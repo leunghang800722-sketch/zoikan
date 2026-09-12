@@ -6,6 +6,7 @@ import { uiLabel } from "@/lib/ui/format";
 import { LogoutButton } from "@/components/LogoutButton";
 import { MustChangePwdGate } from "@/components/MustChangePwdGate";
 import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
+import { MobileNav } from "@/components/MobileNav";
 import { isAiConfigured } from "@/lib/ai/config";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -26,13 +27,20 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const aiConfigured = isAiConfigured();
   const showAiAssistant = grants["助手"] && aiConfigured;
 
+  const roleLabel = uiLabel(session.roleName);
+
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-56 shrink-0 flex-col gap-4 border-r border-gray-200 bg-gray-50 p-4">
+    <div className="flex min-h-screen flex-col md:flex-row">
+      {/* 手機版（< md）：漢堡抽屜，見 MobileNav 內部註解。桌面版（md 以
+          上）呢個 component render 一個 `md:hidden` 空殼，唔影響下面固定
+          `<aside>`。 */}
+      <MobileNav links={links} userName={session.name} roleLabel={roleLabel} />
+
+      <aside className="hidden w-56 shrink-0 flex-col gap-4 border-r border-gray-200 bg-gray-50 p-4 md:flex">
         <div>
           <div className="text-xs font-medium uppercase tracking-wide text-gray-400">在勤</div>
           <div className="mt-1 text-sm font-medium text-gray-900">{session.name}</div>
-          <div className="text-xs text-gray-500">{uiLabel(session.roleName)}</div>
+          <div className="text-xs text-gray-500">{roleLabel}</div>
         </div>
 
         <nav className="flex flex-1 flex-col gap-0.5 text-sm">
@@ -50,7 +58,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <LogoutButton />
         </div>
       </aside>
-      <main className="min-w-0 flex-1 overflow-x-auto p-6">
+      <main className="min-w-0 flex-1 overflow-x-auto p-4 md:p-6">
         <MustChangePwdGate mustChange={session.mustChangePwd} />
         {children}
       </main>

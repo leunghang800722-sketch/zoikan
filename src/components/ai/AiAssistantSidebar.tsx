@@ -8,6 +8,7 @@
 // POST /api/ai/chat SSE），對話記錄經 `GET`/`DELETE /api/ai/conversation`
 // （`api-client.ts`）。
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiGet, apiRequest } from "@/lib/ui/api-client";
 import { deriveAiContext, type AiPageContext } from "@/lib/ui/ai-context";
 import { streamAiChat, type AiChatMessage } from "@/lib/ui/ai-chat-client";
@@ -177,7 +178,15 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
 
   const showWelcome = messages.length === 0 && !sending && !loadingHistory;
 
-  return (
+  // 老闆手機版 bug（2026-09-13）：呢個 tab／側欄一定要貼實螢幕最右邊
+  // 緣，唔可以被任何祖先嘅 transform／overflow 影響 `position: fixed`
+  // 嘅定位基準——直接 portal 去 `document.body`，唔理呢個 component
+  // 本身掛喺 DOM 樹邊度（`(app)/layout.tsx` 嘅 `<main>` 有
+  // `overflow-x-auto`），從根本上避免呢類定位失效。SSR／首次 client
+  // render 之前 `document` 未存在，所以 `mounted` 之前淨係 render null
+  // （同原有讀 localStorage 嘅 mount pattern 一致，唔會 hydration
+  // mismatch）。
+  const content = (
     <>
       {!open && (
         <button
@@ -186,7 +195,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
           data-testid="ai-assistant-tab"
           aria-label="開啟在勤助手"
           onClick={() => setOpen(true)}
-          className="fixed right-0 top-1/2 z-30 -translate-y-1/2 rounded-l-md border border-r-0 border-gray-300 bg-white px-2 py-4 text-sm font-medium tracking-wide text-gray-700 shadow-md hover:bg-gray-50"
+          className="fixed right-0 top-[40%] z-30 -translate-y-1/2 rounded-l-md border border-r-0 border-gray-300 bg-white px-2 py-4 text-sm font-medium tracking-wide text-gray-700 shadow-md hover:bg-gray-50"
           style={{ writingMode: "vertical-rl" }}
         >
           在勤助手
@@ -339,4 +348,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
       )}
     </>
   );
+
+  if (!mounted) return null;
+  return createPortal(content, document.body);
 }
