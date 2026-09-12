@@ -372,7 +372,10 @@ async function seedRateCards(
         clientRate: num(r.client_rate),
         guardWage: num(r.guard_wage),
         brokerFee: num(r.broker_fee),
-        payoutRate: num(r.payout_rate),
+        // 2026-09-12 老闆批准：出街價＝保安員工資＋雞頭費（P0 §3.5 定義）。P0 反推嘅
+        // payout_rate 有三張 Patrick 逐人卡係「糧單總額÷含半更嘅更數」嘅混合價
+        // （679.45／628.70／29.68），半更屬調整項，唔應該入卡。
+        payoutRate: num(r.guard_wage) != null || num(r.broker_fee) != null ? (num(r.guard_wage) ?? 0) + (num(r.broker_fee) ?? 0) : num(r.payout_rate),
         billingModel: str(r.billing_model) ? mapBillingModel(r.billing_model) : null,
         effectiveFrom: dateOnly(r.effective_from)!,
         effectiveTo: dateOnly(r.effective_to),
