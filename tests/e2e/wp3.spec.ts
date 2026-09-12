@@ -144,6 +144,45 @@ test("(d) 主管匯出 7 月 xlsx", async ({ page }) => {
   expect(savedPath).toBeTruthy();
 });
 
+test("(e) 主管開啟航1331 7 月更表 → 雞頭篩選（統計條撳一行 → 行數減少 + URL 帶 broker= → 清除篩選行數回復）", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-07`);
+
+  // 統計條同更表本身一齊喺初次載入 effect 出嚟——等第一個安員行出現，
+  // 即代表編輯器已經載入完成（同其他 (a)-(d) 場景一致嘅等法）。
+  await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+
+  const statsRows = page.getByTestId("broker-stats-row");
+  await expect(statsRows.first()).toBeVisible({ timeout: 20_000 });
+  const rowCount = await statsRows.count();
+  expect(rowCount).toBeGreaterThanOrEqual(2); // 老闆 feedback 驗收準則：統計條要有 ≥2 個雞頭先有得篩
+
+  const initialRosterRows = await page.getByTestId("roster-row").count();
+  expect(initialRosterRows).toBeGreaterThan(0);
+  // 未篩選之前 URL 唔應該帶 broker= 呢個 query。
+  expect(new URL(page.url()).searchParams.get("broker")).toBeNull();
+
+  const firstCode = await statsRows.first().getAttribute("data-broker-code");
+  expect(firstCode).toBeTruthy();
+  await statsRows.first().click();
+
+  // URL 帶 broker=（分享／重載保留）。
+  await expect.poll(() => new URL(page.url()).searchParams.get("broker")).toBe(firstCode);
+  // 篩選之後行數減少（其他雞頭嘅行唔顯示——但 Total／尚欠照計全部，
+  // 呢條 e2e 淨係斷言行數，唔重複斷言 Total 呢個已經有 vitest/單元層面
+  // 覆蓋唔到嘅純 UI 邏輯留返俾人手複查）。
+  await expect.poll(() => page.getByTestId("roster-row").count()).toBeLessThan(initialRosterRows);
+  // 篩選咗會多一行「所選雞頭合計」。
+  await expect(page.getByTestId("roster-selected-broker-total")).toBeVisible();
+
+  // 清除篩選 → 行數回復、URL 唔再帶 broker=。
+  await page.getByTestId("broker-filter-clear").click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("broker")).toBeNull();
+  await expect.poll(() => page.getByTestId("roster-row").count()).toBe(initialRosterRows);
+  await expect(page.getByTestId("roster-selected-broker-total")).toHaveCount(0);
+});
+
 test.afterAll(async () => {
   await prisma.$disconnect();
 });

@@ -260,10 +260,21 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const [extraRows, setExtraRows] = useState<RowMeta[]>([]); // 加安員／複製上月加嘅新行，未儲存前冇 baseline
   const [baseline, setBaseline] = useState<Map<string, CellState>>(new Map());
   const [cells, setCells] = useState<Map<string, CellState>>(new Map());
+  // 2026-09-12 老闆 feedback：雞頭篩選＋人數/更數統計條——保留原始
+  // ShiftRecordDto 陣列（唔淨係聚合完嘅 rows/cells），俾統計條逐日/逐
+  // 狀態計數（confirmed／pending 分開計）。
+  const [records, setRecords] = useState<ShiftRecordDto[]>([]);
 
   const [dailyReq, setDailyReq] = useState<number[]>([]); // index0 = day1
   const [quotas, setQuotas] = useState<QuotaDto[]>([]);
   const [monthLocked, setMonthLocked] = useState(false);
+
+  // 雞頭篩選（老闆 feedback 2026-09-12）：揀住嘅雞頭代號（例如 "K"），
+  // `null` = 全部。狀態放 URL query `?broker=K`（方便分享／重載保留）；
+  // 淨係內部角色顯示篩選器（雞頭 session 本身淨見自己，冇篩選必要）。
+  // 用 code（唔係內部 uuid）做 URL 值——同老闆講嘅「雞頭代號」一致。
+  const [selectedBrokerCode, setSelectedBrokerCode] = useState<string | null>(null);
+  const urlSyncedFromLoadRef = useRef(false);
 
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -294,11 +305,21 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const [fillRowValue, setFillRowValue] = useState("");
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const displayRows = useMemo(() => [...rows, ...extraRows], [rows, extraRows]);
-  const displayRowsRef = useRef<RowMeta[]>(displayRows);
+  // allRows＝呢個盤呢個月全部行（已儲存+未儲存新加嘅），唔受雞頭篩選
+  // 影響——儲存 diff／複製上月／加安員去重都要睇成個集合，先唔會漏
+  // 咗篩選緊冇顯示嗰啲行嘅改動。
+  const allRows = useMemo(() => [...rows, ...extraRows], [rows, extraRows]);
+  // visibleRows＝畫面實際渲染／鍵盤導覽嗰個集合——揀咗雞頭篩選就淨係
+  // 呢個雞頭嘅行；日合計／尚欠照計 allRows（唔受篩選影響，見底下
+  // dayTotals），呢個淨係管顯示同「所選雞頭合計」。
+  const visibleRows = useMemo(() => {
+    if (!selectedBrokerCode) return allRows;
+    return allRows.filter((r) => (r.brokerId ? brokersById.get(r.brokerId)?.code : null) === selectedBrokerCode);
+  }, [allRows, selectedBrokerCode, brokersById]);
+  const displayRowsRef = useRef<RowMeta[]>(visibleRows);
   useEffect(() => {
-    displayRowsRef.current = displayRows;
-  }, [displayRows]);
+    displayRowsRef.current = visibleRows;
+  }, [visibleRows]);
 
   // ---- 初次載入／重新 fetch（儲存成功之後都會經呢個 effect 重跑一次）----
   useEffect(() => {
@@ -340,6 +361,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         setGuardsById(gMap);
         setBrokersById(bMap);
 
+        setRecords(records);
         const built = buildRowsAndCells(records, stMap, gMap);
         setRows(built.rows);
         setBaseline(new Map(built.cells));
@@ -379,17 +401,41 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     };
   }, [siteId, month, reloadTick]);
 
+  // ---- 雞頭篩選 ←→ URL query `?broker=` 同步 -----------------------------
+  // 讀（一次性，載入時攞返 URL 已有嘅 broker 代號，令重載／分享連結保留
+  // 篩選狀態）：唔用 next/navigation 嘅 useSearchParams（避免呢個已經
+  // "use client" 嘅互動編輯器頁面被迫加 Suspense boundary），純粹讀
+  // window.location，同埋淨係喺 client mount 之後先做（避免 SSR
+  // hydration mismatch）。
+  useEffect(() => {
+    if (urlSyncedFromLoadRef.current) return;
+    urlSyncedFromLoadRef.current = true;
+    const fromUrl = new URLSearchParams(window.location.search).get("broker");
+    if (fromUrl) setSelectedBrokerCode(fromUrl);
+  }, []);
+
+  // 寫：揀咗（或清咗）雞頭篩選，即刻用 replaceState 更新返 URL query（唔
+  // 加入 history stack，唔觸發 Next 導航／重新 fetch）。
+  useEffect(() => {
+    if (!urlSyncedFromLoadRef.current) return; // 等讀嗰個 effect 行咗先，避免一開波就寫走個原本嘅 URL 值
+    const url = new URL(window.location.href);
+    if (selectedBrokerCode) url.searchParams.set("broker", selectedBrokerCode);
+    else url.searchParams.delete("broker");
+    // eslint-disable-next-line no-console
+    window.history.replaceState(null, "", url.toString());
+  }, [selectedBrokerCode]);
+
   // ---- 選格移動 --------------------------------------------------------
   const moveSelection = useCallback(
     (dr: number, dd: number, extend: boolean) => {
       setSel((prev) => {
         const base = prev?.b ?? { r: 0, d: 1 };
-        const nb = { r: clamp(base.r + dr, 0, Math.max(displayRows.length - 1, 0)), d: clamp(base.d + dd, 1, days) };
+        const nb = { r: clamp(base.r + dr, 0, Math.max(visibleRows.length - 1, 0)), d: clamp(base.d + dd, 1, days) };
         if (extend && prev) return { a: prev.a, b: nb };
         return { a: nb, b: nb };
       });
     },
-    [displayRows.length, days],
+    [visibleRows.length, days],
   );
 
   const commitEdit = useCallback(() => {
@@ -442,6 +488,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      // eslint-disable-next-line no-console
       if (monthLocked) return;
       if (editing) {
         if (e.key === "Enter") {
@@ -518,10 +565,12 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
 
   const onCellClick = useCallback(
     (r: number, d: number, shiftKey: boolean) => {
+      // eslint-disable-next-line no-console
       if (monthLocked) return;
       if (editing) commitEdit();
       setSel((prev) => (shiftKey && prev ? { a: prev.a, b: { r, d } } : { a: { r, d }, b: { r, d } }));
-      containerRef.current?.focus();
+      containerRef.current?.focus({ preventScroll: true }); // 2026-09-12：統計條令容器可能半出視窗，focus() 會捲動頁面，令 mousedown→mouseup 落喺唔同格（拖選成兩行、click 唔觸發）
+      // eslint-disable-next-line no-console
     },
     [monthLocked, editing, commitEdit],
   );
@@ -529,12 +578,12 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const onCellDoubleClick = useCallback(
     (r: number, d: number) => {
       if (monthLocked) return;
-      const row = displayRows[r];
+      const row = visibleRows[r];
       if (!row) return;
       const current = cells.get(cellKeyOf(row.key, d))?.code ?? "";
       startEdit(r, d, current);
     },
-    [monthLocked, displayRows, cells, startEdit],
+    [monthLocked, visibleRows, cells, startEdit],
   );
 
   // ---- 拖曳填充（純前端 state，mousedown 個格個 code 複製去拖到嘅範圍）----
@@ -542,15 +591,15 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     (r: number, d: number, e: { shiftKey: boolean }) => {
       if (monthLocked || e.shiftKey) return;
       if (editing) commitEdit();
-      const row = displayRows[r];
+      const row = visibleRows[r];
       const code = row ? cells.get(cellKeyOf(row.key, d))?.code ?? null : null;
       setSel({ a: { r, d }, b: { r, d } });
       draggingRef.current = true;
       dragSourceRef.current = { r, d, code };
       dragCurrentRef.current = { r, d };
-      containerRef.current?.focus();
+      containerRef.current?.focus({ preventScroll: true }); // 2026-09-12：統計條令容器可能半出視窗，focus() 會捲動頁面，令 mousedown→mouseup 落喺唔同格（拖選成兩行、click 唔觸發）
     },
-    [monthLocked, editing, commitEdit, displayRows, cells],
+    [monthLocked, editing, commitEdit, visibleRows, cells],
   );
 
   const onCellMouseEnter = useCallback((r: number, d: number) => {
@@ -636,7 +685,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         setErrorBanner(`上個月（${pm}）搵唔到呢個盤嘅更表記錄，冇嘢可以複製`);
         return;
       }
-      const knownKeys = new Set(displayRows.map((r) => r.key));
+      const knownKeys = new Set(allRows.map((r) => r.key));
       const nextCells = new Map(cells);
       const newExtra: RowMeta[] = [];
       for (const r of prevRecords) {
@@ -669,7 +718,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : "複製上月失敗");
     }
-  }, [monthLocked, month, siteId, displayRows, cells, days, shiftTypesById, guardsById]);
+  }, [monthLocked, month, siteId, allRows, cells, days, shiftTypesById, guardsById]);
 
   // ---- 加安員：純前端加一行空行，未填格儲存之前唔會出現喺下次 reload ----
   const guardOptions = useMemo(() => [...guardsById.values()].sort((a, b) => a.name_zh.localeCompare(b.name_zh)), [guardsById]);
@@ -681,7 +730,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const handleAddGuardRow = useCallback(() => {
     if (!addGuardId || !addShiftTypeId) return;
     const rowKey = `${addShiftTypeId}|${addGuardId}`;
-    if (displayRows.some((r) => r.key === rowKey)) {
+    if (allRows.some((r) => r.key === rowKey)) {
       setShowAddGuard(false);
       setAddGuardId("");
       setAddShiftTypeId("");
@@ -705,7 +754,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     setShowAddGuard(false);
     setAddGuardId("");
     setAddShiftTypeId("");
-  }, [addGuardId, addShiftTypeId, displayRows, guardsById, shiftTypesById]);
+  }, [addGuardId, addShiftTypeId, allRows, guardsById, shiftTypesById]);
 
   // ---- 儲存：淨係送真係改過嘅格 --------------------------------------
   const handleSave = useCallback(async () => {
@@ -713,7 +762,10 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     setErrorBanner(null);
     setErrorCellKey(null);
 
-    const rowByKey = new Map(displayRows.map((r) => [r.key, r]));
+    // 用 allRows（唔係篩選緊嘅 visibleRows）——揀咗雞頭篩選之後，其他
+    // 雞頭嘅行雖然而家冇顯示，但如果之前已經有改動（例如清咗篩選前打
+    // 落嘅格）都要照送出去，唔可以因為篩選漏咗（篩選只影響顯示）。
+    const rowByKey = new Map(allRows.map((r) => [r.key, r]));
     const keys = new Set<string>([...baseline.keys(), ...cells.keys()]);
     const diffCells: { guard_id: string; shift_type_id: string; work_date: string; code: string | null }[] = [];
     const invalidMsgs: string[] = [];
@@ -768,7 +820,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     } finally {
       setSaving(false);
     }
-  }, [monthLocked, saving, displayRows, baseline, cells, siteId, month, year, monthNum]);
+  }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum]);
 
   const handleRevert = useCallback(() => {
     setCells(new Map(baseline));
@@ -779,15 +831,30 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   }, [baseline]);
 
   // ---- 底部合計 ----------------------------------------------------------
+  // Total／尚欠一律計 allRows（老闆 feedback 2026-09-12：呢兩行「照計
+  // 全部（唔受篩選影響）」），淨係「所選雞頭合計」先睇 visibleRows。
   const dayTotals = useMemo(() => {
     const totals = new Array(days).fill(0) as number[];
-    for (const row of displayRows) {
+    for (const row of allRows) {
       for (let d = 1; d <= days; d++) {
         if (isEffectiveShiftCell(row, d, cells, baseline)) totals[d - 1]++;
       }
     }
     return totals;
-  }, [displayRows, cells, baseline, days]);
+  }, [allRows, cells, baseline, days]);
+
+  // 所選雞頭合計（`null` = 揀咗「全部」，唔顯示呢行）——同 dayTotals
+  // 一樣嘅口徑，淨係範圍收窄做 visibleRows（已經篩選咗嘅集合）。
+  const selectedBrokerTotals = useMemo(() => {
+    if (!selectedBrokerCode) return null;
+    const totals = new Array(days).fill(0) as number[];
+    for (const row of visibleRows) {
+      for (let d = 1; d <= days; d++) {
+        if (isEffectiveShiftCell(row, d, cells, baseline)) totals[d - 1]++;
+      }
+    }
+    return totals;
+  }, [selectedBrokerCode, visibleRows, cells, baseline, days]);
 
   const dirtyCount = useMemo(() => {
     let n = 0;
@@ -795,6 +862,58 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     for (const key of keys) if (!cellsEqual(baseline.get(key), cells.get(key))) n++;
     return n;
   }, [baseline, cells]);
+
+  // ---- 雞頭人數／更數統計條（老闆 feedback 2026-09-12）------------------
+  // 用原始 `records`（未經 rows/cells 聚合）逐更計數，先分得到
+  // confirmed／pending 兩個桶。歸屬雞頭嘅口徑同 buildRowsAndCells()一致：
+  // settlement_broker_id 冇填就跟 guard.default_broker_id；仲係冇（例如
+  // 舊更表冇填雞頭欄）嘅記錄唔計入任何雞頭列（同 §「Y=公司兵」呢類淨係
+  // 憑糧明細先反推得到嘅安排一致，呢度冇資料源可以反推，唔會亂估）。
+  // 內部角色見晒全部雞頭；雞頭 session 本身 API 已經淨係傳返自己嗰啲
+  // records（scopeShiftRecordWhere），呢度自然淨係計到自己一行，唔使
+  // 額外分支處理。
+  type BrokerStat = {
+    brokerId: string;
+    code: string;
+    name: string;
+    headcount: number;
+    confirmed: number;
+    pending: number;
+    quotaTarget: number;
+  };
+  const brokerStats = useMemo<BrokerStat[]>(() => {
+    const byBroker = new Map<string, { guards: Set<string>; confirmed: number; pending: number }>();
+    for (const rec of records) {
+      const brokerId = rec.settlement_broker_id ?? guardsById.get(rec.guard_id)?.default_broker_id ?? null;
+      if (!brokerId) continue;
+      let bucket = byBroker.get(brokerId);
+      if (!bucket) {
+        bucket = { guards: new Set(), confirmed: 0, pending: 0 };
+        byBroker.set(brokerId, bucket);
+      }
+      bucket.guards.add(rec.guard_id);
+      if (rec.status === "confirmed" || rec.status === "completed") bucket.confirmed++;
+      else if (rec.status === "pending_approval" || rec.status === "draft") bucket.pending++;
+    }
+    const quotaTotalsByBroker = new Map<string, number>();
+    for (const q of quotas) {
+      quotaTotalsByBroker.set(q.broker_id, (quotaTotalsByBroker.get(q.broker_id) ?? 0) + q.target_shifts);
+    }
+    const stats: BrokerStat[] = [];
+    for (const [brokerId, bucket] of byBroker) {
+      const broker = brokersById.get(brokerId);
+      stats.push({
+        brokerId,
+        code: broker?.code ?? brokerId,
+        name: broker?.name ?? "",
+        headcount: bucket.guards.size,
+        confirmed: bucket.confirmed,
+        pending: bucket.pending,
+        quotaTarget: quotaTotalsByBroker.get(brokerId) ?? 0,
+      });
+    }
+    return stats.sort((a, b) => a.code.localeCompare(b.code));
+  }, [records, guardsById, brokersById, quotas]);
 
   // ---- 畫面 ---------------------------------------------------------------
   if (loading) {
@@ -918,6 +1037,88 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         </div>
       </div>
 
+      {/* 老闆 feedback 2026-09-12：雞頭篩選器＋人數/更數統計條——篩選器
+          淨係內部角色見（雞頭 session 本身「只見自己」，冇篩選必要）；
+          統計條兩種 session 都顯示（雞頭 session 因為 API 本身已經淨係
+          傳返自己嘅記錄，呢度自然得返自己一行）。 */}
+      {brokerStats.length > 0 && (
+        <div className="rounded border border-gray-200 p-2 space-y-2" data-testid="broker-stats-bar">
+          {!isBrokerSession && (
+            <div className="flex flex-wrap items-center gap-2">
+              <label htmlFor="broker-filter-select" className="text-xs text-gray-600">
+                雞頭篩選
+              </label>
+              <select
+                id="broker-filter-select"
+                data-testid="broker-filter-select"
+                className="border border-gray-300 rounded px-2 py-1 text-sm"
+                value={selectedBrokerCode ?? ""}
+                onChange={(e) => setSelectedBrokerCode(e.target.value || null)}
+              >
+                <option value="">全部</option>
+                {brokerStats.map((b) => (
+                  <option key={b.brokerId} value={b.code}>
+                    {b.code}
+                    {b.name ? `（${b.name}）` : ""}
+                  </option>
+                ))}
+              </select>
+              {selectedBrokerCode && (
+                <button
+                  type="button"
+                  data-testid="broker-filter-clear"
+                  className="text-xs text-blue-600 underline"
+                  onClick={() => setSelectedBrokerCode(null)}
+                >
+                  清除篩選
+                </button>
+              )}
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="text-xs border-collapse" data-testid="broker-stats-table">
+              <thead>
+                <tr className="text-left text-gray-500">
+                  <th className="pr-4 py-0.5 font-medium">雞頭</th>
+                  <th className="pr-4 py-0.5 font-medium">人數</th>
+                  <th className="pr-4 py-0.5 font-medium">已確認</th>
+                  <th className="pr-4 py-0.5 font-medium">待審批</th>
+                  <th className="pr-4 py-0.5 font-medium">已排／配額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {brokerStats.map((b) => {
+                  const scheduled = b.confirmed + b.pending;
+                  const isSelected = selectedBrokerCode === b.code;
+                  return (
+                    <tr
+                      key={b.brokerId}
+                      data-testid="broker-stats-row"
+                      data-broker-code={b.code}
+                      className={
+                        "border-t border-gray-100" +
+                        (isBrokerSession ? "" : " cursor-pointer hover:bg-gray-50") +
+                        (isSelected ? " bg-blue-50 font-medium" : "")
+                      }
+                      onClick={isBrokerSession ? undefined : () => setSelectedBrokerCode(b.code)}
+                    >
+                      <td className="pr-4 py-0.5">
+                        {b.code}
+                        {b.name ? `（${b.name}）` : ""}
+                      </td>
+                      <td className="pr-4 py-0.5">{b.headcount}</td>
+                      <td className="pr-4 py-0.5">{b.confirmed}</td>
+                      <td className="pr-4 py-0.5">{b.pending}</td>
+                      <td className="pr-4 py-0.5">{b.quotaTarget > 0 ? `${scheduled}／${b.quotaTarget}` : scheduled}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {monthLocked && (
         <div className="rounded border border-red-300 bg-red-50 text-red-800 text-sm px-3 py-2">
           呢個月（{month}）已經鎖定，唔可以再改更表。如需修改，請聯絡有「月結鎖定解鎖」權限嘅同事。
@@ -968,7 +1169,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
             </tr>
           </thead>
           <tbody>
-            {displayRows.map((row, r) => {
+            {visibleRows.map((row, r) => {
               const guard = guardsById.get(row.guardId);
               const permitExpired = guard?.sia_permit_expiry ? new Date(guard.sia_permit_expiry) < new Date(year, monthNum - 1 + 1, 0) : false;
               const broker = row.brokerId ? brokersById.get(row.brokerId) : null;
@@ -1056,10 +1257,12 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                 </tr>
               );
             })}
-            {displayRows.length === 0 && (
+            {visibleRows.length === 0 && (
               <tr>
                 <td colSpan={4 + (isBrokerSession ? 0 : 1) + days} className="border border-gray-300 text-center text-gray-400 py-6 text-sm">
-                  呢個盤呢個月未有更表記錄——撳「加安員」開始排更，或者撳「複製上月」。
+                  {allRows.length === 0
+                    ? "呢個盤呢個月未有更表記錄——撳「加安員」開始排更，或者撳「複製上月」。"
+                    : "呢個雞頭喺呢個盤搵唔到安員行（篩選只影響顯示，其他雞頭嘅記錄照喺度）。"}
                 </td>
               </tr>
             )}
@@ -1098,6 +1301,21 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                 );
               })}
             </tr>
+            {/* 老闆 feedback 2026-09-12：篩選咗某個雞頭時加多一行「所選
+                雞頭合計」——Total／尚欠一律照計全部（唔受篩選影響，見上面
+                dayTotals 注解），呢行先係篩選範圍嘅合計。 */}
+            {selectedBrokerTotals && (
+              <tr data-testid="roster-selected-broker-total">
+                <td className="sticky z-10 bg-blue-50 border border-gray-300 font-medium text-blue-900" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
+                  所選雞頭合計（{selectedBrokerCode}）
+                </td>
+                {selectedBrokerTotals.map((t, i) => (
+                  <td key={i} className="border border-gray-300 text-center bg-blue-50 text-blue-900">
+                    {t}
+                  </td>
+                ))}
+              </tr>
+            )}
           </tfoot>
         </table>
       </div>
@@ -1115,7 +1333,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               onChange={(e) => setFillRowValue(e.target.value.toUpperCase())}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  const row = displayRows.find((r) => r.key === fillRowKey);
+                  const row = visibleRows.find((r) => r.key === fillRowKey);
                   if (row) applyFillRow(row, fillRowValue);
                 }
               }}
@@ -1128,7 +1346,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                 type="button"
                 className="text-sm px-3 py-1 rounded bg-blue-600 text-white"
                 onClick={() => {
-                  const row = displayRows.find((r) => r.key === fillRowKey);
+                  const row = visibleRows.find((r) => r.key === fillRowKey);
                   if (row) applyFillRow(row, fillRowValue);
                 }}
               >
