@@ -1,0 +1,17 @@
+code,kind,description
+N,work,夜更保安員 一般代號
+D,work,日更/早更保安員 一般代號
+C,work,HKU座頭 C更（8.25小時）
+C1,work,HKU座頭 C1更
+IC,work,Zone IC / 早更IC 一般代號
+SIC,work,高級IC（Senior IC）
+Y,work,HKU Y更成盤用嘅上班代號（注意：呢個Y係格仔代號，同A欄嘅雞頭代號Y=公司兵唔同意思，兩者要分開睇）
+OT1,ot,HKU座頭獨立一行 0615-0715 OT
+RD,leave,例假 Rest Day
+SH,leave,輪班津貼/短假（沿用現有代號，唔改動）
+AL,leave,年假 Annual Leave
+SL,leave,病假 Sick Leave
+NPL,leave,無薪假（規則：NPL=NL，同一類）
+NL,leave,無薪假 No Pay Leave
+OFF,leave,假期（規則：OFF=RD，同一類，但保留原代號方便追溯）
+數據中心,pointer,數碼港 CP5 檔內指向數據中心盤嘅指針格，唔係更次，只喺數據中心更表計一次

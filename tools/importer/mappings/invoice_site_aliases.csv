@@ -1,0 +1,16 @@
+invoice_label,site_id,note
+HKU C更,S007,發票用「HKU C更」，更表/WP2b canonical name係「HKU座頭」
+Weave ML,S014,發票用「Weave ML」，WP2b canonical name係「Weave Hospital Road」
+Weave RR,S015,發票用「Weave RR」，WP2b canonical name係「Weave Robinson」
+WeaveML,S014,月結R2.pdf wp3_r2解析時將「Weave ML」格仔冇空格咁join埋一齊，同上面「Weave ML」係同一個site
+WeaveRR,S015,月結R2.pdf wp3_r2解析時將「Weave RR」格仔冇空格咁join埋一齊，同上面「Weave RR」係同一個site
+Wilson Control,S031,設計文件3.7節：Wilson Control＝控制室
+Wilson Patrol,S032,設計文件3.7節：Wilson Patrol＝都會大學夜巡邏
+創富城巴車廠 IC,S026,發票原文帶括號人名（PDPO：wp3_io._strip_pdpo_name_suffix 已剝走，唔存人名）標記邊行係創富早IC（月費/行政費），非per_shift嘅創富車廠
+數碼港,S010,發票單一「數碼港」對應WP2b嘅數碼港CP1-4（CP5/CP5 IC/數據中心另開發票）
+創富城巴車廠,S019,發票用全稱「創富城巴車廠」，sites.csv alias只有「創富/創富車廠」冇呢個全稱
+都會大學,S033,2026-07-月結總表-FinalR2.pdf row13用簡稱「都會大學」指都會大學學生宿舍（金額15440同發票row36對得上）；「都會大學夜巡邏」（row14）先係S032
+MORI凱和山,S009,2026-07-月結總表-FinalR2.pdf row18用「MORI 凱和山」（wp3_r2解析時將格仔文字冇空格咁join埋一齊），MORI係集團/品牌名，sites.csv canonical name係「屯門凱和山」
+Garden East Service Apartment,S046,發票用全稱「Garden East Service Apartment」，sites.csv canonical name係「Garden East」（client_name 代號見 client-names.json）；T頁冇呢個site嘅逐日更次來源，rate_card status=pending(no_shift_source)
+TentiWealthBodyGuard,S064,2026-07-月結總表-FinalR2.pdf row35「Tenti Wealth BodyGuard」wp3_r2解析時將格仔文字冇空格咁join埋一齊，同sites.csv「HKW（個別雞頭Event客戶）」（client_group=P special income）係同一個site；特殊收入項（P0-執行計劃§2 B4，個別雞頭月薪/Event佣金，人手入）
+HKW,S064,月結R2用簡稱「HKW」，sites.csv canonical name係「HKW（個別雞頭Event客戶）」；特殊收入項（P0-執行計劃§2 B4，個別雞頭月薪/Event佣金，人手入）

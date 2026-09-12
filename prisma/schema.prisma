@@ -1,0 +1,650 @@
+// 在勤保安排更系統 — Prisma schema v1.1
+// 依據：《在勤系統設計文件v1.0》§3、《P1-執行計劃.md》§3
+// PDPO：呢個檔案本身唔含任何真名／工號／電話 —— 只有欄位定義。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum BrokerKind {
+  broker // 外判雞頭（真名見 gitignored 嘅 data/mappings-private/brokers.csv，代號 K/W/G/D/T）
+  internal_cash // 公司兵（Y，現金日薪直聘）
+  internal_longterm // 長工（autopay 月薪）
+  external // 客戶自己嘅人（Wilson Guard），唔入糧唔開單
+  special // 散 Event／獨立雞頭費／個別雞頭 Event 呢類特殊結算單位
+}
+
+enum SettlementType {
+  cash
+  autopay
+  salary // 個別雞頭：月薪＋Event 佣金
+  none // external：客戶自己嘅人，唔適用
+}
+
+enum ActiveStatus {
+  active
+  inactive
+}
+
+enum SiteStatus {
+  active
+  paused
+  ended
+}
+
+enum EmploymentType {
+  cash_casual // 散現金安員
+  longterm_autopay // 長工，autopay 月薪
+  external // 客戶自己嘅人
+  casual_event // 散 Event（例：HKU Y更 獨立雞頭費 5 人）
+}
+
+enum BillingModel {
+  per_shift // 按更
+  monthly_fixed // 月費（可能有 monthly_posts 崗數）
+  admin_fee // 行政費
+  special // 特殊（例如純登記、月結以外）
+}
+
+enum ProrataBasis {
+  div_31 // 固定除 31（例：凱和山 27,000÷31）
+  div_month_days // 除當月實際日數
+}
+
+enum BillingGroup {
+  per_shift
+  monthly_ic
+}
+
+enum RecordType {
+  shift // 正更
+  ot // 超時（掛靠 parent_shift_id）
+  leave // 出勤狀態（RD/AL/SL/NL/SH）
+}
+
+// P1-WP3 第三輪規劃裁定（2026-09-12）：擴充至
+// `tools/importer/mappings/status_codes.csv` 全部代號（含原始未歸一
+// 字面，例：OFF/NPL）——原本淨係得 5 個「已歸一」值（RD/AL/SL/NL/SH），
+// 原檔有出現過但同義嘅字面（OFF=RD、NPL=NL）會喺 P0 import 嗰陣直接
+// 歸一，令 DB 冇存返原始字面，更表匯出對唔返原檔嗰粒代號。而家保留
+// 埋原始字面做獨立 enum 值，seed 時（`scripts/seed/lib/
+// leave-code-raw.ts`）逐條 leave 記錄由原檔 cell 讀返原始字面覆蓋，
+// 冇讀到/唔識嘅字先跌返 wp2b 已歸一嘅值。
+enum LeaveCode {
+  RD
+  OFF // = RD（status_codes.csv「歸一做 RD」），保留原字面
+  AL
+  SL
+  NL
+  NPL // = NL（status_codes.csv「歸一做 NL」），保留原字面
+  SH
+}
+
+enum ShiftRecordStatus {
+  draft // 雞頭已填
+  pending_approval
+  confirmed
+  completed
+  cancelled
+}
+
+enum SpecialItemKind {
+  casual_event // 散 Event（HKU Y更 獨立雞頭費 94 更呢類）
+  standalone_broker_fee // 獨立雞頭費
+  individual_broker_event // 個別雞頭（billing_model=special_income 嗰類）自己嘅 Event 特殊收入項
+  shuttle // 專車
+  per_hour // 按鐘
+  supplemental // 補單（龍譽／惠康）
+  cross_month_adjustment // 跨月調整（例：扣上月一更／補上月漏計，見設計文件§3.2 payout_batches「支援跨月調整」）
+  // P1-WP4（規劃裁定，2026-09-12）：長工雞頭費——老闆喺「在勤總表」手打
+  // 嘅費用行金額（唔係一條可以由 shift_records 逐更計返嚟嘅公式，見
+  // scripts/seed/lib/py/extract_referral_fees.py 頂註解），逐 (broker_id,
+  // block) seed 做呢個 kind 嘅 special_item（cost=金額，siteId 有得配對
+  // 就填、配對唔到就 null）。
+  referral_fee
+  other
+}
+
+enum PermissionAction {
+  view
+  create
+  update
+  void
+  export
+}
+
+enum UserStatus {
+  active
+  inactive
+}
+
+enum PayoutBatchStatus {
+  draft
+  pending_approval
+  approved
+  paid
+}
+
+// ---------------------------------------------------------------------------
+// brokers 雞頭
+// ---------------------------------------------------------------------------
+model Broker {
+  id               String         @id @default(uuid())
+  code             String         @unique // K/W/G/D/T/Y…
+  name             String // 業務代號或真名——真名對照見 gitignored 嘅 data/mappings-private/brokers.csv，git 內預設用代號 K/W/G/D/T/Y
+  kind             BrokerKind
+  settlementType   SettlementType @map("settlement_type")
+  bankInfo         Json?          @map("bank_info")
+  requiresApproval Boolean        @default(false) @map("requires_approval")
+  isInternal       Boolean        @default(false) @map("is_internal")
+  aliases          String[]       @default([])
+  status           ActiveStatus   @default(active)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  defaultForGuards        Guard[]                @relation("GuardDefaultBroker")
+  rateCards               RateCard[]
+  referralFeeRates        ReferralFeeRate[]
+  settlementShiftRecords  ShiftRecord[]          @relation("ShiftRecordSettlementBroker")
+  operationalShiftRecords ShiftRecord[]          @relation("ShiftRecordOperationalBroker")
+  users                   User[]
+  specialItems            SpecialItem[]
+  siteAssignments         BrokerSiteAssignment[]
+  quotas                  Quota[]
+
+  @@map("brokers")
+}
+
+// ---------------------------------------------------------------------------
+// broker_site_assignments（P1-WP2 Opus 驗收 C1 新增）：邊個雞頭喺邊個盤、
+// 邊個月有份——雞頭嘅「歸屬」白名單，唔准淨係靠「有冇更次記錄」判斷可見性
+// /寫入權（嗰個係可以憑空開更、guard嫁接嘅漏洞）。quotas 表本身 P3 先做，
+// 呢個表暫代做 P1 嘅歸屬判斷來源；P0 7 月真數據由
+// scripts/seed/index.ts 嘅 seedBrokerSiteAssignments() 根據 shift_records
+// 實際 settlement/operational broker × site × 月份反推生成。
+// ---------------------------------------------------------------------------
+model BrokerSiteAssignment {
+  id       String   @id @default(uuid())
+  brokerId String   @map("broker_id")
+  broker   Broker   @relation(fields: [brokerId], references: [id])
+  siteId   String   @map("site_id")
+  site     Site     @relation(fields: [siteId], references: [id])
+  month    DateTime @db.Date // 月份第一日
+
+  createdAt DateTime @default(now()) @map("created_at")
+  createdBy String?  @map("created_by")
+
+  @@unique([brokerId, siteId, month])
+  @@map("broker_site_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// referral_fee_rates 雞頭介紹費率（P3a：逐盤逐雞頭逐月可變）
+// ---------------------------------------------------------------------------
+model ReferralFeeRate {
+  id          String   @id @default(uuid())
+  brokerId    String   @map("broker_id")
+  broker      Broker   @relation(fields: [brokerId], references: [id])
+  siteId      String?  @map("site_id") // null = 該雞頭全盤預設費率；有 site_id 嘅行覆蓋預設
+  site        Site?    @relation(fields: [siteId], references: [id])
+  month       DateTime @db.Date // 月份第一日
+  feePerShift Decimal  @map("fee_per_shift") @db.Decimal(12, 2)
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  // P1-WP3（E）：跟其他主數據表一樣「只作廢冇刪除」（quotas/rate_cards
+  // 同一 pattern）——新加落一份 migration，唔准改 init migration。
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@unique([brokerId, siteId, month])
+  @@map("referral_fee_rates")
+}
+
+// ---------------------------------------------------------------------------
+// quotas 配額（P1-WP3；設計文件§3.2、§4.1——主管派：呢個盤、呢個更別、
+// 呢個月，畀呢個雞頭幾多更；軟性限制，超額唔擋，UI 黃警示）。
+// ---------------------------------------------------------------------------
+model Quota {
+  id           String    @id @default(uuid())
+  month        DateTime  @db.Date // 月份第一日
+  siteId       String    @map("site_id")
+  site         Site      @relation(fields: [siteId], references: [id])
+  shiftTypeId  String    @map("shift_type_id")
+  shiftType    ShiftType @relation(fields: [shiftTypeId], references: [id])
+  brokerId     String    @map("broker_id")
+  broker       Broker    @relation(fields: [brokerId], references: [id])
+  targetShifts Int       @map("target_shifts")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@unique([month, siteId, shiftTypeId, brokerId])
+  @@map("quotas")
+}
+
+// ---------------------------------------------------------------------------
+// guards 安員
+// ---------------------------------------------------------------------------
+model Guard {
+  id              String         @id @default(uuid())
+  staffNo         String?        @unique @map("staff_no") // U00xxx，可為空
+  staffNoMw       String?        @map("staff_no_mw") // Maxwell MG/MW 工號
+  nameZh          String         @map("name_zh")
+  nameEn          String?        @map("name_en")
+  tel             String?
+  defaultBrokerId String?        @map("default_broker_id")
+  defaultBroker   Broker?        @relation("GuardDefaultBroker", fields: [defaultBrokerId], references: [id])
+  employmentType  EmploymentType @map("employment_type")
+  monthlySalary   Decimal?       @map("monthly_salary") @db.Decimal(12, 2)
+  siaPermitExpiry DateTime?      @map("sia_permit_expiry") @db.Date
+  poloSize        String?        @map("polo_size")
+  mergedFrom      String[]       @default([]) @map("merged_from") // 身份合併留痕（舊 staff_no/id）
+  status          ActiveStatus   @default(active)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  rateCards    RateCard[]
+  shiftRecords ShiftRecord[]
+  users        User[]
+
+  @@map("guards")
+}
+
+// ---------------------------------------------------------------------------
+// sites 盤
+// ---------------------------------------------------------------------------
+model Site {
+  id            String        @id @default(uuid())
+  canonicalName String        @unique @map("canonical_name")
+  aliases       String[]      @default([])
+  clientName    String        @map("client_name")
+  clientGroup   String?       @map("client_group")
+  parentSiteId  String?       @map("parent_site_id")
+  parent        Site?         @relation("SiteParent", fields: [parentSiteId], references: [id])
+  children      Site[]        @relation("SiteParent")
+  billingModel  BillingModel  @map("billing_model")
+  monthlyFee    Decimal?      @map("monthly_fee") @db.Decimal(12, 2)
+  monthlyPosts  Int?          @map("monthly_posts") // 每崗月費 × 崗數
+  prorataBasis  ProrataBasis? @map("prorata_basis")
+  inScope       Boolean       @default(true) @map("in_scope")
+  status        SiteStatus    @default(active)
+  // P1-WP3：更表版面模板（`RosterLayoutTemplate`，見
+  // src/lib/roster-layout-template.ts）——由 seed 時由 data/ 讀出反推
+  // 寫入（scripts/seed/lib/roster-layout.ts），匯出（src/lib/
+  // roster-export.ts）用嚟出到原檔一致嘅 block 分組／橫額／表頭裝飾字。
+  // null＝未有模板，匯出跌返用generic嘅「一個shift_type一個block」邏輯。
+  rosterLayout  Json?         @map("roster_layout")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  shiftTypes        ShiftType[]
+  rateCards         RateCard[]
+  shiftRecords      ShiftRecord[]
+  dailyRequirements DailyRequirement[]
+  specialItems      SpecialItem[]
+  referralFeeRates  ReferralFeeRate[]
+  brokerAssignments BrokerSiteAssignment[]
+  quotas            Quota[]
+
+  @@map("sites")
+}
+
+// ---------------------------------------------------------------------------
+// shift_types 更別
+// ---------------------------------------------------------------------------
+model ShiftType {
+  id                String       @id @default(uuid())
+  siteId            String       @map("site_id")
+  site              Site         @relation(fields: [siteId], references: [id])
+  code              String // N/C/C1/A/B/IC/SIC/OT1/Event…
+  label             String?
+  startTime         DateTime?    @map("start_time") @db.Time
+  endTime           DateTime?    @map("end_time") @db.Time
+  hours             Decimal?     @db.Decimal(5, 2)
+  headcountRequired Int?         @map("headcount_required")
+  billingGroup      BillingGroup @default(per_shift) @map("billing_group")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  // WP2：呢個表冇現成「終態 enum」可以借嚟表達「作廢」，冇刪除規則要另加
+  // voided_at/voided_by（原因留喺 audit_log.after，唔喺度重複存）
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  rateCards         RateCard[]
+  shiftRecords      ShiftRecord[]
+  dailyRequirements DailyRequirement[]
+  quotas            Quota[]
+
+  // 規劃 session 裁定（2026-09-11）：DB 層強制 (site_id, code, start_time)
+  // 唯一——master-roster-only 合成更別（例：國泰城 S038）seed 時逐個 post
+  // 用 `MR-<label>-<n>` 做 code 保證唔撞（見 scripts/seed/index.ts）。
+  @@unique([siteId, code, startTime])
+  @@map("shift_types")
+}
+
+// ---------------------------------------------------------------------------
+// rate_cards 價目（帶生效日期）
+// ---------------------------------------------------------------------------
+model RateCard {
+  id            String        @id @default(uuid())
+  siteId        String        @map("site_id")
+  site          Site          @relation(fields: [siteId], references: [id])
+  shiftTypeId   String?       @map("shift_type_id")
+  shiftType     ShiftType?    @relation(fields: [shiftTypeId], references: [id])
+  brokerId      String?       @map("broker_id") // null = 通用；指定 = 雞頭專屬價
+  broker        Broker?       @relation(fields: [brokerId], references: [id])
+  guardId       String?       @map("guard_id") // null = 通用；指定 = 人專屬價（長工日均）
+  guard         Guard?        @relation(fields: [guardId], references: [id])
+  clientRate    Decimal?      @map("client_rate") @db.Decimal(12, 2)
+  guardWage     Decimal?      @map("guard_wage") @db.Decimal(12, 2)
+  brokerFee     Decimal?      @map("broker_fee") @db.Decimal(12, 2)
+  payoutRate    Decimal?      @map("payout_rate") @db.Decimal(12, 2) // = guardWage + brokerFee
+  billingModel  BillingModel? @map("billing_model") // 呢張價卡本身嘅收費模式（可覆蓋 site 預設；site 級「flat」卡 = shiftType/broker/guard 三個 FK 皆空）
+  effectiveFrom DateTime      @map("effective_from") @db.Date
+  effectiveTo   DateTime?     @map("effective_to") @db.Date
+  source        String?
+  evidence      String?
+  confidence    String?
+  status        String?
+  note          String?
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  // WP2 void（注意：`status` 欄已經俾 P0 import 用嚟存 confirmed/tentative
+  // 呢類 provenance 狀態，唔可以借用嚟做「作廢」，所以加獨立欄）
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@map("rate_cards")
+}
+
+// ---------------------------------------------------------------------------
+// shift_records 更次記錄（核心事實表）
+// ---------------------------------------------------------------------------
+model ShiftRecord {
+  id          String    @id @default(uuid())
+  workDate    DateTime  @map("work_date") @db.Date
+  siteId      String    @map("site_id")
+  site        Site      @relation(fields: [siteId], references: [id])
+  shiftTypeId String    @map("shift_type_id")
+  shiftType   ShiftType @relation(fields: [shiftTypeId], references: [id])
+  guardId     String    @map("guard_id")
+  guard       Guard     @relation(fields: [guardId], references: [id])
+
+  settlementBrokerId  String? @map("settlement_broker_id") // 邊個出糧
+  settlementBroker    Broker? @relation("ShiftRecordSettlementBroker", fields: [settlementBrokerId], references: [id])
+  operationalBrokerId String? @map("operational_broker_id") // 總表成本桶
+  operationalBroker   Broker? @relation("ShiftRecordOperationalBroker", fields: [operationalBrokerId], references: [id])
+
+  referralFeeSnapshot Decimal? @map("referral_fee_snapshot") @db.Decimal(12, 2)
+  rescueRate          Decimal? @map("rescue_rate") @db.Decimal(12, 2) // 救更價覆寫
+
+  recordType    RecordType    @default(shift) @map("record_type")
+  leaveCode     LeaveCode?    @map("leave_code")
+  otHours       Decimal?      @map("ot_hours") @db.Decimal(5, 2)
+  parentShiftId String?       @map("parent_shift_id")
+  parentShift   ShiftRecord?  @relation("ShiftRecordParent", fields: [parentShiftId], references: [id])
+  childShifts   ShiftRecord[] @relation("ShiftRecordParent")
+
+  locationTag    String? @map("location_tag") // 上村／摩星嶺
+  isExternal     Boolean @default(false) @map("is_external")
+  billed         Boolean @default(false)
+  paid           Boolean @default(false)
+  // 7 月紙本糧單「頁」嘅追溯標記（例：K-1331／K-LINK／公司兵-2／W…，真名見
+  // gitignored 嘅 data/mappings-private/brokers.csv）。
+  // DB 時代報表用 broker 粒度就夠，呢個欄淨係做歷史頁面追溯 + 糧明細對數
+  // gate（見 scripts/report/payroll.ts、data/2026-07/transcribed/payroll-pages.csv）
+  settlementPage String? @map("settlement_page")
+
+  clientRateSnapshot Decimal? @map("client_rate_snapshot") @db.Decimal(12, 2)
+  guardWageSnapshot  Decimal? @map("guard_wage_snapshot") @db.Decimal(12, 2)
+  brokerFeeSnapshot  Decimal? @map("broker_fee_snapshot") @db.Decimal(12, 2)
+
+  source     String?
+  provenance Json?
+  status     ShiftRecordStatus @default(confirmed)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  @@unique([guardId, workDate, shiftTypeId])
+  @@index([siteId, workDate])
+  @@index([workDate])
+  @@map("shift_records")
+}
+
+// ---------------------------------------------------------------------------
+// daily_requirements 每日所需人手 override
+// ---------------------------------------------------------------------------
+model DailyRequirement {
+  id                String    @id @default(uuid())
+  siteId            String    @map("site_id")
+  site              Site      @relation(fields: [siteId], references: [id])
+  shiftTypeId       String    @map("shift_type_id")
+  shiftType         ShiftType @relation(fields: [shiftTypeId], references: [id])
+  workDate          DateTime  @map("work_date") @db.Date
+  headcountRequired Int       @map("headcount_required")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@unique([siteId, shiftTypeId, workDate])
+  @@map("daily_requirements")
+}
+
+// ---------------------------------------------------------------------------
+// special_items 特殊項（散Event／獨立雞頭費／個別雞頭Event／專車／按鐘／補單）
+// ---------------------------------------------------------------------------
+model SpecialItem {
+  id          String          @id @default(uuid())
+  month       DateTime        @db.Date
+  siteId      String?         @map("site_id")
+  site        Site?           @relation(fields: [siteId], references: [id])
+  brokerId    String?         @map("broker_id") // 跨月調整通常掛喺雞頭層面，唔一定有 site
+  broker      Broker?         @relation(fields: [brokerId], references: [id])
+  kind        SpecialItemKind
+  shifts      Int?
+  revenue     Decimal?        @db.Decimal(12, 2)
+  cost        Decimal?        @db.Decimal(12, 2)
+  description String?
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@map("special_items")
+}
+
+// ---------------------------------------------------------------------------
+// month_closes 月結鎖定
+// ---------------------------------------------------------------------------
+model MonthClose {
+  id                String    @id @default(uuid())
+  month             DateTime  @unique @db.Date
+  lockedAt          DateTime? @map("locked_at")
+  lockedBy          String?   @map("locked_by")
+  rosterVersionNote String?   @map("roster_version_note")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  @@map("month_closes")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC：users / roles / permissions / role_permissions
+// ---------------------------------------------------------------------------
+model Role {
+  id                  String   @id @default(uuid())
+  name                String   @unique
+  payoutApprovalLimit Decimal? @map("payout_approval_limit") @db.Decimal(12, 2)
+  // 「角色可複製再改」——true = 由某個預設角色複製出嚟嘅自訂角色；五個出廠
+  // 角色（老闆/主管/會計/雞頭/安員）呢欄係 false，唔可以被 void。
+  isCustom            Boolean  @default(false) @map("is_custom")
+  // P1-WP2 Opus 驗收殘留2：自訂角色嘅硬性 deny 矩陣來源——複製自邊個出廠
+  // 角色，創建之後唔可以改（冇對應 update API），isHardDenied() 用呢個
+  // 而唔係 name 判斷（防止改名逃過硬性禁止）。五個出廠角色呢欄 = 自己個
+  // name（"老闆"/"主管"/…）。
+  baseRole            String   @map("base_role")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  users           User[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id     String           @id @default(uuid())
+  module String // 更表／配額／審批／價目／盤／安員／雞頭／糧務／報表／系統
+  action PermissionAction
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  rolePermissions RolePermission[]
+
+  @@unique([module, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String     @map("role_id")
+  role         Role       @relation(fields: [roleId], references: [id])
+  permissionId String     @map("permission_id")
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  granted      Boolean    @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id                  String     @id @default(uuid())
+  name                String
+  tel                 String     @unique // 登入用
+  passwordHash        String     @map("password_hash")
+  roleId              String     @map("role_id")
+  role                Role       @relation(fields: [roleId], references: [id])
+  guardId             String?    @map("guard_id") // 安員登入
+  guard               Guard?     @relation(fields: [guardId], references: [id])
+  brokerId            String?    @map("broker_id") // 雞頭登入
+  broker              Broker?    @relation(fields: [brokerId], references: [id])
+  payoutApprovalLimit Decimal?   @map("payout_approval_limit") @db.Decimal(12, 2) // 覆蓋角色預設上限
+  allowedIp           String?    @map("allowed_ip") // 登入 IP 限制（預留，WP2 唔實作 enforcement）
+  status              UserStatus @default(active)
+
+  // 登入鎖定（WP2 §A）
+  lastLoginAt    DateTime? @map("last_login_at")
+  lastLoginIp    String?   @map("last_login_ip")
+  failedAttempts Int       @default(0) @map("failed_attempts")
+  lockedUntil    DateTime? @map("locked_until")
+  mustChangePwd  Boolean   @default(false) @map("must_change_pwd")
+  // P1-WP2 Opus 驗收殘留1：session 作廢——每次 issue 一個 session 都寫入
+  // 當時嘅 token_version；requireSession() 每次都同 DB 現值核對，唔啱就
+  // 當 session 已失效。logout／改密碼／改角色／改 broker／void user 全部
+  // 要 bump（見 src/lib/auth/token-version.ts）。
+  tokenVersion   Int       @default(1) @map("token_version")
+
+  // SMS OTP——欄位預留，WP2 唔實作發送/驗證邏輯
+  otpEnabled DateTime? @map("otp_enabled") // null = 未啟用；非 null = 啟用時間（預留）
+  otpSecret  String?   @map("otp_secret") // 預留，WP2 唔寫入
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// audit_log 操作紀錄（只寫入，DB trigger 拒絕 UPDATE/DELETE）
+// ---------------------------------------------------------------------------
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorUserId String?  @map("actor_user_id")
+  actor       User?    @relation(fields: [actorUserId], references: [id])
+  tableName   String   @map("table_name")
+  rowId       String   @map("row_id")
+  action      String // create/update/void/login/login_failed/logout/lock/unlock…
+  before      Json?
+  after       Json?
+  ip          String? // WP2：邊個IP做嘅（設計文件§3.2 audit_log「邊個、幾時、邊張表邊行、改前JSON、改後JSON」+ P1計劃登入IP記入audit）
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([tableName, rowId])
+  @@map("audit_log")
+}
+
+// ---------------------------------------------------------------------------
+// payout_batches / expenses — P3 先實作，呢度淨係預留表名（stub）
+// ---------------------------------------------------------------------------
+model PayoutBatch {
+  id       String            @id @default(uuid())
+  month    DateTime          @db.Date
+  brokerId String?           @map("broker_id")
+  status   PayoutBatchStatus @default(draft)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  @@map("payout_batches")
+}
+
+model Expense {
+  id       String   @id @default(uuid())
+  month    DateTime @db.Date
+  siteId   String?  @map("site_id")
+  category String?
+  amount   Decimal? @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  @@map("expenses")
+}

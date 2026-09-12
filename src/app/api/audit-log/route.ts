@@ -1,0 +1,67 @@
+// GET /api/audit-log（只讀——audit_log 本身係 append-only，冇 POST/PATCH/
+// DELETE endpoint，亦冇必要有：寫入一律由 writeAudit() 喺其他 route 內部
+// 觸發，唔開一個公開嘅「新增 audit_log」endpoint）。
+//
+// N1（Opus 對抗式驗收第三輪）：呢個 route 之前直接 `ok({ rows, ... })`
+// 將成個 Prisma AuditLog row（連 before/after 兩個 JSON blob）塞出街，
+// 冇 DTO 冇 field-group gate——即使 writeAudit() 寫入嗰陣（見
+// src/lib/api/audit-dto.ts）已經淨係存緊「完整資源 DTO」（唔係原始
+// Prisma row），before/after 入面仍然可能有 client_rate/monthly_fee/
+// revenue 呢類淨係「收客價:view」/「出街價:view」先應該見到嘅價錢欄
+// ——寫入嗰陣存嘅係*完整*審計記錄，讀出嗰陣先按*讀者*（唔係當初改嗰個
+// 人）嘅權限再 gate 一次，先至係正確嘅存取控制模型（審計軌跡本身要
+// 完整，但邊個睇得到邊部分先受讀者權限限制）。雞頭本身喺 matrix.ts
+// 「操作紀錄」係 uniformRow(D)——硬性 deny，requirePermission() 已經
+// 喺呢個 route 最頭拒咗，唔會行到落嚟。
+import { prisma } from "@/lib/db";
+import { requirePermission } from "@/lib/rbac/requirePermission";
+import { ok, withApiError } from "@/lib/api/http";
+import { paginationParams } from "@/lib/api/query";
+import { toAuditLogDTO, mapListDTO, AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE } from "@/lib/api/dto";
+import { applyFieldGroupGate } from "@/lib/api/field-groups";
+import type { AuthedSession } from "@/lib/rbac/requirePermission";
+import type { Prisma } from "@prisma/client";
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+async function gateAuditBlob(session: AuthedSession, tableName: string, blob: unknown): Promise<unknown> {
+  const resource = AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE[tableName];
+  if (!resource || !isPlainObject(blob)) return blob;
+  return applyFieldGroupGate(session, resource, blob);
+}
+
+export async function GET(req: Request) {
+  return withApiError(async () => {
+    const session = await requirePermission(req, "操作紀錄", "view");
+    const url = new URL(req.url);
+    if (url.searchParams.get("export") === "1") {
+      await requirePermission(req, "操作紀錄", "export");
+    }
+    const { skip, take } = paginationParams(url);
+    const tableName = url.searchParams.get("table_name");
+    const rowId = url.searchParams.get("row_id");
+    const actorUserId = url.searchParams.get("actor_user_id");
+
+    const where: Prisma.AuditLogWhereInput = {
+      ...(tableName ? { tableName } : {}),
+      ...(rowId ? { rowId } : {}),
+      ...(actorUserId ? { actorUserId } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      prisma.auditLog.findMany({ where, skip, take, orderBy: { createdAt: "desc" } }),
+      prisma.auditLog.count({ where }),
+    ]);
+
+    const gatedRows = await Promise.all(
+      rows.map(async (row) => ({
+        ...row,
+        before: await gateAuditBlob(session, row.tableName, row.before),
+        after: await gateAuditBlob(session, row.tableName, row.after),
+      })),
+    );
+
+    return ok(mapListDTO({ rows: gatedRows, total, skip, take }, toAuditLogDTO));
+  });
+}

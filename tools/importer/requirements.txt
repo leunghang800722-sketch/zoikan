@@ -1,0 +1,7 @@
+openpyxl>=3.1
+pytest>=7.0
+numpy>=1.26
+
+# WP3 rates/report（發票/月結 PDF 解析）用 runtime 呼叫 `pdftotext -layout`
+# （poppler-utils 提供嘅命令行工具，唔係 pip 套件，冇辦法喺呢個檔列
+# 版本）——裝機步驟見 README.md「裝機」段：macOS `brew install poppler`。

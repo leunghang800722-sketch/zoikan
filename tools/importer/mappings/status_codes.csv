@@ -1,0 +1,8 @@
+code,normalized,kind,description
+RD,RD,leave,例假 Rest Day
+OFF,RD,leave,假期（歸一做 RD）
+SH,SH,leave,輪班津貼/短假
+AL,AL,leave,年假 Annual Leave
+SL,SL,leave,病假 Sick Leave
+NPL,NL,leave,無薪假（歸一做 NL）
+NL,NL,leave,無薪假 No Pay Leave

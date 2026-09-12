@@ -1,0 +1,151 @@
+# API 清單（P1-WP2，含 Opus 對抗式驗收 C1–C4＋殘留 1–6 加固後版本）
+
+> 呢個檔案本身唔准有真名／工號／電話（PDPO）。全部 API 一律 App Router
+> route handler（`src/app/api/**/route.ts`），**request body 同 response
+> body 一律 snake_case**（`{ client_rate, work_date, source_role_id, … }`）
+> ——request body 由 `src/lib/api/schemas.ts` 嘅 zod schema 逐個 route
+> 驗證（全部 `.strict()`，見下面「欄位命名」一節），response 由
+> `camelToSnakeDeep()` 統一轉。未登入回 401；冇權限／硬性
+> 禁止回 403（並寫 `audit_log`）；月份鎖定寫入回 403
+> （`{ error: "month_locked" }`）；輸入驗證失敗回 400
+> （`{ error: "bad_request", message: "輸入驗證失敗：…" }`）。
+
+## 欄位命名（body casing）
+
+- **Response body**：一律 snake_case（`client_rate`、`work_date`、
+  `base_role`…），由 `ok()`（`src/lib/api/http.ts`）統一經
+  `camelToSnakeDeep()` 轉。
+- **Request body（全部 route）**：一律 snake_case（`work_date`、
+  `effective_from`、`site_id`、`role_id`…），對應 `src/lib/api/
+  schemas.ts` 嘅 zod schema（全部 `.strict()`）——傳一個 camelCase
+  舊 key（例如 `workDate`）會俾 zod 當「未知欄位」拒絕，回 400（Opus
+  對抗式驗收第三輪：「API 契約統一」，唔再有 camelCase／snake_case
+  混寫嘅例外資源）。
+
+## 認證
+
+| Method | Path | 權限 | 說明 |
+|---|---|---|---|
+| POST | `/api/auth/login` | 公開 | `{ tel, password }`；錯5次鎖15分鐘；登入IP記audit |
+| POST | `/api/auth/logout` | 已登入 | 清 session cookie **並 bump `users.token_version`**（舊 cookie 即刻失效，唔淨係靠清 cookie） |
+| POST | `/api/auth/change-password` | 已登入 | `{ old_password, new_password }`；管理角色強制強密碼；bump token_version（重新 issue 帶新 version 嘅 cookie，唔踢走緊用緊嗰個 session） |
+
+**Session 作廢（Opus 驗收殘留1）**：`users.token_version`——logout／
+改密碼／改角色（`role_id`）／改雞頭（`broker_id`）／void user 全部
+bump；`requireSession()`（`src/lib/rbac/requirePermission.ts`）每個
+request 都同 DB 現值核對一次（一條 `SELECT token_version, status`），
+唔啱就當未登入（401）。
+
+## RBAC 矩陣（19 module × 5 action，Opus 驗收 C3 拆細版）
+
+單一事實來源：`src/lib/rbac/matrix.ts`。由舊版 10 module 拆細做 19 個，
+逐個對應《設計文件》§5.1 表入面唔同粒度嘅行（詳細逐格對照見
+README-P1.md「RBAC：module × action 矩陣」一節）：
+
+`更表`／`配額`／`審批`／**`收客價`**／**`出街價`**（拆自舊「價目」）／
+`盤`／`安員`／**`自己安員`**（新增，雞頭專用）／`雞頭`／`糧務`／
+**`批核糧務批次`**／**`月結鎖定解鎖`**（拆自舊「糧務」void）／
+**`用戶管理`**／**`操作紀錄`**（拆自舊「系統」）／**`毛利即時表`**／
+**`尚欠總覽`**／**`月結總表`**／**`糧明細`**／**`更表匯出`**（拆自舊
+「報表」，每份報表獨立一行權限，設計文件§5.0）。
+
+**自訂角色（Opus 驗收殘留2）**：`roles.base_role`——複製一個出廠角色
+時寫死（`POST /api/roles`），**唔可以再改**；硬性 deny 矩陣查詢一律用
+`session.baseRole`（唔係顯示用嘅 `roleName`），所以複製「雞頭」再改名
+做「高級雞頭」都逃唔過雞頭嘅硬性禁止。未知 `base_role`（理論上唔應該
+出現）一律當最嚴處理（`requireSession()` 直接 403）。
+
+## 資源 CRUD
+
+除咗 `audit_log`（只讀）同 `month_closes`（**冇 void/unvoid**，用
+lock/unlock 代替），其餘資源一律：
+- `GET /api/<resource>`　list　— `<module>:view`
+- `POST /api/<resource>`　create　— `<module>:create`
+- `GET /api/<resource>/:id`　get　— `<module>:view`
+- `PATCH /api/<resource>/:id`　update　— `<module>:update`
+- `POST /api/<resource>/:id/void`　void（強制 `{ reason }`，zod
+  `VoidReasonSchema`）— `<module>:void`
+- `POST /api/<resource>/:id/unvoid`　解除作廢 — `<module>:void`（矩陣
+  冇獨立 unvoid action，同 void 共用）
+
+**`roles` 冇 `/unvoid`**——自訂角色一旦 void 咗就係終態，冇 API 可以
+解除（同五個出廠角色一開始就唔准 void 呢個保護分開睇：void 咗嘅自訂
+角色如果要復用，要老闆直接查 DB 或者 P3 先補呢個 endpoint）。
+
+| 資源 | Path prefix | module | 雞頭隔離 | 備註 |
+|---|---|---|---|---|
+| 盤 | `/api/sites` | 盤 | 冇（雞頭硬性 deny） | void→`status=ended`；`status=ended` 唔准直接 PATCH |
+| 更別 | `/api/shift-types` | 盤 | 冇（雞頭硬性 deny） | void→`voided_at`/`voided_by` |
+| 安員 | `/api/guards` | **`安員`**（內部角色）／**`自己安員`**（雞頭，C3 新拆） | ✓ `scopeGuardWhere`——C1 收緊：`default_broker_id=自己` OR（有更次 AND 嗰個 site 喺 `broker_site_assignments`） | 雞頭建人自動掛自己 broker_id；void 硬性 deny |
+| 雞頭 | `/api/brokers` | 雞頭 | ✓ `scopeBrokerWhere`（淨見自己）+ 白名單 DTO | void→`status=inactive` |
+| 價目 | `/api/rate-cards` | **`出街價`**（基本存取）+ **`收客價`**（field-level gate，C3） | ✓ `scopeRateCardWhere`——C1 加咗盤 scope（`site.brokerAssignments.some`） + 白名單 DTO | void/unvoid **C4 新加**以 `effective_from` 月份判斷鎖定；改動強制 audit；body 帶 `client_rate` 但冇「收客價」寫入權限→403 |
+| 更次記錄 | `/api/shift-records` | 更表 | ✓ `scopeShiftRecordWhere` + 白名單 DTO；**C1 寫入歸屬檢查**：雞頭淨係可以幫 `default_broker_id=自己` 嘅安員、喺 `broker_site_assignments` 白名單入面嘅 (盤,月) 開更，否則 403（唔可以靠「開得到」反證有份） | 受月份鎖定；unique(guard,work_date,shift_type)違反回409；雞頭填更強制自己 broker_id、唔准夾帶價錢；**雞頭 update 而家硬性 deny（C3）**；`GET ?status=pending_approval` 審批隊列；雞頭開更視 `brokers.requires_approval` 定 `pending_approval`/`confirmed`（P1-WP3） |
+| 審批 | `POST /api/shift-records/:id/approve`、`POST /api/shift-records/:id/reject` | **審批** | 冇（雞頭硬性 deny） | approve：`pending_approval`→`confirmed`，非 pending 狀態 409；reject：`{reason}` 必填，`pending_approval`→`draft`（P1-WP3） |
+| 更表批量儲存 | `POST /api/shift-records/batch` | 更表（雞頭用 create；內部角色視乎新建/修改/清格細分 create/update/void） | ✓ 同單條 create 一致（C1 歸屬檢查 + query scope） | `{site_id, month, cells:[{guard_id,shift_type_id,work_date,code}]}`——逐格 validate 晒先開 transaction 寫入，任何一格 403/400 或 DB unique 衝突（409）**成批 rollback**；response 帶 `warnings`（同日多更／單月>26更／超配額／證件過期，軟警示唔擋寫入）；雞頭改自己已 `confirmed` 嘅格重入 `pending_approval`（設計文件§4.2）；雞頭清 `confirmed` 格 403（要主管用 void）（P1-WP3） |
+| 開新月份 | `POST /api/months/:month/open` | 更表:create（額外硬擋雞頭角色） | — | 複製上月 `broker_site_assignments`／`quotas`／`daily_requirements`（`shift_types` 唔跟月份，冇需要複製）；已存在嘅唔覆寫（幂等）；受目標月份鎖定（P1-WP3） |
+| 配額 | `/api/quotas` | **配額** | ✓ `scopeQuotaWhere`（雞頭 GET 淨見自己）；雞頭 create/update 硬性 deny | unique(month,site_id,shift_type_id,broker_id) 違反回409；受月份鎖定；軟性限制（超配額唔擋寫入，喺 batch response 嘅 `warnings` 出黃警示）（P1-WP3） |
+| 介紹費率 | `/api/referral-fee-rates` | **雞頭**（同 `/api/brokers` 共用同一個 module——出廠淨係老闆有 create/update/void grant，主管/會計出廠 ○） | ✓ `scopeReferralFeeRateWhere`（雞頭 GET 淨見自己）；雞頭 create/update/void 硬性 deny；`fee_per_shift` 受「出街價」field-level gate（內部角色冇「出街價:view」見唔到；雞頭見自己嗰行唔經呢個 gate，同 rate_cards 嘅 payout_rate 一致） | `site_id` 留空＝呢個雞頭全盤預設費率；unique(broker_id,site_id,month) 違反回409；同一雞頭同一月兩行 `site_id=null`（partial unique index）都回409；受月份鎖定（用 `month` 欄）；`brokers/page.tsx` UI 逐雞頭子表（P1-WP3 E） |
+| 所需人手 | `/api/daily-requirements` | 更表 | ✓ `scopeBySiteHavingBrokerShifts`——C1 改用 `broker_site_assignments`（唔係「有冇更次」）+ 白名單 DTO | 受月份鎖定（create/update/void/**unvoid，C4 補漏**） |
+| 特殊項 | `/api/special-items` | 糧務 | 冇（雞頭硬性 deny） | 受月份鎖定（用 `month` 欄，create/update/void/**unvoid，C4 補漏**）；`revenue` 受「收客價」field-level gate（C3） |
+| 用戶 | `/api/users` | **`用戶管理`**（C3 拆自系統） | 冇（雞頭硬性 deny） | 回應一律剝 `password_hash`／`otp_secret`（殘留3，`toSafeUserDTO`）；create 要求強密碼（視乎目標角色）；PATCH 改 `role_id`／`broker_id` 會 bump 目標用戶 token_version（殘留1） |
+| 角色 | `/api/roles` | 用戶管理 | 冇 | `POST { source_role_id, name }` 複製現有角色，`base_role` 繼承唔可改；void 淨係 `is_custom=true` 得；**冇 unvoid** |
+| 角色權限矩陣 | `/api/roles/:id/permissions` | 用戶管理 | 冇 | `GET` 攞矩陣（19×5=95 格，含 `hard_denied` 旗標，用 `base_role` 判斷）；`PATCH { changes:[{module,action,granted}] }` 逐格改，硬性禁止格拒絕開（殘留6：一次 `findMany` 攞晒 permission，唔逐個 change 查） |
+| 月結 | `/api/month-closes` | 糧務（view/create）／**`月結鎖定解鎖`**（C3 拆自糧務，lock/unlock） | 冇 | `GET`/`POST`（起草月）；`POST /:id/lock`、`POST /:id/unlock`（強制 `{ reason }`）——**冇 void/unvoid** |
+| 操作紀錄 | `/api/audit-log` | **`操作紀錄`**（C3 拆自系統） | 冇 | 只讀；`?export=1` 額外要求 `操作紀錄:export` |
+
+## 查詢參數（list endpoint 通用）
+
+- `skip`、`take`（分頁，`take` 上限 500）
+- `include_inactive=1` / `include_voided=1`：連已停用/已作廢都攞（仍要 view 權限）
+- 部分資源額外支援 `site_id`、`guard_id`、`work_date_from`/`work_date_to`（shift-records）、`month`（special-items）
+
+## 硬性規則喺 API 層點實現
+
+1. **雞頭隔離**（設計文件§5.1 硬性規則1；Opus 驗收 C1/C2 加固）：
+   `src/lib/broker-isolation.ts`——三重防線：(a) **寫入歸屬檢查**
+   （`assertGuardOwnedByBroker`／`assertSiteAssignedToBroker`，C1）；
+   (b) query scope；(c) 白名單 DTO（`src/lib/broker-dto.ts`）+ blocklist
+   scrub 雙重。見 README-P1.md 同
+   `tests/wp2-broker-isolation-fuzz.test.ts`、
+   `tests/wp2-c1-guard-attribution.test.ts`。
+2. **同人同日同更別唯一**：`shift_records` DB unique constraint，違反
+   API 回 409。
+3. **audit_log 只寫入**：DB trigger 拒絕 UPDATE/DELETE/TRUNCATE，冇任何
+   API 可以改/刪 audit_log。
+4. **月份鎖定**（Opus 驗收 C4 補漏）：`src/lib/month-lock.ts`——
+   `shift_records`／`rate_cards`（用 `effective_from`）／
+   `daily_requirements`／`special_items`（用 `month`）四個資源嘅
+   **create/update/void/unvoid 全部**（共 16 種寫入）寫入前一律 check，
+   鎖定咗嘅月一律 403 並寫 audit。見
+   `tests/wp2-c4-month-lock-writes.test.ts`（16 種寫入逐一斷言）。
+   `referral_fee_rates`（用 `month` 欄，P1-WP3 E）跟同一個機制，覆蓋喺
+   `tests/wp3-referral-fee-rates.test.ts`。
+5. **糧務入數人≠批核人**：`src/lib/payroll-segregation.ts` 嘅
+   `assertDifferentActorApprover()`——payout_batches 本身 P3 先做，WP2
+   先鎖住 helper + test（`tests/wp2-payroll-segregation.test.ts`）。
+6. **Input validation**（Opus 驗收殘留4）：`src/lib/api/schemas.ts`
+   （zod）+ `src/lib/api/validate.ts` 嘅 `parseBody()`——每個
+   create/update route 一律經 zod schema 驗證，非法 enum／日期格式
+   400；`console.error`（`src/lib/api/http.ts` 嘅 `handleApiError`）
+   淨係印 `ErrorName: 最後一行訊息`（≤300字符），唔會將成個 Prisma
+   query payload（可能含安員個人資料）印落 server log。
+
+## 已知限制／留返後續 session 決定
+
+- **`data/mappings-private/` 依賴（C5）**：`npm run db:seed`／
+  `npm run report:regen` 需要 gitignored 嘅 `data/mappings-private/`
+  先跑得通（含真名／電話／工號，唔入 git）。冇呢個資料夾，`db:seed`
+  會直接 throw 中止（刻意行為，唔係 bug），`report:regen` 部分已知落差
+  比對會降級做 `info`，`tests/seed-regen-gate.test.ts`（對真實 7 月
+  數據嘅 gate test）一定會紅——詳見 README-P1.md「`data/mappings-private/`
+  依賴」一節。
+- `roles` 冇 `/unvoid`——需要嘅話 P3 補。
+- 自訂角色（`is_custom=true`）而家可以完整登入使用（`base_role` 保證
+  硬性 deny 唔會逃），但角色權限管理 UI（逐格開關）淨係得 API，冇畫面
+  ——WP3 先做。
+- `shift_types` 嘅 `start_time`/`end_time`（`@db.Time`）經 API 寫入時
+  仲未做時間字串解析（`src/lib/api/schemas.ts` 暫時淨係 `z.string()`），
+  留返 WP3 更別編輯器一齊做。
+- 報表 module（毛利即時表／尚欠總覽／月結總表／糧明細／更表匯出）暫時
+  淨係 permission placeholder，未有對應嘅報表生成/匯出 endpoint（WP3/
+  WP4 範圍）。

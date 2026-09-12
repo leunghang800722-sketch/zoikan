@@ -1,0 +1,49 @@
+# 原始數據含個人資料同銀行戶口號碼（PDPO），永遠唔入 git
+data/
+# importer 輸出（由 data/ 抽出嚟，一樣含姓名/電話/Staff No.，PDPO 原因唔入 git）
+tools/importer/out/
+# 本機工具殘留
+.DS_Store
+__pycache__/
+venv/
+
+# 執行 session 嘅掃描頁/暫存（含糧單影像、簽名）
+tools/importer/work/
+tools/importer/out/
+
+# --- P1 Next.js / Prisma 專案 ---
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+
+# 本機 embedded-postgres 資料庫（含真實 7 月數據，PDPO 永遠唔入 git）
+.pg/
+.pg-logfile
+.pg-daemon.pid
+.pg-daemon.log
+.pg-test/
+
+# P1 report regen 輸出（由 DB 重出，含真名，PDPO 唔入 git）
+# (out/p1 covered by out/)
+
+# misc
+*.log
+.DS_Store
+coverage/
+tsconfig.tsbuildinfo
+
+# 規劃文件含安員姓名／工號（老闆營運文件），本機保留唔入 git；設計文件冇真名照 track
+P0-執行計劃.md
+P1-執行計劃.md
+archive/
+# 所有生成輸出
+out/
+
+# P1-WP3：Playwright e2e 輸出（截圖／trace／report，可能含真實 7 月
+# 數據嘅畫面截圖，PDPO 唔入 git；同 test-results 呢類慣例一致）
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

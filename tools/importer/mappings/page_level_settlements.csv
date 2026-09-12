@@ -1,0 +1,2 @@
+site_id,roster_broker_code,settlement_unit,confidence,note
+S017,K,K-1331,medium,啟航1331嘅「K-1331」糧明細頁只有逐日總額冇逐人拆分（P0-執行計劃§3.3）；規劃session 2026-09-03決定：更表A欄標K嘅安員行歸K，source=roster_code_site_page，W/Y行照用逐人糧明細配（W頁「啟德1331夜」、公司兵p2「1331夜/1331早」），空白行仍然unknown。WP4會用K逐日總額對Σ(K行更次×單價)做逐日核。

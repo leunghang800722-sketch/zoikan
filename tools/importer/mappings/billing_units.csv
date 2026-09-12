@@ -1,0 +1,2 @@
+site_id,extra_shifts_from_monthly,note
+S006,94,"HKU Y更：月結 R2 第3/4行分開列「HKU」170更(HK$153,000=170×900)同「獨立雞頭費」94更(HK$84,600=94×900)——呢94更更表完全冇任何逐日來源，但2026-09-10已收「港大職員宿舍值勤表（HKU Y更）」下半月5人名單同逐人更數（N2已答，逐人姓名/更數見 data/mappings-private/client_dutysheet_hku_y_2026-07.csv，PDPO唔入呢個git-tracked檔；合計94，broker_id=B11「獨立雞頭」，client_rate=900，冇逐日日期）——已知係邊5個人，但冇逐日日期／唔知邊個雞頭出糧（追問N2a），所以繼續用site級flat adjustment（唔升做逐日shift_records，避免影響base_shifts/base_revenue同R2「HKU」主行170嘅逐行match）。佢哋用緊同一個收客價(900)開單，所以計 site 全體收客價 Σclient_rate 嘅分母（更數）要加返呢94更先同發票/R2對得上，唔可以淨計更表嘅170更"

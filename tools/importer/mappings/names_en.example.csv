@@ -1,0 +1,4 @@
+english_name,name_zh,confidence,tier,evidence
+SAMPLE GUARD ONE,測試員甲,high,longterm,示例：某盤roster全部空白雞頭行，經§3.6確認為長工
+SAMPLE GUARD TWO,,none,longterm,示例：未能配對，需老闆補員工名單(N6)
+SAMPLE GUARD THREE,測試員乙,high,longterm,示例：T頁「工資－」某車廠長工

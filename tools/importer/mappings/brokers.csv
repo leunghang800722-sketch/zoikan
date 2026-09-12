@@ -1,0 +1,12 @@
+broker_id,code,canonical_name,kind,settlement_type,aliases
+B01,K,,broker,cash,
+B02,W,,broker,cash,
+B03,G,,broker,cash,
+B04,D,,broker,cash,
+B05,T,,broker,cash,
+B06,Y,公司兵,internal_cash,cash,公司兵;公司兵-2
+B07,,autopay_longterm,internal_autopay,autopay,
+B08,P,,broker,salary,
+B09,,LINK公司兵,internal_cash,cash,LINK公司兵
+B10,,external,external,none,Wilson Guard;Wilson Supervisor
+B11,,獨立雞頭,broker,cash,

@@ -1,0 +1,5 @@
+label,role,description
+Total,total,逐日已排更數（安員行加總的驗證行）
+所需人手,required,逐日所需人手（daily_requirements 來源）
+尚欠,shortfall,所需人手減已排（Total 之差）
+早加夜,combined_total,數碼港檔專用：早更+夜更合計（跨 block 彙總，唔對應單一 block）

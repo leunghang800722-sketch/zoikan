@@ -1,0 +1,44 @@
+import { prisma } from "@/lib/db";
+import { requirePermission } from "@/lib/rbac/requirePermission";
+import { scopeSiteWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { toBrokerSiteDTO } from "@/lib/broker-dto";
+import { toSiteDTO } from "@/lib/api/dto";
+import { applyFieldGroupGate, assertFieldGroupWritable } from "@/lib/api/field-groups";
+import { ok, getClientIp, withApiError } from "@/lib/api/http";
+import { readJson } from "@/lib/api/query";
+import { parseBody } from "@/lib/api/validate";
+import { snakeToCamelShallow } from "@/lib/api/case";
+import { SiteUpdateSchema } from "@/lib/api/schemas";
+import { writeAudit } from "@/lib/audit";
+import { BadRequest, NotFound } from "@/lib/api/errors";
+import type { Prisma } from "@prisma/client";
+
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  return withApiError(async () => {
+    const session = await requirePermission(req, (s) => (isBrokerRole(s) ? "更表" : "盤"), "view");
+    const { id } = await params;
+    const where = scopeSiteWhere(session, { id });
+    const row = await prisma.site.findFirst({ where });
+    if (!row) throw NotFound();
+    if (isBrokerRole(session)) return ok(toBrokerSiteDTO(row));
+    return ok(await applyFieldGroupGate(session, "sites", toSiteDTO(row)));
+  });
+}
+
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  return withApiError(async () => {
+    const session = await requirePermission(req, "盤", "update");
+    const { id } = await params;
+    const before = await prisma.site.findUniqueOrThrow({ where: { id } });
+    const body = await readJson(req);
+    const parsed = parseBody(SiteUpdateSchema, body);
+    await assertFieldGroupWritable(session, "sites", parsed);
+    // status="ended" 一定要經 void endpoint（強制填原因、留痕），唔准直接
+    // update 繞過——見設計文件§5.0「只有作廢冇刪除」。
+    if (parsed.status === "ended") throw BadRequest("盤「結束」要用 /void（強制填原因）");
+    const data = snakeToCamelShallow(parsed) as Prisma.SiteUncheckedUpdateInput;
+    const after = await prisma.site.update({ where: { id }, data });
+    await writeAudit({ actorUserId: session.userId, tableName: "sites", rowId: id, action: "update", before, after, ip: getClientIp(req) });
+    return ok(await applyFieldGroupGate(session, "sites", toSiteDTO(after)));
+  });
+}
