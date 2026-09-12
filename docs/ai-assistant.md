@@ -307,7 +307,7 @@ message，見 `src/lib/ai-conversation.ts`）。每條問答另外寫一條
    Anthropic Tool Runner 嘅 `max_iterations` 到頂就直接停，行為唔一致，
    規劃裁定「寧願多一輪都要有收尾文字」。
 9. **Live smoke（`npm run ai:smoke`）用真 DeepSeek key，會真係扣費**——
-   刻意淨係 6 條問題（見 `scripts/ai/smoke.ts` 頂註解），唔會喺 CI/自動
+   刻意淨係 7 條問題（見 `scripts/ai/smoke.ts` 頂註解），唔會喺 CI/自動
    測試入面跑。
 
 ## 前端（WP-AI2）

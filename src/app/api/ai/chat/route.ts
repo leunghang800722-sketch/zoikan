@@ -159,6 +159,12 @@ export async function POST(req: Request) {
               text: finalText,
               tools_used: result.toolsUsed,
               guard_triggered: guardResult.triggered,
+              // 老闆正式站驗收要求：token 用量之前淨係寫入 audit_log，
+              // 前端/smoke script 攞唔到——LlmClient.chat() 早已經回埋
+              // input_tokens/output_tokens（見 llm.ts LlmChatResult），
+              // 呢度單純傳埋出嚟，唔涉及新查詢/新權限判斷。
+              input_tokens: result.inputTokens,
+              output_tokens: result.outputTokens,
             }),
           ),
         );

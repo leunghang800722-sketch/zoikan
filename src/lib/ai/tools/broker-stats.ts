@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { aiQuery } from "../db";
+import { round2 } from "@/lib/reports/money";
 import type { AiToolContext } from "./common";
 import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 
@@ -59,7 +60,33 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
         delete rest.estimated_payout;
         return rest;
       });
-      return toolResultJson({ month, site: site ?? null, brokers });
+
+      // 系統計嘅總計——`pg` driver 對 COUNT()/SUM() 呢類 bigint/numeric
+      // 欄預設會用字串返（避免大數精度損失），逐個工具自己加總嗰陣要
+      // 手動 `Number()` 轉返做數字先可以相加。`guard_count` 唔可以直接
+      // 逐 broker 相加（同一個安員同月可能跨兩個雞頭做過嘢會計多），
+      // 所以另外用 `COUNT(DISTINCT sr.guard_id)`（冇 GROUP BY broker）
+      // 查一次去重總數。
+      const totalShiftCount = rows.reduce((sum, r) => sum + Number((r as { shift_count: unknown }).shift_count), 0);
+      const totalPayout = ctx.fieldVisibility.settlementVisible
+        ? round2(rows.reduce((sum, r) => sum + Number((r as { estimated_payout: unknown }).estimated_payout ?? 0), 0))
+        : undefined;
+      const { rows: guardTotalRows } = await aiQuery(
+        `SELECT COUNT(DISTINCT sr.guard_id) AS guard_count
+         FROM ai.shift_records sr
+         JOIN ai.brokers b ON b.id = COALESCE(sr.operational_broker_id, sr.settlement_broker_id)
+         WHERE sr.work_date >= $1::date AND sr.work_date < ($1::date + INTERVAL '1 month') ${siteFilter}`,
+        params,
+      );
+      const totalGuardCount = Number((guardTotalRows[0] as { guard_count?: unknown } | undefined)?.guard_count ?? 0);
+
+      return toolResultJson({
+        month,
+        site: site ?? null,
+        brokers,
+        totals: { shift_count: totalShiftCount, guard_count: totalGuardCount, estimated_payout: totalPayout },
+        totals_note: "totals 已由系統計（guard_count 已去重，唔係逐雞頭相加），唔好自己加總。",
+      });
     },
   });
 }

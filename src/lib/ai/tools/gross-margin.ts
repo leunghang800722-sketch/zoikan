@@ -18,7 +18,8 @@ const monthParam = z.string().regex(/^\d{4}-\d{2}$/, "月份格式要係 YYYY-MM
 export function createGrossMarginTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "gross_margin",
-    description: "睇毛利即時表——逐盤本月至今營業額/成本/毛利/毛利率，同總計。要「毛利即時表:view」；數字另外跟收客價/出街價查閱權歸零。",
+    description:
+      "毛利即時表——完整成本口徑（逐更工資＋雞頭費＋長工月薪分攤＋介紹費＋特別項目＋OT），逐盤本月至今營業額/成本/毛利/毛利率，同系統計好嘅總計（totals）。**凡問毛利／毛利率／成本／盈利（包括「全公司」「某個月」呢類問法）一律用呢個工具，唔准用 monthly_close 答**。要「毛利即時表:view」；數字另外跟收客價/出街價查閱權歸零。",
     inputSchema: z
       .object({
         month: monthParam,
@@ -64,6 +65,7 @@ export function createGrossMarginTool(ctx: AiToolContext) {
         thresholdPct: result.thresholdPct,
         sites: shaped,
         totals,
+        totals_note: "totals 已由系統計（完整成本口徑），答「全公司」「總計」呢類問題直接讀呢個 totals，唔好自己逐行加總。",
         note: clientRateVisible && settlementVisible ? undefined : "你嘅角色冇齊「收客價」／「出街價」查閱權，部分數字已歸零。",
       });
     },

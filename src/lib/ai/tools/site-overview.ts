@@ -58,12 +58,28 @@ export function createSiteOverviewTool(ctx: AiToolContext) {
         ),
       ]);
 
+      // 系統計嘅總計——`shift_count` 逐雞頭相加就係呢個盤總更數（唔會
+      // 重複，一個更次淨係屬於一個雞頭），`guard_count` 就唔可以逐行
+      // 相加（同一個安員可能喺呢個盤下跨雞頭做過），所以另外用
+      // `COUNT(DISTINCT guard_id)` 查一次去重總數。
+      const totalShiftCount = brokerCounts.rows.reduce((sum, r) => sum + Number((r as { shift_count: unknown }).shift_count), 0);
+      const { rows: guardTotalRows } = await aiQuery(
+        `SELECT COUNT(DISTINCT sr.guard_id) AS guard_count
+         FROM ai.shift_records sr
+         WHERE sr.site_id = $1 AND sr.work_date >= $2::date AND sr.work_date < ($2::date + INTERVAL '1 month')
+           AND sr.record_type = 'shift'`,
+        [siteRow.id, monthStart],
+      );
+      const totalGuardCount = Number((guardTotalRows[0] as { guard_count?: unknown } | undefined)?.guard_count ?? 0);
+
       return toolResultJson({
         site: siteRow,
         month,
         shift_types: shiftTypes.rows,
         daily_requirements_summary: dailyReq.rows,
         broker_breakdown: scrubRowsForResource(brokerCounts.rows, "shift_records", ctx.fieldVisibility),
+        totals: { shift_count: totalShiftCount, guard_count: totalGuardCount },
+        totals_note: "totals 已由系統計（guard_count 已去重），唔好自己加總。",
       });
     },
   });
