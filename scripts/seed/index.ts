@@ -3,10 +3,11 @@
 // PDPO：呢個檔案唔含任何真名/電話/工號——真數據淨係喺 runtime 由 CSV 讀入。
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "./lib/db";
 import { readCsv, num, bool, str, dateOnly, timeOnly, arr } from "./lib/csv";
-import { CSV } from "./lib/paths";
+import { CSV, DATA } from "./lib/paths";
 import {
   mapBrokerKind,
   mapSettlementType,
@@ -55,7 +56,15 @@ async function clearAll() {
   await prisma.specialItem.deleteMany({});
   await prisma.monthClose.deleteMany({});
   await prisma.rolePermission.deleteMany({});
-  const deletableUserIds = (await prisma.user.findMany({ where: { auditLogs: { none: {} } }, select: { id: true } })).map((u) => u.id);
+  // D-P1-1：真人帳號（createdBy 以 seed:D-P1-1 開頭）永遠唔喺 db:seed 刪走，
+  // 否則測試套件重跑 seed 會令佢哋被重建、密碼變咗。只有 db:reset（drop DB）
+  // 先會清走——正式環境永遠唔准跑 db:reset。
+  const deletableUserIds = (
+    await prisma.user.findMany({
+      where: { auditLogs: { none: {} }, NOT: { createdBy: { startsWith: "seed:D-P1-1" } } },
+      select: { id: true },
+    })
+  ).map((u) => u.id);
   if (deletableUserIds.length) await prisma.user.deleteMany({ where: { id: { in: deletableUserIds } } });
   await prisma.guard.updateMany({ data: { defaultBrokerId: null } });
   await prisma.guard.deleteMany({});
@@ -1038,8 +1047,15 @@ async function seedUsers(roleIds: Record<string, string>, brokerIdMap: Map<strin
     { tel: "90000005", name: "測試雞頭B", password: "Broker0005", roleName: "雞頭", brokerCsvId: "B02" }, // 代號 W
     { tel: "90000006", name: "測試安員", password: "Guard00006", roleName: "安員" },
   ];
+  // D-P1-1（2026-09-12 老闆答）：真人帳號由 gitignored 嘅
+  // data/mappings-private/users.json 讀（[{tel,name,role,broker_csv_id?}]），
+  // 電話號碼永遠唔入 git。初始密碼隨機生成，寫入同一目錄嘅
+  // users-initial-passwords.txt（gitignored），首次登入強制改密碼；
+  // 已存在嘅真人帳號重跑 seed 唔會重設密碼（同測試帳號相反）。
+  // SEED_SKIP_TEST_ACCOUNTS=1 時唔起假測試帳號（正式環境用）。
+  const skipTest = process.env.SEED_SKIP_TEST_ACCOUNTS === "1";
   let n = 0;
-  for (const a of accounts) {
+  for (const a of skipTest ? [] : accounts) {
     const passwordHash = await bcrypt.hash(a.password, 12);
     const brokerId = a.brokerCsvId ? brokerIdMap.get(a.brokerCsvId) ?? null : null;
     // P1-WP3：upsert（唔係 create）——呢個 user 如果已經有 audit_log
@@ -1071,7 +1087,40 @@ async function seedUsers(roleIds: Record<string, string>, brokerIdMap: Map<strin
     });
     n++;
   }
+  n += await seedRealUsers(roleIds, brokerIdMap);
   stats.users = n;
+}
+
+async function seedRealUsers(roleIds: Record<string, string>, brokerIdMap: Map<string, string>): Promise<number> {
+  const file = DATA("mappings-private/users.json");
+  if (!fs.existsSync(file)) return 0;
+  const rows = JSON.parse(fs.readFileSync(file, "utf-8")) as Array<{ tel: string; name: string; role: string; broker_csv_id?: string }>;
+  const pwFile = DATA("mappings-private/users-initial-passwords.txt");
+  const lines: string[] = [];
+  let created = 0;
+  for (const r of rows) {
+    if (!/^\d{8}$/.test(r.tel)) throw new Error("users.json：tel 必須係 8 位數字");
+    const roleId = roleIds[r.role];
+    if (!roleId) throw new Error(`users.json：未知角色 ${r.role}`);
+    if (r.role === "雞頭" && !r.broker_csv_id) throw new Error("users.json：雞頭帳號必須有 broker_csv_id");
+    const brokerId = r.broker_csv_id ? brokerIdMap.get(r.broker_csv_id) ?? null : null;
+    const existing = await prisma.user.findUnique({ where: { tel: r.tel } });
+    if (existing) {
+      await prisma.user.update({ where: { tel: r.tel }, data: { name: r.name, roleId, brokerId } });
+      continue;
+    }
+    const password = crypto.randomBytes(9).toString("base64url"); // 12 字元
+    const passwordHash = await bcrypt.hash(password, 12);
+    await prisma.user.create({
+      data: { name: r.name, tel: r.tel, passwordHash, roleId, brokerId, mustChangePwd: true, createdBy: "seed:D-P1-1 真人帳號（data/mappings-private/users.json）" },
+    });
+    lines.push(`${r.name}\t${r.tel}\t${password}\t（首次登入必須改密碼）`);
+    created++;
+  }
+  // 每次只寫該次新建嘅帳號（覆寫，唔 append）——舊行必然已經係無效密碼
+  if (lines.length) fs.writeFileSync(pwFile, `# 由 db:seed 於 ${new Date().toISOString()} 生成，交俾本人後刪走\n` + lines.join("\n") + "\n", "utf-8");
+  stats.realUsersCreated = created;
+  return rows.length;
 }
 
 // ---------------------------------------------------------------------------

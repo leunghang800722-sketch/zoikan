@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { getNavLinks } from "@/lib/rbac/nav";
 import { LogoutButton } from "@/components/LogoutButton";
+import { MustChangePwdGate } from "@/components/MustChangePwdGate";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
@@ -34,7 +35,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <LogoutButton />
         </div>
       </aside>
-      <main className="min-w-0 flex-1 overflow-x-auto p-6">{children}</main>
+      <main className="min-w-0 flex-1 overflow-x-auto p-6">
+        <MustChangePwdGate mustChange={session.mustChangePwd} />
+        {children}
+      </main>
     </div>
   );
 }

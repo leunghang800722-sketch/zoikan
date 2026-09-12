@@ -22,12 +22,12 @@ function LoginForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tel, password }),
       });
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      const body = (await res.json().catch(() => ({}))) as { message?: string; user?: { must_change_pwd?: boolean } };
       if (!res.ok) {
         setError(body.message ?? "登入失敗");
         return;
       }
-      router.push(next);
+      router.push(body.user?.must_change_pwd ? "/change-password" : next);
       router.refresh();
     } catch {
       setError("網絡錯誤，請重試");

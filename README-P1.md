@@ -246,3 +246,11 @@ decimal.js 實際內部形狀（`s`/`e`/`d` + `toFixed` method）duck-type
   `data/mappings-private/names_en.csv` 做 needle（797 個），掃描晒全部
   會入 git 嘅檔案（`git ls-files` + 未 gitignore 嘅 untracked 檔案，共
   186 個）——0 命中（P1-WP2 Opus 對抗式驗收後覆核，2026-09-11）。
+
+## 真人帳號（D-P1-1）
+
+真人帳號唔喺 git：`data/mappings-private/users.json`（gitignored）格式
+`[{"tel":"8位數字","name":"顯示名","role":"老闆|主管|會計|雞頭|安員","broker_csv_id":"B01（雞頭先要）"}]`。
+`npm run db:seed` 讀到就會建立帳號，初始密碼隨機生成，寫入
+`data/mappings-private/users-initial-passwords.txt`（gitignored，交完俾本人就刪走），首次登入強制改密碼。
+已存在嘅真人帳號重跑 seed 唔會重設密碼。正式環境用 `SEED_SKIP_TEST_ACCOUNTS=1 npm run db:seed` 唔起假測試帳號。

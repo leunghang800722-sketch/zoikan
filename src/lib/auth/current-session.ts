@@ -27,6 +27,8 @@ function sessionPassword(): string {
 
 export interface CurrentSession extends SessionData {
   baseRole: RoleName;
+  /** D-P1-1：首次登入強制改密碼（DB users.must_change_pwd，每次讀 session 即場查） */
+  mustChangePwd: boolean;
 }
 
 /** 喺 Server Component（page.tsx／layout.tsx）讀取已登入用戶；未登入／
@@ -45,8 +47,8 @@ export async function getCurrentSession(): Promise<CurrentSession | null> {
   }
   if (!data.userId || !data.baseRole || !(ROLE_NAMES as readonly string[]).includes(data.baseRole)) return null;
 
-  const user = await prisma.user.findUnique({ where: { id: data.userId }, select: { tokenVersion: true, status: true } });
+  const user = await prisma.user.findUnique({ where: { id: data.userId }, select: { tokenVersion: true, status: true, mustChangePwd: true } });
   if (!user || user.status !== "active" || user.tokenVersion !== data.tokenVersion) return null;
 
-  return data as CurrentSession;
+  return { ...(data as SessionData), baseRole: data.baseRole as RoleName, mustChangePwd: user.mustChangePwd };
 }
