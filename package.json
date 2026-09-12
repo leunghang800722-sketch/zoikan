@@ -13,6 +13,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:seed": "tsx scripts/seed/index.ts",
     "db:reset": "tsx scripts/db/reset.ts",
+    "db:ensure-ai-role": "tsx scripts/db/ensure-ai-role.ts",
     "report:regen": "tsx scripts/report/index.ts && tsx scripts/report/diff.ts",
     "assignments:rollover": "tsx scripts/assignments/rollover.ts",
     "gate:export": "tsx scripts/report/roster-export-diff.ts --month 2026-07 && tsx scripts/report/roster-export-diff.ts --month 2026-07 --derived && tsx scripts/report/roster-export-newmonth-gate.ts",
@@ -21,10 +22,12 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^3.0.3",
     "iron-session": "^8.0.4",
     "next": "^15.5.25",
+    "pg": "^8.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.6.2"
@@ -36,6 +39,7 @@
     "@tailwindcss/postcss": "^4",
     "@types/async-exit-hook": "^2.0.2",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "async-exit-hook": "2.0.1",

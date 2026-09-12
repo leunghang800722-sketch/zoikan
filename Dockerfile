@@ -27,5 +27,8 @@ COPY --from=build /app/prisma ./prisma
 # 直接用完整 node_modules 疊喺 standalone 嘅最小 node_modules 上面（超集，安全）
 COPY --from=build /app/node_modules ./node_modules
 EXPOSE 8080
-# 每次啟動先套用 migration（幂等），再起 Next standalone server
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && node server.js"]
+# 每次啟動：套用 migration（幂等）→ 建/更新 AI 助手唯讀角色 zoikan_ai_ro
+# （幂等；冇 AI_DB_PASSWORD 就跳過並 warn，唔中止部署，見
+# scripts/db/ensure-ai-role.ts）→ 起 Next standalone server。
+COPY --from=build /app/scripts ./scripts
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts && node server.js"]

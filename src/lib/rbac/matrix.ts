@@ -46,6 +46,12 @@ export const MODULES = [
   "糧明細",
   "更表匯出",
   "個人資料", // P3 新增——設計文件「改自己個人資料 全部✓」，change-password／自己 display 資料用呢格，五角色皆✓
+  // WP-AI1 新增（老闆 2026-09-12 產品要求）——側欄 AI 助手（唯讀，讀操作
+  // 說明＋讀真實系統數據答問題）嘅基本進入權。淨係 view 有意義（助手本身
+  // 冚死唔可以寫入，冇 create/update/void/export 呢類概念）；雞頭／安員
+  // 硬性禁止——同「呢個 module 硬性拒絕嘅角色連 AI 助手都攞唔到」直接對應
+  // requirePermission(req, "助手", "view") 喺 chat route 嘅第一道閘。
+  "助手",
 ] as const;
 export type Module = (typeof MODULES)[number];
 
@@ -101,6 +107,7 @@ const OWNER: RoleMatrix = {
   糧明細: row(G, NA, NA, NA, G),
   更表匯出: row(G, NA, NA, NA, G),
   個人資料: row(G, NA, G, NA, NA), // 改自己個人資料✓
+  助手: row(G, NA, NA, NA, NA), // WP-AI1：老闆✓——view 有意義，其餘 N/A
 };
 
 // ---------------------------------------------------------------------------
@@ -127,6 +134,7 @@ const SUPERVISOR: RoleMatrix = {
   糧明細: row(O, NA, NA, NA, O),
   更表匯出: row(G, NA, NA, NA, G),
   個人資料: row(G, NA, G, NA, NA),
+  助手: row(G, NA, NA, NA, NA), // WP-AI1：主管✓
 };
 
 // ---------------------------------------------------------------------------
@@ -153,6 +161,7 @@ const ACCOUNTANT: RoleMatrix = {
   糧明細: row(G, NA, NA, NA, G),
   更表匯出: row(G, NA, NA, NA, G),
   個人資料: row(G, NA, G, NA, NA),
+  助手: row(G, NA, NA, NA, NA), // WP-AI1：會計✓
 };
 
 // ---------------------------------------------------------------------------
@@ -194,6 +203,7 @@ const BROKER: RoleMatrix = {
   糧明細: uniformRow(D),
   更表匯出: row(D, NA, NA, NA, O), // P3：export 同更表:export 一致（兩者○）
   個人資料: row(G, NA, G, NA, NA),
+  助手: uniformRow(D), // WP-AI1：硬性禁止——雞頭永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
 };
 
 // ---------------------------------------------------------------------------
@@ -220,6 +230,7 @@ const GUARD_SELF: RoleMatrix = {
   糧明細: uniformRow(D),
   更表匯出: uniformRow(D),
   個人資料: row(G, NA, G, NA, NA), // 「改自己個人資料」P4 都適用（change-password 呢個 P1 就有）
+  助手: uniformRow(D), // WP-AI1：硬性禁止——安員永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
 };
 
 export const DEFAULT_MATRIX: Record<RoleName, RoleMatrix> = {

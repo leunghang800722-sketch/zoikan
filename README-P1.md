@@ -128,12 +128,13 @@ tools/importer/         P0 工具（保留做 seed 來源 + 回歸對數，唔�
 
 ### RBAC：module × action 矩陣（Opus 對抗式驗收 C3 拆細版）
 
-**19 個 module**（由舊版 10 個拆細，令設計文件§5.1 表入面粒度唔同嘅行都
-表達得到）× 5 個 action（view／create／update／void／export）＝
-**95 permission**，單一事實來源喺 `src/lib/rbac/matrix.ts`（同設計文件
-§5.0/§5.1 逐行對應，每個 module 上面有註解引用返表入面原文；
-`scripts/seed/index.ts`／`tests/global-setup.ts` 都經
-`src/lib/rbac/seed.ts` 嘅同一份邏輯入 DB，唔會兩份矩陣漂移）：
+**21 個 module**（由舊版 10 個拆細，令設計文件§5.1 表入面粒度唔同嘅行都
+表達得到；P3 加咗`個人資料`，WP-AI1 加咗`助手`）× 5 個 action
+（view／create／update／void／export）＝**105 permission**，單一事實
+來源喺 `src/lib/rbac/matrix.ts`（同設計文件§5.0/§5.1 逐行對應，每個
+module 上面有註解引用返表入面原文；`scripts/seed/index.ts`／
+`tests/global-setup.ts` 都經 `src/lib/rbac/seed.ts` 嘅同一份邏輯入 DB，
+唔會兩份矩陣漂移）：
 
 `更表`、`配額`、`審批`、**`收客價`**、**`出街價`**（拆自舊「價目」——
 設計文件「睇收客價、毛利、月結總表」主管預設**○**、「睇出街價（全部
@@ -142,7 +143,9 @@ tools/importer/         P0 工具（保留做 seed 來源 + 回歸對數，唔�
 `糧務`、**`批核糧務批次`**、**`月結鎖定解鎖`**（拆自舊「糧務」void）、
 **`用戶管理`**、**`操作紀錄`**（拆自舊「系統」）、**`毛利即時表`**、
 **`尚欠總覽`**、**`月結總表`**、**`糧明細`**、**`更表匯出`**（拆自舊
-「報表」，設計文件§5.0「每份報表獨立一行權限」）。
+「報表」，設計文件§5.0「每份報表獨立一行權限」）、**`個人資料`**
+（P3，改自己個人資料，五角色皆✓）、**`助手`**（WP-AI1，側欄 AI 助手嘅
+基本進入權，淨係 view 有意義，雞頭／安員硬性禁止）。
 
 - **✓（grant）**：seed 出嚟 `role_permissions.granted = true`。
 - **○（off）**：seed 出嚟 `role_permissions.granted = false`——呢行存在，
@@ -153,7 +156,7 @@ tools/importer/         P0 工具（保留做 seed 來源 + 回歸對數，唔�
   hard-deny check（`isHardDenied()`，用 `session.baseRole` 查——見下面
   自訂角色一節），即使有人手動塞一條 `granted=true` 嘅 role_permission
   入 DB 都照拒 403——`tests/wp2-rbac-matrix.test.ts` 逐格（5 角色 ×
-  95 權限 = 475 格）test 咗呢個行為，仲有一個專門 test 模擬「塞咗一行
+  105 權限 = 525 格）test 咗呢個行為，仲有一個專門 test 模擬「塞咗一行
   都拒」。
 - 全部 API route／server action 一律經 `requirePermission(req, module,
   action)`；拒絕（未登入 401／冇權限或硬性禁止 403）都寫一條
@@ -232,6 +235,24 @@ decimal.js 實際內部形狀（`s`/`e`/`d` + `toFixed` method）duck-type
 ## endpoint 清單同對應權限
 
 見 [`docs/api.md`](docs/api.md)。
+
+## AI 助手（WP-AI1）
+
+側欄 AI 助手（唯讀，讀操作說明＋讀真實系統數據答問題）——只有
+老闆／主管／會計用得，`助手` module 雞頭／安員硬性禁止（見
+`src/lib/rbac/matrix.ts`，而家 21 個 module）。**鐵律**：架構上做唔到
+任何寫入／修改／部署，四層唯讀保證（DB 角色 `zoikan_ai_ro` 淨係
+`USAGE`+`SELECT` on `ai.*` schema → 唯讀 view 冚咗 tel/bank_info/
+password_hash/otp_secret → 獨立 `pg` 連線唔用 Prisma 寫入客戶端 →
+`sql_select` tokenizer 拒絕 DML/DDL）。詳細架構、工具清單、輸出過濾、
+env 設定、已知限制見 [`docs/ai-assistant.md`](docs/ai-assistant.md)。
+
+**前端（WP-AI2）**：`(app)` layout 右邊緣直向 tab「在勤助手」——淨係
+`助手:view` 為 true 先 render（雞頭/安員 DOM 零元素），撳開側欄支援
+歡迎語＋4 個例子、串流問答、簡單 markdown 回覆、清空對話（二次確認）、
+手機全屏，送問題帶目前頁面 `context`（site_id/month/broker）俾後端
+system prompt 做提示。詳見 [`docs/ai-assistant.md`](docs/ai-assistant.md)
+「前端（WP-AI2）」一節；e2e 見 `tests/e2e/ai.spec.ts`。
 
 ## PDPO
 

@@ -18,7 +18,11 @@ export type AuditAction =
   | "change_password"
   | "lock_month"
   | "unlock_month"
-  | "permission_denied";
+  | "permission_denied"
+  // WP-AI1：AI 助手——每條問答一條（table_name="ai_chat"）；guard
+  // 觸發（輸出過濾攔截咗一個似係改動指示/DML 嘅回覆）額外多一條。
+  | "ai_chat"
+  | "ai_guard_triggered";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

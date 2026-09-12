@@ -62,3 +62,13 @@ export async function clearBrokerShiftRecords(brokerId: string, siteId: string, 
     where: { siteId, workDate: { gte: month, lte: monthEnd }, OR: [{ settlementBrokerId: brokerId }, { operationalBrokerId: brokerId }] },
   });
 }
+
+/** WP-AI2 `ai.spec.ts` 用：清走呢個電話（TEST_TEL）用戶嘅 AI 助手對話
+ * 記錄（`ai_conversations`，一個 user 一行）——令「開側欄見歡迎語」呢類
+ * 斷言唔會因為上一次跑剩低嘅對話記錄而唔穩定（重跑 e2e 都由乾淨狀態
+ * 開始）。 */
+export async function clearAiConversationForTel(tel: string): Promise<void> {
+  const user = await prisma.user.findFirst({ where: { tel } });
+  if (!user) return;
+  await prisma.aiConversation.deleteMany({ where: { userId: user.id } });
+}

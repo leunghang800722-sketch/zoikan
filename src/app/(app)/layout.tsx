@@ -1,16 +1,27 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
-import { getNavLinks } from "@/lib/rbac/nav";
+import { getNavLinks, getViewGrants } from "@/lib/rbac/nav";
 import { uiLabel } from "@/lib/ui/format";
 import { LogoutButton } from "@/components/LogoutButton";
 import { MustChangePwdGate } from "@/components/MustChangePwdGate";
+import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
   if (!session) redirect("/login");
 
-  const links = await getNavLinks(session);
+  // WP-AI2：「助手」module 嘅 view 權（老闆/主管/會計✓，雞頭/安員硬性
+  // 禁止，見 `src/lib/rbac/matrix.ts`）同左欄導航一齊用同一次
+  // `getViewGrants()` fetch 判斷，唔使幫側欄 AI 助手 tab 多打一次
+  // `/api/roles/:id/permissions`。冇 `助手:view` 就連 `<AiAssistantSidebar>`
+  // 呢個 component 都唔會 render——DOM 零元素，唔係淨係 CSS 隱藏。
+  const grants = await getViewGrants(session);
+  const links = await getNavLinks(session, grants);
+  // 未設定 AI Hub key（正式站接線前）或者唔係測試用 fake 模型嗰陣，tab 唔顯示——
+  // 免得用戶見到一個「暫時未連接」嘅助手。
+  const aiConfigured = process.env.AI_LLM === "fake" || !!process.env.AI_HUB_API_KEY;
+  const showAiAssistant = grants["助手"] && aiConfigured;
 
   return (
     <div className="flex min-h-screen">
@@ -40,6 +51,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <MustChangePwdGate mustChange={session.mustChangePwd} />
         {children}
       </main>
+      {showAiAssistant && <AiAssistantSidebar userName={session.name} />}
     </div>
   );
 }

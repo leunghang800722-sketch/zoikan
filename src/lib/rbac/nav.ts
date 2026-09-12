@@ -3,7 +3,7 @@
 // 折衷做法（見 P1-WP3 任務指示）：
 //   1. 先用 DEFAULT_MATRIX（出廠預設）做 fallback。
 //   2. 再試打一次 `GET /api/roles/:id/permissions`，用返呢個角色實際
-//      （可能俾老闆喺角色權限頁改過）嘅 95 格矩陣覆蓋 view 呢個 action。
+//      （可能俾老闆喺角色權限頁改過）嘅 105 格矩陣覆蓋 view 呢個 action。
 //
 // 已知限制：`/api/roles/:id/permissions` 本身要求呼叫者有「用戶管理:view」
 // ——喺 matrix.ts 呢個 module 對主管/會計/雞頭/安員 4 個 base_role 全部
@@ -25,7 +25,11 @@ interface PermissionCell {
   hard_denied: boolean;
 }
 
-async function getViewGrants(session: CurrentSession): Promise<Record<Module, boolean>> {
+/** WP-AI2：側欄 AI 助手嘅入口 tab 同呢個左欄導航列一樣，用「呢個角色
+ * 有冇 `助手:view`」決定顯示（唔顯示 = DOM 零元素，唔係淨係 CSS
+ * 隱藏）——輸出返成個 grants 表等 `(app)/layout.tsx` 可以一次 fetch
+ * 拎晒（唔使為咗助手 tab 再打多一次 `/api/roles/:id/permissions`）。 */
+export async function getViewGrants(session: CurrentSession): Promise<Record<Module, boolean>> {
   const fallback = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(session.baseRole, m, "view")])) as Record<Module, boolean>;
 
   try {
@@ -59,8 +63,8 @@ export interface NavLink {
   label: string;
 }
 
-export async function getNavLinks(session: CurrentSession): Promise<NavLink[]> {
-  const grants = await getViewGrants(session);
+export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Record<Module, boolean>): Promise<NavLink[]> {
+  const grants = prefetchedGrants ?? (await getViewGrants(session));
   const links: NavLink[] = [];
   const push = (href: string, label: string, mod: Module) => {
     if (grants[mod]) links.push({ href, label });

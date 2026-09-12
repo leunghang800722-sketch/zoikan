@@ -597,7 +597,8 @@ model User {
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
-  auditLogs AuditLog[]
+  auditLogs      AuditLog[]
+  aiConversation AiConversation?
 
   @@map("users")
 }
@@ -649,4 +650,24 @@ model Expense {
   createdBy String?  @map("created_by")
 
   @@map("expenses")
+}
+
+// ---------------------------------------------------------------------------
+// ai_conversations（WP-AI1）：側欄 AI 助手嘅對話記錄——唯讀助手本身淨係
+// 讀 `ai.*` schema（見 prisma/migrations/…_wp_ai1_readonly_schema），呢個
+// 表反而係一般讀寫（用主 Prisma client），純粹存「呢個 user 同助手嘅
+// 對話 history」，唔屬於「AI 可以查嘅業務數據」，所以擺喺呢度用返一般
+// migration 流程（唔使加入 ai schema）。
+// user_id unique——每個 user 得一條對話記錄（設計裁定：唔留多個分頁
+// session，簡化「清空自己嘅對話」語意）。
+// ---------------------------------------------------------------------------
+model AiConversation {
+  id        String   @id @default(uuid())
+  userId    String   @unique @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  messages  Json     @default("[]") // 最多保留 30 turn（見 src/lib/ai/conversation.ts）
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("ai_conversations")
 }

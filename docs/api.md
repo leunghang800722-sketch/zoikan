@@ -36,18 +36,21 @@ bump；`requireSession()`（`src/lib/rbac/requirePermission.ts`）每個
 request 都同 DB 現值核對一次（一條 `SELECT token_version, status`），
 唔啱就當未登入（401）。
 
-## RBAC 矩陣（19 module × 5 action，Opus 驗收 C3 拆細版）
+## RBAC 矩陣（21 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1 加）
 
 單一事實來源：`src/lib/rbac/matrix.ts`。由舊版 10 module 拆細做 19 個，
-逐個對應《設計文件》§5.1 表入面唔同粒度嘅行（詳細逐格對照見
-README-P1.md「RBAC：module × action 矩陣」一節）：
+P3 加咗`個人資料`、WP-AI1 加咗`助手`，而家 21 個，逐個對應《設計文件》
+§5.1 表入面唔同粒度嘅行（詳細逐格對照見 README-P1.md「RBAC：module ×
+action 矩陣」一節）：
 
 `更表`／`配額`／`審批`／**`收客價`**／**`出街價`**（拆自舊「價目」）／
 `盤`／`安員`／**`自己安員`**（新增，雞頭專用）／`雞頭`／`糧務`／
 **`批核糧務批次`**／**`月結鎖定解鎖`**（拆自舊「糧務」void）／
 **`用戶管理`**／**`操作紀錄`**（拆自舊「系統」）／**`毛利即時表`**／
 **`尚欠總覽`**／**`月結總表`**／**`糧明細`**／**`更表匯出`**（拆自舊
-「報表」，每份報表獨立一行權限，設計文件§5.0）。
+「報表」，每份報表獨立一行權限，設計文件§5.0）／**`個人資料`**（P3）／
+**`助手`**（WP-AI1，側欄 AI 助手，雞頭／安員硬性禁止，見
+[`docs/ai-assistant.md`](ai-assistant.md)）。
 
 **自訂角色（Opus 驗收殘留2）**：`roles.base_role`——複製一個出廠角色
 時寫死（`POST /api/roles`），**唔可以再改**；硬性 deny 矩陣查詢一律用
@@ -89,9 +92,20 @@ lock/unlock 代替），其餘資源一律：
 | 特殊項 | `/api/special-items` | 糧務 | 冇（雞頭硬性 deny） | 受月份鎖定（用 `month` 欄，create/update/void/**unvoid，C4 補漏**）；`revenue` 受「收客價」field-level gate（C3） |
 | 用戶 | `/api/users` | **`用戶管理`**（C3 拆自系統） | 冇（雞頭硬性 deny） | 回應一律剝 `password_hash`／`otp_secret`（殘留3，`toSafeUserDTO`）；create 要求強密碼（視乎目標角色）；PATCH 改 `role_id`／`broker_id` 會 bump 目標用戶 token_version（殘留1） |
 | 角色 | `/api/roles` | 用戶管理 | 冇 | `POST { source_role_id, name }` 複製現有角色，`base_role` 繼承唔可改；void 淨係 `is_custom=true` 得；**冇 unvoid** |
-| 角色權限矩陣 | `/api/roles/:id/permissions` | 用戶管理 | 冇 | `GET` 攞矩陣（19×5=95 格，含 `hard_denied` 旗標，用 `base_role` 判斷）；`PATCH { changes:[{module,action,granted}] }` 逐格改，硬性禁止格拒絕開（殘留6：一次 `findMany` 攞晒 permission，唔逐個 change 查） |
+| 角色權限矩陣 | `/api/roles/:id/permissions` | 用戶管理 | 冇 | `GET` 攞矩陣（21×5=105 格，含 `hard_denied` 旗標，用 `base_role` 判斷）；`PATCH { changes:[{module,action,granted}] }` 逐格改，硬性禁止格拒絕開（殘留6：一次 `findMany` 攞晒 permission，唔逐個 change 查） |
 | 月結 | `/api/month-closes` | 糧務（view/create）／**`月結鎖定解鎖`**（C3 拆自糧務，lock/unlock） | 冇 | `GET`/`POST`（起草月）；`POST /:id/lock`、`POST /:id/unlock`（強制 `{ reason }`）——**冇 void/unvoid** |
 | 操作紀錄 | `/api/audit-log` | **`操作紀錄`**（C3 拆自系統） | 冇 | 只讀；`?export=1` 額外要求 `操作紀錄:export` |
+
+## AI 助手（WP-AI1）
+
+| Method | Path | 權限 | 說明 |
+|---|---|---|---|
+| POST | `/api/ai/chat` | **`助手`**:view（雞頭/安員硬性禁止） | `{ message }`；SSE 串流（`event: delta`／`done`／`error`）；每人每日 `AI_DAILY_LIMIT` 條（超過 429）；每條問答寫 `audit_log(table_name=ai_chat, action=ai_chat)` |
+| GET | `/api/ai/conversation` | 助手:view | 攞返自己同助手嘅對話記錄（最多 30 turn） |
+| DELETE | `/api/ai/conversation` | 助手:view | 清空自己嘅對話記錄 |
+
+**架構上做唔到任何寫入／修改／部署**——四層唯讀保證＋工具清單＋輸出
+過濾詳見 [`docs/ai-assistant.md`](ai-assistant.md)。
 
 ## 查詢參數（list endpoint 通用）
 
