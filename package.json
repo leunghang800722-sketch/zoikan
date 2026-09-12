@@ -14,6 +14,7 @@
     "db:seed": "tsx scripts/seed/index.ts",
     "db:reset": "tsx scripts/db/reset.ts",
     "db:ensure-ai-role": "tsx scripts/db/ensure-ai-role.ts",
+    "db:sync-permissions": "tsx scripts/db/sync-permissions.ts",
     "report:regen": "tsx scripts/report/index.ts && tsx scripts/report/diff.ts",
     "assignments:rollover": "tsx scripts/assignments/rollover.ts",
     "gate:export": "tsx scripts/report/roster-export-diff.ts --month 2026-07 && tsx scripts/report/roster-export-diff.ts --month 2026-07 --derived && tsx scripts/report/roster-export-newmonth-gate.ts",

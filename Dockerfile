@@ -31,4 +31,4 @@ EXPOSE 8080
 # （幂等；冇 AI_DB_PASSWORD 就跳過並 warn，唔中止部署，見
 # scripts/db/ensure-ai-role.ts）→ 起 Next standalone server。
 COPY --from=build /app/scripts ./scripts
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts && node server.js"]
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && node node_modules/.bin/tsx scripts/db/sync-permissions.ts && node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts && node server.js"]
