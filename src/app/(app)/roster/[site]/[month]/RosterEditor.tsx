@@ -230,7 +230,8 @@ function isEffectiveShiftCell(row: RowMeta, day: number, cells: Map<string, Cell
 const COL_SHIFT_TYPE = 56;
 const COL_NAME = 96;
 const COL_STAFF_NO = 88;
-const COL_TEL = 104;
+// 2026-09-12 老闆 feedback：更表唔顯示安員電話（聯絡資料只喺安員名冊，按 安員:view 權限）；Excel 匯出照原檔格式保留
+const COL_TEL = 0;
 const COL_BROKER = 104;
 const COL_DAY = 44;
 
@@ -954,9 +955,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.staffNo, width: COL_STAFF_NO, position: "sticky" }}>
                 工號
               </th>
-              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.tel, width: COL_TEL, position: "sticky" }}>
-                電話
-              </th>
               {!isBrokerSession && (
                 <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.broker, width: COL_BROKER, position: "sticky" }}>
                   雞頭
@@ -998,9 +996,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                   </td>
                   <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.staffNo, width: COL_STAFF_NO, position: "sticky" }}>
                     {row.staffNo}
-                  </td>
-                  <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.tel, width: COL_TEL, position: "sticky" }}>
-                    {row.tel}
                   </td>
                   {!isBrokerSession && (
                     <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.broker, width: COL_BROKER, position: "sticky" }}>
@@ -1074,7 +1069,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               <td className="sticky z-10 bg-gray-50 border border-gray-300 font-medium" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
                 Total
               </td>
-              <td className="sticky z-10 bg-gray-50 border border-gray-300" style={{ left: leftOffsets.tel, position: "sticky" }} />
               {dayTotals.map((t, i) => (
                 <td key={i} className="border border-gray-300 text-center bg-gray-50">
                   {t}
@@ -1085,7 +1079,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               <td className="sticky z-10 bg-gray-50 border border-gray-300 font-medium" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
                 所需人手
               </td>
-              <td className="sticky z-10 bg-gray-50 border border-gray-300" style={{ left: leftOffsets.tel, position: "sticky" }} />
               {dayList.map((d) => (
                 <td key={d} className="border border-gray-300 text-center bg-gray-50">
                   {dailyReq[d - 1] ?? 0}
@@ -1096,7 +1089,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               <td className="sticky z-10 bg-gray-50 border border-gray-300 font-medium" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
                 尚欠
               </td>
-              <td className="sticky z-10 bg-gray-50 border border-gray-300" style={{ left: leftOffsets.tel, position: "sticky" }} />
               {dayList.map((d) => {
                 const short = Math.max(0, (dailyReq[d - 1] ?? 0) - dayTotals[d - 1]);
                 return (
