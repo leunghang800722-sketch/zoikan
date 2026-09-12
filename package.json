@@ -20,7 +20,8 @@
     "gate:export": "tsx scripts/report/roster-export-diff.ts --month 2026-07 && tsx scripts/report/roster-export-diff.ts --month 2026-07 --derived && tsx scripts/report/roster-export-newmonth-gate.ts",
     "gate:reports": "tsx scripts/gate/reports.ts",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "ai:smoke": "tsx scripts/ai/smoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
@@ -28,6 +29,7 @@
     "bcryptjs": "^3.0.3",
     "iron-session": "^8.0.4",
     "next": "^15.5.25",
+    "openai": "^7.15.0",
     "pg": "^8.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

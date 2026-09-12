@@ -11,6 +11,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { BetaRunnableTool } from "@anthropic-ai/sdk/lib/tools/BetaRunnableTool";
 import type { Anthropic as AnthropicTypes } from "@anthropic-ai/sdk";
+import { resolveAiProvider } from "./config";
+import { DeepSeekLlmClient } from "./providers/deepseek";
 
 export interface LlmHistoryTurn {
   role: "user" | "assistant";
@@ -42,9 +44,17 @@ export interface LlmClient {
   chat(params: LlmChatParams): Promise<LlmChatResult>;
 }
 
+// WP-AI3：由「AI Hub 暫時連唔到」改做「AI 服務暫時連唔到」——加咗
+// DeepSeek 之後呢個 error 唔再淨係 Zeabur AI Hub（Anthropic）先會拋，
+// DeepSeek 嗰邊 401/429/5xx/網絡錯誤（`src/lib/ai/providers/deepseek.ts`
+// 嘅 `mapDeepSeekError()`）同「冇任何 provider 配置好」都會拋呢個，
+// 訊息唔應該再點名邊個供應商。route.ts 嘅 JSON error code 同步由
+// `ai_hub_unavailable` 改做 `ai_provider_unavailable`（前端
+// `friendlyAiError()` 淨係跟 HTTP status 503 揀文字，本身冇提
+// 「Hub」，唔使改）。
 export class LlmUnavailableError extends Error {
   constructor(cause?: unknown) {
-    super("AI Hub 暫時連唔到，請稍後再試");
+    super("AI 服務暫時連唔到，請稍後再試");
     this.name = "LlmUnavailableError";
     if (cause instanceof Error) this.cause = cause;
   }
@@ -139,11 +149,37 @@ class FakeDevLlmClient implements LlmClient {
 
 let singleton: LlmClient | undefined;
 
+// WP-AI3：邊個 provider——判斷邏輯（`AI_LLM=fake` 優先 → 明文
+// `AI_PROVIDER` → 有邊個 key 就自動揀）抽咗去 `./config.ts`
+// `resolveAiProvider()`，同 `(app)/layout.tsx` 嘅 `isAiConfigured()`
+// 共用同一套（見嗰個檔案頂註解，兩邊判斷結果一定一致，唔會出現「tab
+// 顯示咗但打落去 503」或者「tab 唔顯示但其實配置好」呢種走飛）。
+// **呢個唔削弱任何 guard／權限**：呢個 factory 淨係決定「用邊個
+// `LlmClient` 去問模型」，之前之後嘅 `requirePermission()`／daily
+// limit／`checkOutputGuardAndAudit()` 完全唔受影響（無論揀邊個
+// provider，`LlmClient.chat()` 個 return shape 一樣，route.ts 睇唔出
+// 分別）。
 /** production 用嘅單例——route.ts 淨係 call 呢個，唔會自己 `new
- * AnthropicLlmClient()`（等測試可以用 `setLlmClientForTests()` 換走）。 */
+ * AnthropicLlmClient()`/`new DeepSeekLlmClient()`（等測試可以用
+ * `setLlmClientForTests()` 換走）。冇任何 provider 配置好就拋
+ * `LlmUnavailableError`（route.ts 接住轉 503 `ai_provider_unavailable`），
+ * 唔會靜靜雞 fallback 去第個 provider。 */
 export function getLlmClient(): LlmClient {
-  if (!singleton) {
-    singleton = process.env.AI_LLM === "fake" ? new FakeDevLlmClient() : new AnthropicLlmClient();
+  if (singleton) return singleton;
+
+  const provider = resolveAiProvider();
+  switch (provider) {
+    case "fake":
+      singleton = new FakeDevLlmClient();
+      break;
+    case "deepseek":
+      singleton = new DeepSeekLlmClient();
+      break;
+    case "anthropic":
+      singleton = new AnthropicLlmClient();
+      break;
+    default:
+      throw new LlmUnavailableError(new Error("AI_PROVIDER 未設定，亦搵唔到 DEEPSEEK_API_KEY/AI_HUB_API_KEY"));
   }
   return singleton;
 }

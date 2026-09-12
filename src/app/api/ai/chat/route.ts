@@ -104,7 +104,7 @@ export async function POST(req: Request) {
     llmClient = getLlmClient();
   } catch (err) {
     if (err instanceof LlmUnavailableError) {
-      return new Response(JSON.stringify({ error: "ai_hub_unavailable", message: err.message }), {
+      return new Response(JSON.stringify({ error: "ai_provider_unavailable", message: err.message }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
       });

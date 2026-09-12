@@ -44,7 +44,7 @@ describe("syncPermissions", () => {
   });
 
   it("自訂角色（base_role=雞頭）按 base_role 補預設行，硬性 deny 唔寫行", async () => {
-    const custom = await prisma.role.create({ data: { name: "高級雞頭", baseRole: "雞頭", createdBy: "test" } });
+    const custom = await prisma.role.create({ data: { name: "同步測試雞頭", baseRole: "雞頭", createdBy: "test" } });
     const r = await syncPermissions(prisma, "test");
     expect(r.rolesScanned).toBeGreaterThanOrEqual(6);
     const { permId } = await ids();

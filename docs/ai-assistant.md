@@ -152,7 +152,7 @@ module，一句查詢涉及嘅每張表都要有 view 權（AND，唔係 OR）�
 「毛利即時表:view」但主管仍然冇「收客價:view」→ 有更數/成本、零
 revenue）。
 
-## LLM 可注入
+## LLM 可注入（WP-AI3：可設定揀供應商）
 
 `src/lib/ai/llm.ts` 匯出 `LlmClient` interface：
 
@@ -162,8 +162,39 @@ interface LlmClient {
 }
 ```
 
-Production：`AnthropicLlmClient`（`getLlmClient()`）——
-`new Anthropic({ baseURL: AI_HUB_BASE_URL, authToken: AI_HUB_API_KEY })`
+`getLlmClient()` 用 `src/lib/ai/config.ts` 嘅 `resolveAiProvider()` 揀
+provider（同 `(app)/layout.tsx` 嘅 `isAiConfigured()` 共用同一套邏輯，
+唔會出現「tab 顯示咗但打落去 503」）：
+
+1. `AI_LLM=fake`——Playwright e2e 專用假分支，優先過任何真 provider。
+2. `AI_PROVIDER` 明文設咗（`anthropic`/`deepseek`/`fake`）就跟呢個。
+3. 冇明文設：有 `DEEPSEEK_API_KEY` 就 `deepseek`，否則有 `AI_HUB_API_KEY`
+   就 `anthropic`，兩樣都冇就拋 `LlmUnavailableError`（route.ts 轉 503
+   `ai_provider_unavailable`）。
+
+**Production——`deepseek`（老闆 2026-09-12 揀）**：`DeepSeekLlmClient`
+（`src/lib/ai/providers/deepseek.ts`）——DeepSeek 冇官方 SDK，官方文件用
+OpenAI 格式，`new OpenAI({ baseURL: DEEPSEEK_BASE_URL ?? "https://api.
+deepseek.com", apiKey: DEEPSEEK_API_KEY })`，model 用
+`process.env.AI_MODEL ?? "deepseek-v4-pro"`。`openai` SDK 冇 Anthropic
+嗰種官方 Tool Runner helper，所以呢個 client 手寫成個 agentic loop：
+`chat.completions.create({ tools, temperature:0.2, max_tokens:4096 })`
+→ 有 `tool_calls` 就逐個（可以並行）call 對應工具嘅 `.run()`、逐個包
+返做 `role:"tool"` message → 再問一次，最多 `maxToolRounds`（route.ts
+傳 8）輪；行齊都仲有 tool_calls，加多一輪冧走 `tools` 逼收尾（唔算入
+`maxToolRounds`），等用戶唔會齋收空白回覆。401/429/5xx/網絡錯誤
+（`OpenAI.APIError` 同佢啲子類）一律映射做 `LlmUnavailableError`。
+工具 schema：**唔使自己再轉一次**——`betaZodTool()`（下面「工具」一節）
+內部已經用 zod v4 `z.toJSONSchema()` 將 `inputSchema` 轉咗做
+`input_schema` 掛喺每個工具物件度，`toOpenAiTool()` 淨係將呢個 key
+搬去 OpenAI 要嘅 `function.parameters`（剝走 `$schema`）。DeepSeek 專屬
+prompt 微調：system prompt 尾加一句「用廣東話口語回答（香港中文），
+唔好用普通話書面語」（`buildSystemPrompt()` 本身保持 provider-agnostic
+唔改，喺 `DeepSeekLlmClient` 入面先 append，見該檔案
+`CANTONESE_STYLE_SUFFIX`）。
+
+**Fallback provider——`anthropic`**：`AnthropicLlmClient`（`getLlmClient()`）
+——`new Anthropic({ baseURL: AI_HUB_BASE_URL, authToken: AI_HUB_API_KEY })`
 （Zeabur AI Hub 用 Anthropic 官方格式，Bearer token），
 `client.beta.messages.toolRunner({ ..., stream: true })`（SDK 官方 Tool
 Runner，跟 `typescript/claude-api/tool-use.md`/`streaming.md` 嘅寫法，
@@ -177,6 +208,12 @@ Runner，跟 `typescript/claude-api/tool-use.md`/`streaming.md` 嘅寫法，
 「call 邊個工具、傳咩 input」＋「最後答咩」，`chat()` 會真係 call
 `params.tools`（route.ts 傳落嚟嘅真工具物件）嘅 `.run()`，等測試可以
 驗證真實工具邏輯（field-group gate/DB 查詢），唔淨係 mock 咗成個 route。
+`DeepSeekLlmClient` 本身嘅 loop 用 inject 嘅假 `openai` client 單元測試
+（`tests/ai-deepseek-client.test.ts`）；14 個工具嘅 schema 轉換用
+`tests/ai-deepseek-tool-schema.test.ts`；`resolveAiProvider()`/
+`getLlmClient()` 嘅 env 組合用 `tests/ai-provider-config.test.ts`。
+Live smoke（真key、控制成本）：`npm run ai:smoke`（`scripts/ai/smoke.ts`），
+見「已知限制」下面一條。
 
 ## 輸出過濾（`src/lib/ai/output-guard.ts`）
 
@@ -220,16 +257,19 @@ message，見 `src/lib/ai-conversation.ts`）。每條問答另外寫一條
 
 | Env | 用途 |
 |---|---|
-| `AI_HUB_BASE_URL` | Zeabur AI Hub base URL |
+| `AI_PROVIDER` | `anthropic`/`deepseek`/`fake`；唔填就自動揀（見上面「LLM 可注入」判斷次序） |
+| `DEEPSEEK_API_KEY` | DeepSeek API key（OpenAI 格式） |
+| `DEEPSEEK_BASE_URL` | DeepSeek base URL，預設 `https://api.deepseek.com` |
+| `AI_HUB_BASE_URL` | Zeabur AI Hub base URL（`anthropic` fallback provider 用） |
 | `AI_HUB_API_KEY` | AI Hub API key（Bearer token） |
-| `AI_MODEL` | 預設 `claude-opus-5` |
+| `AI_MODEL` | 兩個 provider 共用；DeepSeek 冇填預設 `deepseek-v4-pro`，Anthropic 冇填預設 `claude-opus-5` |
 | `AI_DATABASE_URL` | `zoikan_ai_ro` 連線字串（`npm run db:ensure-ai-role` 建立） |
 | `AI_DB_PASSWORD` | `zoikan_ai_ro` 密碼；冇就 `db:ensure-ai-role` 跳過並 warn |
 | `AI_DAILY_LIMIT` | 每人每日問答上限，預設 100 |
 
-`AI_HUB_BASE_URL`/`AI_HUB_API_KEY` 缺——`GET LlmClient` 會拋
-`LlmUnavailableError`，route 回 503（`{error:"ai_hub_unavailable"}`），
-唔會噴 stack。
+冇任何 provider 配置好（冇 `DEEPSEEK_API_KEY`、冇 `AI_HUB_API_KEY`、亦
+冇 `AI_LLM=fake`）——`getLlmClient()` 會拋 `LlmUnavailableError`，route
+回 503（`{error:"ai_provider_unavailable"}`），唔會噴 stack。
 
 ## 已知限制
 
@@ -258,6 +298,17 @@ message，見 `src/lib/ai-conversation.ts`）。每條問答另外寫一條
    俾用戶手動重試。
 7. AI 助手唔記得住跨 session 嘅長期偏好（每個 user 一條
    `ai_conversations`，唔係逐 topic 開新對話）。
+8. **`DeepSeekLlmClient` 手寫 loop，冇 Anthropic SDK 嗰種官方 Tool
+   Runner**——`openai` SDK 冇對應 helper。行為上有兩點同 Anthropic 路徑
+   唔完全一樣：(a) `onTextDelta` 唔係逐 token 串流，收尾先一次過 call
+   （反正 route.ts 本身冇用呢個 callback，SSE 都係先儲齊先切段送，見
+   上面「輸出過濾」）；(b) 8 輪工具調用都用晒仲有 tool_calls，會多加
+   一輪冧走 `tools` 逼收尾（唔算入 8 輪），等用戶唔會齋收空白——
+   Anthropic Tool Runner 嘅 `max_iterations` 到頂就直接停，行為唔一致，
+   規劃裁定「寧願多一輪都要有收尾文字」。
+9. **Live smoke（`npm run ai:smoke`）用真 DeepSeek key，會真係扣費**——
+   刻意淨係 6 條問題（見 `scripts/ai/smoke.ts` 頂註解），唔會喺 CI/自動
+   測試入面跑。
 
 ## 前端（WP-AI2）
 

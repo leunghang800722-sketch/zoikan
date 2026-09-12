@@ -6,6 +6,7 @@ import { uiLabel } from "@/lib/ui/format";
 import { LogoutButton } from "@/components/LogoutButton";
 import { MustChangePwdGate } from "@/components/MustChangePwdGate";
 import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
+import { isAiConfigured } from "@/lib/ai/config";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
@@ -18,9 +19,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // 呢個 component 都唔會 render——DOM 零元素，唔係淨係 CSS 隱藏。
   const grants = await getViewGrants(session);
   const links = await getNavLinks(session, grants);
-  // 未設定 AI Hub key（正式站接線前）或者唔係測試用 fake 模型嗰陣，tab 唔顯示——
-  // 免得用戶見到一個「暫時未連接」嘅助手。
-  const aiConfigured = process.env.AI_LLM === "fake" || !!process.env.AI_HUB_API_KEY;
+  // WP-AI3：邊個 provider 配置好（DeepSeek／Anthropic／測試用 fake）
+  // 判斷邏輯抽咗喺 `@/lib/ai/config.ts`，同 `getLlmClient()`
+  // （`src/lib/ai/llm.ts`）共用同一套，唔會走飛——未配置好任何 provider
+  // 就唔顯示 tab，免得用戶見到一個「暫時未連接」嘅助手。
+  const aiConfigured = isAiConfigured();
   const showAiAssistant = grants["助手"] && aiConfigured;
 
   return (

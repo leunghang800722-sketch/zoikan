@@ -236,7 +236,7 @@ decimal.js 實際內部形狀（`s`/`e`/`d` + `toFixed` method）duck-type
 
 見 [`docs/api.md`](docs/api.md)。
 
-## AI 助手（WP-AI1）
+## AI 助手（WP-AI1／WP-AI3）
 
 側欄 AI 助手（唯讀，讀操作說明＋讀真實系統數據答問題）——只有
 老闆／主管／會計用得，`助手` module 雞頭／安員硬性禁止（見
@@ -246,6 +246,15 @@ decimal.js 實際內部形狀（`s`/`e`/`d` + `toFixed` method）duck-type
 password_hash/otp_secret → 獨立 `pg` 連線唔用 Prisma 寫入客戶端 →
 `sql_select` tokenizer 拒絕 DML/DDL）。詳細架構、工具清單、輸出過濾、
 env 設定、已知限制見 [`docs/ai-assistant.md`](docs/ai-assistant.md)。
+
+**LLM 供應商可設定（WP-AI3，老闆 2026-09-12 揀 DeepSeek）**：
+`src/lib/ai/config.ts` `resolveAiProvider()` 由 env 揀
+`deepseek`／`anthropic`／`fake`（`AI_PROVIDER`/`DEEPSEEK_API_KEY`/
+`AI_HUB_API_KEY`/`AI_LLM=fake`，次序見 `docs/ai-assistant.md`「LLM
+可注入」一節），`getLlmClient()` 同 `(app)/layout.tsx` 嘅 tab 顯示判斷
+共用同一套邏輯。DeepSeek client（`src/lib/ai/providers/deepseek.ts`）
+用官方 `openai` npm SDK 打 OpenAI-compatible endpoint，手寫工具調用
+loop（Anthropic 路徑嗰個官方 Tool Runner 冇 OpenAI-SDK 版）。
 
 **前端（WP-AI2）**：`(app)` layout 右邊緣直向 tab「在勤助手」——淨係
 `助手:view` 為 true 先 render（雞頭/安員 DOM 零元素），撳開側欄支援
