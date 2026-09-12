@@ -127,8 +127,26 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 段），所以呢個 fallback 公式預設用足月（N=0，分子=分母），有真正
     // 逐月 SL/扣數輸入機制之前只可以做到「冇資料就當足月」，唔會屈估
     // 一個唔知啱唔啱嘅扣數。
+    //
+    // WP-AI3 第二輪 live 驗收 bug fix（老闆）：之前呢個 fallback 齋憑
+    // site 設定（monthly_fixed + monthly_fee 有值）就計出一個金額，完全
+    // 冇檢查呢個盤呢個月係咪真係有營運——對一個完全冇任何 shift_
+    // records/daily_requirements 嘅月份（例如業務未開始嘅 2025-07），
+    // 會計出一舊假營業額，成本 0，毛利率顯示 100%。而家加一層閘：淨係
+    // 「呢個盤呢個月至少有 1 條 shift_record 或者 1 條 daily_requirement」
+    // 先至套用呢個 fallback 公式；冇嘅話當呢個盤呢個月完全冇活動（同
+    // 其他「完全冇活動」嘅盤一致，唔顯示喺 mainRows/outsideRows，見下面
+    // `hasActivity` 判斷）。淨係喺真係可能行到呢個 fallback 嘅盤先查
+    // （monthly_fixed + 有 monthly_fee），唔會拖慢其他盤。
+    const monthlyFeeFallbackCandidate = site.billingModel === "monthly_fixed" && !!site.monthlyFee;
+    const hasAnyRecordThisMonth = monthlyFeeFallbackCandidate
+      ? (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END } } })) > 0 ||
+        (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0
+      : false;
+
     function monthlyFeeProrataRevenue(): number | null {
       if (site.billingModel !== "monthly_fixed" || !site.monthlyFee) return null;
+      if (!hasAnyRecordThisMonth) return null; // 見上面 bug fix 註解
       const posts = site.monthlyPosts ?? 1;
       const fullFee = n(site.monthlyFee) * posts;
       const basis = site.prorataBasis ?? "div_31";
@@ -143,8 +161,23 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // special 卡——例：啟航1331 Event Guard（ST0027）$11,700，唔按更數拆，
     // client_rate_snapshot 喺呢個更別本身故意留 null（避免同總表 1,200/更
     // 嘅內部名義價撞埋一張卡），所以呢筆要喺度加返先至同 P0 輸出一致。
+    //
+    // WP-AI3 第二輪 live 驗收 bug fix（老闆）額外揪到嘅同類問題：呢條
+    // query 之前冇篩 effective_from/effective_to（同 `flatCard` 嗰條
+    // query 修過嘅 bug 一樣），令呢張卡嘅金額會加落**任何**月份，包括
+    // 完全唔相干嘅月份（例如業務未開始嘅 2025-07）——同「月費 fallback」
+    // 果條係同一種「空月份假收入」問題，淨係嗰張卡本身生效區間已經覆蓋
+    // 咗 2026-07（真實 P0 數據），冇覆蓋嘅月份而家會正確咁唔計呢張卡。
     const shiftTypeSpecialCards = await prisma.rateCard.findMany({
-      where: { siteId: site.id, shiftTypeId: { not: null }, brokerId: null, guardId: null, billingModel: "special" },
+      where: {
+        siteId: site.id,
+        shiftTypeId: { not: null },
+        brokerId: null,
+        guardId: null,
+        billingModel: "special",
+        effectiveFrom: { lte: MONTH_END },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: MONTH_START } }],
+      },
     });
     for (const c of shiftTypeSpecialCards) revenue = round2(revenue + n(c.clientRate));
 

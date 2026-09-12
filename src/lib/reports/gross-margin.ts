@@ -122,7 +122,16 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
     select: { siteId: true },
     distinct: ["siteId"],
   });
-  const siteIdSet = new Set<string>([...p0SiteIds, ...activeSiteIdRows.map((r) => r.siteId)]);
+  // WP-AI3 第二輪 live 驗收（老闆）：月費盤（billing_model=
+  // monthly_fixed，設咗 monthly_fee）就算呢個月完全冇 shift_records都要
+  // 喺報表度出現——等用戶睇到「呢個盤呢個月冇更次記錄」，唔會靜靜雞喺
+  // 報表度消失、亦都唔會令人以為淨係冇查到（見下面 fallback gate 同
+  // `monthlyFeeNoActivitySiteIds`）。
+  const monthlyFixedSiteIdRows = await prisma.site.findMany({
+    where: { billingModel: "monthly_fixed", monthlyFee: { not: null } },
+    select: { id: true },
+  });
+  const siteIdSet = new Set<string>([...p0SiteIds, ...activeSiteIdRows.map((r) => r.siteId), ...monthlyFixedSiteIdRows.map((r) => r.id)]);
   const siteIds = [...siteIdSet];
   if (siteIds.length === 0) {
     return {
@@ -161,8 +170,21 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   });
   const flatCardBySite = new Map<string, number>();
   for (const c of flatCards) if (!flatCardBySite.has(c.siteId)) flatCardBySite.set(c.siteId, n(c.clientRate));
+  // WP-AI3 第二輪 live 驗收 bug fix（老闆）：同 monthly-close.ts 一致——
+  // 呢條 query 之前冇篩 effective_from/effective_to，會將呢類「更別級
+  // special 卡」（例如啟航1331 Event Guard $11,700，見上面 §頂註解）
+  // 加落任何月份，包括完全唔相干嘅月份（同「月費 fallback」果條係同一
+  // 種「空月份假收入」問題）。
   const shiftTypeSpecialCards = await prisma.rateCard.findMany({
-    where: { siteId: { in: siteIds }, shiftTypeId: { not: null }, brokerId: null, guardId: null, billingModel: "special" },
+    where: {
+      siteId: { in: siteIds },
+      shiftTypeId: { not: null },
+      brokerId: null,
+      guardId: null,
+      billingModel: "special",
+      effectiveFrom: { lte: MONTH_END },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: MONTH_START } }],
+    },
   });
   for (const c of shiftTypeSpecialCards) {
     flatCardBySite.set(c.siteId, round2((flatCardBySite.get(c.siteId) ?? 0) + n(c.clientRate)));
@@ -170,9 +192,27 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   // 冇覆蓋 `month` 嘅 card（例如未嚟月份）嘅 monthly_fixed 盤——用
   // monthly_fee×monthly_posts×prorata 公式 fallback（同 monthly-close.ts
   // 「已知限制」註解一致：分子預設足月，冇逐月 SL 輸入機制）。
+  //
+  // WP-AI3 第二輪 live 驗收 bug fix（老闆）：同 monthly-close.ts 一致——
+  // 之前呢度齋憑 site 設定就計出一舊假營業額，冇檢查呢個盤呢個月係咪
+  // 真係有營運，對完全冇活動嘅月份（例如 2025-07）會令成本 0、毛利率
+  // 顯示 100%。而家要求「呢個盤呢個月至少有 1 條 shift_record 或者 1
+  // 條 daily_requirement」先至套用；冇嘅話 `flatCardBySite` 唔設呢個
+  // site（`isMonthlyFee=false`，冇「月費」展示行），revenue 維持 0，
+  // 落面 `monthlyFeeNoActivitySiteIds` 記低嚟俾個 site row 加返
+  // 「該月冇更次記錄」嘅 note，等用戶睇到係「查過確認冇活動」，唔係
+  // 「漏咗冇查」。
+  const monthlyFeeNoActivitySiteIds = new Set<string>();
   for (const site of sites) {
     if (flatCardBySite.has(site.id)) continue;
     if (site.billingModel !== "monthly_fixed" || !site.monthlyFee) continue;
+    const hasAnyRecordThisMonth =
+      (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END } } })) > 0 ||
+      (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0;
+    if (!hasAnyRecordThisMonth) {
+      monthlyFeeNoActivitySiteIds.add(site.id);
+      continue;
+    }
     const posts = site.monthlyPosts ?? 1;
     const fullFee = n(site.monthlyFee) * posts;
     const basis = site.prorataBasis ?? "div_31";
@@ -493,7 +533,9 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
       profit,
       marginPct,
       belowThreshold: marginPct !== null && marginPct < thresholdPct,
-      note: base?.note ?? (base === undefined ? "額外盤（冇 P0 月結對數基準，revenue 顯示 0；見 gross-margin.ts 頂註解 2）" : null),
+      note: monthlyFeeNoActivitySiteIds.has(siteId)
+        ? "該月冇更次記錄（月費 pro-rata fallback 已經停用，唔會顯示假營業額）"
+        : (base?.note ?? (base === undefined ? "額外盤（冇 P0 月結對數基準，revenue 顯示 0；見 gross-margin.ts 頂註解 2）" : null)),
     });
   }
 
