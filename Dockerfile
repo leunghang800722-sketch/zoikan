@@ -7,7 +7,8 @@ WORKDIR /app
 FROM base AS deps
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
-RUN npm ci
+# Zeabur 會將服務環境變數（含 NODE_ENV=production）帶入 build，npm ci 會跳過 devDependencies（prisma CLI 喺入面）；強制連 dev 一齊裝
+RUN npm ci --include=dev
 
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
