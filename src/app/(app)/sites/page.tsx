@@ -22,6 +22,7 @@ interface SiteRow {
   monthly_posts?: number | null;
   prorata_basis?: string | null;
   in_scope: boolean;
+  outside_monthly_close: boolean;
   status: string;
 }
 
@@ -48,6 +49,7 @@ const emptySiteForm = {
   monthly_posts: "",
   prorata_basis: "",
   in_scope: true,
+  outside_monthly_close: false,
 };
 
 export default function SitesPage() {
@@ -102,6 +104,7 @@ export default function SitesPage() {
       monthly_posts: row.monthly_posts !== undefined && row.monthly_posts !== null ? String(row.monthly_posts) : "",
       prorata_basis: row.prorata_basis ?? "",
       in_scope: row.in_scope,
+      outside_monthly_close: row.outside_monthly_close ?? false,
     });
     setFormError(null);
     setDrawerOpen(true);
@@ -122,6 +125,7 @@ export default function SitesPage() {
       monthly_posts: form.monthly_posts ? Number(form.monthly_posts) : undefined,
       prorata_basis: form.prorata_basis || undefined,
       in_scope: form.in_scope,
+      outside_monthly_close: form.outside_monthly_close,
       aliases,
     };
     if (hasMoneyField && form.monthly_fee !== "") body.monthly_fee = Number(form.monthly_fee);
@@ -307,6 +311,10 @@ export default function SitesPage() {
           <label className="flex items-center gap-2 text-sm text-gray-700">
             <input type="checkbox" checked={form.in_scope} onChange={(e) => setForm((f) => ({ ...f, in_scope: e.target.checked }))} />
             in_scope（計入報表範圍）
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.outside_monthly_close} onChange={(e) => setForm((f) => ({ ...f, outside_monthly_close: e.target.checked }))} />
+            月結以外（收入唔入月結總表主表，另列「月結以外」）
           </label>
           <div className="flex gap-2 pt-2">
             <button type="submit" disabled={saving} className={btnPrimary}>

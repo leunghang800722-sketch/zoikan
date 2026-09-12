@@ -17,7 +17,7 @@ import { pickWhitelist, brandSafeResponse, type Dto } from "../serialize";
 import type { FieldGroupResource } from "../field-groups";
 
 const BROKER_FIELDS = ["id", "code", "name", "kind", "settlementType", "bankInfo", "requiresApproval", "isInternal", "aliases", "status", "createdAt", "updatedAt", "createdBy"] as const;
-const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "status", "createdAt", "updatedAt", "createdBy"] as const;
+const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTime", "hours", "headcountRequired", "billingGroup", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const GUARD_FIELDS = ["id", "staffNo", "staffNoMw", "nameZh", "nameEn", "tel", "defaultBrokerId", "employmentType", "monthlySalary", "siaPermitExpiry", "poloSize", "mergedFrom", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;

@@ -24,7 +24,6 @@
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { n, round2 } from "./money";
-import { excludedClientNames } from "./private-overrides";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
 
 export const DEFAULT_REPORT_MONTH = new Date(Date.UTC(2026, 6, 1));
@@ -214,7 +213,9 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 分類判斷本身「跳過」，唔強行假設）——受影響嘅幾個 site 會留喺主表，
     // diffMonthlyClose() 對唔返 P0「月結以外」sheet 會自然跌落 info 分支
     // （唔係 fail，見 scripts/report/diff.ts）。
-    const isOutside = !site.inScope || excludedClientNames().includes(site.clientName) || site.billingModel === "special";
+    // 2026-09-12 部署修正：唔再喺報表 runtime 讀 data/ 私密檔（正式容器冇 data/），
+    // 改讀 sites.outside_monthly_close（seed 由私密檔填；盤管理頁可改）。
+    const isOutside = !site.inScope || site.outsideMonthlyClose || site.billingModel === "special";
     (isOutside ? outsideRows : mainRows).push(row);
   }
 

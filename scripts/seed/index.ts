@@ -20,6 +20,7 @@ import { canonicalNameFor } from "./lib/broker-names";
 import { knownUnmappedSettlementUnits, monthlySalaryOverrides } from "./lib/seed-overrides";
 import { bochkAmountForName } from "./lib/bochk";
 import { loadReferralFees, siteCsvIdForBlock } from "./lib/referral-fees";
+import { excludedClientNames } from "../../src/lib/reports/private-overrides";
 import type { RecordType, LeaveCode } from "@prisma/client";
 import { backfillDefaultBrokerId } from "./lib/backfill-broker";
 import { ROLE_NAMES } from "../../src/lib/rbac/matrix";
@@ -133,6 +134,7 @@ async function seedSites() {
         canonicalName: r.canonical_name,
         aliases: arr(r.aliases),
         clientName: str(r.client_name) ?? r.canonical_name,
+        outsideMonthlyClose: excludedClientNames().includes(str(r.client_name) ?? r.canonical_name),
         clientGroup: str(r.client_group),
         billingModel: mapBillingModel(r.billing_model),
         monthlyFee: num(r.monthly_fee),

@@ -285,6 +285,8 @@ model Site {
   monthlyPosts  Int?          @map("monthly_posts") // 每崗月費 × 崗數
   prorataBasis  ProrataBasis? @map("prorata_basis")
   inScope       Boolean       @default(true) @map("in_scope")
+  /** 月結「以外」：收入唔入月結總表主表（例如客戶另有合約嘅盤）；seed 由 data/mappings-private/report-overrides.json 嘅客戶名填，之後由盤管理頁改 */
+  outsideMonthlyClose Boolean @default(false) @map("outside_monthly_close")
   status        SiteStatus    @default(active)
   // P1-WP3：更表版面模板（`RosterLayoutTemplate`，見
   // src/lib/roster-layout-template.ts）——由 seed 時由 data/ 讀出反推
