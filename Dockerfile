@@ -23,6 +23,10 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/prisma ./prisma
+# 啟動腳本（scripts/db/*）會 import src/lib/rbac/*（相對路徑），runner 要有 src 同 tsconfig
+COPY --from=build /app/src ./src
+COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/tsconfig.json ./tsconfig.json
 # prisma CLI（migrate deploy）要成套依賴（effect／@prisma/config…），部分複製會缺模組；
 # 直接用完整 node_modules 疊喺 standalone 嘅最小 node_modules 上面（超集，安全）
 COPY --from=build /app/node_modules ./node_modules
@@ -31,4 +35,5 @@ EXPOSE 8080
 # （幂等；冇 AI_DB_PASSWORD 就跳過並 warn，唔中止部署，見
 # scripts/db/ensure-ai-role.ts）→ 起 Next standalone server。
 COPY --from=build /app/scripts ./scripts
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && node node_modules/.bin/tsx scripts/db/sync-permissions.ts && node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts && node server.js"]
+# migrate deploy 失敗要停（schema 唔對唔可以起）；sync-permissions／ensure-ai-role 失敗只 warn，唔阻止網站起
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && (node node_modules/.bin/tsx scripts/db/sync-permissions.ts || echo '[warn] sync-permissions 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts || echo '[warn] ensure-ai-role 失敗，網站照起') && node server.js"]
