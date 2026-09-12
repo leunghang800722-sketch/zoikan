@@ -72,7 +72,7 @@ export async function getNavLinks(session: CurrentSession): Promise<NavLink[]> {
   push("/sites", "盤", "盤");
   // 雞頭端睇自己安員用「自己安員」module；內部角色用「安員」——兩者
   // 都連去同一個 /guards 路徑，API 自己會 scope（見 src/app/api/guards）。
-  push("/guards", "安員", session.baseRole === "雞頭" ? "自己安員" : "安員");
+  push("/guards", "保安員", session.baseRole === "雞頭" ? "自己安員" : "安員");
   push("/brokers", "雞頭", "雞頭");
   push("/rate-cards", "價目", "出街價");
   // P1-WP4：報表 module——每份報表獨立一行權限（設計文件§5.0）。雞頭端

@@ -63,7 +63,7 @@ export function requireOwnBrokerId(session: AuthedSession): string {
 export async function assertGuardOwnedByBroker(guardId: string, brokerId: string): Promise<void> {
   const guard = await prisma.guard.findUnique({ where: { id: guardId }, select: { defaultBrokerId: true } });
   if (!guard || guard.defaultBrokerId !== brokerId) {
-    throw Forbidden("呢個安員唔屬於你（default_broker_id 唔係自己）——唔可以幫佢開更");
+    throw Forbidden("呢個保安員唔屬於你（default_broker_id 唔係自己）——唔可以幫佢開更");
   }
 }
 

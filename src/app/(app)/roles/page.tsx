@@ -1,4 +1,5 @@
 "use client";
+import { uiLabel } from "@/lib/ui/format";
 import { useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
@@ -179,7 +180,7 @@ export default function RolesPage() {
                     r.id === selectedId ? "bg-gray-100 font-medium" : ""
                   }`}
                 >
-                  {r.name}
+                  {uiLabel(r.name)}
                   {r.is_custom && <span className="ml-1 text-xs text-gray-400">（自訂）</span>}
                 </button>
               ))}
@@ -192,7 +193,7 @@ export default function RolesPage() {
               <option value="">來源角色</option>
               {roles.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.name}
+                  {uiLabel(r.name)}
                 </option>
               ))}
             </select>
@@ -239,7 +240,7 @@ export default function RolesPage() {
                 <tbody>
                   {MODULES.map((mod) => (
                     <tr key={mod} className="border-t border-gray-100">
-                      <td className="px-2 py-1.5 whitespace-nowrap">{mod}</td>
+                      <td className="px-2 py-1.5 whitespace-nowrap">{uiLabel(mod)}</td>
                       {ACTIONS.map((action) => {
                         const { granted, hardDenied } = cellValue(mod, action);
                         return (

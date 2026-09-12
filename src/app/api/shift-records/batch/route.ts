@@ -264,7 +264,7 @@ export async function POST(req: Request) {
       });
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
-        throw Conflict("批量寫入撞到唯一約束（同一安員、同一日、同一更別已經有記錄）——成批已 rollback");
+        throw Conflict("批量寫入撞到唯一約束（同一保安員、同一日、同一更別已經有記錄）——成批已 rollback");
       }
       throw err;
     }
@@ -304,7 +304,7 @@ async function computeWarnings(
     _count: { _all: true },
   });
   for (const row of monthlyCounts) {
-    if (row._count._all > 26) warnings.push(`安員 ${guardName(row.guardId)} 本月已排 ${row._count._all} 更（>26）`);
+    if (row._count._all > 26) warnings.push(`保安員 ${guardName(row.guardId)} 本月已排 ${row._count._all} 更（>26）`);
   }
 
   // 軟警示：同人同日多更（跨盤/跨更別都計，record_type=shift）
@@ -320,14 +320,14 @@ async function computeWarnings(
   for (const [k, n] of perDay) {
     if (n > 1) {
       const [guardId, day] = k.split("|");
-      warnings.push(`安員 ${guardName(guardId!)} ${day} 有 ${n} 條正更記錄（同人同日多更）`);
+      warnings.push(`保安員 ${guardName(guardId!)} ${day} 有 ${n} 條正更記錄（同人同日多更）`);
     }
   }
 
   // 軟警示：證件過期
   for (const g of guards) {
     if (g.siaPermitExpiry && g.siaPermitExpiry < monthEnd) {
-      warnings.push(`安員 ${g.nameZh} 嘅許可證於 ${g.siaPermitExpiry.toISOString().slice(0, 10)} 到期`);
+      warnings.push(`保安員 ${g.nameZh} 嘅許可證於 ${g.siaPermitExpiry.toISOString().slice(0, 10)} 到期`);
     }
   }
 

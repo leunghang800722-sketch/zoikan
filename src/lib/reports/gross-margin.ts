@@ -543,7 +543,7 @@ export async function writeGrossMarginXlsx(outPath: string, month: Date = DEFAUL
   }
   ws.addRow(["全公司合計", "", result.totals.shifts, "", result.totals.revenue, result.totals.cost, result.totals.profit, result.totals.marginPct === null ? "n/a" : `${result.totals.marginPct}%`, `毛利率底線 ${result.thresholdPct}%`]);
   ws.addRow([]);
-  ws.addRow(["長工月薪分攤 scope：呢份毛利即時表列晒全部本月有 shift_records 嘅盤（唔止月結總表 mainRows 嗰 40 個 P0 對數基準盤）——分攤總額 = Σ全部本月有出更嘅 longterm_autopay 安員月薪。"]);
+  ws.addRow(["長工月薪分攤 scope：呢份毛利即時表列晒全部本月有 shift_records 嘅盤（唔止月結總表 mainRows 嗰 40 個 P0 對數基準盤）——分攤總額 = Σ全部本月有出更嘅 longterm_autopay 保安員月薪。"]);
   ws.addRow([`referral 未配對 site 金額（唔會顯示喺任何一盤）：${result.referralFeeUnattributed}；非 referral special_items 未配對 site 金額：${result.specialCostUnattributed}。`]);
   await wb.xlsx.writeFile(outPath);
   return result;

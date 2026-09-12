@@ -241,10 +241,10 @@ export default function RateCardsPage() {
               <th className="px-3 py-2">盤</th>
               <th className="px-3 py-2">更別</th>
               <th className="px-3 py-2">雞頭</th>
-              <th className="px-3 py-2">安員</th>
+              <th className="px-3 py-2">保安員</th>
               <th className="px-3 py-2">收客價</th>
               <th className="px-3 py-2">出街價</th>
-              <th className="px-3 py-2">安員工資</th>
+              <th className="px-3 py-2">保安員工資</th>
               <th className="px-3 py-2">雞頭費</th>
               <th className="px-3 py-2">生效期</th>
               <th className="px-3 py-2">操作</th>
@@ -344,7 +344,7 @@ export default function RateCardsPage() {
               ))}
             </select>
           </Field>
-          <Field label="安員" hint="留空＝通用">
+          <Field label="保安員" hint="留空＝通用">
             <select className={selectCls} value={form.guard_id} onChange={(e) => setForm((f) => ({ ...f, guard_id: e.target.value }))}>
               <option value="">（通用）</option>
               {guards.map((g) => (
@@ -366,7 +366,7 @@ export default function RateCardsPage() {
               />
             </Field>
           )}
-          <Field label="安員工資（guard_wage）">
+          <Field label="保安員工資（guard_wage）">
             <input
               type="number"
               step="0.01"

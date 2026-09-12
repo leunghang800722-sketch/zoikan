@@ -51,7 +51,7 @@ export default function MyReceivablePage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-gray-900">本月應收</h1>
-          <p className="text-sm text-gray-500">自己安員本月更數 × 自己出街價，逐日明細。</p>
+          <p className="text-sm text-gray-500">自己保安員本月更數 × 自己出街價，逐日明細。</p>
         </div>
         <input type="month" className={inputCls + " max-w-[160px]"} value={month} onChange={(e) => setMonth(e.target.value)} />
       </div>

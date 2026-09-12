@@ -163,7 +163,7 @@ export default function GuardsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-gray-900">安員名冊</h1>
+          <h1 className="text-lg font-semibold text-gray-900">保安員名冊</h1>
           <p className="text-sm text-gray-500">許可證 60 日內到期或已過期嘅列會高亮。</p>
         </div>
         <button type="button" onClick={openCreate} className={btnPrimary}>
@@ -244,7 +244,7 @@ export default function GuardsPage() {
         </table>
       </div>
 
-      <Drawer open={drawerOpen} title={editingId ? "編輯安員" : "新增安員"} onClose={() => setDrawerOpen(false)}>
+      <Drawer open={drawerOpen} title={editingId ? "編輯保安員" : "新增保安員"} onClose={() => setDrawerOpen(false)}>
         <form onSubmit={onSubmit} className="space-y-3">
           <Banner kind="error" message={formError} />
           <div className="grid grid-cols-2 gap-2">

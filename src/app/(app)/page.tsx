@@ -12,7 +12,7 @@ const CARDS = [
   { href: "/roster", label: "更表", desc: "揀盤揀月，開更表編輯器" },
   { href: "/quotas", label: "配額", desc: "雞頭每月配額" },
   { href: "/my-receivable", label: "本月應收", desc: "自己更數×出街價" },
-  { href: "/guards", label: "安員", desc: "自己安員名冊" },
+  { href: "/guards", label: "保安員", desc: "自己保安員名冊" },
 ];
 
 export default async function DashboardPage() {

@@ -5,7 +5,7 @@ import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
-import { fmt } from "@/lib/ui/format";
+import { fmt, uiLabel } from "@/lib/ui/format";
 
 interface UserRow {
   id: string;
@@ -265,7 +265,7 @@ export default function UsersPage() {
               <option value="">請選擇</option>
               {roles.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.name}
+                  {uiLabel(r.name)}
                 </option>
               ))}
             </select>

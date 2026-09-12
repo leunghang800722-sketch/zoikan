@@ -421,7 +421,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     const url = new URL(window.location.href);
     if (selectedBrokerCode) url.searchParams.set("broker", selectedBrokerCode);
     else url.searchParams.delete("broker");
-    // eslint-disable-next-line no-console
     window.history.replaceState(null, "", url.toString());
   }, [selectedBrokerCode]);
 
@@ -488,7 +487,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
-      // eslint-disable-next-line no-console
       if (monthLocked) return;
       if (editing) {
         if (e.key === "Enter") {
@@ -565,12 +563,10 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
 
   const onCellClick = useCallback(
     (r: number, d: number, shiftKey: boolean) => {
-      // eslint-disable-next-line no-console
       if (monthLocked) return;
       if (editing) commitEdit();
       setSel((prev) => (shiftKey && prev ? { a: prev.a, b: { r, d } } : { a: { r, d }, b: { r, d } }));
       containerRef.current?.focus({ preventScroll: true }); // 2026-09-12：統計條令容器可能半出視窗，focus() 會捲動頁面，令 mousedown→mouseup 落喺唔同格（拖選成兩行、click 唔觸發）
-      // eslint-disable-next-line no-console
     },
     [monthLocked, editing, commitEdit],
   );
@@ -982,7 +978,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
             className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={() => setShowAddGuard(true)}
           >
-            加安員
+            加保安員
           </button>
           <button
             type="button"
@@ -1261,8 +1257,8 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               <tr>
                 <td colSpan={4 + (isBrokerSession ? 0 : 1) + days} className="border border-gray-300 text-center text-gray-400 py-6 text-sm">
                   {allRows.length === 0
-                    ? "呢個盤呢個月未有更表記錄——撳「加安員」開始排更，或者撳「複製上月」。"
-                    : "呢個雞頭喺呢個盤搵唔到安員行（篩選只影響顯示，其他雞頭嘅記錄照喺度）。"}
+                    ? "呢個盤呢個月未有更表記錄——撳「加保安員」開始排更，或者撳「複製上月」。"
+                    : "呢個雞頭喺呢個盤搵唔到保安員行（篩選只影響顯示，其他雞頭嘅記錄照喺度）。"}
                 </td>
               </tr>
             )}
@@ -1360,17 +1356,17 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       {showAddGuard && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30" onClick={() => setShowAddGuard(false)}>
           <div className="bg-white rounded shadow-lg p-4 w-80 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-sm font-semibold text-gray-900">加安員行</h2>
+            <h2 className="text-sm font-semibold text-gray-900">加保安員行</h2>
             <label className="block text-xs text-gray-600">
-              安員
+              保安員
               <select
-                aria-label="加安員行:安員"
+                aria-label="加保安員行:保安員"
                 data-testid="add-guard-select-guard"
                 className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-sm"
                 value={addGuardId}
                 onChange={(e) => setAddGuardId(e.target.value)}
               >
-                <option value="">請揀安員</option>
+                <option value="">請揀保安員</option>
                 {guardOptions.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.name_zh}
@@ -1382,7 +1378,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
             <label className="block text-xs text-gray-600">
               更別
               <select
-                aria-label="加安員行:更別"
+                aria-label="加保安員行:更別"
                 data-testid="add-guard-select-shift-type"
                 className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-sm"
                 value={addShiftTypeId}

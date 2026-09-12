@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { getNavLinks } from "@/lib/rbac/nav";
+import { uiLabel } from "@/lib/ui/format";
 import { LogoutButton } from "@/components/LogoutButton";
 import { MustChangePwdGate } from "@/components/MustChangePwdGate";
 
@@ -17,7 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <div>
           <div className="text-xs font-medium uppercase tracking-wide text-gray-400">在勤</div>
           <div className="mt-1 text-sm font-medium text-gray-900">{session.name}</div>
-          <div className="text-xs text-gray-500">{session.roleName}</div>
+          <div className="text-xs text-gray-500">{uiLabel(session.roleName)}</div>
         </div>
 
         <nav className="flex flex-1 flex-col gap-0.5 text-sm">

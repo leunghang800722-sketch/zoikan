@@ -41,3 +41,9 @@ export function isExpired(dateStr: unknown): boolean {
   if (Number.isNaN(d.getTime())) return false;
   return d.getTime() < Date.now();
 }
+
+/** 顯示層改名（老闆 2026-09-12）：「安員」一律顯示做「保安員」。權限模組 key
+ * （安員／自己安員）同角色名（安員）係內部識別，唔改，只喺顯示時經呢個對照。 */
+export function uiLabel(s: string): string {
+  return s.replace(/(?<!保)安員/g, "保安員");
+}

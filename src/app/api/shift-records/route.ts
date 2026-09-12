@@ -128,7 +128,7 @@ export async function POST(req: Request) {
         return ok(scrubForBrokerSession(session, toBrokerShiftRecordDTO(created)), 201);
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
-          throw Conflict("同一安員、同一日、同一更別已經有記錄（硬性規則2）");
+          throw Conflict("同一保安員、同一日、同一更別已經有記錄（硬性規則2）");
         }
         throw err;
       }
@@ -153,7 +153,7 @@ export async function POST(req: Request) {
       return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(created)), 201);
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
-        throw Conflict("同一安員、同一日、同一更別已經有記錄（硬性規則2）");
+        throw Conflict("同一保安員、同一日、同一更別已經有記錄（硬性規則2）");
       }
       throw err;
     }

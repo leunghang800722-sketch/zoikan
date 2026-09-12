@@ -79,11 +79,11 @@ test("(b) 雞頭登入 → 只見自己 block → 填一格 → pending → 主�
   await loginAs(page, "雞頭A");
   await page.goto(`/roster/${siteId}/2026-08`);
   await expect(page.getByTestId("roster-forbidden")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "加安員" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "加保安員" })).toBeVisible({ timeout: 20_000 });
 
   const rowsBefore = await page.getByTestId("roster-row").count();
 
-  await page.getByRole("button", { name: "加安員" }).click();
+  await page.getByRole("button", { name: "加保安員" }).click();
   await page.getByTestId("add-guard-select-guard").selectOption({ index: 1 });
   await page.getByTestId("add-guard-select-shift-type").selectOption({ index: 1 });
   await page.getByRole("button", { name: "加入" }).click();

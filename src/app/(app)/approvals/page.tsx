@@ -168,7 +168,7 @@ export default function ApprovalsPage() {
               <th className="px-3 py-2">日期</th>
               <th className="px-3 py-2">盤</th>
               <th className="px-3 py-2">更別</th>
-              <th className="px-3 py-2">安員</th>
+              <th className="px-3 py-2">保安員</th>
               <th className="px-3 py-2">類型</th>
               <th className="px-3 py-2">操作</th>
             </tr>
