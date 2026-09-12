@@ -22,10 +22,9 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/prisma ./prisma
-COPY --from=deps /app/node_modules/prisma ./node_modules/prisma
-COPY --from=deps /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=deps /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=deps /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+# prisma CLI（migrate deploy）要成套依賴（effect／@prisma/config…），部分複製會缺模組；
+# 直接用完整 node_modules 疊喺 standalone 嘅最小 node_modules 上面（超集，安全）
+COPY --from=build /app/node_modules ./node_modules
 EXPOSE 8080
 # 每次啟動先套用 migration（幂等），再起 Next standalone server
 CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && node server.js"]
