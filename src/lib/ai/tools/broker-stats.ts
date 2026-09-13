@@ -3,7 +3,7 @@ import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { aiQuery } from "../db";
 import { round2 } from "@/lib/reports/money";
 import type { AiToolContext } from "./common";
-import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
+import { requireModuleOrDenied, deniedResult, toolResultJson, brokerDisplayName, feeSplitStatus, FEE_SPLIT_NOTE, LONGTERM_PAYOUT_NOTE } from "./common";
 
 const monthParam = z.string().regex(/^\d{4}-\d{2}$/, "月份格式要係 YYYY-MM");
 
@@ -13,7 +13,7 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "broker_stats",
     description:
-      "睇雞頭喺某個月嘅更次統計——幾多更、幾多安員、（有出街價權限先見到）預計出街價成本。可選 site 篩選淨係睇某個盤。要「更表:view」。",
+      "睇雞頭喺某個月嘅更次統計——幾多更、幾多安員、（有出街價權限先見到）出街價合計。回傳帶 broker_display_name（雞頭顯示名，答用戶一律用呢個，唔准用 broker_code）；有啲盤啲卡源頭冇拆開保安員工資/雞頭費，呢啲雞頭嘅 fee_split=\"combined\"，broker_fee_total 會係 null（唔係 0，唔准話雞頭費係 0，只可以講出街價合計）；公司長工（internal_longterm）桶嘅 payout_total 一律 null＋payout_note（月薪唔計逐更出街價，唔准答出街價 0）。仲帶 latest_month_with_data（呢個盤/全公司最近有記錄嘅月份）——查嗰個月冇數就可以用嚟自動退一步答（唔使再問用戶）。可選 site 篩選淨係睇某個盤。要「更表:view」。",
     inputSchema: z
       .object({
         site: z.string().optional().describe("盤名稱（可選，唔填即全公司）"),
@@ -40,7 +40,9 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
         `SELECT b.id AS broker_id, b.code AS broker_code, b.name AS broker_name, b.kind,
                 COUNT(*) FILTER (WHERE sr.record_type = 'shift') AS shift_count,
                 COUNT(DISTINCT sr.guard_id) AS guard_count,
-                SUM(COALESCE(sr.guard_wage_snapshot, 0) + COALESCE(sr.broker_fee_snapshot, 0)) AS estimated_payout
+                SUM(COALESCE(sr.guard_wage_snapshot, 0)) AS guard_wage_total,
+                SUM(COALESCE(sr.broker_fee_snapshot, 0)) AS broker_fee_total_raw,
+                SUM(COALESCE(sr.guard_wage_snapshot, 0) + COALESCE(sr.broker_fee_snapshot, 0)) AS payout_total
          FROM ai.shift_records sr
          JOIN ai.brokers b ON b.id = COALESCE(sr.operational_broker_id, sr.settlement_broker_id)
          WHERE sr.work_date >= $1::date AND sr.work_date < ($1::date + INTERVAL '1 month') ${siteFilter}
@@ -50,15 +52,42 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
         params,
       );
 
-      // `estimated_payout` 係聚合出嚟嘅欄，唔係 shift_records 底層物理欄名
-      // （SETTLEMENT_FIELDS 嗰個 blocklist 對唔中呢個 alias），所以呢度
-      // 手動剝——唔靠通用 scrubRowsForResource（見 field-scrub.ts 頂註解
-      // 「已知限制」，聚合/改名欄要逐個工具自己判斷）。
-      const brokers = rows.map((r) => {
-        if (ctx.fieldVisibility.settlementVisible) return r;
-        const rest: Record<string, unknown> = { ...(r as Record<string, unknown>) };
-        delete rest.estimated_payout;
-        return rest;
+      // 老闆 feedback（正式站助手，真數據查證：部分盤啲卡源頭係總表
+      // 外判價／糧單合計，冇拆開保安員工資／雞頭費）——逐雞頭判斷
+      // fee_split：`broker_fee_total_raw`（呢個月呢個雞頭全部更次嘅
+      // 雞頭費 snapshot 加埋）為 0 且 `payout_total`≈`guard_wage_total`
+      // 就當「未拆」，`broker_fee_total` 要顯示 `null`（唔准顯示 0，
+      // 免得用戶以為雞頭費真係 0）。`broker_display_name`／`broker_code`
+      // 之前淨係俾內部代號，模型照抄晒落最終回覆——而家加返業務用語／
+      // 真名，`broker_code` 保留做技術參考，但答用戶一律用
+      // `broker_display_name`（system prompt 已經明文要求）。
+      const shaped = rows.map((r) => {
+        // 老闆 feedback：月薪長工（internal_longterm，「公司長工」桶）
+        // 唔係逐更出街價——`shift_records` 嘅 guard_wage_snapshot／
+        // broker_fee_snapshot 對呢桶通常淨係 0（薪金唔係逐更 snapshot
+        // 落嚟，係月薪分攤，喺毛利即時表果邊計），之前呢度將呢個 0
+        // 當「未拆」一齊回，模型會答「出街價 0」——而家獨立處理：呢桶
+        // 嘅 payout_total／guard_wage_total／broker_fee_total 一律
+        // null，用 `payout_note` 講明係月薪唔計逐更出街價，唔再套用
+        // fee_split 嗰套「未拆」邏輯（兩種係唔同嘅原因）。
+        const isInternalLongterm = r.kind === "internal_longterm";
+        const feeSplit = feeSplitStatus({ guardWage: r.guard_wage_total, brokerFee: r.broker_fee_total_raw, payoutRate: r.payout_total });
+        const out: Record<string, unknown> = {
+          broker_id: r.broker_id,
+          broker_code: r.broker_code,
+          broker_display_name: brokerDisplayName({ name: r.broker_name, code: r.broker_code, kind: r.kind }),
+          shift_count: r.shift_count,
+          guard_count: r.guard_count,
+          fee_split: isInternalLongterm ? null : feeSplit,
+          fee_split_note: !isInternalLongterm && feeSplit === "combined" ? FEE_SPLIT_NOTE : null,
+          payout_note: isInternalLongterm ? LONGTERM_PAYOUT_NOTE : null,
+        };
+        if (ctx.fieldVisibility.settlementVisible) {
+          out.payout_total = isInternalLongterm ? null : r.payout_total;
+          out.guard_wage_total = isInternalLongterm ? null : r.guard_wage_total;
+          out.broker_fee_total = isInternalLongterm ? null : feeSplit === "combined" ? null : r.broker_fee_total_raw;
+        }
+        return out;
       });
 
       // 系統計嘅總計——`pg` driver 對 COUNT()/SUM() 呢類 bigint/numeric
@@ -67,10 +96,19 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
       // 逐 broker 相加（同一個安員同月可能跨兩個雞頭做過嘢會計多），
       // 所以另外用 `COUNT(DISTINCT sr.guard_id)`（冇 GROUP BY broker）
       // 查一次去重總數。
-      const totalShiftCount = rows.reduce((sum, r) => sum + Number((r as { shift_count: unknown }).shift_count), 0);
-      const totalPayout = ctx.fieldVisibility.settlementVisible
-        ? round2(rows.reduce((sum, r) => sum + Number((r as { estimated_payout: unknown }).estimated_payout ?? 0), 0))
-        : undefined;
+      const totalShiftCount = rows.reduce((sum, r) => sum + Number(r.shift_count), 0);
+      // 老闆 feedback：total 嘅 payout_total／broker_fee_total 淨係加
+      // 返「真係逐更出街價」嘅雞頭（唔包 internal_longterm 月薪長工果
+      // 桶——嗰桶嘅 snapshot 通常係 0，唔應該當一個「已拆開/未拆開」嘅
+      // 真實出街價計落個總計度）。
+      const payoutRows = rows.filter((r) => r.kind !== "internal_longterm");
+      const totalPayout = ctx.fieldVisibility.settlementVisible ? round2(payoutRows.reduce((sum, r) => sum + Number(r.payout_total ?? 0), 0)) : undefined;
+      // 全公司總計嘅 broker_fee_total：如果*任何*（會逐更計出街價嘅）
+      // 雞頭係 combined，總計都要跟住變 null（唔可以齋加返有拆開嗰幾個
+      // 雞頭嘅數，扮晒齊，令用戶以為個總數已經包晒）。
+      const anyCombined = payoutRows.some((r) => feeSplitStatus({ guardWage: r.guard_wage_total, brokerFee: r.broker_fee_total_raw, payoutRate: r.payout_total }) === "combined");
+      const totalBrokerFee =
+        ctx.fieldVisibility.settlementVisible && !anyCombined ? round2(payoutRows.reduce((sum, r) => sum + Number(r.broker_fee_total_raw ?? 0), 0)) : undefined;
       const { rows: guardTotalRows } = await aiQuery(
         `SELECT COUNT(DISTINCT sr.guard_id) AS guard_count
          FROM ai.shift_records sr
@@ -80,12 +118,38 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
       );
       const totalGuardCount = Number((guardTotalRows[0] as { guard_count?: unknown } | undefined)?.guard_count ?? 0);
 
+      // 老闆 feedback：空月份自動退一步——呢個盤（或者全公司，冇 site
+      // 篩選嗰陣）最近一個有 shift_records 嘅月份，等模型喺 `month`
+      // 冇數據嗰陣可以自己退一步答（system prompt 已經加咗對應規則），
+      // 唔使再多問一輪。
+      const latestMonthParams: unknown[] = [];
+      let latestMonthSiteFilter = "";
+      if (site) {
+        latestMonthParams.push(params[1]); // params[1] = 上面搵到嘅 site id（params[0] 係 monthStart）
+        latestMonthSiteFilter = "AND sr.site_id = $1";
+      }
+      const { rows: latestMonthRows } = await aiQuery(
+        `SELECT to_char(MAX(sr.work_date), 'YYYY-MM') AS latest_month
+         FROM ai.shift_records sr
+         WHERE 1=1 ${latestMonthSiteFilter}`,
+        latestMonthParams,
+      );
+      const latestMonthWithData = (latestMonthRows[0] as { latest_month?: string | null } | undefined)?.latest_month ?? null;
+
       return toolResultJson({
         month,
         site: site ?? null,
-        brokers,
-        totals: { shift_count: totalShiftCount, guard_count: totalGuardCount, estimated_payout: totalPayout },
-        totals_note: "totals 已由系統計（guard_count 已去重，唔係逐雞頭相加），唔好自己加總。",
+        brokers: shaped,
+        latest_month_with_data: latestMonthWithData,
+        totals: {
+          shift_count: totalShiftCount,
+          guard_count: totalGuardCount,
+          payout_total: totalPayout,
+          broker_fee_total: ctx.fieldVisibility.settlementVisible ? (anyCombined ? null : totalBrokerFee) : undefined,
+        },
+        totals_note: anyCombined
+          ? "totals 已由系統計（guard_count 已去重，唔包公司長工月薪桶），唔好自己加總；部分雞頭嘅盤未拆開保安員工資/雞頭費，broker_fee_total 顯示 null，唔係 0——只可以答出街價合計（payout_total）。"
+          : "totals 已由系統計（guard_count 已去重，唔包公司長工月薪桶），唔好自己加總。",
       });
     },
   });

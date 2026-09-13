@@ -27,6 +27,7 @@ import { computeFieldVisibility } from "@/lib/ai/field-scrub";
 import { buildAiTools } from "@/lib/ai/tools";
 import { buildSystemPrompt } from "@/lib/ai/system-prompt";
 import { checkOutputGuardAndAudit } from "@/lib/ai/output-guard";
+import { applyOutputStyleGuard } from "@/lib/ai/output-style";
 import { getLlmClient, LlmUnavailableError, type LlmHistoryTurn } from "@/lib/ai/llm";
 
 // WP-AI2：`context` 由前端側欄由目前網址解析出嚟（更表頁嘅
@@ -50,6 +51,17 @@ const ChatRequestSchema = z
 
 const MAX_TOOL_ROUNDS = 8;
 const SSE_CHUNK_SIZE = 40;
+// WP-AI3 第三輪正式站 live 驗收發現：長對話入面偶爾會撞到 LlmClient
+// 回一句完全空白嘅 `text`（真 LLM 嘅罕見情況，唔止某個 provider 先有，
+// 兩邊都有機會撞到）——用戶側會見到一個完全冇字嘅回覆，好差嘅體驗。
+// 呢個 fallback 淨係喺 `result.text` 淨係空白先套用，唔會影響任何有
+// 內容嘅回覆，亦都唔會削弱 guard（fallback 文字本身乾淨，行齊
+// checkOutputGuardAndAudit()／applyOutputStyleGuard() 都通過）。
+const EMPTY_REPLY_FALLBACK = "唔知點答呢條問題，可以講清楚啲想問邊方面，或者換個講法再問一次？";
+
+function withEmptyReplyFallback(text: string): string {
+  return text.trim() === "" ? EMPTY_REPLY_FALLBACK : text;
+}
 
 function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -130,8 +142,14 @@ export async function POST(req: Request) {
           maxToolRounds: MAX_TOOL_ROUNDS,
         });
 
-        const guardResult = await checkOutputGuardAndAudit({ text: result.text, actorUserId: session.userId, ip });
-        const finalText = guardResult.text;
+        const guardResult = await checkOutputGuardAndAudit({ text: withEmptyReplyFallback(result.text), actorUserId: session.userId, ip });
+        // WP-AI3 老闆 feedback（正式站助手）：安全 guard（DML/DDL/指示性
+        // 文字）先行——`checkOutputGuardAndAudit()` 完全唔改，順序上永遠
+        // 行喺表達方式 guard 之前，`applyOutputStyleGuard()` 淨係喺安全
+        // guard 判斷之後嘅（可能已經換咗做標準回覆嘅）文字上面再做一層
+        // 「業務用語化」，唔會削弱、亦都唔會繞過安全 guard。
+        const styleResult = await applyOutputStyleGuard({ text: guardResult.text, llmClient, actorUserId: session.userId, ip });
+        const finalText = styleResult.text;
 
         for (const piece of chunk(finalText, SSE_CHUNK_SIZE)) {
           controller.enqueue(encoder.encode(sseEvent("delta", { text: piece })));
@@ -149,6 +167,7 @@ export async function POST(req: Request) {
             input_tokens: result.inputTokens,
             output_tokens: result.outputTokens,
             guard_triggered: guardResult.triggered,
+            style_rewritten: styleResult.triggered,
           },
           ip,
         });
@@ -159,6 +178,7 @@ export async function POST(req: Request) {
               text: finalText,
               tools_used: result.toolsUsed,
               guard_triggered: guardResult.triggered,
+              style_rewritten: styleResult.triggered,
               // 老闆正式站驗收要求：token 用量之前淨係寫入 audit_log，
               // 前端/smoke script 攞唔到——LlmClient.chat() 早已經回埋
               // input_tokens/output_tokens（見 llm.ts LlmChatResult），

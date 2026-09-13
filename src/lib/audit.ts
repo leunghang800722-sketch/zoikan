@@ -22,7 +22,10 @@ export type AuditAction =
   // WP-AI1：AI 助手——每條問答一條（table_name="ai_chat"）；guard
   // 觸發（輸出過濾攔截咗一個似係改動指示/DML 嘅回覆）額外多一條。
   | "ai_chat"
-  | "ai_guard_triggered";
+  | "ai_guard_triggered"
+  // WP-AI3：表達方式 guard（`src/lib/ai/output-style.ts`）觸發——回覆
+  // 出現咗 snake_case 識別符/工具名/內部雞頭代號，改寫或者剝走咗。
+  | "ai_style_rewrite";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

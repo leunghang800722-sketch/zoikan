@@ -18,7 +18,7 @@ function chatRequest(cookie: string, message: string) {
   });
 }
 
-async function collectDoneEvent(res: Response): Promise<{ text: string; tools_used: string[]; guard_triggered: boolean }> {
+async function collectDoneEvent(res: Response): Promise<{ text: string; tools_used: string[]; guard_triggered: boolean; style_rewritten: boolean }> {
   const text = await res.text();
   const block = text.split("\n\n").find((b) => b.includes("event: done"));
   const dataLine = block!.split("\n").find((l) => l.startsWith("data: "))!;
@@ -115,12 +115,17 @@ describe("WP-AI1 §5：對抗式測試（≥25 條）", () => {
     expect(after).toBe(before + 1);
   });
 
-  it("正常問題（唔係攻擊）唔會誤觸 guard", async () => {
+  it("正常問題（唔係攻擊）唔會誤觸安全 guard", async () => {
     setLlmClientForTests(fakeLlmReplying("呢個盤而家有 5 個安員喺度返緊工，資料嚟自 site_overview 工具。"));
     const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
     const res = await chatPost(chatRequest(cookie, "呢個盤而家咩情況？"));
     const done = await collectDoneEvent(res);
     expect(done.guard_triggered).toBe(false);
-    expect(done.text).toContain("site_overview");
+    // WP-AI3 老闆 feedback：回覆唔准出現工具名——`applyOutputStyleGuard()`
+    // 呢個表達方式 guard（同安全 guard 獨立）會攔到「site_overview」呢個
+    // 工具名觸發改寫/剝走，唔係安全 guard 觸發（`guard_triggered` 保持
+    // false），但 `style_rewritten` 會係 true。
+    expect(done.style_rewritten).toBe(true);
+    expect(done.text).not.toContain("site_overview");
   });
 });

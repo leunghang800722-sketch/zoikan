@@ -155,7 +155,12 @@ export class DeepSeekLlmClient implements LlmClient {
       // Runner 嘅 `max_iterations` 唔完全一樣（嗰個到頂就直接停），但
       // 呢度想保證用戶唔會齋收空白回覆。
       for (let round = 1; round <= params.maxToolRounds + 1; round++) {
-        const allowTools = round <= params.maxToolRounds;
+        // WP-AI3：`output-style.ts` 嘅改寫 request 用 `tools: []` call
+        // 呢個 client（同 provider、冇工具）——`openAiTools.length === 0`
+        // 嗰陣連 `tools` key 都唔傳（唔傳一個空陣列），保守做法，唔靠
+        // DeepSeek/OpenAI-compatible API 對空陣列嘅行為一定同傳有嘢嗰陣
+        // 一致。
+        const allowTools = round <= params.maxToolRounds && openAiTools.length > 0;
         const response = await this.client.chat.completions.create({
           model: this.model,
           max_tokens: MAX_TOKENS,
