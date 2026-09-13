@@ -4,7 +4,7 @@ import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole } from "@/lib/brok
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toGuardFullDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate, applyFieldGroupGateToList } from "@/lib/api/field-groups";
-import { ok, getClientIp, withApiError } from "@/lib/api/http";
+import { ok, getClientIp, withApiError , okGzip } from "@/lib/api/http";
 import { paginationParams, readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
@@ -35,10 +35,10 @@ export async function GET(req: Request) {
       prisma.guard.count({ where }),
     ]);
     if (isBrokerRole(session)) {
-      return ok(scrubForBrokerSession(session, mapListForBroker({ rows, total, skip, take }, toBrokerGuardDTO)));
+      return okGzip(req, scrubForBrokerSession(session, mapListForBroker({ rows, total, skip, take }, toBrokerGuardDTO)));
     }
     const dto = mapListDTO({ rows, total, skip, take }, toGuardFullDTO);
-    return ok(await applyFieldGroupGateToList(session, "guards", dto));
+    return okGzip(req, await applyFieldGroupGateToList(session, "guards", dto));
   });
 }
 

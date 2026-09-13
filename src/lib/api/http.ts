@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { gzipSync } from "node:zlib";
 import { ApiError } from "./errors";
 import { camelToSnakeDeep, type Dto } from "./serialize";
 
@@ -22,6 +23,23 @@ export function getClientIp(req: Request): string | null {
 // 街」嘅結構性保證，唔淨係靠逐個 route 自己記得转 DTO。
 export function ok(data: Dto | Dto[] | null, init?: number): NextResponse {
   return NextResponse.json(camelToSnakeDeep(data), { status: init ?? 200 });
+}
+
+// 2026-09-13：App Router 嘅 Route Handler 回應唔會被 next.config `compress` 壓縮（正式站實測
+// 帶 Accept-Encoding: gzip 都係原大送出），大列表（更次／保安員）喺手機網絡極慢。呢個 helper
+// 同 ok() 一樣只收 Dto（型別層保證白名單），但當 client 接受 gzip 而 body ≥ 8KB 就手動 gzip。
+const GZIP_MIN_BYTES = 8 * 1024;
+export function okGzip(req: Request, data: Dto | Dto[] | null, init?: number): NextResponse {
+  const json = JSON.stringify(camelToSnakeDeep(data));
+  const accept = req.headers.get("accept-encoding") ?? "";
+  if (!/\bgzip\b/i.test(accept) || json.length < GZIP_MIN_BYTES) {
+    return new NextResponse(json, { status: init ?? 200, headers: { "content-type": "application/json", vary: "accept-encoding" } });
+  }
+  const body = gzipSync(Buffer.from(json, "utf8"));
+  return new NextResponse(new Uint8Array(body), {
+    status: init ?? 200,
+    headers: { "content-type": "application/json", "content-encoding": "gzip", vary: "accept-encoding", "content-length": String(body.length) },
+  });
 }
 
 // Opus 驗收殘留4：console.error 唔准噴 payload。Prisma 嘅

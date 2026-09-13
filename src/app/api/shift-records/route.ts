@@ -12,7 +12,7 @@ import { toBrokerShiftRecordDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toShiftRecordFullDTO, toShiftRecordListDTO, toShiftRecordGridDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate, applyFieldGroupGateToList, assertFieldGroupWritable } from "@/lib/api/field-groups";
 import { assertMonthNotLocked } from "@/lib/month-lock";
-import { ok, getClientIp, withApiError } from "@/lib/api/http";
+import { ok, getClientIp, withApiError , okGzip } from "@/lib/api/http";
 import { paginationParams, readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
@@ -52,12 +52,12 @@ export async function GET(req: Request) {
       prisma.shiftRecord.count({ where }),
     ]);
     if (isBrokerRole(session)) {
-      return ok(scrubForBrokerSession(session, mapListForBroker({ rows, total, skip, take }, toBrokerShiftRecordDTO)));
+      return okGzip(req, scrubForBrokerSession(session, mapListForBroker({ rows, total, skip, take }, toBrokerShiftRecordDTO)));
     }
     // M1：內部角色都經白名單 DTO（唔准 raw row 出街），再經 field-group gate
     // （主管出廠冇「收客價:view」就剝 client_rate_snapshot）。
     const dto = mapListDTO({ rows, total, skip, take }, gridView ? toShiftRecordGridDTO : includeProvenance ? toShiftRecordFullDTO : toShiftRecordListDTO);
-    return ok(await applyFieldGroupGateToList(session, "shift_records", dto));
+    return okGzip(req, await applyFieldGroupGateToList(session, "shift_records", dto));
   });
 }
 
