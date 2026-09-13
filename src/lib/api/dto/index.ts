@@ -61,6 +61,10 @@ export const toShiftTypeDTO = <T extends Record<string, unknown>>(row: T) => map
 export const toGuardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_FIELDS);
 export const toRateCardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, RATE_CARD_FIELDS);
 export const toShiftRecordFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_FIELDS);
+// 2026-09-13：列表預設唔回傳 provenance（原檔追溯 JSON，每條 ~1.5KB，7 月一個盤三頁共 2MB+，
+// 手機網絡載入極慢；畫面唔用佢）。要嘅 caller 用 `?include_provenance=1`。
+const SHIFT_RECORD_LIST_FIELDS = SHIFT_RECORD_FIELDS.filter((f) => f !== "provenance") as unknown as readonly (typeof SHIFT_RECORD_FIELDS)[number][];
+export const toShiftRecordListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_LIST_FIELDS);
 export const toDailyRequirementFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, DAILY_REQUIREMENT_FIELDS);
 export const toSpecialItemDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SPECIAL_ITEM_FIELDS);
 export const toMonthCloseDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, MONTH_CLOSE_FIELDS);

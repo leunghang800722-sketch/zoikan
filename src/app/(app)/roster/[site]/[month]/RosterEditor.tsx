@@ -241,6 +241,12 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const dayList = useMemo(() => Array.from({ length: days }, (_, i) => i + 1), [days]);
 
   const [loading, setLoading] = useState(true);
+  const [slowLoading, setSlowLoading] = useState(false); // 載入超過 15 秒 → 顯示重試掣（安全網）
+  useEffect(() => {
+    if (!loading) { setSlowLoading(false); return; }
+    const t = setTimeout(() => setSlowLoading(true), 15_000);
+    return () => clearTimeout(t);
+  }, [loading]);
   const [forbidden, setForbidden] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -913,7 +919,20 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
 
   // ---- 畫面 ---------------------------------------------------------------
   if (loading) {
-    return <div className="p-6 text-sm text-gray-500">載入緊更表……</div>;
+    return (
+      <div className="p-6 text-sm text-gray-500">
+        載入緊更表……
+        {slowLoading && (
+          <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+            載入時間比平時長（超過 15 秒）——可能係網絡慢或者登入已過期。
+            <div className="mt-2 flex gap-2">
+              <button type="button" className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700" onClick={() => window.location.reload()}>重新載入</button>
+              <a href={`/login?next=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname : "/")}`} className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">重新登入</a>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (forbidden) {

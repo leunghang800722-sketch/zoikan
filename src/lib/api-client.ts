@@ -16,7 +16,26 @@ export class ApiClientError extends Error {
   }
 }
 
+// 2026-09-13 安全網：每個 request 45 秒逾時（唔准無限轉圈）；401 即刻跳返登入頁。
+const REQUEST_TIMEOUT_MS = 45_000;
+async function fetchWithTimeout(input: string, init: RequestInit): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw new ApiClientError(0, `請求逾時（${REQUEST_TIMEOUT_MS / 1000} 秒）：${input.split("?")[0]}`, "timeout");
+    throw new ApiClientError(0, `網絡錯誤：${input.split("?")[0]}`, "network");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handle<T>(res: Response): Promise<T> {
+  if (res.status === 401 && typeof window !== "undefined") {
+    const next = encodeURIComponent(window.location.pathname + window.location.search);
+    window.location.assign(`/login?next=${next}`);
+  }
   let body: unknown = null;
   try {
     body = await res.json();
@@ -43,12 +62,12 @@ export async function apiGet<T>(
     }
   }
   const query = qs.toString();
-  const res = await fetch(query ? `${path}?${query}` : path, { method: "GET" });
+  const res = await fetchWithTimeout(query ? `${path}?${query}` : path, { method: "GET" });
   return handle<T>(res);
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetchWithTimeout(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

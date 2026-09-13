@@ -5,6 +5,7 @@ import { getNavLinks, getViewGrants } from "@/lib/rbac/nav";
 import { uiLabel } from "@/lib/ui/format";
 import { LogoutButton } from "@/components/LogoutButton";
 import { MustChangePwdGate } from "@/components/MustChangePwdGate";
+import { ChunkErrorReload } from "@/components/ChunkErrorReload";
 import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
 import { MobileNav } from "@/components/MobileNav";
 import { isAiConfigured } from "@/lib/ai/config";
@@ -59,6 +60,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
       <main className="min-w-0 flex-1 overflow-x-auto p-4 md:p-6">
+        <ChunkErrorReload />
         <MustChangePwdGate mustChange={session.mustChangePwd} />
         {children}
       </main>
