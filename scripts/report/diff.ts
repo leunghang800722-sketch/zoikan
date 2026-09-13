@@ -372,8 +372,18 @@ async function diffPayroll() {
       }
     } else {
       const startIdx = rows.length;
-      pushNumeric("C:糧明細", page, "工資", dbWage, p0.wage);
-      pushNumeric("C:糧明細", page, "雞頭費", dbFee, p0.fee);
+      // 2026-09-13 老闆提供雞頭費率（例如淦 1331 $60/其餘 $50），DB 將 P0 源頭冇拆嘅
+      // 「出街價合計」拆返工資＋雞頭費。P0 糧明細源頭冇呢個拆分，所以只要「金額」
+      // （工資＋雞頭費＝雞頭實收）對得上，工資／雞頭費兩欄嘅拆分差異降做 info，唔算 fail。
+      const splitOnly = Math.abs(round2(dbAmount - p0.amount)) < EPS && (Math.abs(round2(dbWage - p0.wage)) >= EPS || Math.abs(round2(dbFee - p0.fee)) >= EPS);
+      if (splitOnly) {
+        for (const [metric, dbVal, p0Val] of [["工資", dbWage, p0.wage], ["雞頭費", dbFee, p0.fee]] as const) {
+          rows.push({ section: "C:糧明細", key: page, metric, db_value: String(dbVal), p0_value: String(p0Val), diff: String(round2(dbVal - p0Val)), status: "info", note: "拆分口徑：老闆提供雞頭費率後 DB 拆返工資＋雞頭費；P0 源頭只有合計。金額（雞頭實收）一致。" });
+        }
+      } else {
+        pushNumeric("C:糧明細", page, "工資", dbWage, p0.wage);
+        pushNumeric("C:糧明細", page, "雞頭費", dbFee, p0.fee);
+      }
       pushNumeric("C:糧明細", page, "金額", dbAmount, p0.amount);
       if (!reportOverridesFileExists()) {
         for (let i = startIdx; i < rows.length; i++) {
