@@ -59,6 +59,36 @@ session／老闆）放落呢個路徑。
 自己個改動整壞咗嘢。其餘唔靠真實 7 月數據嘅 test（假 fixture）唔受
 影響，照常全過。
 
+### 雞頭費率拆分（P1-WP4，老闆 2026-09-13 批准）
+
+P0 源頭（糧明細／總表）只有「出街價」合計，冇拆開保安員工資／雞頭費
+（P0 §3.5 定義：出街價＝工資＋雞頭費）。老闆 2026-09-13 提供雞頭 K 嘅
+每更雞頭費率：盤「啟航1331」$60/更，其餘盤 $50/更。正式庫已經用一次性
+腳本拆咗（47 張 K 卡、974 條 7 月更次快照）；`npm run db:seed`（包括
+`tests/seed-regen-gate.test.ts` 會跑嘅嗰次）而家會喺 seed 期間自動做返
+同一件事，唔會退返舊嘅「合計卡」樣。
+
+- 費率規則喺 gitignored 嘅 `data/mappings-private/seed-overrides.json`
+  嘅 `brokerFeeRules` key（`{ "<broker_csv_id>": { "default": <數>,
+  "bySite": { "<盤 canonical_name>": <數> } } }`），由
+  `scripts/seed/lib/seed-overrides.ts` 嘅 `brokerFeeRules()` 讀入——冇
+  呢個 key 就跌返 `{}`（即係邊個雞頭都唔拆，行為同拆分前一樣）。
+- 拆分嘅純邏輯喺 `scripts/seed/lib/broker-fee-split.ts`
+  （`applyBrokerFeeSplit()`），rate_cards 同 shift_records 快照 stamping
+  兩處（`scripts/seed/index.ts`）共用同一份判斷：外判雞頭
+  （`broker.kind==="broker"`）、有登記費率、`guard_wage` 有值、
+  `broker_fee` 空或 0（idempotent，已拆開嘅唔會再拆）先會拆；出街價
+  （`guard_wage+broker_fee`）拆前拆後不變。長工／公司兵／external 呢類
+  唔屬外判雞頭嘅卡（`kind≠broker`）唔會被呢條規則掂到。
+- 8 月起（seed 冇覆蓋嘅月份）新增嘅更次一律經由已經拆開咗嘅 rate_cards
+  卡計價，落地時 `guard_wage`／`broker_fee` 已經係分開嘅——呢個拆分邏輯
+  淨係為咗令**本機重 seed 7 月歷史數據**時同正式庫已經人手拆過嘅結果
+  一致，唔係一個持續運行嘅 runtime 規則。
+- seed 完成後 `out/p1/seed-stats.json` 有 `brokerFeeSplitCards`（rate_cards
+  拆咗幾張）／`brokerFeeSplitRecords`（shift_records 快照拆咗幾條）兩個
+  統計；單元測試見 `tests/seed-broker-fee-split.test.ts`（純函數 fixture，
+  唔碰 DB）。
+
 ## 由零建庫（等同 `prisma migrate reset`）
 
 `prisma migrate reset` 呢個指令喺 AI agent 非互動 session 會俾 Prisma 自己嘅

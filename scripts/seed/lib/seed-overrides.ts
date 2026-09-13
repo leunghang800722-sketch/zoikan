@@ -28,6 +28,13 @@ interface SeedOverrides {
   // 入面，唔入 git-tracked 嘅 scripts/——呢個型別定義淨係話「key 係
   // staff_no」，冇任何實際工號字面）。
   monthlySalaryOverrides?: Record<string, number>;
+  // P1-WP4：雞頭每更雞頭費率（老闆 2026-09-13 提供；P0 源頭嘅糧明細／
+  // 總表只有出街價合計，冇拆開保安員工資／雞頭費——正式庫已經用一次性
+  // 腳本拆咗，seed 要做返同一件事先至唔會令本機重 seed 退返舊嘅合計卡／
+  // 合計 snapshot，見 scripts/seed/lib/broker-fee-split.ts）。Key 用
+  // broker_csv_id（例如 K 嘅代號）；bySite 嘅 key 用盤嘅 canonical_name
+  // （盤名唔算 PDPO 定義嘅真名，可以留喺呢個檔案）。
+  brokerFeeRules?: Record<string, { default: number; bySite?: Record<string, number> }>;
 }
 
 let cached: SeedOverrides | null = null;
@@ -47,4 +54,8 @@ export function knownUnmappedSettlementUnits(): string[] {
 
 export function monthlySalaryOverrides(): Record<string, number> {
   return load().monthlySalaryOverrides ?? {};
+}
+
+export function brokerFeeRules(): Record<string, { default: number; bySite?: Record<string, number> }> {
+  return load().brokerFeeRules ?? {};
 }

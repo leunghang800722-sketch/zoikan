@@ -12,7 +12,7 @@
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
     "db:seed": "tsx scripts/seed/index.ts",
-    "db:reset": "tsx scripts/db/reset.ts",
+    "db:reset": "tsx scripts/db/reset.ts && tsx scripts/db/ensure-ai-role.ts",
     "db:ensure-ai-role": "tsx scripts/db/ensure-ai-role.ts",
     "db:sync-permissions": "tsx scripts/db/sync-permissions.ts",
     "report:regen": "tsx scripts/report/index.ts && tsx scripts/report/diff.ts",

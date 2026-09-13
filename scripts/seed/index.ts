@@ -17,7 +17,8 @@ import {
   MASTER_BROKER_CODE_TO_BROKER_CSV_ID,
 } from "./lib/mapping";
 import { canonicalNameFor } from "./lib/broker-names";
-import { knownUnmappedSettlementUnits, monthlySalaryOverrides } from "./lib/seed-overrides";
+import { knownUnmappedSettlementUnits, monthlySalaryOverrides, brokerFeeRules } from "./lib/seed-overrides";
+import { applyBrokerFeeSplit } from "./lib/broker-fee-split";
 import { bochkAmountForName } from "./lib/bochk";
 import { loadReferralFees, siteCsvIdForBlock } from "./lib/referral-fees";
 import { excludedClientNames } from "../../src/lib/reports/private-overrides";
@@ -30,6 +31,19 @@ import { enrichLeaveCodeRawText } from "./lib/leave-code-raw";
 import { enrichShiftRecordsWithRawRow } from "./lib/roster-raw";
 
 const stats: Record<string, number> = {};
+
+// ---------------------------------------------------------------------------
+// P1-WP4：雞頭費拆分（見 lib/broker-fee-split.ts 頂註解）要用嘅兩個
+// 輔助對照表——broker_csv_id → kind、site_id(csv) → canonical_name。
+// 淨係讀返 CSV，唔碰 DB，seedRateCards()／seedShiftRecords() 兩處共用。
+function loadBrokerKindByCsvId(): Map<string, string> {
+  const rows = readCsv<{ broker_id: string; kind: string }>(CSV.brokers);
+  return new Map(rows.map((r) => [r.broker_id, mapBrokerKind(r.kind)]));
+}
+function loadSiteCanonicalNameByCsvId(): Map<string, string> {
+  const rows = readCsv<{ site_id: string; canonical_name: string }>(CSV.sites);
+  return new Map(rows.map((r) => [r.site_id, r.canonical_name]));
+}
 
 async function clearAll() {
   console.log("[seed] 清空現有數據...");
@@ -359,10 +373,28 @@ async function seedRateCards(
     note: string;
   };
   const rows = readCsv<Row>(CSV.rateCards);
+  const brokerKindByCsvId = loadBrokerKindByCsvId();
+  const siteCanonicalNameByCsvId = loadSiteCanonicalNameByCsvId();
+  const feeRules = brokerFeeRules();
   let n = 0;
+  let feeSplitCards = 0;
   for (const r of rows) {
     const siteId = siteIdMap.get(r.site_id);
     if (!siteId) continue; // 理論上唔會發生，rate_cards 嘅 site_id 一定喺 sites.csv 出現過
+
+    // P1-WP4：老闆 2026-09-13 批准嘅雞頭費率（見 lib/broker-fee-split.ts）——
+    // 「合計卡」（出街價冚埋工資+雞頭費，冇拆開）拆做 guard_wage/broker_fee，
+    // 出街價（下面 payoutRate）保持不變。
+    const brokerCsvId = str(r.broker_id);
+    const split = applyBrokerFeeSplit(feeRules, {
+      brokerCsvId,
+      brokerKind: brokerCsvId ? brokerKindByCsvId.get(brokerCsvId) ?? null : null,
+      siteCanonicalName: siteCanonicalNameByCsvId.get(r.site_id) ?? null,
+      guardWage: num(r.guard_wage),
+      brokerFee: num(r.broker_fee),
+    });
+    if (split.split) feeSplitCards++;
+
     await prisma.rateCard.create({
       data: {
         siteId,
@@ -370,12 +402,12 @@ async function seedRateCards(
         brokerId: str(r.broker_id) ? brokerIdMap.get(r.broker_id) : null,
         guardId: str(r.guard_id) ? guardIdMap.get(r.guard_id) : null,
         clientRate: num(r.client_rate),
-        guardWage: num(r.guard_wage),
-        brokerFee: num(r.broker_fee),
+        guardWage: split.guardWage,
+        brokerFee: split.brokerFee,
         // 2026-09-12 老闆批准：出街價＝保安員工資＋雞頭費（P0 §3.5 定義）。P0 反推嘅
         // payout_rate 有三張雞頭 T 逐人卡係「糧單總額÷含半更嘅更數」嘅混合價
         // （679.45／628.70／29.68），半更屬調整項，唔應該入卡。
-        payoutRate: num(r.guard_wage) != null || num(r.broker_fee) != null ? (num(r.guard_wage) ?? 0) + (num(r.broker_fee) ?? 0) : num(r.payout_rate),
+        payoutRate: split.guardWage != null || split.brokerFee != null ? (split.guardWage ?? 0) + (split.brokerFee ?? 0) : num(r.payout_rate),
         billingModel: str(r.billing_model) ? mapBillingModel(r.billing_model) : null,
         effectiveFrom: dateOnly(r.effective_from)!,
         effectiveTo: dateOnly(r.effective_to),
@@ -390,6 +422,7 @@ async function seedRateCards(
     n++;
   }
   stats.rateCards = n;
+  stats.brokerFeeSplitCards = feeSplitCards;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +493,11 @@ async function seedShiftRecords(
   // PDPO 裁定：settlement_unit（真名）→ broker_csv_id 對照喺 runtime
   // 合埋讀（見 mapping.ts 頂註解），唔再係 git-tracked 嘅靜態 object。
   const settlementUnitMap = settlementUnitToBrokerCsvId();
+  // P1-WP4：雞頭費拆分（見 lib/broker-fee-split.ts）要用嘅對照表同規則。
+  const brokerKindByCsvId = loadBrokerKindByCsvId();
+  const siteCanonicalNameByCsvId = loadSiteCanonicalNameByCsvId();
+  const feeRules = brokerFeeRules();
+  let brokerFeeSplitRecords = 0;
 
   // Gate（規劃裁定，Opus 對抗式驗收第三輪）：CSV 入面每個 distinct
   // settlement_unit／master_broker_code 都要 map 到一個已知 broker，或者
@@ -615,6 +653,26 @@ async function seedShiftRecords(
       }
     }
 
+    // P1-WP4：老闆 2026-09-13 批准嘅雞頭費率——settlement broker 有登記、
+    // 呢條係正更 snapshot（record_type=shift）、guard_wage_snapshot 有值、
+    // broker_fee_snapshot 空／0 嘅「合計 snapshot」拆做 guard_wage_snapshot/
+    // broker_fee_snapshot，出街價（兩者之和）保持不變。leave／OT 冇「呢更
+    // 出街價」呢個概念，同上面 item 4 fallback 一樣唔拆。
+    if (r.record_type === "shift") {
+      const split = applyBrokerFeeSplit(feeRules, {
+        brokerCsvId: settlementCsvId ?? null,
+        brokerKind: settlementCsvId ? brokerKindByCsvId.get(settlementCsvId) ?? null : null,
+        siteCanonicalName: siteCanonicalNameByCsvId.get(r.site_id) ?? null,
+        guardWage: guardWageSnapshot,
+        brokerFee: brokerFeeSnapshot,
+      });
+      if (split.split) {
+        guardWageSnapshot = split.guardWage;
+        brokerFeeSnapshot = split.brokerFee;
+        brokerFeeSplitRecords++;
+      }
+    }
+
     const key = keyOf(guardId, r.work_date, shiftTypeId);
 
     const provenance = {
@@ -717,6 +775,7 @@ async function seedShiftRecords(
   stats.shiftRecordsClonedPlaceholderGuards = cloned;
   stats.shiftRecordsParentLinked = parentLinked;
   stats.shiftRecordsOperationalNeSettlement = operationalNeSettlement;
+  stats.brokerFeeSplitRecords = brokerFeeSplitRecords;
 }
 
 // ---------------------------------------------------------------------------
