@@ -189,17 +189,30 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
   const content = (
     <>
       {!open && (
-        <button
-          ref={tabButtonRef}
-          type="button"
-          data-testid="ai-assistant-tab"
-          aria-label="開啟在勤助手"
-          onClick={() => setOpen(true)}
-          className="fixed right-0 top-[40%] z-30 -translate-y-1/2 rounded-l-md border border-r-0 border-gray-300 bg-white px-2 py-4 text-sm font-medium tracking-wide text-gray-700 shadow-md hover:bg-gray-50"
-          style={{ writingMode: "vertical-rl" }}
-        >
-          在勤助手
-        </button>
+        <>
+          {/* 桌面（md+）：右邊緣直向 tab */}
+          <button
+            ref={tabButtonRef}
+            type="button"
+            data-testid="ai-assistant-tab"
+            aria-label="開啟在勤助手"
+            onClick={() => setOpen(true)}
+            className="fixed right-0 top-[40%] z-30 hidden -translate-y-1/2 rounded-l-md border border-r-0 border-gray-300 bg-white px-2 py-4 text-sm font-medium tracking-wide text-gray-700 shadow-md hover:bg-gray-50 md:block"
+            style={{ writingMode: "vertical-rl" }}
+          >
+            在勤助手
+          </button>
+          {/* 手機（<md）：右下角圓形浮動掣（老闆 2026-09-13：垂直置中嘅 tab 會壓住卡片） */}
+          <button
+            type="button"
+            data-testid="ai-assistant-fab"
+            aria-label="開啟在勤助手"
+            onClick={() => setOpen(true)}
+            className="fixed bottom-5 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full border border-gray-300 bg-white text-sm font-semibold text-gray-800 shadow-lg hover:bg-gray-50 md:hidden"
+          >
+            助手
+          </button>
+        </>
       )}
 
       {open && (

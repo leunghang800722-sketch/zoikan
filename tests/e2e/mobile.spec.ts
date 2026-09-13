@@ -55,25 +55,29 @@ test.describe("手機版佈局（375×812）", () => {
     await expect(drawer).toBeHidden();
   });
 
-  test("(c) 「在勤助手」tab 貼實螢幕最右邊緣；撳開 → 側欄佔滿視窗寬度", async ({ page }) => {
+  test("(c) 手機用右下角「助手」浮動掣（唔壓內容）；撳開 → 側欄佔滿視窗寬度；直向 tab 唔顯示", async ({ page }) => {
     await loginAs(page, "老闆");
     await page.goto("/");
 
-    const tab = page.getByTestId("ai-assistant-tab");
-    await expect(tab).toBeVisible({ timeout: 20_000 });
-    const tabBox = await tab.boundingBox();
-    expect(tabBox).toBeTruthy();
-    expect(Math.abs(tabBox!.x + tabBox!.width - 375)).toBeLessThanOrEqual(2);
+    const fab = page.getByTestId("ai-assistant-fab");
+    await expect(fab).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("ai-assistant-tab")).toBeHidden(); // 桌面直向 tab 手機唔出
+    const box = await fab.boundingBox();
+    expect(box).toBeTruthy();
+    // 右下角：右邊距 8–40px、底邊距 8–60px；喺視窗下 25% 範圍內（唔會壓住中間卡片）
+    expect(375 - (box!.x + box!.width)).toBeGreaterThanOrEqual(8);
+    expect(375 - (box!.x + box!.width)).toBeLessThanOrEqual(40);
+    expect(812 - (box!.y + box!.height)).toBeGreaterThanOrEqual(8);
+    expect(812 - (box!.y + box!.height)).toBeLessThanOrEqual(60);
+    expect(box!.y).toBeGreaterThan(812 * 0.75);
 
-    await tab.click();
+    await fab.click();
     const panel = page.getByTestId("ai-assistant-panel");
     await expect(panel).toBeVisible({ timeout: 20_000 });
     const panelBox = await panel.boundingBox();
     expect(panelBox).toBeTruthy();
     expect(panelBox!.width).toBeGreaterThanOrEqual(375 - 2);
-    // 側欄開晒全螢幕嗰陣 tab 應該隱藏（`AiAssistantSidebar.tsx` `!open` 先
-    // render tab）。
-    await expect(tab).toBeHidden();
+    await expect(fab).toBeHidden();
   });
 
   test("(d) 首頁同更表頁冇橫向捲動", async ({ page }) => {
