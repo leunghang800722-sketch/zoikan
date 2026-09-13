@@ -35,6 +35,26 @@ interface SeedOverrides {
   // broker_csv_id（例如 K 嘅代號）；bySite 嘅 key 用盤嘅 canonical_name
   // （盤名唔算 PDPO 定義嘅真名，可以留喺呢個檔案）。
   brokerFeeRules?: Record<string, { default: number; bySite?: Record<string, number> }>;
+  // P1-WP4：一次性補漏卡（2026-09-13 老闆質詢後跟進）——P0 源頭有幾個
+  // site×broker 組合完全冇任何 rate_cards 卡（唔係「有卡但價錯」，係
+  // 「連卡都冇」），令 shift_records 快照 guard_wage_snapshot 一直留空、
+  // 個更次靜靜哋變咗 $0 成本。P0 總表（tools/importer/out/wp5/
+  // master_posts.csv）其實有嗰個崗位嘅外判價，只係冇轉做 rate_cards 卡
+  // ——見 scripts/seed/lib/extra-rate-cards.ts。呢個 array 逐項係一張
+  // 要補嘅卡；`site` 用盤嘅 canonical_name（盤名唔算真名，可以留喺呢個
+  // 檔案），實際套用嘅 shift_type_id 由 extra-rate-cards.ts 喺 runtime
+  // 反推（搵返呢個 site+broker 組合入面邊啲更次冇 guard_wage_snapshot），
+  // 唔喺呢度手動指定，避免人手估錯漏咗某個更型。
+  extraRateCards?: Array<{
+    broker_csv_id: string;
+    site: string;
+    payout_rate: number;
+    client_rate?: number | null;
+    effective_from: string;
+    effective_to?: string | null;
+    source?: string;
+    note?: string;
+  }>;
 }
 
 let cached: SeedOverrides | null = null;
@@ -58,4 +78,19 @@ export function monthlySalaryOverrides(): Record<string, number> {
 
 export function brokerFeeRules(): Record<string, { default: number; bySite?: Record<string, number> }> {
   return load().brokerFeeRules ?? {};
+}
+
+export interface ExtraRateCardOverride {
+  broker_csv_id: string;
+  site: string;
+  payout_rate: number;
+  client_rate?: number | null;
+  effective_from: string;
+  effective_to?: string | null;
+  source?: string;
+  note?: string;
+}
+
+export function extraRateCardOverrides(): ExtraRateCardOverride[] {
+  return load().extraRateCards ?? [];
 }

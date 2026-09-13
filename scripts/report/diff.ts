@@ -56,8 +56,26 @@ function leadingNumber(v: unknown): number {
   return m ? Number(m[0].replace(/,/g, "")) : 0;
 }
 
+// P1-WP4：老闆 2026-09-13 質詢後補嘅 P0 漏價——殷樺花園 K 雞頭 25 條 7 月
+// 更次（source=master_roster_site，settlement_page=總表確認-K）P0 源頭
+// 由頭到尾冇任何 rate_cards 卡、guard_wage_snapshot 一直係空，P0 自己嘅
+// 糧明細/月結總表從來冇計過呢筆成本（唔係 DB 拆分口徑做錯）。DB 用
+// 總表（master_posts.csv property=殷樺）外判價 850 補咗之後，「殷樺花園」
+// 呢個 site 嘅成本／盈利同 P0 呢兩個歷史數之間必然多咗 21,250（25更×850）
+// ——呢個係「DB 啱、P0 漏」，降級做 known，唔算 fail；差額唔啱好呢個
+// 精確數值就照舊 fail（唔會因為呢個表就盲目放過殷樺花園其他唔相關嘅差異）。
+const YINWAH_K_MISSING_COST = 21250; // 25 更 × 850（P0-執行計劃.md §8；master_posts.csv MP0244）
+const YINWAH_K_NOTE =
+  "P0 漏價，總表外判價 850 補（2026-09-13 老闆質詢後修正：殷樺花園 K 雞頭 25 更 × 850 = 21,250，master_posts.csv property=殷樺 block「城巴車廠 12hrs (N/S)」Night，P0 糧明細/月結從未計入呢筆成本，見 scripts/seed/lib/extra-rate-cards.ts）";
+const KNOWN_MONTHLY_CLOSE_GAP: Record<string, number> = {
+  "殷樺花園|成本": YINWAH_K_MISSING_COST,
+  "殷樺花園|盈利": -YINWAH_K_MISSING_COST,
+};
+
 function pushNumeric(section: string, key: string, metric: string, dbVal: number, p0Val: number, note = "") {
   const diff = Math.round((dbVal - p0Val) * 100) / 100;
+  const expectedGap = KNOWN_MONTHLY_CLOSE_GAP[`${key}|${metric}`];
+  const isKnownGap = expectedGap !== undefined && Math.abs(diff - expectedGap) < EPS;
   rows.push({
     section,
     key,
@@ -65,8 +83,8 @@ function pushNumeric(section: string, key: string, metric: string, dbVal: number
     db_value: String(dbVal),
     p0_value: String(p0Val),
     diff: String(diff),
-    status: Math.abs(diff) < EPS ? "pass" : "fail",
-    note,
+    status: Math.abs(diff) < EPS ? "pass" : isKnownGap ? "known" : "fail",
+    note: isKnownGap ? YINWAH_K_NOTE : note,
   });
 }
 
@@ -372,19 +390,45 @@ async function diffPayroll() {
       }
     } else {
       const startIdx = rows.length;
+      // P1-WP4：呢頁（總表確認-K）金額差剛好等於已知嘅殷樺花園 P0 漏價
+      // （見上面 YINWAH_K_MISSING_COST 註解）——工資/雞頭費仲混埋原有嘅
+      // 拆分口徑差，三個 total 一齊標 known（唔再細分拆分 info，因為金額
+      // 本身已經唔再對得上，唔屬於「純拆分、金額不變」嗰種情況）。差額
+      // 唔啱好 21,250 就跌返落面嘅正常邏輯，唔會盲目放過。
+      const amountDiff = round2(dbAmount - p0.amount);
+      const isKnownGapPage = Math.abs(amountDiff - YINWAH_K_MISSING_COST) < EPS;
       // 2026-09-13 老闆提供雞頭費率（例如淦 1331 $60/其餘 $50），DB 將 P0 源頭冇拆嘅
       // 「出街價合計」拆返工資＋雞頭費。P0 糧明細源頭冇呢個拆分，所以只要「金額」
       // （工資＋雞頭費＝雞頭實收）對得上，工資／雞頭費兩欄嘅拆分差異降做 info，唔算 fail。
-      const splitOnly = Math.abs(round2(dbAmount - p0.amount)) < EPS && (Math.abs(round2(dbWage - p0.wage)) >= EPS || Math.abs(round2(dbFee - p0.fee)) >= EPS);
-      if (splitOnly) {
+      const splitOnly = Math.abs(amountDiff) < EPS && (Math.abs(round2(dbWage - p0.wage)) >= EPS || Math.abs(round2(dbFee - p0.fee)) >= EPS);
+      if (isKnownGapPage) {
+        for (const [metric, dbVal, p0Val] of [
+          ["工資", dbWage, p0.wage],
+          ["雞頭費", dbFee, p0.fee],
+          ["金額", dbAmount, p0.amount],
+        ] as const) {
+          const diff = round2(dbVal - p0Val);
+          rows.push({
+            section: "C:糧明細",
+            key: page,
+            metric,
+            db_value: String(dbVal),
+            p0_value: String(p0Val),
+            diff: String(diff),
+            status: Math.abs(diff) < EPS ? "pass" : "known",
+            note: Math.abs(diff) < EPS ? "" : YINWAH_K_NOTE,
+          });
+        }
+      } else if (splitOnly) {
         for (const [metric, dbVal, p0Val] of [["工資", dbWage, p0.wage], ["雞頭費", dbFee, p0.fee]] as const) {
           rows.push({ section: "C:糧明細", key: page, metric, db_value: String(dbVal), p0_value: String(p0Val), diff: String(round2(dbVal - p0Val)), status: "info", note: "拆分口徑：老闆提供雞頭費率後 DB 拆返工資＋雞頭費；P0 源頭只有合計。金額（雞頭實收）一致。" });
         }
+        pushNumeric("C:糧明細", page, "金額", dbAmount, p0.amount);
       } else {
         pushNumeric("C:糧明細", page, "工資", dbWage, p0.wage);
         pushNumeric("C:糧明細", page, "雞頭費", dbFee, p0.fee);
+        pushNumeric("C:糧明細", page, "金額", dbAmount, p0.amount);
       }
-      pushNumeric("C:糧明細", page, "金額", dbAmount, p0.amount);
       if (!reportOverridesFileExists()) {
         for (let i = startIdx; i < rows.length; i++) {
           const r = rows[i]!;

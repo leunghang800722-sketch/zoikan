@@ -351,7 +351,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
 
         const [shiftTypes, records, guards, dailyRequirements, quotaRows, monthCloses, brokers] = await Promise.all([
           apiGetAll<ShiftTypeDto>("/api/shift-types", { site_id: siteId }),
-          apiGetAll<ShiftRecordDto>("/api/shift-records", { site_id: siteId, work_date_from: workDateFrom, work_date_to: workDateTo }),
+          apiGetAll<ShiftRecordDto>("/api/shift-records", { site_id: siteId, work_date_from: workDateFrom, work_date_to: workDateTo, view: "grid" }),
           apiGetAll<GuardDto>("/api/guards", {}),
           apiGetAll<DailyRequirementDto>("/api/daily-requirements", { site_id: siteId }),
           apiGetAll<QuotaDto>("/api/quotas", { site_id: siteId, month }),

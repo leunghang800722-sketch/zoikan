@@ -9,7 +9,7 @@ import {
   assertSiteAssignedToBroker,
 } from "@/lib/broker-isolation";
 import { toBrokerShiftRecordDTO, mapListForBroker } from "@/lib/broker-dto";
-import { toShiftRecordFullDTO, toShiftRecordListDTO, mapListDTO } from "@/lib/api/dto";
+import { toShiftRecordFullDTO, toShiftRecordListDTO, toShiftRecordGridDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate, applyFieldGroupGateToList, assertFieldGroupWritable } from "@/lib/api/field-groups";
 import { assertMonthNotLocked } from "@/lib/month-lock";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -32,6 +32,7 @@ export async function GET(req: Request) {
     const workDateTo = url.searchParams.get("work_date_to");
     const includeVoided = url.searchParams.get("include_voided") === "1";
     const includeProvenance = url.searchParams.get("include_provenance") === "1";
+    const gridView = url.searchParams.get("view") === "grid";
     // P1-WP3：審批隊列——`GET /api/shift-records?status=pending_approval`。
     // 明確傳咗 status 就用嗰個值（覆蓋 includeVoided 嘅預設 not:cancelled）。
     const statusParam = url.searchParams.get("status");
@@ -55,7 +56,7 @@ export async function GET(req: Request) {
     }
     // M1：內部角色都經白名單 DTO（唔准 raw row 出街），再經 field-group gate
     // （主管出廠冇「收客價:view」就剝 client_rate_snapshot）。
-    const dto = mapListDTO({ rows, total, skip, take }, includeProvenance ? toShiftRecordFullDTO : toShiftRecordListDTO);
+    const dto = mapListDTO({ rows, total, skip, take }, gridView ? toShiftRecordGridDTO : includeProvenance ? toShiftRecordFullDTO : toShiftRecordListDTO);
     return ok(await applyFieldGroupGateToList(session, "shift_records", dto));
   });
 }

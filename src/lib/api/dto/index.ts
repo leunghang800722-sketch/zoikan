@@ -65,6 +65,9 @@ export const toShiftRecordFullDTO = <T extends Record<string, unknown>>(row: T) 
 // 手機網絡載入極慢；畫面唔用佢）。要嘅 caller 用 `?include_provenance=1`。
 const SHIFT_RECORD_LIST_FIELDS = SHIFT_RECORD_FIELDS.filter((f) => f !== "provenance") as unknown as readonly (typeof SHIFT_RECORD_FIELDS)[number][];
 export const toShiftRecordListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_LIST_FIELDS);
+// `?view=grid`：更表編輯器只需要呢 9 欄（每條 ~230 bytes，對比全欄 ~965）。
+const SHIFT_RECORD_GRID_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "recordType", "leaveCode", "status"] as const;
+export const toShiftRecordGridDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_GRID_FIELDS);
 export const toDailyRequirementFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, DAILY_REQUIREMENT_FIELDS);
 export const toSpecialItemDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SPECIAL_ITEM_FIELDS);
 export const toMonthCloseDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, MONTH_CLOSE_FIELDS);

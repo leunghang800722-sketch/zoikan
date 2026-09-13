@@ -324,7 +324,19 @@ async function checkD2XlsxValuesVsP0() {
     if (label && label !== "Sub-Total") oursByLabel.set(label, row);
   });
 
+  // P1-WP4：老闆 2026-09-13 質詢後補嘅 P0 漏價（殷樺花園 K 雞頭 25 更 ×
+  // 850＝21,250，見 scripts/report/diff.ts 嘅 YINWAH_K_MISSING_COST／
+  // out/p1/regen-diff.csv「A:月結總表(主表)」殷樺花園 行）——DB 補咗之後
+  // 呢個 site 嘅成本／盈利同 P0 呢個歷史檔必然差 21,250，屬已知落差、
+  // 唔算 fail，但都要如實列出嚟（唔靜默 PASS 扮冇差異）。差額唔啱好呢個
+  // 精確數值就照舊當 fail（唔會盲目放過殷樺花園其他唔相關嘅差異）。
+  const KNOWN_D2_GAPS: Record<string, number> = {
+    "殷樺花園.成本": 21250,
+    "殷樺花園.盈利": -21250,
+  };
+
   const fails: string[] = [];
+  const known: string[] = [];
   let compared = 0;
   p0Ws.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
@@ -336,7 +348,15 @@ async function checkD2XlsxValuesVsP0() {
       const p0Val = leadingNumber(row.getCell(p0Idx[m.p0]).value);
       const oursVal = leadingNumber(oursRow.getCell(oursIdx[m.ours]).value);
       compared++;
-      if (Math.abs(p0Val - oursVal) >= EPS) fails.push(`${label}.${m.ours}: 我哋xlsx=${oursVal} P0xlsx=${p0Val}`);
+      const diff = round2(oursVal - p0Val);
+      if (Math.abs(diff) < EPS) continue;
+      const gapKey = `${label}.${m.ours}`;
+      const expectedGap = KNOWN_D2_GAPS[gapKey];
+      if (expectedGap !== undefined && Math.abs(diff - expectedGap) < EPS) {
+        known.push(`${gapKey}: 我哋xlsx=${oursVal} P0xlsx=${p0Val}（known：P0 漏價，總表外判價 850 補，2026-09-13 老闆質詢後修正）`);
+      } else {
+        fails.push(`${label}.${m.ours}: 我哋xlsx=${oursVal} P0xlsx=${p0Val}`);
+      }
     }
   });
 
@@ -344,6 +364,12 @@ async function checkD2XlsxValuesVsP0() {
     report("(d2) 我哋 xlsx vs P0 xlsx（值層面）", "SKIP", "冇任何一行對到 P0 xlsx");
   } else if (fails.length > 0) {
     report("(d2) 我哋 xlsx vs P0 xlsx（值層面）", "FAIL", `${compared} 格比對，${fails.length} 個差異：\n${fails.slice(0, 10).join("\n")}`);
+  } else if (known.length > 0) {
+    report(
+      "(d2) 我哋 xlsx vs P0 xlsx（值層面）",
+      "PASS",
+      `${compared} 格（更數/營業額/成本/盈利 × 逐盤）值層面零差異，另有 ${known.length} 格已知落差（唔算 fail）：\n${known.join("\n")}`,
+    );
   } else {
     report("(d2) 我哋 xlsx vs P0 xlsx（值層面）", "PASS", `${compared} 格（更數/營業額/成本/盈利 × 逐盤）值層面零差異（允許欄位次序/格式差）`);
   }

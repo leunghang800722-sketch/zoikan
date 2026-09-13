@@ -17,8 +17,9 @@ import {
   MASTER_BROKER_CODE_TO_BROKER_CSV_ID,
 } from "./lib/mapping";
 import { canonicalNameFor } from "./lib/broker-names";
-import { knownUnmappedSettlementUnits, monthlySalaryOverrides, brokerFeeRules } from "./lib/seed-overrides";
+import { knownUnmappedSettlementUnits, monthlySalaryOverrides, brokerFeeRules, extraRateCardOverrides } from "./lib/seed-overrides";
 import { applyBrokerFeeSplit } from "./lib/broker-fee-split";
+import { resolveExtraRateCardRows, type ExtraRateCardRow } from "./lib/extra-rate-cards";
 import { bochkAmountForName } from "./lib/bochk";
 import { loadReferralFees, siteCsvIdForBlock } from "./lib/referral-fees";
 import { excludedClientNames } from "../../src/lib/reports/private-overrides";
@@ -352,6 +353,7 @@ async function seedRateCards(
   shiftTypeIdMap: Map<string, string>,
   brokerIdMap: Map<string, string>,
   guardIdMap: Map<string, string>,
+  extraRateCardRows: ExtraRateCardRow[],
 ) {
   type Row = {
     rate_id: string;
@@ -372,12 +374,16 @@ async function seedRateCards(
     status: string;
     note: string;
   };
-  const rows = readCsv<Row>(CSV.rateCards);
+  // P1-WP4：extraRateCardRows（見 lib/extra-rate-cards.ts）係一次性補漏卡
+  // （2026-09-13 老闆質詢後跟進，殷樺花園 K 雞頭 P0 完全冇卡嗰單）——形狀同
+  // CSV.rateCards 一致，接落嚟一齊行同一份建卡／拆分邏輯，唔使獨立一份。
+  const rows: Row[] = [...readCsv<Row>(CSV.rateCards), ...extraRateCardRows];
   const brokerKindByCsvId = loadBrokerKindByCsvId();
   const siteCanonicalNameByCsvId = loadSiteCanonicalNameByCsvId();
   const feeRules = brokerFeeRules();
   let n = 0;
   let feeSplitCards = 0;
+  let extraRateCards = 0;
   for (const r of rows) {
     const siteId = siteIdMap.get(r.site_id);
     if (!siteId) continue; // 理論上唔會發生，rate_cards 嘅 site_id 一定喺 sites.csv 出現過
@@ -394,6 +400,8 @@ async function seedRateCards(
       brokerFee: num(r.broker_fee),
     });
     if (split.split) feeSplitCards++;
+    const isExtra = r.rate_id.startsWith("EXTRA");
+    if (isExtra) extraRateCards++;
 
     await prisma.rateCard.create({
       data: {
@@ -416,13 +424,14 @@ async function seedRateCards(
         confidence: str(r.confidence),
         status: str(r.status),
         note: str(r.note),
-        createdBy: "seed:wp3/rate_cards.csv",
+        createdBy: isExtra ? "seed:overrides/extraRateCards(P0漏價補，2026-09-13)" : "seed:wp3/rate_cards.csv",
       },
     });
     n++;
   }
   stats.rateCards = n;
   stats.brokerFeeSplitCards = feeSplitCards;
+  stats.extraRateCards = extraRateCards;
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +450,7 @@ async function seedShiftRecords(
   shiftTypeIdMap: Map<string, string>,
   guardIdMap: Map<string, string>,
   brokerIdMap: Map<string, string>,
+  extraRateCardRows: ExtraRateCardRow[],
 ) {
   type Row = {
     shift_id: string;
@@ -554,7 +564,11 @@ async function seedShiftRecords(
   // （guard_id 留空，keyed by site/shift_type/broker）；(b) 人專屬卡
   // （LINK C7 嗰批冇 shift_type_id、keyed by site/broker/guard），(a) 搵唔
   // 到先試 (b)。
-  const rateCardRows = readCsv<RateCardRow>(CSV.rateCards);
+  // P1-WP4：extraRateCardRows（一次性補漏卡，見 lib/extra-rate-cards.ts）
+  // 一齊攞嚟起 fallback 索引——呢啲卡本身已經帶埋精準嘅 shift_type_id
+  // （由缺價嘅更次反推），會經下面現有嘅 site+shiftType+broker 索引
+  // （level 1）直接命中，唔使加任何新嘅 fallback tier。
+  const rateCardRows = [...readCsv<RateCardRow>(CSV.rateCards), ...extraRateCardRows];
   const rateCardIndex = new Map<string, RateCardRow>();
   const guardSpecificRateCardIndex = new Map<string, RateCardRow>();
   for (const rc of rateCardRows) {
@@ -1196,8 +1210,13 @@ async function main() {
   const siteIdMap = await seedSites();
   const shiftTypeIdMap = await seedShiftTypes(siteIdMap);
   const guardIdMap = await seedGuards();
-  await seedRateCards(siteIdMap, shiftTypeIdMap, brokerIdMap, guardIdMap);
-  await seedShiftRecords(siteIdMap, shiftTypeIdMap, guardIdMap, brokerIdMap);
+  // P1-WP4：一次性補漏卡（2026-09-13 老闆質詢後跟進，見
+  // lib/extra-rate-cards.ts 頂註解）——反推要用嘅 canonical_name→site_id
+  // (csv) 對照喺呢度一次過整，seedRateCards()／seedShiftRecords() 共用。
+  const siteCsvIdByCanonicalName = new Map([...loadSiteCanonicalNameByCsvId()].map(([csvId, name]) => [name, csvId]));
+  const extraRateCardRows = resolveExtraRateCardRows(extraRateCardOverrides(), siteCsvIdByCanonicalName);
+  await seedRateCards(siteIdMap, shiftTypeIdMap, brokerIdMap, guardIdMap, extraRateCardRows);
+  await seedShiftRecords(siteIdMap, shiftTypeIdMap, guardIdMap, brokerIdMap, extraRateCardRows);
   await seedBrokerSiteAssignments();
   const backfillStats = await backfillDefaultBrokerId(prisma);
   stats.guardsDefaultBrokerBackfilled = backfillStats.backfilled;
