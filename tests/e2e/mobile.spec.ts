@@ -80,6 +80,30 @@ test.describe("手機版佈局（375×812）", () => {
     await expect(fab).toBeHidden();
   });
 
+  test("(f) 手機闊度：更表日期欄要喺固定欄右邊見得到（唔可以被固定欄遮晒），且可以橫向捲", async ({ page }) => {
+    const siteId = await findSiteIdByName("啟航1331");
+    await loginAs(page, "老闆");
+    await page.goto(`/roster/${siteId}/2026-07`);
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 30_000 });
+    const info = await page.evaluate(() => {
+      const cell = document.querySelector('[data-testid="roster-cell-0-1"]') as HTMLElement;
+      const container = cell.closest("div.overflow-auto") as HTMLElement;
+      const c = container.getBoundingClientRect();
+      const b = cell.getBoundingClientRect();
+      // 固定欄總闊（sticky 左欄）
+      const stickyRight = Math.max(...[...container.querySelectorAll('tbody tr:first-child td')].filter((td) => getComputedStyle(td).position === "sticky").map((td) => td.getBoundingClientRect().right));
+      return { containerRight: c.right, containerLeft: c.left, cellLeft: b.left, cellRight: b.right, stickyRight, scrollWidth: container.scrollWidth, clientWidth: container.clientWidth };
+    });
+    // 日期 1 格嘅左邊要喺固定欄右邊，而且整格喺容器可視範圍內
+    expect(info.cellLeft).toBeGreaterThanOrEqual(info.stickyRight - 1);
+    expect(info.cellRight).toBeLessThanOrEqual(info.containerRight + 1);
+    // 固定欄唔可以佔多過容器 55%
+    expect(info.stickyRight - info.containerLeft).toBeLessThan(info.clientWidth * 0.55);
+    // 可以橫向捲（程式捲動後 scrollLeft 有變）
+    const moved = await page.evaluate(() => { const d = document.querySelector('[data-testid="roster-cell-0-1"]')!.closest("div.overflow-auto") as HTMLElement; d.scrollLeft = 300; return d.scrollLeft; });
+    expect(moved).toBeGreaterThan(100);
+  });
+
   test("(d) 首頁同更表頁冇橫向捲動", async ({ page }) => {
     const siteId = await findSiteIdByName("啟航1331");
 

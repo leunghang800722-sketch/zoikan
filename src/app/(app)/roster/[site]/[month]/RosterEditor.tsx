@@ -241,6 +241,16 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const dayList = useMemo(() => Array.from({ length: days }, (_, i) => i + 1), [days]);
 
   const [loading, setLoading] = useState(true);
+  // 2026-09-13 緊急：手機闊度下左邊固定四欄（56+96+88+104=344px）闊過整個容器（~324px），
+  // 日期欄永遠被固定欄遮住，捲極都見唔到。compact（<640px）改用窄欄並收起工號／雞頭欄。
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const apply = () => setCompact(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
   const [slowLoading, setSlowLoading] = useState(false); // 載入超過 15 秒 → 顯示重試掣（安全網）
   useEffect(() => {
     if (!loading) { setSlowLoading(false); return; }
@@ -963,14 +973,19 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     );
   }
 
+  const colW = compact
+    ? { shiftType: 44, name: 76, staffNo: 0, broker: 0 }
+    : { shiftType: COL_SHIFT_TYPE, name: COL_NAME, staffNo: COL_STAFF_NO, broker: COL_BROKER };
+  const showStaffNo = !compact;
+  const showBrokerCol = !isBrokerSession && !compact;
   const leftOffsets = {
     shiftType: 0,
-    name: COL_SHIFT_TYPE,
-    staffNo: COL_SHIFT_TYPE + COL_NAME,
-    tel: COL_SHIFT_TYPE + COL_NAME + COL_STAFF_NO,
-    broker: COL_SHIFT_TYPE + COL_NAME + COL_STAFF_NO + COL_TEL,
+    name: colW.shiftType,
+    staffNo: colW.shiftType + colW.name,
+    tel: colW.shiftType + colW.name + colW.staffNo,
+    broker: colW.shiftType + colW.name + colW.staffNo + COL_TEL,
   };
-  const dayColStart = COL_SHIFT_TYPE + COL_NAME + COL_STAFF_NO + COL_TEL + (isBrokerSession ? 0 : COL_BROKER);
+  const dayColStart = colW.shiftType + colW.name + colW.staffNo + COL_TEL + (showBrokerCol ? colW.broker : 0);
 
   function rangeBounds() {
     if (!sel) return null;
@@ -1162,17 +1177,19 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         <table className="border-collapse text-sm" style={{ minWidth: dayColStart + days * COL_DAY + 80 }}>
           <thead>
             <tr>
-              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300 sticky-left" style={{ left: leftOffsets.shiftType, width: COL_SHIFT_TYPE, position: "sticky" }}>
+              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300 sticky-left" style={{ left: leftOffsets.shiftType, width: colW.shiftType, minWidth: colW.shiftType, position: "sticky" }}>
                 更別
               </th>
-              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.name, width: COL_NAME, position: "sticky" }}>
+              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.name, width: colW.name, minWidth: colW.name, position: "sticky" }}>
                 姓名
               </th>
-              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.staffNo, width: COL_STAFF_NO, position: "sticky" }}>
-                工號
-              </th>
-              {!isBrokerSession && (
-                <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.broker, width: COL_BROKER, position: "sticky" }}>
+              {showStaffNo && (
+                <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.staffNo, width: colW.staffNo, position: "sticky" }}>
+                  工號
+                </th>
+              )}
+              {showBrokerCol && (
+                <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.broker, width: colW.broker, position: "sticky" }}>
                   雞頭
                 </th>
               )}
@@ -1190,7 +1207,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               const broker = row.brokerId ? brokersById.get(row.brokerId) : null;
               return (
                 <tr key={row.key} data-testid="roster-row" data-row-index={r} data-row-key={row.key}>
-                  <td className="sticky z-10 bg-white border border-gray-300 text-center font-medium" style={{ left: leftOffsets.shiftType, width: COL_SHIFT_TYPE, position: "sticky" }}>
+                  <td className="sticky z-10 bg-white border border-gray-300 text-center font-medium" style={{ left: leftOffsets.shiftType, width: colW.shiftType, minWidth: colW.shiftType, position: "sticky" }}>
                     <div className="flex flex-col items-center gap-0.5">
                       <span>{row.shiftTypeCode}</span>
                       <button
@@ -1206,15 +1223,22 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                       </button>
                     </div>
                   </td>
-                  <td className="sticky z-10 bg-white border border-gray-300 px-1" style={{ left: leftOffsets.name, width: COL_NAME, position: "sticky" }}>
-                    {row.guardName || "(未命名)"}
+                  <td className="sticky z-10 bg-white border border-gray-300 px-1" style={{ left: leftOffsets.name, width: colW.name, minWidth: colW.name, maxWidth: colW.name, position: "sticky" }}>
+                    <div className="truncate" title={row.guardName || "(未命名)"}>{row.guardName || "(未命名)"}</div>
                     {permitExpired && <span className="ml-1 text-red-600 text-[10px]">證件到期</span>}
+                    {compact && (
+                      <div className="truncate text-[10px] text-gray-500">
+                        {row.staffNo || ""}{row.staffNo && !isBrokerSession && broker ? "·" : ""}{!isBrokerSession ? broker?.code ?? "" : ""}
+                      </div>
+                    )}
                   </td>
-                  <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.staffNo, width: COL_STAFF_NO, position: "sticky" }}>
-                    {row.staffNo}
-                  </td>
-                  {!isBrokerSession && (
-                    <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.broker, width: COL_BROKER, position: "sticky" }}>
+                  {showStaffNo && (
+                    <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.staffNo, width: colW.staffNo, position: "sticky" }}>
+                      {row.staffNo}
+                    </td>
+                  )}
+                  {showBrokerCol && (
+                    <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.broker, width: colW.broker, position: "sticky" }}>
                       {broker?.name ?? row.brokerId ?? ""}
                     </td>
                   )}
@@ -1274,7 +1298,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
             })}
             {visibleRows.length === 0 && (
               <tr>
-                <td colSpan={4 + (isBrokerSession ? 0 : 1) + days} className="border border-gray-300 text-center text-gray-400 py-6 text-sm">
+                <td colSpan={2 + (showStaffNo ? 1 : 0) + (showBrokerCol ? 1 : 0) + days} className="border border-gray-300 text-center text-gray-400 py-6 text-sm">
                   {allRows.length === 0
                     ? "呢個盤呢個月未有更表記錄——撳「加保安員」開始排更，或者撳「複製上月」。"
                     : "呢個雞頭喺呢個盤搵唔到保安員行（篩選只影響顯示，其他雞頭嘅記錄照喺度）。"}
