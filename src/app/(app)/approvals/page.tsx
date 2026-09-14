@@ -1,8 +1,20 @@
 "use client";
+// P2-A：審批隊列頁（README §06）——換皮，邏輯／API 呼叫全部保留。
+// 注意：「全選＋批准」primary 掣要留喺表格之前（DOM 順序）——
+// tests/e2e/wp3.spec.ts (b) 用 `getByRole("button",{name:"批准"}).first()`
+// 撳掣（substring match，個 bulk 掣個名都含「批准」二字），原本行為
+// 就係揀中呢個 bulk 掣，唔可以因為換皮打亂順序。
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterChip } from "@/components/ui/FilterChip";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate } from "@/lib/ui/format";
+import { brokerColor } from "@/lib/ui/broker-color";
+import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 
 interface ShiftRecordRow {
   id: string;
@@ -13,6 +25,7 @@ interface ShiftRecordRow {
   status: string;
   record_type?: string;
   leave_code?: string | null;
+  settlement_broker_id?: string | null;
 }
 interface SiteRow {
   id: string;
@@ -28,12 +41,18 @@ interface ShiftTypeRow {
   code: string;
   label?: string;
 }
+interface BrokerRow {
+  id: string;
+  code: string;
+  name: string;
+}
 
 export default function ApprovalsPage() {
   const [rows, setRows] = useState<ShiftRecordRow[]>([]);
   const [sites, setSites] = useState<Record<string, SiteRow>>({});
   const [guards, setGuards] = useState<Record<string, GuardRow>>({});
   const [shiftTypes, setShiftTypes] = useState<Record<string, ShiftTypeRow>>({});
+  const [brokers, setBrokers] = useState<Record<string, BrokerRow>>({});
   const [siteFilter, setSiteFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -59,15 +78,17 @@ export default function ApprovalsPage() {
     const siteIds = Array.from(new Set(res.data.rows.map((r) => r.site_id)));
     const guardIds = Array.from(new Set(res.data.rows.map((r) => r.guard_id)));
     const shiftTypeIds = Array.from(new Set(res.data.rows.map((r) => r.shift_type_id)));
-    const [siteList, guardList, shiftTypeList] = await Promise.all([
+    const [siteList, guardList, shiftTypeList, brokerList] = await Promise.all([
       apiGet<ApiListResult<SiteRow>>("/api/sites?take=500"),
       apiGet<ApiListResult<GuardRow>>("/api/guards?take=500&include_inactive=1"),
       apiGet<ApiListResult<ShiftTypeRow>>("/api/shift-types?take=500&include_voided=1"),
+      apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500&include_inactive=1"),
     ]);
     if (siteList.ok) setSites(Object.fromEntries(siteList.data.rows.filter((s) => siteIds.includes(s.id)).map((s) => [s.id, s])));
     if (guardList.ok) setGuards(Object.fromEntries(guardList.data.rows.filter((g) => guardIds.includes(g.id)).map((g) => [g.id, g])));
     if (shiftTypeList.ok)
       setShiftTypes(Object.fromEntries(shiftTypeList.data.rows.filter((s) => shiftTypeIds.includes(s.id)).map((s) => [s.id, s])));
+    if (brokerList.ok) setBrokers(Object.fromEntries(brokerList.data.rows.map((b) => [b.id, b])));
     setLoading(false);
   }
 
@@ -128,132 +149,250 @@ export default function ApprovalsPage() {
     await load();
   }
 
+  function typePill(r: ShiftRecordRow) {
+    if (r.leave_code) {
+      return <Pill variant="warning">請假 · {r.leave_code}</Pill>;
+    }
+    return <Pill variant="shift">新排更</Pill>;
+  }
+
+  // P2-A 驗收修復：頭列實際係 7 欄（日期/盤/更別/保安員/類型/雞頭/操
+  // 作）——原本寫死 6，令 tableMinWidth() 算窄咗、要靠落面 colSpan
+  // 「+1」補返，兩個問題一齊執:colCount 改返啱數，colSpan 直接用
+  // colCount（唔再 +1）。
+  const colCount = 7;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">審批隊列</h1>
-          <p className="text-sm text-gray-500">雞頭排更逐項確認——批准後轉 confirmed，退回打返 draft。</p>
-        </div>
-        <button
-          type="button"
-          onClick={approveAll}
-          disabled={bulkBusy || rows.length === 0}
-          className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
-        >
-          {bulkBusy ? "批准緊…" : `全選＋批准（${rows.length}）`}
-        </button>
-      </div>
+      <PageHeader
+        kicker="排更"
+        title="審批隊列"
+        subtitle="雞頭排嘅更逐項確認（draft → confirmed）或者打返轉頭。"
+        actions={
+          <>
+            <FilterChip label="盤">
+              <select value={siteFilter} onChange={(e) => setSiteFilter(e.target.value)}>
+                <option value="">全部盤</option>
+                {siteOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.canonical_name}
+                  </option>
+                ))}
+              </select>
+            </FilterChip>
+            <Button variant="primary" onClick={approveAll} disabled={bulkBusy || rows.length === 0}>
+              {bulkBusy ? "批准緊…" : `全選 ＋ 批准（${rows.length}）`}
+            </Button>
+          </>
+        }
+      />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
-      <select
-        className="rounded border border-gray-300 px-3 py-1.5 text-sm"
-        value={siteFilter}
-        onChange={(e) => setSiteFilter(e.target.value)}
-      >
-        <option value="">全部盤</option>
-        {siteOptions.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.canonical_name}
-          </option>
-        ))}
-      </select>
+      {!loading && rows.length === 0 ? (
+        <div className={tableCls.wrap}>
+          <EmptyState title="暫時冇待審項目" description="雞頭排嘅新更／請假會喺呢度逐項出現，等緊審批。" />
+        </div>
+      ) : (
+        <>
+          <div className={`hidden sm:block ${tableCls.wrap}`}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(colCount) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>日期</th>
+                  <th className={tableCls.th}>盤</th>
+                  <th className={tableCls.th}>更別</th>
+                  <th className={tableCls.th}>保安員</th>
+                  <th className={tableCls.th}>類型</th>
+                  <th className={tableCls.th}>雞頭</th>
+                  <th className={tableCls.th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
+                      載入緊…
+                    </td>
+                  </tr>
+                )}
+                {rows.map((r) => {
+                  const busy = busyIds.has(r.id);
+                  const guard = guards[r.guard_id];
+                  const st = shiftTypes[r.shift_type_id];
+                  const b = r.settlement_broker_id ? brokers[r.settlement_broker_id] : undefined;
+                  return (
+                    <tr key={r.id} className={tableCls.rowHover}>
+                      <td className={tableCls.td}>{fmtDate(r.work_date)}</td>
+                      <td className={`${tableCls.td} font-medium`}>{sites[r.site_id]?.canonical_name ?? r.site_id.slice(0, 8)}</td>
+                      <td className={tableCls.td}>
+                        {st ? (
+                          <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+                            {st.code}
+                          </Pill>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={tableCls.td}>
+                        {guard ? (
+                          <>
+                            {guard.name_zh}
+                            {guard.staff_no && <span className="ml-1 text-[11px] text-zk-faint">（{guard.staff_no}）</span>}
+                          </>
+                        ) : (
+                          r.guard_id.slice(0, 8)
+                        )}
+                      </td>
+                      <td className={tableCls.td}>{typePill(r)}</td>
+                      <td className={tableCls.td}>
+                        {b ? (
+                          <Pill variant="broker" color={brokerColor(b.code)}>
+                            {b.name}
+                          </Pill>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={tableCls.td}>
+                        {rejectingId === r.id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              autoFocus
+                              value={rejectReason}
+                              onChange={(e) => setRejectReason(e.target.value)}
+                              placeholder="退回原因"
+                              className="w-36 rounded border border-zk-input-border px-2 py-1 text-xs"
+                            />
+                            <button
+                              type="button"
+                              disabled={busy || !rejectReason.trim()}
+                              onClick={() => reject(r.id, rejectReason.trim())}
+                              className="rounded-[5px] bg-[#dc2626] px-2.5 py-[3px] text-xs text-white disabled:opacity-50"
+                            >
+                              確認退回
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRejectingId(null);
+                                setRejectReason("");
+                              }}
+                              className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-header"
+                            >
+                              取消
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-1.5">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setRejectingId(r.id)}
+                              className="rounded-[5px] border border-[#fecaca] px-2.5 py-[3px] text-xs text-[#b91c1c] hover:bg-[#fef2f2] disabled:opacity-50"
+                            >
+                              退回
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => approve(r.id)}
+                              className="rounded-[5px] bg-[#2563eb] px-2.5 py-[3px] text-xs text-white hover:bg-[#1d4ed8] disabled:opacity-50"
+                            >
+                              批准
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
-            <tr>
-              <th className="px-3 py-2">日期</th>
-              <th className="px-3 py-2">盤</th>
-              <th className="px-3 py-2">更別</th>
-              <th className="px-3 py-2">保安員</th>
-              <th className="px-3 py-2">類型</th>
-              <th className="px-3 py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  載入緊…
-                </td>
-              </tr>
-            )}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  暫時冇待審項目
-                </td>
-              </tr>
-            )}
+          <div className="space-y-2 sm:hidden">
             {rows.map((r) => {
               const busy = busyIds.has(r.id);
               const guard = guards[r.guard_id];
+              const st = shiftTypes[r.shift_type_id];
+              const b = r.settlement_broker_id ? brokers[r.settlement_broker_id] : undefined;
               return (
-                <tr key={r.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2">{fmtDate(r.work_date)}</td>
-                  <td className="px-3 py-2">{sites[r.site_id]?.canonical_name ?? r.site_id.slice(0, 8)}</td>
-                  <td className="px-3 py-2">{shiftTypes[r.shift_type_id]?.code ?? r.shift_type_id.slice(0, 8)}</td>
-                  <td className="px-3 py-2">{guard ? `${guard.name_zh}${guard.staff_no ? `（${guard.staff_no}）` : ""}` : r.guard_id.slice(0, 8)}</td>
-                  <td className="px-3 py-2">{r.leave_code ?? r.record_type ?? "shift"}</td>
-                  <td className="px-3 py-2">
-                    {rejectingId === r.id ? (
-                      <div className="flex items-center gap-1">
-                        <input
-                          autoFocus
-                          value={rejectReason}
-                          onChange={(e) => setRejectReason(e.target.value)}
-                          placeholder="退回原因"
-                          className="w-36 rounded border border-gray-300 px-2 py-1 text-xs"
-                        />
-                        <button
-                          type="button"
-                          disabled={busy || !rejectReason.trim()}
-                          onClick={() => reject(r.id, rejectReason.trim())}
-                          className="rounded bg-red-600 px-2 py-1 text-xs text-white disabled:opacity-50"
-                        >
-                          確認退回
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRejectingId(null);
-                            setRejectReason("");
-                          }}
-                          className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
-                        >
-                          取消
-                        </button>
-                      </div>
+                <div key={r.id} className="rounded-lg border border-zk-border bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13.5px] font-medium text-zk-text">
+                      {sites[r.site_id]?.canonical_name ?? r.site_id.slice(0, 8)}
+                    </span>
+                    <span className="text-[13px] text-zk-text">{fmtDate(r.work_date)}</span>
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                    {guard ? (
+                      <>
+                        {guard.name_zh}
+                        {guard.staff_no && <span className="ml-1">（{guard.staff_no}）</span>}
+                      </>
                     ) : (
-                      <div className="flex gap-1.5">
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => approve(r.id)}
-                          className="rounded bg-green-600 px-2 py-1 text-xs text-white hover:bg-green-700 disabled:opacity-50"
-                        >
-                          批准
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => setRejectingId(r.id)}
-                          className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          退回
-                        </button>
-                      </div>
+                      r.guard_id.slice(0, 8)
                     )}
-                  </td>
-                </tr>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {st && (
+                      <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+                        {st.code}
+                      </Pill>
+                    )}
+                    {typePill(r)}
+                    {b && (
+                      <Pill variant="broker" color={brokerColor(b.code)}>
+                        {b.name}
+                      </Pill>
+                    )}
+                  </div>
+                  {rejectingId === r.id ? (
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <input
+                        autoFocus
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        placeholder="退回原因"
+                        className="w-full rounded border border-zk-input-border px-2 py-1 text-xs"
+                      />
+                      <button
+                        type="button"
+                        disabled={busy || !rejectReason.trim()}
+                        onClick={() => reject(r.id, rejectReason.trim())}
+                        className="shrink-0 rounded-[5px] bg-[#dc2626] px-2.5 py-[5px] text-xs text-white disabled:opacity-50"
+                      >
+                        確認退回
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex gap-1.5">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setRejectingId(r.id)}
+                        className="rounded-[5px] border border-[#fecaca] px-2.5 py-[5px] text-xs text-[#b91c1c] disabled:opacity-50"
+                      >
+                        退回
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => approve(r.id)}
+                        className="rounded-[5px] bg-[#2563eb] px-2.5 py-[5px] text-xs text-white disabled:opacity-50"
+                      >
+                        批准
+                      </button>
+                    </div>
+                  )}
+                </div>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

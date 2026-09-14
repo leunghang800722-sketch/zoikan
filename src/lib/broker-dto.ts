@@ -4,6 +4,10 @@
 import { pickWhitelist, brandSafeResponse, type Dto } from "./api/serialize";
 
 // 安員（自己安員名冊，§6.2）：HR 基本資料，冇任何金錢/其他 broker 資料。
+// S4（Opus 驗收修復）：`monthShiftCount`（P2-A「本月更數」衍生欄，
+// `GET /api/guards?with_month_shifts=` 先會計出嚟）加入呢個白名單——
+// 冇金錢/敏感成分，雞頭見自己安員嘅本月更數一向准，同內部角色
+// GUARD_FIELDS 一致做法（見 src/lib/api/dto/index.ts 同一段註解）。
 export const GUARD_BROKER_FIELDS = [
   "id",
   "staffNo",
@@ -18,6 +22,7 @@ export const GUARD_BROKER_FIELDS = [
   "status",
   "createdAt",
   "updatedAt",
+  "monthShiftCount",
 ] as const;
 
 // 雞頭（自己資料）：淨係基本資料，bankInfo 已經喺 blocklist 剝埋（defense-in-depth）。

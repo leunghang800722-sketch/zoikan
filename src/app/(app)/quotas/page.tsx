@@ -1,11 +1,19 @@
 "use client";
+// P2-A：配額頁（README §05）——換皮，邏輯／API 呼叫全部保留。
 import { useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
-import { fmtDate } from "@/lib/ui/format";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterChip } from "@/components/ui/FilterChip";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { fmtDate, currentMonthStr } from "@/lib/ui/format";
+import { brokerColor } from "@/lib/ui/broker-color";
+import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 
 interface QuotaRow {
   id: string;
@@ -31,12 +39,7 @@ interface BrokerRow {
   name: string;
 }
 
-function currentMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-const emptyForm = { month: currentMonth(), site_id: "", shift_type_id: "", broker_id: "", target_shifts: "" };
+const emptyForm = { month: currentMonthStr(), site_id: "", shift_type_id: "", broker_id: "", target_shifts: "" };
 
 export default function QuotasPage() {
   const [rows, setRows] = useState<QuotaRow[]>([]);
@@ -44,7 +47,7 @@ export default function QuotasPage() {
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [siteFilter, setSiteFilter] = useState("");
-  const [monthFilter, setMonthFilter] = useState(currentMonth());
+  const [monthFilter, setMonthFilter] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -103,16 +106,16 @@ export default function QuotasPage() {
   function siteLabel(id: string): string {
     return sites.find((s) => s.id === id)?.canonical_name ?? id.slice(0, 8);
   }
-  function shiftTypeLabel(id: string): string {
-    return shiftTypes.find((s) => s.id === id)?.code ?? id.slice(0, 8);
+  function shiftType(id: string): ShiftTypeRow | undefined {
+    return shiftTypes.find((s) => s.id === id);
   }
-  function brokerLabel(id: string): string {
-    return brokers.find((b) => b.id === id)?.name ?? id.slice(0, 8);
+  function broker(id: string): BrokerRow | undefined {
+    return brokers.find((b) => b.id === id);
   }
 
   function openCreate() {
     setEditingId(null);
-    setForm({ ...emptyForm, site_id: siteFilter, month: monthFilter || currentMonth() });
+    setForm({ ...emptyForm, site_id: siteFilter, month: monthFilter || currentMonthStr() });
     setFormError(null);
     setDrawerOpen(true);
   }
@@ -175,90 +178,171 @@ export default function QuotasPage() {
     await load();
   }
 
+  const colCount = 6;
+  const emptyDescription = "呢個月未有任何雞頭配額——配額係軟性限制，超額會喺更表提示但唔會擋儲存。";
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">配額</h1>
-          <p className="text-sm text-gray-500">雞頭每月配額——軟性限制，超配額唔會擋更表儲存。</p>
-        </div>
-        <button type="button" onClick={openCreate} className={btnPrimary}>
-          新增
-        </button>
-      </div>
+      <PageHeader
+        kicker="排更"
+        title="配額"
+        subtitle="雞頭每月每盤每更別可排幾多更 — 軟性限制，超額會提示但唔會封。"
+        actions={
+          <>
+            <FilterChip label="盤">
+              <select value={siteFilter} onChange={(e) => setSiteFilter(e.target.value)}>
+                <option value="">全部盤</option>
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.canonical_name}
+                  </option>
+                ))}
+              </select>
+            </FilterChip>
+            <FilterChip label="月份" showCaret={false}>
+              <input type="month" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} />
+            </FilterChip>
+            <Button variant="primary" onClick={openCreate}>
+              新增配額
+            </Button>
+          </>
+        }
+      />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
-      <div className="flex flex-wrap gap-2">
-        <select className={selectCls + " max-w-xs"} value={siteFilter} onChange={(e) => setSiteFilter(e.target.value)}>
-          <option value="">全部盤</option>
-          {sites.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.canonical_name}
-            </option>
-          ))}
-        </select>
-        <input type="month" className={inputCls + " max-w-[160px]"} value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} />
-      </div>
+      {!loading && rows.length === 0 ? (
+        <div className={tableCls.wrap}>
+          <EmptyState
+            title={`${monthFilter || "本月"} 未設任何配額`}
+            description={emptyDescription}
+            cta={
+              <Button variant="primary" onClick={openCreate}>
+                新增配額
+              </Button>
+            }
+          />
+        </div>
+      ) : (
+        <>
+          {/* 桌面／平板：表格。 */}
+          <div className={`hidden sm:block ${tableCls.wrap}`}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(colCount) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>月份</th>
+                  <th className={tableCls.th}>盤</th>
+                  <th className={tableCls.th}>更別</th>
+                  <th className={tableCls.th}>雞頭</th>
+                  <th className={tableCls.thNum}>目標更數</th>
+                  <th className={tableCls.th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
+                      載入緊…
+                    </td>
+                  </tr>
+                )}
+                {rows.map((r) => {
+                  const st = shiftType(r.shift_type_id);
+                  const b = broker(r.broker_id);
+                  return (
+                    <tr key={r.id} className={`${tableCls.rowHover} ${r.voided_at ? "opacity-45" : ""}`}>
+                      <td className={tableCls.td}>{fmtDate(r.month)}</td>
+                      <td className={`${tableCls.td} font-medium`}>{siteLabel(r.site_id)}</td>
+                      <td className={tableCls.td}>
+                        {st ? (
+                          <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+                            {st.code}
+                          </Pill>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={tableCls.td}>
+                        {b ? (
+                          <Pill variant="broker" color={brokerColor(b.code)}>
+                            {b.name}
+                          </Pill>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={tableCls.tdNum}>{r.target_shifts}</td>
+                      <td className={tableCls.td}>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                            編輯
+                          </button>
+                          {r.voided_at ? (
+                            <button
+                              type="button"
+                              onClick={() => onUnvoid(r.id)}
+                              className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                            >
+                              解除作廢
+                            </button>
+                          ) : (
+                            <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
-            <tr>
-              <th className="px-3 py-2">月份</th>
-              <th className="px-3 py-2">盤</th>
-              <th className="px-3 py-2">更別</th>
-              <th className="px-3 py-2">雞頭</th>
-              <th className="px-3 py-2">目標更數</th>
-              <th className="px-3 py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  載入緊…
-                </td>
-              </tr>
-            )}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  暫時冇資料
-                </td>
-              </tr>
-            )}
-            {rows.map((r) => (
-              <tr key={r.id} className={`border-t border-gray-100 ${r.voided_at ? "opacity-50" : ""}`}>
-                <td className="px-3 py-2">{fmtDate(r.month)}</td>
-                <td className="px-3 py-2">{siteLabel(r.site_id)}</td>
-                <td className="px-3 py-2">{shiftTypeLabel(r.shift_type_id)}</td>
-                <td className="px-3 py-2">{brokerLabel(r.broker_id)}</td>
-                <td className="px-3 py-2">{r.target_shifts}</td>
-                <td className="px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50">
+          {/* 手機（&lt;640）：列表卡。其他（Opus 驗收）：loading 嗰陣桌面
+              table 有「載入緊…」提示列，手機卡舊版冇——加返，唔好淨係
+              一片空白。 */}
+          <div className="space-y-2 sm:hidden">
+            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-[13px] text-zk-muted">載入緊…</div>}
+            {rows.map((r) => {
+              const st = shiftType(r.shift_type_id);
+              const b = broker(r.broker_id);
+              return (
+                <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13.5px] font-medium text-zk-text">{siteLabel(r.site_id)}</span>
+                    <span className="text-[13px] tabular-nums text-zk-text">{r.target_shifts} 更</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                    <span>{fmtDate(r.month)}</span>
+                    {st && (
+                      <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+                        {st.code}
+                      </Pill>
+                    )}
+                    {b && (
+                      <Pill variant="broker" color={brokerColor(b.code)}>
+                        {b.name}
+                      </Pill>
+                    )}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
                       編輯
                     </button>
                     {r.voided_at ? (
-                      <button
-                        type="button"
-                        onClick={() => onUnvoid(r.id)}
-                        className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50"
-                      >
+                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
                         解除作廢
                       </button>
                     ) : (
                       <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                     )}
                   </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       <Drawer open={drawerOpen} title={editingId ? "編輯配額" : "新增配額"} onClose={() => setDrawerOpen(false)}>
         <form onSubmit={onSubmit} className="space-y-3">

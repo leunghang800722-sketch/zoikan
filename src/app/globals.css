@@ -114,6 +114,16 @@ body {
   main a:hover {
     color: var(--zk-primary-dark);
   }
+
+  /* 其他（Opus 驗收）：全站鍵盤 focus 樣式——之前冇統一 focus-visible
+     outline，鍵盤操作嘅時候撳掣／連結／role=button 元素聚焦時冇明顯
+     視覺提示（無障礙問題）。 */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+  }
 }
 
 /* P2 整合驗收②：桌面（≥1024）「在勤助手」面板開住時，主內容要縮窄

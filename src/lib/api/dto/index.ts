@@ -19,7 +19,12 @@ import type { FieldGroupResource } from "../field-groups";
 const BROKER_FIELDS = ["id", "code", "name", "kind", "settlementType", "bankInfo", "requiresApproval", "isInternal", "aliases", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTime", "hours", "headcountRequired", "billingGroup", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
-const GUARD_FIELDS = ["id", "staffNo", "staffNoMw", "nameZh", "nameEn", "tel", "defaultBrokerId", "employmentType", "monthlySalary", "siaPermitExpiry", "poloSize", "mergedFrom", "status", "createdAt", "updatedAt", "createdBy"] as const;
+// S4（Opus 驗收修復）：`monthShiftCount` 係 P2-A 加嘅衍生欄（唔係
+// Prisma model 本身有嘅欄，`GET /api/guards?with_month_shifts=YYYY-MM`
+// 先會計出嚟 merge 落 row——加落呢個白名單先，落面 route 就可以喺
+// DTO／field-group gate 之前就 merge，唔使再靠「gate 之後先手動加返」
+// 嗰種繞過白名單機制嘅寫法。
+const GUARD_FIELDS = ["id", "staffNo", "staffNoMw", "nameZh", "nameEn", "tel", "defaultBrokerId", "employmentType", "monthlySalary", "siaPermitExpiry", "poloSize", "mergedFrom", "status", "createdAt", "updatedAt", "createdBy", "monthShiftCount"] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const DAILY_REQUIREMENT_FIELDS = ["id", "siteId", "shiftTypeId", "workDate", "headcountRequired", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;

@@ -1,10 +1,15 @@
 "use client";
+// P2-A：盤管理頁（README §07）——換皮，邏輯／API 呼叫全部保留。
 import { useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmt, fmtMoney } from "@/lib/ui/format";
 
 const BILLING_MODELS = ["per_shift", "monthly_fixed", "admin_fee", "special"] as const;
@@ -52,8 +57,18 @@ const emptySiteForm = {
   outside_monthly_close: false,
 };
 
+function billingModelPill(model: string) {
+  if (model === "monthly_fixed") return <Pill variant="monthly">月費</Pill>;
+  if (model === "per_shift") return <Pill variant="neutral">逐更</Pill>;
+  return <Pill variant="neutral">{model}</Pill>;
+}
+
 export default function SitesPage() {
   const [rows, setRows] = useState<SiteRow[]>([]);
+  const [shiftTypesBySite, setShiftTypesBySite] = useState<Record<string, ShiftTypeRow[]>>({});
+  // S1（Opus 驗收）：「更別」欄未讀到之前顯示「載入緊…」，唔好當佢真係
+  // 冇更別（「—」）——落面 load() 一次過攞晒 shift-types 先會清呢個 flag。
+  const [shiftTypesLoading, setShiftTypesLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -79,6 +94,21 @@ export default function SitesPage() {
     setRows(res.data.rows);
     setHasMoneyField(res.data.rows.length === 0 ? true : res.data.rows.some((r) => "monthly_fee" in r));
     setLoading(false);
+
+    // S1（Opus 驗收修復）：README §07「更別」欄（「D · N · IC」）舊版逐盤
+    // 一次 GET /api/shift-types?site_id=（64 個盤＝64 條 request，N+1）。
+    // 改為一次過 GET /api/shift-types?take=500，前端 group by site_id。
+    setShiftTypesLoading(true);
+    const stRes = await apiGet<ApiListResult<ShiftTypeRow>>("/api/shift-types?take=500");
+    if (stRes.ok) {
+      const map: Record<string, ShiftTypeRow[]> = {};
+      for (const st of stRes.data.rows) {
+        if (st.voided_at) continue;
+        (map[st.site_id] ??= []).push(st);
+      }
+      setShiftTypesBySite(map);
+    }
+    setShiftTypesLoading(false);
   }
 
   useEffect(() => {
@@ -165,85 +195,138 @@ export default function SitesPage() {
     await load();
   }
 
+  // 其他（Opus 驗收）：頭列實際係 盤名/客戶/結算模式/(月費)/更別/狀態/
+  // 操作——hasMoneyField 就 7 欄，冇就 6 欄（原本寫死 6/5，靠落面
+  // colSpan「+1」補返，而家 colCount 本身改啱，colSpan 唔使再 +1）。
+  const colCount = hasMoneyField ? 7 : 6;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">盤</h1>
-          <p className="text-sm text-gray-500">盤管理——每個盤可以有多個更別（子表）。</p>
-        </div>
-        <button type="button" onClick={openCreate} className={btnPrimary}>
-          新增
-        </button>
-      </div>
+      <PageHeader
+        kicker="主檔"
+        title="盤"
+        subtitle="盤管理——每個盤可以有多個更別（子表）。"
+        actions={
+          <Button variant="primary" onClick={openCreate}>
+            新增盤
+          </Button>
+        }
+      />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
-            <tr>
-              <th className="px-3 py-2">盤名</th>
-              <th className="px-3 py-2">客戶</th>
-              <th className="px-3 py-2">結算模式</th>
-              {hasMoneyField && <th className="px-3 py-2">月費</th>}
-              <th className="px-3 py-2">狀態</th>
-              <th className="px-3 py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  載入緊…
-                </td>
-              </tr>
-            )}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  暫時冇資料
-                </td>
-              </tr>
-            )}
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-gray-100">
-                <td className="px-3 py-2 font-medium text-gray-900">{r.canonical_name}</td>
-                <td className="px-3 py-2">{r.client_name}</td>
-                <td className="px-3 py-2">{r.billing_model}</td>
-                {hasMoneyField && <td className="px-3 py-2">{fmtMoney(r.monthly_fee)}</td>}
-                <td className="px-3 py-2">{r.status}</td>
-                <td className="px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50">
-                      編輯
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShiftTypesFor(r)}
-                      className="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50"
-                    >
-                      更別
-                    </button>
-                    {r.status === "ended" ? (
-                      <button
-                        type="button"
-                        onClick={() => onUnvoid(r.id)}
-                        className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50"
-                      >
-                        恢復
-                      </button>
-                    ) : (
-                      <ConfirmVoidButton label="結束" confirmLabel="確認結束" onConfirm={(reason) => onVoid(r.id, reason)} />
+      {!loading && rows.length === 0 ? (
+        <div className={tableCls.wrap}>
+          <EmptyState title="暫時冇任何盤" description="撳右上「新增盤」開始建立客戶／盤資料。" cta={<Button variant="primary" onClick={openCreate}>新增盤</Button>} />
+        </div>
+      ) : (
+        <>
+          <div className={`hidden sm:block ${tableCls.wrap}`}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(colCount) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>盤名</th>
+                  <th className={tableCls.th}>客戶</th>
+                  <th className={tableCls.th}>結算模式</th>
+                  {hasMoneyField && <th className={tableCls.thNum}>月費</th>}
+                  <th className={tableCls.th}>更別</th>
+                  <th className={tableCls.th}>狀態</th>
+                  <th className={tableCls.th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
+                      載入緊…
+                    </td>
+                  </tr>
+                )}
+                {rows.map((r) => (
+                  <tr key={r.id} className={tableCls.rowHover}>
+                    <td className={`${tableCls.td} font-medium`}>{r.canonical_name}</td>
+                    <td className={tableCls.td}>{r.client_name}</td>
+                    <td className={tableCls.td}>{billingModelPill(r.billing_model)}</td>
+                    {hasMoneyField && (
+                      <td className={tableCls.tdNum}>{r.billing_model === "per_shift" ? "—" : fmtMoney(r.monthly_fee)}</td>
                     )}
-                  </div>
-                </td>
-              </tr>
+                    <td className={tableCls.tdMuted}>
+                      {shiftTypesLoading
+                        ? "載入緊…"
+                        : (shiftTypesBySite[r.id] ?? []).length > 0
+                          ? shiftTypesBySite[r.id]!.map((s) => s.code).join(" · ")
+                          : "—"}
+                    </td>
+                    <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}</td>
+                    <td className={tableCls.td}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          編輯
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShiftTypesFor(r)}
+                          className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header"
+                        >
+                          更別
+                        </button>
+                        {r.status === "ended" ? (
+                          <button
+                            type="button"
+                            onClick={() => onUnvoid(r.id)}
+                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                          >
+                            恢復
+                          </button>
+                        ) : (
+                          <ConfirmVoidButton label="結束" confirmLabel="確認結束" onConfirm={(reason) => onVoid(r.id, reason)} />
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-2 sm:hidden">
+            {rows.map((r) => (
+              <div key={r.id} className="rounded-lg border border-zk-border bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[13.5px] font-medium text-zk-text">{r.canonical_name}</span>
+                  {hasMoneyField && (
+                    <span className="text-[13px] tabular-nums text-zk-text">{r.billing_model === "per_shift" ? "—" : fmtMoney(r.monthly_fee)}</span>
+                  )}
+                </div>
+                <div className="mt-1 text-[11.5px] text-zk-muted">{r.client_name}</div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {billingModelPill(r.billing_model)}
+                  {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
+                  <span className="text-[11.5px] text-zk-muted">
+                    {shiftTypesLoading ? "載入緊…" : (shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    編輯
+                  </button>
+                  <button type="button" onClick={() => setShiftTypesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    更別
+                  </button>
+                  {r.status === "ended" ? (
+                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      恢復
+                    </button>
+                  ) : (
+                    <ConfirmVoidButton label="結束" confirmLabel="確認結束" onConfirm={(reason) => onVoid(r.id, reason)} />
+                  )}
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </>
+      )}
 
       <Drawer open={drawerOpen} title={editingId ? "編輯盤" : "新增盤"} onClose={() => setDrawerOpen(false)}>
         <form onSubmit={onSubmit} className="space-y-3">
@@ -327,7 +410,7 @@ export default function SitesPage() {
         </form>
       </Drawer>
 
-      <ShiftTypesDrawer site={shiftTypesFor} onClose={() => setShiftTypesFor(null)} />
+      <ShiftTypesDrawer site={shiftTypesFor} onClose={() => setShiftTypesFor(null)} onChanged={load} />
     </div>
   );
 }
@@ -342,7 +425,7 @@ const emptyShiftTypeForm = {
   billing_group: "",
 };
 
-function ShiftTypesDrawer({ site, onClose }: { site: SiteRow | null; onClose: () => void }) {
+function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; onClose: () => void; onChanged: () => void }) {
   const [rows, setRows] = useState<ShiftTypeRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -417,6 +500,7 @@ function ShiftTypesDrawer({ site, onClose }: { site: SiteRow | null; onClose: ()
     }
     setShowForm(false);
     await load(site.id);
+    onChanged();
   }
 
   async function onVoid(id: string, reason: string) {
@@ -428,6 +512,7 @@ function ShiftTypesDrawer({ site, onClose }: { site: SiteRow | null; onClose: ()
       return;
     }
     await load(site.id);
+    onChanged();
   }
 
   async function onUnvoid(id: string) {
@@ -439,6 +524,7 @@ function ShiftTypesDrawer({ site, onClose }: { site: SiteRow | null; onClose: ()
       return;
     }
     await load(site.id);
+    onChanged();
   }
 
   return (

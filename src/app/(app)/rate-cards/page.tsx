@@ -1,11 +1,20 @@
 "use client";
+// P2-A：價目頁（README §10）——換皮，邏輯／API 呼叫、權限遮蔽
+// （hasClientRate/hasPayoutRate 判斷唔變）全部保留。
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterChip } from "@/components/ui/FilterChip";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate, fmtMoney } from "@/lib/ui/format";
+import { brokerColor } from "@/lib/ui/broker-color";
+import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 
 const BILLING_MODELS = ["per_shift", "monthly_fixed", "admin_fee", "special"] as const;
 const PAGE_SIZE = 50;
@@ -39,6 +48,7 @@ interface BrokerRow {
   id: string;
   code: string;
   name: string;
+  status?: string;
 }
 interface GuardRow {
   id: string;
@@ -106,43 +116,70 @@ export default function RateCardsPage() {
 
   useEffect(() => {
     (async () => {
-      const [siteRes, brokerRes, guardRes] = await Promise.all([
+      // M2（Opus 驗收修復）：更別欄舊版淨係喺揀咗盤先 load 一個 site
+      // 嘅 shift-types（原本掛喺 form.site_id 嘅 useEffect），令列表 255
+      // 行全部搵唔到、一律顯示「通用」。改為入頁一次攞晒（take=500），
+      // 前端按 id 對；雞頭欄同理，`/api/brokers` 帶 `include_inactive=1`
+      // （API 已有呢個唯讀參數，additive），先可以分辨「通用」（broker_id
+      // 為 null）同「指向咗一個已停用嘅雞頭」。
+      const [siteRes, brokerRes, guardRes, shiftTypeRes] = await Promise.all([
         apiGet<ApiListResult<SiteRow>>("/api/sites?take=500"),
-        apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
+        apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500&include_inactive=1"),
         apiGet<ApiListResult<GuardRow>>("/api/guards?take=500"),
+        apiGet<ApiListResult<ShiftTypeRow>>("/api/shift-types?take=500"),
       ]);
       if (siteRes.ok) setSites(siteRes.data.rows);
       if (brokerRes.ok) setBrokers(brokerRes.data.rows);
       if (guardRes.ok) setGuards(guardRes.data.rows);
+      if (shiftTypeRes.ok) setShiftTypes(shiftTypeRes.data.rows);
     })();
   }, []);
-
-  useEffect(() => {
-    if (!form.site_id) {
-      setShiftTypes([]);
-      return;
-    }
-    apiGet<ApiListResult<ShiftTypeRow>>(`/api/shift-types?site_id=${form.site_id}&take=500`).then((res) => {
-      if (res.ok) setShiftTypes(res.data.rows);
-    });
-  }, [form.site_id]);
 
   function siteLabel(id: string): string {
     return sites.find((s) => s.id === id)?.canonical_name ?? id.slice(0, 8);
   }
-  function shiftTypeLabel(id?: string | null): string {
-    if (!id) return "通用";
-    return shiftTypes.find((s) => s.id === id)?.code ?? id.slice(0, 8);
+  function shiftType(id?: string | null): ShiftTypeRow | undefined {
+    if (!id) return undefined;
+    return shiftTypes.find((s) => s.id === id);
   }
-  function brokerLabel(id?: string | null): string {
-    if (!id) return "通用";
-    const b = brokers.find((x) => x.id === id);
-    return b ? b.name : id.slice(0, 8);
+  function broker(id?: string | null): BrokerRow | undefined {
+    if (!id) return undefined;
+    return brokers.find((x) => x.id === id);
   }
   function guardLabel(id?: string | null): string {
     if (!id) return "通用";
     const g = guards.find((x) => x.id === id);
     return g ? g.name_zh : id.slice(0, 8);
+  }
+
+  // M2（Opus 驗收修復）：`shift_type_id`/`broker_id` 為 null 先真係「通
+  // 用」；非 null 但喺已載入嘅名單搵唔到（例如更別已被刪、雞頭理論上唔
+  // 應該會刪）就顯示 id 首 8 位＋灰色，唔准當成「通用」誤導。
+  function renderShiftTypeCell(shiftTypeId?: string | null) {
+    if (!shiftTypeId) return <Pill variant="neutral">通用</Pill>;
+    const st = shiftType(shiftTypeId);
+    if (st) {
+      return (
+        <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+          {st.code}
+        </Pill>
+      );
+    }
+    return <span className="text-zk-faint">{shiftTypeId.slice(0, 8)}</span>;
+  }
+
+  function renderBrokerCell(brokerId?: string | null) {
+    if (!brokerId) return <span>通用</span>;
+    const b = broker(brokerId);
+    if (b) {
+      return (
+        <Pill variant="broker" color={brokerColor(b.code)}>
+          {b.name}
+          {b.status === "inactive" ? "（已停用）" : ""}
+        </Pill>
+      );
+    }
+    return <span className="text-zk-faint">{brokerId.slice(0, 8)}</span>;
   }
 
   function openCreate() {
@@ -203,113 +240,151 @@ export default function RateCardsPage() {
     await load();
   }
 
+  const colCount = 10;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">價目</h1>
-          <p className="text-sm text-gray-500">收客價／出街價——冇對應權限嘅欄一律顯示「—」。</p>
-        </div>
-        <button type="button" onClick={openCreate} className={btnPrimary}>
-          新增
-        </button>
-      </div>
+      <PageHeader
+        kicker="主檔"
+        title="價目"
+        subtitle="每個盤每個更別每個雞頭嘅價；冇權睇嘅欄顯示「—」。"
+        actions={
+          <>
+            <FilterChip label="盤">
+              <select
+                value={siteFilter}
+                onChange={(e) => {
+                  setSiteFilter(e.target.value);
+                  setSkip(0);
+                }}
+              >
+                <option value="">全部盤</option>
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.canonical_name}
+                  </option>
+                ))}
+              </select>
+            </FilterChip>
+            <Button variant="primary" onClick={openCreate}>
+              新增價目
+            </Button>
+          </>
+        }
+      />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
-      <select
-        className={selectCls + " max-w-xs"}
-        value={siteFilter}
-        onChange={(e) => {
-          setSiteFilter(e.target.value);
-          setSkip(0);
-        }}
-      >
-        <option value="">全部盤</option>
-        {sites.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.canonical_name}
-          </option>
-        ))}
-      </select>
-
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
-            <tr>
-              <th className="px-3 py-2">盤</th>
-              <th className="px-3 py-2">更別</th>
-              <th className="px-3 py-2">雞頭</th>
-              <th className="px-3 py-2">保安員</th>
-              <th className="px-3 py-2">收客價</th>
-              <th className="px-3 py-2">出街價</th>
-              <th className="px-3 py-2">保安員工資</th>
-              <th className="px-3 py-2">雞頭費</th>
-              <th className="px-3 py-2">生效期</th>
-              <th className="px-3 py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={10}>
-                  載入緊…
-                </td>
-              </tr>
-            )}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={10}>
-                  暫時冇資料
-                </td>
-              </tr>
-            )}
-            {rows.map((r) => (
-              <tr key={r.id} className={`border-t border-gray-100 ${r.voided_at ? "opacity-50" : ""}`}>
-                <td className="px-3 py-2">{siteLabel(r.site_id)}</td>
-                <td className="px-3 py-2">{shiftTypeLabel(r.shift_type_id)}</td>
-                <td className="px-3 py-2">{brokerLabel(r.broker_id)}</td>
-                <td className="px-3 py-2">{guardLabel(r.guard_id)}</td>
-                <td className="px-3 py-2">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</td>
-                <td className="px-3 py-2">{hasPayoutRate ? fmtMoney(r.payout_rate) : "—"}</td>
-                <td className="px-3 py-2">{fmtMoney(r.guard_wage)}</td>
-                <td className="px-3 py-2">{fmtMoney(r.broker_fee)}</td>
-                <td className="px-3 py-2">
-                  {fmtDate(r.effective_from)} – {r.effective_to ? fmtDate(r.effective_to) : "無限期"}
-                </td>
-                <td className="px-3 py-2">
-                  {r.voided_at ? (
-                    <button
-                      type="button"
-                      onClick={() => onUnvoid(r.id)}
-                      className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50"
-                    >
-                      解除作廢
-                    </button>
-                  ) : (
-                    <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex items-center justify-between text-sm text-gray-500">
-        <span>
-          共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
-        </span>
-        <div className="flex gap-2">
-          <button type="button" disabled={skip === 0} onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))} className={btnSecondary}>
-            上一頁
-          </button>
-          <button type="button" disabled={skip + PAGE_SIZE >= total} onClick={() => setSkip((s) => s + PAGE_SIZE)} className={btnSecondary}>
-            下一頁
-          </button>
+      {!loading && rows.length === 0 ? (
+        <div className={tableCls.wrap}>
+          <EmptyState title="暫時冇價目紀錄" description="撳右上「新增價目」開始建立收客價／出街價。" cta={<Button variant="primary" onClick={openCreate}>新增價目</Button>} />
         </div>
-      </div>
+      ) : (
+        <>
+          <div className={`hidden sm:block ${tableCls.wrap}`}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(colCount) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>盤</th>
+                  <th className={tableCls.th}>更別</th>
+                  <th className={tableCls.th}>雞頭</th>
+                  <th className={tableCls.th}>保安員</th>
+                  <th className={tableCls.thNum}>收客價</th>
+                  <th className={tableCls.thNum}>出街價</th>
+                  <th className={tableCls.thNum}>保安員工資</th>
+                  <th className={tableCls.thNum}>雞頭費</th>
+                  <th className={tableCls.th}>生效期</th>
+                  <th className={tableCls.th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
+                      載入緊…
+                    </td>
+                  </tr>
+                )}
+                {rows.map((r) => {
+                  return (
+                    <tr key={r.id} className={`${tableCls.rowHover} ${r.voided_at ? "opacity-45" : ""}`}>
+                      <td className={`${tableCls.td} font-medium`}>{siteLabel(r.site_id)}</td>
+                      <td className={tableCls.td}>{renderShiftTypeCell(r.shift_type_id)}</td>
+                      <td className={tableCls.td}>{renderBrokerCell(r.broker_id)}</td>
+                      <td className={tableCls.td}>{guardLabel(r.guard_id)}</td>
+                      <td className={tableCls.tdNum}>{hasClientRate ? fmtMoney(r.client_rate) : "—"}</td>
+                      <td className={tableCls.tdNum}>{hasPayoutRate ? fmtMoney(r.payout_rate) : "—"}</td>
+                      <td className={tableCls.tdNum}>{fmtMoney(r.guard_wage)}</td>
+                      <td className={tableCls.tdNum}>{fmtMoney(r.broker_fee)}</td>
+                      <td className={tableCls.tdMuted}>
+                        {fmtDate(r.effective_from)} – {r.effective_to ? fmtDate(r.effective_to) : "無限期"}
+                      </td>
+                      <td className={tableCls.td}>
+                        {r.voided_at ? (
+                          <button
+                            type="button"
+                            onClick={() => onUnvoid(r.id)}
+                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                          >
+                            解除作廢
+                          </button>
+                        ) : (
+                          <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-2 sm:hidden">
+            {rows.map((r) => {
+              return (
+                <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13.5px] font-medium text-zk-text">{siteLabel(r.site_id)}</span>
+                    <span className="text-[13px] tabular-nums text-zk-text">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                    {renderShiftTypeCell(r.shift_type_id)}
+                    {r.broker_id && renderBrokerCell(r.broker_id)}
+                    <span>{guardLabel(r.guard_id)}</span>
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                    出街 {hasPayoutRate ? fmtMoney(r.payout_rate) : "—"} · 生效 {fmtDate(r.effective_from)}–{r.effective_to ? fmtDate(r.effective_to) : "無限期"}
+                  </div>
+                  <div className="mt-2">
+                    {r.voided_at ? (
+                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                        解除作廢
+                      </button>
+                    ) : (
+                      <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between text-[12.5px] text-zk-muted">
+            <span>
+              共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
+            </span>
+            <div className="flex gap-2">
+              <Button variant="secondary" disabled={skip === 0} onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}>
+                上一頁
+              </Button>
+              <Button variant="secondary" disabled={skip + PAGE_SIZE >= total} onClick={() => setSkip((s) => s + PAGE_SIZE)}>
+                下一頁
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
 
       <Drawer open={drawerOpen} title="新增價目" onClose={() => setDrawerOpen(false)}>
         <form onSubmit={onSubmit} className="space-y-3">
@@ -325,23 +400,31 @@ export default function RateCardsPage() {
             </select>
           </Field>
           <Field label="更別" hint="留空＝通用">
+            {/* M2：shiftTypes 而家係全站一次 load（唔再逐 site 攞），
+                揀盤入面淨係揀返呢個 site_id 底下嘅更別。 */}
             <select className={selectCls} value={form.shift_type_id} onChange={(e) => setForm((f) => ({ ...f, shift_type_id: e.target.value }))}>
               <option value="">（通用）</option>
-              {shiftTypes.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code}
-                </option>
-              ))}
+              {shiftTypes
+                .filter((s) => s.site_id === form.site_id)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.code}
+                  </option>
+                ))}
             </select>
           </Field>
           <Field label="雞頭" hint="留空＝通用">
+            {/* M2：brokers 而家包含 inactive（顯示用）——新增/揀價目淨
+                係俾揀有效雞頭，已停用嘅唔應該再畀人新配。 */}
             <select className={selectCls} value={form.broker_id} onChange={(e) => setForm((f) => ({ ...f, broker_id: e.target.value }))}>
               <option value="">（通用）</option>
-              {brokers.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
+              {brokers
+                .filter((b) => b.status !== "inactive")
+                .map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
             </select>
           </Field>
           <Field label="保安員" hint="留空＝通用">
