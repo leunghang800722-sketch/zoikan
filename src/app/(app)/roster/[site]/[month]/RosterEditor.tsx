@@ -9,6 +9,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -17,7 +18,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { apiGet, apiGetAll, apiPost, ApiClientError } from "@/lib/api-client";
+import { Notice } from "@/components/ui/Notice";
+import { brokerColor } from "@/lib/ui/broker-color";
+import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 
 // ---------------------------------------------------------------------------
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
@@ -107,6 +112,10 @@ type BatchResponse = { results: { key: string; id: string; action: string }[]; w
 // `LeaveCode` enum（已經由 `tools/importer/mappings/status_codes.csv`
 // 擴充咗保留原始字面嘅 OFF/NPL，見 schema 頂註解）。
 const LEAVE_CODES: readonly string[] = ["RD", "OFF", "AL", "SL", "NL", "NPL", "SH"];
+// WP-R2 第 8 項：手機鍵盤唔出 OFF／NPL——呢兩個係歷史保留代號（schema
+// 註解：OFF＝RD、NPL＝NL），batch API 照舊接受（`LEAVE_CODES` 冇改，舊
+// 資料／桌面打字都照樣得），淨係手機鍵盤按鍵收窄做實際會用嘅代號。
+const MOBILE_KEYPAD_LEAVE_CODES: readonly string[] = LEAVE_CODES.filter((c) => c !== "OFF" && c !== "NPL");
 
 type CellState = {
   code: string | null;
@@ -153,6 +162,66 @@ function prevMonthStr(month: string): string {
   const pm = monthNum === 1 ? 12 : monthNum - 1;
   const py = monthNum === 1 ? year - 1 : year;
   return `${py}-${pad2(pm)}`;
+}
+
+// WP-R2：月份 chip「‹ › 」撳＝跳去上／下月（README §04）。
+function nextMonthStr(month: string): string {
+  const { year, monthNum } = parseMonthStr(month);
+  const nm = monthNum === 12 ? 1 : monthNum + 1;
+  const ny = monthNum === 12 ? year + 1 : year;
+  return `${ny}-${pad2(nm)}`;
+}
+
+// WP-R2：今日（香港時間）高亮用——同 src/lib/ai/system-prompt.ts
+// `hongKongToday()` 一樣做法（伺服器/瀏覽器一律用 Asia/Hong_Kong，唔靠
+// 本機時區）。淨係喺 `loading` 完咗先會 render 到用得着呢個值嘅格仔表，
+// 所以唔會有 SSR/CSR 唔同日先後 render 撞第日嘅 hydration mismatch 風險。
+function hongKongTodayYMD(): { y: number; m: number; d: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Hong_Kong",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return { y: get("year"), m: get("month"), d: get("day") };
+}
+
+const WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+
+type DayMeta = {
+  weekday: string;
+  isWeekend: boolean;
+  isToday: boolean;
+  headerBg: string;
+  weekdayColor: string;
+  dayColor: string;
+  /** 資料格底色（今日／週末），`undefined` = 平日（透明，跟返行 hover 底）。 */
+  colBg?: string;
+};
+
+function dayMeta(y: number, m: number, day: number, today: { y: number; m: number; d: number } | null): DayMeta {
+  const wd = new Date(Date.UTC(y, m - 1, day)).getUTCDay();
+  const isWeekend = wd === 0 || wd === 6;
+  const isToday = !!today && today.y === y && today.m === m && today.d === day;
+  return {
+    weekday: WEEKDAY_LABELS[wd],
+    isWeekend,
+    isToday,
+    headerBg: isToday ? "#dbeafe" : isWeekend ? "#f1f5f9" : "#fafbfc",
+    weekdayColor: isToday ? "#2563eb" : "#94a3b8",
+    dayColor: isToday ? "#1d4ed8" : isWeekend ? "#64748b" : "#0f172a",
+    colBg: isToday ? "#eff6ff" : isWeekend ? "#f8fafc" : undefined,
+  };
+}
+
+// WP-R2：底部合計行「已排」數配色（README §04：≥所需 綠；<所需 但
+// ≥所需×0.55 中性；否則紅；冇所需設定＝中性）。
+function coverageColor(count: number, required: number): string {
+  if (!required || required <= 0) return "#334155";
+  if (count >= required) return "#0f766e";
+  if (count >= required * 0.55) return "#334155";
+  return "#dc2626";
 }
 
 function workDateStr(year: number, monthNum: number, day: number): string {
@@ -226,16 +295,153 @@ function isEffectiveShiftCell(row: RowMeta, day: number, cells: Map<string, Cell
   return effectiveType === "shift";
 }
 
-// 左邊固定欄寬度（px）——用嚟計 sticky 欄嘅 left offset。
-const COL_SHIFT_TYPE = 56;
-const COL_NAME = 96;
-const COL_STAFF_NO = 88;
-// 2026-09-12 老闆 feedback：更表唔顯示安員電話（聯絡資料只喺安員名冊，按 安員:view 權限）；Excel 匯出照原檔格式保留
-const COL_TEL = 0;
-const COL_BROKER = 104;
-const COL_DAY = 44;
+// 左邊固定欄寬度（px，WP-R2 按 README §04/§23 重新分配）——用嚟計 sticky
+// 欄嘅 left offset。
+// 桌面（≥1024，非 compact）：更別 44 + 姓名/工號（彈性）+ 雞頭 70 = 300 總闊。
+const DESK_COL_SHIFT_TYPE = 44;
+const DESK_COL_BROKER = 70;
+const DESK_FIXED_TOTAL = 300;
+const DESK_COL_DAY = 34;
+// 手機（compact，<640）：單一「姓名」固定欄 118px（連工號／雞頭代號都收
+// 埋落姓名格下行，冇獨立更別／工號／雞頭欄——跟 README §23 手機原型
+// 1:1，見 P2-版面重設計計劃.md §2「手機更別鍵盤」判斷附近段落）。
+const MOBILE_COL_NAME = 118;
+const MOBILE_COL_DAY = 44;
+// 2026-09-12 老闆 feedback：更表唔顯示安員電話（聯絡資料只喺安員名冊，按 安員:view 權限）；Excel 匯出照原檔格式保留，`RowMeta.tel` 仍然保留但呢頁唔顯示。
+
+// WP-R2 第 9 項：手機底部更別鍵盤實際高度（約），等表格捲動區留返
+// padding-bottom，撳近底部嘅格先唔會俾鍵盤遮住。
+const MOBILE_KEYPAD_HEIGHT = 143;
+
+// WP-R2 第 13 項：格仔（`<td>` 一格代表一日一行）抽做獨立 `memo` 元件，
+// props 淨係傳原始值（string/number/boolean）同穩定嘅 callback（useCallback
+// 過），等其他格改動（例如揀第二格）唔使成個表重新 render 每一粒格。
+type DayCellProps = {
+  r: number;
+  d: number;
+  rowKey: string;
+  code: string | null;
+  isDirty: boolean;
+  selected: boolean;
+  inRange: boolean;
+  isError: boolean;
+  chipBg: string;
+  chipFg: string;
+  chipBorder: string | undefined;
+  monthLocked: boolean;
+  compact: boolean;
+  dayColW: number;
+  rowH: number;
+  colBg: string | undefined;
+  isToday: boolean;
+  isWeekend: boolean;
+  isEditingHere: boolean;
+  editText: string;
+  title: string | undefined;
+  onCellMouseDown: (r: number, d: number, e: { shiftKey: boolean }) => void;
+  onCellMouseEnter: (r: number, d: number) => void;
+  onCellClick: (r: number, d: number, shiftKey: boolean) => void;
+  onCellDoubleClick: (r: number, d: number) => void;
+  onContextMenu: (r: number, d: number, x: number, y: number) => void;
+  onEditTextChange: (v: string) => void;
+  onCommitEdit: () => void;
+};
+
+const DayCell = memo(function DayCell(props: DayCellProps) {
+  const {
+    r,
+    d,
+    code,
+    isDirty,
+    selected,
+    inRange,
+    isError,
+    chipBg,
+    chipFg,
+    chipBorder,
+    monthLocked,
+    compact,
+    dayColW,
+    rowH,
+    colBg,
+    isToday,
+    isWeekend,
+    isEditingHere,
+    editText,
+    title,
+    onCellMouseDown,
+    onCellMouseEnter,
+    onCellClick,
+    onCellDoubleClick,
+    onContextMenu,
+    onEditTextChange,
+    onCommitEdit,
+  } = props;
+  const tdBg = isError ? "#fecaca" : colBg;
+  // 三層可以同時出現、唔會互撞：選中＝outline；dirty＝inset ring box-shadow；
+  // draft／請假＝chip 自己嘅 border（喺 chip span 層，唔喺呢度）。
+  const shadows: string[] = [];
+  if (isDirty) shadows.push("inset 0 0 0 2px #2563eb");
+  if (inRange && !selected) shadows.push("inset 0 0 0 9999px rgba(37,99,235,.08)");
+  return (
+    <td
+      className={`text-center align-middle cursor-cell ${monthLocked ? "cursor-not-allowed" : ""}`}
+      style={{
+        width: dayColW,
+        height: rowH,
+        background: tdBg,
+        outline: selected ? "2px solid #2563eb" : undefined,
+        outlineOffset: selected ? -2 : undefined,
+        boxShadow: shadows.length > 0 ? shadows.join(", ") : undefined,
+      }}
+      title={title}
+      data-testid={`roster-cell-${r}-${d}`}
+      data-dirty={isDirty || undefined}
+      data-today={isToday || undefined}
+      data-weekend={isWeekend || undefined}
+      onMouseDown={(e) => onCellMouseDown(r, d, { shiftKey: e.shiftKey })}
+      onMouseEnter={() => onCellMouseEnter(r, d)}
+      onClick={(e) => onCellClick(r, d, e.shiftKey)}
+      onDoubleClick={() => onCellDoubleClick(r, d)}
+      onContextMenu={(e) => {
+        if (monthLocked) return;
+        e.preventDefault();
+        onContextMenu(r, d, e.clientX, e.clientY);
+      }}
+    >
+      {isEditingHere ? (
+        <input
+          autoFocus
+          className="h-full w-full bg-white text-center outline-none"
+          value={editText}
+          maxLength={4}
+          onChange={(e) => onEditTextChange(e.target.value.toUpperCase())}
+          onBlur={onCommitEdit}
+        />
+      ) : (
+        code && (
+          <span
+            className="inline-block font-semibold"
+            style={{
+              fontSize: compact ? 12 : 11,
+              minWidth: compact ? 28 : 22,
+              padding: compact ? "5px 0" : "3px 0",
+              borderRadius: compact ? 6 : 5,
+              background: chipBg,
+              color: chipFg,
+              border: chipBorder,
+            }}
+          >
+            {code}
+          </span>
+        )
+      )}
+    </td>
+  );
+});
 
 export default function RosterEditor({ siteId, month }: { siteId: string; month: string }) {
+  const router = useRouter();
   const { year, monthNum } = parseMonthStr(month);
   const days = daysInMonth(year, monthNum);
   const dayList = useMemo(() => Array.from({ length: days }, (_, i) => i + 1), [days]);
@@ -297,12 +503,25 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const [errorCellKey, setErrorCellKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+  // WP-R2：儲存成功 toast（README §04「儲存後 Toast」）——右下深色 toast，
+  // 3 秒後自動消失。
+  const [showSaveToast, setShowSaveToast] = useState(false);
+  useEffect(() => {
+    if (!showSaveToast) return;
+    const t = setTimeout(() => setShowSaveToast(false), 3000);
+    return () => clearTimeout(t);
+  }, [showSaveToast]);
   const skipExtraRowsResetRef = useRef(false);
 
   // 選格／編輯
   const [sel, setSel] = useState<SelRange | null>(null);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
+  // WP-R2 第 4 項：拖選多格後打字，inline input 要開喺「錨點」格（拖選
+  // 起手嗰格，即 sel.a）——`sel` 本身喺編輯期間保持成個範圍唔變（等
+  // commit 嗰下識寫晒成個範圍），淨係呢個 `editAnchor` 話畀 render 知
+  // input 要畫喺邊格。
+  const [editAnchor, setEditAnchor] = useState<{ r: number; d: number } | null>(null);
 
   // 拖曳填充（純前端 state：mousedown 嘅格個 code 複製去拖到嘅範圍；高亮
   // 顯示借用選格 `sel` 本身——mouseenter 會不斷更新 `sel.b`，唔使額外
@@ -319,6 +538,13 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   // 整行填
   const [fillRowKey, setFillRowKey] = useState<string | null>(null);
   const [fillRowValue, setFillRowValue] = useState("");
+
+  // WP-R2 第 4 項：右鍵選單（README Interactions：「右鍵選單：清除／整行
+  // 填／整行清」）。`x`/`y` 用 `clientX`/`clientY`（fixed 定位）。
+  const [contextMenu, setContextMenu] = useState<{ r: number; d: number; x: number; y: number } | null>(null);
+  // WP-R2 第 5 項：手機頁首「⋯」更多選單（README §23 冇畫，但四個動作
+  // 「加保安員／複製上月／匯出 Excel／還原」手機唔可以消失）。
+  const [showMobileMore, setShowMobileMore] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   // allRows＝呢個盤呢個月全部行（已儲存+未儲存新加嘅），唔受雞頭篩選
@@ -453,32 +679,70 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     [visibleRows.length, days],
   );
 
-  const commitEdit = useCallback(() => {
-    if (!editing || !sel) return;
-    const row = displayRowsRef.current[sel.b.r];
-    if (!row) {
-      setEditing(false);
-      setEditText("");
-      return;
-    }
-    const key = cellKeyOf(row.key, sel.b.d);
-    const code = normalizeCode(editText);
+  // WP-R2：手機底部更別鍵盤（README §23）——撳鍵直接寫入揀住嗰格，同桌面
+  // 打字（commitEdit）用同一種「寫 cells map」方式，淨係唔經 editing/
+  // editText 呢條 input 路徑（手機冇實體鍵盤，直接撳掣）。第 11 項：
+  // compact 下實體鍵盤單字母打字都經呢條路徑（onKeyDown 直接call），唔
+  // 開 inline input。
+  const applyMobileKeypadCode = useCallback((row: RowMeta, day: number, rawCode: string | null) => {
+    const key = cellKeyOf(row.key, day);
+    const code = normalizeCode(rawCode);
     setCells((prev) => {
       const next = new Map(prev);
       const existing = next.get(key);
       next.set(key, { code, id: existing?.id ?? null, status: existing?.status ?? null, recordType: existing?.recordType ?? null });
       return next;
     });
+    setErrorCellKey((prev) => (prev === key ? null : prev));
+    setSel(null); // 撳完鍵即刻收埋鍵盤（同撳「清除」一樣）
+  }, []);
+
+  // WP-R2 第 4 項：commit 寫入 `sel` 成個範圍（唔淨係 sel.b 嗰格）——拖選
+  // 多格之後打字，全部揀咗嘅格都要寫同一個代號。單格編輯（雙擊／單格打
+  // 字）嘅 `sel.a===sel.b`，行為同以前一樣。
+  const commitEdit = useCallback(() => {
+    if (!editing || !sel) return;
+    const r0 = Math.min(sel.a.r, sel.b.r);
+    const r1 = Math.max(sel.a.r, sel.b.r);
+    const d0 = Math.min(sel.a.d, sel.b.d);
+    const d1 = Math.max(sel.a.d, sel.b.d);
+    const code = normalizeCode(editText);
+    const touchedKeys: string[] = [];
+    setCells((prev) => {
+      const next = new Map(prev);
+      for (let r = r0; r <= r1; r++) {
+        const row = displayRowsRef.current[r];
+        if (!row) continue;
+        for (let d = d0; d <= d1; d++) {
+          const key = cellKeyOf(row.key, d);
+          touchedKeys.push(key);
+          const existing = next.get(key);
+          next.set(key, { code, id: existing?.id ?? null, status: existing?.status ?? null, recordType: existing?.recordType ?? null });
+        }
+      }
+      return next;
+    });
     setEditing(false);
     setEditText("");
-    setErrorCellKey((prev) => (prev === key ? null : prev));
+    setEditAnchor(null);
+    setErrorCellKey((prev) => (prev && touchedKeys.includes(prev) ? null : prev));
   }, [editing, sel, editText]);
 
-  const startEdit = useCallback((r: number, d: number, initial: string) => {
-    setSel({ a: { r, d }, b: { r, d } });
-    setEditing(true);
-    setEditText(initial);
-  }, []);
+  // `opts.keepSelection`：拖選多格後打字（README「拖選多格一齊填」）要
+  // 保留成個 `sel` 範圍等 commitEdit 寫晒（唔可以好似以前咁一開始編輯就
+  // 摺埋做單格）。compact（手機）冇實體鍵盤 inline input 呢條路徑——第
+  // 11 項要求 `editing` 喺 compact 下永遠唔會變 true，早退唔做嘢，打字
+  // 由 onKeyDown 直接經 `applyMobileKeypadCode` 寫入。
+  const startEdit = useCallback(
+    (r: number, d: number, initial: string, opts?: { keepSelection?: boolean }) => {
+      if (compact) return;
+      if (!opts?.keepSelection) setSel({ a: { r, d }, b: { r, d } });
+      setEditAnchor({ r, d });
+      setEditing(true);
+      setEditText(initial);
+    },
+    [compact],
+  );
 
   const clearSelectedRange = useCallback(() => {
     if (!sel) return;
@@ -520,6 +784,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           e.stopPropagation();
           setEditing(false);
           setEditText("");
+          setEditAnchor(null);
         } else {
           // 打緊字入格入面（可能仲有其他鍵，例如純粹字元）——唔畀個
           // keydown 走漏去 layout／外層嘅全局快捷鍵（例如側欄），淨係
@@ -567,14 +832,23 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           clearSelectedRange();
           break;
         default:
-          if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key) && sel.a.r === sel.b.r && sel.a.d === sel.b.d) {
+          // WP-R2 第 4 項：拖選多格之後打字要一齊填（唔再要求
+          // sel.a===sel.b）；第 11 項：compact 冇 inline input，單字母
+          // 直接經 applyMobileKeypadCode 寫入嗰格（同手機鍵盤按鍵一樣
+          // 路徑），唔開 editing。
+          if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) {
             e.preventDefault();
             e.stopPropagation();
-            startEdit(sel.b.r, sel.b.d, e.key);
+            if (compact) {
+              const row = displayRowsRef.current[sel.b.r];
+              if (row) applyMobileKeypadCode(row, sel.b.d, e.key);
+            } else {
+              startEdit(sel.a.r, sel.a.d, e.key, { keepSelection: true });
+            }
           }
       }
     },
-    [monthLocked, editing, sel, commitEdit, moveSelection, clearSelectedRange, startEdit],
+    [monthLocked, editing, sel, compact, commitEdit, moveSelection, clearSelectedRange, startEdit, applyMobileKeypadCode],
   );
 
   const onCellClick = useCallback(
@@ -589,13 +863,16 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
 
   const onCellDoubleClick = useCallback(
     (r: number, d: number) => {
-      if (monthLocked) return;
+      // WP-R2：手機（compact）冇實體鍵盤，撳格改用底部更別鍵盤（見
+      // `applyMobileKeypadCode`），唔經呢條 inline <input> 編輯路徑——
+      // 雙擊/雙撳一律當普通揀格。
+      if (monthLocked || compact) return;
       const row = visibleRows[r];
       if (!row) return;
       const current = cells.get(cellKeyOf(row.key, d))?.code ?? "";
       startEdit(r, d, current);
     },
-    [monthLocked, visibleRows, cells, startEdit],
+    [monthLocked, compact, visibleRows, cells, startEdit],
   );
 
   // ---- 拖曳填充（純前端 state，mousedown 個格個 code 複製去拖到嘅範圍）----
@@ -610,8 +887,32 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       dragSourceRef.current = { r, d, code };
       dragCurrentRef.current = { r, d };
       containerRef.current?.focus({ preventScroll: true }); // 2026-09-12：統計條令容器可能半出視窗，focus() 會捲動頁面，令 mousedown→mouseup 落喺唔同格（拖選成兩行、click 唔觸發）
+      // WP-R2 第 9 項：手機撳格開底部鍵盤，格仔要滾去畫面中間，唔可以俾
+      // fixed 喺底嘅鍵盤遮住。特登放喺 mousedown（唔喺 onClick）——
+      // `sel` 一改，`mobileKeypadRow`／容器 max-height 已經即刻（同一個
+      // React 批次）變，如果撳呢下再等個 click 事件，個 click 隨時因為
+      // 容器已經摺埋一截、格仔喺 mousedown→mouseup 之間走咗位而唔觸發
+      // （同上面 2026-09-12 果個 comment 講嘅一樣問題）。Mousedown 一定
+      // 會準確咁接住呢粒 r/d（撳落嗰下都仲未移位），唔使靠個 click。
+      if (compact) {
+        requestAnimationFrame(() => {
+          const container = containerRef.current;
+          const el = container?.querySelector<HTMLElement>(`[data-testid="roster-cell-${r}-${d}"]`);
+          if (!container || !el) return;
+          el.scrollIntoView({ block: "nearest", inline: "center" });
+          // `scrollIntoView` 唔知道底部仲有一個 fixed 嘅更別鍵盤（唔屬於
+          // 文件流，唔會計落 container 嘅可視高度入面）——鍵盤開咗之後
+          // container 本身 max-height 已經縮咗（見下面表格容器嗰段
+          // style），但如果個格喺 scrollIntoView 嗰下都仲未完全入返嗰個
+          // （已經縮咗嘅）範圍，呢度再手動較正多一次。
+          const cellRect = el.getBoundingClientRect();
+          const keypadTop = window.innerHeight - MOBILE_KEYPAD_HEIGHT;
+          const overlap = cellRect.bottom - keypadTop;
+          if (overlap > 0) container.scrollTop += overlap + 8;
+        });
+      }
     },
-    [monthLocked, editing, commitEdit, visibleRows, cells],
+    [monthLocked, editing, commitEdit, visibleRows, cells, compact],
   );
 
   const onCellMouseEnter = useCallback((r: number, d: number) => {
@@ -652,10 +953,23 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   }, []);
 
   // ---- 整行填：揀代號，一鍵填晒成行（成個月全部日）----------------------
+  // WP-R2 第 4 項：「整行清」＝呢個 function 入面 rawCode 打空／清咗嘅
+  // path——唔使揀代號都得，成個月 `days` 日全部清做 null（右鍵選單
+  // 「整行清」直接 call `applyFillRow(row, "")`；桌面「整行」modal 個
+  // input 留空撳「填滿全行」都係同一效果）。
   const applyFillRow = useCallback(
     (row: RowMeta, rawCode: string) => {
       const code = normalizeCode(rawCode);
       if (code === null) {
+        setCells((prev) => {
+          const next = new Map(prev);
+          for (let d = 1; d <= days; d++) {
+            const key = cellKeyOf(row.key, d);
+            const existing = next.get(key);
+            next.set(key, { code: null, id: existing?.id ?? null, status: existing?.status ?? null, recordType: existing?.recordType ?? null });
+          }
+          return next;
+        });
         setFillRowKey(null);
         setFillRowValue("");
         return;
@@ -817,6 +1131,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       setWarnings(res.warnings ?? []);
       skipExtraRowsResetRef.current = true;
       setReloadTick((t) => t + 1);
+      setShowSaveToast(true);
     } catch (err) {
       if (err instanceof ApiClientError) {
         setErrorBanner(err.message);
@@ -841,6 +1156,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     setErrorCellKey(null);
     setEditing(false);
   }, [baseline]);
+
 
   // ---- 底部合計 ----------------------------------------------------------
   // Total／尚欠一律計 allRows（老闆 feedback 2026-09-12：呢兩行「照計
@@ -874,6 +1190,106 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     for (const key of keys) if (!cellsEqual(baseline.get(key), cells.get(key))) n++;
     return n;
   }, [baseline, cells]);
+
+  // WP-R2 第 3 項：頁首月份 chip「‹ › 」（README §04）——跳去上／下月嘅
+  // roster route，帶埋而家嘅 broker 篩選（如果有揀）。有未儲存改動要
+  // confirm，取消就唔跳（Opus 驗收：「dirty 時撳下月 confirm 取消唔
+  // 跳」）。
+  const goMonth = useCallback(
+    (targetMonth: string) => {
+      if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 格未儲存，離開會遺失，確定？`)) return;
+      const url = new URL(`/roster/${siteId}/${targetMonth}`, window.location.origin);
+      if (selectedBrokerCode) url.searchParams.set("broker", selectedBrokerCode);
+      router.push(url.pathname + url.search);
+    },
+    [dirtyCount, router, siteId, selectedBrokerCode],
+  );
+
+  // WP-R2 第 3 項：手機頁首「‹」返回更表索引——同 goMonth 一樣嘅 dirty
+  // guard，取消就唔跳（`Link` 本身唔可以攔截，用 onClick
+  // preventDefault）。
+  const handleMobileBack = useCallback(
+    (e: { preventDefault: () => void }) => {
+      if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 格未儲存，離開會遺失，確定？`)) {
+        e.preventDefault();
+      }
+    },
+    [dirtyCount],
+  );
+
+  // WP-R2 第 3 項：離開（跳月／關頁）有未儲存改動要提示——`beforeunload`
+  // 擋得到整頁關閉／重新整理；App 內部導航（goMonth／手機返回）另外用
+  // `window.confirm` 攔（見底下 goMonth 同手機頁首「‹」）。
+  useEffect(() => {
+    if (dirtyCount === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirtyCount]);
+
+  // WP-R2 第 13 項：今日（香港時間）＋逐日 dayMeta 淨係按 y/m/today 計一
+  // 次（唔係每格 render 都重新計一次 `Intl.DateTimeFormat`／`Date`）。
+  const today = useMemo(() => hongKongTodayYMD(), []);
+  const dayMetaList = useMemo(
+    () => dayList.map((d) => dayMeta(year, monthNum, d, today)),
+    [dayList, year, monthNum, today],
+  );
+
+  // WP-R2 第 4 項：右鍵選單——揀咗嘅格唔喺撳右鍵嗰格範圍入面，就將選格
+  // 收窄做單一嗰格（同 Excel 一致嘅行為）；已經揀晒個範圍入面就保留成個
+  // 範圍（等「清除所選」可以一次清晒）。鎖定月份唔開（DayCell 本身
+  // onContextMenu 已經擋咗，呢度加多層保險）。
+  const openContextMenu = useCallback(
+    (r: number, d: number, x: number, y: number) => {
+      if (monthLocked) return;
+      setSel((prev) => {
+        if (prev) {
+          const r0 = Math.min(prev.a.r, prev.b.r);
+          const r1 = Math.max(prev.a.r, prev.b.r);
+          const d0 = Math.min(prev.a.d, prev.b.d);
+          const d1 = Math.max(prev.a.d, prev.b.d);
+          if (r >= r0 && r <= r1 && d >= d0 && d <= d1) return prev;
+        }
+        return { a: { r, d }, b: { r, d } };
+      });
+      setContextMenu({ r, d, x, y });
+    },
+    [monthLocked],
+  );
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  // Escape／點選單以外嘅地方收埋右鍵選單。
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onDocMouseDown = () => closeContextMenu();
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeContextMenu();
+    };
+    window.addEventListener("mousedown", onDocMouseDown);
+    window.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onDocMouseDown);
+      window.removeEventListener("keydown", onDocKeyDown);
+    };
+  }, [contextMenu, closeContextMenu]);
+
+  // WP-R2 第 5 項：手機「⋯」更多選單——Escape／點選單以外嘅地方收埋。
+  useEffect(() => {
+    if (!showMobileMore) return;
+    const onDocMouseDown = () => setShowMobileMore(false);
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowMobileMore(false);
+    };
+    window.addEventListener("mousedown", onDocMouseDown);
+    window.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onDocMouseDown);
+      window.removeEventListener("keydown", onDocKeyDown);
+    };
+  }, [showMobileMore]);
 
   // ---- 雞頭人數／更數統計條（老闆 feedback 2026-09-12）------------------
   // 用原始 `records`（未經 rows/cells 聚合）逐更計數，先分得到
@@ -973,19 +1389,24 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     );
   }
 
-  const colW = compact
-    ? { shiftType: 44, name: 76, staffNo: 0, broker: 0 }
-    : { shiftType: COL_SHIFT_TYPE, name: COL_NAME, staffNo: COL_STAFF_NO, broker: COL_BROKER };
-  const showStaffNo = !compact;
+
+  // ---- WP-R2：桌面／手機固定欄闊度（README §04/§23）--------------------
   const showBrokerCol = !isBrokerSession && !compact;
-  const leftOffsets = {
-    shiftType: 0,
-    name: colW.shiftType,
-    staffNo: colW.shiftType + colW.name,
-    tel: colW.shiftType + colW.name + colW.staffNo,
-    broker: colW.shiftType + colW.name + colW.staffNo + COL_TEL,
-  };
-  const dayColStart = colW.shiftType + colW.name + colW.staffNo + COL_TEL + (showBrokerCol ? colW.broker : 0);
+  const deskNameWidth = DESK_FIXED_TOTAL - DESK_COL_SHIFT_TYPE - (showBrokerCol ? DESK_COL_BROKER : 0);
+  const nameColWidth = compact ? MOBILE_COL_NAME : deskNameWidth;
+  const leftOffsets = compact
+    ? { name: 0 }
+    : { shiftType: 0, name: DESK_COL_SHIFT_TYPE, broker: DESK_COL_SHIFT_TYPE + deskNameWidth };
+  const fixedTotal = compact ? MOBILE_COL_NAME : DESK_FIXED_TOTAL;
+  const dayColW = compact ? MOBILE_COL_DAY : DESK_COL_DAY;
+  const rowH = compact ? 44 : 38;
+  // 該盤全部有效更別代號——頁首「N 日 · 更別 …」＋未鎖定提示條圖例＋手機
+  // 鍵盤按鍵都用呢個（Fable 規劃判斷，P2-版面重設計計劃.md §2：「31 日 ·
+  // 更別 D」改為列出全部代號，唔跟原型淨顯示一個）。
+  // 同一個代號（例如「D」）喺呢個盤可以對應多個 shift_type 記錄（唔同
+  // id，例如唔同時段／唔同人手要求但沿用同一個代號字面）——呢度淨係想
+  // 列出「呢個盤有邊啲代號」，用 Set 去重先至唔會顯示重複代號。
+  const siteShiftCodes = [...new Set(shiftTypeOptions.map((s) => s.code))];
 
   function rangeBounds() {
     if (!sel) return null;
@@ -998,90 +1419,331 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   }
   const bounds = rangeBounds();
 
-  return (
-    <div className="p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">{siteName || "更表編輯器"}</h1>
-          <p className="text-xs text-gray-500">{month} 更表（{days} 日）{dirtyCount > 0 ? ` · ${dirtyCount} 格未儲存` : ""}</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={monthLocked}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={() => setShowAddGuard(true)}
-          >
-            加保安員
-          </button>
-          <button
-            type="button"
-            disabled={monthLocked}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={handleCopyPrevMonth}
-          >
-            複製上月（{prevMonthStr(month)}）
-          </button>
-          <button
-            type="button"
-            disabled={dirtyCount === 0}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={handleRevert}
-          >
-            還原
-          </button>
-          <button
-            type="button"
-            disabled={monthLocked || saving || dirtyCount === 0}
-            className="rounded bg-blue-600 text-white px-4 py-1.5 text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={handleSave}
-          >
-            {saving ? "儲存緊……" : "儲存"}
-          </button>
-          {/* P1-WP3：更表匯出（GET /api/sites/:id/roster-export?month=）——
-              `更表匯出` module 出廠冇雞頭，冇權限撳落去會見到 API 嘅 403
-              JSON（喺新分頁顯示），唔會壞成個編輯器。
-              Opus 對抗式驗收第二輪 R3：呢個盤冇 roster_layout 模板嘅話
-              （`hasRosterLayout===false`），API 而家會 409
-              no_roster_layout——UI 唔准照樣當正常連結掣（撳落去先喺新
-              分頁見錯誤 JSON 太隱蔽），改用一個 disabled 掣＋文字提示。 */}
-          {hasRosterLayout === false ? (
-            <span
-              data-testid="roster-export-unavailable"
-              title="呢個盤未有更表版面模板，唔可以匯出"
-              className="rounded border border-gray-200 px-3 py-1.5 text-sm text-gray-400 cursor-not-allowed"
-            >
-              未有更表模板，唔可以匯出
-            </span>
-          ) : (
-            <a
-              data-testid="roster-export-link"
-              href={`/api/sites/${siteId}/roster-export?month=${month}`}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
-            >
-              匯出 Excel
-            </a>
-          )}
-        </div>
-      </div>
+  // 手機底部更別鍵盤（README §23）：揀住單一格、未鎖定、冇喺 inline
+  // 編輯（桌面專用路徑，compact 已經喺 onCellDoubleClick 禁咗）先顯示。
+  // 按鍵＝呢一行嘅更別代號（一定 valid，因為 row 本身固定咗
+  // shift_type_id）＋請假代號，唔重複、唔寫死 D/N/SH/RD/AL（Fable 規劃
+  // 判斷，P2-版面重設計計劃.md §2）。
+  const mobileKeypadRow: RowMeta | null =
+    compact && !monthLocked && !editing && sel && sel.a.r === sel.b.r && sel.a.d === sel.b.d ? (visibleRows[sel.b.r] ?? null) : null;
+  const mobileKeypadDay = mobileKeypadRow ? sel!.b.d : null;
+  const mobileKeypadKeys = mobileKeypadRow
+    ? [mobileKeypadRow.shiftTypeCode, ...MOBILE_KEYPAD_LEAVE_CODES.filter((code) => code !== mobileKeypadRow.shiftTypeCode)]
+    : [];
 
-      {/* 老闆 feedback 2026-09-12：雞頭篩選器＋人數/更數統計條——篩選器
-          淨係內部角色見（雞頭 session 本身「只見自己」，冇篩選必要）；
-          統計條兩種 session 都顯示（雞頭 session 因為 API 本身已經淨係
-          傳返自己嘅記錄，呢度自然得返自己一行）。 */}
-      {brokerStats.length > 0 && (
-        <div className="rounded border border-gray-200 p-2 space-y-2" data-testid="broker-stats-bar">
+  // 格仔渲染（桌面／手機共用；淨係 sizePx／字級隨 compact 改）——保留
+  // 原本嘅拖選／打字／選中／dirty／invalid／伺服器錯誤高亮邏輯，配色改
+  // 用 `shiftCodeStyle()`（README「格內代號 chip」）；第 13 項抽咗做
+  // `DayCell` memo 元件，呢度淨係計算原始值 props。
+  function renderDayCell(row: RowMeta, r: number, d: number) {
+    const key = cellKeyOf(row.key, d);
+    const c = cells.get(key);
+    const isDirty = !cellsEqual(baseline.get(key), c);
+    const selected = sel ? sel.b.r === r && sel.b.d === d : false;
+    const inRange = bounds ? r >= bounds.r0 && r <= bounds.r1 && d >= bounds.d0 && d <= bounds.d1 : false;
+    const isError = errorCellKey === key;
+    const code = c?.code ?? null;
+    const isLeave = !!code && code !== row.shiftTypeCode && LEAVE_CODES.includes(code);
+    const invalid = !!code && code !== row.shiftTypeCode && !LEAVE_CODES.includes(code);
+    const isDraft = c?.status === "draft" || c?.status === "pending_approval";
+    // WP-R2 第 4 項：inline input 開喺「錨點」格（`editAnchor`），唔再係
+    // `selected`（拖選多格之後 `selected` 淨係代表 sel.b，同 sel.a 未必
+    // 係同一格）。
+    const isEditingHere = editing && !compact && !!editAnchor && editAnchor.r === r && editAnchor.d === d;
+    const m = dayMetaList[d - 1];
+
+    const chip = invalid ? { bg: "#fee2e2", fg: "#b91c1c", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
+    const title = c?.status ? `狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
+
+    return (
+      <DayCell
+        key={d}
+        r={r}
+        d={d}
+        rowKey={row.key}
+        code={code}
+        isDirty={isDirty}
+        selected={selected}
+        inRange={inRange}
+        isError={isError}
+        chipBg={chip.bg}
+        chipFg={chip.fg}
+        chipBorder={chip.border}
+        monthLocked={monthLocked}
+        compact={compact}
+        dayColW={dayColW}
+        rowH={rowH}
+        colBg={m.colBg}
+        isToday={m.isToday}
+        isWeekend={m.isWeekend}
+        isEditingHere={isEditingHere}
+        editText={editText}
+        title={title}
+        onCellMouseDown={onCellMouseDown}
+        onCellMouseEnter={onCellMouseEnter}
+        onCellClick={onCellClick}
+        onCellDoubleClick={onCellDoubleClick}
+        onContextMenu={openContextMenu}
+        onEditTextChange={setEditText}
+        onCommitEdit={commitEdit}
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* ================= 桌面頁首（README §04） ================= */}
+      {!compact && (
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <Link href="/roster" className="flex items-center gap-1.5 text-xs text-zk-muted hover:text-zk-text">
+              更表 <span className="text-zk-faintest">/</span> {siteName || "…"}
+            </Link>
+            <div className="mt-0.5 flex flex-wrap items-baseline gap-3">
+              <h1 className="text-[22px] font-bold tracking-[-0.01em] text-zk-text">{siteName || "更表編輯器"}</h1>
+              <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[3px] text-[13px] text-[#334155]">
+                <button type="button" className="text-zk-faint hover:text-zk-text" onClick={() => goMonth(prevMonthStr(month))} aria-label="上一月">
+                  ‹
+                </button>
+                {year} 年 {monthNum} 月
+                <button type="button" className="text-zk-faint hover:text-zk-text" onClick={() => goMonth(nextMonthStr(month))} aria-label="下一月">
+                  ›
+                </button>
+              </div>
+              <span className="text-xs text-zk-muted">
+                {days} 日{siteShiftCodes.length > 0 ? ` · 更別 ${siteShiftCodes.join("／")}` : ""}
+                {dirtyCount > 0 ? ` · ${dirtyCount} 格未儲存` : ""}
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={monthLocked}
+              className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() => setShowAddGuard(true)}
+            >
+              加保安員
+            </button>
+            <button
+              type="button"
+              disabled={monthLocked}
+              className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={handleCopyPrevMonth}
+            >
+              複製上月（{prevMonthStr(month)}）
+            </button>
+            {hasRosterLayout === false ? (
+              <span
+                data-testid="roster-export-unavailable"
+                title="呢個盤未有更表版面模板，唔可以匯出"
+                className="cursor-not-allowed rounded-md border border-zk-border px-3.5 py-[7px] text-[13px] text-zk-faintest"
+              >
+                未有更表模板，唔可以匯出
+              </span>
+            ) : (
+              <a
+                data-testid="roster-export-link"
+                href={`/api/sites/${siteId}/roster-export?month=${month}`}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] hover:bg-zk-header"
+              >
+                匯出 Excel
+              </a>
+            )}
+            <span className="mx-1 h-[22px] w-px bg-zk-border" />
+            <button
+              type="button"
+              disabled={dirtyCount === 0}
+              className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] disabled:cursor-not-allowed disabled:opacity-45"
+              style={{ color: "#94a3b8" }}
+              onClick={handleRevert}
+            >
+              還原
+            </button>
+            <button
+              type="button"
+              disabled={monthLocked || saving || dirtyCount === 0}
+              className="rounded-md border border-[#2563eb] bg-[#2563eb] px-4 py-[7px] text-[13px] font-semibold text-white hover:bg-[#1d4ed8] disabled:cursor-not-allowed"
+              style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
+              onClick={handleSave}
+            >
+              {saving ? "儲存緊……" : "儲存"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ================= 手機頁首（README §23） =================
+          注意：R1 嘅全域手機頂欄（漢堡＋「在勤」＋頭像，`MobileNav.tsx`）
+          呢頁都會照樣顯示喺上面——原型 `mShowBar` 喺 roster 頁會收埋個
+          全域頂欄，但 `MobileNav.tsx` 屬於 R1 外殼檔案，WP-R2 任務明確
+          唔准改，所以呢個更表專屬頂欄改為疊喺全域頂欄下面（唔係取代
+          佢），見完成回報「偏差」一節。 */}
+      {compact && (
+        <div className="-mx-4 -mt-3.5 flex items-center justify-between gap-3 border-b border-zk-border bg-white px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Link href="/roster" aria-label="返回更表索引" className="text-xl text-zk-text" onClick={handleMobileBack}>
+              ‹
+            </Link>
+            <div className="min-w-0">
+              <div className="truncate text-[16px] font-bold text-zk-text">{siteName || "更表編輯器"}</div>
+              <div className="text-[11.5px] text-zk-muted">
+                {year} 年 {monthNum} 月 · {monthLocked ? "已鎖定" : "排更中"}
+              </div>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {/* WP-R2 第 5 項：加保安員／複製上月／匯出 Excel／還原——手機
+                頁首冇位擺齊，收埋做「⋯」選單，沿用桌面同一啲 handler。 */}
+            <div className="relative">
+              <button
+                type="button"
+                data-testid="roster-mobile-more"
+                aria-label="更多操作"
+                aria-haspopup="menu"
+                aria-expanded={showMobileMore}
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-[#d1d5db] text-[15px] leading-none text-[#334155]"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setShowMobileMore((v) => !v)}
+              >
+                ⋯
+              </button>
+              {showMobileMore && (
+                <div
+                  data-testid="roster-mobile-more-menu"
+                  className="absolute right-0 top-9 z-40 w-48 rounded-md border border-zk-border bg-white py-1 text-[13px] text-zk-text"
+                  style={{ boxShadow: "0 6px 20px rgba(15,23,42,.15)" }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    disabled={monthLocked}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    onClick={() => {
+                      setShowMobileMore(false);
+                      setShowAddGuard(true);
+                    }}
+                  >
+                    加保安員
+                  </button>
+                  <button
+                    type="button"
+                    disabled={monthLocked}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    onClick={() => {
+                      setShowMobileMore(false);
+                      handleCopyPrevMonth();
+                    }}
+                  >
+                    複製上月（{prevMonthStr(month)}）
+                  </button>
+                  {hasRosterLayout === false ? (
+                    <span
+                      data-testid="roster-export-unavailable"
+                      title="呢個盤未有更表版面模板，唔可以匯出"
+                      className="block px-3 py-1.5 text-left text-zk-faintest"
+                    >
+                      未有更表模板，唔可以匯出
+                    </span>
+                  ) : (
+                    <a
+                      data-testid="roster-export-link"
+                      href={`/api/sites/${siteId}/roster-export?month=${month}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block px-3 py-1.5 hover:bg-zk-header"
+                      onClick={() => setShowMobileMore(false)}
+                    >
+                      匯出 Excel
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    disabled={dirtyCount === 0}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    onClick={() => {
+                      setShowMobileMore(false);
+                      handleRevert();
+                    }}
+                  >
+                    還原{dirtyCount > 0 ? `（${dirtyCount} 格未儲存）` : ""}
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={monthLocked || saving || dirtyCount === 0}
+              className="rounded-md border border-[#2563eb] bg-[#2563eb] px-3 py-[6px] text-[12.5px] font-semibold text-white disabled:cursor-not-allowed"
+              style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
+              onClick={handleSave}
+            >
+              {saving ? "儲存緊…" : "儲存"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ================= 雞頭統計卡（桌面，README §04） ================= */}
+      {brokerStats.length > 0 && !compact && (
+        <div className="flex flex-col gap-2" data-testid="broker-stats-bar">
+          <div
+            className="grid gap-2.5"
+            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}
+            data-testid="broker-stats-table"
+          >
+            {brokerStats.map((b) => {
+              const scheduled = b.confirmed + b.pending;
+              const isSelected = selectedBrokerCode === b.code;
+              const bc = brokerColor(b.code);
+              const pct = b.quotaTarget > 0 ? Math.min(100, Math.round((scheduled / b.quotaTarget) * 100)) : 100;
+              return (
+                <div
+                  key={b.brokerId}
+                  data-testid="broker-stats-row"
+                  data-broker-code={b.code}
+                  className={`flex flex-col gap-1.5 rounded-lg border bg-white px-3.5 py-2.5 ${isBrokerSession ? "" : "cursor-pointer hover:bg-zk-header"}`}
+                  style={{ borderColor: isSelected ? bc.dot : "#e5e7eb" }}
+                  onClick={isBrokerSession ? undefined : () => setSelectedBrokerCode(isSelected ? null : b.code)}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-zk-text">
+                      <span className="h-2 w-2 rounded-sm" style={{ background: bc.dot }} />
+                      {b.code}
+                      {b.name ? `（${b.name}）` : ""}
+                    </span>
+                    <span className="text-[11.5px] text-zk-muted">{b.headcount} 人</span>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-[18px] font-bold text-zk-text">{b.confirmed}</span>
+                    <span className="text-[11.5px] text-zk-muted">
+                      已確認 · 待審批{" "}
+                      <span style={{ color: b.pending > 0 ? "#b45309" : "#64748b", fontWeight: b.pending > 0 ? 600 : 400 }}>{b.pending}</span>
+                    </span>
+                  </div>
+                  <div className="h-1 overflow-hidden rounded-full bg-zk-surface">
+                    <div className="h-full" style={{ width: `${pct}%`, background: bc.dot }} />
+                  </div>
+                  <div className="text-[11px] text-zk-faint">
+                    {b.quotaTarget > 0 ? `配額 ${b.quotaTarget} · 已排 ${scheduled}` : "未設配額（軟性限制）"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
           {!isBrokerSession && (
-            <div className="flex flex-wrap items-center gap-2">
-              <label htmlFor="broker-filter-select" className="text-xs text-gray-600">
+            <div className="flex items-center gap-2">
+              {/* 舊雞頭篩選下拉：卡本身已經可以撳篩選，呢個下拉保留做
+                  輔助／後備（testid 要留喺 DOM），視覺上隱藏。 */}
+              <label htmlFor="broker-filter-select" className="sr-only">
                 雞頭篩選
               </label>
               <select
                 id="broker-filter-select"
                 data-testid="broker-filter-select"
-                className="border border-gray-300 rounded px-2 py-1 text-sm"
+                className="sr-only"
                 value={selectedBrokerCode ?? ""}
                 onChange={(e) => setSelectedBrokerCode(e.target.value || null)}
               >
@@ -1094,65 +1756,104 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                 ))}
               </select>
               {selectedBrokerCode && (
-                <button
-                  type="button"
-                  data-testid="broker-filter-clear"
-                  className="text-xs text-blue-600 underline"
-                  onClick={() => setSelectedBrokerCode(null)}
-                >
+                <button type="button" data-testid="broker-filter-clear" className="text-xs text-zk-primary underline" onClick={() => setSelectedBrokerCode(null)}>
                   清除篩選
                 </button>
               )}
             </div>
           )}
-          <div className="overflow-x-auto">
-            <table className="text-xs border-collapse" data-testid="broker-stats-table">
-              <thead>
-                <tr className="text-left text-gray-500">
-                  <th className="pr-4 py-0.5 font-medium">雞頭</th>
-                  <th className="pr-4 py-0.5 font-medium">人數</th>
-                  <th className="pr-4 py-0.5 font-medium">已確認</th>
-                  <th className="pr-4 py-0.5 font-medium">待審批</th>
-                  <th className="pr-4 py-0.5 font-medium">已排／配額</th>
-                </tr>
-              </thead>
-              <tbody>
-                {brokerStats.map((b) => {
-                  const scheduled = b.confirmed + b.pending;
-                  const isSelected = selectedBrokerCode === b.code;
-                  return (
-                    <tr
-                      key={b.brokerId}
-                      data-testid="broker-stats-row"
-                      data-broker-code={b.code}
-                      className={
-                        "border-t border-gray-100" +
-                        (isBrokerSession ? "" : " cursor-pointer hover:bg-gray-50") +
-                        (isSelected ? " bg-blue-50 font-medium" : "")
-                      }
-                      onClick={isBrokerSession ? undefined : () => setSelectedBrokerCode(b.code)}
-                    >
-                      <td className="pr-4 py-0.5">
-                        {b.code}
-                        {b.name ? `（${b.name}）` : ""}
-                      </td>
-                      <td className="pr-4 py-0.5">{b.headcount}</td>
-                      <td className="pr-4 py-0.5">{b.confirmed}</td>
-                      <td className="pr-4 py-0.5">{b.pending}</td>
-                      <td className="pr-4 py-0.5">{b.quotaTarget > 0 ? `${scheduled}／${b.quotaTarget}` : scheduled}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
         </div>
       )}
 
-      {monthLocked && (
-        <div className="rounded border border-red-300 bg-red-50 text-red-800 text-sm px-3 py-2">
-          呢個月（{month}）已經鎖定，唔可以再改更表。如需修改，請聯絡有「月結鎖定解鎖」權限嘅同事。
+      {/* ================= 雞頭 chips（手機，README §23） ================= */}
+      {brokerStats.length > 0 && compact && (
+        <div className="flex flex-col gap-1.5" data-testid="broker-stats-bar">
+          <div className="nosb flex gap-1.5 overflow-x-auto" data-testid="broker-stats-table">
+            {brokerStats.map((b) => {
+              const isSelected = selectedBrokerCode === b.code;
+              const bc = brokerColor(b.code);
+              return (
+                <button
+                  key={b.brokerId}
+                  type="button"
+                  data-testid="broker-stats-row"
+                  data-broker-code={b.code}
+                  disabled={isBrokerSession}
+                  className="flex shrink-0 items-center gap-1 rounded-[14px] border px-2 py-1 text-[11.5px] text-[#334155]"
+                  style={{ borderColor: isSelected ? bc.dot : "#e5e7eb" }}
+                  onClick={() => setSelectedBrokerCode(isSelected ? null : b.code)}
+                >
+                  <span className="h-[7px] w-[7px] rounded-sm" style={{ background: bc.dot }} />
+                  {b.code}
+                  {b.name ? `（${b.name}）` : ""} <b>{b.confirmed}</b>
+                </button>
+              );
+            })}
+          </div>
+          {!isBrokerSession && (
+            <div className="flex items-center gap-2">
+              <select
+                id="broker-filter-select"
+                data-testid="broker-filter-select"
+                className="sr-only"
+                value={selectedBrokerCode ?? ""}
+                onChange={(e) => setSelectedBrokerCode(e.target.value || null)}
+                aria-hidden
+              >
+                <option value="">全部</option>
+                {brokerStats.map((b) => (
+                  <option key={b.brokerId} value={b.code}>
+                    {b.code}
+                  </option>
+                ))}
+              </select>
+              {selectedBrokerCode && (
+                <button type="button" data-testid="broker-filter-clear" className="text-[11.5px] text-zk-primary underline" onClick={() => setSelectedBrokerCode(null)}>
+                  清除篩選
+                </button>
+              )}
+            </div>
+          )}
         </div>
+      )}
+
+      {/* ================= 鎖定／提示橫幅 ================= */}
+      {monthLocked ? (
+        <Notice
+          variant="warning"
+          action={
+            <Link href="/reports/monthly-close" className="text-[12px] underline" style={{ color: "inherit" }}>
+              去月結工作台
+            </Link>
+          }
+        >
+          {month} 已鎖定 — 更表只讀。如需修改，請聯絡有「月結鎖定解鎖」權限嘅同事。
+        </Notice>
+      ) : (
+        !compact && (
+          <div className="flex items-center gap-3.5 rounded-md border border-zk-border bg-white px-3 py-2 text-xs text-zk-muted">
+            <span>撳格打字（D / N / SH / RD / AL）· 拖選多格一齊填 · 右鍵：清除／整行填／整行清</span>
+            <span className="ml-auto inline-flex flex-wrap gap-2.5">
+              {siteShiftCodes.map((code) => {
+                const s = shiftCodeStyle(code);
+                return (
+                  <span key={code} className="inline-flex items-center gap-1">
+                    <span className="h-3 w-3 rounded-[3px]" style={{ background: s.bg === "transparent" ? "#f1f5f9" : s.bg, border: s.border }} />
+                    {code}
+                  </span>
+                );
+              })}
+              <span className="inline-flex items-center gap-1">
+                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed #f59e0b" }} />
+                假
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed #2563eb" }} />
+                待批
+              </span>
+            </span>
+          </div>
+        )
       )}
       {warnings.length > 0 && (
         <div className="rounded border border-yellow-300 bg-yellow-50 text-yellow-900 text-sm px-3 py-2 space-y-1">
@@ -1168,205 +1869,348 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         <div className="rounded border border-red-300 bg-red-50 text-red-800 text-sm px-3 py-2 whitespace-pre-wrap">{errorBanner}</div>
       )}
 
-      <div
-        ref={containerRef}
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        className="outline-none border border-gray-300 rounded overflow-auto max-h-[72vh] select-none"
-      >
-        <table className="border-collapse text-sm" style={{ minWidth: dayColStart + days * COL_DAY + 80 }}>
-          <thead>
-            <tr>
-              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300 sticky-left" style={{ left: leftOffsets.shiftType, width: colW.shiftType, minWidth: colW.shiftType, position: "sticky" }}>
-                更別
-              </th>
-              <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.name, width: colW.name, minWidth: colW.name, position: "sticky" }}>
-                姓名
-              </th>
-              {showStaffNo && (
-                <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.staffNo, width: colW.staffNo, position: "sticky" }}>
-                  工號
+      {/* ================= 格仔表（README §04/§23） ================= */}
+      <div className="overflow-hidden rounded-lg border border-zk-border bg-white" style={{ opacity: monthLocked ? 0.8 : 1 }}>
+        <div
+          ref={containerRef}
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          className="outline-none overflow-auto select-none"
+          // WP-R2 第 9 項：容器本身 max-height 封頂 72vh——如果淨係用
+          // scrollTop 較正，揀住嘅係最尾一行嘅話，容器已經冇位再向下
+          // 捲（本身個底邊已經伸到鍵盤範圍），scrollTop 點加都冇用。鍵
+          // 盤開緊嗰陣直接縮細容器可視高度（扣走鍵盤高度），先保證容
+          // 器底邊實際唔會伸過鍵盤頂。
+          style={{ maxHeight: compact && mobileKeypadRow && mobileKeypadDay !== null ? `calc(72vh - ${MOBILE_KEYPAD_HEIGHT}px)` : "72vh" }}
+        >
+          <table className="border-collapse text-sm" style={{ minWidth: fixedTotal + days * dayColW }}>
+            <thead>
+              <tr>
+                {!compact && (
+                  <th
+                    className="sticky top-0 z-20 bg-[#fafbfc] text-left text-[11px] font-semibold text-zk-muted"
+                    style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid #e5e7eb", borderBottom: "1px solid #e5e7eb", padding: "8px 0 8px 12px" }}
+                  >
+                    更別
+                  </th>
+                )}
+                <th
+                  className="sticky top-0 z-20 bg-[#fafbfc] text-left text-[11px] font-semibold text-zk-muted"
+                  style={{
+                    left: leftOffsets.name,
+                    width: nameColWidth,
+                    minWidth: nameColWidth,
+                    position: "sticky",
+                    borderRight: compact || !showBrokerCol ? "1px solid #e5e7eb" : undefined,
+                    borderBottom: "1px solid #e5e7eb",
+                    padding: compact ? "0 12px" : "8px 10px",
+                    boxShadow: compact ? "2px 0 6px rgba(0,0,0,.04)" : undefined,
+                  }}
+                >
+                  {compact ? "姓名" : "姓名 / 工號"}
                 </th>
-              )}
-              {showBrokerCol && (
-                <th className="sticky top-0 z-20 bg-gray-100 border border-gray-300" style={{ left: leftOffsets.broker, width: colW.broker, position: "sticky" }}>
-                  雞頭
-                </th>
-              )}
-              {dayList.map((d) => (
-                <th key={d} className="sticky top-0 z-10 bg-gray-100 border border-gray-300 font-normal" style={{ width: COL_DAY }}>
-                  {d}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((row, r) => {
-              const guard = guardsById.get(row.guardId);
-              const permitExpired = guard?.sia_permit_expiry ? new Date(guard.sia_permit_expiry) < new Date(year, monthNum - 1 + 1, 0) : false;
-              const broker = row.brokerId ? brokersById.get(row.brokerId) : null;
-              return (
-                <tr key={row.key} data-testid="roster-row" data-row-index={r} data-row-key={row.key}>
-                  <td className="sticky z-10 bg-white border border-gray-300 text-center font-medium" style={{ left: leftOffsets.shiftType, width: colW.shiftType, minWidth: colW.shiftType, position: "sticky" }}>
-                    <div className="flex flex-col items-center gap-0.5">
-                      <span>{row.shiftTypeCode}</span>
-                      <button
-                        type="button"
-                        disabled={monthLocked}
-                        className="text-[10px] text-blue-600 underline disabled:opacity-40"
-                        onClick={() => {
-                          setFillRowKey(row.key === fillRowKey ? null : row.key);
-                          setFillRowValue("");
-                        }}
-                      >
-                        整行
-                      </button>
-                    </div>
-                  </td>
-                  <td className="sticky z-10 bg-white border border-gray-300 px-1" style={{ left: leftOffsets.name, width: colW.name, minWidth: colW.name, maxWidth: colW.name, position: "sticky" }}>
-                    <div className="truncate" title={row.guardName || "(未命名)"}>{row.guardName || "(未命名)"}</div>
-                    {permitExpired && <span className="ml-1 text-red-600 text-[10px]">證件到期</span>}
-                    {compact && (
-                      <div className="truncate text-[10px] text-gray-500">
-                        {row.staffNo || ""}{row.staffNo && !isBrokerSession && broker ? "·" : ""}{!isBrokerSession ? broker?.code ?? "" : ""}
-                      </div>
-                    )}
-                  </td>
-                  {showStaffNo && (
-                    <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.staffNo, width: colW.staffNo, position: "sticky" }}>
-                      {row.staffNo}
-                    </td>
-                  )}
-                  {showBrokerCol && (
-                    <td className="sticky z-10 bg-white border border-gray-300 px-1 text-xs" style={{ left: leftOffsets.broker, width: colW.broker, position: "sticky" }}>
-                      {broker?.name ?? row.brokerId ?? ""}
-                    </td>
-                  )}
-                  {dayList.map((d) => {
-                    const key = cellKeyOf(row.key, d);
-                    const c = cells.get(key);
-                    const isDirty = !cellsEqual(baseline.get(key), c);
-                    const selected = sel ? sel.b.r === r && sel.b.d === d : false;
-                    const inRange = bounds ? r >= bounds.r0 && r <= bounds.r1 && d >= bounds.d0 && d <= bounds.d1 : false;
-                    const isError = errorCellKey === key;
-                    const code = c?.code ?? null;
-                    const invalid = !!code && code !== row.shiftTypeCode && !LEAVE_CODES.includes(code);
-                    const isEditingHere = editing && selected;
-
-                    let cls = "border border-gray-300 text-center text-sm h-8 align-middle cursor-cell";
-                    if (monthLocked) cls += " bg-gray-100 text-gray-400 cursor-not-allowed";
-                    else if (isError) cls += " bg-red-200 text-red-900 font-semibold";
-                    else if (invalid) cls += " bg-red-100 text-red-700";
-                    else if (!code) cls += " bg-white";
-                    else if (c?.status === "pending_approval") cls += " bg-yellow-200 text-yellow-900 font-medium";
-                    else if (!c?.status) cls += " bg-gray-200 text-gray-800";
-                    else if (c.status === "draft") cls += " bg-gray-200 text-gray-800";
-                    else cls += " bg-emerald-50 text-emerald-900 font-medium";
-                    if (isDirty) cls += " ring-2 ring-inset ring-blue-500";
-                    if (selected) cls += " outline outline-2 -outline-offset-2 outline-indigo-600";
-                    else if (inRange) cls += " bg-indigo-100";
-
-                    return (
+                {showBrokerCol && (
+                  <th
+                    className="sticky top-0 z-20 bg-[#fafbfc] text-left text-[11px] font-semibold text-zk-muted"
+                    style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, minWidth: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb", borderBottom: "1px solid #e5e7eb", padding: "8px 10px" }}
+                  >
+                    雞頭
+                  </th>
+                )}
+                {dayList.map((d) => {
+                  const m = dayMetaList[d - 1];
+                  return (
+                    <th
+                      key={d}
+                      className="sticky top-0 z-10 text-center font-normal"
+                      style={{ width: dayColW, background: m.headerBg, borderBottom: "1px solid #e5e7eb", padding: "5px 0" }}
+                      data-testid={`roster-day-header-${d}`}
+                      data-today={m.isToday || undefined}
+                      data-weekend={m.isWeekend || undefined}
+                    >
+                      <div style={{ fontSize: 9.5, color: m.weekdayColor }}>{m.weekday}</div>
+                      <div style={{ fontSize: compact ? 12.5 : 12, fontWeight: 600, color: m.dayColor, lineHeight: 1.2 }}>{d}</div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((row, r) => {
+                const guard = guardsById.get(row.guardId);
+                const permitExpired = guard?.sia_permit_expiry ? new Date(guard.sia_permit_expiry) < new Date(year, monthNum - 1 + 1, 0) : false;
+                const broker = row.brokerId ? brokersById.get(row.brokerId) : null;
+                const bc = brokerColor(broker?.code);
+                return (
+                  <tr
+                    key={row.key}
+                    data-testid="roster-row"
+                    data-row-index={r}
+                    data-row-key={row.key}
+                    className="hover:bg-[#fafbfc]"
+                    style={{ height: rowH, borderBottom: "1px solid #f1f5f9" }}
+                  >
+                    {!compact && (
                       <td
-                        key={d}
-                        className={cls}
-                        style={{ width: COL_DAY }}
-                        title={c?.status ? `狀態：${c.status}` : undefined}
-                        data-testid={`roster-cell-${r}-${d}`}
-                        onMouseDown={(e) => onCellMouseDown(r, d, { shiftKey: e.shiftKey })}
-                        onMouseEnter={() => onCellMouseEnter(r, d)}
-                        onClick={(e) => onCellClick(r, d, e.shiftKey)}
-                        onDoubleClick={() => onCellDoubleClick(r, d)}
+                        className="sticky z-10 bg-white text-center text-xs text-zk-muted"
+                        style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid #e5e7eb" }}
                       >
-                        {isEditingHere ? (
-                          <input
-                            autoFocus
-                            className="w-full h-full text-center bg-white outline-none"
-                            value={editText}
-                            maxLength={4}
-                            onChange={(e) => setEditText(e.target.value.toUpperCase())}
-                            onBlur={commitEdit}
-                          />
-                        ) : (
-                          code ?? ""
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span>{row.shiftTypeCode}</span>
+                          <button
+                            type="button"
+                            disabled={monthLocked}
+                            className="text-[10px] text-zk-primary underline disabled:opacity-40"
+                            onClick={() => {
+                              setFillRowKey(row.key === fillRowKey ? null : row.key);
+                              setFillRowValue("");
+                            }}
+                          >
+                            整行
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                    <td
+                      className="sticky z-10 bg-white"
+                      style={{
+                        left: leftOffsets.name,
+                        width: nameColWidth,
+                        minWidth: nameColWidth,
+                        maxWidth: nameColWidth,
+                        position: "sticky",
+                        borderRight: compact || !showBrokerCol ? "1px solid #e5e7eb" : undefined,
+                        boxShadow: compact ? "2px 0 6px rgba(0,0,0,.04)" : undefined,
+                      }}
+                    >
+                      {compact ? (
+                        // WP-R2 第 12 項：手機行高固定 44px，姓名格淨係
+                        // 兩行（名／雞頭·工號）——證件到期呢類第三行 44px
+                        // 塞唔落，compact 唔顯示（桌面照樣顯示）。
+                        <div className="flex h-full flex-col justify-center gap-0.5 px-3 py-1">
+                          <div className="truncate text-[13.5px] font-medium text-zk-text" title={row.guardName || "(未命名)"}>
+                            {row.guardName || "(未命名)"}
+                          </div>
+                          <div className="flex items-center gap-1 truncate text-[10.5px] text-zk-faint">
+                            {broker && (
+                              <span className="font-semibold" style={{ color: bc.dot }}>
+                                {broker.code}
+                              </span>
+                            )}
+                            {broker && row.staffNo ? "·" : ""}
+                            {row.staffNo}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex min-w-0 items-baseline gap-2 px-2.5">
+                          <span className="truncate text-[13px] font-medium" title={row.guardName || "(未命名)"}>
+                            {row.guardName || "(未命名)"}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-zk-faint">{row.staffNo}</span>
+                          {permitExpired && <span className="shrink-0 text-[10px] text-red-600">證件到期</span>}
+                        </div>
+                      )}
+                    </td>
+                    {showBrokerCol && (
+                      <td className="sticky z-10 bg-white px-2.5" style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb" }}>
+                        {broker && (
+                          <span style={{ fontSize: 10.5, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: bc.bg, color: bc.fg }}>
+                            {broker.code}
+                          </span>
                         )}
                       </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-            {visibleRows.length === 0 && (
-              <tr>
-                <td colSpan={2 + (showStaffNo ? 1 : 0) + (showBrokerCol ? 1 : 0) + days} className="border border-gray-300 text-center text-gray-400 py-6 text-sm">
-                  {allRows.length === 0
-                    ? "呢個盤呢個月未有更表記錄——撳「加保安員」開始排更，或者撳「複製上月」。"
-                    : "呢個雞頭喺呢個盤搵唔到保安員行（篩選只影響顯示，其他雞頭嘅記錄照喺度）。"}
-                </td>
-              </tr>
-            )}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="sticky z-10 bg-gray-50 border border-gray-300 font-medium" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
-                Total
-              </td>
-              {dayTotals.map((t, i) => (
-                <td key={i} className="border border-gray-300 text-center bg-gray-50">
-                  {t}
-                </td>
-              ))}
-            </tr>
-            <tr>
-              <td className="sticky z-10 bg-gray-50 border border-gray-300 font-medium" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
-                所需人手
-              </td>
-              {dayList.map((d) => (
-                <td key={d} className="border border-gray-300 text-center bg-gray-50">
-                  {dailyReq[d - 1] ?? 0}
-                </td>
-              ))}
-            </tr>
-            <tr>
-              <td className="sticky z-10 bg-gray-50 border border-gray-300 font-medium" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
-                尚欠
-              </td>
-              {dayList.map((d) => {
-                const short = Math.max(0, (dailyReq[d - 1] ?? 0) - dayTotals[d - 1]);
-                return (
-                  <td key={d} className={`border border-gray-300 text-center bg-gray-50 ${short > 0 ? "text-red-600 font-semibold" : ""}`}>
-                    {short}
-                  </td>
+                    )}
+                    {dayList.map((d) => renderDayCell(row, r, d))}
+                  </tr>
                 );
               })}
-            </tr>
-            {/* 老闆 feedback 2026-09-12：篩選咗某個雞頭時加多一行「所選
-                雞頭合計」——Total／尚欠一律照計全部（唔受篩選影響，見上面
-                dayTotals 注解），呢行先係篩選範圍嘅合計。 */}
-            {selectedBrokerTotals && (
-              <tr data-testid="roster-selected-broker-total">
-                <td className="sticky z-10 bg-blue-50 border border-gray-300 font-medium text-blue-900" style={{ left: leftOffsets.shiftType, position: "sticky" }} colSpan={3 + (isBrokerSession ? 0 : 1)}>
-                  所選雞頭合計（{selectedBrokerCode}）
-                </td>
-                {selectedBrokerTotals.map((t, i) => (
-                  <td key={i} className="border border-gray-300 text-center bg-blue-50 text-blue-900">
-                    {t}
+              {visibleRows.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={(compact ? 1 : 2) + (showBrokerCol ? 1 : 0) + days}
+                    className="py-6 text-center text-sm text-zk-faintest"
+                  >
+                    {allRows.length === 0
+                      ? "呢個盤呢個月未有更表記錄——撳「加保安員」開始排更，或者撳「複製上月」。"
+                      : "呢個雞頭喺呢個盤搵唔到保安員行（篩選只影響顯示，其他雞頭嘅記錄照喺度）。"}
                   </td>
-                ))}
+                </tr>
+              )}
+            </tbody>
+            {/* WP-R2 第 6／7 項：合計行桌面／手機都要 render（手機之前
+                `{!compact}` 令成行消失）——桌面兩行（已排色碼／所需灰色
+                細字）；雞頭視角（isBrokerSession）淨係顯示自己已排數，
+                唔做紅綠色碼、唔顯示所需（所需係成個盤口徑，對雞頭無
+                意義）。 */}
+            <tfoot>
+              <tr>
+                <td
+                  className="sticky z-10 bg-[#fafbfc] text-[11px] text-zk-muted"
+                  style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px" }}
+                  colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
+                >
+                  {isBrokerSession ? "自己已排" : "每日已排 / 所需"}
+                </td>
+                {dayTotals.map((t, i) => {
+                  const req = dailyReq[i] ?? 0;
+                  if (isBrokerSession) {
+                    return (
+                      <td
+                        key={i}
+                        className="text-center text-[11px] font-semibold"
+                        style={{ borderTop: "1px solid #e5e7eb", padding: "7px 0", color: "#334155" }}
+                        title={`自己已排 ${t}`}
+                      >
+                        {t}
+                      </td>
+                    );
+                  }
+                  return (
+                    <td
+                      key={i}
+                      className="text-center"
+                      style={{ borderTop: "1px solid #e5e7eb", padding: compact ? "5px 0" : "6px 0" }}
+                      title={`已排 ${t} / 所需 ${req}`}
+                    >
+                      <div className="text-[11px] font-semibold" style={{ color: coverageColor(t, req) }}>
+                        {t}
+                      </div>
+                      <div className="text-[9.5px] text-[#94a3b8]">{req}</div>
+                    </td>
+                  );
+                })}
               </tr>
-            )}
-          </tfoot>
-        </table>
+              {selectedBrokerTotals && (
+                <tr data-testid="roster-selected-broker-total">
+                  <td
+                    className="sticky z-10 text-[11px] font-medium"
+                    style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px", background: "#eff6ff", color: "#1e40af" }}
+                    colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
+                  >
+                    所選雞頭合計（{selectedBrokerCode}）
+                  </td>
+                  {selectedBrokerTotals.map((t, i) => (
+                    <td key={i} className="text-center text-[11px]" style={{ borderTop: "1px solid #e5e7eb", background: "#eff6ff", color: "#1e40af" }}>
+                      {t}
+                    </td>
+                  ))}
+                </tr>
+              )}
+            </tfoot>
+          </table>
+          {/* WP-R2 第 9 項：鍵盤開緊嗰陣表底加返 padding-bottom（≥鍵盤高
+              度），等最底幾行可以捲上嚟，唔會俾 fixed 底部鍵盤遮住。 */}
+          {compact && mobileKeypadRow && mobileKeypadDay !== null && <div style={{ height: MOBILE_KEYPAD_HEIGHT }} aria-hidden />}
+        </div>
       </div>
+
+      {/* ================= 手機底部更別鍵盤（README §23） ================= */}
+      {mobileKeypadRow && mobileKeypadDay !== null && (
+        <div
+          data-testid="roster-mobile-keypad"
+          className="fixed inset-x-0 bottom-0 z-40 flex flex-col gap-2 border-t border-zk-border bg-white px-4 py-3"
+          style={{ boxShadow: "0 -4px 16px rgba(0,0,0,.08)" }}
+        >
+          <div className="text-xs text-zk-muted">
+            {mobileKeypadRow.guardName || "(未命名)"} · {monthNum} 月 {mobileKeypadDay} 日 — 揀更別
+          </div>
+          {/* 第 8 項之後最多 6 個代號鍵＋1 個清除＝7 粒——用固定 4 欄
+              grid（唔用 flex-wrap）令「清除」一定喺可預測位置（第二行
+              最尾），唔會因為 flex-wrap 換行令掣數目唔同時跑位／喺
+              MOBILE_KEYPAD_HEIGHT 估算高度以外。 */}
+          <div className="grid grid-cols-4 gap-1.5">
+            {mobileKeypadKeys.map((code) => {
+              const isLeave = code !== mobileKeypadRow.shiftTypeCode;
+              const s = shiftCodeStyle(code, { isLeave });
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  className="h-11 w-full rounded-lg text-[13px] font-semibold"
+                  style={{
+                    background: s.bg === "transparent" ? "#fff" : s.bg,
+                    color: s.fg === "transparent" ? "#0f172a" : s.fg,
+                    border: "1px solid #e5e7eb",
+                  }}
+                  onClick={() => applyMobileKeypadCode(mobileKeypadRow, mobileKeypadDay, code)}
+                >
+                  {code}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className="h-11 w-full rounded-lg border border-zk-border bg-white text-xs text-zk-muted"
+              onClick={() => applyMobileKeypadCode(mobileKeypadRow, mobileKeypadDay, null)}
+            >
+              清除
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ================= 右鍵選單（README Interactions：清除／整行填／
+          整行清） ================= */}
+      {contextMenu &&
+        (() => {
+          const row = visibleRows[contextMenu.r];
+          if (!row) return null;
+          const cellCode = cells.get(cellKeyOf(row.key, contextMenu.d))?.code ?? "";
+          const menuWidth = 152;
+          const left = typeof window !== "undefined" ? Math.min(contextMenu.x, window.innerWidth - menuWidth - 8) : contextMenu.x;
+          const top = typeof window !== "undefined" ? Math.min(contextMenu.y, window.innerHeight - 140) : contextMenu.y;
+          return (
+            <div
+              data-testid="roster-context-menu"
+              className="fixed z-50 rounded-md border border-zk-border bg-white py-1 text-[13px] text-zk-text"
+              style={{ left, top, width: menuWidth, boxShadow: "0 6px 20px rgba(15,23,42,.15)" }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                onClick={() => {
+                  clearSelectedRange();
+                  closeContextMenu();
+                }}
+              >
+                清除所選
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                onClick={() => {
+                  setFillRowKey(row.key);
+                  setFillRowValue(cellCode);
+                  closeContextMenu();
+                }}
+              >
+                整行填
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                onClick={() => {
+                  applyFillRow(row, "");
+                  closeContextMenu();
+                }}
+              >
+                整行清
+              </button>
+            </div>
+          );
+        })()}
 
       {fillRowKey && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30" onClick={() => setFillRowKey(null)}>
           <div className="bg-white rounded shadow-lg p-4 w-72 space-y-3" onClick={(e) => e.stopPropagation()}>
             <p className="text-sm text-gray-700">
-              整行填滿（成個月 {days} 日全部填同一個代號）——更別代號或者請假代號（AL/NL/RD/SL/SH）：
+              整行填滿（成個月 {days} 日全部填同一個代號）——更別代號或者請假代號（AL/NL/RD/SL/SH）；留空撳「填滿全行」＝整行清（成行清空）：
             </p>
             <input
               autoFocus
+              data-testid="roster-fill-row-input"
               className="w-full border border-gray-300 rounded px-2 py-1 text-sm uppercase"
               value={fillRowValue}
               onChange={(e) => setFillRowValue(e.target.value.toUpperCase())}
@@ -1462,6 +2306,17 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* ================= 儲存成功 Toast（README §04） ================= */}
+      {showSaveToast && (
+        <div
+          data-testid="roster-save-toast"
+          className="fixed bottom-5 right-5 z-50 rounded-md bg-[#0f172a] px-4 py-2.5 text-[13px] text-white"
+          style={{ boxShadow: "0 6px 18px rgba(15,23,42,.3)" }}
+        >
+          已儲存
         </div>
       )}
     </div>
