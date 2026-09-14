@@ -68,7 +68,10 @@ export default function GuardsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [hasMoneyField, setHasMoneyField] = useState(true);
   const [search, setSearch] = useState("");
-  const [month] = useState(currentMonthStr());
+  // S3（Opus 驗收修復）：原本冇 setter，月份寫死；而家加返 setter＋月份
+  // FilterChip，改月份要重新 fetch `with_month_shifts`（見下面 useEffect
+  // dep）。
+  const [month, setMonth] = useState(currentMonthStr());
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -97,7 +100,7 @@ export default function GuardsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [month]);
 
   function broker(id?: string | null): BrokerRow | undefined {
     if (!id) return undefined;
@@ -186,7 +189,8 @@ export default function GuardsPage() {
   }
 
   const visibleRows = rows.filter((r) => matchesSearch(r, search));
-  const colCount = 8;
+  // S2：加返「聘用形式」欄——8 欄變 9 欄。
+  const colCount = 9;
 
   return (
     <div className="space-y-4">
@@ -198,6 +202,9 @@ export default function GuardsPage() {
           <>
             <FilterChip label="搜尋" showCaret={false}>
               <input type="text" placeholder="姓名 / 工號 / 電話" value={search} onChange={(e) => setSearch(e.target.value)} className="w-36" />
+            </FilterChip>
+            <FilterChip label="本月更數月份">
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
             </FilterChip>
             <Button variant="primary" onClick={openCreate}>
               新增保安員
@@ -226,6 +233,7 @@ export default function GuardsPage() {
                   <th className={tableCls.th}>工號</th>
                   <th className={tableCls.th}>雞頭</th>
                   <th className={tableCls.th}>電話</th>
+                  <th className={tableCls.th}>聘用形式</th>
                   <th className={tableCls.thNum}>本月更數</th>
                   <th className={tableCls.th}>狀態</th>
                   <th className={tableCls.th}>許可證到期</th>
@@ -258,6 +266,7 @@ export default function GuardsPage() {
                         )}
                       </td>
                       <td className={tableCls.td}>{fmt(r.tel)}</td>
+                      <td className={tableCls.tdMuted}>{fmt(r.employment_type)}</td>
                       <td className={tableCls.tdNum}>{r.month_shift_count ?? "—"}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1">
@@ -306,6 +315,7 @@ export default function GuardsPage() {
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
                     <span>{fmt(r.staff_no)}</span>
                     <span>{fmt(r.tel)}</span>
+                    <span>{fmt(r.employment_type)}</span>
                     {b && (
                       <Pill variant="broker" color={brokerColor(b.code)}>
                         {b.name}

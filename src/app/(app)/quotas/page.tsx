@@ -298,8 +298,11 @@ export default function QuotasPage() {
             </table>
           </div>
 
-          {/* 手機（&lt;640）：列表卡。 */}
+          {/* 手機（&lt;640）：列表卡。其他（Opus 驗收）：loading 嗰陣桌面
+              table 有「載入緊…」提示列，手機卡舊版冇——加返，唔好淨係
+              一片空白。 */}
           <div className="space-y-2 sm:hidden">
+            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-[13px] text-zk-muted">載入緊…</div>}
             {rows.map((r) => {
               const st = shiftType(r.shift_type_id);
               const b = broker(r.broker_id);

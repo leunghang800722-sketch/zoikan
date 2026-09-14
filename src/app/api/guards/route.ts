@@ -10,7 +10,7 @@ import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { GuardCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { brandSafeResponse, type Dto } from "@/lib/api/serialize";
+import { BadRequest } from "@/lib/api/errors";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 import type { Prisma } from "@prisma/client";
@@ -29,7 +29,15 @@ function guardModule(session: AuthedSession): Module {
 // guard 分組計數（同 shift-records route 預設 `status: { not: "cancelled" }`
 // 口徑一致）。全部經 `rows`（已經由 `scopeGuardWhere()` 做咗雞頭隔離）
 // 揀出嚟嘅 guardId 先計，唔會漏隔離揭露第二個雞頭嘅安員。
-const MONTH_RE = /^\d{4}-\d{2}$/;
+//
+// M1（Opus 驗收修復）：舊版 regex `^\d{4}-\d{2}$` 會接受「2026-13」
+// 「2026-00」呢類結構啱但月份唔存在嘅字串——之後 `new Date("2026-13-01T…")`
+// 拎到 Invalid Date，落到 Prisma `groupBy()` 嘅 `workDate` range query
+// 就 500。收緊做 `^\d{4}-(0[1-9]|1[0-2])$`（MM 一定要 01-12），並且
+// 「傳咗但格式唔啱」同其他 route（referral-fee-rates／quotas／
+// broker-site-assignments 嗰堆）一致，一律 400 BadRequest，唔再靜靜哋
+// 當冇傳處理。
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 async function loadMonthShiftCounts(guardIds: string[], month: string): Promise<Record<string, number>> {
   if (guardIds.length === 0) return {};
@@ -43,18 +51,6 @@ async function loadMonthShiftCounts(guardIds: string[], month: string): Promise<
   return Object.fromEntries(counts.map((c) => [c.guardId, c._count._all]));
 }
 
-/** 每行加返 `monthShiftCount`（camelCase——`okGzip()` 出街前會經
- * `camelToSnakeDeep()` 轉做 `month_shift_count`）。呢個唔係
- * `pickWhitelist()` 白名單入面嘅欄，要喺 DTO／field-group gate 之後先
- * 加，否則會被白名單剝走。 */
-function withMonthShiftCounts(
-  list: Dto<{ rows: Dto[]; total: number; skip: number; take: number }>,
-  counts: Record<string, number>,
-): Dto<{ rows: Dto[]; total: number; skip: number; take: number }> {
-  const rows = list.rows.map((r) => brandSafeResponse({ ...r, monthShiftCount: counts[String(r.id)] ?? 0 }));
-  return brandSafeResponse({ ...list, rows });
-}
-
 export async function GET(req: Request) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "view");
@@ -62,21 +58,39 @@ export async function GET(req: Request) {
     const { skip, take } = paginationParams(url);
     const includeInactive = url.searchParams.get("include_inactive") === "1";
     const withMonthShiftsParam = url.searchParams.get("with_month_shifts");
-    const monthShiftsMonth = withMonthShiftsParam && MONTH_RE.test(withMonthShiftsParam) ? withMonthShiftsParam : null;
+    if (withMonthShiftsParam && !MONTH_RE.test(withMonthShiftsParam)) {
+      throw BadRequest("with_month_shifts 格式唔啱（要 YYYY-MM，MM 係 01-12）");
+    }
     let where: Prisma.GuardWhereInput = includeInactive ? {} : { status: "active" };
     where = scopeGuardWhere(session, where);
     const [rows, total] = await Promise.all([
       prisma.guard.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
       prisma.guard.count({ where }),
     ]);
-    const monthShiftCounts = monthShiftsMonth ? await loadMonthShiftCounts(rows.map((r) => r.id), monthShiftsMonth) : null;
+    // S4（Opus 驗收修復）：monthShiftCount 而家喺 DTO／field-group gate
+    // **之前**就 merge 落 raw `rows`（`GUARD_FIELDS`／`GUARD_BROKER_FIELDS`
+    // 白名單已經加咗 `monthShiftCount`，見 src/lib/api/dto/index.ts、
+    // src/lib/broker-dto.ts）——行返 `pickWhitelist()` 正常嘅白名單路
+    // 徑，唔再靠「喺 gate 之後先手動加返」嗰種繞過白名單機制嘅寫法（嗰
+    // 種寫法一旦第二個欄都想咁做，個白名單就形同虛設）。`rows` 冇呢個
+    // key 嘅時候（冇傳 `with_month_shifts`）`pickWhitelist()` 嘅
+    // `hasOwnProperty` 檢查會自然跳過，同以前「乜都唔加」行為一致。
+    const monthShiftCounts = withMonthShiftsParam
+      ? await loadMonthShiftCounts(rows.map((r) => r.id), withMonthShiftsParam)
+      : null;
+    const rowsWithCount = monthShiftCounts
+      ? rows.map((r) => ({ ...r, monthShiftCount: monthShiftCounts[r.id] ?? 0 }))
+      : rows;
     if (isBrokerRole(session)) {
-      const list = scrubForBrokerSession(session, mapListForBroker({ rows, total, skip, take }, toBrokerGuardDTO));
-      return okGzip(req, monthShiftCounts ? withMonthShiftCounts(list, monthShiftCounts) : list);
+      const list = scrubForBrokerSession(
+        session,
+        mapListForBroker({ rows: rowsWithCount, total, skip, take }, toBrokerGuardDTO),
+      );
+      return okGzip(req, list);
     }
-    const dto = mapListDTO({ rows, total, skip, take }, toGuardFullDTO);
+    const dto = mapListDTO({ rows: rowsWithCount, total, skip, take }, toGuardFullDTO);
     const gated = await applyFieldGroupGateToList(session, "guards", dto);
-    return okGzip(req, monthShiftCounts ? withMonthShiftCounts(gated, monthShiftCounts) : gated);
+    return okGzip(req, gated);
   });
 }
 

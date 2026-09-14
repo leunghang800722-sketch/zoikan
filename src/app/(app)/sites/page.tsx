@@ -66,6 +66,9 @@ function billingModelPill(model: string) {
 export default function SitesPage() {
   const [rows, setRows] = useState<SiteRow[]>([]);
   const [shiftTypesBySite, setShiftTypesBySite] = useState<Record<string, ShiftTypeRow[]>>({});
+  // S1（Opus 驗收）：「更別」欄未讀到之前顯示「載入緊…」，唔好當佢真係
+  // 冇更別（「—」）——落面 load() 一次過攞晒 shift-types 先會清呢個 flag。
+  const [shiftTypesLoading, setShiftTypesLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -92,17 +95,20 @@ export default function SitesPage() {
     setHasMoneyField(res.data.rows.length === 0 ? true : res.data.rows.some((r) => "monthly_fee" in r));
     setLoading(false);
 
-    // README §07：「更別」欄（「D · N · IC」）——逐盤攞一次更別代號，
-    // 純顯示用，唔影響原有 CRUD 流程（子表 drawer 仍然自己再 load 一次）。
-    const results = await Promise.all(
-      res.data.rows.map((s) => apiGet<ApiListResult<ShiftTypeRow>>(`/api/shift-types?site_id=${s.id}&take=100`)),
-    );
-    const map: Record<string, ShiftTypeRow[]> = {};
-    res.data.rows.forEach((s, i) => {
-      const r = results[i];
-      if (r?.ok) map[s.id] = r.data.rows.filter((st) => !st.voided_at);
-    });
-    setShiftTypesBySite(map);
+    // S1（Opus 驗收修復）：README §07「更別」欄（「D · N · IC」）舊版逐盤
+    // 一次 GET /api/shift-types?site_id=（64 個盤＝64 條 request，N+1）。
+    // 改為一次過 GET /api/shift-types?take=500，前端 group by site_id。
+    setShiftTypesLoading(true);
+    const stRes = await apiGet<ApiListResult<ShiftTypeRow>>("/api/shift-types?take=500");
+    if (stRes.ok) {
+      const map: Record<string, ShiftTypeRow[]> = {};
+      for (const st of stRes.data.rows) {
+        if (st.voided_at) continue;
+        (map[st.site_id] ??= []).push(st);
+      }
+      setShiftTypesBySite(map);
+    }
+    setShiftTypesLoading(false);
   }
 
   useEffect(() => {
@@ -189,7 +195,10 @@ export default function SitesPage() {
     await load();
   }
 
-  const colCount = hasMoneyField ? 6 : 5;
+  // 其他（Opus 驗收）：頭列實際係 盤名/客戶/結算模式/(月費)/更別/狀態/
+  // 操作——hasMoneyField 就 7 欄，冇就 6 欄（原本寫死 6/5，靠落面
+  // colSpan「+1」補返，而家 colCount 本身改啱，colSpan 唔使再 +1）。
+  const colCount = hasMoneyField ? 7 : 6;
 
   return (
     <div className="space-y-4">
@@ -229,7 +238,7 @@ export default function SitesPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount + 1}>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
                       載入緊…
                     </td>
                   </tr>
@@ -243,7 +252,11 @@ export default function SitesPage() {
                       <td className={tableCls.tdNum}>{r.billing_model === "per_shift" ? "—" : fmtMoney(r.monthly_fee)}</td>
                     )}
                     <td className={tableCls.tdMuted}>
-                      {(shiftTypesBySite[r.id] ?? []).length > 0 ? shiftTypesBySite[r.id]!.map((s) => s.code).join(" · ") : "—"}
+                      {shiftTypesLoading
+                        ? "載入緊…"
+                        : (shiftTypesBySite[r.id] ?? []).length > 0
+                          ? shiftTypesBySite[r.id]!.map((s) => s.code).join(" · ")
+                          : "—"}
                     </td>
                     <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}</td>
                     <td className={tableCls.td}>
@@ -290,7 +303,9 @@ export default function SitesPage() {
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {billingModelPill(r.billing_model)}
                   {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
-                  <span className="text-[11.5px] text-zk-muted">{(shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}</span>
+                  <span className="text-[11.5px] text-zk-muted">
+                    {shiftTypesLoading ? "載入緊…" : (shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}
+                  </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">

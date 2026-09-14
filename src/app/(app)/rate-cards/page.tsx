@@ -48,6 +48,7 @@ interface BrokerRow {
   id: string;
   code: string;
   name: string;
+  status?: string;
 }
 interface GuardRow {
   id: string;
@@ -115,26 +116,24 @@ export default function RateCardsPage() {
 
   useEffect(() => {
     (async () => {
-      const [siteRes, brokerRes, guardRes] = await Promise.all([
+      // M2（Opus 驗收修復）：更別欄舊版淨係喺揀咗盤先 load 一個 site
+      // 嘅 shift-types（原本掛喺 form.site_id 嘅 useEffect），令列表 255
+      // 行全部搵唔到、一律顯示「通用」。改為入頁一次攞晒（take=500），
+      // 前端按 id 對；雞頭欄同理，`/api/brokers` 帶 `include_inactive=1`
+      // （API 已有呢個唯讀參數，additive），先可以分辨「通用」（broker_id
+      // 為 null）同「指向咗一個已停用嘅雞頭」。
+      const [siteRes, brokerRes, guardRes, shiftTypeRes] = await Promise.all([
         apiGet<ApiListResult<SiteRow>>("/api/sites?take=500"),
-        apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
+        apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500&include_inactive=1"),
         apiGet<ApiListResult<GuardRow>>("/api/guards?take=500"),
+        apiGet<ApiListResult<ShiftTypeRow>>("/api/shift-types?take=500"),
       ]);
       if (siteRes.ok) setSites(siteRes.data.rows);
       if (brokerRes.ok) setBrokers(brokerRes.data.rows);
       if (guardRes.ok) setGuards(guardRes.data.rows);
+      if (shiftTypeRes.ok) setShiftTypes(shiftTypeRes.data.rows);
     })();
   }, []);
-
-  useEffect(() => {
-    if (!form.site_id) {
-      setShiftTypes([]);
-      return;
-    }
-    apiGet<ApiListResult<ShiftTypeRow>>(`/api/shift-types?site_id=${form.site_id}&take=500`).then((res) => {
-      if (res.ok) setShiftTypes(res.data.rows);
-    });
-  }, [form.site_id]);
 
   function siteLabel(id: string): string {
     return sites.find((s) => s.id === id)?.canonical_name ?? id.slice(0, 8);
@@ -151,6 +150,36 @@ export default function RateCardsPage() {
     if (!id) return "通用";
     const g = guards.find((x) => x.id === id);
     return g ? g.name_zh : id.slice(0, 8);
+  }
+
+  // M2（Opus 驗收修復）：`shift_type_id`/`broker_id` 為 null 先真係「通
+  // 用」；非 null 但喺已載入嘅名單搵唔到（例如更別已被刪、雞頭理論上唔
+  // 應該會刪）就顯示 id 首 8 位＋灰色，唔准當成「通用」誤導。
+  function renderShiftTypeCell(shiftTypeId?: string | null) {
+    if (!shiftTypeId) return <Pill variant="neutral">通用</Pill>;
+    const st = shiftType(shiftTypeId);
+    if (st) {
+      return (
+        <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+          {st.code}
+        </Pill>
+      );
+    }
+    return <span className="text-zk-faint">{shiftTypeId.slice(0, 8)}</span>;
+  }
+
+  function renderBrokerCell(brokerId?: string | null) {
+    if (!brokerId) return <span>通用</span>;
+    const b = broker(brokerId);
+    if (b) {
+      return (
+        <Pill variant="broker" color={brokerColor(b.code)}>
+          {b.name}
+          {b.status === "inactive" ? "（已停用）" : ""}
+        </Pill>
+      );
+    }
+    return <span className="text-zk-faint">{brokerId.slice(0, 8)}</span>;
   }
 
   function openCreate() {
@@ -278,29 +307,11 @@ export default function RateCardsPage() {
                   </tr>
                 )}
                 {rows.map((r) => {
-                  const st = shiftType(r.shift_type_id);
-                  const b = broker(r.broker_id);
                   return (
                     <tr key={r.id} className={`${tableCls.rowHover} ${r.voided_at ? "opacity-45" : ""}`}>
                       <td className={`${tableCls.td} font-medium`}>{siteLabel(r.site_id)}</td>
-                      <td className={tableCls.td}>
-                        {st ? (
-                          <Pill variant="broker" color={shiftCodeStyle(st.code)}>
-                            {st.code}
-                          </Pill>
-                        ) : (
-                          <Pill variant="neutral">通用</Pill>
-                        )}
-                      </td>
-                      <td className={tableCls.td}>
-                        {b ? (
-                          <Pill variant="broker" color={brokerColor(b.code)}>
-                            {b.name}
-                          </Pill>
-                        ) : (
-                          "通用"
-                        )}
-                      </td>
+                      <td className={tableCls.td}>{renderShiftTypeCell(r.shift_type_id)}</td>
+                      <td className={tableCls.td}>{renderBrokerCell(r.broker_id)}</td>
                       <td className={tableCls.td}>{guardLabel(r.guard_id)}</td>
                       <td className={tableCls.tdNum}>{hasClientRate ? fmtMoney(r.client_rate) : "—"}</td>
                       <td className={tableCls.tdNum}>{hasPayoutRate ? fmtMoney(r.payout_rate) : "—"}</td>
@@ -331,8 +342,6 @@ export default function RateCardsPage() {
 
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => {
-              const st = shiftType(r.shift_type_id);
-              const b = broker(r.broker_id);
               return (
                 <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
@@ -340,18 +349,8 @@ export default function RateCardsPage() {
                     <span className="text-[13px] tabular-nums text-zk-text">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</span>
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
-                    {st ? (
-                      <Pill variant="broker" color={shiftCodeStyle(st.code)}>
-                        {st.code}
-                      </Pill>
-                    ) : (
-                      <Pill variant="neutral">通用</Pill>
-                    )}
-                    {b && (
-                      <Pill variant="broker" color={brokerColor(b.code)}>
-                        {b.name}
-                      </Pill>
-                    )}
+                    {renderShiftTypeCell(r.shift_type_id)}
+                    {r.broker_id && renderBrokerCell(r.broker_id)}
                     <span>{guardLabel(r.guard_id)}</span>
                   </div>
                   <div className="mt-1 text-[11.5px] text-zk-muted">
@@ -401,23 +400,31 @@ export default function RateCardsPage() {
             </select>
           </Field>
           <Field label="更別" hint="留空＝通用">
+            {/* M2：shiftTypes 而家係全站一次 load（唔再逐 site 攞），
+                揀盤入面淨係揀返呢個 site_id 底下嘅更別。 */}
             <select className={selectCls} value={form.shift_type_id} onChange={(e) => setForm((f) => ({ ...f, shift_type_id: e.target.value }))}>
               <option value="">（通用）</option>
-              {shiftTypes.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code}
-                </option>
-              ))}
+              {shiftTypes
+                .filter((s) => s.site_id === form.site_id)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.code}
+                  </option>
+                ))}
             </select>
           </Field>
           <Field label="雞頭" hint="留空＝通用">
+            {/* M2：brokers 而家包含 inactive（顯示用）——新增/揀價目淨
+                係俾揀有效雞頭，已停用嘅唔應該再畀人新配。 */}
             <select className={selectCls} value={form.broker_id} onChange={(e) => setForm((f) => ({ ...f, broker_id: e.target.value }))}>
               <option value="">（通用）</option>
-              {brokers.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
+              {brokers
+                .filter((b) => b.status !== "inactive")
+                .map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
             </select>
           </Field>
           <Field label="保安員" hint="留空＝通用">

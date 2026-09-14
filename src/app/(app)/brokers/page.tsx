@@ -1,9 +1,12 @@
 "use client";
 // P2-A：雞頭管理頁（README §09）——換皮，邏輯／API 呼叫全部保留。
-// 「人數」「掛邊啲盤」兩欄係純前端計出嚟：人數＝/api/guards 入面
-// default_broker_id 等於呢個雞頭嘅個數；掛邊啲盤＝
-// /api/referral-fee-rates 入面呢個雞頭有 site_id 嘅費率行（去重）——
-// 兩個都係現有 GET endpoint，冇加任何新 API／權限。
+// 「人數」欄係純前端計出嚟：/api/guards 入面 default_broker_id 等於呢
+// 個雞頭嘅個數。
+// M3（Opus 驗收修復）：「掛邊啲盤」舊版用 /api/referral-fee-rates（呢個
+// 表係「幾錢」，唔係「邊個盤有份」，一個雞頭可以喺冇費率行嘅盤都有份）
+// 改用真正代表「邊個雞頭喺邊個盤邊個月有份」嘅
+// GET /api/broker-site-assignments（已存在，配額前身白名單），按當月
+// （currentMonthStr()）過濾，加月份 FilterChip 俾人揀返第啲月。
 import { useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
@@ -11,10 +14,11 @@ import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney } from "@/lib/ui/format";
+import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 
 const BROKER_KINDS = ["broker", "internal_cash", "internal_longterm", "external", "special"] as const;
@@ -58,6 +62,12 @@ interface GuardRow {
   id: string;
   default_broker_id?: string | null;
 }
+interface BrokerSiteAssignmentRow {
+  id: string;
+  broker_id: string;
+  site_id: string;
+  month: string;
+}
 
 const emptyFeeRateForm = { site_id: "", month: "", fee_per_shift: "" };
 
@@ -96,9 +106,12 @@ export default function BrokersPage() {
   const [feeRateFormError, setFeeRateFormError] = useState<string | null>(null);
   const [feeRateSaving, setFeeRateSaving] = useState(false);
 
-  // README §09「人數」「掛邊邊啲盤」——全公司安員／全部費率行各載一次。
+  // README §09「人數」——全公司安員載一次前端數。
   const [guardCountByBroker, setGuardCountByBroker] = useState<Record<string, number>>({});
-  const [sitesByBroker, setSitesByBroker] = useState<Record<string, string[]>>({});
+  // M3：「掛邊啲盤」改用 broker_site_assignments（一次過攞晒，前端按
+  // 月份 FilterChip 篩）。
+  const [assignments, setAssignments] = useState<BrokerSiteAssignmentRow[]>([]);
+  const [month, setMonth] = useState(currentMonthStr());
 
   async function load() {
     setLoading(true);
@@ -127,14 +140,8 @@ export default function BrokersPage() {
       }
       setGuardCountByBroker(counts);
     });
-    apiGet<ApiListResult<ReferralFeeRateRow>>("/api/referral-fee-rates?take=500").then((res) => {
-      if (!res.ok) return;
-      const map: Record<string, Set<string>> = {};
-      for (const r of res.data.rows) {
-        if (!r.site_id || r.voided_at) continue;
-        (map[r.broker_id] ??= new Set()).add(r.site_id);
-      }
-      setSitesByBroker(Object.fromEntries(Object.entries(map).map(([k, v]) => [k, Array.from(v)])));
+    apiGet<ApiListResult<BrokerSiteAssignmentRow>>("/api/broker-site-assignments?take=500").then((res) => {
+      if (res.ok) setAssignments(res.data.rows);
     });
   }, []);
 
@@ -144,7 +151,11 @@ export default function BrokersPage() {
   }
 
   function sitesLabel(brokerId: string): string {
-    const ids = sitesByBroker[brokerId] ?? [];
+    const ids = Array.from(
+      new Set(
+        assignments.filter((a) => a.broker_id === brokerId && a.month.slice(0, 7) === month).map((a) => a.site_id),
+      ),
+    );
     if (ids.length === 0) return "—";
     return ids.map((id) => sites.find((s) => s.id === id)?.canonical_name ?? id.slice(0, 8)).join("、");
   }
@@ -299,7 +310,7 @@ export default function BrokersPage() {
       setError(res.message);
       return;
     }
-    setNotice("已作廢");
+    setNotice("已停用");
     await load();
   }
 
@@ -314,18 +325,25 @@ export default function BrokersPage() {
     await load();
   }
 
-  const colCount = 7;
+  // S2：加返「需要審批」欄（README 冇逐個列，但 base 有，丟咗會少
+  // 資料）——7 欄變 8 欄。
+  const colCount = 8;
 
   return (
     <div className="space-y-4">
       <PageHeader
         kicker="主檔"
         title="雞頭"
-        subtitle="每行「介紹費率」開返嗰個雞頭嘅逐盤逐月費率子表。"
+        subtitle="每行「介紹費率」開返嗰個雞頭嘅逐盤逐月費率子表；「掛邊啲盤」按下面月份 FilterChip 嘅月睇。"
         actions={
-          <Button variant="primary" onClick={openCreate}>
-            新增雞頭
-          </Button>
+          <>
+            <FilterChip label="月份">
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </FilterChip>
+            <Button variant="primary" onClick={openCreate}>
+              新增雞頭
+            </Button>
+          </>
         }
       />
 
@@ -347,6 +365,7 @@ export default function BrokersPage() {
                   <th className={tableCls.th}>種類</th>
                   <th className={tableCls.thNum}>人數</th>
                   <th className={tableCls.th}>掛邊啲盤</th>
+                  <th className={tableCls.th}>需要審批</th>
                   <th className={tableCls.th}>狀態</th>
                   <th className={tableCls.th}>操作</th>
                 </tr>
@@ -368,7 +387,10 @@ export default function BrokersPage() {
                     <td className={tableCls.td}>{kindPill(r.kind)}</td>
                     <td className={tableCls.tdNum}>{guardCountByBroker[r.id] ?? 0}</td>
                     <td className={tableCls.tdMuted}>{sitesLabel(r.id)}</td>
-                    <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">{r.status}</Pill>}</td>
+                    <td className={tableCls.td}>
+                      {r.requires_approval ? <Pill variant="warning">需要</Pill> : <Pill variant="neutral">唔使</Pill>}
+                    </td>
+                    <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}</td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
@@ -390,7 +412,7 @@ export default function BrokersPage() {
                             恢復
                           </button>
                         ) : (
-                          <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
+                          <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                         )}
                       </div>
                     </td>
@@ -412,7 +434,8 @@ export default function BrokersPage() {
                 <div className="mt-1 text-[11.5px] text-zk-muted">{sitesLabel(r.id)}</div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {kindPill(r.kind)}
-                  {r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">{r.status}</Pill>}
+                  {r.requires_approval ? <Pill variant="warning">需要審批</Pill> : <Pill variant="neutral">唔使審批</Pill>}
+                  {r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
@@ -426,7 +449,7 @@ export default function BrokersPage() {
                       恢復
                     </button>
                   ) : (
-                    <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
+                    <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                   )}
                 </div>
               </div>

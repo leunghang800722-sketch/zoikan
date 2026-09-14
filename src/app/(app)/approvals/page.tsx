@@ -156,7 +156,11 @@ export default function ApprovalsPage() {
     return <Pill variant="shift">新排更</Pill>;
   }
 
-  const colCount = 6;
+  // P2-A 驗收修復：頭列實際係 7 欄（日期/盤/更別/保安員/類型/雞頭/操
+  // 作）——原本寫死 6，令 tableMinWidth() 算窄咗、要靠落面 colSpan
+  // 「+1」補返，兩個問題一齊執:colCount 改返啱數，colSpan 直接用
+  // colCount（唔再 +1）。
+  const colCount = 7;
 
   return (
     <div className="space-y-4">
@@ -208,7 +212,7 @@ export default function ApprovalsPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount + 1}>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
                       載入緊…
                     </td>
                   </tr>
