@@ -72,8 +72,8 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
   const [data, setData] = useState<Result | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // M2：`?broker=` 預覽分支而家要求「收客價:view」（主管出廠冇）——
-  // 403 唔顯示通用紅色 Banner，改用專門嘅 Notice 講明係咩原因。
+  // 預覽分支 403（例如日後老闆收走某角色嘅「出街價」權）——唔顯示通用
+  // 紅色 Banner，改用專門嘅 Notice 講明係咩原因。
   const [forbiddenPreview, setForbiddenPreview] = useState(false);
 
   // 內部角色：入頁一次（mount）攞雞頭清單俾 select 用；URL 已經帶
@@ -142,9 +142,9 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
         }
       />
 
-      {/* M2：冇「收客價」權限（例如主管出廠設定）嘅內部角色——顯示專門
-          嘅 warning Notice，唔顯示雞頭 select（揀咗都係照 403）。 */}
-      {!isBroker && forbiddenPreview && <Notice variant="warning">你嘅角色暫時唔可以預覽雞頭應收——需要「收客價」權限，請聯絡老闆開放。</Notice>}
+      {/* 冇「出街價」權限嘅內部角色——顯示專門嘅 warning Notice，唔顯示
+          雞頭 select（揀咗都係照 403）。老闆 2026-09-15 拍板主管可以預覽。 */}
+      {!isBroker && forbiddenPreview && <Notice variant="warning">你嘅角色暫時唔可以預覽雞頭應收——需要「出街價」權限，請聯絡老闆開放。</Notice>}
 
       {!isBroker && !forbiddenPreview && (
         <Notice

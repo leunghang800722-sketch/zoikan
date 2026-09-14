@@ -26,6 +26,7 @@ import AsyncExitHook from "async-exit-hook";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { seedRolesPermissionsMatrix } from "../src/lib/rbac/seed";
+import { ensureAiRole, AI_RO_ROLE } from "../scripts/db/ensure-ai-role";
 import { TEST_USER_SLOTS, TEST_USER_TEL, TEST_USER_PASSWORD, roleNameForSlot } from "./fixtures/test-users";
 
 // port/dir 可以由環境變數覆蓋——`tests/exit-code-regression.test.ts` 要
@@ -59,6 +60,19 @@ export default async function setup() {
   process.env.DATABASE_URL = DATABASE_URL;
   // P1-WP2：session cookie 加密密碼，測試用固定值（≥32 字符），唔係真密碼。
   process.env.SESSION_SECRET = "test-only-session-secret-do-not-use-in-prod-xyz";
+
+  // 2026-09-15：AI 助手嘅唯讀 pool（`src/lib/ai/db.ts`）讀 `AI_DATABASE_URL`——
+  // 以前冇喺呢度設，worker 見唔到（.env 唔會自動入 process.env），AI 工具 test
+  // 要靠環境碰巧先過，而且就算有都係打 dev DB 而唔係 fixture。而家喺
+  // zoikan_test 建返 `zoikan_ai_ro` 角色（同正式站 ensure-ai-role 同一段
+  // code，只 SELECT `ai` schema、read-only session）並指過去，AI 工具 test
+  // 全部查 fixture 數據。密碼係測試用固定值，唔係任何真環境嘅密碼。
+  const TEST_AI_PASSWORD = "test-ai-ro-password-0123456789";
+  await ensureAiRole({ databaseUrl: DATABASE_URL, password: TEST_AI_PASSWORD });
+  const aiUrl = new URL(DATABASE_URL);
+  aiUrl.username = AI_RO_ROLE;
+  aiUrl.password = TEST_AI_PASSWORD;
+  process.env.AI_DATABASE_URL = aiUrl.toString();
 
   // P1-WP2：RBAC 矩陣（roles/permissions/role_permissions）+ 6 個固定假
   // 測試帳號，成個 test run 淨係種一次（唔喺 clearAll() 度刪）——原因見
