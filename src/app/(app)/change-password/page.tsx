@@ -1,60 +1,14 @@
-"use client";
-import { useState } from "react";
-import { apiPost } from "@/lib/ui/api-client";
-import { Banner } from "@/components/ui/Banner";
-import { Field, inputCls, btnPrimary } from "@/components/ui/Field";
+// P2-C：改密碼頁（README §20）——頂資訊橫幅（藍）「首次登入請先設定新
+// 密碼。」只喺 `session.mustChangePwd` 為 true 先顯示；呢個 flag 之前
+// 淨係 `(app)/layout.tsx` 讀去驅動 `MustChangePwdGate`（跳轉用），呢頁
+// 本身冇讀過。改做 server component 直接攞 session（同首頁 `page.tsx`
+// 一樣做法，唯讀，冇改 API），再傳落去 client 表單 component。
+import { redirect } from "next/navigation";
+import { getCurrentSession } from "@/lib/auth/current-session";
+import { ChangePasswordForm } from "./ChangePasswordForm";
 
-export default function ChangePasswordPage() {
-  const [oldPassword, setOldPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (loading) return;
-    setMessage(null);
-    setLoading(true);
-    const res = await apiPost("/api/auth/change-password", { old_password: oldPassword, new_password: newPassword });
-    setLoading(false);
-    if (!res.ok) {
-      setMessage({ kind: "error", text: res.message });
-      return;
-    }
-    setMessage({ kind: "success", text: "密碼已更新" });
-    setOldPassword("");
-    setNewPassword("");
-  }
-
-  return (
-    <div className="max-w-md space-y-4">
-      <h1 className="text-lg font-semibold text-gray-900">改密碼</h1>
-      <form onSubmit={onSubmit} className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
-        <Banner kind={message?.kind ?? "info"} message={message?.text ?? null} />
-        <Field label="舊密碼">
-          <input
-            type="password"
-            className={inputCls}
-            value={oldPassword}
-            onChange={(e) => setOldPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-          />
-        </Field>
-        <Field label="新密碼" hint="管理角色（老闆/主管/會計）要求至少 8 字符，含字母同數字">
-          <input
-            type="password"
-            className={inputCls}
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            autoComplete="new-password"
-            required
-          />
-        </Field>
-        <button type="submit" disabled={loading} className={btnPrimary}>
-          {loading ? "更新中…" : "更新密碼"}
-        </button>
-      </form>
-    </div>
-  );
+export default async function ChangePasswordPage() {
+  const session = await getCurrentSession();
+  if (!session) redirect("/login");
+  return <ChangePasswordForm mustChangePwd={session.mustChangePwd} />;
 }

@@ -1,11 +1,22 @@
 "use client";
+// P2-C：用戶管理版面重新實作（README §16）——欄：名／電話／角色 pill／
+// 掛邊個／最後登入／狀態（啟用 綠／待啟用 橙＝從未登入／停用）／操作
+// 重設密碼・停用。新增／編輯／停用（void/unvoid）流程本身唔變，淨係
+// 換晒 UI 皮；「重設密碼」呢粒掣之前完全冇對應 endpoint，補咗一個
+// additive 嘅 `POST /api/users/:id/reset-password`（見嗰個 route 檔
+// 頂註解）——用返現有「用戶管理:update」權限，冇加新 permission。
 import { useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
+import { Notice } from "@/components/ui/Notice";
 import { Drawer } from "@/components/ui/Drawer";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
-import { fmt, uiLabel } from "@/lib/ui/format";
+import { fmt, fmtDateTime, uiLabel } from "@/lib/ui/format";
 
 interface UserRow {
   id: string;
@@ -17,10 +28,12 @@ interface UserRow {
   payout_approval_limit?: string | number | null;
   allowed_ip?: string | null;
   status: string;
+  last_login_at?: string | null;
 }
 interface RoleRow {
   id: string;
   name: string;
+  base_role: string;
 }
 interface BrokerRow {
   id: string;
@@ -39,6 +52,23 @@ const emptyForm = {
   allowed_ip: "",
 };
 
+// README「共用元件 · pill」：老闆 紫（monthly variant 同色）；雞頭 青
+// （broker variant + 自訂色）；其餘（主管/會計/保安員/自訂角色）灰。用
+// `base_role` 而唔係 `name` 判斷，自訂角色（例如「夜班主管」複製自
+// 「主管」）都跟返源頭角色嘅色。
+function RolePill({ roleName, baseRole }: { roleName: string; baseRole: string }) {
+  const label = uiLabel(roleName);
+  if (baseRole === "老闆") return <Pill variant="monthly">{label}</Pill>;
+  if (baseRole === "雞頭") return <Pill variant="broker" color={{ bg: "#ccfbf1", fg: "#0f766e" }}>{label}</Pill>;
+  return <Pill variant="neutral">{label}</Pill>;
+}
+
+function statusPill(row: UserRow): React.ReactNode {
+  if (row.status === "inactive") return <Pill variant="neutral">停用</Pill>;
+  if (!row.last_login_at) return <Pill variant="warning">待啟用</Pill>;
+  return <Pill variant="success">啟用</Pill>;
+}
+
 export default function UsersPage() {
   const [rows, setRows] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
@@ -52,6 +82,11 @@ export default function UsersPage() {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // 「重設密碼」二次確認 ＋ 一次性顯示臨時密碼（見頂註解）。
+  const [confirmResetId, setConfirmResetId] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetResult, setResetResult] = useState<{ name: string; password: string } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -76,8 +111,14 @@ export default function UsersPage() {
     load();
   }, []);
 
-  function roleLabel(id: string): string {
-    return roles.find((r) => r.id === id)?.name ?? id.slice(0, 8);
+  function roleOf(id: string): RoleRow | undefined {
+    return roles.find((r) => r.id === id);
+  }
+
+  function brokerLabel(id: string | null | undefined): string {
+    if (!id) return "—";
+    const b = brokers.find((x) => x.id === id);
+    return b ? `${b.name}（${b.code}）` : "—";
   }
 
   function openCreate() {
@@ -169,73 +210,139 @@ export default function UsersPage() {
     await load();
   }
 
+  async function onResetPassword(row: UserRow) {
+    setResetting(true);
+    setError(null);
+    const res = await apiPost<{ temp_password: string }>(`/api/users/${row.id}/reset-password`);
+    setResetting(false);
+    setConfirmResetId(null);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    setResetResult({ name: row.name, password: res.data.temp_password });
+    await load();
+  }
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">用戶管理</h1>
-          <p className="text-sm text-gray-500">建立登入帳號、指派角色。</p>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        kicker="系統"
+        title="用戶管理"
+        subtitle="帳號列表；重設密碼會強制對方下次登入改密碼。"
+        actions={
+          <Button variant="primary" onClick={openCreate} data-testid="user-create-button">
+            新增用戶
+          </Button>
+        }
+      />
+
+      {error && <Notice variant="error">{error}</Notice>}
+      {notice && <Notice variant="info">{notice}</Notice>}
+      {resetResult && (
+        <div data-testid="user-reset-password-result">
+          <Notice
+            variant="info"
+            action={
+              <button type="button" onClick={() => setResetResult(null)} className="text-[12px] font-semibold text-zk-primary">
+                知道了
+              </button>
+            }
+          >
+            已重設「{resetResult.name}」嘅密碼，臨時密碼：<strong className="font-mono">{resetResult.password}</strong>
+            ——請盡快通知佢，離開此頁後將唔會再顯示，佢下次登入會被要求即時設定新密碼。
+          </Notice>
         </div>
-        <button type="button" onClick={openCreate} className={btnPrimary}>
-          新增
-        </button>
-      </div>
+      )}
 
-      <Banner kind="error" message={error} />
-      <Banner kind="success" message={notice} />
-
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
+      <div className={tableCls.wrap}>
+        <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
+          <thead>
             <tr>
-              <th className="px-3 py-2">姓名</th>
-              <th className="px-3 py-2">電話</th>
-              <th className="px-3 py-2">角色</th>
-              <th className="px-3 py-2">狀態</th>
-              <th className="px-3 py-2">操作</th>
+              <th className={tableCls.th}>名</th>
+              <th className={tableCls.th}>電話</th>
+              <th className={tableCls.th}>角色</th>
+              <th className={tableCls.th}>掛邊個</th>
+              <th className={tableCls.th}>最後登入</th>
+              <th className={tableCls.th}>狀態</th>
+              <th className={tableCls.thNum}>操作</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={5}>
+                <td className="px-3.5 py-4 text-zk-faint" colSpan={7}>
                   載入緊…
                 </td>
               </tr>
             )}
             {!loading && rows.length === 0 && (
               <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={5}>
-                  暫時冇資料
+                <td colSpan={7}>
+                  <EmptyState title="暫時冇用戶" description="撳右上「新增用戶」開第一個登入帳號。" />
                 </td>
               </tr>
             )}
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-gray-100">
-                <td className="px-3 py-2 font-medium text-gray-900">{r.name}</td>
-                <td className="px-3 py-2">{fmt(r.tel)}</td>
-                <td className="px-3 py-2">{roleLabel(r.role_id)}</td>
-                <td className="px-3 py-2">{r.status}</td>
-                <td className="px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50">
-                      編輯
-                    </button>
-                    {r.status === "inactive" ? (
-                      <button
-                        type="button"
-                        onClick={() => onUnvoid(r.id)}
-                        className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50"
-                      >
-                        恢復
+            {rows.map((r) => {
+              const role = roleOf(r.role_id);
+              return (
+                <tr key={r.id} data-testid="user-row" className={tableCls.rowHover}>
+                  <td className={`${tableCls.td} font-medium`}>{r.name}</td>
+                  <td className={tableCls.td}>{fmt(r.tel)}</td>
+                  <td className={tableCls.td}>
+                    {role ? <RolePill roleName={role.name} baseRole={role.base_role} /> : <span className="text-zk-faint">—</span>}
+                  </td>
+                  <td className={tableCls.td}>{brokerLabel(r.broker_id)}</td>
+                  <td className={`${tableCls.td} text-zk-muted`}>{r.last_login_at ? fmtDateTime(r.last_login_at) : "從未登入"}</td>
+                  <td className={tableCls.td} data-testid="user-status-pill">
+                    {statusPill(r)}
+                  </td>
+                  <td className={tableCls.tdNum}>
+                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                      <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-[9px] py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                        編輯
                       </button>
-                    ) : (
-                      <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
+                      {confirmResetId === r.id ? (
+                        <span className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            data-testid="user-reset-password-confirm"
+                            disabled={resetting}
+                            onClick={() => onResetPassword(r)}
+                            className="rounded-[5px] bg-zk-primary px-[9px] py-[3px] text-xs font-semibold text-white disabled:opacity-50"
+                          >
+                            {resetting ? "重設緊…" : "確定重設"}
+                          </button>
+                          <button type="button" onClick={() => setConfirmResetId(null)} className="rounded-[5px] px-[9px] py-[3px] text-xs text-zk-muted hover:bg-zk-header">
+                            取消
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          data-testid="user-reset-password-button"
+                          onClick={() => setConfirmResetId(r.id)}
+                          className="rounded-[5px] border border-zk-border px-[9px] py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header"
+                        >
+                          重設密碼
+                        </button>
+                      )}
+                      {r.status === "inactive" ? (
+                        <button
+                          type="button"
+                          onClick={() => onUnvoid(r.id)}
+                          className="rounded-[5px] border border-[#a7f3d0] px-[9px] py-[3px] text-xs text-[#047857] hover:bg-[#ecfdf5]"
+                        >
+                          恢復
+                        </button>
+                      ) : (
+                        <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

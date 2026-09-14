@@ -19,6 +19,10 @@ export type AuditAction =
   | "lock_month"
   | "unlock_month"
   | "permission_denied"
+  // P2-C §16：用戶管理「重設密碼」——之前呢個 module 淨係有 create/
+  // update/void/unvoid，冇對稱嘅「幫用戶開返新密碼」action，見
+  // src/app/api/users/[id]/reset-password/route.ts。
+  | "reset_password"
   // WP-AI1：AI 助手——每條問答一條（table_name="ai_chat"）；guard
   // 觸發（輸出過濾攔截咗一個似係改動指示/DML 嘅回覆）額外多一條。
   | "ai_chat"
