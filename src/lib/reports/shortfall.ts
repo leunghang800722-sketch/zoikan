@@ -15,7 +15,13 @@ export type ShortfallSiteRow = {
 export type ShortfallResult = {
   date: string;
   today: ShortfallSiteRow[];
+  /** 本月（呢個 date 所屬月份）嘅待審批數——同首頁 KPI 副行「本月 X」口徑。 */
   pendingApprovalCount: number;
+  /** P2 整合驗收應修③：additive 欄位——全部未審批數（唔篩月份），同
+   * `/approvals` 頁／`(app)/layout.tsx` 側欄 badge 同一口徑（見嗰邊
+   * 「R1 驗收修正」註解：嗰兩處刻意唔篩月份）。首頁 KPI 大數改用呢個
+   * （見 `ShortfallDashboard.tsx`），避免同側欄 badge 數字對唔上。 */
+  pendingApprovalTotal: number;
   monthProgress: {
     month: string;
     revenue: number;
@@ -63,6 +69,7 @@ export async function buildShortfall(date: Date): Promise<ShortfallResult> {
   const pendingApprovalCount = await prisma.shiftRecord.count({
     where: { status: "pending_approval", workDate: { gte: MONTH_START, lte: MONTH_END } },
   });
+  const pendingApprovalTotal = await prisma.shiftRecord.count({ where: { status: "pending_approval" } });
 
   const margin = await buildGrossMargin(month);
   const belowThresholdSiteCount = margin.sites.filter((s) => s.belowThreshold).length;
@@ -71,6 +78,7 @@ export async function buildShortfall(date: Date): Promise<ShortfallResult> {
     date: dayStart.toISOString().slice(0, 10),
     today: today.sort((a, b) => b.shortfall - a.shortfall),
     pendingApprovalCount,
+    pendingApprovalTotal,
     monthProgress: {
       month: monthLabel(month),
       revenue: margin.totals.revenue,

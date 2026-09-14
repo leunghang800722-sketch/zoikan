@@ -140,6 +140,37 @@ test.describe("手機版佈局（375×812）", () => {
     overflow = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
     expect(overflow).toBe(true);
   });
+
+  // P2 整合驗收應修④：手機更表頁以前有雙層頁首——全站頂欄（`MobileNav`
+  // 53px）＋更表自己嘅頁首（66px）疊埋一齊。跟原型，`< lg` 底下
+  // `/roster/[site]/[month]` 呢個 route 而家完全唔 render 全站頂欄（連
+  // 漢堡都冇），淨係得更表自己嗰個頁首。
+  test("(g) 手機更表頁冇雙層頁首——全站頂欄漢堡唔顯示，淨係得更表自己嘅頁首", async ({ page }) => {
+    const siteId = await findSiteIdByName("啟航1331");
+    await loginAs(page, "老闆");
+
+    // 對照組：更表「索引」頁（`/roster`，冇 site/month）唔受影響，全站
+    // 頂欄照常顯示。
+    await page.goto("/roster");
+    await expect(page.getByTestId("mobile-nav-hamburger")).toBeVisible();
+
+    await page.goto(`/roster/${siteId}/2026-07`);
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("mobile-nav-hamburger")).toHaveCount(0);
+
+    // 更表自己嘅頁首要貼實螢幕頂（y≈0），冇被一個已經冧咗嘅全站頂欄再
+    // 讓落嚟。
+    const header = page.getByTestId("roster-mobile-header");
+    await expect(header).toBeVisible();
+    const box = await header.boundingBox();
+    expect(box).toBeTruthy();
+    expect(box!.y).toBeLessThanOrEqual(1);
+
+    await shot(page, "roster-page-single-header.png");
+    await page.screenshot({
+      path: "/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/p1-fix/mobile-375-roster-header.png",
+    });
+  });
 });
 
 test.describe("桌面版回歸（1280×800）", () => {

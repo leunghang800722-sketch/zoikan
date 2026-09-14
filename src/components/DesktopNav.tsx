@@ -9,11 +9,14 @@
 // R1 驗收修正：斷點由 `md`（768）改 `lg`（1024）——README「桌面外殼
 // （≥ 1024px）」／「手機外殼（375px）」中間嗰段（768–1023px）設計上
 // 都算「手機外殼」（漢堡＋抽屜），呢個 `<aside>` 淨係喺 `≥ lg` 先顯示。
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { NavGroup } from "@/lib/rbac/nav";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isLinkActive } from "@/lib/ui/nav-active";
+// P2 整合驗收①：全部連結改用 `GuardedLink`（唔係原生 `next/link`）——更表
+// 編輯器有未儲存改動時撳呢度任何連結，會經 `unsaved-guard` store 問一句
+// 先跳（見 `@/components/ui/GuardedLink`）。
+import { GuardedLink } from "@/components/ui/GuardedLink";
 
 function initials(name: string): string {
   return name.trim().slice(0, 2);
@@ -48,7 +51,7 @@ export function DesktopNav({
                 const active = isLinkActive(pathname, l.href);
                 const badge = badges[l.href];
                 return (
-                  <Link
+                  <GuardedLink
                     key={l.href}
                     href={l.href}
                     className={`flex items-center justify-between rounded-md px-2 py-[7px] text-[13.5px] ${
@@ -59,7 +62,7 @@ export function DesktopNav({
                     {!!badge && (
                       <span className="rounded-[9px] bg-[#fee2e2] px-1.5 py-px text-[10.5px] font-semibold text-[#b91c1c]">{badge}</span>
                     )}
-                  </Link>
+                  </GuardedLink>
                 );
               })}
             </div>
@@ -76,9 +79,9 @@ export function DesktopNav({
           <div className="flex items-center gap-1.5 text-[11px] text-zk-muted">
             <span>{roleLabel}</span>
             <span>·</span>
-            <Link href="/change-password" className="text-zk-primary">
+            <GuardedLink href="/change-password" className="text-zk-primary">
               改密碼
-            </Link>
+            </GuardedLink>
             <span>·</span>
             <LogoutButton className="p-0 text-[11px] font-normal text-zk-muted underline-offset-2 hover:text-zk-text-secondary hover:underline" />
           </div>

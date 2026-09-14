@@ -20,11 +20,20 @@
 // 顯示文字／badge 數字呢啲數據由嗰邊 fetch 好再傳落嚟，呢個 component
 // 淨係管抽屜開關嘅 client state。
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isLinkActive } from "@/lib/ui/nav-active";
 import type { NavGroup } from "@/lib/rbac/nav";
+// P2 整合驗收①：連結全部改用 `GuardedLink`——更表有未儲存改動時撳抽屜
+// 連結會經 `unsaved-guard` store 問一句先跳（`GuardedLink` 內部處理）。
+import { GuardedLink } from "@/components/ui/GuardedLink";
+
+// P2 整合驗收④：跟原型，更表編輯器（`/roster/<site>/<month>`）自己有專屬
+// 手機頁首（見 `RosterEditor.tsx` compact 頁首），唔要呢個全站頂欄再疊一
+// 層（雙層頁首、53px＋66px），所以呢個 route 底下 `< lg` 完全唔 render
+// 呢個 component（連漢堡都冇）。淨係更表「索引」頁（`/roster`，冇
+// site/month path segment）唔受影響，照常顯示全站頂欄。
+const ROSTER_EDITOR_PATH = /^\/roster\/[^/]+\/[^/]+$/;
 
 function initials(name: string): string {
   return name.trim().slice(0, 2);
@@ -58,6 +67,8 @@ export function MobileNav({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open]);
+
+  if (ROSTER_EDITOR_PATH.test(pathname ?? "")) return null;
 
   return (
     <div className="lg:hidden">
@@ -112,7 +123,7 @@ export function MobileNav({
                       const active = isLinkActive(pathname, l.href);
                       const badge = badges[l.href];
                       return (
-                        <Link
+                        <GuardedLink
                           key={l.href}
                           href={l.href}
                           onClick={() => setOpen(false)}
@@ -124,7 +135,7 @@ export function MobileNav({
                           {!!badge && (
                             <span className="rounded-[9px] bg-[#fee2e2] px-1.5 py-px text-[10.5px] font-semibold text-[#b91c1c]">{badge}</span>
                           )}
-                        </Link>
+                        </GuardedLink>
                       );
                     })}
                   </div>
@@ -133,9 +144,9 @@ export function MobileNav({
             </nav>
 
             <div className="flex flex-col gap-0.5 border-t border-zk-border pt-3">
-              <Link href="/change-password" onClick={() => setOpen(false)} className="rounded-md px-2 py-2.5 text-[14px] text-zk-primary">
+              <GuardedLink href="/change-password" onClick={() => setOpen(false)} className="rounded-md px-2 py-2.5 text-[14px] text-zk-primary">
                 改密碼
-              </Link>
+              </GuardedLink>
               <LogoutButton className="rounded-md px-2 py-2.5 text-left text-[14px] text-zk-text-secondary" />
             </div>
           </div>

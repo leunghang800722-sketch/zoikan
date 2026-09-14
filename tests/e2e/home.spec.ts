@@ -33,6 +33,7 @@ interface ShortfallResult {
   date: string;
   today: ShortfallSiteRow[];
   pending_approval_count: number;
+  pending_approval_total: number;
   month_progress: {
     month: string;
     margin_pct: number | null;
@@ -111,9 +112,11 @@ test.describe("首頁／尚欠總覽（WP-R3）", () => {
       await expect(main.getByText("今日各盤人手足夠").first()).toBeVisible();
     }
 
-    // 待審批（本月）。
-    await expect(main.getByText("待審批（本月）").first()).toBeVisible();
-    await expect(main.getByText(String(body.pending_approval_count)).first()).toBeVisible();
+    // 待審批——P2 整合驗收應修③：KPI 大數改用 `pending_approval_total`
+    // （全部未審批，同側欄 badge／`/approvals` 頁口徑一致），唔再係
+    // `pending_approval_count`（本月）。
+    await expect(main.getByText("待審批", { exact: true }).first()).toBeVisible();
+    await expect(main.getByText(String(body.pending_approval_total)).first()).toBeVisible();
 
     // 毛利率——「本月毛利進度」大數同 API `month_progress.margin_pct`
     // 一字不漏（README：進度條數字直出，UI 冇再 round）。

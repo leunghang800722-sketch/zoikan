@@ -184,7 +184,9 @@ test("(g) 桌面：拖選 3 格 → 打 D → Enter → 三格一齊寫入", asy
 });
 
 // WP-R2 Opus 驗收 fix：清空格要有 dirty 指示（喺 <td> 層，唔喺已經消失
-// 咗嘅 chip 度）——量 computed box-shadow 有冇藍色 inset ring。
+// 咗嘅 chip 度）——量 computed box-shadow 有冇琥珀色 inset ring（P2 整合
+// 驗收應修①：dirty ring 由 `#2563eb`（同選中 outline／draft 虛線撞色）
+// 改咗做 `#f59e0b`）。
 test("(h) 桌面：清空一個原本有代號嘅格，<td> computed box-shadow 要有 dirty inset ring", async ({ page }) => {
   const siteId = await findSiteIdByName("啟航1331");
   await loginAs(page, "主管");
@@ -214,7 +216,7 @@ test("(h) 桌面：清空一個原本有代號嘅格，<td> computed box-shadow 
   await expect(cell).toHaveText("", { timeout: 10_000 });
   await expect(cell).toHaveAttribute("data-dirty", "true");
   const boxShadow = await cell.evaluate((el) => getComputedStyle(el).boxShadow);
-  expect(boxShadow).toMatch(/37,\s*99,\s*235/); // #2563eb inset ring
+  expect(boxShadow).toMatch(/245,\s*158,\s*11/); // #f59e0b inset ring
   await page.screenshot({ path: `${SCREENSHOT_DIR_FIX}/desktop-dirty-empty-cell.png` });
 });
 
@@ -271,6 +273,96 @@ test("(j) 桌面：打 RD／SH 入格，chip computed background 係固定配色
   await expect(shCell).toHaveText("SH", { timeout: 10_000 });
   const shChip = shCell.locator("span");
   await expect(shChip).toHaveCSS("background-color", "rgb(204, 251, 241)");
+});
+
+// P2 整合驗收①：更表有未儲存改動時，撳左欄任何連結（唔止 goMonth／
+// 手機「‹」）都要有 unsaved guard——之前淨係 `goMonth`／手機頁首「‹」
+// 有做（本地 `window.confirm`），`DesktopNav`／`MobileNav`／呢頁麵包屑
+// 嘅 `<Link>` 冇任何攔截，撳落去會直接 client-side 跳走、改動靜靜哋
+// 遺失（`beforeunload` 淨係擋得到成頁關閉，擋唔到呢種 App 內部導航）。
+// 而家全部經 `GuardedLink`（`@/lib/ui/unsaved-guard` 共用 store），撳
+// 左欄「首頁」應該同撳「下一月」（test (i)）一樣有 confirm。
+test("(k) 桌面：更表有未儲存改動，撳左欄「首頁」→ confirm 取消唔跳，確定先跳", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-08`);
+  await page.waitForSelector('button:has-text("複製上月")', { timeout: 20_000 });
+  await ensureRosterHasRows(page);
+
+  const cell = page.getByTestId("roster-cell-0-25");
+  await cell.click();
+  await page.keyboard.type("AL");
+  await page.keyboard.press("Enter");
+  await expect(page.getByText(/格未儲存/)).toBeVisible({ timeout: 10_000 });
+
+  const homeLink = page.locator("aside").getByRole("link", { name: "首頁", exact: true });
+
+  let dialogMessage = "";
+  page.once("dialog", (dialog) => {
+    dialogMessage = dialog.message();
+    void dialog.dismiss();
+  });
+  await homeLink.click();
+  await page.waitForTimeout(500);
+  expect(dialogMessage).toMatch(/格未儲存/);
+  expect(page.url()).toContain(`/roster/${siteId}/2026-08`);
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await homeLink.click();
+  await page.waitForURL((u) => u.pathname === "/", { timeout: 15_000 });
+});
+
+// P2 整合驗收②：桌面（≥1024）助手面板開住時，「面板開時主內容縮窄」
+// （`html[data-ai-panel="open"] main { padding-right: ... }`，見
+// `globals.css`），唔再係之前個 overlay 版本遮住更表右上「儲存／還原／
+// 匯出／複製上月」。用 `document.elementFromPoint()` 量「儲存」掣中心點
+// 果度、DOM 樹上嘅嘢係咪個 button 本身（如果俾面板 overlay 遮住，嗰個
+// 點會攞到面板嘅 DOM 元素，唔係個 button）——1280／1440 兩個桌面闊度都
+// 要過。
+test("(l) 桌面 1280／1440：AI 助手面板開住，「儲存」掣 elementFromPoint 係 button 本身（冇俾面板遮住）", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/roster/${siteId}/2026-08`);
+    await page.waitForSelector('button:has-text("複製上月")', { timeout: 20_000 });
+
+    const aiTab = page.getByTestId("ai-assistant-tab");
+    await expect(aiTab).toBeVisible({ timeout: 20_000 });
+    await aiTab.click();
+    const panel = page.getByTestId("ai-assistant-panel");
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+
+    const saveBtn = page.getByRole("button", { name: /^儲存$|^儲存緊/ });
+    await expect(saveBtn).toBeVisible();
+    const box = await saveBtn.boundingBox();
+    expect(box).toBeTruthy();
+    const cx = box!.x + box!.width / 2;
+    const cy = box!.y + box!.height / 2;
+
+    const hitsSaveButton = await page.evaluate(
+      ({ x, y }) => {
+        const el = document.elementFromPoint(x, y);
+        const btn = el?.closest("button");
+        return !!btn && /儲存/.test(btn.textContent ?? "");
+      },
+      { x: cx, y: cy },
+    );
+    expect(hitsSaveButton).toBe(true);
+
+    if (width === 1440) {
+      await page.screenshot({
+        path: "/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/p1-fix/desktop-1440-ai-panel-open-roster.png",
+      });
+    }
+    await page.screenshot({ path: `${SCREENSHOT_DIR_FIX}/desktop-${width}-ai-panel-save-button.png` });
+
+    // 收返個面板，等下個 viewport 嘅測試由乾淨狀態開始（`open` 有
+    // localStorage 記住，唔關就會影響下次 `page.goto`）。
+    await page.getByRole("button", { name: "關閉在勤助手" }).click();
+    await expect(panel).toHaveCount(0);
+  }
 });
 
 test.describe("手機（375×812）", () => {
@@ -370,6 +462,59 @@ test.describe("手機（375×812）", () => {
     expect(cellBox!.y + cellBox!.height).toBeLessThanOrEqual(keypadBox!.y + 1);
 
     await page.screenshot({ path: `${SCREENSHOT_DIR_FIX}/mobile-cell-above-keypad.png` });
+  });
+
+  // P2 整合驗收應修②：compact 實體鍵盤打多字代號（SH 呢種）以前逐個
+  // keystroke 即刻寫入（打「S」即刻當完整代號寫咗，跟住個「H」已經冇
+  // sel 可以再寫），而家改做 buffer——打「S」先喺格入面細字顯示緊
+  // 「S」（唔開 inline input，格仔本身冇變成 input），打埋「H」之後
+  // 「SH」冇更長候選，即刻寫入正式 chip。
+  test("(g) compact 實體鍵盤打 S→H：先見 buffer「S」，打完即刻寫入「SH」", async ({ page }) => {
+    const siteId = await findSiteIdByName("啟航1331");
+    await loginAs(page, "老闆");
+    await page.goto(`/roster/${siteId}/2026-08`);
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+
+    const cell = page.getByTestId("roster-cell-0-26");
+    await cell.click();
+    await expect(page.getByTestId("roster-mobile-keypad")).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.press("s");
+    const buffer = page.getByTestId("roster-cell-key-buffer");
+    // 未夠鐘／未打埋之前，格入面顯示緊 buffer（細字），唔係已經 commit
+    // 咗嘅正式 chip——`cell` 本身（`<td>`）嘅文字同 buffer testid 個
+    // span 一致，都係未完成嘅 "S"。
+    await expect(buffer).toHaveText("S");
+    await expect(cell).toHaveText("S");
+
+    await page.keyboard.press("h");
+    await expect(cell).toHaveText("SH", { timeout: 10_000 });
+    await expect(buffer).toHaveCount(0);
+  });
+
+  // 同上，補 Escape 取消 buffer（唔寫入）同埋 timeout 自動寫入呢兩個分支。
+  test("(h) compact 實體鍵盤：Escape 取消 buffer；打一個字冇更長候選之後等 timeout 自動寫入", async ({ page }) => {
+    const siteId = await findSiteIdByName("啟航1331");
+    await loginAs(page, "老闆");
+    await page.goto(`/roster/${siteId}/2026-08`);
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+
+    // Escape 取消：打「A」（AL 嘅字首，仲有更長候選，會等）→ Escape → 格仍然空。
+    const escCell = page.getByTestId("roster-cell-0-27");
+    await escCell.click();
+    await page.keyboard.press("a");
+    await expect(page.getByTestId("roster-cell-key-buffer")).toHaveText("A");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("roster-cell-key-buffer")).toHaveCount(0);
+    await expect(escCell).toHaveText("");
+
+    // Timeout 自動寫入：打「A」（AL 字首）之後唔再打，等夠 500ms → 自動寫入「A」。
+    const timeoutCell = page.getByTestId("roster-cell-0-29");
+    await timeoutCell.click();
+    await page.keyboard.press("a");
+    await expect(page.getByTestId("roster-cell-key-buffer")).toHaveText("A");
+    await expect(timeoutCell).toHaveText("A", { timeout: 3_000 });
+    await expect(page.getByTestId("roster-cell-key-buffer")).toHaveCount(0);
   });
 });
 

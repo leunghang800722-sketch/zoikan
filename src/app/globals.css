@@ -116,6 +116,20 @@ body {
   }
 }
 
+/* P2 整合驗收②：桌面（≥1024）「在勤助手」面板開住時，主內容要縮窄
+   （唔係俾面板 overlay 遮住）——`AiAssistantSidebar.tsx` 開／關／闊窄
+   切換時會喺 `<html>` set `data-ai-panel="open"` ＋ `--zk-ai-panel-w`
+   （面板實際闊度 px），呢度見到就幫 `(app)/layout.tsx` 嘅 `<main>`
+   讓返一個面板闊度＋28px 嘅右邊 padding，等更表右上角「儲存／還原／
+   匯出／複製上月」唔會俾面板蓋住。手機（<1024）面板全屏 overlay，唔
+   讓位，所以呢條規則淨係 `min-width:1024px` 先生效（同 `AiAssistantSidebar`
+   嘅 `MOBILE_BREAKPOINT_PX` 對齊）。 */
+@media (min-width: 1024px) {
+  html[data-ai-panel="open"] main {
+    padding-right: calc(var(--zk-ai-panel-w, 380px) + 28px);
+  }
+}
+
 /* 手機更表格仔橫向掃／導航 chip 掃動要隱藏 scrollbar（同原型
    `.nosb` class 對應）。 */
 .nosb::-webkit-scrollbar {

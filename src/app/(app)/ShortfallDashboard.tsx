@@ -28,6 +28,10 @@ interface Result {
   date: string;
   today: SiteRow[];
   pending_approval_count: number;
+  // P2 整合驗收應修③：全部未審批數（唔篩月份）——同側欄 badge／
+  // `/approvals` 頁口徑一致，KPI 大數改用呢個（`pending_approval_count`
+  // 淨係用嚟喺兩者唔同時加多一行 note，見底下 `PendingApprovalNote`）。
+  pending_approval_total: number;
   month_progress: {
     month: string;
     revenue?: number;
@@ -40,6 +44,22 @@ interface Result {
 }
 
 const MARGIN_SCALE_MAX = 20; // README：進度條 0%–20% 刻度
+
+// P2 整合驗收應修③：首頁「待審批」大數用 `pending_approval_total`（全部
+//未審批，同側欄 badge 口徑一致），淨係當本月數（`pending_approval_count`）
+// 同全部數唔同先加一行 note 講明「本月 X · 全部 Y」，等用戶知道呢個大數
+// 唔淨係本月；兩者一樣就照舊顯示「去審批 ›」提示（大部分月份都係一樣，
+// 冇需要加多行解釋）。
+function pendingApprovalNote(data: Pick<Result, "pending_approval_count" | "pending_approval_total">) {
+  if (data.pending_approval_count !== data.pending_approval_total) {
+    return (
+      <span>
+        本月 {data.pending_approval_count} · 全部 {data.pending_approval_total}
+      </span>
+    );
+  }
+  return <span className="text-zk-primary">去審批 ›</span>;
+}
 
 // 用 shortfall（=required-confirmed）判斷紅／綠，唔淨係比較 required/
 // confirmed——先夾得埋「required=0 但有額外出勤」呢種盤（冇正式所需人手
@@ -249,12 +269,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                 </div>
               )}
             </KpiCard>
-            <KpiCard
-              label="待審批（本月）"
-              value={data.pending_approval_count}
-              href="/approvals"
-              note={<span className="text-zk-primary">去審批 ›</span>}
-            />
+            <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />
             <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />
           </div>
 
@@ -267,7 +282,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
               note={shortfallSites.length > 0 ? `共欠 ${totalShort} 更` : "人手足夠"}
               href={variant === "home" ? "/reports/shortfall" : undefined}
             />
-            <KpiCard label="待審批（本月）" value={data.pending_approval_count} href="/approvals" />
+            <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />
             <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />
           </div>
 

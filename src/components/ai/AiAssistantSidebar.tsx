@@ -7,7 +7,7 @@
 // UI 只經 API（硬規則）：問答經 `streamAiChat()`（`@/lib/ui/ai-chat-client`
 // POST /api/ai/chat SSE），對話記錄經 `GET`/`DELETE /api/ai/conversation`
 // （`api-client.ts`）。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiGet, apiRequest } from "@/lib/ui/api-client";
 import { deriveAiContext, type AiPageContext } from "@/lib/ui/ai-context";
@@ -106,6 +106,33 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
       // 同上
     }
   }, [mounted, width]);
+
+  // P2 整合驗收②：桌面（≥1024）面板開住時，Opus 驗收發現面板以前純粹用
+  // `fixed` 疊喺內容之上（overlay），會遮住更表右上「儲存／還原／匯出／
+  // 複製上月」——README 要求嘅係「面板開時主內容縮窄」，唔係遮住。做法：
+  // 面板開／關（連埋闊／窄切換）就喺 `<html>` set `data-ai-panel="open"`
+  // ＋ CSS 變數 `--zk-ai-panel-w`（實際面板闊度 px），`globals.css` 見到
+  // 呢個屬性就用 `padding-right` 幫 `<main>` 讓返位（見 globals.css「AI
+  // 面板讓位」一段）。手機（<1024）維持全屏 overlay，唔使讓位，所以
+  // `isMobile` 時唔 set。用 `useLayoutEffect`（唔係 `useEffect`）—— 連同
+  // 上面讀 localStorage 嗰個 effect 一齊喺瀏覽器畫呢一幀之前盡快 set 好，
+  // 減少「先閃一下冇縮窄，先至縮窄」嘅畫面跳動（「初始由 localStorage
+  // 讀狀態時亦要 set，避免閃動」）。
+  useLayoutEffect(() => {
+    if (!mounted) return;
+    const root = document.documentElement;
+    if (open && !isMobile) {
+      root.setAttribute("data-ai-panel", "open");
+      root.style.setProperty("--zk-ai-panel-w", `${width}px`);
+    } else {
+      root.removeAttribute("data-ai-panel");
+      root.style.removeProperty("--zk-ai-panel-w");
+    }
+    return () => {
+      root.removeAttribute("data-ai-panel");
+      root.style.removeProperty("--zk-ai-panel-w");
+    };
+  }, [mounted, open, isMobile, width]);
 
   const loadConversation = useCallback(async () => {
     setLoadingHistory(true);

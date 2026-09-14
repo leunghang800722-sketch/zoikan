@@ -23,6 +23,13 @@ import { apiGet, apiGetAll, apiPost, ApiClientError } from "@/lib/api-client";
 import { Notice } from "@/components/ui/Notice";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
+// P2 整合驗收①：麵包屑／手機頁首「‹」呢兩條連結改用 `GuardedLink`——
+// 未儲存改動時撳落去要經 `unsaved-guard` store 問一句先跳（下面
+// `handleMobileBack` 舊有嘅本地 `window.confirm` 版本刪咗，改用同一個
+// store，唔再自己維護一份）。冇未儲存改動風險嘅連結（冇權限／鎖定月份
+// 提示條嗰啲）照舊用普通 `Link` 就夠。
+import { GuardedLink } from "@/components/ui/GuardedLink";
+import { confirmLeaveIfUnsaved, setUnsavedCount } from "@/lib/ui/unsaved-guard";
 
 // ---------------------------------------------------------------------------
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
@@ -337,6 +344,9 @@ type DayCellProps = {
   isWeekend: boolean;
   isEditingHere: boolean;
   editText: string;
+  /** P2 整合驗收應修②：compact 實體鍵盤打緊嘅未完成代號（唔開 inline
+   * input，淨係細字顯示緊喺格入面），`undefined`＝呢格冇打緊。 */
+  keyBufferText: string | undefined;
   title: string | undefined;
   onCellMouseDown: (r: number, d: number, e: { shiftKey: boolean }) => void;
   onCellMouseEnter: (r: number, d: number) => void;
@@ -368,6 +378,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
     isWeekend,
     isEditingHere,
     editText,
+    keyBufferText,
     title,
     onCellMouseDown,
     onCellMouseEnter,
@@ -378,10 +389,18 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
     onCommitEdit,
   } = props;
   const tdBg = isError ? "#fecaca" : colBg;
-  // 三層可以同時出現、唔會互撞：選中＝outline；dirty＝inset ring box-shadow；
-  // draft／請假＝chip 自己嘅 border（喺 chip span 層，唔喺呢度）。
+  // 三層可以同時出現、唔會互撞：選中＝outline（藍）；dirty＝inset ring
+  // box-shadow（琥珀色 #f59e0b）；draft／請假＝chip 自己嘅 border（喺
+  // chip span 層，唔喺呢度，draft 虛線藍／請假虛線橙）。
+  //
+  // P2 整合驗收應修①：dirty ring 原本同「選中」outline 一樣用
+  // `#2563eb`（藍），兩層又同色又貼埋，肉眼分唔清邊個係邊個；而且藍色
+  // 又同 draft 嘅虛線藍撞。改做琥珀色 `#f59e0b`（同「請假」chip 嘅虛線
+  // 橙同色系但唔同形狀——請假係內層 chip 嘅虛線細框，dirty 係成格嘅實
+  // 線 inset ring，唔會混淆），令「呢格未儲存」呢個狀態同「呢格揀緊」
+  // 完全用唔同顏色，一眼分得出。
   const shadows: string[] = [];
-  if (isDirty) shadows.push("inset 0 0 0 2px #2563eb");
+  if (isDirty) shadows.push("inset 0 0 0 2px #f59e0b");
   if (inRange && !selected) shadows.push("inset 0 0 0 9999px rgba(37,99,235,.08)");
   return (
     <td
@@ -404,8 +423,12 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
       onClick={(e) => onCellClick(r, d, e.shiftKey)}
       onDoubleClick={() => onCellDoubleClick(r, d)}
       onContextMenu={(e) => {
-        if (monthLocked) return;
+        // P2 整合驗收「可接受 1 順手」：以前 `monthLocked` 就直接 `return`，
+        // 冇行到 `preventDefault()`，鎖定月份右鍵會彈瀏覽器原生選單
+        // （不一致——未鎖定嗰陣一定唔會見到原生選單）。改做一律先
+        // `preventDefault()`，先至判斷鎖定與否決定使唔使開自己個選單。
         e.preventDefault();
+        if (monthLocked) return;
         onContextMenu(r, d, e.clientX, e.clientY);
       }}
     >
@@ -418,6 +441,13 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
           onChange={(e) => onEditTextChange(e.target.value.toUpperCase())}
           onBlur={onCommitEdit}
         />
+      ) : keyBufferText ? (
+        // P2 整合驗收應修②：打緊未完成嘅多字代號（例如打咗「S」仲等緊
+        // 「H」）——細字顯示喺格入面，蓋過原本個 chip（等夠鐘／打夠／
+        // Enter 先變返正式 chip）。
+        <span data-testid="roster-cell-key-buffer" className="text-[11px] font-semibold text-[#b45309]">
+          {keyBufferText}
+        </span>
       ) : (
         code && (
           <span
@@ -697,6 +727,79 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     setSel(null); // 撳完鍵即刻收埋鍵盤（同撳「清除」一樣）
   }, []);
 
+  // P2 整合驗收應修②：compact（<640）實體鍵盤打多字代號（SH／SL／AL／
+  // NL／RD）打唔到——原本 `onKeyDown` 逐個 keystroke 即刻 call
+  // `applyMobileKeypadCode`（單一字元當成完整代號寫入＋收埋選格），打
+  // 「S」就即刻當「S」寫咗，跟住個「H」已經冇 sel 可以再寫。改做喺
+  // `keyBuffer` state 度逐個 keystroke 砌住個字串（唔開 `editing` inline
+  // input）：
+  //   - 而家個 buffer 係「呢行更別代號／請假代號」入面某個代號嘅字首，
+  //     而且仲有更長嘅候選（例如「S」係「SH」同「SL」嘅字首）——唔即刻
+  //     寫，等最多 500ms 睇下一個 keystroke；
+  //   - 否則（啱好等於某個代號但冇更長候選、或者本身就係呢行自己嘅更
+  //     別代號、或者乜代號都夾唔到）即刻寫入——呢行自己嘅更別代號通常
+  //     淨係一個字母（D／N），就算佢啱好係另一個代號嘅字首（「N」係
+  //     「NL」嘅字首）都要即刻寫，唔應該有延遲。
+  // Enter＝就住而家個 buffer 即刻寫入；Escape＝取消（唔寫入）。
+  const [keyBuffer, setKeyBuffer] = useState<{ r: number; d: number; text: string } | null>(null);
+  const keyBufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearKeyBufferTimer = useCallback(() => {
+    if (keyBufferTimerRef.current) {
+      clearTimeout(keyBufferTimerRef.current);
+      keyBufferTimerRef.current = null;
+    }
+  }, []);
+
+  // Unmount 都要清埋個 pending timer，唔可以喺 component 消失咗之後先
+  // 觸發（React 18 strict mode／離開頁面都會 unmount）。
+  useEffect(() => clearKeyBufferTimer, [clearKeyBufferTimer]);
+
+  const pushKeyBufferChar = useCallback(
+    (row: RowMeta, r: number, d: number, char: string) => {
+      const base = keyBuffer && keyBuffer.r === r && keyBuffer.d === d ? keyBuffer.text : "";
+      const next = (base + char).toUpperCase();
+      const candidates = [row.shiftTypeCode, ...MOBILE_KEYPAD_LEAVE_CODES.filter((c) => c !== row.shiftTypeCode)];
+      const isRowShiftCode = next === row.shiftTypeCode;
+      const hasLongerCandidate = candidates.some((c) => c.length > next.length && c.startsWith(next));
+      clearKeyBufferTimer();
+      if (isRowShiftCode || !hasLongerCandidate) {
+        setKeyBuffer(null);
+        applyMobileKeypadCode(row, d, next);
+        return;
+      }
+      setKeyBuffer({ r, d, text: next });
+      keyBufferTimerRef.current = setTimeout(() => {
+        keyBufferTimerRef.current = null;
+        setKeyBuffer(null);
+        applyMobileKeypadCode(row, d, next);
+      }, 500);
+    },
+    [keyBuffer, applyMobileKeypadCode, clearKeyBufferTimer],
+  );
+
+  const flushKeyBuffer = useCallback(() => {
+    if (!keyBuffer) return;
+    clearKeyBufferTimer();
+    const row = displayRowsRef.current[keyBuffer.r];
+    const { d, text } = keyBuffer;
+    setKeyBuffer(null);
+    if (row) applyMobileKeypadCode(row, d, text);
+  }, [keyBuffer, applyMobileKeypadCode, clearKeyBufferTimer]);
+
+  const cancelKeyBuffer = useCallback(() => {
+    clearKeyBufferTimer();
+    setKeyBuffer(null);
+  }, [clearKeyBufferTimer]);
+
+  // 安全網：撳咗第二格（滑鼠／方向鍵）令 `sel` 唔再對住個 buffer 緊嘅
+  // 格，就即刻寫低而家個 buffer（唔留低喺背景靜靜哋等 500ms 先寫入一個
+  // 已經唔選緊嘅格）。
+  useEffect(() => {
+    if (!keyBuffer) return;
+    if (!sel || sel.b.r !== keyBuffer.r || sel.b.d !== keyBuffer.d) flushKeyBuffer();
+  }, [sel, keyBuffer, flushKeyBuffer]);
+
   // WP-R2 第 4 項：commit 寫入 `sel` 成個範圍（唔淨係 sel.b 嗰格）——拖選
   // 多格之後打字，全部揀咗嘅格都要寫同一個代號。單格編輯（雙擊／單格打
   // 字）嘅 `sel.a===sel.b`，行為同以前一樣。
@@ -794,6 +897,24 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         return;
       }
       if (!sel) return;
+      // P2 整合驗收應修②：compact 實體鍵盤 buffer——Enter＝就住而家個
+      // buffer 即刻寫入（唔好似平時 Enter 咁移去下一格）；Escape＝取消
+      // 個 buffer（唔寫入）。冇 buffer 就冇呢兩個特例，行返落面一般嘅
+      // switch（Enter＝移去下一格，等等）。
+      if (compact && keyBuffer) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          flushKeyBuffer();
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          cancelKeyBuffer();
+          return;
+        }
+      }
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
@@ -841,14 +962,14 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
             e.stopPropagation();
             if (compact) {
               const row = displayRowsRef.current[sel.b.r];
-              if (row) applyMobileKeypadCode(row, sel.b.d, e.key);
+              if (row) pushKeyBufferChar(row, sel.b.r, sel.b.d, e.key);
             } else {
               startEdit(sel.a.r, sel.a.d, e.key, { keepSelection: true });
             }
           }
       }
     },
-    [monthLocked, editing, sel, compact, commitEdit, moveSelection, clearSelectedRange, startEdit, applyMobileKeypadCode],
+    [monthLocked, editing, sel, compact, keyBuffer, commitEdit, moveSelection, clearSelectedRange, startEdit, pushKeyBufferChar, flushKeyBuffer, cancelKeyBuffer],
   );
 
   const onCellClick = useCallback(
@@ -1191,30 +1312,29 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     return n;
   }, [baseline, cells]);
 
+  // P2 整合驗收①：`dirtyCount` 變化就同步落 `unsaved-guard` module-level
+  // store——全站 nav 連結（`GuardedLink`，DesktopNav／MobileNav／呢頁麵包
+  // 屑／手機「‹」）撳落去之前會讀呢個 store 決定使唔使 confirm。unmount
+  // （離開呢個編輯器頁）要歸零，唔留低舊數值影響第二頁嘅連結。
+  useEffect(() => {
+    setUnsavedCount(dirtyCount);
+    return () => setUnsavedCount(0);
+  }, [dirtyCount]);
+
   // WP-R2 第 3 項：頁首月份 chip「‹ › 」（README §04）——跳去上／下月嘅
   // roster route，帶埋而家嘅 broker 篩選（如果有揀）。有未儲存改動要
   // confirm，取消就唔跳（Opus 驗收：「dirty 時撳下月 confirm 取消唔
-  // 跳」）。
+  // 跳」）。P2 整合驗收①：改用 `confirmLeaveIfUnsaved()`（讀返上面同步
+  // 落 store 嘅 `dirtyCount`），同 `GuardedLink` 用同一份邏輯／同一句
+  // 提示字，唔再自己組一次 `window.confirm` 字串。
   const goMonth = useCallback(
     (targetMonth: string) => {
-      if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 格未儲存，離開會遺失，確定？`)) return;
+      if (!confirmLeaveIfUnsaved()) return;
       const url = new URL(`/roster/${siteId}/${targetMonth}`, window.location.origin);
       if (selectedBrokerCode) url.searchParams.set("broker", selectedBrokerCode);
       router.push(url.pathname + url.search);
     },
-    [dirtyCount, router, siteId, selectedBrokerCode],
-  );
-
-  // WP-R2 第 3 項：手機頁首「‹」返回更表索引——同 goMonth 一樣嘅 dirty
-  // guard，取消就唔跳（`Link` 本身唔可以攔截，用 onClick
-  // preventDefault）。
-  const handleMobileBack = useCallback(
-    (e: { preventDefault: () => void }) => {
-      if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 格未儲存，離開會遺失，確定？`)) {
-        e.preventDefault();
-      }
-    },
-    [dirtyCount],
+    [router, siteId, selectedBrokerCode],
   );
 
   // WP-R2 第 3 項：離開（跳月／關頁）有未儲存改動要提示——`beforeunload`
@@ -1450,6 +1570,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     // `selected`（拖選多格之後 `selected` 淨係代表 sel.b，同 sel.a 未必
     // 係同一格）。
     const isEditingHere = editing && !compact && !!editAnchor && editAnchor.r === r && editAnchor.d === d;
+    const keyBufferText = keyBuffer && keyBuffer.r === r && keyBuffer.d === d ? keyBuffer.text : undefined;
     const m = dayMetaList[d - 1];
 
     const chip = invalid ? { bg: "#fee2e2", fg: "#b91c1c", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
@@ -1478,6 +1599,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         isWeekend={m.isWeekend}
         isEditingHere={isEditingHere}
         editText={editText}
+        keyBufferText={keyBufferText}
         title={title}
         onCellMouseDown={onCellMouseDown}
         onCellMouseEnter={onCellMouseEnter}
@@ -1496,9 +1618,9 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       {!compact && (
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <Link href="/roster" className="flex items-center gap-1.5 text-xs text-zk-muted hover:text-zk-text">
+            <GuardedLink href="/roster" className="flex items-center gap-1.5 text-xs text-zk-muted hover:text-zk-text">
               更表 <span className="text-zk-faintest">/</span> {siteName || "…"}
-            </Link>
+            </GuardedLink>
             <div className="mt-0.5 flex flex-wrap items-baseline gap-3">
               <h1 className="text-[22px] font-bold tracking-[-0.01em] text-zk-text">{siteName || "更表編輯器"}</h1>
               <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[3px] text-[13px] text-[#334155]">
@@ -1582,11 +1704,11 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           唔准改，所以呢個更表專屬頂欄改為疊喺全域頂欄下面（唔係取代
           佢），見完成回報「偏差」一節。 */}
       {compact && (
-        <div className="-mx-4 -mt-3.5 flex items-center justify-between gap-3 border-b border-zk-border bg-white px-4 py-3">
+        <div data-testid="roster-mobile-header" className="-mx-4 -mt-3.5 flex items-center justify-between gap-3 border-b border-zk-border bg-white px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <Link href="/roster" aria-label="返回更表索引" className="text-xl text-zk-text" onClick={handleMobileBack}>
+            <GuardedLink href="/roster" aria-label="返回更表索引" className="text-xl text-zk-text">
               ‹
-            </Link>
+            </GuardedLink>
             <div className="min-w-0">
               <div className="truncate text-[16px] font-bold text-zk-text">{siteName || "更表編輯器"}</div>
               <div className="text-[11.5px] text-zk-muted">
@@ -1850,6 +1972,13 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               <span className="inline-flex items-center gap-1">
                 <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed #2563eb" }} />
                 待批
+              </span>
+              {/* P2 整合驗收應修①：加返「未儲存」圖例——同格仔嘅 dirty inset
+                  ring 同一個顏色（琥珀色），等用戶睇圖例就知呢個顏色代表
+                  「未儲存」，唔使靠估。 */}
+              <span className="inline-flex items-center gap-1">
+                <span className="h-3 w-3 rounded-[3px]" style={{ boxShadow: "inset 0 0 0 2px #f59e0b" }} />
+                未儲存
               </span>
             </span>
           </div>
@@ -2132,7 +2261,13 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                     color: s.fg === "transparent" ? "#0f172a" : s.fg,
                     border: "1px solid #e5e7eb",
                   }}
-                  onClick={() => applyMobileKeypadCode(mobileKeypadRow, mobileKeypadDay, code)}
+                  onClick={() => {
+                    // 安全網：撳緊螢幕鍵盤嗰下，如果實體鍵盤仲有個 pending
+                    // 嘅 buffer timer 未寫入，要即刻取消（唔係就可能兩邊
+                    // 都寫，或者遲嚟嗰個 timer 蓋走撳掣寫嘅結果）。
+                    cancelKeyBuffer();
+                    applyMobileKeypadCode(mobileKeypadRow, mobileKeypadDay, code);
+                  }}
                 >
                   {code}
                 </button>
@@ -2141,7 +2276,10 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
             <button
               type="button"
               className="h-11 w-full rounded-lg border border-zk-border bg-white text-xs text-zk-muted"
-              onClick={() => applyMobileKeypadCode(mobileKeypadRow, mobileKeypadDay, null)}
+              onClick={() => {
+                cancelKeyBuffer();
+                applyMobileKeypadCode(mobileKeypadRow, mobileKeypadDay, null);
+              }}
             >
               清除
             </button>
