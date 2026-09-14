@@ -183,6 +183,34 @@ describe("P2-C A1／A2／細節：POST /api/users/:id/reset-password", () => {
     expect(res.status).toBe(404);
   });
 
+  // A9（Opus 整合驗收）：reset-password 寫嘅 audit_log 一行要真係查得到
+  // （action="reset_password"），而且 before/after 嘅 JSON 唔可以含臨時
+  // 密碼明文（`temp_password` 淨係喺 response body 一次性出現，唔應該
+  // 走漏落 audit_log）、亦唔可以含 `passwordHash`（`toUserDTO()` 白名單
+  // 本身就冇呢個欄，呢度用成個 JSON.stringify() 嚟核，唔淨係核頂層
+  // key，防止漏喺 nested 位置）。
+  it("A9：audit_log 有一行 action=reset_password，before/after JSON 字串唔含臨時密碼，唔含 passwordHash", async () => {
+    const res = await resetPassword(req(`http://test.local/api/users/${targetUserId}/reset-password`, ownerCookie, "POST"), {
+      params: Promise.resolve({ id: targetUserId }),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const tempPassword: string = json.temp_password;
+
+    const auditRow = await prisma.auditLog.findFirst({
+      where: { tableName: "users", rowId: targetUserId, action: "reset_password" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(auditRow).not.toBeNull();
+
+    const beforeStr = JSON.stringify(auditRow!.before);
+    const afterStr = JSON.stringify(auditRow!.after);
+    expect(beforeStr).not.toContain(tempPassword);
+    expect(afterStr).not.toContain(tempPassword);
+    expect(beforeStr.toLowerCase()).not.toContain("passwordhash");
+    expect(afterStr.toLowerCase()).not.toContain("passwordhash");
+  });
+
   it("細節：臨時密碼長度 ≥ 12、同時含字母同數字", async () => {
     const res = await resetPassword(req(`http://test.local/api/users/${targetUserId}/reset-password`, ownerCookie, "POST"), {
       params: Promise.resolve({ id: targetUserId }),

@@ -2,9 +2,10 @@
 // `groupNavLinks()`）——純函數 unit test，唔使起 DB／session（同
 // `getNavLinks()` 嘅權限邏輯完全分開，見嗰個 function 頭嘅註解）。
 import { describe, expect, it } from "vitest";
-import { getNavLinks, groupNavLinks, type NavLink } from "@/lib/rbac/nav";
-import { MODULES, type Module } from "@/lib/rbac/matrix";
+import { getNavLinks, getViewGrants, groupNavLinks, type NavLink } from "@/lib/rbac/nav";
+import { MODULES, ROLE_NAMES, isGrantedByDefault, type Module, type RoleName } from "@/lib/rbac/matrix";
 import type { CurrentSession } from "@/lib/auth/current-session";
+import { clearAll, prisma } from "./lib/db";
 
 // 老闆／主管／會計全部 module 都 grant（出廠矩陣）時 `getNavLinks()`
 // 會回嘅完整連結（唔包 /roles，等落面 case 分開測「冇連結嘅組唔顯示」）。
@@ -114,5 +115,54 @@ describe("groupNavLinks（WP-R1 左欄分組，純顯示層）", () => {
     const last = groups[groups.length - 1];
     expect(last.title).toBe("其他");
     expect(last.links.map((l) => l.href)).toEqual(["/some-new-page"]);
+  });
+});
+
+// A10（Opus 整合驗收）：`getViewGrants()` 之前唔理 baseRole 一律打
+// `GET /api/roles/:id/permissions`，但呢個 endpoint 要求「用戶管理:
+// view」——主管/會計/雞頭/安員呢 4 個 base_role 喺 matrix.ts 硬性 deny
+// 咗成個「用戶管理」module，即係呢個 fetch 對呢 4 個角色**一定** 403，
+// 每次都經 `requirePermission()` 寫一行 `permission_denied` audit——
+// 一個頁面（layout+page 各打一次）就兩行，操作紀錄俾呢啲必敗嘅內部
+// fetch 洗版。而家淨係老闆先真係打呢個 fetch，其餘 4 個角色直接用出廠
+// 矩陣 fallback，連 `cookies()`/`headers()`（next/headers，冇 request
+// context 會例外）都唔會掂到。
+describe("getViewGrants（A10：非老闆角色唔再打必定 403 嘅 /api/roles/:id/permissions）", () => {
+  function fakeSession(baseRole: RoleName, roleId: string): CurrentSession {
+    return {
+      userId: "u-fake",
+      tel: "90000000",
+      name: "假用戶",
+      roleId,
+      roleName: baseRole,
+      baseRole,
+      brokerId: null,
+      guardId: null,
+      payoutApprovalLimit: null,
+      tokenVersion: 0,
+      loggedInAt: new Date().toISOString(),
+      mustChangePwd: false,
+    } as unknown as CurrentSession;
+  }
+
+  it.each(ROLE_NAMES.filter((r) => r !== "老闆"))(
+    "%s：唔會拋錯（證明冇喺 next/headers 冇 request context 之下都試過打 fetch），結果等於出廠矩陣 fallback",
+    async (roleName) => {
+      const role = await prisma.role.findFirstOrThrow({ where: { name: roleName } });
+      const grants = await getViewGrants(fakeSession(roleName, role.id));
+      const expected = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(roleName, m, "view")])) as Record<Module, boolean>;
+      expect(grants).toEqual(expected);
+    },
+  );
+
+  it("雞頭：呼叫 getViewGrants() 之後 audit_log 冇新增 permission_denied 行（fetch 完全冇打出，`requirePermission()` 唔會被觸發）", async () => {
+    await clearAll();
+    const role = await prisma.role.findFirstOrThrow({ where: { name: "雞頭" } });
+    const before = await prisma.auditLog.count({ where: { action: "permission_denied" } });
+    await getViewGrants(fakeSession("雞頭", role.id));
+    await getViewGrants(fakeSession("雞頭", role.id));
+    await getViewGrants(fakeSession("雞頭", role.id));
+    const after = await prisma.auditLog.count({ where: { action: "permission_denied" } });
+    expect(after).toBe(before);
   });
 });

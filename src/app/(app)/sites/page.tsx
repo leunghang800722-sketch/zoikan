@@ -11,8 +11,8 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmt, fmtMoney } from "@/lib/ui/format";
+import { BILLING_MODELS } from "@/lib/ui/billing-model";
 
-const BILLING_MODELS = ["per_shift", "monthly_fixed", "admin_fee", "special"] as const;
 const PRORATA_BASIS = ["div_31", "div_month_days"] as const;
 const BILLING_GROUPS = ["per_shift", "monthly_ic"] as const;
 

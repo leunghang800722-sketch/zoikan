@@ -5,6 +5,15 @@
 // segment 名）——`resolveMonthCloseIdOrMonth()` 令佢可以接受
 // "2026-07"／"2026-07-01" 或者真正嘅 month_closes.id（uuid）。
 //
+// A6（Opus 整合驗收，改正檔頭註解）：`resolveMonthCloseIdOrMonth()`
+// 收到 "2026-07" 呢類月份字串（唔係 uuid）嗰陣，會用 `prisma.monthClose.
+// upsert()`——月份未有 month_closes 行就**新建**一行（未鎖定），已經有
+// 就原樣攞返（`update: {}`，冇 op）。即係話呢個 route 撳一下，對未有
+// month_closes 行嘅月份會產生副作用（多咗一行），唔係純粹 SELECT；
+// 對已有行嘅月份先真係 no-op。呢個副作用係故意嘅（見 A1，月結工作台
+// 入頁對「已有 month_closes 行」嘅月份會自動打一次呢個 route，靠嗰個
+// no-op upsert 冇風險）。
+//
 // 鎖定前必須 generate 一次：[id]/lock/route.ts 鎖定嗰陣會**自己**重新
 // 計一次 buildReconciliation()（唔靠呢個 route 有冇被叫過嚟做前置狀態
 // ——避免「叫完 generate 之後、鎖定之前又偷偷改咗數」呢類 race，見

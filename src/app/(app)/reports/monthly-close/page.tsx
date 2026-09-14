@@ -16,15 +16,18 @@
 //    （舊 test 用 `input[placeholder="解鎖原因"]` CSS attribute selector，
 //    唔係 substring）——README 想要「解鎖原因（必填）」呢個顯示，改用
 //    上面獨立一行 label 顯示「（必填）」，`placeholder` 屬性維持原字面值。
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
+import { inputCls } from "@/components/ui/Field";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateTime, currentMonthStr } from "@/lib/ui/format";
+import type { ApiListResult } from "@/lib/ui/api-client";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface MonthCloseDto {
@@ -71,8 +74,6 @@ interface GrossMarginTotalsResult {
 }
 
 const CLOSE_COLS = 6; // 工作地點/更數/營業額/成本/盈利/%
-
-const fieldCls = "w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-[13px] text-zk-text focus:border-zk-primary focus:outline-none";
 
 function statusDot(status: ReconciliationRule["status"]): string {
   if (status === "pass") return "#0f766e";
@@ -182,6 +183,14 @@ export default function MonthlyCloseWorkbenchPage() {
   // 加返出嚟嗰個數——兩份報表 scope 唔同，見 gross-margin.ts 檔頭註解），
   // 呢度另外攞 `/api/reports/gross-margin?month=` 嘅 totals。
   const [marginTotals, setMarginTotals] = useState<GrossMarginTotalsResult["totals"] | null>(null);
+  // A1（Opus 整合驗收）：入頁／切月份時，先查呢個月有冇 month_closes 行
+  // （`GET /api/month-closes?month=`）——已經有就自動行一次 Generate（見
+  // src/app/api/month-closes/[id]/generate/route.ts 檔頭註解：
+  // `resolveMonthCloseIdOrMonth()` 對已存在嘅行係 no-op upsert，安全），
+  // 用戶入頁即刻見到規則卡／總表／狀態卡，唔使自己撳「Generate」；冇行
+  // 就顯示空狀態＋掣，唔自動幫用戶建新行（建行係「Generate」呢個動作
+  // 本身嘅副作用，唔應該淨係「打開個頁」就觸發）。
+  const [checkingExisting, setCheckingExisting] = useState(true);
 
   async function generate() {
     setLoading(true);
@@ -226,6 +235,25 @@ export default function MonthlyCloseWorkbenchPage() {
     await generate();
   }
 
+  // A1：入頁／切月份查呢個月有冇 month_closes 行，有就自動 Generate。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setCheckingExisting(true);
+      setResult(null);
+      setMarginTotals(null);
+      const res = await apiGet<ApiListResult<MonthCloseDto>>(`/api/month-closes?month=${month}`);
+      if (cancelled) return;
+      const exists = res.ok && res.data.rows.length > 0;
+      setCheckingExisting(false);
+      if (exists) await generate();
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month]);
+
   const locked = !!result?.month_close.locked_at;
   const rules = result?.reconciliation.rules ?? [];
   const passCount = rules.filter((r) => r.status === "pass").length;
@@ -255,8 +283,23 @@ export default function MonthlyCloseWorkbenchPage() {
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+      <EmptyMonthNotice month={month} isEmpty={!checkingExisting && !result} onJump={setMonth} />
 
-      {!result && <div className="text-sm text-zk-faint">撳「重新 Generate」開始。</div>}
+      {checkingExisting && !result && <div className="text-sm text-zk-faint">載入緊…</div>}
+
+      {!checkingExisting && !result && (
+        <div className="rounded-[10px] border border-zk-border bg-white">
+          <EmptyState
+            title={`${month} 未有月結記錄`}
+            description="呢個月未 Generate 過——撳「Generate」建立月結總表＋五條自動對數規則。"
+            cta={
+              <Button variant="dark" onClick={generate} disabled={loading}>
+                {loading ? "生成緊…" : "Generate"}
+              </Button>
+            }
+          />
+        </div>
+      )}
 
       {result && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,340px)]">
@@ -422,7 +465,7 @@ export default function MonthlyCloseWorkbenchPage() {
                   <>
                     <span className="text-xs text-zk-muted">有紅色差異，鎖定要填 override 原因（必填）</span>
                     <input
-                      className={fieldCls}
+                      className={inputCls}
                       placeholder="有紅色差異，鎖定要填 override 原因"
                       value={overrideReason}
                       onChange={(e) => setOverrideReason(e.target.value)}
@@ -439,7 +482,7 @@ export default function MonthlyCloseWorkbenchPage() {
                   解鎖會令更表重新可改；需要「月結鎖定解鎖」權限 · 原因會寫入操作紀錄。
                 </span>
                 <span className="text-xs text-zk-muted">解鎖原因（必填）</span>
-                <input className={fieldCls} placeholder="解鎖原因" value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} />
+                <input className={inputCls} placeholder="解鎖原因" value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} />
                 <Button variant="danger" onClick={unlock} disabled={!unlockReason.trim()}>
                   解鎖 {month}
                 </Button>

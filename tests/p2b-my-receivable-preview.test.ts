@@ -61,6 +61,32 @@ describe("P2-B：本月應收 ?broker= 預覽（GET /api/reports/my-receivable�
     expect(brokerBLeak).toEqual([]);
   });
 
+  // M2（Opus 整合驗收）：`?broker=` 預覽分支額外要求「收客價:view」——
+  // 主管出廠冇（矩陣 收客價:view=off）→ 403；會計出廠有 → 照舊 200；
+  // 雞頭 session 唔受影響（結構性行 else branch 之前）。
+  it("M2：主管帶 ?broker= 預覽——冇「收客價」權限，403", async () => {
+    const supervisorCookie = await sessionCookieForUser(fx.userIds["主管"]);
+    const res = await getMyReceivable(req("http://test.local/api/reports/my-receivable?month=2026-08&broker=TEST-BA", supervisorCookie));
+    expect(res.status).toBe(403);
+  });
+
+  it("M2：會計帶 ?broker= 預覽——有「收客價」權限，照舊 200", async () => {
+    const accountantCookie = await sessionCookieForUser(fx.userIds["會計"]);
+    const res = await getMyReceivable(req("http://test.local/api/reports/my-receivable?month=2026-08&broker=TEST-BA", accountantCookie));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.total).toBe(750);
+    expect(body.previewing).toBe(true);
+  });
+
+  it("M2：雞頭A 自己嗰個 route（唔經預覽分支）唔受「收客價」門檻影響，照舊 200", async () => {
+    const res = await getMyReceivable(req("http://test.local/api/reports/my-receivable?month=2026-08", brokerACookie));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.total).toBe(750);
+    expect(body.previewing).toBe(false);
+  });
+
   it("待審批 stat：新加一條 pending_approval 嘅更，pending_count=1，pending_amount=嗰條金額，total_shifts 計埋佢", async () => {
     await prisma.shiftRecord.create({
       data: {

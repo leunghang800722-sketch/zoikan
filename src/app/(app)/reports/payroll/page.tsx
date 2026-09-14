@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
@@ -79,6 +80,7 @@ export default function PayrollReportPage() {
       />
 
       <Banner kind="error" message={error} />
+      <EmptyMonthNotice month={month} isEmpty={!loading && totals.length === 0} onJump={setMonth} />
 
       {/* 桌面表。 */}
       <div className={`hidden md:block ${tableCls.wrap}`}>

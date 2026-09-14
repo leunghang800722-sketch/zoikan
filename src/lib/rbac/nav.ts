@@ -32,6 +32,21 @@ interface PermissionCell {
 export async function getViewGrants(session: CurrentSession): Promise<Record<Module, boolean>> {
   const fallback = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(session.baseRole, m, "view")])) as Record<Module, boolean>;
 
+  // A10（Opus 整合驗收）：`/api/roles/:id/permissions` 要求「用戶管理:
+  // view」，喺 matrix.ts 對主管/會計/雞頭/安員呢 4 個 base_role 全部硬性
+  // deny（見上面檔頭註解）——即係話呢 4 個角色打呢個 fetch **一定** 403。
+  // 之前唔理 baseRole 一律照打，令呢 4 個角色每次 render（`(app)/layout.
+  // tsx` 同 `(app)/page.tsx` 各打一次，一個頁面兩次）都寫一行
+  // `permission_denied` audit（`requirePermission()` 拒絕一定寫
+  // audit，見 requirePermission.ts），操作紀錄俾呢啲必敗嘅內部 fetch
+  // 洗版。而家淨係老闆先真係打呢個 fetch（老闆本身有「用戶管理:view」
+  // ，先有可能成功，攞返可能俾人客製化過嘅角色矩陣）；其餘 4 個角色
+  // 直接用出廠矩陣 fallback（本身就係佢哋實際會攞到嘅結果，唯一分別係
+  // 老闆事後幫呢個角色開多一格出廠係○嘅權限嗰種客製化，呢 4 個角色
+  // 自己登入時導航列反映唔到——呢個限制之前個註解已經講咗，唔係新增
+  // 缺陷）。
+  if (session.baseRole !== "老闆") return fallback;
+
   try {
     const [cookieStore, headerStore] = await Promise.all([cookies(), headers()]);
     const host = headerStore.get("host");

@@ -20,8 +20,14 @@ import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
+import { BROKER_KIND_LABEL, brokerKindPillTone, type BrokerKindLiteral } from "@/lib/ui/broker-kind";
 
-const BROKER_KINDS = ["broker", "internal_cash", "internal_longterm", "external", "special"] as const;
+// A2（Opus 整合驗收）：呢頁「種類」select 嘅選項同表格 pill 之前各自有
+// 一套標籤（select 出 raw kind 字面值；表格 `kindPill()` 自己砌一套
+// 中文對照，兩者唔一致）——改用共用嘅 `BROKER_KIND_LABEL`／
+// `brokerKindPillTone()`（`src/lib/ui/broker-kind.ts`，同糧明細頁
+// 共用嗰份），刪走呢頁自己嗰套。
+const BROKER_KINDS = Object.keys(BROKER_KIND_LABEL) as BrokerKindLiteral[];
 const SETTLEMENT_TYPES = ["cash", "autopay", "salary", "none"] as const;
 
 interface BrokerRow {
@@ -71,15 +77,11 @@ interface BrokerSiteAssignmentRow {
 
 const emptyFeeRateForm = { site_id: "", month: "", fee_per_shift: "" };
 
-// P2 規劃判斷（Fable，唔算 README 衝突）：broker.kind 冇喺 README 逐個
-// 定義中文名——「外判/公司兵/公司長工」對應 broker/external → 外判，
-// internal_cash → 公司兵，internal_longterm → 公司長工；special 冇對應，
-// 原字面中性灰顯示。
+// A2：改用共用 `BROKER_KIND_LABEL`／`brokerKindPillTone()`（README §14
+// 「種類 pill」——公司兵／公司長工 藍，其餘灰），唔再自己砌一套。
 function kindPill(kind: string) {
-  if (kind === "internal_cash") return <Pill variant="shift">公司兵</Pill>;
-  if (kind === "internal_longterm") return <Pill variant="shift">公司長工</Pill>;
-  if (kind === "broker" || kind === "external") return <Pill variant="neutral">外判</Pill>;
-  return <Pill variant="neutral">{kind}</Pill>;
+  const label = BROKER_KIND_LABEL[kind as BrokerKindLiteral] ?? kind;
+  return <Pill variant={brokerKindPillTone(kind) === "blue" ? "shift" : "neutral"}>{label}</Pill>;
 }
 
 export default function BrokersPage() {
@@ -548,7 +550,7 @@ export default function BrokersPage() {
             <select className={selectCls} value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))} disabled={!!editingId}>
               {BROKER_KINDS.map((v) => (
                 <option key={v} value={v}>
-                  {v}
+                  {BROKER_KIND_LABEL[v]}
                 </option>
               ))}
             </select>

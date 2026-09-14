@@ -18,13 +18,13 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
+import { inputCls } from "@/components/ui/Field";
 import { currentMonthStr } from "@/lib/ui/format";
 
-// README「表單控件」：padding 9–10px 12px、1px solid #d1d5db、圓角
-// 7–8px、13.5–14px——冇共用 ui component 出呢個 class（Field.tsx 係 P1
-// 前舊樣式，唔屬於呢次規格），逐頁自己攞呢串（同 RosterEditor.tsx 現有
-// 工具列 input 同一套色）。
-const fieldCls = "w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-[13.5px] text-zk-text focus:border-zk-primary focus:outline-none";
+// A7（Opus 整合驗收）：呢頁本地嘅 input 樣式已刪走，改用
+// `@/components/ui/Field` 嘅 `inputCls`（README「表單控件」規格，三份
+// 幾乎一樣嘅本地 class 合一，見嗰個檔嘅註解）。
 
 interface SiteRow {
   id: string;
@@ -116,6 +116,7 @@ export default function RosterEntryPage() {
       <PageHeader kicker="排更" title="更表" subtitle="揀盤揀月，開啟嗰個月嘅更表編輯器。" />
 
       <Banner kind="error" message={error} />
+      <EmptyMonthNotice month={month} isEmpty={!overviewLoading && overview.length === 0} onJump={setMonth} />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(280px,380px)_1fr]">
         {/* 左卡：開啟更表。 */}
@@ -123,7 +124,7 @@ export default function RosterEntryPage() {
           <div className="text-[13.5px] font-semibold text-zk-text">開啟更表</div>
           <label className="block space-y-1.5">
             <span className="block text-xs text-zk-muted">盤</span>
-            <select className={fieldCls} value={siteId} onChange={(e) => setSiteId(e.target.value)} disabled={loading} required>
+            <select className={inputCls} value={siteId} onChange={(e) => setSiteId(e.target.value)} disabled={loading} required>
               {sites.length === 0 && <option value="">（冇盤）</option>}
               {sites.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -135,7 +136,7 @@ export default function RosterEntryPage() {
           </label>
           <label className="block space-y-1.5">
             <span className="block text-xs text-zk-muted">月份</span>
-            <input type="month" className={fieldCls} value={month} onChange={(e) => setMonth(e.target.value)} required />
+            <input type="month" className={inputCls} value={month} onChange={(e) => setMonth(e.target.value)} required />
           </label>
           <Button type="submit" variant="primary" disabled={loading || !siteId} className="w-full">
             開啟

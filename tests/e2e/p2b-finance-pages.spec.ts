@@ -162,7 +162,7 @@ test("(d2) Opus 驗收應修③：毛利即時表由低到高排（第一行毛�
   }
 });
 
-test("(e) 月結工作台：2026-07 頁面結構（唔撳 Generate，唔改任何鎖定狀態）", async ({ page }) => {
+test("(e) 月結工作台：2026-07 已有 month_closes 行——入頁自動 Generate，唔使自己撳掣，亦唔改任何鎖定狀態", async ({ page }) => {
   await loginAs(page, "老闆");
   await page.goto("/reports/monthly-close");
   await page.locator('input[type="month"]').fill("2026-07");
@@ -170,11 +170,31 @@ test("(e) 月結工作台：2026-07 頁面結構（唔撳 Generate，唔改任�
   await expect(page.getByRole("heading", { name: "月結工作台" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Generate/ })).toBeVisible();
   await expect(page.locator('a:has-text("匯出 Excel")')).toBeVisible();
-  // 未撳 Generate 之前應該淨係見到提示文字，冇任何 lock/unlock 動作發生。
-  await expect(page.getByText("撳「重新 Generate」開始。")).toBeVisible();
+  // A1（Opus 整合驗收）：2026-07 已經有 month_closes 行（鎖定咗）——入頁
+  // 應該自動行一次 Generate，直接見到規則卡／總表／狀態卡，唔使自己
+  // 撳「Generate」（呢個 test 全程冇撳過任何掣，`generate()` 淨係 no-op
+  // upsert，唔會觸發 lock/unlock）。
+  await expect(page.getByText("§6.3 五條自動對數規則")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "月結總表" })).toBeVisible();
+  await expect(page.getByText("2026-07 狀態")).toBeVisible();
+  await expect(page.getByText("已鎖定")).toBeVisible();
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: `${SCREENSHOT_DIR}/13-monthly-close-1440.png`, fullPage: true });
+});
+
+test("(e2) Opus 整合驗收 A1：冇 month_closes 行嘅月份——空狀態＋「Generate」掣，唔自動建行", async ({ page }) => {
+  await loginAs(page, "老闆");
+  await page.goto("/reports/monthly-close");
+  await page.locator('input[type="month"]').fill("2026-12");
+
+  await expect(page.getByText("2026-12 未有月結記錄")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Generate", exact: true })).toBeVisible();
+
+  const res = await page.request.get("/api/month-closes?month=2026-12");
+  expect(res.ok()).toBe(true);
+  const body = await res.json();
+  expect(body.rows.length).toBe(0);
 });
 
 test("(f) 糧明細：foot 合計可見", async ({ page }) => {

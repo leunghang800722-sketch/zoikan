@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
@@ -211,6 +212,7 @@ export default function QuotasPage() {
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+      <EmptyMonthNotice month={monthFilter} isEmpty={!loading && rows.length === 0} onJump={setMonthFilter} />
 
       {!loading && rows.length === 0 ? (
         <div className={tableCls.wrap}>

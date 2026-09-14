@@ -25,9 +25,17 @@ export async function GET(req: Request) {
     const session = await requirePermission(req, "更表", "view");
     const url = new URL(req.url);
     const { skip, take } = paginationParams(url);
+    // A1（Opus 整合驗收，additive）：`?month=` 俾月結工作台（
+    // reports/monthly-close/page.tsx）入頁時查「呢個月有冇 month_closes
+    // 行」，唔使成個列表攞晒自己喺前端篩。接受 "YYYY-MM" 或
+    // "YYYY-MM-DD"；格式唔啱就當冇篩（同其他 list route 嘅寬鬆 filter
+    // 一致，呢個 route 冇金錢敏感度，唔使 400）。
+    const monthRaw = url.searchParams.get("month");
+    const parsedMonth = monthRaw ? new Date(monthRaw.length <= 7 ? `${monthRaw}-01` : monthRaw) : null;
+    const where = parsedMonth && !Number.isNaN(parsedMonth.getTime()) ? { month: monthStart(parsedMonth) } : undefined;
     const [rows, total] = await Promise.all([
-      prisma.monthClose.findMany({ skip, take, orderBy: { month: "desc" } }),
-      prisma.monthClose.count(),
+      prisma.monthClose.findMany({ where, skip, take, orderBy: { month: "desc" } }),
+      prisma.monthClose.count({ where }),
     ]);
     // C1（Opus 對抗式驗收第四輪）：雞頭而家有「更表:view」入得嚟，但淨係
     // 應該見到 { id, month, locked_at }——rosterVersionNote/lockedBy/

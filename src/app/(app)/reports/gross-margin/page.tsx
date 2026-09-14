@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 
@@ -141,6 +142,8 @@ export default function GrossMarginPage() {
       />
 
       <Banner kind="error" message={error} />
+      {/* A5：當月零資料先顯示，撳「去 YYYY-MM」即刻跳去最近有資料嘅月份。 */}
+      <EmptyMonthNotice month={month} isEmpty={!loading && (data?.sites.length ?? 0) === 0} onJump={setMonth} />
 
       {data && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

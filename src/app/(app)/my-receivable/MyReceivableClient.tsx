@@ -13,6 +13,7 @@ import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDate, currentMonthStr } from "@/lib/ui/format";
 
@@ -62,25 +63,38 @@ const COLS = 6; // 日期／盤／更別／更數／出街價／金額
 export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean; roleLabel: string }) {
   const [month, setMonth] = useState(() => currentMonthStr());
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
-  const [brokerParam, setBrokerParam] = useState<string>(() => (isBroker ? "" : (readBrokerFromUrl() ?? "")));
+  // M1（Opus 整合驗收）：initial state 唔可以喺 `useState` initializer
+  // 度讀 `readBrokerFromUrl()`——SSR 冇 `window`，會令 SSR 輸出（空字串）
+  // 同 CSR 首次 render（帶 URL 嘅 broker code）唔一致，觸發 hydration
+  // error。改跟 `ShortfallDashboard.tsx` 嘅 `?date=` 做法：initial state
+  // 一律用 SSR 一致嘅空字串，落面呢個 effect 先讀 URL。
+  const [brokerParam, setBrokerParam] = useState<string>("");
   const [data, setData] = useState<Result | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // M2：`?broker=` 預覽分支而家要求「收客價:view」（主管出廠冇）——
+  // 403 唔顯示通用紅色 Banner，改用專門嘅 Notice 講明係咩原因。
+  const [forbiddenPreview, setForbiddenPreview] = useState(false);
 
-  // 內部角色先要攞雞頭清單俾 select 用；未帶 ?broker= 就預設第一個。
+  // 內部角色：入頁一次（mount）攞雞頭清單俾 select 用；URL 已經帶
+  // `?broker=` 就即刻同步落 state（唔使等 fetch 完成），冇帶先等 fetch
+  // 完用第一個做預設。呢個 effect 特登得 `[isBroker]` 一個 dep（唔可以
+  // 加 `brokerParam`——會令用戶自己揀雞頭都觸發多一次冧晒嘅 broker
+  // list fetch）。
   useEffect(() => {
     if (isBroker) return;
+    const fromUrl = readBrokerFromUrl();
+    if (fromUrl) setBrokerParam(fromUrl);
     (async () => {
       const res = await apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500");
       if (!res.ok) return;
       setBrokers(res.data.rows);
-      if (!brokerParam && res.data.rows.length > 0) {
+      if (!fromUrl && res.data.rows.length > 0) {
         const first = res.data.rows[0]!.code;
         setBrokerParam(first);
         writeBrokerToUrl(first);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBroker]);
 
   useEffect(() => {
@@ -93,10 +107,12 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
       const res = await apiGet<Result>(`/api/reports/my-receivable?${qs.toString()}`);
       if (cancelled) return;
       if (!res.ok) {
-        setError(res.message);
+        setForbiddenPreview(!isBroker && res.status === 403);
+        setError(res.status === 403 ? null : res.message);
         setLoading(false);
         return;
       }
+      setForbiddenPreview(false);
       setData(res.data);
       setError(null);
       setLoading(false);
@@ -126,7 +142,11 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
         }
       />
 
-      {!isBroker && (
+      {/* M2：冇「收客價」權限（例如主管出廠設定）嘅內部角色——顯示專門
+          嘅 warning Notice，唔顯示雞頭 select（揀咗都係照 403）。 */}
+      {!isBroker && forbiddenPreview && <Notice variant="warning">你嘅角色暫時唔可以預覽雞頭應收——需要「收客價」權限，請聯絡老闆開放。</Notice>}
+
+      {!isBroker && !forbiddenPreview && (
         <Notice
           variant="info"
           action={
@@ -151,6 +171,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
       )}
 
       <Banner kind="error" message={error} />
+      {!forbiddenPreview && <EmptyMonthNotice month={month} isEmpty={!loading && (data?.grouped_days.length ?? 0) === 0} onJump={setMonth} />}
 
       {data && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

@@ -15,8 +15,15 @@
 // 淨係換個角度睇返同一批資料（Fable 規劃判斷，見 P2-版面重設計計劃.md
 // §5）。雞頭 session 本身一定用 requireOwnBrokerId()，`?broker=` 完全
 // 冇入邊個分支，結構性冇得改人。
+//
+// M2（Opus 整合驗收）：`?broker=` 預覽分支額外要求「收客價:view」——
+// 老闆未拍板主管見唔見出街價前，預覽只開俾有收客價權嘅角色（老闆／
+// 會計出廠有，主管出廠冇）。呢個唔改矩陣（`收客價` module 本身已經
+// 存在，淨係喺呢個 route 多加一格 check），淨係收窄「邊個內部角色可以
+// 用呢個預覽分支」，唔影響雞頭 session 自己嘅本月應收（結構性行 else
+// branch 之前嘅 `isBrokerRole` 分支，完全唔受影響）。
 import { z } from "zod";
-import { requirePermission } from "@/lib/rbac/requirePermission";
+import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { isBrokerRole, requireOwnBrokerId, scrubForBrokerSession } from "@/lib/broker-isolation";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -52,6 +59,11 @@ export async function GET(req: Request) {
       // 「老闆（非雞頭角色）打呢個 route → 403」唔改都要照過。有帶
       // `?broker=` 先進入新嘅預覽分支。
       if (!brokerParam) throw Forbidden("呢個 report 淨係俾雞頭角色用——內部角色請用 GET /api/reports/gross-margin，或者帶 ?broker=<雞頭 code 或 id> 預覽");
+      // M2：預覽分支額外要求「收客價:view」（見檔頭註解）——主管出廠
+      // 冇 → 403；老闆／會計出廠有 → 照常 200。
+      if (!(await hasPermission(session, "收客價", "view"))) {
+        throw Forbidden("你嘅角色暫時未有「收客價」權限，唔可以預覽雞頭應收（老闆未拍板主管見唔見出街價前嘅暫定安排）");
+      }
       const broker = await prisma.broker.findFirst({ where: { OR: [{ id: brokerParam }, { code: brokerParam }] } });
       if (!broker) throw BadRequest("搵唔到呢個雞頭（broker code 或 id 唔啱）");
       brokerId = broker.id;
