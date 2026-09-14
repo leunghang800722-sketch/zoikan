@@ -27,7 +27,11 @@ test("(a) 主管登入 → 開 2026-08 → 啟航1331 更表 → 複製上月 �
   const copyBtn = page.getByRole("button", { name: /複製上月/ });
   await expect(copyBtn).toBeVisible({ timeout: 20_000 });
   await copyBtn.click();
-  await expect(page.getByText(/格未儲存/)).toBeVisible({ timeout: 15_000 });
+  // 2026-09-14：wp-r2 e2e 嘅 helper 會將「複製上月」嘅結果儲存落 DB，所以
+  // 8 月可能已經有齊記錄，複製會係 no-op（零格未儲存）。呢度唔再斷言
+  // 「有格未儲存」，淨係等有行出現——之後打 AL 嗰步先係呢個 test 真正
+  // 要驗嘅「改→儲存→重載仍在」。
+  await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
 
   // 「複製上月」剛加落嚟嘅 extraRows 未經 shiftTypeCode+姓名排序（見
   // RosterEditor.tsx buildRowsAndCells() 嘅 sort，淨係管 `rows`，唔管
