@@ -72,3 +72,13 @@ export async function clearAiConversationForTel(tel: string): Promise<void> {
   if (!user) return;
   await prisma.aiConversation.deleteMany({ where: { userId: user.id } });
 }
+
+/** P2.5 `feedback.spec.ts` 用：清走成個 `feedback_reports`／`feedback_
+ * sessions`（唔止某個用戶）——「未讀 badge」計嘅係系統入面全部
+ * status=new 嘅報告，唔清晒就會俾之前跑剩低嘅記錄累加，令「老闆登入見
+ * badge 1」呢類斷言唔穩定。`feedback_reports` FK RESTRICT 落
+ * `feedback_sessions`，要先刪嗰張。 */
+export async function clearAllFeedback(): Promise<void> {
+  await prisma.feedbackReport.deleteMany({});
+  await prisma.feedbackSession.deleteMany({});
+}

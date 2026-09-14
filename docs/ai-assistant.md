@@ -397,3 +397,150 @@ boundary，同 `RosterEditor.tsx` 避開嘅理由一致）：
   `playwright.config.ts` 嘅 `webServer.env` 帶咗呢個 env——已知限制：
   `reuseExistingServer: true` 之下，如果開發者自己手動起咗一個冇呢個
   env 嘅 dev server，Playwright 會沿用嗰個，AI 相關場景會打真 AI Hub。
+
+## 開會反映（P2.5）
+
+老闆 2026-09-15 拍板方案 D（`P2-版面重設計計劃.md` §6）——側欄 AI 助手
+加一個獨立**開會模式**：唔係答數據問題嘅「在勤助手」，而係做**訪談員**
+（問清楚、覆述確認、整理），用戶（老闆／主管／會計，同「助手」module
+一致）撳「開會反映」入呢個模式，同助手講清楚想反映嘅現場問題／改動
+訴求；撳「整理並送出」由伺服器叫模型按固定範本生成摘要 JSON，用戶
+預覽、可以編輯，確認之後**由伺服器 code（唔係模型工具）**寫入
+`feedback_reports`。老闆有一個新畫面「現場意見」（`/feedback`，淨係
+老闆先睇得到）睇晒全部人送出嘅意見，改狀態（新／已睇／已轉交／唔
+做）＋備註。
+
+### 架構同鐵律不變之處
+
+- **模型零寫入工具完全冇改**——訪談員嘅工具集就係現有 `buildAiTools()`
+  嗰套只讀工具（幫佢查數據理解用戶講緊嘅場景），`zoikan_ai_ro` 冇加任何
+  grant。真正嘅寫入（`feedback_sessions`／`feedback_reports`）一律經
+  `src/app/api/feedback/**` 嘅正常 Prisma route code，**淨係喺用戶明確
+  撳「確認送出」之後**先會執行——同主助手「架構上做唔到任何寫入」嘅
+  鐵律完全一致，訪談過程本身（開 session／逐輪對話）唔會寫落
+  `feedback_reports`。
+- **唔改權限矩陣**——`matrix.ts` 冇加任何新 module。開會反映嘅基本進入
+  權沿用現有「助手」module（`requirePermission(req,"助手","view")`，
+  `src/lib/feedback/guard.ts` 嘅 `requireFeedbackAccess()`）；老闆專用嘅
+  endpoint（睇意見清單／改狀態／未讀數）額外用 `assertBoss()` 核
+  `session.baseRole==="老闆"`——直接判斷，唔靠矩陣加格。
+
+### 唔評可行性（三層防線）
+
+老闆明文要求呢個模式**唔可以評可行性**（「做唔做得到」呢類判斷交返
+俾 Eric 同技術團隊）：
+
+1. **訪談指示明文禁止**——`src/lib/ai/feedback-prompt.ts` 嘅
+   `buildFeedbackInterviewPrompt()` 鐵律 1 明文寫「你唔評可行性」，撞到
+   就要用標準句答。
+2. **輸出守衛**（第二層，唔信任模型一定跟得到指示）——新
+   `src/lib/ai/feasibility-guard.ts`：`checkFeasibilityGuard()` 掃「訪談員
+   自己落判斷」嘅肯定/否定句式（「可以做到」「做唔到」「技術上可行」
+   「我會幫你改」「系統會加」「冇問題可以加」等），撞到就成段換做標準句
+   「可行性由 Eric 同技術團隊評估，我淨係幫你整理清楚訴求。」，並寫
+   `audit_log(action="ai_feasibility_guard_triggered")`。刻意用「肯定句/
+   承諾句」樣式（唔係齋齋出現「可行性」三隻字）——標準句本身、用戶單純
+   問「做唔做得到」都唔會被誤殺（形成一個穩定 fixed point：觸發之後答
+   標準句，標準句本身唔再撞中任何 pattern）。`session/chat/route.ts` 入面
+   順序：先行現有 `checkOutputGuardAndAudit()`（安全底線，DML/DDL／指示
+   性文字），先至行呢個（產品規則）——兩個獨立、唔會互相削弱。
+   `session/summarize/route.ts` 逐個摘要欄位都各自過呢兩層 guard（局部
+   換字，唔會因為一欄觸發就成份摘要變晒標準句）。
+3. **摘要範本冇可行性欄**——`src/lib/feedback/report.ts` 嘅
+   `FeedbackFields`（`title`/`reporter`/`current_problem`/
+   `desired_change`/`reason`/`related`/`open_questions`/`footer`）冇任何
+   「可行性」「技術評估」呢類 key，`footer` 固定一句「本摘要只整理訴求，
+   未評估技術可行性，由 Eric 核實後交技術團隊評估。」。`summary_md` 由
+   `buildSummaryMarkdown()` 喺**伺服器**由 `fields` 組成（唔靠模型排版），
+   `summarize` route 同 `submit` route 都用返同一個 helper，保證一致。
+
+### 資料表（`prisma/migrations/20260914171755_p25_feedback_sessions`）
+
+- `feedback_sessions`——`user_id`／`status`（draft/submitted/abandoned）／
+  `messages`（JSON，格式同 `ai_conversations` 一致）／`page_context`。
+  一個用戶同時最多一個 draft（application 層保證，`src/lib/feedback/
+  session.ts` 嘅 `getOrCreateDraftSession()`，冇加 DB partial unique
+  index）。
+- `feedback_reports`——`session_id`／`user_id`／`role_name`（快照）／
+  `title`／`summary_md`／`fields`（JSON）／`transcript_excerpt`（最後 20
+  輪）／`status`（new/read/forwarded/declined）／`reviewed_by`／
+  `reviewed_at`／`review_note`。
+
+### `ai` schema 唔加 view——`list_feedback` 呢個例外
+
+規劃裁定：`feedback_reports` 入面係用戶自己打嘅自由文字（未經審視嘅
+意見），**唔喺 `ai` schema 開 view**（唔想開一條任何助手 session 都可以
+隨意 `sql_select` 到嘅路）。但老闆想用助手查自己收到嘅意見（例如問「有
+幾多未睇嘅意見」），所以加咗一個獨立工具 `list_feedback`
+（`src/lib/feedback/ai-tools/list-feedback.ts`）：
+
+- **唔經 `zoikan_ai_ro`／`aiQuery()`**——用正常 Prisma（`@/lib/db`）直接
+  `findMany`（只讀，冇任何寫入方法）。因為要用 Prisma，呢個檔案刻意擺喺
+  `src/lib/feedback/`（唔喺 `src/lib/ai/tools/`）——`tests/ai-structural-
+  guard.test.ts` 嘅「零 `@/lib/db`／零 `prisma.`」掃描淨係管
+  `src/lib/ai/**`／`src/app/api/ai/**` 呢兩個 tree，擺出嚟先可以用
+  Prisma，同時嗰兩個 tree 嘅結構性保證完全唔受影響（另有
+  `tests/feedback-tools-readonly.test.ts` 逐檔案掃 `src/lib/feedback/
+  ai-tools/**`，斷言冇任何 Prisma 寫入方法調用）。
+- **只讀、老闆限定**——`src/lib/ai/tools/index.ts` 嘅 `buildAiTools()`
+  淨係喺 `ctx.session.baseRole === "老闆"` 先掛載呢個工具落主助手（`/api
+  /ai/chat`）嘅工具集；`run()` 入面再核一次 `baseRole==="老闆"`
+  （defense-in-depth，同 `denyIfBroker()` 一致做法）——冇加新 module 落
+  `matrix.ts`。
+- **內容過電話 pattern scrub**——`src/lib/ai/field-scrub.ts` 新增
+  `scrubPhoneLike()`（香港電話 pattern，寧枉勿縱），`list_feedback` 讀出
+  嗰陣對 `title`/`summary`/`review_note` 逐個 scrub 一次；`session/chat/
+  route.ts` 入面用戶輸入送去 LLM／存落 session 之前都會先過呢個 scrub
+  （呼應「電話、銀行資料一律唔准送去 Anthropic/DeepSeek」——訪談對話一樣
+  係送出去嘅內容，唔可以例外）。UI 入口亦有 Notice 提醒「唔好打電話／
+  銀行資料」，但呢個 scrub 唔淨係靠用戶自律，係 code 層面嘅保底。
+
+### API（`src/app/api/feedback/**`，全部 `withApiError`）
+
+| Endpoint | 權限 |
+|---|---|
+| `POST /api/feedback/session` | `助手:view`（開／續 draft） |
+| `POST /api/feedback/session/chat` | `助手:view`（訪談，SSE，同 `/api/ai/chat` 一樣傳輸做法） |
+| `POST /api/feedback/session/summarize` | `助手:view`（唔寫入，淨係回預覽） |
+| `POST /api/feedback/session/submit` | `助手:view`（伺服器校驗長度：每欄 ≤2000／總 ≤12000 字；每人每日 ≤3 份） |
+| `POST /api/feedback/session/abandon` | `助手:view` |
+| `GET /api/feedback/reports` | `助手:view`＋`baseRole==="老闆"` |
+| `GET /api/feedback/reports/[id]` | `助手:view`（老闆全睇；作者本人淨係睇自己） |
+| `PATCH /api/feedback/reports/[id]` | `助手:view`＋`baseRole==="老闆"` |
+| `GET /api/feedback/unread-count` | `助手:view`＋`baseRole==="老闆"` |
+
+### 前端
+
+- `AiAssistantSidebar.tsx`——頂部「開會反映」掣（`ai-feedback-start`）
+  切去開會模式（`ai-feedback-mode`）：Notice 提醒、對話走 `streamFeedback
+  Chat()`（`src/lib/ui/feedback-chat-client.ts`，同 `streamAiChat()` 一樣
+  SSE 做法，另起一份因為 payload/endpoint 唔同）、底部「整理並送出」
+  （`ai-feedback-summarize`，≥2 輪先 enable）／「取消開會」
+  （`ai-feedback-cancel`）；整理完顯示預覽（`ai-feedback-preview`）：
+  `reporter`／`footer` 唔可以改，其餘 6 欄 textarea 可編輯，「確認送出」
+  （`ai-feedback-submit`）之後 toast「已送出俾老闆」，返回普通模式。
+- 老闆左欄「系統」組多一條「現場意見」（`src/lib/rbac/nav.ts`，用
+  「助手」module＋`baseRole==="老闆"` 雙重判斷）＋未讀 badge（`(app)/
+  layout.tsx`，同審批 badge 一樣做法：server-side `prisma.feedbackReport.
+  count({where:{status:"new"}})`）。`/feedback`（列表）／`/feedback/[id]`
+  （詳情，markdown 用 `SimpleMarkdown`、原對話節錄 `<details>` 摺埋、
+  狀態掣＋備註、「複製摘要」clipboard）淨係老闆先睇得到，非老闆打呢兩個
+  路徑一律顯示 403 畫面（`feedback-forbidden` testid）。
+
+### 測試
+
+- `tests/feedback-feasibility-guard.test.ts`——可行性 guard 字眼表（13
+  正例、5 反例，包括標準句本身唔被誤殺）。
+- `tests/feedback-flow.test.ts`——session/summarize/submit API 整合：權限
+  （雞頭/安員 403）、一個用戶最多一個 draft、summarize 出返固定範本、
+  submit 長度校驗（400）、每日 3 份上限（429）、reports 讀取權限（作者
+  本人／老闆全睇／主管睇他人 403）、PATCH 改狀態 audit、unread-count
+  權限。
+- `tests/feedback-tools-readonly.test.ts`／`tests/feedback-list-tool.test.ts`
+  ——模型零寫入工具結構性掃描（同 `tests/ai-structural-guard.test.ts`
+  一致風格）、`list_feedback` 淨係老闆 session 先掛載、內容 scrub、
+  defense-in-depth 拒絕。
+- Playwright `tests/e2e/feedback.spec.ts`（`AI_LLM=fake`）：主管開會→
+  兩輪→整理→預覽→改一欄→送出→老闆登入見 badge 1→開清單→睇詳情→改狀態
+  →badge 0；雞頭／主管冇「現場意見」入口＋直接打 `/feedback` 一律 403
+  畫面。

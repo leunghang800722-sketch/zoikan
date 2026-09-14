@@ -114,6 +114,16 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   push("/roles", "角色權限管理", "用戶管理");
   push("/audit-log", "操作紀錄", "操作紀錄");
 
+  // P2.5「現場反映」開會模式——「現場意見」清單頁淨係老闆先睇得到（老闆
+  // 讀主管/會計/老闆自己開會送出嘅意見）。呢度刻意唔用 push()（module
+  // grant 淨係決定「助手」有冇 view，唔識分「老闆 vs 主管/會計」）——
+  // 用「助手」module（雞頭/安員硬性冇）＋`session.baseRole==="老闆"`
+  // 雙重判斷，冇加新 module 落 matrix.ts（鐵律「唔改權限矩陣」，同
+  // `src/app/api/feedback/**` 嘅 `assertBoss()` 一致做法）。
+  if (grants["助手"] && session.baseRole === "老闆") {
+    links.push({ href: "/feedback", label: "現場意見" });
+  }
+
   return links;
 }
 
@@ -137,7 +147,7 @@ const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
   { title: "排更", hrefs: ["/roster", "/quotas", "/approvals"] },
   { title: "主檔", hrefs: ["/sites", "/guards", "/brokers", "/rate-cards"] },
   { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall"] },
-  { title: "系統", hrefs: ["/users", "/roles", "/audit-log"] },
+  { title: "系統", hrefs: ["/users", "/roles", "/audit-log", "/feedback"] },
 ];
 
 const BROKER_GROUP_ORDER: { title: string; hrefs: string[] }[] = [

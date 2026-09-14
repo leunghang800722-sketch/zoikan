@@ -9,10 +9,38 @@
 // （`api-client.ts`）。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { apiGet, apiRequest } from "@/lib/ui/api-client";
+import { apiGet, apiPost, apiRequest } from "@/lib/ui/api-client";
 import { deriveAiContext, type AiPageContext } from "@/lib/ui/ai-context";
 import { streamAiChat, type AiChatMessage } from "@/lib/ui/ai-chat-client";
+import { streamFeedbackChat } from "@/lib/ui/feedback-chat-client";
 import { SimpleMarkdown } from "./SimpleMarkdown";
+import { Notice } from "@/components/ui/Notice";
+
+// P2.5「現場反映」開會模式（老闆 2026-09-15 拍板方案 D）——側欄獨立模式：
+// 助手做訪談員，唔評可行性，討論存 `feedback_sessions`；撳「整理並送出」
+// 攞返伺服器生成嘅範本預覽，用戶確認/編輯之後先由伺服器寫入
+// `feedback_reports`（唔係模型工具）。呢個 component 已經淨係喺
+// `助手:view` 為 true 先會 render（見檔案頂註解），所以老闆/主管/會計
+// 都見到「開會反映」掣。
+interface FeedbackFields {
+  title: string;
+  reporter: string;
+  current_problem: string;
+  desired_change: string;
+  reason: string;
+  related: string;
+  open_questions: string;
+  footer: string;
+}
+type EditableFeedbackKey = "title" | "current_problem" | "desired_change" | "reason" | "related" | "open_questions";
+const EDITABLE_FEEDBACK_FIELDS: { key: EditableFeedbackKey; label: string }[] = [
+  { key: "title", label: "標題" },
+  { key: "current_problem", label: "現況／問題" },
+  { key: "desired_change", label: "想點改" },
+  { key: "reason", label: "點解（業務原因／影響）" },
+  { key: "related", label: "相關盤／雞頭／月份／角色" },
+  { key: "open_questions", label: "未確定嘅地方" },
+];
 
 // 刻意唔用 next/navigation 嘅 `useSearchParams()`——呢個 component 掛喺
 // `(app)/layout.tsx`，包住全站每一頁，用 `useSearchParams()` 會逼成個
@@ -73,6 +101,22 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // P2.5「現場反映」開會模式——狀態同普通問答模式分開擺（唔混用
+  // messages/sending 等），兩套 UI 互斥顯示（`meetingMode` 決定顯示邊套）。
+  const [meetingMode, setMeetingMode] = useState(false);
+  const [meetingSessionId, setMeetingSessionId] = useState<string | null>(null);
+  const [meetingMessages, setMeetingMessages] = useState<AiChatMessage[]>([]);
+  const [meetingInput, setMeetingInput] = useState("");
+  const [meetingSending, setMeetingSending] = useState(false);
+  const [meetingStreamingText, setMeetingStreamingText] = useState<string | null>(null);
+  const [meetingError, setMeetingError] = useState<string | null>(null);
+  const [meetingStarting, setMeetingStarting] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const [preview, setPreview] = useState<FeedbackFields | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [meetingToast, setMeetingToast] = useState<string | null>(null);
+  const meetingTurnCount = Math.floor(meetingMessages.length / 2);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
@@ -170,7 +214,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
 
   useEffect(() => {
     messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight });
-  }, [messages, streamingText]);
+  }, [messages, streamingText, meetingMessages, meetingStreamingText]);
 
   const handleSubmit = useCallback(
     async (raw: string) => {
@@ -211,6 +255,112 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
   const toggleWidth = useCallback(() => {
     setWidth((w) => (w >= WIDE_WIDTH ? NARROW_WIDTH : WIDE_WIDTH));
   }, []);
+
+  // P2.5「開會反映」——撳掣開／續 draft session（一個用戶同時最多一個
+  // draft，見 `getOrCreateDraftSession()`），跟住切去開會模式 UI。
+  const handleStartMeeting = useCallback(async () => {
+    setMeetingStarting(true);
+    setMeetingError(null);
+    const context = getCurrentAiContext();
+    const res = await apiPost<{ id: string; status: string; messages: AiChatMessage[] }>("/api/feedback/session", {
+      page_context: context,
+    });
+    setMeetingStarting(false);
+    if (!res.ok) {
+      setErrorMessage(res.message);
+      return;
+    }
+    setMeetingSessionId(res.data.id);
+    setMeetingMessages(res.data.messages);
+    setPreview(null);
+    setMeetingMode(true);
+  }, []);
+
+  const handleMeetingSubmit = useCallback(
+    async (raw: string) => {
+      const text = raw.trim();
+      if (!text || meetingSending || !meetingSessionId) return;
+      setMeetingError(null);
+      setMeetingInput("");
+      setMeetingMessages((prev) => [...prev, { role: "user", content: text }]);
+      setMeetingSending(true);
+      setMeetingStreamingText("");
+
+      await streamFeedbackChat(meetingSessionId, text, getCurrentAiContext(), {
+        onDelta: (chunk) => setMeetingStreamingText((prev) => (prev ?? "") + chunk),
+        onDone: (result) => {
+          setMeetingSending(false);
+          setMeetingStreamingText(null);
+          setMeetingMessages((prev) => [...prev, { role: "assistant", content: result.text }]);
+        },
+        onError: (msg) => {
+          setMeetingSending(false);
+          setMeetingStreamingText(null);
+          setMeetingError(msg);
+        },
+      });
+    },
+    [meetingSending, meetingSessionId],
+  );
+
+  const handleSummarize = useCallback(async () => {
+    if (!meetingSessionId) return;
+    setSummarizing(true);
+    setMeetingError(null);
+    const res = await apiPost<{ fields: FeedbackFields; summary_md: string }>("/api/feedback/session/summarize", {
+      session_id: meetingSessionId,
+    });
+    setSummarizing(false);
+    if (!res.ok) {
+      setMeetingError(res.message);
+      return;
+    }
+    setPreview(res.data.fields);
+  }, [meetingSessionId]);
+
+  const handlePreviewFieldChange = useCallback((key: EditableFeedbackKey, value: string) => {
+    setPreview((prev) => (prev ? { ...prev, [key]: value } : prev));
+  }, []);
+
+  const resetMeetingState = useCallback(() => {
+    setMeetingMode(false);
+    setMeetingSessionId(null);
+    setMeetingMessages([]);
+    setMeetingInput("");
+    setMeetingStreamingText(null);
+    setMeetingError(null);
+    setPreview(null);
+  }, []);
+
+  const handleConfirmSubmit = useCallback(async () => {
+    if (!meetingSessionId || !preview) return;
+    setSubmitting(true);
+    setMeetingError(null);
+    const fields = {
+      title: preview.title,
+      current_problem: preview.current_problem,
+      desired_change: preview.desired_change,
+      reason: preview.reason,
+      related: preview.related,
+      open_questions: preview.open_questions,
+    };
+    const res = await apiPost("/api/feedback/session/submit", { session_id: meetingSessionId, fields });
+    setSubmitting(false);
+    if (!res.ok) {
+      setMeetingError(res.message);
+      return;
+    }
+    resetMeetingState();
+    setMeetingToast("已送出俾老闆");
+    window.setTimeout(() => setMeetingToast(null), 4000);
+  }, [meetingSessionId, preview, resetMeetingState]);
+
+  const handleCancelMeeting = useCallback(async () => {
+    if (meetingSessionId) {
+      await apiPost("/api/feedback/session/abandon", { session_id: meetingSessionId });
+    }
+    resetMeetingState();
+  }, [meetingSessionId, resetMeetingState]);
 
   const showWelcome = messages.length === 0 && !sending && !loadingHistory;
 
@@ -265,10 +415,21 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
         >
           <div className="flex items-center gap-2.5 border-b border-zk-border px-4 py-3">
             <span className="h-2 w-2 shrink-0 rounded-full bg-zk-primary" />
-            <h2 className="text-sm font-semibold text-zk-text">在勤助手</h2>
-            {!isMobile && <span className="text-[11px] text-zk-faint">只讀 · 答數據問題</span>}
+            <h2 className="text-sm font-semibold text-zk-text">{meetingMode ? "在勤助手 · 開會反映" : "在勤助手"}</h2>
+            {!isMobile && !meetingMode && <span className="text-[11px] text-zk-faint">只讀 · 答數據問題</span>}
             <div className="ml-auto flex items-center gap-1">
-              {!isMobile && (
+              {!meetingMode && (
+                <button
+                  type="button"
+                  data-testid="ai-feedback-start"
+                  onClick={handleStartMeeting}
+                  disabled={meetingStarting}
+                  className="rounded px-2 py-1 text-xs font-semibold text-zk-primary hover:bg-zk-surface disabled:opacity-50"
+                >
+                  {meetingStarting ? "開緊…" : "開會反映"}
+                </button>
+              )}
+              {!isMobile && !meetingMode && (
                 <button
                   type="button"
                   onClick={toggleWidth}
@@ -278,14 +439,16 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   {width >= WIDE_WIDTH ? "窄" : "闊"}
                 </button>
               )}
-              <button
-                type="button"
-                data-testid="ai-clear-conversation"
-                onClick={() => setConfirmingClear(true)}
-                className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
-              >
-                清空
-              </button>
+              {!meetingMode && (
+                <button
+                  type="button"
+                  data-testid="ai-clear-conversation"
+                  onClick={() => setConfirmingClear(true)}
+                  className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
+                >
+                  清空
+                </button>
+              )}
               <button
                 type="button"
                 aria-label="關閉在勤助手"
@@ -297,7 +460,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             </div>
           </div>
 
-          {confirmingClear && (
+          {!meetingMode && confirmingClear && (
             <div className="flex items-center justify-between gap-2 border-b border-yellow-200 bg-yellow-50 px-4 py-2 text-xs text-yellow-800">
               <span>確定清空成個對話記錄？呢個動作唔可以復原。</span>
               <div className="flex shrink-0 gap-2">
@@ -311,6 +474,94 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             </div>
           )}
 
+          {meetingMode && (
+            <div data-testid="ai-feedback-mode" className="px-4 pt-3">
+              <Notice variant="info">開會模式——講清楚你想改乜同點解，助手會問清楚再幫你整理；唔好打電話／銀行資料。</Notice>
+            </div>
+          )}
+
+          {meetingMode ? (
+            preview ? (
+              <div data-testid="ai-feedback-preview" className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+                <div className="space-y-1">
+                  <div className="text-[11px] font-semibold text-zk-faint">提出人（唔可以改）</div>
+                  <div className="rounded-md border border-zk-border bg-zk-surface px-3 py-2 text-[13px] text-zk-text-secondary">{preview.reporter}</div>
+                </div>
+                {EDITABLE_FEEDBACK_FIELDS.map(({ key, label }) => (
+                  <div key={key} className="space-y-1">
+                    <div className="text-[11px] font-semibold text-zk-faint">{label}</div>
+                    <textarea
+                      data-testid={`ai-feedback-field-${key}`}
+                      value={preview[key]}
+                      onChange={(e) => handlePreviewFieldChange(key, e.target.value)}
+                      rows={key === "title" ? 1 : 3}
+                      className="w-full resize-none rounded-md border border-zk-input-border px-2.5 py-2 text-[13px] focus:border-zk-primary focus:outline-none"
+                    />
+                  </div>
+                ))}
+                <div className="space-y-1">
+                  <div className="text-[11px] font-semibold text-zk-faint">（唔可以改）</div>
+                  <div className="rounded-md border border-zk-border bg-zk-surface px-3 py-2 text-[12px] text-zk-muted">{preview.footer}</div>
+                </div>
+                {meetingError && (
+                  <div data-testid="ai-error" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {meetingError}
+                  </div>
+                )}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    data-testid="ai-feedback-submit"
+                    onClick={handleConfirmSubmit}
+                    disabled={submitting}
+                    className="flex-1 rounded-md bg-zk-primary px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-50"
+                  >
+                    {submitting ? "送出緊…" : "確認送出"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreview(null)}
+                    className="rounded-md border border-zk-border px-3 py-2 text-[13px] text-zk-text-secondary hover:bg-zk-surface"
+                  >
+                    返回對話
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                ref={messageListRef}
+                data-testid="ai-message-list"
+                className={`flex-1 space-y-3 overflow-y-auto ${isMobile ? "px-4 py-4" : "px-4 py-4"}`}
+              >
+                {meetingMessages.map((m, i) => (
+                  <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
+                    <div
+                      data-testid={m.role === "user" ? "ai-message-user" : "ai-message-assistant"}
+                      className={
+                        m.role === "user"
+                          ? "max-w-[86%] rounded-xl bg-zk-primary px-3 py-[9px] text-[13px] leading-[1.55] text-white"
+                          : "max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[13px] leading-[1.55] text-zk-text"
+                      }
+                    >
+                      {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : <span className="whitespace-pre-wrap">{m.content}</span>}
+                    </div>
+                  </div>
+                ))}
+                {meetingSending && (
+                  <div className="flex justify-start">
+                    <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[13px] text-zk-muted">
+                      {meetingStreamingText ? <span className="whitespace-pre-wrap">{meetingStreamingText}</span> : "思考緊…"}
+                    </div>
+                  </div>
+                )}
+                {meetingError && (
+                  <div data-testid="ai-error" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {meetingError}
+                  </div>
+                )}
+              </div>
+            )
+          ) : (
           <div
             ref={messageListRef}
             data-testid="ai-message-list"
@@ -364,49 +615,123 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
               </div>
             )}
           </div>
+          )}
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void handleSubmit(inputValue);
-            }}
-            className="flex items-end gap-2 border-t border-zk-border p-3"
-          >
-            <textarea
-              ref={textareaRef}
-              data-testid="ai-input"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleSubmit(inputValue);
-                }
+          {meetingMode ? (
+            !preview && (
+              <div className="border-t border-zk-border">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void handleMeetingSubmit(meetingInput);
+                  }}
+                  className="flex items-end gap-2 p-3"
+                >
+                  <textarea
+                    data-testid="ai-input"
+                    value={meetingInput}
+                    onChange={(e) => setMeetingInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void handleMeetingSubmit(meetingInput);
+                      }
+                    }}
+                    rows={isMobile ? 1 : 2}
+                    placeholder="講清楚你想反映咩……"
+                    aria-label="輸入反映內容"
+                    disabled={meetingSending}
+                    className={
+                      isMobile
+                        ? "min-h-[44px] flex-1 resize-none rounded-[22px] border border-zk-input-border px-3.5 py-2.5 text-sm focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+                        : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-[13px] focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+                    }
+                  />
+                  <button
+                    type="submit"
+                    data-testid="ai-submit"
+                    disabled={meetingSending || !meetingInput.trim()}
+                    aria-label="送出"
+                    className={
+                      isMobile
+                        ? "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zk-primary text-lg font-bold text-white disabled:opacity-50"
+                        : "flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-zk-primary text-base font-bold text-white disabled:opacity-50"
+                    }
+                  >
+                    ↑
+                  </button>
+                </form>
+                <div className="flex gap-2 border-t border-zk-border px-3 py-2.5">
+                  <button
+                    type="button"
+                    data-testid="ai-feedback-summarize"
+                    onClick={handleSummarize}
+                    disabled={meetingTurnCount < 2 || summarizing || meetingSending}
+                    className="flex-1 rounded-md bg-[#0f172a] px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-40"
+                  >
+                    {summarizing ? "整理緊…" : "整理並送出"}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="ai-feedback-cancel"
+                    onClick={handleCancelMeeting}
+                    className="rounded-md border border-zk-border px-3 py-2 text-[13px] text-zk-text-secondary hover:bg-zk-surface"
+                  >
+                    取消開會
+                  </button>
+                </div>
+              </div>
+            )
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleSubmit(inputValue);
               }}
-              rows={isMobile ? 1 : 2}
-              placeholder={isMobile ? "問啲咩？" : "問啲咩？（Enter 送出，Shift+Enter 換行）"}
-              aria-label="輸入問題"
-              disabled={sending}
-              className={
-                isMobile
-                  ? "min-h-[44px] flex-1 resize-none rounded-[22px] border border-zk-input-border px-3.5 py-2.5 text-sm focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
-                  : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-[13px] focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
-              }
-            />
-            <button
-              type="submit"
-              data-testid="ai-submit"
-              disabled={sending || !inputValue.trim()}
-              aria-label="送出"
-              className={
-                isMobile
-                  ? "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zk-primary text-lg font-bold text-white disabled:opacity-50"
-                  : "flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-zk-primary text-base font-bold text-white disabled:opacity-50"
-              }
+              className="flex items-end gap-2 border-t border-zk-border p-3"
             >
-              ↑
-            </button>
-          </form>
+              <textarea
+                ref={textareaRef}
+                data-testid="ai-input"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSubmit(inputValue);
+                  }
+                }}
+                rows={isMobile ? 1 : 2}
+                placeholder={isMobile ? "問啲咩？" : "問啲咩？（Enter 送出，Shift+Enter 換行）"}
+                aria-label="輸入問題"
+                disabled={sending}
+                className={
+                  isMobile
+                    ? "min-h-[44px] flex-1 resize-none rounded-[22px] border border-zk-input-border px-3.5 py-2.5 text-sm focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+                    : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-[13px] focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+                }
+              />
+              <button
+                type="submit"
+                data-testid="ai-submit"
+                disabled={sending || !inputValue.trim()}
+                aria-label="送出"
+                className={
+                  isMobile
+                    ? "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zk-primary text-lg font-bold text-white disabled:opacity-50"
+                    : "flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-zk-primary text-base font-bold text-white disabled:opacity-50"
+                }
+              >
+                ↑
+              </button>
+            </form>
+          )}
+
+          {meetingToast && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+              <div className="rounded-full bg-[#0f172a] px-4 py-2 text-xs text-white shadow-lg">{meetingToast}</div>
+            </div>
+          )}
         </div>
       )}
     </>

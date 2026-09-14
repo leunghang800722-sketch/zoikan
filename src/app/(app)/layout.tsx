@@ -36,7 +36,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // 篩選，會令 badge 數字細過 `/approvals` 頁實際筆數，令人以為「仲有
   // 未算入 badge 嘅待批」。改成同頁面一樣唔篩月份。
   const approvalsPending = grants["審批"] ? await prisma.shiftRecord.count({ where: { status: "pending_approval" } }) : 0;
-  const badges: Record<string, number> = approvalsPending > 0 ? { "/approvals": approvalsPending } : {};
+  // P2.5「現場反映」開會模式——「現場意見」badge＝status=new 嘅報告數
+  // （同審批 badge 一樣做法：server count，淨係老闆先查，見
+  // `src/lib/rbac/nav.ts` 嘅「現場意見」連結一樣用「助手」module＋
+  // baseRole==="老闆" 雙重判斷）。
+  const unreadFeedback = grants["助手"] && session.baseRole === "老闆" ? await prisma.feedbackReport.count({ where: { status: "new" } }) : 0;
+  const badges: Record<string, number> = {
+    ...(approvalsPending > 0 ? { "/approvals": approvalsPending } : {}),
+    ...(unreadFeedback > 0 ? { "/feedback": unreadFeedback } : {}),
+  };
 
   // WP-AI3：邊個 provider 配置好（DeepSeek／Anthropic／測試用 fake）
   // 判斷邏輯抽咗喺 `@/lib/ai/config.ts`，同 `getLlmClient()`

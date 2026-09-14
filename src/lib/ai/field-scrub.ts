@@ -106,3 +106,24 @@ export function scrubUnknownShape<T>(value: T, vis: AiFieldVisibility): T {
   if (!vis.settlementVisible) out = dropKeysDeep(out, ALL_SETTLEMENT_FIELD_NAMES);
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// P2.5「現場反映」開會模式——電話號碼 pattern（best-effort，同上面「已知
+// 限制」一致嘅刻意權衡：簡單 regex，唔係完整 PII detector）。用途兩個：
+// 1. `src/app/api/feedback/session/chat/route.ts` 送用戶輸入去 LLM 之前
+//    先過呢個（呼應 `docs/ai-assistant.md`「電話、銀行資料、密碼、OTP
+//    一律唔准送」——訪談對話都係送去 Anthropic/DeepSeek 處理，唔可以
+//    例外）。
+// 2. `src/lib/feedback/ai-tools/list-feedback.ts`（老闆用 AI 助手讀已經
+//    送出嘅意見）讀出嗰陣再 scrub 一次（defense-in-depth——即使入口
+//    冇擋晒，呢一層做最後把關）。
+// 香港電話：8 位數字（可以有 +852／852 前綴、空格、連字號）。刻意寬鬆
+// （寧枉勿縱）：連 8 位純數字（唔係電話嘅普通數量詞，例如「20250101」
+// 呢類日期）都會被剝——呢個係規劃裁定嘅刻意權衡，見上面「已知限制」
+// 一節嘅精神（simple regex over完整 NLP/PII detector）。
+// ---------------------------------------------------------------------------
+const PHONE_LIKE_PATTERN = /(\+?852[-\s]?)?\b\d{4}[-\s]?\d{4}\b/g;
+
+export function scrubPhoneLike(text: string): string {
+  return text.replace(PHONE_LIKE_PATTERN, "[已隱藏電話]");
+}

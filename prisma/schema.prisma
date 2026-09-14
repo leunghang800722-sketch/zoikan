@@ -599,6 +599,11 @@ model User {
 
   auditLogs      AuditLog[]
   aiConversation AiConversation?
+  // P2.5：現場反映開會模式——一個用戶同時最多一個 draft（見
+  // src/lib/feedback/session.ts 嘅 getOrCreateDraftSession()），但歷史
+  // 上可以有幾個 submitted/abandoned，所以係 array 唔係 unique 一對一。
+  feedbackSessions FeedbackSession[]
+  feedbackReports  FeedbackReport[]
 
   @@map("users")
 }
@@ -670,4 +675,64 @@ model AiConversation {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("ai_conversations")
+}
+
+// ---------------------------------------------------------------------------
+// P2.5「現場反映」開會模式（老闆 2026-09-15 拍板，方案 D）——助手做訪談員
+// （src/lib/ai/feedback-prompt.ts），唔評可行性（見 feasibility-guard.ts），
+// 討論存 feedback_sessions；撳「整理並送出」由伺服器叫模型按範本生成
+// 摘要，用戶預覽可改，確認先由伺服器 code（唔係模型工具）寫入
+// feedback_reports。`ai` schema 唔加呢兩張表嘅 view（模型讀唔到原始
+// session），老闆讀意見用 `list_feedback` 呢個獨立工具（
+// src/lib/feedback/ai-tools/list-feedback.ts，唔經 zoikan_ai_ro，因為
+// 唔喺 ai schema——見 docs/ai-assistant.md「開會反映」一節嘅例外說明）。
+// ---------------------------------------------------------------------------
+model FeedbackSession {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id])
+  // draft|submitted|abandoned——一個用戶同時最多一個 draft（application
+  // 層保證，見 getOrCreateDraftSession()，冇加 DB partial unique index，
+  // 同呢個 codebase 其他「一個時點限一個」規則一致做法，例如
+  // ai_conversations 用 unique(userId) 就唔使呢招，但呢度要保留歷史
+  // submitted/abandoned session，唔可以做 unique(userId)）。
+  status      String   @default("draft")
+  messages    Json     @default("[]") // 格式同 ai_conversations.messages 一致：{role,content,createdAt}[]
+  pageContext Json?    @map("page_context") // {path,site_id,month,broker}——同 AiPageContext 一致，純提示用途
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  reports FeedbackReport[]
+
+  @@index([userId, status])
+  @@map("feedback_sessions")
+}
+
+model FeedbackReport {
+  id        String          @id @default(uuid())
+  sessionId String          @map("session_id")
+  session   FeedbackSession @relation(fields: [sessionId], references: [id])
+  userId    String          @map("user_id")
+  user      User            @relation(fields: [userId], references: [id])
+  roleName  String          @map("role_name") // 快照——提出人嗰陣嘅角色名，唔跟返 user.role 之後嘅改動
+
+  title     String
+  summaryMd String @map("summary_md") // 完整範本文字，用戶確認版（伺服器由 fields 組成，唔靠模型排版）
+  fields    Json // {title,reporter,current_problem,desired_change,reason,related,open_questions,footer}
+
+  transcriptExcerpt Json @map("transcript_excerpt") // 最後 20 輪對話節錄
+
+  // new|read|forwarded|declined
+  status     String    @default("new")
+  reviewNote String?   @map("review_note")
+  reviewedBy String?   @map("reviewed_by") // 老闆 user id（plain string，同呢個 codebase voidedBy 一致做法，唔起 FK relation）
+  reviewedAt DateTime? @map("reviewed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([userId])
+  @@map("feedback_reports")
 }

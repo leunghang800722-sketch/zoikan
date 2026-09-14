@@ -49,6 +49,26 @@ const REFERRAL_FEE_RATE_FIELDS = ["id", "brokerId", "siteId", "month", "feePerSh
 // N1：audit_log 本身嘅白名單（都經呢個機制，一致對待——雖然 AuditLog
 // model 目前冇任何「唔應該出街」嘅欄，但結構上一致，日後加欄唔會自動漏）。
 const AUDIT_LOG_FIELDS = ["id", "actorUserId", "tableName", "rowId", "action", "before", "after", "ip", "createdAt"] as const;
+// P2.5「現場反映」開會模式——feedback_reports 白名單。冇金錢欄，唔需要
+// field-group gate；讀取權限（作者本人／老闆）喺 route 層判斷（見
+// src/app/api/feedback/reports/**）。
+const FEEDBACK_REPORT_FIELDS = [
+  "id",
+  "sessionId",
+  "userId",
+  "roleName",
+  "title",
+  "summaryMd",
+  "fields",
+  "transcriptExcerpt",
+  "status",
+  "reviewNote",
+  "reviewedBy",
+  "reviewedAt",
+  "createdAt",
+  "updatedAt",
+] as const;
+export const toFeedbackReportDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, FEEDBACK_REPORT_FIELDS);
 
 function mapRow<T extends Record<string, unknown>>(row: T, fields: readonly string[]): Dto {
   return pickWhitelist(row, fields);
