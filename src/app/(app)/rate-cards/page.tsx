@@ -1,11 +1,20 @@
 "use client";
+// P2-A：價目頁（README §10）——換皮，邏輯／API 呼叫、權限遮蔽
+// （hasClientRate/hasPayoutRate 判斷唔變）全部保留。
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterChip } from "@/components/ui/FilterChip";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate, fmtMoney } from "@/lib/ui/format";
+import { brokerColor } from "@/lib/ui/broker-color";
+import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 
 const BILLING_MODELS = ["per_shift", "monthly_fixed", "admin_fee", "special"] as const;
 const PAGE_SIZE = 50;
@@ -130,14 +139,13 @@ export default function RateCardsPage() {
   function siteLabel(id: string): string {
     return sites.find((s) => s.id === id)?.canonical_name ?? id.slice(0, 8);
   }
-  function shiftTypeLabel(id?: string | null): string {
-    if (!id) return "通用";
-    return shiftTypes.find((s) => s.id === id)?.code ?? id.slice(0, 8);
+  function shiftType(id?: string | null): ShiftTypeRow | undefined {
+    if (!id) return undefined;
+    return shiftTypes.find((s) => s.id === id);
   }
-  function brokerLabel(id?: string | null): string {
-    if (!id) return "通用";
-    const b = brokers.find((x) => x.id === id);
-    return b ? b.name : id.slice(0, 8);
+  function broker(id?: string | null): BrokerRow | undefined {
+    if (!id) return undefined;
+    return brokers.find((x) => x.id === id);
   }
   function guardLabel(id?: string | null): string {
     if (!id) return "通用";
@@ -203,113 +211,181 @@ export default function RateCardsPage() {
     await load();
   }
 
+  const colCount = 10;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">價目</h1>
-          <p className="text-sm text-gray-500">收客價／出街價——冇對應權限嘅欄一律顯示「—」。</p>
-        </div>
-        <button type="button" onClick={openCreate} className={btnPrimary}>
-          新增
-        </button>
-      </div>
+      <PageHeader
+        kicker="主檔"
+        title="價目"
+        subtitle="每個盤每個更別每個雞頭嘅價；冇權睇嘅欄顯示「—」。"
+        actions={
+          <>
+            <FilterChip label="盤">
+              <select
+                value={siteFilter}
+                onChange={(e) => {
+                  setSiteFilter(e.target.value);
+                  setSkip(0);
+                }}
+              >
+                <option value="">全部盤</option>
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.canonical_name}
+                  </option>
+                ))}
+              </select>
+            </FilterChip>
+            <Button variant="primary" onClick={openCreate}>
+              新增價目
+            </Button>
+          </>
+        }
+      />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
-      <select
-        className={selectCls + " max-w-xs"}
-        value={siteFilter}
-        onChange={(e) => {
-          setSiteFilter(e.target.value);
-          setSkip(0);
-        }}
-      >
-        <option value="">全部盤</option>
-        {sites.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.canonical_name}
-          </option>
-        ))}
-      </select>
-
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
-            <tr>
-              <th className="px-3 py-2">盤</th>
-              <th className="px-3 py-2">更別</th>
-              <th className="px-3 py-2">雞頭</th>
-              <th className="px-3 py-2">保安員</th>
-              <th className="px-3 py-2">收客價</th>
-              <th className="px-3 py-2">出街價</th>
-              <th className="px-3 py-2">保安員工資</th>
-              <th className="px-3 py-2">雞頭費</th>
-              <th className="px-3 py-2">生效期</th>
-              <th className="px-3 py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={10}>
-                  載入緊…
-                </td>
-              </tr>
-            )}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={10}>
-                  暫時冇資料
-                </td>
-              </tr>
-            )}
-            {rows.map((r) => (
-              <tr key={r.id} className={`border-t border-gray-100 ${r.voided_at ? "opacity-50" : ""}`}>
-                <td className="px-3 py-2">{siteLabel(r.site_id)}</td>
-                <td className="px-3 py-2">{shiftTypeLabel(r.shift_type_id)}</td>
-                <td className="px-3 py-2">{brokerLabel(r.broker_id)}</td>
-                <td className="px-3 py-2">{guardLabel(r.guard_id)}</td>
-                <td className="px-3 py-2">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</td>
-                <td className="px-3 py-2">{hasPayoutRate ? fmtMoney(r.payout_rate) : "—"}</td>
-                <td className="px-3 py-2">{fmtMoney(r.guard_wage)}</td>
-                <td className="px-3 py-2">{fmtMoney(r.broker_fee)}</td>
-                <td className="px-3 py-2">
-                  {fmtDate(r.effective_from)} – {r.effective_to ? fmtDate(r.effective_to) : "無限期"}
-                </td>
-                <td className="px-3 py-2">
-                  {r.voided_at ? (
-                    <button
-                      type="button"
-                      onClick={() => onUnvoid(r.id)}
-                      className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50"
-                    >
-                      解除作廢
-                    </button>
-                  ) : (
-                    <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex items-center justify-between text-sm text-gray-500">
-        <span>
-          共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
-        </span>
-        <div className="flex gap-2">
-          <button type="button" disabled={skip === 0} onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))} className={btnSecondary}>
-            上一頁
-          </button>
-          <button type="button" disabled={skip + PAGE_SIZE >= total} onClick={() => setSkip((s) => s + PAGE_SIZE)} className={btnSecondary}>
-            下一頁
-          </button>
+      {!loading && rows.length === 0 ? (
+        <div className={tableCls.wrap}>
+          <EmptyState title="暫時冇價目紀錄" description="撳右上「新增價目」開始建立收客價／出街價。" cta={<Button variant="primary" onClick={openCreate}>新增價目</Button>} />
         </div>
-      </div>
+      ) : (
+        <>
+          <div className={`hidden sm:block ${tableCls.wrap}`}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(colCount) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>盤</th>
+                  <th className={tableCls.th}>更別</th>
+                  <th className={tableCls.th}>雞頭</th>
+                  <th className={tableCls.th}>保安員</th>
+                  <th className={tableCls.thNum}>收客價</th>
+                  <th className={tableCls.thNum}>出街價</th>
+                  <th className={tableCls.thNum}>保安員工資</th>
+                  <th className={tableCls.thNum}>雞頭費</th>
+                  <th className={tableCls.th}>生效期</th>
+                  <th className={tableCls.th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
+                      載入緊…
+                    </td>
+                  </tr>
+                )}
+                {rows.map((r) => {
+                  const st = shiftType(r.shift_type_id);
+                  const b = broker(r.broker_id);
+                  return (
+                    <tr key={r.id} className={`${tableCls.rowHover} ${r.voided_at ? "opacity-45" : ""}`}>
+                      <td className={`${tableCls.td} font-medium`}>{siteLabel(r.site_id)}</td>
+                      <td className={tableCls.td}>
+                        {st ? (
+                          <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+                            {st.code}
+                          </Pill>
+                        ) : (
+                          <Pill variant="neutral">通用</Pill>
+                        )}
+                      </td>
+                      <td className={tableCls.td}>
+                        {b ? (
+                          <Pill variant="broker" color={brokerColor(b.code)}>
+                            {b.name}
+                          </Pill>
+                        ) : (
+                          "通用"
+                        )}
+                      </td>
+                      <td className={tableCls.td}>{guardLabel(r.guard_id)}</td>
+                      <td className={tableCls.tdNum}>{hasClientRate ? fmtMoney(r.client_rate) : "—"}</td>
+                      <td className={tableCls.tdNum}>{hasPayoutRate ? fmtMoney(r.payout_rate) : "—"}</td>
+                      <td className={tableCls.tdNum}>{fmtMoney(r.guard_wage)}</td>
+                      <td className={tableCls.tdNum}>{fmtMoney(r.broker_fee)}</td>
+                      <td className={tableCls.tdMuted}>
+                        {fmtDate(r.effective_from)} – {r.effective_to ? fmtDate(r.effective_to) : "無限期"}
+                      </td>
+                      <td className={tableCls.td}>
+                        {r.voided_at ? (
+                          <button
+                            type="button"
+                            onClick={() => onUnvoid(r.id)}
+                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                          >
+                            解除作廢
+                          </button>
+                        ) : (
+                          <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-2 sm:hidden">
+            {rows.map((r) => {
+              const st = shiftType(r.shift_type_id);
+              const b = broker(r.broker_id);
+              return (
+                <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13.5px] font-medium text-zk-text">{siteLabel(r.site_id)}</span>
+                    <span className="text-[13px] tabular-nums text-zk-text">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                    {st ? (
+                      <Pill variant="broker" color={shiftCodeStyle(st.code)}>
+                        {st.code}
+                      </Pill>
+                    ) : (
+                      <Pill variant="neutral">通用</Pill>
+                    )}
+                    {b && (
+                      <Pill variant="broker" color={brokerColor(b.code)}>
+                        {b.name}
+                      </Pill>
+                    )}
+                    <span>{guardLabel(r.guard_id)}</span>
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                    出街 {hasPayoutRate ? fmtMoney(r.payout_rate) : "—"} · 生效 {fmtDate(r.effective_from)}–{r.effective_to ? fmtDate(r.effective_to) : "無限期"}
+                  </div>
+                  <div className="mt-2">
+                    {r.voided_at ? (
+                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                        解除作廢
+                      </button>
+                    ) : (
+                      <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between text-[12.5px] text-zk-muted">
+            <span>
+              共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
+            </span>
+            <div className="flex gap-2">
+              <Button variant="secondary" disabled={skip === 0} onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}>
+                上一頁
+              </Button>
+              <Button variant="secondary" disabled={skip + PAGE_SIZE >= total} onClick={() => setSkip((s) => s + PAGE_SIZE)}>
+                下一頁
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
 
       <Drawer open={drawerOpen} title="新增價目" onClose={() => setDrawerOpen(false)}>
         <form onSubmit={onSubmit} className="space-y-3">

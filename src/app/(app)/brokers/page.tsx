@@ -1,11 +1,21 @@
 "use client";
+// P2-A：雞頭管理頁（README §09）——換皮，邏輯／API 呼叫全部保留。
+// 「人數」「掛邊啲盤」兩欄係純前端計出嚟：人數＝/api/guards 入面
+// default_broker_id 等於呢個雞頭嘅個數；掛邊啲盤＝
+// /api/referral-fee-rates 入面呢個雞頭有 site_id 嘅費率行（去重）——
+// 兩個都係現有 GET endpoint，冇加任何新 API／權限。
 import { useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney } from "@/lib/ui/format";
+import { brokerColor } from "@/lib/ui/broker-color";
 
 const BROKER_KINDS = ["broker", "internal_cash", "internal_longterm", "external", "special"] as const;
 const SETTLEMENT_TYPES = ["cash", "autopay", "salary", "none"] as const;
@@ -32,11 +42,6 @@ const emptyForm = {
   aliases: "",
 };
 
-// P1-WP3（E）：referral_fee_rates（雞頭介紹費率）——每個雞頭一份子表，
-// 逐盤逐月可變。「雞頭」module——出廠淨係老闆有 create/update/void
-// grant（主管/會計出廠 ○，可以後續喺角色權限管理開）；雞頭自己讀
-// GET 見自己，寫入一律硬性 deny，呢個管理頁本身雞頭角色都入唔到
-// （見 src/app/(app)/layout.tsx 嘅選單/路由權限）。
 interface ReferralFeeRateRow {
   id: string;
   broker_id: string;
@@ -49,8 +54,23 @@ interface SiteRow {
   id: string;
   canonical_name: string;
 }
+interface GuardRow {
+  id: string;
+  default_broker_id?: string | null;
+}
 
 const emptyFeeRateForm = { site_id: "", month: "", fee_per_shift: "" };
+
+// P2 規劃判斷（Fable，唔算 README 衝突）：broker.kind 冇喺 README 逐個
+// 定義中文名——「外判/公司兵/公司長工」對應 broker/external → 外判，
+// internal_cash → 公司兵，internal_longterm → 公司長工；special 冇對應，
+// 原字面中性灰顯示。
+function kindPill(kind: string) {
+  if (kind === "internal_cash") return <Pill variant="shift">公司兵</Pill>;
+  if (kind === "internal_longterm") return <Pill variant="shift">公司長工</Pill>;
+  if (kind === "broker" || kind === "external") return <Pill variant="neutral">外判</Pill>;
+  return <Pill variant="neutral">{kind}</Pill>;
+}
 
 export default function BrokersPage() {
   const [rows, setRows] = useState<BrokerRow[]>([]);
@@ -64,7 +84,6 @@ export default function BrokersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // P1-WP3（E）：介紹費率子表——揀咗邊個雞頭先出嚟。
   const [feeRatesBroker, setFeeRatesBroker] = useState<BrokerRow | null>(null);
   const [feeRates, setFeeRates] = useState<ReferralFeeRateRow[]>([]);
   const [feeRatesLoading, setFeeRatesLoading] = useState(false);
@@ -76,6 +95,10 @@ export default function BrokersPage() {
   const [feeRateForm, setFeeRateForm] = useState(emptyFeeRateForm);
   const [feeRateFormError, setFeeRateFormError] = useState<string | null>(null);
   const [feeRateSaving, setFeeRateSaving] = useState(false);
+
+  // README §09「人數」「掛邊邊啲盤」——全公司安員／全部費率行各載一次。
+  const [guardCountByBroker, setGuardCountByBroker] = useState<Record<string, number>>({});
+  const [sitesByBroker, setSitesByBroker] = useState<Record<string, string[]>>({});
 
   async function load() {
     setLoading(true);
@@ -95,11 +118,35 @@ export default function BrokersPage() {
     apiGet<ApiListResult<SiteRow>>("/api/sites?take=500").then((res) => {
       if (res.ok) setSites(res.data.rows);
     });
+    apiGet<ApiListResult<GuardRow>>("/api/guards?take=500").then((res) => {
+      if (!res.ok) return;
+      const counts: Record<string, number> = {};
+      for (const g of res.data.rows) {
+        if (!g.default_broker_id) continue;
+        counts[g.default_broker_id] = (counts[g.default_broker_id] ?? 0) + 1;
+      }
+      setGuardCountByBroker(counts);
+    });
+    apiGet<ApiListResult<ReferralFeeRateRow>>("/api/referral-fee-rates?take=500").then((res) => {
+      if (!res.ok) return;
+      const map: Record<string, Set<string>> = {};
+      for (const r of res.data.rows) {
+        if (!r.site_id || r.voided_at) continue;
+        (map[r.broker_id] ??= new Set()).add(r.site_id);
+      }
+      setSitesByBroker(Object.fromEntries(Object.entries(map).map(([k, v]) => [k, Array.from(v)])));
+    });
   }, []);
 
   function siteLabel(id?: string | null): string {
     if (!id) return "（全盤預設）";
     return sites.find((s) => s.id === id)?.canonical_name ?? id.slice(0, 8);
+  }
+
+  function sitesLabel(brokerId: string): string {
+    const ids = sitesByBroker[brokerId] ?? [];
+    if (ids.length === 0) return "—";
+    return ids.map((id) => sites.find((s) => s.id === id)?.canonical_name ?? id.slice(0, 8)).join("、");
   }
 
   async function loadFeeRates(brokerId: string) {
@@ -111,9 +158,6 @@ export default function BrokersPage() {
       return;
     }
     setFeeRates(res.data.rows);
-    // 冇「出街價:view」嘅角色（例如關咗呢格權限嘅會計）response 會冇
-    // fee_per_shift 呢粒欄——同 rate-cards 頁 hasClientRate/hasPayoutRate
-    // 一致做法，成欄顯示「—」，唔靠估。
     setHasFeePerShift(res.data.rows.length === 0 ? true : res.data.rows.some((r) => "fee_per_shift" in r));
     setFeeRatesLoading(false);
   }
@@ -255,7 +299,7 @@ export default function BrokersPage() {
       setError(res.message);
       return;
     }
-    setNotice("已停用");
+    setNotice("已作廢");
     await load();
   }
 
@@ -270,139 +314,180 @@ export default function BrokersPage() {
     await load();
   }
 
+  const colCount = 7;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">雞頭管理</h1>
-          <p className="text-sm text-gray-500">每行「介紹費率」開返嗰個雞頭嘅逐盤逐月費率子表。</p>
-        </div>
-        <button type="button" onClick={openCreate} className={btnPrimary}>
-          新增
-        </button>
-      </div>
+      <PageHeader
+        kicker="主檔"
+        title="雞頭"
+        subtitle="每行「介紹費率」開返嗰個雞頭嘅逐盤逐月費率子表。"
+        actions={
+          <Button variant="primary" onClick={openCreate}>
+            新增雞頭
+          </Button>
+        }
+      />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
-            <tr>
-              <th className="px-3 py-2">代號</th>
-              <th className="px-3 py-2">名稱</th>
-              <th className="px-3 py-2">類型</th>
-              <th className="px-3 py-2">需要審批</th>
-              <th className="px-3 py-2">狀態</th>
-              <th className="px-3 py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  載入緊…
-                </td>
-              </tr>
-            )}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
-                  暫時冇資料
-                </td>
-              </tr>
-            )}
+      {!loading && rows.length === 0 ? (
+        <div className={tableCls.wrap}>
+          <EmptyState title="暫時冇雞頭" description="撳右上「新增雞頭」開始建立雞頭資料。" cta={<Button variant="primary" onClick={openCreate}>新增雞頭</Button>} />
+        </div>
+      ) : (
+        <>
+          <div className={`hidden sm:block ${tableCls.wrap}`}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(colCount) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>代號</th>
+                  <th className={tableCls.th}>名稱</th>
+                  <th className={tableCls.th}>種類</th>
+                  <th className={tableCls.thNum}>人數</th>
+                  <th className={tableCls.th}>掛邊啲盤</th>
+                  <th className={tableCls.th}>狀態</th>
+                  <th className={tableCls.th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className={tableCls.tdMuted} colSpan={colCount}>
+                      載入緊…
+                    </td>
+                  </tr>
+                )}
+                {rows.map((r) => (
+                  <tr key={r.id} className={tableCls.rowHover}>
+                    <td className={`${tableCls.td} font-semibold`} style={{ color: brokerColor(r.code).fg }}>
+                      {r.code}
+                    </td>
+                    <td className={`${tableCls.td} font-medium`}>{r.name}</td>
+                    <td className={tableCls.td}>{kindPill(r.kind)}</td>
+                    <td className={tableCls.tdNum}>{guardCountByBroker[r.id] ?? 0}</td>
+                    <td className={tableCls.tdMuted}>{sitesLabel(r.id)}</td>
+                    <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">{r.status}</Pill>}</td>
+                    <td className={tableCls.td}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          編輯
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openFeeRatesFor(r)}
+                          className={`rounded-[5px] border px-2.5 py-[3px] text-xs hover:bg-zk-header ${feeRatesBroker?.id === r.id ? "border-[#0f172a] bg-[#0f172a] text-white hover:bg-[#1e293b]" : "border-zk-border text-[#334155]"}`}
+                        >
+                          介紹費率
+                        </button>
+                        {r.status === "inactive" ? (
+                          <button
+                            type="button"
+                            onClick={() => onUnvoid(r.id)}
+                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                          >
+                            恢復
+                          </button>
+                        ) : (
+                          <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
-              <tr key={r.id} className="border-t border-gray-100">
-                <td className="px-3 py-2">{r.code}</td>
-                <td className="px-3 py-2 font-medium text-gray-900">{r.name}</td>
-                <td className="px-3 py-2">{r.kind}</td>
-                <td className="px-3 py-2">{r.requires_approval ? "是" : "否"}</td>
-                <td className="px-3 py-2">{r.status}</td>
-                <td className="px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50">
-                      編輯
+              <div key={r.id} className="rounded-lg border border-zk-border bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[13.5px] font-medium text-zk-text">
+                    {r.name} <span className="text-zk-faint">（{r.code}）</span>
+                  </span>
+                  <span className="text-[13px] tabular-nums text-zk-text">{guardCountByBroker[r.id] ?? 0} 人</span>
+                </div>
+                <div className="mt-1 text-[11.5px] text-zk-muted">{sitesLabel(r.id)}</div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {kindPill(r.kind)}
+                  {r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">{r.status}</Pill>}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    編輯
+                  </button>
+                  <button type="button" onClick={() => openFeeRatesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    介紹費率
+                  </button>
+                  {r.status === "inactive" ? (
+                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      恢復
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => openFeeRatesFor(r)}
-                      className={`rounded border px-2 py-1 text-xs hover:bg-gray-50 ${feeRatesBroker?.id === r.id ? "border-gray-900 bg-gray-900 text-white hover:bg-gray-800" : "border-gray-300"}`}
-                    >
-                      介紹費率
-                    </button>
-                    {r.status === "inactive" ? (
-                      <button
-                        type="button"
-                        onClick={() => onUnvoid(r.id)}
-                        className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50"
-                      >
-                        恢復
-                      </button>
-                    ) : (
-                      <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
-                    )}
-                  </div>
-                </td>
-              </tr>
+                  ) : (
+                    <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
+                  )}
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </>
+      )}
 
       {feeRatesBroker && (
-        <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-4">
+        <div className="space-y-2 rounded-lg border border-zk-border bg-white p-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-gray-900">{feeRatesBroker.name}——介紹費率</h2>
-              <p className="text-xs text-gray-500">site 留空＝呢個雞頭全盤預設費率；有 site 嘅行覆蓋預設。</p>
+              <h2 className="text-[13.5px] font-semibold text-zk-text">{feeRatesBroker.name}——介紹費率</h2>
+              <p className="text-xs text-zk-muted">site 留空＝呢個雞頭全盤預設費率；有 site 嘅行覆蓋預設。</p>
             </div>
             <div className="flex gap-2">
-              <button type="button" onClick={openFeeRateCreate} className={btnPrimary}>
+              <Button variant="primary" onClick={openFeeRateCreate}>
                 新增費率
-              </button>
-              <button type="button" onClick={() => setFeeRatesBroker(null)} className={btnSecondary}>
+              </Button>
+              <Button variant="secondary" onClick={() => setFeeRatesBroker(null)}>
                 收起
-              </button>
+              </Button>
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded border border-gray-100">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500">
+          <div className={tableCls.wrap}>
+            <table className={tableCls.table}>
+              <thead>
                 <tr>
-                  <th className="px-3 py-2">盤</th>
-                  <th className="px-3 py-2">月份</th>
-                  <th className="px-3 py-2">介紹費（每更）</th>
-                  <th className="px-3 py-2">狀態</th>
-                  <th className="px-3 py-2">操作</th>
+                  <th className={tableCls.th}>盤</th>
+                  <th className={tableCls.th}>月份</th>
+                  <th className={tableCls.thNum}>介紹費（每更）</th>
+                  <th className={tableCls.th}>狀態</th>
+                  <th className={tableCls.th}>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {feeRatesLoading && (
                   <tr>
-                    <td className="px-3 py-4 text-gray-400" colSpan={5}>
+                    <td className={tableCls.tdMuted} colSpan={5}>
                       載入緊…
                     </td>
                   </tr>
                 )}
                 {!feeRatesLoading && feeRates.length === 0 && (
                   <tr>
-                    <td className="px-3 py-4 text-gray-400" colSpan={5}>
+                    <td className={tableCls.tdMuted} colSpan={5}>
                       暫時冇費率行
                     </td>
                   </tr>
                 )}
                 {feeRates.map((r) => (
-                  <tr key={r.id} className={`border-t border-gray-100 ${r.voided_at ? "opacity-50" : ""}`}>
-                    <td className="px-3 py-2">{siteLabel(r.site_id)}</td>
-                    <td className="px-3 py-2">{r.month.slice(0, 7)}</td>
-                    <td className="px-3 py-2">{hasFeePerShift ? fmtMoney(r.fee_per_shift) : "—"}</td>
-                    <td className="px-3 py-2">{r.voided_at ? "已作廢" : "有效"}</td>
-                    <td className="px-3 py-2">
+                  <tr key={r.id} className={`${tableCls.rowHover} ${r.voided_at ? "opacity-45" : ""}`}>
+                    <td className={tableCls.td}>{siteLabel(r.site_id)}</td>
+                    <td className={tableCls.td}>{r.month.slice(0, 7)}</td>
+                    <td className={tableCls.tdNum}>{hasFeePerShift ? fmtMoney(r.fee_per_shift) : "—"}</td>
+                    <td className={tableCls.td}>{r.voided_at ? <Pill variant="neutral">已作廢</Pill> : <Pill variant="success">有效</Pill>}</td>
+                    <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {!r.voided_at && (
-                          <button type="button" onClick={() => openFeeRateEdit(r)} className="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50">
+                          <button type="button" onClick={() => openFeeRateEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
                             編輯
                           </button>
                         )}
@@ -410,7 +495,7 @@ export default function BrokersPage() {
                           <button
                             type="button"
                             onClick={() => onFeeRateUnvoid(r.id)}
-                            className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50"
+                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
                           >
                             解除作廢
                           </button>
