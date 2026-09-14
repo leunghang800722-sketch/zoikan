@@ -36,7 +36,10 @@ function hongKongToday(now: Date): { dateStr: string; year: number } {
   return { dateStr, year: Number(get("year")) };
 }
 
-function formatTodaySection(now: Date): string {
+// P2.5：訪談 system prompt（feedback-prompt.ts）沿用呢個 helper（唔改
+// 行為，淨係 export 出嚟重用）——「今日日期段」兩邊要一致，唔可以各自
+// 抄一份漸漸走樣。
+export function formatTodaySection(now: Date): string {
   const { dateStr, year } = hongKongToday(now);
   return `
 

@@ -42,6 +42,12 @@ export async function clearAll() {
     await seedRolePermissions(prisma, roleIds, permissionIds, "test:clearAll-reset-to-default-matrix");
   }
 
+  // P2.5：feedback_reports FK RESTRICT 落 feedback_sessions，要喺嗰張表
+  // 之前刪。兩張表都冇任何其他表 FK 落嚟，擺喺呢度（其他表之前）純粹
+  // 令呢個函數讀落去有個固定順序，唔影響下面其他刪除。
+  await prisma.feedbackReport.deleteMany({});
+  await prisma.feedbackSession.deleteMany({});
+
   await prisma.shiftRecord.updateMany({ data: { parentShiftId: null } });
   await prisma.shiftRecord.deleteMany({});
   await prisma.brokerSiteAssignment.deleteMany({}); // C1：清埋先可以安全刪 site/broker

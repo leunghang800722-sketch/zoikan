@@ -2,9 +2,28 @@
 // `src/lib/ai-conversation.ts` 一樣，呢個檔案管嘅係「幾多次問答」呢類
 // 應用層節流狀態（讀 audit_log 計數），唔係業務數據查詢，所以擺喺
 // `src/lib/` 頂層、用返正常 `@/lib/db`，唔喺 `src/lib/ai/**` 之下。
+//
+// P2.5 Opus 驗收應修④：呢個每日額度**同開會反映訪談員共用**——
+// `src/app/api/ai/chat/route.ts`（主助手問答）同
+// `src/app/api/feedback/session/chat/route.ts`／`src/app/api/feedback/
+// session/summarize/route.ts`（訪談員 chat／整理，兩個都真係叫 LLM）
+// 三個 route 一齊 call `assertUnderDailyLimit()`，計埋同一個數——唔係
+// 「主助手 100 次＋開會反映另外 100 次」，係總共 100 次。`session`／
+// `abandon` 兩個 feedback endpoint 唔叫 LLM，唔受呢個額度影響（見
+// `src/lib/feedback/session.ts` 嘅 `countSessionsOpenedToday()`——開
+// session 次數另外用一個獨立嘅每日上限）。
 import { prisma } from "./db";
 
 export const DEFAULT_AI_DAILY_LIMIT = 100;
+
+/** 計入呢個共用每日額度嘅 audit_log `(table_name, action)` 組合——逐個
+ * 會叫 LLM 嘅 route 每次都要（唔止 guard 觸發先）寫一行呢度列明嘅
+ * audit，先至保證「叫幾多次 LLM 就計幾多次」呢個口徑成立。 */
+export const AI_QUOTA_ACTIONS: ReadonlyArray<{ tableName: string; action: string }> = [
+  { tableName: "ai_chat", action: "ai_chat" }, // 主助手 /api/ai/chat
+  { tableName: "ai_feedback_chat", action: "ai_feedback_chat" }, // 開會反映訪談 /api/feedback/session/chat
+  { tableName: "ai_feedback_chat", action: "ai_feedback_summarize" }, // 開會反映整理 /api/feedback/session/summarize
+];
 
 export function getAiDailyLimit(): number {
   const raw = process.env.AI_DAILY_LIMIT;
@@ -13,17 +32,16 @@ export function getAiDailyLimit(): number {
 }
 
 /** 今日（UTC 曆日——規劃裁定：唔額外引入時區處理依賴，同其他報表用嘅
- * UTC 月份邊界一致）已經問咗幾多條。用 `audit_log`（table_name="ai_chat"，
- * action="ai_chat"）計數，唔另開一張表。 */
+ * UTC 月份邊界一致）已經問咗幾多條——計埋主助手＋開會反映訪談／整理
+ * （`AI_QUOTA_ACTIONS`），唔另開一張表。 */
 export async function countTodayAiChats(userId: string): Promise<number> {
   const now = new Date();
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   return prisma.auditLog.count({
     where: {
       actorUserId: userId,
-      tableName: "ai_chat",
-      action: "ai_chat",
       createdAt: { gte: dayStart },
+      OR: AI_QUOTA_ACTIONS.map((a) => ({ tableName: a.tableName, action: a.action })),
     },
   });
 }

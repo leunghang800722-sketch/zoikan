@@ -15,11 +15,18 @@ import { createMonthlyCloseTool } from "./monthly-close";
 import { createShortfallTool } from "./shortfall";
 import { createRecentAuditTool } from "./recent-audit";
 import { createSqlSelectTool } from "./sql-select";
+// P2.5：`list_feedback`——老闆讀「現場反映」意見用嘅只讀工具，`feedback_
+// reports` 唔喺 `ai` schema，工具本身用正常 Prisma（見該檔案頂註解嘅
+// 例外說明），刻意擺喺 `src/lib/feedback/`（唔喺 `src/lib/ai/tools/`），
+// 呢度淨係 import 個 builder function 嚟 call，呢個 import 本身唔含
+// `prisma.`／`@/lib/db` 字面文字，唔違反 tests/ai-structural-guard.
+// test.ts 嘅逐檔案原始碼文字掃描。
+import { createListFeedbackTool } from "../../feedback/ai-tools/list-feedback";
 
 export type { AiToolContext } from "./common";
 
 export function buildAiTools(ctx: AiToolContext) {
-  return [
+  const tools = [
     createDescribeSystemTool(ctx),
     createListSitesTool(ctx),
     createSiteOverviewTool(ctx),
@@ -35,4 +42,9 @@ export function buildAiTools(ctx: AiToolContext) {
     createRecentAuditTool(ctx),
     createSqlSelectTool(ctx),
   ];
+  // P2.5：淨係老闆先掛載 `list_feedback`（規劃裁定，唔改 matrix.ts 加
+  // module——直接用 baseRole 判斷，工具 run() 入面再核一次 defense-in-
+  // depth，見該檔案）。
+  if (ctx.session.baseRole === "老闆") tools.push(createListFeedbackTool(ctx));
+  return tools;
 }

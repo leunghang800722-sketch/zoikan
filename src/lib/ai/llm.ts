@@ -139,9 +139,33 @@ export class AnthropicLlmClient implements LlmClient {
 // 之後 `checkOutputGuardAndAudit()` 一樣會對假 client 回傳嘅 `text`
 // 生效。假 client 本身零工具調用（`toolsUsed: []`），純粹回一句固定
 // 廣東話回覆，唔會冒充任何真實業務數據。
+// P2.5：「整理並送出」（`POST /api/feedback/session/summarize`）叫模型
+// 出返固定 JSON（`src/lib/ai/feedback-prompt.ts` 嘅
+// `buildFeedbackSummarizePrompt()`）——fake dev client 冇工具/歷史可以
+// 判斷「而家係咪摘要模式」，靠 systemPrompt 有冇呢個 marker 分支答；
+// 淨係喺 `systemPrompt` 含呢個字串先觸發，唔影響平時嘅通用假回覆（見
+// feedback-prompt.ts 頂註解——真 provider 見到呢句純粹當普通文字）。
+const FEEDBACK_SUMMARIZE_MARKER = "ZOIKAN_P25_FEEDBACK_SUMMARIZE_MODE";
+
+function fakeFeedbackSummaryJson(userMessage: string): string {
+  // 攞用戶訊息（transcript 節錄）頭 60 字做 current_problem，等 e2e／
+  // 本機冒煙睇到嘅摘要同真係傾過嘅嘢有關連，唔係齋一句固定字。
+  const snippet = userMessage.replace(/\s+/g, " ").trim().slice(0, 60);
+  return JSON.stringify({
+    title: "（開發測試用）現場反映",
+    current_problem: snippet || "（開發測試——未有實際訪談內容）",
+    desired_change: "（開發測試用嘅假摘要，未連接真 AI Hub）",
+    reason: "（開發測試用嘅假摘要，未連接真 AI Hub）",
+    related: "冇特別提及",
+    open_questions: "",
+  });
+}
+
 class FakeDevLlmClient implements LlmClient {
   async chat(params: LlmChatParams): Promise<LlmChatResult> {
-    const text = `（開發測試用嘅假 AI 回覆，未連接真 AI Hub）已收到你嘅問題：「${params.userMessage}」。`;
+    const text = params.systemPrompt.includes(FEEDBACK_SUMMARIZE_MARKER)
+      ? fakeFeedbackSummaryJson(params.userMessage)
+      : `（開發測試用嘅假 AI 回覆，未連接真 AI Hub）已收到你嘅問題：「${params.userMessage}」。`;
     for (const ch of text) params.onTextDelta?.(ch);
     return { text, toolsUsed: [], inputTokens: 0, outputTokens: text.length };
   }

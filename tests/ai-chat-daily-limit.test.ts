@@ -6,6 +6,7 @@ import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixture
 import { setLlmClientForTests } from "@/lib/ai/llm";
 import { fakeLlmReplying } from "./fixtures/fake-llm";
 import { POST as chatPost } from "@/app/api/ai/chat/route";
+import { countTodayAiChats } from "@/lib/ai-rate-limit";
 
 function chatRequest(cookie: string, message = "你好") {
   return new Request("http://test.local/api/ai/chat", {
@@ -46,10 +47,15 @@ describe("WP-AI1 §？：每日上限 + audit", () => {
     const userId = fx.userIds["會計"];
     // 6 個固定測試用戶成個 vitest run 淨係種一次唔會刪（audit_log
     // append-only，見 tests/lib/db.ts clearAll() 註解）——「會計」呢個
-    // 用戶可能俾其他 test file（例如 ai-chat-isolation.test.ts）今日
-    // 已經問過幾次，唔可以假設由 0 開始。攞返呢一刻嘅已用次數，動態
-    // 定個 limit = 已用 + 2，先可以喺唔理執行順序嘅情況下穩定斷言。
-    const already = await prisma.auditLog.count({ where: { tableName: "ai_chat", action: "ai_chat", actorUserId: userId } });
+    // 用戶可能俾其他 test file（例如 ai-chat-isolation.test.ts、P2.5
+    // 開會反映嘅 session/chat／summarize，見 tests/feedback-daily-
+    // limit.test.ts）今日已經問過幾次，唔可以假設由 0 開始。用
+    // `countTodayAiChats()`（同 `assertUnderDailyLimit()` 實際用嘅
+    // 一樣，P2.5 之後計埋 `ai_chat`／`ai_feedback_chat`／
+    // `ai_feedback_summarize`——見 `src/lib/ai-rate-limit.ts`）攞返呢一
+    // 刻嘅已用次數，動態定個 limit = 已用 + 2，先可以喺唔理執行順序嘅
+    // 情況下穩定斷言。
+    const already = await countTodayAiChats(userId);
     process.env.AI_DAILY_LIMIT = String(already + 2);
     const cookie = await sessionCookieForUser(userId);
 

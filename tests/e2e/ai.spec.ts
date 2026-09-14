@@ -104,6 +104,28 @@ test("(e) 更表頁開側欄問「呢個盤」→ 請求 body 含 site_id/month"
   expect(capturedBody!.context?.month).toBe("2026-07");
 });
 
+test("(f) 側欄頂欄（預設窄版 380px）一行放得落，高度 ≤48px（P2 整合驗收⑤）", async ({ page }) => {
+  await loginAs(page, "老闆");
+  await page.goto("/roster");
+  await page.getByTestId("ai-assistant-tab").click();
+  await expect(page.getByTestId("ai-assistant-panel")).toBeVisible({ timeout: 20_000 });
+
+  const header = page.getByTestId("ai-assistant-header");
+  await expect(header).toBeVisible();
+  const box = await header.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.height).toBeLessThanOrEqual(48);
+
+  // 「只讀 · 答數據問題」而家收埋做 tooltip（title），唔再係常駐喺頂欄
+  // 嘅一個獨立文字元素，唔應該再喺 DOM 度佔一個可見嘅 span。
+  await expect(page.getByText("只讀 · 答數據問題")).toHaveCount(0);
+
+  // 頂欄嘅按鈕（開會反映／窄闊/清空/關閉）全部要見到，冇俾逼到斷行
+  // 跌出頂欄嘅可視範圍之外。
+  await expect(page.getByTestId("ai-feedback-start")).toBeVisible();
+  await expect(page.getByTestId("ai-clear-conversation")).toBeVisible();
+});
+
 test.afterAll(async () => {
   await prisma.$disconnect();
 });

@@ -29,7 +29,20 @@ export type AuditAction =
   | "ai_guard_triggered"
   // WP-AI3：表達方式 guard（`src/lib/ai/output-style.ts`）觸發——回覆
   // 出現咗 snake_case 識別符/工具名/內部雞頭代號，改寫或者剝走咗。
-  | "ai_style_rewrite";
+  | "ai_style_rewrite"
+  // P2.5「現場反映」開會模式——訪談每輪一條（table_name="ai_feedback_chat"）；
+  // 可行性 guard（`src/lib/ai/feasibility-guard.ts`）觸發（訪談員答咗
+  // 可行性判斷）額外多一條；撳「確認送出」寫 feedback_reports 一條
+  // （table_name="feedback_reports"）；老闆改狀態用返現有 "update"
+  // action（同其他 resource PATCH 一致）。
+  | "ai_feedback_chat"
+  | "ai_feasibility_guard_triggered"
+  | "feedback_submit"
+  // P2.5 Opus 驗收應修④：`session/summarize` 每次成功整理（叫咗一次
+  // LLM）都寫一條（table_name="ai_feedback_chat"，同 `ai_feedback_chat`
+  // 呢個 action 分開，等 audit_log 可以分辨「訪談對話」定「整理」，同
+  // 埋計入 `src/lib/ai-rate-limit.ts` 嗰個同主助手共用嘅每日額度）。
+  | "ai_feedback_summarize";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

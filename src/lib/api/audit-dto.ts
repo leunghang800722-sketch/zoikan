@@ -31,6 +31,7 @@ import {
   toBrokerSiteAssignmentDTO,
   toQuotaDTO,
   toReferralFeeRateDTO,
+  toFeedbackReportDTO,
 } from "./dto";
 import type { Dto } from "./serialize";
 import type { AuditAction } from "../audit";
@@ -55,6 +56,11 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   // update 會靜靜哋跌落「未知 table_name → 淨係存 {id}」嗰個 catch-all，
   // audit 追溯唔到改咗咩費率（規劃 E 明文要求 writeAudit）。
   referral_fee_rates: (r) => toReferralFeeRateDTO(r),
+  // P2.5：老闆 PATCH 報告狀態（`action="update"`）經呢個 mapping 存完整
+  // DTO；`feedback_submit`（新增報告）唔喺 AUDIT_ROW_MAPPED_ACTIONS
+  // （見下面），刻意原樣存 route 自己手砌嘅細個安全 payload（唔係完整
+  // row），同 `ai_chat` 一致做法。
+  feedback_reports: (r) => toFeedbackReportDTO(r),
 };
 
 /** 呢啲 action 代表「呢個值本身係一個完整資源 row」——先會行 DTO
