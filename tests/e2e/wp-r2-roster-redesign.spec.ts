@@ -11,6 +11,10 @@ import { prisma, findSiteIdByName } from "./db-helpers";
 
 const SCREENSHOT_DIR =
   "/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/r2";
+// WP-R2 Opus 驗收第二輪 fix——呢個檔加嘅新截圖（右鍵選單／dirty 指示／
+// 手機更多選單／鍵盤唔遮格）存呢度，同舊有 (a)-(d) 果批截圖分開。
+const SCREENSHOT_DIR_FIX =
+  "/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/r2-fix";
 
 test.describe.configure({ mode: "serial" });
 
@@ -29,6 +33,17 @@ async function ensureRosterHasRows(page: Page): Promise<void> {
   if (hasRow) return;
   await page.getByRole("button", { name: /複製上月/ }).click();
   await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+  // 「複製上月」淨係本地未儲存 state——雞頭統計卡／每日合計呢類 UI 讀
+  // 伺服器持久化嘅 `records`，唔會反映到未儲存嘅本地 copy。即刻儲存一
+  // 次，等呢個月喺 DB 有真資料（同時等之後（或者第時）跑呢個檔案嘅其他
+  // test 唔使再靠呢個 fallback）。
+  const saveBtn = page.getByRole("button", { name: /^儲存$|^儲存緊/ });
+  if (await saveBtn.isEnabled().catch(() => false)) {
+    await saveBtn.click();
+    await expect(page.getByText(/儲存失敗|輸入有錯/)).toHaveCount(0);
+    await expect(page.getByText(/格未儲存/)).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+  }
 }
 
 test("(a) 桌面：雞頭統計卡撳＝篩選（行數減少 + URL 帶 broker=），再撳同一張卡＝取消篩選", async ({ page }) => {
@@ -89,6 +104,175 @@ test("(b) 桌面：今日／週末日期欄樣式（data-today/data-weekend）",
   await expect(page.getByTestId(`roster-day-header-${weekdayDay}`)).not.toHaveAttribute("data-weekend", "true");
 });
 
+// WP-R2 Opus 驗收 fix：右鍵選單（清除所選／整行填／整行清）。
+test("(f) 桌面：右鍵選單三項——整行填、整行清、清除所選", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-08`);
+  await page.waitForSelector('button:has-text("複製上月")', { timeout: 20_000 });
+  await ensureRosterHasRows(page);
+
+  const cell6 = page.getByTestId("roster-cell-0-6");
+  await cell6.click({ button: "right" });
+  const menu = page.getByTestId("roster-context-menu");
+  await expect(menu).toBeVisible({ timeout: 5_000 });
+  await expect(menu.getByText("清除所選", { exact: true })).toBeVisible();
+  await expect(menu.getByText("整行填", { exact: true })).toBeVisible();
+  await expect(menu.getByText("整行清", { exact: true })).toBeVisible();
+  await page.screenshot({ path: `${SCREENSHOT_DIR_FIX}/desktop-context-menu.png` });
+
+  // Escape 收埋選單，唔觸發任何動作。
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  // 整行填：右鍵 → 整行填 → 輸入 AL → 填滿全行 → 成行（例如第 3、20 日）都變 AL。
+  await cell6.click({ button: "right" });
+  await expect(page.getByTestId("roster-context-menu")).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId("roster-context-menu").getByText("整行填", { exact: true }).click();
+  const fillInput = page.getByTestId("roster-fill-row-input");
+  await fillInput.fill("AL");
+  await page.getByRole("button", { name: "填滿全行" }).click();
+  await expect(page.getByTestId("roster-cell-0-3")).toHaveText("AL", { timeout: 10_000 });
+  await expect(page.getByTestId("roster-cell-0-20")).toHaveText("AL", { timeout: 10_000 });
+
+  // 整行清：右鍵 → 整行清 → 成行變返空。
+  await cell6.click({ button: "right" });
+  await expect(page.getByTestId("roster-context-menu")).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId("roster-context-menu").getByText("整行清", { exact: true }).click();
+  await expect(page.getByTestId("roster-cell-0-3")).toHaveText("", { timeout: 10_000 });
+  await expect(page.getByTestId("roster-cell-0-20")).toHaveText("", { timeout: 10_000 });
+
+  // 清除所選：先打一個代號入格，右鍵揀「清除所選」變返空。
+  await cell6.click();
+  await page.keyboard.type("SL");
+  await page.keyboard.press("Enter");
+  await expect(cell6).toHaveText("SL", { timeout: 10_000 });
+  await cell6.click({ button: "right" });
+  await expect(page.getByTestId("roster-context-menu")).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId("roster-context-menu").getByText("清除所選", { exact: true }).click();
+  await expect(cell6).toHaveText("", { timeout: 10_000 });
+});
+
+// WP-R2 Opus 驗收 fix：拖選多格之後打字要一齊填晒（README「拖選多格一齊填」）。
+test("(g) 桌面：拖選 3 格 → 打 D → Enter → 三格一齊寫入", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-08`);
+  await page.waitForSelector('button:has-text("複製上月")', { timeout: 20_000 });
+  await ensureRosterHasRows(page);
+
+  const c1 = page.getByTestId("roster-cell-0-9");
+  const c2 = page.getByTestId("roster-cell-0-10");
+  const c3 = page.getByTestId("roster-cell-0-11");
+  const b1 = await c1.boundingBox();
+  const b2 = await c2.boundingBox();
+  const b3 = await c3.boundingBox();
+  expect(b1 && b2 && b3).toBeTruthy();
+
+  await page.mouse.move(b1!.x + b1!.width / 2, b1!.y + b1!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b2!.x + b2!.width / 2, b2!.y + b2!.height / 2, { steps: 5 });
+  await page.mouse.move(b3!.x + b3!.width / 2, b3!.y + b3!.height / 2, { steps: 5 });
+  await page.mouse.up();
+
+  await page.keyboard.type("D");
+  await page.keyboard.press("Enter");
+
+  await expect(c1).toHaveText("D", { timeout: 10_000 });
+  await expect(c2).toHaveText("D", { timeout: 10_000 });
+  await expect(c3).toHaveText("D", { timeout: 10_000 });
+});
+
+// WP-R2 Opus 驗收 fix：清空格要有 dirty 指示（喺 <td> 層，唔喺已經消失
+// 咗嘅 chip 度）——量 computed box-shadow 有冇藍色 inset ring。
+test("(h) 桌面：清空一個原本有代號嘅格，<td> computed box-shadow 要有 dirty inset ring", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-08`);
+  await page.waitForSelector('button:has-text("複製上月")', { timeout: 20_000 });
+  await ensureRosterHasRows(page);
+
+  // 揾第一行入面一個原本已經有代號（baseline 非空）嘅格先——清空一個本身
+  // 就係空嘅格，清完都仲係跟返 baseline（唔算 dirty），測唔到呢個 fix。
+  const days = new Date(Date.UTC(2026, 8, 0)).getUTCDate(); // 2026-08 有幾多日
+  let targetDay = -1;
+  for (let d = 1; d <= days; d++) {
+    const text = await page.getByTestId(`roster-cell-0-${d}`).innerText();
+    if (text.trim() !== "") {
+      targetDay = d;
+      break;
+    }
+  }
+  expect(targetDay).toBeGreaterThan(0);
+  const cell = page.getByTestId(`roster-cell-0-${targetDay}`);
+  const originalText = await cell.innerText();
+  expect(originalText.trim()).not.toBe("");
+
+  // 清空（Delete）之後格仔本身冇 chip（冇文字），但 <td> 要見到 dirty 指示。
+  await cell.click();
+  await page.keyboard.press("Delete");
+  await expect(cell).toHaveText("", { timeout: 10_000 });
+  await expect(cell).toHaveAttribute("data-dirty", "true");
+  const boxShadow = await cell.evaluate((el) => getComputedStyle(el).boxShadow);
+  expect(boxShadow).toMatch(/37,\s*99,\s*235/); // #2563eb inset ring
+  await page.screenshot({ path: `${SCREENSHOT_DIR_FIX}/desktop-dirty-empty-cell.png` });
+});
+
+// WP-R2 Opus 驗收 fix：月份 ‹ › dirty guard——confirm 取消唔跳月。
+test("(i) 桌面：有未儲存改動撳「下一月」→ confirm，取消唔跳，確定先跳", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-08`);
+  await page.waitForSelector('button:has-text("複製上月")', { timeout: 20_000 });
+  await ensureRosterHasRows(page);
+
+  const cell = page.getByTestId("roster-cell-1-4");
+  await cell.click();
+  await page.keyboard.type("SL");
+  await page.keyboard.press("Enter");
+  await expect(page.getByText(/格未儲存/)).toBeVisible({ timeout: 10_000 });
+
+  let dialogMessage = "";
+  page.once("dialog", (dialog) => {
+    dialogMessage = dialog.message();
+    void dialog.dismiss();
+  });
+  await page.getByRole("button", { name: "下一月" }).click();
+  await page.waitForTimeout(500);
+  expect(dialogMessage).toMatch(/格未儲存/);
+  expect(page.url()).toContain("/2026-08");
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "下一月" }).click();
+  await page.waitForURL((u) => u.pathname.endsWith("/2026-09"), { timeout: 15_000 });
+});
+
+// WP-R2 Opus 驗收 fix 第 1 項：RD／SH chip 顏色唔可以俾 isLeave 橙虛線
+// 蓋過（README §04 固定配色）。
+test("(j) 桌面：打 RD／SH 入格，chip computed background 係固定配色（唔係橙虛線）", async ({ page }) => {
+  const siteId = await findSiteIdByName("啟航1331");
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-08`);
+  await page.waitForSelector('button:has-text("複製上月")', { timeout: 20_000 });
+  await ensureRosterHasRows(page);
+
+  const rdCell = page.getByTestId("roster-cell-0-17");
+  await rdCell.click();
+  await page.keyboard.type("RD");
+  await page.keyboard.press("Enter");
+  await expect(rdCell).toHaveText("RD", { timeout: 10_000 });
+  const rdChip = rdCell.locator("span");
+  await expect(rdChip).toHaveCSS("background-color", "rgb(241, 245, 249)");
+
+  const shCell = page.getByTestId("roster-cell-0-18");
+  await shCell.click();
+  await page.keyboard.type("SH");
+  await page.keyboard.press("Enter");
+  await expect(shCell).toHaveText("SH", { timeout: 10_000 });
+  const shChip = shCell.locator("span");
+  await expect(shChip).toHaveCSS("background-color", "rgb(204, 251, 241)");
+});
+
 test.describe("手機（375×812）", () => {
   test.use({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
 
@@ -135,6 +319,57 @@ test.describe("手機（375×812）", () => {
 
     await page.getByTestId("roster-cell-0-5").click({ force: true });
     await expect(page.getByTestId("roster-mobile-keypad")).toHaveCount(0);
+  });
+
+  // WP-R2 Opus 驗收 fix 第 5 項：手機頁首「⋯」更多選單要有齊四個動作。
+  test("(e) 手機「⋯」選單有加保安員／複製上月／匯出 Excel／還原四項", async ({ page }) => {
+    const siteId = await findSiteIdByName("啟航1331");
+    await loginAs(page, "老闆");
+    await page.goto(`/roster/${siteId}/2026-08`);
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+
+    const moreBtn = page.getByTestId("roster-mobile-more");
+    await expect(moreBtn).toBeVisible();
+    await moreBtn.click();
+    const menu = page.getByTestId("roster-mobile-more-menu");
+    await expect(menu).toBeVisible({ timeout: 5_000 });
+    await expect(menu.getByText("加保安員", { exact: true })).toBeVisible();
+    await expect(menu.getByText(/複製上月/)).toBeVisible();
+    await expect(menu.getByText(/匯出 Excel|未有更表模板/)).toBeVisible();
+    await expect(menu.getByText(/還原/)).toBeVisible();
+
+    await page.screenshot({ path: `${SCREENSHOT_DIR_FIX}/mobile-more-menu.png` });
+
+    // 撳外面收埋。
+    await page.mouse.click(5, 5);
+    await expect(menu).toHaveCount(0);
+  });
+
+  // WP-R2 Opus 驗收 fix 第 9 項：手機撳近底部嘅格，鍵盤（fixed 約 143px）
+  // 唔可以遮住揀咗嘅格——量 boundingBox 確認格喺鍵盤頂之上。
+  test("(f) 手機撳近底部嘅格，格仔會滾去鍵盤上面，唔會俾鍵盤遮住", async ({ page }) => {
+    const siteId = await findSiteIdByName("啟航1331");
+    await loginAs(page, "老闆");
+    await page.goto(`/roster/${siteId}/2026-08`);
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+
+    const rowCount = await page.getByTestId("roster-row").count();
+    const lastRowIndex = rowCount - 1;
+    const cell = page.getByTestId(`roster-cell-${lastRowIndex}-28`);
+    await cell.scrollIntoViewIfNeeded();
+    await cell.click();
+
+    const keypad = page.getByTestId("roster-mobile-keypad");
+    await expect(keypad).toBeVisible({ timeout: 10_000 });
+
+    const cellBox = await cell.boundingBox();
+    const keypadBox = await keypad.boundingBox();
+    expect(cellBox).toBeTruthy();
+    expect(keypadBox).toBeTruthy();
+    // 格底邊要喺鍵盤頂邊之上（容許 1px 誤差）。
+    expect(cellBox!.y + cellBox!.height).toBeLessThanOrEqual(keypadBox!.y + 1);
+
+    await page.screenshot({ path: `${SCREENSHOT_DIR_FIX}/mobile-cell-above-keypad.png` });
   });
 });
 

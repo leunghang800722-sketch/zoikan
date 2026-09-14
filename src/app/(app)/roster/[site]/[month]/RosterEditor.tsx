@@ -9,6 +9,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -111,6 +112,10 @@ type BatchResponse = { results: { key: string; id: string; action: string }[]; w
 // `LeaveCode` enum（已經由 `tools/importer/mappings/status_codes.csv`
 // 擴充咗保留原始字面嘅 OFF/NPL，見 schema 頂註解）。
 const LEAVE_CODES: readonly string[] = ["RD", "OFF", "AL", "SL", "NL", "NPL", "SH"];
+// WP-R2 第 8 項：手機鍵盤唔出 OFF／NPL——呢兩個係歷史保留代號（schema
+// 註解：OFF＝RD、NPL＝NL），batch API 照舊接受（`LEAVE_CODES` 冇改，舊
+// 資料／桌面打字都照樣得），淨係手機鍵盤按鍵收窄做實際會用嘅代號。
+const MOBILE_KEYPAD_LEAVE_CODES: readonly string[] = LEAVE_CODES.filter((c) => c !== "OFF" && c !== "NPL");
 
 type CellState = {
   code: string | null;
@@ -304,6 +309,137 @@ const MOBILE_COL_NAME = 118;
 const MOBILE_COL_DAY = 44;
 // 2026-09-12 老闆 feedback：更表唔顯示安員電話（聯絡資料只喺安員名冊，按 安員:view 權限）；Excel 匯出照原檔格式保留，`RowMeta.tel` 仍然保留但呢頁唔顯示。
 
+// WP-R2 第 9 項：手機底部更別鍵盤實際高度（約），等表格捲動區留返
+// padding-bottom，撳近底部嘅格先唔會俾鍵盤遮住。
+const MOBILE_KEYPAD_HEIGHT = 143;
+
+// WP-R2 第 13 項：格仔（`<td>` 一格代表一日一行）抽做獨立 `memo` 元件，
+// props 淨係傳原始值（string/number/boolean）同穩定嘅 callback（useCallback
+// 過），等其他格改動（例如揀第二格）唔使成個表重新 render 每一粒格。
+type DayCellProps = {
+  r: number;
+  d: number;
+  rowKey: string;
+  code: string | null;
+  isDirty: boolean;
+  selected: boolean;
+  inRange: boolean;
+  isError: boolean;
+  chipBg: string;
+  chipFg: string;
+  chipBorder: string | undefined;
+  monthLocked: boolean;
+  compact: boolean;
+  dayColW: number;
+  rowH: number;
+  colBg: string | undefined;
+  isToday: boolean;
+  isWeekend: boolean;
+  isEditingHere: boolean;
+  editText: string;
+  title: string | undefined;
+  onCellMouseDown: (r: number, d: number, e: { shiftKey: boolean }) => void;
+  onCellMouseEnter: (r: number, d: number) => void;
+  onCellClick: (r: number, d: number, shiftKey: boolean) => void;
+  onCellDoubleClick: (r: number, d: number) => void;
+  onContextMenu: (r: number, d: number, x: number, y: number) => void;
+  onEditTextChange: (v: string) => void;
+  onCommitEdit: () => void;
+};
+
+const DayCell = memo(function DayCell(props: DayCellProps) {
+  const {
+    r,
+    d,
+    code,
+    isDirty,
+    selected,
+    inRange,
+    isError,
+    chipBg,
+    chipFg,
+    chipBorder,
+    monthLocked,
+    compact,
+    dayColW,
+    rowH,
+    colBg,
+    isToday,
+    isWeekend,
+    isEditingHere,
+    editText,
+    title,
+    onCellMouseDown,
+    onCellMouseEnter,
+    onCellClick,
+    onCellDoubleClick,
+    onContextMenu,
+    onEditTextChange,
+    onCommitEdit,
+  } = props;
+  const tdBg = isError ? "#fecaca" : colBg;
+  // 三層可以同時出現、唔會互撞：選中＝outline；dirty＝inset ring box-shadow；
+  // draft／請假＝chip 自己嘅 border（喺 chip span 層，唔喺呢度）。
+  const shadows: string[] = [];
+  if (isDirty) shadows.push("inset 0 0 0 2px #2563eb");
+  if (inRange && !selected) shadows.push("inset 0 0 0 9999px rgba(37,99,235,.08)");
+  return (
+    <td
+      className={`text-center align-middle cursor-cell ${monthLocked ? "cursor-not-allowed" : ""}`}
+      style={{
+        width: dayColW,
+        height: rowH,
+        background: tdBg,
+        outline: selected ? "2px solid #2563eb" : undefined,
+        outlineOffset: selected ? -2 : undefined,
+        boxShadow: shadows.length > 0 ? shadows.join(", ") : undefined,
+      }}
+      title={title}
+      data-testid={`roster-cell-${r}-${d}`}
+      data-dirty={isDirty || undefined}
+      data-today={isToday || undefined}
+      data-weekend={isWeekend || undefined}
+      onMouseDown={(e) => onCellMouseDown(r, d, { shiftKey: e.shiftKey })}
+      onMouseEnter={() => onCellMouseEnter(r, d)}
+      onClick={(e) => onCellClick(r, d, e.shiftKey)}
+      onDoubleClick={() => onCellDoubleClick(r, d)}
+      onContextMenu={(e) => {
+        if (monthLocked) return;
+        e.preventDefault();
+        onContextMenu(r, d, e.clientX, e.clientY);
+      }}
+    >
+      {isEditingHere ? (
+        <input
+          autoFocus
+          className="h-full w-full bg-white text-center outline-none"
+          value={editText}
+          maxLength={4}
+          onChange={(e) => onEditTextChange(e.target.value.toUpperCase())}
+          onBlur={onCommitEdit}
+        />
+      ) : (
+        code && (
+          <span
+            className="inline-block font-semibold"
+            style={{
+              fontSize: compact ? 12 : 11,
+              minWidth: compact ? 28 : 22,
+              padding: compact ? "5px 0" : "3px 0",
+              borderRadius: compact ? 6 : 5,
+              background: chipBg,
+              color: chipFg,
+              border: chipBorder,
+            }}
+          >
+            {code}
+          </span>
+        )
+      )}
+    </td>
+  );
+});
+
 export default function RosterEditor({ siteId, month }: { siteId: string; month: string }) {
   const router = useRouter();
   const { year, monthNum } = parseMonthStr(month);
@@ -381,6 +517,11 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const [sel, setSel] = useState<SelRange | null>(null);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
+  // WP-R2 第 4 項：拖選多格後打字，inline input 要開喺「錨點」格（拖選
+  // 起手嗰格，即 sel.a）——`sel` 本身喺編輯期間保持成個範圍唔變（等
+  // commit 嗰下識寫晒成個範圍），淨係呢個 `editAnchor` 話畀 render 知
+  // input 要畫喺邊格。
+  const [editAnchor, setEditAnchor] = useState<{ r: number; d: number } | null>(null);
 
   // 拖曳填充（純前端 state：mousedown 嘅格個 code 複製去拖到嘅範圍；高亮
   // 顯示借用選格 `sel` 本身——mouseenter 會不斷更新 `sel.b`，唔使額外
@@ -397,6 +538,13 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   // 整行填
   const [fillRowKey, setFillRowKey] = useState<string | null>(null);
   const [fillRowValue, setFillRowValue] = useState("");
+
+  // WP-R2 第 4 項：右鍵選單（README Interactions：「右鍵選單：清除／整行
+  // 填／整行清」）。`x`/`y` 用 `clientX`/`clientY`（fixed 定位）。
+  const [contextMenu, setContextMenu] = useState<{ r: number; d: number; x: number; y: number } | null>(null);
+  // WP-R2 第 5 項：手機頁首「⋯」更多選單（README §23 冇畫，但四個動作
+  // 「加保安員／複製上月／匯出 Excel／還原」手機唔可以消失）。
+  const [showMobileMore, setShowMobileMore] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   // allRows＝呢個盤呢個月全部行（已儲存+未儲存新加嘅），唔受雞頭篩選
@@ -531,32 +679,70 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     [visibleRows.length, days],
   );
 
-  const commitEdit = useCallback(() => {
-    if (!editing || !sel) return;
-    const row = displayRowsRef.current[sel.b.r];
-    if (!row) {
-      setEditing(false);
-      setEditText("");
-      return;
-    }
-    const key = cellKeyOf(row.key, sel.b.d);
-    const code = normalizeCode(editText);
+  // WP-R2：手機底部更別鍵盤（README §23）——撳鍵直接寫入揀住嗰格，同桌面
+  // 打字（commitEdit）用同一種「寫 cells map」方式，淨係唔經 editing/
+  // editText 呢條 input 路徑（手機冇實體鍵盤，直接撳掣）。第 11 項：
+  // compact 下實體鍵盤單字母打字都經呢條路徑（onKeyDown 直接call），唔
+  // 開 inline input。
+  const applyMobileKeypadCode = useCallback((row: RowMeta, day: number, rawCode: string | null) => {
+    const key = cellKeyOf(row.key, day);
+    const code = normalizeCode(rawCode);
     setCells((prev) => {
       const next = new Map(prev);
       const existing = next.get(key);
       next.set(key, { code, id: existing?.id ?? null, status: existing?.status ?? null, recordType: existing?.recordType ?? null });
       return next;
     });
+    setErrorCellKey((prev) => (prev === key ? null : prev));
+    setSel(null); // 撳完鍵即刻收埋鍵盤（同撳「清除」一樣）
+  }, []);
+
+  // WP-R2 第 4 項：commit 寫入 `sel` 成個範圍（唔淨係 sel.b 嗰格）——拖選
+  // 多格之後打字，全部揀咗嘅格都要寫同一個代號。單格編輯（雙擊／單格打
+  // 字）嘅 `sel.a===sel.b`，行為同以前一樣。
+  const commitEdit = useCallback(() => {
+    if (!editing || !sel) return;
+    const r0 = Math.min(sel.a.r, sel.b.r);
+    const r1 = Math.max(sel.a.r, sel.b.r);
+    const d0 = Math.min(sel.a.d, sel.b.d);
+    const d1 = Math.max(sel.a.d, sel.b.d);
+    const code = normalizeCode(editText);
+    const touchedKeys: string[] = [];
+    setCells((prev) => {
+      const next = new Map(prev);
+      for (let r = r0; r <= r1; r++) {
+        const row = displayRowsRef.current[r];
+        if (!row) continue;
+        for (let d = d0; d <= d1; d++) {
+          const key = cellKeyOf(row.key, d);
+          touchedKeys.push(key);
+          const existing = next.get(key);
+          next.set(key, { code, id: existing?.id ?? null, status: existing?.status ?? null, recordType: existing?.recordType ?? null });
+        }
+      }
+      return next;
+    });
     setEditing(false);
     setEditText("");
-    setErrorCellKey((prev) => (prev === key ? null : prev));
+    setEditAnchor(null);
+    setErrorCellKey((prev) => (prev && touchedKeys.includes(prev) ? null : prev));
   }, [editing, sel, editText]);
 
-  const startEdit = useCallback((r: number, d: number, initial: string) => {
-    setSel({ a: { r, d }, b: { r, d } });
-    setEditing(true);
-    setEditText(initial);
-  }, []);
+  // `opts.keepSelection`：拖選多格後打字（README「拖選多格一齊填」）要
+  // 保留成個 `sel` 範圍等 commitEdit 寫晒（唔可以好似以前咁一開始編輯就
+  // 摺埋做單格）。compact（手機）冇實體鍵盤 inline input 呢條路徑——第
+  // 11 項要求 `editing` 喺 compact 下永遠唔會變 true，早退唔做嘢，打字
+  // 由 onKeyDown 直接經 `applyMobileKeypadCode` 寫入。
+  const startEdit = useCallback(
+    (r: number, d: number, initial: string, opts?: { keepSelection?: boolean }) => {
+      if (compact) return;
+      if (!opts?.keepSelection) setSel({ a: { r, d }, b: { r, d } });
+      setEditAnchor({ r, d });
+      setEditing(true);
+      setEditText(initial);
+    },
+    [compact],
+  );
 
   const clearSelectedRange = useCallback(() => {
     if (!sel) return;
@@ -598,6 +784,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           e.stopPropagation();
           setEditing(false);
           setEditText("");
+          setEditAnchor(null);
         } else {
           // 打緊字入格入面（可能仲有其他鍵，例如純粹字元）——唔畀個
           // keydown 走漏去 layout／外層嘅全局快捷鍵（例如側欄），淨係
@@ -645,14 +832,23 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           clearSelectedRange();
           break;
         default:
-          if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key) && sel.a.r === sel.b.r && sel.a.d === sel.b.d) {
+          // WP-R2 第 4 項：拖選多格之後打字要一齊填（唔再要求
+          // sel.a===sel.b）；第 11 項：compact 冇 inline input，單字母
+          // 直接經 applyMobileKeypadCode 寫入嗰格（同手機鍵盤按鍵一樣
+          // 路徑），唔開 editing。
+          if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) {
             e.preventDefault();
             e.stopPropagation();
-            startEdit(sel.b.r, sel.b.d, e.key);
+            if (compact) {
+              const row = displayRowsRef.current[sel.b.r];
+              if (row) applyMobileKeypadCode(row, sel.b.d, e.key);
+            } else {
+              startEdit(sel.a.r, sel.a.d, e.key, { keepSelection: true });
+            }
           }
       }
     },
-    [monthLocked, editing, sel, commitEdit, moveSelection, clearSelectedRange, startEdit],
+    [monthLocked, editing, sel, compact, commitEdit, moveSelection, clearSelectedRange, startEdit, applyMobileKeypadCode],
   );
 
   const onCellClick = useCallback(
@@ -691,8 +887,32 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       dragSourceRef.current = { r, d, code };
       dragCurrentRef.current = { r, d };
       containerRef.current?.focus({ preventScroll: true }); // 2026-09-12：統計條令容器可能半出視窗，focus() 會捲動頁面，令 mousedown→mouseup 落喺唔同格（拖選成兩行、click 唔觸發）
+      // WP-R2 第 9 項：手機撳格開底部鍵盤，格仔要滾去畫面中間，唔可以俾
+      // fixed 喺底嘅鍵盤遮住。特登放喺 mousedown（唔喺 onClick）——
+      // `sel` 一改，`mobileKeypadRow`／容器 max-height 已經即刻（同一個
+      // React 批次）變，如果撳呢下再等個 click 事件，個 click 隨時因為
+      // 容器已經摺埋一截、格仔喺 mousedown→mouseup 之間走咗位而唔觸發
+      // （同上面 2026-09-12 果個 comment 講嘅一樣問題）。Mousedown 一定
+      // 會準確咁接住呢粒 r/d（撳落嗰下都仲未移位），唔使靠個 click。
+      if (compact) {
+        requestAnimationFrame(() => {
+          const container = containerRef.current;
+          const el = container?.querySelector<HTMLElement>(`[data-testid="roster-cell-${r}-${d}"]`);
+          if (!container || !el) return;
+          el.scrollIntoView({ block: "nearest", inline: "center" });
+          // `scrollIntoView` 唔知道底部仲有一個 fixed 嘅更別鍵盤（唔屬於
+          // 文件流，唔會計落 container 嘅可視高度入面）——鍵盤開咗之後
+          // container 本身 max-height 已經縮咗（見下面表格容器嗰段
+          // style），但如果個格喺 scrollIntoView 嗰下都仲未完全入返嗰個
+          // （已經縮咗嘅）範圍，呢度再手動較正多一次。
+          const cellRect = el.getBoundingClientRect();
+          const keypadTop = window.innerHeight - MOBILE_KEYPAD_HEIGHT;
+          const overlap = cellRect.bottom - keypadTop;
+          if (overlap > 0) container.scrollTop += overlap + 8;
+        });
+      }
     },
-    [monthLocked, editing, commitEdit, visibleRows, cells],
+    [monthLocked, editing, commitEdit, visibleRows, cells, compact],
   );
 
   const onCellMouseEnter = useCallback((r: number, d: number) => {
@@ -733,10 +953,23 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   }, []);
 
   // ---- 整行填：揀代號，一鍵填晒成行（成個月全部日）----------------------
+  // WP-R2 第 4 項：「整行清」＝呢個 function 入面 rawCode 打空／清咗嘅
+  // path——唔使揀代號都得，成個月 `days` 日全部清做 null（右鍵選單
+  // 「整行清」直接 call `applyFillRow(row, "")`；桌面「整行」modal 個
+  // input 留空撳「填滿全行」都係同一效果）。
   const applyFillRow = useCallback(
     (row: RowMeta, rawCode: string) => {
       const code = normalizeCode(rawCode);
       if (code === null) {
+        setCells((prev) => {
+          const next = new Map(prev);
+          for (let d = 1; d <= days; d++) {
+            const key = cellKeyOf(row.key, d);
+            const existing = next.get(key);
+            next.set(key, { code: null, id: existing?.id ?? null, status: existing?.status ?? null, recordType: existing?.recordType ?? null });
+          }
+          return next;
+        });
         setFillRowKey(null);
         setFillRowValue("");
         return;
@@ -924,32 +1157,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     setEditing(false);
   }, [baseline]);
 
-  // WP-R2：頁首月份 chip「‹ › 」（README §04）——跳去上／下月嘅 roster
-  // route，帶埋而家嘅 broker 篩選（如果有揀）。
-  const goMonth = useCallback(
-    (targetMonth: string) => {
-      const url = new URL(`/roster/${siteId}/${targetMonth}`, window.location.origin);
-      if (selectedBrokerCode) url.searchParams.set("broker", selectedBrokerCode);
-      router.push(url.pathname + url.search);
-    },
-    [router, siteId, selectedBrokerCode],
-  );
-
-  // WP-R2：手機底部更別鍵盤（README §23）——撳鍵直接寫入揀住嗰格，同桌面
-  // 打字（commitEdit）用同一種「寫 cells map」方式，淨係唔經 editing/
-  // editText 呢條 input 路徑（手機冇實體鍵盤，直接撳掣）。
-  const applyMobileKeypadCode = useCallback((row: RowMeta, day: number, rawCode: string | null) => {
-    const key = cellKeyOf(row.key, day);
-    const code = normalizeCode(rawCode);
-    setCells((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(key);
-      next.set(key, { code, id: existing?.id ?? null, status: existing?.status ?? null, recordType: existing?.recordType ?? null });
-      return next;
-    });
-    setErrorCellKey((prev) => (prev === key ? null : prev));
-    setSel(null); // 撳完鍵即刻收埋鍵盤（同撳「清除」一樣）
-  }, []);
 
   // ---- 底部合計 ----------------------------------------------------------
   // Total／尚欠一律計 allRows（老闆 feedback 2026-09-12：呢兩行「照計
@@ -983,6 +1190,106 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     for (const key of keys) if (!cellsEqual(baseline.get(key), cells.get(key))) n++;
     return n;
   }, [baseline, cells]);
+
+  // WP-R2 第 3 項：頁首月份 chip「‹ › 」（README §04）——跳去上／下月嘅
+  // roster route，帶埋而家嘅 broker 篩選（如果有揀）。有未儲存改動要
+  // confirm，取消就唔跳（Opus 驗收：「dirty 時撳下月 confirm 取消唔
+  // 跳」）。
+  const goMonth = useCallback(
+    (targetMonth: string) => {
+      if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 格未儲存，離開會遺失，確定？`)) return;
+      const url = new URL(`/roster/${siteId}/${targetMonth}`, window.location.origin);
+      if (selectedBrokerCode) url.searchParams.set("broker", selectedBrokerCode);
+      router.push(url.pathname + url.search);
+    },
+    [dirtyCount, router, siteId, selectedBrokerCode],
+  );
+
+  // WP-R2 第 3 項：手機頁首「‹」返回更表索引——同 goMonth 一樣嘅 dirty
+  // guard，取消就唔跳（`Link` 本身唔可以攔截，用 onClick
+  // preventDefault）。
+  const handleMobileBack = useCallback(
+    (e: { preventDefault: () => void }) => {
+      if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 格未儲存，離開會遺失，確定？`)) {
+        e.preventDefault();
+      }
+    },
+    [dirtyCount],
+  );
+
+  // WP-R2 第 3 項：離開（跳月／關頁）有未儲存改動要提示——`beforeunload`
+  // 擋得到整頁關閉／重新整理；App 內部導航（goMonth／手機返回）另外用
+  // `window.confirm` 攔（見底下 goMonth 同手機頁首「‹」）。
+  useEffect(() => {
+    if (dirtyCount === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirtyCount]);
+
+  // WP-R2 第 13 項：今日（香港時間）＋逐日 dayMeta 淨係按 y/m/today 計一
+  // 次（唔係每格 render 都重新計一次 `Intl.DateTimeFormat`／`Date`）。
+  const today = useMemo(() => hongKongTodayYMD(), []);
+  const dayMetaList = useMemo(
+    () => dayList.map((d) => dayMeta(year, monthNum, d, today)),
+    [dayList, year, monthNum, today],
+  );
+
+  // WP-R2 第 4 項：右鍵選單——揀咗嘅格唔喺撳右鍵嗰格範圍入面，就將選格
+  // 收窄做單一嗰格（同 Excel 一致嘅行為）；已經揀晒個範圍入面就保留成個
+  // 範圍（等「清除所選」可以一次清晒）。鎖定月份唔開（DayCell 本身
+  // onContextMenu 已經擋咗，呢度加多層保險）。
+  const openContextMenu = useCallback(
+    (r: number, d: number, x: number, y: number) => {
+      if (monthLocked) return;
+      setSel((prev) => {
+        if (prev) {
+          const r0 = Math.min(prev.a.r, prev.b.r);
+          const r1 = Math.max(prev.a.r, prev.b.r);
+          const d0 = Math.min(prev.a.d, prev.b.d);
+          const d1 = Math.max(prev.a.d, prev.b.d);
+          if (r >= r0 && r <= r1 && d >= d0 && d <= d1) return prev;
+        }
+        return { a: { r, d }, b: { r, d } };
+      });
+      setContextMenu({ r, d, x, y });
+    },
+    [monthLocked],
+  );
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  // Escape／點選單以外嘅地方收埋右鍵選單。
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onDocMouseDown = () => closeContextMenu();
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeContextMenu();
+    };
+    window.addEventListener("mousedown", onDocMouseDown);
+    window.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onDocMouseDown);
+      window.removeEventListener("keydown", onDocKeyDown);
+    };
+  }, [contextMenu, closeContextMenu]);
+
+  // WP-R2 第 5 項：手機「⋯」更多選單——Escape／點選單以外嘅地方收埋。
+  useEffect(() => {
+    if (!showMobileMore) return;
+    const onDocMouseDown = () => setShowMobileMore(false);
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowMobileMore(false);
+    };
+    window.addEventListener("mousedown", onDocMouseDown);
+    window.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onDocMouseDown);
+      window.removeEventListener("keydown", onDocKeyDown);
+    };
+  }, [showMobileMore]);
 
   // ---- 雞頭人數／更數統計條（老闆 feedback 2026-09-12）------------------
   // 用原始 `records`（未經 rows/cells 聚合）逐更計數，先分得到
@@ -1093,7 +1400,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   const fixedTotal = compact ? MOBILE_COL_NAME : DESK_FIXED_TOTAL;
   const dayColW = compact ? MOBILE_COL_DAY : DESK_COL_DAY;
   const rowH = compact ? 44 : 38;
-  const today = hongKongTodayYMD();
   // 該盤全部有效更別代號——頁首「N 日 · 更別 …」＋未鎖定提示條圖例＋手機
   // 鍵盤按鍵都用呢個（Fable 規劃判斷，P2-版面重設計計劃.md §2：「31 日 ·
   // 更別 D」改為列出全部代號，唔跟原型淨顯示一個）。
@@ -1122,12 +1428,13 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     compact && !monthLocked && !editing && sel && sel.a.r === sel.b.r && sel.a.d === sel.b.d ? (visibleRows[sel.b.r] ?? null) : null;
   const mobileKeypadDay = mobileKeypadRow ? sel!.b.d : null;
   const mobileKeypadKeys = mobileKeypadRow
-    ? [mobileKeypadRow.shiftTypeCode, ...LEAVE_CODES.filter((code) => code !== mobileKeypadRow.shiftTypeCode)]
+    ? [mobileKeypadRow.shiftTypeCode, ...MOBILE_KEYPAD_LEAVE_CODES.filter((code) => code !== mobileKeypadRow.shiftTypeCode)]
     : [];
 
   // 格仔渲染（桌面／手機共用；淨係 sizePx／字級隨 compact 改）——保留
   // 原本嘅拖選／打字／選中／dirty／invalid／伺服器錯誤高亮邏輯，配色改
-  // 用 `shiftCodeStyle()`（README「格內代號 chip」）。
+  // 用 `shiftCodeStyle()`（README「格內代號 chip」）；第 13 項抽咗做
+  // `DayCell` memo 元件，呢度淨係計算原始值 props。
   function renderDayCell(row: RowMeta, r: number, d: number) {
     const key = cellKeyOf(row.key, d);
     const c = cells.get(key);
@@ -1139,63 +1446,47 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
     const isLeave = !!code && code !== row.shiftTypeCode && LEAVE_CODES.includes(code);
     const invalid = !!code && code !== row.shiftTypeCode && !LEAVE_CODES.includes(code);
     const isDraft = c?.status === "draft" || c?.status === "pending_approval";
-    const isEditingHere = editing && selected && !compact;
-    const m = dayMeta(year, monthNum, d, today);
+    // WP-R2 第 4 項：inline input 開喺「錨點」格（`editAnchor`），唔再係
+    // `selected`（拖選多格之後 `selected` 淨係代表 sel.b，同 sel.a 未必
+    // 係同一格）。
+    const isEditingHere = editing && !compact && !!editAnchor && editAnchor.r === r && editAnchor.d === d;
+    const m = dayMetaList[d - 1];
 
     const chip = invalid ? { bg: "#fee2e2", fg: "#b91c1c", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
-    const tdBg = isError ? "#fecaca" : m.colBg;
+    const title = c?.status ? `狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
 
     return (
-      <td
+      <DayCell
         key={d}
-        className={`text-center align-middle cursor-cell ${monthLocked ? "cursor-not-allowed" : ""}`}
-        style={{
-          width: dayColW,
-          height: rowH,
-          background: tdBg,
-          outline: selected ? "2px solid #2563eb" : undefined,
-          outlineOffset: selected ? -2 : undefined,
-          boxShadow: inRange && !selected ? "inset 0 0 0 9999px rgba(37,99,235,.08)" : undefined,
-        }}
-        title={c?.status ? `狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined}
-        data-testid={`roster-cell-${r}-${d}`}
-        data-today={m.isToday || undefined}
-        data-weekend={m.isWeekend || undefined}
-        onMouseDown={(e) => onCellMouseDown(r, d, { shiftKey: e.shiftKey })}
-        onMouseEnter={() => onCellMouseEnter(r, d)}
-        onClick={(e) => onCellClick(r, d, e.shiftKey)}
-        onDoubleClick={() => onCellDoubleClick(r, d)}
-      >
-        {isEditingHere ? (
-          <input
-            autoFocus
-            className="h-full w-full bg-white text-center outline-none"
-            value={editText}
-            maxLength={4}
-            onChange={(e) => setEditText(e.target.value.toUpperCase())}
-            onBlur={commitEdit}
-          />
-        ) : (
-          code && (
-            <span
-              className="inline-block font-semibold"
-              style={{
-                fontSize: compact ? 12 : 11,
-                minWidth: compact ? 28 : 22,
-                padding: compact ? "5px 0" : "3px 0",
-                borderRadius: compact ? 6 : 5,
-                background: chip.bg,
-                color: chip.fg,
-                border: chip.border,
-                outline: isDirty ? "1.5px solid #2563eb" : undefined,
-                outlineOffset: isDirty ? 1 : undefined,
-              }}
-            >
-              {code}
-            </span>
-          )
-        )}
-      </td>
+        r={r}
+        d={d}
+        rowKey={row.key}
+        code={code}
+        isDirty={isDirty}
+        selected={selected}
+        inRange={inRange}
+        isError={isError}
+        chipBg={chip.bg}
+        chipFg={chip.fg}
+        chipBorder={chip.border}
+        monthLocked={monthLocked}
+        compact={compact}
+        dayColW={dayColW}
+        rowH={rowH}
+        colBg={m.colBg}
+        isToday={m.isToday}
+        isWeekend={m.isWeekend}
+        isEditingHere={isEditingHere}
+        editText={editText}
+        title={title}
+        onCellMouseDown={onCellMouseDown}
+        onCellMouseEnter={onCellMouseEnter}
+        onCellClick={onCellClick}
+        onCellDoubleClick={onCellDoubleClick}
+        onContextMenu={openContextMenu}
+        onEditTextChange={setEditText}
+        onCommitEdit={commitEdit}
+      />
     );
   }
 
@@ -1293,7 +1584,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       {compact && (
         <div className="-mx-4 -mt-3.5 flex items-center justify-between gap-3 border-b border-zk-border bg-white px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <Link href="/roster" aria-label="返回更表索引" className="text-xl text-zk-text">
+            <Link href="/roster" aria-label="返回更表索引" className="text-xl text-zk-text" onClick={handleMobileBack}>
               ‹
             </Link>
             <div className="min-w-0">
@@ -1303,15 +1594,95 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            disabled={monthLocked || saving || dirtyCount === 0}
-            className="shrink-0 rounded-md border border-[#2563eb] bg-[#2563eb] px-3 py-[6px] text-[12.5px] font-semibold text-white disabled:cursor-not-allowed"
-            style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
-            onClick={handleSave}
-          >
-            {saving ? "儲存緊…" : "儲存"}
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {/* WP-R2 第 5 項：加保安員／複製上月／匯出 Excel／還原——手機
+                頁首冇位擺齊，收埋做「⋯」選單，沿用桌面同一啲 handler。 */}
+            <div className="relative">
+              <button
+                type="button"
+                data-testid="roster-mobile-more"
+                aria-label="更多操作"
+                aria-haspopup="menu"
+                aria-expanded={showMobileMore}
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-[#d1d5db] text-[15px] leading-none text-[#334155]"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setShowMobileMore((v) => !v)}
+              >
+                ⋯
+              </button>
+              {showMobileMore && (
+                <div
+                  data-testid="roster-mobile-more-menu"
+                  className="absolute right-0 top-9 z-40 w-48 rounded-md border border-zk-border bg-white py-1 text-[13px] text-zk-text"
+                  style={{ boxShadow: "0 6px 20px rgba(15,23,42,.15)" }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    disabled={monthLocked}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    onClick={() => {
+                      setShowMobileMore(false);
+                      setShowAddGuard(true);
+                    }}
+                  >
+                    加保安員
+                  </button>
+                  <button
+                    type="button"
+                    disabled={monthLocked}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    onClick={() => {
+                      setShowMobileMore(false);
+                      handleCopyPrevMonth();
+                    }}
+                  >
+                    複製上月（{prevMonthStr(month)}）
+                  </button>
+                  {hasRosterLayout === false ? (
+                    <span
+                      data-testid="roster-export-unavailable"
+                      title="呢個盤未有更表版面模板，唔可以匯出"
+                      className="block px-3 py-1.5 text-left text-zk-faintest"
+                    >
+                      未有更表模板，唔可以匯出
+                    </span>
+                  ) : (
+                    <a
+                      data-testid="roster-export-link"
+                      href={`/api/sites/${siteId}/roster-export?month=${month}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block px-3 py-1.5 hover:bg-zk-header"
+                      onClick={() => setShowMobileMore(false)}
+                    >
+                      匯出 Excel
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    disabled={dirtyCount === 0}
+                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    onClick={() => {
+                      setShowMobileMore(false);
+                      handleRevert();
+                    }}
+                  >
+                    還原{dirtyCount > 0 ? `（${dirtyCount} 格未儲存）` : ""}
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={monthLocked || saving || dirtyCount === 0}
+              className="rounded-md border border-[#2563eb] bg-[#2563eb] px-3 py-[6px] text-[12.5px] font-semibold text-white disabled:cursor-not-allowed"
+              style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
+              onClick={handleSave}
+            >
+              {saving ? "儲存緊…" : "儲存"}
+            </button>
+          </div>
         </div>
       )}
 
@@ -1461,7 +1832,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       ) : (
         !compact && (
           <div className="flex items-center gap-3.5 rounded-md border border-zk-border bg-white px-3 py-2 text-xs text-zk-muted">
-            <span>撳格打字（D / N / SH / RD / AL）· 拖選多格一齊填 · 右鍵清除或整行</span>
+            <span>撳格打字（D / N / SH / RD / AL）· 拖選多格一齊填 · 右鍵：清除／整行填／整行清</span>
             <span className="ml-auto inline-flex flex-wrap gap-2.5">
               {siteShiftCodes.map((code) => {
                 const s = shiftCodeStyle(code);
@@ -1504,7 +1875,13 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           ref={containerRef}
           tabIndex={0}
           onKeyDown={onKeyDown}
-          className="outline-none overflow-auto max-h-[72vh] select-none"
+          className="outline-none overflow-auto select-none"
+          // WP-R2 第 9 項：容器本身 max-height 封頂 72vh——如果淨係用
+          // scrollTop 較正，揀住嘅係最尾一行嘅話，容器已經冇位再向下
+          // 捲（本身個底邊已經伸到鍵盤範圍），scrollTop 點加都冇用。鍵
+          // 盤開緊嗰陣直接縮細容器可視高度（扣走鍵盤高度），先保證容
+          // 器底邊實際唔會伸過鍵盤頂。
+          style={{ maxHeight: compact && mobileKeypadRow && mobileKeypadDay !== null ? `calc(72vh - ${MOBILE_KEYPAD_HEIGHT}px)` : "72vh" }}
         >
           <table className="border-collapse text-sm" style={{ minWidth: fixedTotal + days * dayColW }}>
             <thead>
@@ -1541,7 +1918,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                   </th>
                 )}
                 {dayList.map((d) => {
-                  const m = dayMeta(year, monthNum, d, today);
+                  const m = dayMetaList[d - 1];
                   return (
                     <th
                       key={d}
@@ -1607,6 +1984,9 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                       }}
                     >
                       {compact ? (
+                        // WP-R2 第 12 項：手機行高固定 44px，姓名格淨係
+                        // 兩行（名／雞頭·工號）——證件到期呢類第三行 44px
+                        // 塞唔落，compact 唔顯示（桌面照樣顯示）。
                         <div className="flex h-full flex-col justify-center gap-0.5 px-3 py-1">
                           <div className="truncate text-[13.5px] font-medium text-zk-text" title={row.guardName || "(未命名)"}>
                             {row.guardName || "(未命名)"}
@@ -1620,7 +2000,6 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                             {broker && row.staffNo ? "·" : ""}
                             {row.staffNo}
                           </div>
-                          {permitExpired && <span className="text-[10px] text-red-600">證件到期</span>}
                         </div>
                       ) : (
                         <div className="flex min-w-0 items-baseline gap-2 px-2.5">
@@ -1658,49 +2037,70 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                 </tr>
               )}
             </tbody>
-            {!compact && (
-              <tfoot>
-                <tr>
-                  <td
-                    className="sticky z-10 bg-[#fafbfc] text-[11px] text-zk-muted"
-                    style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px" }}
-                    colSpan={2 + (showBrokerCol ? 1 : 0)}
-                  >
-                    每日已排 / 所需人手
-                  </td>
-                  {dayTotals.map((t, i) => {
-                    const req = dailyReq[i] ?? 0;
+            {/* WP-R2 第 6／7 項：合計行桌面／手機都要 render（手機之前
+                `{!compact}` 令成行消失）——桌面兩行（已排色碼／所需灰色
+                細字）；雞頭視角（isBrokerSession）淨係顯示自己已排數，
+                唔做紅綠色碼、唔顯示所需（所需係成個盤口徑，對雞頭無
+                意義）。 */}
+            <tfoot>
+              <tr>
+                <td
+                  className="sticky z-10 bg-[#fafbfc] text-[11px] text-zk-muted"
+                  style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px" }}
+                  colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
+                >
+                  {isBrokerSession ? "自己已排" : "每日已排 / 所需"}
+                </td>
+                {dayTotals.map((t, i) => {
+                  const req = dailyReq[i] ?? 0;
+                  if (isBrokerSession) {
                     return (
                       <td
                         key={i}
                         className="text-center text-[11px] font-semibold"
-                        style={{ borderTop: "1px solid #e5e7eb", padding: "7px 0", color: coverageColor(t, req) }}
-                        title={`已排 ${t} / 所需 ${req}`}
+                        style={{ borderTop: "1px solid #e5e7eb", padding: "7px 0", color: "#334155" }}
+                        title={`自己已排 ${t}`}
                       >
                         {t}
                       </td>
                     );
-                  })}
-                </tr>
-                {selectedBrokerTotals && (
-                  <tr data-testid="roster-selected-broker-total">
+                  }
+                  return (
                     <td
-                      className="sticky z-10 text-[11px] font-medium"
-                      style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px", background: "#eff6ff", color: "#1e40af" }}
-                      colSpan={2 + (showBrokerCol ? 1 : 0)}
+                      key={i}
+                      className="text-center"
+                      style={{ borderTop: "1px solid #e5e7eb", padding: compact ? "5px 0" : "6px 0" }}
+                      title={`已排 ${t} / 所需 ${req}`}
                     >
-                      所選雞頭合計（{selectedBrokerCode}）
-                    </td>
-                    {selectedBrokerTotals.map((t, i) => (
-                      <td key={i} className="text-center text-[11px]" style={{ borderTop: "1px solid #e5e7eb", background: "#eff6ff", color: "#1e40af" }}>
+                      <div className="text-[11px] font-semibold" style={{ color: coverageColor(t, req) }}>
                         {t}
-                      </td>
-                    ))}
-                  </tr>
-                )}
-              </tfoot>
-            )}
+                      </div>
+                      <div className="text-[9.5px] text-[#94a3b8]">{req}</div>
+                    </td>
+                  );
+                })}
+              </tr>
+              {selectedBrokerTotals && (
+                <tr data-testid="roster-selected-broker-total">
+                  <td
+                    className="sticky z-10 text-[11px] font-medium"
+                    style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px", background: "#eff6ff", color: "#1e40af" }}
+                    colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
+                  >
+                    所選雞頭合計（{selectedBrokerCode}）
+                  </td>
+                  {selectedBrokerTotals.map((t, i) => (
+                    <td key={i} className="text-center text-[11px]" style={{ borderTop: "1px solid #e5e7eb", background: "#eff6ff", color: "#1e40af" }}>
+                      {t}
+                    </td>
+                  ))}
+                </tr>
+              )}
+            </tfoot>
           </table>
+          {/* WP-R2 第 9 項：鍵盤開緊嗰陣表底加返 padding-bottom（≥鍵盤高
+              度），等最底幾行可以捲上嚟，唔會俾 fixed 底部鍵盤遮住。 */}
+          {compact && mobileKeypadRow && mobileKeypadDay !== null && <div style={{ height: MOBILE_KEYPAD_HEIGHT }} aria-hidden />}
         </div>
       </div>
 
@@ -1714,7 +2114,11 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           <div className="text-xs text-zk-muted">
             {mobileKeypadRow.guardName || "(未命名)"} · {monthNum} 月 {mobileKeypadDay} 日 — 揀更別
           </div>
-          <div className="flex flex-wrap gap-1.5">
+          {/* 第 8 項之後最多 6 個代號鍵＋1 個清除＝7 粒——用固定 4 欄
+              grid（唔用 flex-wrap）令「清除」一定喺可預測位置（第二行
+              最尾），唔會因為 flex-wrap 換行令掣數目唔同時跑位／喺
+              MOBILE_KEYPAD_HEIGHT 估算高度以外。 */}
+          <div className="grid grid-cols-4 gap-1.5">
             {mobileKeypadKeys.map((code) => {
               const isLeave = code !== mobileKeypadRow.shiftTypeCode;
               const s = shiftCodeStyle(code, { isLeave });
@@ -1722,7 +2126,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
                 <button
                   key={code}
                   type="button"
-                  className="h-11 min-w-[52px] flex-1 rounded-lg text-[13px] font-semibold"
+                  className="h-11 w-full rounded-lg text-[13px] font-semibold"
                   style={{
                     background: s.bg === "transparent" ? "#fff" : s.bg,
                     color: s.fg === "transparent" ? "#0f172a" : s.fg,
@@ -1736,7 +2140,7 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
             })}
             <button
               type="button"
-              className="h-11 w-[52px] rounded-lg border border-zk-border bg-white text-xs text-zk-muted"
+              className="h-11 w-full rounded-lg border border-zk-border bg-white text-xs text-zk-muted"
               onClick={() => applyMobileKeypadCode(mobileKeypadRow, mobileKeypadDay, null)}
             >
               清除
@@ -1745,14 +2149,68 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
         </div>
       )}
 
+      {/* ================= 右鍵選單（README Interactions：清除／整行填／
+          整行清） ================= */}
+      {contextMenu &&
+        (() => {
+          const row = visibleRows[contextMenu.r];
+          if (!row) return null;
+          const cellCode = cells.get(cellKeyOf(row.key, contextMenu.d))?.code ?? "";
+          const menuWidth = 152;
+          const left = typeof window !== "undefined" ? Math.min(contextMenu.x, window.innerWidth - menuWidth - 8) : contextMenu.x;
+          const top = typeof window !== "undefined" ? Math.min(contextMenu.y, window.innerHeight - 140) : contextMenu.y;
+          return (
+            <div
+              data-testid="roster-context-menu"
+              className="fixed z-50 rounded-md border border-zk-border bg-white py-1 text-[13px] text-zk-text"
+              style={{ left, top, width: menuWidth, boxShadow: "0 6px 20px rgba(15,23,42,.15)" }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                onClick={() => {
+                  clearSelectedRange();
+                  closeContextMenu();
+                }}
+              >
+                清除所選
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                onClick={() => {
+                  setFillRowKey(row.key);
+                  setFillRowValue(cellCode);
+                  closeContextMenu();
+                }}
+              >
+                整行填
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                onClick={() => {
+                  applyFillRow(row, "");
+                  closeContextMenu();
+                }}
+              >
+                整行清
+              </button>
+            </div>
+          );
+        })()}
+
       {fillRowKey && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30" onClick={() => setFillRowKey(null)}>
           <div className="bg-white rounded shadow-lg p-4 w-72 space-y-3" onClick={(e) => e.stopPropagation()}>
             <p className="text-sm text-gray-700">
-              整行填滿（成個月 {days} 日全部填同一個代號）——更別代號或者請假代號（AL/NL/RD/SL/SH）：
+              整行填滿（成個月 {days} 日全部填同一個代號）——更別代號或者請假代號（AL/NL/RD/SL/SH）；留空撳「填滿全行」＝整行清（成行清空）：
             </p>
             <input
               autoFocus
+              data-testid="roster-fill-row-input"
               className="w-full border border-gray-300 rounded px-2 py-1 text-sm uppercase"
               value={fillRowValue}
               onChange={(e) => setFillRowValue(e.target.value.toUpperCase())}
