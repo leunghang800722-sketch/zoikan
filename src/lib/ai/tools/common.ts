@@ -80,7 +80,13 @@ export function deniedResult(d: ToolDenied): string {
 // 唯讀邊界完全唔碰 Prisma（見 tests/ai-structural-guard.test.ts），呢個
 // union 用字面量抄一份就得，同 `prisma/schema.prisma` 嘅 `enum
 // BrokerKind` 保持同步（5 個值，改嗰邊要記得改埋呢度）。
-export type BrokerKindLiteral = "broker" | "internal_cash" | "internal_longterm" | "external" | "special";
+//
+// P2-B 應修⑤（Opus 驗收）：`BrokerKindLiteral`／`BROKER_KIND_LABEL` 搬咗
+// 去 `src/lib/ui/broker-kind.ts`（UI 頁面唔應該 import `ai/` 目錄），呢度
+// re-export 返（tests/ai-structural-guard.test.ts 嘅 allowlist 已經加咗
+// `../../ui/broker-kind`），內容冇改。
+export type { BrokerKindLiteral } from "../../ui/broker-kind";
+export { BROKER_KIND_LABEL } from "../../ui/broker-kind";
 
 export const FEE_SPLIT_NOTE = "呢個盤嘅出街價未拆開保安員工資同雞頭費（源頭只有合計），只可以俾合計數。";
 
@@ -123,17 +129,6 @@ export function brokerDisplayName(b: { name: string | null | undefined; code: st
   if (b.kind === "special") return "特殊結算單位";
   return "外判公司"; // kind==="broker" 但冇填真名嘅 fallback（seed 資料理論上唔應該出現）
 }
-
-/** 逐 kind 嘅業務用語對照（`brokers.kind` → 顯示用語），俾要自己組
- * display name（唔經 `brokerDisplayName()`）嘅地方用，例如逐雞頭列
- * 表要保留返個人名之餘都想知道類別。 */
-export const BROKER_KIND_LABEL: Record<BrokerKindLiteral, string> = {
-  broker: "外判判頭",
-  internal_cash: "公司兵",
-  internal_longterm: "公司長工",
-  external: "客戶自己嘅人",
-  special: "特殊結算單位",
-};
 
 /** `aiQuery()` 嘅 row 型別預設淨係 `{[column:string]: any}`（pg 嘅
  * `QueryResultRow`，index signature，冇實際欄位名）——同呢種型別

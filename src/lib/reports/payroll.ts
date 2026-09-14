@@ -19,7 +19,10 @@ function monthRange(month: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
-export type BrokerPayrollTotal = { brokerId: string; brokerName: string; brokerCode: string; shifts: number; wage: number; fee: number; amount: number };
+// P2-B（README §14「種類 pill」欄）additive：`brokerKind` 直接搬 broker.kind
+// 過嚟，冇加任何查詢，`writePayrollXlsx()`／既有 API 消費者唔受影響
+// （多一個 key，唔係改咗原有 key 嘅意思）。
+export type BrokerPayrollTotal = { brokerId: string; brokerName: string; brokerCode: string; brokerKind: string; shifts: number; wage: number; fee: number; amount: number };
 
 export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Promise<BrokerPayrollTotal[]> {
   const { start, end } = monthRange(month);
@@ -38,6 +41,7 @@ export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Pr
       brokerId: b.id,
       brokerName: b.name,
       brokerCode: b.code,
+      brokerKind: b.kind,
       shifts: agg._count._all,
       wage,
       fee,

@@ -533,9 +533,14 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
       profit,
       marginPct,
       belowThreshold: marginPct !== null && marginPct < thresholdPct,
+      // P2-B 應修④（Opus 驗收）：呢欄係俾用戶（老闆/會計）睇嘅業務文案，
+      // 唔准出現檔名／內部註解編號——「額外盤 · 冇 P0 月結對數基準」／
+      // 「月費盤 · 更數越多毛利越低」（後者由 UI 層俾，見
+      // src/app/(app)/reports/gross-margin/page.tsx，呢度淨係喺冇更貼切
+      // 嘅備註時 fallback 做「額外盤」嗰句）。
       note: monthlyFeeNoActivitySiteIds.has(siteId)
         ? "該月冇更次記錄（月費 pro-rata fallback 已經停用，唔會顯示假營業額）"
-        : (base?.note ?? (base === undefined ? "額外盤（冇 P0 月結對數基準，revenue 顯示 0；見 gross-margin.ts 頂註解 2）" : null)),
+        : (base?.note ?? (base === undefined ? "額外盤 · 冇 P0 月結對數基準" : null)),
     });
   }
 

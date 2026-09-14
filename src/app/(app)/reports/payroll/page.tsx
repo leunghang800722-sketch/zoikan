@@ -1,28 +1,44 @@
 "use client";
+// P2-B：糧明細（按雞頭）（README §14）——逐結算單位（雞頭）本月更數／
+// 工資／雞頭費／金額；foot 合計。Generate／匯出 API 唔變。
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
-import { inputCls, btnSecondary } from "@/components/ui/Field";
-import { fmtMoney } from "@/lib/ui/format";
+import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterChip } from "@/components/ui/FilterChip";
+import { Pill } from "@/components/ui/Pill";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface Total {
   broker_id: string;
   broker_name: string;
   broker_code: string;
+  broker_kind?: string;
   shifts: number;
   wage: number;
   fee: number;
   amount: number;
 }
 
-function currentMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+const COLS = 7; // 結算單位/代號/種類/更數/工資/雞頭費/金額
+
+// P2-B 應修⑤（README §14「種類 pill」）：公司兵／公司長工 藍，外判（同
+// 其餘 kind）灰——用現成 `BROKER_KIND_LABEL`（搬咗去
+// `src/lib/ui/broker-kind.ts`，`src/lib/ai/tools/common.ts` re-export，
+// 兩邊共用同一份業務用語）。
+function kindLabel(kind?: string): string {
+  return BROKER_KIND_LABEL[kind as keyof typeof BROKER_KIND_LABEL] ?? "外判";
+}
+function KindPill({ kind }: { kind?: string }) {
+  return <Pill variant={brokerKindPillTone(kind) === "blue" ? "shift" : "neutral"}>{kindLabel(kind)}</Pill>;
 }
 
 export default function PayrollReportPage() {
-  const [month, setMonth] = useState(currentMonth());
+  const [month, setMonth] = useState(() => currentMonthStr());
   const [totals, setTotals] = useState<Total[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,66 +61,113 @@ export default function PayrollReportPage() {
   const grand = totals.reduce((a, t) => ({ shifts: a.shifts + t.shifts, wage: a.wage + t.wage, fee: a.fee + t.fee, amount: a.amount + t.amount }), { shifts: 0, wage: 0, fee: 0, amount: 0 });
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">糧明細（按雞頭）</h1>
-          <p className="text-sm text-gray-500">逐結算單位（雞頭）本月更數／工資／雞頭費／金額。</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <input type="month" className={inputCls + " max-w-[160px]"} value={month} onChange={(e) => setMonth(e.target.value)} />
-          <a href={`/api/reports/payroll?month=${month}&export=1`} className={btnSecondary}>
-            匯出 Excel
-          </a>
-        </div>
-      </div>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        kicker="財務"
+        title="糧明細（按雞頭）"
+        subtitle="逐結算單位（雞頭）本月更數／工資／雞頭費／金額。"
+        actions={
+          <>
+            <FilterChip label="月份">
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </FilterChip>
+            <a href={`/api/reports/payroll?month=${month}&export=1`}>
+              <Button variant="secondary">匯出 Excel</Button>
+            </a>
+          </>
+        }
+      />
 
       <Banner kind="error" message={error} />
 
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs text-gray-500">
+      {/* 桌面表。 */}
+      <div className={`hidden md:block ${tableCls.wrap}`}>
+        <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
+          <thead>
             <tr>
-              <th className="px-3 py-2">結算單位（雞頭）</th>
-              <th className="px-3 py-2">代號</th>
-              <th className="px-3 py-2 text-right">更數</th>
-              <th className="px-3 py-2 text-right">工資</th>
-              <th className="px-3 py-2 text-right">雞頭費</th>
-              <th className="px-3 py-2 text-right">金額</th>
+              <th className={tableCls.th}>結算單位</th>
+              <th className={tableCls.th}>代號</th>
+              <th className={tableCls.th}>種類</th>
+              <th className={tableCls.thNum}>更數</th>
+              <th className={tableCls.thNum}>工資</th>
+              <th className={tableCls.thNum}>雞頭費</th>
+              <th className={tableCls.thNum}>金額</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td className="px-3 py-4 text-gray-400" colSpan={6}>
+                <td className="px-3.5 py-4 text-sm text-zk-faint" colSpan={7}>
                   載入緊…
+                </td>
+              </tr>
+            )}
+            {!loading && totals.length === 0 && (
+              <tr>
+                <td colSpan={7}>
+                  <EmptyState title="呢個月暫時冇資料" />
                 </td>
               </tr>
             )}
             {!loading &&
               totals.map((t) => (
-                <tr key={t.broker_id} className="border-t border-gray-100">
-                  <td className="px-3 py-2">{t.broker_name}</td>
-                  <td className="px-3 py-2">{t.broker_code}</td>
-                  <td className="px-3 py-2 text-right">{t.shifts}</td>
-                  <td className="px-3 py-2 text-right">{fmtMoney(t.wage)}</td>
-                  <td className="px-3 py-2 text-right">{fmtMoney(t.fee)}</td>
-                  <td className="px-3 py-2 text-right">{fmtMoney(t.amount)}</td>
+                <tr key={t.broker_id} className={tableCls.rowHover}>
+                  <td className={`${tableCls.td} font-medium`}>{t.broker_name}</td>
+                  <td className={tableCls.td}>{t.broker_code}</td>
+                  <td className={tableCls.td}>
+                    <KindPill kind={t.broker_kind} />
+                  </td>
+                  <td className={tableCls.tdNum}>{t.shifts}</td>
+                  <td className={tableCls.tdNum}>{fmtMoney(t.wage)}</td>
+                  <td className={tableCls.tdNum}>{fmtMoney(t.fee)}</td>
+                  <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(t.amount)}</td>
                 </tr>
               ))}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
-              <td className="px-3 py-2" colSpan={2}>
+            <tr>
+              <td className={`${tableCls.td} ${tableCls.foot}`} colSpan={3}>
                 Total
               </td>
-              <td className="px-3 py-2 text-right">{grand.shifts}</td>
-              <td className="px-3 py-2 text-right">{fmtMoney(grand.wage)}</td>
-              <td className="px-3 py-2 text-right">{fmtMoney(grand.fee)}</td>
-              <td className="px-3 py-2 text-right">{fmtMoney(grand.amount)}</td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{grand.shifts}</td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(grand.wage)}</td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(grand.fee)}</td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(grand.amount)}</td>
             </tr>
           </tfoot>
         </table>
+      </div>
+
+      {/* 手機：每行變卡。 */}
+      <div className="flex flex-col gap-2 md:hidden">
+        {loading ? (
+          <div className="text-sm text-zk-faint">載入緊…</div>
+        ) : totals.length === 0 ? (
+          <div className="rounded-[10px] border border-zk-border bg-white">
+            <EmptyState title="呢個月暫時冇資料" />
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
+            {totals.map((t) => (
+              <div key={t.broker_id} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-[13px] font-medium text-zk-text">{t.broker_name}</span>
+                    <Pill variant="neutral">{t.broker_code}</Pill>
+                  </div>
+                  <div className="mt-0.5 text-[11.5px] text-zk-muted">
+                    {kindLabel(t.broker_kind)} · {t.shifts} 更
+                  </div>
+                </div>
+                <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(t.amount)}</div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-[13px] font-bold text-zk-text">
+              <span>Total {grand.shifts} 更</span>
+              <span>{fmtMoney(grand.amount)}</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
