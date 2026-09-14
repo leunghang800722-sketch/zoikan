@@ -10,6 +10,7 @@ import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface Total {
@@ -25,19 +26,15 @@ interface Total {
 
 const COLS = 7; // 結算單位/代號/種類/更數/工資/雞頭費/金額
 
+// P2-B 應修⑤（README §14「種類 pill」）：公司兵／公司長工 藍，外判（同
+// 其餘 kind）灰——用現成 `BROKER_KIND_LABEL`（搬咗去
+// `src/lib/ui/broker-kind.ts`，`src/lib/ai/tools/common.ts` re-export，
+// 兩邊共用同一份業務用語）。
 function kindLabel(kind?: string): string {
-  switch (kind) {
-    case "internal_cash":
-      return "公司兵";
-    case "internal_longterm":
-      return "公司長工";
-    case "external":
-      return "外部";
-    case "special":
-      return "特殊";
-    default:
-      return "外判";
-  }
+  return BROKER_KIND_LABEL[kind as keyof typeof BROKER_KIND_LABEL] ?? "外判";
+}
+function KindPill({ kind }: { kind?: string }) {
+  return <Pill variant={brokerKindPillTone(kind) === "blue" ? "shift" : "neutral"}>{kindLabel(kind)}</Pill>;
 }
 
 export default function PayrollReportPage() {
@@ -118,7 +115,7 @@ export default function PayrollReportPage() {
                   <td className={`${tableCls.td} font-medium`}>{t.broker_name}</td>
                   <td className={tableCls.td}>{t.broker_code}</td>
                   <td className={tableCls.td}>
-                    <Pill variant="neutral">{kindLabel(t.broker_kind)}</Pill>
+                    <KindPill kind={t.broker_kind} />
                   </td>
                   <td className={tableCls.tdNum}>{t.shifts}</td>
                   <td className={tableCls.tdNum}>{fmtMoney(t.wage)}</td>

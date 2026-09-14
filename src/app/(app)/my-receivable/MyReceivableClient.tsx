@@ -12,21 +12,27 @@ import { Banner } from "@/components/ui/Banner";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { KpiCard } from "@/components/ui/KpiCard";
+import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDate, currentMonthStr } from "@/lib/ui/format";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
-interface DayRow {
+// M4（Opus 驗收）：`grouped_days` 按 (日期, 盤, 更別, 出街價) 合併——一
+// 條記錄一行改成「N 更 × 出街價 ＝ 金額」，`days`（逐 shift_record 一
+// 行）保留喺 API response 但 UI 唔再直接用（避免行數 = 記錄數）。
+interface GroupedRow {
   work_date: string;
   site_id: string;
   site_name: string;
   shift_type_code: string;
+  outside_rate: number;
+  shifts: number;
   amount: number;
 }
 interface Result {
   month: string;
-  days: DayRow[];
+  days: unknown[];
+  grouped_days: GroupedRow[];
   total: number;
   total_shifts: number;
   pending_count: number;
@@ -148,11 +154,12 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
 
       {data && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <KpiCard label="本月更數" value={data.total_shifts} />
-          <KpiCard label="合計（出街價）" value={fmtMoney(data.total)} />
-          <KpiCard
+          <P2BStatCard label="本月更數" value={data.total_shifts} />
+          <P2BStatCard label="合計（出街價）" value={fmtMoney(data.total)} />
+          <P2BStatCard
             label="待審批"
-            value={<span style={{ color: "#c2410c" }}>{data.pending_count} 更</span>}
+            tone={data.pending_count > 0 ? "warning" : "default"}
+            value={<span>{data.pending_count} 更</span>}
             note={data.pending_count > 0 ? <span style={{ color: "#c2410c" }}>{fmtMoney(data.pending_amount)}</span> : undefined}
           />
         </div>
@@ -180,21 +187,21 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
                   </td>
                 </tr>
               )}
-              {!loading && (data?.days.length ?? 0) === 0 && (
+              {!loading && (data?.grouped_days.length ?? 0) === 0 && (
                 <tr>
                   <td colSpan={COLS}>
                     <EmptyState title="呢個月暫時冇資料" description="呢個月未有排更記錄。" />
                   </td>
                 </tr>
               )}
-              {data?.days.map((d, i) => (
-                <tr key={i} className={tableCls.rowHover}>
-                  <td className={tableCls.td}>{fmtDate(d.work_date)}</td>
-                  <td className={`${tableCls.td} font-medium`}>{d.site_name}</td>
-                  <td className={tableCls.td}>{d.shift_type_code}</td>
-                  <td className={tableCls.tdNum}>1</td>
-                  <td className={tableCls.tdNum}>{fmtMoney(d.amount)}</td>
-                  <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(d.amount)}</td>
+              {data?.grouped_days.map((g, i) => (
+                <tr key={i} className={tableCls.rowHover} data-testid="my-receivable-row">
+                  <td className={tableCls.td}>{fmtDate(g.work_date)}</td>
+                  <td className={`${tableCls.td} font-medium`}>{g.site_name}</td>
+                  <td className={tableCls.td}>{g.shift_type_code}</td>
+                  <td className={tableCls.tdNum}>{g.shifts}</td>
+                  <td className={tableCls.tdNum}>{fmtMoney(g.outside_rate)}</td>
+                  <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(g.amount)}</td>
                 </tr>
               ))}
             </tbody>
@@ -218,21 +225,21 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
       <div className="flex flex-col gap-2 md:hidden">
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
-        ) : (data?.days.length ?? 0) === 0 ? (
+        ) : (data?.grouped_days.length ?? 0) === 0 ? (
           <div className="rounded-[10px] border border-zk-border bg-white">
             <EmptyState title="呢個月暫時冇資料" />
           </div>
         ) : (
           <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
-            {data?.days.map((d, i) => (
-              <div key={i} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0">
+            {data?.grouped_days.map((g, i) => (
+              <div key={i} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0" data-testid="my-receivable-row-mobile">
                 <div className="min-w-0">
-                  <div className="truncate text-[13px] font-medium text-zk-text">{d.site_name}</div>
+                  <div className="truncate text-[13px] font-medium text-zk-text">{g.site_name}</div>
                   <div className="mt-0.5 text-[11.5px] text-zk-muted">
-                    {fmtDate(d.work_date)} · {d.shift_type_code}
+                    {fmtDate(g.work_date)} · {g.shift_type_code} · {g.shifts} × {fmtMoney(g.outside_rate)}
                   </div>
                 </div>
-                <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(d.amount)}</div>
+                <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(g.amount)}</div>
               </div>
             ))}
             {data && (

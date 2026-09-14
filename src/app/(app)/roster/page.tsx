@@ -1,9 +1,14 @@
 "use client";
 // P2-B：更表索引（README §03）——兩欄 grid：左卡「開啟更表」（盤／月份
-// select＋開啟 primary）；右邊「最近開過」＝該月有更表記錄或雞頭指派嘅
-// 盤（唯讀 `GET /api/roster/overview?month=`，見
-// src/lib/reports/roster-overview.ts 註解：代替真正嘅瀏覽歷史，唔加新
-// 表）。撳一項＝去 `/roster/<site>/<month>`。
+// select＋開啟 primary）；右邊「最近開過」＝呢個月最近有更表改動嘅盤
+// （最多 8 個，Opus 驗收 M3；唯讀 `GET /api/roster/overview?month=`，見
+// src/lib/reports/roster-overview.ts 註解：用 shift_records 代替真正嘅
+// 瀏覽歷史，唔加新表）。撳一項＝去 `/roster/<site>/<month>`；列表下面
+// 「全部盤用左邊選單開」提示用左卡開其他盤。
+//
+// 「已鎖定」pill：`month_closes` 係月級（一個月一行，唔分盤）——呢個
+// pill 顯示嘅係「呢個盤所屬嗰個月」有冇鎖定，唔係呢個盤自己有冇獨立嘅
+// 鎖定狀態（見 src/lib/reports/roster-overview.ts 嘅 `locked` 計法）。
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -34,14 +39,17 @@ interface OverviewRow {
   guard_count: number;
   shift_count: number;
   locked: boolean;
-  shortfall: number;
+  // Opus 驗收 M1：null＝雞頭 session（API 結構性唔傳呢個盤級口徑俾雞頭，
+  // 見 src/lib/reports/roster-overview.ts 檔頭註解）——雞頭 pill 淨係出
+  // 「已鎖定」／「排更中」，唔顯示「欠 N 更」（避免反推盤總所需人手）。
+  shortfall: number | null;
 }
 
 function StatusPill({ row }: { row: OverviewRow }) {
   if (row.locked) return <Pill variant="warning">已鎖定</Pill>;
   // Pill 冇「危險/紅」variant（README 呢個 pill 用嘅紅色同 Pill 現有
   // variant 唔同色階，唔改現有 ui/Pill.tsx，呢度用同一個組件外形手砌）。
-  if (row.shortfall > 0) {
+  if (row.shortfall !== null && row.shortfall > 0) {
     return (
       <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap" style={{ background: "#fef2f2", color: "#dc2626" }}>
         欠 {row.shortfall} 更
@@ -167,6 +175,7 @@ export default function RosterEntryPage() {
               ))}
             </div>
           )}
+          {!overviewLoading && overview.length > 0 && <div className="text-[11.5px] text-zk-faint">全部盤用左邊選單開。</div>}
         </div>
       </div>
     </div>

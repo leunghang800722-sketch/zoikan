@@ -33,6 +33,46 @@ export type ShortfallResult = {
   };
 };
 
+// P2-B M2（Opus 驗收）additive export：逐日、逐盤 per_shift 尚欠嘅公式，
+// 由 `buildShortfall()`（下面，只計「今日」）抽出嚟俾 `buildRosterOverview()`
+// （src/lib/reports/roster-overview.ts）逐日call、逐日加總算「本月」共用
+// ——兩邊口徑要一致（同一條公式），唔可以各自維護一份會慢慢飄開嘅計法。
+// 純計算、冇碰 DB，輸入（`shiftTypes`／`reqOverrideByShiftType`／
+// `confirmed`）由 caller 自己按需要嘅粒度（單日 vs 成個月逐日）查好先
+// 傳入。行為同呢個函數抽出之前嘅 `buildShortfall()` inline 版完全一樣，
+// `buildShortfall()` 行為冇改（見下面 call site）。
+export type ShiftTypeForShortfall = { id: string; billingGroup: string; headcountRequired: number | null };
+
+/**
+ * required(site, day) = Σ_{st ∈ 呢個盤 billing_group="per_shift" 嘅更別}
+ *                       (daily_requirements override(site, st, day) ??
+ *                        shift_type.headcount_required ?? 0)
+ * confirmed(site, day) = 呢個盤呢一日 confirmed/completed 嘅 shift_records
+ *                        總數（recordType=shift, isExternal=false；唔限
+ *                        shiftType billingGroup——同 `buildShortfall()` 原本
+ *                        inline 嘅 confirmedToday 查詢一致，status 清單本身
+ *                        冇包含 cancelled，天然排除）。
+ * 呢個函數本身唔 clamp——`required - confirmed` 可以係負數（人手夠曬/超額）；
+ * `buildShortfall()`（今日單日）保留呢個負數（等 UI 可以分辨「岩夠」同
+ * 「超額」，`today.sort()` 亦靠負數排到落尾）；`buildRosterOverview()`
+ * （本月逐日加總）先喺 call site 做 `Math.max(0, …)` 淨計「淨欠」嗰啲日
+ * （同呢個函數抽出之前 roster-overview.ts 原本嘅 `gap = Math.max(0, …)`
+ * 邏輯一致，見該檔案）。
+ */
+export function computeSiteDayShortfall(params: {
+  shiftTypes: ShiftTypeForShortfall[];
+  reqOverrideByShiftType: Map<string, number>; // shiftTypeId -> 呢一日嘅 override
+  confirmed: number;
+}): { required: number; confirmed: number; shortfall: number } {
+  let required = 0;
+  for (const st of params.shiftTypes) {
+    if (st.billingGroup !== "per_shift") continue;
+    const override = params.reqOverrideByShiftType.get(st.id);
+    required += override ?? st.headcountRequired ?? 0;
+  }
+  return { required, confirmed: params.confirmed, shortfall: required - params.confirmed };
+}
+
 /** 今日（或指定日期）逐盤所需人手 vs confirmed 更次——daily_requirements
  * 冇 override 就跌返用 shift_types.headcount_required（設計 §3.2 daily_
  * requirements「每日所需人手 override」，冇 override 用更別本身嘅預設）。 */
@@ -55,15 +95,14 @@ export async function buildShortfall(date: Date): Promise<ShortfallResult> {
 
   const today: ShortfallSiteRow[] = [];
   for (const site of sites) {
-    const siteShiftTypes = shiftTypes.filter((st) => st.siteId === site.id && st.billingGroup === "per_shift");
-    let required = 0;
-    for (const st of siteShiftTypes) {
-      const override = reqBySiteShiftType.get(`${site.id}|${st.id}`);
-      required += override ?? st.headcountRequired ?? 0;
-    }
+    const siteShiftTypes = shiftTypes.filter((st) => st.siteId === site.id);
     const confirmed = confirmedBySite.get(site.id) ?? 0;
+    const reqOverrideByShiftType = new Map(
+      siteShiftTypes.filter((st) => reqBySiteShiftType.has(`${site.id}|${st.id}`)).map((st) => [st.id, reqBySiteShiftType.get(`${site.id}|${st.id}`)!]),
+    );
+    const { required, shortfall } = computeSiteDayShortfall({ shiftTypes: siteShiftTypes, reqOverrideByShiftType, confirmed });
     if (required === 0 && confirmed === 0) continue; // 冇任何所需人手都冇出勤嘅盤唔顯示，減噪音
-    today.push({ siteId: site.id, siteName: site.canonicalName, required, confirmed, shortfall: required - confirmed });
+    today.push({ siteId: site.id, siteName: site.canonicalName, required, confirmed, shortfall });
   }
 
   const pendingApprovalCount = await prisma.shiftRecord.count({

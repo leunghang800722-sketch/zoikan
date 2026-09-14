@@ -9,6 +9,7 @@
 // 計一次 buildReconciliation()（唔靠呢個 route 有冇被叫過嚟做前置狀態
 // ——避免「叫完 generate 之後、鎖定之前又偷偷改咗數」呢類 race，見
 // lock/route.ts 註解），所以呢個 route 純粹係俾 UI 預覽用。
+import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { resolveMonthCloseIdOrMonth } from "@/lib/month-lock";
 import { toMonthCloseDTO } from "@/lib/api/dto";
@@ -33,9 +34,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const scrubRows = (rows: typeof mainRows) =>
       rows.map((r) => (canViewClientRate ? r : { ...r, revenue: undefined, profit: undefined, marginPct: undefined, fullProfit: undefined, fullMarginPct: undefined }));
 
+    // 應修①（Opus 驗收）：月結工作台狀態卡想顯示「最後 Generate」時間——
+    // `month_closes` 本身冇 `generated_at` 呢個欄（Generate 純粹係 UI
+    // 預覽，唔寫任何一行），只讀查 audit_log 有冇任何 table_name=
+    // month_closes、row_id=呢個 month_close、action 含「generate」嘅記錄，
+    // 攞最近一條嘅時間。**已知現況**：而家成個 code base 冇任何 route 會
+    // 寫呢種 audit action（lock/unlock 先會寫 audit，見 [id]/lock、
+    // [id]/unlock），所以呢個查詢而家實際上一定搵唔到、`last_generated_at`
+        // 一律 null——UI 顯示「—」（規格容許嘅 fallback，唔係 bug）。故意唔喺
+    // 呢個 route 加一個新嘅 audit 寫入（呢次修復範圍係「API 只
+    // additive/唯讀」，加寫入係另一個決定，留返俾規劃 session）。
+    const lastGenerateAudit = await prisma.auditLog.findFirst({
+      where: { tableName: "month_closes", rowId: monthClose.id, action: { contains: "generate" } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+
     return ok(
       brandSafeResponse({
         month_close: await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(monthClose)),
+        last_generated_at: lastGenerateAudit?.createdAt ?? null,
         monthly_close: { main_rows: scrubRows(mainRows), outside_rows: scrubRows(outsideRows) },
         reconciliation,
       }),

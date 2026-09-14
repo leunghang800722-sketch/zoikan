@@ -136,6 +136,7 @@ describe("WP-AI1 §6：結構性保證——src/lib/ai/** 同 src/app/api/ai/**"
     "../../rbac/requirePermission",
     "../../rbac/matrix", // `Module` type——規劃裁定：工具要跟返畫面權限（見 tools/common.ts）
     "../../api/field-groups",
+    "../../ui/broker-kind", // P2-B 應修⑤：`BROKER_KIND_LABEL` 搬咗去呢度，tools/common.ts re-export（純字面量 map，唔碰 DB）
   ];
 
   const TOOL_FILES = listFiles("src/lib/ai/tools").filter((f) => !f.endsWith("index.ts"));

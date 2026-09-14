@@ -40,6 +40,30 @@ test("(a) 更表索引：「最近開過」有項目，撳一項去更表", asyn
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-roster-index-1440.png`, fullPage: true });
 });
 
+test("(a2) Opus 驗收 M1：雞頭A 更表索引冇「欠」字 pill（shortfall 結構性唔傳俾雞頭）", async ({ page }) => {
+  await loginAs(page, "雞頭A");
+  await page.goto("/roster");
+  await page.locator('input[type="month"]').fill("2026-07");
+  const rows = page.getByTestId("roster-overview-row");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/欠 \d+ 更/)).toHaveCount(0);
+});
+
+test("(a3) Opus 驗收 M3：老闆 2026-07 更表索引最多 8 項（預設 limit）", async ({ page }) => {
+  await loginAs(page, "老闆");
+  const res = await page.request.get("/api/roster/overview?month=2026-07");
+  expect(res.ok()).toBe(true);
+  const body = await res.json();
+  expect(body.sites.length).toBeLessThanOrEqual(8);
+
+  await page.goto("/roster");
+  await page.locator('input[type="month"]').fill("2026-07");
+  const rows = page.getByTestId("roster-overview-row");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  expect(await rows.count()).toBeLessThanOrEqual(8);
+  await expect(page.getByText("全部盤用左邊選單開")).toBeVisible();
+});
+
 test("(b) 老闆帶 ?broker= 預覽本月應收：見到 3 張 stat 卡＋提示橫幅", async ({ page }) => {
   await loginAs(page, "老闆");
   await page.goto("/my-receivable");
@@ -59,6 +83,28 @@ test("(b) 老闆帶 ?broker= 預覽本月應收：見到 3 張 stat 卡＋提示
   await page.screenshot({ path: `${SCREENSHOT_DIR}/11-my-receivable-1440.png`, fullPage: true });
 });
 
+test("(b2) Opus 驗收 M4：本月應收表行數 < 記錄數（group 咗），foot 更數同 stat 卡一致", async ({ page }) => {
+  await loginAs(page, "老闆");
+  await page.goto("/my-receivable");
+  await page.locator('input[type="month"]').fill("2026-07");
+  await expect.poll(() => new URL(page.url()).searchParams.get("broker"), { timeout: 20_000 }).not.toBeNull();
+
+  const broker = new URL(page.url()).searchParams.get("broker")!;
+  const res = await page.request.get(`/api/reports/my-receivable?month=2026-07&broker=${broker}`);
+  expect(res.ok()).toBe(true);
+  const body = await res.json();
+  expect(body.grouped_days.length).toBeLessThan(body.days.length);
+
+  const rows = page.getByTestId("my-receivable-row");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  expect(await rows.count()).toBe(body.grouped_days.length);
+
+  const footShiftsText = await page.locator("tfoot tr td").nth(1).innerText();
+  expect(Number(footShiftsText.replace(/,/g, ""))).toBe(body.total_shifts);
+  // stat 卡「本月更數」用返同一個數（P2BStatCard 大數）。
+  await expect(page.getByText(String(body.total_shifts)).first()).toBeVisible();
+});
+
 test("(c) 雞頭A：本月應收冇預覽橫幅，直接見自己（呢頁本身行為冇改）", async ({ page }) => {
   await loginAs(page, "雞頭A");
   await page.goto("/my-receivable");
@@ -73,8 +119,10 @@ test("(d) 毛利即時表：3 張 stat 卡＋至少一行紅底（低於門檻�
   await page.locator('input[type="month"]').fill("2026-07");
 
   await expect(page.getByText("全公司毛利率", { exact: true })).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("低於門檻嘅盤", { exact: true })).toBeVisible();
-  await expect(page.getByText("額外盤", { exact: true })).toBeVisible();
+  // 應修③（Opus 驗收）：stat label 改咗做「低於 N% 嘅盤」／「額外盤（未
+  // 收入基準）」（README §12 字面），唔再係「低於門檻嘅盤」／「額外盤」。
+  await expect(page.getByText(/^低於 \d+% 嘅盤$/)).toBeVisible();
+  await expect(page.getByText("額外盤（未收入基準）", { exact: true })).toBeVisible();
 
   const rows = page.getByTestId("gross-margin-row");
   await expect(rows.first()).toBeVisible({ timeout: 20_000 });
@@ -86,6 +134,32 @@ test("(d) 毛利即時表：3 張 stat 卡＋至少一行紅底（低於門檻�
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: `${SCREENSHOT_DIR}/12-gross-margin-1440.png`, fullPage: true });
+});
+
+test("(d2) Opus 驗收應修③：毛利即時表由低到高排（第一行毛利率 ≤ 第二行）", async ({ page }) => {
+  await loginAs(page, "老闆");
+  await page.goto("/reports/gross-margin");
+  await page.locator('input[type="month"]').fill("2026-07");
+
+  const rows = page.getByTestId("gross-margin-row");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  const count = await rows.count();
+  expect(count).toBeGreaterThan(1);
+
+  function parsePct(text: string): number | null {
+    const t = text.trim();
+    if (t === "—" || t === "") return null;
+    return Number(t.replace("%", ""));
+  }
+  const firstPct = parsePct(await rows.nth(0).locator("td").nth(5).innerText());
+  const secondPct = parsePct(await rows.nth(1).locator("td").nth(5).innerText());
+  if (firstPct !== null && secondPct !== null) {
+    expect(firstPct).toBeLessThanOrEqual(secondPct);
+  } else {
+    // null 排最尾——第一行係 null 就代表全部行都冇毛利率（極端情況），
+    // 唔應該發生喺第一/二行都有資料嘅正常月份，呢度留返訊息方便debug。
+    expect(firstPct === null && secondPct === null).toBe(true);
+  }
 });
 
 test("(e) 月結工作台：2026-07 頁面結構（唔撳 Generate，唔改任何鎖定狀態）", async ({ page }) => {

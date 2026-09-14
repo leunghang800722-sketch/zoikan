@@ -6,14 +6,14 @@
 // unit test 一致，冇改）：撳行＝展開／收埋嗰盤嘅更別 breakdown（保留 P1
 // 原有行為），唔改做直接跳去更表——README「撳行開該盤更表」改用行內
 // 「更表 ›」連結做（唔覆蓋原有展開行為，兩個唔衝突）。
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiGet } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { KpiCard } from "@/components/ui/KpiCard";
+import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 
@@ -59,12 +59,28 @@ interface Result {
 
 const COLS = 7; // 盤/更數/營業額/成本/毛利/毛利率/備註
 
+type SiteFilter = "all" | "in_close" | "outside";
+
+// 應修③：毛利率由低到高排（null——冇 revenue 計唔到率——排最尾），紅底
+// 行（<門檻）自然排喺前面。
+function sortByMarginAsc(sites: SiteRow[]): SiteRow[] {
+  return [...sites].sort((a, b) => {
+    const am = a.margin_pct;
+    const bm = b.margin_pct;
+    if (am == null && bm == null) return 0;
+    if (am == null) return 1;
+    if (bm == null) return -1;
+    return am - bm;
+  });
+}
+
 export default function GrossMarginPage() {
   const [month, setMonth] = useState(() => currentMonthStr());
   const [data, setData] = useState<Result | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<SiteFilter>("all");
 
   async function load() {
     setLoading(true);
@@ -91,6 +107,14 @@ export default function GrossMarginPage() {
   const belowCount = data?.sites.filter((s) => s.below_threshold).length ?? 0;
   const extraCount = data?.sites.filter((s) => !s.in_p0_monthly_close).length ?? 0;
 
+  // 應修③：頁首「只睇：全部盤／月結盤／額外盤」FilterChip；④：排序由低
+  // 到高（null 排最尾）。
+  const visibleSites = useMemo(() => {
+    const sites = data?.sites ?? [];
+    const filtered = filter === "in_close" ? sites.filter((s) => s.in_p0_monthly_close) : filter === "outside" ? sites.filter((s) => !s.in_p0_monthly_close) : sites;
+    return sortByMarginAsc(filtered);
+  }, [data, filter]);
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
@@ -99,6 +123,13 @@ export default function GrossMarginPage() {
         subtitle={`每盤×更別，本月至今更數／營業額／成本／毛利／毛利率。毛利率低於 ${data?.threshold_pct ?? 8}% 標紅。`}
         actions={
           <>
+            <FilterChip label="只睇">
+              <select value={filter} onChange={(e) => setFilter(e.target.value as SiteFilter)}>
+                <option value="all">全部盤</option>
+                <option value="in_close">月結盤</option>
+                <option value="outside">額外盤</option>
+              </select>
+            </FilterChip>
             <FilterChip label="月份">
               <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
             </FilterChip>
@@ -113,9 +144,9 @@ export default function GrossMarginPage() {
 
       {data && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <KpiCard label="全公司毛利率" value={data.totals.margin_pct == null ? "—" : `${data.totals.margin_pct}%`} />
-          <KpiCard label="低於門檻嘅盤" value={<span style={{ color: belowCount > 0 ? "#dc2626" : undefined }}>{belowCount}</span>} tone={belowCount > 0 ? "danger" : "default"} />
-          <KpiCard label="額外盤" value={<span className="text-zk-muted">{extraCount}</span>} />
+          <P2BStatCard label="全公司毛利率" value={data.totals.margin_pct == null ? "—" : `${data.totals.margin_pct}%`} />
+          <P2BStatCard label={`低於 ${data.threshold_pct}% 嘅盤`} value={belowCount} tone={belowCount > 0 ? "danger" : "default"} />
+          <P2BStatCard label="額外盤（未收入基準）" value={<span className="text-zk-muted">{extraCount}</span>} />
         </div>
       )}
 
@@ -141,14 +172,14 @@ export default function GrossMarginPage() {
                 </td>
               </tr>
             )}
-            {!loading && data?.sites.length === 0 && (
+            {!loading && visibleSites.length === 0 && (
               <tr>
                 <td colSpan={COLS}>
                   <EmptyState title="呢個月暫時冇資料" />
                 </td>
               </tr>
             )}
-            {data?.sites.map((s) => (
+            {visibleSites.map((s) => (
               <Fragment key={s.site_id}>
                 <tr
                   data-testid="gross-margin-row"
@@ -173,7 +204,7 @@ export default function GrossMarginPage() {
                   <td className={s.below_threshold ? "border-b border-[#f1f5f9] px-3.5 py-2.5 text-right font-bold text-[#dc2626]" : tableCls.tdNum}>
                     {s.margin_pct == null ? "—" : `${s.margin_pct}%`}
                   </td>
-                  <td className={tableCls.tdMuted}>{s.note ?? (s.is_monthly_fee ? "更數越多毛利越低" : "")}</td>
+                  <td className={tableCls.tdMuted}>{s.note ?? (s.is_monthly_fee ? "月費盤 · 更數越多毛利越低" : "")}</td>
                 </tr>
                 {expanded[s.site_id] &&
                   s.shift_types.map((st, i) => (
@@ -225,12 +256,12 @@ export default function GrossMarginPage() {
       <div className="flex flex-col gap-2 md:hidden">
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
-        ) : (data?.sites.length ?? 0) === 0 ? (
+        ) : visibleSites.length === 0 ? (
           <div className="rounded-[10px] border border-zk-border bg-white">
             <EmptyState title="呢個月暫時冇資料" />
           </div>
         ) : (
-          data?.sites.map((s) => (
+          visibleSites.map((s) => (
             <Link
               key={s.site_id}
               href={`/roster/${s.site_id}/${month}`}

@@ -17,7 +17,7 @@
 //    唔係 substring）——README 想要「解鎖原因（必填）」呢個顯示，改用
 //    上面獨立一行 label 顯示「（必填）」，`placeholder` 屬性維持原字面值。
 import { useState } from "react";
-import { apiPost } from "@/lib/ui/api-client";
+import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -55,8 +55,19 @@ interface ReconciliationRule {
 }
 interface GenerateResult {
   month_close: MonthCloseDto;
+  // 應修①：`last_generated_at`——`month_closes` 冇 `generated_at` 欄，由
+  // audit_log 查返（見 src/app/api/month-closes/[id]/generate/route.ts）；
+  // 而家成個 code base 冇任何 route 會寫呢種 audit action，所以呢個欄
+  // 現況一律 null，UI 顯示「—」。
+  last_generated_at: string | null;
   monthly_close: { main_rows: SiteRow[]; outside_rows: SiteRow[] };
   reconciliation: { month: string; rules: ReconciliationRule[]; has_diff: boolean };
+}
+// 毛利即時表 totals（README §13 狀態卡「毛利」要同毛利即時表口徑一致，
+// 唔可以自己用月結總表 main_rows 加返出嚟——兩份報表 scope 唔同，見
+// src/lib/reports/gross-margin.ts 檔頭註解）。
+interface GrossMarginTotalsResult {
+  totals: { revenue?: number; profit?: number; margin_pct?: number | null };
 }
 
 const CLOSE_COLS = 6; // 工作地點/更數/營業額/成本/盈利/%
@@ -69,22 +80,51 @@ function statusDot(status: ReconciliationRule["status"]): string {
   return "#cbd5e1";
 }
 
-function ruleDetailLine(d: Record<string, unknown>): { kind: string; rest: string } {
-  const { kind, ...others } = d;
-  const rest = Object.entries(others)
-    .map(([k, v]) => `${k}=${String(v)}`)
-    .join(" · ");
-  return { kind: kind ? String(kind) : "—", rest };
+// §13：差異小表三欄（kind 紅 600 110px／who 500／detail 灰）——用業務
+// 字眼，唔出 DB 欄名（`ruleDetailLine()` 之前直接 `k=v` dump 返 raw 物件
+// 欄名，違反規格；而家逐條規則識別自己嘅 details 形狀，砌返中文業務句）。
+function fmtAmt(v: unknown): string {
+  return fmtMoney(typeof v === "number" ? v : Number(v ?? 0));
+}
+function ruleDetailRow(ruleKey: string, d: Record<string, unknown>): { kind: string; who: string; detail: string } {
+  if (ruleKey === "revenue_per_site") {
+    return {
+      kind: "營業額差異",
+      who: String(d.site_name ?? "—"),
+      detail: `確認狀態 ${fmtAmt(d.confirmed_only_revenue)} · 全部狀態 ${fmtAmt(d.all_status_revenue)} · 差 ${fmtAmt(d.diff)}`,
+    };
+  }
+  if (ruleKey === "payroll_per_broker") {
+    return {
+      kind: "糧明細差異",
+      who: String(d.broker_code ?? "—"),
+      detail: `確認狀態 ${fmtAmt(d.confirmed_only_amount)} · 糧明細總額 ${fmtAmt(d.payroll_amount)} · 差 ${fmtAmt(d.diff)}`,
+    };
+  }
+  if (ruleKey === "three_table_shifts") {
+    return {
+      kind: "更數唔對",
+      who: String(d.site_name ?? "—"),
+      detail: `更表 ${d.roster_shifts_with_adjustments ?? 0} 更 · 月結 ${d.monthly_close_shifts ?? 0} 更 · 糧明細 ${d.payroll_shift_and_ot_records ?? 0} 更`,
+    };
+  }
+  // yellow_warnings（規則 5）：details 本身已經有業務用語嘅 `kind`。
+  const detailParts: string[] = [];
+  if (d.work_date) detailParts.push(`出更日 ${d.work_date}`);
+  if (d.shift_count) detailParts.push(`${d.shift_count} 更`);
+  if (d.permit_expiry) detailParts.push(`許可證到期 ${d.permit_expiry}`);
+  return { kind: String(d.kind ?? "—"), who: String(d.guard_ref ?? "—"), detail: detailParts.join(" · ") };
 }
 
+// 應修（README §13）：規則列表改白底單行——狀態圓點＋「N. 標題」
+// 500/13px＋公式說明 11.5px 灰＋右側狀態 pill；只有差異規則先展開紅邊
+// 小表（唔再成張卡染色）。
 function RuleCard({ rule }: { rule: ReconciliationRule }) {
   const [showAll, setShowAll] = useState(false);
   const shown = showAll ? rule.details : rule.details.slice(0, 5);
-  const cardBg = rule.status === "diff" ? "#fef2f2" : rule.status === "not_enabled" ? "#f8fafc" : "#f0fdf9";
-  const cardBorder = rule.status === "diff" ? "#fecaca" : "#e5e7eb";
 
   return (
-    <div data-rule-key={rule.key} data-rule-status={rule.status} className="rounded-lg border p-3" style={{ background: cardBg, borderColor: cardBorder }}>
+    <div data-rule-key={rule.key} data-rule-status={rule.status} className="rounded-lg border border-zk-border bg-white p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="h-[10px] w-[10px] shrink-0 rounded-full" style={{ background: statusDot(rule.status) }} />
@@ -109,11 +149,12 @@ function RuleCard({ rule }: { rule: ReconciliationRule }) {
       {rule.status === "diff" && rule.details.length > 0 && (
         <div className="mt-2 overflow-hidden rounded-md border" style={{ borderColor: "#fecaca" }}>
           {shown.map((d, i) => {
-            const { kind, rest } = ruleDetailLine(d);
+            const { kind, who, detail } = ruleDetailRow(rule.key, d);
             return (
               <div key={i} className="flex gap-2 border-b bg-white px-2.5 py-1.5 text-[11.5px] last:border-b-0" style={{ borderColor: "#fef2f2" }}>
                 <span className="w-[110px] shrink-0 font-semibold text-[#b91c1c]">{kind}</span>
-                <span className="min-w-0 truncate text-zk-muted">{rest}</span>
+                <span className="w-[100px] shrink-0 font-medium text-zk-text">{who}</span>
+                <span className="min-w-0 truncate text-zk-muted">{detail}</span>
               </div>
             );
           })}
@@ -136,18 +177,27 @@ export default function MonthlyCloseWorkbenchPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [unlockReason, setUnlockReason] = useState("");
+  const [showOutside, setShowOutside] = useState(false);
+  // 應修①：狀態卡「毛利」要同毛利即時表口徑一致（唔係月結總表 main_rows
+  // 加返出嚟嗰個數——兩份報表 scope 唔同，見 gross-margin.ts 檔頭註解），
+  // 呢度另外攞 `/api/reports/gross-margin?month=` 嘅 totals。
+  const [marginTotals, setMarginTotals] = useState<GrossMarginTotalsResult["totals"] | null>(null);
 
   async function generate() {
     setLoading(true);
     setError(null);
     // month 段接受 "YYYY-MM"——見 src/lib/month-lock.ts resolveMonthCloseIdOrMonth()
-    const res = await apiPost<GenerateResult>(`/api/month-closes/${month}/generate`);
+    const [res, marginRes] = await Promise.all([
+      apiPost<GenerateResult>(`/api/month-closes/${month}/generate`),
+      apiGet<GrossMarginTotalsResult>(`/api/reports/gross-margin?month=${month}`),
+    ]);
     setLoading(false);
     if (!res.ok) {
       setError(res.message);
       return;
     }
     setResult(res.data);
+    setMarginTotals(marginRes.ok ? marginRes.data.totals : null);
   }
 
   async function lock() {
@@ -264,8 +314,60 @@ export default function MonthlyCloseWorkbenchPage() {
                       </tr>
                     ))}
                   </tbody>
+                  {/* 應修②：foot 合計。 */}
+                  <tfoot>
+                    <tr>
+                      <td className={`${tableCls.td} ${tableCls.foot}`}>合計</td>
+                      <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{result.monthly_close.main_rows.reduce((a, r) => a + r.shifts, 0)}</td>
+                      <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(result.monthly_close.main_rows.reduce((a, r) => a + (r.revenue ?? 0), 0))}</td>
+                      <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(result.monthly_close.main_rows.reduce((a, r) => a + r.cost, 0))}</td>
+                      <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(result.monthly_close.main_rows.reduce((a, r) => a + (r.profit ?? 0), 0))}</td>
+                      <td className={`${tableCls.tdNum} ${tableCls.foot}`}></td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
+
+              {/* 應修②：額外盤（outside_rows）摺埋顯示，唔入月結對數。 */}
+              {result.monthly_close.outside_rows.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowOutside((v) => !v)}
+                    className="w-fit text-left text-[12.5px] text-zk-primary hover:underline"
+                  >
+                    {showOutside ? "收埋 ‹" : `額外盤 ${result.monthly_close.outside_rows.length} 個（唔入月結對數）›`}
+                  </button>
+                  {showOutside && (
+                    <div className={tableCls.wrap}>
+                      <table className={tableCls.table} style={{ minWidth: tableMinWidth(CLOSE_COLS) }}>
+                        <thead>
+                          <tr>
+                            <th className={tableCls.th}>工作地點</th>
+                            <th className={tableCls.thNum}>更數</th>
+                            <th className={tableCls.thNum}>營業額</th>
+                            <th className={tableCls.thNum}>成本</th>
+                            <th className={tableCls.thNum}>盈利</th>
+                            <th className={tableCls.thNum}>%</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.monthly_close.outside_rows.map((r) => (
+                            <tr key={r.site_id} className={tableCls.rowHover}>
+                              <td className={`${tableCls.td} font-medium`}>{r.canonical_name}</td>
+                              <td className={tableCls.tdNum}>{r.shifts}</td>
+                              <td className={tableCls.tdNum}>{fmtMoney(r.revenue)}</td>
+                              <td className={tableCls.tdNum}>{fmtMoney(r.cost)}</td>
+                              <td className={tableCls.tdNum}>{fmtMoney(r.profit)}</td>
+                              <td className={tableCls.tdNum}>{r.margin_pct == null ? "n/a" : `${r.margin_pct}%`}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -276,9 +378,13 @@ export default function MonthlyCloseWorkbenchPage() {
               <Pill variant={locked ? "warning" : "success"}>{locked ? "已鎖定" : "未鎖定"}</Pill>
             </div>
             <dl className="flex flex-col gap-1.5 text-[12.5px] text-zk-text">
+              {/* 應修①：刪重覆「月份」row（頁首 FilterChip 已經顯示緊）；
+                  「最後 Generate」——month_closes 冇 generated_at 欄，由
+                  audit_log 查返（見 generate route 註解），而家現況一律
+                  「—」（冇任何 route 寫呢種 audit action）。 */}
               <div className="flex justify-between gap-2">
-                <dt className="text-zk-muted">月份</dt>
-                <dd>{result.month_close.month.slice(0, 7)}</dd>
+                <dt className="text-zk-muted">最後 Generate</dt>
+                <dd>{result.last_generated_at ? fmtDateTime(result.last_generated_at) : "—"}</dd>
               </div>
               {locked && (
                 <div className="flex justify-between gap-2">
@@ -287,16 +393,24 @@ export default function MonthlyCloseWorkbenchPage() {
                 </div>
               )}
               <div className="flex justify-between gap-2">
-                <dt className="text-zk-muted">總更數</dt>
+                <dt className="text-zk-muted">總更數（月結總表）</dt>
                 <dd>{result.monthly_close.main_rows.reduce((a, r) => a + r.shifts, 0)}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-zk-muted">營業額</dt>
+                <dt className="text-zk-muted">營業額（月結總表）</dt>
                 <dd>{fmtMoney(result.monthly_close.main_rows.reduce((a, r) => a + (r.revenue ?? 0), 0))}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-zk-muted">毛利</dt>
-                <dd>{fmtMoney(result.monthly_close.main_rows.reduce((a, r) => a + (r.profit ?? 0), 0))}</dd>
+                <dt className="text-zk-muted">毛利（毛利即時表口徑）</dt>
+                <dd>
+                  {marginTotals ? (
+                    <>
+                      {fmtMoney(marginTotals.profit)} · {marginTotals.margin_pct == null ? "—" : `${marginTotals.margin_pct}%`}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
               </div>
             </dl>
 
@@ -321,6 +435,9 @@ export default function MonthlyCloseWorkbenchPage() {
               </div>
             ) : (
               <div className="flex flex-col gap-2">
+                <span className="text-[11px] leading-relaxed text-zk-faint">
+                  解鎖會令更表重新可改；需要「月結鎖定解鎖」權限 · 原因會寫入操作紀錄。
+                </span>
                 <span className="text-xs text-zk-muted">解鎖原因（必填）</span>
                 <input className={fieldCls} placeholder="解鎖原因" value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} />
                 <Button variant="danger" onClick={unlock} disabled={!unlockReason.trim()}>
