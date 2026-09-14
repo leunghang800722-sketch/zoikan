@@ -1,0 +1,91 @@
+"use client";
+// WP-R1：桌面左欄（README「桌面外殼 · 左欄」）——216px 固定、分組導航、
+// active 樣式跟 `usePathname()`（更表索引 `/roster` 同編輯器
+// `/roster/[site]/[month]` 共用「更表」active，見 `isLinkActive()`）、
+// 底部用戶區。呢個要係 client component 先攞到 `usePathname()`；連結
+// 分組／badge 數字由 `(app)/layout.tsx`（server component）fetch 好傳落嚟。
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import type { NavGroup } from "@/lib/rbac/nav";
+import { LogoutButton } from "@/components/LogoutButton";
+
+function isLinkActive(pathname: string, href: string): boolean {
+  if (href === "/") return pathname === "/";
+  if (pathname === href) return true;
+  // 更表索引與編輯器共用「更表」active（README「Interactions」）。
+  if (href === "/roster") return pathname.startsWith("/roster");
+  return pathname.startsWith(`${href}/`);
+}
+
+function initials(name: string): string {
+  return name.trim().slice(0, 2);
+}
+
+export function DesktopNav({
+  groups,
+  userName,
+  roleLabel,
+  badges,
+}: {
+  groups: NavGroup[];
+  userName: string;
+  roleLabel: string;
+  badges: Record<string, number>;
+}) {
+  const pathname = usePathname();
+
+  return (
+    <aside className="sticky top-0 hidden h-screen w-[216px] shrink-0 flex-col border-r border-zk-border bg-white px-3.5 py-5 md:flex">
+      <div className="mb-[18px] flex items-center gap-2 px-1.5">
+        <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] bg-zk-primary text-[13px] font-bold text-white">在</div>
+        <div className="text-[15px] font-bold text-zk-text">在勤</div>
+      </div>
+
+      <nav className="flex flex-1 flex-col overflow-y-auto">
+        {groups.map((g) => (
+          <div key={g.title || "_top"} className="mb-3.5">
+            {g.title && <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[.06em] text-zk-faint">{g.title}</div>}
+            <div className="flex flex-col">
+              {g.links.map((l) => {
+                const active = isLinkActive(pathname, l.href);
+                const badge = badges[l.href];
+                return (
+                  <Link
+                    key={l.href}
+                    href={l.href}
+                    className={`flex items-center justify-between rounded-md px-2 py-[7px] text-[13.5px] ${
+                      active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
+                    }`}
+                  >
+                    {l.label}
+                    {!!badge && (
+                      <span className="rounded-[9px] bg-[#fee2e2] px-1.5 py-px text-[10.5px] font-semibold text-[#b91c1c]">{badge}</span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      <div className="mt-auto flex items-center gap-2.5 border-t border-zk-border pt-3.5 pl-1.5">
+        <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-[#e0e7ff] text-xs font-semibold text-[#3730a3]">
+          {initials(userName)}
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-[12.5px] font-semibold text-zk-text">{userName}</div>
+          <div className="flex items-center gap-1.5 text-[11px] text-zk-muted">
+            <span>{roleLabel}</span>
+            <span>·</span>
+            <Link href="/change-password" className="text-zk-primary">
+              改密碼
+            </Link>
+            <span>·</span>
+            <LogoutButton className="p-0 text-[11px] font-normal text-zk-muted underline-offset-2 hover:text-zk-text-secondary hover:underline" />
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}

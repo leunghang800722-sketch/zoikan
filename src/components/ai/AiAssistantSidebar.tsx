@@ -197,7 +197,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             data-testid="ai-assistant-tab"
             aria-label="開啟在勤助手"
             onClick={() => setOpen(true)}
-            className="fixed right-0 top-[40%] z-30 hidden -translate-y-1/2 rounded-l-md border border-r-0 border-gray-300 bg-white px-2 py-4 text-sm font-medium tracking-wide text-gray-700 shadow-md hover:bg-gray-50 md:block"
+            className="fixed right-0 top-[120px] z-30 hidden rounded-l-md bg-[#0f172a] px-[7px] py-3 text-xs tracking-[.1em] text-white shadow-md hover:bg-[#1e293b] md:block"
             style={{ writingMode: "vertical-rl" }}
           >
             在勤助手
@@ -208,7 +208,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             data-testid="ai-assistant-fab"
             aria-label="開啟在勤助手"
             onClick={() => setOpen(true)}
-            className="fixed bottom-5 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full border border-gray-300 bg-white text-sm font-semibold text-gray-800 shadow-lg hover:bg-gray-50 md:hidden"
+            className="fixed right-4 bottom-6 z-30 flex h-[52px] w-[52px] items-center justify-center rounded-full bg-[#0f172a] text-xs font-semibold text-white shadow-[0_6px_18px_rgba(15,23,42,.3)] md:hidden"
           >
             助手
           </button>
@@ -223,19 +223,21 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
           className={
             isMobile
               ? "fixed inset-0 z-40 flex flex-col bg-white"
-              : "fixed inset-y-0 right-0 z-40 flex flex-col border-l border-gray-200 bg-white shadow-xl"
+              : "fixed inset-y-0 right-0 z-40 flex flex-col border-l border-zk-border bg-white shadow-xl"
           }
           style={isMobile ? undefined : { width }}
         >
-          <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-            <h2 className="text-sm font-semibold text-gray-900">在勤助手</h2>
-            <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2.5 border-b border-zk-border px-4 py-3">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-zk-primary" />
+            <h2 className="text-sm font-semibold text-zk-text">在勤助手</h2>
+            {!isMobile && <span className="text-[11px] text-zk-faint">只讀 · 答數據問題</span>}
+            <div className="ml-auto flex items-center gap-1">
               {!isMobile && (
                 <button
                   type="button"
                   onClick={toggleWidth}
                   aria-label={width >= WIDE_WIDTH ? "縮窄側欄" : "擴闊側欄"}
-                  className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+                  className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
                 >
                   {width >= WIDE_WIDTH ? "窄" : "闊"}
                 </button>
@@ -244,15 +246,15 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 type="button"
                 data-testid="ai-clear-conversation"
                 onClick={() => setConfirmingClear(true)}
-                className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+                className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
               >
-                清空對話
+                清空
               </button>
               <button
                 type="button"
                 aria-label="關閉在勤助手"
                 onClick={() => setOpen(false)}
-                className="rounded px-2 py-1 text-sm text-gray-500 hover:bg-gray-100"
+                className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
               >
                 關閉
               </button>
@@ -273,10 +275,14 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             </div>
           )}
 
-          <div ref={messageListRef} data-testid="ai-message-list" className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+          <div
+            ref={messageListRef}
+            data-testid="ai-message-list"
+            className={`flex-1 space-y-3 overflow-y-auto ${isMobile ? "px-4 py-4" : "px-4 py-4"}`}
+          >
             {showWelcome && (
               <div className="space-y-3" data-testid="ai-welcome">
-                <p className="text-sm text-gray-700">你好，{userName}，今日想問啲咩？</p>
+                <p className="text-[13px] text-zk-text-secondary">你好，{userName}，今日想問啲咩？</p>
                 <div className="flex flex-col gap-2">
                   {EXAMPLE_QUESTIONS.map((ex) => (
                     <button
@@ -284,7 +290,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                       type="button"
                       data-testid="ai-example-button"
                       onClick={() => handleSubmit(ex)}
-                      className="rounded border border-gray-200 px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50"
+                      className="rounded-xl border border-zk-border px-3 py-2 text-left text-[11.5px] text-zk-text-secondary hover:bg-zk-header"
                     >
                       {ex}
                     </button>
@@ -299,8 +305,8 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   data-testid={m.role === "user" ? "ai-message-user" : "ai-message-assistant"}
                   className={
                     m.role === "user"
-                      ? "max-w-[85%] rounded-lg bg-blue-600 px-3 py-2 text-sm text-white"
-                      : "max-w-[85%] rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-900"
+                      ? `max-w-[86%] bg-zk-primary text-white ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-2.5 text-[13px] leading-[1.55]"}`
+                      : `max-w-[86%] bg-zk-surface text-zk-text ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-2.5 text-[13px] leading-[1.55]"}`
                   }
                 >
                   {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : <span className="whitespace-pre-wrap">{m.content}</span>}
@@ -310,7 +316,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
 
             {sending && (
               <div className="flex justify-start">
-                <div data-testid="ai-thinking" className="max-w-[85%] rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-500">
+                <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-2.5 text-[13px] text-zk-muted">
                   {streamingText ? <span className="whitespace-pre-wrap">{streamingText}</span> : "思考緊…"}
                 </div>
               </div>
@@ -328,7 +334,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
               e.preventDefault();
               void handleSubmit(inputValue);
             }}
-            className="flex items-end gap-2 border-t border-gray-200 p-3"
+            className="flex items-end gap-2 border-t border-zk-border p-3"
           >
             <textarea
               ref={textareaRef}
@@ -341,20 +347,28 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   void handleSubmit(inputValue);
                 }
               }}
-              rows={2}
-              placeholder="問啲咩？（Enter 送出，Shift+Enter 換行）"
+              rows={isMobile ? 1 : 2}
+              placeholder={isMobile ? "問啲咩？" : "問啲咩？（Enter 送出，Shift+Enter 換行）"}
               aria-label="輸入問題"
               disabled={sending}
-              className="flex-1 resize-none rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-400 focus:outline-none disabled:bg-gray-50"
+              className={
+                isMobile
+                  ? "min-h-[44px] flex-1 resize-none rounded-[22px] border border-zk-input-border px-3.5 py-2.5 text-sm focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+                  : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-[13px] focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+              }
             />
             <button
               type="submit"
               data-testid="ai-submit"
               disabled={sending || !inputValue.trim()}
               aria-label="送出"
-              className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              className={
+                isMobile
+                  ? "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zk-primary text-lg font-bold text-white disabled:opacity-50"
+                  : "flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-zk-primary text-base font-bold text-white disabled:opacity-50"
+              }
             >
-              送出
+              ↑
             </button>
           </form>
         </div>

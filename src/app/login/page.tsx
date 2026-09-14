@@ -37,55 +37,77 @@ function LoginForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-      <div>
-        <h1 className="text-lg font-semibold text-gray-900">在勤 登入</h1>
-        <p className="text-sm text-gray-500">保安排更系統</p>
+    <div className="flex w-full max-w-[380px] flex-col gap-5">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-zk-primary text-base font-bold text-white">在</div>
+        <div>
+          <div className="text-lg font-bold text-zk-text">在勤</div>
+          <div className="text-xs text-zk-muted">排更 · 對數 · 出糧</div>
+        </div>
       </div>
-      {error && <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-      <div className="space-y-1">
-        <label className="block text-sm text-gray-700" htmlFor="tel">
-          電話
-        </label>
-        <input
-          id="tel"
-          value={tel}
-          onChange={(e) => setTel(e.target.value)}
-          className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
-          autoComplete="username"
-          disabled={loading}
-          required
-        />
-      </div>
-      <div className="space-y-1">
-        <label className="block text-sm text-gray-700" htmlFor="password">
-          密碼
-        </label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
-          autoComplete="current-password"
-          disabled={loading}
-          required
-        />
-      </div>
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full rounded bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+
+      <form
+        onSubmit={onSubmit}
+        className="flex flex-col gap-3.5 rounded-xl border border-zk-border bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,.04)]"
       >
-        {loading ? "登入中…" : "登入"}
-      </button>
-    </form>
+        <div className="text-base font-semibold text-zk-text">登入</div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-[12.5px] text-[#b91c1c]">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#dc2626]" />
+            {error}
+          </div>
+        )}
+
+        <label className="flex flex-col gap-1.5 text-[12.5px] text-zk-text-secondary" htmlFor="tel">
+          電話
+          <input
+            id="tel"
+            value={tel}
+            onChange={(e) => setTel(e.target.value)}
+            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none ${
+              error ? "border-[#dc2626] shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
+            }`}
+            autoComplete="username"
+            disabled={loading}
+            required
+          />
+        </label>
+        <label className="flex flex-col gap-1.5 text-[12.5px] text-zk-text-secondary" htmlFor="password">
+          密碼
+          <input
+            id="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none ${
+              error ? "border-[#dc2626] shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
+            }`}
+            autoComplete="current-password"
+            disabled={loading}
+            required
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={loading}
+          className="rounded-lg bg-zk-primary py-[11px] text-sm font-semibold text-white hover:bg-zk-primary-dark disabled:opacity-50"
+        >
+          {loading ? "登入中…" : "登入"}
+        </button>
+        <div className="text-center text-[11.5px] leading-relaxed text-zk-faint">
+          帳號由老闆開立；首次登入會要求改密碼。
+          <br />
+          忘記密碼請聯絡老闆重設。
+        </div>
+      </form>
+    </div>
   );
 }
 
 export default function LoginPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
+    <div className="flex min-h-screen items-center justify-center bg-zk-bg p-6">
       <Suspense fallback={null}>
         <LoginForm />
       </Suspense>

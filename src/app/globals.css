@@ -1,26 +1,111 @@
 @import "tailwindcss";
 
+/* WP-R1：Design Tokens（見 data/design-handoff/README.md「Design
+   Tokens」）——顏色 CSS 變數，命名跟 README 嘅語義分組（底色／卡／
+   邊／文字／主色／深色／成功／警告／危險）。R2/R3 逐頁改版時，一般
+   數值直接寫 Tailwind arbitrary value（例如 `text-[#64748b]`）已經夠
+   精確；呢度嘅變數主要俾 `@theme` 底下暴露做 `bg-zk-*`/`text-zk-*`
+   utility（見底下），同埋 `body` 呢類冇對應 component 嘅全站底色用。 */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --zk-bg: #f6f7f9;
+  --zk-card: #ffffff;
+  --zk-header: #fafbfc;
+  --zk-surface: #f1f5f9;
+  --zk-surface-2: #f8fafc;
+
+  --zk-border: #e5e7eb;
+  --zk-border-soft: #f1f5f9;
+  --zk-input-border: #d1d5db;
+
+  --zk-text: #0f172a;
+  --zk-text-secondary: #334155;
+  --zk-muted: #64748b;
+  --zk-faint: #94a3b8;
+  --zk-faintest: #cbd5e1;
+
+  --zk-primary: #2563eb;
+  --zk-primary-dark: #1d4ed8;
+  --zk-primary-deep: #1e40af;
+  --zk-primary-tint: #dbeafe;
+  --zk-primary-tint-soft: #eff6ff;
+
+  --zk-dark: #0f172a;
+
+  --zk-success: #0f766e;
+  --zk-success-dark: #047857;
+  --zk-success-bg: #ecfdf5;
+
+  --zk-warning: #c2410c;
+  --zk-warning-dark: #9a3412;
+  --zk-warning-darker: #b45309;
+  --zk-warning-bg: #fff7ed;
+  --zk-warning-border: #fed7aa;
+
+  --zk-danger: #dc2626;
+  --zk-danger-dark: #b91c1c;
+  --zk-danger-bg: #fef2f2;
+  --zk-danger-border: #fecaca;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-noto-sans-hk), system-ui, sans-serif;
+
+  --color-zk-bg: var(--zk-bg);
+  --color-zk-card: var(--zk-card);
+  --color-zk-header: var(--zk-header);
+  --color-zk-surface: var(--zk-surface);
+  --color-zk-surface-2: var(--zk-surface-2);
+  --color-zk-border: var(--zk-border);
+  --color-zk-border-soft: var(--zk-border-soft);
+  --color-zk-input-border: var(--zk-input-border);
+  --color-zk-text: var(--zk-text);
+  --color-zk-text-secondary: var(--zk-text-secondary);
+  --color-zk-muted: var(--zk-muted);
+  --color-zk-faint: var(--zk-faint);
+  --color-zk-faintest: var(--zk-faintest);
+  --color-zk-primary: var(--zk-primary);
+  --color-zk-primary-dark: var(--zk-primary-dark);
+  --color-zk-primary-deep: var(--zk-primary-deep);
+  --color-zk-primary-tint: var(--zk-primary-tint);
+  --color-zk-primary-tint-soft: var(--zk-primary-tint-soft);
+  --color-zk-dark: var(--zk-dark);
+  --color-zk-success: var(--zk-success);
+  --color-zk-success-dark: var(--zk-success-dark);
+  --color-zk-success-bg: var(--zk-success-bg);
+  --color-zk-warning: var(--zk-warning);
+  --color-zk-warning-dark: var(--zk-warning-dark);
+  --color-zk-warning-darker: var(--zk-warning-darker);
+  --color-zk-warning-bg: var(--zk-warning-bg);
+  --color-zk-warning-border: var(--zk-warning-border);
+  --color-zk-danger: var(--zk-danger);
+  --color-zk-danger-dark: var(--zk-danger-dark);
+  --color-zk-danger-bg: var(--zk-danger-bg);
+  --color-zk-danger-border: var(--zk-danger-border);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  background: var(--zk-bg);
+  color: var(--zk-text);
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--zk-primary);
+}
+a:hover {
+  color: var(--zk-primary-dark);
+}
+
+/* 手機更表格仔橫向掃／導航 chip 掃動要隱藏 scrollbar（同原型
+   `.nosb` class 對應）。 */
+.nosb::-webkit-scrollbar {
+  display: none;
+}
+.nosb {
+  scrollbar-width: none;
 }

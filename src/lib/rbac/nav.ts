@@ -70,6 +70,11 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
     if (grants[mod]) links.push({ href, label });
   };
 
+  // WP-R1：「首頁」（dashboard，內部角色＝尚欠總覽式歡迎頁、雞頭＝自己
+  // 嘅 4 KPI 首頁）唔對應任何 module 權限格——凡已登入嘅用戶都見得到，
+  // 一律加返（唔經 push()，唔使揀 module）。
+  links.push({ href: "/", label: "首頁" });
+
   push("/roster", "更表", "更表");
   push("/quotas", "配額", "配額");
   push("/approvals", "審批隊列", "審批");
@@ -95,4 +100,46 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   push("/audit-log", "操作紀錄", "操作紀錄");
 
   return links;
+}
+
+// ---------------------------------------------------------------------------
+// WP-R1：左欄／手機抽屜嘅分組顯示——設計稿（README「桌面外殼」）將
+// `getNavLinks()` 已經算好嘅連結按主題分堆（排更／主檔／財務／系統，
+// 雞頭端排更／我的），純粹顯示層，唔改 `getNavLinks()` 嗰套權限邏輯：
+// 一個角色見唔見到某條連結，仍然全部由上面 push() 嗰句決定；呢度淨係
+// 決定「見到嘅連結擺去邊組」，冇連結嘅組唔顯示（見 groupNavLinks()
+// 尾嗰個 filter）。用 href 對照（唔用 module）——因為同一個 module
+// 喺唔同角色會連去唔同 href（例如「出街價」module 內部角色係
+// /rate-cards 擺喺「主檔」，雞頭係 /my-receivable 擺喺「我的」）。
+export interface NavGroup {
+  /** 空字串＝冇組標題（例：頂部「首頁」）。 */
+  title: string;
+  links: NavLink[];
+}
+
+const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
+  { title: "", hrefs: ["/"] },
+  { title: "排更", hrefs: ["/roster", "/quotas", "/approvals"] },
+  { title: "主檔", hrefs: ["/sites", "/guards", "/brokers", "/rate-cards"] },
+  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall"] },
+  { title: "系統", hrefs: ["/users", "/roles", "/audit-log"] },
+];
+
+const BROKER_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
+  { title: "排更", hrefs: ["/", "/roster", "/quotas"] },
+  { title: "我的", hrefs: ["/my-receivable", "/guards", "/rate-cards"] },
+];
+
+/** 純函數（冇 DB／網絡）——`baseRole` 淨係用嚟揀「雞頭 vs 內部角色」
+ * 呢個分組版面，唔重新判斷權限（`links` 入面已經係 `getNavLinks()`
+ * 篩選完嘅結果）。方便 unit test（唔使起 DB／mock session）。 */
+export function groupNavLinks(baseRole: string, links: NavLink[]): NavGroup[] {
+  const order = baseRole === "雞頭" ? BROKER_GROUP_ORDER : INTERNAL_GROUP_ORDER;
+  const byHref = new Map(links.map((l) => [l.href, l]));
+  const groups: NavGroup[] = [];
+  for (const g of order) {
+    const groupLinks = g.hrefs.map((h) => byHref.get(h)).filter((l): l is NavLink => l !== undefined);
+    if (groupLinks.length > 0) groups.push({ title: g.title, links: groupLinks });
+  }
+  return groups;
 }

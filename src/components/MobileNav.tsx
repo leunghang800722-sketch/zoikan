@@ -1,20 +1,37 @@
 "use client";
 // 老闆手機版 bug（2026-09-13）：`< md`（768px）時左欄固定 `<aside>` 收埋做
-// 漢堡抽屜——頂部一條 header（漢堡掣＋「在勤」＋用戶名／角色），撳漢堡
-// 由左滑出抽屜（含全部導航連結、改密碼、登出），撳連結／遮罩／Esc 關。
-// `md` 以上呢個 component 淨係 render 一個 `md:hidden` 嘅空殼（drawer 都
-// 喺入面但成個包住嘅 div display:none，唔會擋到桌面版固定 `<aside>`）。
+// 漢堡抽屜——頂部一條 header（漢堡掣＋「在勤」＋用戶頭像），撳漢堡由左
+// 滑出抽屜（含分組導航、改密碼、登出），撳連結／遮罩／Esc 關。
 //
-// `(app)/layout.tsx` 仍然係 server component——links／用戶名／角色顯示文字
-// 呢啲數據由嗰邊 fetch 好再傳落嚟，呢個 component 淨係管抽屜開關嘅 client
-// state。
+// WP-R1：外觀跟 README「手機外殼」重做——頂欄白底 border-bottom、漢堡
+// 3 條 20×2px 深色線；抽屜 280px、遮罩 `rgba(15,23,42,.45)`、shadow、
+// 頂部頭像＋名＋角色、同桌面一樣分組導航、底部改密碼／登出。行為（開
+// 關／Esc／撳連結自動關）同 testid 全部保留。
+//
+// `(app)/layout.tsx` 仍然係 server component——分組連結／用戶名／角色
+// 顯示文字／badge 數字呢啲數據由嗰邊 fetch 好再傳落嚟，呢個 component
+// 淨係管抽屜開關嘅 client state。
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/LogoutButton";
-import type { NavLink } from "@/lib/rbac/nav";
+import type { NavGroup } from "@/lib/rbac/nav";
 
-export function MobileNav({ links, userName, roleLabel }: { links: NavLink[]; userName: string; roleLabel: string }) {
+function initials(name: string): string {
+  return name.trim().slice(0, 2);
+}
+
+export function MobileNav({
+  groups,
+  userName,
+  roleLabel,
+  badges,
+}: {
+  groups: NavGroup[];
+  userName: string;
+  roleLabel: string;
+  badges: Record<string, number>;
+}) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
 
@@ -35,24 +52,21 @@ export function MobileNav({ links, userName, roleLabel }: { links: NavLink[]; us
 
   return (
     <div className="md:hidden">
-      <header className="flex items-center gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
+      <header className="flex items-center gap-3 border-b border-zk-border bg-white px-4 py-2.5">
         <button
           type="button"
           data-testid="mobile-nav-hamburger"
           aria-label="開啟導航選單"
           onClick={() => setOpen(true)}
-          className="shrink-0 rounded p-1.5 text-gray-700 hover:bg-gray-200"
+          className="flex shrink-0 flex-col gap-[4px] p-1"
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
+          <span className="h-0.5 w-5 bg-zk-text" />
+          <span className="h-0.5 w-5 bg-zk-text" />
+          <span className="h-0.5 w-5 bg-zk-text" />
         </button>
-        <div className="min-w-0 flex-1 text-xs font-medium uppercase tracking-wide text-gray-400">在勤</div>
-        <div className="shrink-0 text-right text-xs">
-          <div className="font-medium text-gray-900">{userName}</div>
-          <div className="text-gray-500">{roleLabel}</div>
+        <div className="min-w-0 flex-1 text-[15px] font-bold text-zk-text">在勤</div>
+        <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-[#e0e7ff] text-xs font-semibold text-[#3730a3]">
+          {initials(userName)}
         </div>
       </header>
 
@@ -62,42 +76,57 @@ export function MobileNav({ links, userName, roleLabel }: { links: NavLink[]; us
             data-testid="mobile-nav-overlay"
             aria-hidden="true"
             onClick={() => setOpen(false)}
-            className="fixed inset-0 z-40 bg-black/40"
+            className="fixed inset-0 z-40 bg-[rgba(15,23,42,.45)]"
           />
           <div
             role="dialog"
             aria-label="導航選單"
             data-testid="mobile-nav-drawer"
-            className="fixed inset-y-0 left-0 z-50 flex w-64 max-w-[80vw] flex-col gap-4 overflow-y-auto bg-gray-50 p-4 shadow-xl"
+            className="fixed inset-y-0 left-0 z-50 flex w-[280px] max-w-[80vw] flex-col overflow-y-auto bg-white px-3.5 pt-14 pb-5 shadow-[8px_0_30px_rgba(0,0,0,.2)]"
           >
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wide text-gray-400">在勤</div>
-              <div className="mt-1 text-sm font-medium text-gray-900">{userName}</div>
-              <div className="text-xs text-gray-500">{roleLabel}</div>
+            <div className="mb-[18px] flex items-center gap-2.5 px-1.5">
+              <div className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-[#e0e7ff] text-xs font-semibold text-[#3730a3]">
+                {initials(userName)}
+              </div>
+              <div>
+                <div className="text-[13.5px] font-semibold text-zk-text">{userName}</div>
+                <div className="text-[11px] text-zk-muted">{roleLabel}</div>
+              </div>
             </div>
 
-            <nav className="flex flex-1 flex-col gap-0.5 text-sm">
-              {links.map((l) => (
-                <Link
-                  key={l.href}
-                  href={l.href}
-                  onClick={() => setOpen(false)}
-                  className="rounded px-2 py-1.5 text-gray-700 hover:bg-gray-200"
-                >
-                  {l.label}
-                </Link>
+            <nav className="flex flex-1 flex-col overflow-y-auto">
+              {groups.map((g) => (
+                <div key={g.title || "_top"} className="mb-3">
+                  {g.title && <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[.06em] text-zk-faint">{g.title}</div>}
+                  <div className="flex flex-col">
+                    {g.links.map((l) => {
+                      const active = pathname === l.href || (l.href === "/roster" && pathname.startsWith("/roster"));
+                      const badge = badges[l.href];
+                      return (
+                        <Link
+                          key={l.href}
+                          href={l.href}
+                          className={`flex items-center justify-between rounded-md px-2 py-2.5 text-[14px] ${
+                            active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
+                          }`}
+                        >
+                          {l.label}
+                          {!!badge && (
+                            <span className="rounded-[9px] bg-[#fee2e2] px-1.5 py-px text-[10.5px] font-semibold text-[#b91c1c]">{badge}</span>
+                          )}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
               ))}
             </nav>
 
-            <div className="flex flex-col gap-2 border-t border-gray-200 pt-3 text-sm">
-              <Link
-                href="/change-password"
-                onClick={() => setOpen(false)}
-                className="rounded px-2 py-1.5 text-blue-700 hover:bg-gray-200"
-              >
+            <div className="flex flex-col gap-0.5 border-t border-zk-border pt-3">
+              <Link href="/change-password" className="rounded-md px-2 py-2.5 text-[14px] text-zk-primary">
                 改密碼
               </Link>
-              <LogoutButton />
+              <LogoutButton className="rounded-md px-2 py-2.5 text-left text-[14px] text-zk-text-secondary" />
             </div>
           </div>
         </>

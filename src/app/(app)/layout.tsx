@@ -1,14 +1,14 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
-import { getNavLinks, getViewGrants } from "@/lib/rbac/nav";
+import { getNavLinks, getViewGrants, groupNavLinks } from "@/lib/rbac/nav";
 import { uiLabel } from "@/lib/ui/format";
-import { LogoutButton } from "@/components/LogoutButton";
 import { MustChangePwdGate } from "@/components/MustChangePwdGate";
 import { ChunkErrorReload } from "@/components/ChunkErrorReload";
 import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
 import { MobileNav } from "@/components/MobileNav";
+import { DesktopNav } from "@/components/DesktopNav";
 import { isAiConfigured } from "@/lib/ai/config";
+import { prisma } from "@/lib/db";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
@@ -21,6 +21,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // 呢個 component 都唔會 render——DOM 零元素，唔係淨係 CSS 隱藏。
   const grants = await getViewGrants(session);
   const links = await getNavLinks(session, grants);
+  // WP-R1：導航分組純粹顯示層（見 `groupNavLinks()` 註解）——邊條連結
+  // 顯示唔顯示仍然由 `getNavLinks()` 嗰套權限邏輯決定，呢度淨係決定
+  // 擺去邊組。
+  const groups = groupNavLinks(session.baseRole, links);
+
+  // WP-R1：「審批隊列」右側紅 badge＝本月（伺服器現在月份）待審批更次
+  // 數（README「桌面外殼 · 左欄」）。淨係有「審批:view」權限先查（0 就
+  // 唔顯示，交由 DesktopNav/MobileNav 自己判斷 `!!badge`）。
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const approvalsPending = grants["審批"]
+    ? await prisma.shiftRecord.count({ where: { status: "pending_approval", workDate: { gte: monthStart, lt: monthEnd } } })
+    : 0;
+  const badges: Record<string, number> = approvalsPending > 0 ? { "/approvals": approvalsPending } : {};
+
   // WP-AI3：邊個 provider 配置好（DeepSeek／Anthropic／測試用 fake）
   // 判斷邏輯抽咗喺 `@/lib/ai/config.ts`，同 `getLlmClient()`
   // （`src/lib/ai/llm.ts`）共用同一套，唔會走飛——未配置好任何 provider
@@ -31,35 +47,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const roleLabel = uiLabel(session.roleName);
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
+    <div className="flex min-h-screen flex-col bg-zk-bg md:flex-row">
       {/* 手機版（< md）：漢堡抽屜，見 MobileNav 內部註解。桌面版（md 以
           上）呢個 component render 一個 `md:hidden` 空殼，唔影響下面固定
           `<aside>`。 */}
-      <MobileNav links={links} userName={session.name} roleLabel={roleLabel} />
+      <MobileNav groups={groups} userName={session.name} roleLabel={roleLabel} badges={badges} />
 
-      <aside className="hidden w-56 shrink-0 flex-col gap-4 border-r border-gray-200 bg-gray-50 p-4 md:flex">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wide text-gray-400">在勤</div>
-          <div className="mt-1 text-sm font-medium text-gray-900">{session.name}</div>
-          <div className="text-xs text-gray-500">{roleLabel}</div>
-        </div>
+      <DesktopNav groups={groups} userName={session.name} roleLabel={roleLabel} badges={badges} />
 
-        <nav className="flex flex-1 flex-col gap-0.5 text-sm">
-          {links.map((l) => (
-            <Link key={l.href} href={l.href} className="rounded px-2 py-1.5 text-gray-700 hover:bg-gray-200">
-              {l.label}
-            </Link>
-          ))}
-        </nav>
-
-        <div className="flex flex-col gap-2 border-t border-gray-200 pt-3 text-sm">
-          <Link href="/change-password" className="rounded px-2 py-1.5 text-blue-700 hover:bg-gray-200">
-            改密碼
-          </Link>
-          <LogoutButton />
-        </div>
-      </aside>
-      <main className="min-w-0 flex-1 overflow-x-auto p-4 md:p-6">
+      <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-x-auto px-4 pt-3.5 pb-[90px] md:px-7 md:pt-6 md:pb-6">
         <ChunkErrorReload />
         <MustChangePwdGate mustChange={session.mustChangePwd} />
         {children}
