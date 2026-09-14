@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Noto_Sans_HK } from "next/font/google";
 import "./globals.css";
 
@@ -33,6 +33,23 @@ const notoSansHK = Noto_Sans_HK({
 export const metadata: Metadata = {
   title: "在勤",
   description: "在勤保安排更系統",
+  // PWA／主畫面圖示（見 src/app/manifest.ts 頂註解）
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "32x32 16x16" },
+      { url: "/icons/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: { capable: true, title: "在勤", statusBarStyle: "default" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#1c1917",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
