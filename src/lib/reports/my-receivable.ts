@@ -18,6 +18,12 @@ export type MyReceivableResult = {
   days: MyReceivableDayRow[];
   total: number;
   totalShifts: number;
+  // P2-B（README §11 3 張 stat 卡第三張「待審批 N 更 · 金額」）：additive
+  // 欄位——`days`／`total`／`totalShifts` 一律唔篩 status（跟原本口徑，
+  // 包晒 draft/pending_approval/confirmed/completed），呢兩個欄淨係喺
+  // 上面嗰堆入面再篩出 status=pending_approval 嘅子集，俾 UI 出橙色提示。
+  pendingCount: number;
+  pendingAmount: number;
 };
 
 export async function buildMyReceivable(brokerId: string, month: Date): Promise<MyReceivableResult> {
@@ -40,11 +46,16 @@ export async function buildMyReceivable(brokerId: string, month: Date): Promise<
     amount: round2(n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot)),
   }));
 
+  const pendingRecords = records.filter((r) => r.status === "pending_approval");
+  const pendingAmount = round2(pendingRecords.reduce((a, r) => a + n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot), 0));
+
   return {
     month: monthLabel(month),
     brokerId,
     days,
     total: round2(days.reduce((a, d) => a + d.amount, 0)),
     totalShifts: days.length,
+    pendingCount: pendingRecords.length,
+    pendingAmount,
   };
 }
