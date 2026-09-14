@@ -4,6 +4,19 @@
 // `EmptyState` component 俾冇資料嘅表用。
 import type { ReactNode } from "react";
 
+/** README「共用元件 · 資料表」：內層 `min-width = max(560px, 欄數 ×
+ * 118px)`——欄多嘅表（例如糧明細）568px 淨係得返幾欄闊，數字會迫到
+ * 窄晒；呢個 helper 計出嗰頁實際欄數應有嘅 min-width，用法：
+ *
+ *   <div className={tableCls.wrap}>
+ *     <table className={tableCls.table} style={{ minWidth: tableMinWidth(colCount) }}>
+ *
+ * （`tableCls.table` 本身仍然保留 `min-w-[560px]` 做冇傳 style 時嘅
+ * 保底值；欄數多過 ~5 欄嘅表建議都傳呢個 style 覆蓋。） */
+export function tableMinWidth(colCount: number): number {
+  return Math.max(560, colCount * 118);
+}
+
 export const tableCls = {
   /** 外框：白底、邊、圓角、橫向捲。 */
   wrap: "overflow-x-auto rounded-lg border border-zk-border bg-white",

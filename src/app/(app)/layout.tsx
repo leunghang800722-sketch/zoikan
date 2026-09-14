@@ -26,15 +26,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // 擺去邊組。
   const groups = groupNavLinks(session.baseRole, links);
 
-  // WP-R1：「審批隊列」右側紅 badge＝本月（伺服器現在月份）待審批更次
-  // 數（README「桌面外殼 · 左欄」）。淨係有「審批:view」權限先查（0 就
-  // 唔顯示，交由 DesktopNav/MobileNav 自己判斷 `!!badge`）。
-  const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-  const approvalsPending = grants["審批"]
-    ? await prisma.shiftRecord.count({ where: { status: "pending_approval", workDate: { gte: monthStart, lt: monthEnd } } })
-    : 0;
+  // WP-R1：「審批隊列」右側紅 badge＝待審批更次總數（README「桌面外殼 ·
+  // 左欄」）。淨係有「審批:view」權限先查（0 就唔顯示，交由
+  // DesktopNav/MobileNav 自己判斷 `!!badge`）。
+  //
+  // R1 驗收修正：口徑要同 `/approvals` 頁本身一致——嗰頁列晒全部
+  // `pending_approval` 嘅更次，冇按本月篩（見
+  // `src/app/(app)/approvals/page.tsx`），之前呢度加咗 `workDate` 本月
+  // 篩選，會令 badge 數字細過 `/approvals` 頁實際筆數，令人以為「仲有
+  // 未算入 badge 嘅待批」。改成同頁面一樣唔篩月份。
+  const approvalsPending = grants["審批"] ? await prisma.shiftRecord.count({ where: { status: "pending_approval" } }) : 0;
   const badges: Record<string, number> = approvalsPending > 0 ? { "/approvals": approvalsPending } : {};
 
   // WP-AI3：邊個 provider 配置好（DeepSeek／Anthropic／測試用 fake）
@@ -47,15 +48,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const roleLabel = uiLabel(session.roleName);
 
   return (
-    <div className="flex min-h-screen flex-col bg-zk-bg md:flex-row">
-      {/* 手機版（< md）：漢堡抽屜，見 MobileNav 內部註解。桌面版（md 以
-          上）呢個 component render 一個 `md:hidden` 空殼，唔影響下面固定
-          `<aside>`。 */}
+    <div className="flex min-h-screen flex-col bg-zk-bg lg:flex-row">
+      {/* 手機版（< lg，README「<1024 建議左欄收起變抽屜」）：漢堡抽屜，
+          見 MobileNav 內部註解。桌面版（lg 以上）呢個 component render
+          一個 `lg:hidden` 空殼，唔影響下面固定 `<aside>`。 */}
       <MobileNav groups={groups} userName={session.name} roleLabel={roleLabel} badges={badges} />
 
       <DesktopNav groups={groups} userName={session.name} roleLabel={roleLabel} badges={badges} />
 
-      <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-x-auto px-4 pt-3.5 pb-[90px] md:px-7 md:pt-6 md:pb-6">
+      <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-x-auto px-4 pt-3.5 pb-[90px] lg:px-7 lg:pt-6 lg:pb-6">
         <ChunkErrorReload />
         <MustChangePwdGate mustChange={session.mustChangePwd} />
         {children}

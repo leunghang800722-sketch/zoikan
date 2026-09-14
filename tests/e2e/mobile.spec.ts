@@ -80,6 +80,23 @@ test.describe("手機版佈局（375×812）", () => {
     await expect(fab).toBeHidden();
   });
 
+  test("(e) 撳當前頁連結（pathname 唔變）抽屜都要收——喺 /roster 開抽屜撳「更表」", async ({ page }) => {
+    await loginAs(page, "老闆");
+    await page.goto("/roster");
+
+    await page.getByTestId("mobile-nav-hamburger").click();
+    const drawer = page.getByTestId("mobile-nav-drawer");
+    await expect(drawer).toBeVisible();
+
+    // 已經喺 /roster，撳抽屜入面嘅「更表」連結 pathname 唔會變，之前
+    // 淨係靠 `usePathname()` 變化嗰個 effect 關抽屜嘅寫法喺呢種情況會
+    // 漏（抽屜賴喺度）——`MobileNav.tsx` 每條 `<Link>` 而家加咗顯式
+    // `onClick={() => setOpen(false)}`，唔理 pathname 變唔變都會關。
+    await drawer.getByRole("link", { name: "更表" }).click();
+    await expect(drawer).toBeHidden();
+    expect(new URL(page.url()).pathname).toBe("/roster");
+  });
+
   test("(f) 手機闊度：更表日期欄要喺固定欄右邊見得到（唔可以被固定欄遮晒），且可以橫向捲", async ({ page }) => {
     const siteId = await findSiteIdByName("啟航1331");
     await loginAs(page, "老闆");

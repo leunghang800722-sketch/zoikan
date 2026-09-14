@@ -18,6 +18,11 @@ export default defineConfig({
     // 岩巧撞正 Vitest 預設嘅 test file pattern，要明確排除，否則 Vitest
     // 會嘗試收集 Playwright 嘅 `test.describe`/`test()` 全局函數，成個
     // test file 爆錯。
-    exclude: ["**/node_modules/**", "tests/e2e/**"],
+    // R1 驗收修正：`.claude/worktrees/**` 係其他 agent 平行開嘅 git
+    // worktree（各自 checkout 一份完整 repo 副本，包括 tests/ 同呢個
+    // vitest config 自己）——冇呢條 exclude，喺主工作樹跑 `vitest run`
+    // 會撈埋人哋 worktree 入面嗰份 test 副本一齊跑（同一條 test 跑兩
+    // 次、甚至撞另一個 agent 改緊一半嘅檔案）。
+    exclude: ["**/node_modules/**", "tests/e2e/**", ".claude/**"],
   },
 });

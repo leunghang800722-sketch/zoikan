@@ -65,7 +65,7 @@ function LoginForm() {
             id="tel"
             value={tel}
             onChange={(e) => setTel(e.target.value)}
-            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none ${
+            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]/30 ${
               error ? "border-[#dc2626] shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
             }`}
             autoComplete="username"
@@ -80,7 +80,7 @@ function LoginForm() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none ${
+            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]/30 ${
               error ? "border-[#dc2626] shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
             }`}
             autoComplete="current-password"
@@ -91,7 +91,7 @@ function LoginForm() {
         <button
           type="submit"
           disabled={loading}
-          className="rounded-lg bg-zk-primary py-[11px] text-sm font-semibold text-white hover:bg-zk-primary-dark disabled:opacity-50"
+          className="rounded-lg bg-zk-primary py-[11px] text-sm font-semibold text-white hover:bg-zk-primary-dark disabled:opacity-[.45]"
         >
           {loading ? "登入中…" : "登入"}
         </button>

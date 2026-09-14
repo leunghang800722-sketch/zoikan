@@ -2,7 +2,9 @@
 // `groupNavLinks()`）——純函數 unit test，唔使起 DB／session（同
 // `getNavLinks()` 嘅權限邏輯完全分開，見嗰個 function 頭嘅註解）。
 import { describe, expect, it } from "vitest";
-import { groupNavLinks, type NavLink } from "@/lib/rbac/nav";
+import { getNavLinks, groupNavLinks, type NavLink } from "@/lib/rbac/nav";
+import { MODULES, type Module } from "@/lib/rbac/matrix";
+import type { CurrentSession } from "@/lib/auth/current-session";
 
 // 老闆／主管／會計全部 module 都 grant（出廠矩陣）時 `getNavLinks()`
 // 會回嘅完整連結（唔包 /roles，等落面 case 分開測「冇連結嘅組唔顯示」）。
@@ -72,5 +74,45 @@ describe("groupNavLinks（WP-R1 左欄分組，純顯示層）", () => {
     const mineGroup = brokerGroups.find((g) => g.title === "我的");
     expect(mineGroup?.links.some((l) => l.href === "/my-receivable")).toBe(true);
     expect(mineGroup?.links.some((l) => l.href === "/rate-cards")).toBe(true);
+  });
+
+  // R1 驗收修正：分組表（INTERNAL_GROUP_ORDER/BROKER_GROUP_ORDER）同
+  // `getNavLinks()` 係兩份獨立維護嘅清單，之前如果分組表漏列一個
+  // href，個連結會靜靜哋喺導航消失，冇任何測試會爆。加返呢條：真係用
+  // `getNavLinks()`（老闆、全部 module 都 grant）計出嚟嘅連結，逐條
+  // 核對喺 `groupNavLinks()` 嘅結果度都揾到，確保兩份清單冚得住。
+  it("getNavLinks 老闆全部 href 都出現喺分組結果（分組表冚晒 getNavLinks 出嘅連結，唔會靜靜消失）", async () => {
+    const allGrants = Object.fromEntries(MODULES.map((m) => [m, true])) as Record<Module, boolean>;
+    const fakeSession = {
+      userId: "u1",
+      tel: "90000001",
+      name: "老闆",
+      roleId: "r1",
+      roleName: "老闆",
+      baseRole: "老闆",
+      brokerId: null,
+      guardId: null,
+      payoutApprovalLimit: null,
+      tokenVersion: 0,
+      loggedInAt: new Date().toISOString(),
+      mustChangePwd: false,
+    } as unknown as CurrentSession;
+
+    const links = await getNavLinks(fakeSession, allGrants);
+    const groups = groupNavLinks("老闆", links);
+    const groupedHrefs = new Set(groups.flatMap((g) => g.links.map((l) => l.href)));
+
+    expect(links.length).toBeGreaterThan(0);
+    for (const l of links) {
+      expect(groupedHrefs.has(l.href)).toBe(true);
+    }
+  });
+
+  it("分組表冇列出嘅 href（未知連結）落尾組「其他」，唔會靜靜消失", () => {
+    const linksWithUnknown: NavLink[] = [...FULL_INTERNAL_LINKS, { href: "/some-new-page", label: "新頁面" }];
+    const groups = groupNavLinks("老闆", linksWithUnknown);
+    const last = groups[groups.length - 1];
+    expect(last.title).toBe("其他");
+    expect(last.links.map((l) => l.href)).toEqual(["/some-new-page"]);
   });
 });

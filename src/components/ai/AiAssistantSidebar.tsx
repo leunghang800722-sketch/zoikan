@@ -29,7 +29,11 @@ const OPEN_STORAGE_KEY = "zoikan-ai-panel-open";
 const WIDTH_STORAGE_KEY = "zoikan-ai-panel-width";
 const NARROW_WIDTH = 380;
 const WIDE_WIDTH = 560;
-const MOBILE_BREAKPOINT_PX = 768;
+// R1 驗收修正：外殼斷點由 `md`（768）改 `lg`（1024，見 `MobileNav.tsx`／
+// `DesktopNav.tsx`），呢度判斷手機／桌面版（直向 tab vs FAB、side panel
+// vs 全螢幕）都要跟——否則 768–1023px 呢段會出現「外殼已經係手機版
+// （漢堡＋抽屜），但助手仲以為自己係桌面版」嘅唔一致。
+const MOBILE_BREAKPOINT_PX = 1024;
 
 const EXAMPLE_QUESTIONS = ["呢個盤今個月排咗幾多人？", "7 月毛利點解係咁？", "呢張價卡出街價點解係咁？", "點樣開新月份更表？"];
 
@@ -197,7 +201,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             data-testid="ai-assistant-tab"
             aria-label="開啟在勤助手"
             onClick={() => setOpen(true)}
-            className="fixed right-0 top-[120px] z-30 hidden rounded-l-md bg-[#0f172a] px-[7px] py-3 text-xs tracking-[.1em] text-white shadow-md hover:bg-[#1e293b] md:block"
+            className="fixed right-0 top-[120px] z-30 hidden rounded-l-md bg-[#0f172a] px-[7px] py-3 text-xs tracking-[.1em] text-white shadow-md hover:bg-[#1e293b] lg:block"
             style={{ writingMode: "vertical-rl" }}
           >
             在勤助手
@@ -208,7 +212,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             data-testid="ai-assistant-fab"
             aria-label="開啟在勤助手"
             onClick={() => setOpen(true)}
-            className="fixed right-4 bottom-6 z-30 flex h-[52px] w-[52px] items-center justify-center rounded-full bg-[#0f172a] text-xs font-semibold text-white shadow-[0_6px_18px_rgba(15,23,42,.3)] md:hidden"
+            className="fixed right-4 bottom-6 z-30 flex h-[52px] w-[52px] items-center justify-center rounded-full bg-[#0f172a] text-xs font-semibold text-white shadow-[0_6px_18px_rgba(15,23,42,.3)] lg:hidden"
           >
             助手
           </button>
@@ -290,7 +294,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                       type="button"
                       data-testid="ai-example-button"
                       onClick={() => handleSubmit(ex)}
-                      className="rounded-xl border border-zk-border px-3 py-2 text-left text-[11.5px] text-zk-text-secondary hover:bg-zk-header"
+                      className="rounded-xl border border-zk-border px-2.5 py-1 text-left text-[11.5px] text-zk-text-secondary hover:bg-zk-header"
                     >
                       {ex}
                     </button>
@@ -305,8 +309,8 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   data-testid={m.role === "user" ? "ai-message-user" : "ai-message-assistant"}
                   className={
                     m.role === "user"
-                      ? `max-w-[86%] bg-zk-primary text-white ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-2.5 text-[13px] leading-[1.55]"}`
-                      : `max-w-[86%] bg-zk-surface text-zk-text ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-2.5 text-[13px] leading-[1.55]"}`
+                      ? `max-w-[86%] bg-zk-primary text-white ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-[9px] text-[13px] leading-[1.55]"}`
+                      : `max-w-[86%] bg-zk-surface text-zk-text ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-[9px] text-[13px] leading-[1.55]"}`
                   }
                 >
                   {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : <span className="whitespace-pre-wrap">{m.content}</span>}
@@ -316,7 +320,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
 
             {sending && (
               <div className="flex justify-start">
-                <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-2.5 text-[13px] text-zk-muted">
+                <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[13px] text-zk-muted">
                   {streamingText ? <span className="whitespace-pre-wrap">{streamingText}</span> : "思考緊…"}
                 </div>
               </div>

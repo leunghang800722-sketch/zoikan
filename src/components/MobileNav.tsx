@@ -1,5 +1,5 @@
 "use client";
-// 老闆手機版 bug（2026-09-13）：`< md`（768px）時左欄固定 `<aside>` 收埋做
+// 老闆手機版 bug（2026-09-13）：`< lg`（1024px）時左欄固定 `<aside>` 收埋做
 // 漢堡抽屜——頂部一條 header（漢堡掣＋「在勤」＋用戶頭像），撳漢堡由左
 // 滑出抽屜（含分組導航、改密碼、登出），撳連結／遮罩／Esc 關。
 //
@@ -8,6 +8,14 @@
 // 頂部頭像＋名＋角色、同桌面一樣分組導航、底部改密碼／登出。行為（開
 // 關／Esc／撳連結自動關）同 testid 全部保留。
 //
+// R1 驗收修正：斷點由 `md`（768）改 `lg`（1024），同 `DesktopNav.tsx`
+// 對齊（README「<1024 建議左欄收起變抽屜」）；每條 `<Link>`（含「改
+// 密碼」）加返 `onClick={() => setOpen(false)}`——原本淨係靠
+// `usePathname()` 變化嗰個 effect 關抽屜，撳「當前頁」（pathname 不變，
+// 例如喺 `/roster` 撳抽屜入面嘅「更表」）就唔會觸發嗰個 effect，抽屜
+// 會賴喺度唔收；顯式 onClick 就算 pathname 冇變都照關。active 判斷同
+// `DesktopNav.isLinkActive()` 共用同一個 export（`@/lib/ui/nav-active`）。
+//
 // `(app)/layout.tsx` 仍然係 server component——分組連結／用戶名／角色
 // 顯示文字／badge 數字呢啲數據由嗰邊 fetch 好再傳落嚟，呢個 component
 // 淨係管抽屜開關嘅 client state。
@@ -15,6 +23,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/LogoutButton";
+import { isLinkActive } from "@/lib/ui/nav-active";
 import type { NavGroup } from "@/lib/rbac/nav";
 
 function initials(name: string): string {
@@ -51,8 +60,8 @@ export function MobileNav({
   }, [open]);
 
   return (
-    <div className="md:hidden">
-      <header className="flex items-center gap-3 border-b border-zk-border bg-white px-4 py-2.5">
+    <div className="lg:hidden">
+      <header className="flex items-center gap-3 border-b border-zk-border bg-white px-4 pt-2.5 pb-3">
         <button
           type="button"
           data-testid="mobile-nav-hamburger"
@@ -100,12 +109,13 @@ export function MobileNav({
                   {g.title && <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[.06em] text-zk-faint">{g.title}</div>}
                   <div className="flex flex-col">
                     {g.links.map((l) => {
-                      const active = pathname === l.href || (l.href === "/roster" && pathname.startsWith("/roster"));
+                      const active = isLinkActive(pathname, l.href);
                       const badge = badges[l.href];
                       return (
                         <Link
                           key={l.href}
                           href={l.href}
+                          onClick={() => setOpen(false)}
                           className={`flex items-center justify-between rounded-md px-2 py-2.5 text-[14px] ${
                             active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
                           }`}
@@ -123,7 +133,7 @@ export function MobileNav({
             </nav>
 
             <div className="flex flex-col gap-0.5 border-t border-zk-border pt-3">
-              <Link href="/change-password" className="rounded-md px-2 py-2.5 text-[14px] text-zk-primary">
+              <Link href="/change-password" onClick={() => setOpen(false)} className="rounded-md px-2 py-2.5 text-[14px] text-zk-primary">
                 改密碼
               </Link>
               <LogoutButton className="rounded-md px-2 py-2.5 text-left text-[14px] text-zk-text-secondary" />

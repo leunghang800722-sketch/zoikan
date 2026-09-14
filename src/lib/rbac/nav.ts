@@ -132,14 +132,24 @@ const BROKER_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
 
 /** 純函數（冇 DB／網絡）——`baseRole` 淨係用嚟揀「雞頭 vs 內部角色」
  * 呢個分組版面，唔重新判斷權限（`links` 入面已經係 `getNavLinks()`
- * 篩選完嘅結果）。方便 unit test（唔使起 DB／mock session）。 */
+ * 篩選完嘅結果）。方便 unit test（唔使起 DB／mock session）。
+ *
+ * R1 驗收修正：以前淨係揀 `order` 表入面有列出嘅 href，`getNavLinks()`
+ * 有但呢個分組表漏咗嘅 href 會靜靜哋喺導航消失（用戶見唔到條連結，但
+ * 冇任何錯誤／log）。而家做法：分組完之後，仲剩低未被任何組攞走嘅
+ * link（保持 `links` 原本次序），統一擺去尾組「其他」——寧願樣衰過
+ * 消失，起碼用戶／QA 一眼見到漏咗分組。 */
 export function groupNavLinks(baseRole: string, links: NavLink[]): NavGroup[] {
   const order = baseRole === "雞頭" ? BROKER_GROUP_ORDER : INTERNAL_GROUP_ORDER;
   const byHref = new Map(links.map((l) => [l.href, l]));
+  const placed = new Set<string>();
   const groups: NavGroup[] = [];
   for (const g of order) {
     const groupLinks = g.hrefs.map((h) => byHref.get(h)).filter((l): l is NavLink => l !== undefined);
+    groupLinks.forEach((l) => placed.add(l.href));
     if (groupLinks.length > 0) groups.push({ title: g.title, links: groupLinks });
   }
+  const leftover = links.filter((l) => !placed.has(l.href));
+  if (leftover.length > 0) groups.push({ title: "其他", links: leftover });
   return groups;
 }

@@ -48,7 +48,11 @@
 }
 
 @theme inline {
-  --font-sans: var(--font-noto-sans-hk), system-ui, sans-serif;
+  /* R1 驗收修正：唔好再喺呢度重覆加 `system-ui, sans-serif`——
+     `next/font/google` 嘅 `fallback` option（見 `src/app/layout.tsx`）
+     已經令 `--font-noto-sans-hk` 呢個 CSS 變數本身內含 fallback 字型
+     堆疊，呢度加多次淨係多餘（唔會錯，但兩處要改就要改兩處）。 */
+  --font-sans: var(--font-noto-sans-hk);
 
   --color-zk-bg: var(--zk-bg);
   --color-zk-card: var(--zk-card);
@@ -94,11 +98,22 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-a {
-  color: var(--zk-primary);
-}
-a:hover {
-  color: var(--zk-primary-dark);
+/* R1 驗收修正：呢兩條規則本來寫喺 `@layer` 外面（unlayered），CSS
+   cascade layer 規矩係「冇 layer 嘅規則優先於任何有 layer 嘅規則」，
+   蓋過晒 Tailwind utilities（`@import "tailwindcss"` 入面嘅 class 全部
+   喺 `@layer utilities`），令左欄／抽屜啲導航連結（明明有
+   `text-zk-text-secondary` 呢類 class）全部變成藍色。改法：放入
+   `@layer base`（Tailwind base layer，優先度低過 utilities，唔會再蓋
+   過任何 Tailwind class），並且只針對 `<main>` 內文嘅裸 `<a>`——左欄
+   `<aside>`／手機抽屜嘅導航 `<Link>` 全部喺 `<main>` 之外，本來就唔會
+   撞到呢條規則，加呢個範圍淨係做多一重保險。 */
+@layer base {
+  main a {
+    color: var(--zk-primary);
+  }
+  main a:hover {
+    color: var(--zk-primary-dark);
+  }
 }
 
 /* 手機更表格仔橫向掃／導航 chip 掃動要隱藏 scrollbar（同原型

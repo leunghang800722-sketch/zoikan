@@ -1,21 +1,19 @@
 "use client";
 // WP-R1：桌面左欄（README「桌面外殼 · 左欄」）——216px 固定、分組導航、
 // active 樣式跟 `usePathname()`（更表索引 `/roster` 同編輯器
-// `/roster/[site]/[month]` 共用「更表」active，見 `isLinkActive()`）、
-// 底部用戶區。呢個要係 client component 先攞到 `usePathname()`；連結
-// 分組／badge 數字由 `(app)/layout.tsx`（server component）fetch 好傳落嚟。
+// `/roster/[site]/[month]` 共用「更表」active，見 `isLinkActive()`，
+// 抽咗去 `@/lib/ui/nav-active.ts` 同 `MobileNav.tsx` 共用）、底部用戶
+// 區。呢個要係 client component 先攞到 `usePathname()`；連結分組／
+// badge 數字由 `(app)/layout.tsx`（server component）fetch 好傳落嚟。
+//
+// R1 驗收修正：斷點由 `md`（768）改 `lg`（1024）——README「桌面外殼
+// （≥ 1024px）」／「手機外殼（375px）」中間嗰段（768–1023px）設計上
+// 都算「手機外殼」（漢堡＋抽屜），呢個 `<aside>` 淨係喺 `≥ lg` 先顯示。
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { NavGroup } from "@/lib/rbac/nav";
 import { LogoutButton } from "@/components/LogoutButton";
-
-function isLinkActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
-  if (pathname === href) return true;
-  // 更表索引與編輯器共用「更表」active（README「Interactions」）。
-  if (href === "/roster") return pathname.startsWith("/roster");
-  return pathname.startsWith(`${href}/`);
-}
+import { isLinkActive } from "@/lib/ui/nav-active";
 
 function initials(name: string): string {
   return name.trim().slice(0, 2);
@@ -35,7 +33,7 @@ export function DesktopNav({
   const pathname = usePathname();
 
   return (
-    <aside className="sticky top-0 hidden h-screen w-[216px] shrink-0 flex-col border-r border-zk-border bg-white px-3.5 py-5 md:flex">
+    <aside className="sticky top-0 hidden h-screen w-[216px] shrink-0 flex-col border-r border-zk-border bg-white px-3.5 py-5 lg:flex">
       <div className="mb-[18px] flex items-center gap-2 px-1.5">
         <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] bg-zk-primary text-[13px] font-bold text-white">在</div>
         <div className="text-[15px] font-bold text-zk-text">在勤</div>
