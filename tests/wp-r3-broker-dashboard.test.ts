@@ -83,4 +83,76 @@ describe("P2-WP-R3：雞頭首頁 dashboard（GET /api/dashboard/broker）", () 
     const res = await getBrokerDashboard(req("http://test.local/api/dashboard/broker", brokerACookie));
     expect(res.status).toBe(200);
   });
+
+  // B10 驗收修正：`parseMonthParam()`（src/lib/reports/money.ts）底層
+  // `new Date()` 對住 "garbage-01" 呢類垃圾字串唔一定回 Invalid Date
+  // （JS Date parser 好寬鬆），令 `month=garbage` 冇 400——route 而家喺
+  // `parseMonthParam()` 之前加咗 zod regex `^\d{4}-\d{2}$` 驗證形狀。
+  it("B10：month=garbage → 400（唔准當某個估估吓嘅月份處理）", async () => {
+    const res = await getBrokerDashboard(req("http://test.local/api/dashboard/broker?month=garbage", brokerACookie));
+    expect(res.status).toBe(400);
+  });
+
+  it("B10：month=2026-13（形狀啱但月份唔存在）→ 400", async () => {
+    const res = await getBrokerDashboard(req("http://test.local/api/dashboard/broker?month=2026-13", brokerACookie));
+    expect(res.status).toBe(400);
+  });
+
+  // B7 驗收修正：「我有份嘅盤」= broker_site_assignments（該月）聯集
+  // 本月有 settlement 更次嘅盤——有 assignment 但未開過更嘅盤都要出現
+  // （更數 0），唔可以淨係靠「有冇更次」判斷「有冇份」。
+  it("B7：有 broker_site_assignments 但呢個月未開過更嘅盤，都要出現喺 sites（更數 0）", async () => {
+    const emptySite = await prisma.site.create({
+      data: { canonicalName: "測試盤WP-R3-未開更", clientName: "測試客戶WP-R3", billingModel: "per_shift", createdBy: "test-fixture:wp-r3" },
+    });
+    await prisma.brokerSiteAssignment.create({
+      data: { brokerId: fx.brokerA.id, siteId: emptySite.id, month: fx.unlockedMonth, createdBy: "test-fixture:wp-r3" },
+    });
+
+    const res = await getBrokerDashboard(req("http://test.local/api/dashboard/broker?month=2026-08", brokerACookie));
+    const body = await res.json();
+
+    const row = body.sites.find((s: { site_id: string }) => s.site_id === emptySite.id);
+    expect(row).toBeDefined();
+    expect(row.shifts).toBe(0);
+    expect(row.pending).toBe(0);
+    // fx.site（有更次）都要照舊出現——聯集，唔係淨係得 assignment 嗰盤。
+    expect(body.sites.some((s: { site_id: string }) => s.site_id === fx.site.id)).toBe(true);
+  });
+
+  // B9 驗收修正：配額 KPI 分子只計「有設配額嘅 (盤,更別) 組合」嘅已排
+  // 更數——呢度幫 fx.site 加多一個冇配額嘅更別（D），開多一條呢個更別
+  // 嘅更次，證明佢唔會計落分子（分子應該淨係計原有嘅 N 更別嗰 1 條）。
+  it("B9：配額分子淨係計有設配額嗰個 (盤,更別) 組合嘅已排更數，唔包冇配額嘅其他更別", async () => {
+    const shiftTypeD = await prisma.shiftType.create({
+      data: { siteId: fx.site.id, code: "D", label: "測試日更", hours: 12, createdBy: "test-fixture:wp-r3" },
+    });
+    await prisma.shiftRecord.create({
+      data: {
+        workDate: new Date(Date.UTC(2026, 7, 2)),
+        siteId: fx.site.id,
+        shiftTypeId: shiftTypeD.id,
+        guardId: fx.guardA.id,
+        settlementBrokerId: fx.brokerA.id,
+        operationalBrokerId: fx.brokerA.id,
+        recordType: "shift",
+        clientRateSnapshot: 999,
+        guardWageSnapshot: 700,
+        brokerFeeSnapshot: 50,
+        createdBy: "test-fixture:wp-r3",
+      },
+    });
+    // 配額淨係幫原有嘅 N 更別（fx.shiftType）設，冇幫 D 設。
+    await prisma.quota.create({
+      data: { month: fx.unlockedMonth, siteId: fx.site.id, shiftTypeId: fx.shiftType.id, brokerId: fx.brokerA.id, targetShifts: 10, createdBy: "test-fixture:wp-r3" },
+    });
+
+    const res = await getBrokerDashboard(req("http://test.local/api/dashboard/broker?month=2026-08", brokerACookie));
+    const body = await res.json();
+
+    // scheduled_shifts（本月已排更數總計）依舊要計埋 D 嗰條（2 條）；
+    // quota.scheduled_shifts（配額分子）淨係計 N 嗰 1 條。
+    expect(body.scheduled_shifts).toBe(2);
+    expect(body.quota).toEqual({ target_shifts: 10, scheduled_shifts: 1 });
+  });
 });

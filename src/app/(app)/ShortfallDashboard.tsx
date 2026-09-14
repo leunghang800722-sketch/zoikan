@@ -9,11 +9,9 @@
 // RosterEditor.tsx 同一個理由：避免呢個 client component 被迫加
 // Suspense boundary）。
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiGet } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { tableCls, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateWeekday, fmtMonthDayWeekday, addDaysStr, todayLocalStr, greetingWord } from "@/lib/ui/format";
@@ -109,7 +107,7 @@ function MarginProgressCard({ monthProgress, href }: { monthProgress: Result["mo
         )}
       </div>
       <div className="mt-1 flex flex-wrap items-baseline gap-2.5">
-        <span className="text-[28px] leading-[1.1] font-bold text-zk-text md:text-[30px]">
+        <span data-testid="margin-pct-value" className="text-[28px] leading-[1.1] font-bold text-zk-text md:text-[30px]">
           {monthProgress.margin_pct == null ? "—" : `${monthProgress.margin_pct}%`}
         </span>
         {monthProgress.revenue !== undefined && (
@@ -147,7 +145,6 @@ export interface ShortfallDashboardProps {
 }
 
 export default function ShortfallDashboard({ variant, userName, roleLabel }: ShortfallDashboardProps) {
-  const router = useRouter();
   // SSR／首次 client render 一律用 `todayLocalStr()`（避免 hydration
   // mismatch——`window` 喺 SSR 冇得攞，見 `readDateFromUrl()`）；URL 已有
   // `?date=` 就喺下面呢個 effect 入面先切換，同 RosterEditor.tsx 嘅
@@ -187,44 +184,46 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
     writeDateToUrl(next);
   }
 
-  function goRoster(siteId: string) {
-    router.push(`/roster/${siteId}/${date.slice(0, 7)}`);
-  }
-
   if (error) return <Banner kind="error" message={error} />;
 
   const shortfallSites = data?.today.filter((s) => s.shortfall > 0) ?? [];
   const totalShort = shortfallSites.reduce((a, s) => a + s.shortfall, 0);
   const kicker = variant === "overview" ? "財務 · 尚欠總覽" : `${roleLabel} · 今日尚欠情況一覽`;
   const title = variant === "overview" ? "尚欠總覽" : `歡迎返嚟，${userName}`;
+  // B3 驗收修正：手機版原本冇任何可見 <h1>（桌面 <h1> 由 PageHeader
+  // 出，但成個 PageHeader 包喺 `hidden md:block` 度，手機淨係得一個
+  // `<div>` 重複文字，等於手機頁面完全冇 heading）。改做「同一個 h1、
+  // 兩邊都係 heading」：淨係一個 <h1> 元素，入面兩個 <span> 用
+  // `hidden`/`md:hidden` responsive class 互相排斥，唔再用兩個獨立
+  // block 各自 hidden 嗰種寫法。
+  const mobileHeading = variant === "home" ? `${greetingWord()}，${userName}` : title;
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 桌面：頁首 kicker/H1 + 日期 chip（README「頁首模式」） */}
-      <div className="hidden md:block">
-        <PageHeader kicker={kicker} title={title} actions={<DateChip date={date} onChange={changeDate} />} />
-      </div>
-
-      {/* 手機：variant="home" 用問候語（README §21），overview 用簡化頁首。 */}
-      <div className="md:hidden">
-        {variant === "home" ? (
-          <div>
-            <div className="text-xs text-zk-muted">
-              {fmtMonthDayWeekday(date)} · {roleLabel}
-            </div>
-            <div className="mt-0.5 text-[20px] font-bold text-zk-text">
-              {greetingWord()}，{userName}
-            </div>
+      <div className="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-4">
+        <div>
+          <div className="text-xs text-zk-muted md:text-[12.5px]">
+            <span className="md:hidden">{variant === "home" ? `${fmtMonthDayWeekday(date)} · ${roleLabel}` : kicker}</span>
+            <span className="hidden md:inline">{kicker}</span>
           </div>
-        ) : (
-          <div>
-            <div className="text-xs text-zk-muted">{kicker}</div>
-            <div className="mt-0.5 flex items-center justify-between gap-2">
-              <div className="text-[20px] font-bold text-zk-text">{title}</div>
+          <h1 className="mt-0.5 text-[20px] font-bold text-zk-text md:text-[22px] md:tracking-[-0.01em]">
+            <span className="md:hidden">{mobileHeading}</span>
+            <span className="hidden md:inline">{title}</span>
+          </h1>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* 手機：home 版問候語頁首唔使日期 chip（README §21 冇畫呢個
+              掣）；overview 簡化頁首要（原本已經有）。桌面兩個 variant
+              都要。 */}
+          {variant === "overview" && (
+            <div className="md:hidden">
               <DateChip date={date} onChange={changeDate} />
             </div>
+          )}
+          <div className="hidden md:block">
+            <DateChip date={date} onChange={changeDate} />
           </div>
-        )}
+        </div>
       </div>
 
       {loading && !data ? (
@@ -235,7 +234,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
           <div className="hidden grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3 md:grid">
             <KpiCard
               label="今日尚欠盤數"
-              value={shortfallSites.length}
+              value={<span data-testid="shortfall-count-value">{shortfallSites.length}</span>}
               tone={shortfallSites.length > 0 ? "danger" : "default"}
               note={shortfallSites.length > 0 ? `共欠 ${totalShort} 更` : "今日各盤人手足夠"}
               href={variant === "home" ? "/reports/shortfall" : undefined}
@@ -263,7 +262,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
           <div className="grid grid-cols-2 gap-2.5 md:hidden">
             <KpiCard
               label="今日尚欠盤數"
-              value={shortfallSites.length}
+              value={<span data-testid="shortfall-count-value">{shortfallSites.length}</span>}
               tone={shortfallSites.length > 0 ? "danger" : "default"}
               note={shortfallSites.length > 0 ? `共欠 ${totalShort} 更` : "人手足夠"}
               href={variant === "home" ? "/reports/shortfall" : undefined}
@@ -300,10 +299,26 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                     <tr
                       key={s.site_id}
                       data-testid="shortfall-row"
-                      onClick={() => goRoster(s.site_id)}
-                      className={`cursor-pointer ${tableCls.rowHover} ${s.shortfall > 0 ? tableCls.warnRow : ""}`}
+                      // B1 驗收修正：成行撳得原本靠 `<tr onClick>`——冇
+                      // 鍵盤焦點、Tab 唔到，亦冇 focus-visible 樣式。改
+                      // 用「行內覆蓋真 <a>」呢個標準無障礙 pattern：
+                      // `relative` 落喺 <tr>，第一個 <td> 入面嘅
+                      // `next/link` 用 `absolute inset-0`（相對嗰個
+                      // positioned 嘅 <tr> 伸展去成行闊／高），視覺上
+                      // 「成行都撳得」，同時本身係一個真 <a>，可以
+                      // Tab 到、有 focus-visible outline。
+                      className={`relative ${tableCls.rowHover} ${s.shortfall > 0 ? tableCls.warnRow : ""}`}
                     >
-                      <td className={`${tableCls.td} font-medium`}>{s.site_name}</td>
+                      <td className={`${tableCls.td} font-medium`}>
+                        <Link
+                          href={`/roster/${s.site_id}/${date.slice(0, 7)}`}
+                          className="absolute inset-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
+                          aria-label={`開啟 ${s.site_name} 更表`}
+                        >
+                          <span className="sr-only">{s.site_name}</span>
+                        </Link>
+                        <span aria-hidden="true">{s.site_name}</span>
+                      </td>
                       <td className={tableCls.tdNum}>{s.required}</td>
                       <td className={tableCls.tdNum}>
                         <div className="flex items-center justify-end gap-2">
@@ -338,11 +353,14 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                 <EmptyState title="今日暫時冇排更資料" />
               ) : (
                 data.today.map((s) => (
-                  <div
+                  // B2 驗收修正：同 B1 一致——「撳列表卡」改用真
+                  // `next/link`（唔再係 `<div onClick>`），可以 Tab
+                  // 到、有 focus-visible 樣式。
+                  <Link
                     key={s.site_id}
+                    href={`/roster/${s.site_id}/${date.slice(0, 7)}`}
                     data-testid="shortfall-row-mobile"
-                    onClick={() => goRoster(s.site_id)}
-                    className="flex items-center gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0"
+                    className="flex items-center gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
                   >
                     <div className="min-w-0 flex-1 truncate text-[13px] text-zk-text">{s.site_name}</div>
                     <div className="h-[5px] w-20 shrink-0 overflow-hidden rounded-full bg-zk-surface">
@@ -355,7 +373,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                     <div className={`w-6 shrink-0 text-right text-[12.5px] font-bold ${s.shortfall > 0 ? "text-[#dc2626]" : "text-zk-faintest"}`}>
                       {s.shortfall > 0 ? s.shortfall : "—"}
                     </div>
-                  </div>
+                  </Link>
                 ))
               )}
             </div>
