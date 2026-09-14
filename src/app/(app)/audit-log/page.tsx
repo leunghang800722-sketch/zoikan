@@ -4,11 +4,18 @@
 // (500)／資料表 pill 灰／動作 pill（lock 橙、create 綠、其他淺灰）／
 // Row ID(`#94a3b8`)／「展開 before/after」掣（沿用現有 <details>，換皮）。
 //
-// 資料表／操作人兩個 filter 送去 GET /api/audit-log 現有嘅 table_name／
-// actor_user_id 參數（API 不變）。「日期」呢個 filter README 話要有，
-// 但 API 本身未有日期範圍參數，加呢個參數屬於改 API 語意，超出「只
-// 換皮」範圍——改用客戶端喺已經攞落嚟嗰一頁（PAGE_SIZE 筆）再篩，
-// 屬於已知偏差，詳見回報。
+// M1（Opus 驗收修復）：「日期」filter 之前淨係喺前端對已攞到手嗰
+// PAGE_SIZE 行假篩，UI 冇講呢個限制（撳「最近 30 日」睇落好似篩緊全部
+// 紀錄，其實只係篩緊第一頁）——而家改做正路：send `from`／`to`（香港
+// 曆日 "YYYY-MM-DD"）落 GET /api/audit-log，server 篩 created_at，分頁
+// 總數自然跟返 filter。「今日／最近 7 日／最近 30 日」用
+// `@/lib/ui/format.ts` 嘅 `todayLocalStr()`／`addDaysStr()`（香港時區）
+// 計出 from/to；「自訂」俾用戶自己揀兩個日期。
+//
+// A3（Opus 驗收修復）：「資料表」filter 名單之前係前端硬編碼一個
+// table_name 陣列，要人手同 writeAudit() call site keep in sync——改由
+// 新增嘅 additive `GET /api/audit-log/tables`（distinct table_name，
+// 同一權限、只讀）提供，冇資料就唔會出現。
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, type ApiListResult } from "@/lib/ui/api-client";
 import { Notice } from "@/components/ui/Notice";
@@ -17,7 +24,7 @@ import { Pill } from "@/components/ui/Pill";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtDateTime } from "@/lib/ui/format";
+import { fmtDateTime, todayLocalStr, addDaysStr } from "@/lib/ui/format";
 
 interface AuditLogRow {
   id: string;
@@ -37,34 +44,26 @@ interface UserRow {
 
 const PAGE_SIZE = 50;
 
-// 見過會寫入 audit_log 嘅 table_name（`src/lib/audit.ts` writeAudit()
-// call site 逐個 grep 出嚟）——純粹俾 filter 揀，唔係白名單限制（API
-// 本身冇限制傳咩 table_name）。
-const TABLE_NAMES = [
-  "ai_chat",
-  "broker_site_assignments",
-  "brokers",
-  "daily_requirements",
-  "guards",
-  "month_closes",
-  "quotas",
-  "rate_cards",
-  "referral_fee_rates",
-  "role_permissions",
-  "roles",
-  "shift_records",
-  "shift_types",
-  "sites",
-  "special_items",
-  "users",
-];
-
 const DATE_PRESETS = [
   { value: "", label: "全部" },
   { value: "today", label: "今日" },
   { value: "7d", label: "最近 7 日" },
   { value: "30d", label: "最近 30 日" },
+  { value: "custom", label: "自訂" },
 ] as const;
+type DatePreset = (typeof DATE_PRESETS)[number]["value"];
+
+/** 「今日／最近 7 日／最近 30 日」→ `{ from, to }`（香港曆日
+ * "YYYY-MM-DD"，含首尾兩日）；「自訂」用返用戶自己揀嘅 `customFrom`／
+ * `customTo`；「全部」冇界。 */
+function presetToRange(preset: DatePreset, customFrom: string, customTo: string): { from: string; to: string } {
+  const today = todayLocalStr();
+  if (preset === "today") return { from: today, to: today };
+  if (preset === "7d") return { from: addDaysStr(today, -6), to: today };
+  if (preset === "30d") return { from: addDaysStr(today, -29), to: today };
+  if (preset === "custom") return { from: customFrom, to: customTo };
+  return { from: "", to: "" };
+}
 
 function actionPill(action: string) {
   if (action === "lock_month" || action === "lock") return <Pill variant="warning">{action}</Pill>;
@@ -80,13 +79,18 @@ export default function AuditLogPage() {
   const [rows, setRows] = useState<AuditLogRow[]>([]);
   const [users, setUsers] = useState<Record<string, string>>({});
   const [userOptions, setUserOptions] = useState<UserRow[]>([]);
+  const [tableOptions, setTableOptions] = useState<string[]>([]);
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
   const [tableName, setTableName] = useState("");
   const [actorUserId, setActorUserId] = useState("");
-  const [datePreset, setDatePreset] = useState<(typeof DATE_PRESETS)[number]["value"]>("");
+  const [datePreset, setDatePreset] = useState<DatePreset>("");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const { from, to } = useMemo(() => presetToRange(datePreset, customFrom, customTo), [datePreset, customFrom, customTo]);
 
   async function load() {
     setLoading(true);
@@ -94,6 +98,8 @@ export default function AuditLogPage() {
     const qs = new URLSearchParams({ take: String(PAGE_SIZE), skip: String(skip) });
     if (tableName) qs.set("table_name", tableName);
     if (actorUserId) qs.set("actor_user_id", actorUserId);
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
     const res = await apiGet<ApiListResult<AuditLogRow>>(`/api/audit-log?${qs.toString()}`);
     if (!res.ok) {
       setError(res.message);
@@ -108,7 +114,7 @@ export default function AuditLogPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [skip, tableName, actorUserId]);
+  }, [skip, tableName, actorUserId, from, to]);
 
   useEffect(() => {
     // 用戶名對照——盡力而為，冇「用戶管理:view」就攞唔到，靜靜哋跌返用 id。
@@ -118,15 +124,11 @@ export default function AuditLogPage() {
         setUserOptions(res.data.rows);
       }
     });
+    // A3：「資料表」filter 名單由 API 提供（distinct table_name），唔再硬編碼。
+    apiGet<{ tables: string[] }>("/api/audit-log/tables").then((res) => {
+      if (res.ok) setTableOptions(res.data.tables);
+    });
   }, []);
-
-  // 「日期」——API 冇日期範圍參數（見頂註解），喺已經攞到手嘅呢一頁再篩。
-  const visibleRows = useMemo(() => {
-    if (!datePreset) return rows;
-    const now = Date.now();
-    const cutoffMs = datePreset === "today" ? 24 * 3600_000 : datePreset === "7d" ? 7 * 24 * 3600_000 : 30 * 24 * 3600_000;
-    return rows.filter((r) => now - new Date(r.created_at).getTime() <= cutoffMs);
-  }, [rows, datePreset]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -145,7 +147,7 @@ export default function AuditLogPage() {
                 }}
               >
                 <option value="">全部</option>
-                {TABLE_NAMES.map((t) => (
+                {tableOptions.map((t) => (
                   <option key={t} value={t}>
                     {t}
                   </option>
@@ -169,7 +171,14 @@ export default function AuditLogPage() {
               </select>
             </FilterChip>
             <FilterChip label="日期">
-              <select value={datePreset} onChange={(e) => setDatePreset(e.target.value as (typeof DATE_PRESETS)[number]["value"])}>
+              <select
+                data-testid="audit-log-date-filter"
+                value={datePreset}
+                onChange={(e) => {
+                  setSkip(0);
+                  setDatePreset(e.target.value as DatePreset);
+                }}
+              >
                 {DATE_PRESETS.map((d) => (
                   <option key={d.value} value={d.value}>
                     {d.label}
@@ -177,6 +186,27 @@ export default function AuditLogPage() {
                 ))}
               </select>
             </FilterChip>
+            {datePreset === "custom" && (
+              <FilterChip label="由" showCaret={false}>
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(e) => {
+                    setSkip(0);
+                    setCustomFrom(e.target.value);
+                  }}
+                />
+                <span className="mx-1 text-zk-faint">至</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(e) => {
+                    setSkip(0);
+                    setCustomTo(e.target.value);
+                  }}
+                />
+              </FilterChip>
+            )}
           </>
         }
       />
@@ -203,14 +233,14 @@ export default function AuditLogPage() {
                 </td>
               </tr>
             )}
-            {!loading && visibleRows.length === 0 && (
+            {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={6}>
                   <EmptyState title="暫時冇紀錄" description="呢頁只讀，寫入一律由各 API 內部觸發，調整篩選再試。" />
                 </td>
               </tr>
             )}
-            {visibleRows.map((r) => (
+            {rows.map((r) => (
               <tr key={r.id} data-testid="audit-log-row" className={`${tableCls.rowHover} align-top`}>
                 <td className={`${tableCls.td} text-zk-muted whitespace-nowrap`}>{fmtDateTime(r.created_at)}</td>
                 <td className={`${tableCls.td} font-medium whitespace-nowrap`}>

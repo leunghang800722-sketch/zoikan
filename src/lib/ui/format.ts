@@ -140,3 +140,38 @@ export function addMonthsStr(month: string, delta: number): string {
   const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1 + delta, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
+
+// P2-C M1：操作紀錄「日期」filter 由「攞到手嗰 50 行先喺前端假篩」改做
+// 正路——server 用返日曆日（香港曆日，冇 DST，固定 UTC+8）篩
+// `created_at`。呢三個 helper 一齊用：`isValidHkDateStr()` 驗輸入格式，
+// `hkDayStartUtc()`／`hkDayEndUtc()` 將「YYYY-MM-DD」（香港嗰一日）轉做
+// 對應嘅 UTC instant 邊界，俾 Prisma `gte`/`lte` 用。前端／後端共用呢個
+// module，唔使兩邊各自砌一套日期換算。
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** `dateStr` 一定要係 "YYYY-MM-DD" 格式，並且係一個真實存在嘅日曆日
+ * （例如 "2026-02-30" 呢類要拒——唔靠 `Date` 自動進位嚟判斷，直接用
+ * 「嗰個月實際有幾多日」核對）。 */
+export function isValidHkDateStr(dateStr: string): boolean {
+  const m = DATE_ONLY_RE.exec(dateStr);
+  if (!m) return false;
+  const year = Number(m[0].slice(0, 4));
+  const month = Number(m[0].slice(5, 7));
+  const day = Number(m[0].slice(8, 10));
+  if (month < 1 || month > 12) return false;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return day >= 1 && day <= daysInMonth;
+}
+
+/** 香港嗰一日 00:00:00.000（HKT，即 UTC+8，全年冇 DST）對應嘅 UTC
+ * instant。call 之前請先用 `isValidHkDateStr()` 驗過格式。 */
+export function hkDayStartUtc(dateStr: string): Date {
+  return new Date(`${dateStr}T00:00:00.000+08:00`);
+}
+
+/** 香港嗰一日 23:59:59.999（HKT）對應嘅 UTC instant——同
+ * `hkDayStartUtc()` 一對，`created_at BETWEEN` 呢個範圍即係「嗰個香港
+ * 日曆日入面」。 */
+export function hkDayEndUtc(dateStr: string): Date {
+  return new Date(`${dateStr}T23:59:59.999+08:00`);
+}

@@ -34,6 +34,26 @@ test.describe("P2-C 系統頁", () => {
     const statusText = await page.getByTestId("user-status-pill").first().innerText();
     expect(["啟用", "待啟用", "停用"]).toContain(statusText.trim());
 
+    // A2：自己嗰行（登入緊嘅「老闆」，用電話定位而唔係寫死真名）唔顯示
+    // 「重設密碼」掣——同 API 側 id === session.userId → 400 一致。
+    const ownRow = rows.filter({ hasText: TEST_TEL.老闆 });
+    await expect(ownRow).toHaveCount(1);
+    await expect(ownRow.getByTestId("user-reset-password-button")).toHaveCount(0);
+
+    // §16：頁首「角色」FilterChip——揀「老闆」之後行數應該收窄（唔多過
+    // 之前），而且自己（登入緊嗰個「老闆」）嗰行仍然喺入面；揀返「全部」
+    // 行數要返晒去。
+    const beforeCount = await rows.count();
+    const roleSelect = page.getByTestId("user-role-filter");
+    await roleSelect.selectOption({ label: "老闆" });
+    await expect(async () => {
+      expect(await rows.count()).toBeLessThanOrEqual(beforeCount);
+      expect(await rows.count()).toBeGreaterThan(0);
+    }).toPass({ timeout: 5_000 });
+    await expect(rows.filter({ hasText: TEST_TEL.老闆 })).toHaveCount(1);
+    await roleSelect.selectOption({ label: "全部" });
+    await expect(rows).toHaveCount(beforeCount);
+
     await shoot(page, "16-users-1440");
     await page.setViewportSize({ width: 375, height: 812 });
     await shoot(page, "16-users-375");
@@ -80,6 +100,22 @@ test.describe("P2-C 系統頁", () => {
 
     await expect(page.getByTestId("audit-log-row").first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("audit-log-action-pill").first()).toBeVisible();
+
+    // M1：揀「最近 7 日」→ 請求 URL 帶 from/to（正路 server-side 篩，
+    // 唔再係前端假篩），總數（分頁 caption）會變（呢個 dev DB 有跨越
+    // 7 日以上嘅操作紀錄，「全部」總數一定 ≥「最近 7 日」總數）。
+    const totalCaptionBefore = await page.locator("text=/共 \\d+ 條/").innerText();
+    const [request] = await Promise.all([
+      page.waitForRequest((r) => r.url().includes("/api/audit-log?") && r.url().includes("from=") && r.url().includes("to=")),
+      page.getByTestId("audit-log-date-filter").selectOption({ label: "最近 7 日" }),
+    ]);
+    expect(request.url()).toMatch(/from=\d{4}-\d{2}-\d{2}/);
+    expect(request.url()).toMatch(/to=\d{4}-\d{2}-\d{2}/);
+    await expect(page.locator("text=/共 \\d+ 條/")).toBeVisible();
+    const totalCaptionAfter = await page.locator("text=/共 \\d+ 條/").innerText();
+    const numOf = (s: string) => Number(/共 (\d+) 條/.exec(s)?.[1] ?? "-1");
+    expect(numOf(totalCaptionAfter)).toBeLessThanOrEqual(numOf(totalCaptionBefore));
+    expect(numOf(totalCaptionBefore)).toBeGreaterThan(0);
 
     await shoot(page, "18-audit-log-1440");
     await page.setViewportSize({ width: 375, height: 812 });

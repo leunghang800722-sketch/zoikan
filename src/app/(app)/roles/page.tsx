@@ -148,14 +148,25 @@ export default function RolesPage() {
     return { granted: cell?.granted ?? false, hardDenied: cell?.hard_denied ?? false };
   }
 
+  // A4（Opus 驗收）：「儲存（N 項改動）」嘅 N 之前係 `dirty.size`，但
+  // `dirty` 淨係記「撳過」而唔係「同原值唔同」——撳兩下（開咗又閂返）
+  // 都會令 dirty 有一條記錄，N 就會多計一格根本冇改嘅嘢。改做同*原值*
+  // （`matrix.cells` 入面 API 讀返嚟嘅 `cell.granted`，唔受 dirty 狀態
+  // 影響）比對：新值同原值一樣就喺 dirty map 度刪走嗰個 key（等於冚返
+  // 原狀），唔一樣先記低——`dirty.size` 先真係「淨改動」數目。
   function toggleCell(mod: Module, action: Action) {
     const cell = matrix?.cells.find((c) => c.module === mod && c.action === action);
     if (!cell || cell.hard_denied) return;
     const k = cellKey(mod, action);
     const current = cellValue(mod, action).granted;
+    const next = !current;
     setDirty((d) => {
       const n = new Map(d);
-      n.set(k, !current);
+      if (next === cell.granted) {
+        n.delete(k);
+      } else {
+        n.set(k, next);
+      }
       return n;
     });
   }
@@ -224,7 +235,11 @@ export default function RolesPage() {
       {error && <Notice variant="error">{error}</Notice>}
       {notice && <Notice variant="info">{notice}</Notice>}
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] items-start gap-4">
+      {/* 規格觀感修復：README §17 grid 由 `auto-fit minmax(240px,1fr)`
+          （寬度夠就左右對半，矩陣卡好迫）改做 `minmax(240px,1fr)
+          minmax(0,2fr)`（左 1 右 2，矩陣卡實際分得更闊），1024px 以下
+          先疊做一欄。 */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(240px,1fr)_minmax(0,2fr)]">
         <div className="flex flex-col gap-3">
           <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
             {loading && <div className="p-3 text-sm text-zk-faint">載入緊…</div>}
