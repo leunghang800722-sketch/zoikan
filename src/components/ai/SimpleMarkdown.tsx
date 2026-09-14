@@ -33,14 +33,18 @@ export function SimpleMarkdown({ text }: { text: string }) {
             </ul>
           );
         }
-        // table
+        // table——README「AI 助手面板」：內嵌小表 `1px solid #e5e7eb` 圓角
+        // 6px、每行 k/v 12px（原型示例其實係逐行 flex k/v，唔係傳統
+        // <table> 框線；呢度為咗兼容任意欄數嘅 markdown table，保留
+        // <table> 結構但換晒配色/字級去貼近個示例：淡灰表頭、行分隔線
+        // `#f1f5f9`、字 12px，最後一欄（通常係數值）用 600 突出）。
         return (
-          <div key={i} className="overflow-x-auto">
-            <table className="min-w-full border-collapse text-xs">
+          <div key={i} className="overflow-x-auto rounded-md border border-zk-border bg-white" data-testid="ai-message-table">
+            <table className="w-full min-w-full border-collapse text-[12px]">
               <thead>
-                <tr>
+                <tr className="bg-zk-header">
                   {block.header.map((cell, j) => (
-                    <th key={j} className="border border-gray-300 bg-gray-50 px-2 py-1 text-left font-medium">
+                    <th key={j} className="border-b border-zk-border px-2.5 py-[5px] text-left font-semibold text-zk-muted">
                       {renderInline(cell, `th${i}-${j}`)}
                     </th>
                   ))}
@@ -48,9 +52,9 @@ export function SimpleMarkdown({ text }: { text: string }) {
               </thead>
               <tbody>
                 {block.rows.map((row, r) => (
-                  <tr key={r}>
+                  <tr key={r} className={r < block.rows.length - 1 ? "border-b border-[#f1f5f9]" : ""}>
                     {row.map((cell, c) => (
-                      <td key={c} className="border border-gray-200 px-2 py-1">
+                      <td key={c} className={`px-2.5 py-[5px] ${c === row.length - 1 ? "font-semibold text-zk-text" : "text-zk-text-secondary"}`}>
                         {renderInline(cell, `td${i}-${r}-${c}`)}
                       </td>
                     ))}

@@ -1,10 +1,18 @@
 "use client";
+// P2-C：角色權限管理版面重新實作（README §17）——左邊角色列表卡（右側
+// 「N 人」，選中底 `#eff6ff`）＋「複製角色」卡；右邊矩陣卡（頭「角色名
+// ＋系統預設角色/自訂角色 · N 個帳號」，欄 模組／睇／增／改／刪／出，
+// checkbox 18px 圓角 5px 樣式，硬性禁止格底 `#f8fafc`）。權限邏輯／
+// API（GET/PATCH /api/roles/:id/permissions、POST /api/roles 複製）完全
+// 不變，淨係換皮。
 import { uiLabel } from "@/lib/ui/format";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
-import { Banner } from "@/components/ui/Banner";
+import { Notice } from "@/components/ui/Notice";
+import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { inputCls, selectCls, btnPrimary } from "@/components/ui/Field";
+import { inputCls, selectCls } from "@/components/ui/Field";
 import { ACTIONS, MODULES, type Action, type Module } from "@/lib/rbac/matrix";
 
 interface RoleRow {
@@ -14,6 +22,10 @@ interface RoleRow {
   is_custom: boolean;
   payout_approval_limit?: string | number | null;
   voided_at?: string | null;
+}
+interface UserRow {
+  id: string;
+  role_id: string;
 }
 interface PermissionCell {
   module: Module;
@@ -28,10 +40,39 @@ interface PermissionsResponse {
   cells: PermissionCell[];
 }
 
-const ACTION_LABEL: Record<Action, string> = { view: "睇", create: "增", update: "改", void: "廢", export: "出" };
+const ACTION_LABEL: Record<Action, string> = { view: "睇", create: "增", update: "改", void: "刪", export: "出" };
+
+// README「角色權限管理」矩陣 checkbox：勾選底/邊 `#2563eb` 白「✓」；
+// 未勾白底灰邊；硬性禁止底 `#f1f5f9` 邊 `#e5e7eb`（唔可以撳，唔理
+// granted 值），整格底 `#f8fafc`。
+function MatrixCheckbox({ granted, hardDenied, onToggle }: { granted: boolean; hardDenied: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={granted}
+      aria-disabled={hardDenied}
+      disabled={hardDenied}
+      onClick={onToggle}
+      data-testid="role-matrix-checkbox"
+      data-hard-denied={hardDenied ? "1" : "0"}
+      title={hardDenied ? "硬性禁止" : undefined}
+      className={`flex h-[18px] w-[18px] items-center justify-center rounded-[5px] border text-[12px] font-bold ${
+        hardDenied
+          ? "cursor-not-allowed border-zk-border bg-zk-surface text-transparent"
+          : granted
+            ? "cursor-pointer border-zk-primary bg-zk-primary text-white"
+            : "cursor-pointer border-zk-input-border bg-white text-transparent"
+      }`}
+    >
+      ✓
+    </button>
+  );
+}
 
 export default function RolesPage() {
   const [roles, setRoles] = useState<RoleRow[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -50,14 +91,18 @@ export default function RolesPage() {
   async function loadRoles() {
     setLoading(true);
     setError(null);
-    const res = await apiGet<ApiListResult<RoleRow>>("/api/roles?take=500");
-    if (!res.ok) {
-      setError(res.message);
+    const [roleRes, userRes] = await Promise.all([
+      apiGet<ApiListResult<RoleRow>>("/api/roles?take=500"),
+      apiGet<ApiListResult<UserRow>>("/api/users?take=500&include_inactive=1"),
+    ]);
+    if (!roleRes.ok) {
+      setError(roleRes.message);
       setLoading(false);
       return;
     }
-    setRoles(res.data.rows);
-    if (!selectedId && res.data.rows.length > 0) setSelectedId(res.data.rows[0].id);
+    setRoles(roleRes.data.rows);
+    if (userRes.ok) setUsers(userRes.data.rows);
+    if (!selectedId && roleRes.data.rows.length > 0) setSelectedId(roleRes.data.rows[0].id);
     setLoading(false);
   }
 
@@ -65,6 +110,13 @@ export default function RolesPage() {
     loadRoles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 每個角色掛咗幾多個帳號——純顯示層，喺呢頁本地 count，唔加新 API 欄。
+  const accountCountByRole = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const u of users) m.set(u.role_id, (m.get(u.role_id) ?? 0) + 1);
+    return m;
+  }, [users]);
 
   async function loadMatrix(roleId: string) {
     setMatrixLoading(true);
@@ -96,14 +148,25 @@ export default function RolesPage() {
     return { granted: cell?.granted ?? false, hardDenied: cell?.hard_denied ?? false };
   }
 
+  // A4（Opus 驗收）：「儲存（N 項改動）」嘅 N 之前係 `dirty.size`，但
+  // `dirty` 淨係記「撳過」而唔係「同原值唔同」——撳兩下（開咗又閂返）
+  // 都會令 dirty 有一條記錄，N 就會多計一格根本冇改嘅嘢。改做同*原值*
+  // （`matrix.cells` 入面 API 讀返嚟嘅 `cell.granted`，唔受 dirty 狀態
+  // 影響）比對：新值同原值一樣就喺 dirty map 度刪走嗰個 key（等於冚返
+  // 原狀），唔一樣先記低——`dirty.size` 先真係「淨改動」數目。
   function toggleCell(mod: Module, action: Action) {
     const cell = matrix?.cells.find((c) => c.module === mod && c.action === action);
     if (!cell || cell.hard_denied) return;
     const k = cellKey(mod, action);
     const current = cellValue(mod, action).granted;
+    const next = !current;
     setDirty((d) => {
       const n = new Map(d);
-      n.set(k, !current);
+      if (next === cell.granted) {
+        n.delete(k);
+      } else {
+        n.set(k, next);
+      }
       return n;
     });
   }
@@ -157,38 +220,52 @@ export default function RolesPage() {
   const selectedRole = roles.find((r) => r.id === selectedId) ?? null;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-gray-900">角色權限管理</h1>
-        <p className="text-sm text-gray-500">灰底格＝硬性禁止（唔可以開）；其餘格可以逐個開關，儲存先一齊送出。</p>
-      </div>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        kicker="系統"
+        title="角色權限管理"
+        subtitle="灰格＝硬性禁止（唔可以開）；其餘格逐個開關，儲存先一齊送出。"
+        actions={
+          <Button variant="primary" onClick={saveMatrix} disabled={savingMatrix || dirty.size === 0} data-testid="role-save-button">
+            {savingMatrix ? "儲存緊…" : `儲存（${dirty.size} 項改動）`}
+          </Button>
+        }
+      />
 
-      <Banner kind="error" message={error} />
-      <Banner kind="success" message={notice} />
+      {error && <Notice variant="error">{error}</Notice>}
+      {notice && <Notice variant="info">{notice}</Notice>}
 
-      <div className="flex gap-4">
-        <div className="w-56 shrink-0 space-y-3">
-          <div className="rounded-lg border border-gray-200 bg-white">
-            {loading && <div className="p-3 text-sm text-gray-400">載入緊…</div>}
+      {/* 規格觀感修復：README §17 grid 由 `auto-fit minmax(240px,1fr)`
+          （寬度夠就左右對半，矩陣卡好迫）改做 `minmax(240px,1fr)
+          minmax(0,2fr)`（左 1 右 2，矩陣卡實際分得更闊），1024px 以下
+          先疊做一欄。 */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(240px,1fr)_minmax(0,2fr)]">
+        <div className="flex flex-col gap-3">
+          <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
+            {loading && <div className="p-3 text-sm text-zk-faint">載入緊…</div>}
             {!loading &&
               roles.map((r) => (
                 <button
                   key={r.id}
                   type="button"
+                  data-testid="role-list-item"
                   onClick={() => setSelectedId(r.id)}
-                  className={`block w-full border-b border-gray-100 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-gray-50 ${
-                    r.id === selectedId ? "bg-gray-100 font-medium" : ""
+                  className={`flex w-full items-center justify-between border-b border-[#f1f5f9] px-3.5 py-[11px] text-left text-[13.5px] last:border-b-0 hover:bg-zk-header ${
+                    r.id === selectedId ? "bg-zk-primary-tint-soft font-semibold" : "font-normal"
                   }`}
                 >
-                  {uiLabel(r.name)}
-                  {r.is_custom && <span className="ml-1 text-xs text-gray-400">（自訂）</span>}
+                  <span className="truncate">
+                    {uiLabel(r.name)}
+                    {r.is_custom && <span className="ml-1 text-xs font-normal text-zk-faint">（自訂）</span>}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-zk-faint">{accountCountByRole.get(r.id) ?? 0} 人</span>
                 </button>
               ))}
           </div>
 
-          <form onSubmit={onCopy} className="space-y-2 rounded-lg border border-gray-200 bg-white p-3">
-            <div className="text-sm font-medium text-gray-700">複製角色</div>
-            <Banner kind="error" message={copyError} />
+          <form onSubmit={onCopy} className="flex flex-col gap-2 rounded-[10px] border border-zk-border bg-white p-3.5">
+            <div className="text-[12.5px] font-semibold text-zk-text">複製角色</div>
+            {copyError && <Notice variant="error">{copyError}</Notice>}
             <select className={selectCls} value={copySourceId} onChange={(e) => setCopySourceId(e.target.value)} required>
               <option value="">來源角色</option>
               {roles.map((r) => (
@@ -197,70 +274,60 @@ export default function RolesPage() {
                 </option>
               ))}
             </select>
-            <input className={inputCls} placeholder="新角色名稱" value={copyName} onChange={(e) => setCopyName(e.target.value)} required />
-            <button type="submit" disabled={copying} className={btnPrimary + " w-full"}>
+            <input className={inputCls} placeholder="新角色名稱，例：夜班主管" value={copyName} onChange={(e) => setCopyName(e.target.value)} required />
+            <Button type="submit" variant="secondary" disabled={copying} className="w-full justify-center">
               {copying ? "建立緊…" : "複製"}
-            </button>
+            </Button>
           </form>
         </div>
 
-        <div className="min-w-0 flex-1 space-y-3">
-          {selectedRole && (
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-medium text-gray-900">{selectedRole.name}</div>
-                <div className="text-xs text-gray-500">base_role={selectedRole.base_role}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={saveMatrix} disabled={savingMatrix || dirty.size === 0} className={btnPrimary}>
-                  {savingMatrix ? "儲存緊…" : `儲存（${dirty.size}）`}
-                </button>
-                {selectedRole.is_custom && !selectedRole.voided_at && (
-                  <ConfirmVoidButton confirmLabel="確認作廢" onConfirm={(reason) => onVoidRole(selectedRole.id, reason)} />
-                )}
-              </div>
-            </div>
-          )}
+        <div className="min-w-0 flex-1">
+          <div className="overflow-x-auto rounded-[10px] border border-zk-border bg-white" style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 540 }}>
+              {matrixLoading && <div className="p-3.5 text-sm text-zk-faint">載入緊…</div>}
+              {!matrixLoading && !matrix && <div className="p-3.5 text-sm text-zk-faint">請先揀角色</div>}
+              {!matrixLoading && matrix && selectedRole && (
+                <>
+                  <div className="flex items-baseline gap-2.5 border-b border-zk-border px-4 py-3">
+                    <span className="text-[15px] font-bold text-zk-text">{uiLabel(selectedRole.name)}</span>
+                    <span className="text-[12px] text-zk-muted">
+                      {selectedRole.is_custom ? "自訂角色" : "系統預設角色"} · {accountCountByRole.get(selectedRole.id) ?? 0} 個帳號
+                    </span>
+                    {selectedRole.is_custom && !selectedRole.voided_at && (
+                      <ConfirmVoidButton confirmLabel="確認作廢" onConfirm={(reason) => onVoidRole(selectedRole.id, reason)} className="ml-auto" />
+                    )}
+                  </div>
 
-          <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-            {matrixLoading && <div className="p-3 text-sm text-gray-400">載入緊…</div>}
-            {!matrixLoading && !matrix && <div className="p-3 text-sm text-gray-400">請先揀角色</div>}
-            {!matrixLoading && matrix && (
-              <table className="w-full text-xs">
-                <thead className="bg-gray-50 text-left text-gray-500">
-                  <tr>
-                    <th className="px-2 py-1.5">Module</th>
+                  <div className="flex border-b border-zk-border bg-zk-header text-[11.5px] font-semibold text-zk-muted">
+                    <div className="min-w-[160px] flex-1 whitespace-nowrap px-4 py-[9px]">模組</div>
                     {ACTIONS.map((a) => (
-                      <th key={a} className="px-2 py-1.5 text-center">
+                      <div key={a} className="w-[72px] shrink-0 py-[9px] text-center">
                         {ACTION_LABEL[a]}
-                      </th>
+                      </div>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
+                  </div>
+
                   {MODULES.map((mod) => (
-                    <tr key={mod} className="border-t border-gray-100">
-                      <td className="px-2 py-1.5 whitespace-nowrap">{uiLabel(mod)}</td>
+                    <div key={mod} className="flex h-[38px] items-center border-b border-[#f1f5f9] last:border-b-0">
+                      <div className="min-w-[160px] flex-1 truncate px-4 text-[13px] text-zk-text" title={uiLabel(mod)}>
+                        {uiLabel(mod)}
+                      </div>
                       {ACTIONS.map((action) => {
                         const { granted, hardDenied } = cellValue(mod, action);
                         return (
-                          <td key={action} className={`px-2 py-1.5 text-center ${hardDenied ? "bg-gray-100" : ""}`}>
-                            <input
-                              type="checkbox"
-                              checked={granted}
-                              disabled={hardDenied}
-                              onChange={() => toggleCell(mod, action)}
-                              className={hardDenied ? "cursor-not-allowed opacity-40" : "cursor-pointer"}
-                              title={hardDenied ? "硬性禁止" : undefined}
-                            />
-                          </td>
+                          <div
+                            key={action}
+                            className={`flex h-[38px] w-[72px] shrink-0 items-center justify-center ${hardDenied ? "bg-zk-surface-2" : ""}`}
+                          >
+                            <MatrixCheckbox granted={granted} hardDenied={hardDenied} onToggle={() => toggleCell(mod, action)} />
+                          </div>
                         );
                       })}
-                    </tr>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>

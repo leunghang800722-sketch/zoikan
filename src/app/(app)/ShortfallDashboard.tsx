@@ -329,9 +329,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                           href={`/roster/${s.site_id}/${date.slice(0, 7)}`}
                           className="absolute inset-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
                           aria-label={`開啟 ${s.site_name} 更表`}
-                        >
-                          <span className="sr-only">{s.site_name}</span>
-                        </Link>
+                        />
                         <span aria-hidden="true">{s.site_name}</span>
                       </td>
                       <td className={tableCls.tdNum}>{s.required}</td>

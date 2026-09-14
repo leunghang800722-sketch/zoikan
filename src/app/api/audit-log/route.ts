@@ -19,6 +19,8 @@ import { ok, withApiError } from "@/lib/api/http";
 import { paginationParams } from "@/lib/api/query";
 import { toAuditLogDTO, mapListDTO, AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE } from "@/lib/api/dto";
 import { applyFieldGroupGate } from "@/lib/api/field-groups";
+import { BadRequest } from "@/lib/api/errors";
+import { isValidHkDateStr, hkDayStartUtc, hkDayEndUtc } from "@/lib/ui/format";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Prisma } from "@prisma/client";
 
@@ -44,10 +46,26 @@ export async function GET(req: Request) {
     const rowId = url.searchParams.get("row_id");
     const actorUserId = url.searchParams.get("actor_user_id");
 
+    // M1（Opus 驗收）：「日期」filter 之前淨係喺前端對已載入嗰 50 行假
+    // 篩、UI 冇講呢個限制——而家喺呢度做正路 server-side 篩，`from`/`to`
+    // 一律 "YYYY-MM-DD"，當香港曆日解讀（`from` 00:00 HKT 至 `to`
+    // 23:59:59 HKT），分頁總數（下面 count）自然跟返呢個 filter。兩個
+    // 參數獨立生效，冇傳就唔加嗰一邊嘅界。
+    const fromRaw = url.searchParams.get("from");
+    const toRaw = url.searchParams.get("to");
+    if (fromRaw !== null && !isValidHkDateStr(fromRaw)) throw BadRequest("from 格式錯誤，要 YYYY-MM-DD");
+    if (toRaw !== null && !isValidHkDateStr(toRaw)) throw BadRequest("to 格式錯誤，要 YYYY-MM-DD");
+    const createdAtFilter: Prisma.DateTimeFilter = {
+      ...(fromRaw ? { gte: hkDayStartUtc(fromRaw) } : {}),
+      ...(toRaw ? { lte: hkDayEndUtc(toRaw) } : {}),
+    };
+    const hasCreatedAtFilter = fromRaw !== null || toRaw !== null;
+
     const where: Prisma.AuditLogWhereInput = {
       ...(tableName ? { tableName } : {}),
       ...(rowId ? { rowId } : {}),
       ...(actorUserId ? { actorUserId } : {}),
+      ...(hasCreatedAtFilter ? { createdAt: createdAtFilter } : {}),
     };
     const [rows, total] = await Promise.all([
       prisma.auditLog.findMany({ where, skip, take, orderBy: { createdAt: "desc" } }),

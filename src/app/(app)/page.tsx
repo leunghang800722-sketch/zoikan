@@ -62,9 +62,13 @@ export default async function DashboardPage() {
   const grants = await getViewGrants(session);
   const links = (await getNavLinks(session, grants)).filter((l) => l.href !== "/");
 
+  // P2-C §4：零連結時（例如出廠「安員」角色全部 module 都硬性禁止）副題
+  // 唔再寫「快速連結見下面」——下面根本冇連結，嗰句字面上係錯嘅。
+  const subtitle = links.length === 0 ? "你嘅角色暫時未開任何模組權限" : `${session.roleName}——快速連結見下面。`;
+
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader title={`歡迎返嚟，${session.name}`} subtitle={`${session.roleName}——快速連結見下面。`} />
+      <PageHeader title={`歡迎返嚟，${session.name}`} subtitle={subtitle} />
       {links.length === 0 ? (
         <div className="rounded-lg border border-zk-border bg-white px-4 py-6 text-center text-[13px] text-zk-muted">
           你嘅角色暫時未開任何模組權限，請聯絡老闆開權限。

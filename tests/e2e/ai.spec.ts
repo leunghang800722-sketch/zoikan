@@ -16,7 +16,7 @@ test.beforeAll(async () => {
   await clearAiConversationForTel(TEST_TEL.老闆);
 });
 
-test("(a) 老闆登入見到「在勤助手」tab，撳開見歡迎語同 4 個例子", async ({ page }) => {
+test("(a) 老闆登入見到「在勤助手」tab，撳開見歡迎語同 3 個例子", async ({ page }) => {
   await loginAs(page, "老闆");
   await page.goto("/roster");
 
@@ -26,7 +26,7 @@ test("(a) 老闆登入見到「在勤助手」tab，撳開見歡迎語同 4 個�
 
   await expect(page.getByTestId("ai-assistant-panel")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("ai-welcome")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("ai-example-button")).toHaveCount(4);
+  await expect(page.getByTestId("ai-example-button")).toHaveCount(3);
 });
 
 test("(b) 撳例子 → 出現用戶訊息＋助手回覆（fake LLM 腳本）", async ({ page }) => {

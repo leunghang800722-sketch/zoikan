@@ -35,7 +35,12 @@ const WIDE_WIDTH = 560;
 // （漢堡＋抽屜），但助手仲以為自己係桌面版」嘅唔一致。
 const MOBILE_BREAKPOINT_PX = 1024;
 
-const EXAMPLE_QUESTIONS = ["呢個盤今個月排咗幾多人？", "7 月毛利點解係咁？", "呢張價卡出街價點解係咁？", "點樣開新月份更表？"];
+// P2-C：建議 chips 文案跟返 README §19／24 嘅示例（「今日邊個盤未夠
+// 人」「7 月毛利率最低 5 個盤」），第三句 README 原文寫「B07 本月幾多
+// RD」——但 B07 係內部雞頭代號，鐵律「真名/工號/內部代號唔入 code」，
+// 改用通用講法「公司兵」（`kind='internal'` 嗰批雞頭嘅統稱，唔係某個
+// 特定代號）。
+const EXAMPLE_QUESTIONS = ["今日邊個盤未夠人", "7 月毛利率最低 5 個盤", "公司兵本月幾多 RD"];
 
 function readStoredOpen(): boolean {
   try {
