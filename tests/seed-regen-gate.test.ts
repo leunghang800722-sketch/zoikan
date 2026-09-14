@@ -33,7 +33,13 @@ try {
   DEV_DATABASE_URL = "";
 }
 
-const describeOrSkip = DEV_DATABASE_URL ? describe : describe.skip;
+// 2026-09-14 教訓：平行 worktree 冇 gitignored 嘅 tools/importer/out／data/mappings-private
+// （seed 嘅輸入），但 `npm run db:seed` 係先 clearAll() 再讀 CSV——喺嗰度跑呢個 gate
+// 會清空共用開發庫然後先死。輸入唔齊就 skip，唔好碰個庫。
+const SEED_INPUTS_PRESENT =
+  fs.existsSync(path.resolve(REPO_ROOT, "tools/importer/out")) &&
+  fs.existsSync(path.resolve(REPO_ROOT, "data/mappings-private"));
+const describeOrSkip = DEV_DATABASE_URL && SEED_INPUTS_PRESENT ? describe : describe.skip;
 
 describeOrSkip("Gate：seed + regen 對真實 7 月數據（開發庫）", () => {
   let devPrisma: PrismaClient;

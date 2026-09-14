@@ -12,8 +12,12 @@ import { test, expect } from "@playwright/test";
 import { loginAs } from "./helpers";
 import { findSiteIdByName, prisma } from "./db-helpers";
 
-const SCREENSHOT_DIR =
-  "/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/mobile";
+// 截圖只喺設咗 E2E_SHOT_DIR 先存（同 home.spec.ts 一致），唔寫死機器路徑。
+const SCREENSHOT_DIR = process.env.E2E_SHOT_DIR ? `${process.env.E2E_SHOT_DIR}/mobile` : null;
+const shot = async (page: import("@playwright/test").Page, name: string) => {
+  if (!SCREENSHOT_DIR) return;
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/${name}` });
+};
 
 test.describe("手機版佈局（375×812）", () => {
   test.use({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
@@ -34,7 +38,7 @@ test.describe("手機版佈局（375×812）", () => {
     expect(box).toBeTruthy();
     expect(box!.width).toBeGreaterThanOrEqual(375 * 0.9);
 
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/home-drawer-closed.png` });
+    await shot(page, "home-drawer-closed.png");
   });
 
   test("(b) 撳漢堡 → 抽屜可見且含「更表」「保安員」連結，撳「更表」→ 抽屜關閉並到 /roster", async ({ page }) => {
@@ -45,7 +49,7 @@ test.describe("手機版佈局（375×812）", () => {
     const drawer = page.getByTestId("mobile-nav-drawer");
     await expect(drawer).toBeVisible();
 
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/home-drawer-open.png` });
+    await shot(page, "home-drawer-open.png");
 
     await expect(drawer.getByRole("link", { name: "更表" })).toBeVisible();
     await expect(drawer.getByRole("link", { name: "保安員" })).toBeVisible();
@@ -132,7 +136,7 @@ test.describe("手機版佈局（375×812）", () => {
 
     await page.goto(`/roster/${siteId}/2026-07`);
     await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/roster-page.png` });
+    await shot(page, "roster-page.png");
     overflow = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
     expect(overflow).toBe(true);
   });
