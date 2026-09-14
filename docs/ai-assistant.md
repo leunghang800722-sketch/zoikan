@@ -475,13 +475,21 @@ boundary，同 `RosterEditor.tsx` 避開嘅理由一致）：
 （`src/lib/feedback/ai-tools/list-feedback.ts`）：
 
 - **唔經 `zoikan_ai_ro`／`aiQuery()`**——用正常 Prisma（`@/lib/db`）直接
-  `findMany`（只讀，冇任何寫入方法）。因為要用 Prisma，呢個檔案刻意擺喺
-  `src/lib/feedback/`（唔喺 `src/lib/ai/tools/`）——`tests/ai-structural-
-  guard.test.ts` 嘅「零 `@/lib/db`／零 `prisma.`」掃描淨係管
-  `src/lib/ai/**`／`src/app/api/ai/**` 呢兩個 tree，擺出嚟先可以用
-  Prisma，同時嗰兩個 tree 嘅結構性保證完全唔受影響（另有
-  `tests/feedback-tools-readonly.test.ts` 逐檔案掃 `src/lib/feedback/
-  ai-tools/**`，斷言冇任何 Prisma 寫入方法調用）。
+  `findMany`（只讀，冇任何寫入方法）。因為要用 Prisma，呢個檔案擺喺
+  `src/lib/feedback/ai-tools/`（唔喺 `src/lib/ai/tools/`），但**唔係
+  靠擺喺呢個目錄去避開結構性掃描**——`tests/ai-structural-guard.test.ts`
+  明文列出 `MODEL_FACING_TOOL_DIRS = ["src/lib/ai/tools",
+  "src/lib/feedback/ai-tools"]` 兩個「會俾模型直接調用」嘅工具定義檔
+  目錄，行**同一套** import allowlist／「冇 fetch(」／「冇 import
+  route.ts」斷言；`list_feedback` 用 `@/lib/db` 呢一項係喺嗰個 allowlist
+  入面**逐檔案明列嘅豁免**（`IMPORT_ALLOWLIST_EXEMPTIONS`），註明原因
+  ——只讀 `findMany`、老闆限定、`feedback_reports` 本身唔喺 `ai`
+  schema——唔係一條寬鬆嘅目錄級例外。掃描仲有一條斷言逐個靜態检查
+  `buildAiTools()`（`src/lib/ai/tools/index.ts`）用嘅每個工具定義檔
+  都喺呢兩個目錄之內，將來如果有人喺第三個目錄起新工具檔案再 import
+  落嚟用，呢條會唔通過。另有 `tests/feedback-tools-readonly.test.ts`
+  逐檔案掃 `src/lib/feedback/ai-tools/**`，斷言冇任何 Prisma 寫入方法
+  調用。
 - **只讀、老闆限定**——`src/lib/ai/tools/index.ts` 嘅 `buildAiTools()`
   淨係喺 `ctx.session.baseRole === "老闆"` 先掛載呢個工具落主助手（`/api
   /ai/chat`）嘅工具集；`run()` 入面再核一次 `baseRole==="老闆"`
@@ -505,9 +513,37 @@ boundary，同 `RosterEditor.tsx` 避開嘅理由一致）：
 | `POST /api/feedback/session/submit` | `助手:view`（伺服器校驗長度：每欄 ≤2000／總 ≤12000 字；每人每日 ≤3 份） |
 | `POST /api/feedback/session/abandon` | `助手:view` |
 | `GET /api/feedback/reports` | `助手:view`＋`baseRole==="老闆"` |
-| `GET /api/feedback/reports/[id]` | `助手:view`（老闆全睇；作者本人淨係睇自己） |
-| `PATCH /api/feedback/reports/[id]` | `助手:view`＋`baseRole==="老闆"` |
+| `GET /api/feedback/reports/[id]` | `助手:view`（老闆全睇；作者本人淨係睇自己；非作者非老闆——包括 id 根本唔存在——一律 404，見下） |
+| `PATCH /api/feedback/reports/[id]` | `助手:view`＋`baseRole==="老闆"`（老闆限定嘅 endpoint，非老闆一律 403，唔涉及 id 存唔存在嘅枚舉問題） |
 | `GET /api/feedback/unread-count` | `助手:view`＋`baseRole==="老闆"` |
+
+Opus 驗收應修③：`GET /api/feedback/reports/[id]` 之前 row 唔存在係
+`404`、row 存在但冇權睇係 `403`——兩個唔同狀態碼本身已經俾人可以逐個
+猜 id 去分辨「呢個 id 存唔存在」（enumeration）。而家統一：非作者非
+老闆一律 `404`（唔理 row 存唔存在），對外行為完全一樣。`PATCH` 呢個
+endpoint 本身就係「老闆限定」（`助手:view`＋`baseRole==="老闆"`），
+唔涉及「呢個 id 屬唔屬於我」嘅枚舉問題——非老闆打呢個 endpoint 一律
+`403`，唔會因為 id 存唔存在而有分別，所以維持 `403` 唔改。
+
+### 每日／每人上限（AI 用量）
+
+Opus 驗收應修④：四個 `/api/feedback/session/**` endpoint 入面，`chat`／
+`summarize` 兩個真係叫 LLM，同 `/api/ai/chat` **共用同一個每日額度**
+（`src/lib/ai-rate-limit.ts` 嘅 `assertUnderDailyLimit()`／
+`AI_DAILY_LIMIT`）——一個用戶今日問咗幾多次「在勤助手」加埋開會反映
+訪談，兩邊計埋同一個數，撞到上限任一邊都係 `429`。`countTodayAiChats()`
+而家計 `audit_log` 入面 `(table_name, action)` 屬於 `ai_chat`／
+`ai_feedback_chat`／`ai_feedback_summarize` 呢個集合嘅記錄（見該檔案
+`AI_QUOTA_ACTIONS`），`session/summarize` route 而家每次都會寫一行
+`ai_feedback_chat`/`ai_feedback_summarize` audit（唔止喺 guard 觸發先
+寫），先至保證「每叫一次 LLM 就計一次」呢個口徑成立。`session`／
+`abandon` 兩個唔叫 LLM，唔受呢個額度影響，但**開 session 本身**另外有
+上限：每人每日最多開 5 個 session（`MAX_FEEDBACK_SESSIONS_PER_DAY`，
+`src/lib/feedback/session.ts` 嘅 `countSessionsOpenedToday()`）——攞
+`feedback_sessions.created_at`（UTC 曆日）計數，`abandon` 咗再開一個
+新嘅都計（每次冇現有 draft 先要新開一行，`abandoned` 嗰行本身唔會俾
+`getOrCreateDraftSession()` 揀返嚟續用），撞到上限 `POST /api/feedback/
+session` 就 `429`；續用現有 draft（唔開新嘅）唔受呢個上限影響。
 
 ### 前端
 
@@ -519,6 +555,15 @@ boundary，同 `RosterEditor.tsx` 避開嘅理由一致）：
   （`ai-feedback-cancel`）；整理完顯示預覽（`ai-feedback-preview`）：
   `reporter`／`footer` 唔可以改，其餘 6 欄 textarea 可編輯，「確認送出」
   （`ai-feedback-submit`）之後 toast「已送出俾老闆」，返回普通模式。
+  P2 整合驗收⑤（Opus 驗收）：頂欄（`ai-assistant-header`）原本常駐一句
+  「只讀 · 答數據問題」副標，側欄預設窄版（`NARROW_WIDTH=380px`）連同
+  右邊「開會反映」／「窄／闊」／「清空」／「關閉」幾個掣成日逼到斷
+  行。而家副標收埋做 `<h2 title="只讀 · 答數據問題">`（hover tooltip，
+  唔再佔橫向空間），「開會反映」由 primary 風格（`text-zk-primary`
+  `font-semibold`）改做同其他掣一致嘅細 secondary 風格（`text-zk-muted`
+  `text-[11px]`），確保 380px 窄版一行放得落——Playwright
+  `tests/e2e/ai.spec.ts` 量 `ai-assistant-header` 嘅 `boundingBox().
+  height` ≤48px。
 - 老闆左欄「系統」組多一條「現場意見」（`src/lib/rbac/nav.ts`，用
   「助手」module＋`baseRole==="老闆"` 雙重判斷）＋未讀 badge（`(app)/
   layout.tsx`，同審批 badge 一樣做法：server-side `prisma.feedbackReport.

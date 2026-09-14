@@ -37,7 +37,12 @@ export type AuditAction =
   // action（同其他 resource PATCH 一致）。
   | "ai_feedback_chat"
   | "ai_feasibility_guard_triggered"
-  | "feedback_submit";
+  | "feedback_submit"
+  // P2.5 Opus 驗收應修④：`session/summarize` 每次成功整理（叫咗一次
+  // LLM）都寫一條（table_name="ai_feedback_chat"，同 `ai_feedback_chat`
+  // 呢個 action 分開，等 audit_log 可以分辨「訪談對話」定「整理」，同
+  // 埋計入 `src/lib/ai-rate-limit.ts` 嗰個同主助手共用嘅每日額度）。
+  | "ai_feedback_summarize";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

@@ -3,6 +3,12 @@
 // 前端預覽（**唔寫 feedback_reports**——真正寫入喺 `session/submit`，
 // 用戶確認/編輯之後先寫，符合鐵律「AI 助手架構上做唔到任何寫入，寫入
 // 一律由伺服器 code 喺用戶明確撳掣之後先做」）。
+//
+// P2.5 Opus 驗收應修④：呢度都真係叫 LLM，同 `/api/ai/chat`／
+// `session/chat` **共用同一個每日額度**（`assertUnderDailyLimit()`）
+// ——撞到上限 429。每次成功整理都寫一行 `ai_feedback_chat`/
+// `ai_feedback_summarize` audit（唔止 guard 觸發先寫），等
+// `countTodayAiChats()` 數得到（見 `src/lib/ai-rate-limit.ts`）。
 import { requireFeedbackAccess } from "@/lib/feedback/guard";
 import { ApiError, NotFound, BadRequest } from "@/lib/api/errors";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -10,6 +16,8 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { z } from "zod";
+import { writeAudit } from "@/lib/audit";
+import { assertUnderDailyLimit } from "@/lib/ai-rate-limit";
 import { getSessionForUser, messagesOf, turnCountOf, type StoredFeedbackMessage } from "@/lib/feedback/session";
 import { buildFeedbackSummarizePrompt } from "@/lib/ai/feedback-prompt";
 import { checkOutputGuardAndAudit } from "@/lib/ai/output-guard";
@@ -58,6 +66,13 @@ export async function POST(req: Request) {
     if (!feedbackSession || feedbackSession.status !== "draft") throw NotFound("呢個開會 session 唔存在或者已經結束");
     if (turnCountOf(feedbackSession) < 1) throw BadRequest("最少要傾一輪先可以整理");
 
+    // P2.5 Opus 驗收應修④：同 `/api/ai/chat`／`session/chat` 共用嘅每日
+    // 額度（見 `src/lib/ai-rate-limit.ts` 頂註解）。
+    const { used, limit } = await assertUnderDailyLimit(session.userId);
+    if (used >= limit) {
+      throw new ApiError(429, "rate_limited", `今日已經問咗 ${used} 次，上限 ${limit} 次，聽日再嚟啦。`);
+    }
+
     let llmClient;
     try {
       llmClient = getLlmClient();
@@ -103,6 +118,19 @@ export async function POST(req: Request) {
       footer: FEEDBACK_FOOTER,
     };
     const summaryMd = buildSummaryMarkdown(fields);
+
+    // P2.5 Opus 驗收應修④：每次成功整理（叫咗一次 LLM）都寫一行
+    // audit——唔淨係 guard 觸發先寫，等
+    // `countTodayAiChats()`／`assertUnderDailyLimit()` 數得到（見
+    // `src/lib/ai-rate-limit.ts` 嘅 `AI_QUOTA_ACTIONS`）。
+    await writeAudit({
+      actorUserId: session.userId,
+      tableName: "ai_feedback_chat",
+      rowId: feedbackSession.id,
+      action: "ai_feedback_summarize",
+      after: { session_id: feedbackSession.id, input_tokens: result.inputTokens, output_tokens: result.outputTokens },
+      ip,
+    });
 
     return ok(brandSafeResponse({ fields, summary_md: summaryMd }));
   });

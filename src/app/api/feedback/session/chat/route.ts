@@ -17,7 +17,10 @@
 //    開會」。
 // 6. audit action 用 `ai_feedback_chat`（唔係 `ai_chat`），`row_id` 用
 //    session id（唔係 user id）——等一個用戶多次開會嘅記錄分得開。
+// 7. P2.5 Opus 驗收應修④：呢度真係叫 LLM，同 `/api/ai/chat` **共用同
+//    一個每日額度**（`assertUnderDailyLimit()`），撞到上限一樣 429。
 import { requireFeedbackAccess } from "@/lib/feedback/guard";
+import { assertUnderDailyLimit } from "@/lib/ai-rate-limit";
 import { ApiError, NotFound } from "@/lib/api/errors";
 import { getClientIp } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
@@ -81,6 +84,17 @@ export async function POST(req: Request) {
   }
 
   const ip = getClientIp(req);
+
+  // P2.5 Opus 驗收應修④：同 `/api/ai/chat` 共用嘅每日額度（見
+  // `src/lib/ai-rate-limit.ts` 頂註解），撞到上限就 429。
+  const { used, limit } = await assertUnderDailyLimit(session.userId);
+  if (used >= limit) {
+    return new Response(
+      JSON.stringify({ error: "rate_limited", message: `今日已經問咗 ${used} 次，上限 ${limit} 次，聽日再嚟啦。` }),
+      { status: 429, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   const bodyRaw = await readJson(req);
   let parsed: z.infer<typeof ChatRequestSchema>;
   try {

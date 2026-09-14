@@ -123,37 +123,122 @@ describe("WP-AI1 §6：結構性保證——src/lib/ai/** 同 src/app/api/ai/**"
     expect(code).not.toMatch(/\bfetch\(/);
   });
 
-  // 業務數據來源收窄：src/lib/ai/tools/*.ts 逐個工具檔案，`@/lib/*` 呢
-  // 一類 import 淨係准嚟自呢個 allowlist（唯讀 DB 連線／field-scrub／
-  // 純讀報表／rbac 權限判斷）——唔准另外起一個會掂到寫入客戶端嘅業務
-  // 數據 helper 再 import 落嚟。
-  const ALLOWED_LIB_IMPORT_PREFIXES = [
-    "@/lib/reports/",
-    "../db", // src/lib/ai/db.ts（相對路徑，tools/*.ts 入面用 "../db"）
-    "../field-scrub",
-    "../sql-guard",
-    "./common",
-    "../../rbac/requirePermission",
-    "../../rbac/matrix", // `Module` type——規劃裁定：工具要跟返畫面權限（見 tools/common.ts）
-    "../../api/field-groups",
-    "../../ui/broker-kind", // P2-B 應修⑤：`BROKER_KIND_LABEL` 搬咗去呢度，tools/common.ts re-export（純字面量 map，唔碰 DB）
+  // ------------------------------------------------------------------
+  // Opus 驗收應修①：呢個結構性掃描之前淨係管 `src/lib/ai/tools/**`，
+  // `list_feedback`（`src/lib/feedback/ai-tools/list-feedback.ts`）刻意
+  // 擺喺另一個目錄用正常 Prisma 讀（見該檔案頂註解＋
+  // docs/ai-assistant.md「ai schema 唔加 view」一節），但呢個掃描本身
+  // 唔應該淨係憑「擺喺邊個目錄」就放行唔受管——所以呢度明文列出全部
+  // 「會俾模型直接調用」嘅工具定義檔目錄，兩個目錄行**同一套**
+  // 斷言（import allowlist／冇 fetch(／冇 import route.ts），
+  // `list_feedback` 用 `@/lib/db` 呢一項淨係用下面
+  // `IMPORT_ALLOWLIST_EXEMPTIONS` **明列豁免**（唔係靠目錄位置繞過），
+  // 仲加多一條「`buildAiTools()` 用嘅每個工具定義檔都要喺呢兩個目錄之
+  // 內」——將來如果有人喺第三個目錄起個新工具檔案再喺 `tools/index.ts`
+  // import 落嚟，呢條會唔通過（唔使個新目錄自己記得嚟呢個 test 度加）。
+  const MODEL_FACING_TOOL_DIRS = ["src/lib/ai/tools", "src/lib/feedback/ai-tools"];
+
+  // 業務數據來源收窄：兩個 MODEL_FACING_TOOL_DIRS 入面逐個工具檔案，
+  // `@/lib/*`／相對路徑呢類 import 淨係准嚟自呢個 allowlist（唯讀 DB
+  // 連線／field-scrub／sql-guard／純讀報表／rbac 權限判斷／common
+  // helper）——唔准另外起一個會掂到寫入客戶端嘅業務數據 helper 再
+  // import 落嚟。呢度用「解析做 repo-root 相對路徑」嚟比對（見
+  // `resolveImportToRepoPath()`），唔係逐個 import specifier 串比對——
+  // 兩個目錄慣用嘅寫法唔同（`src/lib/ai/tools/**` 慣用相對路徑
+  // `"../db"`／`"./common"`，`src/lib/feedback/ai-tools/**` 慣用
+  // `@/lib/...` alias），解析做同一種表示先可以用同一套 allowlist。
+  const ALLOWED_LIB_IMPORT_TARGETS = [
+    "src/lib/reports/", // prefix——純讀 report builder
+    "src/lib/ai/db.ts", // 唯讀 pg 連線（aiQuery()）
+    "src/lib/ai/field-scrub.ts",
+    "src/lib/ai/sql-guard.ts",
+    "src/lib/ai/tools/common.ts",
+    "src/lib/rbac/requirePermission.ts",
+    "src/lib/rbac/matrix.ts", // `Module` type——規劃裁定：工具要跟返畫面權限（見 tools/common.ts）
+    "src/lib/api/field-groups.ts",
+    "src/lib/ui/broker-kind.ts", // P2-B 應修⑤：`BROKER_KIND_LABEL` 搬咗去呢度，tools/common.ts re-export（純字面量 map，唔碰 DB）
   ];
 
-  const TOOL_FILES = listFiles("src/lib/ai/tools").filter((f) => !f.endsWith("index.ts"));
+  // 明列豁免——`list_feedback` 用 `@/lib/db`（Prisma）直接讀
+  // `feedback_reports`，原因（詳見 docs/ai-assistant.md「ai schema 唔加
+  // view」一節）：(1) 只讀 `findMany`，冇任何寫入方法調用（另有
+  // `tests/feedback-tools-readonly.test.ts` 逐檔案掃 Prisma 寫入方法）；
+  // (2) 老闆限定（`buildAiTools()` 淨係 `baseRole==="老闆"` 先掛載，
+  // `run()` 入面 defense-in-depth 再核一次）；(3) `feedback_reports`
+  // 本身唔喺 `ai` schema，冇對應嘅唯讀 view 可以用。呢個豁免逐檔案明
+  // 列（`Record`），唔係一條寬鬆嘅目錄級例外。
+  const IMPORT_ALLOWLIST_EXEMPTIONS: Record<string, string[]> = {
+    "src/lib/feedback/ai-tools/list-feedback.ts": ["src/lib/db.ts"],
+  };
 
-  it("tools/ 目錄掃到合理數量嘅檔案", () => {
-    expect(TOOL_FILES.length).toBeGreaterThanOrEqual(10);
+  /** 將一個 import specifier（相對路徑或者 `@/...` alias，`@/` → `src/`，
+   * 見 tsconfig.json `paths`）解析做 repo-root 相對嘅 `.ts` 檔案路徑，
+   * 等兩種寫法可以用同一套 allowlist 比對。淨係處理「相對路徑」同
+   * `@/lib/` alias——第三方套件（`imp` 唔屬於呢兩種）由呼叫方自己
+   * 跳過，唔會行到呢度。 */
+  function resolveImportToRepoPath(fromFileRelPath: string, importSpecifier: string): string {
+    if (importSpecifier.startsWith("@/")) {
+      return path.join("src", importSpecifier.slice(2)) + ".ts";
+    }
+    const fromDir = path.dirname(path.join(ROOT, fromFileRelPath));
+    return path.relative(ROOT, path.resolve(fromDir, importSpecifier)) + ".ts";
+  }
+
+  const TOOL_FILES = MODEL_FACING_TOOL_DIRS.flatMap((dir) => listFiles(dir)).filter((f) => !f.endsWith("index.ts"));
+
+  it("MODEL_FACING_TOOL_DIRS 兩個目錄合共掃到合理數量嘅檔案", () => {
+    expect(TOOL_FILES.length).toBeGreaterThanOrEqual(11); // 10+ 條 src/lib/ai/tools/*.ts + list-feedback.ts
   });
 
-  it.each(TOOL_FILES)("%s 嘅 lib import 淨係嚟自 allowlist（@/lib/ai/db、@/lib/reports/*、rbac/field-groups、common）", (relPath) => {
+  it.each(TOOL_FILES)("%s 嘅 lib import 淨係嚟自 allowlist（含明列豁免）", (relPath) => {
     const src = readSource(relPath);
     const importLines = [...src.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
     for (const imp of importLines) {
-      const isThirdParty = !imp.startsWith(".") && !imp.startsWith("@/lib/") && !imp.startsWith("../") && !imp.startsWith("./");
-      if (isThirdParty) continue; // zod、@anthropic-ai/sdk/* 等第三方套件唔受限
-      if (imp.startsWith("@/lib/reports/")) continue;
-      const allowed = ALLOWED_LIB_IMPORT_PREFIXES.some((prefix) => imp === prefix || imp.startsWith(prefix));
-      expect(allowed, `${relPath} import 咗未列入 allowlist 嘅 "${imp}"`).toBe(true);
+      const isRelevant = imp.startsWith(".") || imp.startsWith("@/lib/");
+      if (!isRelevant) continue; // zod、@anthropic-ai/sdk/* 等第三方套件唔受限
+      const resolved = resolveImportToRepoPath(relPath, imp);
+      const exempted = IMPORT_ALLOWLIST_EXEMPTIONS[relPath]?.includes(resolved) ?? false;
+      const allowed = exempted || ALLOWED_LIB_IMPORT_TARGETS.some((target) => resolved === target || resolved.startsWith(target));
+      expect(allowed, `${relPath} import 咗未列入 allowlist 嘅 "${imp}"（解析做 "${resolved}"）`).toBe(true);
     }
+  });
+
+  // 同 ALL_SCANNED 嗰兩條一致風格，擴展落 MODEL_FACING_TOOL_DIRS 兩個
+  // 目錄（`list-feedback.ts` 之前唔喺任何結構性掃描嘅 tree 之內，冇被
+  // 斷言過「冇 fetch(」／「冇 import route.ts」）。
+  it.each(TOOL_FILES)("%s 冇 fetch( 去內部 API（去走 comment/string 之後）", (relPath) => {
+    const code = stripCommentsAndStrings(readSource(relPath));
+    expect(code).not.toMatch(/\bfetch\(/);
+  });
+
+  it.each(TOOL_FILES)("%s 冇 import 任何 src/app/api/**/route", (relPath) => {
+    const src = readSource(relPath);
+    expect(src).not.toMatch(/from\s+["'][^"']*\/api\/[^"']*\/route["']/);
+  });
+
+  // 「將來新目錄會被抓到」：靜態掃 `src/lib/ai/tools/index.ts`（
+  // `buildAiTools()` 嘅定義處）入面每一個供俾 `create*Tool` 工廠函數嘅
+  // import，解析嗰個 import 嘅來源檔案，斷言一定喺 MODEL_FACING_TOOL_
+  // DIRS 之內——如果第日有人加多一個工具檔案擺第三個目錄（例如
+  // `src/lib/reports/ai-tools/`）再喺呢度 import 落嚟用，呢條會唔通過，
+  // 唔使個新目錄自己記得嚟呢個 test 度加白名單。
+  it("buildAiTools() 回傳嘅每個工具嘅定義檔都必須喺 MODEL_FACING_TOOL_DIRS 之內", () => {
+    const indexRelPath = "src/lib/ai/tools/index.ts";
+    const src = readSource(indexRelPath);
+    const importRegex = /import\s+(?:type\s+)?\{([^}]+)\}\s*from\s*["']([^"']+)["']/g;
+    let match: RegExpExecArray | null;
+    let toolFactoryImportCount = 0;
+    while ((match = importRegex.exec(src))) {
+      const importedNames = match[1]!.split(",").map((n) => n.trim().split(/\s+as\s+/)[0]!.trim());
+      const modSpecifier = match[2]!;
+      const isToolFactoryImport = importedNames.some((n) => /^create[A-Za-z0-9]*Tool$/.test(n));
+      if (!isToolFactoryImport) continue; // 淨係理 `create*Tool` 呢類工廠函數 import（`common`/型別 import 唔屬於「工具定義檔」）
+      toolFactoryImportCount++;
+      const resolved = resolveImportToRepoPath(indexRelPath, modSpecifier);
+      const inAllowedDir = MODEL_FACING_TOOL_DIRS.some((dir) => resolved === `${dir}.ts` || resolved.startsWith(`${dir}/`));
+      expect(inAllowedDir, `${indexRelPath} 嘅 "${modSpecifier}"（解析做 "${resolved}"）唔喺 MODEL_FACING_TOOL_DIRS 之內`).toBe(true);
+    }
+    // 防止 regex 打空令呢條斷言形同虛設（現時 14 個 create*Tool import）。
+    expect(toolFactoryImportCount).toBeGreaterThanOrEqual(10);
   });
 });

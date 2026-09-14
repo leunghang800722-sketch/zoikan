@@ -141,7 +141,13 @@ describe("P2.5：/api/feedback/** 權限＋流程", () => {
   });
 
   it(`submit：每人每日上限 ${MAX_REPORTS_PER_DAY} 份，第 ${MAX_REPORTS_PER_DAY + 1} 份 → 429`, async () => {
-    const cookie = await sessionCookieForUser(fx.userIds["會計"]);
+    // 呢個測試要開 MAX_REPORTS_PER_DAY+1 個 session——用「老闆」（呢個
+    // describe block 入面淨係喺角色迴圈嗰條 test 開過一次 session）唔係
+    // 「會計」（之前兩條 test 已經開咗 2 次），避免同 P2.5 Opus 驗收
+    // 應修④嘅「每人每日最多開 5 個 session」上限撞埋一齊，令呢條測試
+    // 提早俾 `feedback_session_limit` 429 擋住，測試唔到真正想斷言嘅
+    // 「送出份數上限」429。
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
     for (let i = 0; i < MAX_REPORTS_PER_DAY; i++) {
       const openRes = await sessionOpenPost(req("/api/feedback/session", cookie, {}));
       const { id: sessionId } = (await openRes.json()) as { id: string };
@@ -201,10 +207,26 @@ describe("P2.5：/api/feedback/reports 讀取權限", () => {
     expect(res.status).toBe(200);
   });
 
-  it("主管（唔係作者）→ 403", async () => {
+  it("主管（唔係作者）→ 404（唔可以由 403／404 分辨呢個 id 存唔存在，見 P2.5 Opus 驗收應修③）", async () => {
     const cookie = await sessionCookieForUser(fx.userIds["主管"]);
     const res = await reportGet(req(`/api/feedback/reports/${reportId}`, cookie, undefined, "GET"), { params: Promise.resolve({ id: reportId }) });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
+  });
+
+  it("主管打一個根本唔存在嘅 id → 一樣係 404（同上面「唔係作者」個 case 分唔出嚟，唔洩露 id 存在與否）", async () => {
+    const cookie = await sessionCookieForUser(fx.userIds["主管"]);
+    const res = await reportGet(req(`/api/feedback/reports/no-such-id-00000000`, cookie, undefined, "GET"), {
+      params: Promise.resolve({ id: "no-such-id-00000000" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("作者本人打一個根本唔存在嘅 id → 404", async () => {
+    const cookie = await sessionCookieForUser(authorUserId);
+    const res = await reportGet(req(`/api/feedback/reports/no-such-id-11111111`, cookie, undefined, "GET"), {
+      params: Promise.resolve({ id: "no-such-id-11111111" }),
+    });
+    expect(res.status).toBe(404);
   });
 
   it("GET /api/feedback/reports（清單）：主管唔係老闆 → 403", async () => {

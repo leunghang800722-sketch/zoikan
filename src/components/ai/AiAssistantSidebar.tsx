@@ -413,18 +413,28 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
           }
           style={isMobile ? undefined : { width }}
         >
-          <div className="flex items-center gap-2.5 border-b border-zk-border px-4 py-3">
+          <div data-testid="ai-assistant-header" className="flex items-center gap-2 border-b border-zk-border px-4 py-2.5">
             <span className="h-2 w-2 shrink-0 rounded-full bg-zk-primary" />
-            <h2 className="text-sm font-semibold text-zk-text">{meetingMode ? "在勤助手 · 開會反映" : "在勤助手"}</h2>
-            {!isMobile && !meetingMode && <span className="text-[11px] text-zk-faint">只讀 · 答數據問題</span>}
-            <div className="ml-auto flex items-center gap-1">
+            {/* P2 整合驗收⑤（Opus 驗收）：之前呢度仲有一句常駐嘅「只讀 ·
+                答數據問題」副標，窄版（側欄預設 380px 闊）連同右邊四個
+                掣（開會反映／窄闊/清空/關閉）成日逼到斷行，令頂欄高過
+                一行。副標本身唔係關鍵資訊——收埋做 `title`（hover
+                tooltip），唔再佔用 flex row 嘅橫向空間。 */}
+            <h2
+              className="truncate text-sm font-semibold text-zk-text"
+              title={meetingMode ? undefined : "只讀 · 答數據問題"}
+            >
+              {meetingMode ? "在勤助手 · 開會反映" : "在勤助手"}
+            </h2>
+            <div className="ml-auto flex shrink-0 items-center gap-1">
               {!meetingMode && (
                 <button
                   type="button"
                   data-testid="ai-feedback-start"
                   onClick={handleStartMeeting}
                   disabled={meetingStarting}
-                  className="rounded px-2 py-1 text-xs font-semibold text-zk-primary hover:bg-zk-surface disabled:opacity-50"
+                  title="開會反映——同助手講清楚想反映嘅現場問題／改動訴求"
+                  className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface disabled:opacity-50"
                 >
                   {meetingStarting ? "開緊…" : "開會反映"}
                 </button>
@@ -434,7 +444,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   type="button"
                   onClick={toggleWidth}
                   aria-label={width >= WIDE_WIDTH ? "縮窄側欄" : "擴闊側欄"}
-                  className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
+                  className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface"
                 >
                   {width >= WIDE_WIDTH ? "窄" : "闊"}
                 </button>
@@ -444,7 +454,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   type="button"
                   data-testid="ai-clear-conversation"
                   onClick={() => setConfirmingClear(true)}
-                  className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
+                  className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface"
                 >
                   清空
                 </button>
@@ -453,7 +463,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 type="button"
                 aria-label="關閉在勤助手"
                 onClick={() => setOpen(false)}
-                className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
+                className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface"
               >
                 關閉
               </button>
