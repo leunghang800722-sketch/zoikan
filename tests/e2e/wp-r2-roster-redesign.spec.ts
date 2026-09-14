@@ -77,21 +77,26 @@ test("(a) 桌面：雞頭統計卡撳＝篩選（行數減少 + URL 帶 broker=�
 test("(b) 桌面：今日／週末日期欄樣式（data-today/data-weekend）", async ({ page }) => {
   const siteId = await findSiteIdByName("啟航1331");
   await loginAs(page, "主管");
-  // 2026-09 係伺服器「今日」所在月份（2026-09-14）——就算呢個盤呢個月
-  // 未有更表記錄，日期表頭都照樣會 render（唔靠 shift_records 資料）。
-  await page.goto(`/roster/${siteId}/2026-09`);
-  await expect(page.getByTestId("roster-day-header-14")).toBeVisible({ timeout: 20_000 });
+  // 「今日」用香港曆日動態計（唔寫死 2026-09-14——過咗午夜就會錯），
+  // 開返今日所在月份；就算呢個盤呢個月未有更表記錄，日期表頭都照樣
+  // render（唔靠 shift_records 資料）。
+  const hk = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Hong_Kong", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const hkGet = (t: string) => Number(hk.find((p) => p.type === t)?.value);
+  const y = hkGet("year"), m = hkGet("month"), todayD = hkGet("day");
+  const monthStr = `${y}-${String(m).padStart(2, "0")}`;
+  await page.goto(`/roster/${siteId}/${monthStr}`);
+  await expect(page.getByTestId(`roster-day-header-${todayD}`)).toBeVisible({ timeout: 20_000 });
 
-  const todayHeader = page.getByTestId("roster-day-header-14");
+  const todayHeader = page.getByTestId(`roster-day-header-${todayD}`);
   await expect(todayHeader).toHaveAttribute("data-today", "true");
 
-  // 搵返 2026-09 入面第一個週末（六／日）同第一個非週末嘅日數，逐個同
+  // 搵返今個月第一個週末（六／日）同第一個非週末嘅日數，逐個同
   // JS Date 對返嘅 UTC weekday 計算一致（唔靠寫死實際日曆）。
   let weekendDay = -1;
   let weekdayDay = -1;
-  const daysInSep = new Date(Date.UTC(2026, 9, 0)).getUTCDate();
+  const daysInSep = new Date(Date.UTC(y, m, 0)).getUTCDate();
   for (let d = 1; d <= daysInSep; d++) {
-    const wd = new Date(Date.UTC(2026, 8, d)).getUTCDay();
+    const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
     const isWeekend = wd === 0 || wd === 6;
     if (isWeekend && weekendDay === -1) weekendDay = d;
     if (!isWeekend && weekdayDay === -1) weekdayDay = d;
