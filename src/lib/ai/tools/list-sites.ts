@@ -9,7 +9,7 @@ import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 export function createListSitesTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "list_sites",
-    description: "列出全部盤（site）嘅基本資料——名稱、客戶名、收費模式、狀態。當用戶問「有咩盤」「邊啲盤仲 active」呢類問題時用。要「盤:view」。",
+    description: "列出全部盤（site）嘅基本資料——名稱、客戶名、收費模式、狀態。淨係用嚟答「公司有咩盤」「邊啲盤仲 active」呢類*全公司盤名單*問題。**唔係**用嚟答「某個雞頭／某個保安員派咗邊幾個盤」——嗰啲係上一輪話題嘅追問，要用 broker_stats（帶 broker）或者 shift_history。要「盤:view」。",
     inputSchema: z
       .object({
         include_inactive: z.boolean().optional().describe("連已結束/暫停嘅盤都列（預設 false，只列 active）"),

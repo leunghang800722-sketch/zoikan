@@ -13,14 +13,15 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "broker_stats",
     description:
-      "睇雞頭喺某個月嘅更次統計——幾多更、幾多安員、（有出街價權限先見到）出街價合計。回傳帶 broker_display_name（雞頭顯示名，答用戶一律用呢個，唔准用 broker_code）；有啲盤啲卡源頭冇拆開保安員工資/雞頭費，呢啲雞頭嘅 fee_split=\"combined\"，broker_fee_total 會係 null（唔係 0，唔准話雞頭費係 0，只可以講出街價合計）；公司長工（internal_longterm）桶嘅 payout_total 一律 null＋payout_note（月薪唔計逐更出街價，唔准答出街價 0）。仲帶 latest_month_with_data（呢個盤/全公司最近有記錄嘅月份）——查嗰個月冇數就可以用嚟自動退一步答（唔使再問用戶）。可選 site 篩選淨係睇某個盤。要「更表:view」。",
+      "睇雞頭喺某個月嘅更次統計——幾多更、幾多安員、（有出街價權限先見到）出街價合計。回傳帶 broker_display_name（雞頭顯示名，答用戶一律用呢個，唔准用 broker_code）；有啲盤啲卡源頭冇拆開保安員工資/雞頭費，呢啲雞頭嘅 fee_split=\"combined\"，broker_fee_total 會係 null（唔係 0，唔准話雞頭費係 0，只可以講出街價合計）；公司長工（internal_longterm）桶嘅 payout_total 一律 null＋payout_note（月薪唔計逐更出街價，唔准答出街價 0）。仲帶 latest_month_with_data（呢個盤/全公司最近有記錄嘅月份）——查嗰個月冇數就可以用嚟自動退一步答（唔使再問用戶）。可選 site 篩選淨係睇某個盤。**可選 broker（雞頭名／代號關鍵字）淨係睇一個雞頭，同時回傳 sites（呢個雞頭嗰個月逐盤嘅更數／保安員數，按更數排）＋site_count——用戶問「某個雞頭派咗邊幾個盤」「佢啲更分布喺邊幾個盤」「邊個盤最多」，或者上一輪問完某個雞頭之後跟住問「有邊幾個盤」，一律用呢個帶 broker 嘅查法，唔好用 list_sites（嗰個係全公司盤名單）。要「更表:view」。",
     inputSchema: z
       .object({
         site: z.string().optional().describe("盤名稱（可選，唔填即全公司）"),
+        broker: z.string().optional().describe("雞頭名／代號關鍵字（可選）——填咗就淨係回呢個雞頭，並帶 sites 逐盤分佈；用戶講「阿淦」呢類暱稱，填「淦」"),
         month: monthParam,
       })
       .strict(),
-    run: async ({ site, month }) => {
+    run: async ({ site, broker, month }) => {
       const denied = await requireModuleOrDenied(ctx, "更表");
       if (denied) return deniedResult(denied);
 
@@ -35,6 +36,15 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
         params.push(siteRows[0].id);
         siteFilter = `AND sr.site_id = $${params.length}`;
       }
+      // 雞頭篩選：用戶口語「阿淦」→ 去掉開頭「阿」再對 name／code（ILIKE 包含）
+      let brokerFilter = "";
+      let brokerKeyword: string | null = null;
+      if (broker && broker.trim()) {
+        brokerKeyword = broker.trim().replace(/^阿/, "");
+        params.push(`%${brokerKeyword}%`);
+        brokerFilter = `AND (b.name ILIKE $${params.length} OR b.code ILIKE $${params.length})`;
+      }
+      const siteIdParam = site ? params[1] : null; // params[1] = 上面搵到嘅 site id（params[0] 係 monthStart）
 
       const { rows } = await aiQuery(
         `SELECT b.id AS broker_id, b.code AS broker_code, b.name AS broker_name, b.kind,
@@ -45,7 +55,7 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
                 SUM(COALESCE(sr.guard_wage_snapshot, 0) + COALESCE(sr.broker_fee_snapshot, 0)) AS payout_total
          FROM ai.shift_records sr
          JOIN ai.brokers b ON b.id = COALESCE(sr.operational_broker_id, sr.settlement_broker_id)
-         WHERE sr.work_date >= $1::date AND sr.work_date < ($1::date + INTERVAL '1 month') ${siteFilter}
+         WHERE sr.work_date >= $1::date AND sr.work_date < ($1::date + INTERVAL '1 month') ${siteFilter} ${brokerFilter}
          GROUP BY b.id, b.code, b.name, b.kind
          ORDER BY shift_count DESC
          LIMIT 200`,
@@ -113,7 +123,7 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
         `SELECT COUNT(DISTINCT sr.guard_id) AS guard_count
          FROM ai.shift_records sr
          JOIN ai.brokers b ON b.id = COALESCE(sr.operational_broker_id, sr.settlement_broker_id)
-         WHERE sr.work_date >= $1::date AND sr.work_date < ($1::date + INTERVAL '1 month') ${siteFilter}`,
+         WHERE sr.work_date >= $1::date AND sr.work_date < ($1::date + INTERVAL '1 month') ${siteFilter} ${brokerFilter}`,
         params,
       );
       const totalGuardCount = Number((guardTotalRows[0] as { guard_count?: unknown } | undefined)?.guard_count ?? 0);
@@ -125,20 +135,64 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
       const latestMonthParams: unknown[] = [];
       let latestMonthSiteFilter = "";
       if (site) {
-        latestMonthParams.push(params[1]); // params[1] = 上面搵到嘅 site id（params[0] 係 monthStart）
-        latestMonthSiteFilter = "AND sr.site_id = $1";
+        latestMonthParams.push(siteIdParam);
+        latestMonthSiteFilter = `AND sr.site_id = $${latestMonthParams.length}`;
+      }
+      if (brokerKeyword !== null) {
+        latestMonthParams.push(`%${brokerKeyword}%`);
+        latestMonthSiteFilter += ` AND (b.name ILIKE $${latestMonthParams.length} OR b.code ILIKE $${latestMonthParams.length})`;
       }
       const { rows: latestMonthRows } = await aiQuery(
         `SELECT to_char(MAX(sr.work_date), 'YYYY-MM') AS latest_month
          FROM ai.shift_records sr
+         JOIN ai.brokers b ON b.id = COALESCE(sr.operational_broker_id, sr.settlement_broker_id)
          WHERE 1=1 ${latestMonthSiteFilter}`,
         latestMonthParams,
       );
       const latestMonthWithData = (latestMonthRows[0] as { latest_month?: string | null } | undefined)?.latest_month ?? null;
 
+      // 雞頭篩選時：逐盤分佈（答「派咗邊幾個盤」「邊個盤最多」用），
+      // 按更數排，最多 200 個盤；出街價合計淨係有結算權限先帶。
+      let sitesBreakdown: Record<string, unknown>[] | undefined;
+      if (brokerKeyword !== null) {
+        const siteParams: unknown[] = [monthStart, `%${brokerKeyword}%`];
+        let siteScope = "";
+        if (siteIdParam) {
+          siteParams.push(siteIdParam);
+          siteScope = `AND sr.site_id = $${siteParams.length}`;
+        }
+        const { rows: siteRows } = await aiQuery(
+          `SELECT s.canonical_name AS site_name,
+                  COUNT(*) FILTER (WHERE sr.record_type = 'shift') AS shift_count,
+                  COUNT(DISTINCT sr.guard_id) AS guard_count,
+                  SUM(COALESCE(sr.guard_wage_snapshot, 0) + COALESCE(sr.broker_fee_snapshot, 0)) AS payout_total
+           FROM ai.shift_records sr
+           JOIN ai.brokers b ON b.id = COALESCE(sr.operational_broker_id, sr.settlement_broker_id)
+           JOIN ai.sites s ON s.id = sr.site_id
+           WHERE sr.work_date >= $1::date AND sr.work_date < ($1::date + INTERVAL '1 month')
+             AND (b.name ILIKE $2 OR b.code ILIKE $2) ${siteScope}
+           GROUP BY s.id, s.canonical_name
+           ORDER BY shift_count DESC, s.canonical_name
+           LIMIT 200`,
+          siteParams,
+        );
+        sitesBreakdown = siteRows.map((r) => {
+          const row: Record<string, unknown> = { site_name: r.site_name, shift_count: r.shift_count, guard_count: r.guard_count };
+          if (ctx.fieldVisibility.settlementVisible) row.payout_total = r.payout_total;
+          return row;
+        });
+      }
       return toolResultJson({
         month,
         site: site ?? null,
+        broker: brokerKeyword,
+        ...(sitesBreakdown !== undefined
+          ? {
+              site_count: sitesBreakdown.length,
+              sites: sitesBreakdown,
+              sites_note: "sites 係呢個雞頭喺呢個月逐盤嘅更數分佈（已按更數排，shift_count 全部加埋＝totals.shift_count），答「派咗邊幾個盤」直接用呢個列表，唔使再查盤名單。",
+            }
+          : {}),
         brokers: shaped,
         latest_month_with_data: latestMonthWithData,
         totals: {
