@@ -1,13 +1,11 @@
+// P2-WP-R3：尚欠總覽頁（README §15，同首頁 §02 共用 ShortfallDashboard，
+// 只有 kicker／H1 唔同——見該 component 註解）。
+import { redirect } from "next/navigation";
+import { getCurrentSession } from "@/lib/auth/current-session";
 import ShortfallDashboard from "../../ShortfallDashboard";
 
-export default function ShortfallPage() {
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-gray-900">尚欠總覽</h1>
-        <p className="text-sm text-gray-500">今日各盤出勤 vs 所需；待審批數；本月毛利進度。</p>
-      </div>
-      <ShortfallDashboard />
-    </div>
-  );
+export default async function ShortfallPage() {
+  const session = await getCurrentSession();
+  if (!session) redirect("/login");
+  return <ShortfallDashboard variant="overview" userName={session.name} roleLabel={session.roleName} />;
 }
