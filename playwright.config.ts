@@ -3,6 +3,9 @@
 // 就用 `npm run dev` 自己起（reuseExistingServer 保證唔會撞埠）。
 import { defineConfig, devices } from "@playwright/test";
 
+// 並行 worktree 各自跑 e2e 時可用 PW_PORT 換 port（預設 3000），避免撞埋同一個 dev server。
+const PW_PORT = Number(process.env.PW_PORT) || 3000;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 60_000,
@@ -12,13 +15,13 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: `http://localhost:${PW_PORT}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:3000",
+    command: `npm run dev -- -p ${PW_PORT}`,
+    url: `http://localhost:${PW_PORT}`,
     reuseExistingServer: true,
     timeout: 120_000,
     // WP-AI2：`tests/e2e/ai.spec.ts` 側欄 AI 助手 e2e 唔打真 AI Hub——
