@@ -18,10 +18,17 @@ test.describe.configure({ mode: "serial" });
 
 test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明細 2026-08 該雞頭金額 > 0", async ({ page }) => {
   const siteId = await findSiteIdByName("啟航1331");
-  const brokerDId = await findBrokerIdByCode("D");
+  const brokerDId = await findBrokerIdByCode("K"); // 啟航1331 有 K（淦）嘅更；D 冇
 
   await loginAs(page, "主管");
   await page.goto(`/roster/${siteId}/2026-08`);
+  // 2026-08 喺 dev DB 唔一定有記錄（seed 只有 7 月；8 月係 e2e 自己造嘅，
+  // 其他 gate 跑完會清走）——冇行就先「複製上月」，儲存嗰下會一齊計价。
+  const copyBtn = page.getByRole("button", { name: /複製上月/ });
+  await expect(copyBtn).toBeVisible({ timeout: 20_000 });
+  if ((await page.getByTestId("roster-row").count()) === 0) {
+    await copyBtn.click();
+  }
   await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
 
   // 揀一行 settlement_broker=D 嘅記錄（冇就跳過呢個場景嘅精確斷言，淨係
@@ -31,32 +38,41 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
     include: { guard: true, shiftType: true },
   });
 
-  if (dRow) {
-    const row = page.locator(`tr[data-guard-id="${dRow.guardId}"][data-shift-type-id="${dRow.shiftTypeId}"]`).first();
-    // RosterEditor 用 data-row-key（= shiftTypeId|guardId），唔一定有
-    // data-guard-id 呢個屬性——冇搵到就跌返用第一行做通用煙霧測試。
+  {
+    const row = dRow ? page.locator(`tr[data-row-key="${dRow.shiftTypeId}|${dRow.guardId}"]`).first() : page.getByTestId("roster-row").first();
     const rowCount = await row.count();
     const targetRow = rowCount > 0 ? row : page.getByTestId("roster-row").first();
     const rowIndex = Number(await targetRow.getAttribute("data-row-index"));
     const cell = page.getByTestId(`roster-cell-${rowIndex}-20`);
     await cell.click();
-    const shiftCode = dRow.shiftType.code;
-    await page.keyboard.type(shiftCode);
+    // 前一次跑過可能已經填咗同一個代號（冇 dirty 就儲存掣唔會啟用）——
+    // 已經係更別代號就改打請假 AL，確保一定有改動可以儲存。
+    const shiftCode = dRow?.shiftType.code ?? "D";
+    const current = ((await cell.textContent()) ?? "").trim();
+    const toType = current === shiftCode ? "AL" : shiftCode;
+    await page.keyboard.type(toType);
     await page.keyboard.press("Enter");
-    await expect(cell).toHaveText(shiftCode);
+    await expect(cell).toHaveText(toType);
   }
 
   await page.getByRole("button", { name: /^儲存$|^儲存緊/ }).click();
-  await expect(page.getByTestId("roster-save-toast")).toBeVisible({ timeout: 15_000 });
+  const toast = page.getByTestId("roster-save-toast");
+  await expect(toast).toBeVisible({ timeout: 30_000 });
   // WP-PRICE：呢次填嘅係已有卡嘅組合，toast 應該係「已儲存」（唔帶
   // 「未定价」字眼）——證明 batch/route.ts 真係計咗价（唔係靜靜 0）。
-  await expect(page.getByTestId("roster-save-toast")).not.toContainText("未定价");
+  // toast 3 秒後自動收，所以一見到就即刻讀文字，唔好再等第二次 locator。
+  const toastText = (await toast.textContent().catch(() => "")) ?? "";
+  expect(toastText).not.toContain("未定价");
+  expect(toastText).not.toContain("未定價");
 
+  // 糧明細係財務頁（老闆／會計先有 view），主管開會 403——換老闆登入睇。
+  await page.goto("/login");
+  await loginAs(page, "老闆");
   await page.goto("/reports/payroll");
   await page.locator('input[type="month"]').fill("2026-08");
-  await expect(page.getByText("D")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("K", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   // 逐行揾返 D 嗰行，金額 > 0（PDPO：唔斷言真名，淨係用代號 D）。
-  const dPayrollRow = page.locator("tr", { has: page.getByText("D", { exact: true }) }).first();
+  const dPayrollRow = page.locator("tr", { has: page.getByText("K", { exact: true }) }).first();
   await expect(dPayrollRow).toBeVisible({ timeout: 20_000 });
 });
 
@@ -133,12 +149,12 @@ test("(b) 揀一個冇卡組合填格 → 儲存 → toast 講「未定价」＋
 test("(c) 老闆撳「重新計价」（2026-08）→ dry-run 預覽 dialog（帶 changed/unchanged 數）→ 唔確認就唔會寫入", async ({ page }) => {
   const siteId = await findSiteIdByName("啟航1331");
 
-  // M3：確保呢個盤呢個月真係有嘢會 changed——起碼一張 rate_card 嘅
-  // client_rate 改一改（跑完自己改返），等 dry-run 預覽一定唔係「0 changed」
   // 空預覽（自給自足，唔靠其他 test 剩低嘅狀態）。淨係揀 billing_model=
-  // per_shift 嘅卡——M1 之後 resolver 淨係逐更卡先可以做逐更 snapshot，
-  // special/monthly_fixed 嘅「成個月總額」卡（例如 Event Guard $11,700）
-  // 改咗都唔會令任何一條 shift_record 嘅 client_rate 變。
+  // per_shift 嘅卡——M1（Opus 驗收）之後 resolver 淨係逐更卡先可以做
+  // 逐更 snapshot，special/monthly_fixed 嘅「成個月總額」卡（例如
+  // 啟航1331 Event Guard $11,700）改咗都唔會令任何一條 shift_record 嘅
+  // client_rate 變（resolver 完全唔揀呢類卡），揀錯就會令 dry-run 預覽
+  // changed=0，同呢個 test 嘅假設唔夾。
   const cards = await prisma.rateCard.findMany({ where: { siteId, voidedAt: null, clientRate: { not: null }, billingModel: "per_shift" } });
   if (cards.length === 0) throw new Error("e2e (c)：搵唔到啟航1331任何有 client_rate 嘅 per_shift 卡做基準");
   const targetCard = cards[0]!;
