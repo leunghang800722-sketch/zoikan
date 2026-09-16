@@ -123,28 +123,44 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteFilter, skip]);
 
-  // WP-PRICE（老闆 2026-09-16 拍板）：「重新計价」——用「生效月」篩選器
-  // 揀嘅月份（冇揀就用返家陣個月），撳前 confirm（會覆蓋現有 snapshot，
-  // 唔只 null）。同 payroll/roster 頁一樣嘅設計。
+  // WP-PRICE §M3（老闆 2026-09-16 拍板）：「重新計价」——用「生效月」
+  // 篩選器揀嘅月份（冇揀就用返家陣個月）。改為 dry-run 預覽→confirm→
+  // 先至真係 dry_run:false 寫入，同 payroll/roster 頁一樣嘅設計。
   const [repricing, setRepricing] = useState(false);
   async function handleReprice() {
     if (repricing) return;
     const month = effectiveMonthFilter || new Date().toISOString().slice(0, 7);
     const scopeLabel = siteFilter ? (sites.find((s) => s.id === siteFilter)?.canonical_name ?? "呢個盤") : "全部盤";
-    if (!window.confirm(`確定要重新計价 ${month}（${scopeLabel}）？呢個操作會用現時價目卡覆蓋呢段月份嘅收客價／出街價 snapshot。`)) return;
     setRepricing(true);
     setError(null);
     setNotice(null);
-    const res = await apiPost<{ repriced: number; unpriced: number }>("/api/shift-records/reprice", {
-      month,
-      ...(siteFilter ? { site_id: siteFilter } : {}),
-    });
+    const body = { month, dry_run: true, ...(siteFilter ? { site_id: siteFilter } : {}) };
+    const preview = await apiPost<{ changed: number; unchanged: number; kept_unresolved: number; unpriced: number }>("/api/shift-records/reprice", body);
+    if (!preview.ok) {
+      setRepricing(false);
+      setError(preview.message);
+      return;
+    }
+    if (preview.data.changed === 0) {
+      setRepricing(false);
+      setNotice(`重新計价預覽：${month}（${scopeLabel}）冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定价。冇嘢寫入。`);
+      return;
+    }
+    const keptNote = preview.data.kept_unresolved > 0 ? `（其中 ${preview.data.kept_unresolved} 更搵唔到對應卡，保留原有 snapshot）` : "";
+    const proceed = window.confirm(
+      `重新計价預覽 ${month}（${scopeLabel}）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定价。確定要寫入？`,
+    );
+    if (!proceed) {
+      setRepricing(false);
+      return;
+    }
+    const res = await apiPost<{ repriced: number; unpriced: number }>("/api/shift-records/reprice", { ...body, dry_run: false });
     setRepricing(false);
     if (!res.ok) {
       setError(res.message);
       return;
     }
-    setNotice(`重新計价完成：${res.data.repriced} 更已重算，仲有 ${res.data.unpriced} 更未定价。`);
+    setNotice(`重新計价完成：${res.data.repriced} 更已改寫，仲有 ${res.data.unpriced} 更未定价。`);
   }
 
   useEffect(() => {

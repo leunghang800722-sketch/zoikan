@@ -28,12 +28,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       status: "confirmed",
     };
     if (before.clientRateSnapshot === null || before.guardWageSnapshot === null || before.brokerFeeSnapshot === null) {
-      const brokerForPricing = before.settlementBrokerId
-        ? await prisma.broker.findUnique({ where: { id: before.settlementBrokerId }, select: { kind: true } })
-        : null;
+      const [brokerForPricing, shiftTypeForPricing] = await Promise.all([
+        before.settlementBrokerId ? prisma.broker.findUnique({ where: { id: before.settlementBrokerId }, select: { kind: true } }) : Promise.resolve(null),
+        prisma.shiftType.findUniqueOrThrow({ where: { id: before.shiftTypeId }, select: { code: true } }),
+      ]);
       const pricing = await resolveShiftPricing({
         siteId: before.siteId,
         shiftTypeId: before.shiftTypeId,
+        shiftTypeCode: shiftTypeForPricing.code,
         settlementBrokerId: before.settlementBrokerId,
         brokerKind: brokerForPricing?.kind ?? null,
         guardId: before.guardId,

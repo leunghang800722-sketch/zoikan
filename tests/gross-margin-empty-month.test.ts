@@ -163,3 +163,87 @@ describe("WP-PRICE：rate_cards 伸長做無限期之後，零更次月份唔可
     expect(siteRow!.revenue).toBe(30000);
   });
 });
+
+// M2（Opus 驗收，2026-09-16）：之前「零活動月份唔准假營業額」呢條閘
+// 淨係喺 site.billing_model==="monthly_fixed" 先查——special／admin_fee
+// 嘅盤級 flat 卡、更別級 special 卡（例如啟航1331 Event Guard $11,700）
+// 完全冇被呢條閘擋住，零活動月份一樣會計出假營業額。呢度覆蓋 Opus 驗收
+// 明文提到嘅 case：更別級 special 卡（billing_model=special、shift_type_id
+// 有值、broker/guard 皆空）喺零活動月份，revenue 一定要係 0，唔可以列
+// 出 11700。
+describe("M2：更別級／site 級 special、admin_fee 卡——零活動月份都唔准假營業額", () => {
+  const ZERO_ACTIVITY_MONTH = new Date(Date.UTC(2026, 8, 1)); // 2026-09
+  const ACTIVE_MONTH2 = new Date(Date.UTC(2026, 7, 1)); // 2026-08
+  let siteId: string;
+  let shiftTypeId: string;
+
+  beforeAll(async () => {
+    await clearAll();
+    const site = await prisma.site.create({
+      data: {
+        canonicalName: "測試盤-Event Guard special卡",
+        clientName: "測試客戶",
+        billingModel: "per_shift",
+        inScope: true,
+        status: "active",
+        createdBy: "test",
+      },
+    });
+    siteId = site.id;
+    const shiftType = await prisma.shiftType.create({
+      data: { siteId, code: "EVT", billingGroup: "per_shift", createdBy: "test" },
+    });
+    shiftTypeId = shiftType.id;
+    // 更別級 special 卡——唔按更數拆，$11,700 一筆過（同啟航1331 Event
+    // Guard 一致嘅形狀：shift_type_id 有值、broker/guard 皆空、effective_
+    // to=null 無限期）。
+    await prisma.rateCard.create({
+      data: {
+        siteId,
+        shiftTypeId,
+        billingModel: "special",
+        clientRate: 11700,
+        effectiveFrom: new Date(Date.UTC(2026, 6, 1)),
+        effectiveTo: null,
+        createdBy: "test",
+      },
+    });
+  });
+
+  it("gross-margin：零活動月份（2026-09）revenue=0，唔會列出 $11,700 假營業額", async () => {
+    const result = await buildGrossMargin(ZERO_ACTIVITY_MONTH);
+    expect(result.totals.revenue).toBe(0);
+    const siteRow = result.sites.find((s) => s.siteId === siteId);
+    if (siteRow) {
+      // 零活動 site 依家可能因為 A2「全部有 shift_records 嘅盤」擴大條件
+      // 唔出現（呢個 site 本身冇 mainRows 基準），出現嘅話 revenue 一定要 0。
+      expect(siteRow.revenue).toBe(0);
+    }
+  });
+
+  it("monthly-close：零活動月份（2026-09）呢個盤唔會顯示喺 mainRows/outsideRows（唔會夾埋 $11,700）", async () => {
+    const { mainRows, outsideRows } = await buildMonthlyClose(ZERO_ACTIVITY_MONTH);
+    expect(mainRows.some((r) => r.siteId === siteId)).toBe(false);
+    expect(outsideRows.some((r) => r.siteId === siteId)).toBe(false);
+  });
+
+  it("對照組：有活動嘅月份（2026-08）照常計入 $11,700（冇整壞正常情況）", async () => {
+    await prisma.shiftRecord.create({
+      data: {
+        siteId,
+        shiftTypeId,
+        guardId: (
+          await prisma.guard.create({ data: { nameZh: "測試安員", employmentType: "cash_casual", createdBy: "test" } })
+        ).id,
+        workDate: new Date(Date.UTC(2026, 7, 3)),
+        recordType: "shift",
+        status: "confirmed",
+        createdBy: "test",
+      },
+    });
+    const { mainRows } = await buildMonthlyClose(ACTIVE_MONTH2);
+    const row = mainRows.find((r) => r.siteId === siteId);
+    expect(row, "有活動就應該喺 mainRows 出現").toBeDefined();
+    expect(row!.revenue).toBe(11700);
+  });
+});

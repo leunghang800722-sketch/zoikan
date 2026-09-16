@@ -122,8 +122,12 @@ type BatchResponse = {
   warnings: string[];
   pricing?: { priced: number; unpriced: number; unpriced_cells: UnpricedCellSummary[] };
 };
-type UnpricedGroup = { site_id: string; site_name: string; shift_type_code: string; broker_code: string | null; broker_display: string; count: number };
-type UnpricedSummary = { count: number; groups: UnpricedGroup[] };
+// S3：`category` 分「出街价未定」／「收客价未定」（見
+// src/lib/pricing/unpriced.ts）。`payoutCount`/`clientCount` 用
+// `?? 0` fallback——`/api/shift-records/reprice` 嘅 `groups`（handleReprice
+// 撳完之後 setUnpricedSummary 用嗰批）冇呢兩個欄，向下相容。
+type UnpricedGroup = { site_id: string; site_name: string; shift_type_code: string; broker_code: string | null; broker_display: string; category?: "payout_unpriced" | "client_unpriced"; count: number };
+type UnpricedSummary = { count: number; groups: UnpricedGroup[]; payoutCount?: number; clientCount?: number };
 
 // P1-WP3 第三輪規劃裁定（point B(4)）：同步 `prisma/schema.prisma` 嘅
 // `LeaveCode` enum（已經由 `tools/importer/mappings/status_codes.csv`
@@ -1303,23 +1307,41 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     }
   }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum]);
 
-  // WP-PRICE：「重新計价」——價目卡補咗／改咗之後，一鍵將呢個盤呢個月
-  // 全部 shift 記錄嘅 snapshot 追返卡（見 POST /api/shift-records/
-  // reprice）。撳前 confirm（規劃裁定，會覆蓋現有 snapshot，唔只 null）。
+  // WP-PRICE §M3：「重新計价」——價目卡補咗／改咗之後，一鍵將呢個盤呢個
+  // 月全部 shift 記錄嘅 snapshot 追返卡（見 POST /api/shift-records/
+  // reprice）。M3（Opus 驗收「reprice 清空數據」修正）：改為 dry-run 預覽
+  // →確認流程——先用 `dry_run:true`（預設）攞 diff 摘要（changed／
+  // unchanged／kept_unresolved），用 confirm() 俾用戶睇過先至真係
+  // `dry_run:false` 寫入（唔再係「撳咗就即刻覆蓋成個盤」嘅單一 confirm）。
+  type RepriceDryRunResult = { changed: number; unchanged: number; kept_unresolved: number; unpriced: number; groups: UnpricedGroup[] };
   const [repricing, setRepricing] = useState(false);
   const handleReprice = useCallback(async () => {
     if (repricing) return;
-    if (!window.confirm(`確定要重新計价 ${month}（${siteName || siteId}）？呢個操作會用現時價目卡覆蓋呢個盤呢個月全部更次嘅收客價／出街價 snapshot。`)) {
-      return;
-    }
     setRepricing(true);
     try {
-      const res = await apiPost<{ repriced: number; unpriced: number; groups: UnpricedGroup[] }>("/api/shift-records/reprice", { month, site_id: siteId });
+      const preview = await apiPost<RepriceDryRunResult>("/api/shift-records/reprice", { month, site_id: siteId, dry_run: true });
+      if (preview.changed === 0) {
+        window.alert(`重新計价預覽：呢個盤呢個月冇任何更次嘅收客價／出街價會變（同現有 snapshot 一致），${preview.unpriced} 更仍然未定价（冇對應價目卡）。冇嘢寫入。`);
+        setUnpricedSummary({ count: preview.unpriced, groups: preview.groups });
+        return;
+      }
+      const keptNote = preview.kept_unresolved > 0 ? `（其中 ${preview.kept_unresolved} 更資料庫搵唔到對應卡，保留原有 snapshot 唔會清走）` : "";
+      const proceed = window.confirm(
+        `重新計价預覽 ${month}（${siteName || siteId}）：${preview.changed} 更嘅收客價／出街價會改變，${preview.unchanged} 更不變${keptNote}，仲有 ${preview.unpriced} 更未定价。確定要寫入？`,
+      );
+      if (!proceed) {
+        setUnpricedSummary({ count: preview.unpriced, groups: preview.groups });
+        return;
+      }
+      const res = await apiPost<{ repriced: number; changed: number; unchanged: number; kept_unresolved: number; unpriced: number; groups: UnpricedGroup[] }>(
+        "/api/shift-records/reprice",
+        { month, site_id: siteId, dry_run: false },
+      );
       setUnpricedSummary({ count: res.unpriced, groups: res.groups });
       skipExtraRowsResetRef.current = true;
       setReloadTick((t) => t + 1);
       setErrorBanner(null);
-      window.alert(`重新計价完成：${res.repriced} 更已重算，仲有 ${res.unpriced} 更未定价。`);
+      window.alert(`重新計价完成：${res.repriced} 更已改寫，仲有 ${res.unpriced} 更未定价。`);
     } catch (err) {
       setErrorBanner(err instanceof ApiClientError ? err.message : err instanceof Error ? err.message : "重新計价失敗");
     } finally {
@@ -2060,9 +2082,15 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           }
         >
           <p className="font-medium">呢個月有 {unpricedSummary.count} 更未定价（冇對應價目卡），金額未計入報表：</p>
+          {/* S3：分開講「出街价未定」／「收客价未定」（後者淨係逐更盤先算，
+              月費／admin_fee／special 盤 client_rate=null 屬正常）。 */}
+          <p className="text-[12px] opacity-80">
+            出街价未定 {unpricedSummary.payoutCount ?? unpricedSummary.count} 更；收客价未定（逐更盤）{unpricedSummary.clientCount ?? 0} 更
+          </p>
           <ul className="list-disc pl-5 mt-1">
             {unpricedSummary.groups.map((g) => (
-              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+              <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                {g.category === "client_unpriced" ? "收客价未定 · " : "出街价未定 · "}
                 {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
               </li>
             ))}

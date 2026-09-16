@@ -47,7 +47,8 @@ import { LeaveCode, type Prisma, type ShiftRecordStatus } from "@prisma/client";
 // src/lib/pricing/resolve-rate.ts 頂註解。`fetchEffectiveRateCards()`
 // 一次攞晒呢個盤呢個月範圍嘅有效卡，`resolveShiftPricingFromCards()`
 // 喺記憶體逐格揀價，唔逐格打 DB。
-import { fetchEffectiveRateCards, resolveShiftPricingFromCards, type ResolvedShiftPricing } from "@/lib/pricing/resolve-rate";
+import { fetchEffectiveRateCards, resolveShiftPricingFromCards, isUnpricedShift, type ResolvedShiftPricing } from "@/lib/pricing/resolve-rate";
+import { n } from "@/lib/reports/money";
 
 const LEAVE_CODES = new Set<string>(Object.values(LeaveCode));
 
@@ -219,6 +220,16 @@ export async function POST(req: Request) {
     // 揀價（`resolveShiftPricingFromCards`），唔逐格打 DB。淨係
     // record_type=shift 先計「未定价」統計（leave 冇「呢更嘅價」呢個
     // 概念，resolver 本身對 leave 已經回全 null＋unpriced:false）。
+    //
+    // S4（Opus 驗收）：舊版每次都無條件覆寫已存在記錄嘅 snapshot——人手
+    // 改過嘅出街價／收客價會被靜靜計返覆蓋（例如老闆手動補咗一個特殊
+    // 價，之後個雞頭改咗呢格另一個唔相干欄位，snapshot 又俾 resolver
+    // 計出嚟嘅「標準價」蓋走）。而家淨係下面四種情況先重計：
+    //   1. 新建記錄（existingId=null）；
+    //   2. record_type 變咗（shift↔leave）；
+    //   3. settlement_broker 變咗（邊個雞頭出糧變咗，出街價自然要追）；
+    //   4. 現存三個 snapshot 全部 null（本身就未定价，冇嘢好「保留」）。
+    // 其他情況（改嘅淨係狀態／清咗又填返同一個值等）保留現有 snapshot。
     const upsertPlans = plans.filter((p): p is Extract<PlannedOp, { kind: "upsert" }> => p.kind === "upsert");
     const pricingBrokerIds = [...new Set(upsertPlans.map((p) => p.settlementBrokerId).filter((v): v is string => v !== null))];
     const pricingBrokers = pricingBrokerIds.length
@@ -233,16 +244,40 @@ export async function POST(req: Request) {
     let pricedCount = 0;
     let unpricedCount = 0;
     for (const plan of upsertPlans) {
-      plan.pricing = resolveShiftPricingFromCards(rateCards, {
-        siteId: parsed.site_id,
-        shiftTypeId: plan.cell.shift_type_id,
-        settlementBrokerId: plan.settlementBrokerId,
-        brokerKind: plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null,
-        guardId: plan.cell.guard_id,
-        workDate: plan.cell.work_date,
-        isExternal: plan.existingIsExternal,
-        recordType: plan.recordType,
-      });
+      const key = `${plan.cell.guard_id}|${plan.cell.work_date.toISOString().slice(0, 10)}|${plan.cell.shift_type_id}`;
+      const existingRecord = plan.existingId ? (existingByKey.get(key) ?? null) : null;
+      const allSnapshotNull = existingRecord
+        ? existingRecord.clientRateSnapshot === null && existingRecord.guardWageSnapshot === null && existingRecord.brokerFeeSnapshot === null
+        : false;
+      const brokerChanged = existingRecord ? existingRecord.settlementBrokerId !== plan.settlementBrokerId : false;
+      const recordTypeChanged = existingRecord ? existingRecord.recordType !== plan.recordType : false;
+      const shouldReprice = !existingRecord || brokerChanged || recordTypeChanged || allSnapshotNull;
+
+      if (shouldReprice) {
+        plan.pricing = resolveShiftPricingFromCards(rateCards, {
+          siteId: parsed.site_id,
+          shiftTypeId: plan.cell.shift_type_id,
+          shiftTypeCode: shiftTypeById.get(plan.cell.shift_type_id)?.code ?? "",
+          settlementBrokerId: plan.settlementBrokerId,
+          brokerKind: plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null,
+          guardId: plan.cell.guard_id,
+          workDate: plan.cell.work_date,
+          isExternal: plan.existingIsExternal,
+          recordType: plan.recordType,
+        });
+      } else {
+        // S4：保留現有 snapshot（人手改過嘅數唔可以被靜靜覆蓋）。
+        const brokerKind = plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null;
+        const guardWage = existingRecord!.guardWageSnapshot !== null ? n(existingRecord!.guardWageSnapshot) : null;
+        const brokerFee = existingRecord!.brokerFeeSnapshot !== null ? n(existingRecord!.brokerFeeSnapshot) : null;
+        plan.pricing = {
+          clientRate: existingRecord!.clientRateSnapshot !== null ? n(existingRecord!.clientRateSnapshot) : null,
+          guardWage,
+          brokerFee,
+          source: {},
+          unpriced: isUnpricedShift({ recordType: plan.recordType, status: "confirmed", guardWageSnapshot: guardWage, brokerFeeSnapshot: brokerFee }, brokerKind),
+        };
+      }
       if (plan.recordType !== "shift") continue; // leave 唔計入「未定价」統計
       if (plan.pricing.unpriced) {
         unpricedCount++;

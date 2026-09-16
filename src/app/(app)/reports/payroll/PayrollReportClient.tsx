@@ -82,19 +82,39 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
     })();
   }, [month, reloadTick]);
 
-  // WP-PRICE：「重新計价」——見 src/app/(app)/roster/[site]/[month]/
-  // RosterEditor.tsx 同一段設計註解（撳前 confirm，覆蓋整段月份 snapshot）。
+  // WP-PRICE §M3：「重新計价」——見 src/app/(app)/roster/[site]/[month]/
+  // RosterEditor.tsx 同一段設計註解——dry-run 預覽（diff 摘要）→ confirm
+  // →先至真係 dry_run:false 寫入（唔再係單一 confirm 就直接覆蓋）。
   const handleReprice = useCallback(async () => {
     if (repricing) return;
-    if (!window.confirm(`確定要重新計价 ${month}（全公司）？呢個操作會用現時價目卡覆蓋呢個月全部盤嘅收客價／出街價 snapshot。`)) return;
     setRepricing(true);
     try {
-      const res = await apiPost<{ repriced: number; unpriced: number; groups: UnpricedGroup[] }>("/api/shift-records/reprice", { month });
+      const preview = await apiPost<{ changed: number; unchanged: number; kept_unresolved: number; unpriced: number; groups: UnpricedGroup[] }>(
+        "/api/shift-records/reprice",
+        { month, dry_run: true },
+      );
+      if (!preview.ok) {
+        setError(preview.message);
+        return;
+      }
+      if (preview.data.changed === 0) {
+        window.alert(`重新計价預覽：呢個月全公司冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定价。冇嘢寫入。`);
+        return;
+      }
+      const keptNote = preview.data.kept_unresolved > 0 ? `（其中 ${preview.data.kept_unresolved} 更搵唔到對應卡，保留原有 snapshot）` : "";
+      if (
+        !window.confirm(
+          `重新計价預覽 ${month}（全公司）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定价。確定要寫入？`,
+        )
+      ) {
+        return;
+      }
+      const res = await apiPost<{ repriced: number; unpriced: number; groups: UnpricedGroup[] }>("/api/shift-records/reprice", { month, dry_run: false });
       if (!res.ok) {
         setError(res.message);
         return;
       }
-      window.alert(`重新計价完成：${res.data.repriced} 更已重算，仲有 ${res.data.unpriced} 更未定价。`);
+      window.alert(`重新計价完成：${res.data.repriced} 更已改寫，仲有 ${res.data.unpriced} 更未定价。`);
       setReloadTick((t) => t + 1);
     } finally {
       setRepricing(false);

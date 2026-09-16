@@ -427,11 +427,14 @@ export const ShiftRecordBatchSchema = z
   .strict();
 
 // WP-PRICE：`POST /api/shift-records/reprice`——重新計价，`site_id` 冇填
-// 即係成個月全部盤。
+// 即係成個月全部盤。S5（Opus 驗收）：月份格式收緊做真日曆月（01-12），
+// 唔止「四位數字」。M3：`dry_run` 預設 true——一定要用戶睇過預覽（diff
+// 摘要）先至可以確認 `dry_run:false` 真係寫入。
 export const ShiftRecordRepriceSchema = z
   .object({
-    month: z.string().regex(/^\d{4}-\d{2}$/, "月份格式要係 YYYY-MM"),
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "月份格式要係 YYYY-MM（01-12）"),
     site_id: uuid.optional(),
+    dry_run: z.boolean().optional(),
   })
   .strict();
 

@@ -211,24 +211,37 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   // 呢度淨係「先查有冇活動」，冇活動就強制剝走 `flatCardBySite` 嘅
   // entry（就算上面已經有卡直接命中都要剝）；有活動先睇要唔要行 pro-rata
   // fallback。
+  // M2（Opus 驗收，2026-09-16）：之前呢條閘淨係喺
+  // `site.billingModel === "monthly_fixed"` 先查——令 admin_fee／special
+  // 嘅盤級 flat 卡（同上面加咗入 `flatCardBySite` 嘅更別級 special 卡）
+  // 完全冇被「零活動」閘擋住。而家逐個「有 flatCardBySite entry」（嚟自
+  // flatCards／shiftTypeSpecialCards，唔理 billing_model 係邊種）*或者*
+  // 可能行 monthly_fixed pro-rata fallback 嘅 site，都查呢個月係咪真係
+  // 有活動（非 cancelled 記錄）。
   const monthlyFeeNoActivitySiteIds = new Set<string>();
-  for (const site of sites) {
-    if (site.billingModel !== "monthly_fixed" || !site.monthlyFee) continue;
+  const nonPerShiftCandidateSiteIds = new Set<string>([
+    ...flatCardBySite.keys(),
+    ...sites.filter((s) => s.billingModel === "monthly_fixed" && s.monthlyFee).map((s) => s.id),
+  ]);
+  for (const siteId of nonPerShiftCandidateSiteIds) {
+    const site = siteById.get(siteId);
+    if (!site) continue;
     const hasAnyRecordThisMonth =
-      (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END } } })) > 0 ||
-      (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0;
+      (await prisma.shiftRecord.count({ where: { siteId, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } })) > 0 ||
+      (await prisma.dailyRequirement.count({ where: { siteId, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0;
     if (!hasAnyRecordThisMonth) {
-      flatCardBySite.delete(site.id);
-      monthlyFeeNoActivitySiteIds.add(site.id);
+      flatCardBySite.delete(siteId);
+      monthlyFeeNoActivitySiteIds.add(siteId);
       continue;
     }
-    if (flatCardBySite.has(site.id)) continue; // 已經有卡直接命中，唔使 fallback 公式
+    if (flatCardBySite.has(siteId)) continue; // 已經有卡直接命中（或者更別 special 卡已加），唔使 fallback 公式
+    if (site.billingModel !== "monthly_fixed" || !site.monthlyFee) continue; // pro-rata 公式 fallback 淨係 monthly_fixed 先有
     const posts = site.monthlyPosts ?? 1;
     const fullFee = n(site.monthlyFee) * posts;
     const basis = site.prorataBasis ?? "div_31";
     const denom = basis === "div_month_days" ? new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0)).getUTCDate() : 31;
     const numer = denom; // 已知限制：冇逐月 SL 輸入機制，預設足月（見 monthly-close.ts 同一段註解）
-    flatCardBySite.set(site.id, round2((fullFee * numer) / denom));
+    flatCardBySite.set(siteId, round2((fullFee * numer) / denom));
   }
 
   // 1. per_shift 正更——逐條記錄（要 rescue_rate 覆寫，唔可以淨係

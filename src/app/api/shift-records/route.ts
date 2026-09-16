@@ -64,12 +64,15 @@ export async function GET(req: Request) {
   });
 }
 
-async function assertShiftTypeBelongsToSite(shiftTypeId: string, siteId: string): Promise<void> {
+async function assertShiftTypeBelongsToSite(shiftTypeId: string, siteId: string): Promise<string> {
   // S2：shift_type.site_id 一定要同傳入嘅 site_id 一致，否則 400（防止
-  // 夾錯／夾撞另一個盤嘅更別）。
-  const st = await prisma.shiftType.findUnique({ where: { id: shiftTypeId }, select: { siteId: true } });
+  // 夾錯／夾撞另一個盤嘅更別）。順便攞返 code——WP-PRICE resolver 要
+  // 知道係咪 code="PR"（糧明細生成 reconciliation placeholder），見
+  // src/lib/pricing/resolve-rate.ts `ResolveShiftPricingInput.shiftTypeCode`。
+  const st = await prisma.shiftType.findUnique({ where: { id: shiftTypeId }, select: { siteId: true, code: true } });
   if (!st) throw BadRequest("shift_type_id 唔存在");
   if (st.siteId !== siteId) throw BadRequest("shift_type_id 唔屬於呢個 site_id");
+  return st.code;
 }
 
 async function assertParentShiftValid(
@@ -109,7 +112,7 @@ export async function POST(req: Request) {
       // C1：憑空開更＋guard嫁接防線。
       await assertGuardOwnedByBroker(parsedBroker.guard_id, brokerId);
       await assertSiteAssignedToBroker(parsedBroker.site_id, brokerId, workDate);
-      await assertShiftTypeBelongsToSite(parsedBroker.shift_type_id, parsedBroker.site_id);
+      const brokerShiftTypeCode = await assertShiftTypeBelongsToSite(parsedBroker.shift_type_id, parsedBroker.site_id);
       if (parsedBroker.parent_shift_id) {
         await assertParentShiftValid(parsedBroker.parent_shift_id, session, parsedBroker.guard_id, parsedBroker.site_id, brokerId);
       }
@@ -130,6 +133,7 @@ export async function POST(req: Request) {
       const brokerPricing = await resolveShiftPricing({
         siteId: parsedBroker.site_id,
         shiftTypeId: parsedBroker.shift_type_id,
+        shiftTypeCode: brokerShiftTypeCode,
         settlementBrokerId: brokerId,
         brokerKind: broker.kind,
         guardId: parsedBroker.guard_id,
@@ -158,7 +162,7 @@ export async function POST(req: Request) {
     // 內部角色：完整 schema，M1/M3 field-group 寫入閘。
     const parsed = parseBody(ShiftRecordCreateSchema, rawBody);
     await assertFieldGroupWritable(session, "shift_records", parsed);
-    await assertShiftTypeBelongsToSite(parsed.shift_type_id, parsed.site_id);
+    const shiftTypeCode = await assertShiftTypeBelongsToSite(parsed.shift_type_id, parsed.site_id);
     if (parsed.parent_shift_id) {
       const settlementBrokerId = parsed.settlement_broker_id ?? null;
       await assertParentShiftValid(parsed.parent_shift_id, session, parsed.guard_id, parsed.site_id, settlementBrokerId);
@@ -177,6 +181,7 @@ export async function POST(req: Request) {
       const internalPricing = await resolveShiftPricing({
         siteId: parsed.site_id,
         shiftTypeId: parsed.shift_type_id,
+        shiftTypeCode,
         settlementBrokerId,
         brokerKind: brokerForPricing?.kind ?? null,
         guardId: parsed.guard_id,

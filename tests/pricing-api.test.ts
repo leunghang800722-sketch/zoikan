@@ -165,14 +165,30 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     expect(res.status).toBe(409);
   });
 
-  it("老闆重新計价 2026-08：改咗 rate_card 之後，重算完 snapshot 追返新卡值", async () => {
-    // shiftRecordA 本身 snapshot 係 999/700/50（fixture 種嘅舊值）——改
-    // 咗 rateCardBrokerA 嘅價之後，冇重計之前 snapshot 唔會自動變。
+  it("M3：dry_run 預設 true——唔傳 dry_run 就淨係回 diff 摘要，乜都唔寫", async () => {
     await prisma.rateCard.update({ where: { id: fx.rateCardBrokerA.id }, data: { clientRate: 1200, guardWage: 900, brokerFee: 80 } });
 
     const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08" }));
     expect(res.status).toBe(200);
     const body = await res.json();
+    expect(body.dry_run).toBe(true);
+    expect(body.repriced).toBe(0); // dry-run 乜都冇寫
+    expect(body.changed).toBeGreaterThanOrEqual(1);
+
+    // 確認真係冇寫入 DB——snapshot 仍然係 fixture 嘅舊值（999），唔係新卡值（1200）。
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: fx.shiftRecordA.id } });
+    expect(after.clientRateSnapshot?.toString()).toBe("999");
+  });
+
+  it("老闆重新計价 2026-08（dry_run:false）：改咗 rate_card 之後，重算完 snapshot 追返新卡值", async () => {
+    // shiftRecordA 本身 snapshot 係 999/700/50（fixture 種嘅舊值）——改
+    // 咗 rateCardBrokerA 嘅價之後，冇重計之前 snapshot 唔會自動變。
+    await prisma.rateCard.update({ where: { id: fx.rateCardBrokerA.id }, data: { clientRate: 1200, guardWage: 900, brokerFee: 80 } });
+
+    const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", dry_run: false }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.dry_run).toBe(false);
     expect(body.repriced).toBeGreaterThanOrEqual(1);
 
     const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: fx.shiftRecordA.id } });
@@ -181,16 +197,46 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     expect(after.brokerFeeSnapshot?.toString()).toBe("80");
   });
 
-  it("重新計价之後、冇卡嘅記錄回應帶 unpriced 分組", async () => {
+  it("重新計价之後（dry_run:false）、冇卡嘅記錄回應帶 unpriced 分組", async () => {
     await prisma.rateCard.updateMany({ where: { siteId: fx.site.id }, data: { voidedAt: new Date() } });
-    const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08" }));
+    const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", dry_run: false }));
     const body = await res.json();
-    expect(body.unpriced).toBeGreaterThanOrEqual(2); // shiftRecordA + shiftRecordB 都跌返冇卡
+    expect(body.unpriced).toBeGreaterThanOrEqual(2); // shiftRecordA + shiftRecordB 都跌返冇卡（回應嘅 unpriced 分組計及，唔理 M3 keep 咗原值定係本身就 null）
     expect(body.groups.length).toBeGreaterThan(0);
+  });
 
-    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: fx.shiftRecordA.id } });
+  it("M3：真係本身就未定价（snapshot 本身就 null）嘅記錄，搵唔到卡繼續係 null（唔係 kept 出嚟嘅假象）", async () => {
+    await prisma.rateCard.updateMany({ where: { siteId: fx.site.id }, data: { voidedAt: new Date() } });
+    const freshGuard = await prisma.guard.create({ data: { nameZh: "測試新人", employmentType: "cash_casual", createdBy: "test" } });
+    const brandNew = await prisma.shiftRecord.create({
+      data: {
+        workDate: new Date(Date.UTC(2026, 7, 20)),
+        siteId: fx.site.id,
+        shiftTypeId: fx.shiftType.id,
+        guardId: freshGuard.id,
+        settlementBrokerId: fx.brokerA.id,
+        operationalBrokerId: fx.brokerA.id,
+        recordType: "shift",
+        status: "confirmed",
+        createdBy: "test",
+      },
+    });
+    await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", dry_run: false }));
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: brandNew.id } });
     expect(after.guardWageSnapshot).toBeNull();
     expect(after.brokerFeeSnapshot).toBeNull();
+  });
+
+  it("M3：resolver 搵唔到（voidedAt 晒全部卡）就保留原值——kept_unresolved 計及，唔會靜靜清走已有嘅 snapshot", async () => {
+    await prisma.rateCard.updateMany({ where: { siteId: fx.site.id }, data: { voidedAt: new Date() } });
+    const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", dry_run: false }));
+    const body = await res.json();
+    expect(body.kept_unresolved).toBeGreaterThanOrEqual(1);
+    // shiftRecordA 原本 999/700/50 全部搵唔到卡（卡晒 void），全部保留原值。
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: fx.shiftRecordA.id } });
+    expect(after.clientRateSnapshot?.toString()).toBe("999");
+    expect(after.guardWageSnapshot?.toString()).toBe("700");
+    expect(after.brokerFeeSnapshot?.toString()).toBe("50");
   });
 
   it("site_id 篩選：淨係重算指定盤", async () => {
@@ -198,10 +244,28 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     expect(res.status).toBe(200);
   });
 
-  it("寫低 audit_log（action=reprice_month）", async () => {
+  it("S5：site_id 唔存在 → 404", async () => {
+    const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", site_id: "00000000-0000-0000-0000-000000000000" }));
+    expect(res.status).toBe(404);
+  });
+
+  it("S5：月份格式唔啱（例如 13 月）→ 400", async () => {
+    const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-13" }));
+    expect(res.status).toBe(400);
+  });
+
+  it("寫低 audit_log（action=reprice_month，dry_run:false 先至寫）", async () => {
     const before = await prisma.auditLog.count({ where: { action: "reprice_month" } });
-    await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08" }));
+    await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08" })); // dry_run 預設 true
+    const afterDryRun = await prisma.auditLog.count({ where: { action: "reprice_month" } });
+    expect(afterDryRun).toBe(before); // dry-run 唔寫 audit
+
+    await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", dry_run: false }));
     const after = await prisma.auditLog.count({ where: { action: "reprice_month" } });
     expect(after).toBe(before + 1);
+
+    const row = await prisma.auditLog.findFirst({ where: { action: "reprice_month" }, orderBy: { createdAt: "desc" } });
+    const afterPayload = row?.after as { changed_records?: unknown[] } | null;
+    expect(Array.isArray(afterPayload?.changed_records)).toBe(true); // M3：after 含全部 changed 記錄嘅 {id,before,after}
   });
 });
