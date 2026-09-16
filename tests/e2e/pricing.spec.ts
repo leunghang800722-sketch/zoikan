@@ -66,7 +66,7 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
 
   await page.getByRole("button", { name: /^儲存$|^儲存緊/ }).click();
   const toast = page.getByTestId("roster-save-toast");
-  await expect(toast).toBeVisible({ timeout: 30_000 });
+  await expect(toast).toBeVisible({ timeout: 90_000 }); // 冷啟動＋成個月複製儲存可以超過 30s
   // WP-PRICE：呢次填嘅係已有卡嘅組合，toast 應該係「已儲存」（唔帶
   // 「未定价」字眼）——證明 batch/route.ts 真係計咗价（唔係靜靜 0）。
   // toast 3 秒後自動收，所以一見到就即刻讀文字，唔好再等第二次 locator。
