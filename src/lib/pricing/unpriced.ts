@@ -55,6 +55,7 @@ export type UnpricedLookups = {
   brokerKindById: Map<string, BrokerKindLike>;
   brokerCodeById: Map<string, string | null>;
   siteNameById: Map<string, string>;
+  siteBillingModelById: Map<string, string | null>;
   shiftTypeCodeById: Map<string, string>;
   shiftTypeBillingGroupById: Map<string, string>;
 };
@@ -91,6 +92,7 @@ export function computeUnpricedSummary(records: UnpricedRecordLike[], lookups: U
     const clientUnpriced = isClientUnpricedShift(
       { recordType: "shift", status: r.status, clientRateSnapshot: r.clientRateSnapshot, isExternal: r.isExternal },
       shiftTypeBillingGroup,
+      { siteBillingModel: lookups.siteBillingModelById.get(r.siteId) ?? null, brokerKind },
     );
     if (!payoutUnpriced && !clientUnpriced) continue;
     count++;
@@ -148,13 +150,14 @@ export async function buildUnpricedSummary(session: AuthedSession, month: Date, 
   const siteIds = [...new Set(records.map((r) => r.siteId))];
   const [brokers, sites, shiftTypes] = await Promise.all([
     brokerIds.length ? prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, kind: true, code: true } }) : Promise.resolve([]),
-    prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true } }),
+    prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true, billingModel: true } }),
     prisma.shiftType.findMany({ where: { id: { in: [...new Set(records.map((r) => r.shiftTypeId))] } }, select: { id: true, code: true, billingGroup: true } }),
   ]);
   const lookups: UnpricedLookups = {
     brokerKindById: new Map(brokers.map((b) => [b.id, b.kind as BrokerKindLike])),
     brokerCodeById: new Map(brokers.map((b) => [b.id, b.code])),
     siteNameById: new Map(sites.map((s) => [s.id, s.canonicalName])),
+    siteBillingModelById: new Map(sites.map((s) => [s.id, (s.billingModel as string | null) ?? null])),
     shiftTypeCodeById: new Map(shiftTypes.map((s) => [s.id, s.code])),
     shiftTypeBillingGroupById: new Map(shiftTypes.map((s) => [s.id, s.billingGroup])),
   };

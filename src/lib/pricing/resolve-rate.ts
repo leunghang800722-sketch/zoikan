@@ -406,10 +406,18 @@ export function isUnpricedShift(
 export function isClientUnpricedShift(
   record: { recordType: string; status: string; clientRateSnapshot: unknown; isExternal?: boolean },
   shiftTypeBillingGroup: "per_shift" | "monthly_ic" | string,
+  opts: { siteBillingModel?: string | null; brokerKind?: BrokerKindLike } = {},
 ): boolean {
   if (record.recordType !== "shift") return false;
   if (record.status === "cancelled") return false;
   if (record.isExternal === true) return false;
+  // Opus 第三輪 M1：盤層面（site.billing_model）同更別層面（shift_type.
+  // billing_group）**兩層都要係逐更**先有「逐更收客價」呢回事——月費盤
+  // （IFC／九龍企業大廈…）、admin_fee、special 嘅盤唔逐更開單，佢哋嘅
+  // per-shift client_rate_snapshot=null 係正確狀態，唔算未定價；數碼港
+  // CP5「D」（billing_group=monthly_ic，收入喺 CP5 IC 月費）同理。
+  if (opts.siteBillingModel !== undefined && opts.siteBillingModel !== null && opts.siteBillingModel !== "per_shift") return false;
+  if (opts.brokerKind === "external") return false;
   if (shiftTypeBillingGroup !== "per_shift") return false;
   return record.clientRateSnapshot === null || record.clientRateSnapshot === undefined;
 }

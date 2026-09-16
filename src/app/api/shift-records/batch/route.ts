@@ -278,7 +278,10 @@ export async function POST(req: Request) {
       // 應修 S4：is_external 翻轉咗但 snapshot 未追（external 記錄理應
       // snapshot 全 null，若唔係就係狀態變咗但未重計過）。
       const externalStaleInconsistent = existingRecord ? existingRecord.isExternal && !allSnapshotNull : false;
-      const shouldFullReprice = !existingRecord || brokerChanged || recordTypeChanged || allSnapshotNull || externalStaleInconsistent;
+      // Opus 第三輪 S2：既有「PR」對數佔位記錄（7 月源頭轉錄）永不重計——
+      // resolver 對 PR 會計錯拆分，就算月份解鎖都唔准靜靜改寫歷史數。
+      const existingIsPR = !!existingRecord && shiftTypeById.get(plan.cell.shift_type_id)?.code === "PR";
+      const shouldFullReprice = !existingIsPR && (!existingRecord || brokerChanged || recordTypeChanged || allSnapshotNull || externalStaleInconsistent);
 
       const resolverInput = {
         siteId: parsed.site_id,
@@ -295,14 +298,17 @@ export async function POST(req: Request) {
 
       if (shouldFullReprice) {
         plan.pricing = resolveShiftPricingFromCards(rateCards, resolverInput);
-      } else if (existingRecord && (existingClient === null || existingWage === null || existingFee === null)) {
+      } else if (existingRecord && !existingIsPR && (existingClient === null || existingWage === null || existingFee === null)) {
         // 應修 S4：局部補漏——唔夠全部重計嘅門檻，但有部份欄位係 null，
         // resolver 計一次，淨係補嗰個 null 欄位，非 null 嘅欄位原封不動。
         const resolved = resolveShiftPricingFromCards(rateCards, resolverInput);
         const brokerKind = plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null;
+        // Opus 第三輪 S3：同 reprice 一致——長工／外部記錄嘅 wage/fee 永不
+        // 由 resolver 補（長工月薪制、外部唔係我哋成本），只可能補收客價。
+        const payoutFrozen = brokerKind === "internal_longterm" || brokerKind === "external" || plan.existingIsExternal;
         const mergedClient = existingClient !== null ? existingClient : resolved.clientRate;
-        const mergedWage = existingWage !== null ? existingWage : resolved.guardWage;
-        const mergedFee = existingFee !== null ? existingFee : resolved.brokerFee;
+        const mergedWage = existingWage !== null ? existingWage : payoutFrozen ? null : resolved.guardWage;
+        const mergedFee = existingFee !== null ? existingFee : payoutFrozen ? null : resolved.brokerFee;
         plan.pricing = {
           clientRate: mergedClient,
           guardWage: mergedWage,

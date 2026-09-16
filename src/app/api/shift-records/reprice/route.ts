@@ -23,6 +23,7 @@
 // 條）；`findMany` 用 `select`（唔攞成行）；盤級卡查詢用 `Promise.all`。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
+import { scopeShiftRecordWhere } from "@/lib/broker-isolation";
 import { isMonthLocked, monthStart } from "@/lib/month-lock";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
@@ -96,13 +97,16 @@ export async function POST(req: Request) {
       throw Conflict(`${parsed.month} 已鎖定，唔可以重新計价`);
     }
 
+    // Opus 第三輪 S1：dry-run 同 commit 後嘅 buildUnpricedSummary() 一樣行
+    // scopeShiftRecordWhere()（現時只有老闆有 出街價:update，唔受隔離；
+    // 但自訂內部角色一旦獲授權，兩個數要一致）。
     const records = await prisma.shiftRecord.findMany({
-      where: {
+      where: scopeShiftRecordWhere(session, {
         recordType: "shift",
         status: { not: "cancelled" },
         workDate: { gte: start, lte: end },
         ...(parsed.site_id ? { siteId: parsed.site_id } : {}),
-      },
+      }),
       select: {
         id: true,
         siteId: true,
@@ -139,7 +143,7 @@ export async function POST(req: Request) {
     const shiftTypeIdList = [...new Set(records.map((r) => r.shiftTypeId))];
     const [brokers, sites, shiftTypes] = await Promise.all([
       brokerIds.length ? prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, kind: true, code: true } }) : Promise.resolve([]),
-      prisma.site.findMany({ where: { id: { in: siteIdList } }, select: { id: true, canonicalName: true } }),
+      prisma.site.findMany({ where: { id: { in: siteIdList } }, select: { id: true, canonicalName: true, billingModel: true } }),
       // 應修：加 billingGroup——收客价 resolver／未定价判斷而家用
       // shift_type.billing_group（唔再用 site.billing_model）。
       prisma.shiftType.findMany({ where: { id: { in: shiftTypeIdList } }, select: { id: true, code: true, billingGroup: true } }),
@@ -151,6 +155,7 @@ export async function POST(req: Request) {
       brokerKindById: new Map(brokers.map((b) => [b.id, b.kind as BrokerKindLike])),
       brokerCodeById: new Map(brokers.map((b) => [b.id, b.code])),
       siteNameById: new Map(sites.map((s) => [s.id, s.canonicalName])),
+      siteBillingModelById: new Map(sites.map((s) => [s.id, (s.billingModel as string | null) ?? null])),
       shiftTypeCodeById: new Map(shiftTypes.map((s) => [s.id, s.code])),
       shiftTypeBillingGroupById: new Map(shiftTypes.map((s) => [s.id, s.billingGroup])),
     };

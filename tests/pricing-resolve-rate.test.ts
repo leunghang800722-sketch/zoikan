@@ -384,6 +384,12 @@ describe("isClientUnpricedShift（S3：收客价未定，淨係逐更盤先算�
   });
 
   it("非逐更更別（monthly_ic，例：數碼港 CP5「D」更），client_rate_snapshot null 屬正常 → false", () => {
+    // Opus 第三輪 M1：盤層面唔逐更開單（月費／admin_fee／special）→ 唔算收客未定
+    for (const bm of ["monthly_fixed", "admin_fee", "special"]) {
+      expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: bm })).toBe(false);
+    }
+    expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "per_shift" })).toBe(true);
+    expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { brokerKind: "external" })).toBe(false);
     expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "monthly_ic")).toBe(false);
   });
 
