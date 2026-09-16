@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { POST as batchSave } from "@/app/api/shift-records/batch/route";
+import { POST as shiftRecordCreate } from "@/app/api/shift-records/route";
 import { GET as unpricedGet } from "@/app/api/shift-records/unpriced/route";
 import { POST as reprice } from "@/app/api/shift-records/reprice/route";
 
@@ -78,6 +79,103 @@ describe("WP-PRICE：更表批量儲存自動計价", () => {
     expect(created!.clientRateSnapshot).toBeNull();
     expect(created!.guardWageSnapshot).toBeNull();
     expect(created!.brokerFeeSnapshot).toBeNull();
+  });
+});
+
+// 必修 1(a)（Opus 第二輪驗收）：code="PR"（糧明細生成 reconciliation
+// placeholder，見 src/lib/pricing/resolve-rate.ts 頂註解）唔可以新建——
+// batch/route.ts 同單條 POST /api/shift-records 都要 400。呢度用 integration
+// test（唔淨係 e2e）釘住，保證 vitest 全跑都攔到（e2e 見 tests/e2e/
+// pricing.spec.ts (e)）。
+describe("WP-PRICE 必修 1：code=\"PR\"（對數佔位更別）唔可以新建", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+  let prShiftTypeId: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    const prShiftType = await prisma.shiftType.create({
+      data: { siteId: fx.site.id, code: "PR", label: "糧明細生成（更表冇對應資料）", createdBy: "test:wp-price-pr" },
+    });
+    prShiftTypeId = prShiftType.id;
+  });
+
+  it("batch/route.ts：新建 code=\"PR\" 記錄 → 400，乜都冇寫", async () => {
+    const res = await batchSave(
+      req("http://test.local/api/shift-records/batch", ownerCookie, "POST", {
+        site_id: fx.site.id,
+        month: "2026-08",
+        cells: [{ guard_id: fx.guardA.id, shift_type_id: prShiftTypeId, work_date: "2026-08-05", code: "PR", settlement_broker_id: fx.brokerA.id }],
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(JSON.stringify(body)).toMatch(/對數佔位更別/);
+    const created = await prisma.shiftRecord.findFirst({ where: { shiftTypeId: prShiftTypeId } });
+    expect(created).toBeNull();
+  });
+
+  it("batch/route.ts：同一批入面其他正常格唔受 PR 格 400 連累——成批一齊 400（rollback，冇部分寫入）", async () => {
+    const res = await batchSave(
+      req("http://test.local/api/shift-records/batch", ownerCookie, "POST", {
+        site_id: fx.site.id,
+        month: "2026-08",
+        cells: [
+          { guard_id: fx.guardA.id, shift_type_id: fx.shiftType.id, work_date: "2026-08-05", code: "N", settlement_broker_id: fx.brokerA.id },
+          { guard_id: fx.guardA.id, shift_type_id: prShiftTypeId, work_date: "2026-08-06", code: "PR", settlement_broker_id: fx.brokerA.id },
+        ],
+      }),
+    );
+    expect(res.status).toBe(400);
+    const normalCreated = await prisma.shiftRecord.findFirst({ where: { guardId: fx.guardA.id, workDate: new Date(Date.UTC(2026, 7, 5)) } });
+    expect(normalCreated).toBeNull(); // 成批 rollback，正常格都冇寫入
+  });
+
+  it("POST /api/shift-records（內部角色單條）：code=\"PR\" 嘅 shift_type_id → 400", async () => {
+    const res = await shiftRecordCreate(
+      req("http://test.local/api/shift-records", ownerCookie, "POST", {
+        work_date: "2026-08-05",
+        site_id: fx.site.id,
+        shift_type_id: prShiftTypeId,
+        guard_id: fx.guardA.id,
+        settlement_broker_id: fx.brokerA.id,
+        record_type: "shift",
+      }),
+    );
+    expect(res.status).toBe(400);
+    const created = await prisma.shiftRecord.findFirst({ where: { shiftTypeId: prShiftTypeId } });
+    expect(created).toBeNull();
+  });
+
+  it("更新既有 PR 記錄（唔係新建）唔受影響——batch 淨係擋新建", async () => {
+    // 模擬「7 月已經有一條 PR 記錄」（本身月鎖定，呢度用 8 月純粹方便
+    // test 唔使處理鎖月）——batch 改呢條*既有*記錄嘅其他欄（例如
+    // settlement_broker）唔應該撞 PR 400，因為 `!record` 條件唔成立。
+    const existing = await prisma.shiftRecord.create({
+      data: {
+        workDate: new Date(Date.UTC(2026, 7, 6)),
+        siteId: fx.site.id,
+        shiftTypeId: prShiftTypeId,
+        guardId: fx.guardA.id,
+        settlementBrokerId: fx.brokerA.id,
+        operationalBrokerId: fx.brokerA.id,
+        recordType: "shift",
+        status: "confirmed",
+        createdBy: "test:wp-price-pr",
+      },
+    });
+    const res = await batchSave(
+      req("http://test.local/api/shift-records/batch", ownerCookie, "POST", {
+        site_id: fx.site.id,
+        month: "2026-08",
+        cells: [{ guard_id: fx.guardA.id, shift_type_id: prShiftTypeId, work_date: "2026-08-06", code: "PR", settlement_broker_id: fx.brokerB.id }],
+      }),
+    );
+    expect(res.status).toBe(200);
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: existing.id } });
+    expect(after.settlementBrokerId).toBe(fx.brokerB.id);
   });
 });
 
@@ -197,12 +295,24 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     expect(after.brokerFeeSnapshot?.toString()).toBe("80");
   });
 
-  it("重新計价之後（dry_run:false）、冇卡嘅記錄回應帶 unpriced 分組", async () => {
+  it("重新計价之後（dry_run:false）、搵唔到卡但本身有值嘅記錄——kept_unresolved 計及，唔計入 unpriced（必修 2：口徑統一用 buildUnpricedSummary()）", async () => {
     await prisma.rateCard.updateMany({ where: { siteId: fx.site.id }, data: { voidedAt: new Date() } });
     const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", dry_run: false }));
     const body = await res.json();
-    expect(body.unpriced).toBeGreaterThanOrEqual(2); // shiftRecordA + shiftRecordB 都跌返冇卡（回應嘅 unpriced 分組計及，唔理 M3 keep 咗原值定係本身就 null）
-    expect(body.groups.length).toBeGreaterThan(0);
+    // 必修 2（Opus 第二輪驗收）：reprice 回應嘅 `unpriced` 而家一律用
+    // `buildUnpricedSummary()`（同 GET /api/shift-records/unpriced 一致
+    // 口徑）——shiftRecordA/B 原本 999/700/50（非 null），卡晒 void 之後
+    // resolver 搵唔到卡，M3「保留原值」令 snapshot keep 咗 999/700/50，
+    // 真係未定价判斷（isUnpricedShift）睇嘅係*最終* snapshot 狀態，唔係
+    // 「呢次 reprice 有冇搵到卡」——非 null 嘅 snapshot 唔算未定价，所以
+    // `unpriced` 應該係 0，`kept_unresolved` 先反映「呢兩條搵唔到卡、
+    // 保留返原值」。
+    expect(body.kept_unresolved).toBeGreaterThanOrEqual(2);
+    expect(body.unpriced).toBe(0);
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: fx.shiftRecordA.id } });
+    expect(after.clientRateSnapshot?.toString()).toBe("999");
+    expect(after.guardWageSnapshot?.toString()).toBe("700");
+    expect(after.brokerFeeSnapshot?.toString()).toBe("50");
   });
 
   it("M3：真係本身就未定价（snapshot 本身就 null）嘅記錄，搵唔到卡繼續係 null（唔係 kept 出嚟嘅假象）", async () => {

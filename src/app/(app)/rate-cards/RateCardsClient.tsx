@@ -71,7 +71,9 @@ const emptyForm = {
   guard_wage: "",
   broker_fee: "",
   payout_rate: "",
-  billing_model: "",
+  // 應修（Opus 第二輪驗收）：RateCardCreateSchema 而家 billing_model 必填
+  // ——前端預設 per_shift（絕大多數卡都係逐更收費，減少用戶漏揀撞 400）。
+  billing_model: "per_shift",
   effective_from: "",
   effective_to: "",
   note: "",
@@ -160,7 +162,15 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
       setError(res.message);
       return;
     }
-    setNotice(`重新計价完成：${res.data.repriced} 更已改寫，仲有 ${res.data.unpriced} 更未定价。`);
+    // 必修 2（Opus 第二輪驗收）：寫入成功之後唔用 reprice 回覆嘅
+    // `unpriced` 數直接落 notice——重新 fetch `/api/shift-records/
+    // unpriced`（`buildUnpricedSummary()`，同 roster/payroll 頁一致嘅
+    // 權威口徑）先至話俾用戶知。攞唔到就 fallback 用返 reprice 回覆嘅數
+    // （additive，唔阻住主流程）。
+    const qs = new URLSearchParams({ month, ...(siteFilter ? { site_id: siteFilter } : {}) });
+    const unpricedRes = await apiGet<{ count: number }>(`/api/shift-records/unpriced?${qs.toString()}`);
+    const unpricedCount = unpricedRes.ok ? unpricedRes.data.count : res.data.unpriced;
+    setNotice(`重新計价完成：${res.data.repriced} 更已改寫，仲有 ${unpricedCount} 更未定价。`);
   }
 
   useEffect(() => {
@@ -555,9 +565,8 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
               />
             </Field>
           )}
-          <Field label="結算模式（billing_model）">
-            <select className={selectCls} value={form.billing_model} onChange={(e) => setForm((f) => ({ ...f, billing_model: e.target.value }))}>
-              <option value="">（沿用盤設定）</option>
+          <Field label="結算模式（billing_model，必填）">
+            <select className={selectCls} value={form.billing_model} onChange={(e) => setForm((f) => ({ ...f, billing_model: e.target.value }))} required>
               {BILLING_MODELS.map((v) => (
                 <option key={v} value={v}>
                   {v}

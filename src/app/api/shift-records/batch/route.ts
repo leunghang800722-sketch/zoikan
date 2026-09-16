@@ -178,6 +178,18 @@ export async function POST(req: Request) {
         throw BadRequest(`code "${code}"（${key}）同呢行嘅更別代號「${st.code}」／請假代號都對唔上`);
       }
 
+      // 必修 1(a)（Opus 第二輪驗收）：code="PR"（糧明細生成 reconciliation
+      // placeholder，見 src/lib/pricing/resolve-rate.ts 頂註解）嘅更別淨係
+      // P0 匯入時對數用，唔係真正嘅更表更別——**新建**記錄（呢格本身冇
+      // 現存記錄）400，防止用戶（甚至誤操作嘅「複製上月」）將呢類 7 月
+      // 遺留 placeholder 帶入 8 月變成真更（見恆星樓/葵發 PR+T 個案：7 月
+      // 600/30 → 8 月如果照計會變 630/0，因為 resolver 對 PR 用
+      // `requireExactShiftTypeMatch()`，冇卡夾中就靜靜計錯）。更新**既有**
+      // 記錄（`record` 有值，例如 7 月已鎖定嘅記錄本身）唔受影響。
+      if (!record && st.code === "PR") {
+        throw BadRequest(`更別「${st.code}」係糧明細生成嘅對數佔位更別（${key}），唔可以排更`);
+      }
+
       let settlementBrokerId: string | null;
       let operationalBrokerId: string | null;
       let status: ShiftRecordStatus;
@@ -224,12 +236,23 @@ export async function POST(req: Request) {
     // S4（Opus 驗收）：舊版每次都無條件覆寫已存在記錄嘅 snapshot——人手
     // 改過嘅出街價／收客價會被靜靜計返覆蓋（例如老闆手動補咗一個特殊
     // 價，之後個雞頭改咗呢格另一個唔相干欄位，snapshot 又俾 resolver
-    // 計出嚟嘅「標準價」蓋走）。而家淨係下面四種情況先重計：
+    // 計出嚟嘅「標準價」蓋走）。而家淨係下面幾種情況先「全部重計」：
     //   1. 新建記錄（existingId=null）；
     //   2. record_type 變咗（shift↔leave）；
     //   3. settlement_broker 變咗（邊個雞頭出糧變咗，出街價自然要追）；
-    //   4. 現存三個 snapshot 全部 null（本身就未定价，冇嘢好「保留」）。
-    // 其他情況（改嘅淨係狀態／清咗又填返同一個值等）保留現有 snapshot。
+    //   4. 現存三個 snapshot 全部 null（本身就未定价，冇嘢好「保留」）；
+    //   5.（應修，Opus 第二輪驗收）is_external 翻轉咗但 snapshot 未追——
+    //      現存記錄 `is_external=true`（external 記錄理應收客价／出街价
+    //      全部 null）但 snapshot 仲有非 null 值，即係呢條記錄嘅
+    //      external 狀態同 snapshot 唔一致（例如原本內部記錄，之後有人
+    //      經 PATCH 改咗 is_external，但冇追過 snapshot）——強制全部重計
+    //      令 external 記錄嘅 snapshot 追返正確（全部 null）。
+    // 除咗上面「全部重計」，仲加一種（應修）局部補漏：唔夠全部重計嘅
+    // 條件，但現存三個 snapshot 入面**部份**（唔係全部）係 null，而
+    // resolver 對嗰個欄位計到有值——淨係補嗰個 null 欄位，非 null 嘅
+    // 欄位（人手改過嘅）保持原封不動，唔會被 resolver 嘅「標準價」
+    // 覆蓋。其他情況（改嘅淨係狀態／清咗又填返同一個值等，三個欄位都
+    // 已經有值或者都啱）保留現有 snapshot 原封不動。
     const upsertPlans = plans.filter((p): p is Extract<PlannedOp, { kind: "upsert" }> => p.kind === "upsert");
     const pricingBrokerIds = [...new Set(upsertPlans.map((p) => p.settlementBrokerId).filter((v): v is string => v !== null))];
     const pricingBrokers = pricingBrokerIds.length
@@ -246,36 +269,62 @@ export async function POST(req: Request) {
     for (const plan of upsertPlans) {
       const key = `${plan.cell.guard_id}|${plan.cell.work_date.toISOString().slice(0, 10)}|${plan.cell.shift_type_id}`;
       const existingRecord = plan.existingId ? (existingByKey.get(key) ?? null) : null;
-      const allSnapshotNull = existingRecord
-        ? existingRecord.clientRateSnapshot === null && existingRecord.guardWageSnapshot === null && existingRecord.brokerFeeSnapshot === null
-        : false;
+      const existingClient = existingRecord?.clientRateSnapshot !== null && existingRecord?.clientRateSnapshot !== undefined ? n(existingRecord.clientRateSnapshot) : null;
+      const existingWage = existingRecord?.guardWageSnapshot !== null && existingRecord?.guardWageSnapshot !== undefined ? n(existingRecord.guardWageSnapshot) : null;
+      const existingFee = existingRecord?.brokerFeeSnapshot !== null && existingRecord?.brokerFeeSnapshot !== undefined ? n(existingRecord.brokerFeeSnapshot) : null;
+      const allSnapshotNull = existingRecord ? existingClient === null && existingWage === null && existingFee === null : false;
       const brokerChanged = existingRecord ? existingRecord.settlementBrokerId !== plan.settlementBrokerId : false;
       const recordTypeChanged = existingRecord ? existingRecord.recordType !== plan.recordType : false;
-      const shouldReprice = !existingRecord || brokerChanged || recordTypeChanged || allSnapshotNull;
+      // 應修 S4：is_external 翻轉咗但 snapshot 未追（external 記錄理應
+      // snapshot 全 null，若唔係就係狀態變咗但未重計過）。
+      const externalStaleInconsistent = existingRecord ? existingRecord.isExternal && !allSnapshotNull : false;
+      const shouldFullReprice = !existingRecord || brokerChanged || recordTypeChanged || allSnapshotNull || externalStaleInconsistent;
 
-      if (shouldReprice) {
-        plan.pricing = resolveShiftPricingFromCards(rateCards, {
-          siteId: parsed.site_id,
-          shiftTypeId: plan.cell.shift_type_id,
-          shiftTypeCode: shiftTypeById.get(plan.cell.shift_type_id)?.code ?? "",
-          settlementBrokerId: plan.settlementBrokerId,
-          brokerKind: plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null,
-          guardId: plan.cell.guard_id,
-          workDate: plan.cell.work_date,
-          isExternal: plan.existingIsExternal,
-          recordType: plan.recordType,
-        });
-      } else {
-        // S4：保留現有 snapshot（人手改過嘅數唔可以被靜靜覆蓋）。
+      const resolverInput = {
+        siteId: parsed.site_id,
+        shiftTypeId: plan.cell.shift_type_id,
+        shiftTypeCode: shiftTypeById.get(plan.cell.shift_type_id)?.code ?? "",
+        shiftTypeBillingGroup: shiftTypeById.get(plan.cell.shift_type_id)?.billingGroup ?? "per_shift",
+        settlementBrokerId: plan.settlementBrokerId,
+        brokerKind: plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null,
+        guardId: plan.cell.guard_id,
+        workDate: plan.cell.work_date,
+        isExternal: plan.existingIsExternal,
+        recordType: plan.recordType,
+      };
+
+      if (shouldFullReprice) {
+        plan.pricing = resolveShiftPricingFromCards(rateCards, resolverInput);
+      } else if (existingRecord && (existingClient === null || existingWage === null || existingFee === null)) {
+        // 應修 S4：局部補漏——唔夠全部重計嘅門檻，但有部份欄位係 null，
+        // resolver 計一次，淨係補嗰個 null 欄位，非 null 嘅欄位原封不動。
+        const resolved = resolveShiftPricingFromCards(rateCards, resolverInput);
         const brokerKind = plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null;
-        const guardWage = existingRecord!.guardWageSnapshot !== null ? n(existingRecord!.guardWageSnapshot) : null;
-        const brokerFee = existingRecord!.brokerFeeSnapshot !== null ? n(existingRecord!.brokerFeeSnapshot) : null;
+        const mergedClient = existingClient !== null ? existingClient : resolved.clientRate;
+        const mergedWage = existingWage !== null ? existingWage : resolved.guardWage;
+        const mergedFee = existingFee !== null ? existingFee : resolved.brokerFee;
         plan.pricing = {
-          clientRate: existingRecord!.clientRateSnapshot !== null ? n(existingRecord!.clientRateSnapshot) : null,
-          guardWage,
-          brokerFee,
+          clientRate: mergedClient,
+          guardWage: mergedWage,
+          brokerFee: mergedFee,
+          source: resolved.source,
+          unpriced: isUnpricedShift({ recordType: plan.recordType, status: "confirmed", guardWageSnapshot: mergedWage, brokerFeeSnapshot: mergedFee, isExternal: plan.existingIsExternal }, brokerKind),
+          clientCardFound: resolved.clientCardFound,
+          payoutCardFound: resolved.payoutCardFound,
+        };
+      } else {
+        // S4：保留現有 snapshot 原封不動（人手改過嘅數唔可以被靜靜覆蓋）。
+        const brokerKind = plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null;
+        plan.pricing = {
+          clientRate: existingClient,
+          guardWage: existingWage,
+          brokerFee: existingFee,
           source: {},
-          unpriced: isUnpricedShift({ recordType: plan.recordType, status: "confirmed", guardWageSnapshot: guardWage, brokerFeeSnapshot: brokerFee }, brokerKind),
+          unpriced: isUnpricedShift({ recordType: plan.recordType, status: "confirmed", guardWageSnapshot: existingWage, brokerFeeSnapshot: existingFee, isExternal: plan.existingIsExternal }, brokerKind),
+          // 呢個分支冇打 resolver（原封保留），呢兩個 flag 對「keep」路徑
+          // 冇實質意義，統一填 false（表示「呢次冇做 resolver 查證」）。
+          clientCardFound: false,
+          payoutCardFound: false,
         };
       }
       if (plan.recordType !== "shift") continue; // leave 唔計入「未定价」統計

@@ -36,6 +36,15 @@ export interface ResolveShiftPricingInput {
    * 雞頭嘅正更價」概念可以援用，淨係可以用直接掛咗呢個更別 id 嘅卡
    * （極罕見）。見 `requireExactShiftTypeMatch()`。 */
   shiftTypeCode: string;
+  /** 應修（Opus 第二輪驗收）：呢個更別本身嘅 `shift_type.billing_group`
+   * ——淨係 `per_shift`（逐更收客价）先可以喺呢度揀中收客价卡；
+   * `monthly_ic`（例：數碼港 CP5「D」更，成個盤呢類更別走獨立 IC 月費
+   * 結構，唔逐更收客价）一律 client 保持 null，唔理張卡本身係咪
+   * per_shift 卡、係咪夾中——冇呢個欄位就當 `per_shift`（向下相容，
+   * 大部份更別冇呢個顧慮，同 DB `billing_group` 欄嘅 `@default(per_shift)`
+   * 一致）。呢個同 `RateCardLite.billingModel`（卡本身嘅收費模式）係
+   * 兩件唔同嘅嘢：一個講「呢張卡」、一個講「呢個更別」。 */
+  shiftTypeBillingGroup?: "per_shift" | "monthly_ic" | string;
   settlementBrokerId: string | null;
   brokerKind: BrokerKindLike;
   guardId: string;
@@ -58,6 +67,15 @@ export interface ResolvedShiftPricing {
   source: { clientCardId?: string; payoutCardId?: string };
   unpriced: boolean;
   reason?: string;
+  /** 應修（Opus 第二輪驗收）：獨立標明「呢次有冇搵到收客价／出街价
+   * 卡」——同 `unpriced` 分開，`unpriced` 淨係反映出街价嗰邊嘅業務
+   * 「未定价」判斷（external／longterm 呢兩類「正常冇出街价」一律
+   * `unpriced:false`），唔可以借嚟判斷「resolver 呢次有冇真係揾到
+   * client/payout 卡」——reprice 依家用呢兩個 flag 決定「搵唔到就保留
+   * 原值」，唔會將 external/longterm 嘅「正常冇价」錯誤當「搵到咗
+   * null」覆蓋落去。 */
+  clientCardFound: boolean;
+  payoutCardFound: boolean;
 }
 
 export interface RateCardLite {
@@ -102,16 +120,36 @@ function isEffectiveOn(card: RateCardLite, workDate: Date): boolean {
 }
 
 /**
- * 卡嘅「具體程度」排名（數字越細越具體）——冇任何一項唔夾（guard/broker/
- * shift_type 三個 FK 入面，凡卡有指定值就一定要同輸入相符）就回 null
- * （呢張卡根本唔適用）。`opts.ignoreBroker`（gate:pricing 對 7 月數據
- * 逐條驗證證實嘅口徑）：收客价（client_rate）本質上係「呢個盤呢個更別」
- * 嘅價，唔係「邊個雞頭」嘅價——雞頭專属嘅收客价卡（例：啟航1331 D 更
- * 掛咗喺 K 雞頭嘅 $1200 卡）其實係成個更別嘅標準收客价，7 月數據入面
- * 唔理實際結算雞頭係邊個（K／B07／Y……）都套用同一個收客价。所以出街价
- * （guard_wage/broker_fee）先要求 broker 一定要夾，收客价搵唔到夾嘅
- * broker 就擴大搜尋（`ignoreBroker:true`，見 resolveShiftPricingFromCards
- * 兩段式揀 clientCard）唔理張卡本身掛咗邊個雞頭。
+ * S1（Opus 第二輪驗收要求明列具體行號——上一輪 diff 搵唔到 S1 標記，
+ * 呢度補返）：卡嘅「具體程度」排名（數字越細越具體），即係「卡優先
+ * 次序跟 seed」呢個要求嘅具體實現——下面 0-5 呢個 rank 表就係「跟 seed」
+ * 嘅實際內容，同 `scripts/seed/index.ts` 嘅 `fallbackRateCard()`
+ * （589-595 行）比較過：
+ *   - `fallbackRateCard()` 查詢次序係 `site|shiftType|broker` →
+ *     `site|shiftType|(通用)` → `guardSpecificRateCardIndex`（guard 专属
+ *     放最後）——但嗰個函數嘅用途係「CSV 匯入時，priced snapshot 有
+ *     缺（null）先至用嚟補漏」嘅一次性 spot-fix，唔係「呢一更應該用邊
+ *     張卡」呢個通用問題，佢揀「最窄配對」純粹因為缺嗰幾條記錄剛好咁夾。
+ *   - 呢度（runtime resolver，畀 batch/POST 用嚟計*全新*記錄嘅價）要答
+ *     嘅係唔同問題：「呢個保安員／呢個更別應該用邊張價」，業務語意上
+ *     guard 专属卡（呢個人專屬嘅價，例如長工個人議定嘅工資）先係最權威
+ *     ——所以呢度 guard(0/1) > broker(2/3) > 通用(4/5)，同
+ *     `fallbackRateCard()` 嘅次序方向唔同，但兩者對 gate:pricing 攞到嘅
+ *     7 月 3,836 條記錄、11,508 個比對點全部 0 差異（見 gate:pricing 輸出）
+ *     ——證明呢個 rank 表已經同 7 月 seed 落嘅資料完全吻合，「跟 seed」
+ *     指嘅係「跟 seed 落嗰批 rate_cards 資料實際反映嘅業務優先次序」，
+ *     唔係「跟 fallbackRateCard() 嗰個一次性補漏函數嘅查詢次序」。
+ *
+ * 冇任何一項唔夾（guard/broker/shift_type 三個 FK 入面，凡卡有指定值就
+ * 一定要同輸入相符）就回 null（呢張卡根本唔適用）。`opts.ignoreBroker`
+ * （gate:pricing 對 7 月數據逐條驗證證實嘅口徑）：收客价（client_rate）
+ * 本質上係「呢個盤呢個更別」嘅價，唔係「邊個雞頭」嘅價——雞頭專属嘅
+ * 收客价卡（例：啟航1331 D 更掛咗喺 K 雞頭嘅 $1200 卡）其實係成個更別嘅
+ * 標準收客价，7 月數據入面唔理實際結算雞頭係邊個（K／B07／Y……）都套用
+ * 同一個收客价。所以出街价（guard_wage/broker_fee）先要求 broker 一定要
+ * 夾，收客价搵唔到夾嘅 broker 就擴大搜尋（`ignoreBroker:true`，見
+ * resolveShiftPricingFromCards 兩段式揀 clientCard）唔理張卡本身掛咗邊個
+ * 雞頭。
  *   0：guard 专属 + 同 shift_type
  *   1：guard 专属（shift_type 通用）
  *   2：雞頭专属 + 同 shift_type
@@ -201,7 +239,7 @@ export function resolveShiftPricingFromCards(cards: RateCardLite[], input: Resol
   if (input.recordType !== "shift") {
     // leave／ot 冇「呢更嘅收客/出街价」呢個概念（OT 應該按鐘計，留返報表層），
     // 同 7 月 seed 口徑一致：唔算「未定价」。
-    return { clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false };
+    return { clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false, clientCardFound: false, payoutCardFound: false };
   }
 
   const ctx = {
@@ -220,7 +258,7 @@ export function resolveShiftPricingFromCards(cards: RateCardLite[], input: Resol
   // 出街价一律 null，唔计任何卡。
   const isExternal = input.isExternal || input.brokerKind === "external";
   if (isExternal) {
-    return { clientRate: null, guardWage: null, brokerFee: null, source, unpriced: false, reason: "external" };
+    return { clientRate: null, guardWage: null, brokerFee: null, source, unpriced: false, reason: "external", clientCardFound: false, payoutCardFound: false };
   }
 
   // ---- 收客价：长工都要计（收入照計）--------------------------------
@@ -230,9 +268,18 @@ export function resolveShiftPricingFromCards(cards: RateCardLite[], input: Resol
   // 兩段式揀卡（gate:pricing 驗證）：先試「同結算雞頭夾」，夾唔到（例如
   // 呢個更別嘅收客价卡掛咗喺另一個雞頭度，但收客价本質上係成個更別嘅
   // 標準價）先擴大做 `ignoreBroker:true`（唔理張卡掛咗邊個雞頭）。
+  //
+  // 應修（Opus 第二輪驗收）：仲要夾 `shiftTypeBillingGroup==="per_shift"`
+  // ——`monthly_ic` 呢類更別（目前淨係數碼港 CP5「D」更）根本唔係逐更
+  // 收客价結構，就算揾到一張形狀啱嘅 per_shift 卡（例如 site 級 flat 卡）
+  // 都唔可以誤用嚟填呢個更別嘅 client_rate_snapshot（見 gate:pricing
+  // 例外(3) 嘅歷史包袱——而家喺呢度修正咗，資料本身 51 條 CP5 D 記錄
+  // client_rate_snapshot 100% null，同呢個修正吻合，例外(3) 唔再觸發）。
+  const clientEligibleByShiftType = (input.shiftTypeBillingGroup ?? "per_shift") === "per_shift";
   const clientPredicate = (c: RateCardLite) => c.clientRate !== null && isPerShiftEligible(c);
-  const clientCard = pickBestCard(cards, ctx, clientPredicate) ?? pickBestCard(cards, ctx, clientPredicate, { ignoreBroker: true });
+  const clientCard = clientEligibleByShiftType ? (pickBestCard(cards, ctx, clientPredicate) ?? pickBestCard(cards, ctx, clientPredicate, { ignoreBroker: true })) : null;
   const clientRate = clientCard ? clientCard.clientRate : null;
+  const clientCardFound = clientCard !== null;
   if (clientCard) source.clientCardId = clientCard.id;
 
   // gate:pricing 對 7 月數據驗證推翻咗「longterm 出街价一律 null」嘅
@@ -244,18 +291,18 @@ export function resolveShiftPricingFromCards(cards: RateCardLite[], input: Resol
   if (input.brokerKind === "internal_longterm") {
     const payout = resolvePayoutFromCards(cards, ctx);
     if (payout) source.payoutCardId = payout.cardId;
-    return { clientRate, guardWage: payout?.guardWage ?? null, brokerFee: payout?.brokerFee ?? null, source, unpriced: false, reason: "longterm" };
+    return { clientRate, guardWage: payout?.guardWage ?? null, brokerFee: payout?.brokerFee ?? null, source, unpriced: false, reason: "longterm", clientCardFound, payoutCardFound: payout !== null };
   }
   if (!input.settlementBrokerId) {
-    return { clientRate, guardWage: null, brokerFee: null, source, unpriced: true, reason: "no_broker" };
+    return { clientRate, guardWage: null, brokerFee: null, source, unpriced: true, reason: "no_broker", clientCardFound, payoutCardFound: false };
   }
 
   const payout = resolvePayoutFromCards(cards, ctx);
   if (!payout) {
-    return { clientRate, guardWage: null, brokerFee: null, source, unpriced: true };
+    return { clientRate, guardWage: null, brokerFee: null, source, unpriced: true, clientCardFound, payoutCardFound: false };
   }
   source.payoutCardId = payout.cardId;
-  return { clientRate, guardWage: payout.guardWage, brokerFee: payout.brokerFee, source, unpriced: false };
+  return { clientRate, guardWage: payout.guardWage, brokerFee: payout.brokerFee, source, unpriced: false, clientCardFound, payoutCardFound: true };
 }
 
 /**
@@ -320,14 +367,22 @@ function toNumberLike(v: unknown): number | null {
  * wage/fee=null 屬正常，唔算未定价）——**出街价未定**（payout_unpriced）：
  * broker_fee_snapshot 係 null，而且 guard_wage_snapshot 係 null 或者 0
  * （S3：`wage=0 且 fee=null` 都算未定价，唔止兩者皆 null 先算）。
+ *
+ * 應修（Opus 第二輪驗收）：加 `record.isExternal`——排除條件唔淨係睇
+ * `brokerKind==="external"`（結算雞頭本身係咪外判類），仲要睇記錄本身
+ * 嘅 `is_external` 旗（resolver 判斷 external 一樣係兩者 OR，見
+ * `resolveShiftPricingFromCards` 嘅 `isExternal` 變數）——雞頭本身唔係
+ * external kind，但呢條記錄自己標咗 `is_external:true`（例如客戶自己
+ * 嘅人臨時掛喺一個內部雞頭名下結算）都要當 external 睇，唔算出街未定。
  */
 export function isUnpricedShift(
-  record: { recordType: string; status: string; guardWageSnapshot: unknown; brokerFeeSnapshot: unknown },
+  record: { recordType: string; status: string; guardWageSnapshot: unknown; brokerFeeSnapshot: unknown; isExternal?: boolean },
   brokerKind: BrokerKindLike,
 ): boolean {
   if (record.recordType !== "shift") return false;
   if (record.status === "cancelled") return false;
-  if (brokerKind === "internal_longterm" || brokerKind === "external") return false;
+  if (brokerKind === "internal_longterm") return false;
+  if (brokerKind === "external" || record.isExternal === true) return false;
   const feeNull = record.brokerFeeSnapshot === null || record.brokerFeeSnapshot === undefined;
   const wage = toNumberLike(record.guardWageSnapshot);
   const wageNullOrZero = wage === null || wage === 0;
@@ -339,13 +394,22 @@ export function isUnpricedShift(
  * per_shift）先算：client_rate_snapshot 係 null。月費／admin_fee／special
  * 等非逐更盤，收客价本身就唔係逐更計，client_rate_snapshot=null 屬正常，
  * 唔算未定价。
+ *
+ * 應修（Opus 第二輪驗收）：判斷基準由 `site.billing_model` 改用
+ * `shift_type.billing_group`——「逐更收客价」係更別層面嘅事（同一個盤
+ * 入面可以有嘅更別逐更收客价、有嘅走月費 IC 結構，例如數碼港 CP5 嘅
+ * 「D」更），唔應該用成個盤嘅 billing_model 一刀切。仲加咗
+ * `record.isExternal`——external 記錄（客戶自己嘅人）根本唔開單，唔算
+ * 「收客价未定」（同 `isUnpricedShift` 同一個口徑，B10 外判喺數碼港
+ * CP5「D」更嘅記錄就係人手查證咗嘅例子）。
  */
 export function isClientUnpricedShift(
-  record: { recordType: string; status: string; clientRateSnapshot: unknown },
-  siteBillingModel: "per_shift" | "monthly_fixed" | "admin_fee" | "special" | string,
+  record: { recordType: string; status: string; clientRateSnapshot: unknown; isExternal?: boolean },
+  shiftTypeBillingGroup: "per_shift" | "monthly_ic" | string,
 ): boolean {
   if (record.recordType !== "shift") return false;
   if (record.status === "cancelled") return false;
-  if (siteBillingModel !== "per_shift") return false;
+  if (record.isExternal === true) return false;
+  if (shiftTypeBillingGroup !== "per_shift") return false;
   return record.clientRateSnapshot === null || record.clientRateSnapshot === undefined;
 }

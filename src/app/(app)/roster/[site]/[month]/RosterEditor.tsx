@@ -1169,11 +1169,22 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       const knownKeys = new Set(allRows.map((r) => r.key));
       const nextCells = new Map(cells);
       const newExtra: RowMeta[] = [];
+      // 必修 1(b)（Opus 第二輪驗收）：PR（code="PR"，糧明細生成對數佔位
+      // 更別）唔可以隨「複製上月」原封搬入新月份——batch/route.ts 對
+      // 新建 PR 記錄一律 400，如果唔喺呢度攔截，「複製上月」會將 7 月
+      // PR 記錄複製落 cells，撳「儲存」嗰下先撞 400（用戶體驗差，仲要
+      // 逐格排查邊格撞）。用 Set 記低跳過咗邊幾行（guard+更別），唔係
+      // 逐格計。
+      const skippedPrRowKeys = new Set<string>();
       for (const r of prevRecords) {
         const day = dayOfMonthFromIso(r.work_date);
         if (day > days) continue; // 今個月冇呢個日數（例如上月31號、今個月得30日）——跳過
         const rowKey = `${r.shift_type_id}|${r.guard_id}`;
         const st = shiftTypesById.get(r.shift_type_id);
+        if (st?.code === "PR") {
+          skippedPrRowKeys.add(rowKey);
+          continue;
+        }
         const code = r.record_type === "shift" || r.record_type === "ot" ? st?.code ?? null : r.leave_code;
         if (!code) continue;
         if (!knownKeys.has(rowKey)) {
@@ -1196,6 +1207,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       }
       setCells(nextCells);
       if (newExtra.length > 0) setExtraRows((prev) => [...prev, ...newExtra]);
+      if (skippedPrRowKeys.size > 0) {
+        window.alert(`已略過 ${skippedPrRowKeys.size} 行對數佔位更別（PR）——呢類更別淨係 P0 匯入時對數用，唔可以排更。`);
+      }
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : "複製上月失敗");
     }
@@ -1203,8 +1217,10 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
 
   // ---- 加安員：純前端加一行空行，未填格儲存之前唔會出現喺下次 reload ----
   const guardOptions = useMemo(() => [...guardsById.values()].sort((a, b) => a.name_zh.localeCompare(b.name_zh)), [guardsById]);
+  // 必修 1(b)（Opus 第二輪驗收）：「加保安員」嘅更別選項一律剔走
+  // code="PR"（對數佔位更別，唔可以排更——見 batch/route.ts 新建 400）。
   const shiftTypeOptions = useMemo(
-    () => [...shiftTypesById.values()].filter((s) => !s.voided_at).sort((a, b) => a.code.localeCompare(b.code)),
+    () => [...shiftTypesById.values()].filter((s) => !s.voided_at && s.code !== "PR").sort((a, b) => a.code.localeCompare(b.code)),
     [shiftTypesById],
   );
 
@@ -1319,10 +1335,15 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     if (repricing) return;
     setRepricing(true);
     try {
+      // 必修 2（Opus 第二輪驗收）：dry-run 預覽淨係用嚟俾用戶睇 diff 摘要
+      // （confirm() 嗰句文字入面），**唔再** `setUnpricedSummary(...)`
+      // 覆蓋頁首 banner——dry-run 冇寫 DB，banner 應該繼續顯示緊「而家
+      // DB 入面真實」嘅未定价數（由 `/api/shift-records/unpriced`、即
+      // `buildUnpricedSummary()` 提供），唔可以俾 reprice 自己嗰套
+      // 「模擬」數頂替咗。
       const preview = await apiPost<RepriceDryRunResult>("/api/shift-records/reprice", { month, site_id: siteId, dry_run: true });
       if (preview.changed === 0) {
         window.alert(`重新計价預覽：呢個盤呢個月冇任何更次嘅收客價／出街價會變（同現有 snapshot 一致），${preview.unpriced} 更仍然未定价（冇對應價目卡）。冇嘢寫入。`);
-        setUnpricedSummary({ count: preview.unpriced, groups: preview.groups });
         return;
       }
       const keptNote = preview.kept_unresolved > 0 ? `（其中 ${preview.kept_unresolved} 更資料庫搵唔到對應卡，保留原有 snapshot 唔會清走）` : "";
@@ -1330,14 +1351,16 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         `重新計价預覽 ${month}（${siteName || siteId}）：${preview.changed} 更嘅收客價／出街價會改變，${preview.unchanged} 更不變${keptNote}，仲有 ${preview.unpriced} 更未定价。確定要寫入？`,
       );
       if (!proceed) {
-        setUnpricedSummary({ count: preview.unpriced, groups: preview.groups });
         return;
       }
       const res = await apiPost<{ repriced: number; changed: number; unchanged: number; kept_unresolved: number; unpriced: number; groups: UnpricedGroup[] }>(
         "/api/shift-records/reprice",
         { month, site_id: siteId, dry_run: false },
       );
-      setUnpricedSummary({ count: res.unpriced, groups: res.groups });
+      // 必修 2：寫入成功之後**唔用 reprice 回覆嘅數覆蓋 banner**——
+      // `setReloadTick` 會觸發上面嗰個 `apiGet("/api/shift-records/
+      // unpriced", ...)` 嘅 useEffect 重新 fetch 權威數字（同
+      // `buildUnpricedSummary()` 一致），banner 用嗰個。
       skipExtraRowsResetRef.current = true;
       setReloadTick((t) => t + 1);
       setErrorBanner(null);
@@ -1626,8 +1649,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const mobileKeypadRow: RowMeta | null =
     compact && !monthLocked && !editing && sel && sel.a.r === sel.b.r && sel.a.d === sel.b.d ? (visibleRows[sel.b.r] ?? null) : null;
   const mobileKeypadDay = mobileKeypadRow ? sel!.b.d : null;
+  // 必修 1(b)（Opus 第二輪驗收）：手機鍵盤剔走 code="PR"（對數佔位更別，
+  // 唔可以排更）——就算呢一行本身係歷史 PR 行（例如揭返 7 月鎖定咗嘅
+  // 記錄），都唔俾用戶經手機鍵盤撳「PR」呢粒鍵（新建會撞 batch 400）。
   const mobileKeypadKeys = mobileKeypadRow
-    ? [mobileKeypadRow.shiftTypeCode, ...MOBILE_KEYPAD_LEAVE_CODES.filter((code) => code !== mobileKeypadRow.shiftTypeCode)]
+    ? [
+        ...(mobileKeypadRow.shiftTypeCode === "PR" ? [] : [mobileKeypadRow.shiftTypeCode]),
+        ...MOBILE_KEYPAD_LEAVE_CODES.filter((code) => code !== mobileKeypadRow.shiftTypeCode),
+      ]
     : [];
 
   // 格仔渲染（桌面／手機共用；淨係 sizePx／字級隨 compact 改）——保留

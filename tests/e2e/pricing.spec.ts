@@ -45,9 +45,18 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
     const rowIndex = Number(await targetRow.getAttribute("data-row-index"));
     const cell = page.getByTestId(`roster-cell-${rowIndex}-20`);
     await cell.click();
-    // 前一次跑過可能已經填咗同一個代號（冇 dirty 就儲存掣唔會啟用）——
-    // 已經係更別代號就改打請假 AL，確保一定有改動可以儲存。
-    const shiftCode = dRow?.shiftType.code ?? "D";
+    // 修正（本輪跑 e2e 發現）：`dRow` 淨係查緊 DB（真正儲存咗嘅記錄）——
+    // 「複製上月」淨係喺瀏覽器記憶體 dirty 咗（未儲存前 DB 完全冇 8 月
+    // 記錄），所以第一次喺一個乾淨嘅 8 月跑呢個 test，`dRow` 100% 係
+    // null，跌落 `getByTestId("roster-row").first()` 呢條 fallback——
+    // 之前呢度不論 fallback 揀到邊一行都硬打字面 "D"，如果第一行剛好
+    // 唔係 D 更（例如 IC/N/SIC）就即刻撞「同呢行嘅更別代號都對唔上」。
+    // 而家改用 `targetRow` 自己嘅 `data-row-key`（`${shift_type_id}|
+    // ${guard_id}`）查返呢一行*真正*嘅更別代號，先至保證打嘅字同行一定夾。
+    const rowKey = await targetRow.getAttribute("data-row-key");
+    const rowShiftTypeId = rowKey?.split("|")[0];
+    const rowShiftType = rowShiftTypeId ? await prisma.shiftType.findUnique({ where: { id: rowShiftTypeId } }) : null;
+    const shiftCode = dRow?.shiftType.code ?? rowShiftType?.code ?? "D";
     const current = ((await cell.textContent()) ?? "").trim();
     const toType = current === shiftCode ? "AL" : shiftCode;
     await page.keyboard.type(toType);
@@ -199,4 +208,102 @@ test("(c) 老闆撳「重新計价」（2026-08）→ dry-run 預覽 dialog（�
     // 張卡嘅 client_rate 就足夠。
     await prisma.rateCard.update({ where: { id: targetCard.id }, data: { clientRate: originalClientRate } });
   }
+});
+
+// 必修 1（Opus 第二輪驗收）：code="PR"（糧明細生成 reconciliation
+// placeholder）更別已經封死——(d) 「複製上月」唔可以將 7 月 PR 記錄原封
+// 搬入 8 月（RosterEditor.tsx handleCopyPrevMonth skip 邏輯）；(e) batch
+// API 對 code="PR" 新建一律 400（batch/route.ts）。用 TKO Gateway 厚A——
+// dev DB seed 咗 25 條 7 月 PR 記錄（settlement broker K），冇任何盤
+// 更適合做呢個場景嘅基準。
+
+test("(d) 「複製上月」略過 PR：TKO Gateway 厚A 7 月有 25 條 PR 記錄，複製上月唔會將 PR 帶入 8 月＋提示已略過幾行", async ({ page }) => {
+  const siteId = await findSiteIdByName("TKO Gateway 厚A");
+  const prShiftType = await prisma.shiftType.findFirstOrThrow({ where: { siteId, code: "PR" } });
+
+  // 自給自足：先確認 8 月呢個盤完全冇 PR 記錄（batch 已經 400 咗新建，
+  // 理論上永遠唔會有——呢度純粹防禦性斷言，唔係呢個 test 自己整嘅）。
+  const augPrBefore = await prisma.shiftRecord.count({
+    where: { shiftTypeId: prShiftType.id, workDate: { gte: AUG, lte: AUG_END } },
+  });
+  expect(augPrBefore).toBe(0);
+
+  const dialogMessages: string[] = [];
+  page.on("dialog", (d) => {
+    dialogMessages.push(d.message());
+    d.accept();
+  });
+
+  await loginAs(page, "主管");
+  await page.goto(`/roster/${siteId}/2026-08`);
+  const copyBtn = page.getByRole("button", { name: /複製上月/ }).first();
+  await expect(copyBtn).toBeVisible({ timeout: 20_000 });
+  await copyBtn.click();
+
+  // handleCopyPrevMonth() 純前端 cells/extraRows 狀態變更，冇撳「儲存」
+  // 前乜都唔會寫落 DB——等 alert() 講「已略過 N 行對數佔位更別」出現。
+  await expect(async () => {
+    expect(dialogMessages.some((m) => m.includes("已略過") && m.includes("對數佔位更別"))).toBe(true);
+  }).toPass({ timeout: 15_000 });
+
+  // 格仔層面都要驗證：PR 呢一行（shift_type_id=prShiftType.id）唔應該
+  // 出現喺畫面（`data-row-key` 以 `${prShiftType.id}|` 開頭嘅 row 一個
+  // 都冇）——證明真係跳過咗，唔係得個提示冧巴啱但實際上仍然帶咗入嚟。
+  const prRowLocator = page.locator(`tr[data-row-key^="${prShiftType.id}|"]`);
+  await expect(prRowLocator).toHaveCount(0);
+
+  // 冇撳「儲存」，DB 應該完全冇變——雙重確認（唔淨係信賴前端冇整污染）。
+  const augPrAfter = await prisma.shiftRecord.count({
+    where: { shiftTypeId: prShiftType.id, workDate: { gte: AUG, lte: AUG_END } },
+  });
+  expect(augPrAfter).toBe(0);
+});
+
+test("(e) 新建 PR 記錄 → batch/route.ts 400（PR 已封死，唔可以排更）", async ({ page }) => {
+  const siteId = await findSiteIdByName("TKO Gateway 厚A");
+  const prShiftType = await prisma.shiftType.findFirstOrThrow({ where: { siteId, code: "PR" } });
+  const prRecord = await prisma.shiftRecord.findFirstOrThrow({ where: { shiftTypeId: prShiftType.id, recordType: "shift" } });
+
+  await loginAs(page, "主管");
+
+  // 直接打 batch API（唔經 UI——加保安員／複製上月嘅更別選項已經剔走
+  // PR，UI 冇路徑可以整到呢個 payload，但 API 本身要獨立守住，防止繞過
+  // 前端直接打 API）。揀一個 8 月未存在呢個組合嘅日期。
+  const res = await page.request.post("/api/shift-records/batch", {
+    data: {
+      site_id: siteId,
+      month: "2026-08",
+      cells: [
+        {
+          guard_id: prRecord.guardId,
+          shift_type_id: prShiftType.id,
+          work_date: "2026-08-20",
+          code: "PR",
+          settlement_broker_id: prRecord.settlementBrokerId,
+        },
+      ],
+    },
+  });
+  expect(res.status()).toBe(400);
+  const body = await res.json();
+  expect(JSON.stringify(body)).toMatch(/對數佔位更別/);
+
+  // 確認真係乜都冇寫入。
+  const created = await prisma.shiftRecord.findFirst({
+    where: { shiftTypeId: prShiftType.id, workDate: new Date(Date.UTC(2026, 7, 20)) },
+  });
+  expect(created).toBeNull();
+
+  // 單條 POST /api/shift-records（內部角色路徑）都要一致守住。
+  const res2 = await page.request.post("/api/shift-records", {
+    data: {
+      work_date: "2026-08-21",
+      site_id: siteId,
+      shift_type_id: prShiftType.id,
+      guard_id: prRecord.guardId,
+      settlement_broker_id: prRecord.settlementBrokerId,
+      record_type: "shift",
+    },
+  });
+  expect(res2.status()).toBe(400);
 });

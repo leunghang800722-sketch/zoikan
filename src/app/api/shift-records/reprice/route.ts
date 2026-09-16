@@ -33,12 +33,36 @@ import { writeAudit } from "@/lib/audit";
 import { Conflict, NotFound } from "@/lib/api/errors";
 import { monthRange } from "@/lib/reports/money";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
+// 必修 2（Opus 第二輪驗收）：「未定价」口徑（response 嘅 `unpriced`／
+// `groups`）一律用同 `buildUnpricedSummary()`（GET /api/shift-records/
+// unpriced、頁首 banner 嗰個 API）共用嘅核心邏輯——`computeUnpricedSummary()`
+// 係抽出嚟嘅純函數，dry-run 用「模擬寫入之後」嘅 in-memory 記錄餵佢，
+// commit 之後直接再打一次 `buildUnpricedSummary()` 攞返寫入咗之後嘅
+// 真實 DB 狀態，兩條路徑口徑保證同 GET /api/shift-records/unpriced 一致，
+// 唔會各自另計一套數。
+import { computeUnpricedSummary, buildUnpricedSummary, type UnpricedRecordLike, type UnpricedLookups, type UnpricedGroup } from "@/lib/pricing/unpriced";
 
 const BATCH_SIZE = 500;
+// 應修（Opus 第二輪驗收）：audit `changed_records` 上限 1,000 條，超過就
+// 存前 1,000 條＋`truncated:true`＋總數（避免一個月幾千條改動令
+// audit_log 一行 JSON 過大）。
+const AUDIT_CHANGED_RECORDS_LIMIT = 1000;
 
-type RepriceGroup = { site_id: string; site_name: string; shift_type_code: string; broker_code: string | null; broker_display: string; count: number };
-type Snapshot = { clientRate: number | null; guardWage: number | null; brokerFee: number | null };
-type PreviewRow = { id: string; site_name: string; shift_type_code: string; work_date: string; before: Snapshot; after: Snapshot };
+type RepriceGroup = UnpricedGroup;
+// 必修（本輪 vitest 全跑發現）：`preview`／audit `changed_records` 兩個
+// 對外可見嘅 before/after 用 snake_case＋同 shift_records 資源嘅
+// field-group 白名單同名（`client_rate_snapshot`／`guard_wage_snapshot`／
+// `broker_fee_snapshot`，見 src/lib/api/field-groups.ts
+// CLIENT_RATE_FIELDS／SETTLEMENT_FIELDS）——先可以畀 GET /api/audit-log
+// 嘅 `gateAuditBlob()`（src/app/api/audit-log/route.ts）遞歸落
+// `changed_records[]` 逐條 `applyFieldGroupGate()` 一次，冇「收客價:view」
+// ／「出街價:view」嘅讀者先至真係睇唔到（之前用 camelCase
+// `clientRate`／`guardWage`／`brokerFee`，audit-log 嘅 field-group gate
+// 淨係識做頂層 key，完全冇拆到呢個 nested array，令冇權限嘅主管一樣經
+// GET /api/audit-log 見到 reprice 改過嘅收客/出街价——wp2-n1-audit-log-
+// gate.test.ts 全 suite 一齊跑就會發現）。
+type AuditSnapshot = { client_rate_snapshot: number | null; guard_wage_snapshot: number | null; broker_fee_snapshot: number | null };
+type PreviewRow = { id: string; site_name: string; shift_type_code: string; work_date: string; before: AuditSnapshot; after: AuditSnapshot };
 
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined) return null;
@@ -116,11 +140,20 @@ export async function POST(req: Request) {
     const [brokers, sites, shiftTypes] = await Promise.all([
       brokerIds.length ? prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, kind: true, code: true } }) : Promise.resolve([]),
       prisma.site.findMany({ where: { id: { in: siteIdList } }, select: { id: true, canonicalName: true } }),
-      prisma.shiftType.findMany({ where: { id: { in: shiftTypeIdList } }, select: { id: true, code: true } }),
+      // 應修：加 billingGroup——收客价 resolver／未定价判斷而家用
+      // shift_type.billing_group（唔再用 site.billing_model）。
+      prisma.shiftType.findMany({ where: { id: { in: shiftTypeIdList } }, select: { id: true, code: true, billingGroup: true } }),
     ]);
     const brokerById = new Map(brokers.map((b) => [b.id, b]));
     const siteById = new Map(sites.map((s) => [s.id, s]));
     const shiftTypeById = new Map(shiftTypes.map((s) => [s.id, s]));
+    const unpricedLookups: UnpricedLookups = {
+      brokerKindById: new Map(brokers.map((b) => [b.id, b.kind as BrokerKindLike])),
+      brokerCodeById: new Map(brokers.map((b) => [b.id, b.code])),
+      siteNameById: new Map(sites.map((s) => [s.id, s.canonicalName])),
+      shiftTypeCodeById: new Map(shiftTypes.map((s) => [s.id, s.code])),
+      shiftTypeBillingGroupById: new Map(shiftTypes.map((s) => [s.id, s.billingGroup])),
+    };
 
     // S6：一次過（Promise.all，唔逐個 site 排隊 await）攞晒每個盤喺呢個
     // 月範圍嘅有效卡。
@@ -129,9 +162,7 @@ export async function POST(req: Request) {
 
     type Update = { id: string; clientRate: number | null; guardWage: number | null; brokerFee: number | null };
     const updates: Update[] = [];
-    const groupsMap = new Map<string, RepriceGroup>();
     const previewRows: PreviewRow[] = [];
-    let unpricedCount = 0;
     let changedCount = 0;
     let unchangedCount = 0;
     let keptUnresolvedCount = 0;
@@ -143,6 +174,7 @@ export async function POST(req: Request) {
         siteId: r.siteId,
         shiftTypeId: r.shiftTypeId,
         shiftTypeCode: shiftTypeById.get(r.shiftTypeId)?.code ?? "",
+        shiftTypeBillingGroup: shiftTypeById.get(r.shiftTypeId)?.billingGroup ?? "per_shift",
         settlementBrokerId: r.settlementBrokerId,
         brokerKind,
         guardId: r.guardId,
@@ -155,13 +187,17 @@ export async function POST(req: Request) {
       const beforeWage = numOrNull(r.guardWageSnapshot);
       const beforeFee = numOrNull(r.brokerFeeSnapshot);
 
-      // M3：resolver 搵唔到收客价（冇 clientCard）就保留原值，唔清做
-      // null；出街价（wage/fee 一齊嚟自同一張 payoutCard）同理——
-      // `pricing.unpriced===true` 先代表「真係搵唔到」（external／
-      // longterm 兩種「正常冇出街价」嘅情況 unpriced 一律 false，唔會
-      // 喺呢度被當「keep」）。
-      const clientNotFound = pricing.clientRate === null;
-      const payoutNotFound = pricing.unpriced === true;
+      // 應修（Opus 第二輪驗收）：改用獨立嘅 `clientCardFound`／
+      // `payoutCardFound` flag（唔再借 `pricing.unpriced` 做雙重用途——
+      // 嗰個欄位淨係反映出街价嘅「業務未定价」判斷，external／longterm
+      // 呢兩類「正常冇出街价」一律 `unpriced:false`，唔可以當「搵到咗
+      // null」誤覆蓋原有 snapshot）。仲要：internal_longterm／external
+      // 記錄嘅 wage/fee 永遠唔喺 reprice 改（保留原值，計入
+      // kept_unresolved）——呢兩類本身唔經「逐更卡」出糧/收費，reprice
+      // 唔應該掂佢哋嘅出街价。
+      const neverRepriceWage = brokerKind === "internal_longterm" || brokerKind === "external";
+      const clientNotFound = !pricing.clientCardFound;
+      const payoutNotFound = neverRepriceWage || !pricing.payoutCardFound;
       const afterClient = clientNotFound ? beforeClient : pricing.clientRate;
       const afterWage = payoutNotFound ? beforeWage : pricing.guardWage;
       const afterFee = payoutNotFound ? beforeFee : pricing.brokerFee;
@@ -183,37 +219,38 @@ export async function POST(req: Request) {
             site_name: siteById.get(r.siteId)?.canonicalName ?? r.siteId.slice(0, 8),
             shift_type_code: shiftTypeById.get(r.shiftTypeId)?.code ?? r.shiftTypeId.slice(0, 8),
             work_date: r.workDate.toISOString().slice(0, 10),
-            before: { clientRate: beforeClient, guardWage: beforeWage, brokerFee: beforeFee },
-            after: { clientRate: afterClient, guardWage: afterWage, brokerFee: afterFee },
-          });
-        }
-      }
-
-      // 「未定价」統計——收客价／出街价都搵唔到（同 dry-run/commit 都要
-      // 一致，等用戶睇到嘅預覽數同真係寫入之後嘅數一致）。
-      if (clientNotFound && payoutNotFound) {
-        unpricedCount++;
-        const key = `${r.siteId}|${r.shiftTypeId}|${r.settlementBrokerId ?? "none"}`;
-        const existing = groupsMap.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          groupsMap.set(key, {
-            site_id: r.siteId,
-            site_name: siteById.get(r.siteId)?.canonicalName ?? r.siteId.slice(0, 8),
-            shift_type_code: shiftTypeById.get(r.shiftTypeId)?.code ?? r.shiftTypeId.slice(0, 8),
-            broker_code: brokerRow?.code ?? null,
-            broker_display: brokerRow?.code ?? "冇雞頭",
-            count: 1,
+            before: { client_rate_snapshot: beforeClient, guard_wage_snapshot: beforeWage, broker_fee_snapshot: beforeFee },
+            after: { client_rate_snapshot: afterClient, guard_wage_snapshot: afterWage, broker_fee_snapshot: afterFee },
           });
         }
       }
     }
 
-    const groups = [...groupsMap.values()].sort((a, b) => a.site_name.localeCompare(b.site_name) || a.shift_type_code.localeCompare(b.shift_type_code));
+    // 必修 2：「未定价」統計（`unpriced`／`groups`）唔再喺上面嗰個 loop
+    // 各自另計一套（`clientNotFound && payoutNotFound`）——而家用「模擬
+    // 寫入之後」嘅記錄，餵返 `computeUnpricedSummary()`（同 `buildUnpriced
+    // Summary()` 共用嘅核心邏輯），保證同 GET /api/shift-records/unpriced
+    // 顯示嘅口徑一致（例如 external/longterm 唔會被計做未定价）。
+    const simulatedRecords: UnpricedRecordLike[] = records.map((r, i) => {
+      const u = updates[i]!;
+      return {
+        siteId: r.siteId,
+        shiftTypeId: r.shiftTypeId,
+        settlementBrokerId: r.settlementBrokerId,
+        status: "confirmed",
+        guardWageSnapshot: u.guardWage,
+        brokerFeeSnapshot: u.brokerFee,
+        clientRateSnapshot: u.clientRate,
+        isExternal: r.isExternal,
+      };
+    });
+    const simulatedSummary = computeUnpricedSummary(simulatedRecords, unpricedLookups);
+    const groups: RepriceGroup[] = simulatedSummary.groups;
 
     if (dryRun) {
-      // M3：dry-run 淨係回 diff 摘要，乜都唔寫。
+      // M3：dry-run 淨係回 diff 摘要，乜都唔寫；`unpriced`／`groups` 用
+      // 上面模擬寫入之後嘅 `computeUnpricedSummary()` 結果（同 GET
+      // /api/shift-records/unpriced 同一套口徑）。
       return ok(
         brandSafeResponse({
           dry_run: true,
@@ -223,7 +260,9 @@ export async function POST(req: Request) {
           changed: changedCount,
           unchanged: unchangedCount,
           kept_unresolved: keptUnresolvedCount,
-          unpriced: unpricedCount,
+          unpriced: simulatedSummary.count,
+          unpriced_payout: simulatedSummary.payoutCount,
+          unpriced_client: simulatedSummary.clientCount,
           groups,
           preview: previewRows,
         }),
@@ -249,18 +288,30 @@ export async function POST(req: Request) {
     }
 
     // audit：after 含全部 changed 記錄嘅 {id, before, after}（可逆）——
-    // 用 id＋盤／更別／日期，唔存真名（PDPO）。
+    // 用 id＋盤／更別／日期，唔存真名（PDPO）。應修：上限
+    // AUDIT_CHANGED_RECORDS_LIMIT（1,000）條，超過就淨係存前 1,000＋
+    // `truncated:true`＋總數（唔想一個月幾千條改動令 audit_log 一行
+    // JSON 過大）。
     const changedIdSet = new Set(changedUpdates.map((u) => u.id));
-    const auditChangedRows = records
+    const auditChangedRowsAll = records
       .filter((r) => changedIdSet.has(r.id))
       .map((r) => {
         const u = updates.find((x) => x.id === r.id)!;
         return {
           id: r.id,
-          before: { clientRate: numOrNull(r.clientRateSnapshot), guardWage: numOrNull(r.guardWageSnapshot), brokerFee: numOrNull(r.brokerFeeSnapshot) },
-          after: { clientRate: u.clientRate, guardWage: u.guardWage, brokerFee: u.brokerFee },
+          before: { client_rate_snapshot: numOrNull(r.clientRateSnapshot), guard_wage_snapshot: numOrNull(r.guardWageSnapshot), broker_fee_snapshot: numOrNull(r.brokerFeeSnapshot) },
+          after: { client_rate_snapshot: u.clientRate, guard_wage_snapshot: u.guardWage, broker_fee_snapshot: u.brokerFee },
         };
       });
+    const auditTruncated = auditChangedRowsAll.length > AUDIT_CHANGED_RECORDS_LIMIT;
+    const auditChangedRows = auditTruncated ? auditChangedRowsAll.slice(0, AUDIT_CHANGED_RECORDS_LIMIT) : auditChangedRowsAll;
+
+    // 必修 2：commit 之後直接打一次真正嘅 `buildUnpricedSummary()`（讀返
+    // 寫入咗之後嘅 DB 狀態）——response 嘅 `unpriced`／`groups` 用呢個
+    // 權威結果，唔用上面 dry-run 嗰個「模擬」數（DB 已經寫咗，唔使再靠
+    // 模擬）。
+    const postCommitUnpriced = await buildUnpricedSummary(session, month, parsed.site_id ?? null);
+
     await writeAudit({
       actorUserId: session.userId,
       tableName: "shift_records",
@@ -273,8 +324,10 @@ export async function POST(req: Request) {
         changed: changedCount,
         unchanged: unchangedCount,
         kept_unresolved: keptUnresolvedCount,
-        unpriced: unpricedCount,
+        unpriced: postCommitUnpriced.count,
         changed_records: auditChangedRows,
+        changed_records_total: auditChangedRowsAll.length,
+        truncated: auditTruncated,
       },
       ip: getClientIp(req),
     });
@@ -288,8 +341,10 @@ export async function POST(req: Request) {
         changed: changedCount,
         unchanged: unchangedCount,
         kept_unresolved: keptUnresolvedCount,
-        unpriced: unpricedCount,
-        groups,
+        unpriced: postCommitUnpriced.count,
+        unpriced_payout: postCommitUnpriced.payoutCount,
+        unpriced_client: postCommitUnpriced.clientCount,
+        groups: postCommitUnpriced.groups,
         preview: previewRows,
       }),
     );

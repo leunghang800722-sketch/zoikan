@@ -53,6 +53,7 @@ describe("WP2 N1：audit_log 側 channel（DTO + field-group gate）", () => {
       req("http://test.local/api/rate-cards", ownerCookie, "POST", {
         site_id: fx.site.id,
         effective_from: "2026-08-01",
+        billing_model: "per_shift",
         client_rate: 999,
         guard_wage: 700,
         broker_fee: 60,
