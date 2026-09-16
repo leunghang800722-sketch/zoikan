@@ -418,7 +418,13 @@ async function seedRateCards(
         payoutRate: split.guardWage != null || split.brokerFee != null ? (split.guardWage ?? 0) + (split.brokerFee ?? 0) : num(r.payout_rate),
         billingModel: str(r.billing_model) ? mapBillingModel(r.billing_model) : null,
         effectiveFrom: dateOnly(r.effective_from)!,
-        effectiveTo: dateOnly(r.effective_to),
+        // WP-PRICE（老闆 2026-09-16 拍板）：8 月價同 7 月一樣——254 張
+        // effective_to="2026-07-31" 嘅卡喺 dev seed 都要伸長做無限期，
+        // 同正式站 prisma/migrations/20260916000000_extend_rate_cards_
+        // open_ended 嘅 UPDATE 結果一致（dev seed 同 prod migration 雙軌
+        // 但要同一個結果）。7 月 shift_records snapshot 唔受影響——呢度
+        // 淨係改緊生效範圍，唔改任何快照值。
+        effectiveTo: r.effective_to === "2026-07-31" ? null : dateOnly(r.effective_to),
         source: str(r.source),
         evidence: str(r.evidence),
         confidence: str(r.confidence),

@@ -38,6 +38,13 @@ export type AuditAction =
   | "ai_feedback_chat"
   | "ai_feasibility_guard_triggered"
   | "feedback_submit"
+  // WP-PRICE（老闆 2026-09-16 拍板）：`POST /api/shift-records/reprice`
+  // 一個月/一個盤重新計价，一次過覆蓋整段範圍嘅 snapshot（價目卡改咗
+  // 要生效）——一行 audit（table_name="shift_records"，row_id=
+  // "reprice:<month>[:<site_id>]"），after 存 counts（唔存逐條 before/
+  // after，成千上萬條會令 audit_log 爆），詳情見
+  // src/app/api/shift-records/reprice/route.ts。
+  | "reprice_month"
   // P2.5 Opus 驗收應修④：`session/summarize` 每次成功整理（叫咗一次
   // LLM）都寫一條（table_name="ai_feedback_chat"，同 `ai_feedback_chat`
   // 呢個 action 分開，等 audit_log 可以分辨「訪談對話」定「整理」，同

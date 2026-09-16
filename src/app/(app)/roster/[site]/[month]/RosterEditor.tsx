@@ -113,7 +113,17 @@ type BrokerDto = {
   name: string;
 };
 
-type BatchResponse = { results: { key: string; id: string; action: string }[]; warnings: string[] };
+// WP-PRICE（老闆 2026-09-16 拍板）：batch 儲存回應加咗 pricing 統計——
+// 「未定价」＝清楚警告，唔准靜靜 0（見 src/app/api/shift-records/
+// batch/route.ts）。
+type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
+type BatchResponse = {
+  results: { key: string; id: string; action: string }[];
+  warnings: string[];
+  pricing?: { priced: number; unpriced: number; unpriced_cells: UnpricedCellSummary[] };
+};
+type UnpricedGroup = { site_id: string; site_name: string; shift_type_code: string; broker_code: string | null; broker_display: string; count: number };
+type UnpricedSummary = { count: number; groups: UnpricedGroup[] };
 
 // P1-WP3 第三輪規劃裁定（point B(4)）：同步 `prisma/schema.prisma` 嘅
 // `LeaveCode` enum（已經由 `tools/importer/mappings/status_codes.csv`
@@ -470,7 +480,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
   );
 });
 
-export default function RosterEditor({ siteId, month }: { siteId: string; month: string }) {
+export default function RosterEditor({ siteId, month, canReprice = false }: { siteId: string; month: string; canReprice?: boolean }) {
   const router = useRouter();
   const { year, monthNum } = parseMonthStr(month);
   const days = daysInMonth(year, monthNum);
@@ -536,11 +546,31 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
   // WP-R2：儲存成功 toast（README §04「儲存後 Toast」）——右下深色 toast，
   // 3 秒後自動消失。
   const [showSaveToast, setShowSaveToast] = useState(false);
+  // WP-PRICE：儲存呢次帶嚟嘅未定价數（null＝呢次儲存全部有价，唔顯示
+  // 警告字眼；>0＝toast 改講「已儲存 · N 格未定价」）。
+  const [saveToastUnpriced, setSaveToastUnpriced] = useState<number | null>(null);
   useEffect(() => {
     if (!showSaveToast) return;
     const t = setTimeout(() => setShowSaveToast(false), 3000);
     return () => clearTimeout(t);
   }, [showSaveToast]);
+  // WP-PRICE §3：頁首持續顯示嘅「呢個月有 N 更未定价」Notice——載入時同
+  // 儲存後（`reloadTick` 一齊帶）刷新，用 GET /api/shift-records/unpriced。
+  const [unpricedSummary, setUnpricedSummary] = useState<UnpricedSummary | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<UnpricedSummary>("/api/shift-records/unpriced", { month, site_id: siteId })
+      .then((res) => {
+        if (!cancelled) setUnpricedSummary(res);
+      })
+      .catch(() => {
+        // 未定价 Notice 純粹 additive 提示，攞唔到就靜靜唔顯示（唔阻住成個更表編輯器）。
+        if (!cancelled) setUnpricedSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [siteId, month, reloadTick]);
   const skipExtraRowsResetRef = useRef(false);
 
   // 選格／編輯
@@ -1251,6 +1281,9 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       const res = await apiPost<BatchResponse>("/api/shift-records/batch", { site_id: siteId, month, cells: diffCells });
       setWarnings(res.warnings ?? []);
       skipExtraRowsResetRef.current = true;
+      // WP-PRICE：呢次儲存有未定价格就喺 toast 講清楚（唔准靜靜當儲存
+      // 成功；`reloadTick`＋1 同時會觸發上面嘅未定价 Notice 刷新）。
+      setSaveToastUnpriced(res.pricing && res.pricing.unpriced > 0 ? res.pricing.unpriced : null);
       setReloadTick((t) => t + 1);
       setShowSaveToast(true);
     } catch (err) {
@@ -1269,6 +1302,30 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       setSaving(false);
     }
   }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum]);
+
+  // WP-PRICE：「重新計价」——價目卡補咗／改咗之後，一鍵將呢個盤呢個月
+  // 全部 shift 記錄嘅 snapshot 追返卡（見 POST /api/shift-records/
+  // reprice）。撳前 confirm（規劃裁定，會覆蓋現有 snapshot，唔只 null）。
+  const [repricing, setRepricing] = useState(false);
+  const handleReprice = useCallback(async () => {
+    if (repricing) return;
+    if (!window.confirm(`確定要重新計价 ${month}（${siteName || siteId}）？呢個操作會用現時價目卡覆蓋呢個盤呢個月全部更次嘅收客價／出街價 snapshot。`)) {
+      return;
+    }
+    setRepricing(true);
+    try {
+      const res = await apiPost<{ repriced: number; unpriced: number; groups: UnpricedGroup[] }>("/api/shift-records/reprice", { month, site_id: siteId });
+      setUnpricedSummary({ count: res.unpriced, groups: res.groups });
+      skipExtraRowsResetRef.current = true;
+      setReloadTick((t) => t + 1);
+      setErrorBanner(null);
+      window.alert(`重新計价完成：${res.repriced} 更已重算，仲有 ${res.unpriced} 更未定价。`);
+    } catch (err) {
+      setErrorBanner(err instanceof ApiClientError ? err.message : err instanceof Error ? err.message : "重新計价失敗");
+    } finally {
+      setRepricing(false);
+    }
+  }, [repricing, month, siteId, siteName]);
 
   const handleRevert = useCallback(() => {
     setCells(new Map(baseline));
@@ -1984,6 +2041,38 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
           </div>
         )
       )}
+      {/* WP-PRICE §3：呢個盤呢個月未定价格持續提示（唔止儲存嗰下先出——
+          載入頁面已經攞緊，等用戶就算冇改動都睇到舊有缺價格）。 */}
+      {unpricedSummary && unpricedSummary.count > 0 && (
+        <Notice
+          variant="warning"
+          action={
+            canReprice ? (
+              <button
+                type="button"
+                onClick={handleReprice}
+                disabled={repricing}
+                className="rounded border border-current px-2 py-1 text-[12px] disabled:opacity-50"
+              >
+                {repricing ? "計价緊…" : `重新計价（${month}）`}
+              </button>
+            ) : undefined
+          }
+        >
+          <p className="font-medium">呢個月有 {unpricedSummary.count} 更未定价（冇對應價目卡），金額未計入報表：</p>
+          <ul className="list-disc pl-5 mt-1">
+            {unpricedSummary.groups.map((g) => (
+              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1">
+            去<Link href="/rate-cards" className="underline" style={{ color: "inherit" }}>價目頁</Link>補卡後
+            {canReprice ? "，撳右邊「重新計价」。" : "，請有「出街價:update」權限嘅同事撳「重新計价」。"}
+          </p>
+        </Notice>
+      )}
       {warnings.length > 0 && (
         <div className="rounded border border-yellow-300 bg-yellow-50 text-yellow-900 text-sm px-3 py-2 space-y-1">
           <p className="font-medium">儲存成功，但有以下軟性警示（唔擋寫入，建議留意）：</p>
@@ -2451,10 +2540,15 @@ export default function RosterEditor({ siteId, month }: { siteId: string; month:
       {showSaveToast && (
         <div
           data-testid="roster-save-toast"
-          className="fixed bottom-5 right-5 z-50 rounded-md bg-[#0f172a] px-4 py-2.5 text-[13px] text-white"
-          style={{ boxShadow: "0 6px 18px rgba(15,23,42,.3)" }}
+          className="fixed bottom-5 right-5 z-50 rounded-md px-4 py-2.5 text-[13px] text-white"
+          style={{
+            // WP-PRICE：有未定价格就用警示色（唔係「儲存成功」嗰隻深藍色），
+            // 等用戶一眼睇到呢次儲存唔係「乜都掂晒」。
+            background: saveToastUnpriced ? "#b45309" : "#0f172a",
+            boxShadow: "0 6px 18px rgba(15,23,42,.3)",
+          }}
         >
-          已儲存
+          {saveToastUnpriced ? `已儲存 · ${saveToastUnpriced} 格未定价（冇對應價目卡）` : "已儲存"}
         </div>
       )}
     </div>

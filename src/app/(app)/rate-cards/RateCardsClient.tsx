@@ -77,7 +77,7 @@ const emptyForm = {
   note: "",
 };
 
-export function RateCardsClient({ isBroker }: { isBroker: boolean }) {
+export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: boolean; canReprice?: boolean }) {
   const [rows, setRows] = useState<RateCardRow[]>([]);
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
@@ -122,6 +122,30 @@ export function RateCardsClient({ isBroker }: { isBroker: boolean }) {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteFilter, skip]);
+
+  // WP-PRICE（老闆 2026-09-16 拍板）：「重新計价」——用「生效月」篩選器
+  // 揀嘅月份（冇揀就用返家陣個月），撳前 confirm（會覆蓋現有 snapshot，
+  // 唔只 null）。同 payroll/roster 頁一樣嘅設計。
+  const [repricing, setRepricing] = useState(false);
+  async function handleReprice() {
+    if (repricing) return;
+    const month = effectiveMonthFilter || new Date().toISOString().slice(0, 7);
+    const scopeLabel = siteFilter ? (sites.find((s) => s.id === siteFilter)?.canonical_name ?? "呢個盤") : "全部盤";
+    if (!window.confirm(`確定要重新計价 ${month}（${scopeLabel}）？呢個操作會用現時價目卡覆蓋呢段月份嘅收客價／出街價 snapshot。`)) return;
+    setRepricing(true);
+    setError(null);
+    setNotice(null);
+    const res = await apiPost<{ repriced: number; unpriced: number }>("/api/shift-records/reprice", {
+      month,
+      ...(siteFilter ? { site_id: siteFilter } : {}),
+    });
+    setRepricing(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    setNotice(`重新計价完成：${res.data.repriced} 更已重算，仲有 ${res.data.unpriced} 更未定价。`);
+  }
 
   useEffect(() => {
     (async () => {
@@ -298,6 +322,11 @@ export function RateCardsClient({ isBroker }: { isBroker: boolean }) {
                 onChange={(e) => setEffectiveMonthFilter(e.target.value)}
               />
             </FilterChip>
+            {canReprice && (
+              <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
+                {repricing ? "計价緊…" : `重新計价（${effectiveMonthFilter || "本月"}）`}
+              </Button>
+            )}
             <Button variant="primary" onClick={openCreate}>
               新增價目
             </Button>

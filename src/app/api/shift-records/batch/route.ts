@@ -43,6 +43,11 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest, Forbidden, Conflict } from "@/lib/api/errors";
 import { LeaveCode, type Prisma, type ShiftRecordStatus } from "@prisma/client";
+// WP-PRICE（老闆 2026-09-16 拍板）：儲存時自動計价——見
+// src/lib/pricing/resolve-rate.ts 頂註解。`fetchEffectiveRateCards()`
+// 一次攞晒呢個盤呢個月範圍嘅有效卡，`resolveShiftPricingFromCards()`
+// 喺記憶體逐格揀價，唔逐格打 DB。
+import { fetchEffectiveRateCards, resolveShiftPricingFromCards, type ResolvedShiftPricing } from "@/lib/pricing/resolve-rate";
 
 const LEAVE_CODES = new Set<string>(Object.values(LeaveCode));
 
@@ -67,6 +72,8 @@ type PlannedOp =
       settlementBrokerId: string | null;
       operationalBrokerId: string | null;
       status: ShiftRecordStatus;
+      existingIsExternal: boolean; // WP-PRICE：計价 external 判斷要用——現存記錄保留佢原本嘅 is_external，新記錄預設 false
+      pricing: ResolvedShiftPricing | null; // WP-PRICE：喺 plans 起晒之後先一次過計（見下面「計价」段），呢度淨係佔位
     };
 
 export async function POST(req: Request) {
@@ -201,7 +208,57 @@ export async function POST(req: Request) {
         settlementBrokerId,
         operationalBrokerId,
         status,
+        existingIsExternal: record?.isExternal ?? false,
+        pricing: null,
       });
+    }
+
+    // ---- WP-PRICE：計价（老闆 2026-09-16 拍板）------------------------
+    // 喺 plans 起晒之後、開 transaction 之前一次過計——一次 query 攞晒
+    // 呢個盤本月範圍嘅有效卡（`fetchEffectiveRateCards`），逐格喺記憶體
+    // 揀價（`resolveShiftPricingFromCards`），唔逐格打 DB。淨係
+    // record_type=shift 先計「未定价」統計（leave 冇「呢更嘅價」呢個
+    // 概念，resolver 本身對 leave 已經回全 null＋unpriced:false）。
+    const upsertPlans = plans.filter((p): p is Extract<PlannedOp, { kind: "upsert" }> => p.kind === "upsert");
+    const pricingBrokerIds = [...new Set(upsertPlans.map((p) => p.settlementBrokerId).filter((v): v is string => v !== null))];
+    const pricingBrokers = pricingBrokerIds.length
+      ? await prisma.broker.findMany({ where: { id: { in: pricingBrokerIds } }, select: { id: true, kind: true, code: true } })
+      : [];
+    const brokerKindById = new Map(pricingBrokers.map((b) => [b.id, b.kind]));
+    const brokerCodeById = new Map(pricingBrokers.map((b) => [b.id, b.code]));
+    const rateCards = await fetchEffectiveRateCards(parsed.site_id, month, monthEnd);
+
+    type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
+    const unpricedByKey = new Map<string, UnpricedCellSummary>();
+    let pricedCount = 0;
+    let unpricedCount = 0;
+    for (const plan of upsertPlans) {
+      plan.pricing = resolveShiftPricingFromCards(rateCards, {
+        siteId: parsed.site_id,
+        shiftTypeId: plan.cell.shift_type_id,
+        settlementBrokerId: plan.settlementBrokerId,
+        brokerKind: plan.settlementBrokerId ? (brokerKindById.get(plan.settlementBrokerId) ?? null) : null,
+        guardId: plan.cell.guard_id,
+        workDate: plan.cell.work_date,
+        isExternal: plan.existingIsExternal,
+        recordType: plan.recordType,
+      });
+      if (plan.recordType !== "shift") continue; // leave 唔計入「未定价」統計
+      if (plan.pricing.unpriced) {
+        unpricedCount++;
+        const shiftTypeCode = shiftTypeById.get(plan.cell.shift_type_id)!.code;
+        const brokerCode = plan.settlementBrokerId ? (brokerCodeById.get(plan.settlementBrokerId) ?? null) : null;
+        const key = `${shiftTypeCode}|${brokerCode ?? "冇雞頭"}|${plan.pricing.reason ?? ""}`;
+        const existingSummary = unpricedByKey.get(key);
+        if (existingSummary) existingSummary.count++;
+        else unpricedByKey.set(key, { key, shift_type_code: shiftTypeCode, broker_code: brokerCode, reason: plan.pricing.reason, count: 1 });
+      } else {
+        pricedCount++;
+      }
+    }
+    if (unpricedByKey.size > 0) {
+      const site = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { canonicalName: true } });
+      for (const summary of unpricedByKey.values()) summary.site_name = site?.canonicalName;
     }
 
     // ---- 全部 validate 過關，先開 transaction 寫入 --------------------
@@ -239,6 +296,13 @@ export async function POST(req: Request) {
                 settlementBrokerId: plan.settlementBrokerId,
                 operationalBrokerId: plan.operationalBrokerId,
                 status: plan.status,
+                // WP-PRICE：snapshot 跟返 plan.pricing（喺 plans 起晒之後一次過計好，
+                // 見上面「計价」段）——shift_type/guard 唔會變（本身就係揀返
+                // 呢條記錄嘅 key），settlement_broker 或者 record_type（shift↔leave）
+                // 有變都會反映喺呢個 plan.pricing。
+                clientRateSnapshot: plan.pricing?.clientRate ?? null,
+                guardWageSnapshot: plan.pricing?.guardWage ?? null,
+                brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
               },
             });
             pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
@@ -255,6 +319,11 @@ export async function POST(req: Request) {
               leaveCode: plan.leaveCode as never,
               status: plan.status,
               createdBy: session.userId,
+              // WP-PRICE：新記錄一律填 snapshot（見上面「計价」段）——
+              // 呢個 route 之前完全冇寫呢三個欄，令新更次金額靜靜變 0。
+              clientRateSnapshot: plan.pricing?.clientRate ?? null,
+              guardWageSnapshot: plan.pricing?.guardWage ?? null,
+              brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
             };
             const created = await tx.shiftRecord.create({ data });
             pendingAudits.push({ rowId: created.id, action: "create", after: created });
@@ -276,7 +345,12 @@ export async function POST(req: Request) {
 
     const warnings = await computeWarnings(guardIds, parsed.site_id, month, monthEnd, broker);
 
-    return ok(brandSafeResponse({ results, warnings }), 200);
+    // WP-PRICE：「未定价」＝清楚警告，唔准靜靜 0——回應加返呢次儲存嘅計价
+    // 結果，等 RosterEditor 儲存後可以即刻 toast/Notice 出嚟（見
+    // src/components/roster/RosterEditor.tsx）。
+    const pricing = { priced: pricedCount, unpriced: unpricedCount, unpriced_cells: [...unpricedByKey.values()] };
+
+    return ok(brandSafeResponse({ results, warnings, pricing }), 200);
   });
 }
 

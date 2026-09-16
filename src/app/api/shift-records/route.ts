@@ -20,6 +20,9 @@ import { ShiftRecordCreateSchema, BrokerShiftRecordCreateSchema } from "@/lib/ap
 import { writeAudit } from "@/lib/audit";
 import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
 import type { Prisma } from "@prisma/client";
+// WP-PRICE：單條建立都要計价（同 batch/route.ts 一樣，之前完全冇寫
+// snapshot 三個欄）——見 src/lib/pricing/resolve-rate.ts 頂註解。
+import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -119,8 +122,24 @@ export async function POST(req: Request) {
       // brokers.requires_approval 決定雞頭開嘅更一開波係 draft/待審
       // 定直接confirmed（呢度用 pending_approval，等主管審批隊列見到；
       // requires_approval=false 直接 confirmed，唔使入隊）。
-      const broker = await prisma.broker.findUniqueOrThrow({ where: { id: brokerId }, select: { requiresApproval: true } });
+      const broker = await prisma.broker.findUniqueOrThrow({ where: { id: brokerId }, select: { requiresApproval: true, kind: true } });
       data.status = broker.requiresApproval ? "pending_approval" : "confirmed";
+
+      // WP-PRICE：雞頭自己開嘅更（呢個 schema 冇任何 snapshot 欄可以自己填）
+      // 一律 runtime 計价，唔准靜靜 0。
+      const brokerPricing = await resolveShiftPricing({
+        siteId: parsedBroker.site_id,
+        shiftTypeId: parsedBroker.shift_type_id,
+        settlementBrokerId: brokerId,
+        brokerKind: broker.kind,
+        guardId: parsedBroker.guard_id,
+        workDate,
+        isExternal: false,
+        recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+      });
+      data.clientRateSnapshot = brokerPricing.clientRate;
+      data.guardWageSnapshot = brokerPricing.guardWage;
+      data.brokerFeeSnapshot = brokerPricing.brokerFee;
 
       await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
@@ -146,6 +165,29 @@ export async function POST(req: Request) {
     }
     const data = snakeToCamelShallow(parsed) as Prisma.ShiftRecordUncheckedCreateInput;
     const workDate = parsed.work_date;
+
+    // WP-PRICE：內部角色呢個 schema 本身容許手動傳 *_snapshot（保留
+    // 手動覆寫能力，例如補漏單／人手核價）——淨係冇傳嗰啲先自動計价，
+    // 傳咗嘅一律尊重，唔覆蓋。
+    if (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null) {
+      const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
+      const brokerForPricing = settlementBrokerId
+        ? await prisma.broker.findUnique({ where: { id: settlementBrokerId }, select: { kind: true } })
+        : null;
+      const internalPricing = await resolveShiftPricing({
+        siteId: parsed.site_id,
+        shiftTypeId: parsed.shift_type_id,
+        settlementBrokerId,
+        brokerKind: brokerForPricing?.kind ?? null,
+        guardId: parsed.guard_id,
+        workDate,
+        isExternal: data.isExternal ?? false,
+        recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+      });
+      if (data.clientRateSnapshot == null) data.clientRateSnapshot = internalPricing.clientRate;
+      if (data.guardWageSnapshot == null) data.guardWageSnapshot = internalPricing.guardWage;
+      if (data.brokerFeeSnapshot == null) data.brokerFeeSnapshot = internalPricing.brokerFee;
+    }
 
     await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 

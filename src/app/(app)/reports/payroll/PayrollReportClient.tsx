@@ -1,0 +1,236 @@
+"use client";
+// P2-B：糧明細（按雞頭）（README §14）——逐結算單位（雞頭）本月更數／
+// 工資／雞頭費／金額；foot 合計。Generate／匯出 API 唔變。
+//
+// WP-PRICE（老闆 2026-09-16 拍板）：呢度由原本嘅 page.tsx 搬出嚟做
+// client component——`canReprice`（「出街價:update」）要喺 server
+// component 查一次先傳落嚟（同 src/app/(app)/rate-cards/page.tsx 一樣
+// 嘅 pattern），「重新計价」掣先可以做到「有權先顯示」。
+import { useEffect, useState, useCallback } from "react";
+import { apiGet, apiPost } from "@/lib/ui/api-client";
+import { Banner } from "@/components/ui/Banner";
+import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { FilterChip } from "@/components/ui/FilterChip";
+import { Pill } from "@/components/ui/Pill";
+import { Notice } from "@/components/ui/Notice";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
+import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
+
+// API response 一律 snake_case（見 src/lib/api/http.ts）。
+interface Total {
+  broker_id: string;
+  broker_name: string;
+  broker_code: string;
+  broker_kind?: string;
+  shifts: number;
+  wage: number;
+  fee: number;
+  amount: number;
+}
+
+interface UnpricedGroup {
+  site_id: string;
+  site_name: string;
+  shift_type_code: string;
+  broker_code: string | null;
+  broker_display: string;
+  count: number;
+}
+
+const COLS = 7; // 結算單位/代號/種類/更數/工資/雞頭費/金額
+
+// P2-B 應修⑤（README §14「種類 pill」）：公司兵／公司長工 藍，外判（同
+// 其餘 kind）灰——用現成 `BROKER_KIND_LABEL`（搬咗去
+// `src/lib/ui/broker-kind.ts`，`src/lib/ai/tools/common.ts` re-export，
+// 兩邊共用同一份業務用語）。
+function kindLabel(kind?: string): string {
+  return BROKER_KIND_LABEL[kind as keyof typeof BROKER_KIND_LABEL] ?? "外判";
+}
+function KindPill({ kind }: { kind?: string }) {
+  return <Pill variant={brokerKindPillTone(kind) === "blue" ? "shift" : "neutral"}>{kindLabel(kind)}</Pill>;
+}
+
+export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
+  const [month, setMonth] = useState(() => currentMonthStr());
+  const [totals, setTotals] = useState<Total[]>([]);
+  const [unpricedCount, setUnpricedCount] = useState(0);
+  const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [repricing, setRepricing] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setError(null);
+      const res = await apiGet<{ month: string; totals: Total[]; unpriced_count?: number; unpriced_groups?: UnpricedGroup[] }>(
+        `/api/reports/payroll?month=${month}`,
+      );
+      if (!res.ok) {
+        setError(res.message);
+        setLoading(false);
+        return;
+      }
+      setTotals(res.data.totals);
+      setUnpricedCount(res.data.unpriced_count ?? 0);
+      setUnpricedGroups(res.data.unpriced_groups ?? []);
+      setLoading(false);
+    })();
+  }, [month, reloadTick]);
+
+  // WP-PRICE：「重新計价」——見 src/app/(app)/roster/[site]/[month]/
+  // RosterEditor.tsx 同一段設計註解（撳前 confirm，覆蓋整段月份 snapshot）。
+  const handleReprice = useCallback(async () => {
+    if (repricing) return;
+    if (!window.confirm(`確定要重新計价 ${month}（全公司）？呢個操作會用現時價目卡覆蓋呢個月全部盤嘅收客價／出街價 snapshot。`)) return;
+    setRepricing(true);
+    try {
+      const res = await apiPost<{ repriced: number; unpriced: number; groups: UnpricedGroup[] }>("/api/shift-records/reprice", { month });
+      if (!res.ok) {
+        setError(res.message);
+        return;
+      }
+      window.alert(`重新計价完成：${res.data.repriced} 更已重算，仲有 ${res.data.unpriced} 更未定价。`);
+      setReloadTick((t) => t + 1);
+    } finally {
+      setRepricing(false);
+    }
+  }, [repricing, month]);
+
+  const grand = totals.reduce((a, t) => ({ shifts: a.shifts + t.shifts, wage: a.wage + t.wage, fee: a.fee + t.fee, amount: a.amount + t.amount }), { shifts: 0, wage: 0, fee: 0, amount: 0 });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        kicker="財務"
+        title="糧明細（按雞頭）"
+        subtitle="逐結算單位（雞頭）本月更數／工資／雞頭費／金額。"
+        actions={
+          <>
+            <FilterChip label="月份">
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </FilterChip>
+            {canReprice && (
+              <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
+                {repricing ? "計价緊…" : `重新計价（${month}）`}
+              </Button>
+            )}
+            <a href={`/api/reports/payroll?month=${month}&export=1`}>
+              <Button variant="secondary">匯出 Excel</Button>
+            </a>
+          </>
+        }
+      />
+
+      <Banner kind="error" message={error} />
+      {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
+      {unpricedCount > 0 && (
+        <Notice variant="warning">
+          <p className="font-medium">呢個月有 {unpricedCount} 更未定价（冇對應價目卡），金額未計入呢份糧明細：</p>
+          <ul className="list-disc pl-5 mt-1">
+            {unpricedGroups.map((g) => (
+              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      <EmptyMonthNotice month={month} isEmpty={!loading && totals.length === 0} onJump={setMonth} />
+
+      {/* 桌面表。 */}
+      <div className={`hidden md:block ${tableCls.wrap}`}>
+        <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
+          <thead>
+            <tr>
+              <th className={tableCls.th}>結算單位</th>
+              <th className={tableCls.th}>代號</th>
+              <th className={tableCls.th}>種類</th>
+              <th className={tableCls.thNum}>更數</th>
+              <th className={tableCls.thNum}>工資</th>
+              <th className={tableCls.thNum}>雞頭費</th>
+              <th className={tableCls.thNum}>金額</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td className="px-3.5 py-4 text-sm text-zk-faint" colSpan={7}>
+                  載入緊…
+                </td>
+              </tr>
+            )}
+            {!loading && totals.length === 0 && (
+              <tr>
+                <td colSpan={7}>
+                  <EmptyState title="呢個月暫時冇資料" />
+                </td>
+              </tr>
+            )}
+            {!loading &&
+              totals.map((t) => (
+                <tr key={t.broker_id} className={tableCls.rowHover}>
+                  <td className={`${tableCls.td} font-medium`}>{t.broker_name}</td>
+                  <td className={tableCls.td}>{t.broker_code}</td>
+                  <td className={tableCls.td}>
+                    <KindPill kind={t.broker_kind} />
+                  </td>
+                  <td className={tableCls.tdNum}>{t.shifts}</td>
+                  <td className={tableCls.tdNum}>{fmtMoney(t.wage)}</td>
+                  <td className={tableCls.tdNum}>{fmtMoney(t.fee)}</td>
+                  <td className={`${tableCls.tdNum} font-semibold`}>{fmtMoney(t.amount)}</td>
+                </tr>
+              ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td className={`${tableCls.td} ${tableCls.foot}`} colSpan={3}>
+                Total
+              </td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{grand.shifts}</td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(grand.wage)}</td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(grand.fee)}</td>
+              <td className={`${tableCls.tdNum} ${tableCls.foot}`}>{fmtMoney(grand.amount)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* 手機：每行變卡。 */}
+      <div className="flex flex-col gap-2 md:hidden">
+        {loading ? (
+          <div className="text-sm text-zk-faint">載入緊…</div>
+        ) : totals.length === 0 ? (
+          <div className="rounded-[10px] border border-zk-border bg-white">
+            <EmptyState title="呢個月暫時冇資料" />
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
+            {totals.map((t) => (
+              <div key={t.broker_id} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-[13px] font-medium text-zk-text">{t.broker_name}</span>
+                    <Pill variant="neutral">{t.broker_code}</Pill>
+                  </div>
+                  <div className="mt-0.5 text-[11.5px] text-zk-muted">
+                    {kindLabel(t.broker_kind)} · {t.shifts} 更
+                  </div>
+                </div>
+                <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(t.amount)}</div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-[13px] font-bold text-zk-text">
+              <span>Total {grand.shifts} 更</span>
+              <span>{fmtMoney(grand.amount)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

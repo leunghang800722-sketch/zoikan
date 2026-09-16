@@ -426,6 +426,15 @@ export const ShiftRecordBatchSchema = z
   })
   .strict();
 
+// WP-PRICE：`POST /api/shift-records/reprice`——重新計价，`site_id` 冇填
+// 即係成個月全部盤。
+export const ShiftRecordRepriceSchema = z
+  .object({
+    month: z.string().regex(/^\d{4}-\d{2}$/, "月份格式要係 YYYY-MM"),
+    site_id: uuid.optional(),
+  })
+  .strict();
+
 // ---------------------------------------------------------------------------
 // P1-WP3：開新月份——複製上月 daily_requirements／quotas／
 // broker_site_assignments 結構。

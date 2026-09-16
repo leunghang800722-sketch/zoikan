@@ -202,17 +202,27 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   // 落面 `monthlyFeeNoActivitySiteIds` 記低嚟俾個 site row 加返
   // 「該月冇更次記錄」嘅 note，等用戶睇到係「查過確認冇活動」，唔係
   // 「漏咗冇查」。
+  // WP-PRICE（老闆 2026-09-16 拍板）bug fix：rate_cards 伸長做無限期
+  // （見 prisma/migrations/20260916000000_extend_rate_cards_open_ended）
+  // 之後，上面 `flatCards`/`shiftTypeSpecialCards` 對任何未來月份都會
+  // 直接命中（唔再淨係 7 月）——一個月費盤如果嗰個月真係完全冇任何
+  // shift_record/daily_requirement，唔可以淨係憑住張卡直接命中就當有
+  // 營業額（同呢個 fallback 本身嘅「空月份」gate 要同一個原則），所以
+  // 呢度淨係「先查有冇活動」，冇活動就強制剝走 `flatCardBySite` 嘅
+  // entry（就算上面已經有卡直接命中都要剝）；有活動先睇要唔要行 pro-rata
+  // fallback。
   const monthlyFeeNoActivitySiteIds = new Set<string>();
   for (const site of sites) {
-    if (flatCardBySite.has(site.id)) continue;
     if (site.billingModel !== "monthly_fixed" || !site.monthlyFee) continue;
     const hasAnyRecordThisMonth =
       (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END } } })) > 0 ||
       (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0;
     if (!hasAnyRecordThisMonth) {
+      flatCardBySite.delete(site.id);
       monthlyFeeNoActivitySiteIds.add(site.id);
       continue;
     }
+    if (flatCardBySite.has(site.id)) continue; // 已經有卡直接命中，唔使 fallback 公式
     const posts = site.monthlyPosts ?? 1;
     const fullFee = n(site.monthlyFee) * posts;
     const basis = site.prorataBasis ?? "div_31";
