@@ -19,6 +19,7 @@
     "assignments:rollover": "tsx scripts/assignments/rollover.ts",
     "gate:export": "tsx scripts/report/roster-export-diff.ts --month 2026-07 && tsx scripts/report/roster-export-diff.ts --month 2026-07 --derived && tsx scripts/report/roster-export-newmonth-gate.ts",
     "gate:reports": "tsx scripts/gate/reports.ts",
+    "gate:pricing": "tsx scripts/gate/pricing.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "ai:smoke": "tsx scripts/ai/smoke.ts"

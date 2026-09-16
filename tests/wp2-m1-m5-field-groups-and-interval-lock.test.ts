@@ -186,6 +186,7 @@ describe("WP2 M5：rate_cards 生效區間月鎖——Opus 兩條重現", () => 
         site_id: fx.site.id,
         effective_from: "2026-06-01",
         effective_to: "2026-07-31",
+        billing_model: "per_shift",
         client_rate: 500,
         guard_wage: 400,
       }),

@@ -32,6 +32,7 @@ describe("WP2 audit_log middleware", () => {
       req("http://test.local/api/rate-cards", ownerCookie, "POST", {
         site_id: fx.site.id,
         effective_from: "2026-08-01",
+        billing_model: "per_shift",
         client_rate: 1000,
         guard_wage: 700,
         broker_fee: 60,

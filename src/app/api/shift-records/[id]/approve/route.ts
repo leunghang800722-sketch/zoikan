@@ -9,6 +9,9 @@ import { applyFieldGroupGate } from "@/lib/api/field-groups";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
 import { Conflict, NotFound } from "@/lib/api/errors";
+// WP-PRICE：批核嗰陣如果 snapshot 仲係 null（雞頭自己開嗰陣可能重計唔到
+// ——例如嗰陣仲未有對應卡），呢度補計一次先至 confirm，唔准帶住 0 過主。
+import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
@@ -20,7 +23,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       throw Conflict(`呢條更次而家係 ${before.status}，唔係 pending_approval，冇嘢要批`);
     }
     await assertMonthNotLocked({ workDate: before.workDate, actorUserId: session.userId, tableName: "shift_records", rowId: id, ip: getClientIp(req) });
-    const after = await prisma.shiftRecord.update({ where: { id }, data: { status: "confirmed" } });
+
+    const data: { status: "confirmed"; clientRateSnapshot?: number | null; guardWageSnapshot?: number | null; brokerFeeSnapshot?: number | null } = {
+      status: "confirmed",
+    };
+    if (before.clientRateSnapshot === null || before.guardWageSnapshot === null || before.brokerFeeSnapshot === null) {
+      const [brokerForPricing, shiftTypeForPricing] = await Promise.all([
+        before.settlementBrokerId ? prisma.broker.findUnique({ where: { id: before.settlementBrokerId }, select: { kind: true } }) : Promise.resolve(null),
+        prisma.shiftType.findUniqueOrThrow({ where: { id: before.shiftTypeId }, select: { code: true } }),
+      ]);
+      const pricing = await resolveShiftPricing({
+        siteId: before.siteId,
+        shiftTypeId: before.shiftTypeId,
+        shiftTypeCode: shiftTypeForPricing.code,
+        settlementBrokerId: before.settlementBrokerId,
+        brokerKind: brokerForPricing?.kind ?? null,
+        guardId: before.guardId,
+        workDate: before.workDate,
+        isExternal: before.isExternal,
+        recordType: before.recordType as ShiftPricingRecordType,
+      });
+      if (before.clientRateSnapshot === null) data.clientRateSnapshot = pricing.clientRate;
+      if (before.guardWageSnapshot === null) data.guardWageSnapshot = pricing.guardWage;
+      if (before.brokerFeeSnapshot === null) data.brokerFeeSnapshot = pricing.brokerFee;
+    }
+
+    const after = await prisma.shiftRecord.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: id, action: "update", before, after, ip: getClientIp(req) });
     return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(after)));
   });

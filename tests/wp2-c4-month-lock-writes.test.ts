@@ -107,7 +107,7 @@ describe("WP2 C4：月鎖補漏——16 種寫入喺鎖定月全部 403", () => 
 
   it("rate-cards：create/update/void/unvoid 以 effective_from 判斷，鎖定月全部 403（4/16）", async () => {
     const createRes = await rateCardCreate(
-      req("http://test.local/api/rate-cards", ownerCookie, "POST", { site_id: fx.site.id, effective_from: lockedDateStr, client_rate: 500, guard_wage: 400 }),
+      req("http://test.local/api/rate-cards", ownerCookie, "POST", { site_id: fx.site.id, effective_from: lockedDateStr, billing_model: "per_shift", client_rate: 500, guard_wage: 400 }),
     );
     expect(createRes.status, "rate-cards create").toBe(403);
 

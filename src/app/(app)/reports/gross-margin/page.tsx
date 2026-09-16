@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
+import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
@@ -51,11 +52,21 @@ interface SiteRow {
   below_threshold?: boolean;
   note: string | null;
 }
+interface UnpricedGroup {
+  site_id: string;
+  site_name: string;
+  shift_type_code: string;
+  broker_code: string | null;
+  broker_display: string;
+  count: number;
+}
 interface Result {
   month: string;
   threshold_pct: number;
   sites: SiteRow[];
   totals: { shifts: number; revenue?: number; cost?: number; profit?: number; margin_pct?: number | null };
+  unpriced_count?: number;
+  unpriced_groups?: UnpricedGroup[];
 }
 
 const COLS = 7; // 盤/更數/營業額/成本/毛利/毛利率/備註
@@ -142,6 +153,19 @@ export default function GrossMarginPage() {
       />
 
       <Banner kind="error" message={error} />
+      {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
+      {(data?.unpriced_count ?? 0) > 0 && (
+        <Notice variant="warning">
+          <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定价（冇對應價目卡），金額未計入毛利表：</p>
+          <ul className="list-disc pl-5 mt-1">
+            {(data!.unpriced_groups ?? []).map((g) => (
+              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
       {/* A5：當月零資料先顯示，撳「去 YYYY-MM」即刻跳去最近有資料嘅月份。 */}
       <EmptyMonthNotice month={month} isEmpty={!loading && (data?.sites.length ?? 0) === 0} onJump={setMonth} />
 

@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
+import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { inputCls } from "@/components/ui/Field";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
@@ -69,8 +70,21 @@ interface GenerateResult {
 // 毛利即時表 totals（README §13 狀態卡「毛利」要同毛利即時表口徑一致，
 // 唔可以自己用月結總表 main_rows 加返出嚟——兩份報表 scope 唔同，見
 // src/lib/reports/gross-margin.ts 檔頭註解）。
+interface UnpricedGroup {
+  site_id: string;
+  site_name: string;
+  shift_type_code: string;
+  broker_code: string | null;
+  broker_display: string;
+  count: number;
+}
 interface GrossMarginTotalsResult {
   totals: { revenue?: number; profit?: number; margin_pct?: number | null };
+  // WP-PRICE §3：呢個 route 已經 additive 加咗呢兩個欄（見
+  // src/app/api/reports/gross-margin/route.ts）——月結工作台借嚟顯示
+  // 「N 更未定价」Notice，唔使另外打 API。
+  unpriced_count?: number;
+  unpriced_groups?: UnpricedGroup[];
 }
 
 const CLOSE_COLS = 6; // 工作地點/更數/營業額/成本/盈利/%
@@ -183,6 +197,10 @@ export default function MonthlyCloseWorkbenchPage() {
   // 加返出嚟嗰個數——兩份報表 scope 唔同，見 gross-margin.ts 檔頭註解），
   // 呢度另外攞 `/api/reports/gross-margin?month=` 嘅 totals。
   const [marginTotals, setMarginTotals] = useState<GrossMarginTotalsResult["totals"] | null>(null);
+  // WP-PRICE §3：頁頂「N 更未定价，金額未計入」——同 marginTotals 一齊由
+  // gross-margin API 攞（additive 欄，唔使多打一次 API）。
+  const [unpricedCount, setUnpricedCount] = useState(0);
+  const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
   // A1（Opus 整合驗收）：入頁／切月份時，先查呢個月有冇 month_closes 行
   // （`GET /api/month-closes?month=`）——已經有就自動行一次 Generate（見
   // src/app/api/month-closes/[id]/generate/route.ts 檔頭註解：
@@ -207,6 +225,8 @@ export default function MonthlyCloseWorkbenchPage() {
     }
     setResult(res.data);
     setMarginTotals(marginRes.ok ? marginRes.data.totals : null);
+    setUnpricedCount(marginRes.ok ? (marginRes.data.unpriced_count ?? 0) : 0);
+    setUnpricedGroups(marginRes.ok ? (marginRes.data.unpriced_groups ?? []) : []);
   }
 
   async function lock() {
@@ -283,6 +303,19 @@ export default function MonthlyCloseWorkbenchPage() {
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+      {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
+      {unpricedCount > 0 && (
+        <Notice variant="warning">
+          <p className="font-medium">呢個月有 {unpricedCount} 更未定价（冇對應價目卡），金額未計入月結總表：</p>
+          <ul className="list-disc pl-5 mt-1">
+            {unpricedGroups.map((g) => (
+              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
       <EmptyMonthNotice month={month} isEmpty={!checkingExisting && !result} onJump={setMonth} />
 
       {checkingExisting && !result && <div className="text-sm text-zk-faint">載入緊…</div>}

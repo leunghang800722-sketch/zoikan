@@ -28,10 +28,38 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+// 必修（本輪 vitest 全跑發現）：`applyFieldGroupGate()` 淨係識做**頂層**
+// key（見 src/lib/api/field-groups.ts `omit()`）——WP-PRICE `reprice_month`
+// action 嘅 `after.changed_records`（src/app/api/shift-records/reprice/
+// route.ts）係一個 nested array，每項自己帶一個完整嘅 `before`/`after`
+// snapshot（`client_rate_snapshot`／`guard_wage_snapshot`／
+// `broker_fee_snapshot`），淨係靠頂層 gate 完全唔會拆到呢層，令冇「收客
+// 價:view」／「出街價:view」嘅讀者一樣經 GET /api/audit-log 見到呢啲數
+// （wp2-n1-audit-log-gate.test.ts 全 suite 一齊跑先會發現，因為 audit_log
+// 係 append-only、跨 test file 唔清）。呢度額外遞歸落 `changed_records[]`
+// 逐項對 `before`/`after` 用返同一個 `applyFieldGroupGate(shift_records)`
+// gate 一次。
+async function gateChangedRecords(session: AuthedSession, blob: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const changedRecords = blob.changed_records;
+  if (!Array.isArray(changedRecords)) return blob;
+  const gated = await Promise.all(
+    changedRecords.map(async (entry) => {
+      if (!isPlainObject(entry)) return entry;
+      const out: Record<string, unknown> = { ...entry };
+      if (isPlainObject(out.before)) out.before = await applyFieldGroupGate(session, "shift_records", out.before as Record<string, unknown>);
+      if (isPlainObject(out.after)) out.after = await applyFieldGroupGate(session, "shift_records", out.after as Record<string, unknown>);
+      return out;
+    }),
+  );
+  return { ...blob, changed_records: gated };
+}
+
 async function gateAuditBlob(session: AuthedSession, tableName: string, blob: unknown): Promise<unknown> {
   const resource = AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE[tableName];
   if (!resource || !isPlainObject(blob)) return blob;
-  return applyFieldGroupGate(session, resource, blob);
+  const gatedTop = await applyFieldGroupGate(session, resource, blob);
+  if (resource !== "shift_records") return gatedTop;
+  return gateChangedRecords(session, gatedTop);
 }
 
 export async function GET(req: Request) {

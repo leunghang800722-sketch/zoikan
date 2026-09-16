@@ -20,6 +20,9 @@ import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam } from "@/lib/reports/money";
 import { buildGrossMargin, writeGrossMarginXlsx, type GrossMarginSiteRow, type GrossMarginShiftTypeRow } from "@/lib/reports/gross-margin";
+import { DEFAULT_REPORT_MONTH } from "@/lib/reports/monthly-close";
+// WP-PRICE §3：頁頂「N 更未定价，金額未計入」Notice 要用嘅 additive 欄。
+import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
 function scrubShiftType(row: GrossMarginShiftTypeRow, canClient: boolean, canSettlement: boolean) {
   const out: Record<string, unknown> = { ...row };
@@ -90,8 +93,12 @@ export async function GET(req: Request) {
       });
     }
 
-    const result = await buildGrossMargin(month, { thresholdPct });
-    const [canClient, canSettlement] = await Promise.all([hasPermission(session, "收客價", "view"), hasPermission(session, "出街價", "view")]);
+    const [result, canClient, canSettlement, unpriced] = await Promise.all([
+      buildGrossMargin(month, { thresholdPct }),
+      hasPermission(session, "收客價", "view"),
+      hasPermission(session, "出街價", "view"),
+      buildUnpricedSummary(session, month ?? DEFAULT_REPORT_MONTH),
+    ]);
     const sites = result.sites.map((s) => scrubSite(s, canClient, canSettlement));
     const totals: Record<string, unknown> = { ...result.totals };
     if (!canClient) {
@@ -115,6 +122,8 @@ export async function GET(req: Request) {
         referral_fee_unattributed: referralFeeUnattributed,
         special_cost_unattributed: specialCostUnattributed,
         longterm_salary_total_allocatable: longtermSalaryTotalAllocatable,
+        unpriced_count: unpriced.count,
+        unpriced_groups: unpriced.groups,
       }),
     );
   });

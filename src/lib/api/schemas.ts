@@ -153,7 +153,13 @@ export const RateCardCreateSchema = z
     guard_wage: money,
     broker_fee: money,
     payout_rate: money,
-    billing_model: enumOf(BillingModel).optional(),
+    // 應修（Opus 第二輪驗收）：新建價目卡一定要明確揀 billing_model（唔
+    // 再 optional）——之前 optional 令唔少卡冇填呢個欄，resolver
+    // `isPerShiftEligible()` 將 null 當 per_shift 向下相容，某啲本來想做
+    // 「月費／special」嘅卡冇填呢個欄就會靜靜被逐更 resolver 揀中（見
+    // src/lib/pricing/resolve-rate.ts M1 註解）。Update schema（下面）
+    // 保持 optional（改現有卡可以唔改呢個欄），但唔准設 null。
+    billing_model: enumOf(BillingModel),
     effective_from: dateOnly,
     effective_to: dateOnly.optional(),
     source: z.string().optional(),
@@ -169,6 +175,10 @@ export const RateCardUpdateSchema = z
     guard_wage: money,
     broker_fee: money,
     payout_rate: money,
+    // 應修：update 可以唔改呢個欄（optional），但 `enumOf()` 本身唔接受
+    // null——傳咗就一定要係四個合法值之一，唔可以用 `null` 去清空一張
+    // 卡已經定咗嘅 billing_model（避免退返做「向下相容當 per_shift」嘅
+    // 灰色地帶）。
     billing_model: enumOf(BillingModel).optional(),
     effective_from: dateOnly.optional(),
     effective_to: dateOnly.optional(),
@@ -423,6 +433,18 @@ export const ShiftRecordBatchSchema = z
     site_id: uuid,
     month: z.string().min(4), // "YYYY-MM"，逐格 work_date 都要跌落呢個月
     cells: z.array(ShiftRecordBatchCellSchema).min(1).max(2000),
+  })
+  .strict();
+
+// WP-PRICE：`POST /api/shift-records/reprice`——重新計价，`site_id` 冇填
+// 即係成個月全部盤。S5（Opus 驗收）：月份格式收緊做真日曆月（01-12），
+// 唔止「四位數字」。M3：`dry_run` 預設 true——一定要用戶睇過預覽（diff
+// 摘要）先至可以確認 `dry_run:false` 真係寫入。
+export const ShiftRecordRepriceSchema = z
+  .object({
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "月份格式要係 YYYY-MM（01-12）"),
+    site_id: uuid.optional(),
+    dry_run: z.boolean().optional(),
   })
   .strict();
 

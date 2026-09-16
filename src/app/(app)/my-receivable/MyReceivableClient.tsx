@@ -30,6 +30,14 @@ interface GroupedRow {
   shifts: number;
   amount: number;
 }
+interface UnpricedGroup {
+  site_id: string;
+  site_name: string;
+  shift_type_code: string;
+  broker_code: string | null;
+  broker_display: string;
+  count: number;
+}
 interface Result {
   month: string;
   days: unknown[];
@@ -41,6 +49,9 @@ interface Result {
   previewing: boolean;
   broker_code?: string;
   broker_name?: string;
+  // WP-PRICE §3：additive——「N 更未定价，金額未計入」。
+  unpriced_count?: number;
+  unpriced_groups?: UnpricedGroup[];
 }
 interface BrokerRow {
   id: string;
@@ -171,6 +182,19 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
       )}
 
       <Banner kind="error" message={error} />
+      {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
+      {(data?.unpriced_count ?? 0) > 0 && (
+        <Notice variant="warning">
+          <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定价（冇對應價目卡），金額未計入以上合計：</p>
+          <ul className="list-disc pl-5 mt-1">
+            {(data!.unpriced_groups ?? []).map((g) => (
+              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
       {!forbiddenPreview && <EmptyMonthNotice month={month} isEmpty={!loading && (data?.grouped_days.length ?? 0) === 0} onJump={setMonth} />}
 
       {data && (

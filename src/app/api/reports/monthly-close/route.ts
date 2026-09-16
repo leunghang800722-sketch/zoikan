@@ -14,6 +14,8 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel, monthStart } from "@/lib/reports/money";
 import { buildMonthlyClose, writeMonthlyCloseXlsx, DEFAULT_REPORT_MONTH, type MonthlyCloseSiteRow } from "@/lib/reports/monthly-close";
 import { prisma } from "@/lib/db";
+// WP-PRICE §3：頁頂「N 更未定价，金額未計入」Notice 要用嘅 additive 欄。
+import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
 function scrubRow(row: MonthlyCloseSiteRow, canClient: boolean): Record<string, unknown> {
   if (canClient) return row;
@@ -45,10 +47,11 @@ export async function GET(req: Request) {
       });
     }
 
-    const [{ mainRows, outsideRows }, canClient, monthClose] = await Promise.all([
+    const [{ mainRows, outsideRows }, canClient, monthClose, unpriced] = await Promise.all([
       buildMonthlyClose(month),
       hasPermission(session, "收客價", "view"),
       prisma.monthClose.findUnique({ where: { month: monthStart(month) }, select: { lockedAt: true } }),
+      buildUnpricedSummary(session, month),
     ]);
 
     return ok(
@@ -57,6 +60,8 @@ export async function GET(req: Request) {
         locked: !!monthClose?.lockedAt,
         main_rows: mainRows.map((r) => scrubRow(r, canClient)),
         outside_rows: outsideRows.map((r) => scrubRow(r, canClient)),
+        unpriced_count: unpriced.count,
+        unpriced_groups: unpriced.groups,
       }),
     );
   });

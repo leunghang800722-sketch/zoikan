@@ -20,6 +20,9 @@ import { ShiftRecordCreateSchema, BrokerShiftRecordCreateSchema } from "@/lib/ap
 import { writeAudit } from "@/lib/audit";
 import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
 import type { Prisma } from "@prisma/client";
+// WP-PRICE：單條建立都要計价（同 batch/route.ts 一樣，之前完全冇寫
+// snapshot 三個欄）——見 src/lib/pricing/resolve-rate.ts 頂註解。
+import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -61,12 +64,20 @@ export async function GET(req: Request) {
   });
 }
 
-async function assertShiftTypeBelongsToSite(shiftTypeId: string, siteId: string): Promise<void> {
+async function assertShiftTypeBelongsToSite(shiftTypeId: string, siteId: string): Promise<{ code: string; billingGroup: string }> {
   // S2：shift_type.site_id 一定要同傳入嘅 site_id 一致，否則 400（防止
-  // 夾錯／夾撞另一個盤嘅更別）。
-  const st = await prisma.shiftType.findUnique({ where: { id: shiftTypeId }, select: { siteId: true } });
+  // 夾錯／夾撞另一個盤嘅更別）。順便攞返 code／billing_group——WP-PRICE
+  // resolver 要知道係咪 code="PR"（糧明細生成 reconciliation
+  // placeholder），見 src/lib/pricing/resolve-rate.ts
+  // `ResolveShiftPricingInput.shiftTypeCode`／`shiftTypeBillingGroup`。
+  const st = await prisma.shiftType.findUnique({ where: { id: shiftTypeId }, select: { siteId: true, code: true, billingGroup: true } });
   if (!st) throw BadRequest("shift_type_id 唔存在");
   if (st.siteId !== siteId) throw BadRequest("shift_type_id 唔屬於呢個 site_id");
+  // 必修 1(a)（Opus 第二輪驗收）：code="PR" 對數佔位更別——呢個 route
+  // 永遠都係「新建」（POST 冇 upsert-on-existing 分支），所以淨係要
+  // 400，唔使好似 batch/route.ts 咁分「新建 vs 更新既有」。
+  if (st.code === "PR") throw BadRequest(`更別「${st.code}」係糧明細生成嘅對數佔位更別，唔可以排更`);
+  return { code: st.code, billingGroup: st.billingGroup };
 }
 
 async function assertParentShiftValid(
@@ -106,7 +117,7 @@ export async function POST(req: Request) {
       // C1：憑空開更＋guard嫁接防線。
       await assertGuardOwnedByBroker(parsedBroker.guard_id, brokerId);
       await assertSiteAssignedToBroker(parsedBroker.site_id, brokerId, workDate);
-      await assertShiftTypeBelongsToSite(parsedBroker.shift_type_id, parsedBroker.site_id);
+      const brokerShiftType = await assertShiftTypeBelongsToSite(parsedBroker.shift_type_id, parsedBroker.site_id);
       if (parsedBroker.parent_shift_id) {
         await assertParentShiftValid(parsedBroker.parent_shift_id, session, parsedBroker.guard_id, parsedBroker.site_id, brokerId);
       }
@@ -119,8 +130,26 @@ export async function POST(req: Request) {
       // brokers.requires_approval 決定雞頭開嘅更一開波係 draft/待審
       // 定直接confirmed（呢度用 pending_approval，等主管審批隊列見到；
       // requires_approval=false 直接 confirmed，唔使入隊）。
-      const broker = await prisma.broker.findUniqueOrThrow({ where: { id: brokerId }, select: { requiresApproval: true } });
+      const broker = await prisma.broker.findUniqueOrThrow({ where: { id: brokerId }, select: { requiresApproval: true, kind: true } });
       data.status = broker.requiresApproval ? "pending_approval" : "confirmed";
+
+      // WP-PRICE：雞頭自己開嘅更（呢個 schema 冇任何 snapshot 欄可以自己填）
+      // 一律 runtime 計价，唔准靜靜 0。
+      const brokerPricing = await resolveShiftPricing({
+        siteId: parsedBroker.site_id,
+        shiftTypeId: parsedBroker.shift_type_id,
+        shiftTypeCode: brokerShiftType.code,
+        shiftTypeBillingGroup: brokerShiftType.billingGroup,
+        settlementBrokerId: brokerId,
+        brokerKind: broker.kind,
+        guardId: parsedBroker.guard_id,
+        workDate,
+        isExternal: false,
+        recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+      });
+      data.clientRateSnapshot = brokerPricing.clientRate;
+      data.guardWageSnapshot = brokerPricing.guardWage;
+      data.brokerFeeSnapshot = brokerPricing.brokerFee;
 
       await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
@@ -139,13 +168,38 @@ export async function POST(req: Request) {
     // 內部角色：完整 schema，M1/M3 field-group 寫入閘。
     const parsed = parseBody(ShiftRecordCreateSchema, rawBody);
     await assertFieldGroupWritable(session, "shift_records", parsed);
-    await assertShiftTypeBelongsToSite(parsed.shift_type_id, parsed.site_id);
+    const internalShiftType = await assertShiftTypeBelongsToSite(parsed.shift_type_id, parsed.site_id);
     if (parsed.parent_shift_id) {
       const settlementBrokerId = parsed.settlement_broker_id ?? null;
       await assertParentShiftValid(parsed.parent_shift_id, session, parsed.guard_id, parsed.site_id, settlementBrokerId);
     }
     const data = snakeToCamelShallow(parsed) as Prisma.ShiftRecordUncheckedCreateInput;
     const workDate = parsed.work_date;
+
+    // WP-PRICE：內部角色呢個 schema 本身容許手動傳 *_snapshot（保留
+    // 手動覆寫能力，例如補漏單／人手核價）——淨係冇傳嗰啲先自動計价，
+    // 傳咗嘅一律尊重，唔覆蓋。
+    if (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null) {
+      const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
+      const brokerForPricing = settlementBrokerId
+        ? await prisma.broker.findUnique({ where: { id: settlementBrokerId }, select: { kind: true } })
+        : null;
+      const internalPricing = await resolveShiftPricing({
+        siteId: parsed.site_id,
+        shiftTypeId: parsed.shift_type_id,
+        shiftTypeCode: internalShiftType.code,
+        shiftTypeBillingGroup: internalShiftType.billingGroup,
+        settlementBrokerId,
+        brokerKind: brokerForPricing?.kind ?? null,
+        guardId: parsed.guard_id,
+        workDate,
+        isExternal: data.isExternal ?? false,
+        recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+      });
+      if (data.clientRateSnapshot == null) data.clientRateSnapshot = internalPricing.clientRate;
+      if (data.guardWageSnapshot == null) data.guardWageSnapshot = internalPricing.guardWage;
+      if (data.brokerFeeSnapshot == null) data.brokerFeeSnapshot = internalPricing.brokerFee;
+    }
 
     await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 

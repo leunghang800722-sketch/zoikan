@@ -133,16 +133,33 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 冇檢查呢個盤呢個月係咪真係有營運——對一個完全冇任何 shift_
     // records/daily_requirements 嘅月份（例如業務未開始嘅 2025-07），
     // 會計出一舊假營業額，成本 0，毛利率顯示 100%。而家加一層閘：淨係
-    // 「呢個盤呢個月至少有 1 條 shift_record 或者 1 條 daily_requirement」
-    // 先至套用呢個 fallback 公式；冇嘅話當呢個盤呢個月完全冇活動（同
-    // 其他「完全冇活動」嘅盤一致，唔顯示喺 mainRows/outsideRows，見下面
-    // `hasActivity` 判斷）。淨係喺真係可能行到呢個 fallback 嘅盤先查
-    // （monthly_fixed + 有 monthly_fee），唔會拖慢其他盤。
-    const monthlyFeeFallbackCandidate = site.billingModel === "monthly_fixed" && !!site.monthlyFee;
-    const hasAnyRecordThisMonth = monthlyFeeFallbackCandidate
-      ? (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END } } })) > 0 ||
-        (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0
-      : false;
+    // 「呢個盤呢個月至少有 1 條非 cancelled 嘅 shift_record 或者 1 條
+    // daily_requirement」先至套用逐月 flat 卡／pro-rata 公式／更別級
+    // special 卡；冇嘅話當呢個盤呢個月完全冇活動（同其他「完全冇活動」
+    // 嘅盤一致，唔顯示喺 mainRows/outsideRows，見下面 `hasActivity` 判斷）。
+    //
+    // M2（Opus 驗收，2026-09-16）：之前呢條閘淨係喺
+    // `site.billingModel==="monthly_fixed"` 先查（`monthlyFeeFallbackCandidate`），
+    // 令 billing_model=admin_fee／special 嘅盤級 flat 卡（`flatCard`）
+    // 同更別級 special 卡（`shiftTypeSpecialCards`，唔理 site.billingModel
+    // 係乜）完全冇被呢個「零活動」閘擋住——依家一律計「呢個盤呢個月係咪
+    // 有非 cancelled 記錄」，唔理 site.billingModel 係邊種，逐個 site 都查
+    // （呢個 route 本身就已經逐 site 打緊幾次 DB，加呢條唔算加新瓶頸量級）。
+    const hasAnyRecordThisMonth =
+      (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } })) > 0 ||
+      (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0;
+
+    // WP-PRICE（老闆 2026-09-16 拍板）bug fix：rate_cards 伸長做無限期
+    // （見 prisma/migrations/20260916000000_extend_rate_cards_open_ended）
+    // 之後，`flatCard` 對任何未來月份都會直接命中（唔再淨係 7 月）——
+    // 一個非逐更盤（月費／admin_fee／special）如果嗰個月真係完全冇任何
+    // shift_record/daily_requirement，唔可以淨係憑住張卡直接命中就當有
+    // 營業額（同下面 monthlyFeeProrataRevenue() 嘅「空月份」gate 要同一
+    // 個原則；M2：呢條閘而家覆蓋*全部* billing_model，唔止 monthly_fixed）。
+    // `effectiveFlatCard` 喺呢種情況當冇卡處理，跌返落
+    // monthlyFeeProrataRevenue()（一樣因為 !hasAnyRecordThisMonth 而回
+    // null）→ 最尾 fallback 到 shiftAgg._sum（冇更次一樣係 0）。
+    const effectiveFlatCard = flatCard !== null && !hasAnyRecordThisMonth ? null : flatCard;
 
     function monthlyFeeProrataRevenue(): number | null {
       if (site.billingModel !== "monthly_fixed" || !site.monthlyFee) return null;
@@ -155,7 +172,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
       return round2((fullFee * numer) / denom);
     }
 
-    let revenue = flatCard ? round2(n(flatCard.clientRate)) : (monthlyFeeProrataRevenue() ?? round2(n(shiftAgg._sum.clientRateSnapshot)));
+    let revenue = effectiveFlatCard ? round2(n(effectiveFlatCard.clientRate)) : (monthlyFeeProrataRevenue() ?? round2(n(shiftAgg._sum.clientRateSnapshot)));
 
     // 規劃 session item 4：更別級（shift_type 掛實但 broker/guard 皆空）嘅
     // special 卡——例：啟航1331 Event Guard（ST0027）$11,700，唔按更數拆，
@@ -179,9 +196,18 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
         OR: [{ effectiveTo: null }, { effectiveTo: { gte: MONTH_START } }],
       },
     });
-    for (const c of shiftTypeSpecialCards) revenue = round2(revenue + n(c.clientRate));
+    // M2（Opus 驗收）：呢批更別級 special 卡（例：Event Guard $11,700）
+    // 同上面 flatCard 一樣要受「呢個盤呢個月係咪真係有活動」嘅閘管——
+    // 之前呢度冇檢查，令一個零活動月份（例如未開波嘅月份）都會計出
+    // 11,700 假營業額。冇活動就當呢批卡唔存在（`effectiveShiftTypeSpecialCards`）。
+    const effectiveShiftTypeSpecialCards = hasAnyRecordThisMonth ? shiftTypeSpecialCards : [];
+    for (const c of effectiveShiftTypeSpecialCards) revenue = round2(revenue + n(c.clientRate));
 
-    const hasRawActivity = shifts > 0 || flatCard !== null || shiftTypeSpecialCards.length > 0 || monthlyFeeProrataRevenue() !== null;
+    // WP-PRICE bug fix：呢度要用 `effectiveFlatCard`／`effectiveShiftTypeSpecialCards`
+    // （唔係 `flatCard`／`shiftTypeSpecialCards`）——一張已經伸長做無限
+    // 期、但呢個月完全冇活動嘅卡唔可以令個 site 被當「有活動」而顯示喺
+    // mainRows/outsideRows（見上面同一段註解）。
+    const hasRawActivity = shifts > 0 || effectiveFlatCard !== null || effectiveShiftTypeSpecialCards.length > 0 || monthlyFeeProrataRevenue() !== null;
 
     // out_of_scope（LINK C7）：shift_records 記錄咗留底，但 P0 regen 報表
     // 唔計呢啲 site 入更數/營業額/成本（全部顯示 0，「記錄但唔計數」，

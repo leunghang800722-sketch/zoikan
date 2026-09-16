@@ -11,10 +11,12 @@ import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel } from "@/lib/reports/money";
 import { buildPayrollTotals, writePayrollXlsx, DEFAULT_REPORT_MONTH } from "@/lib/reports/payroll";
+// WP-PRICE §3：頁頂「N 更未定价，金額未計入」Notice 要用嘅 additive 欄。
+import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
-    await requirePermission(req, "糧明細", "view");
+    const session = await requirePermission(req, "糧明細", "view");
     const url = new URL(req.url);
     const month = parseMonthParam(url.searchParams.get("month")) ?? DEFAULT_REPORT_MONTH;
     const isExport = url.searchParams.get("export") === "1";
@@ -31,7 +33,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const totals = await buildPayrollTotals(month);
-    return ok(brandSafeResponse({ month: monthLabel(month), totals }));
+    const [totals, unpriced] = await Promise.all([buildPayrollTotals(month), buildUnpricedSummary(session, month)]);
+    return ok(brandSafeResponse({ month: monthLabel(month), totals, unpriced_count: unpriced.count, unpriced_groups: unpriced.groups }));
   });
 }
