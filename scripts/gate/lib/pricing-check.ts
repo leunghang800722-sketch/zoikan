@@ -109,15 +109,17 @@ export const EXCEPTIONS: PricingGateException[] = [
       "數碼港 CP5「D」更雞頭 Y（internal_cash）：人手查證咗 7 月全部 25 個有記錄嘅工作日，呢個 site+shift_type+broker 組合 client_rate_snapshot 一律係 null（呢個 site 淨係得一張通用 $930 flat 卡，唔應該套用落呢個組合）——屬一次性業務安排，唔係 resolver 邏輯漏咗。",
   },
   {
-    // (4) 單一記錄（HKU 醫學院 2026-07-12，broker K）——`source:
+    // (4) 單一記錄（HKU 醫學院 2026-07-12，broker K，更別 C）——`source:
     // "master_roster_site"`、`settlement_page: "總表確認-K"`，嚟自「總表
     // 確認」呢個人手覆核 pathway（唔係標準 wp2b/shift_records.csv+
     // rate_cards.csv fallback pipeline），呢個盤成個 rate_cards 得 2 張卡
     // （site 級通用、同另一個雞頭嘅 guard 专属卡），完全冇任何卡夾中呢條
-    // 記錄嘅 guard/broker 組合。
-    match: (d) => d.recordId === "9a8d5971-c766-453b-96a0-3625feebcd7d",
+    // 記錄嘅 guard/broker 組合。用 site/更別/日期/雞頭（業務穩定屬性）
+    // 嚟夾——唔用 `recordId`（`npm run db:reset` 重新 seed 會產生新
+    // UUID，用 id 夾會喺下次 reseed 之後靜靜失效）。
+    match: (d) => d.siteName === "HKU 醫學院" && d.shiftTypeCode === "C" && d.workDate === "2026-07-12" && d.brokerCode === "K",
     reason:
-      "HKU 醫學院 2026-07-12 單一記錄——source=master_roster_site（「總表確認-K」人手覆核 pathway，唔係標準 rate_cards fallback pipeline），呢個盤成個 rate_cards 表得 2 張卡，冇一張夾中呢條記錄嘅 guard/broker 組合，snapshot 純粹係人手核實嘅歷史數字。",
+      "HKU 醫學院 2026-07-12（更別 C，雞頭 K）單一記錄——source=master_roster_site（「總表確認-K」人手覆核 pathway，唔係標準 rate_cards fallback pipeline），呢個盤成個 rate_cards 表得 2 張卡，冇一張夾中呢條記錄嘅 guard/broker 組合，snapshot 純粹係人手核實嘅歷史數字。",
   },
 ];
 
