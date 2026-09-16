@@ -135,9 +135,12 @@ test("(c) 老闆撳「重新計价」（2026-08）→ dry-run 預覽 dialog（�
 
   // M3：確保呢個盤呢個月真係有嘢會 changed——起碼一張 rate_card 嘅
   // client_rate 改一改（跑完自己改返），等 dry-run 預覽一定唔係「0 changed」
-  // 空預覽（自給自足，唔靠其他 test 剩低嘅狀態）。
-  const cards = await prisma.rateCard.findMany({ where: { siteId, voidedAt: null, clientRate: { not: null } } });
-  if (cards.length === 0) throw new Error("e2e (c)：搵唔到啟航1331任何有 client_rate 嘅卡做基準");
+  // 空預覽（自給自足，唔靠其他 test 剩低嘅狀態）。淨係揀 billing_model=
+  // per_shift 嘅卡——M1 之後 resolver 淨係逐更卡先可以做逐更 snapshot，
+  // special/monthly_fixed 嘅「成個月總額」卡（例如 Event Guard $11,700）
+  // 改咗都唔會令任何一條 shift_record 嘅 client_rate 變。
+  const cards = await prisma.rateCard.findMany({ where: { siteId, voidedAt: null, clientRate: { not: null }, billingModel: "per_shift" } });
+  if (cards.length === 0) throw new Error("e2e (c)：搵唔到啟航1331任何有 client_rate 嘅 per_shift 卡做基準");
   const targetCard = cards[0]!;
   const originalClientRate = targetCard.clientRate;
   await prisma.rateCard.update({ where: { id: targetCard.id }, data: { clientRate: Number(originalClientRate) + 1 } });
