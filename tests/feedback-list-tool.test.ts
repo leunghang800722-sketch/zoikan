@@ -48,7 +48,7 @@ describe("P2.5：list_feedback 工具", () => {
   it("主管 session：buildAiTools() 冇 list_feedback（唔掛載）", () => {
     const ctx: AiToolContext = {
       session: sessionFor("主管", fx.userIds["主管"]),
-      fieldVisibility: { clientRateVisible: true, settlementVisible: true },
+      fieldVisibility: { clientRateVisible: true, settlementVisible: true, guardPiiVisible: true, guardBankVisible: true },
     };
     const tools = buildAiTools(ctx);
     expect(tools.map((t) => (t as unknown as { name: string }).name)).not.toContain("list_feedback");
@@ -57,7 +57,7 @@ describe("P2.5：list_feedback 工具", () => {
   it("老闆 session：list_feedback 查到，電話已經被 scrub 走", async () => {
     const ctx: AiToolContext = {
       session: sessionFor("老闆", fx.userIds["老闆"]),
-      fieldVisibility: { clientRateVisible: true, settlementVisible: true },
+      fieldVisibility: { clientRateVisible: true, settlementVisible: true, guardPiiVisible: true, guardBankVisible: true },
     };
     const tools = buildAiTools(ctx);
     const tool = tools.find((t) => (t as unknown as { name: string }).name === "list_feedback") as unknown as {
@@ -77,7 +77,7 @@ describe("P2.5：list_feedback 工具", () => {
   it("defense-in-depth：即使人為擺一個 baseRole!='老闆' 嘅 ctx 直接 call `.run()`，都會拒絕（唔靠掛載邏輯單一防線）", async () => {
     const ctx: AiToolContext = {
       session: sessionFor("會計", fx.userIds["會計"]),
-      fieldVisibility: { clientRateVisible: true, settlementVisible: true },
+      fieldVisibility: { clientRateVisible: true, settlementVisible: true, guardPiiVisible: true, guardBankVisible: true },
     };
     // 呢度刻意唔經 buildAiTools()（本身已經唔會幫會計掛載），直接 import
     // 個 builder 出嚟模擬「萬一邊度改壞咗令呢個工具都被掛載」嘅情景。

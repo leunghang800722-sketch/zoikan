@@ -42,10 +42,49 @@ src/app/api/ai/chat/route.ts
    `public` schema 任何一張表。
 2. **`ai.*` schema**：唯讀 view（`prisma/migrations/
    20260912130100_wp_ai1_readonly_schema`）——`ai.brokers` 冇
-   `bank_info`，`ai.guards` 冇 `tel`，`ai.users` 淨係
-   `id/name/role_id/role_name/status`，`ai.audit_log` 嘅
-   `before`/`after` 經 `ai.scrub_json()` 再剝一次
-   `password_hash/otp_secret/tel/bank_info`。
+   `bank_info`，`ai.guards` 冇 `tel`。WP-PII（老闆 2026-09-17 拍板）加嘅
+   16 個保安員個人資料／牌照／銀行欄（`hkid`／`date_of_birth`／
+   `address`／`emergency_contact_*`／`sia_permit_no`／`sia_permit_type`／
+   `safety_card_*`／`hire_date`／`leave_date`／`bank_*`／
+   `blacklist_check_*`）**結構上唔喺 `ai.guards` view**——嗰個 view 明列
+   欄位（唔用 `SELECT *`），加落 `public.guards` 嘅新欄除非有人手動改埋
+   view 定義先會出現，`guard_lookup` 工具嘅 SQL 亦都明列返舊嗰 10 個
+   欄，AI 助手連 `sql_select`（限死 `search_path=ai`，掂唔到
+   `public.guards`）都讀唔到——唔靠 field-scrub 呢層 runtime 剝，係 DB
+   view 定義層面直接冇（見
+   `tests/wp-pii-ai-guards-view-structural.test.ts`）。
+
+   `ai.users` 淨係 `id/name/role_id/role_name/status`（同一種「view 定義
+   層排除」）。
+
+   `ai.audit_log` 唔同——`before`/`after` 兩個 jsonb 欄記緊逐個 resource
+   嘅完整審計快照（包括 guards 嘅 16 個新欄，寫入嗰陣已經係
+   `src/lib/api/audit-dto.ts` 轉出嚟嘅白名單 DTO，`pickWhitelist()`
+   一律轉做 snake_case，見 `src/lib/api/serialize.ts`），冇辦法好似
+   `ai.guards` 咁淨係喺 view SELECT list 度手動剝走某個 resource 嘅某幾
+   個欄（一個 `before`/`after` 欄要裝晒全部 resource 嘅形狀）。所以呢
+   度用**兩層**唔同機制：
+   - **DB view 層**（第一重，`prisma/migrations/
+     20260917010000_wp_pii_ai_audit_log_scrub`）：`ai.audit_log` 嘅
+     `before`/`after` 經 `ai.scrub_json()`（遞歸剝 jsonb key，唔理巢狀
+     幾深、object/array 都得）剝走 `password_hash`／`otp_secret`／
+     `tel`／`bank_info`，加埋 WP-PII 12 個新欄（`hkid`／
+     `date_of_birth`／`address`／`emergency_contact_name`／
+     `emergency_contact_tel`／`sia_permit_no`／`safety_card_no`／
+     `bank_name`／`bank_account_no`／`bank_payee_name`／
+     `blacklist_check_result`／`blacklist_check_date`；`sia_permit_
+     type`／`safety_card_expiry`／`hire_date`／`leave_date` 冇 PDPO
+     高敏感度，刻意唔擋，一路都可以經 audit_log 追溯）——DB 層做結構性
+     保證，`tests/wp-pii-ai-audit-log-view-structural.test.ts` 直接查
+     `pg_get_viewdef('ai.audit_log')` 斷言呢個 blocklist 齊晒。
+   - **應用層**（第二重 defense-in-depth，`src/lib/ai/field-scrub.ts`
+     `scrubUnknownShape()`）：`recent_audit`／`sql_select` 兩個「唔知邊個
+     resource」嘅通用工具，讀完 `ai.audit_log`（或者任何 `ai.*` view）
+     出嚟嘅 row 再過一次欄位*名*嘅 blocklist——`GUARD_PII_FIELDS`／
+     `GUARD_BANK_FIELDS`（連 camelCase 變體都加埋，萬一第二個 call
+     site 日後傳 camelCase 落嚟）冇「安員個人資料／安員銀行資料:view」
+     一樣會剝。呢層防嘅係「DB view 萬一漏咗、或者未來新增第二個讀
+     audit_log 嘅工具冇經返 view」呢類情況，唔係第一重防線本身。
 3. **獨立連線**：`src/lib/ai/db.ts` 用 `pg`（**唔用** `@/lib/db` 嘅
    Prisma 寫入客戶端）連 `AI_DATABASE_URL`，Pool 層再設一次
    `statement_timeout`/`query_timeout`（同角色設定雙重）。

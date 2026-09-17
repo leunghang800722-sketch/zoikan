@@ -46,6 +46,18 @@ export const MODULES = [
   "糧明細",
   "更表匯出",
   "個人資料", // P3 新增——設計文件「改自己個人資料 全部✓」，change-password／自己 display 資料用呢格，五角色皆✓
+  // WP-PII（老闆 2026-09-17 拍板）——保安員身份證／出生日期／地址／
+  // 緊急聯絡人／Blacklist check。同「個人資料」（改自己）分開——呢個
+  // module 管嘅係「睇/改邊個保安員嘅呢批敏感個人資料」，一個獨立資源
+  // field group（見 src/lib/api/field-groups.ts GUARD_PII_FIELDS），
+  // 唔可以借用「個人資料」（嗰格五角色皆✓，語意完全唔同）。牌照（號碼／
+  // 類別／到期日）、平安卡、入職／離職日期唔喺呢個 module——跟現有
+  // 「安員」module（主管出廠已經有，即老闆話嘅「主管睇部分」）。
+  "安員個人資料",
+  // WP-PII——保安員銀行戶口（銀行／戶口號碼／收款人名）。獨立於
+  // 「安員個人資料」——老闆話「主管睇部分」冇提銀行，呢個 module 主管
+  // 出廠硬性拒（同雞頭／安員一致），淨係老闆／會計見得到。
+  "安員銀行資料",
   // WP-AI1 新增（老闆 2026-09-12 產品要求）——側欄 AI 助手（唯讀，讀操作
   // 說明＋讀真實系統數據答問題）嘅基本進入權。淨係 view 有意義（助手本身
   // 冚死唔可以寫入，冇 create/update/void/export 呢類概念）；雞頭／安員
@@ -107,6 +119,8 @@ const OWNER: RoleMatrix = {
   糧明細: row(G, NA, NA, NA, G),
   更表匯出: row(G, NA, NA, NA, G),
   個人資料: row(G, NA, G, NA, NA), // 改自己個人資料✓
+  安員個人資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
+  安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
   助手: row(G, NA, NA, NA, NA), // WP-AI1：老闆✓——view 有意義，其餘 N/A
 };
 
@@ -134,6 +148,11 @@ const SUPERVISOR: RoleMatrix = {
   糧明細: row(O, NA, NA, NA, O),
   更表匯出: row(G, NA, NA, NA, G),
   個人資料: row(G, NA, G, NA, NA),
+  // WP-PII：老闆話「主管睇部分」——牌照/平安卡/入職離職日期跟「安員」
+  // module（主管出廠已經有），但身份證/出生日期/地址/緊急聯絡人/
+  // Blacklist 出廠關（○，老闆可以開）；銀行戶口主管硬性拒（✗）。
+  安員個人資料: row(O, NA, O, NA, NA),
+  安員銀行資料: uniformRow(D),
   助手: row(G, NA, NA, NA, NA), // WP-AI1：主管✓
 };
 
@@ -161,6 +180,8 @@ const ACCOUNTANT: RoleMatrix = {
   糧明細: row(G, NA, NA, NA, G),
   更表匯出: row(G, NA, NA, NA, G),
   個人資料: row(G, NA, G, NA, NA),
+  安員個人資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
+  安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
   助手: row(G, NA, NA, NA, NA), // WP-AI1：會計✓
 };
 
@@ -203,6 +224,12 @@ const BROKER: RoleMatrix = {
   糧明細: uniformRow(D),
   更表匯出: row(D, NA, NA, NA, O), // P3：export 同更表:export 一致（兩者○）
   個人資料: row(G, NA, G, NA, NA),
+  // WP-PII：雞頭硬性拒（老闆決定「雞頭淨係見自己啲人電話」——GUARD_
+  // BROKER_FIELDS 白名單本身冇加任何新欄，呢兩個 module 對雞頭嚟講純粹
+  // defense-in-depth，雞頭連 route 都行「自己安員」module，唔會撞到
+  // 呢兩格，但仍然硬性拒絕，唔留任何開放嘅可能）。
+  安員個人資料: uniformRow(D),
+  安員銀行資料: uniformRow(D),
   助手: uniformRow(D), // WP-AI1：硬性禁止——雞頭永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
 };
 
@@ -230,6 +257,8 @@ const GUARD_SELF: RoleMatrix = {
   糧明細: uniformRow(D),
   更表匯出: uniformRow(D),
   個人資料: row(G, NA, G, NA, NA), // 「改自己個人資料」P4 都適用（change-password 呢個 P1 就有）
+  安員個人資料: uniformRow(D), // WP-PII：安員硬性拒（P1 都唔做安員端，跟返成頁硬性拒絕嘅精神）
+  安員銀行資料: uniformRow(D), // WP-PII：安員硬性拒
   助手: uniformRow(D), // WP-AI1：硬性禁止——安員永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
 };
 

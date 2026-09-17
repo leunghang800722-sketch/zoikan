@@ -30,7 +30,7 @@ const fakeSession: AuthedSession = {
 
 const ctx: AiToolContext = {
   session: fakeSession,
-  fieldVisibility: { clientRateVisible: true, settlementVisible: true },
+  fieldVisibility: { clientRateVisible: true, settlementVisible: true, guardPiiVisible: true, guardBankVisible: true },
 };
 
 describe("WP-AI3：betaZodTool → OpenAI function tool 轉換（15 個工具，老闆 session）", () => {

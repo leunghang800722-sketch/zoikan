@@ -10,6 +10,7 @@
 //
 // key 用 **snake_case**（同 request/response body 嘅 wire format 一致，
 // 見 src/lib/api/schemas.ts／src/lib/api/dto/）。
+import type { Module } from "../rbac/matrix";
 import type { AuthedSession } from "../rbac/requirePermission";
 import { hasPermission } from "../rbac/requirePermission";
 import { Forbidden } from "./errors";
@@ -62,6 +63,37 @@ export const SETTLEMENT_FIELDS = {
   referral_fee_rates: ["fee_per_shift"],
 } as const;
 
+// WP-PII（老闆 2026-09-17 拍板）：保安員「安員個人資料」／「安員銀行
+// 資料」field group——同 CLIENT_RATE_FIELDS/SETTLEMENT_FIELDS 一樣嘅
+// 「逐 resource key，其餘 resource 留空陣列」形狀（淨係 guards 有嘢），
+// 咁樣可以直接掛落 applyFieldGroupGate()／assertFieldGroupWritable() 同一
+// 個機制，唔使逐 route 另外寫一次「有冇呢個 module:view 就剝呢幾隻欄」
+// 嘅邏輯。牌照（sia_permit_no/type/expiry）、平安卡、入職/離職日期
+// 刻意唔喺呢兩個 field group——跟現有「安員」module（主管出廠已經
+// 有 安員:view/update，即老闆話嘅「主管睇部分」），唔需要額外 field-
+// level gate，直接留喺 GUARD_FIELDS 白名單（src/lib/api/dto/index.ts）。
+export const GUARD_PII_FIELDS = {
+  shift_records: [],
+  rate_cards: [],
+  sites: [],
+  special_items: [],
+  month_closes: [],
+  guards: ["hkid", "date_of_birth", "address", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date"],
+  brokers: [],
+  referral_fee_rates: [],
+} as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
+
+export const GUARD_BANK_FIELDS = {
+  shift_records: [],
+  rate_cards: [],
+  sites: [],
+  special_items: [],
+  month_closes: [],
+  guards: ["bank_name", "bank_account_no", "bank_payee_name"],
+  brokers: [],
+  referral_fee_rates: [],
+} as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
+
 export type FieldGroupResource = keyof typeof CLIENT_RATE_FIELDS;
 
 function omit<T extends Record<string, unknown>>(obj: T, keys: readonly string[]): T {
@@ -89,6 +121,14 @@ export async function applyFieldGroupGate<T extends Record<string, unknown>>(
   if (settlementFields.length && !(await hasPermission(session, "出街價", "view"))) {
     out = omit(out, settlementFields);
   }
+  const guardPiiFields = GUARD_PII_FIELDS[resource];
+  if (guardPiiFields.length && !(await hasPermission(session, "安員個人資料", "view"))) {
+    out = omit(out, guardPiiFields);
+  }
+  const guardBankFields = GUARD_BANK_FIELDS[resource];
+  if (guardBankFields.length && !(await hasPermission(session, "安員銀行資料", "view"))) {
+    out = omit(out, guardBankFields);
+  }
   return out;
 }
 
@@ -99,6 +139,80 @@ export async function applyFieldGroupGateToList<T extends Record<string, unknown
 ): Promise<Dto<{ rows: T[]; total: number; skip: number; take: number }>> {
   const rows = await Promise.all(list.rows.map((r) => applyFieldGroupGate(session, resource, r)));
   return brandSafeResponse({ ...list, rows });
+}
+
+// WP-PII（Opus 驗收必修 2a）：「主管/會計改保安員 403 回歸」——前端編輯
+// 抽屜開嗰陣用列表/詳情嘅現有值起草成個 form（見 GuardsClient.tsx
+// `fillFormFromRow()`），撳「儲存」淨係改咗其中幾隻欄，但 form 冚唪唥
+// 值一齊送落 body。`assertFieldGroupWritable()` 見到 body 帶住
+// `monthly_salary`（就算值同而家 DB 一樣）就當「想寫」，冇「出街價:
+// update」就 403——連淨係改電話呢類冇 field-group 保護嘅欄都一齊被拒。
+//
+// 修法：PATCH route 入面、`assertFieldGroupWritable()` 之前，先用呢個
+// 函數同 `before`（改動之前嘅 Prisma row，camelCase）比對——field-group
+// 受控嘅欄如果值冇變，就當「冇寫」，由 body 度刪走（唔會再觸發嗰個
+// field-group 嘅 403，亦都唔會落 Prisma update data，減少無謂寫入）。
+// 真係想改嗰粒數（值唔同）先會保留喺 body，交返 assertFieldGroupWritable()
+// 照正常權限判斷 403。
+//
+// 型別正規化（`isSameFieldGroupValue()`）要處理幾種唔對稱：
+//  - money（`z.union([z.number(), z.string()])`）body 值 vs Prisma
+//    Decimal——Decimal.toString() 保留 DB 精度（例如 "8000.00"），body
+//    可能係 8000（number）；純字串比對會假陽性判「唔同」。
+//  - dateOnly（`z.coerce.date()`）body 值 vs Prisma Date——淨係比日期
+//    部分（dateOnly 冇時間），時區/毫秒噪音唔應該當「改咗」。
+//  - hkid/其他字串欄——直接字串比。
+//  - ""/null/undefined 一律當「冇值」，等空字串同 null 唔會誤判做改咗
+//    （PATCH schema 呢批新欄係 optional 唔係 nullable，前端「唔填」送
+//    ""，唔會出現喺呢個函數——但保險起見一致處理）。
+const NUMERIC_STRING_RE = /^-?\d+(\.\d+)?$/;
+
+function normalizeFieldGroupValue(v: unknown, numeric: boolean): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  const s = typeof v === "string" ? v : String(v);
+  const trimmed = s.trim();
+  // Opus 覆核 S1：數字正規化（"8000.00" ≡ 8000）只可以用喺金額類欄（Decimal
+  // vs number 唔對稱）；戶口號碼／電話呢類「數字字串」要逐字相等——
+  // "000123456" 同 "123456" 係兩個唔同戶口，唔可以被 Number() 撞埋。
+  if (numeric && NUMERIC_STRING_RE.test(trimmed)) return String(Number(trimmed));
+  return trimmed;
+}
+
+function isSameFieldGroupValue(a: unknown, b: unknown, numeric: boolean): boolean {
+  return normalizeFieldGroupValue(a, numeric) === normalizeFieldGroupValue(b, numeric);
+}
+
+/** 喺 `assertFieldGroupWritable()` 之前行，剝走 body 入面「field-group 受控、
+ * 但值同 `before` 一樣」嘅欄，令前端帶返原值唔會被誤 403。`before` 用
+ * camelCase Prisma row；`body` 用 snake_case。回傳新 object。
+ *
+ * Opus 覆核 M1：呢個「值冇變就當冇改」只可以喺 session **有嗰組嘅 view 權**
+ * 先做——否則回應碼會變成 oracle（猜啱 200／猜錯 403），冇 view 權嘅主管可以
+ * 憑 PATCH 回應核實身份證、甚至枚舉月薪。有 view 權嘅人本身睇得到個值。 */
+export async function dropUnchangedFieldGroupValues<T extends Record<string, unknown>>(
+  session: AuthedSession,
+  resource: FieldGroupResource,
+  body: T,
+  before: Record<string, unknown>,
+): Promise<T> {
+  const groups: Array<{ keys: readonly string[]; module: Module; numeric: boolean }> = [
+    { keys: CLIENT_RATE_FIELDS[resource], module: "收客價", numeric: true },
+    { keys: SETTLEMENT_FIELDS[resource], module: "出街價", numeric: true },
+    { keys: GUARD_PII_FIELDS[resource], module: "安員個人資料", numeric: false },
+    { keys: GUARD_BANK_FIELDS[resource], module: "安員銀行資料", numeric: false },
+  ];
+  const out: Record<string, unknown> = { ...body };
+  for (const g of groups) {
+    const present = g.keys.filter((k) => k in out);
+    if (!present.length) continue;
+    if (!(await hasPermission(session, g.module, "view"))) continue; // 冇 view 權：唔剝，交俾 assertFieldGroupWritable 一律 403
+    for (const snakeKey of present) {
+      const camelKey = snakeKey.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+      if (isSameFieldGroupValue(out[snakeKey], before[camelKey], g.numeric)) delete out[snakeKey];
+    }
+  }
+  return out as T;
 }
 
 /** 寫：parseBody() 之後，create/update 落 Prisma 之前一律經呢個。body
@@ -115,5 +229,13 @@ export async function assertFieldGroupWritable(
   const settlementFields = SETTLEMENT_FIELDS[resource].filter((f) => f in body);
   if (settlementFields.length && !(await hasPermission(session, "出街價", "update"))) {
     throw Forbidden(`冇「出街價」寫入權限，唔可以改 ${settlementFields.join("/")}`);
+  }
+  const guardPiiFields = GUARD_PII_FIELDS[resource].filter((f) => f in body);
+  if (guardPiiFields.length && !(await hasPermission(session, "安員個人資料", "update"))) {
+    throw Forbidden(`冇「安員個人資料」寫入權限，唔可以改 ${guardPiiFields.join("/")}`);
+  }
+  const guardBankFields = GUARD_BANK_FIELDS[resource].filter((f) => f in body);
+  if (guardBankFields.length && !(await hasPermission(session, "安員銀行資料", "update"))) {
+    throw Forbidden(`冇「安員銀行資料」寫入權限，唔可以改 ${guardBankFields.join("/")}`);
   }
 }

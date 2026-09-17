@@ -3,7 +3,7 @@
 // 嘅 `brokerColor()`），其餘 variant 用固定色。
 import type { ReactNode } from "react";
 
-export type PillVariant = "success" | "neutral" | "warning" | "shift" | "monthly" | "broker";
+export type PillVariant = "success" | "neutral" | "warning" | "shift" | "monthly" | "broker" | "danger";
 
 const VARIANT_STYLE: Record<Exclude<PillVariant, "broker">, { bg: string; fg: string }> = {
   success: { bg: "#ecfdf5", fg: "#047857" },
@@ -11,6 +11,9 @@ const VARIANT_STYLE: Record<Exclude<PillVariant, "broker">, { bg: string; fg: st
   warning: { bg: "#fff7ed", fg: "#c2410c" },
   shift: { bg: "#dbeafe", fg: "#1e40af" },
   monthly: { bg: "#ede9fe", fg: "#5b21b6" },
+  // WP-PII：牌照／平安卡已過期 pill 用——同表格 warnRow 底色 `#fef2f2`
+  // 一致嘅紅色系（見 DataTable.tsx `tableCls.warnRow`）。
+  danger: { bg: "#fef2f2", fg: "#dc2626" },
 };
 
 export interface PillProps {

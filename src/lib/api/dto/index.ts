@@ -24,7 +24,45 @@ const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTim
 // 先會計出嚟 merge 落 row——加落呢個白名單先，落面 route 就可以喺
 // DTO／field-group gate 之前就 merge，唔使再靠「gate 之後先手動加返」
 // 嗰種繞過白名單機制嘅寫法。
-const GUARD_FIELDS = ["id", "staffNo", "staffNoMw", "nameZh", "nameEn", "tel", "defaultBrokerId", "employmentType", "monthlySalary", "siaPermitExpiry", "poloSize", "mergedFrom", "status", "createdAt", "updatedAt", "createdBy", "monthShiftCount"] as const;
+// WP-PII：加 16 個保安員個人資料/牌照/銀行欄——白名單只係「呢個資源
+// response 結構上准出現邊啲欄」，field-level gate（安員個人資料/安員
+// 銀行資料 view 權限）喺呢個白名單之上再由 applyFieldGroupGate() 做
+// （見 src/lib/api/field-groups.ts）。
+const GUARD_FIELDS = [
+  "id",
+  "staffNo",
+  "staffNoMw",
+  "nameZh",
+  "nameEn",
+  "tel",
+  "defaultBrokerId",
+  "employmentType",
+  "monthlySalary",
+  "siaPermitExpiry",
+  "poloSize",
+  "mergedFrom",
+  "status",
+  "createdAt",
+  "updatedAt",
+  "createdBy",
+  "monthShiftCount",
+  "hkid",
+  "dateOfBirth",
+  "address",
+  "emergencyContactName",
+  "emergencyContactTel",
+  "siaPermitNo",
+  "siaPermitType",
+  "safetyCardNo",
+  "safetyCardExpiry",
+  "hireDate",
+  "leaveDate",
+  "bankName",
+  "bankAccountNo",
+  "bankPayeeName",
+  "blacklistCheckResult",
+  "blacklistCheckDate",
+] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const DAILY_REQUIREMENT_FIELDS = ["id", "siteId", "shiftTypeId", "workDate", "headcountRequired", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
@@ -84,6 +122,32 @@ export const toSiteDTO = <T extends Record<string, unknown>>(row: T) =>
   mapRow({ ...row, hasRosterLayout: (row as Record<string, unknown>).rosterLayout != null }, [...SITE_FIELDS, "hasRosterLayout"]);
 export const toShiftTypeDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_TYPE_FIELDS);
 export const toGuardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_FIELDS);
+// WP-PII（Opus 驗收應修 4）：列表資料最小化——`GET /api/guards`（成個
+// 名冊，可以一次攞 500 行）唔應該連銀行戶口/地址/出生日期/緊急聯絡人/
+// Blacklist 呢批高敏感度欄都逐行送出街（就算讀者有權，一次過送 500 個
+// 人嘅呢批資料都係唔必要嘅曝露面——同 SHIFT_RECORD_LIST_FIELDS 剝
+// provenance 一致嘅「列表窄一啲」精神）。field-group gate（GUARD_PII_
+// FIELDS／GUARD_BANK_FIELDS，見 field-groups.ts）淨係管「有冇權見」，
+// 呢度加多一層「列表結構上唔出呢批欄」，要真係要用（例如查證身份證/
+// 銀行資料）先撳「編輯」叫 `GET /api/guards/:id`（詳情，仍然經同一個
+// field-group gate）。`hkid` 刻意保留（列表遮罩顯示，見
+// src/lib/api/guard-pii.ts maskHkidForList()）；牌照/平安卡/入職離職
+// 日期跟現有「安員」module，列表要用（到期 pill／篩選），一樣保留。
+const GUARD_LIST_DETAIL_ONLY_FIELDS = [
+  "dateOfBirth",
+  "address",
+  "emergencyContactName",
+  "emergencyContactTel",
+  "bankName",
+  "bankAccountNo",
+  "bankPayeeName",
+  "blacklistCheckResult",
+  "blacklistCheckDate",
+] as const;
+const GUARD_LIST_FIELDS = GUARD_FIELDS.filter(
+  (f) => !(GUARD_LIST_DETAIL_ONLY_FIELDS as readonly string[]).includes(f),
+) as unknown as readonly (typeof GUARD_FIELDS)[number][];
+export const toGuardListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LIST_FIELDS);
 export const toRateCardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, RATE_CARD_FIELDS);
 export const toShiftRecordFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_FIELDS);
 // 2026-09-13：列表預設唔回傳 provenance（原檔追溯 JSON，每條 ~1.5KB，7 月一個盤三頁共 2MB+，
