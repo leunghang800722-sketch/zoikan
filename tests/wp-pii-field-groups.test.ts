@@ -216,6 +216,45 @@ describe("WP-PII §3：PATCH 權限", () => {
     expect(after.hkid).toBe(before.hkid);
   });
 
+  it("Opus 覆核 M1（oracle）：主管冇「安員個人資料:view」——PATCH hkid 就算同現值一樣都要 403，唔准變成猜中／猜錯嘅回應碼 oracle", async () => {
+    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { hkid: "A123456(7)", bankAccountNo: "123-456789-001" } });
+    try {
+      for (const guess of ["A123456(7)", "B999888(1)"]) {
+        const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { hkid: guess }), {
+          params: Promise.resolve({ id: fx.guardA.id }),
+        });
+        expect(res.status, `guess=${guess}`).toBe(403);
+      }
+      const resBank = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { bank_account_no: "123-456789-001" }), {
+        params: Promise.resolve({ id: fx.guardA.id }),
+      });
+      expect(resBank.status).toBe(403);
+    } finally {
+      await prisma.guard.update({ where: { id: fx.guardA.id }, data: { hkid: null, bankAccountNo: null } });
+    }
+  });
+
+  async function setAccountantGuardUpdate(granted: boolean) {
+    const permission = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module: "安員", action: "update" } } });
+    await prisma.rolePermission.update({ where: { roleId_permissionId: { roleId: fx.roleIds["會計"], permissionId: permission.id } }, data: { granted } });
+  }
+
+  it("Opus 覆核 S1：戶口號碼係字串，「000123456」同「123456」係兩個唔同戶口——會計（有權）改咗要真係寫入", async () => {
+    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { bankAccountNo: "123456" } });
+    await setAccountantGuardUpdate(true);
+    try {
+      const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, accountantCookie, "PATCH", { bank_account_no: "000123456" }), {
+        params: Promise.resolve({ id: fx.guardA.id }),
+      });
+      expect(res.status).toBe(200);
+      const after = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+      expect(after.bankAccountNo).toBe("000123456");
+    } finally {
+      await setAccountantGuardUpdate(false);
+      await prisma.guard.update({ where: { id: fx.guardA.id }, data: { bankAccountNo: null } });
+    }
+  });
+
   it("主管 PATCH 牌照號碼 → 200（跟「安員」module，主管出廠有）", async () => {
     const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { sia_permit_no: "SIA-999" }), {
       params: Promise.resolve({ id: fx.guardA.id }),

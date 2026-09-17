@@ -46,7 +46,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // assertFieldGroupWritable()（唔係就會被冇改嘅欄嗰個 field-group
     // 誤 403，見 src/lib/api/field-groups.ts dropUnchangedFieldGroupValues()
     // 大註解）。
-    const effectiveBody = dropUnchangedFieldGroupValues("guards", parsed, before as unknown as Record<string, unknown>);
+    const effectiveBody = await dropUnchangedFieldGroupValues(session, "guards", parsed, before as unknown as Record<string, unknown>);
     // WP-PII：body 帶「收客價/出街價/安員個人資料/安員銀行資料」任何一組
     // 欄位，冇對應 module 嘅 update 權限一律 403（唔准靜靜忽略）——同
     // rate-cards/sites 等 route 一致做法（見 src/lib/api/field-groups.ts）。

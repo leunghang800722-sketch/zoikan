@@ -10,6 +10,7 @@
 //
 // key 用 **snake_case**（同 request/response body 嘅 wire format 一致，
 // 見 src/lib/api/schemas.ts／src/lib/api/dto/）。
+import type { Module } from "../rbac/matrix";
 import type { AuthedSession } from "../rbac/requirePermission";
 import { hasPermission } from "../rbac/requirePermission";
 import { Forbidden } from "./errors";
@@ -166,40 +167,50 @@ export async function applyFieldGroupGateToList<T extends Record<string, unknown
 //    ""，唔會出現喺呢個函數——但保險起見一致處理）。
 const NUMERIC_STRING_RE = /^-?\d+(\.\d+)?$/;
 
-function normalizeFieldGroupValue(v: unknown): string | null {
+function normalizeFieldGroupValue(v: unknown, numeric: boolean): string | null {
   if (v === null || v === undefined || v === "") return null;
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   const s = typeof v === "string" ? v : String(v);
   const trimmed = s.trim();
-  if (NUMERIC_STRING_RE.test(trimmed)) return String(Number(trimmed)); // "8000.00" 同 8000 正規化做同一個字串
-  return s;
+  // Opus 覆核 S1：數字正規化（"8000.00" ≡ 8000）只可以用喺金額類欄（Decimal
+  // vs number 唔對稱）；戶口號碼／電話呢類「數字字串」要逐字相等——
+  // "000123456" 同 "123456" 係兩個唔同戶口，唔可以被 Number() 撞埋。
+  if (numeric && NUMERIC_STRING_RE.test(trimmed)) return String(Number(trimmed));
+  return trimmed;
 }
 
-function isSameFieldGroupValue(a: unknown, b: unknown): boolean {
-  return normalizeFieldGroupValue(a) === normalizeFieldGroupValue(b);
+function isSameFieldGroupValue(a: unknown, b: unknown, numeric: boolean): boolean {
+  return normalizeFieldGroupValue(a, numeric) === normalizeFieldGroupValue(b, numeric);
 }
 
-/** 見上面大註解——喺 `assertFieldGroupWritable()` 之前行，剝走 body 入面
- * 「field-group 受控、但值同 `before` 一樣」嘅欄。`before` 用 camelCase
- * Prisma row（同 DB model 欄位一一對應）；`body` 用 snake_case（`parseBody()`
- * 之後嘅 wire format）。回傳一個新 object（唔會 mutate 原本個 `body`）。 */
-export function dropUnchangedFieldGroupValues<T extends Record<string, unknown>>(
+/** 喺 `assertFieldGroupWritable()` 之前行，剝走 body 入面「field-group 受控、
+ * 但值同 `before` 一樣」嘅欄，令前端帶返原值唔會被誤 403。`before` 用
+ * camelCase Prisma row；`body` 用 snake_case。回傳新 object。
+ *
+ * Opus 覆核 M1：呢個「值冇變就當冇改」只可以喺 session **有嗰組嘅 view 權**
+ * 先做——否則回應碼會變成 oracle（猜啱 200／猜錯 403），冇 view 權嘅主管可以
+ * 憑 PATCH 回應核實身份證、甚至枚舉月薪。有 view 權嘅人本身睇得到個值。 */
+export async function dropUnchangedFieldGroupValues<T extends Record<string, unknown>>(
+  session: AuthedSession,
   resource: FieldGroupResource,
   body: T,
   before: Record<string, unknown>,
-): T {
-  const controlledSnakeKeys = [
-    ...CLIENT_RATE_FIELDS[resource],
-    ...SETTLEMENT_FIELDS[resource],
-    ...GUARD_PII_FIELDS[resource],
-    ...GUARD_BANK_FIELDS[resource],
+): Promise<T> {
+  const groups: Array<{ keys: readonly string[]; module: Module; numeric: boolean }> = [
+    { keys: CLIENT_RATE_FIELDS[resource], module: "收客價", numeric: true },
+    { keys: SETTLEMENT_FIELDS[resource], module: "出街價", numeric: true },
+    { keys: GUARD_PII_FIELDS[resource], module: "安員個人資料", numeric: false },
+    { keys: GUARD_BANK_FIELDS[resource], module: "安員銀行資料", numeric: false },
   ];
-  if (!controlledSnakeKeys.length) return body;
   const out: Record<string, unknown> = { ...body };
-  for (const snakeKey of controlledSnakeKeys) {
-    if (!(snakeKey in out)) continue;
-    const camelKey = snakeKey.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
-    if (isSameFieldGroupValue(out[snakeKey], before[camelKey])) delete out[snakeKey];
+  for (const g of groups) {
+    const present = g.keys.filter((k) => k in out);
+    if (!present.length) continue;
+    if (!(await hasPermission(session, g.module, "view"))) continue; // 冇 view 權：唔剝，交俾 assertFieldGroupWritable 一律 403
+    for (const snakeKey of present) {
+      const camelKey = snakeKey.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+      if (isSameFieldGroupValue(out[snakeKey], before[camelKey], g.numeric)) delete out[snakeKey];
+    }
   }
   return out as T;
 }
