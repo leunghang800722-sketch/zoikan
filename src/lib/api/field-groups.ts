@@ -140,6 +140,70 @@ export async function applyFieldGroupGateToList<T extends Record<string, unknown
   return brandSafeResponse({ ...list, rows });
 }
 
+// WP-PII（Opus 驗收必修 2a）：「主管/會計改保安員 403 回歸」——前端編輯
+// 抽屜開嗰陣用列表/詳情嘅現有值起草成個 form（見 GuardsClient.tsx
+// `fillFormFromRow()`），撳「儲存」淨係改咗其中幾隻欄，但 form 冚唪唥
+// 值一齊送落 body。`assertFieldGroupWritable()` 見到 body 帶住
+// `monthly_salary`（就算值同而家 DB 一樣）就當「想寫」，冇「出街價:
+// update」就 403——連淨係改電話呢類冇 field-group 保護嘅欄都一齊被拒。
+//
+// 修法：PATCH route 入面、`assertFieldGroupWritable()` 之前，先用呢個
+// 函數同 `before`（改動之前嘅 Prisma row，camelCase）比對——field-group
+// 受控嘅欄如果值冇變，就當「冇寫」，由 body 度刪走（唔會再觸發嗰個
+// field-group 嘅 403，亦都唔會落 Prisma update data，減少無謂寫入）。
+// 真係想改嗰粒數（值唔同）先會保留喺 body，交返 assertFieldGroupWritable()
+// 照正常權限判斷 403。
+//
+// 型別正規化（`isSameFieldGroupValue()`）要處理幾種唔對稱：
+//  - money（`z.union([z.number(), z.string()])`）body 值 vs Prisma
+//    Decimal——Decimal.toString() 保留 DB 精度（例如 "8000.00"），body
+//    可能係 8000（number）；純字串比對會假陽性判「唔同」。
+//  - dateOnly（`z.coerce.date()`）body 值 vs Prisma Date——淨係比日期
+//    部分（dateOnly 冇時間），時區/毫秒噪音唔應該當「改咗」。
+//  - hkid/其他字串欄——直接字串比。
+//  - ""/null/undefined 一律當「冇值」，等空字串同 null 唔會誤判做改咗
+//    （PATCH schema 呢批新欄係 optional 唔係 nullable，前端「唔填」送
+//    ""，唔會出現喺呢個函數——但保險起見一致處理）。
+const NUMERIC_STRING_RE = /^-?\d+(\.\d+)?$/;
+
+function normalizeFieldGroupValue(v: unknown): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  const s = typeof v === "string" ? v : String(v);
+  const trimmed = s.trim();
+  if (NUMERIC_STRING_RE.test(trimmed)) return String(Number(trimmed)); // "8000.00" 同 8000 正規化做同一個字串
+  return s;
+}
+
+function isSameFieldGroupValue(a: unknown, b: unknown): boolean {
+  return normalizeFieldGroupValue(a) === normalizeFieldGroupValue(b);
+}
+
+/** 見上面大註解——喺 `assertFieldGroupWritable()` 之前行，剝走 body 入面
+ * 「field-group 受控、但值同 `before` 一樣」嘅欄。`before` 用 camelCase
+ * Prisma row（同 DB model 欄位一一對應）；`body` 用 snake_case（`parseBody()`
+ * 之後嘅 wire format）。回傳一個新 object（唔會 mutate 原本個 `body`）。 */
+export function dropUnchangedFieldGroupValues<T extends Record<string, unknown>>(
+  resource: FieldGroupResource,
+  body: T,
+  before: Record<string, unknown>,
+): T {
+  const controlledSnakeKeys = [
+    ...CLIENT_RATE_FIELDS[resource],
+    ...SETTLEMENT_FIELDS[resource],
+    ...GUARD_PII_FIELDS[resource],
+    ...GUARD_BANK_FIELDS[resource],
+  ];
+  if (!controlledSnakeKeys.length) return body;
+  const out: Record<string, unknown> = { ...body };
+  for (const snakeKey of controlledSnakeKeys) {
+    if (!(snakeKey in out)) continue;
+    const camelKey = snakeKey.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+    if (isSameFieldGroupValue(out[snakeKey], before[camelKey])) delete out[snakeKey];
+  }
+  return out as T;
+}
+
 /** 寫：parseBody() 之後，create/update 落 Prisma 之前一律經呢個。body
  * 用 snake_case（同 schemas.ts 嘅 parse 輸出一致）。 */
 export async function assertFieldGroupWritable(

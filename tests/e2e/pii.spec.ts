@@ -32,8 +32,17 @@ async function openEditByName(page: Page, name: string) {
   await searchInput.fill(name);
   const row = main.locator("table tbody tr", { hasText: name }).first();
   await expect(row).toBeVisible({ timeout: 20_000 });
+  // GuardsClient.tsx openEdit() 即刻開抽屜（用列表嗰行起草），跟住先
+  // async 攞 `GET /api/guards/:id` 詳情補正確值（見該檔案註解）——呢個
+  // response 一到就會成個 `fillFormFromRow()` 覆蓋返個 form。Playwright
+  // 打字快過網絡一個 round trip，如果唔等呢個 response 完成先開始
+  // `.fill()`，撳「編輯」之後即刻打嘅字會俾呢個遲到嘅 response 覆蓋
+  // 沖走（打字冇咗）——呢度等埋先至算「真係開好」，等落面逐個 `.fill()`
+  // 唔會撞正呢個覆蓋時機。
+  const detailResponse = page.waitForResponse((r) => /\/api\/guards\/[^/?]+$/.test(r.url()) && r.request().method() === "GET").catch(() => null);
   await row.getByRole("button", { name: "編輯" }).click();
   await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
+  await detailResponse;
 }
 
 /** Field 元件將 label span + input 一齊包喺 `<label>` 入面——用
@@ -172,8 +181,36 @@ test("(c) 雞頭A：開自己人——只有基本資料＋電話，冇牌照/�
   await expect(page.locator('input[type="checkbox"]')).toHaveCount(0);
 });
 
+test("(e) 主管編輯一個長工只改電話 → 儲存成功（唔會被冇改嘅 monthly_salary field-group 誤 403，見 Opus 驗收必修 2）", async ({ page }) => {
+  const guard = await prisma.guard.findFirstOrThrow({
+    where: { employmentType: "longterm_autopay", status: "active", monthlySalary: { not: null } },
+    select: { id: true, nameZh: true, tel: true, monthlySalary: true },
+  });
+  const originalTel = guard.tel;
+  const newTel = "61234567";
+  try {
+    await loginAs(page, "主管");
+    await page.goto("/guards");
+    await openEditByName(page, guard.nameZh);
+
+    await fieldControl(page, "電話", true).locator("input").fill(newTel);
+    await page.getByRole("button", { name: "儲存" }).click();
+    await expect(page.getByText("已更新")).toBeVisible({ timeout: 15_000 });
+
+    const after = await prisma.guard.findUniqueOrThrow({ where: { id: guard.id }, select: { tel: true, monthlySalary: true } });
+    expect(after.tel).toBe(newTel);
+    expect(after.monthlySalary?.toString()).toBe(guard.monthlySalary?.toString());
+  } finally {
+    await prisma.guard.update({ where: { id: guard.id }, data: { tel: originalTel } });
+  }
+});
+
 test("(d) 到期 pill 三種狀態：已過期（紅）／90 日內（橙）／未填（灰）", async ({ page }) => {
   const guard = await findBrokerAOwnGuard();
+  // 還原原值而唔係硬寫 null（可接受但順手：萬一呢個 guard 本身喺呢個
+  // test 之前已經有 siaPermitExpiry，硬寫 null 會令 test 完咗之後同
+  // 入 test 之前個狀態唔一致，留低污染）。
+  const originalGuard = await prisma.guard.findUniqueOrThrow({ where: { id: guard.id }, select: { siaPermitExpiry: true } });
   const today = new Date();
   const expired = new Date(today.getTime() - 10 * 86_400_000).toISOString().slice(0, 10);
   const soon = new Date(today.getTime() + 30 * 86_400_000).toISOString().slice(0, 10);
@@ -205,6 +242,6 @@ test("(d) 到期 pill 三種狀態：已過期（紅）／90 日內（橙）／�
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(row.getByText("未填")).toBeVisible();
   } finally {
-    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitExpiry: null } });
+    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitExpiry: originalGuard.siaPermitExpiry } });
   }
 });

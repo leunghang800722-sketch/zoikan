@@ -15,23 +15,34 @@
 // import 緊嘅其他檔案入面做緊咩）。
 import type { AuthedSession } from "../rbac/requirePermission";
 import { hasPermission } from "../rbac/requirePermission";
-import { CLIENT_RATE_FIELDS, SETTLEMENT_FIELDS, type FieldGroupResource } from "../api/field-groups";
+import { CLIENT_RATE_FIELDS, SETTLEMENT_FIELDS, GUARD_PII_FIELDS, GUARD_BANK_FIELDS, type FieldGroupResource } from "../api/field-groups";
 
 export type { FieldGroupResource };
 
-/** 攞返「呢個 session 而家睇唔睇得到收客價／出街價」——工具層攞一次，
- * 之後同一個 request 入面幾多個工具都可以重用，唔使逐次查 DB。 */
+/** 攞返「呢個 session 而家睇唔睇得到收客價／出街價／安員個人資料／安員
+ * 銀行資料」——工具層攞一次，之後同一個 request 入面幾多個工具都可以
+ * 重用，唔使逐次查 DB。 */
 export interface AiFieldVisibility {
   clientRateVisible: boolean;
   settlementVisible: boolean;
+  // WP-PII（Opus 驗收必修 1b）：`recent_audit`／`sql_select` 呢類「唔知
+  // 邊個 resource」嘅通用工具，之前完全冇檢查呢兩個新 field group——冇
+  // 「安員個人資料/安員銀行資料:view」都一樣經呢兩個工具讀到 hkid／
+  // bank_account_no（DB 層 `ai.audit_log` 嘅 scrub_json blocklist 已經
+  // 喺另一個 migration 加咗做第一重防線，呢度係應用層第二重
+  // defense-in-depth）。
+  guardPiiVisible: boolean;
+  guardBankVisible: boolean;
 }
 
 export async function computeFieldVisibility(session: AuthedSession): Promise<AiFieldVisibility> {
-  const [clientRateVisible, settlementVisible] = await Promise.all([
+  const [clientRateVisible, settlementVisible, guardPiiVisible, guardBankVisible] = await Promise.all([
     hasPermission(session, "收客價", "view"),
     hasPermission(session, "出街價", "view"),
+    hasPermission(session, "安員個人資料", "view"),
+    hasPermission(session, "安員銀行資料", "view"),
   ]);
-  return { clientRateVisible, settlementVisible };
+  return { clientRateVisible, settlementVisible, guardPiiVisible, guardBankVisible };
 }
 
 function omit<T extends Record<string, unknown>>(obj: T, keys: readonly string[]): T {
@@ -52,6 +63,12 @@ export function scrubRowForResource<T extends Record<string, unknown>>(
   let out = row;
   if (!vis.clientRateVisible) out = omit(out, CLIENT_RATE_FIELDS[resource]);
   if (!vis.settlementVisible) out = omit(out, SETTLEMENT_FIELDS[resource]);
+  // WP-PII：`guard_lookup` 呢類工具用嘅 `ai.guards` view 本身結構上冇呢
+  // 16 個新欄（見 prisma/migrations/…wp_ai1_readonly_schema 頂註解），
+  // 呢度純粹保持同 applyFieldGroupGate() 一致嘅四層 gate，日後有第二個
+  // 工具查到帶呢啲欄嘅 resource 都唔會漏。
+  if (!vis.guardPiiVisible) out = omit(out, GUARD_PII_FIELDS[resource]);
+  if (!vis.guardBankVisible) out = omit(out, GUARD_BANK_FIELDS[resource]);
   return out;
 }
 
@@ -81,6 +98,29 @@ function normalizeKey(key: string): string {
   return key.toLowerCase();
 }
 
+function snakeToCamel(key: string): string {
+  return key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+
+// WP-PII（Opus 驗收必修 1b）：`recent_audit`（audit_log.before/after，
+// 已核實 DB 入面係 `pickWhitelist()` 轉出嚟嘅 snake_case DTO）同
+// `sql_select`（`ai.*` view 直接查，欄名一律係 Postgres 欄位名，都係
+// snake_case）而家實際上見到嘅一律係 snake_case key；呢度連 camelCase
+// 變體都一齊加落 blocklist——純粹 defense-in-depth（萬一第二個未來
+// call site 用 camelCase 傳落嚟，都唔會漏），成本近乎零（Set 多幾個
+// 唔存在嘅 key 淨係唔會撞中）。
+function namesWithCamelVariant(names: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const n of names) {
+    out.add(normalizeKey(n));
+    out.add(normalizeKey(snakeToCamel(n)));
+  }
+  return out;
+}
+
+const ALL_GUARD_PII_FIELD_NAMES = namesWithCamelVariant(Object.values(GUARD_PII_FIELDS).flat());
+const ALL_GUARD_BANK_FIELD_NAMES = namesWithCamelVariant(Object.values(GUARD_BANK_FIELDS).flat());
+
 /** 遞歸剝走物件樹（唔理幾深、唔理 array/object）入面嘅指定欄位名。 */
 function dropKeysDeep<T>(value: T, blocked: ReadonlySet<string>): T {
   function walk(v: unknown): unknown {
@@ -104,6 +144,8 @@ export function scrubUnknownShape<T>(value: T, vis: AiFieldVisibility): T {
   let out = value;
   if (!vis.clientRateVisible) out = dropKeysDeep(out, ALL_CLIENT_RATE_FIELD_NAMES);
   if (!vis.settlementVisible) out = dropKeysDeep(out, ALL_SETTLEMENT_FIELD_NAMES);
+  if (!vis.guardPiiVisible) out = dropKeysDeep(out, ALL_GUARD_PII_FIELD_NAMES);
+  if (!vis.guardBankVisible) out = dropKeysDeep(out, ALL_GUARD_BANK_FIELD_NAMES);
   return out;
 }
 

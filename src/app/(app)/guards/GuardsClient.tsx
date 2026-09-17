@@ -108,7 +108,25 @@ function matchesSearch(g: GuardRow, q: string): boolean {
   return [g.name_zh, g.staff_no, g.tel].some((v) => v && String(v).toLowerCase().includes(needle));
 }
 
-export function GuardsClient({ isBroker }: { isBroker: boolean }) {
+export function GuardsClient({
+  isBroker,
+  canUpdateSettlement,
+  canUpdatePii,
+  canUpdateBank,
+}: {
+  isBroker: boolean;
+  // WP-PII（Opus 驗收必修 2）：呢三個係「呢個 session 而家有冇對應
+  // field-group 嘅 update 權」（`hasPermission(session, mod, "update")`，
+  // 喺 server component `page.tsx` 計好傳落嚟）——onSubmit() 用嚟決定
+  // PATCH body 入唔入嗰組欄位，同 `hasMoneyField`/`hasPiiField`/
+  // `hasBankField`（response 有冇嗰粒 key，即係「有冇 view」）唔同一件
+  // 事：淨係有 view 冇 update 嘅角色會見到個 input（可以打字），但撳
+  // 「儲存」唔應該將嗰組欄位（即使值冇變）送落 body，唔係就會撞返
+  // assertFieldGroupWritable() 嘅 403（見 GuardsClient.tsx onSubmit()）。
+  canUpdateSettlement: boolean;
+  canUpdatePii: boolean;
+  canUpdateBank: boolean;
+}) {
   const [rows, setRows] = useState<GuardRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,7 +149,9 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
   // FilterChip，改月份要重新 fetch `with_month_shifts`（見下面 useEffect
   // dep）。
   const [month, setMonth] = useState(currentMonthStr());
-  // WP-PII：「牌照 90 日內到期」FilterChip——`?expiring_within_days=90`。
+  // WP-PII：「牌照／平安卡 90 日內到期」FilterChip——`?expiring_within_days=90`
+  // （API 早已經 OR 埋 safety_card_expiry，見 src/app/api/guards/route.ts；
+  // 呢度改嘅淨係文案＋表格 pill 顯示，唔使改 API）。
   const [expiringOnly, setExpiringOnly] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -221,7 +241,21 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
     setFormError(null);
     setDrawerOpen(true);
     const detailRes = await apiGet<GuardRow>(`/api/guards/${row.id}`);
-    if (detailRes.ok) fillFormFromRow(detailRes.data);
+    if (detailRes.ok) {
+      fillFormFromRow(detailRes.data);
+      // WP-PII（應修 4 連帶）：列表 DTO 而家唔回銀行三欄/地址/出生日期/
+      // 緊急聯絡人/Blacklist（見 src/lib/api/dto/index.ts
+      // toGuardListDTO()），`hasBankField`/`hasPiiField` 之前靠列表 row
+      // 有冇 `bank_name`/`hkid` 呢粒 key 判斷分區顯唔顯示——`bank_name`
+      // 而家已經結構上唔會喺列表出現，靠列表判斷會令有權嘅角色都見唔到
+      // 銀行分區。詳情 response（呢度）仍然用 toGuardFullDTO()，全欄
+      // 照舊靠 field-group gate 決定有冇個 key，改用詳情嚟判斷先準確
+      // （`hkid`/`sia_permit_no` 列表本身冇變，呢度覆蓋純粹為咗
+      // `bank_name` 準，一致順便三個都用詳情覆蓋）。
+      setHasPiiField("hkid" in detailRes.data);
+      setHasBankField("bank_name" in detailRes.data);
+      setHasLicenceExtraField("sia_permit_no" in detailRes.data);
+    }
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -239,16 +273,26 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
       polo_size: form.polo_size || undefined,
     };
     if (!editingId) body.default_broker_id = form.default_broker_id || undefined;
-    if (hasMoneyField && form.monthly_salary !== "") body.monthly_salary = Number(form.monthly_salary);
+    // WP-PII（Opus 驗收必修 2）：用 `canUpdateSettlement`（grants，出街
+    // 價:update）唔用 `hasMoneyField`（view-based）——冇 update 權嘅角色
+    // 就算見到個 input（有 view 冇 update），撳儲存都唔應該送
+    // `monthly_salary` 落 body（同下面 PII/銀行兩組一致道理）。
+    if (canUpdateSettlement && form.monthly_salary !== "") body.monthly_salary = Number(form.monthly_salary);
 
     // WP-PII：新欄一律 PATCH-only（`GuardCreateSchema` 冇呢批欄，
     // POST body 帶咗會 400）——`editingId` 有值（編輯）先夾落 body，
     // 而且淨係揀個別欄有值先送（空字串唔送，等用戶部分填都得，唔會
-    // 逼佢一次過填晒先儲得到）。分區冇顯示（`hasPiiField`/`hasBankField`
-    // false）就完全唔會夾落嚟——冇「安員個人資料/安員銀行資料:update」
-    // 嘅角色本身睇唔到呢啲 input，唔會誤送。
+    // 逼佢一次過填晒先儲得到）。
+    //
+    // Opus 驗收必修 2：夾唔夾落 body 用 `canUpdatePii`/`canUpdateBank`
+    // （grants，「安員個人資料/安員銀行資料:update」）判斷，唔用
+    // `hasPiiField`/`hasBankField`（view-based，「response 有冇呢粒
+    // key」）——後者純粹決定分區顯唔顯示；有 view 冇 update 嘅角色
+    // （理論上出廠矩陣兩個 action 一致開關，但自訂角色可以拆開）見到
+    // 個 input 但冇權寫，唔應該連冇改嗰組欄都送落 body 觸發
+    // assertFieldGroupWritable() 嘅 403。
     if (editingId) {
-      if (hasPiiField) {
+      if (canUpdatePii) {
         if (form.hkid) body.hkid = form.hkid;
         if (form.date_of_birth) body.date_of_birth = form.date_of_birth;
         if (form.address) body.address = form.address;
@@ -257,7 +301,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
         if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
         if (form.blacklist_check_date) body.blacklist_check_date = form.blacklist_check_date;
       }
-      if (hasBankField) {
+      if (canUpdateBank) {
         if (form.bank_name) body.bank_name = form.bank_name;
         if (form.bank_account_no) body.bank_account_no = form.bank_account_no;
         if (form.bank_payee_name) body.bank_payee_name = form.bank_payee_name;
@@ -315,7 +359,17 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
     return <Pill variant="neutral">{g.status}</Pill>;
   }
 
-  // WP-PII：牌照到期三態 pill——過期紅、90 日內橙、冇填灰「未填」
+  // WP-PII（可接受但順手）：牌照（sia_permit_expiry）／平安卡
+  // （safety_card_expiry）兩個到期日一齊揀「較早」嗰一個嚟顯示/高亮——
+  // 一個保安員可以牌照仲有效但平安卡就快到期（或者反過嚟），淨係睇
+  // 牌照會漏警示。冇填嘅一邊當「冇呢個限制」，兩個都冇填先算「未填」。
+  function earlierExpiry(a?: string | null, b?: string | null): string | null | undefined {
+    if (!a) return b;
+    if (!b) return a;
+    return a <= b ? a : b; // "YYYY-MM-DD" 字串排序等同日期排序
+  }
+
+  // WP-PII：牌照/平安卡到期三態 pill——過期紅、90 日內橙、冇填灰「未填」
   // （`isExpiringSoon()` 帶 90 日門檻，見 src/lib/ui/format.ts；已過期
   // 嘅 diffDays 係負數，一樣會 `<=90`，但呢度優先判 `isExpired` 出紅）。
   function licenceExpiryPill(expiry?: string | null) {
@@ -334,7 +388,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
       <PageHeader
         kicker={kickerFor("/guards", isBroker)}
         title="保安員"
-        subtitle="牌照 90 日內到期或已過期嘅列會高亮。"
+        subtitle="牌照／平安卡 90 日內到期或已過期嘅列會高亮。"
         actions={
           <>
             <FilterChip label="搜尋" showCaret={false}>
@@ -346,7 +400,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
             {/* WP-PII：老闆決定「雞頭視角完全唔變」——呢個新 FilterChip
                 淨係內部角色顯示，雞頭個 toolbar 保持原樣。 */}
             {!isBroker && (
-              <FilterChip label="牌照 90 日內到期" showCaret={false}>
+              <FilterChip label="牌照／平安卡 90 日內到期" showCaret={false}>
                 <input type="checkbox" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
               </FilterChip>
             )}
@@ -397,7 +451,10 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
                   </tr>
                 )}
                 {visibleRows.map((r) => {
-                  const expired = isExpired(r.sia_permit_expiry);
+                  // WP-PII（可接受但順手）：牌照／平安卡兩個到期日取較早
+                  // 嗰個嚟判斷高亮/顯示，見 earlierExpiry() 頂註解。
+                  const nearestExpiry = earlierExpiry(r.sia_permit_expiry, r.safety_card_expiry);
+                  const expired = isExpired(nearestExpiry);
                   const b = broker(r.default_broker_id);
                   return (
                     <tr key={r.id} className={`${tableCls.rowHover} ${expired ? tableCls.warnRow : ""}`}>
@@ -418,8 +475,8 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
                       <td className={tableCls.td}>{statusPill(r)}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {licenceExpiryPill(r.sia_permit_expiry)}
-                          <span className="text-[11.5px] text-zk-muted">{fmtDate(r.sia_permit_expiry)}</span>
+                          {licenceExpiryPill(nearestExpiry)}
+                          <span className="text-[11.5px] text-zk-muted">{fmtDate(nearestExpiry)}</span>
                         </div>
                       </td>
                       <td className={tableCls.td}>
@@ -449,7 +506,8 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
 
           <div className="space-y-2 sm:hidden">
             {visibleRows.map((r) => {
-              const expired = isExpired(r.sia_permit_expiry);
+              const nearestExpiry = earlierExpiry(r.sia_permit_expiry, r.safety_card_expiry);
+              const expired = isExpired(nearestExpiry);
               const b = broker(r.default_broker_id);
               return (
                 <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${expired ? "bg-[#fef2f2]" : ""}`}>
@@ -467,7 +525,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
                       </Pill>
                     )}
                     {statusPill(r)}
-                    {licenceExpiryPill(r.sia_permit_expiry)}
+                    {licenceExpiryPill(nearestExpiry)}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">

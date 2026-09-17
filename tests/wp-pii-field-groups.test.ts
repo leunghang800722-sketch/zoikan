@@ -99,38 +99,43 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
     expect(patchRes.status).toBe(200);
   });
 
-  it("老闆：列表 hkid 遮罩（A123***(7)），全部 PII/銀行/牌照欄都見到", async () => {
+  it("老闆：列表 hkid 遮罩（A123***(7)），牌照欄見到；銀行/地址/出生日期/緊急聯絡人/Blacklist 列表結構上唔回（應修 4，唔係俾 gate 剝——只詳情先有）", async () => {
     const listRes = await guardsList(req("http://test.local/api/guards", ownerCookie));
     expect(listRes.status).toBe(200);
     const body = (await listRes.json()) as { rows: Array<Record<string, unknown>> };
     const row = body.rows.find((r) => r.id === fx.guardA.id)!;
     expect(row.hkid).toBe("A123***(7)");
-    expect(row.bank_name).toBe("測試銀行");
     expect(row.sia_permit_no).toBe("SIA-TEST-01");
+    for (const k of ["bank_name", "bank_account_no", "bank_payee_name", "address", "date_of_birth", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date"]) {
+      expect(row).not.toHaveProperty(k);
+    }
   });
 
-  it("老闆：單項詳情 hkid 見全號（未遮罩）", async () => {
+  it("老闆：單項詳情 hkid 見全號（未遮罩），銀行/PII 全部欄都見到（詳情唔受列表最小化影響）", async () => {
     const detailRes = await guardDetail(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     expect(detailRes.status).toBe(200);
     const body = (await detailRes.json()) as Record<string, unknown>;
     expect(body.hkid).toBe("A123456(7)");
+    expect(body.bank_name).toBe("測試銀行");
+    expect(body.address).toBe("測試地址");
   });
 
-  it("會計：列表/詳情全見（hkid 一樣遮罩），同老闆一致", async () => {
+  it("會計：列表遮罩 hkid、銀行/地址等一樣列表唔回；詳情全見，同老闆一致", async () => {
     const listRes = await guardsList(req("http://test.local/api/guards", accountantCookie));
     expect(listRes.status).toBe(200);
     const body = (await listRes.json()) as { rows: Array<Record<string, unknown>> };
     const row = body.rows.find((r) => r.id === fx.guardA.id)!;
     expect(row.hkid).toBe("A123***(7)");
-    expect(row.bank_name).toBe("測試銀行");
+    expect(row).not.toHaveProperty("bank_name");
 
     const detailRes = await guardDetail(req(`http://test.local/api/guards/${fx.guardA.id}`, accountantCookie), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     const detail = (await detailRes.json()) as Record<string, unknown>;
     expect(detail.hkid).toBe("A123456(7)");
+    expect(detail.bank_name).toBe("測試銀行");
   });
 
   it("主管（出廠）：見牌照（安員 module），零命中身份證/銀行 PII 欄", async () => {
@@ -171,6 +176,34 @@ describe("WP-PII §3：PATCH 權限", () => {
     fx = await seedWp2Fixture();
     supervisorCookie = await sessionCookieForUser(fx.userIds["主管"]);
     accountantCookie = await sessionCookieForUser(fx.userIds["會計"]);
+  });
+
+  // WP-PII（Opus 驗收必修 2）：「主管/會計改保安員 403 回歸」——主管出廠
+  // 「出街價:view」係 grant（見得到 monthly_salary）但「出街價:update」
+  // 係 off（改唔到）。前端編輯抽屜帶返成個 form（包括冇改嘅
+  // monthly_salary）一齊送，之前一見到 body 有 monthly_salary 呢粒
+  // key 就當「想寫」，唔理值有冇變一律 403——連淨係想改姓名都被拒。
+  it("主管改有月薪保安員嘅姓名（monthly_salary 值冇變一齊送）→ 200，月薪不變", async () => {
+    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { monthlySalary: 8000 } });
+    const res = await guardUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { name_zh: "改咗個名", monthly_salary: 8000 }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(200);
+    const after = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(after.nameZh).toBe("改咗個名");
+    expect(after.monthlySalary?.toString()).toBe("8000");
+  });
+
+  it("主管真係改月薪（值唔同）→ 403，DB 不變（出街價:update 主管出廠 off）", async () => {
+    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { monthlySalary: 8000 } });
+    const res = await guardUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { monthly_salary: 9000 }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(403);
+    const after = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(after.monthlySalary?.toString()).toBe("8000");
   });
 
   it("主管 PATCH 身份證 → 403，DB 不變", async () => {

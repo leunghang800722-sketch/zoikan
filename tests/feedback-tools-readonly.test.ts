@@ -91,7 +91,7 @@ describe("P2.5：buildAiTools() 出返嘅全部工具（含 list_feedback）都�
     tokenVersion: 1,
     loggedInAt: new Date().toISOString(),
   };
-  const ctx: AiToolContext = { session: fakeSession, fieldVisibility: { clientRateVisible: true, settlementVisible: true } };
+  const ctx: AiToolContext = { session: fakeSession, fieldVisibility: { clientRateVisible: true, settlementVisible: true, guardPiiVisible: true, guardBankVisible: true } };
   const tools = buildAiTools(ctx);
 
   it("老闆 session 出返嘅工具入面有 list_feedback", () => {

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole } from "@/lib/broker-isolation";
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
-import { toGuardFullDTO, mapListDTO } from "@/lib/api/dto";
+import { toGuardFullDTO, toGuardListDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate, applyFieldGroupGateToList } from "@/lib/api/field-groups";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError , okGzip } from "@/lib/api/http";
@@ -103,7 +103,11 @@ export async function GET(req: Request) {
       );
       return okGzip(req, list);
     }
-    const dto = mapListDTO({ rows: rowsWithCount, total, skip, take }, toGuardFullDTO);
+    // WP-PII（應修 4）：列表用窄版 DTO（唔回銀行三欄/地址/出生日期/緊急
+    // 聯絡人/Blacklist），field-group gate 一樣照跑（冧走已經冇喺 DTO
+    // 出現嘅 key 純粹 no-op，唔會報錯，見 src/lib/api/field-groups.ts
+    // omit()）——詳情 GET /api/guards/[id] 先用 toGuardFullDTO() 全欄。
+    const dto = mapListDTO({ rows: rowsWithCount, total, skip, take }, toGuardListDTO);
     const gated = await applyFieldGroupGateToList(session, "guards", dto);
     // WP-PII：列表身份證一律遮罩（老闆/會計有「安員個人資料:view」都係
     // 遮）——詳情/編輯（GET /api/guards/[id]、PATCH 之後 response）先畀

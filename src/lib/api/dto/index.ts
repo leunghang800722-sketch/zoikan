@@ -122,6 +122,32 @@ export const toSiteDTO = <T extends Record<string, unknown>>(row: T) =>
   mapRow({ ...row, hasRosterLayout: (row as Record<string, unknown>).rosterLayout != null }, [...SITE_FIELDS, "hasRosterLayout"]);
 export const toShiftTypeDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_TYPE_FIELDS);
 export const toGuardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_FIELDS);
+// WP-PII（Opus 驗收應修 4）：列表資料最小化——`GET /api/guards`（成個
+// 名冊，可以一次攞 500 行）唔應該連銀行戶口/地址/出生日期/緊急聯絡人/
+// Blacklist 呢批高敏感度欄都逐行送出街（就算讀者有權，一次過送 500 個
+// 人嘅呢批資料都係唔必要嘅曝露面——同 SHIFT_RECORD_LIST_FIELDS 剝
+// provenance 一致嘅「列表窄一啲」精神）。field-group gate（GUARD_PII_
+// FIELDS／GUARD_BANK_FIELDS，見 field-groups.ts）淨係管「有冇權見」，
+// 呢度加多一層「列表結構上唔出呢批欄」，要真係要用（例如查證身份證/
+// 銀行資料）先撳「編輯」叫 `GET /api/guards/:id`（詳情，仍然經同一個
+// field-group gate）。`hkid` 刻意保留（列表遮罩顯示，見
+// src/lib/api/guard-pii.ts maskHkidForList()）；牌照/平安卡/入職離職
+// 日期跟現有「安員」module，列表要用（到期 pill／篩選），一樣保留。
+const GUARD_LIST_DETAIL_ONLY_FIELDS = [
+  "dateOfBirth",
+  "address",
+  "emergencyContactName",
+  "emergencyContactTel",
+  "bankName",
+  "bankAccountNo",
+  "bankPayeeName",
+  "blacklistCheckResult",
+  "blacklistCheckDate",
+] as const;
+const GUARD_LIST_FIELDS = GUARD_FIELDS.filter(
+  (f) => !(GUARD_LIST_DETAIL_ONLY_FIELDS as readonly string[]).includes(f),
+) as unknown as readonly (typeof GUARD_FIELDS)[number][];
+export const toGuardListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LIST_FIELDS);
 export const toRateCardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, RATE_CARD_FIELDS);
 export const toShiftRecordFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_FIELDS);
 // 2026-09-13：列表預設唔回傳 provenance（原檔追溯 JSON，每條 ~1.5KB，7 月一個盤三頁共 2MB+，
