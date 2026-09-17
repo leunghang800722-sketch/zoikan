@@ -24,7 +24,45 @@ const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTim
 // 先會計出嚟 merge 落 row——加落呢個白名單先，落面 route 就可以喺
 // DTO／field-group gate 之前就 merge，唔使再靠「gate 之後先手動加返」
 // 嗰種繞過白名單機制嘅寫法。
-const GUARD_FIELDS = ["id", "staffNo", "staffNoMw", "nameZh", "nameEn", "tel", "defaultBrokerId", "employmentType", "monthlySalary", "siaPermitExpiry", "poloSize", "mergedFrom", "status", "createdAt", "updatedAt", "createdBy", "monthShiftCount"] as const;
+// WP-PII：加 16 個保安員個人資料/牌照/銀行欄——白名單只係「呢個資源
+// response 結構上准出現邊啲欄」，field-level gate（安員個人資料/安員
+// 銀行資料 view 權限）喺呢個白名單之上再由 applyFieldGroupGate() 做
+// （見 src/lib/api/field-groups.ts）。
+const GUARD_FIELDS = [
+  "id",
+  "staffNo",
+  "staffNoMw",
+  "nameZh",
+  "nameEn",
+  "tel",
+  "defaultBrokerId",
+  "employmentType",
+  "monthlySalary",
+  "siaPermitExpiry",
+  "poloSize",
+  "mergedFrom",
+  "status",
+  "createdAt",
+  "updatedAt",
+  "createdBy",
+  "monthShiftCount",
+  "hkid",
+  "dateOfBirth",
+  "address",
+  "emergencyContactName",
+  "emergencyContactTel",
+  "siaPermitNo",
+  "siaPermitType",
+  "safetyCardNo",
+  "safetyCardExpiry",
+  "hireDate",
+  "leaveDate",
+  "bankName",
+  "bankAccountNo",
+  "bankPayeeName",
+  "blacklistCheckResult",
+  "blacklistCheckDate",
+] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const DAILY_REQUIREMENT_FIELDS = ["id", "siteId", "shiftTypeId", "workDate", "headcountRequired", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;

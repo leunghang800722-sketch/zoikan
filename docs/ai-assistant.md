@@ -45,7 +45,17 @@ src/app/api/ai/chat/route.ts
    `bank_info`，`ai.guards` 冇 `tel`，`ai.users` 淨係
    `id/name/role_id/role_name/status`，`ai.audit_log` 嘅
    `before`/`after` 經 `ai.scrub_json()` 再剝一次
-   `password_hash/otp_secret/tel/bank_info`。
+   `password_hash/otp_secret/tel/bank_info`。WP-PII（老闆 2026-09-17
+   拍板）加嘅 16 個保安員個人資料／牌照／銀行欄（`hkid`／
+   `date_of_birth`／`address`／`emergency_contact_*`／`sia_permit_no`／
+   `sia_permit_type`／`safety_card_*`／`hire_date`／`leave_date`／
+   `bank_*`／`blacklist_check_*`）**結構上唔喺 `ai.guards` view**——嗰個
+   view 明列欄位（唔用 `SELECT *`），加落 `public.guards` 嘅新欄除非有人
+   手動改埋 view 定義先會出現，`guard_lookup` 工具嘅 SQL 亦都明列返
+   舊嗰 10 個欄，AI 助手連 `sql_select`（限死 `search_path=ai`，掂唔到
+   `public.guards`）都讀唔到——唔靠 field-scrub 呢層 runtime 剝，係 DB
+   view 定義層面直接冇（見
+   `tests/wp-pii-ai-guards-view-structural.test.ts`）。
 3. **獨立連線**：`src/lib/ai/db.ts` 用 `pg`（**唔用** `@/lib/db` 嘅
    Prisma 寫入客戶端）連 `AI_DATABASE_URL`，Pool 層再設一次
    `statement_timeout`/`query_timeout`（同角色設定雙重）。

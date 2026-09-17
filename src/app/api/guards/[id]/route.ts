@@ -3,7 +3,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole } from "@/lib/broker-isolation";
 import { toBrokerGuardDTO } from "@/lib/broker-dto";
 import { toGuardFullDTO } from "@/lib/api/dto";
-import { applyFieldGroupGate } from "@/lib/api/field-groups";
+import { applyFieldGroupGate, assertFieldGroupWritable } from "@/lib/api/field-groups";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
@@ -40,6 +40,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!before) throw NotFound();
     const body = await readJson(req);
     const parsed = parseBody(GuardUpdateSchema, body);
+    // WP-PII：body 帶「收客價/出街價/安員個人資料/安員銀行資料」任何一組
+    // 欄位，冇對應 module 嘅 update 權限一律 403（唔准靜靜忽略）——同
+    // rate-cards/sites 等 route 一致做法（見 src/lib/api/field-groups.ts）。
+    await assertFieldGroupWritable(session, "guards", parsed);
     const data = snakeToCamelShallow(parsed) as Prisma.GuardUncheckedUpdateInput;
     const after = await prisma.guard.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "guards", rowId: id, action: "update", before, after, ip: getClientIp(req) });

@@ -36,11 +36,12 @@ bump；`requireSession()`（`src/lib/rbac/requirePermission.ts`）每個
 request 都同 DB 現值核對一次（一條 `SELECT token_version, status`），
 唔啱就當未登入（401）。
 
-## RBAC 矩陣（21 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1 加）
+## RBAC 矩陣（23 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII 加）
 
 單一事實來源：`src/lib/rbac/matrix.ts`。由舊版 10 module 拆細做 19 個，
-P3 加咗`個人資料`、WP-AI1 加咗`助手`，而家 21 個，逐個對應《設計文件》
-§5.1 表入面唔同粒度嘅行（詳細逐格對照見 README-P1.md「RBAC：module ×
+P3 加咗`個人資料`、WP-AI1 加咗`助手`、WP-PII（老闆 2026-09-17 拍板）加咗
+`安員個人資料`／`安員銀行資料`，而家 23 個，逐個對應《設計文件》§5.1
+表入面唔同粒度嘅行（詳細逐格對照見 README-P1.md「RBAC：module ×
 action 矩陣」一節）：
 
 `更表`／`配額`／`審批`／**`收客價`**／**`出街價`**（拆自舊「價目」）／
@@ -49,7 +50,11 @@ action 矩陣」一節）：
 **`用戶管理`**／**`操作紀錄`**（拆自舊「系統」）／**`毛利即時表`**／
 **`尚欠總覽`**／**`月結總表`**／**`糧明細`**／**`更表匯出`**（拆自舊
 「報表」，每份報表獨立一行權限，設計文件§5.0）／**`個人資料`**（P3）／
-**`助手`**（WP-AI1，側欄 AI 助手，雞頭／安員硬性禁止，見
+**`安員個人資料`**（WP-PII，管保安員身份證／出生日期／地址／緊急聯絡
+人／Blacklist check——老闆／會計全睇、主管出廠關（老闆可以開）、雞頭／
+安員硬性禁止）／**`安員銀行資料`**（WP-PII，管保安員銀行／戶口號碼／
+收款人名——老闆／會計全睇、主管／雞頭／安員硬性禁止）／**`助手`**
+（WP-AI1，側欄 AI 助手，雞頭／安員硬性禁止，見
 [`docs/ai-assistant.md`](ai-assistant.md)）。
 
 **自訂角色（Opus 驗收殘留2）**：`roles.base_role`——複製一個出廠角色
@@ -79,7 +84,7 @@ lock/unlock 代替），其餘資源一律：
 |---|---|---|---|---|
 | 盤 | `/api/sites` | 盤 | 冇（雞頭硬性 deny） | void→`status=ended`；`status=ended` 唔准直接 PATCH |
 | 更別 | `/api/shift-types` | 盤 | 冇（雞頭硬性 deny） | void→`voided_at`/`voided_by` |
-| 安員 | `/api/guards` | **`安員`**（內部角色）／**`自己安員`**（雞頭，C3 新拆） | ✓ `scopeGuardWhere`——C1 收緊：`default_broker_id=自己` OR（有更次 AND 嗰個 site 喺 `broker_site_assignments`） | 雞頭建人自動掛自己 broker_id；void 硬性 deny |
+| 安員 | `/api/guards` | **`安員`**（內部角色）／**`自己安員`**（雞頭，C3 新拆） | ✓ `scopeGuardWhere`——C1 收緊：`default_broker_id=自己` OR（有更次 AND 嗰個 site 喺 `broker_site_assignments`） | 雞頭建人自動掛自己 broker_id；void 硬性 deny；WP-PII：牌照（`sia_permit_no`／`sia_permit_type`／`sia_permit_expiry`）／平安卡（`safety_card_no`／`safety_card_expiry`）／入職離職日期（`hire_date`／`leave_date`）跟「安員」module（PATCH-only，`GuardUpdateSchema`）；`hkid`／`date_of_birth`／`address`／`emergency_contact_name`／`emergency_contact_tel`／`blacklist_check_result`／`blacklist_check_date` 受 **`安員個人資料`** field-level gate；`bank_name`／`bank_account_no`／`bank_payee_name` 受 **`安員銀行資料`** field-level gate（`applyFieldGroupGate`/`assertFieldGroupWritable`，同「收客價／出街價」一致機制，見 `src/lib/api/field-groups.ts`）；body 帶呢兩組欄位但冇對應 `update` 權限 → 403；`hkid` 喺 **列表**一律遮罩（`A123***(7)`），單項詳情／PATCH response 有「安員個人資料:view」先見全號；建立（`POST`）唔接受呢 16 個新欄，一律建好之後用 `PATCH` 補；`GET ?expiring_within_days=N`——篩 `sia_permit_expiry` 或 `safety_card_expiry` N 日內（含已過期）到期 |
 | 雞頭 | `/api/brokers` | 雞頭 | ✓ `scopeBrokerWhere`（淨見自己）+ 白名單 DTO | void→`status=inactive` |
 | 價目 | `/api/rate-cards` | **`出街價`**（基本存取）+ **`收客價`**（field-level gate，C3） | ✓ `scopeRateCardWhere`——C1 加咗盤 scope（`site.brokerAssignments.some`） + 白名單 DTO | void/unvoid **C4 新加**以 `effective_from` 月份判斷鎖定；改動強制 audit；body 帶 `client_rate` 但冇「收客價」寫入權限→403 |
 | 更次記錄 | `/api/shift-records` | 更表 | ✓ `scopeShiftRecordWhere` + 白名單 DTO；**C1 寫入歸屬檢查**：雞頭淨係可以幫 `default_broker_id=自己` 嘅安員、喺 `broker_site_assignments` 白名單入面嘅 (盤,月) 開更，否則 403（唔可以靠「開得到」反證有份） | 受月份鎖定；unique(guard,work_date,shift_type)違反回409；雞頭填更強制自己 broker_id、唔准夾帶價錢；**雞頭 update 而家硬性 deny（C3）**；`GET ?status=pending_approval` 審批隊列；雞頭開更視 `brokers.requires_approval` 定 `pending_approval`/`confirmed`（P1-WP3） |
@@ -112,6 +117,7 @@ lock/unlock 代替），其餘資源一律：
 - `skip`、`take`（分頁，`take` 上限 500）
 - `include_inactive=1` / `include_voided=1`：連已停用/已作廢都攞（仍要 view 權限）
 - 部分資源額外支援 `site_id`、`guard_id`、`work_date_from`/`work_date_to`（shift-records）、`month`（special-items）
+- `expiring_within_days=N`（`/api/guards`，WP-PII）：篩牌照或平安卡 N 日內（含已過期）到期，非負整數，格式唔啱 400
 
 ## 硬性規則喺 API 層點實現
 

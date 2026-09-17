@@ -31,6 +31,17 @@ function enumOf(obj: Record<string, string>) {
 
 const dateOnly = z.coerce.date(); // 接受 "2026-08-01" 或完整 ISO datetime，一律轉做 Date object
 const money = z.union([z.number(), z.string()]).optional();
+
+// WP-PII：身份證格式寬鬆核對（1-2 個英文字母 + 6 位數字 + 括住 1 位
+// 數字或 "A" 嘅核對碼），大小寫都收（入 DB 之前唔轉大寫，保留原文）。
+const HKID_RE = /^[A-Za-z]{1,2}[0-9]{6}\([0-9Aa]\)$/;
+const hkid = z.string().regex(HKID_RE, "身份證格式要係 A123456(7) 咁樣").optional();
+// 緊急聯絡人電話——同設計文件一致，香港電話 8 位數字。
+const tel8 = z.string().regex(/^\d{8}$/, "電話要係 8 位數字").optional();
+const SIA_PERMIT_TYPES = ["A", "B", "C", "D"] as const;
+const siaPermitType = z.enum(SIA_PERMIT_TYPES).optional();
+const BLACKLIST_CHECK_RESULTS = ["clear", "flagged", "pending"] as const;
+const blacklistCheckResult = z.enum(BLACKLIST_CHECK_RESULTS).optional();
 const uuid = z.string().min(1);
 
 // ---------------------------------------------------------------------------
@@ -139,6 +150,26 @@ export const GuardUpdateSchema = z
     monthly_salary: money,
     sia_permit_expiry: dateOnly.optional(),
     polo_size: z.string().optional(),
+    // WP-PII（老闆 2026-09-17 拍板）：淨係 PATCH 接受呢批新欄——新增
+    // （POST）刻意唔開放，保安員 PII/銀行資料一律建好基本資料之後先
+    // 用編輯抽屜逐項補（field-group gate 喺 assertFieldGroupWritable()
+    // 做，見 src/app/api/guards/[id]/route.ts）。
+    hkid,
+    date_of_birth: dateOnly.optional(),
+    address: z.string().optional(),
+    emergency_contact_name: z.string().optional(),
+    emergency_contact_tel: tel8,
+    sia_permit_no: z.string().optional(),
+    sia_permit_type: siaPermitType,
+    safety_card_no: z.string().optional(),
+    safety_card_expiry: dateOnly.optional(),
+    hire_date: dateOnly.optional(),
+    leave_date: dateOnly.optional(),
+    bank_name: z.string().optional(),
+    bank_account_no: z.string().optional(),
+    bank_payee_name: z.string().optional(),
+    blacklist_check_result: blacklistCheckResult,
+    blacklist_check_date: dateOnly.optional(),
   })
   .strict();
 

@@ -4,6 +4,7 @@ import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole } from "@/lib/brok
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toGuardFullDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate, applyFieldGroupGateToList } from "@/lib/api/field-groups";
+import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError , okGzip } from "@/lib/api/http";
 import { paginationParams, readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
@@ -11,6 +12,7 @@ import { snakeToCamelShallow } from "@/lib/api/case";
 import { GuardCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
+import { maskHkidForList } from "@/lib/api/guard-pii";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 import type { Prisma } from "@prisma/client";
@@ -38,6 +40,11 @@ function guardModule(session: AuthedSession): Module {
 // broker-site-assignments 嗰堆）一致，一律 400 BadRequest，唔再靜靜哋
 // 當冇傳處理。
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// WP-PII：`?expiring_within_days=90`——篩牌照（sia_permit_expiry）或平安卡
+// （safety_card_expiry）90 日內（含已過期）到期嘅保安員，俾列表頁「牌照
+// 90 日內到期」FilterChip 用。非負整數，格式唔啱一律 400（同上面
+// MONTH_RE 一致嘅口徑）。
+const NON_NEGATIVE_INT_RE = /^\d+$/;
 
 async function loadMonthShiftCounts(guardIds: string[], month: string): Promise<Record<string, number>> {
   if (guardIds.length === 0) return {};
@@ -61,7 +68,15 @@ export async function GET(req: Request) {
     if (withMonthShiftsParam && !MONTH_RE.test(withMonthShiftsParam)) {
       throw BadRequest("with_month_shifts 格式唔啱（要 YYYY-MM，MM 係 01-12）");
     }
+    const expiringWithinDaysParam = url.searchParams.get("expiring_within_days");
+    if (expiringWithinDaysParam !== null && !NON_NEGATIVE_INT_RE.test(expiringWithinDaysParam)) {
+      throw BadRequest("expiring_within_days 格式唔啱（要非負整數）");
+    }
     let where: Prisma.GuardWhereInput = includeInactive ? {} : { status: "active" };
+    if (expiringWithinDaysParam !== null) {
+      const cutoff = new Date(Date.now() + Number(expiringWithinDaysParam) * 86_400_000);
+      where = { ...where, OR: [{ siaPermitExpiry: { lte: cutoff } }, { safetyCardExpiry: { lte: cutoff } }] };
+    }
     where = scopeGuardWhere(session, where);
     const [rows, total] = await Promise.all([
       prisma.guard.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
@@ -90,7 +105,11 @@ export async function GET(req: Request) {
     }
     const dto = mapListDTO({ rows: rowsWithCount, total, skip, take }, toGuardFullDTO);
     const gated = await applyFieldGroupGateToList(session, "guards", dto);
-    return okGzip(req, gated);
+    // WP-PII：列表身份證一律遮罩（老闆/會計有「安員個人資料:view」都係
+    // 遮）——詳情/編輯（GET /api/guards/[id]、PATCH 之後 response）先畀
+    // 睇全號，見 src/app/api/guards/[id]/route.ts。
+    const masked = brandSafeResponse({ ...gated, rows: maskHkidForList(gated.rows) });
+    return okGzip(req, masked);
   });
 }
 

@@ -26,6 +26,11 @@ import { brokerColor } from "@/lib/ui/broker-color";
 import { kickerFor } from "@/lib/ui/nav-active";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
+// WP-PII（老闆 2026-09-17 拍板）：牌照類別白名單、Blacklist check 結果
+// 白名單——同 src/lib/api/schemas.ts 嘅 zod enum 一致。
+const SIA_PERMIT_TYPES = ["A", "B", "C", "D"] as const;
+const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
+const BLACKLIST_LABEL: Record<string, string> = { clear: "已核實、無案底", flagged: "有紀錄", pending: "審查緊" };
 
 interface GuardRow {
   id: string;
@@ -41,6 +46,25 @@ interface GuardRow {
   polo_size?: string | null;
   status: string;
   month_shift_count?: number;
+  // WP-PII：新欄一律 optional——response 有冇呢粒 key 視乎 field-group
+  // gate（冇「安員個人資料/安員銀行資料:view」成粒 key 都唔會出現，
+  // 唔係值做 null），見 src/lib/api/field-groups.ts。
+  hkid?: string | null;
+  date_of_birth?: string | null;
+  address?: string | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_tel?: string | null;
+  sia_permit_no?: string | null;
+  sia_permit_type?: string | null;
+  safety_card_no?: string | null;
+  safety_card_expiry?: string | null;
+  hire_date?: string | null;
+  leave_date?: string | null;
+  bank_name?: string | null;
+  bank_account_no?: string | null;
+  bank_payee_name?: string | null;
+  blacklist_check_result?: string | null;
+  blacklist_check_date?: string | null;
 }
 interface BrokerRow {
   id: string;
@@ -59,6 +83,23 @@ const emptyForm = {
   monthly_salary: "",
   sia_permit_expiry: "",
   polo_size: "",
+  // WP-PII——淨係編輯（PATCH）先會夾落 body，見 onSubmit()。
+  hkid: "",
+  date_of_birth: "",
+  address: "",
+  emergency_contact_name: "",
+  emergency_contact_tel: "",
+  sia_permit_no: "",
+  sia_permit_type: "",
+  safety_card_no: "",
+  safety_card_expiry: "",
+  hire_date: "",
+  leave_date: "",
+  bank_name: "",
+  bank_account_no: "",
+  bank_payee_name: "",
+  blacklist_check_result: "",
+  blacklist_check_date: "",
 };
 
 function matchesSearch(g: GuardRow, q: string): boolean {
@@ -74,11 +115,24 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [hasMoneyField, setHasMoneyField] = useState(true);
+  // WP-PII：跟 hasMoneyField 一致嘅手法——response 有冇呢粒 key（field-
+  // group gate 嘅結果）決定編輯抽屜顯唔顯示嗰個分區，唔靠前端自己判斷
+  // 權限（單一事實來源：backend response 形狀）。
+  const [hasPiiField, setHasPiiField] = useState(true);
+  const [hasBankField, setHasBankField] = useState(true);
+  // WP-PII：牌照/平安卡/入職離職日期（GuardCreateSchema 冇，PATCH-only）
+  // 新增嗰幾隻 input——雞頭（`isBroker`）嘅 `GUARD_BROKER_FIELDS` 白名單
+  // 本身唔包含呢啲欄，response 冇 key，同 hasPiiField/hasBankField 一致
+  // 嘅「response 形狀決定顯唔顯示」手法，等雞頭視角自動零變化（唔使
+  // 額外寫 `!isBroker` 分支）。
+  const [hasLicenceExtraField, setHasLicenceExtraField] = useState(true);
   const [search, setSearch] = useState("");
   // S3（Opus 驗收修復）：原本冇 setter，月份寫死；而家加返 setter＋月份
   // FilterChip，改月份要重新 fetch `with_month_shifts`（見下面 useEffect
   // dep）。
   const [month, setMonth] = useState(currentMonthStr());
+  // WP-PII：「牌照 90 日內到期」FilterChip——`?expiring_within_days=90`。
+  const [expiringOnly, setExpiringOnly] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -89,8 +143,9 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
   async function load() {
     setLoading(true);
     setError(null);
+    const expiringParam = expiringOnly ? "&expiring_within_days=90" : "";
     const [guardRes, brokerRes] = await Promise.all([
-      apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}`),
+      apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}`),
       apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
     ]);
     if (!guardRes.ok) {
@@ -100,6 +155,9 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
     }
     setRows(guardRes.data.rows);
     setHasMoneyField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "monthly_salary" in r));
+    setHasPiiField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "hkid" in r));
+    setHasBankField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "bank_name" in r));
+    setHasLicenceExtraField(guardRes.data.rows.length === 0 ? !isBroker : guardRes.data.rows.some((r) => "sia_permit_no" in r));
     if (brokerRes.ok) setBrokers(brokerRes.data.rows);
     setLoading(false);
   }
@@ -107,7 +165,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month]);
+  }, [month, expiringOnly]);
 
   function broker(id?: string | null): BrokerRow | undefined {
     if (!id) return undefined;
@@ -121,8 +179,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
     setDrawerOpen(true);
   }
 
-  function openEdit(row: GuardRow) {
-    setEditingId(row.id);
+  function fillFormFromRow(row: GuardRow) {
     setForm({
       staff_no: row.staff_no ?? "",
       staff_no_mw: row.staff_no_mw ?? "",
@@ -134,9 +191,37 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
       monthly_salary: row.monthly_salary !== undefined && row.monthly_salary !== null ? String(row.monthly_salary) : "",
       sia_permit_expiry: row.sia_permit_expiry ? row.sia_permit_expiry.slice(0, 10) : "",
       polo_size: row.polo_size ?? "",
+      hkid: row.hkid ?? "",
+      date_of_birth: row.date_of_birth ? row.date_of_birth.slice(0, 10) : "",
+      address: row.address ?? "",
+      emergency_contact_name: row.emergency_contact_name ?? "",
+      emergency_contact_tel: row.emergency_contact_tel ?? "",
+      sia_permit_no: row.sia_permit_no ?? "",
+      sia_permit_type: row.sia_permit_type ?? "",
+      safety_card_no: row.safety_card_no ?? "",
+      safety_card_expiry: row.safety_card_expiry ? row.safety_card_expiry.slice(0, 10) : "",
+      hire_date: row.hire_date ? row.hire_date.slice(0, 10) : "",
+      leave_date: row.leave_date ? row.leave_date.slice(0, 10) : "",
+      bank_name: row.bank_name ?? "",
+      bank_account_no: row.bank_account_no ?? "",
+      bank_payee_name: row.bank_payee_name ?? "",
+      blacklist_check_result: row.blacklist_check_result ?? "",
+      blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
     });
+  }
+
+  async function openEdit(row: GuardRow) {
+    // WP-PII：列表嘅 `row.hkid` 係遮罩版（`A123***(7)`）——編輯抽屜要
+    // 顯示全號（「詳情/編輯有權先見全號」），要重新 GET 單項詳情
+    // （`GET /api/guards/:id` 冇做遮罩）。先用列表嗰行起草（即刻開抽屜
+    // 唔使等），detail 攞到先補正確嘅 hkid（同其他欄——detail 同 list
+    // 理論上其他欄一致，淨係 hkid 唔同）。
+    setEditingId(row.id);
+    fillFormFromRow(row);
     setFormError(null);
     setDrawerOpen(true);
+    const detailRes = await apiGet<GuardRow>(`/api/guards/${row.id}`);
+    if (detailRes.ok) fillFormFromRow(detailRes.data);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -155,6 +240,41 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
     };
     if (!editingId) body.default_broker_id = form.default_broker_id || undefined;
     if (hasMoneyField && form.monthly_salary !== "") body.monthly_salary = Number(form.monthly_salary);
+
+    // WP-PII：新欄一律 PATCH-only（`GuardCreateSchema` 冇呢批欄，
+    // POST body 帶咗會 400）——`editingId` 有值（編輯）先夾落 body，
+    // 而且淨係揀個別欄有值先送（空字串唔送，等用戶部分填都得，唔會
+    // 逼佢一次過填晒先儲得到）。分區冇顯示（`hasPiiField`/`hasBankField`
+    // false）就完全唔會夾落嚟——冇「安員個人資料/安員銀行資料:update」
+    // 嘅角色本身睇唔到呢啲 input，唔會誤送。
+    if (editingId) {
+      if (hasPiiField) {
+        if (form.hkid) body.hkid = form.hkid;
+        if (form.date_of_birth) body.date_of_birth = form.date_of_birth;
+        if (form.address) body.address = form.address;
+        if (form.emergency_contact_name) body.emergency_contact_name = form.emergency_contact_name;
+        if (form.emergency_contact_tel) body.emergency_contact_tel = form.emergency_contact_tel;
+        if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
+        if (form.blacklist_check_date) body.blacklist_check_date = form.blacklist_check_date;
+      }
+      if (hasBankField) {
+        if (form.bank_name) body.bank_name = form.bank_name;
+        if (form.bank_account_no) body.bank_account_no = form.bank_account_no;
+        if (form.bank_payee_name) body.bank_payee_name = form.bank_payee_name;
+      }
+      // 牌照/平安卡/入職離職日期跟現有「安員」module，唔受 hasPiiField/
+      // hasBankField 影響（有 `安員:update` 就見得/改得到）；
+      // hasLicenceExtraField 一樣係「response 形狀」判斷，雞頭冇呢批
+      // key，自動唔會夾落 body。
+      if (hasLicenceExtraField) {
+        if (form.sia_permit_no) body.sia_permit_no = form.sia_permit_no;
+        if (form.sia_permit_type) body.sia_permit_type = form.sia_permit_type;
+        if (form.safety_card_no) body.safety_card_no = form.safety_card_no;
+        if (form.safety_card_expiry) body.safety_card_expiry = form.safety_card_expiry;
+        if (form.hire_date) body.hire_date = form.hire_date;
+        if (form.leave_date) body.leave_date = form.leave_date;
+      }
+    }
 
     const res = editingId ? await apiPatch(`/api/guards/${editingId}`, body) : await apiPost("/api/guards", body);
     setSaving(false);
@@ -195,6 +315,16 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
     return <Pill variant="neutral">{g.status}</Pill>;
   }
 
+  // WP-PII：牌照到期三態 pill——過期紅、90 日內橙、冇填灰「未填」
+  // （`isExpiringSoon()` 帶 90 日門檻，見 src/lib/ui/format.ts；已過期
+  // 嘅 diffDays 係負數，一樣會 `<=90`，但呢度優先判 `isExpired` 出紅）。
+  function licenceExpiryPill(expiry?: string | null) {
+    if (!expiry) return <Pill variant="neutral">未填</Pill>;
+    if (isExpired(expiry)) return <Pill variant="danger">已過期</Pill>;
+    if (isExpiringSoon(expiry, 90)) return <Pill variant="warning">90 日內</Pill>;
+    return <Pill variant="success">有效</Pill>;
+  }
+
   const visibleRows = rows.filter((r) => matchesSearch(r, search));
   // S2：加返「聘用形式」欄——8 欄變 9 欄。
   const colCount = 9;
@@ -204,7 +334,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
       <PageHeader
         kicker={kickerFor("/guards", isBroker)}
         title="保安員"
-        subtitle="許可證 60 日內到期或已過期嘅列會高亮。"
+        subtitle="牌照 90 日內到期或已過期嘅列會高亮。"
         actions={
           <>
             <FilterChip label="搜尋" showCaret={false}>
@@ -213,6 +343,13 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
             <FilterChip label="本月更數月份">
               <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
             </FilterChip>
+            {/* WP-PII：老闆決定「雞頭視角完全唔變」——呢個新 FilterChip
+                淨係內部角色顯示，雞頭個 toolbar 保持原樣。 */}
+            {!isBroker && (
+              <FilterChip label="牌照 90 日內到期" showCaret={false}>
+                <input type="checkbox" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
+              </FilterChip>
+            )}
             <Button variant="primary" onClick={openCreate}>
               新增保安員
             </Button>
@@ -247,7 +384,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
                   <th className={tableCls.th}>聘用形式</th>
                   <th className={tableCls.thNum}>本月更數</th>
                   <th className={tableCls.th}>狀態</th>
-                  <th className={tableCls.th}>許可證到期</th>
+                  <th className={tableCls.th}>牌照到期</th>
                   <th className={tableCls.th}>操作</th>
                 </tr>
               </thead>
@@ -261,7 +398,6 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
                 )}
                 {visibleRows.map((r) => {
                   const expired = isExpired(r.sia_permit_expiry);
-                  const expiring = !expired && isExpiringSoon(r.sia_permit_expiry);
                   const b = broker(r.default_broker_id);
                   return (
                     <tr key={r.id} className={`${tableCls.rowHover} ${expired ? tableCls.warnRow : ""}`}>
@@ -279,14 +415,13 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
                       <td className={tableCls.td}>{fmt(r.tel)}</td>
                       <td className={tableCls.tdMuted}>{fmt(r.employment_type)}</td>
                       <td className={tableCls.tdNum}>{r.month_shift_count ?? "—"}</td>
+                      <td className={tableCls.td}>{statusPill(r)}</td>
                       <td className={tableCls.td}>
-                        <div className="flex flex-wrap items-center gap-1">
-                          {statusPill(r)}
-                          {expired && <span className="text-[11px] font-semibold text-[#dc2626]">已過期</span>}
-                          {expiring && <span className="text-[11px] font-semibold text-[#c2410c]">快到期</span>}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {licenceExpiryPill(r.sia_permit_expiry)}
+                          <span className="text-[11.5px] text-zk-muted">{fmtDate(r.sia_permit_expiry)}</span>
                         </div>
                       </td>
-                      <td className={tableCls.td}>{fmtDate(r.sia_permit_expiry)}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
@@ -315,7 +450,6 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
           <div className="space-y-2 sm:hidden">
             {visibleRows.map((r) => {
               const expired = isExpired(r.sia_permit_expiry);
-              const expiring = !expired && isExpiringSoon(r.sia_permit_expiry);
               const b = broker(r.default_broker_id);
               return (
                 <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${expired ? "bg-[#fef2f2]" : ""}`}>
@@ -333,8 +467,7 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
                       </Pill>
                     )}
                     {statusPill(r)}
-                    {expired && <span className="font-semibold text-[#dc2626]">已過期</span>}
-                    {expiring && <span className="font-semibold text-[#c2410c]">快到期</span>}
+                    {licenceExpiryPill(r.sia_permit_expiry)}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
@@ -429,6 +562,128 @@ export function GuardsClient({ isBroker }: { isBroker: boolean }) {
           <Field label="Polo 尺碼">
             <input className={inputCls} value={form.polo_size} onChange={(e) => setForm((f) => ({ ...f, polo_size: e.target.value }))} />
           </Field>
+
+          {/* WP-PII：新欄一律 PATCH-only（見上面 onSubmit()）——新增
+              保安員嗰陣（`!editingId`）唔顯示呢幾個分區，建好之後先用
+              「編輯」補（避免顯示一啲 POST 唔接受嘅 input，撳「儲存」
+              先發現 400）。冇對應 view 權限嘅分區直接唔顯示（唔係顯示
+              「—」，跟老闆決定原文）。 */}
+          {editingId && hasLicenceExtraField && (
+            <>
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">牌照與證件</h3>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="牌照號碼">
+                  <input className={inputCls} value={form.sia_permit_no} onChange={(e) => setForm((f) => ({ ...f, sia_permit_no: e.target.value }))} />
+                </Field>
+                <Field label="牌照類別">
+                  <select className={selectCls} value={form.sia_permit_type} onChange={(e) => setForm((f) => ({ ...f, sia_permit_type: e.target.value }))}>
+                    <option value="">（未填）</option>
+                    {SIA_PERMIT_TYPES.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="平安卡號碼">
+                  <input className={inputCls} value={form.safety_card_no} onChange={(e) => setForm((f) => ({ ...f, safety_card_no: e.target.value }))} />
+                </Field>
+                <Field label="平安卡到期日">
+                  <input
+                    type="date"
+                    className={inputCls}
+                    value={form.safety_card_expiry}
+                    onChange={(e) => setForm((f) => ({ ...f, safety_card_expiry: e.target.value }))}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="入職日期">
+                  <input type="date" className={inputCls} value={form.hire_date} onChange={(e) => setForm((f) => ({ ...f, hire_date: e.target.value }))} />
+                </Field>
+                <Field label="離職日期">
+                  <input type="date" className={inputCls} value={form.leave_date} onChange={(e) => setForm((f) => ({ ...f, leave_date: e.target.value }))} />
+                </Field>
+              </div>
+            </>
+          )}
+
+          {editingId && hasPiiField && (
+            <>
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">個人資料</h3>
+              <Field label="身份證號碼" hint="格式例：A123456(7)">
+                <input className={inputCls} value={form.hkid} onChange={(e) => setForm((f) => ({ ...f, hkid: e.target.value }))} />
+              </Field>
+              <Field label="出生日期">
+                <input type="date" className={inputCls} value={form.date_of_birth} onChange={(e) => setForm((f) => ({ ...f, date_of_birth: e.target.value }))} />
+              </Field>
+              <Field label="地址">
+                <input className={inputCls} value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="緊急聯絡人姓名">
+                  <input
+                    className={inputCls}
+                    value={form.emergency_contact_name}
+                    onChange={(e) => setForm((f) => ({ ...f, emergency_contact_name: e.target.value }))}
+                  />
+                </Field>
+                <Field label="緊急聯絡人電話" hint="8 位數字">
+                  <input
+                    className={inputCls}
+                    value={form.emergency_contact_tel}
+                    onChange={(e) => setForm((f) => ({ ...f, emergency_contact_tel: e.target.value }))}
+                  />
+                </Field>
+              </div>
+
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">Blacklist</h3>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Check 結果">
+                  <select
+                    className={selectCls}
+                    value={form.blacklist_check_result}
+                    onChange={(e) => setForm((f) => ({ ...f, blacklist_check_result: e.target.value }))}
+                  >
+                    <option value="">（未填）</option>
+                    {BLACKLIST_RESULTS.map((v) => (
+                      <option key={v} value={v}>
+                        {BLACKLIST_LABEL[v]}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Check 日期">
+                  <input
+                    type="date"
+                    className={inputCls}
+                    value={form.blacklist_check_date}
+                    onChange={(e) => setForm((f) => ({ ...f, blacklist_check_date: e.target.value }))}
+                  />
+                </Field>
+              </div>
+            </>
+          )}
+
+          {editingId && hasBankField && (
+            <>
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">銀行</h3>
+              <Field label="銀行">
+                <input className={inputCls} value={form.bank_name} onChange={(e) => setForm((f) => ({ ...f, bank_name: e.target.value }))} />
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="戶口號碼">
+                  <input className={inputCls} value={form.bank_account_no} onChange={(e) => setForm((f) => ({ ...f, bank_account_no: e.target.value }))} />
+                </Field>
+                <Field label="收款人名">
+                  <input className={inputCls} value={form.bank_payee_name} onChange={(e) => setForm((f) => ({ ...f, bank_payee_name: e.target.value }))} />
+                </Field>
+              </div>
+            </>
+          )}
+
           <div className="flex gap-2 pt-2">
             <button type="submit" disabled={saving} className={btnPrimary}>
               {saving ? "儲存緊…" : "儲存"}

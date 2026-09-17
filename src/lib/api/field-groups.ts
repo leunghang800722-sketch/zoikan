@@ -62,6 +62,37 @@ export const SETTLEMENT_FIELDS = {
   referral_fee_rates: ["fee_per_shift"],
 } as const;
 
+// WP-PII（老闆 2026-09-17 拍板）：保安員「安員個人資料」／「安員銀行
+// 資料」field group——同 CLIENT_RATE_FIELDS/SETTLEMENT_FIELDS 一樣嘅
+// 「逐 resource key，其餘 resource 留空陣列」形狀（淨係 guards 有嘢），
+// 咁樣可以直接掛落 applyFieldGroupGate()／assertFieldGroupWritable() 同一
+// 個機制，唔使逐 route 另外寫一次「有冇呢個 module:view 就剝呢幾隻欄」
+// 嘅邏輯。牌照（sia_permit_no/type/expiry）、平安卡、入職/離職日期
+// 刻意唔喺呢兩個 field group——跟現有「安員」module（主管出廠已經
+// 有 安員:view/update，即老闆話嘅「主管睇部分」），唔需要額外 field-
+// level gate，直接留喺 GUARD_FIELDS 白名單（src/lib/api/dto/index.ts）。
+export const GUARD_PII_FIELDS = {
+  shift_records: [],
+  rate_cards: [],
+  sites: [],
+  special_items: [],
+  month_closes: [],
+  guards: ["hkid", "date_of_birth", "address", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date"],
+  brokers: [],
+  referral_fee_rates: [],
+} as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
+
+export const GUARD_BANK_FIELDS = {
+  shift_records: [],
+  rate_cards: [],
+  sites: [],
+  special_items: [],
+  month_closes: [],
+  guards: ["bank_name", "bank_account_no", "bank_payee_name"],
+  brokers: [],
+  referral_fee_rates: [],
+} as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
+
 export type FieldGroupResource = keyof typeof CLIENT_RATE_FIELDS;
 
 function omit<T extends Record<string, unknown>>(obj: T, keys: readonly string[]): T {
@@ -89,6 +120,14 @@ export async function applyFieldGroupGate<T extends Record<string, unknown>>(
   if (settlementFields.length && !(await hasPermission(session, "出街價", "view"))) {
     out = omit(out, settlementFields);
   }
+  const guardPiiFields = GUARD_PII_FIELDS[resource];
+  if (guardPiiFields.length && !(await hasPermission(session, "安員個人資料", "view"))) {
+    out = omit(out, guardPiiFields);
+  }
+  const guardBankFields = GUARD_BANK_FIELDS[resource];
+  if (guardBankFields.length && !(await hasPermission(session, "安員銀行資料", "view"))) {
+    out = omit(out, guardBankFields);
+  }
   return out;
 }
 
@@ -115,5 +154,13 @@ export async function assertFieldGroupWritable(
   const settlementFields = SETTLEMENT_FIELDS[resource].filter((f) => f in body);
   if (settlementFields.length && !(await hasPermission(session, "出街價", "update"))) {
     throw Forbidden(`冇「出街價」寫入權限，唔可以改 ${settlementFields.join("/")}`);
+  }
+  const guardPiiFields = GUARD_PII_FIELDS[resource].filter((f) => f in body);
+  if (guardPiiFields.length && !(await hasPermission(session, "安員個人資料", "update"))) {
+    throw Forbidden(`冇「安員個人資料」寫入權限，唔可以改 ${guardPiiFields.join("/")}`);
+  }
+  const guardBankFields = GUARD_BANK_FIELDS[resource].filter((f) => f in body);
+  if (guardBankFields.length && !(await hasPermission(session, "安員銀行資料", "update"))) {
+    throw Forbidden(`冇「安員銀行資料」寫入權限，唔可以改 ${guardBankFields.join("/")}`);
   }
 }
