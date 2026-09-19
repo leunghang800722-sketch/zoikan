@@ -47,7 +47,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const session = await requirePermission(req, guardModule, "update");
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以新增電話");
     const { id } = await params;
-    const guard = await prisma.guard.findUnique({ where: { id }, select: { id: true } });
+    const guardWhere = scopeGuardWhere(session, { id });
+    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
     if (!guard) throw NotFound();
     const body = await readJson(req);
     const parsed = parseBody(GuardPhoneCreateSchema, body);
@@ -62,7 +63,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         source: "manual",
         createdBy: session.userId,
       });
-      await syncLegacyGuardContactColumns(tx, id);
+      await syncLegacyGuardContactColumns(tx, id, ["tel"]);
       return created;
     });
 

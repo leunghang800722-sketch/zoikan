@@ -55,3 +55,9 @@ export function apiPatch<T = unknown>(path: string, body: unknown): Promise<ApiR
 export function apiDelete<T = unknown>(path: string): Promise<ApiResult<T>> {
   return apiRequest<T>(path, { method: "DELETE" });
 }
+
+// WP-MULTI（Opus 覆核必修 6）：緊急聯絡人排序端點（`PUT .../emergency-
+// contacts/order`）用——第一個需要 PUT 嘅資源。
+export function apiPut<T = unknown>(path: string, body: unknown): Promise<ApiResult<T>> {
+  return apiRequest<T>(path, { method: "PUT", body: JSON.stringify(body) });
+}

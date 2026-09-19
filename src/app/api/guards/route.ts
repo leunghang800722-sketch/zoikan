@@ -302,7 +302,7 @@ export async function POST(req: Request) {
           : { changes: [] };
       // WP-MULTI：初始 `tel`（非空）起一行 primary 電話。
       const phoneRes = telLegacy && telLegacy.trim() ? await createGuardPhone(tx, { guardId: createdGuard.id, tel: telLegacy, isPrimary: true, source: "manual", createdBy: session.userId }) : null;
-      if (phoneRes) await syncLegacyGuardContactColumns(tx, createdGuard.id);
+      if (phoneRes) await syncLegacyGuardContactColumns(tx, createdGuard.id, ["tel"]);
       const finalGuard = legacyResult.changes.length > 0 || phoneRes ? await tx.guard.findUniqueOrThrow({ where: { id: createdGuard.id } }) : createdGuard;
       return { created: finalGuard, legacyChanges: legacyResult.changes, phoneResult: phoneRes };
     });

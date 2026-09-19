@@ -5,19 +5,44 @@
 //
 // 執行前提：`PW_PORT=3000 npx playwright test tests/e2e/multi-contacts.spec.ts`，
 // dev DB 要已經 `npm run db:seed`（有雞頭A/90000004 掛住嘅保安員）。
+//
+// Opus 覆核必修 3：呢個檔案原本用 `findBrokerAOwnGuard()` 搵一個真實
+// （seed 出嚟嘅）保安員做測試對象，`cleanupContactTables()` 跑完之後
+// 會將呢個真保安員嘅 `tel`／`address`／`emergency_contact_*` 呢幾個
+// legacy 欄直接寫 `null`——呢張表冇 hard delete，一旦真保安員本身舊資料
+// 存喺 legacy 欄但子表冇對應行（例如未行過自癒之前嘅舊資料），寫 null
+// 就係永久毀走（實測 Opus 跑呢個 file 嘅 e2e 之後，dev DB 有 3 個
+// guard 電話俾清走），違反規劃師拍板嘅「legacy 欄有值而子表冇對應行
+// 時，任何路徑都唔准將 legacy 值寫成 null」呢個鐵則。改用固定一個
+// e2e 專用 guard（`name_zh="e2e多值測試員"`，掛喺雞頭A底下等第三個
+// test「雞頭睇自己人」用得到）——guard 冇 hard delete，`ensureE2eGuard()`
+// 「存在就重用、唔存在先建」，`cleanupContactTables()` 淨係清呢個
+// 專用 guard 自己嘅子表行／legacy 欄，唔會再掂到任何真實資料。
 import { test, expect, type Page } from "@playwright/test";
 import { loginAs } from "./helpers";
 import { prisma } from "./db-helpers";
 
 test.describe.configure({ mode: "serial" });
 
-async function findBrokerAOwnGuard() {
+const E2E_GUARD_NAME = "e2e多值測試員";
+
+/** 存在就重用、唔存在先建——掛喺雞頭A（tel 90000004）底下，等「雞頭
+ * 睇自己人」嗰個 test 用得到；`status:"active"` 等佢喺列表預設顯示。 */
+async function ensureE2eGuard(): Promise<{ id: string; nameZh: string }> {
+  const existing = await prisma.guard.findFirst({ where: { nameZh: E2E_GUARD_NAME }, select: { id: true, nameZh: true } });
+  if (existing) return existing;
   const brokerAUser = await prisma.user.findFirstOrThrow({ where: { tel: "90000004" }, select: { brokerId: true } });
-  const guard = await prisma.guard.findFirstOrThrow({
-    where: { defaultBrokerId: brokerAUser.brokerId, status: "active" },
+  const created = await prisma.guard.create({
+    data: {
+      nameZh: E2E_GUARD_NAME,
+      employmentType: "cash_casual",
+      defaultBrokerId: brokerAUser.brokerId,
+      status: "active",
+      createdBy: "e2e:multi-contacts.spec",
+    },
     select: { id: true, nameZh: true },
   });
-  return guard;
+  return created;
 }
 
 async function openEditByName(page: Page, name: string) {
@@ -38,9 +63,9 @@ function fieldControl(page: Page, label: string, anchorExact = false) {
   return page.locator("label", { hasText: pattern }).first();
 }
 
+/** 呢個 guard 係 e2e 專用（`ensureE2eGuard()` 建低／重用），淨係佢自己
+ * 嘅子表行／legacy 欄——唔會再掂到任何真實保安員資料。 */
 async function cleanupContactTables(guardId: string) {
-  // 呢個 test 自給自足——清走呢個 test 起低嘅新表行，唔留污染畀下次跑
-  // （guard_phones 有 UNIQUE(guard_id, tel)，唔清會令下次跑撞號）。
   await prisma.guardPhone.deleteMany({ where: { guardId } });
   await prisma.guardEmergencyContact.deleteMany({ where: { guardId } });
   await prisma.guardAddress.deleteMany({ where: { guardId } });
@@ -52,7 +77,8 @@ test.afterAll(async () => {
 });
 
 test("老闆：加第二個電話 → 設主要 → 列表電話變 → 舊電話仲喺度", async ({ page }) => {
-  const guard = await findBrokerAOwnGuard();
+  const guard = await ensureE2eGuard();
+  await cleanupContactTables(guard.id); // 保險：上一次跑（如果中途失敗）可能留低舊測試值。
   const originalTel = "6" + Date.now().toString().slice(-7);
   const secondTel = "6" + (Date.now() + 1).toString().slice(-7);
 
@@ -109,7 +135,8 @@ test("老闆：加第二個電話 → 設主要 → 列表電話變 → 舊電�
 });
 
 test("老闆：加兩個緊急聯絡人", async ({ page }) => {
-  const guard = await findBrokerAOwnGuard();
+  const guard = await ensureE2eGuard();
+  await cleanupContactTables(guard.id);
   try {
     await loginAs(page, "老闆");
     await page.goto("/guards");
@@ -141,7 +168,8 @@ test("老闆：加兩個緊急聯絡人", async ({ page }) => {
 });
 
 test("雞頭：睇自己安員——見電話但冇新增/編輯/刪除掣，見唔到緊急聯絡人／地址分區", async ({ page }) => {
-  const guard = await findBrokerAOwnGuard();
+  const guard = await ensureE2eGuard();
+  await cleanupContactTables(guard.id);
   const tel = "6" + Date.now().toString().slice(-7);
   try {
     // 老闆先幫呢個安員加一個電話，等雞頭有嘢好睇。

@@ -20,18 +20,125 @@
 // 同 WP-STAFFNO 一致嘅設計取捨：
 //   - 冇「former／已取消」呢個狀態（同員工編號唔同）——呢三張表嘅行
 //     「存在」就代表「呢筆資料仲有效」，DELETE 真係刪走一行（唔係
-//     UPDATE status）。所以 legacy 欄同步冇「former fallback 顯示歷史
-//     值」呢個概念：primary 冧咗（例如刪走最後一個電話）就直接同步做
-//     `null`，反映「而家一個電話都冇記錄」嘅真實狀態。
-//   - 呢個檔案冚唪唥函數要喺 `prisma.$transaction()` 入面 call——「降級
-//     舊 primary」＋「起新 primary」／「刪 primary＋自動升級下一個」
-//     要原子性咁一齊成功或者一齊失敗，落完數記得喺同一個 tx 入面 call
-//     `syncLegacyGuardContactColumns()`。
+//     UPDATE status）。
+//
+// Opus 覆核（規劃師拍板，同 WP-STAFFNO「已取消 fallback 顯示歷史值」
+// 一致精神）：**legacy 欄（`guards.tel／address／emergency_contact_*`）
+// 有值而子表冇對應行時，任何路徑都唔准將 legacy 值寫成 null 或者令佢
+// 消失；髒資料唔可以鎖死成張表嘅儲存。**
+//   - `syncLegacyGuardContactColumns()` 改做逐組判斷：子表有行（主要
+//     行／代表行）→ 寫返同步值；子表 0 行 → 完全唔掂嗰組 legacy 欄
+//     （唔會寫 null）——即使係「刪走最後一個電話」呢類令子表變 0 行嘅
+//     動作，legacy `tel` 都會停留喺舊值（同 WP-STAFFNO 已取消號 fallback
+//     顯示歷史值一致取態），唔會反映做「而家一個電話都冇」。
+//   - 每次 call 要傳 `groups` 參數，明確講呢次操作影響邊組（`"tel"`／
+//     `"address"`／`"emergency"`），淨係重算嗰組——唔會因為改咗電話而
+//     連帶重算（甚至冧走）冇改過嗰組地址／緊急聯絡人嘅 legacy 值。
+//   - 「自癒」（`healLegacyContactBeforeWrite()`）：任何子資源
+//     create（`createGuardPhone()`／`createGuardAddress()`／
+//     `createGuardEmergencyContact()`）之前，如果嗰個 guard 嗰組 legacy
+//     欄有值但子表仲係 0 行（例如呢個 guard 舊資料一直冇行過任何一張
+//     新表、或者之前俾人刪晒），就先將個 legacy 值搬一行入去（電話／
+//     地址設做 primary，`source="backfill:legacy-on-write"`，值照搬
+//     唔驗格式——同 migration 一致嘅「髒值照搬」取態），先至再做用戶
+//     嗰個真正操作。等「加第二個電話」呢類動作唔會因為子表本身係空
+//     而將原本嗰個（淨係存喺 legacy 欄嗰個）電話丟晒。
+//
+//   呢個檔案冚唪唥函數要喺 `prisma.$transaction()` 入面 call——「降級
+//   舊 primary」＋「起新 primary」／「刪 primary＋自動升級下一個」要
+//   原子性咁一齊成功或者一齊失敗，落完數記得喺同一個 tx 入面 call
+//   `syncLegacyGuardContactColumns()`。
 import type { Prisma, GuardPhone, GuardEmergencyContact, GuardAddress } from "@prisma/client";
 import { BadRequest } from "../api/errors";
 import { writeAudit } from "../audit";
 
 type Tx = Prisma.TransactionClient;
+
+/** `syncLegacyGuardContactColumns()`／自癒邏輯用嘅組別——一次操作淨係
+ * 影響一組，唔會連累第二組。 */
+export type LegacyContactGroup = "tel" | "address" | "emergency";
+
+// ---------------------------------------------------------------------------
+// 併發控制——刪除／設主要（會改變「邊行係 primary」呢個不變式）之前，
+// 用 `SELECT … FOR UPDATE` 鎖住呢個 guard 本身一行，逼同一個 guard 嘅
+// 電話／地址寫入一定序列化（Postgres row lock，等第二個 transaction 要
+// 等第一個 commit 先可以開始），唔會兩個 transaction 同時各自見到
+// 「得返一行、仲係 primary」而一齊唔做「升級下一行」嗰步，最終冧到
+// 一個 primary 都冇。Prisma 冇高階 API 表達 `FOR UPDATE`，用
+// `$queryRaw`——`guards.id` 係 TEXT（唔係 Postgres uuid 型別），直接
+// tagged-template 參數化，Prisma 自動處理 `$1` 綁定，冇 SQL injection
+// 風險。
+// ---------------------------------------------------------------------------
+async function lockGuardRowForContactWrite(tx: Tx, guardId: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM guards WHERE id = ${guardId} FOR UPDATE`;
+}
+
+/** 鎖咗之後嘅保險網：呢個 guard 電話有 ≥1 行就一定要有一個 primary——
+ * 理論上唔應該行到呢度先執行（DB 有 partial unique index
+ * `guard_phones_guard_id_primary_key` 擋多過一個 primary；`deleteGuard
+ * Phone()`/`setPrimaryGuardPhone()` 本身邏輯亦已經保證少一個primary
+ * 就自動升級），純粹 defense-in-depth——真係執行到就升最舊
+ * （`createdAt` asc）嗰行做 primary。 */
+async function reconcilePrimaryPhoneInvariant(tx: Tx, guardId: string): Promise<void> {
+  const rows = await tx.guardPhone.findMany({ where: { guardId }, orderBy: { createdAt: "asc" } });
+  if (rows.length === 0) return;
+  if (rows.some((r) => r.isPrimary)) return;
+  await tx.guardPhone.update({ where: { id: rows[0]!.id }, data: { isPrimary: true } });
+}
+
+async function reconcilePrimaryAddressInvariant(tx: Tx, guardId: string): Promise<void> {
+  const rows = await tx.guardAddress.findMany({ where: { guardId }, orderBy: { createdAt: "asc" } });
+  if (rows.length === 0) return;
+  if (rows.some((r) => r.isPrimary)) return;
+  await tx.guardAddress.update({ where: { id: rows[0]!.id }, data: { isPrimary: true } });
+}
+
+// ---------------------------------------------------------------------------
+// 自癒——任何子資源 create 之前，如果呢個 guard 嗰組 legacy 欄有值但子
+// 表 0 行，先將個 legacy 值搬一行入去（見檔案頂註解）。
+// ---------------------------------------------------------------------------
+async function healLegacyContactBeforeWrite(tx: Tx, guardId: string, group: LegacyContactGroup, createdBy: string | null): Promise<void> {
+  const guard = await tx.guard.findUnique({
+    where: { id: guardId },
+    select: { tel: true, address: true, emergencyContactName: true, emergencyContactTel: true },
+  });
+  if (!guard) return;
+
+  if (group === "tel") {
+    if (!guard.tel || !guard.tel.trim()) return;
+    const count = await tx.guardPhone.count({ where: { guardId } });
+    if (count > 0) return;
+    await tx.guardPhone.create({
+      data: { guardId, tel: guard.tel.trim(), isPrimary: true, source: "backfill:legacy-on-write", createdBy },
+    });
+    return;
+  }
+  if (group === "address") {
+    if (!guard.address || !guard.address.trim()) return;
+    const count = await tx.guardAddress.count({ where: { guardId } });
+    if (count > 0) return;
+    await tx.guardAddress.create({
+      data: { guardId, address: guard.address.trim(), isPrimary: true, source: "backfill:legacy-on-write", createdBy },
+    });
+    return;
+  }
+  // group === "emergency"
+  const hasName = !!(guard.emergencyContactName && guard.emergencyContactName.trim());
+  const hasTel = !!(guard.emergencyContactTel && guard.emergencyContactTel.trim());
+  if (!hasName && !hasTel) return;
+  const count = await tx.guardEmergencyContact.count({ where: { guardId } });
+  if (count > 0) return;
+  await tx.guardEmergencyContact.create({
+    data: {
+      guardId,
+      name: hasName ? guard.emergencyContactName!.trim() : null,
+      tel: hasTel ? guard.emergencyContactTel!.trim() : null,
+      sortOrder: 0,
+      source: "backfill:legacy-on-write",
+      createdBy,
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // 電話（guard_phones）
@@ -94,6 +201,13 @@ export async function createGuardPhone(tx: Tx, input: CreateGuardPhoneInput): Pr
   if (!isValidTel(tel)) {
     throw BadRequest(`電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）：${tel}`);
   }
+  await lockGuardRowForContactWrite(tx, input.guardId);
+  // 自癒：加電話之前，如果呢個 guard 嘅 legacy `tel` 有值但 `guard_
+  // phones` 仲係 0 行，先將個 legacy 值搬一行入去（設做 primary）——
+  // 唔係就下面 `existingCount === 0` 會將「今次新加嗰個」錯誤咁當第一
+  // 個電話變 primary，原本記喺 legacy 欄嗰個電話會冇晒行、彈唔返（見
+  // 檔案頂註解）。
+  await healLegacyContactBeforeWrite(tx, input.guardId, "tel", input.createdBy ?? null);
   const existingCount = await tx.guardPhone.count({ where: { guardId: input.guardId } });
   const wantPrimary = existingCount === 0 ? true : !!input.isPrimary;
 
@@ -138,6 +252,7 @@ export interface SetPrimaryResult<T> {
 /** 將一行電話設做 primary——原本嗰行 primary（如果有）自動降級。已經係
  * primary 就 no-op（`demoted=null`，`before===after`）。 */
 export async function setPrimaryGuardPhone(tx: Tx, guardId: string, phoneId: string): Promise<SetPrimaryResult<GuardPhone> | null> {
+  await lockGuardRowForContactWrite(tx, guardId);
   const row = await tx.guardPhone.findFirst({ where: { id: phoneId, guardId } });
   if (!row) return null;
   if (row.isPrimary) return { before: row, after: row, demoted: null };
@@ -148,6 +263,7 @@ export async function setPrimaryGuardPhone(tx: Tx, guardId: string, phoneId: str
     demoted = { before: existingPrimary, after };
   }
   const after = await tx.guardPhone.update({ where: { id: row.id }, data: { isPrimary: true } });
+  await reconcilePrimaryPhoneInvariant(tx, guardId);
   return { before: row, after, demoted };
 }
 
@@ -164,6 +280,7 @@ export interface DeleteResult<T> {
  * 呢個狀態，刪咗就係冇咗，冇歷史好 fallback，同 WP-STAFFNO 員工編號嘅
  * 「已取消號 fallback 顯示歷史值」唔同，見呢個檔案頂註解）。 */
 export async function deleteGuardPhone(tx: Tx, guardId: string, phoneId: string): Promise<DeleteResult<GuardPhone> | null> {
+  await lockGuardRowForContactWrite(tx, guardId);
   const row = await tx.guardPhone.findFirst({ where: { id: phoneId, guardId } });
   if (!row) return null;
   await tx.guardPhone.delete({ where: { id: row.id } });
@@ -175,6 +292,7 @@ export async function deleteGuardPhone(tx: Tx, guardId: string, phoneId: string)
       promoted = { before: next, after };
     }
   }
+  await reconcilePrimaryPhoneInvariant(tx, guardId);
   return { deleted: row, promoted };
 }
 
@@ -200,6 +318,9 @@ export interface CreateGuardAddressResult {
 export async function createGuardAddress(tx: Tx, input: CreateGuardAddressInput): Promise<CreateGuardAddressResult> {
   const address = input.address.trim();
   if (!address) throw BadRequest("地址唔可以係空白");
+  await lockGuardRowForContactWrite(tx, input.guardId);
+  // 自癒——同 createGuardPhone() 一致理由。
+  await healLegacyContactBeforeWrite(tx, input.guardId, "address", input.createdBy ?? null);
   const existingCount = await tx.guardAddress.count({ where: { guardId: input.guardId } });
   const wantPrimary = existingCount === 0 ? true : !!input.isPrimary;
 
@@ -226,6 +347,7 @@ export async function createGuardAddress(tx: Tx, input: CreateGuardAddressInput)
 }
 
 export async function setPrimaryGuardAddress(tx: Tx, guardId: string, addressId: string): Promise<SetPrimaryResult<GuardAddress> | null> {
+  await lockGuardRowForContactWrite(tx, guardId);
   const row = await tx.guardAddress.findFirst({ where: { id: addressId, guardId } });
   if (!row) return null;
   if (row.isPrimary) return { before: row, after: row, demoted: null };
@@ -236,10 +358,12 @@ export async function setPrimaryGuardAddress(tx: Tx, guardId: string, addressId:
     demoted = { before: existingPrimary, after };
   }
   const after = await tx.guardAddress.update({ where: { id: row.id }, data: { isPrimary: true } });
+  await reconcilePrimaryAddressInvariant(tx, guardId);
   return { before: row, after, demoted };
 }
 
 export async function deleteGuardAddress(tx: Tx, guardId: string, addressId: string): Promise<DeleteResult<GuardAddress> | null> {
+  await lockGuardRowForContactWrite(tx, guardId);
   const row = await tx.guardAddress.findFirst({ where: { id: addressId, guardId } });
   if (!row) return null;
   await tx.guardAddress.delete({ where: { id: row.id } });
@@ -251,6 +375,7 @@ export async function deleteGuardAddress(tx: Tx, guardId: string, addressId: str
       promoted = { before: next, after };
     }
   }
+  await reconcilePrimaryAddressInvariant(tx, guardId);
   return { deleted: row, promoted };
 }
 
@@ -284,6 +409,11 @@ export async function createGuardEmergencyContact(tx: Tx, input: CreateGuardEmer
   const name = input.name?.trim() || null;
   const tel = input.tel?.trim() || null;
   assertNameOrTel(name, tel);
+  // 自癒——同 createGuardPhone() 一致理由：加緊急聯絡人之前，如果
+  // legacy `emergency_contact_name`／`_tel` 有值但子表仲係 0 行，先將
+  // 個 legacy 值搬做代表行（`sort_order=0`），等佢唔會因為子表原本係
+  // 空而冧走。
+  await healLegacyContactBeforeWrite(tx, input.guardId, "emergency", input.createdBy ?? null);
   let sortOrder = input.sortOrder;
   if (sortOrder === undefined) {
     const maxRow = await tx.guardEmergencyContact.findFirst({ where: { guardId: input.guardId }, orderBy: { sortOrder: "desc" } });
@@ -340,31 +470,60 @@ export async function deleteGuardEmergencyContact(tx: Tx, guardId: string, conta
   return row;
 }
 
+/** 加單一端點 `PUT /api/guards/:id/emergency-contacts/order`
+ * 用——一個 transaction 重寫成個 guard 全部緊急聯絡人嘅 `sort_order`
+ * （0-based，跟 `orderedIds` 陣列順序）。`orderedIds` 一定要啱啱好等於
+ * 呢個 guard 現有全部行（唔准漏、唔准多、唔准夾雜其他 guard 嘅 id）
+ * ——唔係嘅話 400，避免手快打錯令某一行走失咗個 sort_order 對應。 */
+export async function reorderGuardEmergencyContacts(tx: Tx, guardId: string, orderedIds: string[]): Promise<GuardEmergencyContact[]> {
+  const rows = await tx.guardEmergencyContact.findMany({ where: { guardId } });
+  const rowIds = new Set(rows.map((r) => r.id));
+  const uniqueOrderedIds = new Set(orderedIds);
+  if (orderedIds.length !== rows.length || uniqueOrderedIds.size !== orderedIds.length || orderedIds.some((id) => !rowIds.has(id))) {
+    throw BadRequest("id 陣列要啱啱好包含呢個保安員全部緊急聯絡人（唔可以多、少、重複或者帶第啲人嘅 id）");
+  }
+  const updated: GuardEmergencyContact[] = [];
+  for (let i = 0; i < orderedIds.length; i++) {
+    updated.push(await tx.guardEmergencyContact.update({ where: { id: orderedIds[i]! }, data: { sortOrder: i } }));
+  }
+  return updated.sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
 // ---------------------------------------------------------------------------
 // legacy 欄同步——`guards.tel`／`address`／`emergency_contact_name`／
 // `emergency_contact_tel` 呢四個舊欄而家係由三張新表現狀重算嘅**同步顯示
-// 值**：`tel`＝primary phone（冇 phone 就 null）；`address`＝primary
-// address（冇就 null）；`emergency_contact_name`／`_tel`＝`sort_order`
-// 最細嗰個緊急聯絡人（冇就兩個都 null）。任何一張表增／改／刪之後都要
-// 喺同一個 transaction 內尾 call 呢個函數，等 legacy 欄唔會唔一致——更表
-// 編輯器／雞頭 DTO／搜尋／匯出／報表全部繼續讀呢四個舊欄，唔使改。
-// ---------------------------------------------------------------------------
-export async function syncLegacyGuardContactColumns(tx: Tx, guardId: string): Promise<void> {
-  const [primaryPhone, primaryAddress, contacts] = await Promise.all([
-    tx.guardPhone.findFirst({ where: { guardId, isPrimary: true } }),
-    tx.guardAddress.findFirst({ where: { guardId, isPrimary: true } }),
-    tx.guardEmergencyContact.findMany({ where: { guardId }, orderBy: { sortOrder: "asc" }, take: 1 }),
-  ]);
-  const representative = contacts[0] ?? null;
-  await tx.guard.update({
-    where: { id: guardId },
-    data: {
-      tel: primaryPhone?.tel ?? null,
-      address: primaryAddress?.address ?? null,
-      emergencyContactName: representative?.name ?? null,
-      emergencyContactTel: representative?.tel ?? null,
-    },
-  });
+// 值**：`tel`＝primary phone；`address`＝primary address；
+// `emergency_contact_name`／`_tel`＝`sort_order` 最細嗰個緊急聯絡人。
+//
+// Opus 覆核：逐組判斷——`groups` 話呢次操作改咗邊組，淨係重算嗰組（冇
+// 講嘅組唔會被連累重算）；每組入面，子表有行就寫返同步值，**子表 0
+// 行就完全唔掂嗰組 legacy 欄**（唔寫 null）——保證「呢個 guard 一直都
+// 有電話」呢類舊資料唔會因為子表一時 0 行（例如刪咗最後一行、或者呢
+// 個 guard 仲未行過自癒）就俾人睇到個電話「唔見咗」。 */
+export async function syncLegacyGuardContactColumns(tx: Tx, guardId: string, groups: readonly LegacyContactGroup[]): Promise<void> {
+  const data: Prisma.GuardUpdateInput = {};
+
+  if (groups.includes("tel")) {
+    const primaryPhone = await tx.guardPhone.findFirst({ where: { guardId, isPrimary: true } });
+    if (primaryPhone) data.tel = primaryPhone.tel;
+    // 冇 primary（包括 0 行）——唔寫，保留 DB 原值。
+  }
+  if (groups.includes("address")) {
+    const primaryAddress = await tx.guardAddress.findFirst({ where: { guardId, isPrimary: true } });
+    if (primaryAddress) data.address = primaryAddress.address;
+  }
+  if (groups.includes("emergency")) {
+    const contacts = await tx.guardEmergencyContact.findMany({ where: { guardId }, orderBy: { sortOrder: "asc" }, take: 1 });
+    const representative = contacts[0] ?? null;
+    if (representative) {
+      data.emergencyContactName = representative.name;
+      data.emergencyContactTel = representative.tel;
+    }
+  }
+
+  if (Object.keys(data).length > 0) {
+    await tx.guard.update({ where: { id: guardId }, data });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +576,14 @@ export async function applyLegacyGuardContactPatch(
     addressResult = await createGuardAddress(tx, { guardId, address, isPrimary: true, source: "manual:legacy-patch(address)", createdBy });
   }
   if ((emergencyContactName && emergencyContactName.trim()) || (emergencyContactTel && emergencyContactTel.trim())) {
+    // 自癒要喺呢度（call `createGuardEmergencyContact()` 之前）先做，
+    // 唔可以淨係靠 `createGuardEmergencyContact()` 入面嗰次——落面
+    // `minRow` 要睇「自癒完成之後」嘅狀態先計得啱「細過現有全部行」嘅
+    // `sortOrder`；如果自癒喺 `createGuardEmergencyContact()` 入面先
+    // 觸發，呢度 `minRow` 會用返自癒之前（0 行）嗰個狀態計出
+    // `sortOrder=0`，同自癒剛巧起低嗰行（都係 `sortOrder=0`）撞成同一個
+    // 值，代表行變咗睇唔準邊個先（DB 冇規定 tie 點排）。
+    await healLegacyContactBeforeWrite(tx, guardId, "emergency", createdBy ?? null);
     // 「加一個新嘅緊急聯絡人，變成新嘅代表行」——`sort_order` 要細過現有
     // 全部行先會贏（`syncLegacyGuardContactColumns()` 揀 `sort_order` 最
     // 細嗰個），用「現有最細 - 1」（冇任何行就 0）。
@@ -432,8 +599,12 @@ export async function applyLegacyGuardContactPatch(
     });
   }
 
-  if (phone || addressResult || contact) {
-    await syncLegacyGuardContactColumns(tx, guardId);
+  const groups: LegacyContactGroup[] = [];
+  if (phone) groups.push("tel");
+  if (addressResult) groups.push("address");
+  if (contact) groups.push("emergency");
+  if (groups.length > 0) {
+    await syncLegacyGuardContactColumns(tx, guardId, groups);
   }
   return { phone, address: addressResult, contact };
 }

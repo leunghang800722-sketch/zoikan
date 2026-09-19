@@ -131,14 +131,35 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // `emergencyContactTel`（sync 返嚟嘅現值）唔同先當「真係想改」，
     // 唔係嘅話每次撳「儲存」都會重新起一行電話撞
     // `UNIQUE(guard_id, tel)` 變 409。
+    //
+    // Opus 覆核（WP-MULTI 必修 5，髒 legacy 值唔鎖死儲存）：原本 `tel`
+    // 淨係試一種比較方式——`normalizeTel(raw)` vs 原始 `before.tel`。
+    // `before.tel` 本身可能係髒值（例如 `"91234569 / 61234569"`，含
+    // `normalizeTel()` 剝唔走嘅 `/`）——用戶完全冇改呢個欄，淨係改第二
+    // 個欄一齊送出嚟嘅 `raw` 同 `before.tel` 逐字一樣，但
+    // `normalizeTel(raw)`（剝走空白之後）就同未正規化嘅 `before.tel` 唔
+    // 一樣，會被誤判「真係想改」，觸發 `applyLegacyGuardContactPatch()`
+    // 嘗試起新行、撞正 `isValidTel()` 格式驗證 400（髒值通常唔合格式）
+    // ——即係「淨係改另一個欄」都會因為呢粒髒 `tel` 撞 400，儲存唔到。
+    // 而家改做兩個方向都試（逐字相等 **或者** 兩邊正規化之後相等），有
+    // 一個岩就當冇改；兩個都唔同先觸發新邏輯（起新行／驗格式）。
+    const telUnchanged = (raw: string | undefined, beforeVal: string | null): boolean => {
+      if (raw === undefined) return true;
+      const beforeStr = beforeVal ?? "";
+      return raw === beforeStr || normalizeTel(raw) === normalizeTel(beforeStr);
+    };
+    const textUnchanged = (raw: string | undefined, beforeVal: string | null): boolean => {
+      if (raw === undefined) return true;
+      return raw.trim() === (beforeVal ?? "");
+    };
     const rawTel = (effectiveBody as Record<string, unknown>).tel as string | undefined;
     const rawAddress = (effectiveBody as Record<string, unknown>).address as string | undefined;
     const rawEmergencyName = (effectiveBody as Record<string, unknown>).emergency_contact_name as string | undefined;
     const rawEmergencyTel = (effectiveBody as Record<string, unknown>).emergency_contact_tel as string | undefined;
-    const telLegacy = rawTel && normalizeTel(rawTel) !== (before.tel ?? "") ? rawTel : undefined;
-    const addressLegacy = rawAddress && rawAddress.trim() !== (before.address ?? "") ? rawAddress : undefined;
-    const emergencyNameChanged = rawEmergencyName !== undefined && rawEmergencyName.trim() !== (before.emergencyContactName ?? "");
-    const emergencyTelChanged = rawEmergencyTel !== undefined && rawEmergencyTel.trim() !== (before.emergencyContactTel ?? "");
+    const telLegacy = rawTel && !telUnchanged(rawTel, before.tel) ? rawTel : undefined;
+    const addressLegacy = rawAddress && !textUnchanged(rawAddress, before.address) ? rawAddress : undefined;
+    const emergencyNameChanged = rawEmergencyName !== undefined && !textUnchanged(rawEmergencyName, before.emergencyContactName);
+    const emergencyTelChanged = rawEmergencyTel !== undefined && !telUnchanged(rawEmergencyTel, before.emergencyContactTel);
     // 兩個欄有其中一個真係改咗就起新代表行——冇改嗰邊帶返 `before`
     // （即係而家嗰個代表行嘅值）一齊起，等新行仍然係一組完整嘅
     // 「姓名＋電話」，唔會因為淨係改咗其中一隻就令新代表行嗰隻變空。

@@ -31,6 +31,7 @@ import { seedRosterLayouts } from "./lib/roster-layout";
 import { enrichLeaveCodeRawText } from "./lib/leave-code-raw";
 import { enrichShiftRecordsWithRawRow } from "./lib/roster-raw";
 import { schemeFromNumber, normalizeStaffNumber } from "../../src/lib/guards/staff-numbers";
+import { normalizeTel, isValidTel } from "../../src/lib/guards/contacts";
 
 const stats: Record<string, number> = {};
 
@@ -286,6 +287,70 @@ async function seedStaffNumberFromLegacyColumn(guardId: string, rawValue: string
   return 1;
 }
 
+// WP-MULTI（Opus 覆核必修 2）：同上面 `seedStaffNumberFromLegacyColumn()`
+// 一致做法——guard 起低之後，跟住即刻幫佢嘅 `tel`／`address`／
+// `emergency_contact_name`／`emergency_contact_tel`（`guards` 表 legacy
+// 欄）喺 `guard_phones`／`guard_addresses`／`guard_emergency_contacts`
+// 三張新表起返對應行（primary／代表行），等 `db:reset`＋`db:seed` 之後
+// 新表由一開始就同 legacy 欄一致（唔使靠「自癒」喺第一次真正寫入先補
+// 番——Opus 實測跑 e2e 之前 dev DB 有大量 guard 得個 legacy `tel`、
+// `guard_phones` 冚唪唥 0 行嘅 orphan 狀態，正正係呢個缺口）。回傳起
+// 低咗幾多行（0-3）。
+//
+// wp2b/guards.csv 冧本身淨係有 `tel` 一欄（冇 address／emergency_
+// contact），落面 address／emergencyName／emergencyTel 三個參數傳
+// `created.address`／`created.emergencyContactName`／
+// `created.emergencyContactTel`（guard create data 冇夾呢幾個欄，一定
+// null）——特登保留成個通用函數（同 seedStaffNumberFromLegacyColumn()
+// 一致「有幾多欄就補幾多」寫法），日後 CSV 加咗呢幾欄唔使再喺呢度手動
+// 加多層邏輯。
+async function seedContactsFromLegacyColumns(
+  guardId: string,
+  tel: string | null,
+  address: string | null,
+  emergencyName: string | null,
+  emergencyTel: string | null,
+): Promise<number> {
+  let created = 0;
+  if (tel) {
+    const normalized = normalizeTel(tel);
+    // 同 migration「唔驗格式、髒值照搬」一致取態——即使格式唔啱都照樣
+    // 起行（保證同 `guards.tel` 一致，唔留 orphan），淨係略過空白。
+    await prisma.guardPhone.create({
+      data: {
+        guardId,
+        tel: isValidTel(normalized) ? normalized : tel.trim(),
+        isPrimary: true,
+        source: "seed:wp2b/guards.csv",
+        createdBy: "seed:wp2b/guards.csv",
+      },
+    });
+    created++;
+  }
+  if (address && address.trim()) {
+    await prisma.guardAddress.create({
+      data: { guardId, address: address.trim(), isPrimary: true, source: "seed:legacy-column", createdBy: "seed:legacy-column" },
+    });
+    created++;
+  }
+  const trimmedEmergencyName = emergencyName?.trim() || null;
+  const trimmedEmergencyTel = emergencyTel?.trim() || null;
+  if (trimmedEmergencyName || trimmedEmergencyTel) {
+    await prisma.guardEmergencyContact.create({
+      data: {
+        guardId,
+        name: trimmedEmergencyName,
+        tel: trimmedEmergencyTel,
+        sortOrder: 0,
+        source: "seed:legacy-column",
+        createdBy: "seed:legacy-column",
+      },
+    });
+    created++;
+  }
+  return created;
+}
+
 // ---------------------------------------------------------------------------
 async function seedGuards() {
   type Row = {
@@ -335,6 +400,7 @@ async function seedGuards() {
   const idMap = new Map<string, string>();
   let longtermCount = 0;
   let staffNumberRowsCreated = 0;
+  let contactRowsCreated = 0;
   for (const r of rows) {
     const isLongterm =
       bool(r.is_longterm) || (str(r.staff_no_mw) !== null && longtermMwNos.has(r.staff_no_mw)) || longtermNameZh.has(r.name_zh);
@@ -375,12 +441,23 @@ async function seedGuards() {
     // 到，要靠呢度）。
     staffNumberRowsCreated += await seedStaffNumberFromLegacyColumn(created.id, r.staff_no, "seed:staff_no");
     staffNumberRowsCreated += await seedStaffNumberFromLegacyColumn(created.id, r.staff_no_mw, "seed:staff_no_mw");
+    // WP-MULTI（Opus 覆核必修 2）：同上面 staff_no 一致做法——電話／地址／
+    // 緊急聯絡人三張新表都要喺 seed 呢一刻由 legacy 欄起底，唔留 orphan
+    // （guard 有 `tel` 但 `guard_phones` 0 行嗰種 dev DB 髒狀態）。
+    contactRowsCreated += await seedContactsFromLegacyColumns(
+      created.id,
+      created.tel,
+      created.address,
+      created.emergencyContactName,
+      created.emergencyContactTel,
+    );
   }
   stats.guards = rows.length;
   stats.guardsLongtermAutopay = longtermCount;
   stats.guardsMonthlySalaryOverrideAppliedBochk = salaryOverrideAppliedBochk;
   stats.guardsMonthlySalaryOverrideAppliedStatic = salaryOverrideAppliedStatic;
   stats.guardStaffNumbers = staffNumberRowsCreated;
+  stats.guardContactRows = contactRowsCreated;
   // names_en.csv tier=longterm 51 人入面有 3 人 name_zh 留空（只有英文
   // 名，PDPO：唔喺呢度寫真名），guards.csv 嘅 name_en 亦冇對應值可以配對
   // ——P0-執行計劃§8 D5 話某一位「已補配」中文名，但現存 names_en.csv

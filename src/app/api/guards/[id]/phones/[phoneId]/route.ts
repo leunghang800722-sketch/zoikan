@@ -74,7 +74,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       }
 
       if (Object.keys(data).length > 0 || demoted) {
-        await syncLegacyGuardContactColumns(tx, id);
+        await syncLegacyGuardContactColumns(tx, id, ["tel"]);
       }
       return { before, after, demoted };
     });
@@ -109,7 +109,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     const result = await prisma.$transaction(async (tx) => {
       const deleted = await deleteGuardPhone(tx, id, phoneId);
       if (!deleted) throw NotFound("搵唔到呢個電話");
-      await syncLegacyGuardContactColumns(tx, id);
+      await syncLegacyGuardContactColumns(tx, id, ["tel"]);
       return deleted;
     });
 

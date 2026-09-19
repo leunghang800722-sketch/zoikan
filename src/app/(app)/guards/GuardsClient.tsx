@@ -10,7 +10,7 @@
 // 同一個 pattern——雞頭 session 頁首 kicker 要顯示「我的」（跟
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
 import { useEffect, useRef, useState } from "react";
-import { apiGet, apiPatch, apiPost, apiDelete, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiPatch, apiPost, apiDelete, apiPut, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -326,6 +326,16 @@ export function GuardsClient({
     editingDrawerRef.current = drawerOpen && !!editingId;
   }, [drawerOpen, editingId]);
 
+  // Opus 覆核（WP-MULTI 必修 5）：`tel`／`address`／`emergency_contact_
+  // name`／`emergency_contact_tel` 呢幾個 legacy 欄記低「開抽屜嗰刻讀到
+  // 嘅值」（`fillFormFromRow()` 度更新）——`onSubmit()` 淨係用戶真係改
+  // 咗（同呢個 baseline 唔一樣）先夾落 body。就算後台（`applyLegacy
+  // GuardContactPatch()`「值冇變就當冇改」）都有一層一樣嘅保護，前端呢
+  // 度都唔送先係最穩陣（唔使靠 network round trip 先知道「其實冇改」，
+  // 亦都避免用戶完全冇掂過電話呢個 field，純粹儲存第二個欄，都要拖埋
+  // 一個（可能係髒值）`tel` 落 body）。
+  const loadedLegacyContactRef = useRef({ tel: "", address: "", emergency_contact_name: "", emergency_contact_tel: "" });
+
   // S7（Opus 驗收）：搜尋改由 server 做（`GET /api/guards?q=`）——原本
   // 純前端 `matchesSearch()` 淨係篩得到已經攞落嚟嗰批 rows 嘅 additive
   // `staff_numbers`（淨係 current），搵唔到 former（已取消，已經摺埋）
@@ -378,6 +388,10 @@ export function GuardsClient({
     setEditingId(null);
     setForm(emptyForm);
     setFormError(null);
+    // 新增模式冇「loaded baseline」呢個概念（form 由空白開始）——重置做
+    // 全空，等用戶打嘅任何非空值都算「改咗」，送得落 body（POST
+    // /api/guards 本身接受 `tel`，同 PATCH 舊寫法唔同）。
+    loadedLegacyContactRef.current = { tel: "", address: "", emergency_contact_name: "", emergency_contact_tel: "" };
     setStaffNumbers([]);
     setStaffNumberForm(emptyStaffNumberForm);
     setStaffNumberError(null);
@@ -439,6 +453,18 @@ export function GuardsClient({
       blacklist_check_result: row.blacklist_check_result ?? "",
       blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
     });
+    // Opus 覆核（WP-MULTI 必修 5）：記低呢一刻讀到嘅 legacy 欄值做
+    // baseline——`onSubmit()` 淨係用戶改咗（同呢個唔一樣）先送。
+    // `fillFormFromRow()` 會 call 兩次（先用列表 row 起草，detail GET
+    // 返嚟再 call 多次用真正詳情覆蓋，見 openEdit()）——兩次都更新呢個
+    // baseline 係啱嘅：detail 嗰次先係真正權威值，用戶唔可能喺 detail
+    // 未返嚟之前就打緊字（Save 掣喺 `detailLoaded` 之前一直 disabled）。
+    loadedLegacyContactRef.current = {
+      tel: row.tel ?? "",
+      address: row.address ?? "",
+      emergency_contact_name: row.emergency_contact_name ?? "",
+      emergency_contact_tel: row.emergency_contact_tel ?? "",
+    };
     if ("sia_permit_type" in row) setDerivedSiaPermitType(row.sia_permit_type ?? null);
     // 必修 3：a／b 都未填（form 個兩隻 input 都會係空字串）、但 row 仲存
     // 住舊 `sia_permit_expiry`／`sia_permit_type` 嘅任何一個 → 顯示舊記錄
@@ -548,7 +574,13 @@ export function GuardsClient({
       staff_no_mw: form.staff_no_mw || undefined,
       name_zh: form.name_zh,
       name_en: form.name_en || undefined,
-      tel: form.tel || undefined,
+      // Opus 覆核（WP-MULTI 必修 5）：淨係用戶真係改咗（同 openEdit()／
+      // openCreate() 嗰刻嘅 baseline 唔一樣）先送——唔係就每次儲存（包括
+      // 完全唔關電話事嘅編輯）都會拖埋呢個值落 body，撞正後台「值冇變
+      // 就當冇改」嗰層都要額外做多一次正規化比較（見
+      // src/app/api/guards/[id]/route.ts）；新增模式 baseline 一律空白
+      // （openCreate() 已經重置），行為不變。
+      tel: form.tel && form.tel !== loadedLegacyContactRef.current.tel ? form.tel : undefined,
       employment_type: form.employment_type,
       polo_size: form.polo_size || undefined,
     };
@@ -592,9 +624,15 @@ export function GuardsClient({
         // GET 已經完成但失敗嗰個情況。
         if (detailAvailable) {
           body.date_of_birth = form.date_of_birth || null;
-          if (form.address) body.address = form.address;
-          if (form.emergency_contact_name) body.emergency_contact_name = form.emergency_contact_name;
-          if (form.emergency_contact_tel) body.emergency_contact_tel = form.emergency_contact_tel;
+          // Opus 覆核（WP-MULTI 必修 5）：`address`／`emergency_contact_*`
+          // 一樣淨係用戶真係改咗先送——同上面 `tel` 一致理由。
+          if (form.address && form.address !== loadedLegacyContactRef.current.address) body.address = form.address;
+          if (form.emergency_contact_name && form.emergency_contact_name !== loadedLegacyContactRef.current.emergency_contact_name) {
+            body.emergency_contact_name = form.emergency_contact_name;
+          }
+          if (form.emergency_contact_tel && form.emergency_contact_tel !== loadedLegacyContactRef.current.emergency_contact_tel) {
+            body.emergency_contact_tel = form.emergency_contact_tel;
+          }
           if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
           body.blacklist_check_date = form.blacklist_check_date || null;
         }
@@ -1004,22 +1042,26 @@ export function GuardsClient({
     await refreshMainFormAfterContactChange();
   }
 
-  // 排序——撳「較先」/「較後」同鄰居互換 sort_order（PATCH 兩次；冇
-  // unique constraint 擋住，短暫中間狀態安全）。
+  // 排序——撳「較先」/「較後」同鄰居換位，一齊送落新嘅
+  // `PUT .../emergency-contacts/order` 端點（一個 transaction 重寫成個
+  // guard 全部行嘅 `sort_order`，原子性；之前分兩次 PATCH 互換有短暫
+  // 窗口冇原子性，Opus 覆核必修 6 改用呢個）。
   async function onMoveContact(index: number, direction: -1 | 1) {
     if (!editingId) return;
+    const neighbourIndex = index + direction;
     const target = contacts[index];
-    const neighbour = contacts[index + direction];
+    const neighbour = contacts[neighbourIndex];
     if (!target || !neighbour) return;
+    const ids = contacts.map((c) => c.id);
+    const tmp = ids[index]!;
+    ids[index] = ids[neighbourIndex]!;
+    ids[neighbourIndex] = tmp;
     setContactActionBusy(true);
     setContactActionError(null);
-    const [r1, r2] = await Promise.all([
-      apiPatch(`/api/guards/${editingId}/emergency-contacts/${target.id}`, { sort_order: neighbour.sort_order }),
-      apiPatch(`/api/guards/${editingId}/emergency-contacts/${neighbour.id}`, { sort_order: target.sort_order }),
-    ]);
+    const res = await apiPut(`/api/guards/${editingId}/emergency-contacts/order`, { ids });
     setContactActionBusy(false);
-    if (!r1.ok || !r2.ok) {
-      setContactActionError(!r1.ok ? r1.message : !r2.ok ? r2.message : "排序失敗");
+    if (!res.ok) {
+      setContactActionError(res.message);
       return;
     }
     await loadContacts(editingId);
@@ -1892,7 +1934,7 @@ export function GuardsClient({
                     onChange={(e) => setForm((f) => ({ ...f, emergency_contact_name: e.target.value }))}
                   />
                 </Field>
-                <Field label="緊急聯絡人電話" hint="8 位數字">
+                <Field label="緊急聯絡人電話" hint="可以 + 開頭，7-15 位數字">
                   <input
                     className={inputCls}
                     value={form.emergency_contact_tel}

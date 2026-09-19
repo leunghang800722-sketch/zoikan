@@ -33,7 +33,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         note: parsed.note,
       });
       if (!updated) throw NotFound("搵唔到呢個緊急聯絡人");
-      if (updated.before !== updated.after) await syncLegacyGuardContactColumns(tx, id);
+      if (updated.before !== updated.after) await syncLegacyGuardContactColumns(tx, id, ["emergency"]);
       return updated;
     });
 
@@ -55,7 +55,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     const deleted = await prisma.$transaction(async (tx) => {
       const row = await deleteGuardEmergencyContact(tx, id, contactId);
       if (!row) throw NotFound("搵唔到呢個緊急聯絡人");
-      await syncLegacyGuardContactColumns(tx, id);
+      await syncLegacyGuardContactColumns(tx, id, ["emergency"]);
       return row;
     });
 
