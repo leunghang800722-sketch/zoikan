@@ -1124,15 +1124,19 @@ describe("WP-STAFFNO §20（必修4）：乙類滿70歲失效 flag（sia_permit_
     expect(row?.sia_permit_b_lapsed_by_age).toBe(true);
   });
 
-  it("雞頭白名單都有呢個 flag（唔係 PII，一直畀雞頭見到）", async () => {
+  it("Fable5.1（私隱保守）：雞頭白名單冇呢粒 key（呢個 flag 等於間接話俾雞頭知安員個人資料——滿70歲/生日，雞頭冇「安員個人資料」view 權）", async () => {
     await prisma.guard.update({
       where: { id: fx.guardA.id },
       data: { dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), siaPermitAExpiry: null, siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z") },
     });
     const res = await guardList(req("http://test.local/api/guards?take=500", brokerACookie));
-    const body = (await res.json()) as { rows: Array<{ id: string; sia_permit_b_lapsed_by_age?: boolean }> };
+    const body = (await res.json()) as { rows: Array<{ id: string; sia_permit_b_lapsed_by_age?: boolean; sia_permit_expiry: string | null }> };
     const row = body.rows.find((r) => r.id === fx.guardA.id);
-    expect(row?.sia_permit_b_lapsed_by_age).toBe(true);
+    expect(row).toBeDefined();
+    expect(row && "sia_permit_b_lapsed_by_age" in row).toBe(false);
+    // 雞頭照舊見到到期日係空（同「未填」睇落一樣，冇獨立警示——刻意嘅
+    // 取捨，見 src/lib/broker-dto.ts GUARD_BROKER_FIELDS 註解）。
+    expect(row?.sia_permit_expiry).toBeNull();
   });
 });
 

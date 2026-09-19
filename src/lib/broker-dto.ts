@@ -13,10 +13,13 @@ import { pickWhitelist, brandSafeResponse, type Dto } from "./api/serialize";
 // 淨係加多個結構化版（chips 用）。`siaPermitAExpiry`／`siaPermitBExpiry`
 // 刻意唔加——跟返現有做法（`siaPermitNo`／`siaPermitType` 一路都冇喺呢
 // 個白名單，雞頭淨係見到衍生嘅 `siaPermitExpiry`，唔見拆開嘅甲／乙）。
-// 必修 4（Opus 驗收第三輪）：`siaPermitBLapsedByAge` 就加埋——呢個係一個
-// 衍生 boolean（唔係 PII，唔係拆開嘅甲／乙到期日本身），淨係話俾雞頭知
-// 「乙類已經因為年齡失效」，唔加就會令雞頭個列表誤顯示做「未填」，見
-// src/lib/api/dto/index.ts 同一段註解。
+// Fable5.1（4 個細修 2）：`siaPermitBLapsedByAge` 必修 4 嗰陣加落嚟話俾
+// 雞頭知「乙類已經因為年齡失效」，但依家私隱保守做法：雞頭本身冇「安員
+// 個人資料」view 權，見到呢粒 flag＝變相知道安員個人資料入面嘅出生
+// 日期（或者至少知道佢滿咗70歲），呢個推斷本身已經係個人資料洩漏，
+// 唔應該畀雞頭嘅白名單——剔走。雞頭照舊淨係見到 `siaPermitExpiry` 呢個
+// 到期日係空（同「未填」睇落一樣，冇獨立警示），呢個係刻意嘅取捨（私
+// 隱 > UI 精準度）。
 export const GUARD_BROKER_FIELDS = [
   "id",
   "staffNo",
@@ -27,7 +30,6 @@ export const GUARD_BROKER_FIELDS = [
   "defaultBrokerId",
   "employmentType",
   "siaPermitExpiry",
-  "siaPermitBLapsedByAge",
   "poloSize",
   "status",
   "createdAt",

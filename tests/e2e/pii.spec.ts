@@ -264,3 +264,98 @@ test("(d) 到期 pill 三種狀態：已過期（紅）／90 日內（橙）／�
     });
   }
 });
+
+// Fable5.1（4 個細修 4，防資料被抹）：`openEdit()` 先用列表 row 起草 form
+// （列表 DTO 冇 date_of_birth 等 detail-only 欄，見
+// src/lib/api/dto/index.ts GUARD_LIST_DETAIL_ONLY_FIELDS），detail GET
+// （`GET /api/guards/:id`）先真正攞到呢批欄嘅值。`onSubmit()` 呢批欄一律
+// `|| null` 送——如果 detail GET 未完成或者失敗就撳「儲存」，會將空字串
+// 當「清空」送落 DB。呢兩個 test 分別覆蓋「detail GET 遲返 → Save 掣
+// disabled」／「detail GET 失敗（500）→ 儲存唔會清走已有 date_of_birth」，
+// 見 src/app/(app)/guards/GuardsClient.tsx openEdit()／onSubmit() 註解。
+test("(f) detail GET 遲返 → Save 掣 disabled 顯示「載入中…」，detail 到咗先解鎖", async ({ page }) => {
+  const guard = await findBrokerAOwnGuard();
+  await loginAs(page, "老闆");
+  await page.goto("/guards");
+  await expect(page.locator("main").getByText("載入緊…")).toHaveCount(0, { timeout: 20_000 });
+  await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
+  const row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
+  await expect(row).toBeVisible({ timeout: 20_000 });
+
+  // 攔截 detail GET，等我哋主動 release 先俾佢繼續——模擬「未返嚟」呢段
+  // 空窗期，睇下 Save 掣喺呢段時間會唔會 disabled。
+  let releaseDetail: () => void = () => {};
+  const detailGate = new Promise<void>((resolve) => {
+    releaseDetail = resolve;
+  });
+  await page.route(
+    (url) => url.pathname === `/api/guards/${guard.id}` && url.search === "",
+    async (route) => {
+      await detailGate;
+      await route.continue();
+    },
+  );
+
+  await row.getByRole("button", { name: "編輯" }).click();
+  await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
+
+  const saveBtn = page.locator('form button[type="submit"]');
+  await expect(saveBtn).toHaveText("載入中…");
+  await expect(saveBtn).toBeDisabled();
+
+  releaseDetail();
+  await expect(saveBtn).toHaveText("儲存", { timeout: 10_000 });
+  await expect(saveBtn).toBeEnabled();
+
+  await page.getByRole("button", { name: "取消" }).click();
+});
+
+test("(g) detail GET 失敗（500，包括冇權睇嗰類 403 一致對待）→ 儲存 DB 嘅 date_of_birth 唔會被清走", async ({ page }) => {
+  const guard = await findBrokerAOwnGuard();
+  const before = await prisma.guard.findUniqueOrThrow({ where: { id: guard.id }, select: { dateOfBirth: true, tel: true } });
+  const originalDob = new Date("1985-03-15T00:00:00.000Z");
+  await prisma.guard.update({ where: { id: guard.id }, data: { dateOfBirth: originalDob } });
+  const newTel = "61009901";
+  try {
+    await loginAs(page, "老闆");
+    await page.goto("/guards");
+    await expect(page.locator("main").getByText("載入緊…")).toHaveCount(0, { timeout: 20_000 });
+    await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
+    const row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
+    await expect(row).toBeVisible({ timeout: 20_000 });
+
+    // 淨係攔截 GET（detail）——PATCH（儲存）同一個 URL path 唔可以一齊
+    // 中招，唔係就個「儲存」request 本身都會俾呢個 500 攔截，測試唔到
+    // 想驗證嘅嘢（detail 失敗之後嘅儲存應該正常成功）。
+    await page.route(
+      (url) => url.pathname === `/api/guards/${guard.id}` && url.search === "",
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.continue();
+          return;
+        }
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "server_error", message: "e2e 模擬 500" }) });
+      },
+    );
+
+    await row.getByRole("button", { name: "編輯" }).click();
+    await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
+
+    const saveBtn = page.locator('form button[type="submit"]');
+    // detail GET 已經完成（雖然失敗），Save 掣要解鎖返（唔可以卡死喺
+    // 「載入中…」）——淨係唔送 detail-only 欄。
+    await expect(saveBtn).toHaveText("儲存", { timeout: 10_000 });
+    await expect(saveBtn).toBeEnabled();
+
+    // 淨係改電話（列表 DTO 本身有嘅欄）——冇掂 date_of_birth。
+    await fieldControl(page, "電話", true).locator("input").fill(newTel);
+    await saveBtn.click();
+    await expect(page.getByText("已更新")).toBeVisible({ timeout: 15_000 });
+
+    const after = await prisma.guard.findUniqueOrThrow({ where: { id: guard.id }, select: { dateOfBirth: true, tel: true } });
+    expect(after.dateOfBirth?.toISOString().slice(0, 10)).toBe("1985-03-15");
+    expect(after.tel).toBe(newTel);
+  } finally {
+    await prisma.guard.update({ where: { id: guard.id }, data: { dateOfBirth: before.dateOfBirth, tel: before.tel } });
+  }
+});

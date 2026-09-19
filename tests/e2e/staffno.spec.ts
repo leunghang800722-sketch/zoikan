@@ -132,6 +132,50 @@ test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 
   }
 });
 
+// Fable5.1（4 個細修 1）：`sia_permit_b_lapsed_by_age` 原本塞喺
+// `licenceExpiryPill()` 嘅 `if (!expiry)` 分支——安員平安卡
+// （safety_card_expiry）仲有效嗰陣，`nearestExpiry`（牌照/平安卡取較早）
+// 就唔係 falsy，成粒 pill 跌落「有效」綠色分支，完全冚蓋咗「乙類已
+// 失效」呢個警示。呢個 test 專登整一個「乙類因年齡失效、但平安卡遠期
+// 仍然有效」嘅情況，斷言兩粒 pill 並排出現（「有效」冚蓋唔到「乙類已
+// 失效」）。
+test("乙類滿70歲失效＋平安卡仍然有效 → 列表「有效」同「乙類已失效」兩粒 pill 並排，唔會被冚蓋", async ({ page }) => {
+  const guard = await findGuardWithUNumber();
+  const before = await prisma.guard.findUniqueOrThrow({
+    where: { id: guard.id },
+    select: { dateOfBirth: true, siaPermitAExpiry: true, siaPermitBExpiry: true, safetyCardExpiry: true },
+  });
+  const farFuture = new Date(Date.now() + 400 * 86_400_000); // 遠過 90 日——確保平安卡揀落嚟顯示「有效」唔係「90 日內」
+  try {
+    await prisma.guard.update({
+      where: { id: guard.id },
+      data: {
+        dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), // 已滿 70 歲
+        siaPermitAExpiry: null,
+        siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z"), // 乙類本身填咗但因年齡法定失效
+        safetyCardExpiry: farFuture,
+      },
+    });
+    await loginAs(page, "老闆");
+    await page.goto("/guards");
+    await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
+    const row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(row.getByText("有效")).toBeVisible();
+    await expect(row.getByText("乙類已失效（滿70歲）")).toBeVisible();
+  } finally {
+    await prisma.guard.update({
+      where: { id: guard.id },
+      data: {
+        dateOfBirth: before.dateOfBirth,
+        siaPermitAExpiry: before.siaPermitAExpiry,
+        siaPermitBExpiry: before.siaPermitBExpiry,
+        safetyCardExpiry: before.safetyCardExpiry,
+      },
+    });
+  }
+});
+
 test("雞頭A：開自己人——員工編號分區有 chips 但冇「新增編號」表單", async ({ page }) => {
   const brokerAUser = await prisma.user.findFirstOrThrow({ where: { tel: "90000004" }, select: { brokerId: true } });
   const guard = await prisma.guard.findFirstOrThrow({

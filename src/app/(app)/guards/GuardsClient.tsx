@@ -9,7 +9,7 @@
 // component，攞 session）傳 `isBroker` 落嚟，跟 `my-receivable` 果頁
 // 同一個 pattern——雞頭 session 頁首 kicker 要顯示「我的」（跟
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmt, fmtDate, isExpired, isExpiringSoon, currentMonthStr } from "@/lib/ui/format";
+import { fmt, fmtDate, isExpired, isExpiringSoon, currentMonthStr, todayLocalStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { kickerFor } from "@/lib/ui/nav-active";
 
@@ -195,6 +195,20 @@ export function GuardsClient({
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Fable5.1（4 個細修 4，防資料被抹）：`openEdit()` 先用列表 row 起草
+  // form（即刻開抽屜），detail GET（`/api/guards/:id`）先真正攞到
+  // date_of_birth／blacklist_check_date（同其他 detail-only 欄——列表
+  // DTO 冇呢批欄，見 src/lib/api/dto/index.ts GUARD_LIST_DETAIL_ONLY_
+  // FIELDS），但 `onSubmit()` 呢兩個欄一律 `|| null` 送——如果 detail
+  // GET 未返嚟就撳「儲存」，空字串會被當做「用戶想清空」，永久毀走已有
+  // 資料。`detailLoaded`：detail GET 呢個 request 已經完成（成功定失敗
+  // 都算），Save 掣喺呢個變 true 之前 disabled；`detailAvailable`：淨係
+  // detail GET 真係成功先 true，`onSubmit()` 用嚟決定送唔送 detail-only
+  // 欄（失敗——包括 403 冇權睇／500——一律唔送，key 唔出現喺 body，等
+  // PATCH 部分更新唔會掂呢批欄）。新增模式（`openCreate()`）唔涉及呢個
+  // 問題，兩個都直接 true。
+  const [detailLoaded, setDetailLoaded] = useState(true);
+  const [detailAvailable, setDetailAvailable] = useState(true);
 
   // WP-STAFFNO：員工編號獨立表——編輯抽屜開嗰陣先另外 GET
   // `/api/guards/:id/staff-numbers`（current+former），唔喺主列表/詳情
@@ -226,6 +240,25 @@ export function GuardsClient({
   // 冇呢種情況（a／b 其中一個有值，或者舊值本身都冇）就 null，唔顯示。
   const [legacyPermitInfo, setLegacyPermitInfo] = useState<{ type: string | null; expiry: string | null } | null>(null);
 
+  // Fable5.1（驗證期間揭發嘅 pre-existing race，順手一齊修——同 P0 前端
+  // 唔准掂 migration.sql 一致，呢個都係純前端）：`hasPiiField`／
+  // `hasBankField`／`hasLicenceExtraField` 淨係編輯抽屜（`editingId &&
+  // drawerOpen`）先用得著。但用戶喺搜尋框打字嗰陣，`load()` 會 debounce
+  // 300ms 之後喺背景重新 fetch 列表——列表 DTO 結構上永遠冇 bank_name／
+  // hkid／sia_permit_no 呢批 detail-only 欄（GUARD_LIST_DETAIL_ONLY_
+  // FIELDS，見 src/lib/api/dto/index.ts），如果呢個背景 reload 嘅
+  // response 遲過 `openEdit()` 嘅 detail GET 先返嚟，就會將 `openEdit()`
+  // 啱啱靠 detail 正確設低嘅 `true` 屈返做 `false`，令抽屜開緊嗰陣
+  // 「個人資料」／「銀行」／「牌照與證件」分區突然消失。用一個 ref（唔
+  // 受閉包影響，`load()` 個 async response 返嚟嗰刻讀到嘅一定係最新值）
+  // 記住「而家係咪編輯緊現有記錄」，`load()` 呢三個 setter 喺呢種情況下
+  // 跳過（抽屜已經有 detail 嘅更準確答案，唔應該畀一個純粹為咗「搜尋」
+  // 先觸發嘅背景 reload 蓋過）。
+  const editingDrawerRef = useRef(false);
+  useEffect(() => {
+    editingDrawerRef.current = drawerOpen && !!editingId;
+  }, [drawerOpen, editingId]);
+
   // S7（Opus 驗收）：搜尋改由 server 做（`GET /api/guards?q=`）——原本
   // 純前端 `matchesSearch()` 淨係篩得到已經攞落嚟嗰批 rows 嘅 additive
   // `staff_numbers`（淨係 current），搵唔到 former（已經摺埋）嘅舊號。
@@ -246,10 +279,15 @@ export function GuardsClient({
       return;
     }
     setRows(guardRes.data.rows);
+    // `hasMoneyField` 唔受呢個 race 影響（`monthly_salary` 唔喺
+    // GUARD_LIST_DETAIL_ONLY_FIELDS，列表 DTO 一直有；創建模式都要用
+    // 呢粒 flag），照舊逢 `load()` 就更新。
     setHasMoneyField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "monthly_salary" in r));
-    setHasPiiField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "hkid" in r));
-    setHasBankField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "bank_name" in r));
-    setHasLicenceExtraField(guardRes.data.rows.length === 0 ? !isBroker : guardRes.data.rows.some((r) => "sia_permit_no" in r));
+    if (!editingDrawerRef.current) {
+      setHasPiiField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "hkid" in r));
+      setHasBankField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "bank_name" in r));
+      setHasLicenceExtraField(guardRes.data.rows.length === 0 ? !isBroker : guardRes.data.rows.some((r) => "sia_permit_no" in r));
+    }
     if (brokerRes.ok) setBrokers(brokerRes.data.rows);
     setLoading(false);
   }
@@ -281,6 +319,10 @@ export function GuardsClient({
     setNumberActionError(null);
     setDerivedSiaPermitType(null);
     setLegacyPermitInfo(null);
+    // 新增模式冇 detail GET 呢個問題（PII/銀行呢批欄新增表單本身都冇），
+    // 兩個都直接 true——Save 掣唔應該因為呢個防護機制喺新增模式度 disabled。
+    setDetailLoaded(true);
+    setDetailAvailable(true);
     setDrawerOpen(true);
   }
 
@@ -347,6 +389,13 @@ export function GuardsClient({
     setShowFormerStaffNumbers(false);
     setNumberEditingId(null);
     setNumberActionError(null);
+    // Fable5.1（防資料被抹）：detail GET 呢個 request 未完成之前，Save
+    // 掣要 disabled（見下面 JSX `disabled={saving || !detailLoaded}`）——
+    // 列表 row 起草嘅 form，`date_of_birth`／`blacklist_check_date` 呢批
+    // detail-only 欄一定係空字串，唔可以俾用戶喺呢段空窗期撳「儲存」將
+    // 空字串當做「清空」送落 DB。
+    setDetailLoaded(false);
+    setDetailAvailable(false);
     setDrawerOpen(true);
     const detailRes = await apiGet<GuardRow>(`/api/guards/${row.id}`);
     if (detailRes.ok) {
@@ -363,7 +412,14 @@ export function GuardsClient({
       setHasPiiField("hkid" in detailRes.data);
       setHasBankField("bank_name" in detailRes.data);
       setHasLicenceExtraField("sia_permit_no" in detailRes.data);
+      setDetailAvailable(true);
+    } else {
+      // Fable5.1：detail GET 失敗（包括 403 冇權睇、500）——`onSubmit()`
+      // 唔會送任何 detail-only 欄（`detailAvailable` 保持 false），淨係
+      // 送列表 DTO 本身有嘅欄，避免用錯（空）值清走 DB 已有資料。
+      setDetailAvailable(false);
     }
+    setDetailLoaded(true);
     await loadStaffNumbers(row.id);
   }
 
@@ -407,17 +463,33 @@ export function GuardsClient({
         // nullable schema（`null`＝清空），呢兩個欄一樣要一律送
         // （`|| null`），唔可以再「空就唔送」，否則用戶打空咗個已填日期
         // 想清返會清唔到。
-        body.date_of_birth = form.date_of_birth || null;
-        if (form.address) body.address = form.address;
-        if (form.emergency_contact_name) body.emergency_contact_name = form.emergency_contact_name;
-        if (form.emergency_contact_tel) body.emergency_contact_tel = form.emergency_contact_tel;
-        if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
-        body.blacklist_check_date = form.blacklist_check_date || null;
+        //
+        // Fable5.1（防資料被抹）：`date_of_birth`／`address`／
+        // `emergency_contact_name`／`emergency_contact_tel`／
+        // `blacklist_check_result`／`blacklist_check_date` 呢 6 個欄全部
+        // detail-only（列表 DTO 冇，見 openEdit() 頂註解）——用
+        // `detailAvailable` 統一包住：detail GET 未成功過（都仲未完成，
+        // 或者完成咗但失敗，包括 403/500）就一律唔送呢批欄（key 唔出現
+        // 喺 body），交俾 PATCH 部分更新語意保護 DB 已有嘅值。Save 掣
+        // 本身喺 detail GET 未完成之前已經 disabled（見下面 JSX），所以
+        // `detailAvailable === false` 但撳得到「儲存」嗰陣，一定係 detail
+        // GET 已經完成但失敗嗰個情況。
+        if (detailAvailable) {
+          body.date_of_birth = form.date_of_birth || null;
+          if (form.address) body.address = form.address;
+          if (form.emergency_contact_name) body.emergency_contact_name = form.emergency_contact_name;
+          if (form.emergency_contact_tel) body.emergency_contact_tel = form.emergency_contact_tel;
+          if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
+          body.blacklist_check_date = form.blacklist_check_date || null;
+        }
       }
       if (canUpdateBank) {
-        if (form.bank_name) body.bank_name = form.bank_name;
-        if (form.bank_account_no) body.bank_account_no = form.bank_account_no;
-        if (form.bank_payee_name) body.bank_payee_name = form.bank_payee_name;
+        // Fable5.1：銀行三欄一樣 detail-only，同上同一個保護。
+        if (detailAvailable) {
+          if (form.bank_name) body.bank_name = form.bank_name;
+          if (form.bank_account_no) body.bank_account_no = form.bank_account_no;
+          if (form.bank_payee_name) body.bank_payee_name = form.bank_payee_name;
+        }
       }
       // 牌照/平安卡/入職離職日期跟現有「安員」module，唔受 hasPiiField/
       // hasBankField 影響（有 `安員:update` 就見得/改得到）；
@@ -614,13 +686,20 @@ export function GuardsClient({
   // `deriveSiaPermitExpiry()`，呢度淨係為咗即時 UI 提示，冇 `now` 參數
   // 就用瀏覽器而家嗰刻，容許幾百毫秒嘅時區/時鐘噪音——呢個純粹係
   // 提示文字，唔影響實際存落 DB 嘅值）。
+  // Fable5.1（4 個細修 3）：原本直接用 `now.getFullYear()`／`getMonth()`
+  // （瀏覽器本地時區）計歲數，同後台 `ageAsOfHk()`（
+  // src/lib/guards/staff-numbers.ts，一律用 `todayLocalStr()` 換做香港
+  // 時區嘅 YYYY-MM-DD 先計）唔一致——HK 00:00–08:00 呢段時間，如果用戶
+  // 部機本地時區唔係 HK（例如 UTC），前端提示可能同後台實際判斷差一
+  // 日。改用 `todayLocalStr(now)` 一致計法。
   function isAge70OrOlder(dobStr: string, now: Date = new Date()): boolean {
     if (!dobStr) return false;
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dobStr);
     if (!m) return false;
     const [, y, mo, d] = m.map(Number) as unknown as [number, number, number, number];
-    let age = now.getFullYear() - y;
-    if (now.getMonth() + 1 < mo || (now.getMonth() + 1 === mo && now.getDate() < d)) age -= 1;
+    const [ty, tm, td] = todayLocalStr(now).split("-").map(Number);
+    let age = ty - y;
+    if (tm < mo || (tm === mo && td < d)) age -= 1;
     return age >= 70;
   }
 
@@ -637,18 +716,26 @@ export function GuardsClient({
   // WP-PII：牌照/平安卡到期三態 pill——過期紅、90 日內橙、冇填灰「未填」
   // （`isExpiringSoon()` 帶 90 日門檻，見 src/lib/ui/format.ts；已過期
   // 嘅 diffDays 係負數，一樣會 `<=90`，但呢度優先判 `isExpired` 出紅）。
-  // 必修 4（Opus 驗收第三輪）：`expiry` 冇值嗰陣，如果係因為乙類滿 70
-  // 歲法定失效（`bLapsedByAge`），唔可以顯示成「未填」——用戶會誤以為
-  // 淨係未補資料，睇唔出其實張證已經因為年齡冇得再用，改顯示獨立嘅
-  // 警示 pill。
-  function licenceExpiryPill(expiry?: string | null, bLapsedByAge?: boolean) {
-    if (!expiry) {
-      if (bLapsedByAge) return <Pill variant="warning">乙類已失效（滿70歲）</Pill>;
-      return <Pill variant="neutral">未填</Pill>;
-    }
+  // Fable5.1（4 個細修 1）：原本必修 4 個做法係將「乙類已失效」塞喺
+  // `!expiry` 分支入面——但 `expiry` 呢度傳嘅係 `earlierExpiry(牌照,
+  // 平安卡)`，安員平安卡（safety_card_expiry）仲有效嗰陣 `expiry` 就唔
+  // 會係 falsy，成粒 pill 會跌落「有效」綠色分支，完全冚蓋咗「乙類已
+  // 失效」呢個警示，用戶睇唔出。改法：`licenceExpiryPill()` 淨係反映
+  // `expiry`（最近到期日）本身，「乙類已失效」拆做獨立
+  // `siaPermitBLapsedPill()`，兩粒 pill 喺 call site 並排 render（桌面
+  // 表格／手機卡都要），互不影響。
+  function licenceExpiryPill(expiry?: string | null) {
+    if (!expiry) return <Pill variant="neutral">未填</Pill>;
     if (isExpired(expiry)) return <Pill variant="danger">已過期</Pill>;
     if (isExpiringSoon(expiry, 90)) return <Pill variant="warning">90 日內</Pill>;
     return <Pill variant="success">有效</Pill>;
+  }
+
+  // Fable5.1：獨立嘅「乙類已失效（滿70歲）」警示 pill——同
+  // `licenceExpiryPill()` 並排顯示，唔會被「有效」冚蓋（見上面註解）。
+  function siaPermitBLapsedPill(bLapsedByAge?: boolean) {
+    if (!bLapsedByAge) return null;
+    return <Pill variant="warning">乙類已失效（滿70歲）</Pill>;
   }
 
   // S7（Opus 驗收）：`rows` 而家已經係 server 揀好嘅結果（`GET
@@ -832,7 +919,8 @@ export function GuardsClient({
                       <td className={tableCls.td}>{statusPill(r)}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {licenceExpiryPill(nearestExpiry, r.sia_permit_b_lapsed_by_age)}
+                          {licenceExpiryPill(nearestExpiry)}
+                          {siaPermitBLapsedPill(r.sia_permit_b_lapsed_by_age)}
                           <span className="text-[11.5px] text-zk-muted">{fmtDate(nearestExpiry)}</span>
                         </div>
                       </td>
@@ -882,7 +970,8 @@ export function GuardsClient({
                       </Pill>
                     )}
                     {statusPill(r)}
-                    {licenceExpiryPill(nearestExpiry, r.sia_permit_b_lapsed_by_age)}
+                    {licenceExpiryPill(nearestExpiry)}
+                    {siaPermitBLapsedPill(r.sia_permit_b_lapsed_by_age)}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
@@ -1237,8 +1326,13 @@ export function GuardsClient({
           )}
 
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
-              {saving ? "儲存緊…" : "儲存"}
+            {/* Fable5.1（防資料被抹）：detail GET（PII/銀行嗰批 detail-only
+                欄嘅真正來源）未完成之前 Save 一律 disabled——防止用戶用
+                列表 row 起草嗰陣嘅空值（唔係真係「未填」，淨係列表 DTO
+                冇呢批欄）撳「儲存」送 `|| null` 清走已有資料，見 openEdit()
+                頂註解。 */}
+            <button type="submit" disabled={saving || !detailLoaded} className={btnPrimary}>
+              {!detailLoaded ? "載入中…" : saving ? "儲存緊…" : "儲存"}
             </button>
             <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
               取消
