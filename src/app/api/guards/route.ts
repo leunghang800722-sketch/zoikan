@@ -20,6 +20,8 @@ import {
   applyLegacyStaffNoPatch,
   writeStaffNumberAudits,
   deriveSiaPermitExpiry,
+  canOverrideDerivedSiaPermit,
+  isSiaPermitBLapsedByAge,
   type StaffNumberChip,
 } from "@/lib/guards/staff-numbers";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
@@ -149,8 +151,18 @@ export async function GET(req: Request) {
     // `sia_permit_expiry`／`sia_permit_type`（migration backfill 唔到、
     // 或者人手都未補嘅舊資料，見 migration.sql「(1)」大註解），一律保留
     // DB 原值；淨係 a／b 其中一個有值先用現算值覆蓋，同
-    // `src/app/api/guards/[id]/route.ts withDerivedGuard()` 一致做法。
-    const withDerived = (row: Guard) => (row.siaPermitAExpiry == null && row.siaPermitBExpiry == null ? row : { ...row, ...deriveSiaPermitExpiry(row) });
+    // `src/app/api/guards/[id]/route.ts withDerivedGuard()` 一致做法
+    // （必修 1／4，Opus 驗收第三輪：而家改用共用嘅
+    // `canOverrideDerivedSiaPermit()`，並且加埋 `siaPermitBLapsedByAge`
+    // 衍生 flag——乙類因為滿 70 歲失效嗰陣，列表唔應該顯示成「未填」，
+    // 見 src/lib/guards/staff-numbers.ts 兩個函數頂註解）。
+    const withDerived = (row: Guard) => {
+      const siaPermitBLapsedByAge = isSiaPermitBLapsedByAge(row);
+      if (!canOverrideDerivedSiaPermit({ siaPermitAExpiry: row.siaPermitAExpiry, siaPermitBExpiry: row.siaPermitBExpiry })) {
+        return { ...row, siaPermitBLapsedByAge };
+      }
+      return { ...row, ...deriveSiaPermitExpiry(row), siaPermitBLapsedByAge };
+    };
     let rows: Array<ReturnType<typeof withDerived>>;
     let total: number;
     if (expiringWithinDaysParam !== null) {
@@ -234,6 +246,30 @@ export async function POST(req: Request) {
     const data = snakeToCamelShallow(rest) as Prisma.GuardUncheckedCreateInput;
     // 雞頭建安員：強制掛喺自己個 broker 底下（唔准幫其他雞頭/自己揀第二個 broker）
     if (isBrokerRole(session)) data.defaultBrokerId = session.brokerId;
+
+    // 必修 1（Opus 驗收第三輪，「POST 同理檢查」）：`GuardCreateSchema`
+    // 現時未開放 `sia_permit_a_expiry`／`sia_permit_b_expiry`／
+    // `date_of_birth`（WP-PII 呢批新欄一律 PATCH-only，見 schemas.ts
+    // GuardUpdateSchema 頂註解），所以呢一刻 `data` 實際上唔會帶呢三個
+    // key，`DERIVED_INPUT_KEYS.some()` 恆常 false，以下呢段係
+    // defense-in-depth（同 PATCH 寫入層共用同一個安全閥函數，日後
+    // GuardCreateSchema 一旦開放呢批欄都唔會漏咗呢層）——建立呢一刻冇
+    // 「之前」，`hadValueBefore` 一律唔傳（default false，同
+    // `canOverrideDerivedSiaPermit()` 嘅「a／b 都 null 就唔覆蓋」一致：
+    // 冇嘢好清，都冇嘢好寫）。
+    const createDerivedInputKeys = ["siaPermitAExpiry", "siaPermitBExpiry", "dateOfBirth"] as const;
+    if (createDerivedInputKeys.some((k) => k in data)) {
+      const createDerivedInput = {
+        siaPermitAExpiry: ((data as Record<string, unknown>).siaPermitAExpiry as Date | null | undefined) ?? null,
+        siaPermitBExpiry: ((data as Record<string, unknown>).siaPermitBExpiry as Date | null | undefined) ?? null,
+        dateOfBirth: ((data as Record<string, unknown>).dateOfBirth as Date | null | undefined) ?? null,
+      };
+      if (canOverrideDerivedSiaPermit({ siaPermitAExpiry: createDerivedInput.siaPermitAExpiry, siaPermitBExpiry: createDerivedInput.siaPermitBExpiry })) {
+        const derived = deriveSiaPermitExpiry(createDerivedInput);
+        (data as Record<string, unknown>).siaPermitExpiry = derived.siaPermitExpiry;
+        (data as Record<string, unknown>).siaPermitType = derived.siaPermitType;
+      }
+    }
 
     const { created, legacyChanges } = await prisma.$transaction(async (tx) => {
       const createdGuard = await tx.guard.create({ data: { ...data, createdBy: session.userId } });

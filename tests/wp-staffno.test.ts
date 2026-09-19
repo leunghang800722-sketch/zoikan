@@ -997,3 +997,202 @@ describe("WP-STAFFNO §18（應修1）：syncLegacyStaffNoColumns P2002 → 409�
     expect(guardA.staffNo).not.toBe("U99999"); // guardA 自己個 staff_no 都冇被寫入
   });
 });
+
+describe("WP-STAFFNO §19（Opus 驗收第三輪必修1）：PATCH 寫入層安全閥——a/b 都 null 唔覆蓋舊值，除非明確清空", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("(A) a/b null＋舊 expiry/type 有值 → PATCH 帶 a/b/dob 都係 null → 舊值不變（唔係真轉變，PATCH 之前 a/b 本身就已經係 null）", async () => {
+    const legacyExpiry = new Date("2027-03-01T00:00:00.000Z");
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { siaPermitAExpiry: null, siaPermitBExpiry: null, siaPermitExpiry: legacyExpiry, siaPermitType: "A" },
+    });
+    const res = await guardUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", {
+        tel: "61230001",
+        sia_permit_a_expiry: null,
+        sia_permit_b_expiry: null,
+        date_of_birth: null,
+      }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.siaPermitExpiry?.toISOString()).toBe(legacyExpiry.toISOString());
+    expect(guard.siaPermitType).toBe("A");
+    expect(guard.tel).toBe("61230001"); // 其他欄照常生效，唔會連累
+  });
+
+  it("(B) expiry null＋type='C'（單選白名單其餘值，migration 唔再 backfill 嘅情況）→ 同一 PATCH → type 仍然 'C'", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { siaPermitAExpiry: null, siaPermitBExpiry: null, siaPermitExpiry: null, siaPermitType: "C" },
+    });
+    const res = await guardUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", {
+        tel: "61230002",
+        sia_permit_a_expiry: null,
+        sia_permit_b_expiry: null,
+        date_of_birth: null,
+      }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.siaPermitType).toBe("C");
+    expect(guard.siaPermitExpiry).toBeNull();
+  });
+
+  it("(C) a 原本有值 → PATCH 清空（a=null，b 一路都係 null）→ 呢個先係真轉變，expiry/type 變 null", async () => {
+    const aExpiry = new Date("2027-06-01T00:00:00.000Z");
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { siaPermitAExpiry: aExpiry, siaPermitBExpiry: null, siaPermitExpiry: aExpiry, siaPermitType: "A" },
+    });
+    const res = await guardUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { sia_permit_a_expiry: null }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.siaPermitAExpiry).toBeNull();
+    expect(guard.siaPermitExpiry).toBeNull();
+    expect(guard.siaPermitType).toBeNull();
+  });
+
+  it("對照組：a/b 都有值嘅正常 PATCH（唔涉及安全閥）繼續照舊重算，冇被呢個修復連累", async () => {
+    const res = await guardUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { sia_permit_a_expiry: "2027-06-01", sia_permit_b_expiry: "2027-01-01" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.siaPermitType).toBe("A+B");
+    expect(guard.siaPermitExpiry?.toISOString().slice(0, 10)).toBe("2027-01-01");
+  });
+});
+
+describe("WP-STAFFNO §20（必修4）：乙類滿70歲失效 flag（sia_permit_b_lapsed_by_age）", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+  let brokerACookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    brokerACookie = await sessionCookieForUser(fx.userIds["雞頭"]);
+  });
+
+  it("有乙類、冇甲類、已滿 70 歲 → GET 詳情：sia_permit_b_lapsed_by_age=true，sia_permit_expiry/type 仍然 null（唔係「未填」）", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), siaPermitAExpiry: null, siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z") },
+    });
+    const res = await guardDetail(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie), { params: Promise.resolve({ id: fx.guardA.id }) });
+    const body = (await res.json()) as { sia_permit_b_lapsed_by_age?: boolean; sia_permit_type: string | null; sia_permit_expiry: string | null };
+    expect(body.sia_permit_b_lapsed_by_age).toBe(true);
+    expect(body.sia_permit_type).toBeNull();
+    expect(body.sia_permit_expiry).toBeNull();
+  });
+
+  it("有乙類、冇甲類、未滿 70 歲 → flag=false", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { dateOfBirth: new Date("2000-01-01T00:00:00.000Z"), siaPermitAExpiry: null, siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z") },
+    });
+    const res = await guardDetail(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie), { params: Promise.resolve({ id: fx.guardA.id }) });
+    const body = (await res.json()) as { sia_permit_b_lapsed_by_age?: boolean };
+    expect(body.sia_permit_b_lapsed_by_age).toBe(false);
+  });
+
+  it("列表 GET /api/guards 一樣有呢個 flag（唔淨係詳情）", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), siaPermitAExpiry: null, siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z") },
+    });
+    const res = await guardList(req("http://test.local/api/guards?take=500", ownerCookie));
+    const body = (await res.json()) as { rows: Array<{ id: string; sia_permit_b_lapsed_by_age?: boolean }> };
+    const row = body.rows.find((r) => r.id === fx.guardA.id);
+    expect(row?.sia_permit_b_lapsed_by_age).toBe(true);
+  });
+
+  it("雞頭白名單都有呢個 flag（唔係 PII，一直畀雞頭見到）", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), siaPermitAExpiry: null, siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z") },
+    });
+    const res = await guardList(req("http://test.local/api/guards?take=500", brokerACookie));
+    const body = (await res.json()) as { rows: Array<{ id: string; sia_permit_b_lapsed_by_age?: boolean }> };
+    const row = body.rows.find((r) => r.id === fx.guardA.id);
+    expect(row?.sia_permit_b_lapsed_by_age).toBe(true);
+  });
+});
+
+describe("WP-STAFFNO §21（必修5）：STAFF_NUMBER_NUMBER_RE／scheme 校驗對齊 schemeFromNumber()", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("scheme=ABCD、number=ABCDE123（開頭連續字母 5 位，多過 scheme 本身）→ 400，唔可以誤判做啱", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "ABCD", number: "ABCDE123" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("對照組：scheme=ABCD、number=ABCD123（開頭連續字母逐字啱）→ 201", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "ABCD", number: "ABCD123" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(201);
+  });
+
+  it("PATCH .../staff-numbers/:numberId 改 number 一樣受呢個修復保護——scheme=U 嗰行想改做 UABCD123（開頭連續字母 'UABCD' 多過 scheme='U'）→ 400", async () => {
+    const created = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U91800" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row = (await created.json()) as { id: string };
+    const res = await staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { number: "UABCD123" }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("WP-STAFFNO §22（必修5）：number 正規化去空白包埋 NBSP（U+00A0）", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("number 中間夾一個 NBSP（唔係普通 ASCII 空格）→ 一樣除得走，存落去嘅係冇空白版本", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U 91900" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { number: string };
+    expect(body.number).toBe("U91900");
+  });
+});

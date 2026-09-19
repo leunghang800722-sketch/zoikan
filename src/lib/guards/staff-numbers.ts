@@ -116,8 +116,19 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
     throw BadRequest(`scheme 格式唔啱（要 1-4 位大寫英文字母）：${input.scheme}`);
   }
   const number = normalizeStaffNumber(input.number);
-  if (!number.startsWith(scheme)) {
-    throw BadRequest(`number 要以 scheme 開頭（${scheme}）：${number}`);
+  // 必修 5（Opus 驗收第三輪）：原本淨係 `number.startsWith(scheme)`——
+  // "ABCDE123".startsWith("ABCD") 都係 true，但 "ABCDE123" 開頭嘅**連續**
+  // 大寫字母其實係 "ABCDE"（5 位），同 `scheme="ABCD"` 唔一致，`startsWith()`
+  // 呢種寫法漏咗檢查「scheme 之後即刻跟住嘅唔可以再係字母」，同
+  // migration.sql「(3) 資料搬遷」`schemeFromNumber()` 對齊嘅計法（攞成串
+  // 連續開頭字母先驗證長度）唔一致，會走漏 `{scheme:"ABCD",
+  // number:"ABCDE123"}` 呢類本應 400 嘅輸入。改做：攞 `number` 開頭連續
+  // 大寫字母（可能多過 4 位），要求逐字等於 `scheme`。
+  const numberLeadingLetters = number.match(/^[A-Z]+/)?.[0] ?? "";
+  if (numberLeadingLetters !== scheme) {
+    throw BadRequest(
+      `number 開頭連續字母要同 scheme 逐字相等（scheme=${scheme}，number 讀到嘅開頭係「${numberLeadingLetters || "（冇字母前綴）"}」）：${number}`,
+    );
   }
   // S2（Opus 驗收）：正規化之後仲要符合 `STAFF_NUMBER_NUMBER_RE`
   // （scheme 前綴 1-4 位大寫英文字母 + 1-16 位英文數字／連字符，總長
@@ -213,7 +224,10 @@ export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: {
   if (hasMgOrMwHistory) data.staffNoMw = mgRow?.number ?? mwRow?.number ?? null;
   if (Object.keys(data).length === 0) return;
 
-  const conflictMessage = (value: string) => `呢個號碼（${value}）仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊`;
+  // 必修 5（Opus 驗收第三輪）：補一句點處理——單講「請先處理嗰邊」冇講
+  // 清楚實際要點做，用戶（老闆/主管）未必知道「處理」係指去邊度做乜。
+  const conflictHint = "，請去嗰位安員嘅「員工編號」區加返正確號碼，舊工號欄就會更新";
+  const conflictMessage = (value: string) => `呢個號碼（${value}）仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊${conflictHint}`;
   if (typeof data.staffNo === "string") {
     const holder = await tx.guard.findFirst({ where: { staffNo: data.staffNo, NOT: { id: guardId } }, select: { id: true } });
     if (holder) throw Conflict(conflictMessage(data.staffNo), opts?.revealConflictGuardId ? { guard_id: holder.id } : undefined);
@@ -230,7 +244,7 @@ export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: {
     await tx.guard.update({ where: { id: guardId }, data });
   } catch (err) {
     if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
-      throw Conflict("呢個號碼仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊");
+      throw Conflict(`呢個號碼仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊${conflictHint}`);
     }
     throw err;
   }
@@ -426,4 +440,50 @@ export function deriveSiaPermitExpiry(input: DeriveSiaPermitInput, now: Date = n
   else if (hasB) siaPermitExpiry = effectiveB;
 
   return { siaPermitExpiry, siaPermitType };
+}
+
+// 必修 1（Opus 驗收第三輪）：讀取層（`withDerivedGuard()`／`withDerived()`，
+// 見 src/app/api/guards/[id]/route.ts、src/app/api/guards/route.ts）、
+// `scripts/db/recompute-permit-derived.ts`、寫入層（`PATCH`／`POST
+// /api/guards*`）三處都要判斷「呢一刻可唔可以用
+// `deriveSiaPermitExpiry()` 嘅結果覆蓋 DB／response 現有嘅
+// `sia_permit_expiry`／`sia_permit_type`」——抽做呢一個共用函數，三處 call
+// 同一份邏輯，避免各自抄一次、漏咗一層（第二輪驗收讀取層／script 已經
+// 加咗安全閥，但 PATCH 寫入層完全冇——見
+// src/app/api/guards/[id]/route.ts PATCH「WP-STAFFNO：body 改咗甲／乙
+// 到期日或者出生日期」嗰段，原本 `DERIVED_INPUT_KEYS.some()` 一撞中就
+// 無條件寫，冇檢查merge 之後係咪 a／b 兩個都 null）。
+//
+// 規則：a／b 兩個都 null（冇任何一個有值）嘅時候，`deriveSiaPermitExpiry()`
+// 一定計出 {null,null}——呢個結果冇資訊性，唔可以攞嚟覆蓋舊值（可能係
+// migration backfill 唔到、或者人手都未補嘅舊資料，見
+// prisma/migrations/20260919064514_wp_staffno/migration.sql「(1)」大
+// 註解），一律 return false（call site 要保留現值，唔寫／唔覆蓋）。
+// 例外：`hadValueBefore=true`——即係呢個「兩個都 null」嘅狀態本身係
+// 啱啱由「a 或 b 原本有值」轉變過嚟（用戶今次 PATCH 明確將原本有值嘅
+// a／b 清空），呢種情況先 return true（等 call site 用 null 覆蓋，反映
+// 用戶明確嘅清空操作）。淨係寫入層先會傳 `hadValueBefore`——讀取層／
+// script 冇「之前」呢個概念（冧睇緊嗰一刻嘅 row 本身），一律用 default
+// `false`，同現有行為一致。
+export function canOverrideDerivedSiaPermit(input: {
+  siaPermitAExpiry: Date | null;
+  siaPermitBExpiry: Date | null;
+  hadValueBefore?: boolean;
+}): boolean {
+  if (input.siaPermitAExpiry != null || input.siaPermitBExpiry != null) return true;
+  return input.hadValueBefore === true;
+}
+
+// 必修 4（Opus 驗收第三輪）：乙類牌照因為滿 70 歲法定失效——
+// `deriveSiaPermitExpiry()` 呢種情況會令 `siaPermitType`／
+// `siaPermitExpiry` 都變 null，同「完全冇填任何牌照」喺 response 層面
+// 睇落一模一樣，列表 pill／抽屜就會誤顯示做「未填」（用戶會以為淨係未
+// 補資料，睇唔出其實係「呢張證已經因為年齡冇得再用」）。呢個 helper
+// 淨係判斷「乙類本身呢一刻係咪因為年齡失效」，俾 route 層加落 response
+// 做一個獨立、結構安全（唔係 PII）嘅 flag（`sia_permit_b_lapsed_by_age`），
+// UI 靠呢個 flag 分開顯示。唔理有冇甲類（甲類獨立計，唔受呢個 flag
+// 影響——就算甲類仲有效，乙類本身一樣可以已經失效）。
+export function isSiaPermitBLapsedByAge(input: DeriveSiaPermitInput, now: Date = new Date()): boolean {
+  if (input.siaPermitBExpiry == null || input.dateOfBirth == null) return false;
+  return ageAsOfHk(input.dateOfBirth, now) >= 70;
 }

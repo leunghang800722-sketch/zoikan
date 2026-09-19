@@ -28,8 +28,10 @@
 //     入，而且**任何更新都寫一條 audit_log**（`action=
 //     "recompute_permit_derived"`，before/after 淨係存衍生值，唔係完整
 //     row，見 src/lib/audit.ts），唔再靜默。
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { prisma } from "../../src/lib/db";
-import { deriveSiaPermitExpiry } from "../../src/lib/guards/staff-numbers";
+import { deriveSiaPermitExpiry, canOverrideDerivedSiaPermit } from "../../src/lib/guards/staff-numbers";
 import { writeAudit } from "../../src/lib/audit";
 
 function sameDate(a: Date | null, b: Date | null): boolean {
@@ -50,8 +52,12 @@ export async function recomputePermitDerived(): Promise<{ scanned: number; updat
   let updated = 0;
   let skippedBothNull = 0;
   for (const g of guards) {
-    // 必修 1(b)：安全閥——a／b 都 null，一律保留 DB 原值，唔計、唔寫。
-    if (g.siaPermitAExpiry == null && g.siaPermitBExpiry == null) {
+    // 必修 1(b)（Opus 驗收第二輪）／必修 1（第三輪，改用共用嘅
+    // `canOverrideDerivedSiaPermit()`——見 src/lib/guards/staff-numbers.ts
+    // 大註解，PATCH 寫入層／讀取層三處共用同一份判斷，避免漏咗一層）：
+    // 安全閥——a／b 都 null，一律保留 DB 原值，唔計、唔寫。呢個 script
+    // 冇「之前」概念（`hadValueBefore` default false），同讀取層一致。
+    if (!canOverrideDerivedSiaPermit({ siaPermitAExpiry: g.siaPermitAExpiry, siaPermitBExpiry: g.siaPermitBExpiry })) {
       skippedBothNull += 1;
       continue;
     }
@@ -73,7 +79,13 @@ export async function recomputePermitDerived(): Promise<{ scanned: number; updat
 
 // 淨係直接 `tsx scripts/db/recompute-permit-derived.ts` 執行嗰陣先跑，
 // 俾 test import `recomputePermitDerived` 唔會意外觸發 CLI 行為。
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+// 必修 5（Opus 驗收第三輪）：原本 `` `file://${process.argv[1]}` ``
+// 呢種寫法喺 `process.argv[1]` 本身帶特殊字符（例如 Windows 路徑、空
+// 格）或者唔係絕對路徑嗰陣會同 `import.meta.url`（一定係正規化咗嘅
+// file URL）唔一致，令判斷唔準——改用 `fileURLToPath()`／`path.resolve()`
+// 兩個都轉做正規化嘅本機路徑先比較，同 scripts/report/*.ts 嗰種寫法唔
+// 同層次，但邏輯上更穩陣。
+const isMain = process.argv[1] != null && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
   recomputePermitDerived()
     .then((r) => {

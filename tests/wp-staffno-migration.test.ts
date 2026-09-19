@@ -1,23 +1,23 @@
-// WP-STAFFNO S3/S4（Opus 驗收修復）＋Opus 驗收第二輪必修 1a／應修 3：
-// migration.sql 「(1) 甲／乙類到期日 backfill」「(3) 資料搬遷」兩段嘅邏輯
-// ——原本一撞號就 RAISE EXCEPTION 中止成個 migration，而家改做「唔
-// abort，兜底處理＋audit_log 留底」；甲／乙類到期日 backfill 係第二輪
-// 新加，唔加就會令 `deriveSiaPermitExpiry()` 喺 a／b 都 null 嗰陣計出
-// {null,null}，永久毀走舊 `sia_permit_expiry` 資料。呢個 migration 本身
-// 係一次性 SQL（prisma/migrations/20260919064514_wp_staffno/
-// migration.sql），冇得直接 import 做 function 測——呢個 test 用
-// synthetic guard 資料（虛構工號，PDPO 安全）＋喺 `prisma.$transaction()`
-// （single connection，保證 temp table 喺同一個 tx 內跨幾個
-// `$executeRawUnsafe` call 都見到）入面**逐字重跑一次同一段 SQL**嚟驗證
-// 邏輯，唔係直接測真 migration 執行結果（真 migration 已經喺 `npx prisma
-// migrate deploy`／`db:reset` 果陣跑咗）。
+// WP-STAFFNO S3/S4（Opus 驗收修復）＋Opus 驗收第二輪必修 1a／應修 3＋
+// Opus 驗收第三輪必修 5：migration.sql 「(1) 甲／乙類到期日 backfill」
+// 「(3) 資料搬遷」兩段嘅邏輯——原本一撞號就 RAISE EXCEPTION 中止成個
+// migration，而家改做「唔 abort，兜底處理＋audit_log 留底」；甲／乙類
+// 到期日 backfill 係第二輪新加，唔加就會令 `deriveSiaPermitExpiry()`
+// 喺 a／b 都 null 嗰陣計出 {null,null}，永久毀走舊 `sia_permit_expiry`
+// 資料。呢個 migration 本身係一次性 SQL（prisma/migrations/
+// 20260919064514_wp_staffno/migration.sql），冇得直接 import 做
+// function 測——呢個 test 用 synthetic guard 資料（虛構工號，PDPO 安全）
+// ＋喺 `prisma.$transaction()`（single connection，保證 temp table 喺
+// 同一個 tx 內跨幾個 `$executeRawUnsafe` call 都見到）入面**逐字重跑一次
+// 同一段 SQL**嚟驗證邏輯，唔係直接測真 migration 執行結果（真 migration
+// 已經喺 `npx prisma migrate deploy`／`db:reset` 果陣跑咗）。
 //
 // 下面呢兩段 SQL 常數要同 migration.sql「(1)」「(3)」保持逐字一致——
 // migration.sql 改咗呢段邏輯，呢度都要跟住改，唔係就呢個 test 淨係測緊
 // 一個舊版邏輯嘅分身，冇意義。
 //
-// 「(3) 資料搬遷」覆蓋 10 種情況（跟 Opus 驗收畀嘅 B/C/D/E/F/G/H/K 標籤，
-// L/M 係第二輪應修 3 新加）：
+// 「(3) 資料搬遷」覆蓋 11 種情況（跟 Opus 驗收畀嘅 B/C/D/E/F/G/H/K 標籤，
+// L/M 係第二輪應修 3 新加，N 係第三輪必修 5 新加）：
 //   B：正常 staff_no（U 開頭，冇撞號）
 //   C：正常 staff_no_mw（MG 開頭，冇撞號）
 //   D：正常 staff_no_mw（MW 開頭，冇撞號）
@@ -33,6 +33,10 @@
 //   M（應修 3 新加）：scheme 後跟嘅部分超過 16 位——舊版 regex 冇上限會
 //      誤收，而家一定要 skip + migration_skipped_invalid（對齊
 //      `STAFF_NUMBER_NUMBER_RE` 嘅 `{1,16}`）。
+//   N（必修 5 新加）：staff_no 中間夾一個 NBSP（U+00A0，唔係普通 ASCII
+//      空格）——Postgres `\s`（ARE）唔包 NBSP，舊版正規化 regex 除唔到，
+//      而家 `'[\s<NBSP>]+'` 呢個字符類先除得走，同 app 層
+//      `normalizeStaffNumber()`（JS `\s` 本身已經包含 NBSP）對齊。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import type { Prisma } from "@prisma/client";
@@ -40,7 +44,8 @@ import type { Prisma } from "@prisma/client";
 // 逐字對照 prisma/migrations/20260919064514_wp_staffno/migration.sql
 // 「(3) 資料搬遷」段——JS 字串入面 `\s` 要寫做 `\\s`（唔係 SQL 本身嘅
 // 分別，係 JS string literal 會靜靜哋剝走冇特殊意義嘅 `\X` 逃逸嘅
-// backslash，唔寫雙斜要就會送咗個 "s+" 落 Postgres）。
+// backslash，唔寫雙斜要就會送咗個 "s+" 落 Postgres）。必修 5：`\\s` 之後
+// 嗰個字符係一個 literal NBSP（U+00A0），唔係打漏嘅普通空格。
 async function runMigrationBackfill(tx: Prisma.TransactionClient): Promise<void> {
   await tx.$executeRawUnsafe(`
     CREATE TEMP TABLE wp_staffno_source AS
@@ -48,7 +53,7 @@ async function runMigrationBackfill(tx: Prisma.TransactionClient): Promise<void>
       id AS guard_id,
       created_at,
       'staff_no' AS col_name,
-      UPPER(REGEXP_REPLACE(TRIM(staff_no), '\\s+', '', 'g')) AS normalized
+      UPPER(REGEXP_REPLACE(TRIM(staff_no), '[\\s ]+', '', 'g')) AS normalized
     FROM guards
     WHERE staff_no IS NOT NULL AND TRIM(staff_no) <> ''
     UNION ALL
@@ -56,7 +61,7 @@ async function runMigrationBackfill(tx: Prisma.TransactionClient): Promise<void>
       id,
       created_at,
       'staff_no_mw',
-      UPPER(REGEXP_REPLACE(TRIM(staff_no_mw), '\\s+', '', 'g'))
+      UPPER(REGEXP_REPLACE(TRIM(staff_no_mw), '[\\s ]+', '', 'g'))
     FROM guards
     WHERE staff_no_mw IS NOT NULL AND TRIM(staff_no_mw) <> '';
   `);
@@ -129,7 +134,7 @@ async function runMigrationBackfill(tx: Prisma.TransactionClient): Promise<void>
   await tx.$executeRawUnsafe(`DROP TABLE wp_staffno_source;`);
 }
 
-describe("WP-STAFFNO S3/S4/應修3：migration 資料搬遷邏輯（synthetic 10 case，全部唔 abort）", () => {
+describe("WP-STAFFNO S3/S4/應修3/必修5：migration 資料搬遷邏輯（synthetic 11 case，全部唔 abort）", () => {
   const t0 = new Date("2026-01-01T00:00:00.000Z").getTime();
   const at = (n: number) => new Date(t0 + n * 1000);
 
@@ -165,13 +170,16 @@ describe("WP-STAFFNO S3/S4/應修3：migration 資料搬遷邏輯（synthetic 10
     // M（應修 3）：scheme 後面跟住 17 位（>16 上限）——"U" + 17 位數字。
     guardIds.M = (await prisma.guard.create({ data: { nameZh: "案例M", employmentType: "cash_casual", staffNo: `U${"1".repeat(17)}`, createdAt: at(60) } }))
       .id;
+    // N（必修 5）：staff_no 中間夾一個 NBSP（U+00A0）——正規化之後要係
+    // "U90004"，冇任何空白／NBSP 殘留。
+    guardIds.N = (await prisma.guard.create({ data: { nameZh: "案例N", employmentType: "cash_casual", staffNo: "U 90004", createdAt: at(70) } })).id;
 
     await prisma.$transaction(async (tx) => {
       await runMigrationBackfill(tx);
     });
   });
 
-  it("全部 10 種情況都冇令個 transaction abort（beforeEach 冇拋錯就已經證明）", () => {
+  it("全部 11 種情況都冇令個 transaction abort（beforeEach 冇拋錯就已經證明）", () => {
     expect(true).toBe(true);
   });
 
@@ -251,10 +259,16 @@ describe("WP-STAFFNO S3/S4/應修3：migration 資料搬遷邏輯（synthetic 10
     expect(logs.length).toBe(1);
   });
 
-  it("總計：7 行 current（B/C/D/F/G/H/K 各一），4 條 migration_skipped_duplicate，3 條 migration_skipped_invalid（E/L/M）", async () => {
+  it("N（必修5）：staff_no 夾住 NBSP（U+00A0）→ 正規化除得走，一行 current，number 冇任何空白/NBSP 殘留", async () => {
+    const row = await prisma.guardStaffNumber.findFirst({ where: { guardId: guardIds.N } });
+    expect(row?.scheme).toBe("U");
+    expect(row?.number).toBe("U90004");
+  });
+
+  it("總計：8 行 current（B/C/D/F/G/H/K/N 各一），4 條 migration_skipped_duplicate，3 條 migration_skipped_invalid（E/L/M）", async () => {
     const allGuardIds = Object.values(guardIds);
     const total = await prisma.guardStaffNumber.count({ where: { guardId: { in: allGuardIds } } });
-    expect(total).toBe(7);
+    expect(total).toBe(8);
     const dupLogs = await prisma.auditLog.count({
       where: { tableName: "guard_staff_numbers", rowId: { in: allGuardIds }, action: "migration_skipped_duplicate" },
     });
@@ -267,8 +281,13 @@ describe("WP-STAFFNO S3/S4/應修3：migration 資料搬遷邏輯（synthetic 10
 });
 
 // ---------------------------------------------------------------------------
-// Opus 驗收第二輪必修 1(a)(c)：甲／乙類到期日 backfill——逐字對照
-// migration.sql「(1) 甲／乙類到期日 backfill」段。
+// Opus 驗收第二輪必修 1(a)(c)／第三輪必修 2：甲／乙類到期日 backfill——
+// 逐字對照 migration.sql「(1) 甲／乙類到期日 backfill」段。
+//
+// 必修 2（Opus 驗收第三輪）：原本規則淨係分「B」定「其餘」（`<> 'B'`
+// 就當甲類），而家收窄做「逐字等於 'A'」先入 a 欄——C／D／null／自由
+// 文字呢批唔再 backfill，a／b 留 null（規劃師：舊牌照資料除非用戶明確
+// 填甲／乙到期日，否則任何一層都唔准改，C／D 唔係「用戶明確填」）。
 // ---------------------------------------------------------------------------
 async function runPermitBackfill(tx: Prisma.TransactionClient): Promise<void> {
   await tx.$executeRawUnsafe(`
@@ -277,7 +296,7 @@ async function runPermitBackfill(tx: Prisma.TransactionClient): Promise<void> {
     WHERE "sia_permit_expiry" IS NOT NULL
       AND "sia_permit_a_expiry" IS NULL
       AND "sia_permit_b_expiry" IS NULL
-      AND UPPER(TRIM(COALESCE("sia_permit_type", ''))) <> 'B';
+      AND UPPER(TRIM(COALESCE("sia_permit_type", ''))) = 'A';
   `);
   await tx.$executeRawUnsafe(`
     UPDATE "guards"
@@ -289,7 +308,7 @@ async function runPermitBackfill(tx: Prisma.TransactionClient): Promise<void> {
   `);
 }
 
-describe("WP-STAFFNO 必修1(a)(c)：migration 甲／乙類到期日 backfill（synthetic，type A/B/null/小寫b）", () => {
+describe("WP-STAFFNO 必修1(a)(c)/必修2：migration 甲／乙類到期日 backfill（synthetic，type A/B/小寫b/帶空白B 會 backfill；C/D/null/自由文字唔會）", () => {
   const expiry = new Date("2027-05-01T00:00:00.000Z");
   let guardIds: Record<string, string> = {};
 
@@ -308,22 +327,44 @@ describe("WP-STAFFNO 必修1(a)(c)：migration 甲／乙類到期日 backfill（
         data: { nameZh: "案例typeB", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: "B" },
       })
     ).id;
-    // type null（冇填）→ 當「其餘」，入 a 欄。
-    guardIds.typeNull = (
-      await prisma.guard.create({
-        data: { nameZh: "案例typeNull", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: null },
-      })
-    ).id;
     // type 小寫 " b "（大小寫/空白噪音）→ 正規化後都係 'B'，入 b 欄。
     guardIds.typeLowerB = (
       await prisma.guard.create({
         data: { nameZh: "案例typeLowerB", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: " b " },
       })
     ).id;
-    // 對照組：type C（單選白名單其餘值之一）→ 入 a 欄。
+    // type 帶空白 "  A  "（純空白噪音，唔涉及大小寫）→ 正規化後都係
+    // 'A'，入 a 欄。
+    guardIds.typeSpacedA = (
+      await prisma.guard.create({
+        data: { nameZh: "案例typeSpacedA", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: "  A  " },
+      })
+    ).id;
+    // 必修 2：type null（冇填）→ 唔再當「其餘」入 a 欄，而家 a／b 都要
+    // 留 null，舊 `sia_permit_expiry`／`sia_permit_type` 原封不動。
+    guardIds.typeNull = (
+      await prisma.guard.create({
+        data: { nameZh: "案例typeNull", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: null },
+      })
+    ).id;
+    // 必修 2：type C（單選白名單其餘值之一）→ 唔再 backfill，a／b 留
+    // null。
     guardIds.typeC = (
       await prisma.guard.create({
         data: { nameZh: "案例typeC", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: "C" },
+      })
+    ).id;
+    // 必修 2：type D（單選白名單其餘值之一）→ 同上，唔 backfill。
+    guardIds.typeD = (
+      await prisma.guard.create({
+        data: { nameZh: "案例typeD", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: "D" },
+      })
+    ).id;
+    // 必修 2：type 自由文字（例如「ABC」，唔屬於單選白名單任何一個值）
+    // → 同上，唔 backfill。
+    guardIds.typeFreeText = (
+      await prisma.guard.create({
+        data: { nameZh: "案例typeFreeText", employmentType: "cash_casual", siaPermitExpiry: expiry, siaPermitType: "ABC" },
       })
     ).id;
     // 冇 sia_permit_expiry → 完全唔郁（a/b 一直 null）。
@@ -346,27 +387,68 @@ describe("WP-STAFFNO 必修1(a)(c)：migration 甲／乙類到期日 backfill（
     expect(g.siaPermitAExpiry).toBeNull();
   });
 
-  it("type null（冇填）→ 當「其餘」入 a 欄", async () => {
-    const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeNull } });
-    expect(g.siaPermitAExpiry?.toISOString()).toBe(expiry.toISOString());
-    expect(g.siaPermitBExpiry).toBeNull();
-  });
-
   it("type 小寫/帶空白 \" b \" → 正規化後都當 B，入 b 欄", async () => {
     const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeLowerB } });
     expect(g.siaPermitBExpiry?.toISOString()).toBe(expiry.toISOString());
     expect(g.siaPermitAExpiry).toBeNull();
   });
 
-  it("type C（單選白名單其餘值）→ 入 a 欄", async () => {
-    const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeC } });
+  it("type 帶空白 \"  A  \" → 正規化後當 A，入 a 欄", async () => {
+    const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeSpacedA } });
     expect(g.siaPermitAExpiry?.toISOString()).toBe(expiry.toISOString());
     expect(g.siaPermitBExpiry).toBeNull();
+  });
+
+  it("必修2：type null（冇填）→ 唔 backfill，a／b 都仍然 null，舊 sia_permit_expiry/type 逐字不變", async () => {
+    const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeNull } });
+    expect(g.siaPermitAExpiry).toBeNull();
+    expect(g.siaPermitBExpiry).toBeNull();
+    expect(g.siaPermitExpiry?.toISOString()).toBe(expiry.toISOString());
+    expect(g.siaPermitType).toBeNull();
+  });
+
+  it("必修2：type C（單選白名單其餘值）→ 唔再誤當甲類，a／b 都仍然 null，舊值逐字不變", async () => {
+    const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeC } });
+    expect(g.siaPermitAExpiry).toBeNull();
+    expect(g.siaPermitBExpiry).toBeNull();
+    expect(g.siaPermitExpiry?.toISOString()).toBe(expiry.toISOString());
+    expect(g.siaPermitType).toBe("C");
+  });
+
+  it("必修2：type D → 同 C 一致，唔 backfill", async () => {
+    const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeD } });
+    expect(g.siaPermitAExpiry).toBeNull();
+    expect(g.siaPermitBExpiry).toBeNull();
+    expect(g.siaPermitExpiry?.toISOString()).toBe(expiry.toISOString());
+    expect(g.siaPermitType).toBe("D");
+  });
+
+  it("必修2：type 自由文字（\"ABC\"）→ 同 C/D 一致，唔 backfill", async () => {
+    const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.typeFreeText } });
+    expect(g.siaPermitAExpiry).toBeNull();
+    expect(g.siaPermitBExpiry).toBeNull();
+    expect(g.siaPermitExpiry?.toISOString()).toBe(expiry.toISOString());
+    expect(g.siaPermitType).toBe("ABC");
   });
 
   it("冇 sia_permit_expiry → a/b 一直 null（backfill 冇嘢好搬）", async () => {
     const g = await prisma.guard.findUniqueOrThrow({ where: { id: guardIds.noExpiry } });
     expect(g.siaPermitAExpiry).toBeNull();
     expect(g.siaPermitBExpiry).toBeNull();
+  });
+
+  it("必修2：backfill 之後再跑 recomputePermitDerived()——C/D/null/自由文字呢批 a/b 都 null 嘅 guard 完全唔被觸碰，舊 sia_permit_expiry/type 經 migration+recompute 兩層之後逐字不變", async () => {
+    const { recomputePermitDerived } = await import("../scripts/db/recompute-permit-derived");
+    const untouchedIds = [guardIds.typeNull, guardIds.typeC, guardIds.typeD, guardIds.typeFreeText];
+    const before = await prisma.guard.findMany({ where: { id: { in: untouchedIds } } });
+    await recomputePermitDerived();
+    const after = await prisma.guard.findMany({ where: { id: { in: untouchedIds } } });
+    for (const b of before) {
+      const a = after.find((g) => g.id === b.id)!;
+      expect(a.siaPermitExpiry?.toISOString()).toBe(b.siaPermitExpiry?.toISOString());
+      expect(a.siaPermitType).toBe(b.siaPermitType);
+      expect(a.siaPermitAExpiry).toBeNull();
+      expect(a.siaPermitBExpiry).toBeNull();
+    }
   });
 });

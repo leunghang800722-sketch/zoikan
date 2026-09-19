@@ -42,12 +42,22 @@ ADD COLUMN     "sia_permit_b_expiry" DATE;
 --
 -- `sia_permit_type` 歷史上係單選白名單 A/B/C/D（見 0a6ea87 之前
 -- `src/lib/api/schemas.ts` 嘅 `SIA_PERMIT_TYPES`／GuardsClient.tsx 嘅
--- 牌照類別下拉），從嚟冇「兩類都有」嘅組合值（冇 "AB" 呢類自由文字）——
--- 所以規則淨係分「B」定「其餘」：
---   `sia_permit_type` 正規化（trim＋大寫）之後 = 'B' → 搬去
---   `sia_permit_b_expiry`；
---   其餘（A／C／D／其他自由文字／冇填）→ 搬去 `sia_permit_a_expiry`
---   （即「呢個人有一張牌」，冇再細分邊類，人手可以事後用 PATCH 改）。
+-- 牌照類別下拉），從嚟冇「兩類都有」嘅組合值（冇 "AB" 呢類自由文字）。
+--
+-- 必修 2（Opus 驗收第三輪）：原本規則淨係分「B」定「其餘」，即係
+-- C／D／null／自由文字全部當「呢個人有一張牌」搬去 `sia_permit_a_
+-- expiry`——但呢個做法本身唔啱：規劃師明文話咗「舊牌照資料除非用戶
+-- 明確填甲／乙到期日，否則任何一層都唔准改」，C／D 呢類根本唔係甲類
+-- （只係「單選白名單其餘值」，唔代表就係甲類），backfill 將佢哋搬入
+-- `sia_permit_a_expiry` 屬於「改咗」，同呢個原則相反。而家收窄做：淨係
+-- 正規化（trim＋大寫）之後**逐字**等於 'A' 先搬去 a 欄、等於 'B' 先搬
+-- 去 b 欄；C／D／null／其他自由文字（包括呢個 type 欄本身就打錯／唔規
+-- 範嘅值）一律唔 backfill——a／b 留 null，舊 `sia_permit_expiry`／
+-- `sia_permit_type` 原封不動，之後靠讀取層／PATCH 寫入層／script 嗰個
+-- 共用安全閥（`canOverrideDerivedSiaPermit()`，見 src/lib/guards/
+-- staff-numbers.ts）保留呢批舊值，直到用戶明確補返甲／乙到期日先會用
+-- 新計法。
+--
 -- 淨係處理「舊 `sia_permit_expiry` 有值、a／b 兩個新欄都仲係 null」嘅
 -- guard——呢個 migration 啱啱先 ADD COLUMN，理論上呢一刻全部 guard 嘅
 -- a／b 都係 null，`AND sia_permit_a_expiry IS NULL AND sia_permit_b_
@@ -58,7 +68,7 @@ SET "sia_permit_a_expiry" = "sia_permit_expiry"
 WHERE "sia_permit_expiry" IS NOT NULL
   AND "sia_permit_a_expiry" IS NULL
   AND "sia_permit_b_expiry" IS NULL
-  AND UPPER(TRIM(COALESCE("sia_permit_type", ''))) <> 'B';
+  AND UPPER(TRIM(COALESCE("sia_permit_type", ''))) = 'A';
 
 UPDATE "guards"
 SET "sia_permit_b_expiry" = "sia_permit_expiry"
@@ -152,12 +162,21 @@ CREATE UNIQUE INDEX "guard_staff_numbers_guard_scheme_current_key"
 --
 -- 兩張 temp table 用完即棄（`DROP TABLE` 喺尾——temp table 本身都會跟
 -- session 结束自動清，呢度顯式 drop 純粹令個 migration 讀落去意圖清晰）。
+--
+-- 必修 5（Opus 驗收第三輪）：正規化 regex 由 `'\s+'` 改做
+-- `'[\s<NBSP>]+'`（下面字符類入面 `\s` 後面嗰個唔係普通空格，係一個
+-- literal NBSP／U+00A0 字符——同 `src/lib/guards/staff-numbers.ts`
+-- `normalizeStaffNumber()` 對齊：JS 嘅 `\s` regex class 本身已經包含
+-- NBSP，但 Postgres 嘅 `\s`（ARE）淨係 ASCII 空白，唔包 NBSP，實測
+-- `regexp_replace(x, '\s+', '', 'g')` 唔會除得走一個 NBSP；貼字元 class
+-- 入面一個真正嘅 NBSP 之後就會，兩邊（JS／SQL）正規化結果先至一致——
+-- 舊員工編號可能係人手喺 Excel／輸入法貼過嚟，帶 NBSP 唔罕見）。
 CREATE TEMP TABLE wp_staffno_source AS
 SELECT
   id AS guard_id,
   created_at,
   'staff_no' AS col_name,
-  UPPER(REGEXP_REPLACE(TRIM(staff_no), '\s+', '', 'g')) AS normalized
+  UPPER(REGEXP_REPLACE(TRIM(staff_no), '[\s ]+', '', 'g')) AS normalized
 FROM guards
 WHERE staff_no IS NOT NULL AND TRIM(staff_no) <> ''
 UNION ALL
@@ -165,7 +184,7 @@ SELECT
   id,
   created_at,
   'staff_no_mw',
-  UPPER(REGEXP_REPLACE(TRIM(staff_no_mw), '\s+', '', 'g'))
+  UPPER(REGEXP_REPLACE(TRIM(staff_no_mw), '[\s ]+', '', 'g'))
 FROM guards
 WHERE staff_no_mw IS NOT NULL AND TRIM(staff_no_mw) <> '';
 

@@ -46,8 +46,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
       if (parsed.number !== undefined) {
         const number = normalizeStaffNumber(parsed.number);
-        if (!number.startsWith(row.scheme)) {
-          throw BadRequest(`number 要以 scheme 開頭（${row.scheme}）：${number}`);
+        // 必修 5（Opus 驗收第三輪）：同
+        // `upsertCurrentStaffNumber()`（src/lib/guards/staff-numbers.ts）
+        // 一致嘅修復——原本 `number.startsWith(row.scheme)` 會漏走
+        // "ABCDE123" 呢類開頭連續字母多過 `row.scheme` 本身長度嘅輸入
+        // （"ABCDE123".startsWith("ABCD") 都係 true），改做要求 `number`
+        // 開頭連續大寫字母逐字等於 `row.scheme`。
+        const numberLeadingLetters = number.match(/^[A-Z]+/)?.[0] ?? "";
+        if (numberLeadingLetters !== row.scheme) {
+          throw BadRequest(
+            `number 開頭連續字母要同 scheme 逐字相等（scheme=${row.scheme}，number 讀到嘅開頭係「${numberLeadingLetters || "（冇字母前綴）"}」）：${number}`,
+          );
         }
         if (number !== row.number) {
           const conflictingRow = await tx.guardStaffNumber.findUnique({ where: { number } });

@@ -15,6 +15,8 @@ import {
   applyLegacyStaffNoPatch,
   writeStaffNumberAudits,
   deriveSiaPermitExpiry,
+  canOverrideDerivedSiaPermit,
+  isSiaPermitBLapsedByAge,
   assertNoLegacySiaPermitWrite,
   assertBrokerNoLegacyStaffNoWrite,
 } from "@/lib/guards/staff-numbers";
@@ -39,9 +41,20 @@ function guardModule(session: AuthedSession): Module {
 // backfill」大註解）；一律保留 DB 原值，唔覆蓋、唔喺呢層計。淨係當 a／b
 // 其中一個有值，先用現算值覆蓋（呢種情況先有足夠資訊重新推導，包括乙類
 // 滿 70 歲失效呢類會令現算結果變返 null 嘅合法轉變）。
-function withDerivedGuard<T extends Guard>(row: T): T {
-  if (row.siaPermitAExpiry == null && row.siaPermitBExpiry == null) return row;
-  return { ...row, ...deriveSiaPermitExpiry(row) };
+//
+// 必修 1／4（Opus 驗收第三輪）：上面呢個判斷而家抽做共用嘅
+// `canOverrideDerivedSiaPermit()`（見 src/lib/guards/staff-numbers.ts
+// 大註解，PATCH 寫入層／script 三處共用，避免各自抄一次、漏咗一層），
+// 讀取層冇「之前」概念，一律 default `hadValueBefore=false`，行為同之前
+// 一致。順手加埋 `siaPermitBLapsedByAge`（衍生 flag，唔係 PII）——乙類
+// 因為滿 70 歲失效嗰陣，列表/抽屜唔應該顯示成「未填」，見
+// src/lib/guards/staff-numbers.ts isSiaPermitBLapsedByAge() 頂註解。
+function withDerivedGuard<T extends Guard>(row: T): T & { siaPermitBLapsedByAge: boolean } {
+  const siaPermitBLapsedByAge = isSiaPermitBLapsedByAge(row);
+  if (!canOverrideDerivedSiaPermit({ siaPermitAExpiry: row.siaPermitAExpiry, siaPermitBExpiry: row.siaPermitBExpiry })) {
+    return { ...row, siaPermitBLapsedByAge };
+  }
+  return { ...row, ...deriveSiaPermitExpiry(row), siaPermitBLapsedByAge };
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -112,6 +125,21 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // WP-STAFFNO：body 改咗甲／乙到期日或者出生日期，就要重新計
     // `sia_permit_expiry`／`sia_permit_type`（三個 input 入面隨便一個變
     // 咗都要重算，用 `before` 補返冇改嗰啲）。
+    //
+    // 必修 1（Opus 驗收第三輪）：merge 之後 a／b 兩個都 null 嗰陣，
+    // `deriveSiaPermitExpiry()` 一定計出 {null,null}——呢個之前完全冇擋，
+    // 例如 guard 舊值 a/b 都係 null（migration backfill 唔到嘅舊資料，
+    // 見 migration.sql「(1)」）、舊 `sia_permit_expiry`／`sia_permit_type`
+    // 仲存住有效資料，淨係 PATCH 改 `date_of_birth`（完全唔關牌照事）都
+    // 會觸發呢段、將個 {null,null} 寫落去，永久毀走舊值——同讀取層／
+    // script 早已有嘅安全閥唔一致（漏咗寫入層呢層）。而家用共用嘅
+    // `canOverrideDerivedSiaPermit()`（見 src/lib/guards/staff-numbers.ts
+    // 大註解）：`hadValueBefore` 傳 `before` 呢個 guard a／b 有冇值——如果
+    // merge 之後兩個都 null，但 `before` 原本 a／b 至少一個有值，即係
+    // 用戶今次明確將佢哋清空，先寫 null（反映用戶嘅明確操作）；如果
+    // `before` 本身 a／b 就已經係 null（冇嘢好清），就算 body 送咗
+    // `null`（同現值一樣，唔算真轉變）都唔寫，保留 DB 原有
+    // `sia_permit_expiry`／`sia_permit_type`。
     const DERIVED_INPUT_KEYS = ["siaPermitAExpiry", "siaPermitBExpiry", "dateOfBirth"] as const;
     if (DERIVED_INPUT_KEYS.some((k) => k in data)) {
       const merged = {
@@ -119,9 +147,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         siaPermitBExpiry: "siaPermitBExpiry" in data ? ((data as Record<string, unknown>).siaPermitBExpiry as Date | null) : before.siaPermitBExpiry,
         dateOfBirth: "dateOfBirth" in data ? ((data as Record<string, unknown>).dateOfBirth as Date | null) : before.dateOfBirth,
       };
-      const derived = deriveSiaPermitExpiry(merged);
-      (data as Record<string, unknown>).siaPermitExpiry = derived.siaPermitExpiry;
-      (data as Record<string, unknown>).siaPermitType = derived.siaPermitType;
+      const hadValueBefore = before.siaPermitAExpiry != null || before.siaPermitBExpiry != null;
+      if (canOverrideDerivedSiaPermit({ siaPermitAExpiry: merged.siaPermitAExpiry, siaPermitBExpiry: merged.siaPermitBExpiry, hadValueBefore })) {
+        const derived = deriveSiaPermitExpiry(merged);
+        (data as Record<string, unknown>).siaPermitExpiry = derived.siaPermitExpiry;
+        (data as Record<string, unknown>).siaPermitType = derived.siaPermitType;
+      }
     }
 
     const { guardAfter, legacyChanges } = await prisma.$transaction(async (tx) => {

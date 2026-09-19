@@ -49,6 +49,12 @@ interface GuardRow {
   // `deriveSiaPermitExpiry()`（後台）計，列表 pill／90 日篩選繼續用呢個。
   sia_permit_expiry?: string | null;
   sia_permit_type?: string | null;
+  // 必修 4（Opus 驗收第三輪）：乙類因為滿 70 歲法定失效嗰陣，
+  // `sia_permit_expiry`/`sia_permit_type` 都會變 null，同「完全冇填」
+  // 睇落一樣——呢個衍生 flag（唔係 PII）令列表/抽屜可以分開顯示「乙類
+  // 已失效」，唔會誤顯示做「未填」，見 src/lib/guards/staff-numbers.ts
+  // isSiaPermitBLapsedByAge()。
+  sia_permit_b_lapsed_by_age?: boolean;
   polo_size?: string | null;
   status: string;
   month_shift_count?: number;
@@ -211,6 +217,14 @@ export function GuardsClient({
   // 乙到期日之後要重新 GET 先會見到新值（同其他衍生欄一致，唔喺前端
   // 重複算一次）。
   const [derivedSiaPermitType, setDerivedSiaPermitType] = useState<string | null>(null);
+  // 必修 3（Opus 驗收第三輪）：a／b 都未填、但 row 仲存住舊
+  // `sia_permit_expiry`／`sia_permit_type` 嘅 guard——抽屜要顯示一行唯讀
+  // 提示（「舊記錄：類別 X、到期 YYYY-MM-DD」），等用戶知呢個人其實有
+  // 舊牌照資料，淨係未搬去新嘅甲／乙到期日兩欄（設計原則：舊牌照資料
+  // 除非用戶明確填咗甲／乙到期日，否則任何一層都唔准改，見
+  // src/lib/guards/staff-numbers.ts canOverrideDerivedSiaPermit()）。
+  // 冇呢種情況（a／b 其中一個有值，或者舊值本身都冇）就 null，唔顯示。
+  const [legacyPermitInfo, setLegacyPermitInfo] = useState<{ type: string | null; expiry: string | null } | null>(null);
 
   // S7（Opus 驗收）：搜尋改由 server 做（`GET /api/guards?q=`）——原本
   // 純前端 `matchesSearch()` 淨係篩得到已經攞落嚟嗰批 rows 嘅 additive
@@ -266,6 +280,7 @@ export function GuardsClient({
     setNumberEditingId(null);
     setNumberActionError(null);
     setDerivedSiaPermitType(null);
+    setLegacyPermitInfo(null);
     setDrawerOpen(true);
   }
 
@@ -299,6 +314,16 @@ export function GuardsClient({
       blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
     });
     if ("sia_permit_type" in row) setDerivedSiaPermitType(row.sia_permit_type ?? null);
+    // 必修 3：a／b 都未填（form 個兩隻 input 都會係空字串）、但 row 仲存
+    // 住舊 `sia_permit_expiry`／`sia_permit_type` 嘅任何一個 → 顯示舊記錄
+    // 提示；唔係就 null（唔顯示）。
+    const aEmpty = !row.sia_permit_a_expiry;
+    const bEmpty = !row.sia_permit_b_expiry;
+    if (aEmpty && bEmpty && (row.sia_permit_expiry || row.sia_permit_type)) {
+      setLegacyPermitInfo({ type: row.sia_permit_type ?? null, expiry: row.sia_permit_expiry ? row.sia_permit_expiry.slice(0, 10) : null });
+    } else {
+      setLegacyPermitInfo(null);
+    }
   }
 
   // WP-STAFFNO：抽屜開緊嗰個人嘅員工編號（current+former），俾「員工
@@ -612,8 +637,15 @@ export function GuardsClient({
   // WP-PII：牌照/平安卡到期三態 pill——過期紅、90 日內橙、冇填灰「未填」
   // （`isExpiringSoon()` 帶 90 日門檻，見 src/lib/ui/format.ts；已過期
   // 嘅 diffDays 係負數，一樣會 `<=90`，但呢度優先判 `isExpired` 出紅）。
-  function licenceExpiryPill(expiry?: string | null) {
-    if (!expiry) return <Pill variant="neutral">未填</Pill>;
+  // 必修 4（Opus 驗收第三輪）：`expiry` 冇值嗰陣，如果係因為乙類滿 70
+  // 歲法定失效（`bLapsedByAge`），唔可以顯示成「未填」——用戶會誤以為
+  // 淨係未補資料，睇唔出其實張證已經因為年齡冇得再用，改顯示獨立嘅
+  // 警示 pill。
+  function licenceExpiryPill(expiry?: string | null, bLapsedByAge?: boolean) {
+    if (!expiry) {
+      if (bLapsedByAge) return <Pill variant="warning">乙類已失效（滿70歲）</Pill>;
+      return <Pill variant="neutral">未填</Pill>;
+    }
     if (isExpired(expiry)) return <Pill variant="danger">已過期</Pill>;
     if (isExpiringSoon(expiry, 90)) return <Pill variant="warning">90 日內</Pill>;
     return <Pill variant="success">有效</Pill>;
@@ -800,7 +832,7 @@ export function GuardsClient({
                       <td className={tableCls.td}>{statusPill(r)}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {licenceExpiryPill(nearestExpiry)}
+                          {licenceExpiryPill(nearestExpiry, r.sia_permit_b_lapsed_by_age)}
                           <span className="text-[11.5px] text-zk-muted">{fmtDate(nearestExpiry)}</span>
                         </div>
                       </td>
@@ -850,7 +882,7 @@ export function GuardsClient({
                       </Pill>
                     )}
                     {statusPill(r)}
-                    {licenceExpiryPill(nearestExpiry)}
+                    {licenceExpiryPill(nearestExpiry, r.sia_permit_b_lapsed_by_age)}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
@@ -969,6 +1001,17 @@ export function GuardsClient({
                   <div className={`${inputCls} flex items-center bg-zk-header text-zk-muted`}>{derivedSiaPermitType ?? "—"}</div>
                 </Field>
               </div>
+              {/* 必修 3（Opus 驗收第三輪）：a／b 都未填但仲存住舊
+                  `sia_permit_expiry`／`sia_permit_type` 嘅 guard——顯示
+                  一行唯讀提示，等用戶知呢個人其實有舊牌照資料，淨係未
+                  搬去新嘅甲／乙到期日兩欄；填咗任何一個之後（撳「儲存」
+                  重新 GET）呢行就會自動消失，改用新計法。 */}
+              {legacyPermitInfo && (
+                <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[13px] text-amber-800">
+                  舊記錄：類別 {legacyPermitInfo.type ?? "—"}、到期 {legacyPermitInfo.expiry ?? "—"}
+                  （填咗甲／乙類到期日之後會改用新計法）
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <Field label="甲類到期">
                   <input

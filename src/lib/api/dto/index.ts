@@ -61,6 +61,13 @@ const GUARD_FIELDS = [
   "siaPermitType",
   "siaPermitAExpiry",
   "siaPermitBExpiry",
+  // 必修 4（Opus 驗收第三輪）：乙類因為滿 70 歲法定失效嗰陣，
+  // `siaPermitExpiry`／`siaPermitType` 現算會變 null，同「完全冇填」
+  // response 層面睇落一樣——呢個衍生 flag（唔係 PII，唔係 Prisma 欄）俾
+  // 前端分開顯示「乙類已失效」，見 src/lib/guards/staff-numbers.ts
+  // isSiaPermitBLapsedByAge()、src/app/api/guards/[id]/route.ts
+  // withDerivedGuard()。
+  "siaPermitBLapsedByAge",
   "safetyCardNo",
   "safetyCardExpiry",
   "hireDate",
