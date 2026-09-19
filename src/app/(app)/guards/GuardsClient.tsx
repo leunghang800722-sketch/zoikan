@@ -30,7 +30,7 @@ const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
 const BLACKLIST_LABEL: Record<string, string> = { clear: "已核實、無案底", flagged: "有紀錄", pending: "審查緊" };
 // WP-STAFFNO（老闆 2026-09-19 拍板）：已知嘅員工編號 scheme——U＝去
 // Wilson 盤做散工必須有；MP＝去第二間公司嘅盤做散工用；MG＝轉咗長工；
-// MW 意思未確認（老闆仲未答）。UI 下拉用呢個列表＋「其他」（自填），
+// MW＝公司寫字樓員工編號（office staff，唔係前線保安；老闆 2026-09-19 確認）。UI 下拉用呢個列表＋「其他」（自填），
 // 對應 API 嗰邊唔寫死 enum（zod regex 1-4 位大寫英文字母），將來加新
 // 種類淨係改呢個陣列，唔使改 API。
 const KNOWN_STAFF_NUMBER_SCHEMES = ["U", "MP", "MG", "MW"] as const;
