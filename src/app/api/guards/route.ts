@@ -89,7 +89,8 @@ async function loadCurrentStaffNumbers(guardIds: string[]): Promise<Record<strin
 // current；而家改喺 server 用 `guard_staff_numbers`（唔限 status）搵，
 // 揾到嘅 guardId 一齊 OR 落主 query（同雞頭 `scopeGuardWhere()` 隔離冇
 // 衝突——喺呢個之後先再過一次 scope）。回傳埋 `formerHitGuardIds`——
-// 邊個 guard 係「靠一個 former 號先搵到」，俾前端標「舊號命中」。
+// 邊個 guard 係「靠一個 former（已取消）號先搵到」，俾前端標「已取消
+// 號命中」。
 async function findNumberSearchMatches(q: string): Promise<{ guardIds: string[]; formerHitGuardIds: Set<string> }> {
   const rows = await prisma.guardStaffNumber.findMany({
     where: { number: { contains: q, mode: "insensitive" } },

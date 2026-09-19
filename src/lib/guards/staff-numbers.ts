@@ -1,13 +1,27 @@
 // WP-STAFFNO（老闆 2026-09-19 拍板）：員工編號獨立表（方案 B）＋保安牌照
 // 甲／乙類到期日分開存嘅共用邏輯。
 //
-// 員工編號並存唔取代：U＝去 Wilson 盤做散工必須有；MP＝去第二間公司嘅
-// 盤做散工用；MG＝轉咗長工；MW＝公司寫字樓員工編號（office staff，唔係前線保安；老闆 2026-09-19 確認）。同一人可以
-// 同時有 U／MP／MG；同一種入面亦可能有多個號（臨時號→正式號、離職再
-// 入職攞新號）——舊號存底但摺埋（status=former）。仲未答：邊個盤顯示
-// 邊種號、轉長工後 U／MP 係咪繼續有效、MW 係咩——`scheme` 刻意用
-// String（1-4 位大寫英文字母，呢度 zod-style regex 管，唔用 Prisma
-// enum），將來加新種類唔使 migration。
+// 業務規則（老闆 2026-09-19 拍板，四條）：
+//   (1) 員工編號種類：U＝去 Wilson 盤做散工必須有；MP＝去第二間公司嘅
+//       盤做散工用；MG＝轉咗長工（純內部出糧／行政用，唔係前線）；
+//       MW＝公司寫字樓員工編號（office staff，唔係前線保安）。
+//   (2) 更表／匯出一律顯示 U 號——`guards.staff_no`（現用 U）係更表編輯
+//       器／匯出 Excel／報表淨一嘅工號來源，唔會顯示 `staff_no_mw`
+//       （MG／MW），呢兩個純粹俾內部出糧／行政用。
+//   (3) 轉長工後 U／MP 繼續有效——一個人可以同時有 U／MP／MG 三種現用
+//       號，加 MG 唔會影響 U／MP 嘅 current 狀態（呢個檔案「一種
+//       scheme 一個 current」嘅唯一性淨係限**同一個 scheme 入面**，跨
+//       scheme 互不影響）。
+//   (4) 離職後舊編號會「取消」，再入職攞全新編號，永遠唔復用舊號——
+//       所以 `status=former` 嘅語義係「已取消／已停用」，唔係「舊但
+//       仍然生效」。UI／API 訊息一律用「已取消」呢個講法（DB 值本身仍
+//       然叫 `former`，唔改，改就要 migration，見 worktree 規則）。
+//
+// 員工編號並存唔取代：同一人可以同時有 U／MP／MG；同一種入面亦可能有
+// 多個號（臨時號→正式號、離職再入職攞新號）——舊行存底但摺埋
+// （status=former＝已取消，見上面 (4)）。`scheme` 刻意用 String（1-4 位
+// 大寫英文字母，呢度 zod-style regex 管，唔用 Prisma enum），將來加新
+// 種類唔使 migration。
 //
 // 呢個檔案兩組函數：
 //   1. `upsertCurrentStaffNumber()`／`syncLegacyStaffNoColumns()`／
@@ -27,9 +41,9 @@ type Tx = Prisma.TransactionClient;
 // 員工編號（guard_staff_numbers）
 // ---------------------------------------------------------------------------
 
-/** scheme 格式：1-4 位大寫英文字母。已知 U／MP／MG／MW，但呢度刻意唔用
- * 寫死 enum——將來加新種類（例如老闆答咗 MW 係咩、或者第三間公司又有
- * 新代號）淨係改 UI 下拉，唔使 migration。 */
+/** scheme 格式：1-4 位大寫英文字母。已知 U／MP／MG／MW（見上面業務規則
+ * (1)），但呢度刻意唔用寫死 enum——將來加新種類（例如第三間公司又有新
+ * 代號）淨係改 UI 下拉，唔使 migration。 */
 export const STAFF_NUMBER_SCHEME_RE = /^[A-Z]{1,4}$/;
 
 // S2（Opus 驗收）：`number` 正規化後嘅格式——scheme 前綴（1-4 位大寫英文
@@ -95,7 +109,7 @@ export interface UpsertStaffNumberInput {
 export interface UpsertStaffNumberResult {
   created: GuardStaffNumber;
   /** 冇 → null；有 → 舊嗰行轉 former 前後嘅完整 row（俾 call site 一齊
-   * 寫 audit_log，並且喺 response 講明「舊 XX 號已經轉咗做舊號」）。 */
+   * 寫 audit_log，並且喺 response 講明「原本嘅 XX 號已取消」）。 */
   convertedFormer: { before: GuardStaffNumber; after: GuardStaffNumber } | null;
 }
 
@@ -172,12 +186,42 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
   return { created, convertedFormer };
 }
 
+/** 揀一個 scheme 嘅「代表行」：current 優先；冇 current 就揀**最近取消**
+ * 嗰一行（`validTo` desc nulls last → `updatedAt` desc）。俾
+ * `syncLegacyStaffNoColumns()` 用（B，見下面大註解）——`rows` 要傳呢個
+ * guard **全部**行（唔限 status），呢度自己揀返啱個 scheme。 */
+function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: string): GuardStaffNumber | undefined {
+  const schemeRows = rows.filter((r) => r.scheme === scheme);
+  const current = schemeRows.find((r) => r.status === "current");
+  if (current) return current;
+  const cancelled = schemeRows.filter((r) => r.status === "former");
+  if (cancelled.length === 0) return undefined;
+  return [...cancelled].sort((a, b) => {
+    // validTo desc nulls last：null 當 -Infinity，descending 排序自然排
+    // 到最後。
+    const av = a.validTo ? a.validTo.getTime() : -Infinity;
+    const bv = b.validTo ? b.validTo.getTime() : -Infinity;
+    if (av !== bv) return bv - av;
+    return b.updatedAt.getTime() - a.updatedAt.getTime();
+  })[0];
+}
+
 /** `guards.staff_no`／`staff_no_mw`（舊欄，保留做同步顯示值）由呢個函數
- * 由新表現狀重算：`staff_no`＝現用 **U**（冇就 null）；`staff_no_mw`＝
- * 現用 **MG**（冇就 MW，再冇就 null）。任何員工編號增／改／轉舊號之後
+ * 由新表現狀重算：`staff_no`＝現用 **U**（冇就用**最近取消**嗰個 U）；
+ * `staff_no_mw`＝現用 **MG**（冇就現用 **MW**；兩個都冇 current 就用
+ * MG／MW 入面**最近取消**嗰個，MG 優先）。任何員工編號增／改／取消之後
  * 都要喺同一個 transaction 內尾 call 呢個函數，等兩邊唔會唔一致——更表
  * 編輯器／匯出 Excel／報表／`ai.guards` view／seed gate 全部繼續讀
- * 呢兩個舊欄，唔使改。 */
+ * 呢兩個舊欄，唔使改。
+ *
+ * B（老闆 2026-09-19 拍板業務規則 (4)：離職後編號取消，永遠唔復用）：
+ * 原本「冇 current 就寫 null」嘅做法，喺安員離職（U 號轉 former／已取消）
+ * 之後就會將 `guards.staff_no` 抹走——但呢個安員舊月份嘅更表／匯出／
+ * `gate:export` 對數仍然要顯示返嗰個（已取消嘅）U 號先做到「歷史文件
+ * 完整」（業務規則 (2)：更表／匯出一律顯示 U 號；一個已離職安員嘅舊
+ * 更表當然仲係要顯示佢嗰陣用緊嘅 U 號，唔可以因為而家取消咗就變空白）。
+ * 改做：冇 current 就 fallback 用「最近取消」嗰一行（`pickRepresentativeStaffNumberRow()`），
+ * 淨係完全冇任何行（連 former 都冇）先真係 null。 */
 // S3/S4（Opus 驗收修復）：原本版本淨係睇 current 行——一個 guard 喺新表
 // 完全冇任何 U 行（例如佢個 legacy `staff_no` 格式怪，搬遷 migration
 // 跳咗冇起新表行，見 migration.sql），叫呢個函數都會將 `staffNo` 寫做
@@ -212,16 +256,19 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
 // 呢度額外處理。
 export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean }): Promise<void> {
   const allRows = await tx.guardStaffNumber.findMany({ where: { guardId } });
-  const currentRows = allRows.filter((r) => r.status === "current");
-  const uRow = currentRows.find((r) => r.scheme === "U");
-  const mgRow = currentRows.find((r) => r.scheme === "MG");
-  const mwRow = currentRows.find((r) => r.scheme === "MW");
   const hasUHistory = allRows.some((r) => r.scheme === "U");
   const hasMgOrMwHistory = allRows.some((r) => r.scheme === "MG" || r.scheme === "MW");
+  // B：`staff_no`／`staff_no_mw` 各自嘅代表值——current 優先，冇 current
+  // 就用最近取消嗰行（見上面 `pickRepresentativeStaffNumberRow()` 同呢個
+  // 函數大註解）。`staff_no_mw` 嘅 MG／MW 各自揀代表行之後，先用「MG 優先
+  // 其次 MW」揀邊個做最終值。
+  const uRepresentative = pickRepresentativeStaffNumberRow(allRows, "U");
+  const mgRepresentative = pickRepresentativeStaffNumberRow(allRows, "MG");
+  const mwRepresentative = pickRepresentativeStaffNumberRow(allRows, "MW");
 
   const data: Prisma.GuardUpdateInput = {};
-  if (hasUHistory) data.staffNo = uRow?.number ?? null;
-  if (hasMgOrMwHistory) data.staffNoMw = mgRow?.number ?? mwRow?.number ?? null;
+  if (hasUHistory) data.staffNo = uRepresentative?.number ?? null;
+  if (hasMgOrMwHistory) data.staffNoMw = mgRepresentative?.number ?? mwRepresentative?.number ?? null;
   if (Object.keys(data).length === 0) return;
 
   // 必修 5（Opus 驗收第三輪）：補一句點處理——單講「請先處理嗰邊」冇講

@@ -218,9 +218,9 @@ export function GuardsClient({
   const [staffNumberForm, setStaffNumberForm] = useState(emptyStaffNumberForm);
   const [staffNumberError, setStaffNumberError] = useState<string | null>(null);
   const [staffNumberSaving, setStaffNumberSaving] = useState(false);
-  // 舊號（former）預設摺埋——「顯示舊號 N 個」撳咗先展開。
+  // 已取消（former）號預設摺埋——「顯示已取消嘅號 N 個」撳咗先展開。
   const [showFormerStaffNumbers, setShowFormerStaffNumbers] = useState(false);
-  // S7：每行員工編號「轉做舊號」／「改返現用」／「編輯（號碼／生效期／
+  // S7：每行員工編號「取消呢個號」／「改返現用」／「編輯（號碼／生效期／
   // 備註）」——`numberEditingId` 有值就顯示緊嗰行嘅 inline 編輯表單。
   const [numberActionBusy, setNumberActionBusy] = useState(false);
   const [numberActionError, setNumberActionError] = useState<string | null>(null);
@@ -261,8 +261,8 @@ export function GuardsClient({
 
   // S7（Opus 驗收）：搜尋改由 server 做（`GET /api/guards?q=`）——原本
   // 純前端 `matchesSearch()` 淨係篩得到已經攞落嚟嗰批 rows 嘅 additive
-  // `staff_numbers`（淨係 current），搵唔到 former（已經摺埋）嘅舊號。
-  // Server 端 `q` 用 `guard_staff_numbers`（唔限 status）搵，仲會標
+  // `staff_numbers`（淨係 current），搵唔到 former（已取消，已經摺埋）
+  // 嘅號。Server 端 `q` 用 `guard_staff_numbers`（唔限 status）搵，仲會標
   // `former_number_hit`。
   async function load(q: string) {
     setLoading(true);
@@ -550,7 +550,7 @@ export function GuardsClient({
     setStaffNumberForm({ ...emptyStaffNumberForm, scheme: staffNumberForm.scheme });
     setNotice(
       res.data.converted_former
-        ? `已新增 ${scheme} 號，舊嘅 ${res.data.converted_former.number} 已經轉做舊號`
+        ? `已新增 ${scheme} 號，原本嘅 ${res.data.converted_former.number} 已取消`
         : `已新增 ${scheme} 號`,
     );
     await loadStaffNumbers(editingId);
@@ -565,20 +565,30 @@ export function GuardsClient({
     if (detailRes.ok) fillFormFromRow(detailRes.data);
   }
 
-  // S7（Opus 驗收）：員工編號逐行「轉做舊號」／「改返現用」——一click
+  // S7（Opus 驗收）：員工編號逐行「取消呢個號」／「改返現用」——一click
   // 切換 status（`current`↔`former`），call PATCH .../staff-numbers/:id。
+  // 業務規則 (4)（老闆 2026-09-19 拍板）：離職後舊編號會取消，再入職攞
+  // 全新編號，永遠唔復用舊號——所以「改返現用」（former→current）係
+  // 反常操作，正常流程唔應該再用返一個已取消嘅號，加一個 `confirm()`
+  // 防手震／防誤觸，撳之前一定要用戶明確確認先送 PATCH。
   async function onToggleStaffNumberStatus(row: StaffNumberRow) {
     if (!editingId) return;
+    const nextStatus: "current" | "former" = row.status === "current" ? "former" : "current";
+    if (nextStatus === "current") {
+      const confirmed = window.confirm(
+        `已取消嘅編號正常唔會再用（再入職會攞新號）。確定要將 ${row.number} 改返現用？（只應該用嚟更正撳錯）`,
+      );
+      if (!confirmed) return;
+    }
     setNumberActionBusy(true);
     setNumberActionError(null);
-    const nextStatus: "current" | "former" = row.status === "current" ? "former" : "current";
     const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${row.id}`, { status: nextStatus });
     setNumberActionBusy(false);
     if (!res.ok) {
       setNumberActionError(res.message);
       return;
     }
-    setNotice(nextStatus === "former" ? `已將 ${row.number} 轉做舊號` : `已將 ${row.number} 改返現用`);
+    setNotice(nextStatus === "former" ? `已將 ${row.number} 取消` : `已將 ${row.number} 改返現用`);
     await loadStaffNumbers(editingId);
     await load(search);
     // 同 onAddStaffNumber() 一致理由——staff_no／staff_no_mw 可能經
@@ -674,9 +684,9 @@ export function GuardsClient({
             {n.number}
           </Pill>
         ))}
-        {/* S7：靠一個舊（former）號搵到嘅結果——標俾用戶知呢個人喺搜尋緊
-            嗰個號其實已經摺埋（列表 chips 本身淨係顯示 current）。 */}
-        {g.former_number_hit ? <Pill variant="warning">舊號命中</Pill> : null}
+        {/* S7：靠一個已取消（former）號搵到嘅結果——標俾用戶知呢個人喺
+            搜尋緊嗰個號其實已經取消（列表 chips 本身淨係顯示 current）。 */}
+        {g.former_number_hit ? <Pill variant="warning">已取消號命中</Pill> : null}
       </div>
     );
   }
@@ -744,7 +754,7 @@ export function GuardsClient({
   // S2：加返「聘用形式」欄——8 欄變 9 欄。
   const colCount = 9;
 
-  // S7：員工編號分區每行——顯示＋（!isBroker 先有）「轉做舊號」／
+  // S7：員工編號分區每行——顯示＋（!isBroker 先有）「取消呢個號」／
   // 「改返現用」／「編輯（號碼／生效期／備註）」，call PATCH
   // .../staff-numbers/:numberId。
   function renderStaffNumberRow(n: StaffNumberRow) {
@@ -758,9 +768,9 @@ export function GuardsClient({
         <div className="flex flex-wrap items-center gap-2">
           <Pill variant="neutral">{n.scheme}</Pill>
           <span className={isCurrent ? "font-medium text-zk-text" : undefined}>{n.number}</span>
-          <Pill variant={isCurrent ? "success" : "neutral"}>{isCurrent ? "現用" : "舊號"}</Pill>
+          <Pill variant={isCurrent ? "success" : "neutral"}>{isCurrent ? "現用" : "已取消"}</Pill>
           {isCurrent && n.valid_from && <span className="text-xs text-zk-muted">生效：{fmtDate(n.valid_from)}</span>}
-          {!isCurrent && n.valid_to && <span className="text-xs">轉舊號：{fmtDate(n.valid_to)}</span>}
+          {!isCurrent && n.valid_to && <span className="text-xs">取消日期：{fmtDate(n.valid_to)}</span>}
           {n.note && <span className="text-xs text-zk-muted">備註：{n.note}</span>}
           {!isBroker && (
             <div className="ml-auto flex gap-1.5">
@@ -770,7 +780,7 @@ export function GuardsClient({
                 onClick={() => onToggleStaffNumberStatus(n)}
                 className="text-xs text-zk-primary underline"
               >
-                {isCurrent ? "轉做舊號" : "改返現用"}
+                {isCurrent ? "取消呢個號" : "改返現用"}
               </button>
               <button
                 type="button"
@@ -797,11 +807,11 @@ export function GuardsClient({
                   onChange={(e) => setNumberEditForm((f) => ({ ...f, valid_from: e.target.value }))}
                 />
               </Field>
-              {/* 應修 2（Opus 驗收第二輪）：轉舊號自動填嘅 valid_to 之前
-                  淨係顯示（renderStaffNumberRow 嗰行「轉舊號：」），冇得
-                  喺呢個編輯表單度改／清——而家補返個 input，打空咗撳
+              {/* 應修 2（Opus 驗收第二輪）：取消自動填嘅 valid_to 之前
+                  淨係顯示（renderStaffNumberRow 嗰行「取消日期：」），冇
+                  得喺呢個編輯表單度改／清——而家補返個 input，打空咗撳
                   「儲存」會送 null 清走（見 onSaveNumberEdit()）。 */}
-              <Field label="轉舊日期">
+              <Field label="取消日期">
                 <input
                   type="date"
                   className={inputCls}
@@ -1155,6 +1165,12 @@ export function GuardsClient({
           {editingId && (
             <>
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">員工編號</h3>
+              {/* C（老闆 2026-09-19 拍板四條業務規則）：分區標題下加一句提示，
+                  等用戶（尤其主管／會計）睇得明「邊個號用嚟做乜」，同「取消
+                  咗嘅編號唔會復用」呢個關鍵行為。 */}
+              <p className="text-xs text-zk-muted">
+                更表／匯出一律顯示 U 號；MG 只作內部出糧／行政用；離職後編號取消，再入職會攞新編號。
+              </p>
               {staffNumbers.filter((n) => n.status === "current").length === 0 ? (
                 <div className="text-sm text-zk-muted">未有現用編號</div>
               ) : (
@@ -1168,7 +1184,7 @@ export function GuardsClient({
                     onClick={() => setShowFormerStaffNumbers((v) => !v)}
                     className="text-xs text-zk-primary underline"
                   >
-                    {showFormerStaffNumbers ? "隱藏舊號" : `顯示舊號 ${staffNumbers.filter((n) => n.status === "former").length} 個`}
+                    {showFormerStaffNumbers ? "隱藏已取消嘅號" : `顯示已取消嘅號 ${staffNumbers.filter((n) => n.status === "former").length} 個`}
                   </button>
                   {showFormerStaffNumbers && (
                     <div className="mt-1.5 space-y-1.5">{staffNumbers.filter((n) => n.status === "former").map(renderStaffNumberRow)}</div>

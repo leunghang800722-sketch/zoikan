@@ -20,6 +20,9 @@
 // §14 S6：雞頭讀 .../staff-numbers 窄版 DTO（冇 note/source/created_by）
 // §15 S7：GET /api/guards?q= 搵到 former 號，標 former_number_hit
 // §16 附帶：牌照/平安卡/入離職日期 nullable（PATCH null 清空）
+// §23 B（老闆 2026-09-19 拍板業務規則 (4)）：syncLegacyStaffNoColumns()
+//     legacy 欄 fallback——取消咗嘅 U／MG／MW 號都要保住舊月份更表／匯出
+//     顯示完整，唔應該因為冧摺埋咗（former／已取消）就變 null
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -142,7 +145,12 @@ describe("WP-STAFFNO §2：legacy 欄同步 + PATCH /api/guards/:id 舊寫法", 
     expect(guard.staffNo).toBe("U90020");
   });
 
-  it("將現用 U 轉 former（冇第二個 U）→ guards.staff_no 變 null", async () => {
+  // B（老闆 2026-09-19 拍板業務規則 (4)：離職後編號取消，永遠唔復用）：
+  // 原本「冇 current 就寫 null」——而家改做 fallback 用「最近取消」嗰行，
+  // 等呢個安員舊月份嘅更表／匯出仲顯示得返個 U 號（唔會因為取消咗就變
+  // 空白，見 src/lib/guards/staff-numbers.ts syncLegacyStaffNoColumns()）。
+  // 完整嘅 fallback 場景測試見 §23。
+  it("將現用 U 轉 former（冇第二個 U）→ guards.staff_no 唔變 null，fallback 用返嗰個已取消嘅號", async () => {
     const created = await staffNumberCreate(
       req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U90021" }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
@@ -153,7 +161,7 @@ describe("WP-STAFFNO §2：legacy 欄同步 + PATCH /api/guards/:id 舊寫法", 
       { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
     );
     const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
-    expect(guard.staffNo).toBeNull();
+    expect(guard.staffNo).toBe("U90021");
   });
 
   it("PATCH /api/guards/:id 帶 staff_no（舊寫法）仍然 work，而且新表一致（起一行 current，legacy 欄同步）", async () => {
@@ -1198,5 +1206,98 @@ describe("WP-STAFFNO §22（必修5）：number 正規化去空白包埋 NBSP（
     expect(res.status).toBe(201);
     const body = (await res.json()) as { number: string };
     expect(body.number).toBe("U91900");
+  });
+});
+
+// B（老闆 2026-09-19 拍板業務規則 (4)：離職後編號取消，永遠唔復用）：
+// `syncLegacyStaffNoColumns()` 原本「冇 current 就寫 null」會令一個安員
+// 離職（U 號取消）之後，佢舊月份嘅更表／匯出／`gate:export` 對數就會漏咗
+// 個 U 號（`guards.staff_no` 變晒 null）。而家 fallback 用「最近取消」嗰
+// 一行——呢度用 POST／PATCH .../staff-numbers* 兩條 route（唔直接 call
+// `syncLegacyStaffNoColumns()`，同其他 §一致用 API 層驗證，兩條 route 尾
+// 都會喺同一 transaction 內 call 呢個函數）驗證三個場景。
+describe("WP-STAFFNO §23（B）：syncLegacyStaffNoColumns legacy 欄 fallback——取消咗都要保住歷史顯示", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  async function cancelStaffNumber(numberId: string) {
+    return staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${numberId}`, ownerCookie, "PATCH", { status: "former" }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId }) },
+    );
+  }
+
+  it("取消唯一嘅 U 號之後，staff_no 仍然係嗰個號（唔會變 null）", async () => {
+    const created = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92001" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row = (await created.json()) as { id: string };
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92001");
+
+    const cancelRes = await cancelStaffNumber(row.id);
+    expect(cancelRes.status).toBe(200);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92001"); // 取消咗都唔變 null
+  });
+
+  it("取消咗之後再加新 U 號——staff_no 變返新號（現用優先過已取消）", async () => {
+    const created1 = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92002" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row1 = (await created1.json()) as { id: string };
+    await cancelStaffNumber(row1.id);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92002"); // 取消咗，暫時仍然顯示嗰個
+
+    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92003" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92003"); // 新現用號蓋過已取消
+  });
+
+  it("兩個已取消嘅 U 號、冇任何 current——staff_no 攞最近取消嗰個（唔係任意一個）", async () => {
+    const created1 = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92004" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row1 = (await created1.json()) as { id: string };
+    await cancelStaffNumber(row1.id);
+
+    const created2 = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92005" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row2 = (await created2.json()) as { id: string };
+    await cancelStaffNumber(row2.id); // 呢個之後至取消，係「最近取消」嗰個
+
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.staffNo).toBe("U92005"); // 攞最近取消嗰個，唔係 U92004
+    const rows = await prisma.guardStaffNumber.findMany({ where: { guardId: fx.guardA.id, scheme: "U" } });
+    expect(rows.every((r) => r.status === "former")).toBe(true); // 兩個都已取消，冇 current
+  });
+
+  it("staff_no_mw 一樣做 fallback——MG 優先過 MW（縱使 MW 取消得遲過 MG）", async () => {
+    const createdMg = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MG", number: "MG92006" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const rowMg = (await createdMg.json()) as { id: string };
+    await cancelStaffNumber(rowMg.id);
+
+    const createdMw = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MW", number: "MW92007" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const rowMw = (await createdMw.json()) as { id: string };
+    await cancelStaffNumber(rowMw.id); // MW 至取消（比 MG 遲），但 MG 業務上仍然優先
+
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.staffNoMw).toBe("MG92006");
   });
 });

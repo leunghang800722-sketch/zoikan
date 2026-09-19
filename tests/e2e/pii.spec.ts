@@ -307,7 +307,9 @@ test("(f) detail GET 遲返 → Save 掣 disabled 顯示「載入中…」，det
   await expect(saveBtn).toHaveText("儲存", { timeout: 10_000 });
   await expect(saveBtn).toBeEnabled();
 
-  await page.getByRole("button", { name: "取消" }).click();
+  // WP-STAFFNO（業務規則 (4)）：員工編號分區而家有一個「取消呢個號」按
+  // 鈕，同呢個抽屜關閉用嘅「取消」撞 substring——用 `exact: true` 分開。
+  await page.getByRole("button", { name: "取消", exact: true }).click();
 });
 
 test("(g) detail GET 失敗（500，包括冇權睇嗰類 403 一致對待）→ 儲存 DB 嘅 date_of_birth 唔會被清走", async ({ page }) => {
