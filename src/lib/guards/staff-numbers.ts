@@ -84,7 +84,7 @@ export function schemeFromNumber(raw: string): string | null {
 // YYYY-MM-DD 字串起 `T00:00:00.000Z`（唔經 HKT 換算），等 Postgres 攞到
 // 嘅日曆日就係 HK 今日本身，唔會早/遲一日。全檔（呢個 module）寫
 // `@db.Date` 一律用呢個慣例，唔再用 `hkDayStartUtc()`。
-function hkToday(now: Date = new Date()): Date {
+export function hkToday(now: Date = new Date()): Date {
   const ymd = todayLocalStr(now);
   return new Date(`${ymd}T00:00:00.000Z`);
 }
@@ -199,8 +199,11 @@ function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: stri
   return [...cancelled].sort((a, b) => {
     // validTo desc nulls last：null 當 -Infinity，descending 排序自然排
     // 到最後。
-    const av = a.validTo ? a.validTo.getTime() : -Infinity;
-    const bv = b.validTo ? b.validTo.getTime() : -Infinity;
+    // Opus 覆核 M1：手動取消嘅行舊資料可能冇 validTo（null）——唔可以當
+    // 「最舊」排最後，否則「被新號取代嘅舊號」會贏咗「最後真正用緊、啱啱
+    // 先取消嗰個」。冇 validTo 就用 updatedAt 頂上；同分再比 updatedAt。
+    const av = (a.validTo ?? a.updatedAt).getTime();
+    const bv = (b.validTo ?? b.updatedAt).getTime();
     if (av !== bv) return bv - av;
     return b.updatedAt.getTime() - a.updatedAt.getTime();
   })[0];
@@ -268,13 +271,29 @@ export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: {
 
   const data: Prisma.GuardUpdateInput = {};
   if (hasUHistory) data.staffNo = uRepresentative?.number ?? null;
-  if (hasMgOrMwHistory) data.staffNoMw = mgRepresentative?.number ?? mwRepresentative?.number ?? null;
+  if (hasMgOrMwHistory) {
+    // 現用嘅一定贏已取消嘅：現用 MG → 現用 MW → 最近取消 MG → 最近取消 MW。
+    const reps = [mgRepresentative, mwRepresentative].filter((r): r is GuardStaffNumber => !!r);
+    data.staffNoMw = (reps.find((r) => r.status === "current") ?? reps[0])?.number ?? null;
+  }
   if (Object.keys(data).length === 0) return;
 
   // 必修 5（Opus 驗收第三輪）：補一句點處理——單講「請先處理嗰邊」冇講
   // 清楚實際要點做，用戶（老闆/主管）未必知道「處理」係指去邊度做乜。
   const conflictHint = "，請去嗰位安員嘅「員工編號」區加返正確號碼，舊工號欄就會更新";
   const conflictMessage = (value: string) => `呢個號碼（${value}）仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊${conflictHint}`;
+  // Opus 覆核 S1：如果要寫入嘅只係「已取消號」嘅歷史顯示值（fallback），
+  // 撞到另一個安員嘅舊工號欄就唔好阻住個操作（否則呢類人永遠取消唔到個
+  // 號）——跳過呢欄、保留原值就算；真現用號撞先至 409。
+  if (typeof data.staffNo === "string" && uRepresentative?.status === "former") {
+    const holder = await tx.guard.findFirst({ where: { staffNo: data.staffNo, NOT: { id: guardId } }, select: { id: true } });
+    if (holder) delete data.staffNo;
+  }
+  if (typeof data.staffNoMw === "string" && ![mgRepresentative, mwRepresentative].some((r) => r?.status === "current")) {
+    const holder = await tx.guard.findFirst({ where: { staffNoMw: data.staffNoMw, NOT: { id: guardId } }, select: { id: true } });
+    if (holder) delete data.staffNoMw;
+  }
+  if (Object.keys(data).length === 0) return;
   if (typeof data.staffNo === "string") {
     const holder = await tx.guard.findFirst({ where: { staffNo: data.staffNo, NOT: { id: guardId } }, select: { id: true } });
     if (holder) throw Conflict(conflictMessage(data.staffNo), opts?.revealConflictGuardId ? { guard_id: holder.id } : undefined);

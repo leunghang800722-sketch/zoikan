@@ -11,7 +11,7 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { GuardStaffNumberUpdateSchema } from "@/lib/api/schemas";
-import { normalizeStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
+import { normalizeStaffNumber, syncLegacyStaffNoColumns, hkToday } from "@/lib/guards/staff-numbers";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden, Conflict, BadRequest } from "@/lib/api/errors";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
@@ -80,6 +80,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           }
         }
         data.status = parsed.status;
+        // Opus 覆核 M1：手動取消都要記低取消日期（同「加新號自動取消舊號」
+        // 一致）；改返現用就清走取消日期。用戶同一個 request 明確俾咗
+        // valid_to 就以用戶為準（下面會覆蓋）。
+        if (parsed.status === "former" && !row.validTo) data.validTo = hkToday();
+        if (parsed.status === "current") data.validTo = null;
       }
       if (parsed.valid_from !== undefined) data.validFrom = parsed.valid_from;
       if (parsed.valid_to !== undefined) data.validTo = parsed.valid_to;

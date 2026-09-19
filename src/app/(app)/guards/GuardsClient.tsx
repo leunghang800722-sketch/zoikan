@@ -665,7 +665,11 @@ export function GuardsClient({
   }
 
   function statusPill(g: GuardRow) {
-    if (!g.staff_no) return <Pill variant="warning">未有工號</Pill>;
+    // Opus 覆核 S2：`staff_no` 舊欄而家會 fallback 顯示已取消嘅 U 號（保歷史
+    // 更表／匯出），唔可以再用佢判斷「有冇工號」——睇現用 U 號（U 號係
+    // 去 Wilson 盤開工嘅硬性要求）；冇 `staff_numbers`（舊 response）先退返舊欄。
+    const hasCurrentU = g.staff_numbers ? g.staff_numbers.some((n) => n.scheme === "U" && n.status === "current") : !!g.staff_no;
+    if (!hasCurrentU) return <Pill variant="warning">未有現用 U 號</Pill>;
     if (g.status === "active") return <Pill variant="success">在職</Pill>;
     return <Pill variant="neutral">{g.status}</Pill>;
   }
@@ -1016,10 +1020,10 @@ export function GuardsClient({
                 字面出現「編號」呢兩個字會令佢誤中呢個較前面嘅 label，撳
                 「新增編號」個掣（`!staffNumberForm.number` 都仲係空）保持
                 disabled，成個 POST 都唔會發出——見 fieldControl() 註解。 */}
-            <Field label="工號" hint="只收 U 開頭；其他種類請用下面獨立分區新增">
+            <Field label="工號" hint="更表／匯出顯示嘅 U 號；只收 U 開頭。如果現用 U 號已取消，呢度會顯示最近取消嗰個（歷史更表用）——現用狀態以下面獨立分區為準">
               <input className={inputCls} value={form.staff_no} onChange={(e) => setForm((f) => ({ ...f, staff_no: e.target.value }))} />
             </Field>
-            <Field label="工號（MW）" hint="只收 MG／MW 開頭；其他種類請用下面獨立分區新增">
+            <Field label="長工／寫字樓工號（MG／MW）" hint="只作內部出糧／行政用；只收 MG／MW 開頭。現用狀態以下面獨立分區為準">
               <input className={inputCls} value={form.staff_no_mw} onChange={(e) => setForm((f) => ({ ...f, staff_no_mw: e.target.value }))} />
             </Field>
           </div>

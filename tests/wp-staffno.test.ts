@@ -1246,6 +1246,47 @@ describe("WP-STAFFNO §23（B）：syncLegacyStaffNoColumns legacy 欄 fallback�
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92001"); // 取消咗都唔變 null
   });
 
+  it("Opus 覆核 M1：被新號取代嘅舊號（有取消日期）唔可以贏咗「最後用緊、啱啱先手動取消」嗰個；手動取消都會記取消日期", async () => {
+    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92011" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    const created2 = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92012" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row2 = (await created2.json()) as { id: string };
+    // 模擬舊資料：第一個號嘅取消日期係好耐之前
+    await prisma.guardStaffNumber.update({ where: { number: "U92011" }, data: { validTo: new Date("2025-01-01T00:00:00.000Z") } });
+    const cancelRes = await cancelStaffNumber(row2.id);
+    expect(cancelRes.status).toBe(200);
+    const cancelled = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { number: "U92012" } });
+    expect(cancelled.status).toBe("former");
+    expect(cancelled.validTo).not.toBeNull(); // 手動取消自動填取消日期
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92012");
+
+    // 就算舊資料冇取消日期（null），都係用 updatedAt 頂上，唔會排最後
+    await prisma.guardStaffNumber.update({ where: { number: "U92012" }, data: { validTo: null } });
+    await staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row2.id}`, ownerCookie, "PATCH", { note: "觸發同步" }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId: row2.id }) },
+    );
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92012");
+  });
+
+  it("Opus 覆核 S1：已取消號嘅歷史顯示值撞到另一個安員嘅舊工號欄——唔阻住取消（唔 409），保留原值", async () => {
+    const created = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92021" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row = (await created.json()) as { id: string };
+    // 模擬 migration 跳過嘅髒資料：guardA 舊欄係未正規化寫法，guardB 舊欄佔住正規化值
+    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { staffNo: "u 92021" } });
+    await prisma.guard.update({ where: { id: fx.guardB.id }, data: { staffNo: "U92021" } });
+    const cancelRes = await cancelStaffNumber(row.id);
+    expect(cancelRes.status).toBe(200);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("u 92021");
+  });
+
   it("取消咗之後再加新 U 號——staff_no 變返新號（現用優先過已取消）", async () => {
     const created1 = await staffNumberCreate(
       req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92002" }),
