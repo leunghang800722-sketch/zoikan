@@ -1,0 +1,149 @@
+// WP-STAFFNO（老闆 2026-09-19 拍板）Playwright e2e——員工編號獨立表
+// （方案 B）＋保安牌照甲／乙類到期日分開存，喺真實 dev DB／真實 UI 路徑
+// 驗證（同 pii.spec.ts 一樣嘅 pattern：`mode:"serial"`，跑完清走測試值）。
+//
+// 執行前提：`PW_PORT=3000 npx playwright test tests/e2e/staffno.spec.ts`，
+// dev DB 要已經 `npm run db:seed`（有 staff_no="U…" 開頭嘅保安員）。
+import { test, expect, type Page } from "@playwright/test";
+import { loginAs } from "./helpers";
+import { prisma } from "./db-helpers";
+
+test.describe.configure({ mode: "serial" });
+
+async function findGuardWithUNumber() {
+  const guard = await prisma.guard.findFirstOrThrow({
+    where: { staffNo: { startsWith: "U" }, status: "active" },
+    select: { id: true, nameZh: true, staffNo: true },
+  });
+  return guard as { id: string; nameZh: string; staffNo: string };
+}
+
+async function openEditByName(page: Page, name: string) {
+  const main = page.locator("main");
+  await expect(main.getByText("載入緊…")).toHaveCount(0, { timeout: 20_000 });
+  const searchInput = page.getByPlaceholder("姓名 / 工號 / 電話");
+  await searchInput.fill(name);
+  const row = main.locator("table tbody tr", { hasText: name }).first();
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  const detailResponse = page.waitForResponse((r) => /\/api\/guards\/[^/?]+$/.test(r.url()) && r.request().method() === "GET").catch(() => null);
+  await row.getByRole("button", { name: "編輯" }).click();
+  await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
+  await detailResponse;
+  // 員工編號分區靠獨立 GET .../staff-numbers（openEdit() 尾段 await
+  // loadStaffNumbers()），等埋呢個 response 先開始撳，唔係就「新增」
+  // 表單撳落去嗰陣個 staffNumbers state 可能仲係舊值。
+  await expect(page.getByRole("heading", { name: "員工編號" })).toBeVisible({ timeout: 10_000 });
+}
+
+function fieldControl(page: Page, label: string, anchorExact = false) {
+  const pattern = anchorExact ? new RegExp(`^${label}`) : label;
+  return page.locator("label", { hasText: pattern }).first();
+}
+
+test.afterAll(async () => {
+  await prisma.$disconnect();
+});
+
+test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 U 摺埋、chip 更新 → staff_no 同步；填甲/乙到期日 → 列表 pill", async ({ page }) => {
+  const guard = await findGuardWithUNumber();
+  const originalStaffNo = guard.staffNo;
+  const newMpNumber = `MP${Date.now().toString().slice(-6)}`;
+  const newUNumber = `U${Date.now().toString().slice(-6)}`;
+
+  try {
+    await loginAs(page, "老闆");
+    await page.goto("/guards");
+    await openEditByName(page, guard.nameZh);
+
+    // ---- 加 MP 號 ----
+    const schemeSelect = fieldControl(page, "種類（scheme）").locator("select");
+    await schemeSelect.selectOption("MP");
+    await fieldControl(page, "編號").locator("input").fill(newMpNumber);
+    const postMp = page.waitForResponse(
+      (r) => /\/api\/guards\/[^/]+\/staff-numbers$/.test(r.url()) && r.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "新增編號" }).click();
+    await postMp;
+    await expect(page.getByText(`已新增 MP 號`)).toBeVisible({ timeout: 10_000 });
+
+    // 抽屜入面即刻見到新 MP 號（current）。
+    await expect(page.getByText(newMpNumber)).toBeVisible();
+
+    // `onAddStaffNumber()` 成功之後自己會 `await load()` 刷新列表，唔使
+    // 再手動 reload——直接關閉抽屜就搵得到最新 chips。
+    await page.getByRole("button", { name: "取消" }).click();
+
+    // ---- 列表見兩個 chips（U + MP） ----
+    await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
+    let row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(row.getByText(originalStaffNo, { exact: true })).toBeVisible();
+    await expect(row.getByText(newMpNumber, { exact: true })).toBeVisible();
+
+    // ---- 再加新 U 號（舊 U 應該自動轉 former） ----
+    await row.getByRole("button", { name: "編輯" }).click();
+    await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "員工編號" })).toBeVisible({ timeout: 10_000 });
+
+    await fieldControl(page, "種類（scheme）").locator("select").selectOption("U");
+    await fieldControl(page, "編號").locator("input").fill(newUNumber);
+    const postU = page.waitForResponse((r) => /\/api\/guards\/[^/]+\/staff-numbers$/.test(r.url()) && r.request().method() === "POST");
+    await page.getByRole("button", { name: "新增編號" }).click();
+    await postU;
+    // response 講明舊 U 已經轉咗做舊號。
+    await expect(page.getByText(`舊嘅 ${originalStaffNo} 已經轉做舊號`)).toBeVisible({ timeout: 10_000 });
+
+    // 舊 U 摺埋（former 預設摺埋）——見到「顯示舊號 N 個」，撳先見到舊值。
+    const showFormerBtn = page.getByRole("button", { name: /顯示舊號 \d+ 個/ });
+    await expect(showFormerBtn).toBeVisible();
+    await expect(page.getByText(originalStaffNo, { exact: true })).toHaveCount(0);
+    await showFormerBtn.click();
+    await expect(page.getByText(originalStaffNo, { exact: true })).toBeVisible();
+
+    // ---- 填甲／乙到期日 ----
+    await fieldControl(page, "甲類到期").locator("input").fill("2028-01-01");
+    await fieldControl(page, "乙類到期").locator("input").fill("2027-01-01");
+    await page.getByRole("button", { name: "儲存" }).click();
+    await expect(page.getByText("已更新")).toBeVisible({ timeout: 15_000 });
+
+    // ---- 列表 chip 更新（U chip 變新號），到期 pill 反映甲/乙較早（乙）嗰個 ----
+    await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
+    row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(row.getByText(newUNumber, { exact: true })).toBeVisible();
+    await expect(row.getByText(originalStaffNo, { exact: true })).toHaveCount(0); // 舊 U 唔再喺 chips 出現（只 current）
+    await expect(row.getByText("90 日內").or(row.getByText("已過期")).or(row.getByText("有效"))).toBeVisible();
+
+    // ---- staff_no 同步（legacy 欄） ----
+    const afterGuard = await prisma.guard.findUniqueOrThrow({ where: { id: guard.id }, select: { staffNo: true, siaPermitAExpiry: true, siaPermitBExpiry: true } });
+    expect(afterGuard.staffNo).toBe(newUNumber);
+    expect(afterGuard.siaPermitAExpiry?.toISOString().slice(0, 10)).toBe("2028-01-01");
+    expect(afterGuard.siaPermitBExpiry?.toISOString().slice(0, 10)).toBe("2027-01-01");
+  } finally {
+    // 還原：清走測試起嘅新表行，將現用 U 改返原本嗰個號，甲/乙到期日清空。
+    await prisma.guardStaffNumber.deleteMany({ where: { guardId: guard.id, number: { in: [newMpNumber, newUNumber, originalStaffNo] } } });
+    await prisma.guardStaffNumber.create({
+      data: { guardId: guard.id, scheme: "U", number: originalStaffNo, status: "current", source: "e2e-restore:staffno.spec" },
+    });
+    await prisma.guard.update({
+      where: { id: guard.id },
+      data: { staffNo: originalStaffNo, siaPermitAExpiry: null, siaPermitBExpiry: null, siaPermitExpiry: null, siaPermitType: null },
+    });
+  }
+});
+
+test("雞頭A：開自己人——員工編號分區有 chips 但冇「新增編號」表單", async ({ page }) => {
+  const brokerAUser = await prisma.user.findFirstOrThrow({ where: { tel: "90000004" }, select: { brokerId: true } });
+  const guard = await prisma.guard.findFirstOrThrow({
+    where: { defaultBrokerId: brokerAUser.brokerId, status: "active", staffNo: { not: null } },
+    select: { id: true, nameZh: true },
+  });
+  await loginAs(page, "雞頭A");
+  await page.goto("/guards");
+  await openEditByName(page, guard.nameZh);
+
+  await expect(page.getByRole("heading", { name: "員工編號" })).toBeVisible();
+  // 冇「新增編號」表單（撳掣冇出現）——雞頭視角 chips 只讀。
+  await expect(page.getByRole("button", { name: "新增編號" })).toHaveCount(0);
+  await expect(page.locator("label", { hasText: "種類（scheme）" })).toHaveCount(0);
+});

@@ -65,9 +65,11 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
     await page.goto("/guards");
     await openEditByName(page, guard.nameZh);
 
-    // 牌照與證件。
+    // 牌照與證件。WP-STAFFNO：「牌照類別」而家係衍生顯示值（唔再係
+    // select，見 deriveSiaPermitExpiry()）——填甲類到期日先會令佢顯示
+    // "A"。
     await fieldControl(page, "牌照號碼").locator("input").fill("SIA-E2E-01");
-    await fieldControl(page, "牌照類別").locator("select").selectOption("A");
+    await fieldControl(page, "甲類到期").locator("input").fill("2027-06-01");
 
     // 個人資料。
     await fieldControl(page, "身份證號碼").locator("input").fill(TEST_HKID);
@@ -95,6 +97,8 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
     await expect(fieldControl(page, "身份證號碼").locator("input")).toHaveValue(TEST_HKID);
     await expect(fieldControl(page, "銀行", true).locator("input")).toHaveValue("測試銀行");
     await expect(fieldControl(page, "牌照號碼").locator("input")).toHaveValue("SIA-E2E-01");
+    await expect(fieldControl(page, "甲類到期").locator("input")).toHaveValue("2027-06-01");
+    await expect(fieldControl(page, "牌照類別（自動計）")).toContainText("A");
 
     // 列表（GET /api/guards）身份證一律遮罩——直接打 API（同一個已登入
     // browser context，帶住 session cookie）核對 response body，唔靠
@@ -130,6 +134,8 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
         bankPayeeName: null,
         siaPermitNo: null,
         siaPermitType: null,
+        siaPermitAExpiry: null,
+        siaPermitBExpiry: null,
         safetyCardNo: null,
         safetyCardExpiry: null,
         hireDate: null,

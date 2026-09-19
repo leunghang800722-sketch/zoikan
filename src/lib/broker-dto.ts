@@ -8,6 +8,11 @@ import { pickWhitelist, brandSafeResponse, type Dto } from "./api/serialize";
 // `GET /api/guards?with_month_shifts=` 先會計出嚟）加入呢個白名單——
 // 冇金錢/敏感成分，雞頭見自己安員嘅本月更數一向准，同內部角色
 // GUARD_FIELDS 一致做法（見 src/lib/api/dto/index.ts 同一段註解）。
+// WP-STAFFNO：`staffNumbers`（additive，淨係 current）加落嚟——工號本身
+// 雞頭一直見到（`staffNo`/`staffNoMw` 舊欄本身已經喺呢個白名單），呢個
+// 淨係加多個結構化版（chips 用）。`siaPermitAExpiry`／`siaPermitBExpiry`
+// 刻意唔加——跟返現有做法（`siaPermitNo`／`siaPermitType` 一路都冇喺呢
+// 個白名單，雞頭淨係見到衍生嘅 `siaPermitExpiry`，唔見拆開嘅甲／乙）。
 export const GUARD_BROKER_FIELDS = [
   "id",
   "staffNo",
@@ -23,6 +28,7 @@ export const GUARD_BROKER_FIELDS = [
   "createdAt",
   "updatedAt",
   "monthShiftCount",
+  "staffNumbers",
 ] as const;
 
 // 雞頭（自己資料）：淨係基本資料，bankInfo 已經喺 blocklist 剝埋（defense-in-depth）。

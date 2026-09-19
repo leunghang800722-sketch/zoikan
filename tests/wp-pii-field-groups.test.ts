@@ -23,7 +23,7 @@ function req(url: string, cookie: string, method = "GET", body?: unknown) {
 
 const PII_KEYS = ["hkid", "date_of_birth", "address", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date"];
 const BANK_KEYS = ["bank_name", "bank_account_no", "bank_payee_name"];
-const LICENCE_KEYS = ["sia_permit_no", "sia_permit_type", "safety_card_no", "safety_card_expiry", "hire_date", "leave_date"];
+const LICENCE_KEYS = ["sia_permit_no", "sia_permit_type", "sia_permit_a_expiry", "sia_permit_b_expiry", "safety_card_no", "safety_card_expiry", "hire_date", "leave_date"];
 
 describe("WP-PII §1：矩陣出廠值——安員個人資料／安員銀行資料", () => {
   it("老闆：兩個 module view/update 都 grant", () => {
@@ -89,7 +89,9 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
         bank_account_no: "123-456789-001",
         bank_payee_name: "測試安員甲",
         sia_permit_no: "SIA-TEST-01",
-        sia_permit_type: "A",
+        // WP-STAFFNO：`sia_permit_type` 而家係衍生值（唔可以直接寫），
+        // 用甲類到期日代替去 exercise 同一組「牌照跟安員 module」欄。
+        sia_permit_a_expiry: "2028-01-01",
         safety_card_no: "SAFE-TEST-01",
         safety_card_expiry: "2027-01-01",
         hire_date: "2020-01-01",

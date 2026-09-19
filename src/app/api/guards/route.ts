@@ -13,6 +13,7 @@ import { GuardCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { maskHkidForList } from "@/lib/api/guard-pii";
+import { toStaffNumberChips, assertNoLegacySiaPermitWrite, applyLegacyStaffNoPatch, writeStaffNumberAudits, type StaffNumberChip } from "@/lib/guards/staff-numbers";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 import type { Prisma } from "@prisma/client";
@@ -58,6 +59,20 @@ async function loadMonthShiftCounts(guardIds: string[], month: string): Promise<
   return Object.fromEntries(counts.map((c) => [c.guardId, c._count._all]));
 }
 
+// WP-STAFFNO（老闆 2026-09-19 拍板）：additive `staff_numbers` 欄——淨係
+// current（chips 用），冇 query 參數開關（同 `with_month_shifts` 唔同，
+// 呢個一律計，因為列表「工號」欄改晒做 chips，前端一定要呢批資料先畫
+// 得出嚟）。內部角色／雞頭白名單都加咗（`GUARD_FIELDS`／
+// `GUARD_BROKER_FIELDS`，見 src/lib/api/dto/index.ts、
+// src/lib/broker-dto.ts）——「工號本身雞頭一直見到」。
+async function loadCurrentStaffNumbers(guardIds: string[]): Promise<Record<string, StaffNumberChip[]>> {
+  if (guardIds.length === 0) return {};
+  const rows = await prisma.guardStaffNumber.findMany({ where: { guardId: { in: guardIds }, status: "current" } });
+  const byGuard: Record<string, typeof rows> = {};
+  for (const r of rows) (byGuard[r.guardId] ??= []).push(r);
+  return Object.fromEntries(Object.entries(byGuard).map(([guardId, rs]) => [guardId, toStaffNumberChips(rs)]));
+}
+
 export async function GET(req: Request) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "view");
@@ -93,9 +108,12 @@ export async function GET(req: Request) {
     const monthShiftCounts = withMonthShiftsParam
       ? await loadMonthShiftCounts(rows.map((r) => r.id), withMonthShiftsParam)
       : null;
-    const rowsWithCount = monthShiftCounts
-      ? rows.map((r) => ({ ...r, monthShiftCount: monthShiftCounts[r.id] ?? 0 }))
-      : rows;
+    const staffNumbersByGuard = await loadCurrentStaffNumbers(rows.map((r) => r.id));
+    const rowsWithCount = rows.map((r) => ({
+      ...r,
+      ...(monthShiftCounts ? { monthShiftCount: monthShiftCounts[r.id] ?? 0 } : {}),
+      staffNumbers: staffNumbersByGuard[r.id] ?? [],
+    }));
     if (isBrokerRole(session)) {
       const list = scrubForBrokerSession(
         session,
@@ -121,12 +139,36 @@ export async function POST(req: Request) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "create");
     const body = await readJson(req);
+    assertNoLegacySiaPermitWrite(body);
     const parsed = parseBody(GuardCreateSchema, body);
-    const data = snakeToCamelShallow(parsed) as Prisma.GuardUncheckedCreateInput;
+    // WP-STAFFNO：`staff_no`／`staff_no_mw` 而家係由 `guard_staff_
+    // numbers` 新表 sync 返嚟嘅值——建立嗰陣如果有帶，一樣要行
+    // `applyLegacyStaffNoPatch()` 起返對應嘅新表行，唔係就呢個 guard
+    // 一開始個 staff_no 就冇對應嘅 current 行，第一次有人幫佢加／改第二
+    // 個工號（觸發 sync）就會被靜靜哋抹走（見 src/lib/guards/
+    // staff-numbers.ts syncLegacyStaffNoColumns() 大註解）。
+    const { staff_no: staffNoLegacy, staff_no_mw: staffNoMwLegacy, ...rest } = parsed as typeof parsed & {
+      staff_no?: string;
+      staff_no_mw?: string;
+    };
+    const data = snakeToCamelShallow(rest) as Prisma.GuardUncheckedCreateInput;
     // 雞頭建安員：強制掛喺自己個 broker 底下（唔准幫其他雞頭/自己揀第二個 broker）
     if (isBrokerRole(session)) data.defaultBrokerId = session.brokerId;
-    const created = await prisma.guard.create({ data: { ...data, createdBy: session.userId } });
+
+    const { created, legacyChanges } = await prisma.$transaction(async (tx) => {
+      const createdGuard = await tx.guard.create({ data: { ...data, createdBy: session.userId } });
+      const legacyResult =
+        staffNoLegacy || staffNoMwLegacy
+          ? await applyLegacyStaffNoPatch(tx, { guardId: createdGuard.id, staffNo: staffNoLegacy, staffNoMw: staffNoMwLegacy, createdBy: session.userId })
+          : { changes: [] };
+      const finalGuard = legacyResult.changes.length > 0 ? await tx.guard.findUniqueOrThrow({ where: { id: createdGuard.id } }) : createdGuard;
+      return { created: finalGuard, legacyChanges: legacyResult.changes };
+    });
+
     await writeAudit({ actorUserId: session.userId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
+    if (legacyChanges.length > 0) {
+      await writeStaffNumberAudits(session.userId, legacyChanges, getClientIp(req));
+    }
     if (isBrokerRole(session)) return ok(scrubForBrokerSession(session, toBrokerGuardDTO(created)), 201);
     return ok(await applyFieldGroupGate(session, "guards", toGuardFullDTO(created)), 201);
   });

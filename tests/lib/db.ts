@@ -60,6 +60,9 @@ export async function clearAll() {
   // 雞頭測試用戶嘅 broker_id 跟住 broker 一齊生生滅滅（見
   // tests/fixtures/wp2-fixture.ts），呢度清埋先可以安全刪 broker。
   await prisma.user.updateMany({ data: { brokerId: null } });
+  // WP-STAFFNO：`guard_staff_numbers.guard_id` 係 FK RESTRICT，刪 guard
+  // 之前要先清（同 scripts/seed/index.ts clearAll() 一致做法）。
+  await prisma.guardStaffNumber.deleteMany({});
   await prisma.guard.updateMany({ data: { defaultBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});

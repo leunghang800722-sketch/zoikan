@@ -26,11 +26,14 @@ import { brokerColor } from "@/lib/ui/broker-color";
 import { kickerFor } from "@/lib/ui/nav-active";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
-// WP-PII（老闆 2026-09-17 拍板）：牌照類別白名單、Blacklist check 結果
-// 白名單——同 src/lib/api/schemas.ts 嘅 zod enum 一致。
-const SIA_PERMIT_TYPES = ["A", "B", "C", "D"] as const;
 const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
 const BLACKLIST_LABEL: Record<string, string> = { clear: "已核實、無案底", flagged: "有紀錄", pending: "審查緊" };
+// WP-STAFFNO（老闆 2026-09-19 拍板）：已知嘅員工編號 scheme——U＝去
+// Wilson 盤做散工必須有；MP＝去第二間公司嘅盤做散工用；MG＝轉咗長工；
+// MW 意思未確認（老闆仲未答）。UI 下拉用呢個列表＋「其他」（自填），
+// 對應 API 嗰邊唔寫死 enum（zod regex 1-4 位大寫英文字母），將來加新
+// 種類淨係改呢個陣列，唔使改 API。
+const KNOWN_STAFF_NUMBER_SCHEMES = ["U", "MP", "MG", "MW"] as const;
 
 interface GuardRow {
   id: string;
@@ -42,10 +45,16 @@ interface GuardRow {
   default_broker_id?: string | null;
   employment_type: string;
   monthly_salary?: string | number | null;
+  // WP-STAFFNO：衍生值——兩者「仍然有效而最早到期」嗰個，由
+  // `deriveSiaPermitExpiry()`（後台）計，列表 pill／90 日篩選繼續用呢個。
   sia_permit_expiry?: string | null;
+  sia_permit_type?: string | null;
   polo_size?: string | null;
   status: string;
   month_shift_count?: number;
+  // WP-STAFFNO：additive，淨係 current（chips 用）——冇 key 就當「未攞到
+  // （唔會發生，冇 gate）」，見 src/app/api/guards/route.ts。
+  staff_numbers?: Array<{ scheme: string; number: string; status: string }>;
   // WP-PII：新欄一律 optional——response 有冇呢粒 key 視乎 field-group
   // gate（冇「安員個人資料/安員銀行資料:view」成粒 key 都唔會出現，
   // 唔係值做 null），見 src/lib/api/field-groups.ts。
@@ -55,7 +64,10 @@ interface GuardRow {
   emergency_contact_name?: string | null;
   emergency_contact_tel?: string | null;
   sia_permit_no?: string | null;
-  sia_permit_type?: string | null;
+  // WP-STAFFNO：甲／乙類到期日分開存——跟現有「安員」module（PATCH-only，
+  // 同 sia_permit_no 一致層級）。
+  sia_permit_a_expiry?: string | null;
+  sia_permit_b_expiry?: string | null;
   safety_card_no?: string | null;
   safety_card_expiry?: string | null;
   hire_date?: string | null;
@@ -71,6 +83,16 @@ interface BrokerRow {
   code: string;
   name: string;
 }
+// WP-STAFFNO：`GET/POST /api/guards/:id/staff-numbers` 嘅一行。
+interface StaffNumberRow {
+  id: string;
+  scheme: string;
+  number: string;
+  status: "current" | "former";
+  valid_from?: string | null;
+  valid_to?: string | null;
+  note?: string | null;
+}
 
 const emptyForm = {
   staff_no: "",
@@ -81,7 +103,6 @@ const emptyForm = {
   default_broker_id: "",
   employment_type: EMPLOYMENT_TYPES[0] as string,
   monthly_salary: "",
-  sia_permit_expiry: "",
   polo_size: "",
   // WP-PII——淨係編輯（PATCH）先會夾落 body，見 onSubmit()。
   hkid: "",
@@ -90,7 +111,11 @@ const emptyForm = {
   emergency_contact_name: "",
   emergency_contact_tel: "",
   sia_permit_no: "",
-  sia_permit_type: "",
+  // WP-STAFFNO：甲／乙類到期日——淨係編輯先會夾落 body，`sia_permit_
+  // type` 唔喺呢度（衍生值，API 唔接受寫，顯示直接讀 row，見
+  // fillFormFromRow()）。
+  sia_permit_a_expiry: "",
+  sia_permit_b_expiry: "",
   safety_card_no: "",
   safety_card_expiry: "",
   hire_date: "",
@@ -102,10 +127,22 @@ const emptyForm = {
   blacklist_check_date: "",
 };
 
+const emptyStaffNumberForm = {
+  scheme: KNOWN_STAFF_NUMBER_SCHEMES[0] as string,
+  schemeOther: "",
+  number: "",
+  valid_from: "",
+  note: "",
+};
+
 function matchesSearch(g: GuardRow, q: string): boolean {
   if (!q.trim()) return true;
   const needle = q.trim().toLowerCase();
-  return [g.name_zh, g.staff_no, g.tel].some((v) => v && String(v).toLowerCase().includes(needle));
+  // WP-STAFFNO：搜尋要搵到任何一種現用工號（U／MP／MG／MW…），唔淨係
+  // 舊嘅 staff_no（現用 U）——`staff_numbers`（additive，見
+  // src/app/api/guards/route.ts）已經係呢個人全部現用號嘅陣列。
+  const numbers = [g.staff_no, g.staff_no_mw, ...(g.staff_numbers ?? []).map((n) => n.number)];
+  return [g.name_zh, g.tel, ...numbers].some((v) => v && String(v).toLowerCase().includes(needle));
 }
 
 export function GuardsClient({
@@ -160,6 +197,22 @@ export function GuardsClient({
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // WP-STAFFNO：員工編號獨立表——編輯抽屜開嗰陣先另外 GET
+  // `/api/guards/:id/staff-numbers`（current+former），唔喺主列表/詳情
+  // 攞（列表淨係 additive 嘅 current chips）。雞頭（`isBroker`）淨係讀
+  // （冇「新增編號」表單，見下面 render）。
+  const [staffNumbers, setStaffNumbers] = useState<StaffNumberRow[]>([]);
+  const [staffNumberForm, setStaffNumberForm] = useState(emptyStaffNumberForm);
+  const [staffNumberError, setStaffNumberError] = useState<string | null>(null);
+  const [staffNumberSaving, setStaffNumberSaving] = useState(false);
+  // 舊號（former）預設摺埋——「顯示舊號 N 個」撳咗先展開。
+  const [showFormerStaffNumbers, setShowFormerStaffNumbers] = useState(false);
+  // WP-STAFFNO：`sia_permit_type`（A／B／A+B）而家係衍生顯示值，唔喺
+  // `form` 度（唔會送落 PATCH body）——淨係讀 row 顯示俾用戶睇，改甲／
+  // 乙到期日之後要重新 GET 先會見到新值（同其他衍生欄一致，唔喺前端
+  // 重複算一次）。
+  const [derivedSiaPermitType, setDerivedSiaPermitType] = useState<string | null>(null);
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -196,6 +249,11 @@ export function GuardsClient({
     setEditingId(null);
     setForm(emptyForm);
     setFormError(null);
+    setStaffNumbers([]);
+    setStaffNumberForm(emptyStaffNumberForm);
+    setStaffNumberError(null);
+    setShowFormerStaffNumbers(false);
+    setDerivedSiaPermitType(null);
     setDrawerOpen(true);
   }
 
@@ -209,7 +267,6 @@ export function GuardsClient({
       default_broker_id: row.default_broker_id ?? "",
       employment_type: row.employment_type,
       monthly_salary: row.monthly_salary !== undefined && row.monthly_salary !== null ? String(row.monthly_salary) : "",
-      sia_permit_expiry: row.sia_permit_expiry ? row.sia_permit_expiry.slice(0, 10) : "",
       polo_size: row.polo_size ?? "",
       hkid: row.hkid ?? "",
       date_of_birth: row.date_of_birth ? row.date_of_birth.slice(0, 10) : "",
@@ -217,7 +274,8 @@ export function GuardsClient({
       emergency_contact_name: row.emergency_contact_name ?? "",
       emergency_contact_tel: row.emergency_contact_tel ?? "",
       sia_permit_no: row.sia_permit_no ?? "",
-      sia_permit_type: row.sia_permit_type ?? "",
+      sia_permit_a_expiry: row.sia_permit_a_expiry ? row.sia_permit_a_expiry.slice(0, 10) : "",
+      sia_permit_b_expiry: row.sia_permit_b_expiry ? row.sia_permit_b_expiry.slice(0, 10) : "",
       safety_card_no: row.safety_card_no ?? "",
       safety_card_expiry: row.safety_card_expiry ? row.safety_card_expiry.slice(0, 10) : "",
       hire_date: row.hire_date ? row.hire_date.slice(0, 10) : "",
@@ -228,6 +286,14 @@ export function GuardsClient({
       blacklist_check_result: row.blacklist_check_result ?? "",
       blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
     });
+    if ("sia_permit_type" in row) setDerivedSiaPermitType(row.sia_permit_type ?? null);
+  }
+
+  // WP-STAFFNO：抽屜開緊嗰個人嘅員工編號（current+former），俾「員工
+  // 編號」分區用。
+  async function loadStaffNumbers(guardId: string) {
+    const res = await apiGet<StaffNumberRow[]>(`/api/guards/${guardId}/staff-numbers`);
+    if (res.ok) setStaffNumbers(res.data);
   }
 
   async function openEdit(row: GuardRow) {
@@ -239,6 +305,9 @@ export function GuardsClient({
     setEditingId(row.id);
     fillFormFromRow(row);
     setFormError(null);
+    setStaffNumberForm(emptyStaffNumberForm);
+    setStaffNumberError(null);
+    setShowFormerStaffNumbers(false);
     setDrawerOpen(true);
     const detailRes = await apiGet<GuardRow>(`/api/guards/${row.id}`);
     if (detailRes.ok) {
@@ -256,6 +325,7 @@ export function GuardsClient({
       setHasBankField("bank_name" in detailRes.data);
       setHasLicenceExtraField("sia_permit_no" in detailRes.data);
     }
+    await loadStaffNumbers(row.id);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -269,7 +339,6 @@ export function GuardsClient({
       name_en: form.name_en || undefined,
       tel: form.tel || undefined,
       employment_type: form.employment_type,
-      sia_permit_expiry: form.sia_permit_expiry || undefined,
       polo_size: form.polo_size || undefined,
     };
     if (!editingId) body.default_broker_id = form.default_broker_id || undefined;
@@ -312,7 +381,11 @@ export function GuardsClient({
       // key，自動唔會夾落 body。
       if (hasLicenceExtraField) {
         if (form.sia_permit_no) body.sia_permit_no = form.sia_permit_no;
-        if (form.sia_permit_type) body.sia_permit_type = form.sia_permit_type;
+        // WP-STAFFNO：`sia_permit_type`／`sia_permit_expiry` 而家係衍生
+        // 值，唔再送落 body（API 400）——改甲／乙到期日就得，後台自動
+        // 重算，儲存之後 `load()`／`openEdit()` 重新 GET 會見到新值。
+        if (form.sia_permit_a_expiry) body.sia_permit_a_expiry = form.sia_permit_a_expiry;
+        if (form.sia_permit_b_expiry) body.sia_permit_b_expiry = form.sia_permit_b_expiry;
         if (form.safety_card_no) body.safety_card_no = form.safety_card_no;
         if (form.safety_card_expiry) body.safety_card_expiry = form.safety_card_expiry;
         if (form.hire_date) body.hire_date = form.hire_date;
@@ -329,6 +402,45 @@ export function GuardsClient({
     setDrawerOpen(false);
     setNotice(editingId ? "已更新" : "已新增");
     await load();
+  }
+
+  // WP-STAFFNO：抽屜「員工編號」分區嘅「新增」——POST
+  // `/api/guards/:id/staff-numbers`。淨係編輯（`editingId` 有值）先用得
+  // 到（新增保安員嗰陣個 guard 仲未存在）；掛喺一個獨立 `type="button"`
+  // 撳掣（唔係 nested `<form>` submit——HTML 唔准 form 入面再有 form，
+  // 呢個分區本身喺編輯保安員嗰個大 `<form onSubmit={onSubmit}>` 入面）。
+  async function onAddStaffNumber() {
+    if (!editingId) return;
+    setStaffNumberSaving(true);
+    setStaffNumberError(null);
+    const scheme = staffNumberForm.scheme === "其他" ? staffNumberForm.schemeOther.trim().toUpperCase() : staffNumberForm.scheme;
+    const res = await apiPost<{ converted_former?: { number: string } | null }>(`/api/guards/${editingId}/staff-numbers`, {
+      scheme,
+      number: staffNumberForm.number,
+      valid_from: staffNumberForm.valid_from || undefined,
+      note: staffNumberForm.note || undefined,
+    });
+    setStaffNumberSaving(false);
+    if (!res.ok) {
+      setStaffNumberError(res.message);
+      return;
+    }
+    setStaffNumberForm({ ...emptyStaffNumberForm, scheme: staffNumberForm.scheme });
+    setNotice(
+      res.data.converted_former
+        ? `已新增 ${scheme} 號，舊嘅 ${res.data.converted_former.number} 已經轉做舊號`
+        : `已新增 ${scheme} 號`,
+    );
+    await loadStaffNumbers(editingId);
+    await load(); // 令列表 chips 即時反映新現用號
+    // 主表單頂部嘅「工號」／「工號（MW）」（舊欄，PATCH 支援舊寫法）
+    // 唔可以留低啱先起草嗰陣嘅舊值——如果新增咗 U／MG／MW 號，`guards.
+    // staff_no`／`staff_no_mw` 已經由後台 `syncLegacyStaffNoColumns()`
+    // 同步咗，主表單再唔重新 GET 就會停留喺舊值；到時撳「儲存」個 form
+    // 會帶住呢個舊值一齊送，`PATCH /api/guards/:id` 會以為「想將個號改返
+    // 舊嗰個」，同呢個 guard 自己頭先轉咗做 former 嗰行撞號（409）。
+    const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
+    if (detailRes.ok) fillFormFromRow(detailRes.data);
   }
 
   async function onVoid(id: string, reason: string) {
@@ -357,6 +469,39 @@ export function GuardsClient({
     if (!g.staff_no) return <Pill variant="warning">未有工號</Pill>;
     if (g.status === "active") return <Pill variant="success">在職</Pill>;
     return <Pill variant="neutral">{g.status}</Pill>;
+  }
+
+  // WP-STAFFNO：列表「工號」欄——由舊嘅單一 `staff_no` 文字改做逐個
+  // scheme 一個 chip（`U…`／`MP…`／`MG…`，淨係 current，additive
+  // `staff_numbers`，見 src/app/api/guards/route.ts）；冇任何現用號就
+  // 「—」。
+  function staffNumberChips(g: GuardRow) {
+    const numbers = g.staff_numbers ?? [];
+    if (numbers.length === 0) return <span className="text-zk-muted">—</span>;
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {numbers.map((n) => (
+          <Pill key={`${n.scheme}:${n.number}`} variant="neutral">
+            {n.number}
+          </Pill>
+        ))}
+      </div>
+    );
+  }
+
+  // WP-STAFFNO：乙類牌照過 70 歲失效——編輯抽屜「乙類到期」旁邊灰字
+  // 提示用（純前端顯示，真正「失效唔計」嘅邏輯喺後台
+  // `deriveSiaPermitExpiry()`，呢度淨係為咗即時 UI 提示，冇 `now` 參數
+  // 就用瀏覽器而家嗰刻，容許幾百毫秒嘅時區/時鐘噪音——呢個純粹係
+  // 提示文字，唔影響實際存落 DB 嘅值）。
+  function isAge70OrOlder(dobStr: string, now: Date = new Date()): boolean {
+    if (!dobStr) return false;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dobStr);
+    if (!m) return false;
+    const [, y, mo, d] = m.map(Number) as unknown as [number, number, number, number];
+    let age = now.getFullYear() - y;
+    if (now.getMonth() + 1 < mo || (now.getMonth() + 1 === mo && now.getDate() < d)) age -= 1;
+    return age >= 70;
   }
 
   // WP-PII（可接受但順手）：牌照（sia_permit_expiry）／平安卡
@@ -459,7 +604,7 @@ export function GuardsClient({
                   return (
                     <tr key={r.id} className={`${tableCls.rowHover} ${expired ? tableCls.warnRow : ""}`}>
                       <td className={`${tableCls.td} font-medium`}>{r.name_zh}</td>
-                      <td className={tableCls.td}>{fmt(r.staff_no)}</td>
+                      <td className={tableCls.td}>{staffNumberChips(r)}</td>
                       <td className={tableCls.td}>
                         {b ? (
                           <Pill variant="broker" color={brokerColor(b.code)}>
@@ -516,7 +661,7 @@ export function GuardsClient({
                     <span className="text-[13px] tabular-nums text-zk-text">{r.month_shift_count ?? "—"} 更</span>
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
-                    <span>{fmt(r.staff_no)}</span>
+                    {staffNumberChips(r)}
                     <span>{fmt(r.tel)}</span>
                     <span>{fmt(r.employment_type)}</span>
                     {b && (
@@ -609,14 +754,6 @@ export function GuardsClient({
               <div className="text-sm text-gray-400">—（冇「出街價」權限）</div>
             </Field>
           )}
-          <Field label="SIA 許可證到期日">
-            <input
-              type="date"
-              className={inputCls}
-              value={form.sia_permit_expiry}
-              onChange={(e) => setForm((f) => ({ ...f, sia_permit_expiry: e.target.value }))}
-            />
-          </Field>
           <Field label="Polo 尺碼">
             <input className={inputCls} value={form.polo_size} onChange={(e) => setForm((f) => ({ ...f, polo_size: e.target.value }))} />
           </Field>
@@ -633,15 +770,34 @@ export function GuardsClient({
                 <Field label="牌照號碼">
                   <input className={inputCls} value={form.sia_permit_no} onChange={(e) => setForm((f) => ({ ...f, sia_permit_no: e.target.value }))} />
                 </Field>
-                <Field label="牌照類別">
-                  <select className={selectCls} value={form.sia_permit_type} onChange={(e) => setForm((f) => ({ ...f, sia_permit_type: e.target.value }))}>
-                    <option value="">（未填）</option>
-                    {SIA_PERMIT_TYPES.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
+                {/* WP-STAFFNO：牌照類別而家係衍生顯示值（由甲／乙類到期日
+                    計，見 src/lib/guards/staff-numbers.ts
+                    deriveSiaPermitExpiry()）——唔再係可以自己揀嘅
+                    select，改甲／乙到期日、儲存之後重新 GET 先會見到
+                    新值。 */}
+                <Field label="牌照類別（自動計）">
+                  <div className={`${inputCls} flex items-center bg-zk-header text-zk-muted`}>{derivedSiaPermitType ?? "—"}</div>
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="甲類到期">
+                  <input
+                    type="date"
+                    className={inputCls}
+                    value={form.sia_permit_a_expiry}
+                    onChange={(e) => setForm((f) => ({ ...f, sia_permit_a_expiry: e.target.value }))}
+                  />
+                </Field>
+                <Field
+                  label="乙類到期"
+                  hint={isAge70OrOlder(form.date_of_birth) ? "已滿 70 歲，乙類失效" : undefined}
+                >
+                  <input
+                    type="date"
+                    className={inputCls}
+                    value={form.sia_permit_b_expiry}
+                    onChange={(e) => setForm((f) => ({ ...f, sia_permit_b_expiry: e.target.value }))}
+                  />
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -665,6 +821,133 @@ export function GuardsClient({
                   <input type="date" className={inputCls} value={form.leave_date} onChange={(e) => setForm((f) => ({ ...f, leave_date: e.target.value }))} />
                 </Field>
               </div>
+            </>
+          )}
+
+          {/* WP-STAFFNO：員工編號獨立表——新增保安員嗰陣（`!editingId`）
+              個 guard 仲未存在，`POST .../staff-numbers` 用唔到，同牌照/
+              PII/銀行分區一致做法，淨係編輯先顯示。雞頭（`isBroker`）
+              可以見到（`GET .../staff-numbers` 跟「自己安員:view」，出廠
+              有），但冇「新增編號」表單——「雞頭視角：chips 只讀，冇新增
+              掣」（老闆決定原文）。 */}
+          {editingId && (
+            <>
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">員工編號</h3>
+              {staffNumbers.filter((n) => n.status === "current").length === 0 ? (
+                <div className="text-sm text-zk-muted">未有現用編號</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {staffNumbers
+                    .filter((n) => n.status === "current")
+                    .map((n) => (
+                      <div key={n.id} className="flex flex-wrap items-center gap-2 rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+                        <Pill variant="neutral">{n.scheme}</Pill>
+                        <span className="font-medium text-zk-text">{n.number}</span>
+                        <Pill variant="success">現用</Pill>
+                        {n.valid_from && <span className="text-xs text-zk-muted">生效：{fmtDate(n.valid_from)}</span>}
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {staffNumbers.filter((n) => n.status === "former").length > 0 && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowFormerStaffNumbers((v) => !v)}
+                    className="text-xs text-zk-primary underline"
+                  >
+                    {showFormerStaffNumbers ? "隱藏舊號" : `顯示舊號 ${staffNumbers.filter((n) => n.status === "former").length} 個`}
+                  </button>
+                  {showFormerStaffNumbers && (
+                    <div className="mt-1.5 space-y-1.5">
+                      {staffNumbers
+                        .filter((n) => n.status === "former")
+                        .map((n) => (
+                          <div key={n.id} className="flex flex-wrap items-center gap-2 rounded-[7px] border border-zk-border bg-zk-header px-2.5 py-1.5 text-[13px] text-zk-muted">
+                            <Pill variant="neutral">{n.scheme}</Pill>
+                            <span>{n.number}</span>
+                            <Pill variant="neutral">舊號</Pill>
+                            {n.valid_to && <span className="text-xs">轉舊號：{fmtDate(n.valid_to)}</span>}
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!isBroker && (
+                <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
+                  <Banner kind="error" message={staffNumberError} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="種類（scheme）">
+                      <select
+                        className={selectCls}
+                        value={staffNumberForm.scheme}
+                        onChange={(e) => setStaffNumberForm((f) => ({ ...f, scheme: e.target.value }))}
+                      >
+                        {KNOWN_STAFF_NUMBER_SCHEMES.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                        <option value="其他">其他（自填）</option>
+                      </select>
+                    </Field>
+                    {staffNumberForm.scheme === "其他" ? (
+                      <Field label="自填 scheme">
+                        <input
+                          className={inputCls}
+                          value={staffNumberForm.schemeOther}
+                          onChange={(e) => setStaffNumberForm((f) => ({ ...f, schemeOther: e.target.value }))}
+                          placeholder="1-4 位英文字母"
+                        />
+                      </Field>
+                    ) : (
+                      <Field label="編號">
+                        <input
+                          className={inputCls}
+                          value={staffNumberForm.number}
+                          onChange={(e) => setStaffNumberForm((f) => ({ ...f, number: e.target.value }))}
+                          placeholder={`例：${staffNumberForm.scheme}00123`}
+                        />
+                      </Field>
+                    )}
+                  </div>
+                  {staffNumberForm.scheme === "其他" && (
+                    <div className="mt-2">
+                      <Field label="編號">
+                        <input
+                          className={inputCls}
+                          value={staffNumberForm.number}
+                          onChange={(e) => setStaffNumberForm((f) => ({ ...f, number: e.target.value }))}
+                        />
+                      </Field>
+                    </div>
+                  )}
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Field label="生效日期（選填）">
+                      <input
+                        type="date"
+                        className={inputCls}
+                        value={staffNumberForm.valid_from}
+                        onChange={(e) => setStaffNumberForm((f) => ({ ...f, valid_from: e.target.value }))}
+                      />
+                    </Field>
+                    <Field label="備註（選填）">
+                      <input className={inputCls} value={staffNumberForm.note} onChange={(e) => setStaffNumberForm((f) => ({ ...f, note: e.target.value }))} />
+                    </Field>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={staffNumberSaving || !staffNumberForm.number}
+                    onClick={onAddStaffNumber}
+                    className={`${btnSecondary} mt-2`}
+                  >
+                    {staffNumberSaving ? "新增緊…" : "新增編號"}
+                  </button>
+                </div>
+              )}
             </>
           )}
 

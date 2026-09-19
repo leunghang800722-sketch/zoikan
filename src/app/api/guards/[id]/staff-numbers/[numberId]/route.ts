@@ -1,0 +1,98 @@
+// WP-STAFFNO（老闆 2026-09-19 拍板）：PATCH 改一行員工編號——status／
+// valid_from／valid_to／note；打錯用 `number` 改（唔洗刪咗重加，同
+// POST 一樣行 unique／prefix 檢查）。冇硬刪（設計明文「冇硬刪」）。
+// 將 former 改返 current 要檢查 partial unique（同一個 guard 同一個
+// scheme 唔可以有兩行 current）。
+import { prisma } from "@/lib/db";
+import { requirePermission } from "@/lib/rbac/requirePermission";
+import { scopeGuardWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { toGuardStaffNumberDTO } from "@/lib/api/dto";
+import { ok, getClientIp, withApiError } from "@/lib/api/http";
+import { readJson } from "@/lib/api/query";
+import { parseBody } from "@/lib/api/validate";
+import { GuardStaffNumberUpdateSchema } from "@/lib/api/schemas";
+import { normalizeStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
+import { writeAudit } from "@/lib/audit";
+import { NotFound, Forbidden, Conflict, BadRequest } from "@/lib/api/errors";
+import type { AuthedSession } from "@/lib/rbac/requirePermission";
+import type { Module } from "@/lib/rbac/matrix";
+import type { GuardStaffNumber } from "@prisma/client";
+
+function guardModule(session: AuthedSession): Module {
+  return isBrokerRole(session) ? "自己安員" : "安員";
+}
+
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string; numberId: string }> }) {
+  return withApiError(async () => {
+    const session = await requirePermission(req, guardModule, "update");
+    // WP-STAFFNO：同 POST 一致——「雞頭 session 只可以讀自己啲人，唔可
+    // 以寫」係硬性規則，唔靠矩陣「自己安員:update」出廠 off 呢個可開關
+    // 嘅 cell（見 src/app/api/guards/[id]/staff-numbers/route.ts 同段
+    // 註解）。
+    if (isBrokerRole(session)) throw Forbidden("雞頭唔可以改員工編號");
+    const { id, numberId } = await params;
+    const guardWhere = scopeGuardWhere(session, { id });
+    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
+    if (!guard) throw NotFound();
+
+    const body = await readJson(req);
+    const parsed = parseBody(GuardStaffNumberUpdateSchema, body);
+
+    const { before, after } = await prisma.$transaction(async (tx) => {
+      const row = await tx.guardStaffNumber.findFirst({ where: { id: numberId, guardId: id } });
+      if (!row) throw NotFound("搵唔到呢個員工編號");
+
+      const data: Record<string, unknown> = {};
+
+      if (parsed.number !== undefined) {
+        const number = normalizeStaffNumber(parsed.number);
+        if (!number.startsWith(row.scheme)) {
+          throw BadRequest(`number 要以 scheme 開頭（${row.scheme}）：${number}`);
+        }
+        if (number !== row.number) {
+          const conflictingRow = await tx.guardStaffNumber.findUnique({ where: { number } });
+          if (conflictingRow) throw Conflict("呢個工號已經有人用緊", { guard_id: conflictingRow.guardId });
+          data.number = number;
+        }
+      }
+
+      if (parsed.status !== undefined && parsed.status !== row.status) {
+        if (parsed.status === "current") {
+          const existingCurrent = await tx.guardStaffNumber.findFirst({
+            where: { guardId: id, scheme: row.scheme, status: "current", NOT: { id: row.id } },
+          });
+          if (existingCurrent) {
+            throw Conflict(
+              `呢個保安員已經有一個 current 嘅 ${row.scheme} 號（${existingCurrent.number}）——要先將嗰個轉做 former 先可以將呢個轉返 current`,
+            );
+          }
+        }
+        data.status = parsed.status;
+      }
+      if (parsed.valid_from !== undefined) data.validFrom = parsed.valid_from;
+      if (parsed.valid_to !== undefined) data.validTo = parsed.valid_to;
+      if (parsed.note !== undefined) data.note = parsed.note;
+
+      if (Object.keys(data).length === 0) {
+        return { before: row as GuardStaffNumber, after: row as GuardStaffNumber };
+      }
+
+      const updated = await tx.guardStaffNumber.update({ where: { id: row.id }, data });
+      await syncLegacyStaffNoColumns(tx, id);
+      return { before: row as GuardStaffNumber, after: updated };
+    });
+
+    if (before !== after) {
+      await writeAudit({
+        actorUserId: session.userId,
+        tableName: "guard_staff_numbers",
+        rowId: numberId,
+        action: "update",
+        before,
+        after,
+        ip: getClientIp(req),
+      });
+    }
+    return ok(toGuardStaffNumberDTO(after));
+  });
+}

@@ -38,8 +38,9 @@ const HKID_RE = /^[A-Za-z]{1,2}[0-9]{6}\([0-9Aa]\)$/;
 const hkid = z.string().regex(HKID_RE, "身份證格式要係 A123456(7) 咁樣").optional();
 // 緊急聯絡人電話——同設計文件一致，香港電話 8 位數字。
 const tel8 = z.string().regex(/^\d{8}$/, "電話要係 8 位數字").optional();
-const SIA_PERMIT_TYPES = ["A", "B", "C", "D"] as const;
-const siaPermitType = z.enum(SIA_PERMIT_TYPES).optional();
+// WP-STAFFNO：`sia_permit_type` 改做衍生值（唔再接受 API 直接寫，見
+// GuardUpdateSchema 註解），之前呢度嘅 `SIA_PERMIT_TYPES`／
+// `siaPermitType` zod enum 冇 call site 用喇，成組刪走。
 const BLACKLIST_CHECK_RESULTS = ["clear", "flagged", "pending"] as const;
 const blacklistCheckResult = z.enum(BLACKLIST_CHECK_RESULTS).optional();
 const uuid = z.string().min(1);
@@ -135,7 +136,6 @@ export const GuardCreateSchema = z
     default_broker_id: uuid.optional(),
     employment_type: enumOf(EmploymentType),
     monthly_salary: money,
-    sia_permit_expiry: dateOnly.optional(),
     polo_size: z.string().optional(),
   })
   .strict();
@@ -148,7 +148,15 @@ export const GuardUpdateSchema = z
     tel: z.string().optional(),
     employment_type: enumOf(EmploymentType).optional(),
     monthly_salary: money,
-    sia_permit_expiry: dateOnly.optional(),
+    // WP-STAFFNO（老闆 2026-09-19 拍板）：甲／乙類到期日分開存，`sia_
+    // permit_expiry`／`sia_permit_type` 改做衍生值——API 唔再接受直接
+    // 寫呢兩個（見 schemas.ts 之前呢度有 `sia_permit_expiry`／
+    // `sia_permit_type`，而家淨係得返 a／b；route 層 `guards/[id]/
+    // route.ts` 額外會喺 parseBody() 之前檢查 raw body 有冇帶呢兩個
+    // 舊 key，帶咗就 400 並提示用 a／b 欄——好過淨係靠 `.strict()`
+    // 嘅「未知欄位」generic 錯誤訊息）。
+    sia_permit_a_expiry: dateOnly.optional(),
+    sia_permit_b_expiry: dateOnly.optional(),
     polo_size: z.string().optional(),
     // WP-PII（老闆 2026-09-17 拍板）：淨係 PATCH 接受呢批新欄——新增
     // （POST）刻意唔開放，保安員 PII/銀行資料一律建好基本資料之後先
@@ -160,7 +168,6 @@ export const GuardUpdateSchema = z
     emergency_contact_name: z.string().optional(),
     emergency_contact_tel: tel8,
     sia_permit_no: z.string().optional(),
-    sia_permit_type: siaPermitType,
     safety_card_no: z.string().optional(),
     safety_card_expiry: dateOnly.optional(),
     hire_date: dateOnly.optional(),
@@ -170,6 +177,33 @@ export const GuardUpdateSchema = z
     bank_payee_name: z.string().optional(),
     blacklist_check_result: blacklistCheckResult,
     blacklist_check_date: dateOnly.optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// WP-STAFFNO：員工編號獨立表（方案 B）——`scheme` 唔用 Prisma enum，呢度
+// 都刻意唔寫死 enum，用 regex（1-4 位大寫英文字母；「大寫」由
+// src/lib/guards/staff-numbers.ts normalizeStaffNumber() 喺寫入前正規化，
+// 呢度容許細楷輸入，等前端唔使自己轉）。
+const staffNumberScheme = z.string().regex(/^[A-Za-z]{1,4}$/, "scheme 要係 1-4 位英文字母");
+const staffNumberStatus = z.enum(["current", "former"]);
+export const GuardStaffNumberCreateSchema = z
+  .object({
+    scheme: staffNumberScheme,
+    number: z.string().min(1),
+    valid_from: dateOnly.optional(),
+    note: z.string().optional(),
+  })
+  .strict();
+export const GuardStaffNumberUpdateSchema = z
+  .object({
+    status: staffNumberStatus.optional(),
+    valid_from: dateOnly.optional(),
+    valid_to: dateOnly.optional(),
+    note: z.string().optional(),
+    // 打錯用呢個改，唔洗刪咗重加——同樣行 unique/prefix 檢查（見
+    // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
+    number: z.string().min(1).optional(),
   })
   .strict();
 

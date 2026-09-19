@@ -28,6 +28,12 @@ const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTim
 // response 結構上准出現邊啲欄」，field-level gate（安員個人資料/安員
 // 銀行資料 view 權限）喺呢個白名單之上再由 applyFieldGroupGate() 做
 // （見 src/lib/api/field-groups.ts）。
+// WP-STAFFNO（老闆 2026-09-19 拍板）：`siaPermitAExpiry`／`siaPermitBExpiry`
+// 甲／乙類分開存（跟現有「安員」module，同 `siaPermitNo`/`siaPermitType`
+// 一致層級，唔屬於 PII 組）；`staffNumbers` 係 additive 衍生欄（淨係
+// current，`[{scheme,number,status}]`，見 src/app/api/guards/route.ts
+// `loadCurrentStaffNumbers()`）——工號本身雞頭一直見到，所以
+// `GUARD_BROKER_FIELDS`（broker-dto.ts）都加埋。
 const GUARD_FIELDS = [
   "id",
   "staffNo",
@@ -53,6 +59,8 @@ const GUARD_FIELDS = [
   "emergencyContactTel",
   "siaPermitNo",
   "siaPermitType",
+  "siaPermitAExpiry",
+  "siaPermitBExpiry",
   "safetyCardNo",
   "safetyCardExpiry",
   "hireDate",
@@ -62,6 +70,7 @@ const GUARD_FIELDS = [
   "bankPayeeName",
   "blacklistCheckResult",
   "blacklistCheckDate",
+  "staffNumbers",
 ] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "createdAt", "updatedAt", "createdBy"] as const;
@@ -148,6 +157,10 @@ const GUARD_LIST_FIELDS = GUARD_FIELDS.filter(
   (f) => !(GUARD_LIST_DETAIL_ONLY_FIELDS as readonly string[]).includes(f),
 ) as unknown as readonly (typeof GUARD_FIELDS)[number][];
 export const toGuardListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LIST_FIELDS);
+// WP-STAFFNO：`GET/POST/PATCH /api/guards/:id/staff-numbers*` 白名單——
+// 工號本身（唔係身份證／銀行）跟「安員」module，冇獨立 field-group。
+const GUARD_STAFF_NUMBER_FIELDS = ["id", "guardId", "scheme", "number", "status", "validFrom", "validTo", "note", "source", "createdAt", "updatedAt", "createdBy"] as const;
+export const toGuardStaffNumberDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_STAFF_NUMBER_FIELDS);
 export const toRateCardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, RATE_CARD_FIELDS);
 export const toShiftRecordFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_FIELDS);
 // 2026-09-13：列表預設唔回傳 provenance（原檔追溯 JSON，每條 ~1.5KB，7 月一個盤三頁共 2MB+，
