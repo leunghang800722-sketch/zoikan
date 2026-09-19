@@ -32,6 +32,7 @@ import {
   toQuotaDTO,
   toReferralFeeRateDTO,
   toFeedbackReportDTO,
+  toGuardStaffNumberDTO,
 } from "./dto";
 import type { Dto } from "./serialize";
 import type { AuditAction } from "../audit";
@@ -61,6 +62,10 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   // （見下面），刻意原樣存 route 自己手砌嘅細個安全 payload（唔係完整
   // row），同 `ai_chat` 一致做法。
   feedback_reports: (r) => toFeedbackReportDTO(r),
+  // WP-STAFFNO：guard_staff_numbers（員工編號獨立表）——create/update
+  // action（POST/PATCH staff-numbers）一樣經呢個 mapping 存完整白名單
+  // DTO，唔會跌落「未知 table_name → 淨係存 {id}」嗰個 catch-all。
+  guard_staff_numbers: (r) => toGuardStaffNumberDTO(r),
 };
 
 /** 呢啲 action 代表「呢個值本身係一個完整資源 row」——先會行 DTO

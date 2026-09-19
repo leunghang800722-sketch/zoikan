@@ -50,6 +50,16 @@ export function isBrokerRole(session: AuthedSession): boolean {
   return session.baseRole === "雞頭";
 }
 
+// WP-STAFFNO（Opus 驗收 M2b）：「內部角色」＝老闆／主管／會計——409
+// response 帶 `guard_id`（例如工號撞號）呢類結構化 detail 淨係俾內部
+// 角色見到，雞頭（＋理論上嘅「安員」自助角色）一律唔畀，唔靠「唔係雞頭
+// 就畀」（`!isBrokerRole()`）咁鬆——用白名單（明列三個內部角色）先係
+// default-deny。
+const INTERNAL_ROLES = ["老闆", "主管", "會計"] as const;
+export function isInternalRole(session: AuthedSession): boolean {
+  return (INTERNAL_ROLES as readonly string[]).includes(session.baseRole);
+}
+
 export function requireOwnBrokerId(session: AuthedSession): string {
   if (!session.brokerId) throw new Error("雞頭角色 session 冇 broker_id——資料有問題，拒絕繼續");
   return session.brokerId;

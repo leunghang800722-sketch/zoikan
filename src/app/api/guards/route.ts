@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole } from "@/lib/broker-isolation";
+import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toGuardFullDTO, toGuardListDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate, applyFieldGroupGateToList } from "@/lib/api/field-groups";
@@ -13,9 +13,20 @@ import { GuardCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { maskHkidForList } from "@/lib/api/guard-pii";
+import {
+  toStaffNumberChips,
+  assertNoLegacySiaPermitWrite,
+  assertBrokerNoLegacyStaffNoWrite,
+  applyLegacyStaffNoPatch,
+  writeStaffNumberAudits,
+  deriveSiaPermitExpiry,
+  canOverrideDerivedSiaPermit,
+  isSiaPermitBLapsedByAge,
+  type StaffNumberChip,
+} from "@/lib/guards/staff-numbers";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, Guard } from "@prisma/client";
 
 // C3：雞頭睇/管自己安員用「自己安員」module（§6.2「自己安員名冊管理」），
 // 內部角色（老闆/主管/會計）睇全公司安員用「安員」module——同一個
@@ -58,6 +69,38 @@ async function loadMonthShiftCounts(guardIds: string[], month: string): Promise<
   return Object.fromEntries(counts.map((c) => [c.guardId, c._count._all]));
 }
 
+// WP-STAFFNO（老闆 2026-09-19 拍板）：additive `staff_numbers` 欄——淨係
+// current（chips 用），冇 query 參數開關（同 `with_month_shifts` 唔同，
+// 呢個一律計，因為列表「工號」欄改晒做 chips，前端一定要呢批資料先畫
+// 得出嚟）。內部角色／雞頭白名單都加咗（`GUARD_FIELDS`／
+// `GUARD_BROKER_FIELDS`，見 src/lib/api/dto/index.ts、
+// src/lib/broker-dto.ts）——「工號本身雞頭一直見到」。
+async function loadCurrentStaffNumbers(guardIds: string[]): Promise<Record<string, StaffNumberChip[]>> {
+  if (guardIds.length === 0) return {};
+  const rows = await prisma.guardStaffNumber.findMany({ where: { guardId: { in: guardIds }, status: "current" } });
+  const byGuard: Record<string, typeof rows> = {};
+  for (const r of rows) (byGuard[r.guardId] ??= []).push(r);
+  return Object.fromEntries(Object.entries(byGuard).map(([guardId, rs]) => [guardId, toStaffNumberChips(rs)]));
+}
+
+// S7（Opus 驗收）：`?q=`——姓名／英文名／電話／任何工號（**current 同
+// former 都搵**，唔淨係現用）。舊寫法（`matchesSearch()`，前端純本地
+// filter）搵唔到 former 號，因為列表 additive `staff_numbers` 淨係得
+// current；而家改喺 server 用 `guard_staff_numbers`（唔限 status）搵，
+// 揾到嘅 guardId 一齊 OR 落主 query（同雞頭 `scopeGuardWhere()` 隔離冇
+// 衝突——喺呢個之後先再過一次 scope）。回傳埋 `formerHitGuardIds`——
+// 邊個 guard 係「靠一個 former 號先搵到」，俾前端標「舊號命中」。
+async function findNumberSearchMatches(q: string): Promise<{ guardIds: string[]; formerHitGuardIds: Set<string> }> {
+  const rows = await prisma.guardStaffNumber.findMany({
+    where: { number: { contains: q, mode: "insensitive" } },
+    select: { guardId: true, status: true },
+  });
+  return {
+    guardIds: [...new Set(rows.map((r) => r.guardId))],
+    formerHitGuardIds: new Set(rows.filter((r) => r.status === "former").map((r) => r.guardId)),
+  };
+}
+
 export async function GET(req: Request) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "view");
@@ -72,16 +115,74 @@ export async function GET(req: Request) {
     if (expiringWithinDaysParam !== null && !NON_NEGATIVE_INT_RE.test(expiringWithinDaysParam)) {
       throw BadRequest("expiring_within_days 格式唔啱（要非負整數）");
     }
+    // S7：`?q=`——姓名／電話／任何 current＋former 工號，見
+    // `findNumberSearchMatches()` 頂註解。
+    const qParam = url.searchParams.get("q")?.trim() || null;
     let where: Prisma.GuardWhereInput = includeInactive ? {} : { status: "active" };
-    if (expiringWithinDaysParam !== null) {
-      const cutoff = new Date(Date.now() + Number(expiringWithinDaysParam) * 86_400_000);
-      where = { ...where, OR: [{ siaPermitExpiry: { lte: cutoff } }, { safetyCardExpiry: { lte: cutoff } }] };
+    let formerHitGuardIds = new Set<string>();
+    if (qParam) {
+      const numberMatches = await findNumberSearchMatches(qParam);
+      formerHitGuardIds = numberMatches.formerHitGuardIds;
+      where = {
+        ...where,
+        OR: [
+          { nameZh: { contains: qParam, mode: "insensitive" } },
+          { nameEn: { contains: qParam, mode: "insensitive" } },
+          { tel: { contains: qParam } },
+          ...(numberMatches.guardIds.length > 0 ? [{ id: { in: numberMatches.guardIds } }] : []),
+        ],
+      };
     }
     where = scopeGuardWhere(session, where);
-    const [rows, total] = await Promise.all([
-      prisma.guard.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
-      prisma.guard.count({ where }),
-    ]);
+
+    // S5（Opus 驗收修復）：`sia_permit_expiry`／`sia_permit_type` 唔再信
+    // DB 欄，讀取時一律用 `deriveSiaPermitExpiry()` 現算（DB 欄寫入時仍
+    // 會更新，`ai.guards` view 用緊，但寫入之後「時間流逝」引致嘅陳舊
+    // ——例如生日過咗令乙類滿 70 歲失效——冇再寫入就唔會自動反映，要讀
+    // 嗰下現算先啱）。`expiring_within_days` 篩選一齊改用現算值——SQL
+    // WHERE 表達唔到「乙類滿 70 歲失效」呢類要睇 DOB＋今日先計得到嘅條
+    // 件，改做攞返呢個 session 可見嘅全部 row（唔限 skip/take）→ 逐個
+    // 現算 → 篩 → 先分頁（`total`／`skip`/`take` 一律用篩選之後嘅陣列，
+    // 唔可以用 DB `count()`，嗰個係「篩選前」嘅數）。目前規模（265 行）
+    // 呢種「後篩」可接受，見設計文件。
+    //
+    // 必修 1(b)（Opus 驗收第二輪）：a／b 兩個都 null 嗰陣，`deriveSiaPermit
+    // Expiry()` 一定計出 {null,null}——唔可以用嚟覆蓋 DB 原有嘅
+    // `sia_permit_expiry`／`sia_permit_type`（migration backfill 唔到、
+    // 或者人手都未補嘅舊資料，見 migration.sql「(1)」大註解），一律保留
+    // DB 原值；淨係 a／b 其中一個有值先用現算值覆蓋，同
+    // `src/app/api/guards/[id]/route.ts withDerivedGuard()` 一致做法
+    // （必修 1／4，Opus 驗收第三輪：而家改用共用嘅
+    // `canOverrideDerivedSiaPermit()`，並且加埋 `siaPermitBLapsedByAge`
+    // 衍生 flag——乙類因為滿 70 歲失效嗰陣，列表唔應該顯示成「未填」，
+    // 見 src/lib/guards/staff-numbers.ts 兩個函數頂註解）。
+    const withDerived = (row: Guard) => {
+      const siaPermitBLapsedByAge = isSiaPermitBLapsedByAge(row);
+      if (!canOverrideDerivedSiaPermit({ siaPermitAExpiry: row.siaPermitAExpiry, siaPermitBExpiry: row.siaPermitBExpiry })) {
+        return { ...row, siaPermitBLapsedByAge };
+      }
+      return { ...row, ...deriveSiaPermitExpiry(row), siaPermitBLapsedByAge };
+    };
+    let rows: Array<ReturnType<typeof withDerived>>;
+    let total: number;
+    if (expiringWithinDaysParam !== null) {
+      const cutoff = new Date(Date.now() + Number(expiringWithinDaysParam) * 86_400_000);
+      const all = await prisma.guard.findMany({ where, orderBy: { createdAt: "asc" } });
+      const filtered = all.map(withDerived).filter(
+        (r) =>
+          (r.siaPermitExpiry != null && r.siaPermitExpiry.getTime() <= cutoff.getTime()) ||
+          (r.safetyCardExpiry != null && r.safetyCardExpiry.getTime() <= cutoff.getTime()),
+      );
+      total = filtered.length;
+      rows = filtered.slice(skip, skip + take);
+    } else {
+      const [dbRows, dbTotal] = await Promise.all([
+        prisma.guard.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
+        prisma.guard.count({ where }),
+      ]);
+      rows = dbRows.map(withDerived);
+      total = dbTotal;
+    }
     // S4（Opus 驗收修復）：monthShiftCount 而家喺 DTO／field-group gate
     // **之前**就 merge 落 raw `rows`（`GUARD_FIELDS`／`GUARD_BROKER_FIELDS`
     // 白名單已經加咗 `monthShiftCount`，見 src/lib/api/dto/index.ts、
@@ -93,9 +194,15 @@ export async function GET(req: Request) {
     const monthShiftCounts = withMonthShiftsParam
       ? await loadMonthShiftCounts(rows.map((r) => r.id), withMonthShiftsParam)
       : null;
-    const rowsWithCount = monthShiftCounts
-      ? rows.map((r) => ({ ...r, monthShiftCount: monthShiftCounts[r.id] ?? 0 }))
-      : rows;
+    const staffNumbersByGuard = await loadCurrentStaffNumbers(rows.map((r) => r.id));
+    const rowsWithCount = rows.map((r) => ({
+      ...r,
+      ...(monthShiftCounts ? { monthShiftCount: monthShiftCounts[r.id] ?? 0 } : {}),
+      staffNumbers: staffNumbersByGuard[r.id] ?? [],
+      // S7：淨係有 `q` 先加呢粒 key（冇搜尋就唔需要，同 `monthShiftCount`
+      // 一致嘅「唯讀 additive 參數」口徑）。
+      ...(qParam ? { formerNumberHit: formerHitGuardIds.has(r.id) } : {}),
+    }));
     if (isBrokerRole(session)) {
       const list = scrubForBrokerSession(
         session,
@@ -121,12 +228,69 @@ export async function POST(req: Request) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "create");
     const body = await readJson(req);
+    assertNoLegacySiaPermitWrite(body);
+    // M2a（Opus 驗收修復）：雞頭帶 staff_no／staff_no_mw 一律 403（硬性，
+    // 唔靠矩陣個 cell），見 assertBrokerNoLegacyStaffNoWrite() 頂註解。
+    assertBrokerNoLegacyStaffNoWrite(isBrokerRole(session), body);
     const parsed = parseBody(GuardCreateSchema, body);
-    const data = snakeToCamelShallow(parsed) as Prisma.GuardUncheckedCreateInput;
+    // WP-STAFFNO：`staff_no`／`staff_no_mw` 而家係由 `guard_staff_
+    // numbers` 新表 sync 返嚟嘅值——建立嗰陣如果有帶，一樣要行
+    // `applyLegacyStaffNoPatch()` 起返對應嘅新表行，唔係就呢個 guard
+    // 一開始個 staff_no 就冇對應嘅 current 行，第一次有人幫佢加／改第二
+    // 個工號（觸發 sync）就會被靜靜哋抹走（見 src/lib/guards/
+    // staff-numbers.ts syncLegacyStaffNoColumns() 大註解）。
+    const { staff_no: staffNoLegacy, staff_no_mw: staffNoMwLegacy, ...rest } = parsed as typeof parsed & {
+      staff_no?: string;
+      staff_no_mw?: string;
+    };
+    const data = snakeToCamelShallow(rest) as Prisma.GuardUncheckedCreateInput;
     // 雞頭建安員：強制掛喺自己個 broker 底下（唔准幫其他雞頭/自己揀第二個 broker）
     if (isBrokerRole(session)) data.defaultBrokerId = session.brokerId;
-    const created = await prisma.guard.create({ data: { ...data, createdBy: session.userId } });
+
+    // 必修 1（Opus 驗收第三輪，「POST 同理檢查」）：`GuardCreateSchema`
+    // 現時未開放 `sia_permit_a_expiry`／`sia_permit_b_expiry`／
+    // `date_of_birth`（WP-PII 呢批新欄一律 PATCH-only，見 schemas.ts
+    // GuardUpdateSchema 頂註解），所以呢一刻 `data` 實際上唔會帶呢三個
+    // key，`DERIVED_INPUT_KEYS.some()` 恆常 false，以下呢段係
+    // defense-in-depth（同 PATCH 寫入層共用同一個安全閥函數，日後
+    // GuardCreateSchema 一旦開放呢批欄都唔會漏咗呢層）——建立呢一刻冇
+    // 「之前」，`hadValueBefore` 一律唔傳（default false，同
+    // `canOverrideDerivedSiaPermit()` 嘅「a／b 都 null 就唔覆蓋」一致：
+    // 冇嘢好清，都冇嘢好寫）。
+    const createDerivedInputKeys = ["siaPermitAExpiry", "siaPermitBExpiry", "dateOfBirth"] as const;
+    if (createDerivedInputKeys.some((k) => k in data)) {
+      const createDerivedInput = {
+        siaPermitAExpiry: ((data as Record<string, unknown>).siaPermitAExpiry as Date | null | undefined) ?? null,
+        siaPermitBExpiry: ((data as Record<string, unknown>).siaPermitBExpiry as Date | null | undefined) ?? null,
+        dateOfBirth: ((data as Record<string, unknown>).dateOfBirth as Date | null | undefined) ?? null,
+      };
+      if (canOverrideDerivedSiaPermit({ siaPermitAExpiry: createDerivedInput.siaPermitAExpiry, siaPermitBExpiry: createDerivedInput.siaPermitBExpiry })) {
+        const derived = deriveSiaPermitExpiry(createDerivedInput);
+        (data as Record<string, unknown>).siaPermitExpiry = derived.siaPermitExpiry;
+        (data as Record<string, unknown>).siaPermitType = derived.siaPermitType;
+      }
+    }
+
+    const { created, legacyChanges } = await prisma.$transaction(async (tx) => {
+      const createdGuard = await tx.guard.create({ data: { ...data, createdBy: session.userId } });
+      const legacyResult =
+        staffNoLegacy || staffNoMwLegacy
+          ? await applyLegacyStaffNoPatch(tx, {
+              guardId: createdGuard.id,
+              staffNo: staffNoLegacy,
+              staffNoMw: staffNoMwLegacy,
+              createdBy: session.userId,
+              revealConflictGuardId: isInternalRole(session),
+            })
+          : { changes: [] };
+      const finalGuard = legacyResult.changes.length > 0 ? await tx.guard.findUniqueOrThrow({ where: { id: createdGuard.id } }) : createdGuard;
+      return { created: finalGuard, legacyChanges: legacyResult.changes };
+    });
+
     await writeAudit({ actorUserId: session.userId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
+    if (legacyChanges.length > 0) {
+      await writeStaffNumberAudits(session.userId, legacyChanges, getClientIp(req));
+    }
     if (isBrokerRole(session)) return ok(scrubForBrokerSession(session, toBrokerGuardDTO(created)), 201);
     return ok(await applyFieldGroupGate(session, "guards", toGuardFullDTO(created)), 201);
   });

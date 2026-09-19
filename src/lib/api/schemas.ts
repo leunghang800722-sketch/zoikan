@@ -24,12 +24,34 @@ import {
   SiteStatus,
   SpecialItemKind,
 } from "@prisma/client";
+import { normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
 
 function enumOf(obj: Record<string, string>) {
   return z.enum(Object.values(obj) as [string, ...string[]]);
 }
 
 const dateOnly = z.coerce.date(); // 接受 "2026-08-01" 或完整 ISO datetime，一律轉做 Date object
+// 附帶修復（Opus 驗收）：`dateOnly`（`z.coerce.date()`）收 `null` 會俾
+// `z.coerce.date()` 將 `null` 當 `new Date(null)`＝1970-01-01，唔會 400，
+// 靜靜哋錯存一個假日期——牌照／平安卡／入離職／甲乙到期呢批欄用戶要
+// 「清空已填日期」呢個操作冇得做（想刪只可以打入另一個日期，唔可以留
+// 空）。`nullableDateOnly` 明確容許 `null`（＝清空，落 Prisma 會存
+// `null`）並拒絕真係傳漏／傳空字串一類會令 `z.coerce.date()` 出
+// Invalid Date 嘅值；其他 route 嘅 `dateOnly` 行為唔變（`hire_date` 等
+// 5 個欄先改用呢個，見 GuardUpdateSchema）。
+// 注意：`z.union([...])` 逐個 branch 順序試，第一個成功就用嗰個——
+// `z.coerce.date()` 擺前面嘅話，`null` 會俾 `new Date(null)`（＝
+// 1970-01-01，唔會拋錯）静静哋「成功」咗，永遠去唔到 `z.null()` 嗰
+// branch，等於冇修到（呢個正正係原本 bug 嘅成因）。`z.null()` 一定要
+// 擺第一，等 `null` 輸入優先俾佢啱啱接住。
+const nullableDateOnly = z.union([z.null(), z.coerce.date()]).optional();
+// 應修 2（Opus 驗收第二輪）：UI「編輯員工編號」要清得走 `note`（唔止
+// 日期），同 `nullableDateOnly` 一致精神——`z.string().optional()` 唔收
+// `null`，用戶打空咗個備註送 `null` 想清返，會俾 `.strict()` 400（唔係
+// 「未知欄位」，係值型別唔啱）。淨係 `guard_staff_numbers.note` 呢種
+// DB nullable 嘅文字欄用呢個，唔係成個檔案通改（例如 `sia_permit_no`
+// 呢類跟現有「安員」module 嘅欄暫時唔喺呢輪修復範圍）。
+const nullableString = z.union([z.null(), z.string()]).optional();
 const money = z.union([z.number(), z.string()]).optional();
 
 // WP-PII：身份證格式寬鬆核對（1-2 個英文字母 + 6 位數字 + 括住 1 位
@@ -38,8 +60,9 @@ const HKID_RE = /^[A-Za-z]{1,2}[0-9]{6}\([0-9Aa]\)$/;
 const hkid = z.string().regex(HKID_RE, "身份證格式要係 A123456(7) 咁樣").optional();
 // 緊急聯絡人電話——同設計文件一致，香港電話 8 位數字。
 const tel8 = z.string().regex(/^\d{8}$/, "電話要係 8 位數字").optional();
-const SIA_PERMIT_TYPES = ["A", "B", "C", "D"] as const;
-const siaPermitType = z.enum(SIA_PERMIT_TYPES).optional();
+// WP-STAFFNO：`sia_permit_type` 改做衍生值（唔再接受 API 直接寫，見
+// GuardUpdateSchema 註解），之前呢度嘅 `SIA_PERMIT_TYPES`／
+// `siaPermitType` zod enum 冇 call site 用喇，成組刪走。
 const BLACKLIST_CHECK_RESULTS = ["clear", "flagged", "pending"] as const;
 const blacklistCheckResult = z.enum(BLACKLIST_CHECK_RESULTS).optional();
 const uuid = z.string().min(1);
@@ -135,7 +158,6 @@ export const GuardCreateSchema = z
     default_broker_id: uuid.optional(),
     employment_type: enumOf(EmploymentType),
     monthly_salary: money,
-    sia_permit_expiry: dateOnly.optional(),
     polo_size: z.string().optional(),
   })
   .strict();
@@ -148,28 +170,94 @@ export const GuardUpdateSchema = z
     tel: z.string().optional(),
     employment_type: enumOf(EmploymentType).optional(),
     monthly_salary: money,
-    sia_permit_expiry: dateOnly.optional(),
+    // WP-STAFFNO（老闆 2026-09-19 拍板）：甲／乙類到期日分開存，`sia_
+    // permit_expiry`／`sia_permit_type` 改做衍生值——API 唔再接受直接
+    // 寫呢兩個（見 schemas.ts 之前呢度有 `sia_permit_expiry`／
+    // `sia_permit_type`，而家淨係得返 a／b；route 層 `guards/[id]/
+    // route.ts` 額外會喺 parseBody() 之前檢查 raw body 有冇帶呢兩個
+    // 舊 key，帶咗就 400 並提示用 a／b 欄——好過淨係靠 `.strict()`
+    // 嘅「未知欄位」generic 錯誤訊息）。
+    // 附帶修復：牌照甲／乙類到期日改用 `nullableDateOnly`——用戶可以
+    // PATCH `null` 清空已填嘅到期日（例如打錯咗想清返、或者張牌照仲未
+    // 有到期日資料）。
+    sia_permit_a_expiry: nullableDateOnly,
+    sia_permit_b_expiry: nullableDateOnly,
     polo_size: z.string().optional(),
     // WP-PII（老闆 2026-09-17 拍板）：淨係 PATCH 接受呢批新欄——新增
     // （POST）刻意唔開放，保安員 PII/銀行資料一律建好基本資料之後先
     // 用編輯抽屜逐項補（field-group gate 喺 assertFieldGroupWritable()
     // 做，見 src/app/api/guards/[id]/route.ts）。
     hkid,
-    date_of_birth: dateOnly.optional(),
+    // 應修 2（Opus 驗收第二輪）：`date_of_birth` DB 欄 nullable，同
+    // `sia_permit_a/b_expiry`／`safety_card_expiry`／`hire_date`／
+    // `leave_date` 一致理由——改用 `nullableDateOnly`，等用戶 PATCH
+    // `null` 真係清得走已填嘅出生日期（打錯咗想清返）。
+    date_of_birth: nullableDateOnly,
     address: z.string().optional(),
     emergency_contact_name: z.string().optional(),
     emergency_contact_tel: tel8,
     sia_permit_no: z.string().optional(),
-    sia_permit_type: siaPermitType,
     safety_card_no: z.string().optional(),
-    safety_card_expiry: dateOnly.optional(),
-    hire_date: dateOnly.optional(),
-    leave_date: dateOnly.optional(),
+    // 附帶修復：平安卡到期／入職／離職日期一樣改用 `nullableDateOnly`
+    // （牌照／平安卡／入離職／甲乙到期呢批，見上面 sia_permit_a/b_expiry
+    // 同一段理由）。
+    safety_card_expiry: nullableDateOnly,
+    hire_date: nullableDateOnly,
+    leave_date: nullableDateOnly,
     bank_name: z.string().optional(),
     bank_account_no: z.string().optional(),
     bank_payee_name: z.string().optional(),
     blacklist_check_result: blacklistCheckResult,
-    blacklist_check_date: dateOnly.optional(),
+    // 應修 2：同 `date_of_birth` 一致，DB 欄 nullable，改用
+    // `nullableDateOnly` 等 `null` 清得走。
+    blacklist_check_date: nullableDateOnly,
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// WP-STAFFNO：員工編號獨立表（方案 B）——`scheme` 唔用 Prisma enum，呢度
+// 都刻意唔寫死 enum，用 regex（1-4 位大寫英文字母；「大寫」由
+// src/lib/guards/staff-numbers.ts normalizeStaffNumber() 喺寫入前正規化，
+// 呢度容許細楷輸入，等前端唔使自己轉）。
+const staffNumberScheme = z.string().regex(/^[A-Za-z]{1,4}$/, "scheme 要係 1-4 位英文字母");
+const staffNumberStatus = z.enum(["current", "former"]);
+// S2（Opus 驗收）：`number` 喺 zod 層一樣做正規化（trim＋大寫＋去晒空
+// 白，`normalizeStaffNumber()`）＋格式 regex（`STAFF_NUMBER_NUMBER_RE`），
+// 兩個 route（POST .../staff-numbers、PATCH .../staff-numbers/:numberId）
+// 共用同一份規則，唔使各自抄一次；`upsertCurrentStaffNumber()`
+// （src/lib/guards/staff-numbers.ts）入面仲有一層一樣嘅檢查做
+// defense-in-depth（例如舊寫法 `applyLegacyStaffNoPatch()` 唔經呢個 zod
+// schema，都要靠嗰層擋）。
+const staffNumberValue = z
+  .string()
+  .min(1)
+  .transform((v) => normalizeStaffNumber(v))
+  .refine((v) => STAFF_NUMBER_NUMBER_RE.test(v), {
+    message: `number 格式唔啱（正規化後要係 1-4 位大寫英文字母 + 1-16 位英文字母／數字／連字符，總長 ≤20）`,
+  });
+export const GuardStaffNumberCreateSchema = z
+  .object({
+    scheme: staffNumberScheme,
+    number: staffNumberValue,
+    // 應修 2（Opus 驗收第二輪）：`valid_from`（DB 欄 nullable）跟
+    // GuardUpdateSchema 嗰批日期欄一致改用 `nullableDateOnly`。
+    valid_from: nullableDateOnly,
+    note: nullableString,
+  })
+  .strict();
+export const GuardStaffNumberUpdateSchema = z
+  .object({
+    status: staffNumberStatus.optional(),
+    // 應修 2：`valid_from`／`valid_to` 一樣改用 `nullableDateOnly`——
+    // `null`＝清空，former 行清 `valid_to` 一樣容許（呢個 route 本身冇
+    // 額外「former 一定要有 valid_to」嘅限制，見
+    // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
+    valid_from: nullableDateOnly,
+    valid_to: nullableDateOnly,
+    note: nullableString,
+    // 打錯用呢個改，唔洗刪咗重加——同樣行 unique/prefix 檢查（見
+    // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
+    number: staffNumberValue.optional(),
   })
   .strict();
 

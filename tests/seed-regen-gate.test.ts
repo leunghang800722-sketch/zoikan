@@ -84,6 +84,40 @@ describeOrSkip("Gate：seed + regen 對真實 7 月數據（開發庫）", () =>
     expect(diffCount).toBe(0);
   });
 
+  // WP-STAFFNO（老闆 2026-09-19 拍板）：migration 資料搬遷（見
+  // prisma/migrations/20260919064514_wp_staffno）淨係喺「migration 執行
+  // 嗰一刻 guards 表已經有嘅行」先搬——`db:reset` 由空表重新 migrate，
+  // backfill INSERT 嗰陣一定搬 0 行，真正令新表有數嘅係 `seedGuards()`
+  // 建咗 guard 之後即刻起對應行（見 scripts/seed/index.ts
+  // seedStaffNumberFromLegacyColumn()，同一套 scheme 推斷規則）。呢度
+  // 直接查開發庫（已經跑完上面嗰個 `npm run db:seed`），斷言「每個有
+  // staff_no／staff_no_mw 嘅 guard 都有對應 current 行」呢個不變式。
+  it("guard_staff_numbers：每個有 staff_no 嘅 guard 有對應 scheme=U current 行", async () => {
+    const guardsWithStaffNo = await devPrisma.guard.findMany({ where: { staffNo: { not: null } }, select: { id: true, staffNo: true } });
+    expect(guardsWithStaffNo.length).toBeGreaterThan(0);
+    for (const g of guardsWithStaffNo) {
+      const row = await devPrisma.guardStaffNumber.findFirst({ where: { guardId: g.id, scheme: "U", status: "current" } });
+      expect(row?.number, `guard ${g.id}（staff_no=${g.staffNo}）冇對應 current U 行`).toBe(g.staffNo);
+    }
+  });
+
+  it("guard_staff_numbers：每個有 staff_no_mw 嘅 guard 有對應 scheme=MG／MW current 行", async () => {
+    const guardsWithMw = await devPrisma.guard.findMany({ where: { staffNoMw: { not: null } }, select: { id: true, staffNoMw: true } });
+    expect(guardsWithMw.length).toBeGreaterThan(0);
+    for (const g of guardsWithMw) {
+      const row = await devPrisma.guardStaffNumber.findFirst({
+        where: { guardId: g.id, scheme: { in: ["MG", "MW"] }, status: "current" },
+      });
+      expect(row?.number, `guard ${g.id}（staff_no_mw=${g.staffNoMw}）冇對應 current MG/MW 行`).toBe(g.staffNoMw);
+    }
+  });
+
+  it("guard_staff_numbers.number 全表 unique（DB 約束）——冇任何重複值", async () => {
+    const rows = await devPrisma.guardStaffNumber.findMany({ select: { number: true } });
+    const numbers = rows.map((r) => r.number);
+    expect(new Set(numbers).size).toBe(numbers.length);
+  });
+
   it("npm run report:regen exit 0，[diff] fail===0", () => {
     const out = execFileSync("npm", ["run", "report:regen"], {
       cwd: REPO_ROOT,

@@ -243,8 +243,16 @@ model Quota {
 // ---------------------------------------------------------------------------
 model Guard {
   id              String         @id @default(uuid())
-  staffNo         String?        @unique @map("staff_no") // U00xxx，可為空
-  staffNoMw       String?        @map("staff_no_mw") // Maxwell MG/MW 工號
+  // WP-STAFFNO（老闆 2026-09-19 拍板）：呢兩個舊欄而家改做**同步顯示值**
+  // ——真正存底喺下面 `staffNumbers`（`guard_staff_numbers` 表，方案
+  // B：員工編號獨立表，U／MP／MG／MW 並存）。`staffNo`＝該人現用 **U**
+  // 號（冇 U 就 null）；`staffNoMw`＝現用 **MG**（冇就 MW）。任何員工編號
+  // 增／改／轉舊號之後都由 `syncLegacyStaffNoColumns()`（`src/lib/
+  // guards/staff-numbers.ts`）喺同一 transaction 內重算呢兩欄，唔准兩邊
+  // 唔一致——更表編輯器／匯出／報表／`ai.guards` view／seed gate 全部
+  // 照舊讀呢兩欄，唔使改。
+  staffNo         String?        @unique @map("staff_no") // 同步值：現用 U 號，可為空
+  staffNoMw       String?        @map("staff_no_mw") // 同步值：現用 MG（冇就 MW）
   nameZh          String         @map("name_zh")
   nameEn          String?        @map("name_en")
   tel             String?
@@ -271,7 +279,16 @@ model Guard {
   emergencyContactName String?      @map("emergency_contact_name")
   emergencyContactTel  String?      @map("emergency_contact_tel")
   siaPermitNo          String?      @map("sia_permit_no")
-  siaPermitType        String?      @map("sia_permit_type") // A/B/C/D，zod 白名單管（唔用 Prisma enum，較易加類別）
+  // WP-STAFFNO（老闆 2026-09-19 拍板）：`siaPermitType` 改做**衍生顯示值**
+  // （A／B／A+B，見 `deriveSiaPermitExpiry()`），唔再直接接受 API 寫入——
+  // 真正存底嘅係下面 siaPermitAExpiry／siaPermitBExpiry 兩個獨立到期日。
+  siaPermitType        String?      @map("sia_permit_type") // 衍生值：A／B／A+B（PATCH 甲/乙/出生日期時自動重算，唔准直接寫）
+  // WP-STAFFNO：甲類／乙類到期日分開存（乙類過 70 歲失效，淨返甲類仍要
+  // 存底——兩個都要存，唔係二揀一）。`siaPermitExpiry`（下面）保留做
+  // **衍生值**＝兩個入面「仍然有效而最早到期」嗰個，`ai.guards` view／
+  // 90 日篩選繼續讀呢個舊欄，唔使改。
+  siaPermitAExpiry     DateTime?    @map("sia_permit_a_expiry") @db.Date
+  siaPermitBExpiry     DateTime?    @map("sia_permit_b_expiry") @db.Date
   safetyCardNo         String?      @map("safety_card_no") // 平安卡號碼
   safetyCardExpiry     DateTime?    @map("safety_card_expiry") @db.Date
   hireDate             DateTime?    @map("hire_date") @db.Date
@@ -289,8 +306,52 @@ model Guard {
   rateCards    RateCard[]
   shiftRecords ShiftRecord[]
   users        User[]
+  staffNumbers GuardStaffNumber[]
 
   @@map("guards")
+}
+
+// ---------------------------------------------------------------------------
+// WP-STAFFNO（老闆 2026-09-19 拍板）：員工編號獨立表（方案 B）——員工編號
+// 並存唔取代：U＝去 Wilson 盤做散工必須有；MP＝去第二間公司嘅盤做散工
+// 用；MG＝轉咗長工；MW 意思未確認（老闆仲未答）。同一人可以同時有
+// U／MP／MG；同一種入面亦可能有多個號（臨時號→正式號、離職再入職攞
+// 新號）——舊號存底但摺埋（status=former）。`scheme` 刻意用 String（大寫
+// 英文字母 1–4 位，zod regex 管，唔用 Prisma enum）——已知 U／MP／MG／MW，
+// 但邊個盤顯示邊種號、轉長工後 U／MP 係咪繼續有效呢啲老闆都仲未答，等
+// 將來加新種類唔使 migration。
+model GuardStaffNumber {
+  id      String @id @default(uuid())
+  guardId String @map("guard_id")
+  guard   Guard  @relation(fields: [guardId], references: [id], onDelete: Restrict)
+
+  scheme String // U/MP/MG/MW/…，app 層 regex 驗證（^[A-Z]{1,4}$）
+  // 全表 unique——同一個工號唔可以掛喺兩個唔同 guard（POST 撞號 409）。
+  number String @unique
+  status GuardStaffNumberStatus @default(current)
+
+  validFrom DateTime? @map("valid_from") @db.Date
+  validTo   DateTime? @map("valid_to") @db.Date
+  note      String?
+  // migration:staff_no／migration:staff_no_mw（搬遷嚟）／manual（API 手動
+  // 加）／import:u-team 等——邊度嚟嘅呢一行。
+  source String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  // 同一個 guard 同一個 scheme 最多一行 current——用 partial unique index
+  // 做（Prisma schema 冇 WHERE 子句表達能力，見 migration.sql 手加嘅
+  // `CREATE UNIQUE INDEX ... WHERE status = 'current'`，呢度淨係留返
+  // 一個普通 index 幫查詢，唔係約束本身）。
+  @@index([guardId, scheme])
+  @@map("guard_staff_numbers")
+}
+
+enum GuardStaffNumberStatus {
+  current
+  former
 }
 
 // ---------------------------------------------------------------------------

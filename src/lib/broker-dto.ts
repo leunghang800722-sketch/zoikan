@@ -8,6 +8,18 @@ import { pickWhitelist, brandSafeResponse, type Dto } from "./api/serialize";
 // `GET /api/guards?with_month_shifts=` 先會計出嚟）加入呢個白名單——
 // 冇金錢/敏感成分，雞頭見自己安員嘅本月更數一向准，同內部角色
 // GUARD_FIELDS 一致做法（見 src/lib/api/dto/index.ts 同一段註解）。
+// WP-STAFFNO：`staffNumbers`（additive，淨係 current）加落嚟——工號本身
+// 雞頭一直見到（`staffNo`/`staffNoMw` 舊欄本身已經喺呢個白名單），呢個
+// 淨係加多個結構化版（chips 用）。`siaPermitAExpiry`／`siaPermitBExpiry`
+// 刻意唔加——跟返現有做法（`siaPermitNo`／`siaPermitType` 一路都冇喺呢
+// 個白名單，雞頭淨係見到衍生嘅 `siaPermitExpiry`，唔見拆開嘅甲／乙）。
+// Fable5.1（4 個細修 2）：`siaPermitBLapsedByAge` 必修 4 嗰陣加落嚟話俾
+// 雞頭知「乙類已經因為年齡失效」，但依家私隱保守做法：雞頭本身冇「安員
+// 個人資料」view 權，見到呢粒 flag＝變相知道安員個人資料入面嘅出生
+// 日期（或者至少知道佢滿咗70歲），呢個推斷本身已經係個人資料洩漏，
+// 唔應該畀雞頭嘅白名單——剔走。雞頭照舊淨係見到 `siaPermitExpiry` 呢個
+// 到期日係空（同「未填」睇落一樣，冇獨立警示），呢個係刻意嘅取捨（私
+// 隱 > UI 精準度）。
 export const GUARD_BROKER_FIELDS = [
   "id",
   "staffNo",
@@ -23,6 +35,10 @@ export const GUARD_BROKER_FIELDS = [
   "createdAt",
   "updatedAt",
   "monthShiftCount",
+  "staffNumbers",
+  // S7：同內部角色 GUARD_FIELDS 一致——「舊號命中」badge 雞頭搜尋自己人
+  // 一樣用得到。
+  "formerNumberHit",
 ] as const;
 
 // 雞頭（自己資料）：淨係基本資料，bankInfo 已經喺 blocklist 剝埋（defense-in-depth）。
@@ -146,6 +162,13 @@ export const QUOTA_BROKER_FIELDS = ["id", "month", "siteId", "shiftTypeId", "bro
 // 自己）。
 export const REFERRAL_FEE_RATE_BROKER_FIELDS = ["id", "brokerId", "siteId", "month", "feePerShift", "voidedAt", "createdAt"] as const;
 
+// S6（Opus 驗收）：雞頭讀 `GET /api/guards/:id/staff-numbers`（「自己安
+// 員」module，出廠有 view）淨係要見到工號本身——`note`（可能有內部備
+// 註文字）／`source`（例如 "manual:legacy-patch(...)"）／`created_by`
+// （內部用戶 id）一律唔畀，同 GUARD_STAFF_NUMBER_FIELDS（內部角色版，
+// src/lib/api/dto/index.ts）拆開一份獨立白名單。
+export const GUARD_STAFF_NUMBER_BROKER_FIELDS = ["id", "scheme", "number", "status", "validFrom", "validTo"] as const;
+
 function mapRow<T extends Record<string, unknown>>(row: T, fields: readonly string[]): Dto {
   return pickWhitelist(row, fields);
 }
@@ -179,6 +202,9 @@ export function toBrokerQuotaDTO<T extends Record<string, unknown>>(row: T) {
 }
 export function toBrokerReferralFeeRateDTO<T extends Record<string, unknown>>(row: T) {
   return mapRow(row, REFERRAL_FEE_RATE_BROKER_FIELDS);
+}
+export function toGuardStaffNumberBrokerDTO<T extends Record<string, unknown>>(row: T) {
+  return mapRow(row, GUARD_STAFF_NUMBER_BROKER_FIELDS);
 }
 
 /** list response 常見形狀 { rows, total, skip, take }——rows 逐個過白名單，其他欄照留。 */

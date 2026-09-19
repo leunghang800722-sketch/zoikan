@@ -30,6 +30,7 @@ import { seedRolesPermissionsMatrix } from "../../src/lib/rbac/seed";
 import { seedRosterLayouts } from "./lib/roster-layout";
 import { enrichLeaveCodeRawText } from "./lib/leave-code-raw";
 import { enrichShiftRecordsWithRawRow } from "./lib/roster-raw";
+import { schemeFromNumber, normalizeStaffNumber } from "../../src/lib/guards/staff-numbers";
 
 const stats: Record<string, number> = {};
 
@@ -82,6 +83,10 @@ async function clearAll() {
     })
   ).map((u) => u.id);
   if (deletableUserIds.length) await prisma.user.deleteMany({ where: { id: { in: deletableUserIds } } });
+  // WP-STAFFNO：`guard_staff_numbers.guard_id` 係 FK RESTRICT（設計刻意
+  // 唔准刪 guard 過手留低斷咗嘅工號歷史）——刪 guard 之前要先清呢張表，
+  // 唔係 `prisma.guard.deleteMany({})` 會俾 RESTRICT 擋成句 fail。
+  await prisma.guardStaffNumber.deleteMany({});
   await prisma.guard.updateMany({ data: { defaultBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});
@@ -253,6 +258,29 @@ async function seedShiftTypes(siteIdMap: Map<string, string>) {
   return idMap;
 }
 
+// WP-STAFFNO：由 guards.csv 嘅 staff_no／staff_no_mw 值起一行 current
+// guard_staff_numbers（同 migration 嘅資料搬遷邏輯一致：scheme＝前綴大寫
+// 英文字母，1-4 位；推唔到就跳過，唔起 garbage row——實測 wp2b/guards.csv
+// 全部 staff_no 都係 "U" 開頭、staff_no_mw 都係 "MG"／"MW" 開頭，理論上
+// 唔會跳過）。回傳 1（有起行）或 0（值為空/推唔到 scheme）。
+async function seedStaffNumberFromLegacyColumn(guardId: string, rawValue: string, source: string): Promise<number> {
+  const value = str(rawValue);
+  if (!value) return 0;
+  const scheme = schemeFromNumber(value);
+  if (!scheme) return 0;
+  await prisma.guardStaffNumber.create({
+    data: {
+      guardId,
+      scheme,
+      number: normalizeStaffNumber(value),
+      status: "current",
+      source,
+      createdBy: "seed:wp2b/guards.csv",
+    },
+  });
+  return 1;
+}
+
 // ---------------------------------------------------------------------------
 async function seedGuards() {
   type Row = {
@@ -301,6 +329,7 @@ async function seedGuards() {
 
   const idMap = new Map<string, string>();
   let longtermCount = 0;
+  let staffNumberRowsCreated = 0;
   for (const r of rows) {
     const isLongterm =
       bool(r.is_longterm) || (str(r.staff_no_mw) !== null && longtermMwNos.has(r.staff_no_mw)) || longtermNameZh.has(r.name_zh);
@@ -333,11 +362,20 @@ async function seedGuards() {
       },
     });
     idMap.set(r.guard_id, created.id);
+    // WP-STAFFNO（老闆 2026-09-19 拍板）：建咗 guard 之後，按同一規則
+    // （同 prisma/migrations/…wp_staffno 個資料搬遷用嘅一樣：scheme=
+    // 前綴大寫英文字母）填 guard_staff_numbers，等 `db:reset`＋`db:seed`
+    // 之後新表都有數（唔係要跑一次「真」migration 先有——db:reset 會由
+    // 空表重新 migrate，backfill INSERT 嗰陣 guards 表仲係空，乜都搬唔
+    // 到，要靠呢度）。
+    staffNumberRowsCreated += await seedStaffNumberFromLegacyColumn(created.id, r.staff_no, "seed:staff_no");
+    staffNumberRowsCreated += await seedStaffNumberFromLegacyColumn(created.id, r.staff_no_mw, "seed:staff_no_mw");
   }
   stats.guards = rows.length;
   stats.guardsLongtermAutopay = longtermCount;
   stats.guardsMonthlySalaryOverrideAppliedBochk = salaryOverrideAppliedBochk;
   stats.guardsMonthlySalaryOverrideAppliedStatic = salaryOverrideAppliedStatic;
+  stats.guardStaffNumbers = staffNumberRowsCreated;
   // names_en.csv tier=longterm 51 人入面有 3 人 name_zh 留空（只有英文
   // 名，PDPO：唔喺呢度寫真名），guards.csv 嘅 name_en 亦冇對應值可以配對
   // ——P0-執行計劃§8 D5 話某一位「已補配」中文名，但現存 names_en.csv

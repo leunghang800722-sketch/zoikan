@@ -59,7 +59,7 @@ function safeErrorSummary(err: unknown): string {
 
 export function handleApiError(err: unknown): NextResponse {
   if (err instanceof ApiError) {
-    return NextResponse.json({ error: err.code, message: err.message }, { status: err.status });
+    return NextResponse.json({ error: err.code, message: err.message, ...(err.details ?? {}) }, { status: err.status });
   }
   console.error("[api] 未預期錯誤", safeErrorSummary(err));
   return NextResponse.json({ error: "internal_error", message: "系統錯誤" }, { status: 500 });

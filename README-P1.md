@@ -111,6 +111,39 @@ src/app/                Next.js App Router（暫時得返一個佔位首頁，�
 tools/importer/         P0 工具（保留做 seed 來源 + 回歸對數，唔屬於 P1 骨架本身）
 ```
 
+## 資料模型（節錄）
+
+單一事實來源：`prisma/schema.prisma`（逐欄註解）。呢度淨係記低容易漏睇嘅
+一張新表——**WP-STAFFNO（老闆 2026-09-19 拍板）：員工編號獨立表（方案
+B）**：
+
+- `guard_staff_numbers`（`GuardStaffNumber`）：員工編號**並存**唔取代
+  ——`U`＝去 Wilson 盤做散工必須有；`MP`＝去第二間公司嘅盤做散工用；
+  `MG`＝轉咗長工；`MW` 意思未確認（老闆仲未答）。同一人可以同時有
+  U／MP／MG；同一種入面亦可能有多個號（臨時號→正式號、離職再入職攞
+  新號）——舊號存底但摺埋（`status=former`）。`scheme`（String，1-4 位
+  大寫英文字母，唔寫死 Prisma enum）、`number`（**全表 unique**）、
+  `status`（`current`／`former`）、`validFrom`／`validTo`、`note`、
+  `source`（`migration:staff_no`／`migration:staff_no_mw`／`manual`／
+  `seed:staff_no`…）。約束：同一 guard 同一 scheme 最多一行 `current`
+  （partial unique index，Prisma schema 表達唔到，喺 migration.sql 手
+  加）；`number` 前綴要同 `scheme` 一致（app 層驗證）。API 見
+  `docs/api.md`「員工編號」一行；核心邏輯喺
+  `src/lib/guards/staff-numbers.ts`。
+- `guards.staff_no`／`staff_no_mw`（舊有兩欄）呢個 WP 之後改做**同步
+  顯示值**——`staff_no`＝現用 **U** 號（冇就 null），`staff_no_mw`＝
+  現用 **MG**（冇就 MW）——由 `syncLegacyStaffNoColumns()` 喺任何員工
+  編號寫入之後喺同一個 transaction 內重算，更表編輯器／匯出 Excel／
+  報表／`ai.guards` view／seed gate 全部照舊讀呢兩個舊欄，唔使改。
+- `guards.sia_permit_a_expiry`／`sia_permit_b_expiry`（保安牌照甲／乙
+  類到期日，分開存——乙類過 70 歲失效，淨返甲類仍要存底，兩個都要存，
+  唔係二揀一）。舊有 `guards.sia_permit_expiry`／`sia_permit_type`
+  保留做**衍生值**（`deriveSiaPermitExpiry()`）：`sia_permit_expiry`＝
+  兩者「仍然有效（冇因為滿 70 歲而失效）而最早到期」嗰個；
+  `sia_permit_type`＝`A`／`B`／`A+B`。API 唔再接受直接寫呢兩個衍生
+  欄（帶咗一律 400，提示改用 a／b 欄）；`ai.guards` view／90 日到期
+  篩選繼續讀 `sia_permit_expiry` 呢個舊欄，唔使改。
+
 ## 帳號／角色／權限（P1-WP2）
 
 ### 認證
