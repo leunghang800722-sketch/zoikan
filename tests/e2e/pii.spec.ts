@@ -214,9 +214,19 @@ test("(e) 主管編輯一個長工只改電話 → 儲存成功（唔會被冇�
 test("(d) 到期 pill 三種狀態：已過期（紅）／90 日內（橙）／未填（灰）", async ({ page }) => {
   const guard = await findBrokerAOwnGuard();
   // 還原原值而唔係硬寫 null（可接受但順手：萬一呢個 guard 本身喺呢個
-  // test 之前已經有 siaPermitExpiry，硬寫 null 會令 test 完咗之後同
-  // 入 test 之前個狀態唔一致，留低污染）。
-  const originalGuard = await prisma.guard.findUniqueOrThrow({ where: { id: guard.id }, select: { siaPermitExpiry: true } });
+  // test 之前已經有 siaPermitAExpiry/siaPermitBExpiry，硬寫 null 會令
+  // test 完咗之後同入 test 之前個狀態唔一致，留低污染）。
+  //
+  // WP-STAFFNO S5（Opus 驗收修復）：`sia_permit_expiry` 而家係讀取時
+  // 由 `sia_permit_a_expiry`／`sia_permit_b_expiry`（+ 出生日期）現算
+  // 嘅衍生值（見 src/app/api/guards/[id]/route.ts withDerivedGuard()），
+  // 直接寫舊嘅 `siaPermitExpiry` 欄唔會再反映落 response——呢度改寫
+  // `siaPermitAExpiry`（甲類到期）先會令現算出嚟嘅 `sia_permit_expiry`
+  // 跟住變。
+  const originalGuard = await prisma.guard.findUniqueOrThrow({
+    where: { id: guard.id },
+    select: { siaPermitAExpiry: true, siaPermitBExpiry: true },
+  });
   const today = new Date();
   const expired = new Date(today.getTime() - 10 * 86_400_000).toISOString().slice(0, 10);
   const soon = new Date(today.getTime() + 30 * 86_400_000).toISOString().slice(0, 10);
@@ -225,7 +235,7 @@ test("(d) 到期 pill 三種狀態：已過期（紅）／90 日內（橙）／�
     await loginAs(page, "老闆");
 
     // 已過期。
-    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitExpiry: new Date(expired) } });
+    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitAExpiry: new Date(expired), siaPermitBExpiry: null } });
     await page.goto("/guards");
     await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
     let row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
@@ -233,7 +243,7 @@ test("(d) 到期 pill 三種狀態：已過期（紅）／90 日內（橙）／�
     await expect(row.getByText("已過期")).toBeVisible();
 
     // 90 日內。
-    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitExpiry: new Date(soon) } });
+    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitAExpiry: new Date(soon), siaPermitBExpiry: null } });
     await page.reload();
     await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
     row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
@@ -241,13 +251,16 @@ test("(d) 到期 pill 三種狀態：已過期（紅）／90 日內（橙）／�
     await expect(row.getByText("90 日內")).toBeVisible();
 
     // 未填。
-    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitExpiry: null } });
+    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitAExpiry: null, siaPermitBExpiry: null } });
     await page.reload();
     await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
     row = page.locator("main table tbody tr", { hasText: guard.nameZh }).first();
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(row.getByText("未填")).toBeVisible();
   } finally {
-    await prisma.guard.update({ where: { id: guard.id }, data: { siaPermitExpiry: originalGuard.siaPermitExpiry } });
+    await prisma.guard.update({
+      where: { id: guard.id },
+      data: { siaPermitAExpiry: originalGuard.siaPermitAExpiry, siaPermitBExpiry: originalGuard.siaPermitBExpiry },
+    });
   }
 });

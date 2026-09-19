@@ -10,15 +10,25 @@
 //    unique 檢查
 // §6 直接寫 sia_permit_type／sia_permit_expiry → 400
 // §7 deriveSiaPermitExpiry() 真值表（只A/只B/A+B/B過期/滿70歲/冇DOB）
+// §8 M1：validTo 用 HK 曆日（邊界：UTC 16:30＝HK 翌日）
+// §9 M2：雞頭 PATCH/POST 帶 staff_no*／PATCH .../staff-numbers/:numberId
+//    撞號 → 403／409 一律冇 guard_id；內部角色 409 仍然有
+// §10 S1：staff_no 只收 U、staff_no_mw 只收 MG/MW
+// §11 S2：number 正規化（去晒空白）＋格式 regex
+// §12 S3/S4：syncLegacyStaffNoColumns 唔抹走「新表冇對應」嘅 legacy 值
+// §13 S5：sia_permit_expiry/type 讀取時現算（唔信 DB 陳舊值）
+// §14 S6：雞頭讀 .../staff-numbers 窄版 DTO（冇 note/source/created_by）
+// §15 S7：GET /api/guards?q= 搵到 former 號，標 former_number_hit
+// §16 附帶：牌照/平安卡/入離職日期 nullable（PATCH null 清空）
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { TEST_USER_TEL } from "./fixtures/test-users";
 import { GET as guardDetail, PATCH as guardUpdate } from "@/app/api/guards/[id]/route";
-import { POST as guardCreate } from "@/app/api/guards/route";
+import { GET as guardList, POST as guardCreate } from "@/app/api/guards/route";
 import { GET as staffNumbersList, POST as staffNumberCreate } from "@/app/api/guards/[id]/staff-numbers/route";
 import { PATCH as staffNumberUpdate } from "@/app/api/guards/[id]/staff-numbers/[numberId]/route";
-import { deriveSiaPermitExpiry } from "@/lib/guards/staff-numbers";
+import { deriveSiaPermitExpiry, upsertCurrentStaffNumber } from "@/lib/guards/staff-numbers";
 
 function req(url: string, cookie: string, method = "GET", body?: unknown) {
   return new Request(url, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
@@ -429,5 +439,389 @@ describe("WP-STAFFNO §6：deriveSiaPermitExpiry() 真值表", () => {
     const r = deriveSiaPermitExpiry({ siaPermitAExpiry: null, siaPermitBExpiry: null, dateOfBirth: null });
     expect(r.siaPermitType).toBeNull();
     expect(r.siaPermitExpiry).toBeNull();
+  });
+});
+
+describe("WP-STAFFNO §8（M1）：validTo 用 HK 曆日，唔會早一日", () => {
+  let fx: Wp2Fixture;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+  });
+
+  it("邊界：now=UTC 16:30（即 HK 已經踏入翌日 00:30）→ 轉 former 嘅 validTo 要係 HK 嗰個新曆日", async () => {
+    await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91001", source: "test" }));
+    const now = new Date("2026-09-19T16:30:00.000Z"); // HK = 2026-09-20 00:30
+    const result = await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91002", source: "test", now }));
+    const validToStr = result.convertedFormer!.after.validTo!.toISOString().slice(0, 10);
+    // 舊版 bug：hkDayStartUtc("2026-09-20") = 2026-09-19T16:00:00Z，存落
+    // @db.Date 會變 2026-09-19（早咗一日）。啱嘅答案要係 HK 今日本身。
+    expect(validToStr).toBe("2026-09-20");
+  });
+
+  it("一般情況（now 喺 HK 曆日中段）→ validTo 都係 HK 今日", async () => {
+    await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91003", source: "test" }));
+    const now = new Date("2026-09-19T04:00:00.000Z"); // HK = 2026-09-19 12:00
+    const result = await prisma.$transaction((tx) => upsertCurrentStaffNumber(tx, { guardId: fx.guardA.id, scheme: "U", number: "U91004", source: "test", now }));
+    expect(result.convertedFormer!.after.validTo!.toISOString().slice(0, 10)).toBe("2026-09-19");
+  });
+});
+
+describe("WP-STAFFNO §9（M2）：雞頭寫 staff_no*／409 guard_id 白名單", () => {
+  let fx: Wp2Fixture;
+  let brokerACookie: string;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    brokerACookie = await sessionCookieForUser(fx.userIds["雞頭"]);
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("(a) 雞頭 PATCH /api/guards/:id 帶 staff_no → 403，回應冇任何 guard_id", async () => {
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, brokerACookie, "PATCH", { staff_no: "U91100" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(403);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain("guard_id");
+  });
+
+  it("(a) 雞頭 PATCH 帶 staff_no_mw → 403", async () => {
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, brokerACookie, "PATCH", { staff_no_mw: "MG91101" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("(a) 雞頭 POST /api/guards 帶 staff_no → 403", async () => {
+    const res = await guardCreate(
+      req("http://test.local/api/guards", brokerACookie, "POST", { staff_no: "U91102", name_zh: "測試", employment_type: "cash_casual" }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("(a) 雞頭 PATCH 帶普通欄（冇 staff_no）→ 唔會因為呢個修復被額外擋（開咗「自己安員:update」之後照樣 200）", async () => {
+    // 「自己安員:update」出廠 off（雞頭預設淨係讀自己名冊，見矩陣）——
+    // 要模擬老闆已經開咗呢個基本閘嘅狀態，先可以驗證 M2a 呢個修復（擋
+    // `staff_no`／`staff_no_mw`）冇連累埋普通欄一齊被擋（同
+    // wp-pii-field-groups.test.ts 會計銀行戶口嗰個 test 一致手法）。
+    const permission = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module: "自己安員", action: "update" } } });
+    await prisma.rolePermission.update({
+      where: { roleId_permissionId: { roleId: fx.roleIds["雞頭"], permissionId: permission.id } },
+      data: { granted: true },
+    });
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, brokerACookie, "PATCH", { tel: "61112222" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("(b) 內部角色 PATCH .../staff-numbers/:numberId 撞號 → 409 仍然帶 guard_id", async () => {
+    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardB.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP91103" }), {
+      params: Promise.resolve({ id: fx.guardB.id }),
+    });
+    const created = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP91104" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row = (await created.json()) as { id: string };
+    const res = await staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { number: "MP91103" }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { guard_id?: string };
+    expect(body.guard_id).toBe(fx.guardB.id);
+  });
+});
+
+describe("WP-STAFFNO §10（S1）：legacy 欄 scheme 校驗", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("staff_no 帶 MP 開頭 → 400，提示用「員工編號」區", async () => {
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { staff_no: "MP91200" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { message: string };
+    expect(body.message).toContain("員工編號");
+  });
+
+  it("staff_no_mw 帶 U 開頭 → 400", async () => {
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { staff_no_mw: "U91201" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("staff_no_mw 帶 MW 開頭 → 照樣 work（MG／MW 都收）", async () => {
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { staff_no_mw: "MW91202" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("「員工編號」區（POST .../staff-numbers）唔受呢個限制——MP 一樣 work", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP91203" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(201);
+  });
+});
+
+describe("WP-STAFFNO §11（S2）：number 正規化＋格式 regex", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("中間夾空白（U 9130 0）正規化之後去晒空白，存落去嘅係冇空白版本", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U 913 00" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { number: string };
+    expect(body.number).toBe("U91300");
+  });
+
+  it("含唔啱嘅符號（U91301@）→ 400", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U91301@" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("總長超過 20 位 → 400", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: `U${"9".repeat(20)}` }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("帶連字符（合法字符）→ 照樣 work", async () => {
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP-9130-2" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(201);
+  });
+});
+
+describe("WP-STAFFNO §12（S3/S4）：syncLegacyStaffNoColumns 唔抹走「新表冇對應」嘅 legacy 值", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("guard 嘅 staff_no=00500（migration 跳過、新表冇 U 行），加一個 MP 號之後 staff_no 仍然係 00500", async () => {
+    // 模擬 migration 跳過咗嘅狀態：guards.staff_no 有值，但
+    // guard_staff_numbers 完全冇呢個 guard 嘅任何 U 行。
+    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { staffNo: "00500" } });
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP91400" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(201);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.staffNo).toBe("00500"); // 冇被靜靜哋抹走做 null
+  });
+
+  it("對照組：guard 有真正 U 行嘅情況，加返第二個 U 之後舊 staff_no 正常同步（唔係恆常唔改）", async () => {
+    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U91401" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    await staffNumberCreate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U91402" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.staffNo).toBe("U91402"); // 同步到最新現用
+  });
+});
+
+describe("WP-STAFFNO §13（S5）：sia_permit_expiry/type 讀取時現算", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("DB 舊衍生值陳舊（滿70歲之後冇再 PATCH 過）——GET 詳情照樣用返啱嘅現算值（乙類當失效）", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: {
+        dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), // 76 歲 @ 今日
+        siaPermitAExpiry: null,
+        siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z"),
+        // 模擬 DB 陳舊值（未 recompute）：舊版仲話有 B。
+        siaPermitType: "B",
+        siaPermitExpiry: new Date("2030-01-01T00:00:00.000Z"),
+      },
+    });
+    const res = await guardDetail(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie), { params: Promise.resolve({ id: fx.guardA.id }) });
+    const body = (await res.json()) as { sia_permit_type: string | null; sia_permit_expiry: string | null };
+    expect(body.sia_permit_type).toBeNull();
+    expect(body.sia_permit_expiry).toBeNull();
+  });
+
+  it("列表 GET /api/guards 一樣讀取時現算（唔淨係詳情）", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: {
+        dateOfBirth: new Date("1950-01-01T00:00:00.000Z"),
+        siaPermitAExpiry: null,
+        siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z"),
+        siaPermitType: "B",
+        siaPermitExpiry: new Date("2030-01-01T00:00:00.000Z"),
+      },
+    });
+    const res = await guardList(req("http://test.local/api/guards?take=500", ownerCookie));
+    const body = (await res.json()) as { rows: Array<{ id: string; sia_permit_type: string | null }> };
+    const row = body.rows.find((r) => r.id === fx.guardA.id);
+    expect(row?.sia_permit_type).toBeNull();
+  });
+});
+
+describe("WP-STAFFNO §14（S6）：雞頭讀 .../staff-numbers 窄版 DTO", () => {
+  let fx: Wp2Fixture;
+  let brokerACookie: string;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    brokerACookie = await sessionCookieForUser(fx.userIds["雞頭"]);
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("雞頭見到 id/scheme/number/status/valid_from/valid_to，冇 note/source/created_by", async () => {
+    await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP91500", note: "內部備註唔應該漏俾雞頭" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const res = await staffNumbersList(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, brokerACookie), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<Record<string, unknown>>;
+    const row = rows.find((r) => r.number === "MP91500")!;
+    expect(row).toBeDefined();
+    expect("note" in row).toBe(false);
+    expect("source" in row).toBe(false);
+    expect("created_by" in row).toBe(false);
+    expect("scheme" in row).toBe(true);
+    expect("status" in row).toBe(true);
+  });
+
+  it("內部角色照樣見全欄（包括 note）", async () => {
+    await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP91501", note: "備註" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const res = await staffNumbersList(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    const rows = (await res.json()) as Array<Record<string, unknown>>;
+    const row = rows.find((r) => r.number === "MP91501")!;
+    expect(row.note).toBe("備註");
+  });
+});
+
+describe("WP-STAFFNO §15（S7）：GET /api/guards?q= 搵到 former 號", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("former 號（已經摺埋）一樣搵到，並標 former_number_hit", async () => {
+    const created = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "MP", number: "MP91600" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row = (await created.json()) as { id: string };
+    await staffNumberUpdate(req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former" }), {
+      params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }),
+    });
+    const res = await guardList(req("http://test.local/api/guards?q=MP91600", ownerCookie));
+    const body = (await res.json()) as { rows: Array<{ id: string; former_number_hit?: boolean }> };
+    expect(body.rows.map((r) => r.id)).toContain(fx.guardA.id);
+    const hit = body.rows.find((r) => r.id === fx.guardA.id)!;
+    expect(hit.former_number_hit).toBe(true);
+  });
+
+  it("q 搵唔到嘅字串——total=0，唔會報錯", async () => {
+    const res = await guardList(req("http://test.local/api/guards?q=冇呢個人冇呢個號ZZZZ", ownerCookie));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number };
+    expect(body.total).toBe(0);
+  });
+
+  it("q 搵姓名一樣得", async () => {
+    const res = await guardList(req(`http://test.local/api/guards?q=${encodeURIComponent(fx.guardA.name)}`, ownerCookie));
+    const body = (await res.json()) as { rows: Array<{ id: string }> };
+    expect(body.rows.map((r) => r.id)).toContain(fx.guardA.id);
+  });
+});
+
+describe("WP-STAFFNO §16（附帶）：牌照/平安卡/入離職日期 nullable（PATCH null 清空）", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("PATCH sia_permit_a_expiry=null 清空已填嘅日期（唔會變 1970-01-01）", async () => {
+    await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { sia_permit_a_expiry: "2027-06-01" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { sia_permit_a_expiry: null }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.siaPermitAExpiry).toBeNull();
+  });
+
+  it("PATCH hire_date=null 清空", async () => {
+    await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { hire_date: "2020-01-01" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { hire_date: null }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.hireDate).toBeNull();
   });
 });

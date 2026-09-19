@@ -8,8 +8,9 @@
 // 唔應該連帶解鎖呢個新子資源）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { scopeGuardWhere, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toGuardStaffNumberDTO } from "@/lib/api/dto";
+import { toGuardStaffNumberBrokerDTO } from "@/lib/broker-dto";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
@@ -35,7 +36,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     // current 先、former 後（同一組 status 入面按新到舊）。
     const current = rows.filter((r) => r.status === "current");
     const former = rows.filter((r) => r.status === "former");
-    return ok([...current, ...former].map(toGuardStaffNumberDTO));
+    // S6（Opus 驗收）：雞頭讀呢個 sub-resource 用窄版 DTO——`id／scheme／
+    // number／status／valid_from／valid_to`，冇 note（可能有內部備註文
+    // 字）／source／created_by（內部用戶 id）。內部角色（老闆/主管/會計）
+    // 先見全欄。
+    const mapper = isBrokerRole(session) ? toGuardStaffNumberBrokerDTO : toGuardStaffNumberDTO;
+    return ok([...current, ...former].map(mapper));
   });
 }
 
@@ -58,6 +64,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         note: parsed.note ?? null,
         source: "manual",
         createdBy: session.userId,
+        revealConflictGuardId: isInternalRole(session),
       });
       await syncLegacyStaffNoColumns(tx, id);
       return upserted;

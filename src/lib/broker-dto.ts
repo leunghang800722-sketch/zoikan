@@ -29,6 +29,9 @@ export const GUARD_BROKER_FIELDS = [
   "updatedAt",
   "monthShiftCount",
   "staffNumbers",
+  // S7：同內部角色 GUARD_FIELDS 一致——「舊號命中」badge 雞頭搜尋自己人
+  // 一樣用得到。
+  "formerNumberHit",
 ] as const;
 
 // 雞頭（自己資料）：淨係基本資料，bankInfo 已經喺 blocklist 剝埋（defense-in-depth）。
@@ -152,6 +155,13 @@ export const QUOTA_BROKER_FIELDS = ["id", "month", "siteId", "shiftTypeId", "bro
 // 自己）。
 export const REFERRAL_FEE_RATE_BROKER_FIELDS = ["id", "brokerId", "siteId", "month", "feePerShift", "voidedAt", "createdAt"] as const;
 
+// S6（Opus 驗收）：雞頭讀 `GET /api/guards/:id/staff-numbers`（「自己安
+// 員」module，出廠有 view）淨係要見到工號本身——`note`（可能有內部備
+// 註文字）／`source`（例如 "manual:legacy-patch(...)"）／`created_by`
+// （內部用戶 id）一律唔畀，同 GUARD_STAFF_NUMBER_FIELDS（內部角色版，
+// src/lib/api/dto/index.ts）拆開一份獨立白名單。
+export const GUARD_STAFF_NUMBER_BROKER_FIELDS = ["id", "scheme", "number", "status", "validFrom", "validTo"] as const;
+
 function mapRow<T extends Record<string, unknown>>(row: T, fields: readonly string[]): Dto {
   return pickWhitelist(row, fields);
 }
@@ -185,6 +195,9 @@ export function toBrokerQuotaDTO<T extends Record<string, unknown>>(row: T) {
 }
 export function toBrokerReferralFeeRateDTO<T extends Record<string, unknown>>(row: T) {
   return mapRow(row, REFERRAL_FEE_RATE_BROKER_FIELDS);
+}
+export function toGuardStaffNumberBrokerDTO<T extends Record<string, unknown>>(row: T) {
+  return mapRow(row, GUARD_STAFF_NUMBER_BROKER_FIELDS);
 }
 
 /** list response 常見形狀 { rows, total, skip, take }——rows 逐個過白名單，其他欄照留。 */

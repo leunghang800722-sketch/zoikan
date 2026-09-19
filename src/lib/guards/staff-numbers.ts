@@ -17,8 +17,8 @@
 //   2. `deriveSiaPermitExpiry()`——SIA 牌照甲／乙類到期日 →
 //      衍生 `sia_permit_expiry`／`sia_permit_type`。
 import type { Prisma, GuardStaffNumber } from "@prisma/client";
-import { BadRequest, Conflict } from "../api/errors";
-import { todayLocalStr, hkDayStartUtc } from "../ui/format";
+import { BadRequest, Conflict, Forbidden } from "../api/errors";
+import { todayLocalStr } from "../ui/format";
 import { writeAudit } from "../audit";
 
 type Tx = Prisma.TransactionClient;
@@ -32,8 +32,17 @@ type Tx = Prisma.TransactionClient;
  * 新代號）淨係改 UI 下拉，唔使 migration。 */
 export const STAFF_NUMBER_SCHEME_RE = /^[A-Z]{1,4}$/;
 
+// S2（Opus 驗收）：`number` 正規化後嘅格式——scheme 前綴（1-4 位大寫英文
+// 字母）+ 1-16 位大寫英文字母／數字／連字符（`-`），總長自然 ≤20（4+16）。
+// 呢個 regex 係「正規化之後」先驗，唔理原文大小寫/空白（見
+// `normalizeStaffNumber()`）。
+export const STAFF_NUMBER_NUMBER_RE = /^[A-Z]{1,4}[0-9A-Z-]{1,16}$/;
+
+// S2：正規化＝trim＋大寫＋移除所有空白（唔淨係頭尾——中間打錯多咗個
+// space，例如 "U 1234"，都要當同 "U1234" 係同一個號，唔應該因為呢種
+// 打字習慣差異漏撞號檢查）。
 export function normalizeStaffNumber(raw: string): string {
-  return raw.trim().toUpperCase();
+  return raw.trim().toUpperCase().replace(/\s+/g, "");
 }
 
 /** 由工號本身推返個 scheme（前綴大寫英文字母）——「PATCH /api/guards/:id
@@ -48,8 +57,22 @@ export function schemeFromNumber(raw: string): string | null {
   return STAFF_NUMBER_SCHEME_RE.test(scheme) ? scheme : null;
 }
 
+// M1（Opus 驗收修復）：原本用 `hkDayStartUtc(todayLocalStr(now))`——
+// `hkDayStartUtc()` 傳返「嗰個 HK 曆日 00:00 HKT」對應嘅 UTC instant
+// （即 UTC 前一日 16:00），寫落 `@db.Date` 欄會俾 Postgres 攞返嗰個 UTC
+// instant 嘅日曆日部分＝**前一日**（例如 HK 今日 2026-09-19，`hkDayStartUtc`
+// 返 2026-09-18T16:00:00Z，存到 `guard_staff_numbers.valid_to` 就變咗
+// 2026-09-18，早咗一日）。`hkDayStartUtc()`/`hkDayEndUtc()` 本身係啱
+// 嘅——佢哋係俾「當範圍邊界同 `created_at`（timestamptz）比較」呢類場合
+// 用（見 src/lib/ui/format.ts 頂註解），唔係俾「要寫入 `@db.Date` 嘅字面
+// 日曆日」呢種場合用。`@db.Date` 呢類欄要嘅係同 zod `dateOnly`
+// （`z.coerce.date()` 解 "YYYY-MM-DD"）一致嘅慣例：直接用「HK 今日」嗰個
+// YYYY-MM-DD 字串起 `T00:00:00.000Z`（唔經 HKT 換算），等 Postgres 攞到
+// 嘅日曆日就係 HK 今日本身，唔會早/遲一日。全檔（呢個 module）寫
+// `@db.Date` 一律用呢個慣例，唔再用 `hkDayStartUtc()`。
 function hkToday(now: Date = new Date()): Date {
-  return hkDayStartUtc(todayLocalStr(now));
+  const ymd = todayLocalStr(now);
+  return new Date(`${ymd}T00:00:00.000Z`);
 }
 
 export interface UpsertStaffNumberInput {
@@ -61,6 +84,12 @@ export interface UpsertStaffNumberInput {
   source?: string | null;
   createdBy?: string | null;
   now?: Date;
+  // M2b（Opus 驗收）：409（撞號）response 帶 `guard_id` 呢個結構化 detail
+  // 淨係俾內部角色（老闆／主管／會計）見到，雞頭（同其他角色）一律唔
+  // 畀——call site 要明確傳 `true`（`src/lib/broker-isolation.ts
+  // isInternalRole()`），default `false`（default-deny，就算漏傳都唔會
+  // 洩漏）。
+  revealConflictGuardId?: boolean;
 }
 
 export interface UpsertStaffNumberResult {
@@ -74,7 +103,8 @@ export interface UpsertStaffNumberResult {
  * 寫法」共用嘅核心 upsert 邏輯——起一行新 current；如果同一個 guard 同
  * 一個 scheme 已經有 current，就將舊嗰行自動轉 `former`（`validTo`＝今日
  * HK）；`number` 已經被（任何，包括自己）guard 用緊就 409（唔回姓名，
- * 淨係回邊個 guard_id，見 `src/lib/api/errors.ts` `ApiError.details`）。
+ * `revealConflictGuardId=true`——即係內部角色——先回埋邊個 guard_id，
+ * 見 `src/lib/api/errors.ts` `ApiError.details`／M2b）。
  *
  * 一定要喺 `prisma.$transaction()` 入面 call（`tx` 入面）——同一個 scheme
  * 「舊 current 轉 former」＋「起新 current」要原子性咁一齊成功或者一齊
@@ -89,10 +119,18 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
   if (!number.startsWith(scheme)) {
     throw BadRequest(`number 要以 scheme 開頭（${scheme}）：${number}`);
   }
+  // S2（Opus 驗收）：正規化之後仲要符合 `STAFF_NUMBER_NUMBER_RE`
+  // （scheme 前綴 1-4 位大寫英文字母 + 1-16 位英文數字／連字符，總長
+  // ≤20）——冇呢層會漏收例如夾埋標點/emoji/超長字串嘅工號。
+  if (!STAFF_NUMBER_NUMBER_RE.test(number)) {
+    throw BadRequest(`number 格式唔啱（正規化後要係 ${scheme}+1-16 位大寫英文字母／數字／連字符，總長 ≤20）：${number}`);
+  }
 
   const conflictingRow = await tx.guardStaffNumber.findUnique({ where: { number } });
   if (conflictingRow) {
-    throw Conflict("呢個工號已經有人用緊", { guard_id: conflictingRow.guardId });
+    // M2b：淨係內部角色（`revealConflictGuardId=true`）先攞到 guard_id，
+    // 雞頭一律得返個 generic 訊息，冇任何結構化 detail。
+    throw Conflict("呢個工號已經有人用緊", input.revealConflictGuardId ? { guard_id: conflictingRow.guardId } : undefined);
   }
 
   const existingCurrent = await tx.guardStaffNumber.findFirst({
@@ -129,18 +167,27 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
  * 都要喺同一個 transaction 內尾 call 呢個函數，等兩邊唔會唔一致——更表
  * 編輯器／匯出 Excel／報表／`ai.guards` view／seed gate 全部繼續讀
  * 呢兩個舊欄，唔使改。 */
+// S3/S4（Opus 驗收修復）：原本版本淨係睇 current 行——一個 guard 喺新表
+// 完全冇任何 U 行（例如佢個 legacy `staff_no` 格式怪，搬遷 migration
+// 跳咗冇起新表行，見 migration.sql），叫呢個函數都會將 `staffNo` 寫做
+// null，靜靜哋抹走一個「新表冇對應」但本身有效嘅 legacy 值。而家改做：
+// 淨係當呢個 guard 喺新表**有過**（`current` 或 `former`，唔限
+// `current`）呢個 scheme 嘅行，先同步嗰個舊欄；完全冇任何行（包括
+// former）就當「呢個 scheme 唔歸新表管」，保留 `guards` 表原有值唔郁。
 export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string): Promise<void> {
-  const currentRows = await tx.guardStaffNumber.findMany({ where: { guardId, status: "current" } });
+  const allRows = await tx.guardStaffNumber.findMany({ where: { guardId } });
+  const currentRows = allRows.filter((r) => r.status === "current");
   const uRow = currentRows.find((r) => r.scheme === "U");
   const mgRow = currentRows.find((r) => r.scheme === "MG");
   const mwRow = currentRows.find((r) => r.scheme === "MW");
-  await tx.guard.update({
-    where: { id: guardId },
-    data: {
-      staffNo: uRow?.number ?? null,
-      staffNoMw: mgRow?.number ?? mwRow?.number ?? null,
-    },
-  });
+  const hasUHistory = allRows.some((r) => r.scheme === "U");
+  const hasMgOrMwHistory = allRows.some((r) => r.scheme === "MG" || r.scheme === "MW");
+
+  const data: Prisma.GuardUpdateInput = {};
+  if (hasUHistory) data.staffNo = uRow?.number ?? null;
+  if (hasMgOrMwHistory) data.staffNoMw = mgRow?.number ?? mwRow?.number ?? null;
+  if (Object.keys(data).length === 0) return;
+  await tx.guard.update({ where: { id: guardId }, data });
 }
 
 export interface ApplyLegacyStaffNoPatchResult {
@@ -157,19 +204,44 @@ export interface ApplyLegacyStaffNoPatchResult {
  * `PATCH /api/guards/:id/staff-numbers/:numberId`）。 */
 export async function applyLegacyStaffNoPatch(
   tx: Tx,
-  params: { guardId: string; staffNo?: string | null; staffNoMw?: string | null; createdBy?: string | null; now?: Date },
+  params: {
+    guardId: string;
+    staffNo?: string | null;
+    staffNoMw?: string | null;
+    createdBy?: string | null;
+    now?: Date;
+    // M2b：見 UpsertStaffNumberInput.revealConflictGuardId——呢個 legacy
+    // patch 一樣可能撞號 409，一致對待。
+    revealConflictGuardId?: boolean;
+  },
 ): Promise<ApplyLegacyStaffNoPatchResult> {
-  const { guardId, staffNo, staffNoMw, createdBy, now } = params;
+  const { guardId, staffNo, staffNoMw, createdBy, now, revealConflictGuardId } = params;
   const changes: UpsertStaffNumberResult[] = [];
   if (staffNo) {
     const scheme = schemeFromNumber(staffNo);
     if (!scheme) throw BadRequest(`staff_no 格式推唔到 scheme（要以 1-4 位大寫英文字母開頭）：${staffNo}`);
-    changes.push(await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNo, source: "manual:legacy-patch(staff_no)", createdBy, now }));
+    // S1（Opus 驗收）：`staff_no`（舊欄）呢條快速路淨係收 U 開頭——其他
+    // 種類（MP／MG／MW／將來新種類）要用「員工編號」區（`POST/PATCH
+    // .../staff-numbers*`，唔限 scheme）新增／管理，唔准借呢條 legacy
+    // 路後門入。
+    if (scheme !== "U") {
+      throw BadRequest(`staff_no 只收 U 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNo}`);
+    }
+    changes.push(
+      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNo, source: "manual:legacy-patch(staff_no)", createdBy, now, revealConflictGuardId }),
+    );
   }
   if (staffNoMw) {
     const scheme = schemeFromNumber(staffNoMw);
     if (!scheme) throw BadRequest(`staff_no_mw 格式推唔到 scheme（要以 1-4 位大寫英文字母開頭）：${staffNoMw}`);
-    changes.push(await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNoMw, source: "manual:legacy-patch(staff_no_mw)", createdBy, now }));
+    // S1：`staff_no_mw`（舊欄）淨係收 MG／MW——同上，其他種類請用
+    // 「員工編號」區。
+    if (scheme !== "MG" && scheme !== "MW") {
+      throw BadRequest(`staff_no_mw 只收 MG／MW 開頭嘅工號；「${scheme}」呢類請用「員工編號」區新增／管理：${staffNoMw}`);
+    }
+    changes.push(
+      await upsertCurrentStaffNumber(tx, { guardId, scheme, number: staffNoMw, source: "manual:legacy-patch(staff_no_mw)", createdBy, now, revealConflictGuardId }),
+    );
   }
   if (changes.length) {
     await syncLegacyStaffNoColumns(tx, guardId);
@@ -215,6 +287,24 @@ export function assertNoLegacySiaPermitWrite(body: unknown): void {
   const hit = LEGACY_SIA_PERMIT_KEYS.find((k) => k in (body as Record<string, unknown>));
   if (hit) {
     throw BadRequest(`「${hit}」而家係衍生值（由甲／乙類到期日計出嚟），唔可以直接寫——請改用 sia_permit_a_expiry／sia_permit_b_expiry`);
+  }
+}
+
+// M2a（Opus 驗收修復）：雞頭經 `POST /api/guards`／`PATCH /api/guards/:id`
+// 帶 `staff_no`／`staff_no_mw`（舊寫法，會觸發 `applyLegacyStaffNoPatch()`
+// 起／改新表行）一律 403——同兩條新 `.../staff-numbers*` route 一樣**硬性
+// 擋**，唔靠矩陣「自己安員:update」出廠 off 個 cell（老闆理論上可以開
+// 呢個 cell 俾雞頭改自己安員嘅普通欄，開咗唔應該連帶解鎖雞頭寫工號——
+// 「雞頭唔可以寫工號」係呢個資源絕對規則，唔係可開關嘅權限）。要喺
+// `parseBody()` 之前用 raw body 檢查（key 存在就算，唔理值係咪 truthy/
+// 空字串——同 `assertNoLegacySiaPermitWrite()` 一致做法）。
+const LEGACY_STAFF_NO_KEYS = ["staff_no", "staff_no_mw"] as const;
+export function assertBrokerNoLegacyStaffNoWrite(isBroker: boolean, body: unknown): void {
+  if (!isBroker) return;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return;
+  const hit = LEGACY_STAFF_NO_KEYS.find((k) => k in (body as Record<string, unknown>));
+  if (hit) {
+    throw Forbidden(`雞頭唔可以帶「${hit}」——工號要用「員工編號」區管理，呢兩個 API 快速路淨係俾內部角色用`);
   }
 }
 

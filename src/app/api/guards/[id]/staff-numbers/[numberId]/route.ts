@@ -5,7 +5,7 @@
 // scheme 唔可以有兩行 current）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { scopeGuardWhere, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toGuardStaffNumberDTO } from "@/lib/api/dto";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
@@ -51,7 +51,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         }
         if (number !== row.number) {
           const conflictingRow = await tx.guardStaffNumber.findUnique({ where: { number } });
-          if (conflictingRow) throw Conflict("呢個工號已經有人用緊", { guard_id: conflictingRow.guardId });
+          // M2b：同 upsertCurrentStaffNumber() 一致——淨係內部角色先見到
+          // guard_id（呢度雞頭其實已經俾上面 isBrokerRole() 擋咗，呢層純
+          // 粹 defense-in-depth，唔靠「上面擋咗就假設呢度安全」）。
+          if (conflictingRow) throw Conflict("呢個工號已經有人用緊", isInternalRole(session) ? { guard_id: conflictingRow.guardId } : undefined);
           data.number = number;
         }
       }

@@ -55,6 +55,9 @@ interface GuardRow {
   // WP-STAFFNO：additive，淨係 current（chips 用）——冇 key 就當「未攞到
   // （唔會發生，冇 gate）」，見 src/app/api/guards/route.ts。
   staff_numbers?: Array<{ scheme: string; number: string; status: string }>;
+  // S7：淨係有 `?q=` 先有呢粒 key——呢個保安員入面有一個舊（former）號
+  // 撞中咗搜尋字。
+  former_number_hit?: boolean;
   // WP-PII：新欄一律 optional——response 有冇呢粒 key 視乎 field-group
   // gate（冇「安員個人資料/安員銀行資料:view」成粒 key 都唔會出現，
   // 唔係值做 null），見 src/lib/api/field-groups.ts。
@@ -135,16 +138,6 @@ const emptyStaffNumberForm = {
   note: "",
 };
 
-function matchesSearch(g: GuardRow, q: string): boolean {
-  if (!q.trim()) return true;
-  const needle = q.trim().toLowerCase();
-  // WP-STAFFNO：搜尋要搵到任何一種現用工號（U／MP／MG／MW…），唔淨係
-  // 舊嘅 staff_no（現用 U）——`staff_numbers`（additive，見
-  // src/app/api/guards/route.ts）已經係呢個人全部現用號嘅陣列。
-  const numbers = [g.staff_no, g.staff_no_mw, ...(g.staff_numbers ?? []).map((n) => n.number)];
-  return [g.name_zh, g.tel, ...numbers].some((v) => v && String(v).toLowerCase().includes(needle));
-}
-
 export function GuardsClient({
   isBroker,
   canUpdateSettlement,
@@ -207,18 +200,30 @@ export function GuardsClient({
   const [staffNumberSaving, setStaffNumberSaving] = useState(false);
   // 舊號（former）預設摺埋——「顯示舊號 N 個」撳咗先展開。
   const [showFormerStaffNumbers, setShowFormerStaffNumbers] = useState(false);
+  // S7：每行員工編號「轉做舊號」／「改返現用」／「編輯（號碼／生效期／
+  // 備註）」——`numberEditingId` 有值就顯示緊嗰行嘅 inline 編輯表單。
+  const [numberActionBusy, setNumberActionBusy] = useState(false);
+  const [numberActionError, setNumberActionError] = useState<string | null>(null);
+  const [numberEditingId, setNumberEditingId] = useState<string | null>(null);
+  const [numberEditForm, setNumberEditForm] = useState({ number: "", valid_from: "", note: "" });
   // WP-STAFFNO：`sia_permit_type`（A／B／A+B）而家係衍生顯示值，唔喺
   // `form` 度（唔會送落 PATCH body）——淨係讀 row 顯示俾用戶睇，改甲／
   // 乙到期日之後要重新 GET 先會見到新值（同其他衍生欄一致，唔喺前端
   // 重複算一次）。
   const [derivedSiaPermitType, setDerivedSiaPermitType] = useState<string | null>(null);
 
-  async function load() {
+  // S7（Opus 驗收）：搜尋改由 server 做（`GET /api/guards?q=`）——原本
+  // 純前端 `matchesSearch()` 淨係篩得到已經攞落嚟嗰批 rows 嘅 additive
+  // `staff_numbers`（淨係 current），搵唔到 former（已經摺埋）嘅舊號。
+  // Server 端 `q` 用 `guard_staff_numbers`（唔限 status）搵，仲會標
+  // `former_number_hit`。
+  async function load(q: string) {
     setLoading(true);
     setError(null);
     const expiringParam = expiringOnly ? "&expiring_within_days=90" : "";
+    const qParam = q.trim() ? `&q=${encodeURIComponent(q.trim())}` : "";
     const [guardRes, brokerRes] = await Promise.all([
-      apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}`),
+      apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${qParam}`),
       apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
     ]);
     if (!guardRes.ok) {
@@ -235,10 +240,15 @@ export function GuardsClient({
     setLoading(false);
   }
 
+  // S7：搜尋字打緊嗰陣 debounce 300ms 先 fetch（唔係逐個字都打一次
+  // API）；月份／90日篩選改變唔使等（用戶撳完期望即刻反映，呢兩個唔會
+  // 好似打字咁密集），但為咗淨係得一條 effect 管全部 reload、邏輯簡單
+  // 啲，一律用同一個 debounce（300ms 用戶感覺唔到延遲）。
   useEffect(() => {
-    load();
+    const t = setTimeout(() => load(search), 300);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, expiringOnly]);
+  }, [month, expiringOnly, search]);
 
   function broker(id?: string | null): BrokerRow | undefined {
     if (!id) return undefined;
@@ -253,6 +263,8 @@ export function GuardsClient({
     setStaffNumberForm(emptyStaffNumberForm);
     setStaffNumberError(null);
     setShowFormerStaffNumbers(false);
+    setNumberEditingId(null);
+    setNumberActionError(null);
     setDerivedSiaPermitType(null);
     setDrawerOpen(true);
   }
@@ -308,6 +320,8 @@ export function GuardsClient({
     setStaffNumberForm(emptyStaffNumberForm);
     setStaffNumberError(null);
     setShowFormerStaffNumbers(false);
+    setNumberEditingId(null);
+    setNumberActionError(null);
     setDrawerOpen(true);
     const detailRes = await apiGet<GuardRow>(`/api/guards/${row.id}`);
     if (detailRes.ok) {
@@ -384,12 +398,18 @@ export function GuardsClient({
         // WP-STAFFNO：`sia_permit_type`／`sia_permit_expiry` 而家係衍生
         // 值，唔再送落 body（API 400）——改甲／乙到期日就得，後台自動
         // 重算，儲存之後 `load()`／`openEdit()` 重新 GET 會見到新值。
-        if (form.sia_permit_a_expiry) body.sia_permit_a_expiry = form.sia_permit_a_expiry;
-        if (form.sia_permit_b_expiry) body.sia_permit_b_expiry = form.sia_permit_b_expiry;
+        //
+        // 附帶修復（Opus 驗收）：呢 5 個日期欄而家一律送（`|| null`），
+        // 唔再「空就唔送」——`GuardUpdateSchema` 已經改用 nullable
+        // schema（`null`＝清空），用戶將 input 打空咗要真係清得走個已填
+        // 日期，唔可以淨係「唔送呢個 key」（嗰種寫法後台會當「冇提
+        // 供」，完全唔會清）。
+        body.sia_permit_a_expiry = form.sia_permit_a_expiry || null;
+        body.sia_permit_b_expiry = form.sia_permit_b_expiry || null;
         if (form.safety_card_no) body.safety_card_no = form.safety_card_no;
-        if (form.safety_card_expiry) body.safety_card_expiry = form.safety_card_expiry;
-        if (form.hire_date) body.hire_date = form.hire_date;
-        if (form.leave_date) body.leave_date = form.leave_date;
+        body.safety_card_expiry = form.safety_card_expiry || null;
+        body.hire_date = form.hire_date || null;
+        body.leave_date = form.leave_date || null;
       }
     }
 
@@ -401,7 +421,7 @@ export function GuardsClient({
     }
     setDrawerOpen(false);
     setNotice(editingId ? "已更新" : "已新增");
-    await load();
+    await load(search);
   }
 
   // WP-STAFFNO：抽屜「員工編號」分區嘅「新增」——POST
@@ -432,13 +452,75 @@ export function GuardsClient({
         : `已新增 ${scheme} 號`,
     );
     await loadStaffNumbers(editingId);
-    await load(); // 令列表 chips 即時反映新現用號
+    await load(search); // 令列表 chips 即時反映新現用號
     // 主表單頂部嘅「工號」／「工號（MW）」（舊欄，PATCH 支援舊寫法）
     // 唔可以留低啱先起草嗰陣嘅舊值——如果新增咗 U／MG／MW 號，`guards.
     // staff_no`／`staff_no_mw` 已經由後台 `syncLegacyStaffNoColumns()`
     // 同步咗，主表單再唔重新 GET 就會停留喺舊值；到時撳「儲存」個 form
     // 會帶住呢個舊值一齊送，`PATCH /api/guards/:id` 會以為「想將個號改返
     // 舊嗰個」，同呢個 guard 自己頭先轉咗做 former 嗰行撞號（409）。
+    const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
+    if (detailRes.ok) fillFormFromRow(detailRes.data);
+  }
+
+  // S7（Opus 驗收）：員工編號逐行「轉做舊號」／「改返現用」——一click
+  // 切換 status（`current`↔`former`），call PATCH .../staff-numbers/:id。
+  async function onToggleStaffNumberStatus(row: StaffNumberRow) {
+    if (!editingId) return;
+    setNumberActionBusy(true);
+    setNumberActionError(null);
+    const nextStatus: "current" | "former" = row.status === "current" ? "former" : "current";
+    const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${row.id}`, { status: nextStatus });
+    setNumberActionBusy(false);
+    if (!res.ok) {
+      setNumberActionError(res.message);
+      return;
+    }
+    setNotice(nextStatus === "former" ? `已將 ${row.number} 轉做舊號` : `已將 ${row.number} 改返現用`);
+    await loadStaffNumbers(editingId);
+    await load(search);
+    // 同 onAddStaffNumber() 一致理由——staff_no／staff_no_mw 可能經
+    // syncLegacyStaffNoColumns() 同步咗，主表單要重新 GET 先唔會帶住
+    // 舊值撳「儲存」撞號。
+    const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
+    if (detailRes.ok) fillFormFromRow(detailRes.data);
+  }
+
+  // S7：「編輯」撳落去開 inline 表單（號碼／生效日期／備註），「編輯」
+  // 撳多次都得——`openNumberEdit()` 淨係重設個 form 做嗰行現有值。
+  function onOpenNumberEdit(row: StaffNumberRow) {
+    setNumberEditingId(row.id);
+    setNumberActionError(null);
+    setNumberEditForm({
+      number: row.number,
+      valid_from: row.valid_from ? row.valid_from.slice(0, 10) : "",
+      note: row.note ?? "",
+    });
+  }
+
+  function onCancelNumberEdit() {
+    setNumberEditingId(null);
+    setNumberActionError(null);
+  }
+
+  async function onSaveNumberEdit() {
+    if (!editingId || !numberEditingId) return;
+    setNumberActionBusy(true);
+    setNumberActionError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${numberEditingId}`, {
+      number: numberEditForm.number,
+      valid_from: numberEditForm.valid_from || undefined,
+      note: numberEditForm.note || undefined,
+    });
+    setNumberActionBusy(false);
+    if (!res.ok) {
+      setNumberActionError(res.message);
+      return;
+    }
+    setNumberEditingId(null);
+    setNotice("已更新員工編號");
+    await loadStaffNumbers(editingId);
+    await load(search);
     const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
     if (detailRes.ok) fillFormFromRow(detailRes.data);
   }
@@ -451,7 +533,7 @@ export function GuardsClient({
       return;
     }
     setNotice("已停用");
-    await load();
+    await load(search);
   }
 
   async function onUnvoid(id: string) {
@@ -462,7 +544,7 @@ export function GuardsClient({
       return;
     }
     setNotice("已恢復");
-    await load();
+    await load(search);
   }
 
   function statusPill(g: GuardRow) {
@@ -477,14 +559,17 @@ export function GuardsClient({
   // 「—」。
   function staffNumberChips(g: GuardRow) {
     const numbers = g.staff_numbers ?? [];
-    if (numbers.length === 0) return <span className="text-zk-muted">—</span>;
     return (
       <div className="flex flex-wrap items-center gap-1">
+        {numbers.length === 0 ? <span className="text-zk-muted">—</span> : null}
         {numbers.map((n) => (
           <Pill key={`${n.scheme}:${n.number}`} variant="neutral">
             {n.number}
           </Pill>
         ))}
+        {/* S7：靠一個舊（former）號搵到嘅結果——標俾用戶知呢個人喺搜尋緊
+            嗰個號其實已經摺埋（列表 chips 本身淨係顯示 current）。 */}
+        {g.former_number_hit ? <Pill variant="warning">舊號命中</Pill> : null}
       </div>
     );
   }
@@ -524,9 +609,82 @@ export function GuardsClient({
     return <Pill variant="success">有效</Pill>;
   }
 
-  const visibleRows = rows.filter((r) => matchesSearch(r, search));
+  // S7（Opus 驗收）：`rows` 而家已經係 server 揀好嘅結果（`GET
+  // /api/guards?q=`）——唔使再喺前端 filter 一次。
+  const visibleRows = rows;
   // S2：加返「聘用形式」欄——8 欄變 9 欄。
   const colCount = 9;
+
+  // S7：員工編號分區每行——顯示＋（!isBroker 先有）「轉做舊號」／
+  // 「改返現用」／「編輯（號碼／生效期／備註）」，call PATCH
+  // .../staff-numbers/:numberId。
+  function renderStaffNumberRow(n: StaffNumberRow) {
+    const isCurrent = n.status === "current";
+    const isEditing = numberEditingId === n.id;
+    return (
+      <div
+        key={n.id}
+        className={`rounded-[7px] border px-2.5 py-1.5 text-[13px] ${isCurrent ? "border-zk-border" : "border-zk-border bg-zk-header text-zk-muted"}`}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Pill variant="neutral">{n.scheme}</Pill>
+          <span className={isCurrent ? "font-medium text-zk-text" : undefined}>{n.number}</span>
+          <Pill variant={isCurrent ? "success" : "neutral"}>{isCurrent ? "現用" : "舊號"}</Pill>
+          {isCurrent && n.valid_from && <span className="text-xs text-zk-muted">生效：{fmtDate(n.valid_from)}</span>}
+          {!isCurrent && n.valid_to && <span className="text-xs">轉舊號：{fmtDate(n.valid_to)}</span>}
+          {n.note && <span className="text-xs text-zk-muted">備註：{n.note}</span>}
+          {!isBroker && (
+            <div className="ml-auto flex gap-1.5">
+              <button
+                type="button"
+                disabled={numberActionBusy}
+                onClick={() => onToggleStaffNumberStatus(n)}
+                className="text-xs text-zk-primary underline"
+              >
+                {isCurrent ? "轉做舊號" : "改返現用"}
+              </button>
+              <button
+                type="button"
+                onClick={() => (isEditing ? onCancelNumberEdit() : onOpenNumberEdit(n))}
+                className="text-xs text-zk-primary underline"
+              >
+                {isEditing ? "取消編輯" : "編輯"}
+              </button>
+            </div>
+          )}
+        </div>
+        {isEditing && (
+          <div className="mt-2 space-y-2 border-t border-zk-border pt-2">
+            <Banner kind="error" message={numberActionError} />
+            <Field label="號碼">
+              <input className={inputCls} value={numberEditForm.number} onChange={(e) => setNumberEditForm((f) => ({ ...f, number: e.target.value }))} />
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="生效日期">
+                <input
+                  type="date"
+                  className={inputCls}
+                  value={numberEditForm.valid_from}
+                  onChange={(e) => setNumberEditForm((f) => ({ ...f, valid_from: e.target.value }))}
+                />
+              </Field>
+              <Field label="備註">
+                <input className={inputCls} value={numberEditForm.note} onChange={(e) => setNumberEditForm((f) => ({ ...f, note: e.target.value }))} />
+              </Field>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" disabled={numberActionBusy} onClick={onSaveNumberEdit} className={btnSecondary}>
+                {numberActionBusy ? "儲存緊…" : "儲存"}
+              </button>
+              <button type="button" onClick={onCancelNumberEdit} className={btnSecondary}>
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -695,10 +853,20 @@ export function GuardsClient({
         <form onSubmit={onSubmit} className="space-y-3">
           <Banner kind="error" message={formError} />
           <div className="grid grid-cols-2 gap-2">
-            <Field label="工號">
+            {/* S1（Opus 驗收）：呢兩個係快速路（同步落 guards.staff_no／
+                staff_no_mw），淨係收固定種類——U／MG／MW 以外嘅種類（例如
+                MP）要落面「員工編號」分區新增，唔係就 API 會 400。 */}
+            {/* hint 文字刻意唔用「員工編號」呢個字眼（雖然指緊嗰個分區）——
+                Playwright e2e（tests/e2e/staffno.spec.ts fieldControl()）
+                淨係靠 `label` 嘅 `hasText` 子字串 + `.first()` 揾返落面
+                「員工編號」分區入面真正嘅「編號」input，`hint` 文字入面
+                字面出現「編號」呢兩個字會令佢誤中呢個較前面嘅 label，撳
+                「新增編號」個掣（`!staffNumberForm.number` 都仲係空）保持
+                disabled，成個 POST 都唔會發出——見 fieldControl() 註解。 */}
+            <Field label="工號" hint="只收 U 開頭；其他種類請用下面獨立分區新增">
               <input className={inputCls} value={form.staff_no} onChange={(e) => setForm((f) => ({ ...f, staff_no: e.target.value }))} />
             </Field>
-            <Field label="工號（MW）">
+            <Field label="工號（MW）" hint="只收 MG／MW 開頭；其他種類請用下面獨立分區新增">
               <input className={inputCls} value={form.staff_no_mw} onChange={(e) => setForm((f) => ({ ...f, staff_no_mw: e.target.value }))} />
             </Field>
           </div>
@@ -836,18 +1004,7 @@ export function GuardsClient({
               {staffNumbers.filter((n) => n.status === "current").length === 0 ? (
                 <div className="text-sm text-zk-muted">未有現用編號</div>
               ) : (
-                <div className="space-y-1.5">
-                  {staffNumbers
-                    .filter((n) => n.status === "current")
-                    .map((n) => (
-                      <div key={n.id} className="flex flex-wrap items-center gap-2 rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
-                        <Pill variant="neutral">{n.scheme}</Pill>
-                        <span className="font-medium text-zk-text">{n.number}</span>
-                        <Pill variant="success">現用</Pill>
-                        {n.valid_from && <span className="text-xs text-zk-muted">生效：{fmtDate(n.valid_from)}</span>}
-                      </div>
-                    ))}
-                </div>
+                <div className="space-y-1.5">{staffNumbers.filter((n) => n.status === "current").map(renderStaffNumberRow)}</div>
               )}
 
               {staffNumbers.filter((n) => n.status === "former").length > 0 && (
@@ -860,18 +1017,7 @@ export function GuardsClient({
                     {showFormerStaffNumbers ? "隱藏舊號" : `顯示舊號 ${staffNumbers.filter((n) => n.status === "former").length} 個`}
                   </button>
                   {showFormerStaffNumbers && (
-                    <div className="mt-1.5 space-y-1.5">
-                      {staffNumbers
-                        .filter((n) => n.status === "former")
-                        .map((n) => (
-                          <div key={n.id} className="flex flex-wrap items-center gap-2 rounded-[7px] border border-zk-border bg-zk-header px-2.5 py-1.5 text-[13px] text-zk-muted">
-                            <Pill variant="neutral">{n.scheme}</Pill>
-                            <span>{n.number}</span>
-                            <Pill variant="neutral">舊號</Pill>
-                            {n.valid_to && <span className="text-xs">轉舊號：{fmtDate(n.valid_to)}</span>}
-                          </div>
-                        ))}
-                    </div>
+                    <div className="mt-1.5 space-y-1.5">{staffNumbers.filter((n) => n.status === "former").map(renderStaffNumberRow)}</div>
                   )}
                 </div>
               )}

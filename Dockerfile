@@ -33,7 +33,9 @@ COPY --from=build /app/node_modules ./node_modules
 EXPOSE 8080
 # 每次啟動：套用 migration（幂等）→ 建/更新 AI 助手唯讀角色 zoikan_ai_ro
 # （幂等；冇 AI_DB_PASSWORD 就跳過並 warn，唔中止部署，見
-# scripts/db/ensure-ai-role.ts）→ 起 Next standalone server。
+# scripts/db/ensure-ai-role.ts）→ 校正 sia_permit_expiry／sia_permit_type
+# 衍生欄（S5，見 scripts/db/recompute-permit-derived.ts，同樣幂等、失敗
+# 只 warn）→ 起 Next standalone server。
 COPY --from=build /app/scripts ./scripts
-# migrate deploy 失敗要停（schema 唔對唔可以起）；sync-permissions／ensure-ai-role 失敗只 warn，唔阻止網站起
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && (node node_modules/.bin/tsx scripts/db/sync-permissions.ts || echo '[warn] sync-permissions 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts || echo '[warn] ensure-ai-role 失敗，網站照起') && node server.js"]
+# migrate deploy 失敗要停（schema 唔對唔可以起）；sync-permissions／ensure-ai-role／recompute-permit-derived 失敗只 warn，唔阻止網站起
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && (node node_modules/.bin/tsx scripts/db/sync-permissions.ts || echo '[warn] sync-permissions 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts || echo '[warn] ensure-ai-role 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/recompute-permit-derived.ts || echo '[warn] recompute-permit-derived 失敗，網站照起') && node server.js"]

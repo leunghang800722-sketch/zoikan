@@ -73,65 +73,108 @@ CREATE UNIQUE INDEX "guard_staff_numbers_guard_scheme_current_key"
 -- 刻意唔改 guards.staff_no／staff_no_mw 本身呢兩個值——由呢個 migration
 -- 之後起，呢兩個舊欄先變做「由新表算返嚟」嘅同步值（見
 -- src/lib/guards/staff-numbers.ts syncLegacyStaffNoColumns()）。呢一刻
--- 淨係負責由現有值起新表底，唔可以反過嚟拿 sync 結果去覆蓋現有欄：如果
--- 現有 staff_no 冇 letter 前綴（理論上唔應該發生——staff_no 本身直到
--- 而家一律 "U00xxx" 呢種格式，見 tools/importer/out/wp2b/guards.csv
--- 實測 201 個 staff_no 全部 "U" 開頭、48 個 staff_no_mw 全部
--- "MG"／"MW" 開頭），下面 WHERE 子句會跳過嗰行（唔會插入任何 scheme
--- 為空嘅 garbage row），令嗰個 guard 冇對應 current 行、legacy 欄原樣
--- 保留——日後由人手用 API 補一行正確嘅號先會令兩邊一致。
+-- 淨係負責由現有值起新表底，唔可以反過嚟拿 sync 結果去覆蓋現有欄。
 --
--- 撞號檢查：dev DB 應該冇任何 staff_no／staff_no_mw 撞號（staff_no 本身
--- 已經有 unique 約束防重複，但 staff_no 同 staff_no_mw 之間理論上未防
--- 過——例如萬一 staff_no="MG001" 撞正另一個人嘅 staff_no_mw="MG001"），
--- 呢度用 PL/pgSQL 顯式 RAISE EXCEPTION 中止，唔靠插入一半先俾 unique
--- constraint 拋錯（減少殘缺 migration state）。
-DO $$
-DECLARE
-  dup_count INT;
-BEGIN
-  SELECT COUNT(*) INTO dup_count FROM (
-    SELECT UPPER(TRIM(staff_no)) AS number FROM guards WHERE staff_no IS NOT NULL AND TRIM(staff_no) <> ''
-    UNION ALL
-    SELECT UPPER(TRIM(staff_no_mw)) AS number FROM guards WHERE staff_no_mw IS NOT NULL AND TRIM(staff_no_mw) <> ''
-  ) t
-  GROUP BY number
-  HAVING COUNT(*) > 1
-  LIMIT 1;
+-- S3/S4（Opus 驗收修復）：原本版本一旦 staff_no／staff_no_mw 之間有正規
+-- 化後撞號就成個 migration `RAISE EXCEPTION` 中止——歷史髒資料應該盡量
+-- 兜底、留低證據俾人手跟進，唔應該令部署卡死。而家改做：
+--
+--   (a) dup-check 同真正 INSERT 用**同一個**候選集合（下面 `wp_staffno_
+--       source` 呢張 temp table）——一個值要正規化（trim＋大寫＋去晒
+--       空白，同 `normalizeStaffNumber()` app 層一致）之後符合
+--       `^[A-Z]{1,4}[0-9A-Z-]+$`（scheme 前綴 1-4 位大寫英文字母 + 至少
+--       一位英文字母/數字/連字符）先會被考慮 backfill。
+--   (b) 格式唔啱嘅（例如冇字母前綴、淨係得個空殼）——唔起新表行、
+--       `guards` 表原值原封不動，寫一行 `audit_log`
+--       （`action='migration_skipped_invalid'`）俾人手跟進，`row_id`＝
+--       嗰個 guard 嘅 id。
+--   (c) 正規化後真係撞號（同一個值嚟自兩個唔同 guard，或者同一個 guard
+--       嘅 `staff_no`／`staff_no_mw` 兩欄啱啱好正規化埋一齊）——**唔
+--       abort**：`(created_at, guard_id)` 排先嗰個攞呢個號做
+--       `current`；其餘全部跳過（唔起行），每個跳過嘅一樣寫一行
+--       `audit_log`（`action='migration_skipped_duplicate'`）。
+--
+-- 兩張 temp table 用完即棄（`DROP TABLE` 喺尾——temp table 本身都會跟
+-- session 结束自動清，呢度顯式 drop 純粹令個 migration 讀落去意圖清晰）。
+CREATE TEMP TABLE wp_staffno_source AS
+SELECT
+  id AS guard_id,
+  created_at,
+  'staff_no' AS col_name,
+  UPPER(REGEXP_REPLACE(TRIM(staff_no), '\s+', '', 'g')) AS normalized
+FROM guards
+WHERE staff_no IS NOT NULL AND TRIM(staff_no) <> ''
+UNION ALL
+SELECT
+  id,
+  created_at,
+  'staff_no_mw',
+  UPPER(REGEXP_REPLACE(TRIM(staff_no_mw), '\s+', '', 'g'))
+FROM guards
+WHERE staff_no_mw IS NOT NULL AND TRIM(staff_no_mw) <> '';
 
-  IF dup_count IS NOT NULL AND dup_count > 0 THEN
-    RAISE EXCEPTION 'WP-STAFFNO 搬遷：staff_no／staff_no_mw 之間有重複值，要人手核對再搬（見 migration.sql 頭註解）';
-  END IF;
-END $$;
+-- 格式啱嘅候選值，逐個 normalized 值分組，`(created_at, guard_id)`
+-- 排先嗰行 rn=1 做 winner；同一個值有兩行或以上就係真撞號（rn>1 嗰啲）。
+CREATE TEMP TABLE wp_staffno_ranked AS
+SELECT
+  guard_id,
+  col_name,
+  normalized,
+  ROW_NUMBER() OVER (PARTITION BY normalized ORDER BY created_at ASC, guard_id ASC) AS rn
+FROM wp_staffno_source
+WHERE normalized ~ '^[A-Z]{1,4}[0-9A-Z-]+$';
 
+-- winner（每個 normalized 值嘅第一個）→ 起一行 current。
 INSERT INTO "guard_staff_numbers" (id, guard_id, scheme, number, status, source, created_at, updated_at)
 SELECT
   gen_random_uuid(),
-  id,
-  UPPER(substring(TRIM(staff_no) FROM '^[A-Za-z]+')),
-  UPPER(TRIM(staff_no)),
+  guard_id,
+  UPPER(substring(normalized FROM '^[A-Z]{1,4}')),
+  normalized,
   'current',
-  'migration:staff_no',
+  'migration:' || col_name,
   now(),
   now()
-FROM guards
-WHERE staff_no IS NOT NULL
-  AND TRIM(staff_no) <> ''
-  AND substring(TRIM(staff_no) FROM '^[A-Za-z]+') IS NOT NULL
-  AND length(substring(TRIM(staff_no) FROM '^[A-Za-z]+')) BETWEEN 1 AND 4;
+FROM wp_staffno_ranked
+WHERE rn = 1;
 
-INSERT INTO "guard_staff_numbers" (id, guard_id, scheme, number, status, source, created_at, updated_at)
+-- 真撞號、冇攞到 winner 嗰啲（rn>1）→ 跳過，audit_log 留底俾人手跟進。
+INSERT INTO audit_log (id, actor_user_id, table_name, row_id, action, before, after, ip, created_at)
 SELECT
   gen_random_uuid(),
-  id,
-  UPPER(substring(TRIM(staff_no_mw) FROM '^[A-Za-z]+')),
-  UPPER(TRIM(staff_no_mw)),
-  'current',
-  'migration:staff_no_mw',
-  now(),
+  NULL,
+  'guard_staff_numbers',
+  guard_id,
+  'migration_skipped_duplicate',
+  NULL,
+  jsonb_build_object(
+    'column', col_name,
+    'number', normalized,
+    'reason', '正規化後同另一個 guard（或自己另一欄）撞號，(created_at,guard_id) 排先嗰個已經攞咗做 current，呢個跳過，需要人手核對邊個先係啱嘅擁有人'
+  ),
+  NULL,
   now()
-FROM guards
-WHERE staff_no_mw IS NOT NULL
-  AND TRIM(staff_no_mw) <> ''
-  AND substring(TRIM(staff_no_mw) FROM '^[A-Za-z]+') IS NOT NULL
-  AND length(substring(TRIM(staff_no_mw) FROM '^[A-Za-z]+')) BETWEEN 1 AND 4;
+FROM wp_staffno_ranked
+WHERE rn > 1;
+
+-- 格式唔啱嘅（例如冇字母前綴）→ 跳過，同樣 audit_log 留底。
+INSERT INTO audit_log (id, actor_user_id, table_name, row_id, action, before, after, ip, created_at)
+SELECT
+  gen_random_uuid(),
+  NULL,
+  'guard_staff_numbers',
+  guard_id,
+  'migration_skipped_invalid',
+  NULL,
+  jsonb_build_object(
+    'column', col_name,
+    'raw_normalized', normalized,
+    'reason', 'format 唔啱（正規化後要係 1-4 位大寫英文字母開頭 + 至少一位英文字母/數字/連字符），legacy 欄原值保留，需要人手核對後用 API 補一行正確嘅員工編號'
+  ),
+  NULL,
+  now()
+FROM wp_staffno_source
+WHERE normalized !~ '^[A-Z]{1,4}[0-9A-Z-]+$';
+
+DROP TABLE wp_staffno_ranked;
+DROP TABLE wp_staffno_source;
