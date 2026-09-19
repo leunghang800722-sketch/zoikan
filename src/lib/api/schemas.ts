@@ -25,6 +25,7 @@ import {
   SpecialItemKind,
 } from "@prisma/client";
 import { normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
+import { normalizeTel, TEL_RE } from "@/lib/guards/contacts";
 
 function enumOf(obj: Record<string, string>) {
   return z.enum(Object.values(obj) as [string, ...string[]]);
@@ -58,8 +59,29 @@ const money = z.union([z.number(), z.string()]).optional();
 // 數字或 "A" 嘅核對碼），大小寫都收（入 DB 之前唔轉大寫，保留原文）。
 const HKID_RE = /^[A-Za-z]{1,2}[0-9]{6}\([0-9Aa]\)$/;
 const hkid = z.string().regex(HKID_RE, "身份證格式要係 A123456(7) 咁樣").optional();
-// 緊急聯絡人電話——同設計文件一致，香港電話 8 位數字。
-const tel8 = z.string().regex(/^\d{8}$/, "電話要係 8 位數字").optional();
+// Opus 覆核（WP-MULTI 必修 4）：電話格式（`guard_phones.tel`／
+// `GuardUpdateSchema.emergency_contact_tel`／`GuardEmergencyContact*
+// Schema.tel`）統一用呢兩個——之前呢度嘅 `tel8`（8 位香港號硬性）成個
+// 刪走，`GuardUpdateSchema.emergency_contact_tel` 淨係放寬到同 `tel`
+// 一致（唔喺 schema 層驗格式，落 `applyLegacyGuardContactPatch()` 舊
+// 寫法一樣容許髒值唔會撞 400，見 src/app/api/guards/[id]/route.ts「值
+// 冇變就當冇改」大註解）；子資源（POST／PATCH .../emergency-contacts）
+// 就用 `nullablePhoneTel`（正規化＋驗格式，可空，同電話一致）。
+const phoneTel = z
+  .string()
+  .min(1)
+  .transform((v) => normalizeTel(v))
+  .refine((v) => TEL_RE.test(v), { message: "電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）" });
+// 可空版——`null`／undefined／空白字串都當「冇提供」，非空先正規化＋驗
+// 格式（緊急聯絡人「姓名／電話至少填一樣」，電話呢欄本身可以淨係得
+// 姓名冇電話，同 phoneTel 唔同要容許空）。
+const nullablePhoneTel = z
+  .union([z.null(), z.string()])
+  .optional()
+  .transform((v) => (v === null || v === undefined ? v : v.trim() === "" ? null : normalizeTel(v)))
+  .refine((v) => v === null || v === undefined || TEL_RE.test(v), {
+    message: "電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）",
+  });
 // WP-STAFFNO：`sia_permit_type` 改做衍生值（唔再接受 API 直接寫，見
 // GuardUpdateSchema 註解），之前呢度嘅 `SIA_PERMIT_TYPES`／
 // `siaPermitType` zod enum 冇 call site 用喇，成組刪走。
@@ -195,7 +217,14 @@ export const GuardUpdateSchema = z
     date_of_birth: nullableDateOnly,
     address: z.string().optional(),
     emergency_contact_name: z.string().optional(),
-    emergency_contact_tel: tel8,
+    // Opus 覆核（WP-MULTI 必修 4）：呢個舊寫法欄放寬到同 `tel`（上面）
+    // 一致——冇格式驗證（唔再 8 位硬性），真正嘅正規化＋驗格式留返落
+    // `applyLegacyGuardContactPatch()`／子資源 schema（`nullablePhoneTel`）
+    // 做；唔喺呢層驗嘅原因同 `tel` 一致：「值冇變（包括髒值）就當冇改」
+    // 呢個判斷要喺 parseBody() 之後、真係改咗先觸發格式驗證，唔可以喺
+    // parseBody() 呢一刻就因為 DB 現存嘅髒值格式唔啱而 400（見
+    // src/app/api/guards/[id]/route.ts 大註解）。
+    emergency_contact_tel: z.string().optional(),
     sia_permit_no: z.string().optional(),
     safety_card_no: z.string().optional(),
     // 附帶修復：平安卡到期／入職／離職日期一樣改用 `nullableDateOnly`
@@ -258,6 +287,81 @@ export const GuardStaffNumberUpdateSchema = z
     // 打錯用呢個改，唔洗刪咗重加——同樣行 unique/prefix 檢查（見
     // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
     number: staffNumberValue.optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// WP-MULTI（老闆 2026-09-19 拍板）：電話／緊急聯絡人／地址三張新子表——
+// 同上面 GuardStaffNumber* 一致嘅 zod 手法（`tel` 正規化＋格式 regex 喺
+// 呢層做一次 defense-in-depth，`src/lib/guards/contacts.ts` 入面嘅
+// create/update 函數再驗一次，兩個 call site——route／舊 PATCH legacy
+// path——都要經過）。`phoneTel`／`nullablePhoneTel` 定義喺檔案頭
+// （`GuardUpdateSchema` 之前，等佢都用得到）。
+export const GuardPhoneCreateSchema = z
+  .object({
+    tel: phoneTel,
+    label: nullableString,
+    is_primary: z.boolean().optional(),
+    note: nullableString,
+  })
+  .strict();
+// Opus 第三輪覆核：update 嘅 `tel` 唔喺 schema 層驗格式——自癒／舊寫法照搬落嚟嘅
+// 髒 tel 行，前端編輯 label／備註時會連 tel 原值一齊送，schema 一驗就 400 鎖死。
+// 改為 route／lib 層「同現值一樣就照搬、真係改咗先正規化＋驗格式」。
+export const GuardPhoneUpdateSchema = z
+  .object({
+    tel: z.string().min(1).optional(),
+    label: nullableString,
+    is_primary: z.boolean().optional(),
+    note: nullableString,
+  })
+  .strict();
+
+// Opus 覆核（WP-MULTI 必修 4）：`tel` 之前用 `nullableString`（完全冇格式
+// 驗證）——而家同電話一樣正規化＋驗格式（去空白／連字符；`^\+?[0-9]
+// {7,15}$`；可空，`assertNameOrTel()` 落 src/lib/guards/contacts.ts 保證
+// 姓名／電話唔會同時空）。
+export const GuardEmergencyContactCreateSchema = z
+  .object({
+    name: nullableString,
+    tel: nullablePhoneTel,
+    relationship: nullableString,
+    sort_order: z.number().int().optional(),
+    note: nullableString,
+  })
+  .strict();
+export const GuardEmergencyContactUpdateSchema = z
+  .object({
+    name: nullableString,
+    tel: nullableString, // 同上：lib 層 updateGuardEmergencyContact() 先驗（冇改就照搬）
+    relationship: nullableString,
+    sort_order: z.number().int().optional(),
+    note: nullableString,
+  })
+  .strict();
+
+// Opus 覆核（必修 6）：`PUT /api/guards/:id/emergency-contacts/order`——
+// 一個 transaction 重寫全部行嘅 `sort_order`（跟 `ids` 陣列順序，
+// 0-based）。`ids` 要啱啱好等於現有全部行（見
+// src/lib/guards/contacts.ts reorderGuardEmergencyContacts()）。
+export const GuardEmergencyContactOrderSchema = z
+  .object({
+    ids: z.array(uuid).min(1),
+  })
+  .strict();
+
+export const GuardAddressCreateSchema = z
+  .object({
+    address: z.string().min(1),
+    is_primary: z.boolean().optional(),
+    note: nullableString,
+  })
+  .strict();
+export const GuardAddressUpdateSchema = z
+  .object({
+    address: z.string().min(1).optional(),
+    is_primary: z.boolean().optional(),
+    note: nullableString,
   })
   .strict();
 

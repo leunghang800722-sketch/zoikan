@@ -33,6 +33,9 @@ import {
   toReferralFeeRateDTO,
   toFeedbackReportDTO,
   toGuardStaffNumberDTO,
+  toGuardPhoneDTO,
+  toGuardEmergencyContactDTO,
+  toGuardAddressDTO,
 } from "./dto";
 import type { Dto } from "./serialize";
 import type { AuditAction } from "../audit";
@@ -66,6 +69,16 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   // action（POST/PATCH staff-numbers）一樣經呢個 mapping 存完整白名單
   // DTO，唔會跌落「未知 table_name → 淨係存 {id}」嗰個 catch-all。
   guard_staff_numbers: (r) => toGuardStaffNumberDTO(r),
+  // WP-MULTI（老闆 2026-09-19 拍板）：guard_phones／
+  // guard_emergency_contacts／guard_addresses——同上一致做法，寫入
+  // audit_log 一樣經完整白名單 DTO。呢三個 table_name 嘅 audit_log
+  // before／after 有 PII（tel／name／address）——AI 助手結構性睇唔到
+  // （`ai.audit_log` view WHERE 子句直接排除，見
+  // prisma/migrations/20260919154450_wp_multi_phones_contacts_addresses），
+  // 呢度嘅 DTO mapping 純粹俾內部 `/audit-log` 頁用。
+  guard_phones: (r) => toGuardPhoneDTO(r),
+  guard_emergency_contacts: (r) => toGuardEmergencyContactDTO(r),
+  guard_addresses: (r) => toGuardAddressDTO(r),
 };
 
 /** 呢啲 action 代表「呢個值本身係一個完整資源 row」——先會行 DTO
@@ -78,6 +91,10 @@ export const AUDIT_ROW_MAPPED_ACTIONS: ReadonlySet<AuditAction> = new Set([
   "unvoid",
   "lock_month",
   "unlock_month",
+  // WP-MULTI：`before`（刪之前嘅完整 row）一樣要經 DTO mapping——`after`
+  // 本身係 null，`toAuditSafeValue()` 見到 null 會直接 `return value`
+  // （唔會嘗試 mapping 一個唔存在嘅 row），唔受呢個 Set 影響。
+  "delete",
 ]);
 
 /** DTO 轉換之後仲要保留嘅安全純文字 meta 欄——唔屬於任何 resource 嘅

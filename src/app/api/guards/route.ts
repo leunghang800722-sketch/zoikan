@@ -24,6 +24,7 @@ import {
   isSiaPermitBLapsedByAge,
   type StaffNumberChip,
 } from "@/lib/guards/staff-numbers";
+import { createGuardPhone, syncLegacyGuardContactColumns, writeLegacyContactAudits } from "@/lib/guards/contacts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 import type { Prisma, Guard } from "@prisma/client";
@@ -118,12 +119,20 @@ export async function GET(req: Request) {
     }
     // S7：`?q=`——姓名／電話／任何 current＋former 工號，見
     // `findNumberSearchMatches()` 頂註解。
+    // WP-MULTI：電話而家「有幾多個記幾多個」——`guards.tel` 舊欄淨係
+    // primary，`?q=` 要搵到任何一個（唔止主要），所以加埋
+    // `guard_phones`（唔限 is_primary）嘅 guardId 一齊 OR 落主 query，
+    // 同 `findNumberSearchMatches()` 一致嘅手法。
     const qParam = url.searchParams.get("q")?.trim() || null;
     let where: Prisma.GuardWhereInput = includeInactive ? {} : { status: "active" };
     let formerHitGuardIds = new Set<string>();
     if (qParam) {
-      const numberMatches = await findNumberSearchMatches(qParam);
+      const [numberMatches, phoneMatches] = await Promise.all([
+        findNumberSearchMatches(qParam),
+        prisma.guardPhone.findMany({ where: { tel: { contains: qParam } }, select: { guardId: true } }),
+      ]);
       formerHitGuardIds = numberMatches.formerHitGuardIds;
+      const phoneMatchGuardIds = [...new Set(phoneMatches.map((p) => p.guardId))];
       where = {
         ...where,
         OR: [
@@ -131,6 +140,7 @@ export async function GET(req: Request) {
           { nameEn: { contains: qParam, mode: "insensitive" } },
           { tel: { contains: qParam } },
           ...(numberMatches.guardIds.length > 0 ? [{ id: { in: numberMatches.guardIds } }] : []),
+          ...(phoneMatchGuardIds.length > 0 ? [{ id: { in: phoneMatchGuardIds } }] : []),
         ],
       };
     }
@@ -240,9 +250,15 @@ export async function POST(req: Request) {
     // 一開始個 staff_no 就冇對應嘅 current 行，第一次有人幫佢加／改第二
     // 個工號（觸發 sync）就會被靜靜哋抹走（見 src/lib/guards/
     // staff-numbers.ts syncLegacyStaffNoColumns() 大註解）。
-    const { staff_no: staffNoLegacy, staff_no_mw: staffNoMwLegacy, ...rest } = parsed as typeof parsed & {
+    // WP-MULTI（老闆 2026-09-19 拍板）：`tel`（新增保安員嗰陣填嘅初始
+    // 電話）而家一樣要行 `createGuardPhone()` 起一行 primary（唔可以再
+    // 直接落 `prisma.guard.create({ data: { tel } })`），唔係就呢個
+    // guard 一開始嘅電話就冇對應嘅 `guard_phones` 行，第一次有人幫佢加
+    // 第二個電話（觸發 sync）就會被靜靜哋抹走（同 staff_no 一致理由）。
+    const { staff_no: staffNoLegacy, staff_no_mw: staffNoMwLegacy, tel: telLegacy, ...rest } = parsed as typeof parsed & {
       staff_no?: string;
       staff_no_mw?: string;
+      tel?: string;
     };
     const data = snakeToCamelShallow(rest) as Prisma.GuardUncheckedCreateInput;
     // 雞頭建安員：強制掛喺自己個 broker 底下（唔准幫其他雞頭/自己揀第二個 broker）
@@ -272,7 +288,7 @@ export async function POST(req: Request) {
       }
     }
 
-    const { created, legacyChanges } = await prisma.$transaction(async (tx) => {
+    const { created, legacyChanges, phoneResult } = await prisma.$transaction(async (tx) => {
       const createdGuard = await tx.guard.create({ data: { ...data, createdBy: session.userId } });
       const legacyResult =
         staffNoLegacy || staffNoMwLegacy
@@ -284,13 +300,19 @@ export async function POST(req: Request) {
               revealConflictGuardId: isInternalRole(session),
             })
           : { changes: [] };
-      const finalGuard = legacyResult.changes.length > 0 ? await tx.guard.findUniqueOrThrow({ where: { id: createdGuard.id } }) : createdGuard;
-      return { created: finalGuard, legacyChanges: legacyResult.changes };
+      // WP-MULTI：初始 `tel`（非空）起一行 primary 電話。
+      const phoneRes = telLegacy && telLegacy.trim() ? await createGuardPhone(tx, { guardId: createdGuard.id, tel: telLegacy, isPrimary: true, source: "manual", createdBy: session.userId }) : null;
+      if (phoneRes) await syncLegacyGuardContactColumns(tx, createdGuard.id, ["tel"]);
+      const finalGuard = legacyResult.changes.length > 0 || phoneRes ? await tx.guard.findUniqueOrThrow({ where: { id: createdGuard.id } }) : createdGuard;
+      return { created: finalGuard, legacyChanges: legacyResult.changes, phoneResult: phoneRes };
     });
 
     await writeAudit({ actorUserId: session.userId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
     if (legacyChanges.length > 0) {
       await writeStaffNumberAudits(session.userId, legacyChanges, getClientIp(req));
+    }
+    if (phoneResult) {
+      await writeLegacyContactAudits(session.userId, { phone: phoneResult, address: null, contact: null }, getClientIp(req));
     }
     if (isBrokerRole(session)) return ok(scrubForBrokerSession(session, toBrokerGuardDTO(created)), 201);
     return ok(await applyFieldGroupGate(session, "guards", toGuardFullDTO(created)), 201);

@@ -25,6 +25,38 @@ async function findBrokerAOwnGuard() {
   return guard;
 }
 
+// Opus 覆核（WP-MULTI 必修 3）：呢個檔案幾個 test（(e)／(g)）淨係想測
+// PII／field-group 邏輯，順手用真實嘅 `findBrokerAOwnGuard()` 改咗電話
+// 一次，`finally` 度原本直接 `prisma.guard.update({ data: { tel: ... }
+// })` raw 還原——呢種寫法唔會跟住 sync `guard_phones`（WP-MULTI 新表），
+// 令 legacy `tel` 同子表嘅 primary 行唔一致（`src/lib/guards/contacts.ts
+// createGuardPhone()` 頂註解都有記低呢個場景）。改用呢個 helper：
+// 順手將測試起低嘅電話行清走、將原本嗰個電話行升（或者補）返做
+// primary，先至還原 `guards.tel`——等 `guard_phones` 同 legacy 欄一直
+// 保持一致，唔留 desync 畀下一個測試/下一次 db 檢查。
+async function restoreGuardTel(guardId: string, originalTel: string | null, extraTelsToRemove: string[] = []): Promise<void> {
+  const normalize = (v: string) => v.replace(/[\s-]+/g, "");
+  const normalizedOriginal = originalTel ? normalize(originalTel) : null;
+  const toRemove = extraTelsToRemove.map(normalize).filter((t) => t !== normalizedOriginal);
+  if (toRemove.length > 0) {
+    await prisma.guardPhone.deleteMany({ where: { guardId, tel: { in: toRemove } } });
+  }
+  if (normalizedOriginal) {
+    await prisma.guardPhone.updateMany({ where: { guardId, isPrimary: true, NOT: { tel: normalizedOriginal } }, data: { isPrimary: false } });
+    const existing = await prisma.guardPhone.findUnique({ where: { guardId_tel: { guardId, tel: normalizedOriginal } } });
+    if (existing) {
+      if (!existing.isPrimary) await prisma.guardPhone.update({ where: { id: existing.id }, data: { isPrimary: true } });
+    } else {
+      await prisma.guardPhone.create({
+        data: { guardId, tel: normalizedOriginal, isPrimary: true, source: "e2e-restore:pii.spec", createdBy: "e2e-restore:pii.spec" },
+      });
+    }
+  } else {
+    await prisma.guardPhone.updateMany({ where: { guardId, isPrimary: true }, data: { isPrimary: false } });
+  }
+  await prisma.guard.update({ where: { id: guardId }, data: { tel: originalTel } });
+}
+
 async function openEditByName(page: Page, name: string) {
   const main = page.locator("main");
   await expect(main.getByText("載入緊…")).toHaveCount(0, { timeout: 20_000 });
@@ -60,6 +92,20 @@ test.afterAll(async () => {
 
 test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見全號；列表 API 遮罩身份證", async ({ page }) => {
   const guard = await findBrokerAOwnGuard();
+  // Opus 覆核（WP-MULTI 必修 3 連帶）：下面會經「地址」／「緊急聯絡人
+  // 姓名／電話」三個舊寫法欄觸發 `applyLegacyGuardContactPatch()`，喺
+  // `guard_addresses`／`guard_emergency_contacts` 起新行——記低測試開始
+  // 之前呢個（真實）guard 已經有嘅行 id／legacy 欄原值，等 `finally`
+  // 淨係刪走測試自己起低嘅新行、將 legacy 欄還原做「原本嘅值」（唔係
+  // 一律硬寫 null——如果呢個 guard 本身已經有地址/緊急聯絡人資料，寫
+  // null 會將佢哋隱藏埋，同 WP-MULTI「唔准將 legacy 值寫成 null 令佢
+  // 消失」嘅鐵則相違背）。
+  const beforeContacts = await prisma.guard.findUniqueOrThrow({
+    where: { id: guard.id },
+    select: { address: true, emergencyContactName: true, emergencyContactTel: true },
+  });
+  const beforeAddressIds = (await prisma.guardAddress.findMany({ where: { guardId: guard.id }, select: { id: true } })).map((r) => r.id);
+  const beforeContactIds = (await prisma.guardEmergencyContact.findMany({ where: { guardId: guard.id }, select: { id: true } })).map((r) => r.id);
   try {
     await loginAs(page, "老闆");
     await page.goto("/guards");
@@ -119,14 +165,22 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
     // optional（唔係 nullable），API 冇辦法「清返做 null」，直接用
     // Prisma 還原（同 pricing.spec.ts「鐵律：唔可以留低污染畀下一次
     // 跑」一致精神，見該檔案 (b) 場景嘅 finally block）。
+    //
+    // WP-MULTI 必修 3 連帶：淨係刪走測試自己起低嘅 `guard_addresses`／
+    // `guard_emergency_contacts` 新行（`notIn` 空陣列＝冇排除任何一
+    // 行，即係全刪——同「測試開始之前 0 行」嘅前提一致），`address`／
+    // `emergency_contact_*` 還原返「測試之前」嘅值（一般都係 null，但
+    // 保留住萬一唔係嘅可能性）。
+    await prisma.guardAddress.deleteMany({ where: { guardId: guard.id, id: { notIn: beforeAddressIds } } });
+    await prisma.guardEmergencyContact.deleteMany({ where: { guardId: guard.id, id: { notIn: beforeContactIds } } });
     await prisma.guard.update({
       where: { id: guard.id },
       data: {
         hkid: null,
         dateOfBirth: null,
-        address: null,
-        emergencyContactName: null,
-        emergencyContactTel: null,
+        address: beforeContacts.address,
+        emergencyContactName: beforeContacts.emergencyContactName,
+        emergencyContactTel: beforeContacts.emergencyContactTel,
         blacklistCheckResult: null,
         blacklistCheckDate: null,
         bankName: null,
@@ -207,7 +261,7 @@ test("(e) 主管編輯一個長工只改電話 → 儲存成功（唔會被冇�
     expect(after.tel).toBe(newTel);
     expect(after.monthlySalary?.toString()).toBe(guard.monthlySalary?.toString());
   } finally {
-    await prisma.guard.update({ where: { id: guard.id }, data: { tel: originalTel } });
+    await restoreGuardTel(guard.id, originalTel, [newTel]);
   }
 });
 
@@ -358,6 +412,7 @@ test("(g) detail GET 失敗（500，包括冇權睇嗰類 403 一致對待）→
     expect(after.dateOfBirth?.toISOString().slice(0, 10)).toBe("1985-03-15");
     expect(after.tel).toBe(newTel);
   } finally {
-    await prisma.guard.update({ where: { id: guard.id }, data: { dateOfBirth: before.dateOfBirth, tel: before.tel } });
+    await prisma.guard.update({ where: { id: guard.id }, data: { dateOfBirth: before.dateOfBirth } });
+    await restoreGuardTel(guard.id, before.tel, [newTel]);
   }
 });

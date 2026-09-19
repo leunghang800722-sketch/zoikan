@@ -63,6 +63,11 @@ export async function clearAll() {
   // WP-STAFFNO：`guard_staff_numbers.guard_id` 係 FK RESTRICT，刪 guard
   // 之前要先清（同 scripts/seed/index.ts clearAll() 一致做法）。
   await prisma.guardStaffNumber.deleteMany({});
+  // WP-MULTI：電話／緊急聯絡人／地址三張新表一樣 FK RESTRICT，同上一致
+  // 理由。
+  await prisma.guardPhone.deleteMany({});
+  await prisma.guardEmergencyContact.deleteMany({});
+  await prisma.guardAddress.deleteMany({});
   await prisma.guard.updateMany({ data: { defaultBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});

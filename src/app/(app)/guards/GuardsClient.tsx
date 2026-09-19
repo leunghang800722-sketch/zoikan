@@ -10,7 +10,7 @@
 // 同一個 pattern——雞頭 session 頁首 kicker 要顯示「我的」（跟
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
 import { useEffect, useRef, useState } from "react";
-import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiPatch, apiPost, apiDelete, apiPut, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -103,6 +103,32 @@ interface StaffNumberRow {
   note?: string | null;
 }
 
+// WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀一個」）：
+// `GET/POST /api/guards/:id/phones`／`emergency-contacts`／`addresses`
+// 嘅一行——雞頭讀電話用窄版 DTO（冇 note/source/created_by），呢個
+// interface 全部欄都做 optional 兼容兩種 DTO。
+interface PhoneRow {
+  id: string;
+  tel: string;
+  label?: string | null;
+  is_primary: boolean;
+  note?: string | null;
+}
+interface AddressRow {
+  id: string;
+  address: string;
+  is_primary: boolean;
+  note?: string | null;
+}
+interface ContactRow {
+  id: string;
+  name?: string | null;
+  tel?: string | null;
+  relationship?: string | null;
+  sort_order: number;
+  note?: string | null;
+}
+
 const emptyForm = {
   staff_no: "",
   staff_no_mw: "",
@@ -143,6 +169,11 @@ const emptyStaffNumberForm = {
   valid_from: "",
   note: "",
 };
+
+// WP-MULTI：三個新分區各自嘅「新增」表單初始值。
+const emptyPhoneForm = { tel: "", label: "", note: "" };
+const emptyAddressForm = { address: "", note: "" };
+const emptyContactForm = { name: "", tel: "", relationship: "", note: "" };
 
 export function GuardsClient({
   isBroker,
@@ -240,6 +271,42 @@ export function GuardsClient({
   // 冇呢種情況（a／b 其中一個有值，或者舊值本身都冇）就 null，唔顯示。
   const [legacyPermitInfo, setLegacyPermitInfo] = useState<{ type: string | null; expiry: string | null } | null>(null);
 
+  // WP-MULTI（老闆 2026-09-19 拍板）：電話——「主要電話照舊喺頂」＝上面
+  // `form.tel`（舊寫法，經 PATCH /api/guards/:id 走 legacy path，見
+  // src/lib/guards/contacts.ts applyLegacyGuardContactPatch()），呢度
+  // 加多一個分區列晒所有電話（`GET .../phones`，主要 pill／label／設為
+  // 主要／編輯／刪除／新增）。雞頭（isBroker）淨係讀（冇新增/編輯/刪除
+  // 掣，同員工編號分區一致 UX）。
+  const [phones, setPhones] = useState<PhoneRow[]>([]);
+  const [phoneForm, setPhoneForm] = useState(emptyPhoneForm);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [phoneSaving, setPhoneSaving] = useState(false);
+  const [phoneActionBusy, setPhoneActionBusy] = useState(false);
+  const [phoneActionError, setPhoneActionError] = useState<string | null>(null);
+  const [phoneEditingId, setPhoneEditingId] = useState<string | null>(null);
+  const [phoneEditForm, setPhoneEditForm] = useState({ tel: "", label: "", note: "" });
+
+  // WP-MULTI：地址——同電話一致嘅分區手法（primary pill）。
+  const [addresses, setAddresses] = useState<AddressRow[]>([]);
+  const [addressForm, setAddressForm] = useState(emptyAddressForm);
+  const [addressError, setAddressError] = useState<string | null>(null);
+  const [addressSaving, setAddressSaving] = useState(false);
+  const [addressActionBusy, setAddressActionBusy] = useState(false);
+  const [addressActionError, setAddressActionError] = useState<string | null>(null);
+  const [addressEditingId, setAddressEditingId] = useState<string | null>(null);
+  const [addressEditForm, setAddressEditForm] = useState({ address: "", note: "" });
+
+  // WP-MULTI：緊急聯絡人——冇「主要」概念，用 sort_order 排先後（列表
+  // 已經跟 `GET .../emergency-contacts` 排好序，唔使前端再排一次）。
+  const [contacts, setContacts] = useState<ContactRow[]>([]);
+  const [contactForm, setContactForm] = useState(emptyContactForm);
+  const [contactError, setContactError] = useState<string | null>(null);
+  const [contactSaving, setContactSaving] = useState(false);
+  const [contactActionBusy, setContactActionBusy] = useState(false);
+  const [contactActionError, setContactActionError] = useState<string | null>(null);
+  const [contactEditingId, setContactEditingId] = useState<string | null>(null);
+  const [contactEditForm, setContactEditForm] = useState({ name: "", tel: "", relationship: "", note: "" });
+
   // Fable5.1（驗證期間揭發嘅 pre-existing race，順手一齊修——同 P0 前端
   // 唔准掂 migration.sql 一致，呢個都係純前端）：`hasPiiField`／
   // `hasBankField`／`hasLicenceExtraField` 淨係編輯抽屜（`editingId &&
@@ -258,6 +325,16 @@ export function GuardsClient({
   useEffect(() => {
     editingDrawerRef.current = drawerOpen && !!editingId;
   }, [drawerOpen, editingId]);
+
+  // Opus 覆核（WP-MULTI 必修 5）：`tel`／`address`／`emergency_contact_
+  // name`／`emergency_contact_tel` 呢幾個 legacy 欄記低「開抽屜嗰刻讀到
+  // 嘅值」（`fillFormFromRow()` 度更新）——`onSubmit()` 淨係用戶真係改
+  // 咗（同呢個 baseline 唔一樣）先夾落 body。就算後台（`applyLegacy
+  // GuardContactPatch()`「值冇變就當冇改」）都有一層一樣嘅保護，前端呢
+  // 度都唔送先係最穩陣（唔使靠 network round trip 先知道「其實冇改」，
+  // 亦都避免用戶完全冇掂過電話呢個 field，純粹儲存第二個欄，都要拖埋
+  // 一個（可能係髒值）`tel` 落 body）。
+  const loadedLegacyContactRef = useRef({ tel: "", address: "", emergency_contact_name: "", emergency_contact_tel: "" });
 
   // S7（Opus 驗收）：搜尋改由 server 做（`GET /api/guards?q=`）——原本
   // 純前端 `matchesSearch()` 淨係篩得到已經攞落嚟嗰批 rows 嘅 additive
@@ -311,6 +388,10 @@ export function GuardsClient({
     setEditingId(null);
     setForm(emptyForm);
     setFormError(null);
+    // 新增模式冇「loaded baseline」呢個概念（form 由空白開始）——重置做
+    // 全空，等用戶打嘅任何非空值都算「改咗」，送得落 body（POST
+    // /api/guards 本身接受 `tel`，同 PATCH 舊寫法唔同）。
+    loadedLegacyContactRef.current = { tel: "", address: "", emergency_contact_name: "", emergency_contact_tel: "" };
     setStaffNumbers([]);
     setStaffNumberForm(emptyStaffNumberForm);
     setStaffNumberError(null);
@@ -319,6 +400,23 @@ export function GuardsClient({
     setNumberActionError(null);
     setDerivedSiaPermitType(null);
     setLegacyPermitInfo(null);
+    // WP-MULTI：新增保安員嗰陣個 guard 仲未存在，三張新表分區同員工編號
+    // 分區一致——淨係編輯先顯示，呢度重置返晒空。
+    setPhones([]);
+    setPhoneForm(emptyPhoneForm);
+    setPhoneError(null);
+    setPhoneEditingId(null);
+    setPhoneActionError(null);
+    setAddresses([]);
+    setAddressForm(emptyAddressForm);
+    setAddressError(null);
+    setAddressEditingId(null);
+    setAddressActionError(null);
+    setContacts([]);
+    setContactForm(emptyContactForm);
+    setContactError(null);
+    setContactEditingId(null);
+    setContactActionError(null);
     // 新增模式冇 detail GET 呢個問題（PII/銀行呢批欄新增表單本身都冇），
     // 兩個都直接 true——Save 掣唔應該因為呢個防護機制喺新增模式度 disabled。
     setDetailLoaded(true);
@@ -355,6 +453,18 @@ export function GuardsClient({
       blacklist_check_result: row.blacklist_check_result ?? "",
       blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
     });
+    // Opus 覆核（WP-MULTI 必修 5）：記低呢一刻讀到嘅 legacy 欄值做
+    // baseline——`onSubmit()` 淨係用戶改咗（同呢個唔一樣）先送。
+    // `fillFormFromRow()` 會 call 兩次（先用列表 row 起草，detail GET
+    // 返嚟再 call 多次用真正詳情覆蓋，見 openEdit()）——兩次都更新呢個
+    // baseline 係啱嘅：detail 嗰次先係真正權威值，用戶唔可能喺 detail
+    // 未返嚟之前就打緊字（Save 掣喺 `detailLoaded` 之前一直 disabled）。
+    loadedLegacyContactRef.current = {
+      tel: row.tel ?? "",
+      address: row.address ?? "",
+      emergency_contact_name: row.emergency_contact_name ?? "",
+      emergency_contact_tel: row.emergency_contact_tel ?? "",
+    };
     if ("sia_permit_type" in row) setDerivedSiaPermitType(row.sia_permit_type ?? null);
     // 必修 3：a／b 都未填（form 個兩隻 input 都會係空字串）、但 row 仲存
     // 住舊 `sia_permit_expiry`／`sia_permit_type` 嘅任何一個 → 顯示舊記錄
@@ -375,6 +485,22 @@ export function GuardsClient({
     if (res.ok) setStaffNumbers(res.data);
   }
 
+  // WP-MULTI：抽屜開緊嗰個人嘅電話／地址／緊急聯絡人——冇權（403，例如
+  // 雞頭睇地址／緊急聯絡人）就保持空陣列，對應分區靠 `hasPiiField`／
+  // `isBroker` 唔顯示，唔靠呢度嘅 fetch 結果判斷顯唔顯示。
+  async function loadPhones(guardId: string) {
+    const res = await apiGet<PhoneRow[]>(`/api/guards/${guardId}/phones`);
+    setPhones(res.ok ? res.data : []);
+  }
+  async function loadAddresses(guardId: string) {
+    const res = await apiGet<AddressRow[]>(`/api/guards/${guardId}/addresses`);
+    setAddresses(res.ok ? res.data : []);
+  }
+  async function loadContacts(guardId: string) {
+    const res = await apiGet<ContactRow[]>(`/api/guards/${guardId}/emergency-contacts`);
+    setContacts(res.ok ? res.data : []);
+  }
+
   async function openEdit(row: GuardRow) {
     // WP-PII：列表嘅 `row.hkid` 係遮罩版（`A123***(7)`）——編輯抽屜要
     // 顯示全號（「詳情/編輯有權先見全號」），要重新 GET 單項詳情
@@ -389,6 +515,21 @@ export function GuardsClient({
     setShowFormerStaffNumbers(false);
     setNumberEditingId(null);
     setNumberActionError(null);
+    // WP-MULTI：重置返三張新表分區嘅 inline 編輯／表單狀態（同上面
+    // openCreate() 一致），實際資料靠下面 `loadPhones()`／
+    // `loadAddresses()`／`loadContacts()` 攞。
+    setPhoneForm(emptyPhoneForm);
+    setPhoneError(null);
+    setPhoneEditingId(null);
+    setPhoneActionError(null);
+    setAddressForm(emptyAddressForm);
+    setAddressError(null);
+    setAddressEditingId(null);
+    setAddressActionError(null);
+    setContactForm(emptyContactForm);
+    setContactError(null);
+    setContactEditingId(null);
+    setContactActionError(null);
     // Fable5.1（防資料被抹）：detail GET 呢個 request 未完成之前，Save
     // 掣要 disabled（見下面 JSX `disabled={saving || !detailLoaded}`）——
     // 列表 row 起草嘅 form，`date_of_birth`／`blacklist_check_date` 呢批
@@ -421,6 +562,7 @@ export function GuardsClient({
     }
     setDetailLoaded(true);
     await loadStaffNumbers(row.id);
+    await Promise.all([loadPhones(row.id), loadAddresses(row.id), loadContacts(row.id)]);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -432,7 +574,13 @@ export function GuardsClient({
       staff_no_mw: form.staff_no_mw || undefined,
       name_zh: form.name_zh,
       name_en: form.name_en || undefined,
-      tel: form.tel || undefined,
+      // Opus 覆核（WP-MULTI 必修 5）：淨係用戶真係改咗（同 openEdit()／
+      // openCreate() 嗰刻嘅 baseline 唔一樣）先送——唔係就每次儲存（包括
+      // 完全唔關電話事嘅編輯）都會拖埋呢個值落 body，撞正後台「值冇變
+      // 就當冇改」嗰層都要額外做多一次正規化比較（見
+      // src/app/api/guards/[id]/route.ts）；新增模式 baseline 一律空白
+      // （openCreate() 已經重置），行為不變。
+      tel: form.tel && form.tel !== loadedLegacyContactRef.current.tel ? form.tel : undefined,
       employment_type: form.employment_type,
       polo_size: form.polo_size || undefined,
     };
@@ -476,9 +624,15 @@ export function GuardsClient({
         // GET 已經完成但失敗嗰個情況。
         if (detailAvailable) {
           body.date_of_birth = form.date_of_birth || null;
-          if (form.address) body.address = form.address;
-          if (form.emergency_contact_name) body.emergency_contact_name = form.emergency_contact_name;
-          if (form.emergency_contact_tel) body.emergency_contact_tel = form.emergency_contact_tel;
+          // Opus 覆核（WP-MULTI 必修 5）：`address`／`emergency_contact_*`
+          // 一樣淨係用戶真係改咗先送——同上面 `tel` 一致理由。
+          if (form.address && form.address !== loadedLegacyContactRef.current.address) body.address = form.address;
+          if (form.emergency_contact_name && form.emergency_contact_name !== loadedLegacyContactRef.current.emergency_contact_name) {
+            body.emergency_contact_name = form.emergency_contact_name;
+          }
+          if (form.emergency_contact_tel && form.emergency_contact_tel !== loadedLegacyContactRef.current.emergency_contact_tel) {
+            body.emergency_contact_tel = form.emergency_contact_tel;
+          }
           if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
           body.blacklist_check_date = form.blacklist_check_date || null;
         }
@@ -642,6 +796,278 @@ export function GuardsClient({
     if (detailRes.ok) fillFormFromRow(detailRes.data);
   }
 
+  // WP-MULTI：主表單頂部嘅「電話」（舊欄，PATCH 支援舊寫法）撳「儲存」
+  // 之後可能已經由 `syncLegacyGuardContactColumns()` 同步咗新值——同
+  // `onAddStaffNumber()` 一致理由（見該函數註解），呢三張新表分區操作
+  // 完之後一樣要重新 GET 詳情覆蓋返主表單，唔係就撳「儲存」會帶住舊值
+  // 再撞一次 legacy path。
+  async function refreshMainFormAfterContactChange() {
+    if (!editingId) return;
+    const detailRes = await apiGet<GuardRow>(`/api/guards/${editingId}`);
+    if (detailRes.ok) fillFormFromRow(detailRes.data);
+  }
+
+  // -------------------------------------------------------------------
+  // 電話
+  // -------------------------------------------------------------------
+  async function onAddPhone() {
+    if (!editingId) return;
+    setPhoneSaving(true);
+    setPhoneError(null);
+    const res = await apiPost<PhoneRow>(`/api/guards/${editingId}/phones`, {
+      tel: phoneForm.tel,
+      label: phoneForm.label || undefined,
+      note: phoneForm.note || undefined,
+    });
+    setPhoneSaving(false);
+    if (!res.ok) {
+      setPhoneError(res.message);
+      return;
+    }
+    setPhoneForm(emptyPhoneForm);
+    setNotice("已新增電話");
+    await loadPhones(editingId);
+    await load(search);
+    await refreshMainFormAfterContactChange();
+  }
+
+  async function onSetPhonePrimary(row: PhoneRow) {
+    if (!editingId || row.is_primary) return;
+    setPhoneActionBusy(true);
+    setPhoneActionError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/phones/${row.id}`, { is_primary: true });
+    setPhoneActionBusy(false);
+    if (!res.ok) {
+      setPhoneActionError(res.message);
+      return;
+    }
+    setNotice(`已將 ${row.tel} 設做主要電話`);
+    await loadPhones(editingId);
+    await load(search);
+    await refreshMainFormAfterContactChange();
+  }
+
+  function onOpenPhoneEdit(row: PhoneRow) {
+    setPhoneEditingId(row.id);
+    setPhoneActionError(null);
+    setPhoneEditForm({ tel: row.tel, label: row.label ?? "", note: row.note ?? "" });
+  }
+  function onCancelPhoneEdit() {
+    setPhoneEditingId(null);
+    setPhoneActionError(null);
+  }
+  async function onSavePhoneEdit() {
+    if (!editingId || !phoneEditingId) return;
+    setPhoneActionBusy(true);
+    setPhoneActionError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/phones/${phoneEditingId}`, {
+      tel: phoneEditForm.tel,
+      label: phoneEditForm.label || null,
+      note: phoneEditForm.note || null,
+    });
+    setPhoneActionBusy(false);
+    if (!res.ok) {
+      setPhoneActionError(res.message);
+      return;
+    }
+    setPhoneEditingId(null);
+    setNotice("已更新電話");
+    await loadPhones(editingId);
+    await load(search);
+    await refreshMainFormAfterContactChange();
+  }
+
+  async function onDeletePhone(row: PhoneRow) {
+    if (!editingId) return;
+    const confirmed = window.confirm(`確定要刪走電話 ${row.tel}？（更正打錯用，audit_log 留底）`);
+    if (!confirmed) return;
+    setPhoneActionBusy(true);
+    setPhoneActionError(null);
+    const res = await apiDelete(`/api/guards/${editingId}/phones/${row.id}`);
+    setPhoneActionBusy(false);
+    if (!res.ok) {
+      setPhoneActionError(res.message);
+      return;
+    }
+    setNotice(`已刪走電話 ${row.tel}`);
+    await loadPhones(editingId);
+    await load(search);
+    await refreshMainFormAfterContactChange();
+  }
+
+  // -------------------------------------------------------------------
+  // 地址
+  // -------------------------------------------------------------------
+  async function onAddAddress() {
+    if (!editingId) return;
+    setAddressSaving(true);
+    setAddressError(null);
+    const res = await apiPost<AddressRow>(`/api/guards/${editingId}/addresses`, { address: addressForm.address, note: addressForm.note || undefined });
+    setAddressSaving(false);
+    if (!res.ok) {
+      setAddressError(res.message);
+      return;
+    }
+    setAddressForm(emptyAddressForm);
+    setNotice("已新增地址");
+    await loadAddresses(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
+  async function onSetAddressPrimary(row: AddressRow) {
+    if (!editingId || row.is_primary) return;
+    setAddressActionBusy(true);
+    setAddressActionError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/addresses/${row.id}`, { is_primary: true });
+    setAddressActionBusy(false);
+    if (!res.ok) {
+      setAddressActionError(res.message);
+      return;
+    }
+    setNotice("已設做主要地址");
+    await loadAddresses(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
+  function onOpenAddressEdit(row: AddressRow) {
+    setAddressEditingId(row.id);
+    setAddressActionError(null);
+    setAddressEditForm({ address: row.address, note: row.note ?? "" });
+  }
+  function onCancelAddressEdit() {
+    setAddressEditingId(null);
+    setAddressActionError(null);
+  }
+  async function onSaveAddressEdit() {
+    if (!editingId || !addressEditingId) return;
+    setAddressActionBusy(true);
+    setAddressActionError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/addresses/${addressEditingId}`, { address: addressEditForm.address, note: addressEditForm.note || null });
+    setAddressActionBusy(false);
+    if (!res.ok) {
+      setAddressActionError(res.message);
+      return;
+    }
+    setAddressEditingId(null);
+    setNotice("已更新地址");
+    await loadAddresses(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
+  async function onDeleteAddress(row: AddressRow) {
+    if (!editingId) return;
+    const confirmed = window.confirm("確定要刪走呢個地址？（更正打錯用，audit_log 留底）");
+    if (!confirmed) return;
+    setAddressActionBusy(true);
+    setAddressActionError(null);
+    const res = await apiDelete(`/api/guards/${editingId}/addresses/${row.id}`);
+    setAddressActionBusy(false);
+    if (!res.ok) {
+      setAddressActionError(res.message);
+      return;
+    }
+    setNotice("已刪走地址");
+    await loadAddresses(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
+  // -------------------------------------------------------------------
+  // 緊急聯絡人
+  // -------------------------------------------------------------------
+  async function onAddContact() {
+    if (!editingId) return;
+    setContactSaving(true);
+    setContactError(null);
+    const res = await apiPost<ContactRow>(`/api/guards/${editingId}/emergency-contacts`, {
+      name: contactForm.name || undefined,
+      tel: contactForm.tel || undefined,
+      relationship: contactForm.relationship || undefined,
+      note: contactForm.note || undefined,
+    });
+    setContactSaving(false);
+    if (!res.ok) {
+      setContactError(res.message);
+      return;
+    }
+    setContactForm(emptyContactForm);
+    setNotice("已新增緊急聯絡人");
+    await loadContacts(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
+  function onOpenContactEdit(row: ContactRow) {
+    setContactEditingId(row.id);
+    setContactActionError(null);
+    setContactEditForm({ name: row.name ?? "", tel: row.tel ?? "", relationship: row.relationship ?? "", note: row.note ?? "" });
+  }
+  function onCancelContactEdit() {
+    setContactEditingId(null);
+    setContactActionError(null);
+  }
+  async function onSaveContactEdit() {
+    if (!editingId || !contactEditingId) return;
+    setContactActionBusy(true);
+    setContactActionError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/emergency-contacts/${contactEditingId}`, {
+      name: contactEditForm.name || null,
+      tel: contactEditForm.tel || null,
+      relationship: contactEditForm.relationship || null,
+      note: contactEditForm.note || null,
+    });
+    setContactActionBusy(false);
+    if (!res.ok) {
+      setContactActionError(res.message);
+      return;
+    }
+    setContactEditingId(null);
+    setNotice("已更新緊急聯絡人");
+    await loadContacts(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
+  async function onDeleteContact(row: ContactRow) {
+    if (!editingId) return;
+    const confirmed = window.confirm(`確定要刪走呢個緊急聯絡人${row.name ? `（${row.name}）` : ""}？（更正打錯用，audit_log 留底）`);
+    if (!confirmed) return;
+    setContactActionBusy(true);
+    setContactActionError(null);
+    const res = await apiDelete(`/api/guards/${editingId}/emergency-contacts/${row.id}`);
+    setContactActionBusy(false);
+    if (!res.ok) {
+      setContactActionError(res.message);
+      return;
+    }
+    setNotice("已刪走緊急聯絡人");
+    await loadContacts(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
+  // 排序——撳「較先」/「較後」同鄰居換位，一齊送落新嘅
+  // `PUT .../emergency-contacts/order` 端點（一個 transaction 重寫成個
+  // guard 全部行嘅 `sort_order`，原子性；之前分兩次 PATCH 互換有短暫
+  // 窗口冇原子性，Opus 覆核必修 6 改用呢個）。
+  async function onMoveContact(index: number, direction: -1 | 1) {
+    if (!editingId) return;
+    const neighbourIndex = index + direction;
+    const target = contacts[index];
+    const neighbour = contacts[neighbourIndex];
+    if (!target || !neighbour) return;
+    const ids = contacts.map((c) => c.id);
+    const tmp = ids[index]!;
+    ids[index] = ids[neighbourIndex]!;
+    ids[neighbourIndex] = tmp;
+    setContactActionBusy(true);
+    setContactActionError(null);
+    const res = await apiPut(`/api/guards/${editingId}/emergency-contacts/order`, { ids });
+    setContactActionBusy(false);
+    if (!res.ok) {
+      setContactActionError(res.message);
+      return;
+    }
+    await loadContacts(editingId);
+    await refreshMainFormAfterContactChange();
+  }
+
   async function onVoid(id: string, reason: string) {
     setError(null);
     const res = await apiPost(`/api/guards/${id}/void`, { reason });
@@ -773,8 +1199,12 @@ export function GuardsClient({
           <Pill variant="neutral">{n.scheme}</Pill>
           <span className={isCurrent ? "font-medium text-zk-text" : undefined}>{n.number}</span>
           <Pill variant={isCurrent ? "success" : "neutral"}>{isCurrent ? "現用" : "已取消"}</Pill>
-          {isCurrent && n.valid_from && <span className="text-xs text-zk-muted">生效：{fmtDate(n.valid_from)}</span>}
-          {!isCurrent && n.valid_to && <span className="text-xs">取消日期：{fmtDate(n.valid_to)}</span>}
+          {/* WP-MULTI（老闆 2026-09-19 拍板業務規則 (4)）：每個編號有自己
+              嘅入職／離職日期——標籤改用呢個講法，唔再淨係講「生效」/
+              「取消」，等用戶睇得明「呢個係呢個號嘅入職/離職日期，唔係
+              呢個人整體嘅」。 */}
+          {isCurrent && n.valid_from && <span className="text-xs text-zk-muted">入職（呢個號）：{fmtDate(n.valid_from)}</span>}
+          {!isCurrent && n.valid_to && <span className="text-xs">離職／取消：{fmtDate(n.valid_to)}</span>}
           {n.note && <span className="text-xs text-zk-muted">備註：{n.note}</span>}
           {!isBroker && (
             <div className="ml-auto flex gap-1.5">
@@ -803,7 +1233,10 @@ export function GuardsClient({
               <input className={inputCls} value={numberEditForm.number} onChange={(e) => setNumberEditForm((f) => ({ ...f, number: e.target.value }))} />
             </Field>
             <div className="grid grid-cols-2 gap-2">
-              <Field label="生效日期">
+              {/* WP-MULTI：`valid_from` 標籤改「入職日期（呢個號）」——
+                  一個工號一行＝一組入職／離職日期，同「保安員整體」嘅
+                  入職／離職日期（下面「牌照與證件」分區嗰兩個）分開。 */}
+              <Field label="入職日期（呢個號）">
                 <input
                   type="date"
                   className={inputCls}
@@ -812,10 +1245,10 @@ export function GuardsClient({
                 />
               </Field>
               {/* 應修 2（Opus 驗收第二輪）：取消自動填嘅 valid_to 之前
-                  淨係顯示（renderStaffNumberRow 嗰行「取消日期：」），冇
-                  得喺呢個編輯表單度改／清——而家補返個 input，打空咗撳
+                  淨係顯示（renderStaffNumberRow 嗰行「離職／取消：」），
+                  冇得喺呢個編輯表單度改／清——而家補返個 input，打空咗撳
                   「儲存」會送 null 清走（見 onSaveNumberEdit()）。 */}
-              <Field label="取消日期">
+              <Field label="離職／取消日期">
                 <input
                   type="date"
                   className={inputCls}
@@ -832,6 +1265,172 @@ export function GuardsClient({
                 {numberActionBusy ? "儲存緊…" : "儲存"}
               </button>
               <button type="button" onClick={onCancelNumberEdit} className={btnSecondary}>
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // WP-MULTI：電話分區每行——主要 pill／label／（!isBroker 先有）「設為
+  // 主要」／「編輯」／「刪除」，call PATCH/DELETE .../phones/:phoneId。
+  function renderPhoneRow(p: PhoneRow) {
+    const isEditing = phoneEditingId === p.id;
+    return (
+      <div key={p.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={p.is_primary ? "font-medium text-zk-text" : undefined}>{p.tel}</span>
+          {p.is_primary ? <Pill variant="success">主要</Pill> : null}
+          {p.label && <Pill variant="neutral">{p.label}</Pill>}
+          {!isBroker && (
+            <div className="ml-auto flex gap-1.5">
+              {!p.is_primary && (
+                <button type="button" disabled={phoneActionBusy} onClick={() => onSetPhonePrimary(p)} className="text-xs text-zk-primary underline">
+                  設為主要
+                </button>
+              )}
+              <button type="button" onClick={() => (isEditing ? onCancelPhoneEdit() : onOpenPhoneEdit(p))} className="text-xs text-zk-primary underline">
+                {isEditing ? "取消編輯" : "編輯"}
+              </button>
+              <button type="button" disabled={phoneActionBusy} onClick={() => onDeletePhone(p)} className="text-xs text-red-600 underline">
+                刪除
+              </button>
+            </div>
+          )}
+        </div>
+        {isEditing && (
+          <div className="mt-2 space-y-2 border-t border-zk-border pt-2">
+            <Banner kind="error" message={phoneActionError} />
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="號碼">
+                <input className={inputCls} value={phoneEditForm.tel} onChange={(e) => setPhoneEditForm((f) => ({ ...f, tel: e.target.value }))} />
+              </Field>
+              <Field label="標籤（選填）" hint="例：本人／屋企／WhatsApp">
+                <input className={inputCls} value={phoneEditForm.label} onChange={(e) => setPhoneEditForm((f) => ({ ...f, label: e.target.value }))} />
+              </Field>
+            </div>
+            <Field label="備註（選填）">
+              <input className={inputCls} value={phoneEditForm.note} onChange={(e) => setPhoneEditForm((f) => ({ ...f, note: e.target.value }))} />
+            </Field>
+            <div className="flex gap-2">
+              <button type="button" disabled={phoneActionBusy} onClick={onSavePhoneEdit} className={btnSecondary}>
+                {phoneActionBusy ? "儲存緊…" : "儲存"}
+              </button>
+              <button type="button" onClick={onCancelPhoneEdit} className={btnSecondary}>
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // WP-MULTI：地址分區每行——同電話一致嘅 primary pill 手法。
+  function renderAddressRow(a: AddressRow) {
+    const isEditing = addressEditingId === a.id;
+    return (
+      <div key={a.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={a.is_primary ? "font-medium text-zk-text" : undefined}>{a.address}</span>
+          {a.is_primary ? <Pill variant="success">主要</Pill> : null}
+          {!isBroker && (
+            <div className="ml-auto flex gap-1.5">
+              {!a.is_primary && (
+                <button type="button" disabled={addressActionBusy} onClick={() => onSetAddressPrimary(a)} className="text-xs text-zk-primary underline">
+                  設為主要
+                </button>
+              )}
+              <button type="button" onClick={() => (isEditing ? onCancelAddressEdit() : onOpenAddressEdit(a))} className="text-xs text-zk-primary underline">
+                {isEditing ? "取消編輯" : "編輯"}
+              </button>
+              <button type="button" disabled={addressActionBusy} onClick={() => onDeleteAddress(a)} className="text-xs text-red-600 underline">
+                刪除
+              </button>
+            </div>
+          )}
+        </div>
+        {isEditing && (
+          <div className="mt-2 space-y-2 border-t border-zk-border pt-2">
+            <Banner kind="error" message={addressActionError} />
+            <Field label="地址">
+              <input className={inputCls} value={addressEditForm.address} onChange={(e) => setAddressEditForm((f) => ({ ...f, address: e.target.value }))} />
+            </Field>
+            <Field label="備註（選填）">
+              <input className={inputCls} value={addressEditForm.note} onChange={(e) => setAddressEditForm((f) => ({ ...f, note: e.target.value }))} />
+            </Field>
+            <div className="flex gap-2">
+              <button type="button" disabled={addressActionBusy} onClick={onSaveAddressEdit} className={btnSecondary}>
+                {addressActionBusy ? "儲存緊…" : "儲存"}
+              </button>
+              <button type="button" onClick={onCancelAddressEdit} className={btnSecondary}>
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // WP-MULTI：緊急聯絡人分區每行——冇「主要」，用「較先」/「較後」兩粒
+  // 箭嘴掣同鄰居互換 sort_order（`index` 係喺 `contacts`（已經跟
+  // sort_order 排好序）入面嘅位置）。
+  function renderContactRow(c: ContactRow, index: number) {
+    const isEditing = contactEditingId === c.id;
+    return (
+      <div key={c.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+        <div className="flex flex-wrap items-center gap-2">
+          {index === 0 && <Pill variant="success">代表（同步落舊欄）</Pill>}
+          <span className="font-medium text-zk-text">{c.name || "（未填姓名）"}</span>
+          {c.tel && <span className="text-zk-muted">{c.tel}</span>}
+          {c.relationship && <Pill variant="neutral">{c.relationship}</Pill>}
+          {!isBroker && (
+            <div className="ml-auto flex gap-1.5">
+              <button type="button" disabled={contactActionBusy || index === 0} onClick={() => onMoveContact(index, -1)} className="text-xs text-zk-primary underline disabled:opacity-40">
+                較先
+              </button>
+              <button
+                type="button"
+                disabled={contactActionBusy || index === contacts.length - 1}
+                onClick={() => onMoveContact(index, 1)}
+                className="text-xs text-zk-primary underline disabled:opacity-40"
+              >
+                較後
+              </button>
+              <button type="button" onClick={() => (isEditing ? onCancelContactEdit() : onOpenContactEdit(c))} className="text-xs text-zk-primary underline">
+                {isEditing ? "取消編輯" : "編輯"}
+              </button>
+              <button type="button" disabled={contactActionBusy} onClick={() => onDeleteContact(c)} className="text-xs text-red-600 underline">
+                刪除
+              </button>
+            </div>
+          )}
+        </div>
+        {isEditing && (
+          <div className="mt-2 space-y-2 border-t border-zk-border pt-2">
+            <Banner kind="error" message={contactActionError} />
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="姓名">
+                <input className={inputCls} value={contactEditForm.name} onChange={(e) => setContactEditForm((f) => ({ ...f, name: e.target.value }))} />
+              </Field>
+              <Field label="電話">
+                <input className={inputCls} value={contactEditForm.tel} onChange={(e) => setContactEditForm((f) => ({ ...f, tel: e.target.value }))} />
+              </Field>
+            </div>
+            <Field label="關係（選填）" hint="例：配偶／父母／子女">
+              <input className={inputCls} value={contactEditForm.relationship} onChange={(e) => setContactEditForm((f) => ({ ...f, relationship: e.target.value }))} />
+            </Field>
+            <Field label="備註（選填）">
+              <input className={inputCls} value={contactEditForm.note} onChange={(e) => setContactEditForm((f) => ({ ...f, note: e.target.value }))} />
+            </Field>
+            <div className="flex gap-2">
+              <button type="button" disabled={contactActionBusy} onClick={onSaveContactEdit} className={btnSecondary}>
+                {contactActionBusy ? "儲存緊…" : "儲存"}
+              </button>
+              <button type="button" onClick={onCancelContactEdit} className={btnSecondary}>
                 取消
               </button>
             </div>
@@ -1036,6 +1635,38 @@ export function GuardsClient({
           <Field label="電話">
             <input className={inputCls} value={form.tel} onChange={(e) => setForm((f) => ({ ...f, tel: e.target.value }))} />
           </Field>
+
+          {/* WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀
+              一個」）：主要電話照舊喺頂（above），呢度加多一個分區列晒
+              所有電話（有幾多個記幾多個）。新增保安員嗰陣（!editingId）
+              個 guard 仲未存在，同員工編號分區一致淨係編輯先顯示。 */}
+          {editingId && (
+            <>
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">所有電話</h3>
+              {phones.length === 0 ? (
+                <div className="text-sm text-zk-muted">未有記錄電話</div>
+              ) : (
+                <div className="space-y-1.5">{phones.map(renderPhoneRow)}</div>
+              )}
+              {!isBroker && (
+                <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
+                  <Banner kind="error" message={phoneError} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="新增電話號碼">
+                      <input className={inputCls} value={phoneForm.tel} onChange={(e) => setPhoneForm((f) => ({ ...f, tel: e.target.value }))} placeholder="例：61234567" />
+                    </Field>
+                    <Field label="標籤（選填）" hint="例：本人／屋企／WhatsApp">
+                      <input className={inputCls} value={phoneForm.label} onChange={(e) => setPhoneForm((f) => ({ ...f, label: e.target.value }))} />
+                    </Field>
+                  </div>
+                  <button type="button" disabled={phoneSaving || !phoneForm.tel} onClick={onAddPhone} className={`${btnSecondary} mt-2`}>
+                    {phoneSaving ? "新增緊…" : "新增電話"}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
           <Field label="預設雞頭" hint={editingId ? "建立之後唔可以喺呢頁改，要用用戶/雞頭管理" : undefined}>
             <select
               className={selectCls}
@@ -1149,11 +1780,20 @@ export function GuardsClient({
                   />
                 </Field>
               </div>
+              {/* WP-MULTI：呢兩個係「保安員層面」（整體）嘅入職／離職日期——
+                  跟下面「員工編號」分區每個號自己嘅入職／離職日期（見
+                  renderStaffNumberRow）唔同層級，加 hint 講明分別。 */}
               <div className="grid grid-cols-2 gap-2">
-                <Field label="入職日期">
+                {/* Fable5.1：hint 刻意避免出現「編號」兩字——Playwright
+                    e2e `fieldControl(page,"編號")`（tests/e2e/staffno.
+                    spec.ts）用 `hasText` 揀返個「編號」input，佢會撞中
+                    呢兩個欄嘅 hint 文字（連同呢個 label 底下嘅成段文字
+                    一齊比對），令佢揀錯去呢度（type="date"）唔係下面
+                    工號分區果個真正嘅「編號」文字 input。 */}
+                <Field label="入職日期" hint="呢個係保安員整體嘅入職日期；每個工號仲有自己獨立嘅入職日期，見下面「員工工號」分區">
                   <input type="date" className={inputCls} value={form.hire_date} onChange={(e) => setForm((f) => ({ ...f, hire_date: e.target.value }))} />
                 </Field>
-                <Field label="離職日期">
+                <Field label="離職日期" hint="呢個係保安員整體嘅離職日期；每個工號仲有自己獨立嘅離職／取消日期">
                   <input type="date" className={inputCls} value={form.leave_date} onChange={(e) => setForm((f) => ({ ...f, leave_date: e.target.value }))} />
                 </Field>
               </div>
@@ -1173,7 +1813,7 @@ export function GuardsClient({
                   等用戶（尤其主管／會計）睇得明「邊個號用嚟做乜」，同「取消
                   咗嘅編號唔會復用」呢個關鍵行為。 */}
               <p className="text-xs text-zk-muted">
-                更表／匯出一律顯示 U 號；MG 只作內部出糧／行政用；離職後編號取消，再入職會攞新編號。
+                更表／匯出一律顯示 U 號；MG 只作內部出糧／行政用；離職後編號取消，再入職會攞新編號。每個編號有自己嘅入職／離職日期。
               </p>
               {staffNumbers.filter((n) => n.status === "current").length === 0 ? (
                 <div className="text-sm text-zk-muted">未有現用編號</div>
@@ -1246,7 +1886,10 @@ export function GuardsClient({
                     </div>
                   )}
                   <div className="mt-2 grid grid-cols-2 gap-2">
-                    <Field label="生效日期（選填）">
+                    {/* WP-MULTI：新增表單「生效日期」改「入職日期（呢個
+                        號）」——同 renderStaffNumberRow／編輯表單一致講
+                        法（見上面兩處同一段理由）。 */}
+                    <Field label="入職日期（呢個號）（選填）">
                       <input
                         type="date"
                         className={inputCls}
@@ -1291,7 +1934,7 @@ export function GuardsClient({
                     onChange={(e) => setForm((f) => ({ ...f, emergency_contact_name: e.target.value }))}
                   />
                 </Field>
-                <Field label="緊急聯絡人電話" hint="8 位數字">
+                <Field label="緊急聯絡人電話" hint="可以 + 開頭，7-15 位數字">
                   <input
                     className={inputCls}
                     value={form.emergency_contact_tel}
@@ -1299,6 +1942,62 @@ export function GuardsClient({
                   />
                 </Field>
               </div>
+
+              {/* WP-MULTI（老闆 2026-09-19 拍板，規劃師延伸同一原則）：
+                  上面「地址」單一 input 照舊（快速改主要地址，經 PATCH
+                  舊寫法），呢度加地址列表（可以多個，一個主要）。 */}
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">地址列表</h3>
+              {addresses.length === 0 ? (
+                <div className="text-sm text-zk-muted">未有記錄地址</div>
+              ) : (
+                <div className="space-y-1.5">{addresses.map(renderAddressRow)}</div>
+              )}
+              {!isBroker && (
+                <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
+                  <Banner kind="error" message={addressError} />
+                  <Field label="新增地址">
+                    <input className={inputCls} value={addressForm.address} onChange={(e) => setAddressForm((f) => ({ ...f, address: e.target.value }))} />
+                  </Field>
+                  <button type="button" disabled={addressSaving || !addressForm.address} onClick={onAddAddress} className={`${btnSecondary} mt-2`}>
+                    {addressSaving ? "新增緊…" : "新增地址"}
+                  </button>
+                </div>
+              )}
+
+              {/* 上面「緊急聯絡人姓名／電話」兩個 input 照舊（快速改代表
+                  行，經 PATCH 舊寫法），呢度加緊急聯絡人列表（可以多個，
+                  可加／改／刪／排序）。 */}
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">緊急聯絡人列表</h3>
+              <p className="text-xs text-zk-muted">排先個位（「代表」）會同步落上面嘅「緊急聯絡人姓名／電話」。</p>
+              {contacts.length === 0 ? (
+                <div className="text-sm text-zk-muted">未有記錄緊急聯絡人</div>
+              ) : (
+                <div className="space-y-1.5">{contacts.map((c, i) => renderContactRow(c, i))}</div>
+              )}
+              {!isBroker && (
+                <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
+                  <Banner kind="error" message={contactError} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="姓名（新增聯絡人）">
+                      <input className={inputCls} value={contactForm.name} onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))} />
+                    </Field>
+                    <Field label="電話（新增聯絡人）">
+                      <input className={inputCls} value={contactForm.tel} onChange={(e) => setContactForm((f) => ({ ...f, tel: e.target.value }))} />
+                    </Field>
+                  </div>
+                  <Field label="關係（選填）" hint="例：配偶／父母／子女">
+                    <input className={inputCls} value={contactForm.relationship} onChange={(e) => setContactForm((f) => ({ ...f, relationship: e.target.value }))} />
+                  </Field>
+                  <button
+                    type="button"
+                    disabled={contactSaving || (!contactForm.name && !contactForm.tel)}
+                    onClick={onAddContact}
+                    className={`${btnSecondary} mt-2`}
+                  >
+                    {contactSaving ? "新增緊…" : "新增緊急聯絡人"}
+                  </button>
+                </div>
+              )}
 
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">Blacklist</h3>
               <div className="grid grid-cols-2 gap-2">

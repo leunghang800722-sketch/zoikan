@@ -55,7 +55,14 @@ export type AuditAction =
   // 而家改做「任何更新都寫一條」（table_name="guards"，before/after 淨係
   // `{sia_permit_expiry, sia_permit_type}` 呢兩粒衍生值，唔係完整 row，
   // 避免 PII 經呢條 action 漏出去）。
-  | "recompute_permit_derived";
+  | "recompute_permit_derived"
+  // WP-MULTI（老闆 2026-09-19 拍板）：guard_phones／
+  // guard_emergency_contacts／guard_addresses 呢三張新表冇「former／已
+  // 取消」呢個狀態（唔似 guard_staff_numbers），DELETE 係真刪一行（俾
+  // 用戶自己更正打錯用）——用獨立嘅 "delete" action（`before`＝刪之前
+  // 嘅完整 DTO，`after`＝null），同 "void"（軟刪，資源仲存在）分開，
+  // audit_log 睇落一眼就分辨得到「呢行真係冇咗」定「淨係停用」。
+  | "delete";
 
 export interface WriteAuditInput {
   actorUserId: string | null;
