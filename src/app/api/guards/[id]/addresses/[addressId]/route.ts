@@ -9,7 +9,7 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { GuardAddressUpdateSchema } from "@/lib/api/schemas";
-import { setPrimaryGuardAddress, deleteGuardAddress, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
+import { setPrimaryGuardAddress, deleteGuardAddress, syncLegacyGuardContactColumns, lockGuardRowForContactWrite } from "@/lib/guards/contacts";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, BadRequest } from "@/lib/api/errors";
 import type { GuardAddress } from "@prisma/client";
@@ -26,6 +26,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const parsed = parseBody(GuardAddressUpdateSchema, body);
 
     const result = await prisma.$transaction(async (tx) => {
+      // 鎖序一律「guard 行先、子表行後」（同 create／delete／setPrimary 一致，避免 deadlock 40P01）。
+      await lockGuardRowForContactWrite(tx, id);
       const row = await tx.guardAddress.findFirst({ where: { id: addressId, guardId: id } });
       if (!row) throw NotFound("搵唔到呢個地址");
 

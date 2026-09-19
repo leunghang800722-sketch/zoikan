@@ -41,7 +41,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       if (!row) throw NotFound("搵唔到呢個電話");
 
       const data: Record<string, unknown> = {};
-      if (parsed.tel !== undefined && parsed.tel.trim() !== row.tel && normalizeTel(parsed.tel) !== row.tel) {
+      if (parsed.tel !== undefined && parsed.tel.trim() !== row.tel && normalizeTel(parsed.tel) !== normalizeTel(row.tel)) {
         const tel = normalizeTel(parsed.tel);
         if (!isValidTel(tel)) throw BadRequest("電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）");
         {

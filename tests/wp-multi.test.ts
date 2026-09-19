@@ -534,6 +534,26 @@ describe("WP-MULTI", () => {
       );
       expect(r4.status).toBe(400);
     });
+    it("Opus 第四輪覆核：併發 PATCH 地址＋POST 新主要地址唔會 deadlock（冇 500）", async () => {
+      const first = await addressCreate(req(`http://test.local/api/guards/${fx.guardA.id}/addresses`, ownerCookie, "POST", { address: "測試地址起點" }), {
+        params: Promise.resolve({ id: fx.guardA.id }),
+      });
+      const a0 = (await first.json()) as { id: string };
+      const statuses: number[] = [];
+      for (let i = 0; i < 12; i++) {
+        const [r1, r2] = await Promise.all([
+          addressUpdate(req(`http://test.local/api/guards/${fx.guardA.id}/addresses/${a0.id}`, ownerCookie, "PATCH", { address: `測試地址改${i}` }), {
+            params: Promise.resolve({ id: fx.guardA.id, addressId: a0.id }),
+          }),
+          addressCreate(req(`http://test.local/api/guards/${fx.guardA.id}/addresses`, ownerCookie, "POST", { address: `測試地址新${i}`, is_primary: true }), {
+            params: Promise.resolve({ id: fx.guardA.id }),
+          }),
+        ]);
+        statuses.push(r1.status, r2.status);
+      }
+      expect(statuses.filter((c) => c >= 500)).toEqual([]);
+      expect(await prisma.guardAddress.count({ where: { guardId: fx.guardA.id, isPrimary: true } })).toBe(1);
+    });
   });
 
   // ---------------------------------------------------------------------
