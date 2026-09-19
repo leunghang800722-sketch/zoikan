@@ -11,7 +11,7 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { GuardPhoneUpdateSchema } from "@/lib/api/schemas";
-import { setPrimaryGuardPhone, deleteGuardPhone, syncLegacyGuardContactColumns, normalizeTel } from "@/lib/guards/contacts";
+import { setPrimaryGuardPhone, deleteGuardPhone, syncLegacyGuardContactColumns, normalizeTel, isValidTel, lockGuardRowForContactWrite } from "@/lib/guards/contacts";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden, Conflict, BadRequest } from "@/lib/api/errors";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
@@ -35,13 +35,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const parsed = parseBody(GuardPhoneUpdateSchema, body);
 
     const result = await prisma.$transaction(async (tx) => {
+      // 鎖序一律「guard 行先、子表行後」（同 create／delete／setPrimary 一致，避免 deadlock）。
+      await lockGuardRowForContactWrite(tx, id);
       const row = await tx.guardPhone.findFirst({ where: { id: phoneId, guardId: id } });
       if (!row) throw NotFound("搵唔到呢個電話");
 
       const data: Record<string, unknown> = {};
-      if (parsed.tel !== undefined) {
+      if (parsed.tel !== undefined && parsed.tel.trim() !== row.tel && normalizeTel(parsed.tel) !== row.tel) {
         const tel = normalizeTel(parsed.tel);
-        if (tel !== row.tel) {
+        if (!isValidTel(tel)) throw BadRequest("電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）");
+        {
           const dup = await tx.guardPhone.findUnique({ where: { guardId_tel: { guardId: id, tel } } });
           if (dup) throw Conflict("呢個電話已經記錄咗（同一個保安員唔可以重複記錄同一個電話）");
           data.tel = tel;

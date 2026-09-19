@@ -69,7 +69,7 @@ export type LegacyContactGroup = "tel" | "address" | "emergency";
 // tagged-template 參數化，Prisma 自動處理 `$1` 綁定，冇 SQL injection
 // 風險。
 // ---------------------------------------------------------------------------
-async function lockGuardRowForContactWrite(tx: Tx, guardId: string): Promise<void> {
+export async function lockGuardRowForContactWrite(tx: Tx, guardId: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM guards WHERE id = ${guardId} FOR UPDATE`;
 }
 
@@ -477,10 +477,13 @@ export async function updateGuardEmergencyContact(
   contactId: string,
   input: UpdateGuardEmergencyContactInput,
 ): Promise<{ before: GuardEmergencyContact; after: GuardEmergencyContact } | null> {
+  await lockGuardRowForContactWrite(tx, guardId);
   const row = await tx.guardEmergencyContact.findFirst({ where: { id: contactId, guardId } });
   if (!row) return null;
   const nextName = input.name !== undefined ? input.name?.trim() || null : row.name;
-  const nextTel = input.tel !== undefined && (input.tel?.trim() || null) !== row.tel ? normalizeContactTelOrThrow(input.tel) : row.tel;
+  const inTel = input.tel?.trim() || null;
+  const telSame = inTel === row.tel || (!!inTel && !!row.tel && normalizeTel(inTel) === normalizeTel(row.tel));
+  const nextTel = input.tel !== undefined && !telSame ? normalizeContactTelOrThrow(input.tel) : row.tel;
   assertNameOrTel(nextName, nextTel);
   const data: Prisma.GuardEmergencyContactUpdateInput = {};
   if (input.name !== undefined) data.name = nextName;
@@ -494,6 +497,7 @@ export async function updateGuardEmergencyContact(
 }
 
 export async function deleteGuardEmergencyContact(tx: Tx, guardId: string, contactId: string): Promise<GuardEmergencyContact | null> {
+  await lockGuardRowForContactWrite(tx, guardId);
   const row = await tx.guardEmergencyContact.findFirst({ where: { id: contactId, guardId } });
   if (!row) return null;
   await tx.guardEmergencyContact.delete({ where: { id: row.id } });
@@ -507,6 +511,7 @@ export async function deleteGuardEmergencyContact(tx: Tx, guardId: string, conta
  * 呢個 guard 現有全部行（唔准漏、唔准多、唔准夾雜其他 guard 嘅 id）
  * ——唔係嘅話 400，避免手快打錯令某一行走失咗個 sort_order 對應。 */
 export async function reorderGuardEmergencyContacts(tx: Tx, guardId: string, orderedIds: string[]): Promise<GuardEmergencyContact[]> {
+  await lockGuardRowForContactWrite(tx, guardId);
   const rows = await tx.guardEmergencyContact.findMany({ where: { guardId } });
   const rowIds = new Set(rows.map((r) => r.id));
   const uniqueOrderedIds = new Set(orderedIds);
@@ -614,6 +619,7 @@ export async function applyLegacyGuardContactPatch(
     // 觸發，呢度 `minRow` 會用返自癒之前（0 行）嗰個狀態計出
     // `sortOrder=0`，同自癒剛巧起低嗰行（都係 `sortOrder=0`）撞成同一個
     // 值，代表行變咗睇唔準邊個先（DB 冇規定 tie 點排）。
+    await lockGuardRowForContactWrite(tx, guardId); // 先鎖後自癒（同電話／地址一致），併發唔會重複補行
     await healLegacyContactBeforeWrite(tx, guardId, "emergency", createdBy ?? null);
     // 「加一個新嘅緊急聯絡人，變成新嘅代表行」——`sort_order` 要細過現有
     // 全部行先會贏（`syncLegacyGuardContactColumns()` 揀 `sort_order` 最
@@ -622,7 +628,9 @@ export async function applyLegacyGuardContactPatch(
     const sortOrder = minRow ? minRow.sortOrder - 1 : 0;
     // 只改咗姓名、電話照舊（可能係舊髒值）→ 照搬唔驗，唔好鎖死儲存；電話真係改咗先驗格式。
     const legacyNow = await tx.guard.findUnique({ where: { id: guardId }, select: { emergencyContactTel: true } });
-    const telUnchanged = (emergencyContactTel?.trim() || null) === (legacyNow?.emergencyContactTel?.trim() || null);
+    const _newTel = emergencyContactTel?.trim() || null;
+    const _oldTel = legacyNow?.emergencyContactTel?.trim() || null;
+    const telUnchanged = _newTel === _oldTel || (!!_newTel && !!_oldTel && normalizeTel(_newTel) === normalizeTel(_oldTel));
     contact = await createGuardEmergencyContact(tx, {
       guardId,
       name: emergencyContactName,

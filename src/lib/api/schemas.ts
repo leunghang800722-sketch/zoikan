@@ -305,9 +305,12 @@ export const GuardPhoneCreateSchema = z
     note: nullableString,
   })
   .strict();
+// Opus 第三輪覆核：update 嘅 `tel` 唔喺 schema 層驗格式——自癒／舊寫法照搬落嚟嘅
+// 髒 tel 行，前端編輯 label／備註時會連 tel 原值一齊送，schema 一驗就 400 鎖死。
+// 改為 route／lib 層「同現值一樣就照搬、真係改咗先正規化＋驗格式」。
 export const GuardPhoneUpdateSchema = z
   .object({
-    tel: phoneTel.optional(),
+    tel: z.string().min(1).optional(),
     label: nullableString,
     is_primary: z.boolean().optional(),
     note: nullableString,
@@ -330,7 +333,7 @@ export const GuardEmergencyContactCreateSchema = z
 export const GuardEmergencyContactUpdateSchema = z
   .object({
     name: nullableString,
-    tel: nullablePhoneTel,
+    tel: nullableString, // 同上：lib 層 updateGuardEmergencyContact() 先驗（冇改就照搬）
     relationship: nullableString,
     sort_order: z.number().int().optional(),
     note: nullableString,

@@ -505,6 +505,35 @@ describe("WP-MULTI", () => {
       expect(rows.map((r) => r.name)).toEqual(["舊聯絡人改名", "舊聯絡人"]); // 舊嗰個經自癒保留
       expect(rows[0].tel).toBe("6930 0001 / 6930 0002");
     });
+    it("Opus 第三輪覆核：髒 tel 行（自癒／舊寫法照搬）經子資源 PATCH 改姓名／label 唔會 400；改做新髒值先 400", async () => {
+      const contact = await prisma.guardEmergencyContact.create({ data: { guardId: fx.guardA.id, name: "舊聯絡人", tel: "6930 0001 / 6930 0002", sortOrder: 0, source: "backfill:legacy-on-write" } });
+      const r1 = await contactUpdate(
+        req(`http://test.local/api/guards/${fx.guardA.id}/emergency-contacts/${contact.id}`, ownerCookie, "PATCH", { name: "舊聯絡人改名", tel: "6930 0001 / 6930 0002" }),
+        { params: Promise.resolve({ id: fx.guardA.id, contactId: contact.id }) },
+      );
+      expect(r1.status).toBe(200);
+      expect((await prisma.guardEmergencyContact.findUniqueOrThrow({ where: { id: contact.id } })).tel).toBe("6930 0001 / 6930 0002");
+      const r2 = await contactUpdate(
+        req(`http://test.local/api/guards/${fx.guardA.id}/emergency-contacts/${contact.id}`, ownerCookie, "PATCH", { tel: "abc / def" }),
+        { params: Promise.resolve({ id: fx.guardA.id, contactId: contact.id }) },
+      );
+      expect(r2.status).toBe(400);
+
+      const phone = await prisma.guardPhone.create({ data: { guardId: fx.guardA.id, tel: "6931 0001 / 6931 0002", isPrimary: true, source: "backfill:legacy-on-write" } });
+      const r3 = await phoneUpdate(
+        req(`http://test.local/api/guards/${fx.guardA.id}/phones/${phone.id}`, ownerCookie, "PATCH", { tel: "6931 0001 / 6931 0002", label: "屋企" }),
+        { params: Promise.resolve({ id: fx.guardA.id, phoneId: phone.id }) },
+      );
+      expect(r3.status).toBe(200);
+      const after = await prisma.guardPhone.findUniqueOrThrow({ where: { id: phone.id } });
+      expect(after.tel).toBe("6931 0001 / 6931 0002");
+      expect(after.label).toBe("屋企");
+      const r4 = await phoneUpdate(
+        req(`http://test.local/api/guards/${fx.guardA.id}/phones/${phone.id}`, ownerCookie, "PATCH", { tel: "唔係電話" }),
+        { params: Promise.resolve({ id: fx.guardA.id, phoneId: phone.id }) },
+      );
+      expect(r4.status).toBe(400);
+    });
   });
 
   // ---------------------------------------------------------------------
