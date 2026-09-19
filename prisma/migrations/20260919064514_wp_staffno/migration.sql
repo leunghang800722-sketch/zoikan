@@ -221,7 +221,7 @@ WHERE scheme IS NOT NULL
 -- 邏輯上唔啱，同 `wp_staffno_ranked` 嘅篩選條件唔對齊）。
 INSERT INTO "guard_staff_numbers" (id, guard_id, scheme, number, status, source, created_at, updated_at)
 SELECT
-  gen_random_uuid(),
+  md5(random()::text || clock_timestamp()::text || guard_id::text || col_name)::uuid, -- 唔用 gen_random_uuid()：PG 12 或以下冇內置
   guard_id,
   scheme,
   normalized,
@@ -235,7 +235,7 @@ WHERE rn = 1;
 -- 真撞號、冇攞到 winner 嗰啲（rn>1）→ 跳過，audit_log 留底俾人手跟進。
 INSERT INTO audit_log (id, actor_user_id, table_name, row_id, action, before, after, ip, created_at)
 SELECT
-  gen_random_uuid(),
+  md5(random()::text || clock_timestamp()::text || guard_id::text || col_name)::uuid, -- 唔用 gen_random_uuid()：PG 12 或以下冇內置
   NULL,
   'guard_staff_numbers',
   guard_id,
@@ -255,7 +255,7 @@ WHERE rn > 1;
 -- 唔啱）→ 跳過，同樣 audit_log 留底。
 INSERT INTO audit_log (id, actor_user_id, table_name, row_id, action, before, after, ip, created_at)
 SELECT
-  gen_random_uuid(),
+  md5(random()::text || clock_timestamp()::text || guard_id::text || col_name)::uuid, -- 唔用 gen_random_uuid()：PG 12 或以下冇內置
   NULL,
   'guard_staff_numbers',
   guard_id,
