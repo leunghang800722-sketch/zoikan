@@ -75,7 +75,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           });
           if (existingCurrent) {
             throw Conflict(
-              `呢個保安員已經有一個 current 嘅 ${row.scheme} 號（${existingCurrent.number}）——要先將嗰個轉做 former 先可以將呢個轉返 current`,
+              `呢個保安員已經有一個現用嘅 ${row.scheme} 號（${existingCurrent.number}）——要先取消嗰個，先可以將呢個改返現用`,
             );
           }
         }

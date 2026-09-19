@@ -36,8 +36,8 @@ export const GUARD_BROKER_FIELDS = [
   "updatedAt",
   "monthShiftCount",
   "staffNumbers",
-  // S7：同內部角色 GUARD_FIELDS 一致——「舊號命中」badge 雞頭搜尋自己人
-  // 一樣用得到。
+  // S7：同內部角色 GUARD_FIELDS 一致——「已取消號命中」badge 雞頭搜尋自己
+  // 人一樣用得到。
   "formerNumberHit",
 ] as const;
 

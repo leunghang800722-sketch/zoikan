@@ -71,7 +71,9 @@ test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 
 
     // `onAddStaffNumber()` 成功之後自己會 `await load()` 刷新列表，唔使
     // 再手動 reload——直接關閉抽屜就搵得到最新 chips。
-    await page.getByRole("button", { name: "取消" }).click();
+    // WP-STAFFNO（業務規則 (4)）：員工編號分區有「取消呢個號」按鈕，同
+    // 呢個抽屜關閉用嘅「取消」撞 substring——用 `exact: true` 分開。
+    await page.getByRole("button", { name: "取消", exact: true }).click();
 
     // ---- 列表見兩個 chips（U + MP） ----
     await page.getByPlaceholder("姓名 / 工號 / 電話").fill(guard.nameZh);
@@ -90,11 +92,11 @@ test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 
     const postU = page.waitForResponse((r) => /\/api\/guards\/[^/]+\/staff-numbers$/.test(r.url()) && r.request().method() === "POST");
     await page.getByRole("button", { name: "新增編號" }).click();
     await postU;
-    // response 講明舊 U 已經轉咗做舊號。
-    await expect(page.getByText(`舊嘅 ${originalStaffNo} 已經轉做舊號`)).toBeVisible({ timeout: 10_000 });
+    // response 講明舊 U 已經取消。
+    await expect(page.getByText(`原本嘅 ${originalStaffNo} 已取消`)).toBeVisible({ timeout: 10_000 });
 
-    // 舊 U 摺埋（former 預設摺埋）——見到「顯示舊號 N 個」，撳先見到舊值。
-    const showFormerBtn = page.getByRole("button", { name: /顯示舊號 \d+ 個/ });
+    // 舊 U 摺埋（former／已取消預設摺埋）——見到「顯示已取消嘅號 N 個」，撳先見到舊值。
+    const showFormerBtn = page.getByRole("button", { name: /顯示已取消嘅號 \d+ 個/ });
     await expect(showFormerBtn).toBeVisible();
     await expect(page.getByText(originalStaffNo, { exact: true })).toHaveCount(0);
     await showFormerBtn.click();

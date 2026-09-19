@@ -78,9 +78,9 @@ const GUARD_FIELDS = [
   "blacklistCheckResult",
   "blacklistCheckDate",
   "staffNumbers",
-  // S7：`?q=` 搜尋命中舊（former）工號嗰陣先會有呢粒 key（見
+  // S7：`?q=` 搜尋命中已取消（former）工號嗰陣先會有呢粒 key（見
   // src/app/api/guards/route.ts findNumberSearchMatches()）——前端標
-  // 「舊號命中」用。
+  // 「已取消號命中」用。
   "formerNumberHit",
 ] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
