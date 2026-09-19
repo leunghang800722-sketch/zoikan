@@ -122,6 +122,9 @@ export const SiteCreateSchema = z
     parent_site_id: uuid.optional(),
     billing_model: enumOf(BillingModel),
     outside_monthly_close: z.boolean().optional(),
+    // WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類「客戶直接出糧」嘅盤——
+    // 見 prisma/schema.prisma Site.guardsPaidByClient 大註解。
+    guards_paid_by_client: z.boolean().optional(),
     monthly_fee: money,
     monthly_posts: z.number().int().optional(),
     prorata_basis: enumOf(ProrataBasis).optional(),
@@ -136,6 +139,7 @@ export const SiteUpdateSchema = z
     parent_site_id: uuid.optional(),
     billing_model: enumOf(BillingModel).optional(),
     outside_monthly_close: z.boolean().optional(),
+    guards_paid_by_client: z.boolean().optional(),
     monthly_fee: money,
     monthly_posts: z.number().int().optional(),
     prorata_basis: enumOf(ProrataBasis).optional(),
@@ -231,6 +235,11 @@ export const GuardUpdateSchema = z
     // （牌照／平安卡／入離職／甲乙到期呢批，見上面 sia_permit_a/b_expiry
     // 同一段理由）。
     safety_card_expiry: nullableDateOnly,
+    // WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）——
+    // `qas_issue_date`＝完成日期、`qas_expiry_date`＝到期日（如有），
+    // 跟「安員」module（同 safety_card_expiry 一致層級），`null`＝清空。
+    qas_issue_date: nullableDateOnly,
+    qas_expiry_date: nullableDateOnly,
     hire_date: nullableDateOnly,
     leave_date: nullableDateOnly,
     bank_name: z.string().optional(),

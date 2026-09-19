@@ -291,6 +291,15 @@ model Guard {
   siaPermitBExpiry     DateTime?    @map("sia_permit_b_expiry") @db.Date
   safetyCardNo         String?      @map("safety_card_no") // 平安卡號碼
   safetyCardExpiry     DateTime?    @map("safety_card_expiry") @db.Date
+  // WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）日期——跟
+  // 「安員」module（同牌照／平安卡欄一樣嘅讀寫規則）。`qasIssueDate`＝
+  // 完成日期（UI 標籤「QAS 完成日期」），`qasExpiryDate`＝到期日（如有，
+  // UI 標籤「QAS 到期日（如有）」）——來源檔個欄過去日子＝完成、未來
+  // 日子＝到期，混雜咗，分開兩欄先唔會入錯。`qasExpiryDate` 納入「90 日
+  // 內到期／已過期」高亮同列表最近到期 pill（同 safetyCardExpiry 一樣，
+  // 見 earlierExpiry() / licenceExpiryPill()）。
+  qasIssueDate         DateTime?    @map("qas_issue_date") @db.Date
+  qasExpiryDate        DateTime?    @map("qas_expiry_date") @db.Date
   hireDate             DateTime?    @map("hire_date") @db.Date
   leaveDate            DateTime?    @map("leave_date") @db.Date
   bankName             String?      @map("bank_name")
@@ -454,6 +463,15 @@ model Site {
   inScope       Boolean       @default(true) @map("in_scope")
   /** 月結「以外」：收入唔入月結總表主表（例如客戶另有合約嘅盤）；seed 由 data/mappings-private/report-overrides.json 嘅客戶名填，之後由盤管理頁改 */
   outsideMonthlyClose Boolean @default(false) @map("outside_monthly_close")
+  // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢批盤嘅
+  // 保安員由客戶（Wilson）直接出糧，我哋淨係收每月服務費——唔逐更計
+  // 客價／工資，唔使價目卡。true 嘅盤：(1) computeUnpricedSummary()／
+  // isUnpricedShift()／isClientUnpricedShift() 唔算未定价；(2) 更表
+  // batch save／reprice 唔寫 guard_wage/broker_fee/client_rate snapshot
+  // （已有值唔清，保守）；(3) 更表編輯器頂部 Notice；(4) 盤管理頁可切換
+  // （跟「盤」module update 權限）；(5) 唔改 gross-margin 服務費收入點計
+  // （老闆話維持現狀）。見 src/lib/pricing/unpriced.ts、resolve-rate.ts。
+  guardsPaidByClient Boolean @default(false) @map("guards_paid_by_client")
   status        SiteStatus    @default(active)
   // P1-WP3：更表版面模板（`RosterLayoutTemplate`，見
   // src/lib/roster-layout-template.ts）——由 seed 時由 data/ 讀出反推

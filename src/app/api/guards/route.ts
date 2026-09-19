@@ -179,10 +179,14 @@ export async function GET(req: Request) {
     if (expiringWithinDaysParam !== null) {
       const cutoff = new Date(Date.now() + Number(expiringWithinDaysParam) * 86_400_000);
       const all = await prisma.guard.findMany({ where, orderBy: { createdAt: "asc" } });
+      // WP-MISC（老闆 2026-09-20 拍板）：QAS 到期日一齊納入「90 日內到期／
+      // 已過期」篩選——同牌照／平安卡一致口徑（見 GuardsClient.tsx
+      // earlierExpiry()）。
       const filtered = all.map(withDerived).filter(
         (r) =>
           (r.siaPermitExpiry != null && r.siaPermitExpiry.getTime() <= cutoff.getTime()) ||
-          (r.safetyCardExpiry != null && r.safetyCardExpiry.getTime() <= cutoff.getTime()),
+          (r.safetyCardExpiry != null && r.safetyCardExpiry.getTime() <= cutoff.getTime()) ||
+          (r.qasExpiryDate != null && r.qasExpiryDate.getTime() <= cutoff.getTime()),
       );
       total = filtered.length;
       rows = filtered.slice(skip, skip + take);

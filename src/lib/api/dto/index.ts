@@ -17,7 +17,10 @@ import { pickWhitelist, brandSafeResponse, type Dto } from "../serialize";
 import type { FieldGroupResource } from "../field-groups";
 
 const BROKER_FIELDS = ["id", "code", "name", "kind", "settlementType", "bankInfo", "requiresApproval", "isInternal", "aliases", "status", "createdAt", "updatedAt", "createdBy"] as const;
-const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "status", "createdAt", "updatedAt", "createdBy"] as const;
+// WP-MISC（老闆 2026-09-20 拍板）：`guardsPaidByClient`——LINK（TKO
+// Gateway 厚A/B/C）呢類「客戶直接出糧」嘅盤，見 prisma/schema.prisma
+// Site model 大註解。
+const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "guardsPaidByClient", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTime", "hours", "headcountRequired", "billingGroup", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 // S4（Opus 驗收修復）：`monthShiftCount` 係 P2-A 加嘅衍生欄（唔係
 // Prisma model 本身有嘅欄，`GET /api/guards?with_month_shifts=YYYY-MM`
@@ -70,6 +73,12 @@ const GUARD_FIELDS = [
   "siaPermitBLapsedByAge",
   "safetyCardNo",
   "safetyCardExpiry",
+  // WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）日期——跟現有
+  // 「安員」module（同 safetyCardExpiry 一致層級，唔屬於 PII 組），列表
+  // 都要（90 日內到期高亮／列表最近到期 pill 用），唔放入
+  // GUARD_LIST_DETAIL_ONLY_FIELDS。
+  "qasIssueDate",
+  "qasExpiryDate",
   "hireDate",
   "leaveDate",
   "bankName",

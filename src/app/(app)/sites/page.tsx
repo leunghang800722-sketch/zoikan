@@ -28,6 +28,9 @@ interface SiteRow {
   prorata_basis?: string | null;
   in_scope: boolean;
   outside_monthly_close: boolean;
+  // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類盤嘅
+  // 保安員由客戶直接出糧，我哋淨係收每月服務費——唔逐更計客價／工資。
+  guards_paid_by_client: boolean;
   status: string;
 }
 
@@ -55,6 +58,7 @@ const emptySiteForm = {
   prorata_basis: "",
   in_scope: true,
   outside_monthly_close: false,
+  guards_paid_by_client: false,
 };
 
 function billingModelPill(model: string) {
@@ -135,6 +139,7 @@ export default function SitesPage() {
       prorata_basis: row.prorata_basis ?? "",
       in_scope: row.in_scope,
       outside_monthly_close: row.outside_monthly_close ?? false,
+      guards_paid_by_client: row.guards_paid_by_client ?? false,
     });
     setFormError(null);
     setDrawerOpen(true);
@@ -156,6 +161,7 @@ export default function SitesPage() {
       prorata_basis: form.prorata_basis || undefined,
       in_scope: form.in_scope,
       outside_monthly_close: form.outside_monthly_close,
+      guards_paid_by_client: form.guards_paid_by_client,
       aliases,
     };
     if (hasMoneyField && form.monthly_fee !== "") body.monthly_fee = Number(form.monthly_fee);
@@ -258,7 +264,12 @@ export default function SitesPage() {
                           ? shiftTypesBySite[r.id]!.map((s) => s.code).join(" · ")
                           : "—"}
                     </td>
-                    <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}</td>
+                    <td className={tableCls.td}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
+                        {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
+                      </div>
+                    </td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
@@ -303,6 +314,7 @@ export default function SitesPage() {
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {billingModelPill(r.billing_model)}
                   {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
+                  {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
                   <span className="text-[11.5px] text-zk-muted">
                     {shiftTypesLoading ? "載入緊…" : (shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}
                   </span>
@@ -398,6 +410,16 @@ export default function SitesPage() {
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.outside_monthly_close} onChange={(e) => setForm((f) => ({ ...f, outside_monthly_close: e.target.checked }))} />
             月結以外（收入唔入月結總表主表，另列「月結以外」）
+          </label>
+          {/* WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類盤——保安員由客戶
+              直接出糧，我哋淨係收每月服務費，唔逐更計客價／工資。 */}
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.guards_paid_by_client}
+              onChange={(e) => setForm((f) => ({ ...f, guards_paid_by_client: e.target.checked }))}
+            />
+            客戶直接出糧（保安員由客戶直接出糧，我哋淨係收每月服務費，呢個盤嘅更唔計工資／客價）
           </label>
           <div className="flex gap-2 pt-2">
             <button type="submit" disabled={saving} className={btnPrimary}>

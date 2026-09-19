@@ -111,7 +111,10 @@ export const SHIFT_RECORD_BROKER_FIELDS = [
 // 顯示「呢個盤未有更表模板，唔可以匯出」提示（同內部角色 toSiteDTO 一致
 // 手法——`rosterLayout` 本身個 JSON blob 唔可以直接俾雞頭，見
 // src/lib/api/dto/index.ts 對應註解）。
-export const SITE_BROKER_FIELDS = ["id", "canonicalName", "aliases", "status", "hasRosterLayout"] as const;
+// WP-MISC（老闆 2026-09-20 拍板）：`guardsPaidByClient` 加落嚟——雞頭自己
+//排 LINK 呢類盤嘅更都要見到「客戶直接出糧」呢個 Notice（RosterEditor
+// 用），呢個係業務安排 boolean，唔係金錢數字，冇敏感度顧慮。
+export const SITE_BROKER_FIELDS = ["id", "canonicalName", "aliases", "status", "hasRosterLayout", "guardsPaidByClient"] as const;
 
 // P1-WP3：更別（shift_types）——雞頭要睇到自己有份嗰啲盤嘅更別代號／
 // 時段先填得到自己配額（設計文件§4.1「雞頭：喺自己配額內填人」），但

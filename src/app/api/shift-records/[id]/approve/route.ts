@@ -27,7 +27,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const data: { status: "confirmed"; clientRateSnapshot?: number | null; guardWageSnapshot?: number | null; brokerFeeSnapshot?: number | null } = {
       status: "confirmed",
     };
-    if (before.clientRateSnapshot === null || before.guardWageSnapshot === null || before.brokerFeeSnapshot === null) {
+    // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
+    // 盤嘅保安員由客戶直接出糧——就算將來有人誤加通用價目卡都唔可以
+    // 喺呢度補計，見 batch/route.ts、reprice/route.ts 同一個 gate。
+    const pricingSite = await prisma.site.findUnique({ where: { id: before.siteId }, select: { guardsPaidByClient: true } });
+    if (!pricingSite?.guardsPaidByClient && (before.clientRateSnapshot === null || before.guardWageSnapshot === null || before.brokerFeeSnapshot === null)) {
       const [brokerForPricing, shiftTypeForPricing] = await Promise.all([
         before.settlementBrokerId ? prisma.broker.findUnique({ where: { id: before.settlementBrokerId }, select: { kind: true } }) : Promise.resolve(null),
         prisma.shiftType.findUniqueOrThrow({ where: { id: before.shiftTypeId }, select: { code: true } }),

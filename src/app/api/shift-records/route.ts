@@ -135,21 +135,31 @@ export async function POST(req: Request) {
 
       // WP-PRICE：雞頭自己開嘅更（呢個 schema 冇任何 snapshot 欄可以自己填）
       // 一律 runtime 計价，唔准靜靜 0。
-      const brokerPricing = await resolveShiftPricing({
-        siteId: parsedBroker.site_id,
-        shiftTypeId: parsedBroker.shift_type_id,
-        shiftTypeCode: brokerShiftType.code,
-        shiftTypeBillingGroup: brokerShiftType.billingGroup,
-        settlementBrokerId: brokerId,
-        brokerKind: broker.kind,
-        guardId: parsedBroker.guard_id,
-        workDate,
-        isExternal: false,
-        recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
-      });
-      data.clientRateSnapshot = brokerPricing.clientRate;
-      data.guardWageSnapshot = brokerPricing.guardWage;
-      data.brokerFeeSnapshot = brokerPricing.brokerFee;
+      //
+      // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
+      // 盤唔寫 snapshot——同 batch/route.ts、reprice/route.ts 一致嘅 gate。
+      const brokerPricingSite = await prisma.site.findUnique({ where: { id: parsedBroker.site_id }, select: { guardsPaidByClient: true } });
+      if (brokerPricingSite?.guardsPaidByClient) {
+        data.clientRateSnapshot = null;
+        data.guardWageSnapshot = null;
+        data.brokerFeeSnapshot = null;
+      } else {
+        const brokerPricing = await resolveShiftPricing({
+          siteId: parsedBroker.site_id,
+          shiftTypeId: parsedBroker.shift_type_id,
+          shiftTypeCode: brokerShiftType.code,
+          shiftTypeBillingGroup: brokerShiftType.billingGroup,
+          settlementBrokerId: brokerId,
+          brokerKind: broker.kind,
+          guardId: parsedBroker.guard_id,
+          workDate,
+          isExternal: false,
+          recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+        });
+        data.clientRateSnapshot = brokerPricing.clientRate;
+        data.guardWageSnapshot = brokerPricing.guardWage;
+        data.brokerFeeSnapshot = brokerPricing.brokerFee;
+      }
 
       await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
@@ -179,7 +189,12 @@ export async function POST(req: Request) {
     // WP-PRICE：內部角色呢個 schema 本身容許手動傳 *_snapshot（保留
     // 手動覆寫能力，例如補漏單／人手核價）——淨係冇傳嗰啲先自動計价，
     // 傳咗嘅一律尊重，唔覆蓋。
-    if (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null) {
+    //
+    // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
+    // 盤自動計价呢一步跳過（冇傳嘅欄保持 null）——手動明確傳咗嘅值仍然
+    // 尊重（老闆／會計可以人手補一次性特殊安排），唔喺呢度硬性擋。
+    const internalPricingSite = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { guardsPaidByClient: true } });
+    if (!internalPricingSite?.guardsPaidByClient && (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null)) {
       const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
       const brokerForPricing = settlementBrokerId
         ? await prisma.broker.findUnique({ where: { id: settlementBrokerId }, select: { kind: true } })

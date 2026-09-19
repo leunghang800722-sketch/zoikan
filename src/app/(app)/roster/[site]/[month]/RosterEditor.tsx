@@ -50,6 +50,11 @@ type SiteDto = {
   // GET roster-export 會 409 no_roster_layout，匯出掣要顯示提示
   // 唔可以照樣當連結掣使（見底下匯出按鈕嗰段）。
   has_roster_layout?: boolean;
+  // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類盤
+  // 嘅保安員由客戶直接出糧，我哋淨係收每月服務費——頁頂顯示 Notice，
+  // 呢個更表唔計工資／客價。內部＋雞頭 DTO 都有（見 src/lib/api/dto/
+  // index.ts、src/lib/broker-dto.ts SITE_BROKER_FIELDS）。
+  guards_paid_by_client?: boolean;
 };
 
 type ShiftTypeDto = {
@@ -517,6 +522,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // no_roster_layout）。`undefined`＝仲未載入完（唔顯示提示，避免載入
   // 中間閃一下）。
   const [hasRosterLayout, setHasRosterLayout] = useState<boolean | undefined>(undefined);
+  // WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類「客戶直接出糧」嘅盤——頁
+  // 頂 Notice 用（見下面「鎖定／提示橫幅」段）。
+  const [guardsPaidByClient, setGuardsPaidByClient] = useState(false);
 
   const [shiftTypesById, setShiftTypesById] = useState<Map<string, ShiftTypeDto>>(new Map());
   const [guardsById, setGuardsById] = useState<Map<string, GuardDto>>(new Map());
@@ -645,6 +653,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         setIsBrokerSession(brokerSession);
         setSiteName(site.canonical_name);
         setHasRosterLayout(site.has_roster_layout ?? false);
+        setGuardsPaidByClient(site.guards_paid_by_client ?? false);
 
         const workDateFrom = workDateStr(y, m, 1);
         const workDateTo = workDateStr(y, m, d);
@@ -2091,6 +2100,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             </span>
           </div>
         )
+      )}
+      {/* WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
+          「客戶直接出糧」嘅盤——頁頂提示，同鎖定狀態獨立（鎖定與否都要
+          畀用戶知呢個盤嘅更唔計工資／客價）。 */}
+      {guardsPaidByClient && (
+        <Notice variant="info">
+          呢個盤嘅保安員由客戶直接出糧，我哋只收每月服務費——呢度嘅更唔計工資／客價，亦唔會出現喺糧單。
+        </Notice>
       )}
       {/* WP-PRICE §3：呢個盤呢個月未定价格持續提示（唔止儲存嗰下先出——
           載入頁面已經攞緊，等用戶就算冇改動都睇到舊有缺價格）。 */}

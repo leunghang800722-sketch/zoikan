@@ -143,7 +143,9 @@ export async function POST(req: Request) {
     const shiftTypeIdList = [...new Set(records.map((r) => r.shiftTypeId))];
     const [brokers, sites, shiftTypes] = await Promise.all([
       brokerIds.length ? prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, kind: true, code: true } }) : Promise.resolve([]),
-      prisma.site.findMany({ where: { id: { in: siteIdList } }, select: { id: true, canonicalName: true, billingModel: true } }),
+      // WP-MISC（老闆 2026-09-20 拍板）：加 `guardsPaidByClient`——LINK
+      // 呢類盤 reprice 全部保留現值（唔掂），見下面 loop。
+      prisma.site.findMany({ where: { id: { in: siteIdList } }, select: { id: true, canonicalName: true, billingModel: true, guardsPaidByClient: true } }),
       // 應修：加 billingGroup——收客价 resolver／未定价判斷而家用
       // shift_type.billing_group（唔再用 site.billing_model）。
       prisma.shiftType.findMany({ where: { id: { in: shiftTypeIdList } }, select: { id: true, code: true, billingGroup: true } }),
@@ -151,6 +153,8 @@ export async function POST(req: Request) {
     const brokerById = new Map(brokers.map((b) => [b.id, b]));
     const siteById = new Map(sites.map((s) => [s.id, s]));
     const shiftTypeById = new Map(shiftTypes.map((s) => [s.id, s]));
+    // WP-MISC：LINK（TKO Gateway 厚A/B/C）呢類盤——`guardsPaidByClient`。
+    const guardsPaidByClientById = new Map(sites.map((s) => [s.id, s.guardsPaidByClient]));
     const unpricedLookups: UnpricedLookups = {
       brokerKindById: new Map(brokers.map((b) => [b.id, b.kind as BrokerKindLike])),
       brokerCodeById: new Map(brokers.map((b) => [b.id, b.code])),
@@ -158,6 +162,7 @@ export async function POST(req: Request) {
       siteBillingModelById: new Map(sites.map((s) => [s.id, (s.billingModel as string | null) ?? null])),
       shiftTypeCodeById: new Map(shiftTypes.map((s) => [s.id, s.code])),
       shiftTypeBillingGroupById: new Map(shiftTypes.map((s) => [s.id, s.billingGroup])),
+      siteGuardsPaidByClientById: guardsPaidByClientById,
     };
 
     // S6：一次過（Promise.all，唔逐個 site 排隊 await）攞晒每個盤喺呢個
@@ -173,43 +178,57 @@ export async function POST(req: Request) {
     let keptUnresolvedCount = 0;
 
     for (const r of records) {
-      const brokerRow = r.settlementBrokerId ? brokerById.get(r.settlementBrokerId) : undefined;
-      const brokerKind: BrokerKindLike = (brokerRow?.kind as BrokerKindLike) ?? null;
-      const pricing = resolveShiftPricingFromCards(cardsBySite.get(r.siteId) ?? [], {
-        siteId: r.siteId,
-        shiftTypeId: r.shiftTypeId,
-        shiftTypeCode: shiftTypeById.get(r.shiftTypeId)?.code ?? "",
-        shiftTypeBillingGroup: shiftTypeById.get(r.shiftTypeId)?.billingGroup ?? "per_shift",
-        settlementBrokerId: r.settlementBrokerId,
-        brokerKind,
-        guardId: r.guardId,
-        workDate: r.workDate,
-        isExternal: r.isExternal,
-        recordType: "shift",
-      });
-
       const beforeClient = numOrNull(r.clientRateSnapshot);
       const beforeWage = numOrNull(r.guardWageSnapshot);
       const beforeFee = numOrNull(r.brokerFeeSnapshot);
 
-      // 應修（Opus 第二輪驗收）：改用獨立嘅 `clientCardFound`／
-      // `payoutCardFound` flag（唔再借 `pricing.unpriced` 做雙重用途——
-      // 嗰個欄位淨係反映出街价嘅「業務未定价」判斷，external／longterm
-      // 呢兩類「正常冇出街价」一律 `unpriced:false`，唔可以當「搵到咗
-      // null」誤覆蓋原有 snapshot）。仲要：internal_longterm／external
-      // 記錄嘅 wage/fee 永遠唔喺 reprice 改（保留原值，計入
-      // kept_unresolved）——呢兩類本身唔經「逐更卡」出糧/收費，reprice
-      // 唔應該掂佢哋嘅出街价。
-      const neverRepriceWage = brokerKind === "internal_longterm" || brokerKind === "external";
-      const clientNotFound = !pricing.clientCardFound;
-      const payoutNotFound = neverRepriceWage || !pricing.payoutCardFound;
-      const afterClient = clientNotFound ? beforeClient : pricing.clientRate;
-      const afterWage = payoutNotFound ? beforeWage : pricing.guardWage;
-      const afterFee = payoutNotFound ? beforeFee : pricing.brokerFee;
+      // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
+      // 盤嘅保安員由客戶直接出糧——reprice 對呢類盤完全「唔掂」（保守，
+      // 已有值／null 都保留原封不動），唔行 resolver、唔計入
+      // kept_unresolved（唔係「搵唔到卡」，係業務上根本唔使計）。
+      const siteGuardsPaidByClient = guardsPaidByClientById.get(r.siteId) ?? false;
+      let afterClient: number | null;
+      let afterWage: number | null;
+      let afterFee: number | null;
+      if (siteGuardsPaidByClient) {
+        afterClient = beforeClient;
+        afterWage = beforeWage;
+        afterFee = beforeFee;
+      } else {
+        const brokerRow = r.settlementBrokerId ? brokerById.get(r.settlementBrokerId) : undefined;
+        const brokerKind: BrokerKindLike = (brokerRow?.kind as BrokerKindLike) ?? null;
+        const pricing = resolveShiftPricingFromCards(cardsBySite.get(r.siteId) ?? [], {
+          siteId: r.siteId,
+          shiftTypeId: r.shiftTypeId,
+          shiftTypeCode: shiftTypeById.get(r.shiftTypeId)?.code ?? "",
+          shiftTypeBillingGroup: shiftTypeById.get(r.shiftTypeId)?.billingGroup ?? "per_shift",
+          settlementBrokerId: r.settlementBrokerId,
+          brokerKind,
+          guardId: r.guardId,
+          workDate: r.workDate,
+          isExternal: r.isExternal,
+          recordType: "shift",
+        });
 
-      const keptClientMeaningful = clientNotFound && beforeClient !== null;
-      const keptPayoutMeaningful = payoutNotFound && (beforeWage !== null || beforeFee !== null);
-      if (keptClientMeaningful || keptPayoutMeaningful) keptUnresolvedCount++;
+        // 應修（Opus 第二輪驗收）：改用獨立嘅 `clientCardFound`／
+        // `payoutCardFound` flag（唔再借 `pricing.unpriced` 做雙重用途——
+        // 嗰個欄位淨係反映出街价嘅「業務未定价」判斷，external／longterm
+        // 呢兩類「正常冇出街价」一律 `unpriced:false`，唔可以當「搵到咗
+        // null」誤覆蓋原有 snapshot）。仲要：internal_longterm／external
+        // 記錄嘅 wage/fee 永遠唔喺 reprice 改（保留原值，計入
+        // kept_unresolved）——呢兩類本身唔經「逐更卡」出糧/收費，reprice
+        // 唔應該掂佢哋嘅出街价。
+        const neverRepriceWage = brokerKind === "internal_longterm" || brokerKind === "external";
+        const clientNotFound = !pricing.clientCardFound;
+        const payoutNotFound = neverRepriceWage || !pricing.payoutCardFound;
+        afterClient = clientNotFound ? beforeClient : pricing.clientRate;
+        afterWage = payoutNotFound ? beforeWage : pricing.guardWage;
+        afterFee = payoutNotFound ? beforeFee : pricing.brokerFee;
+
+        const keptClientMeaningful = clientNotFound && beforeClient !== null;
+        const keptPayoutMeaningful = payoutNotFound && (beforeWage !== null || beforeFee !== null);
+        if (keptClientMeaningful || keptPayoutMeaningful) keptUnresolvedCount++;
+      }
 
       updates.push({ id: r.id, clientRate: afterClient, guardWage: afterWage, brokerFee: afterFee });
 

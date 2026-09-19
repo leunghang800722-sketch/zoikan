@@ -261,6 +261,13 @@ export async function POST(req: Request) {
     const brokerKindById = new Map(pricingBrokers.map((b) => [b.id, b.kind]));
     const brokerCodeById = new Map(pricingBrokers.map((b) => [b.id, b.code]));
     const rateCards = await fetchEffectiveRateCards(parsed.site_id, month, monthEnd);
+    // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類盤
+    // 嘅保安員由客戶直接出糧，公司淨係收每月服務費——唔逐更計客價／
+    // 工資，唔使價目卡。下面「計价」段對呢類盤（`guardsPaidByClient`）
+    // 一律行「保留現有值、唔寫新 snapshot、唔算未定价」分支，見
+    // src/lib/pricing/unpriced.ts、resolve-rate.ts 頂註解。
+    const pricingSite = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { canonicalName: true, guardsPaidByClient: true } });
+    const siteGuardsPaidByClient = pricingSite?.guardsPaidByClient ?? false;
 
     type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
     const unpricedByKey = new Map<string, UnpricedCellSummary>();
@@ -296,7 +303,21 @@ export async function POST(req: Request) {
         recordType: plan.recordType,
       };
 
-      if (shouldFullReprice) {
+      if (siteGuardsPaidByClient) {
+        // WP-MISC：LINK 呢類盤——唔行 resolver、唔寫新 snapshot（新記錄
+        // 三個欄一律 null，`existingClient/Wage/Fee` 對新記錄本身已經係
+        // null）；已有值（例如未拍板前舊資料）保留原封不動，唔清；一律
+        // 唔算未定价（payout 同 client 都唔算）。
+        plan.pricing = {
+          clientRate: existingClient,
+          guardWage: existingWage,
+          brokerFee: existingFee,
+          source: {},
+          unpriced: false,
+          clientCardFound: false,
+          payoutCardFound: false,
+        };
+      } else if (shouldFullReprice) {
         plan.pricing = resolveShiftPricingFromCards(rateCards, resolverInput);
       } else if (existingRecord && !existingIsPR && (existingClient === null || existingWage === null || existingFee === null)) {
         // 應修 S4：局部補漏——唔夠全部重計嘅門檻，但有部份欄位係 null，
@@ -347,8 +368,7 @@ export async function POST(req: Request) {
       }
     }
     if (unpricedByKey.size > 0) {
-      const site = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { canonicalName: true } });
-      for (const summary of unpricedByKey.values()) summary.site_name = site?.canonicalName;
+      for (const summary of unpricedByKey.values()) summary.site_name = pricingSite?.canonicalName;
     }
 
     // ---- 全部 validate 過關，先開 transaction 寫入 --------------------

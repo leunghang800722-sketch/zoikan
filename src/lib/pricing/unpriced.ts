@@ -58,6 +58,10 @@ export type UnpricedLookups = {
   siteBillingModelById: Map<string, string | null>;
   shiftTypeCodeById: Map<string, string>;
   shiftTypeBillingGroupById: Map<string, string>;
+  // WP-MISC（老闆 2026-09-20 拍板）：LINK（TKO Gateway 厚A/B/C）呢類
+  // 「客戶直接出糧」嘅盤——true 嘅盤一律唔算未定价（payout 同 client
+  // 都唔算），見 resolve-rate.ts isUnpricedShift()／isClientUnpricedShift()。
+  siteGuardsPaidByClientById: Map<string, boolean>;
 };
 
 export function computeUnpricedSummary(records: UnpricedRecordLike[], lookups: UnpricedLookups): UnpricedSummary {
@@ -85,14 +89,16 @@ export function computeUnpricedSummary(records: UnpricedRecordLike[], lookups: U
   for (const r of records) {
     const brokerKind: BrokerKindLike = r.settlementBrokerId ? (lookups.brokerKindById.get(r.settlementBrokerId) ?? null) : null;
     const shiftTypeBillingGroup = lookups.shiftTypeBillingGroupById.get(r.shiftTypeId) ?? "per_shift";
+    const guardsPaidByClient = lookups.siteGuardsPaidByClientById.get(r.siteId) ?? false;
     const payoutUnpriced = isUnpricedShift(
       { recordType: "shift", status: r.status, guardWageSnapshot: r.guardWageSnapshot, brokerFeeSnapshot: r.brokerFeeSnapshot, isExternal: r.isExternal },
       brokerKind,
+      { guardsPaidByClient },
     );
     const clientUnpriced = isClientUnpricedShift(
       { recordType: "shift", status: r.status, clientRateSnapshot: r.clientRateSnapshot, isExternal: r.isExternal },
       shiftTypeBillingGroup,
-      { siteBillingModel: lookups.siteBillingModelById.get(r.siteId) ?? null, brokerKind },
+      { siteBillingModel: lookups.siteBillingModelById.get(r.siteId) ?? null, brokerKind, guardsPaidByClient },
     );
     if (!payoutUnpriced && !clientUnpriced) continue;
     count++;
@@ -150,7 +156,7 @@ export async function buildUnpricedSummary(session: AuthedSession, month: Date, 
   const siteIds = [...new Set(records.map((r) => r.siteId))];
   const [brokers, sites, shiftTypes] = await Promise.all([
     brokerIds.length ? prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, kind: true, code: true } }) : Promise.resolve([]),
-    prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true, billingModel: true } }),
+    prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true, billingModel: true, guardsPaidByClient: true } }),
     prisma.shiftType.findMany({ where: { id: { in: [...new Set(records.map((r) => r.shiftTypeId))] } }, select: { id: true, code: true, billingGroup: true } }),
   ]);
   const lookups: UnpricedLookups = {
@@ -160,6 +166,7 @@ export async function buildUnpricedSummary(session: AuthedSession, month: Date, 
     siteBillingModelById: new Map(sites.map((s) => [s.id, (s.billingModel as string | null) ?? null])),
     shiftTypeCodeById: new Map(shiftTypes.map((s) => [s.id, s.code])),
     shiftTypeBillingGroupById: new Map(shiftTypes.map((s) => [s.id, s.billingGroup])),
+    siteGuardsPaidByClientById: new Map(sites.map((s) => [s.id, s.guardsPaidByClient])),
   };
 
   return computeUnpricedSummary(records, lookups);
