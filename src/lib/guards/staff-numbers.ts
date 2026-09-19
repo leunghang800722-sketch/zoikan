@@ -174,7 +174,32 @@ export async function upsertCurrentStaffNumber(tx: Tx, input: UpsertStaffNumberI
 // 淨係當呢個 guard 喺新表**有過**（`current` 或 `former`，唔限
 // `current`）呢個 scheme 嘅行，先同步嗰個舊欄；完全冇任何行（包括
 // former）就當「呢個 scheme 唔歸新表管」，保留 `guards` 表原有值唔郁。
-export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string): Promise<void> {
+//
+// 應修 1（Opus 驗收第二輪）：`guards.staff_no`（`@unique`）呢個寫入可能
+// 撞另一個 guard——典型成因係 migration「(3) 資料搬遷」跳咗嘅
+// `migration_skipped_duplicate` 案例：輸咗嗰個 guard 嘅**原始**（未正規
+// 化）legacy 欄值原封不動留喺自己嗰行（migration 刻意唔郁 guards 表本身，
+// 見 migration.sql），如果嗰個原始值本身已經係正規化形式（同贏咗嗰個
+// guard 而家喺新表嘅現用號啱啱好撞正），呢度就會撞號。原本冇攔截，直上
+// route 變 500；而家轉做 409，並且指出「呢個號碼仲留喺另一個安員嘅舊工
+// 號欄（資料遷移時跳過咗）」，`guard_id` 淨係內部角色
+// （`revealConflictGuardId=true`）先見到，同 M2b
+// （`upsertCurrentStaffNumber()`）一致口徑。
+//
+// 做法：寫之前**主動查一次**有冇第二個 guard 已經用緊呢個值（`tx.guard.
+// findFirst()`）——唔淨係靠 catch P2002 先發現，因為 P2002 一撞，Postgres
+// 個 transaction 即刻進入 aborted 狀態（"current transaction is aborted,
+// commands ignored until end of transaction block"），呢下再想用返
+// **同一個** `tx` 查邊個 guard 攞緊（想攞佢個 id 做 409 detail）會直接
+// 再拋多個錯，查唔到。主動查冇呢個問題（transaction 仲正常），可以攞到
+// `guard_id`。`catch` 嗰段留低做 defense-in-depth（極罕見 race：主動查
+// 完、真正 UPDATE 之前，第二個 transaction 啱啱好寫咗同一個值）——呢種
+// 情況都要轉做 409（唔可以 500），但呢一刻 tx 已經 aborted，唔再嘗試攞
+// `guard_id`（寧願訊息少啲都好過再拋一個關於「transaction aborted」嘅
+// 唔相關 500）。呢個函數本身冇開自己個 transaction（call site 已經喺
+// `tx` 入面），拋錯會令外層 `prisma.$transaction()` 自然 rollback，唔使
+// 呢度額外處理。
+export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: { revealConflictGuardId?: boolean }): Promise<void> {
   const allRows = await tx.guardStaffNumber.findMany({ where: { guardId } });
   const currentRows = allRows.filter((r) => r.status === "current");
   const uRow = currentRows.find((r) => r.scheme === "U");
@@ -187,7 +212,28 @@ export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string): Promise
   if (hasUHistory) data.staffNo = uRow?.number ?? null;
   if (hasMgOrMwHistory) data.staffNoMw = mgRow?.number ?? mwRow?.number ?? null;
   if (Object.keys(data).length === 0) return;
-  await tx.guard.update({ where: { id: guardId }, data });
+
+  const conflictMessage = (value: string) => `呢個號碼（${value}）仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊`;
+  if (typeof data.staffNo === "string") {
+    const holder = await tx.guard.findFirst({ where: { staffNo: data.staffNo, NOT: { id: guardId } }, select: { id: true } });
+    if (holder) throw Conflict(conflictMessage(data.staffNo), opts?.revealConflictGuardId ? { guard_id: holder.id } : undefined);
+  }
+  // `staff_no_mw` 而家冇 DB unique constraint（見 prisma/schema.prisma），
+  // 理論上唔會撞——但一致對待（防禦性；日後如果加返 constraint 都唔使
+  // 改呢度）。
+  if (typeof data.staffNoMw === "string") {
+    const holder = await tx.guard.findFirst({ where: { staffNoMw: data.staffNoMw, NOT: { id: guardId } }, select: { id: true } });
+    if (holder) throw Conflict(conflictMessage(data.staffNoMw), opts?.revealConflictGuardId ? { guard_id: holder.id } : undefined);
+  }
+
+  try {
+    await tx.guard.update({ where: { id: guardId }, data });
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
+      throw Conflict("呢個號碼仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊");
+    }
+    throw err;
+  }
 }
 
 export interface ApplyLegacyStaffNoPatchResult {
@@ -244,7 +290,7 @@ export async function applyLegacyStaffNoPatch(
     );
   }
   if (changes.length) {
-    await syncLegacyStaffNoColumns(tx, guardId);
+    await syncLegacyStaffNoColumns(tx, guardId, { revealConflictGuardId });
   }
   return { changes };
 }

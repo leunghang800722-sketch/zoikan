@@ -49,7 +49,13 @@ export type AuditAction =
   // LLM）都寫一條（table_name="ai_feedback_chat"，同 `ai_feedback_chat`
   // 呢個 action 分開，等 audit_log 可以分辨「訪談對話」定「整理」，同
   // 埋計入 `src/lib/ai-rate-limit.ts` 嗰個同主助手共用嘅每日額度）。
-  | "ai_feedback_summarize";
+  | "ai_feedback_summarize"
+  // WP-STAFFNO 必修 1(b)(c)（Opus 驗收第二輪）：`scripts/db/recompute-
+  // permit-derived.ts` 背景校正 job——之前呢個 script 靜默寫入、唔留底，
+  // 而家改做「任何更新都寫一條」（table_name="guards"，before/after 淨係
+  // `{sia_permit_expiry, sia_permit_type}` 呢兩粒衍生值，唔係完整 row，
+  // 避免 PII 經呢條 action 漏出去）。
+  | "recompute_permit_derived";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

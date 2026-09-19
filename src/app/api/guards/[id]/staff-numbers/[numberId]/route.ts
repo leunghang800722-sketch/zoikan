@@ -81,7 +81,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       }
 
       const updated = await tx.guardStaffNumber.update({ where: { id: row.id }, data });
-      await syncLegacyStaffNoColumns(tx, id);
+      await syncLegacyStaffNoColumns(tx, id, { revealConflictGuardId: isInternalRole(session) });
       return { before: row as GuardStaffNumber, after: updated };
     });
 

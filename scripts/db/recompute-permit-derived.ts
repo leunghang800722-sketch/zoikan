@@ -11,44 +11,78 @@
 // 「而家」應該係嘅值唔一致。
 //
 // 呢個 script 逐個 guard 重新用 deriveSiaPermitExpiry() 計一次、寫返
-// DB（值冇變就跳過，減少無謂嘅 UPDATE／audit 雜訊——呢個純粹係背景校正
-// job，唔寫 audit_log，唔係用戶動作）。幂等，可以隨時重複跑。跟
-// sync-permissions.ts／ensure-ai-role.ts 一致嘅容器啟動慣例（Dockerfile
-// CMD 尾，`|| warn`，唔阻止部署）。
-import { PrismaClient } from "@prisma/client";
+// DB（值冇變就跳過，減少無謂嘅 UPDATE／audit 雜訊）。幂等，可以隨時
+// 重複跑。跟 sync-permissions.ts／ensure-ai-role.ts 一致嘅容器啟動慣例
+// （Dockerfile CMD 尾，`|| warn`，唔阻止部署）。
+//
+// 必修 1(b)(c)（Opus 驗收第二輪）：呢個 script 硬性規定「永遠唔准將非
+// null 寫成 null」，除非 a／b 至少一個有值而現算結果真係 null（即乙類
+// 過 70 歲而冇甲類）——所以：
+//   - a／b 兩個都 null 嘅 guard（migration backfill 唔到、或者人手都未
+//     補嘅舊資料，見 prisma/migrations/20260919064514_wp_staffno/
+//     migration.sql「(1)」大註解）——一律保留 DB 原值，唔覆蓋、唔寫，
+//     完全跳過（`deriveSiaPermitExpiry()` 呢種情況一定計出
+//     {null,null}，寫落去等於將舊 `sia_permit_expiry` 永久毀走）。
+//   - a／b 其中一個有值——先有足夠資訊做合法重算（包括「乙類滿 70 歲
+//     失效、冇甲類」呢種現算結果真係 null 嘅合法轉變），先允許寫
+//     入，而且**任何更新都寫一條 audit_log**（`action=
+//     "recompute_permit_derived"`，before/after 淨係存衍生值，唔係完整
+//     row，見 src/lib/audit.ts），唔再靜默。
+import { prisma } from "../../src/lib/db";
 import { deriveSiaPermitExpiry } from "../../src/lib/guards/staff-numbers";
-
-const prisma = new PrismaClient();
+import { writeAudit } from "../../src/lib/audit";
 
 function sameDate(a: Date | null, b: Date | null): boolean {
   if (a === null || b === null) return a === b;
   return a.getTime() === b.getTime();
 }
 
-async function recomputePermitDerived(): Promise<{ scanned: number; updated: number }> {
+// 必修 1(c)：`export` 呢個函數（原本冇 export，淨係底下即刻自己執行）——
+// 等 test（tests/wp-staffno.test.ts）可以直接 import 呢個函數逐粒斷言
+// 佢嘅安全閥／audit_log 行為，唔使另外重抄一份邏輯做 synthetic test
+// （同 migration.sql 嗰種「冇得直接 import」唔同，呢個純粹係一個 TS
+// 函數，可以直接 import）。底下 `isMain` guard 保證 test import 呢個
+// 檔案唔會觸發自動執行——跟 scripts/db/ensure-ai-role.ts 一致嘅寫法。
+export async function recomputePermitDerived(): Promise<{ scanned: number; updated: number; skippedBothNull: number }> {
   const guards = await prisma.guard.findMany({
     select: { id: true, siaPermitAExpiry: true, siaPermitBExpiry: true, dateOfBirth: true, siaPermitExpiry: true, siaPermitType: true },
   });
   let updated = 0;
+  let skippedBothNull = 0;
   for (const g of guards) {
+    // 必修 1(b)：安全閥——a／b 都 null，一律保留 DB 原值，唔計、唔寫。
+    if (g.siaPermitAExpiry == null && g.siaPermitBExpiry == null) {
+      skippedBothNull += 1;
+      continue;
+    }
     const derived = deriveSiaPermitExpiry(g);
     if (sameDate(derived.siaPermitExpiry, g.siaPermitExpiry) && derived.siaPermitType === g.siaPermitType) continue;
+    const before = { sia_permit_expiry: g.siaPermitExpiry, sia_permit_type: g.siaPermitType };
     await prisma.guard.update({
       where: { id: g.id },
       data: { siaPermitExpiry: derived.siaPermitExpiry, siaPermitType: derived.siaPermitType },
     });
+    const after = { sia_permit_expiry: derived.siaPermitExpiry, sia_permit_type: derived.siaPermitType };
+    // 必修 1(c)：任何更新都寫 audit_log，唔再靜默（包括合法嘅
+    // 非null→null 轉變，例如乙類啱啱滿 70 歲、冇甲類）。
+    await writeAudit({ actorUserId: null, tableName: "guards", rowId: g.id, action: "recompute_permit_derived", before, after });
     updated += 1;
   }
-  return { scanned: guards.length, updated };
+  return { scanned: guards.length, updated, skippedBothNull };
 }
 
-recomputePermitDerived()
-  .then((r) => {
-    console.log(`[db:recompute-permit-derived] 完成——掃描=${r.scanned} 更新=${r.updated}`);
-    return prisma.$disconnect();
-  })
-  .catch(async (e) => {
-    console.error("[db:recompute-permit-derived] 失敗", e instanceof Error ? e.message : e);
-    await prisma.$disconnect();
-    process.exit(1);
-  });
+// 淨係直接 `tsx scripts/db/recompute-permit-derived.ts` 執行嗰陣先跑，
+// 俾 test import `recomputePermitDerived` 唔會意外觸發 CLI 行為。
+const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+  recomputePermitDerived()
+    .then((r) => {
+      console.log(`[db:recompute-permit-derived] 完成——掃描=${r.scanned} 更新=${r.updated}（a/b都null跳過=${r.skippedBothNull}）`);
+      return prisma.$disconnect();
+    })
+    .catch(async (e) => {
+      console.error("[db:recompute-permit-derived] 失敗", e instanceof Error ? e.message : e);
+      await prisma.$disconnect();
+      process.exit(1);
+    });
+}

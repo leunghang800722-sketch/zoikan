@@ -143,7 +143,14 @@ export async function GET(req: Request) {
     // 現算 → 篩 → 先分頁（`total`／`skip`/`take` 一律用篩選之後嘅陣列，
     // 唔可以用 DB `count()`，嗰個係「篩選前」嘅數）。目前規模（265 行）
     // 呢種「後篩」可接受，見設計文件。
-    const withDerived = (row: Guard) => ({ ...row, ...deriveSiaPermitExpiry(row) });
+    //
+    // 必修 1(b)（Opus 驗收第二輪）：a／b 兩個都 null 嗰陣，`deriveSiaPermit
+    // Expiry()` 一定計出 {null,null}——唔可以用嚟覆蓋 DB 原有嘅
+    // `sia_permit_expiry`／`sia_permit_type`（migration backfill 唔到、
+    // 或者人手都未補嘅舊資料，見 migration.sql「(1)」大註解），一律保留
+    // DB 原值；淨係 a／b 其中一個有值先用現算值覆蓋，同
+    // `src/app/api/guards/[id]/route.ts withDerivedGuard()` 一致做法。
+    const withDerived = (row: Guard) => (row.siaPermitAExpiry == null && row.siaPermitBExpiry == null ? row : { ...row, ...deriveSiaPermitExpiry(row) });
     let rows: Array<ReturnType<typeof withDerived>>;
     let total: number;
     if (expiringWithinDaysParam !== null) {

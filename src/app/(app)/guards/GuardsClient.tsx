@@ -205,7 +205,7 @@ export function GuardsClient({
   const [numberActionBusy, setNumberActionBusy] = useState(false);
   const [numberActionError, setNumberActionError] = useState<string | null>(null);
   const [numberEditingId, setNumberEditingId] = useState<string | null>(null);
-  const [numberEditForm, setNumberEditForm] = useState({ number: "", valid_from: "", note: "" });
+  const [numberEditForm, setNumberEditForm] = useState({ number: "", valid_from: "", valid_to: "", note: "" });
   // WP-STAFFNO：`sia_permit_type`（A／B／A+B）而家係衍生顯示值，唔喺
   // `form` 度（唔會送落 PATCH body）——淨係讀 row 顯示俾用戶睇，改甲／
   // 乙到期日之後要重新 GET 先會見到新值（同其他衍生欄一致，唔喺前端
@@ -377,12 +377,17 @@ export function GuardsClient({
     if (editingId) {
       if (canUpdatePii) {
         if (form.hkid) body.hkid = form.hkid;
-        if (form.date_of_birth) body.date_of_birth = form.date_of_birth;
+        // 應修 2（Opus 驗收第二輪）：出生日期／黑名單查核日期跟牌照/
+        // 平安卡/入離職嗰 5 個日期欄一致——`GuardUpdateSchema` 已經改用
+        // nullable schema（`null`＝清空），呢兩個欄一樣要一律送
+        // （`|| null`），唔可以再「空就唔送」，否則用戶打空咗個已填日期
+        // 想清返會清唔到。
+        body.date_of_birth = form.date_of_birth || null;
         if (form.address) body.address = form.address;
         if (form.emergency_contact_name) body.emergency_contact_name = form.emergency_contact_name;
         if (form.emergency_contact_tel) body.emergency_contact_tel = form.emergency_contact_tel;
         if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
-        if (form.blacklist_check_date) body.blacklist_check_date = form.blacklist_check_date;
+        body.blacklist_check_date = form.blacklist_check_date || null;
       }
       if (canUpdateBank) {
         if (form.bank_name) body.bank_name = form.bank_name;
@@ -494,6 +499,7 @@ export function GuardsClient({
     setNumberEditForm({
       number: row.number,
       valid_from: row.valid_from ? row.valid_from.slice(0, 10) : "",
+      valid_to: row.valid_to ? row.valid_to.slice(0, 10) : "",
       note: row.note ?? "",
     });
   }
@@ -507,10 +513,14 @@ export function GuardsClient({
     if (!editingId || !numberEditingId) return;
     setNumberActionBusy(true);
     setNumberActionError(null);
+    // 應修 2（Opus 驗收第二輪）：`note`／`valid_from`／`valid_to` 而家
+    // 一律送（`|| null`），唔再「空就唔送」——`GuardStaffNumberUpdateSchema`
+    // 已經改用 nullable schema，用戶打空咗想清返呢三個欄要真係清得走。
     const res = await apiPatch(`/api/guards/${editingId}/staff-numbers/${numberEditingId}`, {
       number: numberEditForm.number,
-      valid_from: numberEditForm.valid_from || undefined,
-      note: numberEditForm.note || undefined,
+      valid_from: numberEditForm.valid_from || null,
+      valid_to: numberEditForm.valid_to || null,
+      note: numberEditForm.note || null,
     });
     setNumberActionBusy(false);
     if (!res.ok) {
@@ -668,10 +678,22 @@ export function GuardsClient({
                   onChange={(e) => setNumberEditForm((f) => ({ ...f, valid_from: e.target.value }))}
                 />
               </Field>
-              <Field label="備註">
-                <input className={inputCls} value={numberEditForm.note} onChange={(e) => setNumberEditForm((f) => ({ ...f, note: e.target.value }))} />
+              {/* 應修 2（Opus 驗收第二輪）：轉舊號自動填嘅 valid_to 之前
+                  淨係顯示（renderStaffNumberRow 嗰行「轉舊號：」），冇得
+                  喺呢個編輯表單度改／清——而家補返個 input，打空咗撳
+                  「儲存」會送 null 清走（見 onSaveNumberEdit()）。 */}
+              <Field label="轉舊日期">
+                <input
+                  type="date"
+                  className={inputCls}
+                  value={numberEditForm.valid_to}
+                  onChange={(e) => setNumberEditForm((f) => ({ ...f, valid_to: e.target.value }))}
+                />
               </Field>
             </div>
+            <Field label="備註">
+              <input className={inputCls} value={numberEditForm.note} onChange={(e) => setNumberEditForm((f) => ({ ...f, note: e.target.value }))} />
+            </Field>
             <div className="flex gap-2">
               <button type="button" disabled={numberActionBusy} onClick={onSaveNumberEdit} className={btnSecondary}>
                 {numberActionBusy ? "儲存緊…" : "儲存"}

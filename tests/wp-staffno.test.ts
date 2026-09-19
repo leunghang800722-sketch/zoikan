@@ -824,4 +824,176 @@ describe("WP-STAFFNO §16（附帶）：牌照/平安卡/入離職日期 nullabl
     const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
     expect(guard.hireDate).toBeNull();
   });
+
+  // 應修 2（Opus 驗收第二輪）：`date_of_birth`／`blacklist_check_date`
+  // 補埋 nullableDateOnly，跟上面幾個日期欄一致。
+  it("PATCH date_of_birth=null 清空", async () => {
+    await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { date_of_birth: "1990-01-01" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { date_of_birth: null }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.dateOfBirth).toBeNull();
+  });
+
+  it("PATCH blacklist_check_date=null 清空", async () => {
+    await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { blacklist_check_date: "2024-01-01" }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { blacklist_check_date: null }), {
+      params: Promise.resolve({ id: fx.guardA.id }),
+    });
+    expect(res.status).toBe(200);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.blacklistCheckDate).toBeNull();
+  });
+
+  // 應修 2：staff-numbers PATCH 嘅 valid_from／valid_to／note 一樣
+  // nullable——former 行清 valid_to 一樣容許。
+  it("PATCH .../staff-numbers/:numberId 用 null 清走 note／valid_from／valid_to", async () => {
+    const created = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", {
+        scheme: "MP",
+        number: "MP91700",
+        valid_from: "2026-01-01",
+        note: "起草備註",
+      }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    const row = (await created.json()) as { id: string };
+    // 先轉做 former，並且填一個 valid_to（模擬「former 行清 valid_to」
+    // 嗰個場景——呢個 route 冇「轉 former 自動帶 valid_to」嘅邏輯，人手
+    // PATCH 填先有值）。
+    await staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", { status: "former", valid_to: "2026-02-01" }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
+    );
+    const afterFormer = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { id: row.id } });
+    expect(afterFormer.validTo).not.toBeNull();
+
+    const res = await staffNumberUpdate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers/${row.id}`, ownerCookie, "PATCH", {
+        valid_from: null,
+        valid_to: null,
+        note: null,
+      }),
+      { params: Promise.resolve({ id: fx.guardA.id, numberId: row.id }) },
+    );
+    expect(res.status).toBe(200);
+    const after = await prisma.guardStaffNumber.findUniqueOrThrow({ where: { id: row.id } });
+    expect(after.validFrom).toBeNull();
+    expect(after.validTo).toBeNull(); // former 行清 valid_to 一樣容許
+    expect(after.note).toBeNull();
+  });
+});
+
+describe("WP-STAFFNO §17（必修1b/c）：a/b 都 null 嘅舊值 guard——讀取層／recompute script 安全閥", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+  const legacyExpiry = new Date("2027-03-01T00:00:00.000Z");
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    // 模擬 migration backfill 唔到（或者人手都未補）嘅舊值狀態：
+    // a／b 兩個新欄都係 null，但舊 `sia_permit_expiry`／`sia_permit_type`
+    // 仲存住有效資料。
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: { siaPermitAExpiry: null, siaPermitBExpiry: null, siaPermitExpiry: legacyExpiry, siaPermitType: "A" },
+    });
+  });
+
+  it("GET 詳情——a/b 都 null 唔會用現算值（{null,null}）覆蓋舊 sia_permit_expiry/type", async () => {
+    const res = await guardDetail(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie), { params: Promise.resolve({ id: fx.guardA.id }) });
+    const body = (await res.json()) as { sia_permit_expiry: string | null; sia_permit_type: string | null };
+    expect(body.sia_permit_expiry).toBe(legacyExpiry.toISOString());
+    expect(body.sia_permit_type).toBe("A");
+  });
+
+  it("GET 列表——一樣見到舊值（唔淨係詳情）", async () => {
+    const res = await guardList(req("http://test.local/api/guards?take=500", ownerCookie));
+    const body = (await res.json()) as { rows: Array<{ id: string; sia_permit_expiry: string | null; sia_permit_type: string | null }> };
+    const row = body.rows.find((r) => r.id === fx.guardA.id);
+    expect(row?.sia_permit_expiry).toBe(legacyExpiry.toISOString());
+    expect(row?.sia_permit_type).toBe("A");
+  });
+
+  it("GET 列表 ?expiring_within_days= 一樣用返舊值做篩選（唔會因為現算 null 就漏篩）", async () => {
+    const days = Math.ceil((legacyExpiry.getTime() - Date.now()) / 86_400_000) + 5;
+    const res = await guardList(req(`http://test.local/api/guards?expiring_within_days=${days}`, ownerCookie));
+    const body = (await res.json()) as { rows: Array<{ id: string }> };
+    expect(body.rows.map((r) => r.id)).toContain(fx.guardA.id);
+  });
+
+  it("recompute script（recomputePermitDerived）跑完 DB 值不變——a/b 都 null 完全跳過，唔覆蓋、唔寫 audit", async () => {
+    const { recomputePermitDerived } = await import("../scripts/db/recompute-permit-derived");
+    const beforeCount = await prisma.auditLog.count({ where: { tableName: "guards", action: "recompute_permit_derived" } });
+    const result = await recomputePermitDerived();
+    expect(result.skippedBothNull).toBeGreaterThanOrEqual(1);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.siaPermitExpiry?.toISOString()).toBe(legacyExpiry.toISOString());
+    expect(guard.siaPermitType).toBe("A");
+    const afterCount = await prisma.auditLog.count({ where: { tableName: "guards", action: "recompute_permit_derived" } });
+    expect(afterCount).toBe(beforeCount); // 完全冇寫任何 audit（冇更新任何嘢）
+  });
+
+  it("recompute script——對照組：a 有值但陳舊（乙類啱啱滿70歲、冇甲類）→ 允許轉做 null，並寫 audit_log", async () => {
+    await prisma.guard.update({
+      where: { id: fx.guardA.id },
+      data: {
+        dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), // 76 歲
+        siaPermitAExpiry: null,
+        siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z"), // 有 b，冇 a——唔屬於「a/b 都 null」
+        siaPermitExpiry: new Date("2030-01-01T00:00:00.000Z"), // 陳舊：仲話有效
+        siaPermitType: "B",
+      },
+    });
+    const { recomputePermitDerived } = await import("../scripts/db/recompute-permit-derived");
+    const result = await recomputePermitDerived();
+    expect(result.updated).toBeGreaterThanOrEqual(1);
+    const guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guard.siaPermitExpiry).toBeNull(); // 乙類滿70歲失效，合法轉做 null
+    expect(guard.siaPermitType).toBeNull();
+    const logs = await prisma.auditLog.findMany({ where: { tableName: "guards", rowId: fx.guardA.id, action: "recompute_permit_derived" } });
+    expect(logs.length).toBe(1); // 呢種合法嘅 非null→null 轉變都要留底
+  });
+});
+
+describe("WP-STAFFNO §18（應修1）：syncLegacyStaffNoColumns P2002 → 409（唔再 500）", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("guardB 嘅舊 staff_no 仲留住「guardA 而家想攞嘅」正規化值（模擬 migration_skipped_duplicate 遺留狀態）→ POST 新工號 409，唔係 500，rollback 乾淨", async () => {
+    // 模擬 migration 跳過咗嘅遺留狀態：guardB.staff_no 已經係正規化形式
+    // "U99999"，但呢個值完全冇入 guard_staff_numbers 新表（新表淨係 guardA
+    // 之後先起）。
+    await prisma.guard.update({ where: { id: fx.guardB.id }, data: { staffNo: "U99999" } });
+
+    const res = await staffNumberCreate(
+      req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U99999" }),
+      { params: Promise.resolve({ id: fx.guardA.id }) },
+    );
+    expect(res.status).toBe(409); // 唔係 500
+    const body = (await res.json()) as { message: string; guard_id?: string };
+    expect(body.message).toContain("舊工號欄");
+    expect(body.guard_id).toBe(fx.guardB.id); // 內部角色（老闆）見到邊個 guard 攞緊
+    expect(body.message).not.toContain(fx.guardB.name); // 唔回姓名
+
+    // Transaction 要 rollback 乾淨——唔可以留低半條新表行。
+    const row = await prisma.guardStaffNumber.findFirst({ where: { number: "U99999" } });
+    expect(row).toBeNull();
+    const guardA = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
+    expect(guardA.staffNo).not.toBe("U99999"); // guardA 自己個 staff_no 都冇被寫入
+  });
 });

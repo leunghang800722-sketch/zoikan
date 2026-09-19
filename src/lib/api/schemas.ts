@@ -45,6 +45,13 @@ const dateOnly = z.coerce.date(); // 接受 "2026-08-01" 或完整 ISO datetime�
 // branch，等於冇修到（呢個正正係原本 bug 嘅成因）。`z.null()` 一定要
 // 擺第一，等 `null` 輸入優先俾佢啱啱接住。
 const nullableDateOnly = z.union([z.null(), z.coerce.date()]).optional();
+// 應修 2（Opus 驗收第二輪）：UI「編輯員工編號」要清得走 `note`（唔止
+// 日期），同 `nullableDateOnly` 一致精神——`z.string().optional()` 唔收
+// `null`，用戶打空咗個備註送 `null` 想清返，會俾 `.strict()` 400（唔係
+// 「未知欄位」，係值型別唔啱）。淨係 `guard_staff_numbers.note` 呢種
+// DB nullable 嘅文字欄用呢個，唔係成個檔案通改（例如 `sia_permit_no`
+// 呢類跟現有「安員」module 嘅欄暫時唔喺呢輪修復範圍）。
+const nullableString = z.union([z.null(), z.string()]).optional();
 const money = z.union([z.number(), z.string()]).optional();
 
 // WP-PII：身份證格式寬鬆核對（1-2 個英文字母 + 6 位數字 + 括住 1 位
@@ -181,7 +188,11 @@ export const GuardUpdateSchema = z
     // 用編輯抽屜逐項補（field-group gate 喺 assertFieldGroupWritable()
     // 做，見 src/app/api/guards/[id]/route.ts）。
     hkid,
-    date_of_birth: dateOnly.optional(),
+    // 應修 2（Opus 驗收第二輪）：`date_of_birth` DB 欄 nullable，同
+    // `sia_permit_a/b_expiry`／`safety_card_expiry`／`hire_date`／
+    // `leave_date` 一致理由——改用 `nullableDateOnly`，等用戶 PATCH
+    // `null` 真係清得走已填嘅出生日期（打錯咗想清返）。
+    date_of_birth: nullableDateOnly,
     address: z.string().optional(),
     emergency_contact_name: z.string().optional(),
     emergency_contact_tel: tel8,
@@ -197,7 +208,9 @@ export const GuardUpdateSchema = z
     bank_account_no: z.string().optional(),
     bank_payee_name: z.string().optional(),
     blacklist_check_result: blacklistCheckResult,
-    blacklist_check_date: dateOnly.optional(),
+    // 應修 2：同 `date_of_birth` 一致，DB 欄 nullable，改用
+    // `nullableDateOnly` 等 `null` 清得走。
+    blacklist_check_date: nullableDateOnly,
   })
   .strict();
 
@@ -226,16 +239,22 @@ export const GuardStaffNumberCreateSchema = z
   .object({
     scheme: staffNumberScheme,
     number: staffNumberValue,
-    valid_from: dateOnly.optional(),
-    note: z.string().optional(),
+    // 應修 2（Opus 驗收第二輪）：`valid_from`（DB 欄 nullable）跟
+    // GuardUpdateSchema 嗰批日期欄一致改用 `nullableDateOnly`。
+    valid_from: nullableDateOnly,
+    note: nullableString,
   })
   .strict();
 export const GuardStaffNumberUpdateSchema = z
   .object({
     status: staffNumberStatus.optional(),
-    valid_from: dateOnly.optional(),
-    valid_to: dateOnly.optional(),
-    note: z.string().optional(),
+    // 應修 2：`valid_from`／`valid_to` 一樣改用 `nullableDateOnly`——
+    // `null`＝清空，former 行清 `valid_to` 一樣容許（呢個 route 本身冇
+    // 額外「former 一定要有 valid_to」嘅限制，見
+    // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
+    valid_from: nullableDateOnly,
+    valid_to: nullableDateOnly,
+    note: nullableString,
     // 打錯用呢個改，唔洗刪咗重加——同樣行 unique/prefix 檢查（見
     // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
     number: staffNumberValue.optional(),

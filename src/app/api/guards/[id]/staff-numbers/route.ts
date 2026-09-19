@@ -66,7 +66,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         createdBy: session.userId,
         revealConflictGuardId: isInternalRole(session),
       });
-      await syncLegacyStaffNoColumns(tx, id);
+      await syncLegacyStaffNoColumns(tx, id, { revealConflictGuardId: isInternalRole(session) });
       return upserted;
     });
 

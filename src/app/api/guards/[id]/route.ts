@@ -30,7 +30,17 @@ function guardModule(session: AuthedSession): Module {
 // 現算（覆蓋 DB 欄）——同 `src/app/api/guards/route.ts` 列表一致理由
 // （DB 欄寫入時有更新，但「時間流逝」引致嘅陳舊，例如生日過咗令乙類滿
 // 70 歲失效，冇再寫入就唔會自動反映）。
+//
+// 必修 1(b)（Opus 驗收第二輪）：甲／乙類到期日（`sia_permit_a_expiry`／
+// `sia_permit_b_expiry`）兩個都係 null 嘅時候，`deriveSiaPermitExpiry()`
+// 一定計出 {null,null}——呢種情況唔可以用現算值覆蓋 DB 原有嘅
+// `sia_permit_expiry`／`sia_permit_type`（可能仲存住 migration backfill
+// 唔到、或者人手都未補嘅舊資料，見 migration.sql「(1) 甲／乙類到期日
+// backfill」大註解）；一律保留 DB 原值，唔覆蓋、唔喺呢層計。淨係當 a／b
+// 其中一個有值，先用現算值覆蓋（呢種情況先有足夠資訊重新推導，包括乙類
+// 滿 70 歲失效呢類會令現算結果變返 null 嘅合法轉變）。
 function withDerivedGuard<T extends Guard>(row: T): T {
+  if (row.siaPermitAExpiry == null && row.siaPermitBExpiry == null) return row;
   return { ...row, ...deriveSiaPermitExpiry(row) };
 }
 
