@@ -20,6 +20,7 @@ import {
   assertNoLegacySiaPermitWrite,
   assertBrokerNoLegacyStaffNoWrite,
 } from "@/lib/guards/staff-numbers";
+import { applyLegacyGuardContactPatch, writeLegacyContactAudits, normalizeTel } from "@/lib/guards/contacts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 import type { Guard, Prisma } from "@prisma/client";
@@ -117,9 +118,41 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const rawStaffNoMw = (effectiveBody as Record<string, unknown>).staff_no_mw as string | undefined;
     const staffNoLegacy = rawStaffNo && rawStaffNo.trim().toUpperCase() !== (before.staffNo ?? "").toUpperCase() ? rawStaffNo : undefined;
     const staffNoMwLegacy = rawStaffNoMw && rawStaffNoMw.trim().toUpperCase() !== (before.staffNoMw ?? "").toUpperCase() ? rawStaffNoMw : undefined;
+
+    // WP-MULTI（老闆 2026-09-19 拍板）：`tel`／`address`／
+    // `emergency_contact_name`／`emergency_contact_tel`（舊前端／舊 API
+    // 用法）而家一樣係由 `guard_phones`／`guard_addresses`／
+    // `guard_emergency_contacts` 新表 sync 返嚟嘅值——唔可以再直接落
+    // `prisma.guard.update()`，抽出嚟轉做對新表嘅「加一行並設為主要／
+    // 新代表行」（`applyLegacyGuardContactPatch()`）。「值冇變就當冇改」
+    // ——同 `staffNoLegacy`／`staffNoMwLegacy` 一致理由（GuardsClient.tsx
+    // 個 form 成個 body 一齊送，包括未改嘅 `tel`），淨係值同
+    // `before.tel`／`address`／`emergencyContactName`／
+    // `emergencyContactTel`（sync 返嚟嘅現值）唔同先當「真係想改」，
+    // 唔係嘅話每次撳「儲存」都會重新起一行電話撞
+    // `UNIQUE(guard_id, tel)` 變 409。
+    const rawTel = (effectiveBody as Record<string, unknown>).tel as string | undefined;
+    const rawAddress = (effectiveBody as Record<string, unknown>).address as string | undefined;
+    const rawEmergencyName = (effectiveBody as Record<string, unknown>).emergency_contact_name as string | undefined;
+    const rawEmergencyTel = (effectiveBody as Record<string, unknown>).emergency_contact_tel as string | undefined;
+    const telLegacy = rawTel && normalizeTel(rawTel) !== (before.tel ?? "") ? rawTel : undefined;
+    const addressLegacy = rawAddress && rawAddress.trim() !== (before.address ?? "") ? rawAddress : undefined;
+    const emergencyNameChanged = rawEmergencyName !== undefined && rawEmergencyName.trim() !== (before.emergencyContactName ?? "");
+    const emergencyTelChanged = rawEmergencyTel !== undefined && rawEmergencyTel.trim() !== (before.emergencyContactTel ?? "");
+    // 兩個欄有其中一個真係改咗就起新代表行——冇改嗰邊帶返 `before`
+    // （即係而家嗰個代表行嘅值）一齊起，等新行仍然係一組完整嘅
+    // 「姓名＋電話」，唔會因為淨係改咗其中一隻就令新代表行嗰隻變空。
+    const emergencyPatchNeeded = emergencyNameChanged || emergencyTelChanged;
+    const emergencyNameLegacy = emergencyPatchNeeded ? (rawEmergencyName !== undefined ? rawEmergencyName : before.emergencyContactName) : undefined;
+    const emergencyTelLegacy = emergencyPatchNeeded ? (rawEmergencyTel !== undefined ? rawEmergencyTel : before.emergencyContactTel) : undefined;
+
     const rest = { ...(effectiveBody as Record<string, unknown>) };
     delete rest.staff_no;
     delete rest.staff_no_mw;
+    delete rest.tel;
+    delete rest.address;
+    delete rest.emergency_contact_name;
+    delete rest.emergency_contact_tel;
     const data = snakeToCamelShallow(rest) as Prisma.GuardUncheckedUpdateInput;
 
     // WP-STAFFNO：body 改咗甲／乙到期日或者出生日期，就要重新計
@@ -155,7 +188,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       }
     }
 
-    const { guardAfter, legacyChanges } = await prisma.$transaction(async (tx) => {
+    const { guardAfter, legacyChanges, contactPatchResult } = await prisma.$transaction(async (tx) => {
       let guardAfter: Guard = before;
       if (Object.keys(data).length > 0) {
         guardAfter = await tx.guard.update({ where: { id }, data });
@@ -170,15 +203,31 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
               revealConflictGuardId: isInternalRole(session),
             })
           : { changes: [] };
-      if (legacyResult.changes.length > 0) {
+      // WP-MULTI：同上面 staff_no legacy patch 一致做法——`tel`／
+      // `address`／`emergency_contact_*` 轉做對三張新表嘅寫入。
+      const contactResult =
+        telLegacy || addressLegacy || emergencyNameLegacy !== undefined || emergencyTelLegacy !== undefined
+          ? await applyLegacyGuardContactPatch(tx, {
+              guardId: id,
+              tel: telLegacy,
+              address: addressLegacy,
+              emergencyContactName: emergencyNameLegacy,
+              emergencyContactTel: emergencyTelLegacy,
+              createdBy: session.userId,
+            })
+          : { phone: null, address: null, contact: null };
+      if (legacyResult.changes.length > 0 || contactResult.phone || contactResult.address || contactResult.contact) {
         guardAfter = await tx.guard.findUniqueOrThrow({ where: { id } });
       }
-      return { guardAfter, legacyChanges: legacyResult.changes };
+      return { guardAfter, legacyChanges: legacyResult.changes, contactPatchResult: contactResult };
     });
 
     await writeAudit({ actorUserId: session.userId, tableName: "guards", rowId: id, action: "update", before, after: guardAfter, ip: getClientIp(req) });
     if (legacyChanges.length > 0) {
       await writeStaffNumberAudits(session.userId, legacyChanges, getClientIp(req));
+    }
+    if (contactPatchResult.phone || contactPatchResult.address || contactPatchResult.contact) {
+      await writeLegacyContactAudits(session.userId, contactPatchResult, getClientIp(req));
     }
     const derivedAfter = withDerivedGuard(guardAfter);
     if (isBrokerRole(session)) return ok(scrubForBrokerSession(session, toBrokerGuardDTO(derivedAfter)));

@@ -169,6 +169,17 @@ export const REFERRAL_FEE_RATE_BROKER_FIELDS = ["id", "brokerId", "siteId", "mon
 // src/lib/api/dto/index.ts）拆開一份獨立白名單。
 export const GUARD_STAFF_NUMBER_BROKER_FIELDS = ["id", "scheme", "number", "status", "validFrom", "validTo"] as const;
 
+// WP-MULTI（老闆 2026-09-19 拍板）：雞頭讀 `GET /api/guards/:id/phones`
+// （「自己安員」module，出廠有 view；POST/PATCH/DELETE 硬擋——「雞頭
+// 對自己安員只讀」，見 src/app/api/guards/[id]/phones/route.ts 頂註解）
+// 淨係要見到 `tel`／`label`／`is_primary`——`note`（可能有內部備註文
+// 字）／`source`（例如 "manual:legacy-patch(tel)"）／`created_by`（內部
+// 用戶 id）一律唔畀，同 GUARD_STAFF_NUMBER_BROKER_FIELDS 一致做法。
+// 緊急聯絡人／地址跟「安員個人資料」module——雞頭對呢個 module 出廠
+// `uniformRow(D)`（見 src/lib/rbac/matrix.ts），route 層 `requirePermission()`
+// 直接 403，冧本冧用唔到呢個白名單，唔需要獨立 broker DTO。
+export const GUARD_PHONE_BROKER_FIELDS = ["id", "tel", "label", "isPrimary"] as const;
+
 function mapRow<T extends Record<string, unknown>>(row: T, fields: readonly string[]): Dto {
   return pickWhitelist(row, fields);
 }
@@ -205,6 +216,9 @@ export function toBrokerReferralFeeRateDTO<T extends Record<string, unknown>>(ro
 }
 export function toGuardStaffNumberBrokerDTO<T extends Record<string, unknown>>(row: T) {
   return mapRow(row, GUARD_STAFF_NUMBER_BROKER_FIELDS);
+}
+export function toGuardPhoneBrokerDTO<T extends Record<string, unknown>>(row: T) {
+  return mapRow(row, GUARD_PHONE_BROKER_FIELDS);
 }
 
 /** list response 常見形狀 { rows, total, skip, take }——rows 逐個過白名單，其他欄照留。 */

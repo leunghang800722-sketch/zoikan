@@ -48,3 +48,10 @@ export function apiPost<T = unknown>(path: string, body?: unknown): Promise<ApiR
 export function apiPatch<T = unknown>(path: string, body: unknown): Promise<ApiResult<T>> {
   return apiRequest<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 }
+
+// WP-MULTI（老闆 2026-09-19 拍板）：電話／緊急聯絡人／地址三張新子表嘅
+// DELETE（更正打錯用）——之前冇任何資源需要真 DELETE（其他資源一律
+// void/unvoid 軟刪），呢個先加呢個 helper。
+export function apiDelete<T = unknown>(path: string): Promise<ApiResult<T>> {
+  return apiRequest<T>(path, { method: "DELETE" });
+}

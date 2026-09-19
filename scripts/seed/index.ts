@@ -87,6 +87,11 @@ async function clearAll() {
   // 唔准刪 guard 過手留低斷咗嘅工號歷史）——刪 guard 之前要先清呢張表，
   // 唔係 `prisma.guard.deleteMany({})` 會俾 RESTRICT 擋成句 fail。
   await prisma.guardStaffNumber.deleteMany({});
+  // WP-MULTI：電話／緊急聯絡人／地址三張新表一樣 FK RESTRICT，同上一致
+  // 理由，要喺 guard 之前清。
+  await prisma.guardPhone.deleteMany({});
+  await prisma.guardEmergencyContact.deleteMany({});
+  await prisma.guardAddress.deleteMany({});
   await prisma.guard.updateMany({ data: { defaultBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});

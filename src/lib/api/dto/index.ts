@@ -172,6 +172,20 @@ export const toGuardListDTO = <T extends Record<string, unknown>>(row: T) => map
 // 工號本身（唔係身份證／銀行）跟「安員」module，冇獨立 field-group。
 const GUARD_STAFF_NUMBER_FIELDS = ["id", "guardId", "scheme", "number", "status", "validFrom", "validTo", "note", "source", "createdAt", "updatedAt", "createdBy"] as const;
 export const toGuardStaffNumberDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_STAFF_NUMBER_FIELDS);
+// WP-MULTI（老闆 2026-09-19 拍板）：`GET/POST/PATCH/DELETE
+// /api/guards/:id/phones*`／`emergency-contacts*`／`addresses*`——內部
+// 角色（老闆/主管/會計）用嘅完整白名單。工號本身跟「安員」module
+// （電話），緊急聯絡人／地址跟「安員個人資料」module（見
+// src/app/api/guards/[id]/phones/route.ts 等 route 頂註解），冇獨立
+// field-group（呢三個係獨立子資源，唔係 guards resource 嘅欄，field-
+// groups.ts 嗰套「field-level gate」機制唔適用，直接由 route 層
+// `requirePermission()` 判斷）。
+const GUARD_PHONE_FIELDS = ["id", "guardId", "tel", "label", "isPrimary", "source", "note", "createdAt", "updatedAt", "createdBy"] as const;
+export const toGuardPhoneDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_PHONE_FIELDS);
+const GUARD_EMERGENCY_CONTACT_FIELDS = ["id", "guardId", "name", "tel", "relationship", "sortOrder", "source", "note", "createdAt", "updatedAt", "createdBy"] as const;
+export const toGuardEmergencyContactDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_EMERGENCY_CONTACT_FIELDS);
+const GUARD_ADDRESS_FIELDS = ["id", "guardId", "address", "isPrimary", "source", "note", "createdAt", "updatedAt", "createdBy"] as const;
+export const toGuardAddressDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_ADDRESS_FIELDS);
 export const toRateCardFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, RATE_CARD_FIELDS);
 export const toShiftRecordFullDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, SHIFT_RECORD_FIELDS);
 // 2026-09-13：列表預設唔回傳 provenance（原檔追溯 JSON，每條 ~1.5KB，7 月一個盤三頁共 2MB+，
@@ -221,4 +235,14 @@ export const AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE: Record<string, FieldGroupResou
   brokers: "brokers",
   // P1-WP3（E）：referral_fee_rates.fee_per_shift 係出街價性質嘅成本欄。
   referral_fee_rates: "referral_fee_rates",
+  // WP-MULTI（老闆 2026-09-19 拍板）：三張新子表嘅 audit_log 一樣要跟
+  // guards 一致模型——讀出嗰陣再按讀者權限 gate 一次（`guard_
+  // emergency_contacts`/`guard_addresses` 冇「安員個人資料:view」就要
+  // 剝走 name/tel/relationship/address；`guard_phones` 跟「安員」
+  // module，呢個 mapping 純粹一致性處理，實際冧走任何欄，見
+  // src/lib/api/field-groups.ts GUARD_PII_FIELDS 對呢三個 resource 嘅
+  // 定義）。
+  guard_phones: "guard_phones",
+  guard_emergency_contacts: "guard_emergency_contacts",
+  guard_addresses: "guard_addresses",
 };

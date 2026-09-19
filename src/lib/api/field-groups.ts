@@ -31,6 +31,16 @@ export const CLIENT_RATE_FIELDS = {
   // P1-WP3（E）：referral_fee_rates 冇「收客價」性質嘅欄（呢個表淨係
   // 記公司俾雞頭嘅介紹費，唔係收客嗰邊）。
   referral_fee_rates: [],
+  // WP-MULTI（老闆 2026-09-19 拍板）：電話／緊急聯絡人／地址三張新表——
+  // 加落嚟純粹俾 `AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE`（audit-log route
+  // 讀出嗰陣，見 src/app/api/audit-log/route.ts）用，先可以將呢三張表
+  // 嘅 audit_log before/after 一齊經 `applyFieldGroupGate()` 過返（同
+  // guards resource 一致模型：「寫入時存完整 DTO，讀出時先按讀者權限再
+  // gate」，唔可以淨係得 guards 表本身受保護、佢哋自己嘅獨立審計記錄漏
+  // 咗）。呢三張表冇「收客價」性質嘅欄。
+  guard_phones: [],
+  guard_emergency_contacts: [],
+  guard_addresses: [],
 } as const;
 
 export const SETTLEMENT_FIELDS = {
@@ -61,6 +71,10 @@ export const SETTLEMENT_FIELDS = {
   // 就見唔到呢粒數。雞頭自己睇自己嘅費率唔經呢個機制（見 broker-dto.ts
   // 註解），一向准。
   referral_fee_rates: ["fee_per_shift"],
+  // WP-MULTI：冇「出街價」性質嘅欄。
+  guard_phones: [],
+  guard_emergency_contacts: [],
+  guard_addresses: [],
 } as const;
 
 // WP-PII（老闆 2026-09-17 拍板）：保安員「安員個人資料」／「安員銀行
@@ -81,6 +95,17 @@ export const GUARD_PII_FIELDS = {
   guards: ["hkid", "date_of_birth", "address", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date"],
   brokers: [],
   referral_fee_rates: [],
+  // WP-MULTI：`guard_emergency_contacts`／`guard_addresses` 呢兩張表
+  // 本身成個 resource 就係 PII 性質（同「安員個人資料」module 一致敏感
+  // 度）——`AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE` 讀出嗰陣用嘅係呢兩個
+  // resource 自己嘅欄名（`name`/`tel`/`relationship`／`address`，唔係
+  // `guards` resource 嗰個 `emergency_contact_name`/`emergency_contact_
+  // tel`／`address`），所以呢度要獨立一份、唔可以借 `guards` 嗰份（借
+  // 咗會因為欄名對唔上而形同冇 gate）。`guard_phones` 跟「安員」
+  // module（同 `tel` 喺 guards resource 一直唔喺 PII 組一致），留空。
+  guard_phones: [],
+  guard_emergency_contacts: ["name", "tel", "relationship", "note"],
+  guard_addresses: ["address", "note"],
 } as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
 
 export const GUARD_BANK_FIELDS = {
@@ -92,6 +117,10 @@ export const GUARD_BANK_FIELDS = {
   guards: ["bank_name", "bank_account_no", "bank_payee_name"],
   brokers: [],
   referral_fee_rates: [],
+  // WP-MULTI：冇銀行類欄。
+  guard_phones: [],
+  guard_emergency_contacts: [],
+  guard_addresses: [],
 } as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
 
 export type FieldGroupResource = keyof typeof CLIENT_RATE_FIELDS;

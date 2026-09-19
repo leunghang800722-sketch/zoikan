@@ -25,6 +25,7 @@ import {
   SpecialItemKind,
 } from "@prisma/client";
 import { normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
+import { normalizeTel, TEL_RE } from "@/lib/guards/contacts";
 
 function enumOf(obj: Record<string, string>) {
   return z.enum(Object.values(obj) as [string, ...string[]]);
@@ -258,6 +259,68 @@ export const GuardStaffNumberUpdateSchema = z
     // 打錯用呢個改，唔洗刪咗重加——同樣行 unique/prefix 檢查（見
     // src/app/api/guards/[id]/staff-numbers/[numberId]/route.ts）。
     number: staffNumberValue.optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// WP-MULTI（老闆 2026-09-19 拍板）：電話／緊急聯絡人／地址三張新子表——
+// 同上面 GuardStaffNumber* 一致嘅 zod 手法（`tel` 正規化＋格式 regex 喺
+// 呢層做一次 defense-in-depth，`src/lib/guards/contacts.ts` 入面嘅
+// create/update 函數再驗一次，兩個 call site——route／舊 PATCH legacy
+// path——都要經過）。
+const phoneTel = z
+  .string()
+  .min(1)
+  .transform((v) => normalizeTel(v))
+  .refine((v) => TEL_RE.test(v), { message: "電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）" });
+export const GuardPhoneCreateSchema = z
+  .object({
+    tel: phoneTel,
+    label: nullableString,
+    is_primary: z.boolean().optional(),
+    note: nullableString,
+  })
+  .strict();
+export const GuardPhoneUpdateSchema = z
+  .object({
+    tel: phoneTel.optional(),
+    label: nullableString,
+    is_primary: z.boolean().optional(),
+    note: nullableString,
+  })
+  .strict();
+
+export const GuardEmergencyContactCreateSchema = z
+  .object({
+    name: nullableString,
+    tel: nullableString,
+    relationship: nullableString,
+    sort_order: z.number().int().optional(),
+    note: nullableString,
+  })
+  .strict();
+export const GuardEmergencyContactUpdateSchema = z
+  .object({
+    name: nullableString,
+    tel: nullableString,
+    relationship: nullableString,
+    sort_order: z.number().int().optional(),
+    note: nullableString,
+  })
+  .strict();
+
+export const GuardAddressCreateSchema = z
+  .object({
+    address: z.string().min(1),
+    is_primary: z.boolean().optional(),
+    note: nullableString,
+  })
+  .strict();
+export const GuardAddressUpdateSchema = z
+  .object({
+    address: z.string().min(1).optional(),
+    is_primary: z.boolean().optional(),
+    note: nullableString,
   })
   .strict();
 
