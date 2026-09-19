@@ -158,12 +158,28 @@ describe("WP-MULTI", () => {
         params: Promise.resolve({ id: fx.guardA.id, phoneId: p2.id }),
       });
       guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
-      // Opus 覆核（規劃師拍板，同 WP-STAFFNO「已取消 fallback 顯示歷史
-      // 值」一致精神）：子表冧到 0 行都唔會令 legacy `tel` 變 null——
-      // 保留最後已知值（呢個情況即係最後刪走嗰行嘅值），唔會俾用戶睇到
-      // 「呢個人突然冇晒電話」。
-      expect(guard.tel).toBe("69000011");
+      // Opus 第二輪覆核：用戶經 DELETE **明確刪走最後一行**＝明確操作，legacy `tel`
+      // 要跟住清（被動 0 行先至保留）——否則下次新增時自癒會令已刪嘅號復活。
+      expect(guard.tel).toBeNull();
       expect(await prisma.guardPhone.count({ where: { guardId: fx.guardA.id } })).toBe(0);
+    });
+
+    it("刪走最後一個電話再加新號：舊號唔會復活，新號做主要", async () => {
+      const r1 = await phoneCreate(req(`http://test.local/api/guards/${fx.guardA.id}/phones`, ownerCookie, "POST", { tel: "69000041" }), {
+        params: Promise.resolve({ id: fx.guardA.id }),
+      });
+      const p1 = (await r1.json()) as { id: string };
+      await phoneDelete(req(`http://test.local/api/guards/${fx.guardA.id}/phones/${p1.id}`, ownerCookie, "DELETE"), {
+        params: Promise.resolve({ id: fx.guardA.id, phoneId: p1.id }),
+      });
+      const r2 = await phoneCreate(req(`http://test.local/api/guards/${fx.guardA.id}/phones`, ownerCookie, "POST", { tel: "69000042" }), {
+        params: Promise.resolve({ id: fx.guardA.id }),
+      });
+      expect(r2.status).toBe(201);
+      const rows = await prisma.guardPhone.findMany({ where: { guardId: fx.guardA.id } });
+      expect(rows.map((r) => r.tel)).toEqual(["69000042"]);
+      expect(rows[0].isPrimary).toBe(true);
+      expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).tel).toBe("69000042");
     });
 
     it("自癒：guardA 有 dirty legacy tel（0 行）→ POST 加新電話 → 自癒補返原號做 primary，新號非主要；地址／緊急聯絡人（同樣 dirty 0 行）唔受影響", async () => {
@@ -286,7 +302,7 @@ describe("WP-MULTI", () => {
       expect(res.status).toBe(400);
     });
 
-    it("DELETE primary 地址 → 自動升下一行；淨返一行都刪走 → 子表 0 行，legacy address 保留最後已知值（唔再變 null）", async () => {
+    it("DELETE primary 地址 → 自動升下一行；淨返一行都刪走 → 子表 0 行，legacy address 跟住清（明確刪除）", async () => {
       const r1 = await addressCreate(req(`http://test.local/api/guards/${fx.guardA.id}/addresses`, ownerCookie, "POST", { address: "測試地址甲" }), {
         params: Promise.resolve({ id: fx.guardA.id }),
       });
@@ -306,9 +322,8 @@ describe("WP-MULTI", () => {
         params: Promise.resolve({ id: fx.guardA.id, addressId: a2.id }),
       });
       guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
-      // Opus 覆核：同電話一致——子表 0 行唔會將 legacy `address` 寫做
-      // null，保留最後已知值。
-      expect(guard.address).toBe("測試地址乙");
+      // Opus 第二輪覆核：用戶明確刪走最後一行＝明確操作，legacy `address` 跟住清（被動 0 行先至保留）。
+      expect(guard.address).toBeNull();
       expect(await prisma.guardAddress.count({ where: { guardId: fx.guardA.id } })).toBe(0);
     });
 
@@ -362,7 +377,7 @@ describe("WP-MULTI", () => {
       expect(rows.map((r) => r.name)).toEqual(["聯絡人二", "聯絡人一"]);
     });
 
-    it("刪走代表行之後，代表變返剩低嗰個 sort_order 最細；全刪晒 → 子表 0 行，legacy emergency_contact_* 保留最後已知值（唔再變 null）", async () => {
+    it("刪走代表行之後，代表變返剩低嗰個 sort_order 最細；全刪晒 → 子表 0 行，legacy emergency_contact_* 跟住清（明確刪除）", async () => {
       const r1 = await contactCreate(req(`http://test.local/api/guards/${fx.guardA.id}/emergency-contacts`, ownerCookie, "POST", { name: "聯絡人一" }), {
         params: Promise.resolve({ id: fx.guardA.id }),
       });
@@ -382,9 +397,8 @@ describe("WP-MULTI", () => {
         params: Promise.resolve({ id: fx.guardA.id, contactId: c2.id }),
       });
       guard = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
-      // Opus 覆核：同電話／地址一致——子表 0 行唔會將 legacy 欄寫做
-      // null，保留最後已知值（呢度即係刪剩嗰個「聯絡人二」）。
-      expect(guard.emergencyContactName).toBe("聯絡人二");
+      // Opus 第二輪覆核：用戶明確刪走最後一行＝明確操作，legacy 欄跟住清（被動 0 行先至保留）。
+      expect(guard.emergencyContactName).toBeNull();
       expect(guard.emergencyContactTel).toBeNull(); // 「聯絡人二」本身冇填電話，代表值一直都係 null（唔係俾呢次刪走整出嚟）
       expect(await prisma.guardEmergencyContact.count({ where: { guardId: fx.guardA.id } })).toBe(0);
     });
@@ -472,6 +486,24 @@ describe("WP-MULTI", () => {
       expect(guard.emergencyContactTel).toBe("69300001");
       expect(await prisma.guardAddress.count({ where: { guardId: fx.guardA.id } })).toBe(1);
       expect(await prisma.guardEmergencyContact.count({ where: { guardId: fx.guardA.id } })).toBe(1);
+    });
+    it("Opus 第二輪覆核：舊寫法 emergency_contact_tel——新嘅髒值 400；舊髒值冇改、只改姓名 → 200 照搬", async () => {
+      const bad = await guardUpdate(
+        req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { emergency_contact_name: "聯絡人甲", emergency_contact_tel: "唔係電話 / abc" }),
+        { params: Promise.resolve({ id: fx.guardA.id }) },
+      );
+      expect(bad.status).toBe(400);
+      expect(await prisma.guardEmergencyContact.count({ where: { guardId: fx.guardA.id } })).toBe(0);
+
+      await prisma.guard.update({ where: { id: fx.guardA.id }, data: { emergencyContactName: "舊聯絡人", emergencyContactTel: "6930 0001 / 6930 0002" } });
+      const ok = await guardUpdate(
+        req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { emergency_contact_name: "舊聯絡人改名", emergency_contact_tel: "6930 0001 / 6930 0002" }),
+        { params: Promise.resolve({ id: fx.guardA.id }) },
+      );
+      expect(ok.status).toBe(200);
+      const rows = await prisma.guardEmergencyContact.findMany({ where: { guardId: fx.guardA.id }, orderBy: { sortOrder: "asc" } });
+      expect(rows.map((r) => r.name)).toEqual(["舊聯絡人改名", "舊聯絡人"]); // 舊嗰個經自癒保留
+      expect(rows[0].tel).toBe("6930 0001 / 6930 0002");
     });
   });
 

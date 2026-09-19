@@ -97,6 +97,21 @@ async function reconcilePrimaryAddressInvariant(tx: Tx, guardId: string): Promis
 // 自癒——任何子資源 create 之前，如果呢個 guard 嗰組 legacy 欄有值但子
 // 表 0 行，先將個 legacy 值搬一行入去（見檔案頂註解）。
 // ---------------------------------------------------------------------------
+/** Opus 覆核（第二輪）必修：分開兩種「子表 0 行」——
+ *   (a) 被動 0 行（從來冇 backfill／直接寫 DB）：legacy 值要保留，sync 唔准寫 null；
+ *   (b) 用戶經 DELETE 端點**明確刪走最後一行**：呢個係明確操作，legacy 欄要跟住清，
+ *       否則下次新增時「自癒」會將啱啱刪咗嘅值復活並霸住主要（改打錯嘅號永遠改唔到）。
+ * 只喺三個 delete 函數入面 call。 */
+async function clearLegacyIfGroupEmptiedByDelete(tx: Tx, guardId: string, group: LegacyContactGroup): Promise<void> {
+  if (group === "tel") {
+    if ((await tx.guardPhone.count({ where: { guardId } })) === 0) await tx.guard.update({ where: { id: guardId }, data: { tel: null } });
+  } else if (group === "address") {
+    if ((await tx.guardAddress.count({ where: { guardId } })) === 0) await tx.guard.update({ where: { id: guardId }, data: { address: null } });
+  } else if ((await tx.guardEmergencyContact.count({ where: { guardId } })) === 0) {
+    await tx.guard.update({ where: { id: guardId }, data: { emergencyContactName: null, emergencyContactTel: null } });
+  }
+}
+
 async function healLegacyContactBeforeWrite(tx: Tx, guardId: string, group: LegacyContactGroup, createdBy: string | null): Promise<void> {
   const guard = await tx.guard.findUnique({
     where: { id: guardId },
@@ -109,7 +124,7 @@ async function healLegacyContactBeforeWrite(tx: Tx, guardId: string, group: Lega
     const count = await tx.guardPhone.count({ where: { guardId } });
     if (count > 0) return;
     await tx.guardPhone.create({
-      data: { guardId, tel: guard.tel.trim(), isPrimary: true, source: "backfill:legacy-on-write", createdBy },
+      data: { guardId, tel: isValidTel(normalizeTel(guard.tel)) ? normalizeTel(guard.tel) : guard.tel.trim(), isPrimary: true, source: "backfill:legacy-on-write", createdBy },
     });
     return;
   }
@@ -275,7 +290,7 @@ export interface DeleteResult<T> {
 /** DELETE 係俾更正打錯用——刪走一行電話；如果刪嘅係 primary，自動升返
  * 最舊（`createdAt` asc）嗰行做新 primary（保證剩返嘅電話一定有一個
  * primary）。冇剩返任何電話就自然冇 primary，
- * `syncLegacyGuardContactColumns()` 會將 `guards.tel` 同步做 `null`
+ * `clearLegacyIfGroupEmptiedByDelete()` 會將 `guards.tel` 寫做 `null`
  * （反映「呢個人而家一個電話都冇記錄」嘅真實狀態——呢張表冇「已取消」
  * 呢個狀態，刪咗就係冇咗，冇歷史好 fallback，同 WP-STAFFNO 員工編號嘅
  * 「已取消號 fallback 顯示歷史值」唔同，見呢個檔案頂註解）。 */
@@ -293,6 +308,7 @@ export async function deleteGuardPhone(tx: Tx, guardId: string, phoneId: string)
     }
   }
   await reconcilePrimaryPhoneInvariant(tx, guardId);
+  await clearLegacyIfGroupEmptiedByDelete(tx, guardId, "tel");
   return { deleted: row, promoted };
 }
 
@@ -376,6 +392,7 @@ export async function deleteGuardAddress(tx: Tx, guardId: string, addressId: str
     }
   }
   await reconcilePrimaryAddressInvariant(tx, guardId);
+  await clearLegacyIfGroupEmptiedByDelete(tx, guardId, "address");
   return { deleted: row, promoted };
 }
 
@@ -395,6 +412,18 @@ export interface CreateGuardEmergencyContactInput {
   note?: string | null;
   source?: string | null;
   createdBy?: string | null;
+  /** 只俾 PATCH 舊寫法用：電話同 legacy 現值一樣（可能係舊髒值）→ 照搬唔驗格式。 */
+  keepTelVerbatim?: boolean;
+}
+
+/** 緊急聯絡人電話——新輸入嘅值同一般電話同一套：正規化（去空白／連字符）＋驗格式；空＝null。
+ * 舊髒值唔會經呢度（PATCH 舊寫法「冇改就唔入嚟」；自癒直接照搬），所以唔會鎖死儲存。 */
+function normalizeContactTelOrThrow(raw: string | null | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  const normalized = normalizeTel(trimmed);
+  if (!isValidTel(normalized)) throw BadRequest("緊急聯絡人電話格式唔啱（正規化後要係 7-15 位數字，可以 + 開頭）");
+  return normalized;
 }
 
 function assertNameOrTel(name: string | null | undefined, tel: string | null | undefined): void {
@@ -407,8 +436,9 @@ function assertNameOrTel(name: string | null | undefined, tel: string | null | u
  * 最大 `sort_order` + 1，冇任何行就 0）。 */
 export async function createGuardEmergencyContact(tx: Tx, input: CreateGuardEmergencyContactInput): Promise<GuardEmergencyContact> {
   const name = input.name?.trim() || null;
-  const tel = input.tel?.trim() || null;
+  const tel = input.keepTelVerbatim ? input.tel?.trim() || null : normalizeContactTelOrThrow(input.tel);
   assertNameOrTel(name, tel);
+  await lockGuardRowForContactWrite(tx, input.guardId);
   // 自癒——同 createGuardPhone() 一致理由：加緊急聯絡人之前，如果
   // legacy `emergency_contact_name`／`_tel` 有值但子表仲係 0 行，先將
   // 個 legacy 值搬做代表行（`sort_order=0`），等佢唔會因為子表原本係
@@ -450,7 +480,7 @@ export async function updateGuardEmergencyContact(
   const row = await tx.guardEmergencyContact.findFirst({ where: { id: contactId, guardId } });
   if (!row) return null;
   const nextName = input.name !== undefined ? input.name?.trim() || null : row.name;
-  const nextTel = input.tel !== undefined ? input.tel?.trim() || null : row.tel;
+  const nextTel = input.tel !== undefined && (input.tel?.trim() || null) !== row.tel ? normalizeContactTelOrThrow(input.tel) : row.tel;
   assertNameOrTel(nextName, nextTel);
   const data: Prisma.GuardEmergencyContactUpdateInput = {};
   if (input.name !== undefined) data.name = nextName;
@@ -467,6 +497,7 @@ export async function deleteGuardEmergencyContact(tx: Tx, guardId: string, conta
   const row = await tx.guardEmergencyContact.findFirst({ where: { id: contactId, guardId } });
   if (!row) return null;
   await tx.guardEmergencyContact.delete({ where: { id: row.id } });
+  await clearLegacyIfGroupEmptiedByDelete(tx, guardId, "emergency");
   return row;
 }
 
@@ -589,10 +620,14 @@ export async function applyLegacyGuardContactPatch(
     // 細嗰個），用「現有最細 - 1」（冇任何行就 0）。
     const minRow = await tx.guardEmergencyContact.findFirst({ where: { guardId }, orderBy: { sortOrder: "asc" } });
     const sortOrder = minRow ? minRow.sortOrder - 1 : 0;
+    // 只改咗姓名、電話照舊（可能係舊髒值）→ 照搬唔驗，唔好鎖死儲存；電話真係改咗先驗格式。
+    const legacyNow = await tx.guard.findUnique({ where: { id: guardId }, select: { emergencyContactTel: true } });
+    const telUnchanged = (emergencyContactTel?.trim() || null) === (legacyNow?.emergencyContactTel?.trim() || null);
     contact = await createGuardEmergencyContact(tx, {
       guardId,
       name: emergencyContactName,
       tel: emergencyContactTel,
+      keepTelVerbatim: telUnchanged,
       sortOrder,
       source: "manual:legacy-patch(emergency_contact)",
       createdBy,
