@@ -69,11 +69,29 @@ describeOrSkip("Gate：seed + regen 對真實 7 月數據（開發庫）", () =>
     expect(augCount).toBe(90);
   });
 
-  it("guards.default_broker_id：backfilled===172，null(internal 或 external，冇雞頭證據)===93", async () => {
+  // P0（Opus 驗收重現，2026-09-20）：舊斷言（172 backfilled／93 null）淨係
+  // 反映 `backfillDefaultBrokerId()`（S6，`scripts/seed/lib/backfill-
+  // broker.ts`）——嗰個 helper 刻意淨係計 kind=broker（外判雞頭）嘅證據，
+  // 為咗雞頭隔離用途，長工/公司兵留 NULL。而長工/公司兵嘅
+  // `default_broker_id` NULL 正正係 P0 bug 嘅根源（batch/route.ts 嘅
+  // settlement_broker_id fallback 鏈跌到呢個欄）——而家 `main()` 多行咗
+  // 一層更闊嘅 `backfillGuardDefaultBrokerBroaderP0()`（見
+  // `scripts/seed/lib/backfill-broker-p0.ts`，逐字對照
+  // `prisma/migrations/20260920010000_p0_backfill_guard_default_broker/
+  // migration.sql`），淨係補第一層冇補到嗰批：257 = 172（第一層，kind=
+  // broker 證據）+ 85（第二層，kind=internal_cash/internal_longterm/
+  // external 嘅歷史記錄——按 kind 分佈：internal_longterm 48、
+  // internal_cash 26、external 11，見 out/p1/seed-stats.json
+  // `guardsDefaultBrokerBroaderBackfilledByKind_*`）。剩低 8 個
+  // 真係完全冇任何非作廢 shift_record 歷史、又唔係長工（longterm_
+  // autopay）——冇證據可以臆測，保持 NULL 係啱嘅（B 項嘅 runtime
+  // fallback 鏈、D 項嘅 no_settlement_count 警告會兜住呢批人第一次
+  // 派更嗰陣嘅情況）。
+  it("guards.default_broker_id：backfilled===257，null(乜證據都冇，唔係長工)===8", async () => {
     const totalGuards = await devPrisma.guard.count();
     const backfilled = await devPrisma.guard.count({ where: { defaultBrokerId: { not: null } } });
-    expect(backfilled).toBe(172);
-    expect(totalGuards - backfilled).toBe(93);
+    expect(backfilled).toBe(257);
+    expect(totalGuards - backfilled).toBe(8);
   });
 
   it("shift_records===4188，operational_broker_id≠settlement_broker_id===0（真實 7 月數據冇呢個落差）", async () => {

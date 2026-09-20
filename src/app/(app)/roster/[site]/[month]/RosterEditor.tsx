@@ -126,13 +126,16 @@ type BatchResponse = {
   results: { key: string; id: string; action: string }[];
   warnings: string[];
   pricing?: { priced: number; unpriced: number; unpriced_cells: UnpricedCellSummary[] };
+  // P0（Opus 驗收重現）：呢次儲存完之後仲有幾多個 shift 格
+  // settlement_broker_id 係 NULL（會喺糧明細完全消失，唔止未定价）。
+  no_settlement_count?: number;
 };
-// S3：`category` 分「出街价未定」／「收客价未定」（見
-// src/lib/pricing/unpriced.ts）。`payoutCount`/`clientCount` 用
+// S3：`category` 分「出街价未定」／「收客价未定」／（P0）「冇結算單位」
+// （見 src/lib/pricing/unpriced.ts）。`payoutCount`/`clientCount` 用
 // `?? 0` fallback——`/api/shift-records/reprice` 嘅 `groups`（handleReprice
 // 撳完之後 setUnpricedSummary 用嗰批）冇呢兩個欄，向下相容。
-type UnpricedGroup = { site_id: string; site_name: string; shift_type_code: string; broker_code: string | null; broker_display: string; category?: "payout_unpriced" | "client_unpriced"; count: number };
-type UnpricedSummary = { count: number; groups: UnpricedGroup[]; payoutCount?: number; clientCount?: number };
+type UnpricedGroup = { site_id: string; site_name: string; shift_type_code: string; broker_code: string | null; broker_display: string; category?: "payout_unpriced" | "client_unpriced" | "no_settlement"; count: number };
+type UnpricedSummary = { count: number; groups: UnpricedGroup[]; payoutCount?: number; clientCount?: number; noSettlementCount?: number };
 
 // P1-WP3 第三輪規劃裁定（point B(4)）：同步 `prisma/schema.prisma` 嘅
 // `LeaveCode` enum（已經由 `tools/importer/mappings/status_codes.csv`
@@ -561,6 +564,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // WP-PRICE：儲存呢次帶嚟嘅未定价數（null＝呢次儲存全部有价，唔顯示
   // 警告字眼；>0＝toast 改講「已儲存 · N 格未定价」）。
   const [saveToastUnpriced, setSaveToastUnpriced] = useState<number | null>(null);
+  // P0（Opus 驗收重現）：儲存呢次帶嚟嘅「冇結算單位」格數——呢批更
+  // 唔止未定价，係喺糧明細完全消失，一定要獨立、更顯眼咁警告。
+  const [saveToastNoSettlement, setSaveToastNoSettlement] = useState<number | null>(null);
   useEffect(() => {
     if (!showSaveToast) return;
     const t = setTimeout(() => setShowSaveToast(false), 3000);
@@ -1273,7 +1279,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     // 落嘅格）都要照送出去，唔可以因為篩選漏咗（篩選只影響顯示）。
     const rowByKey = new Map(allRows.map((r) => [r.key, r]));
     const keys = new Set<string>([...baseline.keys(), ...cells.keys()]);
-    const diffCells: { guard_id: string; shift_type_id: string; work_date: string; code: string | null }[] = [];
+    const diffCells: { guard_id: string; shift_type_id: string; work_date: string; code: string | null; settlement_broker_id?: string }[] = [];
     const invalidMsgs: string[] = [];
 
     for (const key of keys) {
@@ -1293,7 +1299,22 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           continue;
         }
       }
-      diffCells.push({ guard_id: row.guardId, shift_type_id: row.shiftTypeId, work_date: workDateStr(year, monthNum, day), code });
+      // P0（Opus 驗收重現）：之前呢度冇送 settlement_broker_id，令新建
+      // 記錄（「複製上月」／新增格）完全冚做 guard.default_broker_id
+      // fallback——93 個長工/公司兵安員嗰個欄係 NULL，條記錄就喺糧明細
+      // 消失。`row.brokerId`（RowMeta，見 buildRowsAndCells／
+      // handleCopyPrevMonth／handleAddGuardRow）已經帶咗「複製嘅來源
+      // 記錄值」或者「呢行現有嘅結算單位」——送埋出去等 batch route 唔使
+      // 淨係靠 guard 嘅 default 值。`?? undefined`：null 唔可以直接送
+      // （schema 淨係 `uuid.optional()`，唔准 null），冇值就交返俾
+      // server 端更深嘅 fallback 鏈（同盤/任何盤最近一條、長工桶…）。
+      diffCells.push({
+        guard_id: row.guardId,
+        shift_type_id: row.shiftTypeId,
+        work_date: workDateStr(year, monthNum, day),
+        code,
+        settlement_broker_id: row.brokerId ?? undefined,
+      });
     }
 
     if (invalidMsgs.length > 0) {
@@ -1313,6 +1334,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       // WP-PRICE：呢次儲存有未定价格就喺 toast 講清楚（唔准靜靜當儲存
       // 成功；`reloadTick`＋1 同時會觸發上面嘅未定价 Notice 刷新）。
       setSaveToastUnpriced(res.pricing && res.pricing.unpriced > 0 ? res.pricing.unpriced : null);
+      setSaveToastNoSettlement(res.no_settlement_count && res.no_settlement_count > 0 ? res.no_settlement_count : null);
       setReloadTick((t) => t + 1);
       setShowSaveToast(true);
     } catch (err) {
@@ -2106,7 +2128,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           畀用戶知呢個盤嘅更唔計工資／客價）。 */}
       {guardsPaidByClient && (
         <Notice variant="info">
-          呢個盤嘅保安員由客戶直接出糧，我哋只收每月服務費——呢度嘅更唔計工資／客價，亦唔會出現喺糧單。
+          {/* WP-MISC Opus 應修（P0 同一輪覆核）：舊文字講「亦唔會出現喺
+              糧單」會令人以為呢個盤嘅更表記錄喺糧單完全睇唔到——實情係
+              糧單入面呢個盤照計更數，淨係金額為 0（`buildPayrollTotals()`
+              對 LINK 盤唔寫 snapshot，但記錄仍然掛住雞頭/內部結算單位，
+              照樣出現喺對應 broker 明細）。唔准改報表本身，淨係改呢句
+              文字令講法準確。 */}
+          呢個盤嘅保安員由客戶直接出糧，我哋只收每月服務費——呢度嘅更唔計工資／客價（糧單入面更數照計、金額為 0）。
         </Notice>
       )}
       {/* WP-PRICE §3：呢個盤呢個月未定价格持續提示（唔止儲存嗰下先出——
@@ -2134,17 +2162,43 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             出街价未定 {unpricedSummary.payoutCount ?? unpricedSummary.count} 更；收客价未定（逐更盤）{unpricedSummary.clientCount ?? 0} 更
           </p>
           <ul className="list-disc pl-5 mt-1">
-            {unpricedSummary.groups.map((g) => (
-              <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                {g.category === "client_unpriced" ? "收客价未定 · " : "出街价未定 · "}
-                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-              </li>
-            ))}
+            {/* P0：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更搶眼
+                嘅 Notice，見下面）——留喺呢度就會誤標做「出街价未定」，
+                令用戶以為補張卡就得，但真正要做嘅係指定雞頭。 */}
+            {unpricedSummary.groups
+              .filter((g) => g.category !== "no_settlement")
+              .map((g) => (
+                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                  {g.category === "client_unpriced" ? "收客价未定 · " : "出街价未定 · "}
+                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+                </li>
+              ))}
           </ul>
           <p className="mt-1">
             去<Link href="/rate-cards" className="underline" style={{ color: "inherit" }}>價目頁</Link>補卡後
             {canReprice ? "，撳右邊「重新計价」。" : "，請有「出街價:update」權限嘅同事撳「重新計价」。"}
           </p>
+        </Notice>
+      )}
+      {/* P0（Opus 驗收重現）：呢個盤呢個月有幾多格 settlement_broker_id
+          係 NULL——呢批更喺糧明細完全消失（唔止未定价，成條記錄搵唔
+          到），獨立、更搶眼（danger）嘅 Notice，唔可以同上面「未定价」
+          混埋一齊（會令人以為補張卡就搞掂）。 */}
+      {unpricedSummary && (unpricedSummary.noSettlementCount ?? 0) > 0 && (
+        <Notice variant="error">
+          <p className="font-medium">
+            呢個月有 {unpricedSummary.noSettlementCount} 更冇結算單位（settlement_broker_id 未定）——
+            <strong>呢批更唔會出現喺任何雞頭嘅糧明細</strong>，請盡快幫呢啲格指定雞頭再儲存。
+          </p>
+          <ul className="list-disc pl-5 mt-1">
+            {unpricedSummary.groups
+              .filter((g) => g.category === "no_settlement")
+              .map((g) => (
+                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
+                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
+                </li>
+              ))}
+          </ul>
         </Notice>
       )}
       {warnings.length > 0 && (
@@ -2616,13 +2670,18 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           data-testid="roster-save-toast"
           className="fixed bottom-5 right-5 z-50 rounded-md px-4 py-2.5 text-[13px] text-white"
           style={{
-            // WP-PRICE：有未定价格就用警示色（唔係「儲存成功」嗰隻深藍色），
-            // 等用戶一眼睇到呢次儲存唔係「乜都掂晒」。
-            background: saveToastUnpriced ? "#b45309" : "#0f172a",
+            // WP-PRICE／P0：有「冇結算單位」就用更搶眼嘅紅色（呢批更會喺
+            // 糧明細完全消失，比「未定价」更嚴重）；有未定价格用警示色
+            // （唔係「儲存成功」嗰隻深藍色）。
+            background: saveToastNoSettlement ? "#b91c1c" : saveToastUnpriced ? "#b45309" : "#0f172a",
             boxShadow: "0 6px 18px rgba(15,23,42,.3)",
           }}
         >
-          {saveToastUnpriced ? `已儲存 · ${saveToastUnpriced} 格未定价（冇對應價目卡）` : "已儲存"}
+          {saveToastNoSettlement
+            ? `已儲存 · ${saveToastNoSettlement} 格冇結算單位（唔會出現喺糧單，請盡快指定雞頭）`
+            : saveToastUnpriced
+              ? `已儲存 · ${saveToastUnpriced} 格未定价（冇對應價目卡）`
+              : "已儲存"}
         </div>
       )}
     </div>

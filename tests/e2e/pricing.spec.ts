@@ -307,3 +307,84 @@ test("(e) 新建 PR 記錄 → batch/route.ts 400（PR 已封死，唔可以排�
   });
   expect(res2.status()).toBe(400);
 });
+
+// P0（Opus 驗收重現）：新月份更表記錄冇咗結算單位→喺糧單成行消失——見
+// RosterEditor.tsx handleSave()／batch/route.ts／
+// src/lib/pricing/settlement-broker-fallback.ts 頂註解。呢個場景專登整
+// 一個 `default_broker_id=NULL` 嘅安員（模擬 bug repro 講嘅 93/265 個
+// 長工/公司兵）——修復之前，「複製上月」個 payload 冇送
+// settlement_broker_id，跌到 batch route 嘅 `guard.default_broker_id ??
+// null` fallback，新記錄會係 NULL。自己起獨立 site/guard（唔靠 seed
+// 數據嘅巧合），自給自足＋finally 清走。
+test("(f) 複製上月：安員 default_broker_id=NULL 都要跟返上月記錄嘅 settlement broker，唔會跌做 NULL 喺糧單消失", async ({ page }) => {
+  const brokerK = await findBrokerIdByCode("K");
+  const testSite = await prisma.site.create({
+    data: { canonicalName: `E2E-P0-結算單位-${Date.now()}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "e2e:pricing-p0" },
+  });
+  const testShiftType = await prisma.shiftType.create({
+    data: { siteId: testSite.id, code: "N", label: "測試夜更", hours: 12, createdBy: "e2e:pricing-p0" },
+  });
+  const testGuard = await prisma.guard.create({
+    data: { nameZh: "E2E測試安員", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "e2e:pricing-p0" },
+  });
+  const julyDate = new Date(Date.UTC(2026, 6, 10));
+  await prisma.shiftRecord.create({
+    data: {
+      siteId: testSite.id,
+      shiftTypeId: testShiftType.id,
+      guardId: testGuard.id,
+      workDate: julyDate,
+      settlementBrokerId: brokerK,
+      operationalBrokerId: brokerK,
+      recordType: "shift",
+      status: "confirmed",
+      createdBy: "e2e:pricing-p0",
+    },
+  });
+
+  try {
+    await loginAs(page, "主管");
+    await page.goto(`/roster/${testSite.id}/2026-08`);
+    const copyBtn = page.getByRole("button", { name: /複製上月/ }).first();
+    await expect(copyBtn).toBeVisible({ timeout: 20_000 });
+    await copyBtn.click();
+    await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole("button", { name: /^儲存$|^儲存緊/ }).click();
+    const toast = page.getByTestId("roster-save-toast");
+    await expect(toast).toBeVisible({ timeout: 30_000 });
+    const toastText = (await toast.textContent().catch(() => "")) ?? "";
+    // P0 修復之後，呢個 guard 嘅新記錄唔應該再係「冇結算單位」。
+    expect(toastText).not.toContain("冇結算單位");
+
+    const augRecord = await prisma.shiftRecord.findFirst({
+      where: { siteId: testSite.id, guardId: testGuard.id, workDate: new Date(Date.UTC(2026, 7, 10)), recordType: "shift" },
+    });
+    expect(augRecord).toBeTruthy();
+    // 核心斷言：settlement broker 同 7 月一致，唔係 null（batch route
+    // response 亦已經證明 no_settlement_count 冇被觸發）。
+    expect(augRecord!.settlementBrokerId).toBe(brokerK);
+
+    // 糧單：K 呢個雞頭本月出現喺 /api/reports/payroll，證明冇喺
+    // buildPayrollTotals() 逐 broker 查嗰陣跌漏（同 7 月一致嘅結算單位
+    // 令呢條記錄真係計入咗糧單，唔係得個 settlement_broker_id 有值但
+    // 報表冇讀到）。
+    await page.goto("/login");
+    await loginAs(page, "老闆");
+    const payrollRes = await page.request.get("/api/reports/payroll?month=2026-08");
+    expect(payrollRes.ok()).toBe(true);
+    const payrollBody = await payrollRes.json();
+    const kTotal = (payrollBody.totals as Array<{ broker_id: string; shifts: number }>).find((t) => t.broker_id === brokerK);
+    expect(kTotal).toBeTruthy();
+    expect(kTotal!.shifts).toBeGreaterThan(0);
+
+    // 反向確認：冇「未歸屬結算單位」（broker_id=null）行係嚟自呢個 test
+    // 整嘅記錄——呢個 test 本身冇整任何 null 記錄，如果有都係其他
+    // 並行/遺留狀態，唔喺呢度斷言全局 0（避免同其他 test 撞）。
+  } finally {
+    await prisma.shiftRecord.deleteMany({ where: { siteId: testSite.id } });
+    await prisma.guard.delete({ where: { id: testGuard.id } });
+    await prisma.shiftType.deleteMany({ where: { siteId: testSite.id } });
+    await prisma.site.delete({ where: { id: testSite.id } });
+  }
+});

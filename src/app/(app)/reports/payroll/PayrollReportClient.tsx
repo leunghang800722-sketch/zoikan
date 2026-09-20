@@ -20,8 +20,11 @@ import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
+// P0（Opus 驗收重現）：`broker_id` 可以係 `null`——代表「未歸屬結算
+// 單位」（settlement_broker_id IS NULL 嘅記錄，見 src/lib/reports/
+// payroll.ts buildPayrollTotals()），呢種行唔可以再靜靜消失。
 interface Total {
-  broker_id: string;
+  broker_id: string | null;
   broker_name: string;
   broker_code: string;
   broker_kind?: string;
@@ -193,11 +196,14 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
             )}
             {!loading &&
               totals.map((t) => (
-                <tr key={t.broker_id} className={tableCls.rowHover}>
+                <tr key={t.broker_id ?? "unattributed"} className={tableCls.rowHover} style={t.broker_id === null ? { background: "#fef2f2" } : undefined}>
                   <td className={`${tableCls.td} font-medium`}>{t.broker_name}</td>
                   <td className={tableCls.td}>{t.broker_code}</td>
                   <td className={tableCls.td}>
-                    <KindPill kind={t.broker_kind} />
+                    {/* P0：未歸屬結算單位嗰行冇一個真正嘅 broker.kind
+                        （sentinel，唔係真 broker）——唔可以借 KindPill
+                        嘅 fallback 顯示做「外判」（誤導）。 */}
+                    {t.broker_id === null ? <Pill variant="neutral">未歸屬</Pill> : <KindPill kind={t.broker_kind} />}
                   </td>
                   <td className={tableCls.tdNum}>{t.shifts}</td>
                   <td className={tableCls.tdNum}>{fmtMoney(t.wage)}</td>
@@ -231,14 +237,18 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         ) : (
           <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
             {totals.map((t) => (
-              <div key={t.broker_id} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0">
+              <div
+                key={t.broker_id ?? "unattributed"}
+                className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0"
+                style={t.broker_id === null ? { background: "#fef2f2" } : undefined}
+              >
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="truncate text-[13px] font-medium text-zk-text">{t.broker_name}</span>
                     <Pill variant="neutral">{t.broker_code}</Pill>
                   </div>
                   <div className="mt-0.5 text-[11.5px] text-zk-muted">
-                    {kindLabel(t.broker_kind)} · {t.shifts} 更
+                    {t.broker_id === null ? "未歸屬" : kindLabel(t.broker_kind)} · {t.shifts} 更
                   </div>
                 </div>
                 <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(t.amount)}</div>

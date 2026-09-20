@@ -25,6 +25,11 @@ import { loadReferralFees, siteCsvIdForBlock } from "./lib/referral-fees";
 import { excludedClientNames } from "../../src/lib/reports/private-overrides";
 import type { RecordType, LeaveCode } from "@prisma/client";
 import { backfillDefaultBrokerId } from "./lib/backfill-broker";
+// P0（Opus 驗收重現）：`backfillDefaultBrokerId()` 淨係為咗雞頭隔離補
+// kind=broker 嘅證據，長工／公司兵（internal_cash/internal_longterm）
+// 一路留 NULL——呢個第二層、更闊嘅 backfill 專門補呢批，見
+// backfill-broker-p0.ts 頂註解。
+import { backfillGuardDefaultBrokerBroaderP0 } from "./lib/backfill-broker-p0";
 import { ROLE_NAMES } from "../../src/lib/rbac/matrix";
 import { seedRolesPermissionsMatrix } from "../../src/lib/rbac/seed";
 import { seedRosterLayouts } from "./lib/roster-layout";
@@ -1359,6 +1364,17 @@ async function main() {
   const backfillStats = await backfillDefaultBrokerId(prisma);
   stats.guardsDefaultBrokerBackfilled = backfillStats.backfilled;
   stats.guardsDefaultBrokerNullNoEvidence = backfillStats.nullNoBrokerKindEvidence;
+  // P0：第二層更闊 backfill（逐字對照 prisma/migrations/
+  // 20260920010000_p0_backfill_guard_default_broker/migration.sql）——
+  // 淨係補上面 backfillDefaultBrokerId() 冇補到（internal_cash/
+  // internal_longterm/external/special 嗰批）嘅安員。
+  const broaderBackfillStats = await backfillGuardDefaultBrokerBroaderP0(prisma);
+  stats.guardsDefaultBrokerBroaderBackfilledFromHistory = broaderBackfillStats.backfilledFromHistory;
+  stats.guardsDefaultBrokerBroaderBackfilledLongtermFallback = broaderBackfillStats.backfilledLongtermFallback;
+  stats.guardsDefaultBrokerBroaderStillNull = broaderBackfillStats.stillNull;
+  for (const [kind, count] of Object.entries(broaderBackfillStats.byBrokerKind)) {
+    stats[`guardsDefaultBrokerBroaderBackfilledByKind_${kind}`] = count;
+  }
   await seedDailyRequirements(siteIdMap, shiftTypeIdMap);
   await seedReferralFeeRates(siteIdMap, brokerIdMap);
   await seedReferralFeeSpecialItems(siteIdMap, brokerIdMap);

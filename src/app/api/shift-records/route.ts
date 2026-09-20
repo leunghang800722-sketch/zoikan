@@ -23,6 +23,9 @@ import type { Prisma } from "@prisma/client";
 // WP-PRICE：單條建立都要計价（同 batch/route.ts 一樣，之前完全冇寫
 // snapshot 三個欄）——見 src/lib/pricing/resolve-rate.ts 頂註解。
 import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
+// P0（Opus 驗收重現）：settlement_broker_id 冇填就喺糧明細完全消失——
+// 單筆新建都要行同一條 fallback 鏈，見 settlement-broker-fallback.ts。
+import { resolveSettlementBrokerFallback } from "@/lib/pricing/settlement-broker-fallback";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -185,6 +188,29 @@ export async function POST(req: Request) {
     }
     const data = snakeToCamelShallow(parsed) as Prisma.ShiftRecordUncheckedCreateInput;
     const workDate = parsed.work_date;
+
+    // P0（Opus 驗收重現）：呢個 route 之前完全冇 fallback——冇傳
+    // settlement_broker_id／operational_broker_id 就直接寫 null，令
+    // 呢條記錄喺 buildPayrollTotals()（逐 broker 查）完全消失。而家同
+    // batch/route.ts 一致，行同一條 fallback 鏈（payload 已經喺
+    // data.settlementBrokerId 度，呢度淨係補「payload 冇填」嗰個情況；
+    // 單筆新建冇「現存記錄」呢一級）。
+    if (data.settlementBrokerId == null || data.operationalBrokerId == null) {
+      const guardForFallback = await prisma.guard.findUnique({
+        where: { id: parsed.guard_id },
+        select: { employmentType: true, defaultBrokerId: true },
+      });
+      if (guardForFallback) {
+        const fallbackBrokerId = await resolveSettlementBrokerFallback({
+          guardId: parsed.guard_id,
+          siteId: parsed.site_id,
+          employmentType: guardForFallback.employmentType,
+          defaultBrokerId: guardForFallback.defaultBrokerId,
+        });
+        if (data.settlementBrokerId == null) data.settlementBrokerId = fallbackBrokerId;
+        if (data.operationalBrokerId == null) data.operationalBrokerId = fallbackBrokerId;
+      }
+    }
 
     // WP-PRICE：內部角色呢個 schema 本身容許手動傳 *_snapshot（保留
     // 手動覆寫能力，例如補漏單／人手核價）——淨係冇傳嗰啲先自動計价，

@@ -13,6 +13,8 @@ import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixture
 import { POST as batchSave } from "@/app/api/shift-records/batch/route";
 import { POST as reprice } from "@/app/api/shift-records/reprice/route";
 import { GET as unpricedGet } from "@/app/api/shift-records/unpriced/route";
+import { POST as shiftRecordCreate } from "@/app/api/shift-records/route";
+import { POST as approveRecord } from "@/app/api/shift-records/[id]/approve/route";
 import { PATCH as sitePatch } from "@/app/api/sites/[id]/route";
 import { GET as guardGet, PATCH as guardPatch } from "@/app/api/guards/[id]/route";
 import { GET as guardsListGet } from "@/app/api/guards/route";
@@ -215,6 +217,105 @@ describe("WP-MISC C：LINK（客戶直接出糧）嘅盤——guards_paid_by_cli
     expect(body.pricing.priced).toBe(1);
     const created = await prisma.shiftRecord.findFirst({ where: { guardId: fx.guardA.id, workDate: new Date(Date.UTC(2026, 7, 9)) } });
     expect(created!.clientRateSnapshot?.toString()).toBe("888"); // rateCardBrokerA（更具體）
+  });
+
+  // WP-MISC Opus 應修（P0 同一輪覆核，A2）：approve 路徑、單筆 POST
+  // （內部＋雞頭）、flag true→false 後行為——之前淨係測咗 batch save／
+  // reprice／unpriced，呢三個路徑一齊有同一個 gate（見各自檔案
+  // 「WP-MISC」註解），冇獨立測過。
+  it("guards_paid_by_client=true：approve 路徑唔會幫 pending_approval 記錄補計 snapshot（就算有夾中嘅通用卡）", async () => {
+    await prisma.site.update({ where: { id: fx.site.id }, data: { guardsPaidByClient: true } });
+    const pending = await prisma.shiftRecord.create({
+      data: {
+        workDate: new Date(Date.UTC(2026, 7, 2)),
+        siteId: fx.site.id,
+        shiftTypeId: fx.shiftType.id,
+        guardId: fx.guardA.id,
+        settlementBrokerId: fx.brokerA.id,
+        operationalBrokerId: fx.brokerA.id,
+        recordType: "shift",
+        status: "pending_approval",
+        createdBy: "test:wp-misc",
+      },
+    });
+    const res = await approveRecord(req(`http://test.local/api/shift-records/${pending.id}/approve`, ownerCookie, "POST"), {
+      params: Promise.resolve({ id: pending.id }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("confirmed");
+    expect(body.client_rate_snapshot).toBeNull();
+    expect(body.guard_wage_snapshot).toBeNull();
+    expect(body.broker_fee_snapshot).toBeNull();
+  });
+
+  it("guards_paid_by_client=true：單筆 POST /api/shift-records（內部角色）新記錄唔寫 snapshot", async () => {
+    await prisma.site.update({ where: { id: fx.site.id }, data: { guardsPaidByClient: true } });
+    const res = await shiftRecordCreate(
+      req("http://test.local/api/shift-records", ownerCookie, "POST", {
+        work_date: "2026-08-03",
+        site_id: fx.site.id,
+        shift_type_id: fx.shiftType.id,
+        guard_id: fx.guardA.id,
+        settlement_broker_id: fx.brokerA.id,
+        record_type: "shift",
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.client_rate_snapshot).toBeNull();
+    expect(body.guard_wage_snapshot).toBeNull();
+    expect(body.broker_fee_snapshot).toBeNull();
+  });
+
+  it("guards_paid_by_client=true：單筆 POST /api/shift-records（雞頭角色）新記錄唔寫 snapshot", async () => {
+    await prisma.site.update({ where: { id: fx.site.id }, data: { guardsPaidByClient: true } });
+    const brokerCookie = await sessionCookieForUser(fx.userIds["雞頭"]);
+    const res = await shiftRecordCreate(
+      req("http://test.local/api/shift-records", brokerCookie, "POST", {
+        work_date: "2026-08-04",
+        site_id: fx.site.id,
+        shift_type_id: fx.shiftType.id,
+        guard_id: fx.guardA.id, // fx.guardA.default_broker_id = brokerA，先過得到雞頭嘅歸屬檢查
+        record_type: "shift",
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // 雞頭角色 DTO 白名單（SHIFT_RECORD_BROKER_FIELDS）本身唔含
+    // client_rate_snapshot（雞頭永遠見唔到收客價，同 guards_paid_by_
+    // client 呢個 flag 無關）——呢個 key 應該完全唔存在，唔係 null。
+    expect(body.client_rate_snapshot).toBeUndefined();
+    expect(body.guard_wage_snapshot).toBeNull();
+    expect(body.broker_fee_snapshot).toBeNull();
+  });
+
+  it("guards_paid_by_client：true→false 之後即刻生效——切走 flag 嗰刻之後嘅 batch save 照計价（gate 即時跟 site 現值，唔係俾之前嗰次讀取快取住）", async () => {
+    await prisma.site.update({ where: { id: fx.site.id }, data: { guardsPaidByClient: true } });
+    const resOn = await batchSave(
+      req("http://test.local/api/shift-records/batch", ownerCookie, "POST", {
+        site_id: fx.site.id,
+        month: "2026-08",
+        cells: [{ guard_id: fx.guardA.id, shift_type_id: fx.shiftType.id, work_date: "2026-08-11", code: "N", settlement_broker_id: fx.brokerA.id }],
+      }),
+    );
+    expect(resOn.status).toBe(200);
+    const createdOn = await prisma.shiftRecord.findFirst({ where: { guardId: fx.guardA.id, workDate: new Date(Date.UTC(2026, 7, 11)) } });
+    expect(createdOn!.clientRateSnapshot).toBeNull();
+
+    await prisma.site.update({ where: { id: fx.site.id }, data: { guardsPaidByClient: false } });
+    const resOff = await batchSave(
+      req("http://test.local/api/shift-records/batch", ownerCookie, "POST", {
+        site_id: fx.site.id,
+        month: "2026-08",
+        cells: [{ guard_id: fx.guardA.id, shift_type_id: fx.shiftType.id, work_date: "2026-08-12", code: "N", settlement_broker_id: fx.brokerA.id }],
+      }),
+    );
+    expect(resOff.status).toBe(200);
+    const bodyOff = await resOff.json();
+    expect(bodyOff.pricing.priced).toBe(1);
+    const createdOff = await prisma.shiftRecord.findFirst({ where: { guardId: fx.guardA.id, workDate: new Date(Date.UTC(2026, 7, 12)) } });
+    expect(createdOff!.clientRateSnapshot?.toString()).toBe("888"); // rateCardBrokerA（更具體），flag 關咗即刻照計价
   });
 });
 
