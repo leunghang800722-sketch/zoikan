@@ -20,8 +20,11 @@ import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
+// P0（Opus 驗收重現）：`broker_id` 可以係 `null`——代表「未歸屬結算
+// 單位」（settlement_broker_id IS NULL 嘅記錄，見 src/lib/reports/
+// payroll.ts buildPayrollTotals()），呢種行唔可以再靜靜消失。
 interface Total {
-  broker_id: string;
+  broker_id: string | null;
   broker_name: string;
   broker_code: string;
   broker_kind?: string;
@@ -37,6 +40,9 @@ interface UnpricedGroup {
   shift_type_code: string;
   broker_code: string | null;
   broker_display: string;
+  // 應修 1：同 RosterEditor.tsx 一致——`no_settlement`（冇結算單位）唔係
+  // 「未定价」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
+  category?: "payout_unpriced" | "client_unpriced" | "no_settlement";
   count: number;
 }
 
@@ -58,6 +64,10 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   const [totals, setTotals] = useState<Total[]>([]);
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
+  // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格喺任何
+  // 雞頭／長工／公司兵嘅糧單都唔會出現，只會出現喺「未歸屬結算單位」
+  // 行，要有自己嘅警告，就算未定价 count＝0 都要顯示。
+  const [noSettlementCount, setNoSettlementCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [repricing, setRepricing] = useState(false);
@@ -67,7 +77,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
     (async () => {
       setLoading(true);
       setError(null);
-      const res = await apiGet<{ month: string; totals: Total[]; unpriced_count?: number; unpriced_groups?: UnpricedGroup[] }>(
+      const res = await apiGet<{ month: string; totals: Total[]; unpriced_count?: number; unpriced_groups?: UnpricedGroup[]; no_settlement_count?: number }>(
         `/api/reports/payroll?month=${month}`,
       );
       if (!res.ok) {
@@ -78,6 +88,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       setTotals(res.data.totals);
       setUnpricedCount(res.data.unpriced_count ?? 0);
       setUnpricedGroups(res.data.unpriced_groups ?? []);
+      setNoSettlementCount(res.data.no_settlement_count ?? 0);
       setLoading(false);
     })();
   }, [month, reloadTick]);
@@ -152,11 +163,36 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         <Notice variant="warning">
           <p className="font-medium">呢個月有 {unpricedCount} 更未定价（冇對應價目卡），金額未計入呢份糧明細：</p>
           <ul className="list-disc pl-5 mt-1">
-            {unpricedGroups.map((g) => (
-              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-              </li>
-            ))}
+            {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
+                搶眼嘅 Notice，見下面）——留喺呢度會令人以為補張卡就得，
+                但真正要做嘅係指定雞頭。 */}
+            {unpricedGroups
+              .filter((g) => g.category !== "no_settlement")
+              .map((g) => (
+                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+                </li>
+              ))}
+          </ul>
+        </Notice>
+      )}
+      {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
+          唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
+          單位」行。就算未定价 count＝0 都要顯示（同 RosterEditor.tsx 一
+          致嘅獨立 error Notice）。 */}
+      {noSettlementCount > 0 && (
+        <Notice variant="error">
+          <p className="font-medium">
+            呢個月有 {noSettlementCount} 格冇結算單位（唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算單位」行）：
+          </p>
+          <ul className="list-disc pl-5 mt-1">
+            {unpricedGroups
+              .filter((g) => g.category === "no_settlement")
+              .map((g) => (
+                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
+                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
+                </li>
+              ))}
           </ul>
         </Notice>
       )}
@@ -193,11 +229,14 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
             )}
             {!loading &&
               totals.map((t) => (
-                <tr key={t.broker_id} className={tableCls.rowHover}>
+                <tr key={t.broker_id ?? "unattributed"} className={tableCls.rowHover} style={t.broker_id === null ? { background: "#fef2f2" } : undefined}>
                   <td className={`${tableCls.td} font-medium`}>{t.broker_name}</td>
                   <td className={tableCls.td}>{t.broker_code}</td>
                   <td className={tableCls.td}>
-                    <KindPill kind={t.broker_kind} />
+                    {/* P0：未歸屬結算單位嗰行冇一個真正嘅 broker.kind
+                        （sentinel，唔係真 broker）——唔可以借 KindPill
+                        嘅 fallback 顯示做「外判」（誤導）。 */}
+                    {t.broker_id === null ? <Pill variant="neutral">未歸屬</Pill> : <KindPill kind={t.broker_kind} />}
                   </td>
                   <td className={tableCls.tdNum}>{t.shifts}</td>
                   <td className={tableCls.tdNum}>{fmtMoney(t.wage)}</td>
@@ -231,14 +270,18 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         ) : (
           <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
             {totals.map((t) => (
-              <div key={t.broker_id} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0">
+              <div
+                key={t.broker_id ?? "unattributed"}
+                className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0"
+                style={t.broker_id === null ? { background: "#fef2f2" } : undefined}
+              >
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="truncate text-[13px] font-medium text-zk-text">{t.broker_name}</span>
                     <Pill variant="neutral">{t.broker_code}</Pill>
                   </div>
                   <div className="mt-0.5 text-[11.5px] text-zk-muted">
-                    {kindLabel(t.broker_kind)} · {t.shifts} 更
+                    {t.broker_id === null ? "未歸屬" : kindLabel(t.broker_kind)} · {t.shifts} 更
                   </div>
                 </div>
                 <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(t.amount)}</div>

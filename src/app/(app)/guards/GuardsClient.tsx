@@ -79,6 +79,10 @@ interface GuardRow {
   sia_permit_b_expiry?: string | null;
   safety_card_no?: string | null;
   safety_card_expiry?: string | null;
+  // WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）——
+  // `qas_issue_date`＝完成日期，`qas_expiry_date`＝到期日（如有）。
+  qas_issue_date?: string | null;
+  qas_expiry_date?: string | null;
   hire_date?: string | null;
   leave_date?: string | null;
   bank_name?: string | null;
@@ -153,6 +157,8 @@ const emptyForm = {
   sia_permit_b_expiry: "",
   safety_card_no: "",
   safety_card_expiry: "",
+  qas_issue_date: "",
+  qas_expiry_date: "",
   hire_date: "",
   leave_date: "",
   bank_name: "",
@@ -445,6 +451,8 @@ export function GuardsClient({
       sia_permit_b_expiry: row.sia_permit_b_expiry ? row.sia_permit_b_expiry.slice(0, 10) : "",
       safety_card_no: row.safety_card_no ?? "",
       safety_card_expiry: row.safety_card_expiry ? row.safety_card_expiry.slice(0, 10) : "",
+      qas_issue_date: row.qas_issue_date ? row.qas_issue_date.slice(0, 10) : "",
+      qas_expiry_date: row.qas_expiry_date ? row.qas_expiry_date.slice(0, 10) : "",
       hire_date: row.hire_date ? row.hire_date.slice(0, 10) : "",
       leave_date: row.leave_date ? row.leave_date.slice(0, 10) : "",
       bank_name: row.bank_name ?? "",
@@ -664,6 +672,10 @@ export function GuardsClient({
         body.sia_permit_b_expiry = form.sia_permit_b_expiry || null;
         if (form.safety_card_no) body.safety_card_no = form.safety_card_no;
         body.safety_card_expiry = form.safety_card_expiry || null;
+        // WP-MISC（老闆 2026-09-20 拍板）：QAS 兩個日期欄一樣一律送
+        // （`|| null`），同其餘日期欄一致（nullable schema，清得走）。
+        body.qas_issue_date = form.qas_issue_date || null;
+        body.qas_expiry_date = form.qas_expiry_date || null;
         body.hire_date = form.hire_date || null;
         body.leave_date = form.leave_date || null;
       }
@@ -1147,10 +1159,16 @@ export function GuardsClient({
   // （safety_card_expiry）兩個到期日一齊揀「較早」嗰一個嚟顯示/高亮——
   // 一個保安員可以牌照仲有效但平安卡就快到期（或者反過嚟），淨係睇
   // 牌照會漏警示。冇填嘅一邊當「冇呢個限制」，兩個都冇填先算「未填」。
-  function earlierExpiry(a?: string | null, b?: string | null): string | null | undefined {
-    if (!a) return b;
-    if (!b) return a;
-    return a <= b ? a : b; // "YYYY-MM-DD" 字串排序等同日期排序
+  //
+  // WP-MISC（老闆 2026-09-20 拍板）：QAS 到期日（qas_expiry_date）一齊
+  // 納入呢個「揀最近到期」嘅比較——擴成 variadic，唔止兩個。
+  function earlierExpiry(...dates: Array<string | null | undefined>): string | null | undefined {
+    let result: string | null | undefined;
+    for (const d of dates) {
+      if (!d) continue;
+      if (!result || d < result) result = d; // "YYYY-MM-DD" 字串排序等同日期排序
+    }
+    return result;
   }
 
   // WP-PII：牌照/平安卡到期三態 pill——過期紅、90 日內橙、冇填灰「未填」
@@ -1445,7 +1463,7 @@ export function GuardsClient({
       <PageHeader
         kicker={kickerFor("/guards", isBroker)}
         title="保安員"
-        subtitle="牌照／平安卡 90 日內到期或已過期嘅列會高亮。"
+        subtitle="牌照／平安卡／QAS 90 日內到期或已過期嘅列會高亮。"
         actions={
           <>
             <FilterChip label="搜尋" showCaret={false}>
@@ -1457,7 +1475,7 @@ export function GuardsClient({
             {/* WP-PII：老闆決定「雞頭視角完全唔變」——呢個新 FilterChip
                 淨係內部角色顯示，雞頭個 toolbar 保持原樣。 */}
             {!isBroker && (
-              <FilterChip label="牌照／平安卡 90 日內到期" showCaret={false}>
+              <FilterChip label="牌照／平安卡／QAS 90 日內到期" showCaret={false}>
                 <input type="checkbox" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
               </FilterChip>
             )}
@@ -1510,7 +1528,7 @@ export function GuardsClient({
                 {visibleRows.map((r) => {
                   // WP-PII（可接受但順手）：牌照／平安卡兩個到期日取較早
                   // 嗰個嚟判斷高亮/顯示，見 earlierExpiry() 頂註解。
-                  const nearestExpiry = earlierExpiry(r.sia_permit_expiry, r.safety_card_expiry);
+                  const nearestExpiry = earlierExpiry(r.sia_permit_expiry, r.safety_card_expiry, r.qas_expiry_date);
                   const expired = isExpired(nearestExpiry);
                   const b = broker(r.default_broker_id);
                   return (
@@ -1564,7 +1582,7 @@ export function GuardsClient({
 
           <div className="space-y-2 sm:hidden">
             {visibleRows.map((r) => {
-              const nearestExpiry = earlierExpiry(r.sia_permit_expiry, r.safety_card_expiry);
+              const nearestExpiry = earlierExpiry(r.sia_permit_expiry, r.safety_card_expiry, r.qas_expiry_date);
               const expired = isExpired(nearestExpiry);
               const b = broker(r.default_broker_id);
               return (
@@ -1777,6 +1795,27 @@ export function GuardsClient({
                     className={inputCls}
                     value={form.safety_card_expiry}
                     onChange={(e) => setForm((f) => ({ ...f, safety_card_expiry: e.target.value }))}
+                  />
+                </Field>
+              </div>
+              {/* WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）
+                  ——來源檔個欄過去日子＝完成、未來日子＝到期，混雜咗，
+                  分開兩欄先唔會入錯。 */}
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="QAS 完成日期">
+                  <input
+                    type="date"
+                    className={inputCls}
+                    value={form.qas_issue_date}
+                    onChange={(e) => setForm((f) => ({ ...f, qas_issue_date: e.target.value }))}
+                  />
+                </Field>
+                <Field label="QAS 到期日（如有）">
+                  <input
+                    type="date"
+                    className={inputCls}
+                    value={form.qas_expiry_date}
+                    onChange={(e) => setForm((f) => ({ ...f, qas_expiry_date: e.target.value }))}
                   />
                 </Field>
               </div>

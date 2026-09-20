@@ -7,6 +7,7 @@ import {
   requireOwnBrokerId,
   assertGuardOwnedByBroker,
   assertSiteAssignedToBroker,
+  assertSettlementBrokerIdsValid,
 } from "@/lib/broker-isolation";
 import { toBrokerShiftRecordDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toShiftRecordFullDTO, toShiftRecordListDTO, toShiftRecordGridDTO, mapListDTO } from "@/lib/api/dto";
@@ -23,6 +24,9 @@ import type { Prisma } from "@prisma/client";
 // WP-PRICE：單條建立都要計价（同 batch/route.ts 一樣，之前完全冇寫
 // snapshot 三個欄）——見 src/lib/pricing/resolve-rate.ts 頂註解。
 import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
+// P0（Opus 驗收重現）：settlement_broker_id 冇填就喺糧明細完全消失——
+// 單筆新建都要行同一條 fallback 鏈，見 settlement-broker-fallback.ts。
+import { resolveSettlementBrokerFallback } from "@/lib/pricing/settlement-broker-fallback";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -135,21 +139,31 @@ export async function POST(req: Request) {
 
       // WP-PRICE：雞頭自己開嘅更（呢個 schema 冇任何 snapshot 欄可以自己填）
       // 一律 runtime 計价，唔准靜靜 0。
-      const brokerPricing = await resolveShiftPricing({
-        siteId: parsedBroker.site_id,
-        shiftTypeId: parsedBroker.shift_type_id,
-        shiftTypeCode: brokerShiftType.code,
-        shiftTypeBillingGroup: brokerShiftType.billingGroup,
-        settlementBrokerId: brokerId,
-        brokerKind: broker.kind,
-        guardId: parsedBroker.guard_id,
-        workDate,
-        isExternal: false,
-        recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
-      });
-      data.clientRateSnapshot = brokerPricing.clientRate;
-      data.guardWageSnapshot = brokerPricing.guardWage;
-      data.brokerFeeSnapshot = brokerPricing.brokerFee;
+      //
+      // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
+      // 盤唔寫 snapshot——同 batch/route.ts、reprice/route.ts 一致嘅 gate。
+      const brokerPricingSite = await prisma.site.findUnique({ where: { id: parsedBroker.site_id }, select: { guardsPaidByClient: true } });
+      if (brokerPricingSite?.guardsPaidByClient) {
+        data.clientRateSnapshot = null;
+        data.guardWageSnapshot = null;
+        data.brokerFeeSnapshot = null;
+      } else {
+        const brokerPricing = await resolveShiftPricing({
+          siteId: parsedBroker.site_id,
+          shiftTypeId: parsedBroker.shift_type_id,
+          shiftTypeCode: brokerShiftType.code,
+          shiftTypeBillingGroup: brokerShiftType.billingGroup,
+          settlementBrokerId: brokerId,
+          brokerKind: broker.kind,
+          guardId: parsedBroker.guard_id,
+          workDate,
+          isExternal: false,
+          recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+        });
+        data.clientRateSnapshot = brokerPricing.clientRate;
+        data.guardWageSnapshot = brokerPricing.guardWage;
+        data.brokerFeeSnapshot = brokerPricing.brokerFee;
+      }
 
       await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
@@ -167,19 +181,75 @@ export async function POST(req: Request) {
 
     // 內部角色：完整 schema，M1/M3 field-group 寫入閘。
     const parsed = parseBody(ShiftRecordCreateSchema, rawBody);
+    // 應修 4：settlement_broker_id／operational_broker_id 一定要存在
+    // （唔存在→400，唔留低俾後面 create() 嘅 FK constraint 撞 500）。
+    // 呢個分支冇雞頭 session（雞頭專用 BrokerShiftRecordCreateSchema
+    // 完全冇呢兩個欄），所以淨係做存在性校驗（`ownBrokerId=null`）。
+    await assertSettlementBrokerIdsValid([parsed.settlement_broker_id, parsed.operational_broker_id], null);
     await assertFieldGroupWritable(session, "shift_records", parsed);
     const internalShiftType = await assertShiftTypeBelongsToSite(parsed.shift_type_id, parsed.site_id);
-    if (parsed.parent_shift_id) {
-      const settlementBrokerId = parsed.settlement_broker_id ?? null;
-      await assertParentShiftValid(parsed.parent_shift_id, session, parsed.guard_id, parsed.site_id, settlementBrokerId);
-    }
     const data = snakeToCamelShallow(parsed) as Prisma.ShiftRecordUncheckedCreateInput;
     const workDate = parsed.work_date;
+
+    // 應修 5：OT 子記錄（`parent_shift_id` 有值）冇帶 settlement_broker_id／
+    // operational_broker_id 就跟 parent 嘅值——唔行下面通用嘅
+    // guard.default_broker_id fallback 鏈（parent 本身可能經人手覆寫過，
+    // OT 子記錄理應同 parent 一致，唔係重新用通用規則計，計出嚟隨時同
+    // parent 唔同一個 broker）。呢步要喺 `assertParentShiftValid()` 之前
+    // 做——下面驗證要用嘅係「fallback 之後」嘅值。
+    if (parsed.parent_shift_id && (data.settlementBrokerId == null || data.operationalBrokerId == null)) {
+      const parentForBrokerDefault = await prisma.shiftRecord.findUnique({
+        where: { id: parsed.parent_shift_id },
+        select: { settlementBrokerId: true, operationalBrokerId: true },
+      });
+      if (parentForBrokerDefault) {
+        if (data.settlementBrokerId == null) data.settlementBrokerId = parentForBrokerDefault.settlementBrokerId;
+        if (data.operationalBrokerId == null) data.operationalBrokerId = parentForBrokerDefault.operationalBrokerId;
+      }
+    }
+
+    // P0（Opus 驗收重現）：呢個 route 之前完全冇 fallback——冇傳
+    // settlement_broker_id／operational_broker_id 就直接寫 null，令
+    // 呢條記錄喺 buildPayrollTotals()（逐 broker 查）完全消失。而家同
+    // batch/route.ts 一致，行同一條 fallback 鏈（payload 已經喺
+    // data.settlementBrokerId 度，呢度淨係補「payload 冇填、又冇跟到
+    // parent」嗰個情況；冇 parent_shift_id 嘅一般新建都行呢條鏈）。
+    if (data.settlementBrokerId == null || data.operationalBrokerId == null) {
+      const guardForFallback = await prisma.guard.findUnique({
+        where: { id: parsed.guard_id },
+        select: { employmentType: true, defaultBrokerId: true },
+      });
+      if (guardForFallback) {
+        const fallbackBrokerId = await resolveSettlementBrokerFallback({
+          guardId: parsed.guard_id,
+          siteId: parsed.site_id,
+          employmentType: guardForFallback.employmentType,
+          defaultBrokerId: guardForFallback.defaultBrokerId,
+        });
+        if (data.settlementBrokerId == null) data.settlementBrokerId = fallbackBrokerId;
+        if (data.operationalBrokerId == null) data.operationalBrokerId = fallbackBrokerId;
+      }
+    }
+
+    // 應修 5：`assertParentShiftValid()` 要用「fallback 之後」嘅
+    // settlement broker（唔係 raw payload 值）——之前呢個檢查行喺 fallback
+    // 之前，OT 子記錄冇帶 settlement_broker_id 就會用 `null` 同 parent
+    // 個真實值比對，一定唔啱，即刻 400（就算跟返 parent 嘅邏輯本身冇
+    // 問題都會撞）。
+    if (parsed.parent_shift_id) {
+      const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
+      await assertParentShiftValid(parsed.parent_shift_id, session, parsed.guard_id, parsed.site_id, settlementBrokerId);
+    }
 
     // WP-PRICE：內部角色呢個 schema 本身容許手動傳 *_snapshot（保留
     // 手動覆寫能力，例如補漏單／人手核價）——淨係冇傳嗰啲先自動計价，
     // 傳咗嘅一律尊重，唔覆蓋。
-    if (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null) {
+    //
+    // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
+    // 盤自動計价呢一步跳過（冇傳嘅欄保持 null）——手動明確傳咗嘅值仍然
+    // 尊重（老闆／會計可以人手補一次性特殊安排），唔喺呢度硬性擋。
+    const internalPricingSite = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { guardsPaidByClient: true } });
+    if (!internalPricingSite?.guardsPaidByClient && (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null)) {
       const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
       const brokerForPricing = settlementBrokerId
         ? await prisma.broker.findUnique({ where: { id: settlementBrokerId }, select: { kind: true } })

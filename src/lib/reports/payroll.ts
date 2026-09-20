@@ -22,7 +22,13 @@ function monthRange(month: Date): { start: Date; end: Date } {
 // P2-B（README §14「種類 pill」欄）additive：`brokerKind` 直接搬 broker.kind
 // 過嚟，冇加任何查詢，`writePayrollXlsx()`／既有 API 消費者唔受影響
 // （多一個 key，唔係改咗原有 key 嘅意思）。
-export type BrokerPayrollTotal = { brokerId: string; brokerName: string; brokerCode: string; brokerKind: string; shifts: number; wage: number; fee: number; amount: number };
+// P0（Opus 驗收重現）：`brokerId` 而家可以係 `null`——呢個 sentinel 代表
+// `settlement_broker_id IS NULL` 嗰批記錄（同全部真正 broker 完全分開查
+// ——之前呢類記錄逐 broker 查嘅時候完全跌漏，糧明細見唔到）。前端／
+// 匯出見到 `brokerId === null` 就顯示做「未歸屬結算單位」呢一行，等
+// 用戶知呢筆金額／更數仲未有人認領，唔係「唔存在」。
+export type BrokerPayrollTotal = { brokerId: string | null; brokerName: string; brokerCode: string; brokerKind: string; shifts: number; wage: number; fee: number; amount: number };
+const UNATTRIBUTED_BROKER_LABEL = "未歸屬結算單位";
 
 export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Promise<BrokerPayrollTotal[]> {
   const { start, end } = monthRange(month);
@@ -48,6 +54,34 @@ export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Pr
       amount: round2(wage + fee),
     });
   }
+
+  // D 項（Opus 驗收重現）：settlement_broker_id IS NULL 嘅記錄——理論上
+  // 而家 batch/route.ts＋單筆 POST 都有完整 fallback 鏈，唔應該再有新
+  // 記錄跌落呢度；但（a）7 月鎖定咗嘅歷史記錄、（b）fallback 鏈全部級
+  // 都搵唔到（全新安員、乜歷史都冇、又唔係長工）嗰種邊緣情況，仍然
+  // 可能出現。呢種記錄一律唔准再靜靜喺報表消失——逐 broker 查完之後，
+  // 加多一次獨立查詢，一有就加一行「未歸屬結算單位」（金額計入 Total，
+  // 等會計一眼見到有錢未歸邊個雞頭）。
+  const unattributedAgg = await prisma.shiftRecord.aggregate({
+    where: { settlementBrokerId: null, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
+    _count: { _all: true },
+    _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
+  });
+  if (unattributedAgg._count._all > 0) {
+    const wage = round2(n(unattributedAgg._sum.guardWageSnapshot));
+    const fee = round2(n(unattributedAgg._sum.brokerFeeSnapshot));
+    out.push({
+      brokerId: null,
+      brokerName: UNATTRIBUTED_BROKER_LABEL,
+      brokerCode: "",
+      brokerKind: "unattributed",
+      shifts: unattributedAgg._count._all,
+      wage,
+      fee,
+      amount: round2(wage + fee),
+    });
+  }
+
   return out;
 }
 

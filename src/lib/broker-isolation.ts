@@ -19,7 +19,7 @@ import type { Prisma } from "@prisma/client";
 import type { AuthedSession } from "./rbac/requirePermission";
 import { prisma } from "./db";
 import { dropKeysDeep, isDecimalLike } from "./api/serialize";
-import { Forbidden } from "./api/errors";
+import { Forbidden, BadRequest } from "./api/errors";
 import { monthStart } from "./month-lock";
 
 export const BROKER_FORBIDDEN_KEYS = [
@@ -87,6 +87,43 @@ export async function assertSiteAssignedToBroker(siteId: string, brokerId: strin
   });
   if (!assignment) {
     throw Forbidden("你喺呢個盤呢個月冇份（broker_site_assignments 冇呢行）——唔可以開更");
+  }
+}
+
+// 應修 4（Opus 驗收覆核）：`settlement_broker_id`／`operational_broker_id`
+// 嘅 zod schema（src/lib/api/schemas.ts）淨係校驗格式（`uuid`），冇校驗
+// 呢個 id 真係存在——之前傳一個格式啱但唔存在嘅 UUID，會一路帶到
+// `prisma.shiftRecord.create()`/`update()` 先至撞 FK constraint，兩個
+// route 都冇 catch `P2003`，變成未經處理嘅 500（唔係乾淨嘅 400）。DB
+// existence 呢種要打 DB 嘅檢查唔屬於 zod（呢個 repo 嘅 schemas.ts 一路
+// 淨係做同步格式校驗，冇任何 async DB 查詢），所以放呢度（同
+// `assertGuardOwnedByBroker`／`assertSiteAssignedToBroker` 呢類 route-級
+// async assert helper 同一種）。
+//
+// 順便補埋雞頭隔離：之前 batch/route.ts 嘅雞頭分支完全冇讀 payload 嘅
+// `settlement_broker_id`（一律靜靜用自己個 broker id 蓋過去）——雞頭帶
+// 咗第二個雞頭嘅 id 落嚟，之前會「靜靜忽略」（冚咗自己個 id，睇落好似
+// 冧啱，但用戶完全唔知自己個 payload 本身就唔啱）。而家改做明確 403，
+// 話畀佢知個 payload 有問題，唔係得個「好彩冚啱」。
+/** 校驗一批（可以帶 null/undefined，會自動剔走）settlement／operational
+ * broker id：(a) 全部一定要喺 `brokers` 表存在，唔存在 → 400；
+ * (b) `ownBrokerId` 非 null（即雞頭 session）嗰陣，帶咗嘅 id 一定要
+ * 同 `ownBrokerId` 一致，唔一致 → 403（雞頭唔可以幫第二個雞頭寫呢個
+ * 欄，就算嗰個 broker id 真係存在都唔准）。 */
+export async function assertSettlementBrokerIdsValid(brokerIds: Array<string | null | undefined>, ownBrokerId: string | null): Promise<void> {
+  const ids = [...new Set(brokerIds.filter((v): v is string => v != null))];
+  if (ids.length === 0) return;
+  if (ownBrokerId) {
+    for (const id of ids) {
+      if (id !== ownBrokerId) {
+        throw Forbidden(`settlement_broker_id／operational_broker_id 唔可以係第二個雞頭嘅 id（${id}）——雞頭淨係可以用自己嘅 broker id`);
+      }
+    }
+  }
+  const found = await prisma.broker.findMany({ where: { id: { in: ids } }, select: { id: true } });
+  const foundIds = new Set(found.map((b) => b.id));
+  for (const id of ids) {
+    if (!foundIds.has(id)) throw BadRequest(`broker id ${id} 唔存在`);
   }
 }
 

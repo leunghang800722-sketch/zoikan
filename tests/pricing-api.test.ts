@@ -179,6 +179,71 @@ describe("WP-PRICE 必修 1：code=\"PR\"（對數佔位更別）唔可以新建
   });
 });
 
+// 應修 2（RosterEditor.tsx handleSave()）：前端而家淨係喺「新建格」先送
+// `settlement_broker_id`——既有記錄（`baseline.get(key)?.id` 有值）改
+// code 時唔再送，等後端保留該記錄原值（唔會俾同一行、可能嚟自唔同日
+// 嘅 row 級 brokerId 覆蓋）。呢度直接打 batch route（唔經 UI，UI 層面
+// 見 tests/e2e/pricing.spec.ts (g)）釘住後端契約：省略 payload 嘅
+// `settlement_broker_id` 就一定保留 `record?.settlementBrokerId`（唔會
+// 跌落 fallback 鏈揀第二個 broker）——呢個契約係應修 2 前端修復可以
+// 安全「唔送」嘅前提，兩邊測試合埋先算完整覆蓋（前端唔送 + 後端接收
+// 「冇送」就保留）。
+describe("應修 2：既有記錄改 code，冇送 settlement_broker_id → 後端保留原值", () => {
+  let fx: Wp2Fixture;
+  let ownerCookie: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    fx = await seedWp2Fixture();
+    ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+
+  it("existing record settlement broker=X（brokerA），guard.default_broker_id=Y（brokerB）——改 code 冇送 settlement_broker_id，記錄仍然係 X", async () => {
+    // fixture guardB 掛 default_broker_id=brokerB，但呢度整一條佢喺
+    // brokerA（X）出糧嘅既有記錄，模擬「呢一格自己嘅結算單位同呢個
+    // guard 嘅 default／同行其他日子唔同」嘅情況。
+    expect(fx.guardB.id).toBeTruthy();
+    const guardBRow = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardB.id } });
+    expect(guardBRow.defaultBrokerId).toBe(fx.brokerB.id);
+
+    const existing = await prisma.shiftRecord.create({
+      data: {
+        workDate: new Date(Date.UTC(2026, 7, 9)),
+        siteId: fx.site.id,
+        shiftTypeId: fx.shiftType.id,
+        guardId: fx.guardB.id,
+        settlementBrokerId: fx.brokerA.id, // X——同 guard 嘅 default（Y=brokerB）唔同
+        operationalBrokerId: fx.brokerA.id,
+        recordType: "shift",
+        status: "confirmed",
+        clientRateSnapshot: 999,
+        guardWageSnapshot: 700,
+        brokerFeeSnapshot: 50,
+        createdBy: "test:wp-p0-item2",
+      },
+    });
+
+    // 應修 2 之後嘅前端行為：既有格改 code，payload 冇 settlement_broker_id
+    // 呢個 key（唔係送 undefined 值，係成個 key 都冇），先真正模擬
+    // `JSON.stringify({...})` 之後嘅實際 HTTP body（object spread
+    // `...(isExistingRecord ? {} : {...})` 唔會留低 `settlement_broker_id`
+    // 呢個 key）。
+    const res = await batchSave(
+      req("http://test.local/api/shift-records/batch", ownerCookie, "POST", {
+        site_id: fx.site.id,
+        month: "2026-08",
+        cells: [{ guard_id: fx.guardB.id, shift_type_id: fx.shiftType.id, work_date: "2026-08-09", code: "AL" }],
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: existing.id } });
+    expect(after.settlementBrokerId).toBe(fx.brokerA.id); // 仍然係 X，唔係跌落 guard.default（Y=brokerB）
+    expect(after.recordType).toBe("leave");
+    expect(after.leaveCode).toBe("AL");
+  });
+});
+
 describe("WP-PRICE：GET /api/shift-records/unpriced", () => {
   let fx: Wp2Fixture;
   let ownerCookie: string;

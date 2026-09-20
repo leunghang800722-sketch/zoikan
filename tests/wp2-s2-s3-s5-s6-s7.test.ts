@@ -116,6 +116,56 @@ describe("WP2 S3：parent_shift_id 驗證", () => {
     );
     expect(res.status).toBe(201);
   });
+
+  // 應修 5（Opus 驗收覆核）：之前 `assertParentShiftValid()` 行喺
+  // settlement broker fallback 之前，用 raw payload 值（冇帶就係
+  // `null`）比對 parent 嘅真實值——OT 子記錄（內部角色，冇雞頭嗰個
+  // 「強制自己 broker」分支）冇帶 settlement_broker_id 就一定撞
+  // 「parent_shift_id 要同一個 guard/site/settlement broker」400，就算
+  // 「跟 parent」本身係啱嘅邏輯都用唔到。而家改咗做「fallback 之後」
+  // 先驗證，兼且冇帶就直接跟 parent 嘅值（唔行通用 guard.default_broker_id
+  // 鏈）。
+  it("應修 5：內部角色建 OT 子記錄，冇帶 settlement_broker_id → 跟 parent（shiftRecordA＝brokerA）嘅值，唔會 400", async () => {
+    const res = await shiftRecordCreate(
+      req("http://test.local/api/shift-records", ownerCookie, "POST", {
+        work_date: "2026-08-22",
+        site_id: fx.site.id,
+        shift_type_id: fx.shiftType.id,
+        guard_id: fx.guardA.id,
+        record_type: "ot",
+        ot_hours: 2,
+        parent_shift_id: fx.shiftRecordA.id, // settlement=operational=brokerA
+        // 刻意冇帶 settlement_broker_id／operational_broker_id。
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.settlement_broker_id).toBe(fx.brokerA.id);
+    expect(body.operational_broker_id).toBe(fx.brokerA.id);
+
+    const created = await prisma.shiftRecord.findFirst({
+      where: { guardId: fx.guardA.id, workDate: new Date(Date.UTC(2026, 7, 22)), recordType: "ot" },
+    });
+    expect(created).toBeTruthy();
+    expect(created!.settlementBrokerId).toBe(fx.brokerA.id);
+    expect(created!.operationalBrokerId).toBe(fx.brokerA.id);
+  });
+
+  it("應修 5：內部角色建 OT 子記錄，帶咗一個同 parent 唔同嘅 settlement_broker_id → 仍然 400（fallback 之後嘅值一樣攔到唔夾嘅情況）", async () => {
+    const res = await shiftRecordCreate(
+      req("http://test.local/api/shift-records", ownerCookie, "POST", {
+        work_date: "2026-08-23",
+        site_id: fx.site.id,
+        shift_type_id: fx.shiftType.id,
+        guard_id: fx.guardA.id,
+        record_type: "ot",
+        ot_hours: 2,
+        parent_shift_id: fx.shiftRecordA.id, // brokerA
+        settlement_broker_id: fx.brokerB.id, // 明確帶咗一個唔同嘅 broker
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("WP2 S5：roles/permissions PATCH 先驗 permission 存在", () => {

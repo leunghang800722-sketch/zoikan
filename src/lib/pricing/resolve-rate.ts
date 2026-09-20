@@ -374,15 +374,22 @@ function toNumberLike(v: unknown): number | null {
  * `resolveShiftPricingFromCards` 嘅 `isExternal` 變數）——雞頭本身唔係
  * external kind，但呢條記錄自己標咗 `is_external:true`（例如客戶自己
  * 嘅人臨時掛喺一個內部雞頭名下結算）都要當 external 睇，唔算出街未定。
+ *
+ * WP-MISC（老闆 2026-09-20 拍板）：加 `opts.guardsPaidByClient`——LINK
+ * （TKO Gateway 厚A/B/C）呢類「客戶直接出糧」嘅盤，我哋唔逐更計工資，
+ * 呢類盤嘅更一律唔算未定价（payout 同 client 都唔算，見
+ * `isClientUnpricedShift` 同一個 opts）。
  */
 export function isUnpricedShift(
   record: { recordType: string; status: string; guardWageSnapshot: unknown; brokerFeeSnapshot: unknown; isExternal?: boolean },
   brokerKind: BrokerKindLike,
+  opts: { guardsPaidByClient?: boolean } = {},
 ): boolean {
   if (record.recordType !== "shift") return false;
   if (record.status === "cancelled") return false;
   if (brokerKind === "internal_longterm") return false;
   if (brokerKind === "external" || record.isExternal === true) return false;
+  if (opts.guardsPaidByClient) return false;
   const feeNull = record.brokerFeeSnapshot === null || record.brokerFeeSnapshot === undefined;
   const wage = toNumberLike(record.guardWageSnapshot);
   const wageNullOrZero = wage === null || wage === 0;
@@ -406,11 +413,14 @@ export function isUnpricedShift(
 export function isClientUnpricedShift(
   record: { recordType: string; status: string; clientRateSnapshot: unknown; isExternal?: boolean },
   shiftTypeBillingGroup: "per_shift" | "monthly_ic" | string,
-  opts: { siteBillingModel?: string | null; brokerKind?: BrokerKindLike } = {},
+  opts: { siteBillingModel?: string | null; brokerKind?: BrokerKindLike; guardsPaidByClient?: boolean } = {},
 ): boolean {
   if (record.recordType !== "shift") return false;
   if (record.status === "cancelled") return false;
   if (record.isExternal === true) return false;
+  // WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類「客戶直接出糧」嘅盤——見
+  // `isUnpricedShift` 同一個 opts。
+  if (opts.guardsPaidByClient) return false;
   // Opus 第三輪 M1：盤層面（site.billing_model）同更別層面（shift_type.
   // billing_group）**兩層都要係逐更**先有「逐更收客價」呢回事——月費盤
   // （IFC／九龍企業大廈…）、admin_fee、special 嘅盤唔逐更開單，佢哋嘅

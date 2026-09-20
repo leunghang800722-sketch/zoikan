@@ -124,6 +124,9 @@ export async function GET(req: Request) {
         longterm_salary_total_allocatable: longtermSalaryTotalAllocatable,
         unpriced_count: unpriced.count,
         unpriced_groups: unpriced.groups,
+        // 應修 1：獨立畀前端顯示「N 格冇結算單位」警告，唔同 unpriced_count
+        // 混埋（computeUnpricedSummary() 口徑已經分開計，唔重複計入）。
+        no_settlement_count: unpriced.noSettlementCount,
       }),
     );
   });

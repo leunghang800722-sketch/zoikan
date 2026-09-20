@@ -33,6 +33,7 @@ import {
   requireOwnBrokerId,
   assertGuardOwnedByBroker,
   assertSiteAssignedToBroker,
+  assertSettlementBrokerIdsValid,
 } from "@/lib/broker-isolation";
 import { assertMonthNotLocked, monthStart } from "@/lib/month-lock";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -49,6 +50,9 @@ import { LeaveCode, type Prisma, type ShiftRecordStatus } from "@prisma/client";
 // 喺記憶體逐格揀價，唔逐格打 DB。
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards, isUnpricedShift, type ResolvedShiftPricing } from "@/lib/pricing/resolve-rate";
 import { n } from "@/lib/reports/money";
+// P0（Opus 驗收重現）：新建記錄冇 settlement_broker_id 就喺糧明細完全
+// 消失——見 settlement-broker-fallback.ts 頂註解嘅完整 fallback 鏈。
+import { createSettlementBrokerFallbackResolver } from "@/lib/pricing/settlement-broker-fallback";
 
 const LEAVE_CODES = new Set<string>(Object.values(LeaveCode));
 
@@ -126,6 +130,16 @@ export async function POST(req: Request) {
       }
     }
 
+    // 應修 4：cells 入面帶嘅 settlement_broker_id／operational_broker_id
+    // 一定要存在（唔存在→400，唔留低俾後面 create()/update() 嘅 FK
+    // constraint 撞 500）；雞頭 session 帶咗唔係自己嘅 broker id→403
+    // （之前呢批 payload 值喺雞頭分支完全冇讀過，靜靜用自己個 id 蓋過
+    // 去——而家改做明確話畀佢知個 payload 有問題）。
+    await assertSettlementBrokerIdsValid(
+      cells.flatMap((c) => [c.settlement_broker_id, c.operational_broker_id]),
+      broker,
+    );
+
     const canVoid = await hasPermission(session, "更表", "void");
     const canUpdate = await hasPermission(session, "更表", "update");
 
@@ -145,6 +159,9 @@ export async function POST(req: Request) {
       requiresApprovalForNewBroker = brokerRow.requiresApproval;
     }
 
+    // P0：memoize（同一 guard 喺呢批 cells 入面可能出現好多次，唔逐格
+    // 都打 DB）——見 settlement-broker-fallback.ts。
+    const resolveSettlementBrokerFallback = createSettlementBrokerFallbackResolver(prisma);
     const plans: PlannedOp[] = [];
     for (const c of cells) {
       const st = shiftTypeById.get(c.shift_type_id)!;
@@ -207,8 +224,31 @@ export async function POST(req: Request) {
       } else {
         if (record && !canUpdate) throw Forbidden("冇「更表:update」權限，唔可以改呢格");
         if (!record && !(await hasPermission(session, "更表", "create"))) throw Forbidden("冇「更表:create」權限");
-        settlementBrokerId = c.settlement_broker_id ?? record?.settlementBrokerId ?? guardById.get(c.guard_id)!.defaultBrokerId ?? null;
-        operationalBrokerId = c.operational_broker_id ?? record?.operationalBrokerId ?? guardById.get(c.guard_id)!.defaultBrokerId ?? null;
+        const guardRow = guardById.get(c.guard_id)!;
+        // P0：payload → 現存記錄 → （helper）同盤最近一條 → 任何盤最近
+        // 一條 → guard.default_broker_id → 長工揀 internal_longterm →
+        // null。settlement／operational 分開 resolve（一般同值，但
+        // operational 理論上可以自己一條鏈——依家兩者都用同一個 helper，
+        // 同舊行為「兩個都跟 default_broker_id」一致，淨係加強咗
+        // fallback 深度）。
+        settlementBrokerId =
+          c.settlement_broker_id ??
+          record?.settlementBrokerId ??
+          (await resolveSettlementBrokerFallback({
+            guardId: c.guard_id,
+            siteId: parsed.site_id,
+            employmentType: guardRow.employmentType,
+            defaultBrokerId: guardRow.defaultBrokerId,
+          }));
+        operationalBrokerId =
+          c.operational_broker_id ??
+          record?.operationalBrokerId ??
+          (await resolveSettlementBrokerFallback({
+            guardId: c.guard_id,
+            siteId: parsed.site_id,
+            employmentType: guardRow.employmentType,
+            defaultBrokerId: guardRow.defaultBrokerId,
+          }));
         status = "confirmed"; // 主管/有權者直接改，唔使入審批隊列
       }
 
@@ -261,6 +301,13 @@ export async function POST(req: Request) {
     const brokerKindById = new Map(pricingBrokers.map((b) => [b.id, b.kind]));
     const brokerCodeById = new Map(pricingBrokers.map((b) => [b.id, b.code]));
     const rateCards = await fetchEffectiveRateCards(parsed.site_id, month, monthEnd);
+    // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類盤
+    // 嘅保安員由客戶直接出糧，公司淨係收每月服務費——唔逐更計客價／
+    // 工資，唔使價目卡。下面「計价」段對呢類盤（`guardsPaidByClient`）
+    // 一律行「保留現有值、唔寫新 snapshot、唔算未定价」分支，見
+    // src/lib/pricing/unpriced.ts、resolve-rate.ts 頂註解。
+    const pricingSite = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { canonicalName: true, guardsPaidByClient: true } });
+    const siteGuardsPaidByClient = pricingSite?.guardsPaidByClient ?? false;
 
     type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
     const unpricedByKey = new Map<string, UnpricedCellSummary>();
@@ -296,7 +343,21 @@ export async function POST(req: Request) {
         recordType: plan.recordType,
       };
 
-      if (shouldFullReprice) {
+      if (siteGuardsPaidByClient) {
+        // WP-MISC：LINK 呢類盤——唔行 resolver、唔寫新 snapshot（新記錄
+        // 三個欄一律 null，`existingClient/Wage/Fee` 對新記錄本身已經係
+        // null）；已有值（例如未拍板前舊資料）保留原封不動，唔清；一律
+        // 唔算未定价（payout 同 client 都唔算）。
+        plan.pricing = {
+          clientRate: existingClient,
+          guardWage: existingWage,
+          brokerFee: existingFee,
+          source: {},
+          unpriced: false,
+          clientCardFound: false,
+          payoutCardFound: false,
+        };
+      } else if (shouldFullReprice) {
         plan.pricing = resolveShiftPricingFromCards(rateCards, resolverInput);
       } else if (existingRecord && !existingIsPR && (existingClient === null || existingWage === null || existingFee === null)) {
         // 應修 S4：局部補漏——唔夠全部重計嘅門檻，但有部份欄位係 null，
@@ -347,8 +408,7 @@ export async function POST(req: Request) {
       }
     }
     if (unpricedByKey.size > 0) {
-      const site = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { canonicalName: true } });
-      for (const summary of unpricedByKey.values()) summary.site_name = site?.canonicalName;
+      for (const summary of unpricedByKey.values()) summary.site_name = pricingSite?.canonicalName;
     }
 
     // ---- 全部 validate 過關，先開 transaction 寫入 --------------------
@@ -440,7 +500,13 @@ export async function POST(req: Request) {
     // src/components/roster/RosterEditor.tsx）。
     const pricing = { priced: pricedCount, unpriced: unpricedCount, unpriced_cells: [...unpricedByKey.values()] };
 
-    return ok(brandSafeResponse({ results, warnings, pricing }), 200);
+    // P0（D 項）：就算加強咗 fallback 鏈，理論上仍然可能出現全部級都搵
+    // 唔到嘅情況（全新安員、乜記錄都冇、又唔係長工）——呢種格唔准再靜靜
+    // 消失，response 帶 `no_settlement_count` 等前端 toast／banner 明確
+    // 講畀用戶知呢幾格「唔會出現喺糧單」。
+    const noSettlementCount = upsertPlans.filter((p) => p.recordType === "shift" && p.settlementBrokerId === null).length;
+
+    return ok(brandSafeResponse({ results, warnings, pricing, no_settlement_count: noSettlementCount }), 200);
   });
 }
 
