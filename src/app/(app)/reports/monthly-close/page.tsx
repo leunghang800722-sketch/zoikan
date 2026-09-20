@@ -76,6 +76,9 @@ interface UnpricedGroup {
   shift_type_code: string;
   broker_code: string | null;
   broker_display: string;
+  // 應修 1：同 RosterEditor.tsx 一致——`no_settlement`（冇結算單位）唔係
+  // 「未定价」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
+  category?: "payout_unpriced" | "client_unpriced" | "no_settlement";
   count: number;
 }
 interface GrossMarginTotalsResult {
@@ -85,6 +88,8 @@ interface GrossMarginTotalsResult {
   // 「N 更未定价」Notice，唔使另外打 API。
   unpriced_count?: number;
   unpriced_groups?: UnpricedGroup[];
+  // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格。
+  no_settlement_count?: number;
 }
 
 const CLOSE_COLS = 6; // 工作地點/更數/營業額/成本/盈利/%
@@ -201,6 +206,9 @@ export default function MonthlyCloseWorkbenchPage() {
   // gross-margin API 攞（additive 欄，唔使多打一次 API）。
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
+  // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格，就算
+  // 未定价 count＝0 都要顯示。
+  const [noSettlementCount, setNoSettlementCount] = useState(0);
   // A1（Opus 整合驗收）：入頁／切月份時，先查呢個月有冇 month_closes 行
   // （`GET /api/month-closes?month=`）——已經有就自動行一次 Generate（見
   // src/app/api/month-closes/[id]/generate/route.ts 檔頭註解：
@@ -227,6 +235,7 @@ export default function MonthlyCloseWorkbenchPage() {
     setMarginTotals(marginRes.ok ? marginRes.data.totals : null);
     setUnpricedCount(marginRes.ok ? (marginRes.data.unpriced_count ?? 0) : 0);
     setUnpricedGroups(marginRes.ok ? (marginRes.data.unpriced_groups ?? []) : []);
+    setNoSettlementCount(marginRes.ok ? (marginRes.data.no_settlement_count ?? 0) : 0);
   }
 
   async function lock() {
@@ -308,11 +317,34 @@ export default function MonthlyCloseWorkbenchPage() {
         <Notice variant="warning">
           <p className="font-medium">呢個月有 {unpricedCount} 更未定价（冇對應價目卡），金額未計入月結總表：</p>
           <ul className="list-disc pl-5 mt-1">
-            {unpricedGroups.map((g) => (
-              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-              </li>
-            ))}
+            {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
+                搶眼嘅 Notice，見下面）。 */}
+            {unpricedGroups
+              .filter((g) => g.category !== "no_settlement")
+              .map((g) => (
+                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
+                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
+                </li>
+              ))}
+          </ul>
+        </Notice>
+      )}
+      {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
+          唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
+          單位」行。就算未定价 count＝0 都要顯示。 */}
+      {noSettlementCount > 0 && (
+        <Notice variant="error">
+          <p className="font-medium">
+            呢個月有 {noSettlementCount} 格冇結算單位（唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算單位」行）：
+          </p>
+          <ul className="list-disc pl-5 mt-1">
+            {unpricedGroups
+              .filter((g) => g.category === "no_settlement")
+              .map((g) => (
+                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
+                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
+                </li>
+              ))}
           </ul>
         </Notice>
       )}

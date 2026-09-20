@@ -430,6 +430,11 @@ export const ShiftRecordCreateSchema = z
     site_id: uuid,
     shift_type_id: uuid,
     guard_id: uuid,
+    // 應修 4：呢度嘅 `uuid` 淨係校驗格式（呢個 repo 嘅 schemas.ts 一律
+    // 純同步驗證，冇 DB 查詢）——真正嘅「broker 存在？」／「雞頭 session
+    // 帶咗唔係自己嘅 id？」校驗喺 route 層做（見
+    // src/lib/broker-isolation.ts `assertSettlementBrokerIdsValid()`，
+    // POST /api/shift-records 同 POST /api/shift-records/batch 都會call）。
     settlement_broker_id: uuid.optional(),
     operational_broker_id: uuid.optional(),
     referral_fee_snapshot: money,

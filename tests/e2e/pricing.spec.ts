@@ -38,6 +38,11 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
     include: { guard: true, shiftType: true },
   });
 
+  // 應修 6（Opus 驗收覆核）：呢三個變數要喺 block 出面就宣告——下面
+  // (i)/(ii) 兩條斷言要用嚟查返「呢一格」真正儲存咗嘅記錄／組合。
+  let savedShiftTypeId: string | undefined;
+  let savedGuardId: string | undefined;
+  let savedShiftTypeCode: string | undefined;
   {
     const row = dRow ? page.locator(`tr[data-row-key="${dRow.shiftTypeId}|${dRow.guardId}"]`).first() : page.getByTestId("roster-row").first();
     const rowCount = await row.count();
@@ -55,6 +60,7 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
     // ${guard_id}`）查返呢一行*真正*嘅更別代號，先至保證打嘅字同行一定夾。
     const rowKey = await targetRow.getAttribute("data-row-key");
     const rowShiftTypeId = rowKey?.split("|")[0];
+    const rowGuardId = rowKey?.split("|")[1];
     const rowShiftType = rowShiftTypeId ? await prisma.shiftType.findUnique({ where: { id: rowShiftTypeId } }) : null;
     const shiftCode = dRow?.shiftType.code ?? rowShiftType?.code ?? "D";
     const current = ((await cell.textContent()) ?? "").trim();
@@ -62,17 +68,70 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
     await page.keyboard.type(toType);
     await page.keyboard.press("Enter");
     await expect(cell).toHaveText(toType);
+
+    savedShiftTypeId = rowShiftTypeId;
+    savedGuardId = rowGuardId;
+    savedShiftTypeCode = rowShiftType?.code ?? shiftCode;
   }
 
   await page.getByRole("button", { name: /^儲存$|^儲存緊/ }).click();
   const toast = page.getByTestId("roster-save-toast");
   await expect(toast).toBeVisible({ timeout: 90_000 }); // 冷啟動＋成個月複製儲存可以超過 30s
-  // WP-PRICE：呢次填嘅係已有卡嘅組合，toast 應該係「已儲存」（唔帶
-  // 「未定价」字眼）——證明 batch/route.ts 真係計咗价（唔係靜靜 0）。
-  // toast 3 秒後自動收，所以一見到就即刻讀文字，唔好再等第二次 locator。
-  const toastText = (await toast.textContent().catch(() => "")) ?? "";
-  expect(toastText).not.toContain("未定价");
-  expect(toastText).not.toContain("未定價");
+
+  // 應修 6（Opus 驗收覆核）：新 toast 優先級（「冇結算單位」toast 贏過
+  // 「未定价」toast，見 RosterEditor.tsx「已儲存 · N 格冇結算單位」／
+  // 「已儲存 · N 格未定价」互斥顯示）令舊版 `not.toContain("未定价")`
+  // 呢種純睇 toast 文字嘅斷言可以假通過——就算呢次動作真係整咗未定价
+  // 格，只要同一次儲存**同時**觸發咗「冇結算單位」toast，文字已經唔
+  // 帶「未定价」呢個字，舊斷言一樣過，但實際上未定价問題完全冇被攔
+  // 到。而家改用兩條實質、直接打 API／DB 嘅斷言，唔再淨係睇 toast
+  // 文字：
+  //   (i) 冇結算單位（no_settlement_count）＝0——呢個先係 P0 真正要守嘅
+  //       invariant（settlement_broker_id 一定要有值，糧單先見到呢批
+  //       更；呢個 test 本身填嘅係一個已存在嘅安員/更別/雞頭組合，儲存
+  //       之後唔應該整出任何一格冇結算單位）。
+  //   (ii) 未定价格數（呢個 site+shift_type+broker 組合，excl.
+  //       no_settlement）唔准多過「上月（2026-07）同一個組合本身已經
+  //       缺價嘅格數」——用 `GET /api/shift-records/unpriced?month=&
+  //       site_id=` 動態計，唔寫死數字（上月本身缺咗幾多張卡係 dev
+  //       seed 資料，可以隨 seed 內容變；淨係要求「冧手唔會整多」）。
+  //
+  // 呢兩條斷言用返仍然登入緊嘅「主管」session（`page.request` 帶埋
+  // browser context 嘅 cookie），喺換老闆登入睇糧明細之前打。
+  const savedRecord =
+    savedShiftTypeId && savedGuardId
+      ? await prisma.shiftRecord.findFirst({
+          where: { siteId, shiftTypeId: savedShiftTypeId, guardId: savedGuardId, workDate: new Date(Date.UTC(2026, 7, 20)) },
+        })
+      : null;
+
+  type UnpricedApiGroup = { shift_type_code: string; broker_code: string | null; category?: string; count: number };
+  type UnpricedApiResult = { no_settlement_count?: number; groups: UnpricedApiGroup[] };
+  async function fetchUnpriced(month: string): Promise<UnpricedApiResult> {
+    const res = await page.request.get(`/api/shift-records/unpriced?month=${month}&site_id=${siteId}`);
+    expect(res.ok()).toBe(true);
+    return (await res.json()) as UnpricedApiResult;
+  }
+  function sumUnpricedForCombo(groups: UnpricedApiGroup[], shiftTypeCode: string, brokerCode: string | null): number {
+    return groups
+      .filter((g) => g.category !== "no_settlement" && g.shift_type_code === shiftTypeCode && g.broker_code === brokerCode)
+      .reduce((sum, g) => sum + g.count, 0);
+  }
+
+  const augUnpriced = await fetchUnpriced("2026-08");
+  // (i) 冇結算單位一定係 0——呢個 test 揀嘅係一個原本已經有雞頭嘅組合，
+  // 唔應該整出任何一格冇結算單位。
+  expect(augUnpriced.no_settlement_count ?? 0).toBe(0);
+
+  // (ii) 未定价格數唔准多過上月同組合本身已缺價嘅格數（動態計，唔寫死）。
+  if (savedRecord && savedShiftTypeCode) {
+    const brokerCodeRow = savedRecord.settlementBrokerId ? await prisma.broker.findUnique({ where: { id: savedRecord.settlementBrokerId } }) : null;
+    const brokerCode = brokerCodeRow?.code ?? null;
+    const julUnpriced = await fetchUnpriced("2026-07");
+    const baselineCount = sumUnpricedForCombo(julUnpriced.groups, savedShiftTypeCode, brokerCode);
+    const afterCount = sumUnpricedForCombo(augUnpriced.groups, savedShiftTypeCode, brokerCode);
+    expect(afterCount).toBeLessThanOrEqual(baselineCount);
+  }
 
   // 糧明細係財務頁（老闆／會計先有 view），主管開會 403——換老闆登入睇。
   await page.goto("/login");
@@ -381,6 +440,97 @@ test("(f) 複製上月：安員 default_broker_id=NULL 都要跟返上月記錄�
     // 反向確認：冇「未歸屬結算單位」（broker_id=null）行係嚟自呢個 test
     // 整嘅記錄——呢個 test 本身冇整任何 null 記錄，如果有都係其他
     // 並行/遺留狀態，唔喺呢度斷言全局 0（避免同其他 test 撞）。
+  } finally {
+    await prisma.shiftRecord.deleteMany({ where: { siteId: testSite.id } });
+    await prisma.guard.delete({ where: { id: testGuard.id } });
+    await prisma.shiftType.deleteMany({ where: { siteId: testSite.id } });
+    await prisma.site.delete({ where: { id: testSite.id } });
+  }
+});
+
+// 應修 2（RosterEditor.tsx handleSave()）：同一行（guard+shift_type）入面
+// 唔同日可以有唔同嘅 settlement_broker_id（例如舊月份逐日人手指定過）；
+// `RowMeta.brokerId` 淨係「其中一日」嘅值（buildRowsAndCells() 逐 rowKey
+// 第一次見到嗰條記錄嘅 broker，`GET /api/shift-records` 用
+// `workDate:"desc"`，即係「最遲嗰日」）。之前改另一日嘅 code 會連
+// settlement_broker_id 一齊送出去，將呢個 row 級（其實係「最遲嗰日」）
+// 嘅值覆蓋咗自己嗰日本身唔同嘅結算單位——而家改咗之後，既有格淨係送
+// code，唔會再送 settlement_broker_id，由後端保留返呢一格自己嘅原值。
+test("(g) 同一行兩日唔同結算單位：改「較早日」（X）嘅 code，唔會俾「較遲日」（row 級 brokerId，Y）覆蓋", async ({ page }) => {
+  const brokerXId = await findBrokerIdByCode("K");
+  const brokerYId = await findBrokerIdByCode("W");
+  const testSite = await prisma.site.create({
+    data: { canonicalName: `E2E-P0-應修2-${Date.now()}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "e2e:pricing-item2" },
+  });
+  const testShiftType = await prisma.shiftType.create({
+    data: { siteId: testSite.id, code: "N", label: "測試夜更", hours: 12, createdBy: "e2e:pricing-item2" },
+  });
+  const testGuard = await prisma.guard.create({
+    data: { nameZh: "E2E測試安員二", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "e2e:pricing-item2" },
+  });
+  // 較早日＝X（brokerK）——呢個 test 會改呢一格；較遲日＝Y（brokerW）——
+  // `GET /api/shift-records` desc 排序令呢日先俾 buildRowsAndCells() 見
+  // 到，成為 row.brokerId＝Y，先夠條件驗證「唔會俾 Y 覆蓋」。
+  const earlyDate = new Date(Date.UTC(2026, 7, 5)); // 2026-08-05＝X
+  const lateDate = new Date(Date.UTC(2026, 7, 20)); // 2026-08-20＝Y
+  const earlyRecord = await prisma.shiftRecord.create({
+    data: {
+      siteId: testSite.id,
+      shiftTypeId: testShiftType.id,
+      guardId: testGuard.id,
+      workDate: earlyDate,
+      settlementBrokerId: brokerXId,
+      operationalBrokerId: brokerXId,
+      recordType: "shift",
+      status: "confirmed",
+      createdBy: "e2e:pricing-item2",
+    },
+  });
+  await prisma.shiftRecord.create({
+    data: {
+      siteId: testSite.id,
+      shiftTypeId: testShiftType.id,
+      guardId: testGuard.id,
+      workDate: lateDate,
+      settlementBrokerId: brokerYId,
+      operationalBrokerId: brokerYId,
+      recordType: "shift",
+      status: "confirmed",
+      createdBy: "e2e:pricing-item2",
+    },
+  });
+
+  try {
+    await loginAs(page, "主管");
+    await page.goto(`/roster/${testSite.id}/2026-08`);
+    const row = page.locator(`tr[data-row-key="${testShiftType.id}|${testGuard.id}"]`);
+    await expect(row).toHaveCount(1, { timeout: 20_000 });
+    const rowIndex = Number(await row.getAttribute("data-row-index"));
+
+    // 改「較早日」（X，2026-08-05，日=5）嘅 code——由「N」改做請假代號
+    // 「AL」（有效，唔會撞「同呢行更別代號都對唔上」）。
+    const cell = page.getByTestId(`roster-cell-${rowIndex}-5`);
+    await cell.click();
+    await page.keyboard.type("AL");
+    await page.keyboard.press("Enter");
+    await expect(cell).toHaveText("AL");
+
+    await page.getByRole("button", { name: /^儲存$|^儲存緊/ }).click();
+    const toast = page.getByTestId("roster-save-toast");
+    await expect(toast).toBeVisible({ timeout: 30_000 });
+    const toastText = (await toast.textContent().catch(() => "")) ?? "";
+    expect(toastText).not.toContain("冇結算單位");
+
+    const afterEarly = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: earlyRecord.id } });
+    // 核心斷言：改咗 code 之後，呢一格自己嘅結算單位仍然係 X（brokerK）
+    // ——冇俾同一行「較遲日」（row.brokerId＝Y＝brokerW）覆蓋。
+    expect(afterEarly.settlementBrokerId).toBe(brokerXId);
+    expect(afterEarly.recordType).toBe("leave");
+    expect(afterEarly.leaveCode).toBe("AL");
+
+    // 反向確認：較遲日（20）冧巴完全冇郁過，仍然係 Y。
+    const afterLate = await prisma.shiftRecord.findFirst({ where: { siteId: testSite.id, guardId: testGuard.id, workDate: lateDate } });
+    expect(afterLate?.settlementBrokerId).toBe(brokerYId);
   } finally {
     await prisma.shiftRecord.deleteMany({ where: { siteId: testSite.id } });
     await prisma.guard.delete({ where: { id: testGuard.id } });

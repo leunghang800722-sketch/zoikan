@@ -33,6 +33,7 @@ import {
   requireOwnBrokerId,
   assertGuardOwnedByBroker,
   assertSiteAssignedToBroker,
+  assertSettlementBrokerIdsValid,
 } from "@/lib/broker-isolation";
 import { assertMonthNotLocked, monthStart } from "@/lib/month-lock";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -128,6 +129,16 @@ export async function POST(req: Request) {
         await assertGuardOwnedByBroker(gId, broker); // C1：guard 嫁接防線
       }
     }
+
+    // 應修 4：cells 入面帶嘅 settlement_broker_id／operational_broker_id
+    // 一定要存在（唔存在→400，唔留低俾後面 create()/update() 嘅 FK
+    // constraint 撞 500）；雞頭 session 帶咗唔係自己嘅 broker id→403
+    // （之前呢批 payload 值喺雞頭分支完全冇讀過，靜靜用自己個 id 蓋過
+    // 去——而家改做明確話畀佢知個 payload 有問題）。
+    await assertSettlementBrokerIdsValid(
+      cells.flatMap((c) => [c.settlement_broker_id, c.operational_broker_id]),
+      broker,
+    );
 
     const canVoid = await hasPermission(session, "更表", "void");
     const canUpdate = await hasPermission(session, "更表", "update");

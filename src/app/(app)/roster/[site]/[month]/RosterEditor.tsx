@@ -1308,12 +1308,22 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       // 淨係靠 guard 嘅 default 值。`?? undefined`：null 唔可以直接送
       // （schema 淨係 `uuid.optional()`，唔准 null），冇值就交返俾
       // server 端更深嘅 fallback 鏈（同盤/任何盤最近一條、長工桶…）。
+      //
+      // 應修 2：`row.brokerId` 係「呢一整行」（同一 shift_type_id+guard_id）
+      // 嘅結算單位，但同一行入面唔同日可以有唔同嘅 settlement_broker_id
+      // （例如舊月份逐日人手指定過）。`b?.id` 有值即代表呢個格本身已經
+      // 存在一條記錄——淨係改咗 code（唔係新建），呢種情況唔可以再送
+      // row 級嘅 brokerId 落去，否則會用同一行嘅值覆蓋咗呢一格自己原有
+      // 、可能唔同嘅結算單位。只有「新建格」（`b?.id` 冇值——新增行／
+      // 複製上月新落嘅格）先至送 settlement_broker_id，等後端 fallback
+      // 鏈有嘢跟；既有記錄唔送，由後端保留該記錄原值。
+      const isExistingRecord = !!b?.id;
       diffCells.push({
         guard_id: row.guardId,
         shift_type_id: row.shiftTypeId,
         work_date: workDateStr(year, monthNum, day),
         code,
-        settlement_broker_id: row.brokerId ?? undefined,
+        ...(isExistingRecord ? {} : { settlement_broker_id: row.brokerId ?? undefined }),
       });
     }
 

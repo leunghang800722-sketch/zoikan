@@ -9,14 +9,19 @@
 -- settlement-broker-fallback.ts），呢個 migration 負責補返現有資料：
 --
 --   1. `default_broker_id IS NULL` 嘅安員，喺 `shift_records`（非作廢、
---      `settlement_broker_id` 非 null）出現最多次嘅結算單位 → 設做佢嘅
---      `default_broker_id`（同票取最近 `work_date`，再同票用 broker id
---      做穩定 tie-break）。
---   2. 完全冇非作廢記錄嘅安員，`employment_type = 'longterm_autopay'`
---      （長工）→ 設做 kind=internal_longterm 嗰個 broker（唔寫死 id／
---      code，用 kind 搵——同 settlement-broker-fallback.ts 一致）。
---   3. 其他（冇記錄、又唔係長工——例如 cash_casual／casual_event 新
---      入職未派過更嘅安員）保持 NULL，唔臆測。
+--      `settlement_broker_id` 非 null、**且嗰個 broker.status='active'**
+--      ——應修 3：已停用嘅結算單位唔可以再揀嚟做任何安員嘅新
+--      default_broker_id，否則新月份 fallback 會靜靜幫佢揀一個而家已經
+--      唔再用嘅雞頭）出現最多次嘅結算單位 → 設做佢嘅 `default_broker_id`
+--      （同票取最近 `work_date`，再同票用 broker id 做穩定 tie-break）。
+--   2. 完全冇符合上面條件記錄嘅安員，`employment_type = 'longterm_autopay'`
+--      （長工）→ 設做 kind=internal_longterm **且 status='active'** 嗰個
+--      broker（唔寫死 id／code，用 kind 搵——同
+--      settlement-broker-fallback.ts 一致；應修 3：同樣要求 active，如果
+--      內部長工結算單位本身俾人停用咗就寧願留 NULL，唔臆測揀第二個）。
+--   3. 其他（冇符合條件記錄、又唔係長工，或者長工但搵唔到 active 嘅
+--      internal_longterm broker——例如 cash_casual／casual_event 新入職
+--      未派過更嘅安員）保持 NULL，唔臆測。
 --
 -- 逐個被改嘅安員寫一行 `audit_log`（action=migration_backfill_
 -- default_broker，before/after），等會計/老闆查得到邊個安員嘅
@@ -45,14 +50,18 @@
 -- 嗰幾個 migration 頂註解），冇任何 `gen_random_uuid()` 或者會令
 -- `migrate deploy` abort 嘅寫法。
 WITH guard_broker_counts AS (
+  -- 應修 3：`JOIN brokers ... AND b."status"='active'`——已停用嘅結算
+  -- 單位唔計入「出現最多次」嘅候選，唔會揀咗一個而家已經唔再用嘅雞頭。
   SELECT
     sr."guard_id" AS guard_id,
     sr."settlement_broker_id" AS broker_id,
     COUNT(*) AS cnt,
     MAX(sr."work_date") AS latest_date
   FROM "shift_records" sr
+  JOIN "brokers" b ON b."id" = sr."settlement_broker_id"
   WHERE sr."status" <> 'cancelled'
     AND sr."settlement_broker_id" IS NOT NULL
+    AND b."status" = 'active'
   GROUP BY sr."guard_id", sr."settlement_broker_id"
 ),
 guard_top_broker AS (
@@ -65,7 +74,8 @@ guard_top_broker AS (
   ORDER BY guard_id, cnt DESC, latest_date DESC, broker_id ASC
 ),
 internal_longterm_broker AS (
-  SELECT "id" FROM "brokers" WHERE "kind" = 'internal_longterm' ORDER BY "code" ASC LIMIT 1
+  -- 應修 3：長工 fallback 嘅內部結算單位一樣要 active。
+  SELECT "id" FROM "brokers" WHERE "kind" = 'internal_longterm' AND "status" = 'active' ORDER BY "code" ASC LIMIT 1
 ),
 guard_backfill AS (
   SELECT

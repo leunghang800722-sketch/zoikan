@@ -62,6 +62,8 @@ export async function GET(req: Request) {
         outside_rows: outsideRows.map((r) => scrubRow(r, canClient)),
         unpriced_count: unpriced.count,
         unpriced_groups: unpriced.groups,
+        // 應修 1：獨立畀前端顯示「N 格冇結算單位」警告。
+        no_settlement_count: unpriced.noSettlementCount,
       }),
     );
   });

@@ -34,6 +34,17 @@ export async function GET(req: Request) {
     }
 
     const [totals, unpriced] = await Promise.all([buildPayrollTotals(month), buildUnpricedSummary(session, month)]);
-    return ok(brandSafeResponse({ month: monthLabel(month), totals, unpriced_count: unpriced.count, unpriced_groups: unpriced.groups }));
+    // 應修 1：`no_settlement_count` 獨立於 `unpriced_count`（口徑已經喺
+    // computeUnpricedSummary() 分開計，唔會重複計入），等前端顯示獨立
+    // 「N 格冇結算單位」警告，就算 unpriced_count=0 都要顯示。
+    return ok(
+      brandSafeResponse({
+        month: monthLabel(month),
+        totals,
+        unpriced_count: unpriced.count,
+        unpriced_groups: unpriced.groups,
+        no_settlement_count: unpriced.noSettlementCount,
+      }),
+    );
   });
 }

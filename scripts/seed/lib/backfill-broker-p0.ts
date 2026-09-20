@@ -20,12 +20,14 @@
 // 0 行夾中）：
 //   1. `default_broker_id` 仍然 NULL 嘅安員 → 喺 shift_records（非作廢、
 //      settlement_broker_id 非 null，**唔限 kind=broker**，同
-//      backfill-broker.ts 唔同）出現最多次嗰個結算單位；同票取最近
-//      work_date，再同票用 broker_id 做穩定 tie-break。
-//   2. 完全冇非作廢記錄嘅安員，`employment_type='longterm_autopay'`
-//      （長工）→ kind=internal_longterm 嗰個 broker（用 kind 搵，唔寫死
-//      id／code）。
-//   3. 其餘保持 NULL。
+//      backfill-broker.ts 唔同；**應修 3：仲要求嗰個 broker.status=
+//      'active'**——已停用嘅結算單位唔計入候選）出現最多次嗰個結算單位；
+//      同票取最近 work_date，再同票用 broker_id 做穩定 tie-break。
+//   2. 完全冇符合上面條件記錄嘅安員，`employment_type='longterm_autopay'`
+//      （長工）→ kind=internal_longterm **且 status='active'** 嗰個
+//      broker（用 kind 搵，唔寫死 id／code；應修 3：同樣要求 active）。
+//   3. 其餘（包括長工但搵唔到 active 嘅 internal_longterm broker）保持
+//      NULL。
 //
 // 逐個被改嘅安員寫一行 audit_log（action=migration_backfill_
 // default_broker，before/after）——同 migration 嗰行用同一個 action
@@ -61,10 +63,17 @@ export async function backfillGuardDefaultBrokerBroaderP0(prisma: PrismaClient):
     select: { guardId: true, settlementBrokerId: true, workDate: true },
   });
 
+  // 應修 3：已停用（status≠'active'）嘅結算單位唔計入「出現最多次」嘅
+  // 候選——同 migration.sql 嘅 `JOIN brokers ... AND status='active'` 一致。
+  const allBrokers = await prisma.broker.findMany({ select: { id: true, kind: true, status: true } });
+  const brokerKindById = new Map(allBrokers.map((b) => [b.id, b.kind as string]));
+  const activeBrokerIds = new Set(allBrokers.filter((b) => b.status === "active").map((b) => b.id));
+
   // guardId -> brokerId -> { count, latestDate }
   const perGuard = new Map<string, Map<string, { count: number; latestDate: Date }>>();
   for (const r of records) {
     const brokerId = r.settlementBrokerId!;
+    if (!activeBrokerIds.has(brokerId)) continue; // 應修 3：已停用嘅結算單位剔走
     let byBroker = perGuard.get(r.guardId);
     if (!byBroker) {
       byBroker = new Map();
@@ -82,12 +91,11 @@ export async function backfillGuardDefaultBrokerBroaderP0(prisma: PrismaClient):
   let internalLongtermBrokerId: string | null | undefined; // undefined=未查過
   async function getInternalLongtermBrokerId(): Promise<string | null> {
     if (internalLongtermBrokerId !== undefined) return internalLongtermBrokerId;
-    const b = await prisma.broker.findFirst({ where: { kind: "internal_longterm" }, orderBy: { code: "asc" }, select: { id: true } });
+    // 應修 3：長工 fallback 嘅內部結算單位一樣要 active。
+    const b = await prisma.broker.findFirst({ where: { kind: "internal_longterm", status: "active" }, orderBy: { code: "asc" }, select: { id: true } });
     internalLongtermBrokerId = b?.id ?? null;
     return internalLongtermBrokerId;
   }
-
-  const brokerKindById = new Map((await prisma.broker.findMany({ select: { id: true, kind: true } })).map((b) => [b.id, b.kind as string]));
 
   for (const g of guardsNeeding) {
     let newBrokerId: string | null = null;

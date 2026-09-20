@@ -7,6 +7,7 @@ import {
   requireOwnBrokerId,
   assertGuardOwnedByBroker,
   assertSiteAssignedToBroker,
+  assertSettlementBrokerIdsValid,
 } from "@/lib/broker-isolation";
 import { toBrokerShiftRecordDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toShiftRecordFullDTO, toShiftRecordListDTO, toShiftRecordGridDTO, mapListDTO } from "@/lib/api/dto";
@@ -180,21 +181,39 @@ export async function POST(req: Request) {
 
     // 內部角色：完整 schema，M1/M3 field-group 寫入閘。
     const parsed = parseBody(ShiftRecordCreateSchema, rawBody);
+    // 應修 4：settlement_broker_id／operational_broker_id 一定要存在
+    // （唔存在→400，唔留低俾後面 create() 嘅 FK constraint 撞 500）。
+    // 呢個分支冇雞頭 session（雞頭專用 BrokerShiftRecordCreateSchema
+    // 完全冇呢兩個欄），所以淨係做存在性校驗（`ownBrokerId=null`）。
+    await assertSettlementBrokerIdsValid([parsed.settlement_broker_id, parsed.operational_broker_id], null);
     await assertFieldGroupWritable(session, "shift_records", parsed);
     const internalShiftType = await assertShiftTypeBelongsToSite(parsed.shift_type_id, parsed.site_id);
-    if (parsed.parent_shift_id) {
-      const settlementBrokerId = parsed.settlement_broker_id ?? null;
-      await assertParentShiftValid(parsed.parent_shift_id, session, parsed.guard_id, parsed.site_id, settlementBrokerId);
-    }
     const data = snakeToCamelShallow(parsed) as Prisma.ShiftRecordUncheckedCreateInput;
     const workDate = parsed.work_date;
+
+    // 應修 5：OT 子記錄（`parent_shift_id` 有值）冇帶 settlement_broker_id／
+    // operational_broker_id 就跟 parent 嘅值——唔行下面通用嘅
+    // guard.default_broker_id fallback 鏈（parent 本身可能經人手覆寫過，
+    // OT 子記錄理應同 parent 一致，唔係重新用通用規則計，計出嚟隨時同
+    // parent 唔同一個 broker）。呢步要喺 `assertParentShiftValid()` 之前
+    // 做——下面驗證要用嘅係「fallback 之後」嘅值。
+    if (parsed.parent_shift_id && (data.settlementBrokerId == null || data.operationalBrokerId == null)) {
+      const parentForBrokerDefault = await prisma.shiftRecord.findUnique({
+        where: { id: parsed.parent_shift_id },
+        select: { settlementBrokerId: true, operationalBrokerId: true },
+      });
+      if (parentForBrokerDefault) {
+        if (data.settlementBrokerId == null) data.settlementBrokerId = parentForBrokerDefault.settlementBrokerId;
+        if (data.operationalBrokerId == null) data.operationalBrokerId = parentForBrokerDefault.operationalBrokerId;
+      }
+    }
 
     // P0（Opus 驗收重現）：呢個 route 之前完全冇 fallback——冇傳
     // settlement_broker_id／operational_broker_id 就直接寫 null，令
     // 呢條記錄喺 buildPayrollTotals()（逐 broker 查）完全消失。而家同
     // batch/route.ts 一致，行同一條 fallback 鏈（payload 已經喺
-    // data.settlementBrokerId 度，呢度淨係補「payload 冇填」嗰個情況；
-    // 單筆新建冇「現存記錄」呢一級）。
+    // data.settlementBrokerId 度，呢度淨係補「payload 冇填、又冇跟到
+    // parent」嗰個情況；冇 parent_shift_id 嘅一般新建都行呢條鏈）。
     if (data.settlementBrokerId == null || data.operationalBrokerId == null) {
       const guardForFallback = await prisma.guard.findUnique({
         where: { id: parsed.guard_id },
@@ -210,6 +229,16 @@ export async function POST(req: Request) {
         if (data.settlementBrokerId == null) data.settlementBrokerId = fallbackBrokerId;
         if (data.operationalBrokerId == null) data.operationalBrokerId = fallbackBrokerId;
       }
+    }
+
+    // 應修 5：`assertParentShiftValid()` 要用「fallback 之後」嘅
+    // settlement broker（唔係 raw payload 值）——之前呢個檢查行喺 fallback
+    // 之前，OT 子記錄冇帶 settlement_broker_id 就會用 `null` 同 parent
+    // 個真實值比對，一定唔啱，即刻 400（就算跟返 parent 嘅邏輯本身冇
+    // 問題都會撞）。
+    if (parsed.parent_shift_id) {
+      const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
+      await assertParentShiftValid(parsed.parent_shift_id, session, parsed.guard_id, parsed.site_id, settlementBrokerId);
     }
 
     // WP-PRICE：內部角色呢個 schema 本身容許手動傳 *_snapshot（保留
