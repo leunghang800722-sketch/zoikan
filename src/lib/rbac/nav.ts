@@ -91,6 +91,7 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   links.push({ href: "/", label: "首頁" });
 
   push("/roster", "更表", "更表");
+  push("/roster-uploads", "更表上載", "更表上載");
   push("/quotas", "配額", "配額");
   push("/approvals", "審批隊列", "審批");
   push("/sites", "盤", "盤");
@@ -144,7 +145,7 @@ export interface NavGroup {
 
 const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
   { title: "", hrefs: ["/"] },
-  { title: "排更", hrefs: ["/roster", "/quotas", "/approvals"] },
+  { title: "排更", hrefs: ["/roster", "/roster-uploads", "/quotas", "/approvals"] },
   { title: "主檔", hrefs: ["/sites", "/guards", "/brokers", "/rate-cards"] },
   { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall"] },
   { title: "系統", hrefs: ["/users", "/roles", "/audit-log", "/feedback"] },

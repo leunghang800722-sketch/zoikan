@@ -36,11 +36,12 @@ bump；`requireSession()`（`src/lib/rbac/requirePermission.ts`）每個
 request 都同 DB 現值核對一次（一條 `SELECT token_version, status`），
 唔啱就當未登入（401）。
 
-## RBAC 矩陣（23 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII 加）
+## RBAC 矩陣（24 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII/WP-ROSTER-UPLOAD 加）
 
 單一事實來源：`src/lib/rbac/matrix.ts`。由舊版 10 module 拆細做 19 個，
 P3 加咗`個人資料`、WP-AI1 加咗`助手`、WP-PII（老闆 2026-09-17 拍板）加咗
-`安員個人資料`／`安員銀行資料`，而家 23 個，逐個對應《設計文件》§5.1
+`安員個人資料`／`安員銀行資料`，WP-ROSTER-UPLOAD（老闆 2026-09-21/23
+拍板）加咗`更表上載`，而家 24 個，逐個對應《設計文件》§5.1
 表入面唔同粒度嘅行（詳細逐格對照見 README-P1.md「RBAC：module ×
 action 矩陣」一節）：
 
@@ -55,7 +56,9 @@ action 矩陣」一節）：
 安員硬性禁止）／**`安員銀行資料`**（WP-PII，管保安員銀行／戶口號碼／
 收款人名——老闆／會計全睇、主管／雞頭／安員硬性禁止）／**`助手`**
 （WP-AI1，側欄 AI 助手，雞頭／安員硬性禁止，見
-[`docs/ai-assistant.md`](ai-assistant.md)）。
+[`docs/ai-assistant.md`](ai-assistant.md)）／**`更表上載`**
+（WP-ROSTER-UPLOAD Phase A，管逐盤更表檔案上載——老闆／主管／會計 G，
+雞頭／安員硬性禁止）。
 
 **自訂角色（Opus 驗收殘留2）**：`roles.base_role`——複製一個出廠角色
 時寫死（`POST /api/roles`），**唔可以再改**；硬性 deny 矩陣查詢一律用
@@ -104,6 +107,7 @@ lock/unlock 代替），其餘資源一律：
 | 角色權限矩陣 | `/api/roles/:id/permissions` | 用戶管理 | 冇 | `GET` 攞矩陣（21×5=105 格，含 `hard_denied` 旗標，用 `base_role` 判斷）；`PATCH { changes:[{module,action,granted}] }` 逐格改，硬性禁止格拒絕開（殘留6：一次 `findMany` 攞晒 permission，唔逐個 change 查） |
 | 月結 | `/api/month-closes` | 糧務（view/create）／**`月結鎖定解鎖`**（C3 拆自糧務，lock/unlock） | 冇 | `GET`/`POST`（起草月）；`POST /:id/lock`、`POST /:id/unlock`（強制 `{ reason }`）——**冇 void/unvoid** |
 | 操作紀錄 | `/api/audit-log` | **`操作紀錄`**（C3 拆自系統） | 冇 | 只讀；`?export=1` 額外要求 `操作紀錄:export` |
+| 更表上載 | `/api/roster-uploads`、`/api/roster-uploads/:id`、`/api/roster-uploads/:id/reparse` | **`更表上載`**（WP-ROSTER-UPLOAD Phase A，老闆 2026-09-21/23 拍板，§15） | 冇（雞頭／安員硬性 deny——呢個 resource 完全接觸唔到，唔止 scope） | 唔跟資源 CRUD 通用表（**冇** POST 一般 create 語意、**冇** void/unvoid——同盤同月新上載自動將舊版轉 `superseded`，冇刪除概念）。`GET ?month=YYYY-MM`（必填）：逐盤狀態（未上載／已上載 vN／解析失敗），額外列出 `unresolved_uploads`（盤名對唔到、`site_id=null` 嘅上載）。`POST`（multipart/form-data：`file`＋`month`＋`site_id` 可選）：即時存 bytes＋SHA-256→解析（`src/lib/roster-upload/parse.ts`）→對照盤/更別/安員/雞頭（`match.ts`）→存 `roster_upload_rows`；解析失敗（壞檔／搵唔到 Date 表頭）唔會擋上載，`status=parse_failed`＋`parse_error`；檔案上限 20MB。`GET /:id`：`upload`（field-group gate 過）＋`rows`（分頁，`?guard_match=unmatched` 篩未配對）。`PATCH /:id { site_id }`：人手指定盤（`null`＝清返未指定），之後即刻用返原檔 bytes 重新對照一次（`reparseRosterUpload()`）。`POST /:id/reparse`：唔使重新上載，用返存底嘅 bytes 重新解析＋對照（例如安員名冊/更別加咗新資料之後）。**PII**：`roster_upload_rows` 嘅 `name_raw`／`tel_raw`／`staff_no_raw` 屬 **`安員個人資料`** field-level gate（`GUARD_PII_FIELDS`）——冇嗰格 view 權限嘅內部角色見唔到呢三隻欄，`code_raw`／配對結果等唔受影響。**唔寫入 `shift_records`**（Phase A 範圍明文排除，對數＋寫入係 Phase B，見 §15.3）。`file_bytes`（bytea）永遠唔會出現喺任何 API response（白名單 DTO 冇呢隻欄，連老闆都攞唔到——冇下載原檔 endpoint）。AI 隔離：`ai.*` schema 完全冇 `ai.roster_uploads`／`ai.roster_upload_rows` view；`ai.audit_log` WHERE 子句排除呢兩個 table_name（同 WP-MULTI 一致做法，見 `prisma/migrations/20260923000000_wp_roster_upload_a`）。 |
 
 ## AI 助手（WP-AI1）
 

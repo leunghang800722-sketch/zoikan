@@ -213,6 +213,25 @@ export const toQuotaDTO = <T extends Record<string, unknown>>(row: T) => mapRow(
 export const toReferralFeeRateDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, REFERRAL_FEE_RATE_FIELDS);
 export const toAuditLogDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, AUDIT_LOG_FIELDS);
 
+// WP-ROSTER-UPLOAD Phase A（§15.3）：`fileBytes` 刻意唔喺白名單入面——
+// 冚唪唥 API 一律唔回檔案原始 bytes（雞頭連呢個 resource 都硬性 deny，
+// 內部角色如果將來要「下載原檔」要另開專用 endpoint 先，唔可以經呢個
+// DTO 夾帶）。
+const ROSTER_UPLOAD_FIELDS = [
+  "id", "month", "siteId", "siteNameRaw", "uploaderUserId", "uploadedAt",
+  "fileName", "fileSha256", "fileSize", "version", "status", "parseSummary",
+  "parseError", "layoutKey", "createdAt", "updatedAt", "createdBy",
+] as const;
+export const toRosterUploadDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, ROSTER_UPLOAD_FIELDS);
+
+const ROSTER_UPLOAD_ROW_FIELDS = [
+  "id", "uploadId", "rowIndex", "subSiteName", "workDate", "rawCode",
+  "codeKind", "shiftTypeId", "staffNoRaw", "nameRaw", "telRaw", "rankRaw",
+  "timeRaw", "brokerCodeRaw", "guardId", "guardMatch", "settlementBrokerId",
+  "hours", "warnings", "createdAt", "updatedAt",
+] as const;
+export const toRosterUploadRowDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, ROSTER_UPLOAD_ROW_FIELDS);
+
 export function toUserDTO<T extends Record<string, unknown>>(row: T, includeManagementFields: boolean): Dto {
   const fields = includeManagementFields ? [...USER_BASE_FIELDS, ...USER_MANAGEMENT_ONLY_FIELDS] : USER_BASE_FIELDS;
   return mapRow(row, fields);
@@ -254,4 +273,12 @@ export const AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE: Record<string, FieldGroupResou
   guard_phones: "guard_phones",
   guard_emergency_contacts: "guard_emergency_contacts",
   guard_addresses: "guard_addresses",
+  // WP-ROSTER-UPLOAD Phase A：roster_upload_rows 嘅 name_raw/tel_raw/
+  // staff_no_raw 一樣要喺 GET /api/audit-log 讀出嗰陣再 gate 一次（同
+  // guards/guard_phones 一致模型，唔可以淨係得寫入路徑受保護）——呢個
+  // mapping 漏咗嘅話，冇「安員個人資料:view」嘅內部角色（例如關咗呢格
+  // 嘅主管）都會經操作紀錄睇到未配對安員嘅姓名/電話/工號原文，WP-MULTI
+  // 已經撞過一次呢個漏洞（見 P2-版面重設計計劃.md §12）。
+  roster_uploads: "roster_uploads",
+  roster_upload_rows: "roster_upload_rows",
 };
