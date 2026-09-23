@@ -66,8 +66,11 @@ test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 
     await postMp;
     await expect(page.getByText(`已新增 MP 號`)).toBeVisible({ timeout: 10_000 });
 
-    // 抽屜入面即刻見到新 MP 號（current）。
-    await expect(page.getByText(newMpNumber)).toBeVisible();
+    // 抽屜入面即刻見到新 MP 號（current）。驗收 2026-09-23：`onAddStaffNumber()`
+    // 會即刻 reload 背後嘅列表（桌面表格＋手機卡各一粒 chip），唔 scope 落
+    // 抽屜 form 就 strict-mode 撞 3 個元素（main 已有嘅測試問題）。
+    const drawer = page.locator("form").filter({ hasText: "員工編號" });
+    await expect(drawer.getByText(newMpNumber, { exact: true })).toBeVisible();
 
     // `onAddStaffNumber()` 成功之後自己會 `await load()` 刷新列表，唔使
     // 再手動 reload——直接關閉抽屜就搵得到最新 chips。
@@ -90,17 +93,23 @@ test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 
     await fieldControl(page, "種類（scheme）").locator("select").selectOption("U");
     await fieldControl(page, "編號").locator("input").fill(newUNumber);
     const postU = page.waitForResponse((r) => /\/api\/guards\/[^/]+\/staff-numbers$/.test(r.url()) && r.request().method() === "POST");
+    // 驗收 2026-09-23：`onAddStaffNumber()` 最後會重新 GET 詳情再
+    // `fillFormFromRow()`（主表單「工號」由舊 U 換新 U）——唔等呢個 GET 就
+    // 填日期撳「儲存」，form 仲帶住舊 U 送出 → 409「呢個工號已經有人用緊」
+    // （main 已有嘅 race，乾淨 DB 穩定重現）。
+    const detailAfterAddU = page.waitForResponse((r) => /\/api\/guards\/[^/?]+$/.test(r.url()) && r.request().method() === "GET");
     await page.getByRole("button", { name: "新增編號" }).click();
     await postU;
+    await detailAfterAddU;
     // response 講明舊 U 已經取消。
     await expect(page.getByText(`原本嘅 ${originalStaffNo} 已取消`)).toBeVisible({ timeout: 10_000 });
 
     // 舊 U 摺埋（former／已取消預設摺埋）——見到「顯示已取消嘅號 N 個」，撳先見到舊值。
     const showFormerBtn = page.getByRole("button", { name: /顯示已取消嘅號 \d+ 個/ });
     await expect(showFormerBtn).toBeVisible();
-    await expect(page.getByText(originalStaffNo, { exact: true })).toHaveCount(0);
+    await expect(drawer.getByText(originalStaffNo, { exact: true })).toHaveCount(0);
     await showFormerBtn.click();
-    await expect(page.getByText(originalStaffNo, { exact: true })).toBeVisible();
+    await expect(drawer.getByText(originalStaffNo, { exact: true })).toBeVisible();
 
     // ---- 填甲／乙到期日 ----
     await fieldControl(page, "甲類到期").locator("input").fill("2028-01-01");
