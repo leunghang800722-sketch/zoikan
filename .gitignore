@@ -47,3 +47,6 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
+
+# 部署暫存（由 git archive 砌出嚟，唔入 git）
+.deploy-src/
