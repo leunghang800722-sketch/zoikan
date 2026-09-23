@@ -19,6 +19,9 @@ const TIME_RANGE_RE = /^(\d{1,2}):?(\d{2})-(\d{1,2}):?(\d{2})$/;
 export function normalizeTimeRange(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const cleaned = raw
+    // 驗收 2026-09-23：全形數字／全形冒號（「０７００」「07：00」）香港
+    // Excel 好常見——NFKC 先轉返半形，否則成格當解唔到。
+    .normalize("NFKC")
     .trim()
     .replace(/[–—~～]/g, "-") // 長短破折號／全形半形波浪號 → "-"
     .replace(/\s*(?:to|至)\s*/gi, "-") // "0700 to 1900" / "0700至1900"

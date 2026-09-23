@@ -3,6 +3,7 @@
 // 寫法都要正規化做同一個 "HHMM-HHMM"。
 import { describe, it, expect } from "vitest";
 import { normalizeTimeRange, shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
+import { matchShiftType } from "@/lib/roster-upload/match";
 
 describe("normalizeTimeRange：8 種寫法", () => {
   it("1. 0700-1900（冇冒號、冇空白）", () => {
@@ -37,6 +38,12 @@ describe("normalizeTimeRange：8 種寫法", () => {
     expect(normalizeTimeRange(null)).toBeNull();
     expect(normalizeTimeRange("")).toBeNull();
   });
+
+  // 驗收 2026-09-23 補測：全形數字／全形冒號（NFKC 正規化）。
+  it("全形數字／全形冒號 → 一樣正規化", () => {
+    expect(normalizeTimeRange("０７００-１９００")).toBe("0700-1900");
+    expect(normalizeTimeRange("07：00-19：00")).toBe("0700-1900");
+  });
 });
 
 describe("shiftTypeTimeSlot：DB Time 欄 → HHMM-HHMM", () => {
@@ -53,5 +60,44 @@ describe("shiftTypeTimeSlot：DB Time 欄 → HHMM-HHMM", () => {
     const start = new Date(Date.UTC(1970, 0, 1, 19, 30, 0));
     const end = new Date(Date.UTC(1970, 0, 1, 7, 30, 0));
     expect(shiftTypeTimeSlot(start, end)).toBe(normalizeTimeRange("1930-0730"));
+  });
+});
+
+// 驗收 2026-09-23 補測：`matchShiftType()` 收窄三條路之前冇純函數測試。
+describe("matchShiftType：time_raw 收窄", () => {
+  const cands = [
+    { id: "ic-am", siteId: "S", code: "IC", timeSlot: "0700-1500" },
+    { id: "ic-pm", siteId: "S", code: "IC", timeSlot: "1430-2230" },
+    { id: "ic-nt", siteId: "S", code: "ic", timeSlot: "2230-0730" },
+    { id: "x1", siteId: "S", code: "X", timeSlot: "0700-1900" },
+    { id: "x2", siteId: "S", code: "X", timeSlot: "0700-1900" },
+    { id: "d", siteId: "S", code: "D", timeSlot: "0730-1930" },
+    { id: "other", siteId: "T", code: "D", timeSlot: "0700-1900" },
+  ];
+  it("同代號多個候選，時段一個命中 → 配（代號大小寫、時段寫法唔影響）", () => {
+    expect(matchShiftType("IC", "shift", "S", "14:30 - 22:30", cands)).toEqual({ id: "ic-pm", ambiguous: false });
+    expect(matchShiftType("ic", "shift", "S", "2230～0730", cands)).toEqual({ id: "ic-nt", ambiguous: false });
+  });
+  it("時段零個命中 → null＋列晒候選時段", () => {
+    const r = matchShiftType("IC", "shift", "S", "0900-1700", cands);
+    expect(r.id).toBeNull();
+    expect(r.ambiguous).toBe(true);
+    expect(r.candidateTimeSlots).toEqual(["0700-1500", "1430-2230", "2230-0730"]);
+  });
+  it("時段仍然多過一個命中 → null＋列候選（唔准估）", () => {
+    const r = matchShiftType("X", "shift", "S", "0700-1900", cands);
+    expect(r.id).toBeNull();
+    expect(r.ambiguous).toBe(true);
+    expect(r.candidateTimeSlots).toEqual(["0700-1900", "0700-1900"]);
+  });
+  it("冇 time_raw／解唔到 → 多候選照舊 ambiguous", () => {
+    expect(matchShiftType("IC", "shift", "S", null, cands).ambiguous).toBe(true);
+    expect(matchShiftType("IC", "shift", "S", "成日", cands).ambiguous).toBe(true);
+  });
+  it("淨係一個候選 → 直接配（唔理 time_raw）；零個 → null 唔係 ambiguous；其他盤唔會撈埋", () => {
+    expect(matchShiftType("D", "shift", "S", "垃圾", cands)).toEqual({ id: "d", ambiguous: false });
+    expect(matchShiftType("Z", "shift", "S", "0700-1900", cands)).toEqual({ id: null, ambiguous: false });
+    expect(matchShiftType("D", "shift", null, "0700-1900", cands)).toEqual({ id: null, ambiguous: false });
+    expect(matchShiftType("AL", "leave", "S", null, cands)).toEqual({ id: null, ambiguous: false });
   });
 });

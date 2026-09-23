@@ -4,7 +4,7 @@
 // 由會計/主管/老闆補；指定咗之後即刻重新對照一次，等更別/安員配對用返
 // 啱嘅盤範圍）。
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac/requirePermission";
+import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { toRosterUploadDTO, toRosterUploadRowDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGateToList, applyFieldGroupGate } from "@/lib/api/field-groups";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -64,7 +64,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
     const uploadDto = await applyFieldGroupGate(session, "roster_uploads", toRosterUploadDTO(upload));
     const rowsListDto = mapListDTO({ rows, total, skip, take }, toRosterUploadRowDTO);
-    const rowsDto = await applyFieldGroupGateToList(session, "roster_upload_rows", rowsListDto);
+    const gatedRowsDto = await applyFieldGroupGateToList(session, "roster_upload_rows", rowsListDto);
+    // 驗收 2026-09-23：Phase B-0「檔案工號 X 同系統工號 Y 唔一致」warning
+    // 將工號原文寫咗入 `warnings`——`staff_no_raw` 本身屬「安員個人資料」
+    // field gate（主管出廠係 O＝預設冇），唔遮嘅話冇權限嘅角色經 warnings
+    // 一樣睇到工號。冇 view 權限就將兩個號碼換做「（已隱藏）」，保留其餘
+    // 文字（`?warning_flag=` 篩選同 UI 顯示照用）。
+    const canSeeGuardPii = await hasPermission(session, "安員個人資料", "view");
+    const rowsDto = canSeeGuardPii
+      ? gatedRowsDto
+      : brandSafeResponse({ ...gatedRowsDto, rows: gatedRowsDto.rows.map((r) => ({ ...r, warnings: redactStaffNoWarnings(r.warnings) })) });
 
     return ok(brandSafeResponse({ upload: uploadDto, rows: rowsDto }));
   });
@@ -107,4 +116,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     return ok(toRosterUploadDTO(after));
   });
+}
+
+const STAFF_NO_MISMATCH_RE = /檔案工號 .*? 同系統工號 .*? 唔一致/g;
+
+function redactStaffNoWarnings(warnings: unknown): unknown {
+  if (!Array.isArray(warnings)) return warnings;
+  return warnings.map((w) => (typeof w === "string" ? w.replace(STAFF_NO_MISMATCH_RE, "檔案工號（已隱藏）同系統工號（已隱藏）唔一致") : w));
 }

@@ -280,7 +280,7 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
     // 同呢個盤同月「任何現有版本」（active 或 superseded）唔同——同名一
     // 律 400 拒絕，唔存底、唔開版本。喺 lock 入面做，避免兩個並發上載
     // 撞同一個檔名都各自過檢查。
-    const allVersionsSameGroup = await tx.rosterUpload.findMany({ where: monthGroupWhere(resolvedSiteId, siteNameRaw, month), select: { fileName: true } });
+    const allVersionsSameGroup = await tx.rosterUpload.findMany({ where: monthGroupWhere(resolvedSiteId, siteNameRaw, month), select: { fileName: true, fileSha256: true, version: true } });
     const newNameNorm = input.fileName.trim().toLowerCase();
     if (allVersionsSameGroup.some((u) => u.fileName.trim().toLowerCase() === newNameNorm)) {
       throw BadRequest("更新檔嘅檔名必須同舊版唔同，請改檔名再上載");
@@ -294,9 +294,11 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
     }
 
     // Phase B-0 第 5(a) 項：同一檔（同 SHA-256）重複上載——出提示，唔擋
-    // （老闆 2026-09-23 答）。比對即將被取代嗰批（`previous`，通常最多
-    // 一個 active）。
-    const duplicateMatch = previous.find((p) => p.fileSha256 === sha256) ?? null;
+    // （老闆 2026-09-23 答）。驗收 2026-09-23：比對範圍由「即將被取代嗰批
+    // active」擴闊到呢個盤同月**全部**版本（含 superseded）——v1→v2→再上
+    // 載返 v1 個檔（改咗名）之前唔會出提示。撞多個就報最新嗰個版本。
+    const duplicateMatch =
+      allVersionsSameGroup.filter((p) => p.fileSha256 === sha256).sort((a, b) => b.version - a.version)[0] ?? null;
 
     const upload = await tx.rosterUpload.create({
       data: {

@@ -202,6 +202,9 @@ interface DateMergeGroup {
   /** 合併範圍伸出咗 dateEndCol 以外（例如連埋備註欄）——淨係展開咗日期
    * 欄嗰部分，要另外出一個警告講呢件事。 */
   extendsBeyondRange: boolean;
+  /** 驗收 2026-09-23：合併範圍由日期欄前面（例如 Name／日薪欄）伸入日期
+   * 欄——母格唔係日期格，個值（通常係姓名）唔係代號，當空白跳過＋警告。 */
+  startsBeforeRange?: boolean;
 }
 
 function collectDateMergeGroups(ws: ExcelJS.Worksheet, row: number, startCol: number, endCol: number): DateMergeGroup[] {
@@ -213,6 +216,20 @@ function collectDateMergeGroups(ws: ExcelJS.Worksheet, row: number, startCol: nu
       // 母格喺上面幾行（直行合併延伸落嚟呢個日期格，理論上罕見）——當
       // 空白跳過，唔起 group（同姓名欄嘅直行合併行為一致）。
       col += 1;
+      continue;
+    }
+    if (cell.isMerged && Number(cell.master.col) < startCol) {
+      // 驗收 2026-09-23：母格喺日期欄前面（例如姓名格合併伸入第一個日期
+      // 欄）——之前會將姓名當代號展開入日期格。當空白跳過＋警告。
+      const masterAddress = cell.master.address;
+      const cols = [col];
+      let probe = col + 1;
+      while (probe <= endCol && ws.getRow(row).getCell(probe).isMerged && ws.getRow(row).getCell(probe).master.address === masterAddress) {
+        cols.push(probe);
+        probe += 1;
+      }
+      groups.push({ cols, rawValue: null, isMultiCol: false, extendsBeyondRange: false, startsBeforeRange: true });
+      col = probe;
       continue;
     }
     const masterAddress = cell.isMerged ? cell.master.address : cell.address;
@@ -228,7 +245,9 @@ function collectDateMergeGroups(ws: ExcelJS.Worksheet, row: number, startCol: nu
       }
     }
     let extendsBeyondRange = false;
-    if (cols.length > 1) {
+    // 驗收 2026-09-23：淨係最後一個日期格同備註欄合併（日期部分得 1 格）
+    // 之前唔會出警告——改做只要 group 去到 endCol 而且係合併格就檢查。
+    if (cell.isMerged && cols[cols.length - 1] === endCol) {
       const afterCell = ws.getRow(row).getCell(endCol + 1);
       if (afterCell.isMerged && afterCell.master.address === masterAddress) extendsBeyondRange = true;
     }
@@ -300,6 +319,13 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
       // 如連埋備註欄）就淨係展開日期欄部分＋另加一個警告。
       const mergeGroups = collectDateMergeGroups(ws, r, mapping.dateStartCol, mapping.dateEndCol);
       for (const group of mergeGroups) {
+        if (group.startsBeforeRange) {
+          const firstCell = ws.getRow(r).getCell(group.cols[0]!);
+          warnings.push({
+            row: r,
+            reason: `合併儲存格（${firstCell.master.address} 開始）由日期欄前面伸入日期欄（${firstCell.address}），嗰幾格當空白跳過，人手覆核`,
+          });
+        }
         if (group.extendsBeyondRange) {
           const firstCell = ws.getRow(r).getCell(group.cols[0]!);
           warnings.push({

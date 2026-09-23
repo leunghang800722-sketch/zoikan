@@ -31,6 +31,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseRosterWorkbook } from "@/lib/roster-upload/parse";
+import { rosterFixtureKey } from "./roster-fixture-key";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const DATA_DIR = path.resolve(REPO_ROOT, "data/2026-09/aug-rosters");
@@ -84,14 +85,17 @@ async function main() {
   let okCount = 0;
   const failedFiles: string[] = [];
 
-  for (const fileName of xlsxFiles) {
+  for (const diskFileName of xlsxFiles) {
+    // 驗收 2026-09-23：fixture key 唔帶人名／工號（見 roster-fixture-key.ts），
+    // console 輸出亦一律用 key，唔印原檔名。
+    const fileName = rosterFixtureKey(diskFileName);
     const expected = fixture.files[fileName];
     if (!expected) {
       console.log(`[gate:roster-parse] FAIL — ${fileName}：fixture 冇呢個檔（新檔？要重新生成 fixture）`);
       failedFiles.push(fileName);
       continue;
     }
-    const buffer = fs.readFileSync(path.join(DATA_DIR, fileName));
+    const buffer = fs.readFileSync(path.join(DATA_DIR, diskFileName));
     const result = await parseRosterWorkbook(buffer, fileName);
     if (!result.ok) {
       console.log(`[gate:roster-parse] FAIL — ${fileName}：解析失敗（${result.error}）`);
@@ -124,7 +128,8 @@ async function main() {
 
   // fixture 有但本機 xlsx 冇（唔應該發生，36 個檔一齊上載／一齊缺）——
   // 唔當 fail（本機可能淨係有部分檔），淨係提示。
-  const missingFromDisk = Object.keys(fixture.files).filter((f) => !xlsxFiles.includes(f));
+  const diskKeys = xlsxFiles.map(rosterFixtureKey);
+  const missingFromDisk = Object.keys(fixture.files).filter((f) => !diskKeys.includes(f));
   if (missingFromDisk.length) {
     console.log(`[gate:roster-parse] INFO — fixture 有但本機 ${path.relative(REPO_ROOT, DATA_DIR)} 冇嘅檔（${missingFromDisk.length} 個）：${missingFromDisk.join("、")}`);
   }
