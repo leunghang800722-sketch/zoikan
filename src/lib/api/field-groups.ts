@@ -41,6 +41,9 @@ export const CLIENT_RATE_FIELDS = {
   guard_phones: [],
   guard_emergency_contacts: [],
   guard_addresses: [],
+  // WP-ROSTER-UPLOAD Phase A：冇「收客價」性質嘅欄。
+  roster_uploads: [],
+  roster_upload_rows: [],
 } as const;
 
 export const SETTLEMENT_FIELDS = {
@@ -75,6 +78,10 @@ export const SETTLEMENT_FIELDS = {
   guard_phones: [],
   guard_emergency_contacts: [],
   guard_addresses: [],
+  // WP-ROSTER-UPLOAD Phase A：冇「出街價」性質嘅欄（settlement_broker_id
+  // 係配對結果唔係金錢，唔屬於呢個 field group）。
+  roster_uploads: [],
+  roster_upload_rows: [],
 } as const;
 
 // WP-PII（老闆 2026-09-17 拍板）：保安員「安員個人資料」／「安員銀行
@@ -106,6 +113,15 @@ export const GUARD_PII_FIELDS = {
   guard_phones: [],
   guard_emergency_contacts: ["name", "tel", "relationship", "note"],
   guard_addresses: ["address", "note"],
+  // WP-ROSTER-UPLOAD Phase A（§15.3）：`roster_upload_rows` 嘅
+  // `name_raw`／`tel_raw`／`staff_no_raw`——更表檔案逐行原文姓名／電話／
+  // 工號（可能未配對成功嘅人），同「安員個人資料」一致敏感度。冇
+  // 「安員個人資料:view」嘅內部角色（例如關咗呢格嘅主管）就算有「更表
+  // 上載:view」都見唔到呢三隻欄，`code_raw`／`work_date`／配對結果等
+  // 唔屬於 PII 嘅欄唔受影響。`roster_uploads` 本身（月份/盤/檔名/版本）
+  // 冇逐行 PII，留空。
+  roster_uploads: [],
+  roster_upload_rows: ["name_raw", "tel_raw", "staff_no_raw"],
 } as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
 
 export const GUARD_BANK_FIELDS = {
@@ -121,6 +137,9 @@ export const GUARD_BANK_FIELDS = {
   guard_phones: [],
   guard_emergency_contacts: [],
   guard_addresses: [],
+  // WP-ROSTER-UPLOAD Phase A：冇銀行類欄。
+  roster_uploads: [],
+  roster_upload_rows: [],
 } as const satisfies Record<keyof typeof CLIENT_RATE_FIELDS, readonly string[]>;
 
 export type FieldGroupResource = keyof typeof CLIENT_RATE_FIELDS;

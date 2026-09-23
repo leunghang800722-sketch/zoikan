@@ -1,0 +1,824 @@
+{
+  "note": "由 data/2026-09/aug-payroll-trial/out-rosters/records.jsonl（8 月試算，python importer + 7 patch）彙總生成，只存數目/日期範圍/盤名/子盤名，冇任何姓名/電話/工號。生成方式：npx tsx scripts/gate/build-roster-parse-fixture.ts。layout_key 唔含 date-gap 標記（試算 CSV 冇留低呢個訊號，見 scripts/gate/roster-parse.ts 頂註解）。",
+  "generatedAt": "2026-09-23T07:15:39.113Z",
+  "fileCount": 36,
+  "files": {
+    "Roster - 3172 殷樺花園 - Aug 2026.xlsx": {
+      "siteRaw": "殷樺花園",
+      "layoutKey": "standard",
+      "totalCellCount": 23,
+      "shiftCount": 23,
+      "codeBreakdown": {
+        "N": 23
+      },
+      "codeKindBreakdown": {
+        "shift": 23,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-02",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 7141 IFC 70樓 - Aug 2026.xlsx": {
+      "siteRaw": "IFC 70樓",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 46,
+      "shiftCount": 41,
+      "codeBreakdown": {
+        "D": 10,
+        "N": 31,
+        "RD": 5
+      },
+      "codeKindBreakdown": {
+        "shift": 41,
+        "leave": 5,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 7324 粉嶺安樂村貨倉 - Aug 2026.xlsx": {
+      "siteRaw": "粉嶺貨倉",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 67,
+      "shiftCount": 62,
+      "codeBreakdown": {
+        "D": 31,
+        "RD": 5,
+        "N": 31
+      },
+      "codeKindBreakdown": {
+        "shift": 62,
+        "leave": 5,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 7754  Weave OL - Aug 2026.xlsx": {
+      "siteRaw": "Weave Olympic",
+      "layoutKey": "standard",
+      "totalCellCount": 31,
+      "shiftCount": 31,
+      "codeBreakdown": {
+        "N": 31
+      },
+      "codeKindBreakdown": {
+        "shift": 31,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 7767 皓日 - Aug 2026.xlsx": {
+      "siteRaw": "皓日",
+      "layoutKey": "standard",
+      "totalCellCount": 6,
+      "shiftCount": 6,
+      "codeBreakdown": {
+        "D": 6
+      },
+      "codeKindBreakdown": {
+        "shift": 6,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-17",
+        "max": "2026-08-24"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9314 HKU Y更 - Aug 2026.xlsx": {
+      "siteRaw": "HKU",
+      "layoutKey": "standard",
+      "totalCellCount": 148,
+      "shiftCount": 148,
+      "codeBreakdown": {
+        "Y": 148
+      },
+      "codeKindBreakdown": {
+        "shift": 148,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9314 HKU座頭 C更 - Aug 2026.xlsx": {
+      "siteRaw": "HKU 座頭",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 216,
+      "shiftCount": 204,
+      "codeBreakdown": {
+        "C": 112,
+        "RD": 10,
+        "SL": 1,
+        "C1": 92,
+        "OT1": 1
+      },
+      "codeKindBreakdown": {
+        "shift": 204,
+        "leave": 11,
+        "ot": 1,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9314 醫學院 - Aug 2026.xlsx": {
+      "siteRaw": "香港大學李嘉誠醫學院",
+      "layoutKey": "standard",
+      "totalCellCount": 2,
+      "shiftCount": 2,
+      "codeBreakdown": {
+        "C": 2
+      },
+      "codeKindBreakdown": {
+        "shift": 2,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-23",
+        "max": "2026-08-24"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9605 屯門凱和山 - Aug 2026.xlsx": {
+      "siteRaw": "屯門凱和山",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 50,
+      "shiftCount": 50,
+      "codeBreakdown": {
+        "D": 3,
+        "N": 47
+      },
+      "codeKindBreakdown": {
+        "shift": 50,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9610 國泰城 - Aug 2026.xlsx": {
+      "siteRaw": "國泰城",
+      "layoutKey": "digital_port+multi-block",
+      "totalCellCount": 84,
+      "shiftCount": 84,
+      "codeBreakdown": {
+        "D": 33,
+        "N": 51
+      },
+      "codeKindBreakdown": {
+        "shift": 84,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9615 數碼港 - Aug 2026.xlsx": {
+      "siteRaw": "數碼港 CP1-4",
+      "layoutKey": "digital_port+multi-block",
+      "totalCellCount": 261,
+      "shiftCount": 218,
+      "codeBreakdown": {
+        "D": 75,
+        "RD": 25,
+        "OFF": 13,
+        "N": 143,
+        "AL": 2,
+        "NL": 3
+      },
+      "codeKindBreakdown": {
+        "shift": 218,
+        "leave": 43,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9615 數碼港 CP5 - Aug 2026.xlsx": {
+      "siteRaw": "數碼港 CP5",
+      "layoutKey": "digital_port+multi-block",
+      "totalCellCount": 382,
+      "shiftCount": 344,
+      "codeBreakdown": {
+        "SL": 11,
+        "D": 282,
+        "RD": 21,
+        "NL": 1,
+        "AL": 3,
+        "數據中心": 2,
+        "N": 62
+      },
+      "codeKindBreakdown": {
+        "shift": 344,
+        "leave": 36,
+        "ot": 0,
+        "marker": 2,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 9615 數碼港 CP5 數據中心 - Aug 2026.xlsx": {
+      "siteRaw": "數碼港 Cyberport CP5 數據中心",
+      "layoutKey": "digital_port",
+      "totalCellCount": 21,
+      "shiftCount": 21,
+      "codeBreakdown": {
+        "D": 21
+      },
+      "codeKindBreakdown": {
+        "shift": 21,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-03",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - CTB 6907 Aug 2026.xlsx": {
+      "siteRaw": "城巴車廠",
+      "layoutKey": "citybus",
+      "totalCellCount": 22,
+      "shiftCount": 22,
+      "codeBreakdown": {
+        "D": 22
+      },
+      "codeKindBreakdown": {
+        "shift": 22,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": [
+        "創富車廠"
+      ]
+    },
+    "Roster - Garden East - Aug 2026.xlsx": {
+      "siteRaw": "Garden East",
+      "layoutKey": "standard+no-broker-col",
+      "totalCellCount": 10,
+      "shiftCount": 10,
+      "codeBreakdown": {
+        "D": 10
+      },
+      "codeKindBreakdown": {
+        "shift": 10,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-22",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - M+ - Aug 2026.xlsx": {
+      "siteRaw": "M+",
+      "layoutKey": "standard",
+      "totalCellCount": 31,
+      "shiftCount": 26,
+      "codeBreakdown": {
+        "N": 26,
+        "RD": 5
+      },
+      "codeKindBreakdown": {
+        "shift": 26,
+        "leave": 5,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - Weave Hospital Road - Aug 2026.xlsx": {
+      "siteRaw": "Weave Hospital Road",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 36,
+      "shiftCount": 36,
+      "codeBreakdown": {
+        "D": 4,
+        "N": 32
+      },
+      "codeKindBreakdown": {
+        "shift": 36,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - Weave Robinson - Aug 2026.xlsx": {
+      "siteRaw": "Weave Robinson",
+      "layoutKey": "standard",
+      "totalCellCount": 31,
+      "shiftCount": 31,
+      "codeBreakdown": {
+        "N": 31
+      },
+      "codeKindBreakdown": {
+        "shift": 31,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - Wilson Control - Aug 2026.xlsx": {
+      "siteRaw": "Wilson Control",
+      "layoutKey": "citybus",
+      "totalCellCount": 62,
+      "shiftCount": 47,
+      "codeBreakdown": {
+        "N": 47,
+        "RD": 15
+      },
+      "codeKindBreakdown": {
+        "shift": 47,
+        "leave": 15,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": [
+        "Head Office"
+      ]
+    },
+    "Roster - Wilson Patrol -  Aug 2026.xlsx": {
+      "siteRaw": "Wilson Patrol",
+      "layoutKey": "standard",
+      "totalCellCount": 31,
+      "shiftCount": 25,
+      "codeBreakdown": {
+        "N": 25,
+        "RD": 6
+      },
+      "codeKindBreakdown": {
+        "shift": 25,
+        "leave": 6,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 九龍企業大廈 - Aug 2026.xlsx": {
+      "siteRaw": "九龍企業大廈",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 63,
+      "shiftCount": 63,
+      "codeBreakdown": {
+        "D": 32,
+        "N": 31
+      },
+      "codeKindBreakdown": {
+        "shift": 63,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 免稅店 Aug 2026.xlsx": {
+      "siteRaw": "免稅店",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 7,
+      "shiftCount": 7,
+      "codeBreakdown": {
+        "D": 5,
+        "M": 2
+      },
+      "codeKindBreakdown": {
+        "shift": 7,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-18",
+        "max": "2026-08-26"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 城巴車廠 - Aug 2026.xlsx": {
+      "siteRaw": "城巴車廠",
+      "layoutKey": "citybus+multi-block+multi-subsite",
+      "totalCellCount": 580,
+      "shiftCount": 546,
+      "codeBreakdown": {
+        "N": 351,
+        "D": 195,
+        "RD": 22,
+        "OFF": 8,
+        "SL": 2,
+        "NL": 2
+      },
+      "codeKindBreakdown": {
+        "shift": 546,
+        "leave": 34,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": [
+        "上環城巴車廠",
+        "創富車廠",
+        "將軍澳城巴車廠",
+        "屯門城巴車廠",
+        "東涌城巴車廠",
+        "柴灣城巴車廠",
+        "海洋公園城巴車廠",
+        "西九龍城巴車廠",
+        "黃竹坑城巴車廠"
+      ]
+    },
+    "Roster - 屯門小欖樂怡街5號 - Aug 2026.xlsx": {
+      "siteRaw": "屯門小欖樂怡街5號",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 62,
+      "shiftCount": 62,
+      "codeBreakdown": {
+        "D": 31,
+        "N": 31
+      },
+      "codeKindBreakdown": {
+        "shift": 62,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 希慎廣場 - Aug 2026.xlsx": {
+      "siteRaw": "希慎廣場",
+      "layoutKey": "standard+no-broker-col",
+      "totalCellCount": 8,
+      "shiftCount": 8,
+      "codeBreakdown": {
+        "N": 8
+      },
+      "codeKindBreakdown": {
+        "shift": 8,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-19",
+        "max": "2026-08-28"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 怡安168 - Aug 2026.xlsx": {
+      "siteRaw": "怡安168",
+      "layoutKey": "standard",
+      "totalCellCount": 9,
+      "shiftCount": 9,
+      "codeBreakdown": {
+        "N": 9
+      },
+      "codeKindBreakdown": {
+        "shift": 9,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-28"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 恆星樓 - Aug 2026.xlsx": {
+      "siteRaw": "恆星樓",
+      "layoutKey": "standard",
+      "totalCellCount": 62,
+      "shiftCount": 62,
+      "codeBreakdown": {
+        "D": 31,
+        "N": 31
+      },
+      "codeKindBreakdown": {
+        "shift": 62,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 啟航1331 - Aug 2026.xlsx": {
+      "siteRaw": "啟航1331",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 1352,
+      "shiftCount": 1150,
+      "codeBreakdown": {
+        "RD": 154,
+        "IC": 379,
+        "NPL": 45,
+        "OT3.5": 2,
+        "D": 369,
+        "AL": 1,
+        "SIC": 31,
+        "N": 371
+      },
+      "codeKindBreakdown": {
+        "shift": 1150,
+        "leave": 200,
+        "ot": 2,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 啟航1331 Event - Aug 2026.xlsx": {
+      "siteRaw": "啟航1331 Event Guard",
+      "layoutKey": "standard",
+      "totalCellCount": 4,
+      "shiftCount": 4,
+      "codeBreakdown": {
+        "D": 4
+      },
+      "codeKindBreakdown": {
+        "shift": 4,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-31",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 新皇崗口岸 - Aug 2026.xlsx": {
+      "siteRaw": "新皇崗口岸",
+      "layoutKey": "standard",
+      "totalCellCount": 6,
+      "shiftCount": 6,
+      "codeBreakdown": {
+        "D": 6
+      },
+      "codeKindBreakdown": {
+        "shift": 6,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-15",
+        "max": "2026-08-29"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 東濤苑 - Aug 2026.xlsx": {
+      "siteRaw": "東濤苑",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 25,
+      "shiftCount": 25,
+      "codeBreakdown": {
+        "D": 4,
+        "M": 15,
+        "N": 6
+      },
+      "codeKindBreakdown": {
+        "shift": 25,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-15"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 淺水灣道11號蔚峰園 - Aug 2026.xlsx": {
+      "siteRaw": "淺水灣道11號蔚峰園",
+      "layoutKey": "standard+multi-block",
+      "totalCellCount": 99,
+      "shiftCount": 99,
+      "codeBreakdown": {
+        "D": 62,
+        "N": 37
+      },
+      "codeKindBreakdown": {
+        "shift": 99,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-01",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 港深創新及科技園 - Aug 2026.xlsx": {
+      "siteRaw": "港深創新及科技園",
+      "layoutKey": "standard",
+      "totalCellCount": 21,
+      "shiftCount": 21,
+      "codeBreakdown": {
+        "D": 21
+      },
+      "codeKindBreakdown": {
+        "shift": 21,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-06",
+        "max": "2026-08-21"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 美心集團中心 - Aug 2026.xlsx": {
+      "siteRaw": "美心集團中心",
+      "layoutKey": "standard",
+      "totalCellCount": 4,
+      "shiftCount": 4,
+      "codeBreakdown": {
+        "D": 4
+      },
+      "codeKindBreakdown": {
+        "shift": 4,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-25",
+        "max": "2026-08-28"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 葵發大廈 - Aug 2026.xlsx": {
+      "siteRaw": "葵發大廈",
+      "layoutKey": "standard",
+      "totalCellCount": 8,
+      "shiftCount": 8,
+      "codeBreakdown": {
+        "D": 4,
+        "N": 4
+      },
+      "codeKindBreakdown": {
+        "shift": 8,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-03",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": []
+    },
+    "Roster - 都會大學 - Aug 2026.xlsx": {
+      "siteRaw": "都會大學學生宿舍",
+      "layoutKey": "citybus",
+      "totalCellCount": 17,
+      "shiftCount": 17,
+      "codeBreakdown": {
+        "D": 17
+      },
+      "codeKindBreakdown": {
+        "shift": 17,
+        "leave": 0,
+        "ot": 0,
+        "marker": 0,
+        "unknown": 0
+      },
+      "dateRange": {
+        "min": "2026-08-03",
+        "max": "2026-08-31"
+      },
+      "subSiteNames": [
+        "都會大學學生宿舍"
+      ]
+    }
+  }
+}

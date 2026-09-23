@@ -64,6 +64,13 @@ export const MODULES = [
   // 硬性禁止——同「呢個 module 硬性拒絕嘅角色連 AI 助手都攞唔到」直接對應
   // requirePermission(req, "助手", "view") 喺 chat route 嘅第一道閘。
   "助手",
+  // WP-ROSTER-UPLOAD Phase A（老闆 2026-09-21/23 拍板，§15）——會計／
+  // 老闆每月上載嘅、每個盤自己嘅更表檔案（xlsx），係計糧嘅 authoritative
+  // source（唔係雞頭／同事喺系統自己報更嗰啲）。老闆 2026-09-23 明文答
+  // 「上載權限：會計、主管、老闆」三類——雞頭／安員硬性拒（檔案含逐行
+  // 姓名／電話／工號原文，同 WP-PII 級別一致，雞頭連自己嗰盤嘅上載都
+  // 見唔到）。
+  "更表上載",
 ] as const;
 export type Module = (typeof MODULES)[number];
 
@@ -122,6 +129,7 @@ const OWNER: RoleMatrix = {
   安員個人資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
   助手: row(G, NA, NA, NA, NA), // WP-AI1：老闆✓——view 有意義，其餘 N/A
+  更表上載: row(G, G, G, NA, NA), // WP-ROSTER-UPLOAD：老闆上載/睇/PATCH（人手指定盤）全部✓；冇 void 概念（同盤同月新上載自動 supersede 舊版）
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +162,7 @@ const SUPERVISOR: RoleMatrix = {
   安員個人資料: row(O, NA, O, NA, NA),
   安員銀行資料: uniformRow(D),
   助手: row(G, NA, NA, NA, NA), // WP-AI1：主管✓
+  更表上載: row(G, G, G, NA, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載
 };
 
 // ---------------------------------------------------------------------------
@@ -183,6 +192,7 @@ const ACCOUNTANT: RoleMatrix = {
   安員個人資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
   助手: row(G, NA, NA, NA, NA), // WP-AI1：會計✓
+  更表上載: row(G, G, G, NA, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載
 };
 
 // ---------------------------------------------------------------------------
@@ -231,6 +241,7 @@ const BROKER: RoleMatrix = {
   安員個人資料: uniformRow(D),
   安員銀行資料: uniformRow(D),
   助手: uniformRow(D), // WP-AI1：硬性禁止——雞頭永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
+  更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒——雞頭連自己嗰盤嘅上載都見唔到（老闆「上載權限：會計、主管、老闆」三類）
 };
 
 // ---------------------------------------------------------------------------
@@ -260,6 +271,7 @@ const GUARD_SELF: RoleMatrix = {
   安員個人資料: uniformRow(D), // WP-PII：安員硬性拒（P1 都唔做安員端，跟返成頁硬性拒絕嘅精神）
   安員銀行資料: uniformRow(D), // WP-PII：安員硬性拒
   助手: uniformRow(D), // WP-AI1：硬性禁止——安員永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
+  更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒
 };
 
 export const DEFAULT_MATRIX: Record<RoleName, RoleMatrix> = {

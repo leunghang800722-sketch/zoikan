@@ -693,3 +693,20 @@ export const MonthOpenSchema = z
     roster_version_note: z.string().optional(),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// WP-ROSTER-UPLOAD Phase A（§15.3）：`POST /api/roster-uploads` 係
+// multipart/form-data（帶檔案），唔經呢個 zod schema／`parseBody()`（嗰
+// 個淨係做 JSON body）——非檔案欄位（`month`／`site_id`）由 route 自己
+// 由 FormData 讀出嚟，再用呢個 schema 驗證（見 route.ts）。
+export const RosterUploadFormFieldsSchema = z
+  .object({
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])(-\d{2})?$/, "月份格式要係 YYYY-MM 或 YYYY-MM-DD"),
+    site_id: uuid.optional(),
+  })
+  .strict();
+export const RosterUploadPatchSchema = z
+  .object({
+    site_id: z.union([z.null(), uuid]), // 人手指定盤（清返做未指定用 null）
+  })
+  .strict();

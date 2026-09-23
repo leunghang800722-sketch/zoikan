@@ -134,6 +134,40 @@ enum PayoutBatchStatus {
   paid
 }
 
+// WP-ROSTER-UPLOAD Phase A（老闆 2026-09-21/23 拍板，§15）：逐盤更表檔案
+// 上載嘅生命週期。`confirmed` 留俾 Phase B（對數確認之後）用，Phase A
+// 唔會寫呢個值。同盤同月新上載一律將舊版行改做 `superseded`（舊版留底，
+// 唔刪）。
+enum RosterUploadStatus {
+  uploaded // 檔案已存底，解析未行完／未存 rows（理論上短暫狀態，解析係
+  // 上載嗰刻同步做，正常唔會停留喺呢個狀態）
+  parsed // 解析成功，rows 已存
+  parse_failed // 解析拋錯（壞檔／完全冇 Date 表頭），rows 冇存，parse_error 有原因
+  superseded // 同盤同月俾更新嘅版本取代，留底唔刪
+  confirmed // Phase B 用：對數確認完成
+}
+
+// 逐格代號嘅種類——對應 tools/importer cell_codes.csv 嘅 kind，`pointer`
+// 呢個 python 名改做 `marker`（同 P2 §15.3 用字一致：數碼港 CP5「數據
+// 中心」指針格）。
+enum RosterUploadCodeKind {
+  shift // 正更（python 版 kind=work）
+  leave // 假期代號（RD/AL/SL/NL/SH/OFF/NPL…）
+  ot // OT<n> 超時
+  marker // 指針格（例：數碼港 CP5「數據中心」），唔算一更
+  unknown // 對唔到 cell_codes 對照表，人手覆核
+}
+
+// 逐行安員配對嘅結果——「唔准估」，配對唔到就 unmatched，唔會靜靜襲用第
+// 一個近似結果。
+enum RosterUploadGuardMatch {
+  by_staff_no // staff_no_raw 正規化之後對到 guard_staff_numbers/guards.staff_no
+  by_name_tel // name+tel 一齊啱先當啱
+  by_name // 淨係憑姓名啱（風險較高，UI 要標）
+  unmatched // 完全對唔到
+  ambiguous // 對到多過一個候選，人手覆核
+}
+
 // ---------------------------------------------------------------------------
 // brokers 雞頭
 // ---------------------------------------------------------------------------
@@ -162,6 +196,7 @@ model Broker {
   specialItems            SpecialItem[]
   siteAssignments         BrokerSiteAssignment[]
   quotas                  Quota[]
+  rosterUploadRows        RosterUploadRow[]
 
   @@map("brokers")
 }
@@ -273,24 +308,24 @@ model Guard {
   // 部分」）。`ai.guards` view（見 prisma/migrations/…wp_ai1_readonly_
   // schema）明列欄位，呢 16 個新欄一律唔加入去——AI 助手結構上讀唔到
   // （唔淨係 field-scrub 呢層 defense-in-depth，係 DB view 本身冇呢啲欄）。
-  hkid                 String?      @map("hkid") // 身份證號碼——列表遮罩顯示，詳情/編輯有「安員個人資料:view」先見全號
-  dateOfBirth          DateTime?    @map("date_of_birth") @db.Date
-  address              String?      @map("address")
-  emergencyContactName String?      @map("emergency_contact_name")
-  emergencyContactTel  String?      @map("emergency_contact_tel")
-  siaPermitNo          String?      @map("sia_permit_no")
+  hkid                 String?   @map("hkid") // 身份證號碼——列表遮罩顯示，詳情/編輯有「安員個人資料:view」先見全號
+  dateOfBirth          DateTime? @map("date_of_birth") @db.Date
+  address              String?   @map("address")
+  emergencyContactName String?   @map("emergency_contact_name")
+  emergencyContactTel  String?   @map("emergency_contact_tel")
+  siaPermitNo          String?   @map("sia_permit_no")
   // WP-STAFFNO（老闆 2026-09-19 拍板）：`siaPermitType` 改做**衍生顯示值**
   // （A／B／A+B，見 `deriveSiaPermitExpiry()`），唔再直接接受 API 寫入——
   // 真正存底嘅係下面 siaPermitAExpiry／siaPermitBExpiry 兩個獨立到期日。
-  siaPermitType        String?      @map("sia_permit_type") // 衍生值：A／B／A+B（PATCH 甲/乙/出生日期時自動重算，唔准直接寫）
+  siaPermitType        String?   @map("sia_permit_type") // 衍生值：A／B／A+B（PATCH 甲/乙/出生日期時自動重算，唔准直接寫）
   // WP-STAFFNO：甲類／乙類到期日分開存（乙類過 70 歲失效，淨返甲類仍要
   // 存底——兩個都要存，唔係二揀一）。`siaPermitExpiry`（下面）保留做
   // **衍生值**＝兩個入面「仍然有效而最早到期」嗰個，`ai.guards` view／
   // 90 日篩選繼續讀呢個舊欄，唔使改。
-  siaPermitAExpiry     DateTime?    @map("sia_permit_a_expiry") @db.Date
-  siaPermitBExpiry     DateTime?    @map("sia_permit_b_expiry") @db.Date
-  safetyCardNo         String?      @map("safety_card_no") // 平安卡號碼
-  safetyCardExpiry     DateTime?    @map("safety_card_expiry") @db.Date
+  siaPermitAExpiry     DateTime? @map("sia_permit_a_expiry") @db.Date
+  siaPermitBExpiry     DateTime? @map("sia_permit_b_expiry") @db.Date
+  safetyCardNo         String?   @map("safety_card_no") // 平安卡號碼
+  safetyCardExpiry     DateTime? @map("safety_card_expiry") @db.Date
   // WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）日期——跟
   // 「安員」module（同牌照／平安卡欄一樣嘅讀寫規則）。`qasIssueDate`＝
   // 完成日期（UI 標籤「QAS 完成日期」），`qasExpiryDate`＝到期日（如有，
@@ -298,24 +333,24 @@ model Guard {
   // 日子＝到期，混雜咗，分開兩欄先唔會入錯。`qasExpiryDate` 納入「90 日
   // 內到期／已過期」高亮同列表最近到期 pill（同 safetyCardExpiry 一樣，
   // 見 earlierExpiry() / licenceExpiryPill()）。
-  qasIssueDate         DateTime?    @map("qas_issue_date") @db.Date
-  qasExpiryDate        DateTime?    @map("qas_expiry_date") @db.Date
-  hireDate             DateTime?    @map("hire_date") @db.Date
-  leaveDate            DateTime?    @map("leave_date") @db.Date
-  bankName             String?      @map("bank_name")
-  bankAccountNo        String?      @map("bank_account_no")
-  bankPayeeName        String?      @map("bank_payee_name")
-  blacklistCheckResult String?      @map("blacklist_check_result") // clear／flagged／pending，zod 白名單管
-  blacklistCheckDate   DateTime?    @map("blacklist_check_date") @db.Date
+  qasIssueDate         DateTime? @map("qas_issue_date") @db.Date
+  qasExpiryDate        DateTime? @map("qas_expiry_date") @db.Date
+  hireDate             DateTime? @map("hire_date") @db.Date
+  leaveDate            DateTime? @map("leave_date") @db.Date
+  bankName             String?   @map("bank_name")
+  bankAccountNo        String?   @map("bank_account_no")
+  bankPayeeName        String?   @map("bank_payee_name")
+  blacklistCheckResult String?   @map("blacklist_check_result") // clear／flagged／pending，zod 白名單管
+  blacklistCheckDate   DateTime? @map("blacklist_check_date") @db.Date
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
-  rateCards    RateCard[]
-  shiftRecords ShiftRecord[]
-  users        User[]
-  staffNumbers GuardStaffNumber[]
+  rateCards         RateCard[]
+  shiftRecords      ShiftRecord[]
+  users             User[]
+  staffNumbers      GuardStaffNumber[]
   // WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀一個」）：
   // 電話／緊急聯絡人／地址呢三樣而家可以「有幾多個記幾多個」，方案跟
   // WP-STAFFNO 一致（獨立子表＋`guards.tel`／`address`／
@@ -324,6 +359,7 @@ model Guard {
   phones            GuardPhone[]
   emergencyContacts GuardEmergencyContact[]
   addresses         GuardAddress[]
+  rosterUploadRows  RosterUploadRow[]
 
   @@map("guards")
 }
@@ -345,8 +381,8 @@ model GuardPhone {
   isPrimary Boolean @default(false) @map("is_primary")
   // migration:tel（由 guards.tel backfill 嚟）／manual（API 手動加）等，
   // 同 GuardStaffNumber.source 一致做法。
-  source String?
-  note   String?
+  source    String?
+  note      String?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -417,7 +453,7 @@ model GuardStaffNumber {
 
   scheme String // U/MP/MG/MW/…，app 層 regex 驗證（^[A-Z]{1,4}$）
   // 全表 unique——同一個工號唔可以掛喺兩個唔同 guard（POST 撞號 409）。
-  number String @unique
+  number String                 @unique
   status GuardStaffNumberStatus @default(current)
 
   validFrom DateTime? @map("valid_from") @db.Date
@@ -425,7 +461,7 @@ model GuardStaffNumber {
   note      String?
   // migration:staff_no／migration:staff_no_mw（搬遷嚟）／manual（API 手動
   // 加）／import:u-team 等——邊度嚟嘅呢一行。
-  source String?
+  source    String?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -448,21 +484,23 @@ enum GuardStaffNumberStatus {
 // sites 盤
 // ---------------------------------------------------------------------------
 model Site {
-  id            String        @id @default(uuid())
-  canonicalName String        @unique @map("canonical_name")
-  aliases       String[]      @default([])
-  clientName    String        @map("client_name")
-  clientGroup   String?       @map("client_group")
-  parentSiteId  String?       @map("parent_site_id")
-  parent        Site?         @relation("SiteParent", fields: [parentSiteId], references: [id])
-  children      Site[]        @relation("SiteParent")
-  billingModel  BillingModel  @map("billing_model")
-  monthlyFee    Decimal?      @map("monthly_fee") @db.Decimal(12, 2)
-  monthlyPosts  Int?          @map("monthly_posts") // 每崗月費 × 崗數
-  prorataBasis  ProrataBasis? @map("prorata_basis")
-  inScope       Boolean       @default(true) @map("in_scope")
-  /** 月結「以外」：收入唔入月結總表主表（例如客戶另有合約嘅盤）；seed 由 data/mappings-private/report-overrides.json 嘅客戶名填，之後由盤管理頁改 */
-  outsideMonthlyClose Boolean @default(false) @map("outside_monthly_close")
+  id                  String        @id @default(uuid())
+  canonicalName       String        @unique @map("canonical_name")
+  aliases             String[]      @default([])
+  clientName          String        @map("client_name")
+  clientGroup         String?       @map("client_group")
+  parentSiteId        String?       @map("parent_site_id")
+  parent              Site?         @relation("SiteParent", fields: [parentSiteId], references: [id])
+  children            Site[]        @relation("SiteParent")
+  billingModel        BillingModel  @map("billing_model")
+  monthlyFee          Decimal?      @map("monthly_fee") @db.Decimal(12, 2)
+  monthlyPosts        Int?          @map("monthly_posts") // 每崗月費 × 崗數
+  prorataBasis        ProrataBasis? @map("prorata_basis")
+  inScope             Boolean       @default(true) @map("in_scope")
+  /**
+   * 月結「以外」：收入唔入月結總表主表（例如客戶另有合約嘅盤）；seed 由 data/mappings-private/report-overrides.json 嘅客戶名填，之後由盤管理頁改
+   */
+  outsideMonthlyClose Boolean       @default(false) @map("outside_monthly_close")
   // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢批盤嘅
   // 保安員由客戶（Wilson）直接出糧，我哋淨係收每月服務費——唔逐更計
   // 客價／工資，唔使價目卡。true 嘅盤：(1) computeUnpricedSummary()／
@@ -471,14 +509,14 @@ model Site {
   // （已有值唔清，保守）；(3) 更表編輯器頂部 Notice；(4) 盤管理頁可切換
   // （跟「盤」module update 權限）；(5) 唔改 gross-margin 服務費收入點計
   // （老闆話維持現狀）。見 src/lib/pricing/unpriced.ts、resolve-rate.ts。
-  guardsPaidByClient Boolean @default(false) @map("guards_paid_by_client")
-  status        SiteStatus    @default(active)
+  guardsPaidByClient  Boolean       @default(false) @map("guards_paid_by_client")
+  status              SiteStatus    @default(active)
   // P1-WP3：更表版面模板（`RosterLayoutTemplate`，見
   // src/lib/roster-layout-template.ts）——由 seed 時由 data/ 讀出反推
   // 寫入（scripts/seed/lib/roster-layout.ts），匯出（src/lib/
   // roster-export.ts）用嚟出到原檔一致嘅 block 分組／橫額／表頭裝飾字。
   // null＝未有模板，匯出跌返用generic嘅「一個shift_type一個block」邏輯。
-  rosterLayout  Json?         @map("roster_layout")
+  rosterLayout        Json?         @map("roster_layout")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -492,6 +530,7 @@ model Site {
   referralFeeRates  ReferralFeeRate[]
   brokerAssignments BrokerSiteAssignment[]
   quotas            Quota[]
+  rosterUploads     RosterUpload[]
 
   @@map("sites")
 }
@@ -523,6 +562,7 @@ model ShiftType {
   shiftRecords      ShiftRecord[]
   dailyRequirements DailyRequirement[]
   quotas            Quota[]
+  rosterUploadRows  RosterUploadRow[]
 
   // 規劃 session 裁定（2026-09-11）：DB 層強制 (site_id, code, start_time)
   // 唯一——master-roster-only 合成更別（例：國泰城 S038）seed 時逐個 post
@@ -622,6 +662,89 @@ model ShiftRecord {
   @@index([siteId, workDate])
   @@index([workDate])
   @@map("shift_records")
+}
+
+// ---------------------------------------------------------------------------
+// WP-ROSTER-UPLOAD Phase A（§15）：逐盤更表檔案上載——會計／主管／老闆
+// 每月上載嘅、每個盤自己嘅更表檔案（xlsx），係計糧嘅 authoritative
+// source（規則 11）。Phase A 淨係存＋解析＋顯示，**唔寫入
+// shift_records**（對數＋寫入係 Phase B）。
+//
+// 檔案 bytes 存喺 DB（`file_bytes bytea`）——雞頭永遠冇「更表上載」
+// module 嘅任何 grant（硬性 deny），連呢張表嘅 view 都攞唔到，file_bytes
+// 更加冇任何 API 會回俾佢；AI 助手：`ai.*` schema 完全冇 `ai.roster_
+// uploads`／`ai.roster_upload_rows` view（結構性隔離，見 migration
+// `20260923000000_wp_roster_upload_a`），`ai.audit_log` 一齊 WHERE 排除
+// 呢兩個 table_name（同 WP-MULTI 一致做法）。
+// ---------------------------------------------------------------------------
+model RosterUpload {
+  id             String             @id @default(uuid())
+  month          DateTime           @db.Date // 月份第一日
+  siteId         String?            @map("site_id") // nullable——上載時盤名對唔到（site_raw
+  // 喺 sites.canonical_name/aliases 搵唔到）可以先存底，之後 PATCH
+  // 人手指定
+  site           Site?              @relation(fields: [siteId], references: [id])
+  siteNameRaw    String             @map("site_name_raw") // 更表檔案自己讀出嚟嘅盤名（A2/C2/A1），未必對得上 sites.canonical_name
+  uploaderUserId String             @map("uploader_user_id")
+  uploader       User               @relation(fields: [uploaderUserId], references: [id])
+  uploadedAt     DateTime           @default(now()) @map("uploaded_at")
+  fileName       String             @map("file_name")
+  fileSha256     String             @map("file_sha256")
+  fileBytes      Bytes              @map("file_bytes")
+  fileSize       Int                @map("file_size")
+  // 同盤同月遞增——siteId 未定（null）嗰陣用 siteNameRaw 分組計版本（見
+  // src/lib/roster-upload/service.ts resolveNextVersion()）。
+  version        Int                @default(1)
+  status         RosterUploadStatus @default(uploaded)
+  parseSummary   Json?              @map("parse_summary") // {shift_count, date_range, code_breakdown, unmatched_count, warnings…}
+  parseError     String?            @map("parse_error")
+  layoutKey      String?            @map("layout_key") // 自動偵測用咗邊套 layout 規則（standard/digital_port/citybus + 變體 flags）
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+
+  rows RosterUploadRow[]
+
+  @@index([month, siteId])
+  @@map("roster_uploads")
+}
+
+model RosterUploadRow {
+  id       String       @id @default(uuid())
+  uploadId String       @map("upload_id")
+  upload   RosterUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  rowIndex Int          @map("row_index") // 原檔行號（1-based，openpyxl/exceljs row number），追溯用
+
+  subSiteName String?              @map("sub_site_name") // 城巴車廠等一檔多子盤嘅子盤名（citybus layout 先有值）
+  workDate    DateTime             @map("work_date") @db.Date
+  rawCode     String               @map("raw_code") // 格仔原始代號（未歸一，例：OFF/NPL 保留原字面）
+  codeKind    RosterUploadCodeKind @map("code_kind")
+  shiftTypeId String?              @map("shift_type_id") // 對唔到 shift_types 就 null（唔准估），warnings 記低
+  shiftType   ShiftType?           @relation(fields: [shiftTypeId], references: [id])
+
+  staffNoRaw    String? @map("staff_no_raw")
+  nameRaw       String? @map("name_raw")
+  telRaw        String? @map("tel_raw")
+  rankRaw       String? @map("rank_raw")
+  timeRaw       String? @map("time_raw")
+  brokerCodeRaw String? @map("broker_code_raw") // A 欄雞頭碼原文（可冇）
+
+  guardId    String?                @map("guard_id") // 配對結果
+  guard      Guard?                 @relation(fields: [guardId], references: [id])
+  guardMatch RosterUploadGuardMatch @default(unmatched) @map("guard_match")
+
+  settlementBrokerId String? @map("settlement_broker_id") // 雞頭碼→brokers；冇雞頭碼欄嘅盤=null（Phase B 由系統設定補）
+  settlementBroker   Broker? @relation(fields: [settlementBrokerId], references: [id])
+
+  hours    Decimal? @db.Decimal(5, 2) // OT 小時（OT<n> 代號）
+  warnings Json? // 逐行警告（例：未配對、code 對唔到、日期唔喺目標月份）
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([uploadId, workDate])
+  @@map("roster_upload_rows")
 }
 
 // ---------------------------------------------------------------------------
@@ -782,12 +905,13 @@ model User {
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
-  auditLogs      AuditLog[]
-  aiConversation AiConversation?
+  auditLogs        AuditLog[]
+  aiConversation   AiConversation?
   // P2.5：現場反映開會模式——一個用戶同時最多一個 draft（見
   // src/lib/feedback/session.ts 嘅 getOrCreateDraftSession()），但歷史
   // 上可以有幾個 submitted/abandoned，所以係 array 唔係 unique 一對一。
   feedbackSessions FeedbackSession[]
+  rosterUploads    RosterUpload[]
   feedbackReports  FeedbackReport[]
 
   @@map("users")
@@ -873,17 +997,17 @@ model AiConversation {
 // 唔喺 ai schema——見 docs/ai-assistant.md「開會反映」一節嘅例外說明）。
 // ---------------------------------------------------------------------------
 model FeedbackSession {
-  id     String @id @default(uuid())
-  userId String @map("user_id")
-  user   User   @relation(fields: [userId], references: [id])
+  id          String @id @default(uuid())
+  userId      String @map("user_id")
+  user        User   @relation(fields: [userId], references: [id])
   // draft|submitted|abandoned——一個用戶同時最多一個 draft（application
   // 層保證，見 getOrCreateDraftSession()，冇加 DB partial unique index，
   // 同呢個 codebase 其他「一個時點限一個」規則一致做法，例如
   // ai_conversations 用 unique(userId) 就唔使呢招，但呢度要保留歷史
   // submitted/abandoned session，唔可以做 unique(userId)）。
-  status      String   @default("draft")
-  messages    Json     @default("[]") // 格式同 ai_conversations.messages 一致：{role,content,createdAt}[]
-  pageContext Json?    @map("page_context") // {path,site_id,month,broker}——同 AiPageContext 一致，純提示用途
+  status      String @default("draft")
+  messages    Json   @default("[]") // 格式同 ai_conversations.messages 一致：{role,content,createdAt}[]
+  pageContext Json?  @map("page_context") // {path,site_id,month,broker}——同 AiPageContext 一致，純提示用途
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

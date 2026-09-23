@@ -36,6 +36,8 @@ import {
   toGuardPhoneDTO,
   toGuardEmergencyContactDTO,
   toGuardAddressDTO,
+  toRosterUploadDTO,
+  toRosterUploadRowDTO,
 } from "./dto";
 import type { Dto } from "./serialize";
 import type { AuditAction } from "../audit";
@@ -79,6 +81,16 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   guard_phones: (r) => toGuardPhoneDTO(r),
   guard_emergency_contacts: (r) => toGuardEmergencyContactDTO(r),
   guard_addresses: (r) => toGuardAddressDTO(r),
+  // WP-ROSTER-UPLOAD Phase A：roster_uploads／roster_upload_rows 一樣經
+  // 完整白名單 DTO（`toRosterUploadDTO()` 已經剝走 fileBytes）。呢兩個
+  // table_name 嘅 audit_log 有 PII（roster_upload_rows 嘅 name_raw／
+  // tel_raw／staff_no_raw）——AI 助手結構性睇唔到（`ai.audit_log` view
+  // WHERE 子句直接排除，見
+  // prisma/migrations/20260923000000_wp_roster_upload_a），呢度嘅 DTO
+  // mapping 純粹俾內部 `/audit-log` 頁用（仲要經 `applyFieldGroupGate()`
+  // 嘅「安員個人資料」field group 再剝一次，見 field-groups.ts）。
+  roster_uploads: (r) => toRosterUploadDTO(r),
+  roster_upload_rows: (r) => toRosterUploadRowDTO(r),
 };
 
 /** 呢啲 action 代表「呢個值本身係一個完整資源 row」——先會行 DTO
@@ -103,4 +115,8 @@ export const AUDIT_ROW_MAPPED_ACTIONS: ReadonlySet<AuditAction> = new Set([
 // P1-WP4：`override_reason`／`reconciliation_summary`——月結鎖定嗰陣，
 // §6.3 對數規則有紅色差異都堅持鎖嘅原因＋當刻嘅對數結果快照（見
 // src/app/api/month-closes/[id]/lock/route.ts）。
-export const AUDIT_META_PASSTHROUGH_KEYS = ["void_reason", "unlock_reason", "copied_from", "reject_reason", "override_reason", "reconciliation_summary"] as const;
+// WP-ROSTER-UPLOAD Phase A：`superseded_upload_ids`——同盤同月新上載將
+// 邊幾個舊版本行轉咗 `superseded`（`src/lib/roster-upload/service.ts`
+// `processRosterUpload()`），留喺呢個上載自己嘅 create audit 度話畀睇
+// 操作紀錄嘅人知邊個版本頂替咗邊個。
+export const AUDIT_META_PASSTHROUGH_KEYS = ["void_reason", "unlock_reason", "copied_from", "reject_reason", "override_reason", "reconciliation_summary", "superseded_upload_ids"] as const;
