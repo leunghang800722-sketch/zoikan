@@ -346,3 +346,52 @@ describe("roster-upload parse：壞檔／搵唔到表頭", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+// Opus 驗收（2026-09-23）補測：
+describe("roster-upload parse：驗收補測", () => {
+  function baseSheet(ws: ExcelJS.Worksheet, dates: Date[]) {
+    ws.getCell("A2").value = "測試盤L";
+    ws.getCell("F4").value = "Date";
+    dates.forEach((d, i) => (ws.getRow(4).getCell(7 + i).value = d));
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Staff No.", "Tel", "Name"];
+    ws.getRow(6).values = ["K", "0700-1900", "Guard", "U91234", "61234567", "測試安員甲"];
+  }
+
+  it("合併儲存格：一格 AL 橫跨 3 日，只計左上角一格（同 python openpyxl 一致）＋出警告", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2), aug(3)]);
+    ws.getCell("G6").value = "AL";
+    ws.mergeCells("G6:I6");
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.totalCellCount).toBe(1);
+    expect(result.warnings.some((w) => w.includes("合併儲存格"))).toBe(true);
+  });
+
+  it("合併儲存格：姓名直跨兩行，第二行當冇姓名（唔會靜靜借用上一行個名）", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2)]);
+    ws.getCell("G6").value = "D";
+    ws.getRow(7).values = ["K", "1900-0700", "Guard", null, null, null, "N", "N"];
+    ws.mergeCells("F6:F7");
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-name.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows.filter((r) => r.rowIndex === 7)).toHaveLength(0);
+    expect(result.warnings.some((w) => w.includes("row 7") && w.includes("冇姓名"))).toBe(true);
+  });
+
+  it("工作表名唔寫死 2026：2027 年更表都讀到", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2027");
+    baseSheet(ws, [new Date(Date.UTC(2027, 0, 1))]);
+    ws.getCell("G6").value = "D";
+    const result = await parseRosterWorkbook(await toBuffer(wb), "2027.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows[0]!.workDate).toBe("2027-01-01");
+  });
+});

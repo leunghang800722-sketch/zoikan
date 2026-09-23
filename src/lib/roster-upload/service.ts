@@ -37,6 +37,7 @@ export interface RosterUploadParseSummary {
   ambiguousGuardCount: number;
   unmatchedShiftTypeCount: number;
   unmatchedBrokerCount: number;
+  outOfMonthCount: number;
   warnings: string[];
 }
 
@@ -50,6 +51,7 @@ async function matchRowsAndSummarize(
   resolvedSiteId: string | null,
   parseResult: ParseResult,
   brokers: readonly BrokerCandidate[],
+  month: Date,
 ): Promise<{ rows: Prisma.RosterUploadRowCreateManyInput[]; summary: RosterUploadParseSummary | null }> {
   if (!parseResult.ok) return { rows: [], summary: null };
 
@@ -67,6 +69,11 @@ async function matchRowsAndSummarize(
   let ambiguousGuardCount = 0;
   let unmatchedShiftTypeCount = 0;
   let unmatchedBrokerCount = 0;
+  let outOfMonthCount = 0;
+  // 驗收 2026-09-23：python 版（extract.py EXPECTED_YEAR_MONTH）會將「格仔
+  // 日期唔係呢個月」逐格列入 unparsed 俾人覆核——移植漏咗。上載揀錯月份
+  // （例如 8 月更表揀咗 9 月）或者更表夾住上／下月日子，都要明確警告。
+  const monthPrefix = `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, "0")}-`;
   const rows: Prisma.RosterUploadRowCreateManyInput[] = [];
 
   for (const r of parseResult.rows) {
@@ -78,6 +85,10 @@ async function matchRowsAndSummarize(
     if (guardResult.guardMatch === "ambiguous") ambiguousGuardCount += 1;
 
     const warnings = [...r.warnings];
+    if (!r.workDate.startsWith(monthPrefix)) {
+      outOfMonthCount += 1;
+      warnings.push(`格仔日期 ${r.workDate} 唔係上載月份（${monthPrefix.slice(0, 7)}），人手覆核`);
+    }
     if (guardResult.guardMatch === "unmatched") warnings.push("安員配對唔到（staff_no/姓名/電話都對唔上現有安員名冊）");
     if (guardResult.guardMatch === "ambiguous") warnings.push("安員配對到多過一個候選，人手覆核");
     if (shiftTypeMatch.ambiguous) {
@@ -121,7 +132,10 @@ async function matchRowsAndSummarize(
     ambiguousGuardCount,
     unmatchedShiftTypeCount,
     unmatchedBrokerCount,
-    warnings: parseResult.warnings,
+    outOfMonthCount,
+    warnings: outOfMonthCount
+      ? [`有 ${outOfMonthCount} 格日期唔係上載月份（${monthPrefix.slice(0, 7)}）——檢查係咪揀錯月份`, ...parseResult.warnings]
+      : parseResult.warnings,
   };
   return { rows, summary };
 }
@@ -133,6 +147,14 @@ function versionGroupWhere(siteId: string | null, siteNameRaw: string, month: Da
   return siteId
     ? { siteId, month, status: { not: "superseded" as const } }
     : { siteId: null, siteNameRaw: siteNameRaw.trim(), month, status: { not: "superseded" as const } };
+}
+
+/** 驗收 2026-09-23：同盤同月版本序列嘅 transaction 級 advisory lock——
+ * 冇呢個，兩個同時上載（例如撳兩下）喺 READ COMMITTED 下面會各自睇唔到
+ * 對方，兩個都變 v(N+1) 而且都係 active。 */
+async function lockVersionGroup(tx: Prisma.TransactionClient, siteId: string | null, siteNameRaw: string, month: Date): Promise<void> {
+  const key = `roster_upload:${month.toISOString().slice(0, 7)}:${siteId ?? `raw:${siteNameRaw.trim()}`}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
 }
 
 export async function processRosterUpload(input: ProcessRosterUploadInput): Promise<ProcessRosterUploadResult> {
@@ -151,6 +173,7 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
   const resolvedSiteId = input.siteIdHint ?? (parseResult.ok ? matchSite(parseResult.siteRaw, sites) : null);
 
   return prisma.$transaction(async (tx) => {
+    await lockVersionGroup(tx, resolvedSiteId, siteNameRaw, month);
     const groupWhere = versionGroupWhere(resolvedSiteId, siteNameRaw, month);
     const previous = await tx.rosterUpload.findMany({ where: groupWhere, select: { id: true, version: true } });
     const nextVersion = previous.length ? Math.max(...previous.map((p) => p.version)) + 1 : 1;
@@ -176,7 +199,7 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
       },
     });
 
-    const { rows, summary } = await matchRowsAndSummarize(tx, upload.id, resolvedSiteId, parseResult, brokers);
+    const { rows, summary } = await matchRowsAndSummarize(tx, upload.id, resolvedSiteId, parseResult, brokers, month);
     if (rows.length) await tx.rosterUploadRow.createMany({ data: rows });
     const finalUpload = summary
       ? await tx.rosterUpload.update({ where: { id: upload.id }, data: { parseSummary: summary as unknown as Prisma.InputJsonValue } })
@@ -189,7 +212,8 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
 /** 重新解析一個已存在嘅上載（檔案 bytes 唔變）——刪返舊 rows 再插新，
  * upload 本身嘅 status/parse_summary/layout_key 同步更新。已經人手
  * PATCH 指定咗嘅 site_id 保留，唔會俾解析結果覆蓋。 */
-export async function reparseRosterUpload(uploadId: string): Promise<ParseResult> {
+export async function reparseRosterUpload(uploadId: string, opts: { autoResolveSite?: boolean } = {}): Promise<ParseResult> {
+  const autoResolveSite = opts.autoResolveSite ?? true;
   const existing = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
   const buffer = Buffer.from(existing.fileBytes);
   const parseResult = await parseRosterWorkbook(buffer, existing.fileName);
@@ -200,18 +224,23 @@ export async function reparseRosterUpload(uploadId: string): Promise<ParseResult
   ]);
   const sites: SiteCandidate[] = sitesRaw.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases }));
   const brokers: BrokerCandidate[] = brokersRaw.map((b) => ({ id: b.id, code: b.code, aliases: b.aliases }));
-  const resolvedSiteId = existing.siteId ?? (parseResult.ok ? matchSite(parseResult.siteRaw, sites) : null);
+  // 驗收 2026-09-23：PATCH `{site_id:null}`（人手清返未指定）之後唔好即刻
+  // 又用盤名自動配返，否則「清返」永遠清唔到。
+  const resolvedSiteId = existing.siteId ?? (autoResolveSite && parseResult.ok ? matchSite(parseResult.siteRaw, sites) : null);
+  // 驗收 2026-09-23：已被取代（superseded）／已確認（confirmed）嘅版本重新
+  // 解析之後**唔准**變返 parsed——之前會令同盤同月出現兩個 active 版本。
+  const keepStatus = existing.status === "superseded" || existing.status === "confirmed";
 
   await prisma.$transaction(async (tx) => {
     await tx.rosterUploadRow.deleteMany({ where: { uploadId } });
-    const { rows, summary } = await matchRowsAndSummarize(tx, uploadId, resolvedSiteId, parseResult, brokers);
+    const { rows, summary } = await matchRowsAndSummarize(tx, uploadId, resolvedSiteId, parseResult, brokers, existing.month);
     if (rows.length) await tx.rosterUploadRow.createMany({ data: rows });
 
     await tx.rosterUpload.update({
       where: { id: uploadId },
       data: {
         siteId: resolvedSiteId,
-        status: parseResult.ok ? "parsed" : "parse_failed",
+        status: keepStatus ? existing.status : parseResult.ok ? "parsed" : "parse_failed",
         parseSummary: summary ? (summary as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
         parseError: parseResult.ok ? null : parseResult.error,
         layoutKey: parseResult.ok ? parseResult.layoutKey : null,
@@ -220,4 +249,42 @@ export async function reparseRosterUpload(uploadId: string): Promise<ParseResult
   });
 
   return parseResult;
+}
+
+
+/** 驗收 2026-09-23：PATCH `site_id`（人手指定盤）——之前淨係 update
+ * siteId，如果目標盤呢個月已經有 active 上載，就會出現兩個 active v1。
+ * 而家喺 advisory lock 入面：呢個上載攞目標組別 max(version)+1；目標組別
+ * 入面「上載時間最新」嗰個保持 active，其餘轉 superseded（唔會因為人手
+ * 指定一個舊檔而蓋咗較新嘅上載）。返回被轉 superseded 嘅 id。 */
+export async function assignRosterUploadSite(uploadId: string, siteId: string | null): Promise<{ supersededIds: string[] }> {
+  return prisma.$transaction(async (tx) => {
+    const upload = await tx.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
+    await lockVersionGroup(tx, siteId, upload.siteNameRaw, upload.month);
+    if (upload.siteId === siteId) return { supersededIds: [] };
+    const others = await tx.rosterUpload.findMany({
+      where: { ...versionGroupWhere(siteId, upload.siteNameRaw, upload.month), id: { not: uploadId } },
+      select: { id: true, uploadedAt: true },
+    });
+    const allVersions = await tx.rosterUpload.findMany({
+      where: siteId ? { siteId, month: upload.month } : { siteId: null, siteNameRaw: upload.siteNameRaw.trim(), month: upload.month },
+      select: { version: true },
+    });
+    const nextVersion = allVersions.length ? Math.max(...allVersions.map((v) => v.version)) + 1 : 1;
+    const isActive = upload.status !== "superseded" && upload.status !== "confirmed";
+    const thisIsNewest = others.every((o) => o.uploadedAt <= upload.uploadedAt);
+    const supersededIds = isActive && thisIsNewest ? others.map((o) => o.id) : [];
+    if (supersededIds.length) {
+      await tx.rosterUpload.updateMany({ where: { id: { in: supersededIds } }, data: { status: "superseded" } });
+    }
+    await tx.rosterUpload.update({
+      where: { id: uploadId },
+      data: {
+        siteId,
+        version: nextVersion,
+        ...(isActive && !thisIsNewest ? { status: "superseded" as const } : {}),
+      },
+    });
+    return { supersededIds };
+  });
 }

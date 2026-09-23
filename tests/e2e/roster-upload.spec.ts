@@ -92,3 +92,33 @@ test("雞頭：更表上載硬性 403（連導航都見唔到條連結）", asyn
   await page.goto(`/roster-uploads?month=${TEST_MONTH}`);
   await expect(page.getByText(/硬性禁止|冇權限|forbidden/i)).toBeVisible({ timeout: 15_000 });
 });
+
+// Opus 驗收（2026-09-23）補測：手機闊度（375px）——會計上載一個盤名對唔到
+// 嘅檔，卡列表要見到「盤名未配對」＋「指定盤」下拉（之前手機版冇呢個
+// 下拉，對唔到嘅上載喺手機完全處理唔到）；頁面唔可以橫向捲動；詳情見到
+// 「已載入 N／共 T 格」。
+test("會計（手機 375px）：上載盤名對唔到嘅檔 → 卡列表可以指定盤，冇橫向捲動", async ({ page }) => {
+  const guard = await findGuardWithUNumber();
+  const buffer = await buildSyntheticRosterXlsx("驗收測試對唔到嘅盤名", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
+  const fileName = "test-roster-mobile.xlsx";
+  await page.setViewportSize({ width: 375, height: 812 });
+  try {
+    await loginAs(page, "會計");
+    await page.goto(`/roster-uploads?month=${TEST_MONTH}`);
+    await page.locator('input[type="month"]').fill(TEST_MONTH);
+    const uploadResponse = page.waitForResponse((r) => r.url().includes("/api/roster-uploads") && r.request().method() === "POST");
+    await page.getByTestId("roster-upload-file-input").setInputFiles({ name: fileName, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
+    expect((await uploadResponse).status()).toBe(201);
+
+    const card = page.locator("div.sm\\:hidden > div", { hasText: "驗收測試對唔到嘅盤名" }).first();
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(card.getByText("（盤名未配對）")).toBeVisible();
+    await expect(card.getByRole("combobox", { name: "指定盤" })).toBeVisible();
+    await expect(page.getByTestId("roster-upload-rows-count")).toContainText("共 2 格", { timeout: 15_000 });
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  } finally {
+    await prisma.rosterUpload.deleteMany({ where: { month: new Date(Date.UTC(2026, 7, 1)), fileName } });
+  }
+});

@@ -123,7 +123,9 @@ export default function RosterUploadsPage() {
   const [selectedUploadId, setSelectedUploadId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [onlyUnmatched, setOnlyUnmatched] = useState(false);
+  // 驗收 2026-09-23：原本淨係得「只顯示未配對」checkbox——「多個候選」（同名
+  // 多人）同「淨係姓名配對」一樣要人手覆核，改做下拉。
+  const [matchFilter, setMatchFilter] = useState<"" | "unmatched" | "ambiguous" | "by_name">("");
   const [patchingSiteFor, setPatchingSiteFor] = useState<string | null>(null);
 
   async function loadList() {
@@ -150,9 +152,12 @@ export default function RosterUploadsPage() {
     });
   }, []);
 
-  async function loadDetail(uploadId: string, guardMatch?: string) {
+  // 驗收 2026-09-23：API 每頁上限 500 格，大盤（例如城巴車廠）一個月過千格——
+  // 之前淨係攞第一頁，後面嘅格靜靜睇唔到。而家顯示「已載入 N／共 T」＋「載入更多」。
+  async function loadDetail(uploadId: string, guardMatch?: string, append = false) {
     setDetailLoading(true);
-    const qs = new URLSearchParams({ take: "500" });
+    const skip = append && detail ? detail.rows.rows.length : 0;
+    const qs = new URLSearchParams({ take: "500", skip: String(skip) });
     if (guardMatch) qs.set("guard_match", guardMatch);
     const res = await apiGet<DetailResponse>(`/api/roster-uploads/${uploadId}?${qs.toString()}`);
     setDetailLoading(false);
@@ -160,22 +165,29 @@ export default function RosterUploadsPage() {
       setError(res.message);
       return;
     }
-    setDetail(res.data);
+    if (append && detail) {
+      setDetail({ ...res.data, rows: { ...res.data.rows, rows: [...detail.rows.rows, ...res.data.rows.rows] } });
+    } else {
+      setDetail(res.data);
+    }
   }
 
   function openDetail(uploadId: string) {
     setSelectedUploadId(uploadId);
-    setOnlyUnmatched(false);
+    setDetail(null);
+    setMatchFilter("");
     loadDetail(uploadId);
   }
 
   useEffect(() => {
-    if (selectedUploadId) loadDetail(selectedUploadId, onlyUnmatched ? "unmatched" : undefined);
+    if (selectedUploadId) loadDetail(selectedUploadId, matchFilter || undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onlyUnmatched]);
+  }, [matchFilter]);
 
   async function doUpload(file: File) {
+    if (uploading) return; // 驗收 2026-09-23：上載緊時再拖放／再撳唔好重複送
     setUploading(true);
+    setNotice(null);
     setError(null);
     const form = new FormData();
     form.set("file", file);
@@ -216,9 +228,9 @@ export default function RosterUploadsPage() {
       setError(res.message);
       return;
     }
-    setNotice("已指定盤，重新配對完成");
+    setNotice(siteId ? "已指定盤，重新配對完成" : "已清返盤");
     await loadList();
-    if (selectedUploadId === uploadId) loadDetail(uploadId, onlyUnmatched ? "unmatched" : undefined);
+    if (selectedUploadId === uploadId) loadDetail(uploadId, matchFilter || undefined);
   }
 
   async function doReparse(uploadId: string) {
@@ -229,7 +241,7 @@ export default function RosterUploadsPage() {
     }
     setNotice("已重新解析");
     await loadList();
-    if (selectedUploadId === uploadId) loadDetail(uploadId, onlyUnmatched ? "unmatched" : undefined);
+    if (selectedUploadId === uploadId) loadDetail(uploadId, matchFilter || undefined);
   }
 
   const allEntries = list ? [...list.sites, ...list.unresolved_uploads] : [];
@@ -380,12 +392,31 @@ export default function RosterUploadsPage() {
                   </div>
                   <div className="mt-1 text-[11.5px] text-zk-muted">
                     {u ? `v${u.version} · ${summary ? `${summary.shift_count} 更 · 未配對 ${summary.unmatched_guard_count}` : ""}` : "未上載"}
+                    {!entry.site_id && <span className="ml-1.5 text-orange-600">（盤名未配對）</span>}
                   </div>
+                  {u?.status === "parse_failed" && u.parse_error && <div className="mt-1 text-[11px] text-red-600">{u.parse_error}</div>}
                   {u && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
                         睇詳情
                       </button>
+                      {/* 驗收 2026-09-23：手機之前冇「指定盤」，盤名對唔到嘅上載喺手機處理唔到 */}
+                      {!entry.site_id && (
+                        <select
+                          className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-xs"
+                          value=""
+                          disabled={patchingSiteFor === u.id}
+                          onChange={(e) => e.target.value && patchSiteId(u.id, e.target.value)}
+                          aria-label="指定盤"
+                        >
+                          <option value="">指定盤…</option>
+                          {sites.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.canonical_name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                   )}
                 </div>
@@ -408,8 +439,18 @@ export default function RosterUploadsPage() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <label className="flex items-center gap-1.5 text-[12.5px] text-zk-muted">
-                <input type="checkbox" checked={onlyUnmatched} onChange={(e) => setOnlyUnmatched(e.target.checked)} />
-                只顯示未配對
+                篩選
+                <select
+                  className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-xs"
+                  value={matchFilter}
+                  onChange={(e) => setMatchFilter(e.target.value as typeof matchFilter)}
+                  data-testid="roster-upload-match-filter"
+                >
+                  <option value="">全部</option>
+                  <option value="unmatched">只顯示未配對</option>
+                  <option value="ambiguous">只顯示多個候選</option>
+                  <option value="by_name">只顯示淨係姓名配對</option>
+                </select>
               </label>
               <Button variant="secondary" onClick={() => selectedUploadId && doReparse(selectedUploadId)}>
                 重新解析
@@ -420,9 +461,21 @@ export default function RosterUploadsPage() {
             </div>
           </div>
 
-          {detailLoading && <div className="py-6 text-center text-[13px] text-zk-muted">載入緊…</div>}
+          {detail?.upload.parse_summary && detail.upload.parse_summary.warnings.length > 0 && (
+            <ul className="mb-3 list-disc space-y-0.5 rounded-md border border-orange-200 bg-orange-50 py-2 pl-6 pr-3 text-[12px] text-orange-800" data-testid="roster-upload-summary-warnings">
+              {detail.upload.parse_summary.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          )}
 
-          {!detailLoading && detail && (
+          {detailLoading && !detail && <div className="py-6 text-center text-[13px] text-zk-muted">載入緊…</div>}
+
+          {detail && (
+            <>
+            <div className="mb-1.5 text-[12px] text-zk-muted" data-testid="roster-upload-rows-count">
+              已載入 {detail.rows.rows.length}／共 {detail.rows.total} 格
+            </div>
             <div className={`overflow-x-auto rounded-md border border-zk-border`}>
               <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
                 <thead>
@@ -471,6 +524,14 @@ export default function RosterUploadsPage() {
                 </tbody>
               </table>
             </div>
+            {detail.rows.rows.length < detail.rows.total && (
+              <div className="mt-2 text-center">
+                <Button variant="secondary" disabled={detailLoading} onClick={() => selectedUploadId && loadDetail(selectedUploadId, matchFilter || undefined, true)}>
+                  {detailLoading ? "載入緊…" : "載入更多"}
+                </Button>
+              </div>
+            )}
+            </>
           )}
         </div>
       )}

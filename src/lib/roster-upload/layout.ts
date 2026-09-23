@@ -63,8 +63,20 @@ function clean(value: unknown): string | null {
   return s === "" ? null : s;
 }
 
+/** 讀格仔原始值。**合併儲存格淨係左上角（master）有值**，其餘被合併嘅格
+ * 一律當空——同 python 版 openpyxl `MergedCell.value is None` 行為一致。
+ * exceljs 預設會將 master 嘅值「複製」俾每一個被合併嘅格（例如一格 `AL`
+ * 橫跨 3 日會變 3 格 AL、一個姓名直跨兩行會變兩行都有名），同 P0／8 月
+ * 試算規則唔一致，會靜靜多計更數，所以喺呢度統一截斷（驗收 2026-09-23）。 */
 function rawCell(ws: Worksheet, row: number, col: number): unknown {
-  return ws.getRow(row).getCell(col).value;
+  const cell = ws.getRow(row).getCell(col);
+  if (isMergedSlave(cell)) return null;
+  return cell.value;
+}
+
+/** 呢格係咪「被合併、唔係左上角」嗰啲格。 */
+export function isMergedSlave(cell: { isMerged: boolean; address: string; master: { address: string } }): boolean {
+  return cell.isMerged && cell.master.address !== cell.address;
 }
 
 function isDateValue(value: unknown): value is Date {

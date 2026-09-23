@@ -19,6 +19,12 @@ import { processRosterUpload } from "@/lib/roster-upload/service";
 import type { RosterUpload } from "@prisma/client";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB——更表 xlsx 正常幾百 KB，呢個上限純粹防呆
+const MONTH_PARAM_RE = /^\d{4}-(0[1-9]|1[0-2])(-\d{2})?$/;
+// 驗收 2026-09-23：xlsx 係 zip（頭 4 byte `PK\x03\x04`）。唔係 zip 嘅檔（.exe／
+// 圖片／舊版 .xls 等）直接 400、唔存底——之前會照存 bytes 再標 parse_failed。
+// 格式啱但內容壞嘅 xlsx 照舊存底＋parse_failed（方便追溯）。
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+const OLE_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0]); // 舊版 .xls
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -26,6 +32,8 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const monthParam = url.searchParams.get("month");
     if (!monthParam) throw BadRequest("要帶 month（YYYY-MM 或 YYYY-MM-DD）");
+    // 驗收 2026-09-23：`new Date()` 好寬鬆（"hello 2026" 都 parse 到），同 POST 一樣用 regex 收緊。
+    if (!MONTH_PARAM_RE.test(monthParam)) throw BadRequest("month 格式要係 YYYY-MM 或 YYYY-MM-DD");
     const monthDate = new Date(monthParam);
     if (Number.isNaN(monthDate.getTime())) throw BadRequest("month 格式唔啱");
     const month = monthStart(monthDate);
@@ -89,10 +97,13 @@ export async function POST(req: Request) {
       if (!site) throw BadRequest("site_id 唔存在");
     }
 
+    if (fileEntry.size > MAX_UPLOAD_BYTES) throw BadRequest(`檔案太大（上限 ${MAX_UPLOAD_BYTES / 1024 / 1024}MB）`);
     const arrayBuffer = await fileEntry.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     if (!buffer.length) throw BadRequest("檔案係空嘅");
     if (buffer.length > MAX_UPLOAD_BYTES) throw BadRequest(`檔案太大（上限 ${MAX_UPLOAD_BYTES / 1024 / 1024}MB）`);
+    if (buffer.subarray(0, 4).equals(OLE_MAGIC)) throw BadRequest("呢個係舊版 .xls 檔，請用 Excel 另存做 .xlsx 先上載");
+    if (!buffer.subarray(0, 4).equals(ZIP_MAGIC)) throw BadRequest("唔係 xlsx 檔案（請上載 Excel .xlsx 更表）");
 
     const result = await processRosterUpload({
       fileBuffer: buffer,

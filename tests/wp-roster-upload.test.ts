@@ -264,4 +264,64 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(body.upload.status).toBe("parse_failed");
     expect(body.parse_error).toBeTruthy();
   });
+
+  // -------------------------------------------------------------------------
+  // Opus 驗收（2026-09-23）補測：版本／並發／檔案格式／月份
+  // -------------------------------------------------------------------------
+  it("§10 重新解析已被取代嘅舊版：保持 superseded，唔會變兩個 active", async () => {
+    const r1 = (await (await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08"))).json()) as { upload: { id: string } };
+    await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08"));
+    const res = await reparseUpload(reqJson(`http://test.local/api/roster-uploads/${r1.upload.id}/reparse`, ownerCookie, "POST"), { params: Promise.resolve({ id: r1.upload.id }) });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("superseded");
+    expect(await prisma.rosterUpload.count({ where: { siteId: fx.site.id, status: { not: "superseded" } } })).toBe(1);
+  });
+
+  it("§11 PATCH 指定去一個呢個月已有上載嘅盤：較新嗰個保持 active、舊嗰個 superseded、version 遞增", async () => {
+    await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08"));
+    const u = (await (await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: "對唔到嘅盤名" }), "2026-08"))).json()) as { upload: { id: string } };
+    const res = await patchUpload(reqJson(`http://test.local/api/roster-uploads/${u.upload.id}`, ownerCookie, "PATCH", { site_id: fx.site.id }), { params: Promise.resolve({ id: u.upload.id }) });
+    expect(res.status).toBe(200);
+    const all = await prisma.rosterUpload.findMany({ where: { siteId: fx.site.id }, orderBy: { version: "asc" } });
+    expect(all.map((x) => [x.version, x.status])).toEqual([[1, "superseded"], [2, "parsed"]]);
+    expect(all[1]!.id).toBe(u.upload.id);
+  });
+
+  it("§12 PATCH site_id=null 真係清返，唔會即刻又用盤名自動配返", async () => {
+    const u = (await (await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08"))).json()) as { upload: { id: string; site_id: string } };
+    expect(u.upload.site_id).toBe(fx.site.id);
+    await patchUpload(reqJson(`http://test.local/api/roster-uploads/${u.upload.id}`, ownerCookie, "PATCH", { site_id: null }), { params: Promise.resolve({ id: u.upload.id }) });
+    expect((await prisma.rosterUpload.findUniqueOrThrow({ where: { id: u.upload.id } })).siteId).toBeNull();
+  });
+
+  it("§13 同時上載三次（撳多幾下）：只得一個 active，version 1/2/3", async () => {
+    const buf = await buildXlsx({ siteName: fx.site.name });
+    const rs = await Promise.all([1, 2, 3].map(() => createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08"))));
+    expect(rs.map((r) => r.status)).toEqual([201, 201, 201]);
+    const all = await prisma.rosterUpload.findMany({ where: { siteId: fx.site.id }, orderBy: { version: "asc" } });
+    expect(all.map((x) => x.version)).toEqual([1, 2, 3]);
+    expect(all.filter((x) => x.status !== "superseded")).toHaveLength(1);
+  });
+
+  it("§14 唔係 xlsx（隨便一個檔／舊版 .xls）→ 400，唔存底", async () => {
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, Buffer.from("not an xlsx file"), "2026-08"));
+    expect(res.status).toBe(400);
+    const xls = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]), "2026-08"));
+    expect(xls.status).toBe(400);
+    expect(await prisma.rosterUpload.count()).toBe(0);
+  });
+
+  it("§15 揀錯月份（8 月更表上載做 9 月）：parse_summary 有 out_of_month 警告，逐行都有", async () => {
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-09"));
+    const body = (await res.json()) as { upload: { id: string; parse_summary: { out_of_month_count: number; warnings: string[] } } };
+    expect(body.upload.parse_summary.out_of_month_count).toBe(1);
+    expect(body.upload.parse_summary.warnings[0]).toContain("唔係上載月份");
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(JSON.stringify(rows[0]!.warnings)).toContain("唔係上載月份");
+  });
+
+  it("§16 GET ?month= 亂寫 → 400", async () => {
+    const res = await listUploads(reqJson("http://test.local/api/roster-uploads?month=hello%202026", ownerCookie));
+    expect(res.status).toBe(400);
+  });
 });

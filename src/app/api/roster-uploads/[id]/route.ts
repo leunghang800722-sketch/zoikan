@@ -15,7 +15,7 @@ import { parseBody } from "@/lib/api/validate";
 import { RosterUploadPatchSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, BadRequest } from "@/lib/api/errors";
-import { reparseRosterUpload } from "@/lib/roster-upload/service";
+import { assignRosterUploadSite, reparseRosterUpload } from "@/lib/roster-upload/service";
 import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -66,14 +66,25 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       if (!site) throw BadRequest("site_id 唔存在");
     }
 
-    await prisma.rosterUpload.update({ where: { id }, data: { siteId: parsed.site_id } });
+    // 驗收 2026-09-23：改盤要同時處理版本序列（目標盤呢個月已經有 active
+    // 上載嘅話，唔可以變兩個 active v1）——見 assignRosterUploadSite()。
+    const { supersededIds } = await assignRosterUploadSite(id, parsed.site_id);
     // 重新對照一次（更別配對要跟返新盤嘅 shift_types 範圍）——`reparseRosterUpload`
     // 用返原檔 bytes，唔使用戶重新上載。壞檔（parse_failed）冇 rows 可以重配，
     // 但 site_id 本身已經update咗，`reparseRosterUpload` 一樣會行（照樣搵唔到 Date 表頭）。
-    await reparseRosterUpload(id);
+    // autoResolveSite=false：人手清返 null 就係 null，唔好又用盤名自動配返。
+    await reparseRosterUpload(id, { autoResolveSite: false });
 
     const after = await prisma.rosterUpload.findUniqueOrThrow({ where: { id } });
-    await writeAudit({ actorUserId: session.userId, tableName: "roster_uploads", rowId: id, action: "update", before, after, ip: getClientIp(req) });
+    await writeAudit({
+      actorUserId: session.userId,
+      tableName: "roster_uploads",
+      rowId: id,
+      action: "update",
+      before,
+      after: { ...after, superseded_upload_ids: supersededIds },
+      ip: getClientIp(req),
+    });
 
     return ok(toRosterUploadDTO(after));
   });

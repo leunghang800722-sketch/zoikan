@@ -19,7 +19,7 @@
 // ——盤名/更別/安員/雞頭嘅對照留俾 `src/lib/roster-upload/match.ts`
 // （拎住呢度嘅輸出＋DB 查詢結果先做）。
 import ExcelJS from "exceljs";
-import { buildMapping, findDateHeaders, fieldCol, LAYOUT_OFFSETS, type ColumnMapping, type LayoutName } from "./layout";
+import { buildMapping, findDateHeaders, fieldCol, isMergedSlave, rawCell, LAYOUT_OFFSETS, type ColumnMapping, type LayoutName } from "./layout";
 import { classifyCode, otHoursFromCode, STAT_ROW_LABELS, type CodeKind } from "./cell-codes";
 
 function clean(value: unknown): string | null {
@@ -47,10 +47,11 @@ function asDate(value: unknown): Date | null {
   return null;
 }
 
-// 只認可見嘅 `2026` 或 `2026.<月>`（8 月試算 patch 5：恆星樓／葵發大廈嘅
+// 只認可見嘅 `<年>` 或 `<年>.<月>`（8 月試算 patch 5：恆星樓／葵發大廈嘅
 // 工作表叫 `2026.08`）——`相`（相片分頁）、`工作表1`（隱藏舊分頁）呢類
-// 一律唔啱呢個 pattern，跳過。
-const ROSTER_SHEET_RE = /^2026(\.\d{1,2})?$/;
+// 一律唔啱呢個 pattern，跳過。驗收 2026-09-23：原本寫死 `2026`，2027 年
+// 1 月嘅更表（分頁叫 `2027`）會成個 parse_failed——改做任何 20xx 年份。
+const ROSTER_SHEET_RE = /^20\d{2}(\.\d{1,2})?$/;
 
 export interface ParsedCellRow {
   /** 原檔行號（呢個安員行嘅 row number），一個安員行可以有多個 ParsedCellRow（逐日一格）。 */
@@ -123,13 +124,13 @@ function isPureNumberLike(s: string): boolean {
  * 一個日期格）。 */
 function getSiteRaw(ws: ExcelJS.Worksheet): string | null {
   for (let col = 1; col <= 6; col++) {
-    const raw = ws.getRow(2).getCell(col).value;
+    const raw = rawCell(ws, 2, col);
     if (asDate(raw) !== null) continue;
     const v = clean(raw);
     if (v) return v;
   }
   for (let col = 1; col <= 6; col++) {
-    const raw = ws.getRow(1).getCell(col).value;
+    const raw = rawCell(ws, 1, col);
     if (asDate(raw) !== null || typeof raw === "number") continue;
     const v = clean(raw);
     if (v && !SKIP_ROW1_WORDS.has(v) && !isPureNumberLike(v)) return v;
@@ -149,7 +150,7 @@ function isRowBlank(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMapping):
   for (let c = mapping.dateStartCol; c <= mapping.dateEndCol; c++) colsToCheck.add(c);
   for (const [c] of mapping.trailingCols) colsToCheck.add(c);
   for (const c of colsToCheck) {
-    if (clean(ws.getRow(row).getCell(c).value) !== null) return false;
+    if (clean(rawCell(ws, row, c)) !== null) return false;
   }
   return true;
 }
@@ -159,7 +160,7 @@ const IDENTITY_FIELDS = ["brokerCode", "timeSlot", "rank", "staffNo", "tel", "na
 function hasIdentitySignal(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMapping): boolean {
   for (const name of IDENTITY_FIELDS) {
     const col = fieldCol(mapping, name);
-    if (col !== null && clean(ws.getRow(row).getCell(col).value) !== null) return true;
+    if (col !== null && clean(rawCell(ws, row, col)) !== null) return true;
   }
   return false;
 }
@@ -167,7 +168,7 @@ function hasIdentitySignal(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMa
 function field(ws: ExcelJS.Worksheet, row: number, mapping: ColumnMapping, name: (typeof IDENTITY_FIELDS)[number]): string | null {
   const col = fieldCol(mapping, name);
   if (col === null) return null;
-  return clean(ws.getRow(row).getCell(col).value);
+  return clean(rawCell(ws, row, col));
 }
 
 function isoDateUTC(d: Date): string {
@@ -204,7 +205,7 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
     for (let r = startRow; r <= endRow; r++) {
       if (isRowBlank(ws, r, mapping)) continue;
 
-      const labelVal = clean(ws.getRow(r).getCell(mapping.labelCol).value);
+      const labelVal = clean(rawCell(ws, r, mapping.labelCol));
       if (labelVal && STAT_ROW_LABELS.has(labelVal)) continue; // Total/所需人手/尚欠/早加夜——唔係安員行
 
       if (!hasIdentitySignal(ws, r, mapping)) {
@@ -221,7 +222,7 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
       const staffNoRaw = field(ws, r, mapping, "staffNo");
       const telRaw = field(ws, r, mapping, "tel");
       const subSite = field(ws, r, mapping, "subSite");
-      const nameRaw = clean(ws.getRow(r).getCell(mapping.labelCol).value);
+      const nameRaw = clean(rawCell(ws, r, mapping.labelCol));
 
       if (subSite) subSiteNames.add(subSite);
 
@@ -230,8 +231,17 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
         continue;
       }
 
+      // 驗收 2026-09-23：日期格有合併儲存格（例如一格 AL 橫跨幾日）——跟
+      // python 版淨係計左上角一格，但一定要出警告俾會計覆核，唔可以靜靜少計。
       for (let col = mapping.dateStartCol; col <= mapping.dateEndCol; col++) {
-        const rawCode = clean(ws.getRow(r).getCell(col).value);
+        const cell = ws.getRow(r).getCell(col);
+        if (isMergedSlave(cell) && clean(cell.master.value) !== null) {
+          warnings.push({ row: r, reason: `日期格 ${cell.address} 係合併儲存格（左上角 ${cell.master.address}），只計左上角一格，人手覆核` });
+        }
+      }
+
+      for (let col = mapping.dateStartCol; col <= mapping.dateEndCol; col++) {
+        const rawCode = clean(rawCell(ws, r, col));
         if (rawCode === null) continue;
         const dateObj = mapping.dateValues.get(col);
         if (!dateObj) continue;
@@ -303,14 +313,14 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
       continue;
     }
     if (!ROSTER_SHEET_RE.test(ws.name.trim())) {
-      skippedSheets.push({ name: ws.name, reason: "分頁名唔係「2026」或「2026.<月>」，當非更表分頁跳過" });
+      skippedSheets.push({ name: ws.name, reason: "分頁名唔係「<年份>」或「<年份>.<月>」，當非更表分頁跳過" });
       continue;
     }
     matchedSheets.push(ws);
   }
 
   if (!matchedSheets.length) {
-    return { ok: false, fileName, error: "搵唔到可見嘅「2026」或「2026.<月>」更表工作表", skippedSheets };
+    return { ok: false, fileName, error: "搵唔到可見嘅「<年份>」或「<年份>.<月>」更表工作表（例如 2026／2026.08）", skippedSheets };
   }
 
   const sheets: ParsedSheet[] = [];
