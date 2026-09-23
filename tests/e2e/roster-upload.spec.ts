@@ -122,3 +122,41 @@ test("會計（手機 375px）：上載盤名對唔到嘅檔 → 卡列表可以
     await prisma.rosterUpload.deleteMany({ where: { month: new Date(Date.UTC(2026, 7, 1)), fileName } });
   }
 });
+
+// Phase B-0 第 5(b) 項（老闆 2026-09-23 追加答）：更新檔嘅檔名要同該盤同月
+// 現有版本唔同——同名一律 400，錯誤訊息「更新檔嘅檔名必須同舊版唔同，
+// 請改檔名再上載」要喺前端見到；改個檔名先成功開 v2。
+test("老闆：同盤同月上載同名檔 → 400 提示改檔名；改個名先成功開 v2", async ({ page }) => {
+  const siteId = await findSiteIdByName("皓日");
+  const guard = await findGuardWithUNumber();
+  const fileNameSame = "test-roster-dup.xlsx";
+  const fileNameV2 = "test-roster-dup-v2.xlsx";
+  const buffer1 = await buildSyntheticRosterXlsx("皓日", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
+  const buffer2 = await buildSyntheticRosterXlsx("皓日", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
+
+  try {
+    await loginAs(page, "老闆");
+    await page.goto(`/roster-uploads?month=${TEST_MONTH}`);
+    await page.locator('input[type="month"]').fill(TEST_MONTH);
+
+    const uploadResponse1 = page.waitForResponse((r) => r.url().includes("/api/roster-uploads") && r.request().method() === "POST");
+    await page.getByTestId("roster-upload-file-input").setInputFiles({ name: fileNameSame, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: buffer1 });
+    expect((await uploadResponse1).status()).toBe(201);
+
+    // 第二次用返一樣嘅檔名（同盤同月）→ 400，錯誤訊息喺前端顯示。
+    const uploadResponse2 = page.waitForResponse((r) => r.url().includes("/api/roster-uploads") && r.request().method() === "POST");
+    await page.getByTestId("roster-upload-file-input").setInputFiles({ name: fileNameSame, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: buffer2 });
+    expect((await uploadResponse2).status()).toBe(400);
+    await expect(page.getByText("更新檔嘅檔名必須同舊版唔同")).toBeVisible({ timeout: 15_000 });
+
+    // 改個檔名先成功——version 變 v2。
+    const uploadResponse3 = page.waitForResponse((r) => r.url().includes("/api/roster-uploads") && r.request().method() === "POST");
+    await page.getByTestId("roster-upload-file-input").setInputFiles({ name: fileNameV2, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: buffer2 });
+    expect((await uploadResponse3).status()).toBe(201);
+    const row = page.locator("table tbody tr", { hasText: "皓日" }).first();
+    await expect(row.getByText("v2")).toBeVisible({ timeout: 15_000 });
+  } finally {
+    await prisma.rosterUploadRow.deleteMany({ where: { upload: { siteId, month: new Date(Date.UTC(2026, 7, 1)) } } });
+    await prisma.rosterUpload.deleteMany({ where: { siteId, month: new Date(Date.UTC(2026, 7, 1)) } });
+  }
+});

@@ -4,7 +4,7 @@
 // 由會計/主管/老闆補；指定咗之後即刻重新對照一次，等更別/安員配對用返
 // 啱嘅盤範圍）。
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac/requirePermission";
+import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { toRosterUploadDTO, toRosterUploadRowDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGateToList, applyFieldGroupGate } from "@/lib/api/field-groups";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -33,9 +33,28 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (guardMatchParam && !(ALLOWED_GUARD_MATCH as readonly string[]).includes(guardMatchParam)) {
       throw BadRequest(`guard_match 要係其中一個：${ALLOWED_GUARD_MATCH.join("/")}`);
     }
+    // Phase B-0 第 4 項：呢兩類細分（工號唔一致／用已取消舊號配對）淨係
+    // 加咗 warnings 文字，冇改 `guard_match` enum（見 match.ts
+    // GuardMatchResult 註解），所以要用 `warnings::text ILIKE` 篩，
+    // Prisma 嘅 Json filter 冇「子字串 contains」呢種表達力。
+    const warningFlagParam = url.searchParams.get("warning_flag");
+    const WARNING_FLAG_PATTERNS: Record<string, string> = {
+      staff_no_mismatch: "%同系統工號%唔一致%",
+      stale_staff_no: "%用已取消舊號配對%",
+    };
+    if (warningFlagParam && !(warningFlagParam in WARNING_FLAG_PATTERNS)) {
+      throw BadRequest(`warning_flag 要係其中一個：${Object.keys(WARNING_FLAG_PATTERNS).join("/")}`);
+    }
+    let warningFilterIds: string[] | null = null;
+    if (warningFlagParam) {
+      const pattern = WARNING_FLAG_PATTERNS[warningFlagParam]!;
+      const matched = await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM roster_upload_rows WHERE upload_id = ${id} AND warnings::text ILIKE ${pattern}`;
+      warningFilterIds = matched.map((r) => r.id);
+    }
     const where: Prisma.RosterUploadRowWhereInput = {
       uploadId: id,
       ...(guardMatchParam ? { guardMatch: guardMatchParam as GuardMatchValue } : {}),
+      ...(warningFilterIds ? { id: { in: warningFilterIds } } : {}),
     };
 
     const [rows, total] = await Promise.all([
@@ -45,7 +64,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
     const uploadDto = await applyFieldGroupGate(session, "roster_uploads", toRosterUploadDTO(upload));
     const rowsListDto = mapListDTO({ rows, total, skip, take }, toRosterUploadRowDTO);
-    const rowsDto = await applyFieldGroupGateToList(session, "roster_upload_rows", rowsListDto);
+    const gatedRowsDto = await applyFieldGroupGateToList(session, "roster_upload_rows", rowsListDto);
+    // 驗收 2026-09-23：Phase B-0「檔案工號 X 同系統工號 Y 唔一致」warning
+    // 將工號原文寫咗入 `warnings`——`staff_no_raw` 本身屬「安員個人資料」
+    // field gate（主管出廠係 O＝預設冇），唔遮嘅話冇權限嘅角色經 warnings
+    // 一樣睇到工號。冇 view 權限就將兩個號碼換做「（已隱藏）」，保留其餘
+    // 文字（`?warning_flag=` 篩選同 UI 顯示照用）。
+    const canSeeGuardPii = await hasPermission(session, "安員個人資料", "view");
+    const rowsDto = canSeeGuardPii
+      ? gatedRowsDto
+      : brandSafeResponse({ ...gatedRowsDto, rows: gatedRowsDto.rows.map((r) => ({ ...r, warnings: redactStaffNoWarnings(r.warnings) })) });
 
     return ok(brandSafeResponse({ upload: uploadDto, rows: rowsDto }));
   });
@@ -88,4 +116,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     return ok(toRosterUploadDTO(after));
   });
+}
+
+const STAFF_NO_MISMATCH_RE = /檔案工號 .*? 同系統工號 .*? 唔一致/g;
+
+function redactStaffNoWarnings(warnings: unknown): unknown {
+  if (!Array.isArray(warnings)) return warnings;
+  return warnings.map((w) => (typeof w === "string" ? w.replace(STAFF_NO_MISMATCH_RE, "檔案工號（已隱藏）同系統工號（已隱藏）唔一致") : w));
 }

@@ -357,17 +357,60 @@ describe("roster-upload parse：驗收補測", () => {
     ws.getRow(6).values = ["K", "0700-1900", "Guard", "U91234", "61234567", "測試安員甲"];
   }
 
-  it("合併儲存格：一格 AL 橫跨 3 日，只計左上角一格（同 python openpyxl 一致）＋出警告", async () => {
+  // Phase B-0（老闆 2026-09-23 答）：橫向合併跨 N 個日期欄＝嗰 N 日每日一
+  // 格同一個代號（3 格合併 D＝3 更、AL＝3 日年假），逐格出警告。
+  it("合併儲存格：D 橫跨 3 日 → 展開做 3 格 D，每格帶「由合併格展開」警告", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("2026");
     baseSheet(ws, [aug(1), aug(2), aug(3)]);
-    ws.getCell("G6").value = "AL";
+    ws.getCell("G6").value = "D";
     ws.mergeCells("G6:I6");
-    const result = await parseRosterWorkbook(await toBuffer(wb), "merged.xlsx");
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-d.xlsx");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.totalCellCount).toBe(1);
-    expect(result.warnings.some((w) => w.includes("合併儲存格"))).toBe(true);
+    expect(result.totalCellCount).toBe(3);
+    expect(result.shiftCount).toBe(3);
+    expect(result.dateRange).toEqual({ min: "2026-08-01", max: "2026-08-03" });
+    for (const day of [1, 2, 3]) {
+      const row = result.rows.find((r) => r.workDate === `2026-08-0${day}`);
+      expect(row?.rawCode).toBe("D");
+      expect(row?.warnings.some((w) => w.includes("由合併格展開") && w.includes(`第 ${day}/3 日`))).toBe(true);
+    }
+  });
+
+  it("合併儲存格：AL 橫跨 2 日 → 展開做 2 格 AL（leave），每格帶警告", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2)]);
+    ws.getCell("G6").value = "AL";
+    ws.mergeCells("G6:H6");
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-al.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.totalCellCount).toBe(2);
+    expect(result.shiftCount).toBe(0); // leave 唔計入 shiftCount
+    expect(result.codeKindBreakdown.leave).toBe(2);
+    const row1 = result.rows.find((r) => r.workDate === "2026-08-01");
+    const row2 = result.rows.find((r) => r.workDate === "2026-08-02");
+    expect(row1?.rawCode).toBe("AL");
+    expect(row2?.rawCode).toBe("AL");
+    expect(row1?.warnings.some((w) => w.includes("第 1/2 日"))).toBe(true);
+    expect(row2?.warnings.some((w) => w.includes("第 2/2 日"))).toBe(true);
+  });
+
+  it("合併儲存格橫跨但延伸到日期欄範圍以外（例如備註欄）→ 淨係展開日期欄部分＋另加警告", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2)]); // dateEndCol = H（col 8），I（col 9）係日期範圍以外
+    ws.getCell("G6").value = "D";
+    ws.mergeCells("G6:I6"); // 合併範圍伸出咗去 I（備註欄），冇日期
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-beyond.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // 淨係展開咗日期欄部分（G,H＝2 格），I 唔屬於日期欄，唔會生成第三格。
+    expect(result.totalCellCount).toBe(2);
+    expect(result.dateRange).toEqual({ min: "2026-08-01", max: "2026-08-02" });
+    expect(result.warnings.some((w) => w.includes("延伸到日期欄範圍以外"))).toBe(true);
   });
 
   it("合併儲存格：姓名直跨兩行，第二行當冇姓名（唔會靜靜借用上一行個名）", async () => {
@@ -382,6 +425,75 @@ describe("roster-upload parse：驗收補測", () => {
     if (!result.ok) return;
     expect(result.rows.filter((r) => r.rowIndex === 7)).toHaveLength(0);
     expect(result.warnings.some((w) => w.includes("row 7") && w.includes("冇姓名"))).toBe(true);
+  });
+
+  // 驗收 2026-09-23 補測：合併格邊界。
+  it("合併格：master 空白 → 成組當空白；相鄰兩組合併各自展開、各自計 x/N", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2), aug(3), aug(4), aug(5), aug(6), aug(7), aug(8)]);
+    ws.mergeCells("G6:H6"); // 空白 master
+    ws.getCell("I6").value = "D";
+    ws.mergeCells("I6:J6");
+    ws.getCell("K6").value = "AL";
+    ws.mergeCells("K6:M6");
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-adjacent.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.totalCellCount).toBe(5);
+    expect(result.mergedExpandedCount).toBe(5);
+    expect(result.rows.map((r) => `${r.workDate.slice(8)}:${r.rawCode}:${r.warnings.join("")}`)).toEqual([
+      "03:D:由合併格展開（第 1/2 日）",
+      "04:D:由合併格展開（第 2/2 日）",
+      "05:AL:由合併格展開（第 1/3 日）",
+      "06:AL:由合併格展開（第 2/3 日）",
+      "07:AL:由合併格展開（第 3/3 日）",
+    ]);
+  });
+
+  it("合併格：淨係最後一個日期格同備註欄合併 → 照計 1 格＋出「延伸到日期欄範圍以外」警告", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2)]);
+    ws.getCell("H6").value = "D";
+    ws.mergeCells("H6:I6");
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-last-note.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.totalCellCount).toBe(1);
+    expect(result.mergedExpandedCount).toBe(0);
+    expect(result.warnings.some((w) => w.includes("延伸到日期欄範圍以外"))).toBe(true);
+  });
+
+  it("合併格：由姓名欄伸入第一個日期欄 → 日期格當空白（唔會將姓名當代號）＋警告", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2)]);
+    ws.mergeCells("F6:G6");
+    ws.getCell("H6").value = "D";
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-name-into-date.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows.map((r) => [r.workDate, r.rawCode])).toEqual([["2026-08-02", "D"]]);
+    expect(result.warnings.some((w) => w.includes("由日期欄前面伸入日期欄"))).toBe(true);
+  });
+
+  it("合併格：日期格直跨 2 行（G6:G7）→ 淨係第一行有，第二行唔會借用", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    baseSheet(ws, [aug(1), aug(2)]);
+    ws.getRow(7).values = ["K", "1900-0700", "Guard", "U91235", "61234568", "測試安員乙"];
+    ws.getCell("G6").value = "D";
+    ws.mergeCells("G6:G7");
+    ws.getCell("H7").value = "N";
+    const result = await parseRosterWorkbook(await toBuffer(wb), "merged-date-vertical.xlsx");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows.map((r) => [r.rowIndex, r.workDate, r.rawCode])).toEqual([
+      [6, "2026-08-01", "D"],
+      [7, "2026-08-02", "N"],
+    ]);
+    expect(result.mergedExpandedCount).toBe(0);
   });
 
   it("工作表名唔寫死 2026：2027 年更表都讀到", async () => {

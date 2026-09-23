@@ -531,6 +531,9 @@ model Site {
   brokerAssignments BrokerSiteAssignment[]
   quotas            Quota[]
   rosterUploads     RosterUpload[]
+  // Phase B-0：一檔多子盤（城巴車廠／CP5）逐格「解析後實際盤」反向關聯
+  // ——`RosterUploadRow.resolvedSiteId`，見嗰個 model 註解。
+  resolvedRosterUploadRows RosterUploadRow[]
 
   @@map("sites")
 }
@@ -722,6 +725,15 @@ model RosterUploadRow {
   codeKind    RosterUploadCodeKind @map("code_kind")
   shiftTypeId String?              @map("shift_type_id") // 對唔到 shift_types 就 null（唔准估），warnings 記低
   shiftType   ShiftType?           @relation(fields: [shiftTypeId], references: [id])
+  // Phase B-0（§15.3 第 3 項，一檔多子盤：城巴車廠 9 個子盤／CP5 夾數據
+  // 中心）：呢行「語意上」實際屬邊個盤——上載掛嘅盤（`roster_uploads.
+  // site_id`）有子盤（`sites.parent_site_id`）而且 `sub_site_name` 對到
+  // 某個子盤，就係嗰個子盤；冇子盤嘅上載（絕大多數）就同上載本身嘅
+  // site_id 一致；有子盤但 sub_site_name 對唔到就 null（唔准估，見
+  // warnings）。更別配對（`shift_type_id`）跟呢個欄嘅盤範圍搵，唔跟
+  // 上載本身嘅 site_id。
+  resolvedSiteId String? @map("resolved_site_id")
+  resolvedSite   Site?   @relation(fields: [resolvedSiteId], references: [id])
 
   staffNoRaw    String? @map("staff_no_raw")
   nameRaw       String? @map("name_raw")

@@ -21,6 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { rosterFixtureKey } from "./roster-fixture-key";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const RECORDS_JSONL = path.resolve(REPO_ROOT, "data/2026-09/aug-payroll-trial/out-rosters/records.jsonl");
@@ -82,7 +83,7 @@ async function main() {
       site_raw: (raw.site_raw as string | null) ?? null,
     };
 
-    let agg = byFile.get(rec.file);
+    let agg = byFile.get(rosterFixtureKey(rec.file));
     if (!agg) {
       agg = {
         siteRaw: rec.site_raw,
@@ -98,7 +99,7 @@ async function main() {
         brokerCodeSeenNonNull: false,
         standardLayoutRowCount: 0,
       };
-      byFile.set(rec.file, agg);
+      byFile.set(rosterFixtureKey(rec.file), agg);
     }
 
     agg.totalCellCount += 1;

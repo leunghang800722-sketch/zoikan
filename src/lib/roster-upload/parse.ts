@@ -19,7 +19,7 @@
 // ——盤名/更別/安員/雞頭嘅對照留俾 `src/lib/roster-upload/match.ts`
 // （拎住呢度嘅輸出＋DB 查詢結果先做）。
 import ExcelJS from "exceljs";
-import { buildMapping, findDateHeaders, fieldCol, isMergedSlave, rawCell, LAYOUT_OFFSETS, type ColumnMapping, type LayoutName } from "./layout";
+import { buildMapping, findDateHeaders, fieldCol, rawCell, LAYOUT_OFFSETS, type ColumnMapping, type LayoutName } from "./layout";
 import { classifyCode, otHoursFromCode, STAT_ROW_LABELS, type CodeKind } from "./cell-codes";
 
 function clean(value: unknown): string | null {
@@ -83,6 +83,9 @@ export interface ParsedSheet {
   maxDateHeaderGap: number;
   blockCount: number;
   subSiteNames: string[];
+  /** Phase B-0：呢個 sheet 入面由橫向合併格展開出嚟嘅格數（3 格合併 D
+   * ＝計 3，唔包括冇合併嘅格）。 */
+  mergedExpandedCount: number;
   rows: ParsedCellRow[];
   warnings: SheetParseWarning[];
 }
@@ -101,6 +104,8 @@ export interface ParseSuccess {
   codeKindBreakdown: Record<CodeKind, number>;
   dateRange: { min: string; max: string } | null;
   subSiteNames: string[];
+  /** Phase B-0：全檔由橫向合併格展開出嚟嘅格數總和。 */
+  mergedExpandedCount: number;
   warnings: string[];
 }
 
@@ -178,6 +183,83 @@ function isoDateUTC(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+// Phase B-0（§15.3 第 1 項，老闆 2026-09-23 答）：日期格橫向合併跨 N 個
+// 日期欄（例如 8/11–8/13 三格合併寫一個 D）＝嗰 N 日**每日一格**同一個
+// 代號（3 格合併 D＝3 更），逐格出警告「由合併格展開（第 x/N 日）」俾
+// 會計覆核。直行合併（姓名跨兩行）唔受呢個函數影響，照舊淨計第一行
+// （`rawCell()` 對「母格喺上面幾行」嘅 slave 格繼續當空白）。
+function addressRowNum(address: string): number {
+  const m = /^[A-Za-z]+(\d+)$/.exec(address);
+  return m ? Number(m[1]) : -1;
+}
+
+interface DateMergeGroup {
+  /** 呢個 group 喺 [dateStartCol,dateEndCol] 範圍入面實際包含嘅欄（按次序）。 */
+  cols: number[];
+  rawValue: string | null;
+  /** 橫跨多過一個日期欄嘅合併——先要逐格出「由合併格展開」warning。 */
+  isMultiCol: boolean;
+  /** 合併範圍伸出咗 dateEndCol 以外（例如連埋備註欄）——淨係展開咗日期
+   * 欄嗰部分，要另外出一個警告講呢件事。 */
+  extendsBeyondRange: boolean;
+  /** 驗收 2026-09-23：合併範圍由日期欄前面（例如 Name／日薪欄）伸入日期
+   * 欄——母格唔係日期格，個值（通常係姓名）唔係代號，當空白跳過＋警告。 */
+  startsBeforeRange?: boolean;
+}
+
+function collectDateMergeGroups(ws: ExcelJS.Worksheet, row: number, startCol: number, endCol: number): DateMergeGroup[] {
+  const groups: DateMergeGroup[] = [];
+  let col = startCol;
+  while (col <= endCol) {
+    const cell = ws.getRow(row).getCell(col);
+    if (cell.isMerged && addressRowNum(cell.master.address) !== row) {
+      // 母格喺上面幾行（直行合併延伸落嚟呢個日期格，理論上罕見）——當
+      // 空白跳過，唔起 group（同姓名欄嘅直行合併行為一致）。
+      col += 1;
+      continue;
+    }
+    if (cell.isMerged && Number(cell.master.col) < startCol) {
+      // 驗收 2026-09-23：母格喺日期欄前面（例如姓名格合併伸入第一個日期
+      // 欄）——之前會將姓名當代號展開入日期格。當空白跳過＋警告。
+      const masterAddress = cell.master.address;
+      const cols = [col];
+      let probe = col + 1;
+      while (probe <= endCol && ws.getRow(row).getCell(probe).isMerged && ws.getRow(row).getCell(probe).master.address === masterAddress) {
+        cols.push(probe);
+        probe += 1;
+      }
+      groups.push({ cols, rawValue: null, isMultiCol: false, extendsBeyondRange: false, startsBeforeRange: true });
+      col = probe;
+      continue;
+    }
+    const masterAddress = cell.isMerged ? cell.master.address : cell.address;
+    const cols = [col];
+    let probe = col + 1;
+    while (probe <= endCol) {
+      const probeCell = ws.getRow(row).getCell(probe);
+      if (probeCell.isMerged && probeCell.master.address === masterAddress) {
+        cols.push(probe);
+        probe += 1;
+      } else {
+        break;
+      }
+    }
+    let extendsBeyondRange = false;
+    // 驗收 2026-09-23：淨係最後一個日期格同備註欄合併（日期部分得 1 格）
+    // 之前唔會出警告——改做只要 group 去到 endCol 而且係合併格就檢查。
+    if (cell.isMerged && cols[cols.length - 1] === endCol) {
+      const afterCell = ws.getRow(row).getCell(endCol + 1);
+      if (afterCell.isMerged && afterCell.master.address === masterAddress) extendsBeyondRange = true;
+    }
+    // slave 格嘅 `.value` 本身已經自動鏡射母格個值（exceljs 特性），淨係
+    // 讀 group 第一格（唔理係咪母格本身）就攞到正確值，唔使額外攞
+    // `cell.master.value`。
+    groups.push({ cols, rawValue: clean(cell.value), isMultiCol: cols.length > 1, extendsBeyondRange });
+    col = probe;
+  }
+  return groups;
+}
+
 function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | { error: string } {
   const siteRaw = getSiteRaw(ws);
   const headers = findDateHeaders(ws);
@@ -190,6 +272,7 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
   const layouts = new Set<LayoutName>();
   let noBrokerCol = false;
   let maxGap = 0;
+  let mergedExpandedCount = 0;
   const subSiteNames = new Set<string>();
 
   for (let i = 0; i < headers.length; i++) {
@@ -231,39 +314,55 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
         continue;
       }
 
-      // 驗收 2026-09-23：日期格有合併儲存格（例如一格 AL 橫跨幾日）——跟
-      // python 版淨係計左上角一格，但一定要出警告俾會計覆核，唔可以靜靜少計。
-      for (let col = mapping.dateStartCol; col <= mapping.dateEndCol; col++) {
-        const cell = ws.getRow(r).getCell(col);
-        if (isMergedSlave(cell) && clean(cell.master.value) !== null) {
-          warnings.push({ row: r, reason: `日期格 ${cell.address} 係合併儲存格（左上角 ${cell.master.address}），只計左上角一格，人手覆核` });
+      // Phase B-0（老闆 2026-09-23 答）：日期格橫向合併跨 N 個日期欄＝嗰
+      // N 日每日一格同一個代號，逐格展開＋逐格警告；跨出日期欄範圍（例
+      // 如連埋備註欄）就淨係展開日期欄部分＋另加一個警告。
+      const mergeGroups = collectDateMergeGroups(ws, r, mapping.dateStartCol, mapping.dateEndCol);
+      for (const group of mergeGroups) {
+        if (group.startsBeforeRange) {
+          const firstCell = ws.getRow(r).getCell(group.cols[0]!);
+          warnings.push({
+            row: r,
+            reason: `合併儲存格（${firstCell.master.address} 開始）由日期欄前面伸入日期欄（${firstCell.address}），嗰幾格當空白跳過，人手覆核`,
+          });
         }
-      }
-
-      for (let col = mapping.dateStartCol; col <= mapping.dateEndCol; col++) {
-        const rawCode = clean(rawCell(ws, r, col));
+        if (group.extendsBeyondRange) {
+          const firstCell = ws.getRow(r).getCell(group.cols[0]!);
+          warnings.push({
+            row: r,
+            reason: `合併儲存格（${firstCell.address} 開始）延伸到日期欄範圍以外（例如備註欄），淨係展開日期欄部分，人手覆核`,
+          });
+        }
+        const rawCode = group.rawValue;
         if (rawCode === null) continue;
-        const dateObj = mapping.dateValues.get(col);
-        if (!dateObj) continue;
         const codeKind = classifyCode(rawCode);
-        const rowWarnings: string[] = [];
-        if (codeKind === "unknown") {
-          rowWarnings.push(`格仔代號「${rawCode}」未喺對照表出現，人手覆核`);
-        }
-        rows.push({
-          rowIndex: r,
-          subSiteName: subSite,
-          workDate: isoDateUTC(dateObj),
-          rawCode,
-          codeKind,
-          staffNoRaw,
-          nameRaw,
-          telRaw,
-          rankRaw,
-          timeRaw,
-          brokerCodeRaw,
-          hours: codeKind === "ot" ? otHoursFromCode(rawCode) : null,
-          warnings: rowWarnings,
+        const totalDays = group.cols.length;
+        if (group.isMultiCol) mergedExpandedCount += totalDays;
+        group.cols.forEach((col, idx) => {
+          const dateObj = mapping.dateValues.get(col);
+          if (!dateObj) return;
+          const rowWarnings: string[] = [];
+          if (codeKind === "unknown") {
+            rowWarnings.push(`格仔代號「${rawCode}」未喺對照表出現，人手覆核`);
+          }
+          if (group.isMultiCol) {
+            rowWarnings.push(`由合併格展開（第 ${idx + 1}/${totalDays} 日）`);
+          }
+          rows.push({
+            rowIndex: r,
+            subSiteName: subSite,
+            workDate: isoDateUTC(dateObj),
+            rawCode,
+            codeKind,
+            staffNoRaw,
+            nameRaw,
+            telRaw,
+            rankRaw,
+            timeRaw,
+            brokerCodeRaw,
+            hours: codeKind === "ot" ? otHoursFromCode(rawCode) : null,
+            warnings: rowWarnings,
+          });
         });
       }
     }
@@ -277,6 +376,7 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
     maxDateHeaderGap: maxGap,
     blockCount: headers.length,
     subSiteNames: [...subSiteNames],
+    mergedExpandedCount,
     rows,
     warnings,
   };
@@ -373,6 +473,7 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
     codeKindBreakdown,
     dateRange: dateMin && dateMax ? { min: dateMin, max: dateMax } : null,
     subSiteNames: [...subSiteNames],
+    mergedExpandedCount: sheets.reduce((sum, s) => sum + s.mergedExpandedCount, 0),
     warnings,
   };
 }

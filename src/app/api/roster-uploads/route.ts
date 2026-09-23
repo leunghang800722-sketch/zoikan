@@ -128,6 +128,9 @@ export async function POST(req: Request) {
         supersededCount: result.supersededIds.length,
         parseOk: result.parseResult.ok,
         parseError: result.parseResult.ok ? null : result.parseResult.error,
+        // Phase B-0 第 5(a) 項：同一檔（同 SHA-256）重複上載——出提示唔擋，
+        // 呢個係俾嗰個舊版本嘅 version 號（冇撞就 null）。
+        duplicateOfVersion: result.duplicateOfVersion,
       }),
       201,
     );
