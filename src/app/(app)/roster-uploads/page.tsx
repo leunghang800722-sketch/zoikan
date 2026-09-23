@@ -38,7 +38,14 @@ interface RosterUploadDTO {
     unmatched_guard_count: number;
     ambiguous_guard_count: number;
     unmatched_shift_type_count: number;
+    ambiguous_shift_type_count: number;
     unmatched_broker_count: number;
+    out_of_month_count: number;
+    // Phase B-0：合併格展開格數／子盤對唔到格數／舊工號兩類格數。
+    merged_expanded_count: number;
+    unmatched_sub_site_count: number;
+    stale_staff_no_count: number;
+    staff_no_mismatch_count: number;
     date_range: { min: string; max: string } | null;
     warnings: string[];
   } | null;
@@ -67,6 +74,9 @@ interface RosterUploadRowDTO {
   raw_code: string;
   code_kind: "shift" | "leave" | "ot" | "marker" | "unknown";
   shift_type_id: string | null;
+  // Phase B-0 第 3 項：一檔多子盤（城巴車廠／CP5）解析後嘅實際盤——冇
+  // 子盤嘅上載一律等於呢個上載自己嘅 site_id。
+  resolved_site_id: string | null;
   staff_no_raw?: string;
   name_raw?: string;
   tel_raw?: string;
@@ -107,6 +117,10 @@ const GUARD_MATCH_LABEL: Record<string, string> = {
   ambiguous: "多個候選",
 };
 
+// Phase B-0 第 4 項：呢兩類淨係 warnings 文字（唔改 guard_match enum），
+// 對應 API `?warning_flag=`（唔係 `?guard_match=`）。
+const WARNING_FLAG_VALUES = new Set(["staff_no_mismatch", "stale_staff_no"]);
+
 export default function RosterUploadsPage() {
   const [month, setMonth] = useState(currentMonthStr());
   const [sites, setSites] = useState<SiteOption[]>([]);
@@ -124,8 +138,11 @@ export default function RosterUploadsPage() {
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   // 驗收 2026-09-23：原本淨係得「只顯示未配對」checkbox——「多個候選」（同名
-  // 多人）同「淨係姓名配對」一樣要人手覆核，改做下拉。
-  const [matchFilter, setMatchFilter] = useState<"" | "unmatched" | "ambiguous" | "by_name">("");
+  // 多人）同「淨係姓名配對」一樣要人手覆核，改做下拉。Phase B-0 第 4 項：
+  // 加多兩類（工號唔一致／已取消舊號配對）——呢兩類唔係 `guard_match`
+  // enum 值，係喺 warnings 文字入面（見 match.ts GuardMatchResult 註解），
+  // 對應 API 嘅 `?warning_flag=` 參數（`loadDetail()` 自己分流）。
+  const [matchFilter, setMatchFilter] = useState<"" | "unmatched" | "ambiguous" | "by_name" | "staff_no_mismatch" | "stale_staff_no">("");
   const [patchingSiteFor, setPatchingSiteFor] = useState<string | null>(null);
 
   async function loadList() {
@@ -154,11 +171,14 @@ export default function RosterUploadsPage() {
 
   // 驗收 2026-09-23：API 每頁上限 500 格，大盤（例如城巴車廠）一個月過千格——
   // 之前淨係攞第一頁，後面嘅格靜靜睇唔到。而家顯示「已載入 N／共 T」＋「載入更多」。
-  async function loadDetail(uploadId: string, guardMatch?: string, append = false) {
+  async function loadDetail(uploadId: string, filter?: string, append = false) {
     setDetailLoading(true);
     const skip = append && detail ? detail.rows.rows.length : 0;
     const qs = new URLSearchParams({ take: "500", skip: String(skip) });
-    if (guardMatch) qs.set("guard_match", guardMatch);
+    if (filter) {
+      if (WARNING_FLAG_VALUES.has(filter)) qs.set("warning_flag", filter);
+      else qs.set("guard_match", filter);
+    }
     const res = await apiGet<DetailResponse>(`/api/roster-uploads/${uploadId}?${qs.toString()}`);
     setDetailLoading(false);
     if (!res.ok) {
@@ -193,15 +213,22 @@ export default function RosterUploadsPage() {
     form.set("file", file);
     form.set("month", month);
     if (uploadSiteId) form.set("site_id", uploadSiteId);
-    const res = await apiUpload<{ upload: RosterUploadDTO; superseded_count: number; parse_ok: boolean; parse_error: string | null }>("/api/roster-uploads", form);
+    const res = await apiUpload<{ upload: RosterUploadDTO; superseded_count: number; parse_ok: boolean; parse_error: string | null; duplicate_of_version: number | null }>(
+      "/api/roster-uploads",
+      form,
+    );
     setUploading(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (!res.ok) {
+      // Phase B-0 第 5(b) 項：檔名同該盤同月現有版本撞名——後端 400，
+      // 訊息「更新檔嘅檔名必須同舊版唔同，請改檔名再上載」直接喺呢度顯示。
       setError(res.message);
       return;
     }
     if (res.data.parse_ok) {
-      setNotice(`已上載並解析：${file.name}（版本 ${res.data.upload.version}${res.data.superseded_count ? `，取代咗 ${res.data.superseded_count} 個舊版` : ""}）`);
+      // Phase B-0 第 5(a) 項：同一檔（同 SHA-256）重複上載——出提示，唔擋。
+      const dupNote = res.data.duplicate_of_version ? `；同第 ${res.data.duplicate_of_version} 版一模一樣（SHA-256 相同），已開新版本` : "";
+      setNotice(`已上載並解析：${file.name}（版本 ${res.data.upload.version}${res.data.superseded_count ? `，取代咗 ${res.data.superseded_count} 個舊版` : ""}${dupNote}）`);
     } else {
       setError(`已存底但解析失敗：${res.data.parse_error ?? "未知原因"}`);
     }
@@ -450,6 +477,8 @@ export default function RosterUploadsPage() {
                   <option value="unmatched">只顯示未配對</option>
                   <option value="ambiguous">只顯示多個候選</option>
                   <option value="by_name">只顯示淨係姓名配對</option>
+                  <option value="staff_no_mismatch">只顯示工號不一致</option>
+                  <option value="stale_staff_no">只顯示用已取消舊號配對</option>
                 </select>
               </label>
               <Button variant="secondary" onClick={() => selectedUploadId && doReparse(selectedUploadId)}>
@@ -516,7 +545,10 @@ export default function RosterUploadsPage() {
                           {r.name_raw && <span className="ml-1.5 text-[11.5px] text-zk-muted">{r.name_raw}</span>}
                         </td>
                         <td className={tableCls.td}>{r.broker_code_raw ?? "—"}</td>
-                        <td className={tableCls.td}>{r.sub_site_name ?? "—"}</td>
+                        <td className={tableCls.td}>
+                          {r.sub_site_name ?? "—"}
+                          {r.sub_site_name && !r.resolved_site_id && <span className="ml-1 text-[11px] text-orange-600">（子盤未配對）</span>}
+                        </td>
                         <td className={`${tableCls.td} text-[11.5px] text-orange-700`}>{r.warnings && r.warnings.length ? r.warnings.join("；") : ""}</td>
                       </tr>
                     );

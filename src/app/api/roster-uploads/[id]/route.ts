@@ -33,9 +33,28 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (guardMatchParam && !(ALLOWED_GUARD_MATCH as readonly string[]).includes(guardMatchParam)) {
       throw BadRequest(`guard_match 要係其中一個：${ALLOWED_GUARD_MATCH.join("/")}`);
     }
+    // Phase B-0 第 4 項：呢兩類細分（工號唔一致／用已取消舊號配對）淨係
+    // 加咗 warnings 文字，冇改 `guard_match` enum（見 match.ts
+    // GuardMatchResult 註解），所以要用 `warnings::text ILIKE` 篩，
+    // Prisma 嘅 Json filter 冇「子字串 contains」呢種表達力。
+    const warningFlagParam = url.searchParams.get("warning_flag");
+    const WARNING_FLAG_PATTERNS: Record<string, string> = {
+      staff_no_mismatch: "%同系統工號%唔一致%",
+      stale_staff_no: "%用已取消舊號配對%",
+    };
+    if (warningFlagParam && !(warningFlagParam in WARNING_FLAG_PATTERNS)) {
+      throw BadRequest(`warning_flag 要係其中一個：${Object.keys(WARNING_FLAG_PATTERNS).join("/")}`);
+    }
+    let warningFilterIds: string[] | null = null;
+    if (warningFlagParam) {
+      const pattern = WARNING_FLAG_PATTERNS[warningFlagParam]!;
+      const matched = await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM roster_upload_rows WHERE upload_id = ${id} AND warnings::text ILIKE ${pattern}`;
+      warningFilterIds = matched.map((r) => r.id);
+    }
     const where: Prisma.RosterUploadRowWhereInput = {
       uploadId: id,
       ...(guardMatchParam ? { guardMatch: guardMatchParam as GuardMatchValue } : {}),
+      ...(warningFilterIds ? { id: { in: warningFilterIds } } : {}),
     };
 
     const [rows, total] = await Promise.all([

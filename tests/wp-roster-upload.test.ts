@@ -58,9 +58,9 @@ function reqJson(url: string, cookie: string, method = "GET", body?: unknown) {
   return new Request(url, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
 }
 
-function reqMultipart(url: string, cookie: string, buffer: Buffer, month: string, siteId?: string): Request {
+function reqMultipart(url: string, cookie: string, buffer: Buffer, month: string, siteId?: string, fileName = "test-roster.xlsx"): Request {
   const form = new FormData();
-  form.set("file", new File([new Uint8Array(buffer)], "test-roster.xlsx"));
+  form.set("file", new File([new Uint8Array(buffer)], fileName));
   form.set("month", month);
   if (siteId) form.set("site_id", siteId);
   return new Request(url, { method: "POST", headers: { cookie }, body: form });
@@ -120,13 +120,15 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(after.file_bytes).toBeUndefined();
   });
 
-  it("§3 同盤同月重複上載：舊版 supersede，version 遞增", async () => {
+  it("§3 同盤同月重複上載（唔同檔名）：舊版 supersede，version 遞增", async () => {
     const buf1 = await buildXlsx({ siteName: fx.site.name });
-    const res1 = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf1, "2026-08"));
+    const res1 = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf1, "2026-08", undefined, "roster-v1.xlsx"));
     const body1 = (await res1.json()) as { upload: { id: string } };
 
     const buf2 = await buildXlsx({ siteName: fx.site.name, codes: [[1, "N"], [2, "N"]] });
-    const res2 = await createUpload(reqMultipart("http://test.local/api/roster-uploads", accountantCookie, buf2, "2026-08"));
+    // 驗收 2026-09-23（老闆追加答）：更新檔嘅檔名要同舊版唔同——呢度用
+    // 「roster-v2.xlsx」（同 §14 嘅撞名 400 場景分開測）。
+    const res2 = await createUpload(reqMultipart("http://test.local/api/roster-uploads", accountantCookie, buf2, "2026-08", undefined, "roster-v2.xlsx"));
     expect(res2.status).toBe(201);
     const body2 = (await res2.json()) as { upload: { id: string; version: number }; superseded_count: number };
     expect(body2.upload.version).toBe(2);
@@ -269,8 +271,8 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
   // Opus 驗收（2026-09-23）補測：版本／並發／檔案格式／月份
   // -------------------------------------------------------------------------
   it("§10 重新解析已被取代嘅舊版：保持 superseded，唔會變兩個 active", async () => {
-    const r1 = (await (await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08"))).json()) as { upload: { id: string } };
-    await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08"));
+    const r1 = (await (await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08", undefined, "roster-v1.xlsx"))).json()) as { upload: { id: string } };
+    await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08", undefined, "roster-v2.xlsx"));
     const res = await reparseUpload(reqJson(`http://test.local/api/roster-uploads/${r1.upload.id}/reparse`, ownerCookie, "POST"), { params: Promise.resolve({ id: r1.upload.id }) });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status: string }).status).toBe("superseded");
@@ -296,7 +298,9 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
 
   it("§13 同時上載三次（撳多幾下）：只得一個 active，version 1/2/3", async () => {
     const buf = await buildXlsx({ siteName: fx.site.name });
-    const rs = await Promise.all([1, 2, 3].map(() => createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08"))));
+    // 驗收 2026-09-23（老闆追加答）：更新檔嘅檔名唔准同舊版一樣——呢度用
+    // 三個唔同檔名，先淨係測 advisory lock 嘅版本序列（唔係撞名 400）。
+    const rs = await Promise.all([1, 2, 3].map((n) => createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, `roster-concurrent-${n}.xlsx`))));
     expect(rs.map((r) => r.status)).toEqual([201, 201, 201]);
     const all = await prisma.rosterUpload.findMany({ where: { siteId: fx.site.id }, orderBy: { version: "asc" } });
     expect(all.map((x) => x.version)).toEqual([1, 2, 3]);
@@ -323,5 +327,156 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
   it("§16 GET ?month= 亂寫 → 400", async () => {
     const res = await listUploads(reqJson("http://test.local/api/roster-uploads?month=hello%202026", ownerCookie));
     expect(res.status).toBe(400);
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase B-0（2026-09-23）補測：第 2/3/4/5 項
+  // -------------------------------------------------------------------------
+  it("§17 同一檔（同 SHA-256）用唔同檔名重複上載：唔擋，response 帶 duplicate_of_version", async () => {
+    const buf = await buildXlsx({ siteName: fx.site.name });
+    const res1 = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "roster-a.xlsx"));
+    const body1 = (await res1.json()) as { upload: { version: number }; duplicate_of_version: number | null };
+    expect(body1.duplicate_of_version).toBeNull();
+
+    const res2 = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "roster-b.xlsx"));
+    expect(res2.status).toBe(201);
+    const body2 = (await res2.json()) as { upload: { version: number }; duplicate_of_version: number | null };
+    expect(body2.upload.version).toBe(2);
+    expect(body2.duplicate_of_version).toBe(1);
+  });
+
+  it("§18 更新檔嘅檔名同該盤同月任何現有版本（active 或 superseded）一樣 → 400，唔存底、唔開版本", async () => {
+    const buf1 = await buildXlsx({ siteName: fx.site.name });
+    await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf1, "2026-08", undefined, "roster-same.xlsx"));
+
+    const buf2 = await buildXlsx({ siteName: fx.site.name, codes: [[1, "N"], [2, "N"]] });
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf2, "2026-08", undefined, "roster-same.xlsx"));
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { message: string };
+    expect(body.message).toContain("更新檔嘅檔名必須同舊版唔同");
+    expect(await prisma.rosterUpload.count({ where: { siteId: fx.site.id } })).toBe(1); // 撞名嗰次冇存底
+
+    // 撞嘅係 superseded 版本嘅檔名一樣攔——起返 v2（另一個名），再試用返 v1 個名。
+    await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf2, "2026-08", undefined, "roster-v2.xlsx"));
+    const res2 = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf2, "2026-08", undefined, "roster-same.xlsx"));
+    expect(res2.status).toBe(400);
+    expect(await prisma.rosterUpload.count({ where: { siteId: fx.site.id } })).toBe(2);
+  });
+
+  it("§19 一檔多子盤（城巴車廠式）：sub_site_name 對到子盤 → resolved_site_id=子盤，更別配對用子盤嘅 shift_types", async () => {
+    // 鐵則：seed 唔准加真盤名以外嘅嘢——用測試自己合成嘅子盤（唔改
+    // seed script），parent_site_id 掛返，同 Phase B-0 第 3 項規格一致。
+    const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    const child1 = await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤A", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+    await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤B", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+    const shiftTypeChild1 = await prisma.shiftType.create({ data: { siteId: child1.id, code: "D", createdBy: "test-wp-roster-upload" } });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = parent.canonicalName;
+    ws.getCell("G4").value = "Date";
+    ws.getCell("H4").value = aug(1);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", child1.canonicalName, "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("H6").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-test.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string } };
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.subSiteName).toBe(child1.canonicalName);
+    expect(rows[0]!.resolvedSiteId).toBe(child1.id);
+    expect(rows[0]!.shiftTypeId).toBe(shiftTypeChild1.id); // 更別跟子盤嘅 shift_types 範圍搵，唔係母盤
+    expect(rows[0]!.guardId).toBe(fx.guardA.id);
+  });
+
+  it("§19b 一檔多子盤：sub_site_name 對唔到任何子盤 → resolved_site_id=null，更別配對留空＋warning", async () => {
+    const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤2", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤C", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = parent.canonicalName;
+    ws.getCell("G4").value = "Date";
+    ws.getCell("H4").value = aug(1);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", "呢個子盤名對唔到", "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("H6").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-unmatched.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string; parse_summary: { unmatched_sub_site_count: number } } };
+    expect(body.upload.parse_summary.unmatched_sub_site_count).toBe(1);
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows[0]!.resolvedSiteId).toBeNull();
+    expect(rows[0]!.shiftTypeId).toBeNull();
+    expect(JSON.stringify(rows[0]!.warnings)).toContain("對唔到呢個盤底下嘅子盤");
+  });
+
+  it("§20 檔案工號同系統唔一致，退用姓名/電話配到 → guard_match=by_name_tel＋warning「檔案工號 X 同系統工號 Y 唔一致」", async () => {
+    const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "T-ZZZ99", name: fx.guardA.name, tel: "6100001" });
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "mismatch.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string; parse_summary: { staff_no_mismatch_count: number } } };
+    expect(body.upload.parse_summary.staff_no_mismatch_count).toBe(1);
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows[0]!.guardId).toBe(fx.guardA.id);
+    expect(rows[0]!.guardMatch).toBe("by_name_tel");
+    expect(JSON.stringify(rows[0]!.warnings)).toContain("檔案工號 T-ZZZ99 同系統工號 T-A01 唔一致");
+  });
+
+  it("§21 靠已取消（former）舊工號配對到 → guard_match 仍然係 by_staff_no＋warning「用已取消舊號配對」", async () => {
+    await prisma.guardStaffNumber.create({ data: { guardId: fx.guardA.id, scheme: "U", number: "U88888", status: "former", source: "test-wp-roster-upload" } });
+    const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "U88888" });
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "stale.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string; parse_summary: { stale_staff_no_count: number } } };
+    expect(body.upload.parse_summary.stale_staff_no_count).toBe(1);
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows[0]!.guardId).toBe(fx.guardA.id);
+    expect(rows[0]!.guardMatch).toBe("by_staff_no");
+    expect(JSON.stringify(rows[0]!.warnings)).toContain("用已取消舊號配對");
+  });
+
+  it("§22 更種配對用 time_raw 收窄：時段啱就配到，唔啱任何候選就保留 ambiguous 並列出候選時段", async () => {
+    const siteX = await prisma.site.create({ data: { canonicalName: "測試盤時段收窄", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    const shiftDay1 = await prisma.shiftType.create({
+      data: { siteId: siteX.id, code: "D", startTime: new Date(Date.UTC(1970, 0, 1, 7, 0, 0)), endTime: new Date(Date.UTC(1970, 0, 1, 19, 0, 0)), createdBy: "test-wp-roster-upload" },
+    });
+    await prisma.shiftType.create({
+      data: { siteId: siteX.id, code: "D", startTime: new Date(Date.UTC(1970, 0, 1, 8, 0, 0)), endTime: new Date(Date.UTC(1970, 0, 1, 20, 0, 0)), createdBy: "test-wp-roster-upload" },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = siteX.canonicalName;
+    ws.getCell("F4").value = "Date";
+    ws.getCell("G4").value = aug(1);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Staff No.", "Tel", "Name"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("G6").value = "D";
+    ws.getRow(7).values = ["TEST-BA", "0900-2100", "Guard", "T-ZZZZ", "69999999", "測試安員未知"];
+    ws.getCell("G7").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", siteX.id, "timerange.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string } };
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id }, orderBy: { rowIndex: "asc" } });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.timeRaw).toBe("0700-1900");
+    expect(rows[0]!.shiftTypeId).toBe(shiftDay1.id); // 0700-1900 岩第一個候選
+    expect(rows[1]!.timeRaw).toBe("0900-2100");
+    expect(rows[1]!.shiftTypeId).toBeNull(); // 兩個候選時段都唔啱，保留 null
+    expect(JSON.stringify(rows[1]!.warnings)).toContain("更別配對到多過一個候選（時段：");
   });
 });
