@@ -180,7 +180,25 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
 };
 
 // 恆星樓：見上面檔頭註解，淨係跳過佢個「逐更」client 卡。
-const SKIP_PER_SHIFT_CLIENT_SITES = new Set(["恆星樓"]);
+// 九龍企業大廈（Opus 5.5 驗收加）：同一原因——夜更 E=822.58＝25,500÷31，
+// 係月費倒算值唔係真逐更价（sites.monthly_fee 25,500 × monthly_posts 2
+// ＝51,000＝revenue_site.json S016 revenue_total），兩個崗都係月費，收入
+// 交俾 site flat 卡（見第 5 步），唔起逐更 client 卡。
+const SKIP_PER_SHIFT_CLIENT_SITES = new Set(["恆星樓", "九龍企業大廈"]);
+
+// ---------------------------------------------------------------------------
+// 啟航1331 Event（Opus 5.5 驗收改）：原本做法係「啟航1331 Event Guard」加
+// alias 去「啟航1331」——但 Phase B-0 上載版本邏輯係「同盤同月新上載取代
+// 舊版」（service.ts processRosterUpload → versionGroupWhere(siteId, month)），
+// Event 檔同正常 1331 檔係兩個獨立檔，對到同一個盤就會後上載嗰個 supersede
+// 前一個（dev 實測：正常 1331 檔變 superseded，千幾格冇咗）。改做獨立盤
+// 「啟航1331 Event」（parent 留空——如果掛做 1331 嘅子盤，正常 1331 檔每
+// 一行都會因為「有子盤但冇寫子盤名」出 warning），有自己嘅更種同价目卡；
+// 總表 `S017|1000-1900|K` 呢組价（上單 1,350／外判 990，boss_answers.py 七）
+// 掛喺呢個盤。
+// ---------------------------------------------------------------------------
+const EVENT_SITE = "啟航1331 Event";
+const PSTB_KEY_SITE_OVERRIDE: Record<string, string> = { "S017|1000-1900|K": EVENT_SITE };
 
 // ---------------------------------------------------------------------------
 // 唔喺 101 組價目入面、但要另外建 alias 先對得到 8 月更表嘅盤
@@ -200,11 +218,6 @@ const EXTRA_ALIASES: { canonicalName: string; alias: string; note: string }[] = 
     alias: "Wilson Patrol",
     note: "推斷：clientName=都會大學、broker=Y(公司兵)，更表 25N+6RD 同 S032|1930-0730|Y n=25 脗合（時段更表寫 1900-0700，總表寫 1930-0730，30 分鐘落差）。未經老闆/會計確認，見 needsBossReview。",
   },
-  {
-    canonicalName: "啟航1331",
-    alias: "啟航1331 Event Guard",
-    note: "8 月新增嘅 Event 更表檔案（獨立檔名「Roster - 啟航1331 Event - Aug 2026.xlsx」），同「啟航1331」係同一個盤、新增 Event 崗（見 boss_answers.py：broker K，外判990/更，上單1350/更，8月起）——加 alias 令呢個檔案上載時對到盤。",
-  },
 ];
 
 // records.jsonl 逐格記錄嘅 lookup key（cellCountBySite 用 sub_site ??
@@ -222,7 +235,7 @@ const RECORD_LOOKUP_EXTRA_KEYS: Record<string, string[]> = {
 // DB 現況快照
 // ---------------------------------------------------------------------------
 interface DbSnapshot {
-  sites: { id: string; canonicalName: string; aliases: string[]; billingModel: string; monthlyFee: number | null; parentSiteId: string | null; clientGroup: string | null }[];
+  sites: { id: string; canonicalName: string; aliases: string[]; billingModel: string; monthlyFee: number | null; monthlyPosts: number | null; parentSiteId: string | null; clientGroup: string | null }[];
   shiftTypes: { id: string; siteId: string; code: string; startTime: Date | null; endTime: Date | null }[];
   brokers: { id: string; code: string }[];
   guards: { id: string; nameZh: string }[];
@@ -231,7 +244,7 @@ interface DbSnapshot {
 
 async function loadDbSnapshot(): Promise<DbSnapshot> {
   const sites = await prisma.site.findMany({
-    select: { id: true, canonicalName: true, aliases: true, billingModel: true, monthlyFee: true, parentSiteId: true, clientGroup: true },
+    select: { id: true, canonicalName: true, aliases: true, billingModel: true, monthlyFee: true, monthlyPosts: true, parentSiteId: true, clientGroup: true },
   });
   const shiftTypes = await prisma.shiftType.findMany({
     where: { voidedAt: null },
@@ -323,6 +336,20 @@ async function main() {
   for (const name of CITYBUS_CHILDREN) {
     plan.sites.setParent.push({ canonicalName: name, parentCanonicalName: CITYBUS_PARENT, note: "掛落新起嘅「城巴車廠」母盤（原本 parent_site_id=null）。" });
   }
+
+  // 1a-2. 啟航1331 Event 獨立盤（見上面 EVENT_SITE 註解）
+  plan.sites.create.push({
+    canonicalName: EVENT_SITE,
+    clientName: "啟德", // 同現有「啟航1331」盤嘅 client_name 一致
+    clientGroup: "啟航1331",
+    aliases: ["啟航1331 Event Guard"],
+    billingModel: "per_shift",
+    monthlyFee: null,
+    monthlyPosts: null,
+    parentCanonicalName: null,
+    guardsPaidByClient: false,
+    note: "8 月新盤（Event 崗，boss_answers.py 七：雞頭 K、外判 990／更、上單 1,350／更，8 月起）。獨立盤而唔係「啟航1331」alias：B-0 上載「同盤同月新上載取代舊版」，同一個盤會令 Event 檔同正常 1331 檔互相 supersede。",
+  });
 
   // 1b. site_id → 新建盤
   for (const [siteId, res] of Object.entries(SITE_CODE_MAP)) {
@@ -666,18 +693,25 @@ async function main() {
     const groupKey = `${siteId}|${time}|${broker}`;
     if (!personGroupClientDone.has(groupKey)) {
       personGroupClientDone.add(groupKey);
+      // Opus 5.5 驗收加：組級卡都要有一個「預設外判价」＝呢組出現次數最多
+      // 嘅 F——原本 guardWage=null，逐人卡對唔到人（例：HKU座頭 2200-0615
+      // 嗰位 dev DB 冇現用 U 號）或者之後新加入呢組嘅人，出街价會跌落 7 月
+      // 舊卡或者變未定价。逐人卡（rank 0）照樣贏呢張組級卡（rank 2）。
+      const groupF = pstb[groupKey]?.F ?? {};
+      const modalF = Object.keys(groupF).sort((a, b) => groupF[b] - groupF[a])[0];
+      const fallbackWage = modalF !== undefined ? Number(modalF) : null;
       pushCard({
         siteCanonicalName: canonicalName,
         shiftType: { code: shiftType.code, startTime: start, endTime: end },
         brokerCode: broker,
         guardStaffNo: null,
         clientRate: v.E,
-        guardWage: null,
-        brokerFee: null,
+        guardWage: fallbackWage,
+        brokerFee: fallbackWage !== null ? 0 : null,
         billingModel: "per_shift",
         effectiveFrom: EFFECTIVE_FROM,
         source: `aug-opening:price_overrides.json#multi_price_groups["${groupKey}"]`,
-        note: `逐人覆蓋組嘅通用收客价（${groupKey}）：E=${v.E}（8 個逐人卡見下）`,
+        note: `逐人覆蓋組嘅組級卡（${groupKey}）：收客价 E=${v.E}；預設外判价 F=${fallbackWage}（組內出現次數最多；逐人卡見下，優先過呢張）`,
         level: "site_shift_generic",
       });
     }
@@ -713,7 +747,7 @@ async function main() {
     if (zoneHandledGroups.has(`${siteId}|${time}|${broker}`)) continue;
     const isMultiPriceGroup = overrides.multi_price_groups.includes(`${siteId}|${time}|${broker}`);
     if (isMultiPriceGroup) continue; // 已經喺 4b 處理晒
-    const canonicalName = siteNameForCode(siteId);
+    const canonicalName = PSTB_KEY_SITE_OVERRIDE[key] ?? siteNameForCode(siteId);
     if (!canonicalName) {
       plan.needsBossReview.push(`pstb 組 "${key}"：site_id ${siteId} 冇喺 SITE_CODE_MAP。`);
       continue;
@@ -840,10 +874,19 @@ async function main() {
   // 5. Site 級月費 flat 卡：revenue_monthly != 0 嘅 site_id，同現有卡比較。
   // -------------------------------------------------------------------
   for (const r of revenue) {
-    if (!r.revenue_monthly) continue;
     const canonicalName = siteNameForCode(r.site_id);
     if (!canonicalName) continue;
     const site = siteByName.get(canonicalName);
+    // Opus 5.5 驗收改：月結（src/lib/reports/monthly-close.ts）對有 flat 卡
+    // 嘅盤，營業額＝flat 卡金額，**唔再加**逐更 client_rate_snapshot——所以
+    // 月費盤嘅 flat 卡要係成個盤嘅月收入，唔可以淨係 revenue_monthly 嗰部
+    // 分。盤本身設定（billing_model=monthly_fixed，monthly_fee×monthly_posts）
+    // 同試算 revenue_total 一致嘅話，用 revenue_total（例：九龍企業大廈
+    // 25,500×2＝51,000；恆星樓 25,000×2＝50,000——兩個盤嘅「逐更」E 都係
+    // 月費÷31 倒算值）。
+    const siteMonthlyTotal = site && site.billingModel === "monthly_fixed" && site.monthlyFee ? site.monthlyFee * (site.monthlyPosts ?? 1) : null;
+    const targetMonthly = siteMonthlyTotal !== null && Math.abs(siteMonthlyTotal - r.revenue_total) < 0.5 ? r.revenue_total : r.revenue_monthly;
+    if (!targetMonthly) continue;
     const existingFlat = site
       ? db.shiftTypes.length >= 0 &&
         (await prisma.rateCard.findMany({
@@ -854,20 +897,20 @@ async function main() {
       (c) => c.effectiveFrom <= AS_OF_DATE && (c.effectiveTo === null || c.effectiveTo >= AS_OF_DATE),
     );
     const currentValue = effective.length > 0 ? Number(effective[0].clientRate) : null;
-    if (currentValue !== null && Math.abs(currentValue - r.revenue_monthly) < 0.5) continue; // 已經一致，skip
+    if (currentValue !== null && Math.abs(currentValue - targetMonthly) < 0.5) continue; // 已經一致，skip
     const billingModel = site?.billingModel === "admin_fee" ? "admin_fee" : "monthly_fixed";
     pushCard({
       siteCanonicalName: canonicalName,
       shiftType: null,
       brokerCode: null,
       guardStaffNo: null,
-      clientRate: r.revenue_monthly,
+      clientRate: targetMonthly,
       guardWage: null,
       brokerFee: null,
       billingModel,
       effectiveFrom: EFFECTIVE_FROM,
-      source: `aug-opening:revenue_site.json["${r.site_id}"].revenue_monthly`,
-      note: currentValue === null ? `新增月費 flat 卡（${r.revenue_monthly}）。` : `月費由 ${currentValue}（7 月）變 ${r.revenue_monthly}（8 月），加新卡（唔改/唔 void 7 月嗰張）。`,
+      source: `aug-opening:revenue_site.json["${r.site_id}"].${targetMonthly === r.revenue_monthly ? "revenue_monthly" : "revenue_total"}`,
+      note: currentValue === null ? `新增月費 flat 卡（${targetMonthly}）。` : `月費由 ${currentValue}（7 月）變 ${targetMonthly}（8 月），加新卡（唔改/唔 void 7 月嗰張）。`,
       level: "site_flat",
     });
   }
@@ -895,6 +938,25 @@ async function main() {
       note: "啟航1331 Event 檔新散工（8 月起，boss_answers.py 確認：broker K，外判 990/更，上單 1350/更）。",
     });
   }
+
+  // -------------------------------------------------------------------
+  // 6b. Opus 5.5 驗收補：dev 實測（上載 36 檔＋逐格 resolver 對 8 月試算
+  //     shifts_priced.json）搵到、呢個 WP 唔可以自己決定嘅嘢，寫落
+  //     needsBossReview（冇人名／工號）。
+  // -------------------------------------------------------------------
+  plan.needsBossReview = plan.needsBossReview.map((m) =>
+    m.startsWith("「創富廠IC」時段 0700-1900：冇更表檔案資料")
+      ? "「創富廠IC」D@07:00-19:00：代號「D」有更表證據——「CTB 6907」檔（siteRaw 寫「城巴車廠」、子盤標記「創富車廠」）22 格全部 D／0700-1900／雞頭 Y／rank 日更IC，同總表 S026|0700-1900|Y n=22 脗合，檔內唯一安員 7 月淨係做過創富廠IC。"
+      : m,
+  );
+  plan.needsBossReview.push(
+    "【上載操作】「CTB 6907」更表檔 siteRaw 寫「城巴車廠」但實際係「創富廠IC」——上載時一定要喺上載頁人手揀盤「創富廠IC」。唔揀嘅話會自動配去「城巴車廠」母盤：(1) 同「城巴車廠」主檔同盤同月，後上載嗰個會 supersede 前一個；(2) 22 格會歸去子盤「城巴-創富車廠」用 820/700 計，唔係創富廠IC 嘅 1050/1050。",
+    "【數碼港 CP5 日更】7 月 dev DB「數碼港 CP5」有兩個 0750-1950 更種：D（billing_group=monthly_ic，IC 月費崗）同 D-2（per_shift，普通兵）。8 月更表檔全部寫「D」，上載配對（按代號）一律配去 monthly_ic 嗰個 D，resolver 對 monthly_ic 唔出收客价——約 269 更 × 930 收客价會變 null（dev 實測）。呢個唔喺呢個 WP 改得（要改 7 月更種或者 B-0 配對邏輯，例如按 rank 分 IC／兵），要老闆／Fable 定做法。",
+    "【控制室】8 月兩類人：一位月薪崗（收客 22,000 月費，25 更）＋日薪崗（收客 840／更，22 更），試算營業額 40,480。月結（monthly-close.ts）有 flat 卡就淨係計 flat 卡金額、唔加逐更——而家 flat 卡 22,000，月結會少計 18,480；逐更卡 840 又會令月薪崗 25 更都有 840 snapshot。現有資料模型表達唔到「月費＋逐更混合」，要老闆／Fable 定（例如 8 月 flat 卡改 40,480 並加 effective_to=2026-08-31）。",
+    "【數碼港 CP5 IC 月費】8 月 flat 卡 18,580.65 係 32,000 按 AL3＋SL10 扣 13 日嘅**當月**金額（s09_workbook.py），而家 effective_to 留空，9 月起會一直用 18,580.65；7 月 30,967.74 嗰張（7 月扣 1 日）亦係無限期。要老闆定：8 月卡加 effective_to=2026-08-31，9 月起用返 32,000 基數？",
+    "【7 月無限期卡滲入 8 月】7 月卡全部 effective_to 留空（WP-PRICE migration 伸長），8 月冇新卡覆蓋嘅就照用：(1) 啟航1331 D@10:00「special」收客卡 11,700（7 月 Event 發票，唔按更數拆）——月結會喺 8 月「啟航1331」營業額再加 11,700；(2) 7 月 guard 級卡（逐人，rank 高過 8 月雞頭卡）8 月照樣贏，例：長工介紹費卡、公司兵長工日均工資卡。鐵則唔准改 7 月卡，要老闆批准先可以幫 7 月特殊卡加 effective_to=2026-07-31。",
+    "【OT】總表 S007|1Hr OT|Y（HKU座頭 OT 1 小時：上單 84.85／外判 73，n=1）同啟航1331 OT3.5 都冇起卡——resolver 對 record_type=ot 一律唔計价（留返報表層按鐘計），起卡都唔會用到。OT 點計錢要老闆定。",
+  );
 
   // -------------------------------------------------------------------
   // 7. 寫 plan.json + plan-summary.md

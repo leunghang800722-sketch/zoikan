@@ -103,16 +103,28 @@ function toAuditSafeValue(tableName: string, action: AuditAction, value: unknown
   return "id" in row ? { id: row.id } : undefined;
 }
 
+function toAuditCreateData(input: WriteAuditInput): Prisma.AuditLogUncheckedCreateInput {
+  return {
+    actorUserId: input.actorUserId,
+    tableName: input.tableName,
+    rowId: input.rowId,
+    action: input.action,
+    before: toJson(toAuditSafeValue(input.tableName, input.action, input.before)) ?? Prisma.JsonNull,
+    after: toJson(toAuditSafeValue(input.tableName, input.action, input.after)) ?? Prisma.JsonNull,
+    ip: input.ip ?? null,
+  };
+}
+
 export async function writeAudit(input: WriteAuditInput): Promise<void> {
-  await prisma.auditLog.create({
-    data: {
-      actorUserId: input.actorUserId,
-      tableName: input.tableName,
-      rowId: input.rowId,
-      action: input.action,
-      before: toJson(toAuditSafeValue(input.tableName, input.action, input.before)) ?? Prisma.JsonNull,
-      after: toJson(toAuditSafeValue(input.tableName, input.action, input.after)) ?? Prisma.JsonNull,
-      ip: input.ip ?? null,
-    },
-  });
+  await prisma.auditLog.create({ data: toAuditCreateData(input) });
+}
+
+/** WP-AUG-OPENING 驗收（Opus 5.5）：同 `writeAudit()` 一樣嘅 DTO 白名單，
+ * 但寫喺呼叫者嘅 transaction 入面——`writeAudit()` 用全域 `prisma`（另一條
+ * connection），喺 `$transaction()` 入面用嘅話，業務資料 rollback 咗
+ * audit_log 都照樣留低（audit_log append-only，刪唔返），會出現指住唔存在
+ * row 嘅孤兒 audit。批量 script（例如 scripts/opening/apply-aug-plan.ts）
+ * 要「成批一齊成功或者一齊冇」就用呢個。 */
+export async function writeAuditTx(tx: Prisma.TransactionClient, input: WriteAuditInput): Promise<void> {
+  await tx.auditLog.create({ data: toAuditCreateData(input) });
 }

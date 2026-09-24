@@ -2,8 +2,11 @@
 // 讀 data/2026-09/aug-opening/plan.json（build-aug-plan.ts 生成），寫入
 // DB。預設 `--plan`（唔寫，淨係印 diff：新建/修改/跳過 數目＋清單，冇
 // PII）；`--apply` 先真係寫。冪等：natural key 已存在就跳過，唔覆蓋。
-// 全部一個 transaction；寫 audit_log（actor=null 代表 system，跟
-// src/lib/audit.ts 嘅 writeAudit()）。
+// 全部一個 transaction；寫 audit_log（actor=null 代表 system）——用
+// src/lib/audit.ts 嘅 writeAuditTx()，audit 同業務資料喺同一個 transaction，
+// 中途失敗 rollback 唔會留低指住唔存在 row 嘅孤兒 audit（Opus 5.5 驗收：
+// 原本 writeAudit() 行另一條 connection，實測失敗一次留低 46 行孤兒 audit，
+// audit_log append-only 刪唔返）。
 //
 // DATABASE_URL：用 process.env.DATABASE_URL（.env 已經有 dev DB 嘅值；
 // 老闆對正式站行嘅時候喺 Terminal 用 `DATABASE_URL='<正式站>' npx tsx
@@ -11,9 +14,10 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import { readFileSync } from "fs";
 import path from "path";
-import { writeAudit } from "@/lib/audit";
+import { writeAuditTx } from "@/lib/audit";
 import type { AugPlan, NewSitePlan, NewShiftTypePlan, NewRateCardPlan, NewGuardPlan } from "./lib/types";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
+import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 
 const prisma = new PrismaClient();
 
@@ -49,11 +53,24 @@ function isPlanned(id: string | null): boolean {
   return id !== null && id.startsWith(PLANNED);
 }
 
+/** 印目標 DB（host:port/db），唔印帳號密碼——老闆對正式站行之前睇清楚指住邊度。 */
+function describeDbTarget(): string {
+  const raw = process.env.DATABASE_URL;
+  if (!raw) return "（DATABASE_URL 未設）";
+  try {
+    const u = new URL(raw);
+    return `${u.hostname}:${u.port || "5432"}${u.pathname}`;
+  } catch {
+    return "（DATABASE_URL 格式解析唔到）";
+  }
+}
+
 async function main() {
   const planPath = path.resolve(process.cwd(), "data/2026-09/aug-opening/plan.json");
   const plan: AugPlan = JSON.parse(readFileSync(planPath, "utf8"));
 
   console.log(`[apply-aug-plan] 模式：${APPLY ? "--apply（真係寫）" : "--plan（淨係印 diff，唔寫）"}`);
+  console.log(`[apply-aug-plan] 目標 DB：${describeDbTarget()}（冇設 DATABASE_URL 就用 .env 嘅本機 dev DB）`);
   console.log(`[apply-aug-plan] plan.json 生成於 ${plan.generatedAt}`);
 
   const diffs = {
@@ -112,7 +129,7 @@ async function main() {
         },
       });
       siteIdByName.set(sp.canonicalName, created.id);
-      await writeAudit({ actorUserId: null, tableName: "sites", rowId: created.id, action: "create", after: created, ip: null });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "sites", rowId: created.id, action: "create", after: created, ip: null });
       return created.id;
     }
 
@@ -138,7 +155,7 @@ async function main() {
       if (PLAN_ONLY) continue;
       const newAliases = [...site.aliases, ...toAdd];
       const updated = await tx.site.update({ where: { id: site.id }, data: { aliases: newAliases } });
-      await writeAudit({ actorUserId: null, tableName: "sites", rowId: site.id, action: "update", before: { aliases: site.aliases }, after: { aliases: updated.aliases }, ip: null });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "sites", rowId: site.id, action: "update", before: { aliases: site.aliases }, after: { aliases: updated.aliases }, ip: null });
     }
 
     // -----------------------------------------------------------------
@@ -157,7 +174,7 @@ async function main() {
       diffs.sitesClientGroup.update.push(`${u.canonicalName}→${u.clientGroup}`);
       if (PLAN_ONLY) continue;
       const updated = await tx.site.update({ where: { id: site.id }, data: { clientGroup: u.clientGroup } });
-      await writeAudit({ actorUserId: null, tableName: "sites", rowId: site.id, action: "update", before: { clientGroup: site.clientGroup }, after: { clientGroup: updated.clientGroup }, ip: null });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "sites", rowId: site.id, action: "update", before: { clientGroup: site.clientGroup }, after: { clientGroup: updated.clientGroup }, ip: null });
     }
 
     // -----------------------------------------------------------------
@@ -177,7 +194,7 @@ async function main() {
       diffs.sitesParent.update.push(`${u.canonicalName}→${u.parentCanonicalName}`);
       if (PLAN_ONLY) continue;
       const updated = await tx.site.update({ where: { id: site.id }, data: { parentSiteId: parentId } });
-      await writeAudit({ actorUserId: null, tableName: "sites", rowId: site.id, action: "update", before: { parentSiteId: site.parentSiteId }, after: { parentSiteId: updated.parentSiteId }, ip: null });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "sites", rowId: site.id, action: "update", before: { parentSiteId: site.parentSiteId }, after: { parentSiteId: updated.parentSiteId }, ip: null });
     }
 
     // -----------------------------------------------------------------
@@ -219,7 +236,7 @@ async function main() {
         },
       });
       shiftTypeIdByKey.set(key, created.id);
-      await writeAudit({ actorUserId: null, tableName: "shift_types", rowId: created.id, action: "create", after: created, ip: null });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "shift_types", rowId: created.id, action: "create", after: created, ip: null });
       return created.id;
     }
     for (const sp of plan.shiftTypes.create) await ensureShiftType(sp);
@@ -242,7 +259,9 @@ async function main() {
       if (cp.shiftType) {
         const key = `${cp.siteCanonicalName}|${cp.shiftType.code}|${cp.shiftType.startTime}|${cp.shiftType.endTime}`;
         shiftTypeId = shiftTypeIdByKey.get(key) ?? null;
-        if (!shiftTypeId && !PLAN_ONLY) {
+        // --plan 都要 skip：否則 shiftTypeId=null 落面個 natural-key 查詢會
+        // 誤撞同盤嘅 site 級 flat 卡（shift_type_id=null）報「跳過」。
+        if (!shiftTypeId) {
           diffs.rateCards.skip.push(`${key}（shift_type 未起到）`);
           return;
         }
@@ -297,7 +316,7 @@ async function main() {
           createdBy: "system:aug-opening",
         },
       });
-      await writeAudit({ actorUserId: null, tableName: "rate_cards", rowId: created.id, action: "create", after: created, ip: null });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "rate_cards", rowId: created.id, action: "create", after: created, ip: null });
     }
     for (const cp of plan.rateCards.create) await ensureRateCard(cp);
 
@@ -313,10 +332,12 @@ async function main() {
       diffs.guards.create.push(gp.staffNo);
       if (PLAN_ONLY) return;
       const brokerId = brokerIdByCode.get(gp.defaultBrokerCode) ?? null;
+      // WP-MULTI：電話一定要經 createGuardPhone() 起一行 primary（再 sync
+      // 返 legacy `guards.tel`），唔可以直接寫 `guards.tel`——同
+      // POST /api/guards 一致（Opus 5.5 驗收：原本直寫 tel，guard_phones 0 行）。
       const created = await tx.guard.create({
         data: {
           nameZh: gp.nameZh,
-          tel: gp.tel,
           defaultBrokerId: brokerId,
           employmentType: "cash_casual",
           status: "active",
@@ -332,18 +353,21 @@ async function main() {
         createdBy: "system:aug-opening",
       });
       await syncLegacyStaffNoColumns(tx, created.id);
+      const phoneResult = gp.tel && gp.tel.trim() ? await createGuardPhone(tx, { guardId: created.id, tel: gp.tel, isPrimary: true, source: "system:aug-opening", createdBy: "system:aug-opening" }) : null;
+      if (phoneResult) await syncLegacyGuardContactColumns(tx, created.id, ["tel"]);
       guardIdByStaffNo.set(gp.staffNo, created.id);
-      await writeAudit({ actorUserId: null, tableName: "guards", rowId: created.id, action: "create", after: { staffNo: gp.staffNo }, ip: null });
-      await writeAudit({ actorUserId: null, tableName: "guard_staff_numbers", rowId: staffResult.created.id, action: "create", after: { staffNo: gp.staffNo }, ip: null });
+      // audit：guards 淨係記 staff_no（唔放姓名）；guard_staff_numbers 經
+      // audit-dto 白名單；guard_phones 淨係記 id／guard_id／is_primary／source
+      // （唔放電話號碼本身——批量 script 寫嘅 audit 盡量唔帶 PII）。
+      await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: created.id, action: "create", after: { staffNo: gp.staffNo }, ip: null });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "guard_staff_numbers", rowId: staffResult.created.id, action: "create", after: staffResult.created, ip: null });
+      if (phoneResult) await writeAuditTx(tx, { actorUserId: null, tableName: "guard_phones", rowId: phoneResult.created.id, action: "create", after: { id: phoneResult.created.id, guardId: phoneResult.created.guardId, isPrimary: phoneResult.created.isPrimary, source: phoneResult.created.source }, ip: null });
     }
     for (const gp of plan.guards.create) await ensureGuard(gp);
   };
 
-  if (PLAN_ONLY) {
-    await prisma.$transaction(async (tx) => run(tx), { timeout: 120_000 });
-  } else {
-    await prisma.$transaction(async (tx) => run(tx), { timeout: 120_000 });
-  }
+  // --plan 都行 transaction（淨係讀），同 --apply 用同一條 code path。
+  await prisma.$transaction(async (tx) => run(tx), { timeout: 120_000 });
 
   // -----------------------------------------------------------------
   // Summary
