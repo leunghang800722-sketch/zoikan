@@ -80,6 +80,9 @@ export interface RosterUploadParseSummary {
   /** Phase B-0 第 4(a) 項：檔案工號同系統工號唔一致（退用姓名/電話配
    * 到）嘅格數。 */
   staffNoMismatchCount: number;
+  /** 補丁（§17.7 未修第一項）：靠 rank_raw 第三層收窄先至配到更別嘅格
+   * 數（time_raw 收窄之後仲夾住多過一個候選，用 rank 先至剩返一個）。 */
+  rankNarrowedCount: number;
   warnings: string[];
 }
 
@@ -105,11 +108,13 @@ async function matchRowsAndSummarize(
 
   const shiftTypeSiteIds = resolvedSiteId ? [resolvedSiteId, ...childSites.map((c) => c.id)] : [];
   const shiftTypesRaw = shiftTypeSiteIds.length
-    ? await tx.shiftType.findMany({ where: { siteId: { in: shiftTypeSiteIds }, voidedAt: null }, select: { id: true, siteId: true, code: true, startTime: true, endTime: true } })
+    ? await tx.shiftType.findMany({ where: { siteId: { in: shiftTypeSiteIds }, voidedAt: null }, select: { id: true, siteId: true, code: true, startTime: true, endTime: true, billingGroup: true } })
     : [];
   // Phase B-0 第 2 項：candidates 加埋 `timeSlot`（由 start_time/end_time
   // 算），`matchShiftType()` 多過一個候選嗰陣會用嚟同 `timeRaw` 收窄。
-  const shiftTypes: ShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime) }));
+  // 補丁（§17.7 未修第一項）：加埋 `billingGroup`，時段收窄唔到（候選
+  // 時段完全一樣，例如數碼港 CP5「D」）嗰陣俾 rank_raw 第三層收窄用。
+  const shiftTypes: ShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup }));
 
   const [guardsRaw, staffNumbersRaw, phonesRaw] = await Promise.all([
     tx.guard.findMany({ select: { id: true, nameZh: true, tel: true, staffNo: true, staffNoMw: true } }),
@@ -127,6 +132,7 @@ async function matchRowsAndSummarize(
   let unmatchedSubSiteCount = 0;
   let staleStaffNoCount = 0;
   let staffNoMismatchCount = 0;
+  let rankNarrowedCount = 0;
   // 驗收 2026-09-23：python 版（extract.py EXPECTED_YEAR_MONTH）會將「格仔
   // 日期唔係呢個月」逐格列入 unparsed 俾人覆核——移植漏咗。上載揀錯月份
   // （例如 8 月更表揀咗 9 月）或者更表夾住上／下月日子，都要明確警告。
@@ -158,7 +164,7 @@ async function matchRowsAndSummarize(
       warnings.push("未寫子盤，歸母盤，人手覆核係咪漏寫子盤");
     }
 
-    const shiftTypeMatch = matchShiftType(r.rawCode, r.codeKind, effectiveSiteId, r.timeRaw, shiftTypes);
+    const shiftTypeMatch = matchShiftType(r.rawCode, r.codeKind, effectiveSiteId, r.timeRaw, shiftTypes, r.rankRaw);
     const guardResult = matchGuard({ staffNoRaw: r.staffNoRaw, nameRaw: r.nameRaw, telRaw: r.telRaw }, guardIndex);
     if (guardResult.guardMatch === "unmatched") unmatchedGuardCount += 1;
     if (guardResult.guardMatch === "ambiguous") ambiguousGuardCount += 1;
@@ -192,10 +198,15 @@ async function matchRowsAndSummarize(
       staffNoMismatchCount += 1;
       warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人（姓名對唔上），唔會自動配對，人手覆核`);
     }
+    if (shiftTypeMatch.matchedViaRank) rankNarrowedCount += 1;
     if (shiftTypeMatch.ambiguous) {
       ambiguousShiftTypeCount += 1;
       const candidateList = shiftTypeMatch.candidateTimeSlots?.join("、") ?? "";
-      warnings.push(`更別配對到多過一個候選（時段：${candidateList}），人手覆核`);
+      // 補丁（§17.7 未修第一項）：rankAttempted=true 代表時段收窄唔夠、
+      // 已經試過用 rank_raw 收窄但仲係唔夠（收窄完剩 0 個或者多過一
+      // 個）——講明畀會計，唔係淨係睇咗時段就放棄。
+      const rankNote = shiftTypeMatch.rankAttempted ? "，已用 rank 收窄但仍未夠" : "";
+      warnings.push(`更別配對到多過一個候選（時段：${candidateList}${rankNote}），人手覆核`);
     } else if ((r.codeKind === "shift" || r.codeKind === "ot") && !shiftTypeMatch.id) {
       unmatchedShiftTypeCount += 1;
       warnings.push(`更別「${r.rawCode}」對唔到 shift_types，人手覆核`);
@@ -242,6 +253,7 @@ async function matchRowsAndSummarize(
     unmatchedSubSiteCount,
     staleStaffNoCount,
     staffNoMismatchCount,
+    rankNarrowedCount,
     warnings: outOfMonthCount
       ? [`有 ${outOfMonthCount} 格日期唔係上載月份（${monthPrefix.slice(0, 7)}）——檢查係咪揀錯月份`, ...parseResult.warnings]
       : parseResult.warnings,

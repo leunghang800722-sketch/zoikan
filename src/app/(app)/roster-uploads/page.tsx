@@ -47,6 +47,8 @@ interface RosterUploadDTO {
     unmatched_sub_site_count: number;
     stale_staff_no_count: number;
     staff_no_mismatch_count: number;
+    // 補丁（§17.7 未修第一項）：更別配對用 rank_raw 第三層收窄配到嘅格數。
+    rank_narrowed_count: number;
     date_range: { min: string; max: string } | null;
     warnings: string[];
   } | null;

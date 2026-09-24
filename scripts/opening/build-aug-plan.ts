@@ -201,6 +201,31 @@ const EVENT_SITE = "啟航1331 Event";
 const PSTB_KEY_SITE_OVERRIDE: Record<string, string> = { "S017|1000-1900|K": EVENT_SITE };
 
 // ---------------------------------------------------------------------------
+// 補丁（§17.7「未修」第一項——數碼港 CP5 日更收客价）：7 月 dev DB「數碼港
+// CP5」0750-1950 呢個時段有兩個「D」代號嘅更種——`D`（billing_group=
+// monthly_ic，IC 月費崗）同 `D-2`（per_shift，普通保安員）。8 月更表格仔
+// 全部寫代號「D」，`dominantCodeForTime()` 淨係睇代號會揀中 monthly_ic
+// 嗰個（`ensureShiftType()` 見到 dev DB 呢個時段有 2 個完全同時段嘅候選、
+// 兩個都唔係 placeholder code，會落 needsBossReview 逐張都掛、揀第一個
+// 交差——實測揀咗 monthly_ic），令 K／B07 呢兩個普通兵雞頭組（930/850，
+// 246+23=269 更，見 price_site_time_broker.json）嘅收客价起錯咗喺
+// monthly_ic 個更種度，resolver 對 monthly_ic 唔出收客价，變咗 null。
+//
+// 上載嗰邊（`matchShiftType()`，match.ts）而家有 rank_raw 第三層收窄，會
+// 靠更表 Rank 欄（「早更保安員」vs「早更IC」）自動分流——但起价目卡呢層
+// （呢個 script）睇唔到逐格 rank，要人手指定：K／B07 呢兩組雞頭代表嘅係
+// 普通保安員（rank「早更保安員」），逐更卡實牌掛 `D-2`；IC 崗（rank
+// 「早更IC」）冇獨立嘅逐更雞頭組（pstb 冇呢個 broker 嘅 S011|0750-1950
+// key），留返用現有 `D`（monthly_ic）配對，收客价照舊由「數碼港 CP5 IC」
+// 呢個獨立盤嘅 site 級 flat 卡負責（現有 8 月 flat 卡，唔喺呢度加逐更收
+// 客卡）。
+// ---------------------------------------------------------------------------
+const PSTB_KEY_SHIFT_CODE_OVERRIDE: Record<string, string> = {
+  "S011|0750-1950|K": "D-2",
+  "S011|0750-1950|B07": "D-2",
+};
+
+// ---------------------------------------------------------------------------
 // 唔喺 101 組價目入面、但要另外建 alias 先對得到 8 月更表嘅盤
 // （Wilson Control/Patrol——見 P2-版面重設計計劃.md §17：clientName
 // 「Wilson Service」、broker=Y(公司兵) 同「控制室」「都會大學夜巡邏」
@@ -602,6 +627,27 @@ async function main() {
     return { code, startTime: start, endTime: end };
   }
 
+  // 補丁：`PSTB_KEY_SHIFT_CODE_OVERRIDE` 指定咗要掛邊個 code 嗰陣用呢個
+  // 代替 `ensureShiftType()`——直接喺 dev DB 現有嘅 shift_types 搵指定
+  // code＋時段嗰個（唔經 `dominantCodeForTime()` 嘅「代號多數票」邏輯，
+  // 唔會撞返 monthly_ic／per_shift 兩個候選揀邊個嘅老問題）。搵唔到就
+  // needsBossReview，唔會靜靜哋落去 ensureShiftType 嘅 fallback 起錯。
+  function resolveExistingShiftTypeByCode(canonicalName: string, timeSlot: string, code: string, note: string): { code: string; startTime: string; endTime: string } | null {
+    const parsed = parseTimeSlot(timeSlot);
+    if (!parsed) {
+      plan.needsBossReview.push(`「${canonicalName}」時段字串 "${timeSlot}" 解析唔到（唔係 HHMM-HHMM 格式），跳過（${note}）。`);
+      return null;
+    }
+    const [start, end] = parsed;
+    const site = siteByName.get(canonicalName);
+    const found = site ? dbCandidatesAt(site, start, end).find((c) => c.code === code) : undefined;
+    if (!found) {
+      plan.needsBossReview.push(`「${canonicalName}」搵唔到 code=${code} 時段=${timeSlot} 嘅現有 shift_type（${note}），人手覆核。`);
+      return null;
+    }
+    return { code: found.code, startTime: start, endTime: end };
+  }
+
   // 希慎廣場嘅「兩個時段都建」特殊處理喺主 loop 起完 X05 嘅 shift_type/
   // rate_card 之後做（見下面「希慎廣場總表時段」一段）——唔可以喺呢度用
   // ensureShiftType 起，因為 step(2.5)「成份更表淨係一種時段」嘅 fallback
@@ -753,7 +799,10 @@ async function main() {
       continue;
     }
     if (!parseTimeSlot(time)) continue;
-    const st = ensureShiftType(canonicalName, time, dominantCodeForTime(canonicalName, time), `pstb 組 ${key}（n=${entry.n}）。`);
+    const codeOverride = PSTB_KEY_SHIFT_CODE_OVERRIDE[key];
+    const st = codeOverride
+      ? resolveExistingShiftTypeByCode(canonicalName, time, codeOverride, `pstb 組 ${key}（n=${entry.n}，rank 收窄補丁——強制掛 ${codeOverride}，見 PSTB_KEY_SHIFT_CODE_OVERRIDE）`)
+      : ensureShiftType(canonicalName, time, dominantCodeForTime(canonicalName, time), `pstb 組 ${key}（n=${entry.n}）。`);
     if (!st) continue;
 
     const eKeys = Object.keys(entry.E);
@@ -951,7 +1000,7 @@ async function main() {
   );
   plan.needsBossReview.push(
     "【上載操作】「CTB 6907」更表檔 siteRaw 寫「城巴車廠」但實際係「創富廠IC」——上載時一定要喺上載頁人手揀盤「創富廠IC」。唔揀嘅話會自動配去「城巴車廠」母盤：(1) 同「城巴車廠」主檔同盤同月，後上載嗰個會 supersede 前一個；(2) 22 格會歸去子盤「城巴-創富車廠」用 820/700 計，唔係創富廠IC 嘅 1050/1050。",
-    "【數碼港 CP5 日更】7 月 dev DB「數碼港 CP5」有兩個 0750-1950 更種：D（billing_group=monthly_ic，IC 月費崗）同 D-2（per_shift，普通兵）。8 月更表檔全部寫「D」，上載配對（按代號）一律配去 monthly_ic 嗰個 D，resolver 對 monthly_ic 唔出收客价——約 269 更 × 930 收客价會變 null（dev 實測）。呢個唔喺呢個 WP 改得（要改 7 月更種或者 B-0 配對邏輯，例如按 rank 分 IC／兵），要老闆／Fable 定做法。",
+    "【數碼港 CP5 日更——已修】WP-AUG-OPENING-2 補丁：`matchShiftType()` 加咗 rank_raw 第三層收窄（match.ts），上載會靠更表 Rank 欄（「早更保安員」vs「早更IC」）自動分流去 `D-2`（per_shift，普通兵）／`D`（monthly_ic，IC 月費崗）；本 script 起价目卡呢層同步用 PSTB_KEY_SHIFT_CODE_OVERRIDE 將 K／B07 呢兩個普通兵雞頭組（930/850，246+23=269 更）強制掛 `D-2`，唔再撞去 monthly_ic。IC 崗收客价照舊由「數碼港 CP5 IC」獨立盤嘅 site 級 flat 卡負責，冇加逐更收客卡。dev 實測：verify-aug.ts --with-uploads 之後 CP5 檔 ambiguous_shift_type=0，269 格「早更保安員」配 D-2、13 格「早更IC」配 monthly_ic D、62 格「夜更保安員」配 N。",
     "【控制室】8 月兩類人：一位月薪崗（收客 22,000 月費，25 更）＋日薪崗（收客 840／更，22 更），試算營業額 40,480。月結（monthly-close.ts）有 flat 卡就淨係計 flat 卡金額、唔加逐更——而家 flat 卡 22,000，月結會少計 18,480；逐更卡 840 又會令月薪崗 25 更都有 840 snapshot。現有資料模型表達唔到「月費＋逐更混合」，要老闆／Fable 定（例如 8 月 flat 卡改 40,480 並加 effective_to=2026-08-31）。",
     "【數碼港 CP5 IC 月費】8 月 flat 卡 18,580.65 係 32,000 按 AL3＋SL10 扣 13 日嘅**當月**金額（s09_workbook.py），而家 effective_to 留空，9 月起會一直用 18,580.65；7 月 30,967.74 嗰張（7 月扣 1 日）亦係無限期。要老闆定：8 月卡加 effective_to=2026-08-31，9 月起用返 32,000 基數？",
     "【7 月無限期卡滲入 8 月】7 月卡全部 effective_to 留空（WP-PRICE migration 伸長），8 月冇新卡覆蓋嘅就照用：(1) 啟航1331 D@10:00「special」收客卡 11,700（7 月 Event 發票，唔按更數拆）——月結會喺 8 月「啟航1331」營業額再加 11,700；(2) 7 月 guard 級卡（逐人，rank 高過 8 月雞頭卡）8 月照樣贏，例：長工介紹費卡、公司兵長工日均工資卡。鐵則唔准改 7 月卡，要老闆批准先可以幫 7 月特殊卡加 effective_to=2026-07-31。",

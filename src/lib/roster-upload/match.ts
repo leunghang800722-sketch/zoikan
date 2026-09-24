@@ -56,6 +56,11 @@ export interface ShiftTypeCandidate {
    * 開工／收工時間就 null）——Phase B-0：多過一個候選嗰陣用嚟同
    * `timeRaw` 正規化之後嘅值收窄。 */
   timeSlot: string | null;
+  /** `shift_types.billing_group`（`per_shift`／`monthly_ic`）——補丁
+   * （§17.7 未修第一項）：時段收窄之後仲夾住多過一個候選（例如數碼港
+   * CP5「D」代號同時段 0750-1950 有 `monthly_ic` 同 `per_shift` 兩個
+   * 候選），用嚟同 rank_raw 第三層收窄配對。 */
+  billingGroup: "per_shift" | "monthly_ic";
 }
 
 export interface ShiftTypeMatchResult {
@@ -64,6 +69,68 @@ export interface ShiftTypeMatchResult {
   /** ambiguous（或者候選 timeSlot 都冇一個啱）嗰陣，攞嚟砌 warning 俾
    * 會計睇到「候選有邊幾個」。淨係 matches.length>1 先會有值。 */
   candidateTimeSlots?: string[];
+  /** 呢格最終配對係咪靠 rank_raw 第三層收窄先至得出（時段收窄之後仲夾住
+   * 多過一個候選，用 rank 先至剩返一個）——`service.ts` 用嚟計
+   * `parse_summary.rank_narrowed_count`。 */
+  matchedViaRank?: boolean;
+  /** 淨係 ambiguous=true 嗰陣先有意義：呢格有冇試過用 rank_raw 收窄（即
+   * rank_raw 正規化之後有值、確實試過篩一次候選）——唔理收窄完成唔成
+   * 功都會係 true，`service.ts` 用嚟喺 warning 度加多句「已經試過用
+   * rank 收窄」，等會計知呢格唔係淨係睇時段就放棄。 */
+  rankAttempted?: boolean;
+}
+
+/** rank_raw 正規化之後分類：「IC」類（含 IC／SIC，例如「早更IC」）定
+ * 「保安員」類（含「保安員」／「Guard」，或者其他唔含 IC 嘅寫法——當
+ * 冇特別寫明就當普通保安員，符合現實：更表 Rank 欄冇「IC」字樣嘅寫法
+ * 五花八門，唔可能逐個列晒，跟「唔係 IC 就係普通兵」呢個業務事實）。
+ * rank_raw 冇值／NFKC＋壓空白之後係空字串 → null（冇資訊可以收窄，同
+ * 冇試過一樣，唔算 rankAttempted）。 */
+type RankKind = "ic" | "guard" | null;
+/** 「IC」／「SIC」要係獨立字元組，前後唔可以黐住拉丁字母——驗收
+ * 2026-09-24：原版 `/(IC|SIC)/i` 喺去晒空格嘅字串度 test，英文 rank
+ * 例如「Security Officer」（off**ic**er）、「Traffic …」會誤判做 IC
+ * 類。而家喺「保留空格」（NFKC＋空白壓做一格）嘅字串度用字邊界比對：
+ * 「早更IC」「夜Zone SIC」「Zone IC」「保安員(IC)」「ＩＣ」（全形）都係
+ * IC 類；「Security Officer」「Guard」係保安員類。 */
+// 第二條：黐住前面細楷字母嘅大楷「IC／SIC」（例如冇空格嘅「ZoneSIC」）
+// 都當 IC；「officer」（細楷）、「PUBLIC」（前面係大楷）唔中。
+const IC_TOKEN_RE = /(?<![A-Za-z])S?IC(?![A-Za-z])/i;
+const IC_CAMEL_RE = /(?<=[a-z])S?IC(?![A-Za-z])/;
+const IC_TOKEN = { test: (s: string): boolean => IC_TOKEN_RE.test(s) || IC_CAMEL_RE.test(s) };
+export function classifyRank(rankRaw: string | null | undefined): RankKind {
+  if (!rankRaw) return null;
+  const norm = rankRaw.normalize("NFKC").replace(/\s+/g, " ").trim();
+  if (!norm) return null;
+  if (IC_TOKEN.test(norm)) return "ic";
+  return "guard";
+}
+
+/** 用 rank 分類喺 `candidates` 入面篩：IC 類淨係留 `billing_group=
+ * monthly_ic` 或者 code 本身含「IC」（例如啟航1331「SIC」）嘅候選；保
+ * 安員類淨係留 `per_shift` 嘅候選。冧唔到就可能剩返 0 個或者仲係多過一
+ * 個——call site 照舊當 ambiguous，唔會亂揀。 */
+function narrowByRank(candidates: readonly ShiftTypeCandidate[], rankKind: RankKind): readonly ShiftTypeCandidate[] {
+  if (rankKind === "ic") return candidates.filter((c) => c.billingGroup === "monthly_ic" || IC_TOKEN.test(c.code));
+  if (rankKind === "guard") return candidates.filter((c) => c.billingGroup === "per_shift");
+  return candidates;
+}
+
+/** 「同一個代號」嘅代號家族——呢個系統有個現成慣例（build-aug-plan.ts
+ * `ensureShiftType()` 附近註解）：DB `@@unique([siteId, code,
+ * startTime])` 淨係睇 code+start_time，兩個概念上「其實係同一個代
+ * 號」但要分開存嘅更種，會用「-2」「-3」呢類數字後綴分開嚟避免撞
+ * unique（例：數碼港 CP5 嘅 `D`／`D-2`、國泰城嘅 `MR-…`／`-2`/`-3`/
+ * `-4`）。更表格仔嘅 rawCode 通常淨係寫嗰個冇後綴嘅（例如「D」）——
+ * 「同代號」要用呢個家族嚟湊齊全部候選（D、D-2、D-3…），CP5「D」呢個
+ * rawCode 先至會喺 `matches` 度見到 `D-2`（billing_group=per_shift）
+ * 呢個候選，先有得用 rank_raw 第三層收窄分返普通兵／IC。冇後綴嘅代號
+ * family(x)===x，唔會影響冇呢個慣例嘅盤（dev DB 實測：全個系統淨係
+ * 數碼港 CP5「D」有真實檔案會撞到呢種情況；其餘「-2/-3/-4」都係
+ * `MR-` placeholder 合成 code，冇真實檔案會寫呢啲 code 做 rawCode，
+ * 唔會被呢個 family widening 意外撞中）。 */
+function codeFamily(code: string): string {
+  return code.replace(/-\d+$/, "");
 }
 
 /** code→`shift_types`：按盤＋code 對照（時段呢個系統嘅 shift_types 一個
@@ -72,27 +139,55 @@ export interface ShiftTypeMatchResult {
  * ambiguous）：改為先試用 `timeRaw`（該行 Time 欄原文，經
  * `normalizeTimeRange()` 正規化做 "HHMM-HHMM"）同各候選嘅 `timeSlot`
  * 逐字比對收窄——一個命中就配、零個或者多過一個就保留 null＋
- * `candidateTimeSlots` 講明候選有邊幾個時段。淨係 shift／ot 兩種
- * code_kind 先做呢個對照——leave/marker/unknown 本身唔對應一個實際更別。 */
+ * `candidateTimeSlots` 講明候選有邊幾個時段。補丁（§17.7 未修第一項，
+ * 數碼港 CP5「D」同時段有 monthly_ic／per_shift 兩個候選——時段完全一
+ * 樣，time_raw 收窄唔到）：「同代號」而家用 `codeFamily()`（見上面）
+ * 湊埋同一個代號家族（D／D-2 呢類「-N」後綴慣例）嘅全部候選，唔淨係
+ * 逐字相等——先至會喺 matches 度見齊呢兩個候選。搵到候選之後：時段收
+ * 窄之後（或者 time_raw 解唔到／冇候選時段夾中，直接用原本嘅候選）仍
+ * 然多過一個，用 `rankRaw`（該行 Rank 欄原文）做第三層收窄——一個命
+ * 中就配，唔夠就照舊 null＋ambiguous。淨係 shift／ot 兩種 code_kind
+ * 先做呢個對照——leave/marker/unknown 本身唔對應一個實際更別。 */
 export function matchShiftType(
   rawCode: string,
   codeKind: CodeKind,
   siteId: string | null,
   timeRaw: string | null,
   candidates: readonly ShiftTypeCandidate[],
+  rankRaw?: string | null,
 ): ShiftTypeMatchResult {
   if (!siteId || (codeKind !== "shift" && codeKind !== "ot")) return { id: null, ambiguous: false };
   const norm = rawCode.trim().toUpperCase();
-  const matches = candidates.filter((c) => c.siteId === siteId && c.code.trim().toUpperCase() === norm);
+  // 驗收 2026-09-24：淨係 rawCode 本身冇「-N」後綴（例如「D」）先湊成
+  // 個家族；更表明確寫咗「D-2」就淨係逐字配 `D-2`，唔好反過嚟撈埋
+  // `D`，再俾 rank 收窄揀咗去另一個。
+  const normFamily = codeFamily(norm);
+  const matches =
+    normFamily === norm
+      ? candidates.filter((c) => c.siteId === siteId && codeFamily(c.code.trim().toUpperCase()) === normFamily)
+      : candidates.filter((c) => c.siteId === siteId && c.code.trim().toUpperCase() === norm);
   if (matches.length === 0) return { id: null, ambiguous: false };
   if (matches.length === 1) return { id: matches[0]!.id, ambiguous: false };
 
   const normalizedTimeRaw = normalizeTimeRange(timeRaw);
+  let afterTime = matches;
   if (normalizedTimeRaw) {
-    const narrowed = matches.filter((c) => c.timeSlot === normalizedTimeRaw);
-    if (narrowed.length === 1) return { id: narrowed[0]!.id, ambiguous: false };
+    const timeNarrowed = matches.filter((c) => c.timeSlot === normalizedTimeRaw);
+    if (timeNarrowed.length === 1) return { id: timeNarrowed[0]!.id, ambiguous: false };
+    // 時段有收窄到但仲夾住多過一個（例如數碼港 CP5 兩個候選時段完全一
+    // 樣）→ 喺呢個較窄嘅範圍再用 rank 篩；時段完全冧唔到任何候選（0
+    // 個）→ 维持用返未收窄嘅 `matches`，交俾 rank 篩。
+    if (timeNarrowed.length > 1) afterTime = timeNarrowed;
   }
-  return { id: null, ambiguous: true, candidateTimeSlots: matches.map((c) => c.timeSlot ?? "（未設時段）") };
+
+  const rankKind = classifyRank(rankRaw);
+  const rankAttempted = rankKind !== null;
+  if (rankAttempted) {
+    const rankNarrowed = narrowByRank(afterTime, rankKind);
+    if (rankNarrowed.length === 1) return { id: rankNarrowed[0]!.id, ambiguous: false, matchedViaRank: true };
+  }
+
+  return { id: null, ambiguous: true, candidateTimeSlots: matches.map((c) => c.timeSlot ?? "（未設時段）"), rankAttempted };
 }
 
 export type GuardMatchKind = "by_staff_no" | "by_name_tel" | "by_name" | "unmatched" | "ambiguous";
