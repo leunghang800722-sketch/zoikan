@@ -3,7 +3,7 @@
 // 寫法都要正規化做同一個 "HHMM-HHMM"。
 import { describe, it, expect } from "vitest";
 import { normalizeTimeRange, shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
-import { matchShiftType } from "@/lib/roster-upload/match";
+import { classifyRank, matchShiftType } from "@/lib/roster-upload/match";
 
 describe("normalizeTimeRange：8 種寫法", () => {
   it("1. 0700-1900（冇冒號、冇空白）", () => {
@@ -155,5 +155,42 @@ describe("matchShiftType：rank_raw 第三層收窄（時段收窄唔到、候�
     expect(r.id).toBeNull();
     expect(r.ambiguous).toBe(true);
     expect(r.rankAttempted).toBe(true);
+  });
+
+  // 驗收 2026-09-24 補測
+  it("更表明確寫「D-2」→ 淨係逐字配 D-2，唔會撈埋 D 再俾 rank 揀走", () => {
+    expect(matchShiftType("D-2", "shift", "CP5", "0750-1950", cp5, "早更IC")).toEqual({ id: "d-guard", ambiguous: false });
+  });
+
+  it("英文 rank「Security Officer」（officer 入面有 ic）唔當 IC 類 → per_shift", () => {
+    expect(matchShiftType("D", "shift", "CP5", "0750-1950", cp5, "Security Officer")).toEqual({ id: "d-guard", ambiguous: false, matchedViaRank: true });
+  });
+});
+
+describe("classifyRank：IC／保安員分類邊界", () => {
+  it.each([
+    ["早更IC", "ic"],
+    ["日更IC", "ic"],
+    ["夜Zone SIC", "ic"],
+    ["夜ZoneSIC", "ic"],
+    ["Zone IC", "ic"],
+    ["保安員(IC)", "ic"],
+    ["ＩＣ", "ic"],
+    ["ic", "ic"],
+    ["早更保安員", "guard"],
+    ["夜更保安員", "guard"],
+    ["Security Guard", "guard"],
+    ["Security Officer", "guard"],
+    ["Traffic Marshal", "guard"],
+    ["Control", "guard"],
+    ["ASS - Night", "guard"],
+    ["", null],
+    ["　", null],
+  ] as const)("「%s」→ %s", (raw, kind) => {
+    expect(classifyRank(raw)).toBe(kind);
+  });
+  it("null／undefined → null", () => {
+    expect(classifyRank(null)).toBeNull();
+    expect(classifyRank(undefined)).toBeNull();
   });
 });

@@ -19,6 +19,7 @@ import { PrismaClient } from "@prisma/client";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import path from "path";
 import { processRosterUpload } from "@/lib/roster-upload/service";
+import { normalizeTimeRange } from "@/lib/roster-upload/time-range";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards } from "@/lib/pricing/resolve-rate";
 import { loadPriceSiteTimeBroker, loadPriceOverrides } from "./lib/sources";
 import { SITE_ID_TO_CANONICAL_NAME } from "./lib/site-code-map";
@@ -138,6 +139,7 @@ async function verifyUploads() {
   console.log(`  被同盤同月另一檔 supersede：${superseded}（目標 0——唔係 0 即係有兩個檔撞咗同一個盤）`);
 
   await verifyCP5RankNarrowing(uploadIds);
+  await verifySiteSlotBreakdown(uploadIds, "啟航1331", "2230-0730");
 
   return { uploadIds, totals: { siteUnmatched, totalUnmatchedShiftType, totalAmbiguousShiftType, totalUnmatchedSubSite, totalUnmatchedGuard, totalAmbiguousGuard, uploadErrors, superseded } };
 }
@@ -165,6 +167,32 @@ async function verifyCP5RankNarrowing(uploadIds: string[]): Promise<void> {
   }
   for (const [k, v] of [...byKey.entries()].sort()) console.log(`    ${v} 格　${k}`);
   console.log(`  數碼港 CP5 未配到更別（ambiguous／unmatched）總格數：${ambiguousOrUnmatched}（目標 0）`);
+}
+
+/**
+ * 驗收 2026-09-24：啟航1331 2230-0730 有 IC（zone 价 F=750）同 SIC（F=800）
+ * 兩個同時段更種。8 月更表格仔本身已經分開寫代號「IC」／「SIC」（rank
+ * 「夜Zone IC」／「夜Zone SIC」），`matchShiftType()` 靠代號＋時段已經配
+ * 啱，唔使 rank 收窄——呢度逐 rank／代號印返配到邊個更種，證明兩組各自
+ * 落自己嘅更種（再由 zone 覆蓋卡分 750／800）。冇人名／工號。 */
+async function verifySiteSlotBreakdown(uploadIds: string[], siteName: string, timeSlot: string): Promise<void> {
+  const site = await prisma.site.findUnique({ where: { canonicalName: siteName } });
+  if (!site) return;
+  console.log(`\n----- (a-補) ${siteName} ${timeSlot} 逐 rank 配對明細 -----`);
+  const rows = await prisma.rosterUploadRow.findMany({
+    where: { uploadId: { in: uploadIds }, resolvedSiteId: site.id, codeKind: "shift", timeRaw: { not: null } },
+    include: { shiftType: true },
+  });
+  const byKey = new Map<string, number>();
+  let unmatched = 0;
+  for (const r of rows) {
+    if (normalizeTimeRange(r.timeRaw) !== timeSlot) continue;
+    if (!r.shiftTypeId) unmatched += 1;
+    const key = `${r.rankRaw ?? "（冇 rank）"}｜代號=${r.rawCode}｜配到更種=${r.shiftType?.code ?? "（冇配到）"}(${r.shiftType?.billingGroup ?? "-"})`;
+    byKey.set(key, (byKey.get(key) ?? 0) + 1);
+  }
+  for (const [k, v] of [...byKey.entries()].sort()) console.log(`    ${v} 格　${k}`);
+  console.log(`  ${siteName} ${timeSlot} 未配到更別總格數：${unmatched}（目標 0）`);
 }
 
 function readFileSyncOk(dir: string): boolean {

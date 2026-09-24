@@ -84,14 +84,25 @@ export interface ShiftTypeMatchResult {
  * 「保安員」類（含「保安員」／「Guard」，或者其他唔含 IC 嘅寫法——當
  * 冇特別寫明就當普通保安員，符合現實：更表 Rank 欄冇「IC」字樣嘅寫法
  * 五花八門，唔可能逐個列晒，跟「唔係 IC 就係普通兵」呢個業務事實）。
- * rank_raw 冇值／NFKC＋去空格之後係空字串 → null（冇資訊可以收窄，同
+ * rank_raw 冇值／NFKC＋壓空白之後係空字串 → null（冇資訊可以收窄，同
  * 冇試過一樣，唔算 rankAttempted）。 */
 type RankKind = "ic" | "guard" | null;
-function classifyRank(rankRaw: string | null | undefined): RankKind {
+/** 「IC」／「SIC」要係獨立字元組，前後唔可以黐住拉丁字母——驗收
+ * 2026-09-24：原版 `/(IC|SIC)/i` 喺去晒空格嘅字串度 test，英文 rank
+ * 例如「Security Officer」（off**ic**er）、「Traffic …」會誤判做 IC
+ * 類。而家喺「保留空格」（NFKC＋空白壓做一格）嘅字串度用字邊界比對：
+ * 「早更IC」「夜Zone SIC」「Zone IC」「保安員(IC)」「ＩＣ」（全形）都係
+ * IC 類；「Security Officer」「Guard」係保安員類。 */
+// 第二條：黐住前面細楷字母嘅大楷「IC／SIC」（例如冇空格嘅「ZoneSIC」）
+// 都當 IC；「officer」（細楷）、「PUBLIC」（前面係大楷）唔中。
+const IC_TOKEN_RE = /(?<![A-Za-z])S?IC(?![A-Za-z])/i;
+const IC_CAMEL_RE = /(?<=[a-z])S?IC(?![A-Za-z])/;
+const IC_TOKEN = { test: (s: string): boolean => IC_TOKEN_RE.test(s) || IC_CAMEL_RE.test(s) };
+export function classifyRank(rankRaw: string | null | undefined): RankKind {
   if (!rankRaw) return null;
-  const norm = rankRaw.normalize("NFKC").replace(/\s+/g, "").trim();
+  const norm = rankRaw.normalize("NFKC").replace(/\s+/g, " ").trim();
   if (!norm) return null;
-  if (/(IC|SIC)/i.test(norm)) return "ic";
+  if (IC_TOKEN.test(norm)) return "ic";
   return "guard";
 }
 
@@ -100,7 +111,7 @@ function classifyRank(rankRaw: string | null | undefined): RankKind {
  * 安員類淨係留 `per_shift` 嘅候選。冧唔到就可能剩返 0 個或者仲係多過一
  * 個——call site 照舊當 ambiguous，唔會亂揀。 */
 function narrowByRank(candidates: readonly ShiftTypeCandidate[], rankKind: RankKind): readonly ShiftTypeCandidate[] {
-  if (rankKind === "ic") return candidates.filter((c) => c.billingGroup === "monthly_ic" || /IC/i.test(c.code));
+  if (rankKind === "ic") return candidates.filter((c) => c.billingGroup === "monthly_ic" || IC_TOKEN.test(c.code));
   if (rankKind === "guard") return candidates.filter((c) => c.billingGroup === "per_shift");
   return candidates;
 }
@@ -147,8 +158,14 @@ export function matchShiftType(
 ): ShiftTypeMatchResult {
   if (!siteId || (codeKind !== "shift" && codeKind !== "ot")) return { id: null, ambiguous: false };
   const norm = rawCode.trim().toUpperCase();
+  // 驗收 2026-09-24：淨係 rawCode 本身冇「-N」後綴（例如「D」）先湊成
+  // 個家族；更表明確寫咗「D-2」就淨係逐字配 `D-2`，唔好反過嚟撈埋
+  // `D`，再俾 rank 收窄揀咗去另一個。
   const normFamily = codeFamily(norm);
-  const matches = candidates.filter((c) => c.siteId === siteId && codeFamily(c.code.trim().toUpperCase()) === normFamily);
+  const matches =
+    normFamily === norm
+      ? candidates.filter((c) => c.siteId === siteId && codeFamily(c.code.trim().toUpperCase()) === normFamily)
+      : candidates.filter((c) => c.siteId === siteId && c.code.trim().toUpperCase() === norm);
   if (matches.length === 0) return { id: null, ambiguous: false };
   if (matches.length === 1) return { id: matches[0]!.id, ambiguous: false };
 
