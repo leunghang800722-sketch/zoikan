@@ -4,6 +4,7 @@
 // 雞頭），**唔寫入 shift_records**（對數＋寫入係 Phase B）。雞頭／安員
 // 呢個 module 硬性 deny，連呢頁都入唔到（API 一律 403，見 matrix.ts）。
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { apiGet, apiUpload, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -381,6 +382,16 @@ export default function RosterUploadsPage() {
                               睇詳情
                             </button>
                           )}
+                          {/* B1-3：對數頁入口——冇解到盤（entry.site_id 未定）就冧唔到
+                              盤，先要 PATCH 指定盤先可以對數。 */}
+                          {u && entry.site_id && (u.status === "parsed" || u.status === "confirmed") && (
+                            <Link
+                              href={`/roster-uploads/${u.id}/reconcile`}
+                              className="rounded-[5px] border border-zk-primary px-2.5 py-[3px] text-xs font-medium text-zk-primary hover:bg-blue-50"
+                            >
+                              對數
+                            </Link>
+                          )}
                           {u && !entry.site_id && (
                             <select
                               className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-xs"
@@ -427,6 +438,11 @@ export default function RosterUploadsPage() {
                       <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
                         睇詳情
                       </button>
+                      {entry.site_id && (u.status === "parsed" || u.status === "confirmed") && (
+                        <Link href={`/roster-uploads/${u.id}/reconcile`} className="rounded-[5px] border border-zk-primary px-2.5 py-[3px] text-xs font-medium text-zk-primary">
+                          對數
+                        </Link>
+                      )}
                       {/* 驗收 2026-09-23：手機之前冇「指定盤」，盤名對唔到嘅上載喺手機處理唔到 */}
                       {!entry.site_id && (
                         <select
