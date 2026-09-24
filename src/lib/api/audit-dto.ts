@@ -119,4 +119,17 @@ export const AUDIT_ROW_MAPPED_ACTIONS: ReadonlySet<AuditAction> = new Set([
 // 邊幾個舊版本行轉咗 `superseded`（`src/lib/roster-upload/service.ts`
 // `processRosterUpload()`），留喺呢個上載自己嘅 create audit 度話畀睇
 // 操作紀錄嘅人知邊個版本頂替咗邊個。
-export const AUDIT_META_PASSTHROUGH_KEYS = ["void_reason", "unlock_reason", "copied_from", "reject_reason", "override_reason", "reconciliation_summary", "superseded_upload_ids"] as const;
+// WP-ROSTER-UPLOAD Phase B-1（B1-6）：`roster_upload_force`／
+// `roster_upload_coverage_issues`——老闆用 force=true 覆寫「更表上載/
+// 對數未齊擋鎖」嗰陣，記低覆寫咗嘅盤清單（見 [id]/lock/route.ts）。
+export const AUDIT_META_PASSTHROUGH_KEYS = [
+  "void_reason",
+  "unlock_reason",
+  "copied_from",
+  "reject_reason",
+  "override_reason",
+  "reconciliation_summary",
+  "superseded_upload_ids",
+  "roster_upload_force",
+  "roster_upload_coverage_issues",
+] as const;

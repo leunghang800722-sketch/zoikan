@@ -41,6 +41,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const WARNING_FLAG_PATTERNS: Record<string, string> = {
       staff_no_mismatch: "%同系統工號%唔一致%",
       stale_staff_no: "%用已取消舊號配對%",
+      // B1-8 第 3 項：工號命中另一個人（姓名對唔上，唔准配）。
+      staff_no_belongs_to_other: "%屬另一人（姓名對唔上）%",
     };
     if (warningFlagParam && !(warningFlagParam in WARNING_FLAG_PATTERNS)) {
       throw BadRequest(`warning_flag 要係其中一個：${Object.keys(WARNING_FLAG_PATTERNS).join("/")}`);
@@ -119,8 +121,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 const STAFF_NO_MISMATCH_RE = /檔案工號 .*? 同系統工號 .*? 唔一致/g;
+// B1-8 第 3 項：「工號屬另一人」warning 同上面一樣帶工號原文，一齊遮。
+const STAFF_NO_BELONGS_TO_OTHER_RE = /檔案工號 .*? 屬另一人（姓名對唔上），唔會自動配對，人手覆核/g;
 
 function redactStaffNoWarnings(warnings: unknown): unknown {
   if (!Array.isArray(warnings)) return warnings;
-  return warnings.map((w) => (typeof w === "string" ? w.replace(STAFF_NO_MISMATCH_RE, "檔案工號（已隱藏）同系統工號（已隱藏）唔一致") : w));
+  return warnings.map((w) =>
+    typeof w === "string"
+      ? w
+          .replace(STAFF_NO_MISMATCH_RE, "檔案工號（已隱藏）同系統工號（已隱藏）唔一致")
+          .replace(STAFF_NO_BELONGS_TO_OTHER_RE, "檔案工號（已隱藏）屬另一人（姓名對唔上），唔會自動配對，人手覆核")
+      : w,
+  );
 }

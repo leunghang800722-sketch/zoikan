@@ -151,6 +151,11 @@ async function matchRowsAndSummarize(
         unmatchedSubSiteCount += 1;
         warnings.push(`子盤「${r.subSiteName}」對唔到呢個盤底下嘅子盤，更種配對留空，人手覆核`);
       }
+    } else if (resolvedSiteId && childSites.length > 0 && !r.subSiteName) {
+      // B1-8 第 2 項（B-0 驗收留低）：有子盤嘅上載，呢行冇寫 sub_site_name
+      // ——唔擋（effectiveSiteId 保持=母盤，同之前行為一致），淨係加
+      // warning 提會計覆核係咪漏寫咗子盤。
+      warnings.push("未寫子盤，歸母盤，人手覆核係咪漏寫子盤");
     }
 
     const shiftTypeMatch = matchShiftType(r.rawCode, r.codeKind, effectiveSiteId, r.timeRaw, shiftTypes);
@@ -178,6 +183,14 @@ async function matchRowsAndSummarize(
       staffNoMismatchCount += 1;
       const systemStaffNo = guardIndex.staffNoByGuardId.get(guardResult.guardId) ?? "（未有工號）";
       warnings.push(`檔案工號 ${r.staffNoRaw} 同系統工號 ${systemStaffNo} 唔一致`);
+    }
+    // B1-8 第 3 項（B-0 驗收留低）：檔案工號命中咗一個人、但呢行姓名同
+    // 嗰個人唔夾——「唔准配」（match.ts 已經回 guardId=null、ambiguous），
+    // 呢度淨係加 warning（同「工號唔一致」warning 一樣係工號原文，交俾
+    // [id]/route.ts redactStaffNoWarnings() 一齊遮）。
+    if (guardResult.staffNoBelongsToOther) {
+      staffNoMismatchCount += 1;
+      warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人（姓名對唔上），唔會自動配對，人手覆核`);
     }
     if (shiftTypeMatch.ambiguous) {
       ambiguousShiftTypeCount += 1;
@@ -381,6 +394,19 @@ export async function assignRosterUploadSite(uploadId: string, siteId: string | 
     const upload = await tx.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
     await lockVersionGroup(tx, siteId, upload.siteNameRaw, upload.month);
     if (upload.siteId === siteId) return { supersededIds: [] };
+
+    // B1-8 第 1 項（B-0 驗收留低）：呢個上載轉咗去嘅目標（盤,月）組別如
+    // 果已經有一個同名檔（active 或 superseded），同 POST（processRosterUpload）
+    // 一致 400 拒絕——唔可以人手指定盤之後撞名。
+    const targetGroupFiles = await tx.rosterUpload.findMany({
+      where: { ...monthGroupWhere(siteId, upload.siteNameRaw, upload.month), id: { not: uploadId } },
+      select: { fileName: true },
+    });
+    const newNameNorm = upload.fileName.trim().toLowerCase();
+    if (targetGroupFiles.some((u) => u.fileName.trim().toLowerCase() === newNameNorm)) {
+      throw BadRequest("呢個盤呢個月已經有同名檔案，請改檔名再上載，或者直接指定去嗰個現有上載");
+    }
+
     const others = await tx.rosterUpload.findMany({
       where: { ...versionGroupWhere(siteId, upload.siteNameRaw, upload.month), id: { not: uploadId } },
       select: { id: true, uploadedAt: true },

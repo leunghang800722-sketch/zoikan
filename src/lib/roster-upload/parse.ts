@@ -260,6 +260,45 @@ function collectDateMergeGroups(ws: ExcelJS.Worksheet, row: number, startCol: nu
   return groups;
 }
 
+/** WP-ROSTER-UPLOAD Phase B-1（B1-8 第 5 項）：CP5「數據中心」指針格
+ * ——`code_kind=marker` 嘅「數據中心」格代表「呢個格之後（同一行，即
+ * 同一個安員嗰條 `row_index`，跟住落嚟嘅日子）」轉咗去數據中心子盤，
+ * 直至（呢個 row_index 行本身完結）。逐個 `row_index` 天然就係「下一個
+ * 標題」嘅邊界（一個安員一條完整月線），唔使額外追蹤空白段。淨係喺
+ * 呢行本身未由「子盤」欄（`subSite` 直接讀嘅值）填過先套用——有真實
+ * 子盤欄值就尊重佢，唔畀 marker 蓋過去。
+ *
+ * Post-processing pass（喺一個 sheet 全部 rows 收集晒之後先行），冇改
+ * 動 `extractSheet()` 逐格解析核心邏輯，避免連累 gate:roster-parse
+ * 36/36 嘅真實 CP5 檔案（現存主檔入面有 2 粒「數據中心」marker 格，
+ * dev DB 未必真係將「數據中心」set 做 CP5 嘅 `parent_site_id` 子盤——
+ * 單元測試 `tests/roster-upload-parse-data-center-pointer.test.ts` 用
+ * 合成資料證明呢個 pass 本身邏輯啱，唔靠 dev DB 結構，任務書允許呢種
+ * 「合成測試證明」做法）。 */
+export function applyDataCenterMarkerPointer(rows: ParsedCellRow[]): ParsedCellRow[] {
+  const byRow = new Map<number, ParsedCellRow[]>();
+  for (const r of rows) {
+    const list = byRow.get(r.rowIndex) ?? [];
+    list.push(r);
+    byRow.set(r.rowIndex, list);
+  }
+  const out: ParsedCellRow[] = [];
+  for (const group of byRow.values()) {
+    const sorted = [...group].sort((a, b) => (a.workDate < b.workDate ? -1 : a.workDate > b.workDate ? 1 : 0));
+    let active = false;
+    for (const cell of sorted) {
+      if (cell.codeKind === "marker" && cell.rawCode.trim() === "數據中心") {
+        active = true;
+        out.push(cell);
+        continue;
+      }
+      out.push(active && !cell.subSiteName ? { ...cell, subSiteName: "數據中心" } : cell);
+    }
+  }
+  out.sort((a, b) => (a.rowIndex !== b.rowIndex ? a.rowIndex - b.rowIndex : a.workDate < b.workDate ? -1 : a.workDate > b.workDate ? 1 : 0));
+  return out;
+}
+
 function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | { error: string } {
   const siteRaw = getSiteRaw(ws);
   const headers = findDateHeaders(ws);
@@ -368,6 +407,19 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
     }
   }
 
+  // B1-8 第 5 項：`applyDataCenterMarkerPointer()`（見上面）**刻意未接
+  // 落呢個 pipeline**——實測 `npm run gate:roster-parse` 對住真實 8 月
+  // CP5 主檔（2 粒「數據中心」marker 格）跑呢個函數會令
+  // `sub_site_names` 由 `[]` 變 `[數據中心]`，同 `tests/fixtures/
+  // roster-parse-aug-2026.json`（8 月試算 python importer 產生嘅 ground
+  // truth）唔夾，令 35/36（本來 36/36）。即係話任務書「該格之後嘅行
+  // ……屬數據中心子盤」呢條規則，同呢兩粒真實 marker 格嘅已知正確行為
+  // （唔propagate）有出入——唔敢喺冇進一步同老闆/會計核實嘅情況下就咁
+  // 假設邊個啱，所以淨係留低呢個 pure function（同佢自己嘅合成單元
+  // 測試，見 tests/roster-upload-parse-data-center-pointer.test.ts）
+  // 證明個邏輯本身啱，但唔接落 `extractSheet()`，保 gate 36/36。回報會
+  // 講呢個矛盾，等老闆/會計話事應該點做（例如：兩粒真實 marker 格會唔
+  // 會其實係人手輸入錯誤，定係呢個 pointer 語意本身仲要再問清楚範圍）。
   return {
     sheetName,
     siteRaw,
