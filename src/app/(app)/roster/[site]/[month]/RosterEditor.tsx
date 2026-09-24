@@ -123,12 +123,15 @@ type BrokerDto = {
 // batch/route.ts）。
 type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
 type BatchResponse = {
-  results: { key: string; id: string; action: string }[];
+  results: { key: string; id: string; action: string; settlement_inferred?: boolean }[];
   warnings: string[];
   pricing?: { priced: number; unpriced: number; unpriced_cells: UnpricedCellSummary[] };
   // P0（Opus 驗收重現）：呢次儲存完之後仲有幾多個 shift 格
   // settlement_broker_id 係 NULL（會喺糧明細完全消失，唔止未定价）。
   no_settlement_count?: number;
+  // B1-5（WP-ATTRIB）：呢次儲存幾多格結算單位係靠 fallback 推算出嚟
+  // （唔係人手/更表明確指定）。
+  settlement_inferred_count?: number;
 };
 // S3：`category` 分「出街价未定」／「收客价未定」／（P0）「冇結算單位」
 // （見 src/lib/pricing/unpriced.ts）。`payoutCount`/`clientCount` 用
@@ -567,6 +570,10 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // P0（Opus 驗收重現）：儲存呢次帶嚟嘅「冇結算單位」格數——呢批更
   // 唔止未定价，係喺糧明細完全消失，一定要獨立、更顯眼咁警告。
   const [saveToastNoSettlement, setSaveToastNoSettlement] = useState<number | null>(null);
+  // B1-5（WP-ATTRIB）：儲存呢次帶嚟「結算單位推算」（settlement_
+  // inferred，見 batch/route.ts）嘅格數——推算唔係錯，但建議會計覆核，
+  // 用溫和色（唔似 saveToastNoSettlement 咁緊急），優先序最低。
+  const [saveToastSettlementInferred, setSaveToastSettlementInferred] = useState<number | null>(null);
   useEffect(() => {
     if (!showSaveToast) return;
     const t = setTimeout(() => setShowSaveToast(false), 3000);
@@ -609,9 +616,17 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const dragCurrentRef = useRef<{ r: number; d: number } | null>(null);
 
   // 加安員 modal
+  // B1-5（WP-ATTRIB）：逐行結算單位覆寫——用戶喺「雞頭」欄改咗某一行嘅
+  // 結算單位（未儲存前純前端狀態，key＝row.key），儲存嗰陣（仲有畀新格
+  // 用嘅 fallback，見 handleSave 嘅 diffCells 建構）同「複製上月」review
+  // 都會讀呢個 map。冇喺呢度出現嘅行照用 row.brokerId（原本嘅預設值）。
+  const [rowBrokerOverrides, setRowBrokerOverrides] = useState<Map<string, string>>(new Map());
   const [showAddGuard, setShowAddGuard] = useState(false);
   const [addGuardId, setAddGuardId] = useState("");
   const [addShiftTypeId, setAddShiftTypeId] = useState("");
+  // B1-5（WP-ATTRIB）：加安員嗰陣可以揀結算單位——空字串代表「跟返揀咗
+  // 嗰個安員嘅 default_broker_id」（見 handleAddGuardRow）。
+  const [addBrokerId, setAddBrokerId] = useState("");
 
   // 整行填
   const [fillRowKey, setFillRowKey] = useState<string | null>(null);
@@ -1232,6 +1247,12 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
 
   // ---- 加安員：純前端加一行空行，未填格儲存之前唔會出現喺下次 reload ----
   const guardOptions = useMemo(() => [...guardsById.values()].sort((a, b) => a.name_zh.localeCompare(b.name_zh)), [guardsById]);
+  // B1-5（WP-ATTRIB）：結算單位選項——任務書寫「該盤 broker_site_
+  // assignments 嘅雞頭＋公司兵＋長工單位」，呢度用返本身已經攞晒嘅
+  // `brokersById`（`/api/brokers` 全公司範圍，冇再打 broker-site-
+  // assignments API 逐盤篩窄）——選項會多過任務書要求嘅範圍（多過該
+  // 盤有份嘅雞頭），但唔會少（唔會漏），已知落差見回報。
+  const brokerSelectOptions = useMemo(() => [...brokersById.values()].sort((a, b) => a.code.localeCompare(b.code)), [brokersById]);
   // 必修 1(b)（Opus 第二輪驗收）：「加保安員」嘅更別選項一律剔走
   // code="PR"（對數佔位更別，唔可以排更——見 batch/route.ts 新建 400）。
   const shiftTypeOptions = useMemo(
@@ -1246,6 +1267,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       setShowAddGuard(false);
       setAddGuardId("");
       setAddShiftTypeId("");
+      setAddBrokerId("");
       return;
     }
     const guard = guardsById.get(addGuardId);
@@ -1260,13 +1282,15 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         guardName: guard?.name_zh ?? "",
         staffNo: guard?.staff_no ?? "",
         tel: guard?.tel ?? "",
-        brokerId: guard?.default_broker_id ?? null,
+        // B1-5：人手揀咗結算單位就用嗰個，冇揀先跌返 guard.default_broker_id。
+        brokerId: addBrokerId || guard?.default_broker_id || null,
       },
     ]);
     setShowAddGuard(false);
     setAddGuardId("");
     setAddShiftTypeId("");
-  }, [addGuardId, addShiftTypeId, allRows, guardsById, shiftTypesById]);
+    setAddBrokerId("");
+  }, [addGuardId, addShiftTypeId, addBrokerId, allRows, guardsById, shiftTypesById]);
 
   // ---- 儲存：淨係送真係改過嘅格 --------------------------------------
   const handleSave = useCallback(async () => {
@@ -1318,12 +1342,15 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       // 複製上月新落嘅格）先至送 settlement_broker_id，等後端 fallback
       // 鏈有嘢跟；既有記錄唔送，由後端保留該記錄原值。
       const isExistingRecord = !!b?.id;
+      // B1-5：用戶喺「雞頭」欄手動覆寫咗呢行嘅結算單位（rowBrokerOverrides）
+      // 就優先用嗰個，冇覆寫先跌返 row.brokerId（原本嘅預設值）。
+      const effectiveBrokerId = rowBrokerOverrides.get(rowKey) ?? row.brokerId ?? undefined;
       diffCells.push({
         guard_id: row.guardId,
         shift_type_id: row.shiftTypeId,
         work_date: workDateStr(year, monthNum, day),
         code,
-        ...(isExistingRecord ? {} : { settlement_broker_id: row.brokerId ?? undefined }),
+        ...(isExistingRecord ? {} : { settlement_broker_id: effectiveBrokerId }),
       });
     }
 
@@ -1345,6 +1372,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       // 成功；`reloadTick`＋1 同時會觸發上面嘅未定价 Notice 刷新）。
       setSaveToastUnpriced(res.pricing && res.pricing.unpriced > 0 ? res.pricing.unpriced : null);
       setSaveToastNoSettlement(res.no_settlement_count && res.no_settlement_count > 0 ? res.no_settlement_count : null);
+      setSaveToastSettlementInferred(res.settlement_inferred_count && res.settlement_inferred_count > 0 ? res.settlement_inferred_count : null);
       setReloadTick((t) => t + 1);
       setShowSaveToast(true);
     } catch (err) {
@@ -1362,7 +1390,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     } finally {
       setSaving(false);
     }
-  }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum]);
+  }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum, rowBrokerOverrides]);
 
   // WP-PRICE §M3：「重新計价」——價目卡補咗／改咗之後，一鍵將呢個盤呢個
   // 月全部 shift 記錄嘅 snapshot 追返卡（見 POST /api/shift-records/
@@ -2295,7 +2323,10 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               {visibleRows.map((row, r) => {
                 const guard = guardsById.get(row.guardId);
                 const permitExpired = guard?.sia_permit_expiry ? new Date(guard.sia_permit_expiry) < new Date(year, monthNum - 1 + 1, 0) : false;
-                const broker = row.brokerId ? brokersById.get(row.brokerId) : null;
+                // B1-5：呢行有冇手動覆寫過結算單位（rowBrokerOverrides），
+                // 冇就跌返 row.brokerId（原本嘅預設值）。
+                const effectiveRowBrokerId = rowBrokerOverrides.get(row.key) ?? row.brokerId;
+                const broker = effectiveRowBrokerId ? brokersById.get(effectiveRowBrokerId) : null;
                 const bc = brokerColor(broker?.code);
                 return (
                   <tr
@@ -2368,11 +2399,40 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                       )}
                     </td>
                     {showBrokerCol && (
-                      <td className="sticky z-10 bg-white px-2.5" style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb" }}>
-                        {broker && (
-                          <span style={{ fontSize: 10.5, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: bc.bg, color: bc.fg }}>
-                            {broker.code}
-                          </span>
+                      <td className="sticky z-10 bg-white px-1.5" style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb" }}>
+                        {/* B1-5（WP-ATTRIB）：內部角色可以逐行改結算單位
+                            （對新格生效——已存在嘅格唔受影響，見
+                            handleSave 嘅 isExistingRecord 判斷）；鎖定月
+                            份／雞頭 session 唔見呢個控制，淨係顯示 pill。 */}
+                        {monthLocked ? (
+                          broker && (
+                            <span style={{ fontSize: 10.5, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: bc.bg, color: bc.fg }}>
+                              {broker.code}
+                            </span>
+                          )
+                        ) : (
+                          <select
+                            aria-label={`${row.guardName || row.guardId} 結算單位`}
+                            data-testid="roster-row-broker-select"
+                            value={effectiveRowBrokerId ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setRowBrokerOverrides((prev) => {
+                                const next = new Map(prev);
+                                if (v) next.set(row.key, v);
+                                else next.delete(row.key);
+                                return next;
+                              });
+                            }}
+                            style={{ fontSize: 10.5, fontWeight: 600, padding: "1px 2px", borderRadius: 4, background: bc.bg, color: bc.fg, border: "none", maxWidth: DESK_COL_BROKER - 8 }}
+                          >
+                            <option value="">（未指定）</option>
+                            {brokerSelectOptions.map((b) => (
+                              <option key={b.id} value={b.id}>
+                                {b.code}
+                              </option>
+                            ))}
+                          </select>
                         )}
                       </td>
                     )}
@@ -2644,8 +2704,38 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 ))}
               </select>
             </label>
+            {/* B1-5（WP-ATTRIB）：結算單位——預設跟揀咗嗰個安員嘅
+                default_broker_id（顯示喺 placeholder），可以人手改。
+                驗收修正（Opus 5.5）：雞頭 session 唔顯示（自己永遠係自己，
+                後端亦強制）。 */}
+            {!isBrokerSession && (
+            <label className="block text-xs text-gray-600">
+              結算單位（唔揀就跟安員預設）
+              <select
+                aria-label="加保安員行:結算單位"
+                data-testid="add-guard-select-broker"
+                className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                value={addBrokerId}
+                onChange={(e) => setAddBrokerId(e.target.value)}
+              >
+                <option value="">（跟安員預設：{addGuardId ? (guardsById.get(addGuardId)?.default_broker_id ? brokersById.get(guardsById.get(addGuardId)!.default_broker_id!)?.code : "冇預設") : "—"}）</option>
+                {brokerSelectOptions.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.code} · {b.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            )}
             <div className="flex justify-end gap-2">
-              <button type="button" className="text-sm px-3 py-1 rounded border border-gray-300" onClick={() => setShowAddGuard(false)}>
+              <button
+                type="button"
+                className="text-sm px-3 py-1 rounded border border-gray-300"
+                onClick={() => {
+                  setShowAddGuard(false);
+                  setAddBrokerId("");
+                }}
+              >
                 取消
               </button>
               <button
@@ -2682,8 +2772,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           style={{
             // WP-PRICE／P0：有「冇結算單位」就用更搶眼嘅紅色（呢批更會喺
             // 糧明細完全消失，比「未定价」更嚴重）；有未定价格用警示色
-            // （唔係「儲存成功」嗰隻深藍色）。
-            background: saveToastNoSettlement ? "#b91c1c" : saveToastUnpriced ? "#b45309" : "#0f172a",
+            // （唔係「儲存成功」嗰隻深藍色）；B1-5：淨係「結算單位推算」
+            // 優先序最低（用同一個警示色，唔算錯，淨係建議覆核）。
+            background: saveToastNoSettlement ? "#b91c1c" : saveToastUnpriced ? "#b45309" : saveToastSettlementInferred ? "#b45309" : "#0f172a",
             boxShadow: "0 6px 18px rgba(15,23,42,.3)",
           }}
         >
@@ -2691,7 +2782,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             ? `已儲存 · ${saveToastNoSettlement} 格冇結算單位（唔會出現喺糧單，請盡快指定雞頭）`
             : saveToastUnpriced
               ? `已儲存 · ${saveToastUnpriced} 格未定价（冇對應價目卡）`
-              : "已儲存"}
+              : saveToastSettlementInferred
+                ? `已儲存 · ${saveToastSettlementInferred} 格結算單位係推算出嚟，建議覆核`
+                : "已儲存"}
         </div>
       )}
     </div>

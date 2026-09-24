@@ -29,7 +29,7 @@ export async function buildLongtermSalaryAllocation(month: Date): Promise<Longte
     where: { employmentType: "longterm_autopay" },
     include: {
       shiftRecords: {
-        where: { workDate: { gte: MONTH_START, lte: MONTH_END }, recordType: "shift" },
+        where: { workDate: { gte: MONTH_START, lte: MONTH_END }, recordType: "shift", status: { not: "cancelled" } },
         select: { siteId: true },
       },
     },

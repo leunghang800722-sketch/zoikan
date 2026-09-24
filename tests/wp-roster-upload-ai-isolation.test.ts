@@ -45,13 +45,21 @@ describe("WP-ROSTER-UPLOAD：AI 隔離——結構性測試", () => {
     const names = new Set(rows.map((r) => r.table_name));
     expect(names.has("roster_uploads")).toBe(false);
     expect(names.has("roster_upload_rows")).toBe(false);
+    // Phase B-1（B1-2）：新表 roster_reconcile_decisions（`reason` 自由
+    // 文字有 PII 風險）一樣結構性唔入 ai schema。
+    expect(names.has("roster_reconcile_decisions")).toBe(false);
   });
 
-  it("ai.audit_log view 定義文字有 WHERE table_name NOT IN 排除呢兩個 table_name", async () => {
+  it("ai.audit_log view 定義文字有 WHERE table_name NOT IN 排除呢兩個 table_name＋Phase B-1 新表", async () => {
     const viewdef = await auditLogViewDef();
     expect(viewdef).toMatch(/table_name\s*(<>|!=|NOT IN)/i);
     expect(viewdef).toContain("roster_uploads");
     expect(viewdef).toContain("roster_upload_rows");
+    expect(viewdef).toContain("roster_reconcile_decisions");
+  });
+
+  it("SELECT ai.roster_reconcile_decisions / public.roster_reconcile_decisions 都撞唔到（唔存在／permission denied）", async () => {
+    await expect(prisma.$queryRawUnsafe("SELECT * FROM ai.roster_reconcile_decisions LIMIT 1")).rejects.toThrow(/does not exist/i);
   });
 
   it("ai.audit_log 仍然保留返 WP-PII/WP-MULTI 嗰 scrub_json blocked_keys／WHERE 排除（呢個 migration 冇手多多改壞）", async () => {
@@ -87,6 +95,11 @@ describe("WP-ROSTER-UPLOAD：AI 隔離——zoikan_ai_ro 真連線攻擊測試",
   it("SELECT public.roster_uploads（試圖繞過 ai schema 直接 query public）一樣 permission denied", async () => {
     await expect(aiClient.query("SELECT * FROM public.roster_uploads LIMIT 1")).rejects.toThrow(/permission denied/i);
     await expect(aiClient.query("SELECT * FROM public.roster_upload_rows LIMIT 1")).rejects.toThrow(/permission denied/i);
+  });
+
+  it("Phase B-1：zoikan_ai_ro 真連線 SELECT ai.roster_reconcile_decisions／public.roster_reconcile_decisions 都攔到", async () => {
+    await expect(aiClient.query("SELECT * FROM ai.roster_reconcile_decisions LIMIT 1")).rejects.toThrow(/does not exist/i);
+    await expect(aiClient.query("SELECT * FROM public.roster_reconcile_decisions LIMIT 1")).rejects.toThrow(/permission denied/i);
   });
 
   it("上載一份帶姓名/電話/工號嘅更表之後，ai.audit_log SELECT * 一定睇唔到呢一行（table_name='roster_uploads' 已經俾 WHERE 排除）", async () => {

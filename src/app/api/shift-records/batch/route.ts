@@ -79,6 +79,10 @@ type PlannedOp =
       status: ShiftRecordStatus;
       existingIsExternal: boolean; // WP-PRICE：計价 external 判斷要用——現存記錄保留佢原本嘅 is_external，新記錄預設 false
       pricing: ResolvedShiftPricing | null; // WP-PRICE：喺 plans 起晒之後先一次過計（見下面「計价」段），呢度淨係佔位
+      // B1-5（WP-ATTRIB）：settlement_broker_id 冇喺 payload／現存記錄
+      // 度攞到，靠 resolveSettlementBrokerFallback() 推算——response 要
+      // additive 標返俾前端，等 RosterEditor 儲存後 toast「推算」。
+      settlementInferred: boolean;
     };
 
 export async function POST(req: Request) {
@@ -210,6 +214,11 @@ export async function POST(req: Request) {
       let settlementBrokerId: string | null;
       let operationalBrokerId: string | null;
       let status: ShiftRecordStatus;
+      // B1-5（WP-ATTRIB）：呢格嘅 settlement_broker_id 係咪靠
+      // resolveSettlementBrokerFallback() 推算出嚟（唔係 payload／現存
+      // 記錄直接畀嘅）——雞頭 session 一律唔算推算（伺服器強制等於自己
+      // broker_id，唔行 fallback 鏈）。
+      let settlementInferredFlag = false;
 
       if (broker) {
         settlementBrokerId = broker;
@@ -231,6 +240,7 @@ export async function POST(req: Request) {
         // operational 理論上可以自己一條鏈——依家兩者都用同一個 helper，
         // 同舊行為「兩個都跟 default_broker_id」一致，淨係加強咗
         // fallback 深度）。
+        const settlementNeedsFallback = c.settlement_broker_id == null && record?.settlementBrokerId == null;
         settlementBrokerId =
           c.settlement_broker_id ??
           record?.settlementBrokerId ??
@@ -250,6 +260,7 @@ export async function POST(req: Request) {
             defaultBrokerId: guardRow.defaultBrokerId,
           }));
         status = "confirmed"; // 主管/有權者直接改，唔使入審批隊列
+        settlementInferredFlag = settlementNeedsFallback && settlementBrokerId !== null;
       }
 
       plans.push({
@@ -263,6 +274,7 @@ export async function POST(req: Request) {
         status,
         existingIsExternal: record?.isExternal ?? false,
         pricing: null,
+        settlementInferred: settlementInferredFlag,
       });
     }
 
@@ -420,7 +432,7 @@ export async function POST(req: Request) {
     // 入面收集 audit 素材，transaction 成功 commit 之後先真係逐條
     // writeAudit()**，保證 audit_log 同實際落咗 DB 嘅嘢一致。
     const ip = getClientIp(req);
-    const results: { key: string; id: string; action: string }[] = [];
+    const results: { key: string; id: string; action: string; settlement_inferred?: boolean }[] = [];
     type PendingAudit = { rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
     const pendingAudits: PendingAudit[] = [];
     try {
@@ -456,7 +468,7 @@ export async function POST(req: Request) {
               },
             });
             pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
-            results.push({ key, id: plan.existingId, action: "updated" });
+            results.push({ key, id: plan.existingId, action: "updated", settlement_inferred: plan.settlementInferred });
           } else {
             const data: Prisma.ShiftRecordUncheckedCreateInput = {
               workDate: plan.cell.work_date,
@@ -477,7 +489,7 @@ export async function POST(req: Request) {
             };
             const created = await tx.shiftRecord.create({ data });
             pendingAudits.push({ rowId: created.id, action: "create", after: created });
-            results.push({ key, id: created.id, action: "created" });
+            results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
           }
         }
       });
@@ -506,7 +518,11 @@ export async function POST(req: Request) {
     // 講畀用戶知呢幾格「唔會出現喺糧單」。
     const noSettlementCount = upsertPlans.filter((p) => p.recordType === "shift" && p.settlementBrokerId === null).length;
 
-    return ok(brandSafeResponse({ results, warnings, pricing, no_settlement_count: noSettlementCount }), 200);
+    // B1-5（WP-ATTRIB）：幾多格結算單位係靠 fallback 推算（唔係 payload/
+    // 現存記錄直接畀）——RosterEditor 儲存完可以喺度 toast「N 格結算單位
+    // 推算，建議覆核」。
+    const settlementInferredCount = results.filter((r) => r.settlement_inferred).length;
+    return ok(brandSafeResponse({ results, warnings, pricing, no_settlement_count: noSettlementCount, settlement_inferred_count: settlementInferredCount }), 200);
   });
 }
 

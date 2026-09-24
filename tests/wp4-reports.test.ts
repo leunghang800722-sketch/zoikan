@@ -123,7 +123,8 @@ describe("P1-WP4：報表 route", () => {
       expect(genBody.reconciliation.has_diff).toBe(false);
       const monthCloseId = genBody.month_close.id;
 
-      const lockRes = await lockMonthClose(req(`http://test.local/api/month-closes/${monthCloseId}/lock`, ownerCookie, "POST", {}), { params: Promise.resolve({ id: monthCloseId }) });
+      // B1-6（規則 10）：呢個 fixture 冇幫 fx.site 起更表上載，鎖定會俾「未上載」擋——呢個 test 淨係測「有 generate 對數冇差異就鎖到」，唔係測 B1-6，用老闆 force=true 跳過。
+      const lockRes = await lockMonthClose(req(`http://test.local/api/month-closes/${monthCloseId}/lock`, ownerCookie, "POST", { force: true }), { params: Promise.resolve({ id: monthCloseId }) });
       expect(lockRes.status).toBe(200);
 
       const audit = await prisma.auditLog.findFirst({ where: { tableName: "month_closes", rowId: monthCloseId, action: "lock_month" }, orderBy: { createdAt: "desc" } });
@@ -175,8 +176,10 @@ describe("P1-WP4：報表 route", () => {
       const lockNoReason = await lockMonthClose(req(`http://test.local/api/month-closes/${monthCloseId}/lock`, ownerCookie, "POST", {}), { params: Promise.resolve({ id: monthCloseId }) });
       expect(lockNoReason.status).toBe(400);
 
+      // B1-6：同上，force=true 跳過未上載更表嘅擋鎖（呢個 test 焦點係
+      // §6.3 紅色差異 override_reason 嗰個閘，唔係 B1-6）。
       const lockWithReason = await lockMonthClose(
-        req(`http://test.local/api/month-closes/${monthCloseId}/lock`, ownerCookie, "POST", { override_reason: "測試已知差異，老闆確認可以先鎖" }),
+        req(`http://test.local/api/month-closes/${monthCloseId}/lock`, ownerCookie, "POST", { override_reason: "測試已知差異，老闆確認可以先鎖", force: true }),
         { params: Promise.resolve({ id: monthCloseId }) },
       );
       expect(lockWithReason.status).toBe(200);

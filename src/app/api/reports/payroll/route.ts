@@ -10,7 +10,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel } from "@/lib/reports/money";
-import { buildPayrollTotals, writePayrollXlsx, DEFAULT_REPORT_MONTH } from "@/lib/reports/payroll";
+import { buildPayrollTotals, buildPayrollSourceSummary, writePayrollXlsx, DEFAULT_REPORT_MONTH } from "@/lib/reports/payroll";
 // WP-PRICE §3：頁頂「N 更未定价，金額未計入」Notice 要用嘅 additive 欄。
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
@@ -33,7 +33,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const [totals, unpriced] = await Promise.all([buildPayrollTotals(month), buildUnpricedSummary(session, month)]);
+    const [totals, unpriced, sourceSummary] = await Promise.all([buildPayrollTotals(month), buildUnpricedSummary(session, month), buildPayrollSourceSummary(month)]);
     // 應修 1：`no_settlement_count` 獨立於 `unpriced_count`（口徑已經喺
     // computeUnpricedSummary() 分開計，唔會重複計入），等前端顯示獨立
     // 「N 格冇結算單位」警告，就算 unpriced_count=0 都要顯示。
@@ -44,6 +44,9 @@ export async function GET(req: Request) {
         unpriced_count: unpriced.count,
         unpriced_groups: unpriced.groups,
         no_settlement_count: unpriced.noSettlementCount,
+        // B1-7：additive——糧明細嚟源標記摘要（roster_upload 更數 vs
+        // 其他來源），唔改任何既有欄位。
+        source_summary: sourceSummary,
       }),
     );
   });

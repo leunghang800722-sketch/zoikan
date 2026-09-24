@@ -30,13 +30,17 @@ function monthRange(month: Date): { start: Date; end: Date } {
 export type BrokerPayrollTotal = { brokerId: string | null; brokerName: string; brokerCode: string; brokerKind: string; shifts: number; wage: number; fee: number; amount: number };
 const UNATTRIBUTED_BROKER_LABEL = "未歸屬結算單位";
 
+// 驗收修正（Opus 5.5，WP-ROSTER-UPLOAD B1）：糧單一律排除 `status=
+// cancelled`——之前完全冇篩 status，但 B1 對數套用（system_only／
+// guard_diff／shift_type_diff）同更表編輯器清格都係將記錄轉 cancelled，
+// 唔排除就會「舊人＋新人」兩份糧都計。7 月冇 cancelled 記錄，數字唔變。
 export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Promise<BrokerPayrollTotal[]> {
   const { start, end } = monthRange(month);
   const brokers = await prisma.broker.findMany({ orderBy: { code: "asc" } });
   const out: BrokerPayrollTotal[] = [];
   for (const b of brokers) {
     const agg = await prisma.shiftRecord.aggregate({
-      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
+      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
       _count: { _all: true },
       _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
     });
@@ -63,7 +67,7 @@ export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Pr
   // 加多一次獨立查詢，一有就加一行「未歸屬結算單位」（金額計入 Total，
   // 等會計一眼見到有錢未歸邊個雞頭）。
   const unattributedAgg = await prisma.shiftRecord.aggregate({
-    where: { settlementBrokerId: null, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
+    where: { settlementBrokerId: null, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
     _count: { _all: true },
     _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
   });
@@ -83,6 +87,46 @@ export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Pr
   }
 
   return out;
+}
+
+// WP-ROSTER-UPLOAD Phase B-1（B1-7）：糧明細來源標記——additive，唔改
+// `buildPayrollTotals()`／`writePayrollXlsx()` 既有欄位／totals 計法
+// （7 月數字唔准變，gate:reports／gate:pricing／report:regen 全部要
+// 過）。`shift_records.source` 現存絕大部份記錄係 `null`（batch/route.ts
+// ／單筆 POST 之前冇寫過呢個欄，見 reconcile-apply.ts 頂註解——淨係
+// 我哋新嘅對數套用寫入會填 `source='roster_upload'`），呢度原樣統計
+// 實際存底嘅值，`null` 顯示做「未標記」，唔喺呢度估返一個值。 */
+export interface PayrollSourceSummary {
+  /** `source='roster_upload'`（Phase B-1 對數套用寫入）嘅更數。 */
+  rosterUploadCount: number;
+  /** `source` 有值但唔係 `roster_upload`（例如未來雞頭報/人手/複製上月
+   * 呢類標記，現時未有任何路徑會寫呢類值，見回報「已知落差」）嘅更數。 */
+  otherSourceCount: number;
+  /** `source IS NULL`（絕大部份現存記錄，包括 7 月歷史資料）嘅更數。 */
+  unlabeledCount: number;
+  /** 原始 `source` 值 → 更數，`"（未標記）"` 代表 null。 */
+  bySource: Record<string, number>;
+}
+
+export async function buildPayrollSourceSummary(month: Date = DEFAULT_REPORT_MONTH): Promise<PayrollSourceSummary> {
+  const { start, end } = monthRange(month);
+  const grouped = await prisma.shiftRecord.groupBy({
+    by: ["source"],
+    where: { recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
+    _count: { _all: true },
+  });
+  const bySource: Record<string, number> = {};
+  let rosterUploadCount = 0;
+  let otherSourceCount = 0;
+  let unlabeledCount = 0;
+  for (const g of grouped) {
+    const label = g.source ?? "（未標記）";
+    bySource[label] = (bySource[label] ?? 0) + g._count._all;
+    if (g.source === "roster_upload") rosterUploadCount += g._count._all;
+    else if (g.source === null) unlabeledCount += g._count._all;
+    else otherSourceCount += g._count._all;
+  }
+  return { rosterUploadCount, otherSourceCount, unlabeledCount, bySource };
 }
 
 export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_REPORT_MONTH) {
@@ -105,9 +149,12 @@ export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_RE
 
   // 逐安員明細（每個 broker 一個 sheet），方便人手覆核
   const brokers = await prisma.broker.findMany();
+  // B1-7：逐更來源明細（additive 新 sheet，唔改上面任何一個既有 sheet/
+  // 欄位）——同一次查詢順便收集，唔加多一round DB 查詢。
+  const sourceDetailRows: { date: string; brokerCode: string; guardName: string; guardStaffNo: string; source: string }[] = [];
   for (const b of brokers) {
     const records = await prisma.shiftRecord.findMany({
-      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
+      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
       include: { guard: true },
     });
     if (records.length === 0) continue;
@@ -120,12 +167,34 @@ export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_RE
       const g = byGuard.get(key)!;
       g.shifts++;
       g.amount = round2(g.amount + n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot));
+      sourceDetailRows.push({
+        date: r.workDate.toISOString().slice(0, 10),
+        brokerCode: b.code,
+        guardName: r.guard.nameZh,
+        guardStaffNo: r.guard.staffNo ?? "",
+        source: r.source ?? "（未標記）",
+      });
     }
     const safeName = b.name.replace(/[\\/:*?"<>|[\]]/g, "_").slice(0, 28);
     const sheet = wb.addWorksheet(`${b.code || "?"}-${safeName}`);
     sheet.addRow(["Staff No.", "姓名", "更數", "金額"]);
     for (const g of byGuard.values()) sheet.addRow([g.staffNo, g.name, g.shifts, g.amount]);
   }
+
+  // B1-7：頂部摘要——roster_upload 更數 vs 其他來源更數（additive 新
+  // sheet）。
+  const sourceSummary = await buildPayrollSourceSummary(month);
+  const summarySheet = wb.addWorksheet("來源摘要");
+  summarySheet.addRow(["更表上載（roster_upload）更數", sourceSummary.rosterUploadCount]);
+  summarySheet.addRow(["其他已標記來源更數", sourceSummary.otherSourceCount]);
+  summarySheet.addRow(["未標記來源更數", sourceSummary.unlabeledCount]);
+  summarySheet.addRow([]);
+  summarySheet.addRow(["來源", "更數"]);
+  for (const [label, count] of Object.entries(sourceSummary.bySource)) summarySheet.addRow([label, count]);
+
+  const detailSheet = wb.addWorksheet("逐更來源明細");
+  detailSheet.addRow(["日期", "結算單位代號", "Staff No.", "姓名", "來源"]);
+  for (const row of sourceDetailRows) detailSheet.addRow([row.date, row.brokerCode, row.guardStaffNo, row.guardName, row.source]);
 
   await wb.xlsx.writeFile(outPath);
   return totals;

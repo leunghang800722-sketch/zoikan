@@ -281,7 +281,12 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
 
   it("§11 PATCH 指定去一個呢個月已有上載嘅盤：較新嗰個保持 active、舊嗰個 superseded、version 遞增", async () => {
     await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08"));
-    const u = (await (await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: "對唔到嘅盤名" }), "2026-08"))).json()) as { upload: { id: string } };
+    // B1-8 第 1 項：PATCH 轉去目標盤之後，檔名唔准同目標（盤,月）組別
+    // 現有版本撞——呢度特登用唔同檔名（`roster-b.xlsx`），先淨係測版本
+    // 序列邏輯，唔係測撞名 400（撞名 400 見下面新增嘅 §14）。
+    const u = (await (
+      await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: "對唔到嘅盤名" }), "2026-08", undefined, "roster-b.xlsx"))
+    ).json()) as { upload: { id: string } };
     const res = await patchUpload(reqJson(`http://test.local/api/roster-uploads/${u.upload.id}`, ownerCookie, "PATCH", { site_id: fx.site.id }), { params: Promise.resolve({ id: u.upload.id }) });
     expect(res.status).toBe(200);
     const all = await prisma.rosterUpload.findMany({ where: { siteId: fx.site.id }, orderBy: { version: "asc" } });
@@ -553,5 +558,67 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
     expect(rows.length).toBeGreaterThan(0);
     for (const r of rows) expect(r.resolvedSiteId).toBe(fx.site.id);
+  });
+
+  it("§27 B1-8 第 1 項：PATCH 指定去一個目標（盤,月）組別已有同名檔嘅盤→400，唔准撞名", async () => {
+    await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: fx.site.name }), "2026-08", undefined, "same-name.xlsx"));
+    const u = (await (
+      await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, await buildXlsx({ siteName: "對唔到嘅盤名2" }), "2026-08", undefined, "same-name.xlsx"))
+    ).json()) as { upload: { id: string } };
+    const res = await patchUpload(reqJson(`http://test.local/api/roster-uploads/${u.upload.id}`, ownerCookie, "PATCH", { site_id: fx.site.id }), { params: Promise.resolve({ id: u.upload.id }) });
+    expect(res.status).toBe(400);
+    // 拒絕之後 site_id 應該維持未變（PATCH 冇部分生效）。
+    expect((await prisma.rosterUpload.findUniqueOrThrow({ where: { id: u.upload.id } })).siteId).toBeNull();
+  });
+
+  it("§28 B1-8 第 2 項：有子盤嘅上載，某行冇 sub_site_name→warning「未寫子盤，歸母盤」（唔擋）", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = fx.site.name;
+    ws.getCell("F4").value = "Date";
+    ws.getCell("G4").value = aug(1);
+    ws.getCell("A5").value = "Broker";
+    ws.getCell("B5").value = "Time";
+    ws.getCell("C5").value = "Rank";
+    ws.getCell("D5").value = "Staff No.";
+    ws.getCell("E5").value = "Tel";
+    ws.getCell("F5").value = "Name";
+    ws.getCell("A6").value = "TEST-BA";
+    ws.getCell("B6").value = "0700-1900";
+    ws.getCell("D6").value = "T-A01";
+    ws.getCell("E6").value = "6100001";
+    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("G6").value = "N"; // 冇填 sub_site 欄（呢個 fixture 冇 subSite column，所以任何有子盤嘅盤都會觸發呢個 warning）
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    // fx.site 加一個子盤（parent_site_id 指返 fx.site）。
+    const child = await prisma.site.create({
+      data: { canonicalName: "測試子盤A", clientName: fx.site.name, billingModel: "per_shift", parentSiteId: fx.site.id, createdBy: fx.userIds["老闆"]! },
+    });
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", fx.site.id, "with-child-site.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string } };
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id, codeKind: "shift" } });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect((r.warnings as string[] | null)?.some((w) => w.includes("未寫子盤，歸母盤"))).toBe(true);
+      expect(r.resolvedSiteId).toBe(fx.site.id); // 唔擋——歸母盤
+    }
+    await prisma.site.delete({ where: { id: child.id } });
+  });
+
+  it("§29 B1-8 第 3 項：檔案工號命中真實安員，但姓名對唔上→唔准配（ambiguous），warning「屬另一人」", async () => {
+    // fx.guardA 真實 staff_no="T-A01"、name_zh="測試安員甲"——呢度故意
+    // 帶正確工號但錯嘅姓名（似係打錯咗第二個人個工號），「唔准配」。
+    const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "T-A01", name: "測試安員己（唔存在）" });
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "staffno-belongs-to-other.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string } };
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r.guardId).toBeNull();
+      expect(r.guardMatch).toBe("ambiguous");
+      expect((r.warnings as string[] | null)?.some((w) => w.includes("屬另一人"))).toBe(true);
+    }
   });
 });

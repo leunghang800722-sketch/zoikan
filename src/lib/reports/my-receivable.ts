@@ -67,6 +67,7 @@ export async function buildMyReceivable(brokerId: string, month: Date): Promise<
       settlementBrokerId: brokerId,
       recordType: { in: ["shift", "ot"] },
       workDate: { gte: start, lte: end },
+      status: { not: "cancelled" },
     },
     include: { site: { select: { id: true, canonicalName: true } }, shiftType: { select: { code: true } } },
     orderBy: [{ workDate: "asc" }],

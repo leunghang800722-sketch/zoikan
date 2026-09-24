@@ -92,7 +92,10 @@ describe("WP2 月份鎖定", () => {
 
   it("鎖定一個未鎖嘅月份會生效，之後嗰個月寫入即刻拒", async () => {
     const mc = await prisma.monthClose.create({ data: { month: fx.unlockedMonth, createdBy: "test" } });
-    const lockRes = await monthCloseLock(req(`http://test.local/api/month-closes/${mc.id}`, ownerCookie, "POST", {}), {
+    // B1-6（規則 10）：呢個 fixture 冇幫 fx.site 起更表上載，鎖定會俾
+    // 「未上載」擋——呢個 test 淨係測「鎖咗之後寫入拒」，唔係測 B1-6，
+    // 用老闆 force=true 跳過（同 wp4-reports.test.ts 一致做法）。
+    const lockRes = await monthCloseLock(req(`http://test.local/api/month-closes/${mc.id}`, ownerCookie, "POST", { force: true }), {
       params: Promise.resolve({ id: mc.id }),
     });
     expect(lockRes.status).toBe(200);

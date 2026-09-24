@@ -710,3 +710,26 @@ export const RosterUploadPatchSchema = z
     site_id: z.union([z.null(), uuid]), // 人手指定盤（清返做未指定用 null）
   })
   .strict();
+
+// WP-ROSTER-UPLOAD Phase B-1（B1-2）：`POST /api/roster-uploads/:id/reconcile/apply`
+// ——`key` 係 `buildReconcileKey()`/`buildUnresolvedKey()`（src/lib/
+// roster-upload/reconcile.ts）砌出嚟嘅字串，唔係 uuid，故意用寬鬆
+// `z.string().min(1)`（唔識嘅 key 由 service 層 400/逐項 fail，唔喺呢度
+// 驗格式）。`reason` 淨係 `exception` 要非空（service 層再驗一次，呢度
+// 唔擋空字串——`keep_system` 冇填係合法嘅）。
+export const RosterReconcileApplySchema = z
+  .object({
+    actions: z
+      .array(
+        z
+          .object({
+            key: z.string().min(1).max(200),
+            action: z.enum(["apply_roster", "keep_system", "exception"]),
+            reason: z.string().max(2000).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(2000),
+  })
+  .strict();

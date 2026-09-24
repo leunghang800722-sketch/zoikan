@@ -708,6 +708,9 @@ model RosterUpload {
   createdBy String?  @map("created_by")
 
   rows RosterUploadRow[]
+  // Phase B-1（§14.1／§15.3 分期）：呢個上載逐項對數決定（keep_system／
+  // exception 留痕，見 RosterReconcileDecision 大註解）。
+  reconcileDecisions RosterReconcileDecision[]
 
   @@index([month, siteId])
   @@map("roster_uploads")
@@ -756,7 +759,44 @@ model RosterUploadRow {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([uploadId, workDate])
+  // Phase B-1（§14.1／§15.3 分期，B1-8 第 4 項）：對數引擎逐更配對鍵要查
+  // 「呢個上載呢個月呢個（子）盤」嘅 rows——冇呢個 index 就要 seq scan
+  // 成張 roster_upload_rows。
+  @@index([resolvedSiteId])
   @@map("roster_upload_rows")
+}
+
+// ---------------------------------------------------------------------------
+// WP-ROSTER-UPLOAD Phase B-1（§14.1 WP-ATTRIB／§15.3 分期）：對數頁「保留
+// 系統」／「例外」呢兩種決定——唔改 shift_records，但要留痕（邊個、幾
+// 時、原因），等會計之後可以追溯「呢個差異係咪已經有人睇過、點解冇跟更
+// 表改」。`apply_roster` 決定唔喺呢度留一行——嗰種決定本身已經反映喺
+// shift_records 嘅 create/update/void audit_log（`writeAudit()`），呢度
+// 淨係記「唔跟更表」嗰兩種、要解釋原因嘅決定，避免同 audit_log 重複存
+// 一份幾乎一樣嘅嘢。
+//
+// `reconcileKey` 唔用 DB FK（對唔上 `shift_records` 嘅 `roster_only`／
+// `unresolved` 分類、或者未配對嘅 upload row 都可能有決定）——用
+// `buildReconcileKey()`（`src/lib/roster-upload/reconcile.ts`）砌出嚟嘅
+// 穩定字串（work_date|site_id|guard_id|shift_type_id，或者
+// `row:<roster_upload_row_id>` 呢類冇齊配對鍵嘅情況）。
+// ---------------------------------------------------------------------------
+model RosterReconcileDecision {
+  id       String       @id @default(uuid())
+  uploadId String       @map("upload_id")
+  upload   RosterUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  reconcileKey String @map("reconcile_key")
+  category     String // 決定嗰刻嘅分類（roster_only/system_only/guard_diff/settlement_diff/shift_type_diff/unresolved），純記錄用途
+  action       String // 'keep_system' | 'exception'（apply_roster 唔存喺呢度，見上面大註解）
+  reason       String?
+
+  decidedBy String   @map("decided_by")
+  decidedAt DateTime @default(now()) @map("decided_at")
+
+  @@unique([uploadId, reconcileKey])
+  @@index([uploadId])
+  @@map("roster_reconcile_decisions")
 }
 
 // ---------------------------------------------------------------------------

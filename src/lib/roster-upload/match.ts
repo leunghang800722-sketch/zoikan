@@ -114,6 +114,12 @@ export interface GuardMatchResult {
    * 一致」個 warning（呢個 flag 淨係喺 `guardId!==null` 嗰陣先有意
    * 義）。 */
   staffNoMismatch: boolean;
+  /** B1-8 第 3 項（B-0 驗收留低）：檔案工號本身命中咗系統入面一個真實
+   * 存在嘅安員，但呢行嘅姓名同嗰個安員唔夾（例如打錯工號撞正另一個人
+   * 個號、或者工號俾第二個人）——「唔准配」，`guardId` 留 `null`、
+   * `guardMatch` 落 `ambiguous`（唔可以直接當呢個號一定係嗰個人）；呢
+   * 個 flag 令 call site 加「工號屬另一人」warning。 */
+  staffNoBelongsToOther: boolean;
 }
 
 export interface GuardCandidate {
@@ -141,6 +147,9 @@ export interface GuardMatchIndex {
    * staff_no`）——(a)「檔案工號 X 同系統工號 Y 唔一致」warning 用嚟攞
    * Y。 */
   staffNoByGuardId: ReadonlyMap<string, string | null>;
+  /** guardId → `name_zh`（trim）——B1-8 第 3 項：staff_no 命中之後要同
+   * 呢行嘅 `name_raw` 對一對，唔夾就「唔准配」。 */
+  nameByGuardId: ReadonlyMap<string, string>;
 }
 
 function nameTelKey(name: string, tel: string): string {
@@ -157,8 +166,10 @@ export function buildGuardMatchIndex(rows: {
 
   const byLegacyStaffNo = new Map<string, string>();
   const staffNoByGuardId = new Map<string, string | null>();
+  const nameByGuardId = new Map<string, string>();
   for (const g of rows.guards) {
     staffNoByGuardId.set(g.id, g.staffNo);
+    nameByGuardId.set(g.id, g.nameZh.trim());
     if (g.staffNo) byLegacyStaffNo.set(normalizeStaffNumber(g.staffNo), g.id);
     if (g.staffNoMw) byLegacyStaffNo.set(normalizeStaffNumber(g.staffNoMw), g.id);
   }
@@ -184,7 +195,7 @@ export function buildGuardMatchIndex(rows: {
     }
   }
 
-  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, staffNoByGuardId };
+  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, staffNoByGuardId, nameByGuardId };
 }
 
 /** 安員配對：先 staff_no_raw（正規化，含已取消號——`byStaffNumber` 索引
@@ -201,37 +212,51 @@ export function matchGuard(
   index: GuardMatchIndex,
 ): GuardMatchResult {
   let staffNoProvidedButNotFound = false;
+  const rowName = params.nameRaw?.trim() || null;
   if (params.staffNoRaw) {
     const normalized = normalizeStaffNumber(params.staffNoRaw);
     if (normalized) {
       const viaNumber = index.byStaffNumber.get(normalized);
       if (viaNumber) {
-        return { guardId: viaNumber.guardId, guardMatch: "by_staff_no", matchedViaFormerStaffNo: viaNumber.status === "former", staffNoMismatch: false };
+        // B1-8 第 3 項：staff_no 命中真實存在嘅安員，但呢行姓名同嗰個
+        // 人唔夾——「唔准配」，退返 ambiguous，唔會靜靜當呢個號一定係
+        // 嗰個人（`rowName` 冇值就冇得比對，維持舊行為信 staff_no）。
+        const systemName = index.nameByGuardId.get(viaNumber.guardId);
+        if (rowName && systemName && rowName !== systemName) {
+          return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: true };
+        }
+        return { guardId: viaNumber.guardId, guardMatch: "by_staff_no", matchedViaFormerStaffNo: viaNumber.status === "former", staffNoMismatch: false, staffNoBelongsToOther: false };
       }
       const viaLegacy = index.byLegacyStaffNo.get(normalized);
-      if (viaLegacy) return { guardId: viaLegacy, guardMatch: "by_staff_no", matchedViaFormerStaffNo: false, staffNoMismatch: false };
+      if (viaLegacy) {
+        const systemName = index.nameByGuardId.get(viaLegacy);
+        if (rowName && systemName && rowName !== systemName) {
+          return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: true };
+        }
+        return { guardId: viaLegacy, guardMatch: "by_staff_no", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
+      }
       staffNoProvidedButNotFound = true;
     }
   }
 
-  const name = params.nameRaw?.trim() || null;
+  const name = rowName;
   const tel = params.telRaw ? normalizeTel(params.telRaw) : null;
 
   if (name && tel) {
     const candidates = index.byNameAndTel.get(nameTelKey(name, tel)) ?? [];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound };
+      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false };
     }
-    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false };
+    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
   }
 
   if (name) {
     const candidates = index.byName.get(name) ?? [];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound };
+      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false };
     }
-    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false };
+    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
   }
 
-  return { guardId: null, guardMatch: "unmatched", matchedViaFormerStaffNo: false, staffNoMismatch: false };
+  return { guardId: null, guardMatch: "unmatched", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
 }

@@ -209,6 +209,14 @@ export default function MonthlyCloseWorkbenchPage() {
   // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格，就算
   // 未定价 count＝0 都要顯示。
   const [noSettlementCount, setNoSettlementCount] = useState(0);
+  // B1-6（規則 10，§14）：月結鎖定前檢查——邊啲盤呢個月有出更但未上載
+  // 更表／未對數完成，鎖定會 400。呢度入頁／Generate 就查一次，等用戶
+  // 撳「鎖定」之前已經見到清單（唔使撞 400 先知）。
+  const [rosterCoverage, setRosterCoverage] = useState<{
+    missing_upload_sites: { site_id: string; site_name: string }[];
+    unconfirmed_upload_sites: { site_id: string; site_name: string; status: string }[];
+  } | null>(null);
+  const [forceOverride, setForceOverride] = useState(false);
   // A1（Opus 整合驗收）：入頁／切月份時，先查呢個月有冇 month_closes 行
   // （`GET /api/month-closes?month=`）——已經有就自動行一次 Generate（見
   // src/app/api/month-closes/[id]/generate/route.ts 檔頭註解：
@@ -222,9 +230,12 @@ export default function MonthlyCloseWorkbenchPage() {
     setLoading(true);
     setError(null);
     // month 段接受 "YYYY-MM"——見 src/lib/month-lock.ts resolveMonthCloseIdOrMonth()
-    const [res, marginRes] = await Promise.all([
+    const [res, marginRes, coverageRes] = await Promise.all([
       apiPost<GenerateResult>(`/api/month-closes/${month}/generate`),
       apiGet<GrossMarginTotalsResult>(`/api/reports/gross-margin?month=${month}`),
+      apiGet<{ missing_upload_sites: { site_id: string; site_name: string }[]; unconfirmed_upload_sites: { site_id: string; site_name: string; status: string }[] }>(
+        `/api/month-closes/roster-coverage?month=${month}`,
+      ),
     ]);
     setLoading(false);
     if (!res.ok) {
@@ -236,18 +247,23 @@ export default function MonthlyCloseWorkbenchPage() {
     setUnpricedCount(marginRes.ok ? (marginRes.data.unpriced_count ?? 0) : 0);
     setUnpricedGroups(marginRes.ok ? (marginRes.data.unpriced_groups ?? []) : []);
     setNoSettlementCount(marginRes.ok ? (marginRes.data.no_settlement_count ?? 0) : 0);
+    setRosterCoverage(coverageRes.ok ? coverageRes.data : null);
   }
 
   async function lock() {
     if (!result) return;
     setError(null);
-    const res = await apiPost(`/api/month-closes/${result.month_close.id}/lock`, result.reconciliation.has_diff ? { override_reason: overrideReason } : {});
+    const body: Record<string, unknown> = {};
+    if (result.reconciliation.has_diff) body.override_reason = overrideReason;
+    if (forceOverride) body.force = true;
+    const res = await apiPost(`/api/month-closes/${result.month_close.id}/lock`, body);
     if (!res.ok) {
       setError(res.message);
       return;
     }
     setNotice("已鎖定");
     setOverrideReason("");
+    setForceOverride(false);
     await generate();
   }
 
@@ -526,6 +542,23 @@ export default function MonthlyCloseWorkbenchPage() {
 
             {!locked ? (
               <div className="flex flex-col gap-2">
+                {/* B1-6（規則 10，§14）：未上載／未對數完成嘅盤清單——撳
+                    「鎖定」之前已經見到，唔使撞 400 先知。 */}
+                {rosterCoverage && (rosterCoverage.missing_upload_sites.length > 0 || rosterCoverage.unconfirmed_upload_sites.length > 0) && (
+                  <div className="rounded-md border border-orange-200 bg-orange-50 p-2.5 text-[12px] text-orange-800" data-testid="roster-coverage-issues">
+                    <div className="font-medium">更表上載/對數未齊，會擋鎖定：</div>
+                    {rosterCoverage.missing_upload_sites.length > 0 && (
+                      <div className="mt-1">未上載：{rosterCoverage.missing_upload_sites.map((s) => s.site_name).join("、")}</div>
+                    )}
+                    {rosterCoverage.unconfirmed_upload_sites.length > 0 && (
+                      <div className="mt-1">未對數完成：{rosterCoverage.unconfirmed_upload_sites.map((s) => `${s.site_name}（${s.status}）`).join("、")}</div>
+                    )}
+                    <label className="mt-2 flex items-center gap-1.5">
+                      <input type="checkbox" checked={forceOverride} onChange={(e) => setForceOverride(e.target.checked)} />
+                      強制鎖定（淨係老闆做得到，會記落操作紀錄）
+                    </label>
+                  </div>
+                )}
                 {result.reconciliation.has_diff && (
                   <>
                     <span className="text-xs text-zk-muted">有紅色差異，鎖定要填 override 原因（必填）</span>
@@ -537,7 +570,14 @@ export default function MonthlyCloseWorkbenchPage() {
                     />
                   </>
                 )}
-                <Button variant="dark" onClick={lock} disabled={result.reconciliation.has_diff && !overrideReason.trim()}>
+                <Button
+                  variant="dark"
+                  onClick={lock}
+                  disabled={
+                    (result.reconciliation.has_diff && !overrideReason.trim()) ||
+                    (!!rosterCoverage && (rosterCoverage.missing_upload_sites.length > 0 || rosterCoverage.unconfirmed_upload_sites.length > 0) && !forceOverride)
+                  }
+                >
                   鎖定 {month}
                 </Button>
               </div>
