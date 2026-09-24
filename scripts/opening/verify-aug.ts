@@ -137,7 +137,34 @@ async function verifyUploads() {
   console.log(`  上載出錯：${uploadErrors}（目標 0）`);
   console.log(`  被同盤同月另一檔 supersede：${superseded}（目標 0——唔係 0 即係有兩個檔撞咗同一個盤）`);
 
+  await verifyCP5RankNarrowing(uploadIds);
+
   return { uploadIds, totals: { siteUnmatched, totalUnmatchedShiftType, totalAmbiguousShiftType, totalUnmatchedSubSite, totalUnmatchedGuard, totalAmbiguousGuard, uploadErrors, superseded } };
+}
+
+/**
+ * 補丁（§17.7 未修第一項）：數碼港 CP5 rank 收窄逐格明細——上載嗰陣
+ * `matchShiftType()` 第三層收窄（match.ts）要靠更表 Rank 欄自動分流
+ * 「早更保安員」→`D-2`（per_shift）／「早更IC」→`D`（monthly_ic），
+ * 逐盤逐 rank 印返配咗邊個更種、有幾多格，同埋呢個盤嘅 ambiguous 格數
+ * （目標 0）。冇人名／工號，淨係印 rank／代號／格數。 */
+async function verifyCP5RankNarrowing(uploadIds: string[]): Promise<void> {
+  const cp5Site = await prisma.site.findUnique({ where: { canonicalName: "數碼港 CP5" } });
+  if (!cp5Site) return;
+  console.log("\n----- (a-補) 數碼港 CP5 rank 收窄明細（補丁驗證，§17.7 未修第一項）-----");
+  const rows = await prisma.rosterUploadRow.findMany({
+    where: { uploadId: { in: uploadIds }, resolvedSiteId: cp5Site.id, codeKind: "shift" },
+    include: { shiftType: true },
+  });
+  const byKey = new Map<string, number>();
+  let ambiguousOrUnmatched = 0;
+  for (const r of rows) {
+    if (!r.shiftTypeId) ambiguousOrUnmatched += 1;
+    const key = `${r.rankRaw ?? "（冇 rank）"}｜代號=${r.rawCode}｜配到更種=${r.shiftType?.code ?? "（冇配到）"}(${r.shiftType?.billingGroup ?? "-"})`;
+    byKey.set(key, (byKey.get(key) ?? 0) + 1);
+  }
+  for (const [k, v] of [...byKey.entries()].sort()) console.log(`    ${v} 格　${k}`);
+  console.log(`  數碼港 CP5 未配到更別（ambiguous／unmatched）總格數：${ambiguousOrUnmatched}（目標 0）`);
 }
 
 function readFileSyncOk(dir: string): boolean {

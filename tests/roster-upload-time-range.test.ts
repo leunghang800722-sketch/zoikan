@@ -66,13 +66,13 @@ describe("shiftTypeTimeSlot：DB Time 欄 → HHMM-HHMM", () => {
 // 驗收 2026-09-23 補測：`matchShiftType()` 收窄三條路之前冇純函數測試。
 describe("matchShiftType：time_raw 收窄", () => {
   const cands = [
-    { id: "ic-am", siteId: "S", code: "IC", timeSlot: "0700-1500" },
-    { id: "ic-pm", siteId: "S", code: "IC", timeSlot: "1430-2230" },
-    { id: "ic-nt", siteId: "S", code: "ic", timeSlot: "2230-0730" },
-    { id: "x1", siteId: "S", code: "X", timeSlot: "0700-1900" },
-    { id: "x2", siteId: "S", code: "X", timeSlot: "0700-1900" },
-    { id: "d", siteId: "S", code: "D", timeSlot: "0730-1930" },
-    { id: "other", siteId: "T", code: "D", timeSlot: "0700-1900" },
+    { id: "ic-am", siteId: "S", code: "IC", timeSlot: "0700-1500", billingGroup: "per_shift" as const },
+    { id: "ic-pm", siteId: "S", code: "IC", timeSlot: "1430-2230", billingGroup: "per_shift" as const },
+    { id: "ic-nt", siteId: "S", code: "ic", timeSlot: "2230-0730", billingGroup: "per_shift" as const },
+    { id: "x1", siteId: "S", code: "X", timeSlot: "0700-1900", billingGroup: "per_shift" as const },
+    { id: "x2", siteId: "S", code: "X", timeSlot: "0700-1900", billingGroup: "per_shift" as const },
+    { id: "d", siteId: "S", code: "D", timeSlot: "0730-1930", billingGroup: "per_shift" as const },
+    { id: "other", siteId: "T", code: "D", timeSlot: "0700-1900", billingGroup: "per_shift" as const },
   ];
   it("同代號多個候選，時段一個命中 → 配（代號大小寫、時段寫法唔影響）", () => {
     expect(matchShiftType("IC", "shift", "S", "14:30 - 22:30", cands)).toEqual({ id: "ic-pm", ambiguous: false });
@@ -99,5 +99,61 @@ describe("matchShiftType：time_raw 收窄", () => {
     expect(matchShiftType("Z", "shift", "S", "0700-1900", cands)).toEqual({ id: null, ambiguous: false });
     expect(matchShiftType("D", "shift", null, "0700-1900", cands)).toEqual({ id: null, ambiguous: false });
     expect(matchShiftType("AL", "leave", "S", null, cands)).toEqual({ id: null, ambiguous: false });
+  });
+});
+
+// 補丁（§17.7 未修第一項）：數碼港 CP5 dev DB 有兩個 0750-1950 更種——
+// `D`（billing_group=monthly_ic，IC 月費崗）同 `D-2`（per_shift，普通
+// 兵，DB unique 淨係睇 code+start_time，跟「-N 後綴分開」慣例起嘅）。
+// 更表格仔嘅 rawCode 淨係寫「D」——`codeFamily()` 要湊齊 D／D-2 兩個候
+// 選（唔係逐字相等），time_raw 收窄唔到（兩個候選時段字面完全一樣），
+// 要用 rank_raw 第三層收窄。純函數測試，零 DB 依賴。
+describe("matchShiftType：rank_raw 第三層收窄（時段收窄唔到、候選時段完全一樣）", () => {
+  const cp5 = [
+    { id: "d-ic", siteId: "CP5", code: "D", timeSlot: "0750-1950", billingGroup: "monthly_ic" as const },
+    { id: "d-guard", siteId: "CP5", code: "D-2", timeSlot: "0750-1950", billingGroup: "per_shift" as const },
+  ];
+
+  it("rawCode「D」用 codeFamily() 湊埋「D-2」做候選（唔係逐字相等）", () => {
+    // 直接驗證：rank 冇資訊嗰陣都仲係見到兩個候選（ambiguous），證明
+    // matches 入面已經有齊 D／D-2，唔係淨係得逐字相等嘅「D」一個。
+    const r = matchShiftType("D", "shift", "CP5", null, cp5, null);
+    expect(r.ambiguous).toBe(true);
+    expect(r.candidateTimeSlots).toEqual(["0750-1950", "0750-1950"]);
+  });
+
+  it("rank 含「IC」（例：早更IC）→ 收窄去 billing_group=monthly_ic 嗰個", () => {
+    expect(matchShiftType("D", "shift", "CP5", "0750-1950", cp5, "早更IC")).toEqual({ id: "d-ic", ambiguous: false, matchedViaRank: true });
+  });
+
+  it("rank 含「SIC」→ 一樣當 IC 類收窄", () => {
+    expect(matchShiftType("D", "shift", "CP5", "0750-1950", cp5, "夜更SIC")).toEqual({ id: "d-ic", ambiguous: false, matchedViaRank: true });
+  });
+
+  it("rank 係「保安員」類（例：早更保安員）→ 收窄去 per_shift 嗰個", () => {
+    expect(matchShiftType("D", "shift", "CP5", "0750-1950", cp5, "早更保安員")).toEqual({ id: "d-guard", ambiguous: false, matchedViaRank: true });
+  });
+
+  it("rank 寫「Guard」（英文、唔含 IC）→ 一樣當保安員類收窄", () => {
+    expect(matchShiftType("D", "shift", "CP5", "0750-1950", cp5, "Guard")).toEqual({ id: "d-guard", ambiguous: false, matchedViaRank: true });
+  });
+
+  it("空 rank（null／得返空白）→ 冇資訊可以收窄，照舊 ambiguous，rankAttempted=false", () => {
+    const r1 = matchShiftType("D", "shift", "CP5", "0750-1950", cp5, null);
+    expect(r1).toEqual({ id: null, ambiguous: true, candidateTimeSlots: ["0750-1950", "0750-1950"], rankAttempted: false });
+    const r2 = matchShiftType("D", "shift", "CP5", "0750-1950", cp5, "   ");
+    expect(r2.ambiguous).toBe(true);
+    expect(r2.rankAttempted).toBe(false);
+  });
+
+  it("rank 同候選夾唔到（呢個盤根本冇 monthly_ic 候選，rank 話係 IC）→ 照舊 ambiguous，但 rankAttempted=true 講明試過", () => {
+    const allGuard = [
+      { id: "g1", siteId: "T2", code: "D", timeSlot: "0700-1900", billingGroup: "per_shift" as const },
+      { id: "g2", siteId: "T2", code: "D", timeSlot: "0700-1900", billingGroup: "per_shift" as const },
+    ];
+    const r = matchShiftType("D", "shift", "T2", "0700-1900", allGuard, "早更IC");
+    expect(r.id).toBeNull();
+    expect(r.ambiguous).toBe(true);
+    expect(r.rankAttempted).toBe(true);
   });
 });
