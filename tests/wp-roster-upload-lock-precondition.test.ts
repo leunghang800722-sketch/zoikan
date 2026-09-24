@@ -101,4 +101,25 @@ describe("WP-ROSTER-UPLOAD Phase B-1（B1-6）：月結鎖定前檢查", () => {
     const res = await monthCloseLock(req(`http://test.local/api/month-closes/${mc.id}`, accountantCookie, "POST", { force: true }), { params: Promise.resolve({ id: mc.id }) });
     expect(res.status).toBe(403);
   });
+  it("驗收（Opus 5.5）：2026-07 及更早月份唔檢查（7 月冇更表上載，解鎖再鎖唔應該俾規則 10 擋）", async () => {
+    const july = new Date(Date.UTC(2026, 6, 1));
+    await prisma.shiftRecord.create({ data: { workDate: new Date(Date.UTC(2026, 6, 15)), siteId: fx.site.id, shiftTypeId: fx.shiftType.id, guardId: fx.guardA.id, settlementBrokerId: fx.brokerA.id } });
+    const result = await checkRosterUploadCoverage(july);
+    expect(result).toEqual({ missingUploadSites: [], unconfirmedUploadSites: [] });
+    const mc = await prisma.monthClose.create({ data: { month: july, createdBy: "test" } });
+    const res = await monthCloseLock(req(`http://test.local/api/month-closes/${mc.id}`, ownerCookie, "POST", { override_reason: "測試：唔關規則 10 事" }), { params: Promise.resolve({ id: mc.id }) });
+    expect(res.status).toBe(200);
+  });
+
+  it("驗收（Opus 5.5）：子盤嘅更由母盤嗰份上載覆蓋，唔當「未上載」", async () => {
+    const child = await prisma.site.create({ data: { canonicalName: "測試子盤鎖定", clientName: "測試客戶WP2", billingModel: "per_shift", parentSiteId: fx.site.id, createdBy: "t" } });
+    const st = await prisma.shiftType.create({ data: { siteId: child.id, code: "N", label: "子盤夜更", hours: 12, createdBy: "t" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date(Date.UTC(2026, 7, 3)), siteId: child.id, shiftTypeId: st.id, guardId: fx.guardA.id, settlementBrokerId: fx.brokerA.id } });
+    await prisma.rosterUpload.create({
+      data: { month: fx.unlockedMonth, siteId: fx.site.id, siteNameRaw: fx.site.name, uploaderUserId: fx.userIds["老闆"]!, fileName: "parent.xlsx", fileSha256: "z".repeat(64), fileBytes: Buffer.from("x"), fileSize: 1, status: "confirmed" },
+    });
+    const result = await checkRosterUploadCoverage(fx.unlockedMonth);
+    expect(result.missingUploadSites).toHaveLength(0);
+    expect(result.unconfirmedUploadSites).toHaveLength(0);
+  });
 });

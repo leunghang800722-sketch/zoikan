@@ -18,10 +18,17 @@ export interface RosterCoverageCheckResult {
   unconfirmedUploadSites: (RosterCoverageIssueSite & { status: string })[];
 }
 
+/** 驗收修正（Opus 5.5）：規則 10 淨係對「更表上載制度開始之後」嘅月份
+ * 生效——2026-07（P0 已鎖定入庫、數據來自 importer，冇任何更表上載）同
+ * 更早月份唔檢查，否則 7 月一旦解鎖改嘢再鎖，就會俾呢條規則擋住（要老闆
+ * force）。8 月係第一個用更表上載計糧嘅月份（§15）。 */
+export const ROSTER_UPLOAD_REQUIRED_FROM = new Date(Date.UTC(2026, 7, 1));
+
 /** 規則 10：邊啲盤呢個月有出更（shift_records 或 daily_requirements）但
  * 未齊上載／未對數完成。 */
 export async function checkRosterUploadCoverage(month: Date): Promise<RosterCoverageCheckResult> {
   const m = monthStart(month);
+  if (m < ROSTER_UPLOAD_REQUIRED_FROM) return { missingUploadSites: [], unconfirmedUploadSites: [] };
   const monthEnd = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 0));
 
   const [shiftSiteIds, requirementSiteIds] = await Promise.all([
@@ -31,10 +38,12 @@ export async function checkRosterUploadCoverage(month: Date): Promise<RosterCove
   const siteIds = [...new Set([...shiftSiteIds.map((s) => s.siteId), ...requirementSiteIds.map((s) => s.siteId)])];
   if (siteIds.length === 0) return { missingUploadSites: [], unconfirmedUploadSites: [] };
 
-  const [sites, uploads] = await Promise.all([
-    prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true } }),
-    prisma.rosterUpload.findMany({ where: { month: m, siteId: { in: siteIds }, status: { not: "superseded" } }, select: { siteId: true, status: true } }),
-  ]);
+  const sites = await prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true, parentSiteId: true } });
+  // 驗收修正（Opus 5.5）：子盤（城巴車廠／CP5）嘅更係由母盤嗰份上載
+  // 覆蓋（B-0：一檔多子盤，上載掛母盤）——子盤本身冇上載唔算「未上載」。
+  const parentBySite = new Map(sites.map((s) => [s.id, s.parentSiteId]));
+  const uploadSiteIds = [...new Set([...siteIds, ...sites.map((s) => s.parentSiteId).filter((v): v is string => !!v)])];
+  const uploads = await prisma.rosterUpload.findMany({ where: { month: m, siteId: { in: uploadSiteIds }, status: { not: "superseded" } }, select: { siteId: true, status: true } });
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
   // 同盤理論上淨係一個 active（version 序列已經保證），但保守用 Map 揀
   // 「非 superseded 入面隨便一個」——真係有多過一個都代表資料有問題，
@@ -45,7 +54,8 @@ export async function checkRosterUploadCoverage(month: Date): Promise<RosterCove
   const unconfirmedUploadSites: (RosterCoverageIssueSite & { status: string })[] = [];
   for (const siteId of siteIds) {
     const siteName = siteNameById.get(siteId) ?? siteId.slice(0, 8);
-    const status = uploadBySite.get(siteId);
+    const parentId = parentBySite.get(siteId) ?? null;
+    const status = uploadBySite.get(siteId) ?? (parentId ? uploadBySite.get(parentId) : undefined);
     if (!status) {
       missingUploadSites.push({ siteId, siteName });
     } else if (status !== "confirmed") {

@@ -194,7 +194,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
     // exception 一定要有 reason——前端一樣攔一次（後端都會驗）。
     const missingReason = pendingList.find((p) => p.action === "exception" && !p.reason.trim());
     if (missingReason) {
-      setError(`「${missingReason.key}」呢項例外決定未填原因`);
+      setError(`有 ${pendingList.filter((p) => p.action === "exception" && !p.reason.trim()).length} 項例外決定未填原因（例如 ${fmtDate(missingReason.key.startsWith("row:") ? (rows.find((r) => r.key === missingReason.key)?.work_date ?? "") : missingReason.key.split("|")[0]!)}）`);
       setConfirmOpen(false);
       return;
     }
@@ -340,7 +340,36 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
                     ) : item.category === "match" ? (
                       <span className="text-zk-faint">—</span>
                     ) : item.category === "unresolved" ? (
-                      <span className="text-[11px] text-zk-muted">先去上載列表頁指定盤／別名</span>
+                      // 驗收修正（Opus 5.5）：unresolved 之前完全冇動作——但
+                      // 「非 match 項全部有決定」先會轉 confirmed，而月結鎖定
+                      // 要 confirmed，即係一格真係配唔到（例如外判／唔喺名冊
+                      // 嘅人）就永遠卡死。後端本身接受 exception，呢度開返。
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[11px] text-zk-muted">先去上載列表頁指定盤／別名再重新解析；確認唔使寫入就標「例外」</span>
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setDecision(item.key, "exception", decision?.reason ?? "")}
+                            className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "exception" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
+                          >
+                            例外
+                          </button>
+                          {decision && (
+                            <button type="button" onClick={() => clearDecision(item.key)} className="text-[11px] text-zk-faint underline">
+                              清除
+                            </button>
+                          )}
+                        </div>
+                        {decision?.action === "exception" && (
+                          <input
+                            type="text"
+                            placeholder="必填原因"
+                            value={decision.reason}
+                            onChange={(e) => setDecision(item.key, "exception", e.target.value)}
+                            className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-[11.5px]"
+                          />
+                        )}
+                      </div>
                     ) : (
                       <div className="flex flex-col gap-1">
                         <div className="flex flex-wrap gap-1">
@@ -390,6 +419,12 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
         </table>
       </div>
 
+      {data && data.items.total > rows.length && (
+        <div className="text-[12px] text-orange-700">
+          呢個分類有 {data.items.total} 項，而家只顯示頭 {rows.length} 項——套用完呢批再重新整理會見到其餘項目。
+        </div>
+      )}
+
       {/* 手機：卡列表（README 慣例——七欄表格喺窄屏幕唔用得）。 */}
       <div className="space-y-2 md:hidden">
         {rows.length === 0 && <EmptyState title={loading ? "載入緊…" : "冇符合條件嘅項目"} />}
@@ -411,10 +446,10 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
                 系統：{item.system ? `${nameOrId(guardNames, item.system.guard_id)}（${item.system.settlement_broker_id ? nameOrId(brokerCodes, item.system.settlement_broker_id) : "冇結算單位"}・${SOURCE_LABEL[item.system.source ?? ""] ?? "未標記"}）` : "—"}
               </div>
               {item.unresolved_reason && <div className="mt-1 text-[11px] text-red-600">{item.unresolved_reason}</div>}
-              {!locked && item.category !== "match" && item.category !== "unresolved" && (
+              {!locked && item.category !== "match" && (
                 <div className="mt-2 flex flex-col gap-1">
                   <div className="flex flex-wrap gap-1">
-                    {(["apply_roster", "keep_system", "exception"] as PendingAction[]).map((a) => (
+                    {((item.category === "unresolved" ? ["exception"] : ["apply_roster", "keep_system", "exception"]) as PendingAction[]).map((a) => (
                       <button
                         key={a}
                         type="button"

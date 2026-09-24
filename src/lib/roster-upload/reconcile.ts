@@ -164,15 +164,20 @@ interface LeaveShiftTypeCandidate {
  * 「自己假設」），淨係用上面兩層有具體訊號支持嘅推斷；兩層都推斷唔到
  * 就留返 unresolved，等人手覆核（回報會講呢個落差）。 */
 export function resolveLeaveShiftTypeIds(
-  rows: readonly { id: string; rowIndex: number; codeKind: string; shiftTypeId: string | null; timeRaw: string | null; effectiveSiteId: string | null }[],
+  rows: readonly { id: string; rowIndex: number; codeKind: string; shiftTypeId: string | null; timeRaw: string | null; effectiveSiteId: string | null; guardId?: string | null }[],
   shiftTypeCandidates: readonly LeaveShiftTypeCandidate[],
 ): Map<string, { shiftTypeId: string | null; inferred: boolean }> {
-  const byRowIndex = new Map<number, string[]>();
+  // 驗收修正（Opus 5.5）：(a) 多數票淨係數正更（`shift`）格——OT 格嘅
+  // shift_type 係「OT<n>」呢類，唔可以俾請假格襲用；(b) 分組鍵加埋
+  // guard_id＋盤——`row_index` 淨係原檔行號，一個 workbook 多過一張 sheet
+  // 嘅話唔同 sheet 同一行號係唔同人。
+  const rowGroupKey = (r: { rowIndex: number; guardId?: string | null; effectiveSiteId: string | null }) => `${r.rowIndex}|${r.guardId ?? ""}|${r.effectiveSiteId ?? ""}`;
+  const byRowIndex = new Map<string, string[]>();
   for (const r of rows) {
-    if ((r.codeKind === "shift" || r.codeKind === "ot") && r.shiftTypeId) {
-      const list = byRowIndex.get(r.rowIndex) ?? [];
+    if (r.codeKind === "shift" && r.shiftTypeId) {
+      const list = byRowIndex.get(rowGroupKey(r)) ?? [];
       list.push(r.shiftTypeId);
-      byRowIndex.set(r.rowIndex, list);
+      byRowIndex.set(rowGroupKey(r), list);
     }
   }
 
@@ -193,7 +198,7 @@ export function resolveLeaveShiftTypeIds(
       }
     }
     // 訊號 2：同一行（rowIndex）其他日子嘅正更/OT 格多數票。
-    const rowMajority = majorityOf(byRowIndex.get(r.rowIndex) ?? []);
+    const rowMajority = majorityOf(byRowIndex.get(rowGroupKey(r)) ?? []);
     if (rowMajority) {
       result.set(r.id, { shiftTypeId: rowMajority, inferred: true });
       continue;
@@ -213,10 +218,17 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
   const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
   const rows = await prisma.rosterUploadRow.findMany({
     where: { uploadId, codeKind: { in: ["shift", "ot", "leave"] } },
+    // 驗收修正：固定次序（重複 key 嘅「第一行」要穩定）。
+    orderBy: [{ rowIndex: "asc" }, { workDate: "asc" }, { id: "asc" }],
   });
 
   // B1-8 第 5 項：對數用嘅盤＝resolved_site_id ?? upload.site_id。
-  const rowsWithEffectiveSite = rows.map((r) => ({ ...r, effectiveSiteId: r.resolvedSiteId ?? upload.siteId }));
+  // 驗收修正（Opus 5.5）：`resolved_site_id=null` 但呢行有 `sub_site_name`
+  // ＝子盤對唔到（或者 B-0 之前上載、未 reparse）——唔准靜靜跌返母盤
+  // （之前實測：leave 格會用母盤嘅時段推斷更別、寫入母盤），一律 null
+  // → unresolved。
+  const rowsWithEffectiveSite = rows.map((r) => ({ ...r, effectiveSiteId: r.resolvedSiteId ?? (r.subSiteName ? null : upload.siteId) }));
+  const uploadMonthPrefix = toDateStr(toMonthStart(upload.month)).slice(0, 7);
 
   const effectiveSiteIds = [...new Set(rowsWithEffectiveSite.map((r) => r.effectiveSiteId).filter((v): v is string => v !== null))];
   const shiftTypesRaw = effectiveSiteIds.length
@@ -241,7 +253,16 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
   for (const r of rowsWithEffectiveSite) {
     const workDate = toDateStr(r.workDate);
     const reasons: string[] = [];
-    if (!r.effectiveSiteId) reasons.push("上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤");
+    if (!r.effectiveSiteId) {
+      reasons.push(r.subSiteName && upload.siteId ? `子盤「${r.subSiteName}」對唔到（或者未 reparse），請先喺「盤」管理掛好子盤再重新解析` : "上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤");
+    }
+    // 驗收修正（Opus 5.5）：格仔日期唔係上載月份——唔准寫入（之前實測會
+    // 寫入另一個月，包括已鎖定月份：assertMonthNotLocked 淨係 check 上載
+    // 月份）。
+    if (!workDate.startsWith(`${uploadMonthPrefix}-`)) reasons.push(`格仔日期 ${workDate} 唔係上載月份（${uploadMonthPrefix}），唔可以寫入`);
+    // 驗收修正（Opus 5.5，規則 8）：有雞頭碼但對唔到 brokers——唔准用
+    // fallback 靜靜補（fallback 淨係俾「冇雞頭碼欄」嘅盤用）。
+    if (r.brokerCodeRaw && r.brokerCodeRaw.trim() && !r.settlementBrokerId) reasons.push(`雞頭碼「${r.brokerCodeRaw.trim()}」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析`);
     if (!r.guardId) reasons.push("安員未配對");
 
     let shiftTypeId: string | null = r.shiftTypeId;
@@ -303,9 +324,14 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
 
   const monthStartDate = toMonthStart(upload.month);
   const monthEnd = new Date(Date.UTC(monthStartDate.getUTCFullYear(), monthStartDate.getUTCMonth() + 1, 0));
-  const systemRecordsRaw: ShiftRecord[] = effectiveSiteIds.length
+  // 驗收修正（Opus 5.5）：系統嗰邊要攞「上載盤＋佢全部子盤」，唔係淨係
+  // 更表有出現過嘅盤——否則某個子盤成個月喺更表冇人，系統入面嗰啲更
+  // 永遠唔會列做 system_only。
+  const childSiteIds = upload.siteId ? (await prisma.site.findMany({ where: { parentSiteId: upload.siteId }, select: { id: true } })).map((s) => s.id) : [];
+  const systemSiteIds = [...new Set([...effectiveSiteIds, ...(upload.siteId ? [upload.siteId] : []), ...childSiteIds])];
+  const systemRecordsRaw: ShiftRecord[] = systemSiteIds.length
     ? await prisma.shiftRecord.findMany({
-        where: { siteId: { in: effectiveSiteIds }, workDate: { gte: monthStartDate, lte: monthEnd }, status: { not: "cancelled" } },
+        where: { siteId: { in: systemSiteIds }, workDate: { gte: monthStartDate, lte: monthEnd }, status: { not: "cancelled" } },
       })
     : [];
   const systemEntries: ReconcileSystemEntry[] = systemRecordsRaw.map((s) => ({
@@ -329,7 +355,15 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
  * 測試主力測呢個。 */
 export function reconcileRosterUpload(input: Pick<ReconcileInput, "rosterEntries" | "unresolvedEntries" | "systemEntries">): ReconcileItem[] {
   const rosterByKey = new Map<string, ReconcileRosterEntry>();
-  for (const r of input.rosterEntries) rosterByKey.set(buildReconcileKey(r), r);
+  // 驗收修正（Opus 5.5）：更表同一人同日同盤同更別出現多過一次（例如同一
+  // 個人抄咗兩行）——之前 `Map.set` 靜靜覆蓋咗前一行。而家第一行照常
+  // 對數，其餘列 unresolved 俾人手覆核。
+  const duplicateRoster: ReconcileRosterEntry[] = [];
+  for (const r of input.rosterEntries) {
+    const k = buildReconcileKey(r);
+    if (rosterByKey.has(k)) duplicateRoster.push(r);
+    else rosterByKey.set(k, r);
+  }
   const systemByKey = new Map<string, ReconcileSystemEntry>();
   for (const s of input.systemEntries) systemByKey.set(buildReconcileKey(s), s);
 
@@ -377,9 +411,24 @@ export function reconcileRosterUpload(input: Pick<ReconcileInput, "rosterEntries
 
   const rosterByDateSiteShiftType = groupBy(remainingRoster, (r) => `${r.workDate}|${r.siteId}|${r.shiftTypeId}`);
   const systemByDateSiteShiftType = groupBy(remainingSystem, (s) => `${s.workDate}|${s.siteId}|${s.shiftTypeId}`);
+  // 驗收修正（Opus 5.5）：guard_diff 淨係喺「呢日呢盤呢更種」**成組**本身
+  // 就係一對一（更表一個人、系統一個人）先配——例如更表 A B C、系統
+  // A B D，A/B 夾中之後剩低 C 同 D，唔可以當 C 頂 D（邊個頂邊個係估
+  // 嘅），要列 roster_only C＋system_only D 俾會計逐個決定。
+  const fullRosterCount = new Map<string, number>();
+  for (const r of rosterByKey.values()) {
+    const gk = `${r.workDate}|${r.siteId}|${r.shiftTypeId}`;
+    fullRosterCount.set(gk, (fullRosterCount.get(gk) ?? 0) + 1);
+  }
+  const fullSystemCount = new Map<string, number>();
+  for (const s of systemByKey.values()) {
+    const gk = `${s.workDate}|${s.siteId}|${s.shiftTypeId}`;
+    fullSystemCount.set(gk, (fullSystemCount.get(gk) ?? 0) + 1);
+  }
   for (const [groupKey, rosterGroup] of rosterByDateSiteShiftType) {
     const systemGroup = systemByDateSiteShiftType.get(groupKey);
     if (!systemGroup || systemGroup.length !== 1 || rosterGroup.length !== 1) continue;
+    if (fullRosterCount.get(groupKey) !== 1 || fullSystemCount.get(groupKey) !== 1) continue;
     const [rKey, roster] = rosterGroup[0]!;
     const [sKey, system] = systemGroup[0]!;
     if (roster.guardId === system.guardId) continue; // 唔應該發生（第一輪應該已經夾中），保險跳過
@@ -437,6 +486,19 @@ export function reconcileRosterUpload(input: Pick<ReconcileInput, "rosterEntries
   }
 
   // ---- unresolved -----------------------------------------------------
+  for (const d of duplicateRoster) {
+    items.push({
+      key: buildUnresolvedKey(d.rowId),
+      category: "unresolved",
+      workDate: d.workDate,
+      siteId: d.siteId,
+      guardId: d.guardId,
+      shiftTypeId: d.shiftTypeId,
+      roster: null,
+      system: null,
+      unresolvedReason: "更表入面同一人同日同盤同更別出現多過一次（重複行），淨係第一行參與對數，人手覆核",
+    });
+  }
   for (const u of input.unresolvedEntries) {
     items.push({
       key: buildUnresolvedKey(u.rowId),

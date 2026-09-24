@@ -30,13 +30,17 @@ function monthRange(month: Date): { start: Date; end: Date } {
 export type BrokerPayrollTotal = { brokerId: string | null; brokerName: string; brokerCode: string; brokerKind: string; shifts: number; wage: number; fee: number; amount: number };
 const UNATTRIBUTED_BROKER_LABEL = "未歸屬結算單位";
 
+// 驗收修正（Opus 5.5，WP-ROSTER-UPLOAD B1）：糧單一律排除 `status=
+// cancelled`——之前完全冇篩 status，但 B1 對數套用（system_only／
+// guard_diff／shift_type_diff）同更表編輯器清格都係將記錄轉 cancelled，
+// 唔排除就會「舊人＋新人」兩份糧都計。7 月冇 cancelled 記錄，數字唔變。
 export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Promise<BrokerPayrollTotal[]> {
   const { start, end } = monthRange(month);
   const brokers = await prisma.broker.findMany({ orderBy: { code: "asc" } });
   const out: BrokerPayrollTotal[] = [];
   for (const b of brokers) {
     const agg = await prisma.shiftRecord.aggregate({
-      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
+      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
       _count: { _all: true },
       _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
     });
@@ -63,7 +67,7 @@ export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Pr
   // 加多一次獨立查詢，一有就加一行「未歸屬結算單位」（金額計入 Total，
   // 等會計一眼見到有錢未歸邊個雞頭）。
   const unattributedAgg = await prisma.shiftRecord.aggregate({
-    where: { settlementBrokerId: null, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
+    where: { settlementBrokerId: null, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
     _count: { _all: true },
     _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
   });
@@ -150,7 +154,7 @@ export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_RE
   const sourceDetailRows: { date: string; brokerCode: string; guardName: string; guardStaffNo: string; source: string }[] = [];
   for (const b of brokers) {
     const records = await prisma.shiftRecord.findMany({
-      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
+      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
       include: { guard: true },
     });
     if (records.length === 0) continue;

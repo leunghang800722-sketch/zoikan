@@ -69,7 +69,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
   // 如實反映——呢個 cash 成本已經計咗喺 base cost（guard_wage+broker_fee
   // snapshot）入面，呢度淨係做個獨立小計方便老闆睇「雙重支付」有幾大
   const longtermShiftRecords = await prisma.shiftRecord.findMany({
-    where: { workDate: { gte: MONTH_START, lte: MONTH_END }, recordType: "shift", guard: { employmentType: "longterm_autopay" }, settlementBrokerId: { not: null } },
+    where: { workDate: { gte: MONTH_START, lte: MONTH_END }, recordType: "shift", status: { not: "cancelled" }, guard: { employmentType: "longterm_autopay" }, settlementBrokerId: { not: null } },
     select: { siteId: true },
   });
   const brokerCashOnLongtermBySite = new Map<string, number>();
@@ -90,6 +90,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
         isExternal: false,
         shiftType: { billingGroup: "per_shift" },
         workDate: { gte: MONTH_START, lte: MONTH_END },
+        status: { not: "cancelled" },
       },
       _count: { _all: true },
       _sum: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },

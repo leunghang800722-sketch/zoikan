@@ -18,21 +18,27 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const monthParam = url.searchParams.get("month");
     if (monthParam && !MONTH_RE.test(monthParam)) throw BadRequest("month 格式要係 YYYY-MM 或 YYYY-MM-DD");
-    const month = monthStart(monthParam ? new Date(monthParam) : new Date());
+    // 驗收修正（Opus 5.5）：冇帶 month＝所有月份（之前預設「今個月」——但
+    // 8 月更表係 9 月先上載對數，首頁卡用今日個月就永遠見唔到上個月未對
+    // 完嘅數）。有帶 month 就淨係嗰個月（舊行為）。
+    const month = monthParam ? monthStart(new Date(monthParam)) : null;
 
     const uploads = await prisma.rosterUpload.findMany({
-      where: { month, status: "parsed" },
-      select: { id: true, siteId: true, siteNameRaw: true },
+      where: { ...(month ? { month } : {}), status: "parsed" },
+      select: { id: true, siteId: true, siteNameRaw: true, month: true },
     });
 
-    const entries: { site_id: string | null; site_name: string; upload_id: string; pending_count: number }[] = [];
+    const entries: { site_id: string | null; site_name: string; upload_id: string; month: string; pending_count: number }[] = [];
     for (const u of uploads) {
       const { items } = await reconcileUpload(u.id);
-      const pending = items.filter((i) => i.category !== "match").length;
-      if (pending > 0) entries.push({ site_id: u.siteId, site_name: u.siteNameRaw, upload_id: u.id, pending_count: pending });
+      // 驗收修正：同 apply 嘅「未處理」定義一致——已經有 keep_system／
+      // exception 決定嘅項唔再計做待處理。
+      const decided = new Set((await prisma.rosterReconcileDecision.findMany({ where: { uploadId: u.id }, select: { reconcileKey: true } })).map((d) => d.reconcileKey));
+      const pending = items.filter((i) => i.category !== "match" && !decided.has(i.key)).length;
+      if (pending > 0) entries.push({ site_id: u.siteId, site_name: u.siteNameRaw, upload_id: u.id, month: u.month.toISOString().slice(0, 7), pending_count: pending });
     }
     entries.sort((a, b) => b.pending_count - a.pending_count);
 
-    return ok(brandSafeResponse({ month: month.toISOString().slice(0, 7), entries, total: entries.reduce((a, e) => a + e.pending_count, 0) }));
+    return ok(brandSafeResponse({ month: month ? month.toISOString().slice(0, 7) : null, entries, total: entries.reduce((a, e) => a + e.pending_count, 0) }));
   });
 }

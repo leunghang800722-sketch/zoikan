@@ -118,7 +118,7 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   // Opus 驗收 A2：擴大盤範圍——所有呢個月有 shift_records（唔理
   // record_type）嘅 site，唔止 P0 對數基準嘅 40 個。
   const activeSiteIdRows = await prisma.shiftRecord.findMany({
-    where: { workDate: { gte: MONTH_START, lte: MONTH_END } },
+    where: { workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } },
     select: { siteId: true },
     distinct: ["siteId"],
   });
@@ -254,6 +254,7 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
       isExternal: false,
       shiftType: { billingGroup: "per_shift" },
       workDate: { gte: MONTH_START, lte: MONTH_END },
+      status: { not: "cancelled" },
     },
     select: { siteId: true, shiftTypeId: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true, rescueRate: true },
   });
@@ -275,7 +276,7 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   //    client_rate/hours）。搵唔到 parent 或者 parent 冇 hours 就 fallback
   //    用呢個 OT 更別自己嘅 rate_card（site+shiftType+broker）。
   const otRecords = await prisma.shiftRecord.findMany({
-    where: { siteId: { in: siteIds }, recordType: "ot", workDate: { gte: MONTH_START, lte: MONTH_END } },
+    where: { siteId: { in: siteIds }, recordType: "ot", workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } },
     include: { parentShift: { include: { shiftType: true } } },
   });
   const otRateCardCache = new Map<string, { clientHourly: number; guardHourly: number } | null>();

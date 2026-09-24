@@ -44,6 +44,14 @@ export interface ReconcileActionResult {
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
+type Pricing = { clientRate: number | null; guardWage: number | null; brokerFee: number | null };
+
+/** 驗收修正（Opus 5.5，2026-09-24）：`writeAudit()` 用外層 `prisma`
+ * 寫，唔喺 transaction 入面——所以一律喺 transaction 入面收集，commit
+ * 成功之後先逐條寫（同 `shift-records/batch/route.ts` 一致），避免
+ * rollback 之後留低「孤兒」audit。 */
+type PendingAudit = { tableName: string; rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
+
 /** OT 記錉要掛靠返呢個安員呢日嘅正更記錉（`parent_shift_id`）——搵唔到
  * 就 null（唔擋，OT 冇 parent 都可以存在，見 schema `parentShiftId`
  * optional）。喺同一個 transaction 入面查，見得到呢個 transaction內
@@ -67,6 +75,35 @@ interface WriteContext {
   ip: string | null;
 }
 
+function rosterRecordType(roster: NonNullable<ReconcileItem["roster"]>): "shift" | "ot" | "leave" {
+  return roster.codeKind === "leave" ? "leave" : roster.codeKind === "ot" ? "ot" : "shift";
+}
+
+/** 驗收修正：snapshot 喺 transaction **之前**計好（`resolveShiftPricing`
+ * 經外層 prisma 讀 rate_cards，放喺 interactive transaction 入面逐項打
+ * 會令一個真實月份幾百格嘅套用撞 Prisma 預設 5 秒 transaction timeout）。
+ * 規則同 batch/route.ts 一致：LINK（guards_paid_by_client）盤唔寫
+ * snapshot；leave／OT 冇 snapshot；`is_external` 跟現存記錉。 */
+async function computeRosterPricing(ctx: WriteContext, roster: NonNullable<ReconcileItem["roster"]>, isExternal: boolean): Promise<Pricing> {
+  const siteUnpriced = ctx.siteGuardsPaidByClient.get(roster.siteId) ?? false;
+  if (siteUnpriced || rosterRecordType(roster) !== "shift") return { clientRate: null, guardWage: null, brokerFee: null };
+  const st = ctx.shiftTypeById.get(roster.shiftTypeId);
+  const brokerKind = roster.settlementBrokerId ? (ctx.brokerKindById.get(roster.settlementBrokerId) ?? null) : null;
+  const resolved = await resolveShiftPricing({
+    siteId: roster.siteId,
+    shiftTypeId: roster.shiftTypeId,
+    shiftTypeCode: st?.code ?? "",
+    shiftTypeBillingGroup: st?.billingGroup ?? "per_shift",
+    settlementBrokerId: roster.settlementBrokerId,
+    brokerKind,
+    guardId: roster.guardId,
+    workDate: new Date(`${roster.workDate}T00:00:00.000Z`),
+    isExternal,
+    recordType: "shift",
+  });
+  return { clientRate: resolved.clientRate, guardWage: resolved.guardWage, brokerFee: resolved.brokerFee };
+}
+
 /** roster_only／guard_diff／shift_type_diff 嘅「喺更表嗰個 key 度
  * create/reuse」共用邏輯——目標 key 可能已經有一條（例如之前一輪
  * apply 留低嘅 cancelled 記錉），有就 update 番（唔撞 unique
@@ -76,35 +113,17 @@ async function upsertRosterShiftRecord(
   tx: Tx,
   ctx: WriteContext,
   roster: NonNullable<ReconcileItem["roster"]>,
+  pricing: Pricing,
   actorUserId: string,
+  audits: PendingAudit[],
 ): Promise<string> {
   const workDateObj = new Date(`${roster.workDate}T00:00:00.000Z`);
-  const st = ctx.shiftTypeById.get(roster.shiftTypeId);
-  const siteUnpriced = ctx.siteGuardsPaidByClient.get(roster.siteId) ?? false;
-  const isLeave = roster.codeKind === "leave";
-  const recordType = isLeave ? "leave" : roster.codeKind === "ot" ? "ot" : "shift";
+  const recordType = rosterRecordType(roster);
+  const isLeave = recordType === "leave";
 
   let parentShiftId: string | null = null;
   if (recordType === "ot") {
     parentShiftId = await findParentShiftId(tx, { guardId: roster.guardId, workDate: workDateObj, siteId: roster.siteId });
-  }
-
-  let pricing: { clientRate: number | null; guardWage: number | null; brokerFee: number | null } = { clientRate: null, guardWage: null, brokerFee: null };
-  if (!siteUnpriced && recordType === "shift") {
-    const brokerKind = roster.settlementBrokerId ? (ctx.brokerKindById.get(roster.settlementBrokerId) ?? null) : null;
-    const resolved = await resolveShiftPricing({
-      siteId: roster.siteId,
-      shiftTypeId: roster.shiftTypeId,
-      shiftTypeCode: st?.code ?? "",
-      shiftTypeBillingGroup: st?.billingGroup ?? "per_shift",
-      settlementBrokerId: roster.settlementBrokerId,
-      brokerKind,
-      guardId: roster.guardId,
-      workDate: workDateObj,
-      isExternal: false,
-      recordType: "shift",
-    });
-    pricing = { clientRate: resolved.clientRate, guardWage: resolved.guardWage, brokerFee: resolved.brokerFee };
   }
 
   const provenance = { upload_id: ctx.uploadId, row_id: roster.rowId, version: ctx.uploadVersion };
@@ -112,58 +131,39 @@ async function upsertRosterShiftRecord(
     where: { guardId_workDate_shiftTypeId: { guardId: roster.guardId, workDate: workDateObj, shiftTypeId: roster.shiftTypeId } },
   });
 
+  const data = {
+    siteId: roster.siteId,
+    settlementBrokerId: roster.settlementBrokerId,
+    operationalBrokerId: roster.settlementBrokerId,
+    recordType,
+    leaveCode: isLeave ? (roster.leaveCode as never) : null,
+    otHours: recordType === "ot" ? (roster.hours ?? null) : null,
+    parentShiftId: recordType === "ot" ? parentShiftId : null,
+    status: "confirmed" as const,
+    source: "roster_upload",
+    provenance: provenance as unknown as Prisma.InputJsonValue,
+    clientRateSnapshot: pricing.clientRate,
+    guardWageSnapshot: pricing.guardWage,
+    brokerFeeSnapshot: pricing.brokerFee,
+  };
+
   if (existing) {
-    const updated = await tx.shiftRecord.update({
-      where: { id: existing.id },
-      data: {
-        siteId: roster.siteId,
-        settlementBrokerId: roster.settlementBrokerId,
-        operationalBrokerId: roster.settlementBrokerId,
-        recordType,
-        leaveCode: isLeave ? (roster.leaveCode as never) : null,
-        otHours: recordType === "ot" ? (roster.hours ?? null) : null,
-        parentShiftId: recordType === "ot" ? parentShiftId : null,
-        status: "confirmed",
-        source: "roster_upload",
-        provenance: provenance as unknown as Prisma.InputJsonValue,
-        clientRateSnapshot: pricing.clientRate,
-        guardWageSnapshot: pricing.guardWage,
-        brokerFeeSnapshot: pricing.brokerFee,
-      },
-    });
-    await writeAudit({ actorUserId, tableName: "shift_records", rowId: updated.id, action: "update", after: updated, ip: ctx.ip });
+    const updated = await tx.shiftRecord.update({ where: { id: existing.id }, data });
+    audits.push({ tableName: "shift_records", rowId: updated.id, action: "update", before: existing, after: updated });
     return updated.id;
   }
 
   const created = await tx.shiftRecord.create({
-    data: {
-      workDate: workDateObj,
-      siteId: roster.siteId,
-      shiftTypeId: roster.shiftTypeId,
-      guardId: roster.guardId,
-      settlementBrokerId: roster.settlementBrokerId,
-      operationalBrokerId: roster.settlementBrokerId,
-      recordType,
-      leaveCode: isLeave ? (roster.leaveCode as never) : null,
-      otHours: recordType === "ot" ? (roster.hours ?? null) : null,
-      parentShiftId: recordType === "ot" ? parentShiftId : null,
-      status: "confirmed",
-      source: "roster_upload",
-      provenance: provenance as unknown as Prisma.InputJsonValue,
-      clientRateSnapshot: pricing.clientRate,
-      guardWageSnapshot: pricing.guardWage,
-      brokerFeeSnapshot: pricing.brokerFee,
-      createdBy: actorUserId,
-    },
+    data: { ...data, workDate: workDateObj, shiftTypeId: roster.shiftTypeId, guardId: roster.guardId, createdBy: actorUserId },
   });
-  await writeAudit({ actorUserId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: ctx.ip });
+  audits.push({ tableName: "shift_records", rowId: created.id, action: "create", after: created });
   return created.id;
 }
 
-async function cancelSystemRecord(tx: Tx, systemId: string, actorUserId: string, ip: string | null): Promise<string> {
+async function cancelSystemRecord(tx: Tx, systemId: string, audits: PendingAudit[]): Promise<string> {
   const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: systemId } });
   const after = await tx.shiftRecord.update({ where: { id: systemId }, data: { status: "cancelled" } });
-  await writeAudit({ actorUserId, tableName: "shift_records", rowId: systemId, action: "void", before, after: { ...after, void_reason: "roster_reconcile:apply_roster" }, ip });
+  audits.push({ tableName: "shift_records", rowId: systemId, action: "void", before, after: { ...after, void_reason: "roster_reconcile:apply_roster" } });
   return systemId;
 }
 
@@ -178,6 +178,7 @@ async function loadWriteContext(uploadId: string, uploadVersion: number, items: 
       if (item.roster.settlementBrokerId) brokerIds.add(item.roster.settlementBrokerId);
     }
     if (item.system) {
+      shiftTypeIds.add(item.system.shiftTypeId);
       if (item.system.settlementBrokerId) brokerIds.add(item.system.settlementBrokerId);
     }
   }
@@ -209,11 +210,17 @@ export interface ApplyReconcileResult {
   pendingCount: number;
 }
 
+type Plan = { input: ReconcileActionInput; item: ReconcileItem; pricing: Pricing | null };
+
 export async function applyReconcileDecisions(params: ApplyReconcileParams): Promise<ApplyReconcileResult> {
   const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
   if (upload.status !== "parsed" && upload.status !== "confirmed") {
     throw BadRequest(`呢個上載狀態係「${upload.status}」，唔可以對數（要 parsed 或 confirmed）`);
   }
+  // 驗收修正：未指定盤嘅上載（site_id=null）唔准套用任何決定（連
+  // keep_system/exception 都唔得——否則全部 unresolved 項標完「保留」
+  // 就會將一個冇盤嘅上載轉 confirmed）。
+  if (!upload.siteId) throw BadRequest("呢個上載未指定盤，請先喺更表上載列表頁指定盤，先可以對數");
 
   const month = toMonthStart(upload.month);
   await assertMonthNotLocked({ workDate: month, actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
@@ -224,9 +231,9 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
   const ctx = await loadWriteContext(params.uploadId, upload.version, items, params.ip);
 
   const results: ReconcileActionResult[] = [];
-  const shiftPlans: { input: ReconcileActionInput; item: ReconcileItem }[] = [];
-  const otPlans: { input: ReconcileActionInput; item: ReconcileItem }[] = [];
-  const decisionPlans: { input: ReconcileActionInput; item: ReconcileItem }[] = [];
+  const shiftPlans: Plan[] = [];
+  const otPlans: Plan[] = [];
+  const decisionPlans: Plan[] = [];
 
   for (const input of params.actions) {
     const item = itemsByKey.get(input.key);
@@ -243,63 +250,110 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
         results.push({ key: input.key, category: item.category, action: input.action, ok: true, shiftRecordIds: item.system ? [item.system.id] : [] });
         continue;
       }
-      if (item.roster?.codeKind === "ot") otPlans.push({ input, item });
-      else shiftPlans.push({ input, item });
+      if (item.roster?.codeKind === "ot") otPlans.push({ input, item, pricing: null });
+      else shiftPlans.push({ input, item, pricing: null });
       continue;
     }
     if (input.action === "exception" && !(input.reason && input.reason.trim())) {
       results.push({ key: input.key, category: item.category, action: input.action, ok: false, error: "例外決定必須填原因" });
       continue;
     }
-    decisionPlans.push({ input, item });
+    decisionPlans.push({ input, item, pricing: null });
   }
 
-  await prisma.$transaction(async (tx) => {
-    // 正更/leave/system_only(cancel)/settlement_diff 先寫，OT 後寫（等
-    // parent_shift_id 搵得到啱先寫低嘅正更）。
-    for (const { input, item } of shiftPlans) {
-      try {
-        const ids = await applyOneRosterAction(tx, ctx, item, params.actorUserId);
-        results.push({ key: input.key, category: item.category, action: "apply_roster", ok: true, shiftRecordIds: ids });
-      } catch (err: unknown) {
-        results.push({ key: input.key, category: item.category, action: "apply_roster", ok: false, error: p2002Message(err) });
-      }
+  // ---- transaction 之前計好 snapshot --------------------------------
+  const settlementDiffIds = [...shiftPlans, ...otPlans].filter((p) => p.item.category === "settlement_diff").map((p) => p.item.system!.id);
+  const settlementDiffRecords = settlementDiffIds.length
+    ? await prisma.shiftRecord.findMany({ where: { id: { in: settlementDiffIds } }, select: { id: true, isExternal: true, recordType: true } })
+    : [];
+  const settlementDiffById = new Map(settlementDiffRecords.map((r) => [r.id, r]));
+  for (const plan of [...shiftPlans, ...otPlans]) {
+    const { item } = plan;
+    if (!item.roster) continue; // system_only：淨係 cancel，唔使計价
+    if (item.category === "settlement_diff") {
+      const rec = settlementDiffById.get(item.system!.id);
+      const siteUnpriced = ctx.siteGuardsPaidByClient.get(item.roster.siteId) ?? false;
+      const isPR = ctx.shiftTypeById.get(item.system!.shiftTypeId)?.code === "PR";
+      // 同 batch/route.ts 一致：LINK 盤／「PR」對數佔位記錉／非正更——保留
+      // 現有 snapshot 唔郁（pricing=null 代表唔寫 snapshot 欄）。
+      if (!rec || siteUnpriced || isPR || rec.recordType !== "shift") continue;
+      plan.pricing = await computeRosterPricing(ctx, item.roster, rec.isExternal);
+      continue;
     }
-    for (const { input, item } of otPlans) {
-      try {
-        const ids = await applyOneRosterAction(tx, ctx, item, params.actorUserId);
-        results.push({ key: input.key, category: item.category, action: "apply_roster", ok: true, shiftRecordIds: ids });
-      } catch (err: unknown) {
-        results.push({ key: input.key, category: item.category, action: "apply_roster", ok: false, error: p2002Message(err) });
-      }
+    const existing = await prisma.shiftRecord.findUnique({
+      where: { guardId_workDate_shiftTypeId: { guardId: item.roster.guardId, workDate: new Date(`${item.roster.workDate}T00:00:00.000Z`), shiftTypeId: item.roster.shiftTypeId } },
+      select: { isExternal: true },
+    });
+    plan.pricing = await computeRosterPricing(ctx, item.roster, existing?.isExternal ?? false);
+  }
+
+  const pendingAudits: PendingAudit[] = [];
+  // 驗收修正（Opus 5.5）：Postgres 一個 statement 出錯（例如 P2002）之後
+  // 成個 transaction 會變 aborted（之後所有 statement 都 25P02），淨係
+  // JS try/catch 攔住個 error 冇用——之前實測：第二項撞 P2002，第三項
+  // 跟住 25P02，最後 COMMIT 變 ROLLBACK，但回應仲話第一項 ok:true、audit
+  // 仲寫咗一條孤兒 create。而家逐項包 SAVEPOINT：失敗就 ROLLBACK TO
+  // SAVEPOINT，淨係嗰項唔生效，其他項照 commit（同 docs/api.md「逐項
+  // P2002 衝突只令該項 fail、其他照做」一致）。
+  async function runItem<T>(tx: Prisma.TransactionClient, fn: (audits: PendingAudit[]) => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; err: unknown }> {
+    const local: PendingAudit[] = [];
+    await tx.$executeRawUnsafe("SAVEPOINT rc_item");
+    try {
+      const value = await fn(local);
+      await tx.$executeRawUnsafe("RELEASE SAVEPOINT rc_item");
+      pendingAudits.push(...local);
+      return { ok: true, value };
+    } catch (err: unknown) {
+      await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT rc_item");
+      return { ok: false, err };
     }
-    for (const { input, item } of decisionPlans) {
-      try {
-        const decision = await tx.rosterReconcileDecision.upsert({
-          where: { uploadId_reconcileKey: { uploadId: params.uploadId, reconcileKey: input.key } },
-          create: {
-            uploadId: params.uploadId,
-            reconcileKey: input.key,
-            category: item.category,
-            action: input.action,
-            reason: input.reason?.trim() || null,
-            decidedBy: params.actorUserId,
-          },
-          update: {
-            category: item.category,
-            action: input.action,
-            reason: input.reason?.trim() || null,
-            decidedBy: params.actorUserId,
-            decidedAt: new Date(),
-          },
+  }
+
+  await prisma.$transaction(
+    async (tx) => {
+      // 正更/leave/system_only(cancel)/settlement_diff 先寫，OT 後寫（等
+      // parent_shift_id 搵得到啱先寫低嘅正更）。
+      for (const plan of [...shiftPlans, ...otPlans]) {
+        const r = await runItem(tx, (audits) => applyOneRosterAction(tx, ctx, plan, params.actorUserId, audits));
+        if (r.ok) results.push({ key: plan.input.key, category: plan.item.category, action: "apply_roster", ok: true, shiftRecordIds: r.value });
+        else results.push({ key: plan.input.key, category: plan.item.category, action: "apply_roster", ok: false, error: p2002Message(r.err) });
+      }
+      for (const { input, item } of decisionPlans) {
+        const r = await runItem(tx, async (audits) => {
+          const prior = await tx.rosterReconcileDecision.findUnique({ where: { uploadId_reconcileKey: { uploadId: params.uploadId, reconcileKey: input.key } } });
+          const decision = await tx.rosterReconcileDecision.upsert({
+            where: { uploadId_reconcileKey: { uploadId: params.uploadId, reconcileKey: input.key } },
+            create: {
+              uploadId: params.uploadId,
+              reconcileKey: input.key,
+              category: item.category,
+              action: input.action,
+              reason: input.reason?.trim() || null,
+              decidedBy: params.actorUserId,
+            },
+            update: {
+              category: item.category,
+              action: input.action,
+              reason: input.reason?.trim() || null,
+              decidedBy: params.actorUserId,
+              decidedAt: new Date(),
+            },
+          });
+          audits.push({ tableName: "roster_reconcile_decisions", rowId: decision.id, action: prior ? "update" : "create", before: prior ?? undefined, after: decision });
+          return decision;
         });
-        await writeAudit({ actorUserId: params.actorUserId, tableName: "roster_reconcile_decisions", rowId: decision.id, action: "create", after: decision, ip: ctx.ip });
-        results.push({ key: input.key, category: item.category, action: input.action, ok: true });
-      } catch (err: unknown) {
-        results.push({ key: input.key, category: item.category, action: input.action, ok: false, error: err instanceof Error ? err.message : "寫入失敗" });
+        if (r.ok) results.push({ key: input.key, category: item.category, action: input.action, ok: true });
+        else results.push({ key: input.key, category: item.category, action: input.action, ok: false, error: r.err instanceof Error ? r.err.message : "寫入失敗" });
       }
-    }
-  });
+    },
+    // 一個真實月份可以有幾百至千幾格——預設 5 秒唔夠。
+    { timeout: 120_000, maxWait: 10_000 },
+  );
+
+  // transaction 已經 commit——而家先逐條寫 audit_log（同 batch/route.ts 一致）。
+  for (const a of pendingAudits) {
+    await writeAudit({ actorUserId: params.actorUserId, tableName: a.tableName, rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip: ctx.ip });
+  }
 
   // 套用完之後重新分類，計返仲有幾多項未有決定——齊晒先轉 confirmed。
   const { items: itemsAfter } = await reconcileUpload(params.uploadId);
@@ -322,45 +376,27 @@ function p2002Message(err: unknown): string {
   return err instanceof Error ? err.message : "寫入失敗";
 }
 
-async function applyOneRosterAction(tx: Tx, ctx: WriteContext, item: ReconcileItem, actorUserId: string): Promise<string[]> {
+async function applyOneRosterAction(tx: Tx, ctx: WriteContext, plan: Plan, actorUserId: string, audits: PendingAudit[]): Promise<string[]> {
+  const { item } = plan;
+  const pricing = plan.pricing ?? { clientRate: null, guardWage: null, brokerFee: null };
   switch (item.category) {
     case "roster_only": {
-      const id = await upsertRosterShiftRecord(tx, ctx, item.roster!, actorUserId);
+      const id = await upsertRosterShiftRecord(tx, ctx, item.roster!, pricing, actorUserId, audits);
       return [id];
     }
     case "system_only": {
-      const id = await cancelSystemRecord(tx, item.system!.id, actorUserId, ctx.ip);
+      const id = await cancelSystemRecord(tx, item.system!.id, audits);
       return [id];
     }
     case "guard_diff":
     case "shift_type_diff": {
-      const cancelledId = await cancelSystemRecord(tx, item.system!.id, actorUserId, ctx.ip);
-      const newId = await upsertRosterShiftRecord(tx, ctx, item.roster!, actorUserId);
+      const cancelledId = await cancelSystemRecord(tx, item.system!.id, audits);
+      const newId = await upsertRosterShiftRecord(tx, ctx, item.roster!, pricing, actorUserId, audits);
       return [cancelledId, newId];
     }
     case "settlement_diff": {
       const roster = item.roster!;
       const system = item.system!;
-      const st = ctx.shiftTypeById.get(roster.shiftTypeId);
-      const siteUnpriced = ctx.siteGuardsPaidByClient.get(roster.siteId) ?? false;
-      let pricing: { clientRate: number | null; guardWage: number | null; brokerFee: number | null } = { clientRate: null, guardWage: null, brokerFee: null };
-      if (!siteUnpriced && system.recordType === "shift") {
-        const brokerKind = roster.settlementBrokerId ? (ctx.brokerKindById.get(roster.settlementBrokerId) ?? null) : null;
-        const workDateObj = new Date(`${roster.workDate}T00:00:00.000Z`);
-        const resolved = await resolveShiftPricing({
-          siteId: roster.siteId,
-          shiftTypeId: roster.shiftTypeId,
-          shiftTypeCode: st?.code ?? "",
-          shiftTypeBillingGroup: st?.billingGroup ?? "per_shift",
-          settlementBrokerId: roster.settlementBrokerId,
-          brokerKind,
-          guardId: roster.guardId,
-          workDate: workDateObj,
-          isExternal: false,
-          recordType: "shift",
-        });
-        pricing = { clientRate: resolved.clientRate, guardWage: resolved.guardWage, brokerFee: resolved.brokerFee };
-      }
       const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: system.id } });
       const after = await tx.shiftRecord.update({
         where: { id: system.id },
@@ -369,12 +405,11 @@ async function applyOneRosterAction(tx: Tx, ctx: WriteContext, item: ReconcileIt
           operationalBrokerId: roster.settlementBrokerId,
           source: "roster_upload",
           provenance: { upload_id: ctx.uploadId, row_id: roster.rowId, version: ctx.uploadVersion } as unknown as Prisma.InputJsonValue,
-          ...(system.recordType === "shift"
-            ? { clientRateSnapshot: pricing.clientRate, guardWageSnapshot: pricing.guardWage, brokerFeeSnapshot: pricing.brokerFee }
-            : {}),
+          // plan.pricing=null：LINK 盤／PR 佔位／非正更——保留現有 snapshot。
+          ...(plan.pricing ? { clientRateSnapshot: plan.pricing.clientRate, guardWageSnapshot: plan.pricing.guardWage, brokerFeeSnapshot: plan.pricing.brokerFee } : {}),
         },
       });
-      await writeAudit({ actorUserId, tableName: "shift_records", rowId: system.id, action: "update", before, after, ip: ctx.ip });
+      audits.push({ tableName: "shift_records", rowId: system.id, action: "update", before, after });
       return [system.id];
     }
     default:

@@ -206,3 +206,57 @@ test("已鎖定月份：對數頁唯讀（冇套用/決定掣）", async ({ page
     await prisma.rosterUpload.delete({ where: { id: upload.id } });
   }
 });
+
+test("驗收（Opus 5.5）：會計手機 375px 對數頁冇橫向捲、推算標記、unresolved 可標例外；首頁「更表對數待處理」卡（跨月）；雞頭首頁冇呢張卡", async ({ page }) => {
+  const siteId = await findSiteIdByName("殷樺花園");
+  const [guardA] = await findTwoGuardsWithUNumber();
+  const shiftType = await prisma.shiftType.findFirstOrThrow({ where: { siteId, voidedAt: null }, select: { id: true } });
+  await cleanupUploads(siteId);
+  const owner = await prisma.user.findUniqueOrThrow({ where: { tel: TEST_TEL["老闆"] }, select: { id: true } });
+  const upload = await prisma.rosterUpload.create({
+    data: {
+      month: MONTH_DATE,
+      siteId,
+      siteNameRaw: "殷樺花園",
+      uploaderUserId: owner.id,
+      fileName: "reconcile-mobile.xlsx",
+      fileSha256: "1".repeat(64),
+      fileBytes: Buffer.from("x"),
+      fileSize: 1,
+      status: "parsed",
+      createdBy: "e2e:roster-reconcile-mobile",
+    },
+  });
+  await prisma.rosterUploadRow.create({
+    data: { uploadId: upload.id, rowIndex: 6, workDate: new Date(`${WORK_DATE_ISO}T00:00:00.000Z`), rawCode: "N", codeKind: "shift", shiftTypeId: shiftType.id, resolvedSiteId: siteId, guardId: guardA.id, guardMatch: "by_staff_no" },
+  });
+  await prisma.rosterUploadRow.create({
+    data: { uploadId: upload.id, rowIndex: 7, workDate: new Date(`${WORK_DATE_ISO}T00:00:00.000Z`), rawCode: "N", codeKind: "shift", shiftTypeId: shiftType.id, resolvedSiteId: siteId, guardId: null, guardMatch: "unmatched" },
+  });
+
+  try {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await loginAs(page, "會計");
+    await page.goto(`/roster-uploads/${upload.id}/reconcile`);
+    await expect(page.getByRole("heading", { name: "更表對數" })).toBeVisible();
+    await expect(page.getByTestId("reconcile-tab-unresolved")).toBeVisible();
+    // unresolved tab（預設）：手機卡有「例外」掣。
+    await expect(page.getByRole("button", { name: "例外" }).first()).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("reconcile-tab-roster_only").click();
+    await expect(page.getByText(/・推算/).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("button", { name: "以更表為準" }).first()).toBeVisible();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+
+    await page.goto("/");
+    await expect(page.getByText("更表對數待處理").locator("visible=true").first()).toBeVisible({ timeout: 15_000 });
+
+    await page.context().clearCookies();
+    await loginAs(page, "雞頭A");
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByText("更表對數待處理")).toHaveCount(0);
+  } finally {
+    await cleanupUploads(siteId);
+  }
+});

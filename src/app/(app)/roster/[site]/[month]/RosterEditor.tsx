@@ -2705,7 +2705,10 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               </select>
             </label>
             {/* B1-5（WP-ATTRIB）：結算單位——預設跟揀咗嗰個安員嘅
-                default_broker_id（顯示喺 placeholder），可以人手改。 */}
+                default_broker_id（顯示喺 placeholder），可以人手改。
+                驗收修正（Opus 5.5）：雞頭 session 唔顯示（自己永遠係自己，
+                後端亦強制）。 */}
+            {!isBrokerSession && (
             <label className="block text-xs text-gray-600">
               結算單位（唔揀就跟安員預設）
               <select
@@ -2723,6 +2726,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 ))}
               </select>
             </label>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"

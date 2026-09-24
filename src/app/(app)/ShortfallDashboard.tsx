@@ -206,7 +206,9 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await apiGet<{ total: number; entries: { site_name: string; pending_count: number }[] }>(`/api/roster-uploads/pending-summary?month=${date.slice(0, 7)}`);
+      // 驗收修正（Opus 5.5）：唔帶 month＝所有月份未對完嘅上載（上個月更表
+      // 通常今個月先對數）。
+      const res = await apiGet<{ total: number; entries: { site_name: string; pending_count: number }[] }>(`/api/roster-uploads/pending-summary`);
       if (cancelled) return;
       if (res.ok) setReconcilePending(res.data);
       // 冇權限（例如自訂角色冇「更表上載:view」）或者其他錯誤——靜靜唔顯示
@@ -215,7 +217,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
     return () => {
       cancelled = true;
     };
-  }, [date]);
+  }, []);
 
   function changeDate(next: string) {
     setDate(next);
