@@ -38,6 +38,7 @@ import { prisma } from "@/lib/db";
 import { n, round2, monthRange as sharedMonthRange, monthLabel } from "./money";
 import { buildMonthlyClose, DEFAULT_REPORT_MONTH } from "./monthly-close";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
+import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type MixedBillingSiteInfo } from "./mixed-billing";
 
 export const DEFAULT_MARGIN_THRESHOLD_PCT = 8;
 
@@ -269,12 +270,26 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
     perShiftBySiteType.set(key, b);
   }
 
-  // 2. OT——按鐘（ot_hours × 時薪；時薪 = 正更 client_rate_snapshot/guard 成本 ÷
-  //    正更更別 hours，用返正更本身已經 priced 嘅 snapshot，唔另外再查
-  //    rate_cards——同 P0-執行計劃.md §8 B1 嘅人手驗算方法一致：
+  // 2. OT——WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，個個盤
+  //    個個人都唔同，系統唔准自動套公式計 OT 价）：**2026-08 起嘅月份**
+  //    唔再用「parent 更 snapshot ÷ hours × ot_hours」呢條公式（或者呢個
+  //    更別自己嘅 rate_card ÷ hours 嘅 fallback）derive 時薪——直接用 OT
+  //    記錄自己嘅 client_rate_snapshot／guard_wage_snapshot／broker_fee_
+  //    snapshot（由 resolve-rate.ts 嘅 OT 更種卡 site／broker／guard 級
+  //    resolve，或者人手輸入）當「每粒鐘」嘅价，乘 ot_hours。完全冇任何
+  //    snapshot（冇卡冇人手輸入）嘅 OT 記錄計入 `unresolved`（同
+  //    unpriced.ts 嘅 `ot_unpriced` 同一個口徑）。
+  //
+  //    **7 月照舊**——7 月 gate 用緊呢條公式，唔准變：時薪 = 正更
+  //    client_rate_snapshot/guard 成本 ÷ 正更更別 hours，用返正更本身已
+  //    經 priced 嘅 snapshot（同 P0-執行計劃.md §8 B1 嘅人手驗算方法一致：
   //    「HKU C更 …8 小時 ×(700÷8.25)」，700/8.25 正正係嗰個更別嘅
   //    client_rate/hours）。搵唔到 parent 或者 parent 冇 hours 就 fallback
-  //    用呢個 OT 更別自己嘅 rate_card（site+shiftType+broker）。
+  //    用呢個 OT 更別自己嘅 rate_card（site+shiftType+broker）除 hours。
+  const mixedBillingMonth = isMixedBillingMonth(MONTH_START);
+  const otFormulaFallbackEnabled = !mixedBillingMonth;
+  // WP-MIXED-BILLING（Opus 5.5 驗收）：月費盤「逐更另收」更種（展示行用）。
+  const mixedInfo = mixedBillingMonth ? await loadMixedBillingInfo(siteIds, MONTH_START, MONTH_END) : new Map<string, MixedBillingSiteInfo>();
   const otRecords = await prisma.shiftRecord.findMany({
     where: { siteId: { in: siteIds }, recordType: "ot", workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } },
     include: { parentShift: { include: { shiftType: true } } },
@@ -301,19 +316,31 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
     b.shifts += 1;
     b.otHours = round2(b.otHours + otH);
 
-    let rates: { clientHourly: number; guardHourly: number } | null = null;
-    const parent = r.parentShift;
-    const parentHours = parent?.shiftType?.hours ? n(parent.shiftType.hours) : null;
-    if (parent && parentHours && parentHours > 0) {
-      rates = { clientHourly: n(parent.clientRateSnapshot) / parentHours, guardHourly: (n(parent.guardWageSnapshot) + n(parent.brokerFeeSnapshot)) / parentHours };
+    if (otFormulaFallbackEnabled) {
+      // 7 月：舊公式（gate 用緊，唔准變）。
+      let rates: { clientHourly: number; guardHourly: number } | null = null;
+      const parent = r.parentShift;
+      const parentHours = parent?.shiftType?.hours ? n(parent.shiftType.hours) : null;
+      if (parent && parentHours && parentHours > 0) {
+        rates = { clientHourly: n(parent.clientRateSnapshot) / parentHours, guardHourly: (n(parent.guardWageSnapshot) + n(parent.brokerFeeSnapshot)) / parentHours };
+      } else {
+        rates = await otHourlyRatesFallback(r.siteId, r.shiftTypeId, r.settlementBrokerId);
+      }
+      if (rates) {
+        b.revenue = round2(b.revenue + rates.clientHourly * otH);
+        b.cost = round2(b.cost + rates.guardHourly * otH);
+      } else {
+        b.unresolved += 1;
+      }
     } else {
-      rates = await otHourlyRatesFallback(r.siteId, r.shiftTypeId, r.settlementBrokerId);
-    }
-    if (rates) {
-      b.revenue = round2(b.revenue + rates.clientHourly * otH);
-      b.cost = round2(b.cost + rates.guardHourly * otH);
-    } else {
-      b.unresolved += 1;
+      // 8 月起：唔再套公式——直接用 OT 記錄自己嘅 snapshot（已經係「每
+      // 粒鐘」嘅价）。收客／出街可以各自獨立有冇（例如淨係起咗收客价嘅
+      // OT 卡），完全冇任何一邊先算 unresolved（未定价 OT）。
+      const hasClient = r.clientRateSnapshot !== null;
+      const hasGuardOrFee = r.guardWageSnapshot !== null || r.brokerFeeSnapshot !== null;
+      if (hasClient) b.revenue = round2(b.revenue + n(r.clientRateSnapshot) * otH);
+      if (hasGuardOrFee) b.cost = round2(b.cost + (n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot)) * otH);
+      if (!hasClient && !hasGuardOrFee) b.unresolved += 1;
     }
     otBySiteType.set(key, b);
   }
@@ -478,6 +505,12 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
       const st = shiftTypeById.get(stId);
       perShiftCost = round2(perShiftCost + b.cost);
       perShiftShifts += b.shifts;
+      // WP-MIXED-BILLING（Opus 5.5 驗收）：8 月起，月費盤上唔係「逐更另收」
+      // 嘅 per_shift 更種（見 ./mixed-billing.ts）收入已經包喺上面「月費」
+      // 行——展示行 revenue 顯示 0，同 buildMonthlyClose() 嘅 base.revenue
+      // 對得返（唔會展開更別加起嚟多過盤總數）。7 月唔變。
+      const includedInFee = mixedBillingMonth && isMonthlyFee && !isExplicitPerShiftType(mixedInfo.get(siteId), stId);
+      const rowRevenue = includedInFee ? 0 : b.revenue;
       shiftTypesOut.push({
         shiftTypeId: stId,
         code: st?.code ?? stId,
@@ -485,10 +518,10 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
         kind: "per_shift",
         shifts: b.shifts,
         otHours: null,
-        revenue: b.revenue,
+        revenue: rowRevenue,
         cost: b.cost,
-        profit: round2(b.revenue - b.cost),
-        note: null,
+        profit: round2(rowRevenue - b.cost),
+        note: includedInFee ? "收入已包喺月費" : null,
       });
     }
     let otRevenue = 0;

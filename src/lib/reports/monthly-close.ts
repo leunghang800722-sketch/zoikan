@@ -25,6 +25,7 @@ import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { n, round2 } from "./money";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
+import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type MixedBillingSiteInfo } from "./mixed-billing";
 
 export const DEFAULT_REPORT_MONTH = new Date(Date.UTC(2026, 6, 1));
 function monthRange(month: Date): { start: Date; end: Date } {
@@ -76,6 +77,9 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
   for (const sr of longtermShiftRecords) {
     brokerCashOnLongtermBySite.set(sr.siteId, (brokerCashOnLongtermBySite.get(sr.siteId) ?? 0) + 1);
   }
+
+  // WP-MIXED-BILLING（Opus 5.5 驗收）：逐盤「逐更另收」更種（見 ./mixed-billing.ts）。7 月唔使查。
+  const mixedInfo = isMixedBillingMonth(MONTH_START) ? await loadMixedBillingInfo(sites.map((s) => s.id), MONTH_START, MONTH_END) : new Map<string, MixedBillingSiteInfo>();
 
   for (const site of sites) {
     // is_external=true（客戶自己嘅人，例：數碼港 Wilson Guard/Supervisor）
@@ -173,7 +177,45 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
       return round2((fullFee * numer) / denom);
     }
 
-    let revenue = effectiveFlatCard ? round2(n(effectiveFlatCard.clientRate)) : (monthlyFeeProrataRevenue() ?? round2(n(shiftAgg._sum.clientRateSnapshot)));
+    // WP-MIXED-BILLING（老闆 2026-09-24 拍板 8 月開盤方案 (a)：控制室
+    // 月薪崗月費 22,000 + 日薪崗逐更 840×更數）＋Opus 5.5 驗收收窄：月費盤
+    // 可以同時有逐更收客卡——盤嘅收入 = flat 卡（或 pro-rata fallback）+
+    // 該盤「逐更另收」per_shift 更種嘅 client_rate_snapshot 合計。「逐更
+    // 另收」＝有一張 effective_from>=2026-08-01、覆蓋該月、client_rate 非
+    // null 嘅逐更收客卡（判斷見 ./mixed-billing.ts）；其餘 per_shift 更種
+    // 當「已包喺月費」唔加（否則 IFC／蔚峰園／創富廠IC 呢類 7 月 flat 卡
+    // 無限期、8 月試算 E＝月費÷更數 嘅盤會雙重計）。`monthly_ic` 更種本身
+    // 唔喺 `shiftAgg`（上面已經篩 billingGroup=per_shift）。**只對
+    // 2026-08-01 起嘅月份生效**——7 月保留舊口徑（有 flat 卡就淨係計
+    // flat），7 月 gate 唔變。見 P2-版面重設計計劃.md §14 規則 5、§17.9。
+    const mixedBillingEnabled = isMixedBillingMonth(MONTH_START);
+    const flatOrProrataRevenue = effectiveFlatCard ? round2(n(effectiveFlatCard.clientRate)) : monthlyFeeProrataRevenue();
+    let revenue: number;
+    if (flatOrProrataRevenue !== null) {
+      revenue = flatOrProrataRevenue;
+      if (mixedBillingEnabled) {
+        const info = mixedInfo.get(site.id);
+        if (info && (info.allShiftTypes || info.explicitShiftTypeIds.size > 0)) {
+          const byType = await prisma.shiftRecord.groupBy({
+            by: ["shiftTypeId"],
+            where: {
+              siteId: site.id,
+              recordType: "shift",
+              isExternal: false,
+              shiftType: { billingGroup: "per_shift" },
+              workDate: { gte: MONTH_START, lte: MONTH_END },
+              status: { not: "cancelled" },
+            },
+            _sum: { clientRateSnapshot: true },
+          });
+          for (const g of byType) {
+            if (isExplicitPerShiftType(info, g.shiftTypeId)) revenue = round2(revenue + n(g._sum.clientRateSnapshot));
+          }
+        }
+      }
+    } else {
+      revenue = round2(n(shiftAgg._sum.clientRateSnapshot));
+    }
 
     // 規劃 session item 4：更別級（shift_type 掛實但 broker/guard 皆空）嘅
     // special 卡——例：啟航1331 Event Guard（ST0027）$11,700，唔按更數拆，

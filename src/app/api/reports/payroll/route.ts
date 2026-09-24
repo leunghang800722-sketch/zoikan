@@ -44,6 +44,8 @@ export async function GET(req: Request) {
         unpriced_count: unpriced.count,
         unpriced_groups: unpriced.groups,
         no_settlement_count: unpriced.noSettlementCount,
+        // WP-MIXED-BILLING：OT 未定价獨立數目（見 gross-margin/route.ts 同一段註解）。
+        ot_unpriced_count: unpriced.otUnpricedCount,
         // B1-7：additive——糧明細嚟源標記摘要（roster_upload 更數 vs
         // 其他來源），唔改任何既有欄位。
         source_summary: sourceSummary,

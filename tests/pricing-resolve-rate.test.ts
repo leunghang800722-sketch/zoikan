@@ -218,10 +218,35 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     expect(result).toEqual({ clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false, clientCardFound: false, payoutCardFound: false });
   });
 
-  it("ot：全 null，unpriced=false（按鐘計留返報表層）", () => {
-    const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800, guardWage: 700, brokerFee: 50 })];
+  it("ot：冇卡就全 null（WP-MIXED-BILLING 之前嘅口徑，冇卡冇 snapshot＝未定价 OT，見 unpriced.ts）", () => {
+    const result = resolveShiftPricingFromCards([], baseInput({ recordType: "ot" }));
+    expect(result).toEqual({ clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: true, clientCardFound: false, payoutCardFound: false });
+  });
+
+  it("Opus 5.5 驗收：OT 記錄唔准配 shift_type=null 嘅盤級／雞頭級正更卡（例：HKU座頭 OT1＋W 雞頭 7 月正更卡 700／620）", () => {
+    const cards: RateCardLite[] = [
+      card({ id: "site-generic", clientRate: 700, guardWage: 620 }),
+      card({ id: "broker-generic", brokerId: BROKER_K, clientRate: 700, guardWage: 620 }),
+      card({ id: "guard-generic", guardId: GUARD_A, guardWage: 650 }),
+    ];
     const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot" }));
-    expect(result).toEqual({ clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false, clientCardFound: false, payoutCardFound: false });
+    expect(result.clientRate).toBeNull();
+    expect(result.guardWage).toBeNull();
+    expect(result.brokerFee).toBeNull();
+  });
+
+  it("WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，OT 记录行同 shift 一樣嘅卡揀邏輯）：OT 更種有卡就照用", () => {
+    const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
+    const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot" }));
+    expect(result).toEqual({
+      clientRate: 800,
+      guardWage: 700,
+      brokerFee: 50,
+      source: { clientCardId: "c1", payoutCardId: "c1" },
+      unpriced: false,
+      clientCardFound: true,
+      payoutCardFound: true,
+    });
   });
 
   it("完全冇卡：兩邊都 null，unpriced=true，冇 reason", () => {
@@ -267,6 +292,25 @@ describe("resolveShiftPricingFromCards：M1 billing_model 過濾（月費／admi
     const cards: RateCardLite[] = [card({ id: "legacy", clientRate: 500, guardWage: 300, brokerFee: 20, billingModel: null })];
     const result = resolveShiftPricingFromCards(cards, baseInput());
     expect(result.clientRate).toBe(500);
+  });
+
+  it("WP-MIXED-BILLING（控制室例子）：monthly_fixed 盤嘅 per_shift 更種（日薪崗）照樣配到逐更收客卡 840，唔畀 site flat 卡（22000）蓋過", () => {
+    const cards: RateCardLite[] = [
+      card({ id: "flat-22000", clientRate: 22000, billingModel: "monthly_fixed" }), // 盤級 flat 卡（月薪崗，唔理呢個 shift_type）
+      card({ id: "per-shift-840", shiftTypeId: SITE_SHIFT_TYPE, brokerId: BROKER_K, clientRate: 840, guardWage: 800, brokerFee: 0 }), // 日薪崗更種嘅逐更卡
+    ];
+    const result = resolveShiftPricingFromCards(cards, baseInput({ shiftTypeBillingGroup: "per_shift" }));
+    expect(result.clientRate).toBe(840);
+    expect(result.source.clientCardId).toBe("per-shift-840");
+  });
+
+  it("WP-MIXED-BILLING（控制室例子）：同一個盤嘅 monthly_ic 更種（月薪崗）一律唔配逐更收客卡（就算有夾得中嘅卡都唔用）——收入淨係嚟自 flat 卡", () => {
+    const cards: RateCardLite[] = [
+      card({ id: "flat-22000", clientRate: 22000, billingModel: "monthly_fixed" }),
+      card({ id: "per-shift-840", shiftTypeId: SITE_SHIFT_TYPE, brokerId: BROKER_K, clientRate: 840, guardWage: 800, brokerFee: 0 }),
+    ];
+    const result = resolveShiftPricingFromCards(cards, baseInput({ shiftTypeBillingGroup: "monthly_ic" }));
+    expect(result.clientRate).toBeNull();
   });
 });
 
@@ -391,6 +435,56 @@ describe("isClientUnpricedShift（S3：收客价未定，淨係逐更盤先算�
     expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "per_shift" })).toBe(true);
     expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { brokerKind: "external" })).toBe(false);
     expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "monthly_ic")).toBe(false);
+  });
+
+  describe("WP-MIXED-BILLING（老闆 2026-09-24）：月費盤層面豁免只對 2026-08 之前嘅月份生效", () => {
+    const JULY = new Date(Date.UTC(2026, 6, 15));
+    const AUG = new Date(Date.UTC(2026, 7, 15));
+
+    it("7 月（或冇傳 month，向下相容）：monthly_fixed 盤嘅 per_shift 更種 client_rate null 照舊豁免 → false", () => {
+      expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "monthly_fixed" })).toBe(false);
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "monthly_fixed", month: JULY }),
+      ).toBe(false);
+    });
+
+    it("8 月起：月費盤「逐更另收」per_shift 更種（例：控制室日薪崗，includedInSiteFlatFee=false）client_rate null → true", () => {
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "monthly_fixed", month: AUG, includedInSiteFlatFee: false }),
+      ).toBe(true);
+      // 控制室 site.billing_model 其實係 per_shift（有 flat 卡）——一樣要報
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "per_shift", month: AUG, includedInSiteFlatFee: false }),
+      ).toBe(true);
+    });
+
+    it("Opus 5.5 驗收：8 月起，月費盤上「已包喺月費」嘅 per_shift 更種（例：IFC D/N，includedInSiteFlatFee=true）client_rate null → false（唔標收客价未定）", () => {
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "monthly_fixed", month: AUG, includedInSiteFlatFee: true }),
+      ).toBe(false);
+      // site.billing_model=per_shift 但有 flat 卡（蔚峰園／屯門小欖／都會大學夜巡邏）同樣豁免
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "per_shift", month: AUG, includedInSiteFlatFee: true }),
+      ).toBe(false);
+    });
+
+    it("8 月起但 call site 冇提供 includedInSiteFlatFee：保守沿用舊盤層面豁免（唔多報）", () => {
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "monthly_fixed", month: AUG }),
+      ).toBe(false);
+    });
+
+    it("8 月起：「逐更另收」per_shift 更種有 client_rate → false（有卡就唔算未定价）", () => {
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: 840 }, "per_shift", { siteBillingModel: "monthly_fixed", month: AUG, includedInSiteFlatFee: false }),
+      ).toBe(false);
+    });
+
+    it("8 月起：monthly_ic 更種（例：控制室月薪崗）本身層面已經豁免，唔理盤層面 → false", () => {
+      expect(
+        isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "monthly_ic", { siteBillingModel: "monthly_fixed", month: AUG }),
+      ).toBe(false);
+    });
   });
 
   it("cancelled／leave/ot → false", () => {

@@ -55,9 +55,45 @@ export interface NewRateCardPlan {
   brokerFee: number | null;
   billingModel: "per_shift" | "monthly_fixed" | "admin_fee" | "special";
   effectiveFrom: string; // "YYYY-MM-DD"
+  // WP-MIXED-BILLING（老闆 2026-09-24 答：數碼港 CP5 IC 8 月月費卡要加
+  // effective_to=2026-08-31，9 月起用返正常月費——正常月費金額未定，呢個
+  // WP 唔建 9 月卡）。undefined/null＝無限期（同之前 WP-PRICE 「rate_cards
+  // 伸長做無限期」嘅預設一致）。
+  effectiveTo?: string | null; // "YYYY-MM-DD" | null
   source: string;
   note: string;
   level: RateCardLevel;
+}
+
+// WP-MIXED-BILLING（老闆 2026-09-24 答：7 月兩張特殊卡「8 月無就加」到期
+// 日）：呢個唔係「起新卡」，係幫一張*現有*（7 月）卡加 effective_to——
+// rate_cards 歷史係 append-only 精神（唔改金額，淨係畫上期限），所以獨立
+// 一個 plan 分類，唔混入 `rateCards.create`。apply 階段：**淨係喺呢個月
+// 已經有 8 月替代卡先准套用**（`requireAugReplacementCard` 描述緊要搵嘅
+// 8 月替代卡），搵唔到就 skip＋警告，唔會靜靜哋幫 7 月卡加期限但冇嘢頂上。
+export interface RateCardCloseJulyPlan {
+  // 用嚟喺 DB 搵返嗰張現有 7 月卡（natural key 唔夠精確——呢批卡冇
+  // shift_type/broker/guard 或者掛住 shift_type 但冇 broker，用 site+
+  // billingModel+shiftTypeCode(可 null)+clientRate 辨識，同 7 月資料本身
+  // 逐張核對過，見 build-aug-plan.ts 註解）。
+  siteCanonicalName: string;
+  billingModel: "per_shift" | "monthly_fixed" | "admin_fee" | "special";
+  shiftTypeCode: string | null; // null = site 級 flat 卡
+  // 淨係 code 唔夠精確嗰陣要加（例：啟航1331 同一個 code「D」有兩個唔同
+  // 時段嘅 shift_type，07:30-19:30 同 10:00-19:00）——"HH:MM"，唔傳就淨係
+  // 用 code 搵（要求成個盤淨係得一個呢個 code 嘅更種）。
+  shiftTypeStartTime?: string;
+  clientRate: number; // 用嚟核對揾到嗰張卡金額啱（唔改呢個值，淨係加 effective_to）
+  setEffectiveTo: string; // "YYYY-MM-DD"（2026-07-31）
+  requireAugReplacementCard: {
+    siteCanonicalName: string;
+    billingModel: "per_shift" | "monthly_fixed" | "admin_fee" | "special";
+    shiftTypeCode: string | null;
+    shiftTypeStartTime?: string;
+    clientRate: number;
+  };
+  reason: string; // audit 用："老闆 2026-09-24 批"
+  note: string;
 }
 
 export interface NewGuardPlan {
@@ -83,6 +119,9 @@ export interface AugPlan {
   };
   rateCards: {
     create: NewRateCardPlan[];
+    // WP-MIXED-BILLING：見 `RateCardCloseJulyPlan` 註解——幫現有 7 月卡
+    // 加 effective_to（唯一老闆批准嘅 7 月卡改動），唔係新建卡。
+    closeJuly: RateCardCloseJulyPlan[];
   };
   guards: {
     create: NewGuardPlan[];

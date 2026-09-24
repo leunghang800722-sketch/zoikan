@@ -214,3 +214,149 @@ audit`／`sql_select ai.audit_log` 都讀唔到（見
   問題。**同一人同盤同月「雞頭行」同「長工行」並存**（結算單位落入行鍵
   嘅一部分）未實作——現有行鍵仍然係 `shift_type_id|guard_id`（唔含
   broker），呢個係一個較大嘅架構改動，留返下一期。
+
+## WP-MIXED-BILLING（老闆 2026-09-24 拍板，§14 規則 5 補充、§15 8 月開盤第 2 項、§17.9）
+
+**背景**：控制室（威信）8 月收客＝月薪崗月費 22,000 ＋ 日薪崗逐更
+840×更數（試算：25 更月薪崗 + 22 更日薪崗 = 40,480，老闆拍板選項
+(a)）。舊規則「一個盤有 flat 卡就淨係計 flat、唔加逐更」表達唔到呢種
+「月費 + 逐更」混合，本 WP 加返。
+
+- **報表口徑（`src/lib/reports/monthly-close.ts`、`src/lib/reports/
+  gross-margin.ts`）**：site 收入 = flat 卡（或 `monthly_fee×monthly_
+  posts` pro-rata fallback）+ 該盤 `shift_type.billing_group='per_shift'`
+  更種嘅逐更 `client_rate_snapshot` 合計；`billing_group='monthly_ic'`
+  嘅更種本身已經包喺月費，唔會加落呢個合計（`shiftAgg` 查詢本身已經
+  篩 `billingGroup:'per_shift'`）。**只對 `month>=2026-08-01` 生效**
+  （`MIXED_BILLING_FROM`常量）——7 月保留舊口徑（有 flat 卡就淨係計
+  flat），7 月四個 gate 數字唔變（`npm run gate:reports`／
+  `gate:pricing`／`gate:export`／`report:regen` 全部喺呢個改動之後跑
+  過，同基線一致）。`gross-margin.ts` 唔使額外改——site 級 `revenue`
+  直接沿用 `buildMonthlyClose()`（同一份 code），改咗嗰邊自動生效。
+  **已知限制**：`billing_group=monthly_ic` 嘅更種嘅「成本」（guard_
+  wage/broker_fee snapshot）都會被同一個 `shiftAgg` 查詢一併剔走（唔
+  計入該盤 cost），同數碼港 CP5 IC 崗嘅既有做法一致（cost 唔喺呢個
+  site 嘅 gross-margin 反映）——如果將來要將月薪崗嘅真實 payout cost
+  計返入嚟，要拆開 revenue／cost 兩條唔同 billingGroup filter 嘅
+  query，呢個 WP 冇做（超出範圍）。
+- **Opus 5.5 驗收收窄（取代上面「該盤全部 per_shift 更種」嘅講法）**：
+  flat 收入盤（盤級 flat 卡覆蓋該月，或者 monthly_fixed＋monthly_fee
+  pro-rata）上面，per_shift 更種**淨係**喺有「逐更另收」卡（掛呢個更種或
+  盤級通用、`effective_from>=2026-08-01`、覆蓋該月、`client_rate` 非 null、
+  `billing_model` per_shift／null）先加 snapshot 落收入、先要求收客定价；
+  否則當「已包喺月費」——唔加收入、唔標 `client_unpriced`，毛利表嗰行收入
+  顯示 0（備註「收入已包喺月費」）。7 月匯入／派生卡（7/1 起）永遠唔觸發。
+  判斷集中喺 `src/lib/reports/mixed-billing.ts`（`loadMixedBillingInfo()`、
+  `isExplicitPerShiftType()`），`monthly-close.ts`／`gross-margin.ts`／
+  `unpriced.ts`（`includedInSiteFlatFee()`、`UnpricedLookups.
+  mixedBillingInfoBySiteId`）／reprice route 共用。`isClientUnpricedShift()`
+  8 月起用 `opts.includedInSiteFlatFee`，冇傳就保守沿用 7 月盤層面豁免。
+  開盤 plan 對 flat 收入盤唔起逐更收客卡（`scripts/opening/lib/mixed-
+  billing-sites.ts` `MIXED_BILLING_SITES`＝老闆拍板嘅混合盤，暫時淨係控制
+  室）。見 P2-版面重設計計劃.md §17.10。
+- **OT 揀卡（Opus 5.5 驗收）**：OT 記錄淨係配 `shift_type_id` 完全相等嘅
+  卡（唔准跌落 shift_type=null 嘅盤級／雞頭級／guard 級正更卡）；roster
+  upload 套用（`reconcile-apply.ts`）OT 都行 resolver（之前一律 null）。
+  **未決**：OT snapshot 係「每粒鐘」（毛利表 ×ot_hours）定「每條記錄」
+  （糧明細／應收直接加總）——見 §17.10.2 第 3 項。
+- **定價器（`src/lib/pricing/resolve-rate.ts`）**：`monthly_fixed` 盤
+  上嘅 `per_shift` 更種一直都可以配到逐更卡出 `client_rate`（`isPer
+  ShiftEligible()`／`specificityRank()` 從來冇睇 `site.billing_model`，
+  淨係睇卡本身嘅 `billing_model`）——冇改，見
+  `tests/pricing-resolve-rate.test.ts`「有 per_shift 卡就照常揀」＋
+  WP-MIXED-BILLING 新增嘅兩條控制室例子測試。**有改**：
+  `isClientUnpricedShift()` 嘅「盤層面豁免」（`opts.siteBillingModel
+  !=='per_shift'` 就一律唔算未定价）淨係對 `2026-08-01` 之前嘅月份
+  生效（`opts.month` 參數）——8 月起，一個 `monthly_fixed` 盤上嘅
+  `per_shift` 更種（例：控制室日薪崗）如果冇 `client_rate_snapshot`
+  就照樣算「收客价未定」，唔再因為個盤有 flat 卡就成盤豁免。**7 月
+  唔受影響**：IFC／九龍企業大廈／恆星樓／屯門小欖樂怡街5號呢批 7 月
+  既有嘅月費盤，per_shift 更種嘅 `client_rate_snapshot` 100% null（成
+  個盤收入淨係 flat 卡，從來冇打算逐更開單）——8 月起如果呢批盤嘅
+  更種繼續冇逐更卡，會開始畀「收客价未定」標記；如果呢啲更種其實
+  「成個盤月費包晒、永遠唔會有逐更卡」，正確做法係將嗰個更種改做
+  `billing_group=monthly_ic`（呢個 WP 冇改任何現有更種，留俾之後嘅
+  WP／老闆定點做）。
+- **OT（老闆 2026-09-24 答：「個個盤唔同，個個人都唔同」，系統唔准
+  自動套公式計 OT 价）**：
+  - `resolve-rate.ts` 嘅 `resolveShiftPricingFromCards()`：OT 記錄
+    （`record_type=ot`）而家行同 shift 一樣嘅卡揀邏輯（site／broker／
+    guard 級 specificity），揀嘅係掛住嗰個 OT 更種（`shift_type_id`）
+    嘅卡——**卡嘅金額本身就係「每粒鐘」嘅价，唔再除 `shift_type.
+    hours`**。冇卡就 `client_rate`／`guard_wage`／`broker_fee` 全部
+    `null`，`unpriced:true`（`leave` 記錄維持原本一律 null 嘅行為，
+    冇改）。
+  - `gross-margin.ts` 嘅「parent 更 snapshot÷hours×ot_hours」公式
+    fallback（同埋「OT 更種自己嘅卡÷hours」fallback）**對
+    `month>=2026-08-01` 停用**（`otFormulaFallbackEnabled`）——8 月起
+    直接用 OT 記錄自己嘅 `client_rate_snapshot`／`guard_wage_
+    snapshot`／`broker_fee_snapshot`（已經係「每粒鐘」价）× `ot_
+    hours`，收客／出街可以各自獨立有冇；完全冇任何一邊就算
+    `unresolved`。**7 月唔變**（7 月 gate 用緊呢條公式）。
+  - **未定价 OT**（`src/lib/pricing/unpriced.ts` 新分類
+    `ot_unpriced`）：`computeUnpricedSummary()`／`buildUnpricedSummary()`
+    對 `record_type=ot`、非 cancelled、完全冇任何 client/guard/fee
+    snapshot 嘅記錄計入 `ot_unpriced`（同 `payout_unpriced`／
+    `client_unpriced` 嗰套獨立，唔互相排斥）；`buildUnpricedSummary()`
+    淨係喺 `month>=2026-08-01` 先將 OT 記錄攞埋落嚟計（`includeOt`
+    gate，7 月 OT 記錄嘅 snapshot 一直由 seed 直接寫入，唔經呢個新
+    分類）。`GET /api/reports/gross-margin`／`monthly-close`／
+    `payroll`／`my-receivable` 四個 report endpoint response 加咗
+    `ot_unpriced_count`（獨立於 `unpriced_count`，等前端頁頂顯示
+    「N 條 OT 未定价」）。
+  - **OT 逐盤逐人人手設卡**：系統唔會自動推斷 OT 价——要幫某個盤/某
+    個 OT 更種定价，喺價目卡管理起一張 `rate_card`（`shift_type_id`
+    指住嗰個 OT 更種；`broker_id`／`guard_id` 可選，愈細愈優先，同
+    正更卡一致嘅 specificity 規則），`client_rate`／`guard_wage`／
+    `broker_fee` 直接填「每粒鐘」嘅价。`scripts/opening/build-aug-
+    plan.ts` 已經幫 HKU座頭「1Hr OT」（有 8 月試算价目資料）起咗呢
+    種卡（site+shiftType 級，broker Y，84.85/73）；其餘 OT 更種
+    （例：啟航1331「OT3.5」）冇試算資料可以起卡，維持未定价，等
+    會計/老闆人手補。
+- **開盤 script（`scripts/opening/build-aug-plan.ts`／`apply-aug-
+  plan.ts`）**：
+  - 控制室：8 月同時起兩個更種——per_shift「N」（日薪崗，逐更卡
+    840/800）同 monthly_ic「N-IC」（月薪崗，冇逐更 client 卡，收入
+    包喺 site flat 卡 22,000；出街价卡 F=800 掛住呢個新更種）。7 月
+    既有嘅 `MR-` placeholder 更種唔改。**已知限制**：邊個保安員報邊
+    個更種，8 月試算 `records.jsonl` 冇逐格 rank/code 欄可以自動分
+    （同數碼港 CP5 嘅 rank 收窄機制唔同、用唔到），淨係靠「人」先分
+    得到（25 更 vs 22 更兩個人）——要會計/主管喺更表編輯器手動幫每
+    個保安員揀啱更種；`verify-aug.ts` 嘅 `verifyControlRoomMixedBilling()`
+    用「模擬計算」（唔係逐格對真實 shift_records）驗證 40,480。
+  - **7 月卡加 `effective_to`（老闆 2026-09-24 批准嘅唯一 7 月卡改
+    動，「8 月無就加」）**：`plan.rateCards.closeJuly`（新 plan 分
+    類，唔係 `create`——rate_cards 歷史係 append-only，呢個操作純粹
+    幫現有卡加期限，唔改金額）——啟航1331 D@10:00 Event 發票 special
+    卡 11,700、數碼港 CP5 IC 30,967.74 月費卡，兩張都加
+    `effective_to=2026-07-31`。**apply 階段 double-check**：淨係 DB
+    層面已經真係有對應嘅 8 月替代卡（Event K 1,350／CP5 IC flat
+    18,580.65）先套用，搵唔到就 skip（維持 7 月卡原封不動），唔會
+    「幫 7 月卡加期限但冇嘢頂上」。`verify-aug.ts` 嘅
+    `verifyJulyCardsUnaffected()` 確認 `effective_to=2026-07-31`
+    唔影響 7 月最後一日嘅定价（仍然生效），8 月 1 日起先跌出。
+  - 數碼港 CP5 IC 8 月 flat 卡（18,580.65）**建卡時已經帶
+    `effective_to=2026-08-31`**（`NewRateCardPlan.effectiveTo` 新
+    欄，`apply-aug-plan.ts` 寫入 `rate_cards.effective_to`）——9 月起
+    「正常月費」金額未定，呢個 WP 冇建 9 月卡，`plan-summary.md`／
+    `needsBossReview` 提老闆/會計之後定咗先起。
+  - 希慎廣場 1930-0730 更種（老闆 2026-09-24 再確認：同 1930-0930
+    並存，兩個都建，卡一樣 K 1,100／1,000）——實作不變，單純由「未
+    經確認嘅推斷」變「已確認」。
+  - Wilson Control＝控制室、Wilson Patrol＝都會大學夜巡邏 alias——
+    老闆 2026-09-24 確認（「啱」），`EXTRA_ALIASES` 由 `needsBossReview`
+    移除，變定案。
+  - **冪等修正**（Opus 驗收提出）：`ensureShiftType()` 揀更種嗰段—
+    —apply 完之後 dev DB 同一時段可能已經有「7 月 placeholder（`MR-`/
+    `PR`）+ 8 月新起嘅真代號」共存（例：控制室 MR-+N+N-IC、數碼港 CP5
+    D+D-2 全部同一時段），舊版淨係揀 `exact[0]`（DB 查詢次序，唔保證
+    跨 run 一致）會令重新 `build` 誤揀 placeholder 或者揀錯代號，多起
+    唔必要嘅卡（實測 9 張）。而家：已知想要嘅 code（`codeHint`）就直
+    接搵嗰個 code 嘅 exact match；搵唔到先排除 placeholder 代號
+    （`MR-`/`PR`）揀剩低嘅；兩者都唔夠先跌落原本嘅 needsBossReview
+    fallback。`apply-aug-plan.ts` 嘅 `RateCardCloseJulyPlan` 查現有
+    卡／8 月替代卡都加咗 `shiftTypeStartTime` 精確辨識（同 code 但
+    唔同時段嘅更種，例如啟航1331「D」有 07:30-19:30 同 10:00-19:00
+    兩個）。**驗證**：`db:reset && db:seed` → `build` → `apply --plan`
+    → `apply --apply` → `build`（再一次）→ `apply --plan`——全部欄位
+    （盤/更種/價目卡/散工/7 月卡加期限）都係「新建 0／跳過全部」。

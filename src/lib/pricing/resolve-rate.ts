@@ -236,18 +236,34 @@ export async function fetchEffectiveRateCards(siteId: string, monthStart: Date, 
 
 /** 純函數：對住已經攞好嘅卡（喺記憶體）揀出呢一格嘅價。單元測試主力測呢個。 */
 export function resolveShiftPricingFromCards(cards: RateCardLite[], input: ResolveShiftPricingInput): ResolvedShiftPricing {
-  if (input.recordType !== "shift") {
-    // leave／ot 冇「呢更嘅收客/出街价」呢個概念（OT 應該按鐘計，留返報表層），
-    // 同 7 月 seed 口徑一致：唔算「未定价」。
+  if (input.recordType === "leave") {
+    // leave 冇「呢更嘅收客/出街价」呢個概念，同 7 月 seed 口徑一致：唔算「未定价」。
     return { clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false, clientCardFound: false, payoutCardFound: false };
   }
+  // WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，個個盤個個人都
+  // 唔同，系統唔准自動套公式計 OT 价）：OT 記錄而家都行落面同 shift 一樣
+  // 嘅卡揀邏輯（site／broker／guard 級），揀嘅係「OT 更種」自己嘅卡（掛
+  // 住 OT 嗰個 shift_type_id，例：HKU座頭 1Hr OT——見 site+shiftType 級
+  // 卡，broker Y，client=84.85/guard=73，呢張卡嘅金額本身就係「每粒鐘」
+  // 嘅价，唔使再除 hours）；搵唔到卡就 client/guard/fee 全部 null，交俾
+  // 報表層（gross-margin.ts）／unpriced.ts 分類做「未定价 OT」——資料由
+  // (i) 呢張卡，或者 (ii) 人手輸入 snapshot 決定，resolver 唔會自己計。
+  // 7 月既有嘅「parent 更 snapshot ÷ hours × ot_hours」公式**唔喺呢度
+  // 做**（果條公式喺 gross-margin.ts 報表層，唔係呢個 resolver）——7 月
+  // OT 記錄嘅 client/guard/broker snapshot 一直都係由 seed 直接寫入，唔
+  // 經呢個 resolver 計，改呢度唔影響 7 月 gate。
 
   const ctx = {
     shiftTypeId: input.shiftTypeId,
     settlementBrokerId: input.settlementBrokerId,
     guardId: input.guardId,
     workDate: input.workDate,
-    requireExactShiftType: requireExactShiftTypeMatch(input.shiftTypeCode),
+    // Opus 5.5 驗收：OT 記錄**淨係**配掛住呢個 OT 更種（shift_type_id 完全
+    // 相等）嘅卡——唔准跌落 shift_type=null 嘅盤級／雞頭級／guard 級正更卡
+    // （dev DB 實測：HKU座頭 OT1＋雞頭 W 會配中 7 月 W 雞頭正更卡 700／620，
+    // 當「每粒鐘」價計 ⇒ 大幅多計）。OT 冇卡就係未定价 OT（老闆：逐盤逐人
+    // 人手設卡）。
+    requireExactShiftType: requireExactShiftTypeMatch(input.shiftTypeCode) || input.recordType === "ot",
   };
   const source: ResolvedShiftPricing["source"] = {};
 
@@ -409,11 +425,23 @@ export function isUnpricedShift(
  * `record.isExternal`——external 記錄（客戶自己嘅人）根本唔開單，唔算
  * 「收客价未定」（同 `isUnpricedShift` 同一個口徑，B10 外判喺數碼港
  * CP5「D」更嘅記錄就係人手查證咗嘅例子）。
+ *
+ * WP-MIXED-BILLING（老闆 2026-09-24 拍板方案 (a)）＋Opus 5.5 驗收收窄：
+ * `opts.siteBillingModel` 呢個「盤層面豁免」淨係對 2026-08 之前嘅月份
+ * （或者冇傳 `month`／冇傳 `includedInSiteFlatFee` 嘅舊 call site）生效
+ * ——7 月 IFC／九龍企業大廈／恆星樓…嘅 per_shift 更種 client snapshot
+ * 100% null，撤走豁免會令 7 月數字變（鐵則唔准）。8 月起改用
+ * `opts.includedInSiteFlatFee`（由 `src/lib/reports/mixed-billing.ts`
+ * 判斷：盤有 flat 收入、而呢個更種冇「逐更另收」卡＝已包喺月費）——
+ * 包喺月費嘅更種唔算未定价；「逐更另收」更種（例：控制室日薪崗 N）冇
+ * client snapshot 就算「收客价未定」。月費盤本身 `site.billing_model`
+ * 唔再用（控制室／蔚峰園／屯門小欖 billing_model=per_shift 但有 flat 卡，
+ * 靠佢判斷唔準）。
  */
 export function isClientUnpricedShift(
   record: { recordType: string; status: string; clientRateSnapshot: unknown; isExternal?: boolean },
   shiftTypeBillingGroup: "per_shift" | "monthly_ic" | string,
-  opts: { siteBillingModel?: string | null; brokerKind?: BrokerKindLike; guardsPaidByClient?: boolean } = {},
+  opts: { siteBillingModel?: string | null; brokerKind?: BrokerKindLike; guardsPaidByClient?: boolean; month?: Date | null; includedInSiteFlatFee?: boolean } = {},
 ): boolean {
   if (record.recordType !== "shift") return false;
   if (record.status === "cancelled") return false;
@@ -421,12 +449,16 @@ export function isClientUnpricedShift(
   // WP-MISC（老闆 2026-09-20 拍板）：LINK 呢類「客戶直接出糧」嘅盤——見
   // `isUnpricedShift` 同一個 opts。
   if (opts.guardsPaidByClient) return false;
-  // Opus 第三輪 M1：盤層面（site.billing_model）同更別層面（shift_type.
-  // billing_group）**兩層都要係逐更**先有「逐更收客價」呢回事——月費盤
-  // （IFC／九龍企業大廈…）、admin_fee、special 嘅盤唔逐更開單，佢哋嘅
-  // per-shift client_rate_snapshot=null 係正確狀態，唔算未定價；數碼港
-  // CP5「D」（billing_group=monthly_ic，收入喺 CP5 IC 月費）同理。
-  if (opts.siteBillingModel !== undefined && opts.siteBillingModel !== null && opts.siteBillingModel !== "per_shift") return false;
+  // Opus 第三輪 M1 → WP-MIXED-BILLING 收窄（見上面函數註解）：7 月（或者
+  // call site 冇提供 8 月新判斷）用舊「盤層面豁免」；8 月起用
+  // `includedInSiteFlatFee`。
+  const MIXED_BILLING_FROM = Date.UTC(2026, 7, 1); // 2026-08-01（UTC），同 src/lib/reports/mixed-billing.ts
+  const newRuleApplies = !!opts.month && opts.month.getTime() >= MIXED_BILLING_FROM && opts.includedInSiteFlatFee !== undefined;
+  if (newRuleApplies) {
+    if (opts.includedInSiteFlatFee) return false;
+  } else if (opts.siteBillingModel !== undefined && opts.siteBillingModel !== null && opts.siteBillingModel !== "per_shift") {
+    return false;
+  }
   if (opts.brokerKind === "external") return false;
   if (shiftTypeBillingGroup !== "per_shift") return false;
   return record.clientRateSnapshot === null || record.clientRateSnapshot === undefined;

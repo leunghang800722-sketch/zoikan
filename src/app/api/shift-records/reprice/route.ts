@@ -41,6 +41,7 @@ import { fetchEffectiveRateCards, resolveShiftPricingFromCards, type BrokerKindL
 // commit 之後直接再打一次 `buildUnpricedSummary()` 攞返寫入咗之後嘅
 // 真實 DB 狀態，兩條路徑口徑保證同 GET /api/shift-records/unpriced 一致，
 // 唔會各自另計一套數。
+import { isMixedBillingMonth, loadMixedBillingInfo } from "@/lib/reports/mixed-billing";
 import { computeUnpricedSummary, buildUnpricedSummary, type UnpricedRecordLike, type UnpricedLookups, type UnpricedGroup } from "@/lib/pricing/unpriced";
 
 const BATCH_SIZE = 500;
@@ -163,6 +164,8 @@ export async function POST(req: Request) {
       shiftTypeCodeById: new Map(shiftTypes.map((s) => [s.id, s.code])),
       shiftTypeBillingGroupById: new Map(shiftTypes.map((s) => [s.id, s.billingGroup])),
       siteGuardsPaidByClientById: guardsPaidByClientById,
+      // WP-MIXED-BILLING（Opus 5.5 驗收）：同 buildUnpricedSummary() 一致——8 月起月費盤「逐更另收」判斷。
+      mixedBillingInfoBySiteId: isMixedBillingMonth(start) ? await loadMixedBillingInfo(siteIdList, start, end) : undefined,
     };
 
     // S6：一次過（Promise.all，唔逐個 site 排隊 await）攞晒每個盤喺呢個
@@ -268,7 +271,10 @@ export async function POST(req: Request) {
         isExternal: r.isExternal,
       };
     });
-    const simulatedSummary = computeUnpricedSummary(simulatedRecords, unpricedLookups);
+    // WP-MIXED-BILLING：帶 `month` 落去，等 isClientUnpricedShift() 嘅
+    // 「盤層面豁免」判斷同 GET /api/shift-records/unpriced 一致（只對
+    // 2026-08 之前嘅月份生效）。
+    const simulatedSummary = computeUnpricedSummary(simulatedRecords, unpricedLookups, { month });
     const groups: RepriceGroup[] = simulatedSummary.groups;
 
     if (dryRun) {

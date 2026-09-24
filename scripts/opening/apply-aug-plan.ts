@@ -15,7 +15,7 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import { readFileSync } from "fs";
 import path from "path";
 import { writeAuditTx } from "@/lib/audit";
-import type { AugPlan, NewSitePlan, NewShiftTypePlan, NewRateCardPlan, NewGuardPlan } from "./lib/types";
+import type { AugPlan, NewSitePlan, NewShiftTypePlan, NewRateCardPlan, NewGuardPlan, RateCardCloseJulyPlan } from "./lib/types";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
 import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 
@@ -80,6 +80,9 @@ async function main() {
     sitesParent: emptyDiff(),
     shiftTypes: emptyDiff(),
     rateCards: emptyDiff(),
+    // WP-MIXED-BILLING：7 月卡加 effective_to（老闆 2026-09-24 批准嘅唯一
+    // 7 月卡改動）——用 `.update`（唔係 `.create`），skip 入 `.skip`。
+    rateCardsCloseJuly: emptyDiff(),
     guards: emptyDiff(),
   };
 
@@ -308,6 +311,10 @@ async function main() {
           brokerFee: cp.brokerFee,
           billingModel: cp.billingModel,
           effectiveFrom,
+          // WP-MIXED-BILLING：數碼港 CP5 IC 8 月 flat 卡（18,580.65）要加
+          // effective_to=2026-08-31（老闆 2026-09-24 答）；其餘新卡照舊
+          // 無限期（undefined/null → DB null）。
+          effectiveTo: cp.effectiveTo ? dateOnly(cp.effectiveTo) : null,
           source: cp.source,
           evidence: "",
           confidence: "high",
@@ -319,6 +326,118 @@ async function main() {
       await writeAuditTx(tx, { actorUserId: null, tableName: "rate_cards", rowId: created.id, action: "create", after: created, ip: null });
     }
     for (const cp of plan.rateCards.create) await ensureRateCard(cp);
+
+    // -----------------------------------------------------------------
+    // 3b. WP-MIXED-BILLING：7 月卡加 effective_to（老闆 2026-09-24 批准
+    //     嘅唯一 7 月卡改動——「8 月無就加」）。**淨係 DB 層面已經真係有
+    //     對應嘅 8 月替代卡先套用**（唔淨係信 plan.json 生成時嘅 in-memory
+    //     判斷——呢個時間點上面 3. 嘅 rate_cards create 已經行晒，可以真
+    //     係查 DB），搵唔到就 skip（維持 7 月卡原封不動），唔會靜靜哋幫
+    //     7 月卡加期限但冇嘢頂上。
+    // -----------------------------------------------------------------
+    async function findShiftTypeId(canonicalSiteName: string, code: string | null, startTime?: string): Promise<string | null | undefined> {
+      // undefined = 呢個盤／更種搵唔到；null = site 級 flat（唔使 shift_type_id）
+      if (code === null) return null;
+      const siteId = siteIdByName.get(canonicalSiteName) ?? (await tx.site.findUnique({ where: { canonicalName: canonicalSiteName } }))?.id;
+      if (!siteId) return undefined;
+      // 同一個盤可以有兩個同 code 唔同時段嘅更種（例：啟航1331「D」有
+      // 07:30-19:30 同 10:00-19:00）——`findFirst` 冇 `ORDER BY` 唔保證揀
+      // 中邊個，一定要傳 `startTime` 先精確（唔傳就要求淨係得一個呢個
+      // code 嘅更種，搵到多過一個就當搵唔到，寧願 skip 都唔可以撞錯）。
+      if (startTime) {
+        const st = await tx.shiftType.findFirst({ where: { siteId, code, startTime: timeOnly(startTime), voidedAt: null } });
+        return st ? st.id : undefined;
+      }
+      const candidates = await tx.shiftType.findMany({ where: { siteId, code, voidedAt: null } });
+      if (candidates.length !== 1) return undefined;
+      return candidates[0].id;
+    }
+
+    async function ensureCloseJulyCard(cj: RateCardCloseJulyPlan) {
+      const label = `${cj.siteCanonicalName}|${cj.shiftTypeCode ?? "flat"}|${cj.clientRate}→effective_to=${cj.setEffectiveTo}`;
+      const siteId = siteIdByName.get(cj.siteCanonicalName) ?? (await tx.site.findUnique({ where: { canonicalName: cj.siteCanonicalName } }))?.id;
+      if (!siteId) {
+        diffs.rateCardsCloseJuly.skip.push(`${label}（盤搵唔到）`);
+        return;
+      }
+      // (a) DB 層面核實 8 月替代卡真係存在（effective_from>=2026-08-01，
+      //     金額夾）。
+      const req = cj.requireAugReplacementCard;
+      const reqShiftTypeId = await findShiftTypeId(req.siteCanonicalName, req.shiftTypeCode, req.shiftTypeStartTime);
+      let replacementFound = false;
+      if (reqShiftTypeId !== undefined) {
+        const reqSiteId = siteIdByName.get(req.siteCanonicalName) ?? (await tx.site.findUnique({ where: { canonicalName: req.siteCanonicalName } }))?.id;
+        if (reqSiteId) {
+          const candidates = await tx.rateCard.findMany({
+            where: { siteId: reqSiteId, shiftTypeId: reqShiftTypeId, billingModel: req.billingModel, effectiveFrom: { gte: new Date(Date.UTC(2026, 7, 1)) }, voidedAt: null },
+          });
+          replacementFound = candidates.some((c) => c.clientRate !== null && Math.abs(Number(c.clientRate) - req.clientRate) < 0.01);
+        }
+      }
+      if (!replacementFound && PLAN_ONLY) {
+        // Opus 5.5 驗收：第一次 --plan（apply 之前）8 月替代卡仲未寫入 DB——
+        // 如果 plan 本身會起呢張替代卡，--plan 顯示「apply 時會改（到時再
+        // 核實 DB）」，唔好顯示 skip 嚇親人；--apply 照舊一定要 DB 真係有先改。
+        const plannedReplacement = plan.rateCards.create.some(
+          (c) =>
+            c.siteCanonicalName === req.siteCanonicalName &&
+            c.billingModel === req.billingModel &&
+            (req.shiftTypeCode === null ? c.shiftType === null : c.shiftType?.code === req.shiftTypeCode && (!req.shiftTypeStartTime || c.shiftType.startTime === req.shiftTypeStartTime)) &&
+            c.clientRate !== null &&
+            Math.abs(c.clientRate - req.clientRate) < 0.01,
+        );
+        if (plannedReplacement) {
+          diffs.rateCardsCloseJuly.update.push(`${label}（plan 會起 8 月替代卡；--apply 時再喺 DB 核實先改）`);
+          return;
+        }
+      }
+      if (!replacementFound) {
+        diffs.rateCardsCloseJuly.skip.push(`${label}（8 月替代卡未搵到，skip，維持 7 月卡原封不動）`);
+        return;
+      }
+      // (b) 搵返嗰張現有（開放式，effective_to=null）7 月卡，金額要夾中
+      //     先改（唔係就唔知搵錯咗邊張，保守 skip）。
+      const shiftTypeId = await findShiftTypeId(cj.siteCanonicalName, cj.shiftTypeCode, cj.shiftTypeStartTime);
+      if (shiftTypeId === undefined) {
+        diffs.rateCardsCloseJuly.skip.push(`${label}（原 7 月更種搵唔到）`);
+        return;
+      }
+      const existing = await tx.rateCard.findFirst({ where: { siteId, shiftTypeId, billingModel: cj.billingModel, effectiveTo: null, voidedAt: null } });
+      if (!existing || existing.clientRate === null || Math.abs(Number(existing.clientRate) - cj.clientRate) >= 0.01) {
+        // 冪等：可能上次 --apply 已經改過（effective_to 唔再係 null）——
+        // 搵返嗰張已經改咗嘅卡，確認金額同目標日子一致就當「已經套用
+        // 過」，skip（唔係失敗）。
+        const alreadyClosed = await tx.rateCard.findFirst({ where: { siteId, shiftTypeId, billingModel: cj.billingModel, effectiveTo: dateOnly(cj.setEffectiveTo), voidedAt: null } });
+        if (alreadyClosed && alreadyClosed.clientRate !== null && Math.abs(Number(alreadyClosed.clientRate) - cj.clientRate) < 0.01) {
+          diffs.rateCardsCloseJuly.skip.push(`${label}（已經套用過，冪等 skip）`);
+        } else {
+          diffs.rateCardsCloseJuly.skip.push(`${label}（原 7 月卡搵唔到或者金額唔夾）`);
+        }
+        return;
+      }
+      diffs.rateCardsCloseJuly.update.push(label);
+      if (PLAN_ONLY) return;
+      const updated = await tx.rateCard.update({
+        where: { id: existing.id },
+        data: { effectiveTo: dateOnly(cj.setEffectiveTo), note: [existing.note, `[WP-MIXED-BILLING ${cj.reason}] ${cj.note}`].filter(Boolean).join("\n") },
+      });
+      await writeAuditTx(tx, {
+        actorUserId: null,
+        tableName: "rate_cards",
+        rowId: existing.id,
+        action: "update",
+        before: { effectiveTo: existing.effectiveTo },
+        // Opus 5.5 驗收：audit DTO 白名單會剝走唔認識嘅 key（之前嘅 `reason`
+        // 冇寫入 audit_log）——用 AUDIT_META_PASSTHROUGH_KEYS 認可嘅
+        // `override_reason` 記低「老闆 2026-09-24 批」同 8 月替代卡。
+        after: {
+          effectiveTo: updated.effectiveTo,
+          override_reason: `${cj.reason}（WP-MIXED-BILLING 7 月卡加 effective_to；8 月替代卡：${req.siteCanonicalName}|${req.shiftTypeCode ?? "flat"}|${req.clientRate}）`,
+        },
+        ip: null,
+      });
+    }
+    for (const cj of plan.rateCards.closeJuly) await ensureCloseJulyCard(cj);
 
     // -----------------------------------------------------------------
     // 4. Guards（4 位 U 號新散工）
@@ -382,6 +501,11 @@ async function main() {
   for (const s of diffs.sitesParent.update) console.log(`  ~ ${s}`);
   console.log(`\n=== 更種 === 新建 ${diffs.shiftTypes.create.length}／跳過 ${diffs.shiftTypes.skip.length}`);
   console.log(`\n=== 價目卡 === 新建 ${diffs.rateCards.create.length}／跳過 ${diffs.rateCards.skip.length}`);
+  // Opus 5.5 驗收：「已存在」以外嘅跳過（盤／更種／雞頭／U 號搵唔到）要印出嚟，唔可以靜靜哋少起卡。
+  for (const s of diffs.rateCards.skip.filter((x) => x.includes("（") || x.includes("搵唔到"))) console.log(`  ! skip：${s}`);
+  console.log(`=== 價目卡（7 月卡加 effective_to，老闆 2026-09-24 批）=== 改 ${diffs.rateCardsCloseJuly.update.length}／跳過 ${diffs.rateCardsCloseJuly.skip.length}`);
+  for (const s of diffs.rateCardsCloseJuly.update) console.log(`  ~ ${s}`);
+  for (const s of diffs.rateCardsCloseJuly.skip) console.log(`  ! skip：${s}`);
   console.log(`\n=== 散工 === 新建 ${diffs.guards.create.length}／跳過 ${diffs.guards.skip.length}`);
 
   console.log(`\n[apply-aug-plan] ${APPLY ? "已經寫入 DB（同一個 transaction）。" : "淨係印咗 diff，冇寫入（要真係寫用 --apply）。"}`);

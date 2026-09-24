@@ -64,6 +64,8 @@ export async function GET(req: Request) {
         unpriced_groups: unpriced.groups,
         // 應修 1：獨立畀前端顯示「N 格冇結算單位」警告。
         no_settlement_count: unpriced.noSettlementCount,
+        // WP-MIXED-BILLING：OT 未定价獨立數目（見 gross-margin/route.ts 同一段註解）。
+        ot_unpriced_count: unpriced.otUnpricedCount,
       }),
     );
   });

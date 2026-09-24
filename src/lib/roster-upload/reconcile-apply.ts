@@ -83,10 +83,15 @@ function rosterRecordType(roster: NonNullable<ReconcileItem["roster"]>): "shift"
  * 經外層 prisma 讀 rate_cards，放喺 interactive transaction 入面逐項打
  * 會令一個真實月份幾百格嘅套用撞 Prisma 預設 5 秒 transaction timeout）。
  * 規則同 batch/route.ts 一致：LINK（guards_paid_by_client）盤唔寫
- * snapshot；leave／OT 冇 snapshot；`is_external` 跟現存記錉。 */
+ * snapshot；leave 冇 snapshot（OT 見下面 WP-MIXED-BILLING 註解）；`is_external` 跟現存記錉。 */
 async function computeRosterPricing(ctx: WriteContext, roster: NonNullable<ReconcileItem["roster"]>, isExternal: boolean): Promise<Pricing> {
   const siteUnpriced = ctx.siteGuardsPaidByClient.get(roster.siteId) ?? false;
-  if (siteUnpriced || rosterRecordType(roster) !== "shift") return { clientRate: null, guardWage: null, brokerFee: null };
+  const recordType = rosterRecordType(roster);
+  // WP-MIXED-BILLING（Opus 5.5 驗收）：OT 都行 resolver——resolver 對 OT
+  // 淨係配「掛住呢個 OT 更種」嘅卡（老闆：OT 逐盤逐人人手設卡，例：HKU座頭
+  // 1Hr OT 84.85／73），冇卡就 null＝未定价 OT。之前呢度 OT 一律 null，
+  // 令上載嘅 OT 永遠用唔到 OT 卡。leave 照舊冇 snapshot。
+  if (siteUnpriced || recordType === "leave") return { clientRate: null, guardWage: null, brokerFee: null };
   const st = ctx.shiftTypeById.get(roster.shiftTypeId);
   const brokerKind = roster.settlementBrokerId ? (ctx.brokerKindById.get(roster.settlementBrokerId) ?? null) : null;
   const resolved = await resolveShiftPricing({
@@ -99,7 +104,7 @@ async function computeRosterPricing(ctx: WriteContext, roster: NonNullable<Recon
     guardId: roster.guardId,
     workDate: new Date(`${roster.workDate}T00:00:00.000Z`),
     isExternal,
-    recordType: "shift",
+    recordType: recordType === "ot" ? "ot" : "shift",
   });
   return { clientRate: resolved.clientRate, guardWage: resolved.guardWage, brokerFee: resolved.brokerFee };
 }

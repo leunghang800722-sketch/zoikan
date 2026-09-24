@@ -76,6 +76,8 @@ export async function GET(req: Request) {
           broker_name: previewBroker?.name,
           unpriced_count: unpriced.count,
           unpriced_groups: unpriced.groups,
+          // WP-MIXED-BILLING：OT 未定价獨立數目（見 gross-margin/route.ts 同一段註解）。
+          ot_unpriced_count: unpriced.otUnpricedCount,
         }),
       ),
     );

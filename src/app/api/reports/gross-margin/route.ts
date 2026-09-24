@@ -127,6 +127,10 @@ export async function GET(req: Request) {
         // 應修 1：獨立畀前端顯示「N 格冇結算單位」警告，唔同 unpriced_count
         // 混埋（computeUnpricedSummary() 口徑已經分開計，唔重複計入）。
         no_settlement_count: unpriced.noSettlementCount,
+        // WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式）：獨立畀前端
+        // 頁頂顯示「N 條 OT 未定价」（已經計入 unpriced_count／unpriced_groups，
+        // 呢度純粹俾前端唔使自己逐條 group 加返）。只計 2026-08 起嘅月份。
+        ot_unpriced_count: unpriced.otUnpricedCount,
       }),
     );
   });

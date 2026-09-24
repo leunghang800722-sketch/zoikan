@@ -23,6 +23,7 @@ import { normalizeTimeRange } from "@/lib/roster-upload/time-range";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards } from "@/lib/pricing/resolve-rate";
 import { loadPriceSiteTimeBroker, loadPriceOverrides } from "./lib/sources";
 import { SITE_ID_TO_CANONICAL_NAME } from "./lib/site-code-map";
+import { MIXED_BILLING_SITES, siteHasFlatRevenue } from "./lib/mixed-billing-sites";
 
 const prisma = new PrismaClient();
 
@@ -217,6 +218,9 @@ function modalKey(counts: Record<string, number>): string | undefined {
 }
 
 const SKIP_PER_SHIFT_CLIENT_SITES = new Set(["恆星樓", "九龍企業大廈"]); // 同 build-aug-plan.ts
+// WP-MIXED-BILLING（Opus 5.5 驗收）：同 build-aug-plan.ts 6d 段——flat 收入盤
+// （MIXED_BILLING_SITES 以外）唔起逐更收客卡，預期 client=null。
+const AS_OF_DATE = new Date("2026-08-15T00:00:00.000Z");
 
 /**
  * (b) 101 組逐組驗（Opus 5.5 驗收重寫）：原本做法係「呢個盤**任何**一個
@@ -236,6 +240,12 @@ async function verifyPricing() {
   const shiftTypes = await prisma.shiftType.findMany({ where: { voidedAt: null }, select: { id: true, siteId: true, code: true, startTime: true, endTime: true, billingGroup: true } });
   const stById = new Map(shiftTypes.map((st) => [st.id, st]));
   const augCards = await prisma.rateCard.findMany({ where: { voidedAt: null, effectiveFrom: MONTH, source: { startsWith: "aug-opening:" } }, select: { siteId: true, shiftTypeId: true, source: true } });
+  const siteRowsForFlat = await prisma.site.findMany({ select: { id: true, billingModel: true, monthlyFee: true } });
+  const flatRowsForFlat = await prisma.rateCard.findMany({
+    where: { voidedAt: null, shiftTypeId: null, brokerId: null, guardId: null, billingModel: { in: ["monthly_fixed", "admin_fee", "special"] } },
+    select: { siteId: true, effectiveFrom: true, effectiveTo: true },
+  });
+  const flatRevenueSiteIds = new Set(siteRowsForFlat.filter((s) => siteHasFlatRevenue(s, flatRowsForFlat.filter((c) => c.siteId === s.id), AS_OF_DATE)).map((s) => s.id));
 
   let checked = 0;
   let matched = 0;
@@ -246,7 +256,7 @@ async function verifyPricing() {
   for (const [key, entry] of Object.entries(pstb)) {
     const [siteCode, time, brokerCode] = key.split("|");
     if (!parseTimeSlot(time)) {
-      skipped.push(`${key}（時段唔係 HHMM-HHMM，OT 組，resolver 唔計 OT 价）`);
+      skipped.push(`${key}（時段唔係 HHMM-HHMM，OT 組，見 (b-OT)）`);
       continue;
     }
     const canonicalName = PSTB_KEY_SITE_OVERRIDE[key] ?? SITE_ID_TO_CANONICAL_NAME[siteCode];
@@ -258,7 +268,8 @@ async function verifyPricing() {
     const broker = brokerByCode.get(brokerCode);
     const eKeys = Object.keys(entry.E).map(Number);
     const under5000 = eKeys.filter((e) => e < 5000);
-    const expClient = SKIP_PER_SHIFT_CLIENT_SITES.has(canonicalName!) || under5000.length !== 1 ? null : under5000[0];
+    const flatRevenueSite = !MIXED_BILLING_SITES.has(canonicalName!) && flatRevenueSiteIds.has(siteId);
+    const expClient = SKIP_PER_SHIFT_CLIENT_SITES.has(canonicalName!) || flatRevenueSite || under5000.length !== 1 ? null : under5000[0];
     const modalF = modalKey(entry.F);
     if (!broker) {
       skipped.push(`${key}（雞頭代號 ${brokerCode} 系統冇，冇起卡）`);
@@ -329,6 +340,111 @@ async function verifyPricing() {
       vals.push(`${d.toISOString().slice(5, 10)}=${card ? `${card.clientRate}${card.effectiveFrom.getTime() === MONTH.getTime() ? "(8月卡)" : "(舊卡!)"}` : "冇"}`);
     }
     console.log(`    ${sites.find((s) => s.id === siteId)?.canonicalName}：${vals.join("／")}`);
+  }
+}
+
+/**
+ * WP-MIXED-BILLING（老闆 2026-09-24 拍板方案 (a)）：控制室 8 月月薪崗
+ * （billing_group=monthly_ic，收入包喺 site flat 卡 22,000）＋日薪崗
+ * （billing_group=per_shift，逐更卡 840）混合 billing——呢個 WP 淨係起
+ * 卡／更種，冇寫真實 8 月 `shift_records`，所以冇得直接跑
+ * `buildMonthlyClose()` 對住真實記錄驗。呢度：(1) 確認兩個更種都起咗、
+ * billing_group 啱；(2) 逐張卡用 resolver 驗 client/guard 价；(3) 用
+ * pstb 已知嘅日薪崗更數（22 更）模擬計一次「flat + per_shift 合計」，
+ * 對返老闆拍板嘅 40,480（**模擬計算**，唔係逐格對真實記錄，見下面印
+ * 出嚟嘅字眼）。
+ */
+/** Opus 5.5 驗收：HKU座頭「1Hr OT」→ 現有 OT1 更種 8 月卡（Y 84.85／73）；
+ * OT 唔准配 shift_type=null 嘅正更卡（例：W 雞頭 7 月正更卡 700／620）。 */
+async function verifyOtCard() {
+  console.log("\n----- (b-OT) HKU座頭 1Hr OT（OT1）卡 -----");
+  const site = await prisma.site.findUnique({ where: { canonicalName: "HKU座頭" }, include: { shiftTypes: true } });
+  const st = site?.shiftTypes.find((x) => x.code === "OT1" && !x.voidedAt);
+  if (!site || !st) {
+    console.log("  ✗ 搵唔到 HKU座頭 OT1 更種");
+    return;
+  }
+  const cards = await fetchEffectiveRateCards(site.id, new Date("2026-08-01"), new Date("2026-08-31"));
+  for (const code of ["Y", "W"]) {
+    const b = await prisma.broker.findFirst({ where: { code } });
+    if (!b) continue;
+    const pr = resolveShiftPricingFromCards(cards, { siteId: site.id, shiftTypeId: st.id, shiftTypeCode: st.code, shiftTypeBillingGroup: st.billingGroup, settlementBrokerId: b.id, brokerKind: b.kind, guardId: "verify-aug-placeholder-guard", workDate: new Date("2026-08-15T00:00:00.000Z"), isExternal: false, recordType: "ot" });
+    const ok = code === "Y" ? pr.clientRate === 84.85 && pr.guardWage === 73 : pr.guardWage === null && (pr.clientRate === null || pr.clientRate === 84.85);
+    console.log(`  雞頭 ${code}：client=${pr.clientRate} 出街=${pr.guardWage}（預期 ${code === "Y" ? "84.85／73" : "出街 null（冇 W 嘅 OT 卡＝未定价，唔准用正更卡）"}）${ok ? "✓" : "✗"}`);
+  }
+}
+
+async function verifyControlRoomMixedBilling(): Promise<void> {
+  console.log("\n----- (b-補2) 控制室 WP-MIXED-BILLING 混合 billing 驗證 -----");
+  const site = await prisma.site.findUnique({ where: { canonicalName: "控制室" } });
+  if (!site) {
+    console.log("  搵唔到「控制室」，skip。控制室組：✗ 唔一致。");
+    return;
+  }
+  const shiftTypes = await prisma.shiftType.findMany({ where: { siteId: site.id, voidedAt: null } });
+  const dayWage = shiftTypes.find((s) => s.billingGroup === "per_shift" && !s.code.startsWith("MR-") && s.code !== "PR");
+  const monthlyIc = shiftTypes.find((s) => s.billingGroup === "monthly_ic");
+  if (!dayWage || !monthlyIc) {
+    console.log(`  ✗ 冇搵齊兩個更種（日薪崗=${dayWage?.code ?? "冇"}／月薪崗=${monthlyIc?.code ?? "冇"}）。控制室組：✗ 唔一致。`);
+    return;
+  }
+  const broker = await prisma.broker.findUnique({ where: { code: "Y" } });
+  const cards = await fetchEffectiveRateCards(site.id, new Date("2026-08-01"), new Date("2026-08-31"));
+  const ctx = { siteId: site.id, settlementBrokerId: broker?.id ?? null, brokerKind: broker?.kind ?? null, guardId: "verify-aug-placeholder-guard", workDate: new Date("2026-08-15"), isExternal: false, recordType: "shift" as const };
+  const dayPricing = resolveShiftPricingFromCards(cards, { ...ctx, shiftTypeId: dayWage.id, shiftTypeCode: dayWage.code, shiftTypeBillingGroup: dayWage.billingGroup });
+  const icPricing = resolveShiftPricingFromCards(cards, { ...ctx, shiftTypeId: monthlyIc.id, shiftTypeCode: monthlyIc.code, shiftTypeBillingGroup: monthlyIc.billingGroup });
+  const flatCard = await prisma.rateCard.findFirst({ where: { siteId: site.id, shiftTypeId: null, brokerId: null, guardId: null, billingModel: "monthly_fixed", effectiveFrom: MONTH, voidedAt: null } });
+  const flatAmount = flatCard ? Number(flatCard.clientRate) : null;
+  const DAY_WAGE_SHIFTS = 22; // pstb S031|1930-0730|Y：E={840:22,22000:25} 已知日薪崗更數
+  const simulatedRevenue = flatAmount !== null && dayPricing.clientRate !== null ? Math.round((flatAmount + dayPricing.clientRate * DAY_WAGE_SHIFTS) * 100) / 100 : null;
+  const ok = dayPricing.clientRate === 840 && icPricing.clientRate === null && flatAmount !== null && simulatedRevenue !== null && Math.abs(simulatedRevenue - 40480) < 0.01;
+  console.log(`  日薪崗更種「${dayWage.code}」（billing_group=${dayWage.billingGroup}）resolver client=${dayPricing.clientRate}／guardWage=${dayPricing.guardWage}（預期 840／800）`);
+  console.log(`  月薪崗更種「${monthlyIc.code}」（billing_group=${monthlyIc.billingGroup}）resolver client=${icPricing.clientRate}（預期 null，包喺 flat 卡）／guardWage=${icPricing.guardWage}`);
+  console.log(`  site flat 卡（8 月）＝${flatAmount ?? "冇"}（預期 22000）`);
+  console.log(`  **模擬**（flat 22000 + 日薪崗 840×${DAY_WAGE_SHIFTS}，pstb 已知更數，唔係逐格對真實 shift_records）＝${simulatedRevenue}（目標 40,480）`);
+  console.log(`  控制室組：${ok ? "✓ 一致" : "✗ 唔一致"}`);
+}
+
+/**
+ * WP-MIXED-BILLING（老闆 2026-09-24 批准嘅唯一 7 月卡改動）：兩張 7 月
+ * 特殊卡加 effective_to=2026-07-31 之後，7 月定价唔可以有任何變化——
+ * effective_to=2026-07-31 涵蓋緊 7 月最後一日（`day <= effective_to`），
+ * 淨係 8 月起（`day > effective_to`）先跌出生效區間。呢度直接查 DB 嘅
+ * `effective_to` 值（唔係逐條 resolver，因為呢兩張卡本身唔係逐更卡，
+ * 唔會被 `resolveShiftPricingFromCards()` 揀中，見 monthly-close.ts
+ * 「site flat 卡／shiftTypeSpecialCards」段落）。
+ */
+async function verifyJulyCardsUnaffected(): Promise<void> {
+  console.log("\n----- (d) 7 月卡加 effective_to 之後——7 月定价 0 差異（老闆 2026-09-24 批） -----");
+  const JULY_LAST_DAY = new Date("2026-07-31T00:00:00.000Z");
+  const AUG_FIRST_DAY = new Date("2026-08-01T00:00:00.000Z");
+
+  const eventSite = await prisma.site.findUnique({ where: { canonicalName: "啟航1331" } });
+  const eventCard = eventSite
+    ? await prisma.rateCard.findFirst({ where: { siteId: eventSite.id, billingModel: "special", clientRate: 11700, voidedAt: null } })
+    : null;
+  if (eventCard) {
+    const coversJuly31 = eventCard.effectiveFrom.getTime() <= JULY_LAST_DAY.getTime() && (eventCard.effectiveTo === null || eventCard.effectiveTo.getTime() >= JULY_LAST_DAY.getTime());
+    const excludesAug1 = eventCard.effectiveTo !== null && eventCard.effectiveTo.getTime() < AUG_FIRST_DAY.getTime();
+    console.log(
+      `  啟航1331 D@10:00 Event 發票 special 卡 11,700：effective_to=${eventCard.effectiveTo?.toISOString().slice(0, 10) ?? "冇（無限期，未套用老闆批准嘅改動）"}——7 月 31 日${coversJuly31 ? "✓ 仍然生效（0 差異）" : "✗ 已經跌出生效區間（7 月定价會變，錯）"}；8 月 1 日${excludesAug1 ? "✓ 已經跌出（唔會滲入 8 月）" : "⚠ 仍然生效（未套用 effective_to，可能係 8 月替代卡未搵到而 skip咗，見上面 rateCards.closeJuly 印出嚟嘅 diff）"}`,
+    );
+  } else {
+    console.log("  搵唔到啟航1331 D@10:00 Event 發票 special 卡（11,700），skip。");
+  }
+
+  const cp5IcSite = await prisma.site.findUnique({ where: { canonicalName: "數碼港 CP5 IC" } });
+  const cp5IcCard = cp5IcSite
+    ? await prisma.rateCard.findFirst({ where: { siteId: cp5IcSite.id, shiftTypeId: null, brokerId: null, guardId: null, billingModel: "monthly_fixed", clientRate: 30967.74, voidedAt: null } })
+    : null;
+  if (cp5IcCard) {
+    const coversJuly31 = cp5IcCard.effectiveFrom.getTime() <= JULY_LAST_DAY.getTime() && (cp5IcCard.effectiveTo === null || cp5IcCard.effectiveTo.getTime() >= JULY_LAST_DAY.getTime());
+    const excludesAug1 = cp5IcCard.effectiveTo !== null && cp5IcCard.effectiveTo.getTime() < AUG_FIRST_DAY.getTime();
+    console.log(
+      `  數碼港 CP5 IC 30,967.74 月費卡：effective_to=${cp5IcCard.effectiveTo?.toISOString().slice(0, 10) ?? "冇（無限期，未套用老闆批准嘅改動）"}——7 月 31 日${coversJuly31 ? "✓ 仍然生效（0 差異）" : "✗ 已經跌出生效區間（7 月定价會變，錯）"}；8 月 1 日${excludesAug1 ? "✓ 已經跌出（唔會滲入 8 月）" : "⚠ 仍然生效"}`,
+    );
+  } else {
+    console.log("  搵唔到數碼港 CP5 IC 30,967.74 月費卡，skip。");
   }
 }
 
@@ -451,6 +567,22 @@ async function verifyCells(uploadIds: string[]) {
   const badN = [...bad.values()].reduce((a, b) => a + b, 0);
   console.log(`[verify-aug] (c) 逐格：一致 ${ok}，唔一致 ${badN}，對唔返試算 ${noJoin}，試算本身未定價 ${trialUnpriced}，冇更種 ${noShiftType}`);
   for (const [label, n] of [...bad.entries()].sort()) console.log(`    - ${n} 格 ${label}`);
+
+  // Opus 5.5 驗收：控制室上載後真實分流（唔係 pstb 模擬）——Wilson Control
+  // 檔兩位 rank 都係「Control」，rank 收窄分唔到月薪崗／日薪崗，上載會將
+  // 全部「N」格配去 per_shift N（840）。未人手分流前 8 月收入會係
+  // 22,000＋全部格×840，唔係 40,480。
+  const crSiteId = [...siteName.entries()].find(([, v]) => v === "控制室")?.[0];
+  if (crSiteId) {
+    const crRows = rows.filter((r) => r.resolvedSiteId === crSiteId && r.shiftType);
+    const byCode = new Map<string, number>();
+    for (const r of crRows) byCode.set(`${r.shiftType!.code}（${r.shiftType!.billingGroup}）`, (byCode.get(`${r.shiftType!.code}（${r.shiftType!.billingGroup}）`) ?? 0) + 1);
+    const perShiftCells = crRows.filter((r) => r.shiftType!.billingGroup === "per_shift").length;
+    const uploadedRevenue = 22000 + perShiftCells * 840;
+    console.log(`\n----- (c-補) 控制室上載後分流（真實上載，唔係模擬）-----`);
+    console.log(`  更種分佈：${[...byCode.entries()].map(([k, v]) => `${k}=${v} 格`).join("、") || "（冇）"}`);
+    console.log(`  未人手分流前 8 月收入＝22,000＋${perShiftCells}×840＝${uploadedRevenue}（目標 40,480）${uploadedRevenue === 40480 ? "✓" : "⚠ 要人手將月薪崗嗰位嘅更改做 N-IC（或者起 guard 級卡），見 §17.10"}`);
+  }
 }
 
 async function cleanup(uploadIds: string[]) {
@@ -475,6 +607,9 @@ async function main() {
   try {
     await verifyPricing();
     await verifyPersonOverrides();
+    await verifyControlRoomMixedBilling();
+    await verifyOtCard();
+    await verifyJulyCardsUnaffected();
     if (WITH_UPLOADS) await verifyCells(uploadIds);
   } finally {
     if (WITH_UPLOADS) await cleanup(uploadIds);
