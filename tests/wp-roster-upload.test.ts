@@ -21,6 +21,8 @@ import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixture
 import { GET as listUploads, POST as createUpload } from "@/app/api/roster-uploads/route";
 import { GET as getUpload, PATCH as patchUpload } from "@/app/api/roster-uploads/[id]/route";
 import { POST as reparseUpload } from "@/app/api/roster-uploads/[id]/reparse/route";
+import { POST as resolveSubSite } from "@/app/api/roster-uploads/[id]/reconcile/resolve-subsite/route";
+import { reconcileUpload } from "@/lib/roster-upload/reconcile";
 
 function aug(day: number): Date {
   return new Date(Date.UTC(2026, 7, day));
@@ -571,7 +573,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect((await prisma.rosterUpload.findUniqueOrThrow({ where: { id: u.upload.id } })).siteId).toBeNull();
   });
 
-  it("§28 B1-8 第 2 項：有子盤嘅上載，某行冇 sub_site_name→warning「未寫子盤，歸母盤」（唔擋）", async () => {
+  it("§28 WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）：有子盤嘅上載，但檔案格式（standard layout）根本冇 sub_site 欄（例如 HKU座頭）→ 靜靜歸母盤，0 warning（唔會逐行『未寫子盤』覆核）", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("2026");
     ws.getCell("A2").value = fx.site.name;
@@ -588,9 +590,10 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("D6").value = "T-A01";
     ws.getCell("E6").value = "6100001";
     ws.getCell("F6").value = "測試安員甲";
-    ws.getCell("G6").value = "N"; // 冇填 sub_site 欄（呢個 fixture 冇 subSite column，所以任何有子盤嘅盤都會觸發呢個 warning）
+    ws.getCell("G6").value = "N"; // standard layout（呢個 fixture 完全冇 sub_site 欄，同 HKU座頭一樣嘅結構）
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
-    // fx.site 加一個子盤（parent_site_id 指返 fx.site）。
+    // fx.site 加一個子盤（parent_site_id 指返 fx.site）——HKU座頭嘅結構：
+    // 母盤自己嘅檔案冇子盤欄，但 DB 入面確實有一個子盤（HKU 醫學院）。
     const child = await prisma.site.create({
       data: { canonicalName: "測試子盤A", clientName: fx.site.name, billingModel: "per_shift", parentSiteId: fx.site.id, createdBy: fx.userIds["老闆"]! },
     });
@@ -600,10 +603,168 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id, codeKind: "shift" } });
     expect(rows.length).toBeGreaterThan(0);
     for (const r of rows) {
-      expect((r.warnings as string[] | null)?.some((w) => w.includes("未寫子盤，歸母盤"))).toBe(true);
-      expect(r.resolvedSiteId).toBe(fx.site.id); // 唔擋——歸母盤
+      expect((r.warnings as string[] | null)?.some((w) => w.includes("未寫子盤"))).not.toBe(true);
+      expect(r.resolvedSiteId).toBe(fx.site.id); // 唔擋——靜靜歸母盤
     }
     await prisma.site.delete({ where: { id: child.id } });
+  });
+
+  it("§28b WP-GUARD-FIX 第二輪：citybus layout（真係有子盤欄）某行冇寫 sub_site_name，同檔／歷史都冧唔到 → warning「未寫子盤，歸母盤」（回復 B-0 §15.5 原語意）", async () => {
+    const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤3", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤D", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = parent.canonicalName;
+    ws.getCell("G4").value = "Date";
+    ws.getCell("H4").value = aug(1);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
+    // Property Name（子盤）欄留空——citybus layout（有子盤欄），但呢一行冇寫。
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("H6").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-blank-subsite.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string } };
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.subSiteName).toBeNull();
+    expect(rows[0]!.resolvedSiteId).toBe(parent.id); // 冧唔到候選——跌返母盤（唔擋）
+    expect(JSON.stringify(rows[0]!.warnings)).toContain("未寫子盤，歸母盤");
+  });
+
+  it("§28c WP-GUARD-FIX 第二輪：同一安員喺同一檔案另一（物理）行已經寫咗子盤，淨係一種 → 自動填＋warning「同檔其他行推斷」", async () => {
+    const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤4", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    const child = await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤E", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = parent.canonicalName;
+    ws.getCell("G4").value = "Date";
+    ws.getCell("H4").value = aug(1);
+    ws.getCell("I4").value = aug(2);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
+    // 同一個人（T-A01）出現喺兩個唔同物理行：8/1 嗰行寫咗子盤，8/2 嗰行冇寫。
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", child.canonicalName, "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("H6").value = "D";
+    ws.getRow(7).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("I7").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-same-file-infer.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string } };
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id }, orderBy: { rowIndex: "asc" } });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.resolvedSiteId).toBe(child.id); // 8/1 嗰行本身有寫
+    expect(rows[1]!.subSiteName).toBeNull(); // 8/2 嗰行本身冇寫
+    expect(rows[1]!.resolvedSiteId).toBe(child.id); // 但由同檔其他行推斷到
+    expect(JSON.stringify(rows[1]!.warnings)).toContain("子盤由同檔其他行推斷");
+  });
+
+  it("§28d WP-GUARD-FIX 第二輪：同檔冧唔到，但呢個安員最近 3 個月喺呢個盤底下淨係一個子盤出過更 → 自動填＋warning「歷史推斷」", async () => {
+    const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤5", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    const child = await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤F", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+    const childShiftType = await prisma.shiftType.create({ data: { siteId: child.id, code: "D", createdBy: "test-wp-roster-upload" } });
+    // fx.guardA 最近 3 個月（7 月）喺子盤 F 出過更——歷史推斷用嚟填 8 月呢行冇寫嘅子盤。
+    await prisma.shiftRecord.create({
+      data: { workDate: new Date(Date.UTC(2026, 6, 15)), siteId: child.id, shiftTypeId: childShiftType.id, guardId: fx.guardA.id, status: "confirmed", createdBy: "test-wp-roster-upload" },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = parent.canonicalName;
+    ws.getCell("G4").value = "Date";
+    ws.getCell("H4").value = aug(1);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("H6").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-history-infer.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string; parse_summary: { sub_site_inferred_from_history_count: number } } };
+    expect(body.upload.parse_summary.sub_site_inferred_from_history_count).toBe(1);
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows[0]!.resolvedSiteId).toBe(child.id);
+    expect(JSON.stringify(rows[0]!.warnings)).toContain("子盤由歷史推斷");
+  });
+
+  it("§28e WP-GUARD-FIX 第二輪：最近 3 個月喺呢個盤底下多過一個子盤出過更 → 留 null，warning 列候選，對數頁分類做 unresolved（唔會靜靜跌返母盤）", async () => {
+    const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤6", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    const childG = await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤G", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+    const childH = await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤H", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+    const shiftTypeG = await prisma.shiftType.create({ data: { siteId: childG.id, code: "D", createdBy: "test-wp-roster-upload" } });
+    const shiftTypeH = await prisma.shiftType.create({ data: { siteId: childH.id, code: "D", createdBy: "test-wp-roster-upload" } });
+    // fx.guardA 最近 3 個月喺兩個子盤都出過更——歷史推斷唔到單一候選。
+    await prisma.shiftRecord.create({
+      data: { workDate: new Date(Date.UTC(2026, 6, 10)), siteId: childG.id, shiftTypeId: shiftTypeG.id, guardId: fx.guardA.id, status: "confirmed", createdBy: "test-wp-roster-upload" },
+    });
+    await prisma.shiftRecord.create({
+      data: { workDate: new Date(Date.UTC(2026, 6, 20)), siteId: childH.id, shiftTypeId: shiftTypeH.id, guardId: fx.guardA.id, status: "confirmed", createdBy: "test-wp-roster-upload" },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = parent.canonicalName;
+    ws.getCell("G4").value = "Date";
+    ws.getCell("H4").value = aug(1);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("H6").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-history-ambiguous.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string; parse_summary: { sub_site_needs_human_count: number } } };
+    expect(body.upload.parse_summary.sub_site_needs_human_count).toBe(1);
+    const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(rows[0]!.resolvedSiteId).toBeNull();
+    expect(JSON.stringify(rows[0]!.warnings)).toContain("子盤未定，歷史候選");
+
+    // 對數頁：呢種 null 一定要入 unresolved（唔可以靜靜當「舊上載未
+    // reparse」跌返母盤）。
+    const { items } = await reconcileUpload(body.upload.id);
+    const item = items.find((i) => i.category === "unresolved" && i.unresolvedReason?.includes("批量指定子盤"));
+    expect(item).toBeTruthy();
+
+    // §28f：對數頁「批量指定子盤」——揀 childG，行由 unresolved 變咗歸
+    // 咗子盤，`shift_type_id` 一齊重新配（跟 childG 嘅 shift_types 範圍）。
+    const resolveRes = await resolveSubSite(
+      reqJson(`http://test.local/api/roster-uploads/${body.upload.id}/reconcile/resolve-subsite`, ownerCookie, "POST", { row_ids: [rows[0]!.id], site_id: childG.id }),
+      { params: Promise.resolve({ id: body.upload.id }) },
+    );
+    expect(resolveRes.status).toBe(200);
+    const resolveBody = (await resolveRes.json()) as { updated: string[]; skipped: unknown[] };
+    expect(resolveBody.updated).toEqual([rows[0]!.id]);
+    expect(resolveBody.skipped).toEqual([]);
+    const afterRow = await prisma.rosterUploadRow.findUniqueOrThrow({ where: { id: rows[0]!.id } });
+    expect(afterRow.resolvedSiteId).toBe(childG.id);
+    expect(afterRow.shiftTypeId).toBe(shiftTypeG.id);
+    expect(JSON.stringify(afterRow.warnings)).toContain("人手批量指定子盤");
+
+    // 再撳一次（行已經唔係「子盤未定」狀態）→ 冪等 skip，唔會再郁。
+    const resolveAgain = await resolveSubSite(
+      reqJson(`http://test.local/api/roster-uploads/${body.upload.id}/reconcile/resolve-subsite`, ownerCookie, "POST", { row_ids: [rows[0]!.id], site_id: childH.id }),
+      { params: Promise.resolve({ id: body.upload.id }) },
+    );
+    expect(resolveAgain.status).toBe(200);
+    const resolveAgainBody = (await resolveAgain.json()) as { updated: string[]; skipped: Array<{ row_id: string }> };
+    expect(resolveAgainBody.updated).toEqual([]);
+    expect(resolveAgainBody.skipped.map((s) => s.row_id)).toEqual([rows[0]!.id]);
+    const afterRow2 = await prisma.rosterUploadRow.findUniqueOrThrow({ where: { id: rows[0]!.id } });
+    expect(afterRow2.resolvedSiteId).toBe(childG.id); // 冇被第二次呼叫改走
   });
 
   it("§29 B1-8 第 3 項：檔案工號命中真實安員，但姓名對唔上→唔准配（ambiguous），warning「屬另一人」", async () => {

@@ -775,3 +775,14 @@ export const RosterReconcileApplySchema = z
       .max(2000),
   })
   .strict();
+
+// WP-GUARD-FIX 第二輪（老闆 2026-09-25 要求）：`POST /api/roster-uploads/
+// :id/reconcile/resolve-subsite`——對數頁「批量指定子盤」／「全部歸母盤
+// 確認」。`site_id=null`＝全部歸母盤確認；非 null＝批量指定嗰個子盤（要
+// 係呢個上載母盤嘅子盤，service 層 `bulkResolveAmbiguousSubSite()` 驗）。
+export const RosterReconcileResolveSubSiteSchema = z
+  .object({
+    row_ids: z.array(z.string().min(1)).min(1).max(2000),
+    site_id: z.union([z.string().min(1), z.null()]),
+  })
+  .strict();

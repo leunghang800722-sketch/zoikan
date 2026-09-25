@@ -24,8 +24,10 @@ import { prisma } from "@/lib/db";
 import { monthStart, assertMonthNotLocked } from "@/lib/month-lock";
 import { BadRequest, Conflict } from "@/lib/api/errors";
 import { writeAuditTx } from "@/lib/audit";
-import { parseRosterWorkbook, type ParseResult } from "./parse";
+import { parseRosterWorkbook, type ParseResult, type ParsedCellRow } from "./parse";
 import { shiftTypeTimeSlot } from "./time-range";
+import { AMBIGUOUS_SUBSITE_WARNING_PREFIX } from "./reconcile";
+import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import {
   matchSite,
   matchBroker,
@@ -86,6 +88,14 @@ export interface RosterUploadParseSummary {
   /** 補丁（§17.7 未修第一項）：靠 rank_raw 第三層收窄先至配到更別嘅格
    * 數（time_raw 收窄之後仲夾住多過一個候選，用 rank 先至剩返一個）。 */
   rankNarrowedCount: number;
+  // WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）：B1-8「未寫子盤」
+  // warning 原本對**冇子盤欄**嘅檔案格式（例如 HKU座頭 standard
+  // layout）都會逐行出，令會計以為成份檔都要逐行覆核——而家淨係「真係
+  // 有子盤欄（citybus，或者呢個上載本身 parse 到 sub_site_names）而且
+  // 嗰行冇寫」先算，加返三層推斷（見 `matchRowsAndSummarize()` 大註解）：
+  subSiteInferredFromFileCount: number; // 同檔其他行嘅子盤淨係一種，自動填
+  subSiteInferredFromHistoryCount: number; // 最近 3 個月嗰個安員喺呢個盤嘅子盤出更紀錄淨係一個，自動填
+  subSiteNeedsHumanCount: number; // 歷史候選多過一個，留 null 交人手（對數頁 unresolved）
   warnings: string[];
 }
 
@@ -132,6 +142,100 @@ async function matchRowsAndSummarize(
   ]);
   const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw });
 
+  // ---------------------------------------------------------------------
+  // WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）：對數頁大量「未寫子
+  // 盤，歸母盤，人手覆核」——真正根因唔係 python/TS forward-fill 唔一致
+  // （查證過，兩邊行為一致），係 B-0 §15.5 呢條 warning 對**檔案格式根本
+  // 冇子盤欄**嘅母盤上載（例如 HKU座頭：standard layout，得一個子盤
+  // 「HKU 醫學院」，醫學院自己有獨立更表檔，HKU座頭自己嗰份檔案本身
+  // 冇 sub_site 欄可以寫）都逐行出，會計以為要逐條覆核。
+  //
+  // 修法分三層：
+  //   1. warning 收窄——淨係「呢個上載嘅檔案格式真係有子盤欄（citybus
+  //      layout，或者呢個上載本身 parse 到 subSiteNames 非空）」而且
+  //      呢行冇寫，先算「漏寫」；冇子盤欄嘅檔案格式（好似 HKU座頭）淨
+  //      係靜靜歸母盤，唔出 warning（回復 B-0 §15.5 原語意）。
+  //   2. 歷史推斷（淨係喺 (1) 判斷「真係漏寫」嘅情況先做）：
+  //      (a) 同一個上載、同一個安員嘅**其他（物理）行**（同一個人喺一
+  //          個檔案入面可能出現喺唔止一個 Excel 行——例如唔同 block/
+  //          唔同星期各自一行；一個物理行本身逐日展開嘅 `ParsedCellRow`
+  //          全部共用同一個 `rowIndex`、亦即成粒 subSiteName 一定一致，
+  //          所以「其他行」要用「身份」（staff_no_raw 正規化、冇就用
+  //          name_raw）分組，唔可以用 `rowIndex`——同一 `rowIndex` 入面
+  //          唔可能出現多過一種 subSiteName，用 `rowIndex` 分組會令呢
+  //          層推斷變死code）——身份嘅其他物理行已經寫咗子盤，而且淨係
+  //          一種 → 自動填（「同檔其他行推斷」）。
+  //      (b) 同檔搵唔到就查嗰個安員最近 3 個月喺呢個母盤子盤嘅
+  //          `shift_records`（`status != cancelled`）——淨係一個子盤
+  //          出過更 → 自動填（「歷史推斷」）；零個 → 跌返 (1) 嘅「未寫
+  //          子盤，歸母盤」warning；多過一個 → 留 `resolved_site_id=
+  //          null`＋warning 列候選子盤名，交對數頁人手揀（見
+  //          reconcile.ts 點分辨呢種 null 同「舊上載未 reparse」嘅 null）。
+  //   3. 對數頁批量指定／歸母盤確認——見
+  //      `src/lib/roster-upload/reconcile.ts`／`bulk-resolve-site.ts`。
+  const hasSubSiteColumn = childSites.length > 0 && (parseResult.sheets.some((s) => s.layouts.includes("citybus")) || parseResult.subSiteNames.length > 0);
+
+  // Pre-pass 1：逐格 guardResult 抽出嚟先計一次（主 loop 直接攞現成，
+  // 歷史推斷都要用到 guardId，唔使計多次）。
+  const guardResults = parseResult.rows.map((r) => matchGuard({ staffNoRaw: r.staffNoRaw, nameRaw: r.nameRaw, telRaw: r.telRaw }, guardIndex));
+
+  // 「身份」key——staff_no_raw 正規化就用嚟分（同一個號一定係同一個
+  // 人），冇就用 name_raw（trim）。同 scripts/guard-fix/build-guard-fix-
+  // plan.ts 分組邏輯一致精神。
+  const identityKeyOf = (r: ParsedCellRow): string => {
+    const sn = r.staffNoRaw ? normalizeStaffNumber(r.staffNoRaw) : null;
+    return sn ? `sn:${sn}` : `name:${(r.nameRaw ?? "").trim()}`;
+  };
+
+  // Pre-pass 2：同檔其他行推斷——逐個身份收集已寫嘅子盤名。
+  const subSiteNamesByIdentity = new Map<string, Set<string>>();
+  if (hasSubSiteColumn) {
+    for (const r of parseResult.rows) {
+      if (!r.subSiteName) continue;
+      const key = identityKeyOf(r);
+      if (!subSiteNamesByIdentity.has(key)) subSiteNamesByIdentity.set(key, new Set());
+      subSiteNamesByIdentity.get(key)!.add(r.subSiteName);
+    }
+  }
+  const sameFileInferredByIdentity = new Map<string, string>();
+  for (const [key, names] of subSiteNamesByIdentity) {
+    if (names.size === 1) sameFileInferredByIdentity.set(key, [...names][0]!);
+  }
+
+  // Pre-pass 3：歷史推斷——淨係「真係漏寫」（有子盤欄、呢行冇寫、同檔
+  // 都冧唔到）而且呢行有配到 guard 先查，逐個身份淨係查一次。
+  const historyGuardIdByIdentity = new Map<string, string>();
+  if (hasSubSiteColumn) {
+    for (let i = 0; i < parseResult.rows.length; i++) {
+      const r = parseResult.rows[i]!;
+      const key = identityKeyOf(r);
+      if (r.subSiteName || sameFileInferredByIdentity.has(key) || historyGuardIdByIdentity.has(key)) continue;
+      const guardId = guardResults[i]!.guardId;
+      if (guardId) historyGuardIdByIdentity.set(key, guardId);
+    }
+  }
+  const threeMonthsAgo = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() - 3, 1));
+  const historyInferredByIdentity = new Map<string, string>(); // identityKey -> siteId
+  const historyCandidateNamesByIdentity = new Map<string, string[]>(); // identityKey -> 候選子盤名（多過一個）
+  if (historyGuardIdByIdentity.size > 0) {
+    const uniqueGuardIds = [...new Set(historyGuardIdByIdentity.values())];
+    const historyRows = await tx.shiftRecord.findMany({
+      where: { guardId: { in: uniqueGuardIds }, siteId: { in: childSites.map((c) => c.id) }, workDate: { gte: threeMonthsAgo, lt: month }, status: { not: "cancelled" } },
+      select: { guardId: true, siteId: true },
+    });
+    const siteIdsByGuard = new Map<string, Set<string>>();
+    for (const hr of historyRows) {
+      if (!siteIdsByGuard.has(hr.guardId)) siteIdsByGuard.set(hr.guardId, new Set());
+      siteIdsByGuard.get(hr.guardId)!.add(hr.siteId);
+    }
+    const childNameById = new Map(childSites.map((c) => [c.id, c.canonicalName]));
+    for (const [key, guardId] of historyGuardIdByIdentity) {
+      const siteIds = [...(siteIdsByGuard.get(guardId) ?? [])];
+      if (siteIds.length === 1) historyInferredByIdentity.set(key, siteIds[0]!);
+      else if (siteIds.length > 1) historyCandidateNamesByIdentity.set(key, siteIds.map((id) => childNameById.get(id) ?? id));
+    }
+  }
+
   let unmatchedGuardCount = 0;
   let ambiguousGuardCount = 0;
   let unmatchedShiftTypeCount = 0;
@@ -142,13 +246,17 @@ async function matchRowsAndSummarize(
   let staleStaffNoCount = 0;
   let staffNoMismatchCount = 0;
   let rankNarrowedCount = 0;
+  let subSiteInferredFromFileCount = 0;
+  let subSiteInferredFromHistoryCount = 0;
+  let subSiteNeedsHumanCount = 0;
   // 驗收 2026-09-23：python 版（extract.py EXPECTED_YEAR_MONTH）會將「格仔
   // 日期唔係呢個月」逐格列入 unparsed 俾人覆核——移植漏咗。上載揀錯月份
   // （例如 8 月更表揀咗 9 月）或者更表夾住上／下月日子，都要明確警告。
   const monthPrefix = `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, "0")}-`;
   const rows: Prisma.RosterUploadRowCreateManyInput[] = [];
 
-  for (const r of parseResult.rows) {
+  for (let rowPos = 0; rowPos < parseResult.rows.length; rowPos++) {
+    const r = parseResult.rows[rowPos]!;
     const brokerId = matchBroker(r.brokerCodeRaw, brokers);
     if (r.brokerCodeRaw && !brokerId) unmatchedBrokerCount += 1;
 
@@ -173,14 +281,38 @@ async function matchRowsAndSummarize(
         warnings.push(`子盤「${r.subSiteName}」對唔到呢個盤底下嘅子盤，更種配對留空，人手覆核`);
       }
     } else if (resolvedSiteId && childSites.length > 0 && !r.subSiteName) {
-      // B1-8 第 2 項（B-0 驗收留低）：有子盤嘅上載，呢行冇寫 sub_site_name
-      // ——唔擋（effectiveSiteId 保持=母盤，同之前行為一致），淨係加
-      // warning 提會計覆核係咪漏寫咗子盤。
-      warnings.push("未寫子盤，歸母盤，人手覆核係咪漏寫子盤");
+      // WP-GUARD-FIX 第二輪：三層推斷（見上面大註解）。
+      const identityKey = identityKeyOf(r);
+      if (sameFileInferredByIdentity.has(identityKey)) {
+        const inferredName = sameFileInferredByIdentity.get(identityKey)!;
+        const childId = matchSite(inferredName, childSites);
+        if (childId) {
+          effectiveSiteId = childId;
+          subSiteInferredFromFileCount += 1;
+          warnings.push(`子盤由同檔其他行推斷：${inferredName}`);
+        }
+      } else if (historyInferredByIdentity.has(identityKey)) {
+        effectiveSiteId = historyInferredByIdentity.get(identityKey)!;
+        subSiteInferredFromHistoryCount += 1;
+        warnings.push("子盤由歷史推斷（最近 3 個月呢個安員喺呢個盤底下子盤有出更紀錄）");
+      } else if (historyCandidateNamesByIdentity.has(identityKey)) {
+        // 多過一個候選——留 null，唔准估，交對數頁人手揀（呢種 null 同
+        // 「舊上載未 reparse」嘅 null 點分辨見 reconcile.ts）。
+        effectiveSiteId = null;
+        subSiteNeedsHumanCount += 1;
+        warnings.push(`${AMBIGUOUS_SUBSITE_WARNING_PREFIX}多過一個（${historyCandidateNamesByIdentity.get(identityKey)!.join("、")}），人手覆核並指定子盤`);
+      } else if (hasSubSiteColumn) {
+        // 真係有子盤欄、呢行冇寫、同檔／歷史都冧唔到——先出「漏寫」
+        // warning；effectiveSiteId 保持=母盤（唔擋寫入）。
+        warnings.push("未寫子盤，歸母盤，人手覆核係咪漏寫子盤");
+      }
+      // hasSubSiteColumn=false（呢個盤嘅檔案格式根本冇子盤欄，例如
+      // HKU座頭 standard layout）——靜靜歸母盤，唔出 warning（回復 B-0
+      // §15.5 原語意）。
     }
 
     const shiftTypeMatch = matchShiftType(r.rawCode, r.codeKind, effectiveSiteId, r.timeRaw, shiftTypes, r.rankRaw);
-    const guardResult = matchGuard({ staffNoRaw: r.staffNoRaw, nameRaw: r.nameRaw, telRaw: r.telRaw }, guardIndex);
+    const guardResult = guardResults[rowPos]!;
     if (guardResult.guardMatch === "unmatched") unmatchedGuardCount += 1;
     if (guardResult.guardMatch === "ambiguous") ambiguousGuardCount += 1;
 
@@ -274,6 +406,9 @@ async function matchRowsAndSummarize(
     staleStaffNoCount,
     staffNoMismatchCount,
     rankNarrowedCount,
+    subSiteInferredFromFileCount,
+    subSiteInferredFromHistoryCount,
+    subSiteNeedsHumanCount,
     warnings: [
       // WP-UPLOAD-AUTOFIX 個案 1：母盤安全網觸發——擺最前，會計最先睇到
       // 「呢個上載未配對盤，要人手指定」。
@@ -437,6 +572,76 @@ export async function reparseRosterUpload(uploadId: string, opts: { autoResolveS
   return parseResult;
 }
 
+export interface BulkResolveSubSiteResult {
+  updated: string[]; // rowId
+  skipped: Array<{ rowId: string; reason: string }>;
+}
+
+/** WP-GUARD-FIX 第二輪（老闆 2026-09-25 要求）：對數頁批量指定子盤／
+ * 全部歸母盤確認——淨係俾「三層推斷都冧唔到、留 `resolved_site_id=
+ * null`」嗰批行用（`AMBIGUOUS_SUBSITE_WARNING_PREFIX` 呢個 marker，見
+ * reconcile.ts）；`siteId=null` 代表「全部歸母盤確認」（用上載本身嘅
+ * `site_id`），`siteId` 有值就要係呢個上載母盤嘅子盤。逐行重新
+ * `matchShiftType()`（唔係成個 `reparseRosterUpload()`——淨係改咗嘅行
+ * 唔應該連累其他行嘅配對結果重新計一次，亦唔會抹走呢個人手決定）。
+ *
+ * 已知限制（老實列出）：呢個決定冇獨立欄記低「呢行係人手指定」，靠
+ * `resolved_site_id` 非 null 呢個事實本身——如果之後檔案內容有改動再
+ * `reparseRosterUpload()`（例如老闆改完 Excel 重新上載同一檔案觸發嘅
+ * 完整 re-parse），會重新行一次三層推斷，人手指定嘅結果**唔一定**保留
+ * （同檔/歷史推斷可能算出唔同結果）。淨係「單純 `POST .../reparse`
+ * （bytes 冇變）」先會保留——嗰種情況入面 sub_site_name 都係 blank，
+ * 三層推斷會重新行一次，如果推斷邏輯本身冇變，結果應該一致；但呢層
+ * 冇強制保證，屬於已知限制，記喺 P2-版面重設計計劃.md §18。 */
+export async function bulkResolveAmbiguousSubSite(params: {
+  uploadId: string;
+  rowIds: string[];
+  siteId: string | null;
+  actorUserId: string | null;
+  ip: string | null;
+}): Promise<BulkResolveSubSiteResult> {
+  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
+  if (!upload.siteId) throw BadRequest("呢個上載未指定盤，請先指定盤先可以批量指定子盤");
+  const childSites = await prisma.site.findMany({ where: { parentSiteId: upload.siteId }, select: { id: true, canonicalName: true } });
+  const targetSiteId = params.siteId ?? upload.siteId; // null＝全部歸母盤確認
+  if (params.siteId && !childSites.some((c) => c.id === params.siteId)) {
+    throw BadRequest("指定嘅盤唔係呢個上載母盤底下嘅子盤");
+  }
+  const targetShiftTypesRaw = await prisma.shiftType.findMany({ where: { siteId: targetSiteId, voidedAt: null }, select: { id: true, siteId: true, code: true, startTime: true, endTime: true, billingGroup: true } });
+  const targetShiftTypes: ShiftTypeCandidate[] = targetShiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup }));
+
+  const rows = await prisma.rosterUploadRow.findMany({ where: { id: { in: params.rowIds }, uploadId: params.uploadId } });
+  const foundIds = new Set(rows.map((r) => r.id));
+  const result: BulkResolveSubSiteResult = { updated: [], skipped: [] };
+  for (const rowId of params.rowIds) {
+    if (!foundIds.has(rowId)) result.skipped.push({ rowId, reason: "呢個上載搵唔到呢行" });
+  }
+  // 淨係俾「三層推斷都冧唔到、留咗 null」嗰批行用——防止用戶亂改其他
+  // 已經配到盤嘅行（呢個掣淨係喺對數頁「子盤未定」呢一類行出現，呢度
+  // 係結構性再驗證一次，唔淨係信賴前端冧咗邊行）。
+  const eligible = rows.filter((r) => {
+    const warningsArr = Array.isArray(r.warnings) ? (r.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
+    const ok = !r.resolvedSiteId && !r.subSiteName && warningsArr.some((w) => w.startsWith(AMBIGUOUS_SUBSITE_WARNING_PREFIX));
+    if (!ok) result.skipped.push({ rowId: r.id, reason: "呢行唔係「子盤未定」狀態，唔可以用呢個批量掣" });
+    return ok;
+  });
+  if (eligible.length === 0) return result;
+
+  await prisma.$transaction(async (tx) => {
+    for (const row of eligible) {
+      const shiftTypeMatch = matchShiftType(row.rawCode, row.codeKind, targetSiteId, row.timeRaw, targetShiftTypes, row.rankRaw);
+      const existingWarnings = Array.isArray(row.warnings) ? (row.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
+      const noteText = params.siteId ? `人手批量指定子盤：${childSites.find((c) => c.id === params.siteId)?.canonicalName ?? params.siteId}` : "人手批量確認歸母盤";
+      const after = await tx.rosterUploadRow.update({
+        where: { id: row.id },
+        data: { resolvedSiteId: targetSiteId, shiftTypeId: shiftTypeMatch.id, warnings: [...existingWarnings, noteText] as Prisma.InputJsonValue },
+      });
+      await writeAuditTx(tx, { actorUserId: params.actorUserId, tableName: "roster_upload_rows", rowId: row.id, action: "update", before: row, after, ip: params.ip });
+      result.updated.push(row.id);
+    }
+  });
+  return result;
+}
 
 /** 驗收 2026-09-23：PATCH `site_id`（人手指定盤）——之前淨係 update
  * siteId，如果目標盤呢個月已經有 active 上載，就會出現兩個 active v1。
