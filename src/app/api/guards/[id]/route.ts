@@ -10,7 +10,7 @@ import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { GuardUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { NotFound } from "@/lib/api/errors";
+import { NotFound, BadRequest } from "@/lib/api/errors";
 import {
   applyLegacyStaffNoPatch,
   writeStaffNumberAudits,
@@ -85,6 +85,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // assertBrokerNoLegacyStaffNoWrite() 頂註解。
     assertBrokerNoLegacyStaffNoWrite(isBrokerRole(session), body);
     const parsed = parseBody(GuardUpdateSchema, body);
+    // WP-GUARD-FIX（老闆 2026-09-25 要求）：別名唔可以等於「呢次 PATCH
+    // 之後嘅有效本名」——同一次 PATCH 可能一齊改咗 `name_zh`，要用嗰個
+    // 新值嚟比對，唔係就用 `before.nameZh`（見 schemas.ts `nameAliases`
+    // 大註解，呢層 schema 做唔到，要喺呢度做）。
+    if (parsed.name_aliases !== undefined) {
+      const effectiveNameZh = (parsed.name_zh ?? before.nameZh).trim();
+      if (parsed.name_aliases.some((a) => a === effectiveNameZh)) {
+        throw BadRequest(`別名唔可以同本名一樣：${effectiveNameZh}`);
+      }
+    }
     // WP-PII（Opus 驗收必修 2a）：前端編輯抽屜起草成個 form，撳「儲存」
     // 成個 form 一齊送——冇改嘅 field-group 受控欄（例如長工冇改月薪，
     // 但主管淨係改咗電話）唔算「想寫」，先由 body 度刪走，先至再

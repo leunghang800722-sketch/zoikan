@@ -303,6 +303,14 @@ model Guard {
   siaPermitExpiry DateTime?      @map("sia_permit_expiry") @db.Date
   poloSize        String?        @map("polo_size")
   mergedFrom      String[]       @default([]) @map("merged_from") // 身份合併留痕（舊 staff_no/id）
+  // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——更表姓
+  // 名格寫法可能同系統本名（`nameZh`）唔同（花名／簡寫／曾用名），
+  // `matchGuard()`（src/lib/roster-upload/match.ts）配對次序加咗「別名＋
+  // 電話」／「別名唯一」呢兩步，用呢個欄做候選。屬於「安員個人資料」
+  // PII field group（見 src/lib/api/field-groups.ts GUARD_PII_FIELDS），
+  // 雞頭 DTO（GUARD_BROKER_FIELDS，src/lib/broker-dto.ts）同 `ai.guards`
+  // view（明列欄位，冇加呢個）一律唔包。
+  nameAliases     String[]       @default([]) @map("name_aliases")
   status          ActiveStatus   @default(active)
 
   // WP-PII（老闆 2026-09-17 拍板）：保安員個人資料欄位——全部 nullable
@@ -757,6 +765,11 @@ model RosterUploadRow {
   // 上載本身嘅 site_id。
   resolvedSiteId String? @map("resolved_site_id")
   resolvedSite   Site?   @relation(fields: [resolvedSiteId], references: [id])
+  // WP-GUARD-FIX 驗收（Opus 5.5）：`resolved_site_id` 係對數頁人手「批量
+  // 指定子盤／全部歸母盤確認」揀嘅——`reparseRosterUpload()` 重建 rows
+  // 嗰陣要保留呢個決定（唔俾三層推斷覆蓋），見 migration
+  // 20260925130000_wp_guard_fix_resolved_site_manual。
+  resolvedSiteManual Boolean @default(false) @map("resolved_site_manual")
 
   staffNoRaw    String? @map("staff_no_raw")
   nameRaw       String? @map("name_raw")

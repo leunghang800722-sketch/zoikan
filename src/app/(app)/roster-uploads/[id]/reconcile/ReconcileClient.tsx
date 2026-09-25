@@ -110,6 +110,15 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
   const [siteNames, setSiteNames] = useState<Map<string, string>>(new Map());
   const [shiftTypeCodes, setShiftTypeCodes] = useState<Map<string, string>>(new Map());
   const [brokerCodes, setBrokerCodes] = useState<Map<string, string>>(new Map());
+  // WP-GUARD-FIX 第二輪（老闆 2026-09-25 要求）：「子盤未定」批量掣——
+  // `allSites` 全部盤（含 parent_site_id），`childSites` derive 出嚟淨係
+  // 呢個上載母盤（data.upload.site_id）底下嘅子盤，俾「批量指定子盤」
+  // 個下拉揀；`subSiteSelected` 記低用戶喺呢一輪剔選咗邊幾行（key 用
+  // row id，同 unresolved item.key 嘅 "row:" 前綴對應）。
+  const [allSites, setAllSites] = useState<Array<{ id: string; canonical_name: string; parent_site_id: string | null }>>([]);
+  const [subSiteSelected, setSubSiteSelected] = useState<Set<string>>(new Set());
+  const [subSiteTargetId, setSubSiteTargetId] = useState<string>("");
+  const [subSiteBusy, setSubSiteBusy] = useState(false);
 
   // key -> 用戶喺呢一輪揀咗嘅動作（未套用之前純前端狀態）。
   const [decisions, setDecisions] = useState<Map<string, { action: PendingAction; reason: string }>>(new Map());
@@ -136,16 +145,20 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadId, tab]);
 
+
   useEffect(() => {
     (async () => {
       const [guards, sites, shiftTypes, brokers] = await Promise.all([
         apiGet<ApiListResult<{ id: string; name_zh: string }>>("/api/guards?take=500"),
-        apiGet<ApiListResult<{ id: string; canonical_name: string }>>("/api/sites?take=500"),
+        apiGet<ApiListResult<{ id: string; canonical_name: string; parent_site_id: string | null }>>("/api/sites?take=500"),
         apiGet<ApiListResult<{ id: string; code: string }>>("/api/shift-types?take=500"),
         apiGet<ApiListResult<{ id: string; code: string }>>("/api/brokers?take=500"),
       ]);
       if (guards.ok) setGuardNames(new Map(guards.data.rows.map((g) => [g.id, g.name_zh])));
-      if (sites.ok) setSiteNames(new Map(sites.data.rows.map((s) => [s.id, s.canonical_name])));
+      if (sites.ok) {
+        setSiteNames(new Map(sites.data.rows.map((s) => [s.id, s.canonical_name])));
+        setAllSites(sites.data.rows);
+      }
       if (shiftTypes.ok) setShiftTypeCodes(new Map(shiftTypes.data.rows.map((s) => [s.id, s.code])));
       if (brokers.ok) setBrokerCodes(new Map(brokers.data.rows.map((b) => [b.id, b.code])));
     })();
@@ -188,6 +201,53 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
     for (const p of pendingList) c[p.action] += 1;
     return c;
   }, [pendingList]);
+
+  // WP-GUARD-FIX 第二輪：呢個上載母盤底下嘅子盤（`批量指定子盤` 下拉）。
+  const childSites = useMemo(() => {
+    const parentSiteId = data?.upload.site_id;
+    if (!parentSiteId) return [];
+    return allSites.filter((s) => s.parent_site_id === parentSiteId);
+  }, [allSites, data?.upload.site_id]);
+
+  // WP-GUARD-FIX 第二輪：「子盤未定」——`build-guard-fix-plan` 第二輪
+  // 三層推斷（同檔／歷史）都冧唔到，留 `resolved_site_id=null` 嗰批行，
+  // 用 unresolved_reason 嘅 marker 分辨（同 reconcile.ts
+  // `AMBIGUOUS_SUBSITE_WARNING_PREFIX` 一致字面，見 service.ts）。
+  function isSubSiteAmbiguous(item: ReconcileItemDto): boolean {
+    return item.category === "unresolved" && !!item.unresolved_reason?.includes("批量指定子盤");
+  }
+  function rowIdFromKey(key: string): string {
+    return key.startsWith("row:") ? key.slice(4) : key;
+  }
+  function toggleSubSiteSelected(rowId: string) {
+    setSubSiteSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
+  async function applySubSiteBulk(siteId: string | null) {
+    if (subSiteSelected.size === 0) return;
+    setSubSiteBusy(true);
+    const res = await apiPost<{ updated: string[]; skipped: Array<{ row_id: string; reason: string }> }>(`/api/roster-uploads/${uploadId}/reconcile/resolve-subsite`, {
+      row_ids: [...subSiteSelected],
+      site_id: siteId,
+    });
+    setSubSiteBusy(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    setSubSiteSelected(new Set());
+    setSubSiteTargetId("");
+    if (res.data.skipped.length > 0) {
+      setError(`${res.data.skipped.length} 行跳過（可能已經被人手指定過）：${res.data.skipped.map((s) => s.reason).join("；")}`);
+    } else {
+      setNotice(`已${siteId ? "批量指定子盤" : "批量確認歸母盤"} ${res.data.updated.length} 行`);
+    }
+    await load();
+  }
 
   async function doApply() {
     if (pendingList.length === 0) return;
@@ -276,6 +336,35 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
         )}
       </div>
 
+      {/* WP-GUARD-FIX 第二輪（老闆 2026-09-25 要求）：「子盤未定」批量
+          指定子盤／全部歸母盤確認——淨係喺揀咗至少一行先出嚟。 */}
+      {!locked && subSiteSelected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2">
+          <span className="text-[12.5px] text-orange-800">已揀 {subSiteSelected.size} 行「子盤未定」</span>
+          <select
+            value={subSiteTargetId}
+            onChange={(e) => setSubSiteTargetId(e.target.value)}
+            className="rounded-[5px] border border-zk-border px-1.5 py-[4px] text-[12.5px]"
+          >
+            <option value="">揀子盤…</option>
+            {childSites.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.canonical_name}
+              </option>
+            ))}
+          </select>
+          <Button variant="secondary" disabled={!subSiteTargetId || subSiteBusy} onClick={() => applySubSiteBulk(subSiteTargetId)}>
+            批量指定子盤
+          </Button>
+          <Button variant="secondary" disabled={subSiteBusy} onClick={() => applySubSiteBulk(null)}>
+            全部歸母盤確認
+          </Button>
+          <button type="button" className="text-[11px] text-zk-faint underline" onClick={() => setSubSiteSelected(new Set())}>
+            清除選取
+          </button>
+        </div>
+      )}
+
       <div className={`hidden md:block ${tableCls.wrap}`}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(8) }}>
           <thead>
@@ -345,7 +434,18 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
                       // 要 confirmed，即係一格真係配唔到（例如外判／唔喺名冊
                       // 嘅人）就永遠卡死。後端本身接受 exception，呢度開返。
                       <div className="flex flex-col gap-1">
-                        <span className="text-[11px] text-zk-muted">先去上載列表頁指定盤／別名再重新解析；確認唔使寫入就標「例外」</span>
+                        {isSubSiteAmbiguous(item) ? (
+                          <label className="flex items-center gap-1.5 text-[11.5px] text-orange-800">
+                            <input
+                              type="checkbox"
+                              checked={subSiteSelected.has(rowIdFromKey(item.key))}
+                              onChange={() => toggleSubSiteSelected(rowIdFromKey(item.key))}
+                            />
+                            子盤未定——剔選後用上面「批量指定子盤」／「全部歸母盤確認」
+                          </label>
+                        ) : (
+                          <span className="text-[11px] text-zk-muted">先去上載列表頁指定盤／別名再重新解析；確認唔使寫入就標「例外」</span>
+                        )}
                         <div className="flex flex-wrap gap-1">
                           <button
                             type="button"
@@ -446,6 +546,12 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
                 系統：{item.system ? `${nameOrId(guardNames, item.system.guard_id)}（${item.system.settlement_broker_id ? nameOrId(brokerCodes, item.system.settlement_broker_id) : "冇結算單位"}・${SOURCE_LABEL[item.system.source ?? ""] ?? "未標記"}）` : "—"}
               </div>
               {item.unresolved_reason && <div className="mt-1 text-[11px] text-red-600">{item.unresolved_reason}</div>}
+              {!locked && isSubSiteAmbiguous(item) && (
+                <label className="mt-1 flex items-center gap-1.5 text-[11.5px] text-orange-800">
+                  <input type="checkbox" checked={subSiteSelected.has(rowIdFromKey(item.key))} onChange={() => toggleSubSiteSelected(rowIdFromKey(item.key))} />
+                  子盤未定——剔選後用上面「批量指定子盤」／「全部歸母盤確認」
+                </label>
+              )}
               {!locked && item.category !== "match" && (
                 <div className="mt-2 flex flex-col gap-1">
                   <div className="flex flex-wrap gap-1">

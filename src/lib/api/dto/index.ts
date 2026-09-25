@@ -88,6 +88,10 @@ const GUARD_FIELDS = [
   "bankPayeeName",
   "blacklistCheckResult",
   "blacklistCheckDate",
+  // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——屬於
+  // 「安員個人資料」field group（見 field-groups.ts GUARD_PII_FIELDS），
+  // 雞頭 DTO（GUARD_BROKER_FIELDS，broker-dto.ts）刻意唔加。
+  "nameAliases",
   "staffNumbers",
   // S7：`?q=` 搜尋命中已取消（former）工號嗰陣先會有呢粒 key（見
   // src/app/api/guards/route.ts findNumberSearchMatches()）——前端標

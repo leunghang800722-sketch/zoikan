@@ -391,6 +391,10 @@ export interface GuardMatchResult {
    * `guardMatch` 落 `ambiguous`（唔可以直接當呢個號一定係嗰個人）；呢
    * 個 flag 令 call site 加「工號屬另一人」warning。 */
   staffNoBelongsToOther: boolean;
+  /** WP-GUARD-FIX（老闆 2026-09-25 要求）：呢格淨係靠「別名＋電話」或者
+   * 「別名唯一」（`guards.name_aliases`）先配到——`service.ts` 用嚟加
+   * 「由別名配對」warning，等會計知呢個人個本名同更表寫嘅唔同。 */
+  matchedViaAlias: boolean;
 }
 
 export interface GuardCandidate {
@@ -414,6 +418,13 @@ export interface GuardMatchIndex {
   /** 姓名+正規化電話 → 呢個組合嘅全部 guardId（同時比對 `guards.tel`
    * 同 `guard_phones`——任何一個電話啱都算）。 */
   byNameAndTel: ReadonlyMap<string, readonly string[]>;
+  /** WP-GUARD-FIX：別名（`guards.name_aliases`，每個 guard 可以有幾個）
+   * → 呢個別名嘅全部 guardId（同名／同別名可以撞多過一個，交俾 caller
+   * 判斷 ambiguous）。 */
+  byAlias: ReadonlyMap<string, readonly string[]>;
+  /** WP-GUARD-FIX：別名+正規化電話 → 呢個組合嘅全部 guardId（同
+   * `byNameAndTel` 一致做法，電話比對埋 `guards.tel`／`guard_phones`）。 */
+  byAliasAndTel: ReadonlyMap<string, readonly string[]>;
   /** guardId → 現用（或者已取消 fallback）嘅 U 號顯示值（`guards.
    * staff_no`）——(a)「檔案工號 X 同系統工號 Y 唔一致」warning 用嚟攞
    * Y。 */
@@ -421,6 +432,12 @@ export interface GuardMatchIndex {
   /** guardId → `name_zh`（trim）——B1-8 第 3 項：staff_no 命中之後要同
    * 呢行嘅 `name_raw` 對一對，唔夾就「唔准配」。 */
   nameByGuardId: ReadonlyMap<string, string>;
+  /** WP-GUARD-FIX（實測揭發）：guardId → `name_aliases`——B1-8 第 3 項嘅
+   * 「唔夾」比對唔可以淨係睇 `nameByGuardId`（本名）：一個安員嘅工號
+   * 喺呢行入面可能係啱嘅，但更表寫嘅係佢個別名（唔係本名），淨係比
+   * 本名會誤判「工號屬另一人」。加呢個 map 之後，`matchGuard()` 嘅
+   * B1-8 比對會本名／別名都試，有一個啱就唔算「唔夾」。 */
+  aliasesByGuardId: ReadonlyMap<string, readonly string[]>;
 }
 
 function nameTelKey(name: string, tel: string): string {
@@ -428,7 +445,10 @@ function nameTelKey(name: string, tel: string): string {
 }
 
 export function buildGuardMatchIndex(rows: {
-  guards: readonly (GuardCandidate & { tel: string | null; staffNo: string | null; staffNoMw: string | null })[];
+  // WP-GUARD-FIX：`nameAliases` 做 optional——舊 call site（例如
+  // scripts/opening/build-aug-plan.ts，7 月開賬未有呢個欄嘅概念）唔傳都
+  // 得，當冇別名（`[]`），唔影響原有工號／姓名／電話配對行為。
+  guards: readonly (GuardCandidate & { tel: string | null; staffNo: string | null; staffNoMw: string | null; nameAliases?: readonly string[] })[];
   staffNumbers: readonly { number: string; guardId: string; status: string }[];
   phones: readonly { guardId: string; tel: string }[];
 }): GuardMatchIndex {
@@ -438,15 +458,19 @@ export function buildGuardMatchIndex(rows: {
   const byLegacyStaffNo = new Map<string, string>();
   const staffNoByGuardId = new Map<string, string | null>();
   const nameByGuardId = new Map<string, string>();
+  const aliasesByGuardId = new Map<string, readonly string[]>();
   for (const g of rows.guards) {
     staffNoByGuardId.set(g.id, g.staffNo);
     nameByGuardId.set(g.id, g.nameZh.trim());
+    aliasesByGuardId.set(g.id, g.nameAliases ?? []);
     if (g.staffNo) byLegacyStaffNo.set(normalizeStaffNumber(g.staffNo), g.id);
     if (g.staffNoMw) byLegacyStaffNo.set(normalizeStaffNumber(g.staffNoMw), g.id);
   }
 
   const byName = new Map<string, string[]>();
   const byNameAndTel = new Map<string, string[]>();
+  const byAlias = new Map<string, string[]>();
+  const byAliasAndTel = new Map<string, string[]>();
   const telsByGuard = new Map<string, Set<string>>();
   for (const p of rows.phones) {
     if (!telsByGuard.has(p.guardId)) telsByGuard.set(p.guardId, new Set());
@@ -464,20 +488,54 @@ export function buildGuardMatchIndex(rows: {
       if (!byNameAndTel.has(key)) byNameAndTel.set(key, []);
       byNameAndTel.get(key)!.push(g.id);
     }
+
+    // WP-GUARD-FIX：逐個別名一樣起 byAlias／byAliasAndTel——去空白、去
+    // 重複（`nameAliasesSchema`，src/lib/api/schemas.ts，寫入嗰陣已經做
+    // 咗，呢度 `.trim()` 純粹防禦性，唔信賴上游一定乾淨）。
+    for (const rawAlias of g.nameAliases ?? []) {
+      const alias = rawAlias.trim();
+      if (!alias) continue;
+      if (!byAlias.has(alias)) byAlias.set(alias, []);
+      byAlias.get(alias)!.push(g.id);
+      for (const tel of tels) {
+        const key = nameTelKey(alias, tel);
+        if (!byAliasAndTel.has(key)) byAliasAndTel.set(key, []);
+        byAliasAndTel.get(key)!.push(g.id);
+      }
+    }
   }
 
-  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, staffNoByGuardId, nameByGuardId };
+  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId };
 }
 
-/** 安員配對：先 staff_no_raw（正規化，含已取消號——`byStaffNumber` 索引
- * 唔分 current/former，舊號都要搵到返個人），再 name＋tel，再淨靠
- * name（多於一個候選→ambiguous）。「唔准估」：淨係喺剩返一個候選先當
- * 啱，唔會揀「最似」嗰個。
+/** 安員配對次序（WP-GUARD-FIX 老闆 2026-09-25 要求擴充）：
+ *   (1) staff_no_raw（正規化，含已取消號——`byStaffNumber` 索引唔分
+ *       current/former，舊號都要搵到返個人）；
+ *   (2) 姓名／別名＋電話（`guards.name_aliases`——更表寫嘅可能係花名／
+ *       曾用名；驗收 Opus 5.5：本名同別名候選合埋計）；
+ *   (3) 姓名／別名唯一（合埋多於一個候選→ambiguous）。
+ * 「唔准估」：每一步淨係喺剩返一個候選先當啱，唔會揀「最似」嗰個。
  *
  * Phase B-0：加埋 (a)/(b) 兩個 flag（見 `GuardMatchResult` 註解）——
  * (b) staff_no 命中但嗰行 `status==='former'`；(a) 檔案帶咗 staff_no
  * 但完全搵唔到（current／former／legacy 三路都冇），退用姓名／電話先
- * 配到人。 */
+ * 配到人。WP-GUARD-FIX：加埋 `matchedViaAlias` flag——(2b)/(3b) 呢兩步
+ * 配到就係 true，`guard_match` 本身唔加新值（跟返「二揀一」慣例），
+ * `service.ts` 用嚟加「由別名配對」warning。 */
+/** B1-8 第 3 項嘅「呢行姓名同工號嗰個人夾唔夾」比對——WP-GUARD-FIX 實測
+ * 揭發：淨係比本名（`nameByGuardId`）唔夠，一個安員嘅工號登記啱，但更
+ * 表寫嘅係佢個別名（`name_aliases`）——例如 `link` 個案：呢個人本身喺
+ * DB 已經有正確嘅 U 號＋別名，但更表呢一行嘅 `name_raw` 用緊個別名，
+ * 冇呢層會誤判「工號屬另一人」（`staffNoBelongsToOther`），令一個本身
+ * 已經配對好嘅人重新跌返做 ambiguous。本名／別名有一個啱就當夾。 */
+type NameMatchKind = "name" | "alias" | "none";
+function rowNameMatchesGuard(rowName: string, guardId: string, index: GuardMatchIndex): NameMatchKind {
+  const systemName = index.nameByGuardId.get(guardId);
+  if (systemName && rowName === systemName) return "name";
+  const aliases = index.aliasesByGuardId.get(guardId) ?? [];
+  return aliases.includes(rowName) ? "alias" : "none";
+}
+
 export function matchGuard(
   params: { staffNoRaw: string | null; nameRaw: string | null; telRaw: string | null },
   index: GuardMatchIndex,
@@ -490,21 +548,29 @@ export function matchGuard(
       const viaNumber = index.byStaffNumber.get(normalized);
       if (viaNumber) {
         // B1-8 第 3 項：staff_no 命中真實存在嘅安員，但呢行姓名同嗰個
-        // 人唔夾——「唔准配」，退返 ambiguous，唔會靜靜當呢個號一定係
-        // 嗰個人（`rowName` 冇值就冇得比對，維持舊行為信 staff_no）。
-        const systemName = index.nameByGuardId.get(viaNumber.guardId);
-        if (rowName && systemName && rowName !== systemName) {
-          return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: true };
+        // 人唔夾（本名／別名都唔夾，見 `rowNameMatchesGuard()`）——
+        // 「唔准配」，退返 ambiguous，唔會靜靜當呢個號一定係嗰個人
+        // （`rowName` 冇值就冇得比對，維持舊行為信 staff_no）。
+        const nameMatchKind = rowName ? rowNameMatchesGuard(rowName, viaNumber.guardId, index) : "name";
+        if (rowName && nameMatchKind === "none") {
+          return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: true, matchedViaAlias: false };
         }
-        return { guardId: viaNumber.guardId, guardMatch: "by_staff_no", matchedViaFormerStaffNo: viaNumber.status === "former", staffNoMismatch: false, staffNoBelongsToOther: false };
+        return {
+          guardId: viaNumber.guardId,
+          guardMatch: "by_staff_no",
+          matchedViaFormerStaffNo: viaNumber.status === "former",
+          staffNoMismatch: false,
+          staffNoBelongsToOther: false,
+          matchedViaAlias: nameMatchKind === "alias",
+        };
       }
       const viaLegacy = index.byLegacyStaffNo.get(normalized);
       if (viaLegacy) {
-        const systemName = index.nameByGuardId.get(viaLegacy);
-        if (rowName && systemName && rowName !== systemName) {
-          return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: true };
+        const nameMatchKind = rowName ? rowNameMatchesGuard(rowName, viaLegacy, index) : "name";
+        if (rowName && nameMatchKind === "none") {
+          return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: true, matchedViaAlias: false };
         }
-        return { guardId: viaLegacy, guardMatch: "by_staff_no", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
+        return { guardId: viaLegacy, guardMatch: "by_staff_no", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: nameMatchKind === "alias" };
       }
       staffNoProvidedButNotFound = true;
     }
@@ -513,21 +579,31 @@ export function matchGuard(
   const name = rowName;
   const tel = params.telRaw ? normalizeTel(params.telRaw) : null;
 
+  // WP-GUARD-FIX 驗收（Opus 5.5）：(2)/(2b) 同 (3)/(3b) 改做「本名∪別名」
+  // 一齊計候選——之前本名步驟先行、命中一個就即刻返回，如果 A 嘅別名
+  // 啱啱等於 B 嘅本名（例如兩個同名人，其中一個用別名登記），更表寫呢
+  // 個名嘅行會靜靜配咗俾 B，完全唔理 A；而家兩邊合埋多過一個人就
+  // ambiguous（唔准估）。淨係靠別名命中先標 `matchedViaAlias`。
   if (name && tel) {
-    const candidates = index.byNameAndTel.get(nameTelKey(name, tel)) ?? [];
+    const key = nameTelKey(name, tel);
+    const viaName = index.byNameAndTel.get(key) ?? [];
+    const viaAlias = index.byAliasAndTel.get(key) ?? [];
+    const candidates = [...new Set([...viaName, ...viaAlias])];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false };
+      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!) };
     }
-    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
+    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
   }
 
   if (name) {
-    const candidates = index.byName.get(name) ?? [];
+    const viaName = index.byName.get(name) ?? [];
+    const viaAlias = index.byAlias.get(name) ?? [];
+    const candidates = [...new Set([...viaName, ...viaAlias])];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false };
+      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!) };
     }
-    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
+    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
   }
 
-  return { guardId: null, guardMatch: "unmatched", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false };
+  return { guardId: null, guardMatch: "unmatched", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
 }

@@ -50,6 +50,12 @@ export function buildUnresolvedKey(rowId: string): string {
   return `row:${rowId}`;
 }
 
+// WP-GUARD-FIX 第二輪：`matchRowsAndSummarize()`（service.ts）逐行子盤
+// 歷史推斷撞到「多過一個候選」嗰陣加落 `warnings` 嘅 marker 前綴——用嚟
+// 分辨「刻意留空、要人手揀」嘅 null 同「舊上載未 reparse」嘅 null（見
+// `loadReconcileInput()`）。兩邊要用同一份字面，改一邊要記得改埋另一邊。
+export const AMBIGUOUS_SUBSITE_WARNING_PREFIX = "子盤未定，歷史候選";
+
 export interface ReconcileRosterEntry {
   rowId: string;
   workDate: string; // YYYY-MM-DD
@@ -227,7 +233,19 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
   // ＝子盤對唔到（或者 B-0 之前上載、未 reparse）——唔准靜靜跌返母盤
   // （之前實測：leave 格會用母盤嘅時段推斷更別、寫入母盤），一律 null
   // → unresolved。
-  const rowsWithEffectiveSite = rows.map((r) => ({ ...r, effectiveSiteId: r.resolvedSiteId ?? (r.subSiteName ? null : upload.siteId) }));
+  //
+  // WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）：`resolved_site_id`
+  // 同 `sub_site_name` 都係 null 仲有第二種可能——`matchRowsAndSummarize()`
+  // 歷史推斷撞到「多過一個候選」，刻意留 null 唔准估，交呢度對數頁人手
+  // 揀（`AMBIGUOUS_SUBSITE_WARNING_PREFIX` 呢個 marker 就係嗰種 null，
+  // 同「舊上載未 reparse」嘅 null 唔同——後者要靜靜跌返母盤，前者一定要
+  // 入 unresolved，唔可以裝作「已經歸咗母盤」）。
+  const rowsWithEffectiveSite = rows.map((r) => {
+    const warningsArr = Array.isArray(r.warnings) ? (r.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
+    const subSiteAmbiguous = !r.resolvedSiteId && !r.subSiteName && warningsArr.some((w) => w.startsWith(AMBIGUOUS_SUBSITE_WARNING_PREFIX));
+    const effectiveSiteId = r.resolvedSiteId ?? (r.subSiteName || subSiteAmbiguous ? null : upload.siteId);
+    return { ...r, effectiveSiteId, subSiteAmbiguous };
+  });
   const uploadMonthPrefix = toDateStr(toMonthStart(upload.month)).slice(0, 7);
 
   const effectiveSiteIds = [...new Set(rowsWithEffectiveSite.map((r) => r.effectiveSiteId).filter((v): v is string => v !== null))];
@@ -254,7 +272,13 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
     const workDate = toDateStr(r.workDate);
     const reasons: string[] = [];
     if (!r.effectiveSiteId) {
-      reasons.push(r.subSiteName && upload.siteId ? `子盤「${r.subSiteName}」對唔到（或者未 reparse），請先喺「盤」管理掛好子盤再重新解析` : "上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤");
+      if (r.subSiteAmbiguous) {
+        reasons.push("子盤未定，歷史紀錄有多過一個候選，人手覆核並批量指定子盤（或者確認歸母盤）");
+      } else if (r.subSiteName && upload.siteId) {
+        reasons.push(`子盤「${r.subSiteName}」對唔到（或者未 reparse），請先喺「盤」管理掛好子盤再重新解析`);
+      } else {
+        reasons.push("上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤");
+      }
     }
     // 驗收修正（Opus 5.5）：格仔日期唔係上載月份——唔准寫入（之前實測會
     // 寫入另一個月，包括已鎖定月份：assertMonthNotLocked 淨係 check 上載

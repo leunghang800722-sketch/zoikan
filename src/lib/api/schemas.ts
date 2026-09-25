@@ -89,6 +89,30 @@ const BLACKLIST_CHECK_RESULTS = ["clear", "flagged", "pending"] as const;
 const blacklistCheckResult = z.enum(BLACKLIST_CHECK_RESULTS).optional();
 const uuid = z.string().min(1);
 
+// WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——更表姓名
+// 格寫法可能同系統本名唔同（花名／簡寫／曾用名），`matchGuard()` 而家
+// 加多一層用呢個欄配對（見 src/lib/roster-upload/match.ts）。淨係 PATCH
+// 接受（同 hkid 等 PII 欄一致，新增時未必已知有咩別名）；去空白＋去重複
+// （保留原文大小寫，唔轉形，因為中文名冇大細楷可轉）；「唔可以等於本名」
+// 呢個檢查要對住「呢次 PATCH 之後嘅有效本名」（可能同一次 PATCH 改埋
+// `name_zh`），schema 呢層做唔到（冧唔到 `before.nameZh`），留返
+// route.ts 做（見 guards/[id]/route.ts `assertAliasesDoNotMatchOwnName()`）。
+const nameAliases = z
+  .array(z.string())
+  .optional()
+  .transform((arr) => {
+    if (arr === undefined) return undefined;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of arr) {
+      const v = raw.trim();
+      if (!v || seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+    return out;
+  });
+
 // ---------------------------------------------------------------------------
 export const BrokerCreateSchema = z
   .object({
@@ -256,6 +280,8 @@ export const GuardUpdateSchema = z
     // 應修 2：同 `date_of_birth` 一致，DB 欄 nullable，改用
     // `nullableDateOnly` 等 `null` 清得走。
     blacklist_check_date: nullableDateOnly,
+    // WP-GUARD-FIX：見上面 `nameAliases` 定義。
+    name_aliases: nameAliases,
   })
   .strict();
 
@@ -747,5 +773,16 @@ export const RosterReconcileApplySchema = z
       )
       .min(1)
       .max(2000),
+  })
+  .strict();
+
+// WP-GUARD-FIX 第二輪（老闆 2026-09-25 要求）：`POST /api/roster-uploads/
+// :id/reconcile/resolve-subsite`——對數頁「批量指定子盤」／「全部歸母盤
+// 確認」。`site_id=null`＝全部歸母盤確認；非 null＝批量指定嗰個子盤（要
+// 係呢個上載母盤嘅子盤，service 層 `bulkResolveAmbiguousSubSite()` 驗）。
+export const RosterReconcileResolveSubSiteSchema = z
+  .object({
+    row_ids: z.array(z.string().min(1)).min(1).max(2000),
+    site_id: z.union([z.string().min(1), z.null()]),
   })
   .strict();
