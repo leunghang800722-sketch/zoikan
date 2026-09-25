@@ -19,6 +19,7 @@ import { PrismaClient } from "@prisma/client";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import path from "path";
 import { processRosterUpload } from "@/lib/roster-upload/service";
+import { matchSiteByFileName } from "@/lib/roster-upload/match";
 import { normalizeTimeRange } from "@/lib/roster-upload/time-range";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards } from "@/lib/pricing/resolve-rate";
 import { loadPriceSiteTimeBroker, loadPriceOverrides } from "./lib/sources";
@@ -402,6 +403,37 @@ async function verifyControlRoomMixedBilling(): Promise<void> {
   console.log(`  控制室組：${ok ? "✓ 一致" : "✗ 唔一致"}`);
 }
 
+/** Opus 5.5 驗收（WP-UPLOAD-AUTOFIX）：唯讀（正式站都可以跑）——
+ *   (1) 36 個 8 月檔名逐個用 `matchSiteByFileName()`（同上載一樣嘅檔名
+ *       鍵比對）：「CTB 6907」檔要配去「創富廠IC」，其餘 35 檔唔准中任何
+ *       鍵（防 migration backfill 喺正式站因盤名唔同而 0 行、或者有鍵誤中）；
+ *   (2) 控制室 8 月月薪崗 guard 級 $0 卡要啱好 1 張（build 印「要人手」
+ *       嘅話呢度會係 0）。唔印檔名（有人名）、唔印安員。 */
+async function verifyUploadAutofix(): Promise<void> {
+  console.log("\n----- (b-補3) WP-UPLOAD-AUTOFIX：檔名鍵＋控制室 guard 級卡（唯讀）-----");
+  const sites = await prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, rosterFileKeys: true } });
+  const nameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
+  if (!existsSync(AUG_ROSTERS_DIR)) {
+    console.log(`  搵唔到 ${AUG_ROSTERS_DIR}，檔名鍵部分 skip。`);
+  } else {
+    const files = readdirSync(AUG_ROSTERS_DIR).filter((f) => f.endsWith(".xlsx")).sort();
+    let ctbOk = false;
+    let wrongHits = 0;
+    files.forEach((f) => {
+      const hit = matchSiteByFileName(f, sites);
+      const isCtb = /CTB\s*6907/i.test(f.normalize("NFKC"));
+      if (isCtb) ctbOk = hit !== null && nameById.get(hit) === "創富廠IC";
+      else if (hit !== null) wrongHits++;
+    });
+    console.log(`  檔名鍵：「CTB 6907」檔 → ${ctbOk ? "創富廠IC ✓" : "✗ 冇配到創富廠IC（檢查盤管理頁「創富廠IC」嘅更表檔名鍵）"}；其餘 ${files.length - 1} 檔誤中鍵：${wrongHits}${wrongHits === 0 ? " ✓" : " ✗"}`);
+  }
+  const cr = await prisma.site.findUnique({ where: { canonicalName: "控制室" } });
+  const guardCards = cr
+    ? await prisma.rateCard.count({ where: { siteId: cr.id, guardId: { not: null }, clientRate: 0, effectiveFrom: MONTH, voidedAt: null } })
+    : 0;
+  console.log(`  控制室月薪崗 guard 級 $0 卡：${guardCards} 張${guardCards === 1 ? " ✓" : " ✗（build 應該印咗「控制室－WP-UPLOAD-AUTOFIX……要人手」，交返規劃）"}`);
+}
+
 /**
  * WP-MIXED-BILLING（老闆 2026-09-24 批准嘅唯一 7 月卡改動）：兩張 7 月
  * 特殊卡加 effective_to=2026-07-31 之後，7 月定价唔可以有任何變化——
@@ -635,6 +667,7 @@ async function main() {
     await verifyPricing();
     await verifyPersonOverrides();
     await verifyControlRoomMixedBilling();
+    await verifyUploadAutofix();
     await verifyOtCard();
     await verifyJulyCardsUnaffected();
     if (WITH_UPLOADS) await verifyCells(uploadIds);

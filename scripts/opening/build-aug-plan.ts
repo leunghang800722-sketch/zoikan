@@ -37,6 +37,7 @@ import {
 } from "./lib/sources";
 import { MIXED_BILLING_SITES, siteHasFlatRevenue } from "./lib/mixed-billing-sites";
 import type { AugPlan, NewSitePlan, SiteAliasUpdatePlan, NewRateCardPlan, RateCardCloseJulyPlan } from "./lib/types";
+import { buildGuardMatchIndex, matchGuard } from "@/lib/roster-upload/match";
 
 const prisma = new PrismaClient();
 
@@ -683,7 +684,7 @@ async function main() {
   type CardKey = string;
   const cardSeen = new Set<CardKey>();
   function pushCard(c: NewRateCardPlan) {
-    const key = `${c.siteCanonicalName}|${c.shiftType ? `${c.shiftType.code}@${c.shiftType.startTime}-${c.shiftType.endTime}` : "flat"}|${c.brokerCode ?? "-"}|${c.guardStaffNo ?? "-"}|${c.clientRate ?? "-"}|${c.guardWage ?? "-"}|${c.brokerFee ?? "-"}`;
+    const key = `${c.siteCanonicalName}|${c.shiftType ? `${c.shiftType.code}@${c.shiftType.startTime}-${c.shiftType.endTime}` : "flat"}|${c.brokerCode ?? "-"}|${c.guardStaffNo ?? c.guardId ?? "-"}|${c.clientRate ?? "-"}|${c.guardWage ?? "-"}|${c.brokerFee ?? "-"}`;
     if (cardSeen.has(key)) return;
     cardSeen.add(key);
     plan.rateCards.create.push(c);
@@ -1063,11 +1064,17 @@ async function main() {
       //        控制室兩個價」核實過：A 月費 $20,000／收客 22,000／25
       //        更，B 日薪 $800／收客 840／22 更）。
       //     2. Wilson Control 檔（records.jsonl，只可以 runtime 讀，唔入
-      //        git）逐 staff_no 數代號「N」出現次數，邊個 U 號啱好等於
-      //        呢個「25」就係月薪崗安員——U 號／姓名淨係存喺 gitignored
-      //        plan.json，呢個 script 同 plan-summary.md 唔印。
-      //     3. 搵唔到（DB 冇呢個 U 號、或者呢個盤唔啱好兩個人）→
-      //        needsBossReview「要人手」，唔建卡（唔准估）。
+      //        git）逐人（U 號；冇 U 號用姓名＋電話）數代號「N」出現次
+      //        數，啱好等於呢個「25」嘅就係月薪崗安員。
+      //     3. 安員查找（Opus 5.5 驗收加後備）：用同更表上載一樣嘅
+      //        `matchGuard()`——U 號 → 姓名＋電話（guard_phones／legacy
+      //        tel）→ DB 唯一同名；plan.json 記低 `guardMatchMethod`。U 號
+      //        喺 guard_staff_numbers 有就用 `guardStaffNo`，否則記
+      //        `guardId`（build→apply 同一個 DB）。U 號／姓名／guardId 淨
+      //        係存喺 gitignored plan.json，console 同 plan-summary.md 唔印。
+      //     4. 搵唔到（唔啱好一個人夠 25 更、三種方法都對唔到唯一安員、或
+      //        者月薪崗同日薪崗配去同一個安員）→ needsBossReview「要人手」，
+      //        唔建卡（唔准估）。
       // -------------------------------------------------------------------
       {
         const siteCode = Object.entries(SITE_CODE_MAP).find(([, res]) => res.kind === "existing" && res.canonicalName === "控制室")?.[0];
@@ -1080,38 +1087,78 @@ async function main() {
           );
         } else {
           const monthlyShiftCount = monthlyPostEntry[1];
+          // Opus 5.5 驗收：逐「人」數（有 U 號用 U 號，冇就用 姓名＋電話），
+          // 唔再假設每格一定有 U 號。
+          const personKey = (r: RosterRecord) => (r.staff_no ? `sn:${r.staff_no}` : `nt:${r.name ?? ""}|${r.tel ?? ""}`);
+          const crRecords = records.filter((r) => r.site_raw === "Wilson Control" && r.code_raw === dayWageShiftType.code && (r.staff_no || r.name));
           const staffCounts = new Map<string, number>();
-          for (const r of records) {
-            if (r.site_raw !== "Wilson Control" || r.code_raw !== dayWageShiftType.code || !r.staff_no) continue;
-            staffCounts.set(r.staff_no, (staffCounts.get(r.staff_no) ?? 0) + 1);
+          const firstRecord = new Map<string, RosterRecord>();
+          for (const r of crRecords) {
+            const k = personKey(r);
+            staffCounts.set(k, (staffCounts.get(k) ?? 0) + 1);
+            if (!firstRecord.has(k)) firstRecord.set(k, r);
           }
-          const monthlyStaffNos = [...staffCounts.entries()].filter(([, n]) => n === monthlyShiftCount).map(([sn]) => sn);
-          if (monthlyStaffNos.length !== 1) {
+          const monthlyKeys = [...staffCounts.entries()].filter(([, n]) => n === monthlyShiftCount).map(([k]) => k);
+          if (monthlyKeys.length !== 1) {
             plan.needsBossReview.push(
-              `【控制室－WP-UPLOAD-AUTOFIX】Wilson Control 檔逐 U 號數「${dayWageShiftType.code}」更數，冚中「${monthlyShiftCount}」更（月薪崗，pstb 已知）嘅 U 號有 ${monthlyStaffNos.length} 個（要求啱好 1 個）——搞唔清邊位，冇建 guard 級卡，維持人手分流。`,
-            );
-          } else if (!db.staffNumbers.has(monthlyStaffNos[0]!)) {
-            plan.needsBossReview.push(
-              "【控制室－WP-UPLOAD-AUTOFIX】Wilson Control 檔反推嘅月薪崗安員 U 號，dev DB 搵唔到（未 seed 呢位／U 號已變）——冇建 guard 級卡，要人手覆核，或者喺更表編輯器手動將呢位安員嗰啲更改做「N-IC」。",
+              `【控制室－WP-UPLOAD-AUTOFIX】Wilson Control 檔逐人數「${dayWageShiftType.code}」更數，冚中「${monthlyShiftCount}」更（月薪崗，pstb 已知）嘅人有 ${monthlyKeys.length} 個（要求啱好 1 個）——搞唔清邊位，冇建 guard 級卡，要人手覆核（或者喺更表編輯器將月薪崗嗰位嘅更改做「${monthlyIcCode}」）。`,
             );
           } else {
-            pushCard({
-              siteCanonicalName: "控制室",
-              shiftType: { code: dayWageShiftType.code, startTime: dayWageShiftType.startTime, endTime: dayWageShiftType.endTime },
-              brokerCode: "Y",
-              guardStaffNo: monthlyStaffNos[0]!,
-              clientRate: 0,
-              guardWage: 800,
-              brokerFee: null,
-              billingModel: "per_shift",
-              effectiveFrom: EFFECTIVE_FROM,
-              source: "aug-opening:控制室 WP-UPLOAD-AUTOFIX 月薪崗安員專屬卡（records.jsonl 逐 U 號更數反推，pstb S031|1930-0730|Y 核實）",
-              note: "控制室月薪崗（收客包喺 22,000 月費，老闆 2026-09-24 (a)）",
-              level: "site_shift_guard",
-            });
-            plan.needsBossReview.push(
-              `【控制室－WP-UPLOAD-AUTOFIX——已自動化，1 位】已起咗一張 guard 級卡：月薪崗嗰位安員上載後全部歸去 per_shift「${dayWageShiftType.code}」嘅更，client_rate 由呢張卡強制變 0（已包喺月費，唔會再逐更加一次）、guard_wage=800——resolver 會自動揀中（guard 专属卡 rank 0 贏 site 级 840 卡 rank 4），唔再需要人手喺更表編輯器改做「${monthlyIcCode}」。日薪崗嗰位維持行 site 级 840 卡，唔使處理。`,
-            );
+            // Opus 5.5 驗收：安員查找用返**同更表上載一模一樣**嘅
+            // `matchGuard()`（src/lib/roster-upload/match.ts）——先 U 號
+            // （現用＋已取消＋legacy 欄），對唔到就 姓名＋電話
+            // （guard_phones＋legacy tel），再唔得就淨靠姓名（DB 入面得
+            // 一個同名先算）。咁樣張卡掛嘅安員一定係上載時啲格會配到嘅
+            // 同一個人（上載配唔到嘅話卡都冇用），唔會兩邊對唔返。
+            const [gRows, snRows, phRows] = await Promise.all([
+              prisma.guard.findMany({ select: { id: true, nameZh: true, tel: true, staffNo: true, staffNoMw: true } }),
+              prisma.guardStaffNumber.findMany({ select: { number: true, guardId: true, status: true } }),
+              prisma.guardPhone.findMany({ select: { guardId: true, tel: true } }),
+            ]);
+            const guardIndex = buildGuardMatchIndex({ guards: gRows, staffNumbers: snRows, phones: phRows });
+            const lookup = (r: RosterRecord) => matchGuard({ staffNoRaw: r.staff_no, nameRaw: r.name, telRaw: r.tel }, guardIndex);
+            const monthlyKey = monthlyKeys[0]!;
+            const monthlyRec = firstRecord.get(monthlyKey)!;
+            const monthlyMatch = lookup(monthlyRec);
+            // 同檔其他人（日薪崗）唔准配去同一個安員——否則張 $0 卡會連佢
+            // 嘅更都食埋。
+            const otherGuardIds = [...firstRecord.entries()].filter(([k]) => k !== monthlyKey).map(([, r]) => lookup(r).guardId);
+            if (!monthlyMatch.guardId || monthlyMatch.guardMatch === "ambiguous" || monthlyMatch.guardMatch === "unmatched") {
+              plan.needsBossReview.push(
+                `【控制室－WP-UPLOAD-AUTOFIX】Wilson Control 檔反推嘅月薪崗安員，DB 用 U 號／姓名＋電話／姓名都對唔到唯一一個安員（結果：${monthlyMatch.guardMatch}）——冇建 guard 級卡，要人手覆核（上載時呢位嘅格一樣會對唔到安員），或者喺更表編輯器將呢位安員嗰啲更改做「${monthlyIcCode}」。`,
+              );
+            } else if (otherGuardIds.includes(monthlyMatch.guardId)) {
+              plan.needsBossReview.push(
+                "【控制室－WP-UPLOAD-AUTOFIX】月薪崗同日薪崗兩位喺 DB 配去同一個安員（同名／同號？）——唔建 guard 級卡（會連日薪崗嘅更都變 $0），要人手覆核。",
+              );
+            } else {
+              const viaStaffNo = monthlyMatch.guardMatch === "by_staff_no" && !!monthlyRec.staff_no && db.staffNumbers.has(monthlyRec.staff_no);
+              pushCard({
+                siteCanonicalName: "控制室",
+                shiftType: { code: dayWageShiftType.code, startTime: dayWageShiftType.startTime, endTime: dayWageShiftType.endTime },
+                brokerCode: "Y",
+                // U 號喺 guard_staff_numbers 有就照舊用 U 號辨識；否則直接
+                // 記 guardId（同一個 DB build→apply，id 穩定）。
+                guardStaffNo: viaStaffNo ? monthlyRec.staff_no : null,
+                guardId: viaStaffNo ? null : monthlyMatch.guardId,
+                guardMatchMethod: monthlyMatch.guardMatch,
+                clientRate: 0,
+                guardWage: 800,
+                // Opus 5.5 驗收：跟返同組 site 级卡嘅 broker_fee（0）——guard
+                // 級卡 rank 0 連出街价都會揀中佢，留 null 會令月薪崗 25 更
+                // broker_fee_snapshot=null，同日薪崗／N-IC 卡（0）唔一致。
+                brokerFee: controlRoomPerShiftCard.brokerFee,
+                billingModel: "per_shift",
+                effectiveFrom: EFFECTIVE_FROM,
+                source: `aug-opening:控制室 WP-UPLOAD-AUTOFIX 月薪崗安員專屬卡（records.jsonl 逐人更數反推，pstb S031|1930-0730|Y 核實；安員配對方法 ${monthlyMatch.guardMatch}）`,
+                note: "控制室月薪崗（收客包喺 22,000 月費，老闆 2026-09-24 (a)）",
+                level: "site_shift_guard",
+              });
+              const methodLabel = monthlyMatch.guardMatch === "by_staff_no" ? "U 號" : monthlyMatch.guardMatch === "by_name_tel" ? "姓名＋電話（U 號對唔到，後備）" : "姓名（DB 唯一同名；U 號同電話都對唔到，後備——建議覆核）";
+              plan.needsBossReview.push(
+                `【控制室－WP-UPLOAD-AUTOFIX——已自動化，1 位，安員配對：${methodLabel}】已起咗一張 guard 級卡：月薪崗嗰位安員上載後全部歸去 per_shift「${dayWageShiftType.code}」嘅更，client_rate 由呢張卡強制變 0（已包喺月費，唔會再逐更加一次）、guard_wage=800——resolver 會自動揀中（guard 专属卡 rank 0 贏 site 级 840 卡 rank 4），唔再需要人手喺更表編輯器改做「${monthlyIcCode}」。日薪崗嗰位維持行 site 级 840 卡，唔使處理。安員配對用同更表上載一樣嘅 matchGuard()，上載時呢位嘅格會配到同一個安員。`,
+              );
+            }
           }
         }
       }

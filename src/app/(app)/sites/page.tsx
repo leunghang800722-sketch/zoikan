@@ -365,7 +365,7 @@ export default function SitesPage() {
           <Field label="更別（逗號分隔）" hint="例如：日更, 夜更">
             <input className={inputCls} value={form.aliases} onChange={(e) => setForm((f) => ({ ...f, aliases: e.target.value }))} />
           </Field>
-          <Field label="更表檔名鍵（逗號分隔）" hint="會計上載更表時，檔名含呢啲字（唔分大小寫）就自動配去呢個盤，優先過檔內盤名。例如：CTB 6907">
+          <Field label="更表檔名鍵（逗號分隔）" hint="會計上載更表時，檔名含呢啲字（唔分大小寫；數字／英文要成個字，「615」唔會中「9615」）就自動配去呢個盤，優先過檔內盤名。例如：CTB 6907">
             <input
               className={inputCls}
               value={form.roster_file_keys}

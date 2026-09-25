@@ -19,7 +19,7 @@ export interface SiteCandidate {
    * 嘅 `childSites` 候選）就當冇呢個欄，唔影響原本嘅對照。 */
   parentSiteId?: string | null;
   /** WP-UPLOAD-AUTOFIX 個案 1：`sites.roster_file_keys`——更表檔名鍵，
-   * 上載時檔名 stem 含任一鍵（唔分大小寫）就直接用呢個盤，優先過檔內
+   * 上載時檔名 stem 含任一鍵（NFKC、唔分大小寫、字詞邊界）就直接用呢個盤，優先過檔內
    * 盤名（`matchSiteByFileName()`／`resolveRosterUploadSite()`）。 */
   rosterFileKeys?: readonly string[];
 }
@@ -56,16 +56,42 @@ const MONTH_ABBR = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
 const MONTH_YEAR_SUFFIX_RE = new RegExp(`\\s*-?\\s*(${MONTH_ABBR})\\s+\\d{4}$`, "i");
 const ROSTER_PREFIX_RE = /^Roster\s*-\s*/i;
 
-/** 更表檔名 → 「stem」（用嚟同 `roster_file_keys` 逐個 `.includes()` 比
- * 對，唔分大小寫）：去 `Roster - ` 前綴、去 ` - Aug 2026`／` Aug 2026`／
- * ` - <Mon> <YYYY>` 月份尾、去副檔名、空格 collapse。純字串處理，唔理
- * 檔案實際內容。 */
+/** 更表檔名 → 「stem」（用嚟同 `roster_file_keys` 比對）：先 NFKC（全形
+ * 英數／全形空格 → 半形）、去 `Roster - ` 前綴、去 ` - Aug 2026`／
+ * ` Aug 2026`／` - <Mon> <YYYY>` 月份尾、去副檔名、空格 collapse。純字串
+ * 處理，唔理檔案實際內容。 */
 export function rosterFileNameStem(fileName: string): string {
-  let s = fileName.replace(/\.xlsx?$/i, "");
+  let s = fileName.normalize("NFKC").replace(/\.xlsx?$/i, "");
   s = s.replace(/\s+/g, " ").trim();
   s = s.replace(ROSTER_PREFIX_RE, "");
   s = s.replace(MONTH_YEAR_SUFFIX_RE, "");
   return s.replace(/\s+/g, " ").trim();
+}
+
+/** 鍵／stem 比對前嘅正規化：NFKC＋細階＋空格 collapse。 */
+function normalizeFileKeyText(s: string): string {
+  return s.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+const ASCII_ALNUM_RE = /[0-9a-z]/;
+
+/** Opus 5.5 驗收（WP-UPLOAD-AUTOFIX）：鍵對 stem 要**字詞邊界**，唔係
+ * 純 `includes`——否則鍵「615」會誤中「9615 數碼港」、「CTB 690」會誤中
+ * 「CTB 6907」。規則：鍵頭／鍵尾如果係英數字，stem 喺嗰邊緊貼嘅字元就唔
+ * 准係英數字（中文字冇字詞邊界，鍵頭尾係中文就唔加限制）。stem、key 都
+ * 已經 `normalizeFileKeyText()`。 */
+function stemContainsKeyAtBoundary(stem: string, key: string): boolean {
+  if (!key) return false;
+  const keyStartsAlnum = ASCII_ALNUM_RE.test(key[0]!);
+  const keyEndsAlnum = ASCII_ALNUM_RE.test(key[key.length - 1]!);
+  for (let i = stem.indexOf(key); i !== -1; i = stem.indexOf(key, i + 1)) {
+    const before = i > 0 ? stem[i - 1]! : "";
+    const after = stem[i + key.length] ?? "";
+    if (keyStartsAlnum && before && ASCII_ALNUM_RE.test(before)) continue;
+    if (keyEndsAlnum && after && ASCII_ALNUM_RE.test(after)) continue;
+    return true;
+  }
+  return false;
 }
 
 interface FileKeyMatch {
@@ -75,23 +101,36 @@ interface FileKeyMatch {
   key: string;
 }
 
-function findFileKeyMatch(stem: string, candidates: readonly SiteCandidate[]): FileKeyMatch | null {
-  if (!stem) return null;
-  const stemLower = stem.toLowerCase();
+type FileKeyLookup = { kind: "hit"; match: FileKeyMatch } | { kind: "none" } | { kind: "conflict"; keys: string[] };
+
+/** 逐個盤逐條鍵試（字詞邊界比對），**最長嘅鍵贏**（例如將來「9615 數碼港」
+ * 同「9615 數碼港 CP5」各自係兩個盤嘅鍵，CP5 檔會配去較長嗰條）；最長
+ * 嘅鍵有多過一個唔同盤撞中（設定打架）→ `conflict`，唔准估，交返畀檔內
+ * 盤名對照＋頂層警告。 */
+function findFileKeyMatch(stem: string, candidates: readonly SiteCandidate[]): FileKeyLookup {
+  const normStem = normalizeFileKeyText(stem);
+  if (!normStem) return { kind: "none" };
+  const hits: { siteId: string; key: string; len: number }[] = [];
   for (const c of candidates) {
     for (const rawKey of c.rosterFileKeys ?? []) {
-      const key = rawKey.trim();
-      if (key && stemLower.includes(key.toLowerCase())) return { siteId: c.id, key };
+      const key = normalizeFileKeyText(rawKey);
+      if (key && stemContainsKeyAtBoundary(normStem, key)) hits.push({ siteId: c.id, key: rawKey.trim(), len: key.length });
     }
   }
-  return null;
+  if (!hits.length) return { kind: "none" };
+  const maxLen = Math.max(...hits.map((h) => h.len));
+  const top = hits.filter((h) => h.len === maxLen);
+  const siteIds = new Set(top.map((h) => h.siteId));
+  if (siteIds.size > 1) return { kind: "conflict", keys: [...new Set(top.map((h) => h.key))] };
+  return { kind: "hit", match: { siteId: top[0]!.siteId, key: top[0]!.key } };
 }
 
-/** 檔名 stem 含某盤任一 `roster_file_keys`（唔分大小寫，子字串比對）→
- * 嗰個盤嘅 id；冇任何盤有鍵撞中就 null。淨係睇檔名，唔查 DB（candidates
- * 由 caller 一次過查好傳入）。 */
+/** 檔名 stem 含某盤任一 `roster_file_keys`（NFKC、唔分大小寫、字詞邊界，
+ * 最長鍵贏）→ 嗰個盤嘅 id；冇撞中或者設定打架就 null。淨係睇檔名，唔查
+ * DB（candidates 由 caller 一次過查好傳入）。 */
 export function matchSiteByFileName(fileName: string, candidates: readonly SiteCandidate[]): string | null {
-  return findFileKeyMatch(rosterFileNameStem(fileName), candidates)?.siteId ?? null;
+  const r = findFileKeyMatch(rosterFileNameStem(fileName), candidates);
+  return r.kind === "hit" ? r.match.siteId : null;
 }
 
 export interface RosterUploadSiteResolution {
@@ -100,8 +139,8 @@ export interface RosterUploadSiteResolution {
   /** 淨係 `matchedViaFileKey=true` 先有值——撞中嗰條 `roster_file_keys`
    * 原文，俾 caller 砌 row warning「由檔名鍵『…』對盤」。 */
   fileKeyMatchedKey: string | null;
-  /** 淨係「母盤安全網」觸發咗先有值——加落 `parse_summary.warnings`
-   * 嘅頂層警告文字。 */
+  /** 淨係「母盤安全網」觸發、或者檔名鍵設定打架先有值——加落
+   * `parse_summary.warnings` 嘅頂層警告文字。 */
   parentNoSubSiteWarning: string | null;
 }
 
@@ -136,9 +175,19 @@ export function resolveRosterUploadSite(
 ): RosterUploadSiteResolution {
   if (siteIdHint) return { siteId: siteIdHint, matchedViaFileKey: false, fileKeyMatchedKey: null, parentNoSubSiteWarning: null };
 
-  const fileKeyHit = findFileKeyMatch(rosterFileNameStem(fileName), candidates);
-  if (fileKeyHit) {
-    return { siteId: fileKeyHit.siteId, matchedViaFileKey: true, fileKeyMatchedKey: fileKeyHit.key, parentNoSubSiteWarning: null };
+  const fileKey = findFileKeyMatch(rosterFileNameStem(fileName), candidates);
+  if (fileKey.kind === "hit") {
+    return { siteId: fileKey.match.siteId, matchedViaFileKey: true, fileKeyMatchedKey: fileKey.match.key, parentNoSubSiteWarning: null };
+  }
+  if (fileKey.kind === "conflict") {
+    // 設定打架（同一個檔名撞中兩個唔同盤、長度一樣嘅鍵）：唔准估，唔自動
+    // 掛任何盤，要人手指定＋修正盤管理頁嘅鍵。
+    return {
+      siteId: null,
+      matchedViaFileKey: false,
+      fileKeyMatchedKey: null,
+      parentNoSubSiteWarning: `檔名同時撞中幾個盤嘅更表檔名鍵（${fileKey.keys.map((k) => `「${k}」`).join("、")}），請指定盤並修正盤管理頁嘅鍵`,
+    };
   }
 
   const contentMatch = matchSite(siteRaw, candidates);

@@ -36,6 +36,53 @@ describe("WP-UPLOAD-AUTOFIX 個案 1：matchSiteByFileName()", () => {
   });
 });
 
+describe("Opus 5.5 驗收：檔名鍵字詞邊界／全形／最長鍵贏／設定打架", () => {
+  const mk = (id: string, keys: string[]): SiteCandidate => ({ id, canonicalName: id, aliases: [], rosterFileKeys: keys });
+
+  it("數字鍵唔會 substring 誤中：「615」唔中「9615 數碼港」，「6907」中「CTB 6907」", () => {
+    const c = [mk("s615", ["615"]), mk("s6907", ["6907"])];
+    expect(matchSiteByFileName("Roster - 9615 數碼港 - Aug 2026.xlsx", c)).toBeNull();
+    expect(matchSiteByFileName("Roster - 9615 數碼港 CP5 數據中心 - Aug 2026.xlsx", c)).toBeNull();
+    expect(matchSiteByFileName("Roster - CTB 6907 莫測試 U09999 Aug 2026.xlsx", c)).toBe("s6907");
+    expect(matchSiteByFileName("Roster - 615 測試盤 - Aug 2026.xlsx", c)).toBe("s615");
+  });
+
+  it("鍵尾都要邊界：「CTB 690」唔中「CTB 6907」；「CP5」唔中「CP50」", () => {
+    expect(matchSiteByFileName("Roster - CTB 6907 Aug 2026.xlsx", [mk("a", ["CTB 690"])])).toBeNull();
+    expect(matchSiteByFileName("Roster - 數碼港 CP50 - Aug 2026.xlsx", [mk("b", ["CP5"])])).toBeNull();
+    expect(matchSiteByFileName("Roster - 數碼港 CP5 - Aug 2026.xlsx", [mk("b", ["CP5"])])).toBe("b");
+  });
+
+  it("中文邊界唔限制：鍵「數碼港」中「9615數碼港CP5」", () => {
+    expect(matchSiteByFileName("Roster - 9615數碼港CP5 - Aug 2026.xlsx", [mk("c", ["數碼港"])])).toBe("c");
+  });
+
+  it("全形英數／全形空格／大小寫都正規化（NFKC）", () => {
+    const c = [mk("ic", ["CTB 6907"])];
+    expect(matchSiteByFileName("Roster - ＣＴＢ　６９０７ Aug 2026.xlsx", c)).toBe("ic");
+    expect(matchSiteByFileName("Roster - ctb  6907 Aug 2026.xlsx", c)).toBe("ic");
+    expect(matchSiteByFileName("Roster - CTB 6907 Aug 2026.xlsx", [mk("ic", ["ｃｔｂ　6907"])])).toBe("ic");
+  });
+
+  it("幾個盤撞中 → 最長鍵贏（「9615 數碼港 CP5」贏「9615 數碼港」）", () => {
+    const c = [mk("cyber", ["9615 數碼港"]), mk("cp5", ["9615 數碼港 CP5"])];
+    expect(matchSiteByFileName("Roster - 9615 數碼港 CP5 - Aug 2026.xlsx", c)).toBe("cp5");
+    expect(matchSiteByFileName("Roster - 9615 數碼港 - Aug 2026.xlsx", c)).toBe("cyber");
+  });
+
+  it("最長鍵有兩個唔同盤（設定打架）→ 唔估，site_id=null＋頂層警告；唔跌返檔內盤名", () => {
+    const c = [mk("x", ["TESTKEY"]), mk("y", ["testkey"]), { id: "z", canonicalName: "內文盤", aliases: [] }];
+    expect(matchSiteByFileName("Roster - TESTKEY Aug 2026.xlsx", c)).toBeNull();
+    const r = resolveRosterUploadSite("Roster - TESTKEY Aug 2026.xlsx", null, "內文盤", [], c);
+    expect(r.siteId).toBeNull();
+    expect(r.parentNoSubSiteWarning).toContain("撞中幾個盤");
+  });
+
+  it("同一個盤兩條鍵都撞中唔算打架", () => {
+    expect(matchSiteByFileName("Roster - CTB 6907 Aug 2026.xlsx", [mk("ic", ["CTB 6907", "6907"])])).toBe("ic");
+  });
+});
+
 describe("WP-UPLOAD-AUTOFIX 個案 1：resolveRosterUploadSite() 配盤優先次序", () => {
   // dev DB 實測：「城巴車廠」9 個子盤（一檔多子盤，citybus layout），
   // 呢度用返兩個先夠證明安全網嘅「childCount>1」門檻（唔止一個先算）。
