@@ -31,6 +31,9 @@ interface SiteRow {
   // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類盤嘅
   // 保安員由客戶直接出糧，我哋淨係收每月服務費——唔逐更計客價／工資。
   guards_paid_by_client: boolean;
+  // WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求）：更表檔名鍵——上載時檔名
+  // stem 含任一鍵（唔分大小寫）就直接用呢個盤，優先過檔內盤名對照。
+  roster_file_keys?: string[];
   status: string;
 }
 
@@ -59,6 +62,7 @@ const emptySiteForm = {
   in_scope: true,
   outside_monthly_close: false,
   guards_paid_by_client: false,
+  roster_file_keys: "",
 };
 
 function billingModelPill(model: string) {
@@ -140,6 +144,7 @@ export default function SitesPage() {
       in_scope: row.in_scope,
       outside_monthly_close: row.outside_monthly_close ?? false,
       guards_paid_by_client: row.guards_paid_by_client ?? false,
+      roster_file_keys: (row.roster_file_keys ?? []).join(", "),
     });
     setFormError(null);
     setDrawerOpen(true);
@@ -153,6 +158,10 @@ export default function SitesPage() {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const rosterFileKeys = form.roster_file_keys
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const body: Record<string, unknown> = {
       client_name: form.client_name,
       client_group: form.client_group || undefined,
@@ -163,6 +172,7 @@ export default function SitesPage() {
       outside_monthly_close: form.outside_monthly_close,
       guards_paid_by_client: form.guards_paid_by_client,
       aliases,
+      roster_file_keys: rosterFileKeys,
     };
     if (hasMoneyField && form.monthly_fee !== "") body.monthly_fee = Number(form.monthly_fee);
 
@@ -354,6 +364,13 @@ export default function SitesPage() {
           </Field>
           <Field label="更別（逗號分隔）" hint="例如：日更, 夜更">
             <input className={inputCls} value={form.aliases} onChange={(e) => setForm((f) => ({ ...f, aliases: e.target.value }))} />
+          </Field>
+          <Field label="更表檔名鍵（逗號分隔）" hint="會計上載更表時，檔名含呢啲字（唔分大小寫；數字／英文要成個字，「615」唔會中「9615」）就自動配去呢個盤，優先過檔內盤名。例如：CTB 6907">
+            <input
+              className={inputCls}
+              value={form.roster_file_keys}
+              onChange={(e) => setForm((f) => ({ ...f, roster_file_keys: e.target.value }))}
+            />
           </Field>
           <Field label="客戶名稱">
             <input className={inputCls} value={form.client_name} onChange={(e) => setForm((f) => ({ ...f, client_name: e.target.value }))} required />

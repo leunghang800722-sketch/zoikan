@@ -31,9 +31,11 @@ import {
   matchShiftType,
   matchGuard,
   buildGuardMatchIndex,
+  resolveRosterUploadSite,
   type SiteCandidate,
   type BrokerCandidate,
   type ShiftTypeCandidate,
+  type RosterUploadSiteResolution,
 } from "./match";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
@@ -97,6 +99,12 @@ async function matchRowsAndSummarize(
   parseResult: ParseResult,
   brokers: readonly BrokerCandidate[],
   month: Date,
+  // WP-UPLOAD-AUTOFIX 個案 1：`resolveRosterUploadSite()` 嘅結果——
+  // `matchedViaFileKey`/`fileKeyMatchedKey` 用嚟逐行加「由檔名鍵對盤」
+  // warning，`parentNoSubSiteWarning` 用嚟加返個頂層安全網警告（見
+  // match.ts `resolveRosterUploadSite()` 註解）。冇傳＝行為同之前一樣
+  // （`reparseRosterUpload()` 已經人手指定 site_id 嗰種情況唔使呢層）。
+  siteMatch?: Pick<RosterUploadSiteResolution, "matchedViaFileKey" | "fileKeyMatchedKey" | "parentNoSubSiteWarning">,
 ): Promise<{ rows: Prisma.RosterUploadRowCreateManyInput[]; summary: RosterUploadParseSummary | null }> {
   if (!parseResult.ok) return { rows: [], summary: null };
 
@@ -148,6 +156,12 @@ async function matchRowsAndSummarize(
     // 就用嚟對返個子盤；有子盤但對唔到就 null（唔准估）。
     let effectiveSiteId = resolvedSiteId;
     const warnings = [...r.warnings];
+    // WP-UPLOAD-AUTOFIX 個案 1：呢個上載嘅盤係靠檔名鍵（`roster_file_
+    // keys`）對到嘅——逐行留痕「由邊條鍵對盤」，等會計覆核（同「子盤對
+    // 唔到」呢類 warning 一樣係逐行加，唔淨係頂層一句）。
+    if (siteMatch?.matchedViaFileKey && siteMatch.fileKeyMatchedKey) {
+      warnings.push(`由檔名鍵「${siteMatch.fileKeyMatchedKey}」對盤`);
+    }
     if (resolvedSiteId && childSites.length > 0 && r.subSiteName) {
       const childId = matchSite(r.subSiteName, childSites);
       if (childId) {
@@ -254,9 +268,13 @@ async function matchRowsAndSummarize(
     staleStaffNoCount,
     staffNoMismatchCount,
     rankNarrowedCount,
-    warnings: outOfMonthCount
-      ? [`有 ${outOfMonthCount} 格日期唔係上載月份（${monthPrefix.slice(0, 7)}）——檢查係咪揀錯月份`, ...parseResult.warnings]
-      : parseResult.warnings,
+    warnings: [
+      // WP-UPLOAD-AUTOFIX 個案 1：母盤安全網觸發——擺最前，會計最先睇到
+      // 「呢個上載未配對盤，要人手指定」。
+      ...(siteMatch?.parentNoSubSiteWarning ? [siteMatch.parentNoSubSiteWarning] : []),
+      ...(outOfMonthCount ? [`有 ${outOfMonthCount} 格日期唔係上載月份（${monthPrefix.slice(0, 7)}）——檢查係咪揀錯月份`] : []),
+      ...parseResult.warnings,
+    ],
   };
   return { rows, summary };
 }
@@ -289,14 +307,17 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
   const parseResult = await parseRosterWorkbook(input.fileBuffer, input.fileName);
 
   const [sitesRaw, brokersRaw] = await Promise.all([
-    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, parentSiteId: true, rosterFileKeys: true } }),
     prisma.broker.findMany({ select: { id: true, code: true, aliases: true } }),
   ]);
-  const sites: SiteCandidate[] = sitesRaw.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases }));
+  const sites: SiteCandidate[] = sitesRaw.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases, parentSiteId: s.parentSiteId, rosterFileKeys: s.rosterFileKeys }));
   const brokers: BrokerCandidate[] = brokersRaw.map((b) => ({ id: b.id, code: b.code, aliases: b.aliases }));
 
   const siteNameRaw = (parseResult.ok ? parseResult.siteRaw : null) ?? input.fileName;
-  const resolvedSiteId = input.siteIdHint ?? (parseResult.ok ? matchSite(parseResult.siteRaw, sites) : null);
+  // WP-UPLOAD-AUTOFIX 個案 1：配盤優先次序見 match.ts `resolveRosterUploadSite()`
+  // 註解——siteIdHint（呢個 API 嘅人手指定）> 檔名鍵 > 檔內盤名（有安全網）。
+  const siteMatch = resolveRosterUploadSite(input.fileName, input.siteIdHint, parseResult.ok ? parseResult.siteRaw : null, parseResult.ok ? parseResult.subSiteNames : [], sites);
+  const resolvedSiteId = siteMatch.siteId;
 
   return prisma.$transaction(async (tx) => {
     await lockVersionGroup(tx, resolvedSiteId, siteNameRaw, month);
@@ -343,7 +364,7 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
       },
     });
 
-    const { rows, summary } = await matchRowsAndSummarize(tx, upload.id, resolvedSiteId, parseResult, brokers, month);
+    const { rows, summary } = await matchRowsAndSummarize(tx, upload.id, resolvedSiteId, parseResult, brokers, month, siteMatch);
     if (rows.length) await tx.rosterUploadRow.createMany({ data: rows });
     const finalUpload = summary
       ? await tx.rosterUpload.update({ where: { id: upload.id }, data: { parseSummary: summary as unknown as Prisma.InputJsonValue } })
@@ -363,21 +384,29 @@ export async function reparseRosterUpload(uploadId: string, opts: { autoResolveS
   const parseResult = await parseRosterWorkbook(buffer, existing.fileName);
 
   const [sitesRaw, brokersRaw] = await Promise.all([
-    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, parentSiteId: true, rosterFileKeys: true } }),
     prisma.broker.findMany({ select: { id: true, code: true, aliases: true } }),
   ]);
-  const sites: SiteCandidate[] = sitesRaw.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases }));
+  const sites: SiteCandidate[] = sitesRaw.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases, parentSiteId: s.parentSiteId, rosterFileKeys: s.rosterFileKeys }));
   const brokers: BrokerCandidate[] = brokersRaw.map((b) => ({ id: b.id, code: b.code, aliases: b.aliases }));
   // 驗收 2026-09-23：PATCH `{site_id:null}`（人手清返未指定）之後唔好即刻
-  // 又用盤名自動配返，否則「清返」永遠清唔到。
-  const resolvedSiteId = existing.siteId ?? (autoResolveSite && parseResult.ok ? matchSite(parseResult.siteRaw, sites) : null);
+  // 又用盤名自動配返，否則「清返」永遠清唔到。WP-UPLOAD-AUTOFIX 個案 1：
+  // 自動配對（檔名鍵／檔內盤名＋安全網）一樣經 `resolveRosterUploadSite()`
+  // （`siteIdHint` 傳 null——`existing.siteId` 已經喺呢個 `??` 之前處理咗
+  // 「人手指定」呢個優先層）。
+  const siteMatch = existing.siteId
+    ? undefined
+    : autoResolveSite && parseResult.ok
+      ? resolveRosterUploadSite(existing.fileName, null, parseResult.siteRaw, parseResult.subSiteNames, sites)
+      : undefined;
+  const resolvedSiteId = existing.siteId ?? siteMatch?.siteId ?? null;
   // 驗收 2026-09-23：已被取代（superseded）／已確認（confirmed）嘅版本重新
   // 解析之後**唔准**變返 parsed——之前會令同盤同月出現兩個 active 版本。
   const keepStatus = existing.status === "superseded" || existing.status === "confirmed";
 
   await prisma.$transaction(async (tx) => {
     await tx.rosterUploadRow.deleteMany({ where: { uploadId } });
-    const { rows, summary } = await matchRowsAndSummarize(tx, uploadId, resolvedSiteId, parseResult, brokers, existing.month);
+    const { rows, summary } = await matchRowsAndSummarize(tx, uploadId, resolvedSiteId, parseResult, brokers, existing.month, siteMatch);
     if (rows.length) await tx.rosterUploadRow.createMany({ data: rows });
 
     await tx.rosterUpload.update({

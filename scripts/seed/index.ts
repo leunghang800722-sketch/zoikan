@@ -157,6 +157,15 @@ async function seedBrokers() {
 // 呢個列表唔應該靠 gitignored 私有檔，正式站冇 `data/` 都要行得通）。
 const LINK_GUARDS_PAID_BY_CLIENT_NAMES = new Set(["TKO Gateway 厚A", "TKO Gateway 厚B", "TKO Gateway 厚C"]);
 
+// WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求：更表上載完全自動）：同上面
+// `LINK_GUARDS_PAID_BY_CLIENT_NAMES` 一樣嘅道理——migration
+// `20260925035512_wp_upload_autofix_site_file_keys` 嘅 backfill UPDATE 對
+// 一個全新 DB 冧 0 行（sites 呢一刻仲未存在），seed 要自己再做多一次先
+// 保證 `db:reset && db:seed` 之後「創富廠IC」一定有呢條檔名鍵（「CTB
+// 6907」檔盤名格寫「城巴車廠」但實際係「創富廠IC」，見
+// src/lib/roster-upload/match.ts `matchSiteByFileName()`）。
+const ROSTER_FILE_KEYS_BY_SITE_NAME: Record<string, string[]> = { 創富廠IC: ["CTB 6907"] };
+
 // ---------------------------------------------------------------------------
 async function seedSites() {
   type Row = {
@@ -182,6 +191,7 @@ async function seedSites() {
         clientName: str(r.client_name) ?? r.canonical_name,
         outsideMonthlyClose: excludedClientNames().includes(str(r.client_name) ?? r.canonical_name),
         guardsPaidByClient: LINK_GUARDS_PAID_BY_CLIENT_NAMES.has(r.canonical_name),
+        rosterFileKeys: ROSTER_FILE_KEYS_BY_SITE_NAME[r.canonical_name] ?? [],
         clientGroup: str(r.client_group),
         billingModel: mapBillingModel(r.billing_model),
         monthlyFee: num(r.monthly_fee),

@@ -19,6 +19,7 @@ import { PrismaClient } from "@prisma/client";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import path from "path";
 import { processRosterUpload } from "@/lib/roster-upload/service";
+import { matchSiteByFileName } from "@/lib/roster-upload/match";
 import { normalizeTimeRange } from "@/lib/roster-upload/time-range";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards } from "@/lib/pricing/resolve-rate";
 import { loadPriceSiteTimeBroker, loadPriceOverrides } from "./lib/sources";
@@ -33,10 +34,12 @@ const MONTH = new Date("2026-08-01T00:00:00.000Z");
 // 2026-08-01，確認冇任何卡喺月內中途失效或者俾 7 月卡蓋過）。
 const CHECK_DATES = ["2026-08-01", "2026-08-15", "2026-08-31"].map((d) => new Date(`${d}T00:00:00.000Z`));
 const WITH_UPLOADS = process.argv.includes("--with-uploads");
-// Opus 5.5 驗收：「CTB 6907」檔 siteRaw 寫「城巴車廠」但實際係「創富廠IC」，
-// 上載時要人手揀盤（見 P2-版面重設計計劃.md §17.5）——verify 用 siteIdHint
-// 模擬呢個操作。用檔名前綴認，唔寫死完整檔名。
-const SITE_HINT_BY_FILE_PREFIX: Record<string, string> = { "Roster - CTB 6907": "創富廠IC" };
+// WP-UPLOAD-AUTOFIX（個案 1，老闆 2026-09-25 要求：更表上載完全自動）：
+// 以前呢度要用 SITE_HINT_BY_FILE_PREFIX 模擬「人手揀盤」（§17.5 舊做
+// 法）——「CTB 6907」檔 siteRaw 寫「城巴車廠」但實際係「創富廠IC」，靠
+// `sites.roster_file_keys` ＋ `matchSiteByFileName()`（match.ts）而家會
+// 自動配對，`processRosterUpload()` 唔使再傳 siteIdHint，呢個 hack 刪
+// 咗（見下面 verifyUploads()：36 檔一律唔傳 siteIdHint）。
 // build-aug-plan.ts PSTB_KEY_SITE_OVERRIDE 同一份：Event 組价掛喺獨立盤。
 const PSTB_KEY_SITE_OVERRIDE: Record<string, string> = { "S017|1000-1900|K": "啟航1331 Event" };
 
@@ -70,12 +73,6 @@ async function verifyUploads() {
   if (preexisting > 0) {
     throw new Error(`DB 已經有 ${preexisting} 個 2026-08 上載——verify 會 supersede 佢哋再刪走自己嘅上載，唔跑。先 npm run db:reset && npm run db:seed。`);
   }
-  const hintSiteIds = new Map<string, string>();
-  for (const [prefix, name] of Object.entries(SITE_HINT_BY_FILE_PREFIX)) {
-    const site = await prisma.site.findUnique({ where: { canonicalName: name } });
-    if (site) hintSiteIds.set(prefix, site.id);
-  }
-
   const uploadIds: string[] = [];
   let siteUnmatched = 0;
   let totalUnmatchedShiftType = 0;
@@ -92,9 +89,10 @@ async function verifyUploads() {
     const buf = readFileSync(path.join(AUG_ROSTERS_DIR, fileName));
     let result;
     try {
-      const hintPrefix = Object.keys(SITE_HINT_BY_FILE_PREFIX).find((p) => fileName.startsWith(p));
-      const siteIdHint = hintPrefix ? hintSiteIds.get(hintPrefix) : undefined;
-      result = await processRosterUpload({ fileBuffer: buf, fileName, month: MONTH, uploaderUserId: boss.id, siteIdHint });
+      // WP-UPLOAD-AUTOFIX：36 檔一律唔傳 siteIdHint——配盤完全靠
+      // `processRosterUpload()` 入面嘅 `resolveRosterUploadSite()`
+      // （檔名鍵 → 檔內盤名＋安全網），同老闆正式上載嗰陣一樣。
+      result = await processRosterUpload({ fileBuffer: buf, fileName, month: MONTH, uploaderUserId: boss.id, siteIdHint: null });
     } catch (e) {
       uploadErrors++;
       console.log(`  [錯誤] 檔 #${fileNo}：${(e as Error).message}`);
@@ -405,6 +403,37 @@ async function verifyControlRoomMixedBilling(): Promise<void> {
   console.log(`  控制室組：${ok ? "✓ 一致" : "✗ 唔一致"}`);
 }
 
+/** Opus 5.5 驗收（WP-UPLOAD-AUTOFIX）：唯讀（正式站都可以跑）——
+ *   (1) 36 個 8 月檔名逐個用 `matchSiteByFileName()`（同上載一樣嘅檔名
+ *       鍵比對）：「CTB 6907」檔要配去「創富廠IC」，其餘 35 檔唔准中任何
+ *       鍵（防 migration backfill 喺正式站因盤名唔同而 0 行、或者有鍵誤中）；
+ *   (2) 控制室 8 月月薪崗 guard 級 $0 卡要啱好 1 張（build 印「要人手」
+ *       嘅話呢度會係 0）。唔印檔名（有人名）、唔印安員。 */
+async function verifyUploadAutofix(): Promise<void> {
+  console.log("\n----- (b-補3) WP-UPLOAD-AUTOFIX：檔名鍵＋控制室 guard 級卡（唯讀）-----");
+  const sites = await prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, rosterFileKeys: true } });
+  const nameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
+  if (!existsSync(AUG_ROSTERS_DIR)) {
+    console.log(`  搵唔到 ${AUG_ROSTERS_DIR}，檔名鍵部分 skip。`);
+  } else {
+    const files = readdirSync(AUG_ROSTERS_DIR).filter((f) => f.endsWith(".xlsx")).sort();
+    let ctbOk = false;
+    let wrongHits = 0;
+    files.forEach((f) => {
+      const hit = matchSiteByFileName(f, sites);
+      const isCtb = /CTB\s*6907/i.test(f.normalize("NFKC"));
+      if (isCtb) ctbOk = hit !== null && nameById.get(hit) === "創富廠IC";
+      else if (hit !== null) wrongHits++;
+    });
+    console.log(`  檔名鍵：「CTB 6907」檔 → ${ctbOk ? "創富廠IC ✓" : "✗ 冇配到創富廠IC（檢查盤管理頁「創富廠IC」嘅更表檔名鍵）"}；其餘 ${files.length - 1} 檔誤中鍵：${wrongHits}${wrongHits === 0 ? " ✓" : " ✗"}`);
+  }
+  const cr = await prisma.site.findUnique({ where: { canonicalName: "控制室" } });
+  const guardCards = cr
+    ? await prisma.rateCard.count({ where: { siteId: cr.id, guardId: { not: null }, clientRate: 0, effectiveFrom: MONTH, voidedAt: null } })
+    : 0;
+  console.log(`  控制室月薪崗 guard 級 $0 卡：${guardCards} 張${guardCards === 1 ? " ✓" : " ✗（build 應該印咗「控制室－WP-UPLOAD-AUTOFIX……要人手」，交返規劃）"}`);
+}
+
 /**
  * WP-MIXED-BILLING（老闆 2026-09-24 批准嘅唯一 7 月卡改動）：兩張 7 月
  * 特殊卡加 effective_to=2026-07-31 之後，7 月定价唔可以有任何變化——
@@ -568,20 +597,50 @@ async function verifyCells(uploadIds: string[]) {
   console.log(`[verify-aug] (c) 逐格：一致 ${ok}，唔一致 ${badN}，對唔返試算 ${noJoin}，試算本身未定價 ${trialUnpriced}，冇更種 ${noShiftType}`);
   for (const [label, n] of [...bad.entries()].sort()) console.log(`    - ${n} 格 ${label}`);
 
-  // Opus 5.5 驗收：控制室上載後真實分流（唔係 pstb 模擬）——Wilson Control
-  // 檔兩位 rank 都係「Control」，rank 收窄分唔到月薪崗／日薪崗，上載會將
-  // 全部「N」格配去 per_shift N（840）。未人手分流前 8 月收入會係
-  // 22,000＋全部格×840，唔係 40,480。
+  // WP-UPLOAD-AUTOFIX（個案 2）：控制室上載後真實分流（唔係 pstb 模擬，
+  // 用返每格嘅真實 resolver 结果）——Wilson Control 檔兩位安員 rank 都
+  // 係「Control」，rank 收窄分唔到月薪崗／日薪崗，上載會將全部「N」格配
+  // 去 per_shift N（同一個更種）。以前呢度淨係印「22,000＋全部格×840」
+  // 話畀人聽仲要人手分流；而家 build-aug-plan.ts 已經起咗一張 guard 級卡
+  // （月薪崗嗰位安員嘅「N」更 client_rate 強制 0、guard_wage=800），逐格
+  // 用 `resolveShiftPricingFromCards()` 計（guard 级卡 rank 0 贏 site 级
+  // 840 卡 rank 4），唔再靠「全部格×840」呢條假設公式。
   const crSiteId = [...siteName.entries()].find(([, v]) => v === "控制室")?.[0];
   if (crSiteId) {
-    const crRows = rows.filter((r) => r.resolvedSiteId === crSiteId && r.shiftType);
+    const crRows = rows.filter((r) => r.resolvedSiteId === crSiteId && r.shiftType && r.shiftType.billingGroup === "per_shift");
     const byCode = new Map<string, number>();
     for (const r of crRows) byCode.set(`${r.shiftType!.code}（${r.shiftType!.billingGroup}）`, (byCode.get(`${r.shiftType!.code}（${r.shiftType!.billingGroup}）`) ?? 0) + 1);
-    const perShiftCells = crRows.filter((r) => r.shiftType!.billingGroup === "per_shift").length;
-    const uploadedRevenue = 22000 + perShiftCells * 840;
-    console.log(`\n----- (c-補) 控制室上載後分流（真實上載，唔係模擬）-----`);
+    if (!cache.has(crSiteId)) cache.set(crSiteId, await fetchEffectiveRateCards(crSiteId, new Date("2026-08-01"), new Date("2026-08-31")));
+    const crCards = cache.get(crSiteId)!;
+    const crBroker = await prisma.broker.findUnique({ where: { code: "Y" } });
+    let unmatchedGuardCells = 0;
+    let zeroRateCells = 0; // 月薪崗嗰位（guard 級卡 client_rate=0）
+    let perShiftRevenue = 0;
+    for (const r of crRows) {
+      if (!r.guardId) unmatchedGuardCells += 1;
+      const pr = resolveShiftPricingFromCards(crCards, {
+        siteId: crSiteId,
+        shiftTypeId: r.shiftTypeId!,
+        shiftTypeCode: r.shiftType!.code,
+        shiftTypeBillingGroup: r.shiftType!.billingGroup,
+        settlementBrokerId: crBroker?.id ?? null,
+        brokerKind: crBroker?.kind ?? null,
+        guardId: r.guardId ?? "verify-aug-unmatched-guard",
+        workDate: r.workDate,
+        isExternal: false,
+        recordType: "shift",
+      });
+      if (pr.clientRate === 0) zeroRateCells += 1;
+      perShiftRevenue += pr.clientRate ?? 0;
+    }
+    const flatCard = await prisma.rateCard.findFirst({ where: { siteId: crSiteId, shiftTypeId: null, brokerId: null, guardId: null, billingModel: "monthly_fixed", effectiveFrom: MONTH, voidedAt: null } });
+    const flatAmount = flatCard ? Number(flatCard.clientRate) : 0;
+    const uploadedRevenue = flatAmount + perShiftRevenue;
+    console.log(`\n----- (c-補) 控制室上載後分流（真實上載＋真實 resolver，WP-UPLOAD-AUTOFIX 個案 2） -----`);
     console.log(`  更種分佈：${[...byCode.entries()].map(([k, v]) => `${k}=${v} 格`).join("、") || "（冇）"}`);
-    console.log(`  未人手分流前 8 月收入＝22,000＋${perShiftCells}×840＝${uploadedRevenue}（目標 40,480）${uploadedRevenue === 40480 ? "✓" : "⚠ 要人手將月薪崗嗰位嘅更改做 N-IC（或者起 guard 級卡），見 §17.10"}`);
+    console.log(`  月薪崗嗰位（guard 級卡命中，client_rate=0）：${zeroRateCells} 格；安員未配對（用預設價計）：${unmatchedGuardCells} 格`);
+    console.log(`  site flat 卡（8 月）＝${flatAmount}（預期 22,000）`);
+    console.log(`  8 月收入＝flat ${flatAmount} ＋ 逐更收客合計 ${perShiftRevenue} ＝ ${uploadedRevenue}（目標 40,480）${uploadedRevenue === 40480 ? "✓" : "⚠ 未達標——檢查 guard 級卡有冇起到、dev DB 有冇嗰位安員嘅 U 號（見 build-aug-plan.ts needsBossReview「控制室－WP-UPLOAD-AUTOFIX」）"}`);
   }
 }
 
@@ -608,6 +667,7 @@ async function main() {
     await verifyPricing();
     await verifyPersonOverrides();
     await verifyControlRoomMixedBilling();
+    await verifyUploadAutofix();
     await verifyOtCard();
     await verifyJulyCardsUnaffected();
     if (WITH_UPLOADS) await verifyCells(uploadIds);

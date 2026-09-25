@@ -540,3 +540,39 @@ describe("應修（Opus 第二輪驗收）：ResolvedShiftPricing.clientCardFoun
     expect(result.clientRate).toBe(500);
   });
 });
+
+// WP-UPLOAD-AUTOFIX 個案 2（P2-版面重設計計劃.md §17.11）：控制室月薪崗
+// 安員專屬卡——client_rate=0、guard_wage=800，冧 guard 专属+同 shift_type
+// 一定贏 site 级 840 卡；client_rate=0 唔准被 isClientUnpricedShift() 誤標
+// 「未定价」（0 係有效值，唔係 null）。
+describe("resolveShiftPricingFromCards：WP-UPLOAD-AUTOFIX 個案 2（月薪崗安員 client_rate=0 專屬卡）", () => {
+  it("guard 专属＋client_rate=0 卡贏 site 级 840 卡——呢位安員嘅更 client=0（已包喺月費）、guard_wage=800", () => {
+    const cards: RateCardLite[] = [
+      card({ id: "site-840", clientRate: 840, guardWage: 800 }), // rank 4：site 级，通用
+      card({ id: "guard-0", guardId: GUARD_A, clientRate: 0, guardWage: 800, brokerFee: null }), // rank 0：guard 专属+同 shift_type
+    ];
+    const result = resolveShiftPricingFromCards(cards, baseInput());
+    expect(result.clientRate).toBe(0);
+    expect(result.guardWage).toBe(800);
+  });
+
+  it("另一位安員（唔係呢張 guard 专属卡嘅 guardId）照舊行 site 级 840 卡，唔受影響", () => {
+    const cards: RateCardLite[] = [
+      card({ id: "site-840", clientRate: 840, guardWage: 800 }),
+      card({ id: "guard-0", guardId: GUARD_A, clientRate: 0, guardWage: 800, brokerFee: null }),
+    ];
+    const result = resolveShiftPricingFromCards(cards, baseInput({ guardId: "guard-B-日薪崗" }));
+    expect(result.clientRate).toBe(840);
+    expect(result.guardWage).toBe(800);
+  });
+
+  it("isClientUnpricedShift()：clientRateSnapshot=0 唔算未定价（0 係有效值，唔係 null）", () => {
+    const unpriced = isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: 0 }, "per_shift");
+    expect(unpriced).toBe(false);
+  });
+
+  it("對比：clientRateSnapshot=null 先算未定价", () => {
+    const unpriced = isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift");
+    expect(unpriced).toBe(true);
+  });
+});
