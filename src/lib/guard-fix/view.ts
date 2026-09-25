@@ -40,3 +40,17 @@ export async function buildNeedsBossView(prisma: PrismaClient, session: AuthedSe
     };
   });
 }
+
+/** Opus 5.5 驗收：`applying` 超過呢個時間當卡死（server 中途重啟／部署令
+ * `after()` 背景工作冇咗）——老闆可以「重新套用」。apply transaction
+ * timeout 係 30 分鐘，但正常 70+ 人＋逐盤 reparse 幾分鐘內完成；就算真係
+ * 仲行緊，重新套用都會喺 advisory lock 排隊、冪等跳過已建嘅人。 */
+export const APPLY_STALE_MS = 15 * 60 * 1000;
+
+/** 呢個 run 可唔可以（再）撳「套用」：planned；failed（重試，冪等）；
+ * applying 但開始咗超過 15 分鐘（卡死復原）。 */
+export function applyAllowed(run: { status: string; applyStartedAt: Date | null }, now = new Date()): boolean {
+  if (run.status === "planned" || run.status === "failed") return true;
+  if (run.status === "applying") return !run.applyStartedAt || now.getTime() - run.applyStartedAt.getTime() > APPLY_STALE_MS;
+  return false;
+}

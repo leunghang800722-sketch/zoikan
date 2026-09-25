@@ -17,6 +17,12 @@ import type { GuardFixPlan } from "@/lib/guard-fix/types";
 
 const SYSTEM_ACTOR = "system:guard-fix";
 
+/** Opus 5.5 驗收：`pg_advisory_xact_lock` key——script 同 `POST /api/
+ * guard-fix/runs/:id/apply` 共用，兩個 apply（兩個 run、或者 script＋頁
+ * 面）同時行會排隊，唔會兩邊都見到「U 號／同名同電話未存在」而重複建人
+ * （create_minimal 冇 unique constraint 兜底）。 */
+export const GUARD_FIX_ADVISORY_LOCK_KEY = 7_710_250_925;
+
 export interface Diff {
   create: string[]; // seq
   skip: string[]; // seq（（原因））
@@ -49,6 +55,9 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
   const diffs: ApplyGuardFixPlanDiffs = { link: emptyDiff(), create: emptyDiff(), createMinimal: emptyDiff() };
 
   const run = async (tx: Prisma.TransactionClient) => {
+    // 排隊：同一時間淨係一個 apply transaction（見 GUARD_FIX_ADVISORY_LOCK_KEY）。
+    // 攞到 lock 之後先讀 DB 現狀，前一個 apply 已 commit 嘅新人／工號睇得到。
+    await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${GUARD_FIX_ADVISORY_LOCK_KEY})`);
     const existingHkids = new Set(
       (await tx.guard.findMany({ where: { hkid: { not: null } }, select: { hkid: true } })).map((g) => canonicalHkid(g.hkid)).filter((x): x is string => !!x),
     );

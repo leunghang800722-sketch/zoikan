@@ -12,6 +12,8 @@
 // §4 套用：apply 之後 guard 真係建咗、run 變 applied；同一個 run 再
 //    apply 一次 → 409
 // §5 needs_boss PII gate：冇「安員個人資料:view」見唔到姓名/候選姓名
+// §6 Opus 5.5 驗收：`applying` 卡死復原（未夠 15 分鐘 409、超過就可以
+//    重新套用，冪等唔重複建人）；另一個 run 套用緊 → 套用／計劃都 409
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
@@ -19,6 +21,7 @@ import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixture
 import { GET as listStaffList, POST as uploadStaffList } from "@/app/api/guard-fix/staff-list/route";
 import { POST as buildPlan } from "@/app/api/guard-fix/plan/route";
 import { GET as getRun } from "@/app/api/guard-fix/runs/[id]/route";
+import { GET as listRuns } from "@/app/api/guard-fix/runs/route";
 import { POST as applyRun } from "@/app/api/guard-fix/runs/[id]/apply/route";
 import { buildGuardFixPlan, summarizePlan } from "@/lib/guard-fix/plan";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
@@ -241,5 +244,36 @@ describe("WP-GUARD-FIX-UI：未配對安員修復頁面 API", () => {
     expect(runBody.needs_boss[0]!.reason).toBeTruthy(); // 盤＋原因仲見到
 
     expect([dup1.id, dup2.id]).toContain(dup1.id); // 用返變數，避免 eslint unused
+  });
+  it("§6 卡死復原＋同時套用 409", async () => {
+    const uTeamBuf = await buildUTeamXlsx([{ uNumber: "U9001", nameZh: "測試散工甲", tel: "61234567" }]);
+    await uploadStaffList(reqMultipart("http://test.local/api/guard-fix/staff-list", ownerCookie, uTeamBuf));
+    await seedUnmatchedRosterRow(fx, { staffNoRaw: "U9001", nameRaw: "測試散工甲", telRaw: "61234567" });
+
+    const planA = (await (await buildPlan(reqJson("http://test.local/api/guard-fix/plan", ownerCookie, "POST", { month: "2026-08" }))).json()) as { run_id: string };
+    const planB = (await (await buildPlan(reqJson("http://test.local/api/guard-fix/plan", ownerCookie, "POST", { month: "2026-08" }))).json()) as { run_id: string };
+    const apply = (id: string) => applyRun(reqJson(`http://test.local/api/guard-fix/runs/${id}/apply`, ownerCookie, "POST"), { params: Promise.resolve({ id }) });
+
+    // A「套用緊」（啱啱開始）——A 再撳 409、B 撳 409（另一個套用緊）、計劃 409。
+    await prisma.guardFixRun.update({ where: { id: planA.run_id }, data: { status: "applying", applyStartedAt: new Date() } });
+    expect((await apply(planA.run_id)).status).toBe(409);
+    expect((await apply(planB.run_id)).status).toBe(409);
+    expect((await buildPlan(reqJson("http://test.local/api/guard-fix/plan", ownerCookie, "POST", { month: "2026-08" }))).status).toBe(409);
+    const detail = (await (await getRun(reqJson(`http://test.local/api/guard-fix/runs/${planA.run_id}`, ownerCookie), { params: Promise.resolve({ id: planA.run_id }) })).json()) as { apply_allowed: boolean };
+    expect(detail.apply_allowed).toBe(false);
+
+    // 卡咗 16 分鐘（server 中途重啟）——頁面見到可以重新套用，套用成功。
+    await prisma.guardFixRun.update({ where: { id: planA.run_id }, data: { applyStartedAt: new Date(Date.now() - 16 * 60 * 1000) } });
+    const list = (await (await listRuns(reqJson("http://test.local/api/guard-fix/runs", ownerCookie))).json()) as { runs: Array<{ id: string; apply_allowed: boolean }> };
+    expect(list.runs.find((r) => r.id === planA.run_id)!.apply_allowed).toBe(true);
+    expect([200, 202]).toContain((await apply(planA.run_id)).status);
+    expect((await prisma.guardFixRun.findUniqueOrThrow({ where: { id: planA.run_id } })).status).toBe("applied");
+
+    // B（舊計劃）之後再套用：冪等，唔會重複建人。
+    expect([200, 202]).toContain((await apply(planB.run_id)).status);
+    expect(await prisma.guard.count({ where: { nameZh: "測試散工甲" } })).toBe(1);
+    const runB = await prisma.guardFixRun.findUniqueOrThrow({ where: { id: planB.run_id } });
+    expect(runB.status).toBe("applied");
+    expect(((runB.resultJson as { diffs: { create: { skip: string[] } } }).diffs.create.skip.length)).toBe(1);
   });
 });

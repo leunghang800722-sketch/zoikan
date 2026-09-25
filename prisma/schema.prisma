@@ -857,6 +857,9 @@ model GuardFixRun {
 
   status    GuardFixRunStatus @default(planned)
   appliedAt DateTime?         @map("applied_at")
+  // Opus 5.5 驗收：幾時開始套用——`applying` 超過 15 分鐘當卡死（server
+  // 中途重啟），頁面俾老闆「重新套用」（見 runs/[id]/apply/route.ts）。
+  applyStartedAt DateTime? @map("apply_started_at")
   // apply 完成之後嘅結果：逐盤 reparse 前後 unmatched/ambiguous 數＋
   // link/create/create_minimal 處理/跳過數（冇 PII，純數目＋seq）。
   resultJson Json? @map("result_json")

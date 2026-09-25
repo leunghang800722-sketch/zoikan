@@ -158,14 +158,24 @@ Terminal 貼 DB 連線字串手動跑（`P2-版面重設計計劃.md` §18）。
   本身已經淨係老闆，呢層係萬一將來開放俾第二個角色嘅保險）。
 - `POST /api/guard-fix/runs/:id/apply`：套用（建人／登記工號／加
   別名，一個 transaction）＋自動逐個 active 上載 `reparseRosterUpload()`。
-  **冪等**：`status!=='planned'` 一律 **409**（同一 run 唔可以 apply
-  兩次；併發兩個請求撞埋用 `updateMany({where:{status:'planned'}})`
-  原子聲稱，第二個一定見到 409，冇 race window）。apply 完成之後**自動
-  再計一次 plan**（同一份名單、同一個月），開多一條 `guard_fix_runs`
-  （`planned`）俾老闆睇仲剩幾多——相當於 `run-guard-fix.sh` 嘅下一輪，
-  老闆喺頁面再撳一次「計算修復計劃」即可。
+  **可以套用嘅狀態**（Opus 5.5 驗收修正）：`planned`；`failed`（重試）；
+  `applying` 但 `apply_started_at` 超過 15 分鐘（server 中途重啟／部署令
+  背景工作冇咗——卡死復原，頁面歷史 runs 顯示「卡住」＋「重新套用」掣）。
+  `applied`、或者未夠 15 分鐘嘅 `applying` → **409**；另一個（未卡死）
+  run 套用緊 → **409**（`status:"busy"`）。認領（→`applying`）喺
+  `pg_advisory_xact_lock` 入面做；`applyGuardFixPlan()` transaction 入面
+  仲有同一把 lock（script 同頁面同時行都會排隊，唔會兩邊都見到「未存在」
+  而重複建人）。apply 本身冪等（U 號／身份證／同名同電話已存在就跳過），
+  所以重試／套用舊計劃都唔會重複建人。失敗訊息（`result.error`／server
+  log）淨係存 `safeErrorSummary()`（錯誤類別＋最後一行＋Prisma code），
+  唔會帶 Prisma invocation 嘅 create 參數（姓名／電話／身份證）。apply
+  完成之後**自動再計一次 plan**（同一份名單、同一個月），開多一條
+  `guard_fix_runs`（`planned`）——頁面自動帶出呢個下一輪，老闆直接再撳
+  「③ 套用」；冇嘢可以自動修就顯示「已經收斂」。
+  `POST /api/guard-fix/plan` 喺有 run 套用緊（未卡死）嗰陣一樣 **409**。
 - `GET /api/guard-fix/runs`／`GET /api/guard-fix/runs/:id`：歷史／
-  單一 run 詳情（`needs_boss` 一樣受「安員個人資料:view」gate）。
+  單一 run 詳情（`needs_boss` 一樣受「安員個人資料:view」gate）；兩個都帶
+  `apply_started_at`、`apply_allowed`（頁面「套用／重新套用」掣用）。
 
 **長時間 apply 嘅設計取捨**（§18.9，回報要求）：建 70+ 位安員＋逐盤
 `reparseRosterUpload()` 可能要幾分鐘。`POST .../apply` 即刻用一個
@@ -180,9 +190,8 @@ test 一致做法，冇起真 HTTP server）冇呢個 context，會即刻 throw�
 入面 try/catch 咗，冇 context 就 fallback 做齊晒先返（response 帶實際
 完成咗嘅 status），保證行為喺測試／正式運作都一致、唔會「話自己
 applying 但其實已經完咗或者冧咗」。如果 process 中途死咗（部署／
-重啟），run 會卡喺 `applying`，冇自動復原——要人手查 `guard_fix_runs`
-表狀態，DB 寫入本身（apply 嘅 transaction／reparse）已經完成嗰部分唔
-會消失（冪等，重新 apply 一個新 run 唔會重複建人）。**要問老闆**：
+重啟），run 會卡喺 `applying`——15 分鐘後頁面可以「重新套用」（見上面
+apply 一段）。**要問老闆**：
 Zeabur 嘅反向代理／公開 port 對住一個幾分鐘先返嘅 HTTP request 有冇
 自己嘅 timeout（同 `run-guard-fix.sh` 一樣嘅 P2028/連線中斷風險，但
 背景執行令呢個風險只影響「老闆幾耐先見到結果」，唔影響資料寫入本身

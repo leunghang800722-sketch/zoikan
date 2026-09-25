@@ -11,10 +11,10 @@ import { ok, withApiError } from "@/lib/api/http";
 import { parseBody } from "@/lib/api/validate";
 import { GuardFixPlanBodySchema } from "@/lib/api/schemas";
 import { monthStart } from "@/lib/month-lock";
-import { BadRequest } from "@/lib/api/errors";
+import { BadRequest, Conflict } from "@/lib/api/errors";
 import { buildGuardFixPlan, summarizePlan, NoActiveUploadsError } from "@/lib/guard-fix/plan";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
-import { buildNeedsBossView } from "@/lib/guard-fix/view";
+import { buildNeedsBossView, APPLY_STALE_MS } from "@/lib/guard-fix/view";
 import type { Prisma } from "@prisma/client";
 
 export async function POST(req: Request) {
@@ -23,10 +23,19 @@ export async function POST(req: Request) {
     const body = parseBody(GuardFixPlanBodySchema, await req.json().catch(() => ({})));
     const month = monthStart(new Date(body.month));
 
+    // Opus 5.5 驗收：套用緊（未卡死）嗰陣計劃會讀到一半嘅狀態——等佢完成。
+    const busy = await prisma.guardFixRun.findFirst({ where: { status: "applying", applyStartedAt: { gt: new Date(Date.now() - APPLY_STALE_MS) } }, select: { id: true } });
+    if (busy) throw Conflict("修復計劃套用緊，等佢完成先再計算", { status: "busy" });
+
     const staffList = await prisma.staffListUpload.findFirst({ where: { status: "parsed" }, orderBy: { uploadedAt: "desc" } });
     if (!staffList) throw BadRequest("未上載過 U Team 名單（或者最新一份解析失敗）——請先上載名單");
 
-    const uTeamRows = await parseUTeamWorkbookBuffer(Buffer.from(staffList.fileBytes));
+    let uTeamRows;
+    try {
+      uTeamRows = await parseUTeamWorkbookBuffer(Buffer.from(staffList.fileBytes));
+    } catch {
+      throw BadRequest("現用 U Team 名單解析唔到——請重新上載名單");
+    }
 
     let plan;
     try {

@@ -5,7 +5,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, withApiError } from "@/lib/api/http";
 import { NotFound } from "@/lib/api/errors";
-import { buildNeedsBossView } from "@/lib/guard-fix/view";
+import { buildNeedsBossView, applyAllowed } from "@/lib/guard-fix/view";
 import type { GuardFixPlan } from "@/lib/guard-fix/types";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -25,6 +25,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         status: run.status,
         createdAt: run.createdAt.toISOString(),
         appliedAt: run.appliedAt?.toISOString() ?? null,
+        applyStartedAt: run.applyStartedAt?.toISOString() ?? null,
+        // Opus 5.5 驗收：頁面「套用／重新套用」掣用（planned、failed、卡死
+        // 超過 15 分鐘嘅 applying）。
+        applyAllowed: applyAllowed(run),
         summary: run.summaryJson,
         result: run.resultJson,
         staffListUpload: { fileName: run.staffListUpload.fileName, uploadedAt: run.staffListUpload.uploadedAt.toISOString(), rowCount: run.staffListUpload.rowCount },

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, withApiError } from "@/lib/api/http";
+import { applyAllowed } from "@/lib/guard-fix/view";
 
 export async function GET(req: Request) {
   return withApiError(async () => {
@@ -12,7 +13,7 @@ export async function GET(req: Request) {
     const runs = await prisma.guardFixRun.findMany({
       orderBy: { createdAt: "desc" },
       take: 50,
-      select: { id: true, month: true, status: true, createdAt: true, appliedAt: true, summaryJson: true, resultJson: true, staffListUpload: { select: { fileName: true, uploadedAt: true } } },
+      select: { id: true, month: true, status: true, createdAt: true, appliedAt: true, applyStartedAt: true, summaryJson: true, resultJson: true, staffListUpload: { select: { fileName: true, uploadedAt: true } } },
     });
     return ok(
       brandSafeResponse({
@@ -23,6 +24,8 @@ export async function GET(req: Request) {
             status: r.status,
             createdAt: r.createdAt.toISOString(),
             appliedAt: r.appliedAt?.toISOString() ?? null,
+            applyStartedAt: r.applyStartedAt?.toISOString() ?? null,
+            applyAllowed: applyAllowed(r),
             summary: r.summaryJson,
             result: r.resultJson,
             staffListFileName: r.staffListUpload.fileName,

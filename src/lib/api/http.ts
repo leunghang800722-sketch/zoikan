@@ -49,7 +49,7 @@ export function okGzip(req: Request, data: Dto | Dto[] | null, init?: number): N
 // payload 有安員個人資料就漏晒。呢度淨係揀最後一行（Prisma 錯誤訊息嘅
 // 慣例：診斷句喺最尾一行，中間先係俾佢拆爛嘅 query dump），加個長度上限，
 // 唔會有成個物件被 console.error 遞歸 inspect。
-function safeErrorSummary(err: unknown): string {
+export function safeErrorSummary(err: unknown): string {
   const name = err instanceof Error ? err.constructor.name : typeof err;
   const raw = err instanceof Error ? err.message : String(err);
   const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
