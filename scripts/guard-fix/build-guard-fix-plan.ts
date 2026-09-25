@@ -28,10 +28,15 @@ import path from "path";
 import { matchGuard, buildGuardMatchIndex, matchBroker, type BrokerCandidate, type GuardMatchIndex } from "@/lib/roster-upload/match";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
-import { loadUTeamList, buildUTeamIndex, loadCrossCheckMainSheet, buildCrossCheckIndex, type UTeamIndex, type CrossCheckIndex } from "./lib/sources";
+import { loadUTeamList, buildUTeamIndex, loadCrossCheckMainSheet, buildCrossCheckIndex, canonicalHkid, type UTeamIndex, type CrossCheckIndex } from "./lib/sources";
 import type { GuardFixPlan, GuardFixIdentity, GuardFixAction, LinkAction, CreateAction, CreateMinimalAction, NeedsBossAction, GuardFixCellRef } from "./lib/types";
 
 const prisma = new PrismaClient();
+// 驗收（Opus 5.5）：records.jsonl fallback 淨係 dev 明文要先用——之前「目標
+// DB 冇 8 月上載」／「有上載但全部已配對」兩種情況都會靜靜跌去讀本機
+// records.jsonl，對正式站（例如貼錯 DB、或者第二輪已經全部配好）就會用
+// 本機檔案嘅姓名起安員。而家冇 flag 就停。
+const ALLOW_JSONL_FALLBACK = process.argv.includes("--allow-jsonl-fallback");
 
 const AUG_MONTH = new Date("2026-08-01T00:00:00.000Z");
 const RECORDS_JSONL_PATH = "data/2026-09/aug-payroll-trial/out-rosters/records.jsonl";
@@ -70,13 +75,16 @@ async function loadFromDbRows(): Promise<RawUnmatchedCell[] | null> {
     where: { month: AUG_MONTH, status: { notIn: ["superseded", "voided"] } },
     select: { id: true, siteId: true, siteNameRaw: true },
   });
-  if (uploads.length === 0) return null;
+  if (uploads.length === 0) return null; // caller 決定：有 --allow-jsonl-fallback 先 fallback，冇就停
   const uploadById = new Map(uploads.map((u) => [u.id, u]));
   const rows = await prisma.rosterUploadRow.findMany({
     where: { uploadId: { in: uploads.map((u) => u.id) }, guardMatch: { in: ["unmatched", "ambiguous"] }, nameRaw: { not: null } },
     select: { uploadId: true, resolvedSiteId: true, staffNoRaw: true, nameRaw: true, telRaw: true, guardMatch: true, brokerCodeRaw: true, settlementBrokerId: true },
   });
-  if (rows.length === 0) return null; // 有 active 上載但冇 unmatched/ambiguous row——已經全部配到，唔使 fallback，直接當 0 個身份。
+  // 驗收（Opus 5.5）：之前呢度 `return null`，同註解講嘅相反——會跌去
+  // records.jsonl fallback。有 active 上載但冇 unmatched/ambiguous＝已經
+  // 全部配好，0 個身份。
+  if (rows.length === 0) return [];
   const siteIds = [...new Set(rows.map((r) => r.resolvedSiteId).filter((x): x is string => !!x))];
   const sites = siteIds.length ? await prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true } }) : [];
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
@@ -200,8 +208,9 @@ function findByHkid(
 ): LinkMethodResult | null {
   const uNumber = staffNoRaw ? normalizeStaffNumber(staffNoRaw) : null;
   const uRow = (uNumber && uTeam.byUNumber.get(uNumber)) || (uTeam.byName.get(nameRaw)?.length === 1 ? uTeam.byName.get(nameRaw)![0] : null);
-  if (!uRow?.hkid) return null;
-  const ids = hkidIndex.get(uRow.hkid);
+  const canon = canonicalHkid(uRow?.hkid);
+  if (!canon) return null;
+  const ids = hkidIndex.get(canon);
   if (!ids || ids.size !== 1) return null;
   return { method: "U Team 名單身份證＝DB hkid", guardId: [...ids][0]! };
 }
@@ -270,10 +279,20 @@ async function main() {
   // 身份證→guardId 索引（`link` 判斷 (b) U Team 名單身份證＝DB hkid）。
   const hkidIndex = new Map<string, Set<string>>();
   for (const g of guardsRaw) {
-    if (!g.hkid) continue;
-    const norm = g.hkid.toUpperCase().replace(/\s+/g, "");
+    const norm = canonicalHkid(g.hkid);
+    if (!norm) continue;
     if (!hkidIndex.has(norm)) hkidIndex.set(norm, new Set());
     hkidIndex.get(norm)!.add(g.id);
+  }
+  // 驗收（Opus 5.5）：工號（任何 status，含已取消）→ 擁有者——link／create
+  // 都要避開「呢個號已經係 DB 另一個人嘅」（規則 8：已取消號唔復用）。
+  const staffNoOwner = new Map(staffNumbersRaw.map((sn) => [sn.number, sn.guardId]));
+  for (const g of guardsRaw) {
+    for (const legacy of [g.staffNo, g.staffNoMw]) {
+      if (!legacy) continue;
+      const n = normalizeStaffNumber(legacy);
+      if (!staffNoOwner.has(n)) staffNoOwner.set(n, g.id);
+    }
   }
 
   const guardById = new Map(guardsRaw.map((g) => [g.id, g]));
@@ -290,6 +309,9 @@ async function main() {
   let sourceMode: GuardFixPlan["sourceMode"];
   let cells = await loadFromDbRows();
   if (cells === null) {
+    if (!ALLOW_JSONL_FALLBACK) {
+      throw new Error("目標 DB 冇 2026-08 active 上載（貼啱 DB 未？）——停。dev 要用 records.jsonl 就加 --allow-jsonl-fallback。");
+    }
     sourceMode = "records_jsonl_fallback";
     cells = await loadFromRecordsJsonl(guardIndex);
   } else {
@@ -302,6 +324,7 @@ async function main() {
   const create: CreateAction[] = [];
   const createMinimal: CreateMinimalAction[] = [];
   const needsBoss: NeedsBossAction[] = [];
+  let hkidDroppedCount = 0; // 驗收（Opus 5.5）：名單身份證欄唔係身份證格式、冇寫入嘅 create 數
 
   // 逐個身份代表嘅雞頭碼／盤——攞第一格用嚟決定 default_broker（一個身份
   // 通常淨係喺一個盤出現；極少數跨盤要人手覆核嗰批留返俾 needs_hr/needs_boss
@@ -347,6 +370,31 @@ async function main() {
       const existingNumbers = staffNumbersByGuard.get(guardId) ?? [];
       const alreadyHasNumber = staffNoNorm ? existingNumbers.some((n) => n.number === staffNoNorm) : true;
       const scheme = staffNoNorm ? (staffNoNorm.match(/^[A-Z]+/)?.[0] ?? "U") : null;
+      // 驗收（Opus 5.5）——「建錯人」防線：
+      //  (a) 更表工號已經係 DB **另一個人**嘅（任何 status）→ 唔准 link。
+      //  (b) 更表工號 DB 冇，但目標人已經有同 scheme 嘅 current 號 → 加
+      //      新號會將佢現有號轉做已取消（`upsertCurrentStaffNumber()`），
+      //      兩個唔同號好大機會係兩個唔同人 → 唔准 link。
+      //  (c) 淨係一種「弱」證據（電話相同——家人／雞頭電話；或者核對表
+      //      按姓名搵到——同名唔同人）→ 唔准 link；要多一種獨立證據
+      //      （身份證、另一種方法、或者更表工號本身已經屬呢個人）。
+      const snOwner = staffNoNorm ? staffNoOwner.get(staffNoNorm) : undefined;
+      const snCorroborates = !!snOwner && snOwner === guardId;
+      const hasOtherCurrentSameScheme =
+        !!staffNoNorm && !snOwner && existingNumbers.some((n) => n.status === "current" && n.scheme === scheme && n.number !== staffNoNorm);
+      const strongEvidence = methodsFound.some((m) => m === byHkid) || methodsFound.length >= 2 || snCorroborates;
+      const refuse =
+        snOwner && snOwner !== guardId
+          ? "更表工號已經屬 DB 另一位安員，同電話／名單判斷到嘅人唔一致"
+          : hasOtherCurrentSameScheme
+            ? "更表工號同目標安員現有工號唔同（加咗會令佢現有號變已取消），可能係兩個人"
+            : !strongEvidence
+              ? `淨係一種弱證據（${methodsFound.map((m) => m.method).join("／")}），可能係家人／雞頭共用電話或同名唔同人`
+              : null;
+      if (refuse) {
+        needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: `${refuse}，唔自動 link，交老闆睇`, candidateGuardIds: [guardId] });
+        continue;
+      }
       const nameMatches = identity.nameRaw === guard.nameZh.trim();
       const alreadyHasAlias = guard.nameAliases.includes(identity.nameRaw);
       link.push({
@@ -363,10 +411,14 @@ async function main() {
     // 三種方法都搵唔到——ambiguous 嘅身份（DB 已經同名多人，但判斷唔到
     // 邊個）交老闆；unmatched 嘅身份先試 U Team 名單。
     if (identity.kind === "ambiguous") {
+      const snNormForReason = identity.staffNoRaw ? normalizeStaffNumber(identity.staffNoRaw) : null;
+      const snOwnedByOther = !!snNormForReason && staffNoOwner.has(snNormForReason);
       needsBoss.push({
         type: "needs_boss",
         seq: identity.seq,
-        reason: "DB 同名多人，工號／電話／身份證都判斷唔到邊一個，交老闆睇",
+        reason: snOwnedByOther
+          ? "更表工號屬 DB 另一位安員（姓名對唔上，唔准配），電話／身份證都判斷唔到係邊個，交老闆睇"
+          : "DB 同名多人，工號／電話／身份證都判斷唔到邊一個，交老闆睇",
         candidateGuardIds: [...(guardIndex.byName.get(identity.nameRaw) ?? [])],
       });
       continue;
@@ -392,7 +444,31 @@ async function main() {
       continue;
     }
 
+    // 驗收（Opus 5.5）——建新人之前嘅防重複／防錯人：
     if (uRow) {
+      const uRowHkidCanon = canonicalHkid(uRow.hkid);
+      const uNumberForCreate = uRow.uNumber ?? uNumber;
+      const rowTel = identity.telRaw ? normalizeTel(identity.telRaw) : null;
+      const refuse =
+        uRow.hkidNote === "mentions_other_number"
+          ? "名單身份證欄備註話呢個人用緊另一個工號（DB 可能已經有呢個人）"
+          : uRowHkidCanon && hkidIndex.has(uRowHkidCanon)
+            ? "名單身份證已經喺 DB（同身份證已有安員），唔可以再起一個"
+            : uNumberForCreate && staffNoOwner.has(uNumberForCreate)
+              ? "名單工號已經屬 DB 另一位安員（任何狀態，含已取消——規則 8 唔復用）"
+              : !uRowByNumber && (!rowTel || !uRow.tel || rowTel !== uRow.tel)
+                ? !rowTel || !uRow.tel
+                  ? "淨係靠姓名喺名單搵到，更表／名單冇電話可以核對（可能同名唔同人）"
+                  : "淨係靠姓名喺名單搵到，而更表電話同名單電話對唔上（可能同名唔同人）"
+                : null;
+      if (refuse) {
+        needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: `${refuse}，唔自動建人，交老闆睇`, candidateGuardIds: [] });
+        continue;
+      }
+    }
+
+    if (uRow) {
+      if (uRow.hkidNote === "invalid") hkidDroppedCount += 1;
       const nameZh = uRow.nameZh ?? uRow.displayName ?? identity.nameRaw;
       const alias = nameZh !== identity.nameRaw ? identity.nameRaw : null;
       const primaryTel = uRow.tel ?? identity.telRaw ?? null;
@@ -456,17 +532,23 @@ async function main() {
 - create_minimal：${createMinimal.length}（＝ needs_hr）
 - needs_hr：${createMinimal.length}
 - needs_boss：${needsBoss.length}
+- create 入面名單身份證欄唔係身份證格式、冇寫入（要 HR 補）：${hkidDroppedCount}
 
 ## needs_hr（盤＋格數，U Team 名單／核對表都搵唔到，要 HR 補資料）
 ${fmtSiteBreakdown(cellsBySiteFor(createMinimal))}
 
 ## needs_boss（盤＋格數，決定唔到，要老闆睇）
 ${fmtSiteBreakdown(cellsBySiteFor(needsBoss))}
+
+## needs_boss 逐項（序號＋盤＋格數＋原因，唔列名；序號對返 plan.json）
+${needsBoss.map((a) => `  - ${a.seq} ${identities.find((i) => i.seq === a.seq)!.cells.map((c) => `${c.siteLabel} ${c.cellCount} 格`).join("、")}——${a.reason}`).join("\n") || "  （冇）"}
 `;
   writeFileSync(PLAN_SUMMARY_PATH, summary, "utf8");
 
   console.log(`[build-guard-fix-plan] 身份總數 ${identities.length}（格總數 ${totalCells}）`);
   console.log(`[build-guard-fix-plan] link=${link.length} create=${create.length} create_minimal(needs_hr)=${createMinimal.length} needs_boss=${needsBoss.length}`);
+  if (hkidDroppedCount) console.log(`[build-guard-fix-plan] ! create 入面 ${hkidDroppedCount} 個名單身份證欄唔係身份證格式，冇寫入（要 HR 補）`);
+  for (const a of needsBoss) console.log(`[build-guard-fix-plan] needs_boss ${a.seq}：${identities.find((i) => i.seq === a.seq)!.cells.map((c) => `${c.siteLabel} ${c.cellCount} 格`).join("、")}——${a.reason}`);
   console.log(`[build-guard-fix-plan] plan.json → ${PLAN_JSON_PATH}`);
   console.log(`[build-guard-fix-plan] plan-summary.md → ${PLAN_SUMMARY_PATH}`);
 }

@@ -765,6 +765,11 @@ model RosterUploadRow {
   // 上載本身嘅 site_id。
   resolvedSiteId String? @map("resolved_site_id")
   resolvedSite   Site?   @relation(fields: [resolvedSiteId], references: [id])
+  // WP-GUARD-FIX 驗收（Opus 5.5）：`resolved_site_id` 係對數頁人手「批量
+  // 指定子盤／全部歸母盤確認」揀嘅——`reparseRosterUpload()` 重建 rows
+  // 嗰陣要保留呢個決定（唔俾三層推斷覆蓋），見 migration
+  // 20260925130000_wp_guard_fix_resolved_site_manual。
+  resolvedSiteManual Boolean @default(false) @map("resolved_site_manual")
 
   staffNoRaw    String? @map("staff_no_raw")
   nameRaw       String? @map("name_raw")

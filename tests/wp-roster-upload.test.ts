@@ -765,6 +765,81 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(resolveAgainBody.skipped.map((s) => s.row_id)).toEqual([rows[0]!.id]);
     const afterRow2 = await prisma.rosterUploadRow.findUniqueOrThrow({ where: { id: rows[0]!.id } });
     expect(afterRow2.resolvedSiteId).toBe(childG.id); // 冇被第二次呼叫改走
+    expect(afterRow2.resolvedSiteManual).toBe(true);
+
+    // 驗收（Opus 5.5）：audit 有寫（roster_upload_rows update）。
+    const auditRow = await prisma.auditLog.findFirst({ where: { tableName: "roster_upload_rows", rowId: rows[0]!.id, action: "update" } });
+    expect(auditRow).toBeTruthy();
+
+    // 驗收（Opus 5.5）：reparse（bytes 唔變）之後，人手指定嘅子盤要保留，
+    // 唔可以俾三層推斷覆蓋返「子盤未定」。
+    const reparseRes = await reparseUpload(reqJson(`http://test.local/api/roster-uploads/${body.upload.id}/reparse`, ownerCookie, "POST"), { params: Promise.resolve({ id: body.upload.id }) });
+    expect(reparseRes.status).toBe(200);
+    const afterReparse = await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } });
+    expect(afterReparse).toHaveLength(1);
+    expect(afterReparse[0]!.resolvedSiteId).toBe(childG.id);
+    expect(afterReparse[0]!.resolvedSiteManual).toBe(true);
+    expect(afterReparse[0]!.shiftTypeId).toBe(shiftTypeG.id);
+    expect(JSON.stringify(afterReparse[0]!.warnings)).toContain("子盤人手指定（重新解析保留）");
+    const { items: itemsAfter } = await reconcileUpload(body.upload.id);
+    expect(itemsAfter.some((i) => i.category === "unresolved" && i.unresolvedReason?.includes("批量指定子盤"))).toBe(false);
+  });
+
+  it("§28g 驗收（Opus 5.5）：resolve-subsite 權限——雞頭 403；鎖咗月份 403＋permission_denied audit，行唔郁", async () => {
+    const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤7", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
+    const childI = await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤I", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+    const childJ = await prisma.site.create({
+      data: { canonicalName: "測試車廠子盤J", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
+    });
+    const stI = await prisma.shiftType.create({ data: { siteId: childI.id, code: "D", createdBy: "test-wp-roster-upload" } });
+    const stJ = await prisma.shiftType.create({ data: { siteId: childJ.id, code: "D", createdBy: "test-wp-roster-upload" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date(Date.UTC(2026, 6, 11)), siteId: childI.id, shiftTypeId: stI.id, guardId: fx.guardA.id, status: "confirmed", createdBy: "test-wp-roster-upload" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date(Date.UTC(2026, 6, 12)), siteId: childJ.id, shiftTypeId: stJ.id, guardId: fx.guardA.id, status: "confirmed", createdBy: "test-wp-roster-upload" } });
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("2026");
+    ws.getCell("A2").value = parent.canonicalName;
+    ws.getCell("G4").value = "Date";
+    ws.getCell("H4").value = aug(1);
+    ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getCell("H6").value = "D";
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-resolve-perm.xlsx"));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { upload: { id: string } };
+    const row = (await prisma.rosterUploadRow.findMany({ where: { uploadId: body.upload.id } }))[0]!;
+    expect(row.resolvedSiteId).toBeNull();
+    const url = `http://test.local/api/roster-uploads/${body.upload.id}/reconcile/resolve-subsite`;
+    const ctx = { params: Promise.resolve({ id: body.upload.id }) };
+
+    const brokerRes = await resolveSubSite(reqJson(url, brokerCookie, "POST", { row_ids: [row.id], site_id: childI.id }), ctx);
+    expect(brokerRes.status).toBe(403);
+
+    const aug1 = new Date(Date.UTC(2026, 7, 1));
+    const existingMc = await prisma.monthClose.findUnique({ where: { month: aug1 } });
+    await prisma.monthClose.upsert({ where: { month: aug1 }, create: { month: aug1, lockedAt: new Date(), createdBy: "test" }, update: { lockedAt: new Date() } });
+    try {
+      const lockedRes = await resolveSubSite(reqJson(url, accountantCookie, "POST", { row_ids: [row.id], site_id: childI.id }), { params: Promise.resolve({ id: body.upload.id }) });
+      expect(lockedRes.status).toBe(403);
+      const denied = await prisma.auditLog.findFirst({ where: { tableName: "roster_uploads", rowId: body.upload.id, action: "permission_denied" } });
+      expect(denied).toBeTruthy();
+      const still = await prisma.rosterUploadRow.findUniqueOrThrow({ where: { id: row.id } });
+      expect(still.resolvedSiteId).toBeNull();
+      expect(still.resolvedSiteManual).toBe(false);
+    } finally {
+      if (existingMc) await prisma.monthClose.update({ where: { month: aug1 }, data: { lockedAt: existingMc.lockedAt } });
+      else await prisma.monthClose.delete({ where: { month: aug1 } });
+    }
+
+    // 解鎖之後會計（內部角色）得。
+    const okRes = await resolveSubSite(reqJson(url, accountantCookie, "POST", { row_ids: [row.id], site_id: null }), { params: Promise.resolve({ id: body.upload.id }) });
+    expect(okRes.status).toBe(200);
+    const done = await prisma.rosterUploadRow.findUniqueOrThrow({ where: { id: row.id } });
+    expect(done.resolvedSiteId).toBe(parent.id); // 全部歸母盤確認
+    expect(done.resolvedSiteManual).toBe(true);
   });
 
   it("§29 B1-8 第 3 項：檔案工號命中真實安員，但姓名對唔上→唔准配（ambiguous），warning「屬另一人」", async () => {

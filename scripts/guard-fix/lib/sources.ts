@@ -25,9 +25,33 @@ export interface UTeamRow {
   nameZh: string | null;
   displayName: string | null;
   tel: string | null; // 正規化
-  hkid: string | null; // trim，大寫（同 guards.hkid 入 DB 前嘅慣例一致：唔轉大寫——保留原文，比對時先兩邊都轉大寫）
+  /** 驗收（Opus 5.5）：淨係「真係身份證格式」先有值（`A123456(7)` 格式，
+   * 同 `HKID_RE`（src/lib/api/schemas.ts）一致）——名單呢欄實測有一批
+   * 唔係身份證嘅值（「需填寫…號碼」placeholder 22 行、「在職,正式編號…」
+   * 「用緊…,個名正確寫法…」呢類備註），之前會原文寫入 `guards.hkid`，
+   * 仲會令幾個唔同人共用同一個「身份證」。 */
+  hkid: string | null;
+  /** 身份證欄唔係身份證格式嗰陣嘅分類（唔存原文，避免 PII 周圍散）：
+   * `mentions_other_number`＝備註提到佢用緊另一個工號（可能 DB 已經有
+   * 呢個人）→ build 一律 needs_boss；`invalid`＝其他唔啱格式（寫唔入，
+   * 要 HR 補）。 */
+  hkidNote: "invalid" | "mentions_other_number" | null;
   hireDate: string | null; // YYYY-MM-DD
   employeeStatus: string | null;
+}
+
+/** 驗收（Opus 5.5）：身份證比對用嘅 canonical key——大寫、去空白、去
+ * 半形／全形括號（`A123456(7)`／`A1234567`／`A123456（7）` 都當同一個）。
+ * 唔係身份證格式就 null。 */
+export function canonicalHkid(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const s = raw.toUpperCase().replace(/\s+/g, "").replace(/[()（）]/g, "");
+  return /^[A-Z]{1,2}\d{6}[0-9A]$/.test(s) ? s : null;
+}
+
+/** canonical → 入 DB 嘅顯示格式 `A123456(7)`（同 `HKID_RE` 一致）。 */
+function formatHkid(canon: string): string {
+  return `${canon.slice(0, -1)}(${canon.slice(-1)})`;
 }
 
 function cellText(row: ExcelJS.Row, col1based: number): string | null {
@@ -77,7 +101,8 @@ export async function loadUTeamList(filePath: string = U_TEAM_XLSX_PATH): Promis
       nameZh,
       displayName,
       tel: telRaw ? normalizeTel(telRaw) : null,
-      hkid: hkidRaw ? hkidRaw.toUpperCase().replace(/\s+/g, "") : null,
+      hkid: canonicalHkid(hkidRaw) ? formatHkid(canonicalHkid(hkidRaw)!) : null,
+      hkidNote: !hkidRaw || canonicalHkid(hkidRaw) ? null : /用緊|正式編號|威信編號/.test(hkidRaw) ? "mentions_other_number" : "invalid",
       hireDate: hireDateRaw,
       employeeStatus,
     });
@@ -137,7 +162,7 @@ export async function loadCrossCheckMainSheet(filePath: string = CROSS_CHECK_XLS
       systemId,
       nameZh,
       uNumber: uNumberRaw ? normalizeStaffNumber(uNumberRaw) : null,
-      hkid: hkidRaw ? hkidRaw.toUpperCase().replace(/\s+/g, "") : null,
+      hkid: canonicalHkid(hkidRaw),
     });
   }
   return rows;

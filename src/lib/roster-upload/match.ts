@@ -511,10 +511,9 @@ export function buildGuardMatchIndex(rows: {
 /** 安員配對次序（WP-GUARD-FIX 老闆 2026-09-25 要求擴充）：
  *   (1) staff_no_raw（正規化，含已取消號——`byStaffNumber` 索引唔分
  *       current/former，舊號都要搵到返個人）；
- *   (2) 姓名＋電話；
- *   (2b) 別名＋電話（`guards.name_aliases`——更表寫嘅可能係花名／曾用名）；
- *   (3) 姓名唯一（多於一個候選→ambiguous）；
- *   (3b) 別名唯一（多於一個候選→ambiguous）。
+ *   (2) 姓名／別名＋電話（`guards.name_aliases`——更表寫嘅可能係花名／
+ *       曾用名；驗收 Opus 5.5：本名同別名候選合埋計）；
+ *   (3) 姓名／別名唯一（合埋多於一個候選→ambiguous）。
  * 「唔准估」：每一步淨係喺剩返一個候選先當啱，唔會揀「最似」嗰個。
  *
  * Phase B-0：加埋 (a)/(b) 兩個 flag（見 `GuardMatchResult` 註解）——
@@ -580,43 +579,28 @@ export function matchGuard(
   const name = rowName;
   const tel = params.telRaw ? normalizeTel(params.telRaw) : null;
 
+  // WP-GUARD-FIX 驗收（Opus 5.5）：(2)/(2b) 同 (3)/(3b) 改做「本名∪別名」
+  // 一齊計候選——之前本名步驟先行、命中一個就即刻返回，如果 A 嘅別名
+  // 啱啱等於 B 嘅本名（例如兩個同名人，其中一個用別名登記），更表寫呢
+  // 個名嘅行會靜靜配咗俾 B，完全唔理 A；而家兩邊合埋多過一個人就
+  // ambiguous（唔准估）。淨係靠別名命中先標 `matchedViaAlias`。
   if (name && tel) {
-    const candidates = index.byNameAndTel.get(nameTelKey(name, tel)) ?? [];
+    const key = nameTelKey(name, tel);
+    const viaName = index.byNameAndTel.get(key) ?? [];
+    const viaAlias = index.byAliasAndTel.get(key) ?? [];
+    const candidates = [...new Set([...viaName, ...viaAlias])];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: false };
-    }
-    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
-  }
-
-  // WP-GUARD-FIX（老闆 2026-09-25 要求，配對次序 (2b)）：姓名＋電話冧唔到
-  // 先試「別名＋電話」——更表姓名寫法可能係花名／曾用名，`guards.
-  // name_aliases` 就係俾呢種情況用（見 src/lib/api/schemas.ts
-  // `nameAliases` 大註解）。`guard_match` 一樣揀 `by_name_tel`（「二揀一」
-  // 唔加 enum 值，`matchedViaAlias` flag 分開留痕，同 `matchedViaFormerStaffNo`
-  // 一致做法）。
-  if (name && tel) {
-    const candidates = index.byAliasAndTel.get(nameTelKey(name, tel)) ?? [];
-    if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: true };
+      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!) };
     }
     if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
   }
 
   if (name) {
-    const candidates = index.byName.get(name) ?? [];
+    const viaName = index.byName.get(name) ?? [];
+    const viaAlias = index.byAlias.get(name) ?? [];
+    const candidates = [...new Set([...viaName, ...viaAlias])];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: false };
-    }
-    if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
-  }
-
-  // WP-GUARD-FIX（配對次序 (3b)）：姓名唯一都冧唔到，最後試「別名唯一」
-  // （呢一步冇電話都得，同「姓名唯一」一致寬鬆度——多過一個別名撞中就
-  // ambiguous，唔准估）。
-  if (name) {
-    const candidates = index.byAlias.get(name) ?? [];
-    if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: true };
+      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!) };
     }
     if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
   }

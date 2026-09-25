@@ -99,6 +99,15 @@ export interface RosterUploadParseSummary {
   warnings: string[];
 }
 
+/** WP-GUARD-FIX 驗收（Opus 5.5）：reparse 前後對返「同一格」嘅 key——
+ * 檔案 bytes 唔變，`parseRosterWorkbook()` 係決定性嘅，(row_index,
+ * work_date, raw_code, staff_no_raw, name_raw) 足夠分辨同一格（加埋姓名／
+ * 工號係防多 sheet 同 row_index 撞）。 */
+function manualSiteKey(r: { rowIndex: number; workDate: string | Date; rawCode: string; staffNoRaw: string | null; nameRaw: string | null }): string {
+  const wd = typeof r.workDate === "string" ? r.workDate : r.workDate.toISOString().slice(0, 10);
+  return [r.rowIndex, wd, r.rawCode, r.staffNoRaw ?? "", (r.nameRaw ?? "").trim()].join("|");
+}
+
 /** 逐格對照（雞頭碼→broker、code→shift_type、姓名/電話/工號→guard）＋
  * 砌返 roster_upload_rows 嘅 create 輸入＋parse_summary。純粹讀 DB（傳
  * 入嘅 tx），唔寫入——寫入由 caller（`processRosterUpload`／
@@ -116,6 +125,10 @@ async function matchRowsAndSummarize(
   // match.ts `resolveRosterUploadSite()` 註解）。冇傳＝行為同之前一樣
   // （`reparseRosterUpload()` 已經人手指定 site_id 嗰種情況唔使呢層）。
   siteMatch?: Pick<RosterUploadSiteResolution, "matchedViaFileKey" | "fileKeyMatchedKey" | "parentNoSubSiteWarning">,
+  // WP-GUARD-FIX 驗收（Opus 5.5）：reparse 前對數頁人手指定過嘅子盤
+  // （`resolved_site_manual=true`），key 見 `manualSiteKey()`——命中就用
+  // 返人手決定，唔行三層推斷（唔俾 reparse 覆蓋人手決定）。
+  manualSiteOverrides?: ReadonlyMap<string, string>,
 ): Promise<{ rows: Prisma.RosterUploadRowCreateManyInput[]; summary: RosterUploadParseSummary | null }> {
   if (!parseResult.ok) return { rows: [], summary: null };
 
@@ -264,6 +277,7 @@ async function matchRowsAndSummarize(
     // 大多數）同上載本身嘅 site_id 一致；有子盤而且呢行有 sub_site_name
     // 就用嚟對返個子盤；有子盤但對唔到就 null（唔准估）。
     let effectiveSiteId = resolvedSiteId;
+    let resolvedSiteManual = false;
     const warnings = [...r.warnings];
     // WP-UPLOAD-AUTOFIX 個案 1：呢個上載嘅盤係靠檔名鍵（`roster_file_
     // keys`）對到嘅——逐行留痕「由邊條鍵對盤」，等會計覆核（同「子盤對
@@ -283,13 +297,23 @@ async function matchRowsAndSummarize(
     } else if (resolvedSiteId && childSites.length > 0 && !r.subSiteName) {
       // WP-GUARD-FIX 第二輪：三層推斷（見上面大註解）。
       const identityKey = identityKeyOf(r);
-      if (sameFileInferredByIdentity.has(identityKey)) {
+      const manualSiteId = manualSiteOverrides?.get(manualSiteKey(r));
+      if (manualSiteId && (manualSiteId === resolvedSiteId || childSites.some((c) => c.id === manualSiteId))) {
+        // WP-GUARD-FIX 驗收（Opus 5.5）：人手指定過——保留，唔再推斷。
+        effectiveSiteId = manualSiteId;
+        resolvedSiteManual = true;
+        warnings.push("子盤人手指定（重新解析保留）");
+      } else if (sameFileInferredByIdentity.has(identityKey)) {
         const inferredName = sameFileInferredByIdentity.get(identityKey)!;
         const childId = matchSite(inferredName, childSites);
         if (childId) {
           effectiveSiteId = childId;
           subSiteInferredFromFileCount += 1;
           warnings.push(`子盤由同檔其他行推斷：${inferredName}`);
+        } else {
+          // 驗收（Opus 5.5）：同檔其他行寫嘅子盤本身對唔到——唔可以靜靜
+          // 歸母盤冇任何 warning。
+          warnings.push("未寫子盤，歸母盤，人手覆核係咪漏寫子盤");
         }
       } else if (historyInferredByIdentity.has(identityKey)) {
         effectiveSiteId = historyInferredByIdentity.get(identityKey)!;
@@ -373,6 +397,7 @@ async function matchRowsAndSummarize(
       codeKind: r.codeKind,
       shiftTypeId: shiftTypeMatch.id,
       resolvedSiteId: effectiveSiteId,
+      resolvedSiteManual,
       staffNoRaw: r.staffNoRaw,
       nameRaw: r.nameRaw,
       telRaw: r.telRaw,
@@ -525,7 +550,14 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
 /** 重新解析一個已存在嘅上載（檔案 bytes 唔變）——刪返舊 rows 再插新，
  * upload 本身嘅 status/parse_summary/layout_key 同步更新。已經人手
  * PATCH 指定咗嘅 site_id 保留，唔會俾解析結果覆蓋。 */
-export async function reparseRosterUpload(uploadId: string, opts: { autoResolveSite?: boolean } = {}): Promise<ParseResult> {
+export async function reparseRosterUpload(
+  uploadId: string,
+  // WP-GUARD-FIX 驗收（Opus 5.5）：`txTimeoutMs`——scripts 經 Zeabur 公開
+  // port 對正式站 reparse 嗰陣，一個大上載（啟航1331 千幾格）喺預設 5 秒
+  // interactive transaction timeout 入面好易 P2028；web route 唔傳，維持
+  // 預設。
+  opts: { autoResolveSite?: boolean; txTimeoutMs?: number } = {},
+): Promise<ParseResult> {
   const autoResolveSite = opts.autoResolveSite ?? true;
   const existing = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
   const buffer = Buffer.from(existing.fileBytes);
@@ -553,8 +585,17 @@ export async function reparseRosterUpload(uploadId: string, opts: { autoResolveS
   const keepStatus = existing.status === "superseded" || existing.status === "confirmed";
 
   await prisma.$transaction(async (tx) => {
+    // WP-GUARD-FIX 驗收（Opus 5.5）：刪之前記低人手指定過嘅子盤（對數頁
+    // 「批量指定子盤／全部歸母盤確認」），重建 rows 嗰陣用返——唔俾
+    // reparse（三層推斷）覆蓋人手決定。上載個盤變咗（人手改 site_id）就
+    // 唔保留（`matchRowsAndSummarize()` 會驗證 site 仍然係母盤／其子盤）。
+    const manualRows = await tx.rosterUploadRow.findMany({
+      where: { uploadId, resolvedSiteManual: true, resolvedSiteId: { not: null } },
+      select: { rowIndex: true, workDate: true, rawCode: true, staffNoRaw: true, nameRaw: true, resolvedSiteId: true },
+    });
+    const manualSiteOverrides = new Map(manualRows.map((m) => [manualSiteKey(m), m.resolvedSiteId!]));
     await tx.rosterUploadRow.deleteMany({ where: { uploadId } });
-    const { rows, summary } = await matchRowsAndSummarize(tx, uploadId, resolvedSiteId, parseResult, brokers, existing.month, siteMatch);
+    const { rows, summary } = await matchRowsAndSummarize(tx, uploadId, resolvedSiteId, parseResult, brokers, existing.month, siteMatch, manualSiteOverrides);
     if (rows.length) await tx.rosterUploadRow.createMany({ data: rows });
 
     await tx.rosterUpload.update({
@@ -567,7 +608,7 @@ export async function reparseRosterUpload(uploadId: string, opts: { autoResolveS
         layoutKey: parseResult.ok ? parseResult.layoutKey : null,
       },
     });
-  });
+  }, opts.txTimeoutMs ? { timeout: opts.txTimeoutMs, maxWait: 30_000 } : undefined);
 
   return parseResult;
 }
@@ -585,14 +626,10 @@ export interface BulkResolveSubSiteResult {
  * `matchShiftType()`（唔係成個 `reparseRosterUpload()`——淨係改咗嘅行
  * 唔應該連累其他行嘅配對結果重新計一次，亦唔會抹走呢個人手決定）。
  *
- * 已知限制（老實列出）：呢個決定冇獨立欄記低「呢行係人手指定」，靠
- * `resolved_site_id` 非 null 呢個事實本身——如果之後檔案內容有改動再
- * `reparseRosterUpload()`（例如老闆改完 Excel 重新上載同一檔案觸發嘅
- * 完整 re-parse），會重新行一次三層推斷，人手指定嘅結果**唔一定**保留
- * （同檔/歷史推斷可能算出唔同結果）。淨係「單純 `POST .../reparse`
- * （bytes 冇變）」先會保留——嗰種情況入面 sub_site_name 都係 blank，
- * 三層推斷會重新行一次，如果推斷邏輯本身冇變，結果應該一致；但呢層
- * 冇強制保證，屬於已知限制，記喺 P2-版面重設計計劃.md §18。 */
+ * WP-GUARD-FIX 驗收（Opus 5.5）：人手決定寫 `resolved_site_manual=true`，
+ * `reparseRosterUpload()` 重建 rows 嗰陣用 `manualSiteKey()` 對返同一格
+ * 保留（之前冇呢個欄，一 reparse 人手決定就冇咗）。新上載版本（新檔案）
+ * 唔會繼承——嗰個係另一份更表，要重新判斷。 */
 export async function bulkResolveAmbiguousSubSite(params: {
   uploadId: string;
   rowIds: string[];
@@ -602,6 +639,13 @@ export async function bulkResolveAmbiguousSubSite(params: {
 }): Promise<BulkResolveSubSiteResult> {
   const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
   if (!upload.siteId) throw BadRequest("呢個上載未指定盤，請先指定盤先可以批量指定子盤");
+  // WP-GUARD-FIX 驗收（Opus 5.5）：同 `applyReconcileDecisions()` 一致——
+  // 淨係 parsed／confirmed 先可以改；鎖咗嘅月份一律拒（寫 permission_denied
+  // audit）。之前漏咗鎖月檢查，已鎖月份仲改得到 roster_upload_rows。
+  if (upload.status !== "parsed" && upload.status !== "confirmed") {
+    throw BadRequest(`呢個上載狀態係「${upload.status}」，唔可以批量指定子盤（要 parsed 或 confirmed）`);
+  }
+  await assertMonthNotLocked({ workDate: upload.month, actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
   const childSites = await prisma.site.findMany({ where: { parentSiteId: upload.siteId }, select: { id: true, canonicalName: true } });
   const targetSiteId = params.siteId ?? upload.siteId; // null＝全部歸母盤確認
   if (params.siteId && !childSites.some((c) => c.id === params.siteId)) {
@@ -634,7 +678,7 @@ export async function bulkResolveAmbiguousSubSite(params: {
       const noteText = params.siteId ? `人手批量指定子盤：${childSites.find((c) => c.id === params.siteId)?.canonicalName ?? params.siteId}` : "人手批量確認歸母盤";
       const after = await tx.rosterUploadRow.update({
         where: { id: row.id },
-        data: { resolvedSiteId: targetSiteId, shiftTypeId: shiftTypeMatch.id, warnings: [...existingWarnings, noteText] as Prisma.InputJsonValue },
+        data: { resolvedSiteId: targetSiteId, resolvedSiteManual: true, shiftTypeId: shiftTypeMatch.id, warnings: [...existingWarnings, noteText] as Prisma.InputJsonValue },
       });
       await writeAuditTx(tx, { actorUserId: params.actorUserId, tableName: "roster_upload_rows", rowId: row.id, action: "update", before: row, after, ip: params.ip });
       result.updated.push(row.id);

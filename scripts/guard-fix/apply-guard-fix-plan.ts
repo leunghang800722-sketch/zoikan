@@ -23,6 +23,7 @@ import { writeAuditTx } from "@/lib/audit";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
 import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
+import { canonicalHkid } from "./lib/sources";
 import type { GuardFixPlan } from "./lib/types";
 
 const prisma = new PrismaClient();
@@ -55,11 +56,18 @@ async function main() {
   console.log(`[apply-guard-fix-plan] 目標 DB：${describeDbTarget()}${APPLY ? "" : "（--plan，唔會寫入）"}`);
   const plan = JSON.parse(readFileSync(PLAN_JSON_PATH, "utf8")) as GuardFixPlan;
   console.log(`[apply-guard-fix-plan] plan 產生於 ${plan.generatedAt}，資料嚟源 ${plan.sourceMode}`);
+  // 驗收（Opus 5.5）：plan 係對住另一個 DB build 嘅（例如 dev build 完
+  // 忘記重新 build 就對正式站 apply）→ 停。
+  if (plan.dbTarget !== describeDbTarget()) {
+    throw new Error(`plan.json 係對住 ${plan.dbTarget} build 嘅，而家目標係 ${describeDbTarget()}——停，請對住目標 DB 重新 build。`);
+  }
   console.log(`[apply-guard-fix-plan] link=${plan.actions.link.length} create=${plan.actions.create.length} create_minimal=${plan.actions.createMinimal.length} needs_boss=${plan.actions.needsBoss.length}`);
 
   const diffs = { link: emptyDiff(), create: emptyDiff(), createMinimal: emptyDiff() };
 
   const run = async (tx: Prisma.TransactionClient) => {
+    // 驗收（Opus 5.5）：防重複建人——apply 嗰刻 DB 已有嘅身份證（canonical）。
+    const existingHkids = new Set((await tx.guard.findMany({ where: { hkid: { not: null } }, select: { hkid: true } })).map((g) => canonicalHkid(g.hkid)).filter((x): x is string => !!x));
     // -----------------------------------------------------------------
     // 1. link——登記工號／加別名到現有安員。
     // -----------------------------------------------------------------
@@ -72,6 +80,12 @@ async function main() {
       let needsStaffNo = false;
       if (la.addStaffNumber) {
         const existing = await tx.guardStaffNumber.findUnique({ where: { number: la.addStaffNumber.number } });
+        // 驗收（Opus 5.5）：build 之後呢個號已經俾第二個人登記咗——成個
+        // link 唔做（連別名都唔加），唔係淨係靜靜跳過個號。
+        if (existing && existing.guardId !== la.guardId) {
+          diffs.link.skip.push(`${la.seq}（工號已經屬另一位安員，成項唔做，交老闆睇）`);
+          continue;
+        }
         needsStaffNo = !existing;
       }
       const needsAlias = !!la.addAlias && !guard.nameAliases.includes(la.addAlias);
@@ -125,6 +139,11 @@ async function main() {
       // natural key）；冇 U 號（create_minimal）冧唔到穩定 natural key，
       // 淨係查一次同名+同電話嘅 guard 存唔存在（防止 --plan→--apply 之間
       // 又跑多次 build 產生重複身份）。
+      const hkidCanon = canonicalHkid(opts.hkid);
+      if (hkidCanon && existingHkids.has(hkidCanon)) {
+        opts.diff.skip.push(`${opts.seq}（同身份證已有安員，唔再起，交老闆睇）`);
+        return;
+      }
       if (opts.uNumber) {
         const existingSn = await tx.guardStaffNumber.findUnique({ where: { number: opts.uNumber } });
         if (existingSn) {
@@ -139,6 +158,7 @@ async function main() {
         }
       }
       opts.diff.create.push(opts.seq);
+      if (hkidCanon) existingHkids.add(hkidCanon); // 同一個 plan 入面兩項同身份證都要擋
       if (PLAN_ONLY) return;
 
       const broker = await tx.broker.findUnique({ where: { code: opts.defaultBrokerCode }, select: { id: true } });
@@ -238,10 +258,18 @@ async function main() {
   // 3. --apply 完成之後：對目標 DB 2026-08 全部 active 上載逐個
   //    reparseRosterUpload()（順序，唔並行）。
   // -----------------------------------------------------------------
+  // 驗收（Opus 5.5）：`confirmed`（對數已經寫入 shift_records）嘅上載唔
+  // reparse——reparse 會刪晒 rows 再重建（新 row id），對數頁「保留系統／
+  // 例外」決定係用 `row:<id>` 做 key 嘅會對唔返；已寫入嘅更亦唔會因為
+  // reparse 而改。淨係列出嚟俾人知。
+  const confirmedUploads = await prisma.rosterUpload.findMany({ where: { month: AUG_MONTH, status: "confirmed" }, select: { id: true, siteId: true, siteNameRaw: true } });
   const uploads = await prisma.rosterUpload.findMany({
-    where: { month: AUG_MONTH, status: { notIn: ["superseded", "voided"] } },
+    where: { month: AUG_MONTH, status: { notIn: ["superseded", "voided", "confirmed"] } },
     select: { id: true, siteId: true, siteNameRaw: true },
   });
+  if (confirmedUploads.length) {
+    console.log(`\n[apply-guard-fix-plan] ! ${confirmedUploads.length} 個 2026-08 上載已經對數確認（confirmed），唔 reparse（已寫入 shift_records 嘅唔郁）。`);
+  }
   if (uploads.length === 0) {
     console.log("\n[apply-guard-fix-plan] 目標 DB 冇 2026-08 active 上載，跳過 reparse（dev 環境未上載更表嗰陣正常）。");
     return;
@@ -263,7 +291,9 @@ async function main() {
   for (const u of uploads) {
     const label = (u.siteId && siteNameById.get(u.siteId)) || u.siteNameRaw || "（盤名未定）";
     const before = await countUnmatchedAmbiguous(u.id);
-    await reparseRosterUpload(u.id);
+    // 驗收（Opus 5.5）：經公開 port 行，大上載喺預設 5 秒 transaction
+    // timeout 會 P2028——俾 10 分鐘。
+    await reparseRosterUpload(u.id, { txTimeoutMs: 600_000 });
     const after = await countUnmatchedAmbiguous(u.id);
     totalBefore += before.unmatched + before.ambiguous;
     totalAfter += after.unmatched + after.ambiguous;
