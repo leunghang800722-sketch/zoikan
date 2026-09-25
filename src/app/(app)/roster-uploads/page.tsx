@@ -3,6 +3,18 @@
 // 會計每月逐盤上載更表檔案（xlsx），即時解析＋對照（盤／更別／安員／
 // 雞頭），**唔寫入 shift_records**（對數＋寫入係 Phase B）。雞頭／安員
 // 呢個 module 硬性 deny，連呢頁都入唔到（API 一律 403，見 matrix.ts）。
+//
+// WP-UPLOAD-VOID（老闆 2026-09-25 要求）：
+//   1. 作廢——正式站揀錯月份上載咗 8 月更表，之前冇任何刪除／撤銷。逐個
+//      已上載嘅盤／詳情頁加「作廢」掣（`ConfirmVoidButton`，強制填原因），
+//      作廢後列表刷新（voided 唔再顯示做「已上載」）；「顯示已作廢」開關
+//      額外列返灰色行（版本、原因、邊個、幾時）追溯用。
+//   2. 多檔拖放／多選上載——上載區由單檔改做 `<input multiple>`＋拖放多
+//      檔，月份一個套用晒成批，逐個檔獨立叫現有 `POST /api/roster-uploads`
+//      （後端唔改），順序處理、最多同時 2 個（`runQueueWithConcurrency()`，
+//      `src/lib/roster-upload/upload-queue.ts`——純函數，避免同盤同月
+//      advisory lock 排隊）；每個檔獨立顯示進度／結果（成功／解析失敗／
+//      盤對唔到／400），一個檔失敗唔影響其餘，全部跑完顯示總結。
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiUpload, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
@@ -12,9 +24,11 @@ import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { Field, selectCls } from "@/components/ui/Field";
+import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate, fmtDateTime, currentMonthStr } from "@/lib/ui/format";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
+import { classifyUploadResult, runQueueWithConcurrency, summarizeOutcomes, type RosterUploadPostData, type UploadOutcome } from "@/lib/roster-upload/upload-queue";
 
 interface SiteOption {
   id: string;
@@ -32,7 +46,7 @@ interface RosterUploadDTO {
   file_sha256: string;
   file_size: number;
   version: number;
-  status: "uploaded" | "parsed" | "parse_failed" | "superseded" | "confirmed";
+  status: "uploaded" | "parsed" | "parse_failed" | "superseded" | "confirmed" | "voided";
   parse_summary: {
     total_cell_count: number;
     shift_count: number;
@@ -54,6 +68,10 @@ interface RosterUploadDTO {
   } | null;
   parse_error: string | null;
   layout_key: string | null;
+  // WP-UPLOAD-VOID：作廢先有值。
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
 }
 
 interface SiteStatusEntry {
@@ -66,6 +84,7 @@ interface ListResponse {
   month: string;
   sites: SiteStatusEntry[];
   unresolved_uploads: SiteStatusEntry[];
+  voided_uploads: SiteStatusEntry[];
 }
 
 interface RosterUploadRowDTO {
@@ -97,6 +116,12 @@ interface DetailResponse {
   rows: ApiListResult<RosterUploadRowDTO>;
 }
 
+interface VoidResponse {
+  upload: RosterUploadDTO;
+  revived_upload_id: string | null;
+  revived_version: number | null;
+}
+
 const STATUS_LABEL: Record<string, string> = {
   not_uploaded: "未上載",
   uploaded: "已上載",
@@ -104,9 +129,10 @@ const STATUS_LABEL: Record<string, string> = {
   parse_failed: "解析失敗",
   superseded: "已被取代",
   confirmed: "已對數確認",
+  voided: "已作廢",
 };
 function statusPillVariant(status: string): "neutral" | "success" | "danger" | "warning" {
-  if (status === "not_uploaded") return "neutral";
+  if (status === "not_uploaded" || status === "voided") return "neutral";
   if (status === "parse_failed") return "danger";
   if (status === "parsed" || status === "confirmed") return "success";
   return "warning";
@@ -124,6 +150,23 @@ const GUARD_MATCH_LABEL: Record<string, string> = {
 // 對應 API `?warning_flag=`（唔係 `?guard_match=`）。
 const WARNING_FLAG_VALUES = new Set(["staff_no_mismatch", "stale_staff_no"]);
 
+// WP-UPLOAD-VOID：多檔拖放隊列——逐個檔獨立處理／顯示，`month`／
+// `siteIdHint` 喺 enqueue 嗰刻捕捉（避免用戶入面轉月份／盤影響緊處理
+// 緊嘅檔）。
+interface QueueItem {
+  localId: string;
+  file: File;
+  month: string;
+  siteIdHint?: string;
+  // 揀／拖淨係一個檔嗰陣先開（同單檔上載舊行為一致——上載完即刻喺
+  // 詳情區見到結果，唔使額外撳「睇詳情」）；一次過幾個檔就唔自動開，
+  // 由用戶自己揀邊個睇。
+  autoOpenDetail?: boolean;
+  status: "pending" | "uploading" | "done" | "cancelled";
+  outcome?: UploadOutcome;
+}
+const UPLOAD_CONCURRENCY = 2;
+
 export default function RosterUploadsPage() {
   const [month, setMonth] = useState(currentMonthStr());
   const [sites, setSites] = useState<SiteOption[]>([]);
@@ -131,11 +174,19 @@ export default function RosterUploadsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // WP-UPLOAD-VOID：「顯示已作廢」開關——預設關，避免會計誤將已作廢
+  // 版本當做仲生效；開咗先叫 API 帶 `include_voided=1`。
+  const [includeVoided, setIncludeVoided] = useState(false);
 
   const [uploadSiteId, setUploadSiteId] = useState("");
-  const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // WP-UPLOAD-VOID：多檔上載隊列。`queueRef` 係並發排程用嘅同步真相
+  // （`pickNextQueueItem()` 揀中即刻同步標記 uploading，先唔會兩個
+  // worker 撞中同一項），`queue` state 淨係俾 UI 重新 render。
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const queueRef = useRef<QueueItem[]>([]);
 
   const [selectedUploadId, setSelectedUploadId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
@@ -151,7 +202,9 @@ export default function RosterUploadsPage() {
   async function loadList() {
     setLoading(true);
     setError(null);
-    const res = await apiGet<ListResponse>(`/api/roster-uploads?month=${month}`);
+    const qs = new URLSearchParams({ month });
+    if (includeVoided) qs.set("include_voided", "1");
+    const res = await apiGet<ListResponse>(`/api/roster-uploads?${qs.toString()}`);
     if (!res.ok) {
       setError(res.message);
       setLoading(false);
@@ -164,7 +217,7 @@ export default function RosterUploadsPage() {
   useEffect(() => {
     loadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month]);
+  }, [month, includeVoided]);
 
   useEffect(() => {
     apiGet<ApiListResult<SiteOption>>("/api/sites?take=500").then((res) => {
@@ -207,48 +260,100 @@ export default function RosterUploadsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchFilter]);
 
-  async function doUpload(file: File) {
-    if (uploading) return; // 驗收 2026-09-23：上載緊時再拖放／再撳唔好重複送
-    setUploading(true);
-    setNotice(null);
-    setError(null);
-    const form = new FormData();
-    form.set("file", file);
-    form.set("month", month);
-    if (uploadSiteId) form.set("site_id", uploadSiteId);
-    const res = await apiUpload<{ upload: RosterUploadDTO; superseded_count: number; parse_ok: boolean; parse_error: string | null; duplicate_of_version: number | null }>(
-      "/api/roster-uploads",
-      form,
-    );
-    setUploading(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    if (!res.ok) {
-      // Phase B-0 第 5(b) 項：檔名同該盤同月現有版本撞名——後端 400，
-      // 訊息「更新檔嘅檔名必須同舊版唔同，請改檔名再上載」直接喺呢度顯示。
-      setError(res.message);
-      return;
-    }
-    if (res.data.parse_ok) {
-      // Phase B-0 第 5(a) 項：同一檔（同 SHA-256）重複上載——出提示，唔擋。
-      const dupNote = res.data.duplicate_of_version ? `；同第 ${res.data.duplicate_of_version} 版一模一樣（SHA-256 相同），已開新版本` : "";
-      setNotice(`已上載並解析：${file.name}（版本 ${res.data.upload.version}${res.data.superseded_count ? `，取代咗 ${res.data.superseded_count} 個舊版` : ""}${dupNote}）`);
-    } else {
-      setError(`已存底但解析失敗：${res.data.parse_error ?? "未知原因"}`);
-    }
-    await loadList();
-    openDetail(res.data.upload.id);
+  // ---------------------------------------------------------------------
+  // WP-UPLOAD-VOID：多檔上載隊列——`applyQueue()` 同時更新 state＋
+  // `queueRef`（同步真相，俾 `pickNextQueueItem()` 用），`pickNextQueueItem()`
+  // 冇 await，喺 JS 單線程之下同步揀+標記係 atomic，唔會兩個 worker
+  // 撞中同一個 pending item。
+  // ---------------------------------------------------------------------
+  function applyQueue(next: QueueItem[]) {
+    queueRef.current = next;
+    setQueue(next);
   }
 
-  function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) doUpload(file);
+  function pickNextQueueItem(): QueueItem | null {
+    const current = queueRef.current;
+    const idx = current.findIndex((q) => q.status === "pending");
+    if (idx === -1) return null;
+    const item: QueueItem = { ...current[idx]!, status: "uploading" };
+    const next = current.slice();
+    next[idx] = item;
+    applyQueue(next);
+    return item;
+  }
+
+  function updateQueueItem(localId: string, patch: Partial<QueueItem>) {
+    applyQueue(queueRef.current.map((q) => (q.localId === localId ? { ...q, ...patch } : q)));
+  }
+
+  function cancelQueueItem(localId: string) {
+    applyQueue(queueRef.current.map((q) => (q.localId === localId && q.status === "pending" ? { ...q, status: "cancelled" as const } : q)));
+  }
+
+  async function uploadQueueItem(item: QueueItem) {
+    const form = new FormData();
+    form.set("file", item.file);
+    form.set("month", item.month);
+    if (item.siteIdHint) form.set("site_id", item.siteIdHint);
+    const res = await apiUpload<RosterUploadPostData>("/api/roster-uploads", form);
+    const outcome = classifyUploadResult(res);
+    updateQueueItem(item.localId, { status: "done", outcome });
+    await loadList();
+    // 單檔上載（拖／揀淨係一個檔）：沿用舊行為，上載完即刻喺詳情區見到
+    // 結果，唔使額外撳「睇詳情」。呢個要喺 `loadList()` 之後先做，等
+    // 詳情頁打開嗰陣主列表已經係最新（例如「盤對唔到」嗰行已經出現）。
+    if (item.autoOpenDetail && outcome.uploadId) openDetail(outcome.uploadId);
+  }
+
+  // 月份揀一個套用晒成批（`month` 喺 enqueue 嗰刻捕捉，之後轉月份唔會
+  // 影響已經入隊嘅檔）；`siteIdHint`（「盤（可選）」下拉）淨係喺一次過
+  // 揀／拖淨係一個檔嗰陣先套用——一次過幾個檔通常係唔同盤，唔應該逼佢
+  // 哋撞同一個盤。
+  function enqueueFiles(files: FileList | File[]) {
+    const arr = Array.from(files);
+    if (!arr.length) return;
+    const isSingle = arr.length === 1;
+    const singleHint = isSingle && uploadSiteId ? uploadSiteId : undefined;
+    const newItems: QueueItem[] = arr.map((file, i) => ({
+      localId: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      month,
+      siteIdHint: singleHint,
+      autoOpenDetail: isSingle,
+      status: "pending",
+    }));
+    applyQueue([...queueRef.current, ...newItems]);
+    void runQueueWithConcurrency({ items: newItems, concurrency: UPLOAD_CONCURRENCY, pickNext: pickNextQueueItem, worker: uploadQueueItem });
+  }
+
+  function onFilesChosen(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (files && files.length) enqueueFiles(files);
+    e.target.value = "";
   }
   function onDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) doUpload(file);
+    const files = e.dataTransfer.files;
+    if (files && files.length) enqueueFiles(files);
   }
+
+  // WP-UPLOAD-VOID：隊列入面「盤對唔到」嗰行揀咗盤之後，直接喺隊列度
+  // 反映做成功（唔使用戶再去主列表搵返個上載先可以指定盤）。
+  async function assignSiteForQueueItem(item: QueueItem, siteId: string) {
+    if (!item.outcome?.uploadId) return;
+    updateQueueItem(item.localId, { status: "uploading" });
+    const res = await apiPatch(`/api/roster-uploads/${item.outcome.uploadId}`, { site_id: siteId });
+    if (!res.ok) {
+      updateQueueItem(item.localId, { status: "done", outcome: { kind: "error", summary: res.message, uploadId: item.outcome.uploadId } });
+      return;
+    }
+    updateQueueItem(item.localId, { status: "done", outcome: { kind: "success", summary: "已指定盤，重新配對完成", uploadId: item.outcome.uploadId } });
+    await loadList();
+  }
+
+  const queueSummary = summarizeOutcomes(queue);
+  const queueDone = queue.length > 0 && queueSummary.inProgress === 0;
 
   async function patchSiteId(uploadId: string, siteId: string) {
     setPatchingSiteFor(uploadId);
@@ -274,8 +379,23 @@ export default function RosterUploadsPage() {
     if (selectedUploadId === uploadId) loadDetail(uploadId, matchFilter || undefined);
   }
 
+  // WP-UPLOAD-VOID：作廢——`ConfirmVoidButton` 強制填原因先叫呢個 function。
+  async function onVoidUpload(uploadId: string, reason: string) {
+    setError(null);
+    const res = await apiPost<VoidResponse>(`/api/roster-uploads/${uploadId}/void`, { reason });
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    const revivedNote = res.data.revived_version ? `；v${res.data.revived_version} 已回復做現行版本` : "";
+    setNotice(`已作廢${revivedNote}`);
+    if (selectedUploadId === uploadId) setSelectedUploadId(null);
+    await loadList();
+  }
+
   const allEntries = list ? [...list.sites, ...list.unresolved_uploads] : [];
-  const colCount = 6;
+  const voidedEntries = list?.voided_uploads ?? [];
+  const colCount = 7;
 
   return (
     <div className="space-y-4">
@@ -284,19 +404,25 @@ export default function RosterUploadsPage() {
         title="更表上載"
         subtitle="會計／主管／老闆每月逐盤上載更表檔案（xlsx）——呢個係計糧嘅唯一依據，系統自己報更淨係參考／輔助。"
         actions={
-          <FilterChip label="月份" showCaret={false}>
-            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-          </FilterChip>
+          <div className="flex flex-wrap items-center gap-2">
+            <FilterChip label="月份" showCaret={false}>
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </FilterChip>
+            <label className="flex items-center gap-1.5 text-[12.5px] text-zk-muted">
+              <input type="checkbox" checked={includeVoided} onChange={(e) => setIncludeVoided(e.target.checked)} />
+              顯示已作廢
+            </label>
+          </div>
         }
       />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
-      {/* 上載區：拖放或選檔 */}
+      {/* 上載區：拖放或選檔——WP-UPLOAD-VOID：而家可以一次過揀／拖多個檔。 */}
       <div className="rounded-lg border border-zk-border bg-white p-4">
         <div className="mb-3 flex flex-wrap items-end gap-3">
-          <Field label="盤（可選——盤名對唔到可以先唔揀，之後人手指定）">
+          <Field label="盤（一次過上載一個檔先會套用——多檔通常唔同盤，留返自動配對或者跟住喺列表指定）">
             <select className={selectCls} value={uploadSiteId} onChange={(e) => setUploadSiteId(e.target.value)}>
               <option value="">（由檔案盤名自動配對）</option>
               {sites.map((s) => (
@@ -320,10 +446,69 @@ export default function RosterUploadsPage() {
             dragOver ? "border-[#2563eb] bg-blue-50" : "border-zk-border bg-zk-surface"
           }`}
         >
-          <div className="text-[13.5px] font-medium text-zk-text">{uploading ? "上載緊…" : "拖放更表 xlsx 到呢度，或者撳呢度揀檔"}</div>
-          <div className="text-[12px] text-zk-muted">單一 xlsx 檔案，最大 20MB</div>
-          <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={onFileChosen} disabled={uploading} data-testid="roster-upload-file-input" />
+          <div className="text-[13.5px] font-medium text-zk-text">{queueSummary.inProgress > 0 ? "上載緊…" : "拖放更表 xlsx 到呢度（可以一次過拖多個），或者撳呢度揀檔"}</div>
+          <div className="text-[12px] text-zk-muted">可以一次過揀多個 xlsx 檔，單一檔最大 20MB</div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx"
+            multiple
+            className="hidden"
+            onChange={onFilesChosen}
+            data-testid="roster-upload-file-input"
+          />
         </div>
+
+        {/* WP-UPLOAD-VOID：多檔上載隊列——逐檔獨立進度／結果，一個檔失敗唔影響其餘。 */}
+        {queue.length > 0 && (
+          <div className="mt-3 space-y-1.5" data-testid="roster-upload-queue">
+            {queue.map((item) => (
+              <div key={item.localId} className="flex flex-wrap items-center gap-2 rounded-md border border-zk-border px-2.5 py-1.5 text-[12.5px]">
+                <span className="min-w-0 flex-1 truncate font-medium text-zk-text">{item.file.name}</span>
+                {item.status === "pending" && (
+                  <>
+                    <Pill variant="neutral">等緊</Pill>
+                    <button type="button" onClick={() => cancelQueueItem(item.localId)} className="rounded-[5px] border border-zk-border px-2 py-[2px] text-xs text-[#334155] hover:bg-zk-header">
+                      取消
+                    </button>
+                  </>
+                )}
+                {item.status === "uploading" && <Pill variant="warning">上載緊…</Pill>}
+                {item.status === "cancelled" && <Pill variant="neutral">已取消</Pill>}
+                {item.status === "done" && item.outcome && (
+                  <>
+                    <Pill
+                      variant={item.outcome.kind === "success" ? "success" : item.outcome.kind === "unresolved" ? "warning" : "danger"}
+                    >
+                      {item.outcome.kind === "success" ? "成功" : item.outcome.kind === "parse_failed" ? "解析失敗" : item.outcome.kind === "unresolved" ? "盤對唔到" : "失敗"}
+                    </Pill>
+                    <span className="text-zk-muted">{item.outcome.summary}</span>
+                    {item.outcome.kind === "unresolved" && (
+                      <select
+                        className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-xs"
+                        value=""
+                        aria-label="指定盤"
+                        onChange={(e) => e.target.value && assignSiteForQueueItem(item, e.target.value)}
+                      >
+                        <option value="">指定盤…</option>
+                        {sites.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.canonical_name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+            {queueDone && (
+              <div className="text-[12.5px] text-zk-muted" data-testid="roster-upload-queue-summary">
+                總結：成功 {queueSummary.success}／失敗 {queueSummary.error + queueSummary.parseFailed}／要指定盤 {queueSummary.unresolved}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 逐盤狀態表 */}
@@ -343,6 +528,7 @@ export default function RosterUploadsPage() {
                   <th className={tableCls.thNum}>更數</th>
                   <th className={tableCls.thNum}>未配對</th>
                   <th className={tableCls.th}>操作</th>
+                  <th className={tableCls.th}></th>
                 </tr>
               </thead>
               <tbody>
@@ -411,6 +597,7 @@ export default function RosterUploadsPage() {
                           )}
                         </div>
                       </td>
+                      <td className={tableCls.td}>{u && <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(u.id, reason)} />}</td>
                     </tr>
                   );
                 })}
@@ -462,6 +649,7 @@ export default function RosterUploadsPage() {
                           ))}
                         </select>
                       )}
+                      <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(u.id, reason)} />
                     </div>
                   )}
                 </div>
@@ -469,6 +657,71 @@ export default function RosterUploadsPage() {
             })}
           </div>
         </>
+      )}
+
+      {/* WP-UPLOAD-VOID：「顯示已作廢」開關開咗先出現——灰色行追溯用
+          （版本、原因、邊個、幾時）。呢啲上載已經係終態，冇任何操作掣，
+          淨係得「睇詳情」（rows 仲留底，方便追查）。 */}
+      {includeVoided && voidedEntries.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-[12.5px] font-medium text-zk-muted">已作廢記錄</div>
+          <div className={`hidden sm:block ${tableCls.wrap} opacity-60`}>
+            <table className={tableCls.table} style={{ minWidth: tableMinWidth(6) }}>
+              <thead>
+                <tr>
+                  <th className={tableCls.th}>盤</th>
+                  <th className={tableCls.th}>檔案</th>
+                  <th className={tableCls.thNum}>版本</th>
+                  <th className={tableCls.th}>作廢原因</th>
+                  <th className={tableCls.th}>作廢時間</th>
+                  <th className={tableCls.th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {voidedEntries.map((entry) => {
+                  const u = entry.upload!;
+                  return (
+                    <tr key={u.id} className={tableCls.rowHover}>
+                      <td className={`${tableCls.td} font-medium`}>{entry.site_name}</td>
+                      <td className={tableCls.td}>{u.file_name}</td>
+                      <td className={tableCls.tdNum}>v{u.version}</td>
+                      <td className={tableCls.td}>{u.void_reason ?? "—"}</td>
+                      <td className={tableCls.tdMuted}>{fmtDateTime(u.voided_at)}</td>
+                      <td className={tableCls.td}>
+                        <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          睇詳情
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="space-y-2 opacity-60 sm:hidden">
+            {voidedEntries.map((entry) => {
+              const u = entry.upload!;
+              return (
+                <div key={u.id} className="rounded-lg border border-zk-border bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13.5px] font-medium text-zk-text">{entry.site_name}</span>
+                    <Pill variant="neutral">已作廢</Pill>
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                    {u.file_name} · v{u.version}
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-zk-muted">原因：{u.void_reason ?? "—"}</div>
+                  <div className="mt-1 text-[11.5px] text-zk-faint">{fmtDateTime(u.voided_at)}</div>
+                  <div className="mt-2">
+                    <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                      睇詳情
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {/* 逐上載詳情 */}
@@ -479,6 +732,7 @@ export default function RosterUploadsPage() {
               <div className="text-[14px] font-semibold text-zk-text">
                 {detail?.upload.file_name ?? "詳情"}
                 {detail && <span className="ml-2 text-[12px] text-zk-muted">v{detail.upload.version} · 上載於 {fmtDateTime(detail.upload.uploaded_at)}</span>}
+                {detail?.upload.status === "voided" && <span className="ml-2 text-[12px] text-red-600">已作廢：{detail.upload.void_reason}</span>}
               </div>
               {detail?.upload.layout_key && <div className="text-[11.5px] text-zk-faint">layout: {detail.upload.layout_key}</div>}
             </div>
@@ -499,9 +753,14 @@ export default function RosterUploadsPage() {
                   <option value="stale_staff_no">只顯示用已取消舊號配對</option>
                 </select>
               </label>
-              <Button variant="secondary" onClick={() => selectedUploadId && doReparse(selectedUploadId)}>
-                重新解析
-              </Button>
+              {detail?.upload.status !== "voided" && (
+                <Button variant="secondary" onClick={() => selectedUploadId && doReparse(selectedUploadId)}>
+                  重新解析
+                </Button>
+              )}
+              {detail && detail.upload.status !== "voided" && (
+                <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(detail.upload.id, reason)} />
+              )}
               <Button variant="secondary" onClick={() => setSelectedUploadId(null)}>
                 收起
               </Button>

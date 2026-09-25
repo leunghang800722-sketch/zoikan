@@ -5,6 +5,11 @@
 // ——老闆／主管／會計 G，雞頭／安員硬性 deny（`requirePermission()` 第
 // 一道閘已經擋晒，呢個 route 唔使額外雞頭隔離邏輯）。**唔寫入
 // shift_records**（Phase A 範圍）。
+//
+// WP-UPLOAD-VOID：`voided` 一律唔算做「呢個盤本身嘅狀態」——已作廢嘅
+// 上載唔會令個盤顯示做「已上載」（畀 `status: { notIn: [superseded,
+// voided] }` 剔走）；`?include_voided=1` 先會另外帶埋 `voided_uploads`
+// 俾前端出灰色行追溯（版本、原因、邊個、幾時）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { toRosterUploadDTO } from "@/lib/api/dto";
@@ -38,9 +43,14 @@ export async function GET(req: Request) {
     if (Number.isNaN(monthDate.getTime())) throw BadRequest("month 格式唔啱");
     const month = monthStart(monthDate);
 
-    const [sites, uploads] = await Promise.all([
+    // WP-UPLOAD-VOID：`?include_voided=1` 先額外列返作廢咗嘅上載（灰色
+    // 行追溯用）——預設唔列，避免會計誤將已作廢嘅版本當做仲生效。
+    const includeVoided = url.searchParams.get("include_voided") === "1";
+
+    const [sites, uploads, voidedUploads] = await Promise.all([
       prisma.site.findMany({ where: { status: { not: "ended" } }, select: { id: true, canonicalName: true }, orderBy: { canonicalName: "asc" } }),
-      prisma.rosterUpload.findMany({ where: { month, status: { not: "superseded" } }, orderBy: { version: "desc" } }),
+      prisma.rosterUpload.findMany({ where: { month, status: { notIn: ["superseded", "voided"] } }, orderBy: { version: "desc" } }),
+      includeVoided ? prisma.rosterUpload.findMany({ where: { month, status: "voided" }, orderBy: { version: "desc" } }) : Promise.resolve([]),
     ]);
 
     const bySite = new Map<string, RosterUpload>();
@@ -53,6 +63,7 @@ export async function GET(req: Request) {
       }
     }
 
+    const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
     const siteEntries = sites.map((s) => {
       const u = bySite.get(s.id) ?? null;
       return brandSafeResponse({
@@ -70,8 +81,16 @@ export async function GET(req: Request) {
         upload: toRosterUploadDTO(u),
       }),
     );
+    const voidedEntries = voidedUploads.map((u) =>
+      brandSafeResponse({
+        siteId: u.siteId,
+        siteName: u.siteId ? (siteNameById.get(u.siteId) ?? u.siteNameRaw) : u.siteNameRaw,
+        uploadStatus: u.status,
+        upload: toRosterUploadDTO(u),
+      }),
+    );
 
-    return ok(brandSafeResponse({ month: monthParam, sites: siteEntries, unresolvedUploads: unresolvedEntries }));
+    return ok(brandSafeResponse({ month: monthParam, sites: siteEntries, unresolvedUploads: unresolvedEntries, voidedUploads: voidedEntries }));
   });
 }
 

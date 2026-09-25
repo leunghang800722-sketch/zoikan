@@ -6,7 +6,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { toRosterUploadDTO } from "@/lib/api/dto";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
-import { NotFound } from "@/lib/api/errors";
+import { NotFound, Conflict } from "@/lib/api/errors";
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -15,6 +15,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const { id } = await params;
     const before = await prisma.rosterUpload.findUnique({ where: { id } });
     if (!before) throw NotFound();
+    // WP-UPLOAD-VOID：已作廢嘅上載唔准重新解析——同 PATCH 一致嘅道理。
+    if (before.status === "voided") throw Conflict("呢個上載已經作廢，唔可以重新解析");
 
     await reparseRosterUpload(id);
 

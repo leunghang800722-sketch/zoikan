@@ -223,6 +223,9 @@ const ROSTER_UPLOAD_FIELDS = [
   "id", "month", "siteId", "siteNameRaw", "uploaderUserId", "uploadedAt",
   "fileName", "fileSha256", "fileSize", "version", "status", "parseSummary",
   "parseError", "layoutKey", "createdAt", "updatedAt", "createdBy",
+  // WP-UPLOAD-VOID：voidedBy 同呢個 codebase 其他 voidedBy 一致——raw
+  // user id string，冇 PII，唔使 gate。
+  "voidedAt", "voidedBy", "voidReason",
 ] as const;
 export const toRosterUploadDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, ROSTER_UPLOAD_FIELDS);
 

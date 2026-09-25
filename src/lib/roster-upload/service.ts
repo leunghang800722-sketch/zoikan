@@ -21,8 +21,9 @@
 import crypto from "node:crypto";
 import { Prisma, type RosterUpload, type PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { monthStart } from "@/lib/month-lock";
-import { BadRequest } from "@/lib/api/errors";
+import { monthStart, assertMonthNotLocked } from "@/lib/month-lock";
+import { BadRequest, Conflict } from "@/lib/api/errors";
+import { writeAuditTx } from "@/lib/audit";
 import { parseRosterWorkbook, type ParseResult } from "./parse";
 import { shiftTypeTimeSlot } from "./time-range";
 import {
@@ -288,9 +289,12 @@ function monthGroupWhere(siteId: string | null, siteNameRaw: string, month: Date
 }
 
 /** 同盤同月「版本序列」（淨係 active，唔包 superseded）嘅 where——俾
- * supersede／版本遞增邏輯用。 */
+ * supersede／版本遞增邏輯用。WP-UPLOAD-VOID：`voided` 一樣要抽走——
+ * 一個已作廢嘅版本唔算「active」，新上載唔應該將佢由 voided 變返
+ * superseded（會抹走作廢記錄），version 遞增亦唔應該淨係睇 active
+ * 嗰批（見 `monthGroupWhere()` 先算全部版本嘅 max version）。 */
 function versionGroupWhere(siteId: string | null, siteNameRaw: string, month: Date) {
-  return { ...monthGroupWhere(siteId, siteNameRaw, month), status: { not: "superseded" as const } };
+  return { ...monthGroupWhere(siteId, siteNameRaw, month), status: { notIn: ["superseded" as const, "voided" as const] } };
 }
 
 /** 驗收 2026-09-23：同盤同月版本序列嘅 transaction 級 advisory lock——
@@ -334,7 +338,11 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
 
     const groupWhere = versionGroupWhere(resolvedSiteId, siteNameRaw, month);
     const previous = await tx.rosterUpload.findMany({ where: groupWhere, select: { id: true, version: true, fileSha256: true } });
-    const nextVersion = previous.length ? Math.max(...previous.map((p) => p.version)) + 1 : 1;
+    // WP-UPLOAD-VOID：版本號要跟**全部**歷史（含 superseded／voided）先
+    // 唔會撞號——例如作廢咗 v2、v1 由 superseded 回復做 active 之後再上
+    // 載，`previous`（active-only）嘅 max 淨係 1，但 v2 個版本號已經俾
+    // 個已作廢嘅 upload 佔用咗，下一版一定要係 v3 先唔會同 voided 嘅 v2 撞號。
+    const nextVersion = allVersionsSameGroup.length ? Math.max(...allVersionsSameGroup.map((p) => p.version)) + 1 : 1;
     if (previous.length) {
       await tx.rosterUpload.updateMany({ where: { id: { in: previous.map((p) => p.id) } }, data: { status: "superseded" } });
     }
@@ -472,5 +480,97 @@ export async function assignRosterUploadSite(uploadId: string, siteId: string | 
       },
     });
     return { supersededIds };
+  });
+}
+
+export interface VoidRosterUploadResult {
+  upload: RosterUpload; // 作廢之後嘅完整 row（audit after 用）
+  /** 作廢緊嗰個係 active 版本、而且同盤同月有較舊嘅 superseded 版本 →
+   * 嗰個版本回復做 active，呢度係佢嘅 id／version（冇就 null）。 */
+  revivedUploadId: string | null;
+  revivedVersion: number | null;
+}
+
+/** WP-UPLOAD-VOID（老闆 2026-09-25 要求：正式站揀錯月份上載咗 8 月更
+ * 表，UI 冇任何刪除／撤銷）：人手作廢一個上載記錄——唔 hard delete
+ * （file_bytes／rows／reconcile_decisions 全部留底），淨係轉
+ * `status='voided'`＋記低邊個/幾時/原因。
+ *
+ * 規則（見 route.ts 呼叫呢個之前做嘅 pre-check）：
+ *   - `confirmed`（已對數確認寫入 shift_records）唔可以喺呢度作廢——
+ *     會計要先去對數頁處理（apply_roster/keep_system/exception 逐項
+ *     決定，唔可以一鍵作廢整個上載搞掂）。
+ *   - 已經 `voided` 嘅唔可以再作廢一次。
+ *   - `uploaded`／`parsed`／`parse_failed`／`superseded` 四種狀態都可以
+ *     作廢（`superseded` 都得——等會計可以清走一啲舊歷史版本，同「唔
+ *     hard delete」唔矛盾，淨係加個作廢標記）。
+ *
+ * 回復邏輯：淨係當「作廢緊嗰個上載本身仲係呢個（盤,月）版本序列嘅
+ * active 版本」（即係話佢嘅 status 唔係 `superseded`）先會觸發——揾返
+ * 同盤同月**最新**嗰個 `superseded` 版本，令佢重新成為 active。回復做
+ * 咩狀態：如果嗰個版本本身有 `roster_upload_rows`（曾經解析成功）就
+ * `parsed`；冇 rows 但 `parse_error` 有值（曾經解析失敗）就 `parse_
+ * failed`；兩樣都冇（理論上唔會發生）保守當 `parsed`。呢個判斷用返
+ * 已經存底嘅資料（rows 存唔存在、parse_error 存唔存在），冇加新欄——
+ * `status` 呢個欄本身一路俾 supersede/void 蓋咗，冧唔返「俾取代之前
+ * 嗰刻嘅真實狀態」，用 rows/parse_error 做返最貼近事實嘅判斷。
+ *
+ * 版本號**唔會**因為作廢/回復而重新編號——`processRosterUpload()` 嘅
+ * `nextVersion` 計算已經改咗用全部歷史（含 voided）嘅 max，唔會撞號
+ * （見嗰個函數嘅註解）。 */
+export async function voidRosterUpload(params: { uploadId: string; reason: string; actorUserId: string; ip: string | null }): Promise<VoidRosterUploadResult> {
+  // 同 reconcile-apply.ts `applyReconcileDecisions()` 一致嘅做法：狀態／
+  // 鎖月檢查喺 transaction 之前做（`assertMonthNotLocked()` 自己用全域
+  // `prisma` 寫 permission_denied audit，唔可以攞住 transaction 個
+  // connection 一齊做）；transaction 入面攞 advisory lock 之後再撈多次
+  // 最新狀態覆核一次（防止檢查完至開 transaction 呢段空隙撞另一個並發
+  // 請求，例如兩個人同時作廢同一個上載）。
+  const before = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
+  if (before.status === "confirmed") throw Conflict("呢個上載已經對數確認，要先去對數頁處理（keep_system/exception/apply_roster），先可以作廢");
+  if (before.status === "voided") throw Conflict("呢個上載已經作廢");
+  await assertMonthNotLocked({ workDate: before.month, actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
+
+  return prisma.$transaction(async (tx) => {
+    await lockVersionGroup(tx, before.siteId, before.siteNameRaw, before.month);
+    const current = await tx.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
+    if (current.status === "confirmed") throw Conflict("呢個上載已經對數確認，要先去對數頁處理（keep_system/exception/apply_roster），先可以作廢");
+    if (current.status === "voided") throw Conflict("呢個上載已經作廢");
+
+    const wasActive = current.status !== "superseded";
+
+    const after = await tx.rosterUpload.update({
+      where: { id: params.uploadId },
+      data: { status: "voided", voidedAt: new Date(), voidedBy: params.actorUserId, voidReason: params.reason },
+    });
+
+    let revivedUploadId: string | null = null;
+    let revivedVersion: number | null = null;
+    if (wasActive) {
+      const candidates = await tx.rosterUpload.findMany({
+        where: { ...monthGroupWhere(before.siteId, before.siteNameRaw, before.month), status: "superseded" },
+        orderBy: { version: "desc" },
+        take: 1,
+      });
+      const revive = candidates[0];
+      if (revive) {
+        const rowCount = await tx.rosterUploadRow.count({ where: { uploadId: revive.id } });
+        const revivedStatus: RosterUpload["status"] = rowCount > 0 ? "parsed" : revive.parseError ? "parse_failed" : "parsed";
+        await tx.rosterUpload.update({ where: { id: revive.id }, data: { status: revivedStatus } });
+        revivedUploadId = revive.id;
+        revivedVersion = revive.version;
+      }
+    }
+
+    await writeAuditTx(tx, {
+      actorUserId: params.actorUserId,
+      tableName: "roster_uploads",
+      rowId: params.uploadId,
+      action: "void",
+      before: current,
+      after: { ...after, void_reason: params.reason, revived_upload_id: revivedUploadId, revived_version: revivedVersion },
+      ip: params.ip,
+    });
+
+    return { upload: after, revivedUploadId, revivedVersion };
   });
 }

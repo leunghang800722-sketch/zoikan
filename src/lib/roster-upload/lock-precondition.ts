@@ -43,7 +43,9 @@ export async function checkRosterUploadCoverage(month: Date): Promise<RosterCove
   // 覆蓋（B-0：一檔多子盤，上載掛母盤）——子盤本身冇上載唔算「未上載」。
   const parentBySite = new Map(sites.map((s) => [s.id, s.parentSiteId]));
   const uploadSiteIds = [...new Set([...siteIds, ...sites.map((s) => s.parentSiteId).filter((v): v is string => !!v)])];
-  const uploads = await prisma.rosterUpload.findMany({ where: { month: m, siteId: { in: uploadSiteIds }, status: { not: "superseded" } }, select: { siteId: true, status: true } });
+  // WP-UPLOAD-VOID：`voided` 唔算「已上載」——作廢咗嘅上載唔應該令一個
+  // 冇齊上載嘅盤逃過月結鎖定前置檢查。
+  const uploads = await prisma.rosterUpload.findMany({ where: { month: m, siteId: { in: uploadSiteIds }, status: { notIn: ["superseded", "voided"] } }, select: { siteId: true, status: true } });
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
   // 同盤理論上淨係一個 active（version 序列已經保證），但保守用 Map 揀
   // 「非 superseded 入面隨便一個」——真係有多過一個都代表資料有問題，

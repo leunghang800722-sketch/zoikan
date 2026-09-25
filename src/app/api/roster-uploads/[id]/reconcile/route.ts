@@ -7,7 +7,7 @@
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { BadRequest, NotFound } from "@/lib/api/errors";
+import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
 import { reconcileUpload, RECONCILE_CATEGORIES, type ReconcileCategory } from "@/lib/roster-upload/reconcile";
 import { prisma } from "@/lib/db";
 
@@ -15,8 +15,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   return withApiError(async () => {
     await requirePermission(req, "更表上載", "view");
     const { id } = await params;
-    const exists = await prisma.rosterUpload.findUnique({ where: { id }, select: { id: true } });
+    const exists = await prisma.rosterUpload.findUnique({ where: { id }, select: { id: true, status: true } });
     if (!exists) throw NotFound();
+    // WP-UPLOAD-VOID：已作廢嘅上載一律 409——冇資格對數（要對數就要
+    // unvoid……但呢個資源冇 unvoid，作廢咗就係作廢咗，會計要覆核就直接
+    // 睇返灰色行嘅 rows/parse_summary，唔可以再走對數流程）。
+    if (exists.status === "voided") throw Conflict("呢個上載已經作廢，唔可以對數");
 
     const url = new URL(req.url);
     const categoryParam = url.searchParams.get("category");
