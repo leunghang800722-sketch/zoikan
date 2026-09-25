@@ -36,12 +36,13 @@ bump；`requireSession()`（`src/lib/rbac/requirePermission.ts`）每個
 request 都同 DB 現值核對一次（一條 `SELECT token_version, status`），
 唔啱就當未登入（401）。
 
-## RBAC 矩陣（24 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII/WP-ROSTER-UPLOAD 加）
+## RBAC 矩陣（25 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII/WP-ROSTER-UPLOAD/WP-GUARD-FIX-UI 加）
 
 單一事實來源：`src/lib/rbac/matrix.ts`。由舊版 10 module 拆細做 19 個，
 P3 加咗`個人資料`、WP-AI1 加咗`助手`、WP-PII（老闆 2026-09-17 拍板）加咗
 `安員個人資料`／`安員銀行資料`，WP-ROSTER-UPLOAD（老闆 2026-09-21/23
-拍板）加咗`更表上載`，而家 24 個，逐個對應《設計文件》§5.1
+拍板）加咗`更表上載`，WP-GUARD-FIX-UI（老闆 2026-09-25 要求）加咗
+`安員配對修復`，而家 25 個，逐個對應《設計文件》§5.1
 表入面唔同粒度嘅行（詳細逐格對照見 README-P1.md「RBAC：module ×
 action 矩陣」一節）：
 
@@ -58,7 +59,10 @@ action 矩陣」一節）：
 （WP-AI1，側欄 AI 助手，雞頭／安員硬性禁止，見
 [`docs/ai-assistant.md`](ai-assistant.md)）／**`更表上載`**
 （WP-ROSTER-UPLOAD Phase A，管逐盤更表檔案上載——老闆／主管／會計 G，
-雞頭／安員硬性禁止）。
+雞頭／安員硬性禁止）／**`安員配對修復`**（WP-GUARD-FIX-UI，管 U Team
+名單上載／計劃／套用——會批量建人、睇 U Team 名單身份證，**淨係老闆**，
+主管／會計／雞頭／安員硬性禁止，見
+[「未配對安員修復」](#未配對安員修復wp-guard-fix-ui)）。
 
 **自訂角色（Opus 驗收殘留2）**：`roles.base_role`——複製一個出廠角色
 時寫死（`POST /api/roles`），**唔可以再改**；硬性 deny 矩陣查詢一律用
@@ -109,6 +113,95 @@ lock/unlock 代替），其餘資源一律：
 | 操作紀錄 | `/api/audit-log` | **`操作紀錄`**（C3 拆自系統） | 冇 | 只讀；`?export=1` 額外要求 `操作紀錄:export` |
 | 更表上載 | `/api/roster-uploads`、`/api/roster-uploads/:id`、`/api/roster-uploads/:id/reparse`、`/api/roster-uploads/:id/void` | **`更表上載`**（WP-ROSTER-UPLOAD Phase A，老闆 2026-09-21/23 拍板，§15；WP-UPLOAD-VOID 加 `void` action，老闆 2026-09-25 要求） | 冇（雞頭／安員硬性 deny——呢個 resource 完全接觸唔到，唔止 scope） | 唔跟資源 CRUD 通用表（**冇** POST 一般 create 語意；**WP-UPLOAD-VOID 之前冇 void 概念**——同盤同月新上載自動將舊版轉 `superseded`）。`GET ?month=YYYY-MM`（必填）：逐盤狀態（未上載／已上載 vN／解析失敗），額外列出 `unresolved_uploads`（盤名對唔到、`site_id=null` 嘅上載）；`voided`（已作廢）**唔算做該盤嘅狀態**（唔會顯示做「已上載」）；`?include_voided=1` 先額外帶埋 `voided_uploads`（灰色行追溯用：版本、`void_reason`、`voided_by`、`voided_at`）。`POST`（multipart/form-data：`file`＋`month`＋`site_id` 可選）：即時存 bytes＋SHA-256→解析（`src/lib/roster-upload/parse.ts`）→對照盤/更別/安員/雞頭（`match.ts`）→存 `roster_upload_rows`；解析失敗（壞 xlsx／搵唔到 Date 表頭）唔會擋上載，`status=parse_failed`＋`parse_error`；**唔係 xlsx（非 zip、舊版 .xls）直接 400 唔存底**；檔案上限 20MB；同盤同月版本序列有 advisory lock（同時上載唔會出兩個 active）；格仔日期唔係上載月份會逐行警告＋`parse_summary.out_of_month_count`。`GET /:id`：`upload`（field-group gate 過）＋`rows`（分頁，`?guard_match=unmatched` 篩未配對）。`PATCH /:id { site_id }`：人手指定盤（`null`＝清返未指定，唔會再用盤名自動配返），目標盤呢個月已有上載嘅話 version 遞增、上載時間最新嗰個保持 active、其餘轉 `superseded`（`assignRosterUploadSite()`），之後即刻用返原檔 bytes 重新對照一次。`superseded` 嘅舊版重新解析之後仍然係 `superseded`。`POST /:id/reparse`：唔使重新上載，用返存底嘅 bytes 重新解析＋對照（例如安員名冊/更別加咗新資料之後）。**PII**：`roster_upload_rows` 嘅 `name_raw`／`tel_raw`／`staff_no_raw` 屬 **`安員個人資料`** field-level gate（`GUARD_PII_FIELDS`）——冇嗰格 view 權限嘅內部角色見唔到呢三隻欄，`code_raw`／配對結果等唔受影響。**唔寫入 `shift_records`**（Phase A 範圍明文排除，對數＋寫入係 Phase B，見 §15.3）。`file_bytes`（bytea）永遠唔會出現喺任何 API response（白名單 DTO 冇呢隻欄，連老闆都攞唔到——冇下載原檔 endpoint）。AI 隔離：`ai.*` schema 完全冇 `ai.roster_uploads`／`ai.roster_upload_rows` view；`ai.audit_log` WHERE 子句排除呢兩個 table_name（同 WP-MULTI 一致做法，見 `prisma/migrations/20260923000000_wp_roster_upload_a`）。**Phase B-0（§15.3，老闆 2026-09-23 答）加咗**：(1) 合併儲存格橫跨 N 個日期欄＝嗰 N 日每日一格同一個代號（唔再淨計左上角一格），逐格 warning「由合併格展開（第 x/N 日）」，合併範圍伸出日期欄範圍（例如連埋備註欄）另加一個警告，`parse_summary.merged_expanded_count` 記低展開咗幾多格。(2) 更別配對（`shift_type_id`）多過一個候選時用該行 `time_raw`（正規化做 `HHMM-HHMM`，`src/lib/roster-upload/time-range.ts`）收窄，一個命中先配、零個或者多過一個保留 `null`＋warning 列出候選時段（`parse_summary.ambiguous_shift_type_count`）。**補丁（WP-AUG-OPENING-2，§17.7 未修第一項）加咗第三層 rank 收窄**：「同代號」候選先用 `codeFamily()`（`match.ts`——DB `-2`/`-3` 後綴分開同一個代號嘅慣例，例如數碼港 CP5 嘅 `D`／`D-2`）湊齊全部同家族候選（淨係 rawCode 本身冇「-N」後綴先湊；更表明確寫「D-2」就淨係逐字配），time_raw 收窄之後（或者根本收窄唔到，例如候選時段字面完全一樣）仍然多過一個，用該行 `rank_raw`（NFKC＋壓空白正規化）判斷：含獨立字元組「IC」／「SIC」（前後唔黐拉丁字母，例如「早更IC」「夜Zone SIC」「保安員(IC)」；「Security Officer」唔算）→ 淨係留 `billing_group=monthly_ic` 或者 code 含「IC」嘅候選；「保安員」類（含「保安員」／「Guard」／或者唔含 IC 嘅其他寫法）→ 淨係留 `per_shift` 嘅候選；收窄剩一個先配，`parse_summary.rank_narrowed_count` 計呢類靠 rank 先配到嘅格數；仍然多過一個或者零個就照舊 `null`＋ambiguous，warning 加多句「已用 rank 收窄但仍未夠」講明試過。(3) 一檔多子盤（城巴車廠／CP5）：上載掛嘅盤如果有子盤（`sites.parent_site_id`），逐行用 `sub_site_name` 對子盤，命中就寫落新欄 `resolved_site_id`（nullable，DTO 已加白名單），更別配對跟子盤嘅 `shift_types` 範圍；對唔到子盤就 `resolved_site_id=null`＋warning，`parse_summary.unmatched_sub_site_count`。(4) `guard_match` enum 冇改（揀咗淨係加 warnings，唔加 migration）：檔案有工號但系統完全搵唔到、退用姓名/電話配到 → warning「檔案工號 X 同系統工號 Y 唔一致」；靠已取消（`guard_staff_numbers.status='former'`）舊工號配到 → warning「用已取消舊號配對」；`parse_summary.staff_no_mismatch_count`／`staleStaffNoCount`；`GET /:id` 新增 `?warning_flag=staff_no_mismatch|stale_staff_no` 篩呢兩類（`warnings::text ILIKE` 查詢，唔係 `guard_match` 欄）；**冇「安員個人資料:view」嘅角色（例如主管出廠）睇 `GET /:id` 時，warning 入面兩個工號換做「（已隱藏）」**（同 `staff_no_raw` field gate 一致，驗收 2026-09-23）。(5) 同檔重複上載：同一檔（同 SHA-256）唔擋，`POST` response（201）帶 `duplicate_of_version`（同盤同月**任何**版本、含 superseded 撞 SHA 就係最新嗰個撞到嘅 version 號，冇撞就 `null`）俾前端出提示；**更新檔嘅檔名（`file_name`，trim＋忽略大小寫）一定要同該盤同月任何現有版本（active 或 superseded）唔同——同名一律 400，錯誤訊息「更新檔嘅檔名必須同舊版唔同，請改檔名再上載」，唔存底、唔開版本**。**Phase B-1（§14.1／§15.3，B1-8 第 1/2/3 項）加咗**：(1) `PATCH /:id { site_id }` 而家同 `POST` 一樣做「目標（盤,月）組別已有同名檔→400」檢查（之前 PATCH 冇呢個檢查，改盤可以撞埋一個同名檔）。(2) 有子盤嘅上載，某行冇 `sub_site_name` → warning「未寫子盤，歸母盤，人手覆核係咪漏寫子盤」（唔擋，`resolved_site_id` 保持＝母盤）。(3) 檔案工號命中真實存在嘅安員、但呢行姓名同嗰個人唔夾 → `guard_match` 由 `by_staff_no` 改判 `ambiguous`（`guard_id=null`，唔准配）＋warning「檔案工號 X 屬另一人（姓名對唔上），唔會自動配對，人手覆核」（`?warning_flag=staff_no_belongs_to_other` 可篩；冇「安員個人資料:view」一樣會被遮）。**CP5「數據中心」指針格（B1-8 第 5 項，已知落差）**：`src/lib/roster-upload/parse.ts` 有 `applyDataCenterMarkerPointer()`（純函數，合成單元測試證明邏輯），但**冇接落 `extractSheet()` pipeline**——實測對住真實 8 月 CP5 主檔會令 `gate:roster-parse` 由 36/36 跌到 35/36（任務書寫嘅「該格之後嘅行屬數據中心子盤」propagate 規則，同兩粒真實 marker 格嘅已知正確行為唔夾），留返老闆/會計核實邊個啱先接。**WP-UPLOAD-AUTOFIX（§15.7/§17.11，個案 1：「CTB 6907」檔）加咗配盤優先次序**（`resolveRosterUploadSite()`，`match.ts`）：(0) `siteIdHint`（`POST` 嘅 `site_id`／`PATCH { site_id }`）永遠最優先；(1) 檔名 stem（去 `Roster - ` 前綴、去 ` - <Mon> <YYYY>` 月份尾、去副檔名、空格 collapse）含某盤任一 `roster_file_keys`（NFKC、唔分大小寫、字詞邊界比對，最長鍵贏；打架→`site_id=null`＋頂層警告）→ 用該盤，逐行 warning「由檔名鍵『…』對盤」；(2) 否則跌返檔內盤名（`matchSite()`）——**安全網**：冚中一個有**多過一個**子盤（`sites.parent_site_id`）嘅母盤，但呢次解析結果 `subSiteNames` 係空（冇子盤標題）→ 唔自動掛母盤，`site_id=null`＋頂層警告「檔內盤名係母盤『…』但冇子盤資料，請指定盤」，列入 `unresolved_uploads`（防止「檔內盤名同另一個盤主檔撞名」嘅上載誤 supersede 嗰個母盤主檔）。`reparseRosterUpload()` 一致（已人手 PATCH 指定嘅 `site_id` 保留，唔行呢層）。**WP-UPLOAD-VOID（老闆 2026-09-25 要求：正式站揀錯月份上載咗 8 月更表，UI 冇任何刪除／撤銷）加咗**：`POST /:id/void { reason }`（`reason` 必填、≤200 字，`RosterUploadVoidSchema`）——人手作廢，**唔 hard delete**（`file_bytes`／`roster_upload_rows`／`roster_reconcile_decisions` 全部留底，淨係轉 `status='voided'`＋`voided_at`／`voided_by`／`void_reason`）。規則：`uploaded`／`parsed`／`parse_failed`／`superseded` 四種狀態都可以作廢；`confirmed`（已對數確認寫入 `shift_records`）→409「要先去對數頁處理」；已經 `voided`→409；該月已鎖（`assertMonthNotLocked()`）→403。作廢緊嗰個上載本身仲係 active 版本（`status != superseded`）嗰陣，會揾返同盤同月**最新**嗰個 `superseded` 版本，令佢重新做 active（`voidRosterUpload()`，`src/lib/roster-upload/service.ts`）——復原做 `parsed` 定係 `parse_failed` 睇返嗰個版本自己有冇 `roster_upload_rows`／`parse_error`；冇 superseded 版本就即係呢個盤而家「未上載」。版本號**唔會**因為作廢/回復而重編號——`nextVersion` 計算改咗用**全部**歷史（含 voided）嘅 max，唔會同已作廢嘅版本撞號。**檔名撞名規則照舊包含 voided**（同一盤同月嘅檔名比對睇晒全部版本，含 voided）——老闆要求「更新檔要改名」嘅規矩唔會因為作廢咗就鬆咗；但作廢咗之後用**返同一個檔名**重新上載去**啱嘅月份**（唔同（盤,月）組別）唔受影響，一樣得。PATCH／reparse 對住已作廢嘅上載一律 409（作廢係終態，唔可以再人手指定盤或者重新解析）。前端（`src/app/(app)/roster-uploads/page.tsx`）：已上載嘅盤同詳情頁加「作廢」掣（`ConfirmVoidButton`，強制填原因先可以確認）；「顯示已作廢」開關（帶 `?include_voided=1`）顯示灰色行（版本、原因、邊個、幾時），淨係得「睇詳情」，冇其他操作。**WP-UPLOAD-VOID 同時加咗多檔拖放／多選上載**（前端行為，後端 API 冇改）：上載區 `<input multiple>`＋拖放多檔，月份揀一個套用晒成批，逐個檔獨立叫呢個 `POST /api/roster-uploads`（前端順序處理、最多同時 2 個——`runQueueWithConcurrency()`，`src/lib/roster-upload/upload-queue.ts`，避免同盤同月 advisory lock 排隊），每個檔獨立顯示進度／結果（成功／解析失敗／盤對唔到要指定盤／400），一個檔失敗唔影響其餘，全部跑完顯示總結（成功/失敗/要指定盤數目）；上載一個檔（唔係批量）仍然自動開詳情，同舊行為一致。 |
 | 更表對數 | `/api/roster-uploads/:id/reconcile`、`/api/roster-uploads/:id/reconcile/apply`、`/api/roster-uploads/pending-summary` | **`更表上載`**（WP-ROSTER-UPLOAD Phase B-1，B1-2；`view`/`update`，同上載本身共用 module——雞頭／安員硬性 deny） | 冇 | 更表 vs 系統內已報更（`shift_records status != cancelled`）對數，唔跟資源 CRUD 通用表。`GET /:id/reconcile`（`?category=` 篩其中一類、`?skip=`/`?take=`）：分類結果（純函數 `reconcileRosterUpload()`，`src/lib/roster-upload/reconcile.ts`）＋`summary.by_category` 逐類數＋`summary.settlement_inferred_count`。七類：`match`／`roster_only`（更表有系統冇）／`system_only`（系統有更表冇，列 `source`）／`guard_diff`（同日同盤同更種人唔同）／`settlement_diff`（結算單位唔同）／`shift_type_diff`（同人同日同盤更種唔同）／`unresolved`（安員/更別/子盤未配對齊，**唔可以寫入**）。逐更配對鍵＝`work_date｜resolved_site_id??site_id｜guard_id｜shift_type_id`。leave 行（B1-4）`shift_type_id` 由 `resolveLeaveShiftTypeIds()` 兩層推斷（該行 Time 欄時段夾中／同 `row_index` 多數票），兩層都推斷唔到就 `unresolved`；leave code 保留原檔字面（**唔做 OFF→RD／NPL→NL 歸一**，見下面「已知落差」）。`POST /:id/reconcile/apply { actions: [{key, action, reason?}] }`：`action` 三選一——`apply_roster`（roster_only→create；system_only→cancel；guard_diff/shift_type_diff→cancel 舊+create/reuse 新；settlement_diff→update 同一條記錄嘅結算單位＋重計 snapshot；寫入一律 `source='roster_upload'`、`provenance={upload_id,row_id,version}`、`status='confirmed'`）、`keep_system`／`exception`（`exception` 必填 `reason`，唔改 `shift_records`，upsert `roster_reconcile_decisions`——新表，已排除出 `ai.audit_log`）。一個 transaction，逐項包 `SAVEPOINT`——任何一項 DB 錯誤（例如 P2002）只 rollback 該項、其他照 commit，回應逐項如實；audit 喺 commit 之後先寫；上載未指定盤（`site_id=null`）→400；套用完之後重新分類，全部非 match 項都有結果／決定就將 `roster_uploads.status` 轉 `confirmed`，回應 `pending_count` 講仲有幾多未處理。`GET /pending-summary?month=`：「通知會計」最簡單做法（唔做 email）——逐盤列 `status=parsed` 但仲有非 match 項未有決定（扣除 keep_system／exception）嘅數量；**唔帶 `month`＝所有月份**（首頁卡用，上個月更表通常今個月先對數），entries 帶 `month`。**`unresolved` 另外包括**：格仔日期唔係上載月份、有雞頭碼但對唔到 brokers、有 `sub_site_name` 但子盤對唔到（唔跌返母盤）、更表重複行（同人同日同盤同更別第二行起）。`guard_diff` 淨係「同日同盤同更種成組一對一」先配，多人嘅剩餘分開列 roster_only／system_only。**已知落差**：(a) leave code 保留原檔字面同任務書「OFF→RD、NPL→NL」有出入，跟咗 `LeaveCode` enum 自己既有嘅設計精神（seed 一路「有原檔字面就用原檔字面」）；(b) 「該盤預設」更別冇對應概念/欄位，leave 行兩層訊號都推斷唔到就 `unresolved`，唔會估；(c) B1-5「複製上月」覆核清單（上月結算單位≠安員預設/長工掛雞頭）未實作。**WP-UPLOAD-VOID 加咗**：`GET /:id/reconcile`／`POST /:id/reconcile/apply` 對住 `status=voided` 嘅上載一律 **409**（喺 route 入面搶喺 `applyReconcileDecisions()` 嘅內部狀態檢查（400）之前擋）——已作廢係終態，冇「解封」呢個概念，會計要覆核就直接睇灰色行嘅 rows／parse_summary，唔可以再走對數流程。`GET /pending-summary?month=` 本身淨係計 `status='parsed'`，`voided` 從來唔喺計算範圍。**WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）加咗**：B1-8 第 2 項「未寫子盤」warning 原本對**冇子盤欄**嘅檔案格式（standard/digital_port layout，例如 HKU座頭：母盤自己嗰份檔案冇 sub_site 欄，靠子盤「HKU 醫學院」自己獨立上載）都逐行出，令會計以為要逐條覆核——而家收窄做淨係「呢個上載嘅 layout 有子盤欄（citybus）或者 `parse_summary.sub_site_names` 非空」而且該行冇寫先算「漏寫」；冇子盤欄嘅檔案（HKU座頭嗰種）靜靜歸母盤，0 warning（實測：36 檔真實上載，HKU座頭 216 格由 216 個 warning 變 0 個）。真係「有子盤欄、該行冇寫」嗰批加咗三層推斷（`matchRowsAndSummarize()`，`src/lib/roster-upload/service.ts`）：(a) 同一上載、同一安員（staff_no_raw 正規化／name_raw 分身份）其他物理行已經寫咗子盤、淨係一種 → 自動填＋warning「子盤由同檔其他行推斷」，`parse_summary.sub_site_inferred_from_file_count`；(b) 同檔冇 → 查該安員最近 3 個月喺呢個母盤子盤嘅 `shift_records`（`status != cancelled`），淨係一個子盤出過更 → 自動填＋warning「子盤由歷史推斷」，`parse_summary.sub_site_inferred_from_history_count`；(c) 歷史都多過一個候選 → 留 `resolved_site_id=null`＋warning「子盤未定，歷史候選多過一個（…），人手覆核並指定子盤」（`AMBIGUOUS_SUBSITE_WARNING_PREFIX` marker，`reconcile.ts` 靠呢個 marker 分辨呢種 null 同「舊上載未 reparse」嘅 null——前者一定入 `unresolved`，唔會靜靜跌返母盤），`parse_summary.sub_site_needs_human_count`。**新增 `POST /:id/reconcile/resolve-subsite { row_ids: string[], site_id: string\|null }`**：對數頁「批量指定子盤」（`site_id`＝目標子盤）／「全部歸母盤確認」（`site_id=null`）——淨係俾上面 (c) 嗰批「三層推斷都冧唔到、`resolved_site_id=null`」嘅行用（service 層 `bulkResolveAmbiguousSubSite()` 結構性再驗證一次，唔淨係信前端），逐行重新 `matchShiftType()`（唔行成個 `reparseRosterUpload()`，唔會連累其他行）；冪等（已經被人手指定過嘅行第二次選會 skip）；audit 用完整 `roster_upload_rows` DTO（同呢個 table 現有做法一致）。**驗收（Opus 5.5）補**：(1) 上載要係 `parsed`／`confirmed`（其他 400），鎖咗嘅月份 **403**（`assertMonthNotLocked()`，寫 `permission_denied` audit）——之前漏咗鎖月檢查；(2) 人手決定寫 `roster_upload_rows.resolved_site_manual=true`（migration `20260925130000_wp_guard_fix_resolved_site_manual`），`reparseRosterUpload()`（`POST /:id/reparse`、`run-guard-fix.sh` 自動 reparse）重建 rows 嗰陣用 (row_index, work_date, raw_code, staff_no_raw, name_raw) 對返同一格，保留人手揀嘅盤（warning「子盤人手指定（重新解析保留）」），唔再俾三層推斷覆蓋；新上載版本（新檔案）唔繼承。 |
+
+| 未配對安員修復 | `/api/guard-fix/staff-list`、`/api/guard-fix/plan`、`/api/guard-fix/runs`、`/api/guard-fix/runs/:id`、`/api/guard-fix/runs/:id/apply` | **`安員配對修復`**（WP-GUARD-FIX-UI，老闆 2026-09-25 要求——淨係老闆，主管/會計/雞頭/安員硬性 deny） | 冇（雞頭／安員硬性 deny，完全接觸唔到） | 見下面「未配對安員修復（WP-GUARD-FIX-UI）」獨立段。 |
+
+## 未配對安員修復（WP-GUARD-FIX-UI）
+
+老闆 2026-09-25 要求（緊急，直接影響出糧）：8 月更表大量「未配對」安員
+（絕大多數係 7 月之後入職嘅新散工未入系統），之前一律靠
+`scripts/guard-fix/{build-guard-fix-plan,apply-guard-fix-plan}.ts` 喺
+Terminal 貼 DB 連線字串手動跑（`P2-版面重設計計劃.md` §18）。呢個 WP
+將**同一套分類／套用邏輯**（唔准複製貼上一份新——抽做
+`src/lib/guard-fix/{plan,apply}.ts` 純模組，script 同 API 共用同一個
+`buildGuardFixPlan()`／`applyGuardFixPlan()`／`reparseAllActiveUploads()`）
+包裝成 API＋`/guard-fix` 頁面，老闆手機撳兩下就搞掂。
+
+**新表**（`prisma/migrations/20260925120524_wp_guard_fix_ui_tables`）：
+- `staff_list_uploads`——U Team 名單上載，同 `roster_uploads` 一致「存
+  bytes＋SHA-256＋摘要，唔另存逐行 PII」模式（`parse_summary` 淨係
+  `row_count`／`u_number_count`／`hkid_valid_count`／`hkid_invalid_
+  count`）；最新一份 `status='parsed'` 為現用（`orderBy uploadedAt
+  desc` 取第一筆，冇獨立 boolean 旗標）。計劃嗰刻由 bytes 重新解析
+  （`parseUTeamWorkbookBuffer()`，`src/lib/guard-fix/sources.ts`），
+  解析結果淨係記憶體用完即棄。
+- `guard_fix_runs`——一次「計劃／套用」，`plan_json`（帶 PII：姓名/
+  電話/身份證/候選 guardId）＋`summary_json`（淨數目）＋`result_json`
+  （apply 之後嘅 diffs／逐盤 reparse 前後數，淨數目）。`status`：
+  `planned`→`applying`→`applied`／`failed`。
+
+**API**（全部 `安員配對修復` module，session 一定要 `base_role='老闆'`
+先過硬性 deny，其餘角色連 `requireSession()` 之後都 403）：
+- `POST /api/guard-fix/staff-list`（multipart，`file`＝xlsx）：解析
+  sheet1（欄位 index 同 `scripts/guard-fix/lib/sources.ts` 原有 job
+  一致：員工編號idx13／中文姓名idx15／顯示名idx2／電話idx9／身份證
+  idx14／入職日期idx1／員工狀態idx4），存摘要，回 `parse_ok`。
+  `GET`：現用一份＋最近 20 份歷史。
+- `POST /api/guard-fix/plan { month }`：用現用名單＋該月 DB 實際
+  `roster_upload_rows`（`unmatched`／`ambiguous`）計 plan（冇 active
+  上載 → 400；`records.jsonl` fallback **淨係 script 有**，API 冇
+  fallback），存一行 `guard_fix_runs`（`planned`），回 `run_id`／
+  `summary`（補工號/別名 N、新建 N、要老闆決定 N、身份證缺 N）／
+  `needs_boss` 逐條——**要「安員個人資料:view」先見到姓名/工號/電話/
+  候選姓名**（`buildNeedsBossView()`，`src/lib/guard-fix/view.ts`，同
+  `GUARD_PII_FIELDS` 一致嘅 defense-in-depth；`安員配對修復` module
+  本身已經淨係老闆，呢層係萬一將來開放俾第二個角色嘅保險）。
+- `POST /api/guard-fix/runs/:id/apply`：套用（建人／登記工號／加
+  別名，一個 transaction）＋自動逐個 active 上載 `reparseRosterUpload()`。
+  **冪等**：`status!=='planned'` 一律 **409**（同一 run 唔可以 apply
+  兩次；併發兩個請求撞埋用 `updateMany({where:{status:'planned'}})`
+  原子聲稱，第二個一定見到 409，冇 race window）。apply 完成之後**自動
+  再計一次 plan**（同一份名單、同一個月），開多一條 `guard_fix_runs`
+  （`planned`）俾老闆睇仲剩幾多——相當於 `run-guard-fix.sh` 嘅下一輪，
+  老闆喺頁面再撳一次「計算修復計劃」即可。
+- `GET /api/guard-fix/runs`／`GET /api/guard-fix/runs/:id`：歷史／
+  單一 run 詳情（`needs_boss` 一樣受「安員個人資料:view」gate）。
+
+**長時間 apply 嘅設計取捨**（§18.9，回報要求）：建 70+ 位安員＋逐盤
+`reparseRosterUpload()` 可能要幾分鐘。`POST .../apply` 即刻用一個
+`updateMany` 將 run 轉 `applying`（快，喺 response 之前完成，保證
+冪等判斷唔會撞 race），然後用 Next.js `after()`（喺 response 送出之後
+先喺同一個 request lifecycle 執行背景工作）做重工夫，response 即刻
+202 帶 `{run_id, status:"applying"}`；頁面 `GET /api/guard-fix/runs/:id`
+poll 直至 `applied`/`failed`。**已知限制**：`after()` 淨係喺真正 Next
+request 生命週期（`next start`／`next dev` 經 HTTP 進嚟）先有 context——
+測試直接 call route handler function（呢個 codebase 全部 integration
+test 一致做法，冇起真 HTTP server）冇呢個 context，會即刻 throw；route
+入面 try/catch 咗，冇 context 就 fallback 做齊晒先返（response 帶實際
+完成咗嘅 status），保證行為喺測試／正式運作都一致、唔會「話自己
+applying 但其實已經完咗或者冧咗」。如果 process 中途死咗（部署／
+重啟），run 會卡喺 `applying`，冇自動復原——要人手查 `guard_fix_runs`
+表狀態，DB 寫入本身（apply 嘅 transaction／reparse）已經完成嗰部分唔
+會消失（冪等，重新 apply 一個新 run 唔會重複建人）。**要問老闆**：
+Zeabur 嘅反向代理／公開 port 對住一個幾分鐘先返嘅 HTTP request 有冇
+自己嘅 timeout（同 `run-guard-fix.sh` 一樣嘅 P2028/連線中斷風險，但
+背景執行令呢個風險只影響「老闆幾耐先見到結果」，唔影響資料寫入本身
+完唔完整）。
+
+**鐵則／AI 隔離**：建安員一定經 `upsertCurrentStaffNumber()`／
+`createGuardPhone()`／`syncLegacy*Columns()`（`src/lib/guard-fix/
+apply.ts`，同 `scripts/opening/apply-aug-plan.ts ensureGuard()` 一致
+路徑）；audit 精簡 `after`（唔帶姓名/電話/身份證，同 `apply-aug-
+plan.ts` 一致手法）；`ai.*` schema 冇 `ai.staff_list_uploads`／
+`ai.guard_fix_runs` view，`ai.audit_log` WHERE 子句排除呢兩個
+table_name（`20260925120524_wp_guard_fix_ui_tables` migration 尾段）。
+
+**Dev 全流程驗證**（`db:reset && db:seed` → opening build+apply → 36
+檔真上載 → 經 API 上載真 U Team 名單 → plan → apply → 再 plan）：
+461 格未配對 → 第 1 輪 apply 後 15 格 → 第 2 輪 apply 後 5 格，收斂，
+同 §18.8 用 script 跑出嚟嘅數字（461→15→5）完全一致——證明 API 同
+script 共用嘅 `buildGuardFixPlan()`／`applyGuardFixPlan()` 冇行為
+偏差。
 
 ## AI 助手（WP-AI1）
 

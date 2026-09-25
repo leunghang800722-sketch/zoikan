@@ -81,10 +81,10 @@ function cellText(row: ExcelJS.Row, col1based: number): string | null {
   return s === "" ? null : s;
 }
 
-export async function loadUTeamList(filePath: string = U_TEAM_XLSX_PATH): Promise<UTeamRow[]> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
-  const ws = wb.worksheets[0]!;
+/** U Team 名單 sheet1 逐行解析——同一份邏輯俾 script（讀本機檔案路徑）
+ * 同 `POST /api/guard-fix/staff-list`（讀上載嘅 xlsx bytes）共用，唔准
+ * 各自抄一份（WP-GUARD-FIX-UI 鐵則）。 */
+export function parseUTeamWorksheet(ws: ExcelJS.Worksheet): UTeamRow[] {
   const rows: UTeamRow[] = [];
   for (let r = 2; r <= ws.rowCount; r++) {
     const row = ws.getRow(r);
@@ -108,6 +108,23 @@ export async function loadUTeamList(filePath: string = U_TEAM_XLSX_PATH): Promis
     });
   }
   return rows;
+}
+
+export async function loadUTeamList(filePath: string = U_TEAM_XLSX_PATH): Promise<UTeamRow[]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  return parseUTeamWorksheet(wb.worksheets[0]!);
+}
+
+/** `POST /api/guard-fix/staff-list` 用——由上載嘅 xlsx bytes（記憶體）
+ * 解析，唔存落磁碟。回傳 rows＋`row_count`（`staff_list_uploads.
+ * row_count`／`parse_summary` 用，唔存逐行 PII）。 */
+export async function parseUTeamWorkbookBuffer(buffer: Buffer | ArrayBuffer): Promise<UTeamRow[]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const ws = wb.worksheets[0];
+  if (!ws) throw new Error("U Team 名單 xlsx 冇 sheet1");
+  return parseUTeamWorksheet(ws);
 }
 
 export interface UTeamIndex {
