@@ -90,6 +90,9 @@ interface GuardRow {
   bank_payee_name?: string | null;
   blacklist_check_result?: string | null;
   blacklist_check_date?: string | null;
+  // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——同 hkid
+  // 等其他 PII 新欄一致，response 有冇呢粒 key 視乎 field-group gate。
+  name_aliases?: string[] | null;
 }
 interface BrokerRow {
   id: string;
@@ -166,6 +169,9 @@ const emptyForm = {
   bank_payee_name: "",
   blacklist_check_result: "",
   blacklist_check_date: "",
+  // WP-GUARD-FIX：逗號分隔字串（同 sites/page.tsx `aliases` 一致寫法），
+  // onSubmit() 拆返做陣列先送。
+  name_aliases: "",
 };
 
 const emptyStaffNumberForm = {
@@ -460,6 +466,7 @@ export function GuardsClient({
       bank_payee_name: row.bank_payee_name ?? "",
       blacklist_check_result: row.blacklist_check_result ?? "",
       blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
+      name_aliases: (row.name_aliases ?? []).join(", "),
     });
     // Opus 覆核（WP-MULTI 必修 5）：記低呢一刻讀到嘅 legacy 欄值做
     // baseline——`onSubmit()` 淨係用戶改咗（同呢個唔一樣）先送。
@@ -643,6 +650,13 @@ export function GuardsClient({
           }
           if (form.blacklist_check_result) body.blacklist_check_result = form.blacklist_check_result;
           body.blacklist_check_date = form.blacklist_check_date || null;
+          // WP-GUARD-FIX：逗號分隔拆返做陣列先送——同 sites/page.tsx
+          // `aliases` 一致寫法。送埋（唔淨係改咗先送）都冇問題：route 層
+          // `dropUnchangedFieldGroupValues()` 會自己判斷值冇變就跳過。
+          body.name_aliases = form.name_aliases
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
         }
       }
       if (canUpdateBank) {
@@ -1981,6 +1995,16 @@ export function GuardsClient({
                   />
                 </Field>
               </div>
+              {/* WP-GUARD-FIX（老闆 2026-09-25 要求）：更表姓名格寫法可能
+                  同系統本名唔同（花名／簡寫／曾用名）——呢個欄俾更表上載
+                  配對用，hint 刻意唔提「編號」（同員工編號分工唔同）。 */}
+              <Field label="更表用名（別名）" hint="逗號分隔，例如：阿明, 小明——更表寫嘅唔同姓名寫法，幫手配對更表上載">
+                <input
+                  className={inputCls}
+                  value={form.name_aliases}
+                  onChange={(e) => setForm((f) => ({ ...f, name_aliases: e.target.value }))}
+                />
+              </Field>
 
               {/* WP-MULTI（老闆 2026-09-19 拍板，規劃師延伸同一原則）：
                   上面「地址」單一 input 照舊（快速改主要地址，經 PATCH

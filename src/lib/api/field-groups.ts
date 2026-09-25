@@ -99,7 +99,9 @@ export const GUARD_PII_FIELDS = {
   sites: [],
   special_items: [],
   month_closes: [],
-  guards: ["hkid", "date_of_birth", "address", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date"],
+  // WP-GUARD-FIX（老闆 2026-09-25 要求）：`name_aliases`（更表用名／別名）
+  // 加入呢組——同 hkid 等 PII 欄一致敏感度（可以間接曝露曾用名/花名）。
+  guards: ["hkid", "date_of_birth", "address", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date", "name_aliases"],
   brokers: [],
   referral_fee_rates: [],
   // WP-MULTI：`guard_emergency_contacts`／`guard_addresses` 呢兩張表

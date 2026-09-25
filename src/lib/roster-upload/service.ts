@@ -126,7 +126,7 @@ async function matchRowsAndSummarize(
   const shiftTypes: ShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup }));
 
   const [guardsRaw, staffNumbersRaw, phonesRaw] = await Promise.all([
-    tx.guard.findMany({ select: { id: true, nameZh: true, tel: true, staffNo: true, staffNoMw: true } }),
+    tx.guard.findMany({ select: { id: true, nameZh: true, tel: true, staffNo: true, staffNoMw: true, nameAliases: true } }),
     tx.guardStaffNumber.findMany({ select: { number: true, guardId: true, status: true } }),
     tx.guardPhone.findMany({ select: { guardId: true, tel: true } }),
   ]);
@@ -212,6 +212,11 @@ async function matchRowsAndSummarize(
     if (guardResult.staffNoBelongsToOther) {
       staffNoMismatchCount += 1;
       warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人（姓名對唔上），唔會自動配對，人手覆核`);
+    }
+    // WP-GUARD-FIX（老闆 2026-09-25 要求）：靠別名（`guards.name_aliases`）
+    // 配到——留痕俾會計知呢個人個本名同更表寫嘅唔同，唔係純粹信賴巧合。
+    if (guardResult.matchedViaAlias) {
+      warnings.push("由別名配對（更表姓名同系統本名唔同，見安員資料「更表用名」）");
     }
     if (shiftTypeMatch.matchedViaRank) rankNarrowedCount += 1;
     if (shiftTypeMatch.ambiguous) {
