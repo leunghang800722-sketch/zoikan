@@ -14,6 +14,14 @@ export interface SiteCandidate {
   id: string;
   canonicalName: string;
   aliases: string[];
+  /** WP-UPLOAD-AUTOFIX 個案 1：母盤安全網（`resolveRosterUploadSite()`）
+   * 用嚟判斷「呢個盤係咪有子盤」——冇傳（例如 `matchRowsAndSummarize()`
+   * 嘅 `childSites` 候選）就當冇呢個欄，唔影響原本嘅對照。 */
+  parentSiteId?: string | null;
+  /** WP-UPLOAD-AUTOFIX 個案 1：`sites.roster_file_keys`——更表檔名鍵，
+   * 上載時檔名 stem 含任一鍵（唔分大小寫）就直接用呢個盤，優先過檔內
+   * 盤名（`matchSiteByFileName()`／`resolveRosterUploadSite()`）。 */
+  rosterFileKeys?: readonly string[];
 }
 
 /** 更表盤名→`sites`：canonical_name 完全相等（trim）優先，搵唔到再試
@@ -28,6 +36,125 @@ export function matchSite(siteNameRaw: string | null, candidates: readonly SiteC
   if (exact) return exact.id;
   const byAlias = candidates.find((s) => s.aliases.some((a) => a.trim() === norm));
   return byAlias?.id ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// WP-UPLOAD-AUTOFIX 個案 1（P2-版面重設計計劃.md §17.11）：更表上載完全
+// 自動、唔准要人手補救。「CTB 6907」檔案內盤名格寫「城巴車廠」（同城巴車
+// 廠母盤主檔一樣），但實際係「創富廠IC」呢個獨立盤——檔內盤名對照
+// （`matchSite()`）冚唔到呢種「盤名寫錯／寫咗個共用字眼」嘅情況，會同
+// 「城巴車廠」主檔同盤同月撞版（互相 supersede）。老闆方案：逐盤設
+// `roster_file_keys`（更表檔名入面嘅穩定識別字，例如「CTB 6907」），
+// 上載時檔名優先於檔內盤名。
+// ---------------------------------------------------------------------------
+
+// 月份三字母縮寫（8 月試算檔名全部用呢種寫法：「Aug 2026」）。
+const MONTH_ABBR = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
+// 去尾嘅 " - <Mon> <YYYY>" 或者 " <Mon> <YYYY>"（有冇 dash 都要中，dash
+// 前後可以有多過一個空白——喺呢個 regex 行之前已經 collapse 咗空白做一
+// 格，所以呢度淨係要顧「有冇 dash」呢個變化）。
+const MONTH_YEAR_SUFFIX_RE = new RegExp(`\\s*-?\\s*(${MONTH_ABBR})\\s+\\d{4}$`, "i");
+const ROSTER_PREFIX_RE = /^Roster\s*-\s*/i;
+
+/** 更表檔名 → 「stem」（用嚟同 `roster_file_keys` 逐個 `.includes()` 比
+ * 對，唔分大小寫）：去 `Roster - ` 前綴、去 ` - Aug 2026`／` Aug 2026`／
+ * ` - <Mon> <YYYY>` 月份尾、去副檔名、空格 collapse。純字串處理，唔理
+ * 檔案實際內容。 */
+export function rosterFileNameStem(fileName: string): string {
+  let s = fileName.replace(/\.xlsx?$/i, "");
+  s = s.replace(/\s+/g, " ").trim();
+  s = s.replace(ROSTER_PREFIX_RE, "");
+  s = s.replace(MONTH_YEAR_SUFFIX_RE, "");
+  return s.replace(/\s+/g, " ").trim();
+}
+
+interface FileKeyMatch {
+  siteId: string;
+  /** 撞中嘅嗰個 `roster_file_keys` 原文（未正規化）——俾 warning 用嚟講
+   * 「由邊條鍵對盤」。 */
+  key: string;
+}
+
+function findFileKeyMatch(stem: string, candidates: readonly SiteCandidate[]): FileKeyMatch | null {
+  if (!stem) return null;
+  const stemLower = stem.toLowerCase();
+  for (const c of candidates) {
+    for (const rawKey of c.rosterFileKeys ?? []) {
+      const key = rawKey.trim();
+      if (key && stemLower.includes(key.toLowerCase())) return { siteId: c.id, key };
+    }
+  }
+  return null;
+}
+
+/** 檔名 stem 含某盤任一 `roster_file_keys`（唔分大小寫，子字串比對）→
+ * 嗰個盤嘅 id；冇任何盤有鍵撞中就 null。淨係睇檔名，唔查 DB（candidates
+ * 由 caller 一次過查好傳入）。 */
+export function matchSiteByFileName(fileName: string, candidates: readonly SiteCandidate[]): string | null {
+  return findFileKeyMatch(rosterFileNameStem(fileName), candidates)?.siteId ?? null;
+}
+
+export interface RosterUploadSiteResolution {
+  siteId: string | null;
+  matchedViaFileKey: boolean;
+  /** 淨係 `matchedViaFileKey=true` 先有值——撞中嗰條 `roster_file_keys`
+   * 原文，俾 caller 砌 row warning「由檔名鍵『…』對盤」。 */
+  fileKeyMatchedKey: string | null;
+  /** 淨係「母盤安全網」觸發咗先有值——加落 `parse_summary.warnings`
+   * 嘅頂層警告文字。 */
+  parentNoSubSiteWarning: string | null;
+}
+
+/** WP-UPLOAD-AUTOFIX 個案 1：配盤優先次序（`service.ts` 用）——
+ *   (0) `siteIdHint`（上載 API／人手 PATCH 指定）永遠最優先，呢個函數
+ *       唔會覆蓋；
+ *   (1) 檔名鍵（`matchSiteByFileName()`）；
+ *   (2) 跌返檔內盤名（`matchSite()`）——但加安全網：冚中一個**多過一個
+ *       子盤**嘅母盤、而呢次解析結果 `subSiteNames` 係空（冇子盤標題可
+ *       以再細分）→ 唔自動掛母盤（`siteId:null`），因為冚錯母盤主檔會
+ *       同真正嘅母盤更表同盤同月互相 supersede（CTB 6907 撞「城巴車廠」
+ *       主檔就係呢種情況嘅示例，加咗 roster_file_keys 之後呢個檔案唔會
+ *       再行到呢一步，但保留呢層防其他類似檔案）。
+ *
+ *       驗收（dev DB 實測）：**淨係「多過一個子盤」（>1）先觸發**，唔係
+ *       「有子盤就觸發」——「HKU座頭」有一個子盤「HKU 醫學院」（純組織
+ *       關係，兩個盤各自有獨立更表檔案，母盤自己嗰份檔案本身用 standard
+ *       layout、冇 sub_site 欄，`subSiteNames` 本身就一定係空），如果淨
+ *       係「有冇子盤」就觸發，會令「HKU座頭」呢個一路行得好好嘅盤突然
+ *       上載唔到（`site_id=null`）。「城巴車廠」（9 個子盤）／「數碼港
+ *       CP5」呢類先係真正「一檔多子盤」（`sub_site` 欄要分好幾個子盤）
+ *       嘅結構，用「子盤數量 >1」呢個訊號分返呢兩種情況，同現有 DB 結構
+ *       實測吻合。「有子盤但冇 sub_site_name」呢一行本身仲有另一層保護
+ *       （`matchRowsAndSummarize()` 嘅「未寫子盤，歸母盤，人手覆核」
+ *       warning），唔靠呢個安全網獨力頂晒。 */
+export function resolveRosterUploadSite(
+  fileName: string,
+  siteIdHint: string | null | undefined,
+  siteRaw: string | null,
+  subSiteNames: readonly string[],
+  candidates: readonly SiteCandidate[],
+): RosterUploadSiteResolution {
+  if (siteIdHint) return { siteId: siteIdHint, matchedViaFileKey: false, fileKeyMatchedKey: null, parentNoSubSiteWarning: null };
+
+  const fileKeyHit = findFileKeyMatch(rosterFileNameStem(fileName), candidates);
+  if (fileKeyHit) {
+    return { siteId: fileKeyHit.siteId, matchedViaFileKey: true, fileKeyMatchedKey: fileKeyHit.key, parentNoSubSiteWarning: null };
+  }
+
+  const contentMatch = matchSite(siteRaw, candidates);
+  if (contentMatch) {
+    const childCount = candidates.filter((c) => c.parentSiteId === contentMatch).length;
+    if (childCount > 1 && subSiteNames.length === 0) {
+      const parentName = candidates.find((c) => c.id === contentMatch)?.canonicalName ?? siteRaw ?? "（未知）";
+      return {
+        siteId: null,
+        matchedViaFileKey: false,
+        fileKeyMatchedKey: null,
+        parentNoSubSiteWarning: `檔內盤名係母盤「${parentName}」但冇子盤資料，請指定盤`,
+      };
+    }
+  }
+  return { siteId: contentMatch, matchedViaFileKey: false, fileKeyMatchedKey: null, parentNoSubSiteWarning: null };
 }
 
 export interface BrokerCandidate {

@@ -1042,8 +1042,79 @@ async function main() {
         level: "site_shift_broker",
       });
       plan.needsBossReview.push(
-        `【控制室－WP-MIXED-BILLING】8 月起咗兩個更種：per_shift「${dayWageShiftType.code}」（日薪崗，逐更收客 840，pstb 22 更）同 monthly_ic「${monthlyIcCode}」（月薪崗，收入包喺 site flat 卡 22,000，pstb 25 更）。但邊個保安員報邊個更種，roster upload 冇欄位可以自動分流（Wilson Control 檔冇逐格 rank/code，同數碼港 CP5 嘅 rank 收窄機制唔同、用唔到，淨係靠「人」先分得到——8 月試算 records.jsonl 顯示 2 個人：25 更 vs 22 更）——要會計/主管喺更表編輯器手動幫控制室嘅每個保安員揀啱更種（或者之後起一個「guard 級預設更種」機制先自動化到）。`,
+        `【控制室－WP-MIXED-BILLING】8 月起咗兩個更種：per_shift「${dayWageShiftType.code}」（日薪崗，逐更收客 840，pstb 22 更）同 monthly_ic「${monthlyIcCode}」（月薪崗，收入包喺 site flat 卡 22,000，pstb 25 更）。roster upload 本身冇欄位可以自動分流邊個保安員報邊個更種（Wilson Control 檔冇逐格 rank/code，同數碼港 CP5 嘅 rank 收窄機制唔同、用唔到）——下面 WP-UPLOAD-AUTOFIX 段用 guard 級卡解決咗呢個缺口，唔使再喺更表編輯器手動揀更種。`,
       );
+
+      // -------------------------------------------------------------------
+      // WP-UPLOAD-AUTOFIX 個案 2（老闆 2026-09-25 要求：更表上載完全自
+      //     動，唔准要人手補救）：上面起咗兩個更種之後，實際上載（Wilson
+      //     Control 檔兩位安員 rank 都係「Control」、代號都係「N」）會將
+      //     全部格配去 per_shift「N」（840），8 月收入變 22,000+47×840=
+      //     61,480，唔啱（應為 40,480）。解法：起多一張「guard 级」卡，
+      //     直接令月薪崗嗰位安員嘅「N」更 client_rate=0（已包喺月費）、
+      //     guard_wage=800——resolver `specificityRank()`（resolve-rate.ts）
+      //     guard 专属+同 shift_type 係 rank 0，一定贏 site 级 840 卡
+      //     （rank 4），唔使個更種本身變、唔使上載識別「邊格係邊個人」以
+      //     外嘅任何額外資訊。
+      //   邊位係月薪崗：
+      //     1. pstb「控制室 1930-0730 Y」嘅 E map（E={"840":22,"22000":25}）
+      //        反推邊個金額對應月費崗——E≥5000 嗰個 key 對應嘅 count
+      //        （25）就係月薪崗嘅更數（同 boss_answers.py 第四節「威信
+      //        控制室兩個價」核實過：A 月費 $20,000／收客 22,000／25
+      //        更，B 日薪 $800／收客 840／22 更）。
+      //     2. Wilson Control 檔（records.jsonl，只可以 runtime 讀，唔入
+      //        git）逐 staff_no 數代號「N」出現次數，邊個 U 號啱好等於
+      //        呢個「25」就係月薪崗安員——U 號／姓名淨係存喺 gitignored
+      //        plan.json，呢個 script 同 plan-summary.md 唔印。
+      //     3. 搵唔到（DB 冇呢個 U 號、或者呢個盤唔啱好兩個人）→
+      //        needsBossReview「要人手」，唔建卡（唔准估）。
+      // -------------------------------------------------------------------
+      {
+        const siteCode = Object.entries(SITE_CODE_MAP).find(([, res]) => res.kind === "existing" && res.canonicalName === "控制室")?.[0];
+        const pstbKey = siteCode ? `${siteCode}|${dayWageShiftType.startTime.replace(":", "")}-${dayWageShiftType.endTime.replace(":", "")}|Y` : null;
+        const eEntries = pstbKey ? Object.entries(pstb[pstbKey]?.E ?? {}) : [];
+        const monthlyPostEntry = eEntries.find(([rate]) => Number(rate) >= 5000);
+        if (!pstbKey || !monthlyPostEntry) {
+          plan.needsBossReview.push(
+            "【控制室－WP-UPLOAD-AUTOFIX】搵唔到 pstb「控制室 1930-0730 Y」呢組嘅月費崗更數（E≥5000 嗰個 key）——搞唔清邊位係月薪崗，冇建 guard 級卡，維持人手分流（喺更表編輯器改嗰位嘅更做「N-IC」）。",
+          );
+        } else {
+          const monthlyShiftCount = monthlyPostEntry[1];
+          const staffCounts = new Map<string, number>();
+          for (const r of records) {
+            if (r.site_raw !== "Wilson Control" || r.code_raw !== dayWageShiftType.code || !r.staff_no) continue;
+            staffCounts.set(r.staff_no, (staffCounts.get(r.staff_no) ?? 0) + 1);
+          }
+          const monthlyStaffNos = [...staffCounts.entries()].filter(([, n]) => n === monthlyShiftCount).map(([sn]) => sn);
+          if (monthlyStaffNos.length !== 1) {
+            plan.needsBossReview.push(
+              `【控制室－WP-UPLOAD-AUTOFIX】Wilson Control 檔逐 U 號數「${dayWageShiftType.code}」更數，冚中「${monthlyShiftCount}」更（月薪崗，pstb 已知）嘅 U 號有 ${monthlyStaffNos.length} 個（要求啱好 1 個）——搞唔清邊位，冇建 guard 級卡，維持人手分流。`,
+            );
+          } else if (!db.staffNumbers.has(monthlyStaffNos[0]!)) {
+            plan.needsBossReview.push(
+              "【控制室－WP-UPLOAD-AUTOFIX】Wilson Control 檔反推嘅月薪崗安員 U 號，dev DB 搵唔到（未 seed 呢位／U 號已變）——冇建 guard 級卡，要人手覆核，或者喺更表編輯器手動將呢位安員嗰啲更改做「N-IC」。",
+            );
+          } else {
+            pushCard({
+              siteCanonicalName: "控制室",
+              shiftType: { code: dayWageShiftType.code, startTime: dayWageShiftType.startTime, endTime: dayWageShiftType.endTime },
+              brokerCode: "Y",
+              guardStaffNo: monthlyStaffNos[0]!,
+              clientRate: 0,
+              guardWage: 800,
+              brokerFee: null,
+              billingModel: "per_shift",
+              effectiveFrom: EFFECTIVE_FROM,
+              source: "aug-opening:控制室 WP-UPLOAD-AUTOFIX 月薪崗安員專屬卡（records.jsonl 逐 U 號更數反推，pstb S031|1930-0730|Y 核實）",
+              note: "控制室月薪崗（收客包喺 22,000 月費，老闆 2026-09-24 (a)）",
+              level: "site_shift_guard",
+            });
+            plan.needsBossReview.push(
+              `【控制室－WP-UPLOAD-AUTOFIX——已自動化，1 位】已起咗一張 guard 級卡：月薪崗嗰位安員上載後全部歸去 per_shift「${dayWageShiftType.code}」嘅更，client_rate 由呢張卡強制變 0（已包喺月費，唔會再逐更加一次）、guard_wage=800——resolver 會自動揀中（guard 专属卡 rank 0 贏 site 级 840 卡 rank 4），唔再需要人手喺更表編輯器改做「${monthlyIcCode}」。日薪崗嗰位維持行 site 级 840 卡，唔使處理。`,
+            );
+          }
+        }
+      }
     } else {
       plan.needsBossReview.push(
         "【控制室－WP-MIXED-BILLING】主 loop 冇起到控制室 1930-0730|Y 嘅 per_shift 逐更卡（840），冇嘢可以複製起月薪崗 monthly_ic 更種——人手覆核（可能係試算 pstb 資料本身變咗）。",

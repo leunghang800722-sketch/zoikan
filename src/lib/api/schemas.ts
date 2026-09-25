@@ -129,6 +129,8 @@ export const SiteCreateSchema = z
     monthly_posts: z.number().int().optional(),
     prorata_basis: enumOf(ProrataBasis).optional(),
     in_scope: z.boolean().optional(),
+    // WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求）：見 SiteUpdateSchema 同一個欄註解。
+    roster_file_keys: z.array(z.string()).optional(),
   })
   .strict();
 export const SiteUpdateSchema = z
@@ -145,6 +147,11 @@ export const SiteUpdateSchema = z
     prorata_basis: enumOf(ProrataBasis).optional(),
     in_scope: z.boolean().optional(),
     status: enumOf(SiteStatus).optional(),
+    // WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求：更表上載完全自動）：更表檔名
+    // 鍵——上載時檔名 stem 含任一鍵（唔分大小寫）就直接用呢個盤，優先過
+    // 檔內盤名對照。見 prisma/schema.prisma Site.rosterFileKeys、
+    // src/lib/roster-upload/match.ts `matchSiteByFileName()`。老闆／主管可改。
+    roster_file_keys: z.array(z.string()).optional(),
   })
   .strict();
 
