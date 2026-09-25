@@ -97,4 +97,8 @@ export interface GuardFixPlan {
     createMinimal: CreateMinimalAction[];
     needsBoss: NeedsBossAction[];
   };
+  /** `create` 入面幾多個 U Team 名單身份證欄唔係身份證格式、冇寫入
+   * （要 HR 補）——唔係 PII 本身（淨係數目），plan-summary／頁面摘要卡
+   * 都可以印。 */
+  hkidDroppedCount: number;
 }

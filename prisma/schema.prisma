@@ -800,6 +800,85 @@ model RosterUploadRow {
 }
 
 // ---------------------------------------------------------------------------
+// WP-GUARD-FIX-UI（老闆 2026-09-25 要求）：「未配對安員修復」做入系統，
+// 俾老闆手機撳兩下就搞掂（唔使再喺 Terminal 貼 DB 連線字串）。同
+// `roster_uploads` 一致嘅「即時存 bytes＋摘要，唔另存逐行 PII」模式——
+// U Team 名單逐次上載都要喺 plan 計算嗰刻由 bytes 重新解析（記憶體，
+// 唔落 DB），`staff_list_uploads` 本身淨係存檔案＋數目，冧唔到姓名/
+// 電話/身份證。PII 級——`安員配對修復` module 老闆硬性專用（見
+// src/lib/rbac/matrix.ts），主管/會計/雞頭/安員一律 403（會批量建人、
+// 睇身份證）。
+model StaffListUpload {
+  id           String   @id @default(uuid())
+  uploaderId   String   @map("uploader_id")
+  uploader     User     @relation(fields: [uploaderId], references: [id])
+  uploadedAt   DateTime @default(now()) @map("uploaded_at")
+  fileName     String   @map("file_name")
+  fileSha256   String   @map("file_sha256")
+  fileBytes    Bytes    @map("file_bytes")
+  fileSize     Int      @map("file_size")
+  rowCount     Int      @map("row_count")
+  status       StaffListUploadStatus @default(parsed)
+  // {row_count, u_number_count, hkid_valid_count, hkid_invalid_count,
+  // parse_error} 呢類數目——唔存逐行姓名/電話/身份證（鐵則）。
+  parseSummary Json?    @map("parse_summary")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  guardFixRuns GuardFixRun[]
+
+  // 最新一份（`uploadedAt` 最大、`status=parsed`）為現用——查詢用
+  // `orderBy: {uploadedAt: "desc"}` 取第一筆，冇另外用 boolean 旗標（避免
+  // 兩個 "current" 同時存在嘅競態）。
+  @@index([status, uploadedAt])
+  @@map("staff_list_uploads")
+}
+
+enum StaffListUploadStatus {
+  parsed
+  parse_failed
+}
+
+// 一次「計劃／套用」執行——`plan_json` 帶 PII（姓名/電話/身份證/候選
+// guardId），只有老闆可讀（field-level gate 由 route 層 `安員配對修復`
+// 硬性單一角色保證，唔需要額外 field-group——呢個資源成塊都係老闆專
+// 用）。`summary_json` 淨係數目，方便歷史列表唔使反覆解 `plan_json`。
+model GuardFixRun {
+  id                String            @id @default(uuid())
+  month             DateTime          @db.Date
+  staffListUploadId String            @map("staff_list_upload_id")
+  staffListUpload   StaffListUpload   @relation(fields: [staffListUploadId], references: [id])
+  createdById       String            @map("created_by_id")
+  createdBy         User              @relation(fields: [createdById], references: [id])
+  createdAt         DateTime          @default(now()) @map("created_at")
+
+  planJson    Json @map("plan_json")
+  summaryJson Json @map("summary_json")
+
+  status    GuardFixRunStatus @default(planned)
+  appliedAt DateTime?         @map("applied_at")
+  // Opus 5.5 驗收：幾時開始套用——`applying` 超過 15 分鐘當卡死（server
+  // 中途重啟），頁面俾老闆「重新套用」（見 runs/[id]/apply/route.ts）。
+  applyStartedAt DateTime? @map("apply_started_at")
+  // apply 完成之後嘅結果：逐盤 reparse 前後 unmatched/ambiguous 數＋
+  // link/create/create_minimal 處理/跳過數（冇 PII，純數目＋seq）。
+  resultJson Json? @map("result_json")
+
+  @@index([month, createdAt])
+  @@map("guard_fix_runs")
+}
+
+enum GuardFixRunStatus {
+  planned
+  // WP-GUARD-FIX-UI：apply 可能要幾分鐘（建人＋逐盤 reparse）——route
+  // 用 Next `after()` 響應先返、背景先做，呢個中途狀態俾頁面 poll
+  // `GET /api/guard-fix/runs/:id` 用（見 §18.9 設計取捨）。
+  applying
+  applied
+  failed
+}
+
+// ---------------------------------------------------------------------------
 // WP-ROSTER-UPLOAD Phase B-1（§14.1 WP-ATTRIB／§15.3 分期）：對數頁「保留
 // 系統」／「例外」呢兩種決定——唔改 shift_records，但要留痕（邊個、幾
 // 時、原因），等會計之後可以追溯「呢個差異係咪已經有人睇過、點解冇跟更
@@ -998,6 +1077,9 @@ model User {
   feedbackSessions FeedbackSession[]
   rosterUploads    RosterUpload[]
   feedbackReports  FeedbackReport[]
+  // WP-GUARD-FIX-UI：邊個上載咗 U Team 名單／邊個叫過「計劃／套用」。
+  staffListUploads StaffListUpload[]
+  guardFixRuns     GuardFixRun[]
 
   @@map("users")
 }

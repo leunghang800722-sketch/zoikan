@@ -71,6 +71,14 @@ export const MODULES = [
   // 姓名／電話／工號原文，同 WP-PII 級別一致，雞頭連自己嗰盤嘅上載都
   // 見唔到）。
   "更表上載",
+  // WP-GUARD-FIX-UI（老闆 2026-09-25 要求）——「未配對安員修復」做入
+  // 系統（U Team 名單上載／計劃／套用），老闆手機撳兩下。淨係老闆
+  // （會批量建人、睇 U Team 名單身份證）——主管／會計／雞頭／安員一律
+  // 硬性拒絕，同「安員銀行資料」呢類老闆專用 module 一致粒度，唔可以
+  // 借用「更表上載」（嗰個 module 會計/主管都有）。view=睇頁面／歷史
+  // runs／plan 摘要；create=上載名單／計算計劃；update=套用（會建人／
+  // 改安員），void/export 冇對應能力。
+  "安員配對修復",
 ] as const;
 export type Module = (typeof MODULES)[number];
 
@@ -130,6 +138,7 @@ const OWNER: RoleMatrix = {
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
   助手: row(G, NA, NA, NA, NA), // WP-AI1：老闆✓——view 有意義，其餘 N/A
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆上載/睇/PATCH（人手指定盤）全部✓；WP-UPLOAD-VOID：作廢✓（會計/主管/老闆三類）
+  安員配對修復: row(G, G, G, D, D), // WP-GUARD-FIX-UI：淨係老闆——上載名單/計算計劃/套用全部✓；void/export 冇對應能力
 };
 
 // ---------------------------------------------------------------------------
@@ -163,6 +172,7 @@ const SUPERVISOR: RoleMatrix = {
   安員銀行資料: uniformRow(D),
   助手: row(G, NA, NA, NA, NA), // WP-AI1：主管✓
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
+  安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
 };
 
 // ---------------------------------------------------------------------------
@@ -193,6 +203,7 @@ const ACCOUNTANT: RoleMatrix = {
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
   助手: row(G, NA, NA, NA, NA), // WP-AI1：會計✓
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
+  安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
 };
 
 // ---------------------------------------------------------------------------
@@ -242,6 +253,7 @@ const BROKER: RoleMatrix = {
   安員銀行資料: uniformRow(D),
   助手: uniformRow(D), // WP-AI1：硬性禁止——雞頭永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
   更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒——雞頭連自己嗰盤嘅上載都見唔到（老闆「上載權限：會計、主管、老闆」三類）
+  安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
 };
 
 // ---------------------------------------------------------------------------
@@ -272,6 +284,7 @@ const GUARD_SELF: RoleMatrix = {
   安員銀行資料: uniformRow(D), // WP-PII：安員硬性拒
   助手: uniformRow(D), // WP-AI1：硬性禁止——安員永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
   更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒
+  安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
 };
 
 export const DEFAULT_MATRIX: Record<RoleName, RoleMatrix> = {

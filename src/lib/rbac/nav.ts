@@ -92,6 +92,9 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
 
   push("/roster", "更表", "更表");
   push("/roster-uploads", "更表上載", "更表上載");
+  // WP-GUARD-FIX-UI：淨係老闆（module 硬性單一角色）——push() 本身已經
+  // 用 grants 判斷，唔使額外 baseRole 判斷。
+  push("/guard-fix", "未配對安員修復", "安員配對修復");
   push("/quotas", "配額", "配額");
   push("/approvals", "審批隊列", "審批");
   push("/sites", "盤", "盤");
@@ -145,7 +148,7 @@ export interface NavGroup {
 
 const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
   { title: "", hrefs: ["/"] },
-  { title: "排更", hrefs: ["/roster", "/roster-uploads", "/quotas", "/approvals"] },
+  { title: "排更", hrefs: ["/roster", "/roster-uploads", "/guard-fix", "/quotas", "/approvals"] },
   { title: "主檔", hrefs: ["/sites", "/guards", "/brokers", "/rate-cards"] },
   { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall"] },
   { title: "系統", hrefs: ["/users", "/roles", "/audit-log", "/feedback"] },

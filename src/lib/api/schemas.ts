@@ -753,6 +753,14 @@ export const RosterUploadVoidSchema = z
   })
   .strict();
 
+// WP-GUARD-FIX-UI：`POST /api/guard-fix/plan`——`month` 同
+// `RosterUploadFormFieldsSchema` 一致（YYYY-MM 或 YYYY-MM-DD）。
+export const GuardFixPlanBodySchema = z
+  .object({
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])(-\d{2})?$/, "月份格式要係 YYYY-MM 或 YYYY-MM-DD"),
+  })
+  .strict();
+
 // WP-ROSTER-UPLOAD Phase B-1（B1-2）：`POST /api/roster-uploads/:id/reconcile/apply`
 // ——`key` 係 `buildReconcileKey()`/`buildUnresolvedKey()`（src/lib/
 // roster-upload/reconcile.ts）砌出嚟嘅字串，唔係 uuid，故意用寬鬆
