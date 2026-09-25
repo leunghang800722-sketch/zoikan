@@ -8,7 +8,7 @@
 import { test, expect } from "@playwright/test";
 import ExcelJS from "exceljs";
 import { loginAs } from "./helpers";
-import { prisma, findSiteIdByName } from "./db-helpers";
+import { prisma, findSiteIdByName, TEST_TEL } from "./db-helpers";
 
 test.describe.configure({ mode: "serial" });
 
@@ -158,5 +158,211 @@ test("老闆：同盤同月上載同名檔 → 400 提示改檔名；改個名�
   } finally {
     await prisma.rosterUploadRow.deleteMany({ where: { upload: { siteId, month: new Date(Date.UTC(2026, 7, 1)) } } });
     await prisma.rosterUpload.deleteMany({ where: { siteId, month: new Date(Date.UTC(2026, 7, 1)) } });
+  }
+});
+
+// -----------------------------------------------------------------------
+// WP-UPLOAD-VOID（老闆 2026-09-25 要求）：正式站揀錯月份（09 月）上載咗
+// 8 月更表，之前 UI 完全冇刪除／撤銷。作廢＋正確月份再上載同名檔。
+// -----------------------------------------------------------------------
+test("老闆：上載去錯月份 → 作廢 → 正確月份再上載同名檔成功", async ({ page }) => {
+  const siteId = await findSiteIdByName("都會大學學生宿舍");
+  const guard = await findGuardWithUNumber();
+  const wrongMonth = "2026-09";
+  const fileName = "test-roster-void.xlsx";
+  const buffer = await buildSyntheticRosterXlsx("都會大學學生宿舍", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
+
+  try {
+    await loginAs(page, "老闆");
+
+    // 揀錯月份（老闆情境：想上載 8 月更表，手快手震揀咗 09 月）上載。
+    await page.goto(`/roster-uploads?month=${wrongMonth}`);
+    await page.locator('input[type="month"]').fill(wrongMonth);
+    const uploadResponse = page.waitForResponse((r) => r.url().includes("/api/roster-uploads") && r.request().method() === "POST");
+    await page.getByTestId("roster-upload-file-input").setInputFiles({ name: fileName, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
+    expect((await uploadResponse).status()).toBe(201);
+
+    const row = page.locator("table tbody tr", { hasText: "都會大學學生宿舍" }).first();
+    await expect(row.getByText("已上載")).toBeVisible({ timeout: 15_000 });
+
+    // 作廢——強制填原因先可以確認。
+    await row.getByRole("button", { name: "作廢" }).click();
+    await row.getByPlaceholder("填原因先可以確認").fill("揀錯月份，應該係 8 月更表");
+    const voidResponse = page.waitForResponse((r) => r.url().includes("/void") && r.request().method() === "POST");
+    await row.getByRole("button", { name: "確認作廢" }).click();
+    expect((await voidResponse).status()).toBe(200);
+
+    // 作廢之後：9 月呢個盤變返「未上載」（唔會再顯示「已上載」）。
+    await expect(row.getByText("未上載")).toBeVisible({ timeout: 15_000 });
+
+    // 「顯示已作廢」開關開返嚟——見到灰色行（版本、原因）。
+    await page.getByText("顯示已作廢").click();
+    await expect(page.getByText("已作廢記錄")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("揀錯月份，應該係 8 月更表").first()).toBeVisible();
+
+    // 正確月份（8 月）再上載同一個檔名——冇撞名問題（唔同（盤,月）組別），成功。
+    await page.locator('input[type="month"]').fill(TEST_MONTH);
+    const uploadResponse2 = page.waitForResponse((r) => r.url().includes("/api/roster-uploads") && r.request().method() === "POST");
+    await page.getByTestId("roster-upload-file-input").setInputFiles({ name: fileName, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
+    expect((await uploadResponse2).status()).toBe(201);
+    const correctRow = page.locator("table tbody tr", { hasText: "都會大學學生宿舍" }).first();
+    await expect(correctRow.getByText("已上載")).toBeVisible({ timeout: 15_000 });
+  } finally {
+    await prisma.rosterUploadRow.deleteMany({ where: { upload: { siteId } } });
+    await prisma.rosterUpload.deleteMany({ where: { siteId } });
+  }
+});
+
+// -----------------------------------------------------------------------
+// WP-UPLOAD-VOID（老闆 2026-09-25 追加要求）：多檔拖放／多選上載——一次
+// 拖 3 個合成 xlsx（1 個正常、1 個同名檔 400、1 個盤對唔到）→ 三行各自
+// 狀態啱、列表刷新、總結數目啱。
+// -----------------------------------------------------------------------
+test("老闆：一次過拖 3 個檔——1 成功／1 同名 400／1 盤對唔到，隊列逐行狀態啱＋總結數啱", async ({ page }) => {
+  const guard = await findGuardWithUNumber();
+  const normalSiteId = await findSiteIdByName("葵發大廈");
+  const dupSiteId = await findSiteIdByName("恆星樓");
+  const dupFileName = "test-roster-batch-dup.xlsx";
+  const owner = await prisma.user.findUniqueOrThrow({ where: { tel: TEST_TEL["老闆"] }, select: { id: true } });
+
+  // 前置：「恆星樓」8 月已經有一個叫呢個名嘅上載——隊列入面第二個同名檔
+  // 會撞 400（同 §14 撞名邏輯一致，唔係 WP-UPLOAD-VOID 新增，淨係俾隊列
+  // 有一個真實 400 場景測）。
+  await prisma.rosterUploadRow.deleteMany({ where: { upload: { siteId: dupSiteId, month: new Date(Date.UTC(2026, 7, 1)) } } });
+  await prisma.rosterUpload.deleteMany({ where: { siteId: dupSiteId, month: new Date(Date.UTC(2026, 7, 1)) } });
+  const preexisting = await prisma.rosterUpload.create({
+    data: {
+      month: new Date(Date.UTC(2026, 7, 1)),
+      siteId: dupSiteId,
+      siteNameRaw: "恆星樓",
+      uploaderUserId: owner.id,
+      fileName: dupFileName,
+      fileSha256: "b".repeat(64),
+      fileBytes: Buffer.from("x"),
+      fileSize: 1,
+      status: "parsed",
+      createdBy: "e2e:roster-upload-batch",
+    },
+  });
+
+  const bufferNormal = await buildSyntheticRosterXlsx("葵發大廈", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
+  const bufferDup = await buildSyntheticRosterXlsx("恆星樓", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
+  const bufferUnresolved = await buildSyntheticRosterXlsx("驗收測試多檔冇盤", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
+
+  try {
+    await loginAs(page, "老闆");
+    await page.goto(`/roster-uploads?month=${TEST_MONTH}`);
+    await page.locator('input[type="month"]').fill(TEST_MONTH);
+
+    // 一次過揀 3 個檔（`<input multiple>`）——一個 change event 帶齊 3 個。
+    await page.getByTestId("roster-upload-file-input").setInputFiles([
+      { name: "test-roster-batch-normal.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: bufferNormal },
+      { name: dupFileName, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: bufferDup },
+      { name: "test-roster-batch-unresolved.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: bufferUnresolved },
+    ]);
+
+    const queue = page.getByTestId("roster-upload-queue");
+    await expect(queue).toBeVisible({ timeout: 15_000 });
+
+    const normalRow = queue.locator("div", { hasText: "test-roster-batch-normal.xlsx" }).first();
+    await expect(normalRow.getByText("成功")).toBeVisible({ timeout: 20_000 });
+
+    const dupRow = queue.locator("div", { hasText: dupFileName }).first();
+    await expect(dupRow.getByText("失敗")).toBeVisible({ timeout: 20_000 });
+    await expect(dupRow.getByText(/更新檔嘅檔名必須同舊版唔同/)).toBeVisible();
+
+    const unresolvedRow = queue.locator("div", { hasText: "test-roster-batch-unresolved.xlsx" }).first();
+    await expect(unresolvedRow.getByText("盤對唔到")).toBeVisible({ timeout: 20_000 });
+    await expect(unresolvedRow.getByRole("combobox", { name: "指定盤" })).toBeVisible();
+
+    // 全部跑完先出總結——成功 1／失敗 1／要指定盤 1。
+    const summary = page.getByTestId("roster-upload-queue-summary");
+    await expect(summary).toBeVisible({ timeout: 20_000 });
+    await expect(summary).toContainText("成功 1");
+    await expect(summary).toContainText("失敗 1");
+    await expect(summary).toContainText("要指定盤 1");
+
+    // 列表刷新咗——正常嗰個盤而家顯示「已上載」。
+    const normalListRow = page.locator("table tbody tr", { hasText: "葵發大廈" }).first();
+    await expect(normalListRow.getByText("已上載")).toBeVisible({ timeout: 15_000 });
+  } finally {
+    await prisma.rosterUploadRow.deleteMany({ where: { upload: { siteId: normalSiteId, month: new Date(Date.UTC(2026, 7, 1)) } } });
+    await prisma.rosterUpload.deleteMany({ where: { siteId: normalSiteId, month: new Date(Date.UTC(2026, 7, 1)) } });
+    await prisma.rosterUploadRow.deleteMany({ where: { uploadId: preexisting.id } });
+    await prisma.rosterUpload.deleteMany({ where: { siteId: dupSiteId, month: new Date(Date.UTC(2026, 7, 1)) } });
+    await prisma.rosterUploadRow.deleteMany({ where: { upload: { siteId: null, siteNameRaw: "驗收測試多檔冇盤" } } });
+    await prisma.rosterUpload.deleteMany({ where: { siteId: null, siteNameRaw: "驗收測試多檔冇盤" } });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Opus 5.5 驗收補測：多檔隊列——(1) 並發（跨批次）最多 2 個 request 在途
+// （攔截 POST 人為延遲，記錄同時在途最高數）；(2) 取消未開始嘅檔（唔會
+// 送出）；(3) 「盤對唔到」行嘅「指定盤」下拉揀咗即刻 PATCH，行轉「成功」；
+// (4) 單檔上載仍然自動開詳情。
+// -----------------------------------------------------------------------
+test("老闆：多檔隊列——並發 ≤2（跨批次）、取消未開始檔、隊列內指定盤、單檔自動開詳情", async ({ page }) => {
+  const guard = await findGuardWithUNumber();
+  const assignSiteId = await findSiteIdByName("都會大學學生宿舍");
+  const month = new Date(Date.UTC(2026, 7, 1));
+  const rawNames = [1, 2, 3, 4, 5].map((i) => `驗收測試並發盤${i}`);
+  const xlsxMime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const buffers = await Promise.all(rawNames.map((n) => buildSyntheticRosterXlsx(n, guard.staffNo, guard.nameZh, guard.tel ?? "6100000")));
+
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let postCount = 0;
+  await page.route("**/api/roster-uploads", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    postCount += 1;
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, 1200));
+    const response = await route.fetch();
+    inFlight -= 1;
+    await route.fulfill({ response });
+  });
+
+  try {
+    await loginAs(page, "老闆");
+    await page.goto(`/roster-uploads?month=${TEST_MONTH}`);
+    await page.locator('input[type="month"]').fill(TEST_MONTH);
+    const input = page.getByTestId("roster-upload-file-input");
+
+    // 第一批 3 個，即刻再嚟第二批 2 個（跨批次）。
+    await input.setInputFiles(rawNames.slice(0, 3).map((n, i) => ({ name: `acc-conc-${i + 1}.xlsx`, mimeType: xlsxMime, buffer: buffers[i]! })));
+    await input.setInputFiles(rawNames.slice(3).map((n, i) => ({ name: `acc-conc-${i + 4}.xlsx`, mimeType: xlsxMime, buffer: buffers[i + 3]! })));
+
+    const queue = page.getByTestId("roster-upload-queue");
+    // 取消最後一個（仲喺「等緊」）。
+    const lastRow = queue.locator("div", { hasText: "acc-conc-5.xlsx" }).first();
+    await lastRow.getByRole("button", { name: "取消" }).click();
+    await expect(lastRow.getByText("已取消")).toBeVisible();
+
+    const summary = page.getByTestId("roster-upload-queue-summary");
+    await expect(summary).toBeVisible({ timeout: 30_000 });
+    await expect(summary).toContainText("要指定盤 4");
+    expect(postCount).toBe(4);
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(maxInFlight).toBe(2);
+
+    // 隊列內「指定盤」。
+    const firstRow = queue.locator("div", { hasText: "acc-conc-1.xlsx" }).first();
+    const patchResp = page.waitForResponse((r) => r.url().includes("/api/roster-uploads/") && r.request().method() === "PATCH");
+    await firstRow.getByRole("combobox", { name: "指定盤" }).selectOption(assignSiteId);
+    expect((await patchResp).status()).toBe(200);
+    await expect(firstRow.getByText("成功")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("table tbody tr", { hasText: "都會大學學生宿舍" }).first().getByText("已上載")).toBeVisible({ timeout: 15_000 });
+
+    // 單檔上載：自動開詳情。
+    await page.unroute("**/api/roster-uploads");
+    await input.setInputFiles({ name: "acc-single.xlsx", mimeType: xlsxMime, buffer: buffers[4]! });
+    await expect(page.getByText("acc-single.xlsx").last()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("button", { name: "收起" })).toBeVisible({ timeout: 15_000 });
+  } finally {
+    await prisma.rosterUploadRow.deleteMany({ where: { upload: { month, siteNameRaw: { in: rawNames } } } });
+    await prisma.rosterUpload.deleteMany({ where: { month, siteNameRaw: { in: rawNames } } });
+    await prisma.rosterUploadRow.deleteMany({ where: { upload: { siteId: assignSiteId, month } } });
+    await prisma.rosterUpload.deleteMany({ where: { siteId: assignSiteId, month } });
   }
 });

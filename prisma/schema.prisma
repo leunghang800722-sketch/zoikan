@@ -145,6 +145,11 @@ enum RosterUploadStatus {
   parse_failed // 解析拋錯（壞檔／完全冇 Date 表頭），rows 冇存，parse_error 有原因
   superseded // 同盤同月俾更新嘅版本取代，留底唔刪
   confirmed // Phase B 用：對數確認完成
+  // WP-UPLOAD-VOID（老闆 2026-09-25 要求：正式站揀錯月份上載咗 8 月更表，
+  // UI 冇刪除／撤銷）：會計/主管/老闆人手作廢一個上載記錄（唔 hard
+  // delete，檔案 bytes 留底）——`confirmed`（已對數確認寫入 shift_
+  // records）唔可以直接作廢，要先去對數頁處理。
+  voided
 }
 
 // 逐格代號嘅種類——對應 tools/importer cell_codes.csv 嘅 kind，`pointer`
@@ -710,6 +715,13 @@ model RosterUpload {
   parseSummary   Json?              @map("parse_summary") // {shift_count, date_range, code_breakdown, unmatched_count, warnings…}
   parseError     String?            @map("parse_error")
   layoutKey      String?            @map("layout_key") // 自動偵測用咗邊套 layout 規則（standard/digital_port/citybus + 變體 flags）
+
+  // WP-UPLOAD-VOID：人手作廢（唔 hard delete，file_bytes／rows／
+  // reconcile_decisions 全部留底）。`voidedBy` 同呢個 codebase 其他
+  // voidedBy 一致做法——plain user id string，唔起 FK relation。
+  voidedAt   DateTime? @map("voided_at")
+  voidedBy   String?   @map("voided_by")
+  voidReason String?   @map("void_reason")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

@@ -129,7 +129,7 @@ const OWNER: RoleMatrix = {
   安員個人資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
   助手: row(G, NA, NA, NA, NA), // WP-AI1：老闆✓——view 有意義，其餘 N/A
-  更表上載: row(G, G, G, NA, NA), // WP-ROSTER-UPLOAD：老闆上載/睇/PATCH（人手指定盤）全部✓；冇 void 概念（同盤同月新上載自動 supersede 舊版）
+  更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆上載/睇/PATCH（人手指定盤）全部✓；WP-UPLOAD-VOID：作廢✓（會計/主管/老闆三類）
 };
 
 // ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ const SUPERVISOR: RoleMatrix = {
   安員個人資料: row(O, NA, O, NA, NA),
   安員銀行資料: uniformRow(D),
   助手: row(G, NA, NA, NA, NA), // WP-AI1：主管✓
-  更表上載: row(G, G, G, NA, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載
+  更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
 };
 
 // ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ const ACCOUNTANT: RoleMatrix = {
   安員個人資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
   助手: row(G, NA, NA, NA, NA), // WP-AI1：會計✓
-  更表上載: row(G, G, G, NA, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載
+  更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
 };
 
 // ---------------------------------------------------------------------------

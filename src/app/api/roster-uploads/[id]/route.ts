@@ -14,7 +14,7 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { RosterUploadPatchSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { NotFound, BadRequest } from "@/lib/api/errors";
+import { NotFound, BadRequest, Conflict } from "@/lib/api/errors";
 import { assignRosterUploadSite, reparseRosterUpload } from "@/lib/roster-upload/service";
 import type { Prisma } from "@prisma/client";
 
@@ -87,6 +87,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const { id } = await params;
     const before = await prisma.rosterUpload.findUnique({ where: { id } });
     if (!before) throw NotFound();
+    // WP-UPLOAD-VOID：已作廢嘅上載係歷史記錄，唔准再人手指定盤——要
+    // 「改盤」即係當呢個上載未作廢過（老闆要求上載唔准人手補救嘅精神
+    // 一致：作廢咗就係終態，要更正就重新上載）。
+    if (before.status === "voided") throw Conflict("呢個上載已經作廢，唔可以再指定盤");
 
     const body = await readJson(req);
     const parsed = parseBody(RosterUploadPatchSchema, body);

@@ -718,6 +718,15 @@ export const RosterUploadPatchSchema = z
   })
   .strict();
 
+// WP-UPLOAD-VOID（老闆 2026-09-25 要求）：`POST /api/roster-uploads/:id/void`
+// ——`reason` 必填、≤200 字（同 `VoidReasonSchema` 唔同套——嗰個冇上限，
+// 呢度任務書明文「≤200 字」）。
+export const RosterUploadVoidSchema = z
+  .object({
+    reason: z.string().trim().min(1, "作廢一定要填原因").max(200, "原因最多 200 字"), // Opus 5.5 驗收：trim——淨係空格唔算填咗原因
+  })
+  .strict();
+
 // WP-ROSTER-UPLOAD Phase B-1（B1-2）：`POST /api/roster-uploads/:id/reconcile/apply`
 // ——`key` 係 `buildReconcileKey()`/`buildUnresolvedKey()`（src/lib/
 // roster-upload/reconcile.ts）砌出嚟嘅字串，唔係 uuid，故意用寬鬆
