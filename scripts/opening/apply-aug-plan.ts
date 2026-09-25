@@ -251,6 +251,17 @@ async function main() {
     for (const b of await tx.broker.findMany({ select: { id: true, code: true } })) brokerIdByCode.set(b.code, b.id);
     const guardIdByStaffNo = new Map<string, string>();
     for (const sn of await tx.guardStaffNumber.findMany({ select: { number: true, guardId: true } })) guardIdByStaffNo.set(sn.number, sn.guardId);
+    // 2026-09-25 修正（老闆對正式站經公開 port 行 --apply 時 P2028
+    // transaction timeout）：原本逐張卡 `findFirst` 查 natural key，112 張
+    // 卡＝112 次來回，加埋 create／audit 每張 3 次來回，公開 port 延遲下
+    // 120 秒唔夠。改為一次過預載所有未作廢卡嘅 natural key 落 Map，逐張
+    // 卡淨係喺記憶體查；新建嗰陣同步加入 Map（同一次 run 內冪等）。
+    const rateCardKey = (c: { siteId: string; shiftTypeId: string | null; brokerId: string | null; guardId: string | null; effectiveFrom: Date }) =>
+      `${c.siteId}|${c.shiftTypeId ?? ""}|${c.brokerId ?? ""}|${c.guardId ?? ""}|${c.effectiveFrom.toISOString().slice(0, 10)}`;
+    const existingRateCardKeys = new Set<string>();
+    for (const c of await tx.rateCard.findMany({ where: { voidedAt: null }, select: { siteId: true, shiftTypeId: true, brokerId: true, guardId: true, effectiveFrom: true } })) {
+      existingRateCardKeys.add(rateCardKey(c));
+    }
 
     async function ensureRateCard(cp: NewRateCardPlan) {
       const siteId = siteIdByName.get(cp.siteCanonicalName) ?? (await tx.site.findUnique({ where: { canonicalName: cp.siteCanonicalName } }))?.id ?? null;
@@ -291,15 +302,14 @@ async function main() {
         return;
       }
 
-      const existing = await tx.rateCard.findFirst({
-        where: { siteId, shiftTypeId, brokerId, guardId, effectiveFrom, voidedAt: null },
-      });
-      if (existing) {
+      const natKey = rateCardKey({ siteId, shiftTypeId, brokerId, guardId, effectiveFrom });
+      if (existingRateCardKeys.has(natKey)) {
         diffs.rateCards.skip.push(label);
         return;
       }
       diffs.rateCards.create.push(label);
       if (PLAN_ONLY) return;
+      existingRateCardKeys.add(natKey);
       const created = await tx.rateCard.create({
         data: {
           siteId,
@@ -486,7 +496,9 @@ async function main() {
   };
 
   // --plan 都行 transaction（淨係讀），同 --apply 用同一條 code path。
-  await prisma.$transaction(async (tx) => run(tx), { timeout: 120_000 });
+  // timeout 30 分鐘、maxWait 30 秒：老闆經 Zeabur 公開 port 對正式站行，
+  // 每次來回可能幾百毫秒；2026-09-25 實測 120 秒唔夠（P2028）。
+  await prisma.$transaction(async (tx) => run(tx), { timeout: 1_800_000, maxWait: 30_000 });
 
   // -----------------------------------------------------------------
   // Summary
