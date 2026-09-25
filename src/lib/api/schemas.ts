@@ -723,7 +723,7 @@ export const RosterUploadPatchSchema = z
 // 呢度任務書明文「≤200 字」）。
 export const RosterUploadVoidSchema = z
   .object({
-    reason: z.string().min(1, "作廢一定要填原因").max(200, "原因最多 200 字"),
+    reason: z.string().trim().min(1, "作廢一定要填原因").max(200, "原因最多 200 字"), // Opus 5.5 驗收：trim——淨係空格唔算填咗原因
   })
   .strict();
 

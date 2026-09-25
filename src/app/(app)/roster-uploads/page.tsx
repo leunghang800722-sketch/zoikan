@@ -187,6 +187,11 @@ export default function RosterUploadsPage() {
   // worker 撞中同一項），`queue` state 淨係俾 UI 重新 render。
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const queueRef = useRef<QueueItem[]>([]);
+  // Opus 5.5 驗收：跨批次嘅全局並發上限——之前每拖一批就另開最多 2 個
+  // worker，第一批未跑完再拖第二批會同時有 3-4 個 request 在途。而家
+  // 記住仲生存緊嘅 worker 數，新一批淨係補返「空位」；已經生存緊嘅
+  // worker 會喺做完手頭嗰個之後自己去全局隊列揀新入隊嘅 pending 項。
+  const activeWorkersRef = useRef(0);
 
   const [selectedUploadId, setSelectedUploadId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
@@ -323,7 +328,12 @@ export default function RosterUploadsPage() {
       status: "pending",
     }));
     applyQueue([...queueRef.current, ...newItems]);
-    void runQueueWithConcurrency({ items: newItems, concurrency: UPLOAD_CONCURRENCY, pickNext: pickNextQueueItem, worker: uploadQueueItem });
+    const slots = Math.min(UPLOAD_CONCURRENCY - activeWorkersRef.current, newItems.length);
+    if (slots <= 0) return; // 現有 worker 做完手頭嗰個會自己揀新入隊嘅項
+    activeWorkersRef.current += slots;
+    void runQueueWithConcurrency({ items: newItems, concurrency: slots, pickNext: pickNextQueueItem, worker: uploadQueueItem }).finally(() => {
+      activeWorkersRef.current -= slots;
+    });
   }
 
   function onFilesChosen(e: React.ChangeEvent<HTMLInputElement>) {
@@ -597,7 +607,7 @@ export default function RosterUploadsPage() {
                           )}
                         </div>
                       </td>
-                      <td className={tableCls.td}>{u && <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(u.id, reason)} />}</td>
+                      <td className={tableCls.td}>{u && u.status !== "confirmed" && <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(u.id, reason)} />}</td>
                     </tr>
                   );
                 })}
@@ -649,7 +659,7 @@ export default function RosterUploadsPage() {
                           ))}
                         </select>
                       )}
-                      <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(u.id, reason)} />
+                      {u.status !== "confirmed" && <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(u.id, reason)} />}
                     </div>
                   )}
                 </div>
@@ -758,7 +768,7 @@ export default function RosterUploadsPage() {
                   重新解析
                 </Button>
               )}
-              {detail && detail.upload.status !== "voided" && (
+              {detail && detail.upload.status !== "voided" && detail.upload.status !== "confirmed" && (
                 <ConfirmVoidButton label="作廢" confirmLabel="確認作廢" onConfirm={(reason) => onVoidUpload(detail.upload.id, reason)} />
               )}
               <Button variant="secondary" onClick={() => setSelectedUploadId(null)}>

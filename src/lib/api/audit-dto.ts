@@ -132,4 +132,8 @@ export const AUDIT_META_PASSTHROUGH_KEYS = [
   "superseded_upload_ids",
   "roster_upload_force",
   "roster_upload_coverage_issues",
+  // WP-UPLOAD-VOID（Opus 5.5 驗收補）：作廢 active 版本時回復咗邊個舊版
+  // （id／版本號，冇 PII）——之前 service 有傳但唔喺白名單，靜靜雞俾剝走。
+  "revived_upload_id",
+  "revived_version",
 ] as const;

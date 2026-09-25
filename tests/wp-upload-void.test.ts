@@ -22,7 +22,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { POST as createUpload, GET as listUploads } from "@/app/api/roster-uploads/route";
-import { PATCH as patchUpload } from "@/app/api/roster-uploads/[id]/route";
+import { PATCH as patchUpload, GET as getUpload } from "@/app/api/roster-uploads/[id]/route";
 import { POST as voidUpload } from "@/app/api/roster-uploads/[id]/void/route";
 import { POST as reparseUpload } from "@/app/api/roster-uploads/[id]/reparse/route";
 import { GET as getReconcile } from "@/app/api/roster-uploads/[id]/reconcile/route";
@@ -284,5 +284,76 @@ describe("WP-UPLOAD-VOID：更表上載記錄作廢", () => {
     const res = await pendingSummary(req(`http://test.local/api/roster-uploads/pending-summary?month=${monthStr}`, ownerCookie));
     const body = (await res.json()) as { entries: Array<Record<string, unknown>> };
     expect(body.entries.find((e) => e.upload_id === u.id)).toBeUndefined();
+  });
+  // ---------------------------------------------------------------------
+  // Opus 5.5 驗收補測
+  // ---------------------------------------------------------------------
+  it("§13 uploaded／parse_failed 都可以作廢；active parse_failed v2 作廢 → v1（冇 rows、有 parse_error）回復做 parse_failed", async () => {
+    const up = await mkUpload(fx, { status: "uploaded" });
+    const r1 = await voidUpload(req(`http://test.local/api/roster-uploads/${up.id}/void`, ownerCookie, "POST", { reason: "測試" }), { params: Promise.resolve({ id: up.id }) });
+    expect(r1.status).toBe(200);
+    await prisma.rosterUpload.deleteMany({ where: { id: up.id } });
+
+    const v1 = await mkUpload(fx, { version: 1, status: "superseded", fileName: "pf-v1.xlsx" });
+    await prisma.rosterUpload.update({ where: { id: v1.id }, data: { parseError: "搵唔到 Date 表頭" } });
+    const v2 = await mkUpload(fx, { version: 2, status: "parse_failed", fileName: "pf-v2.xlsx" });
+    const r2 = await voidUpload(req(`http://test.local/api/roster-uploads/${v2.id}/void`, ownerCookie, "POST", { reason: "測試" }), { params: Promise.resolve({ id: v2.id }) });
+    expect(r2.status).toBe(200);
+    expect((await prisma.rosterUpload.findUniqueOrThrow({ where: { id: v1.id } })).status).toBe("parse_failed");
+  });
+
+  it("§14 作廢後同盤同月再上載同名檔 → 400（作廢版本檔名仍然佔用）；同名檔上去另一個月 → 201", async () => {
+    const monthStr = fx.unlockedMonth.toISOString().slice(0, 7);
+    const xlsx = await buildXlsx(fx.site.name);
+    const first = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, xlsx, monthStr, "same-name.xlsx"));
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as { upload: { id: string; site_id: string | null } };
+    expect(firstBody.upload.site_id).toBe(fx.site.id);
+    const v = await voidUpload(req(`http://test.local/api/roster-uploads/${firstBody.upload.id}/void`, ownerCookie, "POST", { reason: "揀錯月份" }), { params: Promise.resolve({ id: firstBody.upload.id }) });
+    expect(v.status).toBe(200);
+
+    const again = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, xlsx, monthStr, "same-name.xlsx"));
+    expect(again.status).toBe(400);
+    expect(((await again.json()) as { message: string }).message).toContain("改檔名");
+
+    const [y, m] = monthStr.split("-").map(Number);
+    const otherMonth = `${m === 1 ? y! - 1 : y}-${String(m === 1 ? 12 : m! - 1).padStart(2, "0")}`;
+    const other = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, xlsx, otherMonth, "same-name.xlsx"));
+    expect(other.status).toBe(201);
+    expect(((await other.json()) as { upload: { version: number } }).upload.version).toBe(1);
+  });
+
+  it("§15 GET /:id 仍然睇到已作廢上載（追溯）", async () => {
+    const u = await mkUpload(fx, { status: "voided", withRow: true });
+    const res = await getUpload(req(`http://test.local/api/roster-uploads/${u.id}`, ownerCookie), { params: Promise.resolve({ id: u.id }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { upload: { status: string } };
+    expect(body.upload.status).toBe("voided");
+  });
+
+  it("§16 audit：before/after 經白名單（冇 file_bytes）、reason＋回復咗邊個版本入 after", async () => {
+    const v1 = await mkUpload(fx, { version: 1, status: "superseded", withRow: true, fileName: "a-v1.xlsx" });
+    const v2 = await mkUpload(fx, { version: 2, status: "parsed", fileName: "a-v2.xlsx" });
+    const res = await voidUpload(req(`http://test.local/api/roster-uploads/${v2.id}/void`, ownerCookie, "POST", { reason: "上錯月份" }), { params: Promise.resolve({ id: v2.id }) });
+    expect(res.status).toBe(200);
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { tableName: "roster_uploads", rowId: v2.id, action: "void" } });
+    const before = audit.before as Record<string, unknown>;
+    const after = audit.after as Record<string, unknown>;
+    for (const snap of [before, after]) {
+      expect(snap).not.toHaveProperty("file_bytes");
+      expect(snap).not.toHaveProperty("fileBytes");
+    }
+    expect(before.status).toBe("parsed");
+    expect(after.status).toBe("voided");
+    expect(after.void_reason).toBe("上錯月份");
+    expect(after.revived_upload_id).toBe(v1.id);
+    expect(after.revived_version).toBe(1);
+  });
+
+  it("§17 reason 淨係空格 → 400", async () => {
+    const u = await mkUpload(fx, {});
+    const res = await voidUpload(req(`http://test.local/api/roster-uploads/${u.id}/void`, ownerCookie, "POST", { reason: "   " }), { params: Promise.resolve({ id: u.id }) });
+    expect(res.status).toBe(400);
+    expect((await prisma.rosterUpload.findUniqueOrThrow({ where: { id: u.id } })).status).toBe("parsed");
   });
 });
