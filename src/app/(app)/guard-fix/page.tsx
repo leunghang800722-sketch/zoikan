@@ -27,6 +27,13 @@ interface StaffListDTO {
   parse_summary: { row_count: number; u_number_count: number; hkid_valid_count: number; hkid_invalid_count: number; parse_error: string | null } | null;
 }
 
+// 驗收修正：雞頭稱呼對應——GET /api/brokers 淨係要 id/code/name 揀「揀系統雞頭」下拉。
+interface BrokerOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
 interface PostorderDTO {
   id: string;
   month: string;
@@ -198,6 +205,16 @@ export default function GuardFixPage() {
   const [runsLoading, setRunsLoading] = useState(false);
   const pollingRef = useRef<string | null>(null);
 
+  // 驗收修正：雞頭稱呼對應——Postorder 對唔到嘅稱呼，逐個揀系統雞頭寫入 aliases。
+  const [brokers, setBrokers] = useState<BrokerOption[]>([]);
+  const [brokerAliasChoice, setBrokerAliasChoice] = useState<Record<string, string>>({});
+  const [resolvingAliasLabel, setResolvingAliasLabel] = useState<string | null>(null);
+
+  async function loadBrokers() {
+    const res = await apiGet<{ rows: BrokerOption[] }>("/api/brokers?take=200");
+    if (res.ok) setBrokers(res.data.rows);
+  }
+
   async function loadStaffList() {
     const res = await apiGet<{ current: StaffListDTO | null }>("/api/guard-fix/staff-list");
     if (res.ok) setCurrentStaffList(res.data.current);
@@ -219,6 +236,7 @@ export default function GuardFixPage() {
   useEffect(() => {
     void loadStaffList();
     void loadPostorder(month);
+    void loadBrokers();
     void loadRuns().then((list) => {
       // 開頁（或者手機鎖機後重新整理）見到有 run 套用緊（未卡死）——即刻接住
       // poll，唔使老闆自己撳重新整理。
@@ -303,6 +321,27 @@ export default function GuardFixPage() {
       postorder: res.data.postorder,
     });
     await loadRuns();
+  }
+
+  // 驗收修正：Postorder 對唔到嘅雞頭稱呼——揀完系統雞頭撳「對應」，寫入
+  // brokers.aliases 之後自動重新計劃（唔使老闆自己再撳一次②）。
+  async function onResolveBrokerAlias(label: string) {
+    const brokerId = brokerAliasChoice[label];
+    if (!brokerId) {
+      setError("請先揀返對應嘅系統雞頭");
+      return;
+    }
+    setResolvingAliasLabel(label);
+    setError(null);
+    setNotice(null);
+    const res = await apiPost<{ broker: { id: string; code: string; name: string }; added: boolean }>("/api/guard-fix/broker-alias", { label, broker_id: brokerId });
+    setResolvingAliasLabel(null);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    await onBuildPlan();
+    setNotice(`「${label}」已對應去 ${res.data.broker.code}，已經自動重新計劃。`);
   }
 
   async function pollRunUntilDone(runId: string): Promise<RunDetail | null> {
@@ -534,11 +573,38 @@ export default function GuardFixPage() {
               呢個月共 {plan.summary.total_identities} 個身份（{plan.summary.total_cells} 格未配對）——名單：{plan.staffListFileName}
               {plan.postorderFileName ? `；Postorder：${plan.postorderFileName}` : "；呢次冇上載 Postorder"}
             </div>
-            {plan.postorder && (plan.postorder.unresolved_site_labels.length > 0 || plan.postorder.unresolved_broker_labels.length > 0) && (
+            {plan.postorder && plan.postorder.unresolved_site_labels.length > 0 && (
               <div className="break-words rounded border border-amber-200 bg-amber-50 p-2.5 text-[12.5px] text-amber-800">
-                Postorder 對唔到（保守：唔建計劃，留 ≥50% 推算兜底）——
-                {plan.postorder.unresolved_site_labels.length > 0 && <>盤名：{plan.postorder.unresolved_site_labels.join("、")}　</>}
-                {plan.postorder.unresolved_broker_labels.length > 0 && <>雞頭稱呼：{plan.postorder.unresolved_broker_labels.join("、")}</>}
+                Postorder 對唔到嘅盤名（保守：唔建計劃，留 ≥50% 推算兜底）——{plan.postorder.unresolved_site_labels.join("、")}
+              </div>
+            )}
+
+            {plan.postorder && plan.postorder.unresolved_broker_labels.length > 0 && (
+              <div className="space-y-2 rounded border border-amber-200 bg-amber-50 p-2.5 text-[12.5px] text-amber-800" data-testid="guard-fix-broker-alias">
+                <div>Postorder 對唔到嘅雞頭稱呼（保守：唔建 set_referral，留 ≥50% 推算兜底）——逐個揀返對應嘅系統雞頭：</div>
+                <div className="space-y-1.5">
+                  {plan.postorder.unresolved_broker_labels.map((label) => (
+                    <div key={label} className="flex flex-wrap items-center gap-2">
+                      <span className="min-w-0 break-all font-medium text-amber-900">{label}</span>
+                      <select
+                        className={`${selectCls} max-w-[10rem]`}
+                        value={brokerAliasChoice[label] ?? ""}
+                        onChange={(e) => setBrokerAliasChoice((prev) => ({ ...prev, [label]: e.target.value }))}
+                        disabled={resolvingAliasLabel !== null}
+                      >
+                        <option value="">（揀系統雞頭）</option>
+                        {brokers.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.code}　{b.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Button variant="secondary" disabled={!brokerAliasChoice[label] || resolvingAliasLabel !== null} onClick={() => void onResolveBrokerAlias(label)}>
+                        {resolvingAliasLabel === label ? "對應緊…" : "對應"}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

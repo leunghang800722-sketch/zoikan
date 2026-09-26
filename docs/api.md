@@ -825,26 +825,67 @@ guard-fix 頁上載 Postorder 總表→計算修復計劃→套用（可以重�
    diff「補收客價」；正式站舊版開盤已經起咗蔚峰園 8 月卡（冇收客價），
    之前 WP-LTSHIFT §7 嘅修正喺正式站唔會生效。
 
-**正式站步驟（驗收版，取代上面一段）**：
-0. 部署（`prisma migrate deploy` 跑 6 個新 migration：4 個 WP-LTSHIFT＋
-   `20260926150000`／`20260926160000`）。7 月報表 dump 前後 diff 0（dev
-   模擬正式站狀態實測）。
-1. 本機 `DATABASE_URL=… npx tsx scripts/opening/sync-broker-aliases.ts`
-   → 睇數目 → `--apply`（預期：T 加 1 個稱呼；其餘由 migration 補）。
-2. 本機 `zsh scripts/opening/run-round2.sh`（預期：價目卡新建 0、補收客價
-   2（蔚峰園 D／N）、7 月卡加到期 1（蔚峰園 flat））。
-3. 蔚峰園 8 月更表頁「重新計价」（或 `POST /api/shift-records/reprice
-   {month:"2026-08", site_id, dry_run}`，預期 changed≈98）。
-4. 安員配對修復頁：上載 U Team 名單 → 上載 Postorder（2.96MB，上限
-   30MB）→ 計算計劃 → 套用；重複到冇新動作。預期 needs_boss 0；Postorder
-   摘要「對唔到嘅雞頭稱呼」**要係空**（唔係空＝步驟 1 未做，停）；對唔到
-   盤名得「OT」（2 格，已知）。
-5. 更表上載頁「重新對數全月」（背景 run，15 分鐘卡死可重跑；同時唔好撳
-   guard-fix 套用）。預期 `warnings` 空、errors 0、unresolved 1（蔚峰園
-   重複行）。
-6. 月結頁「重算介紹費」→ 預期合計 60,620（總表 60,520＋Weave 更表漏記
+**驗收修正（第二輪，2026-09-26 同日）——老闆指令「正式站唔准有任何
+Terminal 步驟，全部要喺 app 撳掣」**：上面「正式站步驟」原本嘅 1–3 步
+（`sync-broker-aliases.ts`／`run-round2.sh`／更表頁「重新計价」）全部
+本機 script，撤走，改用下面三個機制：
+
+10. **蔚峰園 8 月卡改由 migration 補**（`prisma/migrations/
+    20260926170000_acc_weifeng_aug_cards/migration.sql`，取代
+    `run-round2.sh`）：兩段條件 UPDATE，都係冪等、0 行唔 abort——
+    (a) 淺水灣道11號蔚峰園 8 月（`effective_from=2026-08-01`）逐更收客
+    卡 `client_rate IS NULL` → 補 935.48（D／N 逐張；試算
+    `price_site_time_broker.json` 核實 `S029|0730-1930|W`／
+    `S029|1930-0730|W` 嘅 E=935.483871、F=850）；(b) 跟住 (a) 之後
+    （8 月逐更卡已經有 `client_rate`）→ 7 月 flat 卡（84,193.55，
+    `effective_to IS NULL`）加 `effective_to=2026-07-31`（同
+    `20260926120000_wp_ltshift_cp5ic_proxy_weifeng_flatcard` §7 一樣
+    嘅條件，做多一次安全網——嗰個 migration 原本靠「8 月已有
+    `client_rate`」判斷，但正式站舊版開盤起卡冇价，單靠佢會 skip；
+    (a)(b) 兩段同一個 migration 內、分開兩個 SQL statement，postgres
+    同一個 transaction 入面 (b) 睇得到 (a) 啱啱寫嘅 `client_rate`）。
+    `prisma migrate deploy` 部署嗰刻自動做晒，唔使老闆本機跑任何 script。
+11. **雞頭稱呼對應搬入 guard-fix 頁**（`POST /api/guard-fix/broker-alias
+    { label, broker_id }`，`src/app/api/guard-fix/broker-alias/route.ts`）：
+    計劃頁「Postorder 對唔到嘅雞頭稱呼」逐個揀返「系統雞頭」下拉
+    （`GET /api/brokers`，「雞頭」module view gate）→ 撳「對應」→ 寫入
+    `brokers.aliases`（冪等，同 code／name／現有 aliases 一樣就 skip；
+    audit 淨係存 count，唔存稱呼本身）→ 前端自動重新計算計劃（唔使老闆
+    再撳一次「計算修復計劃」）。權限同呢一頁其餘寫入 action 一致用
+    「安員配對修復」（老闆專用）。`scripts/opening/sync-broker-
+    aliases.ts` 留低做**本機 dev 便利**（一次過同步 private CSV
+    `data/mappings-private/brokers.csv` 嘅稱呼落 dev DB），唔再係正式站
+    流程一部分。
+12. **「重新計价」併入「重新對數全月」**（`src/lib/pricing/reprice.ts`
+    `decideReprice()`／`repriceMonthForSites()`）：`runReconcileAllForMonth()`
+    （`src/lib/roster-upload/reconcile-all.ts`）處理每張上載之前，先幫
+    呢個月有上載嘅盤全部 reprice 一次——同更表頁「重新計价」（`POST
+    /api/shift-records/reprice`）共用同一個 `decideReprice()` 純函數，
+    但用保守模式 `fill_and_fix_b07`：淨係補而家係 `null` 嘅收客/出街价
+    （唔覆蓋人手價），`internal_longterm`（B07）嘅 `guard_wage`／
+    `broker_fee` 例外——呢兩個欄位 B07 永遠應該係 null（8 月起
+    `broker_fee` 亦然），非 null 就係「B07 舊價」，照樣覆蓋。
+    `ReconcileAllResult.repriced`（`{scanned, changed}`）記低呢步嘅
+    結果。更表頁「重新計价」掣本身冇拆走（老闆仍然可以人手對單一盤/月
+    撳，用嘅係同一個 `decideReprice()`，`mode:"full"`，覆蓋更廣但一樣
+    尊重「搵唔到卡就保留原值」）——正式站流程而家唔使再撳呢個掣。
+
+**正式站步驟（驗收版第二輪，取代上面一段，全部 in-app 撳掣，冇任何
+Terminal 步驟）**：
+0. 部署（`prisma migrate deploy` 跑 7 個新 migration：4 個 WP-LTSHIFT＋
+   `20260926150000`／`20260926160000`／`20260926170000`）。7 月報表 dump
+   前後 diff 0（dev 模擬正式站狀態實測）。
+1. 安員配對修復頁：上載 U Team 名單 → 上載 Postorder（2.96MB，上限
+   30MB）→ 摘要「對唔到嘅雞頭稱呼」逐個揀系統雞頭撳「對應」（會自動
+   重新計算計劃，預期對應完之後呢個清單變空）→ 計算修復計劃 → 套用；
+   重複到冇新動作。預期 needs_boss 0；對唔到盤名得「OT」（2 格，已知）。
+2. 更表上載頁「重新對數全月」（背景 run，開頭自動幫全部有上載嘅盤
+   reprice——見上面 12，唔使再手動撳「重新計价」；15 分鐘卡死可重跑；
+   同時唔好撳 guard-fix 套用）。預期 `warnings` 空、errors 0、unresolved
+   1（蔚峰園重複行）；`repriced.changed`≈98（蔚峰園 D／N 補價）。
+3. 月結頁「重算介紹費」→ 預期合計 60,620（總表 60,520＋Weave 更表漏記
    2 格 100）、`rate_sync.skipped` 空。
-7. 月結總表／雞頭應付：預期 K 1,023,730、G 56,220、D 100,130、Y
+4. 月結總表／雞頭應付：預期 K 1,023,730、G 56,220、D 100,130、Y
    226,433.02 同總表一致；W −850（蔚峰園重複行）、T −1,600（Weave 更表
    漏記病假）係更表資料問題。
 

@@ -33,7 +33,8 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { writeAudit } from "@/lib/audit";
 import { Conflict, NotFound } from "@/lib/api/errors";
 import { monthRange } from "@/lib/reports/money";
-import { fetchEffectiveRateCards, resolveShiftPricingFromCards, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
+import { fetchEffectiveRateCards, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
+import { decideReprice } from "@/lib/pricing/reprice";
 // 必修 2（Opus 第二輪驗收）：「未定价」口徑（response 嘅 `unpriced`／
 // `groups`）一律用同 `buildUnpricedSummary()`（GET /api/shift-records/
 // unpriced、頁首 banner 嗰個 API）共用嘅核心邏輯——`computeUnpricedSummary()`
@@ -151,7 +152,6 @@ export async function POST(req: Request) {
       // shift_type.billing_group（唔再用 site.billing_model）。
       prisma.shiftType.findMany({ where: { id: { in: shiftTypeIdList } }, select: { id: true, code: true, billingGroup: true } }),
     ]);
-    const brokerById = new Map(brokers.map((b) => [b.id, b]));
     const siteById = new Map(sites.map((s) => [s.id, s]));
     const shiftTypeById = new Map(shiftTypes.map((s) => [s.id, s]));
     // WP-MISC：LINK（TKO Gateway 厚A/B/C）呢類盤——`guardsPaidByClient`。
@@ -180,63 +180,20 @@ export async function POST(req: Request) {
     let unchangedCount = 0;
     let keptUnresolvedCount = 0;
 
+    // 驗收修正：單條記錄嘅「幾時覆蓋、幾時保留」規則抽咗去
+    // `src/lib/pricing/reprice.ts` `decideReprice()`（`mode:"full"`）——
+    // 同 `runReconcileAllForMonth()` 開頭自動 reprice（`mode:
+    // "fill_and_fix_b07"`）共用同一個純函數，避免兩處各自維護令規則
+    // 拗開。呢度嘅 `unpricedLookups` 結構同 `RepriceLookups` 一致
+    // （`brokerKindById`／`shiftTypeCodeById`／`shiftTypeBillingGroupById`／
+    // `siteGuardsPaidByClientById`），直接傳落去。
     for (const r of records) {
-      const beforeClient = numOrNull(r.clientRateSnapshot);
-      const beforeWage = numOrNull(r.guardWageSnapshot);
-      const beforeFee = numOrNull(r.brokerFeeSnapshot);
+      const decision = decideReprice(r, unpricedLookups, cardsBySite.get(r.siteId) ?? [], "full");
+      if (decision.keptUnresolved) keptUnresolvedCount++;
 
-      // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
-      // 盤嘅保安員由客戶直接出糧——reprice 對呢類盤完全「唔掂」（保守，
-      // 已有值／null 都保留原封不動），唔行 resolver、唔計入
-      // kept_unresolved（唔係「搵唔到卡」，係業務上根本唔使計）。
-      const siteGuardsPaidByClient = guardsPaidByClientById.get(r.siteId) ?? false;
-      let afterClient: number | null;
-      let afterWage: number | null;
-      let afterFee: number | null;
-      if (siteGuardsPaidByClient) {
-        afterClient = beforeClient;
-        afterWage = beforeWage;
-        afterFee = beforeFee;
-      } else {
-        const brokerRow = r.settlementBrokerId ? brokerById.get(r.settlementBrokerId) : undefined;
-        const brokerKind: BrokerKindLike = (brokerRow?.kind as BrokerKindLike) ?? null;
-        const pricing = resolveShiftPricingFromCards(cardsBySite.get(r.siteId) ?? [], {
-          siteId: r.siteId,
-          shiftTypeId: r.shiftTypeId,
-          shiftTypeCode: shiftTypeById.get(r.shiftTypeId)?.code ?? "",
-          shiftTypeBillingGroup: shiftTypeById.get(r.shiftTypeId)?.billingGroup ?? "per_shift",
-          settlementBrokerId: r.settlementBrokerId,
-          brokerKind,
-          guardId: r.guardId,
-          workDate: r.workDate,
-          isExternal: r.isExternal,
-          recordType: "shift",
-        });
+      updates.push({ id: r.id, clientRate: decision.after.clientRate, guardWage: decision.after.guardWage, brokerFee: decision.after.brokerFee });
 
-        // 應修（Opus 第二輪驗收）：改用獨立嘅 `clientCardFound`／
-        // `payoutCardFound` flag（唔再借 `pricing.unpriced` 做雙重用途——
-        // 嗰個欄位淨係反映出街价嘅「業務未定价」判斷，external／longterm
-        // 呢兩類「正常冇出街价」一律 `unpriced:false`，唔可以當「搵到咗
-        // null」誤覆蓋原有 snapshot）。仲要：internal_longterm／external
-        // 記錄嘅 wage/fee 永遠唔喺 reprice 改（保留原值，計入
-        // kept_unresolved）——呢兩類本身唔經「逐更卡」出糧/收費，reprice
-        // 唔應該掂佢哋嘅出街价。
-        const neverRepriceWage = brokerKind === "internal_longterm" || brokerKind === "external";
-        const clientNotFound = !pricing.clientCardFound;
-        const payoutNotFound = neverRepriceWage || !pricing.payoutCardFound;
-        afterClient = clientNotFound ? beforeClient : pricing.clientRate;
-        afterWage = payoutNotFound ? beforeWage : pricing.guardWage;
-        afterFee = payoutNotFound ? beforeFee : pricing.brokerFee;
-
-        const keptClientMeaningful = clientNotFound && beforeClient !== null;
-        const keptPayoutMeaningful = payoutNotFound && (beforeWage !== null || beforeFee !== null);
-        if (keptClientMeaningful || keptPayoutMeaningful) keptUnresolvedCount++;
-      }
-
-      updates.push({ id: r.id, clientRate: afterClient, guardWage: afterWage, brokerFee: afterFee });
-
-      const unchanged = sameValue(beforeClient, afterClient) && sameValue(beforeWage, afterWage) && sameValue(beforeFee, afterFee);
-      if (unchanged) {
+      if (!decision.changed) {
         unchangedCount++;
       } else {
         changedCount++;
@@ -246,8 +203,8 @@ export async function POST(req: Request) {
             site_name: siteById.get(r.siteId)?.canonicalName ?? r.siteId.slice(0, 8),
             shift_type_code: shiftTypeById.get(r.shiftTypeId)?.code ?? r.shiftTypeId.slice(0, 8),
             work_date: r.workDate.toISOString().slice(0, 10),
-            before: { client_rate_snapshot: beforeClient, guard_wage_snapshot: beforeWage, broker_fee_snapshot: beforeFee },
-            after: { client_rate_snapshot: afterClient, guard_wage_snapshot: afterWage, broker_fee_snapshot: afterFee },
+            before: { client_rate_snapshot: decision.before.clientRate, guard_wage_snapshot: decision.before.guardWage, broker_fee_snapshot: decision.before.brokerFee },
+            after: { client_rate_snapshot: decision.after.clientRate, guard_wage_snapshot: decision.after.guardWage, broker_fee_snapshot: decision.after.brokerFee },
           });
         }
       }

@@ -22,6 +22,7 @@ import { reconcileUpload } from "./reconcile";
 import { applyReconcileDecisions } from "./reconcile-apply";
 import { recomputeSettlement } from "./settlement-resync";
 import { hasParsedPostorderForMonth } from "@/lib/pricing/longterm-settlement";
+import { repriceMonthForSites } from "@/lib/pricing/reprice";
 
 /** 同 guard-fix 嗰個 key（7_710_250_925）刻意用另一個數字，兩個 lock
  * 唔會互相排隊（reconcile-all 淨係改 shift_records／guard_longterm_
@@ -53,6 +54,10 @@ export interface ReconcileAllResult {
   /** 驗收（Opus 5.5）：非阻擋性提示（例如 Postorder 上載咗但未套用安員配對修復）。 */
   warnings: string[];
   uploadCount: number;
+  /** 驗收修正（任務 3）：開頭自動 reprice 嘅結果（淨係補 null／修 B07
+   * 舊價，唔覆蓋人手價，見 `src/lib/pricing/reprice.ts`）——之前呢步要
+   * 老闆喺更表頁自己撳「重新計价」，而家「重新對數全月」自動做埋。 */
+  repriced: { scanned: number; changed: number };
   perUpload: ReconcileAllPerUploadResult[];
   totals: {
     rosterOnlyBefore: number;
@@ -87,6 +92,12 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
   });
   const siteIds = uploads.map((u) => u.siteId).filter((x): x is string => !!x);
   const sites = siteIds.length ? await prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true } }) : [];
+
+  // 驗收修正（任務 3）：對數／套用之前，先幫呢個月有上載嘅盤 reprice
+  // 一次（補 null／修 B07 舊價，唔覆蓋人手價）——之前要老闆喺更表頁自己
+  // 撳一次「重新計价」（見 docs/api.md「WP-LTSHIFT 驗收修正」正式站
+  // 步驟 3），而家「重新對數全月」呢一鍵自動做埋，正式站唔使再撳嗰個掣。
+  const repriced = await repriceMonthForSites(monthStartDate, siteIds, actorUserId, ip);
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
 
   const perUpload: ReconcileAllPerUploadResult[] = [];
@@ -143,5 +154,5 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
     perUpload.push({ uploadId: u.id, siteLabel, before, settlementScanned, settlementChanged, applied, skippedApplyReason, errors });
   }
 
-  return { month: monthStartDate.toISOString().slice(0, 10), warnings, uploadCount: uploads.length, perUpload, totals };
+  return { month: monthStartDate.toISOString().slice(0, 10), warnings, uploadCount: uploads.length, repriced, perUpload, totals };
 }

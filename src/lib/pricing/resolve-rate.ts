@@ -23,8 +23,10 @@ import { n } from "@/lib/reports/money";
 
 /** 驗收（Opus 5.5）：由呢日起長工介紹費改由 `src/lib/reports/referral-fee.ts`
  * `recomputeReferralFees()` 自動計（同 `REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH`
- * 一致；resolver 唔 import reports 層，避免拉埋 exceljs）。 */
-const LONGTERM_REFERRAL_AUTOCOMPUTE_FROM = new Date("2026-08-01T00:00:00.000Z");
+ * 一致；resolver 唔 import reports 層，避免拉埋 exceljs）。**export**
+ * 俾 `src/lib/pricing/reprice.ts`（reconcile-all 自動 reprice）共用同一個
+ * 分界日，避免兩處各自寫一次呢個日期拗開。 */
+export const LONGTERM_REFERRAL_AUTOCOMPUTE_FROM = new Date("2026-08-01T00:00:00.000Z");
 
 export type BrokerKindLike = "broker" | "internal_cash" | "internal_longterm" | "external" | "special" | null;
 
