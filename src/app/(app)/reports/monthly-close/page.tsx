@@ -250,6 +250,42 @@ export default function MonthlyCloseWorkbenchPage() {
     setRosterCoverage(coverageRes.ok ? coverageRes.data : null);
   }
 
+  // WP-LTSHIFT §19 交付 D：月結頁「重算介紹費」——呼叫已有嘅
+  // `POST /api/reports/referral-fee/recompute`（後端 WP-LTSHIFT 第一部分
+  // 已完成，呢度淨係加前端掣）。7 月會俾 400（已人手入，鐵則唔可以自動
+  // 覆蓋），顯示錯誤訊息就得。
+  const [referralFeeResult, setReferralFeeResult] = useState<{
+    total_amount: number;
+    totals_by_broker_code: Record<string, number>;
+    created_count: number;
+    voided_count: number;
+    exempt_shift_count: number;
+    warnings: Array<{ guardId: string; brokerId: string; siteId: string; shifts: number; reason: string }>;
+  } | null>(null);
+  const [recomputingReferralFee, setRecomputingReferralFee] = useState(false);
+
+  async function recomputeReferralFee() {
+    setRecomputingReferralFee(true);
+    setError(null);
+    setReferralFeeResult(null);
+    const res = await apiPost<{
+      total_amount: number;
+      totals_by_broker_code: Record<string, number>;
+      created_count: number;
+      voided_count: number;
+      exempt_shift_count: number;
+      warnings: Array<{ guardId: string; brokerId: string; siteId: string; shifts: number; reason: string }>;
+    }>("/api/reports/referral-fee/recompute", { month });
+    setRecomputingReferralFee(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    setReferralFeeResult(res.data);
+    setNotice(`介紹費已重算：合共 $${res.data.total_amount}（新建 ${res.data.created_count}、作廢 ${res.data.voided_count}）`);
+    await generate(); // 月結總表／毛利即時表要反映新嘅 special_items
+  }
+
   async function lock() {
     if (!result) return;
     setError(null);
@@ -319,6 +355,9 @@ export default function MonthlyCloseWorkbenchPage() {
             <a href={`/api/reports/monthly-close?month=${month}&export=1`}>
               <Button variant="secondary">匯出 Excel</Button>
             </a>
+            <Button variant="secondary" onClick={recomputeReferralFee} disabled={recomputingReferralFee}>
+              {recomputingReferralFee ? "重算緊…" : "重算介紹費"}
+            </Button>
             <Button variant="dark" onClick={generate} disabled={loading}>
               {loading ? "生成緊…" : "重新 Generate"}
             </Button>
@@ -328,6 +367,24 @@ export default function MonthlyCloseWorkbenchPage() {
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+
+      {referralFeeResult && (
+        <div className="rounded-lg border border-zk-border bg-white p-3 text-[12.5px]" data-testid="referral-fee-result">
+          <div className="mb-1 font-medium text-zk-text">介紹費重算結果（{month}）——合共 {fmtMoney(referralFeeResult.total_amount)}</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-zk-muted">
+            {Object.entries(referralFeeResult.totals_by_broker_code).map(([code, amount]) => (
+              <span key={code}>
+                {code}：{fmtMoney(amount)}
+              </span>
+            ))}
+            {Object.keys(referralFeeResult.totals_by_broker_code).length === 0 && <span>（冇任何長工設咗介紹雞頭，或者冇 B07 更）</span>}
+          </div>
+          {referralFeeResult.exempt_shift_count > 0 && <div className="mt-1 text-zk-muted">卓弘客戶盤豁免咗 {referralFeeResult.exempt_shift_count} 格。</div>}
+          {referralFeeResult.warnings.length > 0 && (
+            <div className="mt-1 text-amber-700">{referralFeeResult.warnings.length} 個 (長工,盤) 組合冇設費率，未計入（見 audit / referral_fee_rates）。</div>
+          )}
+        </div>
+      )}
       {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
       {unpricedCount > 0 && (
         <Notice variant="warning">

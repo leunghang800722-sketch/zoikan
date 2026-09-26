@@ -761,6 +761,17 @@ export const GuardFixPlanBodySchema = z
   })
   .strict();
 
+// 驗收修正（雞頭稱呼對應）：`POST /api/guard-fix/broker-alias`——Postorder
+// 對唔到嘅雞頭稱呼，頁面揀完系統雞頭之後寫入 `brokers.aliases`。`label`
+// 係原文稱呼（人名，PII，唔驗格式，淨係要非空同有長度上限）；`broker_id`
+// 一定係 uuid。
+export const GuardFixBrokerAliasBodySchema = z
+  .object({
+    label: z.string().trim().min(1, "稱呼唔可以係空").max(100, "稱呼太長"),
+    broker_id: uuid,
+  })
+  .strict();
+
 // WP-ROSTER-UPLOAD Phase B-1（B1-2）：`POST /api/roster-uploads/:id/reconcile/apply`
 // ——`key` 係 `buildReconcileKey()`/`buildUnresolvedKey()`（src/lib/
 // roster-upload/reconcile.ts）砌出嚟嘅字串，唔係 uuid，故意用寬鬆

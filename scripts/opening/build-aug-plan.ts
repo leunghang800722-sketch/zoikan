@@ -42,6 +42,13 @@ import { buildGuardMatchIndex, matchGuard } from "@/lib/roster-upload/match";
 const prisma = new PrismaClient();
 
 const AS_OF_DATE = new Date("2026-08-15T00:00:00.000Z"); // 準日，用嚟查現有卡會計出咩價
+
+// WP-LTSHIFT（老闆 2026-09-26 §7）：老闆已經拍板「7 月特殊卡 8 月無就加
+// 到期」，呢個盤 8 月已經有逐更收客卡——喺 6d「flat 收入盤唔起逐更收客
+// 卡」嘅判斷入面明確剔走（唔係加入 MIXED_BILLING_SITES，因為呢個盤 8
+// 月淨係逐更、冇月費，唔係「月費＋逐更另收」）。IFC／創富廠IC 冇拍板，
+// 唔喺呢個名單。
+const WP_LTSHIFT_PER_SHIFT_SITE = "淺水灣道11號蔚峰園";
 const EFFECTIVE_FROM = "2026-08-01";
 
 // ---------------------------------------------------------------------------
@@ -110,7 +117,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "免稅店",
       clientName: "機場Cdf",
       clientGroup: null,
-      aliases: ["免稅店"],
+      aliases: ["免稅店", "CDF", "機場CDF", "機場Cdf"], // WP-LTSHIFT §19 第二部分：Postorder 短代號（prop=CDF，client 寫「機場Cdf」）
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -125,7 +132,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "新皇崗口岸",
       clientName: "新皇崗口岸",
       clientGroup: null,
-      aliases: ["新皇崗口岸"],
+      aliases: ["新皇崗口岸", "皇崗"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -140,7 +147,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "港深創新及科技園",
       clientName: "港深創新及科技園",
       clientGroup: null,
-      aliases: ["港深創新及科技園"],
+      aliases: ["港深創新及科技園", "創科園"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -155,7 +162,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "城巴-海洋公園車廠",
       clientName: "城巴",
       clientGroup: "城巴車廠",
-      aliases: ["海洋公園城巴車廠"],
+      aliases: ["海洋公園城巴車廠", "海洋廠"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -170,7 +177,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "希慎廣場",
       clientName: "希慎廣場",
       clientGroup: null,
-      aliases: ["希慎廣場"],
+      aliases: ["希慎廣場", "希慎"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -1352,6 +1359,42 @@ async function main() {
     } else {
       plan.rateCards.closeJuly.push(closeJuly[1]);
     }
+
+    // WP-LTSHIFT（老闆 2026-09-26 §7）：淺水灣道11號蔚峰園——8 月替代卡
+    // 係呢個盤自己嘅 D@07:30-19:30／W／935.483871 逐更收客卡（上面 6d
+    // 已經剔走呢個盤，令佢唔會被 strip）。淨係揀 D 呢張做核實（N 嗰張
+    // 金額一樣，兩張其實都會喺 rateCards.create 起返）。
+    const weifengSiteId = siteByName.get("淺水灣道11號蔚峰園")?.id;
+    const weifengReplacementExists =
+      plan.rateCards.create.some((c) => c.siteCanonicalName === "淺水灣道11號蔚峰園" && c.shiftType?.code === "D" && c.shiftType.startTime === "07:30" && near(c.clientRate, 935.48)) ||
+      (weifengSiteId !== null &&
+        weifengSiteId !== undefined &&
+        (await prisma.rateCard.findFirst({
+          where: {
+            siteId: weifengSiteId,
+            billingModel: "per_shift",
+            voidedAt: null,
+            effectiveFrom: { gte: new Date(Date.UTC(2026, 7, 1)) },
+            clientRate: { gte: 935.47, lte: 935.49 },
+            shiftType: { code: "D", startTime: timeOnlyLocal("07:30") },
+          },
+        })) !== null);
+    if (!weifengReplacementExists) {
+      plan.needsBossReview.push(
+        "【7 月卡加期限——skip】淺水灣道11號蔚峰園 84,193.55 月費卡：plan 冇搵到 8 月替代卡（D@07:30 逐更收客卡 935.48），唔套用 effective_to=2026-07-31（skip，維持 7 月卡原封不動）。",
+      );
+    } else {
+      plan.rateCards.closeJuly.push({
+        siteCanonicalName: "淺水灣道11號蔚峰園",
+        billingModel: "monthly_fixed",
+        shiftTypeCode: null,
+        clientRate: 84193.55,
+        setEffectiveTo: "2026-07-31",
+        requireAugReplacementCard: { siteCanonicalName: "淺水灣道11號蔚峰園", billingModel: "per_shift", shiftTypeCode: "D", shiftTypeStartTime: "07:30", clientRate: 935.48 },
+        reason: "老闆 2026-09-24 答：7 月特殊卡 8 月無就加到期（WP-LTSHIFT §7 執行）",
+        note: "淺水灣道11號蔚峰園 7 月月費 flat 卡 84,193.55——8 月已經有逐更收客卡（D/N 均 935.483871），改做正常逐更盤，7 月卡加 effective_to=2026-07-31。",
+      });
+    }
   }
 
   // -------------------------------------------------------------------
@@ -1375,6 +1418,17 @@ async function main() {
       if (siteHasFlatRevenue(s, flatRows.filter((c) => c.siteId === s.id), AS_OF_DATE)) flatSites.add(s.canonicalName);
     }
     for (const sp of plan.sites.create) if (sp.billingModel === "monthly_fixed" && sp.monthlyFee) flatSites.add(sp.canonicalName);
+    // WP-LTSHIFT（老闆 2026-09-26 §7）：淺水灣道11號蔚峰園——老闆
+    // 2026-09-24 已經拍板「7 月特殊卡 8 月無就加到期」，而家 8 月更表
+    // 本身有逐更收客卡（935.483871），呢個盤要由「flat 收入盤」變返做
+    // 正常逐更盤（唔係 WP-MIXED-BILLING 嗰種「月費＋逐更另收」——蔚峰園
+    // 8 月淨係逐更，冇月費）。淨係喺呢度剔走呢一個盤（唔動 IFC／創富廠IC
+    // ——嗰兩個冇拍板，維持現狀），令下面 6d 唔會 strip 佢嘅 D/N 逐更收客
+    // 卡；下面 6c-2 會加返一個 closeJuly entry 幫 7 月 flat 卡加
+    // effective_to（DB 層面 apply 順序：rateCards.create 先於
+    // closeJuly，同一個 transaction 入面 08 月替代卡會先寫入，
+    // ensureCloseJulyCard() 嘅 DB double-check 先至搵得到）。
+    flatSites.delete(WP_LTSHIFT_PER_SHIFT_SITE);
     const stripped: string[] = [];
     plan.rateCards.create = plan.rateCards.create.filter((c) => {
       if (c.level === "site_flat" || c.billingModel !== "per_shift" || c.clientRate === null) return true;
@@ -1386,7 +1440,7 @@ async function main() {
     });
     if (stripped.length > 0) {
       plan.needsBossReview.push(
-        `【WP-MIXED-BILLING——flat 收入盤唔起逐更收客卡】以下 ${stripped.length} 組試算 E 值係「月費÷更數」倒算值，收入由盤級 flat 卡計（包括 7 月無限期 flat 卡），唔起逐更收客（出街价照起）：${stripped.join("；")}。如果其中有盤其實係「月費＋逐更另收」（好似控制室），要老闆拍板加入 scripts/opening/lib/mixed-billing-sites.ts 嘅 MIXED_BILLING_SITES。**注意淺水灣道11號蔚峰園**：8 月試算收入 92,612.90（935.48×99 更，逐更口徑），但 7 月 flat 卡 84,193.55 無限期覆蓋 8 月——月結 8 月會顯示 84,193.55（同 main 一樣，唔係今次引入），要老闆定 8 月係咪要新 flat 卡／改做逐更盤。`,
+        `【WP-MIXED-BILLING——flat 收入盤唔起逐更收客卡】以下 ${stripped.length} 組試算 E 值係「月費÷更數」倒算值，收入由盤級 flat 卡計（包括 7 月無限期 flat 卡），唔起逐更收客（出街价照起）：${stripped.join("；")}。如果其中有盤其實係「月費＋逐更另收」（好似控制室），要老闆拍板加入 scripts/opening/lib/mixed-billing-sites.ts 嘅 MIXED_BILLING_SITES。（淺水灣道11號蔚峰園已經喺 WP-LTSHIFT §7 處理咗——老闆 2026-09-24 拍板「7 月特殊卡 8 月無就加到期」，見上面 rateCards.closeJuly 同 6d 嘅 WP_LTSHIFT_PER_SHIFT_SITE 剔除，唔再出現喺呢個清單。）`,
       );
     }
   }

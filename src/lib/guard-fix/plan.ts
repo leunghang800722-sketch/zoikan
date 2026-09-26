@@ -7,11 +7,25 @@
 // 邊度／印唔印）。
 import { readFileSync, existsSync } from "fs";
 import type { PrismaClient } from "@prisma/client";
-import { matchGuard, buildGuardMatchIndex, matchBroker, type BrokerCandidate, type GuardMatchIndex } from "@/lib/roster-upload/match";
+import { matchGuard, buildGuardMatchIndex, matchBroker, matchSite, type BrokerCandidate, type GuardMatchIndex, type SiteCandidate } from "@/lib/roster-upload/match";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
 import { buildUTeamIndex, buildCrossCheckIndex, canonicalHkid, type UTeamRow, type CrossCheckRow, type UTeamIndex, type CrossCheckIndex } from "@/lib/guard-fix/sources";
-import type { GuardFixPlan, GuardFixIdentity, GuardFixAction, LinkAction, CreateAction, CreateMinimalAction, NeedsBossAction, GuardFixCellRef } from "@/lib/guard-fix/types";
+import type { PostorderLongtermPostCell, PostorderReferralRow, PostorderVisaResult } from "@/lib/guard-fix/postorder";
+import type {
+  GuardFixPlan,
+  GuardFixIdentity,
+  GuardFixAction,
+  LinkAction,
+  CreateAction,
+  CreateMinimalAction,
+  NeedsBossAction,
+  GuardFixCellRef,
+  SetLongtermAction,
+  SetLongtermPostAction,
+  SetReferralAction,
+  SetVisaAction,
+} from "@/lib/guard-fix/types";
 
 export type { GuardFixPlan } from "@/lib/guard-fix/types";
 
@@ -209,18 +223,181 @@ export interface BuildGuardFixPlanOptions {
    * 專用，要 `--allow-jsonl-fallback`；API 一律唔傳，冇上載直接
    * `NoActiveUploadsError`）。 */
   recordsJsonlFallbackPath?: string;
+  /** WP-LTSHIFT §19 交付 B：Postorder 上載解析結果（由 `postorder.ts`
+   * 喺 caller 度由 `postorder_uploads.file_bytes` 重新解析，呢度純粹接
+   * 埋落去計 4 類新 action）——冇上載就唔傳，四類新 action 一律 0 項。 */
+  postorder?: {
+    uploadId: string;
+    fileName: string;
+    longtermPosts: PostorderLongtermPostCell[];
+    referralRows: PostorderReferralRow[];
+    visa: PostorderVisaResult;
+  };
+}
+
+interface PostorderPlanResult {
+  setLongterm: SetLongtermAction[];
+  setLongtermPost: SetLongtermPostAction[];
+  setReferral: SetReferralAction[];
+  setVisa: SetVisaAction[];
+  unresolvedSiteLabels: string[];
+  unresolvedBrokerLabels: string[];
+}
+
+/** WP-LTSHIFT §19 交付 B：由 Postorder 解析結果計 4 類計劃——同 link/
+ * create 一樣「對唔到就唔出呢個 action，唔准估」；對唔到嘅 site／
+ * guard／broker 淨係計落 unresolved 清單（plan-summary／頁面摘要卡用，
+ * 唔係 PII）。 */
+function buildPostorderActions(params: {
+  postorder: NonNullable<BuildGuardFixPlanOptions["postorder"]>;
+  guardIndex: GuardMatchIndex;
+  guardById: Map<string, { id: string; nameZh: string; employmentType: string; referralBrokerId: string | null }>;
+  siteCandidates: SiteCandidate[];
+  brokerCandidates: BrokerCandidate[];
+  brokerCodeById: Map<string, string>;
+  existingLongtermPosts: Set<string>; // `${guardId}\u0000${siteId}`
+  startSeq: number;
+}): PostorderPlanResult {
+  const { postorder, guardIndex, guardById, siteCandidates, brokerCandidates, brokerCodeById, existingLongtermPosts } = params;
+  let seqN = params.startSeq;
+  const nextSeq = () => {
+    seqN += 1;
+    return `P${String(seqN).padStart(3, "0")}`;
+  };
+
+  const unresolvedSiteLabels = new Set<string>();
+  const unresolvedBrokerLabels = new Set<string>();
+
+  // ---- set_longterm / set_longterm_post：逐 (盤,人) 組合 ----
+  const cellCountByGuard = new Map<string, number>();
+  const setLongtermPost: SetLongtermPostAction[] = [];
+  const seenLongtermPostKeys = new Set<string>();
+  for (const post of postorder.longtermPosts) {
+    const guardResult = matchGuard({ staffNoRaw: null, nameRaw: post.guardNameRaw, telRaw: null }, guardIndex);
+    if (!guardResult.guardId) continue; // 對唔到就唔計（唔准估），留低 ≥50% 推算處理
+    const guardId = guardResult.guardId;
+    cellCountByGuard.set(guardId, (cellCountByGuard.get(guardId) ?? 0) + post.cellCount);
+
+    // 先試「客戶名稱」去人名字句（例：「數碼港 CP5」），撞唔中就跌返
+    // 「物業名稱」短代號（例：「CP5」）——長字句有時夾埋 zone/更份代號
+    // （「啟航1331 IC」嘅「IC」），短代號冇呢個問題，配合 sites.aliases
+    // 補齊短代號（見 P2 §19 第二部分「短代號」migration）令命中率高好多。
+    const siteId = matchSite(post.siteLabelRaw, siteCandidates) ?? (post.siteLabelFallbackRaw ? matchSite(post.siteLabelFallbackRaw, siteCandidates) : null);
+    if (!siteId) {
+      unresolvedSiteLabels.add(post.siteLabelRaw);
+      continue; // 保守：對唔到盤就唔建 set_longterm_post，留 ≥50% 推算＋標記
+    }
+    const pairKey = `${guardId}\u0000${siteId}`;
+    if (existingLongtermPosts.has(pairKey) || seenLongtermPostKeys.has(pairKey)) continue; // 冪等：已經有生效崗位就唔重複計劃
+    seenLongtermPostKeys.add(pairKey);
+    const siteLabel = siteCandidates.find((s) => s.id === siteId)?.canonicalName ?? post.siteLabelRaw;
+    setLongtermPost.push({
+      type: "set_longterm_post",
+      seq: nextSeq(),
+      guardId,
+      siteId,
+      siteLabel,
+      cellCount: post.cellCount,
+      reason: `Postorder「(8) 長工」格：呢個 (盤,人) 組合喺 Roster 表撞中 ${post.cellCount} 格`,
+    });
+  }
+
+  const setLongterm: SetLongtermAction[] = [];
+  for (const [guardId, cellCount] of cellCountByGuard) {
+    const guard = guardById.get(guardId);
+    if (!guard) continue;
+    if (guard.employmentType.startsWith("longterm_")) continue; // 已經係長工，唔使改
+    setLongterm.push({
+      type: "set_longterm",
+      seq: nextSeq(),
+      guardId,
+      cellCount,
+      fromEmploymentType: guard.employmentType,
+      reason: `Postorder「(8) 長工」格出現過（合共 ${cellCount} 格）——由 ${guard.employmentType} 改做 longterm_autopay`,
+    });
+  }
+
+  // ---- set_referral：逐條「長工雞頭費」行 ----
+  const setReferral: SetReferralAction[] = [];
+  const seenReferralGuardIds = new Set<string>();
+  // 「行冇人名就由該盤該雞頭嘅長工 B07 格推」——盤名(raw) → 呢個盤有邊
+  // 啲長工 B07 格人名（跨全部雞頭，用嚟做冇人名行嘅 fallback）。
+  const guardNamesBySiteLabel = new Map<string, Set<string>>();
+  const addGuardNameForSiteLabel = (label: string, name: string) => {
+    if (!guardNamesBySiteLabel.has(label)) guardNamesBySiteLabel.set(label, new Set());
+    guardNamesBySiteLabel.get(label)!.add(name);
+  };
+  for (const post of postorder.longtermPosts) {
+    addGuardNameForSiteLabel(post.siteLabelRaw, post.guardNameRaw);
+    if (post.siteLabelFallbackRaw) addGuardNameForSiteLabel(post.siteLabelFallbackRaw, post.guardNameRaw);
+  }
+  for (const row of postorder.referralRows) {
+    const brokerId = matchBroker(row.brokerLabelRaw, brokerCandidates);
+    if (!brokerId) {
+      unresolvedBrokerLabels.add(row.brokerLabelRaw);
+      continue; // 對唔到雞頭就唔計（唔准估）
+    }
+    const brokerCode = brokerCodeById.get(brokerId) ?? row.brokerLabelRaw;
+    let names = row.guardNamesRaw;
+    if (names.length === 0) {
+      const fallback = new Set<string>();
+      for (const siteLabel of [...row.siteLabelsRaw, ...row.siteLabelsFallbackRaw]) {
+        for (const n of guardNamesBySiteLabel.get(siteLabel) ?? []) fallback.add(n);
+      }
+      names = [...fallback];
+    }
+    for (const nameRaw of names) {
+      const guardResult = matchGuard({ staffNoRaw: null, nameRaw, telRaw: null }, guardIndex);
+      if (!guardResult.guardId) continue;
+      const guardId = guardResult.guardId;
+      if (seenReferralGuardIds.has(guardId)) continue; // 一個長工淨係一個介紹雞頭，同一個跑重複行唔使再計劃
+      const guard = guardById.get(guardId);
+      if (guard?.referralBrokerId === brokerId) continue; // 已經係呢個雞頭，唔使改（冪等）
+      seenReferralGuardIds.add(guardId);
+      setReferral.push({
+        type: "set_referral",
+        seq: nextSeq(),
+        guardId,
+        brokerId,
+        brokerCode,
+        reason: `Postorder「長工雞頭費 (${row.brokerLabelRaw})」行（row ${row.rowIndex}）指住呢個長工`,
+      });
+    }
+  }
+
+  // ---- set_visa：Postorder 冇顯式標記，一律 0 項（見 postorder.ts） ----
+  const setVisa: SetVisaAction[] = [];
+
+  return {
+    setLongterm,
+    setLongtermPost,
+    setReferral,
+    setVisa,
+    unresolvedSiteLabels: [...unresolvedSiteLabels],
+    unresolvedBrokerLabels: [...unresolvedBrokerLabels],
+  };
 }
 
 export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise<GuardFixPlan> {
   const { prisma, month } = opts;
-  const [guardsRaw, staffNumbersRaw, phonesRaw, brokersRaw, siteAssignments, siteRows] = await Promise.all([
-    prisma.guard.findMany({ select: { id: true, nameZh: true, tel: true, hkid: true, staffNo: true, staffNoMw: true, nameAliases: true } }),
+  const [guardsRaw, staffNumbersRaw, phonesRaw, brokersRaw, siteAssignments, siteRows, existingLongtermPostRows] = await Promise.all([
+    prisma.guard.findMany({
+      select: { id: true, nameZh: true, tel: true, hkid: true, staffNo: true, staffNoMw: true, nameAliases: true, employmentType: true, referralBrokerId: true },
+    }),
     prisma.guardStaffNumber.findMany({ select: { number: true, guardId: true, status: true, scheme: true } }),
     prisma.guardPhone.findMany({ select: { guardId: true, tel: true } }),
     prisma.broker.findMany({ select: { id: true, code: true, aliases: true } }),
     prisma.brokerSiteAssignment.findMany({ where: { month }, select: { siteId: true, broker: { select: { code: true } } } }),
-    prisma.site.findMany({ select: { id: true, canonicalName: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } }),
+    // 驗收（Opus 5.5）：淨係 `source=manual` 先當「已經有崗位」——`inferred`
+    // （占比推算）／`july_backfill`（7 月反推）喺 Postorder 生效之後結算判斷
+    // 度會被忽略（見 longterm-settlement.ts），所以總表
+    // 有「(8) 長工」格嘅組合一定要出 set_longterm_post（apply 嗰陣順手作廢
+    // 同組合嘅 inferred 記錄）。之前正式站「先逐盤套用、後上載 Postorder」
+    // 嘅次序會令呢啲組合被當成已有崗位跳過（dev 重演：setPost 由 56 跌到 17）。
+    prisma.guardLongtermPost.findMany({ where: { voidedAt: null, source: "manual" }, select: { guardId: true, siteId: true } }),
   ]);
+  const matchOverridesRaw = await prisma.guardMatchOverride.findMany({ where: { voidedAt: null }, select: { staffNo: true, nameRaw: true, guardId: true } });
   const siteNameById = new Map(siteRows.map((s) => [s.id, s.canonicalName]));
   const siteAssignmentBrokerCodeBySite = new Map<string, string[]>();
   for (const a of siteAssignments) {
@@ -232,7 +409,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
   const brokerCandidates: BrokerCandidate[] = brokersRaw.map((b) => ({ id: b.id, code: b.code, aliases: b.aliases }));
   const brokerCodeById = new Map(brokersRaw.map((b) => [b.id, b.code]));
 
-  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw });
+  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw, matchOverrides: matchOverridesRaw });
   const validGuardIds = new Set(guardsRaw.map((g) => g.id));
 
   const telIndex = new Map<string, Set<string>>();
@@ -362,6 +539,25 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     if (identity.kind === "ambiguous") {
       const snNormForReason = identity.staffNoRaw ? normalizeStaffNumber(identity.staffNoRaw) : null;
       const snOwnedByOther = !!snNormForReason && staffNoOwner.has(snNormForReason);
+      const sameNameInDb = (guardIndex.byName.get(identity.nameRaw)?.length ?? 0) + (guardIndex.byAlias.get(identity.nameRaw)?.length ?? 0);
+      if (snOwnedByOther && snNormForReason && sameNameInDb === 0) {
+        // 驗收（Opus 5.5，2026-09-26）：老闆指令唔准留「要老闆決定」——保守
+        // 預設：工號屬另一人、DB 冇同名安員 → 按更表姓名（＋更表電話）建
+        // 獨立安員（cash_casual、無工號），寫 guard_match_overrides 令呢個
+        // 「工號＋姓名」組合 reparse 配返新安員；唔會搶走工號主人嘅記錄
+        // （B1-8 原則不變），audit＋override.reason 留「工號衝突待核」。
+        createMinimal.push({
+          type: "create_minimal",
+          seq: identity.seq,
+          nameZh: identity.nameRaw,
+          tel: identity.telRaw ? normalizeTel(identity.telRaw) : null,
+          defaultBrokerCode,
+          reason: "更表工號屬 DB 另一位安員（姓名對唔上）——保守預設：按更表姓名建獨立安員（無工號），工號衝突待核",
+          conservative: "staff_no_conflict",
+          matchOverrideStaffNo: snNormForReason,
+        });
+        continue;
+      }
       needsBoss.push({
         type: "needs_boss",
         seq: identity.seq,
@@ -399,6 +595,26 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
                   ? "淨係靠姓名喺名單搵到，更表／名單冇電話可以核對（可能同名唔同人）"
                   : "淨係靠姓名喺名單搵到，而更表電話同名單電話對唔上（可能同名唔同人）"
                 : null;
+      // 驗收（Opus 5.5，2026-09-26）：「淨係靠姓名喺名單搵到」嘅兩種（名單／
+      // 更表冇電話核對、或者電話對唔上）唔再留 needs_boss——保守預設：唔用
+      // 名單嗰行資料（可能係同名另一人），按更表姓名＋更表電話建獨立安員
+      // （cash_casual、無工號、無身份證），待核。其餘拒絕原因（身份證／
+      // 工號已喺 DB）照舊交老闆（嗰啲係「DB 可能已經有呢個人」，唔可以
+      // 再起一個）。
+      const nameOnlyUnverified = !uRowByNumber && !(uRow.hkidNote === "mentions_other_number") && !(uRowHkidCanon && hkidIndex.has(uRowHkidCanon)) && !(uNumberForCreate && staffNoOwner.has(uNumberForCreate));
+      if (refuse && nameOnlyUnverified && (guardIndex.byName.get(identity.nameRaw)?.length ?? 0) + (guardIndex.byAlias.get(identity.nameRaw)?.length ?? 0) === 0) {
+        createMinimal.push({
+          type: "create_minimal",
+          seq: identity.seq,
+          nameZh: identity.nameRaw,
+          tel: rowTel,
+          defaultBrokerCode,
+          reason: `${refuse}——保守預設：唔用名單資料，按更表姓名建獨立安員（無工號），待核`,
+          conservative: "name_only_unverified",
+          matchOverrideStaffNo: null,
+        });
+        continue;
+      }
       if (refuse) {
         needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: `${refuse}，唔自動建人，交老闆睇`, candidateGuardIds: [] });
         continue;
@@ -437,13 +653,49 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     });
   }
 
+  let setLongterm: SetLongtermAction[] = [];
+  let setLongtermPost: SetLongtermPostAction[] = [];
+  let setReferral: SetReferralAction[] = [];
+  let setVisa: SetVisaAction[] = [];
+  let postorderSummary: GuardFixPlan["postorder"] = null;
+  if (opts.postorder) {
+    const guardByIdForPostorder = new Map(guardsRaw.map((g) => [g.id, { id: g.id, nameZh: g.nameZh, employmentType: g.employmentType, referralBrokerId: g.referralBrokerId }]));
+    const siteCandidates: SiteCandidate[] = siteRows.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases }));
+    const existingLongtermPosts = new Set(existingLongtermPostRows.map((p) => `${p.guardId}\u0000${p.siteId}`));
+    const result = buildPostorderActions({
+      postorder: opts.postorder,
+      guardIndex,
+      guardById: guardByIdForPostorder,
+      siteCandidates,
+      brokerCandidates,
+      brokerCodeById,
+      existingLongtermPosts,
+      startSeq: identities.length,
+    });
+    setLongterm = result.setLongterm;
+    setLongtermPost = result.setLongtermPost;
+    setReferral = result.setReferral;
+    setVisa = result.setVisa;
+    postorderSummary = {
+      uploadId: opts.postorder.uploadId,
+      fileName: opts.postorder.fileName,
+      longtermPostCellCount: opts.postorder.longtermPosts.reduce((s, p) => s + p.cellCount, 0),
+      referralRowCount: opts.postorder.referralRows.length,
+      unresolvedSiteLabels: result.unresolvedSiteLabels,
+      unresolvedBrokerLabels: result.unresolvedBrokerLabels,
+      visaSupported: opts.postorder.visa.supported,
+      visaNote: opts.postorder.visa.reason,
+    };
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     dbTarget: describeDbTarget(),
     sourceMode,
     identities,
-    actions: { link, create, createMinimal, needsBoss },
+    actions: { link, create, createMinimal, needsBoss, setLongterm, setLongtermPost, setReferral, setVisa },
     hkidDroppedCount,
+    postorder: postorderSummary,
   };
 }
 
@@ -456,6 +708,10 @@ export function summarizePlan(plan: GuardFixPlan): {
   create: number;
   createMinimal: number;
   needsBoss: number;
+  setLongterm: number;
+  setLongtermPost: number;
+  setReferral: number;
+  setVisa: number;
 } {
   const totalCells = plan.identities.reduce((s, i) => s + i.totalCellCount, 0);
   return {
@@ -465,6 +721,10 @@ export function summarizePlan(plan: GuardFixPlan): {
     create: plan.actions.create.length,
     createMinimal: plan.actions.createMinimal.length,
     needsBoss: plan.actions.needsBoss.length,
+    setLongterm: plan.actions.setLongterm.length,
+    setLongtermPost: plan.actions.setLongtermPost.length,
+    setReferral: plan.actions.setReferral.length,
+    setVisa: plan.actions.setVisa.length,
   };
 }
 
@@ -492,6 +752,13 @@ export function formatPlanSummaryMd(plan: GuardFixPlan): string {
 - needs_hr：${s.createMinimal}
 - needs_boss：${s.needsBoss}
 - create 入面名單身份證欄唔係身份證格式、冇寫入（要 HR 補）：${plan.hkidDroppedCount}
+- set_longterm：${s.setLongterm}
+- set_longterm_post：${s.setLongtermPost}
+- set_referral：${s.setReferral}
+- set_visa：${s.setVisa}（Postorder 冇顯式簽證標記，暫時一律 0——${plan.postorder?.visaNote ?? "冇上載 Postorder"}）
+
+## Postorder 上載（WP-LTSHIFT §19）
+${plan.postorder ? `- 檔案：${plan.postorder.fileName}（upload ${plan.postorder.uploadId}）\n- 長工格總數：${plan.postorder.longtermPostCellCount}\n- 介紹費行數：${plan.postorder.referralRowCount}\n- 對唔到嘅盤名：${plan.postorder.unresolvedSiteLabels.join("、") || "（冇）"}\n- 對唔到嘅雞頭稱呼：${plan.postorder.unresolvedBrokerLabels.join("、") || "（冇）"}` : "（呢次冇上載 Postorder，set_longterm/set_longterm_post/set_referral/set_visa 一律 0 項）"}
 
 ## needs_hr（盤＋格數，U Team 名單／核對表都搵唔到，要 HR 補資料）
 ${fmtSiteBreakdown(cellsBySiteFor(plan.actions.createMinimal))}

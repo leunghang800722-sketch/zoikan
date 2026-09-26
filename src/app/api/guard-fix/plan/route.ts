@@ -14,6 +14,7 @@ import { monthStart } from "@/lib/month-lock";
 import { BadRequest, Conflict } from "@/lib/api/errors";
 import { buildGuardFixPlan, summarizePlan, NoActiveUploadsError } from "@/lib/guard-fix/plan";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
+import { parsePostorderWorkbookBuffer } from "@/lib/guard-fix/postorder";
 import { buildNeedsBossView, APPLY_STALE_MS } from "@/lib/guard-fix/view";
 import type { Prisma } from "@prisma/client";
 
@@ -37,9 +38,16 @@ export async function POST(req: Request) {
       throw BadRequest("現用 U Team 名單解析唔到——請重新上載名單");
     }
 
+    // WP-LTSHIFT §19：呢個月現用 Postorder 上載（冇上載都照計，set_longterm
+    // 等四類新 action 一律 0 項，唔影響原有 link/create 行為）。
+    const postorderUpload = await prisma.postorderUpload.findFirst({ where: { month, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
+    const postorder = postorderUpload
+      ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderWorkbookBuffer(Buffer.from(postorderUpload.fileBytes))) }
+      : undefined;
+
     let plan;
     try {
-      plan = await buildGuardFixPlan({ prisma, month, uTeamRows });
+      plan = await buildGuardFixPlan({ prisma, month, uTeamRows, postorder });
     } catch (e) {
       if (e instanceof NoActiveUploadsError) throw BadRequest(`${e.message}——呢個月未有更表上載，或者未解析成功`);
       throw e;
@@ -52,6 +60,7 @@ export async function POST(req: Request) {
       data: {
         month,
         staffListUploadId: staffList.id,
+        postorderUploadId: postorderUpload?.id ?? null,
         createdById: session.userId,
         planJson: plan as unknown as Prisma.InputJsonValue,
         summaryJson,
@@ -66,7 +75,21 @@ export async function POST(req: Request) {
         runId: run.id,
         month: body.month,
         staffListUpload: { id: staffList.id, fileName: staffList.fileName, uploadedAt: staffList.uploadedAt.toISOString(), rowCount: staffList.rowCount },
-        summary: { totalIdentities: summary.totalIdentities, totalCells: summary.totalCells, link: summary.link, create: summary.create, createMinimal: summary.createMinimal, needsBoss: summary.needsBoss, hkidDroppedCount: plan.hkidDroppedCount },
+        postorderUpload: postorderUpload ? { id: postorderUpload.id, fileName: postorderUpload.fileName, uploadedAt: postorderUpload.uploadedAt.toISOString() } : null,
+        summary: {
+          totalIdentities: summary.totalIdentities,
+          totalCells: summary.totalCells,
+          link: summary.link,
+          create: summary.create,
+          createMinimal: summary.createMinimal,
+          needsBoss: summary.needsBoss,
+          setLongterm: summary.setLongterm,
+          setLongtermPost: summary.setLongtermPost,
+          setReferral: summary.setReferral,
+          setVisa: summary.setVisa,
+          hkidDroppedCount: plan.hkidDroppedCount,
+        },
+        postorder: plan.postorder,
         needsBoss,
       }),
       201,

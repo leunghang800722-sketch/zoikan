@@ -102,6 +102,34 @@ describe("WP-GUARD-FIX：別名唯一 (3b)", () => {
   });
 });
 
+describe("驗收（Opus 5.5）：工號衝突保守預設 guard_match_overrides", () => {
+  const build = (overrides: { staffNo: string; nameRaw: string; guardId: string }[]) =>
+    buildGuardMatchIndex({
+      guards: [
+        { id: "gOwner", nameZh: "測試乙", tel: null, staffNo: "U88880011", staffNoMw: null, nameAliases: [] },
+        { id: "gNew", nameZh: "測試甲", tel: null, staffNo: null, staffNoMw: null, nameAliases: [] },
+      ],
+      staffNumbers: [{ number: "U88880011", guardId: "gOwner", status: "current" }],
+      phones: [],
+      matchOverrides: overrides,
+    });
+
+  it("冇 override：工號屬另一人 → ambiguous（B1-8 原則不變）", () => {
+    expect(matchGuard({ staffNoRaw: "U88880011", nameRaw: "測試甲", telRaw: null }, build([]))).toMatchObject({ guardId: null, guardMatch: "ambiguous", staffNoBelongsToOther: true });
+  });
+
+  it("有完全相同「工號＋姓名」override → 配到獨立安員，標 matchedViaStaffNoConflictOverride", () => {
+    const r = matchGuard({ staffNoRaw: "u88880011", nameRaw: " 測試甲 ", telRaw: null }, build([{ staffNo: "U88880011", nameRaw: "測試甲", guardId: "gNew" }]));
+    expect(r).toMatchObject({ guardId: "gNew", guardMatch: "by_name", matchedViaStaffNoConflictOverride: true, staffNoBelongsToOther: false });
+  });
+
+  it("override 淨係對完全相同組合：同一工號、第二個姓名照舊 ambiguous；工號主人本名照舊 by_staff_no", () => {
+    const idx = build([{ staffNo: "U88880011", nameRaw: "測試甲", guardId: "gNew" }]);
+    expect(matchGuard({ staffNoRaw: "U88880011", nameRaw: "第三個人", telRaw: null }, idx)).toMatchObject({ guardId: null, guardMatch: "ambiguous" });
+    expect(matchGuard({ staffNoRaw: "U88880011", nameRaw: "測試乙", telRaw: null }, idx)).toMatchObject({ guardId: "gOwner", guardMatch: "by_staff_no" });
+  });
+});
+
 describe("WP-GUARD-FIX（實測揭發，dev DB 驗證時撞到）：B1-8 姓名核對要本名／別名都試", () => {
   it("工號命中一個人，更表姓名係佢個別名（唔係本名）→ 唔可以誤判『工號屬另一人』", () => {
     const index = buildGuardMatchIndex({

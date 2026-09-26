@@ -127,6 +127,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 const STAFF_NO_MISMATCH_RE = /檔案工號 .*? 同系統工號 .*? 唔一致/g;
 // B1-8 第 3 項：「工號屬另一人」warning 同上面一樣帶工號原文，一齊遮。
 const STAFF_NO_BELONGS_TO_OTHER_RE = /檔案工號 .*? 屬另一人（姓名對唔上），唔會自動配對，人手覆核/g;
+// 驗收（Opus 5.5）：工號衝突保守預設嘅 warning 一樣要遮工號。
+const STAFF_NO_CONFLICT_OVERRIDE_RE = /檔案工號 .*? 屬另一人：已按/g;
 
 function redactStaffNoWarnings(warnings: unknown): unknown {
   if (!Array.isArray(warnings)) return warnings;
@@ -135,6 +137,7 @@ function redactStaffNoWarnings(warnings: unknown): unknown {
       ? w
           .replace(STAFF_NO_MISMATCH_RE, "檔案工號（已隱藏）同系統工號（已隱藏）唔一致")
           .replace(STAFF_NO_BELONGS_TO_OTHER_RE, "檔案工號（已隱藏）屬另一人（姓名對唔上），唔會自動配對，人手覆核")
+          .replace(STAFF_NO_CONFLICT_OVERRIDE_RE, "檔案工號（已隱藏）屬另一人：已按")
       : w,
   );
 }

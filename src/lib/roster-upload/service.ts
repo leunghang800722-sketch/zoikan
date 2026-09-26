@@ -148,12 +148,13 @@ async function matchRowsAndSummarize(
   // 時段完全一樣，例如數碼港 CP5「D」）嗰陣俾 rank_raw 第三層收窄用。
   const shiftTypes: ShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup }));
 
-  const [guardsRaw, staffNumbersRaw, phonesRaw] = await Promise.all([
+  const [guardsRaw, staffNumbersRaw, phonesRaw, matchOverridesRaw] = await Promise.all([
     tx.guard.findMany({ select: { id: true, nameZh: true, tel: true, staffNo: true, staffNoMw: true, nameAliases: true } }),
     tx.guardStaffNumber.findMany({ select: { number: true, guardId: true, status: true } }),
     tx.guardPhone.findMany({ select: { guardId: true, tel: true } }),
+    tx.guardMatchOverride.findMany({ where: { voidedAt: null }, select: { staffNo: true, nameRaw: true, guardId: true } }),
   ]);
-  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw });
+  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw, matchOverrides: matchOverridesRaw });
 
   // ---------------------------------------------------------------------
   // WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）：對數頁大量「未寫子
@@ -371,6 +372,10 @@ async function matchRowsAndSummarize(
     }
     // WP-GUARD-FIX（老闆 2026-09-25 要求）：靠別名（`guards.name_aliases`）
     // 配到——留痕俾會計知呢個人個本名同更表寫嘅唔同，唔係純粹信賴巧合。
+    if (guardResult.matchedViaStaffNoConflictOverride) {
+      staffNoMismatchCount += 1;
+      warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人：已按安員配對修復保守預設配對到按更表姓名建立嘅獨立安員（工號衝突待核）`);
+    }
     if (guardResult.matchedViaAlias) {
       warnings.push("由別名配對（更表姓名同系統本名唔同，見安員資料「更表用名」）");
     }

@@ -462,3 +462,430 @@ audit`／`sql_select ai.audit_log` 都讀唔到（見
     兩個）。**驗證**：`db:reset && db:seed` → `build` → `apply --plan`
     → `apply --apply` → `build`（再一次）→ `apply --plan`——全部欄位
     （盤/更種/價目卡/散工/7 月卡加期限）都係「新建 0／跳過全部」。
+
+## WP-LTSHIFT（老闆 2026-09-26）：長工更結算單位＋8 月數對總表差額修復
+
+背景、規則同驗收見 `P2-版面重設計計劃.md` §14／§19。呢度淨係記低新
+API／新資料表／關鍵行為，方便日後查。
+
+- **`guard_longterm_posts`**（`prisma/schema.prisma`）：長工崗位盤
+  （guard_id、site_id、effective_from/to、source manual／
+  july_backfill／inferred、note）。`20260926110715_wp_ltshift_
+  longterm_posts` migration 由 7 月 `shift_records.settlement_broker.
+  kind='internal_longterm'` 反推 backfill（用 SQL join，唔涉及任何
+  硬編碼 uuid，冪等）。
+- **`guards.referral_broker_id`／`visa_sponsored_by_broker_id`**：介紹
+  雞頭、簽證擔保雞頭（nullable FK → brokers，ON DELETE SET NULL）。
+- **`sites.activity_proxy_site_id`**：`monthly-close.ts` 反假營業額閘
+  （`hasAnyRecordThisMonth`）額外查呢個 FK 指嘅盤有冇活動——俾「數碼港
+  CP5 IC」呢類自己 0 條 shift_records、但同一業務實際更次記喺另一個
+  盤（「數碼港 CP5」）嘅構造盤唔會被自動隱藏。migration
+  `20260926120000_wp_ltshift_cp5ic_proxy_weifeng_flatcard` 用
+  `canonical_name` 查值（唔存在就 0 行），冪等。
+- **結算單位第一層**（`src/lib/pricing/longterm-settlement.ts`＋
+  `reconcile.ts`）：`employment_type` 開頭 `longterm_` 嘅安員，喺
+  規則 8 舊 fallback 鏈之前，喺呢個盤（含母盤）有生效崗位就結算單位
+  ＝internal_longterm（B07），`operational_broker_id` 保留更表雞頭碼
+  做總表成本桶；唔喺崗位盤就跟雞頭碼幫雞頭頂散更；完全冇崗位記錄就用
+  本月更表行占比推算（≥50% 當自己崗位＋`apply_roster` 時
+  materialize 一行 `source=inferred` 嘅崗位記錄，推算唔到就保守全部
+  當 B07）；簽證形式長工永遠當贊助雞頭散更。`ReconcileRosterEntry`
+  新增 `operationalBrokerId`／`settlementReason`／`settlementWarning`
+  三個欄，對數頁「settlement_diff」而家同時比較 settlement／
+  operational 兩個 broker。
+- **`POST /api/reports/referral-fee/recompute { month }`**（老闆／
+  會計；`月結總表:view` gate＋顯式 baseRole 檢查）：由
+  `guards.referral_broker_id`＋B07 更數＋`referral_fee_rates` 自動
+  重算 `special_items(kind=referral_fee)`（卓弘客戶盤豁免）。冪等
+  （淨係作廢/重建自己 `created_by='referral-fee-recompute:*'` 嗰批，
+  唔踩人手輸入）；拒絕 2026-07 或更早月份（7 月已人手入）。純函數
+  `computeReferralFees()` 見 `src/lib/reports/referral-fee.ts`。
+- **蔚峰園（§7）**：`scripts/opening/build-aug-plan.ts` 新增
+  `WP_LTSHIFT_PER_SHIFT_SITE` 常數——喺 6d「flat 收入盤唔起逐更收客
+  卡」判斷入面明確剔走呢個盤（唔影響 IFC／創富廠IC，冇拍板維持現
+  狀），令佢 8 月 D/N 逐更收客卡（935.48）唔再被 strip；6c 新增第三個
+  `closeJuly` entry 幫 7 月 flat 卡（84,193.55）加 `effective_to=
+  2026-07-31`，同一 transaction 入面 rate_cards.create 行先於
+  closeJuly，DB double-check 一個 round 就成功（dev 實測：
+  `build-aug-plan.ts` → `apply-aug-plan.ts --apply` 一次過完成，7 月
+  gate 不變）。
+
+**第一部分未完成，第二部分（下面）已補做**：guard-fix 四類 Postorder
+計劃、reconcile-all、referral-fee 效期補漏、`aug-e2e-check.ts` 完整
+跑一次——見下面「WP-LTSHIFT §19 第二部分」。
+
+## WP-LTSHIFT §19 第二部分（老闆 2026-09-26；Sonnet 5 執行，branch
+`wp-ltshift`）：Postorder 上載解析＋guard-fix 四類新計劃＋「重新對數
+全月」＋介紹費效期修補＋端到端實測
+
+### A. Postorder 上載＋解析
+- `postorder_uploads` 表（`prisma/schema.prisma`，migration
+  `20260926130000_wp_ltshift_postorder_reconcile_all`）：同
+  `staff_list_uploads` 一致「存 bytes＋sha256→即時解析摘要→唔存逐行
+  PII」模式，`month` 分開唔同月份嘅上載。`POST /api/guard-fix/
+  postorder`（multipart `file`+`month`）、`GET`（`?month=` 篩，唔傳就
+  全部）——`src/app/api/guard-fix/postorder/route.ts`。
+- `src/lib/guard-fix/postorder.ts`（純函數，ExcelJS）：
+  - `parsePostorderLongtermPostsFromWorkbook(wb)`——讀 `Roster` sheet
+    （row 8 起，逐日 7 欄由 col H 起：`[日期,雞頭名,備註,其他,救更價,
+    Unbilled,Paid]`），雞頭名含「長工」（即總表「(8) 長工」格）＋備註
+    有人名先計一格；盤名優先用「客戶名稱」去咗人名尾段嘅字句（比
+    「物業名稱」短代號更多機會 `matchSite()` 撞中），對唔到就跌返短
+    代號。實測 `Postorder - Aug 2026.xlsm`：1,295 格、58 個 (盤,人)
+    組合（同老闆講嘅「56 個組合、1,293 格」誤差 <1%，屬 col A 個別
+    行寫法差異）。
+  - `parsePostorderReferralRowsFromWorkbook(wb)`——讀 `PostOrder`
+    sheet 「長工雞頭費 (雞頭)」行，col F 公式 `=<rate>*SUM(AM..)`
+    直接讀 formula／cached result（`AM` 欄＝`COUNTA` 算低嘅「Total
+    Shift」，唔使自己逐日重加）。實測：21 行，Excel 快取金額加埋
+    **60,520，同老闆講嘅目標一致**（K/W/T/Gary 四個雞頭）。
+  - `parsePostorderVisaStaff(wb)`——Postorder 冇顯式簽證形式長工標記
+    （冇獨立 sheet／專屬欄），老實答 `supported:false`；`set_visa`
+    暫時一律 0 項（唔靠 dev-only 嘅 `boss_answers.py`，production
+    parser 唔可以屈估）。
+  - 單元測試（合成 workbook，唔碰真檔）：`tests/wp-ltshift-postorder-
+    parse.test.ts`，6 條全過。
+- 雞頭 Chinese 稱呼（「淦」/「Wing」/「鄧」/「Garey」…）要撞中
+  `matchBroker()`：`scripts/seed/lib/broker-names.ts` 新增
+  `masterRosterAliasesFor()`，`seedBrokers()`（`scripts/seed/index.ts`）
+  將 `master_roster_aliases`（`data/mappings-private/brokers.csv`，
+  gitignored）＋`canonical_name` 一齊併入 `Broker.aliases`——冇私隱檔
+  就淨係用代號本身，行為 deterministic，唔靠 gitignored 檔存在與否
+  改變公開行為（同現有 `canonicalNameFor()` 一致嘅刻意權衡）。
+
+### B. guard-fix 加四類計劃
+`src/lib/guard-fix/types.ts` 新增 `SetLongtermAction`／
+`SetLongtermPostAction`／`SetReferralAction`／`SetVisaAction`；
+`GuardFixPlan.actions` 加 `setLongterm`/`setLongtermPost`/
+`setReferral`/`setVisa`（冇 Postorder 上載就全部 0 項，唔影響原有
+link/create 行為）；`GuardFixPlan.postorder` 記低對唔到嘅盤名／雞頭
+稱呼清單（plan-summary／頁面摘要卡用）。
+
+`src/lib/guard-fix/plan.ts` `buildPostorderActions()`：
+- `set_longterm`：guardId 喺 Postorder B07 格出現過（`matchGuard()` 淨
+  用姓名——Postorder 冇工號/電話，撞唔中一個先算，唔准估）且
+  `employmentType` 唔係 `longterm_*` → 改 `longterm_autopay`。
+- `set_longterm_post`：(盤,人) 都撞中（`matchSite()`／`matchGuard()`）
+  且未有生效崗位記錄 → 起一行 `guard_longterm_posts`。撞唔中盤／人
+  就跳過（保守：唔建 post，留 `longterm-settlement.ts` 嘅 ≥50% 推算
+  兜底），對唔到嘅盤名/雞頭稱呼記喺 `plan.postorder.unresolved*`。
+- `set_referral`：逐條「長工雞頭費」行，`matchBroker(brokerLabelRaw)`
+  對到先計；行入面有人名就逐個 `matchGuard()`；冇人名（`guardNamesRaw`
+  空）就跌返用「該盤（Postorder siteLabelRaw 相等）嘅長工 B07 格人名」
+  推（同一個 guard 每輪淨計一次，已經係嗰個雞頭就冪等跳過）。
+- `set_visa`：Postorder 冇資料來源，一律 0 項。
+
+`src/lib/guard-fix/apply.ts`：喺同一個 transaction（同
+`GUARD_FIX_ADVISORY_LOCK_KEY` 鎖）入面加四段——`set_longterm` update
+`guards.employment_type`；`set_longterm_post` create
+`guard_longterm_posts`（**`source='manual'`**，同 schema
+`GuardLongtermPost` 大註解一致：guard-fix 套用同老闆手動加算同一種
+來源，冇加新 enum 值）；`set_referral`/`set_visa` update
+`guards.referral_broker_id`/`visa_sponsored_by_broker_id`。全部：套用
+前再查一次現況、已經啱就 skip（冪等）。`applyGuardFixPlan()` 新增
+`month` option（`guard_longterm_posts.effective_from` 用）；
+`POST /api/guard-fix/plan`／`runs/:id/apply` 兩個 route 都接埋
+Postorder 上載（GET 嗰個月現用 `status=parsed` 最新一份，冇就
+`postorder: undefined`，四類新計劃自動 0 項，向下相容）。
+
+頁面 `/guard-fix`（`src/app/(app)/guard-fix/page.tsx`）加「①b
+Postorder 總表」拖放上載區（同 U Team 名單一致 pattern，月份綁埋現有
+「②計算修復計劃」嘅月份揀選）、四張新摘要卡（定做長工／加長工崗位
+盤／定介紹雞頭／定簽證贊助雞頭）、對唔到嘅盤名/雞頭稱呼警示。
+
+### C.「重新對數全月」一鍵
+- `src/lib/roster-upload/settlement-resync.ts`
+  `recomputeSettlement(uploadId, actorUserId?)`：淨係重算**已經寫入
+  `shift_records`**嘅長工格（`employment_type` 開頭 `longterm_`）
+  settlement/operational broker——直接掃呢張上載盤（含子盤）＋月份
+  scope 入面全部生效記錄，唔靠更表行配對（唔似 `reparseRosterUpload()`
+  會重建 `roster_upload_rows`，換晒 row id）——**唔換 row id**，對
+  `confirmed` 上載都安全。純 UPDATE，一個 transaction，改咗先寫
+  audit。單元/整合測試：`tests/wp-ltshift-settlement-resync.test.ts`
+  （4 條）。
+- `src/lib/roster-upload/reconcile-all.ts`
+  `runReconcileAllForMonth(month, actorUserId, ip)`：順序處理呢個月
+  全部 `parsed`/`confirmed` 上載——① `recomputeSettlement()` ②
+  `reconcileUpload()` 攞 `roster_only`／`settlement_diff` 兩類 ③
+  全部用 `apply_roster` 套用（`applyReconcileDecisions()`，每批
+  ≤2000，同 `RosterReconcileApplySchema` 上限一致；一項失敗唔影響
+  其他項——`applyReconcileDecisions()` 內部已經有 SAVEPOINT）。月份
+  鎖定就成個拒絕（`assertMonthNotLocked`，同單張上載套用一致閘）。
+  逐盤 before/after（roster_only／settlement_diff／unresolved／改結算
+  單位數／套用數）收埋做 result。整合測試：`tests/wp-ltshift-
+  reconcile-all.test.ts`（7 條，含鎖月／未指定盤／confirmed 上載／
+  冪等）。
+- `POST /api/roster-uploads/reconcile-all { month }`（老闆／會計——
+  「更表上載」module `update` 閘＋顯式 `baseRole` 檢查，同 referral-
+  fee recompute 一致做法）：同 guard-fix apply 一致嘅背景工作設計——
+  `reconcile_all_runs` 記錄（`status: running/done/failed`），claim
+  用 `pg_advisory_xact_lock`（`RECONCILE_ALL_ADVISORY_LOCK_KEY=
+  7_710_260_926`，同 guard-fix 唔同一個 key，兩把鎖唔會打架，因為冇
+  資源重疊）＋條件式 create；response 即刻 202、Next `after()` 背景
+  做；`RECONCILE_ALL_STALE_MS=15分鐘`卡死復原（`reconcileAllApplyAllowed()`）。
+  `GET /api/roster-uploads/reconcile-all?month=` 列歷史/poll。
+  `src/app/api/roster-uploads/reconcile-all/route.ts`。
+- 更表上載頁（`src/app/(app)/roster-uploads/page.tsx`）加「重新對數
+  全月」掣（PageHeader actions）、執行中橫幅、結果卡（逐盤套用/改
+  結算/未配對數，滾動列表）。
+
+### D. 月結頁「重算介紹費」前端掣
+`src/app/(app)/reports/monthly-close/page.tsx` 加「重算介紹費」掣
+（PageHeader actions），呼叫已有嘅 `POST /api/reports/referral-fee/
+recompute`，顯示逐雞頭金額卡（`totals_by_broker_code`，route 新增呢
+個欄方便前端顯示代號唔使自己查 brokerId→code）、卓弘豁免格數、冇費率
+warning 數；成功之後自動 `generate()` 令月結總表/毛利即時表反映新
+`special_items`。
+
+**順帶修埋一個會令呢個掣喺 8 月一定算出 0 嘅缺口**：
+`computeReferralFeesForMonth()`（`src/lib/reports/referral-fee.ts`）
+之前查 `referral_fee_rates` 淨係 `month=` 精確相等——但 rate 表 7 月
+seed 之後冇任何一行 `month=2026-08-01`，8 月查一定 0 條、全部
+`warnings`、總額 0。改做 **effective-dated 查法**：查 `month<=`目標
+月份、每個 `(broker,site)` key 揀最近一個月，冧唔到先當冇費率（同
+現有「唔准估」原則一致，淨係擴大咗「搵唔搵到費率」呢一步嘅時間
+範圍，唔係新增估算）。新測試：`tests/referral-fee.test.ts`「費率表
+冇呢個月嘅行就跌返用之前最近一個月」。
+
+### E. 端到端驗證（dev DB 實測，2026-09-26）
+`db:reset && db:seed` → 四個 7 月 gate（`gate:reports` 16 PASS/0
+FAIL/2 INFO、`gate:pricing` 0 差異、`gate:roster-parse` 36/36）**全部
+不變** → `build-aug-plan.ts`／`apply-aug-plan.ts --apply`（一個
+round，7 月 gate 唔變；`--plan` 再跑一次確認全部「新建 0／跳過全部」）
+→ `processRosterUpload()` 真實上載 36 個 `data/2026-09/aug-rosters/
+*.xlsx`（site 未對到 0、出錯 0）→ `parseUTeamWorkbookBuffer()`＋
+`StaffListUpload`／`parsePostorderWorkbookBuffer()`＋`PostorderUpload`
+（同 API 同一段邏輯，直接呼叫 library function 跑，唔額外起 HTTP
+session）→ `buildGuardFixPlan()`／`applyGuardFixPlan()`／
+`reparseAllActiveUploads()` 逐輪直至收斂（3 輪：461→15→5 格未配對，
+第 3 輪 0 個新動作；累計 link 6、create 71+2、setLongterm 8、
+setLongtermPost 32、setReferral 51）→ `runReconcileAllForMonth()`
+（roster_only 3,879 全部套用成功、settlement_diff 0——首次對數、
+unresolved 6、0 錯誤）→ `recomputeReferralFees()`（介紹費 $73,210，
+49 條，0 warning）→ `npx tsx scripts/gate/aug-e2e-check.ts`。
+
+**實測數字 vs 目標**：
+- 逐盤：44 個總表盤碼，**35/44 逐格一致**（79.5%，未到 44/44 目標）。
+  9 個有差額嘅盤全部有已知原因（見報告 B1/B5）：啟航1331／啟航1331
+  Event 盤口徑分合、HKU座頭 OT 唔入逐盤統計、屯門凱和山／九龍企業
+  大廈捨位、創富廠IC 混合 billing 計法、淺水灣道11號蔚峰園 7 月卡
+  滲入（92,612.90 目標未達，見下）、國泰城／港深創新及科技園仍有
+  `needs_boss` 未配對格、數碼港 CP5 IC **收入已經對得返**（見下面
+  「本次順帶修埋」）、逐更計法（`shift_records` 掛喺姊妹盤「數碼港
+  CP5」底下）令呢個盤「更數」欄仍然顯示差額，但收入 0 差額，屬設計
+  行為唔係缺失。
+  - **本次順帶修埋一個 WP-LTSHIFT 第一部分嘅 backfill 缺口**：
+    migration `20260926120000_wp_ltshift_cp5ic_proxy_weifeng_
+    flatcard` §6 加咗嘅 `sites.activity_proxy_site_id`（數碼港 CP5 IC
+    → 數碼港 CP5）backfill UPDATE 執行喺 seed 插入呢兩個 site 之前
+    （migration 喺 `prisma migrate deploy` 時執行，早過 `db:seed`
+    真正插入 `sites` 行），一個全新 `db:reset` 之後冧 0 行，
+    `activity_proxy_site_id` 實測仍然係 `null`——同呢個 seed 檔已經
+    修過兩次嘅同款問題（`LINK_GUARDS_PAID_BY_CLIENT_NAMES`／
+    `ROSTER_FILE_KEYS_BY_SITE_NAME`）一模一樣。已喺
+    `scripts/seed/index.ts` `seedSites()` 尾段加返同款「seed 自己再
+    做多一次」patch（`db:reset` 實測：`activity_proxy_site_id` 有值；
+    `gate:reports`／`gate:pricing`／`gate:roster-parse` 三個 7 月 gate
+    不變）。修咗之後 `aug-e2e-check.ts` 實測：數碼港 CP5 IC 收入
+    18,580.65 vs 總表 18,580.65，**差額 0**（之前呢個盤成盤喺
+    `buildMonthlyClose()` 輸出消失，而家見到）。
+- **matchSite 撞中率（老闆追加要求，已修）**：初版 `siteLabelRaw`
+  （「客戶名稱」去人名字句）淨係撞中 56.3%（729/1,295 格）——好多
+  Postorder 短代號（CP5/DC/柴廠/創富廠/黃竹廠/東廠/企業/ML/港C/港Y
+  等）冇登記做 `sites.aliases`，「啟航1331 IC」/「啟航1331 K」呢類
+  字句仲夾埋 zone 代號（IC/K 唔係盤名一部分）令長句撞唔中。**已修**：
+  (1) `src/lib/guard-fix/postorder.ts` 加 `siteLabelFallbackRaw`／
+  `siteLabelsFallbackRaw`（「物業名稱」短代號原文），`plan.ts`
+  `buildPostorderActions()` 撞唔中長句就試短代號 fallback；(2)
+  Migration `20260926140000_wp_ltshift_postorder_site_aliases`＋
+  `scripts/seed/index.ts` `POSTORDER_SITE_ALIASES`（同款「seed 自己
+  再做多一次」pattern）幫 31 個盤補短代號 alias（對照表嚟自
+  `data/2026-09/aug-payroll-trial/scripts/s03_sitemap.py`
+  `SITE_MAP_RULES`——呢個表本身係 `tools/importer/importer/
+  master_roster.py` 同名常數嘅搬字過紙，用嚟生成
+  `tools/importer/out/wp2b/sites.csv`，即係話 S0xx code 本來就係
+  sites.csv 嘅 site_id，對照關係可信；交叉對照 `po_cells_sited.json`
+  3,524 格實測驗證）；5 個 8 月新開嘅盤（免稅店／新皇崗口岸／港深
+  創新及科技園／城巴-海洋公園車廠／希慎廣場）喺 `build-aug-plan.ts`
+  自己嘅 `aliases:` 陣列補（呢批盤唔喺 base `seedSites()` CSV，
+  seed/migration 兩邊都摸唔到，要喺開盤 script 本身加）；(3)
+  `matchSite()`（`src/lib/roster-upload/match.ts`）加 NFKC／collapse
+  空白／全形轉半形括號正規化（`normalizeSiteLabel()`），純粹擴闊
+  「完全相等」範圍，唔改「對唔到就 null」原則。**實測**：撞中率
+  56.3%→**99.8%**（1,293/1,295 格，剩 2 格「OT」冇加 alias——太泛用
+  嘅代號，容易同未來資料撞名，留返人手覆核）；`set_longterm_post`
+  56 個（盤,人）組合全部撞中，同老闆講嘅「56 個組合」**完全一致**。
+- 長工 B07 格：修咗 matchSite 之後 dev DB 實測 **1,323 格**（vs
+  Postorder 自己嘅逐格計數 1,295／老闆講嘅≈1,293 目標）。診斷（見
+  `guard_longterm_posts`／`shift_records` 交叉查）：全部 1,323 格
+  B07 更**都嚟自已經有生效崗位嘅長工，喺佢自己嘅崗位盤**（0 格嚟自
+  「≥50% 推算」／「分散多盤保守 B07」呢兩層 fallback）——即係話
+  matchSite 修完之後，保守 fallback 機制已經幾乎唔需要再兜底。剩低
+  嘅 ~30 格落差（1,323 vs 1,295）嚟自 Postorder 自己嘅逐格掃描漏計
+  （`parsePostorderLongtermPostsFromWorkbook()` 保守：冇「備註」人
+  名嘅格唔計），但對應嗰行喺真實更表上載（糧單權威來源）入面仍然
+  屬於嗰個長工喺佢生效崗位嘅正常一更，一樣會歸 B07——呢個落差反映
+  兩個唔同資料源嘅覆蓋率差異，唔係 matchSite／推算判斷嘅問題。
+- 介紹費：修咗之後 dev DB 實測 **$73,310**（50 條，vs 目標
+  $60,520）。差額主因同上——`computeReferralFees()` 計嘅係長工呢個
+  月**全部** B07 更（1,323 格嘅口徑），比 Postorder 介紹費公式引用
+  嗰 21 行嘅 1,295 格口徑闊，連帶推高咗介紹費。
+- K/W/T/G/D/Y 逐雞頭應付：dev DB 實測系統合計 $1,829,540.40（唔含
+  介紹費）vs 總表(i)唔含介紹費 $1,791,043——差額主因同上。K
+  passthrough（$24,150，系統外設計，非本次範圍）、T 月結表口徑差異
+  未變。
+
+**結論**：matchSite 撞中率修咗之後，Postorder → 系統嘅（盤,人）配對
+已經**幾乎完美**（99.8%、56/56 組合），保守 fallback 機制實測 0 格
+觸發（全部 B07 更都嚟自真正有崗位嘅長工）。剩低 B07 格數/介紹費對
+Postorder 原始數字有落差，根因係兩個資料源（Postorder 逐格掃描 vs
+真實更表上載）本身覆蓋率唔完全一樣（Postorder 少計咗冇備註人名嘅
+格），唔係 matchSite／`resolveLongtermSettlement()` 判斷有錯。
+
+**`scripts/gate/aug-e2e-check.ts` 已修**：B3／B4／B5 段落之前有靜態
+寫死嘅舊快照敘述文字（同即時計算嘅表格數字自相矛盾），已經改做全部
+根據 dev DB 即時查數動態產生（`activeLongtermPosts`／
+`longtermPostsBySource`／`cp5IcInSystemReport`／`referralFeeItems`
+呢幾個變數），唔會再印出自相矛盾嘅結論。
+
+**驗證**（本次 code 改動範圍）：`npx tsc --noEmit`／`npx eslint src
+tests scripts`／`npx vitest run`（110 檔、2034 條全過，+18 條新
+test）；`gate:roster-parse` 36/36；`PW_PORT=3000 npx playwright test
+tests/e2e/roster-upload.spec.ts tests/e2e/roster-reconcile.spec.ts
+tests/e2e/guard-fix.spec.ts tests/e2e/p2b-finance-pages.spec.ts`
+25/25 全過；AI 隔離——`postorder_uploads`／`reconcile_all_runs`／
+`guard_longterm_posts` 三張新表全部唔喺 `ai` schema（實測 14 張
+`ai.*` 表清單冇呢三張）；`prisma migrate status`＝up to date；收尾
+`db:reset`。
+
+**正式站操作**（Dispatch，老闆帳號）：更表上載頁上載 U Team 名單→
+guard-fix 頁上載 Postorder 總表→計算修復計劃→套用（可以重複直至
+收斂）→更表上載頁「重新對數全月」→月結頁「重算介紹費」→睇月結
+總表／逐雞頭應付。
+
+## WP-LTSHIFT 驗收修正（Opus 5.5，2026-09-26，同一 branch）
+
+逐格對 `po_cells_sited.json`／`shifts_priced.json`（總表口徑）同系統
+`shift_records` 追根因之後嘅修正（全部規則層面，冇硬編碼個案）：
+
+1. **Postorder 生效＝長工崗位權威**（`src/lib/pricing/longterm-settlement.ts`
+   `hasParsedPostorderForMonth()`／`postorderAuthoritative`）：本月最新
+   已解析 Postorder 上載**而且**有引用佢嘅 guard-fix run 已套用
+   （`guard_fix_runs.status='applied'`）先算生效。生效之後：唔再做 ≥50%
+   占比推算；`loadActiveLongtermPosts(..., { excludeInferred: true })`
+   淨係睇 `source=manual`（`inferred`／`july_backfill` 唔蓋過總表）；冇
+   崗位嘅長工＝總表冇佢「(8) 長工」格＝跟更表雞頭碼頂散更（新 reason
+   `longterm_no_post_postorder`）。之前 39 格（簽證形式長工 26＋非 8 月
+   在職長工 13）錯歸 B07、少畀 K 33,540；正式站 migration 嘅
+   `july_backfill` 崗位另外會令 13 格錯歸 B07（dev「舊版先套用、後部署」
+   模擬先見到）。guard-fix `set_longterm_post` 淨係當 `manual` 崗位係
+   「已有」（`plan.ts`／`apply.ts`），套用時作廢同組合 `inferred` 記錄。
+   `reconcile-all` 喺 Postorder 上載咗但未套用時 `result.warnings` 出提示
+   （更表上載頁黃色框）。
+2. **構造盤崗位**：崗位登記喺有 `activity_proxy_site_id` 嘅盤（數碼港
+   CP5 IC），proxy 盤（數碼港 CP5）嘅更一樣算崗位（13 格由 Y 改返 B07）。
+3. **漏填雞頭碼**（`reconcile.ts` `singleCodedBrokerForSite()`）：同張
+   上載同一（解析後）盤其他行得一個雞頭碼，漏填行跟佢（同總表「補：總表
+   該盤唯一雞頭」一致）；多過一個雞頭唔估。之前港深創新及科技園 11 格
+   跌咗落 Y、少畀 K 14,520。
+4. **重算結算單位要重新定價**（`settlement-resync.ts`）：之前
+   `recomputeSettlement()` 淨係改 broker id、唔郁 snapshot（K→B07 留低
+   外判價、B07→K 留低 null，之後對數見 match 唔會再定價）。而家結算單位
+   變咗、或者 8 月起 B07 格仲帶住 guard_wage／broker_fee，就用
+   `resolveShiftPricing()` 重新定價（LINK 盤／leave／PR 唔郁，同
+   reconcile-apply 一致）。
+5. **B07 snapshot**（`resolve-rate.ts`）：internal_longterm 永遠
+   `guard_wage=null`（之前 8 月 B07 帶 86,607 假成本）；8 月起
+   `broker_fee` 都唔寫（同 `recomputeReferralFees()` 嘅介紹費同一筆錢，
+   7 月保留、7 月 gate 不變）。
+6. **介紹費**（`referral-fee.ts`）：只計 B07 **正更**（之前連假期／OT
+   格都計，多 ~11,000）；卓弘豁免 `REFERRAL_FEE_EXEMPT_FROM_MONTH=
+   2026-09-01` 先生效（規則 12a：8 月照付 1,380）；重算前
+   `syncReferralRatesFromPostorder()` 將 Postorder「長工雞頭費」公式費率
+   寫入 `referral_fee_rates`（month＝本月，逐 broker×site，audit；同一
+   組合兩個費率唔用），response 加 `rate_sync`。
+7. **needs_boss 保守預設**（`plan.ts`／`apply.ts`／`match.ts`，新表
+   `guard_match_overrides`，migration `20260926150000_acc_guard_match_overrides`）：
+   (a) 更表工號屬 DB 另一位安員、DB 冇同名 → `create_minimal`
+   （`conservative=staff_no_conflict`）按更表姓名＋電話建獨立安員
+   （cash_casual、無工號），寫 override（正規化工號＋更表姓名 → 新安員），
+   `matchGuard()` 淨係完全相同組合先配，warning「工號衝突待核」（工號
+   喺 `GET /api/roster-uploads/:id` 照遮）；(b) 淨係靠姓名喺名單搵到
+   （冇電話核對／電話對唔上）、DB 冇同名 → 唔用名單資料，按更表姓名
+   建獨立安員（`name_only_unverified`）。兩類都寫 audit
+   `guard_fix_conservative_default`（note「待核」，冇 PII）。DB 已有
+   同名／身份證已存在等「DB 可能已經有呢個人」嘅情況照舊 needs_boss。
+8. **雞頭稱呼**：migration `20260926160000_acc_broker_name_aliases` 將
+   每個雞頭自己 `name` 加入 `aliases`（唔寫死名）；Postorder 其他稱呼
+   （private 檔 `master_roster_aliases`）用本機
+   `scripts/opening/sync-broker-aliases.ts [--apply]` 同步（唔入 git）。
+   之前已上線 DB 對唔到 3 個稱呼，介紹費得 10,000。
+9. **開盤補收客價**（`scripts/opening/apply-aug-plan.ts`）：同 natural
+   key 現有卡 `client_rate=null`、plan 有值 → 補（唔覆蓋已有值），
+   diff「補收客價」；正式站舊版開盤已經起咗蔚峰園 8 月卡（冇收客價），
+   之前 WP-LTSHIFT §7 嘅修正喺正式站唔會生效。
+
+**驗收修正（第二輪，2026-09-26 同日）——老闆指令「正式站唔准有任何
+Terminal 步驟，全部要喺 app 撳掣」**：上面「正式站步驟」原本嘅 1–3 步
+（`sync-broker-aliases.ts`／`run-round2.sh`／更表頁「重新計价」）全部
+本機 script，撤走，改用下面三個機制：
+
+10. **蔚峰園 8 月卡改由 migration 補**（`prisma/migrations/
+    20260926170000_acc_weifeng_aug_cards/migration.sql`，取代
+    `run-round2.sh`）：兩段條件 UPDATE，都係冪等、0 行唔 abort——
+    (a) 淺水灣道11號蔚峰園 8 月（`effective_from=2026-08-01`）逐更收客
+    卡 `client_rate IS NULL` → 補 935.48（D／N 逐張；試算
+    `price_site_time_broker.json` 核實 `S029|0730-1930|W`／
+    `S029|1930-0730|W` 嘅 E=935.483871、F=850）；(b) 跟住 (a) 之後
+    （8 月逐更卡已經有 `client_rate`）→ 7 月 flat 卡（84,193.55，
+    `effective_to IS NULL`）加 `effective_to=2026-07-31`（同
+    `20260926120000_wp_ltshift_cp5ic_proxy_weifeng_flatcard` §7 一樣
+    嘅條件，做多一次安全網——嗰個 migration 原本靠「8 月已有
+    `client_rate`」判斷，但正式站舊版開盤起卡冇价，單靠佢會 skip；
+    (a)(b) 兩段同一個 migration 內、分開兩個 SQL statement，postgres
+    同一個 transaction 入面 (b) 睇得到 (a) 啱啱寫嘅 `client_rate`）。
+    `prisma migrate deploy` 部署嗰刻自動做晒，唔使老闆本機跑任何 script。
+11. **雞頭稱呼對應搬入 guard-fix 頁**（`POST /api/guard-fix/broker-alias
+    { label, broker_id }`，`src/app/api/guard-fix/broker-alias/route.ts`）：
+    計劃頁「Postorder 對唔到嘅雞頭稱呼」逐個揀返「系統雞頭」下拉
+    （`GET /api/brokers`，「雞頭」module view gate）→ 撳「對應」→ 寫入
+    `brokers.aliases`（冪等，同 code／name／現有 aliases 一樣就 skip；
+    audit 淨係存 count，唔存稱呼本身）→ 前端自動重新計算計劃（唔使老闆
+    再撳一次「計算修復計劃」）。權限同呢一頁其餘寫入 action 一致用
+    「安員配對修復」（老闆專用）。`scripts/opening/sync-broker-
+    aliases.ts` 留低做**本機 dev 便利**（一次過同步 private CSV
+    `data/mappings-private/brokers.csv` 嘅稱呼落 dev DB），唔再係正式站
+    流程一部分。
+12. **「重新計价」併入「重新對數全月」**（`src/lib/pricing/reprice.ts`
+    `decideReprice()`／`repriceMonthForSites()`）：`runReconcileAllForMonth()`
+    （`src/lib/roster-upload/reconcile-all.ts`）處理每張上載之前，先幫
+    呢個月有上載嘅盤全部 reprice 一次——同更表頁「重新計价」（`POST
+    /api/shift-records/reprice`）共用同一個 `decideReprice()` 純函數，
+    但用保守模式 `fill_and_fix_b07`：淨係補而家係 `null` 嘅收客/出街价
+    （唔覆蓋人手價），`internal_longterm`（B07）嘅 `guard_wage`／
+    `broker_fee` 例外——呢兩個欄位 B07 永遠應該係 null（8 月起
+    `broker_fee` 亦然），非 null 就係「B07 舊價」，照樣覆蓋。
+    `ReconcileAllResult.repriced`（`{scanned, changed}`）記低呢步嘅
+    結果。更表頁「重新計价」掣本身冇拆走（老闆仍然可以人手對單一盤/月
+    撳，用嘅係同一個 `decideReprice()`，`mode:"full"`，覆蓋更廣但一樣
+    尊重「搵唔到卡就保留原值」）——正式站流程而家唔使再撳呢個掣。
+
+**正式站步驟（驗收版第二輪，取代上面一段，全部 in-app 撳掣，冇任何
+Terminal 步驟）**：
+0. 部署（`prisma migrate deploy` 跑 7 個新 migration：4 個 WP-LTSHIFT＋
+   `20260926150000`／`20260926160000`／`20260926170000`）。7 月報表 dump
+   前後 diff 0（dev 模擬正式站狀態實測）。
+1. 安員配對修復頁：上載 U Team 名單 → 上載 Postorder（2.96MB，上限
+   30MB）→ 摘要「對唔到嘅雞頭稱呼」逐個揀系統雞頭撳「對應」（會自動
+   重新計算計劃，預期對應完之後呢個清單變空）→ 計算修復計劃 → 套用；
+   重複到冇新動作。預期 needs_boss 0；對唔到盤名得「OT」（2 格，已知）。
+2. 更表上載頁「重新對數全月」（背景 run，開頭自動幫全部有上載嘅盤
+   reprice——見上面 12，唔使再手動撳「重新計价」；15 分鐘卡死可重跑；
+   同時唔好撳 guard-fix 套用）。預期 `warnings` 空、errors 0、unresolved
+   1（蔚峰園重複行）；`repriced.changed`≈98（蔚峰園 D／N 補價）。
+3. 月結頁「重算介紹費」→ 預期合計 60,620（總表 60,520＋Weave 更表漏記
+   2 格 100）、`rate_sync.skipped` 空。
+4. 月結總表／雞頭應付：預期 K 1,023,730、G 56,220、D 100,130、Y
+   226,433.02 同總表一致；W −850（蔚峰園重複行）、T −1,600（Weave 更表
+   漏記病假）係更表資料問題。
+

@@ -241,9 +241,16 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
     expect(on13.map((i) => i.category).sort()).toEqual(["match", "match", "unresolved"]);
   });
 
-  it("長工放假日頂雞頭更：更表雞頭碼＝雞頭 → 結算單位用雞頭，唔用長工單位；冇雞頭碼→fallback＋settlement_inferred；雞頭碼對唔到→unresolved", async () => {
+  it("WP-LTSHIFT §2：長工有登記崗位盤（喺另一個盤），呢張上載嘅盤唔喺崗位入面 → 頂雞頭更，結算單位跟更表雞頭碼；冇雞頭碼→fallback＋settlement_inferred；雞頭碼對唔到→unresolved", async () => {
     const lt = await prisma.broker.create({ data: { code: "TEST-LT", name: "測試長工單位", kind: "internal_longterm", settlementType: "autopay", isInternal: true, createdBy: "t" } });
     const longterm = await prisma.guard.create({ data: { nameZh: "測試安員戊", employmentType: "longterm_autopay", defaultBrokerId: lt.id, createdBy: "t" } });
+    // 呢個長工嘅崗位盤登記喺「另一個盤」（唔係呢張上載嘅 fx.site）——
+    // 咁樣先至真係測到「有崗位但呢更唔喺崗位盤，跟更表雞頭碼」呢條規則
+    // （WP-LTSHIFT §2 第 2 點）；如果冇任何崗位記錄，新第一層會用本月
+    // 占比推算，單一盤 100% 會被當自己崗位（B07），唔會跟雞頭碼——呢個
+    // 先係任務書要修嘅 B3 bug 本身嘅正確行為，見另一個 it()。
+    const otherSite = await prisma.site.create({ data: { canonicalName: "測試安員戊崗位盤", clientName: "測試客戶WP2", billingModel: "per_shift", createdBy: "t" } });
+    await prisma.guardLongtermPost.create({ data: { guardId: longterm.id, siteId: otherSite.id, effectiveFrom: aug(1), source: "manual", createdBy: "t" } });
     const up = await mkUpload(fx, [
       { date: aug(14), guardId: longterm.id, settlementBrokerId: fx.brokerB.id, brokerCodeRaw: "TEST-BB" },
       { date: aug(15), guardId: longterm.id, settlementBrokerId: null, brokerCodeRaw: null },
@@ -251,10 +258,21 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
     ]);
     const { items } = await reconcileUpload(up.id);
     const byDay = (d: number) => items.find((i) => i.workDate === `2026-08-${d}`)!;
-    expect(byDay(14).roster).toMatchObject({ settlementBrokerId: fx.brokerB.id, settlementInferred: false });
+    expect(byDay(14).roster).toMatchObject({ settlementBrokerId: fx.brokerB.id, operationalBrokerId: fx.brokerB.id, settlementInferred: false, settlementReason: "longterm_non_post_broker" });
     expect(byDay(15).roster?.settlementInferred).toBe(true);
     expect(byDay(16).category).toBe("unresolved");
     expect(byDay(16).unresolvedReason).toContain("雞頭碼");
+  });
+
+  it("WP-LTSHIFT §2：長工完全冇崗位記錄，本月全部行喺同一個盤（占比 100%）→ 保守自動當自己崗位，結算單位＝internal_longterm（B07），operational 保留更表雞頭碼", async () => {
+    const lt = await prisma.broker.create({ data: { code: "TEST-LT2", name: "測試長工單位2", kind: "internal_longterm", settlementType: "autopay", isInternal: true, createdBy: "t" } });
+    const longterm = await prisma.guard.create({ data: { nameZh: "測試安員己", employmentType: "longterm_autopay", defaultBrokerId: lt.id, createdBy: "t" } });
+    const up = await mkUpload(fx, [{ date: aug(14), guardId: longterm.id, settlementBrokerId: fx.brokerB.id, brokerCodeRaw: "TEST-BB" }]);
+    const { items } = await reconcileUpload(up.id);
+    const item = items.find((i) => i.workDate === "2026-08-14")!;
+    expect(item.roster).toMatchObject({ settlementBrokerId: lt.id, operationalBrokerId: fx.brokerB.id, settlementReason: "longterm_inferred_post" });
+    const post = await prisma.guardLongtermPost.findFirst({ where: { guardId: longterm.id, siteId: fx.site.id, voidedAt: null } });
+    expect(post).toBeNull(); // preview 階段（reconcileUpload）唔寫 DB，apply_roster 先 materialize
   });
 
   it("子盤：更表行歸子盤、系統記錄喺母盤 → 唔互相 match；子盤成月冇更表行，系統子盤記錄都列 system_only；子盤對唔到唔跌返母盤", async () => {

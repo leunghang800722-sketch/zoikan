@@ -83,6 +83,8 @@ async function main() {
     // WP-MIXED-BILLING：7 月卡加 effective_to（老闆 2026-09-24 批准嘅唯一
     // 7 月卡改動）——用 `.update`（唔係 `.create`），skip 入 `.skip`。
     rateCardsCloseJuly: emptyDiff(),
+    // 驗收（Opus 5.5）：同 natural key 現有卡 client_rate=null、plan 有值 → 補。
+    rateCardsFillClient: emptyDiff(),
     guards: emptyDiff(),
   };
 
@@ -259,8 +261,12 @@ async function main() {
     const rateCardKey = (c: { siteId: string; shiftTypeId: string | null; brokerId: string | null; guardId: string | null; effectiveFrom: Date }) =>
       `${c.siteId}|${c.shiftTypeId ?? ""}|${c.brokerId ?? ""}|${c.guardId ?? ""}|${c.effectiveFrom.toISOString().slice(0, 10)}`;
     const existingRateCardKeys = new Set<string>();
-    for (const c of await tx.rateCard.findMany({ where: { voidedAt: null }, select: { siteId: true, shiftTypeId: true, brokerId: true, guardId: true, effectiveFrom: true } })) {
+    // 驗收（Opus 5.5）：同一 natural key 已有卡嗰陣要知佢 client_rate 係咪 null
+    // （見下面「補收客價」）。
+    const existingRateCardByKey = new Map<string, { id: string; clientRate: unknown }>();
+    for (const c of await tx.rateCard.findMany({ where: { voidedAt: null }, select: { id: true, siteId: true, shiftTypeId: true, brokerId: true, guardId: true, effectiveFrom: true, clientRate: true } })) {
       existingRateCardKeys.add(rateCardKey(c));
+      existingRateCardByKey.set(rateCardKey(c), { id: c.id, clientRate: c.clientRate });
     }
 
     async function ensureRateCard(cp: NewRateCardPlan) {
@@ -316,6 +322,22 @@ async function main() {
 
       const natKey = rateCardKey({ siteId, shiftTypeId, brokerId, guardId, effectiveFrom });
       if (existingRateCardKeys.has(natKey)) {
+        // 驗收（Opus 5.5，2026-09-26）：正式站舊版開盤已經起咗同一張卡、但當時
+        // 「flat 收入盤唔起逐更收客」規則 strip 咗 client_rate（例：淺水灣道11號
+        // 蔚峰園，WP-LTSHIFT §7 先剔走）——natural key 唔含 client_rate，之前
+        // 會當「已存在」skip，令 8 月逐更收客卡永遠起唔到、7 月 flat 卡亦因為
+        // 搵唔到替代卡而唔加到期（dev 模擬「舊版先開盤、後部署」實測）。
+        // 淨係**補 null**（現有卡 client_rate 係 null、plan 有值），唔覆蓋已有值。
+        const existingCard = existingRateCardByKey.get(natKey);
+        if (existingCard && existingCard.clientRate === null && cp.clientRate !== null) {
+          diffs.rateCardsFillClient.update.push(`${label}（現有卡冇收客價，補 ${cp.clientRate}）`);
+          if (PLAN_ONLY) return;
+          const before = await tx.rateCard.findUniqueOrThrow({ where: { id: existingCard.id } });
+          const updated = await tx.rateCard.update({ where: { id: existingCard.id }, data: { clientRate: cp.clientRate, note: [before.note, "[驗收 Opus 5.5] 補收客價（舊版開盤 strip 咗）"].filter(Boolean).join("\n") } });
+          existingCard.clientRate = updated.clientRate;
+          await writeAuditTx(tx, { actorUserId: null, tableName: "rate_cards", rowId: updated.id, action: "update", before: { clientRate: null }, after: { clientRate: updated.clientRate }, ip: null });
+          return;
+        }
         diffs.rateCards.skip.push(label);
         return;
       }
@@ -527,6 +549,8 @@ async function main() {
   console.log(`\n=== 價目卡 === 新建 ${diffs.rateCards.create.length}／跳過 ${diffs.rateCards.skip.length}`);
   // Opus 5.5 驗收：「已存在」以外嘅跳過（盤／更種／雞頭／U 號搵唔到）要印出嚟，唔可以靜靜哋少起卡。
   for (const s of diffs.rateCards.skip.filter((x) => x.includes("（") || x.includes("搵唔到"))) console.log(`  ! skip：${s}`);
+  console.log(`=== 價目卡（補收客價，現有卡 client_rate 空）=== 改 ${diffs.rateCardsFillClient.update.length}`);
+  for (const s of diffs.rateCardsFillClient.update) console.log(`  ~ ${s}`);
   console.log(`=== 價目卡（7 月卡加 effective_to，老闆 2026-09-24 批）=== 改 ${diffs.rateCardsCloseJuly.update.length}／跳過 ${diffs.rateCardsCloseJuly.skip.length}`);
   for (const s of diffs.rateCardsCloseJuly.update) console.log(`  ~ ${s}`);
   for (const s of diffs.rateCardsCloseJuly.skip) console.log(`  ! skip：${s}`);

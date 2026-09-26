@@ -139,7 +139,11 @@ async function upsertRosterShiftRecord(
   const data = {
     siteId: roster.siteId,
     settlementBrokerId: roster.settlementBrokerId,
-    operationalBrokerId: roster.settlementBrokerId,
+    // WP-LTSHIFT（§2）：長工做自己崗位嘅更，settlement=B07（人工月薪
+    // 覆蓋）但 operational 保留更表雞頭碼（總表成本桶）——`roster.
+    // operationalBrokerId` 冇值（唔係長工格，或者舊上載未 reparse）就
+    // 跌返 settlementBrokerId，同舊行為一致。
+    operationalBrokerId: roster.operationalBrokerId ?? roster.settlementBrokerId,
     recordType,
     leaveCode: isLeave ? (roster.leaveCode as never) : null,
     otHours: recordType === "ot" ? (roster.hours ?? null) : null,
@@ -230,7 +234,7 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
   const month = toMonthStart(upload.month);
   await assertMonthNotLocked({ workDate: month, actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
 
-  const { items } = await reconcileUpload(params.uploadId);
+  const { items, inferredLongtermPosts } = await reconcileUpload(params.uploadId);
   const itemsByKey = new Map(items.map((i) => [i.key, i]));
 
   const ctx = await loadWriteContext(params.uploadId, upload.version, items, params.ip);
@@ -314,14 +318,49 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
     }
   }
 
+  // WP-LTSHIFT（§2）：本次對數推算出嚟嘅長工崗位盤（guardId ->
+  // {siteId, ratio}）——淨係呢個 guard 實際有格喺呢次 apply_roster 成功
+  // 寫入先至 materialize（唔係「呢張上載出現過就一定建」，避免例如全部
+  // 決定其實揀咗 keep_system 都幫佢建咗個崗位）。
+  const appliedLongtermGuardIds = new Set<string>();
+
   await prisma.$transaction(
     async (tx) => {
       // 正更/leave/system_only(cancel)/settlement_diff 先寫，OT 後寫（等
       // parent_shift_id 搵得到啱先寫低嘅正更）。
       for (const plan of [...shiftPlans, ...otPlans]) {
         const r = await runItem(tx, (audits) => applyOneRosterAction(tx, ctx, plan, params.actorUserId, audits));
-        if (r.ok) results.push({ key: plan.input.key, category: plan.item.category, action: "apply_roster", ok: true, shiftRecordIds: r.value });
-        else results.push({ key: plan.input.key, category: plan.item.category, action: "apply_roster", ok: false, error: p2002Message(r.err) });
+        if (r.ok) {
+          results.push({ key: plan.input.key, category: plan.item.category, action: "apply_roster", ok: true, shiftRecordIds: r.value });
+          const guardId = plan.item.roster?.guardId;
+          if (guardId && inferredLongtermPosts.has(guardId)) appliedLongtermGuardIds.add(guardId);
+        } else results.push({ key: plan.input.key, category: plan.item.category, action: "apply_roster", ok: false, error: p2002Message(r.err) });
+      }
+      // WP-LTSHIFT（§2）：materialize 推算崗位——upsert 前先查有冇已經
+      // 生效嘅崗位（可能上一輪 apply 或者人手已經加咗），有就唔重複建
+      // （冪等，第二次跑同一批 apply 0 新增）。
+      for (const guardId of appliedLongtermGuardIds) {
+        const inferredPost = inferredLongtermPosts.get(guardId);
+        if (!inferredPost) continue;
+        await runItem(tx, async (audits) => {
+          const existingActive = await tx.guardLongtermPost.findFirst({
+            where: { guardId, siteId: inferredPost.siteId, voidedAt: null },
+            select: { id: true },
+          });
+          if (existingActive) return;
+          const created = await tx.guardLongtermPost.create({
+            data: {
+              guardId,
+              siteId: inferredPost.siteId,
+              effectiveFrom: month,
+              effectiveTo: null,
+              source: "inferred",
+              note: `由 ${month.toISOString().slice(0, 7)} 更表上載對數推算（占比 ${(inferredPost.ratio * 100).toFixed(0)}%），見 WP-LTSHIFT`,
+              createdBy: params.actorUserId,
+            },
+          });
+          audits.push({ tableName: "guard_longterm_posts", rowId: created.id, action: "create", after: created });
+        });
       }
       for (const { input, item } of decisionPlans) {
         const r = await runItem(tx, async (audits) => {
@@ -407,7 +446,7 @@ async function applyOneRosterAction(tx: Tx, ctx: WriteContext, plan: Plan, actor
         where: { id: system.id },
         data: {
           settlementBrokerId: roster.settlementBrokerId,
-          operationalBrokerId: roster.settlementBrokerId,
+          operationalBrokerId: roster.operationalBrokerId ?? roster.settlementBrokerId, // WP-LTSHIFT §2：長工格保留雞頭碼做成本桶
           source: "roster_upload",
           provenance: { upload_id: ctx.uploadId, row_id: roster.rowId, version: ctx.uploadVersion } as unknown as Prisma.InputJsonValue,
           // plan.pricing=null：LINK 盤／PR 佔位／非正更——保留現有 snapshot。

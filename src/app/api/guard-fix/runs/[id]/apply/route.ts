@@ -32,6 +32,7 @@ import { NotFound, Conflict } from "@/lib/api/errors";
 import { applyGuardFixPlan, reparseAllActiveUploads, GUARD_FIX_ADVISORY_LOCK_KEY } from "@/lib/guard-fix/apply";
 import { buildGuardFixPlan, summarizePlan } from "@/lib/guard-fix/plan";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
+import { parsePostorderWorkbookBuffer } from "@/lib/guard-fix/postorder";
 import { APPLY_STALE_MS, applyAllowed } from "@/lib/guard-fix/view";
 import type { GuardFixPlan } from "@/lib/guard-fix/types";
 
@@ -45,7 +46,7 @@ async function performApply(runId: string, actorUserId: string): Promise<void> {
   if (!run) return; // 冇 DELETE route，理論上唔會發生
   const plan = run.planJson as unknown as GuardFixPlan;
   try {
-    const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 1_800_000 });
+    const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 1_800_000, month: run.month });
     const reparse = await reparseAllActiveUploads(prisma, run.month, { txTimeoutMs: 600_000 });
     const resultJson = { diffs, reparse } as unknown as Prisma.InputJsonValue;
 
@@ -61,6 +62,10 @@ async function performApply(runId: string, actorUserId: string): Promise<void> {
         linkProcessed: diffs.link.create.length,
         createProcessed: diffs.create.create.length,
         createMinimalProcessed: diffs.createMinimal.create.length,
+        setLongtermProcessed: diffs.setLongterm.create.length,
+        setLongtermPostProcessed: diffs.setLongtermPost.create.length,
+        setReferralProcessed: diffs.setReferral.create.length,
+        setVisaProcessed: diffs.setVisa.create.length,
         totalBefore: reparse.totalBefore,
         totalAfter: reparse.totalAfter,
       },
@@ -73,7 +78,11 @@ async function performApply(runId: string, actorUserId: string): Promise<void> {
       const staffList = await prisma.staffListUpload.findUnique({ where: { id: run.staffListUploadId } });
       if (staffList) {
         const uTeamRows = await parseUTeamWorkbookBuffer(Buffer.from(staffList.fileBytes));
-        const nextPlan = await buildGuardFixPlan({ prisma, month: run.month, uTeamRows });
+        const postorderUpload = run.postorderUploadId ? await prisma.postorderUpload.findUnique({ where: { id: run.postorderUploadId } }) : null;
+        const postorder = postorderUpload
+          ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderWorkbookBuffer(Buffer.from(postorderUpload.fileBytes))) }
+          : undefined;
+        const nextPlan = await buildGuardFixPlan({ prisma, month: run.month, uTeamRows, postorder });
         const nextSummary = summarizePlan(nextPlan);
         await prisma.guardFixRun.create({
           data: {

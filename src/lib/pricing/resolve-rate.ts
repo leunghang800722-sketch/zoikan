@@ -21,6 +21,13 @@
 import { prisma } from "@/lib/db";
 import { n } from "@/lib/reports/money";
 
+/** 驗收（Opus 5.5）：由呢日起長工介紹費改由 `src/lib/reports/referral-fee.ts`
+ * `recomputeReferralFees()` 自動計（同 `REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH`
+ * 一致；resolver 唔 import reports 層，避免拉埋 exceljs）。**export**
+ * 俾 `src/lib/pricing/reprice.ts`（reconcile-all 自動 reprice）共用同一個
+ * 分界日，避免兩處各自寫一次呢個日期拗開。 */
+export const LONGTERM_REFERRAL_AUTOCOMPUTE_FROM = new Date("2026-08-01T00:00:00.000Z");
+
 export type BrokerKindLike = "broker" | "internal_cash" | "internal_longterm" | "external" | "special" | null;
 
 export type ShiftPricingRecordType = "shift" | "leave" | "ot";
@@ -304,10 +311,32 @@ export function resolveShiftPricingFromCards(cards: RateCardLite[], input: Resol
   // 經呢張卡出糧），要照跑落面嘅出街价 payout 揀卡（同正常路徑一樣），
   // 搵唔到卡先至當「冇出街价」（unpriced 依然 false——longterm 本身
   // 「冇出街价」屬正常，唔係缺价）。
+  // 驗收（Opus 5.5，2026-09-26）：長工自己崗位更（B07）**永遠冇
+  // guard_wage**——人工由月薪 autopay 覆蓋（總表 B07 payout_rate=0）。
+  // 之前照用揀中張卡嘅 guard_wage：8 月盤卡／逐人卡好多係「唔分雞頭」
+  // 嘅外判價，令 B07 更帶住 86,607 嘅假成本（7 月 B07 guard_wage 全部
+  // null，所以 7 月冇呢個問題，gate:pricing 不變）。broker_fee（雞頭純
+  // 介紹費）照舊保留。
+  //
+  // 同理 broker_fee：7 月嗰批「B07 更掛雞頭純介紹費」（卡上 broker_fee，
+  // 例：T Weave 50／更）同 8 月起 `recomputeReferralFees()` 自動計嘅
+  // special_items(kind=referral_fee) 係同一筆錢（費率一模一樣），8 月起
+  // 再寫落 B07 更就重複計（8 月 dev 實測 B07 帶 7,240，總表 B07＝0）。
+  // 7 月保留（7 月 gate 不變、7 月介紹費係人手 seed）。
   if (input.brokerKind === "internal_longterm") {
     const payout = resolvePayoutFromCards(cards, ctx);
     if (payout) source.payoutCardId = payout.cardId;
-    return { clientRate, guardWage: payout?.guardWage ?? null, brokerFee: payout?.brokerFee ?? null, source, unpriced: false, reason: "longterm", clientCardFound, payoutCardFound: payout !== null };
+    const referralAutoMonth = toUtcDateOnly(input.workDate) >= LONGTERM_REFERRAL_AUTOCOMPUTE_FROM.getTime();
+    return {
+      clientRate,
+      guardWage: null,
+      brokerFee: referralAutoMonth ? null : (payout?.brokerFee ?? null),
+      source,
+      unpriced: false,
+      reason: "longterm",
+      clientCardFound,
+      payoutCardFound: payout !== null,
+    };
   }
   if (!input.settlementBrokerId) {
     return { clientRate, guardWage: null, brokerFee: null, source, unpriced: true, reason: "no_broker", clientCardFound, payoutCardFound: false };

@@ -150,9 +150,23 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 係乜）完全冇被呢個「零活動」閘擋住——依家一律計「呢個盤呢個月係咪
     // 有非 cancelled 記錄」，唔理 site.billingModel 係邊種，逐個 site 都查
     // （呢個 route 本身就已經逐 site 打緊幾次 DB，加呢條唔算加新瓶頸量級）。
+    // WP-LTSHIFT（老闆 2026-09-26 §6）：`activity_proxy_site_id`——純月費
+    // 構造盤（例：「數碼港 CP5 IC」）自己 0 條 shift_records，但同一
+    // 「業務」實質活動記喺另一個盤（「數碼港 CP5」）。純憑呢個盤自己冇
+    // 記錄就當「完全冇活動」隱藏咗佢，會令總表有嘅 18,580.65 喺系統
+    // 度消失（同總表核對唔到）；但淨係憑「盤有 flat 卡」就當有活動又會
+    // 打崩返上面 M2/WP-AI3 嗰條防「假營業額」閘嘅原意（未開業月份唔應該
+    // 憑張卡就計出營業額）。所以：查埋 `activity_proxy_site_id` 嗰個盤
+    // 呢個月有冇記錄，兩者其一有就當有活動——`activity_proxy_site_id`
+    // 係老闆／盤管理頁顯式設定嘅 FK（唔係憑字串估），淨係 CP5 IC 呢類
+    // 已知嘅「構造盤」先會有值，唔會影響其他盤嘅閘。
+    const proxySiteId = site.activityProxySiteId;
     const hasAnyRecordThisMonth =
       (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } })) > 0 ||
-      (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0;
+      (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0 ||
+      (proxySiteId !== null &&
+        ((await prisma.shiftRecord.count({ where: { siteId: proxySiteId, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } })) > 0 ||
+          (await prisma.dailyRequirement.count({ where: { siteId: proxySiteId, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0));
 
     // WP-PRICE（老闆 2026-09-16 拍板）bug fix：rate_cards 伸長做無限期
     // （見 prisma/migrations/20260916000000_extend_rate_cards_open_ended）

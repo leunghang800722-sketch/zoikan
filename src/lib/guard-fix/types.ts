@@ -11,7 +11,15 @@
  * tel_raw 組合）覆核之後嘅決定。`identityLabel` 純粹俾 plan.json 內部
  * 對照用（唔係識別碼意義上嘅敏感值，但都係姓名，一樣淨係存喺呢個
  * gitignored 檔案）。 */
-export type GuardFixActionKind = "link" | "create" | "create_minimal" | "needs_boss";
+export type GuardFixActionKind =
+  | "link"
+  | "create"
+  | "create_minimal"
+  | "needs_boss"
+  | "set_longterm"
+  | "set_longterm_post"
+  | "set_referral"
+  | "set_visa";
 
 export interface GuardFixCellRef {
   /** 盤名（`sites.canonical_name`，搵唔到就用檔內盤名原文）——plan-
@@ -70,6 +78,14 @@ export interface CreateMinimalAction {
   tel: string | null;
   defaultBrokerCode: string;
   reason: string;
+  /** 驗收（Opus 5.5，2026-09-26）：老闆指令「唔准留要老闆決定」——以前
+   * needs_boss 嘅兩類改做保守預設（按更表姓名建獨立安員、cash_casual、
+   * 無工號）：`conservative` 標明呢個係保守預設（待核），唔係名單／DB
+   * 搵唔到嘅普通 needs_hr。`matchOverrideStaffNo`：更表工號屬 DB 另一位
+   * 安員嘅情況，套用時順手寫 `guard_match_overrides`（呢個工號＋更表
+   * 姓名 → 新安員），reparse 先配得返。optional：舊 plan.json 冇呢兩欄。 */
+  conservative?: "staff_no_conflict" | "name_only_unverified";
+  matchOverrideStaffNo?: string | null;
 }
 
 export interface NeedsBossAction {
@@ -80,7 +96,65 @@ export interface NeedsBossAction {
   candidateGuardIds: string[];
 }
 
-export type GuardFixAction = LinkAction | CreateAction | CreateMinimalAction | NeedsBossAction;
+// -----------------------------------------------------------------------
+// WP-LTSHIFT §19 交付 B：由 Postorder 上載解析嚟嘅四類計劃。同上面
+// link/create 一樣「唔准估」——對唔到 guard／site／broker 就唔會出呢類
+// action，留低 ≥50% 推算／保守 B07 fallback（見
+// `src/lib/pricing/longterm-settlement.ts`）處理，唔喺呢度屈估。
+// -----------------------------------------------------------------------
+
+export interface SetLongtermAction {
+  type: "set_longterm";
+  seq: string;
+  guardId: string;
+  /** 呢個安員喺 Postorder 撞中幾多個「(8) 長工」格（跨盤合計）——
+   * plan-summary 可以印（唔係 PII）。 */
+  cellCount: number;
+  /** 套用前嘅 employment_type（`cash_casual`先會被改；已經係
+   * longterm_* 嘅唔使改，唔會出現喺呢個 action）。 */
+  fromEmploymentType: string;
+  reason: string;
+}
+
+export interface SetLongtermPostAction {
+  type: "set_longterm_post";
+  seq: string;
+  guardId: string;
+  siteId: string;
+  /** plan-summary 用嘅盤名（唔係 PII）。 */
+  siteLabel: string;
+  cellCount: number;
+  reason: string;
+}
+
+export interface SetReferralAction {
+  type: "set_referral";
+  seq: string;
+  guardId: string;
+  brokerId: string;
+  /** plan-summary 用嘅雞頭代號（K/W/T/G…，唔係 PII）。 */
+  brokerCode: string;
+  reason: string;
+}
+
+export interface SetVisaAction {
+  type: "set_visa";
+  seq: string;
+  guardId: string;
+  brokerId: string;
+  brokerCode: string;
+  reason: string;
+}
+
+export type GuardFixAction =
+  | LinkAction
+  | CreateAction
+  | CreateMinimalAction
+  | NeedsBossAction
+  | SetLongtermAction
+  | SetLongtermPostAction
+  | SetReferralAction
+  | SetVisaAction;
 
 export interface GuardFixPlan {
   generatedAt: string;
@@ -96,9 +170,27 @@ export interface GuardFixPlan {
     create: CreateAction[];
     createMinimal: CreateMinimalAction[];
     needsBoss: NeedsBossAction[];
+    /** WP-LTSHIFT §19：冇 Postorder 上載就係空 array（唔影響 link/
+     * create 嗰四類原有行為）。 */
+    setLongterm: SetLongtermAction[];
+    setLongtermPost: SetLongtermPostAction[];
+    setReferral: SetReferralAction[];
+    setVisa: SetVisaAction[];
   };
   /** `create` 入面幾多個 U Team 名單身份證欄唔係身份證格式、冇寫入
    * （要 HR 補）——唔係 PII 本身（淨係數目），plan-summary／頁面摘要卡
    * 都可以印。 */
   hkidDroppedCount: number;
+  /** WP-LTSHIFT §19：呢次計劃有冇用到 Postorder 上載（同埋，如果有，
+   * 佢自己嗰份 parse summary／警告——冇上載就 null）。 */
+  postorder: {
+    uploadId: string;
+    fileName: string;
+    longtermPostCellCount: number;
+    referralRowCount: number;
+    unresolvedSiteLabels: string[];
+    unresolvedBrokerLabels: string[];
+    visaSupported: boolean;
+    visaNote: string;
+  } | null;
 }
