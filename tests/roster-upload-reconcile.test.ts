@@ -27,7 +27,10 @@ function roster(overrides: Partial<ReconcileRosterEntry> & Pick<ReconcileRosterE
     leaveCode: null,
     shiftTypeInferred: false,
     settlementBrokerId: "broker-k",
+    operationalBrokerId: "broker-k",
     settlementInferred: false,
+    settlementReason: null,
+    settlementWarning: null,
     ...overrides,
   };
 }

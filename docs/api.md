@@ -462,3 +462,59 @@ audit`／`sql_select ai.audit_log` 都讀唔到（見
     兩個）。**驗證**：`db:reset && db:seed` → `build` → `apply --plan`
     → `apply --apply` → `build`（再一次）→ `apply --plan`——全部欄位
     （盤/更種/價目卡/散工/7 月卡加期限）都係「新建 0／跳過全部」。
+
+## WP-LTSHIFT（老闆 2026-09-26）：長工更結算單位＋8 月數對總表差額修復
+
+背景、規則同驗收見 `P2-版面重設計計劃.md` §14／§19。呢度淨係記低新
+API／新資料表／關鍵行為，方便日後查。
+
+- **`guard_longterm_posts`**（`prisma/schema.prisma`）：長工崗位盤
+  （guard_id、site_id、effective_from/to、source manual／
+  july_backfill／inferred、note）。`20260926110715_wp_ltshift_
+  longterm_posts` migration 由 7 月 `shift_records.settlement_broker.
+  kind='internal_longterm'` 反推 backfill（用 SQL join，唔涉及任何
+  硬編碼 uuid，冪等）。
+- **`guards.referral_broker_id`／`visa_sponsored_by_broker_id`**：介紹
+  雞頭、簽證擔保雞頭（nullable FK → brokers，ON DELETE SET NULL）。
+- **`sites.activity_proxy_site_id`**：`monthly-close.ts` 反假營業額閘
+  （`hasAnyRecordThisMonth`）額外查呢個 FK 指嘅盤有冇活動——俾「數碼港
+  CP5 IC」呢類自己 0 條 shift_records、但同一業務實際更次記喺另一個
+  盤（「數碼港 CP5」）嘅構造盤唔會被自動隱藏。migration
+  `20260926120000_wp_ltshift_cp5ic_proxy_weifeng_flatcard` 用
+  `canonical_name` 查值（唔存在就 0 行），冪等。
+- **結算單位第一層**（`src/lib/pricing/longterm-settlement.ts`＋
+  `reconcile.ts`）：`employment_type` 開頭 `longterm_` 嘅安員，喺
+  規則 8 舊 fallback 鏈之前，喺呢個盤（含母盤）有生效崗位就結算單位
+  ＝internal_longterm（B07），`operational_broker_id` 保留更表雞頭碼
+  做總表成本桶；唔喺崗位盤就跟雞頭碼幫雞頭頂散更；完全冇崗位記錄就用
+  本月更表行占比推算（≥50% 當自己崗位＋`apply_roster` 時
+  materialize 一行 `source=inferred` 嘅崗位記錄，推算唔到就保守全部
+  當 B07）；簽證形式長工永遠當贊助雞頭散更。`ReconcileRosterEntry`
+  新增 `operationalBrokerId`／`settlementReason`／`settlementWarning`
+  三個欄，對數頁「settlement_diff」而家同時比較 settlement／
+  operational 兩個 broker。
+- **`POST /api/reports/referral-fee/recompute { month }`**（老闆／
+  會計；`月結總表:view` gate＋顯式 baseRole 檢查）：由
+  `guards.referral_broker_id`＋B07 更數＋`referral_fee_rates` 自動
+  重算 `special_items(kind=referral_fee)`（卓弘客戶盤豁免）。冪等
+  （淨係作廢/重建自己 `created_by='referral-fee-recompute:*'` 嗰批，
+  唔踩人手輸入）；拒絕 2026-07 或更早月份（7 月已人手入）。純函數
+  `computeReferralFees()` 見 `src/lib/reports/referral-fee.ts`。
+- **蔚峰園（§7）**：`scripts/opening/build-aug-plan.ts` 新增
+  `WP_LTSHIFT_PER_SHIFT_SITE` 常數——喺 6d「flat 收入盤唔起逐更收客
+  卡」判斷入面明確剔走呢個盤（唔影響 IFC／創富廠IC，冇拍板維持現
+  狀），令佢 8 月 D/N 逐更收客卡（935.48）唔再被 strip；6c 新增第三個
+  `closeJuly` entry 幫 7 月 flat 卡（84,193.55）加 `effective_to=
+  2026-07-31`，同一 transaction 入面 rate_cards.create 行先於
+  closeJuly，DB double-check 一個 round 就成功（dev 實測：
+  `build-aug-plan.ts` → `apply-aug-plan.ts --apply` 一次過完成，7 月
+  gate 不變）。
+
+**未完成部分**（範圍太大，本次冇做，交低次 WP／老闆拍板先做）：
+guard-fix 新增 `set_longterm`／`set_longterm_post`（Postorder xlsm
+解析）／`set_referral`／`set_visa` 四類計劃＋`parsePostorderLongterm
+Posts()`；`POST /api/roster-uploads/reconcile-all { month }`「一鍵重
+新對數（全月）」背景工作＋`recomputeSettlement(uploadId)`；月結頁
+「重算介紹費」前端掣（後端 API 已有，見上面）；`aug-e2e-check.ts` 完
+整跑一次核對逐盤/逐雞頭實測數字（需要先完成上面兩項先有真實 8 月
+`guard_longterm_posts`／`referral_broker_id` 資料）。

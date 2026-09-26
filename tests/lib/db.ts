@@ -72,10 +72,13 @@ export async function clearAll() {
   await prisma.guardPhone.deleteMany({});
   await prisma.guardEmergencyContact.deleteMany({});
   await prisma.guardAddress.deleteMany({});
-  await prisma.guard.updateMany({ data: { defaultBrokerId: null } });
+  // WP-LTSHIFT：guard_longterm_posts 對 guard／site 都係 FK RESTRICT，
+  // 要喺兩張表刪之前先清（同 guard_staff_numbers／GuardPhone 一致做法）。
+  await prisma.guardLongtermPost.deleteMany({});
+  await prisma.guard.updateMany({ data: { defaultBrokerId: null, referralBrokerId: null, visaSponsoredByBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});
-  await prisma.site.updateMany({ data: { parentSiteId: null } });
+  await prisma.site.updateMany({ data: { parentSiteId: null, activityProxySiteId: null } });
   await prisma.site.deleteMany({});
   await prisma.broker.deleteMany({});
 }
