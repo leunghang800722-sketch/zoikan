@@ -184,18 +184,40 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
 
   const rows = data?.items.rows ?? [];
 
-  function bulkApplyRosterForVisible() {
+  const [bulkBusy, setBulkBusy] = useState(false);
+  async function bulkApplyRosterForVisible() {
     // 批量「全部以更表為準」——只對 roster_only／settlement_diff（任務書
     // B1-3）。
+    // 2026-09-26 驗收修正（Opus 5.5）：之前淨係掃已載入嘅 `rows`，但 GET
+    // `take` 上限 500（「全部」tab 城巴車廠 546 行 → 尾嗰批永遠冇決定、
+    // 上載轉唔到 confirmed）。而家逐個分類用 skip/take 分頁攞晒先標。
+    // 喺「更表有・系統冇」／「結算單位唔同」tab 就淨係標嗰個分類；其他
+    // tab（全部／未配對…）兩個分類都標。
+    const cats: ReconcileCategory[] = tab === "roster_only" || tab === "settlement_diff" ? [tab] : ["roster_only", "settlement_diff"];
+    setBulkBusy(true);
+    const keys: string[] = [];
+    for (const category of cats) {
+      for (let skip = 0; ; skip += 500) {
+        const params = new URLSearchParams({ category, take: "500", skip: String(skip) });
+        const res = await apiGet<ReconcileResponse>(`/api/roster-uploads/${uploadId}/reconcile?${params.toString()}`);
+        if (!res.ok) {
+          setBulkBusy(false);
+          setError(res.message);
+          return;
+        }
+        for (const item of res.data.items.rows) {
+          if (item.category === "roster_only" || item.category === "settlement_diff") keys.push(item.key);
+        }
+        if (res.data.items.rows.length === 0 || skip + res.data.items.rows.length >= res.data.items.total) break;
+      }
+    }
+    setBulkBusy(false);
     setDecisions((prev) => {
       const next = new Map(prev);
-      for (const item of rows) {
-        if (item.category === "roster_only" || item.category === "settlement_diff") {
-          next.set(item.key, { action: "apply_roster", reason: "" });
-        }
-      }
+      for (const key of keys) next.set(key, { action: "apply_roster", reason: "" });
       return next;
     });
+    setNotice(`已標記 ${keys.length} 項「以更表為準」（包括未顯示喺呢頁嘅項目），撳「套用決定」先會寫入`);
   }
 
   const pendingList = useMemo(() => [...decisions.entries()].map(([key, v]) => ({ key, ...v })), [decisions]);
@@ -262,22 +284,39 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
       return;
     }
     setApplying(true);
-    const res = await apiPost<{ results: { key: string; ok: boolean; error?: string }[]; upload_status: string; pending_count: number }>(
-      `/api/roster-uploads/${uploadId}/reconcile/apply`,
-      { actions: pendingList.map((p) => ({ key: p.key, action: p.action, reason: p.reason || undefined })) },
-    );
+    // 2026-09-26 驗收修正：apply schema `actions` 上限 2000——批量標記可以
+    // 超過，分批送（每批各自一個 transaction；已套用嘅批次唔會因為後面
+    // 批次失敗而回滾，失敗項會列出嚟、可以重新整理再套）。
+    type ApplyRes = { results: { key: string; ok: boolean; error?: string }[]; upload_status: string; pending_count: number };
+    const CHUNK = 2000;
+    const allResults: ApplyRes["results"] = [];
+    let last: ApplyRes | null = null;
+    let apiError: string | null = null;
+    for (let i = 0; i < pendingList.length; i += CHUNK) {
+      const res = await apiPost<ApplyRes>(`/api/roster-uploads/${uploadId}/reconcile/apply`, {
+        actions: pendingList.slice(i, i + CHUNK).map((p) => ({ key: p.key, action: p.action, reason: p.reason || undefined })),
+      });
+      if (!res.ok) {
+        apiError = res.message;
+        break;
+      }
+      last = res.data;
+      allResults.push(...res.data.results);
+    }
     setApplying(false);
     setConfirmOpen(false);
-    if (!res.ok) {
-      setError(res.message);
+    if (apiError && !last) {
+      setError(apiError);
       return;
     }
-    const failed = res.data.results.filter((r) => !r.ok);
+    const failed = allResults.filter((r) => !r.ok);
     setDecisions(new Map());
-    if (failed.length > 0) {
+    if (apiError) {
+      setError(`已套用 ${allResults.length} 項，之後一批失敗：${apiError}——請重新整理再套用餘下項目`);
+    } else if (failed.length > 0) {
       setError(`${failed.length} 項套用失敗：${failed.map((f) => f.error).join("；")}`);
-    } else {
-      setNotice(`已套用 ${res.data.results.length} 項${res.data.upload_status === "confirmed" ? "——全部非一致項已有決定，上載已轉「已對數確認」" : `，仲有 ${res.data.pending_count} 項未處理`}`);
+    } else if (last) {
+      setNotice(`已套用 ${allResults.length} 項${last.upload_status === "confirmed" ? "——全部非一致項已有決定，上載已轉「已對數確認」" : `，仲有 ${last.pending_count} 項未處理`}`);
     }
     await load();
   }
@@ -329,8 +368,8 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
         </button>
         {!locked && (
           <>
-            <Button variant="secondary" onClick={bulkApplyRosterForVisible}>
-              呢頁全部以更表為準（限「更表有・系統冇」／「結算單位唔同」）
+            <Button variant="secondary" onClick={bulkApplyRosterForVisible} disabled={bulkBusy}>
+              {bulkBusy ? "標記緊…" : "全部以更表為準（限「更表有・系統冇」／「結算單位唔同」，包括未顯示項目）"}
             </Button>
             <Button variant="primary" disabled={pendingList.length === 0} onClick={() => setConfirmOpen(true)}>
               套用決定（{pendingList.length}）
