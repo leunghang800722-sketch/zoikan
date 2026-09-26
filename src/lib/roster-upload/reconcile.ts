@@ -28,6 +28,7 @@ import {
   findInternalLongtermBrokerId,
   loadActiveLongtermPosts,
   inferGuardMonthlyTopSite,
+  hasParsedPostorderForMonth,
 } from "@/lib/pricing/longterm-settlement";
 import type { RosterUpload, RosterUploadRow, ShiftRecord } from "@prisma/client";
 
@@ -305,10 +306,15 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
   //      母盤 id，先可以判斷「崗位登記喺母盤，呢格喺子盤」呢種情況。
   const longtermGuardIds = guards.filter((g) => isLongtermEmploymentType(g.employmentType)).map((g) => g.id);
   const internalLongtermBrokerId = longtermGuardIds.length ? await findInternalLongtermBrokerId(prisma) : null;
-  const activePostsByGuard = longtermGuardIds.length ? await loadActiveLongtermPosts(longtermGuardIds, toMonthStart(upload.month), prisma) : new Map<string, Set<string>>();
+  // 驗收（Opus 5.5）：本月有 Postorder（權威）→ 唔推算、唔睇 inferred 崗位。
+  const postorderAuthoritative = longtermGuardIds.length ? await hasParsedPostorderForMonth(upload.month, prisma) : false;
+  const activePostsByGuard = longtermGuardIds.length
+    ? await loadActiveLongtermPosts(longtermGuardIds, toMonthStart(upload.month), prisma, { excludeInferred: postorderAuthoritative })
+    : new Map<string, Set<string>>();
   // 淨係冇任何生效崗位嘅長工先使占比推算，但一次過查晒（DB 查詢成本
   // 唔會因為「先篩選邊個冇崗位」而細好多，直接對全部長工查算簡單啲）。
-  const monthlyTopSiteByGuard = longtermGuardIds.length ? await inferGuardMonthlyTopSite(longtermGuardIds, upload.month, prisma) : new Map<string, { siteId: string; ratio: number }>();
+  const monthlyTopSiteByGuard =
+    longtermGuardIds.length && !postorderAuthoritative ? await inferGuardMonthlyTopSite(longtermGuardIds, upload.month, prisma) : new Map<string, { siteId: string; ratio: number }>();
   const siteParentRows = effectiveSiteIds.length ? await prisma.site.findMany({ where: { id: { in: effectiveSiteIds } }, select: { id: true, parentSiteId: true } }) : [];
   const siteParentMap = new Map(siteParentRows.map((s) => [s.id, s.parentSiteId]));
   // 呢個月新推算出嚟嘅崗位盤（reason=longterm_inferred_post 先有）——
@@ -316,6 +322,24 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
   // guard_longterm_posts。呢度淨係收集 preview 用，唔喺對數（讀）階段
   // 寫 DB（跟返「對數只係 preview，apply 先寫入」嘅一貫做法）。
   const inferredLongtermPosts = new Map<string, { siteId: string; ratio: number }>();
+
+  // 驗收（Opus 5.5，2026-09-26）：更表有雞頭碼欄、但部分行漏填——同一張
+  // 上載同一個（解析後）盤其他行嘅雞頭碼**只有一個**，漏填嗰啲行就跟佢
+  // （同總表 `s05_price.py`「補：總表該盤唯一雞頭」一致；多過一個雞頭
+  // 唔估，跌返規則 8 fallback 鏈）。成張更表冇雞頭碼欄（全部 null）唔受
+  // 影響。8 月實測：港深創新及科技園 11 格新散工 default_broker 冇值
+  // 跌咗落 Y，少畀 K 14,520。
+  const codedBrokersBySite = new Map<string, Set<string>>();
+  for (const r of rowsWithEffectiveSite) {
+    if (!r.effectiveSiteId || !r.settlementBrokerId || (r.codeKind !== "shift" && r.codeKind !== "ot")) continue;
+    const set = codedBrokersBySite.get(r.effectiveSiteId) ?? new Set<string>();
+    set.add(r.settlementBrokerId);
+    codedBrokersBySite.set(r.effectiveSiteId, set);
+  }
+  const singleCodedBrokerForSite = (siteId: string | null): string | null => {
+    const set = siteId ? codedBrokersBySite.get(siteId) : undefined;
+    return set && set.size === 1 ? [...set][0]! : null;
+  };
 
   const rosterEntries: ReconcileRosterEntry[] = [];
   const unresolvedEntries: ReconcileUnresolvedEntry[] = [];
@@ -376,6 +400,9 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
     let longtermWarning: string | null = null;
     let longtermLayerUsed = false;
     const guard = guardById.get(r.guardId);
+    // 驗收（Opus 5.5）：呢行漏填雞頭碼、同盤其他行得一個雞頭 → 當呢行嘅
+    // 「更表雞頭碼」（見上面 singleCodedBrokerForSite 註解）。
+    const rowBrokerId = r.settlementBrokerId ?? singleCodedBrokerForSite(r.effectiveSiteId);
     if (guard && isLongtermEmploymentType(guard.employmentType)) {
       const siteId = r.effectiveSiteId as string; // 上面 reasons.length>0 已經 continue 咗，呢度一定非 null
       const lt = resolveLongtermSettlement({
@@ -383,13 +410,15 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
         visaSponsoredByBrokerId: guard.visaSponsoredByBrokerId ?? null,
         effectiveSiteId: siteId,
         parentSiteId: siteParentMap.get(siteId) ?? null,
-        rosterBrokerId: r.settlementBrokerId,
+        rosterBrokerId: rowBrokerId,
         activePostSiteIds: activePostsByGuard.get(r.guardId as string) ?? new Set<string>(),
         monthlyTopSite: monthlyTopSiteByGuard.get(r.guardId as string) ?? null,
+        postorderAuthoritative,
       });
-      // longterm_non_post_broker 但呢行本身冇雞頭碼欄（rosterBrokerId
-      // null）——冇嘢可以跟，唔算「用得到」嘅判斷，跌返舊 fallback 鏈。
-      const usable = lt && !(lt.reason === "longterm_non_post_broker" && !r.settlementBrokerId);
+      // longterm_non_post_broker／longterm_no_post_postorder 但呢行本身冇
+      // 雞頭碼（rosterBrokerId null）——冇嘢可以跟，唔算「用得到」嘅判斷，
+      // 跌返舊 fallback 鏈。
+      const usable = lt && !((lt.reason === "longterm_non_post_broker" || lt.reason === "longterm_no_post_postorder") && !rowBrokerId);
       if (usable && lt) {
         longtermLayerUsed = true;
         settlementBrokerId = lt.settlementBrokerId ?? internalLongtermBrokerId;
@@ -406,8 +435,8 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
       // 冇先至行 fallback 鏈——WP-LTSHIFT 之前呢度係
       // `let settlementBrokerId = r.settlementBrokerId;`，唔可以因為加咗
       // 長工第一層就漏咗呢個「payload 優先」嘅原則。
-      settlementBrokerId = r.settlementBrokerId;
-      operationalBrokerId = r.settlementBrokerId;
+      settlementBrokerId = rowBrokerId;
+      operationalBrokerId = rowBrokerId;
       if (!settlementBrokerId) {
         settlementBrokerId = await resolveFallback({
           guardId: r.guardId,

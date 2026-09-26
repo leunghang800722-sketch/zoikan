@@ -36,7 +36,8 @@ export type LongtermSettlementReason =
   | "longterm_post" // 喺生效崗位盤（manual/july_backfill）
   | "longterm_inferred_post" // 喺推算崗位盤（本次先發現，ratio>=50%）
   | "longterm_non_post_broker" // 有崗位但呢更唔喺崗位盤，跟更表雞頭碼頂散更
-  | "longterm_dispersed_b07"; // 完全冇崗位記錄、推算唔到（分散多盤），保守全部 B07
+  | "longterm_dispersed_b07" // 完全冇崗位記錄、推算唔到（分散多盤），保守全部 B07
+  | "longterm_no_post_postorder"; // 本月有 Postorder（權威）、總表冇呢個長工任何「(8) 長工」格 → 跟更表雞頭碼頂散更
 
 export interface LongtermSettlementResult {
   settlementBrokerId: string | null;
@@ -67,6 +68,16 @@ export interface ResolveLongtermSettlementInput {
   /** 呢個安員本月各（已摺母盤）盤嘅更表行占比推算結果——`activePostSiteIds`
    * 空集合先會用到。 */
   monthlyTopSite: { siteId: string; ratio: number } | null;
+  /** 驗收（Opus 5.5，2026-09-26）：呢個月已經上載咗 Postorder 總表（權威
+   * 來源）——長工崗位盤一律由 Postorder「(8) 長工」格（guard-fix
+   * `set_longterm_post`）決定，**唔再**用 ≥50% 占比推算，亦唔睇
+   * `source=inferred`／`july_backfill` 嘅崗位（caller 用 `loadActiveLongtermPosts(...,
+   * { excludeInferred: true })` 攞 `activePostSiteIds`，淨係 manual）。冇崗位＝總表
+   * 冇佢嘅長工格＝佢呢個月喺呢啲盤做嘅更全部係幫雞頭頂散更（同總表
+   * `s05_price.py` `is_lt = (盤,人) in po_lt_posts` 一致）。8 月實測：
+   * 推算令 39 格（簽證形式長工 26＋非 8 月在職長工 13）錯歸 B07、少畀
+   * K 33,540。 */
+  postorderAuthoritative?: boolean;
 }
 
 /** 是咪長工（`employment_type` 開頭 `longterm_`）。 */
@@ -92,6 +103,18 @@ export function resolveLongtermSettlement(input: ResolveLongtermSettlementInput)
   }
 
   const inPost = input.activePostSiteIds.has(input.effectiveSiteId) || (input.parentSiteId !== null && input.activePostSiteIds.has(input.parentSiteId));
+
+  if (input.activePostSiteIds.size === 0 && input.postorderAuthoritative) {
+    // 3'：本月 Postorder 係權威，總表冇呢個長工任何長工格 → 跟更表雞頭
+    // 碼（規則 2：長工用假期幫雞頭做散更，照付雞頭外判價）。更表冇雞頭
+    // 碼欄（rosterBrokerId=null）嗰陣 caller 會跌返舊 fallback 鏈。
+    return {
+      settlementBrokerId: input.rosterBrokerId,
+      operationalBrokerId: input.rosterBrokerId,
+      reason: "longterm_no_post_postorder",
+      warning: input.rosterBrokerId ? "本月 Postorder 總表冇呢個長工嘅「(8) 長工」格，呢更跟更表雞頭碼幫雞頭頂散更" : null,
+    };
+  }
 
   if (input.activePostSiteIds.size === 0) {
     // 3：完全冇崗位記錄——用本月占比推算（保守預設，老闆指令）。
@@ -158,7 +181,13 @@ export async function findInternalLongtermBrokerId(client: PrismaLike = prisma):
  * （子盤登記嘅唔會自動加母盤，母盤登記嘅唔會自動加子盤，摺埋嘅工作由
  * `resolveLongtermSettlement()` 呼叫方傳 `parentSiteId` 自己夾）。
  */
-export async function loadActiveLongtermPosts(guardIds: string[], asOf: Date, client: PrismaLike = prisma): Promise<Map<string, Set<string>>> {
+export async function loadActiveLongtermPosts(
+  guardIds: string[],
+  asOf: Date,
+  client: PrismaLike = prisma,
+  /** `excludeInferred`（名保留向下相容）：true＝淨係 `manual` 崗位（Postorder 生效月份用）。 */
+  opts: { excludeInferred?: boolean } = {},
+): Promise<Map<string, Set<string>>> {
   const result = new Map<string, Set<string>>();
   if (guardIds.length === 0) return result;
   const posts = await client.guardLongtermPost.findMany({
@@ -167,15 +196,41 @@ export async function loadActiveLongtermPosts(guardIds: string[], asOf: Date, cl
       voidedAt: null,
       effectiveFrom: { lte: asOf },
       OR: [{ effectiveTo: null }, { effectiveTo: { gte: asOf } }],
+      // 驗收（Opus 5.5）：本月 Postorder 生效（權威）就淨係睇 `manual` 崗位
+      // （guard-fix `set_longterm_post` 由總表「(8) 長工」格寫、或者老闆人手
+      // 加）——`inferred`（冇總表嗰陣嘅占比推算）同 `july_backfill`（7 月
+      // 反推，正式站 migration 先有）都唔可以蓋過總表：dev 模擬「舊版先套用、
+      // 後部署」實測，一位 7 月喺啟航1331 做長工、8 月總表冇佢長工格嘅安員，
+      // 因為 july_backfill 崗位令 13 格錯歸 B07（少畀 K 11,440）。
+      ...(opts.excludeInferred ? { source: "manual" as const } : {}),
     },
-    select: { guardId: true, siteId: true },
+    select: { guardId: true, siteId: true, site: { select: { activityProxySiteId: true } } },
   });
   for (const p of posts) {
     const set = result.get(p.guardId) ?? new Set<string>();
     set.add(p.siteId);
+    // 驗收（Opus 5.5）：崗位登記喺「構造盤」（例：數碼港 CP5 IC，純月費盤，
+    // 自己冇 shift_records，`activity_proxy_site_id` 指住實際記更嘅
+    // 數碼港 CP5）——佢喺 proxy 盤嘅更都係做緊自己崗位。8 月實測 13 格
+    // 因為咁被當「唔喺崗位盤」跟咗更表雞頭碼（Y）。
+    if (p.site.activityProxySiteId) set.add(p.site.activityProxySiteId);
     result.set(p.guardId, set);
   }
   return result;
+}
+
+/** 驗收（Opus 5.5）：呢個月嘅 Postorder 總表係咪已經「生效」——最新一份
+ * 已解析嘅 Postorder 上載，而且已經有一個引用佢嘅安員配對修復計劃**套用
+ * 咗**（`guard_fix_runs.status='applied'`，即係 `set_longterm_post` 等
+ * 已經落 DB）。生效先以總表為準（見 `ResolveLongtermSettlementInput.
+ * postorderAuthoritative`）；淨係上載咗未套用就唔當權威——否則長工崗位
+ * 未寫入、推算又停咗，長工格會暫時全部跟更表雞頭碼（多畀雞頭錢）。 */
+export async function hasParsedPostorderForMonth(month: Date, client: PrismaLike = prisma): Promise<boolean> {
+  const monthStart = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 1));
+  const latest = await client.postorderUpload.findFirst({ where: { month: monthStart, status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { id: true } });
+  if (!latest) return false;
+  const applied = await client.guardFixRun.findFirst({ where: { postorderUploadId: latest.id, status: "applied" }, select: { id: true } });
+  return applied !== null;
 }
 
 /**

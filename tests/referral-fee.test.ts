@@ -3,7 +3,8 @@
 // integration test（idempotent、7 月拒絕、唔踩人手輸入）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
-import { computeReferralFees, computeReferralFeesForMonth, recomputeReferralFees, REFERRAL_FEE_EXEMPT_CLIENT_GROUP } from "@/lib/reports/referral-fee";
+import { computeReferralFees, computeReferralFeesForMonth, recomputeReferralFees, referralRatesFromPostorderRows, REFERRAL_FEE_EXEMPT_CLIENT_GROUP } from "@/lib/reports/referral-fee";
+import type { PostorderReferralRow } from "@/lib/guard-fix/postorder";
 
 describe("computeReferralFees（純函數）", () => {
   it("逐 (guard,site) B07 更數 × 費率，逐雞頭合計", () => {
@@ -165,9 +166,77 @@ describe("recomputeReferralFees（DB integration）", () => {
     expect(Number(manual!.cost)).toBe(999);
   });
 
+  it("驗收（Opus 5.5）：淨係計 B07 正更——假期（leave）同 OT 格唔當「更」", async () => {
+    const k = await makeBroker("TEST-RK4");
+    const b07 = await makeBroker("TEST-B074", "internal_longterm");
+    const site = await makeSite("測試長工盤4");
+    const guard = await makeGuard(k.id);
+    const st = await makeShiftType(site.id);
+    const st2 = await prisma.shiftType.create({ data: { siteId: site.id, code: "AL", label: "假", hours: 12, createdBy: "test" } });
+    await prisma.referralFeeRate.create({ data: { brokerId: k.id, siteId: null, month: new Date("2026-08-01"), feePerShift: 50, createdBy: "test" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-08-01"), siteId: site.id, shiftTypeId: st.id, guardId: guard.id, settlementBrokerId: b07.id, recordType: "shift" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-08-02"), siteId: site.id, shiftTypeId: st2.id, guardId: guard.id, settlementBrokerId: b07.id, recordType: "leave", leaveCode: "AL" } });
+    const r = await computeReferralFeesForMonth(new Date("2026-08-01"));
+    expect(r.totalAmount).toBe(50);
+  });
+
+  it("驗收（Opus 5.5）：規則 12a 卓弘豁免 9 月起先生效——8 月照計（老闆：8 月跟月結表全數支付）", async () => {
+    const t = await makeBroker("TEST-RT");
+    const b07 = await makeBroker("TEST-B07T", "internal_longterm");
+    const site = await makeSite("測試卓弘盤", REFERRAL_FEE_EXEMPT_CLIENT_GROUP);
+    const guard = await makeGuard(t.id);
+    const st = await makeShiftType(site.id);
+    await prisma.referralFeeRate.create({ data: { brokerId: t.id, siteId: null, month: new Date("2026-08-01"), feePerShift: 30, createdBy: "test" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-08-03"), siteId: site.id, shiftTypeId: st.id, guardId: guard.id, settlementBrokerId: b07.id } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-09-03"), siteId: site.id, shiftTypeId: st.id, guardId: guard.id, settlementBrokerId: b07.id } });
+    const aug = await computeReferralFeesForMonth(new Date("2026-08-01"));
+    expect(aug.totalAmount).toBe(30);
+    expect(aug.exemptShiftCount).toBe(0);
+    const sep = await computeReferralFeesForMonth(new Date("2026-09-01"));
+    expect(sep.totalAmount).toBe(0);
+    expect(sep.exemptShiftCount).toBe(1);
+  });
+
   it("computeReferralFeesForMonth：DB loader 對接純函數（冇任何長工介紹記錄就全部空）", async () => {
     const r = await computeReferralFeesForMonth(new Date("2026-08-01"));
     expect(r.lineItems).toHaveLength(0);
     expect(r.totalAmount).toBe(0);
+  });
+});
+
+describe("referralRatesFromPostorderRows（驗收 Opus 5.5：Postorder 費率）", () => {
+  const brokers = [{ id: "bk", code: "K", aliases: ["淦"] }];
+  const sites = [
+    { id: "s1", canonicalName: "測試盤甲", aliases: [] as string[] },
+    { id: "s2", canonicalName: "測試盤乙", aliases: ["乙"] },
+  ];
+  const row = (over: Partial<PostorderReferralRow>): PostorderReferralRow => ({
+    rowIndex: 1,
+    brokerLabelRaw: "淦",
+    rate: 60,
+    shifts: 26,
+    excelAmount: 1560,
+    siteLabelsRaw: ["測試盤甲"],
+    siteLabelsFallbackRaw: [],
+    guardNamesRaw: [],
+    formula: null,
+    ...over,
+  });
+
+  it("雞頭稱呼＋盤名對到就出 (broker, site) 費率；盤名長句對唔到跌返短代號", () => {
+    const { rates, skipped } = referralRatesFromPostorderRows([row({}), row({ rowIndex: 2, rate: 50, siteLabelsRaw: ["唔存在"], siteLabelsFallbackRaw: ["乙"] })], brokers, sites);
+    expect(skipped).toEqual([]);
+    expect(rates.get("bk|s1")?.feePerShift).toBe(60);
+    expect(rates.get("bk|s2")?.feePerShift).toBe(50);
+  });
+
+  it("同一 (broker, site) 兩個唔同費率——唔用（唔估）；對唔到雞頭／盤／冇費率——跳過", () => {
+    const { rates, skipped } = referralRatesFromPostorderRows(
+      [row({}), row({ rowIndex: 2, rate: 30 }), row({ rowIndex: 3, brokerLabelRaw: "唔識" }), row({ rowIndex: 4, siteLabelsRaw: ["冇"] }), row({ rowIndex: 5, rate: null })],
+      brokers,
+      sites,
+    );
+    expect(rates.size).toBe(0);
+    expect(skipped).toHaveLength(4);
   });
 });

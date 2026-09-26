@@ -195,12 +195,25 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
 
   it("internal_longterm、雞頭有純介紹費卡（gate:pricing 對 7 月數據驗證）：長工月薪 autopay 唔經卡出糧（wage 保持 null），但雞頭轉介費（broker_fee）照計，unpriced=false", () => {
     const cards: RateCardLite[] = [card({ id: "client-card", clientRate: 800 }), card({ id: "referral-fee-card", brokerId: BROKER_K, brokerFee: 30 })];
-    const result = resolveShiftPricingFromCards(cards, baseInput({ brokerKind: "internal_longterm" }));
+    // 驗收（Opus 5.5）：用 7 月日子——8 月起 B07 broker_fee 唔寫（見下一條）。
+    const result = resolveShiftPricingFromCards(cards, baseInput({ brokerKind: "internal_longterm", workDate: new Date("2026-07-15T00:00:00.000Z") }));
     expect(result.clientRate).toBe(800);
     expect(result.guardWage).toBeNull();
     expect(result.brokerFee).toBe(30);
     expect(result.unpriced).toBe(false);
     expect(result.reason).toBe("longterm");
+  });
+
+  it("驗收（Opus 5.5）：internal_longterm 8 月起——guard_wage 一律 null（就算揀中張卡有外判價），broker_fee 都唔寫（介紹費改由 recomputeReferralFees 計，避免重複）", () => {
+    const cards: RateCardLite[] = [card({ id: "client-card", clientRate: 800 }), card({ id: "payout-card", brokerId: BROKER_K, guardWage: 850, brokerFee: 30 })];
+    const aug = resolveShiftPricingFromCards(cards, baseInput({ brokerKind: "internal_longterm", workDate: new Date("2026-08-10T00:00:00.000Z") }));
+    expect(aug.clientRate).toBe(800);
+    expect(aug.guardWage).toBeNull();
+    expect(aug.brokerFee).toBeNull();
+    expect(aug.reason).toBe("longterm");
+    const jul = resolveShiftPricingFromCards(cards, baseInput({ brokerKind: "internal_longterm", workDate: new Date("2026-07-10T00:00:00.000Z") }));
+    expect(jul.guardWage).toBeNull();
+    expect(jul.brokerFee).toBe(30);
   });
 
   it("冇结算雞頭（settlementBrokerId=null）：只計收客价，出街 unpriced=true，reason=no_broker", () => {

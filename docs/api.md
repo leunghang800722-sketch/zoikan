@@ -762,3 +762,89 @@ tests/e2e/guard-fix.spec.ts tests/e2e/p2b-finance-pages.spec.ts`
 guard-fix 頁上載 Postorder 總表→計算修復計劃→套用（可以重複直至
 收斂）→更表上載頁「重新對數全月」→月結頁「重算介紹費」→睇月結
 總表／逐雞頭應付。
+
+## WP-LTSHIFT 驗收修正（Opus 5.5，2026-09-26，同一 branch）
+
+逐格對 `po_cells_sited.json`／`shifts_priced.json`（總表口徑）同系統
+`shift_records` 追根因之後嘅修正（全部規則層面，冇硬編碼個案）：
+
+1. **Postorder 生效＝長工崗位權威**（`src/lib/pricing/longterm-settlement.ts`
+   `hasParsedPostorderForMonth()`／`postorderAuthoritative`）：本月最新
+   已解析 Postorder 上載**而且**有引用佢嘅 guard-fix run 已套用
+   （`guard_fix_runs.status='applied'`）先算生效。生效之後：唔再做 ≥50%
+   占比推算；`loadActiveLongtermPosts(..., { excludeInferred: true })`
+   淨係睇 `source=manual`（`inferred`／`july_backfill` 唔蓋過總表）；冇
+   崗位嘅長工＝總表冇佢「(8) 長工」格＝跟更表雞頭碼頂散更（新 reason
+   `longterm_no_post_postorder`）。之前 39 格（簽證形式長工 26＋非 8 月
+   在職長工 13）錯歸 B07、少畀 K 33,540；正式站 migration 嘅
+   `july_backfill` 崗位另外會令 13 格錯歸 B07（dev「舊版先套用、後部署」
+   模擬先見到）。guard-fix `set_longterm_post` 淨係當 `manual` 崗位係
+   「已有」（`plan.ts`／`apply.ts`），套用時作廢同組合 `inferred` 記錄。
+   `reconcile-all` 喺 Postorder 上載咗但未套用時 `result.warnings` 出提示
+   （更表上載頁黃色框）。
+2. **構造盤崗位**：崗位登記喺有 `activity_proxy_site_id` 嘅盤（數碼港
+   CP5 IC），proxy 盤（數碼港 CP5）嘅更一樣算崗位（13 格由 Y 改返 B07）。
+3. **漏填雞頭碼**（`reconcile.ts` `singleCodedBrokerForSite()`）：同張
+   上載同一（解析後）盤其他行得一個雞頭碼，漏填行跟佢（同總表「補：總表
+   該盤唯一雞頭」一致）；多過一個雞頭唔估。之前港深創新及科技園 11 格
+   跌咗落 Y、少畀 K 14,520。
+4. **重算結算單位要重新定價**（`settlement-resync.ts`）：之前
+   `recomputeSettlement()` 淨係改 broker id、唔郁 snapshot（K→B07 留低
+   外判價、B07→K 留低 null，之後對數見 match 唔會再定價）。而家結算單位
+   變咗、或者 8 月起 B07 格仲帶住 guard_wage／broker_fee，就用
+   `resolveShiftPricing()` 重新定價（LINK 盤／leave／PR 唔郁，同
+   reconcile-apply 一致）。
+5. **B07 snapshot**（`resolve-rate.ts`）：internal_longterm 永遠
+   `guard_wage=null`（之前 8 月 B07 帶 86,607 假成本）；8 月起
+   `broker_fee` 都唔寫（同 `recomputeReferralFees()` 嘅介紹費同一筆錢，
+   7 月保留、7 月 gate 不變）。
+6. **介紹費**（`referral-fee.ts`）：只計 B07 **正更**（之前連假期／OT
+   格都計，多 ~11,000）；卓弘豁免 `REFERRAL_FEE_EXEMPT_FROM_MONTH=
+   2026-09-01` 先生效（規則 12a：8 月照付 1,380）；重算前
+   `syncReferralRatesFromPostorder()` 將 Postorder「長工雞頭費」公式費率
+   寫入 `referral_fee_rates`（month＝本月，逐 broker×site，audit；同一
+   組合兩個費率唔用），response 加 `rate_sync`。
+7. **needs_boss 保守預設**（`plan.ts`／`apply.ts`／`match.ts`，新表
+   `guard_match_overrides`，migration `20260926150000_acc_guard_match_overrides`）：
+   (a) 更表工號屬 DB 另一位安員、DB 冇同名 → `create_minimal`
+   （`conservative=staff_no_conflict`）按更表姓名＋電話建獨立安員
+   （cash_casual、無工號），寫 override（正規化工號＋更表姓名 → 新安員），
+   `matchGuard()` 淨係完全相同組合先配，warning「工號衝突待核」（工號
+   喺 `GET /api/roster-uploads/:id` 照遮）；(b) 淨係靠姓名喺名單搵到
+   （冇電話核對／電話對唔上）、DB 冇同名 → 唔用名單資料，按更表姓名
+   建獨立安員（`name_only_unverified`）。兩類都寫 audit
+   `guard_fix_conservative_default`（note「待核」，冇 PII）。DB 已有
+   同名／身份證已存在等「DB 可能已經有呢個人」嘅情況照舊 needs_boss。
+8. **雞頭稱呼**：migration `20260926160000_acc_broker_name_aliases` 將
+   每個雞頭自己 `name` 加入 `aliases`（唔寫死名）；Postorder 其他稱呼
+   （private 檔 `master_roster_aliases`）用本機
+   `scripts/opening/sync-broker-aliases.ts [--apply]` 同步（唔入 git）。
+   之前已上線 DB 對唔到 3 個稱呼，介紹費得 10,000。
+9. **開盤補收客價**（`scripts/opening/apply-aug-plan.ts`）：同 natural
+   key 現有卡 `client_rate=null`、plan 有值 → 補（唔覆蓋已有值），
+   diff「補收客價」；正式站舊版開盤已經起咗蔚峰園 8 月卡（冇收客價），
+   之前 WP-LTSHIFT §7 嘅修正喺正式站唔會生效。
+
+**正式站步驟（驗收版，取代上面一段）**：
+0. 部署（`prisma migrate deploy` 跑 6 個新 migration：4 個 WP-LTSHIFT＋
+   `20260926150000`／`20260926160000`）。7 月報表 dump 前後 diff 0（dev
+   模擬正式站狀態實測）。
+1. 本機 `DATABASE_URL=… npx tsx scripts/opening/sync-broker-aliases.ts`
+   → 睇數目 → `--apply`（預期：T 加 1 個稱呼；其餘由 migration 補）。
+2. 本機 `zsh scripts/opening/run-round2.sh`（預期：價目卡新建 0、補收客價
+   2（蔚峰園 D／N）、7 月卡加到期 1（蔚峰園 flat））。
+3. 蔚峰園 8 月更表頁「重新計价」（或 `POST /api/shift-records/reprice
+   {month:"2026-08", site_id, dry_run}`，預期 changed≈98）。
+4. 安員配對修復頁：上載 U Team 名單 → 上載 Postorder（2.96MB，上限
+   30MB）→ 計算計劃 → 套用；重複到冇新動作。預期 needs_boss 0；Postorder
+   摘要「對唔到嘅雞頭稱呼」**要係空**（唔係空＝步驟 1 未做，停）；對唔到
+   盤名得「OT」（2 格，已知）。
+5. 更表上載頁「重新對數全月」（背景 run，15 分鐘卡死可重跑；同時唔好撳
+   guard-fix 套用）。預期 `warnings` 空、errors 0、unresolved 1（蔚峰園
+   重複行）。
+6. 月結頁「重算介紹費」→ 預期合計 60,620（總表 60,520＋Weave 更表漏記
+   2 格 100）、`rate_sync.skipped` 空。
+7. 月結總表／雞頭應付：預期 K 1,023,730、G 56,220、D 100,130、Y
+   226,433.02 同總表一致；W −850（蔚峰園重複行）、T −1,600（Weave 更表
+   漏記病假）係更表資料問題。
+

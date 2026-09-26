@@ -38,6 +38,10 @@ export type AuditAction =
   | "ai_feedback_chat"
   | "ai_feasibility_guard_triggered"
   | "feedback_submit"
+  // 驗收（Opus 5.5，2026-09-26）：guard-fix 保守預設（工號衝突／淨係
+  // 姓名對到名單）建嘅獨立安員——guards 表冇 note 欄，喺度留「待核」原因
+  // （after 淨係 {id, conservative, note}，冇 PII）。
+  | "guard_fix_conservative_default"
   // WP-PRICE（老闆 2026-09-16 拍板）：`POST /api/shift-records/reprice`
   // 一個月/一個盤重新計价，一次過覆蓋整段範圍嘅 snapshot（價目卡改咗
   // 要生效）——一行 audit（table_name="shift_records"，row_id=

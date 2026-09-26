@@ -389,8 +389,15 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     prisma.broker.findMany({ select: { id: true, code: true, aliases: true } }),
     prisma.brokerSiteAssignment.findMany({ where: { month }, select: { siteId: true, broker: { select: { code: true } } } }),
     prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } }),
-    prisma.guardLongtermPost.findMany({ where: { voidedAt: null }, select: { guardId: true, siteId: true } }),
+    // 驗收（Opus 5.5）：淨係 `source=manual` 先當「已經有崗位」——`inferred`
+    // （占比推算）／`july_backfill`（7 月反推）喺 Postorder 生效之後結算判斷
+    // 度會被忽略（見 longterm-settlement.ts），所以總表
+    // 有「(8) 長工」格嘅組合一定要出 set_longterm_post（apply 嗰陣順手作廢
+    // 同組合嘅 inferred 記錄）。之前正式站「先逐盤套用、後上載 Postorder」
+    // 嘅次序會令呢啲組合被當成已有崗位跳過（dev 重演：setPost 由 56 跌到 17）。
+    prisma.guardLongtermPost.findMany({ where: { voidedAt: null, source: "manual" }, select: { guardId: true, siteId: true } }),
   ]);
+  const matchOverridesRaw = await prisma.guardMatchOverride.findMany({ where: { voidedAt: null }, select: { staffNo: true, nameRaw: true, guardId: true } });
   const siteNameById = new Map(siteRows.map((s) => [s.id, s.canonicalName]));
   const siteAssignmentBrokerCodeBySite = new Map<string, string[]>();
   for (const a of siteAssignments) {
@@ -402,7 +409,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
   const brokerCandidates: BrokerCandidate[] = brokersRaw.map((b) => ({ id: b.id, code: b.code, aliases: b.aliases }));
   const brokerCodeById = new Map(brokersRaw.map((b) => [b.id, b.code]));
 
-  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw });
+  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw, matchOverrides: matchOverridesRaw });
   const validGuardIds = new Set(guardsRaw.map((g) => g.id));
 
   const telIndex = new Map<string, Set<string>>();
@@ -532,6 +539,25 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     if (identity.kind === "ambiguous") {
       const snNormForReason = identity.staffNoRaw ? normalizeStaffNumber(identity.staffNoRaw) : null;
       const snOwnedByOther = !!snNormForReason && staffNoOwner.has(snNormForReason);
+      const sameNameInDb = (guardIndex.byName.get(identity.nameRaw)?.length ?? 0) + (guardIndex.byAlias.get(identity.nameRaw)?.length ?? 0);
+      if (snOwnedByOther && snNormForReason && sameNameInDb === 0) {
+        // 驗收（Opus 5.5，2026-09-26）：老闆指令唔准留「要老闆決定」——保守
+        // 預設：工號屬另一人、DB 冇同名安員 → 按更表姓名（＋更表電話）建
+        // 獨立安員（cash_casual、無工號），寫 guard_match_overrides 令呢個
+        // 「工號＋姓名」組合 reparse 配返新安員；唔會搶走工號主人嘅記錄
+        // （B1-8 原則不變），audit＋override.reason 留「工號衝突待核」。
+        createMinimal.push({
+          type: "create_minimal",
+          seq: identity.seq,
+          nameZh: identity.nameRaw,
+          tel: identity.telRaw ? normalizeTel(identity.telRaw) : null,
+          defaultBrokerCode,
+          reason: "更表工號屬 DB 另一位安員（姓名對唔上）——保守預設：按更表姓名建獨立安員（無工號），工號衝突待核",
+          conservative: "staff_no_conflict",
+          matchOverrideStaffNo: snNormForReason,
+        });
+        continue;
+      }
       needsBoss.push({
         type: "needs_boss",
         seq: identity.seq,
@@ -569,6 +595,26 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
                   ? "淨係靠姓名喺名單搵到，更表／名單冇電話可以核對（可能同名唔同人）"
                   : "淨係靠姓名喺名單搵到，而更表電話同名單電話對唔上（可能同名唔同人）"
                 : null;
+      // 驗收（Opus 5.5，2026-09-26）：「淨係靠姓名喺名單搵到」嘅兩種（名單／
+      // 更表冇電話核對、或者電話對唔上）唔再留 needs_boss——保守預設：唔用
+      // 名單嗰行資料（可能係同名另一人），按更表姓名＋更表電話建獨立安員
+      // （cash_casual、無工號、無身份證），待核。其餘拒絕原因（身份證／
+      // 工號已喺 DB）照舊交老闆（嗰啲係「DB 可能已經有呢個人」，唔可以
+      // 再起一個）。
+      const nameOnlyUnverified = !uRowByNumber && !(uRow.hkidNote === "mentions_other_number") && !(uRowHkidCanon && hkidIndex.has(uRowHkidCanon)) && !(uNumberForCreate && staffNoOwner.has(uNumberForCreate));
+      if (refuse && nameOnlyUnverified && (guardIndex.byName.get(identity.nameRaw)?.length ?? 0) + (guardIndex.byAlias.get(identity.nameRaw)?.length ?? 0) === 0) {
+        createMinimal.push({
+          type: "create_minimal",
+          seq: identity.seq,
+          nameZh: identity.nameRaw,
+          tel: rowTel,
+          defaultBrokerCode,
+          reason: `${refuse}——保守預設：唔用名單資料，按更表姓名建獨立安員（無工號），待核`,
+          conservative: "name_only_unverified",
+          matchOverrideStaffNo: null,
+        });
+        continue;
+      }
       if (refuse) {
         needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: `${refuse}，唔自動建人，交老闆睇`, candidateGuardIds: [] });
         continue;

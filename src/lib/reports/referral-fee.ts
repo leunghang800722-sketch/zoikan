@@ -23,9 +23,16 @@ import { monthStart as toMonthStart } from "@/lib/month-lock";
 import { n, round2 } from "./money";
 import { writeAuditTx } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
+import { parsePostorderWorkbookBuffer, type PostorderReferralRow } from "@/lib/guard-fix/postorder";
+import { matchBroker, matchSite, type BrokerCandidate, type SiteCandidate } from "@/lib/roster-upload/match";
 
 /** 卓弘客戶盤豁免介紹費（規則 12a）。 */
 export const REFERRAL_FEE_EXEMPT_CLIENT_GROUP = "卓弘";
+
+/** 驗收（Opus 5.5，2026-09-26）：規則 12a 原文「8 月結算跟月結表全數支付
+ * （唔扣）」、「規則由 9 月起生效」——之前 8 月都豁免咗，少計 T 1,380
+ * （同總表 60,520 對唔上）。豁免由呢個月份起先生效。 */
+export const REFERRAL_FEE_EXEMPT_FROM_MONTH = "2026-09-01";
 
 /** 呢個 recompute 唔可以碰嘅月份——7 月總表已經人手入咗 referral_fee
  * special_items（`scripts/seed/lib/py/extract_referral_fees.py`），唔可以
@@ -93,7 +100,11 @@ export function computeReferralFees(input: {
   shiftCounts: ReferralFeeShiftCountInput[];
   rates: ReferralFeeRateInput[];
   sites: ReferralFeeSiteInput[];
+  /** 卓弘豁免係咪生效（呢個月 >= REFERRAL_FEE_EXEMPT_FROM_MONTH）；唔傳＝生效
+   * （向下相容純函數測試）。 */
+  exemptionActive?: boolean;
 }): ComputeReferralFeesResult {
+  const exemptionActive = input.exemptionActive ?? true;
   const referralBrokerByGuard = new Map(input.guards.map((g) => [g.guardId, g.referralBrokerId]));
   const clientGroupBySite = new Map(input.sites.map((s) => [s.siteId, s.clientGroup]));
   const rateByKey = new Map<string, number>(); // `${brokerId}|${siteId ?? ''}`
@@ -106,7 +117,7 @@ export function computeReferralFees(input: {
   for (const sc of input.shiftCounts) {
     const brokerId = referralBrokerByGuard.get(sc.guardId);
     if (!brokerId) continue; // 呢個長工冇記錄邊個雞頭介紹——唔計
-    if (clientGroupBySite.get(sc.siteId) === REFERRAL_FEE_EXEMPT_CLIENT_GROUP) {
+    if (exemptionActive && clientGroupBySite.get(sc.siteId) === REFERRAL_FEE_EXEMPT_CLIENT_GROUP) {
       exemptShiftCount += sc.count;
       continue; // 規則 12a：卓弘客戶盤豁免
     }
@@ -140,6 +151,11 @@ export async function computeReferralFeesForMonth(month: Date): Promise<ComputeR
           guardId: { in: guardIds },
           workDate: { gte: monthStartDate, lte: monthEnd },
           status: { not: "cancelled" },
+          // 驗收（Opus 5.5）：淨係計正更——之前冇篩 record_type，將長工
+          // 自己崗位嘅假期格（AL/SL/OFF，都掛 B07）同 OT 都當咗「更」，
+          // 8 月多計 12 條組合、約 11,000（總表「長工雞頭費」公式係
+          // `費率×Total Shift`，Total Shift 只數返工格）。
+          recordType: "shift",
           settlementBroker: { kind: "internal_longterm" },
         },
         _count: { _all: true },
@@ -178,12 +194,108 @@ export async function computeReferralFeesForMonth(month: Date): Promise<ComputeR
     shiftCounts: shiftCountsRaw.map((s) => ({ guardId: s.guardId, siteId: s.siteId, count: s._count._all })),
     rates,
     sites: sites.map((s) => ({ siteId: s.id, clientGroup: s.clientGroup })),
+    exemptionActive: monthStartDate >= new Date(REFERRAL_FEE_EXEMPT_FROM_MONTH),
   });
+}
+
+export interface PostorderReferralRateSync {
+  /** 呢次新寫（或者改咗費率）嘅 (broker, site) 組合數。 */
+  upserted: number;
+  /** 對唔到雞頭／盤、或者同一 (broker, site) 喺總表出現兩個唔同費率（唔估）。 */
+  skipped: string[];
+}
+
+/** 純函數：Postorder「長工雞頭費」行 → 逐 (brokerId, siteId) 費率。對唔到
+ * 雞頭／盤就跳過；同一組合兩個唔同費率就成個組合唔用（唔准估）。 */
+export function referralRatesFromPostorderRows(
+  rows: readonly PostorderReferralRow[],
+  brokers: readonly BrokerCandidate[],
+  sites: readonly SiteCandidate[],
+): { rates: Map<string, { brokerId: string; siteId: string; feePerShift: number }>; skipped: string[] } {
+  const rates = new Map<string, { brokerId: string; siteId: string; feePerShift: number }>();
+  const conflicted = new Set<string>();
+  const skipped: string[] = [];
+  for (const row of rows) {
+    if (row.rate === null) {
+      skipped.push(`row ${row.rowIndex}：公式讀唔到費率`);
+      continue;
+    }
+    const brokerId = matchBroker(row.brokerLabelRaw, brokers);
+    if (!brokerId) {
+      skipped.push(`row ${row.rowIndex}：雞頭稱呼對唔到`);
+      continue;
+    }
+    const siteIds = new Set<string>();
+    for (const label of row.siteLabelsRaw) {
+      const id = matchSite(label, sites);
+      if (id) siteIds.add(id);
+    }
+    if (siteIds.size === 0) for (const label of row.siteLabelsFallbackRaw) {
+      const id = matchSite(label, sites);
+      if (id) siteIds.add(id);
+    }
+    if (siteIds.size === 0) {
+      skipped.push(`row ${row.rowIndex}：盤名對唔到`);
+      continue;
+    }
+    for (const siteId of siteIds) {
+      const key = `${brokerId}|${siteId}`;
+      if (conflicted.has(key)) continue;
+      const cur = rates.get(key);
+      if (cur && cur.feePerShift !== row.rate) {
+        rates.delete(key);
+        conflicted.add(key);
+        skipped.push(`row ${row.rowIndex}：同一雞頭同一盤喺總表有兩個唔同費率，唔用`);
+        continue;
+      }
+      rates.set(key, { brokerId, siteId, feePerShift: row.rate });
+    }
+  }
+  return { rates, skipped };
+}
+
+/**
+ * 驗收（Opus 5.5，2026-09-26）：本月有 Postorder 上載就以總表「長工雞頭
+ * 費」公式嘅費率為準，寫入 `referral_fee_rates`（month＝本月，逐 broker×
+ * site，audit）——之前淨係用 7 月 seed 嘅雞頭預設費率，例如 K 粉嶺安樂村
+ * 貨倉總表係 60／更，系統用咗 K 預設 50。冇 Postorder 就乜都唔做（跟返
+ * 現有費率表）。冪等：費率一樣就唔寫。
+ */
+export async function syncReferralRatesFromPostorder(month: Date, actorUserId: string, ip: string | null): Promise<PostorderReferralRateSync> {
+  const monthStartDate = toMonthStart(month);
+  const po = await prisma.postorderUpload.findFirst({ where: { month: monthStartDate, status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { fileBytes: true } });
+  if (!po) return { upserted: 0, skipped: [] };
+  let parsed: Awaited<ReturnType<typeof parsePostorderWorkbookBuffer>>;
+  try {
+    parsed = await parsePostorderWorkbookBuffer(Buffer.from(po.fileBytes));
+  } catch {
+    // 保守：Postorder 讀唔到就唔郁費率表（跟返現有費率），唔擋重算。
+    return { upserted: 0, skipped: ["Postorder 檔案解析失敗，費率跟返現有費率表"] };
+  }
+  const [brokersRaw, sitesRaw] = await Promise.all([
+    prisma.broker.findMany({ select: { id: true, code: true, aliases: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } }),
+  ]);
+  const { rates, skipped } = referralRatesFromPostorderRows(parsed.referralRows, brokersRaw, sitesRaw);
+  let upserted = 0;
+  await prisma.$transaction(async (tx) => {
+    for (const r of rates.values()) {
+      const existing = await tx.referralFeeRate.findFirst({ where: { brokerId: r.brokerId, siteId: r.siteId, month: monthStartDate } });
+      if (existing && existing.voidedAt === null && n(existing.feePerShift) === r.feePerShift) continue;
+      const row = existing
+        ? await tx.referralFeeRate.update({ where: { id: existing.id }, data: { feePerShift: r.feePerShift, voidedAt: null, voidedBy: null } })
+        : await tx.referralFeeRate.create({ data: { brokerId: r.brokerId, siteId: r.siteId, month: monthStartDate, feePerShift: r.feePerShift, createdBy: `postorder-referral-sync:${actorUserId}` } });
+      await writeAuditTx(tx, { actorUserId, tableName: "referral_fee_rates", rowId: row.id, action: existing ? "update" : "create", before: existing ?? undefined, after: row, ip });
+      upserted += 1;
+    }
+  });
+  return { upserted, skipped };
 }
 
 export interface RecomputeReferralFeesResult extends ComputeReferralFeesResult {
   voidedCount: number;
   createdCount: number;
+  rateSync: PostorderReferralRateSync;
 }
 
 /**
@@ -198,6 +310,7 @@ export async function recomputeReferralFees(month: Date, actorUserId: string, ip
   if (monthStartDate < new Date(REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH)) {
     throw BadRequest(`${REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH.slice(0, 7)} 之前嘅月份已經人手入咗長工介紹費，唔可以用自動公式重算`);
   }
+  const rateSync = await syncReferralRatesFromPostorder(monthStartDate, actorUserId, ip);
   const result = await computeReferralFeesForMonth(monthStartDate);
   const createdByTag = `referral-fee-recompute:${actorUserId}`;
 
@@ -234,5 +347,5 @@ export async function recomputeReferralFees(month: Date, actorUserId: string, ip
     return { voidedCount: voided, createdCount: created };
   });
 
-  return { ...result, voidedCount, createdCount };
+  return { ...result, voidedCount, createdCount, rateSync };
 }

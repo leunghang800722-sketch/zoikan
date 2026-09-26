@@ -97,6 +97,82 @@ describe("recomputeSettlement", () => {
     expect(after.settlementBrokerId).toBe(k.id);
   });
 
+  it("驗收（Opus 5.5）：本月有 Postorder（權威）——推算崗位（inferred）唔算、唔再推算；B07 格改返更表雞頭碼，而且重新定價（唔係留低 B07 冇外判價）", async () => {
+    const k = await makeBroker("TEST-K5");
+    await makeBroker("TEST-B075", "internal_longterm");
+    const site = await makeSite("測試盤5");
+    const guard = await makeGuard();
+    const st = await makeShiftType(site.id);
+    const uploader = await makeUploader();
+    const upload = await makeUpload(site.id, uploader.id);
+    await prisma.rateCard.create({ data: { siteId: site.id, shiftTypeId: st.id, brokerId: k.id, clientRate: 900, guardWage: 850, payoutRate: 850, billingModel: "per_shift", effectiveFrom: new Date("2026-08-01"), createdBy: "test" } });
+    // 之前（未有 Postorder）逐盤套用留低：推算崗位＋B07、冇外判價。
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "inferred", createdBy: "test" } });
+    const b07 = await prisma.broker.findFirstOrThrow({ where: { code: "TEST-B075" } });
+    const sr = await prisma.shiftRecord.create({
+      data: { workDate: new Date("2026-08-05"), siteId: site.id, shiftTypeId: st.id, guardId: guard.id, settlementBrokerId: b07.id, operationalBrokerId: k.id, clientRateSnapshot: 900, guardWageSnapshot: null },
+    });
+    const po = await prisma.postorderUpload.create({ data: { month: new Date("2026-08-01"), uploaderId: uploader.id, fileName: "po.xlsm", fileSha256: "x", fileBytes: Buffer.from("x"), fileSize: 1, rowCount: 0, status: "parsed" } });
+    // 淨係上載、未套用 guard-fix 計劃——唔當權威（仲係跟推算崗位 B07，唔郁）。
+    expect((await recomputeSettlement(upload.id)).changed).toBe(0);
+    const staffList = await prisma.staffListUpload.create({ data: { uploaderId: uploader.id, fileName: "u.xlsx", fileSha256: "u", fileBytes: Buffer.from("u"), fileSize: 1, rowCount: 0 } });
+    await prisma.guardFixRun.create({ data: { month: new Date("2026-08-01"), staffListUploadId: staffList.id, postorderUploadId: po.id, createdById: uploader.id, planJson: {}, summaryJson: {}, status: "applied" } });
+
+    const r = await recomputeSettlement(upload.id);
+    expect(r.changed).toBe(1);
+    expect(r.changes[0]!.reason).toBe("longterm_no_post_postorder");
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: sr.id } });
+    expect(after.settlementBrokerId).toBe(k.id);
+    expect(after.operationalBrokerId).toBe(k.id);
+    expect(Number(after.guardWageSnapshot)).toBe(850); // 重新定價
+    expect(Number(after.clientRateSnapshot)).toBe(900);
+    // 冪等
+    expect((await recomputeSettlement(upload.id)).changed).toBe(0);
+  });
+
+  it("驗收（Opus 5.5）：K→B07 重新定價——B07 格 guard_wage 清走（8 月起 broker_fee 都唔寫）", async () => {
+    const k = await makeBroker("TEST-K6");
+    const b07 = await makeBroker("TEST-B076", "internal_longterm");
+    const site = await makeSite("測試盤6");
+    const guard = await makeGuard();
+    const st = await makeShiftType(site.id);
+    const uploader = await makeUploader();
+    const upload = await makeUpload(site.id, uploader.id);
+    await prisma.rateCard.create({ data: { siteId: site.id, shiftTypeId: st.id, clientRate: 900, guardWage: 850, brokerFee: 30, payoutRate: 880, billingModel: "per_shift", effectiveFrom: new Date("2026-08-01"), createdBy: "test" } });
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const sr = await prisma.shiftRecord.create({
+      data: { workDate: new Date("2026-08-05"), siteId: site.id, shiftTypeId: st.id, guardId: guard.id, settlementBrokerId: k.id, operationalBrokerId: k.id, clientRateSnapshot: 900, guardWageSnapshot: 850, brokerFeeSnapshot: 30 },
+    });
+    const r = await recomputeSettlement(upload.id);
+    expect(r.changed).toBe(1);
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: sr.id } });
+    expect(after.settlementBrokerId).toBe(b07.id);
+    expect(after.guardWageSnapshot).toBeNull();
+    expect(after.brokerFeeSnapshot).toBeNull();
+    expect(Number(after.clientRateSnapshot)).toBe(900);
+  });
+
+  it("驗收（Opus 5.5）：B07 格結算單位冇變、但帶住舊版寫落嘅 guard_wage／broker_fee——8 月起一樣清走", async () => {
+    const k = await makeBroker("TEST-K7");
+    const b07 = await makeBroker("TEST-B077", "internal_longterm");
+    const site = await makeSite("測試盤7");
+    const guard = await makeGuard();
+    const st = await makeShiftType(site.id);
+    const uploader = await makeUploader();
+    const upload = await makeUpload(site.id, uploader.id);
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const sr = await prisma.shiftRecord.create({
+      data: { workDate: new Date("2026-08-05"), siteId: site.id, shiftTypeId: st.id, guardId: guard.id, settlementBrokerId: b07.id, operationalBrokerId: k.id, guardWageSnapshot: 850, brokerFeeSnapshot: 30 },
+    });
+    const r = await recomputeSettlement(upload.id);
+    expect(r.changed).toBe(1);
+    const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: sr.id } });
+    expect(after.settlementBrokerId).toBe(b07.id);
+    expect(after.guardWageSnapshot).toBeNull();
+    expect(after.brokerFeeSnapshot).toBeNull();
+    expect((await recomputeSettlement(upload.id)).changed).toBe(0);
+  });
+
   it("上載未定盤（site_id null）——冇嘢好重算，返 0", async () => {
     const uploader = await makeUploader();
     const upload = await prisma.rosterUpload.create({

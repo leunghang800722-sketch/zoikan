@@ -426,6 +426,7 @@ model Guard {
   users             User[]
   staffNumbers      GuardStaffNumber[]
   longtermPosts     GuardLongtermPost[]
+  matchOverrides    GuardMatchOverride[]
   // WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀一個」）：
   // 電話／緊急聯絡人／地址呢三樣而家可以「有幾多個記幾多個」，方案跟
   // WP-STAFFNO 一致（獨立子表＋`guards.tel`／`address`／
@@ -994,6 +995,32 @@ enum GuardFixRunStatus {
   applying
   applied
   failed
+}
+
+// ---------------------------------------------------------------------------
+// guard_match_overrides（驗收 Opus 5.5，2026-09-26）：更表「工號衝突」保守
+// 預設——更表某行寫嘅工號屬 DB 另一位安員（姓名對唔上，B1-8「唔准配」），
+// 老闆指令唔可以留「要老闆決定」：guard-fix 按更表姓名建一個獨立安員
+// （cash_casual、無工號），再喺度記低「呢個（正規化）工號＋呢個更表姓名
+// → 嗰個獨立安員」，`matchGuard()` 見到完全相同組合先會配（唔影響其他
+// 工號／姓名組合，B1-8 原則照舊）。`reason` 寫「工號衝突待核」等 HR 之後
+// 覆核；作廢唔刪（voided_at）。
+// ---------------------------------------------------------------------------
+model GuardMatchOverride {
+  id        String    @id @default(uuid())
+  staffNo   String    @map("staff_no") // 正規化工號（normalizeStaffNumber）
+  nameRaw   String    @map("name_raw") // 更表姓名原文（trim）
+  guardId   String    @map("guard_id")
+  guard     Guard     @relation(fields: [guardId], references: [id], onDelete: Restrict)
+  reason    String
+  createdAt DateTime  @default(now()) @map("created_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@unique([staffNo, nameRaw])
+  @@index([guardId])
+  @@map("guard_match_overrides")
 }
 
 // ---------------------------------------------------------------------------

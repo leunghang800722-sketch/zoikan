@@ -142,6 +142,8 @@ interface ReconcileAllRunDTO {
   apply_allowed: boolean;
   result: {
     uploadCount: number;
+    /** 驗收（Opus 5.5）：舊 run 冇呢欄。 */
+    warnings?: string[];
     perUpload: ReconcileAllPerUploadDTO[];
     totals: { rosterOnlyBefore: number; settlementDiffBefore: number; unresolvedBefore: number; settlementChanged: number; applied: number; uploadsWithErrors: number };
   } | null;
@@ -530,6 +532,11 @@ export default function RosterUploadsPage() {
             <span>未配對留低 {reconcileAllResult.result.totals.unresolvedBefore} 格</span>
             {reconcileAllResult.result.totals.uploadsWithErrors > 0 && <span className="text-red-700">{reconcileAllResult.result.totals.uploadsWithErrors} 個上載有錯誤</span>}
           </div>
+          {(reconcileAllResult.result.warnings ?? []).map((w) => (
+            <div key={w} className="mb-2 rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-amber-800" data-testid="reconcile-all-warning">
+              {w}
+            </div>
+          ))}
           <ul className="max-h-64 divide-y divide-zk-border overflow-y-auto rounded border border-zk-border">
             {reconcileAllResult.result.perUpload
               .filter((u) => u.applied > 0 || u.settlementChanged > 0 || u.before.unresolved > 0 || u.errors.length > 0)

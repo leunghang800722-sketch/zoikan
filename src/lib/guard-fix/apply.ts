@@ -138,28 +138,28 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       uNumber: string | null;
       defaultBrokerCode: string;
       diff: Diff;
-    }) {
+    }): Promise<string | null> {
       const hkidCanon = canonicalHkid(input.hkid);
       if (hkidCanon && existingHkids.has(hkidCanon)) {
         input.diff.skip.push(`${input.seq}（同身份證已有安員，唔再起，交老闆睇）`);
-        return;
+        return null;
       }
       if (input.uNumber) {
         const existingSn = await tx.guardStaffNumber.findUnique({ where: { number: input.uNumber } });
         if (existingSn) {
           input.diff.skip.push(`${input.seq}（U 號已存在，冪等跳過）`);
-          return;
+          return null;
         }
       } else {
         const dup = await tx.guard.findFirst({ where: { nameZh: input.nameZh, tel: input.primaryTel ?? undefined }, select: { id: true } });
         if (dup) {
           input.diff.skip.push(`${input.seq}（同名同電話已存在，冪等跳過）`);
-          return;
+          return null;
         }
       }
       input.diff.create.push(input.seq);
       if (hkidCanon) existingHkids.add(hkidCanon);
-      if (planOnly) return;
+      if (planOnly) return null;
 
       const broker = await tx.broker.findUnique({ where: { code: input.defaultBrokerCode }, select: { id: true } });
       const created = await tx.guard.create({
@@ -198,6 +198,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         await syncLegacyGuardContactColumns(tx, created.id, ["tel"]);
         await writeAuditTx(tx, { actorUserId: null, tableName: "guard_phones", rowId: phoneResult2.created.id, action: "create", after: { id: phoneResult2.created.id, guardId: phoneResult2.created.guardId, isPrimary: phoneResult2.created.isPrimary, source: phoneResult2.created.source }, ip: null });
       }
+      return created.id;
     }
 
     for (const ca of plan.actions.create) {
@@ -215,7 +216,16 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       });
     }
     for (const cm of plan.actions.createMinimal) {
-      await ensureNewGuard({
+      // 驗收（Opus 5.5）：工號衝突保守預設——同一個「工號＋更表姓名」已經
+      // 有 override 就冪等跳過（唔再起多個人）。
+      if (cm.matchOverrideStaffNo) {
+        const existingOverride = await tx.guardMatchOverride.findUnique({ where: { staffNo_nameRaw: { staffNo: cm.matchOverrideStaffNo, nameRaw: cm.nameZh.trim() } } });
+        if (existingOverride && existingOverride.voidedAt === null) {
+          diffs.createMinimal.skip.push(`${cm.seq}（工號衝突保守預設已套用過，冪等跳過）`);
+          continue;
+        }
+      }
+      const newGuardId = await ensureNewGuard({
         seq: cm.seq,
         nameZh: cm.nameZh,
         alias: null,
@@ -227,6 +237,25 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         defaultBrokerCode: cm.defaultBrokerCode,
         diff: diffs.createMinimal,
       });
+      if (newGuardId && cm.conservative) {
+        // audit 留低「保守預設、待核」原因（guards 表冇 note 欄）。
+        await writeAuditTx(tx, {
+          actorUserId: null,
+          tableName: "guards",
+          rowId: newGuardId,
+          action: "guard_fix_conservative_default",
+          after: { id: newGuardId, conservative: cm.conservative, note: cm.conservative === "staff_no_conflict" ? "工號衝突待核" : "淨係姓名對到名單、未能核實，待核" },
+          ip: null,
+        });
+      }
+      if (newGuardId && cm.matchOverrideStaffNo) {
+        const override = await tx.guardMatchOverride.upsert({
+          where: { staffNo_nameRaw: { staffNo: cm.matchOverrideStaffNo, nameRaw: cm.nameZh.trim() } },
+          create: { staffNo: cm.matchOverrideStaffNo, nameRaw: cm.nameZh.trim(), guardId: newGuardId, reason: "工號衝突待核（guard-fix 保守預設：按更表姓名建獨立安員）", createdBy: SYSTEM_ACTOR },
+          update: { guardId: newGuardId, voidedAt: null, voidedBy: null },
+        });
+        await writeAuditTx(tx, { actorUserId: null, tableName: "guard_match_overrides", rowId: override.id, action: "create", after: { id: override.id, guardId: newGuardId, reason: override.reason }, ip: null });
+      }
     }
 
     // -----------------------------------------------------------------
@@ -263,13 +292,20 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     //    set_longterm_post 計劃套用同老闆手動加同一種來源）。
     // -----------------------------------------------------------------
     for (const sp of plan.actions.setLongtermPost) {
-      const existing = await tx.guardLongtermPost.findFirst({ where: { guardId: sp.guardId, siteId: sp.siteId, voidedAt: null }, select: { id: true } });
+      const existing = await tx.guardLongtermPost.findFirst({ where: { guardId: sp.guardId, siteId: sp.siteId, voidedAt: null, source: "manual" }, select: { id: true } });
       if (existing) {
         diffs.setLongtermPost.skip.push(`${sp.seq}（已經有生效崗位記錄，冪等跳過）`);
         continue;
       }
       diffs.setLongtermPost.create.push(sp.seq);
       if (planOnly) continue;
+      // 驗收（Opus 5.5）：同組合之前由占比推算建咗 inferred 崗位——總表已經
+      // 確認，作廢推算嗰條（留歷史），下面建 manual。
+      const inferredSame = await tx.guardLongtermPost.findMany({ where: { guardId: sp.guardId, siteId: sp.siteId, voidedAt: null, source: "inferred" } });
+      for (const inf of inferredSame) {
+        const voided = await tx.guardLongtermPost.update({ where: { id: inf.id }, data: { voidedAt: new Date(), voidedBy: SYSTEM_ACTOR } });
+        await writeAuditTx(tx, { actorUserId: null, tableName: "guard_longterm_posts", rowId: inf.id, action: "void", before: inf, after: voided, ip: null });
+      }
       const created = await tx.guardLongtermPost.create({
         data: {
           guardId: sp.guardId,

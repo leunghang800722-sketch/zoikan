@@ -410,6 +410,11 @@ export interface GuardMatchResult {
    * 「別名唯一」（`guards.name_aliases`）先配到——`service.ts` 用嚟加
    * 「由別名配對」warning，等會計知呢個人個本名同更表寫嘅唔同。 */
   matchedViaAlias: boolean;
+  /** 驗收（Opus 5.5，2026-09-26）：靠 `guard_match_overrides`（工號衝突
+   * 保守預設）配到——更表工號屬另一人、guard-fix 按更表姓名建咗獨立安員
+   * 並記低「呢個工號＋呢個姓名 → 嗰個安員」。`service.ts` 加「工號衝突
+   * 待核」warning。optional：舊 call site／測試唔使改。 */
+  matchedViaStaffNoConflictOverride?: boolean;
 }
 
 export interface GuardCandidate {
@@ -420,6 +425,8 @@ export interface GuardCandidate {
 /** `service.ts` 一次過查晒 DB 預先起好嘅對照索引——一個上載入面成千格
  * 記錄逐格 O(1) 查表，唔使逐行 await 查 DB。 */
 export interface GuardMatchIndex {
+  /** 驗收（Opus 5.5）：`${正規化工號}\u0000${更表姓名}` → guardId（工號衝突保守預設；optional，舊測試自己砌 index 唔使改）。 */
+  staffNoConflictOverrides?: ReadonlyMap<string, string>;
   /** 正規化工號（含 current／former，`guard_staff_numbers.number`）→
    * {guardId, status}——status 俾 (b) 判斷係咪靠已取消號配到。 */
   byStaffNumber: ReadonlyMap<string, { guardId: string; status: string }>;
@@ -466,6 +473,8 @@ export function buildGuardMatchIndex(rows: {
   guards: readonly (GuardCandidate & { tel: string | null; staffNo: string | null; staffNoMw: string | null; nameAliases?: readonly string[] })[];
   staffNumbers: readonly { number: string; guardId: string; status: string }[];
   phones: readonly { guardId: string; tel: string }[];
+  /** 驗收（Opus 5.5）：`guard_match_overrides`（未作廢）——工號衝突保守預設。 */
+  matchOverrides?: readonly { staffNo: string; nameRaw: string; guardId: string }[];
 }): GuardMatchIndex {
   const byStaffNumber = new Map<string, { guardId: string; status: string }>();
   for (const sn of rows.staffNumbers) byStaffNumber.set(normalizeStaffNumber(sn.number), { guardId: sn.guardId, status: sn.status });
@@ -520,7 +529,14 @@ export function buildGuardMatchIndex(rows: {
     }
   }
 
-  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId };
+  const staffNoConflictOverrides = new Map<string, string>();
+  for (const o of rows.matchOverrides ?? []) staffNoConflictOverrides.set(overrideKey(normalizeStaffNumber(o.staffNo), o.nameRaw.trim()), o.guardId);
+
+  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId, staffNoConflictOverrides };
+}
+
+function overrideKey(staffNoNorm: string, name: string): string {
+  return `${staffNoNorm}\u0000${name}`;
 }
 
 /** 安員配對次序（WP-GUARD-FIX 老闆 2026-09-25 要求擴充）：
@@ -560,6 +576,20 @@ export function matchGuard(
   if (params.staffNoRaw) {
     const normalized = normalizeStaffNumber(params.staffNoRaw);
     if (normalized) {
+      // 驗收（Opus 5.5）：工號衝突保守預設——完全相同嘅「工號＋更表姓名」
+      // 組合先會命中（見 GuardMatchOverride 註解）。
+      const overrideGuardId = rowName ? index.staffNoConflictOverrides?.get(overrideKey(normalized, rowName)) : undefined;
+      if (overrideGuardId) {
+        return {
+          guardId: overrideGuardId,
+          guardMatch: "by_name",
+          matchedViaFormerStaffNo: false,
+          staffNoMismatch: false,
+          staffNoBelongsToOther: false,
+          matchedViaAlias: false,
+          matchedViaStaffNoConflictOverride: true,
+        };
+      }
       const viaNumber = index.byStaffNumber.get(normalized);
       if (viaNumber) {
         // B1-8 第 3 項：staff_no 命中真實存在嘅安員，但呢行姓名同嗰個

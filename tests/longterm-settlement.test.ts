@@ -98,6 +98,25 @@ describe("resolveLongtermSettlement", () => {
     expect(r2!.reason).toBe("longterm_dispersed_b07");
   });
 
+  it("驗收（Opus 5.5）：本月有 Postorder（權威）、冇任何（非推算）崗位——唔推算，跟更表雞頭碼頂散更（就算占比 ≥50%）", () => {
+    const r = resolveLongtermSettlement({ ...base, monthlyTopSite: { siteId: "site-a", ratio: 1 }, postorderAuthoritative: true });
+    expect(r?.reason).toBe("longterm_no_post_postorder");
+    expect(r?.settlementBrokerId).toBe("broker-k");
+    expect(r?.operationalBrokerId).toBe("broker-k");
+    expect(r?.inferredPostSiteId).toBeUndefined();
+  });
+
+  it("驗收（Opus 5.5）：Postorder 權威但更表冇雞頭碼——settlement null（caller 跌返舊 fallback 鏈）", () => {
+    const r = resolveLongtermSettlement({ ...base, rosterBrokerId: null, postorderAuthoritative: true });
+    expect(r?.reason).toBe("longterm_no_post_postorder");
+    expect(r?.settlementBrokerId).toBeNull();
+  });
+
+  it("驗收（Opus 5.5）：Postorder 權威、有崗位喺呢個盤——照舊 B07", () => {
+    const r = resolveLongtermSettlement({ ...base, activePostSiteIds: new Set(["site-a"]), postorderAuthoritative: true });
+    expect(r?.reason).toBe("longterm_post");
+  });
+
   it("恰好 50% 算過咗（>=）", () => {
     const r = resolveLongtermSettlement({ ...base, activePostSiteIds: new Set(), monthlyTopSite: { siteId: "site-a", ratio: 0.5 } });
     expect(r!.reason).toBe("longterm_inferred_post");
@@ -139,6 +158,22 @@ describe("longterm-settlement DB helpers", () => {
 
     const map = await loadActiveLongtermPosts([guard.id], new Date("2026-08-15"), prisma);
     expect([...(map.get(guard.id) ?? [])]).toEqual([site.id]);
+  });
+
+  it("驗收（Opus 5.5）：loadActiveLongtermPosts——崗位喺構造盤（activity_proxy_site_id）就連 proxy 盤都算；excludeInferred（Postorder 生效）淨係計 manual，唔計 inferred／july_backfill", async () => {
+    const real = await makeSite("實際記更盤");
+    const billing = await prisma.site.create({ data: { canonicalName: "構造月費盤", clientName: "測試客戶", billingModel: "per_shift", activityProxySiteId: real.id, createdBy: "test" } });
+    const guard = await makeGuard();
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: billing.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const other = await makeSite("推算盤");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: other.id, effectiveFrom: new Date("2026-08-01"), source: "inferred", createdBy: "test" } });
+    const julySite = await makeSite("七月反推盤");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: julySite.id, effectiveFrom: new Date("2026-07-01"), source: "july_backfill", createdBy: "test" } });
+
+    const all = await loadActiveLongtermPosts([guard.id], new Date("2026-08-15"), prisma);
+    expect([...(all.get(guard.id) ?? [])].sort()).toEqual([billing.id, real.id, other.id, julySite.id].sort());
+    const noInferred = await loadActiveLongtermPosts([guard.id], new Date("2026-08-15"), prisma, { excludeInferred: true });
+    expect([...(noInferred.get(guard.id) ?? [])].sort()).toEqual([billing.id, real.id].sort());
   });
 
   it("inferGuardMonthlyTopSite：跨多張上載計占比，摺埋母盤", async () => {

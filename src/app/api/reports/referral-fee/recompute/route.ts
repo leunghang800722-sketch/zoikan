@@ -51,6 +51,8 @@ export async function POST(req: Request) {
         voided_count: result.voidedCount,
         exempt_shift_count: result.exemptShiftCount,
         warnings: result.warnings,
+        // 驗收（Opus 5.5）：本月 Postorder「長工雞頭費」費率同步結果（純數目＋行號，冇 PII）。
+        rate_sync: result.rateSync,
       }),
     );
   });

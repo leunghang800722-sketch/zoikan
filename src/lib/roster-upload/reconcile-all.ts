@@ -21,6 +21,7 @@ import { assertMonthNotLocked, monthStart as toMonthStart } from "@/lib/month-lo
 import { reconcileUpload } from "./reconcile";
 import { applyReconcileDecisions } from "./reconcile-apply";
 import { recomputeSettlement } from "./settlement-resync";
+import { hasParsedPostorderForMonth } from "@/lib/pricing/longterm-settlement";
 
 /** 同 guard-fix 嗰個 key（7_710_250_925）刻意用另一個數字，兩個 lock
  * 唔會互相排隊（reconcile-all 淨係改 shift_records／guard_longterm_
@@ -49,6 +50,8 @@ export interface ReconcileAllPerUploadResult {
 
 export interface ReconcileAllResult {
   month: string;
+  /** 驗收（Opus 5.5）：非阻擋性提示（例如 Postorder 上載咗但未套用安員配對修復）。 */
+  warnings: string[];
   uploadCount: number;
   perUpload: ReconcileAllPerUploadResult[];
   totals: {
@@ -68,6 +71,14 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
   // 鎖定月份唔准動——同 apply_roster 單張上載一致嘅閘，喺呢度做一次
   // 早期檢查，唔使逐張上載先撞到先知。
   await assertMonthNotLocked({ workDate: monthStartDate, actorUserId, tableName: "roster_uploads", rowId: "reconcile-all", ip });
+
+  // 驗收（Opus 5.5）：Postorder 上載咗但未套用引用佢嘅安員配對修復計劃——
+  // 長工崗位盤未跟總表更新（仍然用舊崗位／占比推算），提示先套用再重跑。
+  const warnings: string[] = [];
+  const latestPostorder = await prisma.postorderUpload.findFirst({ where: { month: monthStartDate, status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { id: true } });
+  if (latestPostorder && !(await hasParsedPostorderForMonth(monthStartDate))) {
+    warnings.push("本月最新 Postorder 已上載但未套用安員配對修復計劃——長工崗位未跟總表更新（暫時沿用舊崗位／占比推算）；請先喺「安員配對修復」計劃＋套用，再重新對數全月");
+  }
 
   const uploads = await prisma.rosterUpload.findMany({
     where: { month: monthStartDate, status: { in: ["parsed", "confirmed"] } },
@@ -132,5 +143,5 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
     perUpload.push({ uploadId: u.id, siteLabel, before, settlementScanned, settlementChanged, applied, skippedApplyReason, errors });
   }
 
-  return { month: monthStartDate.toISOString().slice(0, 10), uploadCount: uploads.length, perUpload, totals };
+  return { month: monthStartDate.toISOString().slice(0, 10), warnings, uploadCount: uploads.length, perUpload, totals };
 }

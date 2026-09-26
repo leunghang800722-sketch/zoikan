@@ -78,6 +78,14 @@ export interface CreateMinimalAction {
   tel: string | null;
   defaultBrokerCode: string;
   reason: string;
+  /** 驗收（Opus 5.5，2026-09-26）：老闆指令「唔准留要老闆決定」——以前
+   * needs_boss 嘅兩類改做保守預設（按更表姓名建獨立安員、cash_casual、
+   * 無工號）：`conservative` 標明呢個係保守預設（待核），唔係名單／DB
+   * 搵唔到嘅普通 needs_hr。`matchOverrideStaffNo`：更表工號屬 DB 另一位
+   * 安員嘅情況，套用時順手寫 `guard_match_overrides`（呢個工號＋更表
+   * 姓名 → 新安員），reparse 先配得返。optional：舊 plan.json 冇呢兩欄。 */
+  conservative?: "staff_no_conflict" | "name_only_unverified";
+  matchOverrideStaffNo?: string | null;
 }
 
 export interface NeedsBossAction {
