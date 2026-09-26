@@ -939,6 +939,14 @@ model PostorderUpload {
   // referral_broker_labels_unresolved_count, parse_error} 呢類數目——
   // 唔存逐行姓名（鐵則）。
   parseSummary Json?                 @map("parse_summary")
+  // WP-POSTORDER-CSV（老闆 2026-09-26 緊急）：正式站操作員工具處理唔到
+  // binary（.xlsm／.xlsx），淨係可以攞到 Google Sheets 匯出嘅 CSV——
+  // 呢兩欄存原始 CSV bytes（Roster／PostOrder 分頁各一份），nullable，
+  // 有值＝呢份係 CSV 上載（`fileBytes`／`fileName`／`fileSha256`／
+  // `fileSize` 呢陣淨係佔位／audit 用途，唔係真正解析嘅資料源——見
+  // `src/lib/guard-fix/postorder.ts` `parsePostorderUploadRow()`）。
+  rosterCsvBytes    Bytes? @map("roster_csv_bytes")
+  postorderCsvBytes Bytes? @map("postorder_csv_bytes")
 
   createdAt DateTime @default(now()) @map("created_at")
 

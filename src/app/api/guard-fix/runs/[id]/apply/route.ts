@@ -32,7 +32,7 @@ import { NotFound, Conflict } from "@/lib/api/errors";
 import { applyGuardFixPlan, reparseAllActiveUploads, GUARD_FIX_ADVISORY_LOCK_KEY } from "@/lib/guard-fix/apply";
 import { buildGuardFixPlan, summarizePlan } from "@/lib/guard-fix/plan";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
-import { parsePostorderWorkbookBuffer } from "@/lib/guard-fix/postorder";
+import { parsePostorderUploadRow } from "@/lib/guard-fix/postorder";
 import { APPLY_STALE_MS, applyAllowed } from "@/lib/guard-fix/view";
 import type { GuardFixPlan } from "@/lib/guard-fix/types";
 
@@ -79,9 +79,8 @@ async function performApply(runId: string, actorUserId: string): Promise<void> {
       if (staffList) {
         const uTeamRows = await parseUTeamWorkbookBuffer(Buffer.from(staffList.fileBytes));
         const postorderUpload = run.postorderUploadId ? await prisma.postorderUpload.findUnique({ where: { id: run.postorderUploadId } }) : null;
-        const postorder = postorderUpload
-          ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderWorkbookBuffer(Buffer.from(postorderUpload.fileBytes))) }
-          : undefined;
+        // WP-POSTORDER-CSV：統一入口，xlsm/CSV 上載都得——見 plan/route.ts 同款註解。
+        const postorder = postorderUpload ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderUploadRow(postorderUpload)) } : undefined;
         const nextPlan = await buildGuardFixPlan({ prisma, month: run.month, uTeamRows, postorder });
         const nextSummary = summarizePlan(nextPlan);
         await prisma.guardFixRun.create({

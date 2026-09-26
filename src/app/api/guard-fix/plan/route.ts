@@ -14,7 +14,7 @@ import { monthStart } from "@/lib/month-lock";
 import { BadRequest, Conflict } from "@/lib/api/errors";
 import { buildGuardFixPlan, summarizePlan, NoActiveUploadsError } from "@/lib/guard-fix/plan";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
-import { parsePostorderWorkbookBuffer } from "@/lib/guard-fix/postorder";
+import { parsePostorderUploadRow } from "@/lib/guard-fix/postorder";
 import { buildNeedsBossView, APPLY_STALE_MS } from "@/lib/guard-fix/view";
 import type { Prisma } from "@prisma/client";
 
@@ -41,9 +41,10 @@ export async function POST(req: Request) {
     // WP-LTSHIFT §19：呢個月現用 Postorder 上載（冇上載都照計，set_longterm
     // 等四類新 action 一律 0 項，唔影響原有 link/create 行為）。
     const postorderUpload = await prisma.postorderUpload.findFirst({ where: { month, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
-    const postorder = postorderUpload
-      ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderWorkbookBuffer(Buffer.from(postorderUpload.fileBytes))) }
-      : undefined;
+    // WP-POSTORDER-CSV：xlsm 定 CSV 上載都用呢個統一入口（見 postorder.ts
+    // `parsePostorderUploadRow()`），揸 fileBytes 定 rosterCsvBytes/
+    // postorderCsvBytes 由裡面判斷，呢度唔使分兩套邏輯。
+    const postorder = postorderUpload ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderUploadRow(postorderUpload)) } : undefined;
 
     let plan;
     try {

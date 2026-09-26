@@ -23,7 +23,7 @@ import { monthStart as toMonthStart } from "@/lib/month-lock";
 import { n, round2 } from "./money";
 import { writeAuditTx } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
-import { parsePostorderWorkbookBuffer, type PostorderReferralRow } from "@/lib/guard-fix/postorder";
+import { parsePostorderUploadRow, type PostorderReferralRow } from "@/lib/guard-fix/postorder";
 import { matchBroker, matchSite, type BrokerCandidate, type SiteCandidate } from "@/lib/roster-upload/match";
 
 /** 卓弘客戶盤豁免介紹費（規則 12a）。 */
@@ -260,14 +260,27 @@ export function referralRatesFromPostorderRows(
  * site，audit）——之前淨係用 7 月 seed 嘅雞頭預設費率，例如 K 粉嶺安樂村
  * 貨倉總表係 60／更，系統用咗 K 預設 50。冇 Postorder 就乜都唔做（跟返
  * 現有費率表）。冪等：費率一樣就唔寫。
+ *
+ * WP-POSTORDER-CSV：呢個函數唔使分 xlsm／CSV 上載——`referralRatesFrom
+ * PostorderRows()` 本身就淨係識 upsert `row.rate !== null` 嘅組合，
+ * CSV 路徑（冇公式，`parsePostorderUploadRow()` 見 postorder.ts 檔頭
+ * 註解）嘅介紹費行 `rate` 全部 null，自然 0 upsert、`skipped` 逐行
+ * 「公式讀唔到費率」——效果同「冇 Postorder 上載」一樣：跟返
+ * `referral_fee_rates` 表入面已有嘅費率（xlsm 上載寫低嗰批，或者
+ * migration 種低嗰批，見 prisma/migrations/
+ * 20260926200000_wp_postorder_csv_aug_referral_rates）。
  */
 export async function syncReferralRatesFromPostorder(month: Date, actorUserId: string, ip: string | null): Promise<PostorderReferralRateSync> {
   const monthStartDate = toMonthStart(month);
-  const po = await prisma.postorderUpload.findFirst({ where: { month: monthStartDate, status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { fileBytes: true } });
+  const po = await prisma.postorderUpload.findFirst({
+    where: { month: monthStartDate, status: "parsed" },
+    orderBy: { uploadedAt: "desc" },
+    select: { fileBytes: true, rosterCsvBytes: true, postorderCsvBytes: true },
+  });
   if (!po) return { upserted: 0, skipped: [] };
-  let parsed: Awaited<ReturnType<typeof parsePostorderWorkbookBuffer>>;
+  let parsed: Awaited<ReturnType<typeof parsePostorderUploadRow>>;
   try {
-    parsed = await parsePostorderWorkbookBuffer(Buffer.from(po.fileBytes));
+    parsed = await parsePostorderUploadRow(po);
   } catch {
     // 保守：Postorder 讀唔到就唔郁費率表（跟返現有費率），唔擋重算。
     return { upserted: 0, skipped: ["Postorder 檔案解析失敗，費率跟返現有費率表"] };

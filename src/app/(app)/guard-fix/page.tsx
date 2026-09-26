@@ -193,6 +193,14 @@ export default function GuardFixPage() {
   const [currentPostorder, setCurrentPostorder] = useState<PostorderDTO | null>(null);
   const [uploadingPostorder, setUploadingPostorder] = useState(false);
   const [dragOverPostorder, setDragOverPostorder] = useState(false);
+
+  // WP-POSTORDER-CSV（老闆 2026-09-26 緊急）：正式站操作員工具處理唔到
+  // binary，改用 Google Sheets「下載為 CSV」——Roster／PostOrder 兩個
+  // CSV 揀齊先可以撳「上載 CSV」（同 xlsm 拖放係另一條獨立路徑，揀咗
+  // 一邊唔使理另一邊）。
+  const [rosterCsvFile, setRosterCsvFile] = useState<File | null>(null);
+  const [postorderCsvFile, setPostorderCsvFile] = useState<File | null>(null);
+  const [uploadingPostorderCsv, setUploadingPostorderCsv] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [plan, setPlan] = useState<ActivePlan | null>(null);
 
@@ -296,6 +304,40 @@ export default function GuardFixPage() {
       return;
     }
     setNotice(`Postorder 已上載（長工格 ${res.data.upload.parse_summary?.longterm_cell_count ?? 0}、介紹費行 ${res.data.upload.parse_summary?.referral_row_count ?? 0}）`);
+    await loadPostorder(month);
+  }
+
+  // WP-POSTORDER-CSV：Roster／PostOrder 兩個 CSV 揀齊先撳得——正式站
+  // 操作員工具處理唔到 binary，用 Google Sheets「下載為 CSV」代替。
+  async function onPostorderCsvUpload() {
+    if (!rosterCsvFile || !postorderCsvFile) {
+      setError("要揀齊 Roster 同 PostOrder 兩個 CSV 先可以上載");
+      return;
+    }
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      setError("請先揀番對應嘅月份（下面②）先上載 Postorder");
+      return;
+    }
+    setUploadingPostorderCsv(true);
+    setError(null);
+    setNotice(null);
+    const form = new FormData();
+    form.set("roster_csv", rosterCsvFile);
+    form.set("postorder_csv", postorderCsvFile);
+    form.set("month", `${month}-01`);
+    const res = await apiUpload<{ upload: PostorderDTO; parse_ok: boolean; parse_error: string | null }>("/api/guard-fix/postorder", form);
+    setUploadingPostorderCsv(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    if (!res.data.parse_ok) {
+      setError(`上載成功但解析失敗：${res.data.parse_error ?? "未知原因"}——請檢查係咪 Roster／PostOrder 分頁匯出嘅 CSV`);
+      return;
+    }
+    setNotice(`Postorder CSV 已上載（長工格 ${res.data.upload.parse_summary?.longterm_cell_count ?? 0}、介紹費行 ${res.data.upload.parse_summary?.referral_row_count ?? 0}）`);
+    setRosterCsvFile(null);
+    setPostorderCsvFile(null);
     await loadPostorder(month);
   }
 
@@ -516,6 +558,58 @@ export default function GuardFixPage() {
             }}
           />
         </label>
+
+        {/* WP-POSTORDER-CSV（老闆 2026-09-26 緊急）：正式站操作員工具讀唔到
+            binary，改用 Google Sheets「下載為 CSV」——呢度加兩個 CSV 檔案
+            輸入（Roster／PostOrder 分頁各一份），效果同上面 .xlsm 上載一樣。 */}
+        <div className="mt-3 rounded-lg border border-zk-border bg-zk-surface p-3">
+          <div className="mb-1.5 text-[13px] font-medium text-zk-text">或者上載兩個 CSV（Roster 分頁、PostOrder 分頁）</div>
+          <div className="mb-2 text-[12px] leading-relaxed text-zk-muted">
+            正式站帳號讀唔到 .xlsm／.xlsx：喺 Google Drive 用「Google Sheets」打開 Postorder 總表→左上「檔案」→「下載」→「逗號分隔值檔案
+            (.csv)（現時工作表）」，Roster 同 PostOrder 兩個分頁分別匯出、揀返落嚟。
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label htmlFor="postorder-roster-csv-input" className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${rosterCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}>
+              {rosterCsvFile ? `Roster：${rosterCsvFile.name}` : "揀 Roster.csv"}
+              <input
+                id="postorder-roster-csv-input"
+                type="file"
+                accept=".csv,text/csv"
+                className="sr-only"
+                disabled={uploadingPostorderCsv}
+                onChange={(e) => {
+                  setRosterCsvFile(e.target.files?.[0] ?? null);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <label
+              htmlFor="postorder-postorder-csv-input"
+              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${postorderCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}
+            >
+              {postorderCsvFile ? `PostOrder：${postorderCsvFile.name}` : "揀 PostOrder.csv"}
+              <input
+                id="postorder-postorder-csv-input"
+                type="file"
+                accept=".csv,text/csv"
+                className="sr-only"
+                disabled={uploadingPostorderCsv}
+                onChange={(e) => {
+                  setPostorderCsvFile(e.target.files?.[0] ?? null);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          <Button
+            className="mt-2 w-full sm:w-auto"
+            variant="secondary"
+            disabled={!rosterCsvFile || !postorderCsvFile || uploadingPostorderCsv}
+            onClick={() => void onPostorderCsvUpload()}
+          >
+            {uploadingPostorderCsv ? "上載緊…" : "上載 CSV"}
+          </Button>
+        </div>
       </div>
 
       {/* ② 計算計劃 */}

@@ -553,6 +553,72 @@ API／新資料表／關鍵行為，方便日後查。
   就淨係用代號本身，行為 deterministic，唔靠 gitignored 檔存在與否
   改變公開行為（同現有 `canonicalNameFor()` 一致嘅刻意權衡）。
 
+### A2. WP-POSTORDER-CSV（老闆 2026-09-26 緊急）：Postorder CSV 上載路徑
+正式站操作員（老闆帳號）用嘅工具處理唔到 binary（.xlsm／.xlsx），淨係
+可以攞到文字／CSV；操作步驟：喺 Google Drive 網頁將 `Postorder - Aug
+2026.xlsm` 用「Google Sheets」打開（自動轉做 Sheet），再逐個分頁「檔案」
+→「下載」→「逗號分隔值檔案 (.csv)（現時工作表）」——`Roster`／
+`PostOrder` 兩個分頁分別匯出。「安員配對修復」頁 Postorder 上載區加咗
+「或者上載兩個 CSV」兩個檔案輸入，選齊兩個先可以撳「上載 CSV」。
+
+- `src/lib/guard-fix/postorder.ts` 重構做「先讀成 grid（`PostorderGrid`
+  1-based 二維陣列），再對 grid 操作」：`parsePostorderLongtermPostsFrom
+  Grid()`／`parsePostorderReferralRowsFromGrid()` 兩條路徑共用，xlsm
+  （`gridFromWorksheet()`）／CSV（`gridFromCsvText()`，用 `csv-parse/
+  sync` 解 RFC4180，`skip_empty_lines:false` 保留行號）分別起 grid 再
+  call 同一套邏輯，格位置判斷唔會兩份代碼飄開。新公開函數：
+  `parsePostorderLongtermPostsFromCsvGrid()`／
+  `parsePostorderReferralRowsFromCsvGrid()`／`parsePostorderFromCsv()`
+  （兩個 CSV 一次過解析，同 `parsePostorderWorkbookBuffer()` 一樣形狀）；
+  統一入口 `parsePostorderUploadRow(row)`——`postorder_uploads` 一行有
+  `rosterCsvBytes`/`postorderCsvBytes` 就行 CSV 路徑，冇就跌返 xlsm 路徑
+  （`plan/route.ts`／`runs/:id/apply/route.ts`／`referral-fee.ts`
+  `syncReferralRatesFromPostorder()` 三個 call site 都改用呢個入口）。
+- **已知差異（唔估）**：Google Sheets 匯出將公式變成值，介紹費行嘅
+  `rate`／`shifts`／`siteLabelsRaw`／`guardNamesRaw`／`formula` CSV 路徑
+  冧唔返（原本靠公式文字 cross-reference 唔連續嘅員工行，例如數碼港
+  CP5／數據中心兩個姊妹盤互相引用），老實答 `null`／空 array／0，唔靠
+  估位置屈一個答案；`brokerLabelRaw`／`excelAmount`／`rowIndex` 兩條
+  路徑都攞得到。長工格（Roster「(8) 長工」）解析冇公式依賴，CSV／xlsm
+  兩條路徑逐項相等。
+- **8 月介紹費率 migration**（`prisma/migrations/
+  20260926200000_wp_postorder_csv_aug_referral_rates`）：CSV 路徑冇公式
+  讀唔到 rate，`syncReferralRatesFromPostorder()` 見到 `row.rate` 全部
+  null 就自然 0 upsert（同「冇 Postorder 上載」效果一樣），跌返用
+  `referral_fee_rates` 表入面已有嘅費率——呢個 migration 就係補低嗰個
+  「已有嘅費率」：由 `data/2026-09/aug-payroll-trial/out/
+  referral_postorder.json`（dev-only、gitignored，21 行「長工雞頭費」
+  行）逐 (雞頭代號, 盤 canonical_name) 去重抽出嚟 16 組費率（淨係
+  broker code／盤名／費率，唔要人名／金額／更數），用
+  `brokers.code`／`sites.canonical_name`(或 `aliases`) join、
+  `INSERT ... WHERE NOT EXISTS`，雞頭／盤對唔到就淨係少插返嗰一行（0
+  行，唔 abort）；已經有嗰個 (broker,site,month) 費率就跳過（唔覆蓋）。
+  同 `20260926110715_wp_ltshift_longterm_posts` 嘅 `july_backfill` 一樣
+  特性：`prisma migrate deploy` 喺 `db:reset` 嘅「先 migrate 後
+  seed」順序下，DML 執行嗰刻 `brokers`/`sites` 仲未有 seed 資料，fresh
+  dev reset 會 0 行插入（呢個係已知、documented 嘅 dev/prod 時序差異，
+  唔係 bug）——production 部署嗰陣 `brokers`/`sites` 早已經有真實資料，
+  join 會撞中。Dev 驗證呢個 migration 邏輯本身（16 組全部撞中）／CSV
+  路徑跌返用已有費率呢個行為，要用「dev 舊版先套用、後部署」模擬（同
+  `july_backfill` 一致做法：seed 完先手動補跑呢條 migration 嘅
+  DML，再上 CSV）。
+- `postorder_uploads` 加兩欄（`prisma/migrations/
+  20260926190000_wp_postorder_csv_upload`）：`roster_csv_bytes`／
+  `postorder_csv_bytes`（nullable Bytes）。CSV 上載嗰陣 `file_bytes`／
+  `file_name`／`file_sha256`／`file_size`（NOT NULL）存兩個 CSV 併埋
+  一齊嘅 bytes／組合檔名——純粹佔位／sha256 audit 用途，真正解析用
+  `roster_csv_bytes`／`postorder_csv_bytes`。
+- `POST /api/guard-fix/postorder` 加第二條路徑：multipart 帶
+  `roster_csv`＋`postorder_csv`（各 ≤30MB，UTF-8）就行 CSV 解析，
+  `parseSummary` 形狀同 xlsm 路徑一樣。
+- 測試：`tests/wp-postorder-csv-grid-parse.test.ts`（合成 workbook →
+  模擬 CSV stringify → 兩條路徑逐項比對；另加 `it.skipIf` 用真檔
+  `data/2026-09/msg-file/Postorder - Aug 2026.xlsm` 嘅 test，冇呢個檔
+  嘅環境自動 skip——實測 Roster 60 組合、1,295 格，PostOrder 21 行
+  $60,520，CSV／xlsm 兩條路徑一致）、
+  `tests/wp-postorder-csv-upload-route.test.ts`（API 兩個 CSV 上載 vs
+  xlsm 上載 `parse_summary` 一致、RBAC、單一 CSV 缺一個 400）。
+
 ### B. guard-fix 加四類計劃
 `src/lib/guard-fix/types.ts` 新增 `SetLongtermAction`／
 `SetLongtermPostAction`／`SetReferralAction`／`SetVisaAction`；
@@ -872,16 +938,19 @@ Terminal 步驟，全部要喺 app 撳掣」**：上面「正式站步驟」原�
 
 **正式站步驟（驗收版第二輪，取代上面一段，全部 in-app 撳掣，冇任何
 Terminal 步驟）**：
-0. 部署（`prisma migrate deploy` 跑 8 個新 migration：4 個 WP-LTSHIFT＋
+0. 部署（`prisma migrate deploy` 跑 10 個新 migration：4 個 WP-LTSHIFT＋
    `20260926150000`／`20260926160000`／`20260926170000`／
-   `20260926180000`）。7 月報表 dump 前後 diff 0（dev 模擬正式站狀態
+   `20260926180000`＋WP-POSTORDER-CSV 兩個（`20260926190000_wp_
+   postorder_csv_upload`／`20260926200000_wp_postorder_csv_aug_
+   referral_rates`））。7 月報表 dump 前後 diff 0（dev 模擬正式站狀態
    實測）。**Opus 5.5 覆核**：`20260926170000` (a) 條件 `broker_id IS
    NULL` 對唔中開盤計劃起嘅蔚峰園 8 月卡（site_shift_broker 級，
    broker=W），正式站會 0 行、(b) 跟住 skip——由
    `20260926180000_acc_weifeng_aug_cards_broker_fix` 用正確條件（broker
    null 或 W、更種 D 07:30／N 19:30、淨係補 null）再做一次，dev 模擬
    正式站狀態實測：補價 2、7 月卡加到期 1，再跑 0／0。
-1. 安員配對修復頁：上載 U Team 名單 → 上載 Postorder（2.96MB，上限
+1. 安員配對修復頁：上載 U Team 名單 → 上載 Postorder（正式站帳號讀唔到
+   binary 就用「或者上載兩個 CSV」——見上面 A2；.xlsm 路徑 2.96MB，上限
    30MB）→ 摘要「對唔到嘅雞頭稱呼」逐個揀系統雞頭撳「對應」（會自動
    重新計算計劃，預期對應完之後呢個清單變空）→ 計算修復計劃 → 套用；
    重複到冇新動作。預期 needs_boss 0；對唔到盤名得「OT」（2 格，已知）。
