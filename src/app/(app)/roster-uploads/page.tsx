@@ -124,15 +124,18 @@ interface VoidResponse {
 
 // WP-LTSHIFT §19 交付 C：「重新對數全月」。
 interface ReconcileAllPerUploadDTO {
-  uploadId: string;
-  siteLabel: string;
-  before: { rosterOnly: number; settlementDiff: number; unresolved: number };
-  settlementScanned: number;
-  settlementChanged: number;
+  upload_id: string;
+  site_label: string;
+  before: { roster_only: number; settlement_diff: number; unresolved: number };
+  settlement_scanned: number;
+  settlement_changed: number;
   applied: number;
-  skippedApplyReason: string | null;
+  skipped_apply_reason: string | null;
   errors: string[];
 }
+// 2026-09-27 修正：`ok()` 會 `camelToSnakeDeep()` 成個 response（含 result_json），
+// 之前 DTO 用 camelCase 讀 `perUpload`／`uploadCount` → undefined.filter → 成頁
+// crash（正式站實測「Application error」）。全部改 snake_case。
 interface ReconcileAllRunDTO {
   id: string;
   month: string;
@@ -141,13 +144,13 @@ interface ReconcileAllRunDTO {
   finished_at: string | null;
   apply_allowed: boolean;
   result: {
-    uploadCount: number;
+    upload_count: number;
     /** 驗收（Opus 5.5）：舊 run 冇呢欄。 */
     warnings?: string[];
     /** 驗收修正：開頭自動 reprice 結果；舊 run 冇呢欄。 */
     repriced?: { scanned: number; changed: number };
-    perUpload: ReconcileAllPerUploadDTO[];
-    totals: { rosterOnlyBefore: number; settlementDiffBefore: number; unresolvedBefore: number; settlementChanged: number; applied: number; uploadsWithErrors: number };
+    per_upload?: ReconcileAllPerUploadDTO[];
+    totals: { roster_only_before: number; settlement_diff_before: number; unresolved_before: number; settlement_changed: number; applied: number; uploads_with_errors: number };
   } | null;
   error_message: string | null;
 }
@@ -304,7 +307,7 @@ export default function RosterUploadsPage() {
     setReconcileAllResult(finalRun);
     setNotice(
       finalRun.result
-        ? `重新對數全月完成：${finalRun.result.uploadCount} 個上載、套用 ${finalRun.result.totals.applied} 項、改咗 ${finalRun.result.totals.settlementChanged} 格結算單位`
+        ? `重新對數全月完成：${finalRun.result.upload_count} 個上載、套用 ${finalRun.result.totals.applied} 項、改咗 ${finalRun.result.totals.settlement_changed} 格結算單位`
         : "重新對數全月完成",
     );
     await loadList();
@@ -528,16 +531,16 @@ export default function RosterUploadsPage() {
         <div className="rounded-lg border border-zk-border bg-white p-4 text-[12.5px]" data-testid="reconcile-all-result">
           <div className="mb-2 text-[14px] font-semibold text-zk-text">重新對數全月結果（{reconcileAllResult.month.slice(0, 7)}）</div>
           <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-zk-muted">
-            <span>{reconcileAllResult.result.uploadCount} 個上載</span>
+            <span>{reconcileAllResult.result.upload_count} 個上載</span>
             {reconcileAllResult.result.repriced && (
               <span data-testid="reconcile-all-repriced">
                 補價 {reconcileAllResult.result.repriced.changed} 格（掃 {reconcileAllResult.result.repriced.scanned} 格）
               </span>
             )}
-            <span>套用 {reconcileAllResult.result.totals.applied} 項（roster_only {reconcileAllResult.result.totals.rosterOnlyBefore}、settlement_diff {reconcileAllResult.result.totals.settlementDiffBefore}）</span>
-            <span>改咗 {reconcileAllResult.result.totals.settlementChanged} 格結算單位</span>
-            <span>未配對留低 {reconcileAllResult.result.totals.unresolvedBefore} 格</span>
-            {reconcileAllResult.result.totals.uploadsWithErrors > 0 && <span className="text-red-700">{reconcileAllResult.result.totals.uploadsWithErrors} 個上載有錯誤</span>}
+            <span>套用 {reconcileAllResult.result.totals.applied} 項（roster_only {reconcileAllResult.result.totals.roster_only_before}、settlement_diff {reconcileAllResult.result.totals.settlement_diff_before}）</span>
+            <span>改咗 {reconcileAllResult.result.totals.settlement_changed} 格結算單位</span>
+            <span>未配對留低 {reconcileAllResult.result.totals.unresolved_before} 格</span>
+            {reconcileAllResult.result.totals.uploads_with_errors > 0 && <span className="text-red-700">{reconcileAllResult.result.totals.uploads_with_errors} 個上載有錯誤</span>}
           </div>
           {(reconcileAllResult.result.warnings ?? []).map((w) => (
             <div key={w} className="mb-2 rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-amber-800" data-testid="reconcile-all-warning">
@@ -545,18 +548,18 @@ export default function RosterUploadsPage() {
             </div>
           ))}
           <ul className="max-h-64 divide-y divide-zk-border overflow-y-auto rounded border border-zk-border">
-            {reconcileAllResult.result.perUpload
-              .filter((u) => u.applied > 0 || u.settlementChanged > 0 || u.before.unresolved > 0 || u.errors.length > 0)
+            {(reconcileAllResult.result.per_upload ?? [])
+              .filter((u) => u.applied > 0 || u.settlement_changed > 0 || u.before.unresolved > 0 || (u.errors ?? []).length > 0)
               .map((u) => (
-                <li key={u.uploadId} className="px-2.5 py-1.5">
+                <li key={u.upload_id} className="px-2.5 py-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="min-w-0 break-words font-medium text-zk-text">{u.siteLabel}</span>
+                    <span className="min-w-0 break-words font-medium text-zk-text">{u.site_label}</span>
                     <span className="shrink-0 tabular-nums text-zk-muted">
-                      套用 {u.applied}・改結算 {u.settlementChanged}・未配對 {u.before.unresolved}
+                      套用 {u.applied}・改結算 {u.settlement_changed}・未配對 {u.before.unresolved}
                     </span>
                   </div>
-                  {u.skippedApplyReason && <div className="mt-0.5 text-amber-700">{u.skippedApplyReason}</div>}
-                  {u.errors.length > 0 && <div className="mt-0.5 break-words text-red-700">{u.errors.slice(0, 3).join("；")}</div>}
+                  {u.skipped_apply_reason && <div className="mt-0.5 text-amber-700">{u.skipped_apply_reason}</div>}
+                  {(u.errors ?? []).length > 0 && <div className="mt-0.5 break-words text-red-700">{u.errors.slice(0, 3).join("；")}</div>}
                 </li>
               ))}
           </ul>
