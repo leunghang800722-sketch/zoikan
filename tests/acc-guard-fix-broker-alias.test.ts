@@ -62,6 +62,22 @@ describe("POST /api/guard-fix/broker-alias（驗收修正：雞頭稱呼對應�
     expect(body2.added).toBe(false);
   });
 
+  it("驗收修正：稱呼撞另一個雞頭嘅 code／alias（大小寫無關）——409，唔寫；自己 alias 大小寫唔同當已經有", async () => {
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    const other = await prisma.broker.create({ data: { code: "TEST-BZ", name: "測試雞頭Z", kind: "broker", settlementType: "cash", aliases: ["測試稱呼Zz"] } });
+    const before = await prisma.broker.findUniqueOrThrow({ where: { id: fx.brokerA.id } });
+    const r1 = await postBrokerAlias(reqJson(cookie, { label: "test-bz", broker_id: fx.brokerA.id }));
+    expect(r1.status).toBe(409);
+    const r2 = await postBrokerAlias(reqJson(cookie, { label: "測試稱呼ZZ", broker_id: fx.brokerA.id }));
+    expect(r2.status).toBe(409);
+    expect(JSON.stringify(await r2.json())).not.toContain("測試稱呼ZZ");
+    const after = await prisma.broker.findUniqueOrThrow({ where: { id: fx.brokerA.id } });
+    expect(after.aliases).toEqual(before.aliases);
+    // 寫去佢自己（other）大小寫唔同 → 當已經有
+    const r3 = await postBrokerAlias(reqJson(cookie, { label: "測試稱呼zz", broker_id: other.id }));
+    expect((await r3.json()).added).toBe(false);
+  });
+
   it("broker_id 搵唔到——404", async () => {
     const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
     const res = await postBrokerAlias(reqJson(cookie, { label: "測試稱呼甲", broker_id: "00000000-0000-0000-0000-000000000000" }));

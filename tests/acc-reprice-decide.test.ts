@@ -85,6 +85,20 @@ describe("decideReprice() mode:full（更表頁「重新計价」，同 route.ts
     expect(d.after.brokerFee).toBe(30);
   });
 
+  it("驗收修正：fill_and_fix_b07 對 8 月前（7 月）記錄一律唔郁——null 收客價有卡都唔補、B07 舊 wage 都唔清", () => {
+    const july = new Date(Date.UTC(2026, 6, 31));
+    const cards = [card({ id: "c1", shiftTypeId: SHIFT_TYPE, clientRate: 100, guardWage: 90, brokerFee: 10 })];
+    const d1 = decideReprice(record({ workDate: july }), lookups(), cards, "fill_and_fix_b07");
+    expect(d1.after).toEqual(d1.before);
+    expect(d1.changed).toBe(false);
+    const d2 = decideReprice(record({ workDate: july, settlementBrokerId: BROKER_B07, guardWageSnapshot: 90, brokerFeeSnapshot: 10 }), lookups(), cards, "fill_and_fix_b07");
+    expect(d2.after).toEqual(d2.before);
+    expect(d2.changed).toBe(false);
+    // 人手 full 模式唔受呢條影響
+    const d3 = decideReprice(record({ workDate: july }), lookups(), cards, "full");
+    expect(d3.after.clientRate).toBe(100);
+  });
+
   it("guardsPaidByClient 嘅盤（LINK）完全唔掂", () => {
     const cards = [card({ id: "c1", shiftTypeId: SHIFT_TYPE, clientRate: 999, guardWage: 999, brokerFee: 999 })];
     const rec = record({ clientRateSnapshot: 500, guardWageSnapshot: 300, brokerFeeSnapshot: 10 });
@@ -134,6 +148,20 @@ describe("decideReprice() mode:fill_and_fix_b07（reconcile-all 自動、保守�
     expect(d.after.guardWage).toBeNull(); // wage 任何月都 null（本身已經係 null，no-op）
     expect(d.after.brokerFee).toBe(50); // 7 月已有值保留，唔強制覆蓋
     expect(d.changed).toBe(false);
+  });
+
+  it("驗收修正：fill_and_fix_b07 對 8 月前（7 月）記錄一律唔郁——null 收客價有卡都唔補、B07 舊 wage 都唔清", () => {
+    const july = new Date(Date.UTC(2026, 6, 31));
+    const cards = [card({ id: "c1", shiftTypeId: SHIFT_TYPE, clientRate: 100, guardWage: 90, brokerFee: 10 })];
+    const d1 = decideReprice(record({ workDate: july }), lookups(), cards, "fill_and_fix_b07");
+    expect(d1.after).toEqual(d1.before);
+    expect(d1.changed).toBe(false);
+    const d2 = decideReprice(record({ workDate: july, settlementBrokerId: BROKER_B07, guardWageSnapshot: 90, brokerFeeSnapshot: 10 }), lookups(), cards, "fill_and_fix_b07");
+    expect(d2.after).toEqual(d2.before);
+    expect(d2.changed).toBe(false);
+    // 人手 full 模式唔受呢條影響
+    const d3 = decideReprice(record({ workDate: july }), lookups(), cards, "full");
+    expect(d3.after.clientRate).toBe(100);
   });
 
   it("guardsPaidByClient 嘅盤（LINK）完全唔掂", () => {

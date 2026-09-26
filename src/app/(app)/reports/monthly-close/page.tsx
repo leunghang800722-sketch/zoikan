@@ -261,6 +261,8 @@ export default function MonthlyCloseWorkbenchPage() {
     voided_count: number;
     exempt_shift_count: number;
     warnings: Array<{ guardId: string; brokerId: string; siteId: string; shifts: number; reason: string }>;
+    /** 驗收修正：Postorder 費率同步結果（舊 API 冇呢欄）。 */
+    rate_sync?: { upserted: number; skipped: string[] };
   } | null>(null);
   const [recomputingReferralFee, setRecomputingReferralFee] = useState(false);
 
@@ -275,6 +277,7 @@ export default function MonthlyCloseWorkbenchPage() {
       voided_count: number;
       exempt_shift_count: number;
       warnings: Array<{ guardId: string; brokerId: string; siteId: string; shifts: number; reason: string }>;
+      rate_sync?: { upserted: number; skipped: string[] };
     }>("/api/reports/referral-fee/recompute", { month });
     setRecomputingReferralFee(false);
     if (!res.ok) {
@@ -379,6 +382,16 @@ export default function MonthlyCloseWorkbenchPage() {
             ))}
             {Object.keys(referralFeeResult.totals_by_broker_code).length === 0 && <span>（冇任何長工設咗介紹雞頭，或者冇 B07 更）</span>}
           </div>
+          {referralFeeResult.rate_sync && (
+            <div className="mt-1 text-zk-muted" data-testid="referral-rate-sync">
+              Postorder 費率同步：寫入 {referralFeeResult.rate_sync.upserted} 組
+              {referralFeeResult.rate_sync.skipped.length > 0 ? (
+                <span className="text-amber-700">、跳過 {referralFeeResult.rate_sync.skipped.length} 行（對唔到雞頭／盤或者費率打架）</span>
+              ) : (
+                "、冇跳過"
+              )}
+            </div>
+          )}
           {referralFeeResult.exempt_shift_count > 0 && <div className="mt-1 text-zk-muted">卓弘客戶盤豁免咗 {referralFeeResult.exempt_shift_count} 格。</div>}
           {referralFeeResult.warnings.length > 0 && (
             <div className="mt-1 text-amber-700">{referralFeeResult.warnings.length} 個 (長工,盤) 組合冇設費率，未計入（見 audit / referral_fee_rates）。</div>

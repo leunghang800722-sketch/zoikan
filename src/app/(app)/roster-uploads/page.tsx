@@ -144,6 +144,8 @@ interface ReconcileAllRunDTO {
     uploadCount: number;
     /** 驗收（Opus 5.5）：舊 run 冇呢欄。 */
     warnings?: string[];
+    /** 驗收修正：開頭自動 reprice 結果；舊 run 冇呢欄。 */
+    repriced?: { scanned: number; changed: number };
     perUpload: ReconcileAllPerUploadDTO[];
     totals: { rosterOnlyBefore: number; settlementDiffBefore: number; unresolvedBefore: number; settlementChanged: number; applied: number; uploadsWithErrors: number };
   } | null;
@@ -527,6 +529,11 @@ export default function RosterUploadsPage() {
           <div className="mb-2 text-[14px] font-semibold text-zk-text">重新對數全月結果（{reconcileAllResult.month.slice(0, 7)}）</div>
           <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-zk-muted">
             <span>{reconcileAllResult.result.uploadCount} 個上載</span>
+            {reconcileAllResult.result.repriced && (
+              <span data-testid="reconcile-all-repriced">
+                補價 {reconcileAllResult.result.repriced.changed} 格（掃 {reconcileAllResult.result.repriced.scanned} 格）
+              </span>
+            )}
             <span>套用 {reconcileAllResult.result.totals.applied} 項（roster_only {reconcileAllResult.result.totals.rosterOnlyBefore}、settlement_diff {reconcileAllResult.result.totals.settlementDiffBefore}）</span>
             <span>改咗 {reconcileAllResult.result.totals.settlementChanged} 格結算單位</span>
             <span>未配對留低 {reconcileAllResult.result.totals.unresolvedBefore} 格</span>

@@ -872,9 +872,15 @@ Terminal 步驟，全部要喺 app 撳掣」**：上面「正式站步驟」原�
 
 **正式站步驟（驗收版第二輪，取代上面一段，全部 in-app 撳掣，冇任何
 Terminal 步驟）**：
-0. 部署（`prisma migrate deploy` 跑 7 個新 migration：4 個 WP-LTSHIFT＋
-   `20260926150000`／`20260926160000`／`20260926170000`）。7 月報表 dump
-   前後 diff 0（dev 模擬正式站狀態實測）。
+0. 部署（`prisma migrate deploy` 跑 8 個新 migration：4 個 WP-LTSHIFT＋
+   `20260926150000`／`20260926160000`／`20260926170000`／
+   `20260926180000`）。7 月報表 dump 前後 diff 0（dev 模擬正式站狀態
+   實測）。**Opus 5.5 覆核**：`20260926170000` (a) 條件 `broker_id IS
+   NULL` 對唔中開盤計劃起嘅蔚峰園 8 月卡（site_shift_broker 級，
+   broker=W），正式站會 0 行、(b) 跟住 skip——由
+   `20260926180000_acc_weifeng_aug_cards_broker_fix` 用正確條件（broker
+   null 或 W、更種 D 07:30／N 19:30、淨係補 null）再做一次，dev 模擬
+   正式站狀態實測：補價 2、7 月卡加到期 1，再跑 0／0。
 1. 安員配對修復頁：上載 U Team 名單 → 上載 Postorder（2.96MB，上限
    30MB）→ 摘要「對唔到嘅雞頭稱呼」逐個揀系統雞頭撳「對應」（會自動
    重新計算計劃，預期對應完之後呢個清單變空）→ 計算修復計劃 → 套用；
@@ -882,9 +888,11 @@ Terminal 步驟）**：
 2. 更表上載頁「重新對數全月」（背景 run，開頭自動幫全部有上載嘅盤
    reprice——見上面 12，唔使再手動撳「重新計价」；15 分鐘卡死可重跑；
    同時唔好撳 guard-fix 套用）。預期 `warnings` 空、errors 0、unresolved
-   1（蔚峰園重複行）；`repriced.changed`≈98（蔚峰園 D／N 補價）。
+   1（蔚峰園重複行）；結果列「補價 N 格」N≈98（蔚峰園 D／N 補價；
+   即 `repriced.changed`）。自動 reprice 對 8 月前記錄一律唔郁。
 3. 月結頁「重算介紹費」→ 預期合計 60,620（總表 60,520＋Weave 更表漏記
-   2 格 100）、`rate_sync.skipped` 空。
+   2 格 100）、結果列「Postorder 費率同步：…冇跳過」（即
+   `rate_sync.skipped` 空）。
 4. 月結總表／雞頭應付：預期 K 1,023,730、G 56,220、D 100,130、Y
    226,433.02 同總表一致；W −850（蔚峰園重複行）、T −1,600（Weave 更表
    漏記病假）係更表資料問題。

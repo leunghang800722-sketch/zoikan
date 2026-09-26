@@ -19,13 +19,11 @@
 //     睇住 dry-run 預覽，要保守好多：淨係補「而家係 null」嘅欄位（唔會
 //     覆蓋人手／之前已經計過嘅非 null 价錢），**除咗** internal_longterm
 //     （B07）嘅 guard_wage／broker_fee——呢兩個欄位 B07 永遠應該係 null
-//     （8 月起；guard_wage 更加係任何月都應該 null，見 resolve-rate.ts
-//     「B07 snapshot」段），一旦條記錄而家係 B07 但仲帶住舊嘅非 null
+//     （8 月起；見 resolve-rate.ts「B07 snapshot」段），一旦條記錄而家係 B07 但仲帶住舊嘅非 null
 //     wage/fee（例如之前用 K／外判雞頭嘅卡計過、之後先改咗做 B07），
-//     就要覆蓋返做 null——呢啲先叫「B07 舊價」，唔算人手价。7 月（呢個
-//     分界日之前）嘅 broker_fee 唔喺呢個模式強制覆蓋（同 resolver
-//     `referralAutoMonth` 一致、跟返 7 月 gate 「保留」嘅規則），淨係
-//     一樣補 null。兩種模式都一樣：`guardsPaidByClient` 嘅盤（LINK）
+//     就要覆蓋返做 null——呢啲先叫「B07 舊價」，唔算人手价。8 月
+//     （LONGTERM_REFERRAL_AUTOCOMPUTE_FROM）之前嘅記錄呢個模式**完全
+//     唔郁**（驗收修正：7 月已過 gate，唔靠資料巧合保證）。兩種模式都一樣：`guardsPaidByClient` 嘅盤（LINK）
 //     完全唔郁。
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
@@ -97,6 +95,13 @@ export function decideReprice(record: RepriceRecordInput, lookups: RepriceLookup
   if (siteGuardsPaidByClient) {
     return { id: record.id, before, after: before, changed: false, keptUnresolved: false };
   }
+  // 驗收修正（Opus 5.5）：自動 reprice（reconcile-all 開頭）對 8 月之前嘅
+  // 記錄**一律唔郁**——7 月已經過晒 gate，`reconcile-all` 本身冇擋 7 月
+  // （淨係靠月鎖），唔可以靠「7 月啱啱好冇 null／冇 B07 舊價」呢類資料
+  // 巧合保證 7 月唔變。人手「重新計价」（mode:full）唔受呢條影響。
+  if (mode === "fill_and_fix_b07" && record.workDate.getTime() < LONGTERM_REFERRAL_AUTOCOMPUTE_FROM.getTime()) {
+    return { id: record.id, before, after: before, changed: false, keptUnresolved: false };
+  }
 
   const brokerKind: BrokerKindLike = record.settlementBrokerId ? (lookups.brokerKindById.get(record.settlementBrokerId) ?? null) : null;
   const pricing = resolveShiftPricingFromCards(cards, {
@@ -131,15 +136,11 @@ export function decideReprice(record: RepriceRecordInput, lookups: RepriceLookup
     // fill_and_fix_b07：收客价淨係補 null，永遠唔覆蓋已有值。
     afterClient = beforeClient === null && pricing.clientCardFound ? pricing.clientRate : beforeClient;
     if (brokerKind === "internal_longterm") {
-      // B07 嘅 wage 任何月都應該 null（resolver 已經無條件咁答）——覆蓋
-      // 返做 null 就係修「B07 舊價」，7 月本身已經係 null 嘅記錄呢度係
-      // no-op（唔會令 7 月 gate 出現任何改動）。
+      // B07 嘅 wage／fee 8 月起（上面已經擋走 8 月前記錄）都應該 null
+      // （resolver 無條件咁答；介紹費交返 recomputeReferralFees() 另計）
+      // ——覆蓋返做 null 就係修「B07 舊價」。
       afterWage = pricing.guardWage;
-      // fee 淨係 8 月起（LONGTERM_REFERRAL_AUTOCOMPUTE_FROM）先強制跟
-      // resolver（一律 null，交返 recomputeReferralFees() 另計）；7 月
-      // 一樣淨係補 null，唔覆蓋 7 月人手 seed 嘅費率（同 7 月 gate 一致）。
-      const isReferralAutoMonth = record.workDate.getTime() >= LONGTERM_REFERRAL_AUTOCOMPUTE_FROM.getTime();
-      afterFee = isReferralAutoMonth ? pricing.brokerFee : beforeFee === null && pricing.payoutCardFound ? pricing.brokerFee : beforeFee;
+      afterFee = pricing.brokerFee;
     } else {
       const neverRepriceWage = brokerKind === "external";
       afterWage = beforeWage === null && !neverRepriceWage && pricing.payoutCardFound ? pricing.guardWage : beforeWage;

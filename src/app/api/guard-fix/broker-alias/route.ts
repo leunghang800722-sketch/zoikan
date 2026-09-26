@@ -20,7 +20,7 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { parseBody } from "@/lib/api/validate";
 import { readJson } from "@/lib/api/query";
 import { GuardFixBrokerAliasBodySchema } from "@/lib/api/schemas";
-import { NotFound } from "@/lib/api/errors";
+import { Conflict, NotFound } from "@/lib/api/errors";
 import { writeAuditTx } from "@/lib/audit";
 
 export async function POST(req: Request) {
@@ -32,8 +32,22 @@ export async function POST(req: Request) {
     if (!broker) throw NotFound("搵唔到呢個雞頭");
 
     const label = body.label.trim();
+    // `matchBroker()`（src/lib/roster-upload/match.ts）係 trim＋大小寫無關
+    // 嘅整串比對（先 code 後 aliases，`find` 攞第一個）——呢度用同一個
+    // 正規化判斷冪等同撞名。
+    const norm = label.toUpperCase();
+    const sameAs = (s: string) => s.trim().toUpperCase() === norm;
     // 同 code／name 一樣，或者已經喺 aliases 度——冪等，唔使再寫。
-    const already = label === broker.code || label === broker.name || broker.aliases.includes(label);
+    const already = sameAs(broker.code) || label === broker.name || broker.aliases.some(sameAs);
+
+    // 驗收修正（Opus 5.5）：稱呼已經係另一個雞頭嘅 code／alias → 加落嚟會
+    // 令 `matchBroker()` 兩個都中、靜靜雞揀第一個（或者永遠俾 code 搶先），
+    // 唔准寫，要老闆先去雞頭管理頁處理。錯誤訊息唔帶稱呼本身（PII）。
+    if (!already) {
+      const others = await prisma.broker.findMany({ where: { id: { not: broker.id } }, select: { code: true, aliases: true } });
+      const clash = others.find((b) => sameAs(b.code) || b.aliases.some(sameAs));
+      if (clash) throw Conflict(`呢個稱呼已經係雞頭 ${clash.code} 嘅代號／稱呼，唔可以再對應去 ${broker.code}`);
+    }
 
     if (already) {
       return ok(
