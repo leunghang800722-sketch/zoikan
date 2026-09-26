@@ -16,7 +16,7 @@ import {
   settlementUnitToBrokerCsvId,
   MASTER_BROKER_CODE_TO_BROKER_CSV_ID,
 } from "./lib/mapping";
-import { canonicalNameFor } from "./lib/broker-names";
+import { canonicalNameFor, masterRosterAliasesFor } from "./lib/broker-names";
 import { knownUnmappedSettlementUnits, monthlySalaryOverrides, brokerFeeRules, extraRateCardOverrides } from "./lib/seed-overrides";
 import { applyBrokerFeeSplit } from "./lib/broker-fee-split";
 import { resolveExtraRateCardRows, type ExtraRateCardRow } from "./lib/extra-rate-cards";
@@ -127,19 +127,25 @@ async function seedBrokers() {
   const idMap = new Map<string, string>();
   for (const r of rows) {
     const kind = mapBrokerKind(r.kind);
+    const code = str(r.code) ?? r.broker_id; // 有幾個 broker 冇單字母代號（個別雞頭/external/獨立雞頭…），用 broker_id 頂住保持 unique
+    // PDPO 裁定（Opus 對抗式驗收）：唔再直接用 out/wp2b/brokers.csv
+    // 嘅 canonical_name（雖然嗰個檔案本身已經 gitignored，但「呢個
+    // 名會唔會係真名」而家統一由 data/mappings-private/brokers.csv
+    // 呢個檔案存唔存在決定——冇嗰個檔就淨係用代號做名，行為
+    // deterministic，唔靠零散幾個 gitignored 檔各自嘅內容）。
+    const name = canonicalNameFor(r.broker_id, code);
     const created = await prisma.broker.create({
       data: {
-        code: str(r.code) ?? r.broker_id, // 有幾個 broker 冇單字母代號（個別雞頭/external/獨立雞頭…），用 broker_id 頂住保持 unique
-        // PDPO 裁定（Opus 對抗式驗收）：唔再直接用 out/wp2b/brokers.csv
-        // 嘅 canonical_name（雖然嗰個檔案本身已經 gitignored，但「呢個
-        // 名會唔會係真名」而家統一由 data/mappings-private/brokers.csv
-        // 呢個檔案存唔存在決定——冇嗰個檔就淨係用代號做名，行為
-        // deterministic，唔靠零散幾個 gitignored 檔各自嘅內容）。
-        name: canonicalNameFor(r.broker_id, str(r.code)),
+        code,
+        name,
         kind,
         settlementType: mapSettlementType(r.settlement_type),
         isInternal: kind === "internal_cash" || kind === "internal_longterm",
-        aliases: arr(r.aliases),
+        // WP-LTSHIFT §19：加埋 canonical_name／master_roster_aliases
+        // （冇私隱檔就淨係 code 本身，唔影響現行 aliases），等 guard-fix
+        // matchBroker() 認得 Postorder 總表逐格「雞頭名」/介紹費行寫嘅
+        // 稱呼（`name` 呢個欄已經係同一個字——冇額外暴露）。
+        aliases: [...new Set([...arr(r.aliases), ...masterRosterAliasesFor(r.broker_id), name])],
         createdBy: "seed:wp2b/brokers.csv",
       },
     });
@@ -168,6 +174,49 @@ const LINK_GUARDS_PAID_BY_CLIENT_NAMES = new Set(["TKO Gateway 厚A", "TKO Gatew
 // 6907」檔盤名格寫「城巴車廠」但實際係「創富廠IC」，見
 // src/lib/roster-upload/match.ts `matchSiteByFileName()`）。
 const ROSTER_FILE_KEYS_BY_SITE_NAME: Record<string, string[]> = { 創富廠IC: ["CTB 6907"] };
+
+// WP-LTSHIFT §19 第二部分（老闆 2026-09-26 追加要求）：同上面一樣嘅
+// backfill-早過-seed 問題——migration
+// `20260926140000_wp_ltshift_postorder_site_aliases` 嘅 UPDATE 喺一個
+// 全新 DB 一樣冧 0 行，seed 要自己再做多一次。對照表同migration 嗰個
+// 一字不變（嚟自 `data/2026-09/aug-payroll-trial/scripts/s03_sitemap.py`
+// SITE_MAP_RULES，交叉對照 `po_cells_sited.json` 實測驗證）——Postorder
+// 「物業名稱」短代號，唔係 PII。淨係「加埋」（唔覆蓋人手已經加嘅
+// aliases），寫喺呢度而唔係改 CSV 源頭，方便同 migration 對照維護。
+const POSTORDER_SITE_ALIASES: Record<string, string[]> = {
+  殷樺花園: ["殷樺"],
+  粉嶺安樂村貨倉: ["粉嶺倉"],
+  "Weave OL": ["OL"],
+  "HKU Y更": ["港Y"],
+  HKU座頭: ["港C", "港C1", "港X"],
+  "HKU 醫學院": ["醫學院"],
+  屯門凱和山: ["凱和"],
+  "數碼港 CP1-4": ["數碼"],
+  "數碼港 CP5": ["CP5"],
+  "數碼港 數據中心": ["DC", "CP5 數據中心"],
+  "Weave Hospital Road": ["ML", "Weave Mid-level"],
+  "Weave Robinson": ["RR"],
+  九龍企業大廈: ["企業"],
+  啟航1331: ["啟航", "啟航1331 IC", "啟航1331 K"],
+  "城巴-柴灣車廠": ["柴廠"],
+  "城巴-創富車廠": ["創富廠"],
+  "城巴-屯門車廠": ["屯廠"],
+  "城巴-東涌車廠": ["東廠"],
+  "城巴-將軍澳車廠": ["將廠"],
+  "城巴-黃竹坑車廠": ["黃竹廠"],
+  "城巴-西九龍車廠": ["西九廠"],
+  "城巴-上環車廠": ["上環廠"],
+  屯門小欖樂怡街5號: ["小欖"],
+  怡安168: ["怡安"],
+  淺水灣道11號蔚峰園: ["蔚峰園"],
+  美心集團中心: ["美心"],
+  控制室: ["控制室", "威信控制室"],
+  都會大學夜巡邏: ["Patrol"],
+  都會大學學生宿舍: ["MU"],
+  恆星樓: ["半更"],
+  葵發大廈: ["葵發"],
+  國泰城: ["CX"],
+};
 
 // ---------------------------------------------------------------------------
 async function seedSites() {
@@ -241,6 +290,35 @@ async function seedSites() {
         prorataBasis: p.prorataBasis ?? null,
       },
     });
+  }
+
+  // WP-LTSHIFT §19（本次發現）：同上面 LINK_GUARDS_PAID_BY_CLIENT_NAMES／
+  // ROSTER_FILE_KEYS_BY_SITE_NAME 一模一樣嘅道理——migration
+  // `20260926120000_wp_ltshift_cp5ic_proxy_weifeng_flatcard` §6 嘅
+  // backfill UPDATE 喺呢一刻執行，*早過* db:seed 真正插入「數碼港 CP5
+  // IC」／「數碼港 CP5」呢兩個 site 行，所以喺一個全新 DB 度冧 0 行
+  // （`db:reset` 實測驗證：`activity_proxy_site_id` seed 完之後仍然係
+  // null，令 `monthly-close.ts` 嘅反假營業額閘照舊隱藏呢個盤，§6 想
+  // 修嘅 bug 喺全新 DB 完全冇修到）。seed 要自己再做多一次，先保證
+  // `db:reset && db:seed` 之後「數碼港 CP5 IC」一定有 proxy。
+  const cp5SiteId = idMap.get(rows.find((r) => r.canonical_name === "數碼港 CP5")?.site_id ?? "");
+  if (cp5SiteId) {
+    await prisma.site.updateMany({
+      where: { canonicalName: "數碼港 CP5 IC", activityProxySiteId: null },
+      data: { activityProxySiteId: cp5SiteId },
+    });
+  }
+
+  // Postorder 短代號 aliases（見上面 POSTORDER_SITE_ALIASES 註解）——
+  // 逐個盤查現有 aliases、加埋新代號（去重），先 update（同上面 cp5SiteId
+  // 一致嘅「seed 自己再做多一次」pattern，唔淨係靠 migration）。
+  for (const [canonicalName, extraAliases] of Object.entries(POSTORDER_SITE_ALIASES)) {
+    const site = await prisma.site.findFirst({ where: { canonicalName }, select: { id: true, aliases: true } });
+    if (!site) continue;
+    const merged = [...new Set([...site.aliases, ...extraAliases])];
+    if (merged.length !== site.aliases.length) {
+      await prisma.site.update({ where: { id: site.id }, data: { aliases: merged } });
+    }
   }
 
   stats.sites = rows.length;

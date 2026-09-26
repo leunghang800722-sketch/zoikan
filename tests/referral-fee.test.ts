@@ -136,6 +136,22 @@ describe("recomputeReferralFees（DB integration）", () => {
     expect(Number(items2[0].cost)).toBe(300);
   });
 
+  it("WP-LTSHIFT §19：費率表冇呢個月嘅行就跌返用之前最近一個月（effective-dated，唔使逐月人手重覆制一份）", async () => {
+    const k = await makeBroker("TEST-RK3");
+    const b07 = await makeBroker("TEST-B073", "internal_longterm");
+    const site = await makeSite("測試長工盤3");
+    const guard = await makeGuard(k.id);
+    const st = await makeShiftType(site.id);
+    // 淨係喺 7 月設咗費率，9 月冇再入一次。
+    await prisma.referralFeeRate.create({ data: { brokerId: k.id, siteId: null, month: new Date("2026-07-01"), feePerShift: 40, createdBy: "test" } });
+    for (let d = 1; d <= 2; d++) {
+      await prisma.shiftRecord.create({ data: { workDate: new Date(`2026-09-0${d}`), siteId: site.id, shiftTypeId: st.id, guardId: guard.id, settlementBrokerId: b07.id, operationalBrokerId: k.id } });
+    }
+    const r = await computeReferralFeesForMonth(new Date("2026-09-01"));
+    expect(r.warnings).toHaveLength(0); // 冇 warning＝搵到費率（跌返用 7 月嗰個），唔係屈估
+    expect(r.totalAmount).toBe(80); // 2 更 × $40（7 月費率）
+  });
+
   it("唔會踩到人手輸入嘅 referral_fee special_item（createdBy 唔係 recompute 前綴）", async () => {
     const k = await makeBroker("TEST-RK2");
     const site = await makeSite("測試盤2");

@@ -24,17 +24,32 @@ export interface SiteCandidate {
   rosterFileKeys?: readonly string[];
 }
 
-/** 更表盤名→`sites`：canonical_name 完全相等（trim）優先，搵唔到再試
- * aliases（例如「怡安」→怡安168 呢類別名）。對唔到就 null——上載時盤名
- * 對唔到可以先存底，之後人手 PATCH 指定（`roster_uploads.site_id`
- * nullable 就係為咗呢個情況）。 */
+/** WP-LTSHIFT §19（第二部分驗收）：盤名比對前嘅正規化——NFKC（全形/
+ * 半形字元、組合字統一）、去頭尾空白、內部多個空白摺做一個、全形括號
+ * （（）（））換做半形（()）。跟 `rosterFileNameStem()`（檔名鍵
+ * 比對，同一份精神）一致做法——純粹擴闊「完全相等」嘅比對範圍（例如
+ * Postorder 逐格「客戶名稱」有時空白／括號寫法同 `sites.canonical_
+ * name`／`aliases` 唔完全一樣），唔改「對唔到就 null，唔准估」原則
+ * （仍然要正規化之後完全相等先算撞中，唔係 substring／fuzzy）。 */
+function normalizeSiteLabel(raw: string): string {
+  return raw
+    .normalize("NFKC")
+    .replace(/[（）]/g, (c) => (c === "（" ? "(" : ")"))
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/** 更表盤名→`sites`：canonical_name 完全相等（正規化後）優先，搵唔到
+ * 再試 aliases（例如「怡安」→怡安168 呢類別名）。對唔到就 null——上載
+ * 時盤名對唔到可以先存底，之後人手 PATCH 指定（`roster_uploads.
+ * site_id` nullable 就係為咗呢個情況）。 */
 export function matchSite(siteNameRaw: string | null, candidates: readonly SiteCandidate[]): string | null {
   if (!siteNameRaw) return null;
-  const norm = siteNameRaw.trim();
+  const norm = normalizeSiteLabel(siteNameRaw);
   if (!norm) return null;
-  const exact = candidates.find((s) => s.canonicalName.trim() === norm);
+  const exact = candidates.find((s) => normalizeSiteLabel(s.canonicalName) === norm);
   if (exact) return exact.id;
-  const byAlias = candidates.find((s) => s.aliases.some((a) => a.trim() === norm));
+  const byAlias = candidates.find((s) => s.aliases.some((a) => normalizeSiteLabel(a) === norm));
   return byAlias?.id ?? null;
 }
 

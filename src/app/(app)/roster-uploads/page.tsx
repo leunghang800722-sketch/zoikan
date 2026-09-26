@@ -122,6 +122,32 @@ interface VoidResponse {
   revived_version: number | null;
 }
 
+// WP-LTSHIFT §19 交付 C：「重新對數全月」。
+interface ReconcileAllPerUploadDTO {
+  uploadId: string;
+  siteLabel: string;
+  before: { rosterOnly: number; settlementDiff: number; unresolved: number };
+  settlementScanned: number;
+  settlementChanged: number;
+  applied: number;
+  skippedApplyReason: string | null;
+  errors: string[];
+}
+interface ReconcileAllRunDTO {
+  id: string;
+  month: string;
+  status: "running" | "done" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  apply_allowed: boolean;
+  result: {
+    uploadCount: number;
+    perUpload: ReconcileAllPerUploadDTO[];
+    totals: { rosterOnlyBefore: number; settlementDiffBefore: number; unresolvedBefore: number; settlementChanged: number; applied: number; uploadsWithErrors: number };
+  } | null;
+  error_message: string | null;
+}
+
 const STATUS_LABEL: Record<string, string> = {
   not_uploaded: "未上載",
   uploaded: "已上載",
@@ -204,6 +230,12 @@ export default function RosterUploadsPage() {
   const [matchFilter, setMatchFilter] = useState<"" | "unmatched" | "ambiguous" | "by_name" | "staff_no_mismatch" | "stale_staff_no">("");
   const [patchingSiteFor, setPatchingSiteFor] = useState<string | null>(null);
 
+  // WP-LTSHIFT §19 交付 C：「重新對數全月」——一鍵重算結算單位＋對數＋
+  // 全部以更表為準套用（見 src/lib/roster-upload/reconcile-all.ts）。
+  const [reconcileAllRunning, setReconcileAllRunning] = useState(false);
+  const [reconcileAllResult, setReconcileAllResult] = useState<ReconcileAllRunDTO | null>(null);
+  const reconcileAllPollRef = useRef<string | null>(null);
+
   async function loadList() {
     setLoading(true);
     setError(null);
@@ -223,6 +255,56 @@ export default function RosterUploadsPage() {
     loadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month, includeVoided]);
+
+  async function pollReconcileAllUntilDone(runId: string, forMonth: string): Promise<ReconcileAllRunDTO | null> {
+    for (let i = 0; i < 1200; i++) {
+      const res = await apiGet<{ runs: ReconcileAllRunDTO[] }>(`/api/roster-uploads/reconcile-all?month=${forMonth}-01`);
+      if (res.ok) {
+        const run = res.data.runs.find((r) => r.id === runId);
+        if (run && (run.status === "done" || run.status === "failed")) return run;
+        if (run && run.status === "running" && run.apply_allowed) return run; // 卡死（>15 分鐘）
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return null;
+  }
+
+  async function onReconcileAll() {
+    if (reconcileAllPollRef.current) return;
+    setError(null);
+    setNotice(null);
+    setReconcileAllResult(null);
+    setReconcileAllRunning(true);
+    const res = await apiPost<{ run_id: string; status: string }>("/api/roster-uploads/reconcile-all", { month });
+    if (!res.ok) {
+      setReconcileAllRunning(false);
+      setError(res.message);
+      return;
+    }
+    reconcileAllPollRef.current = res.data.run_id;
+    const finalRun = await pollReconcileAllUntilDone(res.data.run_id, month);
+    reconcileAllPollRef.current = null;
+    setReconcileAllRunning(false);
+    if (!finalRun) {
+      setError("重新對數全月仲未完成（等咗 40 分鐘）——請稍後撳「重新整理」");
+      return;
+    }
+    if (finalRun.status === "running") {
+      setError("執行超過 15 分鐘都未完成（可能伺服器中途重啟）——可以再撳一次「重新對數全月」（安全，冪等）");
+      return;
+    }
+    if (finalRun.status === "failed") {
+      setError(`重新對數全月失敗：${finalRun.error_message ?? "未知原因"}`);
+      return;
+    }
+    setReconcileAllResult(finalRun);
+    setNotice(
+      finalRun.result
+        ? `重新對數全月完成：${finalRun.result.uploadCount} 個上載、套用 ${finalRun.result.totals.applied} 項、改咗 ${finalRun.result.totals.settlementChanged} 格結算單位`
+        : "重新對數全月完成",
+    );
+    await loadList();
+  }
 
   useEffect(() => {
     apiGet<ApiListResult<SiteOption>>("/api/sites?take=500").then((res) => {
@@ -422,12 +504,50 @@ export default function RosterUploadsPage() {
               <input type="checkbox" checked={includeVoided} onChange={(e) => setIncludeVoided(e.target.checked)} />
               顯示已作廢
             </label>
+            <Button variant="secondary" onClick={onReconcileAll} disabled={reconcileAllRunning || !/^\d{4}-\d{2}$/.test(month)} data-testid="reconcile-all-button">
+              {reconcileAllRunning ? "重新對數全月…" : "重新對數全月"}
+            </Button>
           </div>
         }
       />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+
+      {reconcileAllRunning && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px] text-zk-text" data-testid="reconcile-all-running">
+          重新對數全月執行緊…（重算長工結算單位＋對數＋全部以更表為準套用，成月幾十個上載可能要幾分鐘）。可以留喺呢頁等，或者離開再返嚟——歷史會保留。
+        </div>
+      )}
+
+      {reconcileAllResult?.result && (
+        <div className="rounded-lg border border-zk-border bg-white p-4 text-[12.5px]" data-testid="reconcile-all-result">
+          <div className="mb-2 text-[14px] font-semibold text-zk-text">重新對數全月結果（{reconcileAllResult.month.slice(0, 7)}）</div>
+          <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-zk-muted">
+            <span>{reconcileAllResult.result.uploadCount} 個上載</span>
+            <span>套用 {reconcileAllResult.result.totals.applied} 項（roster_only {reconcileAllResult.result.totals.rosterOnlyBefore}、settlement_diff {reconcileAllResult.result.totals.settlementDiffBefore}）</span>
+            <span>改咗 {reconcileAllResult.result.totals.settlementChanged} 格結算單位</span>
+            <span>未配對留低 {reconcileAllResult.result.totals.unresolvedBefore} 格</span>
+            {reconcileAllResult.result.totals.uploadsWithErrors > 0 && <span className="text-red-700">{reconcileAllResult.result.totals.uploadsWithErrors} 個上載有錯誤</span>}
+          </div>
+          <ul className="max-h-64 divide-y divide-zk-border overflow-y-auto rounded border border-zk-border">
+            {reconcileAllResult.result.perUpload
+              .filter((u) => u.applied > 0 || u.settlementChanged > 0 || u.before.unresolved > 0 || u.errors.length > 0)
+              .map((u) => (
+                <li key={u.uploadId} className="px-2.5 py-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="min-w-0 break-words font-medium text-zk-text">{u.siteLabel}</span>
+                    <span className="shrink-0 tabular-nums text-zk-muted">
+                      套用 {u.applied}・改結算 {u.settlementChanged}・未配對 {u.before.unresolved}
+                    </span>
+                  </div>
+                  {u.skippedApplyReason && <div className="mt-0.5 text-amber-700">{u.skippedApplyReason}</div>}
+                  {u.errors.length > 0 && <div className="mt-0.5 break-words text-red-700">{u.errors.slice(0, 3).join("；")}</div>}
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
 
       {/* 上載區：拖放或選檔——WP-UPLOAD-VOID：而家可以一次過揀／拖多個檔。 */}
       <div className="rounded-lg border border-zk-border bg-white p-4">

@@ -149,17 +149,34 @@ export async function computeReferralFeesForMonth(month: Date): Promise<ComputeR
   const siteIds = [...new Set(shiftCountsRaw.map((s) => s.siteId))];
   const brokerIds = [...new Set(referredGuards.map((g) => g.referralBrokerId).filter((v): v is string => v !== null))];
 
-  const [sites, rates] = await Promise.all([
+  const [sites, ratesUpToMonth] = await Promise.all([
     siteIds.length ? prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, clientGroup: true } }) : Promise.resolve([]),
+    // WP-LTSHIFT §19：費率表「逐月可變」（schema 註解），但唔係逐個月都
+    // 一定有人再入一次——冇呢個月嘅行就跌返用嗰個 (broker,site) 之前
+    // 最近一個月嘅費率（effective-dated 查法，唔係一定要逐月人手重
+    // 覆制一份先計到數）。淨係查 <= 目標月份、揀每個 (broker,site) 組合
+    // 入面 month 最大嗰一行。
     brokerIds.length
-      ? prisma.referralFeeRate.findMany({ where: { brokerId: { in: brokerIds }, month: monthStartDate, voidedAt: null }, select: { brokerId: true, siteId: true, feePerShift: true } })
+      ? prisma.referralFeeRate.findMany({
+          where: { brokerId: { in: brokerIds }, month: { lte: monthStartDate }, voidedAt: null },
+          select: { brokerId: true, siteId: true, feePerShift: true, month: true },
+          orderBy: { month: "asc" },
+        })
       : Promise.resolve([]),
   ]);
+
+  const latestRateByKey = new Map<string, { brokerId: string; siteId: string | null; feePerShift: number }>();
+  for (const r of ratesUpToMonth) {
+    // orderBy month asc——同一個 key 後面嘅行（月份較新）覆蓋前面，
+    // map 行完之後每個 key 剩低嗰個就係 <= 目標月份入面最新一個月嘅費率。
+    latestRateByKey.set(`${r.brokerId}|${r.siteId ?? ""}`, { brokerId: r.brokerId, siteId: r.siteId, feePerShift: n(r.feePerShift) });
+  }
+  const rates = [...latestRateByKey.values()];
 
   return computeReferralFees({
     guards: referredGuards.map((g) => ({ guardId: g.id, referralBrokerId: g.referralBrokerId as string })),
     shiftCounts: shiftCountsRaw.map((s) => ({ guardId: s.guardId, siteId: s.siteId, count: s._count._all })),
-    rates: rates.map((r) => ({ brokerId: r.brokerId, siteId: r.siteId, feePerShift: n(r.feePerShift) })),
+    rates,
     sites: sites.map((s) => ({ siteId: s.id, clientGroup: s.clientGroup })),
   });
 }

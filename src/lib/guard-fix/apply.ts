@@ -35,6 +35,10 @@ export interface ApplyGuardFixPlanDiffs {
   link: Diff;
   create: Diff;
   createMinimal: Diff;
+  setLongterm: Diff;
+  setLongtermPost: Diff;
+  setReferral: Diff;
+  setVisa: Diff;
 }
 
 export interface ApplyGuardFixPlanOptions {
@@ -46,13 +50,26 @@ export interface ApplyGuardFixPlanOptions {
   /** transaction timeout（ms）——老闆可能經 Zeabur 公開 port 對正式站
    * 行，見 P2028 教訓。預設 30 分鐘（同 script 一致）。 */
   txTimeoutMs?: number;
+  /** WP-LTSHIFT §19：`set_longterm_post` 新建崗位記錄嘅 `effective_from`
+   * ——冇傳就跌返用 `plan.generatedAt` 嗰個月首日（保底；正式 call site
+   * 應該傳 `guard_fix_runs.month`）。 */
+  month?: Date;
 }
 
 /** 一個 transaction，冪等。回傳逐類 diff（create=呢次處理咗幾多、
  * skip=跳過幾多＋原因）。 */
 export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise<ApplyGuardFixPlanDiffs> {
   const { prisma, plan, planOnly } = opts;
-  const diffs: ApplyGuardFixPlanDiffs = { link: emptyDiff(), create: emptyDiff(), createMinimal: emptyDiff() };
+  const diffs: ApplyGuardFixPlanDiffs = {
+    link: emptyDiff(),
+    create: emptyDiff(),
+    createMinimal: emptyDiff(),
+    setLongterm: emptyDiff(),
+    setLongtermPost: emptyDiff(),
+    setReferral: emptyDiff(),
+    setVisa: emptyDiff(),
+  };
+  const effectiveFrom = opts.month ?? new Date(`${plan.generatedAt.slice(0, 7)}-01T00:00:00.000Z`);
 
   const run = async (tx: Prisma.TransactionClient) => {
     // 排隊：同一時間淨係一個 apply transaction（見 GUARD_FIX_ADVISORY_LOCK_KEY）。
@@ -210,6 +227,101 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         defaultBrokerCode: cm.defaultBrokerCode,
         diff: diffs.createMinimal,
       });
+    }
+
+    // -----------------------------------------------------------------
+    // 3. set_longterm——`employment_type` 改做 longterm_autopay（同一個
+    //    guardId 淨係喺套用嗰一刻先再查一次現況，避免同一個 run 入面
+    //    兩個 action 撞、或者呢個安員套用之間俾人手改咗）。
+    // -----------------------------------------------------------------
+    for (const sa of plan.actions.setLongterm) {
+      const guard = await tx.guard.findUnique({ where: { id: sa.guardId }, select: { id: true, employmentType: true } });
+      if (!guard) {
+        diffs.setLongterm.skip.push(`${sa.seq}（guard_id 搵唔到，可能已刪）`);
+        continue;
+      }
+      if (guard.employmentType.startsWith("longterm_")) {
+        diffs.setLongterm.skip.push(`${sa.seq}（已經係長工，冪等跳過）`);
+        continue;
+      }
+      diffs.setLongterm.create.push(sa.seq);
+      if (planOnly) continue;
+      await tx.guard.update({ where: { id: sa.guardId }, data: { employmentType: "longterm_autopay" } });
+      await writeAuditTx(tx, {
+        actorUserId: null,
+        tableName: "guards",
+        rowId: sa.guardId,
+        action: "update",
+        after: { id: sa.guardId, employmentType: "longterm_autopay" },
+        ip: null,
+      });
+    }
+
+    // -----------------------------------------------------------------
+    // 4. set_longterm_post——新建生效中崗位記錄（`source=manual`，見
+    //    prisma/schema.prisma GuardLongtermPost 大註解：guard-fix
+    //    set_longterm_post 計劃套用同老闆手動加同一種來源）。
+    // -----------------------------------------------------------------
+    for (const sp of plan.actions.setLongtermPost) {
+      const existing = await tx.guardLongtermPost.findFirst({ where: { guardId: sp.guardId, siteId: sp.siteId, voidedAt: null }, select: { id: true } });
+      if (existing) {
+        diffs.setLongtermPost.skip.push(`${sp.seq}（已經有生效崗位記錄，冪等跳過）`);
+        continue;
+      }
+      diffs.setLongtermPost.create.push(sp.seq);
+      if (planOnly) continue;
+      const created = await tx.guardLongtermPost.create({
+        data: {
+          guardId: sp.guardId,
+          siteId: sp.siteId,
+          effectiveFrom,
+          effectiveTo: null,
+          source: "manual",
+          note: `guard-fix set_longterm_post（Postorder 上載，${sp.cellCount} 格）`,
+          createdBy: SYSTEM_ACTOR,
+        },
+      });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "guard_longterm_posts", rowId: created.id, action: "create", after: created, ip: null });
+    }
+
+    // -----------------------------------------------------------------
+    // 5. set_referral——`guards.referral_broker_id`。
+    // -----------------------------------------------------------------
+    for (const sr of plan.actions.setReferral) {
+      const guard = await tx.guard.findUnique({ where: { id: sr.guardId }, select: { id: true, referralBrokerId: true } });
+      if (!guard) {
+        diffs.setReferral.skip.push(`${sr.seq}（guard_id 搵唔到，可能已刪）`);
+        continue;
+      }
+      if (guard.referralBrokerId === sr.brokerId) {
+        diffs.setReferral.skip.push(`${sr.seq}（已經係呢個雞頭，冪等跳過）`);
+        continue;
+      }
+      diffs.setReferral.create.push(sr.seq);
+      if (planOnly) continue;
+      await tx.guard.update({ where: { id: sr.guardId }, data: { referralBrokerId: sr.brokerId } });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: sr.guardId, action: "update", after: { id: sr.guardId, referralBrokerId: sr.brokerId }, ip: null });
+    }
+
+    // -----------------------------------------------------------------
+    // 6. set_visa——`guards.visa_sponsored_by_broker_id`（Postorder 暫時
+    //    冇顯式標記，`plan.actions.setVisa` 一律空 array，呢段留低等
+    //    parser 之後補實作）。
+    // -----------------------------------------------------------------
+    for (const sv of plan.actions.setVisa) {
+      const guard = await tx.guard.findUnique({ where: { id: sv.guardId }, select: { id: true, visaSponsoredByBrokerId: true } });
+      if (!guard) {
+        diffs.setVisa.skip.push(`${sv.seq}（guard_id 搵唔到，可能已刪）`);
+        continue;
+      }
+      if (guard.visaSponsoredByBrokerId === sv.brokerId) {
+        diffs.setVisa.skip.push(`${sv.seq}（已經係呢個贊助雞頭，冪等跳過）`);
+        continue;
+      }
+      diffs.setVisa.create.push(sv.seq);
+      if (planOnly) continue;
+      await tx.guard.update({ where: { id: sv.guardId }, data: { visaSponsoredByBrokerId: sv.brokerId } });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: sv.guardId, action: "update", after: { id: sv.guardId, visaSponsoredByBrokerId: sv.brokerId }, ip: null });
     }
   };
 

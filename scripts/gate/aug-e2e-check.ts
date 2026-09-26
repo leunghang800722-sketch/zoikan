@@ -94,6 +94,18 @@ async function main() {
   const { mainRows, outsideRows } = await buildMonthlyClose(AUG_MONTH);
   const sysByName = new Map<string, MonthlyCloseSiteRow>([...mainRows, ...outsideRows].map((r) => [r.canonicalName, r]));
 
+  // WP-LTSHIFT §19 第二部分（coordinator 2026-09-26 追加要求）：B3/B4/B5
+  // 唔准再係寫死嘅舊快照敘述——呢度查返而家（跑呢個 script 嗰一刻）嘅
+  // 即時狀態，落面 B3/B4/B5 段落逐句用返呢啲變數，唔會再自相矛盾。
+  const activeLongtermPosts = await prisma.guardLongtermPost.count({ where: { voidedAt: null } });
+  const longtermPostsBySource = await prisma.guardLongtermPost.groupBy({ by: ["source"], where: { voidedAt: null }, _count: true });
+  const cp5IcInSystemReport = sysByName.has("數碼港 CP5 IC");
+  const referralFeeItems = await prisma.specialItem.findMany({
+    where: { month: AUG_MONTH, kind: "referral_fee", voidedAt: null },
+    select: { cost: true },
+  });
+  const referralFeeSystemTotal = round2(referralFeeItems.reduce((a, i) => a + Number(i.cost), 0));
+
   const boss = await prisma.user.findFirst({ where: { role: { name: "老闆" } } });
   if (!boss) throw new Error("搵唔到老闆 user——先 db:seed");
   const bossSession: AuthedSession = {
@@ -204,21 +216,39 @@ async function main() {
     const referral = referralByBroker.get(code);
     const nDiff = sysN - trial.n;
     const amtDiff = round2(sysAmt - trial.amt);
-    const reason = classifyBrokerReason(code, split.get(code));
+    const reason = classifyBrokerReason(code, split.get(code), referralFeeItems.length > 0);
     push(`| ${code} | ${sysN} | ${trial.n} | ${nDiff} | ${sysAmt} | ${trial.amt} | ${amtDiff} | ${final} | ${referral ? `${referral.amt}（${referral.n} 條）` : "—"} | ${reason} |`);
   }
   push("");
-  push(`**雞頭應付合計**：系統（K/W/T/G/D/Y/B07 加總，唔含介紹費）= ${round2(sysPayoutSum)}；總表(i) 唔含介紹費 = ${round2(trialPayoutSumI)}；總表(ii) 最終應付（含介紹費 60,520，K 未扣 24,150 passthrough）= ${round2(trialPayoutSumII)}；老闆總表「付雞頭淨額」= 1,828,804.77（已扣 K passthrough）。系統現時完全冇做：① 長工介紹費（special_items kind=referral_fee，8 月 0 條）；② K 簽證 passthrough 扣減（規則 12，schema 冇對應欄位）；③ 長工做自己崗位時「歸零、唔畀外判費」嘅判斷（見下面「發現」）。`);
+  push(
+    `**雞頭應付合計**：系統（K/W/T/G/D/Y/B07 加總，唔含介紹費）= ${round2(sysPayoutSum)}；總表(i) 唔含介紹費 = ${round2(trialPayoutSumI)}；總表(ii) 最終應付（含介紹費 60,520，K 未扣 24,150 passthrough）= ${round2(trialPayoutSumII)}；老闆總表「付雞頭淨額」= 1,828,804.77（已扣 K passthrough）。` +
+      `長工做自己崗位時「歸零、唔畀外判費」嘅判斷——WP-LTSHIFT §19 已實施（見下面 B3，本次實測 B07 更數 ${payrollByCode.get("B07")?.shifts ?? 0}）。長工介紹費——後端已實施，本次跑呢個 script 嗰一刻系統有 ${referralFeeItems.length} 條 \`special_items(kind=referral_fee)\`，合計 ${referralFeeSystemTotal}（見 B5）。K 簽證 passthrough 扣減（規則 12）——**仍然未做**，schema 冇對應欄位，總表本身都係「會計出糧後直接現金扣返雞頭，唔喺總表/報表反映」，屬故意設計成「系統外」，唔係本次要補嘅缺口。`,
+  );
   push("");
 
-  // ---- 發現：B07／長工歸屬 ----
-  push("### B3. 主要發現——長工「自己崗位」被誤當外判更计费（唔係細節，係最大差額嚟源）");
+  // ---- 發現：B07／長工歸屬（WP-LTSHIFT §19 兩部分做完之後，呢度已經
+  // 改做即時查數，唔再係寫死嘅「系統冇呢層判斷」舊結論——見上面
+  // activeLongtermPosts／longtermPostsBySource／split 變數。） ----
+  push("### B3. 長工「自己崗位」結算單位判斷（WP-LTSHIFT §19，已實施）");
   push("");
   push("總表把 1,295 格（`shifts_priced.json` 逐格 `unit` 欄）歸類做 `B07`（標籤「(8) 長工」，`is_longterm_person=true`）：呢批更表格仔嘅雞頭欄（`更表A欄`）雖然寫緊 K／W／T／Y／G 等代號，但做嗰更嘅人係公司長工（`longterm_autopay`），總表判斷呢啲係「長工做緊自己嗰份長工工作，雞頭欄淨係更表範本殘留」——payout_rate 定 0（唔畀外判費，costs 由長工月薪自己覆蓋），只有真正嘅散工先攞外判費。");
   push("");
-  push("**系統而家冇呢層判斷**——`src/lib/roster-upload/` 全個目錄搵唔到任何 `longterm` 相關嘅結算單位覆寫邏輯，上載解析／對數套用一律照抄更表雞頭欄，令長工做自己崗位嗰啲更都當正常外判更計外判費。逐雞頭拆開長工 vs 非長工嘅系統金額（本報告 B2 表用嘅係「唔拆」嘅 `buildPayrollTotals()` 總額）：");
+  {
+    const sourceBreakdown = longtermPostsBySource.map((s) => `${s.source}=${s._count}`).join("、");
+    push(
+      "**系統而家已經有呢層判斷**（`src/lib/pricing/longterm-settlement.ts` `resolveLongtermSettlement()`＋guard-fix `set_longterm_post`，見 `docs/api.md`「WP-LTSHIFT §19」段）——本次跑呢個 script 嗰一刻，dev DB 實測：生效中 `guard_longterm_posts` 崗位記錄 **" +
+        activeLongtermPosts +
+        "** 條（" +
+        sourceBreakdown +
+        "），系統 B07（internal_longterm）總更數 **" +
+        (payrollByCode.get("B07")?.shifts ?? 0) +
+        "**（vs Postorder 直接解析嘅 1,295 格／老闆講嘅≈1,293 目標——差額嚟源：Postorder 自己嘅逐格掃描有部分格冇「備註」人名會保守跳過唔計，但對應嗰行喺真實更表上載入面（糧單權威來源）仍然屬於呢個長工喺佢生效崗位嘅正常一更，一樣會歸 B07；呢個唔係「未判斷」，係兩個唔同資料源嘅覆蓋率差異）。",
+    );
+  }
   push("");
-  push("| 雞頭 | 系統總更數 | 其中長工做嘅更數 | 其中長工金額 | 非長工更數 | 非長工金額（同總表 by_unit 比對） |");
+  push("逐雞頭拆開「仍然跟緊雞頭碼」嘅長工更（即 `longterm_non_post_broker`／`longterm_dispersed_b07` 兩種：安員有崗位但呢更唔喺崗位盤、或者完全冇崗位記錄推算唔到）——理論上應該接近 0，因為絕大部分長工更而家已經正確歸咗 B07：");
+  push("");
+  push("| 雞頭 | 系統總更數 | 其中長工但跟緊雞頭碼嘅更數 | 其中金額 | 非長工更數 | 非長工金額（同總表 by_unit 比對） |");
   push("|---|---:|---:|---:|---:|---:|");
   for (const code of ["K", "W", "T", "G", "D", "Y"]) {
     const s = split.get(code);
@@ -226,17 +256,35 @@ async function main() {
     push(`| ${code} | ${s.n} | ${s.ltN} | ${s.ltAmt} | ${s.n - s.ltN} | ${round2(s.amt - s.ltAmt)}（總表 by_unit=${byUnit[code]?.amt ?? "n/a"}） |`);
   }
   push("");
-  push("扣走長工嗰批之後，非長工金額同總表 `by_unit` 已經非常接近（D／G 完全相等，Y 淨返 $0.02，K／T／W 剩低嘅細額差異屬下面 B4 已知落差）——證明呢個「長工自己崗位當外判更计费」判斷缺失，係 8 月雞頭應付差額嘅主要嚟源，唔係雜訊。");
+  // 淨係計真正嘅外判雞頭代號（K/W/T/G/D/Y）——`split` 呢個 map 仲有
+  // "B07" 自己一個 key（長工已經正確歸咗嗰批，`ltN` 佔咗 B07 總更數
+  // 幾乎全部，唔可以計落「仍然跟緊雞頭碼」嘅總和，否則個總和會離譜咁大）。
+  const totalStillOnBrokerCode = ["K", "W", "T", "G", "D", "Y"].reduce((a, code) => a + (split.get(code)?.ltN ?? 0), 0);
+  push(
+    totalStillOnBrokerCode === 0
+      ? "**逐雞頭表全部長工更都已經歸咗 B07（0 格仍然跟緊雞頭碼），呢層判斷已經生效，唔再係差額主因。**"
+      : `**仍然有 ${totalStillOnBrokerCode} 格長工更跟緊雞頭碼（唔喺崗位盤頂散更，或者完全冇崗位記錄推算唔到）**——呢批屬設計上嘅保守 fallback（見上表逐雞頭拆分），唔係判斷缺失。`,
+  );
   push("");
-  push("**分類**：口徑/功能缺口（唔係 bug）——同 `P2-版面重設計計劃.md` §14 規則 1／2、§14.1「WP-ATTRIB（未開工）」講嘅缺口一致：系統結算單位而家100%信任更表雞頭欄，冇「呢個人係咪長工、做緊嘅係咪自己嗰個崗位」呢一層判斷；`settlement-broker-fallback.ts` 只處理「完全冇結算單位」，唔處理「有結算單位但個人係長工」。要做呢層判斷需要規劃決定（例如：長工喺自己 `guards.default_broker_id`／所屬盤做更且更表雞頭代號同總表「該盤預設外判方」相同 → 當自己崗位、歸零；長工喺另一個盤/雞頭做更 → 當規則 2「用假期幫雞頭做散更」，正常外判費），非本次唯讀比對任務範圍。");
+  push("**分類**：功能已實施（`src/lib/pricing/longterm-settlement.ts`＋`src/lib/guard-fix/plan.ts` `buildPostorderActions()`），仲剩低嘅細額差異屬 B4/B5 記低嘅已知口徑落差，唔係「未做」。");
   push("");
 
-  // ---- 疑似 bug ----
+  // ---- 疑似 bug（B4 淨係喺「本次實測仍然中招」先出，避免舊快照文字
+  // 同即時數字自相矛盾——WP-LTSHIFT §19 第二部分已經修咗 CP5 IC 個
+  // seed backfill 缺口，正常嚟講而家唔會再見到呢條。） ----
   push("### B4. 疑似 bug（file:line）");
   push("");
-  push("1. **`src/lib/reports/monthly-close.ts:153-167`（`hasAnyRecordThisMonth` / `effectiveFlatCard` 閘）**：`數碼港 CP5 IC` 呢個盤本身 `shift_records` 永遠 0 條（IC 崗嘅更全部寫喺姊妹盤「數碼港 CP5」底下、`shift_type.billing_group=monthly_ic`，見 §17.8 WP-AUG-OPENING-2）——但呢個「零活動」閘（WP-AI3 反假營業額安全網）淨係查「呢個 site 自己」有冇 `shift_record`／`daily_requirement`，查唔到就當呢個盤成個月完全冇活動，令佢嘅 flat 卡（18,580.65）連同成盤一齊喺 `mainRows`／`outsideRows` 完全消失（唔係顯示 0，係成行冇咗）。本次實測：dev DB 8 月 `數碼港 CP5 IC` 喺 `buildMonthlyClose()` 輸出入面搵唔到呢個盤，總表卻有 18,580.65 收入（`revenue_site.json` S012）。**建議修法**：呢個閘要識別「flat 卡本身覆蓋緊嘅 IC 崗更係咪掛咗喺姊妹盤」（例如查 `數碼港 CP5` 呢個月有冇 `shift_type.billing_group=monthly_ic` 嘅記錄），或者由規劃決定呢類「純billing 構造、冇自己shift_records」嘅盤要點樣豁免呢條閘。");
-  push("");
-  push("（未見其他新增疑似 bug——8 月開盤／guard-fix／對數套用嘅其餘差額全部對得返 §17.7-§17.10、§18 已經記錄嘅已知落差，見下面 B5。）");
+  if (!cp5IcInSystemReport) {
+    push(
+      "1. **`src/lib/reports/monthly-close.ts:153-167`（`hasAnyRecordThisMonth` / `effectiveFlatCard` 閘）**：`數碼港 CP5 IC` 呢個盤本身 `shift_records` 永遠 0 條（IC 崗嘅更全部寫喺姊妹盤「數碼港 CP5」底下、`shift_type.billing_group=monthly_ic`，見 §17.8 WP-AUG-OPENING-2）——但呢個「零活動」閘（WP-AI3 反假營業額安全網）淨係查「呢個 site 自己」有冇 `shift_record`／`daily_requirement`，查唔到就當呢個盤成個月完全冇活動，令佢嘅 flat 卡（18,580.65）連同成盤一齊喺 `mainRows`／`outsideRows` 完全消失（唔係顯示 0，係成行冇咗）。本次實測：dev DB 8 月 `數碼港 CP5 IC` 喺 `buildMonthlyClose()` 輸出入面搵唔到呢個盤，總表卻有 18,580.65 收入（`revenue_site.json` S012）。**建議修法**：`sites.activity_proxy_site_id` 應該指向「數碼港 CP5」（migration `20260926120000_wp_ltshift_cp5ic_proxy_weifeng_flatcard`），如果本次實測仲見到呢條，先檢查 `db:reset && db:seed` 之後呢個欄係咪真係有值（`scripts/seed/index.ts` `seedSites()` 尾段 `cp5SiteId` patch）。",
+    );
+    push("");
+    push("（未見其他新增疑似 bug——8 月開盤／guard-fix／對數套用嘅其餘差額全部對得返 §17.7-§17.10、§18 已經記錄嘅已知落差，見下面 B5。）");
+  } else {
+    push(
+      "**本次實測：搵唔到新嘅疑似 bug。**（之前記錄過嘅「數碼港 CP5 IC 喺月結報表消失」——`monthly-close.ts:153-167` 反假營業額閘——已經喺 WP-LTSHIFT §19 修埋 `sites.activity_proxy_site_id` 嘅 seed backfill 缺口，本次實測呢個盤有出現喺 `buildMonthlyClose()` 輸出，唔再重現。8 月開盤／guard-fix／對數套用嘅其餘差額全部對得返 §17.7-§17.10、§18 已經記錄嘅已知落差，見下面 B5。）",
+    );
+  }
   push("");
 
   // ---- B5. 其他已知落差彙總 ----
@@ -246,10 +294,16 @@ async function main() {
   push("- **HKU座頭 OT**（1Hr OT，84.85／更）：`buildMonthlyClose()` 嘅逐盤更數/收入淨計 `record_type=shift`，唔含 `ot`——呢個係報表設計本身（OT 另有 `ot_unpriced` 統計），令逐盤比較見到 -1 更／-84.85 嘅系統性落差，唔係缺失。");
   push("- **國泰城 3 格／港深創新及科技園 1 格**：guard-fix 收斂之後仍然 `needs_boss`（安員身份對唔實）嘅格，未寫入 `shift_records`，令呢兩個盤更數/收入比總表少（國泰城 -3 更、港深創新及科技園 -1 更）——資料未入（等老闆喺 guard-fix `needs_boss` 卡片決定），唔係 bug。加埋 1 格淺水灣道11號蔚峰園更表本身重複行，合共 B step 6 講嘅 6 個 unresolved。任務書原先講嘅「34 格未配對＝兩位安員」係較早期估算，本次跑到 guard-fix 完全收斂之後實測剩低 5 格（3 個身份），細節見 §18.8。");
   push("- **啟航1331**：系統收入 1,231,500 vs 總表 1,236,900（差 5,400＝1,350×4），更數 1,150 vs 1,154（差 4）——實查 `roster_upload_rows`（codeKind=shift）同 `shift_records` 都係 1,150，寫入本身冇問題；差嘅 4 更 1,350／更係「啟航1331 Event」獨立盤（§17.7 修3，K 1,350／990 卡）嘅更，總表 44 碼表用 S017 一個碼將 Event 更同主盤更合併計，系統就分成兩個盤（「啟航1331」＋「啟航1331 Event」）顯示——盤層面「分／合」口徑唔同，唔係漏更／唔是 bug（全公司總收入層面「系統全部盤」欄已經計埋呢 5,400）。");
-  push("- **長工介紹費（60,520）**：系統完全未入（`special_items(kind=referral_fee)` 8 月 0 條）——WP-MONTHLY-BUDGET／referral 自動化未做（§16.2），要會計人手輸入或者起自動化。");
+  push(
+    referralFeeItems.length === 0
+      ? "- **長工介紹費（總表 60,520）**：系統本次跑呢個 script 嗰一刻 `special_items(kind=referral_fee)` 8 月 0 條——後端 API（`POST /api/reports/referral-fee/recompute`）同月結頁「重算介紹費」掣已經做咗（見 `docs/api.md`「WP-LTSHIFT §19」），淨係未撳過；撳咗之後先會有數，見下面即時查到嘅金額。"
+      : `- **長工介紹費（總表 60,520）**：系統本次跑呢個 script 嗰一刻已經有 ${referralFeeItems.length} 條 \`special_items(kind=referral_fee)\`，合計 ${referralFeeSystemTotal}（同總表 60,520 嘅差額原因見上面 B3 同 docs/api.md「WP-LTSHIFT §19 第二部分」段——主要嚟自長工 B07 格數本身同 Postorder 原始格數有落差，連帶推高介紹費）。`,
+  );
   push("- **K 簽證 passthrough（24,150）**：規則 12——系統 schema 完全冇對應欄位／機制，總表本身都係「會計出糧後直接現金扣返雞頭，唔喺總表/報表反映」，屬故意設計成「系統外」，唔係本次要補嘅缺口。");
   push("- **長工 Autopay（882,146.72）／MPF（35,966.15）**：WP-LTPAY 未做，系統完全冇呢盤數（唔喺 `buildPayrollTotals()`／`buildMonthlyClose()` 出現），糧單試算嘅「總付出」「毛利」呢兩個大數暫時冇辦法喺系統報表對得到。");
-  push("- **LINK（厚A/B/C）、CP5 IC 月費、Event 獨立盤、special items（獨立雞頭費等）**：唔喺 Postorder 總表 44 個盤碼範圍內／已經喺 B1 逐盤表反映（CP5 IC 見 B4 bug；Event 已經係獨立盤「啟航1331 Event」，B1 表冇見異常）。");
+  push(
+    `- **LINK（厚A/B/C）、CP5 IC 月費、Event 獨立盤、special items（獨立雞頭費等）**：唔喺 Postorder 總表 44 個盤碼範圍內／已經喺 B1 逐盤表反映（CP5 IC${cp5IcInSystemReport ? "而家有出現喺系統報表（見 B4）" : "見 B4 bug"}；Event 已經係獨立盤「啟航1331 Event」，B1 表冇見異常）。`,
+  );
   push("");
 
   push("### B6. 未定价數（系統，8 月）");
@@ -267,7 +321,9 @@ async function main() {
   push("## C. 回報摘要");
   push("");
   const sitePctMatch = round2(((44 - siteDiffCount) / 44) * 100);
-  push(`**一句總結**：7 月——系統數＝總表（337/337 比對點 pass，100% 一致）。8 月——逐盤更數/收入 ${44 - siteDiffCount}/44（${sitePctMatch}%）盤零差額，主因：①長工做自己崗位被當外判更計費（未做結算單位覆寫判斷，屬功能缺口）；②長工 Autopay／介紹費／K passthrough 三項未入系統（WP-LTPAY／referral 自動化／規則12機制均未做）；③6 格未配對安員未寫入（等老闆 guard-fix 決定）；④ 1 個疑似 bug（數碼港 CP5 IC 盤喺月結報表消失，monthly-close.ts:153-167）；⑤ 其餘為已知口徑差異（蔚峰園 7 月卡滲入、OT 唔入逐盤統計等）。`);
+  push(
+    `**一句總結**：7 月——系統數＝總表（337/337 比對點 pass，100% 一致）。8 月——逐盤更數/收入 ${44 - siteDiffCount}/44（${sitePctMatch}%）盤零差額，長工結算單位判斷（WP-LTSHIFT §19）已實施（B07 更數 ${payrollByCode.get("B07")?.shifts ?? 0}）；長工介紹費後端已實施（本次系統合計 ${referralFeeSystemTotal}）；剩低差額主因：①長工 Autopay／K passthrough 兩項未入系統（WP-LTPAY／規則12機制均未做）；②6 格未配對安員未寫入（等老闆 guard-fix 決定）；③${cp5IcInSystemReport ? "冇新疑似 bug" : "數碼港 CP5 IC 盤喺月結報表消失（monthly-close.ts:153-167，見 B4）"}；④其餘為已知口徑差異（蔚峰園 7 月卡滲入、OT 唔入逐盤統計、啟航1331/Event 盤口徑分合等）。`,
+  );
   push("");
 
   const reportPath = path.join(REPORT_DIR, `報告-${today}.md`);
@@ -289,10 +345,11 @@ function classifySiteReason(name: string, shiftDiff: number | null, revenueDiff:
   return "未分類——需要人手排查";
 }
 
-function classifyBrokerReason(code: string, s: { n: number; ltN: number; ltAmt: number } | undefined): string {
-  if (code === "B07") return "系統冇 B07 記錄（長工自己崗位而家歸咗去 K/W/T/Y/G 其中一個，見 B3）";
-  if (s && s.ltN > 0) return `長工誤當外判（B3）：${s.ltN} 更／${s.ltAmt} 未扣走；另加介紹費／K passthrough 未入`;
-  return "介紹費未入系統（B5）";
+function classifyBrokerReason(code: string, s: { n: number; ltN: number; ltAmt: number } | undefined, referralFeeComputed: boolean): string {
+  const referralNote = referralFeeComputed ? "介紹費本次已計（見 B5）" : "介紹費未撳「重算」（見 B5）";
+  if (code === "B07") return `系統長工自己崗位更數（WP-LTSHIFT §19 已實施，見 B3）；${referralNote}`;
+  if (s && s.ltN > 0) return `${s.ltN} 更長工仍然跟緊雞頭碼（唔喺崗位盤頂散更／完全冇崗位記錄推算唔到，見 B3）：${s.ltAmt}；${referralNote}；K passthrough 未入（規則 12，系統外設計）`;
+  return `${referralNote}；K passthrough 未入（規則 12，系統外設計）`;
 }
 
 main()

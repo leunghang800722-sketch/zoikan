@@ -17,6 +17,7 @@ import { readJson } from "@/lib/api/query";
 import { BadRequest, Forbidden } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { recomputeReferralFees } from "@/lib/reports/referral-fee";
+import { prisma } from "@/lib/db";
 
 export async function POST(req: Request) {
   return withApiError(async () => {
@@ -30,11 +31,22 @@ export async function POST(req: Request) {
 
     const result = await recomputeReferralFees(month, session.userId, getClientIp(req));
 
+    // 頁面顯示用雞頭代號（K/W/T/G…），唔係 brokerId——逐個查返 code
+    // （呢張表通常得幾個雞頭，唔使擔心 N+1）。
+    const brokerIds = [...result.totalsByBroker.keys()];
+    const brokers = brokerIds.length ? await prisma.broker.findMany({ where: { id: { in: brokerIds } }, select: { id: true, code: true } }) : [];
+    const codeById = new Map(brokers.map((b) => [b.id, b.code]));
+    const totalsByBrokerCode: Record<string, number> = {};
+    for (const [brokerId, amount] of result.totalsByBroker) {
+      totalsByBrokerCode[codeById.get(brokerId) ?? brokerId] = amount;
+    }
+
     return ok(
       brandSafeResponse({
         month: month.toISOString().slice(0, 10),
         total_amount: result.totalAmount,
         totals_by_broker: Object.fromEntries(result.totalsByBroker),
+        totals_by_broker_code: totalsByBrokerCode,
         created_count: result.createdCount,
         voided_count: result.voidedCount,
         exempt_shift_count: result.exemptShiftCount,

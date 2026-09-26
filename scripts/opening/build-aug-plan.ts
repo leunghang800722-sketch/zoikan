@@ -117,7 +117,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "免稅店",
       clientName: "機場Cdf",
       clientGroup: null,
-      aliases: ["免稅店"],
+      aliases: ["免稅店", "CDF", "機場CDF", "機場Cdf"], // WP-LTSHIFT §19 第二部分：Postorder 短代號（prop=CDF，client 寫「機場Cdf」）
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -132,7 +132,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "新皇崗口岸",
       clientName: "新皇崗口岸",
       clientGroup: null,
-      aliases: ["新皇崗口岸"],
+      aliases: ["新皇崗口岸", "皇崗"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -147,7 +147,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "港深創新及科技園",
       clientName: "港深創新及科技園",
       clientGroup: null,
-      aliases: ["港深創新及科技園"],
+      aliases: ["港深創新及科技園", "創科園"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -162,7 +162,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "城巴-海洋公園車廠",
       clientName: "城巴",
       clientGroup: "城巴車廠",
-      aliases: ["海洋公園城巴車廠"],
+      aliases: ["海洋公園城巴車廠", "海洋廠"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,
@@ -177,7 +177,7 @@ const SITE_CODE_MAP: Record<string, SiteResolution> = {
       canonicalName: "希慎廣場",
       clientName: "希慎廣場",
       clientGroup: null,
-      aliases: ["希慎廣場"],
+      aliases: ["希慎廣場", "希慎"], // WP-LTSHIFT §19 第二部分：Postorder 短代號
       billingModel: "per_shift",
       monthlyFee: null,
       monthlyPosts: null,

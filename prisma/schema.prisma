@@ -245,9 +245,9 @@ model GuardLongtermPost {
   source GuardLongtermPostSource @default(manual)
   note   String?
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  createdBy String?  @map("created_by")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
   voidedAt  DateTime? @map("voided_at")
   voidedBy  String?   @map("voided_by")
 
@@ -414,8 +414,8 @@ model Guard {
   // 入職，用嚟自動計介紹費（`src/lib/reports/referral-fee.ts`）。抽屜
   // 可揀（見 `set_referral` guard-fix plan 類）。nullable：唔係全部長工
   // 都有記錄到係邊個雞頭介紹。
-  referralBrokerId String? @map("referral_broker_id")
-  referralBroker   Broker? @relation("GuardReferralBroker", fields: [referralBrokerId], references: [id])
+  referralBrokerId        String? @map("referral_broker_id")
+  referralBroker          Broker? @relation("GuardReferralBroker", fields: [referralBrokerId], references: [id])
   // WP-LTSHIFT：簽證形式長工——呢個長工嘅簽證由邊個雞頭擔保。有值＝
   // 呢個人**永遠**當該雞頭散更結算（唔理崗位盤），跟 §14 任務書規則。
   visaSponsoredByBrokerId String? @map("visa_sponsored_by_broker_id")
@@ -606,23 +606,23 @@ model Site {
   // （`hasAnyRecordThisMonth`）查「自己或 proxy 盤有記錄」，先至唔會將
   // 呢個盤當「完全冇活動」自動隱藏。刻意唔用 client_name/canonical_name
   // 前綴呢類字串猜測（規劃階段否決咗），淨係呢個顯式 FK，一盤一 proxy。
-  activityProxySiteId String? @map("activity_proxy_site_id")
-  activityProxySite   Site?   @relation("SiteActivityProxy", fields: [activityProxySiteId], references: [id])
-  activityProxyFor    Site[]  @relation("SiteActivityProxy")
+  activityProxySiteId String?       @map("activity_proxy_site_id")
+  activityProxySite   Site?         @relation("SiteActivityProxy", fields: [activityProxySiteId], references: [id])
+  activityProxyFor    Site[]        @relation("SiteActivityProxy")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
-  shiftTypes        ShiftType[]
-  rateCards         RateCard[]
-  shiftRecords      ShiftRecord[]
-  dailyRequirements DailyRequirement[]
-  specialItems      SpecialItem[]
-  referralFeeRates  ReferralFeeRate[]
-  brokerAssignments BrokerSiteAssignment[]
-  quotas            Quota[]
-  rosterUploads     RosterUpload[]
+  shiftTypes               ShiftType[]
+  rateCards                RateCard[]
+  shiftRecords             ShiftRecord[]
+  dailyRequirements        DailyRequirement[]
+  specialItems             SpecialItem[]
+  referralFeeRates         ReferralFeeRate[]
+  brokerAssignments        BrokerSiteAssignment[]
+  quotas                   Quota[]
+  rosterUploads            RosterUpload[]
   // Phase B-0：一檔多子盤（城巴車廠／CP5）逐格「解析後實際盤」反向關聯
   // ——`RosterUploadRow.resolvedSiteId`，見嗰個 model 註解。
   resolvedRosterUploadRows RosterUploadRow[]
@@ -807,7 +807,7 @@ model RosterUpload {
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
-  rows RosterUploadRow[]
+  rows               RosterUploadRow[]
   // Phase B-1（§14.1／§15.3 分期）：呢個上載逐項對數決定（keep_system／
   // exception 留痕，見 RosterReconcileDecision 大註解）。
   reconcileDecisions RosterReconcileDecision[]
@@ -822,12 +822,12 @@ model RosterUploadRow {
   upload   RosterUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
   rowIndex Int          @map("row_index") // 原檔行號（1-based，openpyxl/exceljs row number），追溯用
 
-  subSiteName String?              @map("sub_site_name") // 城巴車廠等一檔多子盤嘅子盤名（citybus layout 先有值）
-  workDate    DateTime             @map("work_date") @db.Date
-  rawCode     String               @map("raw_code") // 格仔原始代號（未歸一，例：OFF/NPL 保留原字面）
-  codeKind    RosterUploadCodeKind @map("code_kind")
-  shiftTypeId String?              @map("shift_type_id") // 對唔到 shift_types 就 null（唔准估），warnings 記低
-  shiftType   ShiftType?           @relation(fields: [shiftTypeId], references: [id])
+  subSiteName        String?              @map("sub_site_name") // 城巴車廠等一檔多子盤嘅子盤名（citybus layout 先有值）
+  workDate           DateTime             @map("work_date") @db.Date
+  rawCode            String               @map("raw_code") // 格仔原始代號（未歸一，例：OFF/NPL 保留原字面）
+  codeKind           RosterUploadCodeKind @map("code_kind")
+  shiftTypeId        String?              @map("shift_type_id") // 對唔到 shift_types 就 null（唔准估），warnings 記低
+  shiftType          ShiftType?           @relation(fields: [shiftTypeId], references: [id])
   // Phase B-0（§15.3 第 3 項，一檔多子盤：城巴車廠 9 個子盤／CP5 夾數據
   // 中心）：呢行「語意上」實際屬邊個盤——上載掛嘅盤（`roster_uploads.
   // site_id`）有子盤（`sites.parent_site_id`）而且 `sub_site_name` 對到
@@ -835,13 +835,13 @@ model RosterUploadRow {
   // site_id 一致；有子盤但 sub_site_name 對唔到就 null（唔准估，見
   // warnings）。更別配對（`shift_type_id`）跟呢個欄嘅盤範圍搵，唔跟
   // 上載本身嘅 site_id。
-  resolvedSiteId String? @map("resolved_site_id")
-  resolvedSite   Site?   @relation(fields: [resolvedSiteId], references: [id])
+  resolvedSiteId     String?              @map("resolved_site_id")
+  resolvedSite       Site?                @relation(fields: [resolvedSiteId], references: [id])
   // WP-GUARD-FIX 驗收（Opus 5.5）：`resolved_site_id` 係對數頁人手「批量
   // 指定子盤／全部歸母盤確認」揀嘅——`reparseRosterUpload()` 重建 rows
   // 嗰陣要保留呢個決定（唔俾三層推斷覆蓋），見 migration
   // 20260925130000_wp_guard_fix_resolved_site_manual。
-  resolvedSiteManual Boolean @default(false) @map("resolved_site_manual")
+  resolvedSiteManual Boolean              @default(false) @map("resolved_site_manual")
 
   staffNoRaw    String? @map("staff_no_raw")
   nameRaw       String? @map("name_raw")
@@ -881,19 +881,19 @@ model RosterUploadRow {
 // src/lib/rbac/matrix.ts），主管/會計/雞頭/安員一律 403（會批量建人、
 // 睇身份證）。
 model StaffListUpload {
-  id           String   @id @default(uuid())
-  uploaderId   String   @map("uploader_id")
-  uploader     User     @relation(fields: [uploaderId], references: [id])
-  uploadedAt   DateTime @default(now()) @map("uploaded_at")
-  fileName     String   @map("file_name")
-  fileSha256   String   @map("file_sha256")
-  fileBytes    Bytes    @map("file_bytes")
-  fileSize     Int      @map("file_size")
-  rowCount     Int      @map("row_count")
+  id           String                @id @default(uuid())
+  uploaderId   String                @map("uploader_id")
+  uploader     User                  @relation(fields: [uploaderId], references: [id])
+  uploadedAt   DateTime              @default(now()) @map("uploaded_at")
+  fileName     String                @map("file_name")
+  fileSha256   String                @map("file_sha256")
+  fileBytes    Bytes                 @map("file_bytes")
+  fileSize     Int                   @map("file_size")
+  rowCount     Int                   @map("row_count")
   status       StaffListUploadStatus @default(parsed)
   // {row_count, u_number_count, hkid_valid_count, hkid_invalid_count,
   // parse_error} 呢類數目——唔存逐行姓名/電話/身份證（鐵則）。
-  parseSummary Json?    @map("parse_summary")
+  parseSummary Json?                 @map("parse_summary")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -911,30 +911,76 @@ enum StaffListUploadStatus {
   parse_failed
 }
 
+// ---------------------------------------------------------------------------
+// WP-LTSHIFT §19（老闆 2026-09-26 第二部分）：Postorder（`Postorder - Aug
+// 2026.xlsm` 呢類總表）上載——同 `staff_list_uploads` 一模一樣嘅「即時存
+// bytes＋摘要，唔另存逐行 PII」模式：guard-fix `plan`/`apply` 嗰刻先由
+// `fileBytes` 重新解析（記憶體，唔落 DB）。`parseSummary` 淨係數目（盤
+// 數／格數／介紹費行數），唔存逐行人名——人名淨係喺 plan 計算果一刻喺
+// 記憀體度用嚟 matchGuard，唔會落 DB 呢張表。
+// `month`：呢份 Postorder 對應邊個月（file 名/內容通常淨係一個月），
+// 用嚟揀「呢個月而家生效嗰份」（同 staff_list_uploads 一致：`orderBy
+// uploadedAt desc` 揀第一筆 `status=parsed`，唔用 boolean 旗標）。
+// ---------------------------------------------------------------------------
+model PostorderUpload {
+  id           String                @id @default(uuid())
+  month        DateTime              @db.Date // 月份第一日
+  uploaderId   String                @map("uploader_id")
+  uploader     User                  @relation(fields: [uploaderId], references: [id])
+  uploadedAt   DateTime              @default(now()) @map("uploaded_at")
+  fileName     String                @map("file_name")
+  fileSha256   String                @map("file_sha256")
+  fileBytes    Bytes                 @map("file_bytes")
+  fileSize     Int                   @map("file_size")
+  rowCount     Int                   @map("row_count")
+  status       PostorderUploadStatus @default(parsed)
+  // {longterm_post_count, longterm_site_count, referral_row_count,
+  // referral_broker_labels_unresolved_count, parse_error} 呢類數目——
+  // 唔存逐行姓名（鐵則）。
+  parseSummary Json?                 @map("parse_summary")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  guardFixRuns GuardFixRun[]
+
+  @@index([month, status, uploadedAt])
+  @@map("postorder_uploads")
+}
+
+enum PostorderUploadStatus {
+  parsed
+  parse_failed
+}
+
 // 一次「計劃／套用」執行——`plan_json` 帶 PII（姓名/電話/身份證/候選
 // guardId），只有老闆可讀（field-level gate 由 route 層 `安員配對修復`
 // 硬性單一角色保證，唔需要額外 field-group——呢個資源成塊都係老闆專
 // 用）。`summary_json` 淨係數目，方便歷史列表唔使反覆解 `plan_json`。
 model GuardFixRun {
-  id                String            @id @default(uuid())
-  month             DateTime          @db.Date
-  staffListUploadId String            @map("staff_list_upload_id")
-  staffListUpload   StaffListUpload   @relation(fields: [staffListUploadId], references: [id])
-  createdById       String            @map("created_by_id")
-  createdBy         User              @relation(fields: [createdById], references: [id])
-  createdAt         DateTime          @default(now()) @map("created_at")
+  id                String           @id @default(uuid())
+  month             DateTime         @db.Date
+  staffListUploadId String           @map("staff_list_upload_id")
+  staffListUpload   StaffListUpload  @relation(fields: [staffListUploadId], references: [id])
+  // WP-LTSHIFT §19：呢個 run 計劃嗰陣有冇用到 Postorder 上載（set_longterm/
+  // set_longterm_post/set_referral/set_visa 四類計劃嘅來源）——nullable，
+  // 冇上載 Postorder 都照舊計到 link/create 嗰幾類。
+  postorderUploadId String?          @map("postorder_upload_id")
+  postorderUpload   PostorderUpload? @relation(fields: [postorderUploadId], references: [id])
+  createdById       String           @map("created_by_id")
+  createdBy         User             @relation(fields: [createdById], references: [id])
+  createdAt         DateTime         @default(now()) @map("created_at")
 
   planJson    Json @map("plan_json")
   summaryJson Json @map("summary_json")
 
-  status    GuardFixRunStatus @default(planned)
-  appliedAt DateTime?         @map("applied_at")
+  status         GuardFixRunStatus @default(planned)
+  appliedAt      DateTime?         @map("applied_at")
   // Opus 5.5 驗收：幾時開始套用——`applying` 超過 15 分鐘當卡死（server
   // 中途重啟），頁面俾老闆「重新套用」（見 runs/[id]/apply/route.ts）。
-  applyStartedAt DateTime? @map("apply_started_at")
+  applyStartedAt DateTime?         @map("apply_started_at")
   // apply 完成之後嘅結果：逐盤 reparse 前後 unmatched/ambiguous 數＋
   // link/create/create_minimal 處理/跳過數（冇 PII，純數目＋seq）。
-  resultJson Json? @map("result_json")
+  resultJson     Json?             @map("result_json")
 
   @@index([month, createdAt])
   @@map("guard_fix_runs")
@@ -947,6 +993,35 @@ enum GuardFixRunStatus {
   // `GET /api/guard-fix/runs/:id` 用（見 §18.9 設計取捨）。
   applying
   applied
+  failed
+}
+
+// ---------------------------------------------------------------------------
+// WP-LTSHIFT §19 交付 C：「重新對數全月」一次執行——同 `guard_fix_runs`
+// 一致嘅背景工作／卡死復原設計（見 apply.ts GUARD_FIX_ADVISORY_LOCK_KEY／
+// view.ts APPLY_STALE_MS 嘅同款 pattern，呢度用另一個 advisory lock
+// key，見 src/lib/roster-upload/reconcile-all.ts）。`result_json` 逐盤
+// 前後 roster_only／settlement_diff／unresolved／寫入／改結算單位數，
+// 純數目＋盤名，冇 PII。
+// ---------------------------------------------------------------------------
+model ReconcileAllRun {
+  id           String                @id @default(uuid())
+  month        DateTime              @db.Date
+  status       ReconcileAllRunStatus @default(running)
+  startedAt    DateTime              @default(now()) @map("started_at")
+  startedById  String                @map("started_by_id")
+  startedBy    User                  @relation(fields: [startedById], references: [id])
+  finishedAt   DateTime?             @map("finished_at")
+  resultJson   Json?                 @map("result_json")
+  errorMessage String?               @map("error_message")
+
+  @@index([month, startedAt])
+  @@map("reconcile_all_runs")
+}
+
+enum ReconcileAllRunStatus {
+  running
+  done
   failed
 }
 
@@ -970,7 +1045,7 @@ model RosterReconcileDecision {
   uploadId String       @map("upload_id")
   upload   RosterUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
 
-  reconcileKey String @map("reconcile_key")
+  reconcileKey String  @map("reconcile_key")
   category     String // 決定嗰刻嘅分類（roster_only/system_only/guard_diff/settlement_diff/shift_type_diff/unresolved），純記錄用途
   action       String // 'keep_system' | 'exception'（apply_roster 唔存喺呢度，見上面大註解）
   reason       String?
@@ -1152,6 +1227,9 @@ model User {
   // WP-GUARD-FIX-UI：邊個上載咗 U Team 名單／邊個叫過「計劃／套用」。
   staffListUploads StaffListUpload[]
   guardFixRuns     GuardFixRun[]
+  // WP-LTSHIFT §19：邊個上載咗 Postorder 總表。
+  postorderUploads PostorderUpload[]
+  reconcileAllRuns ReconcileAllRun[]
 
   @@map("users")
 }

@@ -12,7 +12,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   return withApiError(async () => {
     const session = await requirePermission(req, "安員配對修復", "view");
     const { id } = await params;
-    const run = await prisma.guardFixRun.findUnique({ where: { id }, include: { staffListUpload: { select: { fileName: true, uploadedAt: true, rowCount: true } } } });
+    const run = await prisma.guardFixRun.findUnique({
+      where: { id },
+      include: {
+        staffListUpload: { select: { fileName: true, uploadedAt: true, rowCount: true } },
+        postorderUpload: { select: { fileName: true, uploadedAt: true } },
+      },
+    });
     if (!run) throw NotFound();
 
     const plan = run.planJson as unknown as GuardFixPlan;
@@ -32,6 +38,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         summary: run.summaryJson,
         result: run.resultJson,
         staffListUpload: { fileName: run.staffListUpload.fileName, uploadedAt: run.staffListUpload.uploadedAt.toISOString(), rowCount: run.staffListUpload.rowCount },
+        postorderUpload: run.postorderUpload ? { fileName: run.postorderUpload.fileName, uploadedAt: run.postorderUpload.uploadedAt.toISOString() } : null,
         needsBoss,
       }),
     );

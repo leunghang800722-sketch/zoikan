@@ -37,6 +37,21 @@ export function canonicalNameFor(brokerCsvId: string, code: string | null | unde
   return row?.canonical_name || code || brokerCsvId;
 }
 
+/** WP-LTSHIFT §19：Postorder 總表用嘅雞頭稱呼（`master_roster_aliases`
+ * 欄，例如某雞頭喺「在勤總表」入面嘅簡稱），淨係用嚟令 guard-fix
+ * `matchBroker()` 對到 Postorder 逐格「雞頭名」/介紹費行 col A 括號入面
+ * 嘅字——**唔入 DB 之外任何地方**、唔入 git（成個 `data/` 都
+ * gitignored），冇私隱檔就跌返空 array（matchBroker 對唔到就 null，
+ * 唔准估，同現行行為一致）。 */
+export function masterRosterAliasesFor(brokerCsvId: string): string[] {
+  const row = loadPrivateBrokerNames().find((r) => r.broker_csv_id === brokerCsvId);
+  const raw = row?.master_roster_aliases || "";
+  return raw
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** settlement_unit（真名）→ broker_csv_id 嘅對照——冇私隱檔就得返空
  * object（seed 嗰陣 settlement_unit 係呢類真名嘅記錄會跌返冇 broker
  * 對應，屬已知限制，唔係 bug——冇私隱檔本身就代表冇授權用真名做對照）。 */
