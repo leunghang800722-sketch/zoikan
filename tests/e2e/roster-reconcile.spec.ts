@@ -95,6 +95,12 @@ test("老闆：上載→對數（roster_only）以更表為準套用→shift_rec
 
     await page.goto(`/roster-uploads/${upload1Body.upload.id}/reconcile`);
     await expect(page.getByRole("heading", { name: "更表對數" })).toBeVisible();
+    // 2026-09-26 回歸：「全部」tab 之前砌錯 URL（`/reconcile&take=500`）→ 404、
+    // 批量掣永遠 (0)。而家「全部」tab 一定要 200 兼見到行。
+    const allTabResp = page.waitForResponse((r) => r.url().includes("/reconcile?") && r.request().method() === "GET");
+    await page.getByRole("button", { name: "全部", exact: true }).click();
+    expect((await allTabResp).status()).toBe(200);
+    await expect(page.locator(`[data-reconcile-key="${key}"]`)).toBeVisible();
     await page.getByTestId("reconcile-tab-roster_only").click();
 
     const row1 = page.locator(`[data-reconcile-key="${key}"]`);

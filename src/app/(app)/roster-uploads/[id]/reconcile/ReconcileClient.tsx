@@ -126,8 +126,11 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
   async function load() {
     setLoading(true);
     setError(null);
-    const qs = tab === "all" ? "" : `?category=${tab}`;
-    const res = await apiGet<ReconcileResponse>(`/api/roster-uploads/${uploadId}/reconcile${qs}&take=500`.replace("?&", "?"));
+    // 2026-09-26 修正：「全部」tab 之前砌出 `/reconcile&take=500`（冇 `?`），
+    // 正式站直接 404、套用掣永遠 (0)。統一用 URLSearchParams 砌 query。
+    const params = new URLSearchParams({ take: "500" });
+    if (tab !== "all") params.set("category", tab);
+    const res = await apiGet<ReconcileResponse>(`/api/roster-uploads/${uploadId}/reconcile?${params.toString()}`);
     setLoading(false);
     if (!res.ok) {
       setError(res.message);
