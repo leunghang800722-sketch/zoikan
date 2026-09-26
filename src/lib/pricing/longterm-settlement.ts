@@ -299,3 +299,161 @@ export async function inferGuardMonthlyTopSite(guardIds: string[], month: Date, 
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// WP-REFERRAL-FALLBACK（老闆 2026-09-26 緊急）：正式站從未上載過 Postorder
+// .xlsm（CSV 冇公式，`set_referral` 由 Postorder「長工雞頭費」行計唔到
+// 邊個長工，見 `guard-fix/plan.ts` `buildPostorderActions()`），令長工
+// `referral_broker_id` 一直係 null、介紹費計 0——呢個 module 加一條**唔靠
+// Postorder** 嘅自動規則：長工嘅介紹雞頭＝供應呢個長工嘅雞頭＝更表上呢個
+// 長工喺自己崗位盤（`guard_longterm_posts` 生效）嗰啲行嘅雞頭碼（K 供應
+// 長工，行就寫 K；T／W／G 同理；D 冇介紹費，費率表冇 D）。
+//
+// 呢個「邊個雞頭供應」嘅概念同 §14 規則 9「賣假／頂位費只適用於由雞頭
+// 供應入公司嘅長工」一致——供應長工嘅雞頭同介紹佢入職嘅雞頭係同一個
+// 人，用更表本身嘅雞頭碼欄就可以推返出嚟，唔使靠 Postorder 總表。
+//
+// 決策鏈：
+//   1. 呢個長工自己喺崗位盤嗰啲 `roster_upload_rows`（active 上載、
+//      code_kind=shift）嘅 `settlement_broker_id`（原更表雞頭碼，唔係
+//      B07 結算結果——呢個欄由 parse 時 `matchBroker(broker_code_raw)`
+//      寫入，`src/lib/roster-upload/service.ts`；B07 覆寫喺
+//      `shift_records`，唔喺呢張表，見檔頭 A2 大註解）：唯一一個雞頭碼
+//      就用佢；多個就用出現最多嗰個，佔比要 ≥70%（否則分散多個雞頭，
+//      計唔到邊個先係「供應」嗰個，唔設＋warning）。
+//   2. 完全冇雞頭碼欄（成盤逐行都冇）——跌返 (a) 該盤該月
+//      `broker_site_assignments` 唯一一個雞頭；(b) 該盤（任何安員）當月
+//      其他 shift 行嘅雞頭碼唯一一個。
+//   3. 都冇——唔設（`referralBrokerId` 保持 null），warning 話原因，交
+//      人手覆核。
+// ---------------------------------------------------------------------------
+
+const REFERRAL_INFER_MIN_RATIO = 0.7;
+
+export interface InferReferralBrokerResult {
+  brokerId: string | null;
+  reason: string;
+  warning: string | null;
+}
+
+/** 「active 上載」同 `guard-fix/plan.ts` `loadFromDbRows()` 一致定義——
+ * `superseded`／`voided` 唔計，`confirmed`（已寫入 `shift_records`）都要
+ * 計（已對數確認嘅上載仍然反映「邊個雞頭報咗呢一更」呢個事實，唔應該
+ * 因為對數確認咗就唔計落嚟）。 */
+const REFERRAL_INFER_ACTIVE_UPLOAD_STATUS_NOT_IN = ["superseded", "voided"] as const;
+
+/** 純 DB helper：逐個 (guardId, month) 推算介紹雞頭——見上面檔頭註解嘅
+ * 決策鏈。**唔寫入 DB**（caller，`guard-fix/plan.ts` `set_referral_inferred`
+ * 決定要唔要出呢個 action）。 */
+export async function inferReferralBrokerFromRosters(guardId: string, month: Date, client: PrismaLike = prisma): Promise<InferReferralBrokerResult> {
+  const monthStart = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0));
+
+  const postMap = await loadActiveLongtermPosts([guardId], monthEnd, client);
+  const postSiteIds = postMap.get(guardId);
+  if (!postSiteIds || postSiteIds.size === 0) {
+    return { brokerId: null, reason: "冇生效崗位盤，計唔到介紹雞頭", warning: null };
+  }
+
+  const uploads = await client.rosterUpload.findMany({
+    where: { month: monthStart, status: { notIn: [...REFERRAL_INFER_ACTIVE_UPLOAD_STATUS_NOT_IN] } },
+    select: { id: true, siteId: true },
+  });
+  if (uploads.length === 0) {
+    return { brokerId: null, reason: "呢個月冇 active 更表上載，計唔到介紹雞頭", warning: null };
+  }
+  const uploadIds = uploads.map((u) => u.id);
+  const uploadSiteById = new Map(uploads.map((u) => [u.id, u.siteId]));
+
+  const rows = await client.rosterUploadRow.findMany({
+    where: { uploadId: { in: uploadIds }, guardId, codeKind: "shift" },
+    select: { uploadId: true, resolvedSiteId: true, settlementBrokerId: true },
+  });
+  if (rows.length === 0) {
+    return { brokerId: null, reason: "呢個月呢個長工冇更表 shift 行，計唔到介紹雞頭", warning: null };
+  }
+
+  // 摺母盤：post site 可能係母盤（登記喺母盤），roster 行可能寫緊子盤
+  // （或者掉轉）——同 `resolveLongtermSettlement()` 嘅 `inPost` 判斷一致
+  // 邏輯（`postSiteIds` 已經摺埋 proxy 盤，呢度加埋 parent 摺）。
+  const rowSiteIds = new Set<string>();
+  for (const r of rows) {
+    const sid = r.resolvedSiteId ?? uploadSiteById.get(r.uploadId) ?? null;
+    if (sid) rowSiteIds.add(sid);
+  }
+  const siteIdsToLoad = new Set<string>([...rowSiteIds, ...postSiteIds]);
+  const siteRows = siteIdsToLoad.size ? await client.site.findMany({ where: { id: { in: [...siteIdsToLoad] } }, select: { id: true, parentSiteId: true } }) : [];
+  const parentBySite = new Map(siteRows.map((s) => [s.id, s.parentSiteId]));
+  const inPostSet = (siteId: string | null): boolean => {
+    if (!siteId) return false;
+    if (postSiteIds.has(siteId)) return true;
+    const parent = parentBySite.get(siteId);
+    return !!parent && postSiteIds.has(parent);
+  };
+
+  const ownRows = rows.filter((r) => inPostSet(r.resolvedSiteId ?? uploadSiteById.get(r.uploadId) ?? null));
+  if (ownRows.length === 0) {
+    return { brokerId: null, reason: "呢個月喺自己崗位盤冇更表 shift 行，計唔到介紹雞頭", warning: null };
+  }
+
+  const countByBroker = new Map<string, number>();
+  for (const r of ownRows) {
+    if (r.settlementBrokerId) countByBroker.set(r.settlementBrokerId, (countByBroker.get(r.settlementBrokerId) ?? 0) + 1);
+  }
+
+  if (countByBroker.size > 0) {
+    // 穩定 tie-break（同 `inferGuardMonthlyTopSite()` 一致做法）：count
+    // 一樣就揀 brokerId 字典序最細嗰個，唔留俾 Map 遍歷次序隨機決定。
+    let topBrokerId: string | null = null;
+    let topCount = -1;
+    for (const [brokerId, count] of [...countByBroker.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
+      if (count > topCount) {
+        topCount = count;
+        topBrokerId = brokerId;
+      }
+    }
+    const ratio = topCount / ownRows.length;
+    if (countByBroker.size === 1 || ratio >= REFERRAL_INFER_MIN_RATIO) {
+      return {
+        brokerId: topBrokerId,
+        reason:
+          countByBroker.size === 1
+            ? `自己崗位盤更表 shift 行雞頭碼唯一（${topCount}/${ownRows.length}）`
+            : `自己崗位盤更表 shift 行雞頭碼最多（${topCount}/${ownRows.length}，${(ratio * 100).toFixed(0)}%）`,
+        warning: null,
+      };
+    }
+    return {
+      brokerId: null,
+      reason: `自己崗位盤更表 shift 行雞頭碼分散多個雞頭，冇一個 ≥${REFERRAL_INFER_MIN_RATIO * 100}%（最多嗰個 ${(ratio * 100).toFixed(0)}%）`,
+      warning: `呢個長工自己崗位盤更表雞頭碼分散（top ${(ratio * 100).toFixed(0)}%），計唔到邊個雞頭供應，未設介紹雞頭，請人手覆核`,
+    };
+  }
+
+  // 冇雞頭碼欄（成盤逐行都冇）——跌返 broker_site_assignments，再跌返
+  // 該盤（任何安員）其他 shift 行唯一雞頭。
+  const postSiteIdList = [...postSiteIds];
+  const assignments = await client.brokerSiteAssignment.findMany({
+    where: { siteId: { in: postSiteIdList }, month: monthStart },
+    select: { brokerId: true },
+  });
+  const assignedBrokerIds = new Set(assignments.map((a) => a.brokerId));
+  if (assignedBrokerIds.size === 1) {
+    return { brokerId: [...assignedBrokerIds][0]!, reason: "崗位盤冇雞頭碼欄，用該盤 broker_site_assignments 唯一雞頭", warning: null };
+  }
+
+  const otherRows = await client.rosterUploadRow.findMany({
+    where: { uploadId: { in: uploadIds }, codeKind: "shift", settlementBrokerId: { not: null } },
+    select: { uploadId: true, resolvedSiteId: true, settlementBrokerId: true },
+  });
+  const otherBrokerIds = new Set(otherRows.filter((r) => inPostSet(r.resolvedSiteId ?? uploadSiteById.get(r.uploadId) ?? null)).map((r) => r.settlementBrokerId!));
+  if (otherBrokerIds.size === 1) {
+    return { brokerId: [...otherBrokerIds][0]!, reason: "崗位盤冇雞頭碼欄，用該盤其他安員 shift 行唯一雞頭", warning: null };
+  }
+
+  return {
+    brokerId: null,
+    reason: "崗位盤冇雞頭碼欄，broker_site_assignments／其他安員行都對唔到唯一雞頭",
+    warning: "呢個長工計唔到介紹雞頭（冇雞頭碼欄、broker_site_assignments／其他行都對唔到唯一雞頭），請人手覆核",
+  };
+}

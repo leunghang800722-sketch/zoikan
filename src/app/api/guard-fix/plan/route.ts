@@ -87,6 +87,7 @@ export async function POST(req: Request) {
           setLongterm: summary.setLongterm,
           setLongtermPost: summary.setLongtermPost,
           setReferral: summary.setReferral,
+          setReferralInferred: summary.setReferralInferred,
           setVisa: summary.setVisa,
           hkidDroppedCount: plan.hkidDroppedCount,
         },

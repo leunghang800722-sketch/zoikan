@@ -76,6 +76,7 @@ interface PlanSummary {
   set_longterm?: number;
   set_longterm_post?: number;
   set_referral?: number;
+  set_referral_inferred?: number;
   set_visa?: number;
 }
 
@@ -97,6 +98,7 @@ interface RunResult {
     set_longterm?: DiffResult;
     set_longterm_post?: DiffResult;
     set_referral?: DiffResult;
+    set_referral_inferred?: DiffResult;
     set_visa?: DiffResult;
   };
   reparse?: ReparseResult;
@@ -176,7 +178,9 @@ function detailToActive(d: RunDetail): ActivePlan {
 }
 
 function actionCount(s: PlanSummary): number {
-  return s.link + s.create + s.create_minimal + (s.set_longterm ?? 0) + (s.set_longterm_post ?? 0) + (s.set_referral ?? 0) + (s.set_visa ?? 0);
+  return (
+    s.link + s.create + s.create_minimal + (s.set_longterm ?? 0) + (s.set_longterm_post ?? 0) + (s.set_referral ?? 0) + (s.set_referral_inferred ?? 0) + (s.set_visa ?? 0)
+  );
 }
 
 export default function GuardFixPage() {
@@ -525,7 +529,9 @@ export default function GuardFixPage() {
             )}
           </div>
         ) : (
-          <div className="mb-3 text-[13px] text-zk-muted">{month} 未上載過 Postorder 總表——唔上載都可以計劃（set_longterm/set_longterm_post/set_referral 一律 0 項）。</div>
+          <div className="mb-3 text-[13px] text-zk-muted">
+            {month} 未上載過 Postorder 總表——唔上載都可以計劃（set_longterm/set_longterm_post/set_referral 一律 0 項；「定介紹雞頭（推算）」唔靠 Postorder，一樣會計）。
+          </div>
         )}
         <label
           data-testid="postorder-dropzone"
@@ -661,6 +667,7 @@ export default function GuardFixPage() {
               <SummaryTile label="定做長工" value={plan.summary.set_longterm ?? 0} />
               <SummaryTile label="加長工崗位盤" value={plan.summary.set_longterm_post ?? 0} />
               <SummaryTile label="定介紹雞頭" value={plan.summary.set_referral ?? 0} />
+              <SummaryTile label="定介紹雞頭（推算）" value={plan.summary.set_referral_inferred ?? 0} />
               <SummaryTile label="定簽證贊助雞頭" value={plan.summary.set_visa ?? 0} />
             </div>
             <div className="break-all text-[12.5px] text-zk-muted">
@@ -741,8 +748,12 @@ export default function GuardFixPage() {
             <div className="mb-2 text-[15px] font-semibold text-zk-text">{confirmingApply.retry ? "確認重新套用" : "確認套用"}</div>
             <div className="mb-4 text-[13px] text-zk-muted">
               會建 {confirmingApply.summary.create + confirmingApply.summary.create_minimal} 位新安員、幫 {confirmingApply.summary.link} 位登記工號／加別名
-              {(confirmingApply.summary.set_longterm ?? 0) + (confirmingApply.summary.set_longterm_post ?? 0) + (confirmingApply.summary.set_referral ?? 0) > 0
-                ? `、定 ${confirmingApply.summary.set_longterm ?? 0} 位做長工／加 ${confirmingApply.summary.set_longterm_post ?? 0} 個長工崗位盤／定 ${confirmingApply.summary.set_referral ?? 0} 個介紹雞頭`
+              {(confirmingApply.summary.set_longterm ?? 0) +
+                (confirmingApply.summary.set_longterm_post ?? 0) +
+                (confirmingApply.summary.set_referral ?? 0) +
+                (confirmingApply.summary.set_referral_inferred ?? 0) >
+              0
+                ? `、定 ${confirmingApply.summary.set_longterm ?? 0} 位做長工／加 ${confirmingApply.summary.set_longterm_post ?? 0} 個長工崗位盤／定 ${(confirmingApply.summary.set_referral ?? 0) + (confirmingApply.summary.set_referral_inferred ?? 0)} 個介紹雞頭`
                 : ""}
               ，然後自動重新配對呢個月全部更表（已對數確認嘅唔郁）。
               {confirmingApply.retry ? "上次冇完成——重新套用唔會重複建人（已建嘅會跳過）。" : ""}

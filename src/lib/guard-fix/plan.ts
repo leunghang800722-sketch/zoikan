@@ -12,6 +12,7 @@ import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
 import { buildUTeamIndex, buildCrossCheckIndex, canonicalHkid, type UTeamRow, type CrossCheckRow, type UTeamIndex, type CrossCheckIndex } from "@/lib/guard-fix/sources";
 import type { PostorderLongtermPostCell, PostorderReferralRow, PostorderVisaResult } from "@/lib/guard-fix/postorder";
+import { inferReferralBrokerFromRosters } from "@/lib/pricing/longterm-settlement";
 import type {
   GuardFixPlan,
   GuardFixIdentity,
@@ -24,6 +25,7 @@ import type {
   SetLongtermAction,
   SetLongtermPostAction,
   SetReferralAction,
+  SetReferralInferredAction,
   SetVisaAction,
 } from "@/lib/guard-fix/types";
 
@@ -688,12 +690,40 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     };
   }
 
+  // -------------------------------------------------------------------
+  // WP-REFERRAL-FALLBACK（老闆 2026-09-26 緊急）：set_referral_inferred
+  // ——唔靠 Postorder，淨係睇更表本身嘅雞頭碼推算供應（＝介紹）雞頭（見
+  // `inferReferralBrokerFromRosters()`）。範圍：**已經係長工**（先有
+  // 「自己崗位盤」呢個概念）、`referral_broker_id IS NULL`、而且呢次冇
+  // 被 Postorder xlsm 嘅 `set_referral` 蓋到（xlsm 有明確資料就以 xlsm
+  // 為準，唔重複再出一次）——冇上載 Postorder（或者上載嘅係 CSV，冇公式
+  // 計唔到 `set_referral`）都一樣會計，正正解決「正式站淨係得 CSV，
+  // 8 月介紹費計 0」呢個問題。
+  // -------------------------------------------------------------------
+  const referralCoveredThisRun = new Set(setReferral.map((a) => a.guardId));
+  const referralInferredCandidates = guardsRaw.filter((g) => g.employmentType.startsWith("longterm_") && g.referralBrokerId === null && !referralCoveredThisRun.has(g.id));
+  const setReferralInferred: SetReferralInferredAction[] = [];
+  let seqReferralInferredN = 0;
+  for (const guard of referralInferredCandidates) {
+    const inferred = await inferReferralBrokerFromRosters(guard.id, month, prisma);
+    if (!inferred.brokerId) continue; // 對唔到就唔出呢個 action（唔准估，留俾人手覆核）
+    seqReferralInferredN += 1;
+    setReferralInferred.push({
+      type: "set_referral_inferred",
+      seq: `R${String(seqReferralInferredN).padStart(3, "0")}`,
+      guardId: guard.id,
+      brokerId: inferred.brokerId,
+      brokerCode: brokerCodeById.get(inferred.brokerId) ?? inferred.brokerId,
+      reason: inferred.reason,
+    });
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     dbTarget: describeDbTarget(),
     sourceMode,
     identities,
-    actions: { link, create, createMinimal, needsBoss, setLongterm, setLongtermPost, setReferral, setVisa },
+    actions: { link, create, createMinimal, needsBoss, setLongterm, setLongtermPost, setReferral, setReferralInferred, setVisa },
     hkidDroppedCount,
     postorder: postorderSummary,
   };
@@ -711,6 +741,7 @@ export function summarizePlan(plan: GuardFixPlan): {
   setLongterm: number;
   setLongtermPost: number;
   setReferral: number;
+  setReferralInferred: number;
   setVisa: number;
 } {
   const totalCells = plan.identities.reduce((s, i) => s + i.totalCellCount, 0);
@@ -724,6 +755,7 @@ export function summarizePlan(plan: GuardFixPlan): {
     setLongterm: plan.actions.setLongterm.length,
     setLongtermPost: plan.actions.setLongtermPost.length,
     setReferral: plan.actions.setReferral.length,
+    setReferralInferred: plan.actions.setReferralInferred.length,
     setVisa: plan.actions.setVisa.length,
   };
 }
@@ -755,6 +787,7 @@ export function formatPlanSummaryMd(plan: GuardFixPlan): string {
 - set_longterm：${s.setLongterm}
 - set_longterm_post：${s.setLongtermPost}
 - set_referral：${s.setReferral}
+- set_referral_inferred（WP-REFERRAL-FALLBACK，唔靠 Postorder，睇更表雞頭碼推算）：${s.setReferralInferred}
 - set_visa：${s.setVisa}（Postorder 冇顯式簽證標記，暫時一律 0——${plan.postorder?.visaNote ?? "冇上載 Postorder"}）
 
 ## Postorder 上載（WP-LTSHIFT §19）

@@ -19,6 +19,7 @@ export type GuardFixActionKind =
   | "set_longterm"
   | "set_longterm_post"
   | "set_referral"
+  | "set_referral_inferred"
   | "set_visa";
 
 export interface GuardFixCellRef {
@@ -137,6 +138,29 @@ export interface SetReferralAction {
   reason: string;
 }
 
+// ---------------------------------------------------------------------------
+// WP-REFERRAL-FALLBACK（老闆 2026-09-26 緊急）：正式站從未上載過 Postorder
+// .xlsm（淨係得 CSV，冇公式，`set_referral` 計唔到邊個長工），加一條唔靠
+// Postorder 嘅自動規則——長工自己喺崗位盤嘅更表雞頭碼推返邊個雞頭供應
+// （＝介紹）呢個長工，見 `src/lib/pricing/longterm-settlement.ts`
+// `inferReferralBrokerFromRosters()`。**只對 `referral_broker_id IS NULL`
+// 嘅長工**（Postorder xlsm 有明確資料就以 `set_referral` 為準，呢個
+// action 唔會重複再出一次）。
+// ---------------------------------------------------------------------------
+
+export interface SetReferralInferredAction {
+  type: "set_referral_inferred";
+  seq: string;
+  guardId: string;
+  brokerId: string;
+  /** plan-summary 用嘅雞頭代號（K/W/T/G…，唔係 PII）。 */
+  brokerCode: string;
+  /** 推算依據（自己崗位盤更表雞頭碼唯一／最多／broker_site_assignments／
+   * 該盤其他行唯一）——plan-summary 唔印（有少少推算細節），plan.json
+   * 存底俾人覆核。 */
+  reason: string;
+}
+
 export interface SetVisaAction {
   type: "set_visa";
   seq: string;
@@ -154,6 +178,7 @@ export type GuardFixAction =
   | SetLongtermAction
   | SetLongtermPostAction
   | SetReferralAction
+  | SetReferralInferredAction
   | SetVisaAction;
 
 export interface GuardFixPlan {
@@ -175,6 +200,9 @@ export interface GuardFixPlan {
     setLongterm: SetLongtermAction[];
     setLongtermPost: SetLongtermPostAction[];
     setReferral: SetReferralAction[];
+    /** WP-REFERRAL-FALLBACK：唔靠 Postorder 嘅推算介紹雞頭（見
+     * `SetReferralInferredAction`）——冇 Postorder 上載都會計。 */
+    setReferralInferred: SetReferralInferredAction[];
     setVisa: SetVisaAction[];
   };
   /** `create` 入面幾多個 U Team 名單身份證欄唔係身份證格式、冇寫入

@@ -38,6 +38,7 @@ export interface ApplyGuardFixPlanDiffs {
   setLongterm: Diff;
   setLongtermPost: Diff;
   setReferral: Diff;
+  setReferralInferred: Diff;
   setVisa: Diff;
 }
 
@@ -67,6 +68,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     setLongterm: emptyDiff(),
     setLongtermPost: emptyDiff(),
     setReferral: emptyDiff(),
+    setReferralInferred: emptyDiff(),
     setVisa: emptyDiff(),
   };
   const effectiveFrom = opts.month ?? new Date(`${plan.generatedAt.slice(0, 7)}-01T00:00:00.000Z`);
@@ -337,6 +339,29 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       if (planOnly) continue;
       await tx.guard.update({ where: { id: sr.guardId }, data: { referralBrokerId: sr.brokerId } });
       await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: sr.guardId, action: "update", after: { id: sr.guardId, referralBrokerId: sr.brokerId }, ip: null });
+    }
+
+    // -----------------------------------------------------------------
+    // 5b. set_referral_inferred（WP-REFERRAL-FALLBACK）——`guards.
+    //     referral_broker_id`，同 set_referral 一樣欄位，淨係嚟源唔同
+    //     （唔靠 Postorder，睇更表雞頭碼推算）。冪等：套用前再查一次現況，
+    //     已經有值（呢個 run 嘅 set_referral、或者人手／舊 run 設過）就
+    //     skip，唔會覆蓋。
+    // -----------------------------------------------------------------
+    for (const sri of plan.actions.setReferralInferred) {
+      const guard = await tx.guard.findUnique({ where: { id: sri.guardId }, select: { id: true, referralBrokerId: true } });
+      if (!guard) {
+        diffs.setReferralInferred.skip.push(`${sri.seq}（guard_id 搵唔到，可能已刪）`);
+        continue;
+      }
+      if (guard.referralBrokerId !== null) {
+        diffs.setReferralInferred.skip.push(`${sri.seq}（已經有介紹雞頭，冪等跳過）`);
+        continue;
+      }
+      diffs.setReferralInferred.create.push(sri.seq);
+      if (planOnly) continue;
+      await tx.guard.update({ where: { id: sri.guardId }, data: { referralBrokerId: sri.brokerId } });
+      await writeAuditTx(tx, { actorUserId: null, tableName: "guards", rowId: sri.guardId, action: "update", after: { id: sri.guardId, referralBrokerId: sri.brokerId, source: "guard_fix_referral_inferred" }, ip: null });
     }
 
     // -----------------------------------------------------------------

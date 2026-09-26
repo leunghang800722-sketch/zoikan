@@ -619,6 +619,87 @@ API／新資料表／關鍵行為，方便日後查。
   `tests/wp-postorder-csv-upload-route.test.ts`（API 兩個 CSV 上載 vs
   xlsm 上載 `parse_summary` 一致、RBAC、單一 CSV 缺一個 400）。
 
+### A3. WP-REFERRAL-FALLBACK（老闆 2026-09-26 緊急，Sonnet 5 執行，
+branch `wp-referral-fallback`）：CSV cold start 已支援——長工介紹雞頭
+唔靠 Postorder
+
+**問題**：正式站到 2026-09-26 為止從未上載過 Postorder `.xlsm`（操作員
+工具處理唔到 binary，見上面 A2），淨係上載得 CSV——CSV 冇公式，
+`buildPostorderActions()` 嘅 `set_referral`（逐條「長工雞頭費」行推
+邊個長工由邊個雞頭介紹）一定 0 項（`guardNamesRaw`／`siteLabelsRaw`
+CSV 路徑一律空 array，見 A2「已知差異」段），令 `guards.
+referral_broker_id` 一直係 null，8 月長工介紹費計 0。
+
+**規則（唔靠 Postorder）**：長工嘅介紹雞頭＝供應該長工嘅雞頭＝更表上
+呢個長工喺自己崗位盤（`guard_longterm_posts` 生效）嗰啲行嘅雞頭碼（K
+供應長工，行就寫 K；T／W／G 同理；D 冇介紹費，費率表冇 D）——呢個
+「邊個雞頭供應」概念同 `P2-版面重設計計劃.md` §14 規則 9「賣假／頂位
+費只適用於由雞頭供應入公司嘅長工」一致，唔係新業務判斷，淨係用更表
+本身已有嘅雞頭碼欄推返出嚟。
+
+- **`inferReferralBrokerFromRosters(guardId, month, client?)`**
+  （`src/lib/pricing/longterm-settlement.ts`）：純 DB helper，決策鏈
+  （對唔到就唔設，唔准估）：
+  1. 攞呢個長工生效中崗位盤（`loadActiveLongtermPosts()`，已經摺埋
+     proxy 盤；呢度另外再摺一次 parent-of-row 嗰個方向）嘅全部
+     `roster_upload_rows`（active 上載、`code_kind=shift`）
+     `settlement_broker_id`（呢個欄係 parse 時 `matchBroker(broker_
+     code_raw)` 寫嘅**原更表雞頭碼**，唔係 B07 結算結果——嗰個喺
+     `shift_records`，唔喺呢張表，見 `service.ts:414`）：得一個雞頭碼
+     就用佢；多個就用出現最多嗰個，要 ≥70%（否則分散、唔設＋
+     warning）。
+  2. 完全冇雞頭碼欄（成盤逐行都冇）——跌返 (a) 該盤該月
+     `broker_site_assignments` 唯一雞頭；(b) 該盤（任何安員）當月
+     其他 shift 行唯一雞頭。
+  3. 都冇——唔設，warning 交人手覆核。
+  單元測試（DB fixture）：`tests/longterm-settlement.test.ts`
+  `inferReferralBrokerFromRosters` describe block，10 條（唯一／多個
+  ≥70%／分散<70%／冇雞頭碼欄兩層 fallback／摺母盤／code_kind 只計
+  shift／superseded／voided 上載唔計／冇崗位）。
+- **guard-fix 新動作 `set_referral_inferred`**（`SetReferralInferredAction`，
+  `src/lib/guard-fix/types.ts`）：`buildGuardFixPlan()`
+  （`src/lib/guard-fix/plan.ts`）喺 postorder 相關計劃之後，**唔理
+  有冇傳 `postorder` option**，逐個 `employmentType` 開頭 `longterm_`
+  且 `referralBrokerId IS NULL` 嘅安員（跳過本輪已經被 xlsm-based
+  `set_referral` 蓋到嘅 guardId——Postorder xlsm 有明確資料就以 xlsm
+  為準，唔重複）call `inferReferralBrokerFromRosters()`，得到
+  brokerId 先出 action（seq 前綴 `R`）。`applyGuardFixPlan()`
+  （`src/lib/guard-fix/apply.ts`）喺 `set_referral` 之後加一段：套用前
+  再查一次 `guard.referralBrokerId`，已經有值（呢個 run 嘅
+  `set_referral`、或者人手／舊 run 設過）就冪等跳過；audit 淨係
+  `{id, referralBrokerId, source:"guard_fix_referral_inferred"}`，唔帶
+  姓名。`summarizePlan()`／`formatPlanSummaryMd()`／`POST /api/guard-
+  fix/plan`／`runs/:id/apply` 嘅 audit `after`／頁面 `PlanSummary`
+  （`src/app/(app)/guard-fix/page.tsx`，新摘要卡「定介紹雞頭（推算）」）
+  全部加咗 `setReferralInferred`／`set_referral_inferred` 呢個新欄。
+  整合測試：`tests/wp-referral-fallback.test.ts`（5 條，全部**唔傳
+  `postorder` option**：計到／已有 referral_broker_id 唔重複／唔係
+  長工唔計／套用＋audit 唔帶名＋冪等／planOnly 唔寫入）。
+- **dev cold-start 驗證**（`db:reset && db:seed` → `build-aug-plan.ts`
+  → `apply-aug-plan.ts --apply` → 真實 36 個 8 月更表 xlsx 上載 → U
+  Team 名單上載 → Postorder **淨係 CSV 路徑**上載（由真檔
+  `Postorder - Aug 2026.xlsm` 嘅 Roster／PostOrder 兩個 sheet 模擬
+  Google Sheets 匯出，同 `tests/wp-postorder-csv-grid-parse.test.ts`
+  `worksheetToSimulatedCsv()` 一致做法）→ 逐輪 `POST /api/guard-fix/
+  plan` ／ `runs/:id/apply` 直至收斂 → 「重新對數全月」→「重算介紹
+  費」）：`set_referral`（Postorder-based）全程 0 項（CSV 冇公式，符合
+  預期）；`set_referral_inferred` 3 輪合共 55 項，收斂後淨係 4 位長工
+  （冇任何生效崗位盤，屬非 8 月在職／簽證形式長工，本身就對唔到，
+  唔係呢個規則嘅缺口）計唔到介紹雞頭；介紹費重算 **$60,620**（52
+  條），`aug-e2e-check.ts` 逐雞頭 K/W/T/G/D/Y 差額同 xlsm 路徑已驗收
+  嘅基線完全一致（K 0 差，B07 1297，W −850／T −1,600 屬已知更表資料
+  問題唔關呢個 WP 事）。
+  - **已知 dev-only 落差**：一個全新 `db:reset`（migrate 先於 seed）
+    之後、未手動補跑 `20260926200000_wp_postorder_csv_aug_referral_
+    rates` 嘅 DML 之前，CSV 冷啟動介紹費淨係 $60,360（少 $260＝K@
+    粉嶺安樂村貨倉 26 更 × ($60−$50) 費率差，因為嗰個 migration 執行
+    嗰刻 `brokers`/`sites` 都仲未有 seed 資料，join 0 行——同 A2 已經
+    記錄嘅「dev/prod 時序差異，唔係 bug」完全同一個已知落差，跟
+    `july_backfill` 一致要用「dev 舊版先套用、後部署」模擬先驗得到
+    （手動補跑嗰個 migration 嘅 DML）；production 部署嗰陣
+    `brokers`/`sites` 早已經有真實資料，join 會撞中，**呢個落差唔會
+    喺正式站出現**。
+
 ### B. guard-fix 加四類計劃
 `src/lib/guard-fix/types.ts` 新增 `SetLongtermAction`／
 `SetLongtermPostAction`／`SetReferralAction`／`SetVisaAction`；
@@ -954,6 +1035,12 @@ Terminal 步驟）**：
    30MB）→ 摘要「對唔到嘅雞頭稱呼」逐個揀系統雞頭撳「對應」（會自動
    重新計算計劃，預期對應完之後呢個清單變空）→ 計算修復計劃 → 套用；
    重複到冇新動作。預期 needs_boss 0；對唔到盤名得「OT」（2 格，已知）。
+   **正式站到 2026-09-26 淨係識用「或者上載兩個 CSV」呢條路（工具讀唔到
+   binary，A2 講嗰個唔係「可揀路徑」而係唯一路徑）**：CSV 路徑冇公式，
+   「定介紹雞頭」（`set_referral`）呢張摘要卡一定 0；見下面 A3
+   （`wp-referral-fallback`）——「定介紹雞頭（推算）」（`set_referral_
+   inferred`）淨係睇更表本身雞頭碼、唔靠 Postorder 公式，會頂上（收斂
+   後預期非 0），介紹費（步驟 3）一樣計到 60,620。
 2. 更表上載頁「重新對數全月」（背景 run，開頭自動幫全部有上載嘅盤
    reprice——見上面 12，唔使再手動撳「重新計价」；15 分鐘卡死可重跑；
    同時唔好撳 guard-fix 套用）。預期 `warnings` 空、errors 0、unresolved
@@ -961,7 +1048,11 @@ Terminal 步驟）**：
    即 `repriced.changed`）。自動 reprice 對 8 月前記錄一律唔郁。
 3. 月結頁「重算介紹費」→ 預期合計 60,620（總表 60,520＋Weave 更表漏記
    2 格 100）、結果列「Postorder 費率同步：…冇跳過」（即
-   `rate_sync.skipped` 空）。
+   `rate_sync.skipped` 空——**呢個係 xlsm 路徑嘅預期**；CSV-only 路徑
+   冇公式，`rate_sync.skipped` 預期 21 條「row N：公式讀唔到費率」，
+   屬正常，唔係錯誤——費率跟返 `referral_fee_rates` 表已有嘅費率
+   （`20260926200000_wp_postorder_csv_aug_referral_rates` migration 已
+   部署種低），介紹費總額一樣係 60,620，見 A3）。
 4. 月結總表／雞頭應付：預期 K 1,023,730、G 56,220、D 100,130、Y
    226,433.02 同總表一致；W −850（蔚峰園重複行）、T −1,600（Weave 更表
    漏記病假）係更表資料問題。

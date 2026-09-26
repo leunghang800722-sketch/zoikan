@@ -65,6 +65,7 @@ async function performApply(runId: string, actorUserId: string): Promise<void> {
         setLongtermProcessed: diffs.setLongterm.create.length,
         setLongtermPostProcessed: diffs.setLongtermPost.create.length,
         setReferralProcessed: diffs.setReferral.create.length,
+        setReferralInferredProcessed: diffs.setReferralInferred.create.length,
         setVisaProcessed: diffs.setVisa.create.length,
         totalBefore: reparse.totalBefore,
         totalAfter: reparse.totalAfter,

@@ -11,6 +11,7 @@ import {
   findInternalLongtermBrokerId,
   loadActiveLongtermPosts,
   inferGuardMonthlyTopSite,
+  inferReferralBrokerFromRosters,
 } from "@/lib/pricing/longterm-settlement";
 
 describe("isLongtermEmploymentType", () => {
@@ -226,5 +227,199 @@ describe("longterm-settlement DB helpers", () => {
     const top = result.get(guard.id);
     expect(top?.siteId).toBe(parentSite.id);
     expect(top?.ratio).toBeCloseTo(5 / 8, 5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WP-REFERRAL-FALLBACK（老闆 2026-09-26 緊急）：正式站淨係得 CSV Postorder
+// （冇公式，`set_referral` 計唔到），`inferReferralBrokerFromRosters()`
+// 唔靠 Postorder，淨係睇更表本身嘅雞頭碼推算供應（＝介紹）雞頭。
+// ---------------------------------------------------------------------------
+describe("inferReferralBrokerFromRosters", () => {
+  beforeEach(async () => {
+    await clearAll();
+  });
+
+  async function makeBroker(code: string) {
+    return prisma.broker.create({ data: { code, name: `測試${code}`, kind: "broker", settlementType: "cash", createdBy: "test:referral-fallback" } });
+  }
+  async function makeSite(name: string) {
+    return prisma.site.create({ data: { canonicalName: name, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test:referral-fallback" } });
+  }
+  async function makeGuard() {
+    return prisma.guard.create({ data: { nameZh: "測試長工", employmentType: "longterm_autopay", createdBy: "test:referral-fallback" } });
+  }
+  async function makeUploader() {
+    const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
+    return prisma.user.create({ data: { name: "測試上載人", tel: `9${Math.floor(1000000 + Math.random() * 8999999)}`, passwordHash: "x", roleId: role.id, createdBy: "test" } });
+  }
+  async function makeUpload(uploaderId: string, siteId: string, status: "uploaded" | "parsed" | "confirmed" | "superseded" | "voided" = "parsed") {
+    return prisma.rosterUpload.create({
+      data: {
+        month: new Date("2026-08-01"),
+        siteId,
+        siteNameRaw: "test",
+        uploaderUserId: uploaderId,
+        fileName: "test.xlsx",
+        fileSha256: `sha-${siteId}-${Math.random()}`,
+        fileBytes: Buffer.from("x"),
+        fileSize: 1,
+        status,
+      },
+    });
+  }
+  async function makeRow(opts: { uploadId: string; guardId: string | null; resolvedSiteId: string | null; day: number; settlementBrokerId?: string | null; codeKind?: "shift" | "ot" | "leave" }) {
+    return prisma.rosterUploadRow.create({
+      data: {
+        uploadId: opts.uploadId,
+        rowIndex: opts.day,
+        workDate: new Date(`2026-08-${String(opts.day).padStart(2, "0")}`),
+        rawCode: "N",
+        codeKind: opts.codeKind ?? "shift",
+        resolvedSiteId: opts.resolvedSiteId,
+        guardId: opts.guardId,
+        settlementBrokerId: opts.settlementBrokerId ?? null,
+      },
+    });
+  }
+
+  it("冇生效崗位盤——計唔到，唔設，冇 warning", async () => {
+    const guard = await makeGuard();
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBeNull();
+    expect(r.warning).toBeNull();
+  });
+
+  it("自己崗位盤更表雞頭碼唯一——用佢", async () => {
+    const site = await makeSite("測試盤A");
+    const guard = await makeGuard();
+    const brokerK = await makeBroker("K");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 5; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerK.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBe(brokerK.id);
+    expect(r.warning).toBeNull();
+  });
+
+  it("多個雞頭碼但最多嗰個 ≥70%——用最多嗰個", async () => {
+    const site = await makeSite("測試盤B");
+    const guard = await makeGuard();
+    const brokerK = await makeBroker("K");
+    const brokerW = await makeBroker("W");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 8; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerK.id });
+    for (let d = 9; d <= 10; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerW.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBe(brokerK.id); // 8/10=80% ≥70%
+    expect(r.warning).toBeNull();
+  });
+
+  it("雞頭碼分散、最多嗰個 <70%——唔設，有 warning", async () => {
+    const site = await makeSite("測試盤C");
+    const guard = await makeGuard();
+    const brokerK = await makeBroker("K");
+    const brokerW = await makeBroker("W");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 5; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerK.id });
+    for (let d = 6; d <= 10; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerW.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBeNull(); // 5/10=50% <70%
+    expect(r.warning).not.toBeNull();
+  });
+
+  it("冇雞頭碼欄——跌返 broker_site_assignments 該盤唯一雞頭", async () => {
+    const site = await makeSite("測試盤D");
+    const guard = await makeGuard();
+    const brokerT = await makeBroker("T");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 5; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: null });
+    await prisma.brokerSiteAssignment.create({ data: { brokerId: brokerT.id, siteId: site.id, month: new Date("2026-08-01"), createdBy: "test" } });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBe(brokerT.id);
+    expect(r.warning).toBeNull();
+  });
+
+  it("冇雞頭碼欄、冇 broker_site_assignments——跌返該盤其他安員 shift 行唯一雞頭", async () => {
+    const site = await makeSite("測試盤E");
+    const guard = await makeGuard();
+    const otherGuard = await makeGuard();
+    const brokerG = await makeBroker("G");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 3; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: null });
+    for (let d = 4; d <= 6; d++) await makeRow({ uploadId: upload.id, guardId: otherGuard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerG.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBe(brokerG.id);
+    expect(r.warning).toBeNull();
+  });
+
+  it("乜都對唔到——唔設，有 warning", async () => {
+    const site = await makeSite("測試盤F");
+    const guard = await makeGuard();
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 3; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: null });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBeNull();
+    expect(r.warning).not.toBeNull();
+  });
+
+  it("摺母盤：post 登記喺母盤，roster 行寫子盤——一樣計落去", async () => {
+    const parentSite = await makeSite("母盤X");
+    const childSite = await prisma.site.create({ data: { canonicalName: "子盤X", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parentSite.id, createdBy: "test" } });
+    const guard = await makeGuard();
+    const brokerK = await makeBroker("K");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: parentSite.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, childSite.id);
+    for (let d = 1; d <= 4; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: childSite.id, day: d, settlementBrokerId: brokerK.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBe(brokerK.id);
+  });
+
+  it("code_kind=ot／leave 唔計（淨係 shift）", async () => {
+    const site = await makeSite("測試盤G");
+    const guard = await makeGuard();
+    const brokerK = await makeBroker("K");
+    const brokerW = await makeBroker("W");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 5; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerK.id });
+    // OT 行寫住另一個雞頭碼——唔應該撈亂 shift 行嘅推算（淨係計 shift）。
+    await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: 6, settlementBrokerId: brokerW.id, codeKind: "ot" });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBe(brokerK.id);
+  });
+
+  it("superseded／voided 上載唔計（唔係 active）", async () => {
+    const site = await makeSite("測試盤H");
+    const guard = await makeGuard();
+    const brokerK = await makeBroker("K");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const voidedUpload = await makeUpload(uploader.id, site.id, "voided");
+    for (let d = 1; d <= 5; d++) await makeRow({ uploadId: voidedUpload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerK.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBeNull(); // voided 上載嘅行唔計——冇 active 更表 shift 行
   });
 });
