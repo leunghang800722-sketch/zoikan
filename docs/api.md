@@ -661,6 +661,24 @@ Google Sheets 匯出令長工格解析由 1,295→0**——操作員貼咗真實
   `tests/wp-postorder-csv-upload-route.test.ts` 嘅合成 fixture 表頭
   補齊「雞頭名」／「備註」子欄字眼（解析器而家靠呢啲字眼搵欄位置，
   唔再靠寫死 col）。
+- **用操作員實際上載到正式站嘅真 CSV 驗證（`data/2026-09/postorder-csv/
+  {Roster,PostOrder}.csv`，gitignored）**：`tests/wp-postorder-csv-
+  grid-parse.test.ts` 加咗 `it.skipIf` 用呢兩個真檔嘅 describe——**用
+  main 版（修改前）解析器逐字比對過**，兩個版本對呢兩個真檔嘅結果
+  完全一樣：Roster 11 個 (盤,人) 組合、239 格「(8) 長工」（表頭第 7
+  行，`9+7k` 公式冇錯位）；PostOrder 21 條「長工雞頭費」行、
+  excelAmount 合計 $60,520（同 `.xlsm` 一致，815 行冇縮水）。即係話
+  **呢兩個真檔本身唔會重現老闆話嘅「0」**——`Roster.csv` 得 110 行
+  （`msg-file` 嗰個 `.xlsm` 嘅 Roster sheet 有 2,996 行），淨係含頭
+  11 個有長工標記嘅安員行，同老闆記憶嘅「1,295 格／56 組合」對唔上
+  （嗰個數字對應嗰份完整嘅 `.xlsm`，唔係呢份細碼 CSV）——冇更完整嘅
+  Roster CSV 樣本之前，唔會屈估湊夠嗰個數字（違反「唔准估」鐵則）。
+  換言之，表頭飄行／合併儲存格呢兩個修法本身冇错（覆蓋咗上面攞真實
+  樣本形狀砌出嚟嘅 edge case），但**呢兩個具體真檔冇重現到原本報告
+  嘅「0」呢單本身**——如果正式站仍然見到 0，根因可能喺呢個 parser
+  以外（例如實際上載嗰份檔案內容／大小同呢個樣本唔一樣，或者上載
+  pipeline 其他部分），需要老闆/操作員提供實際出事嗰次嘅完整檔案先
+  可以進一步查。
 
 ### A3. WP-REFERRAL-FALLBACK（老闆 2026-09-26 緊急，Sonnet 5 執行，
 branch `wp-referral-fallback`）：CSV cold start 已支援——長工介紹雞頭

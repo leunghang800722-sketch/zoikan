@@ -331,3 +331,54 @@ describe("WP-POSTORDER-ROBUST：真實 Google Sheets 匯出形狀（表頭飄行
     expect(resultLess.longtermPosts[0].cellCount).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 操作員上載到正式站嘅同一份真實 Google Sheets「下載為 CSV」匯出
+// （`data/2026-09/postorder-csv/{Roster,PostOrder}.csv`，data/ gitignored，
+// 唔存 PII 入 git，冇呢兩個檔嘅環境自動 skip）。
+//
+// **實測結果（連同 main 版、未修改嘅解析器一齊試過）**：呢兩個檔用
+// 現有（同修改後）`parsePostorderFromCsv()` 都解到 Roster 11 個
+// (盤,人) 組合、239 格「(8) 長工」，PostOrder 21 條「長工雞頭費」行、
+// excelAmount 合計 $60,520——**唔係 0**，表頭喺第 7 行（同 `data/2026-09/
+// msg-file/Postorder - Aug 2026.xlsm` 嘅表頭位置一致，`9+7k` 呢個舊有
+// 公式對呢個真樣本本身冇錯位）。跟老闆話嘅「1,295 格／56 組合」對唔上
+// ——查落去 `Roster.csv` 得 110 行（`msg-file` 嗰個 `.xlsm` 嘅 Roster
+// sheet 有 2,996 行），淨係含頭 11 個有「(8) 長工」標記嘅安員行（數碼港
+// ／CP5／數據中心／港大醫學院／港C1／港C／IFC／Weave 呢幾個盤嘅前半
+// 部分）；`PostOrder.csv`（815 行）就同 `.xlsm` 對應嘅 21 行／$60,520
+// 完全一致，冇縮水。即係話**呢份 `Roster.csv` 本身就唔係完整嘅 Roster
+// sheet 匯出**（可能上載/貼樣本嗰陣淨係揀咗一部分，或者正式站嗰個月
+// 嘅 Roster 表本身就係呢個細碼——見呢個 it() 嘅斷言：11／239，唔係
+// 1,295／56，因為呢個實際檔案入面得咁多），唔可以喺呢份檔案冇嗰啲
+// 資料嘅情況下屈估出嚟湊夠 56 組（違反「唔准估」鐵則）。呢個 describe
+// 記低「解析器對住呢兩個真檔嘅實際、可重現行為」，等之後有更完整嘅
+// Roster CSV 樣本可以直接換咗呢個斷言嘅數字。
+// ---------------------------------------------------------------------------
+const REAL_PROD_ROSTER_CSV = path.resolve(__dirname, "../data/2026-09/postorder-csv/Roster.csv");
+const REAL_PROD_POSTORDER_CSV = path.resolve(__dirname, "../data/2026-09/postorder-csv/PostOrder.csv");
+const hasRealProdCsv = fs.existsSync(REAL_PROD_ROSTER_CSV) && fs.existsSync(REAL_PROD_POSTORDER_CSV);
+
+describe.skipIf(!hasRealProdCsv)("WP-POSTORDER-ROBUST：操作員實際上載到正式站嗰兩個真 CSV（data/ gitignored，冇呢兩個檔嘅環境自動 skip）", () => {
+  it("Roster.csv：表頭第 7 行（同 .xlsm 一致，冇錯位），解到 11 個 (盤,人) 組合、239 格——同 main 版（修改前）解析器結果一致，唔係 0", () => {
+    const rosterCsv = fs.readFileSync(REAL_PROD_ROSTER_CSV, "utf-8");
+    const postorderCsv = fs.readFileSync(REAL_PROD_POSTORDER_CSV, "utf-8");
+    const result = parsePostorderFromCsv({ rosterCsv, postorderCsv });
+    expect(result.rosterParseError).toBeNull();
+    expect(result.rosterHeaderRow).toBe(7);
+    expect(result.rosterDayBlockWidth).toBe(7);
+    const totalCells = result.longtermPosts.reduce((acc, p) => acc + p.cellCount, 0);
+    console.log(`[wp-postorder-robust] 真實正式站 Roster.csv：${result.longtermPosts.length} 組合、${totalCells} 格（唔係 0；跟「1,295／56」對唔上——見上面 describe 註解，呢份 CSV 本身得 110 行，遠少過 .xlsm 嗰 2,996 行）`);
+    expect(result.longtermPosts).toHaveLength(11);
+    expect(totalCells).toBe(239);
+  });
+
+  it("PostOrder.csv：815 行，解到 21 條「長工雞頭費」行，excelAmount 合計 $60,520——同 .xlsm 一致，冇縮水", () => {
+    const rosterCsv = fs.readFileSync(REAL_PROD_ROSTER_CSV, "utf-8");
+    const postorderCsv = fs.readFileSync(REAL_PROD_POSTORDER_CSV, "utf-8");
+    const result = parsePostorderFromCsv({ rosterCsv, postorderCsv });
+    expect(result.referralRows).toHaveLength(21);
+    const total = result.referralRows.reduce((acc, r) => acc + (r.excelAmount ?? 0), 0);
+    expect(Math.round(total * 100) / 100).toBe(60520);
+  });
+});
