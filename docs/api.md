@@ -1941,3 +1941,94 @@ test.ts` 1 條。
 4. **OT 建卡快捷冇覆蓋雞頭／guard 級嘅精準 broker 配對**——`openCreateForOt()`
    淨係用 `broker_code` 喺已載入嘅 `brokers` 度配（`unpriced` API 唔出
    `broker_id`），配唔中就留空等用戶自己揀（唔會估錯）。
+
+## §20.4 Phase 4（老闆 2026-09-27 指令，branch `wp-phase4`）：系統輸出 Postorder 格式總表 Excel
+
+老闆決定唔再自己維護 Postorder，總表由系統計出嚟。`buildPostorderWorkbook
+(month)`（`src/lib/reports/postorder-export.ts`）由 `shift_records`（非
+cancelled）＋現有幾個已經 gate 過嘅報表 pure function（`buildPayrollTotals()`
+逐雞頭付款、`computeReferralFeesForMonth()` 介紹費、`buildMonthlyClose()`
+營業額/成本/毛利/長工糧）砌一份 xlsx，**唔重新發明公式**——數字口徑直接
+沿用呢幾條已經對過數嘅 function，Excel 純係「換個版面」。
+
+### `GET /api/reports/postorder/:month`
+
+- `src/app/api/reports/postorder/[month]/route.ts`。
+- RBAC：`requirePermission(req, "月結總表", "export")`——重用現有「月結
+  總表」module（老闆／會計出廠 grant，主管出廠 off 可由老闆開，雞頭／
+  安員硬性 deny），冇加新 module（呢個 export 同「睇月結總表/毛利」同
+  一個財務敏感度分組）。
+- 路徑刻意冇跟 `:month.xlsx` 字面（Next.js 動態 route segment 帶副檔名
+  會令 `[month]` 解析多咗個尾巴）——跟返 `GET /api/sites/:id/roster-export`
+  同 `GET /api/longterm/payroll/:month/autopay` 嘅寫法：路徑淨係到
+  `:month`，靠 `Content-Disposition` header 帶 `.xlsx` 檔名。
+- 月結鎖定之後仍然可以下載（冇加鎖定檢查）。
+- 每次下載寫一條 `audit_log`（`action=export_download`，`table_name=
+  shift_records`，`row_id=postorder-export:<month>`，`after` 記
+  rosterRowCount／brokerPayoutCount／referralFeeTotal／siteRevenueTotal／
+  siteCostTotal）——匯出檔含安員姓名（Roster 長工行備註欄），PII，只
+  老闆／會計下載得到。
+- UI：`/month-close`（一鍵結算報告區）＋`/reports/monthly-close`（月結
+  工作台頂部）各加一個「下載總表 Excel（Postorder 格式）」掣，同頁下載
+  （`<a href>` + `Content-Disposition: attachment`，跟 autopay CSV 掣
+  同一個 pattern）。
+
+### 四個 sheet
+
+- **Roster**：逐 (盤, 更種/時段, 結算單位) 一行；日曆 block（日期格＝
+  `sites.aliases` 最短嗰個或 canonicalName／雞頭名／備註／其他／救更價／
+  Unbilled／Paid）＋尾欄（取消／甩更／當月更數／當月收入／當月成本／
+  當月GP）。settlement_broker.kind=internal_longterm（B07，DB name 本身
+  係佔位符 "B07"）行恆寫「(8) 長工」，「上單價」＝該 (盤,更種) B07 組合
+  入面全部出過更嘅長工 `guards.monthly_salary` 之和 ÷ 該組合當月更數
+  （任務書明文「系統出實數：月薪÷當月更數，注明」嘅近似值，唔係
+  `longterm-salary.ts` 嗰個逐人按曆日比例分攤口徑）。
+- **PostOrder**：同 Roster 逐行對應嘅精簡版（每日一欄＋Total Shift）＋
+  「長工雞頭費 (雞頭)」逐雞頭逐盤（`computeReferralFeesForMonth()`
+  lineItems 按 (broker,site) 加埋）。
+- **Summary**：逐雞頭付款（`buildPayrollTotals()`）、半月結 01-15/16-31、
+  介紹費、K passthrough 提示行（規則 12：系統外現金扣，呢張表唔扣）、
+  長工 Autopay/MPF（`longterm_payroll_runs.totals_json`）、總收入/總成本/
+  毛利（`buildMonthlyClose()` `combinedCostSummary`）。
+- **口徑說明**：純文字，逐欄口徑＋已知限制（老實列出，唔屈估）：
+  - 「甩更」：`ShiftRecordStatus` 冇對應終態，恆 0。
+  - 「其他」（頂更/賣假等 special mark）：`shift_records` 冇對應欄追蹤，
+    恆留空。
+  - Unbilled＝`client_rate_snapshot IS NULL` 或 `sites.guards_paid_by_
+    client=true`（LINK）；Paid＝該月 `month_closes.locked_at` 非 null。
+
+Excel 規則（鐵則）：sheet 名（`sanitizeSheetName()`）剔走
+`/ \ ? * [ ] :`（含全形）＋截 31 字元；全程 `.value = <literal>` 賦值，
+唔用 `{formula}`，冇任何空字串格（`setCell()` 冇值就唔賦值）。
+
+### 測試
+
+`tests/wp-phase4-postorder-export.test.ts`（12 條：sheet 名/空字串格/
+公式格檢查、Roster 散工/長工行語意、日期格/備註、取消/甩更尾欄、
+Summary 逐雞頭付款、PostOrder Total Shift、回傳 summary 數字）＋
+`tests/wp-phase4-postorder-export-route.test.ts`（3 條：RBAC 403/200、
+audit_log、400）——全部用合成測試代號（測試安員甲/乙、測試雞頭一），
+測試月份揀 2025-08（同真實 2026 資料完全唔撞，跟 `gross-margin-empty-
+month.test.ts` 一致慣例）。
+
+### `npm run gate:postorder-export-aug`
+
+`scripts/gate/postorder-export-aug.ts`——讀 `data/2026-09/aug-payroll-
+trial/out/{broker_settlement,revenue_site,referral_postorder}.json`
+（8 月薪金試算 oracle 輸出，只讀，gitignored），call `buildPostorderWorkbook
+(2026-08)`，逐雞頭付款（K/W/T/G/D/Y/B07）／逐盤收入（44 個總表盤碼）／
+介紹費合計逐項對，印差異表，exit 1 如果唔係全部 0 差。
+
+**前置條件**（同 `scripts/gate/aug-e2e-check.ts` 一樣）：dev DB 要已經
+行完 8 月 Part B 全套流程（`db:reset`/`db:seed` → `build/apply-aug-
+plan.ts` → 真實上載 36 個 8 月更表 → `guard-fix` 收斂 → 「重新對數全月」
+→「重算介紹費」）——呢個 gate 本身淨係讀，唔做呢步（成個 pipeline 好
+重，屬另一個獨立任務嘅工作量）。**本次（2026-09-27，branch `wp-phase4`）
+dev DB 未跑過呢套流程**（`db:reset` 之後淨係 July seed，8 月 0 條
+`shift_records`）——跑 `gate:postorder-export-aug` 見到嘅係預期入面嘅
+「系統缺」（逐雞頭付款 K/W/T/G/D/Y 全部系統=0 vs 參考=實數，逐盤收入
+44/44 個「系統缺」，介紹費合計 0 vs 60,520），**唔係 `buildPostorderWorkbook()`
+本身嘅 bug**——B07（長工内部結算）一行系統=0=參考=0，PASS，證明冇資料
+嗰種情況下模組本身冇報錯/冇亂寫數。要驗證真正 0-diff，要先完成 Part B
+流程（另一個任務量級，留返下一手）。workbook 本身會寫去
+`out/postorder-export-aug.xlsx`（gitignored）俾人手打開睇版面。

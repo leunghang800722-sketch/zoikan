@@ -311,7 +311,17 @@ export default function MonthCloseOneClickPage() {
 
       {report && (
         <section className="flex flex-col gap-4 rounded-lg border border-zk-border bg-white p-4">
-          <div className="text-sm font-semibold text-zk-text">④ 報告（{report.month}）</div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-zk-text">④ 報告（{report.month}）</div>
+            {/* §20.4 Phase 4：系統輸出 Postorder 格式總表 Excel——月結鎖定
+                後仍然可以下載（老闆唔再手做總表）。同頁下載（唔開新
+                tab）：Content-Disposition: attachment 已經令瀏覽器當檔案
+                下載處理，跟 longterm-payroll 頁 autopay 下載掣同一個
+                pattern。 */}
+            <a href={`/api/reports/postorder/${report.month}`}>
+              <Button variant="secondary">下載總表 Excel（Postorder 格式）</Button>
+            </a>
+          </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded border border-zk-border p-3">
