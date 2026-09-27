@@ -11,6 +11,7 @@ import { parseBody } from "@/lib/api/validate";
 import { GuardLongtermPostUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden } from "@/lib/api/errors";
+import { assertLongtermPostPeriodOk } from "@/lib/guards/longterm-posts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 
@@ -35,6 +36,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (parsed.effective_to !== undefined) data.effectiveTo = parsed.effective_to;
     if (parsed.note !== undefined) data.note = parsed.note;
     if (Object.keys(data).length === 0) return ok(toGuardLongtermPostDTO(before));
+    // WP-PHASE3 Opus 5.5 驗收：終止日唔可以早過生效日（例如未來先生效嘅
+    // 崗位喺今日撳「終止」）；延長／清空終止日唔可以同同盤另一條重疊。
+    if (parsed.effective_to !== undefined && !before.voidedAt) {
+      await assertLongtermPostPeriodOk({ guardId: id, siteId: before.siteId, effectiveFrom: before.effectiveFrom, effectiveTo: parsed.effective_to, excludePostId: postId });
+    }
 
     const after = await prisma.guardLongtermPost.update({ where: { id: postId }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "guard_longterm_posts", rowId: postId, action: "update", before, after, ip: getClientIp(req) });

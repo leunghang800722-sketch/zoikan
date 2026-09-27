@@ -1848,10 +1848,10 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
 ### 4. OT 卡管理
 
 `rate_cards` 結構本身已經支援 site／broker／guard 三級（冇要改
-schema）——OT 更種同其他更種一樣用返現有 CRUD。跟 §17.10.2 決定：**OT
-卡金額＝每小時价**（`client_rate`／`guard_wage` 存嘅係「每粒鐘」，唔係
-「呢條記錄成筆」），`RateCardsClient.tsx` 揀咗 code 開頭 "OT" 嘅更種就
-顯示提示。**未定價 OT 清單**——複用現有 `GET /api/shift-records/
+schema）——OT 更種同其他更種一樣用返現有 CRUD。~~跟 §17.10.2 決定：OT
+卡金額＝每小時价~~（**Opus 5.5 驗收更正**：§17.10.2 第 3 項 OT 卡單位仍
+未定案，見下面「Opus 5.5 驗收修正」第 7 項），`RateCardsClient.tsx` 揀咗
+code 開頭 "OT" 嘅更種就顯示「單位未定案」提示。**未定價 OT 清單**——複用現有 `GET /api/shift-records/
 unpriced`（`category=ot_unpriced`），頁面加一個 amber 分區，每項有
 「建卡」快捷（喺已載入嘅 `shiftTypes`／`brokers` 度用 site_id+code／
 broker_code 揾返 id 預填，開返「新增價目」抽屜）。
@@ -1869,6 +1869,55 @@ broker_code 揾返 id 預填，開返「新增價目」抽屜）。
   渡對照（可選）」，報告區塊標題改做「對照（Postorder，過渡對照，可
   選）」，並加一句 §20.5 說明（系統本身已經係總表，長工崗位盤／介紹
   雞頭以系統資料為準）。
+
+### Opus 5.5 驗收修正（2026-09-27，model `claude-opus-5-5[1m]`，同 branch）
+
+**8 月正式站演練（dev，乾淨狀態）**：`db:reset && db:seed` → 開盤 build／
+apply → 補跑 `20260926200000` 介紹費 DML → 36 檔上載 → U Team → Postorder
+CSV（longterm-pairs＋PostOrder）→ 一鍵結算 2026-08：K 1,023,730／G
+56,220／D 100,130／Y 226,433.02／W 172,520／T 209,560／B07 1,297 格、介紹
+費 60,620、營業額 3,304,416.19、毛利表營業額 3,236,901.04，同 §20.7 **完全
+一致**；價卡 368 張（一鍵前後不變——8 月開盤本身已齊卡，舊版自動沿用本來就
+係 0 張，證明 step0 改做建議冇改數）；安員 345／盤 71／崗位 56；連撳兩次冪
+等（shift_records 最後修改時間不變）；報告 JSON 對 345 個安員姓名／電話／
+工號掃描 0 命中。`gate:ltpay-aug` 長工糧 Gross 917,875.19 分毫不差。
+
+**合成「上月有卡、本月冇卡」**（將兩個 (盤,更種) 嘅 8 月卡改做 7 月卡＋清走
+35 條記錄 snapshot）：一鍵報告列建議 → 價目卡頁預覽 2 張（同 API 一致）→
+確認 → 再一鍵 → 未定價 0、35 條 snapshot 同原本逐條一致、六個雞頭應付還原。
+演練揪到以下問題，已修：
+
+1. **step0 建議同「複製上月卡」掣唔一致**——建議用 `findCarryoverCard()`
+   （淨係盤級通用卡），但 8 月卡絕大部分係雞頭專屬價，報告話「冇上月卡——
+   要人手設卡」而掣撳落會複製。改用同一個 `findCopyLastMonthCandidates()`
+   （`one-click.ts` `stepPrecheck()`），訊息列每張卡雞頭代號＋收客／工資。
+2. **補咗卡都唔會補價（兩個漏洞）**——`repriceMonthForSites()`（一鍵
+   step4／「重新對數全月」開頭自動補價）(a) 淨係掃 `record_type=shift`，OT
+   記錄之後先補卡（「未定價 OT → 建卡」快捷、複製上月卡）永遠補唔返；(b)
+   淨係傳上載嘅盤 id，一檔多子盤（例：城巴車廠）子盤記錄永遠唔補。改：OT
+   一齊補 null（同一個 resolver，8 月前唔郁）；`reconcile-all.ts` 連埋上載
+   行 `resolved_site_id` 一齊 reprice。8 月演練數字不變（OT 全月得 3 條，
+   淨係啟航1331 OT3.5 兩條冇卡）。
+3. **長工崗位盤冇期間檢查**——同一安員同一盤生效期重疊而家 409；終止日早
+   過生效日 400（POST／PATCH，`src/lib/guards/longterm-posts.ts`）；UI 日期
+   顯示去走 ISO 時間尾、`manual` 顯示「人手」。
+4. **介紹雞頭／簽證形式贊助雞頭冇驗證**——唔存在嘅 id 原本 FK 500，而家
+   400；唔可以係 `internal_longterm`（B07）；淨係「值有變」先驗（舊值原樣送
+   返唔擋）；雞頭 session 改呢兩欄 403。「轉長工」同一規則。代號 Y
+   （`internal_cash`）現有資料有做介紹雞頭，**冇擋**。
+5. **轉長工連撳兩次會建兩份重疊合約**（糧計兩次）——已有覆蓋生效日嘅合約就
+   唔建，回 warning。
+6. **雞頭讀得到 `GET /longterm-posts`**——改硬性 403（「長工」區雞頭結構性
+   見唔到）。
+7. **OT 卡單位提示寫錯**——原本 UI／文件寫「§17.10.2 決定 OT 卡金額＝每小時
+   价」，但 §17.10.2 第 3 項**仍未定案**（`gross-margin.ts` 當每粒鐘×時數，
+   `payroll.ts` 等當逐條金額）。提示改做如實講未定案、多過 1 個鐘嘅 OT 落卡
+   前先問老闆。
+8. UI 文案：「長工（§20.4 Phase 3）」標題、「§19 規則 9」hint 去走內部章節
+   號。
+
+新增 `tests/acc-phase3-fixes.test.ts`（9 條）＋`month-close-one-click.
+test.ts` 1 條。
 
 ### 已知落差／未做（老實列出）
 

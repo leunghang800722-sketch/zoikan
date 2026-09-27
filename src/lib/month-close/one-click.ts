@@ -46,6 +46,7 @@ import { buildGrossMargin } from "@/lib/reports/gross-margin";
 import { buildPayrollTotals, buildPayrollSourceSummary } from "@/lib/reports/payroll";
 import { computeReferralFeesForMonth, recomputeReferralFees, REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH } from "@/lib/reports/referral-fee";
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
+import { findCopyLastMonthCandidates, type CopyLastMonthCandidate } from "@/lib/pricing/copy-last-month-cards";
 import { writeAudit } from "@/lib/audit";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { STEP_KEYS, STEP_LABELS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
@@ -238,10 +239,9 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     return { numbers, warnings, needsHuman, halt: "上月未鎖定，一鍵結算已停低——請先鎖定上月" };
   }
 
-  // (2) 本月每個有 active 上載嘅盤：有更種？有生效價卡？冇→自動沿用
-  // 「上月卡」（Opus 驗收收窄規則，見 `findCarryoverCard()`），新卡
-  // effective_from=本月 1 日，note「一鍵沿用」，audit，並寫入 needsHuman
-  // 俾人覆核（唔係淨係 warning）。
+  // (2) 本月每個有 active 上載嘅盤：有更種？有生效價卡？冇→唔寫卡（WP-
+  // PHASE3），淨係喺 needsHuman 建議去價目卡頁撳「複製上月卡到本月」（有
+  // 候選先建議）或者人手設卡。
   const uploads = await prisma.rosterUpload.findMany({
     where: { month: start, status: { notIn: ["superseded", "voided"] } },
     select: { id: true, siteId: true, siteNameRaw: true },
@@ -274,6 +274,17 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   // 讀緊呢粒 key 唔會突然 undefined。
   const cardsCarriedOver = 0;
   let cardsMissingNoCarryover = 0;
+  // WP-PHASE3 Opus 5.5 驗收：建議要同價目卡頁「複製上月卡到本月」掣嘅候選
+  // 一致——原本用 `findCarryoverCard()`（淨係盤級通用卡），但 8 月實際卡
+  // 絕大部分係雞頭專屬價，結果掣撳落會複製，報告就話「冇上月卡可以沿用
+  // ——要人手設卡」，兩邊講嘢唔一致。而家直接用同一個
+  // `findCopyLastMonthCandidates()`（唔寫 DB）判斷。
+  const copyCandidates = await findCopyLastMonthCandidates(monthLabel(start));
+  const copyCandidatesByCombo = new Map<string, CopyLastMonthCandidate[]>();
+  for (const c of copyCandidates) {
+    const key = `${c.siteId}|${c.shiftTypeId}`;
+    copyCandidatesByCombo.set(key, [...(copyCandidatesByCombo.get(key) ?? []), c]);
+  }
   for (const combo of combos) {
     const siteId = combo.resolvedSiteId!;
     const shiftTypeId = combo.shiftTypeId!;
@@ -296,12 +307,16 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     cardsMissingNoCarryover++;
     // 淨係查有冇上月卡可以複製（俾用戶睇到「撳咗『複製上月卡』有冇用」），
     // 唔寫 DB。
-    const carryFrom = await findCarryoverCard(siteId, shiftTypeId, start);
-    if (!carryFrom) {
-      needsHuman.push(`盤「${siteName}」更種「${shiftTypeCode}」冇生效價卡，亦冇「上月通用逐更卡」可以沿用——要人手設卡（去價目卡頁）`);
+    const cands = copyCandidatesByCombo.get(`${siteId}|${shiftTypeId}`) ?? [];
+    if (cands.length === 0) {
+      needsHuman.push(`盤「${siteName}」更種「${shiftTypeCode}」冇生效價卡，亦冇上月卡可以複製——要人手設卡（去價目卡頁）`);
     } else {
+      const detail = cands
+        .slice(0, 5)
+        .map((c) => `${c.brokerId ? (c.brokerLabel.split(" ")[0] ?? "雞頭") : "通用"} 收客 ${c.clientRate ?? "—"}／工資 ${c.guardWage ?? "—"}`)
+        .join("；");
       needsHuman.push(
-        `盤「${siteName}」更種「${shiftTypeCode}」冇本月生效卡，搵到上月卡（${carryFrom.effectiveFrom.toISOString().slice(0, 10)}～${carryFrom.effectiveTo?.toISOString().slice(0, 10)}，收客 ${n(carryFrom.clientRate)}／工資 ${n(carryFrom.guardWage)}）——去價目卡頁撳「複製上月卡到本月」一撳套用（或者人手設卡）`,
+        `盤「${siteName}」更種「${shiftTypeCode}」冇本月生效卡，搵到 ${cands.length} 張上月卡（${detail}${cands.length > 5 ? "；…" : ""}）——去價目卡頁撳「複製上月卡到本月」一撳套用（或者人手設卡）`,
       );
     }
   }

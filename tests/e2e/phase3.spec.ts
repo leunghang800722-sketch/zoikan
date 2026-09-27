@@ -64,7 +64,7 @@ test("(a) 老闆抽屜「長工」區：加崗位盤 → 列表見到 → 終止
   await page.goto("/guards");
   await openEditByName(page, GUARD_NAME);
 
-  await expect(page.getByRole("heading", { name: "長工（§20.4 Phase 3）" })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("heading", { name: "長工", exact: true })).toBeVisible({ timeout: 10_000 });
 
   const siteSelect = page.getByLabel("長工崗位盤：揀盤");
   await siteSelect.selectOption({ label: SITE_NAME });
@@ -76,7 +76,7 @@ test("(a) 老闆抽屜「長工」區：加崗位盤 → 列表見到 → 終止
 
   const postRow = page.locator("li", { hasText: SITE_NAME }).first();
   await expect(postRow).toBeVisible({ timeout: 10_000 });
-  await expect(postRow).toContainText("manual");
+  await expect(postRow).toContainText("人手");
 
   const patchResponse = page.waitForResponse((r) => /\/api\/guards\/[^/]+\/longterm-posts\/[^/]+$/.test(r.url()) && r.request().method() === "PATCH");
   await postRow.getByRole("button", { name: "終止" }).click();
@@ -133,7 +133,7 @@ test("(c) 雞頭登入：安員抽屜見唔到「長工」分區（結構性隔�
       // 喺 GET response 冇 key，見 tests/wp-phase3.test.ts §2 已經
       // integration test 驗證過）。
       await editBtn.click();
-      await expect(page.getByRole("heading", { name: "長工（§20.4 Phase 3）" })).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "長工", exact: true })).toHaveCount(0);
     }
   }
 });

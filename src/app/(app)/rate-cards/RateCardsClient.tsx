@@ -465,13 +465,13 @@ export function RateCardsClient({
 
       {/* WP-PHASE3（§20.4 Phase 3 item 4）：OT 卡管理——未定價 OT 清單，
           每項有「建卡」快捷（預填盤／更別／雞頭，開返「新增價目」抽屜）。
-          OT 更種卡跟 §17.10.2 決定：卡金額＝每小時价（`client_rate`／
-          `guard_wage` 呢兩粒數存嘅係「每粒鐘」，唔係「呢條記錄成筆」，
-          落卡嗰陣要喺 note 註明「每小時」，避免第啲人手快之後誤解做
-          per-record 金額）。 */}
+          OT 卡金額單位（每粒鐘／每條記錄）§17.10.2 第 3 項**仍未定案**
+          （Opus 5.5 驗收更正：原本寫「已決定每小時」唔啱——gross-margin.ts
+          當每粒鐘×ot_hours，payroll.ts 等當逐條金額）。建卡之後 OT 記錄
+          由「重新對數全月」／一鍵結算開頭嘅自動補價補返（reprice.ts）。 */}
       {otUnpricedGroups.length > 0 && (
         <div className="rounded-[7px] border border-amber-200 bg-amber-50 p-3">
-          <div className="text-[13px] font-medium text-amber-800">未定價 OT（{otUnpricedGroups.reduce((a, g) => a + g.count, 0)} 條記錄）——OT 卡金額＝每小時价，建卡時請喺備註寫明</div>
+          <div className="text-[13px] font-medium text-amber-800">未定價 OT（{otUnpricedGroups.reduce((a, g) => a + g.count, 0)} 條記錄）——建卡後重跑「一鍵結算」或「重新對數全月」先會補返價</div>
           <ul className="mt-1.5 space-y-1">
             {otUnpricedGroups.map((g, i) => (
               <li key={`${g.site_id}-${g.shift_type_code}-${g.broker_code ?? "none"}-${i}`} className="flex items-center justify-between gap-2 text-[12.5px] text-amber-800">
@@ -653,13 +653,11 @@ export function RateCardsClient({
               ))}
             </select>
           </Field>
-          {/* WP-PHASE3（item 4）：揀咗 OT 更種（code 開頭 "OT"）就提示
-              「呢張卡金額＝每小時价」——§17.10.2 決定，OT 記錄用嘅係
-              hours×每粒鐘嘅口徑，唔係逐筆金額，落卡嗰陣要人清楚呢粒
-              數點解讀。 */}
+          {/* WP-PHASE3（item 4）：揀咗 OT 更種（code 開頭 "OT"）就提示卡金額
+              單位未定案（§17.10.2 第 3 項，見上面 OT 清單註解）。 */}
           {shiftTypes.find((s) => s.id === form.shift_type_id)?.code?.startsWith("OT") && (
             <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12.5px] text-amber-800">
-              OT 更種——下面收客價／保安員工資／雞頭費一律「每小時价」（唔係逐筆金額），建議喺備註寫明「每小時」。
+              OT 更種——卡金額單位（每粒鐘 定 每條記錄）未定案：毛利表當「每粒鐘 × OT 時數」，糧單／雞頭應付當「每條記錄」。1 個鐘嘅 OT 兩者一樣；多過 1 個鐘嘅 OT 落卡前先問老闆，並喺備註寫明。
             </div>
           )}
           {hasClientRate && (

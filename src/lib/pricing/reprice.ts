@@ -173,10 +173,18 @@ export async function repriceMonthForSites(month: Date, siteIds: string[], actor
   if (uniqueSiteIds.length === 0) return { scanned: 0, changed: 0 };
   const { start, end } = monthRange(month);
 
+  // WP-PHASE3 Opus 5.5 驗收：連 OT 記錄（record_type=ot）一齊補 null——
+  // 原本淨係 "shift"，OT 記錄只喺建立嗰刻（上載套用）行 resolver，之後先
+  // 補嘅 OT 卡（價目卡頁「未定價 OT → 建卡」快捷、「複製上月卡」）永遠
+  // 冇路徑補返 snapshot，一鍵結算重跑都係「未定價 OT」。OT 行同一個
+  // resolver（`recordType:"ot"` → 淨係配 shift_type 完全相等嘅卡），同
+  // 建立嗰刻寫入嘅值一致；呢個模式淨係補 null（唔覆蓋已有 OT 價），8 月
+  // 前記錄唔郁（見 decideReprice()），7 月 gate 唔受影響。
   const records = await prisma.shiftRecord.findMany({
-    where: { recordType: "shift", status: { not: "cancelled" }, workDate: { gte: start, lte: end }, siteId: { in: uniqueSiteIds } },
+    where: { recordType: { in: ["shift", "ot"] }, status: { not: "cancelled" }, workDate: { gte: start, lte: end }, siteId: { in: uniqueSiteIds } },
     select: {
       id: true,
+      recordType: true,
       siteId: true,
       shiftTypeId: true,
       guardId: true,
@@ -208,7 +216,7 @@ export async function repriceMonthForSites(month: Date, siteIds: string[], actor
 
   const changedUpdates: Array<{ id: string; clientRate: number | null; guardWage: number | null; brokerFee: number | null }> = [];
   for (const r of records) {
-    const decision = decideReprice(r, lookups, cardsBySite.get(r.siteId) ?? [], "fill_and_fix_b07");
+    const decision = decideReprice({ ...r, recordType: r.recordType === "ot" ? "ot" : "shift" }, lookups, cardsBySite.get(r.siteId) ?? [], "fill_and_fix_b07");
     if (decision.changed) changedUpdates.push({ id: r.id, clientRate: decision.after.clientRate, guardWage: decision.after.guardWage, brokerFee: decision.after.brokerFee });
   }
 

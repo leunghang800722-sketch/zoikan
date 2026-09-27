@@ -23,6 +23,7 @@ import { parseBody } from "@/lib/api/validate";
 import { GuardConvertToLongtermSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden } from "@/lib/api/errors";
+import { assertReferralBrokerAllowed } from "@/lib/guards/longterm-posts";
 import type { Guard, GuardLongtermPost, GuardLongtermContract } from "@prisma/client";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -42,8 +43,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const site = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { id: true } });
     if (!site) throw NotFound("搵唔到呢個盤");
     if (parsed.referral_broker_id) {
-      const broker = await prisma.broker.findUnique({ where: { id: parsed.referral_broker_id }, select: { id: true } });
-      if (!broker) throw NotFound("搵唔到呢個介紹雞頭");
+      // WP-PHASE3 Opus 5.5 驗收：同 guards PATCH 一致——B07（內部長工結算
+      // 單位）唔可以做介紹雞頭。
+      await assertReferralBrokerAllowed(parsed.referral_broker_id, "介紹雞頭");
     }
 
     // 合約要唔要建，喺 transaction 之前就要知（會影響落唔落
@@ -97,7 +99,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       let contract: GuardLongtermContract | null = null;
       let contractSkippedReason: string | null = null;
       if (parsed.monthly_salary !== undefined) {
-        if (canWriteContract) {
+        // WP-PHASE3 Opus 5.5 驗收：冪等——已經有覆蓋 effective_from 嘅合約
+        // 就唔再建（連撳兩次「轉長工」唔會變兩份重疊合約，糧會計兩次）。
+        const existingContract = canWriteContract
+          ? await tx.guardLongtermContract.findFirst({
+              where: { guardId: id, voidedAt: null, effectiveFrom: { lte: parsed.effective_from }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: parsed.effective_from } }] },
+              select: { id: true },
+            })
+          : null;
+        if (existingContract) {
+          contractSkippedReason = "呢個安員喺呢個生效日已經有長工合約，冇再建——要改月薪請去長工糧頁";
+        } else if (canWriteContract) {
           contract = await tx.guardLongtermContract.create({
             data: {
               guardId: id,

@@ -211,6 +211,15 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       const carried = await prisma.rateCard.count({ where: { source: "one_click_carryover" } });
       expect(carried).toBe(0);
     });
+    it("WP-PHASE3 Opus 5.5 驗收：上月淨係有雞頭專屬卡——建議同「複製上月卡」候選一致（唔可以話冇卡要人手設）", async () => {
+      await seedCombo("一鍵沿用雞頭專屬盤", { brokerId: fx.brokerA.id });
+      const result = await stepPrecheck(SEPT, fx.userIds["老闆"], null);
+      const line = result.needsHuman.find((h) => h.includes("一鍵沿用雞頭專屬盤"));
+      expect(line).toBeDefined();
+      expect(line).toContain("複製上月卡到本月");
+      expect(line).not.toContain("要人手設卡（去價目卡頁）");
+      expect(await prisma.rateCard.count({ where: { source: "one_click_carryover" } })).toBe(0);
+    });
     it("WP-PHASE3：(盤,更種) 冇本月生效卡，但有舊卡（client_rate/guard_wage 都有值）→ 唔自動複製，淨係 needsHuman 建議", async () => {
       const site = await prisma.site.create({ data: { canonicalName: "一鍵測試盤A", clientName: "一鍵測試盤A", billingModel: "per_shift", createdBy: "test" } });
       const shiftType = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", label: "測試夜更", createdBy: "test" } });

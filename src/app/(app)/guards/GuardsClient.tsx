@@ -1902,7 +1902,7 @@ export function GuardsClient({
               嗰陣個 guard 仲未存在）。 */}
           {editingId && !isBroker && (
             <>
-              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">長工（§20.4 Phase 3）</h3>
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">長工</h3>
               {form.employment_type !== "longterm_autopay" && (
                 <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
                   {!convertOpen ? (
@@ -1953,7 +1953,7 @@ export function GuardsClient({
                 </div>
               )}
               <div className="grid grid-cols-2 gap-2">
-                <Field label="介紹雞頭" hint="呢個長工由邊個雞頭供應（§19 規則 9）">
+                <Field label="介紹雞頭" hint="呢個長工由邊個雞頭供應（計介紹費用）">
                   <select className={selectCls} value={form.referral_broker_id} onChange={(e) => setForm((f) => ({ ...f, referral_broker_id: e.target.value }))}>
                     <option value="">（無）</option>
                     {brokers.map((b) => (
@@ -1993,7 +1993,7 @@ export function GuardsClient({
                           <span className="min-w-0 break-words">
                             {sites.find((s) => s.id === p.site_id)?.canonical_name ?? p.site_id.slice(0, 8)}
                             <span className="ml-1 text-zk-faint">
-                              （{p.effective_from}～{p.effective_to ?? "現在"}，{p.source}）
+                              （{p.effective_from.slice(0, 10)}～{p.effective_to ? p.effective_to.slice(0, 10) : "現在"}，{p.source === "manual" ? "人手" : p.source}）
                             </span>
                           </span>
                           {active && !p.voided_at && (

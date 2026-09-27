@@ -10,7 +10,8 @@ import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { GuardUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { NotFound, BadRequest } from "@/lib/api/errors";
+import { NotFound, BadRequest, Forbidden } from "@/lib/api/errors";
+import { assertReferralBrokerAllowed } from "@/lib/guards/longterm-posts";
 import {
   applyLegacyStaffNoPatch,
   writeStaffNumberAudits,
@@ -94,6 +95,20 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       if (parsed.name_aliases.some((a) => a === effectiveNameZh)) {
         throw BadRequest(`別名唔可以同本名一樣：${effectiveNameZh}`);
       }
+    }
+    // WP-PHASE3 Opus 5.5 驗收：介紹雞頭／簽證形式贊助雞頭——雞頭要存在、
+    // 唔可以係 B07（內部長工結算單位），原本冇驗證（唔存在嘅 id 會變 FK
+    // 500）。淨係「值有變」先驗（前端成個 form 一齊送，舊值唔應該阻住改
+    // 其他欄）。雞頭 session 唔可以寫呢兩欄（硬性，唔靠矩陣個 cell——同
+    // DTO 結構性睇唔到一致）。
+    for (const [key, label, beforeVal] of [
+      ["referral_broker_id", "介紹雞頭", before.referralBrokerId],
+      ["visa_sponsored_by_broker_id", "簽證形式贊助雞頭", before.visaSponsoredByBrokerId],
+    ] as const) {
+      const v = parsed[key];
+      if (v === undefined || v === beforeVal) continue;
+      if (isBrokerRole(session)) throw Forbidden(`雞頭唔可以改${label}`);
+      if (v !== null) await assertReferralBrokerAllowed(v, label);
     }
     // WP-PII（Opus 驗收必修 2a）：前端編輯抽屜起草成個 form，撳「儲存」
     // 成個 form 一齊送——冇改嘅 field-group 受控欄（例如長工冇改月薪，
