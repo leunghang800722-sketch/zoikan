@@ -74,12 +74,15 @@ export async function GET(req: Request) {
 }
 
 /** 兩條上載路徑共用嘅「解析→組 parseSummary／parseError」邏輯。 */
-function summarizeParseOutcome(runParse: () => Promise<PostorderParseResult>) {
+function summarizeParseOutcome(runParse: () => Promise<PostorderParseResult>, tolerableMissingSheets: readonly string[] = []) {
   return runParse().then(
     (result) => {
       const problems: string[] = [];
-      if (result.missingSheets.length > 0) {
-        problems.push(`搵唔到 sheet：${result.missingSheets.join("、")}（要有 Roster／PostOrder 兩個 sheet）`);
+      // 精簡長工組合 CSV 路徑：`postorder_csv` 係可選，缺 PostOrder sheet 唔算錯
+      // （parse_summary.missing_sheets 照記做診斷）。
+      const blockingMissing = result.missingSheets.filter((m) => !tolerableMissingSheets.includes(m));
+      if (blockingMissing.length > 0) {
+        problems.push(`搵唔到 sheet：${blockingMissing.join("、")}（要有 Roster／PostOrder 兩個 sheet）`);
       }
       // WP-POSTORDER-ROBUST：Roster 表頭偵測唔到（搵唔到「客戶名稱」／
       // 「物業名稱」／「雞頭名」呢類字眼）都要老實答錯，唔可以靜靜當
@@ -207,8 +210,9 @@ export async function POST(req: Request) {
       const sha256 = crypto.createHash("sha256").update(combined).digest("hex");
       const pairsCsvText = pairsBuffer.toString("utf-8");
       const postorderCsvText = postorderBuffer ? postorderBuffer.toString("utf-8") : null;
-      const outcome = await summarizeParseOutcome(() =>
-        Promise.resolve(parsePostorderFromPairsCsv({ longtermPairsCsv: pairsCsvText, postorderCsv: postorderCsvText })),
+      const outcome = await summarizeParseOutcome(
+        () => Promise.resolve(parsePostorderFromPairsCsv({ longtermPairsCsv: pairsCsvText, postorderCsv: postorderCsvText })),
+        postorderCsvEntry instanceof File ? [] : ["PostOrder"],
       );
       parseError = outcome.parseError;
 
