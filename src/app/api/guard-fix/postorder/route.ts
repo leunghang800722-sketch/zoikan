@@ -68,10 +68,15 @@ export async function GET(req: Request) {
 function summarizeParseOutcome(runParse: () => Promise<PostorderParseResult>) {
   return runParse().then(
     (result) => {
-      let parseError: string | null = null;
+      const problems: string[] = [];
       if (result.missingSheets.length > 0) {
-        parseError = `搵唔到 sheet：${result.missingSheets.join("、")}（要有 Roster／PostOrder 兩個 sheet）`;
+        problems.push(`搵唔到 sheet：${result.missingSheets.join("、")}（要有 Roster／PostOrder 兩個 sheet）`);
       }
+      // WP-POSTORDER-ROBUST：Roster 表頭偵測唔到（搵唔到「客戶名稱」／
+      // 「物業名稱」／「雞頭名」呢類字眼）都要老實答錯，唔可以靜靜當
+      // 長工格 0 就當上載成功。
+      if (result.rosterParseError) problems.push(result.rosterParseError);
+      const parseError = problems.length > 0 ? problems.join("；") : null;
       const rowCount = result.longtermPosts.length + result.referralRows.length;
       // 鐵則：唔存逐行 PII——`parseSummary` 淨係數目。
       const parseSummary: Prisma.InputJsonValue = { ...summarizePostorderParse(result), parse_error: parseError };
