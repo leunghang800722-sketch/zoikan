@@ -11,7 +11,7 @@ import { matchGuard, buildGuardMatchIndex, matchBroker, matchSite, type BrokerCa
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
 import { buildUTeamIndex, buildCrossCheckIndex, canonicalHkid, type UTeamRow, type CrossCheckRow, type UTeamIndex, type CrossCheckIndex } from "@/lib/guard-fix/sources";
-import type { PostorderLongtermPostCell, PostorderReferralRow, PostorderVisaResult } from "@/lib/guard-fix/postorder";
+import { derivePostorderLongtermPostsFromPostorderCsv, type PostorderLongtermPostCell, type PostorderReferralRow, type PostorderVisaResult } from "@/lib/guard-fix/postorder";
 import { inferReferralBrokerFromRosters } from "@/lib/pricing/longterm-settlement";
 import type {
   GuardFixPlan,
@@ -234,6 +234,11 @@ export interface BuildGuardFixPlanOptions {
     longtermPosts: PostorderLongtermPostCell[];
     referralRows: PostorderReferralRow[];
     visa: PostorderVisaResult;
+    /** WP-POSTORDER-PO-PAIRS：PostOrder 分頁 CSV 原文（`postorder.ts`
+     * `PostorderParseResult.postorderCsvText`，直接 spread 埋落嚟）——
+     * 冇（xlsm 路徑／冇上載 PostOrder CSV）就 `null`，`longtermPosts`
+     * 唔會補推額外 (盤,人) 組合，行為同之前一樣。 */
+    postorderCsvText?: string | null;
   };
 }
 
@@ -244,6 +249,63 @@ interface PostorderPlanResult {
   setVisa: SetVisaAction[];
   unresolvedSiteLabels: string[];
   unresolvedBrokerLabels: string[];
+}
+
+/** WP-POSTORDER-PO-PAIRS：由 DB `guards` 表建兩個 name set，俾
+ * `derivePostorderLongtermPostsFromPostorderGrid()` 呢個純函數用——
+ * `all`＝`name_zh`＋`name_aliases`（NFKC 正規化，任何安員，用嚟濾走
+ * 一般客戶／盤名尾段啱啱好似人名嗰啲行）；`longterm`＝`all` 嘅子集，
+ * 淨係 `employment_type` 已經係 `longterm_` 開頭嗰啲（幫罕見「外判價
+ * 係數字但已經係長工」個案，見 `postorder.ts` 檔頭註解）。 */
+export function buildKnownGuardNames(guardsRaw: Array<{ nameZh: string; nameAliases: string[]; employmentType: string }>): { all: Set<string>; longterm: Set<string> } {
+  const all = new Set<string>();
+  const longterm = new Set<string>();
+  for (const g of guardsRaw) {
+    for (const raw of [g.nameZh, ...g.nameAliases]) {
+      const norm = raw.normalize("NFKC").trim();
+      if (!norm) continue;
+      all.add(norm);
+      if (g.employmentType.startsWith("longterm_")) longterm.add(norm);
+    }
+  }
+  return { all, longterm };
+}
+
+/** WP-POSTORDER-PO-PAIRS 合併策略：「Roster／pairs 路徑（`primary`）有
+ * 嘅 pairs 優先用；再 union PostOrder 推出嘅 pairs（`secondary`），同一
+ * (盤,人) 組合只計一次，`cellCount` 取兩邊嘅較大值（唔加埋——兩個
+ * 來源數緊同一批日曆格，唔係互補嘅另一批格）」。用 `matchGuard()`／
+ * `matchSite()` 判斷「係咪同一個真實 (盤,人)」（唔淨係比較 raw 文字，
+ * 因為 Roster／PostOrder 兩個分頁嘅「客戶名稱」措辭可以有出入）；
+ * guard／site 都撞唔中嘅 cell 就跌返用 raw 文字做 key（保證唔會屈估
+ * 併埋兩個未必係同一個人／盤嘅組合）——呢啲 cell 之後入
+ * `buildPostorderActions()` 會各自再試一次 match，對唔到照樣落
+ * unresolved 清單，唔會因為呢度 key 撞唔中而漏咗。 */
+export function mergeLongtermPostCells(
+  primary: PostorderLongtermPostCell[],
+  secondary: PostorderLongtermPostCell[],
+  guardIndex: GuardMatchIndex,
+  siteCandidates: SiteCandidate[],
+): PostorderLongtermPostCell[] {
+  const keyFor = (cell: PostorderLongtermPostCell): string => {
+    const guardResult = matchGuard({ staffNoRaw: null, nameRaw: cell.guardNameRaw, telRaw: null }, guardIndex);
+    const siteId = matchSite(cell.siteLabelRaw, siteCandidates) ?? (cell.siteLabelFallbackRaw ? matchSite(cell.siteLabelFallbackRaw, siteCandidates) : null);
+    const guardKey = guardResult.guardId ?? `raw-name:${cell.guardNameRaw}`;
+    const siteKey = siteId ?? `raw-site:${cell.siteLabelRaw}`;
+    return `${guardKey}\u0000${siteKey}`;
+  };
+  const merged = new Map<string, PostorderLongtermPostCell>();
+  for (const cell of [...primary, ...secondary]) {
+    const key = keyFor(cell);
+    const cur = merged.get(key);
+    if (!cur) {
+      merged.set(key, { ...cell });
+      continue;
+    }
+    cur.cellCount = Math.max(cur.cellCount, cell.cellCount);
+    if (!cur.siteLabelFallbackRaw && cell.siteLabelFallbackRaw) cur.siteLabelFallbackRaw = cell.siteLabelFallbackRaw;
+  }
+  return [...merged.values()];
 }
 
 /** WP-LTSHIFT §19 交付 B：由 Postorder 解析結果計 4 類計劃——同 link/
@@ -664,8 +726,21 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     const guardByIdForPostorder = new Map(guardsRaw.map((g) => [g.id, { id: g.id, nameZh: g.nameZh, employmentType: g.employmentType, referralBrokerId: g.referralBrokerId }]));
     const siteCandidates: SiteCandidate[] = siteRows.map((s) => ({ id: s.id, canonicalName: s.canonicalName, aliases: s.aliases }));
     const existingLongtermPosts = new Set(existingLongtermPostRows.map((p) => `${p.guardId}\u0000${p.siteId}`));
+
+    // WP-POSTORDER-PO-PAIRS：正式站操作員傳唔到 Roster CSV／
+    // longterm-pairs.csv（上載瓶頸），但已經有完整嘅 PostOrder.csv——
+    // 單靠佢都補推到 (盤,人) 組合（見 postorder.ts 檔頭規則），同
+    // Roster/pairs 路徑現有嘅組合 union（cell_count 取大）先入
+    // buildPostorderActions()，令「淨係得截短 Roster／冇 Roster」嘅
+    // 上載重新計劃都可以得返齊全嘅 set_longterm_post。
+    const knownGuardNames = buildKnownGuardNames(guardsRaw);
+    const postorderDerivedPosts = opts.postorder.postorderCsvText
+      ? derivePostorderLongtermPostsFromPostorderCsv(opts.postorder.postorderCsvText, knownGuardNames.all, knownGuardNames.longterm)
+      : [];
+    const mergedLongtermPosts = mergeLongtermPostCells(opts.postorder.longtermPosts, postorderDerivedPosts, guardIndex, siteCandidates);
+
     const result = buildPostorderActions({
-      postorder: opts.postorder,
+      postorder: { ...opts.postorder, longtermPosts: mergedLongtermPosts },
       guardIndex,
       guardById: guardByIdForPostorder,
       siteCandidates,
@@ -681,12 +756,13 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     postorderSummary = {
       uploadId: opts.postorder.uploadId,
       fileName: opts.postorder.fileName,
-      longtermPostCellCount: opts.postorder.longtermPosts.reduce((s, p) => s + p.cellCount, 0),
+      longtermPostCellCount: mergedLongtermPosts.reduce((s, p) => s + p.cellCount, 0),
       referralRowCount: opts.postorder.referralRows.length,
       unresolvedSiteLabels: result.unresolvedSiteLabels,
       unresolvedBrokerLabels: result.unresolvedBrokerLabels,
       visaSupported: opts.postorder.visa.supported,
       visaNote: opts.postorder.visa.reason,
+      longtermPairsFromPostorderCount: postorderDerivedPosts.length,
     };
   }
 
@@ -791,7 +867,7 @@ export function formatPlanSummaryMd(plan: GuardFixPlan): string {
 - set_visa：${s.setVisa}（Postorder 冇顯式簽證標記，暫時一律 0——${plan.postorder?.visaNote ?? "冇上載 Postorder"}）
 
 ## Postorder 上載（WP-LTSHIFT §19）
-${plan.postorder ? `- 檔案：${plan.postorder.fileName}（upload ${plan.postorder.uploadId}）\n- 長工格總數：${plan.postorder.longtermPostCellCount}\n- 介紹費行數：${plan.postorder.referralRowCount}\n- 對唔到嘅盤名：${plan.postorder.unresolvedSiteLabels.join("、") || "（冇）"}\n- 對唔到嘅雞頭稱呼：${plan.postorder.unresolvedBrokerLabels.join("、") || "（冇）"}` : "（呢次冇上載 Postorder，set_longterm/set_longterm_post/set_referral/set_visa 一律 0 項）"}
+${plan.postorder ? `- 檔案：${plan.postorder.fileName}（upload ${plan.postorder.uploadId}）\n- 長工格總數：${plan.postorder.longtermPostCellCount}\n- 介紹費行數：${plan.postorder.referralRowCount}\n- 單靠 PostOrder CSV 補推嘅 (盤,人) 組合數（WP-POSTORDER-PO-PAIRS）：${plan.postorder.longtermPairsFromPostorderCount}\n- 對唔到嘅盤名：${plan.postorder.unresolvedSiteLabels.join("、") || "（冇）"}\n- 對唔到嘅雞頭稱呼：${plan.postorder.unresolvedBrokerLabels.join("、") || "（冇）"}` : "（呢次冇上載 Postorder，set_longterm/set_longterm_post/set_referral/set_visa 一律 0 項）"}
 
 ## needs_hr（盤＋格數，U Team 名單／核對表都搵唔到，要 HR 補資料）
 ${fmtSiteBreakdown(cellsBySiteFor(plan.actions.createMinimal))}

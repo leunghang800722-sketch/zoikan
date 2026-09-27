@@ -109,6 +109,12 @@ interface PostorderUploadDTO {
     roster_day_block_width: number | null;
     roster_first_day_col: number | null;
     parse_error: string | null;
+    // WP-POSTORDER-PO-PAIRS（老闆 2026-09-27 再緊急）：CSV 路徑有
+    // `postorderCsvText`，上載嗰刻順手計「單靠 PostOrder 推到幾多個
+    // (盤,人) 組合」提示——xlsm 路徑冇獨立 CSV 原文，呢兩個欄一律唔存在
+    // （已知差異，見底下 §3 test）。
+    longterm_pairs_from_postorder?: number;
+    longterm_cells_from_postorder?: number;
   } | null;
 }
 
@@ -134,7 +140,7 @@ describe("WP-POSTORDER-CSV：POST /api/guard-fix/postorder CSV 路徑", () => {
     expect(res.status).toBe(400);
   });
 
-  it("§3 兩個 CSV 上載嘅 parse_summary 同 xlsm 上載一致（除咗 rate 冇公式呢個已知差異，唔影響 summary）", async () => {
+  it("§3 兩個 CSV 上載嘅 parse_summary 同 xlsm 上載一致（除咗 rate 冇公式、同 WP-POSTORDER-PO-PAIRS 新加嘅 longterm_pairs_from_postorder／longterm_cells_from_postorder 兩個已知差異，唔影響其他 summary 欄）", async () => {
     const { wb, buffer } = await buildPostorderWorkbook();
 
     const xlsmRes = await uploadPostorder(reqMultipartXlsm("http://test.local/api/guard-fix/postorder", ownerCookie, buffer, "2026-08-01"));
@@ -148,7 +154,12 @@ describe("WP-POSTORDER-CSV：POST /api/guard-fix/postorder CSV 路徑", () => {
     const csvBody = (await csvRes.json()) as { upload: PostorderUploadDTO };
 
     expect(csvBody.upload.parse_summary?.parse_error).toBeNull();
-    expect(csvBody.upload.parse_summary).toEqual(xlsmBody.upload.parse_summary);
+    // WP-POSTORDER-PO-PAIRS：CSV 路徑有獨立 PostOrder CSV 原文，會多出
+    // `longterm_pairs_from_postorder`／`longterm_cells_from_postorder`
+    // 呢兩個欄（xlsm 路徑冇——見上面 PostorderUploadDTO 註解），去咗先比
+    // 其餘欄一致。
+    const { longterm_pairs_from_postorder: _p, longterm_cells_from_postorder: _c, ...csvSummaryRest } = csvBody.upload.parse_summary ?? {};
+    expect(csvSummaryRest).toEqual(xlsmBody.upload.parse_summary);
 
     // 兩個 CSV bytes 各自存低，fileBytes 都有值（佔位，NOT NULL）。
     const row = await prisma.postorderUpload.findUnique({ where: { id: csvBody.upload.id } });

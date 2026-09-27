@@ -123,6 +123,7 @@ describe("WP-LTSHIFT postorder parser（合成 workbook）", () => {
       rosterDayBlockWidth: 7,
       rosterFirstDayCol: 8,
       rosterParseError: null,
+      postorderCsvText: null,
     });
     const json = JSON.stringify(summary);
     expect(json).not.toMatch(/甲蟲蟲|乙屎蟲|丙金蟲/);

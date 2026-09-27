@@ -761,6 +761,93 @@ referral_broker_id` 一直係 null，8 月長工介紹費計 0。
     `brokers`/`sites` 早已經有真實資料，join 會撞中，**呢個落差唔會
     喺正式站出現**。
 
+### A4. WP-POSTORDER-PO-PAIRS（老闆 2026-09-27 再緊急，Sonnet 5 執行，
+branch `wp-postorder-po-pairs`）：單靠 PostOrder.csv 都推到長工組合
+
+**問題**：正式站操作員連 A2／A3 提到嘅精簡路徑都傳唔到——完整 Roster
+CSV 匯出（760KB）持續 503，A3 加嘅 `longterm-pairs.csv`（~3KB）都因為
+上載工具本身嘅瓶頸傳唔到。但正式站**已經有**一份完整、冇截短嘅
+`PostOrder.csv`（`PostOrder` 分頁匯出，815 行；`data/2026-09/
+postorder-csv/PostOrder.csv` 係同一份本機樣本）。目標：**單靠**呢份
+PostOrder.csv（唔靠 Roster／longterm-pairs.csv）都推到（盤,人）長工
+組合出嚟，等系統可以喺淨係得（截短嘅）Roster＋完整 PostOrder 呢種
+上載組合下，重新「計算修復計劃」都攞到接近齊全嘅 `set_longterm_post`。
+
+**實測規則**（`data/2026-09/postorder-csv/PostOrder.csv`）：PostOrder
+分頁表頭第 7 行「客戶名稱,Customer Code,物業名稱,更份,上單價,外判價,
+時間,1-8月,…,31-8月,Total Shift」；長工行嘅「客戶名稱」尾段夾埋人名，
+特徵：(a) 「外判價」＝`#REF!`（連去外部長工 roster 檔，Google Sheets
+匯出計唔到，剩低錯誤字面）——58 行、56 組、Total Shift 合計 1,250；
+(b) 罕見：「外判價」係數字（例如 545）但「客戶名稱」都係「盤名 人名」
+形狀；(c) 「外判價」＝`#REF!` 但 Total Shift＝0（Roster 表其實有格，
+例如 23 格）。規則：「客戶名稱」尾 token 係一個系統已知安員姓名
+（`guards.name_zh` 或 `name_aliases`，NFKC 正規化）**且**（外判價＝
+`#REF!` **或** 該安員 `employment_type` 已經係 `longterm_` 開頭）→
+呢一行就係「呢個安員自己嘅崗位」。
+
+**實現**：
+- `src/lib/guard-fix/postorder.ts` 加兩個純函數：
+  `derivePostorderLongtermPostsFromPostorderGrid(grid, knownNames,
+  longtermEmploymentNames?)`／`derivePostorderLongtermPostsFromPostorderCsv
+  (csvText, knownNames, longtermEmploymentNames?)`——逐行掃 PostOrder
+  grid，「長工雞頭費」行（已經由 `parsePostorderReferralRowsFromGrid()`
+  處理）唔會重複計；`siteLabelRaw`＝「客戶名稱」剝走尾段人名之後
+  trim，`siteLabelFallbackRaw`＝「物業名稱」，`cellCount`＝「Total
+  Shift」（col AM/39，讀唔到／0 都保留呢個組合，對應 (c) 個案）。
+  `knownNames`（任何已知安員姓名，濾走一般客戶／盤名尾段啱啱好似人名
+  嗰啲行）／`longtermEmploymentNames`（`knownNames` 嘅子集，`employment_
+  type` 已經係 `longterm_` 開頭，幫 (b) 嗰種罕見行——`#REF!` 嗰行唔使
+  呢個額外條件）由 caller 由 DB `guards` 表建，呢個檔本身冇 DB
+  依賴。`PostorderParseResult` 加 `postorderCsvText`（PostOrder 分頁
+  CSV 原文，xlsm 路徑冇獨立 CSV 原文一律 `null`）俾 `plan.ts` 用。
+- `src/lib/guard-fix/plan.ts` 加 `buildKnownGuardNames(guardsRaw)`
+  （由 `name_zh`＋`name_aliases` 建 `all`／`longterm` 兩個 name
+  set）＋`mergeLongtermPostCells(primary, secondary, guardIndex,
+  siteCandidates)`——合併策略：「Roster/pairs 路徑（`primary`）有嘅
+  pairs 優先；再 union PostOrder 推出嘅 pairs（`secondary`），同一
+  (盤,人) 組合只計一次，`cellCount` 取較大值（唔加埋，兩個來源數緊
+  同一批日曆格）」，用 `matchGuard()`／`matchSite()` 判斷「係咪同一個
+  真實 (盤,人)」（唔淨係比較 raw 文字，因為 Roster／PostOrder 兩個
+  分頁嘅「客戶名稱」措辭可以有出入），撞唔中就跌返用 raw 文字做
+  key（保證唔會屈估併埋兩個未必係同一個人／盤嘅組合）。
+  `buildGuardFixPlan()` 有 `opts.postorder` 就自動做呢個合併，先傳
+  俾 `buildPostorderActions()`——冧埋 Roster/pairs 現有組合＋PostOrder
+  補推組合。`GuardFixPlan.postorder` 加
+  `longtermPairsFromPostorderCount`（單靠 PostOrder 補推咗幾多個組合，
+  純透明度用途，已經計入 `longtermPostCellCount`）。
+- `POST /api/guard-fix/postorder`（`src/app/api/guard-fix/postorder/
+  route.ts`）加第四條路徑：multipart 淨係帶 `postorder_csv`（冇
+  `file`／`roster_csv`／`longterm_pairs_csv`）——`missingSheets` 記低
+  `Roster`（tolerable，唔算上載失敗）。呢個 route 本身唔推(盤,人)
+  組合（要 DB 安員名，`parseSummary` 淨係摘要用途，唔存逐行 PII）——
+  上載嗰刻順手用 DB 安員名（`countPostorderDerivedPairs()`）計「單靠
+  PostOrder 推到幾多組合／格」，加 `longterm_pairs_from_postorder`／
+  `longterm_cells_from_postorder` 兩個欄俾操作員睇提示；真正合併入
+  `set_longterm_post` 喺「計算修復計劃」（`buildGuardFixPlan()`）先計。
+  三個舊路徑（xlsm／roster+postorder CSV／longterm-pairs CSV）都冇
+  `postorderCsvBytes` → `countPostorderDerivedPairs()` 傳 `null` 就
+  唔計，`parseSummary` 冇呢兩個新欄（向下相容，見
+  `tests/wp-postorder-csv-upload-route.test.ts` §3 更新）。
+- 頁面 `/guard-fix`：精簡長工組合 CSV 上載區加「淨係上載 PostOrder.csv
+  都得」提示——`longterm_pairs_csv` 冧做可選（`pairsCsvFile` 冇揀都
+  照樣可以撳掣，淨係揀咗 `postorder_csv`），掣文字／上載後 notice
+  相應分支（有 pairs CSV 就照舊顯示長工格；淨係 PostOrder.csv 就顯示
+  「單靠佢推到 N 個組合、M 格——實際套用數以計算修復計劃為準」）；
+  計劃摘要卡加「其中 N 個組合單靠 PostOrder.csv 補推」提示。
+
+**真檔驗證**（`data/2026-09/postorder-csv/PostOrder.csv`，
+gitignored）：knownNames 由 `longterm-pairs.csv`（Roster 真值：60
+組／1,295 格）嘅 `guard_name` 攞——單靠 PostOrder.csv 推到 **59
+組／1,270 格**，逐 (盤,人) key 撞中真值 **58 組**（1 組 raw 文字
+唔同、1 組 Total Shift 落差歸類做「唔一致」）。差落喺：(1) 兩組
+「OT」（泛用代號，1 格各）PostOrder 冇對應行；(2) 一組 `#REF!` 但
+Total Shift＝0（真值 23 格）——`cellCount` 老實答 0（唔會屈估用
+Roster 嘅 23），同 postorder.ts 檔頭規則一致。呢個落差同 docs/api.md
+A 段落已經記錄嘅「matchSite 剩低 2 格 OT 落差」屬同一類已知限制，向來
+留返人手覆核，唔係規則錯。測試：`tests/wp-postorder-po-pairs.test.ts`
+（合成單元測試 13 條＋route 整合測試 2 條＋真檔 skipIf 2 條，
+`describe.skipIf` 冇 `data/` 嗰兩個檔嘅環境自動 skip）。
+
 ### B. guard-fix 加四類計劃
 `src/lib/guard-fix/types.ts` 新增 `SetLongtermAction`／
 `SetLongtermPostAction`／`SetReferralAction`／`SetVisaAction`；
