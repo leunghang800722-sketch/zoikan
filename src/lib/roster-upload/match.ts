@@ -31,7 +31,7 @@ export interface SiteCandidate {
  * Postorder 逐格「客戶名稱」有時空白／括號寫法同 `sites.canonical_
  * name`／`aliases` 唔完全一樣），唔改「對唔到就 null，唔准估」原則
  * （仍然要正規化之後完全相等先算撞中，唔係 substring／fuzzy）。 */
-function normalizeSiteLabel(raw: string): string {
+export function normalizeSiteLabel(raw: string): string {
   return raw
     .normalize("NFKC")
     .replace(/[（）]/g, (c) => (c === "（" ? "(" : ")"))

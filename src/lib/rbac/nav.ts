@@ -112,6 +112,9 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
     push("/reports/gross-margin", "毛利即時表", "毛利即時表");
     push("/reports/monthly-close", "月結工作台", "月結總表");
     push("/reports/payroll", "糧明細", "糧明細");
+    // WP-ONE-CLICK：「一鍵全月結算」——老闆／會計全開，主管淨係 view
+    // （grants 已經反映呢個分別，push() 唔使再判斷 baseRole）。
+    push("/month-close", "一鍵結算", "一鍵結算");
   }
   push("/reports/shortfall", "尚欠總覽", "尚欠總覽");
   push("/users", "用戶管理", "用戶管理");
@@ -150,7 +153,7 @@ const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
   { title: "", hrefs: ["/"] },
   { title: "排更", hrefs: ["/roster", "/roster-uploads", "/guard-fix", "/quotas", "/approvals"] },
   { title: "主檔", hrefs: ["/sites", "/guards", "/brokers", "/rate-cards"] },
-  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall"] },
+  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall", "/month-close"] },
   { title: "系統", hrefs: ["/users", "/roles", "/audit-log", "/feedback"] },
 ];
 

@@ -36,13 +36,14 @@ bump；`requireSession()`（`src/lib/rbac/requirePermission.ts`）每個
 request 都同 DB 現值核對一次（一條 `SELECT token_version, status`），
 唔啱就當未登入（401）。
 
-## RBAC 矩陣（25 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII/WP-ROSTER-UPLOAD/WP-GUARD-FIX-UI 加）
+## RBAC 矩陣（26 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII/WP-ROSTER-UPLOAD/WP-GUARD-FIX-UI/WP-ONE-CLICK 加）
 
 單一事實來源：`src/lib/rbac/matrix.ts`。由舊版 10 module 拆細做 19 個，
 P3 加咗`個人資料`、WP-AI1 加咗`助手`、WP-PII（老闆 2026-09-17 拍板）加咗
 `安員個人資料`／`安員銀行資料`，WP-ROSTER-UPLOAD（老闆 2026-09-21/23
 拍板）加咗`更表上載`，WP-GUARD-FIX-UI（老闆 2026-09-25 要求）加咗
-`安員配對修復`，而家 25 個，逐個對應《設計文件》§5.1
+`安員配對修復`，WP-ONE-CLICK（老闆 2026-09-26「一鍵全月結算」）加咗
+`一鍵結算`，而家 26 個，逐個對應《設計文件》§5.1
 表入面唔同粒度嘅行（詳細逐格對照見 README-P1.md「RBAC：module ×
 action 矩陣」一節）：
 
@@ -62,7 +63,11 @@ action 矩陣」一節）：
 雞頭／安員硬性禁止）／**`安員配對修復`**（WP-GUARD-FIX-UI，管 U Team
 名單上載／計劃／套用——會批量建人、睇 U Team 名單身份證，**淨係老闆**，
 主管／會計／雞頭／安員硬性禁止，見
-[「未配對安員修復」](#未配對安員修復wp-guard-fix-ui)）。
+[「未配對安員修復」](#未配對安員修復wp-guard-fix-ui)）／**`一鍵結算`**
+（WP-ONE-CLICK，管「一鍵全月結算」job——老闆／會計 G，**主管淨係
+view**（睇進度／報告／歷史 runs，唔可以撳一鍵/重新執行），雞頭／安員
+硬性禁止，見
+[「一鍵全月結算」](#一鍵全月結算wp-one-click)）。
 
 **自訂角色（Opus 驗收殘留2）**：`roles.base_role`——複製一個出廠角色
 時寫死（`POST /api/roles`），**唔可以再改**；硬性 deny 矩陣查詢一律用
@@ -1269,3 +1274,196 @@ Terminal 步驟）**：
 測試：`tests/diagnostics-month-route.test.ts`——老闆 200 有齊 key／逐段
 快樂路徑金額；主管／會計／雞頭 403；冇 month 400；PII 掃描（response
 JSON stringify 對 dev DB 全部 guard 姓名/電話/身份證掃描為 0）。
+
+## 一鍵全月結算（WP-ONE-CLICK）
+
+老闆 2026-09-26 原話：「只要上載更表，按一鍵計算就幫我解決晒所有問題，
+準確計算出當月所有糧及總報表」（P2 文件 §20）。Phase 1 目標：`month_
+close_runs` job 串連現有 lib（**唔重寫已有邏輯**），由上載更表到出報告
+一次過，可重跑、冪等、每步檢查點。長工月薪糧（WP-LTPAY）留 Phase 2。
+
+### 資料表 `month_close_runs`
+
+`id`／`month`／`status`（`running`／`done`／`failed`——同 `guard_fix_
+runs`／`reconcile_all_runs` 一致慣例，**冇** `stalled` 呢個 DB 值：一個
+真正卡死嘅 process 冇機會自己將狀態改做 stalled，「stalled」係顯示層
+computed 判斷，見底下）／`started_by_id`／`started_at`／`finished_at`／
+`apply_started_at`（呢次「認領」開始執行嘅時間，卡死判斷用）／
+`current_step`／`steps_json`（逐步陣列）／`report_json`／
+`error_message`。`ai.month_close_runs` 冇 view（唔開俾 AI 助手），
+`ai.audit_log` WHERE NOT IN 清單加咗呢個 table（migration
+`20260927150000_wp_one_click_month_close_runs`）。
+
+`monthCloseRunStalled(run, now)`（`src/lib/month-close/one-click.ts`）：
+`status==='running'` 且 `apply_started_at` 超過 15 分鐘 = 卡死；頁面／
+`GET` response 用呢個 helper 算出嚟顯示「卡住」，唔存 DB。
+`monthCloseRunRerunAllowed()`：`failed` 隨時得；`running` 淨係卡死先得；
+`done` 唔使（要開新 run）。
+
+### Job `runOneClickMonthClose(runId, month, actorUserId, ip)`
+
+`src/lib/month-close/one-click.ts`。9 步，每步完成／失敗即刻寫返
+`steps_json`（`StepRunner` class），一步拋錯就成個 run 標 `failed`（其餘
+未行嘅步保留 `pending`，可以重新執行由頭嚟過——因為每步本身冪等，唔會
+重複計）：
+
+- **step0 `precheck`**：(1) 上月（如果有 `shift_records`）未鎖定——寫入
+  `needsHuman`，`runOneClickMonthClose()` 睇到呢句就即刻停低（`skipRest()`
+  將之後全部步驟標 `skipped`，run 標 `failed`）。(2) 本月每個有上載嘅
+  （盤,更種）組合冇本月生效 `rate_cards`（`clientRate` 非空、`shiftTypeId`
+  等於呢個更種或者 null）→ 搵嗰個（盤,更種）**最近一張 `broker_id`／
+  `guard_id` 皆 null、`client_rate`／`guard_wage` 都有值**嘅舊卡，複製一張
+  新卡（`effective_from`=本月 1 日、`note`="一鍵沿用（沿用 YYYY-MM-DD
+  生效卡）"、`source`="one_click_carryover"，audit `rate_cards` create）；
+  搵唔到就 `needsHuman`（唔准估）。(3) U Team 名單 >45 日舊 → warning；
+  未上載過 → warning。(4) 長工本月有上載行但冇生效崗位 → warning（純
+  數目，step3 會用 ≥50% 推算，唔係要人決定）。
+- **step1 `parse_health`**：逐 active 上載本月格數 vs 上月同盤格數差
+  >30% → warning；`site_id=null` 嘅上載 → 自動建盤（`billing_model=
+  per_shift`、`client_name`＝檔內盤名，**冇「待核」enum 值可用**——
+  `SiteStatus` 得 `active`／`paused`／`ended`，用 `active`＋warning 文字
+  註明「待核」代替，見「已知落差」）→ `assignRosterUploadSite()`＋
+  `reparseRosterUpload()`（同 PATCH route 一致次序）；失敗（例如壞檔）
+  → `needsHuman`，唔停成個 run。
+- **step2 `guard_fix`**：`buildGuardFixPlan()`／`applyGuardFixPlan()`／
+  `reparseAllActiveUploads()`（`src/lib/guard-fix/*`，同 `POST /api/
+  guard-fix/plan`＋`.../runs/:id/apply` 一致邏輯）循環最多 3 輪直至冇
+  新（可套用）動作；`needsBoss` 逐條攞 `identities[].cells`（盤名＋格
+  數，**冇姓名/工號**）做 `needsHuman`。未上載 U Team 名單 → warning，
+  略過（唔會令整個 run 失敗）。
+- **step3 `longterm_settlement`**：全部 active/confirmed 上載
+  `recomputeSettlement()`（`src/lib/roster-upload/settlement-resync.ts`）。
+- **step4 `reconcile_apply`**：`runReconcileAllForMonth()`（`src/lib/
+  roster-upload/reconcile-all.ts`，已經含 reprice＋全部 `roster_only`／
+  `settlement_diff` 套用）。
+- **step5 `pricing_check`**：`buildUnpricedSummary()`（`src/lib/
+  pricing/unpriced.ts`）——首 30 組未定價寫 `needsHuman`（盤／雞頭／更種／
+  數目，冇姓名）。
+- **step6 `compute`**：`recomputeReferralFees()`（月份 ≥2026-08 先自動
+  重算，之前月份改用 `computeReferralFeesForMonth()` 讀值，唔覆蓋人手
+  輸入）、`buildMonthlyClose()`、`buildGrossMargin()`、
+  `buildPayrollTotals()`、`buildPayrollSourceSummary()`。長工月薪糧
+  （WP-LTPAY）未做，`report_json.longterm_payroll_note` 明文標示
+  「長工糧未計（Phase 2）」。
+- **step7 `postorder_compare`**（可選）：本月有 Postorder 上載先做。
+  介紹費：`parsePostorderUploadRow().referralRows[].excelAmount`
+  加總 vs 系統介紹費總額，出差額；**逐雞頭付款總表比對冇做**——現有
+  `src/lib/guard-fix/postorder.ts` 淨係解析長工崗位格／介紹費行／簽證，
+  冇解析「雞頭總更數/付款」欄位，任務書明文「解析唔到嘅項目寫『總表
+  冇提供』，唔准估」，一律寫呢句，冇自己加新解析邏輯（避免重寫已有
+  邏輯）。冇上載 Postorder 就成個 step 輸出 `{uploaded:false}`。
+- **step8 `report`**：匯總 `report_json`（`MonthCloseReport`，`src/lib/
+  month-close/types.ts`）——總收入/成本/毛利、逐雞頭應付、逐盤收入、
+  介紹費、對照（如有）、未定價、`needs_human`（全部步驟嘅
+  needsHuman／warnings 加埋前綴匯總）、鎖月前置（`checkRosterUpload
+  Coverage()` + 本月鎖定狀態，`ready_to_lock` 判斷）。
+
+### API
+
+- `POST /api/month-close/one-click { month }`——`一鍵結算:create`。同
+  `guard-fix/apply`／`reconcile-all` 一致 pattern：advisory lock
+  （`ONE_CLICK_ADVISORY_LOCK_KEY`）認領，即刻 202 返，`after()` 背景
+  執行；測試環境冇 `after()` context 就同步做晒先返（response 帶實際
+  完成狀態）。同一時間淨係一個 run（唔限月份）。
+- `GET /api/month-close/one-click?month=`——`一鍵結算:view`。最近 20
+  個 run（含 `steps`／`report`／`stalled` 判斷）。
+- `POST /api/month-close/one-click/:id/rerun`——`一鍵結算:update`。
+  `failed` 隨時、`running` 淨係卡死（>15 分鐘）先可以，其餘 409；認領
+  邏輯同 POST 一致（advisory lock＋條件式 `updateMany`）。
+
+權限：`一鍵結算` module——老闆／會計 `view`／`create`／`update` 全開，
+**主管淨係 `view`**（任務書明文「主管可 view 報告」，撳一鍵/重新執行
+一律 403），雞頭／安員硬性拒（`src/lib/rbac/matrix.ts`，`sync-
+permissions` 自動識新 module 補權限行，唔使另外 seed）。
+
+### 頁面 `/month-close`
+
+`src/app/(app)/month-close/page.tsx`（nav「財務」組，
+`src/lib/rbac/nav.ts`）：① 月份（預設上月）；② 上載區三個入口（更表
+xlsx 多檔迴圈逐個 POST `/api/roster-uploads`、U Team 名單 POST
+`/api/guard-fix/staff-list`、Postorder（可選）POST `/api/guard-fix/
+postorder`——直接叫現有 API，冇重新包一份上載邏輯）；③「一鍵結算」
+大掣；④ 逐步進度卡（poll `GET`，5 秒一次，最多 20 分鐘）；⑤ 報告
+（總收入/成本/毛利、逐雞頭應付表、逐盤收入表、介紹費、未定價、
+Postorder 對照、要人決定清單）；⑥「鎖定本月」（`lock_precondition.
+ready_to_lock` 先亮，撳咗會先 `POST /api/month-closes/{month}/generate`
+攞 `month_close.id` 再 `POST .../lock`，跟現有月結工作台頁一致做法）；
+⑦ 歷史 runs 表（卡住／失敗有「重新執行」）。手機 375px：卡片直排，
+`<input type=month>`／`<input type=file multiple>`原生控制項。
+
+### Opus 5.5 驗收修正（2026-09-27，同 branch）
+
+上面 step0–8 描述有以下改動（以呢段為準）：
+
+- **step0**：(0) **本月已鎖** → 即刻停低（run failed「本月已鎖定」），
+  唔寫任何嘢；(1) 上月未鎖 → **即刻停低、唔再做卡沿用**（原版照寫卡先
+  停）；停低條件用結構化 `halt`，唔再靠 needsHuman 字串 `includes("未鎖定")`。
+  (2) 卡沿用收窄做 `findCarryoverCard()`：淨係「上月通用逐更卡」——同盤
+  同更種、`broker_id`／`guard_id` 皆 null、`billing_model` null 或
+  `per_shift`（**唔沿用 `special` 特殊卡**，例：7 月啟航1331 Event Guard
+  11,700 嗰張；唔沿用月費卡）、`effective_from` 早過本月而且
+  `effective_to` 啱啱係上月最後一日（唔沿用未來卡、唔沿用早幾個月已完嘅
+  過期卡）；LINK（`guards_paid_by_client`）盤唔查卡唔沿用。沿用咗嘅卡
+  寫入 **needsHuman**「【已自動沿用，請覆核】…收客／工資…」（報告「要人
+  決定」會列出），唔再淨係 warning。現行資料慣例（卡一律 open-ended）
+  下呢個規則 8 月實測 0 張沿用。(3)「完全未設更種」改為逐格實際歸屬盤
+  （`resolved_site_id`）查——原版逐上載盤查，一檔多子盤母盤（城巴車廠）
+  誤報。
+- **step1**：`parse_failed` 上載唔建盤（原版會攞檔名建盤），列
+  needsHuman；`site_id=null` 先 `reparseRosterUpload({autoResolveSite:true})`
+  用而家嘅盤主檔重新配對一次，真係對唔到先建盤；同一 run 用
+  `normalizeSiteLabel()`（NFKC＋全形括號）再去埋空白做 key 去重，亦會
+  對現有盤 canonical／aliases 做同一寬鬆比對——唔會因為寫法唔同建兩個盤；
+  建咗嘅盤寫 needsHuman「【待核盤】…」。
+- **step2**：同「安員配對修復」頁共用「套用緊」判斷——喺
+  `GUARD_FIX_ADVISORY_LOCK_KEY` 入面檢查冇第二個未卡死 `applying` run，
+  以 `applying` 狀態建 run 先套用（頁面「計算計劃」／「套用」會 409）；
+  撞正人手套用緊或者套用失敗 → **成個 run failed**（原版當 warning 繼續
+  計糧）；最多 5 輪（dev 8 月第 3 輪仍有 3 個動作、第 4 輪先 0）。
+- **step4**：同更表上載頁「重新對數全月」共用 `reconcile_all_runs` 認領
+  （`RECONCILE_ALL_ADVISORY_LOCK_KEY`＋「冇第二個未卡死 running」），
+  人手嗰粒掣喺 job 做緊呢步時 409；job 撞正人手做緊 → run failed、訊息
+  叫人等佢完先「重新執行」。
+- **step6**：總收入＝月結總表（主表＋月結以外）；**成本／毛利＝毛利即時
+  表 `totals`**（新增 `totals.margin_revenue`）——原版「月結收入 − 毛利」
+  倒數成本，混入月結以外收入，得出一個任何頁面都冇嘅數。
+- **step8**：`lock_precondition.unpriced_count`；`ready_to_lock` 加埋
+  「未定價更＝0」（§20.3「前置全綠先亮」）。
+- **錯誤訊息**：`error_message`／step warnings 一律經
+  `safeErrorSummary()`（最後一行＋300 字上限），唔會寫入 Prisma query
+  dump；每次重新執行 steps 由頭開始（唔殘留上一次 skipped/failed）。
+- **報表 lib 順手修（影響一鍵報告準確性）**：`gross-margin.ts` 介紹費／
+  其他 special_items、`monthly-close.ts`、`reconciliation.ts` 讀
+  special_items 加 `voidedAt: null`——`recomputeReferralFees()` 每次重算
+  都 void 舊行再建新行，原版毛利每重算一次就多扣一次介紹費（dev 實測
+  一鍵跑兩次毛利 524,011 → 463,651 → 403,031）。
+- **頁面**：Postorder 入口改做可揀多檔、按副檔名／檔名分流到現有四個
+  入口（原版一律用 `file` 欄位，正式站唯一可用嘅 CSV 會俾 route 當 xlsm
+  拒絕）；job 執行緊時上載掣 disable；鎖月區顯示未定價原因。
+
+### 已知落差／未做（老實列出）
+
+1. **Site「待核」狀態**：`SiteStatus` enum 冇「待核／pending_review」
+   值，step1 自動建盤淨係用 `active`＋warning 文字標「待核」，UI 冇
+   額外「待核」badge——如果要真正嘅待核狀態要加 migration 擴 enum，
+   Phase 1 冇做（避免掂 `SiteStatus` 呢個好多地方用緊嘅 enum）。
+2. **step7 逐雞頭付款總表比對**：完全冇做（見上面 step7 說明），淨係
+   做到介紹費一項比對。
+3. **UI 未做「多檔拖放」**：頁面用原生 `<input type=file multiple>`
+   逐個 loop 呼叫上載 API，**冇重用** `roster-uploads` 頁面自己嘅拖放
+   隊列元件（`upload-queue.ts`／`UploadQueue.tsx` 呢類 client 元件同
+   `/month-close` 頁綁定緊嘅 state 唔一致，時間所限冇抽出共用），行為
+   一致（一樣係逐檔 `POST`），淨係手感冇拖放咁順。
+4. **step2/step4 冧咗現有 lib 嘅所有已知限制**——例如 guard-fix 嘅
+   「needs_boss 收斂可能要多過一輪」、reconcile-all 嘅「Postorder 上載
+   咗但未套用安員配對修復」warning，一鍵結算原樣轉發，冇加新緩解。
+5. **長工月薪糧（Phase 2 WP-LTPAY）**：完全未做，`report_json` 明文
+   標示，唔會靜靜當 0。
+6. **測試覆蓋**：integration test（`tests/month-close-one-click.test.ts`）
+   覆蓋 RBAC／step0 卡沿用／step0 上月鎖定閘／step1 格數差警告／step1
+   自動建盤／卡死重跑冪等判斷共 15 條；**冇**一個合成「36 檔規模」端到
+   端 integration test（guard-fix／reconcile-all 兩個 step 本身已經有
+   自己成套 test，呢度淨係驗證「串埋」冇拋錯），完整規模驗證留俾 dev
+   手動全流程（見 P2 文件 §20.6 執行紀錄）；Playwright e2e
+   （`tests/e2e/month-close-one-click.spec.ts`）覆蓋老闆上載合成 xlsx→
+   一鍵→睇進度→報告，雞頭 403 連 nav 都見唔到。

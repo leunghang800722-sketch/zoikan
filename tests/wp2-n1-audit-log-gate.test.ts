@@ -40,6 +40,15 @@ describe("WP2 N1：audit_log 側 channel（DTO + field-group gate）", () => {
   let ownerCookie: string;
   let supervisorCookie: string;
   let brokerACookie: string;
+  // WP-ONE-CLICK 補：audit_log 係 append-only（DB trigger 拒絕 DELETE），
+  // `clearAll()` 刪唔到，成個 test run 全部檔案嘅 rate_cards create audit
+  // 都會纍積喺同一張表——底下最後一個 test 之前淨係靠
+  // `findFirstOrThrow({tableName:"rate_cards",action:"create"})` 冇 order
+  // 冇 rowId，一旦第日有第二個 test（例如 one-click 一鍵結算嘅「卡沿用」
+  // 測試）都建低一條 clientRate 唔同嘅 rate_cards create audit，先執行
+  // 嗰個就會撞中呢度期望嘅 999——而家記低自己呢個 test 建嘅卡 id，查嗰陣
+  // 精準用 `rowId` 篩返自己嗰一條，唔靠「假設成張表淨係得自己一條」。
+  let createdRateCardId: string;
 
   beforeEach(async () => {
     await clearAll();
@@ -60,6 +69,7 @@ describe("WP2 N1：audit_log 側 channel（DTO + field-group gate）", () => {
       }),
     );
     expect(rcRes.status).toBe(201);
+    createdRateCardId = ((await rcRes.clone().json()) as { id: string }).id;
 
     const siteRes = await siteUpdate(req(`http://test.local/api/sites/${fx.site.id}`, ownerCookie, "PATCH", { monthly_fee: 88888 }), {
       params: Promise.resolve({ id: fx.site.id }),
@@ -112,7 +122,7 @@ describe("WP2 N1：audit_log 側 channel（DTO + field-group gate）", () => {
   });
 
   it("audit_log.before／after 喺 DB 入面本身已經係 DTO（snake_case，唔係原始 Prisma camelCase row）", async () => {
-    const row = await prisma.auditLog.findFirstOrThrow({ where: { tableName: "rate_cards", action: "create" } });
+    const row = await prisma.auditLog.findFirstOrThrow({ where: { tableName: "rate_cards", action: "create", rowId: createdRateCardId } });
     const after = row.after as Record<string, unknown>;
     expect(after.client_rate).toBe("999");
     expect(after.clientRate).toBeUndefined();
