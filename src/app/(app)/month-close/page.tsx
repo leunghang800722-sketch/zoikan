@@ -26,14 +26,14 @@ interface StepDTO {
 
 interface ReportDTO {
   month: string;
-  totals: { revenue: number; cost: number; gross_margin: number };
+  totals: { revenue: number; margin_revenue?: number; cost: number; gross_margin: number };
   payroll_by_broker: Array<{ broker_code: string; broker_name: string; shifts: number; amount: number }>;
   site_revenue: Array<{ site_id: string; site_name: string; shifts: number; revenue: number }>;
   referral_fee: { total: number; count: number };
   unpriced: { count: number; payout_count: number; client_count: number; no_settlement_count: number; ot_unpriced_count: number };
   postorder_compare: { uploaded: boolean; referral_excel_total: number | null; referral_system_total: number; referral_diff: number | null; note: string } | null;
   needs_human: string[];
-  lock_precondition: { current_month_already_locked: boolean; missing_upload_sites: string[]; unconfirmed_upload_sites: string[]; ready_to_lock: boolean };
+  lock_precondition: { current_month_already_locked: boolean; missing_upload_sites: string[]; unconfirmed_upload_sites: string[]; unpriced_count?: number; ready_to_lock: boolean };
   longterm_payroll_note: string;
 }
 
@@ -66,7 +66,7 @@ export default function MonthCloseOneClickPage() {
   const [busy, setBusy] = useState(false);
   const [rosterFiles, setRosterFiles] = useState<FileList | null>(null);
   const [staffListFile, setStaffListFile] = useState<File | null>(null);
-  const [postorderFile, setPostorderFile] = useState<File | null>(null);
+  const [postorderFiles, setPostorderFiles] = useState<File[]>([]);
   const pollingRef = useRef<string | null>(null);
 
   async function loadRuns() {
@@ -132,18 +132,29 @@ export default function MonthCloseOneClickPage() {
     setStaffListFile(null);
   }
 
+  // Opus 驗收：正式站操作員淨係上載得 CSV（讀唔到 .xlsm binary）——原版
+  // 一律用 `file` 欄位送，CSV 會俾 route 當 xlsm 拒絕（「唔係 xlsx/xlsm
+  // 檔案」）。而家按副檔名／檔名分流到 `POST /api/guard-fix/postorder`
+  // 現有嘅四個入口（xlsm／roster_csv＋postorder_csv／longterm_pairs_csv
+  // （＋postorder_csv）／淨 postorder_csv），同「安員配對修復」頁一致。
   async function uploadPostorder() {
-    if (!postorderFile) return;
+    if (postorderFiles.length === 0) return;
     setBusy(true);
     setError(null);
     const fd = new FormData();
-    fd.append("file", postorderFile);
+    for (const f of postorderFiles) {
+      const lower = f.name.toLowerCase();
+      if (!lower.endsWith(".csv")) fd.append("file", f);
+      else if (lower.includes("pair")) fd.append("longterm_pairs_csv", f);
+      else if (lower.includes("roster")) fd.append("roster_csv", f);
+      else fd.append("postorder_csv", f);
+    }
     fd.append("month", month);
     const res = await apiUpload(`/api/guard-fix/postorder`, fd);
     setBusy(false);
     if (!res.ok) setError(res.message);
     else setNotice("Postorder 總表已上載（可選對照用）");
-    setPostorderFile(null);
+    setPostorderFiles([]);
   }
 
   async function startOneClick() {
@@ -184,6 +195,9 @@ export default function MonthCloseOneClickPage() {
 
   const latestRun = runs[0] ?? null;
   const report = latestRun?.report ?? null;
+  // Opus 驗收：job 行緊嗰陣唔俾再上載（會開新版本／改名單，job 讀到一半
+  // 嘅資料），進度區有提示。
+  const jobRunning = !!latestRun && latestRun.status === "running" && !latestRun.stalled;
 
   return (
     <div className="flex flex-col gap-5">
@@ -200,25 +214,27 @@ export default function MonthCloseOneClickPage() {
 
       <section className="rounded-lg border border-zk-border bg-white p-4">
         <div className="mb-2 text-sm font-semibold text-zk-text">① 上載</div>
+        {jobRunning && <div className="mb-2 text-[12.5px] text-orange-700">一鍵結算執行緊——完成之前唔可以再上載</div>}
         <div className="flex flex-col gap-4">
           <div>
             <label className="block text-[12.5px] text-zk-muted">更表 xlsx（可以一次揀多檔，逐盤一檔）</label>
             <input type="file" multiple accept=".xlsx" data-testid="month-close-roster-file-input" onChange={(e) => setRosterFiles(e.target.files)} className="mt-1 text-sm" />
-            <Button className="mt-2" onClick={uploadRosters} disabled={busy || !rosterFiles || rosterFiles.length === 0}>
+            <Button className="mt-2" onClick={uploadRosters} disabled={busy || jobRunning || !rosterFiles || rosterFiles.length === 0}>
               上載更表（{rosterFiles?.length ?? 0} 檔）
             </Button>
           </div>
           <div>
             <label className="block text-[12.5px] text-zk-muted">U Team 名單（新散工建檔用）</label>
             <input type="file" accept=".xlsx" data-testid="month-close-staff-list-file-input" onChange={(e) => setStaffListFile(e.target.files?.[0] ?? null)} className="mt-1 text-sm" />
-            <Button className="mt-2" onClick={uploadStaffList} disabled={busy || !staffListFile}>
+            <Button className="mt-2" onClick={uploadStaffList} disabled={busy || jobRunning || !staffListFile}>
               上載名單
             </Button>
           </div>
           <div>
             <label className="block text-[12.5px] text-zk-muted">Postorder 總表（可選，只做過渡對照）</label>
-            <input type="file" accept=".xlsm,.xlsx,.csv" data-testid="month-close-postorder-file-input" onChange={(e) => setPostorderFile(e.target.files?.[0] ?? null)} className="mt-1 text-sm" />
-            <Button className="mt-2" onClick={uploadPostorder} disabled={busy || !postorderFile}>
+            <input type="file" multiple accept=".xlsm,.xlsx,.csv" data-testid="month-close-postorder-file-input" onChange={(e) => setPostorderFiles(Array.from(e.target.files ?? []))} className="mt-1 text-sm" />
+            <div className="mt-1 text-[11.5px] text-zk-faint">.xlsm 一個檔；或者 CSV：PostOrder.csv（可另加 longterm-pairs.csv 或 Roster.csv）</div>
+            <Button className="mt-2" onClick={uploadPostorder} disabled={busy || jobRunning || postorderFiles.length === 0}>
               上載總表
             </Button>
           </div>
@@ -286,11 +302,11 @@ export default function MonthCloseOneClickPage() {
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded border border-zk-border p-3">
-              <div className="text-[11.5px] text-zk-muted">總收入</div>
+              <div className="text-[11.5px] text-zk-muted">總收入（月結總表）</div>
               <div className="text-lg font-bold">{fmtMoney(report.totals.revenue)}</div>
             </div>
             <div className="rounded border border-zk-border p-3">
-              <div className="text-[11.5px] text-zk-muted">總成本</div>
+              <div className="text-[11.5px] text-zk-muted">總成本（毛利表）</div>
               <div className="text-lg font-bold">{fmtMoney(report.totals.cost)}</div>
             </div>
             <div className="rounded border border-zk-border p-3">
@@ -298,6 +314,9 @@ export default function MonthCloseOneClickPage() {
               <div className="text-lg font-bold">{fmtMoney(report.totals.gross_margin)}</div>
             </div>
           </div>
+          {report.totals.margin_revenue !== undefined && (
+            <div className="text-[11.5px] text-zk-faint">成本／毛利跟「毛利即時表」口徑（營業額 {fmtMoney(report.totals.margin_revenue)}，唔計月結以外收入）</div>
+          )}
           <Banner kind="info" message={report.longterm_payroll_note} />
 
           <div>
@@ -400,6 +419,7 @@ export default function MonthCloseOneClickPage() {
                 前置未齊，未可以鎖：
                 {report.lock_precondition.missing_upload_sites.length > 0 && <div>未上載：{report.lock_precondition.missing_upload_sites.join("、")}</div>}
                 {report.lock_precondition.unconfirmed_upload_sites.length > 0 && <div>未對數完成：{report.lock_precondition.unconfirmed_upload_sites.join("、")}</div>}
+                {(report.lock_precondition.unpriced_count ?? 0) > 0 && <div>仲有 {report.lock_precondition.unpriced_count} 更未定價（見上面「要人決定」）</div>}
               </div>
             )}
           </div>

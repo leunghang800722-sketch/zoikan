@@ -33,9 +33,11 @@ import { monthRange, monthLabel, n, round2 } from "@/lib/reports/money";
 import { monthStart as toMonthStart } from "@/lib/month-lock";
 import { checkRosterUploadCoverage } from "@/lib/roster-upload/lock-precondition";
 import { recomputeSettlement } from "@/lib/roster-upload/settlement-resync";
-import { runReconcileAllForMonth } from "@/lib/roster-upload/reconcile-all";
+import { runReconcileAllForMonth, RECONCILE_ALL_ADVISORY_LOCK_KEY, RECONCILE_ALL_STALE_MS } from "@/lib/roster-upload/reconcile-all";
 import { buildGuardFixPlan, summarizePlan } from "@/lib/guard-fix/plan";
-import { applyGuardFixPlan, reparseAllActiveUploads } from "@/lib/guard-fix/apply";
+import { applyGuardFixPlan, reparseAllActiveUploads, GUARD_FIX_ADVISORY_LOCK_KEY } from "@/lib/guard-fix/apply";
+import { APPLY_STALE_MS } from "@/lib/guard-fix/view";
+import { safeErrorSummary } from "@/lib/api/http";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
 import { parsePostorderUploadRow } from "@/lib/guard-fix/postorder";
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
@@ -49,6 +51,8 @@ import { STEP_KEYS, STEP_LABELS, emptySteps, type StepKey, type StepRecord, type
 
 export const ONE_CLICK_ADVISORY_LOCK_KEY = 7_710_270_927; // 自己一個 key，唔同 guard-fix(...925)／reconcile-all(...926)
 export const ONE_CLICK_STALE_MS = 15 * 60 * 1000;
+/** 安員修復最多循環幾輪（dev 8 月實測第 3 輪仲有 3 個動作、第 4 輪先 0）。 */
+const GUARD_FIX_MAX_ROUNDS = 5;
 
 export function monthCloseRunStalled(run: { status: string; applyStartedAt: Date | null }, now = new Date()): boolean {
   if (run.status !== "running") return false;
@@ -62,6 +66,15 @@ export function monthCloseRunRerunAllowed(run: { status: string; applyStartedAt:
   if (run.status === "failed") return true;
   if (run.status === "running") return monthCloseRunStalled(run, now);
   return false;
+}
+
+/** 寫入 `error_message`／step warnings 嘅錯誤訊息——自己 throw 嘅
+ * `Error`（中文說明句）原文保留；其他（Prisma／lib）錯誤一律經
+ * `safeErrorSummary()` 淨係攞最後一行＋長度上限，唔會將 query payload
+ * （可能有姓名／電話）寫落 DB 俾主管睇到。 */
+function jobErrorMessage(e: unknown): string {
+  if (e instanceof Error && e.constructor === Error) return (e.message.split("\n").pop() ?? "").slice(0, 300);
+  return safeErrorSummary(e);
 }
 
 /** 內部用嘅「全權限」session——一鍵結算 job 喺伺服器背景執行，數字本身
@@ -128,7 +141,7 @@ class StepRunner {
       return rec;
     } catch (e) {
       rec.status = "failed";
-      rec.warnings = [...rec.warnings, e instanceof Error ? e.message.slice(0, 500) : String(e).slice(0, 500)];
+      rec.warnings = [...rec.warnings, jobErrorMessage(e)];
       rec.finishedAt = new Date().toISOString();
       await this.persist(key);
       throw e;
@@ -162,11 +175,51 @@ class StepRunner {
 // ---------------------------------------------------------------------------
 // step0 前置檢查
 // ---------------------------------------------------------------------------
-export async function stepPrecheck(month: Date, actorUserId: string, ip: string | null) {
+/** Opus 驗收收窄嘅「卡沿用」規則——淨係沿用「上月通用逐更卡」：
+ *   - 同盤同更種、`broker_id`／`guard_id` 皆 null（唔沿用雞頭級／逐人卡，
+ *     例如 B07／長工日均卡）；
+ *   - `billing_model` 係 null 或 `per_shift`（唔沿用 `special` 特殊卡——
+ *     例如 7 月 Event Guard 一筆過收入卡——同 `monthly_fixed`／`admin_fee`
+ *     月費卡）；
+ *   - `client_rate`／`guard_wage` 都有值、未作廢；
+ *   - `effective_from` 早過本月、`effective_to` 啱啱係上月最後一日（即係
+ *     一張「上月仲生效、上月底先完」嘅卡）——唔沿用未來卡（會將下月價
+ *     倒灌返本月）、唔沿用早幾個月已經收咗嘅舊卡（過期卡）。
+ * LINK（guards_paid_by_client）盤喺 caller 已經略過。 */
+export async function findCarryoverCard(siteId: string, shiftTypeId: string, monthStartDate: Date) {
+  const prevMonthEnd = new Date(monthStartDate.getTime() - 24 * 60 * 60 * 1000);
+  return prisma.rateCard.findFirst({
+    where: {
+      siteId,
+      shiftTypeId,
+      brokerId: null,
+      guardId: null,
+      voidedAt: null,
+      clientRate: { not: null },
+      guardWage: { not: null },
+      OR: [{ billingModel: null }, { billingModel: "per_shift" }],
+      effectiveFrom: { lt: monthStartDate },
+      effectiveTo: prevMonthEnd,
+    },
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
+  });
+}
+
+export async function stepPrecheck(month: Date, actorUserId: string, ip: string | null): Promise<{ numbers: Record<string, unknown>; warnings: string[]; needsHuman: string[]; halt?: string }> {
   const { start, end } = monthRange(month);
   const numbers: Record<string, unknown> = {};
   const warnings: string[] = [];
   const needsHuman: string[] = [];
+
+  // (0) 本月已鎖——一鍵結算會寫卡／建盤／改安員／套用對數，鎖咗嘅月一律
+  // 唔郁（Opus 驗收：原版淨係靠 step4 `assertMonthNotLocked()` 擋，但
+  // step0–3 已經寫咗卡／建咗盤先至爆）。
+  const thisClose = await prisma.monthClose.findUnique({ where: { month: start } });
+  numbers.currentMonthLocked = !!thisClose?.lockedAt;
+  if (thisClose?.lockedAt) {
+    needsHuman.push(`本月（${monthLabel(start)}）已經鎖定，一鍵結算唔會再改任何資料——要改先由老闆解鎖`);
+    return { numbers, warnings, needsHuman, halt: "本月已鎖定，一鍵結算已停低（冇寫入任何資料）" };
+  }
 
   // (1) 上月已鎖——只喺上月「有出更」（有 shift_records）先強制。
   const prevMonth = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() - 1, 1));
@@ -179,13 +232,14 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   numbers.prevMonthLocked = prevLocked;
   if (prevHasData > 0 && !prevLocked) {
     needsHuman.push(`上月（${monthLabel(prevMonth)}）未鎖定，要先鎖定上月先可以一鍵結算本月`);
-    // 呢個係硬停條件，由 caller 睇 needsHuman 決定停唔停（見
-    // runOneClickMonthClose() PRECHECK_HALT 判斷）。
+    // 硬停：即刻返，唔好再落去做 (2) 卡沿用（Opus 驗收：原版照寫卡先停）。
+    return { numbers, warnings, needsHuman, halt: "上月未鎖定，一鍵結算已停低——請先鎖定上月" };
   }
 
   // (2) 本月每個有 active 上載嘅盤：有更種？有生效價卡？冇→自動沿用
-  // 最近一張同（盤,更種）舊卡（只限 client_rate／guard_wage 都有值嘅
-  // 舊卡），新卡 effective_from=本月 1 日，note「一鍵沿用」，audit。
+  // 「上月卡」（Opus 驗收收窄規則，見 `findCarryoverCard()`），新卡
+  // effective_from=本月 1 日，note「一鍵沿用」，audit，並寫入 needsHuman
+  // 俾人覆核（唔係淨係 warning）。
   const uploads = await prisma.rosterUpload.findMany({
     where: { month: start, status: { notIn: ["superseded", "voided"] } },
     select: { id: true, siteId: true, siteNameRaw: true },
@@ -199,8 +253,9 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
       })
     : [];
   const siteIds = [...new Set(combos.map((c) => c.resolvedSiteId).filter((v): v is string => !!v))];
-  const sites = siteIds.length ? await prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true } }) : [];
+  const sites = siteIds.length ? await prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true, guardsPaidByClient: true } }) : [];
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
+  const paidByClientSiteIds = new Set(sites.filter((s) => s.guardsPaidByClient).map((s) => s.id));
   const shiftTypeIds = [...new Set(combos.map((c) => c.shiftTypeId).filter((v): v is string => !!v))];
   const shiftTypes = shiftTypeIds.length ? await prisma.shiftType.findMany({ where: { id: { in: shiftTypeIds } }, select: { id: true, code: true } }) : [];
   const shiftTypeById = new Map(shiftTypes.map((s) => [s.id, s.code]));
@@ -213,6 +268,9 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     const shiftTypeId = combo.shiftTypeId!;
     const siteName = siteNameById.get(siteId) ?? siteId.slice(0, 8);
     const shiftTypeCode = shiftTypeById.get(shiftTypeId) ?? shiftTypeId.slice(0, 8);
+    // LINK（guards_paid_by_client）盤：客戶直接出糧、唔逐更計价，本身就唔
+    // 需要逐更卡（同 unpriced.ts 一致），唔查、唔沿用。
+    if (paidByClientSiteIds.has(siteId)) continue;
     const hasActiveCard = await prisma.rateCard.count({
       where: {
         siteId,
@@ -224,15 +282,10 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
       },
     });
     if (hasActiveCard > 0) continue;
-    // 冇生效卡——搵最近一張「呢個盤、呢個更種、client_rate／guard_wage
-    // 都有值」嘅盤級通用卡（唔限 broker/guard，用嚟沿用）。
-    const carryFrom = await prisma.rateCard.findFirst({
-      where: { siteId, shiftTypeId, brokerId: null, guardId: null, voidedAt: null, clientRate: { not: null }, guardWage: { not: null } },
-      orderBy: { effectiveFrom: "desc" },
-    });
+    const carryFrom = await findCarryoverCard(siteId, shiftTypeId, start);
     if (!carryFrom) {
       cardsMissingNoCarryover++;
-      needsHuman.push(`盤「${siteName}」更種「${shiftTypeCode}」冇生效價卡，亦搵唔到可以沿用嘅舊卡——要人手設卡`);
+      needsHuman.push(`盤「${siteName}」更種「${shiftTypeCode}」冇生效價卡，亦冇「上月通用逐更卡」可以沿用——要人手設卡`);
       continue;
     }
     const created = await prisma.rateCard.create({
@@ -255,21 +308,33 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     });
     await writeAudit({ actorUserId, tableName: "rate_cards", rowId: created.id, action: "create", after: created, ip });
     cardsCarriedOver++;
-    warnings.push(`盤「${siteName}」更種「${shiftTypeCode}」冇生效卡，已自動沿用 ${carryFrom.effectiveFrom.toISOString().slice(0, 10)} 生效卡（一鍵沿用，見 rate_cards audit）`);
+    needsHuman.push(
+      `【已自動沿用，請覆核】盤「${siteName}」更種「${shiftTypeCode}」冇本月卡，已複製上月通用卡（${carryFrom.effectiveFrom.toISOString().slice(0, 10)}～${carryFrom.effectiveTo?.toISOString().slice(0, 10)}，收客 ${n(carryFrom.clientRate)}／工資 ${n(carryFrom.guardWage)}）做本月卡——價錢有變要去價目卡改`,
+    );
   }
   numbers.siteShiftTypeCombosChecked = combos.length;
   numbers.cardsCarriedOver = cardsCarriedOver;
   numbers.cardsMissingNoCarryover = cardsMissingNoCarryover;
 
   // 盤完全冇 shift_types（更表有格但呢個盤一條更別都未設）——呢類盤嘅
-  // combos 唔會出現（shiftTypeId 一定 null，已經喺 group by 篩走），
-  // 用返 uploads 逐盤查一次 shiftTypes 數。
-  for (const u of uploads) {
-    if (!u.siteId) continue;
-    const count = await prisma.shiftType.count({ where: { siteId: u.siteId, voidedAt: null } });
+  // combos 唔會出現（shiftTypeId 一定 null，已經喺 group by 篩走）。
+  // Opus 驗收：原版逐「上載嘅盤」查，一檔多子盤嘅母盤（例：城巴車廠，
+  // 格全部歸子盤、母盤本身刻意冇更種）會誤報；而家改做逐「格實際歸屬
+  // 嘅盤」（`resolved_site_id`，shift/ot 格）查。
+  const rowSites = uploadIds.length
+    ? await prisma.rosterUploadRow.groupBy({
+        by: ["resolvedSiteId"],
+        where: { uploadId: { in: uploadIds }, codeKind: { in: ["shift", "ot"] }, resolvedSiteId: { not: null } },
+        _count: true,
+      })
+    : [];
+  for (const r of rowSites) {
+    const sid = r.resolvedSiteId!;
+    const count = await prisma.shiftType.count({ where: { siteId: sid, voidedAt: null } });
     if (count === 0) {
       siteMissingShiftTypeCount++;
-      needsHuman.push(`盤「${siteNameById.get(u.siteId) ?? u.siteNameRaw}」完全未設更種，要先喺「盤」管理加更種`);
+      const name = siteNameById.get(sid) ?? (await prisma.site.findUnique({ where: { id: sid }, select: { canonicalName: true } }))?.canonicalName ?? sid.slice(0, 8);
+      needsHuman.push(`盤「${name}」完全未設更種（本月有 ${r._count} 格），要先喺「盤」管理加更種`);
     }
   }
   numbers.siteMissingShiftTypeCount = siteMissingShiftTypeCount;
@@ -306,7 +371,7 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   }
   numbers.longtermGuardsThisMonth = longtermGuardIds.length;
   numbers.longtermGuardsWithoutPost = noPostCount;
-  if (noPostCount > 0) warnings.push(`${noPostCount} 位長工本月有上載行但未設生效崗位——step3 會用 ≥50% 更表占比自動推算`);
+  if (noPostCount > 0) warnings.push(`${noPostCount} 位長工本月有上載行但（執行前）未設生效崗位——之後「安員修復」會先由 Postorder 補崗位，仲係冇先由「長工結算」用 ≥50% 更表占比推算`);
 
   return { numbers, warnings, needsHuman };
 }
@@ -322,9 +387,17 @@ export async function stepParseHealth(month: Date, actorUserId: string) {
 
   const uploads = await prisma.rosterUpload.findMany({
     where: { month: start, status: { notIn: ["superseded", "voided"] } },
-    select: { id: true, siteId: true, siteNameRaw: true, parseSummary: true, status: true },
+    select: { id: true, siteId: true, siteNameRaw: true, parseSummary: true, status: true, fileName: true },
+    orderBy: { uploadedAt: "asc" },
   });
 
+  // Opus 驗收：同一次 run 入面兩個上載盤名寫法唔同（全形／空白／大細楷）
+  // 都唔好建兩個盤——用 `normalizeSiteLabel()`（同 matchSite 一致 NFKC＋
+  // 空白摺合）做 key。
+  const { normalizeSiteLabel, matchSite } = await import("@/lib/roster-upload/match");
+  const builtThisRun = new Map<string, string>(); // normName → siteId
+  const autoBuiltSiteNames: string[] = [];
+  let rematchedSites = 0;
   let autoBuiltSites = 0;
   let formatDiffWarnings = 0;
   let totalShiftCount = 0;
@@ -350,25 +423,56 @@ export async function stepParseHealth(month: Date, actorUserId: string) {
       continue;
     }
 
-    // site_id=null——自動用檔內盤名建盤（狀態待核＝新盤未經人手核實正式
-    // 資料，billing per_shift，client_name＝盤名），warning 唔停。
+    // 解析失敗嘅上載：`site_name_raw` 會跌返做檔名——唔可以攞檔名建盤。
+    if (u.status === "parse_failed") {
+      needsHuman.push(`上載「${u.fileName}」解析失敗，冇計入本月——要重新上載正確嘅更表檔`);
+      continue;
+    }
+
+    // site_id=null——(a) 先用而家嘅盤主檔（含之後先加嘅 aliases／檔名鍵）
+    // 重新自動配對一次（同上載時一樣經 `resolveRosterUploadSite()`）；
+    // (b) 真係對唔到先用檔內盤名建盤（`SiteStatus` 冇「待核」值，用
+    // `active`，喺報告「要人決定」列出「待核盤」），同一 run 同名唔重複建。
     try {
       const { assignRosterUploadSite, reparseRosterUpload } = await import("@/lib/roster-upload/service");
-      const newSite = await prisma.site.create({
-        data: { canonicalName: u.siteNameRaw, clientName: u.siteNameRaw, billingModel: "per_shift", status: "active" },
-      });
-      await writeAudit({ actorUserId, tableName: "sites", rowId: newSite.id, action: "create", after: newSite, ip: null });
-      await assignRosterUploadSite(u.id, newSite.id);
+      await reparseRosterUpload(u.id, { autoResolveSite: true });
+      const after = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: u.id }, select: { siteId: true } });
+      if (after.siteId) {
+        rematchedSites++;
+        warnings.push(`上載「${u.siteNameRaw}」而家對到現有盤（盤主檔之後有更新），已自動指定`);
+        continue;
+      }
+      // 建盤防重複嘅 key 再寬少少：連空白都唔計（「XX (東)」／「XX（東）」／
+      // 「XX(東)」當同一個），淨係用嚟決定「唔好再建多個」，唔影響
+      // matchSite() 本身嘅嚴格比對。
+      const looseKey = (raw: string) => normalizeSiteLabel(raw).replace(/\s+/g, "");
+      const normName = looseKey(u.siteNameRaw);
+      const allSites = await prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } });
+      let siteId =
+        builtThisRun.get(normName) ??
+        matchSite(u.siteNameRaw, allSites) ??
+        allSites.find((s) => looseKey(s.canonicalName) === normName || s.aliases.some((a) => looseKey(a) === normName))?.id ??
+        null;
+      if (!siteId) {
+        const newSite = await prisma.site.create({
+          data: { canonicalName: u.siteNameRaw.trim(), clientName: u.siteNameRaw.trim(), billingModel: "per_shift", status: "active", createdBy: actorUserId },
+        });
+        await writeAudit({ actorUserId, tableName: "sites", rowId: newSite.id, action: "create", after: newSite, ip: null });
+        siteId = newSite.id;
+        builtThisRun.set(normName, siteId);
+        autoBuiltSites++;
+        autoBuiltSiteNames.push(newSite.canonicalName);
+        needsHuman.push(`【待核盤】上載「${u.siteNameRaw}」對唔到任何現有盤，已自動建新盤「${newSite.canonicalName}」（按更計、未有更種／價卡）——請去「盤」管理核實，係舊盤另一個寫法就將佢併返（加 alias）`);
+      }
+      await assignRosterUploadSite(u.id, siteId);
       await reparseRosterUpload(u.id, { autoResolveSite: false });
-      autoBuiltSites++;
-      warnings.push(`上載「${u.siteNameRaw}」盤名對唔到現有盤，已自動建盤「${u.siteNameRaw}」（待核，billing=per_shift）並重新對照，請人手覆核`);
     } catch (e) {
-      needsHuman.push(`上載「${u.siteNameRaw}」盤名對唔到，自動建盤失敗（${e instanceof Error ? e.message.slice(0, 200) : String(e)}），要人手 PATCH 指定盤`);
+      needsHuman.push(`上載「${u.siteNameRaw}」盤名對唔到，自動建盤失敗（${safeErrorSummary(e)}），要人手喺更表上載頁指定盤`);
     }
   }
 
   return {
-    numbers: { uploadCount: uploads.length, totalShiftCount, autoBuiltSites, formatDiffWarnings },
+    numbers: { uploadCount: uploads.length, totalShiftCount, autoBuiltSites, autoBuiltSiteNames, rematchedSites, formatDiffWarnings },
     warnings,
     needsHuman,
   };
@@ -392,7 +496,8 @@ export async function stepGuardFix(month: Date, actorUserId: string) {
   const { start } = monthRange(month);
   let lastPlanNeedsBoss: { seq: string; siteLabels: string[]; totalCellCount: number }[] = [];
 
-  for (let round = 1; round <= 3; round++) {
+  let converged = false;
+  for (let round = 1; round <= GUARD_FIX_MAX_ROUNDS; round++) {
     // 注意：唔使喺呢度自己攞 GUARD_FIX_ADVISORY_LOCK_KEY——`applyGuardFixPlan()`
     // 下面已經喺自己嘅 transaction 入面攞緊呢把鎖（apply.ts:79），呢度淨係
     // build plan（讀），冇寫入，唔需要鎖；一鍵結算本身用另一把獨立鎖
@@ -406,7 +511,7 @@ export async function stepGuardFix(month: Date, actorUserId: string) {
       plan = await buildGuardFixPlan({ prisma, month: start, uTeamRows, postorder });
     } catch (e) {
       // 冇 active 上載（NoActiveUploadsError）等——安員修復對呢個月冇嘢做。
-      warnings.push(`安員修復計劃計算唔到（${e instanceof Error ? e.message.slice(0, 200) : String(e)}），略過`);
+      warnings.push(`安員修復計劃計算唔到（${safeErrorSummary(e)}），略過`);
       break;
     }
     const summary = summarizePlan(plan);
@@ -418,28 +523,52 @@ export async function stepGuardFix(month: Date, actorUserId: string) {
       return { seq: a.seq, siteLabels: identity?.cells.map((c) => `${c.siteLabel}×${c.cellCount}`) ?? [], totalCellCount: identity?.totalCellCount ?? 0 };
     });
 
-    if (actionable === 0) break;
+    if (actionable === 0) {
+      converged = true;
+      break;
+    }
 
-    const run = await prisma.guardFixRun.create({
-      data: {
-        month: start,
-        staffListUploadId: staffList.id,
-        postorderUploadId: postorderUpload?.id ?? null,
-        createdById: actorUserId,
-        planJson: plan as unknown as Prisma.InputJsonValue,
-        summaryJson: { ...summary, hkidDroppedCount: plan.hkidDroppedCount } as unknown as Prisma.InputJsonValue,
-        status: "planned",
-      },
-    });
+    // Opus 驗收：同「安員配對修復」頁共用同一套「套用緊」判斷——喺
+    // GUARD_FIX 鎖入面檢查冇第二個未卡死 run 套用緊，然後直接建一個
+    // `applying` 狀態嘅 run（頁面「計算計劃」／「套用」見到會 409 等佢），
+    // 唔再以 `planned` 狀態偷偷套用（原版頁面完全睇唔到呢個 job 套用緊）。
+    let run;
+    try {
+      run = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${GUARD_FIX_ADVISORY_LOCK_KEY})`);
+        const busy = await tx.guardFixRun.findFirst({ where: { status: "applying", applyStartedAt: { gt: new Date(Date.now() - APPLY_STALE_MS) } }, select: { id: true } });
+        if (busy) throw new Error("「安員配對修復」頁有另一個修復計劃套用緊");
+        return tx.guardFixRun.create({
+          data: {
+            month: start,
+            staffListUploadId: staffList.id,
+            postorderUploadId: postorderUpload?.id ?? null,
+            createdById: actorUserId,
+            planJson: plan as unknown as Prisma.InputJsonValue,
+            summaryJson: { ...summary, hkidDroppedCount: plan.hkidDroppedCount } as unknown as Prisma.InputJsonValue,
+            status: "applying",
+            applyStartedAt: new Date(),
+          },
+        });
+      });
+    } catch (e) {
+      // 人手套用緊——呢一步唔可以靜靜略過（未配對安員會令糧數錯），成個
+      // run 標 failed，等佢完成再「重新執行」。
+      throw new Error(`安員修復第 ${round} 輪開始唔到：${safeErrorSummary(e)}——等「安員配對修復」頁嗰個套用完成，再撳「重新執行」`);
+    }
     try {
       const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: start });
       const reparse = await reparseAllActiveUploads(prisma, start, { txTimeoutMs: 10 * 60 * 1000 });
       await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "applied", appliedAt: new Date(), resultJson: { diffs, reparse } as unknown as Prisma.InputJsonValue } });
     } catch (e) {
-      await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "failed", resultJson: { error: e instanceof Error ? e.message.slice(0, 300) : String(e) } as unknown as Prisma.InputJsonValue } });
-      warnings.push(`安員修復第 ${round} 輪套用失敗，已停低（可以重新執行一鍵結算重試）：${e instanceof Error ? e.message.slice(0, 200) : String(e)}`);
-      break;
+      await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "failed", resultJson: { error: safeErrorSummary(e) } as unknown as Prisma.InputJsonValue } });
+      // 套用失敗唔可以當 warning 繼續行落去計糧（未配對安員會令數錯）——
+      // 成個 run 標 failed，重新執行安全（guard-fix apply 冪等）。
+      throw new Error(`安員修復第 ${round} 輪套用失敗：${safeErrorSummary(e)}`);
     }
+  }
+  if (!converged && rounds.length === GUARD_FIX_MAX_ROUNDS) {
+    needsHuman.push(`安員修復跑咗 ${GUARD_FIX_MAX_ROUNDS} 輪仲有新動作未收斂——再撳一次「一鍵結算」會接住做`);
   }
 
   if (lastPlanNeedsBoss.length > 0) {
@@ -466,7 +595,7 @@ export async function stepLongtermSettlement(month: Date, actorUserId: string) {
       scanned += r.longtermScanned;
       changed += r.changed;
     } catch (e) {
-      warnings.push(`「${u.siteNameRaw}」重算結算單位失敗：${e instanceof Error ? e.message.slice(0, 200) : String(e)}`);
+      warnings.push(`「${u.siteNameRaw}」重算結算單位失敗：${safeErrorSummary(e)}`);
     }
   }
   return { numbers: { uploadsScanned: uploads.length, longtermRowsScanned: scanned, longtermRowsChanged: changed }, warnings };
@@ -476,7 +605,25 @@ export async function stepLongtermSettlement(month: Date, actorUserId: string) {
 // step4 全月對數＋套用——runReconcileAllForMonth()（已含 reprice）
 // ---------------------------------------------------------------------------
 export async function stepReconcileApply(month: Date, actorUserId: string, ip: string | null) {
-  const result = await runReconcileAllForMonth(month, actorUserId, ip);
+  // Opus 驗收：同更表上載頁「重新對數全月」共用同一個 `reconcile_all_runs`
+  // 認領（同一把 RECONCILE_ALL 鎖＋「冇第二個未卡死 running」檢查）——
+  // 頁面嗰粒掣喺 job 做緊呢步嗰陣會 409，job 見到人手嗰個做緊亦會停低
+  // （run failed，訊息叫人等佢完先重新執行），唔會兩個同時套用。
+  const now = new Date();
+  const allRunId = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${RECONCILE_ALL_ADVISORY_LOCK_KEY})`);
+    const other = await tx.reconcileAllRun.findFirst({ where: { status: "running", startedAt: { gt: new Date(now.getTime() - RECONCILE_ALL_STALE_MS) } }, select: { id: true } });
+    if (other) throw new Error("更表上載頁有另一個「重新對數全月」執行緊——等佢完成，再撳「重新執行」");
+    return (await tx.reconcileAllRun.create({ data: { month, status: "running", startedById: actorUserId } })).id;
+  });
+  let result;
+  try {
+    result = await runReconcileAllForMonth(month, actorUserId, ip);
+    await prisma.reconcileAllRun.update({ where: { id: allRunId }, data: { status: "done", finishedAt: new Date(), resultJson: result as unknown as Prisma.InputJsonValue } });
+  } catch (e) {
+    await prisma.reconcileAllRun.update({ where: { id: allRunId }, data: { status: "failed", finishedAt: new Date(), errorMessage: safeErrorSummary(e) } }).catch(() => undefined);
+    throw e;
+  }
   const warnings = [...result.warnings];
   const needsHuman: string[] = [];
   for (const u of result.perUpload) {
@@ -526,7 +673,7 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
       referralTotal = round2(n(r.totalAmount));
       referralCount = r.lineItems.length;
     } catch (e) {
-      warnings.push(`介紹費重算失敗（${e instanceof Error ? e.message.slice(0, 200) : String(e)}），改用現有 special_items 讀值`);
+      warnings.push(`介紹費重算失敗（${safeErrorSummary(e)}），改用現有 special_items 讀值`);
       const r = await computeReferralFeesForMonth(month);
       referralTotal = round2(n(r.totalAmount));
       referralCount = r.lineItems.length;
@@ -539,15 +686,20 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
   }
 
   const [close, margin, payroll, payrollSource] = await Promise.all([buildMonthlyClose(month), buildGrossMargin(month), buildPayrollTotals(month), buildPayrollSourceSummary(month)]);
+  // 總收入＝月結總表（主表＋月結以外）；成本／毛利＝毛利即時表 `totals`
+  // （同一 lib、同頁面一致）。Opus 驗收：原版用「月結總表收入 − 毛利」
+  // 倒數成本，將月結以外收入混入，得出一個任何頁面都搵唔到嘅成本數。
   const totalRevenue = round2([...close.mainRows, ...close.outsideRows].reduce((a, r) => a + n(r.revenue), 0));
-  const totalMargin = round2(margin.sites.reduce((a, s) => a + n(s.profit), 0));
-  const totalCost = round2(totalRevenue - totalMargin);
+  const totalMargin = round2(margin.totals.profit);
+  const totalCost = round2(margin.totals.cost);
+  const marginRevenue = round2(margin.totals.revenue);
 
   return {
     numbers: {
       totalRevenue,
       totalCost,
       totalMargin,
+      marginRevenue,
       siteCount: close.mainRows.length + close.outsideRows.length,
       payrollByBroker: payroll.map((p) => ({ brokerCode: p.brokerCode, brokerName: p.brokerName, shifts: p.shifts, amount: round2(p.amount) })),
       referralFeeTotal: referralTotal,
@@ -596,16 +748,21 @@ export async function stepPostorderCompare(month: Date, referralSystemTotal: num
 // ---------------------------------------------------------------------------
 export async function runOneClickMonthClose(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
   const monthStartDate = toMonthStart(month);
-  const run = await prisma.monthCloseRun.findUnique({ where: { id: runId } });
-  const runner = new StepRunner(runId, (run?.stepsJson as unknown as StepRecord[]) ?? undefined);
+  // 每次（重新）執行都由全新 steps 開始——唔好保留上一次失敗／停低嘅
+  // 狀態（Opus 驗收：原版重新執行停低時，舊 run 嘅 done/skipped 會殘留）。
+  const runner = new StepRunner(runId);
 
   try {
-    const precheck = await runner.run("precheck", () => stepPrecheck(monthStartDate, actorUserId, ip));
-    const prevMonthNotLocked = precheck.needsHuman.some((h) => h.includes("未鎖定"));
-    if (prevMonthNotLocked) {
-      runner.skipRest("parse_health", "上月未鎖定，一鍵結算已停低——請先鎖定上月");
+    let halt: string | undefined;
+    await runner.run("precheck", async () => {
+      const r = await stepPrecheck(monthStartDate, actorUserId, ip);
+      halt = r.halt;
+      return r;
+    });
+    if (halt) {
+      runner.skipRest("parse_health", halt);
       await runner.flush(null);
-      await prisma.monthCloseRun.update({ where: { id: runId }, data: { status: "failed", finishedAt: new Date(), errorMessage: "上月未鎖定，已停低" } });
+      await prisma.monthCloseRun.update({ where: { id: runId }, data: { status: "failed", finishedAt: new Date(), errorMessage: halt } });
       return;
     }
 
@@ -621,9 +778,15 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
     const reportStep = await runner.run("report", async () => {
       const coverage = await checkRosterUploadCoverage(monthStartDate);
       const currentClose = await prisma.monthClose.findUnique({ where: { month: monthStartDate } });
+      const unpricedCount = (runner.get("pricing_check").numbers.count as number) ?? 0;
       const report: MonthCloseReport = {
         month: monthLabel(monthStartDate),
-        totals: { revenue: (compute.numbers.totalRevenue as number) ?? 0, cost: (compute.numbers.totalCost as number) ?? 0, grossMargin: (compute.numbers.totalMargin as number) ?? 0 },
+        totals: {
+          revenue: (compute.numbers.totalRevenue as number) ?? 0,
+          marginRevenue: (compute.numbers.marginRevenue as number) ?? 0,
+          cost: (compute.numbers.totalCost as number) ?? 0,
+          grossMargin: (compute.numbers.totalMargin as number) ?? 0,
+        },
         payrollByBroker: (compute.numbers.payrollByBroker as MonthCloseReport["payrollByBroker"]) ?? [],
         siteRevenue: await (async () => {
           const close = await buildMonthlyClose(monthStartDate);
@@ -651,7 +814,10 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
           currentMonthAlreadyLocked: !!currentClose?.lockedAt,
           missingUploadSites: coverage.missingUploadSites.map((s) => s.siteName),
           unconfirmedUploadSites: coverage.unconfirmedUploadSites.map((s) => `${s.siteName}（${s.status}）`),
-          readyToLock: coverage.missingUploadSites.length === 0 && coverage.unconfirmedUploadSites.length === 0 && !currentClose?.lockedAt,
+          unpricedCount: unpricedCount,
+          // Opus 驗收：§20.3 step8「前置條件全綠先亮」——除咗上載覆蓋，
+          // 仲有未定價更（冇價就鎖會鎖死錯數）。
+          readyToLock: coverage.missingUploadSites.length === 0 && coverage.unconfirmedUploadSites.length === 0 && !currentClose?.lockedAt && unpricedCount === 0,
         },
         longtermPayrollNote: "長工糧未計（Phase 2——WP-LTPAY，跟 8 月試算第十三版口徑另做）",
       };
@@ -664,7 +830,7 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
     });
     await writeAudit({ actorUserId, tableName: "month_close_runs", rowId: runId, action: "update", after: { id: runId, status: "done" }, ip: null });
   } catch (e) {
-    const message = e instanceof Error ? e.message.slice(0, 500) : String(e);
+    const message = jobErrorMessage(e);
     console.error("[one-click] 執行失敗：", message);
     try {
       await prisma.monthCloseRun.update({ where: { id: runId }, data: { status: "failed", finishedAt: new Date(), errorMessage: message } });

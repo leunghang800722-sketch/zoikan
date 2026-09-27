@@ -1391,6 +1391,56 @@ ready_to_lock` 先亮，撳咗會先 `POST /api/month-closes/{month}/generate`
 ⑦ 歷史 runs 表（卡住／失敗有「重新執行」）。手機 375px：卡片直排，
 `<input type=month>`／`<input type=file multiple>`原生控制項。
 
+### Opus 5.5 驗收修正（2026-09-27，同 branch）
+
+上面 step0–8 描述有以下改動（以呢段為準）：
+
+- **step0**：(0) **本月已鎖** → 即刻停低（run failed「本月已鎖定」），
+  唔寫任何嘢；(1) 上月未鎖 → **即刻停低、唔再做卡沿用**（原版照寫卡先
+  停）；停低條件用結構化 `halt`，唔再靠 needsHuman 字串 `includes("未鎖定")`。
+  (2) 卡沿用收窄做 `findCarryoverCard()`：淨係「上月通用逐更卡」——同盤
+  同更種、`broker_id`／`guard_id` 皆 null、`billing_model` null 或
+  `per_shift`（**唔沿用 `special` 特殊卡**，例：7 月啟航1331 Event Guard
+  11,700 嗰張；唔沿用月費卡）、`effective_from` 早過本月而且
+  `effective_to` 啱啱係上月最後一日（唔沿用未來卡、唔沿用早幾個月已完嘅
+  過期卡）；LINK（`guards_paid_by_client`）盤唔查卡唔沿用。沿用咗嘅卡
+  寫入 **needsHuman**「【已自動沿用，請覆核】…收客／工資…」（報告「要人
+  決定」會列出），唔再淨係 warning。現行資料慣例（卡一律 open-ended）
+  下呢個規則 8 月實測 0 張沿用。(3)「完全未設更種」改為逐格實際歸屬盤
+  （`resolved_site_id`）查——原版逐上載盤查，一檔多子盤母盤（城巴車廠）
+  誤報。
+- **step1**：`parse_failed` 上載唔建盤（原版會攞檔名建盤），列
+  needsHuman；`site_id=null` 先 `reparseRosterUpload({autoResolveSite:true})`
+  用而家嘅盤主檔重新配對一次，真係對唔到先建盤；同一 run 用
+  `normalizeSiteLabel()`（NFKC＋全形括號）再去埋空白做 key 去重，亦會
+  對現有盤 canonical／aliases 做同一寬鬆比對——唔會因為寫法唔同建兩個盤；
+  建咗嘅盤寫 needsHuman「【待核盤】…」。
+- **step2**：同「安員配對修復」頁共用「套用緊」判斷——喺
+  `GUARD_FIX_ADVISORY_LOCK_KEY` 入面檢查冇第二個未卡死 `applying` run，
+  以 `applying` 狀態建 run 先套用（頁面「計算計劃」／「套用」會 409）；
+  撞正人手套用緊或者套用失敗 → **成個 run failed**（原版當 warning 繼續
+  計糧）；最多 5 輪（dev 8 月第 3 輪仍有 3 個動作、第 4 輪先 0）。
+- **step4**：同更表上載頁「重新對數全月」共用 `reconcile_all_runs` 認領
+  （`RECONCILE_ALL_ADVISORY_LOCK_KEY`＋「冇第二個未卡死 running」），
+  人手嗰粒掣喺 job 做緊呢步時 409；job 撞正人手做緊 → run failed、訊息
+  叫人等佢完先「重新執行」。
+- **step6**：總收入＝月結總表（主表＋月結以外）；**成本／毛利＝毛利即時
+  表 `totals`**（新增 `totals.margin_revenue`）——原版「月結收入 − 毛利」
+  倒數成本，混入月結以外收入，得出一個任何頁面都冇嘅數。
+- **step8**：`lock_precondition.unpriced_count`；`ready_to_lock` 加埋
+  「未定價更＝0」（§20.3「前置全綠先亮」）。
+- **錯誤訊息**：`error_message`／step warnings 一律經
+  `safeErrorSummary()`（最後一行＋300 字上限），唔會寫入 Prisma query
+  dump；每次重新執行 steps 由頭開始（唔殘留上一次 skipped/failed）。
+- **報表 lib 順手修（影響一鍵報告準確性）**：`gross-margin.ts` 介紹費／
+  其他 special_items、`monthly-close.ts`、`reconciliation.ts` 讀
+  special_items 加 `voidedAt: null`——`recomputeReferralFees()` 每次重算
+  都 void 舊行再建新行，原版毛利每重算一次就多扣一次介紹費（dev 實測
+  一鍵跑兩次毛利 524,011 → 463,651 → 403,031）。
+- **頁面**：Postorder 入口改做可揀多檔、按副檔名／檔名分流到現有四個
+  入口（原版一律用 `file` 欄位，正式站唯一可用嘅 CSV 會俾 route 當 xlsm
+  拒絕）；job 執行緊時上載掣 disable；鎖月區顯示未定價原因。
+
 ### 已知落差／未做（老實列出）
 
 1. **Site「待核」狀態**：`SiteStatus` enum 冇「待核／pending_review」

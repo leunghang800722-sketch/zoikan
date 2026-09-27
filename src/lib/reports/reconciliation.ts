@@ -136,7 +136,7 @@ async function rule3ThreeTableShiftCount(month: Date): Promise<Omit<Reconciliati
     const rosterCount = await prisma.shiftRecord.count({
       where: { siteId: row.siteId, recordType: "shift", isExternal: false, shiftType: { billingGroup: "per_shift" }, workDate: { gte: start, lte: end } },
     });
-    const standaloneItems = await prisma.specialItem.findMany({ where: { siteId: row.siteId, kind: "standalone_broker_fee", month: start } });
+    const standaloneItems = await prisma.specialItem.findMany({ where: { siteId: row.siteId, kind: "standalone_broker_fee", month: start, voidedAt: null } });
     const standaloneShifts = standaloneItems.reduce((a, it) => a + (it.shifts ?? 0), 0);
     const rosterCountWithAdjustments = rosterCount + standaloneShifts;
     // 糧明細口徑：呢個盤嘅 shift+ot 記錄數（唔篩 isExternal/billingGroup，

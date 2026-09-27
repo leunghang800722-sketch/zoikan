@@ -284,7 +284,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 佢個「成本」欄冇計呢筆（cost 本身已經標「不完整」，呢個 P1-WP1 唔強行加）。
     // supplemental（龍譽/惠康補單）同 individual_broker_event 嘅 revenue 已經由 flat rate_card
     // /獨立 outsideRows 處理，唔可以喺度再摺一次（否則會計多一倍）。
-    const siteSpecialItems = await prisma.specialItem.findMany({ where: { siteId: site.id, kind: "standalone_broker_fee", month: MONTH_START } });
+    const siteSpecialItems = await prisma.specialItem.findMany({ where: { siteId: site.id, kind: "standalone_broker_fee", month: MONTH_START, voidedAt: null } });
     for (const it of siteSpecialItems) {
       shifts += it.shifts ?? 0;
       revenue = round2(revenue + n(it.revenue));
@@ -338,7 +338,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
   // 個別雞頭 Event 特殊收入項（special_items，revenue 有值先顯示喺
   // 「月結以外」——見 seed 段落註解，同 P0 輸出嘅兩行「Tenti」「HKW」對齊）
   const individualBrokerEventItems = await prisma.specialItem.findMany({
-    where: { kind: "individual_broker_event", revenue: { not: null }, month: MONTH_START },
+    where: { kind: "individual_broker_event", revenue: { not: null }, month: MONTH_START, voidedAt: null },
   });
   for (const it of individualBrokerEventItems) {
     // label 對齊 P0 regen 輸出「月結以外」sheet 嘅寫法（"Tenti"／"HKW"）

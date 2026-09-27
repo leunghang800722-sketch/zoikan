@@ -365,7 +365,7 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   const OTHER_SPECIAL_KINDS = ["casual_event", "shuttle", "per_hour", "supplemental", "cross_month_adjustment", "other"] as const;
   const REVENUE_DOUBLE_COUNTED_KINDS = new Set(["supplemental"]);
   const specialItems = await prisma.specialItem.findMany({
-    where: { siteId: { in: siteIds }, month: MONTH_START, kind: { in: [...OTHER_SPECIAL_KINDS] } },
+    where: { siteId: { in: siteIds }, month: MONTH_START, kind: { in: [...OTHER_SPECIAL_KINDS] }, voidedAt: null },
   });
   const specialBySite = new Map<string, GrossMarginShiftTypeRow[]>();
   for (const it of specialItems) {
@@ -392,7 +392,7 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   //    唔會 double count），等「展開更別」睇到盤總數同更別breakdown 之和
   //    對得返。
   const standaloneBrokerFeeItems = await prisma.specialItem.findMany({
-    where: { siteId: { in: siteIds }, month: MONTH_START, kind: "standalone_broker_fee" },
+    where: { siteId: { in: siteIds }, month: MONTH_START, kind: "standalone_broker_fee", voidedAt: null },
   });
   const standaloneDisplayBySite = new Map<string, GrossMarginShiftTypeRow[]>();
   for (const it of standaloneBrokerFeeItems) {
@@ -460,8 +460,11 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   //    site，或者配對到嘅 site 冇喺呢個月出現（唔喺 `siteIds` 入面）嘅
   //    金額計入 unattributed（M2 修正：之前完全冇 siteIds 檢查，令冇
   //    活動嘅 site 嘅 referral 金額憑空消失）。
+  //    Opus 驗收（WP-ONE-CLICK）：要 `voidedAt: null`——`recomputeReferralFees()`
+  //    每次重算都係 void 舊行再建新行，冇呢個條件每重算一次毛利就多扣一次
+  //    介紹費（dev 實測一鍵結算跑兩次毛利由 524,011 跌到 403,031）。
   const referralItems = await prisma.specialItem.findMany({
-    where: { kind: "referral_fee", month: MONTH_START },
+    where: { kind: "referral_fee", month: MONTH_START, voidedAt: null },
   });
   const referralFeeBySite = new Map<string, number>();
   let referralFeeUnattributed = 0;

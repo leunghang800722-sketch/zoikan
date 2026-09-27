@@ -51,7 +51,9 @@ export function emptySteps(): StepRecord[] {
 
 export interface MonthCloseReport {
   month: string;
-  totals: { revenue: number; cost: number; grossMargin: number };
+  /** revenue＝月結總表（主表＋月結以外）營業額；marginRevenue／cost／
+   * grossMargin＝毛利即時表 `totals`（唔計月結以外收入）。 */
+  totals: { revenue: number; marginRevenue: number; cost: number; grossMargin: number };
   payrollByBroker: Array<{ brokerCode: string; brokerName: string; shifts: number; amount: number }>;
   siteRevenue: Array<{ siteId: string; siteName: string; shifts: number; revenue: number }>;
   referralFee: { total: number; count: number };
@@ -68,6 +70,7 @@ export interface MonthCloseReport {
     currentMonthAlreadyLocked: boolean;
     missingUploadSites: string[];
     unconfirmedUploadSites: string[];
+    unpricedCount: number;
     readyToLock: boolean;
   };
   longtermPayrollNote: string;
