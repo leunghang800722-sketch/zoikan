@@ -8,7 +8,37 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import ExcelJS from "exceljs";
 import { clearAll, prisma } from "./lib/db";
-import { buildPostorderWorkbook, sanitizeSheetName, POSTORDER_SHEET_NAMES } from "@/lib/reports/postorder-export";
+import { buildPostorderWorkbook, sanitizeSheetName, POSTORDER_SHEET_NAMES, longtermRowPayoutRate, summaryTotalsFrom } from "@/lib/reports/postorder-export";
+
+describe("longtermRowPayoutRate（長工行外判價＝月薪÷當月更數，Opus 5.5 驗收）", () => {
+  it("一人一行做足全月＝月薪÷更數", () => {
+    expect(longtermRowPayoutRate(new Map([["g1", 26]]), new Map([["g1", 26]]), new Map([["g1", { kind: "monthly", monthlySalary: 26000 }]]))).toBe(1000);
+  });
+  it("同一人分散兩行按更數比例拆，唔會每行計足一次月薪", () => {
+    const total = new Map([["g1", 30]]);
+    const basis = new Map([["g1", { kind: "monthly" as const, monthlySalary: 30000 }]]);
+    const a = longtermRowPayoutRate(new Map([["g1", 20]]), total, basis)!;
+    const b = longtermRowPayoutRate(new Map([["g1", 10]]), total, basis)!;
+    expect(a * 20 + b * 10).toBe(30000);
+    expect(a).toBe(1000);
+  });
+  it("日薪制直接用每更價；冇薪金資料就留空（唔屈 0）", () => {
+    expect(longtermRowPayoutRate(new Map([["g1", 5]]), new Map([["g1", 5]]), new Map([["g1", { kind: "daily", dailyRate: 600 }]]))).toBe(600);
+    expect(longtermRowPayoutRate(new Map([["g1", 5]]), new Map([["g1", 5]]), new Map())).toBeNull();
+  });
+});
+
+describe("summaryTotalsFrom（Summary 總收入／成本／毛利＝一鍵結算報告口徑）", () => {
+  const close = { mainRows: [{ revenue: 1000 }], outsideRows: [{ revenue: 200 }] } as never;
+  it("有長工糧 run＋合併摘要 → 合併成本", () => {
+    const gm = { totals: { revenue: 1000, cost: 700, profit: 300 }, combinedCostSummary: { combinedCostTotal: 800 } } as never;
+    expect(summaryTotalsFrom(close, gm, true)).toEqual({ revenue: 1200, marginRevenue: 1000, cost: 800, grossMargin: 200, costBasis: "combined" });
+  });
+  it("冇長工糧 run → 毛利表舊口徑", () => {
+    const gm = { totals: { revenue: 1000, cost: 700, profit: 300 }, combinedCostSummary: { combinedCostTotal: 800 } } as never;
+    expect(summaryTotalsFrom(close, gm, false)).toEqual({ revenue: 1200, marginRevenue: 1000, cost: 700, grossMargin: 300, costBasis: "legacy" });
+  });
+});
 
 describe("sanitizeSheetName（Excel 規則：sheet 名唔可以有 / \\ ? * [ ] :，含全形）", () => {
   it("剔走半形同全形禁字元", () => {
@@ -34,6 +64,7 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
   let brokerLongtermId: string;
   let guardCasualId: string;
   let guardLongtermId: string;
+  let eventSiteId: string;
 
   beforeAll(async () => {
     await clearAll();
@@ -77,6 +108,24 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
       data: { nameZh: "測試安員乙", employmentType: "longterm_autopay", monthlySalary: 15000, status: "active", createdBy: "test" },
     });
     guardLongtermId = guardLongterm.id;
+
+    // 名以「=」開頭嘅長工（鐵則：`=` 開頭字串要當文字，唔可以變公式）
+    const guardEq = await prisma.guard.create({
+      data: { nameZh: "=1+1測試安員丙", employmentType: "longterm_autopay", monthlySalary: 9000, status: "active", createdBy: "test" },
+    });
+    await prisma.shiftRecord.create({
+      data: { workDate: new Date(Date.UTC(2025, 7, 7)), siteId, shiftTypeId, guardId: guardEq.id, settlementBrokerId: brokerLongtermId, recordType: "shift", status: "confirmed", clientRateSnapshot: null, guardWageSnapshot: 0, brokerFeeSnapshot: 0, createdBy: "test" },
+    });
+
+    // Event 分盤：「測試物業-戊 Event」——應該放喺母盤 block（物業名稱「戊」、更份「Event …」）
+    const eventSite = await prisma.site.create({
+      data: { canonicalName: "測試物業-戊 Event", aliases: ["測試物業戊活動更"], clientName: "測試客戶戊", billingModel: "per_shift", inScope: true, status: "active", createdBy: "test" },
+    });
+    eventSiteId = eventSite.id;
+    const eventShift = await prisma.shiftType.create({ data: { siteId: eventSite.id, code: "D", label: "日更", billingGroup: "per_shift", createdBy: "test" } });
+    await prisma.shiftRecord.create({
+      data: { workDate: new Date(Date.UTC(2025, 7, 8)), siteId: eventSite.id, shiftTypeId: eventShift.id, guardId: guardCasualId, settlementBrokerId: brokerCashId, recordType: "shift", status: "confirmed", clientRateSnapshot: 1350, guardWageSnapshot: 990, brokerFeeSnapshot: 0, createdBy: "test" },
+    });
 
     // 散工雞頭行：3 更，client_rate=900/guard_wage=700
     for (const day of [1, 2, 3]) {
@@ -133,7 +182,7 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
   });
 
   afterAll(async () => {
-    await prisma.shiftRecord.deleteMany({ where: { siteId } });
+    await prisma.shiftRecord.deleteMany({ where: { siteId: { in: [siteId, eventSiteId] } } });
   });
 
   it("四個 sheet，名同任務書一致，冇犯 Excel sheet 名禁字元規則", async () => {
@@ -185,13 +234,13 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
     // 物業名稱格（col 2）出「戊」——aliases 入面最短嗰個（"戊"）攞晒
     // canonicalName（"測試物業-戊"）優先，符合任務書「aliases 入面最短
     // 嗰個或 canonical；如冇就 canonical」。
-    const casualRow = Object.values(rows).find((v) => v[2] === "戊" && v[4] === 900);
-    const longtermRow = Object.values(rows).find((v) => v[2] === "戊" && v[4] !== 900);
+    const casualRow = Object.values(rows).find((v) => v[2] === "戊" && v[3] === "夜更" && v[4] === 900);
+    const longtermRow = Object.values(rows).find((v) => v[2] === "戊" && v[3] === "夜更" && v[4] === undefined);
     expect(casualRow, "散工雞頭行要搵到").toBeTruthy();
     expect(longtermRow, "長工(B07)行要搵到").toBeTruthy();
-    // 長工行「上單價」＝ 15000（月薪）÷ 2（更數）= 7500
-    expect(longtermRow![4]).toBe(7500);
-    expect(longtermRow![5]).toBeUndefined(); // 長工行外判價留空（見檔頭註解）
+    // 真 Postorder：長工行「上單價」(E)＝收客價（呢度 null → 留空），「外判價」(F)
+    // ＝月薪÷當月更數（原本 #REF!）：乙 15000 做 2 更＋丙 9000 做 1 更 → 24000÷3＝8000
+    expect(longtermRow![5]).toBe(8000);
   });
 
   it("Roster：日期格＝盤簡稱（aliases 最短嗰個），長工日備註＝安員姓名", async () => {
@@ -211,6 +260,30 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
     expect(found, "第 4 日盤簡稱格要搵到").toBe(true);
   });
 
+  it("Roster：「=」開頭嘅字串（安員名）照寫文字，唔變公式（鐵則）", async () => {
+    const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
+    const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
+    let found = false;
+    ws.eachRow((row) => {
+      const c = row.getCell(6 + (7 - 1) * 7 + 3);
+      if (c.value === "=1+1測試安員丙") {
+        found = true;
+        expect(c.type).toBe(ExcelJS.ValueType.String);
+      }
+    });
+    expect(found).toBe(true);
+  });
+
+  it("Roster：Event 分盤放喺母盤 block（物業名稱同母盤、更份加 Event、排喺母盤後面）", async () => {
+    const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
+    const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
+    const labels: string[] = [];
+    for (let r = 2; r <= ws.rowCount; r++) labels.push(`${ws.getRow(r).getCell(2).value}|${ws.getRow(r).getCell(3).value}`);
+    const eventIdx = labels.indexOf("戊|Event 日更");
+    expect(eventIdx).toBeGreaterThan(-1);
+    expect(labels.slice(0, eventIdx).every((l) => l.startsWith("戊|"))).toBe(true);
+  });
+
   it("Roster：取消尾欄 = 1（一條已取消記錄），甩更恆 0", async () => {
     const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
     const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
@@ -226,14 +299,14 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
     expect(sawCancelled).toBe(true);
   });
 
-  it("Summary：逐雞頭付款 amount = guard_wage+broker_fee 之和（測試雞頭一 = 3×750=2250）", async () => {
+  it("Summary：逐雞頭付款 amount = guard_wage+broker_fee 之和（測試雞頭一 = 3×750＋Event 990＝3240）", async () => {
     const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
     const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.summary)!;
     let foundAmount: number | null = null;
     ws.eachRow((row) => {
       if (row.getCell(2).value === "測試雞頭一") foundAmount = row.getCell(6).value as number;
     });
-    expect(foundAmount).toBe(2250);
+    expect(foundAmount).toBe(3240);
   });
 
   it("PostOrder：每日一欄，Total Shift 同 Roster 更數一致", async () => {
@@ -252,8 +325,8 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
 
   it("回傳嘅 summary 數字（siteRevenueTotal/siteCostTotal/rosterRowCount）啱數", async () => {
     const result = await buildPostorderWorkbook(TEST_MONTH);
-    expect(result.rosterRowCount).toBe(2); // 散工行 + 長工行
-    expect(result.siteRevenueTotal).toBe(2700); // 3 × 900
-    expect(result.siteCostTotal).toBe(2250); // 3 × 750
+    expect(result.rosterRowCount).toBe(3); // 散工行 + 長工行 + Event 行
+    expect(result.siteRevenueTotal).toBe(4050); // 3 × 900 + 1350
+    expect(result.siteCostTotal).toBe(3240); // 3 × 750 + 990
   });
 });

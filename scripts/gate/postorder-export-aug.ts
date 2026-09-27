@@ -20,14 +20,17 @@
 // 冇喺呢層之上再計錯/漏轉。
 //
 // **KNOWN 分類**：§19／aug-e2e-check.ts B5 已經記錄低嘅「更表資料本身
-// 問題」（Event 分盤、OT 未折入逐盤收入、蔚峰園重複行、凱和山
-// Unbilled、Weave 漏記病假）——呢啲差額喺呢個 gate 顯示做 KNOWN（唔算
+// 問題」（OT 未折入逐盤收入、蔚峰園重複行、凱和山 Unbilled、Weave 漏記
+// 病假；Event 分盤而家對總表前合返母盤，唔再係落差）——呢啲差額喺呢個 gate 顯示做 KNOWN（唔算
 // FAIL，唔會令 exit code 非 0），但金額同任務書/文件記錄嘅唔一致
 // （超出 `KNOWN_TOLERANCE`）就照樣 FAIL，唔會靜靜放過新落差。
 import fs from "node:fs";
 import path from "node:path";
+import ExcelJS from "exceljs";
 import { buildPostorderWorkbook, type PostorderSiteRevenue } from "@/lib/reports/postorder-export";
 import { computeReferralFeesForMonth } from "@/lib/reports/referral-fee";
+import { buildPayrollTotals } from "@/lib/reports/payroll";
+import { buildMonthlyClose } from "@/lib/reports/monthly-close";
 import { round2 } from "@/lib/reports/money";
 import { prisma } from "@/lib/db";
 import { SITE_ID_TO_CANONICAL_NAME } from "../opening/lib/site-code-map";
@@ -59,8 +62,12 @@ interface DiffRow {
 
 /** §19／aug-e2e-check.ts B5／docs/api.md 已經記錄低嘅逐雞頭已知落差（更表
  * 資料問題，唔關 export 模組事）。 */
+// Opus 5.5 驗收（2026-09-27）：原本有 `K: -11,440「CP5 IC proxy」` 呢個
+// KNOWN——實查唔係 CP5 IC：係 `gate:ltpay-aug` 舊版冇 `guard_fix_runs`
+// 記錄 → Postorder 唔當權威 → 一位長工 13 格啟航1331 散更（880）被 ≥50%
+// 推算崗位錯歸 B07。修咗 pipeline（改行一鍵 `stepGuardFix()`）之後 K 0 差，
+// 呢個 KNOWN 刪走——再出現就係真 FAIL。
 const KNOWN_BROKER_DIFFS: Record<string, { expected: number; note: string }> = {
-  K: { expected: -11440, note: "CP5 IC proxy 盤／逐格推算已知落差（§19）" },
   W: { expected: -850, note: "淺水灣道11號蔚峰園更表重複行（同一人同日同更兩行，系統 unique 淨記一更）" },
   T: { expected: -1600, note: "Weave Hospital Road 更表漏記病假 2 格（老闆確認 T 頂）" },
 };
@@ -68,7 +75,6 @@ const KNOWN_REFERRAL_DIFF = { expected: 100, note: "Weave 更表漏記 2 格介�
 const KNOWN_SITE_DIFFS: Record<string, { expected: number; note: string }> = {
   HKU座頭: { expected: -84.85, note: "HKU座頭 OT（1Hr OT，84.85／更）——buildMonthlyClose() 逐盤收入淨計 record_type=shift，唔含 ot" },
   屯門凱和山: { expected: 871, note: "Postorder 8/21 夜更標唔收客（Unbilled），系統照逐更收客卡計" },
-  啟航1331: { expected: -5400, note: "系統將 Event 更分做獨立盤「啟航1331 Event」顯示，總表 44 碼表合併計（全公司總收入層面已計埋）" },
   淺水灣道11號蔚峰園: { expected: -935, note: "更表重複行（同 W 雞頭差額同一根源）" },
 };
 
@@ -87,6 +93,68 @@ async function main() {
 
   const diffs: DiffRow[] = [];
 
+  // ---- (A) 系統內部一致性（嚴格 0 差，冇 KNOWN）：Summary 逐雞頭＝
+  // 糧單頁／一鍵報告同一個 buildPayrollTotals()；Roster 逐盤＝月結總表；
+  // Summary 總收入／成本／毛利＝最新一鍵結算報告 report_json。全部由寫出
+  // 嘅 xlsx 讀返（驗證寫檔冇漏轉），唔係淨睇 in-memory 結果。----
+  const wbBack = new ExcelJS.Workbook();
+  await wbBack.xlsx.readFile(OUT_XLSX);
+  const strict = (label: string, sys: number, ref: number) => {
+    const diff = round2(sys - ref);
+    diffs.push({ label, system: sys, reference: ref, diff, status: Math.abs(diff) < 0.005 ? "PASS" : "FAIL" });
+  };
+  const sumRows: unknown[][] = [];
+  wbBack.getWorksheet("Summary")!.eachRow({ includeEmpty: true }, (r, i) => {
+    sumRows[i] = (r.values as unknown[]).slice(1);
+  });
+  const hdr = sumRows.findIndex((r) => r?.[0] === "雞頭代碼");
+  const xlsxBroker = new Map<string, number>();
+  let ri = hdr + 1;
+  for (; sumRows[ri] && sumRows[ri][1] !== "合計"; ri++) xlsxBroker.set(String(sumRows[ri][0]), Number(sumRows[ri][5]));
+  const halfHdr = sumRows.findIndex((r, i) => i > ri && r?.[0] === "雞頭代碼");
+  const xlsxHalf = new Map<string, number>();
+  for (let h = halfHdr + 1; sumRows[h]?.[0]; h++) xlsxHalf.set(String(sumRows[h][0]), round2(Number(sumRows[h][1] ?? 0) + Number(sumRows[h][2] ?? 0)));
+  for (const t of await buildPayrollTotals(AUG_MONTH)) {
+    const code = t.brokerCode || "—";
+    strict(`[內部] Summary 逐雞頭 ${code} vs 糧單頁 buildPayrollTotals()`, xlsxBroker.get(code) ?? NaN, t.amount);
+    if (t.brokerCode) strict(`[內部] 半月結 01-15＋16-31 ${code} vs 全月`, xlsxHalf.get(code) ?? 0, t.amount);
+  }
+  const close = await buildMonthlyClose(AUG_MONTH);
+  const sysSite = new Map(result.siteRevenue.map((r) => [r.siteId, r.revenue]));
+  const closeSites = [...close.mainRows, ...close.outsideRows];
+  for (const r of closeSites) strict(`[內部] 逐盤收入 ${r.canonicalName} vs 月結總表`, sysSite.get(r.siteId) ?? 0, r.revenue);
+  for (const r of result.siteRevenue) if (!closeSites.some((c) => c.siteId === r.siteId)) strict(`[內部] 逐盤收入 ${r.siteName}（月結總表冇呢個盤）`, r.revenue, 0);
+  {
+    const ros = wbBack.getWorksheet("Roster")!;
+    const head = (ros.getRow(1).values as unknown[]).slice(1);
+    const revCol = head.indexOf("當月收入") + 1;
+    let rosterRev = 0;
+    ros.eachRow((r, i) => {
+      if (i > 1) rosterRev += Number(r.getCell(revCol).value ?? 0);
+    });
+    strict("[內部] Roster Σ當月收入 vs 月結總表總收入", round2(rosterRev), round2(closeSites.reduce((a, r) => a + r.revenue, 0)));
+  }
+  const lastRun = await prisma.monthCloseRun.findFirst({ where: { month: AUG_MONTH, status: "done" }, orderBy: { finishedAt: "desc" }, select: { reportJson: true } });
+  const report = lastRun?.reportJson as { totals?: { revenue: number; marginRevenue: number; cost: number; grossMargin: number }; payrollByBroker?: Array<{ brokerCode: string; amount: number }>; referralFee?: { total: number }; longtermPayroll?: Record<string, number> | null } | null;
+  if (report?.totals) {
+    const t = result.summaryTotals;
+    strict("[內部] Summary 總收入 vs 一鍵報告", t.revenue, report.totals.revenue);
+    strict("[內部] Summary 毛利口徑營業額 vs 一鍵報告", t.marginRevenue, report.totals.marginRevenue);
+    strict("[內部] Summary 總成本 vs 一鍵報告", t.cost, report.totals.cost);
+    strict("[內部] Summary 毛利 vs 一鍵報告", t.grossMargin, report.totals.grossMargin);
+    for (const p of report.payrollByBroker ?? []) strict(`[內部] Summary 逐雞頭 ${p.brokerCode || "—"} vs 一鍵報告`, xlsxBroker.get(p.brokerCode || "—") ?? NaN, p.amount);
+    if (report.referralFee) strict("[內部] 介紹費 vs 一鍵報告", result.referralFeeTotal, report.referralFee.total);
+    const ltRow = (label: string) => Number(sumRows.find((r) => r?.[0] === label)?.[1] ?? NaN);
+    if (report.longtermPayroll) {
+      strict("[內部] 長工糧 Gross vs 一鍵報告", ltRow("Gross"), report.longtermPayroll.grossTotal);
+      strict("[內部] 長工糧 Autopay vs 一鍵報告", ltRow("Autopay"), report.longtermPayroll.autopayTotal);
+      strict("[內部] 長工糧 MPF EE vs 一鍵報告", ltRow("MPF 僱員 (EE)"), report.longtermPayroll.mpfEeTotal);
+      strict("[內部] 長工糧 MPF ER vs 一鍵報告", ltRow("MPF 僱主 (ER)"), report.longtermPayroll.mpfErTotal);
+    }
+  } else {
+    console.log("[gate:postorder-export-aug] 注意：本月未有完成嘅一鍵結算 run（report_json），Summary 總收入／成本／毛利未對一鍵報告——想對就先撳一次一鍵結算");
+  }
+
   // ---- 逐雞頭付款（K/W/T/G/D/Y/B07）----
   const byUnit = readJson<{ by_unit: Record<string, ByUnitEntry> }>("broker_settlement.json").by_unit;
   const sysByCode = new Map(result.brokerPayouts.map((p) => [p.brokerCode || "(未歸屬)", p]));
@@ -103,7 +171,7 @@ async function main() {
   for (const r of revenueSite) refRevenueSum = round2(refRevenueSum + r.revenue_total);
   {
     const diff = round2(result.siteRevenueTotal - refRevenueSum);
-    diffs.push({ label: "逐盤收入合計（siteRevenueTotal，Roster/PostOrder 逐行加總）", system: result.siteRevenueTotal, reference: refRevenueSum, diff, status: Math.abs(diff) < EPS ? "PASS" : "KNOWN" });
+    diffs.push({ label: "逐盤收入合計（siteRevenueTotal，Roster/PostOrder 逐行加總）", system: result.siteRevenueTotal, reference: refRevenueSum, diff, status: classify(diff, { expected: round2(Object.values(KNOWN_SITE_DIFFS).reduce((a, k) => a + k.expected, 0)) }) });
   }
 
   // ---- 介紹費合計 ----
@@ -125,8 +193,19 @@ async function main() {
   console.log("");
 
   // ---- 逐盤明細（44 個總表盤碼）----
+  // Event 分盤（「X Event」）喺總表 44 碼表同母盤 X 同一個盤碼合併計——
+  // 對總表時先合返落母盤（Roster 呈現亦係放喺母盤 block，見
+  // postorder-export.ts `eventParentAlias`）。
   const sysBySiteName = new Map<string, PostorderSiteRevenue>();
-  for (const r of result.siteRevenue) sysBySiteName.set(r.siteName, r);
+  for (const r of result.siteRevenue) sysBySiteName.set(r.siteName, { ...r });
+  for (const r of result.siteRevenue) {
+    const m = /^(.+?)\s+Event$/.exec(r.siteName);
+    const parent = m ? sysBySiteName.get(m[1]) : undefined;
+    if (parent) {
+      parent.revenue = round2(parent.revenue + r.revenue);
+      parent.shifts += r.shifts;
+    }
+  }
   const siteDiffRows: DiffRow[] = [];
   for (const r of revenueSite) {
     const name = SITE_ID_TO_CANONICAL_NAME[r.site_id] ?? r.site_id;
@@ -209,7 +288,10 @@ async function main() {
       }
     }
     const diff = round2(sysAmount - ref.recomputed);
-    const status = anyFound ? classify(diff, KNOWN_REFERRAL_LINE_DIFFS[key]) : "FAIL";
+    // 驗收：更數都要一致（唔係淨睇金額——費率唔同嘅兩批人可以金額啱但更數錯）。
+    const known = KNOWN_REFERRAL_LINE_DIFFS[key];
+    let status: Status = anyFound ? classify(diff, known) : "FAIL";
+    if (status === "PASS" && sysShifts !== ref.shifts) status = "FAIL";
     if (status === "PASS") referralLineMatched++;
     else if (status === "KNOWN") referralLineKnown++;
     console.log(

@@ -51,7 +51,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
       status: 200,
       headers: {
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "content-disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+        // 檔名全 ASCII（「Postorder - YYYY-MM.xlsx」）——直接寫，唔好 percent-encode
+        // （Safari／Firefox 會照字面顯示 %20）；filename* 係 RFC 6266 標準寫法。
+        "content-disposition": `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
       },
     });
   });

@@ -30,17 +30,23 @@
 //   - 「其他」（頂更/賣假等 special mark）：`shift_records` 冇獨立欄位
 //     記呢類標記（賣假/頂位費喺 `longterm_payroll_inputs` 人手輸入，同
 //     單一更冇 1:1 對應），呢度恆留空。
-//   - 長工（B07）行「上單價」：任務書明文「系統出實數：月薪÷當月更數，
-//     注明」——呢度用「呢個 (盤,更種) B07 組合入面全部長工嘅
-//     `guards.monthly_salary` 之和 ÷ 呢個組合嘅總更數」做近似值（跨
-//     guard 用曆日比例分攤唔喺呢個粒度做，留喺 longterm-salary.ts 嗰個
-//     獨立分攤口徑），口徑說明 sheet 有註明。
+//   - 長工（B07）行：真 Postorder 呢類行「上單價」(E) 照寫收客價，
+//     「外判價」(F) 係 `#REF!`（月薪÷更數公式斷咗）——任務書明文「系統出
+//     實數：月薪÷當月更數，注明」，所以呢度「上單價」＝收客價眾數（同散工
+//     行一樣），「外判價」＝(呢行每位長工月薪 × 佢喺呢行嘅更數÷佢本月 B07
+//     總更數) 之和 ÷ 呢行更數——一位長工一行做足全月＝月薪÷當月更數；
+//     同一人分散幾行就按更數比例拆，唔會重複計足幾次月薪。月薪來源：
+//     本月生效嘅 `guard_longterm_contracts`（日薪制＝`daily_rate` 直接當
+//     每更），冇合約先 fallback `guards.monthly_salary`。（Opus 5.5 驗收
+//     2026-09-27 修正：原版將月薪÷更數寫落「上單價」欄、而且同一人喺幾
+//     行各計足一次月薪。）
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { n, round2, monthRange as reportMonthRange, monthLabel } from "./money";
 import { buildPayrollTotals, type BrokerPayrollTotal } from "./payroll";
 import { computeReferralFeesForMonth, type ComputeReferralFeesResult } from "./referral-fee";
 import { buildMonthlyClose } from "./monthly-close";
+import { buildGrossMargin } from "./gross-margin";
 
 // ---------------------------------------------------------------------------
 // Excel 規則（鐵則）：sheet 名唔可以有 `/ \ ? * [ ] :`（含全形）、長度
@@ -108,6 +114,10 @@ interface RosterGroup {
   clientRateSamples: number[];
   guardWageSamples: number[];
   longtermGuardIds: Set<string>;
+  /** B07 行逐安員更數——外判價（月薪按更數比例拆）用。 */
+  longtermShiftsByGuard: Map<string, number>;
+  /** 排序用：物業顯示名＋真盤名（Event 盤排喺母盤後面）。 */
+  sortKey: string;
 }
 
 function shortestAlias(canonicalName: string, aliases: string[]): string {
@@ -166,6 +176,8 @@ export interface PostorderWorkbookResult {
   /** 逐盤（跨全部更種／結算單位加總）——俾 gate script 逐盤對真 Postorder
    * `revenue_site.json`，唔止睇合計。 */
   siteRevenue: PostorderSiteRevenue[];
+  /** Summary 總收入／成本／毛利（同一鍵結算報告同一口徑）。 */
+  summaryTotals: PostorderSummaryTotals;
 }
 
 async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; daysInMonth: number }> {
@@ -200,6 +212,20 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     cancelledMap.set(`${c.siteId}|${c.shiftTypeId}|${c.settlementBrokerId ?? "none"}`, c._count._all);
   }
 
+  // Event 分盤（例：「啟航1331 Event」）——系統係獨立盤（獨立價卡），但老闆
+  // 真 Postorder 將 Event 行放喺母盤 block 入面（物業名稱同母盤一樣寫「啟航」，
+  // 客戶欄寫「… Event」）。呢度跟返老闆習慣：物業名稱用母盤簡稱、更份
+  // 前面加「Event」，行排喺母盤後面；**逐行收入／成本唔合併**（逐盤加總仍然
+  // 同月結總表逐盤一致，Event 盤自己一個 siteId）。
+  const allSites = await prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } });
+  const siteByName = new Map(allSites.map((s) => [s.canonicalName, s]));
+  const eventParentAlias = new Map<string, string>();
+  for (const s of allSites) {
+    const m = /^(.+?)\s+Event$/.exec(s.canonicalName);
+    const parent = m ? siteByName.get(m[1]) : undefined;
+    if (parent) eventParentAlias.set(s.id, shortestAlias(parent.canonicalName, parent.aliases));
+  }
+
   const groups = new Map<string, RosterGroup>();
   for (const r of records) {
     const brokerId = r.settlementBrokerId;
@@ -208,11 +234,15 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     if (!g) {
       const isLongterm = r.settlementBroker?.kind === "internal_longterm";
       const brokerLabel = isLongterm ? "(8) 長工" : (r.settlementBroker?.name ?? "未歸屬結算單位");
+      const eventAlias = eventParentAlias.get(r.site.id);
+      const displaySite = eventAlias ?? shortestAlias(r.site.canonicalName, r.site.aliases);
+      const baseShiftLabel = r.shiftType.label ?? r.shiftType.code;
+      const shiftLabel = eventAlias ? `Event ${baseShiftLabel}` : baseShiftLabel;
       g = {
         key: { siteId: r.site.id, shiftTypeId: r.shiftType.id, brokerId },
-        siteName: shortestAlias(r.site.canonicalName, r.site.aliases),
+        siteName: displaySite,
         clientName: r.site.clientName,
-        shiftLabel: r.shiftType.label ?? r.shiftType.code,
+        shiftLabel,
         timeLabel: timeLabel(r.shiftType.startTime, r.shiftType.endTime),
         isLongterm,
         brokerCode: r.settlementBroker?.code ?? "",
@@ -225,6 +255,8 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
         clientRateSamples: [],
         guardWageSamples: [],
         longtermGuardIds: new Set(),
+        longtermShiftsByGuard: new Map(),
+        sortKey: [displaySite, r.site.canonicalName, isLongterm ? "1" : "0", shiftLabel, timeLabel(r.shiftType.startTime, r.shiftType.endTime) ?? "", r.settlementBroker?.code ?? "~"].join("\u0001"),
       };
       groups.set(key, g);
     }
@@ -237,7 +269,10 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     g.cost = round2(g.cost + guardWage + brokerFee);
     if (clientRate !== null) g.clientRateSamples.push(clientRate);
     if (r.guardWageSnapshot !== null) g.guardWageSamples.push(guardWage);
-    if (g.isLongterm) g.longtermGuardIds.add(r.guardId);
+    if (g.isLongterm) {
+      g.longtermGuardIds.add(r.guardId);
+      g.longtermShiftsByGuard.set(r.guardId, (g.longtermShiftsByGuard.get(r.guardId) ?? 0) + 1);
+    }
 
     const day = r.workDate.getUTCDate();
     const cell: DayCell = {
@@ -253,7 +288,66 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     else g.byDay.set(day, [cell]);
   }
 
-  return { groups: [...groups.values()], daysInMonth };
+  const sorted = [...groups.values()].sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
+  return { groups: sorted, daysInMonth };
+}
+
+/** 長工每人「每月成本基準」：本月生效合約（月薪制＝月薪；日薪制＝每更價），
+ * 冇合約 fallback `guards.monthly_salary`。 */
+type LongtermPayBasisInfo = { kind: "monthly"; monthlySalary: number } | { kind: "daily"; dailyRate: number };
+
+/** 外判價（長工行）：Σ(每位長工月薪 × 佢喺呢行更數 ÷ 佢本月 B07 總更數) ÷ 呢行更數；
+ * 日薪制直接用每更價。純函數，export 俾測試。 */
+export function longtermRowPayoutRate(
+  shiftsByGuard: Map<string, number>,
+  totalB07ShiftsByGuard: Map<string, number>,
+  payBasisByGuard: Map<string, LongtermPayBasisInfo>,
+): number | null {
+  let rowShifts = 0;
+  let cost = 0;
+  let known = false;
+  for (const [guardId, shifts] of shiftsByGuard) {
+    rowShifts += shifts;
+    const basis = payBasisByGuard.get(guardId);
+    if (!basis) continue;
+    known = true;
+    if (basis.kind === "daily") cost += basis.dailyRate * shifts;
+    else {
+      const total = totalB07ShiftsByGuard.get(guardId) ?? shifts;
+      cost += total > 0 ? (basis.monthlySalary * shifts) / total : 0;
+    }
+  }
+  if (!known || rowShifts === 0) return null;
+  return round2(cost / rowShifts);
+}
+
+/** 盤級收入補差行（月費／admin_fee／special billing，或者月結口徑調整）。 */
+interface FlatRevenueRow {
+  siteId: string;
+  siteName: string;
+  clientName: string | null;
+  amount: number;
+  label: "月費" | "收入調整（月結口徑）";
+}
+
+/** 逐行次序：散工／長工行按盤排好，每個盤最後一行之後即刻跟返嗰個盤嘅
+ * 「月費／收入調整」行（同一盤 block 入面），冇逐更行嘅盤放最尾。 */
+type RowItem = { kind: "group"; g: RosterGroup } | { kind: "flat"; r: FlatRevenueRow };
+function interleaveRows(groups: RosterGroup[], flatRows: FlatRevenueRow[]): RowItem[] {
+  const flatBySite = new Map<string, FlatRevenueRow[]>();
+  for (const r of flatRows) flatBySite.set(r.siteId, [...(flatBySite.get(r.siteId) ?? []), r]);
+  const out: RowItem[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    out.push({ kind: "group", g });
+    const next = groups[i + 1];
+    if (!next || next.key.siteId !== g.key.siteId) {
+      for (const r of flatBySite.get(g.key.siteId) ?? []) out.push({ kind: "flat", r });
+      flatBySite.delete(g.key.siteId);
+    }
+  }
+  for (const rows of flatBySite.values()) for (const r of rows) out.push({ kind: "flat", r });
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,8 +361,8 @@ async function writeRosterSheet(
   groups: RosterGroup[],
   daysInMonth: number,
   monthLocked: boolean,
-  longtermMonthlySalaryByGuard: Map<string, number>,
-  flatRevenueRows: Array<{ siteId: string; siteName: string; clientName: string | null; amount: number }>,
+  longtermPayoutRate: (g: RosterGroup) => number | null,
+  flatRevenueRows: FlatRevenueRow[],
 ): Promise<void> {
   const ws = wb.addWorksheet(sanitizeSheetName(POSTORDER_SHEET_NAMES.roster));
 
@@ -278,22 +372,35 @@ async function writeRosterSheet(
   head.forEach((h, i) => setCell(ws, 1, i + 1, h));
 
   let row = 2;
-  for (const g of groups) {
+  for (const item of interleaveRows(groups, flatRevenueRows)) {
+    if (item.kind === "flat") {
+      const r = item.r;
+      let col = 1;
+      setCell(ws, row, col++, r.clientName);
+      setCell(ws, row, col++, r.siteName);
+      setCell(ws, row, col++, r.label);
+      setCell(ws, row, col++, r.amount);
+      col += 2; // 外判價／時間留空
+      col += daysInMonth * 7; // 日曆 block 留空（月費唔逐更）
+      col += 2; // 取消／甩更留空
+      setCell(ws, row, col++, 0);
+      setCell(ws, row, col++, r.amount);
+      setCell(ws, row, col++, 0);
+      setCell(ws, row, col++, r.amount);
+      row++;
+      continue;
+    }
+    const g = item.g;
     let col = 1;
     setCell(ws, row, col++, g.clientName);
     setCell(ws, row, col++, g.siteName);
     setCell(ws, row, col++, g.shiftLabel);
 
-    let clientRateRepr: number | null;
-    if (g.isLongterm) {
-      let salarySum = 0;
-      for (const guardId of g.longtermGuardIds) salarySum += longtermMonthlySalaryByGuard.get(guardId) ?? 0;
-      clientRateRepr = g.shiftCount > 0 ? round2(salarySum / g.shiftCount) : null;
-    } else {
-      clientRateRepr = mode(g.clientRateSamples);
-    }
-    setCell(ws, row, col++, clientRateRepr);
-    setCell(ws, row, col++, g.isLongterm ? null : mode(g.guardWageSamples));
+    // 上單價＝收客價眾數（長工行都一樣，真 Postorder E 欄）；外判價：散工
+    // 行＝出街價眾數，長工行＝月薪÷當月更數（真 Postorder F 欄 `#REF!`，
+    // 見檔頭註解）。
+    setCell(ws, row, col++, mode(g.clientRateSamples));
+    setCell(ws, row, col++, g.isLongterm ? longtermPayoutRate(g) : mode(g.guardWageSamples));
     setCell(ws, row, col++, g.timeLabel);
 
     for (let d = 1; d <= daysInMonth; d++) {
@@ -329,25 +436,6 @@ async function writeRosterSheet(
     row++;
   }
 
-  // 「月費」合成行——月費／admin_fee／special billing 盤（`client_rate_
-  // snapshot` 本身唔記逐更收客），日曆 block 全部留空（唔逐更），淨係
-  // 尾欄有數（見 buildPostorderWorkbook() 頂註解）。
-  for (const r of flatRevenueRows) {
-    let col = 1;
-    setCell(ws, row, col++, r.clientName);
-    setCell(ws, row, col++, r.siteName);
-    setCell(ws, row, col++, "月費");
-    setCell(ws, row, col++, r.amount);
-    col += 2; // 外判價／時間留空
-    col += daysInMonth * 7; // 日曆 block 留空（月費唔逐更）
-    col += 2; // 取消／甩更留空
-    setCell(ws, row, col++, 0);
-    setCell(ws, row, col++, r.amount);
-    setCell(ws, row, col++, 0);
-    setCell(ws, row, col++, r.amount);
-    row++;
-  }
-
   ws.getRow(1).font = { bold: true };
   ws.getColumn(2).width = 20;
 }
@@ -362,7 +450,7 @@ async function writePostOrderSheet(
   referral: ComputeReferralFeesResult,
   brokerNameById: Map<string, string>,
   siteNameById: Map<string, string>,
-  flatRevenueRows: Array<{ siteId: string; siteName: string; clientName: string | null; amount: number }>,
+  flatRevenueRows: FlatRevenueRow[],
 ): Promise<void> {
   const ws = wb.addWorksheet(sanitizeSheetName(POSTORDER_SHEET_NAMES.postOrder));
 
@@ -372,7 +460,19 @@ async function writePostOrderSheet(
   head.forEach((h, i) => setCell(ws, 1, i + 1, h));
 
   let row = 2;
-  for (const g of groups) {
+  for (const item of interleaveRows(groups, flatRevenueRows)) {
+    if (item.kind === "flat") {
+      const r = item.r;
+      let col = 1;
+      setCell(ws, row, col++, r.siteName);
+      setCell(ws, row, col++, r.label);
+      setCell(ws, row, col++, "—");
+      col += daysInMonth; // 日曆留空
+      setCell(ws, row, col++, 0);
+      row++;
+      continue;
+    }
+    const g = item.g;
     let col = 1;
     setCell(ws, row, col++, g.siteName);
     setCell(ws, row, col++, g.shiftLabel);
@@ -383,17 +483,6 @@ async function writePostOrderSheet(
       col++;
     }
     setCell(ws, row, col++, g.shiftCount);
-    row++;
-  }
-
-  // 「月費」合成行（同 Roster 一致，見 buildPostorderWorkbook() 頂註解）。
-  for (const r of flatRevenueRows) {
-    let col = 1;
-    setCell(ws, row, col++, r.siteName);
-    setCell(ws, row, col++, "月費");
-    setCell(ws, row, col++, "—");
-    col += daysInMonth; // 日曆留空
-    setCell(ws, row, col++, 0);
     row++;
   }
 
@@ -414,7 +503,9 @@ async function writePostOrderSheet(
   // 個別安員）。
   const byBrokerSite = new Map<string, { brokerId: string; siteId: string; shifts: number; amount: number; feePerShift: number }>();
   for (const li of referral.lineItems) {
-    const k = `${li.brokerId}|${li.siteId}`;
+    // 驗收：key 包埋費率——同一 (雞頭,盤) 有唔同費率嘅人唔可以合埋一行
+    // 淨顯示第一個費率（會令「費率×更數≠金額」掩蓋差異）。
+    const k = `${li.brokerId}|${li.siteId}|${li.feePerShift}`;
     const cur = byBrokerSite.get(k);
     if (cur) {
       cur.shifts += li.shifts;
@@ -445,7 +536,8 @@ async function writeSummarySheet(
   payrollTotals: BrokerPayrollTotal[],
   referral: ComputeReferralFeesResult,
   monthlyClose: Awaited<ReturnType<typeof buildMonthlyClose>>,
-): Promise<void> {
+  grossMargin: Awaited<ReturnType<typeof buildGrossMargin>>,
+): Promise<PostorderSummaryTotals> {
   const ws = wb.addWorksheet(sanitizeSheetName(POSTORDER_SHEET_NAMES.summary));
   const { start, end } = reportMonthRange(month);
   const mid = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 15));
@@ -526,16 +618,37 @@ async function writeSummarySheet(
   row += 2;
 
   // K passthrough 提示（規則 12：系統外現金扣，唔扣）
+  const ltRun = await prisma.longtermPayrollRun.findFirst({ where: { month: start, voidedAt: null, status: { not: "void" } }, orderBy: { createdAt: "desc" } });
   setCell(
     ws,
     row,
     1,
-    "提示（§14 規則 12）：簽證形式長工每月 Autopay＋MPF ER 由公司支付維持簽證，但喺對應雞頭結算（大糧）現金扣返俾公司——呢筆扣減唔喺呢張總表反映（總表雞頭數字係扣減前金額），會計出糧後系統外現金扣。",
+    "提示（§14 規則 12）：簽證形式長工每月人工（Gross）＋MPF 僱主供款由公司支付維持簽證，但喺對應雞頭結算（大糧）現金扣返俾公司——呢筆扣減唔喺呢張總表反映（上面逐雞頭付款係扣減前金額），會計出糧後系統外現金扣。",
   );
-  row += 2;
+  row++;
+  if (ltRun) {
+    // 逐雞頭列出參考金額（長工糧 run 逐人 line，唔帶姓名）。
+    const visaLines = await prisma.longtermPayrollLine.findMany({
+      where: { runId: ltRun.id, guard: { visaSponsoredByBrokerId: { not: null } } },
+      select: { gross: true, mpfEr: true, guard: { select: { visaSponsoredByBroker: { select: { code: true } } } } },
+    });
+    const byBroker = new Map<string, { count: number; gross: number; mpfEr: number }>();
+    for (const l of visaLines) {
+      const code = l.guard.visaSponsoredByBroker?.code ?? "—";
+      const cur = byBroker.get(code) ?? { count: 0, gross: 0, mpfEr: 0 };
+      cur.count++;
+      cur.gross = round2(cur.gross + n(l.gross));
+      cur.mpfEr = round2(cur.mpfEr + n(l.mpfEr));
+      byBroker.set(code, cur);
+    }
+    for (const [code, v] of byBroker) {
+      setCell(ws, row, 1, `  雞頭 ${code}：簽證形式長工 ${v.count} 人，人工 Gross ${v.gross}＋MPF ER ${v.mpfEr}＝${round2(v.gross + v.mpfEr)}（參考金額，會計喺呢個雞頭大糧現金扣返，系統外）`);
+      row++;
+    }
+  }
+  row++;
 
   // 長工 Autopay/MPF
-  const ltRun = await prisma.longtermPayrollRun.findFirst({ where: { month: start, voidedAt: null, status: { not: "void" } }, orderBy: { createdAt: "desc" } });
   setCell(ws, row, 1, "長工糧（Autopay／MPF）");
   ws.getRow(row).font = { bold: true };
   row++;
@@ -562,40 +675,78 @@ async function writeSummarySheet(
   }
   row += 1;
 
-  // 總收入/總成本/毛利（合併口徑，同 monthly-close.ts combinedCostSummary 一致）
-  const { mainRows, combinedCostSummary } = monthlyClose;
-  const revenue = round2(mainRows.reduce((a, r) => a + r.revenue, 0));
-  const perShiftCost = round2(mainRows.reduce((a, r) => a + r.cost, 0));
-  setCell(ws, row, 1, "總收入／總成本／毛利（合併口徑）");
+  // 總收入/總成本/毛利——**同一鍵結算報告 `stepCompute()`（src/lib/month-
+  // close/one-click.ts）一模一樣嘅口徑**（Opus 5.5 驗收修正：原版用
+  // `buildMonthlyClose()` 主表營業額＋月結 combinedCostSummary，同一鍵報告
+  // 差 84.85／73／11.85，而且冇「月結以外」收入）：
+  //   總收入＝月結總表主表＋月結以外（`buildMonthlyClose()`）；
+  //   毛利口徑營業額／成本／毛利＝毛利表（`buildGrossMargin()`），有長工糧
+  //   run 就用合併成本（更次成本＋介紹費＋長工 Autopay 剔簽證形式）。
+  const totals = summaryTotalsFrom(monthlyClose, grossMargin, !!ltRun);
+  setCell(ws, row, 1, "總收入／總成本／毛利（同一鍵結算報告同一口徑）");
   ws.getRow(row).font = { bold: true };
   row++;
-  setCell(ws, row, 1, "營業額（主表）");
-  setCell(ws, row, 2, revenue);
+  setCell(ws, row, 1, "總收入（月結總表，含月結以外）");
+  setCell(ws, row, 2, totals.revenue);
   row++;
-  setCell(ws, row, 1, "更次成本（散工×出街價）");
-  setCell(ws, row, 2, perShiftCost);
+  setCell(ws, row, 1, "毛利口徑營業額（毛利表）");
+  setCell(ws, row, 2, totals.marginRevenue);
   row++;
-  if (combinedCostSummary) {
+  const ccs = grossMargin.combinedCostSummary;
+  if (totals.costBasis === "combined" && ccs) {
+    setCell(ws, row, 1, "更次成本（散工×出街價）");
+    setCell(ws, row, 2, ccs.perShiftCostTotal);
+    row++;
     setCell(ws, row, 1, "介紹費");
-    setCell(ws, row, 2, combinedCostSummary.referralFeeTotal);
+    setCell(ws, row, 2, ccs.referralFeeTotal);
     row++;
     setCell(ws, row, 1, "長工 Autopay（已剔簽證形式）");
-    setCell(ws, row, 2, combinedCostSummary.longtermAutopayTotal);
+    setCell(ws, row, 2, ccs.longtermAutopayTotal);
     row++;
     setCell(ws, row, 1, "合併成本合計");
-    setCell(ws, row, 2, combinedCostSummary.combinedCostTotal);
+    setCell(ws, row, 2, totals.cost);
     row++;
-    setCell(ws, row, 1, "毛利（營業額－合併成本）");
-    setCell(ws, row, 2, round2(revenue - combinedCostSummary.combinedCostTotal));
+    setCell(ws, row, 1, "毛利（毛利口徑營業額－合併成本）");
+    setCell(ws, row, 2, totals.grossMargin);
+    row++;
+    setCell(ws, row, 1, "MPF 僱主供款（另列，唔計入合併成本，同一鍵報告一致）");
+    setCell(ws, row, 2, ccs.mpfErTotal);
     row++;
   } else {
-    setCell(ws, row, 1, "毛利（營業額－更次成本，7 月前口徑，未含長工 Autopay/介紹費）");
-    setCell(ws, row, 2, round2(revenue - perShiftCost));
+    setCell(ws, row, 1, "總成本（毛利表，舊口徑：未含長工 Autopay 實數）");
+    setCell(ws, row, 2, totals.cost);
+    row++;
+    setCell(ws, row, 1, "毛利（毛利表，舊口徑）");
+    setCell(ws, row, 2, totals.grossMargin);
     row++;
   }
 
   ws.getColumn(1).width = 40;
   ws.getColumn(2).width = 18;
+  return totals;
+}
+
+export interface PostorderSummaryTotals {
+  revenue: number;
+  marginRevenue: number;
+  cost: number;
+  grossMargin: number;
+  costBasis: "combined" | "legacy";
+}
+
+/** 同 `stepCompute()`（one-click.ts）一致嘅總收入／成本／毛利。 */
+export function summaryTotalsFrom(
+  monthlyClose: Awaited<ReturnType<typeof buildMonthlyClose>>,
+  grossMargin: Awaited<ReturnType<typeof buildGrossMargin>>,
+  hasLongtermRun: boolean,
+): PostorderSummaryTotals {
+  const revenue = round2([...monthlyClose.mainRows, ...monthlyClose.outsideRows].reduce((a, r) => a + n(r.revenue), 0));
+  const marginRevenue = round2(grossMargin.totals.revenue);
+  const ccs = grossMargin.combinedCostSummary;
+  const useCombined = ccs !== null && hasLongtermRun;
+  const cost = useCombined ? ccs.combinedCostTotal : round2(grossMargin.totals.cost);
+  const grossMarginValue = useCombined ? round2(marginRevenue - ccs.combinedCostTotal) : round2(grossMargin.totals.profit);
+  return { revenue, marginRevenue, cost, grossMargin: grossMarginValue, costBasis: useCombined ? "combined" : "legacy" };
 }
 
 async function writeLegendSheet(wb: ExcelJS.Workbook, month: Date): Promise<void> {
@@ -615,17 +766,19 @@ async function writeLegendSheet(wb: ExcelJS.Workbook, month: Date): Promise<void
     "Paid：month_closes 該月已鎖定（locked_at 非 null）→ 1；未鎖定留空。",
     "取消：該 (盤,更種,結算單位) 組合本月 status=cancelled 嘅記錄數。",
     "甩更：schema 冇對應終態（ShiftRecordStatus 冇「甩更」值），恆 0——如老闆要追蹤呢個概念，要先喺 shift_records 加狀態/欄位。",
-    "長工（B07）行「上單價」：任務書明文「系統出實數：月薪÷當月更數，注明」——呢度＝該 (盤,更種) B07 組合入面全部出過更嘅長工 guards.monthly_salary 之和 ÷ 該組合當月更數（近似值，唔係逐人按曆日比例分攤——嗰個口徑喺 longterm-salary.ts 獨立處理，用喺月結總表「長工月薪分攤」欄）。",
+    "長工（B07）行：「上單價」同散工行一樣＝收客價；「外判價」＝月薪÷當月更數（真 Postorder 呢格係 #REF!，任務書要求系統出實數）——每位長工月薪（本月生效長工合約；日薪制直接用每更價；冇合約先用安員檔案月薪）按佢喺呢行嘅更數÷佢本月長工總更數拆落呢行，再÷呢行更數。一人一行做足全月＝月薪÷當月更數。呢個係參考單價，唔計入「當月成本」（長工成本以長工糧 Autopay 實數計，見 Summary）。",
+    "「月費」行／「收入調整（月結口徑）」行：逐盤收入一律以月結總表（buildMonthlyClose()）為準——月費／admin fee／特別計法嘅盤，逐更收客價加埋同月結口徑唔同，差額寫一行（正數＝月費，負數＝收入調整，例：構造盤／月費盤嘅更同時帶咗逐更收客價），所以 Roster「當月收入」逐盤加總永遠等於月結總表。",
+    "Event 分盤（例：啟航1331 Event）：系統係獨立盤（獨立價卡），跟老闆 Postorder 習慣放喺母盤 block——物業名稱寫母盤簡稱、更份前加「Event」、排喺母盤後面；逐行收入唔合併，逐盤加總同月結總表一致。",
     "",
     "Summary「逐雞頭付款」＝ buildPayrollTotals()（src/lib/reports/payroll.ts）——同 gate:reports／gate:pricing 已經對過數嘅同一條 pure function，唔重新發明公式。",
     "Summary「介紹費」＝ computeReferralFeesForMonth()（src/lib/reports/referral-fee.ts）——§19.1 長工介紹雞頭 fallback 邏輯（唔靠 Postorder 上載）。",
     "Summary「長工 Autopay/MPF」＝ 該月最新一個未作廢 longterm_payroll_runs.totals_json。",
-    "Summary「總收入/總成本/毛利」＝ buildMonthlyClose() combinedCostSummary（同月結頁/一鍵結算報告同一口徑）。",
+    "Summary「總收入/總成本/毛利」＝同一鍵結算報告同一計法：總收入＝月結總表（主表＋月結以外，buildMonthlyClose()）；毛利口徑營業額／成本／毛利＝毛利表 buildGrossMargin()（有長工糧 run 用合併成本：更次成本＋介紹費＋長工 Autopay 剔簽證形式）。",
     "",
     "§14 規則 12（簽證形式長工 salary passthrough）：呢個系統外現金扣減唔喺任何數字反映，總表雞頭數字係扣減前金額——見 Summary 提示行。",
     "§14 規則 12a（卓弘豁免介紹費）：由 2026-09 起生效，8 月結算跟月結表全數支付。",
     "",
-    "已知差異項目（§19，8 月驗收時記錄，未必每月都出現，出現時要人手核對）：Event 分盤、OT 記錄未折入日曆格、蔚峰園(W)更表重複行、凱和山 Unbilled 判斷、CP5 IC proxy。呢啲屬於*上游更表資料*本身嘅已知落差，唔係呢個 export 模組嘅 bug——見 scripts/gate/postorder-export-aug.ts 差異表。",
+    "已知差異項目（§19，8 月驗收時記錄，未必每月都出現，出現時要人手核對）：OT 記錄未折入日曆格／逐盤收入（HKU座頭 OT）、蔚峰園(W)更表重複行、凱和山 Unbilled 判斷、Weave Hospital Road(T)更表漏記病假。呢啲屬於*上游更表資料*本身嘅已知落差，唔係呢個 export 模組嘅 bug——見 scripts/gate/postorder-export-aug.ts 差異表。",
   ];
   lines.forEach((l, i) => setCell(ws, i + 1, 1, l));
   ws.getColumn(1).width = 100;
@@ -635,23 +788,46 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
   const wb = new ExcelJS.Workbook();
   const { groups, daysInMonth } = await loadRosterGroups(month);
 
-  const [payrollTotals, referral, monthClose, brokers, sites, monthlyClose] = await Promise.all([
+  const [payrollTotals, referral, monthClose, brokers, sites, monthlyClose, grossMargin] = await Promise.all([
     buildPayrollTotals(month),
     computeReferralFeesForMonth(month),
     prisma.monthClose.findUnique({ where: { month: reportMonthRange(month).start }, select: { lockedAt: true } }),
     prisma.broker.findMany({ select: { id: true, name: true } }),
-    prisma.site.findMany({ select: { id: true, canonicalName: true, clientName: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, clientName: true, aliases: true } }),
     buildMonthlyClose(month),
+    buildGrossMargin(month),
   ]);
   const brokerNameById = new Map(brokers.map((b) => [b.id, b.name]));
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
   const siteClientNameById = new Map(sites.map((s) => [s.id, s.clientName]));
+  const siteDisplayById = new Map(sites.map((s) => [s.id, shortestAlias(s.canonicalName, s.aliases)]));
 
   const longtermGuardIds = new Set<string>();
-  for (const g of groups) for (const id of g.longtermGuardIds) longtermGuardIds.add(id);
-  const longtermGuards =
-    longtermGuardIds.size > 0 ? await prisma.guard.findMany({ where: { id: { in: [...longtermGuardIds] } }, select: { id: true, monthlySalary: true } }) : [];
-  const longtermMonthlySalaryByGuard = new Map(longtermGuards.map((g) => [g.id, n(g.monthlySalary)]));
+  const totalB07ShiftsByGuard = new Map<string, number>();
+  for (const g of groups) {
+    for (const id of g.longtermGuardIds) longtermGuardIds.add(id);
+    for (const [id, c] of g.longtermShiftsByGuard) totalB07ShiftsByGuard.set(id, (totalB07ShiftsByGuard.get(id) ?? 0) + c);
+  }
+  const { start: mStart, end: mEnd } = reportMonthRange(month);
+  const [longtermGuards, contracts] =
+    longtermGuardIds.size > 0
+      ? await Promise.all([
+          prisma.guard.findMany({ where: { id: { in: [...longtermGuardIds] } }, select: { id: true, monthlySalary: true } }),
+          prisma.guardLongtermContract.findMany({
+            where: { guardId: { in: [...longtermGuardIds] }, effectiveFrom: { lte: mEnd }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: mStart } }] },
+            orderBy: { effectiveFrom: "asc" },
+            select: { guardId: true, monthlySalary: true, payBasis: true, dailyRate: true },
+          }),
+        ])
+      : [[], []];
+  const payBasisByGuard = new Map<string, LongtermPayBasisInfo>();
+  for (const g of longtermGuards) if (g.monthlySalary !== null && n(g.monthlySalary) > 0) payBasisByGuard.set(g.id, { kind: "monthly", monthlySalary: n(g.monthlySalary) });
+  // 合約優先；同月多段（月中轉約）取最後生效嗰段做參考單價。
+  for (const c of contracts) {
+    if (c.payBasis === "daily" && c.dailyRate !== null) payBasisByGuard.set(c.guardId, { kind: "daily", dailyRate: n(c.dailyRate) });
+    else payBasisByGuard.set(c.guardId, { kind: "monthly", monthlySalary: n(c.monthlySalary) });
+  }
+  const longtermPayoutRate = (g: RosterGroup) => longtermRowPayoutRate(g.longtermShiftsByGuard, totalB07ShiftsByGuard, payBasisByGuard);
 
   // 逐盤「更次收入」（groups 加總，`shift_records.client_rate_snapshot`
   // 之和）vs `buildMonthlyClose()` 嘅權威逐盤收入（已經包埋 flat 月費卡／
@@ -664,18 +840,32 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
   // M+／恆星樓 呢類盤冇呢個補丁會顯示 0 收入）。
   const perShiftRevenueBySite = new Map<string, number>();
   for (const g of groups) perShiftRevenueBySite.set(g.key.siteId, round2((perShiftRevenueBySite.get(g.key.siteId) ?? 0) + g.revenue));
-  const flatRevenueRows: Array<{ siteId: string; siteName: string; clientName: string | null; amount: number }> = [];
-  for (const r of [...monthlyClose.mainRows, ...monthlyClose.outsideRows]) {
-    const perShift = perShiftRevenueBySite.get(r.siteId) ?? 0;
-    const flatPortion = round2(r.revenue - perShift);
-    if (flatPortion > 0.01) {
-      flatRevenueRows.push({ siteId: r.siteId, siteName: siteNameById.get(r.siteId) ?? r.canonicalName, clientName: siteClientNameById.get(r.siteId) ?? null, amount: flatPortion });
+  const flatRevenueRows: FlatRevenueRow[] = [];
+  // Opus 5.5 驗收：差額係負數（月結口徑收入少過逐更收客 Σ）或者盤喺
+  // 月結總表完全冇出現，原版會靜靜略過，令 Roster 逐盤收入同月結總表對唔
+  // 上——而家一律加一行「收入調整（月結口徑）」補齊，逐盤加總永遠等於
+  // `buildMonthlyClose()`（金額照寫，唔會收埋）。
+  const closeRevenueBySite = new Map<string, { revenue: number; canonicalName: string }>();
+  for (const r of [...monthlyClose.mainRows, ...monthlyClose.outsideRows]) closeRevenueBySite.set(r.siteId, { revenue: n(r.revenue), canonicalName: r.canonicalName });
+  const siteIdsInOrder = [...closeRevenueBySite.keys(), ...[...perShiftRevenueBySite.keys()].filter((id) => !closeRevenueBySite.has(id))];
+  for (const siteId of siteIdsInOrder) {
+    const close = closeRevenueBySite.get(siteId);
+    const perShift = perShiftRevenueBySite.get(siteId) ?? 0;
+    const flatPortion = round2((close?.revenue ?? 0) - perShift);
+    if (Math.abs(flatPortion) > 0.005) {
+      flatRevenueRows.push({
+        siteId,
+        siteName: siteDisplayById.get(siteId) ?? close?.canonicalName ?? siteId,
+        clientName: siteClientNameById.get(siteId) ?? null,
+        amount: flatPortion,
+        label: flatPortion > 0 ? "月費" : "收入調整（月結口徑）",
+      });
     }
   }
 
-  await writeRosterSheet(wb, groups, daysInMonth, !!monthClose?.lockedAt, longtermMonthlySalaryByGuard, flatRevenueRows);
+  await writeRosterSheet(wb, groups, daysInMonth, !!monthClose?.lockedAt, longtermPayoutRate, flatRevenueRows);
   await writePostOrderSheet(wb, groups, daysInMonth, referral, brokerNameById, siteNameById, flatRevenueRows);
-  await writeSummarySheet(wb, month, payrollTotals, referral, monthlyClose);
+  const summaryTotals = await writeSummarySheet(wb, month, payrollTotals, referral, monthlyClose, grossMargin);
   await writeLegendSheet(wb, month);
 
   const siteRevenueTotal = round2(groups.reduce((a, g) => a + g.revenue, 0) + flatRevenueRows.reduce((a, r) => a + r.amount, 0));
@@ -695,7 +885,7 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
   for (const r of flatRevenueRows) {
     const cur = siteRevenueBySite.get(r.siteId);
     if (cur) cur.revenue = round2(cur.revenue + r.amount);
-    else siteRevenueBySite.set(r.siteId, { siteId: r.siteId, siteName: r.siteName, shifts: 0, revenue: r.amount, cost: 0 });
+    else siteRevenueBySite.set(r.siteId, { siteId: r.siteId, siteName: siteNameById.get(r.siteId) ?? r.siteName, shifts: 0, revenue: r.amount, cost: 0 });
   }
 
   return {
@@ -708,6 +898,7 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
     siteRevenueTotal,
     siteCostTotal,
     siteRevenue: [...siteRevenueBySite.values()],
+    summaryTotals,
   };
 }
 
