@@ -10,6 +10,7 @@
 // 同一個 pattern——雞頭 session 頁首 kicker 要顯示「我的」（跟
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { apiGet, apiPatch, apiPost, apiDelete, apiPut, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
@@ -93,6 +94,27 @@ interface GuardRow {
   // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——同 hkid
   // 等其他 PII 新欄一致，response 有冇呢粒 key 視乎 field-group gate。
   name_aliases?: string[] | null;
+  // WP-PHASE3（§20.4 Phase 3 item 1）：長工介紹雞頭／簽證形式贊助雞頭
+  // ——雞頭 DTO（toBrokerGuardDTO）結構上冇呢兩欄，`optional` 純粹配合
+  // 內部角色 DTO（呢兩欄本身冇 field-group，永遠有 key，唔係「冇權睇」
+  // 嗰種 optional，但都寫 optional 保守兼容未來）。
+  referral_broker_id?: string | null;
+  visa_sponsored_by_broker_id?: string | null;
+}
+// WP-PHASE3（item 1）：安員抽屜「長工」區——盤名下拉／崗位盤列表用。
+interface SiteRow {
+  id: string;
+  canonical_name: string;
+}
+// WP-PHASE3（item 1）：`GET/POST /api/guards/:id/longterm-posts` 一行。
+interface LongtermPostRow {
+  id: string;
+  site_id: string;
+  effective_from: string;
+  effective_to?: string | null;
+  source: string;
+  note?: string | null;
+  voided_at?: string | null;
 }
 interface BrokerRow {
   id: string;
@@ -172,7 +194,16 @@ const emptyForm = {
   // WP-GUARD-FIX：逗號分隔字串（同 sites/page.tsx `aliases` 一致寫法），
   // onSubmit() 拆返做陣列先送。
   name_aliases: "",
+  // WP-PHASE3（item 1）：長工介紹雞頭／簽證形式贊助雞頭——淨係編輯先會
+  // 夾落 body（同 hkid 等 PATCH-only 欄一致），"" 代表未設。
+  referral_broker_id: "",
+  visa_sponsored_by_broker_id: "",
 };
+
+const emptyLongtermPostForm = { site_id: "", effective_from: todayLocalStr(), note: "" };
+// WP-PHASE3（item 2）：「轉長工」一步動作嘅獨立 mini-form（唔用主 form，
+// 避免同編輯表單嘅 state 互相污染）。
+const emptyConvertForm = { site_id: "", effective_from: todayLocalStr(), referral_broker_id: "", monthly_salary: "" };
 
 const emptyStaffNumberForm = {
   scheme: KNOWN_STAFF_NUMBER_SCHEMES[0] as string,
@@ -319,6 +350,21 @@ export function GuardsClient({
   const [contactEditingId, setContactEditingId] = useState<string | null>(null);
   const [contactEditForm, setContactEditForm] = useState({ name: "", tel: "", relationship: "", note: "" });
 
+  // WP-PHASE3（§20.4 Phase 3 item 1）：安員抽屜「長工」區——崗位盤（`GET/
+  // POST/PATCH /api/guards/:id/longterm-posts`）。`sites` 淨係揀盤下拉用
+  // （呢頁之前完全冇載盤清單）。
+  const [sites, setSites] = useState<SiteRow[]>([]);
+  const [longtermPosts, setLongtermPosts] = useState<LongtermPostRow[]>([]);
+  const [longtermPostForm, setLongtermPostForm] = useState(emptyLongtermPostForm);
+  const [longtermPostError, setLongtermPostError] = useState<string | null>(null);
+  const [longtermPostSaving, setLongtermPostSaving] = useState(false);
+  const [longtermPostActionBusy, setLongtermPostActionBusy] = useState(false);
+  // WP-PHASE3（item 2）：「轉長工」一步動作——獨立細 modal，唔佔主 form。
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [convertForm, setConvertForm] = useState(emptyConvertForm);
+  const [convertError, setConvertError] = useState<string | null>(null);
+  const [convertSaving, setConvertSaving] = useState(false);
+
   // Fable5.1（驗證期間揭發嘅 pre-existing race，順手一齊修——同 P0 前端
   // 唔准掂 migration.sql 一致，呢個都係純前端）：`hasPiiField`／
   // `hasBankField`／`hasLicenceExtraField` 淨係編輯抽屜（`editingId &&
@@ -358,9 +404,13 @@ export function GuardsClient({
     setError(null);
     const expiringParam = expiringOnly ? "&expiring_within_days=90" : "";
     const qParam = q.trim() ? `&q=${encodeURIComponent(q.trim())}` : "";
-    const [guardRes, brokerRes] = await Promise.all([
+    const [guardRes, brokerRes, siteRes] = await Promise.all([
       apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${qParam}`),
       apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
+      // WP-PHASE3：淨係內部角色先揀到盤（雞頭 session「盤」module 硬性
+      // 拒絕，403 都冇所謂——`sites` 保持空陣列，「長工」分區本身雞頭都
+      // 見唔到）。
+      isBroker ? Promise.resolve({ ok: false as const, status: 0, error: "", message: "" }) : apiGet<ApiListResult<SiteRow>>("/api/sites?take=500"),
     ]);
     if (!guardRes.ok) {
       setError(guardRes.message);
@@ -378,6 +428,7 @@ export function GuardsClient({
       setHasLicenceExtraField(guardRes.data.rows.length === 0 ? !isBroker : guardRes.data.rows.some((r) => "sia_permit_no" in r));
     }
     if (brokerRes.ok) setBrokers(brokerRes.data.rows);
+    if (siteRes.ok) setSites(siteRes.data.rows);
     setLoading(false);
   }
 
@@ -429,6 +480,14 @@ export function GuardsClient({
     setContactError(null);
     setContactEditingId(null);
     setContactActionError(null);
+    // WP-PHASE3：「長工」區同員工編號／電話等子資源一致——新增保安員
+    // 嗰陣個 guard 仲未存在，淨係編輯先顯示，呢度重置返晒空。
+    setLongtermPosts([]);
+    setLongtermPostForm(emptyLongtermPostForm);
+    setLongtermPostError(null);
+    setConvertOpen(false);
+    setConvertForm(emptyConvertForm);
+    setConvertError(null);
     // 新增模式冇 detail GET 呢個問題（PII/銀行呢批欄新增表單本身都冇），
     // 兩個都直接 true——Save 掣唔應該因為呢個防護機制喺新增模式度 disabled。
     setDetailLoaded(true);
@@ -467,6 +526,8 @@ export function GuardsClient({
       blacklist_check_result: row.blacklist_check_result ?? "",
       blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
       name_aliases: (row.name_aliases ?? []).join(", "),
+      referral_broker_id: row.referral_broker_id ?? "",
+      visa_sponsored_by_broker_id: row.visa_sponsored_by_broker_id ?? "",
     });
     // Opus 覆核（WP-MULTI 必修 5）：記低呢一刻讀到嘅 legacy 欄值做
     // baseline——`onSubmit()` 淨係用戶改咗（同呢個唔一樣）先送。
@@ -515,6 +576,13 @@ export function GuardsClient({
     const res = await apiGet<ContactRow[]>(`/api/guards/${guardId}/emergency-contacts`);
     setContacts(res.ok ? res.data : []);
   }
+  // WP-PHASE3（item 1）：抽屜開緊嗰個人嘅長工崗位盤——冇權（403，雞頭
+  // 唔會行呢條 code path，但保守都係「冇權就得返空陣列」一致做法）就
+  // 保持空。
+  async function loadLongtermPosts(guardId: string) {
+    const res = await apiGet<LongtermPostRow[]>(`/api/guards/${guardId}/longterm-posts`);
+    setLongtermPosts(res.ok ? res.data : []);
+  }
 
   async function openEdit(row: GuardRow) {
     // WP-PII：列表嘅 `row.hkid` 係遮罩版（`A123***(7)`）——編輯抽屜要
@@ -545,6 +613,13 @@ export function GuardsClient({
     setContactError(null);
     setContactEditingId(null);
     setContactActionError(null);
+    // WP-PHASE3：重置「長工」區 inline 表單狀態（實際資料靠下面
+    // `loadLongtermPosts()` 攞）。
+    setLongtermPostForm(emptyLongtermPostForm);
+    setLongtermPostError(null);
+    setConvertOpen(false);
+    setConvertForm(emptyConvertForm);
+    setConvertError(null);
     // Fable5.1（防資料被抹）：detail GET 呢個 request 未完成之前，Save
     // 掣要 disabled（見下面 JSX `disabled={saving || !detailLoaded}`）——
     // 列表 row 起草嘅 form，`date_of_birth`／`blacklist_check_date` 呢批
@@ -577,7 +652,7 @@ export function GuardsClient({
     }
     setDetailLoaded(true);
     await loadStaffNumbers(row.id);
-    await Promise.all([loadPhones(row.id), loadAddresses(row.id), loadContacts(row.id)]);
+    await Promise.all([loadPhones(row.id), loadAddresses(row.id), loadContacts(row.id), !isBroker ? loadLongtermPosts(row.id) : Promise.resolve()]);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -693,6 +768,15 @@ export function GuardsClient({
         body.hire_date = form.hire_date || null;
         body.leave_date = form.leave_date || null;
       }
+      // WP-PHASE3（item 1）：長工介紹雞頭／簽證形式贊助雞頭——冇獨立
+      // field-group，跟「安員」module（同 employment_type 一致層級）；
+      // `!isBroker` 純粹保守（呢兩個 input 本身淨係喺 `!isBroker` 先
+      // render，呢度加多一層唔靠淨係 UI 冇 render 就保證唔送）。一律送
+      // `|| null`（可以清空）。
+      if (!isBroker) {
+        body.referral_broker_id = form.referral_broker_id || null;
+        body.visa_sponsored_by_broker_id = form.visa_sponsored_by_broker_id || null;
+      }
     }
 
     const res = editingId ? await apiPatch(`/api/guards/${editingId}`, body) : await apiPost("/api/guards", body);
@@ -703,6 +787,71 @@ export function GuardsClient({
     }
     setDrawerOpen(false);
     setNotice(editingId ? "已更新" : "已新增");
+    await load(search);
+  }
+
+  // WP-PHASE3（item 1）：抽屜「長工」區——「加崗位盤」（POST /api/guards/
+  // :id/longterm-posts）。同 onAddStaffNumber() 一致 pattern：獨立
+  // `type="button"`，唔喺主 form submit 事件入面。
+  async function onAddLongtermPost() {
+    if (!editingId || !longtermPostForm.site_id) return;
+    setLongtermPostSaving(true);
+    setLongtermPostError(null);
+    const res = await apiPost(`/api/guards/${editingId}/longterm-posts`, {
+      site_id: longtermPostForm.site_id,
+      effective_from: longtermPostForm.effective_from || todayLocalStr(),
+      note: longtermPostForm.note || undefined,
+    });
+    setLongtermPostSaving(false);
+    if (!res.ok) {
+      setLongtermPostError(res.message);
+      return;
+    }
+    setLongtermPostForm(emptyLongtermPostForm);
+    await loadLongtermPosts(editingId);
+    setNotice("已加長工崗位盤");
+  }
+  // 「終止」＝PATCH effective_to=今日（冇硬刪，同 staff_numbers／
+  // rate_cards 一致精神）。
+  async function onTerminateLongtermPost(postId: string) {
+    if (!editingId) return;
+    setLongtermPostActionBusy(true);
+    setLongtermPostError(null);
+    const res = await apiPatch(`/api/guards/${editingId}/longterm-posts/${postId}`, { effective_to: todayLocalStr() });
+    setLongtermPostActionBusy(false);
+    if (!res.ok) {
+      setLongtermPostError(res.message);
+      return;
+    }
+    await loadLongtermPosts(editingId);
+    setNotice("已終止呢個崗位盤");
+  }
+
+  // WP-PHASE3（item 2）：「轉長工」一步動作——POST /api/guards/:id/
+  // convert-to-longterm。撳掣先開 mini modal（`convertOpen`），揀盤／
+  // 生效日／介紹雞頭／起始月薪一齊送，成功之後 `load()`＋`openEdit()`
+  // 重新攞返最新 employment_type／崗位盤／合約狀態。
+  async function onSubmitConvert() {
+    if (!editingId || !convertForm.site_id) return;
+    setConvertSaving(true);
+    setConvertError(null);
+    const body: Record<string, unknown> = {
+      site_id: convertForm.site_id,
+      effective_from: convertForm.effective_from || todayLocalStr(),
+      referral_broker_id: convertForm.referral_broker_id || undefined,
+    };
+    if (convertForm.monthly_salary !== "") body.monthly_salary = Number(convertForm.monthly_salary);
+    const res = await apiPost<{ warning: string | null }>(`/api/guards/${editingId}/convert-to-longterm`, body);
+    setConvertSaving(false);
+    if (!res.ok) {
+      setConvertError(res.message);
+      return;
+    }
+    setConvertOpen(false);
+    setConvertForm(emptyConvertForm);
+    setNotice(res.data.warning ? `已轉長工——${res.data.warning}` : "已轉長工");
+    const row = rows.find((r) => r.id === editingId);
+    if (row) await openEdit(row);
     await load(search);
   }
 
@@ -1745,6 +1894,157 @@ export function GuardsClient({
           <Field label="Polo 尺碼">
             <input className={inputCls} value={form.polo_size} onChange={(e) => setForm((f) => ({ ...f, polo_size: e.target.value }))} />
           </Field>
+
+          {/* WP-PHASE3（§20.4 Phase 3 item 1）：安員抽屜「長工」區——老闆／
+              主管；雞頭（`isBroker`）結構性唔見（呢個 component 雞頭
+              session 根本唔會行到呢個分支，`!isBroker` 淨係防禦性）。
+              淨係編輯先顯示（同員工編號／電話等子資源一致——新增保安員
+              嗰陣個 guard 仲未存在）。 */}
+          {editingId && !isBroker && (
+            <>
+              <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">長工</h3>
+              {form.employment_type !== "longterm_autopay" && (
+                <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
+                  {!convertOpen ? (
+                    <button type="button" onClick={() => setConvertOpen(true)} className={btnSecondary}>
+                      轉長工（一步：設聘用形式＋崗位盤＋介紹雞頭＋起始月薪）
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <Banner kind="error" message={convertError} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="崗位盤">
+                          <select className={selectCls} value={convertForm.site_id} onChange={(e) => setConvertForm((f) => ({ ...f, site_id: e.target.value }))}>
+                            <option value="">（揀盤）</option>
+                            {sites.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.canonical_name}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="生效日">
+                          <input type="date" className={inputCls} value={convertForm.effective_from} onChange={(e) => setConvertForm((f) => ({ ...f, effective_from: e.target.value }))} />
+                        </Field>
+                        <Field label="介紹雞頭（選填）">
+                          <select className={selectCls} value={convertForm.referral_broker_id} onChange={(e) => setConvertForm((f) => ({ ...f, referral_broker_id: e.target.value }))}>
+                            <option value="">（無）</option>
+                            {brokers.map((b) => (
+                              <option key={b.id} value={b.id}>
+                                {b.name}（{b.code}）
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="起始月薪（選填）" hint="要「長工糧」權限先建到合約，冇權會警告但唔會擋轉長工">
+                          <input type="number" step="0.01" className={inputCls} value={convertForm.monthly_salary} onChange={(e) => setConvertForm((f) => ({ ...f, monthly_salary: e.target.value }))} />
+                        </Field>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" disabled={convertSaving || !convertForm.site_id} onClick={onSubmitConvert} className={btnPrimary}>
+                          {convertSaving ? "處理緊…" : "確認轉長工"}
+                        </button>
+                        <button type="button" onClick={() => setConvertOpen(false)} className={btnSecondary}>
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="介紹雞頭" hint="呢個長工由邊個雞頭供應（計介紹費用）">
+                  <select className={selectCls} value={form.referral_broker_id} onChange={(e) => setForm((f) => ({ ...f, referral_broker_id: e.target.value }))}>
+                    <option value="">（無）</option>
+                    {brokers.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}（{b.code}）
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="簽證形式贊助雞頭" hint="有值＝永遠跟呢個雞頭散更結算，唔理崗位盤">
+                  <select
+                    className={selectCls}
+                    value={form.visa_sponsored_by_broker_id}
+                    onChange={(e) => setForm((f) => ({ ...f, visa_sponsored_by_broker_id: e.target.value }))}
+                  >
+                    <option value="">（無）</option>
+                    {brokers.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}（{b.code}）
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
+              <div>
+                <div className="mb-1 text-[12.5px] text-zk-muted">長工崗位盤</div>
+                <Banner kind="error" message={longtermPostError} />
+                {longtermPosts.length === 0 ? (
+                  <div className="text-[12.5px] text-zk-faint">未設崗位盤</div>
+                ) : (
+                  <ul className="space-y-1">
+                    {longtermPosts.map((p) => {
+                      const active = !p.voided_at && (!p.effective_to || p.effective_to >= todayLocalStr());
+                      return (
+                        <li key={p.id} className="flex items-center justify-between gap-2 rounded border border-zk-border px-2 py-1 text-[12.5px]">
+                          <span className="min-w-0 break-words">
+                            {sites.find((s) => s.id === p.site_id)?.canonical_name ?? p.site_id.slice(0, 8)}
+                            <span className="ml-1 text-zk-faint">
+                              （{p.effective_from.slice(0, 10)}～{p.effective_to ? p.effective_to.slice(0, 10) : "現在"}，{p.source === "manual" ? "人手" : p.source}）
+                            </span>
+                          </span>
+                          {active && !p.voided_at && (
+                            <button type="button" disabled={longtermPostActionBusy} onClick={() => onTerminateLongtermPost(p.id)} className="shrink-0 text-[12px] text-red-600 hover:underline">
+                              終止
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {/* e2e：`aria-label` 俾 tests/e2e/phase3.spec.ts 用
+                      `getByLabel()` 精準揀（呢兩個控件冇用 <Field> 包
+                      住，唔靠隱式 label association）。 */}
+                  <select
+                    aria-label="長工崗位盤：揀盤"
+                    className={selectCls}
+                    value={longtermPostForm.site_id}
+                    onChange={(e) => setLongtermPostForm((f) => ({ ...f, site_id: e.target.value }))}
+                  >
+                    <option value="">（揀盤）</option>
+                    {sites.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.canonical_name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    aria-label="長工崗位盤：生效日"
+                    type="date"
+                    className={inputCls}
+                    value={longtermPostForm.effective_from}
+                    onChange={(e) => setLongtermPostForm((f) => ({ ...f, effective_from: e.target.value }))}
+                  />
+                </div>
+                <button type="button" disabled={longtermPostSaving || !longtermPostForm.site_id} onClick={onAddLongtermPost} className={`${btnSecondary} mt-2`}>
+                  {longtermPostSaving ? "新增緊…" : "加崗位盤"}
+                </button>
+              </div>
+
+              <div className="text-[12.5px] text-zk-muted">
+                合約（月薪／假期結餘）去{" "}
+                <Link href="/reports/longterm-payroll" className="text-zk-primary underline">
+                  長工糧頁
+                </Link>{" "}
+                管理。
+              </div>
+            </>
+          )}
 
           {/* WP-PII：新欄一律 PATCH-only（見上面 onSubmit()）——新增
               保安員嗰陣（`!editingId`）唔顯示呢幾個分區，建好之後先用

@@ -202,13 +202,25 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       expect(await prisma.rateCard.count({ where: { siteId: site.id } })).toBe(0);
     });
 
-    it("沿用咗嘅卡喺 needsHuman 列出（【已自動沿用，請覆核】＋金額），唔係淨係 warning", async () => {
+    it("WP-PHASE3：搵到可沿用嘅上月卡——needsHuman 建議去價目卡頁「複製上月卡到本月」，唔再自動寫卡", async () => {
       await seedCombo("一鍵沿用列出盤", {});
       const result = await stepPrecheck(SEPT, fx.userIds["老闆"], null);
-      expect(result.numbers.cardsCarriedOver).toBe(1);
-      expect(result.needsHuman.some((h) => h.includes("已自動沿用") && h.includes("一鍵沿用列出盤") && h.includes("900"))).toBe(true);
+      expect(result.numbers.cardsCarriedOver).toBe(0);
+      expect(result.numbers.cardsMissingNoCarryover).toBe(1);
+      expect(result.needsHuman.some((h) => h.includes("複製上月卡到本月") && h.includes("一鍵沿用列出盤") && h.includes("900"))).toBe(true);
+      const carried = await prisma.rateCard.count({ where: { source: "one_click_carryover" } });
+      expect(carried).toBe(0);
     });
-    it("(盤,更種) 冇本月生效卡，但有舊卡（client_rate/guard_wage 都有值）→ 自動複製新卡，note 帶「一鍵沿用」", async () => {
+    it("WP-PHASE3 Opus 5.5 驗收：上月淨係有雞頭專屬卡——建議同「複製上月卡」候選一致（唔可以話冇卡要人手設）", async () => {
+      await seedCombo("一鍵沿用雞頭專屬盤", { brokerId: fx.brokerA.id });
+      const result = await stepPrecheck(SEPT, fx.userIds["老闆"], null);
+      const line = result.needsHuman.find((h) => h.includes("一鍵沿用雞頭專屬盤"));
+      expect(line).toBeDefined();
+      expect(line).toContain("複製上月卡到本月");
+      expect(line).not.toContain("要人手設卡（去價目卡頁）");
+      expect(await prisma.rateCard.count({ where: { source: "one_click_carryover" } })).toBe(0);
+    });
+    it("WP-PHASE3：(盤,更種) 冇本月生效卡，但有舊卡（client_rate/guard_wage 都有值）→ 唔自動複製，淨係 needsHuman 建議", async () => {
       const site = await prisma.site.create({ data: { canonicalName: "一鍵測試盤A", clientName: "一鍵測試盤A", billingModel: "per_shift", createdBy: "test" } });
       const shiftType = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", label: "測試夜更", createdBy: "test" } });
       const oldCard = await prisma.rateCard.create({
@@ -220,14 +232,11 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       });
 
       const result = await stepPrecheck(SEPT, fx.userIds["老闆"], null);
-      expect(result.numbers.cardsCarriedOver).toBe(1);
-      expect(result.needsHuman.some((w) => w.includes("已自動沿用"))).toBe(true);
+      expect(result.numbers.cardsCarriedOver).toBe(0);
+      expect(result.needsHuman.some((w) => w.includes("複製上月卡到本月"))).toBe(true);
 
       const newCard = await prisma.rateCard.findFirst({ where: { siteId: site.id, shiftTypeId: shiftType.id, id: { not: oldCard.id } } });
-      expect(newCard).not.toBeNull();
-      expect(newCard?.note).toContain("一鍵沿用");
-      expect(newCard?.effectiveFrom.toISOString().slice(0, 10)).toBe("2026-09-01");
-      expect(Number(newCard?.clientRate)).toBe(900);
+      expect(newCard).toBeNull(); // 唔再自動寫卡（Phase 3：建議＋一撳，唔係自動）
     });
 
     it("(盤,更種) 冇本月生效卡，亦冇可沿用嘅舊卡 → needsHuman，唔會估", async () => {
@@ -245,7 +254,7 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       expect(anyCard).toBeNull(); // 唔准估，冇建任何卡
     });
 
-    it("冪等：連跑兩次 stepPrecheck，第二次 cardsCarriedOver=0（已經有本月卡）", async () => {
+    it("WP-PHASE3：連跑兩次 stepPrecheck 完全冇副作用（唔寫卡），兩次結果一致", async () => {
       const site = await prisma.site.create({ data: { canonicalName: "一鍵測試盤C", clientName: "一鍵測試盤C", billingModel: "per_shift", createdBy: "test" } });
       const shiftType = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", createdBy: "test" } });
       await prisma.rateCard.create({ data: { siteId: site.id, shiftTypeId: shiftType.id, clientRate: 900, guardWage: 600, effectiveFrom: new Date(Date.UTC(2026, 6, 1)), effectiveTo: new Date(Date.UTC(2026, 7, 31)), createdBy: "test" } });
@@ -253,11 +262,11 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       await prisma.rosterUploadRow.create({ data: { uploadId: upload.id, rowIndex: 1, resolvedSiteId: site.id, shiftTypeId: shiftType.id, workDate: SEPT, rawCode: "N", codeKind: "shift", guardMatch: "unmatched" } });
 
       const first = await stepPrecheck(SEPT, fx.userIds["老闆"], null);
-      expect(first.numbers.cardsCarriedOver).toBe(1);
+      expect(first.numbers.cardsMissingNoCarryover).toBe(1);
       const second = await stepPrecheck(SEPT, fx.userIds["老闆"], null);
-      expect(second.numbers.cardsCarriedOver).toBe(0);
+      expect(second.numbers.cardsMissingNoCarryover).toBe(1);
       const cardCount = await prisma.rateCard.count({ where: { siteId: site.id, shiftTypeId: shiftType.id } });
-      expect(cardCount).toBe(2); // 舊卡 + 沿用嗰張，唔會再重複建
+      expect(cardCount).toBe(1); // 舊卡都冇被複製，一直得返最初嗰張
     });
   });
 
@@ -342,8 +351,10 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       expect(steps.find((s) => s.key === "precheck")?.status).toBe("done");
       expect(steps.find((s) => s.key === "reconcile_apply")?.status).toBe("failed");
       expect(steps.find((s) => s.key === "report")?.status).toBe("pending");
-      // step0 沿用卡已經寫咗（保留），重新執行唔會再建多張
-      expect(await prisma.rateCard.count({ where: { siteId: site.id, source: "one_click_carryover" } })).toBe(1);
+      // WP-PHASE3：step0 而家唔再自動寫卡（建議＋一撳，見 stepPrecheck()
+      // 大註解）——呢個盤冇本月卡，重新執行前後都應該係 0（唔會再靜靜
+      // 幫用戶寫卡）。
+      expect(await prisma.rateCard.count({ where: { siteId: site.id, source: "one_click_carryover" } })).toBe(0);
 
       await prisma.reconcileAllRun.update({ where: { id: manual.id }, data: { status: "done", finishedAt: new Date() } });
       const rerun = await rerunOneClick(reqJson(`http://x/api/month-close/one-click/${run.id}/rerun`, cookie, "POST"), { params: Promise.resolve({ id: run.id }) });
@@ -351,7 +362,7 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       const after = await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: run.id } });
       expect(after.status).toBe("done");
       expect(after.errorMessage).toBeNull();
-      expect(await prisma.rateCard.count({ where: { siteId: site.id, source: "one_click_carryover" } })).toBe(1);
+      expect(await prisma.rateCard.count({ where: { siteId: site.id, source: "one_click_carryover" } })).toBe(0);
       const report = after.reportJson as { lockPrecondition: { readyToLock: boolean; unpricedCount: number } };
       expect(typeof report.lockPrecondition.unpricedCount).toBe("number");
     });

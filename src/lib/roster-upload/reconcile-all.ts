@@ -97,7 +97,20 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
   // 一次（補 null／修 B07 舊價，唔覆蓋人手價）——之前要老闆喺更表頁自己
   // 撳一次「重新計价」（見 docs/api.md「WP-LTSHIFT 驗收修正」正式站
   // 步驟 3），而家「重新對數全月」呢一鍵自動做埋，正式站唔使再撳嗰個掣。
-  const repriced = await repriceMonthForSites(monthStartDate, siteIds, actorUserId, ip);
+  //
+  // WP-PHASE3 Opus 5.5 驗收：一檔多子盤（例：城巴車廠母盤，格全部歸子盤）
+  // 嘅記錄 `site_id` 係子盤，唔係上載嘅母盤——淨係傳 `uploads.siteId`
+  // 會令子盤記錄永遠唔補價（價目卡頁補咗／複製咗子盤卡，重跑一鍵都仲係
+  // 未定價）。連埋上載行實際歸屬嘅 `resolved_site_id` 一齊 reprice。
+  const resolvedSiteRows = uploads.length
+    ? await prisma.rosterUploadRow.findMany({
+        where: { uploadId: { in: uploads.map((u) => u.id) }, resolvedSiteId: { not: null } },
+        select: { resolvedSiteId: true },
+        distinct: ["resolvedSiteId"],
+      })
+    : [];
+  const repriceSiteIds = [...new Set([...siteIds, ...resolvedSiteRows.map((r) => r.resolvedSiteId).filter((x): x is string => !!x)])];
+  const repriced = await repriceMonthForSites(monthStartDate, repriceSiteIds, actorUserId, ip);
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
 
   const perUpload: ReconcileAllPerUploadResult[] = [];

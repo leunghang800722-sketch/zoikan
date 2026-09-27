@@ -79,7 +79,27 @@ const emptyForm = {
   note: "",
 };
 
-export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: boolean; canReprice?: boolean }) {
+// WP-PHASE3（§20.4 Phase 3 item 3）：「複製上月卡到本月」預覽一行。
+interface CopyLastMonthCandidate {
+  site_id: string;
+  site_name: string;
+  shift_type_id: string;
+  shift_type_code: string;
+  broker_id: string | null;
+  broker_label: string;
+  client_rate: string | null;
+  guard_wage: string | null;
+}
+
+export function RateCardsClient({
+  isBroker,
+  canReprice = false,
+  canCopyLastMonth = false,
+}: {
+  isBroker: boolean;
+  canReprice?: boolean;
+  canCopyLastMonth?: boolean;
+}) {
   const [rows, setRows] = useState<RateCardRow[]>([]);
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
@@ -124,6 +144,75 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteFilter, skip]);
+
+  // WP-PHASE3（§20.4 Phase 3 item 4）：「未定價 OT 清單」——複用現有
+  // `GET /api/shift-records/unpriced`（同更表頁頂 banner 同一份口徑），
+  // 淨係揀 `category=ot_unpriced` 呢一類，俾「建卡」快捷用。冇權
+  // （403，例如關咗「更表:view」嘅自訂角色）就淨係唔顯示呢個分區，唔
+  // 阻住主頁。
+  const [otUnpricedGroups, setOtUnpricedGroups] = useState<
+    Array<{ site_id: string; site_name: string; shift_type_code: string; broker_code: string | null; broker_display: string; count: number }>
+  >([]);
+  useEffect(() => {
+    (async () => {
+      const month = effectiveMonthFilter || new Date().toISOString().slice(0, 7);
+      const qs = new URLSearchParams({ month, ...(siteFilter ? { site_id: siteFilter } : {}) });
+      const res = await apiGet<{ groups: typeof otUnpricedGroups }>(`/api/shift-records/unpriced?${qs.toString()}`);
+      setOtUnpricedGroups(res.ok ? res.data.groups.filter((g) => (g as unknown as { category: string }).category === "ot_unpriced") : []);
+    })();
+  }, [effectiveMonthFilter, siteFilter, notice]);
+
+  /** OT 未定價一行「建卡」——喺已載入嘅 `shiftTypes` 度用 (site_id, code)
+   * 揾返 shift_type_id（`unpriced` API 唔出 id，淨係 code——見
+   * src/lib/pricing/unpriced.ts UnpricedGroup），揾唔到（更別已刪／未
+   * 載入齊）就唔預填，用戶自己揀。 */
+  function openCreateForOt(siteId: string, code: string, brokerCode: string | null) {
+    const st = shiftTypes.find((s) => s.site_id === siteId && s.code === code);
+    const b = brokerCode ? brokers.find((x) => x.code === brokerCode) : undefined;
+    setForm({ ...emptyForm, site_id: siteId, shift_type_id: st?.id ?? "", broker_id: b?.id ?? "" });
+    setFormError(null);
+    setDrawerOpen(true);
+  }
+
+  // WP-PHASE3（item 3）：「複製上月卡到本月」——dry-run 預覽→confirm。
+  const [copyingLastMonth, setCopyingLastMonth] = useState(false);
+  async function handleCopyLastMonth() {
+    if (copyingLastMonth) return;
+    const month = effectiveMonthFilter || new Date().toISOString().slice(0, 7);
+    setCopyingLastMonth(true);
+    setError(null);
+    setNotice(null);
+    const body = { month, dry_run: true, ...(siteFilter ? { site_id: siteFilter } : {}) };
+    const preview = await apiPost<{ count: number; candidates: CopyLastMonthCandidate[] }>("/api/rate-cards/copy-last-month", body);
+    if (!preview.ok) {
+      setCopyingLastMonth(false);
+      setError(preview.message);
+      return;
+    }
+    if (preview.data.count === 0) {
+      setCopyingLastMonth(false);
+      setNotice(`複製上月卡預覽 ${month}：冇搵到可以複製嘅上月卡（可能上月卡已經覆蓋本月，或者本月已經有卡）。`);
+      return;
+    }
+    const lines = preview.data.candidates
+      .slice(0, 20)
+      .map((c) => `${c.site_name} ${c.shift_type_code}（${c.broker_label}）收客 ${c.client_rate ?? "—"}／工資 ${c.guard_wage ?? "—"}`)
+      .join("\n");
+    const more = preview.data.count > 20 ? `\n…仲有 ${preview.data.count - 20} 張` : "";
+    const proceed = window.confirm(`複製上月卡到本月 ${month}：搵到 ${preview.data.count} 張卡可以複製\n${lines}${more}\n\n確定要建立呢 ${preview.data.count} 張新卡？`);
+    if (!proceed) {
+      setCopyingLastMonth(false);
+      return;
+    }
+    const res = await apiPost<{ created_count: number }>("/api/rate-cards/copy-last-month", { ...body, dry_run: false });
+    setCopyingLastMonth(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    setNotice(`複製上月卡完成：已建立 ${res.data.created_count} 張新卡（note「由上月複製」，覆核價錢有變要去改）。`);
+    await load();
+  }
 
   // WP-PRICE §M3（老闆 2026-09-16 拍板）：「重新計价」——用「生效月」
   // 篩選器揀嘅月份（冇揀就用返家陣個月）。改為 dry-run 預覽→confirm→
@@ -326,6 +415,7 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
           <>
             <FilterChip label="盤">
               <select
+                data-testid="rate-cards-site-filter"
                 value={siteFilter}
                 onChange={(e) => {
                   setSiteFilter(e.target.value);
@@ -353,6 +443,16 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
                 {repricing ? "計价緊…" : `重新計价（${effectiveMonthFilter || "本月"}）`}
               </Button>
             )}
+            {/* WP-PHASE3（§20.4 Phase 3 item 3）：「複製上月卡到本月」——
+                代替 8 月教訓入面「新月份要人手逐張補卡」，唔靠一鍵結算
+                自動沿用（見 src/lib/month-close/one-click.ts stepPrecheck()
+                大註解——一鍵結算 step0 而家改做偵測＋建議，唔再自動寫
+                卡）。 */}
+            {canCopyLastMonth && (
+              <Button variant="secondary" onClick={handleCopyLastMonth} disabled={copyingLastMonth}>
+                {copyingLastMonth ? "複製緊…" : `複製上月卡到本月（${effectiveMonthFilter || "本月"}）`}
+              </Button>
+            )}
             <Button variant="primary" onClick={openCreate}>
               新增價目
             </Button>
@@ -362,6 +462,34 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+
+      {/* WP-PHASE3（§20.4 Phase 3 item 4）：OT 卡管理——未定價 OT 清單，
+          每項有「建卡」快捷（預填盤／更別／雞頭，開返「新增價目」抽屜）。
+          OT 卡金額單位（每粒鐘／每條記錄）§17.10.2 第 3 項**仍未定案**
+          （Opus 5.5 驗收更正：原本寫「已決定每小時」唔啱——gross-margin.ts
+          當每粒鐘×ot_hours，payroll.ts 等當逐條金額）。建卡之後 OT 記錄
+          由「重新對數全月」／一鍵結算開頭嘅自動補價補返（reprice.ts）。 */}
+      {otUnpricedGroups.length > 0 && (
+        <div className="rounded-[7px] border border-amber-200 bg-amber-50 p-3">
+          <div className="text-[13px] font-medium text-amber-800">未定價 OT（{otUnpricedGroups.reduce((a, g) => a + g.count, 0)} 條記錄）——建卡後重跑「一鍵結算」或「重新對數全月」先會補返價</div>
+          <ul className="mt-1.5 space-y-1">
+            {otUnpricedGroups.map((g, i) => (
+              <li key={`${g.site_id}-${g.shift_type_code}-${g.broker_code ?? "none"}-${i}`} className="flex items-center justify-between gap-2 text-[12.5px] text-amber-800">
+                <span className="min-w-0 break-words">
+                  {g.site_name} · {g.shift_type_code} · {g.broker_display}（{g.count} 條）
+                </span>
+                <button
+                  type="button"
+                  onClick={() => openCreateForOt(g.site_id, g.shift_type_code, g.broker_code)}
+                  className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 text-[12px] text-amber-800 hover:bg-amber-100"
+                >
+                  建卡
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {!loading && visibleRows.length === 0 ? (
         <div className={tableCls.wrap}>
@@ -525,6 +653,13 @@ export function RateCardsClient({ isBroker, canReprice = false }: { isBroker: bo
               ))}
             </select>
           </Field>
+          {/* WP-PHASE3（item 4）：揀咗 OT 更種（code 開頭 "OT"）就提示卡金額
+              單位未定案（§17.10.2 第 3 項，見上面 OT 清單註解）。 */}
+          {shiftTypes.find((s) => s.id === form.shift_type_id)?.code?.startsWith("OT") && (
+            <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12.5px] text-amber-800">
+              OT 更種——卡金額單位（每粒鐘 定 每條記錄）未定案：毛利表當「每粒鐘 × OT 時數」，糧單／雞頭應付當「每條記錄」。1 個鐘嘅 OT 兩者一樣；多過 1 個鐘嘅 OT 落卡前先問老闆，並喺備註寫明。
+            </div>
+          )}
           {hasClientRate && (
             <Field label="收客價（client_rate）">
               <input
