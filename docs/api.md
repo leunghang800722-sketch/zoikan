@@ -1057,3 +1057,67 @@ Terminal 步驟）**：
    226,433.02 同總表一致；W −850（蔚峰園重複行）、T −1,600（Weave 更表
    漏記病假）係更表資料問題。
 
+
+## WP-MONTH-DIAG（老闆 2026-09-27 緊急）：`GET /api/diagnostics/month`——正式站唯讀診斷
+
+背景：正式站 8 月「重新對數全月」跑完之後，數字同 dev 端到端唔同（介紹費
+9,030 而非 60,520；148 更未定價集中喺啟航1331／城巴-柴灣；營業額
+3,236,816 而非 3,304,416），老闆睇唔到正式站 DB，操作員只可以用瀏覽器
+開網址。呢個 endpoint 俾操作員貼一個網址就攞到成個月嘅摘要數字，**唔寫
+任何 DB 表**（純讀，同 `scripts/gate/aug-e2e-check.ts` 一樣紀律）。
+
+`GET /api/diagnostics/month?month=YYYY-MM`：
+
+- 權限：**淨係老闆**——`requirePermission(req, "月結總表", "view")` ＋
+  顯式 `session.baseRole === "老闆"` check（「月結總表」對主管/會計出廠
+  係「○」、老闆可以開放俾佢哋，但呢個診斷 endpoint 唔跟嗰個可配置閘，
+  加多一重硬性 baseRole 保證）。主管／會計／雞頭 403。
+- 回應（全部 snake_case，經 `ok()`；**冇任何人名／工號／電話**，全程
+  用盤名／雞頭代號／數目／金額）：
+  - `brokers[]`：逐雞頭代號（含 `null`=未歸屬結算單位）`shift_count`／
+    `payout_total`（guard_wage+broker_fee snapshot，非 cancelled，
+    shift+ot）／`client_total`／`null_wage_count`／`null_client_count`。
+  - `longterm`：`active_posts`／`active_posts_by_source`／
+    `longterm_guards`（employment_type=longterm_autopay 數）／
+    `b07_shift_count`／`shifts_by_settlement_reason`（恆空陣列——
+    reconcile 逐格判斷嘅 settlement reason 淨係喺記憶體運算果一刻存在，
+    `shift_records` 本身冇欄位存低，見 `src/lib/reports/
+    month-diagnostics.ts` 頂註解）／`longterm_guard_rows_on_broker_code`
+    （長工安員嘅更仍然掛 K/W/T/G/D/Y 嘅數）／`referral_broker_set_count`
+    ／`referral_broker_null_count`。
+  - `referral`：`items[]`（`special_items(kind=referral_fee)` 該月逐
+    雞頭金額同條數）、`total_amount`、`rates[]`（`referral_fee_rates`
+    該月／最近生效 by broker 嘅 site 數，同 `computeReferralFeesForMonth()`
+    同一套「揀 <= 目標月份最新一個月」邏輯）。
+  - `unpriced`：`computeUnpricedSummary()` 逐類數（`count`／
+    `payout_count`／`client_count`／`no_settlement_count`／
+    `ot_unpriced_count`）＋`top_groups[]`（by site×broker×shift_type_code
+    合計，跨 category 加埋，前 20）。
+  - `sites[]`：同 `buildMonthlyClose()` 口徑逐盤 `shift_count`／
+    `revenue`／`billing_model`／`has_flat_card`／`activity_proxy`。
+  - `uploads`：該月 active 上載數／confirmed 數；rows `unmatched`／
+    `ambiguous`（`roster_upload_rows.guard_match`）／`unresolved`
+    （`roster_reconcile_decisions.category='unresolved'` 條數，係一個
+    proxy——真正即時 unresolved 要重新行 reconcile 引擎，呢個 endpoint
+    唔重複嗰個運算）；`reconcile_all_runs`／`guard_fix_runs`（最近 3
+    個）／`postorder_uploads`／`staff_list_uploads` 最近一個嘅狀態／
+    數目摘要。
+  - `cards`：該月生效卡數 by broker code、by site，`null_client_rate`
+    卡數。
+  - `expected_dev_baseline`：正式站冇 `data/` 目錄，讀唔到
+    `aug-payroll-trial` 輸出——8 月總表口徑 `by_unit`（K 1,023,730、
+    W 173,370、T 211,160、G 56,220、D 100,130、Y 226,433）同介紹費
+    60,520 硬編碼喺 `src/lib/reports/month-diagnostics.ts`
+    （`EXPECTED_AUG_BY_UNIT`／`EXPECTED_AUG_REFERRAL_FEE_TOTAL`），逐項
+    印 `system_amount`／`diff`；`applicable=false`（非 2026-08）就淨係
+    做對照，唔代表有問題。
+
+實現：`src/lib/reports/month-diagnostics.ts`（`buildMonthDiagnostics()`
+純 DB loader）＋`src/app/api/diagnostics/month/route.ts`。逐雞頭代號
+（K/W/T/G/D/Y/B07…）刻意用**陣列**（`{ code, ... }`）表達，唔用「code
+做 object key」——`camelToSnakeDeep()` 會將單一大寫字母 key 錯誤轉做
+`_k`／`_b07` 呢類，用陣列先唔會撞正呢個轉換陷阱。
+
+測試：`tests/diagnostics-month-route.test.ts`——老闆 200 有齊 key／逐段
+快樂路徑金額；主管／會計／雞頭 403；冇 month 400；PII 掃描（response
+JSON stringify 對 dev DB 全部 guard 姓名/電話/身份證掃描為 0）。
