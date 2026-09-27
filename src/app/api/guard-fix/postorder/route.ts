@@ -23,6 +23,19 @@
 // 項，同其他 CSV 路徑冇 PostOrder 分頁一致行為）。`fileBytes`／
 // `fileName`／`fileSha256`／`fileSize` 一樣淨係佔位／audit 用途，真正
 // 解析用 `longtermPairsCsvBytes`（＋可選 `postorderCsvBytes`）。
+//
+// WP-POSTORDER-PO-PAIRS（老闆 2026-09-27 再緊急）：連 longterm-
+// pairs.csv（~3KB）操作員都傳唔到（同款上載瓶頸），但正式站已經有
+// 完整、冇截短嘅 `PostOrder.csv`。第四條路徑：multipart 淨係帶
+// `postorder_csv`（冇 `file`／`roster_csv`／`longterm_pairs_csv`）——
+// `missingSheets` 記低 `Roster`（tolerable，唔算上載失敗）。呢個 route
+// 本身唔推(盤,人)組合（要 DB 安員名，見 `src/lib/guard-fix/
+// postorder.ts` `derivePostorderLongtermPostsFromPostorderGrid()`）——
+// 淨係喺 `parseSummary` 加 `longterm_pairs_from_postorder`／
+// `longterm_cells_from_postorder` 俾操作員睇個提示；真正合併入計劃嘅
+// `set_longterm_post`（連同 Roster/pairs 路徑現有嘅組合 union，
+// `cell_count` 取大）喺 `buildGuardFixPlan()`（`src/lib/guard-fix/
+// plan.ts` `mergeLongtermPostCells()`）「計算修復計劃」嗰刻先計。
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -32,7 +45,14 @@ import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { monthStart } from "@/lib/month-lock";
 import type { Prisma } from "@prisma/client";
-import { parsePostorderWorkbookBuffer, parsePostorderFromCsv, parsePostorderFromPairsCsv, summarizePostorderParse, type PostorderParseResult } from "@/lib/guard-fix/postorder";
+import {
+  parsePostorderWorkbookBuffer,
+  parsePostorderFromCsv,
+  parsePostorderFromPairsCsv,
+  derivePostorderLongtermPostsFromPostorderCsv,
+  summarizePostorderParse,
+  type PostorderParseResult,
+} from "@/lib/guard-fix/postorder";
 
 const MAX_UPLOAD_BYTES = 30 * 1024 * 1024; // Postorder 總表帶 rich text／樣式，比 U Team 名單大好多
 const MAX_CSV_BYTES = 30 * 1024 * 1024; // 每個 CSV 檔上限（同 xlsm 一致，見§19 指示）
@@ -73,10 +93,32 @@ export async function GET(req: Request) {
   });
 }
 
+/** WP-POSTORDER-PO-PAIRS：上載嗰刻順手用 DB 安員名計「單靠 PostOrder
+ * 推到幾多個 (盤,人) 組合」，俾操作員睇個提示（唔存人名，淨係數目）
+ * ——真正合併入計劃嘅 `set_longterm_post` 喺 `buildGuardFixPlan()`
+ * （`plan.ts`）先計，呢度純粹上載摘要用途。冇 `postorderCsvText` 就
+ * 唔計（`null`）。 */
+async function countPostorderDerivedPairs(postorderCsvText: string | null): Promise<{ groups: number; cells: number } | null> {
+  if (!postorderCsvText) return null;
+  const guards = await prisma.guard.findMany({ select: { nameZh: true, nameAliases: true, employmentType: true } });
+  const knownNames = new Set<string>();
+  const longtermNames = new Set<string>();
+  for (const g of guards) {
+    for (const raw of [g.nameZh, ...g.nameAliases]) {
+      const norm = raw.normalize("NFKC").trim();
+      if (!norm) continue;
+      knownNames.add(norm);
+      if (g.employmentType.startsWith("longterm_")) longtermNames.add(norm);
+    }
+  }
+  const derived = derivePostorderLongtermPostsFromPostorderCsv(postorderCsvText, knownNames, longtermNames);
+  return { groups: derived.length, cells: derived.reduce((s, c) => s + c.cellCount, 0) };
+}
+
 /** 兩條上載路徑共用嘅「解析→組 parseSummary／parseError」邏輯。 */
 function summarizeParseOutcome(runParse: () => Promise<PostorderParseResult>, tolerableMissingSheets: readonly string[] = []) {
   return runParse().then(
-    (result) => {
+    async (result) => {
       const problems: string[] = [];
       // 精簡長工組合 CSV 路徑：`postorder_csv` 係可選，缺 PostOrder sheet 唔算錯
       // （parse_summary.missing_sheets 照記做診斷）。
@@ -91,8 +133,13 @@ function summarizeParseOutcome(runParse: () => Promise<PostorderParseResult>, to
       const parseError = problems.length > 0 ? problems.join("；") : null;
       const rowCount = result.longtermPosts.length + result.referralRows.length;
       // 鐵則：唔存逐行 PII——`parseSummary` 淨係數目。
-      const parseSummary: Prisma.InputJsonValue = { ...summarizePostorderParse(result), parse_error: parseError };
-      return { parseError, rowCount, parseSummary };
+      const parseSummary: Record<string, unknown> = { ...summarizePostorderParse(result), parse_error: parseError };
+      const derivedFromPostorder = await countPostorderDerivedPairs(result.postorderCsvText);
+      if (derivedFromPostorder) {
+        parseSummary.longterm_pairs_from_postorder = derivedFromPostorder.groups;
+        parseSummary.longterm_cells_from_postorder = derivedFromPostorder.cells;
+      }
+      return { parseError, rowCount, parseSummary: parseSummary as Prisma.InputJsonValue };
     },
     (e: unknown) => {
       const parseError = e instanceof Error ? e.message : String(e);
@@ -109,7 +156,7 @@ export async function POST(req: Request) {
     try {
       formData = await req.formData();
     } catch {
-      throw BadRequest("要用 multipart/form-data 上載（file + month，或者 roster_csv + postorder_csv + month，或者 longterm_pairs_csv + month）");
+      throw BadRequest("要用 multipart/form-data 上載（file + month，roster_csv + postorder_csv + month，longterm_pairs_csv + month，或者淨係 postorder_csv + month）");
     }
     const monthRaw = formData.get("month");
     if (typeof monthRaw !== "string" || !monthRaw) throw BadRequest("要帶 month（YYYY-MM-DD 或 YYYY-MM，呢份 Postorder 對應邊個月）");
@@ -234,8 +281,42 @@ export async function POST(req: Request) {
           postorderCsvBytes: postorderBuffer,
         },
       });
+    } else if (postorderCsvEntry instanceof File) {
+      // --- 淨係 PostOrder CSV 路徑（WP-POSTORDER-PO-PAIRS，老闆
+      // 2026-09-27 再緊急）：正式站操作員連 roster_csv／
+      // longterm_pairs_csv 都傳唔到（同款上載瓶頸），但已經有完整嘅
+      // `PostOrder.csv`。呢度淨係存 bytes；長工組合唔靠呢個 route 推
+      // （要 DB 安員名，摘要淨係做「PostOrder 推出組合」數目提示）——
+      // 真正推＋合併 Roster/pairs 現有組合喺 `buildGuardFixPlan()`
+      // （`plan.ts` `mergeLongtermPostCells()`）做，重新「計算修復
+      // 計劃」嗰刻先計得埋。 ---
+      if (postorderCsvEntry.size > MAX_CSV_BYTES) throw BadRequest(`CSV 檔案太大（上限 ${MAX_CSV_BYTES / 1024 / 1024}MB）`);
+      const postorderBuffer = Buffer.from(await postorderCsvEntry.arrayBuffer());
+      if (!postorderBuffer.length) throw BadRequest("postorder_csv 係空嘅");
+
+      const sha256 = crypto.createHash("sha256").update(postorderBuffer).digest("hex");
+      const postorderCsvText = postorderBuffer.toString("utf-8");
+      const outcome = await summarizeParseOutcome(() => Promise.resolve(parsePostorderFromCsv({ rosterCsv: null, postorderCsv: postorderCsvText })), ["Roster"]);
+      parseError = outcome.parseError;
+
+      created = await prisma.postorderUpload.create({
+        data: {
+          month,
+          uploaderId: session.userId,
+          // 同其他 CSV 路徑一致：呢幾欄 NOT NULL，淨係做佔位／sha256
+          // audit 用途——真正解析用 postorderCsvBytes。
+          fileName: postorderCsvEntry.name || "PostOrder.csv",
+          fileSha256: sha256,
+          fileBytes: postorderBuffer,
+          fileSize: postorderBuffer.length,
+          rowCount: outcome.rowCount,
+          status: parseError ? "parse_failed" : "parsed",
+          parseSummary: outcome.parseSummary,
+          postorderCsvBytes: postorderBuffer,
+        },
+      });
     } else {
-      throw BadRequest("要帶 file（Postorder 總表 .xlsm/.xlsx）、roster_csv + postorder_csv 兩個 CSV 檔，或者 longterm_pairs_csv（可選 postorder_csv）");
+      throw BadRequest("要帶 file（Postorder 總表 .xlsm/.xlsx）、roster_csv + postorder_csv 兩個 CSV 檔、longterm_pairs_csv（可選 postorder_csv），或者淨係 postorder_csv");
     }
 
     await writeAudit({

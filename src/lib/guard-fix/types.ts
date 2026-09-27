@@ -220,5 +220,12 @@ export interface GuardFixPlan {
     unresolvedBrokerLabels: string[];
     visaSupported: boolean;
     visaNote: string;
+    /** WP-POSTORDER-PO-PAIRS：單靠 PostOrder 分頁 CSV（`postorder.ts`
+     * `derivePostorderLongtermPostsFromPostorderGrid()`）補推到幾多個
+     * (盤,人) 組合——冇上載 PostOrder CSV，或者 xlsm 路徑（冇獨立 CSV
+     * 原文）就係 0。呢個數已經計入 `longtermPostCellCount`／
+     * `set_longterm_post`（見 `plan.ts` `mergeLongtermPostCells()`），
+     * 淨係俾操作員睇透明度用。 */
+    longtermPairsFromPostorderCount: number;
   } | null;
 }

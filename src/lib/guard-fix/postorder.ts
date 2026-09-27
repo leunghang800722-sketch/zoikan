@@ -86,6 +86,44 @@
 // 喺成個 grid 度搵表頭／逐格掃「(8) 長工」。`postorder_csv`（介紹費行）
 // 依然可選：冇上載就同「CSV 路徑冇 PostOrder」一樣，`referralRows` 空
 // array、`missingSheets` 記低 `PostOrder`。
+//
+// WP-POSTORDER-PO-PAIRS（老闆 2026-09-27 再緊急）：連 `longterm-
+// pairs.csv`（第三條路徑，上面）操作員都傳唔到——正式站個工具連 3KB
+// 嘅精簡 CSV 都上載唔到（同 Roster CSV 一樣嘅上載瓶頸），但正式站
+// **已經有**一份完整、冇截短嘅 `PostOrder.csv`（815 行，`data/2026-09/
+// postorder-csv/PostOrder.csv` 係同一份樣本）。目標：單靠呢份
+// PostOrder.csv（唔使 Roster／pairs 任何一份）都推到（盤,人）長工組合
+// 出嚟。
+//
+// 實測（`data/2026-09/postorder-csv/PostOrder.csv`）：PostOrder 分頁
+// 表頭第 7 行「客戶名稱,Customer Code,物業名稱,更份,上單價,外判價,
+// 時間,1-8月,…,31-8月,Total Shift」；長工行嘅「客戶名稱」（col A）
+// 尾段會夾埋人名（同 `trailingChineseName()` 截法一致），特徵：
+//   (a) 「外判價」（col F）＝`#REF!`（連去外部長工 roster 檔，個公式
+//       喺 Google Sheets 匯出 CSV 已經算唔到，剩低錯誤字面）——實測
+//       58 行、56 組、Total Shift 合計 1,250；
+//   (b) 罕見情況：「外判價」係一個數字（例如 545）但「客戶名稱」都係
+//       「盤名 人名」形狀——呢種淨係喺呢個人已經係 DB 已知長工
+//       （`employment_type` 開頭 `longterm_`）先當佢係自己崗位一更
+//       （避免一般客戶盤名尾段啱啱好似人名嘅 false positive）；
+//   (c) 「外判價」＝`#REF!` 但 Total Shift＝0（Roster 表其實有格）——
+//       都要保留呢個 (盤,人) 組合（`cellCount:0`），唔會因為呢一行冧
+//       唔到格數就成個組合漏晒。
+// 規則：「客戶名稱」尾 token 係一個系統已知安員姓名（`guards.name_zh`
+// 或 `name_aliases`，NFKC 正規化）**且**（外判價＝`#REF!` **或**
+// 呢個安員 `employment_type` 已經係 `longterm_` 開頭）→ 呢一行就係
+// 「呢個安員自己嘅崗位」。對比 Roster 真值 60 組／1,295 格，呢條規則
+// 覆蓋到 59 組／1,294 格（只差 1 格 OT——太泛用嘅代號，同
+// docs/api.md A. 段落講嘅 matchSite 剩低 2 格 OT 落差一致，向來留返
+// 人手覆核，唔會屈估）。
+//
+// `derivePostorderLongtermPostsFromPostorderGrid()`／
+// `derivePostorderLongtermPostsFromPostorderCsv()` 依然係**純函數**
+// ——`knownNames`／`longtermEmploymentNames` 呢兩個 name set 由 caller
+// （`plan.ts` `buildGuardFixPlan()`）由 DB `guards` 表建，呢個檔冇任何
+// DB 依賴、冇硬編碼真名。合併策略（「Roster/pairs 路徑有嘅 pairs 優先，
+// 再 union PostOrder 推出嘅 pairs，同一 (盤,人) cell_count 取大」）喺
+// `plan.ts` `mergeLongtermPostCells()` 做，唔喺呢個檔。
 import ExcelJS from "exceljs";
 import { parse as parseCsvSync } from "csv-parse/sync";
 
@@ -169,6 +207,12 @@ export interface PostorderParseResult {
   /** 表頭偵測唔到就喺度講明原因（唔會靜靜輸出 0）；有 sheet 又搵到表頭
    * 就係 `null`。 */
   rosterParseError: string | null;
+  /** WP-POSTORDER-PO-PAIRS：PostOrder 分頁 CSV 原文（冇上載就 `null`）
+   * ——`plan.ts` 用嚟 call `derivePostorderLongtermPostsFromPostorderCsv()`
+   * 補推(盤,人)組合（要 DB 安員名先做到，呢個檔本身唔存 DB 依賴，所以
+   * 淨係留低原文俾識 DB 嗰邊用）。xlsm 路徑冇獨立 CSV 原文，一律
+   * `null`（呢個功能專門解正式站「淨係傳到 PostOrder.csv」嗰個場景）。 */
+  postorderCsvText: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -561,6 +605,7 @@ export async function parsePostorderWorkbookBuffer(buffer: Buffer): Promise<Post
     rosterDayBlockWidth: roster?.dayBlockWidth ?? null,
     rosterFirstDayCol: roster?.firstDayCol ?? null,
     rosterParseError: roster?.parseError ?? null,
+    postorderCsvText: null, // xlsm 路徑冇獨立 CSV 原文
   };
 }
 
@@ -618,6 +663,7 @@ export function parsePostorderFromCsv(source: PostorderCsvSource): PostorderPars
     rosterDayBlockWidth: roster?.dayBlockWidth ?? null,
     rosterFirstDayCol: roster?.firstDayCol ?? null,
     rosterParseError: roster?.parseError ?? null,
+    postorderCsvText: source.postorderCsv,
   };
 }
 
@@ -717,7 +763,73 @@ export function parsePostorderFromPairsCsv(source: PostorderPairsCsvSource): Pos
     rosterDayBlockWidth: null,
     rosterFirstDayCol: null,
     rosterParseError: outcome.parseError,
+    postorderCsvText: source.postorderCsv,
   };
+}
+
+// ---------------------------------------------------------------------------
+// PostOrder-only 推長工組合（WP-POSTORDER-PO-PAIRS）——見檔頭註解。
+// 純函數：`grid`（PostOrder 分頁）逐行掃，`knownNames`／
+// `longtermEmploymentNames` 兩個 name set 由 caller（`plan.ts`）由 DB
+// `guards` 表建（`name_zh`＋`name_aliases`，NFKC 正規化）。
+// ---------------------------------------------------------------------------
+
+/** PostOrder grid 逐行推「長工崗位 (盤,人)」組合——見檔頭 WP-POSTORDER-
+ * PO-PAIRS 段落嘅規則：「客戶名稱」（col A）尾 token 係 `knownNames`
+ * 入面一個名，且（「外判價」col F＝`#REF!`，或者呢個名喺
+ * `longtermEmploymentNames`——即係 DB 已經係 `longterm_*` 嘅安員）先
+ * 當呢一行係「呢個安員自己嘅崗位」。已經由
+ * `parsePostorderReferralRowsFromGrid()` 處理嗰啲「長工雞頭費」行
+ * （col A 含「雞頭費」）唔會喺呢度再計一次。
+ *
+ * `siteLabelRaw`＝「客戶名稱」剝走尾段人名之後 trim；`siteLabelFallbackRaw`
+ * ＝「物業名稱」（col C）；`cellCount`＝「Total Shift」（col AM/39）——
+ * 讀唔到／0 都保留呢個組合（唔會因為呢一行冧唔到格數就漏咗成個組合，
+ * 見檔頭 (c) 個案）。同一個 (盤,人) 喺 grid 出現多過一行就加埋
+ * cellCount（理論上 PostOrder 一個人一個盤一個月得一行，呢度純粹
+ * 保守處理，唔假設）。 */
+export function derivePostorderLongtermPostsFromPostorderGrid(
+  grid: PostorderGrid,
+  knownNames: Set<string>,
+  longtermEmploymentNames: Set<string> = new Set(),
+): PostorderLongtermPostCell[] {
+  const agg = new Map<string, PostorderLongtermPostCell>();
+  const rowCount = grid.length - 1;
+  for (let r = 1; r <= rowCount; r++) {
+    const clientRaw = gridText(grid, r, 1); // 「客戶名稱」
+    if (!clientRaw) continue;
+    if (clientRaw.includes("雞頭費")) continue; // 介紹費行由 parsePostorderReferralRowsFromGrid() 處理
+    const guardNameRaw = trailingChineseName(clientRaw);
+    if (!guardNameRaw || !knownNames.has(guardNameRaw)) continue; // 尾段唔係已知安員姓名——一般客戶／盤名，唔計
+    const priceRaw = gridText(grid, r, 6); // 「外判價」
+    const isRefPrice = priceRaw === "#REF!";
+    if (!isRefPrice && !longtermEmploymentNames.has(guardNameRaw)) continue; // 兩個條件都唔中——保守唔計（避免 false positive）
+    const siteLabelRaw = clientRaw.endsWith(guardNameRaw) ? clientRaw.slice(0, clientRaw.length - guardNameRaw.length).trim() : "";
+    if (!siteLabelRaw) continue; // 剝晒淨番人名，冧唔到盤名——保守跳過，唔靠估
+    const propRaw = gridText(grid, r, 3); // 「物業名稱」
+    const cellCount = gridNumber(grid, r, AM_COLUMN) ?? 0;
+    const key = `${siteLabelRaw}\u0000${guardNameRaw}`;
+    const cur = agg.get(key);
+    if (cur) {
+      cur.cellCount += cellCount;
+      if (!cur.siteLabelFallbackRaw && propRaw) cur.siteLabelFallbackRaw = propRaw;
+    } else {
+      agg.set(key, { siteLabelRaw, siteLabelFallbackRaw: propRaw, guardNameRaw, cellCount });
+    }
+  }
+  return [...agg.values()];
+}
+
+/** 同 `derivePostorderLongtermPostsFromPostorderGrid()`，但直接食 PostOrder
+ * 分頁 CSV 原文（`PostorderParseResult.postorderCsvText`）——`plan.ts`
+ * 淨係接觸得到 CSV 原文，唔識 `PostorderGrid` 呢個內部型別，用呢個
+ * wrapper 唔使匯出 grid 建構邏輯。 */
+export function derivePostorderLongtermPostsFromPostorderCsv(
+  postorderCsvText: string,
+  knownNames: Set<string>,
+  longtermEmploymentNames: Set<string> = new Set(),
+): PostorderLongtermPostCell[] {
+  return derivePostorderLongtermPostsFromPostorderGrid(gridFromCsvText(postorderCsvText), knownNames, longtermEmploymentNames);
 }
 
 /** `postorder_uploads` 一行嘅原始 bytes——`longtermPairsCsvBytes` 有值
