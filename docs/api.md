@@ -2017,18 +2017,39 @@ month.test.ts` 一致慣例）。
 trial/out/{broker_settlement,revenue_site,referral_postorder}.json`
 （8 月薪金試算 oracle 輸出，只讀，gitignored），call `buildPostorderWorkbook
 (2026-08)`，逐雞頭付款（K/W/T/G/D/Y/B07）／逐盤收入（44 個總表盤碼）／
-介紹費合計逐項對，印差異表，exit 1 如果唔係全部 0 差。
+介紹費逐行（21 原始行用「(雞頭,盤組合)」複合鍵合併對）逐項對，印差異
+表。差額喺文件已記錄嘅已知落差容差（±5）之內分類做 KNOWN（唔計 FAIL），
+其餘超出容差先 FAIL，`exit 1`。
 
 **前置條件**（同 `scripts/gate/aug-e2e-check.ts` 一樣）：dev DB 要已經
-行完 8 月 Part B 全套流程（`db:reset`/`db:seed` → `build/apply-aug-
-plan.ts` → 真實上載 36 個 8 月更表 → `guard-fix` 收斂 → 「重新對數全月」
-→「重算介紹費」）——呢個 gate 本身淨係讀，唔做呢步（成個 pipeline 好
-重，屬另一個獨立任務嘅工作量）。**本次（2026-09-27，branch `wp-phase4`）
-dev DB 未跑過呢套流程**（`db:reset` 之後淨係 July seed，8 月 0 條
-`shift_records`）——跑 `gate:postorder-export-aug` 見到嘅係預期入面嘅
-「系統缺」（逐雞頭付款 K/W/T/G/D/Y 全部系統=0 vs 參考=實數，逐盤收入
-44/44 個「系統缺」，介紹費合計 0 vs 60,520），**唔係 `buildPostorderWorkbook()`
-本身嘅 bug**——B07（長工内部結算）一行系統=0=參考=0，PASS，證明冇資料
-嗰種情況下模組本身冇報錯/冇亂寫數。要驗證真正 0-diff，要先完成 Part B
-流程（另一個任務量級，留返下一手）。workbook 本身會寫去
-`out/postorder-export-aug.xlsx`（gitignored）俾人手打開睇版面。
+行完 8 月 Part B 全套流程——**呢個而家可以直接用 `npm run gate:ltpay-aug`
+（`scripts/gate/build-ltpay-aug-fixture.ts && scripts/gate/longterm-
+payroll-aug.ts`）一次過做晒**（db:reset→db:seed→開盤→真實上載 36 個
+8 月更表→guard-fix 收斂→長工結算單位重算→`runReconcileAllForMonth()`
+→導入合約 fixture→計長工糧），跑完之後再補兩步先有介紹費數：
+(1) `npx prisma db execute --file prisma/migrations/20260926200000_
+wp_postorder_csv_aug_referral_rates/migration.sql --schema prisma/
+schema.prisma`（呢個 migration 原本部署嗰刻 `brokers`/`sites` 未 seed，
+join 0 行——`gate:ltpay-aug` 跑完 `brokers`/`sites` 已經有 8 月資料，
+補跑呢個 `WHERE NOT EXISTS` 冪等嘅 DML 會插返 16 行費率）；(2) 用
+`recomputeReferralFees(2026-08, actorUserId, null)`（`src/lib/reports/
+referral-fee.ts`）重算一次介紹費（`recomputeReferralFees` 冇獨立 CLI，
+要自己起個一次性 script call）。
+
+**2026-09-27 第二輪實測（真 Part B 跑過）結果**：`npm run gate:
+postorder-export-aug` **exit 0（PASS）**——逐雞頭付款 G/D/Y/B07 0 差，
+K/W/T 3 個雞頭同逐盤收入 4 個盤同介紹費合計/逐行全部落喺已記錄嘅 KNOWN
+差額（§19／`aug-e2e-check.ts` B5——CP5 IC proxy、蔚峰園重複行、Weave
+漏記病假/介紹費、HKU座頭 OT、凱和山 Unbilled、啟航1331 Event 分盤），
+`0` 個未解釋差異。過程中揪到並修咗一個真 bug：`buildPostorderWorkbook()`
+原本冇處理月費／admin_fee／special billing 盤嘅 flat 卡收入（呢批盤
+`client_rate_snapshot` 逐更本身係 null，收入淨係喺盤級卡），令 13 個盤
+逐盤收入顯示 0——改用 `buildMonthlyClose()`（已經處理晒 flat 卡／pro-rata
+fallback／CP5 IC proxy 呢層邏輯）嘅權威逐盤收入補差額，Roster/PostOrder
+加合成「月費」row，siteRevenueTotal 修正到 3,304,416.19（同 §20.7/§22
+驗收數分毫不差）。詳細差異表見 `P2-版面重設計計劃.md` §23 第二輪段。
+
+真 Excel 開檔測試（Microsoft Excel + AppleScript，用呢輪真 8 月資料
+workbook）：`Roster, PostOrder, Summary, 口徑說明` 四個 sheet 名核對
+PASS，`Summary!A1`／`Roster!A1:F1` 格式核對正常，`close workbook
+"_opentest.xlsx" saving no`（指名 workbook）收尾，測試檔已刪。

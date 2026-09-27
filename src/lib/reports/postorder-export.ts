@@ -268,6 +268,7 @@ async function writeRosterSheet(
   daysInMonth: number,
   monthLocked: boolean,
   longtermMonthlySalaryByGuard: Map<string, number>,
+  flatRevenueRows: Array<{ siteId: string; siteName: string; clientName: string | null; amount: number }>,
 ): Promise<void> {
   const ws = wb.addWorksheet(sanitizeSheetName(POSTORDER_SHEET_NAMES.roster));
 
@@ -328,6 +329,25 @@ async function writeRosterSheet(
     row++;
   }
 
+  // 「月費」合成行——月費／admin_fee／special billing 盤（`client_rate_
+  // snapshot` 本身唔記逐更收客），日曆 block 全部留空（唔逐更），淨係
+  // 尾欄有數（見 buildPostorderWorkbook() 頂註解）。
+  for (const r of flatRevenueRows) {
+    let col = 1;
+    setCell(ws, row, col++, r.clientName);
+    setCell(ws, row, col++, r.siteName);
+    setCell(ws, row, col++, "月費");
+    setCell(ws, row, col++, r.amount);
+    col += 2; // 外判價／時間留空
+    col += daysInMonth * 7; // 日曆 block 留空（月費唔逐更）
+    col += 2; // 取消／甩更留空
+    setCell(ws, row, col++, 0);
+    setCell(ws, row, col++, r.amount);
+    setCell(ws, row, col++, 0);
+    setCell(ws, row, col++, r.amount);
+    row++;
+  }
+
   ws.getRow(1).font = { bold: true };
   ws.getColumn(2).width = 20;
 }
@@ -342,6 +362,7 @@ async function writePostOrderSheet(
   referral: ComputeReferralFeesResult,
   brokerNameById: Map<string, string>,
   siteNameById: Map<string, string>,
+  flatRevenueRows: Array<{ siteId: string; siteName: string; clientName: string | null; amount: number }>,
 ): Promise<void> {
   const ws = wb.addWorksheet(sanitizeSheetName(POSTORDER_SHEET_NAMES.postOrder));
 
@@ -362,6 +383,17 @@ async function writePostOrderSheet(
       col++;
     }
     setCell(ws, row, col++, g.shiftCount);
+    row++;
+  }
+
+  // 「月費」合成行（同 Roster 一致，見 buildPostorderWorkbook() 頂註解）。
+  for (const r of flatRevenueRows) {
+    let col = 1;
+    setCell(ws, row, col++, r.siteName);
+    setCell(ws, row, col++, "月費");
+    setCell(ws, row, col++, "—");
+    col += daysInMonth; // 日曆留空
+    setCell(ws, row, col++, 0);
     row++;
   }
 
@@ -407,7 +439,13 @@ async function writePostOrderSheet(
 // ---------------------------------------------------------------------------
 // Summary sheet
 // ---------------------------------------------------------------------------
-async function writeSummarySheet(wb: ExcelJS.Workbook, month: Date, payrollTotals: BrokerPayrollTotal[], referral: ComputeReferralFeesResult): Promise<void> {
+async function writeSummarySheet(
+  wb: ExcelJS.Workbook,
+  month: Date,
+  payrollTotals: BrokerPayrollTotal[],
+  referral: ComputeReferralFeesResult,
+  monthlyClose: Awaited<ReturnType<typeof buildMonthlyClose>>,
+): Promise<void> {
   const ws = wb.addWorksheet(sanitizeSheetName(POSTORDER_SHEET_NAMES.summary));
   const { start, end } = reportMonthRange(month);
   const mid = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 15));
@@ -525,7 +563,7 @@ async function writeSummarySheet(wb: ExcelJS.Workbook, month: Date, payrollTotal
   row += 1;
 
   // 總收入/總成本/毛利（合併口徑，同 monthly-close.ts combinedCostSummary 一致）
-  const { mainRows, combinedCostSummary } = await buildMonthlyClose(month);
+  const { mainRows, combinedCostSummary } = monthlyClose;
   const revenue = round2(mainRows.reduce((a, r) => a + r.revenue, 0));
   const perShiftCost = round2(mainRows.reduce((a, r) => a + r.cost, 0));
   setCell(ws, row, 1, "總收入／總成本／毛利（合併口徑）");
@@ -597,15 +635,17 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
   const wb = new ExcelJS.Workbook();
   const { groups, daysInMonth } = await loadRosterGroups(month);
 
-  const [payrollTotals, referral, monthClose, brokers, sites] = await Promise.all([
+  const [payrollTotals, referral, monthClose, brokers, sites, monthlyClose] = await Promise.all([
     buildPayrollTotals(month),
     computeReferralFeesForMonth(month),
     prisma.monthClose.findUnique({ where: { month: reportMonthRange(month).start }, select: { lockedAt: true } }),
     prisma.broker.findMany({ select: { id: true, name: true } }),
-    prisma.site.findMany({ select: { id: true, canonicalName: true } }),
+    prisma.site.findMany({ select: { id: true, canonicalName: true, clientName: true } }),
+    buildMonthlyClose(month),
   ]);
   const brokerNameById = new Map(brokers.map((b) => [b.id, b.name]));
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
+  const siteClientNameById = new Map(sites.map((s) => [s.id, s.clientName]));
 
   const longtermGuardIds = new Set<string>();
   for (const g of groups) for (const id of g.longtermGuardIds) longtermGuardIds.add(id);
@@ -613,12 +653,32 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
     longtermGuardIds.size > 0 ? await prisma.guard.findMany({ where: { id: { in: [...longtermGuardIds] } }, select: { id: true, monthlySalary: true } }) : [];
   const longtermMonthlySalaryByGuard = new Map(longtermGuards.map((g) => [g.id, n(g.monthlySalary)]));
 
-  await writeRosterSheet(wb, groups, daysInMonth, !!monthClose?.lockedAt, longtermMonthlySalaryByGuard);
-  await writePostOrderSheet(wb, groups, daysInMonth, referral, brokerNameById, siteNameById);
-  await writeSummarySheet(wb, month, payrollTotals, referral);
+  // 逐盤「更次收入」（groups 加總，`shift_records.client_rate_snapshot`
+  // 之和）vs `buildMonthlyClose()` 嘅權威逐盤收入（已經包埋 flat 月費卡／
+  // pro-rata fallback，見 monthly-close.ts `flatCard`/`monthlyFeeProrataRevenue`
+  // ——呢層邏輯好複雜、已經驗證過，呢度唔重新發明，直接借用差額）。差額
+  // 大過 0 嘅盤（月費／admin_fee／special billing，`client_rate_snapshot`
+  // 本身唔記逐更收客，收入淨係喺 flat 卡度）加一行合成「月費」row，等
+  // Roster/PostOrder/Summary 逐盤收入唔會漏咗呢批盤（8 月實測：IFC／
+  // 控制室／九龍企業大廈／創富廠IC／屯門小欖樂怡街5號／都會大學夜巡邏／
+  // M+／恆星樓 呢類盤冇呢個補丁會顯示 0 收入）。
+  const perShiftRevenueBySite = new Map<string, number>();
+  for (const g of groups) perShiftRevenueBySite.set(g.key.siteId, round2((perShiftRevenueBySite.get(g.key.siteId) ?? 0) + g.revenue));
+  const flatRevenueRows: Array<{ siteId: string; siteName: string; clientName: string | null; amount: number }> = [];
+  for (const r of [...monthlyClose.mainRows, ...monthlyClose.outsideRows]) {
+    const perShift = perShiftRevenueBySite.get(r.siteId) ?? 0;
+    const flatPortion = round2(r.revenue - perShift);
+    if (flatPortion > 0.01) {
+      flatRevenueRows.push({ siteId: r.siteId, siteName: siteNameById.get(r.siteId) ?? r.canonicalName, clientName: siteClientNameById.get(r.siteId) ?? null, amount: flatPortion });
+    }
+  }
+
+  await writeRosterSheet(wb, groups, daysInMonth, !!monthClose?.lockedAt, longtermMonthlySalaryByGuard, flatRevenueRows);
+  await writePostOrderSheet(wb, groups, daysInMonth, referral, brokerNameById, siteNameById, flatRevenueRows);
+  await writeSummarySheet(wb, month, payrollTotals, referral, monthlyClose);
   await writeLegendSheet(wb, month);
 
-  const siteRevenueTotal = round2(groups.reduce((a, g) => a + g.revenue, 0));
+  const siteRevenueTotal = round2(groups.reduce((a, g) => a + g.revenue, 0) + flatRevenueRows.reduce((a, r) => a + r.amount, 0));
   const siteCostTotal = round2(groups.reduce((a, g) => a + g.cost, 0));
 
   const siteRevenueBySite = new Map<string, PostorderSiteRevenue>();
@@ -632,12 +692,17 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
       siteRevenueBySite.set(g.key.siteId, { siteId: g.key.siteId, siteName: siteNameById.get(g.key.siteId) ?? g.siteName, shifts: g.shiftCount, revenue: g.revenue, cost: g.cost });
     }
   }
+  for (const r of flatRevenueRows) {
+    const cur = siteRevenueBySite.get(r.siteId);
+    if (cur) cur.revenue = round2(cur.revenue + r.amount);
+    else siteRevenueBySite.set(r.siteId, { siteId: r.siteId, siteName: r.siteName, shifts: 0, revenue: r.amount, cost: 0 });
+  }
 
   return {
     workbook: wb,
     month: monthLabel(month),
     daysInMonth,
-    rosterRowCount: groups.length,
+    rosterRowCount: groups.length + flatRevenueRows.length,
     brokerPayouts: payrollTotals.map((t) => ({ brokerId: t.brokerId, brokerCode: t.brokerCode, brokerName: t.brokerName, amount: t.amount, shifts: t.shifts })),
     referralFeeTotal: referral.totalAmount,
     siteRevenueTotal,
