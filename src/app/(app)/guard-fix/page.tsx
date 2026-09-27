@@ -213,6 +213,13 @@ export default function GuardFixPage() {
   const [rosterCsvFile, setRosterCsvFile] = useState<File | null>(null);
   const [postorderCsvFile, setPostorderCsvFile] = useState<File | null>(null);
   const [uploadingPostorderCsv, setUploadingPostorderCsv] = useState(false);
+
+  // WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：完整 Roster CSV 匯出
+  // 持續 503——第三條路徑淨係要一個極精簡嘅 longterm-pairs.csv（可選
+  // 再加 PostOrder.csv 計介紹費行）。
+  const [pairsCsvFile, setPairsCsvFile] = useState<File | null>(null);
+  const [pairsPostorderCsvFile, setPairsPostorderCsvFile] = useState<File | null>(null);
+  const [uploadingPairsCsv, setUploadingPairsCsv] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [plan, setPlan] = useState<ActivePlan | null>(null);
 
@@ -368,6 +375,47 @@ export default function GuardFixPage() {
     setNotice(`Postorder CSV 已上載（長工格 ${res.data.upload.parse_summary?.longterm_cell_count ?? 0}、介紹費行 ${res.data.upload.parse_summary?.referral_row_count ?? 0}）`);
     setRosterCsvFile(null);
     setPostorderCsvFile(null);
+    await loadPostorder(month);
+  }
+
+  // WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：淨係要一個
+  // longterm-pairs.csv（PostOrder.csv 可選）——揀齊 pairs CSV 就撳得。
+  async function onPairsCsvUpload() {
+    if (!pairsCsvFile) {
+      setError("要揀 longterm-pairs.csv 先可以上載");
+      return;
+    }
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      setError("請先揀番對應嘅月份（下面②）先上載 Postorder");
+      return;
+    }
+    setUploadingPairsCsv(true);
+    setError(null);
+    setNotice(null);
+    const form = new FormData();
+    form.set("longterm_pairs_csv", pairsCsvFile);
+    if (pairsPostorderCsvFile) form.set("postorder_csv", pairsPostorderCsvFile);
+    form.set("month", `${month}-01`);
+    const res = await apiUpload<{ upload: PostorderDTO; parse_ok: boolean; parse_error: string | null }>("/api/guard-fix/postorder", form);
+    setUploadingPairsCsv(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    if (!res.data.parse_ok) {
+      setError(`上載成功但解析失敗：${res.data.parse_error ?? "未知原因"}——請檢查 longterm-pairs.csv 表頭係咪 site_label,site_short,guard_name,cell_count`);
+      return;
+    }
+    if ((res.data.upload.parse_summary?.longterm_cell_count ?? 0) === 0) {
+      setError("上載成功，但解析唔到長工格——請檢查 longterm-pairs.csv 內容");
+      setPairsCsvFile(null);
+      setPairsPostorderCsvFile(null);
+      await loadPostorder(month);
+      return;
+    }
+    setNotice(`長工組合 CSV 已上載（長工格 ${res.data.upload.parse_summary?.longterm_cell_count ?? 0}、介紹費行 ${res.data.upload.parse_summary?.referral_row_count ?? 0}）`);
+    setPairsCsvFile(null);
+    setPairsPostorderCsvFile(null);
     await loadPostorder(month);
   }
 
@@ -671,6 +719,59 @@ export default function GuardFixPage() {
             onClick={() => void onPostorderCsvUpload()}
           >
             {uploadingPostorderCsv ? "上載緊…" : "上載 CSV"}
+          </Button>
+        </div>
+
+        {/* WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：完整 Roster CSV
+            匯出持續 503——加呢個極精簡路徑，淨係要「(盤,人) 組合＋格數」
+            四欄 CSV（`site_label,site_short,guard_name,cell_count`，
+            由 `scripts/guard-fix/export-postorder-pairs.ts` 產生，或者
+            人手／AI 對住 Roster 分頁逐盤逐人手抄），~3KB，人手／AI 都
+            可以準確轉錄，PostOrder.csv（介紹費行）可選。 */}
+        <div className="mt-3 rounded-lg border border-zk-border bg-zk-surface p-3">
+          <div className="mb-1.5 text-[13px] font-medium text-zk-text">或上載精簡長工組合 CSV（longterm-pairs.csv）</div>
+          <div className="mb-2 text-[12px] leading-relaxed text-zk-muted">
+            完整 Roster 分頁匯出太大時用：淨係四欄 `site_label,site_short,guard_name,cell_count`——每行一個
+            (盤,人) 組合同格數，約 60 行、幾 KB，人手或者 AI 對住 Roster 分頁轉錄都準確。PostOrder.csv（介紹費行）可選，唔上載都可以計劃長工崗位。
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label
+              htmlFor="postorder-pairs-csv-input"
+              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${pairsCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}
+            >
+              {pairsCsvFile ? `長工組合：${pairsCsvFile.name}` : "揀 longterm-pairs.csv"}
+              <input
+                id="postorder-pairs-csv-input"
+                type="file"
+                accept=".csv,text/csv"
+                className="sr-only"
+                disabled={uploadingPairsCsv}
+                onChange={(e) => {
+                  setPairsCsvFile(e.target.files?.[0] ?? null);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <label
+              htmlFor="postorder-pairs-postorder-csv-input"
+              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${pairsPostorderCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}
+            >
+              {pairsPostorderCsvFile ? `PostOrder（可選）：${pairsPostorderCsvFile.name}` : "揀 PostOrder.csv（可選）"}
+              <input
+                id="postorder-pairs-postorder-csv-input"
+                type="file"
+                accept=".csv,text/csv"
+                className="sr-only"
+                disabled={uploadingPairsCsv}
+                onChange={(e) => {
+                  setPairsPostorderCsvFile(e.target.files?.[0] ?? null);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          <Button className="mt-2 w-full sm:w-auto" variant="secondary" disabled={!pairsCsvFile || uploadingPairsCsv} onClick={() => void onPairsCsvUpload()}>
+            {uploadingPairsCsv ? "上載緊…" : "上載長工組合 CSV"}
           </Button>
         </div>
       </div>

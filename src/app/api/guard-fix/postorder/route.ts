@@ -15,6 +15,14 @@
 // NULL），存嘅係兩個 CSV 併埋一齊嘅 bytes——純粹佔位／sha256 audit
 // 用途，真正解析用 `rosterCsvBytes`／`postorderCsvBytes`（見
 // `parsePostorderUploadRow()`）。
+//
+// WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：完整 Roster CSV（2,996
+// 行、760KB）匯出持續 503。第三條路徑：multipart 帶 `longterm_pairs_csv`
+// （必要，見 `scripts/guard-fix/export-postorder-pairs.ts`／
+// `parseLongtermPairsCsv()`）＋可選 `postorder_csv`（冇就介紹費行 0
+// 項，同其他 CSV 路徑冇 PostOrder 分頁一致行為）。`fileBytes`／
+// `fileName`／`fileSha256`／`fileSize` 一樣淨係佔位／audit 用途，真正
+// 解析用 `longtermPairsCsvBytes`（＋可選 `postorderCsvBytes`）。
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -24,10 +32,11 @@ import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { monthStart } from "@/lib/month-lock";
 import type { Prisma } from "@prisma/client";
-import { parsePostorderWorkbookBuffer, parsePostorderFromCsv, summarizePostorderParse, type PostorderParseResult } from "@/lib/guard-fix/postorder";
+import { parsePostorderWorkbookBuffer, parsePostorderFromCsv, parsePostorderFromPairsCsv, summarizePostorderParse, type PostorderParseResult } from "@/lib/guard-fix/postorder";
 
 const MAX_UPLOAD_BYTES = 30 * 1024 * 1024; // Postorder 總表帶 rich text／樣式，比 U Team 名單大好多
 const MAX_CSV_BYTES = 30 * 1024 * 1024; // 每個 CSV 檔上限（同 xlsm 一致，見§19 指示）
+const MAX_PAIRS_CSV_BYTES = 1 * 1024 * 1024; // longterm-pairs.csv 極精簡（~3KB），1MB 已經好闊裕，防止唔小心貼錯檔
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const OLE_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0]);
 
@@ -97,7 +106,7 @@ export async function POST(req: Request) {
     try {
       formData = await req.formData();
     } catch {
-      throw BadRequest("要用 multipart/form-data 上載（file + month，或者 roster_csv + postorder_csv + month）");
+      throw BadRequest("要用 multipart/form-data 上載（file + month，或者 roster_csv + postorder_csv + month，或者 longterm_pairs_csv + month）");
     }
     const monthRaw = formData.get("month");
     if (typeof monthRaw !== "string" || !monthRaw) throw BadRequest("要帶 month（YYYY-MM-DD 或 YYYY-MM，呢份 Postorder 對應邊個月）");
@@ -107,6 +116,7 @@ export async function POST(req: Request) {
     const fileEntry = formData.get("file");
     const rosterCsvEntry = formData.get("roster_csv");
     const postorderCsvEntry = formData.get("postorder_csv");
+    const longtermPairsCsvEntry = formData.get("longterm_pairs_csv");
 
     let created: Awaited<ReturnType<typeof prisma.postorderUpload.create>>;
     let parseError: string | null;
@@ -174,8 +184,54 @@ export async function POST(req: Request) {
           postorderCsvBytes: postorderBuffer,
         },
       });
+    } else if (longtermPairsCsvEntry instanceof File) {
+      // --- 精簡長工組合 CSV 路徑（WP-POSTORDER-PAIRS-CSV，老闆
+      // 2026-09-27 緊急）：完整 Roster CSV 匯出持續 503，改用
+      // `scripts/guard-fix/export-postorder-pairs.ts` 產生嘅極精簡
+      // `longterm-pairs.csv`（`site_label,site_short,guard_name,
+      // cell_count`，~3KB）取代——PostOrder CSV（介紹費行）依然可選。 ---
+      if (longtermPairsCsvEntry.size > MAX_PAIRS_CSV_BYTES) {
+        throw BadRequest(`longterm_pairs_csv 太大（上限 ${MAX_PAIRS_CSV_BYTES / 1024 / 1024}MB，呢份應該淨係得幾 KB）`);
+      }
+      if (postorderCsvEntry !== null && !(postorderCsvEntry instanceof File)) {
+        throw BadRequest("postorder_csv 要係檔案");
+      }
+      if (postorderCsvEntry instanceof File && postorderCsvEntry.size > MAX_CSV_BYTES) {
+        throw BadRequest(`CSV 檔案太大（每個上限 ${MAX_CSV_BYTES / 1024 / 1024}MB）`);
+      }
+      const pairsBuffer = Buffer.from(await longtermPairsCsvEntry.arrayBuffer());
+      if (!pairsBuffer.length) throw BadRequest("longterm_pairs_csv 係空嘅");
+      const postorderBuffer = postorderCsvEntry instanceof File ? Buffer.from(await postorderCsvEntry.arrayBuffer()) : null;
+
+      const combined = postorderBuffer ? Buffer.concat([pairsBuffer, postorderBuffer]) : pairsBuffer;
+      const sha256 = crypto.createHash("sha256").update(combined).digest("hex");
+      const pairsCsvText = pairsBuffer.toString("utf-8");
+      const postorderCsvText = postorderBuffer ? postorderBuffer.toString("utf-8") : null;
+      const outcome = await summarizeParseOutcome(() =>
+        Promise.resolve(parsePostorderFromPairsCsv({ longtermPairsCsv: pairsCsvText, postorderCsv: postorderCsvText })),
+      );
+      parseError = outcome.parseError;
+
+      created = await prisma.postorderUpload.create({
+        data: {
+          month,
+          uploaderId: session.userId,
+          // fileName/fileBytes/fileSha256/fileSize 呢幾欄 NOT NULL、pairs-CSV
+          // 路徑冧唔到一個真正嘅「檔案」，淨係做佔位／sha256 audit 用途
+          // ——真正解析用 longtermPairsCsvBytes/postorderCsvBytes。
+          fileName: `${longtermPairsCsvEntry.name || "longterm-pairs.csv"}${postorderCsvEntry instanceof File ? ` + ${postorderCsvEntry.name || "postorder.csv"}` : ""}`,
+          fileSha256: sha256,
+          fileBytes: combined,
+          fileSize: combined.length,
+          rowCount: outcome.rowCount,
+          status: parseError ? "parse_failed" : "parsed",
+          parseSummary: outcome.parseSummary,
+          longtermPairsCsvBytes: pairsBuffer,
+          postorderCsvBytes: postorderBuffer,
+        },
+      });
     } else {
-      throw BadRequest("要帶 file（Postorder 總表 .xlsm/.xlsx）或者 roster_csv + postorder_csv 兩個 CSV 檔");
+      throw BadRequest("要帶 file（Postorder 總表 .xlsm/.xlsx）、roster_csv + postorder_csv 兩個 CSV 檔，或者 longterm_pairs_csv（可選 postorder_csv）");
     }
 
     await writeAudit({
@@ -190,7 +246,7 @@ export async function POST(req: Request) {
         rowCount: created.rowCount,
         status: created.status,
         parseSummary: created.parseSummary,
-        csvUpload: created.rosterCsvBytes !== null || created.postorderCsvBytes !== null,
+        csvUpload: created.rosterCsvBytes !== null || created.postorderCsvBytes !== null || created.longtermPairsCsvBytes !== null,
       },
       ip: getClientIp(req),
     });

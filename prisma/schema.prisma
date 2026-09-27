@@ -947,6 +947,14 @@ model PostorderUpload {
   // `src/lib/guard-fix/postorder.ts` `parsePostorderUploadRow()`）。
   rosterCsvBytes    Bytes? @map("roster_csv_bytes")
   postorderCsvBytes Bytes? @map("postorder_csv_bytes")
+  // WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：正式站操作員連
+  // Google Sheets 匯出完整 Roster 分頁都持續 503——加呢欄存極精簡嘅
+  // 「(盤,人) 組合＋格數」CSV（`site_label,site_short,guard_name,
+  // cell_count`，見 `scripts/guard-fix/export-postorder-pairs.ts`／
+  // `src/lib/guard-fix/postorder.ts` `parseLongtermPairsCsv()`），有值
+  // 就優先用（跌返 `rosterCsvBytes`／`fileBytes` 見
+  // `parsePostorderUploadRow()`）。
+  longtermPairsCsvBytes Bytes? @map("longterm_pairs_csv_bytes")
 
   createdAt DateTime @default(now()) @map("created_at")
 

@@ -75,6 +75,17 @@
 // `null`，自然 0 upsert，跌返用 `referral_fee_rates` 表入面已有嘅費率
 // （由 migration 種低，或者之前 xlsm 上載寫低嗰批）：「有公式費率就用
 // （xlsm 路徑），冇（CSV 路徑）就用表入面已有費率——效果一樣」。
+//
+// WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：正式站操作員只可以
+// 傳文字檔——Google Sheets 匯出完整 Roster 分頁（2,996 行、760KB）
+// 持續 503，而且 AI 轉錄成隻 63KB CSV 會令格位錯位。所以加第三條、
+// 極精簡嘅路徑：`longterm-pairs.csv`（`site_label,site_short,
+// guard_name,cell_count` 四欄，一行一個 (盤,人) 組合，約 60 行、
+// ~3KB，人手／AI 都可以準確轉錄）取代整份 Roster CSV——
+// `parseLongtermPairsCsv()` 直接讀呢四欄，唔使再靠 `detectRosterHeader()`
+// 喺成個 grid 度搵表頭／逐格掃「(8) 長工」。`postorder_csv`（介紹費行）
+// 依然可選：冇上載就同「CSV 路徑冇 PostOrder」一樣，`referralRows` 空
+// array、`missingSheets` 記低 `PostOrder`。
 import ExcelJS from "exceljs";
 import { parse as parseCsvSync } from "csv-parse/sync";
 
@@ -610,20 +621,128 @@ export function parsePostorderFromCsv(source: PostorderCsvSource): PostorderPars
   };
 }
 
-/** `postorder_uploads` 一行嘅原始 bytes——`rosterCsvBytes`／
- * `postorderCsvBytes` 有值就係 CSV 上載（優先用），冇就跌返用
- * `fileBytes`（xlsm）。同 Prisma 生成嘅 `PostorderUpload` 形狀相容，
- * 淨係揀呢個函數用得到嘅幾個欄位，方便測試起假資料。 */
+// ---------------------------------------------------------------------------
+// 精簡長工組合 CSV 路徑（WP-POSTORDER-PAIRS-CSV）——見檔頭註解。表頭
+// 固定四欄，冇 day-grid 要掃，一行就係一個 (盤,人) 組合嘅格數，人手／
+// AI 都可以準確轉錄。
+// ---------------------------------------------------------------------------
+
+const LONGTERM_PAIRS_HEADER = ["site_label", "site_short", "guard_name", "cell_count"] as const;
+const LONGTERM_PAIRS_CELL_COUNT_RE = /^\d+$/;
+
+export interface LongtermPairsParseOutcome {
+  cells: PostorderLongtermPostCell[];
+  parseError: string | null;
+}
+
+/** `longterm-pairs.csv`（`site_label,site_short,guard_name,cell_count`）
+ * → `PostorderLongtermPostCell[]`，同 Roster 路徑（`parsePostorderLongterm
+ * PostsFromGrid()`）輸出結構一致：`siteLabelRaw`＝`site_label`，
+ * `siteLabelFallbackRaw`＝`site_short`，`guardNameRaw`＝`guard_name`，
+ * `cellCount`＝`cell_count`（要係非負整數）。表頭唔啱、缺欄、
+ * `cell_count` 唔係整數都老實答 `parseError`，唔會估。BOM／CRLF／
+ * 全形字符（NFKC）都經 `normalizeText()`／`csv-parse` 處理，同其他
+ * CSV 路徑一致容忍度。 */
+export function parseLongtermPairsCsv(text: string): LongtermPairsParseOutcome {
+  // BOM／CRLF／CR 全部正規化先交俾 csv-parse（Windows Excel、Sheets 匯出各有唔同）
+  const stripped = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  let rows: string[][];
+  try {
+    rows = parseCsvSync(stripped, {
+      bom: true,
+      relax_column_count: true,
+      skip_empty_lines: true,
+    }) as string[][];
+  } catch (e) {
+    return { cells: [], parseError: `longterm-pairs CSV 解析失敗：${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (rows.length === 0) {
+    return { cells: [], parseError: "longterm-pairs CSV 係空嘅" };
+  }
+  const header = rows[0].map((h) => (normalizeText(h) ?? "").toLowerCase());
+  const headerOk = LONGTERM_PAIRS_HEADER.length === header.length && LONGTERM_PAIRS_HEADER.every((h, i) => header[i] === h);
+  if (!headerOk) {
+    return {
+      cells: [],
+      parseError: `longterm-pairs CSV 表頭要係「${LONGTERM_PAIRS_HEADER.join(",")}」（實際：「${rows[0].join(",")}」）`,
+    };
+  }
+
+  const cells: PostorderLongtermPostCell[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const siteLabelRaw = normalizeText(row[0] ?? "");
+    const siteShortRaw = normalizeText(row[1] ?? "");
+    const guardNameRaw = normalizeText(row[2] ?? "");
+    const cellCountRaw = normalizeText(row[3] ?? "");
+    if (!siteLabelRaw || !guardNameRaw || !cellCountRaw) {
+      return { cells: [], parseError: `longterm-pairs CSV 第 ${i + 1} 行缺欄（要有 site_label／guard_name／cell_count）` };
+    }
+    if (!LONGTERM_PAIRS_CELL_COUNT_RE.test(cellCountRaw)) {
+      return { cells: [], parseError: `longterm-pairs CSV 第 ${i + 1} 行 cell_count「${cellCountRaw}」唔係非負整數` };
+    }
+    cells.push({
+      siteLabelRaw,
+      siteLabelFallbackRaw: siteShortRaw,
+      guardNameRaw,
+      cellCount: Number(cellCountRaw),
+    });
+  }
+  return { cells, parseError: null };
+}
+
+export interface PostorderPairsCsvSource {
+  /** `longterm-pairs.csv` 文字（必須有——冇呢份就唔會行呢條路徑，見
+   * `parsePostorderUploadRow()`）。 */
+  longtermPairsCsv: string;
+  /** PostOrder 分頁 CSV（介紹費行）；null＝冇上載，`missingSheets` 記低
+   * `PostOrder`，`referralRows` 空 array（同其他 CSV 路徑一致行為）。 */
+  postorderCsv: string | null;
+}
+
+/** `longterm-pairs.csv`（＋可選 PostOrder CSV）→ 同 `parsePostorderFromCsv()`
+ * 一樣形狀嘅 `PostorderParseResult`。冇 day-grid 表頭可偵測，
+ * `rosterHeaderRow`／`rosterDayBlockWidth`／`rosterFirstDayCol` 一律
+ * `null`；`rosterParseError` 帶 `parseLongtermPairsCsv()` 嘅結果。 */
+export function parsePostorderFromPairsCsv(source: PostorderPairsCsvSource): PostorderParseResult {
+  const outcome = parseLongtermPairsCsv(source.longtermPairsCsv);
+  const missingSheets: string[] = [];
+  if (!source.postorderCsv) missingSheets.push(POSTORDER_SHEET_NAME);
+  return {
+    longtermPosts: outcome.cells,
+    referralRows: source.postorderCsv ? parsePostorderReferralRowsFromCsvGrid(source.postorderCsv) : [],
+    visa: { supported: false, reason: POSTORDER_VISA_UNSUPPORTED_REASON },
+    missingSheets,
+    rosterHeaderRow: null,
+    rosterDayBlockWidth: null,
+    rosterFirstDayCol: null,
+    rosterParseError: outcome.parseError,
+  };
+}
+
+/** `postorder_uploads` 一行嘅原始 bytes——`longtermPairsCsvBytes` 有值
+ * 優先用（WP-POSTORDER-PAIRS-CSV，最精簡），再係`rosterCsvBytes`／
+ * `postorderCsvBytes`（CSV 路徑），冇就跌返用 `fileBytes`（xlsm）。同
+ * Prisma 生成嘅 `PostorderUpload` 形狀相容，淨係揀呢個函數用得到嘅
+ * 幾個欄位，方便測試起假資料。 */
 export interface PostorderUploadBytesSource {
   fileBytes: Buffer | Uint8Array;
   rosterCsvBytes?: Buffer | Uint8Array | null;
   postorderCsvBytes?: Buffer | Uint8Array | null;
+  longtermPairsCsvBytes?: Buffer | Uint8Array | null;
 }
 
 /** 統一入口——upload route／guard-fix plan／referral-fee rate sync 呢類
  * 要重新解析 `postorder_uploads` 一行嘅地方，一律用呢個函數，唔使自己
- * 判斷「呢份係 xlsm 定 CSV」（判斷邏輯集中喺呢度一個地方）。 */
+ * 判斷「呢份係 xlsm／CSV／pairs-CSV 邊種」（判斷邏輯集中喺呢度一個
+ * 地方）。 */
 export async function parsePostorderUploadRow(row: PostorderUploadBytesSource): Promise<PostorderParseResult> {
+  if (row.longtermPairsCsvBytes) {
+    return parsePostorderFromPairsCsv({
+      longtermPairsCsv: Buffer.from(row.longtermPairsCsvBytes).toString("utf-8"),
+      postorderCsv: row.postorderCsvBytes ? Buffer.from(row.postorderCsvBytes).toString("utf-8") : null,
+    });
+  }
   if (row.rosterCsvBytes || row.postorderCsvBytes) {
     return parsePostorderFromCsv({
       rosterCsv: row.rosterCsvBytes ? Buffer.from(row.rosterCsvBytes).toString("utf-8") : null,
