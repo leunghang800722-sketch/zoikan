@@ -1166,6 +1166,51 @@ model MonthClose {
 }
 
 // ---------------------------------------------------------------------------
+// WP-ONE-CLICK Phase 1（老闆 2026-09-26「一鍵全月結算」，§20）：單一伺服器
+// 端 job，串連現有 lib（guard-fix／roster-upload reconcile／longterm-
+// settlement／reports）由上載更表到出報告，可重跑、冪等、每步檢查點。
+//
+// `status` 刻意淨係 3 個值（同 `ReconcileAllRunStatus`／`GuardFixRunStatus`
+// 一致嘅碼庫慣例）——任務書寫嘅「stalled」係*顯示層*概念（`applying`
+// 超過 15 分鐘當卡死，見 `src/lib/month-close/one-click.ts`
+// `monthCloseRunStalled()`），唔係 DB 實際會寫入嘅狀態（一個真正卡死嘅
+// process 冇機會自己將狀態改做「stalled」）——同 guard-fix/reconcile-all
+// 兩個現成 job 表嘅設計一致，唔另起爐灶。
+model MonthCloseRun {
+  id             String              @id @default(uuid())
+  month          DateTime            @db.Date // 月份第一日
+  status         MonthCloseRunStatus @default(running)
+  startedById    String              @map("started_by_id")
+  startedBy      User                @relation(fields: [startedById], references: [id])
+  startedAt      DateTime            @default(now()) @map("started_at")
+  finishedAt     DateTime?           @map("finished_at")
+  // 呢次「認領」（開始執行背景工作）嘅時間——用嚟判斷卡死（超過 15
+  // 分鐘未完成）。每次「重新執行」都會更新呢個值（唔改 startedAt，
+  // 保留第一次撳「一鍵結算」嘅時間）。
+  applyStartedAt DateTime?           @map("apply_started_at")
+  // 而家行緊邊一步（step key，例：precheck/parse_health/guard_fix/…），
+  // 頁面用嚟顯示進度；完成或者失敗都保留最後一步嘅 key。
+  currentStep    String?             @map("current_step")
+  // 逐步紀錄陣列：{key,label,status,started_at,finished_at,numbers,
+  // warnings[],needs_human[]}——每步完成即刻寫返 DB，頁面 poll 見到即時
+  // 進度，唔使等成個 job 完先有嘢睇。
+  stepsJson      Json                @default("[]") @map("steps_json")
+  // step6-8 埋單報告：總收入/成本/毛利、逐雞頭應付、逐盤收入、介紹費、
+  // 對照差額（如有）、未定價清單、needs_human 匯總、鎖月前置結果。
+  reportJson     Json?               @map("report_json")
+  errorMessage   String?             @map("error_message")
+
+  @@index([month, startedAt])
+  @@map("month_close_runs")
+}
+
+enum MonthCloseRunStatus {
+  running
+  done
+  failed
+}
+
+// ---------------------------------------------------------------------------
 // RBAC：users / roles / permissions / role_permissions
 // ---------------------------------------------------------------------------
 model Role {
@@ -1273,6 +1318,8 @@ model User {
   // WP-LTSHIFT §19：邊個上載咗 Postorder 總表。
   postorderUploads PostorderUpload[]
   reconcileAllRuns ReconcileAllRun[]
+  // WP-ONE-CLICK：邊個撳過「一鍵結算」。
+  monthCloseRuns   MonthCloseRun[]
 
   @@map("users")
 }
