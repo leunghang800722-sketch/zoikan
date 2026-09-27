@@ -360,7 +360,116 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     });
   }
 
-  return { mainRows, outsideRows };
+  // WP-LTPAY §21 任務 4d（老闆 2026-09-26 指令）：長工 Autopay／MPF ER
+  // 另列——**淨係 2026-08 起**（月份閘，7 月 gate 唔變；7 月冇經
+  // `recomputeLongtermPayroll()` 出過官方 run，唔應該喺呢度冒認一個
+  // 數出嚟）。刻意**唔**加落 `mainRows`/`outsideRows` 嘅 `cost`/`profit`
+  // （避免影響同 P0「月結總表」逐格 0-diff 嘅核心口徑，見檔頭註解）——
+  // 「另列」＝獨立一個 top-level 欄，一鍵結算報告／頁面自己揀顯示定
+  // 加落總成本。讀最新一個未 void 嘅 `longterm_payroll_runs`（冇就
+  // null，例如未跑過 `recomputeLongtermPayroll()`）。
+  const longtermPayrollActual = await buildLongtermPayrollActualTotals(MONTH_START);
+
+  // WP-LTPAY §21 任務 5a（老闆定案，§16.2 預算表第一層口徑）：
+  // 「合併成本」＝更次成本（mainRows/outsideRows.cost，即散工更×出街價，
+  // 淨係 2026-08 起先加返長工 Autopay／介紹費）＋長工 Autopay（Gross－
+  // MPF 僱員，嚟自 `longtermPayrollActual`）＋介紹費（`special_items`
+  // kind=referral_fee，全公司該月總額）。MPF 僱主（ER）**另列一行，
+  // 唔入呢個合計**（§16.2：「長工 MPF（僱員＋僱主）唔喺第一層，全部落
+  // 第二層」）。刻意**唔**改 `mainRows`/`outsideRows` 嘅 `cost`/`profit`
+  // /`fullCost`（避免影響同 P0「月結總表」逐格 0-diff 嘅核心口徑，見
+  // 上面 `buildLongtermPayrollActualTotals()` 同一段解釋）——呢個係
+  // 額外一個 top-level 摘要，畀一鍵結算報告／月結頁面自己顯示。
+  const perShiftCostTotal = round2(mainRows.reduce((a, r) => a + r.cost, 0) + outsideRows.reduce((a, r) => a + r.cost, 0));
+  const referralFeeTotal = await sumReferralFeeForMonth(MONTH_START);
+  const combinedCostSummary = buildCombinedCostSummaryPure(MONTH_START, perShiftCostTotal, referralFeeTotal, longtermPayrollActual);
+
+  return { mainRows, outsideRows, longtermPayrollActual, combinedCostSummary };
+}
+
+const LTPAY_MONTHLY_CLOSE_GATE_START = new Date(Date.UTC(2026, 7, 1)); // 2026-08
+
+export interface LongtermPayrollActualTotals {
+  runId: string;
+  grossTotal: number;
+  autopayTotal: number;
+  mpfEeTotal: number;
+  mpfErTotal: number;
+  guardCount: number;
+  /** §14 規則 12 簽證形式長工部分（已包喺上面總數；雞頭結算扣返，合併成本要剔走）。 */
+  visaPassthroughAutopayTotal: number;
+  visaPassthroughGuardCount: number;
+}
+
+export async function buildLongtermPayrollActualTotals(monthStart: Date): Promise<LongtermPayrollActualTotals | null> {
+  if (monthStart.getTime() < LTPAY_MONTHLY_CLOSE_GATE_START.getTime()) return null;
+  const run = await prisma.longtermPayrollRun.findFirst({
+    where: { month: monthStart, voidedAt: null, status: { not: "void" } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!run || !run.totalsJson) return null;
+  const totals = run.totalsJson as unknown as { grossTotal?: number; autopayTotal?: number; mpfEeTotal?: number; mpfErTotal?: number; guardCount?: number; visaPassthrough?: { autopayTotal?: number; guardCount?: number } };
+  return {
+    runId: run.id,
+    grossTotal: n(totals.grossTotal),
+    autopayTotal: n(totals.autopayTotal),
+    mpfEeTotal: n(totals.mpfEeTotal),
+    mpfErTotal: n(totals.mpfErTotal),
+    guardCount: totals.guardCount ?? 0,
+    visaPassthroughAutopayTotal: n(totals.visaPassthrough?.autopayTotal),
+    visaPassthroughGuardCount: totals.visaPassthrough?.guardCount ?? 0,
+  };
+}
+
+/** §21 任務 5a：該月全部 `special_items kind=referral_fee`（介紹費）總額
+ * ——唔理有冇配對到 site（呢度要嘅係全公司總數，唔係逐盤拆分，同
+ * `gross-margin.ts` 逐盤 `referralFeeBySite`／`referralFeeUnattributed`
+ * 呢兩個字唔同用途但同一批資料）。 */
+async function sumReferralFeeForMonth(monthStart: Date): Promise<number> {
+  const items = await prisma.specialItem.findMany({ where: { kind: "referral_fee", month: monthStart, voidedAt: null } });
+  return round2(items.reduce((a, it) => a + n(it.cost), 0));
+}
+
+export interface CombinedCostSummary {
+  /** 更次成本（散工更×出街價；monthly-close.ts 呢個口徑本身未計介紹費／
+   * 長工 autopay，gross-margin.ts caller 傳入嗰陣已經扣走）。 */
+  perShiftCostTotal: number;
+  /** 介紹費（長工雞頭費，`special_items kind=referral_fee`，全公司該月總額）。 */
+  referralFeeTotal: number;
+  /** 長工 Autopay（Gross－MPF 僱員），嚟自 `longtermPayrollActual`——
+   * 2026-08 前恆 0（gate 未開）。**已剔走簽證形式長工**（§14 規則 12：
+   * 雞頭結算扣返，唔係公司成本；8 月預算表 B5 口徑＝55 人唔含佢）。 */
+  longtermAutopayTotal: number;
+  /** 被剔走嘅簽證形式長工 Autopay（顯示用，講清楚點解同糧單總數唔同）。 */
+  visaPassthroughAutopayExcluded: number;
+  /** §16.2 第一層「成本」＝更次成本＋介紹費＋長工 Autopay。 */
+  combinedCostTotal: number;
+  /** MPF 僱主（ER）——另列，唔入 `combinedCostTotal`（§16.2：MPF 落第二層）。 */
+  mpfErTotal: number;
+}
+
+/** 純函數（冇 DB 依賴）——`monthly-close.ts`／`gross-margin.ts` 兩邊都用
+ * 呢個組裝最後嗰個摘要物件，保證兩邊口徑一致。淨係 2026-08 起有值
+ * （同 `buildLongtermPayrollActualTotals()` 一致嘅月份閘，7 月 gate
+ * 完全唔受影響）。 */
+export function buildCombinedCostSummaryPure(
+  monthStart: Date,
+  perShiftCostTotal: number,
+  referralFeeTotal: number,
+  longtermPayrollActual: LongtermPayrollActualTotals | null,
+): CombinedCostSummary | null {
+  if (monthStart.getTime() < LTPAY_MONTHLY_CLOSE_GATE_START.getTime()) return null;
+  const visaPassthroughAutopayExcluded = longtermPayrollActual?.visaPassthroughAutopayTotal ?? 0;
+  const longtermAutopayTotal = round2((longtermPayrollActual?.autopayTotal ?? 0) - visaPassthroughAutopayExcluded);
+  const mpfErTotal = longtermPayrollActual?.mpfErTotal ?? 0;
+  return {
+    perShiftCostTotal: round2(perShiftCostTotal),
+    referralFeeTotal: round2(referralFeeTotal),
+    longtermAutopayTotal,
+    visaPassthroughAutopayExcluded,
+    combinedCostTotal: round2(perShiftCostTotal + referralFeeTotal + longtermAutopayTotal),
+    mpfErTotal,
+  };
 }
 
 export async function writeMonthlyCloseXlsx(outPath: string, month: Date = DEFAULT_REPORT_MONTH) {

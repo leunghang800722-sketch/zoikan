@@ -400,6 +400,12 @@ model Guard {
   qasExpiryDate        DateTime? @map("qas_expiry_date") @db.Date
   hireDate             DateTime? @map("hire_date") @db.Date
   leaveDate            DateTime? @map("leave_date") @db.Date
+  // WP-LTPAY（老闆 2026-09-26，§14 規則 9）：試用期長度（月）——Maxwell
+  // 「Probation Period (Months)」欄，null／0＝冇試用期（即刻生效）。長工
+  // 年假 entitlement／離職補年假要用（試用期入面離職＝entitlement 0）。
+  // 呢個係安員層面嘅快照顯示值；權威仍然係 `GuardLongtermContract.
+  // probationMonths`（逐段合約可以唔同），呢欄方便更表/安員頁唔使 join。
+  probationMonths      Int?      @map("probation_months")
   bankName             String?   @map("bank_name")
   bankAccountNo        String?   @map("bank_account_no")
   bankPayeeName        String?   @map("bank_payee_name")
@@ -421,21 +427,28 @@ model Guard {
   visaSponsoredByBrokerId String? @map("visa_sponsored_by_broker_id")
   visaSponsoredByBroker   Broker? @relation("GuardVisaSponsor", fields: [visaSponsoredByBrokerId], references: [id])
 
-  rateCards         RateCard[]
-  shiftRecords      ShiftRecord[]
-  users             User[]
-  staffNumbers      GuardStaffNumber[]
-  longtermPosts     GuardLongtermPost[]
-  matchOverrides    GuardMatchOverride[]
+  rateCards             RateCard[]
+  shiftRecords          ShiftRecord[]
+  users                 User[]
+  staffNumbers          GuardStaffNumber[]
+  longtermPosts         GuardLongtermPost[]
+  matchOverrides        GuardMatchOverride[]
   // WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀一個」）：
   // 電話／緊急聯絡人／地址呢三樣而家可以「有幾多個記幾多個」，方案跟
   // WP-STAFFNO 一致（獨立子表＋`guards.tel`／`address`／
   // `emergency_contact_*` 呢幾個舊欄改做**同步顯示值**，見
   // src/lib/guards/contacts.ts syncLegacyGuardContactColumns()）。
-  phones            GuardPhone[]
-  emergencyContacts GuardEmergencyContact[]
-  addresses         GuardAddress[]
-  rosterUploadRows  RosterUploadRow[]
+  phones                GuardPhone[]
+  emergencyContacts     GuardEmergencyContact[]
+  addresses             GuardAddress[]
+  rosterUploadRows      RosterUploadRow[]
+  // WP-LTPAY（§14 規則 9）：長工月薪糧——合約／假期結餘／人手輸入項／
+  // 逐人結算行。
+  longtermContracts     GuardLongtermContract[]
+  leaveBalances         GuardLeaveBalance[]
+  avgWages              GuardAvgWage[]
+  longtermPayrollInputs LongtermPayrollInput[]
+  longtermPayrollLines  LongtermPayrollLine[]
 
   @@map("guards")
 }
@@ -628,6 +641,8 @@ model Site {
   // ——`RosterUploadRow.resolvedSiteId`，見嗰個 model 註解。
   resolvedRosterUploadRows RosterUploadRow[]
   longtermPosts            GuardLongtermPost[]
+  // WP-LTPAY：長工合約 `postSiteId`（可 null）反向關聯。
+  longtermContracts        GuardLongtermContract[]
 
   @@map("sites")
 }
@@ -924,29 +939,29 @@ enum StaffListUploadStatus {
 // uploadedAt desc` 揀第一筆 `status=parsed`，唔用 boolean 旗標）。
 // ---------------------------------------------------------------------------
 model PostorderUpload {
-  id           String                @id @default(uuid())
-  month        DateTime              @db.Date // 月份第一日
-  uploaderId   String                @map("uploader_id")
-  uploader     User                  @relation(fields: [uploaderId], references: [id])
-  uploadedAt   DateTime              @default(now()) @map("uploaded_at")
-  fileName     String                @map("file_name")
-  fileSha256   String                @map("file_sha256")
-  fileBytes    Bytes                 @map("file_bytes")
-  fileSize     Int                   @map("file_size")
-  rowCount     Int                   @map("row_count")
-  status       PostorderUploadStatus @default(parsed)
+  id                    String                @id @default(uuid())
+  month                 DateTime              @db.Date // 月份第一日
+  uploaderId            String                @map("uploader_id")
+  uploader              User                  @relation(fields: [uploaderId], references: [id])
+  uploadedAt            DateTime              @default(now()) @map("uploaded_at")
+  fileName              String                @map("file_name")
+  fileSha256            String                @map("file_sha256")
+  fileBytes             Bytes                 @map("file_bytes")
+  fileSize              Int                   @map("file_size")
+  rowCount              Int                   @map("row_count")
+  status                PostorderUploadStatus @default(parsed)
   // {longterm_post_count, longterm_site_count, referral_row_count,
   // referral_broker_labels_unresolved_count, parse_error} 呢類數目——
   // 唔存逐行姓名（鐵則）。
-  parseSummary Json?                 @map("parse_summary")
+  parseSummary          Json?                 @map("parse_summary")
   // WP-POSTORDER-CSV（老闆 2026-09-26 緊急）：正式站操作員工具處理唔到
   // binary（.xlsm／.xlsx），淨係可以攞到 Google Sheets 匯出嘅 CSV——
   // 呢兩欄存原始 CSV bytes（Roster／PostOrder 分頁各一份），nullable，
   // 有值＝呢份係 CSV 上載（`fileBytes`／`fileName`／`fileSha256`／
   // `fileSize` 呢陣淨係佔位／audit 用途，唔係真正解析嘅資料源——見
   // `src/lib/guard-fix/postorder.ts` `parsePostorderUploadRow()`）。
-  rosterCsvBytes    Bytes? @map("roster_csv_bytes")
-  postorderCsvBytes Bytes? @map("postorder_csv_bytes")
+  rosterCsvBytes        Bytes?                @map("roster_csv_bytes")
+  postorderCsvBytes     Bytes?                @map("postorder_csv_bytes")
   // WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：正式站操作員連
   // Google Sheets 匯出完整 Roster 分頁都持續 503——加呢欄存極精簡嘅
   // 「(盤,人) 組合＋格數」CSV（`site_label,site_short,guard_name,
@@ -954,7 +969,7 @@ model PostorderUpload {
   // `src/lib/guard-fix/postorder.ts` `parseLongtermPairsCsv()`），有值
   // 就優先用（跌返 `rosterCsvBytes`／`fileBytes` 見
   // `parsePostorderUploadRow()`）。
-  longtermPairsCsvBytes Bytes? @map("longterm_pairs_csv_bytes")
+  longtermPairsCsvBytes Bytes?                @map("longterm_pairs_csv_bytes")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -1451,4 +1466,257 @@ model FeedbackReport {
   @@index([status])
   @@index([userId])
   @@map("feedback_reports")
+}
+
+// =============================================================================
+// WP-LTPAY Phase 2（老闆 2026-09-26 指令；§14 規則 9／§14.1／§16／§20.4
+// Phase 2）：長工月薪糧（Maxwell 口徑，跟 8 月試算第十三版）。五張新表，
+// 全部 additive。PII 級別：**薪金／MPF／銀行資料一律用系統最嚴 PII 組
+// 「安員銀行資料」**（任務書明文；呢啲表淨係老闆／會計 module「長工糧」
+// 有權，見 src/lib/rbac/matrix.ts）；AI 隔離——呢五張新表**唔加入**
+// `ai` schema 嘅任何 view（`ai.guards` 等 view 明列欄位，呢啲表根本冇
+// 出現，AI 助手結構上讀唔到，同 GUARD_PII_FIELDS 呢批欄一致做法）。
+// =============================================================================
+
+enum LongtermMpfExemptReason {
+  none
+  over65
+  under60days
+  auto // 免供原因由系統逐月按 Gross<7,100 自動判斷，唔使人手揀（§14 規則 9）
+}
+
+enum LongtermContractSource {
+  maxwell_import
+  manual
+}
+
+// WP-LTPAY §21 任務 4b(a)：日薪制長工特判（Maxwell「Rest Day No＝日薪」
+// 個案，s07 oracle `daily_rate_staff = used_monthly < 5000`）——正常長工
+// `monthlySalary` 係月薪，日薪＝月薪/當月曆日數；呢種係「每更 X 蚊」，
+// Net Basic＝`dailyRate`×`workDays`（唔按曆日/在職日子比例）。
+enum LongtermPayBasis {
+  monthly
+  daily
+}
+
+enum LongtermPayrollRunStatus {
+  draft
+  computed
+  confirmed
+  void
+}
+
+enum LongtermPayrollInputKind {
+  special_allowance // 津貼（例如勤工獎）
+  other_allowance // 其他津貼（例如頂位津貼、賣假）
+  uniform
+  deduction
+  leave // SL／AL／NPL 日期段，含醫生紙 flag（見 doctorNoteVerified）
+  contract_change
+  leaver_settlement
+}
+
+// guard_longterm_contracts：長工薪金合約——逐段（effectiveFrom/To）。
+// 月中轉約／調薪 ＝ 新一行（effectiveFrom＝轉約生效日），唔覆蓋舊行，
+// 引擎逐日判斷邊一日跟邊段合約（§14 規則 9「月中轉合約／調薪按日拆」）。
+model GuardLongtermContract {
+  id      String @id @default(uuid())
+  guardId String @map("guard_id")
+  guard   Guard  @relation(fields: [guardId], references: [id], onDelete: Restrict)
+
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+
+  monthlySalary Decimal @map("monthly_salary") @db.Decimal(12, 2)
+
+  // WP-LTPAY §21 任務 4b(a)：日薪制長工特判——`payBasis=daily` 嗰陣
+  // `monthlySalary` 呢欄唔再有月薪意義（保留做歷史，Net Basic 改用
+  // `dailyRate`×`workDays`，見 compute.ts `computeNetBasic()`）。
+  payBasis  LongtermPayBasis @default(monthly) @map("pay_basis")
+  dailyRate Decimal?         @map("daily_rate") @db.Decimal(10, 2) // payBasis=daily 先有意義，每更價（例：600/更）
+
+  postSiteId String? @map("post_site_id")
+  postSite   Site?   @relation(fields: [postSiteId], references: [id])
+
+  restDayPaid Boolean  @default(true) @map("rest_day_paid") // Maxwell 名單 Rest Day Yes/No
+  restDayRate Decimal? @map("rest_day_rate") @db.Decimal(10, 2) // 賣假／頂位價表單價（每日 600–750，逐盤逐職級寫死值，見 compute.ts SELL_LEAVE_RATE_TABLE）
+  shiftHours  Decimal? @map("shift_hours") @db.Decimal(5, 2) // 每更時數，計 OT 時薪（working_hour，一般 12）
+
+  probationMonths Int?    @map("probation_months") // 1／3／null＝冇試用期，跟 Maxwell Probation Period (Months)
+  annualLeaveDays Decimal @default(7) @map("annual_leave_days") @db.Decimal(5, 2) // Maxwell Entitle Annual Leave，一般 7 或 10
+
+  statutoryHolidayPaidFrom String @default("immediate") @map("statutory_holiday_paid_from") // immediate／after_3_months
+
+  mpfExemptReason LongtermMpfExemptReason @default(auto) @map("mpf_exempt_reason")
+
+  note   String?
+  source LongtermContractSource @default(manual)
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@index([guardId])
+  @@index([postSiteId])
+  @@index([guardId, effectiveFrom])
+  @@map("guard_longterm_contracts")
+}
+
+// guard_leave_balances：逐人逐年年假／病假結餘（§14 規則 9：AL 過咗試用期
+// 按比例累積；SL 做滿 1 個月開始儲、每月 2 日、上限 120 日）。一年一行，
+// `year` ＝ 日曆年（病假結餘用「當年 12/31」快照方便對數；年假結餘用嚟
+// 記錄「上年結轉」carry，逐年結算後更新）。
+model GuardLeaveBalance {
+  id      String @id @default(uuid())
+  guardId String @map("guard_id")
+  guard   Guard  @relation(fields: [guardId], references: [id], onDelete: Restrict)
+  year    Int
+
+  alEntitled Decimal @default(0) @map("al_entitled") @db.Decimal(6, 2) // 當年 entitlement（按比例累積，逐月結算後更新）
+  alTaken    Decimal @default(0) @map("al_taken") @db.Decimal(6, 2) // 累積已放 AL——截至 asOfMonth 月尾（含）
+  alCarry    Decimal @default(0) @map("al_carry") @db.Decimal(6, 2) // 上年結轉未放年假
+
+  slAccrued Decimal @default(0) @map("sl_accrued") @db.Decimal(6, 2) // 累積病假結餘（上限 120，見 compute.ts SL_ACCRUAL_CAP）
+  slTaken   Decimal @default(0) @map("sl_taken") @db.Decimal(6, 2) // 累積已放（有薪 4/5）病假日數——截至 asOfMonth 月尾（含）
+
+  // §21 任務 4b(f)：`asOfMonth`＝最近一次寫回呢個結餘嘅結算月份；
+  // `alTakenOpening`／`slTakenOpening`＝截至 `asOfMonth` **前一個月**
+  // 月尾（唔含 asOfMonth 自己）嘅累積——同一個月重算兩次（`longterm_
+  // payroll_runs` void 舊建新，冪等）嗰陣，aggregate.ts 用呢兩個
+  // opening 數做基數重新加返「呢個月」嘅 taken，先至唔會愈計愈多
+  // （`alTaken`／`slTaken` 淨係喺「處理緊嘅月份 > asOfMonth」先當「上個
+  // 月結轉」用嚟做下一個月嘅 opening）。
+  asOfMonth      DateTime? @map("as_of_month") @db.Date
+  alTakenOpening Decimal   @default(0) @map("al_taken_opening") @db.Decimal(6, 2)
+  slTakenOpening Decimal   @default(0) @map("sl_taken_opening") @db.Decimal(6, 2)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([guardId, year])
+  @@index([guardId])
+  @@map("guard_leave_balances")
+}
+
+// WP-LTPAY §21 任務 4b(b)：平均工資（過去 12 個月平均日薪，SL 4/5／AL
+// 離職結算派彩用；未搬入系統前 compute.ts／aggregate.ts fallback 用
+// 「日薪＝月薪/當月曆日數」，見 `aggregate.ts` 檔頭「刻意冇做」第 4
+// 點）。一人一月一行（逐月可以唔同，跟《僱傭條例》「離職前 12 個月」
+// 口徑會逐月變動）；`source` 講明嚟源（人手輸入 vs 過去 12 個月 lines
+// 自動計，見下面 `buildAvgWageFromPastLines()`——任務書「有 lines 先
+// 計，冇就人手」）。
+model GuardAvgWage {
+  id      String @id @default(uuid())
+  guardId String @map("guard_id")
+  guard   Guard  @relation(fields: [guardId], references: [id], onDelete: Restrict)
+  month   DateTime @db.Date // 月份第一日——呢個月用嘅平均工資（通常即上個月結算完之後寫入落嚟做下個月用）
+
+  avgDailyWage Decimal @map("avg_daily_wage") @db.Decimal(10, 2)
+  source       String // 例如「7 月計糧表平均工資欄」／「過去 12 個月 longterm_payroll_lines 自動計」／「人手輸入」
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+
+  @@unique([guardId, month])
+  @@index([guardId])
+  @@map("guard_avg_wages")
+}
+
+// longterm_payroll_runs：一個月一個 run（可重算，覆蓋舊 run 做新版本；
+// 跟 month_close_runs 同款 pattern：status/created_by/totals_json）。
+model LongtermPayrollRun {
+  id     String                   @id @default(uuid())
+  month  DateTime                 @db.Date // 月份第一日
+  status LongtermPayrollRunStatus @default(draft)
+
+  totalsJson Json? @map("totals_json") // {grossTotal,autopayTotal,mpfEeTotal,mpfErTotal,guardCount,...}
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  createdBy   String?   @map("created_by")
+  confirmedAt DateTime? @map("confirmed_at")
+  confirmedBy String?   @map("confirmed_by")
+  voidedAt    DateTime? @map("voided_at")
+  voidedBy    String?   @map("voided_by")
+
+  lines LongtermPayrollLine[]
+
+  @@index([month])
+  @@map("longterm_payroll_runs")
+}
+
+// longterm_payroll_lines：逐人逐月結算行。`notesJson`＝逐項來源（跟 s07
+// 試算 `flags`／`al_info`／`sl_segments` 一致精神，方便會計覆核）。
+model LongtermPayrollLine {
+  id      String             @id @default(uuid())
+  runId   String             @map("run_id")
+  run     LongtermPayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  guardId String             @map("guard_id")
+  guard   Guard              @relation(fields: [guardId], references: [id], onDelete: Restrict)
+
+  contractSnapshot Json @map("contract_snapshot") // 計糧嗰陣用緊嘅合約段（可能不止一段，月中轉約）
+
+  daysInMonth Int @map("days_in_month")
+  workDays    Int @default(0) @map("work_days")
+
+  netBasic Decimal @map("net_basic") @db.Decimal(12, 2)
+
+  otHours  Decimal @default(0) @map("ot_hours") @db.Decimal(8, 2)
+  otAmount Decimal @default(0) @map("ot_amount") @db.Decimal(12, 2)
+
+  restDayPayment Decimal @default(0) @map("rest_day_payment") @db.Decimal(12, 2) // 以薪代假（賣假）
+  npsh           Decimal @default(0) @map("npsh") @db.Decimal(12, 2) // 無薪法定假日扣款
+
+  nplDays   Decimal @default(0) @map("npl_days") @db.Decimal(6, 2)
+  npslDays  Decimal @default(0) @map("npsl_days") @db.Decimal(6, 2) // 病假判定唔合資格→當無薪
+  deduction Decimal @default(0) @map("deduction") @db.Decimal(12, 2) // NPL/NPSL 合計扣款（負數）
+
+  specialAllowance Decimal @default(0) @map("special_allowance") @db.Decimal(12, 2)
+  otherAllowance   Decimal @default(0) @map("other_allowance") @db.Decimal(12, 2) // 頂位津貼等
+
+  alPayment  Decimal @default(0) @map("al_payment") @db.Decimal(12, 2) // 在職年假薪／離職結算
+  sl45Amount Decimal @default(0) @map("sl_45_amount") @db.Decimal(12, 2)
+
+  gross   Decimal @map("gross") @db.Decimal(12, 2)
+  mpfEe   Decimal @default(0) @map("mpf_ee") @db.Decimal(10, 2)
+  mpfEr   Decimal @default(0) @map("mpf_er") @db.Decimal(10, 2)
+  autopay Decimal @map("autopay") @db.Decimal(12, 2)
+
+  notesJson Json @default("[]") @map("notes_json") // string[]，逐項來源說明（跟 s07 flags 一致精神）
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([runId, guardId])
+  @@index([guardId])
+  @@map("longterm_payroll_lines")
+}
+
+// longterm_payroll_inputs：會計每月人手輸入項（試算「18 個人手輸入項」
+// ——津貼／扣款／假期段／轉約／離職結算，逐月一批，引擎計糧時讀呢張表）。
+model LongtermPayrollInput {
+  id      String                   @id @default(uuid())
+  month   DateTime                 @db.Date // 月份第一日
+  guardId String                   @map("guard_id")
+  guard   Guard                    @relation(fields: [guardId], references: [id], onDelete: Restrict)
+  kind    LongtermPayrollInputKind
+
+  amount Decimal? @db.Decimal(12, 2)
+
+  dateFrom String? @map("date_from") @db.VarChar(10) // ISO 日期（leave/contract_change 用）
+  dateTo   String? @map("date_to") @db.VarChar(10)
+
+  doctorNoteVerified Boolean? @map("doctor_note_verified") // kind=leave 且 SL 段先有意義——香港註冊醫生病假紙有冇核實
+
+  note String?
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  createdBy String?   @map("created_by")
+  voidedAt  DateTime? @map("voided_at")
+  voidedBy  String?   @map("voided_by")
+
+  @@index([month, guardId])
+  @@map("longterm_payroll_inputs")
 }

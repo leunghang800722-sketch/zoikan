@@ -105,6 +105,30 @@ async function clearAll() {
   // WP-LTSHIFT：guard_longterm_posts 對 guard／site 都係 FK RESTRICT，
   // 要喺兩張表刪之前先清（同 guard_staff_numbers 一致做法）。
   await prisma.guardLongtermPost.deleteMany({});
+  // WP-LTPAY §21 任務 4e 驗證期間發現（同 guard_staff_numbers／
+  // guard_longterm_contracts 一模一樣嘅落差）：`guard_match_overrides`
+  // （驗收 Opus 5.5，2026-09-26 加，migration
+  // `20260926150000_acc_guard_match_overrides`）一樣 FK RESTRICT 住
+  // guard，之前一路未有真數據寫入所以冧唔到——呢一手 `gate:ltpay-aug`
+  // 跑真 guard-fix（`link`／`setReferralInferred` action）第一次寫入
+  // 就令 `npm run db:seed`／`db:reset` 嘅 `guard.deleteMany()` 撞
+  // RESTRICT 成句 fail（`tests/seed-regen-gate.test.ts` 一驗即中，
+  // 6 條測試連鎖失敗）。已修：跟一致做法，喺刪 guard 之前先清。
+  await prisma.guardMatchOverride.deleteMany({});
+  // WP-LTPAY（§21 任務 3e 驗證期間發現）：`guard_longterm_contracts`／
+  // `guard_leave_balances`／`longterm_payroll_lines`／
+  // `longterm_payroll_inputs` 一樣 FK RESTRICT 住 guard——呢張表 Phase 1
+  // （fca880e）加咗之後，Phase 2 呢一手先第一次真係有嘢寫入（gate:
+  // ltpay-july／Maxwell 導入），一寫入就令 `npm run db:seed`／`db:reset`
+  // 嘅 `prisma.guard.deleteMany({})` 撞 RESTRICT 成句 fail（同
+  // `tests/seed-regen-gate.test.ts` 呢個跑真 `npm run db:seed` 嘅 gate
+  // 一驗就中）。跟 guard_staff_numbers 一致做法，喺刪 guard 之前先清。
+  await prisma.longtermPayrollLine.deleteMany({});
+  await prisma.longtermPayrollRun.deleteMany({});
+  await prisma.longtermPayrollInput.deleteMany({});
+  await prisma.guardLeaveBalance.deleteMany({});
+  await prisma.guardAvgWage.deleteMany({}); // §21 任務 4b(b)：新表，guard_id FK RESTRICT，一樣要喺 guard.deleteMany() 之前清（同上面四張表一致做法）
+  await prisma.guardLongtermContract.deleteMany({});
   await prisma.guard.updateMany({ data: { defaultBrokerId: null, referralBrokerId: null, visaSponsoredByBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});

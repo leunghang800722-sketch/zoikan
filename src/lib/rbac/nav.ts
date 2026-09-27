@@ -115,6 +115,9 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
     // WP-ONE-CLICK：「一鍵全月結算」——老闆／會計全開，主管淨係 view
     // （grants 已經反映呢個分別，push() 唔使再判斷 baseRole）。
     push("/month-close", "一鍵結算", "一鍵結算");
+    // WP-LTPAY §21 任務 5b：長工月薪糧——同「安員銀行資料」一致粒度，
+    // 淨係老闆／會計見得到（主管/雞頭/安員硬性拒，push() 已經反映）。
+    push("/reports/longterm-payroll", "長工糧", "長工糧");
   }
   push("/reports/shortfall", "尚欠總覽", "尚欠總覽");
   push("/users", "用戶管理", "用戶管理");
@@ -153,7 +156,7 @@ const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
   { title: "", hrefs: ["/"] },
   { title: "排更", hrefs: ["/roster", "/roster-uploads", "/guard-fix", "/quotas", "/approvals"] },
   { title: "主檔", hrefs: ["/sites", "/guards", "/brokers", "/rate-cards"] },
-  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall", "/month-close"] },
+  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall", "/month-close", "/reports/longterm-payroll"] },
   { title: "系統", hrefs: ["/users", "/roles", "/audit-log", "/feedback"] },
 ];
 

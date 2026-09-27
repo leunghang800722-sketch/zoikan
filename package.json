@@ -22,6 +22,9 @@
     "gate:reports": "tsx scripts/gate/reports.ts",
     "gate:pricing": "tsx scripts/gate/pricing.ts",
     "gate:roster-parse": "tsx scripts/gate/roster-parse.ts",
+    "gate:ltpay-july": "tsx scripts/gate/longterm-payroll-july.ts",
+    "gate:ltpay-aug-fixture": "tsx scripts/gate/build-ltpay-aug-fixture.ts",
+    "gate:ltpay-aug": "tsx scripts/gate/build-ltpay-aug-fixture.ts && tsx scripts/gate/longterm-payroll-aug.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "ai:smoke": "tsx scripts/ai/smoke.ts"

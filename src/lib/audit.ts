@@ -66,7 +66,13 @@ export type AuditAction =
   // 用戶自己更正打錯用）——用獨立嘅 "delete" action（`before`＝刪之前
   // 嘅完整 DTO，`after`＝null），同 "void"（軟刪，資源仲存在）分開，
   // audit_log 睇落一眼就分辨得到「呢行真係冇咗」定「淨係停用」。
-  | "delete";
+  | "delete"
+  // WP-LTPAY §21 任務 5c：BOCHK autopay 檔下載——含銀行戶口／收款人名
+  // 呢類最嚴 PII，任務書明文要求「audit 記下載」。`after` 淨係安全計數
+  // （行數／缺銀行資料人數/preview flag，冇逐人資料），唔經
+  // `AUDIT_ROW_MAPPED_ACTIONS` DTO mapping（本身已經係 route 自己手砌
+  // 嘅安全 payload，同 `ai_chat`/`feedback_submit` 一致 passthrough）。
+  | "export_download";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

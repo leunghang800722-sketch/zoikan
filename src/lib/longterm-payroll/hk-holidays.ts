@@ -1,0 +1,34 @@
+// WP-LTPAY §21 任務 4b(d)：香港法定假日日期常數（《僱傭條例》附表 1，
+// 2026 年）——NPSH（`statutoryHolidayPaidFrom="after_3_months"`）扣款
+// 邏輯（`aggregate.ts` `computeShDeduction()`）要跟返呢張表先知邊幾日
+// 係法定假日。
+//
+// 嚟源：勞工處 2026 年法定假日公告（2026-09-27 查證）
+// https://www.labour.gov.hk/eng/news/latest_holidays2026.htm ——
+// 15 日（《2021 年僱傭（修訂）條例》起復活節星期一由 2026 年起新增做
+// 法定假日，由 12 日加到 15 日）。8 月**冇**法定假日（同 8 月試算
+// oracle `s07_longterm_payroll.py` A1 assumption 一致：「8 月冇香港
+// 法定假期 → NPSH = 0」）。
+export const HK_STATUTORY_HOLIDAYS_2026: readonly string[] = [
+  "2026-01-01", // 一月一日
+  "2026-02-17", // 農曆年初一
+  "2026-02-18", // 農曆年初二
+  "2026-02-19", // 農曆年初三
+  "2026-04-05", // 清明節
+  "2026-04-06", // 復活節星期一（《2021 年僱傭（修訂）條例》2026 年起新增法定假日）
+  "2026-05-01", // 勞動節
+  "2026-05-24", // 佛誕
+  "2026-06-19", // 端午節
+  "2026-07-01", // 香港特別行政區成立紀念日
+  "2026-09-26", // 中秋節翌日
+  "2026-10-01", // 國慶日
+  "2026-10-18", // 重陽節
+  "2026-12-22", // 冬節或聖誕節（僱主可選其一；呢度預設收 12/22，僱主揀聖誕節就用 12/25，逐間公司唔同，未做逐盤/逐公司揀邊日嘅配置）
+  "2026-12-26", // 聖誕節後第一個周日以外的假日
+] as const;
+
+/** 呢個月入面有邊幾日係法定假日（ISO string 陣列，`monthStartIso`／
+ * `monthEndIso` 含首尾）。 */
+export function hkStatutoryHolidaysInRange(startIso: string, endIso: string): string[] {
+  return HK_STATUTORY_HOLIDAYS_2026.filter((d) => d >= startIso && d <= endIso);
+}

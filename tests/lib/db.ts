@@ -80,6 +80,15 @@ export async function clearAll() {
   // 要喺兩張表刪之前先清（同 guard_staff_numbers／GuardPhone 一致做法）。
   await prisma.guardLongtermPost.deleteMany({});
   await prisma.guardMatchOverride.deleteMany({});
+  // WP-LTPAY：長工糧新表全部 FK RESTRICT 落 guard，要喺 guard 刪之前先清
+  // （lines 先，run 先 lines 因為 lines FK CASCADE 落 run，但保守都係
+  // 逐張刪清楚）。
+  await prisma.longtermPayrollLine.deleteMany({});
+  await prisma.longtermPayrollRun.deleteMany({});
+  await prisma.longtermPayrollInput.deleteMany({});
+  await prisma.guardLeaveBalance.deleteMany({});
+  await prisma.guardAvgWage.deleteMany({}); // §21 任務 4b(b)：新表，guard_id FK RESTRICT，一樣要喺 guard.deleteMany() 之前清（同上面四張表一致做法）
+  await prisma.guardLongtermContract.deleteMany({});
   await prisma.guard.updateMany({ data: { defaultBrokerId: null, referralBrokerId: null, visaSponsoredByBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});

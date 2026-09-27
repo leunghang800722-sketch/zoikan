@@ -47,9 +47,10 @@ export async function GET(req: Request) {
       });
     }
 
-    const [{ mainRows, outsideRows }, canClient, monthClose, unpriced] = await Promise.all([
+    const [{ mainRows, outsideRows, longtermPayrollActual, combinedCostSummary }, canClient, canSettlement, monthClose, unpriced] = await Promise.all([
       buildMonthlyClose(month),
       hasPermission(session, "收客價", "view"),
+      hasPermission(session, "出街價", "view"),
       prisma.monthClose.findUnique({ where: { month: monthStart(month) }, select: { lockedAt: true } }),
       buildUnpricedSummary(session, month),
     ]);
@@ -66,6 +67,10 @@ export async function GET(req: Request) {
         no_settlement_count: unpriced.noSettlementCount,
         // WP-MIXED-BILLING：OT 未定价獨立數目（見 gross-margin/route.ts 同一段註解）。
         ot_unpriced_count: unpriced.otUnpricedCount,
+        // §21 任務 5a：長工糧實際總數／合併成本摘要——成本類數字，跟
+        // gross-margin/route.ts 一致，淨係「出街價:view」先睇得到。
+        longterm_payroll_actual: canSettlement ? longtermPayrollActual : undefined,
+        combined_cost_summary: canSettlement ? combinedCostSummary : undefined,
       }),
     );
   });

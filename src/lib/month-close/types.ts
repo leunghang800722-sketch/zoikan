@@ -53,7 +53,19 @@ export interface MonthCloseReport {
   month: string;
   /** revenue＝月結總表（主表＋月結以外）營業額；marginRevenue／cost／
    * grossMargin＝毛利即時表 `totals`（唔計月結以外收入）。 */
-  totals: { revenue: number; marginRevenue: number; cost: number; grossMargin: number };
+  totals: {
+    revenue: number;
+    marginRevenue: number;
+    /** costBasis="combined"（2026-08 起、長工糧有 run）＝合併口徑（更次成本＋
+     * 介紹費＋長工 Autopay，§16.2 第一層）；"legacy"＝毛利表舊口徑（長工月薪
+     * 係按更數估算分攤）。 */
+    cost: number;
+    grossMargin: number;
+    costBasis?: "combined" | "legacy";
+    /** 毛利表舊口徑成本／毛利（對照用；舊 report_json 冇呢兩欄）。 */
+    legacyCost?: number;
+    legacyMargin?: number;
+  };
   payrollByBroker: Array<{ brokerCode: string; brokerName: string; shifts: number; amount: number }>;
   siteRevenue: Array<{ siteId: string; siteName: string; shifts: number; revenue: number }>;
   referralFee: { total: number; count: number };
@@ -73,5 +85,22 @@ export interface MonthCloseReport {
     unpricedCount: number;
     readyToLock: boolean;
   };
+  // WP-LTPAY Phase 2 §21 任務 3d：長工月薪糧總數（`aggregate.ts`
+  // `recomputeLongtermPayroll()` 呢個 run 嘅 totals，null＝重算失敗）。
+  // 鐵則：呢度淨係總數，唔包含逐人資料（逐人明細有 PII，report_json
+  // 俾主管都睇到，唔可以喺呢層出現姓名／工號——逐人明細留返
+  // `/reports/longterm-payroll` 頁面（未起，見 §21.2）自己做 PII gate）。
+  longtermPayroll: { grossTotal: number; autopayTotal: number; mpfEeTotal: number; mpfErTotal: number; guardCount: number } | null;
   longtermPayrollNote: string;
+  // §21 任務 5a（老闆定案，§16.2 第一層口徑）：合併成本摘要——更次成本／
+  // 長工 Autopay／介紹費／合計／MPF ER（另列，唔入合計）。淨係 2026-08
+  // 起有值，7 月（或更早）恆 null（同 `longtermPayroll` 一致嘅月份閘）。
+  combinedCostSummary: {
+    perShiftCostTotal: number;
+    referralFeeTotal: number;
+    longtermAutopayTotal: number;
+    visaPassthroughAutopayExcluded?: number;
+    combinedCostTotal: number;
+    mpfErTotal: number;
+  } | null;
 }

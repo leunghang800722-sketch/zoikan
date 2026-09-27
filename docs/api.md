@@ -36,14 +36,15 @@ bump；`requireSession()`（`src/lib/rbac/requirePermission.ts`）每個
 request 都同 DB 現值核對一次（一條 `SELECT token_version, status`），
 唔啱就當未登入（401）。
 
-## RBAC 矩陣（26 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII/WP-ROSTER-UPLOAD/WP-GUARD-FIX-UI/WP-ONE-CLICK 加）
+## RBAC 矩陣（27 module × 5 action，Opus 驗收 C3 拆細版 + P3/WP-AI1/WP-PII/WP-ROSTER-UPLOAD/WP-GUARD-FIX-UI/WP-ONE-CLICK/WP-LTPAY 加）
 
 單一事實來源：`src/lib/rbac/matrix.ts`。由舊版 10 module 拆細做 19 個，
 P3 加咗`個人資料`、WP-AI1 加咗`助手`、WP-PII（老闆 2026-09-17 拍板）加咗
 `安員個人資料`／`安員銀行資料`，WP-ROSTER-UPLOAD（老闆 2026-09-21/23
 拍板）加咗`更表上載`，WP-GUARD-FIX-UI（老闆 2026-09-25 要求）加咗
 `安員配對修復`，WP-ONE-CLICK（老闆 2026-09-26「一鍵全月結算」）加咗
-`一鍵結算`，而家 26 個，逐個對應《設計文件》§5.1
+`一鍵結算`，WP-LTPAY（老闆 2026-09-26「長工月薪糧」，§14 規則 9）加咗
+`長工糧`，而家 27 個，逐個對應《設計文件》§5.1
 表入面唔同粒度嘅行（詳細逐格對照見 README-P1.md「RBAC：module ×
 action 矩陣」一節）：
 
@@ -67,7 +68,10 @@ action 矩陣」一節）：
 （WP-ONE-CLICK，管「一鍵全月結算」job——老闆／會計 G，**主管淨係
 view**（睇進度／報告／歷史 runs，唔可以撳一鍵/重新執行），雞頭／安員
 硬性禁止，見
-[「一鍵全月結算」](#一鍵全月結算wp-one-click)）。
+[「一鍵全月結算」](#一鍵全月結算wp-one-click)）／**`長工糧`**
+（WP-LTPAY，管長工月薪糧——合約管理、Maxwell 導入、逐月計糧 run、人手
+輸入項、Autopay 檔——同`安員銀行資料`一致粒度：老闆／會計 G，主管／
+雞頭／安員硬性禁止，見 [「WP-LTPAY」](#wp-ltpay老闆-2026-09-26長工月薪糧)）。
 
 **自訂角色（Opus 驗收殘留2）**：`roles.base_role`——複製一個出廠角色
 時寫死（`POST /api/roles`），**唔可以再改**；硬性 deny 矩陣查詢一律用
@@ -1467,3 +1471,292 @@ ready_to_lock` 先亮，撳咗會先 `POST /api/month-closes/{month}/generate`
    手動全流程（見 P2 文件 §20.6 執行紀錄）；Playwright e2e
    （`tests/e2e/month-close-one-click.spec.ts`）覆蓋老闆上載合成 xlsx→
    一鍵→睇進度→報告，雞頭 403 連 nav 都見唔到。
+
+## WP-LTPAY（老闆 2026-09-26）：長工月薪糧
+
+跟 §14 規則 9／§20.4 Phase 2，oracle＝8 月試算第十三版
+（`data/2026-09/aug-payroll-trial/scripts/s07_longterm_payroll.py`／
+`boss_answers.py`）。2026-09-27，Sonnet 5 執行，branch `wp-ltpay`，
+未 merge main。**呢個 session 只做咗「資料模型＋計算引擎」＋「Maxwell
+導入」兩個分期**，7/8 月 gate、一鍵結算併入、頁面、BOCHK 檔全部未做
+（詳細見 `P2-版面重設計計劃.md` §21）。
+
+### 資料模型（migration `20260927160000_wp_ltpay_longterm_payroll`）
+
+- `guard_longterm_contracts`：長工薪金合約，逐段（`effectiveFrom/To`）。
+  月中轉約／調薪＝新一行（唔覆蓋舊行）。欄位：`monthlySalary`、
+  `postSiteId`（可 null）、`restDayPaid`／`restDayRate`、`shiftHours`、
+  `probationMonths`、`annualLeaveDays`、`statutoryHolidayPaidFrom`、
+  `mpfExemptReason`（none／over65／under60days／auto）、`source`
+  （maxwell_import／manual）。
+- `guard_leave_balances`：逐人逐年 AL／SL 結餘（`year` unique per
+  guard）。**呢個 session 冇任何寫入邏輯**——表已建，未有 job 更新佢。
+- `longterm_payroll_runs`／`longterm_payroll_lines`：逐月 run＋逐人結算
+  行（`notesJson` 留逐項來源）。**未有任何 code 建 run**（未起
+  aggregate 層）。
+- `longterm_payroll_inputs`：會計每月人手輸入項（津貼／扣款／假期段／
+  轉約／離職結算）。**未有 API／UI 寫入**，表已建。
+- `guards.probation_months`：新增 nullable Int。
+
+PII：全部歸「安員銀行資料」級（老闆／會計 view/update，主管／雞頭／
+安員硬性拒——見下面 RBAC）。AI 隔離：新表冇加入 `ai` schema 任何
+view（`zoikan_ai_ro` 淨係 `GRANT ... ON SCHEMA ai`，public schema 新表
+結構上讀唔到）。
+
+### 計算引擎 `src/lib/longterm-payroll/compute.ts`
+
+純函數，冇 DB／IO 依賴。逐條規則一個 function，JSDoc 逐個引返 oracle
+嘅 python 函數名方便對照：
+
+- `dailyRateOnDate()`／`computeNetBasic()`——日薪＝月薪÷當月曆日數；
+  `contractSegmentForDate()` 揀返嗰日所屬合約段，月中轉約按日拆。
+- `computeMpf()`／`checkMpfExemption()`——EE/ER 各 `min(Gross×5%,1500)`；
+  Gross<7,100 僱員免（僱主照供）；≥65 歲／入職<60 日全免。
+- `slAccrued()`／`slSegmentVerdict()`／`sl45Payment()`——病假：做滿 1
+  個月先開始儲、每月 2 日、上限 120 日；要攞 4/5 必須「結餘夠」＋
+  「連續 ≥4 日」＋「有醫生紙」（`doctorNoteVerified` 由人手輸入項提供，
+  冇提供一律當未核實＝唔合資格，穩陣方向），唔合資格全部當無薪假。
+- `alEntitlementProrata()`／`alLeaverBalance()`／`alLeaverPayout()`——
+  年假過咗試用期後按比例累積（entitlement＝entitleYear×服務日數/365，
+  由開始服務日起計）；試用期滿嗰日唔算過咗（`hasPassedProbation()`
+  要 `asOfDate >= probationEnd`）；離職結算＝結餘×平均工資。
+- `computeGross()`／`computeAutopay()`——Gross/Autopay 組裝。
+
+**刻意唔喺呢層做**：OT 時薪公式（老闆已定「冇統一公式」，見 §15.2
+2026-09-24 答 (6)）、賣假／頂位盤級價目表（配置數據）——呢兩樣留俾
+aggregate 層／人手輸入項帶入 `computeGross()` 嘅 `otAmount`／
+`restDayPayment`／`otherAllowance` 參數。
+
+`tests/longterm-payroll-compute.test.ts`：37 條單元測試（合成數據，
+邊界案例包括：MPF 60 日邊界、試用期完結日當日唔算過咗、病假連續日數
+夾 RD、年假結餘唔可以負）。
+
+### Maxwell 名單導入
+
+- `src/lib/longterm-payroll/maxwell-import.ts`：`parseMaxwellWorkbook()`
+  純函數（exceljs），欄位對應抄自 `s04_longterm.py`（在職名單／離職
+  名單兩個分頁，表頭第 2 行，資料第 3 行開始，逐欄寫死 column index）；
+  `matchMaxwellRows()`——MG 員工編號完全一致優先，跟住試中文姓名（撞名
+  就當搵唔到，唔會亂咁揀）。
+- `src/lib/longterm-payroll/import-service.ts`：`importMaxwellContracts()`
+  ——配對到嘅安員：補齊 `hireDate`／`dateOfBirth`／`probationMonths`／
+  `leaveDate`（**淨係補空，唔覆蓋已有值**，鐵則「資料全部保留」）；建
+  合約（Basic + New Basic/Effective Date 拆做兩段）；**已有
+  `source=manual` 現行合約嘅安員導入時跳過**（唔會用 Maxwell 數蓋走
+  會計已經人手核實過嘅合約）；重複導入數值冇變唔會重複建行（void 舊
+  `source=maxwell_import` 行、建新——保留歷史）。
+- `POST /api/longterm/contracts/import`（multipart `file`）——module
+  「長工糧」`create`。回 `{summary: {totalRows, matchedByStaffNo,
+  matchedByName, unmatched[], contractsCreated, contractsUpdated,
+  skippedManualContract[], guardFieldsFilled, warnings[]}}`。
+
+測試：`tests/longterm-payroll-maxwell-import.test.ts`（9 條 parser／
+match 純函數）、`tests/longterm-payroll-import-service.test.ts`（5 條
+DB 整合：建約／跳過人手合約／重複導入唔重建／月薪改咗 void+建新／
+unmatched 列出）、`tests/longterm-payroll-import-route.test.ts`（4 條
+RBAC＋400 驗證）。
+
+### RBAC
+
+新 module「長工糧」：老闆／會計 `row(G,G,G,G,G)`，主管／雞頭／安員
+`uniformRow(D)`（同「安員銀行資料」一致粒度）。**已知落差**：任務書
+第 3 項寫「xlsx 上載，**老闆**」，但呢個 session 用咗同成個 module
+一致嘅「老闆／會計」粒度（跟 `一鍵結算`／`安員銀行資料` 嘅慣例一致），
+冇淨係留返老闆——如果老闆想收窄，`ACCOUNTANT.長工糧` 個 `create`/
+`update` 改 `D` 即可（`src/lib/rbac/matrix.ts`）。
+
+### 已知落差／未做（老實列出）
+
+1. **aggregate 層**（由 `shift_records`/B07 更＋`LeaveCode`＋
+   `longterm_payroll_inputs` 砌出逐人 `LongtermMonthInput` 餵
+   `compute.ts`）：未起。冇呢層，`compute.ts` 純函數庫未可以跑出任何
+   一個人嘅實際糧單。
+2. **7 月／8 月 gate**（任務書交付 4）：完全未做。要做到逐人 0 差異，
+   除咗通用規則仲要重現一大批 8 月個別盤／個案一次性邏輯（簽證形式
+   長工 passthrough、長工頂雞頭散更排除、1331 IC/兵頂位 ±100、賣假
+   逐盤逐職級價目表——全部喺 `boss_answers.py`），呢批屬於 aggregate
+   層，未起之前跑 gate 冇意義。
+3. **一鍵結算併入**：`src/lib/month-close/one-click.ts:708,822` 嘅
+   `longtermPayrollNote: "長工糧未計（Phase 2——WP-LTPAY）"` placeholder
+   未接駁。
+4. **頁面** `/reports/longterm-payroll`：未起。
+5. **BOCHK autopay 檔**：`data/2026-07/reference/2026-07-長工autopay-
+   BOCHK-PayrollEditor.xls` 樣本存在但係舊版 `.xls`（OLE 格式），呢個
+   session 冇工具打開（冇 `xlrd`/`libreoffice`），未解析實際欄位。
+6. **`guard_leave_balances`／`longterm_payroll_runs`／
+   `longterm_payroll_lines`／`longterm_payroll_inputs`**：表已建，
+   **冇任何 API／service 寫入**——純 schema，等 aggregate 層／頁面。
+7. **`GuardLongtermContract.postSiteId`**：schema 有呢個欄，Maxwell
+   導入未做「`site` 文字→`Site.id`」配對，冇寫入；同已有嘅
+   `GuardLongtermPost`（WP-LTSHIFT）關係未理順，下一手應該評估
+   呢個欄仲使唔使。
+8. **integration（3 位合成長工：正常／月中轉約／離職結算）、e2e、
+   RBAC 403 以外嘅頁面測試**：未做。
+
+### §21 任務 5a-5d 追加（2026-09-27，Sonnet 5 執行，同 branch `wp-ltpay`，未 merge main）
+
+跟老闆指令 5a 月結成本口徑／5b 頁面／5c BOCHK autopay 檔／5d 測試＋文件
+呢個分期做。**上面「已知落差／未做」1-3／6 已經喺之前一手（§21.4／
+§21.5，見 `P2-版面重設計計劃.md` §21）做咗**；呢手做嗰 4/5/7/8（頁面、
+BOCHK 檔、testing）＋新增 5a 成本口徑。
+
+1. **5a 合併成本摘要**（`src/lib/reports/monthly-close.ts`
+   `buildCombinedCostSummaryPure()`／`CombinedCostSummary`）：跟§16.2
+   預算表第一層口徑——`combinedCostTotal = perShiftCostTotal +
+   referralFeeTotal + longtermAutopayTotal`，MPF 僱主（`mpfErTotal`）
+   **另列，唔入合計**（§16.2：「MPF 全部落第二層」）。**刻意冇改**任何
+   現有 `mainRows`/`outsideRows`/`totals` 嘅 `cost`/`profit`/`fullCost`
+   欄——呢個係額外一個 top-level 摘要物件，唔影響同 P0「月結總表」逐格
+   0-diff 嘅核心口徑（7 月 gate 完全唔變）。`buildMonthlyClose()`／
+   `buildGrossMargin()` 都加咗呢個欄（gross-margin.ts 由已有嘅
+   `totalCost`/`referralFeeBySite`/`longtermSalaryTotalAllocatable`
+   拆返做「更次成本」，避免同已經計咗嘅估算式長工分攤／介紹費重複計）；
+   同月份閘（2026-08 起）。一鍵結算報告（`stepCompute()`）＋
+   `MonthCloseReport.combinedCostSummary`＋`/month-close` 頁面「④ 報告」
+   已經顯示呢 5 個數字；`GET /api/reports/monthly-close`／
+   `GET /api/reports/gross-margin` 都加咗 `combined_cost_summary`
+   （同其餘成本欄一致，`出街價:view` 先見到）。單元測試
+   `tests/longterm-payroll-combined-cost-summary.test.ts`（5 條：月份閘
+   ／口徑／`longtermPayrollActual=null` fallback）。
+2. **5b 頁面 `/reports/longterm-payroll`**（`src/app/(app)/reports/
+   longterm-payroll/page.tsx`，client component，nav.ts 加咗連結，
+   module「長工糧」）：月份選擇（`←上月`/`月份`/`下月→`）＋「重算本月」
+   （call `recompute`）；逐人結算表（安員／返工日／OT／Net Basic／
+   年假薪／4/5 病假／Gross／MPF EE·ER／Autopay／同上月比較，撳「逐項
+   來源」展開 `notesJson`）；人手輸入區（新增表單＋列表＋作廢，月鎖後
+   表單唔顯示）；合約管理（列表，可切換「顯示歷史／已作廢」＋編輯
+   月薪/終止日＋作廢＋Maxwell 導入掣，沿用現有 import route）；平均
+   工資／假期餘額（逐人列表，假期餘額有「人手覆核」inline 編輯）；
+   BOCHK autopay 檔（預覽＋下載）。2026-09-27 用 `gate:ltpay-aug`
+   跑出嚟嘅真實 8 月資料喺 dev 手動驗證過成頁（Browser 工具）：總額卡
+   （Gross 895,455.83／Autopay 860,877.36／MPF EE 34,578.47／ER
+   34,816.15）同 gate 輸出完全一致；主管撳連結見唔到（nav 冇顯示），
+   直接打 URL 見到清晰嘅「角色…硬性禁止 長工糧:view」banner，頁面唔會
+   崩潰；手機 375px 卡片摺行、表格自己橫向捲，冇整頁橫捲。
+   API（全部 module「長工糧」，同「安員銀行資料」一致粒度）：
+   - `GET /api/longterm/payroll/:month`——latest run／逐人 lines（join
+     埋安員姓名/工號＋上月比較）／`totals`。
+   - `POST /api/longterm/payroll/:month/recompute`——call
+     `recomputeLongtermPayroll()`，月鎖後 403（`assertMonthNotLocked`）。
+   - `GET/POST /api/longterm/inputs`＋`GET/PATCH/DELETE .../:id`——CRUD，
+     `DELETE`＝軟刪（`voidedAt`，業務事實唔准真刪）；月鎖後 create/
+     update/void 403，read 唔受影響。
+   - `GET/POST /api/longterm/contracts`（人手管理，`source` 恆
+     `manual`）＋`GET/PATCH .../:id`（編輯／`voided:true` 作廢）——跟
+     `rate_cards` 一致用 `assertMonthRangeNotLocked()`（生效區間覆蓋
+     鎖定月就 403）。Maxwell 導入維持用返舊有 `POST
+     /api/longterm/contracts/import`。
+   - `GET/POST /api/longterm/avg-wages`（`guardId+month` unique
+     upsert）／`GET /api/longterm/leave-balances`＋`PATCH .../:id`
+     （人手覆核，audit 留底）。
+   DTO：獨立 `src/lib/longterm-payroll/dto.ts`（白名單 `pickWhitelist`，
+   跟中央 `dto/index.ts` 同一精神但獨立開檔——呢批 resource 全部歸
+   module 級硬性 gate，唔需要中央嗰種逐 field-group 細分機制）。
+3. **5c BOCHK autopay 檔**（`GET /api/longterm/payroll/:month/autopay`，
+   module「長工糧」`export` action，audit `export_download`——加咗呢個
+   新 action 落 `AuditAction`）：**老實查證結果**——2026-09-27 用 npm
+   `xlsx`（SheetJS 0.18.5）試過打開
+   `data/2026-07/reference/2026-07-長工autopay-BOCHK-PayrollEditor.xls`，
+   `XLSX.readFile()` 直接拋 `Error: File is password-protected`——呢個
+   樣本**根本打唔開**（唔止「未解析」，係有密碼鎖住，呢個 session 冇
+   密碼），實際欄位次序完全未能核實。跟任務書寫明嘅 fallback：出 CSV
+   （`bank_code,account_no,payee_name,amount,reference`，`bank_code`
+   用 `guards.bank_name` 頂住），頁面／回應標明「格式待銀行核實」。
+   `xlsx` 套件試完即刻 `npm uninstall`（呢個 npm package 嘅已知
+   prototype-pollution／ReDoS 漏洞冇修過嘅版本，`npm audit` 標
+   high，唔留喺 `package.json`）。冇銀行資料（`bank_account_no`／
+   `bank_payee_name` 任一 null）嘅安員**唔會出現**喺 CSV，用
+   `?preview=1` 可以睇返缺邊幾多人（唔列真名喺呢份文件，見頁面/
+   response `missing_bank_info`）。
+4. **5d 測試＋文件**：新增 6 個 test 檔（合成安員，PDPO：冇真名/真工號/
+   真電話/個別月薪/銀行帳號）：
+   `tests/longterm-payroll-inputs-route.test.ts`（6 條：RBAC／CRUD／
+   作廢軟刪／月鎖唯讀）、`longterm-payroll-contracts-route.test.ts`
+   （6 條：RBAC／人手 CRUD／`source` 恆 manual／生效區間鎖月）、
+   `longterm-payroll-payroll-route.test.ts`（7 條：RBAC／未計過 GET／
+   重算真係計出嚟／月份格式 400／鎖月重算 403／autopay CSV 產生＋缺
+   銀行資料剔走＋audit）、`longterm-payroll-avg-wage-leave-balance-
+   route.test.ts`（5 條：RBAC／upsert／人手覆核 audit）、
+   `longterm-payroll-combined-cost-summary.test.ts`（5 條：5a 純函數）
+   ——合計 29 條新 integration/unit 測試，全過。**加咗 Playwright e2e**
+   `tests/e2e/longterm-payroll.spec.ts`（2 條：老闆開頁→重算→逐人結算
+   出現→加一項津貼→重算→Autopay 數字真係變咗（用 `not.toHaveText()`
+   polling，唔靠「重算完成」呢句喺兩次重算之間可能字面相同嘅 banner
+   判斷）→下載 autopay CSV；雞頭 nav 見唔到連結＋直接打 URL 見 403
+   banner）——**7 月喺標準 dev seed 已經鎖定**（同
+   `month-close-one-click.spec.ts` 一致做法，寫入類流程一律用未鎖定嘅
+   2026-08），為咗完全唔靠任何真實安員資料，spec 自己起一個獨立測試盤
+   ／更別／長工（`test-e2e` 前綴，`afterAll` 清走），淨係借用標準 seed
+   已有嘅 B07 結算單位。
+   驗證：`npx tsc --noEmit`／`npx eslint src tests scripts` 乾淨；
+   `npx vitest run`——133 個檔／2333 條測試全過（見低面「驗證結果」
+   實際數字）；四個 7 月 gate（`gate:reports` 16 pass/0 fail/2 info、
+   `gate:export` PASS、`gate:pricing` PASS 589 已知例外、`report:regen`
+   337 pass/0 fail/5 known）逐一重新執行，數字同呢次改動之前完全一樣；
+   `gate:roster-parse` 36/36；`gate:ltpay-july`（FAIL，逐欄差異數
+   gross=29/mpfEe=24/mpfEr=25/autopay=29/netBasic=2，同 §21.4 記錄
+   完全一樣，冇因為呢手改動而變）；`gate:ltpay-aug`（55/55 人配對到、
+   54/55 全 0 差異，同 §21.5 記錄一致，用嚟做 5b 頁面嘅真實資料手動
+   驗證，見上面）；`PW_PORT=3000 npx playwright test
+   tests/e2e/longterm-payroll.spec.ts tests/e2e/month-close-one-click.
+   spec.ts tests/e2e/p2b-finance-pages.spec.ts`——**18 條全過**（新
+   2 條 + 舊 16 條冇因為 nav.ts 加咗連結或者呢手其餘改動而壞）；
+   `npx prisma migrate status` 乾淨；跑完之後 `npm run db:seed` 重新
+   收尾（`guard_longterm_contracts`／`longterm_payroll_*`／
+   `guard_avg_wages`／`guard_leave_balances` 歸零，確認過 count=0）。
+
+**留返下一手**：
+1. BOCHK autopay 格式——要有人攞到
+   `2026-07-長工autopay-BOCHK-PayrollEditor.xls` 嘅密碼先可以核實實際
+   欄位次序，跌返而家嘅 CSV fallback（已經喺頁面/API 標明「格式待銀行
+   核實」）。
+3. 「加落 cost」（§16.2 產品決策，4d 已經留低）——5a 已經加咗一個獨立
+   「合併成本」摘要顯示，但**冇**改動 `mainRows`/`totals` 嘅核心
+   `cost` 欄本身，呢個決策仲係留返老闆/下一手拍板（見上面 4d 記錄）。
+4. `GuardLongtermContract.postSiteId`（§21.2 第 7 點）——依然未用，
+   合約管理頁面冇顯示呢個欄，下一手應該評估仲使唔使。
+
+### Opus 5.5 驗收修正（2026-09-27，同 branch `wp-ltpay`，未 merge main）
+
+逐條對 §14 規則 9／s07 oracle 之後改咗以下行為（詳細見
+`P2-版面重設計計劃.md` §21.7）：
+
+- **簽證形式長工照入 run**（§14 規則 12：公司照 autopay＋MPF）——原本成個
+  人跳過，Autopay 檔會漏咗佢、MPF 漏供。`longterm_payroll_runs.totals_json`
+  加 `visaPassthrough { guardCount, grossTotal, autopayTotal, mpfEeTotal,
+  mpfErTotal }`（已包喺總數）；`combined_cost_summary.longterm_autopay_total`
+  **剔走**佢（雞頭結算扣返，唔係公司成本），另外出
+  `visa_passthrough_autopay_excluded`。
+- **病假段**：段內更表冇 SL 記錄就扣晒全段日數（原本淨係扣段頭 1 日、4/5
+  就照全段計）；更表 SL 日子冇被任何段涵蓋（包括「有段但漏咗幾日」）一律
+  當無薪假扣。
+- **日薪制**：`dailyRateOnDate()` 對 `pay_basis=daily` 用 `daily_rate`；
+  無薪假／病假唔另扣（冇返工本身冇錢）。Maxwell 導入 `Monthly Salary <
+  5,000` 自動設 `pay_basis=daily`（同 s07 `daily_rate_staff` 一致）。
+- **假期結餘**：跨年接上一年累積做 opening（病假結餘／年假 entitlement 都
+  係由入職日起計）；**後面月份已經計過就唔准再重算前面月份**——
+  `POST /api/longterm/payroll/:month/recompute` 回 **409 conflict**（一鍵
+  結算嗰步降級做 warning），避免已放日數重複累積。`PATCH
+  /api/longterm/leave-balances/:id` 改 `al_taken`／`sl_taken`＝設定開波數
+  （同時寫 `*_opening`、清 `as_of_month`，下次重算由呢個數起計）。
+- `POST /api/longterm/avg-wages`：月鎖後 403／409（同人手輸入項一致）。
+- **Maxwell 導入**：`POST /api/longterm/contracts/import` 加 CSV 路徑——
+  multipart `active_csv`（在職名單分頁匯出）／`left_csv`（離職名單分頁
+  匯出），至少一個；Excel 檔當 CSV 上載 → 400。日期接受
+  `yyyy-mm-dd`／`d/m/yyyy`（成個檔有「第二段 >12」先當 m/d）／
+  `dd-mmm-yyyy`；金額接受 `$15,000`／`(100)`。xlsx 路徑修咗真 Maxwell 檔
+  一上載就 500 嘅兩個問題（整欄 data validation 令 ExcelJS 拋 RangeError；
+  公式日期 Invalid Date）。真檔 129 行 xlsx 解析同 s04 oracle 逐欄一致，
+  模擬 Excel 匯出嘅 CSV（三種日期格式）同 xlsx 結果一模一樣。
+- **一鍵結算報告**：2026-08 起而且長工糧有 run，`totals.cost`／
+  `totals.gross_margin` 改用合併口徑（毛利表更次成本＋介紹費＋長工真實
+  Autopay，MPF 僱主另列），`totals.cost_basis="combined"`；舊毛利表口徑
+  （長工月薪按更數估算）保留喺 `totals.legacy_cost`／`legacy_margin`。
+  `/month-close` 頁卡片標題跟住轉，另加長工糧 Gross／Autopay／MPF 卡。
+- **AI 隔離**：`ai.audit_log` view 加排除 `guard_longterm_contracts`／
+  `guard_leave_balances`／`guard_avg_wages`／`longterm_payroll_runs`／
+  `longterm_payroll_lines`／`longterm_payroll_inputs`（migration
+  `20260927190000_wp_ltpay_ai_audit_log_exclude`；原本 AI 讀得到合約 audit
+  入面嘅月薪）。
+- `gate:ltpay-aug`：fixture 唔再抽 oracle 嘅離職補年假金額（改由引擎計）、
+  簽證形式長工照入；金額欄 0 差異就 PASS，workDays 差異淨係 INFO。

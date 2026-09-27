@@ -86,6 +86,15 @@ export const MODULES = [
   // 開新 run／重新執行；update=（保留，而家冇獨立寫入動作）；void/
   // export 冇對應能力。
   "一鍵結算",
+  // WP-LTPAY Phase 2（老闆 2026-09-26，§14 規則 9／§20.4 Phase 2）——長工
+  // 月薪糧（Maxwell 口徑）：合約管理、假期結餘、人手輸入項、逐月計糧
+  // run、頁面 `/reports/longterm-payroll`。薪金／MPF／Autopay 檔全部
+  // 屬於「安員銀行資料」級 PII——任務書明文，同呢個 module 硬性同「安員
+  // 銀行資料」一致粒度（老闆／會計淨係有；主管／雞頭／安員硬性拒）。
+  // view＝睇逐人表／合約／假期結餘；create＝Maxwell 導入、撳「計糧」開
+  // 新 run；update＝人手輸入項（津貼/扣款/假期段）、編輯合約；void＝
+  // 作廢人手輸入項／合約段；export＝Autopay 檔（CSV／BOCHK）。
+  "長工糧",
 ] as const;
 export type Module = (typeof MODULES)[number];
 
@@ -147,6 +156,7 @@ const OWNER: RoleMatrix = {
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆上載/睇/PATCH（人手指定盤）全部✓；WP-UPLOAD-VOID：作廢✓（會計/主管/老闆三類）
   安員配對修復: row(G, G, G, D, D), // WP-GUARD-FIX-UI：淨係老闆——上載名單/計算計劃/套用全部✓；void/export 冇對應能力
   一鍵結算: row(G, G, G, D, D), // WP-ONE-CLICK：老闆——撳一鍵/睇進度報告/重新執行全部✓；void/export 冇對應能力
+  長工糧: row(G, G, G, G, G), // WP-LTPAY：老闆全開——睇/導入/計糧/人手輸入/作廢/出 Autopay 檔
 };
 
 // ---------------------------------------------------------------------------
@@ -182,6 +192,7 @@ const SUPERVISOR: RoleMatrix = {
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
   一鍵結算: row(G, D, D, D, D), // WP-ONE-CLICK：任務書明文「主管可 view 報告」——淨係睇進度／報告／歷史 runs，唔可以撳一鍵/重新執行
+  長工糧: uniformRow(D), // WP-LTPAY：同「安員銀行資料」一致粒度——主管硬性拒（薪金/MPF 最嚴 PII）
 };
 
 // ---------------------------------------------------------------------------
@@ -214,6 +225,7 @@ const ACCOUNTANT: RoleMatrix = {
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
   一鍵結算: row(G, G, G, D, D), // WP-ONE-CLICK：任務書明文「只老闆／會計可用」——會計同老闆一致全開
+  長工糧: row(G, G, G, G, G), // WP-LTPAY：任務書明文「只老闆／會計可用」——會計同老闆一致全開
 };
 
 // ---------------------------------------------------------------------------
@@ -265,6 +277,7 @@ const BROKER: RoleMatrix = {
   更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒——雞頭連自己嗰盤嘅上載都見唔到（老闆「上載權限：會計、主管、老闆」三類）
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
   一鍵結算: uniformRow(D), // WP-ONE-CLICK：硬性拒——任務書明文「雞頭／安員 403」
+  長工糧: uniformRow(D), // WP-LTPAY：硬性拒——任務書明文「雞頭永遠 403」
 };
 
 // ---------------------------------------------------------------------------
@@ -297,6 +310,7 @@ const GUARD_SELF: RoleMatrix = {
   更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
   一鍵結算: uniformRow(D), // WP-ONE-CLICK：硬性拒——任務書明文「雞頭／安員 403」
+  長工糧: uniformRow(D), // WP-LTPAY：硬性拒
 };
 
 export const DEFAULT_MATRIX: Record<RoleName, RoleMatrix> = {

@@ -45,6 +45,7 @@ import { buildMonthlyClose } from "@/lib/reports/monthly-close";
 import { buildGrossMargin } from "@/lib/reports/gross-margin";
 import { buildPayrollTotals, buildPayrollSourceSummary } from "@/lib/reports/payroll";
 import { computeReferralFeesForMonth, recomputeReferralFees, REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH } from "@/lib/reports/referral-fee";
+import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
 import { writeAudit } from "@/lib/audit";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { STEP_KEYS, STEP_LABELS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
@@ -694,18 +695,60 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
   const totalCost = round2(margin.totals.cost);
   const marginRevenue = round2(margin.totals.revenue);
 
+  // WP-LTPAY Phase 2 §21 任務 3d：接駁長工月薪糧 aggregate 層——每次
+  // 一鍵結算都重算呢個月嘅長工糧（冪等：void 舊 run 建新，見
+  // aggregate.ts `recomputeLongtermPayroll()`）。失敗唔可以拖跨成個
+  // 一鍵結算（呢層仲未經 7/8 月 gate 驗證，見 §21.2）——降級做
+  // warning，report 用 note 講清楚未計。
+  let longtermPayroll: MonthCloseReport["longtermPayroll"] = null;
+  let longtermPayrollNote = "";
+  try {
+    const lt = await recomputeLongtermPayroll(month, actorUserId, ip);
+    longtermPayroll = { grossTotal: lt.totals.grossTotal, autopayTotal: lt.totals.autopayTotal, mpfEeTotal: lt.totals.mpfEeTotal, mpfErTotal: lt.totals.mpfErTotal, guardCount: lt.totals.guardCount };
+    const visa = lt.totals.visaPassthrough;
+    longtermPayrollNote = `長工糧 ${lt.totals.guardCount} 人${visa.guardCount ? `（含簽證形式長工 ${visa.guardCount} 人，照出糧，Autopay ${visa.autopayTotal} 由雞頭結算扣返）` : ""}：Gross ${lt.totals.grossTotal}／Autopay ${lt.totals.autopayTotal}／MPF EE ${lt.totals.mpfEeTotal}／ER ${lt.totals.mpfErTotal}。賣假／頂位／勤工獎／病假段醫生紙／平均工資要會計喺「長工糧」頁人手輸入先計到，鎖月前要喺「長工糧」頁逐人覆核`;
+    if (lt.warnings.length) warnings.push(...lt.warnings.map((w) => `長工糧：${w}`));
+  } catch (e) {
+    longtermPayrollNote = `長工糧重算失敗（${safeErrorSummary(e)}）——月結總表／毛利成本暫唔含長工 autopay，要人手覆核`;
+    warnings.push(longtermPayrollNote);
+  }
+
+  // §21 任務 5a：一鍵結算報告顯示合併成本摘要（更次成本／長工 Autopay／
+  // 介紹費／合計／MPF ER）——`recomputeLongtermPayroll()` 啱啱先喺上面
+  // 跑完，要重新讀一次 `buildMonthlyClose()` 嘅 `combinedCostSummary`
+  // 先攞到反映最新 run 嘅摘要（`close` 呢個變量係喺 `recomputeLongtermPayroll()`
+  // 之前計嘅，嗰陣仲未有呢次 run）。
+  //
+  // Opus 5.5 驗收（老闆要求「總成本／毛利」唔好令人睇錯）：改用毛利表
+  // （`buildGrossMargin()`）嘅合併摘要——同上面 `marginRevenue` 同一個
+  // 範圍（唔計月結以外），毛利先係「同一把尺」。2026-08 起而且長工糧
+  // 有 run：報告「總成本／毛利」改用合併口徑（更次成本＋介紹費＋長工
+  // Autopay 真實數，取代 P0 遺留「按更數估算分攤長工月薪」嗰個估算）；
+  // 原本毛利表成本保留做 `legacyCost` 對照。7 月或者長工糧重算失敗 →
+  // 維持舊口徑（`costBasis="legacy"`），頁面會講明。
+  const marginAfterLongterm = await buildGrossMargin(month);
+  const combinedCostSummary = marginAfterLongterm.combinedCostSummary;
+  const useCombined = combinedCostSummary !== null && longtermPayroll !== null;
+  const reportCost = useCombined ? combinedCostSummary.combinedCostTotal : totalCost;
+  const reportMargin = useCombined ? round2(marginRevenue - combinedCostSummary.combinedCostTotal) : totalMargin;
+
   return {
     numbers: {
       totalRevenue,
-      totalCost,
-      totalMargin,
+      totalCost: reportCost,
+      totalMargin: reportMargin,
+      legacyCost: totalCost,
+      legacyMargin: totalMargin,
+      costBasis: useCombined ? "combined" : "legacy",
       marginRevenue,
       siteCount: close.mainRows.length + close.outsideRows.length,
       payrollByBroker: payroll.map((p) => ({ brokerCode: p.brokerCode, brokerName: p.brokerName, shifts: p.shifts, amount: round2(p.amount) })),
       referralFeeTotal: referralTotal,
       referralFeeCount: referralCount,
       payrollSourceSummary: payrollSource,
-      longtermPayrollNote: "長工糧未計（Phase 2——WP-LTPAY）",
+      longtermPayroll,
+      longtermPayrollNote,
+      combinedCostSummary,
     },
     warnings,
   };
@@ -786,6 +829,9 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
           marginRevenue: (compute.numbers.marginRevenue as number) ?? 0,
           cost: (compute.numbers.totalCost as number) ?? 0,
           grossMargin: (compute.numbers.totalMargin as number) ?? 0,
+          costBasis: (compute.numbers.costBasis as "combined" | "legacy" | undefined) ?? "legacy",
+          legacyCost: (compute.numbers.legacyCost as number | undefined) ?? (compute.numbers.totalCost as number) ?? 0,
+          legacyMargin: (compute.numbers.legacyMargin as number | undefined) ?? (compute.numbers.totalMargin as number) ?? 0,
         },
         payrollByBroker: (compute.numbers.payrollByBroker as MonthCloseReport["payrollByBroker"]) ?? [],
         siteRevenue: await (async () => {
@@ -819,7 +865,9 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
           // 仲有未定價更（冇價就鎖會鎖死錯數）。
           readyToLock: coverage.missingUploadSites.length === 0 && coverage.unconfirmedUploadSites.length === 0 && !currentClose?.lockedAt && unpricedCount === 0,
         },
-        longtermPayrollNote: "長工糧未計（Phase 2——WP-LTPAY，跟 8 月試算第十三版口徑另做）",
+        longtermPayroll: (compute.numbers.longtermPayroll as MonthCloseReport["longtermPayroll"]) ?? null,
+        longtermPayrollNote: (compute.numbers.longtermPayrollNote as string) ?? "",
+        combinedCostSummary: (compute.numbers.combinedCostSummary as MonthCloseReport["combinedCostSummary"]) ?? null,
       };
       return { numbers: report as unknown as Record<string, unknown> };
     });

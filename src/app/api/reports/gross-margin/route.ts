@@ -113,6 +113,9 @@ export async function GET(req: Request) {
     const referralFeeUnattributed = canSettlement ? result.referralFeeUnattributed : undefined;
     const specialCostUnattributed = canSettlement ? result.specialCostUnattributed : undefined;
     const longtermSalaryTotalAllocatable = canSettlement ? result.longtermSalaryTotalAllocatable : undefined;
+    // §21 任務 5a：合併成本摘要含長工 Autopay／MPF ER（成本類數字），跟
+    // 其餘成本欄一致淨係「出街價:view」先睇得到。
+    const combinedCostSummary = canSettlement ? result.combinedCostSummary : undefined;
     return ok(
       brandSafeResponse({
         month: result.month,
@@ -122,6 +125,7 @@ export async function GET(req: Request) {
         referral_fee_unattributed: referralFeeUnattributed,
         special_cost_unattributed: specialCostUnattributed,
         longterm_salary_total_allocatable: longtermSalaryTotalAllocatable,
+        combined_cost_summary: combinedCostSummary,
         unpriced_count: unpriced.count,
         unpriced_groups: unpriced.groups,
         // 應修 1：獨立畀前端顯示「N 格冇結算單位」警告，唔同 unpriced_count

@@ -36,7 +36,14 @@ import type { Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { n, round2, monthRange as sharedMonthRange, monthLabel } from "./money";
-import { buildMonthlyClose, DEFAULT_REPORT_MONTH } from "./monthly-close";
+import {
+  buildMonthlyClose,
+  DEFAULT_REPORT_MONTH,
+  buildLongtermPayrollActualTotals,
+  buildCombinedCostSummaryPure,
+  type LongtermPayrollActualTotals,
+  type CombinedCostSummary,
+} from "./monthly-close";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
 import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type MixedBillingSiteInfo } from "./mixed-billing";
 
@@ -101,6 +108,18 @@ export type GrossMarginResult = {
    * gate 條件）——同 `Σsite.longtermSalaryAllocated` 應該相等（容差
    * 0.05，見 gate:reports (g)）。 */
   longtermSalaryTotalAllocatable: number;
+  /** WP-LTPAY §21 任務 4d：長工月薪糧引擎（`recomputeLongtermPayroll()`）
+   * 真實 Autopay／MPF ER 總數，**另列**（唔加落 `totals.cost`/`profit`，
+   * 見 `monthly-close.ts` `buildLongtermPayrollActualTotals()` 註解）。
+   * 淨係 2026-08 起有值（月份閘，7 月 gate 唔變）；冇跑過
+   * `recomputeLongtermPayroll()` 就 null。同上面
+   * `longtermSalaryTotalAllocatable`（P0 遺留嘅「按更數比例分攤」估算）
+   * 唔係同一樣嘢——呢個先係真正引擎算出嚟嘅數。 */
+  longtermPayrollActual: LongtermPayrollActualTotals | null;
+  /** WP-LTPAY §21 任務 5a：合併成本摘要（更次成本／長工 Autopay／介紹費／
+   * 合計／MPF ER 另列）——見 `monthly-close.ts` `buildCombinedCostSummaryPure()`
+   * 註解。淨係 2026-08 起有值，7 月恆 null。 */
+  combinedCostSummary: CombinedCostSummary | null;
 };
 
 function recordCost(r: { guardWageSnapshot: Prisma.Decimal | null; brokerFeeSnapshot: Prisma.Decimal | null; rescueRate: Prisma.Decimal | null }): number {
@@ -143,6 +162,8 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
       referralFeeUnattributed: 0,
       specialCostUnattributed: 0,
       longtermSalaryTotalAllocatable: 0,
+      longtermPayrollActual: await buildLongtermPayrollActualTotals(MONTH_START),
+      combinedCostSummary: buildCombinedCostSummaryPure(MONTH_START, 0, 0, await buildLongtermPayrollActualTotals(MONTH_START)),
     };
   }
 
@@ -621,6 +642,15 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
     marginPct: totalRevenue > 0 ? round2((totalProfit / totalRevenue) * 100) : null,
   };
 
+  // §21 任務 5a：呢度嘅 `totalCost` 已經包埋介紹費（`referralFeeBySite`＋
+  // `referralFeeUnattributed`）＋長工月薪*估算*分攤（`longtermAlloc`，
+  // P0 遺留嘅「按更數比例分攤」，唔係真正引擎算出嚟嘅數）——`combinedCostSummary`
+  // 要嘅係「更次成本（唔含呢兩樣）＋介紹費＋長工 Autopay（真實引擎輸出）」，
+  // 所以由 `totalCost` 扣走呢兩個分量先做返「更次成本」呢個分量。
+  const referralFeeTotalOverall = round2([...referralFeeBySite.values()].reduce((a, v) => a + v, 0) + referralFeeUnattributed);
+  const perShiftCostTotal = round2(totalCost - referralFeeTotalOverall - salaryAllocation.totalAllocatable);
+  const longtermPayrollActual = await buildLongtermPayrollActualTotals(MONTH_START);
+
   return {
     month: monthLabel(month),
     thresholdPct,
@@ -629,6 +659,8 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
     referralFeeUnattributed,
     specialCostUnattributed,
     longtermSalaryTotalAllocatable: salaryAllocation.totalAllocatable,
+    longtermPayrollActual,
+    combinedCostSummary: buildCombinedCostSummaryPure(MONTH_START, perShiftCostTotal, referralFeeTotalOverall, longtermPayrollActual),
   };
 }
 

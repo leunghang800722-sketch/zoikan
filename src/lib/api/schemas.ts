@@ -23,6 +23,9 @@ import {
   LeaveCode,
   SiteStatus,
   SpecialItemKind,
+  LongtermPayBasis,
+  LongtermMpfExemptReason,
+  LongtermPayrollInputKind,
 } from "@prisma/client";
 import { normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
 import { normalizeTel, TEL_RE } from "@/lib/guards/contacts";
@@ -803,5 +806,98 @@ export const RosterReconcileResolveSubSiteSchema = z
   .object({
     row_ids: z.array(z.string().min(1)).min(1).max(2000),
     site_id: z.union([z.string().min(1), z.null()]),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// WP-LTPAY §21 任務 5b：長工糧頁面——合約管理／人手輸入項／平均工資／
+// 假期餘額。呢批表全部歸「長工糧」module 一致粒度（老闆／會計，見
+// rbac/matrix.ts），冇獨立 field-group（同 field-groups.ts 現有機制唔
+// 相關，成個 module 老闆/會計以外硬性 403）。
+const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "要 YYYY-MM-DD 格式");
+const nullableYmd = z.union([z.null(), ymd]).optional();
+
+export const LongtermContractCreateSchema = z
+  .object({
+    guard_id: uuid,
+    effective_from: dateOnly,
+    effective_to: nullableDateOnly,
+    monthly_salary: money,
+    pay_basis: enumOf(LongtermPayBasis).optional(),
+    daily_rate: money,
+    post_site_id: uuid.optional(),
+    rest_day_paid: z.boolean().optional(),
+    rest_day_rate: money,
+    shift_hours: money,
+    probation_months: z.number().int().optional(),
+    annual_leave_days: money,
+    statutory_holiday_paid_from: z.enum(["immediate", "after_3_months"]).optional(),
+    mpf_exempt_reason: enumOf(LongtermMpfExemptReason).optional(),
+    note: z.string().optional(),
+  })
+  .strict();
+
+export const LongtermContractUpdateSchema = z
+  .object({
+    effective_from: dateOnly.optional(),
+    effective_to: nullableDateOnly,
+    monthly_salary: money,
+    pay_basis: enumOf(LongtermPayBasis).optional(),
+    daily_rate: money,
+    post_site_id: z.union([z.string(), z.null()]).optional(),
+    rest_day_paid: z.boolean().optional(),
+    rest_day_rate: money,
+    shift_hours: money,
+    probation_months: z.union([z.number().int(), z.null()]).optional(),
+    annual_leave_days: money,
+    statutory_holiday_paid_from: z.enum(["immediate", "after_3_months"]).optional(),
+    mpf_exempt_reason: enumOf(LongtermMpfExemptReason).optional(),
+    note: nullableString,
+    // 作廢／取消作廢——同「編輯」用同一個 PATCH endpoint（任務書冇要求
+    // 獨立 void route，見 route.ts 檔頭註解）。
+    voided: z.boolean().optional(),
+  })
+  .strict();
+
+export const LongtermInputCreateSchema = z
+  .object({
+    month: dateOnly,
+    guard_id: uuid,
+    kind: enumOf(LongtermPayrollInputKind),
+    amount: money,
+    date_from: nullableYmd,
+    date_to: nullableYmd,
+    doctor_note_verified: z.boolean().optional(),
+    note: z.string().optional(),
+  })
+  .strict();
+
+export const LongtermInputUpdateSchema = z
+  .object({
+    kind: enumOf(LongtermPayrollInputKind).optional(),
+    amount: money,
+    date_from: nullableYmd,
+    date_to: nullableYmd,
+    doctor_note_verified: z.boolean().optional(),
+    note: nullableString,
+  })
+  .strict();
+
+export const GuardAvgWageUpsertSchema = z
+  .object({
+    guard_id: uuid,
+    month: dateOnly,
+    avg_daily_wage: money,
+    source: z.string().min(1).max(200),
+  })
+  .strict();
+
+export const GuardLeaveBalanceUpdateSchema = z
+  .object({
+    al_entitled: money,
+    al_taken: money,
+    al_carry: money,
+    sl_accrued: money,
+    sl_taken: money,
   })
   .strict();

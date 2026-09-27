@@ -26,7 +26,7 @@ interface StepDTO {
 
 interface ReportDTO {
   month: string;
-  totals: { revenue: number; margin_revenue?: number; cost: number; gross_margin: number };
+  totals: { revenue: number; margin_revenue?: number; cost: number; gross_margin: number; cost_basis?: "combined" | "legacy"; legacy_cost?: number; legacy_margin?: number };
   payroll_by_broker: Array<{ broker_code: string; broker_name: string; shifts: number; amount: number }>;
   site_revenue: Array<{ site_id: string; site_name: string; shifts: number; revenue: number }>;
   referral_fee: { total: number; count: number };
@@ -35,6 +35,17 @@ interface ReportDTO {
   needs_human: string[];
   lock_precondition: { current_month_already_locked: boolean; missing_upload_sites: string[]; unconfirmed_upload_sites: string[]; unpriced_count?: number; ready_to_lock: boolean };
   longterm_payroll_note: string;
+  longterm_payroll?: { gross_total: number; autopay_total: number; mpf_ee_total: number; mpf_er_total: number; guard_count: number } | null;
+  // §21 任務 5a：合併成本摘要（2026-08 起先有值，7 月 null）——更次成本／
+  // 長工 Autopay／介紹費／合計／MPF ER（另列）。
+  combined_cost_summary: {
+    per_shift_cost_total: number;
+    referral_fee_total: number;
+    longterm_autopay_total: number;
+    combined_cost_total: number;
+    mpf_er_total: number;
+    visa_passthrough_autopay_excluded?: number;
+  } | null;
 }
 
 interface RunDTO {
@@ -306,18 +317,80 @@ export default function MonthCloseOneClickPage() {
               <div className="text-lg font-bold">{fmtMoney(report.totals.revenue)}</div>
             </div>
             <div className="rounded border border-zk-border p-3">
-              <div className="text-[11.5px] text-zk-muted">總成本（毛利表）</div>
+              <div className="text-[11.5px] text-zk-muted">{report.totals.cost_basis === "combined" ? "總成本（合併：更次＋長工 Autopay＋介紹費）" : "總成本（毛利表）"}</div>
               <div className="text-lg font-bold">{fmtMoney(report.totals.cost)}</div>
             </div>
             <div className="rounded border border-zk-border p-3">
-              <div className="text-[11.5px] text-zk-muted">毛利</div>
+              <div className="text-[11.5px] text-zk-muted">{report.totals.cost_basis === "combined" ? "毛利（合併口徑）" : "毛利"}</div>
               <div className="text-lg font-bold">{fmtMoney(report.totals.gross_margin)}</div>
             </div>
           </div>
           {report.totals.margin_revenue !== undefined && (
-            <div className="text-[11.5px] text-zk-faint">成本／毛利跟「毛利即時表」口徑（營業額 {fmtMoney(report.totals.margin_revenue)}，唔計月結以外收入）</div>
+            <div className="text-[11.5px] text-zk-faint">
+              成本／毛利嘅營業額跟「毛利即時表」口徑（{fmtMoney(report.totals.margin_revenue)}，唔計月結以外收入）。
+              {report.totals.cost_basis === "combined"
+                ? `總成本用合併口徑：長工人工用「長工糧」真實 Autopay（唔再用按更數估算）、MPF 僱主另列唔計入。「毛利即時表」頁嘅成本仲係舊估算口徑（${fmtMoney(report.totals.legacy_cost ?? 0)}，毛利 ${fmtMoney(report.totals.legacy_margin ?? 0)}），兩個數唔同係正常。`
+                : "總成本係毛利表口徑（長工月薪按更數估算分攤）。"}
+            </div>
+          )}
+          {report.longterm_payroll && (
+            <div>
+              <div className="mb-1 text-[13px] font-medium text-zk-text">長工糧（{report.longterm_payroll.guard_count} 人，詳細睇「長工糧」頁）</div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">Gross</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.longterm_payroll.gross_total)}</div>
+                </div>
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">Autopay（實際過數）</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.longterm_payroll.autopay_total)}</div>
+                </div>
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">MPF 僱員</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.longterm_payroll.mpf_ee_total)}</div>
+                </div>
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">MPF 僱主</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.longterm_payroll.mpf_er_total)}</div>
+                </div>
+              </div>
+            </div>
           )}
           <Banner kind="info" message={report.longterm_payroll_note} />
+
+          {report.combined_cost_summary && (
+            <div>
+              <div className="mb-1 text-[13px] font-medium text-zk-text">合併成本（§16.2 口徑，2026-08 起）</div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">更次成本</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.combined_cost_summary.per_shift_cost_total)}</div>
+                </div>
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">長工 Autopay</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.combined_cost_summary.longterm_autopay_total)}</div>
+                </div>
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">介紹費</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.combined_cost_summary.referral_fee_total)}</div>
+                </div>
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">合計</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.combined_cost_summary.combined_cost_total)}</div>
+                </div>
+                <div className="rounded border border-zk-border p-3">
+                  <div className="text-[11.5px] text-zk-muted">MPF 僱主（另列）</div>
+                  <div className="text-lg font-bold">{fmtMoney(report.combined_cost_summary.mpf_er_total)}</div>
+                </div>
+              </div>
+              <div className="mt-1 text-[11.5px] text-zk-faint">
+                「更次成本」＝散工更×出街價（原本嘅成本欄）。MPF 僱主唔計入「合計」（§16.2：MPF 落預算表第二層，唔喺第一層成本）。
+                {report.combined_cost_summary.visa_passthrough_autopay_excluded
+                  ? ` 長工 Autopay 已剔走簽證形式長工 ${fmtMoney(report.combined_cost_summary.visa_passthrough_autopay_excluded)}（雞頭結算扣返，唔係公司成本；糧單照出）。`
+                  : ""}
+              </div>
+            </div>
+          )}
 
           <div>
             <div className="mb-1 text-[13px] font-medium text-zk-text">逐雞頭應付</div>
