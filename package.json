@@ -25,6 +25,7 @@
     "gate:ltpay-july": "tsx scripts/gate/longterm-payroll-july.ts",
     "gate:ltpay-aug-fixture": "tsx scripts/gate/build-ltpay-aug-fixture.ts",
     "gate:ltpay-aug": "tsx scripts/gate/build-ltpay-aug-fixture.ts && tsx scripts/gate/longterm-payroll-aug.ts",
+    "gate:postorder-export-aug": "tsx scripts/gate/postorder-export-aug.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "ai:smoke": "tsx scripts/ai/smoke.ts"

@@ -1941,3 +1941,162 @@ test.ts` 1 條。
 4. **OT 建卡快捷冇覆蓋雞頭／guard 級嘅精準 broker 配對**——`openCreateForOt()`
    淨係用 `broker_code` 喺已載入嘅 `brokers` 度配（`unpriced` API 唔出
    `broker_id`），配唔中就留空等用戶自己揀（唔會估錯）。
+
+## §20.4 Phase 4（老闆 2026-09-27 指令，branch `wp-phase4`）：系統輸出 Postorder 格式總表 Excel
+
+老闆決定唔再自己維護 Postorder，總表由系統計出嚟。`buildPostorderWorkbook
+(month)`（`src/lib/reports/postorder-export.ts`）由 `shift_records`（非
+cancelled）＋現有幾個已經 gate 過嘅報表 pure function（`buildPayrollTotals()`
+逐雞頭付款、`computeReferralFeesForMonth()` 介紹費、`buildMonthlyClose()`
+營業額/成本/毛利/長工糧）砌一份 xlsx，**唔重新發明公式**——數字口徑直接
+沿用呢幾條已經對過數嘅 function，Excel 純係「換個版面」。
+
+### `GET /api/reports/postorder/:month`
+
+- `src/app/api/reports/postorder/[month]/route.ts`。
+- RBAC：`requirePermission(req, "月結總表", "export")`——重用現有「月結
+  總表」module（老闆／會計出廠 grant，主管出廠 off 可由老闆開，雞頭／
+  安員硬性 deny），冇加新 module（呢個 export 同「睇月結總表/毛利」同
+  一個財務敏感度分組）。
+- 路徑刻意冇跟 `:month.xlsx` 字面（Next.js 動態 route segment 帶副檔名
+  會令 `[month]` 解析多咗個尾巴）——跟返 `GET /api/sites/:id/roster-export`
+  同 `GET /api/longterm/payroll/:month/autopay` 嘅寫法：路徑淨係到
+  `:month`，靠 `Content-Disposition` header 帶 `.xlsx` 檔名。
+- 月結鎖定之後仍然可以下載（冇加鎖定檢查）。
+- 每次下載寫一條 `audit_log`（`action=export_download`，`table_name=
+  shift_records`，`row_id=postorder-export:<month>`，`after` 記
+  rosterRowCount／brokerPayoutCount／referralFeeTotal／siteRevenueTotal／
+  siteCostTotal）——匯出檔含安員姓名（Roster 長工行備註欄），PII，只
+  老闆／會計下載得到。
+- UI：`/month-close`（一鍵結算報告區）＋`/reports/monthly-close`（月結
+  工作台頂部）各加一個「下載總表 Excel（Postorder 格式）」掣，同頁下載
+  （`<a href>` + `Content-Disposition: attachment`，跟 autopay CSV 掣
+  同一個 pattern）。
+
+### 四個 sheet
+
+- **Roster**：逐 (盤, 更種/時段, 結算單位) 一行；日曆 block（日期格＝
+  `sites.aliases` 最短嗰個或 canonicalName／雞頭名／備註／其他／救更價／
+  Unbilled／Paid）＋尾欄（取消／甩更／當月更數／當月收入／當月成本／
+  當月GP）。settlement_broker.kind=internal_longterm（B07，DB name 本身
+  係佔位符 "B07"）行恆寫「(8) 長工」，「上單價」＝該 (盤,更種) B07 組合
+  入面全部出過更嘅長工 `guards.monthly_salary` 之和 ÷ 該組合當月更數
+  （任務書明文「系統出實數：月薪÷當月更數，注明」嘅近似值，唔係
+  `longterm-salary.ts` 嗰個逐人按曆日比例分攤口徑）。
+- **PostOrder**：同 Roster 逐行對應嘅精簡版（每日一欄＋Total Shift）＋
+  「長工雞頭費 (雞頭)」逐雞頭逐盤（`computeReferralFeesForMonth()`
+  lineItems 按 (broker,site) 加埋）。
+- **Summary**：逐雞頭付款（`buildPayrollTotals()`）、半月結 01-15/16-31、
+  介紹費、K passthrough 提示行（規則 12：系統外現金扣，呢張表唔扣）、
+  長工 Autopay/MPF（`longterm_payroll_runs.totals_json`）、總收入/總成本/
+  毛利（`buildMonthlyClose()` `combinedCostSummary`）。
+- **口徑說明**：純文字，逐欄口徑＋已知限制（老實列出，唔屈估）：
+  - 「甩更」：`ShiftRecordStatus` 冇對應終態，恆 0。
+  - 「其他」（頂更/賣假等 special mark）：`shift_records` 冇對應欄追蹤，
+    恆留空。
+  - Unbilled＝`client_rate_snapshot IS NULL` 或 `sites.guards_paid_by_
+    client=true`（LINK）；Paid＝該月 `month_closes.locked_at` 非 null。
+
+Excel 規則（鐵則）：sheet 名（`sanitizeSheetName()`）剔走
+`/ \ ? * [ ] :`（含全形）＋截 31 字元；全程 `.value = <literal>` 賦值，
+唔用 `{formula}`，冇任何空字串格（`setCell()` 冇值就唔賦值）。
+
+### 測試
+
+`tests/wp-phase4-postorder-export.test.ts`（12 條：sheet 名/空字串格/
+公式格檢查、Roster 散工/長工行語意、日期格/備註、取消/甩更尾欄、
+Summary 逐雞頭付款、PostOrder Total Shift、回傳 summary 數字）＋
+`tests/wp-phase4-postorder-export-route.test.ts`（3 條：RBAC 403/200、
+audit_log、400）——全部用合成測試代號（測試安員甲/乙、測試雞頭一），
+測試月份揀 2025-08（同真實 2026 資料完全唔撞，跟 `gross-margin-empty-
+month.test.ts` 一致慣例）。
+
+### `npm run gate:postorder-export-aug`
+
+`scripts/gate/postorder-export-aug.ts`——讀 `data/2026-09/aug-payroll-
+trial/out/{broker_settlement,revenue_site,referral_postorder}.json`
+（8 月薪金試算 oracle 輸出，只讀，gitignored），call `buildPostorderWorkbook
+(2026-08)`，逐雞頭付款（K/W/T/G/D/Y/B07）／逐盤收入（44 個總表盤碼）／
+介紹費逐行（21 原始行用「(雞頭,盤組合)」複合鍵合併對）逐項對，印差異
+表。差額喺文件已記錄嘅已知落差容差（±5）之內分類做 KNOWN（唔計 FAIL），
+其餘超出容差先 FAIL，`exit 1`。
+
+**前置條件**（同 `scripts/gate/aug-e2e-check.ts` 一樣）：dev DB 要已經
+行完 8 月 Part B 全套流程——**呢個而家可以直接用 `npm run gate:ltpay-aug`
+（`scripts/gate/build-ltpay-aug-fixture.ts && scripts/gate/longterm-
+payroll-aug.ts`）一次過做晒**（db:reset→db:seed→開盤→真實上載 36 個
+8 月更表→guard-fix 收斂→長工結算單位重算→`runReconcileAllForMonth()`
+→導入合約 fixture→計長工糧），跑完之後再補兩步先有介紹費數：
+(1) `npx prisma db execute --file prisma/migrations/20260926200000_
+wp_postorder_csv_aug_referral_rates/migration.sql --schema prisma/
+schema.prisma`（呢個 migration 原本部署嗰刻 `brokers`/`sites` 未 seed，
+join 0 行——`gate:ltpay-aug` 跑完 `brokers`/`sites` 已經有 8 月資料，
+補跑呢個 `WHERE NOT EXISTS` 冪等嘅 DML 會插返 16 行費率）；(2) 用
+`recomputeReferralFees(2026-08, actorUserId, null)`（`src/lib/reports/
+referral-fee.ts`）重算一次介紹費（`recomputeReferralFees` 冇獨立 CLI，
+要自己起個一次性 script call）。
+
+**2026-09-27 第二輪實測（真 Part B 跑過）結果**：`npm run gate:
+postorder-export-aug` **exit 0（PASS）**——逐雞頭付款 G/D/Y/B07 0 差，
+K/W/T 3 個雞頭同逐盤收入 4 個盤同介紹費合計/逐行全部落喺已記錄嘅 KNOWN
+差額（§19／`aug-e2e-check.ts` B5——CP5 IC proxy、蔚峰園重複行、Weave
+漏記病假/介紹費、HKU座頭 OT、凱和山 Unbilled、啟航1331 Event 分盤），
+`0` 個未解釋差異。過程中揪到並修咗一個真 bug：`buildPostorderWorkbook()`
+原本冇處理月費／admin_fee／special billing 盤嘅 flat 卡收入（呢批盤
+`client_rate_snapshot` 逐更本身係 null，收入淨係喺盤級卡），令 13 個盤
+逐盤收入顯示 0——改用 `buildMonthlyClose()`（已經處理晒 flat 卡／pro-rata
+fallback／CP5 IC proxy 呢層邏輯）嘅權威逐盤收入補差額，Roster/PostOrder
+加合成「月費」row，siteRevenueTotal 修正到 3,304,416.19（同 §20.7/§22
+驗收數分毫不差）。詳細差異表見 `P2-版面重設計計劃.md` §23 第二輪段。
+
+真 Excel 開檔測試（Microsoft Excel + AppleScript，用呢輪真 8 月資料
+workbook）：`Roster, PostOrder, Summary, 口徑說明` 四個 sheet 名核對
+PASS，`Summary!A1`／`Roster!A1:F1` 格式核對正常，`close workbook
+"_opentest.xlsx" saving no`（指名 workbook）收尾，測試檔已刪。
+
+### Opus 5.5 驗收修正（2026-09-27，model `claude-opus-5-5[1m]`，同 branch）
+
+1. **K −11,440「CP5 IC proxy」KNOWN 係錯嘅**：實查差額嚟自啟航1331（唔係
+   CP5 IC）——一位長工 13 格 880 散更被當長工崗位歸咗 B07。根因係
+   `gate:ltpay-aug`（`scripts/gate/longterm-payroll-aug.ts`）直接叫
+   `applyGuardFixPlan()`，冇寫 `guard_fix_runs` → `hasParsedPostorderForMonth()`
+   恆 false → Postorder 唔當權威 → ≥50% 推算崗位照用。export 本身冇錯（Summary
+   逐雞頭同糧單頁用同一個 `buildPayrollTotals()`），係 dev pipeline 同正式站
+   一鍵結算唔同。修：本機有 U Team 名單就改行 `stepGuardFix()`（同一鍵完全
+   同一條路）→ K 1,023,730 同總表／§20.7 0 差；gate 刪走 K KNOWN。
+2. **Summary 總收入／成本／毛利同一鍵報告唔一致**（差 84.85／26,193／73／
+   11.85）：原版用 `buildMonthlyClose()` 主表營業額＋月結 combinedCostSummary；
+   一鍵報告 `stepCompute()` 用月結（主表＋月結以外）總收入＋毛利表
+   `buildGrossMargin()` 合併成本。改用 `summaryTotalsFrom()`（同 `stepCompute()`
+   一樣計法），另列 MPF ER。
+3. **長工行上單價／外判價放錯欄**：真 Postorder 長工行 E（上單價）照寫收客價，
+   `#REF!` 係 F（外判價）。改：上單價＝收客價眾數，外判價＝月薪÷當月更數；
+   同一人跨幾行按更數比例拆（原版每行各計足一次月薪）；月薪優先用本月生效
+   `guard_longterm_contracts`（日薪制用每更價），冇先 fallback
+   `guards.monthly_salary`（8 月 55 位 B07 長工入面 8 位安員檔案冇月薪）。
+4. **逐盤收入負差額被靜靜略過**：月結口徑少過逐更收客 Σ 嘅盤（7 月：都會大學
+   夜巡邏、數碼港 CP5 IC）原版唔處理 → 7 月 Roster 收入 3,909,086.49，比月結
+   總表 3,260,262 多 648,824.49（§23 講「7 月口徑正確」唔啱）。而家加「收入
+   調整（月結口徑）」行，逐盤加總恆等於月結總表；「月費／調整」行放返喺同盤
+   block 入面；Roster 行按盤排序（原版冇 orderBy）。
+5. **Event 分盤**：跟老闆 Postorder 習慣，「X Event」行放喺母盤 block（物業
+   名稱＝母盤簡稱、更份前加「Event」），逐行收入唔合併；gate 對總表 44 碼時
+   合返母盤 → 啟航1331 0 差（唔再係 KNOWN）。
+6. **K passthrough 提示行**：規則 12 係「人工＋MPF ER」＝Gross＋ER（8 月
+   23,000＋1,150＝24,150，同總表 passthrough 一致），逐雞頭列參考金額。
+7. **PostOrder 介紹費行**：key 加埋費率（同 (雞頭,盤) 唔同費率唔再合埋淨顯示
+   第一個費率）；gate 逐行加更數一致檢查。
+8. **gate 收緊**：新增 94 項「[內部]」嚴格 0 差檢查（由寫出嘅 xlsx 讀返）——
+   Summary 逐雞頭 vs 糧單頁、半月結 01–15＋16–31＝全月、逐盤收入 vs 月結總表、
+   Roster Σ當月收入、Summary 總收入／毛利口徑營業額／成本／毛利／逐雞頭／
+   介紹費／長工糧 vs 最新一鍵結算 `report_json`；逐盤合計 KNOWN 改為對已知
+   差額之和（±5）。
+9. 下載檔名 header：`filename="Postorder - YYYY-MM.xlsx"; filename*=UTF-8''…`
+   （原版 percent-encode 咗 ASCII 檔名）。
+
+**8 月最終實測**（`gate:ltpay-aug` → 補費率 DML → 重算介紹費 → 一鍵結算 →
+`gate:postorder-export-aug`，exit 0）：逐雞頭 K/G/D/Y/B07 0 差（Y +0.02 四捨
+五入）、W −850／T −1,600 KNOWN；逐盤 41/44 0 差、3 KNOWN（HKU座頭 OT −84.85、
+凱和山 +871.08、蔚峰園 −935.86）；介紹費 60,620（+100 KNOWN），15 複合鍵 14 個
+0 差；94 項內部檢查全 PASS；Summary 總收入 3,304,416.19／毛利口徑營業額
+3,236,901.04／合併成本 2,709,509.74／毛利 527,391.30＝一鍵報告。

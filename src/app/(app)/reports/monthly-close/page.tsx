@@ -358,6 +358,11 @@ export default function MonthlyCloseWorkbenchPage() {
             <a href={`/api/reports/monthly-close?month=${month}&export=1`}>
               <Button variant="secondary">匯出 Excel</Button>
             </a>
+            {/* §20.4 Phase 4：系統輸出 Postorder 格式總表 Excel——月結鎖定
+                後仍然可以下載。 */}
+            <a href={`/api/reports/postorder/${month}`}>
+              <Button variant="secondary">下載總表 Excel（Postorder 格式）</Button>
+            </a>
             <Button variant="secondary" onClick={recomputeReferralFee} disabled={recomputingReferralFee}>
               {recomputingReferralFee ? "重算緊…" : "重算介紹費"}
             </Button>

@@ -9,6 +9,11 @@
 // aggregate.ts 讀（同 `scripts/gate/aug-e2e-check.ts` 檔頭註解講嘅
 // pre-steps 1-5 一致流程，呢個 script 自己做晒，唔使人手）。
 //
+// **更新（Opus 5.5 驗收 WP-PHASE4，2026-09-27）**：本機有 U Team 名單
+// （`U_TEAM_XLSX_PATH`）就改行一鍵結算嘅 `stepGuardFix()`（同正式站撳
+// 一鍵完全同一條路，會寫 `guard_fix_runs` 令 Postorder 生效做權威），
+// 冇先 fallback 落下面舊做法。以下係舊註解（冇 U Team 名單嘅情況）：
+//
 // **老實講低**：呢個 dev 環境冇 U Team 名單 xlsx（`安員配對修復`模組
 // 用嚟 link/create 未配對安員嗰個檔案），所以 guard-fix 嘅
 // link／create／createMinimal／needsBoss 呢幾類 action 呢度做唔到（冇
@@ -29,7 +34,8 @@ import { processRosterUpload } from "@/lib/roster-upload/service";
 import { buildGuardFixPlan } from "@/lib/guard-fix/plan";
 import { applyGuardFixPlan, reparseAllActiveUploads } from "@/lib/guard-fix/apply";
 import { parsePostorderFromPairsCsv } from "@/lib/guard-fix/postorder";
-import { stepLongtermSettlement, stepReconcileApply } from "@/lib/month-close/one-click";
+import { stepGuardFix, stepLongtermSettlement, stepReconcileApply } from "@/lib/month-close/one-click";
+import { U_TEAM_XLSX_PATH, parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
 import { round2 } from "@/lib/reports/money";
 import type { LtpayAugFixtureRow } from "./build-ltpay-aug-fixture";
@@ -93,7 +99,7 @@ async function main() {
     console.log(`[${GATE_TAG}] 上載：${uploadOk}/${files.length} 成功（${uploadFail} 失敗）`);
 
     // ------------------------------------------------------------- 4. guard-fix（冇 U Team 名單，淨係 Postorder 組合）
-    console.log(`[${GATE_TAG}] === 4. guard-fix（冇 U Team 名單，set_longterm_post／set_referral 靠 Postorder；link/create/needsBoss 呢批做唔到，見檔頭老實講低）===`);
+    console.log(`[${GATE_TAG}] === 4. guard-fix（有 U Team 名單行一鍵 stepGuardFix；冇就淨係 Postorder 組合，見檔頭）===`);
     let postorderInput: Parameters<typeof buildGuardFixPlan>[0]["postorder"] | undefined;
     if (fs.existsSync(PAIRS_CSV_PATH)) {
       const pairsCsv = fs.readFileSync(PAIRS_CSV_PATH, "utf-8");
@@ -121,8 +127,29 @@ async function main() {
       console.log(`[${GATE_TAG}] 揾唔到 ${path.relative(REPO_ROOT, PAIRS_CSV_PATH)}——冇 Postorder 組合，set_longterm_post 呢類 action 0 項`);
     }
 
+    // Opus 5.5 驗收（WP-PHASE4，2026-09-27）：本機有 U Team 名單就行返
+    // 一鍵結算真正嗰條 `stepGuardFix()`（建 `staff_list_uploads`＋
+    // `guard_fix_runs(status=applied, postorder_upload_id=…)`）。之前淨係
+    // 直接叫 `applyGuardFixPlan()`，冇 guard_fix_runs 記錄 →
+    // `hasParsedPostorderForMonth()` 恆 false → Postorder 唔當權威 →
+    // 長工 ≥50% 推算崗位照用：實測一位長工 13 格啟航1331 散更錯歸 B07、
+    // K 少 11,440（13×880），同 §20.7 一鍵報告 K 1,023,730 對唔上。
+    const uTeamAbs = path.resolve(REPO_ROOT, U_TEAM_XLSX_PATH);
+    let usedOneClickGuardFix = false;
+    if (fs.existsSync(uTeamAbs)) {
+      const buf = fs.readFileSync(uTeamAbs);
+      const rows = await parseUTeamWorkbookBuffer(buf);
+      await prisma.staffListUpload.create({
+        data: { uploaderId: actorUserId, fileName: `${GATE_TAG}：u-team.xlsx`, fileSha256: "gate-script-no-hash", fileBytes: buf, fileSize: buf.length, rowCount: rows.length, status: "parsed", parseSummary: { source: GATE_TAG, rowCount: rows.length } },
+      });
+      const gf = await stepGuardFix(AUG_MONTH, actorUserId);
+      console.log(`[${GATE_TAG}] guard-fix（一鍵結算 stepGuardFix，有 U Team 名單）：${JSON.stringify(gf.numbers)}`);
+      for (const w of gf.warnings) console.log(`[${GATE_TAG}]   warning：${w}`);
+      usedOneClickGuardFix = true;
+    }
+
     let round = 0;
-    for (round = 1; round <= GUARD_FIX_MAX_ROUNDS; round++) {
+    for (round = 1; !usedOneClickGuardFix && round <= GUARD_FIX_MAX_ROUNDS; round++) {
       const plan = await buildGuardFixPlan({ prisma: prisma as never, month: AUG_MONTH, uTeamRows: [], postorder: postorderInput });
       const actionable = plan.actions.link.length + plan.actions.create.length + plan.actions.createMinimal.length + plan.actions.setLongterm.length + plan.actions.setLongtermPost.length + plan.actions.setReferral.length + plan.actions.setReferralInferred.length + plan.actions.setVisa.length;
       console.log(
@@ -132,7 +159,7 @@ async function main() {
       await applyGuardFixPlan({ prisma: prisma as never, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: AUG_MONTH });
       await reparseAllActiveUploads(prisma as never, AUG_MONTH, { txTimeoutMs: 10 * 60 * 1000 });
     }
-    console.log(`[${GATE_TAG}] guard-fix 收斂於第 ${round} 輪`);
+    if (!usedOneClickGuardFix) console.log(`[${GATE_TAG}] guard-fix 收斂於第 ${round} 輪`);
 
     // ------------------------------------------------------------- 4b. 簽證形式長工標記（要喺結算單位重算之前）
     // §14 規則 12：佢喺雞頭盤嘅更由雞頭結算（`resolveLongtermSettlement()`
