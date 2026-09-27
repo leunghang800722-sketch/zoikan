@@ -16,7 +16,10 @@ import {
  * 價,Unbilled,Paid]。 */
 function buildRosterSheet(wb: ExcelJS.Workbook) {
   const ws = wb.addWorksheet("Roster");
-  ws.getRow(7).values = ["客戶名稱", "Customer Code", "物業名稱", "更份", "上單價", "外判價", "時間"];
+  // WP-POSTORDER-ROBUST：表頭唔再靠寫死行／欄位置，解析器由「客戶名稱」
+  // ／「物業名稱」／「雞頭名」呢類字眼自己搵——fixture 要帶齊呢啲字眼
+  // （同真樣本一致：逐日 block 由「雞頭名」子欄起，「備註」隔籬）。
+  ws.getRow(7).values = ["客戶名稱", "Customer Code", "物業名稱", "更份", "上單價", "外判價", "時間", "1-8月", "雞頭名", "備註", "其他", "救更價", "Unbilled", "Paid", "2-8月", "雞頭名", "備註", "其他", "救更價", "Unbilled", "Paid", "3-8月", "雞頭名", "備註"];
   // row9：日1／日2 都係 "(8) 長工"，備註「甲蟲蟲」；日3 淦頂散更（唔算長工格）
   ws.getCell("A9").value = "測試盤 甲蟲蟲";
   ws.getCell("C9").value = "測試";
@@ -66,10 +69,13 @@ describe("WP-LTSHIFT postorder parser（合成 workbook）", () => {
     expect(bySite.get("乙屎蟲")?.siteLabelRaw).toBe("另一盤");
   });
 
-  it("parsePostorderLongtermPostsFromWorkbook：物業名稱空（section header）嘅行跳過", async () => {
+  it("parsePostorderLongtermPostsFromWorkbook：物業名稱空（section header）嘅行跳過（冇上一個值可以補）", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Roster");
-    ws.getCell("A8").value = "測試盤 12hrs (D/S)"; // header row，冇 C 欄
+    ws.getRow(7).values = ["客戶名稱", "Customer Code", "物業名稱", "更份", "上單價", "外判價", "時間", "1-8月", "雞頭名", "備註"];
+    ws.getCell("A8").value = "測試盤 12hrs (D/S)"; // section header 行，冇 C 欄（物業名稱），亦冇上一行可以向下補值
+    ws.getCell("I8").value = "(8) 長工"; // 就算呢行有長工標記，冇 prop 都唔計（保守，唔屈估）
+    ws.getCell("J8").value = "甲蟲蟲";
     const posts = parsePostorderLongtermPostsFromWorkbook(wb);
     expect(posts).toHaveLength(0);
   });
@@ -108,7 +114,16 @@ describe("WP-LTSHIFT postorder parser（合成 workbook）", () => {
     const posts = parsePostorderLongtermPostsFromWorkbook(wb);
     const referralRows = parsePostorderReferralRowsFromWorkbook(wb);
     const visa = parsePostorderVisaStaff(wb);
-    const summary = summarizePostorderParse({ longtermPosts: posts, referralRows, visa, missingSheets: [] });
+    const summary = summarizePostorderParse({
+      longtermPosts: posts,
+      referralRows,
+      visa,
+      missingSheets: [],
+      rosterHeaderRow: 7,
+      rosterDayBlockWidth: 7,
+      rosterFirstDayCol: 8,
+      rosterParseError: null,
+    });
     const json = JSON.stringify(summary);
     expect(json).not.toMatch(/甲蟲蟲|乙屎蟲|丙金蟲/);
     expect(summary.longterm_cell_count).toBe(3);

@@ -66,7 +66,9 @@ function worksheetToSimulatedCsv(ws: ExcelJS.Worksheet, maxCol: number): string 
 async function buildPostorderWorkbook(): Promise<{ wb: ExcelJS.Workbook; buffer: Buffer }> {
   const wb = new ExcelJS.Workbook();
   const roster = wb.addWorksheet("Roster");
-  roster.getRow(7).values = ["客戶名稱", "Customer Code", "物業名稱", "更份", "上單價", "外判價", "時間"];
+  // WP-POSTORDER-ROBUST：表頭要帶齊「雞頭名」／「備註」逐日子欄字眼——
+  // 解析器由呢啲字眼自己搵欄位置，唔再靠寫死 col 9/10/16/17。
+  roster.getRow(7).values = ["客戶名稱", "Customer Code", "物業名稱", "更份", "上單價", "外判價", "時間", "1-8月", "雞頭名", "備註", "其他", "救更價", "Unbilled", "Paid", "2-8月", "雞頭名", "備註"];
   roster.getCell("A9").value = "測試盤 甲蟲蟲";
   roster.getCell("C9").value = "測試";
   roster.getCell("I9").value = "(8) 長工";
@@ -103,6 +105,9 @@ interface PostorderUploadDTO {
     referral_row_count: number;
     referral_total_excel_amount: number;
     missing_sheets: string[];
+    roster_header_row: number | null;
+    roster_day_block_width: number | null;
+    roster_first_day_col: number | null;
     parse_error: string | null;
   } | null;
 }

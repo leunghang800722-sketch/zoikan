@@ -619,6 +619,49 @@ API／新資料表／關鍵行為，方便日後查。
   `tests/wp-postorder-csv-upload-route.test.ts`（API 兩個 CSV 上載 vs
   xlsm 上載 `parse_summary` 一致、RBAC、單一 CSV 缺一個 400）。
 
+**WP-POSTORDER-ROBUST（老闆 2026-09-27 緊急，Sonnet 5 執行）：真實
+Google Sheets 匯出令長工格解析由 1,295→0**——操作員貼咗真實匯出樣本
+之後證實：上面「先讀成 grid」呢個 refactor 本身冇問題（欄位置公式
+`9+7k` 對真樣本仍然啱），根本原因係 (1) 表頭實際行號會隨總表版本飄
+（真樣本第 8 行先係表頭，唔係之前假設嘅第 7 行，第 1 行係合併日期
+大標題、第 7 行係帶引號千分位數字嘅 Total 行）；(2) Roster「物業
+名稱」／「客戶名稱」欄好可能係垂直合併儲存格，CSV 匯出淨係合併範圍
+最頂一格有值，之後幾行呢兩欄變空白——舊版見到 `!prop` 就 `continue`，
+成批帶「(8) 長工」嘅真正更表行因為淨係得頂格有值而全部漏咗。修法：
+- `detectRosterHeader()`（`postorder.ts`）：頭 15 行搵一行同時有
+  「客戶名稱」／「物業名稱」文字做表頭，再喺嗰行掃晒每個「雞頭名」
+  子欄位置（「備註」固定隔籬 `+1`）推 `dayBlockWidth`／`firstDayCol`
+  ——唔再靠寫死行號／`DAYS_IN_GRID=31`；搵唔到表頭，或者表頭搵到但
+  冇「雞頭名」子欄，都老實答 `rosterParseError`（唔靜靜當 0）。
+- `parsePostorderLongtermPostsFromGridDetailed()`：表頭下一行起，逐行
+  對「物業名稱」／「客戶名稱」做向下補值（forward-fill，合併儲存格
+  CSV 匯出之後嘅慣例讀法）——完全空白（連上一行都冇值可以補）先
+  當空白行跳過，唔會屈估雞頭／人名本身。
+- 文字比對一律 NFKC（`normalizeText()`）：全形／半形括號同空格
+  （「（8）長工」／「(8) 長工」／「(8)長工」）都認得，喺 xlsm
+  （`valueToText()`）／CSV（`gridFromCsvText()`）起 grid 嗰陣已經
+  normalize，唔使逐個比對位再度。
+- `PostorderParseResult` 加 `rosterHeaderRow`／`rosterDayBlockWidth`／
+  `rosterFirstDayCol`／`rosterParseError` 四個診斷欄；
+  `summarizePostorderParse()` 相應加 `roster_header_row`／
+  `roster_day_block_width`／`roster_first_day_col`（連埋原有
+  `parse_error`，`route.ts` 嘅 `summarizeParseOutcome()` 而家會將
+  `missingSheets` 同 `rosterParseError` 兩種錯誤合併答一個訊息）；
+  前端（`guard-fix/page.tsx`）上載即刻顯示「長工格 N（M 組）」，
+  N=0 就紅字提示＋表頭診斷，上載歷史列表同樣列出（`GET` 本身已經
+  有 `history`，呢次先接落 UI）。
+- 測試：`tests/wp-postorder-csv-grid-parse.test.ts` 新增
+  「WP-POSTORDER-ROBUST」describe——由操作員貼嘅真實樣本形狀（第 1
+  行合併標題令欄數飄、第 7 行 Total 行帶引號千分位數字、第 8 行先係
+  表頭、BOM＋CRLF）直接砌 CSV 文字（唔用
+  `worksheetToSimulatedCsv()`），覆蓋：表頭飄行（前後各多一行都要
+  搵到同一個表頭）、垂直合併儲存格（物業/客戶名稱得返頂格有值）
+  forward-fill、全形括號/冇空格嘅「長工」標記、搵唔到表頭老實答
+  `parseError`；`tests/wp-ltshift-postorder-parse.test.ts`／
+  `tests/wp-postorder-csv-upload-route.test.ts` 嘅合成 fixture 表頭
+  補齊「雞頭名」／「備註」子欄字眼（解析器而家靠呢啲字眼搵欄位置，
+  唔再靠寫死 col）。
+
 ### A3. WP-REFERRAL-FALLBACK（老闆 2026-09-26 緊急，Sonnet 5 執行，
 branch `wp-referral-fallback`）：CSV cold start 已支援——長工介紹雞頭
 唔靠 Postorder

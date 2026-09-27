@@ -1,3 +1,28 @@
+// WP-POSTORDER-ROBUST（老闆 2026-09-27 緊急）：正式站操作員真實
+// Google Sheets「下載為 CSV」樣本證實：Roster CSV 表頭實際喺第 8 行
+// （第 1 行合併日期大標題、第 7 行 Total 行帶引號千分位數字，成隻月份
+// 有幾多行前置標題行會隨總表版本飄，唔可以硬編碼「表頭喺第 7 行、
+// 資料由第 8 行起」）；同埋 8 月呢份總表 236 個「客戶名稱」／「物業
+// 名稱」欄好可能係垂直合併儲存格（Excel/Google Sheets 畫面顯示成一個
+// 盤跨幾行），CSV 匯出淨係喺合併範圍最頂一格有值，之後幾行呢兩欄會係
+// 空白——舊版 `parsePostorderLongtermPostsFromGrid()` 見到 `!prop` 就
+// `continue`，一整個盤淨係第一行（通常仲要係冇雞頭資料嘅「總計」行）
+// 攞到值，之後成批帶「(8) 長工」嘅真正更表行全部因為呢兩欄空白而漏
+// 咗——呢個先係老闆話「1,295 格／56 組合 → 0」嘅根本原因（唔係欄
+// 位置錯，實測欄位置 col1/3/9/10 呢類 9+7k 公式對真樣本仍然啱）。
+// 修法：
+//   1. 表頭唔再假設行號——`detectRosterHeader()` 喺頭 20 行搵一行同時
+//      有「客戶名稱」／「物業名稱」文字，再喺嗰行搵晒逐個「雞頭名」
+//      子欄嘅位置（唔靠日期格式，日期格式好多變、亦唔影響格位置判斷）
+//      推 `dayBlockWidth`／`firstDayCol`，搵唔到就老實答 `parseError`，
+//      唔會靜靜輸出 0。
+//   2. 表頭下一行起，逐行對「物業名稱」／「客戶名稱」呢兩欄做「向下
+//      補值」（forward-fill，同 Excel/Sheets 合併儲存格 CSV 匯出之後
+//      淨係最頂一格有值嘅慣例做法一致）——呢兩欄淨係讀值，唔會屈估
+//      任何雞頭／人名，純粹補返「呢一行屬於邊個盤」呢個資訊。
+//   3. 文字比對一律用 `normalizeText()`（NFKC）——全形／半形括號同
+//      空格（「(8) 長工」／「（8）長工」／「(8)長工」）、BOM、CRLF 都
+//      要認得。
 // WP-LTSHIFT §19（老闆 2026-09-26 第二部分）：讀「Postorder - Aug
 // 2026.xlsm」呢類總表（`PostOrder`／`Roster`／`Summary`／`Master` 四個
 // sheet），抽兩樣嘢俾 guard-fix plan 用：
@@ -122,6 +147,17 @@ export interface PostorderParseResult {
   visa: PostorderVisaResult;
   /** 兩個 sheet 攞唔到就記低喺度（唔 throw，等上層決定點處理）。 */
   missingSheets: string[];
+  /** Roster 表頭偵測結果（`null`＝搵唔到 sheet，或者搵咗都搵唔到表頭）
+   * ——診斷用，upload route 存入 `parseSummary` 俾操作員睇。 */
+  rosterHeaderRow: number | null;
+  /** 逐日 block 闊度（正常 7：日期／雞頭名／備註／其他／救更價／
+   * Unbilled／Paid）——搵唔到就 `null`。 */
+  rosterDayBlockWidth: number | null;
+  /** 第一個逐日 block 嘅日期欄（1-based col）——搵唔到就 `null`。 */
+  rosterFirstDayCol: number | null;
+  /** 表頭偵測唔到就喺度講明原因（唔會靜靜輸出 0）；有 sheet 又搵到表頭
+   * 就係 `null`。 */
+  rosterParseError: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,8 +175,7 @@ function valueToText(v: unknown): string | null {
   if (typeof v === "object") {
     if ("richText" in (v as Record<string, unknown>)) {
       const s = (v as { richText: Array<{ text?: string }> }).richText.map((t) => t.text ?? "").join("");
-      const trimmed = s.trim();
-      return trimmed === "" ? null : trimmed;
+      return normalizeText(s);
     }
     if (v instanceof Date) return v.toISOString().slice(0, 10);
     if ("result" in (v as Record<string, unknown>)) {
@@ -151,8 +186,17 @@ function valueToText(v: unknown): string | null {
     }
     return null;
   }
-  const s = String(v).trim();
-  return s === "" ? null : s;
+  return normalizeText(String(v));
+}
+
+/** 文字容忍（WP-POSTORDER-ROBUST）：NFKC 令全形／半形括號同空格睇齊
+ * （「（8）長工」／「(8) 長工」／「(8)長工」NFKC 之後括號同空格一致，
+ * 淨係差喺有冇空格，`.includes("長工")` 唔受影響），再 trim。xlsm／CSV
+ * 兩條路徑起 grid 嗰陣都行呢個 helper，令格值比較（表頭字眼、「長工」
+ * 標記、「雞頭費」）唔使自己度全形半形。 */
+function normalizeText(s: string): string | null {
+  const t = s.normalize("NFKC").trim();
+  return t === "" ? null : t;
 }
 
 /** formula cell 嘅公式文字（讀唔到就 null）——`.formula` 先有先算，`.value`
@@ -231,8 +275,7 @@ function gridFromCsvText(csvText: string): PostorderGrid {
   for (const row of rows) {
     const gridRow: (string | null)[] = [null];
     for (const cell of row) {
-      const t = (cell ?? "").trim();
-      gridRow.push(t === "" ? null : t);
+      gridRow.push(normalizeText(cell ?? ""));
     }
     grid.push(gridRow);
   }
@@ -244,18 +287,114 @@ function gridFromCsvText(csvText: string): PostorderGrid {
 // 就係用返同一套嘢，格位置判斷唔會兩份代碼飄開。
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Roster 表頭偵測（WP-POSTORDER-ROBUST）——唔再假設「表頭喺第 7 行、
+// 資料由第 8 行起」，喺頭幾行搵表頭文字自己推行號／欄位置。
+// ---------------------------------------------------------------------------
+const HEADER_SEARCH_ROWS = 15; // 表頭理應喺呢個範圍內（真樣本：第 8 行）
+
+interface RosterHeader {
+  headerRow: number;
+  clientCol: number; // 「客戶名稱」
+  propCol: number; // 「物業名稱」
+  /** 逐日 block 嘅「雞頭名」子欄位置，升序排列；「備註」子欄固定喺
+   * 隔籬（`brokerCol + 1`）——真樣本兩個 sheet 都係呢個相對位置。 */
+  brokerCols: number[];
+  /** 相鄰 block 嘅欄距（例如 7）——搵到 2 個或以上 block 先計得到，
+   * 唔一致就揀出現次數最多嗰個（保守，唔畀單一格漏空拉歪個數）。 */
+  dayBlockWidth: number | null;
+}
+
+/** 頭 `HEADER_SEARCH_ROWS` 行搵一行同時有「客戶名稱」／「物業名稱」
+ * 文字嗰行做表頭，再喺嗰行搵晒每個「雞頭名」子欄嘅位置——搵唔到就
+ * `null`，等上層老實答 parseError（唔會靜靜當 0）。 */
+function detectRosterHeader(grid: PostorderGrid): RosterHeader | null {
+  const rowCount = grid.length - 1;
+  const searchRows = Math.min(HEADER_SEARCH_ROWS, rowCount);
+  for (let r = 1; r <= searchRows; r++) {
+    const row = grid[r];
+    if (!row) continue;
+    let clientCol: number | null = null;
+    let propCol: number | null = null;
+    const brokerCols: number[] = [];
+    for (let c = 1; c < row.length; c++) {
+      const t = row[c];
+      if (t === "客戶名稱") clientCol = c;
+      else if (t === "物業名稱") propCol = c;
+      else if (t === "雞頭名") brokerCols.push(c);
+    }
+    if (clientCol === null || propCol === null) continue;
+    return { headerRow: r, clientCol, propCol, brokerCols, dayBlockWidth: modeDiff(brokerCols) };
+  }
+  return null;
+}
+
+/** 相鄰數值嘅眾數差距——用嚟由「雞頭名」欄位置推 block 闊度。 */
+function modeDiff(cols: number[]): number | null {
+  if (cols.length < 2) return null;
+  const counts = new Map<number, number>();
+  for (let i = 1; i < cols.length; i++) {
+    const d = cols[i] - cols[i - 1];
+    counts.set(d, (counts.get(d) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  let bestCount = 0;
+  for (const [d, count] of counts) {
+    if (count > bestCount) {
+      best = d;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+export interface RosterLongtermParseOutcome {
+  cells: PostorderLongtermPostCell[];
+  headerRow: number | null;
+  dayBlockWidth: number | null;
+  firstDayCol: number | null;
+  parseError: string | null;
+}
+
 /** Roster grid 逐格「(8) 長工」——見檔頭註解。淨係計「備註」子欄有人
- * 名嗰啲格（冇人名就冧唔到係邊個，保守唔計入）。 */
-function parsePostorderLongtermPostsFromGrid(grid: PostorderGrid): PostorderLongtermPostCell[] {
+ * 名嗰啲格（冇人名就冧唔到係邊個，保守唔計入）；「物業名稱」／
+ * 「客戶名稱」向下補值（合併儲存格 CSV 匯出之後淨係最頂一格有值嘅
+ * 慣例做法），冇上一個值就當空白行跳過。 */
+function parsePostorderLongtermPostsFromGridDetailed(grid: PostorderGrid): RosterLongtermParseOutcome {
+  const header = detectRosterHeader(grid);
+  if (!header) {
+    return {
+      cells: [],
+      headerRow: null,
+      dayBlockWidth: null,
+      firstDayCol: null,
+      parseError: "Roster 搵唔到表頭（要有「客戶名稱」／「物業名稱」欄）——請檢查係咪 Roster 分頁匯出嘅 CSV",
+    };
+  }
+  if (header.brokerCols.length === 0) {
+    return {
+      cells: [],
+      headerRow: header.headerRow,
+      dayBlockWidth: null,
+      firstDayCol: null,
+      parseError: `Roster 表頭（第 ${header.headerRow} 行）搵唔到逐日「雞頭名」子欄——請檢查係咪 Roster 分頁匯出嘅 CSV`,
+    };
+  }
+
   const agg = new Map<string, PostorderLongtermPostCell>();
   const rowCount = grid.length - 1;
-  for (let r = 8; r <= rowCount; r++) {
-    const prop = gridText(grid, r, 3); // 「物業名稱」（短代號，例：CP5／數碼／柴廠）
-    const client = gridText(grid, r, 1); // 「客戶名稱」（完整字句，例：數碼港 CP5 李文豪）
+  let lastProp: string | null = null;
+  let lastClient: string | null = null;
+  for (let r = header.headerRow + 1; r <= rowCount; r++) {
+    const propRaw = gridText(grid, r, header.propCol); // 「物業名稱」（短代號，例：CP5／數碼／柴廠）
+    const clientRaw = gridText(grid, r, header.clientCol); // 「客戶名稱」（完整字句，例：數碼港 CP5 李文豪）
+    if (propRaw !== null) lastProp = propRaw;
+    if (clientRaw !== null) lastClient = clientRaw;
+    const prop = propRaw ?? lastProp; // 向下補值——見上面函數註解
+    const client = clientRaw ?? lastClient;
     if (!prop) continue;
-    for (let k = 0; k < DAYS_IN_GRID; k++) {
-      const brokerCol = 9 + 7 * k;
-      const noteCol = 10 + 7 * k;
+    for (const brokerCol of header.brokerCols) {
+      const noteCol = brokerCol + 1;
       const brokerRaw = gridText(grid, r, brokerCol);
       if (!brokerRaw || !brokerRaw.includes("長工")) continue;
       const noteRaw = gridText(grid, r, noteCol);
@@ -268,7 +407,21 @@ function parsePostorderLongtermPostsFromGrid(grid: PostorderGrid): PostorderLong
       else agg.set(key, { siteLabelRaw, siteLabelFallbackRaw: prop, guardNameRaw: noteRaw, cellCount: 1 });
     }
   }
-  return [...agg.values()];
+  return {
+    cells: [...agg.values()],
+    headerRow: header.headerRow,
+    dayBlockWidth: header.dayBlockWidth,
+    firstDayCol: header.brokerCols[0] - 1,
+    parseError: null,
+  };
+}
+
+/** 向下相容嘅簡化版本——淨係要格位陣列嗰啲呼叫方（現有測試／
+ * `parsePostorderLongtermPostsFromWorkbook`／`...FromCsvGrid`）用呢個；
+ * 要診斷資訊（`header_row`／`parse_error` 呢類）用
+ * `parsePostorderLongtermPostsFromGridDetailed()`。 */
+function parsePostorderLongtermPostsFromGrid(grid: PostorderGrid): PostorderLongtermPostCell[] {
+  return parsePostorderLongtermPostsFromGridDetailed(grid).cells;
 }
 
 /** PostOrder grid「長工雞頭費 (雞頭)」行——見檔頭註解。`formulaAt(r)`
@@ -348,6 +501,15 @@ export function parsePostorderLongtermPostsFromWorkbook(wb: ExcelJS.Workbook): P
   return parsePostorderLongtermPostsFromGrid(gridFromWorksheet(ws, ROSTER_MIN_COLS));
 }
 
+/** 同 `parsePostorderLongtermPostsFromWorkbook()`，但連表頭偵測診斷
+ * （`header_row`／`day_block_width`／`first_day_col`／`parse_error`）一齊
+ * 攞返——冇 Roster sheet 就 `null`（`missingSheets` 已經記低）。 */
+function parsePostorderLongtermPostsFromWorkbookDetailed(wb: ExcelJS.Workbook): RosterLongtermParseOutcome | null {
+  const ws = wb.getWorksheet(ROSTER_SHEET_NAME);
+  if (!ws) return null;
+  return parsePostorderLongtermPostsFromGridDetailed(gridFromWorksheet(ws, ROSTER_MIN_COLS));
+}
+
 /** PostOrder sheet「長工雞頭費 (雞頭)」行——見檔頭註解。 */
 export function parsePostorderReferralRowsFromWorkbook(wb: ExcelJS.Workbook): PostorderReferralRow[] {
   const ws = wb.getWorksheet(POSTORDER_SHEET_NAME);
@@ -378,11 +540,16 @@ export async function parsePostorderWorkbookBuffer(buffer: Buffer): Promise<Post
   const missingSheets: string[] = [];
   if (!wb.getWorksheet(ROSTER_SHEET_NAME)) missingSheets.push(ROSTER_SHEET_NAME);
   if (!wb.getWorksheet(POSTORDER_SHEET_NAME)) missingSheets.push(POSTORDER_SHEET_NAME);
+  const roster = parsePostorderLongtermPostsFromWorkbookDetailed(wb);
   return {
-    longtermPosts: parsePostorderLongtermPostsFromWorkbook(wb),
+    longtermPosts: roster?.cells ?? [],
     referralRows: parsePostorderReferralRowsFromWorkbook(wb),
     visa: parsePostorderVisaStaff(wb),
     missingSheets,
+    rosterHeaderRow: roster?.headerRow ?? null,
+    rosterDayBlockWidth: roster?.dayBlockWidth ?? null,
+    rosterFirstDayCol: roster?.firstDayCol ?? null,
+    rosterParseError: roster?.parseError ?? null,
   };
 }
 
@@ -398,6 +565,12 @@ export async function parsePostorderWorkbookBuffer(buffer: Buffer): Promise<Post
  * 依賴，CSV／xlsm 兩條路徑應該逐項相等）。 */
 export function parsePostorderLongtermPostsFromCsvGrid(csvText: string): PostorderLongtermPostCell[] {
   return parsePostorderLongtermPostsFromGrid(gridFromCsvText(csvText));
+}
+
+/** 同 `parsePostorderLongtermPostsFromCsvGrid()`，連表頭偵測診斷一齊
+ * 攞返（見 `parsePostorderLongtermPostsFromWorkbookDetailed()` 同款）。 */
+function parsePostorderLongtermPostsFromCsvGridDetailed(csvText: string): RosterLongtermParseOutcome {
+  return parsePostorderLongtermPostsFromGridDetailed(gridFromCsvText(csvText));
 }
 
 /** PostOrder CSV（Google Sheets 匯出）→ 介紹費行解析——冇公式文字，
@@ -424,11 +597,16 @@ export function parsePostorderFromCsv(source: PostorderCsvSource): PostorderPars
   const missingSheets: string[] = [];
   if (!source.rosterCsv) missingSheets.push(ROSTER_SHEET_NAME);
   if (!source.postorderCsv) missingSheets.push(POSTORDER_SHEET_NAME);
+  const roster = source.rosterCsv ? parsePostorderLongtermPostsFromCsvGridDetailed(source.rosterCsv) : null;
   return {
-    longtermPosts: source.rosterCsv ? parsePostorderLongtermPostsFromCsvGrid(source.rosterCsv) : [],
+    longtermPosts: roster?.cells ?? [],
     referralRows: source.postorderCsv ? parsePostorderReferralRowsFromCsvGrid(source.postorderCsv) : [],
     visa: { supported: false, reason: POSTORDER_VISA_UNSUPPORTED_REASON },
     missingSheets,
+    rosterHeaderRow: roster?.headerRow ?? null,
+    rosterDayBlockWidth: roster?.dayBlockWidth ?? null,
+    rosterFirstDayCol: roster?.firstDayCol ?? null,
+    rosterParseError: roster?.parseError ?? null,
   };
 }
 
@@ -468,5 +646,10 @@ export function summarizePostorderParse(result: PostorderParseResult) {
     referral_total_excel_amount: Math.round(referralTotal * 100) / 100,
     visa_supported: result.visa.supported,
     missing_sheets: result.missingSheets,
+    // WP-POSTORDER-ROBUST：Roster 表頭偵測診斷——上載即刻俾操作員睇
+    // 「解析器搵到表頭喺邊行」，唔使個個 case 都要 engineer 落場對數。
+    roster_header_row: result.rosterHeaderRow,
+    roster_day_block_width: result.rosterDayBlockWidth,
+    roster_first_day_col: result.rosterFirstDayCol,
   };
 }

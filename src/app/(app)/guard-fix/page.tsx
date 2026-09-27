@@ -50,6 +50,11 @@ interface PostorderDTO {
     referral_total_excel_amount: number;
     visa_supported: boolean;
     missing_sheets: string[];
+    // WP-POSTORDER-ROBUST（老闆 2026-09-27 緊急）：Roster 表頭偵測診斷——
+    // 上載即刻俾操作員睇「解析到幾多」，0 就要即刻知道去檢查緊 CSV。
+    roster_header_row: number | null;
+    roster_day_block_width: number | null;
+    roster_first_day_col: number | null;
     parse_error: string | null;
   } | null;
 }
@@ -195,6 +200,9 @@ export default function GuardFixPage() {
 
   // WP-LTSHIFT §19：Postorder 總表上載（同月份綁埋，揀月份先知上載去邊個月）。
   const [currentPostorder, setCurrentPostorder] = useState<PostorderDTO | null>(null);
+  // WP-POSTORDER-ROBUST（老闆 2026-09-27 緊急）：歷史上載列表——一齊顯示
+  // 長工格／介紹費行數，方便操作員睇返之前幾次上載係咪都解析到。
+  const [postorderHistory, setPostorderHistory] = useState<PostorderDTO[]>([]);
   const [uploadingPostorder, setUploadingPostorder] = useState(false);
   const [dragOverPostorder, setDragOverPostorder] = useState(false);
 
@@ -233,8 +241,11 @@ export default function GuardFixPage() {
   }
   async function loadPostorder(forMonth: string) {
     if (!/^\d{4}-\d{2}$/.test(forMonth)) return;
-    const res = await apiGet<{ current: PostorderDTO | null }>(`/api/guard-fix/postorder?month=${forMonth}-01`);
-    if (res.ok) setCurrentPostorder(res.data.current);
+    const res = await apiGet<{ current: PostorderDTO | null; history: PostorderDTO[] }>(`/api/guard-fix/postorder?month=${forMonth}-01`);
+    if (res.ok) {
+      setCurrentPostorder(res.data.current);
+      setPostorderHistory(res.data.history ?? []);
+    }
   }
   async function loadRuns(): Promise<RunListItem[]> {
     setRunsLoading(true);
@@ -307,6 +318,13 @@ export default function GuardFixPage() {
       setError(`上載成功但解析失敗：${res.data.parse_error ?? "未知原因"}——請檢查係咪 Postorder 總表（要有 Roster／PostOrder 兩個 sheet）`);
       return;
     }
+    // WP-POSTORDER-ROBUST：表頭搵到、解析冇 throw，但長工格淨係 0——都要
+    // 紅字提示，唔可以靜靜當成功（呢個先係老闆話「1,295→0」嗰單嘅表徵）。
+    if ((res.data.upload.parse_summary?.longterm_cell_count ?? 0) === 0) {
+      setError("上載成功，但解析唔到長工格——請檢查係咪 Roster 分頁嘅 CSV");
+      await loadPostorder(month);
+      return;
+    }
     setNotice(`Postorder 已上載（長工格 ${res.data.upload.parse_summary?.longterm_cell_count ?? 0}、介紹費行 ${res.data.upload.parse_summary?.referral_row_count ?? 0}）`);
     await loadPostorder(month);
   }
@@ -337,6 +355,14 @@ export default function GuardFixPage() {
     }
     if (!res.data.parse_ok) {
       setError(`上載成功但解析失敗：${res.data.parse_error ?? "未知原因"}——請檢查係咪 Roster／PostOrder 分頁匯出嘅 CSV`);
+      return;
+    }
+    // WP-POSTORDER-ROBUST：同上面 xlsm 路徑一致——長工格 0 都要紅字提示。
+    if ((res.data.upload.parse_summary?.longterm_cell_count ?? 0) === 0) {
+      setError("上載成功，但解析唔到長工格——請檢查係咪 Roster 分頁嘅 CSV");
+      setRosterCsvFile(null);
+      setPostorderCsvFile(null);
+      await loadPostorder(month);
       return;
     }
     setNotice(`Postorder CSV 已上載（長工格 ${res.data.upload.parse_summary?.longterm_cell_count ?? 0}、介紹費行 ${res.data.upload.parse_summary?.referral_row_count ?? 0}）`);
@@ -519,13 +545,44 @@ export default function GuardFixPage() {
       <div className="rounded-lg border border-zk-border bg-white p-4">
         <div className="mb-2 text-[14px] font-semibold text-zk-text">①b Postorder 總表（長工崗位／介紹費，選填）</div>
         {currentPostorder ? (
-          <div className="mb-3 break-all text-[13px] text-zk-muted">
-            {month} 現用：{currentPostorder.file_name}（{fmtDateTime(currentPostorder.uploaded_at)} 上載）
-            {currentPostorder.parse_summary && (
-              <>
-                　長工格 {currentPostorder.parse_summary.longterm_cell_count}・介紹費行 {currentPostorder.parse_summary.referral_row_count}（$
-                {currentPostorder.parse_summary.referral_total_excel_amount}）
-              </>
+          <div className="mb-3 text-[13px]">
+            <div className="break-all text-zk-muted">
+              {month} 現用：{currentPostorder.file_name}（{fmtDateTime(currentPostorder.uploaded_at)} 上載）
+              {currentPostorder.parse_summary && (
+                <>
+                  　長工格 {currentPostorder.parse_summary.longterm_cell_count}（{currentPostorder.parse_summary.longterm_post_pair_count} 組）・介紹費行{" "}
+                  {currentPostorder.parse_summary.referral_row_count}（${currentPostorder.parse_summary.referral_total_excel_amount}）
+                </>
+              )}
+            </div>
+            {/* WP-POSTORDER-ROBUST（老闆 2026-09-27 緊急）：長工格 0 就即刻
+                紅字提示——之前解析器靜靜計到 0 都當上載成功，操作員睇唔出
+                個計劃點解「加長工崗位盤／定做長工」係 0。 */}
+            {currentPostorder.parse_summary && currentPostorder.parse_summary.longterm_cell_count === 0 && (
+              <div className="mt-1 rounded border border-red-200 bg-red-50 px-2.5 py-1.5 text-[12.5px] text-red-700">
+                解析唔到長工格——請檢查係咪 Roster 分頁嘅 CSV
+                {currentPostorder.parse_summary.parse_error ? `（${currentPostorder.parse_summary.parse_error}）` : ""}
+                {currentPostorder.parse_summary.roster_header_row !== null && (
+                  <>
+                    　（表頭：第 {currentPostorder.parse_summary.roster_header_row} 行，逐日 block 闊度{" "}
+                    {currentPostorder.parse_summary.roster_day_block_width ?? "搵唔到"}）
+                  </>
+                )}
+              </div>
+            )}
+            {postorderHistory.length > 1 && (
+              <ul className="mt-2 divide-y divide-zk-border rounded border border-zk-border text-[12px]">
+                {postorderHistory.map((h) => (
+                  <li key={h.id} className="flex flex-wrap items-center justify-between gap-x-2 px-2 py-1">
+                    <span className="min-w-0 break-all text-zk-muted">
+                      {fmtDateTime(h.uploaded_at)}・{h.file_name}
+                    </span>
+                    <span className={`shrink-0 tabular-nums ${h.parse_summary?.longterm_cell_count === 0 ? "font-medium text-red-600" : "text-zk-muted"}`}>
+                      長工格 {h.parse_summary?.longterm_cell_count ?? "?"}・介紹費行 {h.parse_summary?.referral_row_count ?? "?"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         ) : (
