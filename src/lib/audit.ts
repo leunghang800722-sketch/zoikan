@@ -49,6 +49,12 @@ export type AuditAction =
   // after，成千上萬條會令 audit_log 爆），詳情見
   // src/app/api/shift-records/reprice/route.ts。
   | "reprice_month"
+  // WP-PHASE3（§20.4 Phase 3 item 3）：`POST /api/rate-cards/copy-last-
+  // month`——批量「複製上月卡到本月」一行摘要 audit（table_name=
+  // "rate_cards"，row_id="copy_last_month"，after 存 counts＋建咗嘅
+  // rate_cards id 陣列），逐張新卡自己仲有一條獨立 "create" audit（同
+  // reprice_month 一致「摘要一條 + 逐項各自一條」寫法）。
+  | "copy_last_month"
   // P2.5 Opus 驗收應修④：`session/summarize` 每次成功整理（叫咗一次
   // LLM）都寫一條（table_name="ai_feedback_chat"，同 `ai_feedback_chat`
   // 呢個 action 分開，等 audit_log 可以分辨「訪談對話」定「整理」，同

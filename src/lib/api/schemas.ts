@@ -285,6 +285,62 @@ export const GuardUpdateSchema = z
     blacklist_check_date: nullableDateOnly,
     // WP-GUARD-FIX：見上面 `nameAliases` 定義。
     name_aliases: nameAliases,
+    // WP-PHASE3（§20.4 Phase 3）：長工介紹雞頭／簽證形式贊助雞頭——呢兩
+    // 欄喺 WP-LTSHIFT（§19）已經加落 schema.prisma（`guards.referral_
+    // broker_id`／`visa_sponsored_by_broker_id`，之前淨係俾
+    // `inferReferralBrokerFromRosters()`／guard-fix 內部寫，冇經呢個
+    // PATCH schema／field-groups 白名單出街），而家安員抽屜「長工」區
+    // 要俾老闆／主管人手設／改／清空——跟「安員」module（同 employment_
+    // type 一致層級，唔係 PII/收客價/出街價 field group）。`null`＝清空
+    // （例如推算錯咗想清返、或者長工唔再由雞頭供應）。
+    referral_broker_id: z.union([z.null(), uuid]).optional(),
+    visa_sponsored_by_broker_id: z.union([z.null(), uuid]).optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// WP-PHASE3（§20.4 Phase 3 item 1）：`guard_longterm_posts`——安員抽屜
+// 「長工」區嘅崗位盤 CRUD。跟 `GuardStaffNumberCreateSchema` 一致手法：
+// 淨係內部角色（module「安員」）先可以寫，雞頭連自己安員都唔可以改（見
+// route.ts 硬性擋雞頭）。「終止」＝PATCH `effective_to`（唔硬刪，同
+// staff_numbers／rate_cards 一致「冇硬刪」精神）。
+export const GuardLongtermPostCreateSchema = z
+  .object({
+    site_id: uuid,
+    effective_from: z.coerce.date(),
+    effective_to: nullableDateOnly,
+    note: nullableString,
+  })
+  .strict();
+export const GuardLongtermPostUpdateSchema = z
+  .object({
+    effective_to: nullableDateOnly,
+    note: nullableString,
+  })
+  .strict();
+
+// WP-PHASE3（item 2）：「轉長工」一步動作——`POST /api/guards/:id/
+// convert-to-longterm`。`monthly_salary` 刻意 optional：冇「長工糧」
+// 權限（例如主管）嘅 session 送咗都會俾 route 層忽略並警告（唔靜靜寫
+// 唔到嘅嘢，見 route.ts）。
+export const GuardConvertToLongtermSchema = z
+  .object({
+    site_id: uuid,
+    effective_from: z.coerce.date(),
+    referral_broker_id: z.union([z.null(), uuid]).optional(),
+    monthly_salary: money,
+  })
+  .strict();
+
+// WP-PHASE3（item 3）：「複製上月卡到本月」——`POST /api/rate-cards/
+// copy-last-month`。`dry_run` 預設 true（預覽，唔寫入），要 `dry_run:
+// false` 先真係建卡（同 `/api/shift-records/reprice` 一致「預覽→確認」
+// 兩段式）。
+export const RateCardCopyLastMonthSchema = z
+  .object({
+    month: z.string().regex(/^\d{4}-\d{2}$/, "month 格式要係 YYYY-MM"),
+    site_id: uuid.optional(),
+    dry_run: z.boolean().optional(),
   })
   .strict();
 

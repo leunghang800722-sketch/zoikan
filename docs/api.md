@@ -1760,3 +1760,135 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
   入面嘅月薪）。
 - `gate:ltpay-aug`：fixture 唔再抽 oracle 嘅離職補年假金額（改由引擎計）、
   簽證形式長工照入；金額欄 0 差異就 PASS，workDays 差異淨係 INFO。
+
+## WP-PHASE3（老闆 2026-09-27，§20.4 Phase 3；Sonnet 5 執行，branch `wp-phase3`，未 merge main）：長工／價卡日常維護做入系統
+
+目標：以後新月份唔使再上載 Postorder、唔使 Terminal——長工崗位盤／介紹
+雞頭／簽證形式喺系統維護，價目卡逐月一撳複製，OT 卡有地方落。
+
+### 1. 安員抽屜「長工」區（老闆／主管；雞頭結構性見唔到）
+
+- **`GET/POST /api/guards/:id/longterm-posts`**（`src/app/api/guards/[id]/longterm-posts/route.ts`）
+  ／**`PATCH /api/guards/:id/longterm-posts/:postId`**（`.../[postId]/route.ts`）
+  ——`guard_longterm_posts` CRUD。module 選擇同 `staff-numbers`/`phones`
+  一致（內部角色「安員」，雞頭「自己安員」但硬性擋寫）。POST＝新增一條
+  生效崗位記錄（`source=manual`）；PATCH＝改 `effective_to`／`note`（冇
+  硬刪，「終止」＝寫 `effective_to`）。DTO：`src/lib/api/dto/index.ts`
+  `GUARD_LONGTERM_POST_FIELDS`／`toGuardLongtermPostDTO`（冇獨立 field-
+  group，`guard_longterm_posts` 表冇 PII 欄，見 schema.prisma model 頂
+  註解）。
+- **`guards.referral_broker_id`／`visa_sponsored_by_broker_id`**——早喺
+  WP-LTSHIFT（§19）已經加落 schema，之前淨係俾 `inferReferralBroker
+  FromRosters()`／guard-fix 內部寫，冇經 PATCH schema／DTO 白名單出街。
+  本次補齊：`GuardUpdateSchema`（`src/lib/api/schemas.ts`）加呢兩欄
+  （`z.union([z.null(), uuid]).optional()`，`null`＝清空）；`GUARD_
+  FIELDS`（`src/lib/api/dto/index.ts`）加呢兩欄。**雞頭結構性見唔到**
+  ——`GUARD_BROKER_FIELDS`（`src/lib/broker-dto.ts`）冇加呢兩個 key，
+  唔靠前端隱藏，同 `monthly_salary` 等其他內部專屬欄一致做法。冇獨立
+  field-group（跟「安員」module，同 `employment_type` 一致層級）。
+- 前端：`GuardsClient.tsx`「長工」分區（編輯抽屜先顯示，同員工編號／
+  電話等子資源一致）——崗位盤列表＋加／終止、介紹雞頭／簽證形式贊助
+  雞頭 select、連結去 `/reports/longterm-payroll`（合約管理喺嗰頁做，
+  呢度淨係連結，唔重複起 UI）。
+
+### 2. 「轉長工」一步動作
+
+**`POST /api/guards/:id/convert-to-longterm`**
+（`src/app/api/guards/[id]/convert-to-longterm/route.ts`）——body
+`{site_id, effective_from, referral_broker_id?, monthly_salary?}`。一次
+過：①`guards.employment_type=longterm_autopay`（＋`referral_broker_id`
+如果有帶）；②建（或者冪等沿用生效嗰條）`guard_longterm_posts`；③如果
+帶咗 `monthly_salary` **同埋** session 有「長工糧」權限先建
+`guard_longterm_contracts`——RBAC 拆兩層（`employment_type`／崗位盤跟
+「安員」module，合約跟「長工糧」module，兩張表本身屬於唔同 module，唔
+可以夾埋一個 permission check）：冇「長工糧」權限（例如主管——「長工
+糧」同「安員銀行資料」一致粒度硬性拒）都唔會擋成個動作，回應
+`contract:null`＋`warning` 講明原因（"session 冇「長工糧」權限，未建
+合約——請老闆／會計去長工糧頁補合約"），唔靜靜掉走用戶送嘅月薪都唔
+講。雞頭一律 403（唔用 `isBrokerRole()` 揀「自己安員」，直接硬性拒）。
+
+### 3. 價目卡「複製上月卡到本月」
+
+**`POST /api/rate-cards/copy-last-month`**（`src/app/api/rate-cards/copy-last-month/route.ts`）
+，body `{month, site_id?, dry_run?}`（`dry_run` 預設 true，同
+`/api/shift-records/reprice` 一致「預覽→確認」兩段式）。核心邏輯
+`src/lib/pricing/copy-last-month-cards.ts`
+`findCopyLastMonthCandidates()`／`applyCopyLastMonthCards()`：
+
+- 候選＝(盤,更種,雞頭／通用) 上月生效嘅逐更卡（`effectiveTo` 逐字等如
+  「上月最後一日」，同 `one-click.ts` `findCarryoverCard()` 一致嚴謹口
+  徑），排除：`guardId` 非 null（人專屬價）、`billingModel` 唔係
+  null/`per_shift`（special／月費／行政費）、`site.guardsPaidByClient=
+  true`（LINK 盤）、本月已經有生效卡嘅組合。**同 `findCarryoverCard()`
+  唔同：包含雞頭專屬價**（`findCarryoverCard()` 淨係搵 `broker_id=null`
+  嘅通用卡，呢個功能任務書明文要覆蓋 (盤,更種,雞頭／通用) 呢個更闊組
+  合，用途唔同，唔係重寫）。
+- 確認建卡：`effective_from`=本月 1 日，`source=copy_last_month`，
+  `note`「由上月複製（沿用 YYYY-MM-DD～YYYY-MM-DD 生效卡）」，逐張
+  audit（`action=create`）＋一行批量摘要 audit（table_name=
+  "rate_cards"，row_id="copy_last_month"，action=`copy_last_month`，
+  `AuditAction` union 加咗呢個新值——`src/lib/audit.ts`）。冪等：候選
+  已經排除「已有本月卡」，連撳兩次第二次一定 0 候選。權限「出街價:
+  create」（跟 `POST /api/rate-cards` 一致，複製出嚟嘅係新行）。
+- **`src/lib/month-close/one-click.ts` `stepPrecheck()` 行為改動**
+  （任務書明文「§20.3 原意係建議＋一撳」）：**唔再自動寫卡**——舊版
+  見到 (盤,更種) 冇本月卡就自動 `findCarryoverCard()` 複製一張落 DB
+  （`source=one_click_carryover`），而家改做純偵測＋喺 `needsHuman`
+  列「搵到上月卡（…）——去價目卡頁撳『複製上月卡到本月』一撳套用」
+  或者「冇上月卡可以沿用——要人手設卡」，`numbers.cardsCarriedOver`
+  保留（恆為 0，避免讀緊呢粒 key 嘅舊 call site 突然 undefined）；
+  `numbers.cardsMissingNoCarryover`＝全部缺卡組合數（唔理有冇上月卡可
+  沿用）。連帶：`numbers.longtermGuardsWithoutPostIds`（新加，長工冇
+  崗位清單首 50 個 guardId，唔帶姓名同其餘 report_json 一致慣例）俾
+  前端逐個連結去安員抽屜「長工」區。
+- 前端：`RateCardsClient.tsx`「複製上月卡到本月」掣（`canCopyLastMonth`
+  ＝`出街價:create`，`page.tsx` 傳落嚟）——dry-run 預覽（`window.confirm`
+  列首 20 張）→ 確認先真係 `dry_run:false`。
+
+### 4. OT 卡管理
+
+`rate_cards` 結構本身已經支援 site／broker／guard 三級（冇要改
+schema）——OT 更種同其他更種一樣用返現有 CRUD。跟 §17.10.2 決定：**OT
+卡金額＝每小時价**（`client_rate`／`guard_wage` 存嘅係「每粒鐘」，唔係
+「呢條記錄成筆」），`RateCardsClient.tsx` 揀咗 code 開頭 "OT" 嘅更種就
+顯示提示。**未定價 OT 清單**——複用現有 `GET /api/shift-records/
+unpriced`（`category=ot_unpriced`），頁面加一個 amber 分區，每項有
+「建卡」快捷（喺已載入嘅 `shiftTypes`／`brokers` 度用 site_id+code／
+broker_code 揾返 id 預填，開返「新增價目」抽屜）。
+
+### 5. Postorder 退場
+
+- `guard-fix`（`src/lib/guard-fix/plan.ts`）本身結構上已經係「冇上載
+  Postorder → `plan.postorder=null` → 相關四類計劃（`set_longterm`／
+  `set_longterm_post`／`set_referral`／`set_visa`）一律 0 項，頁面淨係
+  顯示中性文字「呢次冇上載 Postorder」，唔顯示 amber 警告框（`plan.
+  postorder && ...` 先會 render）」——已經符合「冇上載就 skip 而唔警
+  告」，冇再改邏輯。`one-click.ts` `stepPostorderCompare()` 同理（冇
+  上載 → `{uploaded:false, warnings:[]}`）。
+- `/month-close` 頁面：Postorder 上載入口文案改做「Postorder 總表——過
+  渡對照（可選）」，報告區塊標題改做「對照（Postorder，過渡對照，可
+  選）」，並加一句 §20.5 說明（系統本身已經係總表，長工崗位盤／介紹
+  雞頭以系統資料為準）。
+
+### 已知落差／未做（老實列出）
+
+1. **8 月 dev 全流程正式站演練未重做**——`stepPrecheck()` 行為改動
+   （唔再自動寫卡）理論上會令原本靠自動沿用嘅 (盤,更種) 組合喺一鍵結
+   算流程入面變成「未定價」直到有人撳「複製上月卡」；integration test
+   （`tests/month-close-one-click.test.ts`）同新 `tests/wp-phase3.test.
+   ts` 已經覆蓋呢個新行為嘅單元／整合層面正確性，但冇重新跑一次
+   §20.6/20.7 嗰種「36 檔真實 8 月更表上載＋一鍵結算」端到端演練去確
+   認總數字（K/G/D/Y/W/T 逐雞頭應付、毛利、B07 格數）喺呢個改動之後
+   點變——理論上如果操作員跟新流程（一鍵結算 step0 提示之後去價目卡
+   頁撳「複製上月卡到本月」）數字應該不變，但未經真實規模驗證。
+2. **Playwright e2e**：新 `tests/e2e/phase3.spec.ts` 覆蓋「老闆抽屜設崗
+   位＋複製上月卡」流程（見下面驗證結果），冇覆蓋「轉長工」modal／OT
+   建卡快捷嘅 e2e（integration test 已覆蓋後台邏輯，UI 互動流程留返下
+   一手）。
+3. **`/reports/longterm-payroll` 冇 `?guard_id=` 深連結**——安員抽屜
+   「長工」區嘅「合約」連結去嗰頁係冇篩選嘅（任務書字面「連結去長工糧
+   頁合約」冇話要深連結，簡單版本，留返下一手要嘅話再加 `useSearchParams`
+   篩選）。
+4. **OT 建卡快捷冇覆蓋雞頭／guard 級嘅精準 broker 配對**——`openCreateForOt()`
+   淨係用 `broker_code` 喺已載入嘅 `brokers` 度配（`unpriced` API 唔出
+   `broker_id`），配唔中就留空等用戶自己揀（唔會估錯）。

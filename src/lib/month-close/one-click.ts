@@ -206,6 +206,7 @@ export async function findCarryoverCard(siteId: string, shiftTypeId: string, mon
   });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 簽名保留 actorUserId／ip：呼叫方（runOneClickMonthClose）一律傳呢兩個參數，Phase 3 之後 step0 唔再寫卡／audit（見下面大註解），暫時用唔著，但保留簽名等日後 step0 加返其他需要 actor/ip 嘅動作唔使改晒 call site。
 export async function stepPrecheck(month: Date, actorUserId: string, ip: string | null): Promise<{ numbers: Record<string, unknown>; warnings: string[]; needsHuman: string[]; halt?: string }> {
   const { start, end } = monthRange(month);
   const numbers: Record<string, unknown> = {};
@@ -262,7 +263,16 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   const shiftTypeById = new Map(shiftTypes.map((s) => [s.id, s.code]));
 
   let siteMissingShiftTypeCount = 0;
-  let cardsCarriedOver = 0;
+  // WP-PHASE3（§20.4 Phase 3 item 3，老闆／規劃裁定「§20.3 原意係建議＋
+  // 一撳」）：呢度**唔再自動寫卡**——舊版 step0 見到 (盤,更種) 冇本月卡就
+  // 自動搵上月通用卡複製一張落 DB（`source=one_click_carryover`），Phase 3
+  // 已經起咗獨立「複製上月卡到本月」功能（`src/lib/pricing/copy-last-
+  // month-cards.ts`＋價目卡頁掣，人手預覽先確認），一鍵結算 step0 改做
+  // 純偵測＋建議，唔再幫用戶靜靜寫卡（任務書「唔准靜靜出錯數」精神一
+  // 致：價錢可能已經變，自動沿用完全唔覆核就落 DB 有風險）。`cardsCarried
+  // Over` 呢個 numbers key 保留（值恆為 0）——history/報告頁如果仲有邊度
+  // 讀緊呢粒 key 唔會突然 undefined。
+  const cardsCarriedOver = 0;
   let cardsMissingNoCarryover = 0;
   for (const combo of combos) {
     const siteId = combo.resolvedSiteId!;
@@ -270,7 +280,7 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     const siteName = siteNameById.get(siteId) ?? siteId.slice(0, 8);
     const shiftTypeCode = shiftTypeById.get(shiftTypeId) ?? shiftTypeId.slice(0, 8);
     // LINK（guards_paid_by_client）盤：客戶直接出糧、唔逐更計价，本身就唔
-    // 需要逐更卡（同 unpriced.ts 一致），唔查、唔沿用。
+    // 需要逐更卡（同 unpriced.ts 一致），唔查。
     if (paidByClientSiteIds.has(siteId)) continue;
     const hasActiveCard = await prisma.rateCard.count({
       where: {
@@ -283,35 +293,17 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
       },
     });
     if (hasActiveCard > 0) continue;
+    cardsMissingNoCarryover++;
+    // 淨係查有冇上月卡可以複製（俾用戶睇到「撳咗『複製上月卡』有冇用」），
+    // 唔寫 DB。
     const carryFrom = await findCarryoverCard(siteId, shiftTypeId, start);
     if (!carryFrom) {
-      cardsMissingNoCarryover++;
-      needsHuman.push(`盤「${siteName}」更種「${shiftTypeCode}」冇生效價卡，亦冇「上月通用逐更卡」可以沿用——要人手設卡`);
-      continue;
+      needsHuman.push(`盤「${siteName}」更種「${shiftTypeCode}」冇生效價卡，亦冇「上月通用逐更卡」可以沿用——要人手設卡（去價目卡頁）`);
+    } else {
+      needsHuman.push(
+        `盤「${siteName}」更種「${shiftTypeCode}」冇本月生效卡，搵到上月卡（${carryFrom.effectiveFrom.toISOString().slice(0, 10)}～${carryFrom.effectiveTo?.toISOString().slice(0, 10)}，收客 ${n(carryFrom.clientRate)}／工資 ${n(carryFrom.guardWage)}）——去價目卡頁撳「複製上月卡到本月」一撳套用（或者人手設卡）`,
+      );
     }
-    const created = await prisma.rateCard.create({
-      data: {
-        siteId,
-        shiftTypeId,
-        brokerId: null,
-        guardId: null,
-        clientRate: carryFrom.clientRate,
-        guardWage: carryFrom.guardWage,
-        brokerFee: carryFrom.brokerFee,
-        payoutRate: carryFrom.payoutRate,
-        billingModel: carryFrom.billingModel,
-        effectiveFrom: start,
-        effectiveTo: null,
-        source: "one_click_carryover",
-        note: `一鍵沿用（沿用 ${carryFrom.effectiveFrom.toISOString().slice(0, 10)} 生效卡）`,
-        createdBy: actorUserId,
-      },
-    });
-    await writeAudit({ actorUserId, tableName: "rate_cards", rowId: created.id, action: "create", after: created, ip });
-    cardsCarriedOver++;
-    needsHuman.push(
-      `【已自動沿用，請覆核】盤「${siteName}」更種「${shiftTypeCode}」冇本月卡，已複製上月通用卡（${carryFrom.effectiveFrom.toISOString().slice(0, 10)}～${carryFrom.effectiveTo?.toISOString().slice(0, 10)}，收客 ${n(carryFrom.clientRate)}／工資 ${n(carryFrom.guardWage)}）做本月卡——價錢有變要去價目卡改`,
-    );
   }
   numbers.siteShiftTypeCombosChecked = combos.length;
   numbers.cardsCarriedOver = cardsCarriedOver;
@@ -362,17 +354,26 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     : [];
   const longtermGuardIds = [...new Set(longtermRows.map((r) => r.guardId).filter((v): v is string => !!v))];
   let noPostCount = 0;
+  // WP-PHASE3（item 2）：`longtermGuardsWithoutPostIds`——結構化 guardId
+  // 清單（唔帶姓名，同 report_json 一直嘅「唔放 PII」慣例一致），俾前端
+  // 「一鍵結算」報告頁每項砌一個連結去安員抽屜「長工」區撳「設崗位」（例
+  // 如 `/guards?open=<id>`），唔使人手逐個喺名冊搵。上限 50 個（報告 JSON
+  // 唔應該無上限咁大）。
+  let longtermGuardsWithoutPostIds: string[] = [];
   if (longtermGuardIds.length) {
     const withPost = await prisma.guardLongtermPost.findMany({
       where: { guardId: { in: longtermGuardIds }, voidedAt: null, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] },
       select: { guardId: true },
     });
     const withPostSet = new Set(withPost.map((p) => p.guardId));
-    noPostCount = longtermGuardIds.filter((id) => !withPostSet.has(id)).length;
+    const withoutPostIds = longtermGuardIds.filter((id) => !withPostSet.has(id));
+    noPostCount = withoutPostIds.length;
+    longtermGuardsWithoutPostIds = withoutPostIds.slice(0, 50);
   }
   numbers.longtermGuardsThisMonth = longtermGuardIds.length;
   numbers.longtermGuardsWithoutPost = noPostCount;
-  if (noPostCount > 0) warnings.push(`${noPostCount} 位長工本月有上載行但（執行前）未設生效崗位——之後「安員修復」會先由 Postorder 補崗位，仲係冇先由「長工結算」用 ≥50% 更表占比推算`);
+  numbers.longtermGuardsWithoutPostIds = longtermGuardsWithoutPostIds;
+  if (noPostCount > 0) warnings.push(`${noPostCount} 位長工本月有上載行但（執行前）未設生效崗位——之後「安員修復」會先由 Postorder 補崗位，仲係冇先由「長工結算」用 ≥50% 更表占比推算；報告下面有連結可以逐個去安員抽屜「長工」區撳「設崗位」`);
 
   return { numbers, warnings, needsHuman };
 }

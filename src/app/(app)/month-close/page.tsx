@@ -242,9 +242,11 @@ export default function MonthCloseOneClickPage() {
             </Button>
           </div>
           <div>
-            <label className="block text-[12.5px] text-zk-muted">Postorder 總表（可選，只做過渡對照）</label>
+            <label className="block text-[12.5px] text-zk-muted">Postorder 總表——過渡對照（可選）</label>
             <input type="file" multiple accept=".xlsm,.xlsx,.csv" data-testid="month-close-postorder-file-input" onChange={(e) => setPostorderFiles(Array.from(e.target.files ?? []))} className="mt-1 text-sm" />
-            <div className="mt-1 text-[11.5px] text-zk-faint">.xlsm 一個檔；或者 CSV：PostOrder.csv（可另加 longterm-pairs.csv 或 Roster.csv）</div>
+            <div className="mt-1 text-[11.5px] text-zk-faint">
+              §20.5：系統本身已經係總表，Postorder 純粹俾 8、9 月過渡對照用——以後淨係長工崗位盤／介紹雞頭要以系統資料為準；.xlsm 一個檔；或者 CSV：PostOrder.csv（可另加 longterm-pairs.csv 或 Roster.csv）
+            </div>
             <Button className="mt-2" onClick={uploadPostorder} disabled={busy || jobRunning || postorderFiles.length === 0}>
               上載總表
             </Button>
@@ -458,7 +460,7 @@ export default function MonthCloseOneClickPage() {
 
           {report.postorder_compare && (
             <div className="rounded border border-zk-border p-3">
-              <div className="text-[13px] font-medium text-zk-text">對照（Postorder，可選）</div>
+              <div className="text-[13px] font-medium text-zk-text">對照（Postorder，過渡對照，可選）</div>
               <div className="mt-1 text-[12.5px] text-zk-muted">
                 介紹費：總表快取 {report.postorder_compare.referral_excel_total !== null ? fmtMoney(report.postorder_compare.referral_excel_total) : "（總表冇提供）"} vs 系統{" "}
                 {fmtMoney(report.postorder_compare.referral_system_total)}

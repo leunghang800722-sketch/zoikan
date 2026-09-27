@@ -97,6 +97,13 @@ const GUARD_FIELDS = [
   // src/app/api/guards/route.ts findNumberSearchMatches()）——前端標
   // 「已取消號命中」用。
   "formerNumberHit",
+  // WP-PHASE3（§20.4 Phase 3 item 1）：長工介紹雞頭／簽證形式贊助雞頭
+  // ——WP-LTSHIFT（§19）已經加落 schema，之前淨係內部寫，冇經呢個白名
+  // 單出街；安員抽屜「長工」區要顯示。跟「安員」module，唔係 PII 組
+  // （雞頭本身睇唔到呢個資源，見 broker-dto.ts GUARD_BROKER_FIELDS 冇
+  // 呢兩欄，結構性隔離）。
+  "referralBrokerId",
+  "visaSponsoredByBrokerId",
 ] as const;
 const RATE_CARD_FIELDS = ["id", "siteId", "shiftTypeId", "brokerId", "guardId", "clientRate", "guardWage", "brokerFee", "payoutRate", "billingModel", "effectiveFrom", "effectiveTo", "source", "evidence", "confidence", "status", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_RECORD_FIELDS = ["id", "workDate", "siteId", "shiftTypeId", "guardId", "settlementBrokerId", "operationalBrokerId", "referralFeeSnapshot", "rescueRate", "recordType", "leaveCode", "otHours", "parentShiftId", "locationTag", "isExternal", "billed", "paid", "settlementPage", "clientRateSnapshot", "guardWageSnapshot", "brokerFeeSnapshot", "source", "provenance", "status", "createdAt", "updatedAt", "createdBy"] as const;
@@ -187,6 +194,11 @@ export const toGuardListDTO = <T extends Record<string, unknown>>(row: T) => map
 // 工號本身（唔係身份證／銀行）跟「安員」module，冇獨立 field-group。
 const GUARD_STAFF_NUMBER_FIELDS = ["id", "guardId", "scheme", "number", "status", "validFrom", "validTo", "note", "source", "createdAt", "updatedAt", "createdBy"] as const;
 export const toGuardStaffNumberDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_STAFF_NUMBER_FIELDS);
+// WP-PHASE3（§20.4 Phase 3 item 1）：`guard_longterm_posts` CRUD 白名單
+// ——「盤名」（site）唔係 PII（見 schema.prisma 呢個 model 頂註解），
+// 跟「安員」module 一般 view/update 就夠，冇獨立 field-group。
+const GUARD_LONGTERM_POST_FIELDS = ["id", "guardId", "siteId", "effectiveFrom", "effectiveTo", "source", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
+export const toGuardLongtermPostDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LONGTERM_POST_FIELDS);
 // WP-MULTI（老闆 2026-09-19 拍板）：`GET/POST/PATCH/DELETE
 // /api/guards/:id/phones*`／`emergency-contacts*`／`addresses*`——內部
 // 角色（老闆/主管/會計）用嘅完整白名單。工號本身跟「安員」module
