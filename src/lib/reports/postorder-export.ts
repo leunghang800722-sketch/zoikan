@@ -303,9 +303,24 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
       if (clientRate !== null) g.clientRateSamples.push(clientRate);
       if (r.guardWageSnapshot !== null) g.guardWageSamples.push(guardWage);
     }
+    // 驗收修正（Opus 5.5，WP-BOSS5 §25.7 追蹤）：OT 組（isOt）唔准計入
+    // `longtermShiftsByGuard`／`totalB07ShiftsByGuard`——OT 記錄以小時做
+    // 「更數」（配合 §25.1 每小時价），唔係月薪攤分嘅單位；之前冇擋走
+    // OT，令 B07 長工有 OT 嗰個月，正更行「外判價」（月薪÷正更更數）會被
+    // OT 小時一齊攤薄（分母多咗，每更攤到嘅月薪就少咗），而 OT 行本身又
+    // 冇對應嘅「每小時月薪价」概念可攤（真人月薪按更數攤，OT 唔係「多
+    // 做一更」）。而家 OT B07 行唔寫入 `longtermShiftsByGuard`——
+    // `longtermRowPayoutRate()` 見呢個 guard 冇 entry（rowShifts=0）就
+    // 回 null，OT 行外判價留空（唔攤月薪）；正更 B07 行嘅
+    // `totalB07ShiftsByGuard`（`buildPostorderWorkbook()` 逐組加總
+    // `longtermShiftsByGuard`）自然唔再包 OT 小時。呢個顯示用參考單價
+    // 本身唔計入「當月成本」（B07 成本以長工糧 Autopay 實數計，見
+    // writeLegendSheet），所以呢個修正唔影響任何合計／gate 數字。
     if (g.isLongterm) {
       g.longtermGuardIds.add(r.guardId);
-      g.longtermShiftsByGuard.set(r.guardId, (g.longtermShiftsByGuard.get(r.guardId) ?? 0) + countIncrement);
+      if (!isOt) {
+        g.longtermShiftsByGuard.set(r.guardId, (g.longtermShiftsByGuard.get(r.guardId) ?? 0) + countIncrement);
+      }
     }
 
     const day = r.workDate.getUTCDate();
@@ -807,7 +822,7 @@ async function writeLegendSheet(wb: ExcelJS.Workbook, month: Date): Promise<void
     "Paid：month_closes 該月已鎖定（locked_at 非 null）→ 1；未鎖定留空。",
     "取消：該 (盤,更種,結算單位) 組合本月 status=cancelled 嘅記錄數。",
     "甩更：schema 冇對應終態（ShiftRecordStatus 冇「甩更」值），恆 0——如老闆要追蹤呢個概念，要先喺 shift_records 加狀態/欄位。",
-    "長工（B07）行：「上單價」同散工行一樣＝收客價；「外判價」＝月薪÷當月更數（真 Postorder 呢格係 #REF!，任務書要求系統出實數）——每位長工月薪（本月生效長工合約；日薪制直接用每更價；冇合約先用安員檔案月薪）按佢喺呢行嘅更數÷佢本月長工總更數拆落呢行，再÷呢行更數。一人一行做足全月＝月薪÷當月更數。呢個係參考單價，唔計入「當月成本」（長工成本以長工糧 Autopay 實數計，見 Summary）。",
+    "長工（B07）行：「上單價」同散工行一樣＝收客價；「外判價」＝月薪÷當月更數（真 Postorder 呢格係 #REF!，任務書要求系統出實數）——每位長工月薪（本月生效長工合約；日薪制直接用每更價；冇合約先用安員檔案月薪）按佢喺呢行嘅更數÷佢本月長工總更數拆落呢行，再÷呢行更數。一人一行做足全月＝月薪÷當月更數。呢個係參考單價，唔計入「當月成本」（長工成本以長工糧 Autopay 實數計，見 Summary）。B07 長工嘅 OT 行（isOt）唔計入呢條攤分——OT 更數（Σ ot_hours）唔會攤薄正更行嘅外判價分母，OT 行自己嘅外判價留空（唔攤月薪）。",
     "「月費」行／「收入調整（月結口徑）」行：逐盤收入一律以月結總表（buildMonthlyClose()）為準——月費／admin fee／特別計法嘅盤，逐更收客價加埋同月結口徑唔同，差額寫一行（正數＝月費，負數＝收入調整，例：構造盤／月費盤嘅更同時帶咗逐更收客價），所以 Roster「當月收入」逐盤加總永遠等於月結總表。",
     "Event 分盤（例：啟航1331 Event）：系統係獨立盤（獨立價卡），跟老闆 Postorder 習慣放喺母盤 block——物業名稱寫母盤簡稱、更份前加「Event」、排喺母盤後面；逐行收入唔合併，逐盤加總同月結總表一致。",
     "",
