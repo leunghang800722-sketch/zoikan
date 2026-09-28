@@ -34,7 +34,7 @@ import { processRosterUpload } from "@/lib/roster-upload/service";
 import { buildGuardFixPlan } from "@/lib/guard-fix/plan";
 import { applyGuardFixPlan, reparseAllActiveUploads } from "@/lib/guard-fix/apply";
 import { parsePostorderFromPairsCsv } from "@/lib/guard-fix/postorder";
-import { stepGuardFix, stepLongtermSettlement, stepReconcileApply } from "@/lib/month-close/one-click";
+import { runOneClickMonthClose, stepGuardFix, stepLongtermSettlement, stepReconcileApply } from "@/lib/month-close/one-click";
 import { U_TEAM_XLSX_PATH, parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
 import { round2 } from "@/lib/reports/money";
@@ -80,6 +80,19 @@ async function main() {
     const actor = await prisma.user.findFirst({ where: { role: { name: "老闆" } }, select: { id: true } });
     if (!actor) throw new Error("dev DB 揾唔到「老闆」角色用戶——db:seed 冇跑好");
     const actorUserId = actor.id;
+
+    // ------------------------------------------------------------- 2b. 8 月介紹費費率種子
+    // 老闆 2026-09-28 效能優化指令（自動化）：migration
+    // `20260926200000_wp_postorder_csv_aug_referral_rates` 嘅 DML 用
+    // brokers.code／sites.canonical_name 查 id 先 INSERT——`db:reset` 喺空 DB
+    // 跑 migrate 嗰陣 brokers／sites 仲未 seed，一行都插唔到（正式站有資料
+    // 所以冇呢個問題）。之前要人手補跑一次先至 gate:postorder-export-aug
+    // 介紹費對到 60,520；而家 gate 自己 seed 完重放一次同一份 SQL（WHERE
+    // NOT EXISTS，冪等，正式站已有費率唔會被覆蓋）。
+    console.log(`[${GATE_TAG}] === 2b. 重放 8 月介紹費費率 migration DML（seed 之後先對得到 brokers／sites）===`);
+    const referralRateSql = fs.readFileSync(path.resolve(REPO_ROOT, "prisma/migrations/20260926200000_wp_postorder_csv_aug_referral_rates/migration.sql"), "utf8");
+    const referralRateRows = await prisma.$executeRawUnsafe(referralRateSql);
+    console.log(`[${GATE_TAG}] 介紹費費率補插 ${referralRateRows} 行（已有嘅唔覆蓋）`);
 
     // ------------------------------------------------------------- 3. 36 檔上載
     console.log(`[${GATE_TAG}] === 3. 真實上載 36 個 8 月更表 xlsx ===`);
@@ -386,6 +399,20 @@ async function main() {
       console.log(`[${GATE_TAG}] FAIL —— 淨係對到 ${compared}/${fixture.length} 人`);
       process.exitCode = 1;
     }
+
+    // ------------------------------------------------------------- 9. 一鍵結算
+    // 老闆 2026-09-28 效能優化指令（自動化）：跑埋一次一鍵結算（同正式站撳
+    // 掣同一條 `runOneClickMonthClose()`，全部 step 冪等），令
+    // `gate:postorder-export-aug` 有本月 report_json 可以對 Summary 總收入／
+    // 成本／毛利，唔使人手先去頁面撳一次。放喺上面長工糧比對之後，唔影響
+    // 已經印出嘅 PASS／FAIL 判斷（一鍵結算內部重算長工糧係同一輸入、同一
+    // 結果）。
+    console.log(`[${GATE_TAG}] === 9. 一鍵結算 runOneClickMonthClose(2026-08)（俾 gate:postorder-export-aug 對報告）===`);
+    const oneClickRun = await prisma.monthCloseRun.create({ data: { month: AUG_MONTH, status: "running", startedById: actorUserId, applyStartedAt: new Date() }, select: { id: true } });
+    await runOneClickMonthClose(oneClickRun.id, AUG_MONTH, actorUserId, null);
+    const oneClickFinal = await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: oneClickRun.id }, select: { status: true, errorMessage: true } });
+    console.log(`[${GATE_TAG}] 一鍵結算 ${oneClickFinal.status}${oneClickFinal.errorMessage ? `：${oneClickFinal.errorMessage}` : ""}`);
+    if (oneClickFinal.status !== "done") process.exitCode = 1;
   } finally {
     await prisma.$disconnect();
   }

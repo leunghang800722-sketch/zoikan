@@ -55,7 +55,3 @@ export async function aiQuery<T extends QueryResultRow = QueryResultRow>(
   const p = getPool();
   return p.query<T>(sql, params);
 }
-
-export function isAiDbConfigured(): boolean {
-  return Boolean(process.env.AI_DATABASE_URL);
-}

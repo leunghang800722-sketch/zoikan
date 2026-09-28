@@ -11,17 +11,6 @@
  * tel_raw 組合）覆核之後嘅決定。`identityLabel` 純粹俾 plan.json 內部
  * 對照用（唔係識別碼意義上嘅敏感值，但都係姓名，一樣淨係存喺呢個
  * gitignored 檔案）。 */
-export type GuardFixActionKind =
-  | "link"
-  | "create"
-  | "create_minimal"
-  | "needs_boss"
-  | "set_longterm"
-  | "set_longterm_post"
-  | "set_referral"
-  | "set_referral_inferred"
-  | "set_visa";
-
 export interface GuardFixCellRef {
   /** 盤名（`sites.canonical_name`，搵唔到就用檔內盤名原文）——plan-
    * summary 用嚟印「盤＋格數」，唔係 PII。 */

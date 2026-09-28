@@ -26,9 +26,3 @@ export const HK_STATUTORY_HOLIDAYS_2026: readonly string[] = [
   "2026-12-22", // 冬節或聖誕節（僱主可選其一；呢度預設收 12/22，僱主揀聖誕節就用 12/25，逐間公司唔同，未做逐盤/逐公司揀邊日嘅配置）
   "2026-12-26", // 聖誕節後第一個周日以外的假日
 ] as const;
-
-/** 呢個月入面有邊幾日係法定假日（ISO string 陣列，`monthStartIso`／
- * `monthEndIso` 含首尾）。 */
-export function hkStatutoryHolidaysInRange(startIso: string, endIso: string): string[] {
-  return HK_STATUTORY_HOLIDAYS_2026.filter((d) => d >= startIso && d <= endIso);
-}

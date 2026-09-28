@@ -10,7 +10,7 @@ import type { PrismaClient } from "@prisma/client";
 import { matchGuard, buildGuardMatchIndex, matchBroker, matchSite, type BrokerCandidate, type GuardMatchIndex, type SiteCandidate } from "@/lib/roster-upload/match";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
-import { buildUTeamIndex, buildCrossCheckIndex, canonicalHkid, type UTeamRow, type CrossCheckRow, type UTeamIndex, type CrossCheckIndex } from "@/lib/guard-fix/sources";
+import { buildUTeamIndex, canonicalHkid, type UTeamRow, type UTeamIndex } from "@/lib/guard-fix/sources";
 import { derivePostorderLongtermPostsFromPostorderCsv, type PostorderLongtermPostCell, type PostorderReferralRow, type PostorderVisaResult } from "@/lib/guard-fix/postorder";
 import { inferReferralBrokerFromRosters } from "@/lib/pricing/longterm-settlement";
 import type {
@@ -171,13 +171,6 @@ function findByTel(telRaw: string | null, telIndex: Map<string, Set<string>>): L
   return { method: "電話正規化後相同", guardId: [...ids][0]! };
 }
 
-function findByCrossCheck(nameRaw: string, crossCheck: CrossCheckIndex, validGuardIds: Set<string>): LinkMethodResult | null {
-  const candidates = (crossCheck.byName.get(nameRaw) ?? []).filter((r) => r.systemId && validGuardIds.has(r.systemId));
-  const ids = new Set(candidates.map((r) => r.systemId!));
-  if (ids.size !== 1) return null;
-  return { method: "核對表主檔同一系統 id", guardId: [...ids][0]! };
-}
-
 function findByHkid(staffNoRaw: string | null, nameRaw: string, uTeam: UTeamIndex, hkidIndex: Map<string, Set<string>>): LinkMethodResult | null {
   const uNumber = staffNoRaw ? normalizeStaffNumber(staffNoRaw) : null;
   const uRow = (uNumber && uTeam.byUNumber.get(uNumber)) || (uTeam.byName.get(nameRaw)?.length === 1 ? uTeam.byName.get(nameRaw)![0] : null);
@@ -218,9 +211,6 @@ export interface BuildGuardFixPlanOptions {
   /** U Team 名單 rows（由 xlsx 解析、記憶體，caller 負責攞——script 讀
    * 本機檔案路徑，API 讀現用 `staff_list_uploads` 嘅 bytes 重新解析）。 */
   uTeamRows: UTeamRow[];
-  /** 核對表「主檔（每人一行）」rows（可選——API 暫時冇呢個上載流程，
-   * 淨係 script 帶）。 */
-  crossCheckRows?: CrossCheckRow[];
   /** dev fallback：DB 冇呢個月 active 上載就讀 `records.jsonl`（script
    * 專用，要 `--allow-jsonl-fallback`；API 一律唔傳，冇上載直接
    * `NoActiveUploadsError`）。 */
@@ -474,7 +464,6 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
   const brokerCodeById = new Map(brokersRaw.map((b) => [b.id, b.code]));
 
   const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw, matchOverrides: matchOverridesRaw });
-  const validGuardIds = new Set(guardsRaw.map((g) => g.id));
 
   const telIndex = new Map<string, Set<string>>();
   const addTel = (tel: string | null, guardId: string) => {
@@ -510,7 +499,6 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
   }
 
   const uTeam = buildUTeamIndex(opts.uTeamRows);
-  const crossCheck = buildCrossCheckIndex(opts.crossCheckRows ?? []);
 
   let sourceMode: GuardFixPlan["sourceMode"];
   let cells = await loadFromDbRows(prisma, month);
@@ -548,9 +536,8 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     const defaultBrokerCode = resolveDefaultBrokerCode(representativeCell, brokerCandidates, brokerCodeById, siteAssignmentBrokerCodeBySite, siteLabel);
 
     const byTel = findByTel(identity.telRaw, telIndex);
-    const byCrossCheck = findByCrossCheck(identity.nameRaw, crossCheck, validGuardIds);
     const byHkid = findByHkid(identity.staffNoRaw, identity.nameRaw, uTeam, hkidIndex);
-    const methodsFound = [byTel, byCrossCheck, byHkid].filter((x): x is LinkMethodResult => x !== null);
+    const methodsFound = [byTel, byHkid].filter((x): x is LinkMethodResult => x !== null);
     const distinctGuardIds = new Set(methodsFound.map((m) => m.guardId));
 
     if (distinctGuardIds.size > 1) {

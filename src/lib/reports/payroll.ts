@@ -36,14 +36,25 @@ const UNATTRIBUTED_BROKER_LABEL = "未歸屬結算單位";
 // 唔排除就會「舊人＋新人」兩份糧都計。7 月冇 cancelled 記錄，數字唔變。
 export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Promise<BrokerPayrollTotal[]> {
   const { start, end } = monthRange(month);
-  const brokers = await prisma.broker.findMany({ orderBy: { code: "asc" } });
-  const out: BrokerPayrollTotal[] = [];
-  for (const b of brokers) {
-    const agg = await prisma.shiftRecord.aggregate({
-      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
+  // 效能優化（老闆 2026-09-28 指令）：原本逐雞頭打一條 aggregate（~12 條），
+  // 改做一條 groupBy(settlementBrokerId) 一次過攞齊（where 條件一樣，加總
+  // 一樣由 DB Decimal 精確做）；`settlement_broker_id IS NULL` 嗰組亦係同一
+  // 條 query 攞返（下面「未歸屬結算單位」行）。冇記錄嘅雞頭喺 groupBy 唔會
+  // 出現 ≡ 原本 count=0／wage=0／fee=0 跳過，結果逐行不變。
+  const [brokers, aggRows] = await Promise.all([
+    prisma.broker.findMany({ orderBy: { code: "asc" } }),
+    prisma.shiftRecord.groupBy({
+      by: ["settlementBrokerId"],
+      where: { recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
       _count: { _all: true },
       _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
-    });
+    }),
+  ]);
+  const aggByBroker = new Map(aggRows.map((r) => [r.settlementBrokerId, r]));
+  const out: BrokerPayrollTotal[] = [];
+  for (const b of brokers) {
+    const agg = aggByBroker.get(b.id);
+    if (!agg) continue;
     const wage = round2(n(agg._sum.guardWageSnapshot));
     const fee = round2(n(agg._sum.brokerFeeSnapshot));
     if (agg._count._all === 0 && wage === 0 && fee === 0) continue;
@@ -66,12 +77,8 @@ export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Pr
   // 可能出現。呢種記錄一律唔准再靜靜喺報表消失——逐 broker 查完之後，
   // 加多一次獨立查詢，一有就加一行「未歸屬結算單位」（金額計入 Total，
   // 等會計一眼見到有錢未歸邊個雞頭）。
-  const unattributedAgg = await prisma.shiftRecord.aggregate({
-    where: { settlementBrokerId: null, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
-    _count: { _all: true },
-    _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
-  });
-  if (unattributedAgg._count._all > 0) {
+  const unattributedAgg = aggByBroker.get(null);
+  if (unattributedAgg && unattributedAgg._count._all > 0) {
     const wage = round2(n(unattributedAgg._sum.guardWageSnapshot));
     const fee = round2(n(unattributedAgg._sum.brokerFeeSnapshot));
     out.push({
@@ -148,15 +155,27 @@ export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_RE
   ]);
 
   // 逐安員明細（每個 broker 一個 sheet），方便人手覆核
-  const brokers = await prisma.broker.findMany();
+  // 效能優化（老闆 2026-09-28 指令）：逐雞頭 findMany 改做一條攞齊成月記錄
+  // 再喺記憶體按 settlementBrokerId 分組（where 一樣；每組內記錄相對次序同
+  // 原本逐雞頭查一樣係 DB 自然次序）。
+  const [brokers, allRecords] = await Promise.all([
+    prisma.broker.findMany(),
+    prisma.shiftRecord.findMany({
+      where: { settlementBrokerId: { not: null }, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
+      include: { guard: true },
+    }),
+  ]);
+  const recordsByBroker = new Map<string, typeof allRecords>();
+  for (const r of allRecords) {
+    const list = recordsByBroker.get(r.settlementBrokerId!);
+    if (list) list.push(r);
+    else recordsByBroker.set(r.settlementBrokerId!, [r]);
+  }
   // B1-7：逐更來源明細（additive 新 sheet，唔改上面任何一個既有 sheet/
   // 欄位）——同一次查詢順便收集，唔加多一round DB 查詢。
   const sourceDetailRows: { date: string; brokerCode: string; guardName: string; guardStaffNo: string; source: string }[] = [];
   for (const b of brokers) {
-    const records = await prisma.shiftRecord.findMany({
-      where: { settlementBrokerId: b.id, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
-      include: { guard: true },
-    });
+    const records = recordsByBroker.get(b.id) ?? [];
     if (records.length === 0) continue;
     const byGuard = new Map<string, { name: string; staffNo: string; shifts: number; amount: number }>();
     for (const r of records) {

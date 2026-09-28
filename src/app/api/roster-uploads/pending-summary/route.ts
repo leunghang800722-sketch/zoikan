@@ -28,12 +28,22 @@ export async function GET(req: Request) {
       select: { id: true, siteId: true, siteNameRaw: true, month: true },
     });
 
+    // 效能優化（老闆 2026-09-28 指令）：決定記錄一次過攞齊（原本逐上載一條）。
+    const allDecisions = uploads.length
+      ? await prisma.rosterReconcileDecision.findMany({ where: { uploadId: { in: uploads.map((u) => u.id) } }, select: { uploadId: true, reconcileKey: true } })
+      : [];
+    const decidedByUpload = new Map<string, Set<string>>();
+    for (const d of allDecisions) {
+      const set = decidedByUpload.get(d.uploadId);
+      if (set) set.add(d.reconcileKey);
+      else decidedByUpload.set(d.uploadId, new Set([d.reconcileKey]));
+    }
     const entries: { site_id: string | null; site_name: string; upload_id: string; month: string; pending_count: number }[] = [];
     for (const u of uploads) {
       const { items } = await reconcileUpload(u.id);
       // 驗收修正：同 apply 嘅「未處理」定義一致——已經有 keep_system／
       // exception 決定嘅項唔再計做待處理。
-      const decided = new Set((await prisma.rosterReconcileDecision.findMany({ where: { uploadId: u.id }, select: { reconcileKey: true } })).map((d) => d.reconcileKey));
+      const decided = decidedByUpload.get(u.id) ?? new Set<string>();
       const pending = items.filter((i) => i.category !== "match" && !decided.has(i.key)).length;
       if (pending > 0) entries.push({ site_id: u.siteId, site_name: u.siteNameRaw, upload_id: u.id, month: u.month.toISOString().slice(0, 7), pending_count: pending });
     }

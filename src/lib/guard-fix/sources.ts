@@ -15,7 +15,6 @@ import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
 
 export const U_TEAM_XLSX_PATH = "data/2026-09/msg-file/U Team - People template 20260824.xlsx";
-export const CROSS_CHECK_XLSX_PATH = "/Users/macbookpro/Desktop/MSG /在勤員工資料核對表-2026-09-19（全部保留版）.xlsx";
 
 /** U Team 名單一行——欄位 index（0-based，任務指示已經核實）：
  * 員工編號(13)／中文姓名(15)／姓名（顯示名）(2)／電話號碼(9)／
@@ -150,53 +149,4 @@ export function buildUTeamIndex(rows: UTeamRow[]): UTeamIndex {
     if (row.displayName && row.displayName !== row.nameZh) addName(row.displayName, row);
   }
   return { byUNumber, byName };
-}
-
-/** 核對表「主檔（每人一行）」一行——欄位 index（0-based，peek 過
- * header 核實）：系統id(0)／中文姓名(1)／U編號(5)／MP編號(6)／
- * 其他編號(9)／已取消嘅號(10)／英文名(11)／身份證(12)。 */
-export interface CrossCheckRow {
-  systemId: string | null; // = guards.id
-  nameZh: string | null;
-  uNumber: string | null;
-  hkid: string | null;
-}
-
-export async function loadCrossCheckMainSheet(filePath: string = CROSS_CHECK_XLSX_PATH): Promise<CrossCheckRow[]> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
-  const ws = wb.getWorksheet("主檔（每人一行）");
-  if (!ws) throw new Error(`核對表搵唔到 sheet「主檔（每人一行）」：${filePath}`);
-  const rows: CrossCheckRow[] = [];
-  for (let r = 2; r <= ws.rowCount; r++) {
-    const row = ws.getRow(r);
-    const systemId = cellText(row, 1); // idx0
-    const nameZh = cellText(row, 2); // idx1
-    const uNumberRaw = cellText(row, 6); // idx5
-    const hkidRaw = cellText(row, 13); // idx12
-    if (!systemId && !nameZh) continue;
-    rows.push({
-      systemId,
-      nameZh,
-      uNumber: uNumberRaw ? normalizeStaffNumber(uNumberRaw) : null,
-      hkid: canonicalHkid(hkidRaw),
-    });
-  }
-  return rows;
-}
-
-export interface CrossCheckIndex {
-  byName: Map<string, CrossCheckRow[]>;
-}
-
-export function buildCrossCheckIndex(rows: CrossCheckRow[]): CrossCheckIndex {
-  const byName = new Map<string, CrossCheckRow[]>();
-  for (const row of rows) {
-    if (!row.nameZh) continue;
-    const key = row.nameZh.trim();
-    if (!key) continue;
-    if (!byName.has(key)) byName.set(key, []);
-    byName.get(key)!.push(row);
-  }
-  return { byName };
 }
