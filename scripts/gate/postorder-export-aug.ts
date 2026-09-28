@@ -90,6 +90,21 @@ function classify(diff: number, known: { expected: number } | undefined): Status
 async function main() {
   console.log(`[gate:postorder-export-aug] buildPostorderWorkbook(${AUG_MONTH.toISOString().slice(0, 7)}) 產生緊…`);
   const result = await buildPostorderWorkbook(AUG_MONTH);
+
+  // Opus 5.5 覆核應修 c：Roster 0 行＝dev DB 根本未載 8 月 shift_records
+  // （呢個 gate 嘅前置條件——見檔頭註解——係已經行完 db:reset/seed→
+  // 8 月上載→guard-fix→重新對數全月→介紹費→長工糧成套流程；未行過呢套
+  // 流程嘅 dev DB 逐雞頭/逐盤全部係「系統缺」）。呢種情況下面成套 diff
+  // 邏輯會逐項噴 FAIL（83 項見過），淨係擾亂視線、冇任何診斷價值——
+  // 直接喺呢度截停，出一句明確嘅指示，等操作員知道要先跑
+  // `npm run gate:ltpay-aug`（呢個 script 會自己 reset→開 8 月→上載→
+  // guard-fix→對數→長工糧，跑完先至有嘢俾呢個 gate 比對）。
+  if (result.rosterRowCount === 0) {
+    console.error("[gate:postorder-export-aug] FAIL — Roster 0 行：dev DB 未載 8 月數據，先跑 npm run gate:ltpay-aug。");
+    process.exitCode = 1;
+    return;
+  }
+
   fs.mkdirSync(path.dirname(OUT_XLSX), { recursive: true });
   await result.workbook.xlsx.writeFile(OUT_XLSX);
   console.log(`[gate:postorder-export-aug] workbook 已寫去 ${OUT_XLSX}（${result.rosterRowCount} 行 Roster、4 個 sheet）`);
