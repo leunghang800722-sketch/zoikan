@@ -1524,7 +1524,15 @@ view（`zoikan_ai_ro` 淨係 `GRANT ... ON SCHEMA ai`，public schema 新表
 - `dailyRateOnDate()`／`computeNetBasic()`——日薪＝月薪÷當月曆日數；
   `contractSegmentForDate()` 揀返嗰日所屬合約段，月中轉約按日拆。
 - `computeMpf()`／`checkMpfExemption()`——EE/ER 各 `min(Gross×5%,1500)`；
-  Gross<7,100 僱員免（僱主照供）；≥65 歲／入職<60 日全免。
+  Gross<7,100 僱員免（僱主照供）；≥65 歲全免；`monthStart <
+  MPF_FIRST_MONTH_RULE_FROM`（即 8 月以前）入職<60 日全免（舊規則）。
+  **§25.6（老闆 2026-09-28 追加決定 #3，`monthStart >= 2026-09-01` 起
+  生效）**：唔再用「入職未滿 60 日全免」——入職日喺本月內＝首月，
+  `mpfEe=0`、`mpfEr=min(Gross×5%,1500)`（`exemptReason:"first_month_ee"`），
+  之後月份正常（EE＋ER 都供，Gross<7,100／≥65 歲規則不變）。呢個判斷
+  睇傳入嘅 `monthStart`，`aggregate.ts` 逐月 `buildLongtermPayrollInputs()`
+  傳返個月月首；老闆冇講第二個月點計，跟法例精神當正常供款（假設，
+  非逐字確認）。
 - `slAccrued()`／`slSegmentVerdict()`／`sl45Payment()`——病假：做滿 1
   個月先開始儲、每月 2 日、上限 120 日；要攞 4/5 必須「結餘夠」＋
   「連續 ≥4 日」＋「有醫生紙」（`doctorNoteVerified` 由人手輸入項提供，
@@ -1545,9 +1553,9 @@ inputs` kind＝`special_allowance`（勤工獎）／`other_allowance`（賣假�
 `P2-版面重設計計劃.md` §25.3）。病假每月累積 2 日（`SL_ACCRUAL_
 PER_MONTH`）同樣已經老闆確認鎖死，唔准手多改。
 
-`tests/longterm-payroll-compute.test.ts`：37 條單元測試（合成數據，
-邊界案例包括：MPF 60 日邊界、試用期完結日當日唔算過咗、病假連續日數
-夾 RD、年假結餘唔可以負）。
+`tests/longterm-payroll-compute.test.ts`：合成數據單元測試（邊界案例
+包括：MPF 60 日邊界、§25.6 MPF 首月 8 月 vs 9 月分界、試用期完結日當日
+唔算過咗、病假連續日數夾 RD、年假結餘唔可以負）。
 
 ### Maxwell 名單導入
 

@@ -29,6 +29,7 @@ import {
   computeAutopay,
   MPF_CAP,
   MPF_MIN_GROSS,
+  MPF_FIRST_MONTH_RULE_FROM,
   SL_ACCRUAL_PER_MONTH,
 } from "@/lib/longterm-payroll/compute";
 
@@ -149,6 +150,73 @@ describe("MPF（§14 規則 9）", () => {
     expect(diffDaysInclusive(hireDate, monthEnd)).toBe(60);
     const r = checkMpfExemption({ ageAtMonthEnd: 30, hireDate, monthEnd });
     expect(r.exempt).toBe(false);
+  });
+});
+
+describe("MPF 首月（§25.6，老闆 2026-09-28 追加決定 #3；monthStart 分界＝MPF_FIRST_MONTH_RULE_FROM）", () => {
+  it("常數＝2026-09-01", () => {
+    expect(MPF_FIRST_MONTH_RULE_FROM).toBe("2026-09-01");
+  });
+
+  it("8 月（monthStart<分界）：入職未滿 60 日照舊全免（舊規則不變）", () => {
+    const monthStart = toUtcDate("2026-08-01");
+    const monthEnd = toUtcDate("2026-08-31");
+    const hireDate = toUtcDate("2026-08-10"); // 入職未滿 60 日
+    const r = computeMpf(20000, { ageAtMonthEnd: 30, hireDate, monthEnd, monthStart });
+    expect(r.mpfEe).toBe(0);
+    expect(r.mpfEr).toBe(0);
+    expect(r.exemptReason).toBe("under60days");
+  });
+
+  it("9 月（monthStart>=分界）：入職日喺本月內＝首月——員工免供，公司照供 ER 5%（封頂 1500）", () => {
+    const monthStart = toUtcDate("2026-09-01");
+    const monthEnd = toUtcDate("2026-09-30");
+    const hireDate = toUtcDate("2026-09-10"); // 入職日喺 9 月之內
+    const r = computeMpf(20000, { ageAtMonthEnd: 30, hireDate, monthEnd, monthStart });
+    expect(r.mpfEe).toBe(0);
+    expect(r.mpfEr).toBe(round2(Math.min(20000 * 0.05, MPF_CAP)));
+    expect(r.exemptReason).toBe("first_month_ee");
+  });
+
+  it("9 月：首月 ER 都要封頂 1500", () => {
+    const monthStart = toUtcDate("2026-09-01");
+    const monthEnd = toUtcDate("2026-09-30");
+    const hireDate = toUtcDate("2026-09-01");
+    const r = computeMpf(40000, { ageAtMonthEnd: 30, hireDate, monthEnd, monthStart });
+    expect(r.mpfEe).toBe(0);
+    expect(r.mpfEr).toBe(MPF_CAP);
+    expect(r.exemptReason).toBe("first_month_ee");
+  });
+
+  it("9 月：入職日唔喺本月內（舊員工）＝跟正常規則（EE＋ER 都供，冇 60 日全免）", () => {
+    const monthStart = toUtcDate("2026-09-01");
+    const monthEnd = toUtcDate("2026-09-30");
+    const hireDate = toUtcDate("2026-08-25"); // 上個月先入職，9 月已經係第二個月，唔算首月，8 月 30-31 日「未滿 60 日」舊規則唔再套用
+    const r = computeMpf(20000, { ageAtMonthEnd: 30, hireDate, monthEnd, monthStart });
+    expect(r.mpfEe).toBe(round2(20000 * 0.05));
+    expect(r.mpfEr).toBe(round2(20000 * 0.05));
+    expect(r.exemptReason).toBeNull();
+  });
+
+  it("9 月：Gross<7,100 淨係免 EE，同首月規則獨立（唔係首月嗰個先套用）", () => {
+    const monthStart = toUtcDate("2026-09-01");
+    const monthEnd = toUtcDate("2026-09-30");
+    const hireDate = toUtcDate("2026-01-01"); // 舊員工
+    const gross = MPF_MIN_GROSS - 1;
+    const r = computeMpf(gross, { ageAtMonthEnd: 30, hireDate, monthEnd, monthStart });
+    expect(r.mpfEe).toBe(0);
+    expect(r.mpfEr).toBe(round2(gross * 0.05));
+    expect(r.exemptReason).toBe("low_gross");
+  });
+
+  it("9 月：≥65 歲全免優先過首月規則", () => {
+    const monthStart = toUtcDate("2026-09-01");
+    const monthEnd = toUtcDate("2026-09-30");
+    const hireDate = toUtcDate("2026-09-05"); // 首月入職但都已經 ≥65
+    const r = computeMpf(20000, { ageAtMonthEnd: 65, hireDate, monthEnd, monthStart });
+    expect(r.mpfEe).toBe(0);
+    expect(r.mpfEr).toBe(0);
+    expect(r.exemptReason).toBe("over65");
   });
 });
 
