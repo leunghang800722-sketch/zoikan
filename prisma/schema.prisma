@@ -409,6 +409,12 @@ model Guard {
   bankName             String?   @map("bank_name")
   bankAccountNo        String?   @map("bank_account_no")
   bankPayeeName        String?   @map("bank_payee_name")
+  // WP-BOSS5 §25.4（老闆 2026-09-28 決定 6）：BOCHK Payroll Editor 明細
+  // 要「員工賬戶銀行編號」——3 位 HKICL 清算銀行編號（`src/lib/longterm-
+  // payroll/hkicl-bank-codes.ts` 俾建議下拉，逐個核實過，唔會憑
+  // `bankName` 自動填）。同 `bankName`/`bankAccountNo`/`bankPayeeName`
+  // 一組 PII field group「安員銀行資料」。
+  bankCode             String?   @map("bank_code")
   blacklistCheckResult String?   @map("blacklist_check_result") // clear／flagged／pending，zod 白名單管
   blacklistCheckDate   DateTime? @map("blacklist_check_date") @db.Date
 

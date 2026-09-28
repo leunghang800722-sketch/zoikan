@@ -44,6 +44,10 @@ export interface RepriceRecordInput {
   clientRateSnapshot: unknown;
   guardWageSnapshot: unknown;
   brokerFeeSnapshot: unknown;
+  /** WP-BOSS5 §25.1：`recordType==="ot"` 呢條記錄嘅 OT 時數，傳俾
+   * resolver 做「每小時价 × 時數」（淨係 8 月起生效，見
+   * `resolve-rate.ts` `OT_HOURLY_PRICING_FROM`）。 */
+  otHours?: unknown;
 }
 
 export interface RepriceLookups {
@@ -115,6 +119,7 @@ export function decideReprice(record: RepriceRecordInput, lookups: RepriceLookup
     workDate: record.workDate,
     isExternal: record.isExternal,
     recordType: record.recordType ?? "shift",
+    otHours: numOrNull(record.otHours),
   });
 
   let afterClient: number | null;
@@ -194,6 +199,7 @@ export async function repriceMonthForSites(month: Date, siteIds: string[], actor
       clientRateSnapshot: true,
       guardWageSnapshot: true,
       brokerFeeSnapshot: true,
+      otHours: true,
     },
   });
   if (records.length === 0) return { scanned: 0, changed: 0 };

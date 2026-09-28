@@ -46,6 +46,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         workDate: before.workDate,
         isExternal: before.isExternal,
         recordType: before.recordType as ShiftPricingRecordType,
+        // WP-BOSS5 §25.1：OT 卡＝每小時价。
+        otHours: before.otHours !== null ? Number(before.otHours) : null,
       });
       if (before.clientRateSnapshot === null) data.clientRateSnapshot = pricing.clientRate;
       if (before.guardWageSnapshot === null) data.guardWageSnapshot = pricing.guardWage;

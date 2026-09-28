@@ -330,3 +330,193 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
     expect(result.siteCostTotal).toBe(3240); // 3 × 750 + 990
   });
 });
+
+// WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT 折入 Roster／PostOrder。
+// 獨立 describe＋獨立 clearAll()，避免同上面 describe 嘅精確金額斷言（例如
+// siteRevenueTotal===4050）互相污染——OT 行任何金額都會計落 siteRevenueTotal。
+describe("buildPostorderWorkbook：§25.7 OT 折入 Roster（合成小月份）", () => {
+  let siteId: string;
+  let otShiftTypeId: string;
+  let regularShiftTypeId: string;
+  let brokerId: string;
+
+  beforeAll(async () => {
+    await clearAll();
+
+    const site = await prisma.site.create({
+      data: { canonicalName: "測試物業-己", aliases: ["己"], clientName: "測試客戶己", billingModel: "per_shift", inScope: true, status: "active", createdBy: "test" },
+    });
+    siteId = site.id;
+
+    // OT 更種——label「1Hr OT」，同真 Postorder「1Hr OT，84.85／更」個案一致
+    // （見 P2-版面重設計計劃.md §25.7）。
+    const otShiftType = await prisma.shiftType.create({
+      data: { siteId, code: "OT1", label: "1Hr OT", billingGroup: "per_shift", createdBy: "test" },
+    });
+    otShiftTypeId = otShiftType.id;
+    const regularShiftType = await prisma.shiftType.create({
+      data: { siteId, code: "N", label: "夜更", billingGroup: "per_shift", createdBy: "test" },
+    });
+    regularShiftTypeId = regularShiftType.id;
+
+    const broker = await prisma.broker.create({
+      data: { code: "TB3", name: "測試雞頭三", kind: "broker", settlementType: "cash", createdBy: "test" },
+    });
+    brokerId = broker.id;
+
+    const guard = await prisma.guard.create({
+      data: { nameZh: "測試安員丁", employmentType: "cash_casual", status: "active", createdBy: "test" },
+    });
+
+    // 正更（同一盤，唔同更種）：確保 OT 行同正更行分開兩行，唔會混埋。
+    await prisma.shiftRecord.create({
+      data: { workDate: new Date(Date.UTC(2025, 7, 9)), siteId, shiftTypeId: regularShiftTypeId, guardId: guard.id, settlementBrokerId: brokerId, recordType: "shift", status: "confirmed", clientRateSnapshot: 900, guardWageSnapshot: 700, brokerFeeSnapshot: 50, createdBy: "test" },
+    });
+
+    // §25.7 例子：2 小時 OT，snapshot 記錄金額 169.70（§25.1 之後 snapshot
+    // 已經係「呢條記錄嘅金額」＝卡金額×otHours，唔係每小時价）→ Roster
+    // 行更數應該＝2（Σ ot_hours）、上單價應該＝169.70÷2＝84.85（每小時价）。
+    await prisma.shiftRecord.create({
+      data: { workDate: new Date(Date.UTC(2025, 7, 10)), siteId, shiftTypeId: otShiftTypeId, guardId: guard.id, settlementBrokerId: brokerId, recordType: "ot", otHours: 2, status: "confirmed", clientRateSnapshot: 169.7, guardWageSnapshot: 100, brokerFeeSnapshot: 0, createdBy: "test" },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.shiftRecord.deleteMany({ where: { siteId } });
+  });
+
+  it("Roster：OT 行用 OT 更種 label（1Hr OT）、更數＝Σ ot_hours＝2、上單價＝snapshot÷otHours＝84.85", async () => {
+    const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
+    const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
+    const rows: Record<number, unknown[]> = {};
+    for (let r = 2; r <= ws.rowCount; r++) rows[r] = ws.getRow(r).values as unknown[];
+    const otRow = Object.values(rows).find((v) => v[3] === "1Hr OT");
+    expect(otRow, "OT 行要搵到（更份/時段＝1Hr OT）").toBeTruthy();
+    expect(otRow![4]).toBe(84.85); // 上單價
+    const tailStart = 6 + 31 * 7 + 1; // 取消欄之後：取消／甩更／當月更數／…
+    const otRowNumber = Number(Object.entries(rows).find(([, v]) => v[3] === "1Hr OT")![0]);
+    const otRowFull = ws.getRow(otRowNumber);
+    expect(otRowFull.getCell(tailStart + 2).value).toBe(2); // 當月更數
+    expect(otRowFull.getCell(tailStart + 3).value).toBe(169.7); // 當月收入
+  });
+
+  it("正更行唔受 OT 行影響：更數照樣＝1、單價照樣＝900（兩行獨立分組）", async () => {
+    const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
+    const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
+    const rows: Record<number, unknown[]> = {};
+    for (let r = 2; r <= ws.rowCount; r++) rows[r] = ws.getRow(r).values as unknown[];
+    const regularRow = Object.values(rows).find((v) => v[3] === "夜更");
+    expect(regularRow, "正更行要搵到").toBeTruthy();
+    expect(regularRow![4]).toBe(900);
+  });
+
+  it("PostorderSiteRevenue：otRevenue/otShifts 係 revenue/shifts 嘅子集（revenue 含 OT）", async () => {
+    const result = await buildPostorderWorkbook(TEST_MONTH);
+    const site = result.siteRevenue.find((r) => r.siteId === siteId)!;
+    expect(site).toBeTruthy();
+    expect(site.revenue).toBe(1069.7); // 900（正更）+ 169.70（OT）
+    expect(site.otRevenue).toBe(169.7);
+    expect(site.otShifts).toBe(2);
+    expect(site.shifts).toBe(3); // 1（正更）+ 2（OT 更數＝Σ ot_hours）
+  });
+});
+
+// 驗收修正（Opus 5.5，WP-BOSS5 §25.7 追蹤）：B07 長工 OT 行唔准計入
+// `longtermShiftsByGuard`／`totalB07ShiftsByGuard`——獨立 describe＋獨立
+// clearAll()，避免同其他 describe 嘅精確金額斷言互相污染。
+describe("buildPostorderWorkbook：B07 長工 OT 行外判價唔攤薄正更行（Opus 5.5 驗收修正）", () => {
+  let siteId: string;
+  let regularShiftTypeId: string;
+  let otShiftTypeId: string;
+  let brokerLongtermId: string;
+  let guardId: string;
+
+  beforeAll(async () => {
+    await clearAll();
+
+    const site = await prisma.site.create({
+      data: { canonicalName: "測試物業-庚", aliases: ["庚"], clientName: "測試客戶庚", billingModel: "per_shift", inScope: true, status: "active", createdBy: "test" },
+    });
+    siteId = site.id;
+
+    const regularShiftType = await prisma.shiftType.create({
+      data: { siteId, code: "N", label: "夜更", billingGroup: "per_shift", createdBy: "test" },
+    });
+    regularShiftTypeId = regularShiftType.id;
+    const otShiftType = await prisma.shiftType.create({
+      data: { siteId, code: "OT1", label: "1Hr OT", billingGroup: "per_shift", createdBy: "test" },
+    });
+    otShiftTypeId = otShiftType.id;
+
+    const brokerLongterm = await prisma.broker.upsert({
+      where: { code: "B07" },
+      update: {},
+      create: { code: "B07", name: "B07", kind: "internal_longterm", settlementType: "autopay", createdBy: "test" },
+    });
+    brokerLongtermId = brokerLongterm.id;
+
+    // 月薪 26000，本月 26 個正更（月薪÷26＝1000，方便斷言）。
+    const guard = await prisma.guard.create({
+      data: { nameZh: "測試安員戊", employmentType: "longterm_autopay", monthlySalary: 26000, status: "active", createdBy: "test" },
+    });
+    guardId = guard.id;
+
+    // 26 正更（2025-08 有 31 日，1..26 日夠用）。
+    for (let day = 1; day <= 26; day++) {
+      await prisma.shiftRecord.create({
+        data: {
+          workDate: new Date(Date.UTC(2025, 7, day)),
+          siteId,
+          shiftTypeId: regularShiftTypeId,
+          guardId,
+          settlementBrokerId: brokerLongtermId,
+          recordType: "shift",
+          status: "confirmed",
+          clientRateSnapshot: null,
+          guardWageSnapshot: 0,
+          brokerFeeSnapshot: 0,
+          createdBy: "test",
+        },
+      });
+    }
+    // 3.5 小時 OT（獨立更種，同正更分開一行）。
+    await prisma.shiftRecord.create({
+      data: {
+        workDate: new Date(Date.UTC(2025, 7, 27)),
+        siteId,
+        shiftTypeId: otShiftTypeId,
+        guardId,
+        settlementBrokerId: brokerLongtermId,
+        recordType: "ot",
+        otHours: 3.5,
+        status: "confirmed",
+        clientRateSnapshot: null,
+        guardWageSnapshot: 0,
+        brokerFeeSnapshot: 0,
+        createdBy: "test",
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.shiftRecord.deleteMany({ where: { siteId } });
+  });
+
+  it("正更行外判價＝月薪÷26 正更更數（唔受 3.5 小時 OT 攤薄）、OT 行外判價留空", async () => {
+    const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
+    const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
+    const rows: Record<number, unknown[]> = {};
+    for (let r = 2; r <= ws.rowCount; r++) rows[r] = ws.getRow(r).values as unknown[];
+
+    const regularRow = Object.values(rows).find((v) => v[3] === "夜更");
+    const otRow = Object.values(rows).find((v) => v[3] === "1Hr OT");
+    expect(regularRow, "正更行要搵到").toBeTruthy();
+    expect(otRow, "OT 行要搵到").toBeTruthy();
+
+    // 26000÷26＝1000——如果 OT 嘅 3.5 小時錯誤咁計落分母（26+3.5），
+    // 呢個數會變 26000/29.5≈881.36，同呢個斷言唔夾。
+    expect(regularRow![5]).toBe(1000);
+    // OT 行外判價留空（undefined，`setCell()` null 唔賦值）。
+    expect(otRow![5]).toBeUndefined();
+  });
+});

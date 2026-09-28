@@ -26,6 +26,11 @@ const WP_PII_NEW_GUARD_COLUMNS = [
   "blacklist_check_result",
   "blacklist_check_date",
 ];
+// WP-BOSS5 §25.4：新增嘅 bank_code（HKICL 銀行編號）同上面呢批一樣屬於
+// 「安員銀行資料」PII，一樣要驗證 ai.guards 睇唔到——獨立一個 array（唔
+// 塞入上面果個「16 個新欄」常數，避免改埋成班歷史測試名/註解嘅 magic
+// number），下面兩條 it() 各自加一段。
+const WP_BOSS5_BANK_CODE_COLUMN = "bank_code";
 
 describe("WP-PII：ai.guards view 結構性測試——16 個新欄全部唔存在", () => {
   it("information_schema.columns：ai.guards 唔包含任何一個新 PII/牌照/銀行欄", async () => {
@@ -35,6 +40,14 @@ describe("WP-PII：ai.guards view 結構性測試——16 個新欄全部唔存�
     const columns = new Set(rows.map((r) => r.column_name));
     const leaked = WP_PII_NEW_GUARD_COLUMNS.filter((c) => columns.has(c));
     expect(leaked).toEqual([]);
+  });
+
+  it("WP-BOSS5 §25.4：ai.guards 唔包含 bank_code", async () => {
+    const rows = await prisma.$queryRawUnsafe<Array<{ column_name: string }>>(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = 'ai' AND table_name = 'guards'`,
+    );
+    const columns = new Set(rows.map((r) => r.column_name));
+    expect(columns.has(WP_BOSS5_BANK_CODE_COLUMN)).toBe(false);
   });
 
   it("防止 view 打空令上面斷言形同虛設——ai.guards 仲有返舊嗰 10 個欄", async () => {
@@ -56,5 +69,13 @@ describe("WP-PII：ai.guards view 結構性測試——16 個新欄全部唔存�
     const columns = new Set(rows.map((r) => r.column_name));
     const missing = WP_PII_NEW_GUARD_COLUMNS.filter((c) => !columns.has(c));
     expect(missing).toEqual([]);
+  });
+
+  it("WP-BOSS5 §25.4：public.guards 本身真係有 bank_code（confirm migration 生效）", async () => {
+    const rows = await prisma.$queryRawUnsafe<Array<{ column_name: string }>>(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'guards'`,
+    );
+    const columns = new Set(rows.map((r) => r.column_name));
+    expect(columns.has(WP_BOSS5_BANK_CODE_COLUMN)).toBe(true);
   });
 });

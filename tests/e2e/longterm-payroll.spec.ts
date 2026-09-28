@@ -39,7 +39,11 @@ test.beforeAll(async () => {
       hireDate: new Date("2020-01-01"),
       bankName: "測試銀行",
       bankAccountNo: "6008887776",
-      bankPayeeName: "測試收款人E2E",
+      // WP-BOSS5 §25.4：BOCHK Payroll Editor 賬戶名稱淨係收 HKICL 字元
+      // （0-9/空格/a-z/A-Z/&'()*+,-./$=），中文會被列做缺資料，改用英文
+      // 合成名；bank_code（3 位 HKICL 編號）而家係必填先出到明細。
+      bankPayeeName: "TEST PAYEE E2E",
+      bankCode: "004",
       createdBy: "test-e2e",
     },
   });
@@ -110,11 +114,15 @@ test("老闆：開頁→重算→逐人結算出現→加津貼→重算→Autop
   // 埋最新 totals），唔靠 banner 文字判斷。
   await expect(autopayCardValue).not.toHaveText(autopayCardBefore, { timeout: 15_000 });
 
-  // ⑥ BOCHK autopay 檔：下載 CSV（有帳戶嘅安員應該出現喺檔案入面）
-  const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: "下載 CSV" }).click()]);
+  // ⑥ BOCHK autopay 檔（WP-BOSS5 §25.4：BOCHK Payroll Editor 格式
+  // xlsx，唔再係 CSV）：下載（有齊銀行資料嘅安員應該出現喺明細入面）
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("link", { name: "下載 BOCHK Payroll Editor 格式（貼入 Editor 產生 .DAT）" }).click(),
+  ]);
   const path = await download.path();
   expect(path).toBeTruthy();
-  expect(download.suggestedFilename()).toBe("longterm-autopay-2026-08.csv");
+  expect(download.suggestedFilename()).toBe("longterm-autopay-BOCHK-PayrollEditor-2026-08.xlsx");
 });
 
 test("雞頭：nav 見唔到「長工糧」連結，直接打 URL 見 403 banner", async ({ page }) => {

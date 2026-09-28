@@ -362,13 +362,20 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
         b.unresolved += 1;
       }
     } else {
-      // 8 月起：唔再套公式——直接用 OT 記錄自己嘅 snapshot（已經係「每
-      // 粒鐘」嘅价）。收客／出街可以各自獨立有冇（例如淨係起咗收客价嘅
-      // OT 卡），完全冇任何一邊先算 unresolved（未定价 OT）。
+      // 8 月起：唔再套公式——直接用 OT 記錄自己嘅 snapshot 做金額。
+      // WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价，
+      // 呢個決定由 resolve-rate.ts 嘅 resolver 喺**寫入嗰刻**已經做咗
+      // 「卡金額 × otHours」（`applyOtHourlyPricing()`）——snapshot 存低嘅
+      // 就係「呢條記錄嘅金額」，同 payroll.ts／my-receivable.ts／
+      // broker-dashboard.ts／reconciliation.ts 一直嘅口徑一致，呢度**唔
+      // 再乘 otH**（之前乘多一次會令 client_rate_snapshot 已經係總額嘅
+      // OT 記錄雙重計算）。收客／出街可以各自獨立有冇（例如淨係起咗
+      // 收客价嘅 OT 卡），完全冇任何一邊先算 unresolved（未定价 OT）——
+      // 呢個 unresolved 判斷本身唔受呢次改動影響。
       const hasClient = r.clientRateSnapshot !== null;
       const hasGuardOrFee = r.guardWageSnapshot !== null || r.brokerFeeSnapshot !== null;
-      if (hasClient) b.revenue = round2(b.revenue + n(r.clientRateSnapshot) * otH);
-      if (hasGuardOrFee) b.cost = round2(b.cost + (n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot)) * otH);
+      if (hasClient) b.revenue = round2(b.revenue + n(r.clientRateSnapshot));
+      if (hasGuardOrFee) b.cost = round2(b.cost + (n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot)));
       if (!hasClient && !hasGuardOrFee) b.unresolved += 1;
     }
     otBySiteType.set(key, b);

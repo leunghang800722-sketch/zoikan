@@ -72,8 +72,11 @@ const KNOWN_BROKER_DIFFS: Record<string, { expected: number; note: string }> = {
   T: { expected: -1600, note: "Weave Hospital Road 更表漏記病假 2 格（老闆確認 T 頂）" },
 };
 const KNOWN_REFERRAL_DIFF = { expected: 100, note: "Weave 更表漏記 2 格介紹費（docs/api.md：60,520+100=60,620）" };
+// WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT 已經折入 Roster／
+// siteRevenue（`revenue` 含 OT），HKU座頭 OT（1Hr OT，84.85／更）呢個
+// KNOWN 刪走——對總表 (C，下面「逐盤收入」section，用含 OT 嘅 `revenue`)
+// 而家應該 0 差；再出現就係真 FAIL。
 const KNOWN_SITE_DIFFS: Record<string, { expected: number; note: string }> = {
-  HKU座頭: { expected: -84.85, note: "HKU座頭 OT（1Hr OT，84.85／更）——buildMonthlyClose() 逐盤收入淨計 record_type=shift，唔含 ot" },
   屯門凱和山: { expected: 871, note: "Postorder 8/21 夜更標唔收客（Unbilled），系統照逐更收客卡計" },
   淺水灣道11號蔚峰園: { expected: -935, note: "更表重複行（同 W 雞頭差額同一根源）" },
 };
@@ -87,6 +90,21 @@ function classify(diff: number, known: { expected: number } | undefined): Status
 async function main() {
   console.log(`[gate:postorder-export-aug] buildPostorderWorkbook(${AUG_MONTH.toISOString().slice(0, 7)}) 產生緊…`);
   const result = await buildPostorderWorkbook(AUG_MONTH);
+
+  // Opus 5.5 覆核應修 c：Roster 0 行＝dev DB 根本未載 8 月 shift_records
+  // （呢個 gate 嘅前置條件——見檔頭註解——係已經行完 db:reset/seed→
+  // 8 月上載→guard-fix→重新對數全月→介紹費→長工糧成套流程；未行過呢套
+  // 流程嘅 dev DB 逐雞頭/逐盤全部係「系統缺」）。呢種情況下面成套 diff
+  // 邏輯會逐項噴 FAIL（83 項見過），淨係擾亂視線、冇任何診斷價值——
+  // 直接喺呢度截停，出一句明確嘅指示，等操作員知道要先跑
+  // `npm run gate:ltpay-aug`（呢個 script 會自己 reset→開 8 月→上載→
+  // guard-fix→對數→長工糧，跑完先至有嘢俾呢個 gate 比對）。
+  if (result.rosterRowCount === 0) {
+    console.error("[gate:postorder-export-aug] FAIL — Roster 0 行：dev DB 未載 8 月數據，先跑 npm run gate:ltpay-aug。");
+    process.exitCode = 1;
+    return;
+  }
+
   fs.mkdirSync(path.dirname(OUT_XLSX), { recursive: true });
   await result.workbook.xlsx.writeFile(OUT_XLSX);
   console.log(`[gate:postorder-export-aug] workbook 已寫去 ${OUT_XLSX}（${result.rosterRowCount} 行 Roster、4 個 sheet）`);
@@ -120,10 +138,15 @@ async function main() {
     if (t.brokerCode) strict(`[內部] 半月結 01-15＋16-31 ${code} vs 全月`, xlsxHalf.get(code) ?? 0, t.amount);
   }
   const close = await buildMonthlyClose(AUG_MONTH);
-  const sysSite = new Map(result.siteRevenue.map((r) => [r.siteId, r.revenue]));
+  // WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT 而家折入 Roster／
+  // siteRevenue（`revenue` 含 OT），但 `buildMonthlyClose()`（P0 口徑）
+  // 刻意唔含 OT——呢兩個內部檢查（逐盤／Roster Σ）改比 `revenue −
+  // otRevenue`，先至係同 `buildMonthlyClose()` 同一口徑嘅嚴格 0 差。
+  const sysSite = new Map(result.siteRevenue.map((r) => [r.siteId, round2(r.revenue - r.otRevenue)]));
   const closeSites = [...close.mainRows, ...close.outsideRows];
-  for (const r of closeSites) strict(`[內部] 逐盤收入 ${r.canonicalName} vs 月結總表`, sysSite.get(r.siteId) ?? 0, r.revenue);
-  for (const r of result.siteRevenue) if (!closeSites.some((c) => c.siteId === r.siteId)) strict(`[內部] 逐盤收入 ${r.siteName}（月結總表冇呢個盤）`, r.revenue, 0);
+  for (const r of closeSites) strict(`[內部] 逐盤收入（剔 OT）${r.canonicalName} vs 月結總表`, sysSite.get(r.siteId) ?? 0, r.revenue);
+  for (const r of result.siteRevenue) if (!closeSites.some((c) => c.siteId === r.siteId)) strict(`[內部] 逐盤收入（剔 OT）${r.siteName}（月結總表冇呢個盤）`, round2(r.revenue - r.otRevenue), 0);
+  const otRevenueTotal = round2(result.siteRevenue.reduce((a, r) => a + r.otRevenue, 0));
   {
     const ros = wbBack.getWorksheet("Roster")!;
     const head = (ros.getRow(1).values as unknown[]).slice(1);
@@ -132,7 +155,7 @@ async function main() {
     ros.eachRow((r, i) => {
       if (i > 1) rosterRev += Number(r.getCell(revCol).value ?? 0);
     });
-    strict("[內部] Roster Σ當月收入 vs 月結總表總收入", round2(rosterRev), round2(closeSites.reduce((a, r) => a + r.revenue, 0)));
+    strict("[內部] Roster Σ當月收入（剔 OT）vs 月結總表總收入", round2(rosterRev - otRevenueTotal), round2(closeSites.reduce((a, r) => a + r.revenue, 0)));
   }
   const lastRun = await prisma.monthCloseRun.findFirst({ where: { month: AUG_MONTH, status: "done" }, orderBy: { finishedAt: "desc" }, select: { reportJson: true } });
   const report = lastRun?.reportJson as { totals?: { revenue: number; marginRevenue: number; cost: number; grossMargin: number }; payrollByBroker?: Array<{ brokerCode: string; amount: number }>; referralFee?: { total: number }; longtermPayroll?: Record<string, number> | null } | null;

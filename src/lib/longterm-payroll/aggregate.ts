@@ -543,9 +543,18 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
 
     const dob = guard.dateOfBirth ? toUtcDate(guard.dateOfBirth) : null;
     const ageAtMonthEnd = dob ? (end.getTime() - dob.getTime()) / 86400000 / 365.25 : null;
-    const mpfResult = computeMpf(gross, { ageAtMonthEnd, hireDate: guard.hireDate ? toUtcDate(guard.hireDate) : null, monthEnd: end });
+    // §25.6：monthStart 傳 `start`（呢個月月首）畀 computeMpf() 判斷首月
+    // 新規則（老闆 2026-09-28 追加決定 #3，只 monthStart>=2026-09-01 生效）。
+    const mpfResult = computeMpf(gross, { ageAtMonthEnd, hireDate: guard.hireDate ? toUtcDate(guard.hireDate) : null, monthEnd: end, monthStart: start });
     if (mpfResult.exemptReason) {
-      const label = mpfResult.exemptReason === "over65" ? "≥65 歲免供" : mpfResult.exemptReason === "under60days" ? "入職未滿 60 日免供" : "Gross<7,100 僱員免供";
+      const label =
+        mpfResult.exemptReason === "over65"
+          ? "≥65 歲免供"
+          : mpfResult.exemptReason === "under60days"
+            ? "入職未滿 60 日免供"
+            : mpfResult.exemptReason === "first_month_ee"
+              ? "首月：員工免供、公司供 ER"
+              : "Gross<7,100 僱員免供";
       notes.push(`MPF：${label}`);
     }
     const autopay = computeAutopay(gross, mpfResult.mpfEe);

@@ -132,7 +132,8 @@ export const GUARD_BANK_FIELDS = {
   sites: [],
   special_items: [],
   month_closes: [],
-  guards: ["bank_name", "bank_account_no", "bank_payee_name"],
+  // WP-BOSS5 §25.4：bank_code（3 位 HKICL 清算編號）同一組。
+  guards: ["bank_name", "bank_account_no", "bank_payee_name", "bank_code"],
   brokers: [],
   referral_fee_rates: [],
   // WP-MULTI：冇銀行類欄。

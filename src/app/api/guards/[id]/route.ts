@@ -68,7 +68,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (!row) throw NotFound();
     const derived = withDerivedGuard(row);
     if (isBrokerRole(session)) return ok(scrubForBrokerSession(session, toBrokerGuardDTO(derived)));
-    return ok(await applyFieldGroupGate(session, "guards", toGuardFullDTO(derived)));
+    const dto = await applyFieldGroupGate(session, "guards", toGuardFullDTO(derived));
+    // WP-BOSS5 §25.2：淨係 detail（唔係列表——避免 500 行 N+1）先查呢粒
+    // 衍生 flag，俾前端顯示「已清」提示——`migration_clear_internal_
+    // referral`（見 20260929000000_wp_boss5_referral_broker_no_internal_
+    // cash migration）淨係喺 `referral_broker_id` 曾經指住
+    // internal_cash（Y）嘅安員先寫，冇 PII，audit_log 本身就係
+    // append-only 事實記錄。
+    //
+    // 驗收修正（Opus 5.5）：之前淨係睇「曾經有過呢粒 migration audit」
+    // 就當 true——如果之後有人手重新幫呢個安員揀返一個 referral_
+    // broker_id（唔再係 null），前端仲會繼續顯示「已清」提示，同現況
+    // 唔夾。而家加返「現值 referral_broker_id 係 null」呢個條件，先真係
+    // 反映「而家仲係清咗嘅狀態」。
+    const migrationClearedLog = await prisma.auditLog.findFirst({
+      where: { tableName: "guards", rowId: id, action: "migration_clear_internal_referral" },
+      select: { id: true },
+    });
+    return ok({ ...dto, referral_broker_migration_cleared: row.referralBrokerId === null && !!migrationClearedLog });
   });
 }
 
@@ -108,7 +125,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       const v = parsed[key];
       if (v === undefined || v === beforeVal) continue;
       if (isBrokerRole(session)) throw Forbidden(`雞頭唔可以改${label}`);
-      if (v !== null) await assertReferralBrokerAllowed(v, label);
+      if (v !== null) await assertReferralBrokerAllowed(v, label, { disallowInternalCash: key === "referral_broker_id" });
     }
     // WP-PII（Opus 驗收必修 2a）：前端編輯抽屜起草成個 form，撳「儲存」
     // 成個 form 一齊送——冇改嘅 field-group 受控欄（例如長工冇改月薪，

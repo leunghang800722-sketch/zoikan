@@ -86,6 +86,10 @@ const GUARD_FIELDS = [
   "bankName",
   "bankAccountNo",
   "bankPayeeName",
+  // WP-BOSS5 §25.4：3 位 HKICL 清算銀行編號，同上面三個 bank* 欄一組
+  // field group「安員銀行資料」，一齊淨係詳情有（見下面
+  // GUARD_LIST_DETAIL_ONLY_FIELDS）。
+  "bankCode",
   "blacklistCheckResult",
   "blacklistCheckDate",
   // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——屬於
@@ -183,6 +187,7 @@ const GUARD_LIST_DETAIL_ONLY_FIELDS = [
   "bankName",
   "bankAccountNo",
   "bankPayeeName",
+  "bankCode",
   "blacklistCheckResult",
   "blacklistCheckDate",
 ] as const;

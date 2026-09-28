@@ -371,8 +371,12 @@ audit`／`sql_select ai.audit_log` 都讀唔到（見
 - **OT 揀卡（Opus 5.5 驗收）**：OT 記錄淨係配 `shift_type_id` 完全相等嘅
   卡（唔准跌落 shift_type=null 嘅盤級／雞頭級／guard 級正更卡）；roster
   upload 套用（`reconcile-apply.ts`）OT 都行 resolver（之前一律 null）。
-  **未決**：OT snapshot 係「每粒鐘」（毛利表 ×ot_hours）定「每條記錄」
-  （糧明細／應收直接加總）——見 §17.10.2 第 3 項。
+  **已決（WP-BOSS5 §25.1，老闆 2026-09-28 決定 1）**：OT snapshot＝
+  「每條記錄嘅金額」——resolver 揀到 OT 更種卡（卡金額本身係每小時价）
+  之後喺**寫入嗰刻**已經乘 `ot_hours`（`applyOtHourlyPricing()`，淨係
+  `work_date >= 2026-08-01` 生效，7 月唔郁），糧單／應收／雞頭
+  dashboard／對數／Postorder 總表／毛利表全部一致當「呢條記錄金額」
+  直接加總，唔再各自表述（見 §17.10.2 第 3 項舊落差，已經解決）。
 - **定價器（`src/lib/pricing/resolve-rate.ts`）**：`monthly_fixed` 盤
   上嘅 `per_shift` 更種一直都可以配到逐更卡出 `client_rate`（`isPer
   ShiftEligible()`／`specificityRank()` 從來冇睇 `site.billing_model`，
@@ -404,9 +408,12 @@ audit`／`sql_select ai.audit_log` 都讀唔到（見
     fallback（同埋「OT 更種自己嘅卡÷hours」fallback）**對
     `month>=2026-08-01` 停用**（`otFormulaFallbackEnabled`）——8 月起
     直接用 OT 記錄自己嘅 `client_rate_snapshot`／`guard_wage_
-    snapshot`／`broker_fee_snapshot`（已經係「每粒鐘」价）× `ot_
-    hours`，收客／出街可以各自獨立有冇；完全冇任何一邊就算
-    `unresolved`。**7 月唔變**（7 月 gate 用緊呢條公式）。
+    snapshot`／`broker_fee_snapshot` 做金額，收客／出街可以各自獨立
+    有冇；完全冇任何一邊就算 `unresolved`。**WP-BOSS5 §25.1 之後**：
+    呢三個 snapshot 已經係 resolver 寫入嗰刻乘咗 `ot_hours` 嘅「該條
+    記錄金額」，`gross-margin.ts` **唔再喺呢度乘多一次**（之前乘多一次
+    會雙重計算——舊版同呢個 WP 之前嘅口徑，「每粒鐘」×`ot_hours`，已經
+    喺呢個 WP 之後失效）。**7 月唔變**（7 月 gate 用緊舊公式）。
   - **未定价 OT**（`src/lib/pricing/unpriced.ts` 新分類
     `ot_unpriced`）：`computeUnpricedSummary()`／`buildUnpricedSummary()`
     對 `record_type=ot`、非 cancelled、完全冇任何 client/guard/fee
@@ -1517,7 +1524,15 @@ view（`zoikan_ai_ro` 淨係 `GRANT ... ON SCHEMA ai`，public schema 新表
 - `dailyRateOnDate()`／`computeNetBasic()`——日薪＝月薪÷當月曆日數；
   `contractSegmentForDate()` 揀返嗰日所屬合約段，月中轉約按日拆。
 - `computeMpf()`／`checkMpfExemption()`——EE/ER 各 `min(Gross×5%,1500)`；
-  Gross<7,100 僱員免（僱主照供）；≥65 歲／入職<60 日全免。
+  Gross<7,100 僱員免（僱主照供）；≥65 歲全免；`monthStart <
+  MPF_FIRST_MONTH_RULE_FROM`（即 8 月以前）入職<60 日全免（舊規則）。
+  **§25.6（老闆 2026-09-28 追加決定 #3，`monthStart >= 2026-09-01` 起
+  生效）**：唔再用「入職未滿 60 日全免」——入職日喺本月內＝首月，
+  `mpfEe=0`、`mpfEr=min(Gross×5%,1500)`（`exemptReason:"first_month_ee"`），
+  之後月份正常（EE＋ER 都供，Gross<7,100／≥65 歲規則不變）。呢個判斷
+  睇傳入嘅 `monthStart`，`aggregate.ts` 逐月 `buildLongtermPayrollInputs()`
+  傳返個月月首；老闆冇講第二個月點計，跟法例精神當正常供款（假設，
+  非逐字確認）。
 - `slAccrued()`／`slSegmentVerdict()`／`sl45Payment()`——病假：做滿 1
   個月先開始儲、每月 2 日、上限 120 日；要攞 4/5 必須「結餘夠」＋
   「連續 ≥4 日」＋「有醫生紙」（`doctorNoteVerified` 由人手輸入項提供，
@@ -1531,11 +1546,16 @@ view（`zoikan_ai_ro` 淨係 `GRANT ... ON SCHEMA ai`，public schema 新表
 **刻意唔喺呢層做**：OT 時薪公式（老闆已定「冇統一公式」，見 §15.2
 2026-09-24 答 (6)）、賣假／頂位盤級價目表（配置數據）——呢兩樣留俾
 aggregate 層／人手輸入項帶入 `computeGross()` 嘅 `otAmount`／
-`restDayPayment`／`otherAllowance` 參數。
+`restDayPayment`／`otherAllowance` 參數。**老闆 2026-09-28（WP-BOSS5
+決定 5）已確認：賣假／頂位／勤工獎可以人手輸入**——`longterm_payroll_
+inputs` kind＝`special_allowance`（勤工獎）／`other_allowance`（賣假／
+頂位）就係呢個決定嘅落地，唔再係待決事項（見
+`P2-版面重設計計劃.md` §25.3）。病假每月累積 2 日（`SL_ACCRUAL_
+PER_MONTH`）同樣已經老闆確認鎖死，唔准手多改。
 
-`tests/longterm-payroll-compute.test.ts`：37 條單元測試（合成數據，
-邊界案例包括：MPF 60 日邊界、試用期完結日當日唔算過咗、病假連續日數
-夾 RD、年假結餘唔可以負）。
+`tests/longterm-payroll-compute.test.ts`：合成數據單元測試（邊界案例
+包括：MPF 60 日邊界、§25.6 MPF 首月 8 月 vs 9 月分界、試用期完結日當日
+唔算過咗、病假連續日數夾 RD、年假結餘唔可以負）。
 
 ### Maxwell 名單導入
 
@@ -1713,10 +1733,19 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
    `guard_avg_wages`／`guard_leave_balances` 歸零，確認過 count=0）。
 
 **留返下一手**：
-1. BOCHK autopay 格式——要有人攞到
-   `2026-07-長工autopay-BOCHK-PayrollEditor.xls` 嘅密碼先可以核實實際
-   欄位次序，跌返而家嘅 CSV fallback（已經喺頁面/API 標明「格式待銀行
-   核實」）。
+1. ~~BOCHK autopay 格式~~——**已做，見 WP-BOSS5 §25.4**（老闆
+   2026-09-28 決定 6）：`.xls` 樣本密碼始終未有人解到，改用 BOCHK 公開
+   文件《Payroll (Payment Type) Editor and File Specification (FPS)
+   v1.2》核實格式——`GET /api/longterm/payroll/:month/autopay` 改出
+   「Payroll Editor 明細」xlsx（唔係最終 `.DAT`，貼入 BOCHK Editor 由
+   佢產生），CSV fallback 已淘汰，`format_verified` 由 `false` 變
+   `true`。詳細見 `src/lib/longterm-payroll/bochk-autopay-export.ts`
+   頂註解、`P2-版面重設計計劃.md` §25.4。「Payroll Editor 明細」sheet
+   第 1 欄「編號 No.」淨係內部序號輔助對數，貼入 BOCHK Payroll Editor
+   時要由第 2 欄（B 欄，員工賬戶銀行編號）開始對應 Editor 第 10 欄，
+   唔使貼埋「編號 No.」呢欄（見驗收項 4）。BOCHK 規格 e-Alert 類型／
+   聯絡係必填（驗收項 3）：冇 8 位通知電話、賬戶名稱長過 140 字元、
+   賬戶號碼含 0-9／- 以外字元嘅人一律列入「缺資料」sheet，唔出明細行。
 3. 「加落 cost」（§16.2 產品決策，4d 已經留低）——5a 已經加咗一個獨立
    「合併成本」摘要顯示，但**冇**改動 `mainRows`/`totals` 嘅核心
    `cost` 欄本身，呢個決策仲係留返老闆/下一手拍板（見上面 4d 記錄）。
@@ -1855,10 +1884,10 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
 ### 4. OT 卡管理
 
 `rate_cards` 結構本身已經支援 site／broker／guard 三級（冇要改
-schema）——OT 更種同其他更種一樣用返現有 CRUD。~~跟 §17.10.2 決定：OT
-卡金額＝每小時价~~（**Opus 5.5 驗收更正**：§17.10.2 第 3 項 OT 卡單位仍
-未定案，見下面「Opus 5.5 驗收修正」第 7 項），`RateCardsClient.tsx` 揀咗
-code 開頭 "OT" 嘅更種就顯示「單位未定案」提示。**未定價 OT 清單**——複用現有 `GET /api/shift-records/
+schema）——OT 更種同其他更種一樣用返現有 CRUD。**WP-BOSS5 §25.1（老闆
+2026-09-28 決定 1，取代下面「Opus 5.5 驗收修正」第 7 項嗰陣嘅「未定
+案」狀態）：OT 卡金額＝每小時价**——`RateCardsClient.tsx` 揀咗 code 開頭
+"OT" 嘅更種就顯示呢個決定嘅提示（唔再係「單位未定案」）。**未定價 OT 清單**——複用現有 `GET /api/shift-records/
 unpriced`（`category=ot_unpriced`），頁面加一個 amber 分區，每項有
 「建卡」快捷（喺已載入嘅 `shiftTypes`／`brokers` 度用 site_id+code／
 broker_code 揾返 id 預填，開返「新增價目」抽屜）。
@@ -2107,3 +2136,57 @@ PASS，`Summary!A1`／`Roster!A1:F1` 格式核對正常，`close workbook
 凱和山 +871.08、蔚峰園 −935.86）；介紹費 60,620（+100 KNOWN），15 複合鍵 14 個
 0 差；94 項內部檢查全 PASS；Summary 總收入 3,304,416.19／毛利口徑營業額
 3,236,901.04／合併成本 2,709,509.74／毛利 527,391.30＝一鍵報告。
+
+### WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT 折入 Roster 分頁
+
+老闆決定 #7「Roster 分頁 OT 要計埋」——`loadRosterGroups()`（`src/lib/
+reports/postorder-export.ts`）查詢由淨 `record_type="shift"` 改做 `{in:
+["shift","ot"]}`。OT 更種本身就係獨立 `shiftTypeId`，group key（盤,更種,
+結算雞頭）自然將 OT 行同正更行分開一行，行標籤跟 OT 更種嘅 `label`（例
+「1Hr OT」）。
+
+- **更數**＝Σ `ot_hours`（老闆「折入」決定：以小時做更數，配合 §25.1
+  「OT 卡＝每小時价」），唔係逐格 +1；冇 `ot_hours`（未定价 OT）對更數
+  貢獻 0，唔屈估。
+- **上單價／外判價**＝`client_rate_snapshot`/`guard_wage_snapshot` ÷
+  `ot_hours`（即每小時价；§25.1 之後 snapshot 已經係「呢條記錄嘅金額」，
+  淨係呢度攞嚟顯示單價先要除返 hours，加總 `revenue`/`cost` 唔使再乘）。
+- `RosterGroup` 加 `isOt` 標記；`PostorderSiteRevenue` 加 `otRevenue`／
+  `otShifts`（`revenue`/`shifts` 已經含 OT，呢兩個欄係子集，俾 caller
+  想拆走 OT 用）。
+- **同 `buildMonthlyClose()`（P0 口徑，刻意唔含 OT）嘅「收入調整（月結
+  口徑）」補差機制唔可以撞埋**：`perShiftRevenueBySite`（用嚟同
+  `buildMonthlyClose()` 對、觸發「月費/收入調整」合成行嗰條）而家剔走
+  `isOt` 組先加總——否則 OT 收入會被當「口徑差額」沖銷返 0（第一版實作
+  真係中咗呢條，單元測試揪到：OT 收入喺 `siteRevenue.revenue` 度消失
+  咗）。
+- Summary sheet 總收入維持一鍵報告口徑（唔含 OT，`revenue` 唔變），加
+  一行資訊「OT 收入（已折入 Roster 分頁，唔計入上面總收入）」，8 月實測
+  ＝84.85（同 HKU座頭 1Hr OT 那筆一致）。
+- `scripts/gate/postorder-export-aug.ts`：內部檢查「逐盤收入 vs 月結
+  總表」／「Roster Σ當月收入 vs 月結總表總收入」改比 `revenue −
+  otRevenue`（同 P0 口徑對，嚴格 0 差，冇 KNOWN）；對總表（`revenue_
+  site.json`，真 Postorder 總表口徑，含 OT）嘅逐盤比較改用含 OT 嘅
+  `revenue`，刪走 `KNOWN_SITE_DIFFS.HKU座頭`（−84.85）——8 月實測 HKU座頭
+  變 0 差；`siteRevenueTotal` KNOWN 由 −149.69（三個已知落差之和，含
+  HKU座頭）自動變 −64.84（刪走 HKU座頭嗰項之後，剩返凱和山 +871.08／
+  蔚峰園 −935.86 之和，`KNOWN_SITE_DIFFS` 對象嘅 `expected` 值加總係
+  runtime 動態算，唔使手動改常數）。
+- `scripts/gate/aug-e2e-check.ts` B5「HKU座頭 OT」段落加註：呢個 script
+  本身直接讀 `buildMonthlyClose()`（P0 口徑），唔叫 `buildPostorderWorkbook()`
+  ——OT 唔折入 `buildMonthlyClose()`（老闆冇話要改 P0 口徑），所以呢個
+  B1 對比嘅 −84.85 落差本身**唔變**（設計如此），但加咗一句話清楚寫明
+  Postorder export（`gate:postorder-export-aug`）已經 0 差，避免讀者以為
+  兩個 gate 仲有落差。
+
+**8 月實測**（`gate:postorder-export-aug`，exit 0）：逐盤 **42/44** 0 差
+（HKU座頭已經 0 差；剩 2 個 KNOWN：凱和山 +871.08／蔚峰園 −935.86）；
+`siteRevenueTotal` 差額 **−64.84** KNOWN（同文件記錄一致）；逐雞頭
+K/G/D/Y/B07 0 差、W/T KNOWN 不變；介紹費 60,620（+100 KNOWN）不變；
+Summary!B38「OT 收入」資訊行＝84.85；新增嘅「逐盤收入（剔 OT）」／
+「Roster Σ當月收入（剔 OT）」內部檢查全部 0 差；真 Excel 開檔測試
+（Microsoft Excel + AppleScript，指名 workbook `~/Desktop/MSG /
+_opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
+`close saving no` 收尾，測試檔已刪。單元測試：獨立 `describe`（唔同
+主 fixture 撞精確數字斷言）驗證 2 小時 OT snapshot 169.70 → Roster 行
+更數 2、上單價 84.85、`otRevenue`/`otShifts` 係 `revenue`/`shifts` 子集。

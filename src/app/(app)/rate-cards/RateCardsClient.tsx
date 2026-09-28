@@ -465,9 +465,9 @@ export function RateCardsClient({
 
       {/* WP-PHASE3（§20.4 Phase 3 item 4）：OT 卡管理——未定價 OT 清單，
           每項有「建卡」快捷（預填盤／更別／雞頭，開返「新增價目」抽屜）。
-          OT 卡金額單位（每粒鐘／每條記錄）§17.10.2 第 3 項**仍未定案**
-          （Opus 5.5 驗收更正：原本寫「已決定每小時」唔啱——gross-margin.ts
-          當每粒鐘×ot_hours，payroll.ts 等當逐條金額）。建卡之後 OT 記錄
+          WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价，
+          系統寫入時已乘 OT 時數（淨係 2026-08-01 起嘅記錄；7 月 OT
+          snapshot 由 seed 直接寫，唔受呢個決定影響）。建卡之後 OT 記錄
           由「重新對數全月」／一鍵結算開頭嘅自動補價補返（reprice.ts）。 */}
       {otUnpricedGroups.length > 0 && (
         <div className="rounded-[7px] border border-amber-200 bg-amber-50 p-3">
@@ -654,10 +654,10 @@ export function RateCardsClient({
             </select>
           </Field>
           {/* WP-PHASE3（item 4）：揀咗 OT 更種（code 開頭 "OT"）就提示卡金額
-              單位未定案（§17.10.2 第 3 項，見上面 OT 清單註解）。 */}
+              單位——WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）已經拍板。 */}
           {shiftTypes.find((s) => s.id === form.shift_type_id)?.code?.startsWith("OT") && (
             <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12.5px] text-amber-800">
-              OT 更種——卡金額單位（每粒鐘 定 每條記錄）未定案：毛利表當「每粒鐘 × OT 時數」，糧單／雞頭應付當「每條記錄」。1 個鐘嘅 OT 兩者一樣；多過 1 個鐘嘅 OT 落卡前先問老闆，並喺備註寫明。
+              老闆 2026-09-28 決定：OT 卡金額＝每小時价，系統寫入時已乘 OT 時數（2026-08-01 起嘅記錄；淨係 1 個鐘嘅 OT 同「每條記錄」睇落一樣）。人手直接輸入嘅 OT snapshot（唔經呢張卡自動計）一律當「該條記錄金額」，唔會再乘時數。
             </div>
           )}
           {hasClientRate && (

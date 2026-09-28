@@ -240,8 +240,8 @@ describe("inferReferralBrokerFromRosters", () => {
     await clearAll();
   });
 
-  async function makeBroker(code: string) {
-    return prisma.broker.create({ data: { code, name: `測試${code}`, kind: "broker", settlementType: "cash", createdBy: "test:referral-fallback" } });
+  async function makeBroker(code: string, kind: "broker" | "internal_cash" | "internal_longterm" = "broker") {
+    return prisma.broker.create({ data: { code, name: `測試${code}`, kind, settlementType: kind === "broker" ? "cash" : "salary", createdBy: "test:referral-fallback" } });
   }
   async function makeSite(name: string) {
     return prisma.site.create({ data: { canonicalName: name, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test:referral-fallback" } });
@@ -336,6 +336,21 @@ describe("inferReferralBrokerFromRosters", () => {
     expect(r.warning).not.toBeNull();
   });
 
+  it("WP-BOSS5 §25.2：更表雞頭碼唯一但係內部現金結算單位（Y）——唔可以做介紹雞頭，唔設，有 warning", async () => {
+    const site = await makeSite("測試盤Y1");
+    const guard = await makeGuard();
+    const brokerY = await makeBroker("Y", "internal_cash");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 5; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerY.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBeNull();
+    expect(r.reason).toMatch(/內部結算單位/);
+    expect(r.warning).not.toBeNull();
+  });
+
   it("冇雞頭碼欄——跌返 broker_site_assignments 該盤唯一雞頭", async () => {
     const site = await makeSite("測試盤D");
     const guard = await makeGuard();
@@ -349,6 +364,22 @@ describe("inferReferralBrokerFromRosters", () => {
     const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
     expect(r.brokerId).toBe(brokerT.id);
     expect(r.warning).toBeNull();
+  });
+
+  it("WP-BOSS5 §25.2：冇雞頭碼欄、broker_site_assignments 揀到係 B07（internal_longterm）——唔可以做介紹雞頭，唔設，有 warning", async () => {
+    const site = await makeSite("測試盤D-B07");
+    const guard = await makeGuard();
+    const brokerB07 = await makeBroker("B07", "internal_longterm");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 5; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: null });
+    await prisma.brokerSiteAssignment.create({ data: { brokerId: brokerB07.id, siteId: site.id, month: new Date("2026-08-01"), createdBy: "test" } });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBeNull();
+    expect(r.reason).toMatch(/內部結算單位/);
+    expect(r.warning).not.toBeNull();
   });
 
   it("冇雞頭碼欄、冇 broker_site_assignments——跌返該盤其他安員 shift 行唯一雞頭", async () => {
@@ -365,6 +396,23 @@ describe("inferReferralBrokerFromRosters", () => {
     const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
     expect(r.brokerId).toBe(brokerG.id);
     expect(r.warning).toBeNull();
+  });
+
+  it("WP-BOSS5 §25.2：冇雞頭碼欄、冇 broker_site_assignments，跌返該盤其他安員 shift 行揀到 Y（internal_cash）——唔可以做介紹雞頭，唔設，有 warning", async () => {
+    const site = await makeSite("測試盤E-Y");
+    const guard = await makeGuard();
+    const otherGuard = await makeGuard();
+    const brokerY = await makeBroker("Y", "internal_cash");
+    await prisma.guardLongtermPost.create({ data: { guardId: guard.id, siteId: site.id, effectiveFrom: new Date("2026-08-01"), source: "manual", createdBy: "test" } });
+    const uploader = await makeUploader();
+    const upload = await makeUpload(uploader.id, site.id);
+    for (let d = 1; d <= 3; d++) await makeRow({ uploadId: upload.id, guardId: guard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: null });
+    for (let d = 4; d <= 6; d++) await makeRow({ uploadId: upload.id, guardId: otherGuard.id, resolvedSiteId: site.id, day: d, settlementBrokerId: brokerY.id });
+
+    const r = await inferReferralBrokerFromRosters(guard.id, new Date("2026-08-01"), prisma);
+    expect(r.brokerId).toBeNull();
+    expect(r.reason).toMatch(/內部結算單位/);
+    expect(r.warning).not.toBeNull();
   });
 
   it("乜都對唔到——唔設，有 warning", async () => {

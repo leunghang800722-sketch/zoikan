@@ -21,6 +21,17 @@ export const MPF_MIN_GROSS = 7100;
 export const MPF_MIN_DAYS_EMPLOYED = 60;
 export const MPF_EXEMPT_AGE = 65;
 
+// 老闆 2026-09-28（WP-BOSS5 §25.6 追加決定 #3）：MPF 首月唔再用「入職未滿
+// 60 日全免」——首月（＝入職日所在嗰個月）改做「員工唔供、公司照供 ER
+// 5%」，之後正常（EE＋ER 都供，Gross<7,100／≥65 歲維持原規則）。淨係
+// `monthStart >= MPF_FIRST_MONTH_RULE_FROM` 先生效；之前月份（8 月同以前）
+// 完全維持舊 60 日全免規則，鎖月 gate 唔變。老闆冇講第二個月點計，跟
+// 法例精神當正常供款（呢個係假設，非老闆逐字確認）。
+export const MPF_FIRST_MONTH_RULE_FROM = "2026-09-01";
+
+// 老闆 2026-09-28（WP-BOSS5 決定 4）確認：病假每月 累積 2 日——第十三版
+// 口徑冇變，唔准手多改（有單元測試 assert 呢個常數＝2，見
+// tests/longterm-payroll-compute.test.ts）。
 export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH
 export const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
 export const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限
@@ -158,6 +169,10 @@ export interface MpfExemptionInput {
   hireDate?: Date | null;
   /** 呢個月月尾（含）。 */
   monthEnd: Date;
+  /** §25.6：呢個月月首。淨係用嚟判斷 MPF 首月新／舊規則生效（`monthStart
+   * >= MPF_FIRST_MONTH_RULE_FROM`）；冇提供＝當舊規則（8 月以前 caller
+   * 可以唔傳，行為不變）。 */
+  monthStart?: Date | null;
 }
 
 export interface MpfExemptionResult {
@@ -165,12 +180,17 @@ export interface MpfExemptionResult {
   reason: "over65" | "under60days" | null;
 }
 
-/** 判斷成人係咪 MPF 全免（EE＋ER 都免）——≥65 歲或入職未滿 60 日。
- * 呢個判斷同 Gross<7,100 嗰條獨立（Gross<7,100 淨係免 EE，ER 照供）。 */
+/** 判斷成人係咪 MPF 全免（EE＋ER 都免）——≥65 歲；`monthStart` 未生效
+ * §25.6 新規則嗰陣，入職未滿 60 日都全免（舊規則，8 月以前）。§25.6
+ * 新規則生效之後（`monthStart >= MPF_FIRST_MONTH_RULE_FROM`）冇「未滿
+ * 60 日全免」呢一種——首月改做 `computeMpf()` 入面嘅「員工免供、公司
+ * 照供」，唔係全免，所以呢度唔再回 `under60days`。呢個判斷同 Gross<7,100
+ * 嗰條獨立（Gross<7,100 淨係免 EE，ER 照供）。 */
 export function checkMpfExemption(input: MpfExemptionInput): MpfExemptionResult {
-  const { ageAtMonthEnd, hireDate, monthEnd } = input;
+  const { ageAtMonthEnd, hireDate, monthEnd, monthStart } = input;
   if (ageAtMonthEnd != null && ageAtMonthEnd >= MPF_EXEMPT_AGE) return { exempt: true, reason: "over65" };
-  if (hireDate) {
+  const newFirstMonthRuleInEffect = monthStart != null && monthStart.getTime() >= toUtcDate(MPF_FIRST_MONTH_RULE_FROM).getTime();
+  if (!newFirstMonthRuleInEffect && hireDate) {
     const daysEmployed = diffDaysInclusive(hireDate, monthEnd);
     if (daysEmployed < MPF_MIN_DAYS_EMPLOYED) return { exempt: true, reason: "under60days" };
   }
@@ -180,15 +200,27 @@ export function checkMpfExemption(input: MpfExemptionInput): MpfExemptionResult 
 export interface MpfResult {
   mpfEe: number;
   mpfEr: number;
-  exemptReason: "over65" | "under60days" | "low_gross" | null;
+  exemptReason: "over65" | "under60days" | "low_gross" | "first_month_ee" | null;
 }
 
-/** 逐人 MPF 僱員／僱主供款（§14 規則 9）。`gross` 一定要先計完成（包晒
- * OT／津貼／扣款之後）先可以傳入。 */
+/** 逐人 MPF 僱員／僱主供款（§14 規則 9；首月規則見 §25.6）。`gross` 一定
+ * 要先計完成（包晒 OT／津貼／扣款之後）先可以傳入。 */
 export function computeMpf(gross: number, exemption: MpfExemptionInput): MpfResult {
   const { exempt, reason } = checkMpfExemption(exemption);
   if (exempt) return { mpfEe: 0, mpfEr: 0, exemptReason: reason };
+
   const contribution = round2(Math.min(gross * MPF_RATE, MPF_CAP));
+
+  // §25.6：monthStart >= MPF_FIRST_MONTH_RULE_FROM 而且入職日喺呢個月
+  // 之內 → 首月，員工唔供，公司照供 ER（5%，封頂 1500）。
+  const newFirstMonthRuleInEffect = exemption.monthStart != null && exemption.monthStart.getTime() >= toUtcDate(MPF_FIRST_MONTH_RULE_FROM).getTime();
+  if (newFirstMonthRuleInEffect && exemption.hireDate) {
+    const hireInThisMonth = exemption.hireDate.getTime() >= (exemption.monthStart as Date).getTime() && exemption.hireDate.getTime() <= exemption.monthEnd.getTime();
+    if (hireInThisMonth) {
+      return { mpfEe: 0, mpfEr: contribution, exemptReason: "first_month_ee" };
+    }
+  }
+
   const eeExempt = gross < MPF_MIN_GROSS;
   return {
     mpfEe: eeExempt ? 0 : contribution,

@@ -84,6 +84,14 @@ describe("§2 guards PATCH 介紹雞頭驗證", () => {
     await prisma.guard.update({ where: { id: fx.guardA.id }, data: { referralBrokerId: b07.id } });
     expect((await patch({ referral_broker_id: b07.id, name_aliases: [] })).status).toBe(200);
   });
+
+  it("WP-BOSS5 §25.2：referral_broker_id＝內部現金結算單位（Y）400；同一個 broker 做 visa_sponsored_by_broker_id 維持現狀（200，老闆冇講）", async () => {
+    const referralRes = await patch({ referral_broker_id: fx.brokerInternal.id });
+    expect(referralRes.status).toBe(400);
+    const body = (await referralRes.json()) as { message?: string };
+    expect(body.message ?? "").toMatch(/內部現金結算單位/);
+    expect((await patch({ visa_sponsored_by_broker_id: fx.brokerInternal.id })).status).toBe(200);
+  });
 });
 
 describe("§3 轉長工合約冪等", () => {
@@ -118,7 +126,7 @@ describe("§4 複製上月卡排除", () => {
 });
 
 describe("§5 自動補價：OT／子盤", () => {
-  it("OT 記錄 snapshot 全 null、之後先補 OT 卡 → repriceMonthForSites 補返", async () => {
+  it("OT 記錄 snapshot 全 null、之後先補 OT 卡 → repriceMonthForSites 補返（WP-BOSS5 §25.1：卡金額每小時价 × otHours=3）", async () => {
     const ot = await prisma.shiftType.create({ data: { siteId: fx.site.id, code: "OT3", createdBy: "test" } });
     const rec = await prisma.shiftRecord.create({
       data: { workDate: aug(5), siteId: fx.site.id, shiftTypeId: ot.id, guardId: fx.guardA.id, settlementBrokerId: fx.brokerA.id, operationalBrokerId: fx.brokerA.id, recordType: "ot", otHours: 3, createdBy: "test" },
@@ -127,8 +135,10 @@ describe("§5 自動補價：OT／子盤", () => {
     const r = await repriceMonthForSites(aug(1), [fx.site.id], fx.userIds["老闆"], null);
     expect(r.changed).toBeGreaterThanOrEqual(1);
     const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: rec.id } });
-    expect(Number(after.clientRateSnapshot)).toBe(100);
-    expect(Number(after.guardWageSnapshot)).toBe(80);
+    // 卡係「每小時价」100／80，呢條記錄 otHours=3 → snapshot＝300／240（呢
+    // 條記錄嘅金額，唔再係每小時价）。
+    expect(Number(after.clientRateSnapshot)).toBe(300);
+    expect(Number(after.guardWageSnapshot)).toBe(240);
   });
 
   it("上載掛母盤、格歸子盤：子盤記錄都會補價", async () => {

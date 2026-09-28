@@ -159,6 +159,9 @@ export async function POST(req: Request) {
           workDate,
           isExternal: false,
           recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+          // WP-BOSS5 §25.1：OT 卡＝每小時价，`data.otHours` 已經由
+          // `BrokerShiftRecordCreateSchema`（`ot_hours`）解析好。
+          otHours: data.otHours != null ? Number(data.otHours) : null,
         });
         data.clientRateSnapshot = brokerPricing.clientRate;
         data.guardWageSnapshot = brokerPricing.guardWage;
@@ -265,6 +268,8 @@ export async function POST(req: Request) {
         workDate,
         isExternal: data.isExternal ?? false,
         recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
+        // WP-BOSS5 §25.1：OT 卡＝每小時价。
+        otHours: data.otHours != null ? Number(data.otHours) : null,
       });
       if (data.clientRateSnapshot == null) data.clientRateSnapshot = internalPricing.clientRate;
       if (data.guardWageSnapshot == null) data.guardWageSnapshot = internalPricing.guardWage;
