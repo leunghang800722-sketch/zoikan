@@ -73,7 +73,7 @@ async function performApply(runId: string, actorUserId: string): Promise<void> {
       ip: null,
     });
 
-    // apply 完成之後自動再計一次 plan（相當於 run-guard-fix.sh 嘅下一
+    // apply 完成之後自動再計一次 plan（相當於已刪嘅 run-guard-fix.sh 嘅下一
     // 輪）——用返同一份 U Team 名單／同一個月，等老闆睇仲剩幾多。
     try {
       const staffList = await prisma.staffListUpload.findUnique({ where: { id: run.staffListUploadId } });

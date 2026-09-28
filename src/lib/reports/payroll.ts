@@ -156,13 +156,16 @@ export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_RE
 
   // 逐安員明細（每個 broker 一個 sheet），方便人手覆核
   // 效能優化（老闆 2026-09-28 指令）：逐雞頭 findMany 改做一條攞齊成月記錄
-  // 再喺記憶體按 settlementBrokerId 分組（where 一樣；每組內記錄相對次序同
-  // 原本逐雞頭查一樣係 DB 自然次序）。
+  // 再喺記憶體按 settlementBrokerId 分組（where 一樣）。Opus 5.5 驗收：原本
+  // 逐雞頭 query 冇 orderBy，行次序係 DB 自然次序，改一條大 query 之後次序
+  // 會唔同（數字唔變）——加明確 orderBy（workDate→guardId→id）令 Excel 明細
+  // 行次序有決定性，唔再靠 DB heap 次序。
   const [brokers, allRecords] = await Promise.all([
     prisma.broker.findMany(),
     prisma.shiftRecord.findMany({
       where: { settlementBrokerId: { not: null }, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
       include: { guard: true },
+      orderBy: [{ workDate: "asc" }, { guardId: "asc" }, { id: "asc" }],
     }),
   ]);
   const recordsByBroker = new Map<string, typeof allRecords>();

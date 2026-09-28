@@ -1,5 +1,5 @@
 // WP-GUARD-FIX-UI：8 月（或指定月份）更表「未配對安員」自動修復——
-// 純邏輯模組，`scripts/guard-fix/build-guard-fix-plan.ts`（老闆 Terminal
+// 純邏輯模組，舊 `scripts/guard-fix/build-guard-fix-plan.ts`（2026-09-28 已刪；老闆 Terminal
 // 用）同 `POST /api/guard-fix/plan`（老闆手機頁用）共用同一套判斷，
 // 唔准複製貼上一份新邏輯（WP-GUARD-FIX-UI 鐵則）。
 //

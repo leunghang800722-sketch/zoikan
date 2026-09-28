@@ -3,8 +3,10 @@
 // 月數字要逐格一致）。純讀 DB。輸出唔含任何人名／工號／電話：雞頭淨係用
 // 代號，含 PII 嘅明細（對數規則 details）淨係存 sha256，比對相等就得。
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import ExcelJS from "exceljs";
 
 function systemSession(userId: string) {
   return { userId, tel: "", name: "", roleId: "", roleName: "老闆", baseRole: "老闆" as const, brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString() };
@@ -43,6 +45,18 @@ async function main() {
     const diag = await md.buildMonthDiagnostics(session, month);
     const post = await pe.buildPostorderWorkbook(month);
     const pre = await oc.stepPrecheck(month, session.userId, null);
+    // Opus 5.5 驗收建議：糧單 Excel 逐 sheet 內容 hash（行排序後——揪數字／
+    // 內容變；另存一個未排序 hash 揪行次序變）。寫去 tmp 再讀返，唔留檔。
+    const xlsxPath = path.join(os.tmpdir(), `zoikan-perf-payroll-${m}-${process.pid}.xlsx`);
+    await pr.writePayrollXlsx(xlsxPath, month);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(xlsxPath);
+    fs.rmSync(xlsxPath, { force: true });
+    const payrollXlsxSheets = wb.worksheets.map((ws) => {
+      const rows: string[] = [];
+      ws.eachRow((row) => rows.push(JSON.stringify((row.values as unknown[]).slice(1))));
+      return { sheet: sha(ws.name), rows: rows.length, sortedSha: sha([...rows].sort()), orderedSha: sha(rows) };
+    });
     out[m] = {
       monthlyClose: { main: close.mainRows, outside: close.outsideRows, longtermPayrollActual: close.longtermPayrollActual, combinedCostSummary: close.combinedCostSummary },
       grossMargin: { totals: margin.totals, sites: margin.sites.map((s) => ({ ...s })), referralFeeUnattributed: margin.referralFeeUnattributed, specialCostUnattributed: margin.specialCostUnattributed, longtermSalaryTotalAllocatable: margin.longtermSalaryTotalAllocatable, combinedCostSummary: margin.combinedCostSummary },
@@ -52,6 +66,7 @@ async function main() {
       diagnostics: diag,
       postorder: { siteRevenueTotal: post.siteRevenueTotal, siteCostTotal: post.siteCostTotal, summaryTotals: post.summaryTotals, siteRevenue: post.siteRevenue },
       precheck: { numbers: pre.numbers, warnings: pre.warnings.length, needsHuman: pre.needsHuman.length, halt: pre.halt ?? null },
+      payrollXlsx: payrollXlsxSheets,
     };
   }
   fs.writeFileSync(path.resolve(outPath), JSON.stringify(out, null, 2));

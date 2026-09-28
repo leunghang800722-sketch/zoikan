@@ -1,7 +1,7 @@
 // WP-GUARD-FIX：讀兩份人手維護嘅 Excel 名單——
 //   1. U Team 名單（Wilson，`data/2026-09/msg-file/U Team - People
 //      template 20260824.xlsx`，sheet1，1,395 行）——7 月之後入職嘅新
-//      散工，`build-guard-fix-plan.ts` 用嚟起 `create` 個案。
+//      散工，一鍵結算 stepGuardFix（舊 build-guard-fix-plan.ts 已刪）用嚟起 `create` 個案。
 //   2. 核對表「主檔（每人一行）」（`/Users/macbookpro/Desktop/MSG /
 //      在勤員工資料核對表-2026-09-19（全部保留版）.xlsx`）——已經人手核
 //      對過「DB 已有邊個人」嘅結果，`系統id` 直接係 `guards.id`，用嚟起

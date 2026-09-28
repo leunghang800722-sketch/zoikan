@@ -1,6 +1,6 @@
 // WP-GUARD-FIX（老闆 2026-09-25 要求）：8 月更表「未配對安員」自動修復
 // ——plan.json 嘅型別定義。呢個檔冇 DB 依賴，純粹型別，build-guard-fix-
-// plan.ts／apply-guard-fix-plan.ts 共用，保證兩邊讀寫同一份契約。同
+// plan.ts／apply.ts（舊 apply-guard-fix-plan.ts script 已刪）共用，保證兩邊讀寫同一份契約。同
 // scripts/opening/lib/types.ts 一致模式。
 //
 // 鐵則：呢個型別入面嘅 `nameZh`／`aliases`／`tel`／`hkid` 等 PII 只可以

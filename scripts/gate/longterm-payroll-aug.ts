@@ -1,7 +1,7 @@
 // `npm run gate:ltpay-aug`——WP-LTPAY §21 任務 4c（老闆 2026-09-26 指令）：
 // 8 月長工月薪糧 aggregate 層對 8 月試算 oracle 嘅驗收 gate。
 //
-// 同 `gate:ltpay-july`（`longterm-payroll-july.ts`）唔同：7 月 gate 淨係
+// 同舊 `gate:ltpay-july`（`longterm-payroll-july.ts`，2026-09-28 已刪）唔同：7 月 gate 淨係
 // 對住一個已經跑過一鍵結算嘅靜態 dev DB 讀，8 月 fixture 冇呢種現成
 // 快照，要自己由 `db:reset && db:seed` 開始，行一次「開月→36 檔上
 // 載→（guard-fix，冇 U Team 名單就淨係用 Postorder 組合）→長工結算單
@@ -393,7 +393,7 @@ async function main() {
       const byField = new Map<string, number>();
       for (const d of diffs) byField.set(d.field, (byField.get(d.field) ?? 0) + 1);
       console.log(`[${GATE_TAG}] 逐欄差異數：${[...byField.entries()].map(([f, c]) => `${f}=${c}`).join("、")}`);
-      console.log(`[${GATE_TAG}] FAIL（未達 0 差異——呢個 gate 現階段係 harness／diagnostic，同 gate:ltpay-july 一致級別，唔係扮 0 差異）`);
+      console.log(`[${GATE_TAG}] FAIL（未達 0 差異——呢個 gate 現階段係 harness／diagnostic，同已刪嘅 gate:ltpay-july 一致級別，唔係扮 0 差異）`);
       process.exitCode = 1;
     } else {
       console.log(`[${GATE_TAG}] FAIL —— 淨係對到 ${compared}/${fixture.length} 人`);
@@ -409,7 +409,13 @@ async function main() {
     // 結果）。
     console.log(`[${GATE_TAG}] === 9. 一鍵結算 runOneClickMonthClose(2026-08)（俾 gate:postorder-export-aug 對報告）===`);
     const oneClickRun = await prisma.monthCloseRun.create({ data: { month: AUG_MONTH, status: "running", startedById: actorUserId, applyStartedAt: new Date() }, select: { id: true } });
-    await runOneClickMonthClose(oneClickRun.id, AUG_MONTH, actorUserId, null);
+    try {
+      await runOneClickMonthClose(oneClickRun.id, AUG_MONTH, actorUserId, null);
+    } catch (e) {
+      // Opus 5.5 驗收建議：直接 throw 嘅話 run 會一直停喺 running，標返 failed 先再拋。
+      await prisma.monthCloseRun.updateMany({ where: { id: oneClickRun.id, status: "running" }, data: { status: "failed", finishedAt: new Date(), errorMessage: e instanceof Error ? e.message.slice(0, 500) : String(e) } });
+      throw e;
+    }
     const oneClickFinal = await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: oneClickRun.id }, select: { status: true, errorMessage: true } });
     console.log(`[${GATE_TAG}] 一鍵結算 ${oneClickFinal.status}${oneClickFinal.errorMessage ? `：${oneClickFinal.errorMessage}` : ""}`);
     if (oneClickFinal.status !== "done") process.exitCode = 1;
