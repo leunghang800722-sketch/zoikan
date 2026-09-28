@@ -1725,10 +1725,14 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
    `guard_avg_wages`／`guard_leave_balances` 歸零，確認過 count=0）。
 
 **留返下一手**：
-1. BOCHK autopay 格式——要有人攞到
-   `2026-07-長工autopay-BOCHK-PayrollEditor.xls` 嘅密碼先可以核實實際
-   欄位次序，跌返而家嘅 CSV fallback（已經喺頁面/API 標明「格式待銀行
-   核實」）。
+1. ~~BOCHK autopay 格式~~——**已做，見 WP-BOSS5 §25.4**（老闆
+   2026-09-28 決定 6）：`.xls` 樣本密碼始終未有人解到，改用 BOCHK 公開
+   文件《Payroll (Payment Type) Editor and File Specification (FPS)
+   v1.2》核實格式——`GET /api/longterm/payroll/:month/autopay` 改出
+   「Payroll Editor 明細」xlsx（唔係最終 `.DAT`，貼入 BOCHK Editor 由
+   佢產生），CSV fallback 已淘汰，`format_verified` 由 `false` 變
+   `true`。詳細見 `src/lib/longterm-payroll/bochk-autopay-export.ts`
+   頂註解、`P2-版面重設計計劃.md` §25.4。
 3. 「加落 cost」（§16.2 產品決策，4d 已經留低）——5a 已經加咗一個獨立
    「合併成本」摘要顯示，但**冇**改動 `mainRows`/`totals` 嘅核心
    `cost` 欄本身，呢個決策仲係留返老闆/下一手拍板（見上面 4d 記錄）。

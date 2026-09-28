@@ -25,6 +25,9 @@ import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmt, fmtDate, isExpired, isExpiringSoon, currentMonthStr, todayLocalStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { kickerFor } from "@/lib/ui/nav-active";
+// WP-BOSS5 §25.4：銀行編號「建議下拉」——純資料，冇 DB 依賴，client
+// component 用得。
+import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
 const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
@@ -89,6 +92,9 @@ interface GuardRow {
   bank_name?: string | null;
   bank_account_no?: string | null;
   bank_payee_name?: string | null;
+  // WP-BOSS5 §25.4：3 位 HKICL 清算銀行編號，同上面三個 bank* 欄一組
+  // detail-only。
+  bank_code?: string | null;
   blacklist_check_result?: string | null;
   blacklist_check_date?: string | null;
   // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——同 hkid
@@ -199,6 +205,7 @@ const emptyForm = {
   bank_name: "",
   bank_account_no: "",
   bank_payee_name: "",
+  bank_code: "",
   blacklist_check_result: "",
   blacklist_check_date: "",
   // WP-GUARD-FIX：逗號分隔字串（同 sites/page.tsx `aliases` 一致寫法），
@@ -537,6 +544,7 @@ export function GuardsClient({
       bank_name: row.bank_name ?? "",
       bank_account_no: row.bank_account_no ?? "",
       bank_payee_name: row.bank_payee_name ?? "",
+      bank_code: row.bank_code ?? "",
       blacklist_check_result: row.blacklist_check_result ?? "",
       blacklist_check_date: row.blacklist_check_date ? row.blacklist_check_date.slice(0, 10) : "",
       name_aliases: (row.name_aliases ?? []).join(", "),
@@ -756,6 +764,10 @@ export function GuardsClient({
           if (form.bank_name) body.bank_name = form.bank_name;
           if (form.bank_account_no) body.bank_account_no = form.bank_account_no;
           if (form.bank_payee_name) body.bank_payee_name = form.bank_payee_name;
+          // WP-BOSS5 §25.4：bank_code 淨係一個「建議下拉」揀出嚟嘅值
+          // （見下面 JSX），會計都可以人手打；空字串照送（等清得走已填
+          // 錯嘅值），`dropUnchangedFieldGroupValues()` 值冇變會自己跳過。
+          if (form.bank_code) body.bank_code = form.bank_code;
         }
       }
       // 牌照/平安卡/入職離職日期跟現有「安員」module，唔受 hasPiiField/
@@ -2429,6 +2441,37 @@ export function GuardsClient({
                 </Field>
                 <Field label="收款人名">
                   <input className={inputCls} value={form.bank_payee_name} onChange={(e) => setForm((f) => ({ ...f, bank_payee_name: e.target.value }))} />
+                </Field>
+              </div>
+              {/* WP-BOSS5 §25.4（老闆 2026-09-28 決定 6）：BOCHK Payroll
+                  Editor 要 3 位 HKICL 銀行編號——淨係提供「建議下拉」，
+                  唔會憑上面「銀行」自由文字自動填；揀咗先寫入呢個輸入
+                  格，會計都可以人手改／直接打冇喺建議清單嘅 3 位碼。 */}
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="銀行編號（HKICL，3 位）" hint="BOCHK Payroll Editor 用；建議下拉揀咗先入呢格，唔會自動填">
+                  <input
+                    className={inputCls}
+                    value={form.bank_code}
+                    maxLength={3}
+                    placeholder="例：004"
+                    onChange={(e) => setForm((f) => ({ ...f, bank_code: e.target.value.replace(/[^0-9]/g, "").slice(0, 3) }))}
+                  />
+                </Field>
+                <Field label="建議（常見銀行）">
+                  <select
+                    className={selectCls}
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) setForm((f) => ({ ...f, bank_code: e.target.value }));
+                    }}
+                  >
+                    <option value="">（揀常見銀行帶入編號）</option>
+                    {HKICL_BANK_OPTIONS.map((b) => (
+                      <option key={b.code} value={b.code}>
+                        {b.nameZhShort}（{b.code}）
+                      </option>
+                    ))}
+                  </select>
                 </Field>
               </div>
             </>

@@ -138,7 +138,7 @@ export default function LongtermPayrollPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expandedGuard, setExpandedGuard] = useState<string | null>(null);
-  const [autopayPreview, setAutopayPreview] = useState<{ row_count: number; missing_bank_info: string[] } | null>(null);
+  const [autopayPreview, setAutopayPreview] = useState<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string } | null>(null);
 
   const load = useCallback(async (m: string) => {
     setLoading(true);
@@ -179,7 +179,9 @@ export default function LongtermPayrollPage() {
   }
 
   async function loadAutopayPreview() {
-    const res = await apiGet<{ row_count: number; missing_bank_info: string[] }>(`/api/longterm/payroll/${month}/autopay?preview=1`);
+    const res = await apiGet<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string }>(
+      `/api/longterm/payroll/${month}/autopay?preview=1`,
+    );
     if (res.ok) setAutopayPreview(res.data);
     else setError(res.message);
   }
@@ -327,12 +329,15 @@ export default function LongtermPayrollPage() {
       {/* ⑤ 平均工資／假期餘額 */}
       <AvgWageLeaveBalanceSection month={month} guardOptions={guardOptions} locked={!!payroll?.locked} avgWages={avgWages} leaveBalances={leaveBalances} onChanged={() => load(month)} onError={setError} />
 
-      {/* ⑥ BOCHK autopay 檔 */}
+      {/* ⑥ BOCHK autopay 檔——WP-BOSS5 §25.4（老闆 2026-09-28 決定 6）：
+          格式已核實，出「BOCHK Payroll Editor 明細」xlsx（唔係最終
+          .DAT——老闆／會計要用 BOCHK Payroll Editor 貼呢份 xlsx 嘅資料，
+          由 Editor 產生正式 .DAT）。 */}
       <section className="flex flex-col gap-2 rounded-lg border border-zk-border bg-white p-4">
         <div className="text-sm font-semibold text-zk-text">BOCHK autopay 檔</div>
         <div className="text-[12px] text-zk-faint">
-          格式待銀行核實——公司提供嘅 2026-07 樣本係密碼保護嘅舊版 .xls，未能核實 BOCHK Payroll Editor 實際要求嘅欄位次序。呢度出嘅係
-          CSV fallback（bank_code, account_no, payee_name, amount, reference），bank_code 用安員登記嘅銀行名稱頂住。
+          格式已核實（BOCHK Payroll (Payment Type) Editor and File Specification v1.2）——下載嘅 xlsx 跟 Payroll Editor 明細欄位次序，貼入 Editor 由佢產生正式
+          .DAT。冇銀行編號／戶口號碼／賬戶名稱（或者賬戶名稱含中文／非英文字元）嘅人唔會出現喺明細，列入檔內「缺資料」sheet。
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" onClick={loadAutopayPreview} disabled={!payroll?.run}>
@@ -342,15 +347,18 @@ export default function LongtermPayrollPage() {
               瀏覽器當檔案下載處理，唔會離開現時頁面。 */}
           <a href={`/api/longterm/payroll/${month}/autopay`}>
             <Button variant="primary" disabled={!payroll?.run}>
-              下載 CSV
+              下載 BOCHK Payroll Editor 格式（貼入 Editor 產生 .DAT）
             </Button>
           </a>
         </div>
         {autopayPreview && (
           <div className="text-[12.5px] text-zk-text">
-            會有 {autopayPreview.row_count} 行。
-            {autopayPreview.missing_bank_info.length > 0 && (
-              <span className="text-red-600"> 缺銀行資料，唔會出現喺檔案：{autopayPreview.missing_bank_info.join("、")}</span>
+            會有 {autopayPreview.row_count} 行，總金額 {fmtMoney(autopayPreview.total_amount)}。
+            {autopayPreview.missing.length > 0 && (
+              <span className="text-red-600">
+                {" "}
+                缺資料，唔會出現喺明細（列入「缺資料」sheet）：{autopayPreview.missing.map((m) => `${m.staff_no}（${m.reason}）`).join("、")}
+              </span>
             )}
           </div>
         )}

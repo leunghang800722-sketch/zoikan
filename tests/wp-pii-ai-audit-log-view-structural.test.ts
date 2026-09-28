@@ -30,6 +30,11 @@ const PRE_EXISTING_BLOCKED_FIELDS = ["password_hash", "otp_secret", "tel", "bank
 
 const WP_PII_AUDIT_LOG_ALLOWED_NEW_FIELDS = ["sia_permit_type", "safety_card_expiry", "hire_date", "leave_date"];
 
+// WP-BOSS5 §25.4（老闆 2026-09-28 決定 6）：guards.bank_code（HKICL 銀行
+// 編號）同上面 bank_name/bank_account_no/bank_payee_name 一組「安員銀行
+// 資料」PII，一樣要喺 scrub_json blocked_keys（見
+// prisma/migrations/20260929010000_wp_boss5_bank_code）。
+
 async function auditLogViewDef(): Promise<string> {
   const rows = await prisma.$queryRawUnsafe<Array<{ viewdef: string }>>(
     `SELECT pg_get_viewdef('ai.audit_log'::regclass, true) AS viewdef`,
@@ -56,6 +61,11 @@ describe("WP-PII：ai.audit_log view 結構性測試——scrub_json blocked_key
     for (const field of WP_PII_AUDIT_LOG_ALLOWED_NEW_FIELDS) {
       expect(blockedArrayText).not.toContain(`'${field}'`);
     }
+  });
+
+  it("WP-BOSS5 §25.4：view 定義文字含 bank_code", async () => {
+    const viewdef = await auditLogViewDef();
+    expect(viewdef).toContain("bank_code");
   });
 
   it("before／after 兩邊嘅 scrub_json 用返同一份 blocked_keys（唔係得 before 加齊、after 漏咗）", async () => {

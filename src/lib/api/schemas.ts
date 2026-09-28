@@ -279,6 +279,11 @@ export const GuardUpdateSchema = z
     bank_name: z.string().optional(),
     bank_account_no: z.string().optional(),
     bank_payee_name: z.string().optional(),
+    // WP-BOSS5 §25.4：3 位 HKICL 清算銀行編號——`""` 清空、非空一定要
+    // 3 位數字（BOCHK Payroll Editor 要求嘅格式）。淨係一個「建議下拉」
+    // （`hkicl-bank-codes.ts`）幫會計揀，會計都可以人手打呢度冇收錄嘅
+    // 3 位碼（表唔係白名單）。
+    bank_code: z.union([z.literal(""), z.string().regex(/^\d{3}$/, "銀行編號要 3 位數字（HKICL 清算編號）")]).optional(),
     blacklist_check_result: blacklistCheckResult,
     // 應修 2：同 `date_of_birth` 一致，DB 欄 nullable，改用
     // `nullableDateOnly` 等 `null` 清得走。
