@@ -66,29 +66,44 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     const data = snakeToCamelShallow(parsed) as Prisma.ShiftRecordUncheckedUpdateInput;
 
-    // WP-BOSS5 驗收項 2：改 `ot_hours`（OT 記錄、workDate≥2026-08-01）要
-    // 用 resolver 用新小時重新計价——snapshot 本身係「金額」＝每小時价×
-    // 小時，淨改小時、唔跟住重算金額嘅話，個「每小時价」會靜靜錯咗（例如
-    // 3.5 小時卡×2 小時嘅金額改成 3.5 小時就代表緊錯咗嘅每小時价）。
+    // WP-BOSS5 驗收項 2（Opus 5.5 覆核應修 a）：改 `ot_hours`（OT 記錄、
+    // workDate≥2026-08-01）要用 resolver 用新小時重新計价——snapshot 本身
+    // 係「金額」＝每小時价×小時，淨改小時、唔跟住重算金額嘅話，個「每
+    // 小時价」會靜靜錯咗（例如 3.5 小時卡×2 小時嘅金額改成 3.5 小時就
+    // 代表緊錯咗嘅每小時价）。
     // 揀嘅做法：
-    //   1. 呢次 PATCH 有帶 `ot_hours`、冇同時帶三個 snapshot 欄（帶咗就
-    //      當用戶自己指定金額，唔喺呢度插手）、記錄本身係 OT、
-    //      workDate≥2026-08-01 先觸發；
-    //   2. resolver 揾到 OT 卡 → 三欄覆蓋做「每小時价×新小時」（同
-    //      resolve-rate.ts `applyOtHourlyPricing()` 一致口徑，hours 為
-    //      0/搵唔到都已經喺 resolver 入面變返 null＋unpriced）；
-    //   3. resolver 完全揾唔到卡：
-    //      - 之前三個 snapshot 本身已經全部 null（本來就係未定价 OT）
-    //        → 維持三欄 null（冇嘢好覆蓋，等新小時都係未定价 OT）；
-    //      - 之前三個 snapshot 任一非 null（呢個金額冇對應卡，即係人手
-    //        輸入／舊卡刪咗）→ 409：唔准淨改小時令個「金額」同「新小時」
-    //        再對唔上（會令 84.85/小時嗰類每小時价靜靜變錯），要求用戶
-    //        先手動清空三欄先改小時，等佢自己揀新金額。
+    //   0. 帶咗 `ot_hours` 又帶咗三個 snapshot 欄其中一兩個（唔係三個一
+    //      齊帶）→ 400——唔准淨帶部分欄，等 client／wage／fee 三個一齊
+    //      嚟自「同一個」用戶決定，唔會出現「一半用戶手動值、一半 resolver
+    //      值」呢種夾雜狀態。
+    //   1. 有帶 `ot_hours`、冇同時帶齊三個 snapshot 欄（帶齊三個就當用戶
+    //      自己指定成套金額，唔喺呢度插手）、記錄本身係 OT、
+    //      workDate≥2026-08-01 先觸發自動重新計价；
+    //   2. **逐邊獨立判斷**（唔係「有一邊搵到就成組覆蓋」）：
+    //      - 收客價：resolver 揾到收客卡 → 覆蓋 `client_rate_snapshot`；
+    //        揾唔到但之前非 null（人手輸入冇對應卡）→ 409；揾唔到而之前
+    //        本身已經 null → 維持 null。
+    //      - 出街價：resolver 揾到出街卡 → 覆蓋 `guard_wage_snapshot`／
+    //        `broker_fee_snapshot`；揾唔到但之前兩個任一非 null → 409；
+    //        揾唔到而之前兩個都已經 null → 維持 null。
+    //      呢個分法避免「淨係揾到收客卡冇出街卡」（或者反過來）嗰種常見
+    //      情況一律靜靜清走揾唔到嗰邊嘅人手金額（或者一律 409 攔住連
+    //      揾到嘅嗰邊都唔覆蓋）。
     const rawKeys = new Set(Object.keys(rawBody));
     const otHoursProvided = rawKeys.has("ot_hours");
-    const pricingFieldsProvided = rawKeys.has("client_rate_snapshot") || rawKeys.has("guard_wage_snapshot") || rawKeys.has("broker_fee_snapshot");
+    const clientFieldProvided = rawKeys.has("client_rate_snapshot");
+    const wageFieldProvided = rawKeys.has("guard_wage_snapshot");
+    const feeFieldProvided = rawKeys.has("broker_fee_snapshot");
+    const anyPricingFieldProvided = clientFieldProvided || wageFieldProvided || feeFieldProvided;
+    const allPricingFieldsProvided = clientFieldProvided && wageFieldProvided && feeFieldProvided;
     const effectiveWorkDate = parsed.work_date ?? before.workDate;
-    if (otHoursProvided && !pricingFieldsProvided && before.recordType === "ot" && effectiveWorkDate.getTime() >= OT_HOURLY_PRICING_FROM.getTime()) {
+    const otReconsiderApplies = otHoursProvided && before.recordType === "ot" && effectiveWorkDate.getTime() >= OT_HOURLY_PRICING_FROM.getTime();
+    if (otReconsiderApplies && anyPricingFieldProvided && !allPricingFieldsProvided) {
+      throw BadRequest(
+        "改 ot_hours 同時要帶 client_rate_snapshot／guard_wage_snapshot／broker_fee_snapshot 就要三個一齊帶，唔可以淨帶其中一兩個。",
+      );
+    }
+    if (otReconsiderApplies && !allPricingFieldsProvided) {
       const effectiveShiftTypeId = parsed.shift_type_id ?? before.shiftTypeId;
       const [shiftType, broker] = await Promise.all([
         prisma.shiftType.findUnique({ where: { id: effectiveShiftTypeId }, select: { code: true, billingGroup: true } }),
@@ -108,19 +123,22 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         recordType: "ot",
         otHours: Number(parsed.ot_hours),
       });
-      const cardFound = pricing.clientCardFound || pricing.payoutCardFound;
-      if (cardFound) {
+
+      // 收客價：獨立判斷。
+      if (pricing.clientCardFound) {
         data.clientRateSnapshot = pricing.clientRate;
+      } else if (before.clientRateSnapshot !== null) {
+        throw Conflict("呢條 OT 記錄嘅收客價冇對應卡（人手輸入或者卡已刪）——請先清空 client_rate_snapshot 先改 ot_hours，避免舊金額同新小時對唔上。");
+      }
+      // 出街價（guard_wage／broker_fee 一組）：獨立判斷，唔受收客價嗰邊
+      // 揾唔揾到卡影響。
+      if (pricing.payoutCardFound) {
         data.guardWageSnapshot = pricing.guardWage;
         data.brokerFeeSnapshot = pricing.brokerFee;
-      } else {
-        const beforeHadValue = before.clientRateSnapshot !== null || before.guardWageSnapshot !== null || before.brokerFeeSnapshot !== null;
-        if (beforeHadValue) {
-          throw Conflict("呢條 OT 記錄嘅收客價／出街價冇對應卡（人手輸入或者卡已刪）——請先清空 client_rate_snapshot／guard_wage_snapshot／broker_fee_snapshot 先改 ot_hours，避免舊金額同新小時對唔上。");
-        }
-        data.clientRateSnapshot = null;
-        data.guardWageSnapshot = null;
-        data.brokerFeeSnapshot = null;
+      } else if (before.guardWageSnapshot !== null || before.brokerFeeSnapshot !== null) {
+        throw Conflict(
+          "呢條 OT 記錄嘅出街價冇對應卡（人手輸入或者卡已刪）——請先清空 guard_wage_snapshot／broker_fee_snapshot 先改 ot_hours，避免舊金額同新小時對唔上。",
+        );
       }
     }
 
