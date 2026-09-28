@@ -337,7 +337,12 @@ export default function LongtermPayrollPage() {
         <div className="text-sm font-semibold text-zk-text">BOCHK autopay 檔</div>
         <div className="text-[12px] text-zk-faint">
           格式已核實（BOCHK Payroll (Payment Type) Editor and File Specification v1.2）——下載嘅 xlsx 跟 Payroll Editor 明細欄位次序，貼入 Editor 由佢產生正式
-          .DAT。冇銀行編號／戶口號碼／賬戶名稱（或者賬戶名稱含中文／非英文字元）嘅人唔會出現喺明細，列入檔內「缺資料」sheet。
+          .DAT。冇銀行編號／戶口號碼（只可以係 0-9／-）／賬戶名稱（含中文／非英文字元、或者長過 140 字元）／8
+          位通知電話（e-Alert 類型／聯絡係 BOCHK 規格必填）嘅人唔會出現喺明細，列入檔內「缺資料」sheet。
+        </div>
+        <div className="text-[12px] text-zk-faint">
+          第 1 欄「編號 No.」淨係做內部序號輔助對數，貼入 BOCHK Payroll Editor 時由第 2 欄（B 欄，員工賬戶銀行編號）開始對應 Editor 第 10
+          欄，唔使貼埋「編號 No.」呢欄。
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" onClick={loadAutopayPreview} disabled={!payroll?.run}>

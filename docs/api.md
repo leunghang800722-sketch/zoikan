@@ -1740,7 +1740,12 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
    「Payroll Editor 明細」xlsx（唔係最終 `.DAT`，貼入 BOCHK Editor 由
    佢產生），CSV fallback 已淘汰，`format_verified` 由 `false` 變
    `true`。詳細見 `src/lib/longterm-payroll/bochk-autopay-export.ts`
-   頂註解、`P2-版面重設計計劃.md` §25.4。
+   頂註解、`P2-版面重設計計劃.md` §25.4。「Payroll Editor 明細」sheet
+   第 1 欄「編號 No.」淨係內部序號輔助對數，貼入 BOCHK Payroll Editor
+   時要由第 2 欄（B 欄，員工賬戶銀行編號）開始對應 Editor 第 10 欄，
+   唔使貼埋「編號 No.」呢欄（見驗收項 4）。BOCHK 規格 e-Alert 類型／
+   聯絡係必填（驗收項 3）：冇 8 位通知電話、賬戶名稱長過 140 字元、
+   賬戶號碼含 0-9／- 以外字元嘅人一律列入「缺資料」sheet，唔出明細行。
 3. 「加落 cost」（§16.2 產品決策，4d 已經留低）——5a 已經加咗一個獨立
    「合併成本」摘要顯示，但**冇**改動 `mainRows`/`totals` 嘅核心
    `cost` 欄本身，呢個決策仲係留返老闆/下一手拍板（見上面 4d 記錄）。
