@@ -104,6 +104,12 @@ interface RosterGroup {
   shiftLabel: string;
   timeLabel: string | null;
   isLongterm: boolean; // settlementBroker.kind === 'internal_longterm'（B07）
+  /** WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：呢個組係咪 OT 行
+   * （record_type='ot'）——同一 (盤, OT 更種, 結算雞頭) 一組，同散工/長工
+   * 正更組獨立（OT 更種本身就係一個獨立 shiftTypeId，key 自然分開）。
+   * OT 行「更數」＝Σ ot_hours（老闆「折入」：以小時做更數，配合決定 #1
+   * 每小時价），唔係逐格 +1。 */
+  isOt: boolean;
   brokerCode: string;
   brokerLabel: string;
   byDay: Map<number, DayCell[]>; // 1..31
@@ -160,8 +166,13 @@ export interface PostorderSiteRevenue {
   siteId: string;
   siteName: string;
   shifts: number;
-  revenue: number;
+  revenue: number; // 含 OT（WP-BOSS5 §25.7）
   cost: number;
+  /** WP-BOSS5 §25.7：呢個盤 OT 行嘅收入／更數（Σ ot_hours）子集——已經
+   * 摺入 `revenue`/`shifts`，呢兩個欄淨係俾 caller 想拆走 OT 部分（例如
+   * 對比 `buildMonthlyClose()` P0 口徑唔含 OT）用。 */
+  otRevenue: number;
+  otShifts: number;
 }
 
 export interface PostorderWorkbookResult {
@@ -184,8 +195,11 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
   const { start, end } = reportMonthRange(month);
   const daysInMonth = end.getUTCDate();
 
+  // WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT（record_type='ot'）
+  // 都要折入 Roster／PostOrder（同一 (盤, OT 更種, 結算雞頭) 一組，OT 更種
+  // 本身就係獨立 shiftTypeId，group key 自然同正更分開）。
   const records = await prisma.shiftRecord.findMany({
-    where: { recordType: "shift", status: { not: "cancelled" }, workDate: { gte: start, lte: end } },
+    where: { recordType: { in: ["shift", "ot"] }, status: { not: "cancelled" }, workDate: { gte: start, lte: end } },
     select: {
       workDate: true,
       rescueRate: true,
@@ -193,6 +207,8 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
       guardWageSnapshot: true,
       brokerFeeSnapshot: true,
       guardId: true,
+      recordType: true,
+      otHours: true,
       guard: { select: { nameZh: true, monthlySalary: true, employmentType: true } },
       site: { select: { id: true, canonicalName: true, aliases: true, clientName: true, guardsPaidByClient: true } },
       shiftType: { select: { id: true, code: true, label: true, startTime: true, endTime: true } },
@@ -201,10 +217,11 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     },
   });
 
-  // 取消格另計（尾欄「取消」）——同上面主查詢分開，狀態唔互斥。
+  // 取消格另計（尾欄「取消」）——同上面主查詢分開，狀態唔互斥；OT 都計
+  // （§25.7 之後 OT 行都喺 Roster 出現，取消格數都應該跟埋）。
   const cancelled = await prisma.shiftRecord.groupBy({
     by: ["siteId", "shiftTypeId", "settlementBrokerId"],
-    where: { recordType: "shift", status: "cancelled", workDate: { gte: start, lte: end } },
+    where: { recordType: { in: ["shift", "ot"] }, status: "cancelled", workDate: { gte: start, lte: end } },
     _count: { _all: true },
   });
   const cancelledMap = new Map<string, number>();
@@ -230,6 +247,7 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
   for (const r of records) {
     const brokerId = r.settlementBrokerId;
     const key = `${r.site.id}|${r.shiftType.id}|${brokerId ?? "none"}`;
+    const isOt = r.recordType === "ot";
     let g = groups.get(key);
     if (!g) {
       const isLongterm = r.settlementBroker?.kind === "internal_longterm";
@@ -245,6 +263,7 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
         shiftLabel,
         timeLabel: timeLabel(r.shiftType.startTime, r.shiftType.endTime),
         isLongterm,
+        isOt,
         brokerCode: r.settlementBroker?.code ?? "",
         brokerLabel,
         byDay: new Map(),
@@ -261,17 +280,32 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
       groups.set(key, g);
     }
 
-    g.shiftCount += 1;
+    // §25.7：OT 行「更數」＝Σ ot_hours（老闆「折入」決定：以小時做更數，
+    // 配合 §25.1 OT 卡＝每小時价）；正更／請假照舊逐格 +1。冇 ot_hours
+    // （未定价 OT）＝呢格對「更數」貢獻 0（唔屈估，同 gross-margin.ts
+    // 8 月起「冇 hours 唔可以估」呼應）。
+    const otH = isOt ? (r.otHours === null ? 0 : n(r.otHours)) : 0;
+    const countIncrement = isOt ? otH : 1;
+    g.shiftCount = round2(g.shiftCount + countIncrement);
     const clientRate = r.clientRateSnapshot === null ? null : n(r.clientRateSnapshot);
     const guardWage = n(r.guardWageSnapshot);
     const brokerFee = n(r.brokerFeeSnapshot);
+    // §25.1 之後 OT snapshot 已經係「呢條記錄嘅金額」（卡金額×otHours 喺
+    // resolve-rate.ts 寫入嗰刻已經計好），呢度加總唔使再乘 otHours。
     g.revenue = round2(g.revenue + (clientRate ?? 0));
     g.cost = round2(g.cost + guardWage + brokerFee);
-    if (clientRate !== null) g.clientRateSamples.push(clientRate);
-    if (r.guardWageSnapshot !== null) g.guardWageSamples.push(guardWage);
+    // 「上單價」／「外判價」樣本：OT 行要顯示每小時价（snapshot÷otHours），
+    // 唔係嗰粒 OT 記錄嘅總金額；正更／長工行樣本照舊用記錄本身金額。
+    if (isOt) {
+      if (clientRate !== null && otH > 0) g.clientRateSamples.push(round2(clientRate / otH));
+      if (r.guardWageSnapshot !== null && otH > 0) g.guardWageSamples.push(round2(guardWage / otH));
+    } else {
+      if (clientRate !== null) g.clientRateSamples.push(clientRate);
+      if (r.guardWageSnapshot !== null) g.guardWageSamples.push(guardWage);
+    }
     if (g.isLongterm) {
       g.longtermGuardIds.add(r.guardId);
-      g.longtermShiftsByGuard.set(r.guardId, (g.longtermShiftsByGuard.get(r.guardId) ?? 0) + 1);
+      g.longtermShiftsByGuard.set(r.guardId, (g.longtermShiftsByGuard.get(r.guardId) ?? 0) + countIncrement);
     }
 
     const day = r.workDate.getUTCDate();
@@ -537,6 +571,7 @@ async function writeSummarySheet(
   referral: ComputeReferralFeesResult,
   monthlyClose: Awaited<ReturnType<typeof buildMonthlyClose>>,
   grossMargin: Awaited<ReturnType<typeof buildGrossMargin>>,
+  otRevenueTotal: number,
 ): Promise<PostorderSummaryTotals> {
   const ws = wb.addWorksheet(sanitizeSheetName(POSTORDER_SHEET_NAMES.summary));
   const { start, end } = reportMonthRange(month);
@@ -689,6 +724,12 @@ async function writeSummarySheet(
   setCell(ws, row, 1, "總收入（月結總表，含月結以外）");
   setCell(ws, row, 2, totals.revenue);
   row++;
+  // §25.7：資訊行（唔入合計／唔影響上面總收入口徑）——OT 收入已經折入
+  // Roster／PostOrder 分頁，呢度俾老闆對返數，答返 revenue 同
+  // buildMonthlyClose() P0 口徑（唔含 OT）之間嘅已知差額。
+  setCell(ws, row, 1, "OT 收入（已折入 Roster 分頁，唔計入上面總收入——buildMonthlyClose() P0 口徑未含 OT）");
+  setCell(ws, row, 2, otRevenueTotal);
+  row++;
   setCell(ws, row, 1, "毛利口徑營業額（毛利表）");
   setCell(ws, row, 2, totals.marginRevenue);
   row++;
@@ -778,7 +819,8 @@ async function writeLegendSheet(wb: ExcelJS.Workbook, month: Date): Promise<void
     "§14 規則 12（簽證形式長工 salary passthrough）：呢個系統外現金扣減唔喺任何數字反映，總表雞頭數字係扣減前金額——見 Summary 提示行。",
     "§14 規則 12a（卓弘豁免介紹費）：由 2026-09 起生效，8 月結算跟月結表全數支付。",
     "",
-    "已知差異項目（§19，8 月驗收時記錄，未必每月都出現，出現時要人手核對）：OT 記錄未折入日曆格／逐盤收入（HKU座頭 OT）、蔚峰園(W)更表重複行、凱和山 Unbilled 判斷、Weave Hospital Road(T)更表漏記病假。呢啲屬於*上游更表資料*本身嘅已知落差，唔係呢個 export 模組嘅 bug——見 scripts/gate/postorder-export-aug.ts 差異表。",
+    "已知差異項目（§19，8 月驗收時記錄，未必每月都出現，出現時要人手核對）：蔚峰園(W)更表重複行、凱和山 Unbilled 判斷、Weave Hospital Road(T)更表漏記病假。呢啲屬於*上游更表資料*本身嘅已知落差，唔係呢個 export 模組嘅 bug——見 scripts/gate/postorder-export-aug.ts 差異表。",
+    "OT（record_type=ot）：WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）起折入 Roster／PostOrder——同一 (盤, OT 更種, 結算雞頭) 一組，行標籤用 OT 更種 label（例「1Hr OT」）；「更數」＝Σ ot_hours（以小時做更數，配合 §25.1 OT 卡＝每小時价）；上單價／外判價＝snapshot÷ot_hours（即每小時价）。呢部分收入已經計入 Roster「當月收入」／Summary「逐雞頭付款」／`siteRevenue.revenue`，但 `buildMonthlyClose()`（月結總表 P0 口徑）本身唔含 OT——Summary「總收入」呢個特定總數維持一鍵報告口徑（唔含 OT），另有一行「OT 收入（已折入 Roster 分頁）」俾老闆對數。",
   ];
   lines.forEach((l, i) => setCell(ws, i + 1, 1, l));
   ws.getColumn(1).width = 100;
@@ -838,13 +880,23 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
   // Roster/PostOrder/Summary 逐盤收入唔會漏咗呢批盤（8 月實測：IFC／
   // 控制室／九龍企業大廈／創富廠IC／屯門小欖樂怡街5號／都會大學夜巡邏／
   // M+／恆星樓 呢類盤冇呢個補丁會顯示 0 收入）。
+  //
+  // WP-BOSS5 §25.7：`buildMonthlyClose()`（P0 口徑）刻意唔含 OT（`record_
+  // type=ot`），但呢個 export 嘅 `groups` 而家有 OT 行（`g.isOt`）。呢度
+  // 淨係用非 OT 組嚟同 `buildMonthlyClose()` 對——OT 組嘅收入唔可以落嚟
+  // 呢條「補差」公式，否則會將 OT 收入當「口徑差額」沖銷走（見下面 flat
+  // adjustment），令 Roster/siteRevenue 嘅 OT 收入憑空消失。
   const perShiftRevenueBySite = new Map<string, number>();
-  for (const g of groups) perShiftRevenueBySite.set(g.key.siteId, round2((perShiftRevenueBySite.get(g.key.siteId) ?? 0) + g.revenue));
+  for (const g of groups) {
+    if (g.isOt) continue;
+    perShiftRevenueBySite.set(g.key.siteId, round2((perShiftRevenueBySite.get(g.key.siteId) ?? 0) + g.revenue));
+  }
   const flatRevenueRows: FlatRevenueRow[] = [];
   // Opus 5.5 驗收：差額係負數（月結口徑收入少過逐更收客 Σ）或者盤喺
   // 月結總表完全冇出現，原版會靜靜略過，令 Roster 逐盤收入同月結總表對唔
-  // 上——而家一律加一行「收入調整（月結口徑）」補齊，逐盤加總永遠等於
-  // `buildMonthlyClose()`（金額照寫，唔會收埋）。
+  // 上——而家一律加一行「收入調整（月結口徑）」補齊，逐盤（剔走 OT）加總
+  // 永遠等於 `buildMonthlyClose()`（金額照寫，唔會收埋）；OT 收入另外喺
+  // `PostorderSiteRevenue.otRevenue`／Roster OT 行反映，唔喺呢條調整入面。
   const closeRevenueBySite = new Map<string, { revenue: number; canonicalName: string }>();
   for (const r of [...monthlyClose.mainRows, ...monthlyClose.outsideRows]) closeRevenueBySite.set(r.siteId, { revenue: n(r.revenue), canonicalName: r.canonicalName });
   const siteIdsInOrder = [...closeRevenueBySite.keys(), ...[...perShiftRevenueBySite.keys()].filter((id) => !closeRevenueBySite.has(id))];
@@ -863,9 +915,12 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
     }
   }
 
+  // §25.7：OT 收入合計（Summary 資訊行＋俾 gate/caller 拆走 OT 用）。
+  const otRevenueTotal = round2(groups.filter((g) => g.isOt).reduce((a, g) => a + g.revenue, 0));
+
   await writeRosterSheet(wb, groups, daysInMonth, !!monthClose?.lockedAt, longtermPayoutRate, flatRevenueRows);
   await writePostOrderSheet(wb, groups, daysInMonth, referral, brokerNameById, siteNameById, flatRevenueRows);
-  const summaryTotals = await writeSummarySheet(wb, month, payrollTotals, referral, monthlyClose, grossMargin);
+  const summaryTotals = await writeSummarySheet(wb, month, payrollTotals, referral, monthlyClose, grossMargin, otRevenueTotal);
   await writeLegendSheet(wb, month);
 
   const siteRevenueTotal = round2(groups.reduce((a, g) => a + g.revenue, 0) + flatRevenueRows.reduce((a, r) => a + r.amount, 0));
@@ -878,14 +933,26 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
       cur.shifts += g.shiftCount;
       cur.revenue = round2(cur.revenue + g.revenue);
       cur.cost = round2(cur.cost + g.cost);
+      if (g.isOt) {
+        cur.otRevenue = round2(cur.otRevenue + g.revenue);
+        cur.otShifts = round2(cur.otShifts + g.shiftCount);
+      }
     } else {
-      siteRevenueBySite.set(g.key.siteId, { siteId: g.key.siteId, siteName: siteNameById.get(g.key.siteId) ?? g.siteName, shifts: g.shiftCount, revenue: g.revenue, cost: g.cost });
+      siteRevenueBySite.set(g.key.siteId, {
+        siteId: g.key.siteId,
+        siteName: siteNameById.get(g.key.siteId) ?? g.siteName,
+        shifts: g.shiftCount,
+        revenue: g.revenue,
+        cost: g.cost,
+        otRevenue: g.isOt ? g.revenue : 0,
+        otShifts: g.isOt ? g.shiftCount : 0,
+      });
     }
   }
   for (const r of flatRevenueRows) {
     const cur = siteRevenueBySite.get(r.siteId);
     if (cur) cur.revenue = round2(cur.revenue + r.amount);
-    else siteRevenueBySite.set(r.siteId, { siteId: r.siteId, siteName: siteNameById.get(r.siteId) ?? r.siteName, shifts: 0, revenue: r.amount, cost: 0 });
+    else siteRevenueBySite.set(r.siteId, { siteId: r.siteId, siteName: siteNameById.get(r.siteId) ?? r.siteName, shifts: 0, revenue: r.amount, cost: 0, otRevenue: 0, otShifts: 0 });
   }
 
   return {

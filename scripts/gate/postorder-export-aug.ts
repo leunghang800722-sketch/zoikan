@@ -72,8 +72,11 @@ const KNOWN_BROKER_DIFFS: Record<string, { expected: number; note: string }> = {
   T: { expected: -1600, note: "Weave Hospital Road 更表漏記病假 2 格（老闆確認 T 頂）" },
 };
 const KNOWN_REFERRAL_DIFF = { expected: 100, note: "Weave 更表漏記 2 格介紹費（docs/api.md：60,520+100=60,620）" };
+// WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT 已經折入 Roster／
+// siteRevenue（`revenue` 含 OT），HKU座頭 OT（1Hr OT，84.85／更）呢個
+// KNOWN 刪走——對總表 (C，下面「逐盤收入」section，用含 OT 嘅 `revenue`)
+// 而家應該 0 差；再出現就係真 FAIL。
 const KNOWN_SITE_DIFFS: Record<string, { expected: number; note: string }> = {
-  HKU座頭: { expected: -84.85, note: "HKU座頭 OT（1Hr OT，84.85／更）——buildMonthlyClose() 逐盤收入淨計 record_type=shift，唔含 ot" },
   屯門凱和山: { expected: 871, note: "Postorder 8/21 夜更標唔收客（Unbilled），系統照逐更收客卡計" },
   淺水灣道11號蔚峰園: { expected: -935, note: "更表重複行（同 W 雞頭差額同一根源）" },
 };
@@ -120,10 +123,15 @@ async function main() {
     if (t.brokerCode) strict(`[內部] 半月結 01-15＋16-31 ${code} vs 全月`, xlsxHalf.get(code) ?? 0, t.amount);
   }
   const close = await buildMonthlyClose(AUG_MONTH);
-  const sysSite = new Map(result.siteRevenue.map((r) => [r.siteId, r.revenue]));
+  // WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT 而家折入 Roster／
+  // siteRevenue（`revenue` 含 OT），但 `buildMonthlyClose()`（P0 口徑）
+  // 刻意唔含 OT——呢兩個內部檢查（逐盤／Roster Σ）改比 `revenue −
+  // otRevenue`，先至係同 `buildMonthlyClose()` 同一口徑嘅嚴格 0 差。
+  const sysSite = new Map(result.siteRevenue.map((r) => [r.siteId, round2(r.revenue - r.otRevenue)]));
   const closeSites = [...close.mainRows, ...close.outsideRows];
-  for (const r of closeSites) strict(`[內部] 逐盤收入 ${r.canonicalName} vs 月結總表`, sysSite.get(r.siteId) ?? 0, r.revenue);
-  for (const r of result.siteRevenue) if (!closeSites.some((c) => c.siteId === r.siteId)) strict(`[內部] 逐盤收入 ${r.siteName}（月結總表冇呢個盤）`, r.revenue, 0);
+  for (const r of closeSites) strict(`[內部] 逐盤收入（剔 OT）${r.canonicalName} vs 月結總表`, sysSite.get(r.siteId) ?? 0, r.revenue);
+  for (const r of result.siteRevenue) if (!closeSites.some((c) => c.siteId === r.siteId)) strict(`[內部] 逐盤收入（剔 OT）${r.siteName}（月結總表冇呢個盤）`, round2(r.revenue - r.otRevenue), 0);
+  const otRevenueTotal = round2(result.siteRevenue.reduce((a, r) => a + r.otRevenue, 0));
   {
     const ros = wbBack.getWorksheet("Roster")!;
     const head = (ros.getRow(1).values as unknown[]).slice(1);
@@ -132,7 +140,7 @@ async function main() {
     ros.eachRow((r, i) => {
       if (i > 1) rosterRev += Number(r.getCell(revCol).value ?? 0);
     });
-    strict("[內部] Roster Σ當月收入 vs 月結總表總收入", round2(rosterRev), round2(closeSites.reduce((a, r) => a + r.revenue, 0)));
+    strict("[內部] Roster Σ當月收入（剔 OT）vs 月結總表總收入", round2(rosterRev - otRevenueTotal), round2(closeSites.reduce((a, r) => a + r.revenue, 0)));
   }
   const lastRun = await prisma.monthCloseRun.findFirst({ where: { month: AUG_MONTH, status: "done" }, orderBy: { finishedAt: "desc" }, select: { reportJson: true } });
   const report = lastRun?.reportJson as { totals?: { revenue: number; marginRevenue: number; cost: number; grossMargin: number }; payrollByBroker?: Array<{ brokerCode: string; amount: number }>; referralFee?: { total: number }; longtermPayroll?: Record<string, number> | null } | null;

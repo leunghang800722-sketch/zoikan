@@ -2131,3 +2131,57 @@ PASS，`Summary!A1`／`Roster!A1:F1` 格式核對正常，`close workbook
 凱和山 +871.08、蔚峰園 −935.86）；介紹費 60,620（+100 KNOWN），15 複合鍵 14 個
 0 差；94 項內部檢查全 PASS；Summary 總收入 3,304,416.19／毛利口徑營業額
 3,236,901.04／合併成本 2,709,509.74／毛利 527,391.30＝一鍵報告。
+
+### WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）：OT 折入 Roster 分頁
+
+老闆決定 #7「Roster 分頁 OT 要計埋」——`loadRosterGroups()`（`src/lib/
+reports/postorder-export.ts`）查詢由淨 `record_type="shift"` 改做 `{in:
+["shift","ot"]}`。OT 更種本身就係獨立 `shiftTypeId`，group key（盤,更種,
+結算雞頭）自然將 OT 行同正更行分開一行，行標籤跟 OT 更種嘅 `label`（例
+「1Hr OT」）。
+
+- **更數**＝Σ `ot_hours`（老闆「折入」決定：以小時做更數，配合 §25.1
+  「OT 卡＝每小時价」），唔係逐格 +1；冇 `ot_hours`（未定价 OT）對更數
+  貢獻 0，唔屈估。
+- **上單價／外判價**＝`client_rate_snapshot`/`guard_wage_snapshot` ÷
+  `ot_hours`（即每小時价；§25.1 之後 snapshot 已經係「呢條記錄嘅金額」，
+  淨係呢度攞嚟顯示單價先要除返 hours，加總 `revenue`/`cost` 唔使再乘）。
+- `RosterGroup` 加 `isOt` 標記；`PostorderSiteRevenue` 加 `otRevenue`／
+  `otShifts`（`revenue`/`shifts` 已經含 OT，呢兩個欄係子集，俾 caller
+  想拆走 OT 用）。
+- **同 `buildMonthlyClose()`（P0 口徑，刻意唔含 OT）嘅「收入調整（月結
+  口徑）」補差機制唔可以撞埋**：`perShiftRevenueBySite`（用嚟同
+  `buildMonthlyClose()` 對、觸發「月費/收入調整」合成行嗰條）而家剔走
+  `isOt` 組先加總——否則 OT 收入會被當「口徑差額」沖銷返 0（第一版實作
+  真係中咗呢條，單元測試揪到：OT 收入喺 `siteRevenue.revenue` 度消失
+  咗）。
+- Summary sheet 總收入維持一鍵報告口徑（唔含 OT，`revenue` 唔變），加
+  一行資訊「OT 收入（已折入 Roster 分頁，唔計入上面總收入）」，8 月實測
+  ＝84.85（同 HKU座頭 1Hr OT 那筆一致）。
+- `scripts/gate/postorder-export-aug.ts`：內部檢查「逐盤收入 vs 月結
+  總表」／「Roster Σ當月收入 vs 月結總表總收入」改比 `revenue −
+  otRevenue`（同 P0 口徑對，嚴格 0 差，冇 KNOWN）；對總表（`revenue_
+  site.json`，真 Postorder 總表口徑，含 OT）嘅逐盤比較改用含 OT 嘅
+  `revenue`，刪走 `KNOWN_SITE_DIFFS.HKU座頭`（−84.85）——8 月實測 HKU座頭
+  變 0 差；`siteRevenueTotal` KNOWN 由 −149.69（三個已知落差之和，含
+  HKU座頭）自動變 −64.84（刪走 HKU座頭嗰項之後，剩返凱和山 +871.08／
+  蔚峰園 −935.86 之和，`KNOWN_SITE_DIFFS` 對象嘅 `expected` 值加總係
+  runtime 動態算，唔使手動改常數）。
+- `scripts/gate/aug-e2e-check.ts` B5「HKU座頭 OT」段落加註：呢個 script
+  本身直接讀 `buildMonthlyClose()`（P0 口徑），唔叫 `buildPostorderWorkbook()`
+  ——OT 唔折入 `buildMonthlyClose()`（老闆冇話要改 P0 口徑），所以呢個
+  B1 對比嘅 −84.85 落差本身**唔變**（設計如此），但加咗一句話清楚寫明
+  Postorder export（`gate:postorder-export-aug`）已經 0 差，避免讀者以為
+  兩個 gate 仲有落差。
+
+**8 月實測**（`gate:postorder-export-aug`，exit 0）：逐盤 **42/44** 0 差
+（HKU座頭已經 0 差；剩 2 個 KNOWN：凱和山 +871.08／蔚峰園 −935.86）；
+`siteRevenueTotal` 差額 **−64.84** KNOWN（同文件記錄一致）；逐雞頭
+K/G/D/Y/B07 0 差、W/T KNOWN 不變；介紹費 60,620（+100 KNOWN）不變；
+Summary!B38「OT 收入」資訊行＝84.85；新增嘅「逐盤收入（剔 OT）」／
+「Roster Σ當月收入（剔 OT）」內部檢查全部 0 差；真 Excel 開檔測試
+（Microsoft Excel + AppleScript，指名 workbook `~/Desktop/MSG /
+_opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
+`close saving no` 收尾，測試檔已刪。單元測試：獨立 `describe`（唔同
+主 fixture 撞精確數字斷言）驗證 2 小時 OT snapshot 169.70 → Roster 行
+更數 2、上單價 84.85、`otRevenue`/`otShifts` 係 `revenue`/`shifts` 子集。
