@@ -17,6 +17,7 @@ import { prisma } from "@/lib/db";
 import { n, round2, monthRange } from "./money";
 import { buildMonthlyClose } from "./monthly-close";
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
+import { OT_HOURLY_PRICING_FROM } from "@/lib/pricing/resolve-rate";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 
 // 老闆總表口徑（8 月）——正式站冇 `data/` 目錄，唔可以讀
@@ -100,6 +101,23 @@ export interface MonthDiagnostics {
     activeByBrokerCode: Array<{ code: string | null; count: number }>; // null = 通用（broker_id IS NULL）
     activeBySite: Array<{ siteId: string; siteName: string; count: number }>;
     nullClientRateCount: number;
+  };
+  /** WP-BOSS5 驗收項 7（新增診斷）：本月 OT 記錄逐 `ot_hours` 值嘅分組
+   * 摘要——用途：正式站部署後，操作員開 `GET /api/diagnostics/month?
+   * month=2026-08` 確認 8 月冇「小時≠1 而且已定价」嘅 OT 記錄（§25.1
+   * 起 OT snapshot 本身已經係「呢粒記錄嘅總金額」，gross-margin.ts 唔
+   * 再 ×otHours；如果 8 月有呢類記錄，代表口徑轉咗，8 月毛利會變）。
+   * 冇 PII——逐 `ot_hours` 值一組，唔係逐條記錄。 */
+  ot: {
+    /** OT 卡＝每小時价呢個新口徑生效日（同 resolve-rate.ts
+     * `OT_HOURLY_PRICING_FROM` 一致，"YYYY-MM-DD"）。 */
+    otHourlyPricingFrom: string;
+    byHours: Array<{
+      otHours: number | null; // null = 未填 ot_hours（未定价 OT）
+      count: number;
+      /** 三個 snapshot（client/guard_wage/broker_fee）任一非 null 就算 priced。 */
+      pricedCount: number;
+    }>;
   };
   expectedDevBaseline: {
     applicable: boolean; // 淨係 2026-08 先有意義（見任務書：呢個係 8 月總表口徑硬編碼）
@@ -317,6 +335,30 @@ export async function buildMonthDiagnostics(_session: AuthedSession, month: Date
   };
 
   // ---------------------------------------------------------------------
+  // ot（WP-BOSS5 驗收項 7）：逐 ot_hours 值分組摘要——寧願逐記錄喺記憶體
+  // 分（唔用 Prisma groupBy on Decimal 欄，避免逐個唔同 Decimal 精度都
+  // 分開一組），一個月嘅 OT 記錄量細，冇效能顧慮。
+  // ---------------------------------------------------------------------
+  const otRecords = await prisma.shiftRecord.findMany({
+    where: { recordType: "ot", status: { not: "cancelled" }, workDate: { gte: start, lte: end } },
+    select: { otHours: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
+  });
+  const otByHoursMap = new Map<string, { otHours: number | null; count: number; pricedCount: number }>();
+  for (const r of otRecords) {
+    const hours = r.otHours === null ? null : n(r.otHours);
+    const key = hours === null ? "null" : String(hours);
+    const priced = r.clientRateSnapshot !== null || r.guardWageSnapshot !== null || r.brokerFeeSnapshot !== null;
+    const entry = otByHoursMap.get(key) ?? { otHours: hours, count: 0, pricedCount: 0 };
+    entry.count += 1;
+    if (priced) entry.pricedCount += 1;
+    otByHoursMap.set(key, entry);
+  }
+  const ot: MonthDiagnostics["ot"] = {
+    otHourlyPricingFrom: OT_HOURLY_PRICING_FROM.toISOString().slice(0, 10),
+    byHours: [...otByHoursMap.values()].sort((a, b) => (a.otHours ?? -1) - (b.otHours ?? -1)),
+  };
+
+  // ---------------------------------------------------------------------
   // expected_dev_baseline：8 月總表口徑硬編碼對照（見任務書——正式站冇
   // data/ 目錄，唔可以讀 aug-payroll-trial JSON）。淨係 2026-08 有意義。
   // ---------------------------------------------------------------------
@@ -351,6 +393,7 @@ export async function buildMonthDiagnostics(_session: AuthedSession, month: Date
     sites,
     uploads,
     cards,
+    ot,
     expectedDevBaseline,
   };
 }
