@@ -130,7 +130,10 @@ lock/unlock 代替），其餘資源一律：
 老闆 2026-09-25 要求（緊急，直接影響出糧）：8 月更表大量「未配對」安員
 （絕大多數係 7 月之後入職嘅新散工未入系統），之前一律靠
 `scripts/guard-fix/{build-guard-fix-plan,apply-guard-fix-plan}.ts` 喺
-Terminal 貼 DB 連線字串手動跑（`P2-版面重設計計劃.md` §18）。呢個 WP
+Terminal 貼 DB 連線字串手動跑（`P2-版面重設計計劃.md` §18；**呢批
+script 連 `run-guard-fix.sh`／`export-postorder-pairs.ts` 已於 2026-09-28
+效能優化清走——正式站同 dev gate 一律行一鍵結算 `stepGuardFix()`，見
+§24**）。呢個 WP
 將**同一套分類／套用邏輯**（唔准複製貼上一份新——抽做
 `src/lib/guard-fix/{plan,apply}.ts` 純模組，script 同 API 共用同一個
 `buildGuardFixPlan()`／`applyGuardFixPlan()`／`reparseAllActiveUploads()`）
@@ -1122,7 +1125,8 @@ guard-fix 頁上載 Postorder 總表→計算修復計劃→套用（可以重�
 8. **雞頭稱呼**：migration `20260926160000_acc_broker_name_aliases` 將
    每個雞頭自己 `name` 加入 `aliases`（唔寫死名）；Postorder 其他稱呼
    （private 檔 `master_roster_aliases`）用本機
-   `scripts/opening/sync-broker-aliases.ts [--apply]` 同步（唔入 git）。
+   `scripts/opening/sync-broker-aliases.ts [--apply]` 同步（唔入 git；
+   2026-09-28 已清走——正式站早已改由 migration 補，見下面第二輪）。
    之前已上線 DB 對唔到 3 個稱呼，介紹費得 10,000。
 9. **開盤補收客價**（`scripts/opening/apply-aug-plan.ts`）：同 natural
    key 現有卡 `client_rate=null`、plan 有值 → 補（唔覆蓋已有值），
@@ -1132,7 +1136,9 @@ guard-fix 頁上載 Postorder 總表→計算修復計劃→套用（可以重�
 **驗收修正（第二輪，2026-09-26 同日）——老闆指令「正式站唔准有任何
 Terminal 步驟，全部要喺 app 撳掣」**：上面「正式站步驟」原本嘅 1–3 步
 （`sync-broker-aliases.ts`／`run-round2.sh`／更表頁「重新計价」）全部
-本機 script，撤走，改用下面三個機制：
+本機 script，撤走，改用下面三個機制（呢批 script 連 `verify-aug.ts`／
+`check-aug-state.ts` 已於 2026-09-28 效能優化一併刪除；`build-aug-plan.ts`
+／`apply-aug-plan.ts` 保留，`gate:ltpay-aug` 用嚟開 dev 8 月盤）：
 
 10. **蔚峰園 8 月卡改由 migration 補**（`prisma/migrations/
     20260926170000_acc_weifeng_aug_cards/migration.sql`，取代
@@ -1693,7 +1699,8 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
    實際數字）；四個 7 月 gate（`gate:reports` 16 pass/0 fail/2 info、
    `gate:export` PASS、`gate:pricing` PASS 589 已知例外、`report:regen`
    337 pass/0 fail/5 known）逐一重新執行，數字同呢次改動之前完全一樣；
-   `gate:roster-parse` 36/36；`gate:ltpay-july`（FAIL，逐欄差異數
+   `gate:roster-parse` 36/36；`gate:ltpay-july`（2026-09-28 已刪除呢個
+   diagnostic gate——7 月長工糧唔係系統計，永遠 FAIL 冇對照意義；FAIL，逐欄差異數
    gross=29/mpfEe=24/mpfEr=25/autopay=29/netBasic=2，同 §21.4 記錄
    完全一樣，冇因為呢手改動而變）；`gate:ltpay-aug`（55/55 人配對到、
    54/55 全 0 差異，同 §21.5 記錄一致，用嚟做 5b 頁面嘅真實資料手動

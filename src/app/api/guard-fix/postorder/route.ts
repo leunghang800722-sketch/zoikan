@@ -18,7 +18,7 @@
 //
 // WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：完整 Roster CSV（2,996
 // 行、760KB）匯出持續 503。第三條路徑：multipart 帶 `longterm_pairs_csv`
-// （必要，見 `scripts/guard-fix/export-postorder-pairs.ts`／
+// （必要，見已刪除嘅 `scripts/guard-fix/export-postorder-pairs.ts`（script 已於 2026-09-28 效能優化刪除，功能由一鍵結算 stepGuardFix／正式站 API 取代）／
 // `parseLongtermPairsCsv()`）＋可選 `postorder_csv`（冇就介紹費行 0
 // 項，同其他 CSV 路徑冇 PostOrder 分頁一致行為）。`fileBytes`／
 // `fileName`／`fileSha256`／`fileSize` 一樣淨係佔位／audit 用途，真正
@@ -237,7 +237,7 @@ export async function POST(req: Request) {
     } else if (longtermPairsCsvEntry instanceof File) {
       // --- 精簡長工組合 CSV 路徑（WP-POSTORDER-PAIRS-CSV，老闆
       // 2026-09-27 緊急）：完整 Roster CSV 匯出持續 503，改用
-      // `scripts/guard-fix/export-postorder-pairs.ts` 產生嘅極精簡
+      // 舊 `scripts/guard-fix/export-postorder-pairs.ts`（已刪）產生嘅極精簡
       // `longterm-pairs.csv`（`site_label,site_short,guard_name,
       // cell_count`，~3KB）取代——PostOrder CSV（介紹費行）依然可選。 ---
       if (longtermPairsCsvEntry.size > MAX_PAIRS_CSV_BYTES) {

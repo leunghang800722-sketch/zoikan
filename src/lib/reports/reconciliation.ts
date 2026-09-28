@@ -51,37 +51,26 @@ export interface ReconciliationResult {
 
 async function rule1RevenueBySite(month: Date): Promise<Omit<ReconciliationRule, "rule" | "key" | "label">> {
   const { start, end } = sharedMonthRange(month);
-  const { mainRows } = await buildMonthlyClose(month);
+  // 效能優化（老闆 2026-09-28 指令）：原本逐盤兩條 aggregate（~80 條），改做
+  // 兩條 groupBy(siteId) 一次過攞齊——where 條件一樣（淨係冇 `siteId`），
+  // 每盤加總由 DB 精確做，冇記錄嘅盤 ≡ 原本 sum=null→0，結果逐盤不變。
+  const perShiftWhere = { recordType: "shift", isExternal: false, shiftType: { billingGroup: "per_shift" }, workDate: { gte: start, lte: end } } as const;
+  const [{ mainRows }, confirmedRows, allStatusRows] = await Promise.all([
+    buildMonthlyClose(month),
+    prisma.shiftRecord.groupBy({ by: ["siteId"], where: { ...perShiftWhere, status: { in: ["confirmed", "completed"] } }, _sum: { clientRateSnapshot: true } }),
+    prisma.shiftRecord.groupBy({ by: ["siteId"], where: perShiftWhere, _sum: { clientRateSnapshot: true } }),
+  ]);
+  const confirmedBySite = new Map(confirmedRows.map((r) => [r.siteId, r._sum.clientRateSnapshot]));
+  const allStatusBySite = new Map(allStatusRows.map((r) => [r.siteId, r._sum.clientRateSnapshot]));
   const details: Array<Record<string, unknown>> = [];
   for (const row of mainRows) {
     // flat-card／月費盤嘅 revenue 唔係逐更 client_rate_snapshot 加返嚟，
     // 呢條規則對呢類盤唔適用（monthly-close.ts 本身都係咁處理）。
-    const confirmedAgg = await prisma.shiftRecord.aggregate({
-      where: {
-        siteId: row.siteId,
-        recordType: "shift",
-        isExternal: false,
-        shiftType: { billingGroup: "per_shift" },
-        workDate: { gte: start, lte: end },
-        status: { in: ["confirmed", "completed"] },
-      },
-      _sum: { clientRateSnapshot: true },
-    });
-    const confirmedOnlyRevenue = round2(n(confirmedAgg._sum.clientRateSnapshot));
+    const confirmedOnlyRevenue = round2(n(confirmedBySite.get(row.siteId)));
     // row.revenue 可能包含 flat card／special item 摺入嘅金額，唔可以直接
     // 同 confirmedOnlyRevenue 比較（唔係同一件事）；呢度淨係對「純逐更
     // client_rate_snapshot 加總」呢部分做 confirmed-only vs all-status 比較。
-    const allStatusAgg = await prisma.shiftRecord.aggregate({
-      where: {
-        siteId: row.siteId,
-        recordType: "shift",
-        isExternal: false,
-        shiftType: { billingGroup: "per_shift" },
-        workDate: { gte: start, lte: end },
-      },
-      _sum: { clientRateSnapshot: true },
-    });
-    const allStatusRevenue = round2(n(allStatusAgg._sum.clientRateSnapshot));
+    const allStatusRevenue = round2(n(allStatusBySite.get(row.siteId)));
     const diff = round2(allStatusRevenue - confirmedOnlyRevenue);
     if (Math.abs(diff) >= EPS) {
       details.push({ site_id: row.siteId, site_name: row.canonicalName, confirmed_only_revenue: confirmedOnlyRevenue, all_status_revenue: allStatusRevenue, diff });
@@ -99,14 +88,21 @@ async function rule1RevenueBySite(month: Date): Promise<Omit<ReconciliationRule,
 
 async function rule2PayrollByBroker(month: Date): Promise<Omit<ReconciliationRule, "rule" | "key" | "label">> {
   const { start, end } = sharedMonthRange(month);
-  const totals = await buildPayrollTotals(month);
+  // 效能優化：逐雞頭 aggregate 改做一條 groupBy(settlementBrokerId)（where
+  // 一樣；`brokerId === null` 嗰行對應 groupBy 嘅 null 組），結果不變。
+  const [totals, confirmedRows] = await Promise.all([
+    buildPayrollTotals(month),
+    prisma.shiftRecord.groupBy({
+      by: ["settlementBrokerId"],
+      where: { recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { in: ["confirmed", "completed"] } },
+      _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
+    }),
+  ]);
+  const confirmedByBroker = new Map(confirmedRows.map((r) => [r.settlementBrokerId, r._sum]));
   const details: Array<Record<string, unknown>> = [];
   for (const t of totals) {
-    const confirmedAgg = await prisma.shiftRecord.aggregate({
-      where: { settlementBrokerId: t.brokerId, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end }, status: { in: ["confirmed", "completed"] } },
-      _sum: { guardWageSnapshot: true, brokerFeeSnapshot: true },
-    });
-    const confirmedOnlyAmount = round2(n(confirmedAgg._sum.guardWageSnapshot) + n(confirmedAgg._sum.brokerFeeSnapshot));
+    const confirmedSum = confirmedByBroker.get(t.brokerId);
+    const confirmedOnlyAmount = round2(n(confirmedSum?.guardWageSnapshot) + n(confirmedSum?.brokerFeeSnapshot));
     const diff = round2(t.amount - confirmedOnlyAmount);
     if (Math.abs(diff) >= EPS) {
       details.push({ broker_id: t.brokerId, broker_code: t.brokerCode, payroll_amount: t.amount, confirmed_only_amount: confirmedOnlyAmount, diff });
@@ -124,7 +120,27 @@ async function rule2PayrollByBroker(month: Date): Promise<Omit<ReconciliationRul
 
 async function rule3ThreeTableShiftCount(month: Date): Promise<Omit<ReconciliationRule, "rule" | "key" | "label">> {
   const { start, end } = sharedMonthRange(month);
-  const { mainRows } = await buildMonthlyClose(month);
+  // 效能優化：逐盤兩條 count＋一條 findMany（~120 條）改做兩條 groupBy＋
+  // 一條 findMany 一次過攞齊（where 一樣），結果逐盤不變。
+  const [{ mainRows }, rosterCountRows, standaloneRows, payrollCountRows] = await Promise.all([
+    buildMonthlyClose(month),
+    prisma.shiftRecord.groupBy({
+      by: ["siteId"],
+      where: { recordType: "shift", isExternal: false, shiftType: { billingGroup: "per_shift" }, workDate: { gte: start, lte: end } },
+      _count: { _all: true },
+    }),
+    prisma.specialItem.findMany({ where: { kind: "standalone_broker_fee", month: start, voidedAt: null } }),
+    prisma.shiftRecord.groupBy({ by: ["siteId"], where: { recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } }, _count: { _all: true } }),
+  ]);
+  const rosterCountBySite = new Map(rosterCountRows.map((r) => [r.siteId, r._count._all]));
+  const payrollCountBySite = new Map(payrollCountRows.map((r) => [r.siteId, r._count._all]));
+  const standaloneBySite = new Map<string, typeof standaloneRows>();
+  for (const it of standaloneRows) {
+    if (!it.siteId) continue;
+    const list = standaloneBySite.get(it.siteId);
+    if (list) list.push(it);
+    else standaloneBySite.set(it.siteId, [it]);
+  }
   const details: Array<Record<string, unknown>> = [];
   for (const row of mainRows) {
     // 更表口徑：呢個盤 per_shift 更別、非外判、record_type=shift 嘅記錄數
@@ -133,10 +149,8 @@ async function rule3ThreeTableShiftCount(month: Date): Promise<Omit<Reconciliati
     // 加返 standalone_broker_fee special_items 嘅 shifts（monthly-close.ts
     // 摺入 row.shifts 嗰部分，見 buildMonthlyClose() 註解——呢啲更冇對應
     // shift_records，係盤級調整，唔算「三表唔同源」）。
-    const rosterCount = await prisma.shiftRecord.count({
-      where: { siteId: row.siteId, recordType: "shift", isExternal: false, shiftType: { billingGroup: "per_shift" }, workDate: { gte: start, lte: end } },
-    });
-    const standaloneItems = await prisma.specialItem.findMany({ where: { siteId: row.siteId, kind: "standalone_broker_fee", month: start, voidedAt: null } });
+    const rosterCount = rosterCountBySite.get(row.siteId) ?? 0;
+    const standaloneItems = standaloneBySite.get(row.siteId) ?? [];
     const standaloneShifts = standaloneItems.reduce((a, it) => a + (it.shifts ?? 0), 0);
     const rosterCountWithAdjustments = rosterCount + standaloneShifts;
     // 糧明細口徑：呢個盤嘅 shift+ot 記錄數（唔篩 isExternal/billingGroup，
@@ -144,9 +158,7 @@ async function rule3ThreeTableShiftCount(month: Date): Promise<Omit<Reconciliati
     // 呢個純粹展示比較，唔納入 pass/diff 判斷（standalone_broker_fee 呢
     // 類盤級調整本身冇對應 shift_records，糧明細數字天生會細過月結，唔係
     // 「有人繞過系統」）。
-    const payrollCount = await prisma.shiftRecord.count({
-      where: { siteId: row.siteId, recordType: { in: ["shift", "ot"] }, workDate: { gte: start, lte: end } },
-    });
+    const payrollCount = payrollCountBySite.get(row.siteId) ?? 0;
     if (rosterCountWithAdjustments !== row.shifts) {
       details.push({
         site_id: row.siteId,

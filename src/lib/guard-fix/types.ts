@@ -1,6 +1,6 @@
 // WP-GUARD-FIX（老闆 2026-09-25 要求）：8 月更表「未配對安員」自動修復
 // ——plan.json 嘅型別定義。呢個檔冇 DB 依賴，純粹型別，build-guard-fix-
-// plan.ts／apply-guard-fix-plan.ts 共用，保證兩邊讀寫同一份契約。同
+// plan.ts／apply.ts（舊 apply-guard-fix-plan.ts script 已刪）共用，保證兩邊讀寫同一份契約。同
 // scripts/opening/lib/types.ts 一致模式。
 //
 // 鐵則：呢個型別入面嘅 `nameZh`／`aliases`／`tel`／`hkid` 等 PII 只可以
@@ -11,17 +11,6 @@
  * tel_raw 組合）覆核之後嘅決定。`identityLabel` 純粹俾 plan.json 內部
  * 對照用（唔係識別碼意義上嘅敏感值，但都係姓名，一樣淨係存喺呢個
  * gitignored 檔案）。 */
-export type GuardFixActionKind =
-  | "link"
-  | "create"
-  | "create_minimal"
-  | "needs_boss"
-  | "set_longterm"
-  | "set_longterm_post"
-  | "set_referral"
-  | "set_referral_inferred"
-  | "set_visa";
-
 export interface GuardFixCellRef {
   /** 盤名（`sites.canonical_name`，搵唔到就用檔內盤名原文）——plan-
    * summary 用嚟印「盤＋格數」，唔係 PII。 */

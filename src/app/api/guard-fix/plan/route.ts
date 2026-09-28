@@ -1,6 +1,6 @@
 // WP-GUARD-FIX-UI：`POST /api/guard-fix/plan { month }`——用現用 U Team
 // 名單（最新一份 `status=parsed`）＋該月 active 上載計 plan（同
-// `scripts/guard-fix/build-guard-fix-plan.ts` 一模一樣邏輯，見
+// 舊 `scripts/guard-fix/build-guard-fix-plan.ts`（script 已於 2026-09-28 效能優化刪除，功能由一鍵結算 stepGuardFix／正式站 API 取代） 一模一樣邏輯，見
 // `src/lib/guard-fix/plan.ts`），存一行 `guard_fix_runs`（status=
 // planned）。回 summary（冇 PII）＋ needs_boss 逐條（PII 受
 // 「安員個人資料:view」gate，見 `src/lib/guard-fix/view.ts`）。

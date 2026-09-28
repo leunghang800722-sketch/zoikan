@@ -233,7 +233,7 @@ export）＝**115 permission**，單一事實來源喺 `src/lib/rbac/matrix.ts`
 create/update 存取，仲會影響 `rate_cards`／`special_items` response
 入面 `client_rate*`／`revenue` 呢幾粒數見唔見得到——冇「收客價:view」
 （例如主管出廠設定）response 會剝走呢幾個欄（唔係成張 rate_card 都
-見唔到，見 `src/lib/rbac/field-gates.ts`）。
+見唔到，見 `src/lib/api/field-groups.ts`；舊 `src/lib/rbac/field-gates.ts` 已於 2026-09-28 清走）。
 
 **module resolver**：部分 route（例如 `guards`）依 session 嘅角色動態
 揀 module——雞頭用 `自己安員`，內部角色用 `安員`（`requirePermission()`

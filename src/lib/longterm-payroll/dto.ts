@@ -58,7 +58,6 @@ export const toGuardAvgWageWithGuardDTO = <T extends Record<string, unknown>>(ro
 export const toGuardLeaveBalanceDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LEAVE_BALANCE_FIELDS);
 export const toGuardLeaveBalanceWithGuardDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LEAVE_BALANCE_WITH_GUARD_FIELDS);
 export const toLongtermRunDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, RUN_FIELDS);
-export const toLongtermLineDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LINE_FIELDS);
 export const toLongtermLineWithGuardDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LINE_WITH_GUARD_FIELDS);
 
 export function mapListDTO<T extends Record<string, unknown>>(rows: T[], mapper: (row: T) => Dto): Dto<{ rows: Dto[] }> {

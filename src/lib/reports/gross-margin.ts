@@ -245,12 +245,20 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
     ...flatCardBySite.keys(),
     ...sites.filter((s) => s.billingModel === "monthly_fixed" && s.monthlyFee).map((s) => s.id),
   ]);
+  // 效能優化（老闆 2026-09-28 指令）：「呢個盤呢個月有冇活動」原本逐盤打
+  // 兩條 count，改做兩條 groupBy 一次過攞「有記錄嘅盤」集合——where 條件
+  // 同原本逐盤 count 完全一樣，`count > 0` ≡ 盤喺集合入面，結果不變。
+  const candidateSiteIds = [...nonPerShiftCandidateSiteIds];
+  const [activeShiftSiteRows, activeReqSiteRows] = await Promise.all([
+    prisma.shiftRecord.groupBy({ by: ["siteId"], where: { siteId: { in: candidateSiteIds }, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } }),
+    prisma.dailyRequirement.groupBy({ by: ["siteId"], where: { siteId: { in: candidateSiteIds }, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } }),
+  ]);
+  const activeShiftSites = new Set(activeShiftSiteRows.map((r) => r.siteId));
+  const activeReqSites = new Set(activeReqSiteRows.map((r) => r.siteId));
   for (const siteId of nonPerShiftCandidateSiteIds) {
     const site = siteById.get(siteId);
     if (!site) continue;
-    const hasAnyRecordThisMonth =
-      (await prisma.shiftRecord.count({ where: { siteId, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } })) > 0 ||
-      (await prisma.dailyRequirement.count({ where: { siteId, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0;
+    const hasAnyRecordThisMonth = activeShiftSites.has(siteId) || activeReqSites.has(siteId);
     if (!hasAnyRecordThisMonth) {
       flatCardBySite.delete(siteId);
       monthlyFeeNoActivitySiteIds.add(siteId);

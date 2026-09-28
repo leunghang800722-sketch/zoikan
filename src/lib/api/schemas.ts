@@ -583,14 +583,6 @@ export const BrokerShiftRecordCreateSchema = z
     parent_shift_id: uuid.optional(),
   })
   .strict();
-export const BrokerShiftRecordUpdateSchema = z
-  .object({
-    record_type: enumOf(RecordType).optional(),
-    leave_code: enumOf(LeaveCode).optional(),
-    ot_hours: money,
-    location_tag: z.string().optional(),
-  })
-  .strict();
 
 // ---------------------------------------------------------------------------
 export const DailyRequirementCreateSchema = z

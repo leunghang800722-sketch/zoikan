@@ -22,13 +22,18 @@
     "gate:reports": "tsx scripts/gate/reports.ts",
     "gate:pricing": "tsx scripts/gate/pricing.ts",
     "gate:roster-parse": "tsx scripts/gate/roster-parse.ts",
-    "gate:ltpay-july": "tsx scripts/gate/longterm-payroll-july.ts",
     "gate:ltpay-aug-fixture": "tsx scripts/gate/build-ltpay-aug-fixture.ts",
     "gate:ltpay-aug": "tsx scripts/gate/build-ltpay-aug-fixture.ts && tsx scripts/gate/longterm-payroll-aug.ts",
     "gate:postorder-export-aug": "tsx scripts/gate/postorder-export-aug.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "ai:smoke": "tsx scripts/ai/smoke.ts"
+    "ai:smoke": "tsx scripts/ai/smoke.ts",
+    "perf:profile": "tsx scripts/perf/profile.ts",
+    "gate:aug-e2e": "tsx scripts/gate/aug-e2e-check.ts",
+    "gate:roster-parse-fixture": "tsx scripts/gate/build-roster-parse-fixture.ts",
+    "perf:snapshot": "tsx scripts/perf/snapshot.ts",
+    "gate:locked-months": "zsh scripts/gate/locked-months.sh",
+    "perf:http": "zsh scripts/perf/http-bench.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

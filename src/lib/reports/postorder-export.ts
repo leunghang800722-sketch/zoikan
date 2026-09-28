@@ -901,9 +901,3 @@ export async function buildPostorderWorkbook(month: Date): Promise<PostorderWork
     summaryTotals,
   };
 }
-
-export async function writePostorderXlsx(outPath: string, month: Date): Promise<PostorderWorkbookResult> {
-  const result = await buildPostorderWorkbook(month);
-  await result.workbook.xlsx.writeFile(outPath);
-  return result;
-}

@@ -3,7 +3,7 @@
 // 見 `src/lib/guard-fix/plan.ts`）之前要靠本機 `scripts/opening/
 // sync-broker-aliases.ts`（讀 private CSV）先同步得到，老闆而家要喺
 // app 度逐個揀「呢個稱呼係邊個系統雞頭」→ 呢個 endpoint 寫入
-// `brokers.aliases`（冪等、audit）。`sync-broker-aliases.ts` 留低做
+// `brokers.aliases`（冪等、audit）。`sync-broker-aliases.ts` 已於 2026-09-28 刪除（原本留低做
 // dev 便利（一次過同步私隱 CSV 嘅稱呼），唔再係正式站流程一部分。
 //
 // 權限：同呢一頁其餘寫入 action 一致用「安員配對修復」（老闆專用 gate，

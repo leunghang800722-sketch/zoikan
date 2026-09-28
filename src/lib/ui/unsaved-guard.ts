@@ -20,10 +20,6 @@ export function setUnsavedCount(n: number): void {
   unsavedCount = n;
 }
 
-export function getUnsavedCount(): number {
-  return unsavedCount;
-}
-
 /** 冇未儲存改動就直接放行（true）；有就彈 `window.confirm`，用戶揀「取消」
  * 就擋（false）。淨係喺 client 用（`window` 存在）。 */
 export function confirmLeaveIfUnsaved(): boolean {

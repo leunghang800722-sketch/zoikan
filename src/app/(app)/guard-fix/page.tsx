@@ -756,7 +756,7 @@ export default function GuardFixPage() {
         {/* WP-POSTORDER-PAIRS-CSV（老闆 2026-09-27 緊急）：完整 Roster CSV
             匯出持續 503——加呢個極精簡路徑，淨係要「(盤,人) 組合＋格數」
             四欄 CSV（`site_label,site_short,guard_name,cell_count`，
-            由 `scripts/guard-fix/export-postorder-pairs.ts` 產生，或者
+            由已刪除嘅 `scripts/guard-fix/export-postorder-pairs.ts` 產生（2026-09-28 清走；而家改由 PostOrder.csv 推崗位，見 WP-POSTORDER-PO-PAIRS），或者
             人手／AI 對住 Roster 分頁逐盤逐人手抄），~3KB，人手／AI 都
             可以準確轉錄，PostOrder.csv（介紹費行）可選。 */}
         <div className="mt-3 rounded-lg border border-zk-border bg-zk-surface p-3">

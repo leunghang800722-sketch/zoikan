@@ -285,6 +285,23 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     const key = `${c.siteId}|${c.shiftTypeId}`;
     copyCandidatesByCombo.set(key, [...(copyCandidatesByCombo.get(key) ?? []), c]);
   }
+  // 效能優化（老闆 2026-09-28 指令）：原本逐 (盤,更種) 組合打一條 rate_cards
+  // count（~120 條），改做一條 findMany 攞齊呢批盤本月生效、有收客價嘅卡，
+  // 再喺記憶體判斷「有更種對正嘅卡或者盤級通用卡（shift_type_id IS NULL）」
+  // ——where 條件同原本一樣，結果不變。
+  const activeCardRows = siteIds.length
+    ? await prisma.rateCard.findMany({
+        where: {
+          siteId: { in: siteIds },
+          voidedAt: null,
+          clientRate: { not: null },
+          effectiveFrom: { lte: end },
+          AND: [{ OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] }],
+        },
+        select: { siteId: true, shiftTypeId: true },
+      })
+    : [];
+  const activeCardCombos = new Set(activeCardRows.map((c) => `${c.siteId}|${c.shiftTypeId ?? ""}`));
   for (const combo of combos) {
     const siteId = combo.resolvedSiteId!;
     const shiftTypeId = combo.shiftTypeId!;
@@ -293,17 +310,8 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     // LINK（guards_paid_by_client）盤：客戶直接出糧、唔逐更計价，本身就唔
     // 需要逐更卡（同 unpriced.ts 一致），唔查。
     if (paidByClientSiteIds.has(siteId)) continue;
-    const hasActiveCard = await prisma.rateCard.count({
-      where: {
-        siteId,
-        OR: [{ shiftTypeId }, { shiftTypeId: null }],
-        voidedAt: null,
-        clientRate: { not: null },
-        effectiveFrom: { lte: end },
-        AND: [{ OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] }],
-      },
-    });
-    if (hasActiveCard > 0) continue;
+    const hasActiveCard = activeCardCombos.has(`${siteId}|${shiftTypeId}`) || activeCardCombos.has(`${siteId}|`);
+    if (hasActiveCard) continue;
     cardsMissingNoCarryover++;
     // 淨係查有冇上月卡可以複製（俾用戶睇到「撳咗『複製上月卡』有冇用」），
     // 唔寫 DB。
@@ -336,10 +344,15 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
         _count: true,
       })
     : [];
+  // 效能優化：逐盤 shift_types count 改做一條 groupBy 攞「有更種嘅盤」集合。
+  const sitesWithShiftTypes = new Set(
+    rowSites.length
+      ? (await prisma.shiftType.groupBy({ by: ["siteId"], where: { siteId: { in: rowSites.map((r) => r.resolvedSiteId!) }, voidedAt: null } })).map((g) => g.siteId)
+      : [],
+  );
   for (const r of rowSites) {
     const sid = r.resolvedSiteId!;
-    const count = await prisma.shiftType.count({ where: { siteId: sid, voidedAt: null } });
-    if (count === 0) {
+    if (!sitesWithShiftTypes.has(sid)) {
       siteMissingShiftTypeCount++;
       const name = siteNameById.get(sid) ?? (await prisma.site.findUnique({ where: { id: sid }, select: { canonicalName: true } }))?.canonicalName ?? sid.slice(0, 8);
       needsHuman.push(`盤「${name}」完全未設更種（本月有 ${r._count} 格），要先喺「盤」管理加更種`);
@@ -702,15 +715,12 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
     referralCount = r.lineItems.length;
   }
 
-  const [close, margin, payroll, payrollSource] = await Promise.all([buildMonthlyClose(month), buildGrossMargin(month), buildPayrollTotals(month), buildPayrollSourceSummary(month)]);
-  // 總收入＝月結總表（主表＋月結以外）；成本／毛利＝毛利即時表 `totals`
-  // （同一 lib、同頁面一致）。Opus 驗收：原版用「月結總表收入 − 毛利」
-  // 倒數成本，將月結以外收入混入，得出一個任何頁面都搵唔到嘅成本數。
-  const totalRevenue = round2([...close.mainRows, ...close.outsideRows].reduce((a, r) => a + n(r.revenue), 0));
-  const totalMargin = round2(margin.totals.profit);
-  const totalCost = round2(margin.totals.cost);
-  const marginRevenue = round2(margin.totals.revenue);
-
+  // 效能優化（老闆 2026-09-28 指令）：原版先計一次 buildGrossMargin()（攞
+  // legacy 成本／毛利），重算長工糧之後再計第二次（攞 combinedCostSummary）
+  // ——但 `totals`（更次成本／介紹費／月薪分攤估算）完全唔讀長工糧 run，
+  // 淨係 `longtermPayrollActual`／`combinedCostSummary` 先讀，所以改做先重算
+  // 長工糧、再計一次毛利表就攞齊兩樣，數字同原版逐個 key 一樣，慳返一次
+  // 成個毛利表（含內嵌月結總表）嘅計算。
   // WP-LTPAY Phase 2 §21 任務 3d：接駁長工月薪糧 aggregate 層——每次
   // 一鍵結算都重算呢個月嘅長工糧（冪等：void 舊 run 建新，見
   // aggregate.ts `recomputeLongtermPayroll()`）。失敗唔可以拖跨成個
@@ -729,6 +739,15 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
     warnings.push(longtermPayrollNote);
   }
 
+  const [close, margin, payroll, payrollSource] = await Promise.all([buildMonthlyClose(month), buildGrossMargin(month), buildPayrollTotals(month), buildPayrollSourceSummary(month)]);
+  // 總收入＝月結總表（主表＋月結以外）；成本／毛利＝毛利即時表 `totals`
+  // （同一 lib、同頁面一致）。Opus 驗收：原版用「月結總表收入 − 毛利」
+  // 倒數成本，將月結以外收入混入，得出一個任何頁面都搵唔到嘅成本數。
+  const totalRevenue = round2([...close.mainRows, ...close.outsideRows].reduce((a, r) => a + n(r.revenue), 0));
+  const totalMargin = round2(margin.totals.profit);
+  const totalCost = round2(margin.totals.cost);
+  const marginRevenue = round2(margin.totals.revenue);
+
   // §21 任務 5a：一鍵結算報告顯示合併成本摘要（更次成本／長工 Autopay／
   // 介紹費／合計／MPF ER）——`recomputeLongtermPayroll()` 啱啱先喺上面
   // 跑完，要重新讀一次 `buildMonthlyClose()` 嘅 `combinedCostSummary`
@@ -742,8 +761,7 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
   // Autopay 真實數，取代 P0 遺留「按更數估算分攤長工月薪」嗰個估算）；
   // 原本毛利表成本保留做 `legacyCost` 對照。7 月或者長工糧重算失敗 →
   // 維持舊口徑（`costBasis="legacy"`），頁面會講明。
-  const marginAfterLongterm = await buildGrossMargin(month);
-  const combinedCostSummary = marginAfterLongterm.combinedCostSummary;
+  const combinedCostSummary = margin.combinedCostSummary;
   const useCombined = combinedCostSummary !== null && longtermPayroll !== null;
   const reportCost = useCombined ? combinedCostSummary.combinedCostTotal : totalCost;
   const reportMargin = useCombined ? round2(marginRevenue - combinedCostSummary.combinedCostTotal) : totalMargin;

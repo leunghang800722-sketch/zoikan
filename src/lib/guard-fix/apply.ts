@@ -1,5 +1,5 @@
 // WP-GUARD-FIX-UI：套用 `GuardFixPlan` 落 DB——純邏輯模組，
-// `scripts/guard-fix/apply-guard-fix-plan.ts` 同 `POST /api/guard-fix/
+// 舊 `scripts/guard-fix/apply-guard-fix-plan.ts`（2026-09-28 已刪）同 `POST /api/guard-fix/
 // runs/:id/apply` 共用，唔准複製貼上一份新邏輯（WP-GUARD-FIX-UI 鐵則）。
 //
 // 建安員一定用同 opening 一樣路徑：`tx.guard.create` ＋

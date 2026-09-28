@@ -22,6 +22,7 @@
 //                   長工月薪分攤／雞頭現金雙計 係 P1-WP1 喺呢個基礎上加嘅
 //                   *額外* 欄（後面幾欄），唔影響前面幾欄嘅 0-diff。
 import ExcelJS from "exceljs";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { n, round2 } from "./money";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
@@ -81,24 +82,73 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
   // WP-MIXED-BILLING（Opus 5.5 驗收）：逐盤「逐更另收」更種（見 ./mixed-billing.ts）。7 月唔使查。
   const mixedInfo = isMixedBillingMonth(MONTH_START) ? await loadMixedBillingInfo(sites.map((s) => s.id), MONTH_START, MONTH_END) : new Map<string, MixedBillingSiteInfo>();
 
+  // 效能優化（老闆 2026-09-28 指令）：以下幾類查詢原本喺下面 for 迴圈逐盤
+  // 打（~40 盤 × 6-8 條 ≈ 380 條 SQL／次），改做整月一次過批量攞返，再喺
+  // 記憶體逐盤分組。每類嘅 where 條件同原本逐盤版本完全一樣（淨係將
+  // `siteId: site.id` 換做 `siteId: { in: siteIds }`），加總繼續由 DB
+  // groupBy 做（同 aggregate 一樣係 Decimal 精確加總），所以每盤嘅
+  // shifts／revenue／cost 逐格不變——7／8 月 gate 同 diagnostics 數字優化
+  // 前後對過一致（見 P2-版面重設計計劃.md §24）。
+  const siteIds = sites.map((s) => s.id);
+  const perShiftWhere = {
+    recordType: "shift",
+    isExternal: false,
+    shiftType: { billingGroup: "per_shift" },
+    workDate: { gte: MONTH_START, lte: MONTH_END },
+    status: { not: "cancelled" },
+  } as const;
+  const cardEffectiveWhere: Prisma.RateCardWhereInput = { effectiveFrom: { lte: MONTH_END }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: MONTH_START } }] };
+  const [shiftAggRows, flatCardRows, activeShiftSiteRows, activeReqSiteRows, shiftTypeSpecialCardRows, standaloneItemRows, byTypeRows] = await Promise.all([
+    prisma.shiftRecord.groupBy({
+      by: ["siteId"],
+      where: { ...perShiftWhere, siteId: { in: siteIds } },
+      _count: { _all: true },
+      _sum: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
+    }),
+    prisma.rateCard.findMany({
+      where: { siteId: { in: siteIds }, shiftTypeId: null, brokerId: null, guardId: null, billingModel: { in: ["monthly_fixed", "admin_fee", "special"] }, ...cardEffectiveWhere },
+      orderBy: { effectiveFrom: "desc" },
+    }),
+    prisma.shiftRecord.groupBy({ by: ["siteId"], where: { siteId: { in: siteIds }, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } }),
+    prisma.dailyRequirement.groupBy({ by: ["siteId"], where: { siteId: { in: siteIds }, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } }),
+    prisma.rateCard.findMany({
+      where: { siteId: { in: siteIds }, shiftTypeId: { not: null }, brokerId: null, guardId: null, billingModel: "special", ...cardEffectiveWhere },
+    }),
+    prisma.specialItem.findMany({ where: { siteId: { in: siteIds }, kind: "standalone_broker_fee", month: MONTH_START, voidedAt: null } }),
+    // 逐更種拆分淨係 mixed billing 月份（2026-08 起）先用到——7 月唔打呢條。
+    isMixedBillingMonth(MONTH_START)
+      ? prisma.shiftRecord.groupBy({ by: ["siteId", "shiftTypeId"], where: { ...perShiftWhere, siteId: { in: siteIds } }, _sum: { clientRateSnapshot: true } })
+      : Promise.resolve([] as { siteId: string; shiftTypeId: string; _sum: { clientRateSnapshot: Prisma.Decimal | null } }[]),
+  ]);
+  const shiftAggBySite = new Map(shiftAggRows.map((r) => [r.siteId, r]));
+  const EMPTY_SHIFT_AGG = { _count: { _all: 0 }, _sum: { clientRateSnapshot: null, guardWageSnapshot: null, brokerFeeSnapshot: null } } as const;
+  // findFirst(orderBy effectiveFrom desc) ≡ 排好序嘅 findMany 逐盤取第一張。
+  const flatCardBySite = new Map<string, (typeof flatCardRows)[number]>();
+  for (const c of flatCardRows) if (c.siteId && !flatCardBySite.has(c.siteId)) flatCardBySite.set(c.siteId, c);
+  const activeShiftSites = new Set(activeShiftSiteRows.map((r) => r.siteId));
+  const activeReqSites = new Set(activeReqSiteRows.map((r) => r.siteId));
+  const groupBySite = <T extends { siteId: string | null }>(rows: T[]): Map<string, T[]> => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) {
+      if (!r.siteId) continue;
+      const list = m.get(r.siteId);
+      if (list) list.push(r);
+      else m.set(r.siteId, [r]);
+    }
+    return m;
+  };
+  const shiftTypeSpecialCardsBySite = groupBySite(shiftTypeSpecialCardRows);
+  const standaloneItemsBySite = groupBySite(standaloneItemRows);
+  const byTypeBySite = groupBySite(byTypeRows);
+
   for (const site of sites) {
     // is_external=true（客戶自己嘅人，例：數碼港 Wilson Guard/Supervisor）
     // 唔入糧唔開單，P0 regen 報表已經成行剔走——呢度要跟同一口徑，
     // 否則更數/營業額會計多（實測：數碼港 CP1-4 490 中有 260 係外判客戶自己人）。
     // billing_group=monthly_ic 嘅更別（例：數碼港 CP5 嘅 IC 崗）自己有獨立
     // 月費結構（見 README「CP5 180 拆 25」），唔計入 per-shift 更數/營業額。
-    const shiftAgg = await prisma.shiftRecord.aggregate({
-      where: {
-        siteId: site.id,
-        recordType: "shift",
-        isExternal: false,
-        shiftType: { billingGroup: "per_shift" },
-        workDate: { gte: MONTH_START, lte: MONTH_END },
-        status: { not: "cancelled" },
-      },
-      _count: { _all: true },
-      _sum: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
-    });
+    // （效能優化：由上面批量 groupBy 取值，where 條件同原本逐盤 aggregate 一樣。）
+    const shiftAgg = shiftAggBySite.get(site.id) ?? EMPTY_SHIFT_AGG;
     let shifts = shiftAgg._count._all;
     let cost = round2(n(shiftAgg._sum.guardWageSnapshot) + n(shiftAgg._sum.brokerFeeSnapshot));
 
@@ -109,18 +159,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 7 月金額，唔係顯示 0）。而家要求張卡嘅生效區間覆蓋緊 `month`
     // 先算數；月費盤 8 月（或任何冇card嘅月份）跌落下面嘅 pro-rata
     // 公式 fallback。
-    const flatCard = await prisma.rateCard.findFirst({
-      where: {
-        siteId: site.id,
-        shiftTypeId: null,
-        brokerId: null,
-        guardId: null,
-        billingModel: { in: ["monthly_fixed", "admin_fee", "special"] },
-        effectiveFrom: { lte: MONTH_END },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gte: MONTH_START } }],
-      },
-      orderBy: { effectiveFrom: "desc" },
-    });
+    const flatCard = flatCardBySite.get(site.id) ?? null;
 
     // P1-WP4 §3c（規劃裁定）：月費盤冇覆蓋 `month` 嘅 flat rate_card
     // （例如未嚟月份）就用 `sites.monthly_fee × monthly_posts ×
@@ -162,11 +201,9 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 已知嘅「構造盤」先會有值，唔會影響其他盤嘅閘。
     const proxySiteId = site.activityProxySiteId;
     const hasAnyRecordThisMonth =
-      (await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } })) > 0 ||
-      (await prisma.dailyRequirement.count({ where: { siteId: site.id, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0 ||
-      (proxySiteId !== null &&
-        ((await prisma.shiftRecord.count({ where: { siteId: proxySiteId, workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } } })) > 0 ||
-          (await prisma.dailyRequirement.count({ where: { siteId: proxySiteId, workDate: { gte: MONTH_START, lte: MONTH_END }, voidedAt: null } })) > 0));
+      activeShiftSites.has(site.id) ||
+      activeReqSites.has(site.id) ||
+      (proxySiteId !== null && (activeShiftSites.has(proxySiteId) || activeReqSites.has(proxySiteId)));
 
     // WP-PRICE（老闆 2026-09-16 拍板）bug fix：rate_cards 伸長做無限期
     // （見 prisma/migrations/20260916000000_extend_rate_cards_open_ended）
@@ -210,18 +247,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
       if (mixedBillingEnabled) {
         const info = mixedInfo.get(site.id);
         if (info && (info.allShiftTypes || info.explicitShiftTypeIds.size > 0)) {
-          const byType = await prisma.shiftRecord.groupBy({
-            by: ["shiftTypeId"],
-            where: {
-              siteId: site.id,
-              recordType: "shift",
-              isExternal: false,
-              shiftType: { billingGroup: "per_shift" },
-              workDate: { gte: MONTH_START, lte: MONTH_END },
-              status: { not: "cancelled" },
-            },
-            _sum: { clientRateSnapshot: true },
-          });
+          const byType = byTypeBySite.get(site.id) ?? [];
           for (const g of byType) {
             if (isExplicitPerShiftType(info, g.shiftTypeId)) revenue = round2(revenue + n(g._sum.clientRateSnapshot));
           }
@@ -242,17 +268,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 完全唔相干嘅月份（例如業務未開始嘅 2025-07）——同「月費 fallback」
     // 果條係同一種「空月份假收入」問題，淨係嗰張卡本身生效區間已經覆蓋
     // 咗 2026-07（真實 P0 數據），冇覆蓋嘅月份而家會正確咁唔計呢張卡。
-    const shiftTypeSpecialCards = await prisma.rateCard.findMany({
-      where: {
-        siteId: site.id,
-        shiftTypeId: { not: null },
-        brokerId: null,
-        guardId: null,
-        billingModel: "special",
-        effectiveFrom: { lte: MONTH_END },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gte: MONTH_START } }],
-      },
-    });
+    const shiftTypeSpecialCards = shiftTypeSpecialCardsBySite.get(site.id) ?? [];
     // M2（Opus 驗收）：呢批更別級 special 卡（例：Event Guard $11,700）
     // 同上面 flatCard 一樣要受「呢個盤呢個月係咪真係有活動」嘅閘管——
     // 之前呢度冇檢查，令一個零活動月份（例如未開波嘅月份）都會計出
@@ -284,7 +300,7 @@ export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
     // 佢個「成本」欄冇計呢筆（cost 本身已經標「不完整」，呢個 P1-WP1 唔強行加）。
     // supplemental（龍譽/惠康補單）同 individual_broker_event 嘅 revenue 已經由 flat rate_card
     // /獨立 outsideRows 處理，唔可以喺度再摺一次（否則會計多一倍）。
-    const siteSpecialItems = await prisma.specialItem.findMany({ where: { siteId: site.id, kind: "standalone_broker_fee", month: MONTH_START, voidedAt: null } });
+    const siteSpecialItems = standaloneItemsBySite.get(site.id) ?? [];
     for (const it of siteSpecialItems) {
       shifts += it.shifts ?? 0;
       revenue = round2(revenue + n(it.revenue));
