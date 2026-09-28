@@ -10,15 +10,19 @@
 //   編號 No. / 員工賬戶銀行編號 Employee A/C Bank Code（3 位）/ 員工賬戶
 //   類型 Employee Account Type（固定 BBAN）/ 員工賬戶號碼 Employee A/C /
 //   員工賬戶名稱 Employee Name（bank_payee_name；BOCHK 只收 HKICL 字元：
-//   0-9、空格、a-z、A-Z、&'()*+,-./$=，含中文或其他字元 → 唔出行，列入
-//   缺資料）/ 金額 Amount（autopay，2 位小數）/ 備考號 Reference（
-//   LT<YYYYMM>-<工號>，≤35）/ 備註 Remark（月份，≤140）/ 通知渠道1
-//   e-Alert Type 1（有手機就 S）/ 通知電郵地址/電話號碼 1（主電話，8
-//   位）/ 通知渠道2（留空）/ 通知電郵地址/電話號碼 2（留空）。
+//   0-9、空格、a-z、A-Z、&'()*+,-./$=，仲要 ≤140 字元，含中文/其他字元
+//   或者過長 → 唔出行，列入缺資料）/ 金額 Amount（autopay，2 位小數）/
+//   備考號 Reference（LT<YYYYMM>-<工號>，≤35）/ 備註 Remark（月份，
+//   ≤140）/ 通知渠道1 e-Alert Type 1／通知電郵地址/電話號碼 1（主電話，
+//   8 位——WP-BOSS5 驗收項 3：呢個規格 e-Alert 類型／聯絡**係必填**，
+//   唔係「有就填、冇就留空」，電話唔係 8 位嘅人**唔出明細行**，改列入
+//   缺資料，原因「通知電話要 8 位」）/ 通知渠道2（留空）/ 通知電郵
+//   地址/電話號碼 2（留空）。
 // Sheet 「檔頭資料」：發薪賬戶號碼（空）、發薪日期（空）、付款類別
 //   （001 預設，可改）、貨幣 HKD、總筆數、總金額（=Σ金額，2 位）。
 // Sheet 「缺資料」：冇 bank_code／賬戶號碼／賬戶名稱／名稱含非 HKICL
-//   字元嘅人（淨係工號＋原因，冇姓名/電話/戶口號碼）。
+//   字元或者長過 140／賬戶號碼含 0-9／-以外字元／通知電話唔係 8 位嘅人
+//   （淨係工號＋原因，冇姓名/電話/戶口號碼）。
 //
 // Excel 鐵則：sheet 名唔含 `/ \ ? * [ ] :`（含全形，`sanitizeSheetName()`
 // 已經處理）、冇空字串格（`setCell()`）、`=` 開頭字串當文字（用
@@ -31,6 +35,10 @@ import { sanitizeSheetName } from "@/lib/reports/postorder-export";
 /** BOCHK Payroll Editor 只收呢批字元（HKICL 標準）：0-9、空格、a-z、
  * A-Z、`&'()*+,-./$=`。 */
 const HKICL_NAME_CHARS = /^[0-9A-Za-z &'()*+,\-./$=]*$/;
+/** WP-BOSS5 驗收項 3：賬戶名稱 Employee Name ≤140 字元（BOCHK Editor 欄位長度上限）。 */
+const BANK_PAYEE_NAME_MAX_LEN = 140;
+/** WP-BOSS5 驗收項 3：賬戶號碼 Employee A/C——淨係收 0-9／`-`（BOCHK Editor 唔收其他字元）。 */
+const ACCOUNT_NO_CHARS = /^[0-9-]*$/;
 
 export const BOCHK_FORMAT_SOURCE = "BOCHK Payroll (Payment Type) Editor and File Specification v1.2 (FPS)";
 const DEFAULT_PAYMENT_TYPE = "001";
@@ -98,14 +106,22 @@ export async function buildBochkAutopayWorkbook(month: Date): Promise<BochkAutop
     const reasons: string[] = [];
     if (!g.bankCode) reasons.push("冇銀行編號（bank_code）");
     if (!g.bankAccountNo) reasons.push("冇賬戶號碼");
+    else if (!ACCOUNT_NO_CHARS.test(g.bankAccountNo)) reasons.push("賬戶號碼只可以係 0-9／-");
     if (!g.bankPayeeName) reasons.push("冇賬戶名稱");
     else if (!HKICL_NAME_CHARS.test(g.bankPayeeName)) reasons.push("賬戶名稱要英文（含 HKICL 唔收嘅字元）");
+    else if (g.bankPayeeName.length > BANK_PAYEE_NAME_MAX_LEN) reasons.push(`賬戶名稱長過 ${BANK_PAYEE_NAME_MAX_LEN} 字元`);
+    // WP-BOSS5 驗收項 3（老闆 2026-09-28 決定 6 格式跟 BOCHK Payroll
+    // Editor 規格）：通知渠道 e-Alert Type／通知電話喺呢個規格係必填欄
+    // （唔係得個「有就填」嘅選填），冇 8 位電話嘅人唔可以出明細行（留空
+    // 兩格會令呢行喺 Editor 度唔合規格），改列入「缺資料」等會計人手
+    // 跟進電話。
+    const phone = primaryPhone8(g.tel);
+    if (!phone) reasons.push("通知電話要 8 位");
     if (reasons.length > 0) {
       missing.push({ staff_no: label, reason: reasons.join("、") });
       continue;
     }
     seq += 1;
-    const phone = primaryPhone8(g.tel);
     const reference = `LT${monthCompact}-${label}`.slice(0, 35);
     rows.push({
       seq,
@@ -115,8 +131,8 @@ export async function buildBochkAutopayWorkbook(month: Date): Promise<BochkAutop
       amount: n(l.autopay),
       reference,
       remark: `長工 Autopay ${monthStr}`.slice(0, 140),
-      alertType1: phone ? "S" : "",
-      contact1: phone ?? "",
+      alertType1: "S",
+      contact1: phone!,
     });
   }
 

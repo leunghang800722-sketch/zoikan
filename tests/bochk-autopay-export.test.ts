@@ -76,7 +76,7 @@ describe("buildBochkAutopayWorkbook：HKICL 字元過濾／缺資料判斷", () 
   });
 
   it("賬戶名稱純 HKICL 字元（含 &'()*+,-./$= 呢批符號）——正常出行", async () => {
-    await makeGuard({ bankPayeeName: "TEST & CO. (HK) LTD-PAYEE'S NAME" });
+    await makeGuard({ bankPayeeName: "TEST & CO. (HK) LTD-PAYEE'S NAME", tel: "91234567" });
     await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
     const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
     expect(result.rowCount).toBe(1);
@@ -102,22 +102,57 @@ describe("buildBochkAutopayWorkbook：HKICL 字元過濾／缺資料判斷", () 
     void withAll;
   });
 
-  it("電話唔係 8 位數字——通知渠道／號碼留空，唔會屈估", async () => {
+  // WP-BOSS5 驗收項 3（老闆 2026-09-28 決定 6，BOCHK 規格 e-Alert 類型／
+  // 聯絡係必填）：電話唔係 8 位——唔准出明細行（唔止留空兩格），改列入
+  // 缺資料，原因講明「通知電話要 8 位」。
+  it("電話唔係 8 位數字——唔出明細行，列入缺資料（原因「通知電話要 8 位」），唔會屈估", async () => {
     await makeGuard({ tel: "12345" });
     await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
     const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
-    const row = result.workbook.getWorksheet("Payroll Editor 明細")!;
-    expect(row.getCell(2, 9).value).toBeNull();
-    expect(row.getCell(2, 10).value).toBeNull();
+    expect(result.rowCount).toBe(0);
+    expect(result.missing.length).toBe(1);
+    expect(result.missing[0]!.reason).toContain("通知電話要 8 位");
+  });
+
+  it("冇電話（tel=null）——一樣係「通知電話要 8 位」缺資料，唔出明細行", async () => {
+    await makeGuard({ tel: null });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    expect(result.rowCount).toBe(0);
+    expect(result.missing[0]!.reason).toContain("通知電話要 8 位");
   });
 
   it("reference 格式＝LT<YYYYMM>-<工號>", async () => {
-    const g = await prisma.guard.update({ where: { id: (await makeGuard({})).id }, data: { staffNo: "MG001" } });
+    const g = await prisma.guard.update({ where: { id: (await makeGuard({ tel: "91234567" })).id }, data: { staffNo: "MG001" } });
     await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
     const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
     const row = result.workbook.getWorksheet("Payroll Editor 明細")!;
     expect(row.getCell(2, 7).value).toBe("LT202608-MG001");
     void g;
+  });
+
+  it("賬戶名稱長過 140 字元——唔出行，列入缺資料", async () => {
+    await makeGuard({ bankPayeeName: "A".repeat(141), tel: "91234567" });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    expect(result.rowCount).toBe(0);
+    expect(result.missing[0]!.reason).toContain("賬戶名稱長過 140 字元");
+  });
+
+  it("賬戶號碼含 HKICL 唔收嘅字元（例如空格／英文字母）——唔出行，列入缺資料", async () => {
+    await makeGuard({ bankAccountNo: "600 ABC 123", tel: "91234567" });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    expect(result.rowCount).toBe(0);
+    expect(result.missing[0]!.reason).toContain("賬戶號碼只可以係 0-9／-");
+  });
+
+  it("賬戶號碼純 0-9／- ——正常出行", async () => {
+    await makeGuard({ bankAccountNo: "600-123-4567", tel: "91234567" });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    expect(result.rowCount).toBe(1);
+    expect(result.missing.length).toBe(0);
   });
 
   it("未計過長工糧——拋錯（route 層接住轉 400，唔准靜靜當 0）", async () => {

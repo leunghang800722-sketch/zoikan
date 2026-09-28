@@ -44,6 +44,9 @@ describe("/api/longterm/payroll/:month", () => {
         // 「Payroll Editor 明細」；bankPayeeName 用純英文（HKICL 字元）
         // 先唔會落去「缺資料」sheet。
         bankCode: bankAccountNo ? bankCode : null,
+        // 驗收項 3：BOCHK 規格 e-Alert 類型／聯絡係必填，冇 8 位電話一樣
+        // 會落「缺資料」——有齊銀行資料嗰個都要有效電話先出到明細行。
+        tel: bankAccountNo ? "91234567" : null,
         createdBy: "test",
       },
     });
