@@ -248,9 +248,9 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     expect(result.brokerFee).toBeNull();
   });
 
-  it("WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，OT 记录行同 shift 一樣嘅卡揀邏輯）：OT 更種有卡就照用", () => {
+  it("WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，OT 记录行同 shift 一樣嘅卡揀邏輯）：OT 更種有卡就照用，1 個鐘嘅 OT 同「每條記錄」睇落一樣（WP-BOSS5 §25.1：卡金額每小時价 × otHours=1）", () => {
     const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
-    const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot" }));
+    const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", otHours: 1 }));
     expect(result).toEqual({
       clientRate: 800,
       guardWage: 700,
@@ -259,6 +259,57 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
       unpriced: false,
       clientCardFound: true,
       payoutCardFound: true,
+    });
+  });
+
+  describe("WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价，揀到卡之後乘 otHours——淨係 workDate>=2026-08-01 生效", () => {
+    it("2.5 個鐘 OT：client／guardWage／brokerFee 各乘 2.5（round2）", () => {
+      const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 84.85, guardWage: 73, brokerFee: 10.33 })];
+      const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", otHours: 2.5 }));
+      expect(result.clientRate).toBe(212.13); // 84.85*2.5=212.125 → round2 212.13
+      expect(result.guardWage).toBe(182.5);
+      expect(result.brokerFee).toBe(25.83); // 10.33*2.5=25.825 → round2 25.83
+      expect(result.unpriced).toBe(false);
+    });
+
+    it("otHours 冇傳（undefined）：揾到卡都當未定价 OT，三欄 null，unpriced=true", () => {
+      const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
+      const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot" }));
+      expect(result.clientRate).toBeNull();
+      expect(result.guardWage).toBeNull();
+      expect(result.brokerFee).toBeNull();
+      expect(result.unpriced).toBe(true);
+      expect(result.reason).toBe("ot_hours_missing");
+    });
+
+    it("otHours=0：一樣當未定价 OT，唔可以當「0 個鐘＝0 蚊」", () => {
+      const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
+      const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", otHours: 0 }));
+      expect(result.clientRate).toBeNull();
+      expect(result.unpriced).toBe(true);
+    });
+
+    it("7 月（workDate < 2026-08-01）：唔乘，OT 卡金額原樣寫入 snapshot（7 月口徑不變，gate:pricing 對住）", () => {
+      const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 84.85, guardWage: 73, brokerFee: 10 })];
+      const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", otHours: 3.5, workDate: new Date("2026-07-15T00:00:00.000Z") }));
+      expect(result.clientRate).toBe(84.85);
+      expect(result.guardWage).toBe(73);
+      expect(result.brokerFee).toBe(10);
+      expect(result.unpriced).toBe(false);
+    });
+
+    it("揾唔到卡（本身已經全 null）：otHours 冇傳都維持原狀，唔會將 reason 蓋做 ot_hours_missing", () => {
+      const result = resolveShiftPricingFromCards([], baseInput({ recordType: "ot" }));
+      expect(result.clientRate).toBeNull();
+      expect(result.unpriced).toBe(true);
+      expect(result.reason).toBeUndefined();
+    });
+
+    it("external OT：維持 external 口徑（全 null，reason=external），唔會俾 otHours 邏輯覆蓋", () => {
+      const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
+      const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", brokerKind: "external", isExternal: true, otHours: 2 }));
+      expect(result.clientRate).toBeNull();
+      expect(result.reason).toBe("external");
     });
   });
 

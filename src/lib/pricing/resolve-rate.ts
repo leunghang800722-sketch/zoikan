@@ -19,7 +19,7 @@
 // `resolveShiftPricing(input)`：方便單條記錄用（POST /api/shift-records、
 // approve 路徑）嘅 wrapper，內部自己攞一次卡。
 import { prisma } from "@/lib/db";
-import { n } from "@/lib/reports/money";
+import { n, round2 } from "@/lib/reports/money";
 
 /** 驗收（Opus 5.5）：由呢日起長工介紹費改由 `src/lib/reports/referral-fee.ts`
  * `recomputeReferralFees()` 自動計（同 `REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH`
@@ -27,6 +27,13 @@ import { n } from "@/lib/reports/money";
  * 俾 `src/lib/pricing/reprice.ts`（reconcile-all 自動 reprice）共用同一個
  * 分界日，避免兩處各自寫一次呢個日期拗開。 */
 export const LONGTERM_REFERRAL_AUTOCOMPUTE_FROM = new Date("2026-08-01T00:00:00.000Z");
+
+/** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价——淨係
+ * `workDate >= 2026-08-01` 先生效，同一日起（同 `LONGTERM_REFERRAL_
+ * AUTOCOMPUTE_FROM` 一樣嘅分界日，但概念唔同，獨立命名方便以後各自拗
+ * 開）。7 月 OT snapshot 一直由 seed 直接寫入、`gate:pricing` 對住，
+ * 唔可以郁。 */
+export const OT_HOURLY_PRICING_FROM = new Date("2026-08-01T00:00:00.000Z");
 
 export type BrokerKindLike = "broker" | "internal_cash" | "internal_longterm" | "external" | "special" | null;
 
@@ -58,6 +65,12 @@ export interface ResolveShiftPricingInput {
   workDate: Date;
   isExternal: boolean;
   recordType: ShiftPricingRecordType;
+  /** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价——
+   * `recordType==="ot"` 而且 `workDate >= OT_HOURLY_PRICING_FROM`
+   * （2026-08-01，7 月唔郁）先生效，揀到 OT 更種卡之後 client／
+   * guardWage／brokerFee 各乘呢個數（round2）。呢個更（記錄）嘅 OT
+   * 時數；`recordType!=="ot"` 或者 8 月之前嘅記錄完全唔理呢個欄。 */
+  otHours?: number | null;
 }
 
 /** 見 `ResolveShiftPricingInput.shiftTypeCode` 註解——目前淨係 "PR"
@@ -241,8 +254,17 @@ export async function fetchEffectiveRateCards(siteId: string, monthStart: Date, 
   }));
 }
 
-/** 純函數：對住已經攞好嘅卡（喺記憶體）揀出呢一格嘅價。單元測試主力測呢個。 */
+/** 純函數：對住已經攞好嘅卡（喺記憶體）揀出呢一格嘅價。單元測試主力測呢個。
+ * WP-BOSS5 §25.1：淨係做「揀卡」（同之前一樣，OT 揀嘅仍然係 OT 更種
+ * 自己嗰張卡，張卡金額＝每小時价）——「乘 otHours」呢步刻意拆做獨立嘅
+ * `applyOtHourlyPricing()`（喺函數尾包一層），咁所有 return path（
+ * external／longterm／no_broker／揾唔到卡／正常）唔使逐個分支手動加
+ * 乘數，唔會漏改。 */
 export function resolveShiftPricingFromCards(cards: RateCardLite[], input: ResolveShiftPricingInput): ResolvedShiftPricing {
+  return applyOtHourlyPricing(resolveShiftPricingFromCardsCore(cards, input), input);
+}
+
+function resolveShiftPricingFromCardsCore(cards: RateCardLite[], input: ResolveShiftPricingInput): ResolvedShiftPricing {
   if (input.recordType === "leave") {
     // leave 冇「呢更嘅收客/出街价」呢個概念，同 7 月 seed 口徑一致：唔算「未定价」。
     return { clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false, clientCardFound: false, payoutCardFound: false };
@@ -348,6 +370,32 @@ export function resolveShiftPricingFromCards(cards: RateCardLite[], input: Resol
   }
   source.payoutCardId = payout.cardId;
   return { clientRate, guardWage: payout.guardWage, brokerFee: payout.brokerFee, source, unpriced: false, clientCardFound, payoutCardFound: true };
+}
+
+/** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡＝每小時价——`base`
+ * 已經用同一套「揀卡」邏輯揀到 OT 更種自己嗰張卡（張卡金額本身就係
+ * 每粒鐘价），呢層淨係負責「乘 otHours」，`recordType!=="ot"` 或者
+ * `workDate < OT_HOURLY_PRICING_FROM`（7 月）原樣放行。
+ * `otHours` 空／0（揾到卡但冧唔到呢更做咗幾耐）＝未定价 OT，三欄
+ * 強制 null＋`unpriced:true`，唔准估（同「揾唔到卡」一致嘅保守方向）；
+ * `base` 本身已經全 null（例如 external／揾唔到卡）就原樣返（reason
+ * 唔會俾冇意義嘅 "ot_hours_missing" 蓋走）。 */
+function applyOtHourlyPricing(base: ResolvedShiftPricing, input: ResolveShiftPricingInput): ResolvedShiftPricing {
+  if (input.recordType !== "ot") return base;
+  if (toUtcDateOnly(input.workDate) < OT_HOURLY_PRICING_FROM.getTime()) return base;
+  const hours = input.otHours;
+  const hasHours = hours !== null && hours !== undefined && hours > 0;
+  if (hasHours) {
+    return {
+      ...base,
+      clientRate: base.clientRate !== null ? round2(base.clientRate * hours) : null,
+      guardWage: base.guardWage !== null ? round2(base.guardWage * hours) : null,
+      brokerFee: base.brokerFee !== null ? round2(base.brokerFee * hours) : null,
+    };
+  }
+  const hadAnyValue = base.clientRate !== null || base.guardWage !== null || base.brokerFee !== null;
+  if (!hadAnyValue) return base; // 本身已經冇任何值（external／揾唔到卡），維持原狀同原 reason
+  return { ...base, clientRate: null, guardWage: null, brokerFee: null, unpriced: true, reason: "ot_hours_missing" };
 }
 
 /**

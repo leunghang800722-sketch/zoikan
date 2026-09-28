@@ -31,6 +31,7 @@ import {
   hasParsedPostorderForMonth,
 } from "@/lib/pricing/longterm-settlement";
 import { resolveShiftPricing, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
+import { numOrNull } from "@/lib/pricing/reprice";
 
 export interface RecomputeSettlementChange {
   shiftRecordId: string;
@@ -81,6 +82,7 @@ export async function recomputeSettlement(uploadId: string, actorUserId: string 
       shiftTypeId: true,
       guardWageSnapshot: true,
       brokerFeeSnapshot: true,
+      otHours: true,
       shiftType: { select: { code: true, billingGroup: true } },
       site: { select: { guardsPaidByClient: true } },
     },
@@ -163,6 +165,8 @@ export async function recomputeSettlement(uploadId: string, actorUserId: string 
         workDate: r.workDate,
         isExternal: r.isExternal,
         recordType: r.recordType === "ot" ? "ot" : "shift",
+        // WP-BOSS5 §25.1：OT 卡＝每小時价，要傳呢條記錄本身嘅 OT 時數。
+        otHours: numOrNull(r.otHours),
       });
       pricing = { clientRateSnapshot: resolved.clientRate, guardWageSnapshot: resolved.guardWage, brokerFeeSnapshot: resolved.brokerFee };
     }

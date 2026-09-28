@@ -4,10 +4,17 @@
 //   2. `gross-margin.ts` 嘅「parent 更 snapshot ÷ hours × ot_hours」公式
 //      fallback 對 2026-08 起嘅月份停用（7 月照舊，gate 用緊）——integration
 //      test（真 DB）。
+// WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡＝每小時价——多加一個
+// 端到端 describe（見文件尾），一條「多過 1 個鐘 OT 有卡」記錄由
+// resolveShiftPricing() 寫入 snapshot（同真實 caller 一致，唔係人手砌
+// 已經乘好嘅數字），再驗毛利表（gross-margin.ts）同糧單（payroll.ts）
+// 兩個報表口徑一致（同一個 snapshot，直接加總，冇邊個再自己乘一次）。
 import { describe, it, expect, beforeAll } from "vitest";
 import { clearAll, prisma } from "./lib/db";
 import { computeUnpricedSummary, type UnpricedLookups, type UnpricedRecordLike } from "@/lib/pricing/unpriced";
 import { buildGrossMargin } from "@/lib/reports/gross-margin";
+import { buildPayrollTotals } from "@/lib/reports/payroll";
+import { resolveShiftPricing } from "@/lib/pricing/resolve-rate";
 
 function baseLookups(overrides: Partial<UnpricedLookups> = {}): UnpricedLookups {
   return {
@@ -149,12 +156,15 @@ describe("gross-margin.ts：OT 公式 fallback 只對 2026-08 之前嘅月份生
     expect(otRow!.note).toContain("搵唔到時薪來源，未計價");
   });
 
-  it("8 月：OT 記錄自己有 client/guard snapshot（OT 更種卡起咗）——直接用嗰個值 × ot_hours，唔除 hours", async () => {
+  it("8 月：OT 記錄自己有 client/guard snapshot（OT 更種卡起咗）——直接用 snapshot 做金額，唔再乘 ot_hours（WP-BOSS5 §25.1：resolver 寫入嗰刻已經乘咗，snapshot＝該條記錄金額）", async () => {
     await prisma.shiftRecord.create({
       data: {
         siteId, shiftTypeId: otShiftTypeId, guardId, settlementBrokerId: brokerId, workDate: new Date(Date.UTC(2026, 7, 20)),
         recordType: "ot", status: "confirmed", otHours: 2,
-        clientRateSnapshot: 84.85, guardWageSnapshot: 73, brokerFeeSnapshot: 0, createdBy: "test",
+        // WP-BOSS5 §25.1：呢個 snapshot 代表「呢條記錄嘅金額」（即卡嘅
+        // 每小時价 84.85／73 × otHours=2，由 resolver 喺寫入嗰刻計好—
+        // —169.7／146），唔係「每粒鐘」价，gross-margin.ts 唔會再乘一次。
+        clientRateSnapshot: 169.7, guardWageSnapshot: 146, brokerFeeSnapshot: 0, createdBy: "test",
       },
     });
     const result = await buildGrossMargin(new Date(Date.UTC(2026, 7, 1)));
@@ -163,8 +173,70 @@ describe("gross-margin.ts：OT 公式 fallback 只對 2026-08 之前嘅月份生
     expect(otRow).toBeDefined();
     // 呢個 test 同上面「8 月冇 snapshot」共用同一個 site/shiftType bucket，
     // revenue/cost 係加埋嘅（上面嗰條 record 貢獻 0），淨係呢條新 record
-    // 貢獻 84.85×2=169.7 / 73×2=146。
+    // 貢獻 169.7／146（snapshot 直接加總，唔再乘 otHours）。
     expect(otRow!.revenue).toBe(169.7);
     expect(otRow!.cost).toBe(146);
+  });
+});
+
+describe("WP-BOSS5 §25.1 端到端：多過 1 個鐘 OT 有卡——毛利表同糧單口徑一致", () => {
+  it("resolveShiftPricing() 寫入嘅 snapshot（卡 84.85/73 每小時价 × otHours=2.5）——gross-margin 同 payroll 兩個報表都直接加總，數值一致", async () => {
+    await clearAll();
+    const site = await prisma.site.create({
+      data: { canonicalName: "測試盤-OT端到端", clientName: "測試客戶", billingModel: "per_shift", inScope: true, status: "active", createdBy: "test" },
+    });
+    const otShiftType = await prisma.shiftType.create({
+      data: { siteId: site.id, code: "OT1", billingGroup: "per_shift", hours: 1, startTime: new Date("1970-01-01T06:00:00Z"), endTime: new Date("1970-01-01T07:00:00Z"), createdBy: "test" },
+    });
+    const guard = await prisma.guard.create({ data: { nameZh: "測試-OT端到端安員", employmentType: "cash_casual", createdBy: "test" } });
+    const broker = await prisma.broker.create({ data: { code: "TESTOTE2E", name: "測試雞頭", kind: "broker", settlementType: "cash", createdBy: "test" } });
+    // OT 更種卡：每小時价 client=84.85／guard=73（同 HKU座頭 1Hr OT 一致嘅
+    // 數量級），呢條記錄做咗 2.5 個鐘 OT。
+    await prisma.rateCard.create({ data: { siteId: site.id, shiftTypeId: otShiftType.id, clientRate: 84.85, guardWage: 73, effectiveFrom: new Date(Date.UTC(2026, 7, 1)), createdBy: "test" } });
+
+    const workDate = new Date(Date.UTC(2026, 7, 20));
+    const otHours = 2.5;
+    // 同真實 caller（reconcile-apply.ts／shift-records route）一致：由
+    // resolver 計 snapshot，唔係測試自己砌乘好嘅數字。
+    const pricing = await resolveShiftPricing({
+      siteId: site.id,
+      shiftTypeId: otShiftType.id,
+      shiftTypeCode: otShiftType.code,
+      shiftTypeBillingGroup: otShiftType.billingGroup,
+      settlementBrokerId: broker.id,
+      brokerKind: "broker",
+      guardId: guard.id,
+      workDate,
+      isExternal: false,
+      recordType: "ot",
+      otHours,
+    });
+    expect(pricing.clientRate).toBe(212.13); // 84.85*2.5 round2
+    expect(pricing.guardWage).toBe(182.5);
+
+    await prisma.shiftRecord.create({
+      data: {
+        siteId: site.id, shiftTypeId: otShiftType.id, guardId: guard.id, settlementBrokerId: broker.id, operationalBrokerId: broker.id,
+        workDate, recordType: "ot", status: "confirmed", otHours,
+        clientRateSnapshot: pricing.clientRate, guardWageSnapshot: pricing.guardWage, brokerFeeSnapshot: pricing.brokerFee,
+        createdBy: "test",
+      },
+    });
+
+    const month = new Date(Date.UTC(2026, 7, 1));
+    const [grossMargin, payrollTotals] = await Promise.all([buildGrossMargin(month), buildPayrollTotals(month)]);
+    const siteRow = grossMargin.sites.find((s) => s.siteId === site.id);
+    const otRow = siteRow!.shiftTypes.find((t) => t.code === "OT1");
+    expect(otRow).toBeDefined();
+    // 毛利表：cost＝guardWageSnapshot 直接加總（呢個 broker 冇 broker_fee）。
+    expect(otRow!.cost).toBe(182.5);
+
+    const brokerRow = payrollTotals.find((b) => b.brokerId === broker.id);
+    expect(brokerRow).toBeDefined();
+    // 糧單：wage 一樣直接加總 guardWageSnapshot（payroll.ts 一直嘅口徑）。
+    expect(brokerRow!.wage).toBe(182.5);
+    // 兩個報表對住同一條記錄嘅 OT 成本，數值完全一致——冇邊個自己再乘
+    // 一次 otHours、亦冇邊個漏乘。
+    expect(otRow!.cost).toBe(brokerRow!.wage);
   });
 });

@@ -371,8 +371,12 @@ audit`／`sql_select ai.audit_log` 都讀唔到（見
 - **OT 揀卡（Opus 5.5 驗收）**：OT 記錄淨係配 `shift_type_id` 完全相等嘅
   卡（唔准跌落 shift_type=null 嘅盤級／雞頭級／guard 級正更卡）；roster
   upload 套用（`reconcile-apply.ts`）OT 都行 resolver（之前一律 null）。
-  **未決**：OT snapshot 係「每粒鐘」（毛利表 ×ot_hours）定「每條記錄」
-  （糧明細／應收直接加總）——見 §17.10.2 第 3 項。
+  **已決（WP-BOSS5 §25.1，老闆 2026-09-28 決定 1）**：OT snapshot＝
+  「每條記錄嘅金額」——resolver 揀到 OT 更種卡（卡金額本身係每小時价）
+  之後喺**寫入嗰刻**已經乘 `ot_hours`（`applyOtHourlyPricing()`，淨係
+  `work_date >= 2026-08-01` 生效，7 月唔郁），糧單／應收／雞頭
+  dashboard／對數／Postorder 總表／毛利表全部一致當「呢條記錄金額」
+  直接加總，唔再各自表述（見 §17.10.2 第 3 項舊落差，已經解決）。
 - **定價器（`src/lib/pricing/resolve-rate.ts`）**：`monthly_fixed` 盤
   上嘅 `per_shift` 更種一直都可以配到逐更卡出 `client_rate`（`isPer
   ShiftEligible()`／`specificityRank()` 從來冇睇 `site.billing_model`，
@@ -404,9 +408,12 @@ audit`／`sql_select ai.audit_log` 都讀唔到（見
     fallback（同埋「OT 更種自己嘅卡÷hours」fallback）**對
     `month>=2026-08-01` 停用**（`otFormulaFallbackEnabled`）——8 月起
     直接用 OT 記錄自己嘅 `client_rate_snapshot`／`guard_wage_
-    snapshot`／`broker_fee_snapshot`（已經係「每粒鐘」价）× `ot_
-    hours`，收客／出街可以各自獨立有冇；完全冇任何一邊就算
-    `unresolved`。**7 月唔變**（7 月 gate 用緊呢條公式）。
+    snapshot`／`broker_fee_snapshot` 做金額，收客／出街可以各自獨立
+    有冇；完全冇任何一邊就算 `unresolved`。**WP-BOSS5 §25.1 之後**：
+    呢三個 snapshot 已經係 resolver 寫入嗰刻乘咗 `ot_hours` 嘅「該條
+    記錄金額」，`gross-margin.ts` **唔再喺呢度乘多一次**（之前乘多一次
+    會雙重計算——舊版同呢個 WP 之前嘅口徑，「每粒鐘」×`ot_hours`，已經
+    喺呢個 WP 之後失效）。**7 月唔變**（7 月 gate 用緊舊公式）。
   - **未定价 OT**（`src/lib/pricing/unpriced.ts` 新分類
     `ot_unpriced`）：`computeUnpricedSummary()`／`buildUnpricedSummary()`
     對 `record_type=ot`、非 cancelled、完全冇任何 client/guard/fee
@@ -1860,10 +1867,10 @@ BOCHK 檔、testing）＋新增 5a 成本口徑。
 ### 4. OT 卡管理
 
 `rate_cards` 結構本身已經支援 site／broker／guard 三級（冇要改
-schema）——OT 更種同其他更種一樣用返現有 CRUD。~~跟 §17.10.2 決定：OT
-卡金額＝每小時价~~（**Opus 5.5 驗收更正**：§17.10.2 第 3 項 OT 卡單位仍
-未定案，見下面「Opus 5.5 驗收修正」第 7 項），`RateCardsClient.tsx` 揀咗
-code 開頭 "OT" 嘅更種就顯示「單位未定案」提示。**未定價 OT 清單**——複用現有 `GET /api/shift-records/
+schema）——OT 更種同其他更種一樣用返現有 CRUD。**WP-BOSS5 §25.1（老闆
+2026-09-28 決定 1，取代下面「Opus 5.5 驗收修正」第 7 項嗰陣嘅「未定
+案」狀態）：OT 卡金額＝每小時价**——`RateCardsClient.tsx` 揀咗 code 開頭
+"OT" 嘅更種就顯示呢個決定嘅提示（唔再係「單位未定案」）。**未定價 OT 清單**——複用現有 `GET /api/shift-records/
 unpriced`（`category=ot_unpriced`），頁面加一個 amber 分區，每項有
 「建卡」快捷（喺已載入嘅 `shiftTypes`／`brokers` 度用 site_id+code／
 broker_code 揾返 id 預填，開返「新增價目」抽屜）。

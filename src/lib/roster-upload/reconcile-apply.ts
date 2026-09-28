@@ -105,6 +105,10 @@ async function computeRosterPricing(ctx: WriteContext, roster: NonNullable<Recon
     workDate: new Date(`${roster.workDate}T00:00:00.000Z`),
     isExternal,
     recordType: recordType === "ot" ? "ot" : "shift",
+    // WP-BOSS5 §25.1：OT 卡＝每小時价，resolver 要有呢更嘅 OT 時數先識
+    // 乘（`roster.hours`同 `data.otHours` 寫入 shift_record 嗰個值一致，
+    // 淨係 recordType==="ot" 先有意義）。
+    otHours: recordType === "ot" ? (roster.hours ?? null) : null,
   });
   return { clientRate: resolved.clientRate, guardWage: resolved.guardWage, brokerFee: resolved.brokerFee };
 }
