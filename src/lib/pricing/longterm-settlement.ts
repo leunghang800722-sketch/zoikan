@@ -330,6 +330,15 @@ export async function inferGuardMonthlyTopSite(guardIds: string[], month: Date, 
 
 const REFERRAL_INFER_MIN_RATIO = 0.7;
 
+// WP-BOSS5 §25.2（老闆 2026-09-28 決定 2）：Y 唔可以做介紹雞頭——內部結算
+// 單位（B07＝internal_longterm／Y＝internal_cash）唔係真正「供應」呢個
+// 長工嘅外部雞頭，推算出嚟嘅 top broker 係呢兩種 kind 就當計唔到，唔可以
+// 用嚟自動設 `referral_broker_id`（`guard-fix/plan.ts` 因而唔會出
+// `set_referral_inferred`）。用 `kind` 判斷，唔寫死代號／id。
+const REFERRAL_DISALLOWED_KINDS = new Set(["internal_longterm", "internal_cash"]);
+const REFERRAL_INTERNAL_BLOCKED_REASON = "更表雞頭碼係內部結算單位（B07／Y），唔可以做介紹雞頭";
+const REFERRAL_INTERNAL_BLOCKED_WARNING = `${REFERRAL_INTERNAL_BLOCKED_REASON}，未設介紹雞頭，請人手覆核`;
+
 export interface InferReferralBrokerResult {
   brokerId: string | null;
   reason: string;
@@ -341,6 +350,16 @@ export interface InferReferralBrokerResult {
  * 計（已對數確認嘅上載仍然反映「邊個雞頭報咗呢一更」呢個事實，唔應該
  * 因為對數確認咗就唔計落嚟）。 */
 const REFERRAL_INFER_ACTIVE_UPLOAD_STATUS_NOT_IN = ["superseded", "voided"] as const;
+
+/** WP-BOSS5 §25.2：查返個 broker 嘅 `kind` 係咪內部結算單位
+ * （B07／internal_longterm 或 Y／internal_cash）——呢兩種唔可以做介紹
+ * 雞頭。搵唔到個 broker（理論上唔會，`settlementBrokerId`／
+ * `broker_site_assignments.brokerId` 都係 FK）就當唔擋（false），交返
+ * caller 原有邏輯處理。 */
+async function isDisallowedReferralBrokerKind(brokerId: string, client: PrismaLike): Promise<boolean> {
+  const broker = await client.broker.findUnique({ where: { id: brokerId }, select: { kind: true } });
+  return !!broker && REFERRAL_DISALLOWED_KINDS.has(broker.kind);
+}
 
 /** 純 DB helper：逐個 (guardId, month) 推算介紹雞頭——見上面檔頭註解嘅
  * 決策鏈。**唔寫入 DB**（caller，`guard-fix/plan.ts` `set_referral_inferred`
@@ -414,6 +433,9 @@ export async function inferReferralBrokerFromRosters(guardId: string, month: Dat
     }
     const ratio = topCount / ownRows.length;
     if (countByBroker.size === 1 || ratio >= REFERRAL_INFER_MIN_RATIO) {
+      if (topBrokerId && (await isDisallowedReferralBrokerKind(topBrokerId, client))) {
+        return { brokerId: null, reason: REFERRAL_INTERNAL_BLOCKED_REASON, warning: REFERRAL_INTERNAL_BLOCKED_WARNING };
+      }
       return {
         brokerId: topBrokerId,
         reason:
@@ -439,7 +461,11 @@ export async function inferReferralBrokerFromRosters(guardId: string, month: Dat
   });
   const assignedBrokerIds = new Set(assignments.map((a) => a.brokerId));
   if (assignedBrokerIds.size === 1) {
-    return { brokerId: [...assignedBrokerIds][0]!, reason: "崗位盤冇雞頭碼欄，用該盤 broker_site_assignments 唯一雞頭", warning: null };
+    const assignedBrokerId = [...assignedBrokerIds][0]!;
+    if (await isDisallowedReferralBrokerKind(assignedBrokerId, client)) {
+      return { brokerId: null, reason: REFERRAL_INTERNAL_BLOCKED_REASON, warning: REFERRAL_INTERNAL_BLOCKED_WARNING };
+    }
+    return { brokerId: assignedBrokerId, reason: "崗位盤冇雞頭碼欄，用該盤 broker_site_assignments 唯一雞頭", warning: null };
   }
 
   const otherRows = await client.rosterUploadRow.findMany({
@@ -448,7 +474,11 @@ export async function inferReferralBrokerFromRosters(guardId: string, month: Dat
   });
   const otherBrokerIds = new Set(otherRows.filter((r) => inPostSet(r.resolvedSiteId ?? uploadSiteById.get(r.uploadId) ?? null)).map((r) => r.settlementBrokerId!));
   if (otherBrokerIds.size === 1) {
-    return { brokerId: [...otherBrokerIds][0]!, reason: "崗位盤冇雞頭碼欄，用該盤其他安員 shift 行唯一雞頭", warning: null };
+    const otherBrokerId = [...otherBrokerIds][0]!;
+    if (await isDisallowedReferralBrokerKind(otherBrokerId, client)) {
+      return { brokerId: null, reason: REFERRAL_INTERNAL_BLOCKED_REASON, warning: REFERRAL_INTERNAL_BLOCKED_WARNING };
+    }
+    return { brokerId: otherBrokerId, reason: "崗位盤冇雞頭碼欄，用該盤其他安員 shift 行唯一雞頭", warning: null };
   }
 
   return {

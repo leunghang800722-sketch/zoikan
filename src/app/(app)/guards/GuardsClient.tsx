@@ -100,6 +100,10 @@ interface GuardRow {
   // 嗰種 optional，但都寫 optional 保守兼容未來）。
   referral_broker_id?: string | null;
   visa_sponsored_by_broker_id?: string | null;
+  // WP-BOSS5 §25.2：詳情 GET 先有（唔喺列表 DTO），淨係 detail response
+  // 帶呢粒 key——true＝呢個安員嘅 `referral_broker_id` 曾經俾 migration
+  // 清走過（原本指住 Y／internal_cash，老闆決定 Y 唔可以做介紹雞頭）。
+  referral_broker_migration_cleared?: boolean;
 }
 // WP-PHASE3（item 1）：安員抽屜「長工」區——盤名下拉／崗位盤列表用。
 interface SiteRow {
@@ -120,7 +124,13 @@ interface BrokerRow {
   id: string;
   code: string;
   name: string;
+  kind?: string;
 }
+
+// WP-BOSS5 §25.2（老闆 2026-09-28 決定 2）：介紹雞頭下拉剔走兩種內部結算
+// 單位（B07＝internal_longterm／Y＝internal_cash）——佢哋唔係真正供應
+// 長工嘅外部雞頭，唔可以揀做介紹雞頭。用 `kind` 判斷，唔寫死代號／id。
+const isInternalBrokerKind = (kind?: string) => kind === "internal_longterm" || kind === "internal_cash";
 // WP-STAFFNO：`GET/POST /api/guards/:id/staff-numbers` 嘅一行。
 interface StaffNumberRow {
   id: string;
@@ -248,6 +258,9 @@ export function GuardsClient({
   // 權限（單一事實來源：backend response 形狀）。
   const [hasPiiField, setHasPiiField] = useState(true);
   const [hasBankField, setHasBankField] = useState(true);
+  // WP-BOSS5 §25.2：呢個安員嘅介紹雞頭曾經俾 migration 清走（原本係
+  // Y／internal_cash）——detail GET 先知，淨係編輯模式先有值。
+  const [referralBrokerMigrationCleared, setReferralBrokerMigrationCleared] = useState(false);
   // WP-PII：牌照/平安卡/入職離職日期（GuardCreateSchema 冇，PATCH-only）
   // 新增嗰幾隻 input——雞頭（`isBroker`）嘅 `GUARD_BROKER_FIELDS` 白名單
   // 本身唔包含呢啲欄，response 冇 key，同 hasPiiField/hasBankField 一致
@@ -451,6 +464,7 @@ export function GuardsClient({
     setEditingId(null);
     setForm(emptyForm);
     setFormError(null);
+    setReferralBrokerMigrationCleared(false);
     // 新增模式冇「loaded baseline」呢個概念（form 由空白開始）——重置做
     // 全空，等用戶打嘅任何非空值都算「改咗」，送得落 body（POST
     // /api/guards 本身接受 `tel`，同 PATCH 舊寫法唔同）。
@@ -593,6 +607,7 @@ export function GuardsClient({
     setEditingId(row.id);
     fillFormFromRow(row);
     setFormError(null);
+    setReferralBrokerMigrationCleared(false);
     setStaffNumberForm(emptyStaffNumberForm);
     setStaffNumberError(null);
     setShowFormerStaffNumbers(false);
@@ -643,6 +658,7 @@ export function GuardsClient({
       setHasPiiField("hkid" in detailRes.data);
       setHasBankField("bank_name" in detailRes.data);
       setHasLicenceExtraField("sia_permit_no" in detailRes.data);
+      setReferralBrokerMigrationCleared(!!detailRes.data.referral_broker_migration_cleared);
       setDetailAvailable(true);
     } else {
       // Fable5.1：detail GET 失敗（包括 403 冇權睇、500）——`onSubmit()`
@@ -1926,14 +1942,16 @@ export function GuardsClient({
                         <Field label="生效日">
                           <input type="date" className={inputCls} value={convertForm.effective_from} onChange={(e) => setConvertForm((f) => ({ ...f, effective_from: e.target.value }))} />
                         </Field>
-                        <Field label="介紹雞頭（選填）">
+                        <Field label="介紹雞頭（選填）" hint="Y／內部長工結算單位唔可以做介紹雞頭，下拉已剔走">
                           <select className={selectCls} value={convertForm.referral_broker_id} onChange={(e) => setConvertForm((f) => ({ ...f, referral_broker_id: e.target.value }))}>
                             <option value="">（無）</option>
-                            {brokers.map((b) => (
-                              <option key={b.id} value={b.id}>
-                                {b.name}（{b.code}）
-                              </option>
-                            ))}
+                            {brokers
+                              .filter((b) => !isInternalBrokerKind(b.kind))
+                              .map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name}（{b.code}）
+                                </option>
+                              ))}
                           </select>
                         </Field>
                         <Field label="起始月薪（選填）" hint="要「長工糧」權限先建到合約，冇權會警告但唔會擋轉長工">
@@ -1953,14 +1971,23 @@ export function GuardsClient({
                 </div>
               )}
               <div className="grid grid-cols-2 gap-2">
-                <Field label="介紹雞頭" hint="呢個長工由邊個雞頭供應（計介紹費用）">
+                <Field
+                  label="介紹雞頭"
+                  hint={
+                    referralBrokerMigrationCleared
+                      ? "已清：原設定係內部現金結算單位（Y），老闆 2026-09-28 決定 Y 唔可以做介紹雞頭，系統已自動清空，請人手覆核係咪要改揀其他雞頭"
+                      : "呢個長工由邊個雞頭供應（計介紹費用）——Y／內部長工結算單位唔可以做介紹雞頭，下拉已剔走"
+                  }
+                >
                   <select className={selectCls} value={form.referral_broker_id} onChange={(e) => setForm((f) => ({ ...f, referral_broker_id: e.target.value }))}>
                     <option value="">（無）</option>
-                    {brokers.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}（{b.code}）
-                      </option>
-                    ))}
+                    {brokers
+                      .filter((b) => !isInternalBrokerKind(b.kind))
+                      .map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}（{b.code}）
+                        </option>
+                      ))}
                   </select>
                 </Field>
                 <Field label="簽證形式贊助雞頭" hint="有值＝永遠跟呢個雞頭散更結算，唔理崗位盤">

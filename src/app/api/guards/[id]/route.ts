@@ -68,7 +68,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (!row) throw NotFound();
     const derived = withDerivedGuard(row);
     if (isBrokerRole(session)) return ok(scrubForBrokerSession(session, toBrokerGuardDTO(derived)));
-    return ok(await applyFieldGroupGate(session, "guards", toGuardFullDTO(derived)));
+    const dto = await applyFieldGroupGate(session, "guards", toGuardFullDTO(derived));
+    // WP-BOSS5 §25.2：淨係 detail（唔係列表——避免 500 行 N+1）先查呢粒
+    // 衍生 flag，俾前端顯示「已清」提示——`migration_clear_internal_
+    // referral`（見 20260928… migration）淨係喺 `referral_broker_id` 曾經
+    // 指住 internal_cash（Y）嘅安員先寫，冇 PII，audit_log 本身就係
+    // append-only 事實記錄。
+    const migrationClearedLog = await prisma.auditLog.findFirst({
+      where: { tableName: "guards", rowId: id, action: "migration_clear_internal_referral" },
+      select: { id: true },
+    });
+    return ok({ ...dto, referral_broker_migration_cleared: !!migrationClearedLog });
   });
 }
 
@@ -108,7 +118,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       const v = parsed[key];
       if (v === undefined || v === beforeVal) continue;
       if (isBrokerRole(session)) throw Forbidden(`雞頭唔可以改${label}`);
-      if (v !== null) await assertReferralBrokerAllowed(v, label);
+      if (v !== null) await assertReferralBrokerAllowed(v, label, { disallowInternalCash: key === "referral_broker_id" });
     }
     // WP-PII（Opus 驗收必修 2a）：前端編輯抽屜起草成個 form，撳「儲存」
     // 成個 form 一齊送——冇改嘅 field-group 受控欄（例如長工冇改月薪，

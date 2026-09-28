@@ -44,8 +44,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (!site) throw NotFound("搵唔到呢個盤");
     if (parsed.referral_broker_id) {
       // WP-PHASE3 Opus 5.5 驗收：同 guards PATCH 一致——B07（內部長工結算
-      // 單位）唔可以做介紹雞頭。
-      await assertReferralBrokerAllowed(parsed.referral_broker_id, "介紹雞頭");
+      // 單位）唔可以做介紹雞頭。WP-BOSS5 §25.2：Y（internal_cash）都唔
+      // 可以做介紹雞頭。
+      await assertReferralBrokerAllowed(parsed.referral_broker_id, "介紹雞頭", { disallowInternalCash: true });
     }
 
     // 合約要唔要建，喺 transaction 之前就要知（會影響落唔落

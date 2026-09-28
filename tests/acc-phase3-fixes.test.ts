@@ -84,6 +84,14 @@ describe("§2 guards PATCH 介紹雞頭驗證", () => {
     await prisma.guard.update({ where: { id: fx.guardA.id }, data: { referralBrokerId: b07.id } });
     expect((await patch({ referral_broker_id: b07.id, name_aliases: [] })).status).toBe(200);
   });
+
+  it("WP-BOSS5 §25.2：referral_broker_id＝內部現金結算單位（Y）400；同一個 broker 做 visa_sponsored_by_broker_id 維持現狀（200，老闆冇講）", async () => {
+    const referralRes = await patch({ referral_broker_id: fx.brokerInternal.id });
+    expect(referralRes.status).toBe(400);
+    const body = (await referralRes.json()) as { message?: string };
+    expect(body.message ?? "").toMatch(/內部現金結算單位/);
+    expect((await patch({ visa_sponsored_by_broker_id: fx.brokerInternal.id })).status).toBe(200);
+  });
 });
 
 describe("§3 轉長工合約冪等", () => {

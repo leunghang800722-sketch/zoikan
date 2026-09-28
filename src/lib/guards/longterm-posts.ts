@@ -41,10 +41,23 @@ export async function assertLongtermPostPeriodOk(input: {
 
 /** 介紹雞頭／簽證形式贊助雞頭：雞頭要存在（400），唔可以係 B07 呢類
  * 「內部長工結算單位」（`kind=internal_longterm`）——佢唔係供應人嘅雞頭，
- * 設咗會令介紹費／簽證形式結算跟錯單位。`internal_cash`（例：代號 Y）
- * 現有資料有做介紹雞頭嘅記錄，唔擋（要唔要擋等規劃定）。 */
-export async function assertReferralBrokerAllowed(brokerId: string, label: string): Promise<void> {
+ * 設咗會令介紹費／簽證形式結算跟錯單位。
+ *
+ * WP-BOSS5 §25.2（老闆 2026-09-28 決定 2）：**介紹雞頭**額外唔可以係
+ * `internal_cash`（例：代號 Y）——Y 唔可以做介紹雞頭。用
+ * `disallowInternalCash: true` 開呢個閘，淨係「介紹雞頭」call site 先傳
+ * （`referral_broker_id`）；**簽證形式贊助雞頭維持現狀**（老闆冇講，
+ * `visa_sponsored_by_broker_id` call site 唔傳，行為不變）。判斷用
+ * `kind`，唔寫死代號／id。 */
+export async function assertReferralBrokerAllowed(
+  brokerId: string,
+  label: string,
+  options?: { disallowInternalCash?: boolean }
+): Promise<void> {
   const broker = await prisma.broker.findUnique({ where: { id: brokerId }, select: { id: true, kind: true } });
   if (!broker) throw BadRequest(`搵唔到呢個${label}`);
   if (broker.kind === "internal_longterm") throw BadRequest(`${label}唔可以係內部長工結算單位（B07）`);
+  if (options?.disallowInternalCash && broker.kind === "internal_cash") {
+    throw BadRequest(`${label}唔可以係內部現金結算單位（Y）`);
+  }
 }
