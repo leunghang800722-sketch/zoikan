@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
-import { buildBochkAutopayWorkbook, BOCHK_FORMAT_SOURCE } from "@/lib/longterm-payroll/bochk-autopay-export";
+import { buildBochkAutopayWorkbook, BOCHK_FORMAT_SOURCE, primaryPhone8, normalizeBankAccountNo } from "@/lib/longterm-payroll/bochk-autopay-export";
 import { HKICL_BANK_OPTIONS, HKICL_BANK_CODE_SET } from "@/lib/longterm-payroll/hkicl-bank-codes";
 
 describe("HKICL_BANK_OPTIONS（建議下拉，逐個核實過先可以入呢個陣列）", () => {
@@ -25,6 +25,43 @@ describe("HKICL_BANK_OPTIONS（建議下拉，逐個核實過先可以入呢個�
 
   it("冇收錄任何未核實嘅假編號（例如 999）", () => {
     expect(HKICL_BANK_CODE_SET.has("999")).toBe(false);
+  });
+});
+
+// Opus 5.5 覆核應修 b：電話先去 +852／852 前綴同空格／- 先至檢查 8 位；
+// 賬戶號碼先去空格先至檢查 0-9／-；正規化後嘅值先出行。
+describe("primaryPhone8（去 +852／852 前綴同空格／- 先至檢查 8 位）", () => {
+  it("純 8 位數字——原樣通過", () => {
+    expect(primaryPhone8("91234567")).toBe("91234567");
+  });
+  it("帶 +852 前綴＋空格——去前綴後 8 位通過", () => {
+    expect(primaryPhone8("+852 9123 4567")).toBe("91234567");
+  });
+  it("帶 852 前綴（冇 +）＋-——去前綴後 8 位通過", () => {
+    expect(primaryPhone8("852-9123-4567")).toBe("91234567");
+  });
+  it("冇前綴、純空格分隔——去空格後 8 位通過", () => {
+    expect(primaryPhone8("9123 4567")).toBe("91234567");
+  });
+  it("啱啱好 8 位、首三位數字岩巧係 852——唔會誤當「有國際區號」剝走", () => {
+    // 8 位數字，唔係 11 位，唔應該觸發「852 前綴」邏輯。
+    expect(primaryPhone8("85212345")).toBe("85212345");
+  });
+  it("剝完唔係 8 位——null（唔會屈估）", () => {
+    expect(primaryPhone8("12345")).toBeNull();
+    expect(primaryPhone8(null)).toBeNull();
+  });
+});
+
+describe("normalizeBankAccountNo（去空格先至檢查）", () => {
+  it("去晒空格", () => {
+    expect(normalizeBankAccountNo("600 1234 567")).toBe("6001234567");
+  });
+  it("純空格——當冇值（null）", () => {
+    expect(normalizeBankAccountNo("   ")).toBeNull();
+  });
+  it("冇值——null", () => {
+    expect(normalizeBankAccountNo(null)).toBeNull();
   });
 });
 
@@ -153,6 +190,33 @@ describe("buildBochkAutopayWorkbook：HKICL 字元過濾／缺資料判斷", () 
     const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
     expect(result.rowCount).toBe(1);
     expect(result.missing.length).toBe(0);
+  });
+
+  // Opus 5.5 覆核應修 b：賬戶號碼含空格分組（人手輸入常見）——去咗空格
+  // 之後淨係 0-9／-，應該正常出行，而且出行嘅值係正規化後（去咗空格）
+  // 嘅值，唔係原始輸入。
+  it("賬戶號碼含空格分組（例如「600 1234 567」）——去空格後正常出行，出行值係正規化後嘅值", async () => {
+    await makeGuard({ bankAccountNo: "600 1234 567", tel: "91234567" });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    expect(result.rowCount).toBe(1);
+    expect(result.missing.length).toBe(0);
+    const row = result.workbook.getWorksheet("Payroll Editor 明細")!;
+    expect(row.getCell(2, 4).value).toBe("6001234567");
+  });
+
+  // Opus 5.5 覆核應修 b：電話帶 +852 國際區號前綴——之前會被直接 \D
+  // 去晒非數字變 11 位，誤判「唔係 8 位」列入缺資料；而家先剝前綴先至
+  // 檢查，應該正常出行。
+  it("電話帶 +852 國際區號前綴（例如「+852 9123 4567」）——去前綴後正常出行，通知號碼係去咗前綴嘅 8 位", async () => {
+    await makeGuard({ tel: "+852 9123 4567" });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    expect(result.rowCount).toBe(1);
+    expect(result.missing.length).toBe(0);
+    const row = result.workbook.getWorksheet("Payroll Editor 明細")!;
+    expect(row.getCell(2, 9).value).toBe("S");
+    expect(row.getCell(2, 10).value).toBe("91234567");
   });
 
   it("未計過長工糧——拋錯（route 層接住轉 400，唔准靜靜當 0）", async () => {

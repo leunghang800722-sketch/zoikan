@@ -16,8 +16,11 @@
 //   ≤140）/ 通知渠道1 e-Alert Type 1／通知電郵地址/電話號碼 1（主電話，
 //   8 位——WP-BOSS5 驗收項 3：呢個規格 e-Alert 類型／聯絡**係必填**，
 //   唔係「有就填、冇就留空」，電話唔係 8 位嘅人**唔出明細行**，改列入
-//   缺資料，原因「通知電話要 8 位」）/ 通知渠道2（留空）/ 通知電郵
-//   地址/電話號碼 2（留空）。
+//   缺資料，原因「通知電話要 8 位」。Opus 5.5 覆核應修 b：先去
+//   `+852`／`852` 國際區號前綴同空格／`-` 先至檢查 8 位，正規化後嘅值
+//   先出行——`primaryPhone8()`）/ 通知渠道2（留空）/ 通知電郵地址/電話
+//   號碼 2（留空）。賬戶號碼同樣：先去空格先至檢查 0-9／`-`，正規化後
+//   嘅值先出行（`normalizeBankAccountNo()`）。
 // Sheet 「檔頭資料」：發薪賬戶號碼（空）、發薪日期（空）、付款類別
 //   （001 預設，可改）、貨幣 HKD、總筆數、總金額（=Σ金額，2 位）。
 // Sheet 「缺資料」：冇 bank_code／賬戶號碼／賬戶名稱／名稱含非 HKICL
@@ -69,12 +72,31 @@ export interface BochkAutopayResult {
 
 /** 主電話（8 位）：`guards.tel` 由 `syncLegacyGuardContactColumns()` 同
  * primary `guard_phones` 行保持一致（見 src/lib/guards/contacts.ts），
- * 唔使呢度再逐個查 guard_phones（避免 N+1）。淨係 8 位數字先當有效——
- * 格式唔啱嘅唔准估，通知渠道／號碼一齊留空。 */
-function primaryPhone8(tel: string | null): string | null {
+ * 唔使呢度再逐個查 guard_phones（避免 N+1）。
+ *
+ * Opus 5.5 覆核應修 b：先去 `+852`／`852` 國際區號前綴同空格／`-`，先至
+ * 檢查係咪 8 位——`+852 9123 4567`、`852-9123-4567` 呢類人手輸入格式
+ * 之前會俾直接 `\D` 去晒非數字之後變 11 位，誤判做「唔係 8 位」列入
+ * 缺資料。**淨係喺去晒空格/-/國際區號符號之後總共 11 位、而且開頭係
+ * 852 先當「有國際區號前綴」再剝走**——避免將啱啱好 8 位、首三位數字
+ * 岩巧係 852 嘅本地號碼誤斬走三位。正規化之後嘅 8 位數字先出行（見
+ * caller）。 */
+export function primaryPhone8(tel: string | null): string | null {
   if (!tel) return null;
-  const digits = tel.replace(/\D/g, "");
-  return digits.length === 8 ? digits : null;
+  const digitsOnly = tel.replace(/\D/g, "");
+  if (digitsOnly.length === 11 && digitsOnly.startsWith("852")) {
+    return digitsOnly.slice(3);
+  }
+  return digitsOnly.length === 8 ? digitsOnly : null;
+}
+
+/** 賬戶號碼正規化：先去空格（人手輸入成日夾埋空格分組，例如
+ * "600 1234 567"），先至檢查 0-9／`-`（`ACCOUNT_NO_CHARS`）。Opus 5.5
+ * 覆核應修 b：正規化之後嘅值（去咗空格）先出行，唔係原始輸入值。 */
+export function normalizeBankAccountNo(raw: string | null): string | null {
+  if (!raw) return null;
+  const stripped = raw.replace(/\s/g, "");
+  return stripped.length > 0 ? stripped : null;
 }
 
 function staffLabel(g: { staffNo: string | null; staffNoMw: string | null; id: string }): string {
@@ -105,8 +127,9 @@ export async function buildBochkAutopayWorkbook(month: Date): Promise<BochkAutop
     const label = staffLabel(g);
     const reasons: string[] = [];
     if (!g.bankCode) reasons.push("冇銀行編號（bank_code）");
-    if (!g.bankAccountNo) reasons.push("冇賬戶號碼");
-    else if (!ACCOUNT_NO_CHARS.test(g.bankAccountNo)) reasons.push("賬戶號碼只可以係 0-9／-");
+    const normalizedAccountNo = normalizeBankAccountNo(g.bankAccountNo);
+    if (!normalizedAccountNo) reasons.push("冇賬戶號碼");
+    else if (!ACCOUNT_NO_CHARS.test(normalizedAccountNo)) reasons.push("賬戶號碼只可以係 0-9／-");
     if (!g.bankPayeeName) reasons.push("冇賬戶名稱");
     else if (!HKICL_NAME_CHARS.test(g.bankPayeeName)) reasons.push("賬戶名稱要英文（含 HKICL 唔收嘅字元）");
     else if (g.bankPayeeName.length > BANK_PAYEE_NAME_MAX_LEN) reasons.push(`賬戶名稱長過 ${BANK_PAYEE_NAME_MAX_LEN} 字元`);
@@ -126,7 +149,7 @@ export async function buildBochkAutopayWorkbook(month: Date): Promise<BochkAutop
     rows.push({
       seq,
       bankCode: g.bankCode!,
-      accountNo: g.bankAccountNo!,
+      accountNo: normalizedAccountNo!, // 正規化後（去咗空格）嘅值先出行
       payeeName: g.bankPayeeName!,
       amount: n(l.autopay),
       reference,
