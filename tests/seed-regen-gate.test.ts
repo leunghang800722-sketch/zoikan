@@ -5,6 +5,15 @@
 // 隔離 test DB 混埋（唔想成個真實 7 月數據集污染咗其他 test 嘅 fixture
 // 假設）。需要 `npm run db:start` 已經起咗開發庫先跑得（同手動
 // `npm run db:seed`/`report:regen` 嘅前提一樣）。
+//
+// **鐵則（WP-BOSS5 驗收項 6）：呢個 test 會實際 `npm run db:seed` 重新
+// 種**開發庫（下面 `beforeAll()` 用 `execFileSync` 起子行程執行），會
+// 覆蓋走開發庫入面所有資料同狀態——**唔可以同 `npm run gate:locked-
+// months`（或者任何依賴開發庫現有資料嘅 gate script，見
+// `scripts/gate/locked-months.sh` 頂註解）同時跑**，兩者會互相撞車
+// （一個重新 seed 緊，另一個喺度讀緊同一個開發庫），結果唔可靠。呢個
+// test 同 `gate:locked-months` 要分開、先後執行，唔可以並行（parallel）
+// 或者夾埋一個 `npm run` script 一齊跑。
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";

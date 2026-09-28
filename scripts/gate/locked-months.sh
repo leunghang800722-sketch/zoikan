@@ -13,6 +13,12 @@
 #   5. gate:postorder-export-aug（Postorder 格式總表 vs 老闆總表）
 #   6. gate:aug-e2e（8 月端到端 vs 總表）
 #   7. perf:snapshot（7／8 月報表／對數／診斷數字）＋ perf:profile
+#
+# 鐵則（WP-BOSS5 驗收項 6）：呢個 script 開頭 db-reset／db-seed 兩步會
+# 重新種開發庫（`zoikan`）——**唔可以同 `npx vitest run
+# tests/seed-regen-gate.test.ts`（或者任何一齊跑嘅 `vitest run`，見嗰個
+# test 檔頂註解）同時執行**，兩者都會 seed／讀緊同一個開發庫，撞埋一齊
+# 跑會互相干擾，結果唔可靠。要分開、先後執行，唔可以並行。
 set -o pipefail
 cd "$(dirname "$0")/../.."
 OUT="${1:-out/locked-months/$(date +%Y%m%d-%H%M%S)}"
