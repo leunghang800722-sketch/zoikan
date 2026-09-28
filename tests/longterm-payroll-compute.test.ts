@@ -29,6 +29,7 @@ import {
   computeAutopay,
   MPF_CAP,
   MPF_MIN_GROSS,
+  SL_ACCRUAL_PER_MONTH,
 } from "@/lib/longterm-payroll/compute";
 
 describe("round2", () => {
@@ -152,6 +153,10 @@ describe("MPF（§14 規則 9）", () => {
 });
 
 describe("病假 4/5（§14 規則 9）", () => {
+  it("WP-BOSS5 25.3：老闆 2026-09-28 確認每月累積 2 日，防手多改", () => {
+    expect(SL_ACCRUAL_PER_MONTH).toBe(2);
+  });
+
   it("做滿 1 個月先開始儲：未滿 1 個月＝0", () => {
     expect(slCompletedMonths(toUtcDate("2026-08-01"), toUtcDate("2026-08-20"))).toBe(0);
     expect(slAccrued(toUtcDate("2026-08-01"), toUtcDate("2026-08-20"))).toBe(0);

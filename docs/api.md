@@ -1531,7 +1531,12 @@ view（`zoikan_ai_ro` 淨係 `GRANT ... ON SCHEMA ai`，public schema 新表
 **刻意唔喺呢層做**：OT 時薪公式（老闆已定「冇統一公式」，見 §15.2
 2026-09-24 答 (6)）、賣假／頂位盤級價目表（配置數據）——呢兩樣留俾
 aggregate 層／人手輸入項帶入 `computeGross()` 嘅 `otAmount`／
-`restDayPayment`／`otherAllowance` 參數。
+`restDayPayment`／`otherAllowance` 參數。**老闆 2026-09-28（WP-BOSS5
+決定 5）已確認：賣假／頂位／勤工獎可以人手輸入**——`longterm_payroll_
+inputs` kind＝`special_allowance`（勤工獎）／`other_allowance`（賣假／
+頂位）就係呢個決定嘅落地，唔再係待決事項（見
+`P2-版面重設計計劃.md` §25.3）。病假每月累積 2 日（`SL_ACCRUAL_
+PER_MONTH`）同樣已經老闆確認鎖死，唔准手多改。
 
 `tests/longterm-payroll-compute.test.ts`：37 條單元測試（合成數據，
 邊界案例包括：MPF 60 日邊界、試用期完結日當日唔算過咗、病假連續日數

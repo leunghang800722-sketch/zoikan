@@ -21,6 +21,9 @@ export const MPF_MIN_GROSS = 7100;
 export const MPF_MIN_DAYS_EMPLOYED = 60;
 export const MPF_EXEMPT_AGE = 65;
 
+// 老闆 2026-09-28（WP-BOSS5 決定 4）確認：病假每月 累積 2 日——第十三版
+// 口徑冇變，唔准手多改（有單元測試 assert 呢個常數＝2，見
+// tests/longterm-payroll-compute.test.ts）。
 export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH
 export const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
 export const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限

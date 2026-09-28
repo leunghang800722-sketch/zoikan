@@ -732,7 +732,7 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
     const lt = await recomputeLongtermPayroll(month, actorUserId, ip);
     longtermPayroll = { grossTotal: lt.totals.grossTotal, autopayTotal: lt.totals.autopayTotal, mpfEeTotal: lt.totals.mpfEeTotal, mpfErTotal: lt.totals.mpfErTotal, guardCount: lt.totals.guardCount };
     const visa = lt.totals.visaPassthrough;
-    longtermPayrollNote = `長工糧 ${lt.totals.guardCount} 人${visa.guardCount ? `（含簽證形式長工 ${visa.guardCount} 人，照出糧，Autopay ${visa.autopayTotal} 由雞頭結算扣返）` : ""}：Gross ${lt.totals.grossTotal}／Autopay ${lt.totals.autopayTotal}／MPF EE ${lt.totals.mpfEeTotal}／ER ${lt.totals.mpfErTotal}。賣假／頂位／勤工獎／病假段醫生紙／平均工資要會計喺「長工糧」頁人手輸入先計到，鎖月前要喺「長工糧」頁逐人覆核`;
+    longtermPayrollNote = `長工糧 ${lt.totals.guardCount} 人${visa.guardCount ? `（含簽證形式長工 ${visa.guardCount} 人，照出糧，Autopay ${visa.autopayTotal} 由雞頭結算扣返）` : ""}：Gross ${lt.totals.grossTotal}／Autopay ${lt.totals.autopayTotal}／MPF EE ${lt.totals.mpfEeTotal}／ER ${lt.totals.mpfErTotal}。老闆已確認可人手輸入（賣假／頂位／勤工獎）——呢啲同病假段醫生紙／平均工資要會計喺「長工糧」頁人手輸入先計到，鎖月前要喺「長工糧」頁逐人覆核`;
     if (lt.warnings.length) warnings.push(...lt.warnings.map((w) => `長工糧：${w}`));
   } catch (e) {
     longtermPayrollNote = `長工糧重算失敗（${safeErrorSummary(e)}）——月結總表／毛利成本暫唔含長工 autopay，要人手覆核`;
