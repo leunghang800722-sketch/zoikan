@@ -89,7 +89,9 @@ function sessionPassword(): string {
 }
 
 export async function sealSession(data: SessionData, ttlSeconds?: number): Promise<string> {
-  return sealData(data, { password: sessionPassword(), ttl: ttlSeconds ?? getSessionTtlConfig().idleSeconds });
+  const raw = ttlSeconds ?? getSessionTtlConfig().idleSeconds;
+  const ttl = Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : getSessionTtlConfig().idleSeconds; // 防呆：唔會產生冇到期時間嘅 seal
+  return sealData(data, { password: sessionPassword(), ttl });
 }
 
 /** unseal＋基本檢查（userId、絕對上限）。seal 過期／篡改／過絕對上限一律 null。

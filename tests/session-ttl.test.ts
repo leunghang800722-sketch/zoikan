@@ -183,6 +183,17 @@ describe("WP-SESSION-TTL", () => {
     expect(await getSessionFromRequest(req("/x", cookie))).toBeNull();
   });
 
+  it("sealSession ttl 防呆：0／負數／NaN 都有到期時間", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    for (const bad of [0, -5, Number.NaN]) {
+      const sealed = await sealSession({ ...base, renewedAt: base.loggedInAt }, bad);
+      const cookie = `${SESSION_COOKIE_NAME}=${encodeURIComponent(sealed)}`;
+      vi.setSystemTime(Date.now() + 31 * DAY * 1000);
+      expect(await getSessionFromRequest(req("/x", cookie)), String(bad)).toBeNull();
+      vi.setSystemTime(Date.now() - 31 * DAY * 1000);
+    }
+  });
+
   describe("env 覆蓋", () => {
     it("合法值生效", () => {
       process.env.SESSION_IDLE_DAYS = "7";
