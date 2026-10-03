@@ -148,7 +148,7 @@ export default function GuardImportPage() {
     await runPreview(pkg);
   }
 
-  async function onDecide(key: string, field: (typeof REVIEWABLE)[number], action: "confirm" | "replace" | "skip") {
+  async function onDecide(key: string, field: (typeof REVIEWABLE)[number], action: "confirm" | "replace" | "skip" | "keep_pending") {
     if (!pkg) return;
     const edit = edits[`${key}:${field}`];
     setBusy(true);
@@ -168,7 +168,7 @@ export default function GuardImportPage() {
     await runPreview(pkg);
   }
 
-  const reviewRows = (preview?.rows ?? []).filter((r) => r.auto_apply && REVIEWABLE.some((f) => r.fields[f]?.status === "review" || (f === "name_zh" && r.name_review_pending)));
+  const reviewRows = (preview?.rows ?? []).filter((r) => (r.auto_apply || r.reasons.includes("name_not_confirmed")) && REVIEWABLE.some((f) => r.fields[f]?.status === "review" || (f === "name_zh" && r.name_review_pending)));
 
   return (
     <div className="space-y-4">
@@ -284,6 +284,11 @@ export default function GuardImportPage() {
                             <Button disabled={busy} onClick={() => onDecide(r.key, f, "replace")}>
                               改正後確認
                             </Button>
+                            {f === "name_zh" && r.reasons.includes("name_not_confirmed") && (
+                              <Button disabled={busy} onClick={() => onDecide(r.key, f, "keep_pending")}>
+                                照建但標待核對
+                              </Button>
+                            )}
                             <Button disabled={busy} onClick={() => onDecide(r.key, f, "skip")}>
                               略過
                             </Button>

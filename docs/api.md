@@ -2222,3 +2222,5 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - 更表配對：電話對到 A、姓名唯一對到另一個 guard B → ambiguous（唔自動配）。人手 `POST /api/roster-uploads/:id/reparse` 已鎖月份 → 403。
 - `guard_identity_conflicts` 淨存 `guard_ids`（唔存值或 hash）；`scripts/db/ensure-identity-indexes.ts`（`npm run db:ensure-identity-indexes`，Dockerfile 啟動鏈）冪等補建 unique index，有重複只印組數；`GET /api/diagnostics/month` 加 `identity{dupHkidGroups,dupTelGroups,hkidIndexPresent,telIndexPresent}`。
 - 導入配對：hkid 欄 status≠confirmed 唔做 hkid 層 link（跌落工號／電話層，都冇＝needs_review）。
+- 導入 `create`：`nameZh.status !== confirmed` 唔自動建人，歸 `needs_review`（理由碼 `name_not_confirmed`），留喺覆核頁；人手 decisions 對 `name_zh` 揀 `confirm`／`replace`（值）／`keep_pending`（照建但標 `identity_review_fields=['name_zh']`「姓名待核對」，淨人手路徑可用）先建；`skip` 唔建。原則：自動套用淨寫 confirmed 欄，冇例外。
+- `ensure-identity-indexes` 失敗只印 error code／類別，唔印 message；診斷 `identity` 加 `dupTelSameGuardNormalizedGroups`（同 guard 正規化後多行同號）、`dupTelCrossGuardNormalizedGroups`（跨 guard 正規化後同號）——兩者 raw unique index 都唔會擋（寫法唔同），要人手整理，app 層照擋新增。

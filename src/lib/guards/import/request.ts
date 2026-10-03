@@ -20,7 +20,7 @@ export async function requireImportPermission(req: Request, mode: "preview" | "a
   return requirePermission(req, "安員批量導入", mode === "preview" ? "view" : "update");
 }
 
-const decisionSchema = z.object({ action: z.enum(["confirm", "replace", "skip"]), value: z.string().trim().max(500).optional() }).strict();
+const decisionSchema = z.object({ action: z.enum(["confirm", "replace", "skip", "keep_pending"]), value: z.string().trim().max(500).optional() }).strict();
 const personDecisionSchema = z
   .object({
     name_zh: decisionSchema.optional(),

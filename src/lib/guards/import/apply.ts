@@ -111,7 +111,7 @@ function isoDate(d: Date | null | undefined): string | null {
   return d ? d.toISOString().slice(0, 10) : null;
 }
 
-function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[]): Evaluation {
+function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[], dec?: PersonDecisions): Evaluation {
   const hkidCanon = canonicalHkid(fieldValue(p.hkid));
   const nameZh = fieldValue(p.nameZh);
   // 電話淨係 confirmed 先用嚟對齊（review 電話唔可靠，唔好用佢 link 人／觸發衝突）
@@ -139,6 +139,14 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[])
     } else if (!nameZh) {
       action = "needs_review";
       reasons.push("create_no_name");
+    } else if (p.nameZh.status !== "confirmed") {
+      // 自動套用淨寫 confirmed 欄，冇例外：姓名未確認唔自動建人；人手喺覆核頁確認／改正後確認／
+      // 揀「照建但標待核對」之後（逐人 decisions 路徑）先建。
+      const nd = dec?.nameZh;
+      if (!nd || nd.action === "skip") {
+        action = "needs_review";
+        reasons.push("name_not_confirmed");
+      }
     }
   }
   const g = d.guardId ? ctx.byId.get(d.guardId) ?? null : null;
@@ -327,7 +335,8 @@ export async function previewImport(pkg: ImportPackage): Promise<PreviewResult> 
 // ---------------------------------------------------------------------------
 // 套用
 // ---------------------------------------------------------------------------
-export type ReviewAction = "confirm" | "replace" | "skip";
+/** keep_pending＝（姓名）照建但標「待核對」，淨係人手覆核時可揀，自動路徑唔用。 */
+export type ReviewAction = "confirm" | "replace" | "skip" | "keep_pending";
 export interface FieldDecision {
   action: ReviewAction;
   /** 改正後嘅值（confirm 可以帶；replace 必帶或用包內值） */
@@ -374,6 +383,8 @@ interface Want {
   value: string;
   replace: boolean;
   decided: boolean;
+  /** 人手揀「照建但標待核對」 */
+  pending?: boolean;
 }
 
 function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | undefined): Want | "skip" | null {
@@ -382,7 +393,7 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
   if (d && f !== "hkid") {
     const v = (d.value ?? fieldValue(p[f]))?.trim();
     if (!v) return null;
-    return { value: v, replace: d.action === "replace", decided: true };
+    return { value: v, replace: d.action === "replace", decided: true, pending: d.action === "keep_pending" };
   }
   if (p[f].status === "confirmed") {
     const v = fieldValue(p[f]);
@@ -392,7 +403,7 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
 }
 
 async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: readonly string[], dec: PersonDecisions | undefined, opts: ApplyOptions, acc: ApplyResult): Promise<PersonResult> {
-  const ev = evaluate(p, ctx, groupReasons);
+  const ev = evaluate(p, ctx, groupReasons, dec);
   const res: PersonResult = { key: p.key, outcome: "needs_review", reasons: ev.reasons, fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
   if (ev.action === "conflict" || ev.action === "needs_review") {
     res.outcome = ev.action;
@@ -423,7 +434,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     const dobOk = parseBirthDate(dobVal);
     if (dobVal && !dobOk) bump("dateOfBirth", "invalid_date");
     // 姓名未確認（review 且冇人手決定）→ 仍然建人，記待核對
-    if (!(nameW && nameW !== "skip" && nameW.decided) && p.nameZh.status !== "confirmed") review.add("name_zh");
+    if (p.nameZh.status !== "confirmed" && !(nameW && nameW !== "skip" && nameW.decided && !nameW.pending)) review.add("name_zh");
     const nameEnVal = nameEnW && nameEnW !== "skip" ? nameEnW.value : null;
     const created = await tx.guard.create({
       data: {

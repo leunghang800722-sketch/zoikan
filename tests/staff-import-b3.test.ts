@@ -23,12 +23,12 @@ const H4 = mkHkid("D", "456789");
 type St = "confirmed" | "review" | "missing";
 const F = (value: string | null, status: St) => (value ? { value, status } : { value: null, status: "missing" as St });
 
-function person(over: Partial<Pick<PackagePerson, "key">> & { hkid?: string; name?: string; tel?: string | null; addr?: string | null; nos?: string[]; telStatus?: St; hkidStatus?: St }): PackagePerson {
+function person(over: Partial<Pick<PackagePerson, "key">> & { hkid?: string; name?: string; tel?: string | null; addr?: string | null; nos?: string[]; telStatus?: St; hkidStatus?: St; nameStatus?: St }): PackagePerson {
   const hk = over.hkid ?? H1;
   return {
     key: personKeyForHkid(hk),
     hkid: F(hk, over.hkidStatus ?? "confirmed"),
-    nameZh: F(over.name ?? "導入測試員甲", "review"),
+    nameZh: F(over.name ?? "導入測試員甲", over.nameStatus ?? "confirmed"),
     nameEn: F("TEST AYUEN KAP", "review"),
     dateOfBirth: F("1990-05-06", "confirmed"),
     sex: F("M", "confirmed"),
@@ -121,6 +121,21 @@ describe("導入 API", () => {
     expect((await call(applyRoute, supervisor, { package: pkgOf([person({})]) })).status).toBe(403);
   });
 
+  it("自訂角色（base＝主管，開晒相關權限）對 preview／apply 仍然 403", async () => {
+    const custom = await prisma.role.create({ data: { name: "測試自訂主管", baseRole: "主管", isCustom: true, createdBy: "t" } });
+    const perms = await prisma.permission.findMany({ where: { OR: [{ module: "安員批量導入" }, { module: "安員" }, { module: "安員個人資料" }] } });
+    for (const pm of perms) await prisma.rolePermission.create({ data: { roleId: custom.id, permissionId: pm.id, granted: true } });
+    const supUserId = fx.userIds["主管"];
+    await prisma.user.update({ where: { id: supUserId }, data: { roleId: custom.id, tokenVersion: { increment: 1 } } });
+    const cookie = await sessionCookieForUser(supUserId);
+    expect((await call(previewRoute, cookie, { package: pkgOf([person({})]) })).status).toBe(403);
+    expect((await call(applyRoute, cookie, { package: pkgOf([person({})]) })).status).toBe(403);
+    // 還原（唔留自訂角色，免影響其他測試）
+    await prisma.user.update({ where: { id: supUserId }, data: { roleId: fx.roleIds["主管"], tokenVersion: { increment: 1 } } });
+    await prisma.rolePermission.deleteMany({ where: { roleId: custom.id } });
+    await prisma.role.delete({ where: { id: custom.id } });
+  });
+
   it("壞導入包 → 400，訊息唔帶值", async () => {
     const res = await call(previewRoute, owner, { package: { version: 2, generatedAt: "x", persons: [{ key: "k", hkid: { value: H1, status: "zzz" } }] } });
     expect(res.status).toBe(400);
@@ -136,7 +151,7 @@ describe("導入 API", () => {
     const body = JSON.parse(text);
     expect(body.person_stats).toMatchObject({ create: 2, link: 0, conflict: 0, needs_review: 0 });
     expect(body.field_stats.hkid).toEqual({ confirmed: 2, review: 0, missing: 0 });
-    expect(body.field_stats.name_zh).toEqual({ confirmed: 0, review: 2, missing: 0 });
+    expect(body.field_stats.name_zh).toEqual({ confirmed: 2, review: 0, missing: 0 });
     expect(body.field_stats.phone).toEqual({ confirmed: 1, review: 0, missing: 1 });
     expect(body.auto_apply.guards_to_create).toBe(2);
     expect(body.rows[0].hkid_masked).toBe(`A*****${H1.slice(-2)}`);
@@ -144,7 +159,7 @@ describe("導入 API", () => {
     expect(await prisma.guard.count({ where: { hkid: H1 } })).toBe(0);
   });
 
-  it("apply 自動：create 只寫 confirmed 欄；姓名 review 照建但標待核對；冪等", async () => {
+  it("apply 自動：create 只寫 confirmed 欄（姓名 confirmed）；冪等", async () => {
     const pkg = pkgOf([person({ hkid: H1, tel: "91234567", nos: ["U90001"] })]);
     const r1 = await (await call(applyRoute, owner, { package: pkg })).json();
     expect(r1.outcomes.created).toBe(1);
@@ -154,7 +169,7 @@ describe("導入 API", () => {
     expect(r1.addresses_added).toBe(0);
     const g = await prisma.guard.findFirstOrThrow({ where: { hkid: H1 }, include: { phones: true, staffNumbers: true, addresses: true } });
     expect(g.nameZh).toBe("導入測試員甲");
-    expect(g.identityReviewFields).toEqual(["name_zh"]);
+    expect(g.identityReviewFields).toEqual([]);
     expect(g.nameEn).toBeNull(); // review 欄唔寫
     expect(g.dateOfBirth?.toISOString().slice(0, 10)).toBe("1990-05-06");
     expect(g.phones.map((p) => [p.tel, p.source, p.isPrimary])).toEqual([["91234567", "application_form", true]]);
@@ -226,12 +241,42 @@ describe("導入 API", () => {
     expect(r2.outcomes).toMatchObject({ created: 0, needs_review: 1 });
   });
 
+  it("姓名未 confirmed：自動路徑唔建人（needs_review／name_not_confirmed）；覆核揀「確認／改正後確認／照建但標待核對」先建", async () => {
+    const mk = (hk: string, nm: string) => person({ hkid: hk, key: personKeyForHkid(hk), name: nm, nameStatus: "review", nos: [`U9${hk.slice(1, 5)}`], tel: `6${hk.slice(2, 8)}` });
+    const pA = mk(H1, "導入測試員甲");
+    const pB = mk(H2, "導入測試員乙");
+    const pC = mk(H3, "導入測試員丙");
+    const pkg = pkgOf([pA, pB, pC]);
+    const pv = await (await call(previewRoute, owner, { package: pkg })).json();
+    expect(pv.person_stats).toMatchObject({ create: 0, needs_review: 3 });
+    expect(pv.rows[0].reasons).toContain("name_not_confirmed");
+    expect(pv.auto_apply.persons).toBe(0);
+    const r0 = await (await call(applyRoute, owner, { package: pkg })).json();
+    expect(r0.outcomes).toMatchObject({ created: 0, needs_review: 3 });
+    expect(await prisma.guard.count({ where: { hkid: { in: [H1, H2, H3] } } })).toBe(0);
+    // skip 都唔建
+    const rs = await (await call(applyRoute, owner, { package: pkg, decisions: { [pA.key]: { name_zh: { action: "skip" } } } })).json();
+    expect(rs.outcomes.needs_review).toBe(1);
+    expect(await prisma.guard.count({ where: { hkid: H1 } })).toBe(0);
+    // confirm → 建、冇待核對
+    await call(applyRoute, owner, { package: pkg, decisions: { [pA.key]: { name_zh: { action: "confirm" } } } });
+    expect((await prisma.guard.findFirstOrThrow({ where: { hkid: H1 } })).identityReviewFields).toEqual([]);
+    // 改正後確認 → 用改正嘅名
+    await call(applyRoute, owner, { package: pkg, decisions: { [pB.key]: { name_zh: { action: "replace", value: "導入測試員乙改" } } } });
+    const gB = await prisma.guard.findFirstOrThrow({ where: { hkid: H2 } });
+    expect(gB.nameZh).toBe("導入測試員乙改");
+    expect(gB.identityReviewFields).toEqual([]);
+    // 照建但標待核對
+    await call(applyRoute, owner, { package: pkg, decisions: { [pC.key]: { name_zh: { action: "keep_pending" } } } });
+    expect((await prisma.guard.findFirstOrThrow({ where: { hkid: H3 } })).identityReviewFields).toEqual(["name_zh"]);
+  });
+
   it("覆核決定：確認地址／改正後確認姓名（清待核對）／略過；link 唔覆蓋除非 replace", async () => {
-    const pkg = pkgOf([person({ hkid: H1, tel: "91234567", nos: ["U90001"] })]);
-    await call(applyRoute, owner, { package: pkg });
+    const pkg = pkgOf([person({ hkid: H1, tel: "91234567", nos: ["U90001"], nameStatus: "review" })]);
+    const key = pkg.persons[0]!.key;
+    await call(applyRoute, owner, { package: pkg, decisions: { [key]: { name_zh: { action: "keep_pending" } } } });
     const g0 = await prisma.guard.findFirstOrThrow({ where: { hkid: H1 } });
     expect(g0.identityReviewFields).toEqual(["name_zh"]);
-    const key = pkg.persons[0]!.key;
 
     const r1 = await (await call(applyRoute, owner, { package: pkg, decisions: { [key]: { address: { action: "confirm" }, name_en: { action: "skip" } } } })).json();
     expect(r1.addresses_added).toBe(1);

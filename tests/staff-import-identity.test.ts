@@ -262,7 +262,7 @@ describe("ensureIdentityIndexes／診斷 identity 區塊", () => {
     await clearAll();
     await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS guards_hkid_key`);
     await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS guard_phones_tel_key`);
-    expect(await identityIndexStatus(prisma)).toEqual({ dupHkidGroups: 0, dupTelGroups: 0, hkidIndexPresent: false, telIndexPresent: false });
+    expect(await identityIndexStatus(prisma)).toEqual({ dupHkidGroups: 0, dupTelGroups: 0, hkidIndexPresent: false, telIndexPresent: false, dupTelSameGuardNormalizedGroups: 0, dupTelCrossGuardNormalizedGroups: 0 });
     const r = await ensureIdentityIndexes(prisma);
     expect(r.created.sort()).toEqual(["guard_phones_tel_key", "guards_hkid_key"]);
     expect((await ensureIdentityIndexes(prisma)).created).toEqual([]); // 冪等
@@ -275,6 +275,21 @@ describe("ensureIdentityIndexes／診斷 identity 區塊", () => {
     await ensureIdentityIndexes(prisma);
   });
 
+  it("正規化後同號：同 guard 多行（+852／8 位）同跨 guard 都計入", async () => {
+    const { identityIndexStatus } = await import("@/lib/guards/identity-indexes");
+    await clearAll();
+    const a = await prisma.guard.create({ data: { nameZh: "識別測試員甲", employmentType: "cash_casual", createdBy: "t" } });
+    const b = await prisma.guard.create({ data: { nameZh: "識別測試員乙", employmentType: "cash_casual", createdBy: "t" } });
+    await prisma.guardPhone.create({ data: { guardId: a.id, tel: "91234567", isPrimary: true } });
+    await prisma.guardPhone.create({ data: { guardId: a.id, tel: "+85291234567" } });
+    await prisma.guardPhone.create({ data: { guardId: b.id, tel: "85261234567", isPrimary: true } });
+    await prisma.guardPhone.create({ data: { guardId: a.id, tel: "61234567" } });
+    const st = await identityIndexStatus(prisma);
+    expect(st.dupTelSameGuardNormalizedGroups).toBe(1);
+    expect(st.dupTelCrossGuardNormalizedGroups).toBe(1);
+    await clearAll();
+  });
+
   it("GET /api/diagnostics/month 有 identity 區塊", async () => {
     const { GET } = await import("@/app/api/diagnostics/month/route");
     await clearAll();
@@ -282,6 +297,6 @@ describe("ensureIdentityIndexes／診斷 identity 區塊", () => {
     const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
     const res = await GET(new Request("http://t/api/diagnostics/month?month=2026-08", { headers: { cookie } }));
     expect(res.status).toBe(200);
-    expect((await res.json()).identity).toEqual({ dup_hkid_groups: 0, dup_tel_groups: 0, hkid_index_present: true, tel_index_present: true });
+    expect((await res.json()).identity).toEqual({ dup_hkid_groups: 0, dup_tel_groups: 0, hkid_index_present: true, tel_index_present: true, dup_tel_same_guard_normalized_groups: 0, dup_tel_cross_guard_normalized_groups: 0 });
   });
 });
