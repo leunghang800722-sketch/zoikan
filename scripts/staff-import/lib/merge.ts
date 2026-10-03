@@ -3,7 +3,7 @@
 //  - 地址：取住址證明日期較新嗰份；日期抽唔到而地址又唔同 → review
 //  - 電話：取較新申請表嗰份；申請表日期手寫、唔抽 → 多個唔同電話一律 review（兩個值都留）
 //  - 工號：MP＋U 全部掛落同一人
-import { cmpAddress, normTel } from './compare';
+import { cmpAddress, enTokens, normTel, normZh } from './compare';
 
 export interface MergeDoc {
   docId: string;
@@ -51,6 +51,12 @@ export function mergeGroup(docs: MergeDoc[]): Merged {
       if (addrs.length > 1 && anyDiff) reasons.push('address_dates_unknown_conflict');
     }
   }
+  // 姓名跨檔唔一致 → 衝突（唔准低信心值蓋過另一份嘅值；英文名一個係另一個子集＝斷行少尾段，取較長並標 review）
+  const zhs = new Set(docs.map((d) => normZh(d.id.nameZh)).filter(Boolean));
+  if (zhs.size > 1) reasons.push('nameZh_differs_between_files');
+  const ens = docs.map((d) => d.id.nameEn).filter((x): x is string => !!x);
+  if (new Set(ens.map((e) => enTokens(e).sort().join(' '))).size > 1) reasons.push('nameEn_differs_between_files');
+  const longestEn = [...ens].sort((a, b) => enTokens(b).length - enTokens(a).length)[0] ?? null;
   const phoneDocs = docs.filter((d) => d.phone && d.phone.value);
   const phones = [...new Set(phoneDocs.map((d) => normTel(d.phone!.value)).filter((x): x is string => !!x))];
   let phone: string | null = null;
@@ -61,7 +67,7 @@ export function mergeGroup(docs: MergeDoc[]): Merged {
     idDocId: idDoc.docId,
     hkid: pickId('hkid'),
     nameZh: pickId('nameZh'),
-    nameEn: pickId('nameEn'),
+    nameEn: reasons.includes('nameEn_differs_between_files') ? longestEn : pickId('nameEn'),
     dob: pickId('dob'),
     sex: pickId('sex'),
     address: address?.address!.value ?? null,

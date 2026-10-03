@@ -14,25 +14,36 @@ export interface Field<T = string> {
   note?: string;
   /** 住址證明單據日期（YYYY-MM-DD），抽唔到就冇 */
   date?: string;
+  /** 結構性警示（例 address_truncated） */
+  flags?: string[];
 }
 
 // ---------------------------------------------------------------- 分類
-const RE_ID_ANCHOR = /永久性?居民身份證|PERMANENT\s*IDENTITY|HONG\s*KONG\s*IDENTITY\s*CARD|香港身份證(?!號)|香港身分證(?!號)/i;
+const RE_ID_ANCHOR = /永久性?居民身份[證讚證]|居民身份證|PERMANENT\s*IDENTITY|HONG\s*KONG\s*(?:PERMANENT\s*)?IDENTITY\s*CARD|香港身份證(?!號)|香港身分證(?!號)/i;
+const RE_ORG = /LIMITED|LTD|DEPARTMENT|REVENUE|局|公司|MOBILE|BANK|銀行|COMPANY|HOLDINGS/i;
+/** 身份證 anchor 係卡面短標題行；申請表「香港身份證號碼：」「H.K. I.D. Card」呢類欄位標籤唔算。 */
+export function isIdAnchorLine(t: string): boolean {
+  const n = norm(t);
+  return RE_ID_ANCHOR.test(n) && n.length <= 36 && !/[:：]/.test(n);
+}
 const RE_FORM = /職位申請表|EMPLOYMENT\s*APPLICATION/i;
 const RE_PERMIT = /保安人員許可證|SECURITY\s*PERSONNEL\s*PERMIT/i;
 const RE_BILL =
   /水務署|付款通知書|Water\s*Supplies|CLP|中電|Towngas|煤氣|電費|水費|電話費|賬單|帳單|月結單|結單|STATEMENT|PCCW|HKT|電訊|租約|租賃|TENANCY|住址證明|地址證明|PROOF\s*OF\s*ADDRESS|綜合戶口|信用卡|CREDIT\s*CARD|Account\s*Number|客戶編號|用戶編號|客戶號碼/i;
-const RE_NOT_PROOF = /警務處|POLICE|SECURITY\s*AND\s*GUARDING|保安及護衛|港鐵|入境事務|IMMIGRATION|LICENSING/i;
+// 警方牌照信、入境處、MTR 公司信唔係住址證明（電訊賬單入面嘅「港鐵隧道服務牌照費」唔係）；
+// 申請表頁／諮詢人頁（含公司頁腳地址）亦唔係。公司名單獨出現（例如強積金結單嘅僱主欄）唔排除。
+const RE_NOT_PROOF = /警務處|POLICE|SECURITY\s*AND\s*GUARDING|保安及護衛|港鐵公司|MTR\s*CORPORATION|入境事務|IMMIGRATION|LICENSING|諮詢人|REFERENCE\s*PERSON|個人資料（私隱）|職位申請表|EMPLOYMENT\s*APPLICATION/i;
 const RE_BANK = /銀行|BANK|匯豐|HSBC|恒生|HANG\s*SENG|中銀|BOC|渣打|STANDARD\s*CHARTERED/i;
 
 const ADDR_EN =
   /\b(FLAT|FLT|FT|ROOM|RM|UNIT|BLK|BLOCK|HOUSE|HSE|ESTATE|EST|STREET|ST|ROAD|RD|AVENUE|AVE|COURT|GARDEN|GARDENS|GDN|MANSION|MANSIONS|BUILDING|BLDG|TOWER|TWR|PHASE|KOWLOON|KLN|NEW\s*TERRITORIES|N\.?T\.?|HONG\s*KONG|TUEN\s*MUN|SHATIN|SHA\s*TIN|SHAM\s*SHUI\s*PO|TSUEN\s*WAN|KWAI\s*CHUNG|YUEN\s*LONG|TAI\s*PO|SHEUNG\s*SHUI|FANLING|TSEUNG\s*KWAN\s*O|TKO|TIN\s*SHUI\s*WAI|LANTAU|VILLAGE|VILLA|CENTRE|CENTER|PLAZA|TERRACE|LANE|PATH|DRIVE|CLOSE)\b/i;
 // 中文：要有「數字＋號／室／樓／座」或邨／苑／村／屋邨／大廈／花園，或者係地區頭（香港／九龍／新界／離島）
-const ADDR_ZH = /\d\s*[號室樓座舖]|[A-Za-z0-9]\s*[室座]|[邨苑村]|大廈|花園|廣場|^(香港|九龍|新界|離島)|[樓閣軒閣]$/;
+const ADDR_ZH = /\d\s*[號室樓座舖]|[樓閣軒廈]\s*\d|[A-Za-z0-9]\s*[室座]|[邨苑村]|大廈|花園|廣場|^(香港|九龍|新界|離島)|[樓閣軒閣]$/;
 
 export function isAddrish(t: string): boolean {
   const s = norm(t);
   if (/\$|HK\$|\d+\.\d{2}\b|[:：]\s*\S{6,}/.test(s) || s.length > 70) return false;
+  if (/PRICE|單價|金額|AMOUNT|TOTAL|BALANCE|P\.?\s?O\.?\s*BOX|郵箱|郵政信箱|CCBS|^\s*\d+\s*\/\s*\d+\s*$/i.test(s)) return false;
   return ADDR_EN.test(s) || ADDR_ZH.test(s) || /\d+\s*\/\s*F/i.test(s);
 }
 
@@ -44,18 +55,25 @@ export interface AddressBlock {
   lines: OcrLine[];
   name: OcrLine | null;
   score: number;
+  /** 收件人 block 尾段未見地區／單位行（可能斷咗） */
+  truncated: boolean;
 }
 
 const NAME_EN_LINE = /^(?:(?:MR|MS|MRS|MISS|DR)\.?\s+)?[A-Z][A-Z .,'-]{3,40}$/;
+const REGION_END = /(KOWLOON|KLN|NEW\s*TERRITORIES|N\.?T\.?|HONG\s*KONG|HKSAR|HK|九龍|新界|香港|港島|離島)\s*[.,，。]*$/i;
+const BLOCK_STOP = /賬單|帳單|結單|日期|DATE|STATEMENT|ACCOUNT|電話|客戶|編號|號碼|PAGE|頁|應繳|繳費|\$/i;
 
 function looksLikeName(t: string): boolean {
   const s = norm(t);
   if (/\d/.test(s) || isAddrish(s)) return false;
-  if (/^[一-鿿]{2,5}(先生|小姐|女士)?$/.test(s)) return true;
+  if (/^[\u4e00-\u9fff]{2,5}(先生|小姐|女士)?$/.test(s)) return true;
   return NAME_EN_LINE.test(s.toUpperCase());
 }
 
-/** 搵頁面入面最似收件人地址嘅 block（可能有兩份：收件人同用水樓宇，取左邊／有名嗰份）。 */
+const aligned = (a: OcrLine, b: OcrLine) => Math.abs(a.x - b.x) < 0.05;
+const PLAIN = /^[A-Za-z\u4e00-\u9fff0-9 .,'，\-()（）/]{2,45}$/;
+
+/** 搵頁面入面最似收件人地址嘅 block：由最頂嗰行地址行起，順住向下攞到地區行／單位行為止（中間冇關鍵字嘅屋苑／村名行都接）。 */
 export function findAddressBlock(lines: OcrLine[]): AddressBlock | null {
   const ordered = readingOrder(lines.filter((l) => l.t.trim().length > 0));
   const addr = ordered.filter((l) => isAddrish(l.t) && !/^\s*\$/.test(l.t));
@@ -66,45 +84,33 @@ export function findAddressBlock(lines: OcrLine[]): AddressBlock | null {
     const chain = [start];
     used.add(start);
     let last = start;
-    for (;;) {
+    let guard = 0;
+    while (guard++ < 7) {
+      if (REGION_END.test(norm(last.t)) && chain.length >= 2) break; // 到咗地區行
       const next = ordered.find(
-        (l) =>
-          !used.has(l) &&
-          cy(l) < cy(last) - 0.001 &&
-          cy(last) - cy(l) < 0.03 &&
-          Math.abs(l.x - last.x) < 0.05 &&
-          isAddrish(l.t),
+        (l) => !used.has(l) && cy(l) < cy(last) - 0.001 && cy(last) - cy(l) < 0.032 && aligned(l, last),
       );
       if (!next) break;
+      const ok = isAddrish(next.t) || (PLAIN.test(next.t.trim()) && !BLOCK_STOP.test(next.t) && !/\d{4,}/.test(next.t));
+      if (!ok) break;
       chain.push(next);
       used.add(next);
       last = next;
     }
-    // 鏈尾可跟最多 2 行普通文字（例：屋苑名／地區行）
-    for (let k = 0; k < 2; k++) {
-      const tail = ordered.find(
-        (l) =>
-          !used.has(l) &&
-          cy(l) < cy(last) - 0.001 &&
-          cy(last) - cy(l) < 0.03 &&
-          Math.abs(l.x - last.x) < 0.05 &&
-          /^[A-Za-z\u4e00-\u9fff0-9 .,'，\-()（）]{3,40}$/.test(l.t.trim()) &&
-          !/\$|[:：]/.test(l.t),
-      );
-      if (!tail) break;
-      chain.push(tail);
-      used.add(tail);
-      last = tail;
-    }
+    // 尾巴如果係普通行但前面冇任何地址行（只係標題）就唔算
+    while (chain.length > 1 && !isAddrish(chain[chain.length - 1].t) && !REGION_END.test(norm(chain[chain.length - 1].t))) chain.pop();
     const strongZh = chain.length === 1 && ADDR_ZH.test(norm(start.t)) && /[邨苑樓]/.test(start.t) && /[室座號]/.test(start.t);
     if (chain.length < 2 && !strongZh) continue;
-    // 前面一行似人名就當收件人
     const prev = ordered
-      .filter((l) => cy(l) > cy(start) + 0.001 && cy(l) - cy(start) < 0.03 && Math.abs(l.x - start.x) < 0.05)
+      .filter((l) => cy(l) > cy(start) + 0.001 && cy(l) - cy(start) < 0.032 && aligned(l, start))
       .sort((a, b) => cy(a) - cy(b))[0];
     const name = prev && looksLikeName(prev.t) ? prev : null;
-    if ((prev && RE_ORG.test(prev.t)) || RE_ORG.test(start.t)) continue; // 寄件機構地址
-    chains.push({ lines: chain, name, score: chain.filter((l) => isAddrish(l.t)).length + (name ? 1.5 : 0) });
+    // 寄件機構地址（人名樣嘅公司行／起首就係公司）
+    if ((prev && name && RE_ORG.test(prev.t)) || RE_ORG.test(start.t)) continue;
+    const lastT = norm(chain[chain.length - 1].t);
+    const zh = (chain.map((l) => l.t).join('').match(/[\u4e00-\u9fff]/g) ?? []).length > 3;
+    const truncated = zh ? !/[室樓座號舖]/.test(lastT) : !REGION_END.test(lastT);
+    chains.push({ lines: chain, name, score: chain.filter((l) => isAddrish(l.t)).length + (name ? 1.5 : 0), truncated });
   }
   if (!chains.length) return null;
   chains.sort((a, b) => b.score - a.score || a.lines[0].x - b.lines[0].x || cy(b.lines[0]) - cy(a.lines[0]));
@@ -124,12 +130,14 @@ export function classifyPage(p: OcrPage): Classified {
   const kinds: PageKind[] = [];
   const isForm = RE_FORM.test(text);
   const isPermit = RE_PERMIT.test(text);
-  let isId = RE_ID_ANCHOR.test(text);
-  if (!isId && !isForm && !isPermit) {
-    // 冇 anchor：單獨一行身份證號＋出生日期標籤
+  let isId = !isForm && lines.some((l) => isIdAnchorLine(l.t));
+  if (!isId && !isForm) {
+    // 冇 anchor（標題行 OCR 唔到）：有效 hkid 行＋dd-mm-yyyy 日期＋（性別行或出生日期標籤）＝身份證
     const hasDobLabel = /出生日期|DATE\s*OF\s*BIRTH|DATEOFBIRTH/i.test(text);
-    const standalone = lines.some((l) => /^[A-Z]{1,2}\s?\d{6}\s*\(?[0-9A]?\)?\s*$/i.test(norm(l.t)) && findHkidCandidates(l.t).length > 0);
-    isId = hasDobLabel && standalone;
+    const hkidLine = lines.some((l) => findHkidCandidates(l.t).some(hkidCheckDigitValid) && !/PERMIT|許可證編號/i.test(l.t));
+    const dateLine = lines.some((l) => parseDates(l.t).length > 0);
+    const sexLine = lines.some((l) => /(男|女)/.test(norm(l.t)) && norm(l.t).length <= 8);
+    isId = hkidLine && dateLine && (sexLine || hasDobLabel) && !(isPermit && !sexLine);
   }
   if (isId) kinds.push('id_card');
   const block = isForm || RE_NOT_PROOF.test(text) ? null : findAddressBlock(lines);
@@ -150,6 +158,8 @@ export function classifyPage(p: OcrPage): Classified {
 
 // ---------------------------------------------------------------- 身份證頁
 export interface IdCardResult {
+  /** 供視覺裁圖定位用（唔入 JSON） */
+  nameLines?: OcrLine[];
   hkid: Field | null;
   hkidValid: boolean;
   nameZh: Field | null;
@@ -191,7 +201,7 @@ const NOT_ZH_NAME = /^(中國|中华|中華|香港|人民共和國|共和國|中
 
 /** 身份證所在區域：以 anchor 為中心（卡面版面唔固定，名可以喺標題上面或下面）。 */
 export function cardRegion(lines: OcrLine[]): OcrLine[] {
-  const anchors = lines.filter((l) => RE_ID_ANCHOR.test(norm(l.t)));
+  const anchors = lines.filter((l) => isIdAnchorLine(l.t));
   if (!anchors.length) return lines;
   const ax = Math.min(...anchors.map((l) => l.x));
   const ay = anchors.reduce((s, l) => s + cy(l), 0) / anchors.length;
@@ -204,7 +214,7 @@ function dist(a: OcrLine, b: OcrLine): number {
 
 export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
   const clean = all.filter((l) => l.t.trim());
-  const anchors = clean.filter((l) => RE_ID_ANCHOR.test(norm(l.t)));
+  const anchors = clean.filter((l) => isIdAnchorLine(l.t));
   const region = readingOrder(cardRegion(clean));
   const res: IdCardResult = { hkid: null, hkidValid: false, nameZh: null, nameEn: null, dob: null, sex: null };
   const anchor = anchors[0] ?? null;
@@ -218,7 +228,8 @@ export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
   cands.sort((a, b) => Number(b.valid) - Number(a.valid) || near(a.line) - near(b.line));
   let pick = cands.find((x) => x.valid);
   if (!pick) {
-    for (const l of region) {
+    // 首字母修補：淨係喺有身份證 anchor、而且原文帶括號（卡面印 (x)）先做——避免將電話號碼砌成 hkid
+    for (const l of anchor ? region.filter((x) => /[()（）]/.test(x.t)) : []) {
       const r = repairHkidLeadingLetter(l.t);
       if (r) {
         pick = { c: r, line: l, valid: true, repaired: true };
@@ -248,37 +259,39 @@ export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
     };
   }
 
-  // 英文名 "SURNAME, Given"＋續行（卡面名會斷行／斷 OCR 行）
+  // 英文名 "SURNAME, Given"＋續行：順序接（同行右邊→下一行），唔丟尾段
   const surLine = region
     .filter((l) => /^[A-Z][A-Za-z'-]+(?:\s[A-Za-z'-]+)?\s*[,，]\s*[A-Za-z]?[A-Za-z' -]*$/.test(norm(l.t)) && !NOT_NAME.test(l.t))
     .sort((a, b) => near(a) - near(b))[0];
+  let nameLines: OcrLine[] = [];
   if (surLine) {
-    const parts = [norm(surLine.t)];
-    const used = [surLine];
-    const extra = region
-      .filter(
-        (l) =>
-          l !== surLine &&
-          /^[A-Za-z][A-Za-z' -]{1,30}$/.test(norm(l.t)) &&
-          !NOT_NAME.test(l.t) &&
-          ((Math.abs(cy(l) - cy(surLine)) < 0.012 && l.x > surLine.x) ||
-            (cy(l) < cy(surLine) && cy(surLine) - cy(l) < 0.05 && Math.abs(l.x - surLine.x) < 0.06)),
-      )
-      .sort((a, b) => cy(b) - cy(a) || a.x - b.x)
-      .slice(0, 2);
-    for (const e of extra) {
-      parts.push(norm(e.t));
-      used.push(e);
+    const used: OcrLine[] = [surLine];
+    let cur = surLine;
+    const isSeg = (l: OcrLine) => /^[A-Za-z][A-Za-z' -]{0,30}$/.test(norm(l.t)) && !NOT_NAME.test(l.t) && !used.includes(l);
+    for (let k = 0; k < 4; k++) {
+      const right = region
+        .filter((l) => isSeg(l) && Math.abs(cy(l) - cy(cur)) < 0.012 && l.x > cur.x && l.x - (cur.x + cur.w) < 0.12)
+        .sort((a, b) => a.x - b.x)[0];
+      const below = region
+        .filter((l) => isSeg(l) && cy(l) < cy(cur) - 0.004 && cy(cur) - cy(l) < 0.045 && l.x >= surLine.x - 0.06 && l.x < surLine.x + 0.25)
+        .sort((a, b) => cy(b) - cy(a) || a.x - b.x)[0];
+      const nx = right ?? below;
+      if (!nx) break;
+      used.push(nx);
+      cur = nx;
     }
-    const joined = parts.join(' ').replace(/\s*[,，]\s*/, ', ').replace(/\s+/g, ' ');
+    nameLines = used;
+    const joined = used.map((u) => norm(u.t)).join(' ').replace(/\s*[,，]\s*/, ', ').replace(/\s+/g, ' ');
     const m = /^(.+?),\s*(.*)$/.exec(joined);
     if (m) {
+      const conf = Math.min(...used.map((u) => u.c));
       res.nameEn = {
         value: `${m[1].toUpperCase()} ${m[2]}`.trim(),
-        level: levelOf(Math.min(...used.map((u) => u.c)), false),
-        conf: Math.min(...used.map((u) => u.c)),
+        level: levelOf(conf, false),
+        conf,
         page,
         evidence: used.map((u) => u.t).join(' | '),
+        flags: used.length === 1 ? ['nameEn_single_segment'] : undefined,
       };
     }
   }
@@ -293,6 +306,7 @@ export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
   // 冇 anchor 嗰陣成頁都係 region，只接受貼近英文名／hkid 嘅行，避免攞到頁面上其他中文詞
   const zhPool = anchor ? zhLines : zhLines.filter((l) => !!ref && dist(l, ref) < 0.2);
   const zh = ref ? [...zhPool].sort((a, b) => dist(a, ref) - dist(b, ref))[0] : undefined;
+  res.nameLines = [...nameLines, ...(zh ? [zh] : [])];
   if (zh) {
     res.nameZh = { value: norm(zh.t).replace(/[()（）\s]/g, ''), level: levelOf(zh.c, false), conf: zh.c, page, evidence: zh.t };
   }
@@ -326,7 +340,7 @@ export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
   }
   // 性別：「男M／女F」，同日期同行或獨立一行
   const sexLine = region
-    .filter((l) => /(^|\s|\d)(男|女)\s*[MF]?\s*$/.test(norm(l.t)) || /^\s*[MF]\s*$/.test(norm(l.t)))
+    .filter((l) => /(男|女)/.test(norm(l.t)) && norm(l.t).length <= 24 || /^\s*[MF]\s*$/.test(norm(l.t)))
     .sort((a, b) => (dobLine ? dist(a, dobLine) - dist(b, dobLine) : near(a) - near(b)))[0];
   if (sexLine) {
     const t = norm(sexLine.t);
@@ -366,7 +380,6 @@ export interface AddressResult {
 }
 
 const RE_LABELED_ADDR = /ADDRESS\s*(?:[（(]地址[）)]\s*[:：]|地址\s*[:：]?)\s*(.+)$/i;
-const RE_ORG = /LIMITED|LTD|DEPARTMENT|REVENUE|局|公司|MOBILE|BANK|銀行|COMPANY|HOLDINGS/i;
 
 export function extractAddress(page: number, lines: OcrLine[]): AddressResult {
   const block = findAddressBlock(lines);
@@ -405,6 +418,7 @@ export function extractAddress(page: number, lines: OcrLine[]): AddressResult {
       page,
       evidence: block.lines.map((l) => l.t).join(' | '),
       date: findDocDate(lines) ?? undefined,
+      flags: block.truncated ? ['address_truncated'] : undefined,
     },
     recipient: block.name ? norm(block.name.t) : null,
   };

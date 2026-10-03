@@ -59,6 +59,10 @@ export function recipientMatches(recipient: string | null, nameEn: string | null
     return r === nameZh || (r.length >= 2 && nameZh.includes(r)) || (nameZh.length >= 2 && r.includes(nameZh));
   }
   if (!recipient || !nameEn) return null;
+  // 收件人名可能冇空格（OCR 黐埋）：用純字母比對
+  const flat = recipient.toUpperCase().replace(/[^A-Z]/g, '');
+  const parts = nameTokens(nameEn).filter((t) => t.length >= 2);
+  if (flat.length >= 6 && parts.length >= 2 && parts.every((t) => flat.includes(t))) return true;
   const a = nameTokens(recipient);
   const b = nameTokens(nameEn);
   if (!a.length || !b.length) return null;
@@ -79,13 +83,30 @@ function bestBy<T>(items: T[], score: (t: T) => number): T | null {
   return best;
 }
 
-export function aggregateDoc(docId: string, pages: OcrPage[], hints: { fileNameZh?: string | null } = {}): DocExtract {
+/** 頁面層面嘅住址候選（正規化文字）——02 用嚟搵「喺多個檔重複出現」嘅公司／範本地址。 */
+export function addressCandidates(pages: OcrPage[]): string[] {
+  const out: string[] = [];
+  for (const p of pages) {
+    if (p.alt) continue;
+    if (!classifyPage(p).kinds.includes('address_proof')) continue;
+    const a = extractAddress(p.page, p.lines);
+    if (a.address) out.push(a.address.value.toUpperCase().replace(/[^A-Z0-9\u4e00-\u9fff]/g, ''));
+  }
+  return [...new Set(out)];
+}
+
+export function aggregateDoc(
+  docId: string,
+  pages: OcrPage[],
+  hints: { fileNameZh?: string | null; denyAddr?: Set<string> } = {},
+): DocExtract {
   const classified = pages.map(classifyPage);
   const ids: IdCardResult[] = [];
   const idAlt = new Map<IdCardResult, number>(); // 候選頁嘅旋轉度數
   const addrs: AddressResult[] = [];
   const forms: FormResult[] = [];
   const permitHkids: Field[] = [];
+  const flagsTmp: string[] = [];
   pages.forEach((p, i) => {
     const kinds = classified[i].kinds;
     if (kinds.includes('id_card')) {
@@ -95,7 +116,9 @@ export function aggregateDoc(docId: string, pages: OcrPage[], hints: { fileNameZ
     }
     if (kinds.includes('address_proof')) {
       const a = extractAddress(p.page, p.lines);
-      if (a.address) addrs.push(a);
+      const key = a.address?.value.toUpperCase().replace(/[^A-Z0-9\u4e00-\u9fff]/g, '');
+      if (a.address && key && hints.denyAddr?.has(key)) flagsTmp.push('address_company_template');
+      else if (a.address) addrs.push(a);
     }
     if (kinds.includes('application_form')) forms.push(extractForm(p.page, p.lines));
     if (kinds.includes('sia_permit')) {
@@ -104,7 +127,7 @@ export function aggregateDoc(docId: string, pages: OcrPage[], hints: { fileNameZ
     }
   });
 
-  const flags: string[] = [];
+  const flags: string[] = [...new Set(flagsTmp)];
   // 一個檔可能夾住家人／擔保人嘅身份證：逐張卡打分，揀「屬於呢個人」嗰張，所有欄位跟同一張卡
   const formHkidPre = bestBy(forms.map((f) => f.hkid).filter((f): f is Field => !!f), (f) => (hkidCheckDigitValid(f.value) ? 10 : 0) + f.conf);
   const permitHkidPre = bestBy(permitHkids, (f) => f.conf);
@@ -179,7 +202,7 @@ export function aggregateDoc(docId: string, pages: OcrPage[], hints: { fileNameZ
 
   return {
     docId,
-    pageCount: pages.length,
+    pageCount: pages.filter((p) => !p.alt).length,
     pages: classified.filter((_, i) => !pages[i].alt),
     hkid: hkidFinal,
     hkidValid: !!hkidFinal && hkidCheckDigitValid(hkidFinal.value),

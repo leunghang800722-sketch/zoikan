@@ -6,7 +6,9 @@ import type { DocExtract } from './lib/aggregate';
 import { buildIndex, crosscheck, FIELDS, type DocCheck, type Src } from './lib/crosscheck';
 import type { DocMeta } from './lib/doc-index';
 import type { VisionRead } from './lib/phone';
-import { loadDb, loadMaxwell, loadUTeam } from './lib/refs';
+import { groupPersons } from './lib/persons';
+import { resolvePerson, type AddrVision, type NameVision, type PersonDocIn, type PersonFields } from './lib/person-fields';
+import { loadDb, loadMaxwell, loadUTeam, type RefRow } from './lib/refs';
 
 const OUT = path.join(process.cwd(), 'data/2026-10/staff-import');
 const U_TEAM = 'data/2026-09/msg-file/U Team - People template 20260824.xlsx';
@@ -45,6 +47,57 @@ async function main() {
     checks.push(crosscheck(ex, ex.staffNo, fnZh, idxs, { vision: vision.filter((v) => v.docId === ex.docId), hasCrop: cropDocs.has(ex.docId) }));
   }
   await fs.writeFile(path.join(OUT, 'out/crosscheck.json'), JSON.stringify(checks, null, 1));
+
+  // ---- 逐人逐欄 status（confirmed／review／missing）
+  const readJson = async <T>(f: string): Promise<T[]> => JSON.parse(await fs.readFile(path.join(OUT, f), 'utf8').catch(() => '[]')) as T[];
+  const nameVision = new Map((await readJson<NameVision>('out/name-vision.json')).map((v) => [v.docId, v]));
+  const addrVision = new Map((await readJson<AddrVision>('out/address-vision.json')).map((v) => [v.docId, v]));
+  const refById = new Map<string, RefRow>([...u, ...mx, ...db].map((r) => [r.ref, r]));
+  const checkMap = new Map(checks.map((c) => [c.docId, c]));
+  const exMap = new Map(extracts.map((e) => [e.docId, e]));
+  const fnZhOf = (docId: string) => {
+    const m = meta.get(docId);
+    return m?.fileName && /[\u4e00-\u9fff]/.test(m.fileName) ? m.fileName.replace(/[^\u4e00-\u9fff]/g, '') : null;
+  };
+  const groups = groupPersons(extracts, (d) => checkMap.get(d)!.grade);
+  const peopleOut: { key: string; docIds: string[]; idDocId: string | null; addressDocId: string | null; fields: PersonFields }[] = [];
+  for (const g of groups) {
+    const docs: PersonDocIn[] = g.docIds.map((id) => {
+      const c = checkMap.get(id)!;
+      const rows = (['utem', 'maxwell', 'db'] as Src[]).map((s) => (c.refs[s].ref ? refById.get(c.refs[s].ref!) : undefined)).filter((r): r is RefRow => !!r);
+      return {
+        docId: id,
+        ex: exMap.get(id)!,
+        fileNameZh: fnZhOf(id),
+        phone: c.phoneFinal,
+        listZh: rows.map((r) => r.nameZh).filter((x): x is string => !!x),
+        listEn: rows.map((r) => r.nameEn).filter((x): x is string => !!x),
+        listTels: rows.flatMap((r) => r.tels),
+      };
+    });
+    const fields = resolvePerson({
+      key: g.key,
+      docs,
+      idDocId: g.idDocId,
+      addressDocId: g.addressDocId,
+      nameVision: g.idDocId ? nameVision.get(g.idDocId) ?? null : null,
+      addrVision: g.addressDocId ? addrVision.get(g.addressDocId) ?? null : null,
+    });
+    peopleOut.push({ key: g.key, docIds: g.docIds, idDocId: g.idDocId, addressDocId: g.addressDocId, fields });
+  }
+  await fs.writeFile(path.join(OUT, 'out/person-fields.json'), JSON.stringify(peopleOut, null, 1));
+  const fieldStat: Record<string, Record<string, number>> = {};
+  const fieldReasons: Record<string, number> = {};
+  for (const pp of peopleOut) {
+    for (const [f, v] of Object.entries(pp.fields)) {
+      (fieldStat[f] ??= {})[v.status] = (fieldStat[f][v.status] ?? 0) + 1;
+      v.reasons.forEach((r) => (fieldReasons[`${f}:${r}`] = (fieldReasons[`${f}:${r}`] ?? 0) + 1));
+    }
+  }
+  console.log(`persons=${peopleOut.length}`);
+  for (const [f, st] of Object.entries(fieldStat)) console.log(`person-field ${f}: ${JSON.stringify(st)} confirmed=${pct(st.confirmed ?? 0, peopleOut.length)}`);
+  console.log('field reasons top:', Object.entries(fieldReasons).sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, v]) => `${k}=${v}`).join(', '));
+  await fs.writeFile(path.join(OUT, 'out/person-field-stats.json'), JSON.stringify({ persons: peopleOut.length, fieldStat, fieldReasons }, null, 1));
 
   // hkid 仍然搵唔到／有衝突
   const unresolved = extracts

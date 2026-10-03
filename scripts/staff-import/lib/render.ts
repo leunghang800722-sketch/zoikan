@@ -38,3 +38,31 @@ export async function sourceFiles(entry: string): Promise<string[]> {
   return inner.map((f) => path.join(full, f));
 }
 
+
+/** 渲染某個「人檔」嘅第 page 頁（OCR 頁碼）去 pngPath；rot 係順時針旋轉度數（旋轉救援頁）。 */
+export async function renderPage(file: string, page: number, pngPath: string, dpi = 300, rot = 0): Promise<boolean> {
+  const srcs = await sourceFiles(file);
+  const dir = path.dirname(pngPath);
+  await fs.mkdir(dir, { recursive: true });
+  let img: string | null = null;
+  const tmpBase = `${pngPath}.tmp`;
+  if (srcs.length === 1 && /\.pdf$/i.test(srcs[0])) {
+    const r = await run(PDFTOPPM, ['-r', String(dpi), '-png', '-f', String(page), '-l', String(page), '-singlefile', srcs[0], tmpBase]);
+    if (r.code === 0) img = `${tmpBase}.png`;
+  } else {
+    const d = `${tmpBase}-d`;
+    await fs.mkdir(d, { recursive: true });
+    for (let k = 0; k < srcs.length; k++) {
+      if (/\.pdf$/i.test(srcs[k])) await run(PDFTOPPM, ['-r', String(dpi), '-png', srcs[k], path.join(d, `f${k}`)]);
+      else await fs.copyFile(srcs[k], path.join(d, `f${k}-1${path.extname(srcs[k])}`));
+    }
+    const all = (await fs.readdir(d)).filter((f) => /\.(png|jpe?g)$/i.test(f)).sort();
+    if (all[page - 1]) img = path.join(d, all[page - 1]);
+  }
+  if (!img) return false;
+  if (rot) await run('/usr/bin/sips', ['-s', 'format', 'png', '-r', String(rot), img, '--out', pngPath]);
+  else await run('/usr/bin/sips', ['-s', 'format', 'png', img, '--out', pngPath]);
+  await fs.rm(tmpBase + '.png', { force: true });
+  await fs.rm(`${tmpBase}-d`, { recursive: true, force: true });
+  return true;
+}

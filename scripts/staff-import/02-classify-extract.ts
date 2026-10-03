@@ -3,9 +3,10 @@
 // Console 淨印統計（唔印姓名／號碼／地址）。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { aggregateDoc, type DocExtract } from './lib/aggregate';
+import { addressCandidates, aggregateDoc, type DocExtract } from './lib/aggregate';
 import type { DocMeta } from './lib/doc-index';
 import type { OcrPage } from './lib/ocr';
+import { SRC, run, sourceFiles } from './lib/render';
 
 const OUT = path.join(process.cwd(), 'data/2026-10/staff-import');
 
@@ -18,9 +19,9 @@ async function main() {
   const limit = limitArg >= 0 ? Number(process.argv[limitArg + 1]) : Infinity;
   const index = JSON.parse(await fs.readFile(path.join(OUT, 'index.json'), 'utf8')) as DocMeta[];
   const results: (DocExtract & { staffNo: string | null })[] = [];
-  let n = 0;
+  const loaded: { m: DocMeta; pages: OcrPage[] }[] = [];
   for (const m of index) {
-    if (n >= limit) break;
+    if (loaded.length >= limit) break;
     let raw: string;
     try {
       raw = await fs.readFile(path.join(OUT, 'ocr', `${m.docId}.jsonl`), 'utf8');
@@ -37,10 +38,35 @@ async function main() {
     } catch {
       /* 冇重做 */
     }
-    const fnZh = m.fileName && /[\u4e00-\u9fff]/.test(m.fileName) ? m.fileName.replace(/[^\u4e00-\u9fff]/g, '') : null;
-    results.push({ ...aggregateDoc(m.docId, pages, { fileNameZh: fnZh }), staffNo: m.staffNo });
-    n++;
+    loaded.push({ m, pages });
   }
+  // 喺 ≥4 個檔重複出現嘅「住址」係公司／範本地址（頁腳等），唔係個人住址
+  const freq = new Map<string, number>();
+  for (const { pages } of loaded) for (const k of addressCandidates(pages)) freq.set(k, (freq.get(k) ?? 0) + 1);
+  const denyAddr = new Set([...freq].filter(([, c]) => c >= 4).map(([k]) => k));
+  console.log(`company/template address keys denied: ${denyAddr.size}`);
+  for (const { m, pages } of loaded) {
+    const fnZh = m.fileName && /[\u4e00-\u9fff]/.test(m.fileName) ? m.fileName.replace(/[^\u4e00-\u9fff]/g, '') : null;
+    results.push({ ...aggregateDoc(m.docId, pages, { fileNameZh: fnZh, denyAddr }), staffNo: m.staffNo });
+  }
+  // 資料夾來源：頁碼 → 來源檔／檔內頁（OCR 頁碼係各檔順檔名串接；JPEG 係單頁）
+  const pageMap: Record<string, { page: number; file: string; filePage: number }[]> = {};
+  for (const m of index) {
+    const full = path.join(SRC, m.file);
+    if (!(await fs.stat(full).catch(() => null))?.isDirectory()) continue;
+    const files = await sourceFiles(m.file);
+    let n = 0;
+    for (const f of files) {
+      let cnt = 1;
+      if (/\.pdf$/i.test(f)) {
+        const r = await run('/opt/homebrew/bin/pdfinfo', [f]);
+        cnt = Number(/Pages:\s+(\d+)/.exec(r.stdout)?.[1] ?? 1);
+      }
+      for (let i = 1; i <= cnt; i++) (pageMap[m.docId] ??= []).push({ page: ++n, file: path.basename(f), filePage: i });
+    }
+  }
+  await fs.mkdir(path.join(OUT, 'out'), { recursive: true });
+  await fs.writeFile(path.join(OUT, 'out/page-map.json'), JSON.stringify(pageMap, null, 1));
   await fs.mkdir(path.join(OUT, 'out'), { recursive: true });
   await fs.writeFile(path.join(OUT, 'out/extract.json'), JSON.stringify(results, null, 1));
 
