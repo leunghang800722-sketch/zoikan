@@ -21,13 +21,15 @@ export async function requireImportPermission(req: Request, mode: "preview" | "a
 }
 
 const decisionSchema = z.object({ action: z.enum(["confirm", "replace", "skip", "keep_pending"]), value: z.string().trim().max(500).optional() }).strict();
+// keep_pending（照建但標待核對）淨係准用喺 name_zh；其他欄帶 keep_pending → 400。
+const decisionNoPendingSchema = decisionSchema.refine((d) => d.action !== "keep_pending", { message: "keep_pending 淨係准用喺 name_zh" });
 const personDecisionSchema = z
   .object({
     name_zh: decisionSchema.optional(),
-    name_en: decisionSchema.optional(),
-    date_of_birth: decisionSchema.optional(),
-    phone: decisionSchema.optional(),
-    address: decisionSchema.optional(),
+    name_en: decisionNoPendingSchema.optional(),
+    date_of_birth: decisionNoPendingSchema.optional(),
+    phone: decisionNoPendingSchema.optional(),
+    address: decisionNoPendingSchema.optional(),
   })
   .strict();
 

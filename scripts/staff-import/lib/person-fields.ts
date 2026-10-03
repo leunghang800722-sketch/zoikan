@@ -79,7 +79,7 @@ const out = (status: FieldStatus, value: string | null, candidates: string[] = [
 });
 
 export function normAddr(s: string | null | undefined): string {
-  return (s ?? '').normalize('NFKC').toUpperCase().replace(/[^A-Z0-9一-鿿]/g, '');
+  return (s ?? '').normalize('NFKC').toUpperCase().replace(/[^A-Z0-9\p{Script=Han}]/gu, '');
 }
 
 export function enKey(s: string | null | undefined): string {
