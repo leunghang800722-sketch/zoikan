@@ -21,6 +21,7 @@ import {
   assertNoLegacySiaPermitWrite,
   assertBrokerNoLegacyStaffNoWrite,
 } from "@/lib/guards/staff-numbers";
+import { identityStatus, canonicalHkid, prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, type IdentityStatus } from "@/lib/guards/identity";
 import { applyLegacyGuardContactPatch, writeLegacyContactAudits, normalizeTel } from "@/lib/guards/contacts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
@@ -51,12 +52,13 @@ function guardModule(session: AuthedSession): Module {
 // 一致。順手加埋 `siaPermitBLapsedByAge`（衍生 flag，唔係 PII）——乙類
 // 因為滿 70 歲失效嗰陣，列表/抽屜唔應該顯示成「未填」，見
 // src/lib/guards/staff-numbers.ts isSiaPermitBLapsedByAge() 頂註解。
-function withDerivedGuard<T extends Guard>(row: T): T & { siaPermitBLapsedByAge: boolean } {
+function withDerivedGuard<T extends Guard>(row: T): T & { siaPermitBLapsedByAge: boolean; identityStatus: IdentityStatus } {
   const siaPermitBLapsedByAge = isSiaPermitBLapsedByAge(row);
+  const idStatus = identityStatus({ hkid: row.hkid, tel: row.tel });
   if (!canOverrideDerivedSiaPermit({ siaPermitAExpiry: row.siaPermitAExpiry, siaPermitBExpiry: row.siaPermitBExpiry })) {
-    return { ...row, siaPermitBLapsedByAge };
+    return { ...row, siaPermitBLapsedByAge, identityStatus: idStatus };
   }
-  return { ...row, ...deriveSiaPermitExpiry(row), siaPermitBLapsedByAge };
+  return { ...row, ...deriveSiaPermitExpiry(row), siaPermitBLapsedByAge, identityStatus: idStatus };
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -139,6 +141,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // rate-cards/sites 等 route 一致做法（見 src/lib/api/field-groups.ts）。
     await assertFieldGroupWritable(session, "guards", effectiveBody);
 
+    // WP-STAFF-IMPORT B1：身份證存 canonical；同現值（canonical 後）一樣就當冇改
+    // （舊髒值唔鎖死儲存）；改咗先驗 check digit（`allow_invalid_hkid` 俾護照號）＋
+    // 擋同另一個安員重複（409，唔回顯對方資料）。
+    let hkidCanonical: string | undefined;
+    const effRec = effectiveBody as Record<string, unknown>;
+    if (typeof effRec.hkid === "string") {
+      const incoming = effRec.hkid;
+      const sameAsBefore = !!before.hkid && (canonicalHkid(incoming) ?? incoming.toUpperCase().replace(/\s+/g, "")) === (canonicalHkid(before.hkid) ?? before.hkid);
+      if (!sameAsBefore) hkidCanonical = prepareHkidForWrite(incoming, { allowInvalid: effRec.allow_invalid_hkid === true });
+    }
+
     // WP-STAFFNO：`staff_no`／`staff_no_mw`（舊前端／舊 API 用法）而家係
     // 由 `guard_staff_numbers` 新表 sync 返嚟嘅值，唔可以再直接落
     // `prisma.guard.update()`（唔係就會同新表寫入撞埋、兩邊唔一致）——
@@ -210,6 +223,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const emergencyTelLegacy = emergencyPatchNeeded ? (rawEmergencyTel !== undefined ? rawEmergencyTel : before.emergencyContactTel) : undefined;
 
     const rest = { ...(effectiveBody as Record<string, unknown>) };
+    delete rest.allow_invalid_hkid;
+    if (hkidCanonical !== undefined) rest.hkid = hkidCanonical;
+    else delete rest.hkid;
     delete rest.staff_no;
     delete rest.staff_no_mw;
     delete rest.tel;
@@ -252,6 +268,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     }
 
     const { guardAfter, legacyChanges, contactPatchResult } = await prisma.$transaction(async (tx) => {
+      if (hkidCanonical) await assertHkidAvailable(tx, hkidCanonical, id);
+      if (telLegacy) await assertTelAvailable(tx, telLegacy, id);
       let guardAfter: Guard = before;
       if (Object.keys(data).length > 0) {
         guardAfter = await tx.guard.update({ where: { id }, data });
@@ -283,7 +301,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         guardAfter = await tx.guard.findUniqueOrThrow({ where: { id } });
       }
       return { guardAfter, legacyChanges: legacyResult.changes, contactPatchResult: contactResult };
-    });
+    }).catch(rethrowIdentityConflict);
 
     await writeAudit({ actorUserId: session.userId, tableName: "guards", rowId: id, action: "update", before, after: guardAfter, ip: getClientIp(req) });
     if (legacyChanges.length > 0) {

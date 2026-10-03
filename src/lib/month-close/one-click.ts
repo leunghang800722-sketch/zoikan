@@ -31,6 +31,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { monthRange, monthLabel, n, round2 } from "@/lib/reports/money";
 import { monthStart as toMonthStart } from "@/lib/month-lock";
+import { nameOnlyCountsByUpload, NAME_ONLY_WARNING } from "@/lib/roster-upload/name-only";
 import { checkRosterUploadCoverage } from "@/lib/roster-upload/lock-precondition";
 import { recomputeSettlement } from "@/lib/roster-upload/settlement-resync";
 import { runReconcileAllForMonth, RECONCILE_ALL_ADVISORY_LOCK_KEY, RECONCILE_ALL_STALE_MS } from "@/lib/roster-upload/reconcile-all";
@@ -359,6 +360,13 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     }
   }
   numbers.siteMissingShiftTypeCount = siteMissingShiftTypeCount;
+
+  // (2b) WP-STAFF-IMPORT B2：淨靠姓名配對（`match_basis=name_only`）格數警告——
+  // 純 warning，唔擋、唔改任何資料。
+  const nameOnlyByUpload = await nameOnlyCountsByUpload(uploadIds);
+  const nameOnlyCells = [...nameOnlyByUpload.values()].reduce((a, b) => a + b, 0);
+  numbers.nameOnlyCells = nameOnlyCells;
+  if (nameOnlyCells > 0) warnings.push(`${nameOnlyCells} 格（${nameOnlyByUpload.size} 個上載）${NAME_ONLY_WARNING}`);
 
   // (3) U Team 名單最新上載日期 >45 日→warning。
   const staffList = await prisma.staffListUpload.findFirst({ where: { status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { uploadedAt: true } });

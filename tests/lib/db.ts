@@ -80,6 +80,7 @@ export async function clearAll() {
   // 要喺兩張表刪之前先清（同 guard_staff_numbers／GuardPhone 一致做法）。
   await prisma.guardLongtermPost.deleteMany({});
   await prisma.guardMatchOverride.deleteMany({});
+  await prisma.guardIdentityConflict.deleteMany({}); // WP-STAFF-IMPORT B1
   // WP-LTPAY：長工糧新表全部 FK RESTRICT 落 guard，要喺 guard 刪之前先清
   // （lines 先，run 先 lines 因為 lines FK CASCADE 落 run，但保守都係
   // 逐張刪清楚）。

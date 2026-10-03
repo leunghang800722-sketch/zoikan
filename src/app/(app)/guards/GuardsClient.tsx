@@ -68,6 +68,9 @@ interface GuardRow {
   // S7：淨係有 `?q=` 先有呢粒 key——呢個保安員入面有一個舊（former）號
   // 撞中咗搜尋字。
   former_number_hit?: boolean;
+  // WP-STAFF-IMPORT B1：識別狀態（身份證＋電話），見 src/lib/guards/identity.ts。
+  identity_status?: "complete" | "missing_hkid" | "missing_tel" | "missing_both";
+  identity_review_fields?: string[];
   // WP-PII：新欄一律 optional——response 有冇呢粒 key 視乎 field-group
   // gate（冇「安員個人資料/安員銀行資料:view」成粒 key 都唔會出現，
   // 唔係值做 null），見 src/lib/api/field-groups.ts。
@@ -283,6 +286,10 @@ export function GuardsClient({
   // （API 早已經 OR 埋 safety_card_expiry，見 src/app/api/guards/route.ts；
   // 呢度改嘅淨係文案＋表格 pill 顯示，唔使改 API）。
   const [expiringOnly, setExpiringOnly] = useState(false);
+  // WP-STAFF-IMPORT B1：識別狀態篩選（缺身份證／缺電話）。
+  const [identityFilter, setIdentityFilter] = useState<"" | "missing_hkid" | "missing_tel" | "missing_any">("");
+  // 護照／特殊證件號：唔驗 check digit（API `allow_invalid_hkid`）。
+  const [allowInvalidHkid, setAllowInvalidHkid] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -424,8 +431,9 @@ export function GuardsClient({
     setError(null);
     const expiringParam = expiringOnly ? "&expiring_within_days=90" : "";
     const qParam = q.trim() ? `&q=${encodeURIComponent(q.trim())}` : "";
+    const identityParam = identityFilter ? `&identity=${identityFilter}` : "";
     const [guardRes, brokerRes, siteRes] = await Promise.all([
-      apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${qParam}`),
+      apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${identityParam}${qParam}`),
       apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
       // WP-PHASE3：淨係內部角色先揀到盤（雞頭 session「盤」module 硬性
       // 拒絕，403 都冇所謂——`sites` 保持空陣列，「長工」分區本身雞頭都
@@ -460,7 +468,7 @@ export function GuardsClient({
     const t = setTimeout(() => load(search), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, expiringOnly, search]);
+  }, [month, expiringOnly, identityFilter, search]);
 
   function broker(id?: string | null): BrokerRow | undefined {
     if (!id) return undefined;
@@ -719,7 +727,10 @@ export function GuardsClient({
     // assertFieldGroupWritable() 嘅 403。
     if (editingId) {
       if (canUpdatePii) {
-        if (form.hkid) body.hkid = form.hkid;
+        if (form.hkid) {
+          body.hkid = form.hkid;
+          if (allowInvalidHkid) body.allow_invalid_hkid = true;
+        }
         // 應修 2（Opus 驗收第二輪）：出生日期／黑名單查核日期跟牌照/
         // 平安卡/入離職嗰 5 個日期欄一致——`GuardUpdateSchema` 已經改用
         // nullable schema（`null`＝清空），呢兩個欄一樣要一律送
@@ -1670,6 +1681,21 @@ export function GuardsClient({
                 <input type="checkbox" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
               </FilterChip>
             )}
+            {!isBroker && (
+              <FilterChip label="識別狀態">
+                <select value={identityFilter} onChange={(e) => setIdentityFilter(e.target.value as typeof identityFilter)}>
+                  <option value="">全部</option>
+                  <option value="missing_any">缺身份證或電話</option>
+                  <option value="missing_hkid">缺身份證</option>
+                  <option value="missing_tel">缺電話</option>
+                </select>
+              </FilterChip>
+            )}
+            {!isBroker && (
+              <a href="/guards/import" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">
+                證件資料導入
+              </a>
+            )}
             <Button variant="primary" onClick={openCreate}>
               新增保安員
             </Button>
@@ -1817,6 +1843,18 @@ export function GuardsClient({
       <Drawer open={drawerOpen} title={editingId ? "編輯保安員" : "新增保安員"} onClose={() => setDrawerOpen(false)}>
         <form onSubmit={onSubmit} className="space-y-3">
           <Banner kind="error" message={formError} />
+          {editingId && (() => {
+            const st = rows.find((r) => r.id === editingId)?.identity_status;
+            if (!st) return null;
+            const reviewFields = rows.find((r) => r.id === editingId)?.identity_review_fields ?? [];
+            return (
+              <div className="flex items-center gap-2 text-xs text-zk-faint">
+                {reviewFields.includes("name_zh") ? <Pill variant="warning">姓名待核對</Pill> : null}
+                識別狀態（身份證＋電話）：
+                {st === "complete" ? <Pill variant="success">齊</Pill> : <Pill variant="warning">{st === "missing_hkid" ? "缺身份證" : st === "missing_tel" ? "缺電話" : "缺身份證及電話"}</Pill>}
+              </div>
+            );
+          })()}
           <div className="grid grid-cols-2 gap-2">
             {/* S1（Opus 驗收）：呢兩個係快速路（同步落 guards.staff_no／
                 staff_no_mw），淨係收固定種類——U／MG／MW 以外嘅種類（例如
@@ -2309,9 +2347,13 @@ export function GuardsClient({
           {editingId && hasPiiField && (
             <>
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">個人資料</h3>
-              <Field label="身份證號碼" hint="格式例：A123456(7)">
+              <Field label="身份證號碼" hint="格式例：A123456(3)；系統會驗 check digit，同另一位安員重複會擋">
                 <input className={inputCls} value={form.hkid} onChange={(e) => setForm((f) => ({ ...f, hkid: e.target.value }))} />
               </Field>
+              <label className="flex items-center gap-2 text-xs text-zk-faint">
+                <input type="checkbox" checked={allowInvalidHkid} onChange={(e) => setAllowInvalidHkid(e.target.checked)} />
+                護照／特殊證件號（唔驗 check digit）
+              </label>
               <Field label="出生日期">
                 <input type="date" className={inputCls} value={form.date_of_birth} onChange={(e) => setForm((f) => ({ ...f, date_of_birth: e.target.value }))} />
               </Field>

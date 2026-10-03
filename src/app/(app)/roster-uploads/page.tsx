@@ -107,6 +107,7 @@ interface RosterUploadRowDTO {
   broker_code_raw: string | null;
   guard_id: string | null;
   guard_match: "by_staff_no" | "by_name_tel" | "by_name" | "unmatched" | "ambiguous";
+  match_basis?: "staff_no" | "tel" | "name_tel" | "name_only" | "alias" | "override" | null;
   settlement_broker_id: string | null;
   hours: number | null;
   warnings: string[] | null;
@@ -114,6 +115,9 @@ interface RosterUploadRowDTO {
 interface DetailResponse {
   upload: RosterUploadDTO;
   rows: ApiListResult<RosterUploadRowDTO>;
+  // WP-STAFF-IMPORT B2：淨靠姓名配對格數＋警告文案。
+  name_only_count?: number;
+  name_only_warning?: string | null;
 }
 
 interface VoidResponse {
@@ -182,6 +186,8 @@ const GUARD_MATCH_LABEL: Record<string, string> = {
 // Phase B-0 第 4 項：呢兩類淨係 warnings 文字（唔改 guard_match enum），
 // 對應 API `?warning_flag=`（唔係 `?guard_match=`）。
 const WARNING_FLAG_VALUES = new Set(["staff_no_mismatch", "stale_staff_no"]);
+// WP-STAFF-IMPORT B2：`?match_basis=name_only`。
+const MATCH_BASIS_FILTER_VALUES = new Set(["name_only"]);
 
 // WP-UPLOAD-VOID：多檔拖放隊列——逐個檔獨立處理／顯示，`month`／
 // `siteIdHint` 喺 enqueue 嗰刻捕捉（避免用戶入面轉月份／盤影響緊處理
@@ -234,7 +240,7 @@ export default function RosterUploadsPage() {
   // 加多兩類（工號唔一致／已取消舊號配對）——呢兩類唔係 `guard_match`
   // enum 值，係喺 warnings 文字入面（見 match.ts GuardMatchResult 註解），
   // 對應 API 嘅 `?warning_flag=` 參數（`loadDetail()` 自己分流）。
-  const [matchFilter, setMatchFilter] = useState<"" | "unmatched" | "ambiguous" | "by_name" | "staff_no_mismatch" | "stale_staff_no">("");
+  const [matchFilter, setMatchFilter] = useState<"" | "unmatched" | "ambiguous" | "by_name" | "staff_no_mismatch" | "stale_staff_no" | "name_only">("");
   const [patchingSiteFor, setPatchingSiteFor] = useState<string | null>(null);
 
   // WP-LTSHIFT §19 交付 C：「重新對數全月」——一鍵重算結算單位＋對數＋
@@ -326,7 +332,8 @@ export default function RosterUploadsPage() {
     const skip = append && detail ? detail.rows.rows.length : 0;
     const qs = new URLSearchParams({ take: "500", skip: String(skip) });
     if (filter) {
-      if (WARNING_FLAG_VALUES.has(filter)) qs.set("warning_flag", filter);
+      if (MATCH_BASIS_FILTER_VALUES.has(filter)) qs.set("match_basis", filter);
+      else if (WARNING_FLAG_VALUES.has(filter)) qs.set("warning_flag", filter);
       else qs.set("guard_match", filter);
     }
     const res = await apiGet<DetailResponse>(`/api/roster-uploads/${uploadId}?${qs.toString()}`);
@@ -898,6 +905,7 @@ export default function RosterUploadsPage() {
                   <option value="by_name">只顯示淨係姓名配對</option>
                   <option value="staff_no_mismatch">只顯示工號不一致</option>
                   <option value="stale_staff_no">只顯示用已取消舊號配對</option>
+                  <option value="name_only">只顯示淨靠姓名配對</option>
                 </select>
               </label>
               {detail?.upload.status !== "voided" && (
@@ -913,6 +921,12 @@ export default function RosterUploadsPage() {
               </Button>
             </div>
           </div>
+
+          {detail && (detail.name_only_count ?? 0) > 0 && (
+            <div className="mb-3 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-[12px] text-orange-800" data-testid="roster-upload-name-only-warning">
+              {detail.name_only_count} 格{detail.name_only_warning ?? "淨靠姓名配對，建議補工號或電話"}
+            </div>
+          )}
 
           {detail?.upload.parse_summary && detail.upload.parse_summary.warnings.length > 0 && (
             <ul className="mb-3 list-disc space-y-0.5 rounded-md border border-orange-200 bg-orange-50 py-2 pl-6 pr-3 text-[12px] text-orange-800" data-testid="roster-upload-summary-warnings">

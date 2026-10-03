@@ -38,5 +38,5 @@ EXPOSE 8080
 # 只 warn）→ 起 Next standalone server。
 # 必修 5（Opus 驗收第三輪）：`scripts` 上面第 28 行已經 COPY 過一次，呢度
 # 曾經重複多 COPY 一模一樣嘅嘢——刪走，唔影響行為（同一份 layer 已經有）。
-# migrate deploy 失敗要停（schema 唔對唔可以起）；sync-permissions／ensure-ai-role／recompute-permit-derived 失敗只 warn，唔阻止網站起
-CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && (node node_modules/.bin/tsx scripts/db/sync-permissions.ts || echo '[warn] sync-permissions 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts || echo '[warn] ensure-ai-role 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/recompute-permit-derived.ts || echo '[warn] recompute-permit-derived 失敗，網站照起') && node server.js"]
+# migrate deploy 失敗要停（schema 唔對唔可以起）；sync-permissions／ensure-identity-indexes／ensure-ai-role／recompute-permit-derived 失敗只 warn，唔阻止網站起
+CMD ["sh","-c","node node_modules/prisma/build/index.js migrate deploy && (node node_modules/.bin/tsx scripts/db/sync-permissions.ts || echo '[warn] sync-permissions 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/ensure-identity-indexes.ts || echo '[warn] ensure-identity-indexes 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/ensure-ai-role.ts || echo '[warn] ensure-ai-role 失敗，網站照起') && (node node_modules/.bin/tsx scripts/db/recompute-permit-derived.ts || echo '[warn] recompute-permit-derived 失敗，網站照起') && node server.js"]

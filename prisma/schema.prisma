@@ -361,6 +361,8 @@ model Guard {
   // 雞頭 DTO（GUARD_BROKER_FIELDS，src/lib/broker-dto.ts）同 `ai.guards`
   // view（明列欄位，冇加呢個）一律唔包。
   nameAliases     String[]       @default([]) @map("name_aliases")
+  // WP-STAFF-IMPORT B3：批量導入時未確認（review）嘅欄（例如 ["name_zh"]），覆核確認後移除。
+  identityReviewFields String[]   @default([]) @map("identity_review_fields")
   status          ActiveStatus   @default(active)
 
   // WP-PII（老闆 2026-09-17 拍板）：保安員個人資料欄位——全部 nullable
@@ -371,6 +373,8 @@ model Guard {
   // 部分」）。`ai.guards` view（見 prisma/migrations/…wp_ai1_readonly_
   // schema）明列欄位，呢 16 個新欄一律唔加入去——AI 助手結構上讀唔到
   // （唔淨係 field-scrub 呢層 defense-in-depth，係 DB view 本身冇呢啲欄）。
+  // 注意：`guards_hkid_key`（partial unique, hkid IS NOT NULL）由 migration／scripts/db/ensure-identity-indexes.ts
+  // 管，Prisma schema 表達唔到——`migrate dev` 嘅 drift 偵測可能想 DROP 佢，唔好接受。
   hkid                 String?   @map("hkid") // 身份證號碼——列表遮罩顯示，詳情/編輯有「安員個人資料:view」先見全號
   dateOfBirth          DateTime? @map("date_of_birth") @db.Date
   address              String?   @map("address")
@@ -483,9 +487,26 @@ model GuardPhone {
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
+  // `guard_phones_tel_key`（tel 全表唯一）由 migration／scripts/db/ensure-identity-indexes.ts 管（有重複就唔建），
+  // Prisma schema 唔宣告——`migrate dev` drift 偵測可能想 DROP 佢，唔好接受。
   @@unique([guardId, tel])
   @@index([guardId])
   @@map("guard_phones")
+}
+
+// WP-STAFF-IMPORT B1：身份證／電話重複記錄（只存 sha256，唔存明文）。
+// 唯一性本身靠 migration 建嘅 partial unique index（guards_hkid_key、
+// guard_phones_tel_key，Prisma schema 表達唔到 partial index，同
+// guard_phones_guard_id_primary_key 一樣只喺 migration）；有重複就唔建 index。
+model GuardIdentityConflict {
+  id         String    @id @default(uuid())
+  kind       String // dup_hkid／dup_tel（淨存涉及嘅 guard id，唔存值／hash——可窮舉）
+  guardIds   String[]  @default([]) @map("guard_ids")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  resolvedAt DateTime? @map("resolved_at")
+
+  // 唯一性：migration 用 id = md5(kind || 排序後 guard id) 決定性生成，PK 即唯一。
+  @@map("guard_identity_conflicts")
 }
 
 // WP-MULTI：保安員可以有幾多個緊急聯絡人就記幾多個。`name`／`tel` 唔可以
@@ -875,6 +896,8 @@ model RosterUploadRow {
   guardId    String?                @map("guard_id") // 配對結果
   guard      Guard?                 @relation(fields: [guardId], references: [id])
   guardMatch RosterUploadGuardMatch @default(unmatched) @map("guard_match")
+  // WP-STAFF-IMPORT B2：逐格配對依據（staff_no／tel／name_tel／name_only／alias／override）。
+  matchBasis String? @map("match_basis")
 
   settlementBrokerId String? @map("settlement_broker_id") // 雞頭碼→brokers；冇雞頭碼欄嘅盤=null（Phase B 由系統設定補）
   settlementBroker   Broker? @relation(fields: [settlementBrokerId], references: [id])

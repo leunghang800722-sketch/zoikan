@@ -12,6 +12,7 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { GuardPhoneUpdateSchema } from "@/lib/api/schemas";
 import { setPrimaryGuardPhone, deleteGuardPhone, syncLegacyGuardContactColumns, normalizeTel, isValidTel, lockGuardRowForContactWrite } from "@/lib/guards/contacts";
+import { assertTelAvailable, rethrowIdentityConflict } from "@/lib/guards/identity";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden, Conflict, BadRequest } from "@/lib/api/errors";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
@@ -47,6 +48,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         {
           const dup = await tx.guardPhone.findUnique({ where: { guardId_tel: { guardId: id, tel } } });
           if (dup) throw Conflict("呢個電話已經記錄咗（同一個保安員唔可以重複記錄同一個電話）");
+          await assertTelAvailable(tx, tel, id); // WP-STAFF-IMPORT B1：全表唯一
           data.tel = tel;
         }
       }
@@ -80,7 +82,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         await syncLegacyGuardContactColumns(tx, id, ["tel"]);
       }
       return { before, after, demoted };
-    });
+    }).catch(rethrowIdentityConflict);
 
     if (result.before !== result.after) {
       await writeAudit({ actorUserId: session.userId, tableName: "guard_phones", rowId: phoneId, action: "update", before: result.before, after: result.after, ip: getClientIp(req) });

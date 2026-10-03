@@ -78,7 +78,7 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
     // 老闆寫得入）。
     const patchRes = await guardUpdate(
       req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", {
-        hkid: "A123456(7)",
+        hkid: "A123456(3)",
         date_of_birth: "1990-01-01",
         address: "測試地址",
         emergency_contact_name: "測試聯絡人",
@@ -101,12 +101,12 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
     expect(patchRes.status).toBe(200);
   });
 
-  it("老闆：列表 hkid 遮罩（A123***(7)），牌照欄見到；銀行/地址/出生日期/緊急聯絡人/Blacklist 列表結構上唔回（應修 4，唔係俾 gate 剝——只詳情先有）", async () => {
+  it("老闆：列表 hkid 遮罩（A123***(3)），牌照欄見到；銀行/地址/出生日期/緊急聯絡人/Blacklist 列表結構上唔回（應修 4，唔係俾 gate 剝——只詳情先有）", async () => {
     const listRes = await guardsList(req("http://test.local/api/guards", ownerCookie));
     expect(listRes.status).toBe(200);
     const body = (await listRes.json()) as { rows: Array<Record<string, unknown>> };
     const row = body.rows.find((r) => r.id === fx.guardA.id)!;
-    expect(row.hkid).toBe("A123***(7)");
+    expect(row.hkid).toBe("A123***(3)");
     expect(row.sia_permit_no).toBe("SIA-TEST-01");
     for (const k of ["bank_name", "bank_account_no", "bank_payee_name", "address", "date_of_birth", "emergency_contact_name", "emergency_contact_tel", "blacklist_check_result", "blacklist_check_date"]) {
       expect(row).not.toHaveProperty(k);
@@ -119,7 +119,7 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
     });
     expect(detailRes.status).toBe(200);
     const body = (await detailRes.json()) as Record<string, unknown>;
-    expect(body.hkid).toBe("A123456(7)");
+    expect(body.hkid).toBe("A1234563"); // WP-STAFF-IMPORT B1：入庫 canonical
     expect(body.bank_name).toBe("測試銀行");
     expect(body.address).toBe("測試地址");
   });
@@ -129,14 +129,14 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
     expect(listRes.status).toBe(200);
     const body = (await listRes.json()) as { rows: Array<Record<string, unknown>> };
     const row = body.rows.find((r) => r.id === fx.guardA.id)!;
-    expect(row.hkid).toBe("A123***(7)");
+    expect(row.hkid).toBe("A123***(3)");
     expect(row).not.toHaveProperty("bank_name");
 
     const detailRes = await guardDetail(req(`http://test.local/api/guards/${fx.guardA.id}`, accountantCookie), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     const detail = (await detailRes.json()) as Record<string, unknown>;
-    expect(detail.hkid).toBe("A123456(7)");
+    expect(detail.hkid).toBe("A1234563");
     expect(detail.bank_name).toBe("測試銀行");
   });
 
@@ -210,7 +210,7 @@ describe("WP-PII §3：PATCH 權限", () => {
 
   it("主管 PATCH 身份證 → 403，DB 不變", async () => {
     const before = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
-    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { hkid: "A123456(7)" }), {
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { hkid: "A123456(3)" }), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     expect(res.status).toBe(403);
@@ -219,9 +219,9 @@ describe("WP-PII §3：PATCH 權限", () => {
   });
 
   it("Opus 覆核 M1（oracle）：主管冇「安員個人資料:view」——PATCH hkid 就算同現值一樣都要 403，唔准變成猜中／猜錯嘅回應碼 oracle", async () => {
-    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { hkid: "A123456(7)", bankAccountNo: "123-456789-001" } });
+    await prisma.guard.update({ where: { id: fx.guardA.id }, data: { hkid: "A123456(3)", bankAccountNo: "123-456789-001" } });
     try {
-      for (const guess of ["A123456(7)", "B999888(1)"]) {
+      for (const guess of ["A123456(3)", "B999888(1)"]) {
         const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { hkid: guess }), {
           params: Promise.resolve({ id: fx.guardA.id }),
         });
@@ -309,8 +309,9 @@ describe("WP-PII §3：PATCH 權限", () => {
     expect(after.bankName).toBe(before.bankName);
   });
 
-  it("hkid 格式唔啱（唔跟 A123456(7)）→ 400", async () => {
-    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { hkid: "唔啱格式" }), {
+  it("hkid 格式唔啱（唔跟 A123456(3)）→ 400（B1：格式／check digit 改喺 route 層驗，先過權限）", async () => {
+    const ownerC = await sessionCookieForUser(fx.userIds["老闆"]);
+    const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerC, "PATCH", { hkid: "唔啱格式" }), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
     expect(res.status).toBe(400);
@@ -331,7 +332,7 @@ describe("WP-PII §4：audit_log before/after 同讀出嗰陣一樣要經 field-
 
   it("老闆 PATCH 帶 hkid+bank_name（經 API 寫，audit_log 有完整 DTO）；主管讀 audit-log 零命中呢兩組欄", async () => {
     const patchRes = await guardUpdate(
-      req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { hkid: "A123456(7)", bank_name: "測試銀行" }),
+      req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { hkid: "A123456(3)", bank_name: "測試銀行" }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );
     expect(patchRes.status).toBe(200);

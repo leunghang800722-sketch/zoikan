@@ -97,6 +97,11 @@ const GUARD_FIELDS = [
   // 雞頭 DTO（GUARD_BROKER_FIELDS，broker-dto.ts）刻意唔加。
   "nameAliases",
   "staffNumbers",
+  // WP-STAFF-IMPORT B1：識別狀態衍生欄（complete／missing_hkid／missing_tel／missing_both，
+  // 淨係有冇，唔含值），見 src/lib/guards/identity.ts identityStatus()。
+  "identityStatus",
+  // WP-STAFF-IMPORT B3：導入後待人手核對嘅欄（["name_zh"] 等），抽屜顯示「姓名待核對」。
+  "identityReviewFields",
   // S7：`?q=` 搜尋命中已取消（former）工號嗰陣先會有呢粒 key（見
   // src/app/api/guards/route.ts findNumberSearchMatches()）——前端標
   // 「已取消號命中」用。
@@ -253,7 +258,7 @@ export const toRosterUploadDTO = <T extends Record<string, unknown>>(row: T) => 
 const ROSTER_UPLOAD_ROW_FIELDS = [
   "id", "uploadId", "rowIndex", "subSiteName", "workDate", "rawCode",
   "codeKind", "shiftTypeId", "resolvedSiteId", "staffNoRaw", "nameRaw", "telRaw", "rankRaw",
-  "timeRaw", "brokerCodeRaw", "guardId", "guardMatch", "settlementBrokerId",
+  "timeRaw", "brokerCodeRaw", "guardId", "guardMatch", "matchBasis", "settlementBrokerId",
   "hours", "warnings", "createdAt", "updatedAt",
 ] as const;
 export const toRosterUploadRowDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, ROSTER_UPLOAD_ROW_FIELDS);

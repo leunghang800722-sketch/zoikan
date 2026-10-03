@@ -60,8 +60,11 @@ const money = z.union([z.number(), z.string()]).optional();
 
 // WP-PII：身份證格式寬鬆核對（1-2 個英文字母 + 6 位數字 + 括住 1 位
 // 數字或 "A" 嘅核對碼），大小寫都收（入 DB 之前唔轉大寫，保留原文）。
-const HKID_RE = /^[A-Za-z]{1,2}[0-9]{6}\([0-9Aa]\)$/;
-const hkid = z.string().regex(HKID_RE, "身份證格式要係 A123456(7) 咁樣").optional();
+// WP-STAFF-IMPORT B1：格式／check digit 改由 route 層 `prepareHkidForWrite()`
+// （src/lib/guards/identity.ts）驗——`A123456(3)`／`A1234563` 都收，入庫一律 canonical；
+// 護照號等要帶 `allow_invalid_hkid: true`。呢層淨係擋明顯唔係字串／過長。
+const hkid = z.string().trim().min(1, "身份證唔可以空白").max(32).optional();
+const allowInvalidHkid = z.boolean().optional();
 // Opus 覆核（WP-MULTI 必修 4）：電話格式（`guard_phones.tel`／
 // `GuardUpdateSchema.emergency_contact_tel`／`GuardEmergencyContact*
 // Schema.tel`）統一用呢兩個——之前呢度嘅 `tel8`（8 位香港號硬性）成個
@@ -219,6 +222,9 @@ export const GuardCreateSchema = z
     employment_type: enumOf(EmploymentType),
     monthly_salary: money,
     polo_size: z.string().optional(),
+    // WP-STAFF-IMPORT B1：新增時可帶身份證（需「安員個人資料」update 權限，route 層驗）。
+    hkid,
+    allow_invalid_hkid: allowInvalidHkid,
   })
   .strict();
 export const GuardUpdateSchema = z
@@ -248,6 +254,7 @@ export const GuardUpdateSchema = z
     // 用編輯抽屜逐項補（field-group gate 喺 assertFieldGroupWritable()
     // 做，見 src/app/api/guards/[id]/route.ts）。
     hkid,
+    allow_invalid_hkid: allowInvalidHkid,
     // 應修 2（Opus 驗收第二輪）：`date_of_birth` DB 欄 nullable，同
     // `sia_permit_a/b_expiry`／`safety_card_expiry`／`hire_date`／
     // `leave_date` 一致理由——改用 `nullableDateOnly`，等用戶 PATCH

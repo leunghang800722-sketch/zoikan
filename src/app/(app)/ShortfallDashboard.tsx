@@ -176,7 +176,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
   // B1-2（WP-ROSTER-UPLOAD Phase B-1）：「更表對數待處理」——最簡單做法
   // （任務書原話，唔做 email）：首頁卡列「已上載但未對數完成」嘅盤數。
   // 獨立 fetch，失敗都唔影響主 dashboard（見 catch）。
-  const [reconcilePending, setReconcilePending] = useState<{ total: number; entries: { site_name: string; pending_count: number }[] } | null>(null);
+  const [reconcilePending, setReconcilePending] = useState<{ total: number; entries: { site_name: string; pending_count: number }[]; name_only?: { total: number } } | null>(null);
 
   useEffect(() => {
     const fromUrl = readDateFromUrl();
@@ -208,7 +208,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
     (async () => {
       // 驗收修正（Opus 5.5）：唔帶 month＝所有月份未對完嘅上載（上個月更表
       // 通常今個月先對數）。
-      const res = await apiGet<{ total: number; entries: { site_name: string; pending_count: number }[] }>(`/api/roster-uploads/pending-summary`);
+      const res = await apiGet<{ total: number; entries: { site_name: string; pending_count: number }[]; name_only?: { total: number } }>(`/api/roster-uploads/pending-summary`);
       if (cancelled) return;
       if (res.ok) setReconcilePending(res.data);
       // 冇權限（例如自訂角色冇「更表上載:view」）或者其他錯誤——靜靜唔顯示
@@ -298,7 +298,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                 value={reconcilePending.total}
                 tone="danger"
                 href="/roster-uploads"
-                note={reconcilePending.entries.slice(0, 3).map((e) => `${e.site_name} ${e.pending_count}`).join("、")}
+                note={reconcilePending.entries.slice(0, 3).map((e) => `${e.site_name} ${e.pending_count}`).join("、") + (reconcilePending.name_only && reconcilePending.name_only.total > 0 ? `；${reconcilePending.name_only.total} 格淨靠姓名配對，建議補工號或電話` : "")}
               />
             )}
             <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />

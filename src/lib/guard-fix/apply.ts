@@ -10,6 +10,7 @@
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { writeAuditTx } from "@/lib/audit";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
+import { telLookupVariants } from "@/lib/guards/identity";
 import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
 import { canonicalHkid } from "@/lib/guard-fix/sources";
@@ -26,6 +27,8 @@ export const GUARD_FIX_ADVISORY_LOCK_KEY = 7_710_250_925;
 export interface Diff {
   create: string[]; // seq
   skip: string[]; // seq（（原因））
+  /** WP-STAFF-IMPORT B-fix M1：電話撞咗現有 guard_phones（全表唯一）→ 跳過唔寫，記 `seq:tel_skipped_duplicate`。有先出現。 */
+  telSkipped?: string[];
 }
 function emptyDiff(): Diff {
   return { create: [], skip: [] };
@@ -190,16 +193,20 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
         await syncLegacyStaffNoColumns(tx, created.id);
         await writeAuditTx(tx, { actorUserId: null, tableName: "guard_staff_numbers", rowId: staffResult.created.id, action: "create", after: staffResult.created, ip: null });
       }
-      if (input.primaryTel) {
-        const phoneResult = await createGuardPhone(tx, { guardId: created.id, tel: input.primaryTel, isPrimary: true, source: "system:guard-fix", createdBy: SYSTEM_ACTOR });
+      // 電話全表唯一：撞咗現有電話（或者本次 apply 較早建嘅人）→ 跳過唔寫，guard 照建，唔 rollback。
+      const addTel = async (rawTel: string, isPrimary: boolean) => {
+        const variants = telLookupVariants(rawTel);
+        const clash = variants.length ? await tx.guardPhone.findFirst({ where: { tel: { in: variants } }, select: { id: true } }) : null;
+        if (clash) {
+          (input.diff.telSkipped ??= []).push(`${input.seq}:tel_skipped_duplicate`);
+          return;
+        }
+        const pr = await createGuardPhone(tx, { guardId: created.id, tel: rawTel, isPrimary, source: "system:guard-fix", createdBy: SYSTEM_ACTOR });
         await syncLegacyGuardContactColumns(tx, created.id, ["tel"]);
-        await writeAuditTx(tx, { actorUserId: null, tableName: "guard_phones", rowId: phoneResult.created.id, action: "create", after: { id: phoneResult.created.id, guardId: phoneResult.created.guardId, isPrimary: phoneResult.created.isPrimary, source: phoneResult.created.source }, ip: null });
-      }
-      if (input.secondaryTel) {
-        const phoneResult2 = await createGuardPhone(tx, { guardId: created.id, tel: input.secondaryTel, isPrimary: false, source: "system:guard-fix", createdBy: SYSTEM_ACTOR });
-        await syncLegacyGuardContactColumns(tx, created.id, ["tel"]);
-        await writeAuditTx(tx, { actorUserId: null, tableName: "guard_phones", rowId: phoneResult2.created.id, action: "create", after: { id: phoneResult2.created.id, guardId: phoneResult2.created.guardId, isPrimary: phoneResult2.created.isPrimary, source: phoneResult2.created.source }, ip: null });
-      }
+        await writeAuditTx(tx, { actorUserId: null, tableName: "guard_phones", rowId: pr.created.id, action: "create", after: { id: pr.created.id, guardId: pr.created.guardId, isPrimary: pr.created.isPrimary, source: pr.created.source }, ip: null });
+      };
+      if (input.primaryTel) await addTel(input.primaryTel, true);
+      if (input.secondaryTel) await addTel(input.secondaryTel, false);
       return created.id;
     }
 

@@ -376,6 +376,12 @@ async function matchRowsAndSummarize(
       staffNoMismatchCount += 1;
       warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人：已按安員配對修復保守預設配對到按更表姓名建立嘅獨立安員（工號衝突待核）`);
     }
+    if (guardResult.telNameConflict) {
+      warnings.push("電話對到一位安員、但更表姓名對到另一位，唔會自動配對，人手覆核");
+    }
+    if (guardResult.telMatchNameDiffers) {
+      warnings.push("靠電話配對（更表姓名同系統本名／別名唔同），人手覆核");
+    }
     if (guardResult.matchedViaAlias) {
       warnings.push("由別名配對（更表姓名同系統本名唔同，見安員資料「更表用名」）");
     }
@@ -411,6 +417,7 @@ async function matchRowsAndSummarize(
       brokerCodeRaw: r.brokerCodeRaw,
       guardId: guardResult.guardId,
       guardMatch: guardResult.guardMatch,
+      matchBasis: guardResult.matchBasis ?? null,
       settlementBrokerId: brokerId,
       hours: r.hours,
       warnings: warnings.length ? (warnings as Prisma.InputJsonValue) : Prisma.JsonNull,

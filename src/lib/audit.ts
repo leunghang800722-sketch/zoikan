@@ -78,7 +78,9 @@ export type AuditAction =
   // （行數／缺銀行資料人數/preview flag，冇逐人資料），唔經
   // `AUDIT_ROW_MAPPED_ACTIONS` DTO mapping（本身已經係 route 自己手砌
   // 嘅安全 payload，同 `ai_chat`/`feedback_submit` 一致 passthrough）。
-  | "export_download";
+  | "export_download"
+  // WP-STAFF-IMPORT B3：證件資料批量導入——summary audit（淨係計數，冇逐人資料）。
+  | "guard_import_apply";
 
 export interface WriteAuditInput {
   actorUserId: string | null;
