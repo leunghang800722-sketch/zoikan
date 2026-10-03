@@ -21,6 +21,12 @@ export interface NameVision {
   en: string | null;
   legible: 'clear' | 'unsure';
 }
+export interface DobVision {
+  docId: string;
+  dob: string | null; // YYYY-MM-DD（視覺讀 DD-MM-YYYY 後轉換）
+  sex: string | null; // M／F
+  legible: 'clear' | 'unsure';
+}
 export interface AddrVision {
   docId: string;
   page: number;
@@ -39,6 +45,7 @@ export interface PersonDocIn {
   listZh: string[];
   listEn: string[];
   listTels: string[];
+  listDob?: string[]; // 名單／DB 生日（ISO）
 }
 
 export interface PersonIn {
@@ -48,6 +55,8 @@ export interface PersonIn {
   addressDocId: string | null; // 地址來源檔
   nameVision: NameVision | null;
   addrVision: AddrVision | null;
+  dobVision?: DobVision | null;
+  today?: string;
 }
 
 export type PersonFields = Record<'hkid' | 'nameZh' | 'nameEn' | 'dob' | 'sex' | 'phone' | 'address', FieldOut>;
@@ -85,13 +94,15 @@ export function resolvePerson(p: PersonIn): PersonFields {
     hkid = out(reasons.length ? 'review' : 'confirmed', ex.hkid.value, [], reasons);
   }
 
-  // ---- dob／sex：以身份證為準，多檔唔同＝review
-  const simple = (k: 'dob' | 'sex'): FieldOut => {
-    const vals = p.docs.map((d) => d.ex[k]?.value ?? null);
-    const mine = ex[k]?.value ?? vals.find(Boolean) ?? null;
-    if (!mine) return out('missing', null);
-    return same(vals) ? out('confirmed', mine) : out('review', mine, vals.filter((v): v is string => !!v), [`${k}_differs_between_files`]);
-  };
+  // ---- dob：本機 OCR＋裁圖視覺兩個獨立讀數一致先 confirmed（名單生日只做加強／衝突檢查）；兩讀數唔同、年齡不合理、多檔唔同＝review
+  const dv = p.dobVision ?? null;
+  const dobLocal = p.docs.map((d) => d.ex.dob?.value ?? null);
+  const dobMine = ex.dob?.value ?? dobLocal.find(Boolean) ?? null;
+  const dobList = [...new Set(p.docs.flatMap((d) => d.listDob ?? []))];
+  const dob = resolveDob(dobMine, dobLocal, dobList, dv, p.today ?? '2026-10-03');
+  const sexLocal = p.docs.map((d) => d.ex.sex?.value ?? null);
+  const sexMine = ex.sex?.value ?? sexLocal.find(Boolean) ?? null;
+  const sex = resolveSex(sexMine, sexLocal, dv);
 
   // ---- nameZh
   const zhLocal = p.docs.map((d) => d.ex.nameZh?.value).filter((v): v is string => !!v);
@@ -141,7 +152,21 @@ export function resolvePerson(p: PersonIn): PersonFields {
   // ---- address
   const address = resolveAddress(p, idDoc, nameZh.value, nameEn.value);
 
-  return { hkid, nameZh, nameEn, dob: simple('dob'), sex: simple('sex'), phone, address };
+  // 同一張卡 hkid 或姓名係 review（卡面質素差）→ dob／sex 就算兩讀數一致都要再加一個獨立佐證（名單生日 或 申請表視覺讀數）
+  const weakName = (f: FieldOut) => f.status === 'review' && f.reasons.some((r) => /vision_unsure|vision_uncorroborated|differs_between_files|not_vision_read/.test(r));
+  const cardWeak = hkid.status !== 'confirmed' || weakName(nameZh) || weakName(nameEn);
+  if (cardWeak) {
+    if (dob.status === 'confirmed' && !(dob.value && dobList.includes(dob.value))) {
+      dob.status = 'review';
+      dob.reasons.push('card_weak_needs_extra_corroboration');
+    }
+    if (sex.status === 'confirmed') {
+      sex.status = 'review';
+      sex.reasons.push('card_weak_needs_extra_corroboration');
+    }
+  }
+  if (nameEn.status === 'missing') nameEn.reasons.push(nameEnMissingReason(p, idDoc, v));
+  return { hkid, nameZh, nameEn, dob, sex, phone, address };
 }
 
 const isLandline = (t: string) => /^[23]/.test(t);
@@ -196,4 +221,54 @@ export function recipientOk(recipient: string | null, zh: string | null, en: str
     return !!zh && cmpZh(r, zh).r === 'match';
   }
   return recipientMatches(recipient, en, zh) === true;
+}
+
+export function ageOk(dob: string, today: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dob);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return false;
+  const t = new Date(today + 'T00:00:00Z');
+  let age = t.getUTCFullYear() - y;
+  if (t.getUTCMonth() < mo - 1 || (t.getUTCMonth() === mo - 1 && t.getUTCDate() < d)) age--;
+  return age >= 18 && age <= 80;
+}
+
+export function resolveDob(mine: string | null, local: (string | null)[], list: string[], v: DobVision | null, today: string): FieldOut {
+  const locals = [...new Set(local.filter((x): x is string => !!x))];
+  const vis = v && v.legible === 'clear' ? v.dob : null;
+  if (!mine && !vis) return out('missing', null);
+  const value = vis ?? mine!;
+  const reasons: string[] = [];
+  if (locals.length > 1) reasons.push('dob_differs_between_files');
+  if (!ageOk(value, today)) reasons.push('dob_implausible');
+  if (vis && mine && vis !== mine) reasons.push('dob_vision_differs_from_ocr');
+  if (list.length && !list.includes(value)) reasons.push('dob_differs_from_list');
+  const corroborated = !!vis && locals.includes(vis) && locals.length === 1; // 兩個獨立讀數（本機 OCR＋裁圖視覺）一致，冇例外
+  if (!vis) reasons.push(v ? 'dob_vision_unsure' : 'dob_not_vision_read');
+  else if (!corroborated) reasons.push('dob_uncorroborated');
+  if (reasons.length) return out('review', value, [...locals, ...list, ...(vis ? [vis] : [])], reasons);
+  return out('confirmed', value);
+}
+
+export function resolveSex(mine: string | null, local: (string | null)[], v: DobVision | null): FieldOut {
+  const locals = [...new Set(local.filter((x): x is string => !!x))];
+  const vis = v && v.legible === 'clear' ? v.sex : null;
+  if (!mine && !vis) return out('missing', null);
+  const value = vis ?? mine!;
+  const reasons: string[] = [];
+  if (locals.length > 1) reasons.push('sex_differs_between_files');
+  if (vis && mine && vis !== mine) reasons.push('sex_vision_differs_from_ocr');
+  if (!vis) reasons.push(v ? 'sex_vision_unsure' : 'sex_not_vision_read');
+  else if (!locals.includes(vis)) reasons.push('sex_uncorroborated');
+  return reasons.length ? out("review", value, [...locals, ...(vis ? [vis] : [])], reasons) : out('confirmed', value);
+}
+
+/** nameEn missing 必須有原因碼。 */
+export function nameEnMissingReason(p: PersonIn, idDoc: PersonDocIn, v: NameVision | null): string {
+  if (!p.idDocId || !idDoc.ex.hkid) return 'nameEn_missing_no_id_page';
+  if (v && v.legible !== 'clear') return 'nameEn_missing_crop_unreadable';
+  if (v && !v.en) return 'nameEn_missing_not_printed_or_cut';
+  return 'nameEn_missing_other';
 }

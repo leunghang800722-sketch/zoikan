@@ -1,6 +1,8 @@
 // 逐頁結果 → 逐人結果（純函數）。
 import {
   classifyPage,
+  RE_NOT_ADDRESS_DOC,
+  RE_PO_BOX,
   extractAddress,
   extractForm,
   extractIdCard,
@@ -158,6 +160,22 @@ export function aggregateDoc(
   const dob = pick('dob');
   const sex = pick('sex');
   if (!ids.length) flags.push('no_id_page');
+
+  // 住址證明補漏：寄俾本人（收件人對得上身份證姓名）嘅銀行結單／警方牌照信／稅務通知／水費單等，
+  // 頁面可能被分類做 bank／sia_permit／other。只喺冇正式住址證明頁時先用；信箱地址、僱主稅表、法定聲明排除。
+  if (!addrs.length) {
+    pages.forEach((p, i) => {
+      const kinds = classified[i].kinds;
+      if (p.alt || kinds.includes('application_form') || kinds.includes('id_card') || kinds.includes('address_declaration') || kinds.includes('address_proof')) return;
+      const text = p.lines.map((l) => l.t).join('\n');
+      if (RE_NOT_ADDRESS_DOC.test(text)) return;
+      const a = extractAddress(p.page, p.lines);
+      if (!a.address || !a.recipient || RE_PO_BOX.test(a.address.evidence)) return;
+      if (recipientMatches(a.recipient, nameEn?.value ?? null, nameZh?.value ?? null) !== true) return;
+      a.address.flags = [...(a.address.flags ?? []), 'mailed_candidate'];
+      addrs.push(a);
+    });
+  }
 
   // 地址
   const addrPick = bestBy(addrs, (a) => {

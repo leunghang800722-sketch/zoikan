@@ -42,3 +42,30 @@ export function locateAddressBox(lines: OcrLine[]): { box: Box; how: 'block' | '
   }
   return { box: { x0: 0, x1: 1, y0: 0, y1: 1 }, how: 'page' };
 }
+
+/** 出生日期＋性別行（唔包 hkid、姓名）；定位唔到就裁卡面下半。 */
+export function locateDobBox(page: number, lines: OcrLine[]): { box: Box; how: 'dob' | 'card_lower' | 'page_lower' } {
+  const r = extractIdCard(page, lines);
+  const dl = r.dobLines ?? [];
+  if (dl.length) {
+    const b = bbox(dl);
+    return { box: clamp({ x0: b.x0 - 0.04, x1: b.x1 + 0.12, y0: b.y0 - 0.02, y1: b.y1 + 0.012 }), how: 'dob' };
+  }
+  const region = cardRegion(lines.filter((l) => l.t.trim()));
+  if (region.length && region.length < lines.length) {
+    const b = bbox(region);
+    return { box: clamp({ x0: b.x0 - 0.02, x1: b.x1 + 0.05, y0: b.y0 - 0.02, y1: (b.y0 + b.y1) / 2 }), how: 'card_lower' };
+  }
+  return { box: { x0: 0, x1: 1, y0: 0, y1: 0.5 }, how: 'page_lower' };
+}
+
+/** 英文名補漏：整張卡（含較大邊界）；定位唔到就成頁。 */
+export function locateWideBox(page: number, lines: OcrLine[]): { box: Box; how: 'card' | 'page' } {
+  void page;
+  const region = cardRegion(lines.filter((l) => l.t.trim()));
+  if (region.length && region.length < lines.length) {
+    const b = bbox(region);
+    return { box: clamp({ x0: b.x0 - 0.08, x1: b.x1 + 0.1, y0: b.y0 - 0.08, y1: b.y1 + 0.08 }), how: 'card' };
+  }
+  return { box: { x0: 0, x1: 1, y0: 0, y1: 1 }, how: 'page' };
+}

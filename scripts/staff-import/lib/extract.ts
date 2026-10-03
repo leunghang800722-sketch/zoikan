@@ -140,12 +140,12 @@ export function classifyPage(p: OcrPage): Classified {
     isId = hkidLine && dateLine && (sexLine || hasDobLabel) && !(isPermit && !sexLine);
   }
   if (isId) kinds.push('id_card');
-  const block = isForm || RE_NOT_PROOF.test(text) ? null : findAddressBlock(lines);
+  const block = isForm || RE_NOT_PROOF.test(text) || RE_NOT_ADDRESS_DOC.test(text) ? null : findAddressBlock(lines);
   const bill = RE_BILL.test(text);
-  const labeled = !isForm && !isId && !isPermit && !RE_NOT_PROOF.test(text) && !/個人資料（私隱）|486|聲明/.test(text) && /ADDRESS\s*(?:[（(]地址[）)]\s*[:：]|地址\s*[:：]?)\s*\S/i.test(text);
+  const labeled = !isForm && !isId && !isPermit && !RE_NOT_PROOF.test(text) && !RE_NOT_ADDRESS_DOC.test(text) && !/個人資料（私隱）|486|聲明/.test(text) && /ADDRESS\s*(?:[（(]地址[）)]\s*[:：]|地址\s*[:：]?)\s*\S/i.test(text);
   if (!isForm && block && (bill || block.score >= 3 || block.name)) kinds.push('address_proof');
   else if (labeled) kinds.push('address_proof');
-  else if (!isForm && bill && !isId && !isPermit && !RE_NOT_PROOF.test(text) && !(RE_BANK.test(text) && /卡|CARD/i.test(text))) kinds.push('address_proof');
+  else if (!isForm && bill && !isId && !isPermit && !RE_NOT_PROOF.test(text) && !RE_NOT_ADDRESS_DOC.test(text) && !(RE_BANK.test(text) && /卡|CARD/i.test(text))) kinds.push('address_proof');
   if (!isForm && /聲明/.test(text) && /現居|居於|鄭重聲明/.test(text) && !/個人資料（私隱）|486/.test(text)) kinds.push('address_declaration');
   if (isForm) kinds.push('application_form');
   if (isPermit) kinds.push('sia_permit');
@@ -160,6 +160,8 @@ export function classifyPage(p: OcrPage): Classified {
 export interface IdCardResult {
   /** 供視覺裁圖定位用（唔入 JSON） */
   nameLines?: OcrLine[];
+  /** 出生日期標籤／日期／性別所在行（供視覺裁圖用） */
+  dobLines?: OcrLine[];
   hkid: Field | null;
   hkidValid: boolean;
   nameZh: Field | null;
@@ -347,11 +349,17 @@ export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
     const v = /男/.test(t) ? 'M' : /女/.test(t) ? 'F' : /M\s*$/.test(t) ? 'M' : 'F';
     res.sex = { value: v, level: levelOf(sexLine.c, false), conf: sexLine.c, page, evidence: sexLine.t };
   }
+  res.dobLines = [label, dobLine, sexLine].filter((x): x is OcrLine => !!x);
   return res;
 }
 
 // ---------------------------------------------------------------- 住址證明
 /** 單據日期：優先「發出／發單／結單／Date」label 附近嘅日期，否則頁內最新（2015 年至今）日期。 */
+/** 僱主填嘅稅表（IR56 類）、法定聲明：唔係住址證明。 */
+export const RE_NOT_ADDRESS_DOC = /IR56|僱員薪酬及退休金|僱主報稅|EMPLOYER'?S\s*RETURN|法定聲明|鄭重聲明|STATUTORY\s*DECLARATION/i;
+/** 郵政信箱。 */
+export const RE_PO_BOX = /P\.?\s?O\.?\s*BOX|G\.?\s?P\.?\s?O\.?\s*BOX|郵政信箱|郵箱/i;
+
 export function findDocDate(lines: OcrLine[]): string | null {
   const all = lines
     .map((l) => ({ l, ds: parseDatesLoose(l.t) }))

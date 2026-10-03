@@ -249,3 +249,84 @@ describe("必修 2：多檔合併唔准靜靜蓋值", () => {
     expect(mergeGroup([md({}), md({}, "b")]).reasons).toEqual([]);
   });
 });
+
+import { ageOk, resolveDob, resolveSex, nameEnMissingReason } from "../scripts/staff-import/lib/person-fields";
+import { locateDobBox, locateWideBox } from "../scripts/staff-import/lib/crop-box";
+
+describe("Stage A4：dob／sex 兩獨立讀數互證", () => {
+  const v = (dob: string | null, sex: string | null, legible: "clear" | "unsure" = "clear") => ({ docId: "d1", dob, sex, legible });
+  it("本機 OCR＝視覺 clear → confirmed", () => {
+    expect(resolveDob("1980-02-01", ["1980-02-01"], [], v("1980-02-01", "M"), "2026-10-03").status).toBe("confirmed");
+  });
+  it("兩讀數唔同（年份尾數）→ review，兩值都留", () => {
+    const r = resolveDob("1980-02-01", ["1980-02-01"], [], v("1989-02-01", "M"), "2026-10-03");
+    expect(r.status).toBe("review");
+    expect(r.value).toBe("1989-02-01");
+    expect(r.candidates).toContain("1980-02-01");
+    expect(r.reasons).toContain("dob_vision_differs_from_ocr");
+  });
+  it("冇視覺讀數／unsure → review；唔會單靠 OCR confirmed", () => {
+    expect(resolveDob("1980-02-01", ["1980-02-01"], [], null, "2026-10-03").status).toBe("review");
+    expect(resolveDob("1980-02-01", ["1980-02-01"], [], v(null, null, "unsure"), "2026-10-03").status).toBe("review");
+  });
+  it("同名單生日唔同、年齡不合理、多檔唔同 → review", () => {
+    expect(resolveDob("1980-02-01", ["1980-02-01"], ["1980-02-02"], v("1980-02-01", "M"), "2026-10-03").reasons).toContain("dob_differs_from_list");
+    expect(resolveDob("2015-02-01", ["2015-02-01"], [], v("2015-02-01", "M"), "2026-10-03").reasons).toContain("dob_implausible");
+    expect(resolveDob("1980-02-01", ["1980-02-01", "1980-02-03"], [], v("1980-02-01", "M"), "2026-10-03").reasons).toContain("dob_differs_between_files");
+  });
+  it("ageOk：合法日期、18–80", () => {
+    expect(ageOk("1980-02-01", "2026-10-03")).toBe(true);
+    expect(ageOk("1980-02-30", "2026-10-03")).toBe(false);
+    expect(ageOk("2010-01-01", "2026-10-03")).toBe(false);
+    expect(ageOk("1940-01-01", "2026-10-03")).toBe(false);
+  });
+  it("sex：視覺＝OCR → confirmed；唔同或冇視覺 → review", () => {
+    expect(resolveSex("M", ["M"], v("1980-02-01", "M")).status).toBe("confirmed");
+    expect(resolveSex("M", ["M"], v("1980-02-01", "F")).status).toBe("review");
+    expect(resolveSex("M", ["M"], null).status).toBe("review");
+  });
+  it("卡面差（hkid review）→ dob／sex 即使兩讀數一致都要再加名單佐證", () => {
+    const d: PersonDocIn = { docId: "d1", ex: exOf({ hkid: { value: "A1234563", level: "low", conf: 0.3, page: 3, evidence: "x", note: "repaired" } }), fileNameZh: null, phone: ph(null, "unresolved"), listZh: [], listEn: [], listTels: [], listDob: [] };
+    const dv = { docId: "d1", dob: "1980-02-01", sex: "M", legible: "clear" as const };
+    const weak = resolvePerson({ key: "k", docs: [d], idDocId: "d1", addressDocId: null, nameVision: null, addrVision: null, dobVision: dv });
+    expect(weak.dob.status).toBe("review");
+    expect(weak.dob.reasons).toContain("card_weak_needs_extra_corroboration");
+    expect(weak.sex.status).toBe("review");
+    const withList = resolvePerson({ key: "k", docs: [{ ...d, listDob: ["1980-02-01"] }], idDocId: "d1", addressDocId: null, nameVision: null, addrVision: null, dobVision: dv });
+    expect(withList.dob.status).toBe("confirmed");
+  });
+  it("nameEn missing 一定有原因碼", () => {
+    const d = docIn(exOf({ hkid: null, hkidValid: false }));
+    expect(nameEnMissingReason({ key: "k", docs: [d], idDocId: null, addressDocId: null, nameVision: null, addrVision: null }, d, null)).toBe("nameEn_missing_no_id_page");
+    const d2 = docIn(exOf({}));
+    expect(nameEnMissingReason({ key: "k", docs: [d2], idDocId: "d1", addressDocId: null, nameVision: null, addrVision: null }, d2, { docId: "d1", zh: null, en: null, legible: "unsure" })).toBe("nameEn_missing_crop_unreadable");
+  });
+  it("出生日期裁圖：涵蓋標籤＋日期＋性別行，唔含 hkid 行", () => {
+    const lines = [L("香港永久性居民身份證", 0.5, 0.8), L("測試安員", 0.45, 0.7), L("CHAN, Tai Man", 0.45, 0.67), L("出生日期 Date of Birth", 0.55, 0.6), L("01-02-1980 男M", 0.55, 0.58), L("A123456（3）", 0.6, 0.45)];
+    const { box, how } = locateDobBox(3, lines);
+    expect(how).toBe("dob");
+    expect(box.y0).toBeGreaterThan(0.5);
+    expect(box.y1).toBeLessThan(0.65);
+    expect(locateDobBox(1, [L("雜", 0.1, 0.1)]).how).toBe("page_lower");
+    expect(locateWideBox(1, [L("雜", 0.1, 0.1)]).how).toBe("page");
+  });
+});
+
+describe("Stage A4：寄俾本人嘅非『住址證明』頁補漏", () => {
+  const nameLines = (): OcrLine[] => [L("香港永久性居民身份證", 0.5, 0.8), L("HONG KONG PERMANENT IDENTITY CARD", 0.45, 0.77), L("測試安員", 0.45, 0.7), L("CHAN, Tai Man", 0.45, 0.67), L("出生日期 Date of Birth", 0.55, 0.6), L("01-02-1980 男M", 0.55, 0.58), L("A123456（3）", 0.6, 0.5)];
+  const mail = (name: string, extra: string[] = []): OcrPage => ({
+    page: 5,
+    lines: [L("香港警務處 牌照課", 0.5, 0.95), L(name, 0.08, 0.9), L("FLAT 12, 3/F, SAMPLE HOUSE", 0.08, 0.885), L("DEMO ESTATE", 0.08, 0.87), L("KOWLOON", 0.08, 0.855), ...extra.map((t, i) => L(t, 0.5, 0.7 - i * 0.02))],
+  });
+  it("收件人對得上身份證姓名 → 納入候選（note=mailed_candidate）", () => {
+    const d = aggregateDoc("x", [{ page: 3, lines: nameLines() }, mail("TAI MAN CHAN")]);
+    expect(d.address?.flags).toContain("mailed_candidate");
+  });
+  it("收件人對唔上、信箱地址、僱主稅表、法定聲明 → 唔納入", () => {
+    expect(aggregateDoc("x", [{ page: 3, lines: nameLines() }, mail("LEE SIU MING")]).address).toBeNull();
+    expect(aggregateDoc("x", [{ page: 3, lines: nameLines() }, mail("TAI MAN CHAN", ["IR56 僱員薪酬及退休金"])]).address).toBeNull();
+    expect(aggregateDoc("x", [{ page: 3, lines: nameLines() }, mail("TAI MAN CHAN", ["法定聲明"])]).address).toBeNull();
+    const po: OcrPage = { page: 5, lines: [L("TAI MAN CHAN", 0.08, 0.9), L("MAIL BOX 13 SAMPLE TSUEN", 0.08, 0.885), L("P.O. BOX 12 TAI PO NT", 0.08, 0.87)] };
+    expect(aggregateDoc("x", [{ page: 3, lines: nameLines() }, po]).address).toBeNull();
+  });
+});

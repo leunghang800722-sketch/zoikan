@@ -3,8 +3,9 @@
 import json, os, sys
 from PIL import Image, ImageDraw
 kind, per = sys.argv[1], int(sys.argv[2])
+listfile = sys.argv[3] if len(sys.argv) > 3 else f'{kind}-crops.json'
 OUT = 'data/2026-10/staff-import'
-crops = json.load(open(f'{OUT}/out/{kind}-crops.json'))
+crops = json.load(open(f'{OUT}/out/{listfile}'))
 os.makedirs(f'{OUT}/sheets', exist_ok=True)
 for f in os.listdir(f'{OUT}/sheets'):
     if f.startswith(kind + '-'):

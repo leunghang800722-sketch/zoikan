@@ -7,7 +7,7 @@ import { buildIndex, crosscheck, FIELDS, type DocCheck, type Src } from './lib/c
 import type { DocMeta } from './lib/doc-index';
 import type { VisionRead } from './lib/phone';
 import { groupPersons } from './lib/persons';
-import { resolvePerson, type AddrVision, type NameVision, type PersonDocIn, type PersonFields } from './lib/person-fields';
+import { resolvePerson, type AddrVision, type DobVision, type NameVision, type PersonDocIn, type PersonFields } from './lib/person-fields';
 import { loadDb, loadMaxwell, loadUTeam, type RefRow } from './lib/refs';
 
 const OUT = path.join(process.cwd(), 'data/2026-10/staff-import');
@@ -51,6 +51,13 @@ async function main() {
   // ---- 逐人逐欄 status（confirmed／review／missing）
   const readJson = async <T>(f: string): Promise<T[]> => JSON.parse(await fs.readFile(path.join(OUT, f), 'utf8').catch(() => '[]')) as T[];
   const nameVision = new Map((await readJson<NameVision>('out/name-vision.json')).map((v) => [v.docId, v]));
+  // 英文名補漏：英文名 missing 嘅人用較大範圍重讀（name-vision2），clear 先覆蓋缺嘅欄
+  for (const v of await readJson<NameVision>('out/name-vision2.json')) {
+    const old = nameVision.get(v.docId);
+    if (v.legible !== 'clear') continue;
+    nameVision.set(v.docId, { docId: v.docId, zh: old?.legible === 'clear' && old.zh ? old.zh : v.zh, en: v.en ?? old?.en ?? null, legible: 'clear' });
+  }
+  const dobVision = new Map((await readJson<DobVision>('out/dob-vision.json')).map((v) => [v.docId, v]));
   const addrVision = new Map((await readJson<AddrVision>('out/address-vision.json')).map((v) => [v.docId, v]));
   const refById = new Map<string, RefRow>([...u, ...mx, ...db].map((r) => [r.ref, r]));
   const checkMap = new Map(checks.map((c) => [c.docId, c]));
@@ -73,6 +80,7 @@ async function main() {
         listZh: rows.map((r) => r.nameZh).filter((x): x is string => !!x),
         listEn: rows.map((r) => r.nameEn).filter((x): x is string => !!x),
         listTels: rows.flatMap((r) => r.tels),
+        listDob: rows.map((r) => r.dob).filter((x): x is string => !!x),
       };
     });
     const fields = resolvePerson({
@@ -81,7 +89,8 @@ async function main() {
       idDocId: g.idDocId,
       addressDocId: g.addressDocId,
       nameVision: g.idDocId ? nameVision.get(g.idDocId) ?? null : null,
-      addrVision: g.addressDocId ? addrVision.get(g.addressDocId) ?? null : null,
+      addrVision: g.addressDocId ? addrVision.get(g.addressDocId) ?? null : (g.docIds.map((d) => addrVision.get(d)).find((x) => !!x) ?? null),
+      dobVision: g.idDocId ? dobVision.get(g.idDocId) ?? null : null,
     });
     peopleOut.push({ key: g.key, docIds: g.docIds, idDocId: g.idDocId, addressDocId: g.addressDocId, fields });
   }
