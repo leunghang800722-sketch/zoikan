@@ -3,7 +3,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toGuardFullDTO, toGuardListDTO, mapListDTO } from "@/lib/api/dto";
-import { applyFieldGroupGate, applyFieldGroupGateToList } from "@/lib/api/field-groups";
+import { applyFieldGroupGate, applyFieldGroupGateToList, assertFieldGroupWritable } from "@/lib/api/field-groups";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError , okGzip } from "@/lib/api/http";
 import { paginationParams, readJson } from "@/lib/api/query";
@@ -11,7 +11,7 @@ import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { GuardCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { BadRequest } from "@/lib/api/errors";
+import { BadRequest, Forbidden } from "@/lib/api/errors";
 import { maskHkidForList } from "@/lib/api/guard-pii";
 import {
   toStaffNumberChips,
@@ -24,6 +24,7 @@ import {
   isSiaPermitBLapsedByAge,
   type StaffNumberChip,
 } from "@/lib/guards/staff-numbers";
+import { prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, identityStatus } from "@/lib/guards/identity";
 import { createGuardPhone, syncLegacyGuardContactColumns, writeLegacyContactAudits } from "@/lib/guards/contacts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
@@ -144,6 +145,16 @@ export async function GET(req: Request) {
         ],
       };
     }
+    // WP-STAFF-IMPORT B1：`?identity=missing_hkid|missing_tel|missing_any`——
+    // 篩「缺身份證／缺電話」嘅安員（電話＝guards.tel 同步值或任何 guard_phones 行）。
+    const identityParam = url.searchParams.get("identity");
+    if (identityParam !== null) {
+      const noHkid: Prisma.GuardWhereInput = { OR: [{ hkid: null }, { hkid: "" }] };
+      const noTel: Prisma.GuardWhereInput = { AND: [{ OR: [{ tel: null }, { tel: "" }] }, { phones: { none: {} } }] };
+      const cond = identityParam === "missing_hkid" ? noHkid : identityParam === "missing_tel" ? noTel : identityParam === "missing_any" ? { OR: [noHkid, noTel] } : null;
+      if (!cond) throw BadRequest("identity 要係 missing_hkid／missing_tel／missing_any");
+      where = { AND: [where, cond] };
+    }
     where = scopeGuardWhere(session, where);
 
     // S5（Opus 驗收修復）：`sia_permit_expiry`／`sia_permit_type` 唔再信
@@ -210,10 +221,15 @@ export async function GET(req: Request) {
       ? await loadMonthShiftCounts(rows.map((r) => r.id), withMonthShiftsParam)
       : null;
     const staffNumbersByGuard = await loadCurrentStaffNumbers(rows.map((r) => r.id));
+    const phoneGuardIds = new Set(
+      (await prisma.guardPhone.findMany({ where: { guardId: { in: rows.map((r) => r.id) } }, select: { guardId: true }, distinct: ["guardId"] })).map((p) => p.guardId),
+    );
     const rowsWithCount = rows.map((r) => ({
       ...r,
       ...(monthShiftCounts ? { monthShiftCount: monthShiftCounts[r.id] ?? 0 } : {}),
       staffNumbers: staffNumbersByGuard[r.id] ?? [],
+      // WP-STAFF-IMPORT B1：識別狀態（淨係有冇身份證／電話，唔含值）。
+      identityStatus: identityStatus({ hkid: r.hkid, tel: r.tel, hasPhone: r.tel ? true : (phoneGuardIds.has(r.id)) }),
       // S7：淨係有 `q` 先加呢粒 key（冇搜尋就唔需要，同 `monthShiftCount`
       // 一致嘅「唯讀 additive 參數」口徑）。
       ...(qParam ? { formerNumberHit: formerHitGuardIds.has(r.id) } : {}),
@@ -259,11 +275,19 @@ export async function POST(req: Request) {
     // 直接落 `prisma.guard.create({ data: { tel } })`），唔係就呢個
     // guard 一開始嘅電話就冇對應嘅 `guard_phones` 行，第一次有人幫佢加
     // 第二個電話（觸發 sync）就會被靜靜哋抹走（同 staff_no 一致理由）。
-    const { staff_no: staffNoLegacy, staff_no_mw: staffNoMwLegacy, tel: telLegacy, ...rest } = parsed as typeof parsed & {
+    const { staff_no: staffNoLegacy, staff_no_mw: staffNoMwLegacy, tel: telLegacy, hkid: hkidRaw, allow_invalid_hkid: allowInvalidHkid, ...rest } = parsed as typeof parsed & {
       staff_no?: string;
       staff_no_mw?: string;
       tel?: string;
     };
+    // WP-STAFF-IMPORT B1：身份證存 canonical；冇身份證又冇電話唔擋（guard-fix
+    // createMinimal 要照行），靠 identityStatus 標記。
+    let hkidCanon: string | null = null;
+    if (hkidRaw !== undefined) {
+      if (isBrokerRole(session)) throw Forbidden("雞頭唔可以寫身份證");
+      await assertFieldGroupWritable(session, "guards", { hkid: hkidRaw });
+      hkidCanon = prepareHkidForWrite(hkidRaw, { allowInvalid: allowInvalidHkid });
+    }
     const data = snakeToCamelShallow(rest) as Prisma.GuardUncheckedCreateInput;
     // 雞頭建安員：強制掛喺自己個 broker 底下（唔准幫其他雞頭/自己揀第二個 broker）
     if (isBrokerRole(session)) data.defaultBrokerId = session.brokerId;
@@ -293,7 +317,9 @@ export async function POST(req: Request) {
     }
 
     const { created, legacyChanges, phoneResult } = await prisma.$transaction(async (tx) => {
-      const createdGuard = await tx.guard.create({ data: { ...data, createdBy: session.userId } });
+      if (hkidCanon) await assertHkidAvailable(tx, hkidCanon);
+      if (telLegacy && telLegacy.trim()) await assertTelAvailable(tx, telLegacy);
+      const createdGuard = await tx.guard.create({ data: { ...data, ...(hkidCanon ? { hkid: hkidCanon } : {}), createdBy: session.userId } });
       const legacyResult =
         staffNoLegacy || staffNoMwLegacy
           ? await applyLegacyStaffNoPatch(tx, {
@@ -309,7 +335,7 @@ export async function POST(req: Request) {
       if (phoneRes) await syncLegacyGuardContactColumns(tx, createdGuard.id, ["tel"]);
       const finalGuard = legacyResult.changes.length > 0 || phoneRes ? await tx.guard.findUniqueOrThrow({ where: { id: createdGuard.id } }) : createdGuard;
       return { created: finalGuard, legacyChanges: legacyResult.changes, phoneResult: phoneRes };
-    });
+    }).catch(rethrowIdentityConflict);
 
     await writeAudit({ actorUserId: session.userId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
     if (legacyChanges.length > 0) {
@@ -319,6 +345,6 @@ export async function POST(req: Request) {
       await writeLegacyContactAudits(session.userId, { phone: phoneResult, address: null, contact: null }, getClientIp(req));
     }
     if (isBrokerRole(session)) return ok(scrubForBrokerSession(session, toBrokerGuardDTO(created)), 201);
-    return ok(await applyFieldGroupGate(session, "guards", toGuardFullDTO(created)), 201);
+    return ok(await applyFieldGroupGate(session, "guards", toGuardFullDTO({ ...created, identityStatus: identityStatus({ hkid: created.hkid, tel: created.tel }) })), 201);
   });
 }

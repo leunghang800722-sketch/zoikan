@@ -17,6 +17,7 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { GuardPhoneCreateSchema } from "@/lib/api/schemas";
 import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
+import { assertTelAvailable, rethrowIdentityConflict } from "@/lib/guards/identity";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden } from "@/lib/api/errors";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
@@ -54,6 +55,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const parsed = parseBody(GuardPhoneCreateSchema, body);
 
     const result = await prisma.$transaction(async (tx) => {
+      // WP-STAFF-IMPORT B1：電話全表唯一——同另一個安員重複 → 409（唔回顯對方資料）。
+      await assertTelAvailable(tx, parsed.tel, id);
       const created = await createGuardPhone(tx, {
         guardId: id,
         tel: parsed.tel,
@@ -65,7 +68,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       });
       await syncLegacyGuardContactColumns(tx, id, ["tel"]);
       return created;
-    });
+    }).catch(rethrowIdentityConflict);
 
     await writeAudit({ actorUserId: session.userId, tableName: "guard_phones", rowId: result.created.id, action: "create", after: result.created, ip: getClientIp(req) });
     if (result.demotedPrimary) {

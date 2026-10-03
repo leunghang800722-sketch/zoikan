@@ -87,7 +87,7 @@ describe("WP-PII：AI 助手 recent_audit／sql_select 讀 guards audit row—�
     // DTO 形狀）。
     const patchRes = await guardUpdate(
       req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", {
-        hkid: "A123456(7)",
+        hkid: "A123456(3)",
         date_of_birth: "1990-01-01",
         address: "測試地址（AI audit scrub test）",
         emergency_contact_name: "測試聯絡人",
@@ -137,7 +137,7 @@ describe("WP-PII：AI 助手 recent_audit／sql_select 讀 guards audit row—�
       orderBy: { createdAt: "desc" },
     });
     const after = row.after as Record<string, unknown>;
-    expect(after.hkid).toBe("A123456(7)");
+    expect(after.hkid).toBe("A1234563");
     expect(after.bank_account_no).toBe("999-888777-001");
   });
 });

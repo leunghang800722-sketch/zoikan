@@ -12,7 +12,9 @@
 // 身份證號碼，同「列表一律遮罩」呢個規則直接矛盾）。而家改做：格式啱
 // 先砌遮罩版本，格式唔啱一律回 `"***"`（唔畀睇到原值，寧枉勿縱）；
 // null/undefined/空字串一律回 null（「冇資料」本身唔算敏感，唔使遮）。
-const HKID_MASK_RE = /^([A-Za-z]{1,2})([0-9]{3})[0-9]{3}(\([0-9Aa]\))$/;
+// WP-STAFF-IMPORT B1：DB 入面而家存 canonical（`A1234563`），舊值可能仍然帶括號——兩種都收，
+// 遮罩輸出統一 `A123***(3)`。
+const HKID_MASK_RE = /^([A-Za-z]{1,2})([0-9]{3})[0-9]{3}\(?([0-9Aa])\)?$/;
 
 export function maskHkid(hkid: unknown): unknown {
   if (hkid === null || hkid === undefined) return null;
@@ -21,7 +23,7 @@ export function maskHkid(hkid: unknown): unknown {
   if (trimmed === "") return null;
   const m = trimmed.match(HKID_MASK_RE);
   if (!m) return "***"; // 格式意外（例如舊資料唔跟寬鬆 regex）：fail-closed，唔畀睇到原值
-  return `${m[1]}${m[2]}***${m[3]}`;
+  return `${m[1]}${m[2]}***(${m[3]})`;
 }
 
 /** 列表（`GET /api/guards`）用：逐行將 `hkid`（如果呢粒欄有喺 row 度）

@@ -13,6 +13,7 @@
 import ExcelJS from "exceljs";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
+import { canonicalHkid } from "@/lib/guards/identity";
 
 export const U_TEAM_XLSX_PATH = "data/2026-09/msg-file/U Team - People template 20260824.xlsx";
 
@@ -39,19 +40,8 @@ export interface UTeamRow {
   employeeStatus: string | null;
 }
 
-/** 驗收（Opus 5.5）：身份證比對用嘅 canonical key——大寫、去空白、去
- * 半形／全形括號（`A123456(7)`／`A1234567`／`A123456（7）` 都當同一個）。
- * 唔係身份證格式就 null。 */
-export function canonicalHkid(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const s = raw.toUpperCase().replace(/\s+/g, "").replace(/[()（）]/g, "");
-  return /^[A-Z]{1,2}\d{6}[0-9A]$/.test(s) ? s : null;
-}
-
-/** canonical → 入 DB 嘅顯示格式 `A123456(7)`（同 `HKID_RE` 一致）。 */
-function formatHkid(canon: string): string {
-  return `${canon.slice(0, -1)}(${canon.slice(-1)})`;
-}
+// WP-STAFF-IMPORT B1：canonicalHkid 搬到 src/lib/guards/identity.ts，呢度 re-export。
+export { canonicalHkid };
 
 function cellText(row: ExcelJS.Row, col1based: number): string | null {
   // 驗收：`.value` 嘅型別係 ExcelJS `CellValue`（union，`CellSharedFormulaValue`
@@ -100,7 +90,7 @@ export function parseUTeamWorksheet(ws: ExcelJS.Worksheet): UTeamRow[] {
       nameZh,
       displayName,
       tel: telRaw ? normalizeTel(telRaw) : null,
-      hkid: canonicalHkid(hkidRaw) ? formatHkid(canonicalHkid(hkidRaw)!) : null,
+      hkid: canonicalHkid(hkidRaw), // WP-STAFF-IMPORT B1：入 DB 一律 canonical（A1234563）
       hkidNote: !hkidRaw || canonicalHkid(hkidRaw) ? null : /用緊|正式編號|威信編號/.test(hkidRaw) ? "mentions_other_number" : "invalid",
       hireDate: hireDateRaw,
       employeeStatus,

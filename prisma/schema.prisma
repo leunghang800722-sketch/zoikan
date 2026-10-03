@@ -488,6 +488,22 @@ model GuardPhone {
   @@map("guard_phones")
 }
 
+// WP-STAFF-IMPORT B1：身份證／電話重複記錄（只存 sha256，唔存明文）。
+// 唯一性本身靠 migration 建嘅 partial unique index（guards_hkid_key、
+// guard_phones_tel_key，Prisma schema 表達唔到 partial index，同
+// guard_phones_guard_id_primary_key 一樣只喺 migration）；有重複就唔建 index。
+model GuardIdentityConflict {
+  id         String    @id @default(uuid())
+  kind       String // dup_hkid／dup_tel
+  valueHash  String    @map("value_hash")
+  guardIds   String[]  @default([]) @map("guard_ids")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  resolvedAt DateTime? @map("resolved_at")
+
+  @@unique([kind, valueHash])
+  @@map("guard_identity_conflicts")
+}
+
 // WP-MULTI：保安員可以有幾多個緊急聯絡人就記幾多個。`name`／`tel` 唔可以
 // 同時空（見 migration.sql CHECK constraint）；`sortOrder` 俾用戶自己
 // 排順序（`guards.emergency_contact_name`／`_tel` 呢兩個舊欄同步值＝
@@ -875,6 +891,8 @@ model RosterUploadRow {
   guardId    String?                @map("guard_id") // 配對結果
   guard      Guard?                 @relation(fields: [guardId], references: [id])
   guardMatch RosterUploadGuardMatch @default(unmatched) @map("guard_match")
+  // WP-STAFF-IMPORT B2：逐格配對依據（staff_no／tel／name_tel／name_only／alias／override）。
+  matchBasis String? @map("match_basis")
 
   settlementBrokerId String? @map("settlement_broker_id") // 雞頭碼→brokers；冇雞頭碼欄嘅盤=null（Phase B 由系統設定補）
   settlementBroker   Broker? @relation(fields: [settlementBrokerId], references: [id])

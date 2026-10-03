@@ -97,6 +97,9 @@ const GUARD_FIELDS = [
   // 雞頭 DTO（GUARD_BROKER_FIELDS，broker-dto.ts）刻意唔加。
   "nameAliases",
   "staffNumbers",
+  // WP-STAFF-IMPORT B1：識別狀態衍生欄（complete／missing_hkid／missing_tel／missing_both，
+  // 淨係有冇，唔含值），見 src/lib/guards/identity.ts identityStatus()。
+  "identityStatus",
   // S7：`?q=` 搜尋命中已取消（former）工號嗰陣先會有呢粒 key（見
   // src/app/api/guards/route.ts findNumberSearchMatches()）——前端標
   // 「已取消號命中」用。
