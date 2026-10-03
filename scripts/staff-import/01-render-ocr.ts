@@ -1,46 +1,12 @@
 // Stage A step 1：逐檔分頁（pdftoppm -r 200）→ 本機 Vision OCR → ocr/<docId>.jsonl。
 // 可斷點續跑（已有 ocr/<docId>.jsonl 就跳過）。Console 淨印統計＋docId。
-import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseDocFileName, type DocMeta } from './lib/doc-index';
 
-const ROOT = process.cwd();
-const SRC = path.join(ROOT, 'data/2026-09/staff-docs');
-const OUT = path.join(ROOT, 'data/2026-10/staff-import');
-const BIN = path.join(OUT, 'bin/vision-ocr');
-const PDFTOPPM = '/opt/homebrew/bin/pdftoppm';
+import { BIN, OUT, PDFTOPPM, SRC, exists, run, sourceFiles } from './lib/render';
+
 const CONCURRENCY = Number(process.env.OCR_CONCURRENCY ?? 3);
-
-function run(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const p = spawn(cmd, args, { maxBuffer: undefined } as never);
-    let stdout = '';
-    let stderr = '';
-    p.stdout.on('data', (d) => (stdout += d));
-    p.stderr.on('data', (d) => (stderr += d));
-    p.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
-    p.on('error', () => resolve({ code: -1, stdout, stderr: 'spawn error' }));
-  });
-}
-
-async function exists(p: string) {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** 一個「人」可以係單一檔，亦可以係一個資料夾（入面有幾個 PDF／JPEG，順檔名合併）。 */
-async function sourceFiles(entry: string): Promise<string[]> {
-  const full = path.join(SRC, entry);
-  const st = await fs.stat(full);
-  if (!st.isDirectory()) return [full];
-  const inner = (await fs.readdir(full)).filter((f) => /\.(pdf|jpe?g)$/i.test(f)).sort();
-  return inner.map((f) => path.join(full, f));
-}
 
 async function processDoc(meta: DocMeta): Promise<{ pages: number; ok: boolean }> {
   const outFile = path.join(OUT, 'ocr', `${meta.docId}.jsonl`);

@@ -12,6 +12,8 @@ export interface Field<T = string> {
   page: number;
   evidence: string; // 原文行（只留 data/，唔入 git）
   note?: string;
+  /** 住址證明單據日期（YYYY-MM-DD），抽唔到就冇 */
+  date?: string;
 }
 
 // ---------------------------------------------------------------- 分類
@@ -335,6 +337,29 @@ export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
 }
 
 // ---------------------------------------------------------------- 住址證明
+/** 單據日期：優先「發出／發單／結單／Date」label 附近嘅日期，否則頁內最新（2015 年至今）日期。 */
+export function findDocDate(lines: OcrLine[]): string | null {
+  const all = lines
+    .map((l) => ({ l, ds: parseDatesLoose(l.t) }))
+    .filter((x) => x.ds.length);
+  if (!all.length) return null;
+  const labelled = all.find((x) => /發出日期|發單日期|結單日期|賬單日期|帳單日期|DATE|ISSUE/i.test(x.l.t));
+  if (labelled) return labelled.ds[0];
+  return all.flatMap((x) => x.ds).sort().pop() ?? null;
+}
+
+/** 日期（d/m/yyyy、yyyy/m/d、dd-mm-yy 唔收）；只收 2015–2027。 */
+export function parseDatesLoose(text: string): string[] {
+  const out: string[] = [];
+  const s = norm(text);
+  for (const m of s.matchAll(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/g)) out.push(`${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`);
+  for (const m of s.matchAll(/(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/g)) out.push(`${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`);
+  return out.filter((d) => {
+    const [y, mo, da] = d.split('-').map(Number);
+    return y >= 2015 && y <= 2027 && mo >= 1 && mo <= 12 && da >= 1 && da <= 31;
+  });
+}
+
 export interface AddressResult {
   address: Field | null;
   recipient: string | null;
@@ -364,7 +389,7 @@ export function extractAddress(page: number, lines: OcrLine[]): AddressResult {
       const rec = to ? norm(to.t).replace(/^(To|致)\s*[（(]?致?[）)]?\s*[:：]?\s*/i, '') : null;
       const conf = lineConf(used);
       return {
-        address: { value: parts.join(', '), level: 'low', conf, page, evidence: used.map((u) => u.t).join(' | '), note: 'labeled' },
+        address: { value: parts.join(', '), level: 'low', conf, page, evidence: used.map((u) => u.t).join(' | '), note: 'labeled', date: findDocDate(lines) ?? undefined },
         recipient: rec || null,
       };
     }
@@ -379,6 +404,7 @@ export function extractAddress(page: number, lines: OcrLine[]): AddressResult {
       conf,
       page,
       evidence: block.lines.map((l) => l.t).join(' | '),
+      date: findDocDate(lines) ?? undefined,
     },
     recipient: block.name ? norm(block.name.t) : null,
   };

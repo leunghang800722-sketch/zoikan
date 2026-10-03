@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import type { DocExtract } from './lib/aggregate';
 import type { DocCheck } from './lib/crosscheck';
 import { canonicalHkid } from './lib/hkid';
+import { mergeGroup, type MergeDoc } from './lib/merge';
 import { buildDbIndex, planAll, type DbGuard, type PlanEntry, type PlanInput } from './lib/match-plan';
 
 const OUT = path.join(process.cwd(), 'data/2026-10/staff-import');
@@ -44,7 +45,32 @@ async function main() {
       gradeReasons: c.reasons,
     };
   });
+  const mdocs = new Map<string, MergeDoc>(
+    ex.map((e) => {
+      const c = cc.get(e.docId)!;
+      return [
+        e.docId,
+        {
+          docId: e.docId,
+          staffNo: e.staffNo,
+          grade: c.grade,
+          hkidConf: e.hkid?.conf ?? 0,
+          id: { hkid: e.hkid ? canonicalHkid(e.hkid.value) : null, nameZh: e.nameZh?.value ?? null, nameEn: e.nameEn?.value ?? null, dob: e.dob?.value ?? null, sex: e.sex?.value ?? null },
+          address: e.address ? { value: e.address.value, date: e.address.date ?? null, level: e.address.level } : null,
+          phone: c.phoneFinal.value ? { value: c.phoneFinal.value, status: c.phoneFinal.status } : null,
+        },
+      ];
+    }),
+  );
   const plan: PlanEntry[] = planAll(inputs, db);
+  for (const p of plan) {
+    const m = mergeGroup(p.docIds.map((d) => mdocs.get(d)!));
+    p.merged = m;
+    p.mergeReasons = m.reasons;
+    const info = [...(m.phone || m.phones.length ? [] : ['phone_unresolved']), ...(m.address ? [] : ['address_unresolved'])];
+    p.reasons = [...new Set([...p.reasons, ...m.reasons, ...info])];
+    if (m.reasons.length) p.autoApply = false;
+  }
   await fs.writeFile(path.join(OUT, 'out/plan.json'), JSON.stringify(plan, null, 1));
 
   const byAction: Record<string, number> = {};
@@ -58,8 +84,15 @@ async function main() {
     if (p.action === 'conflict') (ids.conflict ??= []).push(p.docId);
   }
   const autoApply = plan.filter((p) => p.autoApply).length;
+  const personGrade: Record<string, number> = {};
+  plan.forEach((p) => {
+    const g = p.grade === 'auto_ok' && p.mergeReasons?.length ? 'review' : p.grade;
+    personGrade[g] = (personGrade[g] ?? 0) + 1;
+  });
+  console.log(`person grades: ${JSON.stringify(personGrade)}`);
   const lines: string[] = [];
   lines.push('# WP-STAFF-IMPORT Stage A 報告（只含統計同 docId）', '');
+  lines.push(`人評級：${JSON.stringify(personGrade)}`, '');
   lines.push(`檔數：${inputs.length}`, `人數（以 hkid 合併後）：${plan.length}`, `多檔合併嘅人：${plan.filter((p) => p.docIds.length > 1).length}`, `對齊結果：${JSON.stringify(byAction)}`, `評級×對齊：${JSON.stringify(gradeAct)}`, `可自動套用（auto_ok 且 link/create）：${autoApply}`, '');
   lines.push('## 理由碼', ...Object.entries(reasonCnt).sort((a, b) => b[1] - a[1]).map(([k, v]) => `- ${k}: ${v}`), '');
   lines.push('## conflict docId', (ids.conflict ?? []).join(', ') || '（無）', '');

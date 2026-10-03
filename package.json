@@ -22,6 +22,8 @@
     "gate:reports": "tsx scripts/gate/reports.ts",
     "gate:pricing": "tsx scripts/gate/pricing.ts",
     "staff-import:ocr": "tsx scripts/staff-import/01-render-ocr.ts",
+    "staff-import:rotate": "tsx scripts/staff-import/01b-rotate-ocr.ts",
+    "staff-import:phone-crops": "tsx scripts/staff-import/05-phone-crops.ts",
     "staff-import:extract": "tsx scripts/staff-import/02-classify-extract.ts",
     "staff-import:crosscheck": "tsx scripts/staff-import/03-crosscheck.ts",
     "staff-import:plan": "tsx scripts/staff-import/04-match-plan.ts",

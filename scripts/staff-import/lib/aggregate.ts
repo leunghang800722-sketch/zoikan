@@ -39,6 +39,8 @@ export interface DocExtract {
     formNameEn: Field | null;
   };
   flags: string[];
+  /** hkid 係由旋轉／300dpi 重做頁救返嚟（rot 度數） */
+  rescuedRot: number | null;
 }
 
 function nameTokens(s: string | null | undefined): string[] {
@@ -80,12 +82,17 @@ function bestBy<T>(items: T[], score: (t: T) => number): T | null {
 export function aggregateDoc(docId: string, pages: OcrPage[], hints: { fileNameZh?: string | null } = {}): DocExtract {
   const classified = pages.map(classifyPage);
   const ids: IdCardResult[] = [];
+  const idAlt = new Map<IdCardResult, number>(); // 候選頁嘅旋轉度數
   const addrs: AddressResult[] = [];
   const forms: FormResult[] = [];
   const permitHkids: Field[] = [];
   pages.forEach((p, i) => {
     const kinds = classified[i].kinds;
-    if (kinds.includes('id_card')) ids.push(extractIdCard(p.page, p.lines));
+    if (kinds.includes('id_card')) {
+      const r = extractIdCard(p.page, p.lines);
+      ids.push(r);
+      if (p.alt) idAlt.set(r, p.rot ?? 0);
+    }
     if (kinds.includes('address_proof')) {
       const a = extractAddress(p.page, p.lines);
       if (a.address) addrs.push(a);
@@ -173,7 +180,7 @@ export function aggregateDoc(docId: string, pages: OcrPage[], hints: { fileNameZ
   return {
     docId,
     pageCount: pages.length,
-    pages: classified,
+    pages: classified.filter((_, i) => !pages[i].alt),
     hkid: hkidFinal,
     hkidValid: !!hkidFinal && hkidCheckDigitValid(hkidFinal.value),
     nameZh,
@@ -191,5 +198,6 @@ export function aggregateDoc(docId: string, pages: OcrPage[], hints: { fileNameZ
       formNameEn: bestBy(forms.map((f) => f.nameEn).filter((f): f is Field => !!f), (f) => f.conf),
     },
     flags,
+    rescuedRot: card && idAlt.has(card) && !ids.some((r) => !idAlt.has(r) && r.hkid && hkidCheckDigitValid(r.hkid.value)) ? idAlt.get(card)! : null,
   };
 }

@@ -2,6 +2,7 @@
 import type { DocExtract } from './aggregate';
 import { cmpAddress, cmpDate, cmpEn, cmpHkid, cmpTel, cmpZh, fieldStatus, normZh, type Cmp } from './compare';
 import { canonicalHkid } from './hkid';
+import { resolvePhone, type PhoneFinal, type VisionRead } from './phone';
 import type { RefRow } from './refs';
 
 export type Src = 'utem' | 'maxwell' | 'db';
@@ -62,6 +63,7 @@ export interface DocCheck {
   present: Record<FieldName, boolean>;
   grade: Grade;
   reasons: string[];
+  phoneFinal: PhoneFinal;
 }
 
 export function crosscheck(
@@ -69,6 +71,7 @@ export function crosscheck(
   staffNo: string | null,
   fileNameZh: string | null,
   idxs: Record<Src, RefIndex>,
+  phoneIn: { vision: VisionRead[]; hasCrop: boolean } = { vision: [], hasCrop: false },
 ): DocCheck {
   const hkid = ex.hkid ? canonicalHkid(ex.hkid.value) : null;
   const zh = ex.nameZh?.value ?? fileNameZh;
@@ -91,13 +94,23 @@ export function crosscheck(
     if (res.basis !== 'name') near ||= z.near;
     cmp.nameEn[src] = cmpEn(ex.nameEn?.value ?? null, r.nameEn);
     cmp.dob[src] = cmpDate(ex.dob?.value ?? null, r.dob);
-    if (ex.phone) {
-      const rs = r.tels.map((t) => cmpTel(ex.phone!.value, t));
-      cmp.phone[src] = rs.includes('match') ? 'match' : rs.includes('mismatch') ? 'mismatch' : 'no_reference';
-    }
     if (ex.address) {
       const rs = r.addresses.map((a) => cmpAddress(ex.address!.value, a));
       cmp.address[src] = rs.includes('match') ? 'match' : rs.includes('mismatch') ? 'mismatch' : rs.includes('not_comparable') ? 'not_comparable' : 'no_reference';
+    }
+  }
+  // 電話：視覺讀數（clear）先算數；對各來源所有電話
+  const listTels = (['utem', 'maxwell', 'db'] as Src[]).flatMap((src) => {
+    const res = refs[src].ref ? resolveRef(idxs[src], staffNo, hkid, zh).row : null;
+    return res?.tels ?? [];
+  });
+  const phoneFinal = resolvePhone(phoneIn.vision, ex.phone && !ex.phone.note ? ex.phone.value : null, listTels, phoneIn.hasCrop);
+  if (phoneFinal.value) {
+    for (const src of ['utem', 'maxwell', 'db'] as Src[]) {
+      const row = refs[src].ref ? resolveRef(idxs[src], staffNo, hkid, zh).row : null;
+      if (!row) continue;
+      const rs = row.tels.map((t) => cmpTel(phoneFinal.value, t));
+      cmp.phone[src] = rs.includes('match') ? 'match' : rs.includes('mismatch') ? 'mismatch' : 'no_reference';
     }
   }
   // 檔名姓名都係人手打嘅參考
@@ -113,7 +126,7 @@ export function crosscheck(
     nameEn: !!ex.nameEn,
     dob: !!ex.dob,
     address: !!ex.address,
-    phone: !!ex.phone,
+    phone: !!phoneFinal.value,
   };
 
   // ---- 評級
@@ -125,15 +138,16 @@ export function crosscheck(
   else if (!hkidOk) reasons.push('hkid_check_digit_fail');
   if (!present.nameZh && !present.nameEn) reasons.push('name_missing');
   if (!present.dob) reasons.push('dob_missing');
-  if (!present.address) reasons.push(ex.flags.includes('address_declaration_only') ? 'address_declaration_only' : 'address_missing');
-  if (!present.phone) reasons.push('phone_missing');
-  else if (ex.phone?.note) reasons.push(`phone_${ex.phone.note}`);
+  if (!present.address) reasons.push(ex.flags.includes('address_declaration_only') ? 'address_unresolved_declaration' : 'address_unresolved');
+  if (phoneFinal.status === 'unresolved') reasons.push('phone_unresolved', `phone_unresolved_${phoneFinal.reason}`);
+  else if (phoneFinal.status === 'differs') reasons.push('phone_differs_from_list');
+  else reasons.push('phone_confirmed_ok');
   if (ex.flags.includes('address_recipient_mismatch')) reasons.push('address_recipient_mismatch');
   if (ex.flags.includes('no_id_page')) reasons.push('no_id_page');
   if (ex.hkid?.note) reasons.push(`hkid_${ex.hkid.note}`);
   if (ex.flags.some((f) => f.startsWith('hkid_conflict'))) reasons.push('hkid_conflict_other_page');
   if (ex.flags.includes('id_hkid_multiple')) reasons.push('id_hkid_multiple');
-  for (const f of bad) reasons.push(`mismatch_${f}`);
+  for (const f of bad) if (f !== 'phone') reasons.push(`mismatch_${f}`);
   if (agree === 0 && present.hkid) reasons.push('no_cross_reference');
   if (near) reasons.push('nameZh_near_match');
 
@@ -148,10 +162,11 @@ export function crosscheck(
       present.phone &&
       agree >= 2 &&
       bad.length === 0 &&
+      phoneFinal.status !== 'differs' &&
       !ex.flags.includes('address_recipient_mismatch') &&
       !(hkidFixed && status.hkid !== 'match') &&
       !((ex.flags.includes('id_hkid_multiple') || ex.flags.some((f) => f.startsWith('hkid_conflict'))) && status.hkid !== 'match');
     grade = clean ? 'auto_ok' : 'review';
   }
-  return { docId: ex.docId, staffNo, refs, cmp, status, nameZhNear: near, present, grade, reasons: [...new Set(reasons)] };
+  return { docId: ex.docId, staffNo, refs, cmp, status, nameZhNear: near, present, grade, reasons: [...new Set(reasons)].filter((r) => r !== 'phone_confirmed_ok'), phoneFinal };
 }

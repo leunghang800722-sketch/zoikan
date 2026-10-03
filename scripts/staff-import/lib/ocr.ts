@@ -10,6 +10,9 @@ export interface OcrLine {
 export interface OcrPage {
   page: number;
   lines: OcrLine[];
+  /** 旋轉／300dpi 重做嘅候選頁（Stage A2），唔計入頁數統計 */
+  alt?: boolean;
+  rot?: number;
 }
 
 /** 全形 → 半形、統一空白，方便 regex。 */

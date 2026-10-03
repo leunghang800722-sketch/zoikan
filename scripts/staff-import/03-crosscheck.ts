@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { DocExtract } from './lib/aggregate';
 import { buildIndex, crosscheck, FIELDS, type DocCheck, type Src } from './lib/crosscheck';
 import type { DocMeta } from './lib/doc-index';
+import type { VisionRead } from './lib/phone';
 import { loadDb, loadMaxwell, loadUTeam } from './lib/refs';
 
 const OUT = path.join(process.cwd(), 'data/2026-10/staff-import');
@@ -29,14 +30,33 @@ async function main() {
   console.log(`refs: utem=${u.length} maxwell=${mx.length} db=${db.length}`);
   const idxs = { utem: buildIndex(u), maxwell: buildIndex(mx), db: buildIndex(db) } as Record<Src, ReturnType<typeof buildIndex>>;
 
+  let vision: VisionRead[] = [];
+  try {
+    vision = JSON.parse(await fs.readFile(path.join(OUT, 'out/phone-vision.json'), 'utf8')) as VisionRead[];
+  } catch {
+    console.log('WARN: 冇 phone-vision.json，電話全部 unresolved');
+  }
+  const crops = JSON.parse(await fs.readFile(path.join(OUT, 'out/phone-crops.json'), 'utf8').catch(() => '[]')) as { docId: string }[];
+  const cropDocs = new Set(crops.map((c) => c.docId));
   const checks: DocCheck[] = [];
   for (const ex of extracts) {
     const m = meta.get(ex.docId);
     const fnZh = m?.fileName && /[一-鿿]/.test(m.fileName) ? m.fileName.replace(/[^一-鿿]/g, '') : null;
-    checks.push(crosscheck(ex, ex.staffNo, fnZh, idxs));
+    checks.push(crosscheck(ex, ex.staffNo, fnZh, idxs, { vision: vision.filter((v) => v.docId === ex.docId), hasCrop: cropDocs.has(ex.docId) }));
   }
   await fs.writeFile(path.join(OUT, 'out/crosscheck.json'), JSON.stringify(checks, null, 1));
 
+  // hkid 仍然搵唔到／有衝突
+  const unresolved = extracts
+    .filter((e) => !e.hkid || !e.hkidValid || e.flags.some((f) => f.startsWith('hkid_conflict')))
+    .map((e) => ({ docId: e.docId, reason: !e.hkid ? (e.flags.includes('no_id_page') ? 'no_id_page' : 'hkid_not_extracted') : !e.hkidValid ? 'check_digit_fail' : 'hkid_conflict_other_page' }));
+  await fs.writeFile(path.join(OUT, 'out/hkid-unresolved.json'), JSON.stringify(unresolved, null, 1));
+  const unrCount: Record<string, number> = {};
+  unresolved.forEach((u) => (unrCount[u.reason] = (unrCount[u.reason] ?? 0) + 1));
+  console.log(`hkid unresolved: ${unresolved.length} ${JSON.stringify(unrCount)}`);
+  const pstat: Record<string, number> = {};
+  checks.forEach((c) => (pstat[c.phoneFinal.status] = (pstat[c.phoneFinal.status] ?? 0) + 1));
+  console.log(`phone final: ${JSON.stringify(pstat)}`);
   const N = checks.length;
   const grades: Record<string, number> = {};
   checks.forEach((c) => (grades[c.grade] = (grades[c.grade] ?? 0) + 1));

@@ -314,9 +314,9 @@ describe("交叉核對評級", () => {
   const idx = (u: RefRow[]) => ({ utem: buildIndex(u), maxwell: buildIndex([]), db: buildIndex([]) });
   it("兩欄以上互證且冇 mismatch → auto_ok", () => {
     const u = ref("utem", { hkid: "A1234563", nameZh: "測試安員", dob: "1980-02-01", tels: ["91234567"], addresses: ["ROOM 1001 10/F SAMPLE HOUSE DEMO ESTATE TUEN MUN"] });
-    const c = crosscheck(doc(), "U99999", "測試安員", idx([u]));
-    expect(c.status.hkid).toBe("match");
+    const c = crosscheck(doc(), "U99999", "測試安員", idx([u]), { vision: [{ docId: "abc", page: 1, digits: "91234567", legible: "clear" }], hasCrop: true });
     expect(c.status.phone).toBe("match");
+    expect(c.phoneFinal.status).toBe("confirmed");
     expect(c.grade).toBe("auto_ok");
   });
   it("hkid 同名單唔同 → fail", () => {
@@ -339,7 +339,7 @@ describe("交叉核對評級", () => {
     const u = ref("utem", { hkid: "A1234563", nameZh: "測試安員", dob: "1980-02-01" });
     const c = crosscheck(d, "U99999", "測試安員", idx([u]));
     expect(c.grade).toBe("review");
-    expect(c.reasons).toContain("phone_missing");
+    expect(c.reasons).toContain("phone_unresolved");
   });
 });
 

@@ -28,6 +28,15 @@ async function main() {
       continue;
     }
     const pages = raw.split('\n').filter(Boolean).map((l) => JSON.parse(l) as OcrPage);
+    try {
+      const alt = (await fs.readFile(path.join(OUT, 'ocr2', `${m.docId}.jsonl`), 'utf8')).split('\n').filter(Boolean);
+      for (const l of alt) {
+        const o = JSON.parse(l) as { page: number; rot: number; lines: OcrPage['lines'] };
+        pages.push({ page: o.page, lines: o.lines, alt: true, rot: o.rot });
+      }
+    } catch {
+      /* 冇重做 */
+    }
     const fnZh = m.fileName && /[\u4e00-\u9fff]/.test(m.fileName) ? m.fileName.replace(/[^\u4e00-\u9fff]/g, '') : null;
     results.push({ ...aggregateDoc(m.docId, pages, { fileNameZh: fnZh }), staffNo: m.staffNo });
     n++;
@@ -61,6 +70,7 @@ async function main() {
   const flagCount: Record<string, number> = {};
   results.forEach((r) => r.flags.forEach((f) => (flagCount[f] = (flagCount[f] ?? 0) + 1)));
   console.log('flags:', JSON.stringify(flagCount));
+  console.log(`hkid rescued by rotate/300dpi: ${results.filter((r) => r.rescuedRot !== null).length} (rot0=${results.filter((r) => r.rescuedRot === 0).length})`);
 }
 
 main();

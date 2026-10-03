@@ -34,6 +34,9 @@ export interface PlanEntry {
   reasons: string[]; // 理由碼
   grade: PlanInput['grade'];
   autoApply: boolean;
+  /** 多檔合併後嘅欄位（04 填；含 PII，只留 data/） */
+  merged?: import('./merge').Merged;
+  mergeReasons?: string[];
 }
 
 export interface DbIndex {
