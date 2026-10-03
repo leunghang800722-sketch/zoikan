@@ -37,6 +37,15 @@ export interface AddrVision {
   complete: boolean;
 }
 
+/** 第二次盲讀（人手視覺，唔睇第一讀數／本機 OCR）。 */
+export interface AddrVision2 {
+  docId: string;
+  page: number;
+  recipient: string | null;
+  address: string | null;
+  legible: 'clear' | 'unsure';
+}
+
 export interface PersonDocIn {
   docId: string;
   ex: DocExtract;
@@ -55,6 +64,7 @@ export interface PersonIn {
   addressDocId: string | null; // 地址來源檔
   nameVision: NameVision | null;
   addrVision: AddrVision | null;
+  addrVision2?: AddrVision2 | null;
   dobVision?: DobVision | null;
   today?: string;
 }
@@ -69,7 +79,7 @@ const out = (status: FieldStatus, value: string | null, candidates: string[] = [
 });
 
 export function normAddr(s: string | null | undefined): string {
-  return (s ?? '').toUpperCase().replace(/[^A-Z0-9一-鿿]/g, '');
+  return (s ?? '').normalize('NFKC').toUpperCase().replace(/[^A-Z0-9一-鿿]/g, '');
 }
 
 export function enKey(s: string | null | undefined): string {
@@ -206,8 +216,17 @@ function resolveAddress(p: PersonIn, idDoc: PersonDocIn, zh: string | null, en: 
   if (av && av.legible === 'clear' && av.address) {
     const recOk = recipientOk(av.recipient, zh, en);
     const sameAsLocal = !!local && normAddr(local.value) === normAddr(av.address);
-    if (recOk && (sameAsLocal || av.complete) && !reasons.includes('address_differs_between_files')) return out('confirmed', av.address, local ? [local.value] : []);
-    return out('review', av.address, local ? [local.value] : [], [...reasons, recOk ? '' : 'address_recipient_not_matched', sameAsLocal || av.complete ? '' : 'address_incomplete'].filter(Boolean));
+    // 地址 confirmed 必須兩個獨立讀數一致：(第一視覺＝本機 OCR) 或 (第一視覺＝第二盲讀，兩者都 clear)；正規化後逐字比對，唔做模糊匹配
+    const v2 = p.addrVision2 && p.addrVision2.legible === 'clear' && p.addrVision2.address ? p.addrVision2 : null;
+    const sameAsRead2 = !!v2 && normAddr(v2.address) === normAddr(av.address);
+    const corroborated = sameAsLocal || sameAsRead2;
+    const cands = [local?.value, ...allLocal, v2 && !sameAsRead2 ? v2.address : null, v2 && sameAsRead2 ? v2.address : null].filter((x): x is string => !!x);
+    if (recOk && (sameAsLocal || av.complete) && corroborated && !reasons.includes('address_differs_between_files')) return out('confirmed', av.address, cands);
+    const rs = [...reasons];
+    if (!recOk) rs.push('address_recipient_not_matched');
+    if (!(sameAsLocal || av.complete)) rs.push('address_incomplete');
+    if (!corroborated) rs.push(v2 ? 'address_reads_disagree' : 'address_single_read');
+    return out('review', av.address, cands, rs);
   }
   if (local) return out('review', local.value, allLocal, [...reasons, av ? 'address_vision_unsure' : 'address_not_vision_read']);
   const decl = p.docs.some((d) => d.ex.flags.includes('address_declaration_only'));

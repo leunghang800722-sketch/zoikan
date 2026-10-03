@@ -7,7 +7,7 @@ import { buildIndex, crosscheck, FIELDS, type DocCheck, type Src } from './lib/c
 import type { DocMeta } from './lib/doc-index';
 import type { VisionRead } from './lib/phone';
 import { groupPersons } from './lib/persons';
-import { resolvePerson, type AddrVision, type DobVision, type NameVision, type PersonDocIn, type PersonFields } from './lib/person-fields';
+import { resolvePerson, type AddrVision, type AddrVision2, type DobVision, type NameVision, type PersonDocIn, type PersonFields } from './lib/person-fields';
 import { loadDb, loadMaxwell, loadUTeam, type RefRow } from './lib/refs';
 
 const OUT = path.join(process.cwd(), 'data/2026-10/staff-import');
@@ -59,6 +59,7 @@ async function main() {
   }
   const dobVision = new Map((await readJson<DobVision>('out/dob-vision.json')).map((v) => [v.docId, v]));
   const addrVision = new Map((await readJson<AddrVision>('out/address-vision.json')).map((v) => [v.docId, v]));
+  const addrVision2 = new Map((await readJson<AddrVision2>('out/address-vision-2.json')).map((v) => [v.docId, v]));
   const refById = new Map<string, RefRow>([...u, ...mx, ...db].map((r) => [r.ref, r]));
   const checkMap = new Map(checks.map((c) => [c.docId, c]));
   const exMap = new Map(extracts.map((e) => [e.docId, e]));
@@ -83,13 +84,15 @@ async function main() {
         listDob: rows.map((r) => r.dob).filter((x): x is string => !!x),
       };
     });
+    const av1 = g.addressDocId ? addrVision.get(g.addressDocId) ?? null : (g.docIds.map((d) => addrVision.get(d)).find((x) => !!x) ?? null);
     const fields = resolvePerson({
       key: g.key,
       docs,
       idDocId: g.idDocId,
       addressDocId: g.addressDocId,
       nameVision: g.idDocId ? nameVision.get(g.idDocId) ?? null : null,
-      addrVision: g.addressDocId ? addrVision.get(g.addressDocId) ?? null : (g.docIds.map((d) => addrVision.get(d)).find((x) => !!x) ?? null),
+      addrVision: av1,
+      addrVision2: av1 ? addrVision2.get(av1.docId) ?? null : null,
       dobVision: g.idDocId ? dobVision.get(g.idDocId) ?? null : null,
     });
     peopleOut.push({ key: g.key, docIds: g.docIds, idDocId: g.idDocId, addressDocId: g.addressDocId, fields });
