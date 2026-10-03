@@ -8,7 +8,16 @@ import type { PhoneFinal } from './phone';
 import { editDistance } from './text';
 
 export type FieldStatus = 'confirmed' | 'review' | 'missing';
+export type AddressSource = 'address_proof' | 'application_form';
+export interface FormAddrVision {
+  docId: string;
+  page: number;
+  address: string | null;
+  legible: 'clear' | 'unsure' | 'illegible';
+}
 export interface FieldOut {
+  /** 地址來源（淨 address 欄有） */
+  source?: AddressSource;
   status: FieldStatus;
   value: string | null;
   candidates: string[]; // 其他值（review 時兩個值都留）
@@ -66,6 +75,12 @@ export interface PersonIn {
   addrVision: AddrVision | null;
   addrVision2?: AddrVision2 | null;
   dobVision?: DobVision | null;
+  /** 冇住址證明嘅人：申請表地址第一讀數（本模型）、第二讀數（另一模型盲讀；null＝檔未存在） */
+  formAddrVision?: FormAddrVision[];
+  formAddrVision2?: FormAddrVision[] | null;
+  /** 申請表頁數／定位唔到 label 嘅頁數 */
+  formPages?: number;
+  formNoLabel?: number;
   today?: string;
 }
 
@@ -160,7 +175,9 @@ export function resolvePerson(p: PersonIn): PersonFields {
   const phone = resolvePersonPhone(p.docs.map((d) => d.phone));
 
   // ---- address
-  const address = resolveAddress(p, idDoc, nameZh.value, nameEn.value);
+  let address = resolveAddress(p, idDoc, nameZh.value, nameEn.value);
+  if (address.status === 'missing') address = resolveFormAddress(p, address);
+  else address.source = 'address_proof';
 
   // 同一張卡 hkid 或姓名係 review（卡面質素差）→ dob／sex 就算兩讀數一致都要再加一個獨立佐證（名單生日 或 申請表視覺讀數）
   const weakName = (f: FieldOut) => f.status === 'review' && f.reasons.some((r) => /vision_unsure|vision_uncorroborated|differs_between_files|not_vision_read/.test(r));
@@ -290,4 +307,45 @@ export function nameEnMissingReason(p: PersonIn, idDoc: PersonDocIn, v: NameVisi
   if (v && v.legible !== 'clear') return 'nameEn_missing_crop_unreadable';
   if (v && !v.en) return 'nameEn_missing_not_printed_or_cut';
   return 'nameEn_missing_other';
+}
+
+/**
+ * 冇住址證明嘅人（老闆 2026-10-03）：地址用申請表所填。
+ * confirmed ＝ 第一讀數＋第二讀數（另一模型盲讀）都 clear 且 normAddr 後逐字一致；
+ * 同人多份申請表地址唔同 → review（form_address_differs_between_forms）；第二讀數檔未存在 → review（address_single_read）。
+ */
+export function resolveFormAddress(p: PersonIn, base: FieldOut): FieldOut {
+  const first = (p.formAddrVision ?? []).filter((v) => v.legible === 'clear' && v.address);
+  const src: AddressSource = 'application_form';
+  if (!first.length) {
+    const why = !p.formPages ? 'form_address_no_form' : (p.formAddrVision ?? []).length ? 'form_address_unreadable' : p.formNoLabel ? 'form_address_no_label' : 'form_address_not_read';
+    return { ...base, reasons: [...base.reasons, why] };
+  }
+  const distinct = [...new Set(first.map((v) => normAddr(v.address)))];
+  const cands = [...new Set(first.map((v) => v.address!))];
+  if (distinct.length > 1) return { status: 'review', value: first[0].address, candidates: cands.slice(1), reasons: [...base.reasons, 'form_address_differs_between_forms'], source: src };
+  const v1 = first[0];
+  const seconds = p.formAddrVision2;
+  if (!seconds) return { status: 'review', value: v1.address, candidates: [], reasons: [...base.reasons, 'address_single_read'], source: src };
+  // 每份有第一讀數嘅申請表，都要有對應 clear 第二讀數且一致
+  const reasons = [...base.reasons];
+  const cand2: string[] = [];
+  let ok = true;
+  for (const f of first) {
+    const s2 = seconds.find((x) => x.docId === f.docId && x.page === f.page);
+    if (!s2 || s2.legible !== 'clear' || !s2.address) {
+      ok = false;
+      reasons.push('address_single_read');
+      break;
+    }
+    if (normAddr(s2.address) !== normAddr(f.address)) {
+      ok = false;
+      cand2.push(s2.address);
+      reasons.push('address_reads_disagree');
+      break;
+    }
+  }
+  return ok
+    ? { status: 'confirmed', value: v1.address, candidates: [], reasons: [], source: src }
+    : { status: 'review', value: v1.address, candidates: cand2, reasons: [...new Set(reasons)], source: src };
 }

@@ -18,6 +18,17 @@ export type PersonField = (typeof PERSON_FIELDS)[number];
 
 const fieldSchema = z.object({ value: z.string().max(500).nullable(), status: z.enum(FIELD_STATUSES) }).strict();
 
+/** 地址來源：住址證明（預設，舊包冇 source 當呢個）／申請表（冇住址證明嘅人，老闆 2026-10-03 決定）。 */
+export const ADDRESS_SOURCES = ["address_proof", "application_form"] as const;
+export type AddressSource = (typeof ADDRESS_SOURCES)[number];
+const addressFieldSchema = z
+  .object({ value: z.string().max(500).nullable(), status: z.enum(FIELD_STATUSES), source: z.enum(ADDRESS_SOURCES).optional() })
+  .strict();
+
+export function addressSourceOf(a: { source?: AddressSource }): AddressSource {
+  return a.source ?? "address_proof";
+}
+
 export const packagePersonSchema = z
   .object({
     key: z.string().min(1).max(64),
@@ -27,7 +38,7 @@ export const packagePersonSchema = z
     dateOfBirth: fieldSchema,
     sex: fieldSchema,
     phone: fieldSchema,
-    address: fieldSchema,
+    address: addressFieldSchema,
     staffNumbers: z.array(z.object({ scheme: z.string().min(1).max(8), number: z.string().min(1).max(32) }).strict()).max(20),
     rating: z.enum(["auto_ok", "review", "fail"]),
     reasons: z.array(z.string().max(80)).max(60),

@@ -23,7 +23,7 @@ const H4 = mkHkid("D", "456789");
 type St = "confirmed" | "review" | "missing";
 const F = (value: string | null, status: St) => (value ? { value, status } : { value: null, status: "missing" as St });
 
-function person(over: Partial<Pick<PackagePerson, "key">> & { hkid?: string; name?: string; tel?: string | null; addr?: string | null; nos?: string[]; telStatus?: St; hkidStatus?: St; nameStatus?: St }): PackagePerson {
+function person(over: Partial<Pick<PackagePerson, "key">> & { hkid?: string; name?: string; tel?: string | null; addr?: string | null; nos?: string[]; telStatus?: St; hkidStatus?: St; nameStatus?: St; addrSource?: "address_proof" | "application_form" }): PackagePerson {
   const hk = over.hkid ?? H1;
   return {
     key: personKeyForHkid(hk),
@@ -33,7 +33,7 @@ function person(over: Partial<Pick<PackagePerson, "key">> & { hkid?: string; nam
     dateOfBirth: F("1990-05-06", "confirmed"),
     sex: F("M", "confirmed"),
     phone: over.tel === null ? F(null, "missing") : F(over.tel ?? "91234567", over.telStatus ?? "confirmed"),
-    address: over.addr === null ? F(null, "missing") : F(over.addr ?? "測試道123號測試大廈4樓A室", "review"),
+    address: over.addr === null ? F(null, "missing") : { ...F(over.addr ?? "測試道123號測試大廈4樓A室", "review"), ...(over.addrSource ? { source: over.addrSource } : {}) },
     staffNumbers: (over.nos ?? ["U90001"]).map((n) => ({ scheme: n.match(/^[A-Z]+/)![0], number: n })),
     rating: "auto_ok",
     reasons: [],
@@ -269,6 +269,20 @@ describe("導入 API", () => {
     // 照建但標待核對
     await call(applyRoute, owner, { package: pkg, decisions: { [pC.key]: { name_zh: { action: "keep_pending" } } } });
     expect((await prisma.guard.findFirstOrThrow({ where: { hkid: H3 } })).identityReviewFields).toEqual(["name_zh"]);
+  });
+
+  it("地址來源：申請表地址寫 guard_addresses.source=application_form；舊包冇 source 當 address_proof；preview 帶 address_source", async () => {
+    const pkg = pkgOf([person({ hkid: H4, tel: "91234567", nos: ["U90004"], addrSource: "application_form" })]);
+    const key = pkg.persons[0]!.key;
+    const pv = await (await call(previewRoute, owner, { package: pkg })).json();
+    expect(pv.rows[0].address_source).toBe("application_form");
+    const r = await (await call(applyRoute, owner, { package: pkg, decisions: { [key]: { address: { action: "confirm" } } } })).json();
+    expect(r.addresses_added).toBe(1);
+    const g = await prisma.guard.findFirstOrThrow({ where: { hkid: H4 }, include: { addresses: true } });
+    expect(g.addresses[0]!.source).toBe("application_form");
+    const old = pkgOf([person({ hkid: H3, tel: "61234567", nos: ["U90003"] })]);
+    expect((await (await call(previewRoute, owner, { package: old })).json()).rows[0].address_source).toBe("address_proof");
+    expect(importPackageSchema.safeParse(pkgOf([{ ...person({}), address: { value: "x", status: "review", source: "other" } } as unknown as PackagePerson])).success).toBe(false);
   });
 
   it("覆核決定：確認地址／改正後確認姓名（清待核對）／略過；link 唔覆蓋除非 replace", async () => {

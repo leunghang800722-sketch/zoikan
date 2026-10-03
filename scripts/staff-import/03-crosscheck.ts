@@ -7,7 +7,7 @@ import { buildIndex, crosscheck, FIELDS, type DocCheck, type Src } from './lib/c
 import type { DocMeta } from './lib/doc-index';
 import type { VisionRead } from './lib/phone';
 import { groupPersons } from './lib/persons';
-import { resolvePerson, type AddrVision, type AddrVision2, type DobVision, type NameVision, type PersonDocIn, type PersonFields } from './lib/person-fields';
+import { resolvePerson, type FormAddrVision, type AddrVision, type AddrVision2, type DobVision, type NameVision, type PersonDocIn, type PersonFields } from './lib/person-fields';
 import { loadDb, loadMaxwell, loadUTeam, type RefRow } from './lib/refs';
 
 const OUT = path.join(process.cwd(), 'data/2026-10/staff-import');
@@ -57,6 +57,12 @@ async function main() {
     if (v.legible !== 'clear') continue;
     nameVision.set(v.docId, { docId: v.docId, zh: old?.legible === 'clear' && old.zh ? old.zh : v.zh, en: v.en ?? old?.en ?? null, legible: 'clear' });
   }
+  const formV1 = await readJson<FormAddrVision>('out/form-address-vision.json');
+  const formV2: FormAddrVision[] | null = await fs
+    .readFile(path.join(OUT, 'out/form-address-vision-2.json'), 'utf8')
+    .then((t) => JSON.parse(t) as FormAddrVision[])
+    .catch(() => null); // 第二讀數由另一個模型盲讀；檔未存在＝全部 review（address_single_read）
+  const formNoLabel = await readJson<{ docId: string }>('out/form-address-nolabel.json');
   const dobVision = new Map((await readJson<DobVision>('out/dob-vision.json')).map((v) => [v.docId, v]));
   const addrVision = new Map((await readJson<AddrVision>('out/address-vision.json')).map((v) => [v.docId, v]));
   const addrVision2 = new Map((await readJson<AddrVision2>('out/address-vision-2.json')).map((v) => [v.docId, v]));
@@ -93,6 +99,10 @@ async function main() {
       nameVision: g.idDocId ? nameVision.get(g.idDocId) ?? null : null,
       addrVision: av1,
       addrVision2: av1 ? addrVision2.get(av1.docId) ?? null : null,
+      formAddrVision: formV1.filter((v) => g.docIds.includes(v.docId)),
+      formAddrVision2: formV2 ? formV2.filter((v) => g.docIds.includes(v.docId)) : null,
+      formPages: g.docIds.reduce((n, d) => n + (exMap.get(d)?.pages.filter((x) => x.kinds.includes('application_form')).length ?? 0), 0),
+      formNoLabel: formNoLabel.filter((x) => g.docIds.includes(x.docId)).length,
       dobVision: g.idDocId ? dobVision.get(g.idDocId) ?? null : null,
     });
     peopleOut.push({ key: g.key, docIds: g.docIds, idDocId: g.idDocId, addressDocId: g.addressDocId, fields });

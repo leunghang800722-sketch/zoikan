@@ -8,7 +8,7 @@
 //  - create：hkid 要 confirmed；nameZh 係 review 都照建（hkid＋電話先係識別鍵），喺
 //    `guards.identity_review_fields` 記 name_zh，覆核頁顯示「姓名待核對」。
 //  - 寫入 guards／guard_staff_numbers／guard_phones(source=application_form)／
-//    guard_addresses(source=address_proof)，全部 writeAuditTx；冪等（重跑唔重複建）。
+//    guard_addresses(source=address_proof｜application_form，跟包內 address.source)，全部 writeAuditTx；冪等（重跑唔重複建）。
 //  - 分批 transaction（每批 25 人，timeout 120s）；批內任何錯誤 → 該批逐人重試，壞嗰個記 error。
 //  - 導入包本身**唔入 DB**：preview／apply 都係請求內處理，用完即棄（apply 要重新帶包）。
 import type { Prisma } from "@prisma/client";
@@ -25,7 +25,7 @@ import {
   canOverrideDerivedSiaPermit,
 } from "@/lib/guards/staff-numbers";
 import { buildDbIndex, decideMatch, type Action, type DbGuard, type DbIndex } from "./match";
-import { fieldValue, hashPackage, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
+import { addressSourceOf, fieldValue, hashPackage, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
 import { parseBirthDate, maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
 
 type Tx = Prisma.TransactionClient;
@@ -225,6 +225,8 @@ export interface PreviewRow {
   name_en: string | null;
   phone_masked: string | null;
   address_masked: string | null;
+  /** 地址來源：address_proof｜application_form */
+  address_source: string;
   current_name_zh: string | null;
   current_name_en: string | null;
   name_review_pending: boolean;
@@ -313,6 +315,7 @@ export async function previewImport(pkg: ImportPackage): Promise<PreviewResult> 
       name_en: fieldValue(p.nameEn),
       phone_masked: maskTelImport(fieldValue(p.phone)),
       address_masked: maskAddressImport(fieldValue(p.address)),
+      address_source: addressSourceOf(p.address),
       current_name_zh: g?.nameZh ?? null,
       current_name_en: g?.nameEn ?? null,
       name_review_pending: !!g?.identityReviewFields.includes("name_zh"),
@@ -586,7 +589,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     if (have.some((a) => normAddress(a.address) === want)) bump("address", "same");
     else if (have.length > 0 && !addrW.replace) bump("address", "conflict");
     else {
-      const r = await createGuardAddress(tx, { guardId, address: addrW.value, isPrimary: addrW.replace, source: "address_proof", createdBy: opts.actorUserId });
+      const r = await createGuardAddress(tx, { guardId, address: addrW.value, isPrimary: addrW.replace, source: addressSourceOf(p.address), createdBy: opts.actorUserId });
       await syncLegacyGuardContactColumns(tx, guardId, ["address"]);
       await writeAuditTx(tx, { actorUserId: opts.actorUserId, tableName: "guard_addresses", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });
       res.addresses_added += 1;

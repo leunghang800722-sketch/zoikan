@@ -27,7 +27,7 @@ interface F {
 interface PersonFieldsRow {
   key: string;
   docIds: string[];
-  fields: Record<'hkid' | 'nameZh' | 'nameEn' | 'dob' | 'sex' | 'phone' | 'address', { status: Status; value: string | null; candidates: string[]; reasons: string[] }>;
+  fields: Record<'hkid' | 'nameZh' | 'nameEn' | 'dob' | 'sex' | 'phone' | 'address', { status: Status; value: string | null; candidates: string[]; reasons: string[]; source?: 'address_proof' | 'application_form' }>;
 }
 const f = (x: { status: Status; value: string | null }): F => (x.value && x.status !== 'missing' ? { value: x.value, status: x.status } : { value: null, status: 'missing' });
 const RANK = { auto_ok: 0, review: 1, fail: 2 } as const;
@@ -81,7 +81,7 @@ async function main() {
       dateOfBirth: f(row.fields.dob),
       sex: f(row.fields.sex),
       phone: f(row.fields.phone),
-      address: f(row.fields.address),
+      address: { ...f(row.fields.address), source: row.fields.address.source ?? 'address_proof' },
       staffNumbers,
       rating,
       reasons,
