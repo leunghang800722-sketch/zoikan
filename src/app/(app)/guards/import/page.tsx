@@ -47,7 +47,7 @@ const FIELD_LABEL: Record<string, string> = {
 const PKG_KEY: Record<string, keyof PkgPerson> = { name_zh: "nameZh", name_en: "nameEn", date_of_birth: "dateOfBirth", phone: "phone", address: "address" };
 const REVIEWABLE = ["name_zh", "name_en", "date_of_birth", "phone", "address"] as const;
 const ACTION_LABEL: Record<string, string> = { link: "對上現有安員", create: "新增安員", conflict: "衝突", needs_review: "要人手" };
-const CHECK_LABEL: Record<string, string> = { new: "新", fill: "補空欄", same: "同現值一樣", differs: "同現值唔同", conflict: "衝突", missing: "冇", not_stored: "唔儲存" };
+const CHECK_LABEL: Record<string, string> = { new: "新", fill: "補空欄", same: "同現值一樣", differs: "同現值唔同", conflict: "衝突", missing: "冇", not_stored: "唔儲存", invalid_date: "日期唔合法" };
 
 interface Row {
   key: string;

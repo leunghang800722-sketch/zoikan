@@ -52,3 +52,14 @@ export function maskAddressImport(addr: string | null | undefined): string | nul
   if (!a) return null;
   return a.length <= 3 ? "***" : `${a.slice(0, 3)}…`;
 }
+
+/** 出生日期：YYYY-MM-DD，parse 後 round-trip 對返原字串（1980-02-30 拒絕），年份 1930–(今年−16)。唔合法＝null。 */
+export function parseBirthDate(s: string | null | undefined, now: Date = new Date()): Date | null {
+  const v = (s ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const d = new Date(`${v}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) return null;
+  const y = d.getUTCFullYear();
+  if (y < 1930 || y > now.getUTCFullYear() - 16) return null;
+  return d;
+}

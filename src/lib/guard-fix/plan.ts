@@ -516,6 +516,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
 
   const link: LinkAction[] = [];
   const create: CreateAction[] = [];
+  const planTels = new Set<string>();
   const createMinimal: CreateMinimalAction[] = [];
   const needsBoss: NeedsBossAction[] = [];
   let hkidDroppedCount = 0;
@@ -678,13 +679,21 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       const alias = nameZh !== identity.nameRaw ? identity.nameRaw : null;
       const primaryTel = uRow.tel ?? identity.telRaw ?? null;
       const secondaryTel = identity.telRaw && primaryTel && normalizeTel(identity.telRaw) !== normalizeTel(primaryTel) ? identity.telRaw : null;
+      // WP-STAFF-IMPORT B-fix M1：同一 plan 內兩個 create 唔可以用同一電話（apply 層另有 DB 全表查重）。
+      const claim = (t: string | null): string | null => {
+        if (!t) return null;
+        const k = normalizeTel(t);
+        if (planTels.has(k)) return null;
+        planTels.add(k);
+        return k;
+      };
       create.push({
         type: "create",
         seq: identity.seq,
         nameZh,
         alias,
-        primaryTel: primaryTel ? normalizeTel(primaryTel) : null,
-        secondaryTel: secondaryTel ? normalizeTel(secondaryTel) : null,
+        primaryTel: claim(primaryTel),
+        secondaryTel: claim(secondaryTel),
         hkid: uRow.hkid,
         hireDate: uRow.hireDate,
         uNumber: uRow.uNumber ?? uNumber,

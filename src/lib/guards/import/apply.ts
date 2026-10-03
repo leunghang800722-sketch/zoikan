@@ -26,7 +26,7 @@ import {
 } from "@/lib/guards/staff-numbers";
 import { buildDbIndex, decideMatch, type Action, type DbGuard, type DbIndex } from "./match";
 import { fieldValue, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
-import { maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
+import { parseBirthDate, maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
 
 type Tx = Prisma.TransactionClient;
 
@@ -96,7 +96,7 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
 // ---------------------------------------------------------------------------
 // 單人評估（preview 同 apply 共用）
 // ---------------------------------------------------------------------------
-export type FieldCheck = "new" | "fill" | "same" | "differs" | "conflict" | "missing" | "not_stored";
+export type FieldCheck = "new" | "fill" | "same" | "differs" | "conflict" | "missing" | "not_stored" | "invalid_date";
 
 export interface Evaluation {
   person: PackagePerson;
@@ -158,6 +158,10 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[])
     }
     if (!val[f]) {
       checks[f] = "missing";
+      continue;
+    }
+    if (f === "dateOfBirth" && !parseBirthDate(val.dateOfBirth)) {
+      checks.dateOfBirth = "invalid_date";
       continue;
     }
     if (action !== "link" || !g) {
@@ -268,7 +272,7 @@ export async function previewImport(pkg: ImportPackage): Promise<PreviewResult> 
       const g = e.guardId ? ctx.byId.get(e.guardId) : null;
       if (e.action === "create") aa.guards_to_create += 1;
       for (const f of ["hkid", "nameEn", "dateOfBirth"] as const) {
-        if (p[f].status === "confirmed" && (e.checks[f] === "fill" || (e.action === "create" && f !== "hkid"))) aa.guard_fields_to_fill += 1;
+        if (p[f].status === "confirmed" && e.checks[f] !== "invalid_date" && (e.checks[f] === "fill" || (e.action === "create" && f !== "hkid"))) aa.guard_fields_to_fill += 1;
         if (p[f].status === "confirmed" && (e.checks[f] === "differs" || e.checks[f] === "conflict")) aa.field_conflicts += 1;
       }
       if (p.nameZh.status === "confirmed" && e.checks.nameZh === "differs") aa.field_conflicts += 1;
@@ -328,7 +332,7 @@ export interface FieldDecision {
 }
 export type PersonDecisions = Partial<Record<PersonField, FieldDecision>>;
 
-export type FieldOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "invalid" | "not_stored";
+export type FieldOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "invalid" | "invalid_date" | "not_stored";
 
 export interface PersonResult {
   key: string;
@@ -413,10 +417,8 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
   if (ev.action === "create") {
     const nameVal = nameW && nameW !== "skip" ? nameW.value : fieldValue(p.nameZh)!;
     const dobVal = dobW && dobW !== "skip" ? dobW.value : null;
-    if (dobVal && !/^\d{4}-\d{2}-\d{2}$/.test(dobVal)) {
-      bump("dateOfBirth", "invalid");
-    }
-    const dobOk = dobVal && /^\d{4}-\d{2}-\d{2}$/.test(dobVal) ? new Date(`${dobVal}T00:00:00.000Z`) : null;
+    const dobOk = parseBirthDate(dobVal);
+    if (dobVal && !dobOk) bump("dateOfBirth", "invalid_date");
     // 姓名未確認（review 且冇人手決定）→ 仍然建人，記待核對
     if (!(nameW && nameW !== "skip" && nameW.decided) && p.nameZh.status !== "confirmed") review.add("name_zh");
     const nameEnVal = nameEnW && nameEnW !== "skip" ? nameEnW.value : null;
@@ -441,7 +443,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     if (nameEnVal) bump("nameEn", "written");
     else noteSkip("nameEn", nameEnW);
     if (dobOk) bump("dateOfBirth", "written");
-    else if (res.fields.dateOfBirth !== "invalid") noteSkip("dateOfBirth", dobW);
+    else if (res.fields.dateOfBirth !== "invalid_date") noteSkip("dateOfBirth", dobW);
   } else {
     g = ctx.byId.get(ev.guardId!)!;
     guardId = g.id;
@@ -478,11 +480,11 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     } else bump("nameEn", "conflict");
     // dateOfBirth
     if (dobW === "skip" || dobW === null) noteSkip("dateOfBirth", dobW);
-    else if (!/^\d{4}-\d{2}-\d{2}$/.test(dobW.value)) bump("dateOfBirth", "invalid");
+    else if (!parseBirthDate(dobW.value)) bump("dateOfBirth", "invalid_date");
     else if (!g.dateOfBirth || dobW.replace) {
       if (g.dateOfBirth && isoDate(g.dateOfBirth) === dobW.value) bump("dateOfBirth", "same");
       else {
-        const dob = new Date(`${dobW.value}T00:00:00.000Z`);
+        const dob = parseBirthDate(dobW.value)!;
         data.dateOfBirth = dob;
         // 同 PATCH /api/guards/:id 一致：出生日期變咗要重算牌照衍生值
         const hadValueBefore = g.siaPermitAExpiry != null || g.siaPermitBExpiry != null;

@@ -264,3 +264,37 @@ describe("導入 API", () => {
     await expect(prisma.guard.create({ data: { nameZh: "測試重複", employmentType: "cash_casual", hkid: H1, createdBy: "t" } })).rejects.toThrow();
   });
 });
+
+describe("出生日期驗證（M2）", () => {
+  let owner: string;
+  beforeEach(async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    owner = await sessionCookieForUser(fx.userIds["老闆"]);
+  });
+  const callApply = (body: unknown) =>
+    applyRoute(new Request("http://t/api/guards/import/apply", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify(body) }));
+
+  it("1980-02-30、1920、過年輕 → invalid_date，唔寫日期；guard 照建", async () => {
+    for (const [i, dob] of ["1980-02-30", "1920-01-01", `${new Date().getUTCFullYear() - 10}-01-01`, "1980-13-01"].entries()) {
+      const hk = [H1, H2, H3, H4][i]!;
+      const p = person({ hkid: hk, key: personKeyForHkid(hk), nos: [`U9100${i}`], tel: `6123000${i}`, name: `導入測試員${"甲乙丙丁"[i]}` });
+      p.dateOfBirth = { value: dob, status: "confirmed" };
+      const r = await (await callApply({ package: pkgOf([p]) })).json();
+      expect(r.outcomes.created).toBe(1);
+      expect(r.results[0].fields.date_of_birth).toBe("invalid_date");
+      expect((await prisma.guard.findFirstOrThrow({ where: { hkid: hk } })).dateOfBirth).toBeNull();
+    }
+  });
+
+  it("覆核「改正後確認」輸入唔合法日期同樣拒；合法日期寫入", async () => {
+    const p = person({ hkid: H1, nos: ["U91000"], tel: "61230000" });
+    p.dateOfBirth = { value: "1980-02-30", status: "confirmed" };
+    await callApply({ package: pkgOf([p]) });
+    const bad = await (await callApply({ package: pkgOf([p]), decisions: { [p.key]: { date_of_birth: { action: "replace", value: "1981-02-29" } } } })).json();
+    expect(bad.results[0].fields.date_of_birth).toBe("invalid_date");
+    const good = await (await callApply({ package: pkgOf([p]), decisions: { [p.key]: { date_of_birth: { action: "replace", value: "1981-02-28" } } } })).json();
+    expect(good.results[0].fields.date_of_birth).toBe("written");
+    expect((await prisma.guard.findFirstOrThrow({ where: { hkid: H1 } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1981-02-28");
+  });
+});

@@ -229,3 +229,29 @@ describe("migration 20261003000000_wp_staff_import_identity：冪等＋重複入
     expect(await indexExists("guard_phones_tel_key")).toBe(true);
   });
 });
+
+describe("guard-fix create：電話撞現有 guard_phones → 跳過唔寫、guard 照建（M1）", () => {
+  it("有 unique index＋撞電話：run 成功、tel_skipped_duplicate、無重複", async () => {
+    const { buildGuardFixPlan } = await import("@/lib/guard-fix/plan");
+    const { applyGuardFixPlan } = await import("@/lib/guard-fix/apply");
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const month0 = new Date("2026-08-01T00:00:00.000Z");
+    await prisma.rosterUpload.create({
+      data: { month: month0, siteId: fx.site.id, siteNameRaw: "測試盤", uploaderUserId: fx.userIds["老闆"], fileName: "t.xlsx", fileSha256: `sha-${Math.random()}`, fileBytes: Buffer.from("x"), fileSize: 1, status: "parsed" },
+    });
+    const owner = await prisma.guard.create({ data: { nameZh: "識別測試員電話主", employmentType: "cash_casual", createdBy: "t" } });
+    await prisma.guardPhone.create({ data: { guardId: owner.id, tel: "61230001", isPrimary: true } });
+    const month = new Date("2026-08-01T00:00:00.000Z");
+    const plan = await buildGuardFixPlan({ prisma, month, uTeamRows: [] }).catch(() => null);
+    expect(plan).not.toBeNull();
+    const base = { type: "create" as const, alias: null, secondaryTel: "61230002", hkid: null, hireDate: null, defaultBrokerCode: "X", reason: "t" };
+    plan!.actions.create.push({ ...base, seq: "S1", nameZh: "識別測試員新甲", primaryTel: "61230001", uNumber: "U99001" });
+    const diffs = await applyGuardFixPlan({ prisma, plan: plan!, planOnly: false, month });
+    expect(diffs.create.create).toEqual(["S1"]);
+    expect(diffs.create.telSkipped).toEqual(["S1:tel_skipped_duplicate"]);
+    const g = await prisma.guard.findFirstOrThrow({ where: { nameZh: "識別測試員新甲" }, include: { phones: true } });
+    expect(g.phones.map((p) => p.tel)).toEqual(["61230002"]);
+    expect(await prisma.guardPhone.count({ where: { tel: "61230001" } })).toBe(1);
+  });
+});
