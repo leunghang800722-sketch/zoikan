@@ -2205,13 +2205,20 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - `GET /api/roster-uploads/:id` 加 `name_only_count`、`name_only_warning`（「淨靠姓名配對，建議補工號或電話」）、`?match_basis=name_only` 篩選，row DTO 加 `match_basis`。`GET /api/roster-uploads/pending-summary` 加 `name_only: { total, entries[], warning }`（原有欄位不變）。一鍵結算 precheck：`numbers.nameOnlyCells` ＋ warning。
 - 現有 fixture 配對結果零變（gate 期間逐格對比 16,432 格：0 差）。
 
-### B3 批量導入（老闆；需「安員」create＋「安員個人資料」view（preview）／update（apply））
-- 導入包（JSON v2，`scripts/staff-import/06-build-package.ts` → `data/2026-10/staff-import/out/import-package.json`，gitignored）：`{version:2, generatedAt, persons:[{key(sha1 of hkid), hkid, nameZh, nameEn, dateOfBirth, sex, phone, address: {value,status}, staffNumbers:[{scheme,number}], rating, reasons[], conflicts[]}]}`，`status` ∈ `confirmed`／`review`／`missing`。**唔帶 guard id**——伺服器對自己個 DB 對齊（`src/lib/guards/import/match.ts`：hkid → 工號（任何 scheme）→ 電話 → 姓名相同且唯一＋第二鍵；結果 `link`／`create`／`conflict`／`needs_review`，理由碼同 Stage A 04 一致，04 已改 import 呢份）。包內跨人衝突（重複 hkid／同工號／同電話掛多人）一律 conflict。
+### B3 批量導入（老闆專屬：module「安員批量導入」硬性淨老闆，其他角色即使開晒「安員個人資料」都 403；preview=view、apply=update）
+- 導入包（JSON v2，`scripts/staff-import/06-build-package.ts` → `data/2026-10/staff-import/out/import-package.json`，gitignored）：`{version:2, generatedAt, persons:[{key(隨機 uuid), hkid, nameZh, nameEn, dateOfBirth, sex, phone, address: {value,status}, staffNumbers:[{scheme,number}], rating, reasons[], conflicts[]}]}`，`status` ∈ `confirmed`／`review`／`missing`。**唔帶 guard id**——伺服器對自己個 DB 對齊（`src/lib/guards/import/match.ts`：hkid → 工號（任何 scheme）→ 電話 → 姓名相同且唯一＋第二鍵；結果 `link`／`create`／`conflict`／`needs_review`，理由碼同 Stage A 04 一致，04 已改 import 呢份）。包內跨人衝突（重複 hkid／同工號／同電話掛多人）一律 conflict。
 - **導入包唔存入 DB**：preview／apply 都係請求內處理，用完即棄；apply 要重新帶包（頁面將檔案留喺瀏覽器記憶體）。
 - `POST /api/guards/import/preview` body `{package}` → `{package, person_stats{link,create,conflict,needs_review}, field_stats{<field>:{confirmed,review,missing}}, auto_apply{persons,guards_to_create,guard_fields_to_fill,phones_to_add,addresses_to_add,staff_numbers_to_add,field_conflicts}, review{persons,fields}, reason_counts, rows[]}`；rows 內 hkid（頭 1 尾 2）／電話（尾 3）／地址（頭 3 字）已遮罩，另有逐欄 `status`＋`check`（new／fill／same／differs／conflict）。唯讀。
-- `POST /api/guards/import/apply` body `{package, person_keys?, decisions?}`：
+- `POST /api/guards/import/apply` body `{package, package_hash, person_keys?, decisions?}`（`package_hash` 係 preview 回傳嘅 sha256；同包唔一致 → 409「導入包同預覽唔一致，請重新預覽」）：
   - 冇 `decisions`＝自動套用：`link`／`create` 嘅人，**淨寫 status=confirmed 嘅欄**。`link` 淨補空欄，現值唔同＝該欄入 conflict 唔覆蓋。`create` 要 hkid confirmed；中文名係 review 都照建，記 `guards.identity_review_fields=['name_zh']`（抽屜／覆核頁顯示「姓名待核對」）。
   - 有 `decisions`＝覆核：`{<person_key>:{name_zh|name_en|date_of_birth|phone|address:{action:'confirm'|'replace'|'skip', value?}}}`；`confirm` 現值唔同＝conflict；`replace` 先覆蓋（姓名／英文名／出生日期）或加為新主要地址；改姓名決定會清待核對標記。
   - 寫入：`guards`（name_zh／name_en／hkid／date_of_birth，出生日期變會重算牌照衍生值）、`guard_staff_numbers`（同 scheme 已有另一個 current 就唔郁，屬另一人跳過）、`guard_phones`（source=`application_form`，冇主電話就設主，全表唯一撞號＝conflict）、`guard_addresses`（source=`address_proof`）；全部 `writeAuditTx`＋一條 `guard_import_apply` summary audit（淨計數）。冪等（重跑唔重複建）；每批 25 人一個 transaction（advisory lock、timeout 120s），批失敗逐人重試，壞嗰個記 `error`（理由碼 `apply_failed`）。鎖月無關。
   - 回應：`outcomes{created,linked,conflict,needs_review,error}`、各項寫入數、`fields_written`、逐人結果（淨理由碼同欄位結果，冇 PII）。
 - 頁面 `/guards/import`（安員頁工具列「證件資料導入」掣）：揀檔 → 預覽統計（逐欄＋逐人兩組）→「套用自動項」→ 覆核清單（逐人逐欄 抽取值 vs 現值，「確認／改正後確認／略過」）。
+
+### WP-STAFF-IMPORT 驗收修正（Opus 5.5）
+- guard-fix create：電話撞現有 `guard_phones`（全表唯一）→ 跳過唔寫，guard 照建，`diffs.create.telSkipped` 記 `<seq>:tel_skipped_duplicate`；plan 內兩個 create 唔可以用同一電話。
+- 導入出生日期：parse 後 round-trip＋年份 1930–(今年−16)，唔合法＝欄位結果 `invalid_date`（唔寫）；覆核頁「改正後確認」同樣驗。
+- 更表配對：電話對到 A、姓名唯一對到另一個 guard B → ambiguous（唔自動配）。人手 `POST /api/roster-uploads/:id/reparse` 已鎖月份 → 403。
+- `guard_identity_conflicts` 淨存 `guard_ids`（唔存值或 hash）；`scripts/db/ensure-identity-indexes.ts`（`npm run db:ensure-identity-indexes`，Dockerfile 啟動鏈）冪等補建 unique index，有重複只印組數；`GET /api/diagnostics/month` 加 `identity{dupHkidGroups,dupTelGroups,hkidIndexPresent,telIndexPresent}`。
+- 導入配對：hkid 欄 status≠confirmed 唔做 hkid 層 link（跌落工號／電話層，都冇＝needs_review）。
