@@ -70,6 +70,7 @@ interface GuardRow {
   former_number_hit?: boolean;
   // WP-STAFF-IMPORT B1：識別狀態（身份證＋電話），見 src/lib/guards/identity.ts。
   identity_status?: "complete" | "missing_hkid" | "missing_tel" | "missing_both";
+  identity_review_fields?: string[];
   // WP-PII：新欄一律 optional——response 有冇呢粒 key 視乎 field-group
   // gate（冇「安員個人資料/安員銀行資料:view」成粒 key 都唔會出現，
   // 唔係值做 null），見 src/lib/api/field-groups.ts。
@@ -1845,8 +1846,10 @@ export function GuardsClient({
           {editingId && (() => {
             const st = rows.find((r) => r.id === editingId)?.identity_status;
             if (!st) return null;
+            const reviewFields = rows.find((r) => r.id === editingId)?.identity_review_fields ?? [];
             return (
               <div className="flex items-center gap-2 text-xs text-zk-faint">
+                {reviewFields.includes("name_zh") ? <Pill variant="warning">姓名待核對</Pill> : null}
                 識別狀態（身份證＋電話）：
                 {st === "complete" ? <Pill variant="success">齊</Pill> : <Pill variant="warning">{st === "missing_hkid" ? "缺身份證" : st === "missing_tel" ? "缺電話" : "缺身份證及電話"}</Pill>}
               </div>

@@ -100,6 +100,8 @@ const GUARD_FIELDS = [
   // WP-STAFF-IMPORT B1：識別狀態衍生欄（complete／missing_hkid／missing_tel／missing_both，
   // 淨係有冇，唔含值），見 src/lib/guards/identity.ts identityStatus()。
   "identityStatus",
+  // WP-STAFF-IMPORT B3：導入後待人手核對嘅欄（["name_zh"] 等），抽屜顯示「姓名待核對」。
+  "identityReviewFields",
   // S7：`?q=` 搜尋命中已取消（former）工號嗰陣先會有呢粒 key（見
   // src/app/api/guards/route.ts findNumberSearchMatches()）——前端標
   // 「已取消號命中」用。

@@ -361,6 +361,8 @@ model Guard {
   // 雞頭 DTO（GUARD_BROKER_FIELDS，src/lib/broker-dto.ts）同 `ai.guards`
   // view（明列欄位，冇加呢個）一律唔包。
   nameAliases     String[]       @default([]) @map("name_aliases")
+  // WP-STAFF-IMPORT B3：批量導入時未確認（review）嘅欄（例如 ["name_zh"]），覆核確認後移除。
+  identityReviewFields String[]   @default([]) @map("identity_review_fields")
   status          ActiveStatus   @default(active)
 
   // WP-PII（老闆 2026-09-17 拍板）：保安員個人資料欄位——全部 nullable

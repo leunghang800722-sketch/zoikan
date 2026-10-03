@@ -27,6 +27,7 @@
     "staff-import:extract": "tsx scripts/staff-import/02-classify-extract.ts",
     "staff-import:crosscheck": "tsx scripts/staff-import/03-crosscheck.ts",
     "staff-import:plan": "tsx scripts/staff-import/04-match-plan.ts",
+    "staff-import:package": "tsx scripts/staff-import/06-build-package.ts",
     "gate:roster-parse": "tsx scripts/gate/roster-parse.ts",
     "gate:ltpay-aug-fixture": "tsx scripts/gate/build-ltpay-aug-fixture.ts",
     "gate:ltpay-aug": "tsx scripts/gate/build-ltpay-aug-fixture.ts && tsx scripts/gate/longterm-payroll-aug.ts",
