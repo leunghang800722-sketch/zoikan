@@ -12,18 +12,9 @@
 // broker/void user 都會 bump，舊 cookie 要當失效），所以呢個 helper 都
 // 經 DB 查詢，唔淨係 unseal cookie 就算。
 import { cookies } from "next/headers";
-import { unsealData } from "iron-session";
 import { prisma } from "@/lib/db";
-import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, type SessionData } from "./session";
+import { SESSION_COOKIE_NAME, unsealSessionCookie, type SessionData } from "./session";
 import { ROLE_NAMES, type RoleName } from "@/lib/rbac/matrix";
-
-function sessionPassword(): string {
-  const pwd = process.env.SESSION_SECRET;
-  if (!pwd || pwd.length < 32) {
-    throw new Error("SESSION_SECRET 未設定或長度不足 32 字符——喺 .env 設定一個 ≥32 字符嘅隨機字串");
-  }
-  return pwd;
-}
 
 export interface CurrentSession extends SessionData {
   baseRole: RoleName;
@@ -39,13 +30,8 @@ export async function getCurrentSession(): Promise<CurrentSession | null> {
   const raw = jar.get(SESSION_COOKIE_NAME)?.value;
   if (!raw) return null;
 
-  let data: Partial<SessionData>;
-  try {
-    data = await unsealData<Partial<SessionData>>(raw, { password: sessionPassword(), ttl: SESSION_TTL_SECONDS });
-  } catch {
-    return null;
-  }
-  if (!data.userId || !data.baseRole || !(ROLE_NAMES as readonly string[]).includes(data.baseRole)) return null;
+  const data = await unsealSessionCookie(raw); // 含絕對上限檢查
+  if (!data || !data.baseRole || !(ROLE_NAMES as readonly string[]).includes(data.baseRole)) return null;
 
   const user = await prisma.user.findUnique({ where: { id: data.userId }, select: { tokenVersion: true, status: true, mustChangePwd: true } });
   if (!user || user.status !== "active" || user.tokenVersion !== data.tokenVersion) return null;

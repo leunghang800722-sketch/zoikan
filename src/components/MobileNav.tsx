@@ -148,6 +148,7 @@ export function MobileNav({
                 改密碼
               </GuardedLink>
               <LogoutButton className="rounded-md px-2 py-2.5 text-left text-[14px] text-zk-text-secondary" />
+              <div className="px-2 text-[11.5px] text-zk-faint">登出會同時登出所有裝置</div>
             </div>
           </div>
         </>

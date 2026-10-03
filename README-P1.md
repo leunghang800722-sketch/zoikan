@@ -153,7 +153,7 @@ B）**：
   呢部冇 Postgres/Docker 嘅開發機／CI sandbox 都保證裝得到；argon2 要編
   譯 native addon 有裝唔到嘅風險，所以揀 bcryptjs——WP2 執行裁定）。
 - Session：**iron-session** 嘅低層 `sealData`/`unsealData`（HTTP-only、
-  加密簽署 cookie，12 小時 TTL，stateless，唔使 sessions 表）。刻意唔用
+  加密簽署 cookie，stateless，唔使 sessions 表；WP-SESSION-TTL：閒置 30 日滑動續期＋由登入起計 90 日絕對上限，可用 env `SESSION_IDLE_DAYS`／`SESSION_ABSOLUTE_DAYS` 覆蓋，見 P2 §27）。刻意唔用
   `next/headers` 嘅 `cookies()`（嗰個要真正 Next 請求生命週期先用得，
   route handler 冇辦法喺 Vitest 直接調用做 integration test）——改用標準
   `Request`/`NextResponse` 嘅 cookie API，route handler 係純函數

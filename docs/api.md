@@ -28,7 +28,10 @@
 |---|---|---|---|
 | POST | `/api/auth/login` | 公開 | `{ tel, password }`；錯5次鎖15分鐘；登入IP記audit |
 | POST | `/api/auth/logout` | 已登入 | 清 session cookie **並 bump `users.token_version`**（舊 cookie 即刻失效，唔淨係靠清 cookie） |
+| POST | `/api/auth/refresh` | 已登入（cookie） | 滑動續期：距上次簽發 ≥24 小時先重簽 cookie（`{renewed:true}`，`loggedInAt`／`tokenVersion` 不變，maxAge＝min(閒置期限, 距絕對上限剩餘)）；<24 小時 `{renewed:false}` 唔簽；冇登入／token_version 唔啱／用戶停用／過絕對上限 → 401 且唔產生 cookie；內部出錯回 `{renewed:false}`（唔影響原 cookie）。App shell 開頁／返前景時自動打（本機節流 6 小時） |
 | POST | `/api/auth/change-password` | 已登入 | `{ old_password, new_password }`；管理角色強制強密碼；bump token_version（重新 issue 帶新 version 嘅 cookie，唔踢走緊用緊嗰個 session） |
+
+**Session 期限（WP-SESSION-TTL）**：cookie `zoikan_session` 閒置期限預設 30 日（`SESSION_IDLE_DAYS`，整數 1–90；seal ttl＝cookie maxAge），由 `loggedInAt` 起計絕對上限預設 90 日（`SESSION_ABSOLUTE_DAYS`，整數，≥idle 且 ≤180），過咗即使 seal 未過期都當未登入（401）。非法 env 值用預設並 console.warn 一次（唔印值）。舊格式 cookie（冇 `renewedAt`）有效期內照用，下次 refresh 即續成新期限。登出／改密碼／重設密碼／改角色／改雞頭／停用照舊 bump token_version，即時作廢所有裝置。
 
 **Session 作廢（Opus 驗收殘留1）**：`users.token_version`——logout／
 改密碼／改角色（`role_id`）／改雞頭（`broker_id`）／void user 全部

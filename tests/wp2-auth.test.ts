@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, TEST_PASSWORD, type Wp2Fixture } from "./fixtures/wp2-fixture";
-import { getSessionFromRequest, sealSession, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "@/lib/auth/session";
+import { getSessionFromRequest, sealSession, SESSION_COOKIE_NAME, getSessionTtlConfig } from "@/lib/auth/session";
 import { POST as loginPOST } from "@/app/api/auth/login/route";
 import { POST as logoutPOST } from "@/app/api/auth/logout/route";
 import { POST as changePasswordPOST } from "@/app/api/auth/change-password/route";
@@ -120,7 +120,7 @@ describe("WP2 認證", () => {
     expect(audit).toBeTruthy();
   });
 
-  it("session 過期（12 小時 TTL）：過咗期嘅 cookie 當未登入處理", async () => {
+  it("session 過期（閒置 TTL）：過咗期嘅 cookie 當未登入處理", async () => {
     // iron-session 內置 60 秒 clock-skew 容忍度（unsealData 對「Expired
     // seal」呢類錯誤本身就唔拋錯，靜靜咁回一個冇 userId 嘅空物件——設計
     // 原意係「過期＝當冇 session」，唔係拋錯）。src/lib/auth/session.ts
@@ -149,7 +149,7 @@ describe("WP2 認證", () => {
     const realNow = Date.now();
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(realNow + (SESSION_TTL_SECONDS + 61) * 1000); // TTL + clock-skew + buffer
+      vi.setSystemTime(realNow + (getSessionTtlConfig().idleSeconds + 61) * 1000); // TTL + clock-skew + buffer
       const expired = await getSessionFromRequest(new Request("http://test.local/x", { headers: { cookie } }));
       expect(expired).toBeNull();
     } finally {

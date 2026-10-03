@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/lib/auth/current-session";
 import { getNavLinks, getViewGrants, groupNavLinks } from "@/lib/rbac/nav";
 import { uiLabel } from "@/lib/ui/format";
 import { MustChangePwdGate } from "@/components/MustChangePwdGate";
+import { SessionRefresh } from "@/components/SessionRefresh";
 import { ChunkErrorReload } from "@/components/ChunkErrorReload";
 import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
 import { MobileNav } from "@/components/MobileNav";
@@ -66,6 +67,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
       <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-x-auto px-4 pt-3.5 pb-[90px] lg:px-7 lg:pt-6 lg:pb-6">
         <ChunkErrorReload />
+        <SessionRefresh />
         <MustChangePwdGate mustChange={session.mustChangePwd} />
         {children}
       </main>
