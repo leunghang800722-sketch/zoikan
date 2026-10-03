@@ -85,6 +85,7 @@ export function DesktopNav({
             <span>·</span>
             <LogoutButton className="p-0 text-[11px] font-normal text-zk-muted underline-offset-2 hover:text-zk-text-secondary hover:underline" />
           </div>
+          <div className="mt-1 text-[10.5px] leading-snug text-zk-faint">登出會同時登出所有裝置</div>
         </div>
       </div>
     </aside>
