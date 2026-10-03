@@ -3,9 +3,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
-import { hkidCheckDigitValid, hashIdentityValue } from "@/lib/guards/identity";
+import { hkidCheckDigitValid } from "@/lib/guards/identity";
 import { buildDbIndex, decideMatch, type DbGuard, type MatchInput } from "@/lib/guards/import/match";
-import { packageConflicts, importPackageSchema, personKeyForHkid, type PackagePerson } from "@/lib/guards/import/package";
+import { hashPackage, packageConflicts, importPackageSchema, personKeyForHkid, type PackagePerson } from "@/lib/guards/import/package";
 import { maskHkidImport, maskTelImport, maskAddressImport } from "@/lib/guards/import/text";
 import { POST as previewRoute } from "@/app/api/guards/import/preview/route";
 import { POST as applyRoute } from "@/app/api/guards/import/apply/route";
@@ -95,8 +95,11 @@ describe("導入 API", () => {
     owner = await sessionCookieForUser(fx.userIds["老闆"]);
     supervisor = await sessionCookieForUser(fx.userIds["主管"]);
   });
-  const call = (route: typeof previewRoute, cookie: string, body: unknown) =>
-    route(new Request("http://t/api/guards/import/x", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }));
+  const call = (route: typeof previewRoute, cookie: string, body: unknown) => {
+    const b = body as { package?: unknown; package_hash?: string };
+    const withHash = route === applyRoute && b.package && b.package_hash === undefined ? { ...b, package_hash: hashPackage(importPackageSchema.parse(b.package)) } : body;
+    return route(new Request("http://t/api/guards/import/x", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(withHash) }));
+  };
 
   it("RBAC：主管 403（preview／apply）；老闆 200", async () => {
     const pkg = pkgOf([person({})]);
@@ -105,15 +108,17 @@ describe("導入 API", () => {
     expect((await call(previewRoute, owner, { package: pkg })).status).toBe(200);
   });
 
-  it("RBAC：有「安員」create 但冇「安員個人資料」權限 → 403（睇唔到預覽明細）", async () => {
-    const perm = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module: "安員", action: "create" } } });
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId: fx.roleIds["主管"], permissionId: perm.id } },
-      update: { granted: true },
-      create: { roleId: fx.roleIds["主管"], permissionId: perm.id, granted: true },
-    });
-    const res = await call(previewRoute, supervisor, { package: pkgOf([person({})]) });
-    expect(res.status).toBe(403);
+  it("RBAC：主管就算開晒「安員」create＋「安員個人資料」view／update，仍然 403（安員批量導入淨係老闆，硬性拒）", async () => {
+    for (const [module, action] of [["安員", "create"], ["安員個人資料", "view"], ["安員個人資料", "update"]] as const) {
+      const perm = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module, action } } });
+      await prisma.rolePermission.upsert({
+        where: { roleId_permissionId: { roleId: fx.roleIds["主管"], permissionId: perm.id } },
+        update: { granted: true },
+        create: { roleId: fx.roleIds["主管"], permissionId: perm.id, granted: true },
+      });
+    }
+    expect((await call(previewRoute, supervisor, { package: pkgOf([person({})]) })).status).toBe(403);
+    expect((await call(applyRoute, supervisor, { package: pkgOf([person({})]) })).status).toBe(403);
   });
 
   it("壞導入包 → 400，訊息唔帶值", async () => {
@@ -249,6 +254,28 @@ describe("導入 API", () => {
     expect(await prisma.guardAddress.count({ where: { guardId: g0.id } })).toBe(1);
   });
 
+  it("package_hash：preview 回傳；apply 帶錯或冇帶 → 409／400，唔寫入", async () => {
+    const pkg = pkgOf([person({})]);
+    const pv = await (await call(previewRoute, owner, { package: pkg })).json();
+    expect(pv.package_hash).toBe(hashPackage(pkg));
+    const wrong = await call(applyRoute, owner, { package: pkg, package_hash: "0".repeat(64) });
+    expect(wrong.status).toBe(409);
+    expect((await call(applyRoute, owner, { package: pkg, package_hash: "short" })).status).toBe(400);
+    expect(await prisma.guard.count({ where: { hkid: H1 } })).toBe(0);
+    const tampered = pkgOf([person({ name: "被改過" })]);
+    expect((await call(applyRoute, owner, { package: tampered, package_hash: pv.package_hash })).status).toBe(409);
+    expect((await call(applyRoute, owner, { package: pkg, package_hash: pv.package_hash })).status).toBe(200);
+  });
+
+  it("hkid status≠confirmed：唔做 hkid 層 link；同 hkid 嘅現有 guard 唔會被 link，無其他鍵 → needs_review", async () => {
+    await prisma.guard.create({ data: { nameZh: "導入測試現有", employmentType: "cash_casual", hkid: H1, createdBy: "t" } });
+    const dbg: DbGuard[] = [{ id: "g1", nameZh: "導入測試現有", hkid: H1, tels: [], staffNos: ["U00001"] }];
+    const db = buildDbIndex(dbg);
+    const base: MatchInput = { staffNos: [], hkid: H1, hkidValid: true, hkidConfirmed: false, nameZh: null, phone: null, grade: "auto_ok", gradeReasons: [] };
+    expect(decideMatch(base, db)).toMatchObject({ action: "needs_review", reasons: ["hkid_not_confirmed_no_other_key"] });
+    expect(decideMatch({ ...base, staffNos: ["U00001"] }, db)).toMatchObject({ action: "link", guardId: "g1", basis: ["staff_no"] });
+  });
+
   it("person_keys 限定範圍", async () => {
     const p1 = person({ hkid: H1, nos: ["U90001"], tel: "91234567" });
     const p2 = person({ hkid: H2, nos: ["U90002"], tel: "61234567", key: personKeyForHkid(H2) });
@@ -260,7 +287,6 @@ describe("導入 API", () => {
 
   it("識別狀態：導入後 DB unique index／重複身份證仍然擋", async () => {
     await call(applyRoute, owner, { package: pkgOf([person({ hkid: H1 })]) });
-    expect(hashIdentityValue(H1)).toHaveLength(64);
     await expect(prisma.guard.create({ data: { nameZh: "測試重複", employmentType: "cash_casual", hkid: H1, createdBy: "t" } })).rejects.toThrow();
   });
 });
@@ -272,8 +298,8 @@ describe("出生日期驗證（M2）", () => {
     const fx = await seedWp2Fixture();
     owner = await sessionCookieForUser(fx.userIds["老闆"]);
   });
-  const callApply = (body: unknown) =>
-    applyRoute(new Request("http://t/api/guards/import/apply", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify(body) }));
+  const callApply = (body: { package: unknown; decisions?: unknown }) =>
+    applyRoute(new Request("http://t/api/guards/import/apply", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ ...body, package_hash: hashPackage(importPackageSchema.parse(body.package)) }) }));
 
   it("1980-02-30、1920、過年輕 → invalid_date，唔寫日期；guard 照建", async () => {
     for (const [i, dob] of ["1980-02-30", "1920-01-01", `${new Date().getUTCFullYear() - 10}-01-01`, "1980-13-01"].entries()) {

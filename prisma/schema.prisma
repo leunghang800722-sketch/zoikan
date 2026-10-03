@@ -373,6 +373,8 @@ model Guard {
   // 部分」）。`ai.guards` view（見 prisma/migrations/…wp_ai1_readonly_
   // schema）明列欄位，呢 16 個新欄一律唔加入去——AI 助手結構上讀唔到
   // （唔淨係 field-scrub 呢層 defense-in-depth，係 DB view 本身冇呢啲欄）。
+  // 注意：`guards_hkid_key`（partial unique, hkid IS NOT NULL）由 migration／scripts/db/ensure-identity-indexes.ts
+  // 管，Prisma schema 表達唔到——`migrate dev` 嘅 drift 偵測可能想 DROP 佢，唔好接受。
   hkid                 String?   @map("hkid") // 身份證號碼——列表遮罩顯示，詳情/編輯有「安員個人資料:view」先見全號
   dateOfBirth          DateTime? @map("date_of_birth") @db.Date
   address              String?   @map("address")
@@ -485,6 +487,8 @@ model GuardPhone {
   updatedAt DateTime @updatedAt @map("updated_at")
   createdBy String?  @map("created_by")
 
+  // `guard_phones_tel_key`（tel 全表唯一）由 migration／scripts/db/ensure-identity-indexes.ts 管（有重複就唔建），
+  // Prisma schema 唔宣告——`migrate dev` drift 偵測可能想 DROP 佢，唔好接受。
   @@unique([guardId, tel])
   @@index([guardId])
   @@map("guard_phones")
@@ -496,13 +500,12 @@ model GuardPhone {
 // guard_phones_guard_id_primary_key 一樣只喺 migration）；有重複就唔建 index。
 model GuardIdentityConflict {
   id         String    @id @default(uuid())
-  kind       String // dup_hkid／dup_tel
-  valueHash  String    @map("value_hash")
+  kind       String // dup_hkid／dup_tel（淨存涉及嘅 guard id，唔存值／hash——可窮舉）
   guardIds   String[]  @default([]) @map("guard_ids")
   createdAt  DateTime  @default(now()) @map("created_at")
   resolvedAt DateTime? @map("resolved_at")
 
-  @@unique([kind, valueHash])
+  // 唯一性：migration 用 id = md5(kind || 排序後 guard id) 決定性生成，PK 即唯一。
   @@map("guard_identity_conflicts")
 }
 

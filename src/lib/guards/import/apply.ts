@@ -25,7 +25,7 @@ import {
   canOverrideDerivedSiaPermit,
 } from "@/lib/guards/staff-numbers";
 import { buildDbIndex, decideMatch, type Action, type DbGuard, type DbIndex } from "./match";
-import { fieldValue, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
+import { fieldValue, hashPackage, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
 import { parseBirthDate, maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
 
 type Tx = Prisma.TransactionClient;
@@ -121,6 +121,7 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[])
       staffNos: p.staffNumbers.map((n) => n.number),
       hkid: hkidCanon,
       hkidValid: !!hkidCanon && hkidCheckDigitValid(hkidCanon),
+      hkidConfirmed: p.hkid.status === "confirmed",
       nameZh,
       phone: phoneForMatch,
       grade: p.rating,
@@ -224,6 +225,7 @@ export interface PreviewRow {
 }
 
 export interface PreviewResult {
+  package_hash: string;
   package: { version: number; generated_at: string; persons: number };
   person_stats: Record<Action, number>;
   field_stats: Record<PersonField, { confirmed: number; review: number; missing: number }>;
@@ -311,6 +313,7 @@ export async function previewImport(pkg: ImportPackage): Promise<PreviewResult> 
     });
   }
   return {
+    package_hash: hashPackage(pkg),
     package: { version: pkg.version, generated_at: pkg.generatedAt, persons: pkg.persons.length },
     person_stats: personStats,
     field_stats: fieldStats,

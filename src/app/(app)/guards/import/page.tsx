@@ -66,6 +66,7 @@ interface Row {
   fields: Record<string, { status: string; check: string }>;
 }
 interface Preview {
+  package_hash: string;
   package: { version: number; generated_at: string; persons: number };
   person_stats: Record<string, number>;
   field_stats: Record<string, { confirmed: number; review: number; missing: number }>;
@@ -135,7 +136,7 @@ export default function GuardImportPage() {
     if (!pkg) return;
     setBusy(true);
     setError(null);
-    const res = await apiPost<ApplyRes>("/api/guards/import/apply", { package: pkg });
+    const res = await apiPost<ApplyRes>("/api/guards/import/apply", { package: pkg, package_hash: preview?.package_hash });
     setBusy(false);
     setConfirming(false);
     if (!res.ok) {
@@ -154,6 +155,7 @@ export default function GuardImportPage() {
     setError(null);
     const res = await apiPost<ApplyRes>("/api/guards/import/apply", {
       package: pkg,
+      package_hash: preview?.package_hash,
       decisions: { [key]: { [field]: { action, ...(action !== "skip" && edit ? { value: edit } : {}) } } },
     });
     setBusy(false);

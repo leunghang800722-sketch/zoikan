@@ -98,3 +98,8 @@ export function packageConflicts(persons: readonly PackagePerson[]): Map<string,
   }
   return new Map([...out].map(([k, v]) => [k, [...v]]));
 }
+
+/** 導入包 sha256（parse 之後嘅 canonical JSON）：preview 回傳，apply 必須帶返同一個，確保套用嘅就係預覽過嘅。 */
+export function hashPackage(pkg: ImportPackage): string {
+  return createHash("sha256").update(JSON.stringify(pkg)).digest("hex");
+}

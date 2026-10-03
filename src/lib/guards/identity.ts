@@ -4,7 +4,6 @@
 //
 // 重複擋 409 嘅訊息**唔准**回顯對方姓名／完整號碼／guard id。
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { createHash } from "node:crypto";
 import { Conflict, BadRequest } from "../api/errors";
 
 /** canonical key：大寫、去空白（含全形空白）、去半形／全形括號。唔係身份證格式就 null。
@@ -65,10 +64,6 @@ export function identityStatus(g: { hkid?: string | null; tel?: string | null; h
   if (!hasHkid && hasTel) return "missing_hkid";
   if (hasHkid && !hasTel) return "missing_tel";
   return "missing_both";
-}
-
-export function hashIdentityValue(v: string): string {
-  return createHash("sha256").update(v, "utf8").digest("hex");
 }
 
 type Db = PrismaClient | Prisma.TransactionClient;

@@ -7,6 +7,7 @@ import { toRosterUploadDTO } from "@/lib/api/dto";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Conflict } from "@/lib/api/errors";
+import { assertMonthNotLocked } from "@/lib/month-lock";
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -17,6 +18,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (!before) throw NotFound();
     // WP-UPLOAD-VOID：已作廢嘅上載唔准重新解析——同 PATCH 一致嘅道理。
     if (before.status === "voided") throw Conflict("呢個上載已經作廢，唔可以重新解析");
+
+    // Opus 驗收採納：人手重新解析會重寫配對（guard_id／match_basis）——已鎖月份 403（內部 reparse：
+    // guard-fix／一鍵結算另有 confirmed 跳過邏輯，唔經呢條 route）。
+    await assertMonthNotLocked({ workDate: before.month, actorUserId: session.userId, tableName: "roster_uploads", rowId: id, ip: getClientIp(req) });
 
     await reparseRosterUpload(id);
 

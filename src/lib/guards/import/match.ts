@@ -19,6 +19,8 @@ export interface MatchInput {
   staffNos: string[]; // 一個人可以有幾個工號（MP 舊號＋U 新號）
   hkid: string | null; // canonical
   hkidValid: boolean; // check digit 通過
+  /** hkid 欄狀態唔係 confirmed → 唔准做 hkid 層 link（跌落工號／電話層；都冇就 needs_review）。預設 true。 */
+  hkidConfirmed?: boolean;
   nameZh: string | null;
   phone: string | null;
   grade: "auto_ok" | "review" | "fail";
@@ -78,7 +80,8 @@ export function decideMatch(i: MatchInput, db: DbIndex, groupReasons: readonly s
     return out("needs_review", null);
   }
 
-  const gHkid = db.byHkid.get(i.hkid) ?? [];
+  const hkidConfirmed = i.hkidConfirmed !== false;
+  const gHkid = hkidConfirmed ? db.byHkid.get(i.hkid) ?? [] : [];
   const gNo = [...new Map(staffNos.flatMap((n) => db.byNo.get(n) ?? []).map((g) => [g.id, g])).values()];
   const gTel = tel ? db.byTel.get(tel) ?? [] : [];
   [...gHkid, ...gNo, ...gTel].forEach((g) => candidates.add(g.id));
@@ -135,6 +138,10 @@ export function decideMatch(i: MatchInput, db: DbIndex, groupReasons: readonly s
   gName.forEach((x) => candidates.add(x.id));
   if (gName.length) {
     reasons.push(gName.length === 1 ? "name_only_candidate" : "name_multi_candidate");
+    return out("needs_review", null);
+  }
+  if (!hkidConfirmed) {
+    reasons.push("hkid_not_confirmed_no_other_key");
     return out("needs_review", null);
   }
   basis.push("no_existing_guard");

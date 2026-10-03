@@ -6,7 +6,7 @@ import path from "node:path";
 import { Client } from "pg";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
-import { canonicalHkid, hkidCheckDigitValid, normalizeTelHk, identityStatus, hashIdentityValue } from "@/lib/guards/identity";
+import { canonicalHkid, hkidCheckDigitValid, normalizeTelHk, identityStatus } from "@/lib/guards/identity";
 import { canonicalHkid as canonicalFromGuardFix } from "@/lib/guard-fix/sources";
 import { maskHkid } from "@/lib/api/guard-pii";
 import { GET as listGuards, POST as createGuard } from "@/app/api/guards/route";
@@ -186,12 +186,12 @@ describe("migration 20261003000000_wp_staff_import_identity：冪等＋重複入
 
   it("重跑冪等；backfill 正規化；冇重複 → index 在", async () => {
     await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS guards_hkid_key`);
-    await prisma.guard.create({ data: { nameZh: "識別測試員甲", employmentType: "cash_casual", hkid: "a123456（3）", createdBy: "t" } });
+    await prisma.guard.create({ data: { nameZh: "識別測試員甲", employmentType: "cash_casual", hkid: "a123456\u00a0（3）", createdBy: "t" } });
     await prisma.guard.create({ data: { nameZh: "識別測試員乙", employmentType: "cash_casual", hkid: "G12345678", createdBy: "t" } });
     await runMigration();
     await runMigration();
     const gs = await prisma.guard.findMany({ orderBy: { createdAt: "asc" } });
-    expect(gs.map((g) => g.hkid)).toEqual(["A1234563", "G12345678"]);
+    expect(gs.map((g) => g.hkid).sort()).toEqual(["A1234563", "G12345678"]);
     expect(await indexExists("guards_hkid_key")).toBe(true);
     expect(await indexExists("guard_phones_tel_key")).toBe(true);
   });
@@ -212,9 +212,9 @@ describe("migration 20261003000000_wp_staff_import_identity：冪等＋重複入
     await runMigration();
     const rows = await prisma.guardIdentityConflict.findMany({ orderBy: { kind: "asc" } });
     expect(rows.map((r) => r.kind)).toEqual(["dup_hkid", "dup_tel"]);
-    expect(rows[0]!.valueHash).toBe(hashIdentityValue("A1234563"));
-    expect(rows[0]!.guardIds.sort()).toEqual([a.id, b.id].sort());
+        expect(rows[0]!.guardIds.sort()).toEqual([a.id, b.id].sort());
     expect(JSON.stringify(rows)).not.toContain("A1234563");
+    expect(Object.keys(rows[0]!)).not.toContain("valueHash");
     expect(JSON.stringify(rows)).not.toContain("91234567");
     expect(await indexExists("guards_hkid_key")).toBe(false);
     expect(await indexExists("guard_phones_tel_key")).toBe(false);
@@ -253,5 +253,35 @@ describe("guard-fix create：電話撞現有 guard_phones → 跳過唔寫、gua
     const g = await prisma.guard.findFirstOrThrow({ where: { nameZh: "識別測試員新甲" }, include: { phones: true } });
     expect(g.phones.map((p) => p.tel)).toEqual(["61230002"]);
     expect(await prisma.guardPhone.count({ where: { tel: "61230001" } })).toBe(1);
+  });
+});
+
+describe("ensureIdentityIndexes／診斷 identity 區塊", () => {
+  it("冇重複：補建；有重複：保持現狀、淨回數量", async () => {
+    const { ensureIdentityIndexes, identityIndexStatus } = await import("@/lib/guards/identity-indexes");
+    await clearAll();
+    await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS guards_hkid_key`);
+    await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS guard_phones_tel_key`);
+    expect(await identityIndexStatus(prisma)).toEqual({ dupHkidGroups: 0, dupTelGroups: 0, hkidIndexPresent: false, telIndexPresent: false });
+    const r = await ensureIdentityIndexes(prisma);
+    expect(r.created.sort()).toEqual(["guard_phones_tel_key", "guards_hkid_key"]);
+    expect((await ensureIdentityIndexes(prisma)).created).toEqual([]); // 冪等
+    await prisma.$executeRawUnsafe(`DROP INDEX guards_hkid_key`);
+    await prisma.guard.create({ data: { nameZh: "識別測試員甲", employmentType: "cash_casual", hkid: "A1234563", createdBy: "t" } });
+    await prisma.guard.create({ data: { nameZh: "識別測試員乙", employmentType: "cash_casual", hkid: "A1234563", createdBy: "t" } });
+    const r2 = await ensureIdentityIndexes(prisma);
+    expect(r2).toMatchObject({ dupHkidGroups: 1, hkidIndexPresent: false, created: [] });
+    await clearAll();
+    await ensureIdentityIndexes(prisma);
+  });
+
+  it("GET /api/diagnostics/month 有 identity 區塊", async () => {
+    const { GET } = await import("@/app/api/diagnostics/month/route");
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    const res = await GET(new Request("http://t/api/diagnostics/month?month=2026-08", { headers: { cookie } }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).identity).toEqual({ dup_hkid_groups: 0, dup_tel_groups: 0, hkid_index_present: true, tel_index_present: true });
   });
 });

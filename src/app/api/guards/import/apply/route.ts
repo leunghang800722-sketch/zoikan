@@ -4,6 +4,8 @@
 //  - 有 decisions（覆核頁）：只處理有決定嘅人；逐欄 confirm／replace／skip。
 // 冪等；分批 transaction；每筆 writeAuditTx。導入包唔入 DB（要重新帶）。
 import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions } from "@/lib/guards/import/request";
+import { hashPackage } from "@/lib/guards/import/package";
+import { Conflict } from "@/lib/api/errors";
 import { applyImport } from "@/lib/guards/import/apply";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
@@ -15,6 +17,7 @@ export async function POST(req: Request) {
     const session = await requireImportPermission(req, "apply");
     const body = parseBody(applyBodySchema, await readJson(req));
     const pkg = parsePackage(body.package);
+    if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
     const result = await applyImport(pkg, {
       actorUserId: session.userId,
       ip: getClientIp(req),

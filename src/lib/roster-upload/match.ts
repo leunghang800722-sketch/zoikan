@@ -424,6 +424,8 @@ export interface GuardMatchResult {
   matchBasis?: GuardMatchBasis | null;
   /** WP-STAFF-IMPORT B2：靠電話（全表唯一）配到，但更表姓名同系統本名／別名唔同。 */
   telMatchNameDiffers?: boolean;
+  /** 電話對到 guard A、更表姓名唯一對到另一個 guard B → ambiguous（唔自動配）。 */
+  telNameConflict?: boolean;
 }
 
 export interface GuardCandidate {
@@ -669,6 +671,13 @@ function matchGuardInner(
     if (viaTel.length === 1) {
       const gid = viaTel[0]!;
       const nameKind = name ? rowNameMatchesGuard(name, gid, index) : "name";
+      // Opus 驗收採納：電話配到 A，但更表姓名（本名∪別名）唯一對到另一個 guard B → ambiguous，唔自動配。
+      if (name && nameKind === "none") {
+        const byNm = [...new Set([...(index.byName.get(name) ?? []), ...(index.byAlias.get(name) ?? [])])];
+        if (byNm.length === 1 && byNm[0] !== gid) {
+          return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false, matchBasis: null, telNameConflict: true };
+        }
+      }
       return {
         guardId: gid,
         guardMatch: "by_name_tel",

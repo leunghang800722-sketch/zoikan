@@ -43,6 +43,9 @@ describe("matchGuard：match_basis 與電話層", () => {
   it("電話唯一但姓名唔同：basis=tel，flag telMatchNameDiffers", () => {
     expect(matchGuard({ staffNoRaw: null, nameRaw: "寫錯咗嘅名", telRaw: "+852 91234567" }, idx)).toMatchObject({ guardId: "g1", matchBasis: "tel", telMatchNameDiffers: true });
   });
+  it("電話對到 A、姓名唯一對到 B → ambiguous（telNameConflict），唔自動配", () => {
+    expect(matchGuard({ staffNoRaw: null, nameRaw: "測試安員乙", telRaw: "91234567" }, idx)).toMatchObject({ guardId: null, guardMatch: "ambiguous", telNameConflict: true });
+  });
   it("淨姓名（無電話）：basis=name_only；別名淨配：alias", () => {
     expect(matchGuard({ staffNoRaw: null, nameRaw: "測試安員乙", telRaw: null }, idx)).toMatchObject({ guardId: "g2", guardMatch: "by_name", matchBasis: "name_only" });
     expect(matchGuard({ staffNoRaw: null, nameRaw: "阿甲", telRaw: null }, idx)).toMatchObject({ guardId: "g1", matchBasis: "alias" });
@@ -91,5 +94,19 @@ describe("name_only 警告（上載詳情／pending-summary／precheck）", () =
     const pre = await stepPrecheck(month, fx.userIds["老闆"], null);
     expect(pre.numbers.nameOnlyCells).toBe(2);
     expect(pre.warnings.some((w) => w.includes("淨靠姓名配對，建議補工號或電話"))).toBe(true);
+  });
+});
+
+describe("人手 reparse 鎖月 403", () => {
+  it("已鎖月份 → 403；未鎖 → 照行", async () => {
+    const { POST } = await import("@/app/api/roster-uploads/[id]/reparse/route");
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    const up = await prisma.rosterUpload.create({
+      data: { month: fx.lockedMonth, siteId: fx.site.id, siteNameRaw: "測試盤", uploaderUserId: fx.userIds["老闆"], fileName: "x.xlsx", fileSha256: "sha-lock", fileBytes: Buffer.from("x"), fileSize: 1, status: "parsed" },
+    });
+    const res = await POST(new Request(`http://t/api/roster-uploads/${up.id}/reparse`, { method: "POST", headers: { cookie } }), { params: Promise.resolve({ id: up.id }) });
+    expect(res.status).toBe(403);
   });
 });

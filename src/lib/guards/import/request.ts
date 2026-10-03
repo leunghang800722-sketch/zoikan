@@ -1,7 +1,7 @@
 // WP-STAFF-IMPORT B3：導入 API 共用——body 解析（錯誤訊息淨帶欄位路徑，唔帶值）＋權限。
 import { z } from "zod";
-import { BadRequest, Forbidden } from "@/lib/api/errors";
-import { requirePermission, hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
+import { BadRequest } from "@/lib/api/errors";
+import { requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
 import type { PersonDecisions } from "./apply";
 
@@ -14,13 +14,10 @@ export function parsePackage(raw: unknown): ImportPackage {
   return r.data;
 }
 
-/** 老闆權限：module「安員」create＋「安員個人資料」（preview=view，apply=update）。 */
+/** 老闆專屬：module「安員批量導入」硬性淨老闆（preview=view，apply=update）；其他角色（即使開晒
+ * 「安員個人資料」）一律 403。 */
 export async function requireImportPermission(req: Request, mode: "preview" | "apply"): Promise<AuthedSession> {
-  const session = await requirePermission(req, "安員", "create");
-  if (!(await hasPermission(session, "安員個人資料", mode === "preview" ? "view" : "update"))) {
-    throw Forbidden(`冇「安員個人資料」${mode === "preview" ? "睇" : "改"}權限，唔可以${mode === "preview" ? "預覽" : "套用"}證件資料導入`);
-  }
-  return session;
+  return requirePermission(req, "安員批量導入", mode === "preview" ? "view" : "update");
 }
 
 const decisionSchema = z.object({ action: z.enum(["confirm", "replace", "skip"]), value: z.string().trim().max(500).optional() }).strict();
@@ -37,6 +34,8 @@ const personDecisionSchema = z
 export const applyBodySchema = z
   .object({
     package: z.unknown(),
+    /** preview 回傳嘅 `package_hash`；apply 必須帶返，否則 409。 */
+    package_hash: z.string().length(64),
     person_keys: z.array(z.string().min(1).max(64)).max(5000).optional(),
     decisions: z.record(z.string().min(1).max(64), personDecisionSchema).optional(),
   })
