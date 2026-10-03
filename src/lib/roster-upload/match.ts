@@ -7,6 +7,7 @@
 // 冧唔到就老實話 null，唔會揀個「睇落最似」嘅去湊。
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { normalizeTel } from "@/lib/guards/contacts";
+import { normalizeTelHk } from "@/lib/guards/identity";
 import type { CodeKind } from "./cell-codes";
 import { normalizeTimeRange } from "./time-range";
 
@@ -381,6 +382,10 @@ export function matchShiftType(
   return { id: null, ambiguous: true, candidateTimeSlots: matches.map((c) => c.timeSlot ?? "（未設時段）"), rankAttempted };
 }
 
+/** WP-STAFF-IMPORT B2：逐格配對依據（寫入 `roster_upload_rows.match_basis`）。
+ * `name_only`＝淨靠姓名配到（無工號／電話佐證），上載頁／待處理摘要出警告。 */
+export type GuardMatchBasis = "staff_no" | "tel" | "name_tel" | "name_only" | "alias" | "override";
+
 export type GuardMatchKind = "by_staff_no" | "by_name_tel" | "by_name" | "unmatched" | "ambiguous";
 
 // Phase B-0（§15.3 第 4 項）：「二揀一」——`guard_match` enum 本身唔加值
@@ -415,6 +420,10 @@ export interface GuardMatchResult {
    * 並記低「呢個工號＋呢個姓名 → 嗰個安員」。`service.ts` 加「工號衝突
    * 待核」warning。optional：舊 call site／測試唔使改。 */
   matchedViaStaffNoConflictOverride?: boolean;
+  /** WP-STAFF-IMPORT B2：配對依據；配唔到＝null。optional：舊 call site／測試唔使改。 */
+  matchBasis?: GuardMatchBasis | null;
+  /** WP-STAFF-IMPORT B2：靠電話（全表唯一）配到，但更表姓名同系統本名／別名唔同。 */
+  telMatchNameDiffers?: boolean;
 }
 
 export interface GuardCandidate {
@@ -460,6 +469,13 @@ export interface GuardMatchIndex {
    * 本名會誤判「工號屬另一人」。加呢個 map 之後，`matchGuard()` 嘅
    * B1-8 比對會本名／別名都試，有一個啱就唔算「唔夾」。 */
   aliasesByGuardId: ReadonlyMap<string, readonly string[]>;
+  /** WP-STAFF-IMPORT B2：正規化電話（`guards.tel`＋`guard_phones`）→ guardId 全部。電話全表唯一，
+   * 所以通常只有一個；多於一個（歷史重複）就唔當鍵用。optional：舊測試自己砌 index 唔使改。 */
+  byTel?: ReadonlyMap<string, readonly string[]>;
+}
+
+function telKey(raw: string): string {
+  return normalizeTelHk(raw) ?? normalizeTel(raw);
 }
 
 function nameTelKey(name: string, tel: string): string {
@@ -529,17 +545,31 @@ export function buildGuardMatchIndex(rows: {
     }
   }
 
+  const byTelSets = new Map<string, Set<string>>();
+  const addTel = (raw: string, guardId: string) => {
+    const k = telKey(raw);
+    if (!k) return;
+    if (!byTelSets.has(k)) byTelSets.set(k, new Set());
+    byTelSets.get(k)!.add(guardId);
+  };
+  for (const p of rows.phones) addTel(p.tel, p.guardId);
+  for (const g of rows.guards) if (g.tel) addTel(g.tel, g.id);
+  const byTel = new Map<string, string[]>([...byTelSets].map(([k, v]) => [k, [...v]]));
+
   const staffNoConflictOverrides = new Map<string, string>();
   for (const o of rows.matchOverrides ?? []) staffNoConflictOverrides.set(overrideKey(normalizeStaffNumber(o.staffNo), o.nameRaw.trim()), o.guardId);
 
-  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId, staffNoConflictOverrides };
+  return { byStaffNumber, byLegacyStaffNo, byName, byNameAndTel, byAlias, byAliasAndTel, staffNoByGuardId, nameByGuardId, aliasesByGuardId, staffNoConflictOverrides, byTel };
 }
 
 function overrideKey(staffNoNorm: string, name: string): string {
   return `${staffNoNorm}\u0000${name}`;
 }
 
-/** 安員配對次序（WP-GUARD-FIX 老闆 2026-09-25 要求擴充）：
+/** WP-STAFF-IMPORT B2 配對次序：工號 → 電話（byTel，全表唯一，對到一個先用）→ 姓名＋電話 →
+ * 淨姓名 → 花名（別名）；每格回 `matchBasis`。以下係 WP-GUARD-FIX 原有說明：
+ *
+ * 安員配對次序（WP-GUARD-FIX 老闆 2026-09-25 要求擴充）：
  *   (1) staff_no_raw（正規化，含已取消號——`byStaffNumber` 索引唔分
  *       current/former，舊號都要搵到返個人）；
  *   (2) 姓名／別名＋電話（`guards.name_aliases`——更表寫嘅可能係花名／
@@ -571,6 +601,12 @@ export function matchGuard(
   params: { staffNoRaw: string | null; nameRaw: string | null; telRaw: string | null },
   index: GuardMatchIndex,
 ): GuardMatchResult {
+  return matchGuardInner(params, index);
+}
+function matchGuardInner(
+  params: { staffNoRaw: string | null; nameRaw: string | null; telRaw: string | null },
+  index: GuardMatchIndex,
+): GuardMatchResult {
   let staffNoProvidedButNotFound = false;
   const rowName = params.nameRaw?.trim() || null;
   if (params.staffNoRaw) {
@@ -588,6 +624,7 @@ export function matchGuard(
           staffNoBelongsToOther: false,
           matchedViaAlias: false,
           matchedViaStaffNoConflictOverride: true,
+          matchBasis: "override",
         };
       }
       const viaNumber = index.byStaffNumber.get(normalized);
@@ -607,6 +644,7 @@ export function matchGuard(
           staffNoMismatch: false,
           staffNoBelongsToOther: false,
           matchedViaAlias: nameMatchKind === "alias",
+          matchBasis: "staff_no",
         };
       }
       const viaLegacy = index.byLegacyStaffNo.get(normalized);
@@ -615,7 +653,7 @@ export function matchGuard(
         if (rowName && nameMatchKind === "none") {
           return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: true, matchedViaAlias: false };
         }
-        return { guardId: viaLegacy, guardMatch: "by_staff_no", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: nameMatchKind === "alias" };
+        return { guardId: viaLegacy, guardMatch: "by_staff_no", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: nameMatchKind === "alias", matchBasis: "staff_no" };
       }
       staffNoProvidedButNotFound = true;
     }
@@ -623,6 +661,26 @@ export function matchGuard(
 
   const name = rowName;
   const tel = params.telRaw ? normalizeTel(params.telRaw) : null;
+
+  // WP-STAFF-IMPORT B2：電話層（全表唯一）——工號之後、姓名＋電話之前。電話只對到一個
+  // guard 先用；對到多個（歷史重複）就跳過，交返下面姓名＋電話處理。
+  if (tel) {
+    const viaTel = index.byTel?.get(telKey(params.telRaw!)) ?? [];
+    if (viaTel.length === 1) {
+      const gid = viaTel[0]!;
+      const nameKind = name ? rowNameMatchesGuard(name, gid, index) : "name";
+      return {
+        guardId: gid,
+        guardMatch: "by_name_tel",
+        matchedViaFormerStaffNo: false,
+        staffNoMismatch: staffNoProvidedButNotFound,
+        staffNoBelongsToOther: false,
+        matchedViaAlias: nameKind === "alias",
+        matchBasis: nameKind === "none" ? "tel" : nameKind === "alias" ? "alias" : "name_tel",
+        telMatchNameDiffers: nameKind === "none",
+      };
+    }
+  }
 
   // WP-GUARD-FIX 驗收（Opus 5.5）：(2)/(2b) 同 (3)/(3b) 改做「本名∪別名」
   // 一齊計候選——之前本名步驟先行、命中一個就即刻返回，如果 A 嘅別名
@@ -635,7 +693,7 @@ export function matchGuard(
     const viaAlias = index.byAliasAndTel.get(key) ?? [];
     const candidates = [...new Set([...viaName, ...viaAlias])];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!) };
+      return { guardId: candidates[0]!, guardMatch: "by_name_tel", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!), matchBasis: viaName.includes(candidates[0]!) ? "name_tel" : "alias" };
     }
     if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
   }
@@ -645,10 +703,10 @@ export function matchGuard(
     const viaAlias = index.byAlias.get(name) ?? [];
     const candidates = [...new Set([...viaName, ...viaAlias])];
     if (candidates.length === 1) {
-      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!) };
+      return { guardId: candidates[0]!, guardMatch: "by_name", matchedViaFormerStaffNo: false, staffNoMismatch: staffNoProvidedButNotFound, staffNoBelongsToOther: false, matchedViaAlias: !viaName.includes(candidates[0]!), matchBasis: viaName.includes(candidates[0]!) ? "name_only" : "alias" };
     }
     if (candidates.length > 1) return { guardId: null, guardMatch: "ambiguous", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
   }
 
-  return { guardId: null, guardMatch: "unmatched", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false };
+  return { guardId: null, guardMatch: "unmatched", matchedViaFormerStaffNo: false, staffNoMismatch: false, staffNoBelongsToOther: false, matchedViaAlias: false, matchBasis: null };
 }

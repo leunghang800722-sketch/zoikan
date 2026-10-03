@@ -256,7 +256,7 @@ export const toRosterUploadDTO = <T extends Record<string, unknown>>(row: T) => 
 const ROSTER_UPLOAD_ROW_FIELDS = [
   "id", "uploadId", "rowIndex", "subSiteName", "workDate", "rawCode",
   "codeKind", "shiftTypeId", "resolvedSiteId", "staffNoRaw", "nameRaw", "telRaw", "rankRaw",
-  "timeRaw", "brokerCodeRaw", "guardId", "guardMatch", "settlementBrokerId",
+  "timeRaw", "brokerCodeRaw", "guardId", "guardMatch", "matchBasis", "settlementBrokerId",
   "hours", "warnings", "createdAt", "updatedAt",
 ] as const;
 export const toRosterUploadRowDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, ROSTER_UPLOAD_ROW_FIELDS);

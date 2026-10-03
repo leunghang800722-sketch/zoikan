@@ -4,6 +4,7 @@
 // 由會計/主管/老闆補；指定咗之後即刻重新對照一次，等更別/安員配對用返
 // 啱嘅盤範圍）。
 import { prisma } from "@/lib/db";
+import { nameOnlyCountsByUpload, NAME_ONLY_WARNING } from "@/lib/roster-upload/name-only";
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { toRosterUploadDTO, toRosterUploadRowDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGateToList, applyFieldGroupGate } from "@/lib/api/field-groups";
@@ -53,8 +54,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       const matched = await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM roster_upload_rows WHERE upload_id = ${id} AND warnings::text ILIKE ${pattern}`;
       warningFilterIds = matched.map((r) => r.id);
     }
+    // WP-STAFF-IMPORT B2：`?match_basis=name_only` 篩淨靠姓名配對嘅格。
+    const matchBasisParam = url.searchParams.get("match_basis");
+    if (matchBasisParam && !["staff_no", "tel", "name_tel", "name_only", "alias", "override"].includes(matchBasisParam)) {
+      throw BadRequest("match_basis 要係 staff_no／tel／name_tel／name_only／alias／override");
+    }
     const where: Prisma.RosterUploadRowWhereInput = {
       uploadId: id,
+      ...(matchBasisParam ? { matchBasis: matchBasisParam } : {}),
       ...(guardMatchParam ? { guardMatch: guardMatchParam as GuardMatchValue } : {}),
       ...(warningFilterIds ? { id: { in: warningFilterIds } } : {}),
     };
@@ -77,7 +84,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       ? gatedRowsDto
       : brandSafeResponse({ ...gatedRowsDto, rows: gatedRowsDto.rows.map((r) => ({ ...r, warnings: redactStaffNoWarnings(r.warnings) })) });
 
-    return ok(brandSafeResponse({ upload: uploadDto, rows: rowsDto }));
+    // WP-STAFF-IMPORT B2：淨靠姓名配對格數警告（文案見 name-only.ts）。
+    const nameOnlyCount = (await nameOnlyCountsByUpload([id])).get(id) ?? 0;
+    return ok(brandSafeResponse({ upload: uploadDto, rows: rowsDto, name_only_count: nameOnlyCount, name_only_warning: nameOnlyCount > 0 ? NAME_ONLY_WARNING : null }));
   });
 }
 

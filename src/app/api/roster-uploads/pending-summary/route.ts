@@ -8,6 +8,7 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { BadRequest } from "@/lib/api/errors";
 import { monthStart } from "@/lib/month-lock";
 import { buildPendingSummary } from "@/lib/roster-upload/pending-summary";
+import { buildNameOnlySummary } from "@/lib/roster-upload/name-only";
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])(-\d{2})?$/;
 
@@ -23,6 +24,7 @@ export async function GET(req: Request) {
     const month = monthParam ? monthStart(new Date(monthParam)) : null;
 
     // 核心抽做 lib（Opus 5.5 驗收建議 2026-09-28），perf:snapshot 同用。
-    return ok(brandSafeResponse({ ...(await buildPendingSummary(month)) }));
+    // WP-STAFF-IMPORT B2：加 `name_only`（淨靠姓名配對格數警告；additive，原有欄位不變）。
+    return ok(brandSafeResponse({ ...(await buildPendingSummary(month)), name_only: await buildNameOnlySummary(month) }));
   });
 }
