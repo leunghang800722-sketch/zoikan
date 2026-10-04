@@ -254,7 +254,7 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
         break;
       case "phone": {
         if (g.tels.some((t) => normTel8(t) === val.phone)) checks.phone = "same";
-        else checks.phone = "fill";
+        else checks.phone = g.tels.length === 0 ? "fill" : "differs";
         break;
       }
       case "address": {
@@ -301,6 +301,8 @@ export interface PreviewRow {
 }
 
 export interface PreviewResult {
+  /** 冇「安員個人資料:view」：依賴「新值 vs 現值」比較嘅彙總計數已隱藏（見 project.ts） */
+  counts_hidden?: boolean;
   package_hash: string;
   package: { version: number; generated_at: string; persons: number };
   person_stats: Record<Action, number>;
@@ -354,7 +356,7 @@ export async function previewImport(pkg: ImportPackage): Promise<PreviewResult> 
         if (p[f].status === "confirmed" && (e.checks[f] === "differs" || e.checks[f] === "conflict")) aa.field_conflicts += 1;
       }
       if (p.nameZh.status === "confirmed" && e.checks.nameZh === "differs") aa.field_conflicts += 1;
-      if (p.phone.status === "confirmed" && (e.checks.phone === "fill" || e.checks.phone === "new")) aa.phones_to_add += 1;
+      if (p.phone.status === "confirmed" && (e.checks.phone === "fill" || e.checks.phone === "differs" || e.checks.phone === "new")) aa.phones_to_add += 1;
       if (p.address.status === "confirmed") {
         if (e.checks.address === "fill" || e.checks.address === "new") aa.addresses_to_add += 1;
         else if (e.checks.address === "differs") aa.field_conflicts += 1;
@@ -428,6 +430,7 @@ export interface PersonResult {
 }
 
 export interface ApplyResult {
+  counts_hidden?: boolean;
   persons_total: number;
   outcomes: Record<PersonResult["outcome"], number>;
   guards_created: number;
@@ -459,6 +462,8 @@ export interface ApplyOptions {
   forced?: Readonly<Record<string, ForcedMatch>>;
   /** 收集每筆寫入（唔影響寫入本身） */
   collect?: WriteChange[];
+  /** true＝操作人冇「安員個人資料:view」：電話只准補空（安員已有電話就唔加），令寫入結果唔再反映「估啱電話」 */
+  fillOnlyPii?: boolean;
   /** 寫 guards audit 時落 `after.import_via` 硬標記（預設 guard_import；分診傳 triage） */
   via?: "guard_import" | "triage";
   /** false＝操作人冇「安員:update」：唔准經導入覆蓋現有安員姓名（會 403）。undefined 當 true。 */
@@ -673,6 +678,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     else {
       const existing = await tx.guardPhone.findFirst({ where: { tel }, select: { guardId: true } });
       if (existing) bump("phone", existing.guardId === guardId ? "same" : "conflict");
+      else if (opts.fillOnlyPii && (await tx.guardPhone.count({ where: { guardId } })) > 0) bump("phone", "conflict");
       else {
         try {
           await assertTelAvailable(tx, tel, guardId);

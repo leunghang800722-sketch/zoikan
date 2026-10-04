@@ -4,7 +4,7 @@
 //    指紋，唔一致（資料中途變咗）就 rollback + 409，要重新預覽。
 //  - 已答嘅題目唔可以重複套用（同一 transaction 內 updateMany status in (open,skipped) 計 count）。
 //  - audit：每個答案一條 triage_answer（邊個答、邊條題、揀咗乜選項、結果計數；冇 PII）＋有寫入就一條 guard_import_apply summary。
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
@@ -26,7 +26,8 @@ function canon(a: TriageAnswer): string {
   const fields = a.fields ? Object.fromEntries(Object.keys(a.fields).sort().map((k) => [k, (a.fields as Record<string, unknown>)[k]])) : undefined;
   return JSON.stringify({ ...Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]])), ...(fields ? { fields } : {}) });
 }
-const hashOf = (qid: string, a: TriageAnswer, fingerprint: string): string => createHash("sha256").update(`${qid}|${canon(a)}|${fingerprint}`).digest("hex");
+// HMAC（server secret）：冇 secret 就算知道寫入指紋格式都唔可以離線算出 hash 去分辨預覽結果（oracle）
+const hashOf = (qid: string, a: TriageAnswer, fingerprint: string): string => createHmac("sha256", process.env.SESSION_SECRET ?? "triage-dev-only").update(`${qid}|${canon(a)}|${fingerprint}`).digest("hex");
 
 function load(q: QRow) {
   return { kind: q.kind as QuestionKind, evidence: q.evidenceJson as unknown as QuestionEvidence, options: q.optionsJson as unknown as QuestionOption[] };
@@ -38,7 +39,7 @@ function assertAnswerable(q: QRow): void {
 
 function optsFor(r: ResolvedWrite, actor: AuthedSession, ip: string | null, caps: ViewerCaps): ApplyOptions {
   // 冇「安員個人資料:update」：可以新建／補空欄／確認包內值，唔准覆蓋現有唔同嘅 PII（applyPerson 會 403）
-  return { actorUserId: actor.userId, ip, decisions: r.decisions, forced: r.forced, autoKeepPendingName: r.autoKeepPendingName, canOverwritePii: caps.piiUpdate, canEditGuard: caps.guardUpdate, via: "triage" };
+  return { actorUserId: actor.userId, ip, decisions: r.decisions, forced: r.forced, autoKeepPendingName: r.autoKeepPendingName, canOverwritePii: caps.piiUpdate, canEditGuard: caps.guardUpdate, fillOnlyPii: !caps.pii, via: "triage" };
 }
 
 /**

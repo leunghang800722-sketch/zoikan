@@ -71,6 +71,13 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     await prisma.triageQuestion.deleteMany({});
     await prisma.triageSession.deleteMany({});
     fx = await seedWp2Fixture();
+    // 每個 test 用全新嘅會計／主管（非老闆每日導入次數按 audit 計，全局固定用戶會跨 test 累積）
+    const mkUser = async (role: "會計" | "主管") => {
+      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
+    };
+    fx.userIds["會計"] = await mkUser("會計");
+    fx.userIds["主管"] = await mkUser("主管");
     owner = await sessionCookieForUser(fx.userIds["老闆"]);
     accountant = await sessionCookieForUser(fx.userIds["會計"]);
     supervisor = await sessionCookieForUser(fx.userIds["主管"]);
@@ -577,8 +584,8 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1999-01-01");
   });
 
-  it("Major-1(c)：非老闆每包最多 2,000 人（preview／apply 400）；老闆唔受限", async () => {
-    const many = Array.from({ length: 2001 }, (_, i) => {
+  it("Major-1(c)：非老闆每包最多 500 人（preview／apply 400）；老闆唔受限", async () => {
+    const many = Array.from({ length: 501 }, (_, i) => {
       const hk = mkHkid("K", String(100000 + i));
       return person({ hkid: hk, name: `導入測試員${i}`, nos: [] });
     });
@@ -704,5 +711,172 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     // PII 唔因標記入到 ai.audit_log
     const ai = await prisma.$queryRaw<{ after: unknown }[]>`SELECT after FROM ai.audit_log WHERE table_name = 'guards' AND row_id = ${g.id}`;
     expect(JSON.stringify(ai)).not.toContain(H[12]!);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 第三輪覆核：結構性封死
+  // ---------------------------------------------------------------------------
+  const EXIST = { tel: "91000077", addr: "現有地址1號", en: "EXISTING EN", dob: "1985-01-01" };
+  async function seedExisting() {
+    const g = await prisma.guard.create({ data: { nameZh: "導入測試員甲", nameEn: EXIST.en, employmentType: "cash_casual", hkid: H[1]!, dateOfBirth: new Date(`${EXIST.dob}T00:00:00.000Z`), createdBy: "t" } });
+    await prisma.guardPhone.create({ data: { guardId: g.id, tel: EXIST.tel, isPrimary: true } });
+    await prisma.guardAddress.create({ data: { guardId: g.id, address: EXIST.addr, isPrimary: true } });
+    return g;
+  }
+  type DV = { dob: string; addr: string; tel: string; en: string };
+  const RIGHT: DV = { dob: EXIST.dob, addr: EXIST.addr, tel: EXIST.tel, en: EXIST.en };
+  const WRONG: Record<string, DV> = {
+    dob: { ...RIGHT, dob: "1999-09-09" },
+    addr: { ...RIGHT, addr: "別處地址2號" },
+    tel: { ...RIGHT, tel: "91000088" },
+    en: { ...RIGHT, en: "OTHER EN" },
+  };
+  const dp = (v: DV, st: St): PackagePerson => {
+    const p = person({ hkid: H[1], name: "導入測試員甲", nos: [] });
+    p.nameEn = F(v.en, st) as never;
+    p.dateOfBirth = F(v.dob, st) as never;
+    p.phone = F(v.tel, st) as never;
+    p.address = { ...F(v.addr, st) } as never;
+    return p;
+  };
+  // 因輸入而異嘅欄（上載者自己提交嘅值嘅回顯／hash）——差分比較時明確豁免
+  const stripPreview = (b: Record<string, unknown>) => {
+    const c = JSON.parse(JSON.stringify(b)) as { package_hash?: string; rows: Record<string, unknown>[] };
+    delete c.package_hash; // 由輸入包決定
+    for (const r of c.rows) for (const k of ["name_en", "phone_masked", "address_masked"]) delete r[k]; // 上載者自己提交嘅值
+    return c;
+  };
+
+  it("差分（核心）：冇 PII view 嘅主管，preview 估啱／估錯（出生日期、地址、電話、英文名）整個回應 JSON 一樣；有 PII view 嘅會計睇到分別", async () => {
+    await seedExisting();
+    const base = stripPreview(await (await previewRoute0(supervisor, pkgOf([dp(RIGHT, "confirmed")]))).json());
+    for (const [f, v] of Object.entries(WRONG)) {
+      const got = stripPreview(await (await previewRoute0(supervisor, pkgOf([dp(v, "confirmed")]))).json());
+      expect(got, `preview ${f}`).toEqual(base);
+    }
+    const accRight = await (await previewRoute0(accountant, pkgOf([dp(RIGHT, "confirmed")]))).json();
+    const accWrong = await (await previewRoute0(accountant, pkgOf([dp(WRONG.dob!, "confirmed")]))).json();
+    expect(accRight.auto_apply.field_conflicts).toBe(0);
+    expect(accWrong.auto_apply.field_conflicts).toBeGreaterThan(0);
+  });
+
+  it("差分（核心）：apply（自動項）估啱／估錯整個回應一樣（豁免：triage.session_id）；帶 decisions 嘅 apply 亦一樣", async () => {
+    await seedExisting();
+    const strip = (b: Record<string, unknown>) => {
+      const c = JSON.parse(JSON.stringify(b)) as { triage?: { session_id?: string } | null; counts_hidden?: boolean };
+      if (c.triage) delete c.triage.session_id;
+      return c;
+    };
+    const base = strip((await applyPkg(supervisor, [dp(RIGHT, "confirmed")])).body);
+    expect(base.counts_hidden).toBe(true);
+    for (const [f, v] of Object.entries(WRONG)) expect(strip((await applyPkg(supervisor, [dp(v, "confirmed")])).body), `apply ${f}`).toEqual(base);
+    // decisions（confirm 出生日期／地址／電話／英文名）
+    const decide = async (v: DV) => {
+      const p = dp(v, "review");
+      const pkg = pkgOf([p]);
+      const dec = { [p.key]: { date_of_birth: { action: "confirm" }, address: { action: "confirm" }, phone: { action: "confirm" }, name_en: { action: "confirm" } } };
+      const res = await post(applyRoute as never, "/api/guards/import/apply", supervisor, { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)), decisions: dec });
+      expect(res.status).toBe(200);
+      return strip(await res.json());
+    };
+    const dBase = await decide(RIGHT);
+    for (const [f, v] of Object.entries(WRONG)) expect(await decide(v), `decisions ${f}`).toEqual(dBase);
+    // 現有資料冇被改
+    const g = await prisma.guard.findFirstOrThrow({ where: { hkid: H[1] }, include: { phones: true, addresses: true } });
+    expect(g.phones.map((p) => p.tel)).toEqual([EXIST.tel]);
+    expect(g.addresses.length).toBe(1);
+    expect(g.nameEn).toBe(EXIST.en);
+    expect(g.dateOfBirth?.toISOString().slice(0, 10)).toBe(EXIST.dob);
+  });
+
+  it("差分（核心）：分診 preview／session 回應估啱／估錯一樣（豁免：evidence.person 回顯上載者自己提交嘅值、preview_hash、題目／session id）", async () => {
+    await seedExisting();
+    const ans = { option: "apply_fields", fields: { dateOfBirth: { action: "confirm" }, address: { action: "confirm" }, phone: { action: "confirm" }, nameEn: { action: "confirm" } } };
+    const run = async (v: DV) => {
+      const a = await applyPkg(supervisor, [dp(v, "review")]);
+      const sid = a.body.triage.session_id as string;
+      const triage = { open: a.body.triage.open_questions, total: a.body.triage.total_questions, important: a.body.triage.important_open, supp: a.body.triage.supplementary_open };
+      const sess = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, supervisor, sid)).json();
+      const q = sess.questions[0];
+      const pv = await (await preview(supervisor, q.id, ans)).json();
+      delete pv.preview_hash;
+      return { triage, counts: sess.session.counts, review_fields: q.evidence.review_fields, options: q.options, candidates: q.evidence.candidates, reasons: q.evidence.reasons, pv };
+    };
+    const base = await run(RIGHT);
+    expect(base.triage.total).toBe(1);
+    for (const [f, v] of Object.entries(WRONG)) expect(await run(v), `triage ${f}`).toEqual(base);
+  });
+
+  it("Major-B：現有中文姓名欄係英文字母——錯名／空白名隱藏，完全相同先顯示（preview 同分診候選）", async () => {
+    await prisma.guard.create({ data: { nameZh: "ABC Real", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
+    for (const wrong of ["XYZ Wrong", "   "]) {
+      const p = person({ hkid: H[1], name: "導入測試員甲", nos: [] });
+      p.nameZh = { value: wrong, status: "confirmed" } as never;
+      const t = await (await previewRoute0(supervisor, pkgOf([p]))).text();
+      expect(t).not.toContain("ABC Real");
+      expect(JSON.parse(t).rows[0].current_name_hidden).toBe(true);
+    }
+    const ok = person({ hkid: H[1], name: "導入測試員甲", nos: [] });
+    ok.nameZh = { value: " abc real ", status: "confirmed" } as never;
+    expect(JSON.parse(await (await previewRoute0(supervisor, pkgOf([ok]))).text()).rows[0].current_name_zh).toBe("ABC Real");
+    expect((await import("@/lib/guards/import/text")).sameNameStrict("", "")).toBe(false);
+    expect((await import("@/lib/guards/import/text")).sameNameStrict(null, " ")).toBe(false);
+  });
+
+  it("Major-B：分診候選——現有姓名係英文字母，錯名隱藏", async () => {
+    await prisma.guard.create({ data: { nameZh: "ABC Real", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
+    const b = await prisma.guard.create({ data: { nameZh: "測試乙現有", employmentType: "cash_casual", createdBy: "t" } });
+    await prisma.guardStaffNumber.create({ data: { guardId: b.id, scheme: "U", number: "U90020", status: "current" } });
+    const p = person({ hkid: H[1], name: "導入測試員錯", nos: ["U90020"] });
+    const a = await applyPkg(supervisor, [p]);
+    const sid = a.body.triage.session_id as string;
+    const text = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, supervisor, sid)).text();
+    expect(text).not.toContain("ABC Real");
+    expect(text).toContain("測試乙現有");
+  });
+
+  it("限額：非老闆每 24 小時 preview＋apply 最多 20 次（429）；preview 寫 audit（冇 PII）；decisions 覆核 apply 同分診作答唔計；老闆唔受限", async () => {
+    const pk = pkgOf([person({ hkid: H[1], name: "導入測試員甲", nos: [] })]);
+    for (let i = 0; i < 20; i++) expect((await previewRoute0(supervisor, pk)).status).toBe(200);
+    const r = await previewRoute0(supervisor, pk);
+    expect(r.status).toBe(429);
+    expect(JSON.stringify(await r.json())).toContain("今日導入次數已達上限");
+    expect((await post(applyRoute as never, "/api/guards/import/apply", supervisor, { package: pk, package_hash: hashPackage(importPackageSchema.parse(pk)) })).status).toBe(429);
+    // 覆核 decisions 嘅 apply 唔受限
+    const p = pk.persons[0]!;
+    expect((await post(applyRoute as never, "/api/guards/import/apply", supervisor, { package: pk, package_hash: hashPackage(importPackageSchema.parse(pk)), decisions: { [p.key]: { name_en: { action: "skip" } } } })).status).toBe(200);
+    // 老闆唔受限
+    for (let i = 0; i < 22; i++) expect((await previewRoute0(owner, pk)).status).toBe(200);
+    const aud = await prisma.auditLog.findMany({ where: { action: "guard_import_preview", actorUserId: fx.userIds["主管"] } });
+    expect(aud.length).toBe(20);
+    expect(JSON.stringify(aud)).not.toContain(H[1]!);
+    // ai.audit_log 冇 PII
+    const ai = await prisma.$queryRaw<{ after: unknown }[]>`SELECT after FROM ai.audit_log WHERE action = 'guard_import_preview' LIMIT 5`;
+    expect(JSON.stringify(ai)).not.toContain(H[1]!);
+    // 其他用戶唔受影響
+    expect((await previewRoute0(accountant, pk)).status).toBe(200);
+  });
+
+  it("補空欄：冇「安員:update」嘅會計，英文名現有係空→改正後確認得；現有非空→403", async () => {
+    const g1 = await prisma.guard.create({ data: { nameZh: "導入測試員甲", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
+    await prisma.guard.create({ data: { nameZh: "導入測試員乙", nameEn: "HAS EN", employmentType: "cash_casual", hkid: H[2]!, createdBy: "t" } });
+    const a = await applyPkg(accountant, [person({ hkid: H[1], name: "導入測試員甲", nos: ["U90001"] }), person({ hkid: H[2], name: "導入測試員乙", nos: ["U90002"] })]);
+    expect(a.body.triage.open_questions).toBe(2);
+    const qs = await prisma.triageQuestion.findMany({ where: { kind: "field_review" }, orderBy: { sort: "asc" } });
+    const ans = { option: "apply_fields", fields: { nameEn: { action: "replace", value: "NEW EN" } } };
+    const sess = await (await get(sessionRoute as never, `/api/triage/sessions/${a.body.triage.session_id}`, accountant, a.body.triage.session_id)).json();
+    const checkOf = (id: string) => sess.questions.find((q: { id: string }) => q.id === id).evidence.review_fields.find((f: { field: string }) => f.field === "nameEn").check;
+    expect(qs.map((q) => checkOf(q.id)).sort()).toEqual(["differs", "fill"].sort());
+    const fillQ = qs.find((q) => checkOf(q.id) === "fill")!;
+    const hasQ = qs.find((q) => checkOf(q.id) === "differs")!;
+    expect((await preview(accountant, hasQ.id, ans)).status).toBe(403);
+    expect((await confirm(accountant, fillQ.id, ans)).res.status).toBe(200);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g1.id } })).nameEn).toBe("NEW EN");
+  });
+
+  it("reason code 中文標籤：未知 code 顯示「其他原因」，唔露英文碼", async () => {
+    const { reasonLabel } = await import("@/components/TriageDialog");
+    for (const c of ["name_differs_from_guard", "same_name_different_hkid", "tel_only_candidate", "staffno_shared_by_persons", "hkid_belongs_to_other_guard"]) expect(reasonLabel(c)).not.toBe("其他原因");
+    expect(reasonLabel("some_unknown_code")).toBe("其他原因");
   });
 });

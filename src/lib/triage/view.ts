@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { canonicalHkid } from "@/lib/guards/identity";
 import type { PersonResult, WriteChange } from "@/lib/guards/import/apply";
 import { fieldValue, type PackagePerson } from "@/lib/guards/import/package";
-import { maskAddressImport, maskHkidImport, maskTelImport, normZh } from "@/lib/guards/import/text";
+import { maskAddressImport, maskHkidImport, maskTelImport, sameNameStrict } from "@/lib/guards/import/text";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { KIND_LABEL, REVIEW_FIELD_LABEL, type QuestionEvidence, type QuestionKind, type QuestionOption } from "./types";
 
@@ -126,13 +126,13 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
     const ans = r.answerJson as { option?: string; guard_id?: string } | null;
     const candIds = e.candidate_guard_ids.length ? e.candidate_guard_ids : e.guard_id ? [e.guard_id] : [];
     const pkgHkid = canonicalHkid(fieldValue(e.person.hkid));
-    const pkgName = normZh(fieldValue(e.person.nameZh));
+    const pkgName = fieldValue(e.person.nameZh);
     const candidates = candIds
       .map((id) => cards.get(id))
       .filter((x): x is CandidateRow => !!x)
       .map((card) => {
         // 經身份證號對中嘅現有安員，姓名同導入包唔同 → 冇 PII view 嘅人唔俾睇名（否則可以用 hkid 查名）
-        const hide = !c.pii && !!pkgHkid && card.hkid_canon === pkgHkid && normZh(card.name_zh) !== pkgName;
+        const hide = !c.pii && !!pkgHkid && card.hkid_canon === pkgHkid && !sameNameStrict(card.name_zh, pkgName);
         const { hkid_canon: _omit, ...rest } = card;
         void _omit;
         return hide ? { ...rest, name_zh: "", name_en: null, name_hidden: true } : rest;
@@ -154,7 +154,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         reasons: e.reasons,
         candidates,
         // 逐欄 check 反映現有 DB 值嘅比較結果：冇「安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
-        review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || f.field === "nameZh" || f.field === "nameEn" ? f.check : "hidden" })),
+        review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),
       },
       // 答案內容（可能含輸入嘅身份證號）唔回傳，淨回選項
       answer: ans?.option ? { option: ans.option, ...(ans.guard_id ? { guard_id: ans.guard_id } : {}) } : null,
@@ -200,11 +200,11 @@ const REASON_LABEL: Record<string, string> = {
   staffno_invalid: "有工號格式唔合法，已跳過",
 };
 
-const PII_OUTCOME_FIELDS = new Set(["hkid", "dateOfBirth", "phone", "address"]);
+const PII_OUTCOME_FIELDS = new Set(["hkid", "dateOfBirth", "phone", "address", "nameEn", "nameZh"]);
 /** 冇 PII view：呢幾隻欄只分「會補上（原本空）」同「冇寫入（已有資料）」，same／conflict 唔可以分得出。 */
 function outcomeLabel(field: string, v: string, c: ViewerCaps): string {
   if (!c.pii && PII_OUTCOME_FIELDS.has(field)) {
-    if (v === "written") return "會補上（原本空）";
+    if (v === "written") return field === "nameEn" || field === "nameZh" ? "會寫入" : "會補上（原本空）";
     if (v === "same" || v === "conflict" || v === "not_written") return "冇寫入（已有資料）";
   }
   return FIELD_OUTCOME_LABEL[v] ?? String(v);
@@ -294,7 +294,8 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
   if (result.phones_added) summary.push(`新增電話 ${result.phones_added} 個`);
   if (result.addresses_added) summary.push(`新增地址 ${result.addresses_added} 個`);
   if (!written) summary.push("照呢個答案，仍然唔會寫入任何資料（要揀其他選項，或者跳過）");
-  const notes = [...new Set(result.reasons)].map((r) => REASON_LABEL[r] ?? `原因碼：${r}`);
+  // 「姓名同現有安員唔同」呢類 reason 冇 PII view 唔回（同 import project.ts 一致）
+  const notes = [...new Set(result.reasons)].filter((r) => c.pii || r !== "name_differs_from_guard").map((r) => REASON_LABEL[r] ?? `原因碼：${r}`);
   return {
     can_confirm: written,
     summary,

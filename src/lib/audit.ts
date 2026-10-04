@@ -81,6 +81,8 @@ export type AuditAction =
   | "export_download"
   // WP-STAFF-IMPORT B3：證件資料批量導入——summary audit（淨係計數，冇逐人資料）。
   | "guard_import_apply"
+  // WP-AI-OPS：導入 preview（計非老闆每日次數用；after 淨係人數／計數／package_hash，冇 PII）
+  | "guard_import_preview"
   // WP-AI-OPS §28.4：導入後對話式分診——開 session／作答（含跳過）／老闆轉交。after 淨係 id＋類別＋計數（冇姓名／身份證等 PII）。
   | "triage_session_create"
   | "triage_answer"

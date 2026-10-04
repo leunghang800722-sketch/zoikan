@@ -70,7 +70,8 @@ function reviewFieldsOf(e: Evaluation): { field: ReviewField; check: string }[] 
     const st = e.person[f];
     const check = e.checks[f];
     if (st.status !== "review" || !fieldValue(st)) continue;
-    if (check === "same" || check === "missing" || check === "not_stored") continue;
+    // 唔再按 check（同現有值比較）篩：否則「問唔問」會洩露新值同現值係咪一樣（冇 PII view 嘅人睇到題目數）
+    if (check === "missing" || check === "not_stored") continue;
     out.push({ field: f, check });
   }
   return out;

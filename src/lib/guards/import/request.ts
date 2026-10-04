@@ -2,9 +2,9 @@
 import { z } from "zod";
 import { BadRequest, Forbidden } from "@/lib/api/errors";
 import { hasPermission, requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
-import { normZh } from "./text";
 import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
-import { PII_OVERWRITE_DENIED_MSG, type ApplyResult, type PersonDecisions, type PreviewResult } from "./apply";
+import { NON_BOSS_MAX_PERSONS } from "./limits";
+import { PII_OVERWRITE_DENIED_MSG, type PersonDecisions } from "./apply";
 
 export function parsePackage(raw: unknown): ImportPackage {
   const r = importPackageSchema.safeParse(raw);
@@ -61,8 +61,7 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
 // ---------------------------------------------------------------------------
 // WP-AI-OPS 驗收修正（Major-1）：「安員個人資料」權限
 // ---------------------------------------------------------------------------
-/** 非老闆每個包最多人數（防止用 hkid 批量撞名探測現有安員）。 */
-export const NON_BOSS_MAX_PERSONS = 2000;
+export { NON_BOSS_MAX_PERSONS } from "./limits";
 
 export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg: ImportPackage): void {
   if (session.baseRole !== "老闆" && pkg.persons.length > NON_BOSS_MAX_PERSONS) {
@@ -78,40 +77,4 @@ export async function assertDecisionsAllowed(session: AuthedSession, decisions: 
   if (all.some((d) => d.name_zh?.action === "replace" || d.name_en?.action === "replace") && !(await hasPermission(session, "安員", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
 }
 
-function basisCategory(b: string): string {
-  return b === "hkid" || b === "staff_no" || b === "tel" ? "identity_key" : b.startsWith("name") ? "name" : b;
-}
-function maskCurrentNames(r: { name_zh: string | null; current_name_zh: string | null; current_name_en: string | null; name_en: string | null }) {
-  const same = !!r.current_name_zh && normZh(r.current_name_zh) === normZh(r.name_zh);
-  if (same || !r.current_name_zh) return { current_name_zh: r.current_name_zh, current_name_en: same ? r.current_name_en : null, current_name_hidden: false };
-  return { current_name_zh: null, current_name_en: null, current_name_hidden: true };
-}
-
-const PII_FIELDS: PersonField[] = ["hkid", "dateOfBirth", "phone", "address"];
-const HIDDEN_CHECKS = new Set(["same", "differs", "conflict", "fill"]);
-
-/** 冇「安員個人資料:view」：逐欄 check（反映現有 DB 值嘅比較結果）一律剝走，免得變成探測現有身份證／電話嘅 oracle。 */
-export function maskPreviewForViewer(p: PreviewResult, pii: boolean): PreviewResult {
-  if (pii) return p;
-  return {
-    ...p,
-    rows: p.rows.map((r) => ({
-      ...r,
-      // 現有安員姓名：只有同導入包姓名完全相同先回（否則可以用身份證號查出現有安員姓名）
-      ...maskCurrentNames(r),
-      basis: r.basis.map(basisCategory).filter((x, i, a) => a.indexOf(x) === i),
-      fields: Object.fromEntries(Object.entries(r.fields).map(([f, v]) => [f, PII_FIELDS.includes(f as PersonField) && HIDDEN_CHECKS.has(v.check) ? { ...v, check: "hidden" } : v])) as typeof r.fields,
-    })),
-  };
-}
-
-export function maskApplyForViewer(a: ApplyResult, pii: boolean): ApplyResult {
-  if (pii) return a;
-  return {
-    ...a,
-    results: a.results.map((r) => ({
-      ...r,
-      fields: Object.fromEntries(Object.entries(r.fields).map(([f, v]) => [f, PII_FIELDS.includes(f as PersonField) && (v === "same" || v === "conflict") ? "not_written" : v])) as typeof r.fields,
-    })),
-  };
-}
+export { maskPreviewForViewer, maskApplyForViewer } from "./project";

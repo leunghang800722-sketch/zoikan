@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
 import { apiPost } from "@/lib/ui/api-client";
-import { TriageDialog } from "@/components/TriageDialog";
+import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 
 type Status = "confirmed" | "review" | "missing";
 interface PkgField {
@@ -78,6 +78,7 @@ interface Preview {
   review: { persons: number; fields: Record<string, number> };
   reason_counts: Record<string, number>;
   rows: Row[];
+  counts_hidden?: boolean;
   viewer?: { pii_update: boolean; guard_update: boolean };
 }
 interface ApplyRes {
@@ -89,6 +90,7 @@ interface ApplyRes {
   addresses_added: number;
   staff_numbers_added: number;
   field_conflicts: number;
+  counts_hidden?: boolean;
   fields_written: Record<string, number>;
   /** WP-AI-OPS §28.4：自動項完成後剩低要人手嘅問題（上載者自己嗰批） */
   triage?: { session_id?: string; open_questions?: number; new_questions: number; total_questions?: number; important_open?: number; supplementary_open?: number; owned_by_other?: boolean } | null;
@@ -176,14 +178,17 @@ export default function GuardImportPage() {
       setError(res.message);
       return;
     }
-    const conflict = res.data.field_conflicts > 0;
-    setDone((d) => ({ ...d, [`${key}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : "已確認" }));
-    await runPreview(pkg);
+    const conflict = !res.data.counts_hidden && res.data.field_conflicts > 0;
+    setDone((d) => ({ ...d, [`${key}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有安員個人資料權限先睇到）" : "已確認" }));
+    // 唔再每次決定後重新 preview：preview 對非老闆有每日次數上限，而且 done 已記低結果
   }
 
   // 冇修改權限：replace 類選項預先停用（server 一樣會 403）。出生日期／地址要「安員個人資料」修改權；姓名要「安員」修改權
-  const replaceDenied = (f: string): boolean =>
-    f === "date_of_birth" || f === "address" ? preview?.viewer?.pii_update === false : f === "name_zh" || f === "name_en" ? preview?.viewer?.guard_update === false : false;
+  // 只有覆蓋現有非空值先要權限：現有係空（fill）或者新建（new）屬補空欄，得
+  const replaceDenied = (f: string, check: string): boolean => {
+    if (check === "fill" || check === "new") return false;
+    return f === "date_of_birth" || f === "address" ? preview?.viewer?.pii_update === false : f === "name_zh" || f === "name_en" ? preview?.viewer?.guard_update === false : false;
+  };
 
   const reviewRows = (preview?.rows ?? []).filter((r) => (r.auto_apply || r.reasons.includes("name_not_confirmed")) && REVIEWABLE.some((f) => r.fields[f]?.status === "review" || (f === "name_zh" && r.name_review_pending)));
 
@@ -245,7 +250,7 @@ export default function GuardImportPage() {
 
           <div className="rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-auto-summary">
             自動套用（淨寫已確認欄）：{preview.auto_apply.persons} 人 · 新增安員 {preview.auto_apply.guards_to_create} · 補欄 {preview.auto_apply.guard_fields_to_fill} ·
-            電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} · 現值唔同（唔覆蓋）{preview.auto_apply.field_conflicts}
+            電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} {preview.counts_hidden ? "" : `· 現值唔同（唔覆蓋）${preview.auto_apply.field_conflicts}`}
             <div className="mt-2 flex items-center gap-2">
               {!confirming ? (
                 <Button variant="primary" disabled={busy || preview.auto_apply.persons === 0} onClick={() => setConfirming(true)}>
@@ -291,7 +296,7 @@ export default function GuardImportPage() {
                   {r.action === "link" && r.basis?.some((b) => b.startsWith("name_")) && <Pill variant="warning">對齊依據：{r.basis.join("＋")}</Pill>}
                   {r.reasons.slice(0, 3).map((x) => (
                     <Pill key={x} variant="neutral">
-                      {x}
+                      {reasonLabel(x)}
                     </Pill>
                   ))}
                 </div>
@@ -313,7 +318,7 @@ export default function GuardImportPage() {
                         />
                         {current ? <div className="mt-0.5 text-[11.5px] text-zk-faint">現值：{current}</div> : null}
                         {!current && r.current_name_hidden && (f === "name_zh" || f === "name_en") ? <div className="mt-0.5 text-[11.5px] text-zk-faint">姓名同現有安員紀錄唔同（要有安員個人資料權限先睇到）</div> : null}
-                        {replaceDenied(f) ? <div className="mt-0.5 text-[11.5px] text-orange-700">呢條要有安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
+                        {replaceDenied(f, r.fields[f]?.check ?? "") ? <div className="mt-0.5 text-[11.5px] text-orange-700">呢條要有安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
                       </div>
                       <div className="flex items-center gap-1.5">
                         {done[k] ? (
@@ -323,7 +328,7 @@ export default function GuardImportPage() {
                             <Button variant="primary" disabled={busy} onClick={() => onDecide(r.key, f, "confirm")}>
                               確認
                             </Button>
-                            <Button disabled={busy || replaceDenied(f)} onClick={() => onDecide(r.key, f, "replace")}>
+                            <Button disabled={busy || replaceDenied(f, r.fields[f]?.check ?? "")} onClick={() => onDecide(r.key, f, "replace")}>
                               改正後確認
                             </Button>
                             {f === "name_zh" && r.reasons.includes("name_not_confirmed") && (

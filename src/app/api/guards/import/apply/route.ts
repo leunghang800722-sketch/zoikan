@@ -11,6 +11,7 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { createGuardImportTriage } from "@/lib/triage/session";
 import { hasPermission } from "@/lib/rbac/requirePermission";
+import { assertImportQuota } from "@/lib/guards/import/limits";
 import { ok, getClientIp, safeErrorSummary, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 
@@ -20,6 +21,7 @@ export async function POST(req: Request) {
     const body = parseBody(applyBodySchema, await readJson(req));
     const pkg = parsePackage(body.package);
     assertPackageSize(session, pkg);
+    if (!body.decisions) await assertImportQuota(session);
     await assertDecisionsAllowed(session, body.decisions);
     const pii = await hasPermission(session, "安員個人資料", "view");
     if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
@@ -30,6 +32,7 @@ export async function POST(req: Request) {
       decisions: mapDecisions(body.decisions),
       canOverwritePii: await hasPermission(session, "安員個人資料", "update"),
       canEditGuard: await hasPermission(session, "安員", "update"),
+      fillOnlyPii: !pii,
     });
     // WP-AI-OPS §28.4：自動項（冇 decisions）完成後開分診 session；失敗唔影響導入結果。回 triage＝上載者自己嗰批。
     let triage: Awaited<ReturnType<typeof createGuardImportTriage>> = null;

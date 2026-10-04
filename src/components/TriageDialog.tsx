@@ -84,7 +84,20 @@ export const REASON_LABEL: Record<string, string> = {
   tel_belongs_to_other_guard: "電話屬於另一個現有安員",
   tel_guard_has_other_hkid: "電話對到嘅現有安員有另一個身份證號",
   tel_multi_guard: "電話對到多個現有安員",
+  name_differs_from_guard: "姓名同現有安員紀錄唔同",
+  same_name_different_hkid: "同名但現有安員嘅身份證號唔同",
+  forced_guard_missing: "揀咗嘅安員已經唔存在",
+  hkid_belongs_to_other_guard: "呢個身份證號已屬於另一個安員",
+  apply_failed: "套用失敗，請稍後再試",
+  staffno_belongs_to_other: "有工號屬於另一個安員",
+  staffno_scheme_has_other_current: "有工號同現有工號類別重複",
+  staffno_invalid: "有工號格式唔合法",
 };
+
+/** reason code → 中文標籤；未知 code 一律顯示「其他原因」，唔露英文碼。 */
+export function reasonLabel(code: string): string {
+  return REASON_LABEL[code] ?? "其他原因";
+}
 
 const STATUS_LABEL: Record<string, string> = { confirmed: "已確認", review: "待核對", missing: "冇資料" };
 const CHECK_LABEL: Record<string, string> = { hidden: "你冇權限睇現有資料",  fill: "現有資料冇，會補", differs: "同現有資料唔同", invalid_date: "日期唔合法", new: "新" };
@@ -285,7 +298,11 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const needsText = !!selected?.input;
   const fieldsReady = selected?.id !== "apply_fields" || Object.keys(fields).length > 0;
   // 冇修改權限：「改正後確認」選項本身停用（server 一樣會 403）。出生日期／地址要「安員個人資料」修改權；姓名要「安員」修改權
-  const replaceDenied = (f: string): boolean => !!q && (f === "dateOfBirth" || f === "address" ? !q.evidence.pii_update : f === "nameZh" || f === "nameEn" ? !q.evidence.guard_update : false);
+  // 只有覆蓋現有非空值先要權限：欄位現有係空（check=fill）或者新建（new）屬補空欄，得
+  const replaceDenied = (f: string, check: string): boolean => {
+    if (!q || check === "fill" || check === "new") return false;
+    return f === "dateOfBirth" || f === "address" ? !q.evidence.pii_update : f === "nameZh" || f === "nameEn" ? !q.evidence.guard_update : false;
+  };
   const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy;
   const isSupp = q?.kind === SUPP_KIND;
   const progressTotal = totals ? (isSupp ? totals.sup : totals.imp) : 0;
@@ -341,7 +358,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                 <Pill variant="neutral">{q.kind_label}</Pill>
                 {q.evidence.reasons.slice(0, 3).map((r) => (
                   <span key={r} className="text-[12px] text-zk-muted">
-                    {REASON_LABEL[r] ?? r}
+                    {reasonLabel(r)}
                   </span>
                 ))}
               </div>
@@ -403,7 +420,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                         <button
                                           key={a}
                                           type="button"
-                                          disabled={a === "replace" && replaceDenied(rf.field)}
+                                          disabled={a === "replace" && replaceDenied(rf.field, rf.check)}
                                           className={`rounded border px-2 py-1 text-[12px] ${cur?.action === a ? "border-zk-primary bg-blue-100 font-semibold" : "border-zk-border"} disabled:cursor-not-allowed disabled:opacity-40`}
                                           onClick={() => {
                                             setFields((f) => ({ ...f, [rf.field]: { action: a, value: f[rf.field]?.value ?? undefined } }));
@@ -415,7 +432,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                         </button>
                                       ))}
                                     </span>
-                                    {replaceDenied(rf.field) && <span className="mt-1 block text-[11.5px] text-orange-700">「改正後確認」要有修改權限嘅同事（例如老闆）先可以做。</span>}
+                                    {replaceDenied(rf.field, rf.check) && <span className="mt-1 block text-[11.5px] text-orange-700">「改正後確認」要有修改權限嘅同事（例如老闆）先可以做。</span>}
                                     {cur && cur.action !== "skip" && (
                                       <input
                                         className="mt-1.5 w-full rounded-[5px] border border-zk-border px-2 py-1.5"
