@@ -29,6 +29,7 @@ import { inputCls } from "@/components/ui/Field";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateTime, currentMonthStr } from "@/lib/ui/format";
 import type { ApiListResult } from "@/lib/ui/api-client";
+import { MonthHealthCard } from "../../month-close/MonthHealthCard";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface MonthCloseDto {
@@ -614,6 +615,9 @@ export default function MonthlyCloseWorkbenchPage() {
             </dl>
 
             <hr className="border-zk-border" />
+
+            {/* WP-AI-OPS §28.3：鎖月前體檢（只提示，唔擋鎖月）。 */}
+            {!locked && <MonthHealthCard month={month} />}
 
             {!locked ? (
               <div className="flex flex-col gap-2">
