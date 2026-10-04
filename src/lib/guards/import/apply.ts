@@ -439,6 +439,8 @@ export interface ApplyResult {
   addresses_added: number;
   staff_numbers_added: number;
   field_conflicts: number;
+  /** 因冇權限覆蓋現有非空值而被擋嘅人數（reason overwrite_forbidden；只取決於現值係咪非空） */
+  overwrite_blocked: number;
   fields_written: Record<string, number>;
   results: PersonResult[];
 }
@@ -504,6 +506,9 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
 export const PII_OVERWRITE_DENIED_MSG = "呢條要有安員個人資料修改權限嘅同事（例如老闆）答";
 function assertMayOverwritePii(opts: ApplyOptions): void {
   if (opts.canOverwritePii === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
+}
+export function isOverwriteForbidden(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 403 && e.message === PII_OVERWRITE_DENIED_MSG;
 }
 function assertMayEditGuard(opts: ApplyOptions): void {
   if (opts.canEditGuard === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
@@ -731,19 +736,34 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
     addresses_added: 0,
     staff_numbers_added: 0,
     field_conflicts: 0,
+    overwrite_blocked: 0,
     fields_written: {},
     results: [],
   };
 
   const runBatch = async (batch: PackagePerson[]): Promise<PersonResult[]> => {
-    const part: ApplyResult = { ...acc, guards_created: 0, guards_updated: 0, phones_added: 0, addresses_added: 0, staff_numbers_added: 0, field_conflicts: 0, fields_written: {}, results: [] };
+    const part: ApplyResult = { ...acc, guards_created: 0, guards_updated: 0, phones_added: 0, addresses_added: 0, staff_numbers_added: 0, field_conflicts: 0, overwrite_blocked: 0, fields_written: {}, results: [] };
     const out = await prisma.$transaction(
       async (tx) => {
         await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${IMPORT_ADVISORY_LOCK_KEY})`);
         let ctx = await loadCtx(tx);
         const rs: PersonResult[] = [];
         for (const p of batch) {
-          const r = await applyPerson(tx, ctx, p, groupReasons.get(p.key) ?? [], opts.decisions?.[p.key], opts, part);
+          // 逐人 savepoint：呢個人因為冇權限覆蓋現有非空值而被擋 → 只 rollback 佢自己（唔半寫佢其他欄），
+          // 標 overwrite_forbidden，其他人照常寫；唔會成批／成個請求 403（前面批次已 commit）。
+          await tx.$executeRawUnsafe("SAVEPOINT import_person");
+          const snap = { ...part, fields_written: { ...part.fields_written } };
+          let r: PersonResult;
+          try {
+            r = await applyPerson(tx, ctx, p, groupReasons.get(p.key) ?? [], opts.decisions?.[p.key], opts, part);
+            await tx.$executeRawUnsafe("RELEASE SAVEPOINT import_person");
+          } catch (e) {
+            if (!isOverwriteForbidden(e)) throw e;
+            await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT import_person");
+            Object.assign(part, snap);
+            part.overwrite_blocked += 1;
+            r = { key: p.key, outcome: "needs_review", reasons: ["overwrite_forbidden"], fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
+          }
           rs.push(r);
           if (r.outcome === "created" || r.staff_numbers_added || r.phones_added || r.addresses_added || Object.values(r.fields).includes("written")) ctx = await loadCtx(tx);
         }
@@ -758,6 +778,7 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
     acc.addresses_added += part.addresses_added;
     acc.staff_numbers_added += part.staff_numbers_added;
     acc.field_conflicts += part.field_conflicts;
+    acc.overwrite_blocked += part.overwrite_blocked;
     for (const [k, v] of Object.entries(part.fields_written)) acc.fields_written[k] = (acc.fields_written[k] ?? 0) + v;
     return out;
   };
@@ -798,6 +819,7 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
       addresses_added: acc.addresses_added,
       staff_numbers_added: acc.staff_numbers_added,
       field_conflicts: acc.field_conflicts,
+      overwrite_blocked: acc.overwrite_blocked,
       review_decisions: opts.decisions ? Object.keys(opts.decisions).length : 0,
     },
     ip: opts.ip,
@@ -872,6 +894,7 @@ export async function applyOnePerson(pkg1: ImportPackage, opts: ApplyOptions, mo
     addresses_added: 0,
     staff_numbers_added: 0,
     field_conflicts: 0,
+    overwrite_blocked: 0,
     fields_written: {},
     results: [],
   };

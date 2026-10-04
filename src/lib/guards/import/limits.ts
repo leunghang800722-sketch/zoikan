@@ -10,11 +10,13 @@ export const NON_BOSS_MAX_PERSONS = 500;
 export const NON_BOSS_MAX_RUNS_PER_DAY = 20;
 export const QUOTA_MSG = "今日導入次數已達上限，請搵老闆";
 
-export async function assertImportQuota(session: Pick<AuthedSession, "baseRole" | "userId">): Promise<void> {
+export async function assertImportQuota(session: Pick<AuthedSession, "baseRole" | "userId">, db: Pick<typeof prisma, "$queryRaw"> = prisma): Promise<void> {
   if (session.baseRole === "老闆") return;
-  const rows = await prisma.$queryRaw<{ n: number }[]>`
+  // cutoff 喺 JS 計（UTC ISO）：created_at 係冇時區 timestamp（存 UTC），唔可以用 now()（受 session 時區影響）
+  const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const rows = await db.$queryRaw<{ n: number }[]>`
     SELECT count(*)::int AS n FROM audit_log
-    WHERE actor_user_id = ${session.userId} AND created_at > now() - interval '24 hours'
+    WHERE actor_user_id = ${session.userId} AND created_at > ${since}::timestamp
       AND (action = 'guard_import_preview'
         OR (action = 'guard_import_apply' AND (after->>'via') IS NULL AND coalesce((after->>'review_decisions')::int, 0) = 0))`;
   if ((rows[0]?.n ?? 0) >= NON_BOSS_MAX_RUNS_PER_DAY) throw new ApiError(429, "too_many_requests", QUOTA_MSG);

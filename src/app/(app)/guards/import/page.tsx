@@ -91,6 +91,8 @@ interface ApplyRes {
   staff_numbers_added: number;
   field_conflicts: number;
   counts_hidden?: boolean;
+  overwrite_blocked?: number;
+  results?: { key: string; reasons: string[] }[];
   fields_written: Record<string, number>;
   /** WP-AI-OPS §28.4：自動項完成後剩低要人手嘅問題（上載者自己嗰批） */
   triage?: { session_id?: string; open_questions?: number; new_questions: number; total_questions?: number; important_open?: number; supplementary_open?: number; owned_by_other?: boolean } | null;
@@ -176,6 +178,10 @@ export default function GuardImportPage() {
     setBusy(false);
     if (!res.ok) {
       setError(res.message);
+      return;
+    }
+    if (res.data.results?.some((x) => x.reasons.includes("overwrite_forbidden"))) {
+      setDone((d) => ({ ...d, [`${key}:${field}`]: "未處理：要有安員個人資料／安員修改權限嘅同事處理" }));
       return;
     }
     const conflict = !res.data.counts_hidden && res.data.field_conflicts > 0;

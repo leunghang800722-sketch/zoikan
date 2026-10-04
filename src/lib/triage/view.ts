@@ -4,6 +4,7 @@ import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { canonicalHkid } from "@/lib/guards/identity";
 import type { PersonResult, WriteChange } from "@/lib/guards/import/apply";
+import { NAME_REASONS } from "@/lib/guards/import/project";
 import { fieldValue, type PackagePerson } from "@/lib/guards/import/package";
 import { maskAddressImport, maskHkidImport, maskTelImport, sameNameStrict } from "@/lib/guards/import/text";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
@@ -151,7 +152,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         pii_update: c.piiUpdate,
         guard_update: c.guardUpdate,
         person: personView(e.person, c),
-        reasons: e.reasons,
+        reasons: c.pii ? e.reasons : e.reasons.filter((x) => !NAME_REASONS.has(x)),
         candidates,
         // 逐欄 check 反映現有 DB 值嘅比較結果：冇「安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),
