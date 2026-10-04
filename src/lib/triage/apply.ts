@@ -26,8 +26,13 @@ function canon(a: TriageAnswer): string {
   const fields = a.fields ? Object.fromEntries(Object.keys(a.fields).sort().map((k) => [k, (a.fields as Record<string, unknown>)[k]])) : undefined;
   return JSON.stringify({ ...Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]])), ...(fields ? { fields } : {}) });
 }
+function hmacKey(): string {
+  const k = process.env.SESSION_SECRET;
+  if (!k || k.length < 32) throw new Error("SESSION_SECRET 未設定或長度不足 32 字符");
+  return k;
+}
 // HMAC（server secret）：冇 secret 就算知道寫入指紋格式都唔可以離線算出 hash 去分辨預覽結果（oracle）
-const hashOf = (qid: string, a: TriageAnswer, fingerprint: string): string => createHmac("sha256", process.env.SESSION_SECRET ?? "triage-dev-only").update(`${qid}|${canon(a)}|${fingerprint}`).digest("hex");
+const hashOf = (qid: string, a: TriageAnswer, fingerprint: string): string => createHmac("sha256", hmacKey()).update(`${qid}|${canon(a)}|${fingerprint}`).digest("hex");
 
 function load(q: QRow) {
   return { kind: q.kind as QuestionKind, evidence: q.evidenceJson as unknown as QuestionEvidence, options: q.optionsJson as unknown as QuestionOption[] };

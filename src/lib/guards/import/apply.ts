@@ -767,7 +767,9 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
     let rs: PersonResult[];
     try {
       rs = await runBatch(batch);
-    } catch {
+    } catch (e) {
+      // 冇覆蓋權：403 照樣丟出（已 rollback，冇寫入）；403 只取決於「現值係咪非空」，唔取決於新值
+      if (e instanceof ApiError && e.status === 403) throw e;
       // 批失敗（已 rollback）→ 逐人重試，壞嗰個記 error（理由碼，唔帶資料）
       rs = [];
       for (const p of batch) {

@@ -879,4 +879,82 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     for (const c of ["name_differs_from_guard", "same_name_different_hkid", "tel_only_candidate", "staffno_shared_by_persons", "hkid_belongs_to_other_guard"]) expect(reasonLabel(c)).not.toBe("其他原因");
     expect(reasonLabel("some_unknown_code")).toBe("其他原因");
   });
+
+  // ---------------------------------------------------------------------------
+  // 上線後跟進（Opus 第四輪 4 個 Minor）
+  // ---------------------------------------------------------------------------
+  it("Minor-1：分診 session GET 嘅 evidence.reasons，冇 PII view 剝走 name_differs_from_guard；有 PII view 照回", async () => {
+    const a = await applyPkg(supervisor, [person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"] })]);
+    const sid = a.body.triage.session_id as string;
+    const q = await qOfKind("name_not_confirmed");
+    const ev = q.evidenceJson as { reasons: string[] };
+    await prisma.triageQuestion.update({ where: { id: q.id }, data: { evidenceJson: { ...ev, reasons: [...ev.reasons, "name_differs_from_guard"] } } });
+    const sup = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, supervisor, sid)).text();
+    expect(sup).not.toContain("name_differs_from_guard");
+    const boss = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, owner, sid)).text();
+    expect(boss).toContain("name_differs_from_guard");
+  });
+
+  it("Minor-2：批量導入 decisions replace 只擋「覆蓋現有非空值」；補空欄得；403 唔取決於新值", async () => {
+    const mk = async (hk: string, over: { nameEn?: string; addr?: string }) => {
+      const g = await prisma.guard.create({ data: { nameZh: "導入測試員甲", nameEn: over.nameEn ?? null, employmentType: "cash_casual", hkid: hk, createdBy: "t" } });
+      if (over.addr) await prisma.guardAddress.create({ data: { guardId: g.id, address: over.addr, isPrimary: true } });
+      return g;
+    };
+    const gEmpty = await mk(H[1]!, {});
+    const gFull = await mk(H[2]!, { nameEn: "HAS EN", addr: "現有地址1號" });
+    const run = async (cookie: string, hk: string, nm: string, dec: Record<string, unknown>) => {
+      const p = person({ hkid: hk, name: nm, nos: [] });
+      const pkg = pkgOf([p]);
+      return post(applyRoute as never, "/api/guards/import/apply", cookie, { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)), decisions: { [p.key]: dec } });
+    };
+    // 補空欄：冇「安員個人資料:update」嘅主管補空地址得；冇「安員:update」嘅會計補空英文名得
+    expect((await run(supervisor, H[1]!, "導入測試員甲", { address: { action: "replace", value: "新地址9號" } })).status).toBe(200);
+    expect(await prisma.guardAddress.count({ where: { guardId: gEmpty.id } })).toBe(1);
+    expect((await run(accountant, H[1]!, "導入測試員甲", { name_en: { action: "replace", value: "FILLED EN" } })).status).toBe(200);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: gEmpty.id } })).nameEn).toBe("FILLED EN");
+    // 覆蓋現有非空值：403，唔理新值同現值一樣定唔同
+    for (const v of ["現有地址1號", "別處地址2號"]) expect((await run(supervisor, H[2]!, "導入測試員甲", { address: { action: "replace", value: v } })).status).toBe(403);
+    for (const v of ["HAS EN", "OTHER EN"]) expect((await run(accountant, H[2]!, "導入測試員甲", { name_en: { action: "replace", value: v } })).status).toBe(403);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: gFull.id } })).nameEn).toBe("HAS EN");
+    expect(await prisma.guardAddress.count({ where: { guardId: gFull.id } })).toBe(1);
+  });
+
+  it("Minor-3：每日限額視窗唔受 session 時區影響（UTC／Asia/Hong_Kong 一致：17 小時前計入、25 小時前唔計）", async () => {
+    const { assertImportQuota, NON_BOSS_MAX_RUNS_PER_DAY } = await import("@/lib/guards/import/limits");
+    const seed = async (userId: string, hoursAgo: number) => {
+      const t = new Date(Date.now() - hoursAgo * 3600_000);
+      for (let i = 0; i < NON_BOSS_MAX_RUNS_PER_DAY; i++) await prisma.auditLog.create({ data: { actorUserId: userId, tableName: "guard_import", rowId: userId, action: "guard_import_preview", createdAt: t, after: { persons: 1 } } });
+    };
+    const mkU = async () => (await prisma.user.create({ data: { name: "限額測試", tel: `7${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id;
+    const recent = await mkU();
+    const old = await mkU();
+    await seed(recent, 17);
+    await seed(old, 25);
+    for (const tz of ["UTC", "Asia/Hong_Kong", "America/Los_Angeles"]) {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL TIME ZONE '${tz}'`);
+        await expect(assertImportQuota({ baseRole: "會計", userId: recent }, tx as never), tz).rejects.toMatchObject({ status: 429 });
+        await expect(assertImportQuota({ baseRole: "會計", userId: old }, tx as never), tz).resolves.toBeUndefined();
+      });
+    }
+  });
+
+  it("Minor-4：冇 SESSION_SECRET 唔 fallback 固定 key，預覽直接 throw，唔會用弱 key 簽 hash", async () => {
+    const gName = await prisma.guard.create({ data: { nameZh: "導入測試員丙", employmentType: "cash_casual", createdBy: "t" } });
+    await applyPkg(accountant, [person({ hkid: H[3], name: "導入測試員丙", nos: ["U90004"] })]);
+    const q = await qOfKind("name_only_candidate");
+    const { previewAnswer } = await import("@/lib/triage/apply");
+    const actor = { userId: fx.userIds["會計"], baseRole: "會計" } as never;
+    const caps = { pii: true, piiUpdate: true, guardUpdate: true };
+    const ans = { option: "link", guard_id: gName.id };
+    expect((await previewAnswer(actor, q, ans, caps, null)).preview_hash).toHaveLength(64);
+    const saved = process.env.SESSION_SECRET;
+    try {
+      delete process.env.SESSION_SECRET;
+      await expect(previewAnswer(actor, q, ans, caps, null)).rejects.toThrow(/SESSION_SECRET/);
+    } finally {
+      process.env.SESSION_SECRET = saved;
+    }
+  });
 });

@@ -1,10 +1,10 @@
 // WP-STAFF-IMPORT B3：導入 API 共用——body 解析（錯誤訊息淨帶欄位路徑，唔帶值）＋權限。
 import { z } from "zod";
-import { BadRequest, Forbidden } from "@/lib/api/errors";
-import { hasPermission, requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
+import { BadRequest } from "@/lib/api/errors";
+import { requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
 import { NON_BOSS_MAX_PERSONS } from "./limits";
-import { PII_OVERWRITE_DENIED_MSG, type PersonDecisions } from "./apply";
+import { type PersonDecisions } from "./apply";
 
 export function parsePackage(raw: unknown): ImportPackage {
   const r = importPackageSchema.safeParse(raw);
@@ -69,12 +69,7 @@ export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg:
   }
 }
 
-/** replace 會覆蓋現值：出生日期／地址要「安員個人資料:update」；姓名／英文名要「安員:update」。 */
-export async function assertDecisionsAllowed(session: AuthedSession, decisions: z.infer<typeof applyBodySchema>["decisions"]): Promise<void> {
-  if (!decisions) return;
-  const all = Object.values(decisions);
-  if (all.some((d) => d.date_of_birth?.action === "replace" || d.address?.action === "replace") && !(await hasPermission(session, "安員個人資料", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
-  if (all.some((d) => d.name_zh?.action === "replace" || d.name_en?.action === "replace") && !(await hasPermission(session, "安員", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
-}
+// replace 覆蓋現值嘅權限檢查（出生日期／地址：「安員個人資料:update」；姓名／英文名：「安員:update」）
+// 喺 applyPerson 做：只取決於「現值係咪非空」，補空欄得；403 由 applyImport 丟出（唔取決於新值）。
 
 export { maskPreviewForViewer, maskApplyForViewer } from "./project";

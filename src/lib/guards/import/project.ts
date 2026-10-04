@@ -11,7 +11,7 @@ const COMPARED: PersonField[] = ["hkid", "dateOfBirth", "phone", "address", "nam
 /** 呢幾個 check 值代表「現有欄位非空」——要遮；`fill`（現有係空）同 `new` 唔洩露比較結果，保留。 */
 const HIDDEN_CHECKS = new Set(["same", "differs", "conflict"]);
 /** 淨洩露「姓名同現有安員唔同」嘅 reason code（已有 current_name_hidden 旗，唔再重複）。 */
-const NAME_REASONS = new Set(["name_differs_from_guard"]);
+export const NAME_REASONS = new Set(["name_differs_from_guard"]);
 
 function basisCategory(b: string): string {
   return b === "hkid" || b === "staff_no" || b === "tel" ? "identity_key" : b.startsWith("name") ? "name" : b;

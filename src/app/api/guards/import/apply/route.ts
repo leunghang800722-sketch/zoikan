@@ -3,7 +3,7 @@
 //  - 冇 decisions：自動套用（link／create 嘅人，只寫 status=confirmed 嘅欄）。
 //  - 有 decisions（覆核頁）：只處理有決定嘅人；逐欄 confirm／replace／skip。
 // 冪等；分批 transaction；每筆 writeAuditTx。導入包唔入 DB（要重新帶）。
-import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, assertDecisionsAllowed, maskApplyForViewer } from "@/lib/guards/import/request";
+import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer } from "@/lib/guards/import/request";
 import { hashPackage } from "@/lib/guards/import/package";
 import { Conflict } from "@/lib/api/errors";
 import { applyImport } from "@/lib/guards/import/apply";
@@ -22,7 +22,6 @@ export async function POST(req: Request) {
     const pkg = parsePackage(body.package);
     assertPackageSize(session, pkg);
     if (!body.decisions) await assertImportQuota(session);
-    await assertDecisionsAllowed(session, body.decisions);
     const pii = await hasPermission(session, "安員個人資料", "view");
     if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
     const result = await applyImport(pkg, {
