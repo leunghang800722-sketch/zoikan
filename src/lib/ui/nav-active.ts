@@ -8,6 +8,8 @@ export function isLinkActive(pathname: string, href: string): boolean {
   if (pathname === href) return true;
   // 更表索引與編輯器共用「更表」active（README「Interactions」）。
   if (href === "/roster") return pathname.startsWith("/roster");
+  // WP-AI-OPS：「保安員」(/guards) 唔連 /guards/import（證件資料導入有自己條連結），免得雙重 active。
+  if (href === "/guards" && pathname.startsWith("/guards/import")) return false;
   return pathname.startsWith(`${href}/`);
 }
 
@@ -26,9 +28,12 @@ const INTERNAL_KICKER_BY_HREF: Record<string, string> = {
   "/approvals": "排更",
   "/sites": "主檔",
   "/guards": "主檔",
+  "/guards/import": "主檔",
+  "/triage": "主檔",
   "/brokers": "主檔",
   "/rate-cards": "主檔",
   "/reports/gross-margin": "財務",
+  "/reports/ops-digest": "財務",
   "/reports/monthly-close": "財務",
   "/reports/payroll": "財務",
   "/reports/shortfall": "財務",

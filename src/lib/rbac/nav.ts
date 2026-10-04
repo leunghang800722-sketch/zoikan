@@ -102,6 +102,9 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   // 都連去同一個 /guards 路徑，API 自己會 scope（見 src/app/api/guards）。
   push("/guards", "保安員", session.baseRole === "雞頭" ? "自己安員" : "安員");
   push("/brokers", "雞頭", "雞頭");
+  // WP-AI-OPS §28.4：安員證件資料批量導入（老闆／會計／主管）＋導入後「待答問題」（badge＝自己未答數，老闆見全部）。
+  push("/guards/import", "證件資料導入", "安員批量導入");
+  push("/triage", "待答問題", "導入分診");
   push("/rate-cards", "價目", "出街價");
   // P1-WP4：報表 module——每份報表獨立一行權限（設計文件§5.0）。雞頭端
   // 「本月應收」都經「出街價」呢個雞頭出廠已有嘅 module（§6.2），連去
@@ -111,6 +114,8 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   } else {
     push("/reports/gross-margin", "毛利即時表", "毛利即時表");
     push("/reports/monthly-close", "月結工作台", "月結總表");
+    // WP-AI-OPS §28.2：每月修正摘要（權限＝module「月結總表」view）。
+    push("/reports/ops-digest", "每月修正摘要", "月結總表");
     push("/reports/payroll", "糧明細", "糧明細");
     // WP-ONE-CLICK：「一鍵全月結算」——老闆／會計全開，主管淨係 view
     // （grants 已經反映呢個分別，push() 唔使再判斷 baseRole）。
@@ -155,8 +160,8 @@ export interface NavGroup {
 const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
   { title: "", hrefs: ["/"] },
   { title: "排更", hrefs: ["/roster", "/roster-uploads", "/guard-fix", "/quotas", "/approvals"] },
-  { title: "主檔", hrefs: ["/sites", "/guards", "/brokers", "/rate-cards"] },
-  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/payroll", "/reports/shortfall", "/month-close", "/reports/longterm-payroll"] },
+  { title: "主檔", hrefs: ["/sites", "/guards", "/guards/import", "/triage", "/brokers", "/rate-cards"] },
+  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/ops-digest", "/reports/payroll", "/reports/shortfall", "/month-close", "/reports/longterm-payroll"] },
   { title: "系統", hrefs: ["/users", "/roles", "/audit-log", "/feedback"] },
 ];
 

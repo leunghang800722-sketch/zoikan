@@ -1,5 +1,5 @@
 "use client";
-// WP-STAFF-IMPORT B3：安員證件資料批量導入（老闆）。
+// WP-STAFF-IMPORT B3：安員證件資料批量導入（老闆／會計／主管；WP-AI-OPS §28.4 開放）。
 //   ① 揀本機產生嘅導入包（import-package.json，淨文字）→ ② 預覽統計（逐欄 confirmed／review／missing
 //   ＋逐人 link／create／conflict／needs_review）→ ③「套用自動項」（淨寫 confirmed 欄）→ ④ 覆核清單：
 //   review 欄逐欄「確認／改正後確認／略過」。
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
 import { apiPost } from "@/lib/ui/api-client";
+import { TriageDialog } from "@/components/TriageDialog";
 
 type Status = "confirmed" | "review" | "missing";
 interface PkgField {
@@ -87,6 +88,8 @@ interface ApplyRes {
   staff_numbers_added: number;
   field_conflicts: number;
   fields_written: Record<string, number>;
+  /** WP-AI-OPS §28.4：自動項完成後剩低要人手嘅問題（上載者自己嗰批） */
+  triage?: { session_id: string; open_questions: number; new_questions: number; total_questions: number } | null;
 }
 
 export default function GuardImportPage() {
@@ -101,6 +104,8 @@ export default function GuardImportPage() {
   const [shown, setShown] = useState(30);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [done, setDone] = useState<Record<string, string>>({});
+  const [triageSession, setTriageSession] = useState<string | null>(null);
+  const [triageOpen, setTriageOpen] = useState(0);
 
   const personByKey = useMemo(() => new Map((pkg?.persons ?? []).map((p) => [p.key, p])), [pkg]);
 
@@ -146,6 +151,9 @@ export default function GuardImportPage() {
       return;
     }
     setApplyRes(res.data);
+    // 有問題就自動彈出對話式分診（可以「遲啲先答」，之後喺「待答問題」續答）
+    setTriageOpen(res.data.triage?.open_questions ?? 0);
+    if (res.data.triage && res.data.triage.open_questions > 0) setTriageSession(res.data.triage.session_id);
     setNotice(`已套用：新增 ${res.data.guards_created}、更新 ${res.data.guards_updated}、電話 ${res.data.phones_added}、地址 ${res.data.addresses_added}、工號 ${res.data.staff_numbers_added}`);
     await runPreview(pkg);
   }
@@ -185,6 +193,14 @@ export default function GuardImportPage() {
           {fileName && <span className="text-zk-faint">{fileName}</span>}
         </label>
       </div>
+
+      {triageSession && (
+        <TriageDialog
+          sessionId={triageSession}
+          onClose={() => setTriageSession(null)}
+          onChanged={() => setTriageOpen((n) => Math.max(0, n - 1))}
+        />
+      )}
 
       {preview && (
         <>
@@ -240,6 +256,14 @@ export default function GuardImportPage() {
             </div>
           </div>
           {applyRes && <div className="text-[12.5px] text-zk-muted">結果：{JSON.stringify(applyRes.outcomes)}</div>}
+          {applyRes?.triage && triageOpen > 0 && !triageSession && (
+            <div className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px]" data-testid="triage-reopen">
+              <span>有 {triageOpen} 條待答問題</span>
+              <Button variant="primary" onClick={() => setTriageSession(applyRes.triage!.session_id)}>
+                繼續答
+              </Button>
+            </div>
+          )}
 
           <h2 className="text-sm font-semibold">覆核清單（{reviewRows.length} 人）</h2>
           {reviewRows.length === 0 && <EmptyState title="冇待覆核嘅欄" />}

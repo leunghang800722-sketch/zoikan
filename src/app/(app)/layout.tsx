@@ -10,6 +10,7 @@ import { MobileNav } from "@/components/MobileNav";
 import { DesktopNav } from "@/components/DesktopNav";
 import { isAiConfigured } from "@/lib/ai/config";
 import { prisma } from "@/lib/db";
+import { countOpenFor } from "@/lib/triage/session";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
@@ -42,7 +43,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // `src/lib/rbac/nav.ts` 嘅「現場意見」連結一樣用「助手」module＋
   // baseRole==="老闆" 雙重判斷）。
   const unreadFeedback = grants["助手"] && session.baseRole === "老闆" ? await prisma.feedbackReport.count({ where: { status: "new" } }) : 0;
+  // WP-AI-OPS §28.4：「待答問題」badge＝自己上載嗰批未答數（老闆＝全部）。
+  const triageOpen = grants["導入分診"] ? await countOpenFor(session) : 0;
   const badges: Record<string, number> = {
+    ...(triageOpen > 0 ? { "/triage": triageOpen } : {}),
     ...(approvalsPending > 0 ? { "/approvals": approvalsPending } : {}),
     ...(unreadFeedback > 0 ? { "/feedback": unreadFeedback } : {}),
   };

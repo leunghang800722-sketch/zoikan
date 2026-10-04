@@ -20,6 +20,7 @@ import ShortfallDashboard from "./ShortfallDashboard";
 import BrokerDashboard from "./BrokerDashboard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getNavLinks, getViewGrants } from "@/lib/rbac/nav";
+import { TriageHomeNotice } from "@/components/TriageHomeNotice";
 
 // 純顯示層——淨係俾呢個快速連結卡加一行副題文字，唔影響邊條連結顯示
 // （顯示與否一律由 `getNavLinks()` 決定）；冇對應到嘅 href 就冇副題，
@@ -40,6 +41,9 @@ const LINK_DESCRIPTIONS: Record<string, string> = {
   "/users": "用戶帳號管理",
   "/roles": "角色權限矩陣",
   "/audit-log": "操作紀錄（唯讀）",
+  "/guards/import": "上載導入包，補安員證件資料",
+  "/triage": "導入後要人手決定嘅項目",
+  "/reports/ops-digest": "每月修正類別、重複出現嘅問題",
 };
 
 export default async function DashboardPage() {
@@ -50,7 +54,12 @@ export default async function DashboardPage() {
   const isBroker = session.baseRole === "雞頭";
 
   if (canViewShortfall) {
-    return <ShortfallDashboard variant="home" userName={session.name} roleLabel={session.roleName} />;
+    return (
+      <div className="flex flex-col gap-4">
+        <TriageHomeNotice session={session} />
+        <ShortfallDashboard variant="home" userName={session.name} roleLabel={session.roleName} />
+      </div>
+    );
   }
 
   if (isBroker) {
