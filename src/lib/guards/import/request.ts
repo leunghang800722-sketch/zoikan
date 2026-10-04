@@ -1,9 +1,10 @@
 // WP-STAFF-IMPORT B3：導入 API 共用——body 解析（錯誤訊息淨帶欄位路徑，唔帶值）＋權限。
 import { z } from "zod";
-import { BadRequest } from "@/lib/api/errors";
-import { requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
+import { BadRequest, Forbidden } from "@/lib/api/errors";
+import { hasPermission, requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
-import type { PersonDecisions } from "./apply";
+import { NON_BOSS_MAX_PERSONS } from "./limits";
+import { PII_OVERWRITE_DENIED_MSG, type PersonDecisions } from "./apply";
 
 export function parsePackage(raw: unknown): ImportPackage {
   const r = importPackageSchema.safeParse(raw);
@@ -14,8 +15,9 @@ export function parsePackage(raw: unknown): ImportPackage {
   return r.data;
 }
 
-/** 老闆專屬：module「安員批量導入」硬性淨老闆（preview=view，apply=update）；其他角色（即使開晒
- * 「安員個人資料」）一律 403。 */
+/** module「安員批量導入」（preview=view，apply=update）：老闆／會計／主管（WP-AI-OPS §28.4，老闆 2026-10-04 開放）；
+ * 雞頭／安員硬性 403。導入包唔入 DB、冇「批次」可以俾人睇，所以「非老闆淨係自己上載嗰批」由分診 session
+ * （owner＝上載者）強制。 */
 export async function requireImportPermission(req: Request, mode: "preview" | "apply"): Promise<AuthedSession> {
   return requirePermission(req, "安員批量導入", mode === "preview" ? "view" : "update");
 }
@@ -55,3 +57,24 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// WP-AI-OPS 驗收修正（Major-1）：「安員個人資料」權限
+// ---------------------------------------------------------------------------
+export { NON_BOSS_MAX_PERSONS } from "./limits";
+
+export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg: ImportPackage): void {
+  if (session.baseRole !== "老闆" && pkg.persons.length > NON_BOSS_MAX_PERSONS) {
+    throw BadRequest(`每個導入包最多 ${NON_BOSS_MAX_PERSONS} 人，請拆細再上載`);
+  }
+}
+
+/** replace 會覆蓋現值：出生日期／地址要「安員個人資料:update」；姓名／英文名要「安員:update」。 */
+export async function assertDecisionsAllowed(session: AuthedSession, decisions: z.infer<typeof applyBodySchema>["decisions"]): Promise<void> {
+  if (!decisions) return;
+  const all = Object.values(decisions);
+  if (all.some((d) => d.date_of_birth?.action === "replace" || d.address?.action === "replace") && !(await hasPermission(session, "安員個人資料", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
+  if (all.some((d) => d.name_zh?.action === "replace" || d.name_en?.action === "replace") && !(await hasPermission(session, "安員", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
+}
+
+export { maskPreviewForViewer, maskApplyForViewer } from "./project";

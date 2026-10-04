@@ -1,5 +1,5 @@
 "use client";
-// WP-STAFF-IMPORT B3：安員證件資料批量導入（老闆）。
+// WP-STAFF-IMPORT B3：安員證件資料批量導入（老闆／會計／主管；WP-AI-OPS §28.4 開放）。
 //   ① 揀本機產生嘅導入包（import-package.json，淨文字）→ ② 預覽統計（逐欄 confirmed／review／missing
 //   ＋逐人 link／create／conflict／needs_review）→ ③「套用自動項」（淨寫 confirmed 欄）→ ④ 覆核清單：
 //   review 欄逐欄「確認／改正後確認／略過」。
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
 import { apiPost } from "@/lib/ui/api-client";
+import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 
 type Status = "confirmed" | "review" | "missing";
 interface PkgField {
@@ -64,6 +65,7 @@ interface Row {
   basis?: string[];
   current_name_zh: string | null;
   current_name_en: string | null;
+  current_name_hidden?: boolean;
   name_review_pending: boolean;
   fields: Record<string, { status: string; check: string }>;
 }
@@ -76,6 +78,8 @@ interface Preview {
   review: { persons: number; fields: Record<string, number> };
   reason_counts: Record<string, number>;
   rows: Row[];
+  counts_hidden?: boolean;
+  viewer?: { pii_update: boolean; guard_update: boolean };
 }
 interface ApplyRes {
   persons_total: number;
@@ -86,7 +90,10 @@ interface ApplyRes {
   addresses_added: number;
   staff_numbers_added: number;
   field_conflicts: number;
+  counts_hidden?: boolean;
   fields_written: Record<string, number>;
+  /** WP-AI-OPS §28.4：自動項完成後剩低要人手嘅問題（上載者自己嗰批） */
+  triage?: { session_id?: string; open_questions?: number; new_questions: number; total_questions?: number; important_open?: number; supplementary_open?: number; owned_by_other?: boolean } | null;
 }
 
 export default function GuardImportPage() {
@@ -101,6 +108,8 @@ export default function GuardImportPage() {
   const [shown, setShown] = useState(30);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [done, setDone] = useState<Record<string, string>>({});
+  const [triageSession, setTriageSession] = useState<string | null>(null);
+  const [triageOpen, setTriageOpen] = useState(0);
 
   const personByKey = useMemo(() => new Map((pkg?.persons ?? []).map((p) => [p.key, p])), [pkg]);
 
@@ -146,6 +155,10 @@ export default function GuardImportPage() {
       return;
     }
     setApplyRes(res.data);
+    // 有問題就自動彈出對話式分診（可以「遲啲先答」，之後喺「待答問題」續答）
+    const t = res.data.triage;
+    setTriageOpen(t?.owned_by_other ? 0 : (t?.open_questions ?? 0));
+    if (t && !t.owned_by_other && (t.open_questions ?? 0) > 0 && t.session_id) setTriageSession(t.session_id);
     setNotice(`已套用：新增 ${res.data.guards_created}、更新 ${res.data.guards_updated}、電話 ${res.data.phones_added}、地址 ${res.data.addresses_added}、工號 ${res.data.staff_numbers_added}`);
     await runPreview(pkg);
   }
@@ -165,10 +178,17 @@ export default function GuardImportPage() {
       setError(res.message);
       return;
     }
-    const conflict = res.data.field_conflicts > 0;
-    setDone((d) => ({ ...d, [`${key}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : "已確認" }));
-    await runPreview(pkg);
+    const conflict = !res.data.counts_hidden && res.data.field_conflicts > 0;
+    setDone((d) => ({ ...d, [`${key}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有安員個人資料權限先睇到）" : "已確認" }));
+    // 唔再每次決定後重新 preview：preview 對非老闆有每日次數上限，而且 done 已記低結果
   }
+
+  // 冇修改權限：replace 類選項預先停用（server 一樣會 403）。出生日期／地址要「安員個人資料」修改權；姓名要「安員」修改權
+  // 只有覆蓋現有非空值先要權限：現有係空（fill）或者新建（new）屬補空欄，得
+  const replaceDenied = (f: string, check: string): boolean => {
+    if (check === "fill" || check === "new") return false;
+    return f === "date_of_birth" || f === "address" ? preview?.viewer?.pii_update === false : f === "name_zh" || f === "name_en" ? preview?.viewer?.guard_update === false : false;
+  };
 
   const reviewRows = (preview?.rows ?? []).filter((r) => (r.auto_apply || r.reasons.includes("name_not_confirmed")) && REVIEWABLE.some((f) => r.fields[f]?.status === "review" || (f === "name_zh" && r.name_review_pending)));
 
@@ -185,6 +205,14 @@ export default function GuardImportPage() {
           {fileName && <span className="text-zk-faint">{fileName}</span>}
         </label>
       </div>
+
+      {triageSession && (
+        <TriageDialog
+          sessionId={triageSession}
+          onClose={() => setTriageSession(null)}
+          onChanged={() => setTriageOpen((n) => Math.max(0, n - 1))}
+        />
+      )}
 
       {preview && (
         <>
@@ -222,7 +250,7 @@ export default function GuardImportPage() {
 
           <div className="rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-auto-summary">
             自動套用（淨寫已確認欄）：{preview.auto_apply.persons} 人 · 新增安員 {preview.auto_apply.guards_to_create} · 補欄 {preview.auto_apply.guard_fields_to_fill} ·
-            電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} · 現值唔同（唔覆蓋）{preview.auto_apply.field_conflicts}
+            電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} {preview.counts_hidden ? "" : `· 現值唔同（唔覆蓋）${preview.auto_apply.field_conflicts}`}
             <div className="mt-2 flex items-center gap-2">
               {!confirming ? (
                 <Button variant="primary" disabled={busy || preview.auto_apply.persons === 0} onClick={() => setConfirming(true)}>
@@ -240,6 +268,19 @@ export default function GuardImportPage() {
             </div>
           </div>
           {applyRes && <div className="text-[12.5px] text-zk-muted">結果：{JSON.stringify(applyRes.outcomes)}</div>}
+          {applyRes?.triage?.owned_by_other && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px]" data-testid="triage-owned-by-other">
+              呢個檔案之前已經有同事上載過，問題會由佢（或者老闆）跟進。
+            </div>
+          )}
+          {applyRes?.triage && !applyRes.triage.owned_by_other && triageOpen > 0 && !triageSession && (
+            <div className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px]" data-testid="triage-reopen">
+              <span>有 {triageOpen} 條待答問題</span>
+              <Button variant="primary" onClick={() => setTriageSession(applyRes.triage!.session_id ?? null)}>
+                繼續答
+              </Button>
+            </div>
+          )}
 
           <h2 className="text-sm font-semibold">覆核清單（{reviewRows.length} 人）</h2>
           {reviewRows.length === 0 && <EmptyState title="冇待覆核嘅欄" />}
@@ -255,7 +296,7 @@ export default function GuardImportPage() {
                   {r.action === "link" && r.basis?.some((b) => b.startsWith("name_")) && <Pill variant="warning">對齊依據：{r.basis.join("＋")}</Pill>}
                   {r.reasons.slice(0, 3).map((x) => (
                     <Pill key={x} variant="neutral">
-                      {x}
+                      {reasonLabel(x)}
                     </Pill>
                   ))}
                 </div>
@@ -276,6 +317,8 @@ export default function GuardImportPage() {
                           aria-label={`${FIELD_LABEL[f]}抽取值`}
                         />
                         {current ? <div className="mt-0.5 text-[11.5px] text-zk-faint">現值：{current}</div> : null}
+                        {!current && r.current_name_hidden && (f === "name_zh" || f === "name_en") ? <div className="mt-0.5 text-[11.5px] text-zk-faint">姓名同現有安員紀錄唔同（要有安員個人資料權限先睇到）</div> : null}
+                        {replaceDenied(f, r.fields[f]?.check ?? "") ? <div className="mt-0.5 text-[11.5px] text-orange-700">呢條要有安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
                       </div>
                       <div className="flex items-center gap-1.5">
                         {done[k] ? (
@@ -285,7 +328,7 @@ export default function GuardImportPage() {
                             <Button variant="primary" disabled={busy} onClick={() => onDecide(r.key, f, "confirm")}>
                               確認
                             </Button>
-                            <Button disabled={busy} onClick={() => onDecide(r.key, f, "replace")}>
+                            <Button disabled={busy || replaceDenied(f, r.fields[f]?.check ?? "")} onClick={() => onDecide(r.key, f, "replace")}>
                               改正後確認
                             </Button>
                             {f === "name_zh" && r.reasons.includes("name_not_confirmed") && (

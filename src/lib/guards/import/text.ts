@@ -63,3 +63,14 @@ export function parseBirthDate(s: string | null | undefined, now: Date = new Dat
   if (y < 1930 || y > now.getUTCFullYear() - 16) return null;
   return d;
 }
+
+/**
+ * 「同名」判斷（遮罩用）：兩邊去空白／標點、NFKC、統一大小寫之後都非空而且相等先算。
+ * 唔可以用 normZh：冇中文字（例如英文字母）嘅名 normZh 回 null，null==null 會誤當同名。
+ */
+export function sameNameStrict(a: string | null | undefined, b: string | null | undefined): boolean {
+  const n = (x: string | null | undefined) => (x ?? "").normalize("NFKC").replace(/[\s()（）·．.,，、\-]/g, "").toUpperCase();
+  const x = n(a);
+  const y = n(b);
+  return x.length > 0 && x === y;
+}

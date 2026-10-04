@@ -12,6 +12,7 @@ import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
 import { fmtDateTime, fmtMoney, currentMonthStr, addMonthsStr } from "@/lib/ui/format";
+import { MonthHealthCard } from "./MonthHealthCard";
 
 interface StepDTO {
   key: string;
@@ -33,6 +34,7 @@ interface ReportDTO {
   unpriced: { count: number; payout_count: number; client_count: number; no_settlement_count: number; ot_unpriced_count: number };
   postorder_compare: { uploaded: boolean; referral_excel_total: number | null; referral_system_total: number; referral_diff: number | null; note: string } | null;
   needs_human: string[];
+  health?: { critical: number; warn: number; info: number } | null;
   lock_precondition: { current_month_already_locked: boolean; missing_upload_sites: string[]; unconfirmed_upload_sites: string[]; unpriced_count?: number; ready_to_lock: boolean };
   longterm_payroll_note: string;
   longterm_payroll?: { gross_total: number; autopay_total: number; mpf_ee_total: number; mpf_er_total: number; guard_count: number } | null;
@@ -493,6 +495,10 @@ export default function MonthCloseOneClickPage() {
 
           <div className="rounded border border-zk-border p-3">
             <div className="mb-2 text-[13px] font-medium text-zk-text">⑥ 鎖定本月</div>
+            {/* WP-AI-OPS §28.3：鎖月前體檢（只提示，唔擋鎖月）。 */}
+            <div className="mb-3">
+              <MonthHealthCard month={report.month} />
+            </div>
             {report.lock_precondition.current_month_already_locked ? (
               <Pill variant="warning">已鎖定</Pill>
             ) : report.lock_precondition.ready_to_lock ? (

@@ -103,37 +103,43 @@ describe("導入 API", () => {
     return route(new Request("http://t/api/guards/import/x", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(withHash) }));
   };
 
-  it("RBAC：主管 403（preview／apply）；老闆 200", async () => {
+  it("RBAC：老闆／會計／主管 200（WP-AI-OPS §28.4 開放）；雞頭／安員 403（preview／apply）", async () => {
     const pkg = pkgOf([person({})]);
-    expect((await call(previewRoute, supervisor, { package: pkg })).status).toBe(403);
-    expect((await call(applyRoute, supervisor, { package: pkg })).status).toBe(403);
-    expect((await call(previewRoute, owner, { package: pkg })).status).toBe(200);
+    const accountant = await sessionCookieForUser(fx.userIds["會計"]);
+    const broker = await sessionCookieForUser(fx.userIds["雞頭"]);
+    const guardCookie = await sessionCookieForUser(fx.userIds["安員"]);
+    for (const c of [owner, accountant, supervisor]) expect((await call(previewRoute, c, { package: pkg })).status).toBe(200);
+    for (const c of [broker, guardCookie]) {
+      expect((await call(previewRoute, c, { package: pkg })).status).toBe(403);
+      expect((await call(applyRoute, c, { package: pkg })).status).toBe(403);
+    }
   });
 
-  it("RBAC：主管就算開晒「安員」create＋「安員個人資料」view／update，仍然 403（安員批量導入淨係老闆，硬性拒）", async () => {
-    for (const [module, action] of [["安員", "create"], ["安員個人資料", "view"], ["安員個人資料", "update"]] as const) {
+  it("RBAC：雞頭就算開晒「安員」create＋「安員個人資料」view／update，仍然 403（安員批量導入硬性拒）", async () => {
+    const broker = await sessionCookieForUser(fx.userIds["雞頭"]);
+    for (const [module, action] of [["安員", "create"], ["安員個人資料", "view"], ["安員個人資料", "update"], ["安員批量導入", "view"]] as const) {
       const perm = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module, action } } });
       await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: fx.roleIds["主管"], permissionId: perm.id } },
+        where: { roleId_permissionId: { roleId: fx.roleIds["雞頭"], permissionId: perm.id } },
         update: { granted: true },
-        create: { roleId: fx.roleIds["主管"], permissionId: perm.id, granted: true },
+        create: { roleId: fx.roleIds["雞頭"], permissionId: perm.id, granted: true },
       });
     }
-    expect((await call(previewRoute, supervisor, { package: pkgOf([person({})]) })).status).toBe(403);
-    expect((await call(applyRoute, supervisor, { package: pkgOf([person({})]) })).status).toBe(403);
+    expect((await call(previewRoute, broker, { package: pkgOf([person({})]) })).status).toBe(403);
+    expect((await call(applyRoute, broker, { package: pkgOf([person({})]) })).status).toBe(403);
   });
 
-  it("自訂角色（base＝主管，開晒相關權限）對 preview／apply 仍然 403", async () => {
-    const custom = await prisma.role.create({ data: { name: "測試自訂主管", baseRole: "主管", isCustom: true, createdBy: "t" } });
+  it("自訂角色（base＝雞頭，開晒相關權限）對 preview／apply 仍然 403", async () => {
+    const custom = await prisma.role.create({ data: { name: "測試自訂雞頭", baseRole: "雞頭", isCustom: true, createdBy: "t" } });
     const perms = await prisma.permission.findMany({ where: { OR: [{ module: "安員批量導入" }, { module: "安員" }, { module: "安員個人資料" }] } });
     for (const pm of perms) await prisma.rolePermission.create({ data: { roleId: custom.id, permissionId: pm.id, granted: true } });
-    const supUserId = fx.userIds["主管"];
-    await prisma.user.update({ where: { id: supUserId }, data: { roleId: custom.id, tokenVersion: { increment: 1 } } });
-    const cookie = await sessionCookieForUser(supUserId);
+    const brokerUserId = fx.userIds["雞頭"];
+    await prisma.user.update({ where: { id: brokerUserId }, data: { roleId: custom.id, tokenVersion: { increment: 1 } } });
+    const cookie = await sessionCookieForUser(brokerUserId);
     expect((await call(previewRoute, cookie, { package: pkgOf([person({})]) })).status).toBe(403);
     expect((await call(applyRoute, cookie, { package: pkgOf([person({})]) })).status).toBe(403);
     // 還原（唔留自訂角色，免影響其他測試）
-    await prisma.user.update({ where: { id: supUserId }, data: { roleId: fx.roleIds["主管"], tokenVersion: { increment: 1 } } });
+    await prisma.user.update({ where: { id: brokerUserId }, data: { roleId: fx.roleIds["雞頭"], tokenVersion: { increment: 1 } } });
     await prisma.rolePermission.deleteMany({ where: { roleId: custom.id } });
     await prisma.role.delete({ where: { id: custom.id } });
   });
