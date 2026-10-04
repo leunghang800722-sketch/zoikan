@@ -2234,3 +2234,19 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 
 ### 主檔搜尋支援身份證號
 - `GET /api/guards?q=`：原本搜姓名／英文名／電話／工號；**加身份證號**——淨係內部角色且 session 有「安員個人資料:view」（同 `hkid` 欄位顯示一致；雞頭硬性 deny）先會用 q 配 `guards.hkid`，冇權限完全唔配（唔可以用搜尋探測身份證號存唔存在，冇權限用戶結果與以前一致）。q 經 `hkidSearchKey()`（NFKC、大寫、去空白／括號）正規化，英數 ≥4 位先當 hkid，對 canonical `guards.hkid` 做 contains，同其他條件 OR。列表 hkid 照舊遮罩，`total`／分頁沿用同一個 where。q 唔寫入 audit／log。**搜尋字經 request header `x-guard-search`（值用 `encodeURIComponent`）傳**，`GET /api/guards` 先讀 header、冇先 fallback `?q=`（向後相容），原因：避免身份證號落 access log／瀏覽器歷史（壞編碼 400）；`GuardsClient` 一律用 header。`GuardsClient` 搜尋框 placeholder：列表有 `hkid` key（＝有權限）顯示「姓名 / 工號 / 電話 / 身份證」，否則維持原文。
+
+### WP-AI-OPS 第 0／1 期（§28.2／§28.3；S1）
+全部純讀；module 用現有「月結總表」view（老闆／會計預設有；主管預設關；雞頭／安員硬性 deny）。回應 snake_case。
+
+- `GET /api/reports/ops-digest?month=YYYY-MM`（預設上個月）→ 每月修正摘要＋基線，**冇人名／工號／hkid／電話**：
+  `{month, prev_month, window{from,to,basis}, categories[{key,group,label,count,prev_count,streak}], group_totals[{group,label,count,prev_count}], baseline{one_click{runs,done_runs,failed_runs,avg_duration_sec,max_duration_sec,needs_human_per_run[]}, name_only_cells, unmatched_cells, ambiguous_cells, unpriced_records, uploads{files,reuploads,voided,superseded}, days_month_end_to_lock}, prev_baseline, repeats[{key,label,streak}], top_sites[{site_name,count}], top_brokers[{broker_code,count}], correction_total, ai_available}`。
+  - 「結算視窗」`window`：由首份未作廢更表上載起計到鎖月（未鎖就而家），最長 60 日（`src/lib/ops/thresholds.ts DIGEST_WINDOW_MAX_DAYS`）；時間類統計（價卡、配對 override、別名、安員身份欄、批量導入、鎖／解鎖）用視窗；有所屬月份嘅統計（更次修正按 `work_date`、特殊項按 `month`、對數決定按上載月份、guard-fix 按 run 月份）直接按月份。`streak`＝連續幾個月（含本月，最多 3）該類別 >0；`repeats`＝streak ≥ 2。
+  - 更次修正分類（`shift_records` audit）：`shift_manual_*`＝人手；`reconcile_apply_write`＝對數「以更表為準」寫入（`source=roster_upload` 或 `void_reason=roster_reconcile:*`）；`shift_auto_resync`＝只改結算／營運單位嘅系統重配（唔當人手）。
+  - `ai_available`＝AI provider 已設定（前端據此顯示／隱藏「AI 摘要」掣）。
+- `POST /api/reports/ops-digest/ai-summary` body `{month?}` → `{month, text, guard_triggered}`。淨係將上面 digest（snake_case JSON）交現有助手 provider（`getLlmClient()`，**冇工具**），system prompt 明示「唔准編數字、淨係引用 JSON」；輸出再過 `checkOutputGuard`。AI 未設定 404 `ai_not_configured`；每日上限同助手共用（寫一行 `ai_chat` audit，`after.source=ops_digest`），用晒 429 `rate_limited`；provider 連唔到 503。
+- `GET /api/reports/month-health?month=YYYY-MM` → 鎖月前體檢，**只提示，唔擋鎖月**：
+  `{month, prev_month, has_prev, summary{critical,warn,info,total}, findings[{code, severity: critical|warn|info, count, message, fix_link, requires[], detail[]|null, detail_truncated, detail_withheld?}], can_view_detail}`。
+  - finding code：`overlap_same_day`(critical)、`cross_site_same_day`、`over_max_shifts`（>26 更）、`roster_duplicate_rows`、`longterm_leave_and_shift`、`unpriced_payout`／`unpriced_client`／`no_settlement`(critical)、`ot_unpriced`、`ambiguous_cells`／`unmatched_cells`(critical)、`name_only_cells`、`permit_expired_working`、`revenue_without_cost`(critical)、`site_shifts_swing`／`site_revenue_swing`／`site_cost_swing`／`site_margin_swing`、`monthly_fee_no_activity`、`broker_payable_swing`、`referral_total_swing`、`gap_hkid`／`gap_tel`(info)、`gap_bank_code`(warn，長工)。門檻常數全部喺 `src/lib/ops/thresholds.ts`。
+  - 明細（姓名／工號、最多 50 行）要「更表」view；`gap_hkid` 要再有「安員個人資料」view、`gap_bank_code` 要再有「安員銀行資料」view；缺權限 → `detail: null` ＋ `detail_withheld: true`，只回 `count`。hkid／電話／銀行編號**值**永遠唔回（缺資料類只列姓名／工號／更數）。
+- 一鍵結算 `report_json.health`（`GET /api/month-close/one-click` 回應 `report.health`）：`{critical, warn, info, findings[{code, severity, count}]}`，冇明細冇姓名；體檢出錯只略過（`health: null`），唔影響 run。
+- 頁面：`/reports/ops-digest`（月份揀選、類別表、同上月對比、重複提示、基線、AI 摘要掣）；月結頁（`/reports/monthly-close`）同一鍵結算頁（`/month-close`）鎖定掣上方「鎖月前體檢」卡（嚴重／留意／補資料數、逐項展開明細、「去處理」連結）。

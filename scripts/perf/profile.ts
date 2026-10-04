@@ -60,6 +60,8 @@ async function main() {
   const rcu = await import("@/lib/roster-upload/reconcile");
   const oc = await import("@/lib/month-close/one-click");
   const re = await import("@/lib/roster-export");
+  const od = await import("@/lib/ops/digest");
+  const mh = await import("@/lib/ops/month-health");
 
   const boss = await client.user.findFirst({ where: { role: { name: "老闆" } }, select: { id: true } });
   const session = systemSession(boss?.id ?? "");
@@ -84,6 +86,9 @@ async function main() {
     rows.push(await measure("buildLongtermPayrollInputs", m, () => lt.buildLongtermPayrollInputs(month)));
     if (broker) rows.push(await measure("buildBrokerDashboard", m, () => bd.buildBrokerDashboard(broker.id, month)));
     if (upload) rows.push(await measure("reconcileUpload(largest)", m, () => rcu.reconcileUpload(upload.id)));
+    // WP-AI-OPS §28.2／§28.3：每月修正摘要＋鎖月前體檢（純讀）。
+    rows.push(await measure("buildOpsDigest", m, () => od.buildOpsDigest(month, session)));
+    rows.push(await measure("buildMonthHealth", m, () => mh.buildMonthHealth(month, session)));
     rows.push(await measure("stepPrecheck", m, () => oc.stepPrecheck(month, session.userId, null)));
     if (site) rows.push(await measure("buildRosterWorkbookForSite", m, () => re.buildRosterWorkbookForSite(site.id, month)));
   }

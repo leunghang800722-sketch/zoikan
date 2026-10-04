@@ -49,6 +49,7 @@ import { computeReferralFeesForMonth, recomputeReferralFees, REFERRAL_FEE_AUTOCO
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
 import { findCopyLastMonthCandidates, type CopyLastMonthCandidate } from "@/lib/pricing/copy-last-month-cards";
 import { writeAudit } from "@/lib/audit";
+import { buildMonthHealth, summarizeHealthForReport } from "@/lib/ops/month-health";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { STEP_KEYS, STEP_LABELS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
 
@@ -911,7 +912,15 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
         longtermPayrollNote: (compute.numbers.longtermPayrollNote as string) ?? "",
         combinedCostSummary: (compute.numbers.combinedCostSummary as MonthCloseReport["combinedCostSummary"]) ?? null,
       };
-      return { numbers: report as unknown as Record<string, unknown> };
+      // WP-AI-OPS §28.3：鎖月前體檢摘要（淨係類別碼＋數量，冇明細冇姓名）——
+      // 只提示、唔擋鎖月；體檢失敗唔可以拖跨報告（降級為 null）。
+      let health: ReturnType<typeof summarizeHealthForReport> | null = null;
+      try {
+        health = summarizeHealthForReport(await buildMonthHealth(monthStartDate, systemSession(actorUserId)));
+      } catch (e) {
+        console.error("[one-click] 體檢失敗（略過）：", safeErrorSummary(e));
+      }
+      return { numbers: { ...(report as unknown as Record<string, unknown>), health } };
     });
 
     await prisma.monthCloseRun.update({
