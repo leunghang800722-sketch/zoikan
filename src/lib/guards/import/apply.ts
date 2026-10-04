@@ -293,6 +293,8 @@ export interface PreviewRow {
   address_source: string;
   current_name_zh: string | null;
   current_name_en: string | null;
+  /** 讀者冇「安員個人資料:view」而現有姓名同導入包唔同：唔回名，只回旗 */
+  current_name_hidden?: boolean;
   name_review_pending: boolean;
   fields: Record<PersonField, { status: string; check: FieldCheck }>;
   staff_numbers: number;
@@ -457,6 +459,10 @@ export interface ApplyOptions {
   forced?: Readonly<Record<string, ForcedMatch>>;
   /** 收集每筆寫入（唔影響寫入本身） */
   collect?: WriteChange[];
+  /** 寫 guards audit 時落 `after.import_via` 硬標記（預設 guard_import；分診傳 triage） */
+  via?: "guard_import" | "triage";
+  /** false＝操作人冇「安員:update」：唔准經導入覆蓋現有安員姓名（會 403）。undefined 當 true。 */
+  canEditGuard?: boolean;
   /** false＝操作人冇「安員個人資料:update」：唔准覆蓋現有唔同嘅出生日期／地址（會 403）。undefined 當 true（內部呼叫）。 */
   canOverwritePii?: boolean;
   /** 單人套用：結果係 name_not_confirmed（未寫任何嘢）就自動加「照建但標待核對」再行一次——分診答案已經由人手確認咗其他嘢，姓名仍然標待核對 */
@@ -494,10 +500,15 @@ export const PII_OVERWRITE_DENIED_MSG = "呢條要有安員個人資料修改權
 function assertMayOverwritePii(opts: ApplyOptions): void {
   if (opts.canOverwritePii === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
 }
+function assertMayEditGuard(opts: ApplyOptions): void {
+  if (opts.canEditGuard === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
+}
 
 async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writeAuditTx>[1]): Promise<void> {
   opts.collect?.push({ table: input.tableName, action: input.action, rowId: input.rowId, before: input.before ?? null, after: input.after ?? null });
-  await writeAuditTx(tx, input);
+  // 硬標記只落 guards（create／update）after：DTO mapper 之外經 AUDIT_META_PASSTHROUGH_KEYS 保留；非 PII
+  const marked = input.tableName === "guards" && input.after && typeof input.after === "object" ? { ...input, after: { ...(input.after as object), import_via: opts.via ?? "guard_import" } } : input;
+  await writeAuditTx(tx, marked);
 }
 
 async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: readonly string[], dec: PersonDecisions | undefined, opts: ApplyOptions, acc: ApplyResult): Promise<PersonResult> {
@@ -569,6 +580,10 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
         bump("hkid", "written");
       } else bump("hkid", g.hkid === hk ? "same" : "conflict");
     } else noteSkip("hkid", null);
+    // 覆蓋權檢查一律喺比較現值「之前」做（唔理新值同現值係咪一樣），免得 200／403 變成探測現值嘅 oracle
+    if (nameW && nameW !== "skip" && nameW.replace && g.nameZh) assertMayEditGuard(opts);
+    if (nameEnW && nameEnW !== "skip" && nameEnW.replace && g.nameEn) assertMayEditGuard(opts);
+    if (dobW && dobW !== "skip" && dobW.replace && g.dateOfBirth) assertMayOverwritePii(opts);
     // nameZh
     const marker = new Set(g.identityReviewFields);
     if (nameW === "skip" || nameW === null) noteSkip("nameZh", nameW);
@@ -596,7 +611,6 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     else if (!g.dateOfBirth || dobW.replace) {
       if (g.dateOfBirth && isoDate(g.dateOfBirth) === dobW.value) bump("dateOfBirth", "same");
       else {
-        if (g.dateOfBirth) assertMayOverwritePii(opts);
         const dob = parseBirthDate(dobW.value)!;
         data.dateOfBirth = dob;
         // 同 PATCH /api/guards/:id 一致：出生日期變咗要重算牌照衍生值
@@ -681,11 +695,11 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
   else if (addrW === null) noteSkip("address", null);
   else {
     const have = await tx.guardAddress.findMany({ where: { guardId }, select: { address: true } });
+    if (addrW.replace && have.length > 0) assertMayOverwritePii(opts);
     const want = normAddress(addrW.value);
     if (have.some((a) => normAddress(a.address) === want)) bump("address", "same");
     else if (have.length > 0 && !addrW.replace) bump("address", "conflict");
     else {
-      if (have.length > 0) assertMayOverwritePii(opts);
       const r = await createGuardAddress(tx, { guardId, address: addrW.value, isPrimary: addrW.replace, source: addressSourceOf(p.address), createdBy: opts.actorUserId });
       await syncLegacyGuardContactColumns(tx, guardId, ["address"]);
       await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guard_addresses", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });

@@ -361,6 +361,9 @@ describe("結算視窗唔重疊／冇上載＝冇視窗／分類準確度", () =
     // 人手改：同日較早、其後 30 分鐘內冇 summary（summary 係 2 小時後）
     await audit("guards", "update", d("2018-01-05"), g, g2, "gy", boss);
     await prisma.auditLog.create({ data: { actorUserId: boss, tableName: "guard_import", rowId: boss, action: "guard_import_apply", createdAt: new Date(d("2018-01-05").getTime() + 2 * 3600_000), after: { persons: 1, guards_created: 0, guards_updated: 0, field_conflicts: 0, review_decisions: 0 } } });
+    // 硬標記（after.import_via）：就算附近冇 summary 都排除（唔靠 30 分鐘啟發式）
+    await audit("guards", "update", d("2018-01-06"), g, { ...g2, import_via: "triage" }, "gz", boss);
+    await audit("guards", "update", d("2018-01-06"), g, { ...g2, import_via: "guard_import" }, "gw", boss);
     const dg = await buildOpsDigest(d(`${m}-01`), sys(boss), d("2018-03-01"));
     expect(cnt(dg, "import_apply_runs").count).toBe(2);
     expect(cnt(dg, "import_guards_updated").count).toBe(1);

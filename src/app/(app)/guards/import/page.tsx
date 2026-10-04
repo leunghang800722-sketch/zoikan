@@ -65,6 +65,7 @@ interface Row {
   basis?: string[];
   current_name_zh: string | null;
   current_name_en: string | null;
+  current_name_hidden?: boolean;
   name_review_pending: boolean;
   fields: Record<string, { status: string; check: string }>;
 }
@@ -77,6 +78,7 @@ interface Preview {
   review: { persons: number; fields: Record<string, number> };
   reason_counts: Record<string, number>;
   rows: Row[];
+  viewer?: { pii_update: boolean; guard_update: boolean };
 }
 interface ApplyRes {
   persons_total: number;
@@ -178,6 +180,10 @@ export default function GuardImportPage() {
     setDone((d) => ({ ...d, [`${key}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : "已確認" }));
     await runPreview(pkg);
   }
+
+  // 冇修改權限：replace 類選項預先停用（server 一樣會 403）。出生日期／地址要「安員個人資料」修改權；姓名要「安員」修改權
+  const replaceDenied = (f: string): boolean =>
+    f === "date_of_birth" || f === "address" ? preview?.viewer?.pii_update === false : f === "name_zh" || f === "name_en" ? preview?.viewer?.guard_update === false : false;
 
   const reviewRows = (preview?.rows ?? []).filter((r) => (r.auto_apply || r.reasons.includes("name_not_confirmed")) && REVIEWABLE.some((f) => r.fields[f]?.status === "review" || (f === "name_zh" && r.name_review_pending)));
 
@@ -306,6 +312,8 @@ export default function GuardImportPage() {
                           aria-label={`${FIELD_LABEL[f]}抽取值`}
                         />
                         {current ? <div className="mt-0.5 text-[11.5px] text-zk-faint">現值：{current}</div> : null}
+                        {!current && r.current_name_hidden && (f === "name_zh" || f === "name_en") ? <div className="mt-0.5 text-[11.5px] text-zk-faint">姓名同現有安員紀錄唔同（要有安員個人資料權限先睇到）</div> : null}
+                        {replaceDenied(f) ? <div className="mt-0.5 text-[11.5px] text-orange-700">呢條要有安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
                       </div>
                       <div className="flex items-center gap-1.5">
                         {done[k] ? (
@@ -315,7 +323,7 @@ export default function GuardImportPage() {
                             <Button variant="primary" disabled={busy} onClick={() => onDecide(r.key, f, "confirm")}>
                               確認
                             </Button>
-                            <Button disabled={busy} onClick={() => onDecide(r.key, f, "replace")}>
+                            <Button disabled={busy || replaceDenied(f)} onClick={() => onDecide(r.key, f, "replace")}>
                               改正後確認
                             </Button>
                             {f === "name_zh" && r.reasons.includes("name_not_confirmed") && (

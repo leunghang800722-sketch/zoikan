@@ -29,6 +29,7 @@ interface Candidate {
   tels: string[];
   staff_numbers: string[];
   recent_sites: { name: string; last_date: string }[];
+  name_hidden?: boolean;
 }
 interface Question {
   id: string;
@@ -39,6 +40,7 @@ interface Question {
   evidence: {
     pii_visible: boolean;
     pii_update: boolean;
+    guard_update: boolean;
     person: { hkid: Field; name_zh: Field; name_en: Field; date_of_birth: Field; phone: Field; address: Field; staff_numbers: string[] };
     reasons: string[];
     candidates: Candidate[];
@@ -125,7 +127,7 @@ function CandidateCard({ c, idx }: { c: Candidate; idx: number }) {
     <div className="space-y-0.5 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="triage-candidate">
       <div className="text-[12px] font-semibold text-zk-muted">現有安員（候選 {idx + 1}）</div>
       <div>
-        {c.name_zh}
+        {c.name_hidden ? <span className="text-zk-faint">姓名同導入包唔同（要有安員個人資料權限先睇到）</span> : c.name_zh}
         {c.name_en ? <span className="ml-1 text-zk-faint">{c.name_en}</span> : null}
       </div>
       <div className="text-zk-muted">
@@ -282,9 +284,9 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
 
   const needsText = !!selected?.input;
   const fieldsReady = selected?.id !== "apply_fields" || Object.keys(fields).length > 0;
-  // 冇「安員個人資料」修改權限：唔准用「改正」覆蓋出生日期／地址（server 一樣會 403）
-  const piiBlocked = !!q && !q.evidence.pii_update && selected?.id === "apply_fields" && (["dateOfBirth", "address"] as const).some((f) => fields[f]?.action === "replace");
-  const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy && !piiBlocked;
+  // 冇修改權限：「改正後確認」選項本身停用（server 一樣會 403）。出生日期／地址要「安員個人資料」修改權；姓名要「安員」修改權
+  const replaceDenied = (f: string): boolean => !!q && (f === "dateOfBirth" || f === "address" ? !q.evidence.pii_update : f === "nameZh" || f === "nameEn" ? !q.evidence.guard_update : false);
+  const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy;
   const isSupp = q?.kind === SUPP_KIND;
   const progressTotal = totals ? (isSupp ? totals.sup : totals.imp) : 0;
   const progressDone = isSupp ? done.sup : done.imp;
@@ -401,7 +403,8 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                         <button
                                           key={a}
                                           type="button"
-                                          className={`rounded border px-2 py-1 text-[12px] ${cur?.action === a ? "border-zk-primary bg-blue-100 font-semibold" : "border-zk-border"}`}
+                                          disabled={a === "replace" && replaceDenied(rf.field)}
+                                          className={`rounded border px-2 py-1 text-[12px] ${cur?.action === a ? "border-zk-primary bg-blue-100 font-semibold" : "border-zk-border"} disabled:cursor-not-allowed disabled:opacity-40`}
                                           onClick={() => {
                                             setFields((f) => ({ ...f, [rf.field]: { action: a, value: f[rf.field]?.value ?? undefined } }));
                                             setImpact(null);
@@ -412,6 +415,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                         </button>
                                       ))}
                                     </span>
+                                    {replaceDenied(rf.field) && <span className="mt-1 block text-[11.5px] text-orange-700">「改正後確認」要有修改權限嘅同事（例如老闆）先可以做。</span>}
                                     {cur && cur.action !== "skip" && (
                                       <input
                                         className="mt-1.5 w-full rounded-[5px] border border-zk-border px-2 py-1.5"
@@ -438,7 +442,6 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                 {q.options.filter((o) => o.id !== "skip").length === 0 && <div className="text-[12.5px] text-zk-muted">呢條同現有資料矛盾，系統唔會自動處理——可以跳過留返人手。</div>}
               </fieldset>
 
-              {piiBlocked && <div className="rounded border border-orange-300 bg-orange-50 px-3 py-2 text-[13px] text-orange-800">呢條要有安員個人資料修改權限嘅同事（例如老闆）答。你可以揀「確認」或者「略過」。</div>}
               {impact && <ImpactCard impact={impact} />}
             </>
           )}
@@ -453,7 +456,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               <Button disabled={!canPreview} onClick={onPreview} data-testid="triage-preview">
                 預覽影響
               </Button>
-              <Button variant="primary" disabled={busy || !hash || !impact?.can_confirm || piiBlocked} onClick={onConfirm} data-testid="triage-confirm">
+              <Button variant="primary" disabled={busy || !hash || !impact?.can_confirm} onClick={onConfirm} data-testid="triage-confirm">
                 {busy ? "處理緊…" : "確認寫入"}
               </Button>
             </div>

@@ -29,6 +29,7 @@ export async function POST(req: Request) {
       personKeys: body.person_keys,
       decisions: mapDecisions(body.decisions),
       canOverwritePii: await hasPermission(session, "安員個人資料", "update"),
+      canEditGuard: await hasPermission(session, "安員", "update"),
     });
     // WP-AI-OPS §28.4：自動項（冇 decisions）完成後開分診 session；失敗唔影響導入結果。回 triage＝上載者自己嗰批。
     let triage: Awaited<ReturnType<typeof createGuardImportTriage>> = null;

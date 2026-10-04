@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { canonicalHkid } from "@/lib/guards/identity";
 import type { PersonResult, WriteChange } from "@/lib/guards/import/apply";
 import { fieldValue, type PackagePerson } from "@/lib/guards/import/package";
-import { maskAddressImport, maskHkidImport, maskTelImport } from "@/lib/guards/import/text";
+import { maskAddressImport, maskHkidImport, maskTelImport, normZh } from "@/lib/guards/import/text";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { KIND_LABEL, REVIEW_FIELD_LABEL, type QuestionEvidence, type QuestionKind, type QuestionOption } from "./types";
 
@@ -14,10 +14,12 @@ export interface ViewerCaps {
   pii: boolean;
   /** 「安員個人資料:update」：冇就唔准覆蓋現有唔同嘅 PII */
   piiUpdate: boolean;
+  /** 「安員:update」：冇就唔准經導入改寫現有安員姓名 */
+  guardUpdate: boolean;
 }
 export async function viewerCaps(actor: AuthedSession): Promise<ViewerCaps> {
-  const [pii, piiUpdate] = await Promise.all([hasPermission(actor, "安員個人資料", "view"), hasPermission(actor, "安員個人資料", "update")]);
-  return { pii, piiUpdate };
+  const [pii, piiUpdate, guardUpdate] = await Promise.all([hasPermission(actor, "安員個人資料", "view"), hasPermission(actor, "安員個人資料", "update"), hasPermission(actor, "安員", "update")]);
+  return { pii, piiUpdate, guardUpdate };
 }
 
 const mHkid = (v: string | null, c: ViewerCaps) => (v ? (c.pii ? v : maskHkidImport(canonicalHkid(v) ?? v)) : null);
@@ -49,6 +51,10 @@ interface CandidateRow {
   tels: string[];
   staff_numbers: string[];
   recent_sites: { name: string; last_date: string }[];
+  /** 冇「安員個人資料:view」而呢個候選係經身份證號對中、姓名同導入包唔同：唔回名 */
+  name_hidden?: boolean;
+  /** 內部用（唔出街） */
+  hkid_canon?: string | null;
 }
 
 /** 候選安員卡（live 讀，批量 query，唔 N+1）。 */
@@ -76,6 +82,7 @@ export async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<
       guard_id: g.id,
       name_zh: g.nameZh,
       name_en: g.nameEn,
+      hkid_canon: canonicalHkid(g.hkid),
       hkid: mHkid(canonicalHkid(g.hkid), c),
       date_of_birth: mDob(g.dateOfBirth ? g.dateOfBirth.toISOString().slice(0, 10) : null, c),
       tels: tels.map((t) => mTel(t, c)!).filter(Boolean),
@@ -98,6 +105,7 @@ export interface QuestionView {
   evidence: {
     pii_visible: boolean;
     pii_update: boolean;
+    guard_update: boolean;
     person: ReturnType<typeof personView>;
     reasons: string[];
     candidates: CandidateRow[];
@@ -117,6 +125,18 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
     const e = ev[i]!;
     const ans = r.answerJson as { option?: string; guard_id?: string } | null;
     const candIds = e.candidate_guard_ids.length ? e.candidate_guard_ids : e.guard_id ? [e.guard_id] : [];
+    const pkgHkid = canonicalHkid(fieldValue(e.person.hkid));
+    const pkgName = normZh(fieldValue(e.person.nameZh));
+    const candidates = candIds
+      .map((id) => cards.get(id))
+      .filter((x): x is CandidateRow => !!x)
+      .map((card) => {
+        // 經身份證號對中嘅現有安員，姓名同導入包唔同 → 冇 PII view 嘅人唔俾睇名（否則可以用 hkid 查名）
+        const hide = !c.pii && !!pkgHkid && card.hkid_canon === pkgHkid && normZh(card.name_zh) !== pkgName;
+        const { hkid_canon: _omit, ...rest } = card;
+        void _omit;
+        return hide ? { ...rest, name_zh: "", name_en: null, name_hidden: true } : rest;
+      });
     return {
       id: r.id,
       session_id: r.sessionId,
@@ -129,9 +149,10 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
       evidence: {
         pii_visible: c.pii,
         pii_update: c.piiUpdate,
+        guard_update: c.guardUpdate,
         person: personView(e.person, c),
         reasons: e.reasons,
-        candidates: candIds.map((id) => cards.get(id)).filter((x): x is CandidateRow => !!x),
+        candidates,
         // 逐欄 check 反映現有 DB 值嘅比較結果：冇「安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || f.field === "nameZh" || f.field === "nameEn" ? f.check : "hidden" })),
       },
@@ -178,6 +199,16 @@ const REASON_LABEL: Record<string, string> = {
   staffno_scheme_has_other_current: "有工號同現有工號類別重複，已跳過",
   staffno_invalid: "有工號格式唔合法，已跳過",
 };
+
+const PII_OUTCOME_FIELDS = new Set(["hkid", "dateOfBirth", "phone", "address"]);
+/** 冇 PII view：呢幾隻欄只分「會補上（原本空）」同「冇寫入（已有資料）」，same／conflict 唔可以分得出。 */
+function outcomeLabel(field: string, v: string, c: ViewerCaps): string {
+  if (!c.pii && PII_OUTCOME_FIELDS.has(field)) {
+    if (v === "written") return "會補上（原本空）";
+    if (v === "same" || v === "conflict" || v === "not_written") return "冇寫入（已有資料）";
+  }
+  return FIELD_OUTCOME_LABEL[v] ?? String(v);
+}
 
 function fmt(key: string, v: unknown, c: ViewerCaps): string {
   if (v === null || v === undefined || v === "") return "（空）";
@@ -239,7 +270,13 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
       const keys = Object.keys(GUARD_FIELD_LABEL);
       const fields = keys
         .filter((k) => ch.action === "create" ? !(after[k] == null || (Array.isArray(after[k]) && (after[k] as unknown[]).length === 0)) : JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null))
-        .map((k) => ({ label: GUARD_FIELD_LABEL[k]!, from: ch.action === "create" ? null : fmt(k, before[k], c), to: fmt(k, after[k], c) }));
+        .map((k) => {
+          const to = fmt(k, after[k], c);
+          let from = ch.action === "create" ? null : fmt(k, before[k], c);
+          // 冇 PII view：現有姓名只喺同新值一樣時顯示，否則唔洩露
+          if (!c.pii && from !== null && (k === "nameZh" || k === "nameEn") && from !== to) from = "（同導入包唔同，冇權限睇）";
+          return { label: GUARD_FIELD_LABEL[k]!, from, to };
+        });
       out.push({ table: "guards", action: ch.action as "create" | "update", label: ch.action === "create" ? "新增安員" : "更新安員資料", guard_id: ch.action === "update" && c.pii ? ch.rowId : null, fields });
     } else if (ch.table === "guard_staff_numbers") {
       out.push({ table: ch.table, action: "create", label: "新增工號", guard_id: null, fields: [{ label: "工號", from: null, to: String(after.number ?? "") }] });
@@ -264,7 +301,7 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
     changes: out,
     field_outcomes: Object.entries(result.fields)
       .filter(([, v]) => !!v)
-      .map(([f, v]) => ({ field: f, label: FIELD_NAME_LABEL[f] ?? f, outcome: FIELD_OUTCOME_LABEL[v as string] ?? String(v) })),
+      .map(([f, v]) => ({ field: f, label: FIELD_NAME_LABEL[f] ?? f, outcome: outcomeLabel(f, v as string, c) })),
     notes,
   };
 }

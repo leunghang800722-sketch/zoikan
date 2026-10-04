@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { BadRequest, Forbidden } from "@/lib/api/errors";
 import { hasPermission, requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
+import { normZh } from "./text";
 import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
 import { PII_OVERWRITE_DENIED_MSG, type ApplyResult, type PersonDecisions, type PreviewResult } from "./apply";
 
@@ -69,11 +70,21 @@ export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg:
   }
 }
 
-/** 冇「安員個人資料:update」唔准用 replace 改出生日期／地址（會覆蓋現值）。 */
+/** replace 會覆蓋現值：出生日期／地址要「安員個人資料:update」；姓名／英文名要「安員:update」。 */
 export async function assertDecisionsAllowed(session: AuthedSession, decisions: z.infer<typeof applyBodySchema>["decisions"]): Promise<void> {
   if (!decisions) return;
-  const needs = Object.values(decisions).some((d) => d.date_of_birth?.action === "replace" || d.address?.action === "replace");
-  if (needs && !(await hasPermission(session, "安員個人資料", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
+  const all = Object.values(decisions);
+  if (all.some((d) => d.date_of_birth?.action === "replace" || d.address?.action === "replace") && !(await hasPermission(session, "安員個人資料", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
+  if (all.some((d) => d.name_zh?.action === "replace" || d.name_en?.action === "replace") && !(await hasPermission(session, "安員", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
+}
+
+function basisCategory(b: string): string {
+  return b === "hkid" || b === "staff_no" || b === "tel" ? "identity_key" : b.startsWith("name") ? "name" : b;
+}
+function maskCurrentNames(r: { name_zh: string | null; current_name_zh: string | null; current_name_en: string | null; name_en: string | null }) {
+  const same = !!r.current_name_zh && normZh(r.current_name_zh) === normZh(r.name_zh);
+  if (same || !r.current_name_zh) return { current_name_zh: r.current_name_zh, current_name_en: same ? r.current_name_en : null, current_name_hidden: false };
+  return { current_name_zh: null, current_name_en: null, current_name_hidden: true };
 }
 
 const PII_FIELDS: PersonField[] = ["hkid", "dateOfBirth", "phone", "address"];
@@ -86,6 +97,9 @@ export function maskPreviewForViewer(p: PreviewResult, pii: boolean): PreviewRes
     ...p,
     rows: p.rows.map((r) => ({
       ...r,
+      // 現有安員姓名：只有同導入包姓名完全相同先回（否則可以用身份證號查出現有安員姓名）
+      ...maskCurrentNames(r),
+      basis: r.basis.map(basisCategory).filter((x, i, a) => a.indexOf(x) === i),
       fields: Object.fromEntries(Object.entries(r.fields).map(([f, v]) => [f, PII_FIELDS.includes(f as PersonField) && HIDDEN_CHECKS.has(v.check) ? { ...v, check: "hidden" } : v])) as typeof r.fields,
     })),
   };

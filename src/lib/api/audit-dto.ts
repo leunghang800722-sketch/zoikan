@@ -123,6 +123,8 @@ export const AUDIT_ROW_MAPPED_ACTIONS: ReadonlySet<AuditAction> = new Set([
 // `roster_upload_coverage_issues`——老闆用 force=true 覆寫「更表上載/
 // 對數未齊擋鎖」嗰陣，記低覆寫咗嘅盤清單（見 [id]/lock/route.ts）。
 export const AUDIT_META_PASSTHROUGH_KEYS = [
+  // WP-AI-OPS：批量導入／分診寫 guards audit 嘅硬標記（guard_import｜triage；非 PII），月度修正摘要排除身份欄用
+  "import_via",
   "void_reason",
   "unlock_reason",
   "copied_from",

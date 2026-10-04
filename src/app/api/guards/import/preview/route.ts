@@ -15,6 +15,7 @@ export async function POST(req: Request) {
     const pkg = parsePackage((body as Record<string, unknown>).package);
     assertPackageSize(session, pkg);
     const pii = await hasPermission(session, "安員個人資料", "view");
-    return ok(brandSafeResponse({ ...maskPreviewForViewer(await previewImport(pkg), pii) }));
+    const viewer = { pii_update: await hasPermission(session, "安員個人資料", "update"), guard_update: await hasPermission(session, "安員", "update") };
+    return ok(brandSafeResponse({ ...maskPreviewForViewer(await previewImport(pkg), pii), viewer }));
   });
 }
