@@ -57,6 +57,8 @@ async function main() {
     if (v.legible !== 'clear') continue;
     nameVision.set(v.docId, { docId: v.docId, zh: old?.legible === 'clear' && old.zh ? old.zh : v.zh, en: v.en ?? old?.en ?? null, legible: 'clear' });
   }
+  // 姓名第二讀數（另一模型盲讀；檔未存在＝維持現狀）
+  const nameVision2 = new Map((await readJson<NameVision>('out/name-vision-2.json')).map((v) => [v.docId, v]));
   const formV1 = await readJson<FormAddrVision>('out/form-address-vision.json');
   const formV2: FormAddrVision[] | null = await fs
     .readFile(path.join(OUT, 'out/form-address-vision-2.json'), 'utf8')
@@ -97,6 +99,7 @@ async function main() {
       idDocId: g.idDocId,
       addressDocId: g.addressDocId,
       nameVision: g.idDocId ? nameVision.get(g.idDocId) ?? null : null,
+      nameVision2: g.idDocId ? nameVision2.get(g.idDocId) ?? null : null,
       addrVision: av1,
       addrVision2: av1 ? addrVision2.get(av1.docId) ?? null : null,
       formAddrVision: formV1.filter((v) => g.docIds.includes(v.docId)),

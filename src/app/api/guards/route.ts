@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac/requirePermission";
+import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toGuardFullDTO, toGuardListDTO, mapListDTO } from "@/lib/api/dto";
@@ -24,7 +24,7 @@ import {
   isSiaPermitBLapsedByAge,
   type StaffNumberChip,
 } from "@/lib/guards/staff-numbers";
-import { prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, identityStatus } from "@/lib/guards/identity";
+import { hkidSearchKey, prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, identityStatus } from "@/lib/guards/identity";
 import { createGuardPhone, syncLegacyGuardContactColumns, writeLegacyContactAudits } from "@/lib/guards/contacts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
@@ -124,7 +124,17 @@ export async function GET(req: Request) {
     // primary，`?q=` 要搵到任何一個（唔止主要），所以加埋
     // `guard_phones`（唔限 is_primary）嘅 guardId 一齊 OR 落主 query，
     // 同 `findNumberSearchMatches()` 一致嘅手法。
-    const qParam = url.searchParams.get("q")?.trim() || null;
+    // 搜尋字優先讀 header `x-guard-search`（encodeURIComponent）——身份證號唔經 URL（access log／瀏覽器歷史）；冇 header 先 fallback `?q=`（向後相容）。
+    const qHeader = req.headers.get("x-guard-search");
+    let qFromHeader: string | null = null;
+    if (qHeader) {
+      try {
+        qFromHeader = decodeURIComponent(qHeader).trim() || null;
+      } catch {
+        throw BadRequest("x-guard-search 格式唔啱");
+      }
+    }
+    const qParam = qFromHeader ?? (url.searchParams.get("q")?.trim() || null);
     let where: Prisma.GuardWhereInput = includeInactive ? {} : { status: "active" };
     let formerHitGuardIds = new Set<string>();
     if (qParam) {
@@ -133,6 +143,10 @@ export async function GET(req: Request) {
         prisma.guardPhone.findMany({ where: { tel: { contains: qParam } }, select: { guardId: true } }),
       ]);
       formerHitGuardIds = numberMatches.formerHitGuardIds;
+      // 身份證號搜尋：淨係內部角色且有「安員個人資料:view」（同 hkid 欄位顯示一致；雞頭硬性 deny）先用 q 配 hkid；
+      // 冇權限完全唔配，搜尋結果同以前一樣，唔可以用嚟探測某個身份證號存唔存在。q 唔寫入 audit／log。
+      const hkidQ = hkidSearchKey(qParam);
+      const hkidSearch = hkidQ && !isBrokerRole(session) && (await hasPermission(session, "安員個人資料", "view")) ? hkidQ : null;
       const phoneMatchGuardIds = [...new Set(phoneMatches.map((p) => p.guardId))];
       where = {
         ...where,
@@ -140,6 +154,7 @@ export async function GET(req: Request) {
           { nameZh: { contains: qParam, mode: "insensitive" } },
           { nameEn: { contains: qParam, mode: "insensitive" } },
           { tel: { contains: qParam } },
+          ...(hkidSearch ? [{ hkid: { contains: hkidSearch } }] : []),
           ...(numberMatches.guardIds.length > 0 ? [{ id: { in: numberMatches.guardIds } }] : []),
           ...(phoneMatchGuardIds.length > 0 ? [{ id: { in: phoneMatchGuardIds } }] : []),
         ],

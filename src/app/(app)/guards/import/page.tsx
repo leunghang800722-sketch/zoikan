@@ -61,6 +61,7 @@ interface Row {
   phone_masked: string | null;
   address_masked: string | null;
   address_source?: string;
+  basis?: string[];
   current_name_zh: string | null;
   current_name_en: string | null;
   name_review_pending: boolean;
@@ -251,6 +252,7 @@ export default function GuardImportPage() {
                   <span className="text-zk-faint">身份證 {r.hkid_masked ?? "—"} · 電話 {r.phone_masked ?? "—"}</span>
                   {r.name_review_pending && <Pill variant="warning">姓名待核對</Pill>}
                   {r.address_source === "application_form" && r.fields.address?.status === "review" && <Pill variant="warning">地址來自申請表</Pill>}
+                  {r.action === "link" && r.basis?.some((b) => b.startsWith("name_")) && <Pill variant="warning">對齊依據：{r.basis.join("＋")}</Pill>}
                   {r.reasons.slice(0, 3).map((x) => (
                     <Pill key={x} variant="neutral">
                       {x}

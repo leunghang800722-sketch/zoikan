@@ -17,7 +17,7 @@ export interface FormAddrVision {
 }
 export interface FieldOut {
   /** 地址來源（淨 address 欄有） */
-  source?: AddressSource;
+  source?: AddressSource | 'id_card';
   status: FieldStatus;
   value: string | null;
   candidates: string[]; // 其他值（review 時兩個值都留）
@@ -29,6 +29,9 @@ export interface NameVision {
   zh: string | null;
   en: string | null;
   legible: 'clear' | 'unsure';
+  /** 第二讀數分欄 legibility（冇就 fallback legible）：英文 unsure 唔好連中文讀數都丟 */
+  legibleZh?: 'clear' | 'unsure';
+  legibleEn?: 'clear' | 'unsure';
 }
 export interface DobVision {
   docId: string;
@@ -72,6 +75,8 @@ export interface PersonIn {
   idDocId: string | null; // 身份證來源檔
   addressDocId: string | null; // 地址來源檔
   nameVision: NameVision | null;
+  /** 姓名第二讀數（另一模型盲讀 out/name-vision-2.json；null／冇＝未做，維持現狀） */
+  nameVision2?: NameVision | null;
   addrVision: AddrVision | null;
   addrVision2?: AddrVision2 | null;
   dobVision?: DobVision | null;
@@ -99,6 +104,15 @@ export function normAddr(s: string | null | undefined): string {
 
 export function enKey(s: string | null | undefined): string {
   return enTokens(s).sort().join(' ');
+}
+
+/** 姓名第二讀數比對：卡面係乜字就乜字（唔做繁簡／異體正規化），淨忽略空白。 */
+export function exactZh(s: string | null | undefined): string {
+  return (s ?? '').normalize('NFC').replace(/\s+/g, '');
+}
+/** 英文名第二讀數比對：忽略大小寫、逗號、連續空白（次序要一致）。 */
+export function exactEn(s: string | null | undefined): string {
+  return (s ?? '').normalize('NFKC').toUpperCase().replace(/[,，]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 const same = (vals: (string | null | undefined)[]) => new Set(vals.filter(Boolean)).size <= 1;
@@ -138,16 +152,25 @@ export function resolvePerson(p: PersonIn): PersonFields {
   let nameZh: FieldOut;
   const zhReasons: string[] = [];
   if (zhLocal.length > 1 && !same(zhLocal.map(normZh))) zhReasons.push('nameZh_differs_between_files');
-  if (p.docs.some((d) => d.ex.nameZh && [...zhFiles, ...d.listZh].some((f) => cmpZh(d.ex.nameZh!.value, f).near))) zhReasons.push('nameZh_near_match');
+  // 姓名一律以身份證副本為準（老闆 2026-10-04）：同檔名／名單差一字只係資訊，唔阻 confirmed
+  const nearInfo = p.docs.some((d) => d.ex.nameZh && [...zhFiles, ...d.listZh].some((f) => cmpZh(d.ex.nameZh!.value, f).near));
   const v = p.nameVision;
+  const v2zh = p.nameVision2 && (p.nameVision2.legibleZh ?? p.nameVision2.legible) === 'clear' ? p.nameVision2.zh : null;
+  const v2en = p.nameVision2 && (p.nameVision2.legibleEn ?? p.nameVision2.legible) === 'clear' ? p.nameVision2.en : null;
+  const info = nearInfo ? ['name_differs_from_filename_or_list'] : [];
   if (v && v.legible === 'clear' && v.zh) {
     const indep = zhFiles.some((f) => eqZh(v.zh, f)) || zhList.some((f) => eqZh(v.zh, f)); // 檔名／名單（獨立於本機 OCR）
     const viaLocal = zhLocal.some((f) => eqZh(v.zh, f));
     // 只靠本機 OCR 佐證、而檔名／名單差一字（near）→ 證據互相矛盾，唔准 confirmed
-    const corroborated = indep || (viaLocal && !zhReasons.includes('nameZh_near_match'));
-    if (corroborated && !zhReasons.includes('nameZh_differs_between_files')) nameZh = out('confirmed', v.zh, zhLocal, []);
-    else nameZh = out('review', v.zh, [...zhLocal, ...zhFiles], [...zhReasons, corroborated ? '' : 'nameZh_vision_uncorroborated'].filter(Boolean));
-  } else if (zhMine) nameZh = out('review', zhMine, zhLocal, [...zhReasons, v ? 'nameZh_vision_unsure' : 'nameZh_not_vision_read']);
+    const corroborated = indep || (viaLocal && !nearInfo);
+    // 新規則：第一視覺 clear＋第二讀 clear＋逐字相同（卡面兩個獨立讀數）
+    const twoReads = !!v2zh && exactZh(v2zh) === exactZh(v.zh);
+    const disagree = !!v2zh && !twoReads; // 第二讀數 clear 但同第一讀數逐字唔同：一律 review（就算同檔名／名單一致）
+    if ((corroborated || twoReads) && !disagree && !zhReasons.includes('nameZh_differs_between_files')) {
+      nameZh = out('confirmed', v.zh, zhLocal, info);
+      nameZh.source = 'id_card';
+    } else nameZh = out('review', v.zh, [...zhLocal, ...zhFiles, ...(v2zh && !twoReads ? [v2zh] : [])], [...zhReasons, ...info, !disagree && (corroborated || twoReads) ? '' : disagree ? 'nameZh_reads_disagree' : 'nameZh_vision_uncorroborated'].filter(Boolean));
+  } else if (zhMine) nameZh = out('review', zhMine, zhLocal, [...zhReasons, ...info, v ? 'nameZh_vision_unsure' : 'nameZh_not_vision_read']);
   else nameZh = out('missing', null);
 
   // ---- nameEn
@@ -163,9 +186,12 @@ export function resolvePerson(p: PersonIn): PersonFields {
   if (v && v.legible === 'clear' && v.en) {
     const k = enKey(v.en);
     const corroborated = enLocal.some((x) => enKey(x) === k) || enList.some((x) => enKey(x) === k);
-    nameEn = corroborated && !enReasons.includes('nameEn_differs_between_files')
-      ? out('confirmed', v.en.toUpperCase(), enLocal)
-      : out('review', v.en.toUpperCase(), enLocal, [...enReasons, corroborated ? '' : 'nameEn_vision_uncorroborated'].filter(Boolean));
+    const twoReads = !!v2en && exactEn(v2en) === exactEn(v.en);
+    const disagree = !!v2en && !twoReads;
+    if ((corroborated || twoReads) && !disagree && !enReasons.includes('nameEn_differs_between_files')) {
+      nameEn = out('confirmed', v.en.toUpperCase(), enLocal);
+      nameEn.source = 'id_card';
+    } else nameEn = out('review', v.en.toUpperCase(), [...enLocal, ...(v2en && !twoReads ? [v2en.toUpperCase()] : [])], [...enReasons, !disagree && (corroborated || twoReads) ? '' : disagree ? 'nameEn_reads_disagree' : 'nameEn_vision_uncorroborated'].filter(Boolean));
   } else if (enLocal.length) {
     const longest = [...enLocal].sort((a, b) => enTokens(b).length - enTokens(a).length)[0];
     nameEn = out('review', longest, enLocal, [...enReasons, v ? 'nameEn_vision_unsure' : 'nameEn_not_vision_read']);
@@ -180,7 +206,7 @@ export function resolvePerson(p: PersonIn): PersonFields {
   else address.source = 'address_proof';
 
   // 同一張卡 hkid 或姓名係 review（卡面質素差）→ dob／sex 就算兩讀數一致都要再加一個獨立佐證（名單生日 或 申請表視覺讀數）
-  const weakName = (f: FieldOut) => f.status === 'review' && f.reasons.some((r) => /vision_unsure|vision_uncorroborated|differs_between_files|not_vision_read/.test(r));
+  const weakName = (f: FieldOut) => f.status === 'review' && f.reasons.some((r) => /vision_unsure|vision_uncorroborated|reads_disagree|differs_between_files|not_vision_read/.test(r));
   const cardWeak = hkid.status !== 'confirmed' || weakName(nameZh) || weakName(nameEn);
   if (cardWeak) {
     if (dob.status === 'confirmed' && !(dob.value && dobList.includes(dob.value))) {
