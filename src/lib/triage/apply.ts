@@ -8,12 +8,15 @@ import { createHash } from "node:crypto";
 import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
-import { BadRequest, Conflict } from "@/lib/api/errors";
+import { ApiError, BadRequest, Conflict } from "@/lib/api/errors";
+import { canonicalHkid } from "@/lib/guards/identity";
+import { fieldValue } from "@/lib/guards/import/package";
+import { normZh } from "@/lib/guards/import/text";
 import { applyOnePerson, type ApplyOptions } from "@/lib/guards/import/apply";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
-import { buildImpact, type ImpactView, type ViewerCaps } from "./view";
+import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
 import { answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
 type QRow = TriageQuestion;
@@ -33,8 +36,25 @@ function assertAnswerable(q: QRow): void {
   if (q.status === "answered") throw Conflict("呢條問題已經答過，唔可以重複套用");
 }
 
-function optsFor(r: ResolvedWrite, actor: AuthedSession, ip: string | null): ApplyOptions {
-  return { actorUserId: actor.userId, ip, decisions: r.decisions, forced: r.forced, autoKeepPendingName: r.autoKeepPendingName };
+function optsFor(r: ResolvedWrite, actor: AuthedSession, ip: string | null, caps: ViewerCaps): ApplyOptions {
+  // 冇「安員個人資料:update」：可以新建／補空欄／確認包內值，唔准覆蓋現有唔同嘅 PII（applyPerson 會 403）
+  return { actorUserId: actor.userId, ip, decisions: r.decisions, forced: r.forced, autoKeepPendingName: r.autoKeepPendingName, canOverwritePii: caps.piiUpdate };
+}
+
+/**
+ * enter_hkid／use_package_hkid：輸入嘅身份證號如果已屬於一位「唔喺候選名單」嘅現有安員，
+ * 只有姓名同導入包完全相同先准（預覽要警告），否則 422。回 true＝要警告。
+ */
+async function checkHkidOwner(q: QRow, answer: TriageAnswer): Promise<boolean> {
+  if (answer.option !== "enter_hkid" && answer.option !== "use_package_hkid") return false;
+  const ev = q.evidenceJson as unknown as QuestionEvidence;
+  const canon = canonicalHkid(answer.option === "enter_hkid" ? (answer.value ?? null) : fieldValue(ev.person.hkid));
+  if (!canon) return false; // resolveAnswer 會 400
+  const owner = await prisma.guard.findFirst({ where: { hkid: canon }, select: { id: true, nameZh: true } });
+  if (!owner || ev.candidate_guard_ids.includes(owner.id)) return false;
+  const a = normZh(owner.nameZh);
+  if (a && a === normZh(fieldValue(ev.person.nameZh))) return true;
+  throw new ApiError(422, "unprocessable", "身份證號已屬於另一位安員，請留返人手核對");
 }
 
 export interface PreviewOutput {
@@ -47,11 +67,13 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   assertAnswerable(q);
   const answer = parseAnswer(rawAnswer);
   const resolved = resolveAnswer(load(q), answer);
+  const warnOwner = await checkHkidOwner(q, answer);
   if (resolved.mode === "skip") {
     return { preview_hash: hashOf(q.id, answer, "skip"), writes: false, impact: { can_confirm: true, summary: ["跳過：唔寫任何資料，呢條留返人手處理"], changes: [], field_outcomes: [], notes: [] } };
   }
-  const out = await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip), { kind: "dry" });
+  const out = await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip, caps), { kind: "dry" });
   const impact = buildImpact(out.result, out.changes, caps);
+  if (warnOwner) impact.notes.unshift("呢個身份證號已屬於現有安員（唔喺候選名單），而且姓名相同，會連去佢");
   return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: impact.can_confirm, impact };
 }
 
@@ -75,6 +97,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
   assertAnswerable(q);
   const answer = parseAnswer(rawAnswer);
   const resolved = resolveAnswer(load(q), answer);
+  await checkHkidOwner(q, answer);
   const now = new Date();
 
   if (resolved.mode === "skip") {
@@ -91,7 +114,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
 
   if (!previewHash) throw BadRequest("要先預覽影響，再帶返 preview_hash 確認");
   let impact: ImpactView | null = null;
-  await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip), {
+  await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip, caps), {
     kind: "commit",
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
     beforeCommit: async (tx, outcome) => {
@@ -103,7 +126,8 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
           answerJson: JSON.parse(JSON.stringify(answer)),
           answeredBy: actor.userId,
           answeredAt: now,
-          impactJson: JSON.parse(JSON.stringify(impact)),
+          // 存原始結構化值（白名單欄），讀取時按讀者權限遮罩；唔存答題人視角嘅已遮罩版本
+          impactJson: JSON.parse(JSON.stringify(toImpactSource(outcome.result, outcome.changes))),
           // 寫入結果：淨係結果碼／計數（冇 PII）
           applyResultJson: JSON.parse(JSON.stringify({ outcome: outcome.result.outcome, fields: outcome.result.fields, reasons: outcome.result.reasons, staff_numbers_added: outcome.result.staff_numbers_added, phones_added: outcome.result.phones_added, addresses_added: outcome.result.addresses_added })),
         },

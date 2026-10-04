@@ -37,28 +37,32 @@ export interface SessionSummary {
   status: string;
   created_at: Date;
   completed_at: Date | null;
-  counts: { open: number; answered: number; skipped: number; total: number };
+  counts: { open: number; answered: number; skipped: number; total: number; important_open: number; supplementary_open: number };
 }
+
+/** 「補充資料」層（field_review）：唔急，排喺要人手／衝突之後，badge 唔計。 */
+export const SUPPLEMENTARY_KIND = "field_review";
 
 export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolean }): Promise<SessionSummary[]> {
   const where = isBoss(actor) && !opts.mine ? {} : { ownerUserId: actor.userId };
   const sessions = await prisma.triageSession.findMany({ where, orderBy: { createdAt: "desc" }, take: 200, include: { owner: { select: { name: true } } } });
   if (sessions.length === 0) return [];
-  const grouped = await prisma.triageQuestion.groupBy({ by: ["sessionId", "status"], where: { sessionId: { in: sessions.map((s) => s.id) } }, _count: { _all: true } });
+  const grouped = await prisma.triageQuestion.groupBy({ by: ["sessionId", "status", "kind"], where: { sessionId: { in: sessions.map((s) => s.id) } }, _count: { _all: true } });
   return sessions.map((s) => {
-    const counts = { open: 0, answered: 0, skipped: 0, total: 0 };
+    const counts = { open: 0, answered: 0, skipped: 0, total: 0, important_open: 0, supplementary_open: 0 };
     for (const g of grouped) {
       if (g.sessionId !== s.id) continue;
       if (g.status === "open" || g.status === "answered" || g.status === "skipped") counts[g.status] += g._count._all;
+      if (g.status === "open") counts[g.kind === SUPPLEMENTARY_KIND ? "supplementary_open" : "important_open"] += g._count._all;
       counts.total += g._count._all;
     }
     return { id: s.id, source_type: s.sourceType, owner_user_id: s.ownerUserId, owner_name: s.owner.name, status: s.status, created_at: s.createdAt, completed_at: s.completedAt, counts };
   });
 }
 
-/** 「待答問題」數：老闆＝全部；其他＝自己嗰批。 */
+/** 「待答問題」數（badge 用，淨計重要嗰層，唔計補充資料）：老闆＝全部；其他＝自己嗰批。 */
 export async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId">): Promise<number> {
-  return prisma.triageQuestion.count({ where: { status: "open", session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
+  return prisma.triageQuestion.count({ where: { status: "open", kind: { not: SUPPLEMENTARY_KIND }, session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
 }
 
 /** 所有未答都答晒（冇 open）就收尾；有新 open 就重開。 */
@@ -87,6 +91,14 @@ export interface CreateTriageResult {
   open_questions: number;
   new_questions: number;
   total_questions: number;
+  important_open: number;
+  supplementary_open: number;
+}
+
+/** 同一個導入包已經有另一位同事上載過：新題入咗佢（或者老闆）嘅 session，唔回 session 內容。 */
+export interface OwnedByOtherResult {
+  owned_by_other: true;
+  new_questions: number;
 }
 
 /**
@@ -94,7 +106,7 @@ export interface CreateTriageResult {
  * 已經有嘅 group_key（無論 open／answered／skipped）唔再出。冇題目就唔開。
  * 呢度**唔會**寫任何安員資料（淨係讀＋寫 triage 表）。
  */
-export async function createGuardImportTriage(input: { pkg: ImportPackage; packageHash: string; actor: Pick<AuthedSession, "userId">; ip: string | null; personKeys?: readonly string[] }): Promise<CreateTriageResult | null> {
+export async function createGuardImportTriage(input: { pkg: ImportPackage; packageHash: string; actor: Pick<AuthedSession, "userId">; ip: string | null; personKeys?: readonly string[] }): Promise<CreateTriageResult | OwnedByOtherResult | null> {
   const only = input.personKeys ? new Set(input.personKeys) : null;
   const { evals } = await evaluateImportPackage(input.pkg);
   const drafts = draftGuardImportQuestions(input.pkg, only ? evals.filter((e) => only.has(e.person.key)) : evals);
@@ -139,7 +151,8 @@ export async function createGuardImportTriage(input: { pkg: ImportPackage; packa
   const status = await refreshSessionStatus(session.id);
   const open = await prisma.triageQuestion.count({ where: { sessionId: session.id, status: "open" } });
   void status;
-  // 屬於別人嘅 session：唔回俾（非老闆上載者見唔到）
-  if (session.ownerUserId !== input.actor.userId) return null;
-  return { session_id: session.id, open_questions: open, new_questions: fresh.length, total_questions: total };
+  // 屬於別人嘅 session：唔回 session 內容，淨係話俾上載者知
+  if (session.ownerUserId !== input.actor.userId) return { owned_by_other: true, new_questions: fresh.length };
+  const supplementary = await prisma.triageQuestion.count({ where: { sessionId: session.id, status: "open", kind: SUPPLEMENTARY_KIND } });
+  return { session_id: session.id, open_questions: open, new_questions: fresh.length, total_questions: total, important_open: open - supplementary, supplementary_open: supplementary };
 }

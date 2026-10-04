@@ -110,7 +110,7 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
 // ---------------------------------------------------------------------------
 // 單人評估（preview 同 apply 共用）
 // ---------------------------------------------------------------------------
-export type FieldCheck = "new" | "fill" | "same" | "differs" | "conflict" | "missing" | "not_stored" | "invalid_date";
+export type FieldCheck = "new" | "fill" | "same" | "differs" | "conflict" | "missing" | "not_stored" | "invalid_date" | "hidden";
 
 export interface Evaluation {
   person: PackagePerson;
@@ -412,7 +412,7 @@ export interface FieldDecision {
 }
 export type PersonDecisions = Partial<Record<PersonField, FieldDecision>>;
 
-export type FieldOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "invalid" | "invalid_date" | "not_stored";
+export type FieldOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "invalid" | "invalid_date" | "not_stored" | "not_written";
 
 export interface PersonResult {
   key: string;
@@ -457,6 +457,8 @@ export interface ApplyOptions {
   forced?: Readonly<Record<string, ForcedMatch>>;
   /** 收集每筆寫入（唔影響寫入本身） */
   collect?: WriteChange[];
+  /** false＝操作人冇「安員個人資料:update」：唔准覆蓋現有唔同嘅出生日期／地址（會 403）。undefined 當 true（內部呼叫）。 */
+  canOverwritePii?: boolean;
   /** 單人套用：結果係 name_not_confirmed（未寫任何嘢）就自動加「照建但標待核對」再行一次——分診答案已經由人手確認咗其他嘢，姓名仍然標待核對 */
   autoKeepPendingName?: boolean;
   /** 淨係處理呢啲 key（冇＝全部） */
@@ -486,6 +488,11 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
     return v ? { value: v, replace: false, decided: false } : null;
   }
   return null;
+}
+
+export const PII_OVERWRITE_DENIED_MSG = "呢條要有安員個人資料修改權限嘅同事（例如老闆）答";
+function assertMayOverwritePii(opts: ApplyOptions): void {
+  if (opts.canOverwritePii === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
 }
 
 async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writeAuditTx>[1]): Promise<void> {
@@ -589,6 +596,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     else if (!g.dateOfBirth || dobW.replace) {
       if (g.dateOfBirth && isoDate(g.dateOfBirth) === dobW.value) bump("dateOfBirth", "same");
       else {
+        if (g.dateOfBirth) assertMayOverwritePii(opts);
         const dob = parseBirthDate(dobW.value)!;
         data.dateOfBirth = dob;
         // 同 PATCH /api/guards/:id 一致：出生日期變咗要重算牌照衍生值
@@ -677,6 +685,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     if (have.some((a) => normAddress(a.address) === want)) bump("address", "same");
     else if (have.length > 0 && !addrW.replace) bump("address", "conflict");
     else {
+      if (have.length > 0) assertMayOverwritePii(opts);
       const r = await createGuardAddress(tx, { guardId, address: addrW.value, isPrimary: addrW.replace, source: addressSourceOf(p.address), createdBy: opts.actorUserId });
       await syncLegacyGuardContactColumns(tx, guardId, ["address"]);
       await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guard_addresses", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });

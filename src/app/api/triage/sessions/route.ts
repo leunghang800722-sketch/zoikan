@@ -10,10 +10,11 @@ export async function GET(req: Request) {
     const actor = await requirePermission(req, "導入分診", "view");
     const mine = new URL(req.url).searchParams.get("mine") === "1";
     const [sessions, open_total] = await Promise.all([listSessionsFor(actor, { mine }), countOpenFor(actor)]);
+    const open_supplementary = sessions.reduce((a, s) => a + s.counts.supplementary_open, 0);
     // 老闆：可轉交對象（啟用中嘅老闆／會計／主管）
     const eligible_owners = isBoss(actor)
       ? (await prisma.user.findMany({ where: { status: "active", role: { baseRole: { in: [...TRIAGE_OWNER_ROLES] } } }, select: { id: true, name: true, role: { select: { name: true } } }, orderBy: { name: "asc" } })).map((u) => ({ id: u.id, name: u.name, role_name: u.role.name }))
       : [];
-    return ok(brandSafeResponse({ sessions: sessions.map((s) => ({ ...s })), open_total, eligible_owners }));
+    return ok(brandSafeResponse({ sessions: sessions.map((s) => ({ ...s })), open_total, open_supplementary, eligible_owners }));
   });
 }

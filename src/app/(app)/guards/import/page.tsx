@@ -89,7 +89,7 @@ interface ApplyRes {
   field_conflicts: number;
   fields_written: Record<string, number>;
   /** WP-AI-OPS §28.4：自動項完成後剩低要人手嘅問題（上載者自己嗰批） */
-  triage?: { session_id: string; open_questions: number; new_questions: number; total_questions: number } | null;
+  triage?: { session_id?: string; open_questions?: number; new_questions: number; total_questions?: number; important_open?: number; supplementary_open?: number; owned_by_other?: boolean } | null;
 }
 
 export default function GuardImportPage() {
@@ -152,8 +152,9 @@ export default function GuardImportPage() {
     }
     setApplyRes(res.data);
     // 有問題就自動彈出對話式分診（可以「遲啲先答」，之後喺「待答問題」續答）
-    setTriageOpen(res.data.triage?.open_questions ?? 0);
-    if (res.data.triage && res.data.triage.open_questions > 0) setTriageSession(res.data.triage.session_id);
+    const t = res.data.triage;
+    setTriageOpen(t?.owned_by_other ? 0 : (t?.open_questions ?? 0));
+    if (t && !t.owned_by_other && (t.open_questions ?? 0) > 0 && t.session_id) setTriageSession(t.session_id);
     setNotice(`已套用：新增 ${res.data.guards_created}、更新 ${res.data.guards_updated}、電話 ${res.data.phones_added}、地址 ${res.data.addresses_added}、工號 ${res.data.staff_numbers_added}`);
     await runPreview(pkg);
   }
@@ -256,10 +257,15 @@ export default function GuardImportPage() {
             </div>
           </div>
           {applyRes && <div className="text-[12.5px] text-zk-muted">結果：{JSON.stringify(applyRes.outcomes)}</div>}
-          {applyRes?.triage && triageOpen > 0 && !triageSession && (
+          {applyRes?.triage?.owned_by_other && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px]" data-testid="triage-owned-by-other">
+              呢個檔案之前已經有同事上載過，問題會由佢（或者老闆）跟進。
+            </div>
+          )}
+          {applyRes?.triage && !applyRes.triage.owned_by_other && triageOpen > 0 && !triageSession && (
             <div className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px]" data-testid="triage-reopen">
               <span>有 {triageOpen} 條待答問題</span>
-              <Button variant="primary" onClick={() => setTriageSession(applyRes.triage!.session_id)}>
+              <Button variant="primary" onClick={() => setTriageSession(applyRes.triage!.session_id ?? null)}>
                 繼續答
               </Button>
             </div>

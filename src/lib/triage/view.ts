@@ -10,10 +10,14 @@ import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission"
 import { KIND_LABEL, REVIEW_FIELD_LABEL, type QuestionEvidence, type QuestionKind, type QuestionOption } from "./types";
 
 export interface ViewerCaps {
+  /** 「安員個人資料:view」 */
   pii: boolean;
+  /** 「安員個人資料:update」：冇就唔准覆蓋現有唔同嘅 PII */
+  piiUpdate: boolean;
 }
 export async function viewerCaps(actor: AuthedSession): Promise<ViewerCaps> {
-  return { pii: await hasPermission(actor, "安員個人資料", "view") };
+  const [pii, piiUpdate] = await Promise.all([hasPermission(actor, "安員個人資料", "view"), hasPermission(actor, "安員個人資料", "update")]);
+  return { pii, piiUpdate };
 }
 
 const mHkid = (v: string | null, c: ViewerCaps) => (v ? (c.pii ? v : maskHkidImport(canonicalHkid(v) ?? v)) : null);
@@ -93,6 +97,7 @@ export interface QuestionView {
   options: QuestionOption[];
   evidence: {
     pii_visible: boolean;
+    pii_update: boolean;
     person: ReturnType<typeof personView>;
     reasons: string[];
     candidates: CandidateRow[];
@@ -123,16 +128,19 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
       options: r.optionsJson as unknown as QuestionOption[],
       evidence: {
         pii_visible: c.pii,
+        pii_update: c.piiUpdate,
         person: personView(e.person, c),
         reasons: e.reasons,
         candidates: candIds.map((id) => cards.get(id)).filter((x): x is CandidateRow => !!x),
-        review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: f.check })),
+        // 逐欄 check 反映現有 DB 值嘅比較結果：冇「安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
+        review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || f.field === "nameZh" || f.field === "nameEn" ? f.check : "hidden" })),
       },
       // 答案內容（可能含輸入嘅身份證號）唔回傳，淨回選項
       answer: ans?.option ? { option: ans.option, ...(ans.guard_id ? { guard_id: ans.guard_id } : {}) } : null,
       answered_by: r.answeredBy,
       answered_at: r.answeredAt,
-      impact: r.impactJson ?? null,
+      // impact_json 存原始結構化值（唔分讀者），每次讀取先按「讀者」嘅 caps 重新砌＋遮罩
+      impact: storedImpactView(r.impactJson, c),
     };
   });
 }
@@ -177,8 +185,40 @@ function fmt(key: string, v: unknown, c: ViewerCaps): string {
   const s = typeof v === "string" ? v : String(v);
   if (key === "hkid") return mHkid(s, c) ?? "（空）";
   if (key === "dateOfBirth") return c.pii ? s.slice(0, 10) : "（冇權限睇）";
-  if (key === "siaPermitExpiry") return s.slice(0, 10);
+  if (key === "siaPermitExpiry" || key === "siaPermitType") return c.pii ? s.slice(0, 10) : "（冇權限睇）";
   return s;
+}
+
+/** 存入 DB 嘅影響來源（原始值，只留顯示用白名單欄；讀取時再按讀者遮罩）。 */
+export interface ImpactSource {
+  result: Pick<PersonResult, "outcome" | "fields" | "reasons" | "staff_numbers_added" | "phones_added" | "addresses_added">;
+  changes: WriteChange[];
+}
+
+const KEEP_COLS: Record<string, string[]> = {
+  guards: Object.keys(GUARD_FIELD_LABEL),
+  guard_staff_numbers: ["number"],
+  guard_phones: ["tel"],
+  guard_addresses: ["address"],
+};
+
+export function toImpactSource(result: PersonResult, changes: readonly WriteChange[]): ImpactSource {
+  const pick = (table: string, row: unknown) => {
+    if (!row || typeof row !== "object") return null;
+    const o = row as Record<string, unknown>;
+    return Object.fromEntries((KEEP_COLS[table] ?? []).filter((k) => k in o).map((k) => [k, o[k]]));
+  };
+  const slim = changes
+    .filter((c) => c.table in KEEP_COLS)
+    .map((c) => ({ table: c.table, action: c.action, rowId: c.action === "update" ? c.rowId : "", before: pick(c.table, c.before), after: pick(c.table, c.after) }));
+  const r = result;
+  return JSON.parse(JSON.stringify({ result: { outcome: r.outcome, fields: r.fields, reasons: r.reasons, staff_numbers_added: r.staff_numbers_added, phones_added: r.phones_added, addresses_added: r.addresses_added }, changes: slim })) as ImpactSource;
+}
+
+function storedImpactView(raw: unknown, c: ViewerCaps): ImpactView | null {
+  const src = raw as Partial<ImpactSource> | null;
+  if (!src || !src.result || !Array.isArray(src.changes)) return null;
+  return buildImpact(src.result as PersonResult, src.changes, c);
 }
 
 export interface ImpactView {
@@ -200,7 +240,7 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
       const fields = keys
         .filter((k) => ch.action === "create" ? !(after[k] == null || (Array.isArray(after[k]) && (after[k] as unknown[]).length === 0)) : JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null))
         .map((k) => ({ label: GUARD_FIELD_LABEL[k]!, from: ch.action === "create" ? null : fmt(k, before[k], c), to: fmt(k, after[k], c) }));
-      out.push({ table: "guards", action: ch.action as "create" | "update", label: ch.action === "create" ? "新增安員" : "更新安員資料", guard_id: ch.action === "update" ? ch.rowId : null, fields });
+      out.push({ table: "guards", action: ch.action as "create" | "update", label: ch.action === "create" ? "新增安員" : "更新安員資料", guard_id: ch.action === "update" && c.pii ? ch.rowId : null, fields });
     } else if (ch.table === "guard_staff_numbers") {
       out.push({ table: ch.table, action: "create", label: "新增工號", guard_id: null, fields: [{ label: "工號", from: null, to: String(after.number ?? "") }] });
     } else if (ch.table === "guard_phones") {

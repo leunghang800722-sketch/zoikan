@@ -4,6 +4,7 @@
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
@@ -37,6 +38,7 @@ interface Question {
   options: Option[];
   evidence: {
     pii_visible: boolean;
+    pii_update: boolean;
     person: { hkid: Field; name_zh: Field; name_en: Field; date_of_birth: Field; phone: Field; address: Field; staff_numbers: string[] };
     reasons: string[];
     candidates: Candidate[];
@@ -54,6 +56,8 @@ interface SessionRes {
   session: { id: string; status: string; counts: { open: number; answered: number; skipped: number; total: number } };
   questions: Question[];
 }
+
+const SUPP_KIND = "field_review";
 
 export const REASON_LABEL: Record<string, string> = {
   name_not_confirmed: "姓名未能確認（身份證副本讀數唔一致或者未核對）",
@@ -81,7 +85,7 @@ export const REASON_LABEL: Record<string, string> = {
 };
 
 const STATUS_LABEL: Record<string, string> = { confirmed: "已確認", review: "待核對", missing: "冇資料" };
-const CHECK_LABEL: Record<string, string> = { fill: "現有資料冇，會補", differs: "同現有資料唔同", invalid_date: "日期唔合法", new: "新" };
+const CHECK_LABEL: Record<string, string> = { hidden: "你冇權限睇現有資料",  fill: "現有資料冇，會補", differs: "同現有資料唔同", invalid_date: "日期唔合法", new: "新" };
 
 function FieldRow({ label, f }: { label: string; f: Field }) {
   if (f.status === "missing" && !f.value) return null;
@@ -170,8 +174,10 @@ type FieldAns = { action: "confirm" | "replace" | "skip"; value?: string };
 
 export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: string; onClose: () => void; onChanged?: () => void }) {
   const [queue, setQueue] = useState<Question[] | null>(null);
-  const [total, setTotal] = useState(0);
-  const [done, setDone] = useState(0);
+  const router = useRouter();
+  const [totals, setTotals] = useState<{ imp: number; sup: number } | null>(null);
+  const [done, setDone] = useState({ imp: 0, sup: 0 });
+  const [suppStarted, setSuppStarted] = useState(false);
   const [choice, setChoice] = useState<string>("");
   const [text, setText] = useState("");
   const [fields, setFields] = useState<Record<string, FieldAns>>({});
@@ -188,13 +194,17 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       return;
     }
     setQueue(res.data.questions);
-    setTotal((t) => (t === 0 ? res.data.questions.length : t));
+    setTotals((t) => t ?? { imp: res.data.questions.filter((x) => x.kind !== SUPP_KIND).length, sup: res.data.questions.filter((x) => x.kind === SUPP_KIND).length });
   }, [sessionId]);
   useEffect(() => {
     void load();
   }, [load]);
 
-  const q = queue?.[0] ?? null;
+  // 重要（要人手／衝突）先問，補充資料（field_review）後問；答完重要嗰批先問要唔要繼續
+  const imp = useMemo(() => (queue ?? []).filter((x) => x.kind !== SUPP_KIND), [queue]);
+  const sup = useMemo(() => (queue ?? []).filter((x) => x.kind === SUPP_KIND), [queue]);
+  const q = imp[0] ?? (suppStarted ? (sup[0] ?? null) : null);
+  const gate = queue !== null && !q && sup.length > 0 && !suppStarted;
   const reset = () => {
     setChoice("");
     setText("");
@@ -232,10 +242,13 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     setHash(res.data.preview_hash);
   }
 
-  async function next(count: boolean) {
+  async function next() {
+    if (!q) return;
+    const tier = q.kind === SUPP_KIND ? "sup" : "imp";
     onChanged?.();
-    setQueue((cur) => (cur ? cur.slice(1) : cur));
-    if (count) setDone((d) => d + 1);
+    router.refresh(); // 左欄 badge 即時更新
+    setQueue((cur) => (cur ? cur.filter((x) => x.id !== q.id) : cur));
+    setDone((d) => ({ ...d, [tier]: d[tier] + 1 }));
   }
 
   async function onConfirm() {
@@ -252,7 +265,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       }
       return;
     }
-    await next(true);
+    await next();
   }
 
   async function onSkip() {
@@ -264,12 +277,17 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       setError(res.message);
       return;
     }
-    await next(true);
+    await next();
   }
 
   const needsText = !!selected?.input;
   const fieldsReady = selected?.id !== "apply_fields" || Object.keys(fields).length > 0;
-  const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy;
+  // 冇「安員個人資料」修改權限：唔准用「改正」覆蓋出生日期／地址（server 一樣會 403）
+  const piiBlocked = !!q && !q.evidence.pii_update && selected?.id === "apply_fields" && (["dateOfBirth", "address"] as const).some((f) => fields[f]?.action === "replace");
+  const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy && !piiBlocked;
+  const isSupp = q?.kind === SUPP_KIND;
+  const progressTotal = totals ? (isSupp ? totals.sup : totals.imp) : 0;
+  const progressDone = isSupp ? done.sup : done.imp;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label="導入後待答問題" data-testid="triage-dialog">
@@ -280,9 +298,11 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
             <div className="text-[15px] font-semibold">導入完成，有幾條要你決定</div>
             {q && (
               <div className="text-[12px] text-zk-muted" data-testid="triage-progress">
-                第 {Math.min(done + 1, total)} 題／共 {total} 題
+                {isSupp ? "補充資料 " : ""}第 {Math.min(progressDone + 1, progressTotal)} 題／共 {progressTotal} 題
+                {!isSupp && totals && totals.sup > 0 ? `（另有 ${totals.sup} 題補充資料可以遲啲先做）` : ""}
               </div>
             )}
+            {!q && totals && totals.imp + totals.sup > 0 && <div className="text-[12px] text-zk-muted">重要 {totals.imp} 題，補充資料 {totals.sup} 題</div>}
           </div>
           <button type="button" onClick={onClose} className="rounded px-2 py-1 text-[13px] text-zk-muted hover:bg-zk-header" data-testid="triage-later">
             遲啲先答
@@ -292,10 +312,22 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
         <div className="space-y-3 overflow-y-auto px-4 py-3">
           {error && <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</div>}
           {queue === null && <div className="text-[13px] text-zk-muted">載入緊…</div>}
-          {queue !== null && !q && (
+          {gate && (
+            <div className="space-y-2 py-6 text-center" data-testid="triage-gate">
+              <div className="text-[15px] font-semibold">{totals && totals.imp > 0 ? "重要嘅問題答完喇" : "冇重要嘅問題"}</div>
+              <div className="text-[13px] text-zk-muted">仲有 {sup.length} 題補充資料（逐欄核對英文名、出生日期、電話、地址），唔急，可以遲啲先做。</div>
+              <div className="flex justify-center gap-2">
+                <Button variant="primary" onClick={() => setSuppStarted(true)} data-testid="triage-continue-supp">
+                  繼續做補充資料
+                </Button>
+                <Button onClick={onClose}>遲啲先做</Button>
+              </div>
+            </div>
+          )}
+          {queue !== null && !q && !gate && (
             <div className="space-y-2 py-6 text-center">
               <div className="text-[15px] font-semibold">全部處理完</div>
-              <div className="text-[13px] text-zk-muted">本批共答咗 {done} 條。跳過嘅會留喺「待答問題」，隨時可以再答。</div>
+              <div className="text-[13px] text-zk-muted">本批共答咗 {done.imp + done.sup} 條。跳過嘅會留喺「待答問題」，隨時可以再答。</div>
               <Button variant="primary" onClick={onClose}>
                 完成
               </Button>
@@ -406,6 +438,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                 {q.options.filter((o) => o.id !== "skip").length === 0 && <div className="text-[12.5px] text-zk-muted">呢條同現有資料矛盾，系統唔會自動處理——可以跳過留返人手。</div>}
               </fieldset>
 
+              {piiBlocked && <div className="rounded border border-orange-300 bg-orange-50 px-3 py-2 text-[13px] text-orange-800">呢條要有安員個人資料修改權限嘅同事（例如老闆）答。你可以揀「確認」或者「略過」。</div>}
               {impact && <ImpactCard impact={impact} />}
             </>
           )}
@@ -420,7 +453,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               <Button disabled={!canPreview} onClick={onPreview} data-testid="triage-preview">
                 預覽影響
               </Button>
-              <Button variant="primary" disabled={busy || !hash || !impact?.can_confirm} onClick={onConfirm} data-testid="triage-confirm">
+              <Button variant="primary" disabled={busy || !hash || !impact?.can_confirm || piiBlocked} onClick={onConfirm} data-testid="triage-confirm">
                 {busy ? "處理緊…" : "確認寫入"}
               </Button>
             </div>

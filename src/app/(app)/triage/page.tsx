@@ -1,6 +1,7 @@
 "use client";
 // WP-AI-OPS §28.4：待答問題——列出導入分診 session（老闆見全部＋可轉交；其他人見自己上載嗰批），可繼續答。
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -17,7 +18,7 @@ interface SessionRow {
   status: string;
   created_at: string;
   completed_at: string | null;
-  counts: { open: number; answered: number; skipped: number; total: number };
+  counts: { open: number; answered: number; skipped: number; total: number; important_open: number; supplementary_open: number };
 }
 interface ListRes {
   sessions: SessionRow[];
@@ -28,6 +29,7 @@ interface ListRes {
 const SOURCE_LABEL: Record<string, string> = { guard_import: "安員證件資料導入", roster_upload: "更表上載" };
 
 export default function TriagePage() {
+  const router = useRouter();
   const [data, setData] = useState<ListRes | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -57,6 +59,7 @@ export default function TriagePage() {
       return;
     }
     setNotice("已轉交");
+    router.refresh();
     await load();
   }
 
@@ -79,7 +82,8 @@ export default function TriagePage() {
           <div key={s.id} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="triage-session-card">
             <div className="flex flex-wrap items-center gap-2">
               <b>{SOURCE_LABEL[s.source_type] ?? s.source_type}</b>
-              <Pill variant={s.status === "done" ? "success" : "warning"}>{s.status === "done" ? "已處理晒" : `未答 ${s.counts.open}`}</Pill>
+              <Pill variant={s.status === "done" ? "success" : "warning"}>{s.counts.open === 0 ? "已處理晒" : `重要 ${s.counts.important_open}`}</Pill>
+              {s.counts.supplementary_open > 0 && <Pill variant="neutral">補充資料 {s.counts.supplementary_open}</Pill>}
               <span className="text-zk-faint">
                 共 {s.counts.total} 條 · 已答 {s.counts.answered} · 跳過 {s.counts.skipped}
               </span>
@@ -121,6 +125,7 @@ export default function TriagePage() {
           sessionId={openId}
           onClose={() => {
             setOpenId(null);
+            router.refresh();
             void load();
           }}
           onChanged={() => void load()}

@@ -1,9 +1,9 @@
 // WP-STAFF-IMPORT B3：導入 API 共用——body 解析（錯誤訊息淨帶欄位路徑，唔帶值）＋權限。
 import { z } from "zod";
-import { BadRequest } from "@/lib/api/errors";
-import { requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
+import { BadRequest, Forbidden } from "@/lib/api/errors";
+import { hasPermission, requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
-import type { PersonDecisions } from "./apply";
+import { PII_OVERWRITE_DENIED_MSG, type ApplyResult, type PersonDecisions, type PreviewResult } from "./apply";
 
 export function parsePackage(raw: unknown): ImportPackage {
   const r = importPackageSchema.safeParse(raw);
@@ -55,4 +55,49 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
     out[key] = m;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// WP-AI-OPS 驗收修正（Major-1）：「安員個人資料」權限
+// ---------------------------------------------------------------------------
+/** 非老闆每個包最多人數（防止用 hkid 批量撞名探測現有安員）。 */
+export const NON_BOSS_MAX_PERSONS = 2000;
+
+export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg: ImportPackage): void {
+  if (session.baseRole !== "老闆" && pkg.persons.length > NON_BOSS_MAX_PERSONS) {
+    throw BadRequest(`每個導入包最多 ${NON_BOSS_MAX_PERSONS} 人，請拆細再上載`);
+  }
+}
+
+/** 冇「安員個人資料:update」唔准用 replace 改出生日期／地址（會覆蓋現值）。 */
+export async function assertDecisionsAllowed(session: AuthedSession, decisions: z.infer<typeof applyBodySchema>["decisions"]): Promise<void> {
+  if (!decisions) return;
+  const needs = Object.values(decisions).some((d) => d.date_of_birth?.action === "replace" || d.address?.action === "replace");
+  if (needs && !(await hasPermission(session, "安員個人資料", "update"))) throw Forbidden(PII_OVERWRITE_DENIED_MSG);
+}
+
+const PII_FIELDS: PersonField[] = ["hkid", "dateOfBirth", "phone", "address"];
+const HIDDEN_CHECKS = new Set(["same", "differs", "conflict", "fill"]);
+
+/** 冇「安員個人資料:view」：逐欄 check（反映現有 DB 值嘅比較結果）一律剝走，免得變成探測現有身份證／電話嘅 oracle。 */
+export function maskPreviewForViewer(p: PreviewResult, pii: boolean): PreviewResult {
+  if (pii) return p;
+  return {
+    ...p,
+    rows: p.rows.map((r) => ({
+      ...r,
+      fields: Object.fromEntries(Object.entries(r.fields).map(([f, v]) => [f, PII_FIELDS.includes(f as PersonField) && HIDDEN_CHECKS.has(v.check) ? { ...v, check: "hidden" } : v])) as typeof r.fields,
+    })),
+  };
+}
+
+export function maskApplyForViewer(a: ApplyResult, pii: boolean): ApplyResult {
+  if (pii) return a;
+  return {
+    ...a,
+    results: a.results.map((r) => ({
+      ...r,
+      fields: Object.fromEntries(Object.entries(r.fields).map(([f, v]) => [f, PII_FIELDS.includes(f as PersonField) && (v === "same" || v === "conflict") ? "not_written" : v])) as typeof r.fields,
+    })),
+  };
 }
