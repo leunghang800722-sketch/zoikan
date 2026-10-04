@@ -29,6 +29,9 @@ export interface NameVision {
   zh: string | null;
   en: string | null;
   legible: 'clear' | 'unsure';
+  /** 第二讀數分欄 legibility（冇就 fallback legible）：英文 unsure 唔好連中文讀數都丟 */
+  legibleZh?: 'clear' | 'unsure';
+  legibleEn?: 'clear' | 'unsure';
 }
 export interface DobVision {
   docId: string;
@@ -152,7 +155,8 @@ export function resolvePerson(p: PersonIn): PersonFields {
   // 姓名一律以身份證副本為準（老闆 2026-10-04）：同檔名／名單差一字只係資訊，唔阻 confirmed
   const nearInfo = p.docs.some((d) => d.ex.nameZh && [...zhFiles, ...d.listZh].some((f) => cmpZh(d.ex.nameZh!.value, f).near));
   const v = p.nameVision;
-  const v2 = p.nameVision2 && p.nameVision2.legible === 'clear' ? p.nameVision2 : null;
+  const v2zh = p.nameVision2 && (p.nameVision2.legibleZh ?? p.nameVision2.legible) === 'clear' ? p.nameVision2.zh : null;
+  const v2en = p.nameVision2 && (p.nameVision2.legibleEn ?? p.nameVision2.legible) === 'clear' ? p.nameVision2.en : null;
   const info = nearInfo ? ['name_differs_from_filename_or_list'] : [];
   if (v && v.legible === 'clear' && v.zh) {
     const indep = zhFiles.some((f) => eqZh(v.zh, f)) || zhList.some((f) => eqZh(v.zh, f)); // 檔名／名單（獨立於本機 OCR）
@@ -160,11 +164,11 @@ export function resolvePerson(p: PersonIn): PersonFields {
     // 只靠本機 OCR 佐證、而檔名／名單差一字（near）→ 證據互相矛盾，唔准 confirmed
     const corroborated = indep || (viaLocal && !nearInfo);
     // 新規則：第一視覺 clear＋第二讀 clear＋逐字相同（卡面兩個獨立讀數）
-    const twoReads = !!v2?.zh && exactZh(v2.zh) === exactZh(v.zh);
+    const twoReads = !!v2zh && exactZh(v2zh) === exactZh(v.zh);
     if ((corroborated || twoReads) && !zhReasons.includes('nameZh_differs_between_files')) {
       nameZh = out('confirmed', v.zh, zhLocal, info);
       nameZh.source = 'id_card';
-    } else nameZh = out('review', v.zh, [...zhLocal, ...zhFiles, ...(v2?.zh && !twoReads ? [v2.zh] : [])], [...zhReasons, ...info, v2?.zh ? 'nameZh_reads_disagree' : 'nameZh_vision_uncorroborated'].filter(Boolean));
+    } else nameZh = out('review', v.zh, [...zhLocal, ...zhFiles, ...(v2zh && !twoReads ? [v2zh] : [])], [...zhReasons, ...info, corroborated || twoReads ? '' : v2zh ? 'nameZh_reads_disagree' : 'nameZh_vision_uncorroborated'].filter(Boolean));
   } else if (zhMine) nameZh = out('review', zhMine, zhLocal, [...zhReasons, ...info, v ? 'nameZh_vision_unsure' : 'nameZh_not_vision_read']);
   else nameZh = out('missing', null);
 
@@ -181,11 +185,11 @@ export function resolvePerson(p: PersonIn): PersonFields {
   if (v && v.legible === 'clear' && v.en) {
     const k = enKey(v.en);
     const corroborated = enLocal.some((x) => enKey(x) === k) || enList.some((x) => enKey(x) === k);
-    const twoReads = !!v2?.en && exactEn(v2.en) === exactEn(v.en);
+    const twoReads = !!v2en && exactEn(v2en) === exactEn(v.en);
     if ((corroborated || twoReads) && !enReasons.includes('nameEn_differs_between_files')) {
       nameEn = out('confirmed', v.en.toUpperCase(), enLocal);
       nameEn.source = 'id_card';
-    } else nameEn = out('review', v.en.toUpperCase(), [...enLocal, ...(v2?.en && !twoReads ? [v2.en.toUpperCase()] : [])], [...enReasons, v2?.en ? 'nameEn_reads_disagree' : 'nameEn_vision_uncorroborated'].filter(Boolean));
+    } else nameEn = out('review', v.en.toUpperCase(), [...enLocal, ...(v2en && !twoReads ? [v2en.toUpperCase()] : [])], [...enReasons, corroborated || twoReads ? '' : v2en ? 'nameEn_reads_disagree' : 'nameEn_vision_uncorroborated'].filter(Boolean));
   } else if (enLocal.length) {
     const longest = [...enLocal].sort((a, b) => enTokens(b).length - enTokens(a).length)[0];
     nameEn = out('review', longest, enLocal, [...enReasons, v ? 'nameEn_vision_unsure' : 'nameEn_not_vision_read']);

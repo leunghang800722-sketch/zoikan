@@ -17,6 +17,11 @@ describe("GET /api/guards?q= 身份證號", () => {
     expect(res.status).toBe(200);
     return res.json() as Promise<{ rows: { id: string; hkid?: string | null }[]; total: number }>;
   };
+  const searchHeader = async (cookie: string, q: string) => {
+    const res = await guardsList(new Request("http://t/api/guards", { headers: { cookie, "x-guard-search": encodeURIComponent(q) } }));
+    expect(res.status).toBe(200);
+    return res.json() as Promise<{ rows: { id: string }[] }>;
+  };
   const setSupervisorPii = async (granted: boolean) => {
     const permission = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module: "安員個人資料", action: "view" } } });
     await prisma.rolePermission.upsert({
@@ -49,6 +54,19 @@ describe("GET /api/guards?q= 身份證號", () => {
       expect(JSON.stringify(r)).not.toContain(HKID);
     }
     expect((await search(owner, "999999")).rows.length).toBe(0);
+  });
+
+  it("header 路徑（x-guard-search，encodeURIComponent）：有權限搵到、帶括號／全形都得；header 優先過 ?q=；壞編碼 400；冇權限／雞頭搵唔到", async () => {
+    expect((await searchHeader(owner, "A123456(3)")).rows.map((x) => x.id)).toContain(fx.guardA.id);
+    expect((await searchHeader(owner, "ａ１２３４５６（３）")).rows.map((x) => x.id)).toContain(fx.guardA.id);
+    expect((await searchHeader(owner, "測試安員甲")).rows.map((x) => x.id)).toEqual([fx.guardA.id]);
+    const both = await guardsList(new Request("http://t/api/guards?q=zzzz", { headers: { cookie: owner, "x-guard-search": encodeURIComponent(HKID) } }));
+    expect((await both.json()).rows.map((x: { id: string }) => x.id)).toContain(fx.guardA.id);
+    const bad = await guardsList(new Request("http://t/api/guards", { headers: { cookie: owner, "x-guard-search": "%E0%A4%A" } }));
+    expect(bad.status).toBe(400);
+    expect((await searchHeader(broker, HKID)).rows.length).toBe(0);
+    await setSupervisorPii(false);
+    expect((await searchHeader(supervisor, HKID)).rows.length).toBe(0);
   });
 
   it("少過 4 位唔當 hkid 搜", async () => {

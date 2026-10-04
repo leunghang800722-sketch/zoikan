@@ -1,6 +1,7 @@
 // Stage A7：姓名第二讀數——列出 person-fields.json 入面 nameZh／nameEn status=review 而第一視覺讀數 clear 嘅人，
 // 為其身份證頁出第二套姓名區裁圖 crops/name-b/<docId>.png（300dpi，邊界同 07 唔同）。
 // 輸出 out/name-second-read-todo.json（淨 docId／page／路徑，無姓名）。
+// 注意：裁圖範圍未做到最小化（姓名裁圖大多連相片、部分連身份證號／出生日期一齊裁入），淨係本機用、data/ 已 gitignored，唔離開本機。
 // 第二讀數由另一個模型盲讀 → out/name-vision-2.json（本 script 唔做第二讀、唔建該檔）。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';

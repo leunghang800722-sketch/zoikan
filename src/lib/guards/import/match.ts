@@ -15,10 +15,9 @@ export interface DbGuard {
   staffNos: string[];
   /** 出生日期 YYYY-MM-DD（無就 null／undefined） */
   dob?: string | null;
-  nameEn?: string | null;
 }
 
-/** 更表（未作廢上載）入面某 guard 出現過嘅原始工號／電話；批量預載（唔准 N+1）。 */
+/** 更表（未作廢上載）入面某 guard 出現過嘅原始工號／電話；批量預載（唔准 N+1）。只計有獨立鍵（工號／電話）配對嘅行，淨靠姓名嘅行唔計（循環佐證）。 */
 export interface RosterEvidence {
   staffNoRaws: string[];
   telRaws: string[];
@@ -34,8 +33,8 @@ export interface MatchInput {
   phone: string | null;
   /** 導入者 confirmed 出生日期（YYYY-MM-DD）；非 confirmed 傳 null */
   dob?: string | null;
-  /** 導入者 confirmed 英文名；非 confirmed 傳 null */
-  nameEn?: string | null;
+  /** 導入者 nameZh status=confirmed；輔助判斷 (b)(c) 要求 true */
+  nameConfirmed?: boolean;
   grade: "auto_ok" | "review" | "fail";
   gradeReasons: string[];
 }
@@ -72,16 +71,6 @@ export function buildDbIndex(gs: DbGuard[], roster?: Map<string, RosterEvidence>
     add(idx.byZh, normZh(g.nameZh), g);
   }
   return idx;
-}
-
-/** 英文名比對 key：忽略大小寫、逗號、連續空白、姓名次序（token 排序）。 */
-export function enNameKey(s: string | null | undefined): string | null {
-  const t = (s ?? "")
-    .toUpperCase()
-    .split(/[^A-Z]+/)
-    .filter(Boolean)
-    .sort();
-  return t.length >= 2 ? t.join(" ") : null; // 單一 token 太寬鬆，唔做佐證
 }
 
 const escRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -182,35 +171,35 @@ export function decideMatch(i: MatchInput, db: DbIndex, groupReasons: readonly s
   }
   if (gName.length === 1) {
     const c = gName[0]!;
-    // (a) G 有 hkid 而且同導入者 confirmed hkid 唔同 → 唔係同一人
-    if (hkidConfirmed && c.hkid && c.hkid !== i.hkid) {
-      reasons.push("same_name_different_hkid");
-      candidates.delete(c.id);
-      return decideCreate(true);
+    // (a) G 有另一個 hkid：導入者 hkid confirmed → 唔係同一人，行 create 路徑；未 confirmed → 任何輔助依據都唔准 link，人手
+    if (c.hkid && c.hkid !== i.hkid) {
+      if (hkidConfirmed) {
+        reasons.push("same_name_different_hkid");
+        candidates.delete(c.id);
+        return decideCreate(true);
+      }
+      reasons.push("guard_has_other_hkid_unconfirmed");
+      return out("needs_review", null);
     }
-    // (b) 出生日期
-    if (i.dob && c.dob) {
-      if (c.dob === i.dob) {
-        basis.push("name_dob");
+    // 輔助判斷 (b)(c) 要求導入者 nameZh confirmed；冇硬證據一律留人手
+    if (i.nameConfirmed === true) {
+      // (b) 出生日期（導入者 dob 已係 confirmed 先會傳入）：相同 → link；唔同 → 人手（G 嘅 dob 可能係舊資料入錯，唔自動 create）
+      if (i.dob && c.dob) {
+        if (c.dob === i.dob) {
+          basis.push("name_dob");
+          return out("link", c.id);
+        }
+        reasons.push("same_name_different_dob");
+        return out("needs_review", null);
+      }
+      // (c) 更表佐證：只計有獨立鍵（工號／電話）配對嘅行；工號或電話
+      const ev = db.roster.get(c.id);
+      if (ev && (rosterHasStaffNo(ev.staffNoRaws, staffNos) || (tel && ev.telRaws.some((t) => normTel8(t) === tel)))) {
+        basis.push("name_roster_evidence");
         return out("link", c.id);
       }
-      reasons.push("same_name_different_dob");
-      candidates.delete(c.id);
-      return decideCreate(hkidConfirmed);
     }
-    // (c) 更表佐證：工號或電話
-    const ev = db.roster.get(c.id);
-    if (ev && (rosterHasStaffNo(ev.staffNoRaws, staffNos) || (tel && ev.telRaws.some((t) => normTel8(t) === tel)))) {
-      basis.push("name_roster_evidence");
-      return out("link", c.id);
-    }
-    // (d) 英文名
-    const k = enNameKey(i.nameEn);
-    if (k && enNameKey(c.nameEn) === k) {
-      basis.push("name_en");
-      return out("link", c.id);
-    }
-    // (e) 分唔到 → 人手
+    // (e) 分唔到 → 人手（英文名唔做自動 link 依據：多數係中文名拼音，冇額外鑑別力）
     reasons.push("name_only_candidate");
     return out("needs_review", null);
   }

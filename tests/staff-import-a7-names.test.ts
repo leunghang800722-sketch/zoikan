@@ -59,3 +59,20 @@ describe("姓名：兩個獨立讀數逐字相同", () => {
     expect(exactEn("Chan,  Tai Man")).toBe("CHAN TAI MAN");
   });
 });
+
+describe("A7 驗收修正：分欄 legibility／reason 標示", () => {
+  it("英文 unsure 唔連中文第二讀都丟：legibleZh=clear 仍可 confirmed 中文", () => {
+    const r = run({ v1: V("測試安員", "CHAN, TAI MAN"), v2: { docId: "d1", zh: "測試安員", en: null, legible: "unsure", legibleZh: "clear", legibleEn: "unsure" } });
+    expect(r.nameZh.status).toBe("confirmed");
+    expect(r.nameEn.status).toBe("review");
+  });
+  it("兩讀數一致但多檔卡面姓名唔同 → reason 係 differs_between_files，唔標 reads_disagree", () => {
+    const mk = (id: string, zh: string, en: string): PersonDocIn => ({ docId: id, ex: exOf(zh, en, id), fileNameZh: null, phone: ph, listZh: [], listEn: [], listTels: [] });
+    const v = { docId: "d1", zh: "測試安員", en: "CHAN, TAI MAN", legible: "clear" as const };
+    const r = resolvePerson({ key: "k", docs: [mk("d1", "測試安員", "CHAN TAI MAN"), mk("d2", "測試安貝", "CHAN TAI MEN")], idDocId: "d1", addressDocId: null, nameVision: v, nameVision2: v, addrVision: null });
+    expect(r.nameZh.reasons).toContain("nameZh_differs_between_files");
+    expect(r.nameZh.reasons).not.toContain("nameZh_reads_disagree");
+    expect(r.nameEn.reasons).toContain("nameEn_differs_between_files");
+    expect(r.nameEn.reasons).not.toContain("nameEn_reads_disagree");
+  });
+});

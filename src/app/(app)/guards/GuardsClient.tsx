@@ -11,7 +11,7 @@
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { apiGet, apiPatch, apiPost, apiDelete, apiPut, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiRequest, apiPatch, apiPost, apiDelete, apiPut, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -433,10 +433,11 @@ export function GuardsClient({
     setLoading(true);
     setError(null);
     const expiringParam = expiringOnly ? "&expiring_within_days=90" : "";
-    const qParam = q.trim() ? `&q=${encodeURIComponent(q.trim())}` : "";
+    // 搜尋字可能係身份證號：唔放 URL（避免落 access log／瀏覽器歷史），改用 request header（encodeURIComponent）
+    const qHeaders = q.trim() ? { "x-guard-search": encodeURIComponent(q.trim()) } : undefined;
     const identityParam = identityFilter ? `&identity=${identityFilter}` : "";
     const [guardRes, brokerRes, siteRes] = await Promise.all([
-      apiGet<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${identityParam}${qParam}`),
+      apiRequest<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${identityParam}`, { headers: qHeaders }),
       apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
       // WP-PHASE3：淨係內部角色先揀到盤（雞頭 session「盤」module 硬性
       // 拒絕，403 都冇所謂——`sites` 保持空陣列，「長工」分區本身雞頭都

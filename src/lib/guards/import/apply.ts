@@ -64,11 +64,12 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
     db.guardPhone.findMany({ select: { guardId: true, tel: true } }),
     db.guardStaffNumber.findMany({ select: { guardId: true, scheme: true, number: true, status: true } }),
     db.guardAddress.findMany({ select: { guardId: true, address: true } }),
-    // 更表佐證（name_only 輔助判斷 c）：一次過預載未作廢上載入面各 guard 出現過嘅原始工號／電話（DISTINCT，唔 N+1）
+    // 更表佐證（name_only 輔助判斷 c；只計 by_staff_no／by_name_tel／override 等有獨立鍵嘅行，by_name／ambiguous 唔計）：一次過預載未作廢上載入面各 guard 出現過嘅原始工號／電話（DISTINCT，唔 N+1）
     db.$queryRaw<{ guard_id: string; staff_no_raw: string | null; tel_raw: string | null }[]>`
       SELECT DISTINCT r.guard_id, r.staff_no_raw, r.tel_raw
       FROM roster_upload_rows r JOIN roster_uploads u ON u.id = r.upload_id
-      WHERE r.guard_id IS NOT NULL AND u.voided_at IS NULL AND (r.staff_no_raw IS NOT NULL OR r.tel_raw IS NOT NULL)`,
+      WHERE r.guard_id IS NOT NULL AND u.voided_at IS NULL AND (r.staff_no_raw IS NOT NULL OR r.tel_raw IS NOT NULL)
+        AND (r.guard_match IN ('by_staff_no', 'by_name_tel') OR r.match_basis IN ('staff_no', 'tel', 'name_tel', 'override'))`,
   ]);
   const roster = new Map<string, RosterEvidence>();
   for (const r of rosterRows) {
@@ -100,7 +101,7 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
       staffNumbers: noBy.get(g.id) ?? [],
       addresses: addrBy.get(g.id) ?? [],
     });
-    return { id: g.id, nameZh: g.nameZh, hkid: canonicalHkid(g.hkid), tels, staffNos: (noBy.get(g.id) ?? []).map((n) => n.number), dob: isoDate(g.dateOfBirth), nameEn: g.nameEn };
+    return { id: g.id, nameZh: g.nameZh, hkid: canonicalHkid(g.hkid), tels, staffNos: (noBy.get(g.id) ?? []).map((n) => n.number), dob: isoDate(g.dateOfBirth) };
   });
   return { index: buildDbIndex(dbGuards, roster), byId };
 }
@@ -139,7 +140,7 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
       nameZh,
       phone: phoneForMatch,
       dob: p.dateOfBirth.status === "confirmed" && parseBirthDate(fieldValue(p.dateOfBirth)) ? fieldValue(p.dateOfBirth) : null,
-      nameEn: p.nameEn.status === "confirmed" ? fieldValue(p.nameEn) : null,
+      nameConfirmed: p.nameZh.status === "confirmed",
       grade: p.rating,
       gradeReasons: p.reasons,
     },
