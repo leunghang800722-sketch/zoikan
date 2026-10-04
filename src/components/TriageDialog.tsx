@@ -89,6 +89,7 @@ export const REASON_LABEL: Record<string, string> = {
   forced_guard_missing: "揀咗嘅安員已經唔存在",
   hkid_belongs_to_other_guard: "呢個身份證號已屬於另一個安員",
   apply_failed: "套用失敗，請稍後再試",
+  overwrite_forbidden: "要有安員個人資料／安員修改權限嘅同事處理",
   staffno_belongs_to_other: "有工號屬於另一個安員",
   staffno_scheme_has_other_current: "有工號同現有工號類別重複",
   staffno_invalid: "有工號格式唔合法",

@@ -579,7 +579,10 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1990-05-06");
     const pkg = pkgOf([p]);
     const body = { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)), decisions: { [p.key]: { date_of_birth: { action: "replace", value: "1999-01-01" } } } };
-    expect((await post(applyRoute as never, "/api/guards/import/apply", supervisor, body)).status).toBe(403);
+    const blocked = await post(applyRoute as never, "/api/guards/import/apply", supervisor, body);
+    expect(blocked.status).toBe(200); // 逐人標記，唔再成個請求 403
+    expect(JSON.stringify((await blocked.json()).results)).toContain("overwrite_forbidden");
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1990-05-06");
     expect((await post(applyRoute as never, "/api/guards/import/apply", owner, body)).status).toBe(200);
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1999-01-01");
   });
@@ -694,7 +697,10 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     const p = person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"] });
     const pkg = pkgOf([p]);
     const body = { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)), decisions: { [p.key]: { name_zh: { action: "replace" } } } };
-    expect((await post(applyRoute as never, "/api/guards/import/apply", accountant, body)).status).toBe(403);
+    const r = await post(applyRoute as never, "/api/guards/import/apply", accountant, body);
+    expect(r.status).toBe(200);
+    expect(JSON.stringify((await r.json()).results)).toContain("overwrite_forbidden");
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: ga.id } })).nameZh).toBe("測試舊名甲");
   });
 
   it("硬標記：經導入／分診寫嘅 guards audit 帶 after.import_via（guard_import／triage）", async () => {
@@ -895,7 +901,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(boss).toContain("name_differs_from_guard");
   });
 
-  it("Minor-2：批量導入 decisions replace 只擋「覆蓋現有非空值」；補空欄得；403 唔取決於新值", async () => {
+  it("Minor-2：批量導入 decisions replace 只擋「覆蓋現有非空值」；補空欄得；被擋嘅人標 overwrite_forbidden（回 200），唔取決於新值", async () => {
     const mk = async (hk: string, over: { nameEn?: string; addr?: string }) => {
       const g = await prisma.guard.create({ data: { nameZh: "導入測試員甲", nameEn: over.nameEn ?? null, employmentType: "cash_casual", hkid: hk, createdBy: "t" } });
       if (over.addr) await prisma.guardAddress.create({ data: { guardId: g.id, address: over.addr, isPrimary: true } });
@@ -914,8 +920,17 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect((await run(accountant, H[1]!, "導入測試員甲", { name_en: { action: "replace", value: "FILLED EN" } })).status).toBe(200);
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: gEmpty.id } })).nameEn).toBe("FILLED EN");
     // 覆蓋現有非空值：403，唔理新值同現值一樣定唔同
-    for (const v of ["現有地址1號", "別處地址2號"]) expect((await run(supervisor, H[2]!, "導入測試員甲", { address: { action: "replace", value: v } })).status).toBe(403);
-    for (const v of ["HAS EN", "OTHER EN"]) expect((await run(accountant, H[2]!, "導入測試員甲", { name_en: { action: "replace", value: v } })).status).toBe(403);
+    const reasonsOf = async (res: Response) => {
+      expect(res.status).toBe(200);
+      const b = await res.json();
+      return { reasons: b.results[0].reasons, outcome: b.results[0].outcome, blocked: b.overwrite_blocked };
+    };
+    const addr = [await reasonsOf(await run(supervisor, H[2]!, "導入測試員甲", { address: { action: "replace", value: "現有地址1號" } })), await reasonsOf(await run(supervisor, H[2]!, "導入測試員甲", { address: { action: "replace", value: "別處地址2號" } }))];
+    expect(addr[0]).toEqual(addr[1]); // 新值同現值一樣／唔一樣，結果完全相同
+    expect(addr[0]).toMatchObject({ reasons: ["overwrite_forbidden"], outcome: "needs_review", blocked: 1 });
+    const en = [await reasonsOf(await run(accountant, H[2]!, "導入測試員甲", { name_en: { action: "replace", value: "HAS EN" } })), await reasonsOf(await run(accountant, H[2]!, "導入測試員甲", { name_en: { action: "replace", value: "OTHER EN" } }))];
+    expect(en[0]).toEqual(en[1]);
+    expect(en[0].reasons).toEqual(["overwrite_forbidden"]);
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: gFull.id } })).nameEn).toBe("HAS EN");
     expect(await prisma.guardAddress.count({ where: { guardId: gFull.id } })).toBe(1);
   });
@@ -956,5 +971,55 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     } finally {
       process.env.SESSION_SECRET = saved;
     }
+  });
+
+  it("逐人標記：>25 人、被擋嘅人喺第 2 批——前後嘅人照常寫入、被擋嗰個全部唔寫、回 200、summary audit 有 1 條帶被擋計數", async () => {
+    const N = 30;
+    const BLOCK = 27;
+    const ps: PackagePerson[] = [];
+    const guards: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const hk = mkHkid("M", String(100000 + i));
+      const g = await prisma.guard.create({ data: { nameZh: `導入測試員${i}`, employmentType: "cash_casual", hkid: hk, createdBy: "t" } });
+      if (i === BLOCK) await prisma.guardAddress.create({ data: { guardId: g.id, address: "現有地址1號", isPrimary: true } });
+      guards.push(g.id);
+      ps.push(person({ hkid: hk, name: `導入測試員${i}`, nos: [] }));
+    }
+    const pkg = pkgOf(ps);
+    const decisions = Object.fromEntries(ps.map((p) => [p.key, { name_en: { action: "replace", value: "NEW EN" }, address: { action: "replace", value: "新地址9號" } }]));
+    const res = await post(applyRoute as never, "/api/guards/import/apply", supervisor, { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)), decisions });
+    expect(res.status).toBe(200);
+    const b = await res.json();
+    expect(b.overwrite_blocked).toBe(1);
+    expect(b.outcomes).toMatchObject({ linked: N - 1, needs_review: 1 });
+    expect(b.results[BLOCK].reasons).toEqual(["overwrite_forbidden"]);
+    for (let i = 0; i < N; i++) {
+      const g = await prisma.guard.findUniqueOrThrow({ where: { id: guards[i]! }, include: { addresses: true } });
+      if (i === BLOCK) {
+        expect(g.nameEn).toBeNull(); // 同一個人其中一個決定被擋 → 全部唔寫
+        expect(g.addresses.map((a) => a.address)).toEqual(["現有地址1號"]);
+      } else {
+        expect(g.nameEn).toBe("NEW EN");
+        expect(g.addresses.map((a) => a.address)).toEqual(["新地址9號"]);
+      }
+    }
+    const sums = await prisma.auditLog.findMany({ where: { action: "guard_import_apply", actorUserId: fx.userIds["主管"] } });
+    expect(sums.length).toBe(1);
+    expect(sums[0]!.after).toMatchObject({ overwrite_blocked: 1, persons: N });
+    expect(b.guards_updated).toBe(N - 1);
+  }, 60000);
+
+  it("逐人標記：被擋嘅 reason 對冇 PII view 嘅人亦只取決於現值係咪非空（新值一樣／唔一樣回應相同）", async () => {
+    await prisma.guard.create({ data: { nameZh: "導入測試員甲", employmentType: "cash_casual", hkid: H[1]!, dateOfBirth: new Date("1985-01-01T00:00:00.000Z"), createdBy: "t" } });
+    const run = async (v: string) => {
+      const p = person({ hkid: H[1], name: "導入測試員甲", nos: [] });
+      const pkg = pkgOf([p]);
+      const r = await post(applyRoute as never, "/api/guards/import/apply", supervisor, { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)), decisions: { [p.key]: { date_of_birth: { action: "replace", value: v } } } });
+      expect(r.status).toBe(200);
+      const b = await r.json();
+      delete b.triage;
+      return b;
+    };
+    expect(await run("1985-01-01")).toEqual(await run("1999-09-09"));
   });
 });
