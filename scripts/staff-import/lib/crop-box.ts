@@ -69,3 +69,31 @@ export function locateWideBox(page: number, lines: OcrLine[]): { box: Box; how: 
   }
   return { box: { x0: 0, x1: 1, y0: 0, y1: 1 }, how: 'page' };
 }
+
+const HKID_LINE = /[A-Z]{1,2}\s?\d{6}\s?[(（]?\s?[0-9A]\s?[)）]?/;
+
+/**
+ * 姓名區第二套裁圖（Stage A7）：邊界同 locateNameBox 唔同（左右較緊、上下較闊），
+ * 並且把裁圖下緣抬高到身份證號行之上、右緣唔過相片側，盡量唔裁到身份證號／相片。
+ */
+export function locateNameBoxB(page: number, lines: OcrLine[]): { box: Box; how: 'name' | 'card' | 'page' } {
+  const r = extractIdCard(page, lines);
+  const nl = r.nameLines ?? [];
+  if (nl.length) {
+    const b = bbox(nl);
+    let box: Box = { x0: b.x0 - 0.02, x1: b.x1 + 0.05, y0: b.y0 - 0.055, y1: b.y1 + 0.035 };
+    // 身份證號行（OCR 文字似 hkid）喺姓名下面而且落入裁圖 → 下緣抬到佢上面
+    for (const l of lines) {
+      if (!HKID_LINE.test(l.t.toUpperCase())) continue;
+      const top = l.y + l.h;
+      if (top <= b.y0 + 0.005 && top > box.y0) box = { ...box, y0: top + 0.002 };
+    }
+    return { box: clamp(box), how: 'name' };
+  }
+  const region = cardRegion(lines.filter((l) => l.t.trim()));
+  if (region.length && region.length < lines.length) {
+    const b = bbox(region);
+    return { box: clamp({ x0: b.x0 - 0.03, x1: b.x1 + 0.03, y0: (b.y0 + b.y1) / 2 - 0.02, y1: b.y1 + 0.03 }), how: 'card' };
+  }
+  return { box: { x0: 0, x1: 1, y0: 0, y1: 1 }, how: 'page' };
+}

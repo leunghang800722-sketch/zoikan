@@ -78,7 +78,9 @@ describe("masking／package／match 純函數", () => {
     expect(decideMatch({ ...base, hkid: H1, staffNos: ["U00002"] }, db)).toMatchObject({ action: "conflict", reasons: ["hkid_vs_staffno_differ"] });
     expect(decideMatch({ ...base, hkid: H4, phone: "91234567" }, db)).toMatchObject({ action: "conflict", reasons: ["tel_guard_has_other_hkid"] });
     expect(decideMatch({ ...base, hkid: H2, phone: "61234567", nameZh: "測試乙" }, db)).toMatchObject({ action: "link", guardId: "g2" });
-    expect(decideMatch({ ...base, hkid: H4, nameZh: "測試丙" }, db)).toMatchObject({ action: "needs_review", reasons: ["name_only_candidate"] });
+    expect(decideMatch({ ...base, hkid: H4, nameZh: "測試乙" }, db)).toMatchObject({ action: "needs_review", reasons: ["name_only_candidate"] });
+    // A7：同名但 G 有另一個 hkid → 唔係同一人，行 create 路徑
+    expect(decideMatch({ ...base, hkid: H4, nameZh: "測試丙" }, db)).toMatchObject({ action: "create", reasons: ["same_name_different_hkid"] });
     expect(decideMatch({ ...base, hkid: H4, nameZh: "測試新" }, db)).toMatchObject({ action: "create" });
     expect(decideMatch({ ...base, hkid: H1 }, db, ["dup_tel_across_persons"])).toMatchObject({ action: "conflict" });
     expect(decideMatch({ ...base, hkid: null, hkidValid: false, grade: "fail" }, db)).toMatchObject({ action: "needs_review" });
@@ -237,7 +239,7 @@ describe("導入 API", () => {
     const r1 = await (await call(applyRoute, owner, { package: pkgOf([person({ hkid: H1, telStatus: "review" })]) })).json();
     expect(r1.outcomes.created).toBe(1);
     expect(r1.phones_added).toBe(0);
-    const r2 = await (await call(applyRoute, owner, { package: pkgOf([person({ hkid: H2, hkidStatus: "review", key: personKeyForHkid(H2), nos: ["U90002"], tel: "61234567" })]) })).json();
+    const r2 = await (await call(applyRoute, owner, { package: pkgOf([person({ hkid: H2, name: "導入測試員丁", hkidStatus: "review", key: personKeyForHkid(H2), nos: ["U90002"], tel: "61234567" })]) })).json();
     expect(r2.outcomes).toMatchObject({ created: 0, needs_review: 1 });
   });
 

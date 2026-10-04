@@ -24,7 +24,7 @@ import {
   deriveSiaPermitExpiry,
   canOverrideDerivedSiaPermit,
 } from "@/lib/guards/staff-numbers";
-import { buildDbIndex, decideMatch, type Action, type DbGuard, type DbIndex } from "./match";
+import { buildDbIndex, decideMatch, type Action, type DbGuard, type DbIndex, type RosterEvidence } from "./match";
 import { addressSourceOf, fieldValue, hashPackage, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
 import { parseBirthDate, maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
 
@@ -57,14 +57,26 @@ interface DbCtx {
 }
 
 async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
-  const [guards, phones, nos, addrs] = await Promise.all([
+  const [guards, phones, nos, addrs, rosterRows] = await Promise.all([
     db.guard.findMany({
       select: { id: true, nameZh: true, nameEn: true, hkid: true, tel: true, dateOfBirth: true, siaPermitAExpiry: true, siaPermitBExpiry: true, identityReviewFields: true },
     }),
     db.guardPhone.findMany({ select: { guardId: true, tel: true } }),
     db.guardStaffNumber.findMany({ select: { guardId: true, scheme: true, number: true, status: true } }),
     db.guardAddress.findMany({ select: { guardId: true, address: true } }),
+    // 更表佐證（name_only 輔助判斷 c）：一次過預載未作廢上載入面各 guard 出現過嘅原始工號／電話（DISTINCT，唔 N+1）
+    db.$queryRaw<{ guard_id: string; staff_no_raw: string | null; tel_raw: string | null }[]>`
+      SELECT DISTINCT r.guard_id, r.staff_no_raw, r.tel_raw
+      FROM roster_upload_rows r JOIN roster_uploads u ON u.id = r.upload_id
+      WHERE r.guard_id IS NOT NULL AND u.voided_at IS NULL AND (r.staff_no_raw IS NOT NULL OR r.tel_raw IS NOT NULL)`,
   ]);
+  const roster = new Map<string, RosterEvidence>();
+  for (const r of rosterRows) {
+    const e = roster.get(r.guard_id) ?? { staffNoRaws: [], telRaws: [] };
+    if (r.staff_no_raw) e.staffNoRaws.push(r.staff_no_raw);
+    if (r.tel_raw) e.telRaws.push(r.tel_raw);
+    roster.set(r.guard_id, e);
+  }
   const phoneBy = new Map<string, string[]>();
   for (const p of phones) phoneBy.set(p.guardId, [...(phoneBy.get(p.guardId) ?? []), p.tel]);
   const noBy = new Map<string, GuardSnap["staffNumbers"]>();
@@ -88,9 +100,9 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
       staffNumbers: noBy.get(g.id) ?? [],
       addresses: addrBy.get(g.id) ?? [],
     });
-    return { id: g.id, nameZh: g.nameZh, hkid: canonicalHkid(g.hkid), tels, staffNos: (noBy.get(g.id) ?? []).map((n) => n.number) };
+    return { id: g.id, nameZh: g.nameZh, hkid: canonicalHkid(g.hkid), tels, staffNos: (noBy.get(g.id) ?? []).map((n) => n.number), dob: isoDate(g.dateOfBirth), nameEn: g.nameEn };
   });
-  return { index: buildDbIndex(dbGuards), byId };
+  return { index: buildDbIndex(dbGuards, roster), byId };
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +115,8 @@ export interface Evaluation {
   action: Action;
   guardId: string | null;
   reasons: string[];
+  /** 對齊依據（hkid／staff_no／tel／name／name_dob／name_roster_evidence／name_en／no_existing_guard） */
+  basis: string[];
   hkidCanon: string | null;
   checks: Record<PersonField, FieldCheck>;
 }
@@ -124,6 +138,8 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
       hkidConfirmed: p.hkid.status === "confirmed",
       nameZh,
       phone: phoneForMatch,
+      dob: p.dateOfBirth.status === "confirmed" && parseBirthDate(fieldValue(p.dateOfBirth)) ? fieldValue(p.dateOfBirth) : null,
+      nameEn: p.nameEn.status === "confirmed" ? fieldValue(p.nameEn) : null,
       grade: p.rating,
       gradeReasons: p.reasons,
     },
@@ -202,7 +218,7 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
       }
     }
   }
-  return { person: p, action, guardId: d.guardId, reasons: [...new Set(reasons)], hkidCanon, checks };
+  return { person: p, action, guardId: d.guardId, reasons: [...new Set(reasons)], basis: d.basis, hkidCanon, checks };
 }
 
 function evaluateAll(pkg: ImportPackage, ctx: DbCtx): Evaluation[] {
@@ -217,6 +233,8 @@ export interface PreviewRow {
   key: string;
   action: Action;
   reasons: string[];
+  /** 對齊依據（覆核頁顯示） */
+  basis: string[];
   rating: string;
   /** 自動套用會處理呢個人（link／create；寫入淨係 confirmed 欄） */
   auto_apply: boolean;
@@ -308,6 +326,7 @@ export async function previewImport(pkg: ImportPackage): Promise<PreviewResult> 
       key: p.key,
       action: e.action,
       reasons: e.reasons,
+      basis: e.basis,
       rating: p.rating,
       auto_apply: applicable,
       hkid_masked: maskHkidImport(e.hkidCanon),

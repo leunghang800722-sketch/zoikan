@@ -180,11 +180,11 @@ describe("逐欄 status（姓名／地址要視覺 clear＋佐證）", () => {
     expect(bad.nameZh.status).toBe("review");
     expect(bad.nameZh.candidates).toContain("測試安員");
   });
-  it("nameZh 有 near-match → 唔准 confirmed", () => {
+  it("nameZh 有 near-match 而冇第二讀 → 唔 confirmed", () => {
     const d = docIn(exOf({}), { fileNameZh: "測試安貝" });
     const r = base({ docId: "d1", zh: "測試安員", en: null, legible: "clear" }, null, d);
     expect(r.nameZh.status).toBe("review");
-    expect(r.nameZh.reasons).toContain("nameZh_near_match");
+    expect(r.nameZh.reasons).toContain("name_differs_from_filename_or_list"); // A7：資訊性 reason（冇第二讀仍 review）
   });
   it("同人多檔中文名唔同 → review（唔准低信心蓋過高信心）", () => {
     const d1 = docIn(exOf({}), { fileNameZh: "測試安員" });
