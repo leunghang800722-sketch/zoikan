@@ -267,6 +267,9 @@ export function GuardsClient({
   // group gate 嘅結果）決定編輯抽屜顯唔顯示嗰個分區，唔靠前端自己判斷
   // 權限（單一事實來源：backend response 形狀）。
   const [hasPiiField, setHasPiiField] = useState(true);
+  // 搜尋框 placeholder：列表 row 有 `hkid` key（＝session 有「安員個人資料」view，API 先會用 q 配身份證）
+  // 先顯示「身份證」；預設 false（唔洩露權限），有 row 先更新，冇 row 保持上一個值。
+  const [searchHasHkid, setSearchHasHkid] = useState(false);
   const [hasBankField, setHasBankField] = useState(true);
   // WP-BOSS5 §25.2：呢個安員嘅介紹雞頭曾經俾 migration 清走（原本係
   // Y／internal_cash）——detail GET 先知，淨係編輯模式先有值。
@@ -452,6 +455,7 @@ export function GuardsClient({
     setHasMoneyField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "monthly_salary" in r));
     if (!editingDrawerRef.current) {
       setHasPiiField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "hkid" in r));
+      if (guardRes.data.rows.length > 0) setSearchHasHkid(guardRes.data.rows.some((r) => "hkid" in r));
       setHasBankField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "bank_name" in r));
       setHasLicenceExtraField(guardRes.data.rows.length === 0 ? !isBroker : guardRes.data.rows.some((r) => "sia_permit_no" in r));
     }
@@ -1669,7 +1673,7 @@ export function GuardsClient({
         actions={
           <>
             <FilterChip label="搜尋" showCaret={false}>
-              <input type="text" placeholder="姓名 / 工號 / 電話" value={search} onChange={(e) => setSearch(e.target.value)} className="w-36" />
+              <input type="text" placeholder={searchHasHkid ? "姓名 / 工號 / 電話 / 身份證" : "姓名 / 工號 / 電話"} value={search} onChange={(e) => setSearch(e.target.value)} className="w-36" />
             </FilterChip>
             <FilterChip label="本月更數月份">
               <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />

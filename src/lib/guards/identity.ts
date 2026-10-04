@@ -14,6 +14,16 @@ export function canonicalHkid(raw: string | null | undefined): string | null {
   return /^[A-Z]{1,2}\d{6}[0-9A]$/.test(s) ? s : null;
 }
 
+/** q → 身份證搜尋 key：canonical 式正規化（大寫、去空白／全形空白、去半形／全形括號、全形英數轉半形）；長度 ≥4 先當 hkid 搜。 */
+export function hkidSearchKey(q: string): string | null {
+  const k = q
+    .normalize("NFKC")
+    .toUpperCase()
+    .replace(/[\s　]+/g, "")
+    .replace(/[()（）]/g, "");
+  return /^[A-Z0-9]{4,}$/.test(k) ? k : null;
+}
+
 /** canonical → 顯示格式 `A123456(3)`。 */
 export function formatHkid(canon: string): string {
   return `${canon.slice(0, -1)}(${canon.slice(-1)})`;

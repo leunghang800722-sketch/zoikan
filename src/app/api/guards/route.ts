@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac/requirePermission";
+import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
 import { toGuardFullDTO, toGuardListDTO, mapListDTO } from "@/lib/api/dto";
@@ -24,7 +24,7 @@ import {
   isSiaPermitBLapsedByAge,
   type StaffNumberChip,
 } from "@/lib/guards/staff-numbers";
-import { prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, identityStatus } from "@/lib/guards/identity";
+import { hkidSearchKey, prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, identityStatus } from "@/lib/guards/identity";
 import { createGuardPhone, syncLegacyGuardContactColumns, writeLegacyContactAudits } from "@/lib/guards/contacts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
@@ -133,6 +133,10 @@ export async function GET(req: Request) {
         prisma.guardPhone.findMany({ where: { tel: { contains: qParam } }, select: { guardId: true } }),
       ]);
       formerHitGuardIds = numberMatches.formerHitGuardIds;
+      // 身份證號搜尋：淨係內部角色且有「安員個人資料:view」（同 hkid 欄位顯示一致；雞頭硬性 deny）先用 q 配 hkid；
+      // 冇權限完全唔配，搜尋結果同以前一樣，唔可以用嚟探測某個身份證號存唔存在。q 唔寫入 audit／log。
+      const hkidQ = hkidSearchKey(qParam);
+      const hkidSearch = hkidQ && !isBrokerRole(session) && (await hasPermission(session, "安員個人資料", "view")) ? hkidQ : null;
       const phoneMatchGuardIds = [...new Set(phoneMatches.map((p) => p.guardId))];
       where = {
         ...where,
@@ -140,6 +144,7 @@ export async function GET(req: Request) {
           { nameZh: { contains: qParam, mode: "insensitive" } },
           { nameEn: { contains: qParam, mode: "insensitive" } },
           { tel: { contains: qParam } },
+          ...(hkidSearch ? [{ hkid: { contains: hkidSearch } }] : []),
           ...(numberMatches.guardIds.length > 0 ? [{ id: { in: numberMatches.guardIds } }] : []),
           ...(phoneMatchGuardIds.length > 0 ? [{ id: { in: phoneMatchGuardIds } }] : []),
         ],
