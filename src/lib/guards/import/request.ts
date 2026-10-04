@@ -14,8 +14,9 @@ export function parsePackage(raw: unknown): ImportPackage {
   return r.data;
 }
 
-/** 老闆專屬：module「安員批量導入」硬性淨老闆（preview=view，apply=update）；其他角色（即使開晒
- * 「安員個人資料」）一律 403。 */
+/** module「安員批量導入」（preview=view，apply=update）：老闆／會計／主管（WP-AI-OPS §28.4，老闆 2026-10-04 開放）；
+ * 雞頭／安員硬性 403。導入包唔入 DB、冇「批次」可以俾人睇，所以「非老闆淨係自己上載嗰批」由分診 session
+ * （owner＝上載者）強制。 */
 export async function requireImportPermission(req: Request, mode: "preview" | "apply"): Promise<AuthedSession> {
   return requirePermission(req, "安員批量導入", mode === "preview" ? "view" : "update");
 }

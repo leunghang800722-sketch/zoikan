@@ -1,0 +1,490 @@
+// WP-AI-OPS §28.4：導入後對話式分診（規則出題／冪等／權限／預覽＝寫入／唯一性／跳過／audit）。
+// 全部合成資料（合法 check digit hkid 由 helper 計、9100xxxx 電話、「導入測試員X」）。
+import { describe, it, expect, beforeEach } from "vitest";
+import { prisma, clearAll } from "./lib/db";
+import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
+import { hkidCheckDigitValid } from "@/lib/guards/identity";
+import { hashPackage, importPackageSchema, personKeyForHkid, type PackagePerson } from "@/lib/guards/import/package";
+import { POST as applyRoute } from "@/app/api/guards/import/apply/route";
+import { GET as listRoute } from "@/app/api/triage/sessions/route";
+import { GET as sessionRoute } from "@/app/api/triage/sessions/[id]/route";
+import { POST as reassignRoute } from "@/app/api/triage/sessions/[id]/reassign/route";
+import { POST as previewRoute } from "@/app/api/triage/questions/[id]/preview/route";
+import { POST as answerRoute } from "@/app/api/triage/questions/[id]/answer/route";
+import { draftGuardImportQuestions } from "@/lib/triage/generators/guard-import";
+import { getNavLinks, groupNavLinks } from "@/lib/rbac/nav";
+import { MODULES, ROLE_NAMES, isGrantedByDefault, isHardDenied, type Module, type RoleName } from "@/lib/rbac/matrix";
+import type { CurrentSession } from "@/lib/auth/current-session";
+
+function mkHkid(prefix: string, digits: string): string {
+  const base = `${prefix}${digits}`;
+  const c = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A"].find((x) => hkidCheckDigitValid(base + x))!;
+  return base + c;
+}
+const H = Array.from({ length: 14 }, (_, i) => mkHkid(String.fromCharCode(65 + i), `10000${i % 10}`));
+
+type St = "confirmed" | "review" | "missing";
+const F = (value: string | null, status: St) => (value ? { value, status } : { value: null, status: "missing" as St });
+
+interface P {
+  hkid?: string | null;
+  hkidStatus?: St;
+  name?: string;
+  nameStatus?: St;
+  tel?: string | null;
+  nos?: string[];
+  conflicts?: string[];
+  rating?: "auto_ok" | "review" | "fail";
+  addr?: string | null;
+  dob?: string | null;
+}
+function person(o: P): PackagePerson {
+  const hk = o.hkid === undefined ? H[0]! : o.hkid;
+  return {
+    key: personKeyForHkid(hk ?? `none-${o.name ?? "x"}-${(o.nos ?? []).join("")}`),
+    hkid: F(hk, o.hkidStatus ?? "confirmed"),
+    nameZh: F(o.name ?? "導入測試員甲", o.nameStatus ?? "confirmed"),
+    nameEn: F("TEST AYUEN KAP", "review"),
+    dateOfBirth: o.dob === null ? F(null, "missing") : F(o.dob ?? "1990-05-06", "confirmed"),
+    sex: F("M", "confirmed"),
+    phone: F(o.tel === undefined ? null : o.tel, "confirmed"),
+    address: o.addr === null ? F(null, "missing") : { ...F(o.addr ?? "測試道123號測試大廈4樓A室", "review") },
+    staffNumbers: (o.nos ?? []).map((n) => ({ scheme: n.match(/^[A-Z]+/)![0], number: n })),
+    rating: o.rating ?? "auto_ok",
+    reasons: [],
+    conflicts: o.conflicts ?? [],
+  } as PackagePerson;
+}
+const pkgOf = (persons: PackagePerson[]) => ({ version: 2 as const, generatedAt: "2026-10-04T00:00:00.000Z", persons });
+
+describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
+  let fx: Wp2Fixture;
+  let owner: string;
+  let accountant: string;
+  let supervisor: string;
+  let broker: string;
+  let guardCk: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    await prisma.triageQuestion.deleteMany({});
+    await prisma.triageSession.deleteMany({});
+    fx = await seedWp2Fixture();
+    owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    accountant = await sessionCookieForUser(fx.userIds["會計"]);
+    supervisor = await sessionCookieForUser(fx.userIds["主管"]);
+    broker = await sessionCookieForUser(fx.userIds["雞頭"]);
+    guardCk = await sessionCookieForUser(fx.userIds["安員"]);
+  });
+
+  const post = (route: (r: Request, c: never) => Promise<Response>, url: string, cookie: string, body: unknown, id?: string) =>
+    route(new Request(`http://t${url}`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id: id ?? "x" }) } as never);
+  const get = (route: (r: Request, c: never) => Promise<Response>, url: string, cookie: string, id?: string) =>
+    route(new Request(`http://t${url}`, { headers: { cookie } }), { params: Promise.resolve({ id: id ?? "x" }) } as never);
+
+  const applyPkg = async (cookie: string, persons: PackagePerson[]) => {
+    const pkg = pkgOf(persons);
+    const res = await post(applyRoute as never, "/api/guards/import/apply", cookie, { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)) });
+    return { status: res.status, body: await res.json(), pkg };
+  };
+  const qOfKind = async (kind: string) => {
+    const q = await prisma.triageQuestion.findFirst({ where: { kind }, orderBy: { sort: "asc" } });
+    expect(q, `kind ${kind}`).not.toBeNull();
+    return q!;
+  };
+  const preview = (cookie: string, qid: string, answer: unknown) => post(previewRoute as never, `/api/triage/questions/${qid}/preview`, cookie, { answer }, qid);
+  const answer = (cookie: string, qid: string, ans: unknown, hash?: string) => post(answerRoute as never, `/api/triage/questions/${qid}/answer`, cookie, { answer: ans, ...(hash ? { preview_hash: hash } : {}) }, qid);
+  const confirm = async (cookie: string, qid: string, ans: unknown) => {
+    const pv = await (await preview(cookie, qid, ans)).json();
+    return { pv, res: await answer(cookie, qid, ans, pv.preview_hash) };
+  };
+
+  async function seedMixed() {
+    const gName = await prisma.guard.create({ data: { nameZh: "導入測試員丙", employmentType: "cash_casual", createdBy: "t" } });
+    const gTel = await prisma.guard.create({ data: { nameZh: "測試另一名", employmentType: "cash_casual", createdBy: "t" } });
+    await prisma.guardPhone.create({ data: { guardId: gTel.id, tel: "91000005", isPrimary: true } });
+    const gDb = await prisma.guard.create({ data: { nameZh: "測試現有戊", employmentType: "cash_casual", hkid: H[11]!, createdBy: "t" } });
+    await prisma.guardStaffNumber.create({ data: { guardId: gDb.id, scheme: "U", number: "U90010", status: "current" } });
+    const persons = [
+      person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"], tel: "91000001" }), // name_not_confirmed
+      person({ hkid: H[2], hkidStatus: "review", name: "導入測試員乙", nos: ["U90002"] }), // hkid_not_confirmed
+      person({ hkid: null, name: "導入測試員無證", nos: ["U90003"], rating: "fail" }), // no_id_card
+      person({ hkid: H[3], name: "導入測試員丙", nos: ["U90004"], tel: "91000004" }), // name_only_candidate
+      person({ hkid: H[4], name: "導入測試員丁", nos: ["U90005"], tel: "91000005" }), // tel_only_candidate
+      person({ hkid: H[5], name: "導入測試員己", nos: ["U90006"], tel: "91000006" }), // staffno shared
+      person({ hkid: H[6], name: "導入測試員庚", nos: ["U90006"], tel: "91000007" }),
+      person({ hkid: H[7], name: "導入測試員辛", nos: ["U90007"], tel: "91000009" }), // tel shared
+      person({ hkid: H[8], name: "導入測試員壬", nos: ["U90008"], tel: "91000009" }),
+      person({ hkid: H[9], name: "導入測試員癸", nos: ["U90009"], conflicts: ["group_name_differs"] }), // group_name_differs
+      person({ hkid: H[10], name: "導入測試員子", nos: ["U90010"] }), // db_conflict（工號屬另一 hkid）
+      person({ hkid: H[12], name: "導入測試員丑", nos: ["U90012"], tel: "91000012" }), // 自動建 → field_review
+    ];
+    return { persons, gName, gTel, gDb };
+  }
+
+  it("出題：各類別齊（規則產生）；自動項照常寫入；回傳 triage 摘要；題目 payload 唔含 hkid 以外多餘欄", async () => {
+    const { persons } = await seedMixed();
+    const r = await applyPkg(accountant, persons);
+    expect(r.status).toBe(200);
+    expect(r.body.triage.session_id).toBeTruthy();
+    const qs = await prisma.triageQuestion.findMany({});
+    const kinds = qs.map((q) => q.kind).sort();
+    expect(kinds).toEqual(
+      [
+        "name_not_confirmed",
+        "hkid_not_confirmed",
+        "no_id_card",
+        "name_only_candidate",
+        "tel_only_candidate",
+        "staffno_shared_by_persons",
+        "staffno_shared_by_persons",
+        "dup_tel_across_persons",
+        "dup_tel_across_persons",
+        "group_name_differs",
+        "db_conflict",
+        "field_review",
+      ].sort(),
+    );
+    expect(r.body.triage.open_questions).toBe(12);
+    expect(r.body.triage.total_questions).toBe(12);
+    // 自動項已寫入（H12 被建）；有問題嘅人冇被自動建
+    expect(await prisma.guard.count({ where: { hkid: H[12] } })).toBe(1);
+    expect(await prisma.guard.count({ where: { hkid: H[1] } })).toBe(0);
+    expect(await prisma.guard.count({ where: { hkid: H[5] } })).toBe(0);
+    const s = await prisma.triageSession.findFirstOrThrow({});
+    expect(s.ownerUserId).toBe(fx.userIds["會計"]);
+    expect(s.sourceType).toBe("guard_import");
+    // 每題都有「跳過」選項；link 選項帶候選
+    for (const q of qs) expect((q.optionsJson as { id: string }[]).some((o) => o.id === "skip")).toBe(true);
+    const nameOnly = await qOfKind("name_only_candidate");
+    expect((nameOnly.optionsJson as { id: string }[]).map((o) => o.id)).toEqual(["link", "create_new", "skip"]);
+  });
+
+  it("冪等：同一個 package_hash 再上載唔重複開 session／題目；已答嘅唔再出", async () => {
+    const { persons } = await seedMixed();
+    const r1 = await applyPkg(accountant, persons);
+    const n1 = await prisma.triageQuestion.count();
+    const r2 = await applyPkg(accountant, persons);
+    expect(r2.body.triage.session_id).toBe(r1.body.triage.session_id);
+    expect(await prisma.triageSession.count()).toBe(1);
+    expect(await prisma.triageQuestion.count()).toBe(n1);
+    // 答一條 → 再上載 → 仍然 answered，總數不變
+    const q = await qOfKind("name_not_confirmed");
+    const { res } = await confirm(accountant, q.id, { option: "use_package_name" });
+    expect(res.status).toBe(200);
+    const r3 = await applyPkg(accountant, persons);
+    expect(await prisma.triageQuestion.count()).toBe(n1);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("answered");
+    expect(r3.body.triage.new_questions).toBe(0);
+    expect(r3.body.triage.open_questions).toBe(r1.body.triage.open_questions - 1);
+  });
+
+  it("generator 純函數：冇需要人手嘅人唔出題", () => {
+    expect(draftGuardImportQuestions(pkgOf([]), [])).toEqual([]);
+  });
+
+  it("權限：會計／主管只見自己嗰批；攞人哋 session／question 回 403；老闆見全部；轉交；雞頭／安員 403", async () => {
+    const a = await applyPkg(accountant, [person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"] })]);
+    const b = await applyPkg(supervisor, [person({ hkid: H[2], name: "導入測試員乙", nameStatus: "review", nos: ["U90002"] })]);
+    const sa = a.body.triage.session_id as string;
+    const sb = b.body.triage.session_id as string;
+    expect(sa).not.toBe(sb);
+    const listA = await (await get(listRoute as never, "/api/triage/sessions?mine=1", accountant)).json();
+    expect(listA.sessions.map((s: { id: string }) => s.id)).toEqual([sa]);
+    expect(listA.open_total).toBe(1);
+    const listBoss = await (await get(listRoute as never, "/api/triage/sessions", owner)).json();
+    expect(listBoss.sessions.map((s: { id: string }) => s.id).sort()).toEqual([sa, sb].sort());
+    expect(listBoss.open_total).toBe(2);
+    // 他人 session
+    expect((await get(sessionRoute as never, `/api/triage/sessions/${sb}`, accountant, sb)).status).toBe(403);
+    expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, supervisor, sa)).status).toBe(403);
+    expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, owner, sa)).status).toBe(200);
+    expect((await get(sessionRoute as never, `/api/triage/sessions/${"00000000-0000-4000-8000-000000000000"}`, owner, "00000000-0000-4000-8000-000000000000")).status).toBe(404);
+    const qb = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sb } });
+    expect((await preview(accountant, qb.id, { option: "skip" })).status).toBe(403);
+    expect((await answer(accountant, qb.id, { option: "skip" })).status).toBe(403);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qb.id } })).status).toBe("open");
+    // 非老闆轉交 403
+    expect((await post(reassignRoute as never, `/api/triage/sessions/${sa}/reassign`, accountant, { owner_user_id: fx.userIds["主管"] }, sa)).status).toBe(403);
+    // 轉交對象唔合資格（雞頭）→ 400
+    expect((await post(reassignRoute as never, `/api/triage/sessions/${sa}/reassign`, owner, { owner_user_id: fx.userIds["雞頭"] }, sa)).status).toBe(400);
+    // 老闆轉交 sa 俾主管
+    expect((await post(reassignRoute as never, `/api/triage/sessions/${sa}/reassign`, owner, { owner_user_id: fx.userIds["主管"] }, sa)).status).toBe(200);
+    expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, supervisor, sa)).status).toBe(200);
+    expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, accountant, sa)).status).toBe(403);
+    expect(await prisma.auditLog.count({ where: { action: "triage_reassign", rowId: sa } })).toBe(1);
+    // 雞頭／安員
+    for (const c of [broker, guardCk]) {
+      expect((await get(listRoute as never, "/api/triage/sessions", c)).status).toBe(403);
+      expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, c, sa)).status).toBe(403);
+      expect((await preview(c, qb.id, { option: "skip" })).status).toBe(403);
+      expect((await post(reassignRoute as never, `/api/triage/sessions/${sa}/reassign`, c, { owner_user_id: fx.userIds["主管"] }, sa)).status).toBe(403);
+    }
+  });
+
+  it("遮罩：冇「安員個人資料」權限（主管出廠）睇唔到完整 hkid／出生日期／地址；有權限（會計）睇到", async () => {
+    const pk = [person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"], tel: "91000001" })];
+    const a = await applyPkg(accountant, pk);
+    const sid = a.body.triage.session_id as string;
+    await prisma.triageSession.update({ where: { id: sid }, data: { ownerUserId: fx.userIds["主管"] } });
+    const supText = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, supervisor, sid)).text();
+    for (const secret of [H[1]!, "1990-05-06", "測試道123號測試大廈4樓A室", "91000001"]) expect(supText).not.toContain(secret);
+    expect(supText).toContain("導入測試員甲");
+    const bossText = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, owner, sid)).text();
+    for (const secret of [H[1]!, "1990-05-06", "測試道123號測試大廈4樓A室"]) expect(bossText).toContain(secret);
+    // 影響預覽同樣遮罩
+    const q = await qOfKind("name_not_confirmed");
+    const pvSup = await (await preview(supervisor, q.id, { option: "use_package_name" })).text();
+    expect(pvSup).not.toContain(H[1]!);
+    expect(pvSup).not.toContain("1990-05-06");
+  });
+
+  it("預覽＝實際寫入：預覽唔寫任何嘢；確認後寫入同預覽一致；只寫 confirmed 欄；audit 記邊個答；已答唔可以再套用", async () => {
+    const { persons, gName } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const q = await qOfKind("name_only_candidate");
+    const ans = { option: "link", guard_id: gName.id };
+    const guardsBefore = await prisma.guard.count();
+    const auditBefore = await prisma.auditLog.count();
+    const pv = await (await preview(accountant, q.id, ans)).json();
+    expect(pv.writes).toBe(true);
+    expect(pv.impact.can_confirm).toBe(true);
+    expect(pv.impact.changes.find((c: { table: string }) => c.table === "guards")).toBeTruthy();
+    expect(await prisma.guard.count()).toBe(guardsBefore);
+    expect(await prisma.auditLog.count()).toBe(auditBefore);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: gName.id } })).hkid).toBeNull();
+    // 冇 hash／錯 hash → 唔寫
+    expect((await answer(accountant, q.id, ans)).status).toBe(400);
+    expect((await answer(accountant, q.id, ans, "a".repeat(64))).status).toBe(409);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: gName.id } })).hkid).toBeNull();
+    // 確認
+    const res = await answer(accountant, q.id, ans, pv.preview_hash);
+    expect(res.status).toBe(200);
+    const g = await prisma.guard.findUniqueOrThrow({ where: { id: gName.id }, include: { phones: true, staffNumbers: true } });
+    expect(g.hkid).toBe(H[3]); // 補空欄
+    expect(g.nameZh).toBe("導入測試員丙");
+    expect(g.dateOfBirth?.toISOString().slice(0, 10)).toBe("1990-05-06");
+    expect(g.nameEn).toBeNull(); // review 欄唔寫
+    expect(g.phones.map((p) => p.tel)).toEqual(["91000004"]);
+    expect(g.staffNumbers.map((s) => s.number)).toEqual(["U90004"]);
+    const row = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } });
+    expect(row.status).toBe("answered");
+    expect(row.answeredBy).toBe(fx.userIds["會計"]);
+    expect(await prisma.auditLog.count({ where: { action: "triage_answer", rowId: q.id, actorUserId: fx.userIds["會計"] } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { tableName: "guards", rowId: g.id, action: "update", actorUserId: fx.userIds["會計"] } })).toBe(1);
+    // 已答唔可以重複套用
+    expect((await answer(accountant, q.id, ans, pv.preview_hash)).status).toBe(409);
+    expect((await preview(accountant, q.id, ans)).status).toBe(409);
+    expect(await prisma.guard.count()).toBe(guardsBefore);
+    // audit 內冇 PII
+    const aud = await prisma.auditLog.findMany({ where: { action: "triage_answer" } });
+    expect(JSON.stringify(aud)).not.toContain(H[3]!);
+  });
+
+  it("資料中途變咗：確認時指紋唔一致 → 409、不寫入、題目仍然 open", async () => {
+    const { persons, gName } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const q = await qOfKind("name_only_candidate");
+    const ans = { option: "link", guard_id: gName.id };
+    const pv = await (await preview(accountant, q.id, ans)).json();
+    // 預覽之後有人手改咗該安員：加咗另一個電話（影響會變）／改咗出生日期
+    await prisma.guard.update({ where: { id: gName.id }, data: { dateOfBirth: new Date("1985-01-01T00:00:00.000Z") } });
+    const res = await answer(accountant, q.id, ans, pv.preview_hash);
+    expect(res.status).toBe(409);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: gName.id } })).hkid).toBeNull();
+    expect(await prisma.guardPhone.count({ where: { guardId: gName.id } })).toBe(0);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("open");
+    // 重新預覽就得
+    const pv2 = await (await preview(accountant, q.id, ans)).json();
+    expect(pv2.preview_hash).not.toBe(pv.preview_hash);
+    expect((await answer(accountant, q.id, ans, pv2.preview_hash)).status).toBe(200);
+    // 現有出生日期唔覆蓋
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: gName.id } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1985-01-01");
+  });
+
+  it("唯一性：身份證已屬另一安員 → 預覽 can_confirm=false，強行確認 422／409，不寫入；唔合法 hkid 400；電話撞號只標 conflict", async () => {
+    const { persons } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const other = await prisma.guard.create({ data: { nameZh: "測試持有人", employmentType: "cash_casual", hkid: H[13]!, createdBy: "t" } });
+    const q = await qOfKind("hkid_not_confirmed");
+    // 唔合法
+    expect((await preview(accountant, q.id, { option: "enter_hkid", value: "Z9999999" })).status).toBe(400);
+    // 已屬另一人 → forced create 唔適用；enter_hkid 行 evaluate：hkid confirmed 後 byHkid 搵到 other → link 去 other（同一 hkid 即同一人）
+    const pv = await (await preview(accountant, q.id, { option: "enter_hkid", value: H[13]! })).json();
+    expect(pv.writes).toBe(true); // 連去 hkid 擁有人（唔會建重複）
+    expect(await prisma.guard.count({ where: { hkid: H[13] } })).toBe(1);
+    await answer(accountant, q.id, { option: "enter_hkid", value: H[13]! }, pv.preview_hash);
+    expect(await prisma.guard.count({ where: { hkid: H[13] } })).toBe(1);
+    expect(await prisma.guardStaffNumber.count({ where: { guardId: other.id, number: "U90002" } })).toBe(1);
+    // forced create 但 hkid 已屬他人 → 唔准
+    const q2 = await qOfKind("name_only_candidate");
+    await prisma.guard.update({ where: { id: other.id }, data: { hkid: H[3] } }); // 令 H3 已有主
+    const pv2 = await (await preview(accountant, q2.id, { option: "create_new" })).json();
+    expect(pv2.writes).toBe(false);
+    expect(pv2.impact.can_confirm).toBe(false);
+    const res = await answer(accountant, q2.id, { option: "create_new" }, pv2.preview_hash);
+    expect(res.status).toBe(422);
+    expect(await prisma.guard.count({ where: { hkid: H[3] } })).toBe(1);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q2.id } })).status).toBe("open");
+  });
+
+  it("link 選項只可以揀候選；link 去 hkid 矛盾嘅人 → 唔寫", async () => {
+    const { persons, gName } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const q = await qOfKind("name_only_candidate");
+    const stranger = await prisma.guard.create({ data: { nameZh: "測試路人", employmentType: "cash_casual", createdBy: "t" } });
+    expect((await preview(accountant, q.id, { option: "link", guard_id: stranger.id })).status).toBe(400);
+    // 候選本身有另一個 hkid（預覽後被人手加）→ conflict，唔寫
+    await prisma.guard.update({ where: { id: gName.id }, data: { hkid: H[13] } });
+    const pv = await (await preview(accountant, q.id, { option: "link", guard_id: gName.id })).json();
+    expect(pv.writes).toBe(false);
+    expect((await answer(accountant, q.id, { option: "link", guard_id: gName.id }, pv.preview_hash)).status).toBe(422);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: gName.id } })).hkid).toBe(H[13]);
+  });
+
+  it("新開一個（create_new）：姓名未確認自動標待核對；hkid 未確認 → enter_hkid 後行同一條建人路徑", async () => {
+    const { persons } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const qa = await qOfKind("name_only_candidate");
+    expect((await confirm(accountant, qa.id, { option: "create_new" })).res.status).toBe(200);
+    const created = await prisma.guard.findFirstOrThrow({ where: { hkid: H[3] } });
+    expect(created.nameZh).toBe("導入測試員丙");
+    // 姓名未確認 → keep_pending
+    const qn = await qOfKind("name_not_confirmed");
+    const r = await confirm(accountant, qn.id, { option: "keep_pending" });
+    expect(r.res.status).toBe(200);
+    const g1 = await prisma.guard.findFirstOrThrow({ where: { hkid: H[1] } });
+    expect(g1.identityReviewFields).toEqual(["name_zh"]);
+    // hkid 未確認 + 輸入
+    const qh = await qOfKind("hkid_not_confirmed");
+    expect((await confirm(accountant, qh.id, { option: "use_package_hkid" })).res.status).toBe(200);
+    const g2 = await prisma.guard.findFirstOrThrow({ where: { hkid: H[2] } });
+    expect(g2.nameZh).toBe("導入測試員乙");
+    // 冇身份證 → 輸入合法 hkid
+    const qi = await qOfKind("no_id_card");
+    expect((await confirm(accountant, qi.id, { option: "enter_hkid", value: ` ${H[13]!.slice(0, 7)}(${H[13]!.slice(7)}) ` })).res.status).toBe(200);
+    expect(await prisma.guard.count({ where: { hkid: H[13] } })).toBe(1);
+  });
+
+  it("工號／電話共用：drop_shared 唔寫爭議工號；keep 照包內；跳過留返人手", async () => {
+    const { persons } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const qs = await prisma.triageQuestion.findMany({ where: { kind: "staffno_shared_by_persons" }, orderBy: { sort: "asc" } });
+    expect(qs.length).toBe(2);
+    expect((await confirm(accountant, qs[0]!.id, { option: "drop_shared" })).res.status).toBe(200);
+    const g = await prisma.guard.findFirstOrThrow({ where: { hkid: H[5] }, include: { staffNumbers: true } });
+    expect(g.staffNumbers.length).toBe(0);
+    expect((await confirm(accountant, qs[1]!.id, { option: "keep" })).res.status).toBe(200);
+    const g2 = await prisma.guard.findFirstOrThrow({ where: { hkid: H[6] }, include: { staffNumbers: true } });
+    expect(g2.staffNumbers.map((s) => s.number)).toEqual(["U90006"]);
+    // 電話共用：第一個 keep 寫入；第二個 keep 被唯一性擋住（唔重複）
+    const ts = await prisma.triageQuestion.findMany({ where: { kind: "dup_tel_across_persons" }, orderBy: { sort: "asc" } });
+    expect((await confirm(accountant, ts[0]!.id, { option: "keep" })).res.status).toBe(200);
+    // 第二個人：電話已屬第一個人（唔同 hkid）→ keep 唔會寫（唯一性），要揀 drop_shared
+    const second = await confirm(accountant, ts[1]!.id, { option: "keep" });
+    expect(second.pv.writes).toBe(false);
+    expect(second.res.status).toBe(422);
+    expect((await confirm(accountant, ts[1]!.id, { option: "drop_shared" })).res.status).toBe(200);
+    expect(await prisma.guardPhone.count({ where: { tel: "91000009" } })).toBe(1);
+    // group_name_differs：用導入包姓名
+    const gq = await qOfKind("group_name_differs");
+    expect((await confirm(accountant, gq.id, { option: "use_package_name" })).res.status).toBe(200);
+    expect(await prisma.guard.count({ where: { hkid: H[9] } })).toBe(1);
+  });
+
+  it("db_conflict 只可以跳過；不合法選項 400", async () => {
+    const { persons } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const q = await qOfKind("db_conflict");
+    expect((await preview(accountant, q.id, { option: "keep" })).status).toBe(400);
+    expect((await preview(accountant, q.id, { option: "create_new" })).status).toBe(400);
+    expect((await preview(accountant, q.id, { option: "zzz" })).status).toBe(400);
+    expect((await answer(accountant, q.id, { option: "skip" })).status).toBe(200);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("skipped");
+  });
+
+  it("逐欄 review：確認／改正／略過；地址寫入；唔合法值 400；全部答晒 session done；跳過 audit", async () => {
+    const r = await applyPkg(accountant, [person({ hkid: H[12], name: "導入測試員丑", nos: ["U90012"], tel: "91000012" })]);
+    expect(r.body.triage.open_questions).toBe(1);
+    const q = await qOfKind("field_review");
+    const ev = q.evidenceJson as { review_fields: { field: string }[] };
+    expect(ev.review_fields.map((f) => f.field).sort()).toEqual(["address", "nameEn"]);
+    // 唔屬於呢題嘅欄／唔合法值
+    expect((await preview(accountant, q.id, { option: "apply_fields", fields: { phone: { action: "confirm" } } })).status).toBe(400);
+    expect((await preview(accountant, q.id, { option: "apply_fields", fields: {} })).status).toBe(400);
+    const ans = { option: "apply_fields", fields: { address: { action: "confirm", value: "改正地址456號" }, nameEn: { action: "skip" } } };
+    const pv = await (await preview(accountant, q.id, ans)).json();
+    expect(pv.writes).toBe(true);
+    expect(pv.impact.field_outcomes.map((x: { field: string; outcome: string }) => `${x.field}:${x.outcome}`)).toContain("address:會寫入");
+    expect((await answer(accountant, q.id, ans, pv.preview_hash)).status).toBe(200);
+    const g = await prisma.guard.findFirstOrThrow({ where: { hkid: H[12] }, include: { addresses: true } });
+    expect(g.addresses.map((a) => [a.address, a.source])).toEqual([["改正地址456號", "address_proof"]]);
+    expect(g.nameEn).toBeNull();
+    const s = await prisma.triageSession.findFirstOrThrow({});
+    expect(s.status).toBe("done");
+    expect(s.completedAt).not.toBeNull();
+  });
+
+  it("跳過：唔寫任何嘢，只標 skipped＋audit；跳過嘅可以之後再答", async () => {
+    const { persons, gName } = await seedMixed();
+    await applyPkg(accountant, persons);
+    const q = await qOfKind("name_only_candidate");
+    const before = await prisma.guard.count();
+    const res = await answer(accountant, q.id, { option: "skip" });
+    expect(res.status).toBe(200);
+    expect(await prisma.guard.count()).toBe(before);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("skipped");
+    expect(await prisma.auditLog.count({ where: { action: "triage_answer", rowId: q.id } })).toBe(1);
+    const { res: res2 } = await confirm(accountant, q.id, { option: "link", guard_id: gName.id });
+    expect(res2.status).toBe(200);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("answered");
+  });
+
+  it("冇題目就唔開 session；ai.audit_log 唔含 triage 表嘅 audit；triage 表唔喺 ai schema", async () => {
+    const r = await applyPkg(accountant, [person({ hkid: H[1], name: "導入測試員甲", addr: null, nos: ["U90001"], tel: "91000001" }), ]);
+    // nameEn 係 review → 仍然會有 field_review；改用冇 review 欄嘅人
+    void r;
+    await prisma.triageQuestion.deleteMany({});
+    await prisma.triageSession.deleteMany({});
+    const p = person({ hkid: H[2], name: "導入測試員乙", addr: null, nos: ["U90002"], tel: "91000002" });
+    p.nameEn = F(null, "missing") as never;
+    const r2 = await applyPkg(accountant, [p]);
+    expect(r2.body.triage).toBeNull();
+    expect(await prisma.triageSession.count()).toBe(0);
+    const tbl = await prisma.$queryRaw<{ table_schema: string }[]>`SELECT table_schema FROM information_schema.tables WHERE table_name IN ('triage_sessions','triage_questions')`;
+    expect(tbl.map((t) => t.table_schema)).toEqual(["public", "public"]);
+    const views = await prisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM information_schema.views WHERE table_schema = 'ai' AND view_definition ILIKE '%triage%'`;
+    // ai.audit_log 本身以 NOT IN 排除 triage 表（定義內出現 triage 字眼）；冇其他 ai view 提及
+    expect(views[0]!.n).toBe(1);
+  });
+
+  it("矩陣：導入分診／安員批量導入——老闆／會計／主管出廠 grant；雞頭／安員硬性拒", () => {
+    for (const mod of ["導入分診", "安員批量導入"] as const) {
+      for (const role of ["老闆", "會計", "主管"] as RoleName[]) {
+        expect(isGrantedByDefault(role, mod, "view")).toBe(true);
+        expect(isGrantedByDefault(role, mod, "update")).toBe(true);
+      }
+      for (const role of ["雞頭", "安員"] as RoleName[]) for (const a of ["view", "create", "update", "void", "export"] as const) expect(isHardDenied(role, mod, a)).toBe(true);
+    }
+  });
+
+  it("導航：會計／主管見到「證件資料導入」「待答問題」；「每月修正摘要」跟月結總表 view；雞頭見唔到", async () => {
+    const allGrants = Object.fromEntries(MODULES.map((m) => [m, true])) as Record<Module, boolean>;
+    const mk = (baseRole: RoleName) => ({ userId: "u", roleId: "r", roleName: baseRole, baseRole, brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString(), mustChangePwd: false }) as unknown as CurrentSession;
+    for (const role of ["會計", "主管"] as RoleName[]) {
+      const grants = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(role, m, "view")])) as Record<Module, boolean>;
+      const hrefs = (await getNavLinks(mk(role), grants)).map((l) => l.href);
+      expect(hrefs).toContain("/triage");
+      expect(hrefs).toContain("/guards/import");
+      // 每月修正摘要＝module「月結總表」view：會計出廠有、主管出廠關（老闆可開）
+      expect(hrefs.includes("/reports/ops-digest")).toBe(role === "會計");
+    }
+    const links = await getNavLinks(mk("老闆"), allGrants);
+    const groups = groupNavLinks("老闆", links);
+    expect(groups.some((g) => g.title === "其他")).toBe(false); // 新連結都已入分組
+    void ROLE_NAMES;
+    const brokerGrants = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault("雞頭", m, "view")])) as Record<Module, boolean>;
+    const brokerHrefs = (await getNavLinks(mk("雞頭"), brokerGrants)).map((l) => l.href);
+    for (const h of ["/triage", "/guards/import", "/reports/ops-digest"]) expect(brokerHrefs).not.toContain(h);
+  });
+});

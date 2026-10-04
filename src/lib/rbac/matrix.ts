@@ -82,6 +82,9 @@ export const MODULES = [
   // WP-STAFF-IMPORT（Opus 驗收採納）：證件資料批量導入——淨係老闆（會批量建人、寫身份證／電話／地址），
   // 其他角色硬性拒（即使開晒「安員個人資料」都 403）。
   "安員批量導入",
+  // WP-AI-OPS §28.4：導入後對話式分診——view＝睇自己上載嗰批嘅問題（老闆睇全部）；update＝作答／預覽影響。
+  // 老闆／會計／主管；雞頭／安員硬性拒。非老闆只可以睇／答自己上載嗰批（API 層強制，見 src/lib/triage/session.ts）。
+  "導入分診",
   // WP-ONE-CLICK Phase 1（老闆 2026-09-26「一鍵全月結算」，§20）——單一
   // job 串起更表上載／安員修復／長工結算／全月對數／定價檢查／計數／
   // 鎖月前置，任務書明文「只老闆／會計可用（雞頭／安員 403——主管可
@@ -157,7 +160,8 @@ const OWNER: RoleMatrix = {
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆全睇全改
   助手: row(G, NA, NA, NA, NA), // WP-AI1：老闆✓——view 有意義，其餘 N/A
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆上載/睇/PATCH（人手指定盤）全部✓；WP-UPLOAD-VOID：作廢✓（會計/主管/老闆三類）
-  安員批量導入: row(G, G, G, D, D), // WP-STAFF-IMPORT：淨係老闆——preview=view/create、apply=update
+  安員批量導入: row(G, G, G, D, D), // WP-STAFF-IMPORT：老闆——preview=view、apply=update；WP-AI-OPS §28.4 開放埋會計／主管（非老闆淨係自己上載嗰批）
+  導入分診: row(G, G, G, D, D), // WP-AI-OPS §28.4：老闆睇全部、可轉交
   安員配對修復: row(G, G, G, D, D), // WP-GUARD-FIX-UI：淨係老闆——上載名單/計算計劃/套用全部✓；void/export 冇對應能力
   一鍵結算: row(G, G, G, D, D), // WP-ONE-CLICK：老闆——撳一鍵/睇進度報告/重新執行全部✓；void/export 冇對應能力
   長工糧: row(G, G, G, G, G), // WP-LTPAY：老闆全開——睇/導入/計糧/人手輸入/作廢/出 Autopay 檔
@@ -194,7 +198,8 @@ const SUPERVISOR: RoleMatrix = {
   安員銀行資料: uniformRow(D),
   助手: row(G, NA, NA, NA, NA), // WP-AI1：主管✓
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
-  安員批量導入: uniformRow(D), // WP-STAFF-IMPORT：硬性拒——淨係老闆
+  安員批量導入: row(G, G, G, D, D), // WP-AI-OPS §28.4：老闆 2026-10-04 開放——主管可以導入，但欄位仍受「安員個人資料」遮罩
+  導入分診: row(G, G, G, D, D), // WP-AI-OPS §28.4：淨係自己上載嗰批
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
   一鍵結算: row(G, D, D, D, D), // WP-ONE-CLICK：任務書明文「主管可 view 報告」——淨係睇進度／報告／歷史 runs，唔可以撳一鍵/重新執行
   長工糧: uniformRow(D), // WP-LTPAY：同「安員銀行資料」一致粒度——主管硬性拒（薪金/MPF 最嚴 PII）
@@ -228,7 +233,8 @@ const ACCOUNTANT: RoleMatrix = {
   安員銀行資料: row(G, NA, G, NA, NA), // WP-PII：老闆話「會計全睇」
   助手: row(G, NA, NA, NA, NA), // WP-AI1：會計✓
   更表上載: row(G, G, G, G, NA), // WP-ROSTER-UPLOAD：老闆 2026-09-23 明文「會計、主管、老闆」三類可以上載；WP-UPLOAD-VOID：作廢✓
-  安員批量導入: uniformRow(D), // WP-STAFF-IMPORT：硬性拒——淨係老闆
+  安員批量導入: row(G, G, G, D, D), // WP-AI-OPS §28.4：老闆 2026-10-04 開放——會計可以導入，非老闆淨係自己上載嗰批
+  導入分診: row(G, G, G, D, D), // WP-AI-OPS §28.4：淨係自己上載嗰批
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
   一鍵結算: row(G, G, G, D, D), // WP-ONE-CLICK：任務書明文「只老闆／會計可用」——會計同老闆一致全開
   長工糧: row(G, G, G, G, G), // WP-LTPAY：任務書明文「只老闆／會計可用」——會計同老闆一致全開
@@ -282,6 +288,7 @@ const BROKER: RoleMatrix = {
   助手: uniformRow(D), // WP-AI1：硬性禁止——雞頭永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
   更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒——雞頭連自己嗰盤嘅上載都見唔到（老闆「上載權限：會計、主管、老闆」三類）
   安員批量導入: uniformRow(D), // WP-STAFF-IMPORT：硬性拒——淨係老闆
+  導入分診: uniformRow(D), // WP-AI-OPS §28.4：硬性拒
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
   一鍵結算: uniformRow(D), // WP-ONE-CLICK：硬性拒——任務書明文「雞頭／安員 403」
   長工糧: uniformRow(D), // WP-LTPAY：硬性拒——任務書明文「雞頭永遠 403」
@@ -316,6 +323,7 @@ const GUARD_SELF: RoleMatrix = {
   助手: uniformRow(D), // WP-AI1：硬性禁止——安員永遠唔可以用 AI 助手（老闆 2026-09-12 明文）
   更表上載: uniformRow(D), // WP-ROSTER-UPLOAD：硬性拒
   安員批量導入: uniformRow(D), // WP-STAFF-IMPORT：硬性拒——淨係老闆
+  導入分診: uniformRow(D), // WP-AI-OPS §28.4：硬性拒
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
   一鍵結算: uniformRow(D), // WP-ONE-CLICK：硬性拒——任務書明文「雞頭／安員 403」
   長工糧: uniformRow(D), // WP-LTPAY：硬性拒

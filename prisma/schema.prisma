@@ -332,7 +332,7 @@ model Quota {
 // guards 安員
 // ---------------------------------------------------------------------------
 model Guard {
-  id              String         @id @default(uuid())
+  id                   String         @id @default(uuid())
   // WP-STAFFNO（老闆 2026-09-19 拍板）：呢兩個舊欄而家改做**同步顯示值**
   // ——真正存底喺下面 `staffNumbers`（`guard_staff_numbers` 表，方案
   // B：員工編號獨立表，U／MP／MG／MW 並存）。`staffNo`＝該人現用 **U**
@@ -341,18 +341,18 @@ model Guard {
   // guards/staff-numbers.ts`）喺同一 transaction 內重算呢兩欄，唔准兩邊
   // 唔一致——更表編輯器／匯出／報表／`ai.guards` view／seed gate 全部
   // 照舊讀呢兩欄，唔使改。
-  staffNo         String?        @unique @map("staff_no") // 同步值：現用 U 號，可為空
-  staffNoMw       String?        @map("staff_no_mw") // 同步值：現用 MG（冇就 MW）
-  nameZh          String         @map("name_zh")
-  nameEn          String?        @map("name_en")
-  tel             String?
-  defaultBrokerId String?        @map("default_broker_id")
-  defaultBroker   Broker?        @relation("GuardDefaultBroker", fields: [defaultBrokerId], references: [id])
-  employmentType  EmploymentType @map("employment_type")
-  monthlySalary   Decimal?       @map("monthly_salary") @db.Decimal(12, 2)
-  siaPermitExpiry DateTime?      @map("sia_permit_expiry") @db.Date
-  poloSize        String?        @map("polo_size")
-  mergedFrom      String[]       @default([]) @map("merged_from") // 身份合併留痕（舊 staff_no/id）
+  staffNo              String?        @unique @map("staff_no") // 同步值：現用 U 號，可為空
+  staffNoMw            String?        @map("staff_no_mw") // 同步值：現用 MG（冇就 MW）
+  nameZh               String         @map("name_zh")
+  nameEn               String?        @map("name_en")
+  tel                  String?
+  defaultBrokerId      String?        @map("default_broker_id")
+  defaultBroker        Broker?        @relation("GuardDefaultBroker", fields: [defaultBrokerId], references: [id])
+  employmentType       EmploymentType @map("employment_type")
+  monthlySalary        Decimal?       @map("monthly_salary") @db.Decimal(12, 2)
+  siaPermitExpiry      DateTime?      @map("sia_permit_expiry") @db.Date
+  poloSize             String?        @map("polo_size")
+  mergedFrom           String[]       @default([]) @map("merged_from") // 身份合併留痕（舊 staff_no/id）
   // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——更表姓
   // 名格寫法可能同系統本名（`nameZh`）唔同（花名／簡寫／曾用名），
   // `matchGuard()`（src/lib/roster-upload/match.ts）配對次序加咗「別名＋
@@ -360,10 +360,10 @@ model Guard {
   // PII field group（見 src/lib/api/field-groups.ts GUARD_PII_FIELDS），
   // 雞頭 DTO（GUARD_BROKER_FIELDS，src/lib/broker-dto.ts）同 `ai.guards`
   // view（明列欄位，冇加呢個）一律唔包。
-  nameAliases     String[]       @default([]) @map("name_aliases")
+  nameAliases          String[]       @default([]) @map("name_aliases")
   // WP-STAFF-IMPORT B3：批量導入時未確認（review）嘅欄（例如 ["name_zh"]），覆核確認後移除。
-  identityReviewFields String[]   @default([]) @map("identity_review_fields")
-  status          ActiveStatus   @default(active)
+  identityReviewFields String[]       @default([]) @map("identity_review_fields")
+  status               ActiveStatus   @default(active)
 
   // WP-PII（老闆 2026-09-17 拍板）：保安員個人資料欄位——全部 nullable
   // （逐步補齊，唔逼舊記錄一次過填晒）。權限分兩組（`src/lib/rbac/
@@ -507,6 +507,58 @@ model GuardIdentityConflict {
 
   // 唯一性：migration 用 id = md5(kind || 排序後 guard id) 決定性生成，PK 即唯一。
   @@map("guard_identity_conflicts")
+}
+
+// WP-AI-OPS §28.4：導入後對話式分診。session＝一次批量導入（source_ref＝導入包 sha256，冪等）；
+// owner_user_id＝上載者（老闆可轉交）。questions 由規則產生（唔經外部 AI），evidence_json 含安員 PII
+// （同 guards 表同級；API 層按「安員個人資料」權限遮罩）。新表放 public，**唔入 ai schema**，
+// ai.audit_log 排除 triage_* 兩個 table_name。
+model TriageSession {
+  id          String    @id @default(uuid())
+  sourceType  String    @map("source_type") // guard_import｜roster_upload（預留）
+  sourceRef   String    @map("source_ref") // guard_import＝導入包 sha256
+  ownerUserId String    @map("owner_user_id")
+  owner       User      @relation("TriageSessionOwner", fields: [ownerUserId], references: [id])
+  createdBy   String    @map("created_by")
+  status      String    @default("open") // open｜done
+  statsJson   Json      @default("{}") @map("stats_json")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  completedAt DateTime? @map("completed_at")
+
+  questions TriageQuestion[]
+
+  @@unique([sourceType, sourceRef])
+  @@index([ownerUserId, status])
+  @@map("triage_sessions")
+}
+
+model TriageQuestion {
+  id        String        @id @default(uuid())
+  sessionId String        @map("session_id")
+  session   TriageSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  kind     String // name_not_confirmed｜hkid_not_confirmed｜name_only_candidate｜…（見 src/lib/triage/types.ts）
+  groupKey String @map("group_key") // 同一 session 內唯一（導入人 key）——保證冪等、已解決唔再出
+  sort     Int    @default(0)
+  title    String
+
+  evidenceJson Json  @default("{}") @map("evidence_json") // 人嘅快照（含 PII）＋理由碼＋候選 guard id
+  optionsJson  Json  @default("[]") @map("options_json")
+  impactJson   Json? @map("impact_json") // 最近一次預覽嘅影響摘要（唔含 hash）
+
+  status          String    @default("open") // open｜answered｜skipped
+  answerJson      Json?     @map("answer_json")
+  answeredBy      String?   @map("answered_by")
+  answeredAt      DateTime? @map("answered_at")
+  applyResultJson Json?     @map("apply_result_json")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([sessionId, groupKey])
+  @@index([sessionId, status, sort])
+  @@map("triage_questions")
 }
 
 // WP-MULTI：保安員可以有幾多個緊急聯絡人就記幾多個。`name`／`tel` 唔可以
@@ -897,7 +949,7 @@ model RosterUploadRow {
   guard      Guard?                 @relation(fields: [guardId], references: [id])
   guardMatch RosterUploadGuardMatch @default(unmatched) @map("guard_match")
   // WP-STAFF-IMPORT B2：逐格配對依據（staff_no／tel／name_tel／name_only／alias／override）。
-  matchBasis String? @map("match_basis")
+  matchBasis String?                @map("match_basis")
 
   settlementBrokerId String? @map("settlement_broker_id") // 雞頭碼→brokers；冇雞頭碼欄嘅盤=null（Phase B 由系統設定補）
   settlementBroker   Broker? @relation(fields: [settlementBrokerId], references: [id])
@@ -1314,19 +1366,20 @@ model RolePermission {
 }
 
 model User {
-  id                  String     @id @default(uuid())
+  id                  String          @id @default(uuid())
+  triageSessionsOwned TriageSession[] @relation("TriageSessionOwner")
   name                String
-  tel                 String     @unique // 登入用
-  passwordHash        String     @map("password_hash")
-  roleId              String     @map("role_id")
-  role                Role       @relation(fields: [roleId], references: [id])
-  guardId             String?    @map("guard_id") // 安員登入
-  guard               Guard?     @relation(fields: [guardId], references: [id])
-  brokerId            String?    @map("broker_id") // 雞頭登入
-  broker              Broker?    @relation(fields: [brokerId], references: [id])
-  payoutApprovalLimit Decimal?   @map("payout_approval_limit") @db.Decimal(12, 2) // 覆蓋角色預設上限
-  allowedIp           String?    @map("allowed_ip") // 登入 IP 限制（預留，WP2 唔實作 enforcement）
-  status              UserStatus @default(active)
+  tel                 String          @unique // 登入用
+  passwordHash        String          @map("password_hash")
+  roleId              String          @map("role_id")
+  role                Role            @relation(fields: [roleId], references: [id])
+  guardId             String?         @map("guard_id") // 安員登入
+  guard               Guard?          @relation(fields: [guardId], references: [id])
+  brokerId            String?         @map("broker_id") // 雞頭登入
+  broker              Broker?         @relation(fields: [brokerId], references: [id])
+  payoutApprovalLimit Decimal?        @map("payout_approval_limit") @db.Decimal(12, 2) // 覆蓋角色預設上限
+  allowedIp           String?         @map("allowed_ip") // 登入 IP 限制（預留，WP2 唔實作 enforcement）
+  status              UserStatus      @default(active)
 
   // 登入鎖定（WP2 §A）
   lastLoginAt    DateTime? @map("last_login_at")
@@ -1637,9 +1690,9 @@ model GuardLeaveBalance {
 // 自動計，見下面 `buildAvgWageFromPastLines()`——任務書「有 lines 先
 // 計，冇就人手」）。
 model GuardAvgWage {
-  id      String @id @default(uuid())
-  guardId String @map("guard_id")
-  guard   Guard  @relation(fields: [guardId], references: [id], onDelete: Restrict)
+  id      String   @id @default(uuid())
+  guardId String   @map("guard_id")
+  guard   Guard    @relation(fields: [guardId], references: [id], onDelete: Restrict)
   month   DateTime @db.Date // 月份第一日——呢個月用嘅平均工資（通常即上個月結算完之後寫入落嚟做下個月用）
 
   avgDailyWage Decimal @map("avg_daily_wage") @db.Decimal(10, 2)

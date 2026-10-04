@@ -12,6 +12,7 @@
 //  - 分批 transaction（每批 25 人，timeout 120s）；批內任何錯誤 → 該批逐人重試，壞嗰個記 error。
 //  - 導入包本身**唔入 DB**：preview／apply 都係請求內處理，用完即棄（apply 要重新帶包）。
 import type { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { writeAudit, writeAuditTx } from "@/lib/audit";
 import { ApiError } from "@/lib/api/errors";
@@ -116,8 +117,10 @@ export interface Evaluation {
   action: Action;
   guardId: string | null;
   reasons: string[];
-  /** 對齊依據（hkid／staff_no／tel／name／name_dob／name_roster_evidence／name_en／no_existing_guard） */
+  /** 對齊依據（hkid／staff_no／tel／name／name_dob／name_roster_evidence／name_en／no_existing_guard／manual_link／manual_create） */
   basis: string[];
+  /** 對齊時搵到嘅候選 guard id（分診出題用；唔入 preview 回應） */
+  candidates: string[];
   hkidCanon: string | null;
   checks: Record<PersonField, FieldCheck>;
 }
@@ -126,7 +129,7 @@ function isoDate(d: Date | null | undefined): string | null {
   return d ? d.toISOString().slice(0, 10) : null;
 }
 
-function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[], dec?: PersonDecisions): Evaluation {
+function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[], dec?: PersonDecisions, forced?: ForcedMatch): Evaluation {
   const hkidCanon = canonicalHkid(fieldValue(p.hkid));
   const nameZh = fieldValue(p.nameZh);
   // 電話淨係 confirmed 先用嚟對齊（review 電話唔可靠，唔好用佢 link 人／觸發衝突）
@@ -148,7 +151,49 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
     groupReasons,
   );
   let { action } = d;
-  const reasons = [...d.reasons];
+  let guardId = d.guardId;
+  let basis = d.basis;
+  let reasons = [...d.reasons];
+  // WP-AI-OPS §28.4：人手（對話式分診）揀咗「連去呢個現有安員」／「新開一個」。只喺冇包內群組衝突時生效；
+  // 仍然要過唯一性（hkid 屬另一人／身份證互相矛盾 → 唔 link／唔 create），之後行同一條 create／link 寫入路徑。
+  if (forced && groupReasons.length === 0) {
+    const hk = p.hkid.status === "confirmed" ? hkidCanon : null;
+    if (forced.mode === "link") {
+      const fg = ctx.byId.get(forced.guardId);
+      const hkOther = hk ? ctx.index.byHkid.get(hk)?.find((x) => x.id !== forced.guardId) : undefined;
+      if (!fg) {
+        action = "needs_review";
+        guardId = null;
+        reasons = ["forced_guard_missing"];
+      } else if (hk && fg.hkid && fg.hkid !== hk) {
+        action = "conflict";
+        guardId = null;
+        reasons = ["guard_hkid_differs"];
+      } else if (hkOther) {
+        action = "conflict";
+        guardId = null;
+        reasons = ["hkid_belongs_to_other_guard"];
+      } else {
+        action = "link";
+        guardId = fg.id;
+        reasons = [];
+        basis = [...basis, "manual_link"];
+      }
+    } else if (!hkidCanon || !hkidCheckDigitValid(hkidCanon) || p.hkid.status !== "confirmed") {
+      action = "needs_review";
+      guardId = null;
+      reasons = ["create_hkid_not_confirmed"];
+    } else if (ctx.index.byHkid.get(hkidCanon)?.length) {
+      action = "conflict";
+      guardId = null;
+      reasons = ["hkid_belongs_to_other_guard"];
+    } else {
+      action = "create";
+      guardId = null;
+      reasons = [];
+      basis = [...basis, "manual_create"];
+    }
+  }
   if (action === "create") {
     if (p.hkid.status !== "confirmed") {
       action = "needs_review";
@@ -166,7 +211,7 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
       }
     }
   }
-  const g = d.guardId ? ctx.byId.get(d.guardId) ?? null : null;
+  const g = guardId ? ctx.byId.get(guardId) ?? null : null;
   const checks = {} as Record<PersonField, FieldCheck>;
   const val = {
     hkid: hkidCanon,
@@ -219,7 +264,7 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
       }
     }
   }
-  return { person: p, action, guardId: d.guardId, reasons: [...new Set(reasons)], basis: d.basis, hkidCanon, checks };
+  return { person: p, action, guardId, reasons: [...new Set(reasons)], basis, candidates: d.candidates, hkidCanon, checks };
 }
 
 function evaluateAll(pkg: ImportPackage, ctx: DbCtx): Evaluation[] {
@@ -393,9 +438,27 @@ export interface ApplyResult {
   results: PersonResult[];
 }
 
+/** 人手強制對齊（對話式分診）：link＝連去指定現有安員；create＝新開一個。 */
+export type ForcedMatch = { mode: "link"; guardId: string } | { mode: "create" };
+
+/** 寫入時每筆 audit 嘅摘要（分診「預覽＝實際寫入」比對用；唔含 id／時間）。 */
+export interface WriteChange {
+  table: string;
+  action: string;
+  rowId: string;
+  before: unknown;
+  after: unknown;
+}
+
 export interface ApplyOptions {
   actorUserId: string;
   ip: string | null;
+  /** 逐人強制對齊（key → link／create）；淨係分診用 */
+  forced?: Readonly<Record<string, ForcedMatch>>;
+  /** 收集每筆寫入（唔影響寫入本身） */
+  collect?: WriteChange[];
+  /** 單人套用：結果係 name_not_confirmed（未寫任何嘢）就自動加「照建但標待核對」再行一次——分診答案已經由人手確認咗其他嘢，姓名仍然標待核對 */
+  autoKeepPendingName?: boolean;
   /** 淨係處理呢啲 key（冇＝全部） */
   personKeys?: readonly string[];
   /** 覆核頁逐人逐欄決定 */
@@ -425,8 +488,13 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
   return null;
 }
 
+async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writeAuditTx>[1]): Promise<void> {
+  opts.collect?.push({ table: input.tableName, action: input.action, rowId: input.rowId, before: input.before ?? null, after: input.after ?? null });
+  await writeAuditTx(tx, input);
+}
+
 async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: readonly string[], dec: PersonDecisions | undefined, opts: ApplyOptions, acc: ApplyResult): Promise<PersonResult> {
-  const ev = evaluate(p, ctx, groupReasons, dec);
+  const ev = evaluate(p, ctx, groupReasons, dec, opts.forced?.[p.key]);
   const res: PersonResult = { key: p.key, outcome: "needs_review", reasons: ev.reasons, fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
   if (ev.action === "conflict" || ev.action === "needs_review") {
     res.outcome = ev.action;
@@ -471,7 +539,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
         createdBy: opts.actorUserId,
       },
     });
-    await writeAuditTx(tx, { actorUserId: opts.actorUserId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: opts.ip });
+    await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: opts.ip });
     guardId = created.id;
     res.outcome = "created";
     acc.guards_created += 1;
@@ -537,7 +605,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     if (Object.keys(data).length > 0) {
       const before = await tx.guard.findUniqueOrThrow({ where: { id: g.id } });
       const after = await tx.guard.update({ where: { id: g.id }, data });
-      await writeAuditTx(tx, { actorUserId: opts.actorUserId, tableName: "guards", rowId: g.id, action: "update", before, after, ip: opts.ip });
+      await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: g.id, action: "update", before, after, ip: opts.ip });
       acc.guards_updated += 1;
     }
   }
@@ -563,7 +631,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     }
     try {
       const r = await upsertCurrentStaffNumber(tx, { guardId, scheme, number, source: "staff_import", createdBy: opts.actorUserId });
-      await writeAuditTx(tx, { actorUserId: opts.actorUserId, tableName: "guard_staff_numbers", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });
+      await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guard_staff_numbers", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });
       res.staff_numbers_added += 1;
       acc.staff_numbers_added += 1;
     } catch (e) {
@@ -588,7 +656,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
           await assertTelAvailable(tx, tel, guardId);
           const r = await createGuardPhone(tx, { guardId, tel, isPrimary: false, source: "application_form", createdBy: opts.actorUserId });
           await syncLegacyGuardContactColumns(tx, guardId, ["tel"]);
-          await writeAuditTx(tx, { actorUserId: opts.actorUserId, tableName: "guard_phones", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });
+          await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guard_phones", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });
           res.phones_added += 1;
           acc.phones_added += 1;
           bump("phone", "written");
@@ -611,7 +679,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     else {
       const r = await createGuardAddress(tx, { guardId, address: addrW.value, isPrimary: addrW.replace, source: addressSourceOf(p.address), createdBy: opts.actorUserId });
       await syncLegacyGuardContactColumns(tx, guardId, ["address"]);
-      await writeAuditTx(tx, { actorUserId: opts.actorUserId, tableName: "guard_addresses", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });
+      await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guard_addresses", rowId: r.created.id, action: "create", after: r.created, ip: opts.ip });
       res.addresses_added += 1;
       acc.addresses_added += 1;
       bump("address", "written");
@@ -706,4 +774,101 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
     ip: opts.ip,
   });
   return acc;
+}
+
+// ---------------------------------------------------------------------------
+// WP-AI-OPS §28.4：分診用嘅 export（唔改上面 preview／apply 行為）
+// ---------------------------------------------------------------------------
+/** 對齊評估（唔寫 DB）：分診出題用——apply 完成後重新評估，剩低 needs_review／conflict 嘅就係要問嘅人。 */
+export async function evaluateImportPackage(pkg: ImportPackage): Promise<{ evals: Evaluation[]; guards: ReadonlyMap<string, Readonly<GuardSnap>> }> {
+  const ctx = await loadCtx(prisma);
+  return { evals: evaluateAll(pkg, ctx), guards: ctx.byId };
+}
+
+class DryRunRollback extends Error {}
+
+const FP_STRIP = new Set(["id", "guardId", "createdAt", "updatedAt", "createdBy", "created_at", "updated_at", "created_by", "guard_id"]);
+function fpNormalize(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => fpNormalize(x));
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(o)
+        .filter((k) => !FP_STRIP.has(k))
+        .sort()
+        .map((k) => [k, fpNormalize(o[k])]),
+    );
+  }
+  return v;
+}
+
+/** 一個人嘅「寫入指紋」：結果 + 每筆寫入（去咗 id／時間戳；update 保留 rowId）。預覽同實際寫入逐字相同先准 commit。 */
+export function writeFingerprint(res: PersonResult, changes: readonly WriteChange[]): string {
+  const norm = JSON.parse(
+    JSON.stringify({ res, changes: changes.map((c) => ({ table: c.table, action: c.action, rowId: c.action === "update" ? c.rowId : null, before: c.before, after: c.after })) }),
+  ) as unknown;
+  return createHash("sha256").update(JSON.stringify(fpNormalize(norm))).digest("hex");
+}
+
+export interface SingleApplyOutcome {
+  result: PersonResult;
+  changes: WriteChange[];
+  fingerprint: string;
+}
+
+export type SingleApplyMode =
+  | { kind: "dry" }
+  | {
+      kind: "commit";
+      /** 用重算出嚟嘅指紋核對預覽時俾用戶睇嗰次；唔一致＝資料中途變咗 → rollback + 409 */
+      verify: (fingerprint: string) => boolean;
+      /** 同一個 transaction 內（寫入之後、commit 之前）做嘅嘢，例如標記問題已答 */
+      beforeCommit?: (tx: Prisma.TransactionClient, outcome: SingleApplyOutcome) => Promise<void>;
+    };
+
+/**
+ * 單人套用（對話式分診用）：同批量導入共用 applyPerson（同一套唯一性／只寫 confirmed 欄／audit），
+ * 但包喺一個 transaction——dry 一定 rollback（預覽）；commit 先重算指紋，唔一致就 rollback。
+ */
+export async function applyOnePerson(pkg1: ImportPackage, opts: ApplyOptions, mode: SingleApplyMode): Promise<SingleApplyOutcome> {
+  if (pkg1.persons.length !== 1) throw new ApiError(400, "bad_request", "單人套用淨係收一個人");
+  const p = pkg1.persons[0]!;
+  const changes: WriteChange[] = [];
+  const acc: ApplyResult = {
+    persons_total: 1,
+    outcomes: { created: 0, linked: 0, conflict: 0, needs_review: 0, error: 0 },
+    guards_created: 0,
+    guards_updated: 0,
+    phones_added: 0,
+    addresses_added: 0,
+    staff_numbers_added: 0,
+    field_conflicts: 0,
+    fields_written: {},
+    results: [],
+  };
+  let outcome: SingleApplyOutcome | null = null;
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${IMPORT_ADVISORY_LOCK_KEY})`);
+        const ctx = await loadCtx(tx);
+        const groupReasons = packageConflicts(pkg1.persons);
+        const gr = groupReasons.get(p.key) ?? [];
+        let result = await applyPerson(tx, ctx, p, gr, opts.decisions?.[p.key], { ...opts, collect: changes }, acc);
+        if (opts.autoKeepPendingName && result.outcome === "needs_review" && result.reasons.includes("name_not_confirmed") && fieldValue(p.nameZh) && !opts.decisions?.[p.key]?.nameZh) {
+          // needs_review 路徑喺任何寫入之前就返，所以重行安全
+          result = await applyPerson(tx, ctx, p, gr, { ...(opts.decisions?.[p.key] ?? {}), nameZh: { action: "keep_pending" } }, { ...opts, collect: changes }, acc);
+        }
+        outcome = { result, changes, fingerprint: writeFingerprint(result, changes) };
+        if (mode.kind === "dry") throw new DryRunRollback();
+        if (!mode.verify(outcome.fingerprint)) throw new ApiError(409, "conflict", "資料中途變咗，影響同預覽唔一致，請重新預覽", { field: "preview_hash" });
+        if (result.outcome === "needs_review" || result.outcome === "conflict" || result.outcome === "error") throw new ApiError(422, "unprocessable", "呢個答案唔會寫入任何資料，請揀其他選項或者跳過");
+        await mode.beforeCommit?.(tx, outcome);
+      },
+      { timeout: IMPORT_TX_TIMEOUT_MS, maxWait: 30_000 },
+    );
+  } catch (e) {
+    if (!(e instanceof DryRunRollback)) throw e;
+  }
+  return outcome!;
 }

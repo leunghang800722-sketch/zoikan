@@ -80,7 +80,11 @@ export type AuditAction =
   // 嘅安全 payload，同 `ai_chat`/`feedback_submit` 一致 passthrough）。
   | "export_download"
   // WP-STAFF-IMPORT B3：證件資料批量導入——summary audit（淨係計數，冇逐人資料）。
-  | "guard_import_apply";
+  | "guard_import_apply"
+  // WP-AI-OPS §28.4：導入後對話式分診——開 session／作答（含跳過）／老闆轉交。after 淨係 id＋類別＋計數（冇姓名／身份證等 PII）。
+  | "triage_session_create"
+  | "triage_answer"
+  | "triage_reassign";
 
 export interface WriteAuditInput {
   actorUserId: string | null;
