@@ -35,9 +35,10 @@ function sys(userId: string): AuthedSession {
   return { userId, tel: "", name: "", roleId: "", roleName: "老闆", baseRole: "老闆", brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString() };
 }
 
-async function audit(tableName: string, action: string, createdAt: Date, before: unknown, after: unknown, rowId = "row-" + Math.random().toString(36).slice(2)) {
+async function audit(tableName: string, action: string, createdAt: Date, before: unknown, after: unknown, rowId = "row-" + Math.random().toString(36).slice(2), actorUserId?: string) {
   await prisma.auditLog.create({
     data: {
+      actorUserId,
       tableName,
       action,
       rowId,
@@ -49,14 +50,16 @@ async function audit(tableName: string, action: string, createdAt: Date, before:
 }
 
 describe("ops-digest 純函數", () => {
-  it("computeDigestWindow：首份上載起計到鎖月；冇上載由下月 1 號起；最長 60 日；作廢上載唔計", () => {
-    const w1 = computeDigestWindow(d("2019-03-01"), [{ voidedAt: null, status: "parsed", uploadedAt: d("2019-04-02") }, { voidedAt: null, status: "parsed", uploadedAt: d("2019-04-05") }], d("2019-04-12"), d("2019-09-01"));
-    expect(w1).toEqual({ from: "2019-04-02T00:00:00.000Z", to: "2019-04-12T00:00:00.000Z", basis: "first_upload_to_lock" });
-    const w2 = computeDigestWindow(d("2019-03-01"), [], null, d("2019-04-10"));
-    expect(w2).toEqual({ from: "2019-04-01T00:00:00.000Z", to: "2019-04-10T00:00:00.000Z", basis: "month_end_to_now" });
-    const w3 = computeDigestWindow(d("2019-03-01"), [{ voidedAt: d("2019-04-03"), status: "voided", uploadedAt: d("2019-04-02") }], null, d("2020-01-01"));
-    expect(w3.from).toBe("2019-04-01T00:00:00.000Z");
-    expect(w3.to).toBe("2019-05-31T00:00:00.000Z"); // from + 60 日
+  it("computeDigestWindow：首份未作廢上載起計；鎖月或下個月視窗開始（較早者）截尾；冇上載＝null", () => {
+    const ups = [{ voidedAt: null, status: "parsed", uploadedAt: d("2019-04-05") }, { voidedAt: null, status: "parsed", uploadedAt: d("2019-04-02") }];
+    expect(computeDigestWindow(ups, d("2019-04-12"), d("2019-09-01"), null)).toEqual({ from: "2019-04-02T00:00:00.000Z", to: "2019-04-12T00:00:00.000Z", basis: "first_upload_to_lock" });
+    // 下個月 4/10 開始上載、本月 4/20 才鎖 → 截喺 4/10
+    expect(computeDigestWindow(ups, d("2019-04-20"), d("2019-09-01"), d("2019-04-10"))).toEqual({ from: "2019-04-02T00:00:00.000Z", to: "2019-04-10T00:00:00.000Z", basis: "first_upload_to_next_month" });
+    // 未鎖、冇下個月 → 到而家
+    expect(computeDigestWindow(ups, null, d("2019-04-30"), null)).toEqual({ from: "2019-04-02T00:00:00.000Z", to: "2019-04-30T00:00:00.000Z", basis: "first_upload_to_now" });
+    // 冇上載／淨係作廢上載 → null（唔沿用任何月份）
+    expect(computeDigestWindow([], null, d("2019-04-10"), null)).toBeNull();
+    expect(computeDigestWindow([{ voidedAt: d("2019-04-03"), status: "voided", uploadedAt: d("2019-04-02") }], null, d("2020-01-01"), null)).toBeNull();
   });
 
   it("summarizeOneClickRuns：次數、成功／失敗、平均／最長耗時、每次 needs_human 數", () => {
@@ -268,6 +271,101 @@ describe("buildOpsDigest（DB）", () => {
         expect((await digestRoute(req(url, await sessionCookieForUser(fx.userIds[role])))).status).toBe(403);
       }
     });
+  });
+});
+
+describe("結算視窗唔重疊／冇上載＝冇視窗／分類準確度", () => {
+  let fx: Wp2Fixture;
+  let boss: string;
+  const mkUpload = (month: Date, uploadedAt: Date) =>
+    prisma.rosterUpload.create({
+      data: { month, siteId: fx.site.id, siteNameRaw: fx.site.name, uploaderUserId: boss, fileName: "f.xlsx", fileSha256: "0".repeat(64), fileBytes: new Uint8Array([1]), fileSize: 1, status: "parsed", uploadedAt },
+    });
+  const cnt = (dg: OpsDigest, k: string) => dg.categories.find((c) => c.key === k)!;
+
+  beforeAll(async () => {
+    clearAiEnv();
+    await clearAll();
+    fx = await seedWp2Fixture();
+    boss = fx.userIds["老闆"];
+  });
+  afterAll(async () => {
+    await clearAll();
+  });
+
+  it("相鄰兩個月按時間類別加埋＝全期總數（冇重複）；中間冇上載嘅月份＝0、window null、streak 中斷", async () => {
+    // 2017-03：4/02 起；2017-04：4/20 開始上載；2017-05：冇上載；2017-06：6/05 起
+    await mkUpload(d("2017-03-01"), d("2017-04-02"));
+    await mkUpload(d("2017-04-01"), d("2017-04-20"));
+    await mkUpload(d("2017-06-01"), d("2017-06-05"));
+    // 3 月視窗 4/02–4/20；4 月視窗 4/20–（6/05 前未鎖 → 到 now，因 5 月冇上載，下個月視窗開始＝null）
+    for (const day of ["2017-04-03", "2017-04-10", "2017-04-19"]) await audit("rate_cards", "update", d(day), { id: "a" }, { id: "a" });
+    for (const day of ["2017-04-20", "2017-04-25", "2017-05-15"]) await audit("rate_cards", "update", d(day), { id: "a" }, { id: "a" });
+    await audit("rate_cards", "update", d("2017-03-20"), { id: "a" }, { id: "a" }); // 兩個視窗之前，邊個月都唔計
+    const now = d("2017-07-01");
+    const mar = await buildOpsDigest(d("2017-03-01"), sys(boss), now);
+    const apr = await buildOpsDigest(d("2017-04-01"), sys(boss), now);
+    const may = await buildOpsDigest(d("2017-05-01"), sys(boss), now);
+    const jun = await buildOpsDigest(d("2017-06-01"), sys(boss), now);
+    expect(cnt(mar, "rate_card_updated").count).toBe(3);
+    expect(cnt(apr, "rate_card_updated").count).toBe(3);
+    expect(cnt(mar, "rate_card_updated").count + cnt(apr, "rate_card_updated").count).toBe(6);
+    expect(mar.window!.to).toBe(apr.window!.from); // 首尾相接，唔重疊
+    // 5 月冇上載
+    expect(may.window).toBeNull();
+    expect(cnt(may, "rate_card_updated").count).toBe(0);
+    expect(cnt(may, "rate_card_updated").streak).toBe(0);
+    // 6 月（5 月冇視窗）：4 月 3、5 月 0 → 6 月 streak 唔會連到 4 月
+    expect(cnt(jun, "rate_card_updated").prevCount).toBe(0);
+    expect(cnt(jun, "rate_card_updated").streak).toBeLessThanOrEqual(1);
+    expect(jun.repeats.map((r) => r.key)).not.toContain("rate_card_updated");
+    // 相鄰月（3、4 月）各自有數 → 4 月 streak 2
+    expect(cnt(apr, "rate_card_updated").streak).toBe(2);
+  });
+
+  it("人手改 roster_upload 來源更次／unvoid 唔計對數寫入；對數 update（provenance 變）先計", async () => {
+    const m = "2017-09";
+    await mkUpload(d(`${m}-01`), d("2017-10-02"));
+    const base = { work_date: `${m}-05T00:00:00.000Z`, site_id: fx.site.id, source: "roster_upload", provenance: { upload_id: "u", row_id: "r", version: 1 }, status: "confirmed" };
+    await audit("shift_records", "update", d("2017-10-03"), base, { ...base, guard_wage_snapshot: 5 }); // 人手改（provenance 冇變）
+    await audit("shift_records", "unvoid", d("2017-10-03"), base, base); // unvoid
+    await audit("shift_records", "update", d("2017-10-03"), base, { ...base, provenance: { upload_id: "u2", row_id: "r2", version: 2 } }); // 對數 update
+    await audit("shift_records", "create", d("2017-10-03"), null, base); // 對數 create
+    const dg = await buildOpsDigest(d(`${m}-01`), sys(boss), d("2017-12-01"));
+    expect(cnt(dg, "shift_manual_update").count).toBe(2);
+    expect(cnt(dg, "reconcile_apply_write").count).toBe(2);
+  });
+
+  it("審批批准／退回獨立類別，唔混入人手改", async () => {
+    const m = "2017-11";
+    await mkUpload(d(`${m}-01`), d("2017-12-02"));
+    const pend = { work_date: `${m}-05T00:00:00.000Z`, site_id: fx.site.id, status: "pending_approval" };
+    await audit("shift_records", "update", d("2017-12-03"), pend, { ...pend, status: "confirmed" });
+    await audit("shift_records", "update", d("2017-12-03"), pend, { ...pend, status: "draft", reject_reason: "x" });
+    await audit("shift_records", "update", d("2017-12-03"), { ...pend, status: "confirmed" }, { ...pend, status: "confirmed", guard_wage_snapshot: 1 });
+    const dg = await buildOpsDigest(d(`${m}-01`), sys(boss), d("2018-02-01"));
+    expect(cnt(dg, "shift_approve").count).toBe(1);
+    expect(cnt(dg, "shift_reject").count).toBe(1);
+    expect(cnt(dg, "shift_manual_update").count).toBe(1);
+    expect(dg.correctionTotal).toBe(1);
+  });
+
+  it("經導入／分診寫嘅 hkid／出生日期只計批量導入，唔計安員身份欄；同一人手改照計", async () => {
+    const m = "2017-12";
+    await mkUpload(d(`${m}-01`), d("2018-01-02"));
+    const g = { id: "gx", hkid: null, date_of_birth: null };
+    const g2 = { id: "gx", hkid: "Z000000(0)", date_of_birth: "1990-01-01" };
+    // 導入：guards update 之後 1 分鐘有 guard_import_apply summary（同一 actor）
+    await audit("guards", "update", d("2018-01-03"), g, g2, "gx", boss);
+    await prisma.auditLog.create({ data: { actorUserId: boss, tableName: "guard_import", rowId: boss, action: "guard_import_apply", createdAt: new Date(d("2018-01-03").getTime() + 60_000), after: { persons: 1, guards_created: 0, guards_updated: 1, field_conflicts: 0, review_decisions: 0, via: "triage" } } });
+    // 人手改：同日較早、其後 30 分鐘內冇 summary（summary 係 2 小時後）
+    await audit("guards", "update", d("2018-01-05"), g, g2, "gy", boss);
+    await prisma.auditLog.create({ data: { actorUserId: boss, tableName: "guard_import", rowId: boss, action: "guard_import_apply", createdAt: new Date(d("2018-01-05").getTime() + 2 * 3600_000), after: { persons: 1, guards_created: 0, guards_updated: 0, field_conflicts: 0, review_decisions: 0 } } });
+    const dg = await buildOpsDigest(d(`${m}-01`), sys(boss), d("2018-03-01"));
+    expect(cnt(dg, "import_apply_runs").count).toBe(2);
+    expect(cnt(dg, "import_guards_updated").count).toBe(1);
+    expect(cnt(dg, "identity_hkid").count).toBe(1);
+    expect(cnt(dg, "identity_date_of_birth").count).toBe(1);
   });
 });
 

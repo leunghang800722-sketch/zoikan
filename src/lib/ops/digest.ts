@@ -9,16 +9,17 @@
 // 鐵則：輸出**冇人名／工號／hkid／電話**——只有類別、盤名、雞頭代號、數字。
 // （digest 會交俾 AI 摘要掣，亦會俾有「月結總表」view 嘅會計睇。）
 //
-// 「結算視窗」（時間類統計用）：由呢個月首份未作廢更表上載起計（冇上載就由
-// 下個月 1 號起計——結算通常喺月尾之後做），到鎖月時間（未鎖就而家），最長
-// DIGEST_WINDOW_MAX_DAYS 日。有明確所屬月份嘅統計（更次修正按 work_date、特殊項
+// 「結算視窗」（時間類統計用）：由該月第一次（未作廢）更表上載起，計到鎖月或者
+// 下個月第一次上載為止（取較早者；未鎖又冇下個月就到而家）。相鄰月份視窗唔重疊，
+// 每件按時間嘅事只歸一個月。該月冇上載＝冇視窗＝按時間類別全部 0（window=null）。
+// 有明確所屬月份嘅統計（更次修正按 work_date、特殊項
 // 按 month、對數決定按上載月份、guard-fix 按 run 月份）唔用視窗，直接按月份。
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { monthRange, monthStart as toMonthStart } from "@/lib/reports/money";
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import { DIGEST_REPEAT_MIN_STREAK, DIGEST_TOP_N, DIGEST_WINDOW_MAX_DAYS } from "./thresholds";
+import { DIGEST_REPEAT_MIN_STREAK, DIGEST_TOP_N } from "./thresholds";
 
 export type DigestGroupKey = "guard_fix" | "reconcile" | "match" | "pricing" | "shifts" | "identity" | "import" | "special" | "lock";
 
@@ -51,6 +52,8 @@ export const DIGEST_CATEGORIES: ReadonlyArray<{ key: string; group: DigestGroupK
   { key: "shift_manual_create", group: "shifts", label: "更次：人手新增" },
   { key: "shift_manual_update", group: "shifts", label: "更次：人手改" },
   { key: "shift_manual_void", group: "shifts", label: "更次：人手取消" },
+  { key: "shift_approve", group: "shifts", label: "更次：審批批准" },
+  { key: "shift_reject", group: "shifts", label: "更次：審批退回" },
   { key: "shift_auto_resync", group: "shifts", label: "更次：系統重配結算單位" },
   { key: "identity_hkid", group: "identity", label: "身份證欄修改" },
   { key: "identity_date_of_birth", group: "identity", label: "出生日期修改" },
@@ -72,7 +75,7 @@ export const DIGEST_CATEGORIES: ReadonlyArray<{ key: string; group: DigestGroupK
 export interface DigestWindow {
   from: string;
   to: string;
-  basis: "first_upload_to_lock" | "first_upload_to_now" | "month_end_to_lock" | "month_end_to_now";
+  basis: "first_upload_to_lock" | "first_upload_to_next_month" | "first_upload_to_now";
 }
 
 export interface DigestCategoryRow {
@@ -107,7 +110,8 @@ export interface DigestBaseline {
 export interface OpsDigest {
   month: string;
   prevMonth: string;
-  window: DigestWindow;
+  /** null＝該月冇上載，按時間類別全部 0。 */
+  window: DigestWindow | null;
   categories: DigestCategoryRow[];
   groupTotals: Array<{ group: DigestGroupKey; label: string; count: number; prevCount: number }>;
   baseline: DigestBaseline;
@@ -141,38 +145,56 @@ interface MonthContext {
   uploads: UploadLite[];
   monthCloseId: string | null;
   lockedAt: Date | null;
-  window: DigestWindow;
+  window: DigestWindow | null;
 }
 
-/** 純函數：計結算視窗（有單元測試）。 */
-export function computeDigestWindow(month: Date, uploads: Array<{ voidedAt: Date | null; status: string; uploadedAt: Date }>, lockedAt: Date | null, now: Date): DigestWindow {
-  const nextMonth = addMonths(toMonthStart(month), 1);
+/** 純函數：計結算視窗（有單元測試）。[首份未作廢上載, min(鎖月, 下個月視窗開始))；冇上載 → null。 */
+export function computeDigestWindow(
+  uploads: Array<{ voidedAt: Date | null; status: string; uploadedAt: Date }>,
+  lockedAt: Date | null,
+  now: Date,
+  nextWindowStart: Date | null,
+): DigestWindow | null {
   const live = uploads.filter((u) => !u.voidedAt && u.status !== "voided");
-  const firstUpload = live.length ? new Date(Math.min(...live.map((u) => u.uploadedAt.getTime()))) : null;
-  const from = firstUpload ?? nextMonth;
-  const capEnd = new Date(from.getTime() + DIGEST_WINDOW_MAX_DAYS * 86_400_000);
-  let to = lockedAt ?? now;
-  if (to.getTime() > capEnd.getTime()) to = capEnd;
+  if (live.length === 0) return null;
+  const from = new Date(Math.min(...live.map((u) => u.uploadedAt.getTime())));
+  let to = now;
+  let basis: DigestWindow["basis"] = "first_upload_to_now";
+  if (lockedAt && lockedAt.getTime() <= to.getTime()) {
+    to = lockedAt;
+    basis = "first_upload_to_lock";
+  }
+  if (nextWindowStart && nextWindowStart.getTime() <= to.getTime()) {
+    to = nextWindowStart;
+    basis = "first_upload_to_next_month";
+  }
   if (to.getTime() < from.getTime()) to = from;
-  const basis: DigestWindow["basis"] = firstUpload ? (lockedAt ? "first_upload_to_lock" : "first_upload_to_now") : lockedAt ? "month_end_to_lock" : "month_end_to_now";
   return { from: from.toISOString(), to: to.toISOString(), basis };
 }
 
+/** months 要由新到舊（[M, M-1, M-2]）；下個月（M+1）嘅視窗開始時間用嚟截 M 嘅視窗尾。 */
 async function loadContexts(months: Date[], now: Date): Promise<MonthContext[]> {
+  const next = addMonths(months[0]!, 1);
+  const all = [next, ...months];
   const [uploads, closes] = await Promise.all([
-    prisma.rosterUpload.findMany({ where: { month: { in: months } }, select: { id: true, month: true, status: true, version: true, voidedAt: true, uploadedAt: true } }),
-    prisma.monthClose.findMany({ where: { month: { in: months } }, select: { id: true, month: true, lockedAt: true } }),
+    prisma.rosterUpload.findMany({ where: { month: { in: all } }, select: { id: true, month: true, status: true, version: true, voidedAt: true, uploadedAt: true } }),
+    prisma.monthClose.findMany({ where: { month: { in: all } }, select: { id: true, month: true, lockedAt: true } }),
   ]);
-  return months.map((m) => {
-    const ups = uploads.filter((u) => u.month.getTime() === m.getTime());
+  const upOf = (m: Date) => uploads.filter((u) => u.month.getTime() === m.getTime());
+  const startOf = (m: Date): Date | null => {
+    const w = computeDigestWindow(upOf(m), null, now, null);
+    return w ? new Date(w.from) : null;
+  };
+  return months.map((m, i) => {
     const mc = closes.find((c) => c.month.getTime() === m.getTime());
+    const nextStart = startOf(i === 0 ? next : months[i - 1]!);
     return {
       month: m,
       label: label(m),
-      uploads: ups,
+      uploads: upOf(m),
       monthCloseId: mc?.id ?? null,
       lockedAt: mc?.lockedAt ?? null,
-      window: computeDigestWindow(m, ups, mc?.lockedAt ?? null, now),
+      window: computeDigestWindow(upOf(m), mc?.lockedAt ?? null, now, nextStart),
     };
   });
 }
@@ -192,19 +214,21 @@ interface CategoryResult {
 async function collectCategories(ctx: MonthContext, withTop: boolean): Promise<CategoryResult> {
   const counts = new Map<string, number>();
   const add = (k: string, n: number) => counts.set(k, (counts.get(k) ?? 0) + n);
-  const from = new Date(ctx.window.from);
-  const to = new Date(ctx.window.to);
+  const w0 = ctx.window;
+  const from = new Date(w0?.from ?? 0);
+  const to = new Date(w0?.to ?? 0);
   const lbl = ctx.label;
 
-  const [fixRuns, aliasRows, decisions, win, byMonth, topSitesRaw, topBrokersRaw] = await Promise.all([
+  const [fixRuns, aliasRows, decisions, win, lockRows, byMonth, topSitesRaw, topBrokersRaw] = await Promise.all([
     prisma.guardFixRun.findMany({ where: { month: ctx.month, status: "applied" }, select: { resultJson: true } }),
     prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`
       SELECT count(*)::int AS n
       FROM guard_fix_runs r,
            jsonb_array_elements(CASE WHEN jsonb_typeof(r.plan_json->'actions'->'link') = 'array' THEN r.plan_json->'actions'->'link' ELSE '[]'::jsonb END) e
-      WHERE r.month = ${ctx.month}::date AND r.status = 'applied' AND e->>'addAlias' IS NOT NULL`),
+      WHERE r.month = ${ctx.label + '-01'}::date AND r.status = 'applied' AND e->>'addAlias' IS NOT NULL`),
     prisma.rosterReconcileDecision.groupBy({ by: ["action"], where: { upload: { month: ctx.month } }, _count: { _all: true } }),
-    prisma.$queryRaw<Array<Record<string, number>>>(Prisma.sql`
+    w0
+      ? prisma.$queryRaw<Array<Record<string, number>>>(Prisma.sql`
       SELECT
         count(*) FILTER (WHERE table_name = 'rate_cards' AND action = 'create' AND (after->>'copied_from') IS NOT NULL)::int AS rate_card_copied,
         count(*) FILTER (WHERE table_name = 'rate_cards' AND action = 'create' AND (after->>'copied_from') IS NULL)::int AS rate_card_manual_created,
@@ -213,30 +237,36 @@ async function collectCategories(ctx: MonthContext, withTop: boolean): Promise<C
         count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object'
           AND jsonb_typeof(before->'name_aliases') = 'array' AND jsonb_typeof(after->'name_aliases') = 'array'
           AND jsonb_array_length(after->'name_aliases') > jsonb_array_length(before->'name_aliases'))::int AS alias_added_audit,
-        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'hkid') IS DISTINCT FROM (after->>'hkid'))::int AS identity_hkid,
-        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'date_of_birth') IS DISTINCT FROM (after->>'date_of_birth'))::int AS identity_date_of_birth,
-        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'address') IS DISTINCT FROM (after->>'address'))::int AS identity_address,
-        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'name_zh') IS DISTINCT FROM (after->>'name_zh'))::int AS identity_name,
-        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'tel') IS DISTINCT FROM (after->>'tel'))::int AS identity_tel,
+        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'hkid') IS DISTINCT FROM (after->>'hkid') AND NOT EXISTS (SELECT 1 FROM audit_log s WHERE s.table_name = 'guard_import' AND s.action = 'guard_import_apply' AND s.actor_user_id IS NOT DISTINCT FROM audit_log.actor_user_id AND s.created_at >= audit_log.created_at AND s.created_at <= audit_log.created_at + interval '30 minutes'))::int AS identity_hkid,
+        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'date_of_birth') IS DISTINCT FROM (after->>'date_of_birth') AND NOT EXISTS (SELECT 1 FROM audit_log s WHERE s.table_name = 'guard_import' AND s.action = 'guard_import_apply' AND s.actor_user_id IS NOT DISTINCT FROM audit_log.actor_user_id AND s.created_at >= audit_log.created_at AND s.created_at <= audit_log.created_at + interval '30 minutes'))::int AS identity_date_of_birth,
+        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'address') IS DISTINCT FROM (after->>'address') AND NOT EXISTS (SELECT 1 FROM audit_log s WHERE s.table_name = 'guard_import' AND s.action = 'guard_import_apply' AND s.actor_user_id IS NOT DISTINCT FROM audit_log.actor_user_id AND s.created_at >= audit_log.created_at AND s.created_at <= audit_log.created_at + interval '30 minutes'))::int AS identity_address,
+        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'name_zh') IS DISTINCT FROM (after->>'name_zh') AND NOT EXISTS (SELECT 1 FROM audit_log s WHERE s.table_name = 'guard_import' AND s.action = 'guard_import_apply' AND s.actor_user_id IS NOT DISTINCT FROM audit_log.actor_user_id AND s.created_at >= audit_log.created_at AND s.created_at <= audit_log.created_at + interval '30 minutes'))::int AS identity_name,
+        count(*) FILTER (WHERE table_name = 'guards' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object' AND (before->>'tel') IS DISTINCT FROM (after->>'tel') AND NOT EXISTS (SELECT 1 FROM audit_log s WHERE s.table_name = 'guard_import' AND s.action = 'guard_import_apply' AND s.actor_user_id IS NOT DISTINCT FROM audit_log.actor_user_id AND s.created_at >= audit_log.created_at AND s.created_at <= audit_log.created_at + interval '30 minutes'))::int AS identity_tel,
         count(*) FILTER (WHERE table_name = 'guard_import' AND action = 'guard_import_apply')::int AS import_apply_runs,
         coalesce(sum((after->>'guards_created')::int) FILTER (WHERE table_name = 'guard_import' AND action = 'guard_import_apply'), 0)::int AS import_guards_created,
         coalesce(sum((after->>'guards_updated')::int) FILTER (WHERE table_name = 'guard_import' AND action = 'guard_import_apply'), 0)::int AS import_guards_updated,
         coalesce(sum((after->>'field_conflicts')::int) FILTER (WHERE table_name = 'guard_import' AND action = 'guard_import_apply'), 0)::int AS import_field_conflicts,
-        coalesce(sum((after->>'review_decisions')::int) FILTER (WHERE table_name = 'guard_import' AND action = 'guard_import_apply'), 0)::int AS import_review_decisions,
-        count(*) FILTER (WHERE table_name = 'month_closes' AND action = 'lock_month' AND row_id = ${ctx.monthCloseId ?? ""})::int AS month_lock,
-        count(*) FILTER (WHERE table_name = 'month_closes' AND action = 'unlock_month' AND row_id = ${ctx.monthCloseId ?? ""})::int AS month_unlock
+        coalesce(sum((after->>'review_decisions')::int) FILTER (WHERE table_name = 'guard_import' AND action = 'guard_import_apply'), 0)::int AS import_review_decisions
       FROM audit_log
-      WHERE created_at >= ${from} AND created_at <= ${to}
-        AND table_name IN ('rate_cards', 'guard_match_overrides', 'guards', 'guard_import', 'month_closes')`),
+      WHERE created_at >= ${from.toISOString()}::timestamp AND created_at < ${to.toISOString()}::timestamp
+        AND table_name IN ('rate_cards', 'guard_match_overrides', 'guards', 'guard_import')`)
+      : Promise.resolve([] as Array<Record<string, number>>),
+    ctx.monthCloseId
+      ? prisma.auditLog.groupBy({ by: ["action"], where: { tableName: "month_closes", rowId: ctx.monthCloseId, action: { in: ["lock_month", "unlock_month"] } }, _count: { _all: true } })
+      : Promise.resolve([] as Array<{ action: string; _count: { _all: number } }>),
     prisma.$queryRaw<Array<{ cls: string; n: number }>>(Prisma.sql`
       SELECT cls, count(*)::int AS n FROM (
         SELECT CASE
           WHEN table_name = 'shift_records' AND action = 'reprice_month' THEN 'reprice'
           WHEN table_name = 'shift_records' AND action = 'void' AND coalesce(after->>'void_reason', '') LIKE 'roster_reconcile:%' THEN 'reconcile_apply_write'
-          WHEN table_name = 'shift_records' AND action IN ('create', 'update') AND coalesce(after->>'source', '') = 'roster_upload' THEN 'reconcile_apply_write'
+          WHEN table_name = 'shift_records' AND action = 'create' AND coalesce(after->>'source', '') = 'roster_upload' THEN 'reconcile_apply_write'
+          WHEN table_name = 'shift_records' AND action = 'update' AND coalesce(after->>'source', '') = 'roster_upload' AND jsonb_typeof(before) = 'object'
+            AND (after->'provenance') IS DISTINCT FROM (before->'provenance') THEN 'reconcile_apply_write'
           WHEN table_name = 'shift_records' AND action = 'create' THEN 'shift_manual_create'
           WHEN table_name = 'shift_records' AND action = 'update' AND jsonb_typeof(before) = 'object' AND jsonb_typeof(after) = 'object'
             AND (after - 'updated_at' - 'settlement_broker_id' - 'operational_broker_id' - 'settlement_page') = (before - 'updated_at' - 'settlement_broker_id' - 'operational_broker_id' - 'settlement_page') THEN 'shift_auto_resync'
+          WHEN table_name = 'shift_records' AND action = 'update' AND jsonb_typeof(before) = 'object' AND before->>'status' = 'pending_approval' AND (after->>'reject_reason') IS NOT NULL THEN 'shift_reject'
+          WHEN table_name = 'shift_records' AND action = 'update' AND jsonb_typeof(before) = 'object' AND before->>'status' = 'pending_approval' AND after->>'status' = 'confirmed' THEN 'shift_approve'
           WHEN table_name = 'shift_records' AND action IN ('update', 'unvoid') THEN 'shift_manual_update'
           WHEN table_name = 'shift_records' AND action = 'void' THEN 'shift_manual_void'
           WHEN table_name = 'special_items' AND action = 'create' THEN 'special_item_create'
@@ -289,9 +319,10 @@ async function collectCategories(ctx: MonthContext, withTop: boolean): Promise<C
     else if (d.action === "exception") add("reconcile_exception", d._count._all);
   }
   const w = win[0] ?? {};
-  for (const k of ["rate_card_copied", "rate_card_manual_created", "rate_card_updated", "match_override_added", "identity_hkid", "identity_date_of_birth", "identity_address", "identity_name", "identity_tel", "import_apply_runs", "import_guards_created", "import_guards_updated", "import_field_conflicts", "import_review_decisions", "month_lock", "month_unlock"]) {
+  for (const k of ["rate_card_copied", "rate_card_manual_created", "rate_card_updated", "match_override_added", "identity_hkid", "identity_date_of_birth", "identity_address", "identity_name", "identity_tel", "import_apply_runs", "import_guards_created", "import_guards_updated", "import_field_conflicts", "import_review_decisions"]) {
     add(k, Number(w[k] ?? 0));
   }
+  for (const r of lockRows) add(r.action === "lock_month" ? "month_lock" : "month_unlock", r._count._all);
   add("alias_added", Number(aliasRows[0]?.n ?? 0) + Number(w.alias_added_audit ?? 0));
   for (const r of byMonth) add(r.cls, r.n);
 

@@ -31,7 +31,7 @@ interface BaselineDTO {
 interface DigestDTO {
   month: string;
   prev_month: string;
-  window: { from: string; to: string; basis: string };
+  window: { from: string; to: string; basis: string } | null;
   categories: CategoryDTO[];
   group_totals: Array<{ group: string; label: string; count: number; prev_count: number }>;
   baseline: BaselineDTO;
@@ -116,7 +116,12 @@ export default function OpsDigestPage() {
                 </Button>
               )}
             </div>
-            <div className="text-[11.5px] text-zk-faint">時間類統計視窗：{digest.window.from.slice(0, 10)} 至 {digest.window.to.slice(0, 10)}（首份更表上載起計到鎖月／而家，最長 60 日）。更次修正按出更日期、特殊項按月份、對數決定按上載月份。</div>
+            <div className="text-[11.5px] text-zk-faint" data-testid="ops-digest-window">
+              {digest.window
+                ? `時間類統計視窗：${digest.window.from.slice(0, 10)} 至 ${digest.window.to.slice(0, 10)}。視窗＝由該月第一次上載更表起，計到鎖月或者下個月開始上載為止。`
+                : "呢個月未有上載，按時間計嘅類別（價卡、配對、身份欄、批量導入）全部算 0。視窗＝由該月第一次上載更表起，計到鎖月或者下個月開始上載為止。"}
+              更次修正按出更日期、特殊項按月份、對數決定按上載月份。
+            </div>
             {aiText && (
               <div className="mt-3 rounded border border-blue-200 bg-blue-50 p-3 text-[13px] leading-relaxed text-zk-text" data-testid="ops-digest-ai-text">
                 <div className="mb-1 text-[11.5px] text-zk-muted">AI 摘要（只根據上面嘅數字；請以表內數字為準）</div>
