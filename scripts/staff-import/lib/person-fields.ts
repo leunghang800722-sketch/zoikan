@@ -165,10 +165,11 @@ export function resolvePerson(p: PersonIn): PersonFields {
     const corroborated = indep || (viaLocal && !nearInfo);
     // 新規則：第一視覺 clear＋第二讀 clear＋逐字相同（卡面兩個獨立讀數）
     const twoReads = !!v2zh && exactZh(v2zh) === exactZh(v.zh);
-    if ((corroborated || twoReads) && !zhReasons.includes('nameZh_differs_between_files')) {
+    const disagree = !!v2zh && !twoReads; // 第二讀數 clear 但同第一讀數逐字唔同：一律 review（就算同檔名／名單一致）
+    if ((corroborated || twoReads) && !disagree && !zhReasons.includes('nameZh_differs_between_files')) {
       nameZh = out('confirmed', v.zh, zhLocal, info);
       nameZh.source = 'id_card';
-    } else nameZh = out('review', v.zh, [...zhLocal, ...zhFiles, ...(v2zh && !twoReads ? [v2zh] : [])], [...zhReasons, ...info, corroborated || twoReads ? '' : v2zh ? 'nameZh_reads_disagree' : 'nameZh_vision_uncorroborated'].filter(Boolean));
+    } else nameZh = out('review', v.zh, [...zhLocal, ...zhFiles, ...(v2zh && !twoReads ? [v2zh] : [])], [...zhReasons, ...info, !disagree && (corroborated || twoReads) ? '' : disagree ? 'nameZh_reads_disagree' : 'nameZh_vision_uncorroborated'].filter(Boolean));
   } else if (zhMine) nameZh = out('review', zhMine, zhLocal, [...zhReasons, ...info, v ? 'nameZh_vision_unsure' : 'nameZh_not_vision_read']);
   else nameZh = out('missing', null);
 
@@ -186,10 +187,11 @@ export function resolvePerson(p: PersonIn): PersonFields {
     const k = enKey(v.en);
     const corroborated = enLocal.some((x) => enKey(x) === k) || enList.some((x) => enKey(x) === k);
     const twoReads = !!v2en && exactEn(v2en) === exactEn(v.en);
-    if ((corroborated || twoReads) && !enReasons.includes('nameEn_differs_between_files')) {
+    const disagree = !!v2en && !twoReads;
+    if ((corroborated || twoReads) && !disagree && !enReasons.includes('nameEn_differs_between_files')) {
       nameEn = out('confirmed', v.en.toUpperCase(), enLocal);
       nameEn.source = 'id_card';
-    } else nameEn = out('review', v.en.toUpperCase(), [...enLocal, ...(v2en && !twoReads ? [v2en.toUpperCase()] : [])], [...enReasons, corroborated || twoReads ? '' : v2en ? 'nameEn_reads_disagree' : 'nameEn_vision_uncorroborated'].filter(Boolean));
+    } else nameEn = out('review', v.en.toUpperCase(), [...enLocal, ...(v2en && !twoReads ? [v2en.toUpperCase()] : [])], [...enReasons, !disagree && (corroborated || twoReads) ? '' : disagree ? 'nameEn_reads_disagree' : 'nameEn_vision_uncorroborated'].filter(Boolean));
   } else if (enLocal.length) {
     const longest = [...enLocal].sort((a, b) => enTokens(b).length - enTokens(a).length)[0];
     nameEn = out('review', longest, enLocal, [...enReasons, v ? 'nameEn_vision_unsure' : 'nameEn_not_vision_read']);

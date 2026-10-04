@@ -76,3 +76,21 @@ describe("A7 驗收修正：分欄 legibility／reason 標示", () => {
     expect(r.nameEn.reasons).not.toContain("nameEn_reads_disagree");
   });
 });
+
+describe("A7：第二讀數 clear 但同第一讀數唔同 → 一律 review（就算同檔名／名單一致）", () => {
+  it("中文：檔名一致仍 review，兩值都留", () => {
+    const r = run({ v1: V("測試安員", null), fileZh: "測試安員", v2: V("測試安貝", null) });
+    expect(r.nameZh.status).toBe("review");
+    expect(r.nameZh.reasons).toContain("nameZh_reads_disagree");
+    expect(r.nameZh.candidates).toContain("測試安貝");
+  });
+  it("英文：本機 OCR 一致仍 review", () => {
+    const r = run({ local: [null, "CHAN TAI MAN"], v1: V(null, "CHAN, TAI MAN"), v2: V(null, "CHAN, TAI MEN") });
+    expect(r.nameEn.status).toBe("review");
+    expect(r.nameEn.reasons).toContain("nameEn_reads_disagree");
+  });
+  it("第二讀 unsure／冇第二讀 → 原有規則照舊（檔名一致 confirmed）", () => {
+    expect(run({ v1: V("測試安員", null), fileZh: "測試安員", v2: V("測試安貝", null, "unsure") }).nameZh.status).toBe("confirmed");
+    expect(run({ v1: V("測試安員", null), fileZh: "測試安員", v2: null }).nameZh.status).toBe("confirmed");
+  });
+});
