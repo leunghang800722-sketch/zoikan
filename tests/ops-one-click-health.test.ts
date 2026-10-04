@@ -15,6 +15,8 @@ describe("一鍵結算報告：health 摘要", () => {
   });
   beforeEach(async () => {
     await clearAll();
+    // clearAll() 唔清 staff_list_uploads——其他測試檔可能留低一份假名單，一鍵結算 guard_fix 步驟會嘗試解析佢
+    await prisma.staffListUpload.deleteMany({});
     fx = await seedWp2Fixture();
   });
 
