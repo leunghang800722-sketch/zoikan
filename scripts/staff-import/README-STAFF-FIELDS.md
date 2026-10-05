@@ -51,3 +51,10 @@
 
 ### 牌照序號規則補充
 序號接受來源：(a) ≥2 個印刷類別（視覺 read1／read2、本機 OCR）見到同一序號；或 (b) 打字名單（Maxwell）有序號且冇任何印刷來源見到唔同序號 → confirmed + `permit_serial_from_typed_list`。只得單一印刷類別見到序號而冇打字名單 → `review` + `permit_serial_unverified`。Opus 牌照卡獨立視覺讀（`verify/agent-*/permit-read.json`，key＝裁圖 id、格式同讀數檔）併入為 permit_card 嘅 `printed_read2`（只補未有第二讀嘅裁圖單位）。
+
+### 第二輪修訂
+- `py/typed-sources.py` 剔走工號唔符 `^[A-Z]{1,4}\d{2,7}$` 嘅行（Maxwell 在職分頁表尾「Head Count」統計行）；15 亦同樣防呆。只喺打字名單組 51 → 50。
+- 入職日期：純手寫來源（逐工號行同人層面）一律 `review` + `handwritten_unverified`（同 QAS／平安咭）；有打字名單佐證先 confirmed。
+- `handwritten-unverified.json` 改用內部序號 `pNNN`（＝ `person-fields-ext.json` 內 `internalId`），唔再用身份證號做 key。計數類報告（summary.json、handwritten-unverified.json）冇身份證／工號／電話；`person-fields-ext.json`、`first-read*`、`second-read*`、`typed-sources.json` 係含值嘅資料檔，只留 data/（gitignored）。
+- 銀行副本：去銀行代號後尾段逐位相同而副本欠 3 位分行碼 → `bank_copy_agrees_without_branch`（仍可 confirmed）；其餘差異維持 `bank_copy_disagrees`。
+- 同一份 Maxwell 名單（兩個分頁）同名聯絡人而電話唔同 → 合併成一項，電話欄 review（兩個候選）。

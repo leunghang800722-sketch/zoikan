@@ -10,7 +10,7 @@ import type { OcrPage } from './lib/ocr';
 import { FIELDS_OUT } from './lib/fields-render';
 import {
   bankByCode, bankCodeFromName, expiryInRange, issueInRange, joinInRange, normAcct, normDate, normPermitNo, normTelHkStrict, normZh,
-  acctEq, applyHandRules, isCardControlNo, permitMatchesHkid, resolveField, sameNameTokens, normText, splitPermit, type Cand, type FieldOut, type SrcKind, TODAY,
+  applyHandRules, isPureHand, acctAgreeKind, isCardControlNo, permitMatchesHkid, resolveField, sameNameTokens, normText, splitPermit, type Cand, type FieldOut, type SrcKind, TODAY,
 } from './lib/fields-ext';
 import { normalizeTelHk } from '@/lib/guards/identity';
 import { OUT } from './lib/render';
@@ -39,6 +39,11 @@ async function main() {
   const pf = await J<{ key: string; docIds: string[]; fields: { nameEn: { value: string | null; candidates: string[] }; nameZh: { value: string | null } } }[]>(path.join(OUT, 'out/person-fields.json'));
   const index = new Map((await J<DocMeta[]>(path.join(OUT, 'index.json'))).map((m) => [m.docId, m]));
   const typed = await J<Typed>(path.join(FIELDS_OUT, 'typed-sources.json'));
+  const STAFF_NO_OK = /^[A-Z]{1,4}\d{2,7}$/;
+  const okNo = (s: string | null) => !!s && STAFF_NO_OK.test(s.replace(/\s+/g, '').toUpperCase());
+  const droppedRows = typed.maxwell.filter((r) => !okNo(r.staffNo)).length + typed.uteam.filter((r) => !okNo(r.staffNo)).length;
+  typed.maxwell = typed.maxwell.filter((r) => okNo(r.staffNo));
+  typed.uteam = typed.uteam.filter((r) => okNo(r.staffNo));
   const tasks = await J<Task[]>(path.join(FIELDS_OUT, 'read-tasks.json'), []);
   // 讀數檔：first-read.json（總檔）＋ first-read-b*.json（分批，各自落盤）；second-read 同理
   const loadReads = async (prefix: string): Promise<ReadMap> => {
@@ -63,6 +68,7 @@ async function main() {
   const taskById = new Map(tasks.map((t) => [t.id, t]));
   const summaryFlags: Record<string, number> = {};
   summaryFlags.opus_permit_reads_merged = opusPermitUnits;
+  summaryFlags.typed_rows_dropped_bad_staffno_in_merge = droppedRows;
   const bump = (k: string) => (summaryFlags[k] = (summaryFlags[k] ?? 0) + 1);
 
   // ---- 人 ----
@@ -301,7 +307,7 @@ async function main() {
         }
       }
       const rows = [...hireBy.entries()].map(([sn, cs]) => {
-        let fld = applyHandRules(resolveField(cs, { validate: (v) => (joinInRange(v) ? null : 'date_out_of_range') }), { date: true });
+        let fld = applyHandRules(applyHandRules(resolveField(cs, { validate: (v) => (joinInRange(v) ? null : 'date_out_of_range') }), { date: true }), { unverified: true });
         const extra: string[] = [];
         if (hireWeak.has(sn)) extra.push('linked_by_staff_no_only');
         if (sharedStaff.has(sn)) extra.push('filename_staff_no_shared');
@@ -313,7 +319,8 @@ async function main() {
       const earliest = vals.length ? vals.reduce((a, b) => (b.v < a.v ? b : a)) : null;
       const rowReview = rows.filter((r) => r.field.status === 'review');
       const mapReason = (x: string) => (x === 'sources_disagree' ? 'staff_no_row_sources_disagree' : x);
-      F.hireDate = !earliest ? { value: null, status: 'missing', candidates: [], sources: [], reasons: [] } : { value: earliest.v, status: rowReview.length ? 'review' : 'confirmed', candidates: vals.map((x) => ({ value: x.v, sources: x.src })), sources: [...new Set(vals.flatMap((x) => x.src))], reasons: [...new Set([...(rows.length > 1 ? ['earliest_of_staff_numbers'] : []), ...rowReview.flatMap((r) => r.field.reasons.map(mapReason)), ...rows.flatMap((r) => r.field.reasons.filter((x) => x === 'typed_list_only'))])] } satisfies FieldOut;
+      const earliestHand = !!earliest && isPureHand(earliest.src);
+      F.hireDate = !earliest ? { value: null, status: 'missing', candidates: [], sources: [], reasons: [] } : { value: earliest.v, status: rowReview.length || earliestHand ? 'review' : 'confirmed', candidates: vals.map((x) => ({ value: x.v, sources: x.src })), sources: [...new Set(vals.flatMap((x) => x.src))], reasons: [...new Set([...(earliestHand ? ['handwritten_unverified'] : []), ...(rows.length > 1 ? ['earliest_of_staff_numbers'] : []), ...rowReview.flatMap((r) => r.field.reasons.map(mapReason)), ...rows.flatMap((r) => r.field.reasons.filter((x) => x === 'typed_list_only'))])] } satisfies FieldOut;
     }
     {
       const ex = ['siaPermitAExpiry', 'siaPermitBExpiry', 'siaPermitCExpiry', 'siaPermitDExpiry'] as const;
@@ -330,6 +337,7 @@ async function main() {
       const same = (a: EmUnit, b: EmUnit) => {
         const ta = unitTels(a), tb = unitTels(b);
         if (inter(ta, tb)) return true;
+        if (a.items.every((i) => i.src === 'typed_maxwell') && b.items.every((i) => i.src === 'typed_maxwell') && inter(unitNames(a), unitNames(b))) return true; // 同一份 Maxwell 名單兩個分頁嘅同名聯絡人：合併，電話唔同 → 電話欄 review
         return inter(unitNames(a), unitNames(b)) && !(ta.size && tb.size);
       };
       const clusters: EmUnit[][] = [];
@@ -373,7 +381,10 @@ async function main() {
       const hard = e.how === 'hard_key';
       const reasons: string[] = hard ? [] : [e.how === 'name_only' ? 'bank_identity_name_only' : e.how === 'name_ambiguous' ? 'bank_identity_name_ambiguous' : 'bank_identity_unknown'];
       const src = ['typed_pe', ...(hard && (mxAcct === e.acct) ? ['typed_maxwell'] : []), ...(hard && (utAcct === e.acct) ? ['typed_uteam'] : [])];
-      if (copyAccts.length) reasons.push(copyAccts.every((a) => acctEq(a, e.acct, e.code)) ? 'bank_copy_agrees' : 'bank_copy_disagrees');
+      if (copyAccts.length) {
+        const kinds = copyAccts.map((a) => acctAgreeKind(a, e.acct, e.code));
+        reasons.push(kinds.every((k) => k !== 'no') ? (kinds.some((k) => k === 'nobranch') ? 'bank_copy_agrees_without_branch' : 'bank_copy_agrees') : 'bank_copy_disagrees');
+      }
       if (mxAcct && mxAcct !== e.acct) reasons.push('maxwell_acct_differs');
       const ok = hard && !reasons.some((r) => r.endsWith('disagrees') || r.endsWith('differs'));
       const code = e.code ? e.code.padStart(3, '0') : null;
@@ -424,7 +435,7 @@ async function main() {
   summaryFlags.ocr_vs_vision_toDates_both = agree.toDates.both; summaryFlags.ocr_vs_vision_toDates_same = agree.toDates.same;
 
   // ---- 輸出 ----
-  const out = persons.map((p) => ({ key: p.key, keyKind: p.keyKind, hasDocs: p.hasDocs, docIds: p.docIds, staffNos: p.staffNos, typedSources: { maxwell: p.mx.length, uteam: p.ut.length, payrollEditor: p.pe.length }, flags: [...new Set(p.flags)], fields: p.fields }));
+  const out = persons.map((p, i) => ({ internalId: `p${String(i).padStart(3, '0')}`, key: p.key, keyKind: p.keyKind, hasDocs: p.hasDocs, docIds: p.docIds, staffNos: p.staffNos, typedSources: { maxwell: p.mx.length, uteam: p.ut.length, payrollEditor: p.pe.length }, flags: [...new Set(p.flags)], fields: p.fields }));
   await fs.writeFile(path.join(FIELDS_OUT, 'person-fields-ext.json'), JSON.stringify(out, null, 1));
   // summary（只有計數）
   const groupsOf = (pred: (p: Person) => boolean) => out.filter((_, i) => pred(persons[i]));
@@ -459,8 +470,8 @@ async function main() {
     const visit = (name: string, f: unknown) => {
       if (!isStatus(f)) return;
       f.reasons.forEach((r) => rs.add(r));
-      if (f.reasons.includes('handwritten_unverified')) (hwUnverified[name] ??= []).push(o.key);
-      if (f.reasons.includes('handwritten_date_ambiguous')) (hwDate[name] ??= []).push(o.key);
+      if (f.reasons.includes('handwritten_unverified')) (hwUnverified[name] ??= []).push(o.internalId);
+      if (f.reasons.includes('handwritten_date_ambiguous')) (hwDate[name] ??= []).push(o.internalId);
     };
     for (const [k, v] of Object.entries(o.fields)) {
       if (k === 'emergencyContacts') (v as Em[]).forEach((c) => { visit(k, c.name); visit(k, c.relationship); visit(k, c.tel); });

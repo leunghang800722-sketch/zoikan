@@ -144,3 +144,14 @@ export const acctEq = (a: string | null, b: string | null, code: string | null) 
   const c = (code ?? '').padStart(3, '0');
   return !!code && ((a.startsWith(c) && a.slice(3) === b) || (b.startsWith(c) && b.slice(3) === a));
 };
+
+/** 銀行副本 vs Payroll Editor 戶口：去銀行代號前綴後逐位相同＝eq；副本欠 3 位分行碼而尾段相同＝nobranch；其餘 no。 */
+export function acctAgreeKind(copy: string, pe: string, code: string | null): 'eq' | 'nobranch' | 'no' {
+  const c = (code ?? '').padStart(3, '0');
+  const strip = (x: string) => (code && x.startsWith(c) && x.length > 3 ? x.slice(3) : x);
+  if (copy === pe || strip(copy) === strip(pe) || strip(copy) === pe || copy === strip(pe)) return 'eq';
+  const [a, b] = [strip(copy), strip(pe)];
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (long.length - short.length === 3 && short.length >= 6 && long.endsWith(short)) return 'nobranch';
+  return 'no';
+}
