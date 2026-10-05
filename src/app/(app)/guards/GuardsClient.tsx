@@ -243,6 +243,7 @@ export function GuardsClient({
   canUpdateSettlement,
   canUpdatePii,
   canUpdateBank,
+  canOcr = false,
 }: {
   isBroker: boolean;
   // WP-PII（Opus 驗收必修 2）：呢三個係「呢個 session 而家有冇對應
@@ -256,6 +257,8 @@ export function GuardsClient({
   canUpdateSettlement: boolean;
   canUpdatePii: boolean;
   canUpdateBank: boolean;
+  /** WP-GUARD-OCR §29：有 DEEPSEEK_API_KEY 同「安員批量導入」權限先顯示「用證件新增」 */
+  canOcr?: boolean;
 }) {
   const [rows, setRows] = useState<GuardRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
@@ -1699,6 +1702,11 @@ export function GuardsClient({
             {!isBroker && (
               <a href="/guards/import" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">
                 證件資料導入
+              </a>
+            )}
+            {!isBroker && canOcr && (
+              <a href="/guards/new-from-docs" data-testid="guards-new-from-docs" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">
+                用證件新增
               </a>
             )}
             <Button variant="primary" onClick={openCreate}>

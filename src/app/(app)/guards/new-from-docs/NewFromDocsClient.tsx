@@ -1,0 +1,564 @@
+"use client";
+// WP-GUARD-OCR §29：用證件新增保安員。
+//   ① 上載身份證（必須）／住址證明／入職表（圖片或 PDF，瀏覽器轉圖縮細）→ ② 辨識（每份兩次獨立讀）
+//   → ③ 並排核對（圖＋表單，逐欄 已確認／要核對／讀唔到）→ ④ 預覽（新建定連去現有保安員、會寫邊啲欄）→ ⑤ 確認套用。
+// 圖片只留喺瀏覽器記憶體；儲存／離開頁面即 revoke。寫入全部行現有 /api/guards/import/preview → apply（source=single_ocr）。
+import { useCallback, useEffect, useRef, useState } from "react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Banner } from "@/components/ui/Banner";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
+import { apiPost } from "@/lib/ui/api-client";
+import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
+import { canvasFromImageFile, isPdfFile, openPdf, prepareFromCanvas, type PdfHandle, type PreparedImage } from "@/lib/guards/ocr/browser-images";
+import { normalizeField } from "@/lib/guards/ocr/normalize";
+import type { FieldStatus } from "@/lib/guards/ocr/normalize";
+import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
+
+const DOC_LABEL: Record<OcrDocType, string> = { id_card: "身份證（必須）", address_proof: "住址證明（可選）", onboarding_form: "入職表（可選）" };
+const DOC_SHORT: Record<OcrDocType, string> = { id_card: "身份證", address_proof: "住址證明", onboarding_form: "入職表" };
+const FIELD_LABEL: Record<OcrFieldKey, string> = { name_zh: "中文姓名", name_en: "英文姓名", hkid: "身份證號", dob: "出生日期", sex: "性別", phone: "電話", address: "地址" };
+const FIELD_ORDER: OcrFieldKey[] = ["name_zh", "name_en", "hkid", "dob", "sex", "phone", "address"];
+const REQUIRED: OcrFieldKey[] = ["name_zh", "hkid"];
+const REASON_MSG: Record<string, string> = {
+  hkid_format: "身份證號格式唔啱",
+  hkid_check_digit: "身份證號檢查碼唔啱，請對住圖核對",
+  dob_calendar: "出生日期唔係合法日期（例如 DD-MM-YYYY）",
+  dob_year_implausible: "出生年份唔合理，請核對",
+  sex_format: "性別請填 M 或 F",
+  phone_format: "電話格式唔啱",
+  phone_not_hk: "唔係香港 8 位電話",
+  name_zh_format: "中文姓名請只填中文字",
+  name_en_format: "英文姓名格式唔啱",
+  address_format: "地址太短",
+  reads_differ: "兩次辨識結果唔一樣，請對住圖揀一個或者自己改",
+  one_read_unclear: "其中一次辨識睇唔清，請對住圖核對",
+  unclear: "睇唔清，請自己輸入",
+};
+
+interface OcrField {
+  status: FieldStatus;
+  value: string;
+  candidates: string[];
+  reason?: string;
+}
+interface OcrDocResult {
+  type: OcrDocType;
+  fields: Partial<Record<OcrFieldKey, OcrField>>;
+}
+interface OcrResponse {
+  model: string;
+  ms: number;
+  usage: { prompt_tokens: number; completion_tokens: number; calls: number };
+  documents: OcrDocResult[];
+}
+interface Slot {
+  file: File | null;
+  pdf: PdfHandle | null;
+  page: number;
+  prepared: PreparedImage | null;
+  busy: boolean;
+  error: string | null;
+}
+interface FormField {
+  value: string;
+  ocrStatus: FieldStatus;
+  ocrValue: string;
+  candidates: string[];
+  reason?: string;
+  /** 用戶已確認／改正／標明冇資料 */
+  ack: boolean;
+  /** 值同 OCR 預填值唔同（用戶改過） */
+  edited: boolean;
+  from?: OcrDocType;
+}
+type FormState = Record<OcrFieldKey, FormField>;
+
+const emptySlot = (): Slot => ({ file: null, pdf: null, page: 1, prepared: null, busy: false, error: null });
+const blankField = (): FormField => ({ value: "", ocrStatus: "missing", ocrValue: "", candidates: [], ack: false, edited: false });
+const blankForm = (): FormState => Object.fromEntries(FIELD_ORDER.map((f) => [f, blankField()])) as FormState;
+
+interface Row {
+  key: string;
+  action: "link" | "create" | "conflict" | "needs_review";
+  reasons: string[];
+  basis?: string[];
+  hkid_masked: string | null;
+  phone_masked: string | null;
+  fields: Record<string, { status: string; check: string }>;
+  current_name_zh: string | null;
+}
+interface PreviewRes {
+  package_hash: string;
+  rows: Row[];
+  counts_hidden?: boolean;
+}
+interface ApplyRes {
+  outcomes: Record<string, number>;
+  guards_created: number;
+  guards_updated: number;
+  phones_added: number;
+  addresses_added: number;
+  staff_numbers_added: number;
+  fields_written: Record<string, number>;
+  results?: { key: string; reasons: string[] }[];
+  counts_hidden?: boolean;
+  triage?: { session_id?: string; open_questions?: number; owned_by_other?: boolean } | null;
+}
+
+const ACTION_TEXT: Record<string, string> = {
+  create: "會新增一位保安員",
+  link: "已有呢位保安員，只會補空欄（唔會覆蓋現有資料）",
+  conflict: "同現有資料有衝突，唔會自動寫入（可以交俾待答問題處理）",
+  needs_review: "未能自動處理，唔會寫入（可以交俾待答問題處理）",
+};
+const CHECK_TEXT: Record<string, string> = { new: "會寫入", fill: "現有冇，會補", same: "現有一樣，唔使寫", differs: "現有唔同，唔會覆蓋", conflict: "現有唔同，唔會覆蓋", missing: "冇填", not_stored: "系統唔儲存", invalid_date: "日期唔合法" };
+
+function statusPill(f: FormField) {
+  if (f.ocrStatus === "confirmed") return <Pill variant="success">已確認</Pill>;
+  if (f.ocrStatus === "review") return <Pill variant="warning">要核對</Pill>;
+  return <Pill variant="neutral">讀唔到</Pill>;
+}
+
+/** 欄位驗證（淨驗格式；空值另外處理）。 */
+function fieldError(k: OcrFieldKey, v: string): string | null {
+  if (!v.trim()) return null;
+  const n = normalizeField(k, v);
+  return n.valid ? null : (REASON_MSG[n.reason ?? ""] ?? "格式唔啱");
+}
+
+export function NewFromDocsClient() {
+  const [slots, setSlots] = useState<Record<OcrDocType, Slot>>({ id_card: emptySlot(), address_proof: emptySlot(), onboarding_form: emptySlot() });
+  const [step, setStep] = useState<"upload" | "review" | "preview" | "done">("upload");
+  const [form, setForm] = useState<FormState>(blankForm());
+  const [addrFrom, setAddrFrom] = useState<OcrDocType | null>(null);
+  const [viewDoc, setViewDoc] = useState<OcrDocType>("id_card");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [ocrInfo, setOcrInfo] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewRes | null>(null);
+  const [pkgState, setPkgState] = useState<{ pkg: unknown; decisions: Record<string, unknown> } | null>(null);
+  const [applyRes, setApplyRes] = useState<ApplyRes | null>(null);
+  const [triageSession, setTriageSession] = useState<string | null>(null);
+  const urlsRef = useRef<string[]>([]);
+  const pdfsRef = useRef<PdfHandle[]>([]);
+
+  // 離開頁面／卸載即 revoke 所有圖片 object URL，並關閉 PDF
+  const cleanup = useCallback(() => {
+    for (const u of urlsRef.current) URL.revokeObjectURL(u);
+    urlsRef.current = [];
+    for (const p of pdfsRef.current) void p.destroy().catch(() => undefined);
+    pdfsRef.current = [];
+  }, []);
+  useEffect(() => cleanup, [cleanup]);
+
+  async function loadPage(type: OcrDocType, file: File, pdf: PdfHandle | null, page: number) {
+    setSlots((s) => ({ ...s, [type]: { ...s[type], file, pdf, page, busy: true, error: null } }));
+    try {
+      const canvas = pdf ? await pdf.render(page) : await canvasFromImageFile(file);
+      const prepared = await prepareFromCanvas(canvas);
+      urlsRef.current.push(prepared.previewUrl);
+      setSlots((s) => {
+        const old = s[type].prepared?.previewUrl;
+        if (old) {
+          URL.revokeObjectURL(old);
+          urlsRef.current = urlsRef.current.filter((u) => u !== old);
+        }
+        return { ...s, [type]: { ...s[type], file, pdf, page, prepared, busy: false, error: null } };
+      });
+    } catch {
+      setSlots((s) => ({ ...s, [type]: { ...s[type], busy: false, error: "讀唔到呢個檔案（請用清晰嘅圖片或者 PDF）" } }));
+    }
+  }
+
+  async function onPick(type: OcrDocType, file: File | undefined) {
+    if (!file) return;
+    let pdf: PdfHandle | null = null;
+    if (isPdfFile(file)) {
+      try {
+        pdf = await openPdf(file);
+        pdfsRef.current.push(pdf);
+      } catch {
+        setSlots((s) => ({ ...s, [type]: { ...emptySlot(), error: "PDF 打唔開" } }));
+        return;
+      }
+    }
+    await loadPage(type, file, pdf, 1);
+  }
+
+  function removeSlot(type: OcrDocType) {
+    const old = slots[type].prepared?.previewUrl;
+    if (old) URL.revokeObjectURL(old);
+    setSlots((s) => ({ ...s, [type]: emptySlot() }));
+  }
+
+  async function onRead() {
+    const docs = (Object.keys(slots) as OcrDocType[]).filter((t) => slots[t].prepared);
+    if (!slots.id_card.prepared) return;
+    setBusy(true);
+    setError(null);
+    const res = await apiPost<OcrResponse>("/api/guards/ocr/read", { documents: docs.map((t) => ({ type: t, full: slots[t].prepared!.full, tiles: slots[t].prepared!.tiles })) });
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.status === 503 ? `${res.message}（可以撳「全部自己輸入」繼續）` : res.message);
+      return;
+    }
+    const byType = new Map(res.data.documents.map((d) => [d.type, d]));
+    const next = blankForm();
+    const put = (k: OcrFieldKey, d: OcrDocResult | undefined) => {
+      const r = d?.fields[k];
+      if (!r) return false;
+      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates, reason: r.reason, ack: r.status === "confirmed", edited: false, from: d!.type };
+      return true;
+    };
+    for (const k of OCR_DOC_FIELDS.id_card) put(k, byType.get("id_card"));
+    put("phone", byType.get("onboarding_form"));
+    // 地址：住址證明優先；冇上載或者讀唔到先用入職表
+    const proof = byType.get("address_proof")?.fields.address;
+    const formAddr = byType.get("onboarding_form")?.fields.address;
+    if (proof && (proof.status !== "missing" || !formAddr || formAddr.status === "missing")) {
+      put("address", byType.get("address_proof"));
+      setAddrFrom("address_proof");
+    } else if (formAddr) {
+      put("address", byType.get("onboarding_form"));
+      setAddrFrom("onboarding_form");
+    }
+    setForm(next);
+    const u = res.data.usage;
+    setOcrInfo(`辨識完成（${Math.round(res.data.ms / 100) / 10} 秒，${u.calls} 次讀取）`);
+    setViewDoc("id_card");
+    setStep("review");
+  }
+
+  function manualAll() {
+    setForm(blankForm());
+    setAddrFrom("address_proof");
+    setOcrInfo(null);
+    setStep("review");
+  }
+
+  function setField(k: OcrFieldKey, v: string) {
+    setForm((s) => {
+      const f = s[k];
+      const edited = v !== f.ocrValue;
+      const ack = f.ocrStatus === "confirmed" ? true : v.trim() !== "" ? true : false;
+      return { ...s, [k]: { ...f, value: v, edited, ack } };
+    });
+  }
+  const ackField = (k: OcrFieldKey, empty = false) => setForm((s) => ({ ...s, [k]: { ...s[k], ack: true, ...(empty ? { value: "", edited: s[k].ocrValue !== "" } : {}) } }));
+
+  const problems = FIELD_ORDER.map((k) => {
+    const f = form[k];
+    const v = f.value.trim();
+    if (REQUIRED.includes(k) && !v) return `${FIELD_LABEL[k]}要填`;
+    const err = fieldError(k, v);
+    if (err) return `${FIELD_LABEL[k]}：${err}`;
+    if (!f.ack) return `${FIELD_LABEL[k]}要確認`;
+    return null;
+  }).filter((x): x is string => !!x);
+
+  function buildPackage() {
+    const decisions: Record<string, Record<string, { action: "confirm"; value: string }>> = {};
+    const key = crypto.randomUUID();
+    const mk = (k: OcrFieldKey, decisionKey?: string) => {
+      const f = form[k];
+      const raw = f.value.trim();
+      if (!raw) return { value: null, status: "missing" as const };
+      const n = normalizeField(k, raw);
+      const value = n.display;
+      // OCR 兩讀一致而且用戶冇改 → confirmed；用戶確認／改正嘅欄 → review＋decisions(confirm)
+      if (f.ocrStatus === "confirmed" && !f.edited) return { value, status: "confirmed" as const };
+      if (decisionKey) {
+        decisions[key] = { ...(decisions[key] ?? {}), [decisionKey]: { action: "confirm", value } };
+        return { value, status: "review" as const };
+      }
+      return { value, status: "confirmed" as const }; // hkid／sex：用戶已對住圖核對、格式驗證通過
+    };
+    const addr = mk("address", "address");
+    const pkg = {
+      version: 2 as const,
+      generatedAt: new Date().toISOString(),
+      source: "single_ocr" as const,
+      persons: [
+        {
+          key,
+          hkid: mk("hkid"),
+          nameZh: mk("name_zh", "name_zh"),
+          nameEn: mk("name_en", "name_en"),
+          dateOfBirth: mk("dob", "date_of_birth"),
+          sex: mk("sex"),
+          phone: mk("phone", "phone"),
+          address: { ...addr, source: addrFrom === "onboarding_form" ? ("application_form" as const) : ("address_proof" as const) },
+          staffNumbers: [],
+          rating: "review" as const,
+          reasons: [] as string[],
+        },
+      ],
+    };
+    return { pkg, decisions };
+  }
+
+  async function onPreview() {
+    setBusy(true);
+    setError(null);
+    const built = buildPackage();
+    const hasDec = Object.keys(built.decisions).length > 0;
+    const res = await apiPost<PreviewRes>("/api/guards/import/preview", { package: built.pkg, ...(hasDec ? { decisions: built.decisions } : {}) });
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    setPkgState({ pkg: built.pkg, decisions: built.decisions });
+    setPreview(res.data);
+    setStep("preview");
+  }
+
+  async function onApply() {
+    if (!pkgState || !preview) return;
+    setBusy(true);
+    setError(null);
+    const hasDec = Object.keys(pkgState.decisions).length > 0;
+    const res = await apiPost<ApplyRes>("/api/guards/import/apply", { package: pkgState.pkg, package_hash: preview.package_hash, ...(hasDec ? { decisions: pkgState.decisions } : {}) });
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    setApplyRes(res.data);
+    // 儲存即棄圖：revoke 全部 object URL
+    cleanup();
+    setSlots({ id_card: emptySlot(), address_proof: emptySlot(), onboarding_form: emptySlot() });
+    const t = res.data.triage;
+    if (t && !t.owned_by_other && (t.open_questions ?? 0) > 0 && t.session_id) setTriageSession(t.session_id);
+    setNotice(res.data.guards_created > 0 ? "已新增保安員" : res.data.guards_updated > 0 ? "已補充現有保安員資料" : "未有寫入任何資料");
+    setStep("done");
+  }
+
+  function startOver() {
+    cleanup();
+    setSlots({ id_card: emptySlot(), address_proof: emptySlot(), onboarding_form: emptySlot() });
+    setForm(blankForm());
+    setPreview(null);
+    setPkgState(null);
+    setApplyRes(null);
+    setTriageSession(null);
+    setNotice(null);
+    setError(null);
+    setOcrInfo(null);
+    setStep("upload");
+  }
+
+  const row = preview?.rows[0];
+  const uploaded = (Object.keys(slots) as OcrDocType[]).filter((t) => slots[t].prepared);
+
+  return (
+    <div className="space-y-4">
+      <PageHeader kicker="主檔" title="用證件新增保安員" subtitle="上載證件，由 AI 辨識自動填表；逐欄核對後先會寫入。" />
+      <Banner kind="error" message={error} />
+      <Banner kind="success" message={notice} />
+
+      {triageSession && <TriageDialog sessionId={triageSession} onClose={() => setTriageSession(null)} />}
+
+      {step === "upload" && (
+        <div className="space-y-4" data-testid="ocr-step-upload">
+          <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px] text-orange-800" data-testid="ocr-privacy-notice">
+            圖片會傳送去 DeepSeek（內地伺服器）做辨識，本系統唔會儲存圖片。圖片只留喺你部機嘅瀏覽器記憶體，儲存或者離開頁面就會清走。
+          </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            {(Object.keys(DOC_LABEL) as OcrDocType[]).map((t) => {
+              const s = slots[t];
+              return (
+                <div key={t} className="space-y-2 rounded-lg border border-zk-border p-3" data-testid={`ocr-slot-${t}`}>
+                  <div className="text-[13px] font-semibold">{DOC_LABEL[t]}</div>
+                  <input type="file" accept="image/*,application/pdf" data-testid={`ocr-file-${t}`} className="w-full text-[13px]" onChange={(e) => void onPick(t, e.target.files?.[0])} />
+                  {s.busy && <div className="text-[12px] text-zk-muted">處理緊圖片…</div>}
+                  {s.error && <div className="text-[12px] text-red-600">{s.error}</div>}
+                  {s.pdf && s.pdf.pages > 1 && (
+                    <div className="flex items-center gap-2 text-[12.5px]">
+                      <Button disabled={s.page <= 1 || s.busy} onClick={() => void loadPage(t, s.file!, s.pdf, s.page - 1)}>上一頁</Button>
+                      <span>
+                        第 {s.page} / {s.pdf.pages} 頁
+                      </span>
+                      <Button disabled={s.page >= s.pdf.pages || s.busy} onClick={() => void loadPage(t, s.file!, s.pdf, s.page + 1)}>下一頁</Button>
+                    </div>
+                  )}
+                  {s.prepared && (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={s.prepared.previewUrl} alt={`${DOC_SHORT[t]}預覽`} className="max-h-48 w-full rounded border border-zk-border object-contain" />
+                      <Button onClick={() => removeSlot(t)}>移除</Button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="primary" disabled={busy || !slots.id_card.prepared} onClick={() => void onRead()} data-testid="ocr-read">
+              {busy ? "辨識緊…（約 10–30 秒）" : "開始辨識"}
+            </Button>
+            <Button disabled={busy} onClick={manualAll} data-testid="ocr-manual">
+              全部自己輸入
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === "review" && (
+        <div className="space-y-3" data-testid="ocr-step-review">
+          {ocrInfo && <div className="text-[12.5px] text-zk-muted">{ocrInfo}。請對住圖逐欄核對：「要核對」同「讀唔到」嘅欄要你確認或者改正先可以繼續。</div>}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              {uploaded.length > 0 ? (
+                <>
+                  <div className="flex flex-wrap gap-1.5">
+                    {uploaded.map((t) => (
+                      <Button key={t} variant={viewDoc === t ? "primary" : "secondary"} onClick={() => setViewDoc(t)}>
+                        {DOC_SHORT[t]}
+                      </Button>
+                    ))}
+                  </div>
+                  {slots[viewDoc].prepared && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={slots[viewDoc].prepared!.previewUrl} alt={`${DOC_SHORT[viewDoc]}原圖`} className="max-h-[50vh] w-full rounded border border-zk-border object-contain md:sticky md:top-2 md:max-h-[80vh]" data-testid="ocr-review-image" />
+                  )}
+                </>
+              ) : (
+                <div className="rounded-lg border border-zk-border p-3 text-[13px] text-zk-muted">全部自己輸入模式：冇上載圖片，請直接填寫。</div>
+              )}
+            </div>
+            <div className="space-y-3">
+              {FIELD_ORDER.map((k) => {
+                const f = form[k];
+                const err = fieldError(k, f.value);
+                const needAck = !f.ack;
+                const reasonMsg = f.reason && f.ocrStatus !== "confirmed" ? REASON_MSG[f.reason] : null;
+                return (
+                  <div key={k} className="space-y-1 rounded-lg border border-zk-border p-2.5" data-testid={`ocr-field-${k}`} data-status={f.ocrStatus} data-ack={f.ack ? "1" : "0"}>
+                    <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                      <span className="font-semibold">
+                        {FIELD_LABEL[k]}
+                        {REQUIRED.includes(k) ? " *" : ""}
+                      </span>
+                      {statusPill(f)}
+                      {f.edited && <Pill variant="shift">已改</Pill>}
+                      {k === "address" && addrFrom === "onboarding_form" && f.value && <Pill variant="neutral">來自入職表</Pill>}
+                    </div>
+                    {k === "sex" ? (
+                      <select className="w-full rounded-[5px] border border-zk-border px-2 py-1.5 text-[14px]" value={f.value} onChange={(e) => setField(k, e.target.value)} aria-label={FIELD_LABEL[k]}>
+                        <option value="">（未填）</option>
+                        <option value="M">男 M</option>
+                        <option value="F">女 F</option>
+                      </select>
+                    ) : (
+                      <input
+                        className="w-full rounded-[5px] border border-zk-border px-2 py-1.5 text-[14px]"
+                        value={f.value}
+                        onChange={(e) => setField(k, e.target.value)}
+                        aria-label={FIELD_LABEL[k]}
+                        inputMode={k === "phone" ? "tel" : undefined}
+                      />
+                    )}
+                    {f.candidates.length > 1 && (
+                      <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+                        <span className="text-zk-faint">兩次辨識：</span>
+                        {f.candidates.map((c) => (
+                          <button key={c} type="button" className="rounded border border-zk-border px-1.5 py-0.5 hover:bg-zk-hover" onClick={() => setField(k, c)}>
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {reasonMsg && <div className="text-[12px] text-orange-700">{reasonMsg}</div>}
+                    {err && <div className="text-[12px] text-red-600">{err}</div>}
+                    {needAck && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {f.value.trim() ? (
+                          <Button variant="primary" disabled={!!err} onClick={() => ackField(k)}>
+                            對住圖確認
+                          </Button>
+                        ) : !REQUIRED.includes(k) ? (
+                          <Button onClick={() => ackField(k, true)}>呢項冇資料／略過</Button>
+                        ) : (
+                          <span className="text-[12px] text-zk-muted">請自己輸入</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {problems.length > 0 && <div className="text-[12.5px] text-orange-700" data-testid="ocr-problems">仲有 {problems.length} 項要處理：{problems.slice(0, 4).join("、")}{problems.length > 4 ? "…" : ""}</div>}
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={startOver}>重新開始</Button>
+            <Button variant="primary" disabled={busy || problems.length > 0} onClick={() => void onPreview()} data-testid="ocr-to-preview">
+              {busy ? "預覽緊…" : "下一步：預覽"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === "preview" && row && (
+        <div className="space-y-3" data-testid="ocr-step-preview">
+          <div className="rounded-lg border border-zk-border p-3 text-[14px]">
+            <div className="font-semibold" data-testid="ocr-preview-action">{ACTION_TEXT[row.action]}</div>
+            <div className="mt-1 text-[12.5px] text-zk-muted">
+              身份證 {row.hkid_masked ?? "—"} · 電話 {row.phone_masked ?? "—"}
+              {row.current_name_zh ? ` · 現有紀錄：${row.current_name_zh}` : ""}
+            </div>
+            {row.reasons.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {row.reasons.map((r) => (
+                  <Pill key={r} variant="warning">
+                    {reasonLabel(r)}
+                  </Pill>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-zk-border">
+            <table className="w-full text-[13px]">
+              <tbody>
+                {FIELD_ORDER.filter((k) => k !== "sex").map((k) => {
+                  const pf = ({ name_zh: "nameZh", name_en: "nameEn", hkid: "hkid", dob: "dateOfBirth", phone: "phone", address: "address", sex: "sex" } as const)[k];
+                  const c = row.fields[pf];
+                  return (
+                    <tr key={k} className="border-t border-zk-border first:border-t-0">
+                      <td className="p-2 text-zk-faint">{FIELD_LABEL[k]}</td>
+                      <td className="p-2">{CHECK_TEXT[c?.check ?? "missing"] ?? c?.check}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => setStep("review")}>返去修改</Button>
+            <Button variant="danger" disabled={busy} onClick={() => void onApply()} data-testid="ocr-apply">
+              {busy ? "套用緊…" : row.action === "create" ? "確認新增" : row.action === "link" ? "確認補充資料" : "確認（交俾待答問題處理）"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === "done" && (
+        <div className="space-y-3" data-testid="ocr-step-done">
+          {applyRes && (
+            <div className="rounded-lg border border-zk-border p-3 text-[13px]">
+              新增 {applyRes.guards_created} · 更新 {applyRes.guards_updated} · 電話 {applyRes.phones_added} · 地址 {applyRes.addresses_added}
+              {applyRes.results?.[0]?.reasons.length ? <div className="mt-1 text-orange-700">{applyRes.results[0].reasons.map(reasonLabel).join("、")}</div> : null}
+              {applyRes.triage?.owned_by_other ? <div className="mt-1">呢位已有同事跟進中。</div> : null}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" onClick={startOver}>再新增一位</Button>
+            <a href="/guards" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">返去保安員</a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

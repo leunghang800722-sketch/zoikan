@@ -267,9 +267,9 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
   return { person: p, action, guardId, reasons: [...new Set(reasons)], basis, candidates: d.candidates, hkidCanon, checks };
 }
 
-function evaluateAll(pkg: ImportPackage, ctx: DbCtx): Evaluation[] {
+function evaluateAll(pkg: ImportPackage, ctx: DbCtx, decisions?: Readonly<Record<string, PersonDecisions>>): Evaluation[] {
   const conflicts = packageConflicts(pkg.persons);
-  return pkg.persons.map((p) => evaluate(p, ctx, conflicts.get(p.key) ?? []));
+  return pkg.persons.map((p) => evaluate(p, ctx, conflicts.get(p.key) ?? [], decisions?.[p.key]));
 }
 
 // ---------------------------------------------------------------------------
@@ -321,9 +321,10 @@ export interface PreviewResult {
   rows: PreviewRow[];
 }
 
-export async function previewImport(pkg: ImportPackage): Promise<PreviewResult> {
+/** decisions（淨係單人證件包 preview 用）：令預覽同帶 decisions 嘅 apply 用同一套判斷（例如姓名已由用戶確認就唔再報 name_not_confirmed）。 */
+export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Record<string, PersonDecisions>>): Promise<PreviewResult> {
   const ctx = await loadCtx(prisma);
-  const evals = evaluateAll(pkg, ctx);
+  const evals = evaluateAll(pkg, ctx, decisions);
   const fieldStats = Object.fromEntries(["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"].map((f) => [f, { confirmed: 0, review: 0, missing: 0 }])) as PreviewResult["field_stats"];
   const personStats: Record<Action, number> = { link: 0, create: 0, conflict: 0, needs_review: 0 };
   const reviewFields = Object.fromEntries(["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"].map((f) => [f, 0])) as Record<PersonField, number>;
@@ -467,7 +468,7 @@ export interface ApplyOptions {
   /** true＝操作人冇「安員個人資料:view」：電話只准補空（安員已有電話就唔加），令寫入結果唔再反映「估啱電話」 */
   fillOnlyPii?: boolean;
   /** 寫 guards audit 時落 `after.import_via` 硬標記（預設 guard_import；分診傳 triage） */
-  via?: "guard_import" | "triage";
+  via?: "guard_import" | "triage" | "single_ocr";
   /** false＝操作人冇「安員:update」：唔准經導入覆蓋現有安員姓名（會 403）。undefined 當 true。 */
   canEditGuard?: boolean;
   /** false＝操作人冇「安員個人資料:update」：唔准覆蓋現有唔同嘅出生日期／地址（會 403）。undefined 當 true（內部呼叫）。 */
@@ -821,6 +822,7 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
       field_conflicts: acc.field_conflicts,
       overwrite_blocked: acc.overwrite_blocked,
       review_decisions: opts.decisions ? Object.keys(opts.decisions).length : 0,
+      ...(pkg.source ? { package_source: pkg.source } : {}),
     },
     ip: opts.ip,
   });

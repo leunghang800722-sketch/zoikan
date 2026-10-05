@@ -12,6 +12,8 @@ export function parsePackage(raw: unknown): ImportPackage {
     const i = r.error.issues[0];
     throw BadRequest(`導入包格式唔啱（${i ? i.path.join(".") : "unknown"}：${i?.code ?? "invalid"}）`);
   }
+  // WP-GUARD-OCR §29：單人包只准 1 人（獨立配額唔可以變批量導入嘅後門）
+  if (r.data.source === "single_ocr" && r.data.persons.length !== 1) throw BadRequest("單人證件包只可以有 1 個人");
   return r.data;
 }
 
@@ -44,6 +46,8 @@ export const applyBodySchema = z
     decisions: z.record(z.string().min(1).max(64), personDecisionSchema).optional(),
   })
   .strict();
+
+export const previewBodySchema = z.object({ package: z.unknown(), decisions: z.record(z.string().min(1).max(64), personDecisionSchema).optional() }).strict();
 
 const SNAKE_TO_FIELD: Record<string, PersonField> = { name_zh: "nameZh", name_en: "nameEn", date_of_birth: "dateOfBirth", phone: "phone", address: "address" };
 
