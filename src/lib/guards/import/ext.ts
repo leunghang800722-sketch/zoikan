@@ -164,16 +164,24 @@ export interface ContactIn {
   relationship: string | null;
   tel: string | null;
   status: FieldStatus;
+  /** 人手決定（confirm／replace）時寫嘅完整值（包括 review 欄） */
+  full: { name: string | null; relationship: string | null; tel: string | null };
 }
+/**
+ * 每位聯絡人：name 或 tel 至少一個 confirmed → status confirmed，自動寫入只寫 confirmed 嘅欄（review 欄留空唔寫）；
+ * 兩者都冇 confirmed → status review（出分診題，人手揀先寫完整值）。
+ */
 export function contactsOf(p: PackagePerson): ContactIn[] {
   const out: ContactIn[] = [];
   (p.emergencyContacts ?? []).forEach((c, i) => {
-    const name = fieldValue(c.name);
-    const relationship = fieldValue(c.relationship);
-    const tel = fieldValue(c.tel);
-    if (!name && !tel) return;
-    const sts = [c.name, c.relationship, c.tel].filter((l) => fieldValue(l)).map((l) => l.status);
-    out.push({ slot: (i + 1) as 1 | 2 | 3 | 4, name, relationship, tel, status: sts.includes("review") ? "review" : "confirmed" });
+    const full = { name: fieldValue(c.name), relationship: fieldValue(c.relationship), tel: fieldValue(c.tel) };
+    if (!full.name && !full.tel) return;
+    const conf = (l: { value: string | null; status: FieldStatus }) => (l.status === "confirmed" ? fieldValue(l) : null);
+    const cName = conf(c.name);
+    const cTel = conf(c.tel);
+    const slot = (i + 1) as 1 | 2 | 3 | 4;
+    if (cName || cTel) out.push({ slot, name: cName, relationship: conf(c.relationship), tel: cTel, status: "confirmed", full });
+    else out.push({ slot, ...full, status: "review", full });
   });
   return out;
 }

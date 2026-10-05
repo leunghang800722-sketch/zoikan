@@ -12,7 +12,9 @@ async function main() {
   const ext = JSON.parse(await fs.readFile(path.join(FIELDS, 'person-fields-ext.json'), 'utf8')) as ExtPerson[];
   let typed: TypedSources = {};
   try { typed = JSON.parse(await fs.readFile(path.join(FIELDS, 'typed-sources.json'), 'utf8')) as TypedSources; } catch { /* 容忍冇 */ }
-  const { pkg, counts } = buildPackageV3(v2, ext, typed);
+  const { pkg, counts, report } = buildPackageV3(v2, ext, typed);
+  // 未核實欄報告：只有內部 key＋欄位名＋reason，冇值
+  await fs.writeFile(path.join(FIELDS, 'unverified-report.json'), JSON.stringify(report));
   const out = path.join(FIELDS, 'import-package-v3.json');
   await fs.writeFile(out, JSON.stringify(pkg));
   console.log(JSON.stringify(counts));

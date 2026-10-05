@@ -7,7 +7,7 @@ import { importPackageSchemaV3, packagePersonSchema, unassignedBankAccountSchema
 
 type St = 'confirmed' | 'review' | 'missing';
 type Leaf = { value: string | null; status: St };
-interface ExtField { value?: string | null; status?: string; reasons?: string[] }
+interface ExtField { value?: string | null; status?: string; reasons?: string[]; sources?: string[] }
 export interface ExtPerson {
   key: string;
   keyKind?: string;
@@ -25,7 +25,12 @@ export interface TypedSources {
 
 const MISSING: Leaf = { value: null, status: 'missing' };
 const cleanNo = (s: string | null | undefined) => (s ?? '').toUpperCase().replace(/\s+/g, '') || null;
-const SKIP_REASON = 'handwritten_unverified';
+// 減題規則（主規劃 2026-10-05）：以下 reason 一律唔入包、唔出題，只入 unverified-report（內部 key＋欄名＋reason，冇值）
+const DROP_REASONS = ['handwritten_unverified', 'handwritten_date_ambiguous', 'permit_serial_unverified'];
+// review 狀態要「畫面上人可以直接決定」先入包出題
+const REVIEW_OK = ['staff_no_row_sources_disagree', 'linked_by_staff_no_only', 'filename_staff_no_shared', 'typed_row_hkid_conflict'];
+const isBankReason = (r: string) => r.startsWith('bank_') || r === 'pe_multiple_accounts' || r.endsWith('_differs');
+export interface UnverifiedRow { person: string; field: string; reason: string }
 
 export interface BuildCounts {
   persons_total: number;
@@ -36,6 +41,12 @@ export interface BuildCounts {
   unassigned_bank: number;
   unassigned_dropped: number;
   leaves_skipped_handwritten_unverified: number;
+  leaves_not_decidable_review: number;
+  bank_copy_only_skipped: number;
+  bank_review_pe_persons: number;
+  join_by_index: number;
+  join_fallback: number;
+  join_failed: number;
   leaves_dropped_invalid: number;
   identity_check_persons: number;
   typed_only_no_identity_skipped: number;
@@ -45,19 +56,42 @@ export interface BuildCounts {
 export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSources, now = new Date()) {
   const counts: BuildCounts = {
     persons_total: 0, persons_with_docs: 0, persons_typed_only: 0, ext_joined: 0, ext_not_joined_docs: 0, unassigned_bank: 0, unassigned_dropped: 0,
-    leaves_skipped_handwritten_unverified: 0, leaves_dropped_invalid: 0, identity_check_persons: 0, typed_only_no_identity_skipped: 0, by_field: {},
+    leaves_skipped_handwritten_unverified: 0, leaves_not_decidable_review: 0, bank_copy_only_skipped: 0, bank_review_pe_persons: 0, join_by_index: 0, join_fallback: 0, join_failed: 0, leaves_dropped_invalid: 0, identity_check_persons: 0, typed_only_no_identity_skipped: 0, by_field: {},
   };
   const tally = (name: string, l: Leaf) => {
     const c = (counts.by_field[name] ??= { confirmed: 0, review: 0, missing: 0 });
     c[l.status] += 1;
   };
 
-  const leafOf = (f: unknown): Leaf => {
+  const report: UnverifiedRow[] = [];
+  let curPerson = '';
+  type Kind = 'plain' | 'bank' | 'emergency';
+  const leafOf = (f: unknown, field = '?', kind: Kind = 'plain'): Leaf => {
     const x = f as ExtField | null | undefined;
-    if (!x || x.status === 'missing' || !x.value || (x.status !== 'confirmed' && x.status !== 'review')) return MISSING;
-    if (x.reasons?.includes(SKIP_REASON)) {
-      counts.leaves_skipped_handwritten_unverified += 1;
+    if (!x || x.status === 'missing' || (x.status !== 'confirmed' && x.status !== 'review')) return MISSING;
+    const reasons = x.reasons ?? [];
+    const drop = reasons.find((r) => DROP_REASONS.includes(r));
+    if (drop) {
+      if (x.value || x.status === 'review') {
+        counts.leaves_skipped_handwritten_unverified += 1;
+        report.push({ person: curPerson, field, reason: drop });
+      }
       return MISSING;
+    }
+    if (!x.value) {
+      if (x.status === 'review') {
+        counts.leaves_not_decidable_review += 1;
+        report.push({ person: curPerson, field, reason: reasons.find((r) => r === 'sources_disagree') ?? 'review_without_candidate' });
+      }
+      return MISSING;
+    }
+    if (x.status === 'review') {
+      const ok = kind === 'bank' ? reasons.some(isBankReason) : reasons.some((r) => REVIEW_OK.includes(r)) || (kind === 'emergency' && reasons.includes('sources_disagree'));
+      if (!ok) {
+        counts.leaves_not_decidable_review += 1;
+        report.push({ person: curPerson, field, reason: reasons.find((r) => !['typed_list_only'].includes(r)) ?? 'review_unspecified' });
+        return MISSING;
+      }
     }
     return { value: String(x.value), status: x.status };
   };
@@ -83,8 +117,8 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
   const extFields = (e: ExtPerson, staffNumbers: { scheme: string; number: string }[]) => {
     const F = (e.fields ?? {}) as Record<string, unknown>;
     const identityCheck = (e.flags ?? []).some((f) => f.startsWith('possible_duplicate_of:')) || (F.staffNoCheck as { status?: string } | undefined)?.status === 'mismatch';
-    const L = (name: string, f: unknown): Leaf => {
-      let l = leafOf(f);
+    const L = (name: string, f: unknown, kind: Kind = 'plain'): Leaf => {
+      let l = leafOf(f, name, kind);
       if (identityCheck && l.status === 'confirmed') l = { ...l, status: 'review' };
       tally(name, l);
       return l;
@@ -96,20 +130,30 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
     out.qas = { issueDate: L('qas.issueDate', F.qasIssueDate), expiryDate: L('qas.expiryDate', F.qasExpiryDate) };
     out.hireDate = L('hireDate', F.hireDate);
     // 銀行
-    const code = leafOf(F.bankCode);
-    const okCode = code.value && HKICL_BANK_CODE_SET.has(code.value.padStart(3, '0')) ? { ...code, value: code.value.padStart(3, '0') } : MISSING;
-    let name = leafOf(F.bankName);
+    // 銀行只收 Payroll Editor 來源；淨係銀行卡／存摺副本（bank_copy_only）唔入包、唔出題
+    const peSourced = ['bankAccountNo', 'bankCode', 'bankPayeeName'].some((k) => ((F[k] as ExtField | undefined)?.sources ?? []).includes('typed_pe'));
+    const hasCopyOnly = ['bankAccountNo'].some((k) => ((F[k] as ExtField | undefined)?.reasons ?? []).includes('bank_copy_only'));
+    if (!peSourced && hasCopyOnly) counts.bank_copy_only_skipped += 1;
+    const B = (k: string) => (peSourced ? leafOf(F[k], `bank.${k}`, 'bank') : MISSING);
+    const code = B('bankCode');
+    const rawCode = peSourced ? ((F.bankCode as ExtField | undefined)?.value ?? null) : null;
+    const codeBad = !!rawCode && !HKICL_BANK_CODE_SET.has(String(rawCode).padStart(3, '0'));
+    const okCode = code.value && !codeBad ? { ...code, value: code.value.padStart(3, '0') } : MISSING;
+    let name = B('bankName');
     if (okCode.value && !name.value) name = { value: HKICL_BANK_OPTIONS.find((b) => b.code === okCode.value)?.nameZhShort ?? null, status: okCode.status };
-    const bank = { code: okCode, name, accountNo: leafOf(F.bankAccountNo), payeeName: leafOf(F.bankPayeeName) };
+    const bank = { code: okCode, name, accountNo: B('bankAccountNo'), payeeName: B('bankPayeeName') };
+    // 銀行編號唔喺 HKICL 表：戶口照入包，但降 review（出 bank_review 俾人決定）
+    if (codeBad && bank.accountNo.value) bank.accountNo = { ...bank.accountNo, status: 'review' };
+    if (bank.accountNo.value && Object.values(bank).some((l) => l.status === 'review')) counts.bank_review_pe_persons += 1;
     for (const k of Object.keys(bank) as (keyof typeof bank)[]) if (identityCheck && bank[k].status === 'confirmed') bank[k] = { ...bank[k], status: 'review' };
     out.bank = bank;
     tally('bank', bank.accountNo);
-    const bankReasons = [...new Set(['bankAccountNo', 'bankCode', 'bankPayeeName'].flatMap((k) => ((F[k] as ExtField | undefined)?.reasons ?? []).filter((r) => r.startsWith('bank_') || r.endsWith('_differs') || r === 'maxwell_payee_differs')))];
+    const bankReasons = !peSourced ? [] : [...new Set(['bankAccountNo', 'bankCode', 'bankPayeeName'].flatMap((k) => ((F[k] as ExtField | undefined)?.reasons ?? []).filter((r) => r.startsWith('bank_') || r.endsWith('_differs') || r === 'maxwell_payee_differs' || r === 'pe_multiple_accounts')))];
     // 緊急聯絡人：新格式 emergencyContacts[]（≤4），舊格式 emergency1/2Name…
     const arr = Array.isArray(F.emergencyContacts) ? (F.emergencyContacts as Record<string, unknown>[]) : [1, 2].map((i) => ({ name: F[`emergency${i}Name`], relationship: F[`emergency${i}Relationship`], tel: F[`emergency${i}Tel`] }));
     out.emergencyContacts = arr
       .slice(0, 4)
-      .map((c, i) => ({ name: L(`emergency.${i + 1}.name`, c.name), relationship: L(`emergency.${i + 1}.relationship`, c.relationship), tel: L(`emergency.${i + 1}.tel`, c.tel) }))
+      .map((c, i) => ({ name: L(`emergency.${i + 1}.name`, c.name, 'emergency'), relationship: L(`emergency.${i + 1}.relationship`, c.relationship, 'emergency'), tel: L(`emergency.${i + 1}.tel`, c.tel, 'emergency') }))
       .filter((c) => c.name.value || c.tel.value);
     // 逐工號入職日期
     const hires = new Map<string, Leaf>();
@@ -148,13 +192,31 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
   };
 
   const persons: Record<string, unknown>[] = [];
-  for (const p of v2.persons) {
-    const e = extFor(p);
+  // join：v2 包由 person-fields.json 逐個 map 出嚟，ext 有文件嗰批同一次序（docIds 一致）→ 先按次序 join，
+  // 有 hkid 兩邊都有時要一致先認；否則退回 hkid／工號 join。
+  const docsExt = ext.filter((e) => e.hasDocs === true);
+  const byIndex = docsExt.length === v2.persons.length;
+  for (const [pi, p] of v2.persons.entries()) {
+    let e: ExtPerson | null = null;
+    if (byIndex) {
+      const cand = docsExt[pi]!;
+      const h = canonicalHkid(p.hkid.value ?? '');
+      if (!h || cand.keyKind !== 'hkid' || canonicalHkid(cand.key) === h) {
+        e = cand;
+        counts.join_by_index += 1;
+      }
+    }
+    if (!e) {
+      e = extFor(p);
+      if (e) counts.join_fallback += 1;
+      else counts.join_failed += 1;
+    }
+    curPerson = p.key;
     const base: Record<string, unknown> = { ...p };
     delete base.conflicts;
     const conflicts = (p as { conflicts?: string[] }).conflicts;
     if (!e) {
-      counts.ext_not_joined_docs += 1;
+      counts.ext_not_joined_docs += 1; // join_failed
       persons.push(sanitize({ ...p, ...(conflicts ? { conflicts } : {}) }));
       continue;
     }
@@ -174,9 +236,10 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
     if (used.has(e)) continue;
     if (e.key.startsWith('pe:') || (e.flags ?? []).includes('payroll_editor_only_person')) {
       const F = (e.fields ?? {}) as Record<string, unknown>;
-      const code = leafOf(F.bankCode).value?.padStart(3, '0') ?? '';
-      const acct = leafOf(F.bankAccountNo).value ?? '';
-      const payee = leafOf(F.bankPayeeName).value ?? '';
+      curPerson = e.key;
+      const code = leafOf(F.bankCode, 'bank.bankCode', 'bank').value?.padStart(3, '0') ?? '';
+      const acct = leafOf(F.bankAccountNo, 'bank.bankAccountNo', 'bank').value ?? '';
+      const payee = leafOf(F.bankPayeeName, 'bank.bankPayeeName', 'bank').value ?? '';
       const cand = { key: e.key.slice(0, 64), bankCode: code, accountNo: acct, payeeName: payee };
       if (unassignedBankAccountSchema.safeParse(cand).success) {
         unassigned.push(cand);
@@ -200,10 +263,12 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       const m = /^([A-Z]{1,4})\d[0-9A-Z-]{0,15}$/.exec(n);
       return m ? [{ scheme: m[1]!, number: n }] : [];
     });
+    const newKey = randomUUID();
+    curPerson = newKey;
     const x = extFields(e, staffNumbers);
     // 打字名單唔係身份來源（§26.2）：hkid／姓名一律 review，唔會用嚟自動建人；只用嚟 link 現有安員
     const person = {
-      key: randomUUID(),
+      key: newKey,
       hkid: hk ? { value: hk, status: 'review' as St } : MISSING,
       nameZh: row?.nameZh ? { value: row.nameZh, status: 'review' as St } : MISSING,
       nameEn: row?.nameEn ? { value: row.nameEn, status: 'review' as St } : MISSING,
@@ -220,5 +285,5 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
   counts.persons_total = persons.length;
   const pkg = { version: 3 as const, generatedAt: now.toISOString(), persons, ...(unassigned.length ? { unassignedBankAccounts: unassigned } : {}) };
   const parsed = importPackageSchemaV3.parse(pkg);
-  return { pkg: parsed, counts };
+  return { pkg: parsed, counts, report };
 }

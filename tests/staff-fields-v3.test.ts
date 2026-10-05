@@ -372,6 +372,23 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect((await prisma.guard.findUniqueOrThrow({ where: { id: g0.id } })).safetyCardNo).toBe("ABC1234");
     });
 
+    it("只自動寫 name 或 tel 至少一個 confirmed 嘅聯絡人；未 confirmed 嘅欄留空；全 review 嘅聯絡人唔自動寫、出題", async () => {
+      const p = person({ contacts: [{ name: "測試聯絡人甲", rel: "朋友", tel: "91000011" }, { name: "測試聯絡人乙", rel: "家人", tel: "91000012" }] });
+      const raw = p as unknown as { emergencyContacts: { name: { status: string }; relationship: { status: string }; tel: { status: string } }[] };
+      raw.emergencyContacts[0]!.relationship.status = "review"; // 關係未確認
+      raw.emergencyContacts[1]!.name.status = "review";
+      raw.emergencyContacts[1]!.tel.status = "review"; // 全 review
+      const g0 = await prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", hkid: H[0]!, createdBy: "t" } });
+      const r = await applyPkg(owner, pkg3([p]));
+      expect(outs(r.body.results[0].ext)).toEqual({ "emergency.1": "written", "emergency.2": "not_confirmed" });
+      const cs = await prisma.guardEmergencyContact.findMany({ where: { guardId: g0.id } });
+      expect(cs.map((c) => [c.name, c.relationship, c.tel])).toEqual([["測試聯絡人甲", null, "91000011"]]);
+    });
+
+    it("許可證號碼：有序號同冇序號兩種格式都接受", () => {
+      for (const no of ["K-200001-1-001", "K-200001-1"]) expect(importPackageSchema.safeParse(pkg3([person({ sia: { no, a: "2027-03-04", b: null } })])).success).toBe(true);
+    });
+
     it("包內兩位聯絡人同名同電話只加一次", async () => {
       await applyPkg(owner, pkg3([person({ contacts: [{ name: "測試聯絡人甲", tel: "91000011" }, { name: "測試聯絡人甲", tel: "91000011" }] })]));
       expect(await prisma.guardEmergencyContact.count()).toBe(1);

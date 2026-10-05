@@ -163,7 +163,12 @@ export async function applyExtRelations(
       outcomes[key] = "not_confirmed";
       continue;
     }
-    const row = { name: c.name, tel: c.tel };
+    // 人手決定（confirm／replace）寫完整值；自動寫入只寫 confirmed 嘅欄
+    const useFull = d === "confirm" || d === "replace";
+    const wName = useFull ? c.full.name : c.name;
+    const wTel = useFull ? c.full.tel : c.tel;
+    const wRel = useFull ? c.full.relationship : c.relationship;
+    const row = { name: wName, tel: wTel };
     // 同一個聯絡人欄位值衝突（同電話唔同名／同名唔同電話）：人手揀 confirm／replace＝加為另一位（要個人資料 update 權；先查權限，唔理新值同現值）
     const partial = existing.some((x) => partialContact(x, row));
     if ((d === "confirm" || d === "replace") && partial && caps.canOverwritePii === false) deny(PII_OVERWRITE_DENIED_MSG);
@@ -179,7 +184,7 @@ export async function applyExtRelations(
       outcomes[key] = "conflict"; // 冇 PII view：已有聯絡人就唔加（projection 之後同 same 睇落一樣）
       continue;
     }
-    const created = await createGuardEmergencyContact(tx, { guardId, name: c.name, tel: c.tel, relationship: c.relationship, source: "staff_fields_import", createdBy: actorUserId });
+    const created = await createGuardEmergencyContact(tx, { guardId, name: wName, tel: wTel, relationship: wRel, source: "staff_fields_import", createdBy: actorUserId });
     await audit({ tableName: "guard_emergency_contacts", rowId: created.id, action: "create", after: created });
     added.push(row);
     contactsAdded += 1;
