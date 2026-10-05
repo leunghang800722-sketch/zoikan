@@ -13,22 +13,27 @@
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { hasPermission } from "@/lib/rbac/requirePermission";
+import { isGuardOcrConfigured } from "@/lib/guards/ocr/config";
 import { GuardsClient } from "./GuardsClient";
 
 export default async function GuardsPage() {
   const session = await getCurrentSession();
   if (!session) redirect("/login");
-  const [canUpdateSettlement, canUpdatePii, canUpdateBank] = await Promise.all([
+  const [canUpdateSettlement, canUpdatePii, canUpdateBank, ocrCreate, ocrApply] = await Promise.all([
     hasPermission(session, "出街價", "update"),
     hasPermission(session, "安員個人資料", "update"),
     hasPermission(session, "安員銀行資料", "update"),
+    hasPermission(session, "安員批量導入", "create"),
+    hasPermission(session, "安員批量導入", "update"),
   ]);
+  const canOcr = isGuardOcrConfigured() && ocrCreate && ocrApply;
   return (
     <GuardsClient
       isBroker={session.baseRole === "雞頭"}
       canUpdateSettlement={canUpdateSettlement}
       canUpdatePii={canUpdatePii}
       canUpdateBank={canUpdateBank}
+      canOcr={canOcr}
     />
   );
 }

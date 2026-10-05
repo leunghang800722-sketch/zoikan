@@ -148,3 +148,9 @@ body {
 .nosb {
   scrollbar-width: none;
 }
+
+/* WP-GUARD-OCR §29：「用證件新增」核對頁要 sticky 證件圖。<main> 本身 overflow-x:auto 會令 sticky 唔生效
+   （main 變成 scroll container 但自己唔捲）；只喺有 data-sticky-page 嘅頁面放開，唔影響其他頁。 */
+main:has([data-sticky-page]) {
+  overflow: visible;
+}

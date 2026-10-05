@@ -51,6 +51,8 @@ export const importPackageSchema = z
   .object({
     version: z.literal(2),
     generatedAt: z.string().max(40),
+    /** WP-GUARD-OCR §29：`single_ocr`＝瀏覽器單人證件辨識包（淨係 1 人、獨立配額、audit/import_via 標記）。冇＝本機批量包。 */
+    source: z.enum(["single_ocr"]).optional(),
     persons: z.array(packagePersonSchema).max(5000),
   })
   .strict();
