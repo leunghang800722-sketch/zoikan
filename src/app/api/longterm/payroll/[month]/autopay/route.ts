@@ -41,6 +41,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
     const isPreview = sp.get("preview") === "1";
     const lockedMonth = !!(await prisma.monthClose.findUnique({ where: { month }, select: { lockedAt: true } }))?.lockedAt;
     const confirmedLocked = sp.get("confirm_locked") === "1";
+    if (lockedMonth && !isPreview && !confirmedLocked) {
+      await writeAudit({
+        actorUserId: session.userId,
+        tableName: "longterm_payroll_runs",
+        rowId: `bochk-autopay:${result.month}`,
+        action: "export_download_blocked",
+        after: { month: result.month, reason: "locked_month_not_confirmed" },
+        ip: getClientIp(req),
+      });
+    }
     if (lockedMonth && !isPreview && !confirmedLocked) throw BadRequest(`${LOCKED_MONTH_WARNING}（下載要加 confirm_locked=1）`);
     await writeAudit({
       actorUserId: session.userId,

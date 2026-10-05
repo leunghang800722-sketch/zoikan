@@ -1,6 +1,6 @@
 // WP-STAFF-FIELDS 第二階段：由 v2 導入包（327 人）＋ person-fields-ext.json ＋ typed-sources.json 砌 v3 包。
 // 純函數（唔讀檔、唔印值）；輸入容忍欄位唔存在／舊格式。console 只准印計數（見 17-build-package-v3.ts）。
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { HKICL_BANK_CODE_SET, HKICL_BANK_OPTIONS } from '@/lib/longterm-payroll/hkicl-bank-codes';
 import { canonicalHkid } from '@/lib/guards/identity';
 import { importPackageSchemaV3, packagePersonSchema, unassignedBankAccountSchema } from '@/lib/guards/import/package';
@@ -290,7 +290,8 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       const m = /^([A-Z]{1,4})\d[0-9A-Z-]{0,15}$/.exec(n);
       return m ? [{ scheme: m[1]!, number: n }] : [];
     });
-    const newKey = randomUUID();
+    // 確定性 key（跨 build 穩定，令跨 session 去重認得）：來源檔類別＋身份證／工號
+    const newKey = `typed:${createHash('sha256').update(`typed_list|${hk ?? nos[0] ?? e.key}`).digest('hex').slice(0, 12)}`;
     curPerson = newKey;
     const x = extFields(e, staffNumbers);
     // 打字名單唔係身份來源（§26.2）：hkid／姓名一律 review，唔會用嚟自動建人；只用嚟 link 現有安員

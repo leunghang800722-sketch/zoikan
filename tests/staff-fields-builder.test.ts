@@ -89,10 +89,11 @@ describe("v3 builder", () => {
     // 冇 docIds 可核對 → 唔做次序 join
     const c = buildPackageV3(v2, ext.slice(0, 2), {});
     expect(c.counts.join_by_index).toBe(0);
-    // 同一份 ext 唔可以用兩次（重複 key）
-    const dup = buildPackageV3({ ...v2, persons: [v2.persons[0]!, { ...v2.persons[1]!, hkid: v2.persons[0]!.hkid }] }, [ext[0]!, { ...ext[0]!, docIds: ["d2"] }], {}, { v2DocIds: [["d1"], ["d2"]] });
-    expect(dup.counts.join_by_index + dup.counts.join_fallback).toBeLessThanOrEqual(2);
-    expect(dup.pkg.persons.filter((p) => p.siaPermit).length).toBeLessThanOrEqual(2);
+    // 同一份 ext 唔可以用兩次（重複 key）：兩個 v2 人同 hkid，只有一份 ext → key join 下第二個 join_failed，新欄只出現喺一個人
+    const twin = { ...v2.persons[1]!, hkid: v2.persons[0]!.hkid, staffNumbers: [] };
+    const dup = buildPackageV3({ ...v2, persons: [v2.persons[0]!, twin] }, [ext[0]!], {});
+    expect(dup.counts.join_failed).toBe(1);
+    expect(dup.pkg.persons.filter((p) => p.siaPermit).length).toBe(1);
   });
   it("輸出檔缺欄位／冇 typed-sources 都唔爆", () => {
     const { pkg } = buildPackageV3(v2, [{ key: HA, hasDocs: true }], {});

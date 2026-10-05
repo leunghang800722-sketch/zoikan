@@ -9,8 +9,17 @@
 import { normZh, normTel8, sameNameStrict } from "./text";
 import { fieldValue, type FieldStatus, type PackagePerson } from "./package";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
+import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 
-export type ExtDecision = "confirm" | "replace" | "skip";
+/** confirm_id＝「身份確認」（ext_identity_check 照寫入）：只繞過身份／銀行閘，唔繞過長工入職日期閘（N4） */
+export type ExtDecision = "confirm" | "replace" | "skip" | "confirm_id";
+export const isGoDecision = (d: string | undefined): boolean => d === "confirm" || d === "replace" || d === "confirm_id";
+/** 人手決定係咪繞過呢種 hold */
+export const bypassesHold = (d: string | undefined, held: ExtHeld | readonly ExtHeld[] | null): boolean => {
+  const hs = held === null ? [] : Array.isArray(held) ? (held as readonly ExtHeld[]) : [held as ExtHeld];
+  if (hs.length === 0 || d === "confirm" || d === "replace") return true;
+  return d === "confirm_id" && hs.every((h) => h === "identity" || h === "bank");
+};
 export type ExtDecisions = Readonly<Record<string, ExtDecision>>;
 
 export type ExtCheck = "new" | "fill" | "add" | "same" | "differs" | "taken" | "not_stored" | "hidden";
@@ -60,6 +69,14 @@ export function extGateFor(args: { p: PackagePerson; guard: { hkid: string | nul
     return { scalars: false, bank: false, longtermHire };
   }
   return { scalars: true, bank: hkidSame && p.hkid.status === "confirmed", longtermHire };
+}
+/** 呢個 key 喺閘之下所有 hold 原因（身份閘同長工入職日期閘可以同時成立：N4）。 */
+export function heldAll(gate: ExtGate, key: string): ExtHeld[] {
+  const out: ExtHeld[] = [];
+  if (!gate.scalars) out.push("identity");
+  if (key === "bank" && !gate.bank) out.push("bank");
+  if (key === "hireDate" && gate.longtermHire) out.push("longterm");
+  return out;
 }
 /** 呢個 key 喺閘之下係咪要 hold（冇人手決定先）。 */
 export function heldBy(gate: ExtGate, key: string): ExtHeld | null {
@@ -191,6 +208,32 @@ export const SCALARS: readonly ScalarSpec[] = [
 ];
 export const scalarEqual = (kind: "no" | "date", a: string | null, b: string | null): boolean => (kind === "no" ? normNo(a) === normNo(b) : a === b);
 
+/** 銀行四欄（編號、戶口、收款人、名稱〔可由 HKICL 編號推出〕）齊全先可以寫入。 */
+export function bankComplete(p: PackagePerson): boolean {
+  const b = bankLeaves(p);
+  if (!b || !b.code || !b.accountNo || !b.payee) return false;
+  return !!(b.name || HKICL_BANK_OPTIONS.some((o) => o.code === b.code!.padStart(3, "0")));
+}
+
+/** 包內某個 ext key 嘅 {值,狀態}（跨 session 去重用：值或狀態改咗＝新題）。 */
+export function extValueSig(p: PackagePerson, key: string): unknown {
+  const sc = SCALARS.find((s) => s.key === key);
+  if (sc) {
+    const l = sc.get(p);
+    return l ? [l.value ?? null, l.status] : null;
+  }
+  if (key === "bank") return p.bank ? [p.bank.code, p.bank.name, p.bank.accountNo, p.bank.payeeName].map((l) => [l.value ?? null, l.status]) : null;
+  if (key.startsWith("emergency.")) {
+    const c = p.emergencyContacts?.[Number(key.slice("emergency.".length)) - 1];
+    return c ? [c.name, c.relationship, c.tel].map((l) => [l.value ?? null, l.status]) : null;
+  }
+  if (key.startsWith("staffHire.")) {
+    const h = staffHiresOf(p).find((x) => `staffHire.${x.number}` === key);
+    return h ? [h.value, h.status] : null;
+  }
+  return null;
+}
+
 /** 包內有值嘅銀行欄（fieldValue 已處理 missing）。 */
 export function bankLeaves(p: PackagePerson): { code: string | null; name: string | null; accountNo: string | null; payee: string | null; status: FieldStatus } | null {
   if (!p.bank) return null;
@@ -270,7 +313,8 @@ export interface EvalOpts {
 export function evaluateExt(p: PackagePerson, snap: GuardExtSnap | null, opts: EvalOpts = {}): ExtItem[] {
   const gate = opts.gate ?? OPEN_GATE;
   return evaluateExtRaw(p, snap, opts).map((i) => {
-    const held = i.key.startsWith("staffHire.") ? (gate.scalars ? null : "identity") : heldBy(gate, i.key);
+    const all = i.key.startsWith("staffHire.") ? (gate.scalars ? [] : (["identity"] as ExtHeld[])) : heldAll(gate, i.key);
+    const held = all.includes("longterm") && gate.scalars ? "longterm" : all[0] ?? null;
     return held && i.check !== "not_stored" ? { ...i, held } : i;
   });
 }

@@ -11,6 +11,7 @@ import type { ImportPackage } from "@/lib/guards/import/package";
 import { createHash } from "node:crypto";
 import { draftGuardImportQuestions } from "./generators/guard-import";
 import type { QuestionEvidence } from "./types";
+import { extValueSig } from "@/lib/guards/import/ext";
 import { SUPPLEMENTARY_KINDS } from "./types";
 import { hasPermission } from "@/lib/rbac/requirePermission";
 
@@ -106,7 +107,9 @@ export function evidenceCore(kind: string, ev: QuestionEvidence): string {
     cands: [...ev.candidate_guard_ids].sort(),
     review: (ev.review_fields ?? []).map((r) => r.field).sort(),
     ext: (ev.ext_review ?? []).map((r) => r.key).sort(),
-    unassigned: ev.unassigned ? { bankCode: ev.unassigned.bankCode, accountNo: ev.unassigned.accountNo } : null,
+    // N2：ext／bank 類題另加涉及欄位嘅值＋狀態（跳過後新包將值改正→要再問；值冇變→唔再問）。v2 類題唔計
+    extVals: /^(ext_|bank_)/.test(kind) ? (ev.ext_review ?? []).map((r) => [r.key, extValueSig(ev.person, r.key)]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))) : null,
+    unassigned: ev.unassigned ? { bankCode: ev.unassigned.bankCode, accountNo: ev.unassigned.accountNo, payeeName: ev.unassigned.payeeName } : null,
     guard: ev.guard_id ?? null,
   };
   return createHash("sha1").update(JSON.stringify(core)).digest("hex");

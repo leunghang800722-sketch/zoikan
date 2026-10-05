@@ -147,7 +147,7 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       if (q.kind !== "ext_identity_check") throw BadRequest("呢個選項唔屬於呢條問題");
       // 人手確認咗身份：包內 review 嘅新欄當 confirmed（仍然只補空欄，現值唔同＝conflict 唔覆蓋）
       const ext: Record<string, ExtDecision> = {};
-      for (const r of q.evidence.ext_review ?? []) ext[r.key] = "confirm";
+      for (const r of q.evidence.ext_review ?? []) ext[r.key] = "confirm_id"; // 只繞過身份／銀行閘，唔繞過長工入職日期閘
       dec.ext = ext;
       if (q.evidence.guard_id) forced = { mode: "link", guardId: q.evidence.guard_id };
       break;

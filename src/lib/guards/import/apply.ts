@@ -68,12 +68,17 @@ interface GuardSnap {
 interface DbCtx {
   index: DbIndex;
   byId: Map<string, GuardSnap>;
-  /** 戶口（銀行編號＋戶口數字）→ 用緊嘅 guard id（預覽用；寫入時再喺 transaction 內鎖＋查 DB） */
-  acctOwners: Map<string, string[]>;
+  /** 戶口數字 → 用緊嘅 guard（連銀行編號；預覽用，同寫入一樣按「銀行編號＋戶口數字」比；寫入時再喺 transaction 內鎖＋查 DB） */
+  acctOwners: Map<string, { id: string; code: string | null }[]>;
 }
-const acctKey = (code: string | null | undefined, acct: string | null | undefined): string | null => {
+const acctDigits = (acct: string | null | undefined): string | null => {
   const d = (acct ?? "").replace(/\D/g, "");
   return d ? d : null;
+};
+/** 同 acctTakenByOther 同一規則：其中一邊冇銀行編號當唔排除；兩邊都有就要一樣 */
+const acctTakenInCtx = (ctx: DbCtx, code: string | null, acct: string, selfId: string | null): boolean => {
+  const c = code ? code.padStart(3, "0") : "";
+  return (ctx.acctOwners.get(acctDigits(acct) ?? "") ?? []).some((o) => o.id !== selfId && (!c || !o.code || o.code.padStart(3, "0") === c));
 };
 
 async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
@@ -116,10 +121,10 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
   for (const a of addrs) addrBy.set(a.guardId, [...(addrBy.get(a.guardId) ?? []), a.address]);
 
   const contractSet = new Set(contractRows.map((c) => c.guardId));
-  const acctOwners = new Map<string, string[]>();
+  const acctOwners = new Map<string, { id: string; code: string | null }[]>();
   for (const g of guards) {
-    const k = acctKey(g.bankCode, g.bankAccountNo);
-    if (k) acctOwners.set(k, [...(acctOwners.get(k) ?? []), g.id]);
+    const k = acctDigits(g.bankAccountNo);
+    if (k) acctOwners.set(k, [...(acctOwners.get(k) ?? []), { id: g.id, code: g.bankCode }]);
   }
   const byId = new Map<string, GuardSnap>();
   const dbGuards: DbGuard[] = guards.map((g) => {
@@ -326,10 +331,10 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
   const linked = action === "link" && g ? g : null;
   const gate = extGateFor({ p, guard: linked ? { hkid: linked.hkid, nameZh: linked.nameZh, longterm: linked.ext.longterm } : null, hkidCanon, piiView });
   const bl = bankLeaves(p);
-  const takenBy = bl?.accountNo ? (ctx.acctOwners.get(acctKey(bl.code, bl.accountNo) ?? "") ?? []) : [];
+
   const ext = evaluateExt(p, linked ? linked.ext : null, {
     gate,
-    bankTaken: takenBy.some((id) => id !== linked?.id),
+    bankTaken: !!bl?.accountNo && acctTakenInCtx(ctx, bl.code, bl.accountNo, linked?.id ?? null),
     ownerOf: (n) => ctx.index.byNo.get(n)?.[0]?.id ?? null,
     guardId: linked?.id ?? null,
   });
@@ -524,16 +529,18 @@ export interface PersonResult {
   /** WP-STAFF-FIELDS：新欄逐欄結果（冇新欄就唔出） */
   ext?: ExtOutcomeRow[];
   contacts_added?: number;
+  hold_overrides?: number;
 }
 
 /** 新欄結果：按 key 攞 outcome（內部用；response 一律用陣列，因為動態 key 會被 snake_case 轉換）。 */
 export const extOutcomeOf = (r: Pick<PersonResult, "ext">, key: string): ExtOutcome | undefined => r.ext?.find((x) => x.key === key)?.outcome;
 
 /** 由逐人結果彙總新欄寫入／衝突（單一彙總函數：未遮罩同 projection 之後都由 results 重新計）。冇新欄結果＝空物件。 */
-export function summarizeExt(results: readonly PersonResult[]): Pick<ApplyResult, "ext_written" | "ext_conflicts" | "contacts_added"> {
+export function summarizeExt(results: readonly PersonResult[]): Pick<ApplyResult, "ext_written" | "ext_conflicts" | "contacts_added" | "hold_overrides"> {
   const written: Record<string, number> = {};
   let conflicts = 0;
   let contacts = 0;
+  let holds = 0;
   let any = false;
   for (const r of results) {
     if (!r.ext) continue;
@@ -544,9 +551,10 @@ export function summarizeExt(results: readonly PersonResult[]): Pick<ApplyResult
       if (o === "conflict") conflicts += 1;
     }
     contacts += r.contacts_added ?? 0;
+    holds += r.hold_overrides ?? 0;
   }
   return any
-    ? { ext_written: Object.entries(written).map(([key, count]) => ({ key, count })).sort((a, b) => a.key.localeCompare(b.key)), ext_conflicts: conflicts, contacts_added: contacts }
+    ? { ext_written: Object.entries(written).map(([key, count]) => ({ key, count })).sort((a, b) => a.key.localeCompare(b.key)), ext_conflicts: conflicts, contacts_added: contacts, ...(holds ? { hold_overrides: holds } : {}) }
     : {};
 }
 
@@ -567,6 +575,7 @@ export interface ApplyResult {
   ext_written?: { key: string; count: number }[];
   contacts_added?: number;
   ext_conflicts?: number;
+  hold_overrides?: number;
   results: PersonResult[];
 }
 
@@ -601,6 +610,8 @@ export interface ApplyOptions {
   autoKeepPendingName?: boolean;
   /** false＝操作人冇「安員銀行資料:update」：銀行欄一律唔寫（outcome not_written）。undefined 當 true（內部呼叫）。 */
   canEditBank?: boolean;
+  /** 內部：呢個人有 hold 被人手 decision 繞過 → guards audit 加 hold_override:true（冇值） */
+  holdOverride?: boolean;
   /** 淨係處理呢啲 key（冇＝全部） */
   personKeys?: readonly string[];
   /** 覆核頁逐人逐欄決定 */
@@ -650,7 +661,7 @@ const extCaps = (opts: ApplyOptions) => ({ canEditGuard: opts.canEditGuard, canO
 async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writeAuditTx>[1]): Promise<void> {
   opts.collect?.push({ table: input.tableName, action: input.action, rowId: input.rowId, before: input.before ?? null, after: input.after ?? null });
   // 硬標記只落 guards（create／update）after：DTO mapper 之外經 AUDIT_META_PASSTHROUGH_KEYS 保留；非 PII
-  const marked = input.tableName === "guards" && input.after && typeof input.after === "object" ? { ...input, after: { ...(input.after as object), import_via: opts.via ?? "guard_import" } } : input;
+  const marked = input.tableName === "guards" && input.after && typeof input.after === "object" ? { ...input, after: { ...(input.after as object), import_via: opts.via ?? "guard_import", ...(opts.holdOverride ? { hold_override: true } : {}) } } : input;
   await writeAuditTx(tx, marked);
 }
 
@@ -679,7 +690,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
   let guardId: string;
   let g: GuardSnap | null = null;
   const review = new Set<string>();
-  let extPlan: ReturnType<typeof planExtColumns> = { data: {}, outcomes: {}, reasons: [] };
+  let extPlan: ReturnType<typeof planExtColumns> = { data: {}, outcomes: {}, reasons: [], overrides: 0 };
   let bankTaken = false;
 
   if (ev.action === "create") {
@@ -706,7 +717,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     };
     applyDerivedPermit(createData as Prisma.GuardUncheckedUpdateInput, null);
     const created = await tx.guard.create({ data: createData });
-    await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: opts.ip });
+    await auditTx(tx, extPlan.overrides > 0 ? { ...opts, holdOverride: true } : opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: opts.ip });
     guardId = created.id;
     res.outcome = "created";
     acc.guards_created += 1;
@@ -774,7 +785,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     if (Object.keys(data).length > 0) {
       const before = await tx.guard.findUniqueOrThrow({ where: { id: g.id } });
       const after = await tx.guard.update({ where: { id: g.id }, data });
-      await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: g.id, action: "update", before, after, ip: opts.ip });
+      await auditTx(tx, extPlan.overrides > 0 ? { ...opts, holdOverride: true } : opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: g.id, action: "update", before, after, ip: opts.ip });
       acc.guards_updated += 1;
     }
   }
@@ -826,6 +837,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
   const extOutcomes = { ...extPlan.outcomes, ...rel.outcomes };
   if (Object.keys(extOutcomes).length > 0) res.ext = Object.entries(extOutcomes).map(([key, outcome]) => ({ key, outcome }));
   if (rel.contactsAdded > 0) res.contacts_added = rel.contactsAdded;
+  if (extPlan.overrides + rel.overrides > 0) res.hold_overrides = extPlan.overrides + rel.overrides;
 
   // --- 電話（confirmed／已決定；全表唯一） ---
   if (phoneW === "skip") bump("phone", "skipped");
@@ -966,7 +978,7 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
     action: "guard_import_apply",
     after: {
       // 唔放 ext_conflicts：衝突數等於「同現值唔同」嘅 oracle，而 audit 讀者可能冇對應 view
-      ...(acc.ext_written ? { ext_written: acc.ext_written, contacts_added: acc.contacts_added ?? 0 } : {}),
+      ...(acc.ext_written ? { ext_written: acc.ext_written, contacts_added: acc.contacts_added ?? 0, ...(acc.hold_overrides ? { hold_overrides: acc.hold_overrides } : {}) } : {}),
       persons: acc.persons_total,
       outcomes: acc.outcomes,
       guards_created: acc.guards_created,

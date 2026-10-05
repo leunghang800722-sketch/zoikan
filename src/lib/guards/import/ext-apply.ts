@@ -12,8 +12,10 @@ import {
   EMPTY_BANK,
   OPEN_GATE,
   PII_OVERWRITE_DENIED_MSG,
+  bypassesHold,
+  isGoDecision,
   digits,
-  heldBy,
+  heldAll,
   type ExtGate,
   SCALARS,
   bankCompare,
@@ -47,12 +49,14 @@ const deny = (msg: string): never => {
   throw new ApiError(403, "forbidden", msg);
 };
 
-const wants = (d: string | undefined, status: string): "skip" | "go" | "not_confirmed" => (d === "skip" ? "skip" : d === "confirm" || d === "replace" || status === "confirmed" ? "go" : "not_confirmed");
+const wants = (d: string | undefined, status: string): "skip" | "go" | "not_confirmed" => (d === "skip" ? "skip" : isGoDecision(d) || status === "confirmed" ? "go" : "not_confirmed");
 
 export interface ExtColumnPlan {
   data: Prisma.GuardUncheckedUpdateInput;
   outcomes: Record<string, ExtOutcome>;
   reasons: string[];
+  /** 人手 decision 繞過 hold 嘅欄數（audit 留標記，冇值） */
+  overrides: number;
 }
 
 /**
@@ -78,6 +82,7 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
   const data: Record<string, unknown> = {};
   const outcomes: Record<string, ExtOutcome> = {};
   const reasons: string[] = [];
+  let overrides = 0;
   for (const s of SCALARS) {
     const leaf = s.get(p);
     const v = leaf ? fieldValue(leaf) : null;
@@ -96,10 +101,12 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
       outcomes[s.key] = "not_confirmed";
       continue;
     }
-    if (heldBy(gate, s.key) && d !== "confirm" && d !== "replace") {
+    const sh = heldAll(gate, s.key);
+    if (!bypassesHold(d, sh)) {
       outcomes[s.key] = "held"; // 身份未夠證據／長工入職日期：等人手確認
       continue;
     }
+    if (sh.length) overrides += 1;
     const cur = snap ? s.cur(snap) : null;
     if (d === "replace" && cur && caps.canEditGuard === false) deny(PII_OVERWRITE_DENIED_MSG);
     if (!cur) {
@@ -123,9 +130,10 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
     else if (caps.canEditBank === false) {
       if (d === "replace" && cmp.anyCurrent) deny(BANK_OVERWRITE_DENIED_MSG);
       outcomes.bank = "not_written";
-    } else if (heldBy(gate, "bank") && d !== "confirm" && d !== "replace") {
+    } else if (!bypassesHold(d, heldAll(gate, "bank"))) {
       outcomes.bank = "held"; // 銀行：身份證未相同／身份未夠證據 → 要人明確確認（bank_review）
     } else {
+      if (heldAll(gate, "bank").length) overrides += 1;
       // 全有或全無：現有四欄全空先補空；現有有任何資料 → same／conflict（replace 先覆蓋，要銀行資料 update 權——上面已檢查）
       const overwrite = d === "replace";
       const wouldWrite = cmp.state === "fill" || (overwrite && cmp.state !== "same");
@@ -136,7 +144,7 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
         outcomes.bank = "conflict";
         reasons.push("bank_acct_belongs_to_other");
       } else if (wouldWrite && !complete) {
-        if (d === "confirm" || d === "replace") throw new ApiError(422, "unprocessable", "包內銀行資料四欄唔齊，唔可以寫入（唔准砌半套戶口）");
+        if (isGoDecision(d)) throw new ApiError(422, "unprocessable", "包內銀行資料四欄唔齊，唔可以寫入（唔准砌半套戶口）");
         outcomes.bank = "not_confirmed";
       } else if (wouldWrite) {
         data.bankCode = bank.code!.padStart(3, "0");
@@ -147,7 +155,7 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
       } else outcomes.bank = cmp.state === "same" ? "same" : "conflict";
     }
   }
-  return { data: data as Prisma.GuardUncheckedUpdateInput, outcomes, reasons };
+  return { data: data as Prisma.GuardUncheckedUpdateInput, outcomes, reasons, overrides };
 }
 
 /**
@@ -174,6 +182,7 @@ export interface ExtRelationResult {
   outcomes: Record<string, ExtOutcome>;
   contactsAdded: number;
   hiresWritten: number;
+  overrides: number;
 }
 
 /** 緊急聯絡人（guard_emergency_contacts）＋逐工號入職日期（guard_staff_numbers.valid_from）。 */
@@ -186,6 +195,7 @@ export async function applyExtRelations(
   const outcomes: Record<string, ExtOutcome> = {};
   let contactsAdded = 0;
   let hiresWritten = 0;
+  let overrides = 0;
 
   // --- 緊急聯絡人 ---
   const existing = snap?.contacts ?? [];
@@ -203,10 +213,13 @@ export async function applyExtRelations(
       continue;
     }
     // 人手決定（confirm／replace）寫完整值；自動寫入只寫 confirmed 嘅欄
-    const useFull = d === "confirm" || d === "replace";
-    if (!useFull && !gate.scalars) {
-      outcomes[key] = "held";
-      continue;
+    const useFull = isGoDecision(d);
+    if (!gate.scalars) {
+      if (!useFull) {
+        outcomes[key] = "held";
+        continue;
+      }
+      overrides += 1;
     }
     // 覆蓋權：已有聯絡人嘅安員再加一位＝加 PII，deny 與否喺比較「之前」決定（只睇現有聯絡人係咪非空）
     if (useFull && existing.length > 0 && caps.canOverwritePii === false) deny(PII_OVERWRITE_DENIED_MSG);
@@ -220,7 +233,7 @@ export async function applyExtRelations(
       outcomes[key] = "same";
       continue;
     }
-    if (partial && d !== "confirm" && d !== "replace") {
+    if (partial && !useFull) {
       outcomes[key] = "conflict";
       continue;
     }
@@ -249,9 +262,12 @@ export async function applyExtRelations(
       outcomes[key] = "not_confirmed";
       continue;
     }
-    if (d !== "confirm" && d !== "replace" && !gate.scalars) {
-      outcomes[key] = "held";
-      continue;
+    if (!gate.scalars) {
+      if (!isGoDecision(d)) {
+        outcomes[key] = "held";
+        continue;
+      }
+      overrides += 1;
     }
     const row = await tx.guardStaffNumber.findUnique({ where: { number: h.number } });
     if (!row || row.guardId !== guardId) {
@@ -268,5 +284,5 @@ export async function applyExtRelations(
       outcomes[key] = "written";
     } else outcomes[key] = "conflict";
   }
-  return { outcomes, contactsAdded, hiresWritten };
+  return { outcomes, contactsAdded, hiresWritten, overrides };
 }

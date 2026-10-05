@@ -138,8 +138,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       await writeAudit({ actorUserId: session.userId, tableName: "guard_longterm_contracts", rowId: result.contract.id, action: "create", after: result.contract, ip });
     }
 
+    // 入職日期如果係由文件導入寫入（guards audit 有 import_via 而且帶 hire_date）→ 提示核對（只提示，唔改計算；長工糧讀 guards.hire_date）
+    const importedHire = result.guardAfter.hireDate
+      ? (await prisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM audit_log WHERE table_name = 'guards' AND row_id = ${id} AND action IN ('create','update') AND after ? 'import_via' AND coalesce(after->>'hire_date', '') <> ''`)[0]!.n > 0
+      : false;
     return ok(
       brandSafeResponse({
+        hire_date_import_notice: importedHire ? "入職日期由文件導入，請核對（長工糧、年假同 MPF 會用呢個日期）" : null,
         guard: toGuardFullDTO(result.guardAfter),
         longterm_post: toGuardLongtermPostDTO(result.post),
         post_reused: !result.postCreated,

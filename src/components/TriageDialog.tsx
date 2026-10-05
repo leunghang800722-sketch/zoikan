@@ -124,6 +124,8 @@ export const REASON_LABEL: Record<string, string> = {
   maxwell_payee_differs: "Maxwell 名單收款人同 Payroll Editor 唔同",
   typed_list_only_person: "淨係喺打字名單出現",
   ext_identity_check: "工號／身份同另一位唔一致",
+  bank_incomplete: "包內銀行資料四欄唔齊（編號／戶口／收款人／名稱），只可以跳過，唔准砌半套戶口",
+  bank_acct_belongs_to_other: "呢個戶口已屬於另一位保安員",
   bank_acct_shared_by_persons: "同一個戶口出現喺導入包內多個人",
 };
 
@@ -294,7 +296,7 @@ const EXT_CHOICE_LABEL: Record<ExtChoice, string> = { use_import: "用導入值"
 /** 「搜尋其他保安員」：用現有 GET /api/guards（搜尋字經 header，唔入 URL）。 */
 function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | null) => void }) {
   const [term, setTerm] = useState("");
-  const [rows, setRows] = useState<{ id: string; name_zh: string; name_en: string | null }[]>([]);
+  const [rows, setRows] = useState<{ id: string; name_zh: string; name_en: string | null; staff_numbers?: { number: string }[]; status?: string }[]>([]);
   const [picked, setPicked] = useState<string | null>(null);
   useEffect(() => {
     const t = term.trim();
@@ -303,7 +305,7 @@ function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | nu
       return;
     }
     const h = setTimeout(() => {
-      void apiRequest<ApiListResult<{ id: string; name_zh: string; name_en: string | null }>>("/api/guards?take=10", { headers: { "x-guard-search": encodeURIComponent(t) } }).then((r) => setRows(r.ok ? r.data.rows : []));
+      void apiRequest<ApiListResult<{ id: string; name_zh: string; name_en: string | null; staff_numbers?: { number: string }[]; status?: string }>>("/api/guards?take=10&include_inactive=1", { headers: { "x-guard-search": encodeURIComponent(t) } }).then((r) => setRows(r.ok ? r.data.rows : []));
     }, 250);
     return () => clearTimeout(h);
   }, [term]);
@@ -314,6 +316,8 @@ function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | nu
         <button key={r.id} type="button" className={`block w-full rounded border px-2 py-1 text-left text-[12.5px] ${picked === r.id ? "border-zk-primary bg-blue-100" : "border-zk-border"}`} onClick={() => { setPicked(r.id); onPick({ id: r.id, name: r.name_zh }); }}>
           {r.name_zh}
           {r.name_en ? <span className="ml-1 text-zk-faint">{r.name_en}</span> : null}
+          {r.staff_numbers?.length ? <span className="ml-1 text-zk-faint">{r.staff_numbers.map((n) => n.number).join("、")}</span> : null}
+          {r.status && r.status !== "active" ? <span className="ml-1 text-orange-700">（非在職）</span> : null}
         </button>
       ))}
     </span>

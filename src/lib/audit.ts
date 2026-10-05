@@ -79,6 +79,8 @@ export type AuditAction =
   // `AUDIT_ROW_MAPPED_ACTIONS` DTO mapping（本身已經係 route 自己手砌
   // 嘅安全 payload，同 `ai_chat`/`feedback_submit` 一致 passthrough）。
   | "export_download"
+  // 已鎖月份 autopay 下載未確認被擋（月份＋原因，冇戶口）
+  | "export_download_blocked"
   // WP-STAFF-IMPORT B3：證件資料批量導入——summary audit（淨係計數，冇逐人資料）。
   | "guard_import_apply"
   // WP-AI-OPS：導入 preview（計非老闆每日次數用；after 淨係人數／計數／package_hash，冇 PII）

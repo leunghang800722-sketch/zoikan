@@ -2304,3 +2304,9 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - **M5**：`GET /api/longterm/payroll/:month/autopay` 對已鎖月份：preview 回 `locked_month_warning`；下載要 `confirm_locked=1`（否則 400）；audit 帶 `lockedMonth／confirmedLocked`（冇戶口）。金額照舊。
 - **M7**：`assign_bank` 目標英文名同收款人唔夾／唔係 `longterm_autopay` → 預覽警告，要 `confirm_identity:true`（server 驗，冇就 422）。
 - **其他**：`single_ocr` 包只准 v2（400）；`todayIso()` 用香港時區；候選卡冇銀行 view 唔回 `bank`；聯絡人關係按 PII 遮罩；逐工號入職日期「工號屬另一人」預覽 `not_stored`；audit 摘要唔含 `ext_conflicts`；長工（`longterm_autopay` 或有長工合約）人層面入職日期唔自動寫（長工糧讀 `guards.hire_date`：`src/lib/longterm-payroll/aggregate.ts:334,440,477,513,548,593`；`guard_staff_numbers.valid_from` 長工糧冇讀）→ `ext_field_review`。
+
+### WP-STAFF-FIELDS Opus 覆核第二輪（N1–N4／Minor）
+
+- **N1** 生成器所有比較一律經 `eff()`（冇對應 view 嘅作答者：same／differs／add／taken 當 differs），聯絡人 review 估中估錯出題數一致。**N2** `ext_*`／`bank_*` 題嘅跨 session 去重核心加入涉及欄位嘅值＋狀態 hash（v2 類題不變）：跳過後新包改值會再出題，值冇變唔再出。**N3** 冇「安員銀行資料:view」：`assign_bank`／`bank_review` 預覽一律 generic（`can_confirm=true`＋同一句提示），戶口已被用等留到確認時先擋，回 generic 422「寫入唔到，請搵有安員銀行資料查看權限嘅同事處理」。**N4** 新 decision 值 `confirm_id`（`ext_identity_check`「照寫入」）只繞過身份／銀行閘，唔繞過長工入職日期閘；長工 `hireDate` 留／出 `ext_field_review`。
+- **Minor**：繞過 hold 嘅 guards audit 帶 `hold_override:true`、summary 帶 `hold_overrides`（冇值）；答 `ext_identity_check`／帶非 skip `decisions.ext` 要「安員個人資料:view」＋「安員:update」（view 顯示 `restricted`）；打字名單 only 嘅 person key＝`typed:<sha256 頭 12 位>`（跨 build 穩定）；預覽 `acctOwners` 同寫入一樣按編號＋戶口比；`PATCH /api/guards/:id` 改銀行戶口同導入用同一個 `acctTakenByOther`（撞＝409，不講係邊個）；已鎖月 autopay 下載未確認被擋寫 audit `export_download_blocked`；`confirm_identity` 長工判斷＝`longterm_autopay` 或有合約；四欄唔齊嘅 `bank_review` 只有跳過（reason `bank_incomplete`）；銀行 held 而 check=same（有 view）唔出題；分診搜尋加 `include_inactive=1`；`POST /api/guards/:id/convert-to-longterm` 回應 `hire_date_import_notice`（入職日期由導入寫入時提示核對）。
+

@@ -3,7 +3,7 @@
 // 一個人最多一條題目（group_key＝導入人 key）→ 冪等、已解決嘅唔會再出。
 import type { Evaluation } from "@/lib/guards/import/apply";
 import { fieldValue, packageConflicts, unassignedBankOf, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
-import { digits, extKeyGroup, isBankKey, isEmergencyKey, normPayee, type ExtItem } from "@/lib/guards/import/ext";
+import { bankComplete, digits, extKeyGroup, isBankKey, isEmergencyKey, normPayee, type ExtItem } from "@/lib/guards/import/ext";
 import { hkidCheckDigitValid, canonicalHkid } from "@/lib/guards/identity";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type QuestionKind, type QuestionOption, type ReviewField } from "../types";
@@ -160,6 +160,7 @@ function extDrafts(e: Evaluation, order: number, opts: DraftOptions): QuestionDr
   // 冇對應 view 嘅作答者：出題與否唔准取決於「同現有值比較」（same／differs／add／taken 一律當 differs）
   const uniform = (k: string) => (isBankKey(k) ? opts.viewBank === false : isEmergencyKey(k) ? opts.viewPii === false : false);
   const eff = (i: ExtItem): string => (uniform(i.key) && ["same", "differs", "add", "taken"].includes(i.check) ? "differs" : i.check === "taken" ? "differs" : i.check);
+  const incomplete = !bankComplete(p);
   const mk = (kind: QuestionKind, suffix: string, items: ExtItem[]): QuestionDraft => ({
     kind,
     groupKey: `${p.key}:${suffix}`,
@@ -168,26 +169,29 @@ function extDrafts(e: Evaluation, order: number, opts: DraftOptions): QuestionDr
     evidence: {
       v: 1,
       person: p,
-      reasons: [...new Set([...e.reasons])],
+      reasons: [...new Set([...e.reasons, ...(kind === "bank_review" && incomplete ? ["bank_incomplete"] : [])])],
       candidate_guard_ids: [],
       ext_review: items.map((i) => ({ key: i.key, check: eff(i), status: i.status, ...(i.held ? { held: i.held } : {}) })),
       guard_id: e.guardId,
     },
     options:
-      kind === "ext_identity_check"
+      kind === "bank_review" && incomplete
+        ? [SKIP_OPTION] // 包內銀行四欄唔齊：只可以跳過（唔准砌半套戶口）
+        : kind === "ext_identity_check"
         ? [{ id: "confirm_ext_identity", label: "身份冇錯，照寫入（只補空欄）" }, SKIP_OPTION]
         : [{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, SKIP_OPTION],
   });
   const live = e.ext.filter((i) => i.check !== "not_stored");
   // 身份閘 / 重複標記
   if (!e.gate.scalars || (p.reasons.includes("ext_identity_check") && live.some((i) => i.status === "review"))) {
-    const items = live.filter((i) => (i.status === "review" || i.held === "identity") && !(i.status === "confirmed" && i.check === "same"));
+    const items = live.filter((i) => (i.status === "review" || i.held === "identity") && !(i.status === "confirmed" && eff(i) === "same"));
     if (items.length) return [mk("ext_identity_check", "extidentity", items)];
   }
   // 銀行：review／同現有唔同／閘 hold；另外 confirmed 但 apply 後仍然係「補空」（fill／new）＝有原因冇自動寫（例如 link 前後身份證先補上），都要人確認
-  const bank = live.filter((i) => isBankKey(i.key) && (i.status === "review" || eff(i) === "differs" || i.held === "bank" || (i.status === "confirmed" && (i.check === "fill" || i.check === "new"))));
+  // 銀行 held 而 check=same（有 view：現有戶口同導入一樣）→ 冇嘢好確認，唔出題；冇 view 照舊 uniform（eff 會將 same 當 differs）
+  const bank = live.filter((i) => isBankKey(i.key) && (i.status === "review" || eff(i) === "differs" || (i.held === "bank" && eff(i) !== "same") || (i.status === "confirmed" && (i.check === "fill" || i.check === "new"))));
   const longterm = live.filter((i) => i.held === "longterm");
-  const review = live.filter((i) => extKeyGroup(i.key) !== "bank" && (i.status === "review" || i.held === "longterm") && i.check !== "same");
+  const review = live.filter((i) => extKeyGroup(i.key) !== "bank" && (i.status === "review" || i.held === "longterm") && eff(i) !== "same");
   const conflict = live.filter((i) => extKeyGroup(i.key) !== "bank" && i.status === "confirmed" && !i.held && eff(i) === "differs");
   void longterm;
   const out: QuestionDraft[] = [];

@@ -5,7 +5,7 @@
 // 冪等；分批 transaction；每筆 writeAuditTx。導入包唔入 DB（要重新帶）。
 import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, assertBankPermissionForPackage } from "@/lib/guards/import/request";
 import { hashPackage } from "@/lib/guards/import/package";
-import { Conflict } from "@/lib/api/errors";
+import { Conflict, Forbidden } from "@/lib/api/errors";
 import { applyImport } from "@/lib/guards/import/apply";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
@@ -26,6 +26,9 @@ export async function POST(req: Request) {
     await assertBankPermissionForPackage(session, pkg);
     const pii = await hasPermission(session, "安員個人資料", "view");
     if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
+    // decisions.ext（繞過自動寫入閘）要「安員個人資料:view」＋「安員:update」
+    const hasExtDecision = !!body.decisions && Object.values(body.decisions).some((d) => d.ext && Object.values(d.ext).some((a) => a !== "skip"));
+    if (hasExtDecision && !(pii && (await hasPermission(session, "安員", "update")))) throw Forbidden("呢類決定要有安員個人資料查看＋安員修改權限嘅同事做");
     const canOverwritePii = await hasPermission(session, "安員個人資料", "update");
     const canEditGuard = await hasPermission(session, "安員", "update");
     const bankView = await hasPermission(session, "安員銀行資料", "view");

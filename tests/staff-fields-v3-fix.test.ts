@@ -171,6 +171,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       const g = await mkWithNo({ nameZh: "測試員其他" });
       const r = await applyPkg(owner, pkg3([typedPerson(full, H[2]!)]));
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員銀行資料", action: "update" } }, data: { granted: false } });
+      await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員", action: "update" } }, data: { granted: true } });
       const sid = r.body.triage.session_id as string;
       await post(reassignRoute as never, `/api/triage/sessions/${sid}/reassign`, owner, { owner_user_id: fx.userIds["會計"] }, sid);
       // 之後另一個同名安員出現（唔好令目標變）
@@ -246,14 +247,14 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       const q = (await qs("bank_review"))[0]!;
       const ans = { option: "apply_ext_fields", ext_fields: { bank: "use_import" }, replace_existing: true };
       const r = await qPreview(owner, q.id, ans);
-      expect(r.status).toBe(422);
+      expect(r.status).toBe(400); // 四欄唔齊嘅 bank_review 冇「用導入值」選項，只可以跳過
       const a = await prisma.guard.findUniqueOrThrow({ where: { id: g.id } });
       expect([a.bankCode, a.bankAccountNo, a.bankPayeeName]).toEqual(["024", ACCT2, PAYEE]);
     });
   });
 
   describe("M3：差分", () => {
-    it("(a) 冇 PII view：decisions.ext emergency replace 估中 vs 估錯同一結果；含 decisions.ext 嘅請求計配額", async () => {
+    it("(a) 冇 PII view：decisions.ext emergency replace 估中 vs 估錯同一結果（要個人資料 view＋安員 update 先可繞過閘，一律 403）", async () => {
       const g = await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
       await prisma.guardEmergencyContact.create({ data: { guardId: g.id, name: "測試聯絡人甲", tel: "91000011", createdBy: "t" } as never });
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員個人資料", action: { in: ["view", "update"] } } }, data: { granted: false } });
@@ -265,12 +266,9 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       };
       const hit = await run("91000011");
       const miss = await run("91000022");
-      expect(hit.status).toBe(miss.status);
-      expect(hit.body).toBe(miss.body);
+      expect(hit.status).toBe(403);
+      expect(hit).toEqual(miss);
       expect(await prisma.guardEmergencyContact.count({ where: { guardId: g.id } })).toBe(1);
-      // 配額：decisions.ext 都寫預留行
-      const reserves = await prisma.auditLog.count({ where: { action: "guard_quota_reserve", actorUserId: fx.userIds["會計"] } });
-      expect(reserves).toBeGreaterThanOrEqual(2);
     });
     it("(a) 冇 PII view：自動 apply 估中（同一聯絡人）vs 估錯，出題數一樣", async () => {
       const g = await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
@@ -396,6 +394,166 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       await applyPkg(owner, pkg3([person({ safety: { no: "NEW9999", expiry: "2027-06-07" } })]));
       const sums = await prisma.auditLog.findMany({ where: { tableName: "guard_import", action: "guard_import_apply" }, orderBy: { createdAt: "desc" }, take: 1 });
       expect(JSON.stringify(sums)).not.toContain("ext_conflicts");
+    });
+  });
+
+  describe("Opus 覆核第二輪（N1–N4／Minor）", () => {
+    const loginDocPerson = (x: X) => person({ ...x });
+
+    it("N1：冇 PII view 嘅上載者，review 聯絡人估中（同現有一樣）vs 估錯，出題數一樣", async () => {
+      const g = await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
+      await prisma.guardEmergencyContact.create({ data: { guardId: g.id, name: "測試聯絡人甲", tel: "91000011", createdBy: "t" } as never });
+      await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員個人資料", action: "view" } }, data: { granted: false } });
+      const res: unknown[] = [];
+      for (const c of [{ name: "測試聯絡人甲", tel: "91000011" }, { name: "測試聯絡人戊", tel: "91000019" }]) {
+        await prisma.triageQuestion.deleteMany({});
+        await prisma.triageSession.deleteMany({});
+        const r = await applyPkg(accountant, pkg3([loginDocPerson({ contacts: [{ ...c, st: "review" }] })]));
+        res.push([r.body.triage?.new_questions ?? null, r.body.triage?.supplementary_open ?? null, r.body.triage?.important_open ?? null]);
+      }
+      expect(res[0]).toEqual(res[1]);
+      expect((res[0] as number[])[0]).toBe(1);
+    });
+
+    it("N2：bank_review 跳過後，新包將戶口改正 → 再出題；值冇變 → 唔再出", async () => {
+      await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), bankCode: "024", bankName: "恒生銀行", bankAccountNo: ACCT2, bankPayeeName: PAYEE });
+      await applyPkg(owner, pkg3([loginDocPerson({ bank: { acct: "000011110001" } })]));
+      const q = (await qs("bank_review"))[0]!;
+      expect((await qAnswer(owner, q.id, { option: "skip" })).status).toBe(200);
+      const same = await applyPkg(owner, { ...pkg3([loginDocPerson({ bank: { acct: "000011110001" } })]), generatedAt: "2026-10-06T00:00:00.000Z" });
+      expect(same.body.triage?.new_questions ?? 0).toBe(0);
+      const fixed = await applyPkg(owner, { ...pkg3([loginDocPerson({ bank: { acct: "000011110002" } })]), generatedAt: "2026-10-07T00:00:00.000Z" });
+      expect(fixed.body.triage.new_questions).toBe(1);
+    });
+
+    it("N2：牌照 review 值改咗 → 再出 ext_field_review", async () => {
+      await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
+      const a = await applyPkg(owner, pkg3([loginDocPerson({ sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02", st: "review" } })]));
+      const q = (await qs("ext_field_review"))[0]!;
+      await qAnswer(owner, q.id, { option: "skip" });
+      void a;
+      const b = await applyPkg(owner, { ...pkg3([loginDocPerson({ sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02", st: "review" } })]), generatedAt: "2026-10-06T00:00:00.000Z" });
+      expect(b.body.triage?.new_questions ?? 0).toBe(0);
+      const c = await applyPkg(owner, { ...pkg3([loginDocPerson({ sia: { no: "K-200001-1-001", a: "2027-05-05", b: "2028-01-02", st: "review" } })]), generatedAt: "2026-10-07T00:00:00.000Z" });
+      expect(c.body.triage.new_questions).toBe(1);
+    });
+
+    it("N3：有銀行 update 冇 view：assign_bank 預覽（戶口已被用 vs 冇人用）同一個 generic 結果；taken 留到 commit 先擋（generic 422）", async () => {
+      const x = await mkGuard({ nameZh: "測試員X", nameEn: "ONE TEST PAYEE", employmentType: "longterm_autopay" });
+      const u = [{ key: "pe:004:5678", bankCode: "004", accountNo: ACCT, payeeName: "TEST ONE PAYEE" }];
+      await applyPkg(owner, pkg3([], u));
+      const q = (await qs("bank_identity_unknown"))[0]!;
+      await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員銀行資料", action: "view" } }, data: { granted: false } });
+      await prisma.triageSession.update({ where: { id: q.sessionId }, data: { ownerUserId: fx.userIds["會計"] } });
+      const ans = { option: "assign_bank", guard_id: x.id, replace_existing: true };
+      const pv1 = await (await qPreview(accountant, q.id, ans)).json();
+      await mkGuard({ nameZh: "測試員Z", bankCode: "004", bankName: "匯豐銀行", bankAccountNo: ACCT, bankPayeeName: PAYEE });
+      const pv2 = await (await qPreview(accountant, q.id, ans)).json();
+      delete pv1.preview_hash;
+      const h2 = pv2.preview_hash;
+      delete pv2.preview_hash;
+      expect(pv2).toEqual(pv1);
+      expect(pv1.impact.can_confirm).toBe(true);
+      const r = await qAnswer(accountant, q.id, ans, h2);
+      expect(r.status).toBe(422);
+      expect(JSON.stringify(await r.json())).toContain("寫入唔到");
+      expect(await prisma.guard.count({ where: { bankAccountNo: ACCT } })).toBe(1);
+    });
+
+    it("N4：ext_identity_check 照寫入連到長工 → 人層面 hireDate 唔寫，另出 ext_field_review（長工糧）", async () => {
+      const g = await mkGuard({ nameZh: "測試員其他", employmentType: "longterm_autopay", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
+      const tp = typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" }, hire: "2020-01-02" }, H[2]!);
+      await applyPkg(owner, pkg3([tp]));
+      const q = (await qs("ext_identity_check"))[0]!;
+      const { res } = await confirm(owner, q.id, { option: "confirm_ext_identity" });
+      expect(res.status).toBe(200);
+      const a = await prisma.guard.findUniqueOrThrow({ where: { id: g.id } });
+      expect(a.siaPermitNo).toBe("K-200001-1-001");
+      expect(a.hireDate).toBeNull();
+      const lq = (await qs("ext_field_review"))[0]!;
+      expect(lq).toBeTruthy();
+      expect(JSON.stringify(lq.evidenceJson)).toContain("longterm");
+    });
+
+    it("hold 被人手繞過：guards audit 帶 hold_override:true（冇值），summary 帶 hold_overrides", async () => {
+      const g = await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
+      await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
+      const q = (await qs("ext_identity_check"))[0]!;
+      await confirm(owner, q.id, { option: "confirm_ext_identity" });
+      const up = await prisma.auditLog.findMany({ where: { tableName: "guards", rowId: g.id, action: "update" } });
+      expect(up.some((u) => (u.after as Record<string, unknown>).hold_override === true)).toBe(true);
+      const sum = await prisma.auditLog.findMany({ where: { tableName: "guard_import", action: "guard_import_apply" }, orderBy: { createdAt: "desc" }, take: 1 });
+      expect(JSON.stringify(sum)).toContain("hold_overrides");
+      expect(JSON.stringify(up)).not.toContain("K-200001-1-001".toLowerCase());
+    });
+
+    it("答 ext_identity_check 要「安員個人資料:view」＋「安員:update」：冇就 restricted／403", async () => {
+      await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
+      const r = await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
+      const sid = r.body.triage.session_id as string;
+      await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員", action: "update" } }, data: { granted: false } });
+      await post(reassignRoute as never, `/api/triage/sessions/${sid}/reassign`, owner, { owner_user_id: fx.userIds["會計"] }, sid);
+      const sess = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, accountant, sid)).json();
+      expect(sess.questions[0].restricted).toBe(true);
+      const q = (await qs("ext_identity_check"))[0]!;
+      expect((await qPreview(accountant, q.id, { option: "confirm_ext_identity" })).status).toBe(403);
+    });
+
+    it("PATCH /api/guards/:id 改銀行戶口撞咗另一位安員 → 409（唔講係邊個）", async () => {
+      await mkGuard({ nameZh: "測試員Z", bankCode: "004", bankAccountNo: ACCT, bankPayeeName: PAYEE });
+      const y = await mkGuard({ nameZh: "測試員Y" });
+      const { PATCH } = await import("@/app/api/guards/[id]/route");
+      const call = async (acct: string) => PATCH(new Request(`http://t/api/guards/${y.id}`, { method: "PATCH", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ bank_code: "004", bank_account_no: acct }) }), { params: Promise.resolve({ id: y.id }) } as never);
+      const bad = await call(ACCT);
+      expect(bad.status).toBe(409);
+      expect(JSON.stringify(await bad.json())).not.toContain("測試員Z");
+      expect((await call(ACCT2)).status).toBe(200);
+    });
+
+    it("四欄唔齊嘅 bank_review 只有跳過選項，並標明原因", async () => {
+      await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), bankCode: "024", bankName: "恒生銀行", bankAccountNo: ACCT2, bankPayeeName: PAYEE });
+      const p = loginDocPerson({ bank: {} }) as unknown as { bank: { payeeName: unknown } };
+      p.bank.payeeName = L(null);
+      await applyPkg(owner, pkg3([p as never]));
+      const q = (await qs("bank_review"))[0]!;
+      expect((q.optionsJson as { id: string }[]).map((o) => o.id)).toEqual(["skip"]);
+      expect(JSON.stringify(q.evidenceJson)).toContain("bank_incomplete");
+    });
+
+    it("銀行 held 而現有戶口同導入一樣（有銀行 view）→ 唔出 bank_review", async () => {
+      const g = await mkGuard({ nameZh: "測試員甲", bankCode: "004", bankName: "匯豐銀行", bankAccountNo: ACCT, bankPayeeName: PAYEE, staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
+      void g;
+      await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], bank: {} }, H[2]!)]));
+      expect(await prisma.triageQuestion.count({ where: { kind: "bank_review" } })).toBe(0);
+    });
+
+    it("builder：打字名單 only 嘅 key 確定性（跨 build 一致）", async () => {
+      const { buildPackageV3 } = await import("../scripts/staff-import/lib/package-v3");
+      const v2 = { version: 2 as const, generatedAt: "t", persons: [] };
+      const ext = [{ key: H[2]!, keyKind: "hkid", hasDocs: false, staffNos: ["U77001"], flags: ["typed_list_only_person"], fields: {} }];
+      const a = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] });
+      const b = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] });
+      expect(a.pkg.persons[0]!.key).toBe(b.pkg.persons[0]!.key);
+      expect(a.pkg.persons[0]!.key).toMatch(/^typed:[0-9a-f]{12}$/);
+    });
+
+    it("分診搜尋：GET /api/guards 用工號（含非在職）搵到人", async () => {
+      await mkGuard({ nameZh: "測試員搜", status: "inactive", staffNumbers: { create: [{ scheme: "U", number: "U55123" }] } });
+      const { GET } = await import("@/app/api/guards/route");
+      const res = await GET(new Request("http://t/api/guards?take=10&include_inactive=1", { headers: { cookie: owner, "x-guard-search": encodeURIComponent("U55123") } }) as never);
+      expect((await res.json()).rows.length).toBe(1);
+    });
+
+    it("轉長工：入職日期由導入寫入 → 回應帶 hire_date_import_notice", async () => {
+      const g = await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
+      await applyPkg(owner, pkg3([loginDocPerson({ hire: "2020-01-02" })]));
+      expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).hireDate).not.toBeNull();
+      const site = fx.site;
+      const { POST } = await import("@/app/api/guards/[id]/convert-to-longterm/route");
+      const res = await POST(new Request(`http://t/api/guards/${g.id}/convert-to-longterm`, { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ site_id: site.id, effective_from: "2030-01-01", monthly_salary: 15000 }) }), { params: Promise.resolve({ id: g.id }) } as never);
+      const j = await res.json();
+      expect(res.status).toBe(201);
+      expect(j.hire_date_import_notice).toContain("由文件導入");
     });
   });
 });

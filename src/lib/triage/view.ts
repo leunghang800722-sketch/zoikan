@@ -179,13 +179,13 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
   return rows.map((r, i) => {
     const e = ev[i]!;
     const ans = r.answerJson as { option?: string; guard_id?: string } | null;
-    if ((BANK_KINDS as readonly string[]).includes(r.kind) && !c.bankUpdate) {
+    if (((BANK_KINDS as readonly string[]).includes(r.kind) && !c.bankUpdate) || (r.kind === "ext_identity_check" && !(c.pii && c.guardUpdate))) {
       return {
         id: r.id,
         session_id: r.sessionId,
         kind: r.kind as QuestionKind,
         kind_label: KIND_LABEL[r.kind as QuestionKind] ?? r.kind,
-        title: "要有安員銀行資料權限嘅同事處理",
+        title: r.kind === "ext_identity_check" ? "要有安員個人資料查看＋安員修改權限嘅同事處理" : "要有安員銀行資料權限嘅同事處理",
         sort: r.sort,
         status: r.status,
         options: [],

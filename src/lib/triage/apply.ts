@@ -54,6 +54,8 @@ function assertAnswerable(q: QRow): void {
 
 export const BANK_QUESTION_DENIED_MSG = "要有安員銀行資料權限嘅同事處理";
 function assertBankAllowed(q: QRow, caps: ViewerCaps): void {
+  // 身份確認會繞過自動寫入閘：要「安員個人資料:view」＋「安員:update」
+  if (q.kind === "ext_identity_check" && !(caps.pii && caps.guardUpdate)) throw Forbidden("要有安員個人資料查看＋安員修改權限嘅同事處理");
   if ((BANK_KINDS as readonly string[]).includes(q.kind) && !caps.bankUpdate) throw Forbidden(BANK_QUESTION_DENIED_MSG);
 }
 
@@ -79,14 +81,17 @@ function bankProblem(answer: TriageAnswer, result: import("@/lib/guards/import/a
 async function identityMismatch(q: QRow, answer: TriageAnswer): Promise<string | null> {
   if (answer.option !== "assign_bank" || !answer.guard_id) return null;
   const u = (q.evidenceJson as unknown as QuestionEvidence).unassigned;
-  const g = await prisma.guard.findUnique({ where: { id: answer.guard_id }, select: { nameEn: true, employmentType: true } });
+  const g = await prisma.guard.findUnique({ where: { id: answer.guard_id }, select: { nameEn: true, employmentType: true, longtermContracts: { select: { id: true }, take: 1 } } });
   if (!u || !g) return null;
+  const longterm = g.employmentType === "longterm_autopay" || g.longtermContracts.length > 0; // 同 hireDate 閘一致
   const reasons: string[] = [];
   if (!g.nameEn || !sameEnglishTokens(u.payeeName, g.nameEn)) reasons.push("收款人英文名同呢位保安員嘅英文名唔夾（或者佢冇英文名）");
-  if (g.employmentType !== "longterm_autopay") reasons.push("呢位保安員唔係長工 autopay");
+  if (!longterm) reasons.push("呢位保安員唔係長工 autopay");
   return reasons.length ? `警告：${reasons.join("；")}。要剔「我確認呢個戶口屬於呢位保安員」先可以確認` : null;
 }
 
+const BANK_GENERIC_PREVIEW_NOTE = "會嘗試寫入銀行資料；如果寫入唔到，確認時會提示";
+const BANK_GENERIC_FAIL = "寫入唔到，請搵有安員銀行資料查看權限嘅同事處理";
 const BANK_NOT_WRITTEN_NOTE = "呢個答案唔會寫入戶口：目標安員已有唔同戶口（要明確揀「取代現有戶口」，而且要有安員銀行資料修改權限），或者戶口已經係佢嘅";
 
 function optsFor(r: ResolvedWrite, actor: AuthedSession, ip: string | null, caps: ViewerCaps): ApplyOptions {
@@ -130,7 +135,9 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   const out = await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip, caps), { kind: "dry" });
   const impact = buildImpact(out.result, out.changes, caps);
   if (warnOwner) impact.notes.unshift("呢個身份證號已屬於現有安員（唔喺候選名單），而且姓名相同，會連去佢");
-  const problem = bankProblem(answer, out.result);
+  // N3：冇「安員銀行資料:view」→ 預覽一律同一個 generic 結果（can_confirm 唔視乎戶口是否已被用），寫唔到留到 commit 先擋
+  const problem = caps.bankView ? bankProblem(answer, out.result) : null;
+  if (!caps.bankView && (answer.option === "assign_bank" || (answer.option === "apply_ext_fields" && answer.ext_fields?.bank === "use_import"))) impact.notes.unshift(BANK_GENERIC_PREVIEW_NOTE);
   if (problem) {
     impact.can_confirm = false;
     impact.notes.unshift(problem);
@@ -188,7 +195,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
     beforeCommit: async (tx, outcome) => {
       const bp = bankProblem(answer, outcome.result);
-      if (bp) throw new ApiError(422, "unprocessable", bp);
+      if (bp) throw new ApiError(422, "unprocessable", caps.bankView ? bp : BANK_GENERIC_FAIL);
       impact = buildImpact(outcome.result, outcome.changes, caps);
       const n = await tx.triageQuestion.updateMany({
         where: { id: q.id, status: { in: ["open", "skipped"] } },
@@ -209,6 +216,24 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         const ev = q.evidenceJson as unknown as QuestionEvidence;
         const bankItem = ev.ext_review?.find((x) => isBankKey(x.key));
         const bo = extOutcomeOf(outcome.result, "bank");
+        const hireItem = ev.ext_review?.find((x) => x.key === "hireDate");
+        // N4：長工嘅人層面入職日期唔經「身份確認」繞過 → 留一條 ext_field_review（講明會影響長工糧計算）
+        if (hireItem && extOutcomeOf(outcome.result, "hireDate") === "held") {
+          await tx.triageQuestion.createMany({
+            skipDuplicates: true,
+            data: [
+              {
+                sessionId: q.sessionId,
+                kind: "ext_field_review",
+                groupKey: `${ev.person.key}:extreview`,
+                sort: q.sort,
+                title: KIND_LABEL.ext_field_review,
+                evidenceJson: JSON.parse(JSON.stringify({ ...ev, ext_review: [{ ...hireItem, held: "longterm" }] })),
+                optionsJson: JSON.parse(JSON.stringify([{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, { id: "skip", label: "跳過，留返人手處理" }])),
+              },
+            ],
+          });
+        }
         if (bankItem && bo !== "written" && bo !== "same") {
           const bankEv = { ...ev, ext_review: [{ ...bankItem, held: "bank" }] };
           await tx.triageQuestion.createMany({
