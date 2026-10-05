@@ -15,7 +15,7 @@ import { readDocument, type DocumentReadResult } from "@/lib/guards/ocr/read";
 
 export const dynamic = "force-dynamic";
 
-export const OCR_UNAVAILABLE_MSG = "證件辨識暫時用唔到，請改為全部自己輸入，或者遲啲再試";
+const OCR_UNAVAILABLE_MSG = "證件辨識暫時用唔到，請改為全部自己輸入，或者遲啲再試";
 
 const dataUrl = z
   .string()

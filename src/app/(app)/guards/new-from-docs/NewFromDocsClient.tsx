@@ -148,7 +148,7 @@ export function NewFromDocsClient() {
   const cleanup = useCallback(() => {
     for (const u of urlsRef.current) URL.revokeObjectURL(u);
     urlsRef.current = [];
-    for (const p of pdfsRef.current) void p.destroy().catch(() => undefined);
+    for (const p of pdfsRef.current) void Promise.resolve(p.destroy()).catch(() => undefined);
     pdfsRef.current = [];
   }, []);
   useEffect(() => cleanup, [cleanup]);
@@ -523,12 +523,12 @@ export function NewFromDocsClient() {
             <table className="w-full text-[13px]">
               <tbody>
                 {FIELD_ORDER.filter((k) => k !== "sex").map((k) => {
-                  const pf = ({ name_zh: "nameZh", name_en: "nameEn", hkid: "hkid", dob: "dateOfBirth", phone: "phone", address: "address", sex: "sex" } as const)[k];
-                  const c = row.fields[pf];
+                  // 回應經 camelToSnake：欄位 key 係 name_zh／name_en／date_of_birth…
+                  const c = row.fields[k === "dob" ? "date_of_birth" : k];
                   return (
                     <tr key={k} className="border-t border-zk-border first:border-t-0">
                       <td className="p-2 text-zk-faint">{FIELD_LABEL[k]}</td>
-                      <td className="p-2">{CHECK_TEXT[c?.check ?? "missing"] ?? c?.check}</td>
+                      <td className="p-2">{k === "phone" && c?.check === "differs" ? "現有有其他電話，會加入呢個號碼（冇「安員個人資料」權限只補空）" : (CHECK_TEXT[c?.check ?? "missing"] ?? c?.check)}</td>
                     </tr>
                   );
                 })}

@@ -78,7 +78,7 @@ export async function canvasFromImageFile(file: File): Promise<HTMLCanvasElement
 }
 
 // --- PDF（pdfjs-dist，dynamic import）---
-type PdfDoc = { numPages: number; getPage(n: number): Promise<PdfPage>; destroy(): Promise<void> };
+type PdfDoc = { numPages: number; getPage(n: number): Promise<PdfPage> };
 type PdfPage = { getViewport(o: { scale: number }): { width: number; height: number }; render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown; canvas?: HTMLCanvasElement }): { promise: Promise<void> } };
 
 export interface PdfHandle {
@@ -91,7 +91,8 @@ export async function openPdf(file: File): Promise<PdfHandle> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
   const data = new Uint8Array(await file.arrayBuffer());
-  const doc = (await pdfjs.getDocument({ data }).promise) as unknown as PdfDoc;
+  const task = pdfjs.getDocument({ data });
+  const doc = (await task.promise) as unknown as PdfDoc;
   return {
     pages: doc.numPages,
     async render(pageNo: number) {
@@ -106,7 +107,14 @@ export async function openPdf(file: File): Promise<PdfHandle> {
       await page.render({ canvasContext: ctx, viewport, canvas: c }).promise;
       return c;
     },
-    destroy: () => doc.destroy(),
+    // 釋放 worker／記憶體；失敗唔影響用戶（只係清理）
+    destroy: async () => {
+      try {
+        await task.destroy();
+      } catch {
+        /* ignore */
+      }
+    },
   };
 }
 
