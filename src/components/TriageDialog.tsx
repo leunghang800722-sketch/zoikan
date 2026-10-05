@@ -544,7 +544,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                           {o.label}
                           {cand ? <b className="ml-1">（{cand.name_zh}）</b> : null}
                           {o.hint ? <span className="block text-[11.5px] text-zk-faint">{o.hint}</span> : null}
-                          {choice === val && o.input && (
+                          {choice === val && o.input && o.input !== "guard_search" && (
                             <input
                               className="mt-1.5 w-full rounded-[5px] border border-zk-border px-2 py-1.5"
                               placeholder={o.input === "hkid" ? "例：A123456(3)" : "輸入中文姓名"}
