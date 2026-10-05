@@ -49,9 +49,20 @@ async function main() {
   };
   const first = await loadReads('first-read');
   const second = await loadReads('second-read');
+  // Opus 牌照卡獨立視覺讀（verify/agent-*/permit-read.json，key＝裁圖 id，格式同 ReadMap）→ 併入 permit_card 嘅 printed_read2
+  let opusPermitUnits = 0;
+  {
+    const vdir = path.join(FIELDS_OUT, 'verify');
+    const permitIds = new Set(tasks.filter((t) => t.spec === 'permit_card').map((t) => t.id));
+    for (const d of (await fs.readdir(vdir).catch(() => [] as string[])).filter((x) => /^agent-\d+$/.test(x))) {
+      const m = await J<ReadMap>(path.join(vdir, d, 'permit-read.json'), {});
+      for (const [id, rd] of Object.entries(m)) if (permitIds.has(id) && !second[id] && rd?.fields) { second[id] = rd; opusPermitUnits++; }
+    }
+  }
   const ocr2 = await J<Record<string, { nos: string[]; to: string[] }>>(path.join(FIELDS_OUT, 'permit-ocr2.json'), {});
   const taskById = new Map(tasks.map((t) => [t.id, t]));
   const summaryFlags: Record<string, number> = {};
+  summaryFlags.opus_permit_reads_merged = opusPermitUnits;
   const bump = (k: string) => (summaryFlags[k] = (summaryFlags[k] ?? 0) + 1);
 
   // ---- 人 ----
@@ -269,7 +280,9 @@ async function main() {
         cs.filter((c) => c.serial && cls(c.src)).forEach((c) => printed.set(c.serial!, new Set([...(printed.get(c.serial!) ?? []), cls(c.src)!])));
         const anySerial = cs.some((c) => c.serial);
         const agreed = [...printed.entries()].filter(([, v]) => v.size >= 2);
+        const typedSerials = new Set(cs.filter((c) => c.src === 'typed_maxwell' && c.serial).map((c) => c.serial!));
         if (agreed.length === 1 && printed.size === 1) out = { ...out, value: `${pre.value}-${agreed[0][0]}` };
+        else if (typedSerials.size === 1 && [...printed.keys()].every((k) => typedSerials.has(k))) out = { ...out, value: `${pre.value}-${[...typedSerials][0]}`, reasons: [...pre.reasons, 'permit_serial_from_typed_list'] };
         else if (!anySerial) out = { ...out, reasons: [...pre.reasons, 'permit_no_without_serial'] };
         else out = { ...out, value: null, status: 'review', reasons: [...pre.reasons, 'permit_serial_unverified'] };
       }
@@ -394,6 +407,18 @@ async function main() {
       const dv = rd.fields[k] && !(rd.unsure ?? []).includes(k) ? normDate(rd.fields[k]) : null;
       if (dv && o.to.size) { agree.toDates.both++; if (o.to.has(dv)) agree.toDates.same++; }
     }
+  }
+  {
+    let both = 0, same = 0, sBoth = 0, sSame = 0;
+    for (const t of tasks.filter((x) => x.spec === 'permit_card')) {
+      const a = first[t.id], b = second[t.id];
+      if (!a || !b || a.legible === 'illegible' || b.legible === 'illegible') continue;
+      const na = a.fields.permit_no && !(a.unsure ?? []).includes('permit_no') ? normPermitNo(a.fields.permit_no) : null;
+      const nb = b.fields.permit_no && !(b.unsure ?? []).includes('permit_no') ? normPermitNo(b.fields.permit_no) : null;
+      if (na && nb) { both++; if (splitPermit(na).prefix === splitPermit(nb).prefix) same++; if (splitPermit(na).serial || splitPermit(nb).serial) { sBoth++; if (splitPermit(na).serial === splitPermit(nb).serial) sSame++; } }
+    }
+    summaryFlags.read1_vs_opus_permitPrefix_both = both; summaryFlags.read1_vs_opus_permitPrefix_same = same;
+    summaryFlags.read1_vs_opus_permitSerial_both = sBoth; summaryFlags.read1_vs_opus_permitSerial_same = sSame;
   }
   summaryFlags.ocr_vs_vision_permitNo_both = agree.permitNo.both; summaryFlags.ocr_vs_vision_permitNo_same = agree.permitNo.same;
   summaryFlags.ocr_vs_vision_toDates_both = agree.toDates.both; summaryFlags.ocr_vs_vision_toDates_same = agree.toDates.same;

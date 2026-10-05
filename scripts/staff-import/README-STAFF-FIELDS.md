@@ -48,3 +48,6 @@
 - **key／工號（M5）**：key 全局唯一（`doc:` 類 keyKind=internal；Payroll Editor-only key 撞咗改用戶口 sha256 前 10 位；其餘撞 key 加 `#n` 並 flag）。檔名工號被多人共用 → 該等人 flag `filename_staff_no_shared`，其該工號入職日期行 `review`；疑似同一人 flag `possible_duplicate_of:<key>`（唔自動合併）。申請表工號屬另一人檔名工號 → flag `staff_no_form_belongs_to_other_person:<key>`。
 - 其他：銀行副本比對先去銀行代號前綴；`pe_multiple_accounts` → 銀行欄 review（候選全留）；手寫入職日期值同打字行一致就併入該行；入職日期 reason 改用 `staff_no_row_sources_disagree`；`typed_list_only` 去重；summary 不再列 staffNoCheck 空欄，並加 `emergencyContacts`（有／確認聯絡人人數、聯絡人總數）同 `reasonPersons`。
 - `16-permit-ocr.ts` 正則收緊：序號必須帶連字符（唔再把相鄰數字拼成序號）。
+
+### 牌照序號規則補充
+序號接受來源：(a) ≥2 個印刷類別（視覺 read1／read2、本機 OCR）見到同一序號；或 (b) 打字名單（Maxwell）有序號且冇任何印刷來源見到唔同序號 → confirmed + `permit_serial_from_typed_list`。只得單一印刷類別見到序號而冇打字名單 → `review` + `permit_serial_unverified`。Opus 牌照卡獨立視覺讀（`verify/agent-*/permit-read.json`，key＝裁圖 id、格式同讀數檔）併入為 permit_card 嘅 `printed_read2`（只補未有第二讀嘅裁圖單位）。
