@@ -395,11 +395,11 @@ export function NewFromDocsClient() {
       )}
 
       {step === "review" && (
-        <div className="space-y-3" data-testid="ocr-step-review">
+        <div className="space-y-3" data-testid="ocr-step-review" data-sticky-page>
           {ocrInfo && <div className="text-[12.5px] text-zk-muted">{ocrInfo}。請對住圖逐欄核對：「要核對」同「讀唔到」嘅欄要你確認或者改正先可以繼續。</div>}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start">
             {/* 證件圖：手機 375 闊 sticky 細圖（撳一下放大），桌面 sticky 大圖——對欄值唔使捲上捲落 */}
-            <div className="sticky top-0 z-20 space-y-2 bg-zk-bg pb-2 md:top-2 md:self-start" data-testid="ocr-image-pane">
+            <div className="sticky top-0 z-20 space-y-2 bg-zk-bg pb-2 md:top-2 md:w-1/2 md:self-start" data-testid="ocr-image-pane">
               {uploaded.length > 0 ? (
                 <>
                   <div className="flex flex-wrap gap-1.5">
@@ -425,7 +425,7 @@ export function NewFromDocsClient() {
                 <div className="rounded-lg border border-zk-border p-3 text-[13px] text-zk-muted">全部自己輸入模式：冇上載圖片，請直接填寫。</div>
               )}
             </div>
-            <div className="space-y-3">
+            <div className="space-y-3 md:w-1/2">
               {critPending && ocrInfo && (
                 <div className="rounded-lg border border-orange-300 bg-orange-50 p-2.5 text-[13px] font-semibold text-orange-800" data-testid="ocr-critical-notice">
                   {CRITICAL_MSG}
