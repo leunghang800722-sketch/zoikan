@@ -24,7 +24,7 @@ async function one(id: string, file: string): Promise<{ nos: string[]; to: strin
   for (const line of r.stdout.split('\n').filter(Boolean)) {
     const o = JSON.parse(line) as { lines: { t: string }[] };
     const txt = o.lines.map((l) => l.t).join(' ');
-    for (const m of txt.matchAll(/[A-Z]{1,2}\s*-?\s*\d{6}\s*-?\s*[0-9A]\s*-?\s*(?:\d{3})?/g)) { const n = normPermitNo(m[0]); if (n) nos.add(n); }
+    for (const m of txt.matchAll(/[A-Z]{1,2}\s?-?\s?\d{6}\s?-?\s?[0-9A](?:\s?-\s?\d{3}(?!\d))?/g)) { const n = normPermitNo(m[0]); if (n) nos.add(n); }
     for (const l of o.lines) { const m = /^\s*(20\d{2}[-.]\d{2}[-.]\d{2})\s*$/.exec(l.t); const d = m ? normDate(m[1]) : null; if (d) to.add(d); }
   }
   await fs.rm(tmp, { recursive: true, force: true });

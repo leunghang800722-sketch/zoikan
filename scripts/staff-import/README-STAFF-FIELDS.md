@@ -38,3 +38,13 @@
 - 牌照號碼：候選前段須等於身份證號（有對得上先剔走其餘，flag `permit_no_candidates_discarded_not_matching_hkid`）；其一欠序號時補成較長嗰個（flag `permit_no_serial_filled`）。
 - 「在勤兼職資料.xlsx 的副本」其實係普通 xlsx（與 `在勤兼職資料-copy.xlsx` md5 相同），只係 openpyxl 拒讀副檔名「的副本」；已改讀 `-copy.xlsx`，取 MP 工號（補 `extraStaffNosFromParttimeList`）。表內「頭印日期／尾印日期」唔係入職日期，只存喺 typed-sources.json，唔當入職來源。
 - 盲讀包 `second-read-queue.json` 只含手寫裁圖；印刷頁（牌照卡、銀行副本）以 本機OCR＝視覺讀數 確認。
+
+## Opus 核對後修訂（合併規則 v2）
+- **牌照號碼（B1）**：不再「補序號」。號碼拆成前段（字母-6位-檢查碼，＝身份證號）同序號（3 位）分開判斷。序號只認印刷來源（牌照卡視覺讀 read1／read2、牌照卡本機 OCR——整頁＋裁圖四向 OCR 算一個類別），要 ≥2 個印刷類別見到同一個序號先算有；打字名單／手寫只佐證。所有來源都冇序號 → confirmed（冇序號版本，reason `permit_no_without_serial`）；有任何來源顯示序號但未達兩個印刷類別一致 → `review` + `permit_serial_unverified`（value 置空，候選全留）。威信表「許可證號碼」格若填咗卡底控制編號（字母＋7 位、無連字符）唔當候選（flag `permit_no_is_card_control_no`）。
+- **緊急聯絡人（M1）**：輸出 `emergencyContacts[]`（≤4，超出 flag `emergency_more_than_four`），每項 `{name,relationship,tel,sources}`，各欄自有 status。Maxwell／U Team／手寫各自成項；同一人（電話相同，或姓名相同而至少一邊冇電話）先合併，欄位值唔同 → 該欄 review。手寫同一槽位嘅 read1／read2 視為同一單位。手寫聯絡人與打字聯絡人同一人 → 佐證（兩類別 confirmed）；否則獨立一項（要兩次盲讀一致先 confirmed）。
+- **手寫日期歧義（M2）**：純手寫來源（只得 hand_read1／2）而日 ≤12（且日≠月）嘅日期 → `review` + `handwritten_date_ambiguous`。
+- **純手寫 QAS／平安咭／牌照屆滿日／牌照號碼（M3）**：一律 `review` + `handwritten_unverified`（就算兩讀一致）；有打字名單或印刷佐證先 confirmed。清單輸出 `handwritten-unverified.json`（計數＋內部 key）。
+- **打字名單連人（M4）**：身份證相同才直接連；以工號連人時，行內身份證與該人唔同 → 唔連（flag `typed_row_hkid_conflict`）；行內冇身份證（或該人冇）而姓名唔係完全相同 → 連，但該行帶嚟嘅欄全部 `review` + `linked_by_staff_no_only`，且該行唔用作銀行硬鍵／姓名來源。
+- **key／工號（M5）**：key 全局唯一（`doc:` 類 keyKind=internal；Payroll Editor-only key 撞咗改用戶口 sha256 前 10 位；其餘撞 key 加 `#n` 並 flag）。檔名工號被多人共用 → 該等人 flag `filename_staff_no_shared`，其該工號入職日期行 `review`；疑似同一人 flag `possible_duplicate_of:<key>`（唔自動合併）。申請表工號屬另一人檔名工號 → flag `staff_no_form_belongs_to_other_person:<key>`。
+- 其他：銀行副本比對先去銀行代號前綴；`pe_multiple_accounts` → 銀行欄 review（候選全留）；手寫入職日期值同打字行一致就併入該行；入職日期 reason 改用 `staff_no_row_sources_disagree`；`typed_list_only` 去重；summary 不再列 staffNoCheck 空欄，並加 `emergencyContacts`（有／確認聯絡人人數、聯絡人總數）同 `reasonPersons`。
+- `16-permit-ocr.ts` 正則收緊：序號必須帶連字符（唔再把相鄰數字拼成序號）。
