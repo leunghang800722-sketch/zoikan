@@ -32,10 +32,19 @@ interface KeyablePerson {
 export function serverPersonKey(p: KeyablePerson): string {
   const h = canonicalHkid(p.hkid.value?.trim() || null);
   if (h) return hmacRef("hkid", h);
-  // 比較用正規化：MW-123＝MW123（只用喺 key 比較，唔改儲存）
-  const nos = [...new Set(p.staffNumbers.map((n) => normalizeStaffNumber(n.number).replace(/-/g, "")))].sort();
+  // 工號用同 DB 配對（match.ts）一致嘅 normalizeStaffNumber，唔自己發明規則
+  const nos = [...new Set(p.staffNumbers.map((n) => normalizeStaffNumber(n.number)))].sort();
   if (nos.length) return hmacRef("staffnos", nos.join(","));
   return hmacRef("pkgkey", p.key);
+}
+
+/** 弱身份：身份證 HMAC（如有）＋每個工號 HMAC。「有／冇身份證」兩個包雖然強身份（人 key）唔同，但弱身份會重疊。 */
+export function weakIdsOf(p: KeyablePerson): string[] {
+  const out = new Set<string>();
+  const h = canonicalHkid(p.hkid.value?.trim() || null);
+  if (h) out.add(hmacRef("weak-hkid", h));
+  for (const n of p.staffNumbers) out.add(hmacRef("weak-no", normalizeStaffNumber(n.number)));
+  return [...out];
 }
 
 /** key 版本指紋（HMAC(secret,"fingerprint") 頭 8 hex，唔洩露 secret）：SESSION_SECRET 輪換偵測用。 */

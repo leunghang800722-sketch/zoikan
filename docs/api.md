@@ -2327,3 +2327,11 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - **SESSION_SECRET 輪換**：所有 HMAC key（`group_key`、人 key、戶口 ref）都由 `SESSION_SECRET` 衍生，輪換後全部會變。後果：舊 session 嘅題目 key 對唔上新 key。步驟：① 輪換前先答／跳過晒 open 題（或接受佢哋被取代）；② 輪換後第一次自動 apply 會比對 session 記低嘅 `key_fp`（`HMAC(secret,"fingerprint")` 頭 8 hex，唔洩露 secret），唔同就將該 session 嘅 open 題一律標 `superseded`，之後照常出新題。啟動時唔做任何嘢。
 - **decisions 用 `@<index>`**（`request.ts` `resolveDecisionKeys`）：`/guards/import` 覆核卡 state 同提交一律用 index（`ref` 喺同包兩行相同身份證／工號集合時會撞）；server 對返 package_hash 綁定嘅包，越界 400；仍然兼容包內 key（API／單人證件包）。
 - 其他：session 列表 `counts.superseded`（唔計入 `total`）、`superseded_all`（顯示「已被較新嘅導入取代」）；身份題答完對話框即時 reload 出跟進題；`PATCH /api/guards/:id` 戶口先正規化（NFKC、去空白，淨收數字同 `-`，其他 400）；工號比較統一去 `-`（`MW-123`＝`MW123`，只用喺 key／join 比較）。
+
+### WP-STAFF-FIELDS Opus 第五輪（簡化：作廢＋重新出題；取代第四輪嘅「保留／搬移／重開」）
+
+- **生命週期**（`src/lib/triage/session.ts` `createGuardImportTriage`；全域 advisory lock `guard_import_triage`＋同一個 transaction）：每次**自動 apply** 一個 guard_import 包——A 記錄（`triage_person_applies`：強身份＝`serverPersonKey`＋目標 guard〔所有 link 情況都記〕；弱身份＝身份證 HMAC＋每個工號 HMAC〔`normalizeStaffNumber`，同 DB 配對一致〕；包 hash／`is_v3`／`has_bank`／時間；系統查詢，唔受用戶權限影響，即使上載者冇「導入分診:view」亦會記同作廢，只係唔開新題）；B 作廢所有 session（包括自己）入面強身份相同嘅 open 題（v2 類一律；`ext_*` 只喺 v3 包；`bank_*` 包括 `bank_identity_unknown` 只喺有銀行段嘅包——v2／single_ocr／冇銀行段嘅包唔會令銀行題或新欄題消失）；C 由今次評估全新建立 open 題（**新 row**，唔搬移、唔重開舊 row）；D 唔再問：同一條未 superseded 嘅 answered／skipped 題（任何 session）強身份＋kind＋**完整簽名**（v2 證據核心＋人嘅全部 ext 值同狀態——因為答案經 `resolveAnswer` 用成個 person 寫入）相同；G SESSION_SECRET 指紋唔同嘅舊 session open 題一律作廢（包括自己）。
+- **同包再 apply**＝作廢舊 open＋重新出（題數同內容一樣；已答／已跳過嘅唔重出；open 題 id 會變）。`triage_questions` 嘅 `(session_id, group_key)` 唯一索引改為普通索引（同 session 可有已作廢舊 row 同新 row 並存）。擁有人＝該包 session 嘅建立者（同一包由另一人再 apply 時，新題入原 session，回應係 `owned_by_other`）；配額失敗唔退還次數（沿用 §29.6）。
+- **作答**（`src/lib/triage/apply.ts` `assertNoNewer`；預覽＋commit 在同一把 lock／tx 內）：題目必須屬於最近一次包含呢個強身份嘅「同類包」（v2 類＝任何包；ext＝v3；bank＝有銀行段）；另外如果有較新嘅包入面有人同呢條題嘅人弱身份重疊（身份證或工號 HMAC 相同）而強身份唔同（有／冇身份證交替、工號集合變）→ 409「呢位保安員有較新嘅導入資料，請重新上載最新檔案再答」。
+- **Migration** `20261005160000_wp_staff_fields_triage_simplify`：`triage_person_applies` 加 `weak_ids`／`has_bank`；`triage_questions` 唯一索引改普通索引（全部 IF NOT EXISTS／IF EXISTS，冪等）。
+- **decisions**：`@index` 用嚴格正則 `^@(0|[1-9]\d*)$`；原始 body 嘅 `__proto__`／`constructor`／`prototype` key 一律 400（zod 前先查）；解析後 map 用 null-prototype object。

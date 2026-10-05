@@ -3,7 +3,7 @@
 //  - 冇 decisions：自動套用（link／create 嘅人，只寫 status=confirmed 嘅欄）。
 //  - 有 decisions（覆核頁）：只處理有決定嘅人；逐欄 confirm／replace／skip。
 // 冪等；分批 transaction；每筆 writeAuditTx。導入包唔入 DB（要重新帶）。
-import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, resolveDecisionKeys, assertBankPermissionForPackage, redactRowKeys } from "@/lib/guards/import/request";
+import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, assertSafeDecisionKeys, resolveDecisionKeys, assertBankPermissionForPackage, redactRowKeys } from "@/lib/guards/import/request";
 import { hashPackage } from "@/lib/guards/import/package";
 import { Conflict, Forbidden } from "@/lib/api/errors";
 import { applyImport } from "@/lib/guards/import/apply";
@@ -19,7 +19,9 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 export async function POST(req: Request) {
   return withApiError(async () => {
     const session = await requireImportPermission(req, "apply");
-    const body = parseBody(applyBodySchema, await readJson(req));
+    const rawBody = await readJson(req);
+    assertSafeDecisionKeys(rawBody);
+    const body = parseBody(applyBodySchema, rawBody);
     const pkg = parsePackage(body.package);
     const decisions = resolveDecisionKeys(pkg, body.decisions);
     assertPackageSize(session, pkg);
@@ -54,9 +56,11 @@ export async function POST(req: Request) {
     let triage: Awaited<ReturnType<typeof createGuardImportTriage>> = null;
     // 單人證件包（single_ocr）apply 本身就帶 decisions（用戶已逐欄確認）：決定咗嘅欄當已解決，剩低嘅（同名候選、衝突…）照樣出題
     const triageEligible = !decisions || pkg.source === "single_ocr";
-    if (triageEligible && (await hasPermission(session, "導入分診", "view"))) {
+    if (triageEligible) {
+      // 記錄＋作廢舊題一律做（唔受「導入分診:view」影響）；冇權限者唔開新題
+      const canTriage = await hasPermission(session, "導入分診", "view");
       try {
-        triage = await createGuardImportTriage({ pkg: pkg.source === "single_ocr" && decisions ? resolveDecidedFields(pkg, decisions) : pkg, packageHash: body.package_hash, actor: session, ip: getClientIp(req), personKeys: body.person_keys, results: result.results });
+        triage = await createGuardImportTriage({ pkg: pkg.source === "single_ocr" && decisions ? resolveDecidedFields(pkg, decisions) : pkg, packageHash: body.package_hash, actor: session, ip: getClientIp(req), personKeys: body.person_keys, results: result.results, openQuestions: canTriage });
       } catch (e) {
         console.error("triage session create failed", safeErrorSummary(e));
       }

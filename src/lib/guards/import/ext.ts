@@ -209,6 +209,12 @@ export const SCALARS: readonly ScalarSpec[] = [
 ];
 export const scalarEqual = (kind: "no" | "date", a: string | null, b: string | null): boolean => (kind === "no" ? normNo(a) === normNo(b) : a === b);
 
+/** 人嘅全部 ext 值＋狀態簽名（答案經 resolveAnswer 用成個 person 寫入，所以「完整簽名」要計晒會被寫入嘅值）。 */
+export function allExtSig(p: PackagePerson): unknown {
+  const keys = [...SCALARS.map((s) => s.key), "bank", "emergency.1", "emergency.2", "emergency.3", "emergency.4", ...staffHiresOf(p).map((h) => `staffHire.${h.number}`)];
+  return keys.map((k) => [k, extValueSig(p, k)]);
+}
+
 /** 銀行四欄（編號、戶口、收款人、名稱〔可由 HKICL 編號推出〕）齊全先可以寫入。 */
 export function bankComplete(p: PackagePerson): boolean {
   const b = bankLeaves(p);

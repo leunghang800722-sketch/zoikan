@@ -290,15 +290,17 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       const b = await applyPkg(owner, pkg);
       expect(b.body.contacts_added).toBe(0);
       expect(b.body.ext_written).toEqual([]);
-      expect(b.body.triage.new_questions).toBe(0);
+      // 第五輪：同包再 apply＝作廢舊 open＋重新出（題數同內容一樣，id 可變）
       expect(b.body.triage.total_questions).toBe(total1);
+      expect(b.body.triage.open_questions).toBe(a.body.triage.open_questions);
       expect(await prisma.guardEmergencyContact.count()).toBe(1);
       // 跳過後再上載唔重出
-      const q = (await qs("ext_field_conflict"))[0]!;
+      const q = (await qs("ext_field_conflict")).find((x) => x.status === "open")!;
       expect((await qAnswer(owner, q.id, { option: "skip" })).status).toBe(200);
       const c = await applyPkg(owner, pkg);
-      expect(c.body.triage.new_questions).toBe(0);
-      expect(await prisma.triageQuestion.count({ where: { kind: "ext_field_conflict" } })).toBe(1);
+      expect(await prisma.triageQuestion.count({ where: { kind: "ext_field_conflict", status: { not: "superseded" } } })).toBe(1);
+      expect(await prisma.triageQuestion.count({ where: { kind: "ext_field_conflict", status: "open" } })).toBe(0);
+      void c;
     });
 
     it("逐工號入職日期：只補 valid_from 空嘅行；已有唔同值＝conflict 唔覆蓋", async () => {
@@ -540,13 +542,15 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect(view.options.map((o: { id: string; guard_id?: string }) => o.id)).toEqual(["assign_bank", "assign_bank", "skip"]);
       // 重複上載唔重複出題
       const again = await applyPkg(owner, pkg);
-      expect(again.body.triage.new_questions).toBe(0);
+      expect(again.body.triage.open_questions).toBe(1); // 作廢重出，仍然得 1 條 open
       // 預覽：唔寫；揀候選
       const ans = { option: "assign_bank", guard_id: cand.id };
-      const pv = await (await qPreview(owner, q.id, ans)).json();
+      expect((await qPreview(owner, q.id, ans)).status).toBe(409); // 舊題已被同包再 apply 作廢
+      const qNow = (await qs("bank_identity_unknown")).find((x) => x.status === "open")!;
+      const pv = await (await qPreview(owner, qNow.id, ans)).json();
       expect(pv.impact.can_confirm).toBe(true);
       expect((await prisma.guard.findUniqueOrThrow({ where: { id: cand.id } })).bankAccountNo).toBeNull();
-      const res = await qAnswer(owner, q.id, ans, pv.preview_hash);
+      const res = await qAnswer(owner, qNow.id, ans, pv.preview_hash);
       expect(res.status).toBe(200);
       const g = await prisma.guard.findUniqueOrThrow({ where: { id: cand.id } });
       expect([g.bankCode, g.bankAccountNo, g.bankPayeeName, g.bankName]).toEqual(["004", ACCT, "TEST ONE PAYEE", "匯豐銀行"]);

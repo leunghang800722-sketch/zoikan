@@ -326,7 +326,8 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       const answeredKey = first.groupKey;
       const before = await prisma.triageQuestion.count();
       // v3：同樣兩人（穩定 key）＋ 多一個新人
-      const p3 = [...base.map((b) => ({ ...b, siaPermit: { no: L("K-200001-1-001"), aExpiry: L("2027-03-04"), bExpiry: L("2028-01-02") } })), mk2(H[6]!, "k3", "THREE EN")];
+      // 第五輪：已答 v2 類題嘅完整簽名包含人嘅全部 ext 值（答案用成個 person 寫入），所以只有「v3 冇新增 ext 值」嘅人先唔重出
+      const p3 = [...base, { ...mk2(H[6]!, "k3", "THREE EN"), siaPermit: { no: L("K-200001-1-001"), aExpiry: L("2027-03-04"), bExpiry: L("2028-01-02") } }];
       const r3 = await applyPkg(owner, pkg3(p3 as never));
       const after = await prisma.triageQuestion.findMany({ where: { kind: "field_review" } });
       expect(after.filter((q) => q.groupKey === answeredKey)).toHaveLength(1); // 已答嗰條冇重出

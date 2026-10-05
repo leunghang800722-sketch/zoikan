@@ -562,7 +562,7 @@ model TriageQuestion {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@unique([sessionId, groupKey])
+  @@index([sessionId, groupKey])
   @@index([sessionId, status, sort])
   @@index([personKey])
   @@index([targetGuardId])
@@ -577,6 +577,10 @@ model TriagePersonApply {
   guardId   String?  @map("guard_id")
   sourceRef String   @map("source_ref")
   isV3      Boolean  @default(false) @map("is_v3")
+  /// 呢個包有冇銀行段（任何人有 bank 欄或者有 unassignedBankAccounts）
+  hasBank   Boolean  @default(false) @map("has_bank")
+  /// 弱身份：身份證 HMAC＋每個工號 HMAC（工號用同 DB 配對一致嘅 normalizeStaffNumber）
+  weakIds   String[] @default([]) @map("weak_ids")
   appliedAt DateTime @default(now()) @map("applied_at")
 
   @@unique([personKey, sourceRef])

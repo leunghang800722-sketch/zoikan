@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { HKICL_BANK_CODE_SET, HKICL_BANK_OPTIONS } from '@/lib/longterm-payroll/hkicl-bank-codes';
 import { canonicalHkid } from '@/lib/guards/identity';
+import { normalizeStaffNumber } from '@/lib/guards/staff-numbers';
 import { importPackageSchemaV3, packagePersonSchema, unassignedBankAccountSchema } from '@/lib/guards/import/package';
 
 type St = 'confirmed' | 'review' | 'missing';
@@ -26,8 +27,8 @@ export interface TypedSources {
 
 const MISSING: Leaf = { value: null, status: 'missing' };
 const cleanNo = (s: string | null | undefined) => (s ?? '').toUpperCase().replace(/\s+/g, '') || null;
-/** 比較用：MW-123＝MW123（只喺 join／配對比較用，輸出仍然用 cleanNo） */
-const cmpNo = (s: string | null | undefined) => cleanNo(s)?.replace(/-/g, '') ?? null;
+/** 比較用：同伺服器 DB 配對一致（normalizeStaffNumber），輸出仍然用 cleanNo */
+const cmpNo = (s: string | null | undefined) => (s ? normalizeStaffNumber(s) : null) || null; // 同 DB 配對一致嘅正規化
 // 減題規則（主規劃 2026-10-05）：以下 reason 一律唔入包、唔出題，只入 unverified-report（內部 key＋欄名＋reason，冇值）
 const DROP_REASONS = ['handwritten_unverified', 'handwritten_date_ambiguous', 'permit_serial_unverified'];
 // review 狀態要「畫面上人可以直接決定」先入包出題

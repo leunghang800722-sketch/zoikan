@@ -5,7 +5,7 @@
 //  - 已答嘅題目唔可以重複套用（同一 transaction 內 updateMany status in (open,skipped) 計 count）。
 //  - audit：每個答案一條 triage_answer（邊個答、邊條題、揀咗乜選項、結果計數；冇 PII）＋有寫入就一條 guard_import_apply summary。
 import { createHmac } from "node:crypto";
-import type { TriageQuestion } from "@prisma/client";
+import type { Prisma, TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { ApiError, BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
@@ -18,7 +18,7 @@ import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
 import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
 import { sameEnglishTokens } from "./generators/guard-import";
-import { V3_ONLY_KINDS } from "./session";
+import { TRIAGE_LOCK, kindClass } from "./session";
 import { identityFollowUps } from "./generators/guard-import";
 import { BANK_KINDS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
@@ -54,22 +54,36 @@ function assertAnswerable(q: QRow): void {
 }
 
 /**
- * 只有「最近一次包含呢個人嘅包」所出嘅題先答得（Opus 第四輪）：同一個人（人 key 或鎖定目標 guard）喺 triage_person_applies
- * 有較新嘅包（其他包 hash）→ 409。ext／bank 類題淨睇 v3 包。tx 內再查一次防並發。
- * 訊息唔洩露佢冇權睇嘅嘢：新 session 擁有人唔係佢（又唔係老闆）→ 「請搵上載較新檔案嘅同事或者老闆跟進」。
+ * 作答時（預覽＋commit tx 內，同一把 TRIAGE_LOCK）：呢條題必須屬於「最近一次包含呢個強身份（人 key 或目標 guard）嘅同類包」
+ * （v2 類＝任何包；ext 類＝v3 包；bank 類＝有銀行段嘅包），而且冇較新嘅包入面有人同呢條題嘅人弱身份重疊（身份證／工號 HMAC）
+ * 而強身份唔同（有／冇身份證交替、工號集合變）→ 409，寧可擋，唔好寫舊值。
+ * 訊息唔洩露佢冇權睇嘅嘢。triage_person_applies 一律用系統查詢，唔受呼叫者權限影響。
  */
-async function assertNoNewer(db: Pick<typeof prisma, "triagePersonApply" | "triageSession">, q: QRow, actor?: Pick<AuthedSession, "userId" | "baseRole">): Promise<void> {
+async function assertNoNewer(db: Prisma.TransactionClient | typeof prisma, q: QRow, actor?: Pick<AuthedSession, "userId" | "baseRole">): Promise<void> {
   if (!q.personKey && !q.targetGuardId) return; // 舊資料（冇記錄）
   const mine = await db.triageSession.findUnique({ where: { id: q.sessionId }, select: { sourceRef: true } });
-  const v3Only = (V3_ONLY_KINDS as readonly string[]).includes(q.kind);
+  if (!mine) return;
+  const cls = kindClass(q.kind);
+  const classWhere = cls === "ext" ? { isV3: true } : cls === "bank" ? { hasBank: true } : {};
   const latest = await db.triagePersonApply.findFirst({
-    where: { OR: [...(q.personKey ? [{ personKey: q.personKey }] : []), ...(q.targetGuardId ? [{ guardId: q.targetGuardId }] : [])], ...(v3Only ? { isV3: true } : {}) },
+    where: { OR: [...(q.personKey ? [{ personKey: q.personKey }] : []), ...(q.targetGuardId ? [{ guardId: q.targetGuardId }] : [])], ...classWhere },
     orderBy: [{ appliedAt: "desc" }, { id: "desc" }],
   });
-  if (!latest || latest.sourceRef === mine?.sourceRef) return;
-  const newer = await db.triageSession.findUnique({ where: { sourceType_sourceRef: { sourceType: "guard_import", sourceRef: latest.sourceRef } }, select: { ownerUserId: true } });
-  if (newer && actor && newer.ownerUserId !== actor.userId && actor.baseRole !== "老闆") throw Conflict("已有較新嘅導入取代咗呢題，請搵上載較新檔案嘅同事或者老闆跟進");
-  throw Conflict(newer ? "已有較新嘅導入取代咗呢題，請答較新嗰批嘅題" : "已有較新嘅導入取代咗呢題（新資料已經唔需要處理）");
+  if (latest && latest.sourceRef !== mine.sourceRef) {
+    const newer = await db.triageSession.findUnique({ where: { sourceType_sourceRef: { sourceType: "guard_import", sourceRef: latest.sourceRef } }, select: { ownerUserId: true } });
+    if (newer && actor && newer.ownerUserId !== actor.userId && actor.baseRole !== "老闆") throw Conflict("已有較新嘅導入取代咗呢題，請搵上載較新檔案嘅同事或者老闆跟進");
+    throw Conflict(newer ? "已有較新嘅導入取代咗呢題，請答較新嗰批嘅題" : "已有較新嘅導入取代咗呢題（新資料已經唔需要處理）");
+  }
+  // 弱身份重疊（較新嘅包、強身份唔同）
+  const own = q.personKey ? await db.triagePersonApply.findUnique({ where: { personKey_sourceRef: { personKey: q.personKey, sourceRef: mine.sourceRef } } }) : null;
+  if (own && own.weakIds.length > 0) {
+    const hit = await db.$queryRaw<{ id: number }[]>`
+      SELECT id FROM triage_person_applies
+      WHERE applied_at > (${own.appliedAt.toISOString()}::timestamptz AT TIME ZONE 'UTC') AND source_ref <> ${mine.sourceRef} AND weak_ids && ${own.weakIds}::text[]
+        AND person_key <> ${q.personKey} AND (guard_id IS NULL OR guard_id IS DISTINCT FROM ${q.targetGuardId}::text)
+      LIMIT 1`;
+    if (hit.length > 0) throw Conflict("呢位保安員有較新嘅導入資料，請重新上載最新檔案再答");
+  }
 }
 
 export const BANK_QUESTION_DENIED_MSG = "要有安員銀行資料權限嘅同事處理";
@@ -216,6 +230,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
     kind: "commit",
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
     beforeCommit: async (tx, outcome) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
       await assertNoNewer(tx, q, actor);
       const bp = bankProblem(answer, outcome.result);
       if (bp) throw new ApiError(422, "unprocessable", caps.bankView ? bp : BANK_GENERIC_FAIL);
@@ -238,10 +253,11 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
       if (q.kind === "ext_identity_check" && answer.option === "confirm_ext_identity") {
         const ev = q.evidenceJson as unknown as QuestionEvidence;
         const follow = identityFollowUps(ev.person, outcome.result.ext ?? [], ev.guard_id ?? null, q.sort);
-        if (follow.length) {
+        const openKeys = new Set((await tx.triageQuestion.findMany({ where: { sessionId: q.sessionId, status: "open", groupKey: { in: follow.map((d) => d.groupKey) } }, select: { groupKey: true } })).map((x) => x.groupKey));
+        const followNew = follow.filter((d) => !openKeys.has(d.groupKey));
+        if (followNew.length) {
           await tx.triageQuestion.createMany({
-            skipDuplicates: true,
-            data: follow.map((d) => ({
+            data: followNew.map((d) => ({
               sessionId: q.sessionId,
               kind: d.kind,
               groupKey: d.groupKey,

@@ -308,7 +308,7 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
       kind,
       groupKey: sk,
       personKey: sk,
-      targetGuardId: null,
+      targetGuardId: e.action === "link" ? e.guardId : null, // 所有 link 到現有安員嘅情況都記目標 guard（包括 v2 類題）
       sort: KIND_ORDER.indexOf(kind) * 100000 + (order.get(p.key) ?? 0),
       title: KIND_LABEL[kind],
       evidence,
