@@ -120,6 +120,9 @@ def payroll_editor():
         ('2026-09', 'm09a', D9 / '(Maxwell) PayrollEditor (2026.09).xls'),
         ('2026-09', 'm09b', D9 / 'Maxwell_PayrollEditor 9月.xls'),
     ]
+    # 預設只讀 7／8 月。9 月兩個檔未經老闆批准做導入包來源，要明確加 --include-2026-09 先會讀
+    if '--include-2026-09' not in sys.argv:
+        sources = [x for x in sources if x[0] != '2026-09']
     for month, tag, p in sources:
         with open(p, 'rb') as fh:
             of = msoffcrypto.OfficeFile(fh)
