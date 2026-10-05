@@ -2,7 +2,7 @@
 
 輸出全部喺 `data/2026-10/staff-fields/`（gitignored）。命令（冇加 npm script，因 package.json 唔喺本包範圍）：
 
-1. `tools/importer/venv/bin/python scripts/staff-import/py/typed-sources.py` → `typed-sources.json`（Maxwell 前線名單兩個分頁、U Team 名單、BOCHK Payroll Editor 7／8 月；Payroll Editor 用 Excel 預設唯讀密碼解密，同 `tools/importer` 做法）。
+1. `tools/importer/venv/bin/python scripts/staff-import/py/typed-sources.py` → `typed-sources.json`（Maxwell 前線名單兩個分頁、U Team 名單、BOCHK Payroll Editor 預設只讀 7／8 月；9 月兩個互補檔〔`data/2026-09/reference/payrolleditor-drive/`，`file` 標記 m09a／m09b〕腳本有支援，但要加 `--include-2026-09` 先讀——**9 月來源未經老闆批准，唔准開**；Payroll Editor 用 Excel 預設唯讀密碼解密，同 `tools/importer` 做法）。
 2. `npx tsx scripts/staff-import/13-fields-crops.ts [--offset K --limit N --manifest NAME]` → `crops/`、`crops-manifest*.json`（可斷點續跑，可分段並行；頁面 300dpi 快取喺 `pages/`，完成後可刪）。
 3. `npx tsx scripts/staff-import/14-fields-queue.ts` → `read-tasks.json`（每個裁圖要讀乜欄，詞彙見 `lib/fields-spec.ts`）、`second-read-queue.json`（盲讀包：id／裁圖路徑／欄名，唔含任何讀數）。
 4. `python3 scripts/staff-import/py/fields-sheets.py --idx 0,1,..` → `sheets/`（每人裁圖疊成聯絡表，標籤只係內部 id，方便視覺讀）。

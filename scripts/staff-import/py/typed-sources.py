@@ -112,8 +112,18 @@ def parttime():
 def payroll_editor():
     import msoffcrypto, xlrd
     out = []
-    for month in ('2026-07', '2026-08'):
-        p = ROOT / f'data/{month}/reference/{month}-長工autopay-BOCHK-PayrollEditor.xls'
+    # 7／8 月：data/<月>/reference/；9 月：老闆 2026-10 加嘅兩個檔（互補嘅兩批收款人），用唔同 file 標記
+    D9 = ROOT / 'data/2026-09/reference/payrolleditor-drive'
+    sources = [
+        ('2026-07', 'm07', ROOT / 'data/2026-07/reference/2026-07-長工autopay-BOCHK-PayrollEditor.xls'),
+        ('2026-08', 'm08', ROOT / 'data/2026-08/reference/2026-08-長工autopay-BOCHK-PayrollEditor.xls'),
+        ('2026-09', 'm09a', D9 / '(Maxwell) PayrollEditor (2026.09).xls'),
+        ('2026-09', 'm09b', D9 / 'Maxwell_PayrollEditor 9月.xls'),
+    ]
+    # 預設只讀 7／8 月。9 月兩個檔未經老闆批准做導入包來源，要明確加 --include-2026-09 先會讀
+    if '--include-2026-09' not in sys.argv:
+        sources = [x for x in sources if x[0] != '2026-09']
+    for month, tag, p in sources:
         with open(p, 'rb') as fh:
             of = msoffcrypto.OfficeFile(fh)
             of.load_key(password=PE_PASSWORD)
@@ -125,7 +135,7 @@ def payroll_editor():
             name = s(sh.cell_value(r, 4))
             acct = s(sh.cell_value(r, 3))
             if name and acct:
-                out.append({'month': month, 'row': r + 1, 'bankCode': s(sh.cell_value(r, 1)), 'acctType': s(sh.cell_value(r, 2)), 'acct': acct, 'name': name})
+                out.append({'month': month, 'file': tag, 'row': r + 1, 'bankCode': s(sh.cell_value(r, 1)), 'acctType': s(sh.cell_value(r, 2)), 'acct': acct, 'name': name})
             r += 1
     return out
 

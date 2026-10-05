@@ -2283,7 +2283,7 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 
 ### WP-STAFF-FIELDS 第二階段（§30.6）：導入包 v3 新欄寫入路徑
 
-**導入包 v3**（`version:3`，向後兼容 v2；v2 包帶任何 v3 欄 → 400）。每人新增可選欄，每個 leaf 都係 `{value,status}`（status ∈ confirmed／review／missing），值經 zod 嚴格驗證（日期曆法＋範圍：屆滿日 2015–2040、簽發日 2000–今日、入職日 1990–今日；電話香港 8 位；銀行編號喺 HKICL 表；戶口純數字 6–20 位；許可證 `K-123456-7-001` 形式）：
+**導入包 v3**（`version:3`，向後兼容 v2；v2 包帶任何 v3 欄 → 400）。每人新增可選欄，每個 leaf 都係 `{value,status}`（status ∈ confirmed／review／missing），值經 zod 嚴格驗證（日期曆法＋範圍：屆滿日 2015–2040、簽發日 2000–今日、入職日 1990–今日；電話香港 8 位；銀行編號喺 `hkicl-bank-codes.ts` 表（HKICL 現行編號，另加 019＝中銀香港舊成員行編號〔前廣東省銀行，`legacy`，非 HKICL 現行清單〕）；戶口純數字 6–20 位；許可證 `K-123456-7-001` 形式）：
 `siaPermit{no,aExpiry,bExpiry,cExpiry?,dExpiry?}`、`safetyCard{no,expiry}`、`qas{issueDate,expiryDate}`、`bank{code,name,accountNo,payeeName}`、`emergencyContacts[{name,relationship,tel}]`（最多 4）、`hireDate`（人層面）、`staffNumbers[].hireDate`（逐工號）。包頂層另有 `unassignedBankAccounts[{key,bankCode,accountNo,payeeName}]`（Payroll Editor 有戶口但對唔到人，唔係 persons）。
 
 **寫入規則**（`applyPerson`，同一條已驗收路徑）：新欄只寫 confirmed；只補空欄；現有值唔同 → conflict（唔覆蓋）並出分診題；牌照甲／乙到期日寫入後按 PATCH 同一套邏輯重算 `sia_permit_expiry`／`sia_permit_type`（merged 值、`canOverrideDerivedSiaPermit`）；丙／丁到期日系統未儲存（`not_stored`）。銀行 unit 全有或全無（現有四欄全空先補，否則 same／conflict）；緊急聯絡人入 `guard_emergency_contacts`（同名同電話已存在唔重複；同電話唔同名／同名唔同電話＝衝突才出題；其餘 confirmed 逐個加；寫完同步 legacy 欄；legacy 有值而子表 0 行會先自癒搬入）；逐工號入職日期只補 `valid_from` 空嘅行。audit 沿用 `guards`／`guard_emergency_contacts`／`guard_staff_numbers` 嘅 DTO（帶 `import_via`），`ai.audit_log` 照舊 scrub／排除；導入摘要同 triage audit 只有計數。

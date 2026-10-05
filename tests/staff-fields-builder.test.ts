@@ -40,6 +40,18 @@ const ext: ExtPerson[] = [
   { key: "pe:999:bad", keyKind: "internal", hasDocs: false, flags: ["payroll_editor_only_person"], fields: { bankCode: F("999", "review", ["bank_identity_unknown"]), bankAccountNo: F("000011110000", "review", ["bank_identity_unknown"]), bankPayeeName: F("TEST BADCODE", "review", ["bank_identity_unknown"]) } },
 ];
 
+describe("v3 builder：銀行編號 019／250", () => {
+  it.each([["019", "中國銀行（香港）（前廣東省銀行）"], ["250", "花旗銀行（香港）"]])("bank.code %s 唔再當「唔喺表」，銀行名由表推出", (code, zh) => {
+    const e: ExtPerson[] = [{ key: HA, keyKind: "hkid", hasDocs: true, docIds: ["d1"], staffNos: ["U90001"], flags: [], fields: { bankCode: F(code, "confirmed", [], ["typed_pe"]), bankAccountNo: F("000012345678", "confirmed", [], ["typed_pe"]), bankPayeeName: F("TEST PAYEE", "confirmed", [], ["typed_pe"]) } }];
+    const { pkg } = buildPackageV3({ ...v2, persons: [v2.persons[0]!] }, e, {}, { v2DocIds: [["d1"]] });
+    const b = pkg.persons[0]!.bank!;
+    expect(b.code.value).toBe(code);
+    expect(b.code.status).toBe("confirmed");
+    expect(b.name.value).toBe(zh);
+    expect(b.accountNo.status).toBe("confirmed");
+  });
+});
+
 describe("v3 builder", () => {
   it("327＋打字名單＋Payroll Editor 對不到人：v3 形狀、降級、略過、容忍舊格式", () => {
     const { pkg, counts, report } = buildPackageV3(v2, ext, { maxwell: [{ hkid: HC, nameZh: "測試打字員", nameEn: "TEST TYPED", staffNo: "MG90003" }] }, { v2DocIds: [["d1"], ["d2"]] });

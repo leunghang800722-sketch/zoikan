@@ -148,6 +148,8 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect(bad((p) => ((p.emergencyContacts as Record<string, unknown>[])[0]!.tel = L("12345678")))).toBe(false); // 首位 1 非香港號
       expect(bad((p) => ((p.emergencyContacts as Record<string, unknown>[])[0]!.tel = L("9100 0011")))).toBe(false); // 要純 8 位
       expect(bad((p) => ((p.bank as Record<string, unknown>).code = L("999")))).toBe(false); // 唔喺 HKICL 表
+      expect(bad((p) => ((p.bank as Record<string, unknown>).code = L("019")))).toBe(true); // 中銀舊編號（legacy）
+      expect(bad((p) => ((p.bank as Record<string, unknown>).code = L("250")))).toBe(true); // 花旗香港
       expect(bad((p) => ((p.bank as Record<string, unknown>).accountNo = L("000-1234-5678")))).toBe(false); // 戶口只准數字
       expect(bad((p) => ((p.emergencyContacts as unknown[]).push(...Array(4).fill((p.emergencyContacts as unknown[])[0]))))).toBe(false); // 最多 4 位
       expect(importPackageSchema.safeParse(pkg3([], [{ key: "pe:1", bankCode: "999", accountNo: ACCT, payeeName: PAYEE }])).success).toBe(false);

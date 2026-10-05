@@ -23,6 +23,29 @@ describe("HKICL_BANK_OPTIONS（建議下拉，逐個核實過先可以入呢個�
     expect(HKICL_BANK_CODE_SET.has("024")).toBe(true);
   });
 
+  it("250（花旗香港）同 019（中銀香港舊編號）喺表；019 標 legacy、名同 012 分得開；其餘全部唔係 legacy", () => {
+    const b250 = HKICL_BANK_OPTIONS.find((b) => b.code === "250")!;
+    expect(b250.nameEn).toBe("Citibank (Hong Kong) Limited");
+    expect(b250.legacy).toBeUndefined();
+    const b019 = HKICL_BANK_OPTIONS.find((b) => b.code === "019")!;
+    const b012 = HKICL_BANK_OPTIONS.find((b) => b.code === "012")!;
+    expect(b019.legacy).toBe(true);
+    expect(b019.nameEn).toBe(b012.nameEn);
+    expect(b019.nameZhShort).not.toBe(b012.nameZhShort);
+    expect(b019.note).toBeTruthy();
+    expect(HKICL_BANK_OPTIONS.filter((b) => b.legacy).map((b) => b.code)).toEqual(["019"]);
+    expect(new Set(HKICL_BANK_OPTIONS.map((b) => b.nameZhShort)).size).toBe(HKICL_BANK_OPTIONS.length); // 下拉顯示名唔重複
+  });
+
+  it("由名反推編號（fields-ext）：中國銀行／BOC 仍然淨係 012，唔會變 019", async () => {
+    const { bankCodeFromName, bankByCode } = await import("../scripts/staff-import/lib/fields-ext");
+    expect(bankCodeFromName("中國銀行")).toBe("012");
+    expect(bankCodeFromName("Bank of China (Hong Kong) Limited")).toBe("012");
+    expect(bankByCode("12")?.nameZhShort).toBe("中國銀行（香港）");
+    expect(bankByCode("019")?.nameZhShort).toBe("中國銀行（香港）（前廣東省銀行）");
+    expect(bankByCode("250")?.code).toBe("250");
+  });
+
   it("冇收錄任何未核實嘅假編號（例如 999）", () => {
     expect(HKICL_BANK_CODE_SET.has("999")).toBe(false);
   });
@@ -190,6 +213,15 @@ describe("buildBochkAutopayWorkbook：HKICL 字元過濾／缺資料判斷", () 
     const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
     expect(result.rowCount).toBe(1);
     expect(result.missing.length).toBe(0);
+  });
+
+  it.each(["019", "250"])("bank_code %s——照編號正常出行（唔再依賴銀行名）", async (code) => {
+    await makeGuard({ bankCode: code, tel: "91234567" });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const result = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    expect(result.rowCount).toBe(1);
+    expect(result.missing.length).toBe(0);
+    expect(result.workbook.getWorksheet("Payroll Editor 明細")!.getCell(2, 2).value).toBe(code);
   });
 
   // Opus 5.5 覆核應修 b：賬戶號碼含空格分組（人手輸入常見）——去咗空格
