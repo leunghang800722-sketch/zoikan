@@ -5,7 +5,7 @@
 // code`——會計揀完先由前端寫入 `guards.bank_code`，`bank_name`（自由
 // 文字）唔可以反推呢個對照（見 §25.4 任務書：「唔准憑 bank_name 自動填」）。
 //
-// 逐個核實：本表全部抄自 HKICL 官方清算銀行編號清單（透過香港特區政府
+// 逐個核實：本表除 `legacy` 標記嗰個（見下面 019）之外，全部抄自 HKICL 官方清算銀行編號清單（透過香港特區政府
 // 社會福利署 wfsfaa.gov.hk 轉載嘅 PDF《Bank Code List (sorted by bank
 // code)》，頁尾註明 "Source of Data : Hong Kong Interbank Clearing Ltd.
 // (data as at 20.5.2026) (Website: http://www.hkicl.com.hk)"，
@@ -13,7 +13,20 @@
 // —2026-09-28 逐個銀行名／編號對住嗰份 PDF 核實過。清單淨係收錄香港
 // 保安員日常會用嚟出糧嘅主流零售／商業銀行（含幾間虛擬銀行），**唔係
 // 齊全嘅 HKICL 全部參與者**（PDF 仲有幾百間，包括投行／結算所／HKMA
-// 各類特殊編號，同「幫會計揀員工銀行」呢個用途無關，冇抄入嚟）。**核實
+// 各類特殊編號，同「幫會計揀員工銀行」呢個用途無關，冇抄入嚟）。
+//
+// 例外（2026-10-05 老闆指示補）：
+// - 250 Citibank (Hong Kong) Limited／花旗銀行(香港)——同樣喺上面嗰份
+//   HKICL PDF 有，純粹之前冇抄入；BOCHK Payroll Editor 有收款人用。
+// - 019 **唔係 HKICL 現行清單編號**，係中銀香港嘅舊成員行編號（前廣東省
+//   銀行），標 `legacy: true`。來源＝公司嘅銀行代號對照表（Bank Code List
+//   列明 019＝中國銀行（前稱「廣東省銀行」））＋實際 BOCHK Payroll Editor
+//   出糧檔有用 019（即係中銀發薪系統接受）。英文名同 012 一樣，所以**任何
+//   由銀行名反推編號嘅邏輯唔可以靠呢個表**（反推只認 012）；一律按編號。
+//   同類舊編號（014／026／030／031／033／036／064／070 等，都係「中國銀行
+//   （前稱 XX 銀行）」）冇實際用例，暫時唔加；有用例先逐個核實再加。
+//
+// **核實
 // 唔到嘅（PDF 冇出現、或者名同編號對唔上）一律唔寫，唔准估**——如果
 // 之後要加銀行，一定要重新對住官方清單核實先可以加呢個陣列。
 export interface HkiclBankOption {
@@ -24,6 +37,10 @@ export interface HkiclBankOption {
   /** 常見中文簡稱（方便下拉搜尋／顯示，呢個唔係 HKICL 官方欄位，純粹
    * UI 用，冇喺 PDF 出現，係坊間通用叫法）。 */
   nameZhShort: string;
+  /** true＝唔係 HKICL 現行清單編號，係舊成員行編號（只有 019），來源見表頭。 */
+  legacy?: true;
+  /** 補充說明（legacy 編號寫來源）。 */
+  note?: string;
 }
 
 export const HKICL_BANK_OPTIONS: readonly HkiclBankOption[] = [
@@ -35,6 +52,13 @@ export const HKICL_BANK_OPTIONS: readonly HkiclBankOption[] = [
   { code: "015", nameEn: "The Bank of East Asia, Ltd.", nameZhShort: "東亞銀行" },
   { code: "016", nameEn: "DBS Bank (Hong Kong) Limited", nameZhShort: "星展銀行" },
   { code: "018", nameEn: "China CITIC Bank International Limited", nameZhShort: "中信銀行國際" },
+  {
+    code: "019",
+    nameEn: "Bank of China (Hong Kong) Limited",
+    nameZhShort: "中國銀行（香港）（前廣東省銀行）",
+    legacy: true,
+    note: "非 HKICL 現行清單編號；中銀香港舊成員行編號（前廣東省銀行）。來源：公司 Bank Code List＋實際 Payroll Editor 出糧檔",
+  },
   { code: "020", nameEn: "CMB Wing Lung Bank Limited", nameZhShort: "招商永隆銀行" },
   { code: "024", nameEn: "Hang Seng Bank Limited", nameZhShort: "恒生銀行" },
   { code: "025", nameEn: "Shanghai Commercial Bank Limited", nameZhShort: "上海商業銀行" },
@@ -47,6 +71,7 @@ export const HKICL_BANK_OPTIONS: readonly HkiclBankOption[] = [
   { code: "043", nameEn: "Nanyang Commercial Bank Limited", nameZhShort: "南洋商業銀行" },
   { code: "072", nameEn: "Industrial and Commercial Bank of China (Asia) Limited", nameZhShort: "中國工商銀行（亞洲）" },
   { code: "128", nameEn: "Fubon Bank (Hong Kong) Limited", nameZhShort: "富邦銀行（香港）" },
+  { code: "250", nameEn: "Citibank (Hong Kong) Limited", nameZhShort: "花旗銀行（香港）" },
   { code: "382", nameEn: "Bank of Communications (Hong Kong) Limited", nameZhShort: "交通銀行（香港）" },
   { code: "387", nameEn: "ZA Bank Limited", nameZhShort: "眾安銀行" },
   { code: "388", nameEn: "Livi Bank Limited", nameZhShort: "livi 銀行" },
