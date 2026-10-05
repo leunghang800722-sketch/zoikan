@@ -16,8 +16,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const rows = await prisma.triageQuestion.findMany({ where: { sessionId: session.id, ...(onlyOpen ? { status: "open" } : {}) }, orderBy: [{ sort: "asc" }, { id: "asc" }] });
     const counts = await prisma.triageQuestion.groupBy({ by: ["status", "kind"], where: { sessionId: session.id }, _count: { _all: true } });
     const restricted = new Set(await restrictedKindsFor(actor));
-    const c = { open: 0, answered: 0, skipped: 0, total: 0, important_open: 0, supplementary_open: 0, restricted_open: 0 };
+    const c = { open: 0, answered: 0, skipped: 0, superseded: 0, total: 0, important_open: 0, supplementary_open: 0, restricted_open: 0 };
     for (const g of counts) {
+      if (g.status === "superseded") {
+        c.superseded += g._count._all;
+        continue;
+      }
       if (g.status === "open" || g.status === "answered" || g.status === "skipped") c[g.status] += g._count._all;
       if (g.status === "open" && !restricted.has(g.kind)) c[isSupplementary(g.kind) ? "supplementary_open" : "important_open"] += g._count._all;
       if (g.status === "open" && restricted.has(g.kind)) c.restricted_open += g._count._all;

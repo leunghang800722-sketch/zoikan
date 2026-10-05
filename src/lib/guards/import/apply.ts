@@ -28,6 +28,7 @@ import {
   extGateFor,
   EMPTY_BANK,
   OVERWRITE_DENIED_MSGS,
+  LONGTERM_HIRE_VIA_TRIAGE_MSG,
   PII_OVERWRITE_DENIED_MSG,
   aggregateExt,
   bankLeaves,
@@ -932,7 +933,7 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
             await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT import_person");
             Object.assign(part, snap);
             part.overwrite_blocked += 1;
-            r = { key: p.key, outcome: "needs_review", reasons: ["overwrite_forbidden"], fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
+            r = { key: p.key, outcome: "needs_review", reasons: e instanceof ApiError && e.message === LONGTERM_HIRE_VIA_TRIAGE_MSG ? ["overwrite_forbidden", "longterm_hire_via_triage"] : ["overwrite_forbidden"], fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
           }
           rs.push(r);
           if (r.outcome === "created" || r.staff_numbers_added || r.phones_added || r.addresses_added || Object.values(r.fields).includes("written")) ctx = await loadCtx(tx);

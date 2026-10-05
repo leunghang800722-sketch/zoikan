@@ -18,7 +18,8 @@ interface SessionRow {
   status: string;
   created_at: string;
   completed_at: string | null;
-  counts: { open: number; answered: number; skipped: number; total: number; important_open: number; supplementary_open: number };
+  counts: { open: number; answered: number; skipped: number; superseded?: number; total: number; important_open: number; supplementary_open: number };
+  superseded_all?: boolean;
 }
 interface ListRes {
   sessions: SessionRow[];
@@ -82,10 +83,10 @@ export default function TriagePage() {
           <div key={s.id} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="triage-session-card">
             <div className="flex flex-wrap items-center gap-2">
               <b>{SOURCE_LABEL[s.source_type] ?? s.source_type}</b>
-              <Pill variant={s.status === "done" ? "success" : "warning"}>{s.counts.open === 0 ? "已處理晒" : `重要 ${s.counts.important_open}`}</Pill>
+              <Pill variant={s.status === "done" ? "success" : "warning"}>{s.superseded_all ? "已被較新嘅導入取代" : s.counts.open === 0 ? "已處理晒" : `重要 ${s.counts.important_open}`}</Pill>
               {s.counts.supplementary_open > 0 && <Pill variant="neutral">補充資料 {s.counts.supplementary_open}</Pill>}
               <span className="text-zk-faint">
-                共 {s.counts.total} 條 · 已答 {s.counts.answered} · 跳過 {s.counts.skipped}
+                共 {s.counts.total} 條 · 已答 {s.counts.answered} · 跳過 {s.counts.skipped}{(s.counts.superseded ?? 0) > 0 ? ` · ${s.counts.superseded} 條已被較新嘅導入取代` : ""}
               </span>
               <span className="text-zk-faint">{new Date(s.created_at).toLocaleString("zh-HK")}</span>
               {isBossView && <span className="text-zk-muted">上載者／擁有人：{s.owner_name ?? "—"}</span>}

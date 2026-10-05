@@ -32,9 +32,17 @@ interface KeyablePerson {
 export function serverPersonKey(p: KeyablePerson): string {
   const h = canonicalHkid(p.hkid.value?.trim() || null);
   if (h) return hmacRef("hkid", h);
-  const nos = [...new Set(p.staffNumbers.map((n) => normalizeStaffNumber(n.number)))].sort();
+  // 比較用正規化：MW-123＝MW123（只用喺 key 比較，唔改儲存）
+  const nos = [...new Set(p.staffNumbers.map((n) => normalizeStaffNumber(n.number).replace(/-/g, "")))].sort();
   if (nos.length) return hmacRef("staffnos", nos.join(","));
   return hmacRef("pkgkey", p.key);
+}
+
+/** key 版本指紋（HMAC(secret,"fingerprint") 頭 8 hex，唔洩露 secret）：SESSION_SECRET 輪換偵測用。 */
+export function keyFingerprint(): string {
+  const k = process.env.SESSION_SECRET;
+  if (!k || k.length < 32) throw new Error("SESSION_SECRET 未設定或長度不足 32 字符");
+  return createHmac("sha256", k).update("fingerprint").digest("hex").slice(0, 8);
 }
 
 /** 對唔到人嘅收款戶口嘅題目 key。 */

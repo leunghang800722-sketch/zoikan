@@ -146,8 +146,7 @@ describe("WP-STAFF-FIELDS 第三輪覆核（R1–R5／Minor）", () => {
     await applyPkg(owner, pa);
     const q1 = (await qs("ext_field_review"))[0]!;
     const pv = await (await qPreview(owner, q1.id, ans)).json();
-    const s2 = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: "newer", ownerUserId: fx.userIds["老闆"], createdBy: "t", statsJson: {} } });
-    await prisma.triageQuestion.create({ data: { sessionId: s2.id, kind: q1.kind, groupKey: q1.groupKey, sort: 0, title: "x", evidenceJson: q1.evidenceJson as never, optionsJson: q1.optionsJson as never } });
+    await prisma.triagePersonApply.create({ data: { personKey: q1.personKey!, guardId: q1.targetGuardId, sourceRef: "newer-pkg", isV3: true } });
     expect((await qAnswer(owner, q1.id, ans, pv.preview_hash)).status).toBe(409);
   });
 

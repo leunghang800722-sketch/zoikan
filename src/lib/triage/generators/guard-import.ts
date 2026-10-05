@@ -12,6 +12,9 @@ import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type QuestionKind, ty
 export interface QuestionDraft {
   kind: QuestionKind;
   groupKey: string;
+  /** 人 key（serverPersonKey；bank_identity_unknown＝戶口 ref）＋鎖定嘅目標 guard（ext／bank 題）：分診「只有最近一次包含呢個人嘅包先答得」用 */
+  personKey: string;
+  targetGuardId: string | null;
   sort: number;
   title: string;
   evidence: QuestionEvidence;
@@ -167,6 +170,8 @@ function extDrafts(e: Evaluation, order: number, opts: DraftOptions): QuestionDr
   const mk = (kind: QuestionKind, suffix: string, items: ExtItem[]): QuestionDraft => ({
     kind,
     groupKey: `${serverPersonKey(p)}:${suffix}`,
+    personKey: serverPersonKey(p),
+    targetGuardId: e.guardId,
     sort: KIND_ORDER.indexOf(kind) * 100000 + order,
     title: KIND_LABEL[kind],
     evidence: {
@@ -243,6 +248,8 @@ function unassignedBankDrafts(pkg: ImportPackage, opts: DraftOptions): QuestionD
     out.push({
       kind: "bank_identity_unknown",
       groupKey: `bankpe:${ref}`,
+      personKey: ref,
+      targetGuardId: null,
       sort: KIND_ORDER.indexOf("bank_identity_unknown") * 100000 + i,
       title: KIND_LABEL.bank_identity_unknown,
       evidence: { v: 1, person: synthetic, reasons: ["bank_identity_unknown"], candidate_guard_ids: cands, unassigned: { key: ref, bankCode: u.bankCode, accountNo: u.accountNo, payeeName: u.payeeName } },
@@ -300,6 +307,8 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
     drafts.push({
       kind,
       groupKey: sk,
+      personKey: sk,
+      targetGuardId: null,
       sort: KIND_ORDER.indexOf(kind) * 100000 + (order.get(p.key) ?? 0),
       title: KIND_LABEL[kind],
       evidence,
@@ -322,6 +331,8 @@ export function identityFollowUps(person: PackagePerson, outcomes: readonly { ke
   const mk = (kind: QuestionKind, suffix: string, items: { key: string; check: string; status: string; held?: string }[], extraReasons: string[] = [], skipOnly = false): QuestionDraft => ({
     kind,
     groupKey: `${sk}:${suffix}`,
+    personKey: sk,
+    targetGuardId: guardId,
     sort,
     title: KIND_LABEL[kind],
     evidence: { v: 1, person: { ...person, key: sk }, reasons: extraReasons, candidate_guard_ids: [], ext_review: items, guard_id: guardId },
@@ -329,11 +340,11 @@ export function identityFollowUps(person: PackagePerson, outcomes: readonly { ke
   });
   const out: QuestionDraft[] = [];
   const o = new Map(outcomes.map((x) => [x.key, x.outcome]));
-  if (o.get("hireDate") === "held") out.push(mk("ext_field_review", "extreview", [{ key: "hireDate", check: "fill", status: "confirmed", held: "longterm" }]));
+  if (o.get("hireDate") === "held") out.push(mk("ext_field_review", "extreview", [{ key: "hireDate", check: "held", status: "confirmed", held: "longterm" }]));
   const bo = o.get("bank");
   if (bo !== undefined && bo !== "written" && bo !== "same" && bo !== "skipped") {
     const incomplete = !bankComplete(person);
-    out.push(mk("bank_review", "bank", [{ key: "bank", check: "fill", status: "review", held: "bank" }], incomplete ? ["bank_incomplete"] : [], incomplete));
+    out.push(mk("bank_review", "bank", [{ key: "bank", check: "held", status: "review", held: "bank" }], incomplete ? ["bank_incomplete"] : [], incomplete));
   }
   const conflicts = outcomes.filter((x) => x.outcome === "conflict" && !isBankKey(x.key)).map((x) => ({ key: x.key, check: "differs", status: "confirmed" }));
   if (conflicts.length) out.push(mk("ext_field_conflict", "extconflict", conflicts));

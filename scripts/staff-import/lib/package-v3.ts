@@ -26,6 +26,8 @@ export interface TypedSources {
 
 const MISSING: Leaf = { value: null, status: 'missing' };
 const cleanNo = (s: string | null | undefined) => (s ?? '').toUpperCase().replace(/\s+/g, '') || null;
+/** 比較用：MW-123＝MW123（只喺 join／配對比較用，輸出仍然用 cleanNo） */
+const cmpNo = (s: string | null | undefined) => cleanNo(s)?.replace(/-/g, '') ?? null;
 // 減題規則（主規劃 2026-10-05）：以下 reason 一律唔入包、唔出題，只入 unverified-report（內部 key＋欄名＋reason，冇值）
 const DROP_REASONS = ['handwritten_unverified', 'handwritten_date_ambiguous', 'permit_serial_unverified'];
 // review 狀態要「畫面上人可以直接決定」先入包出題
@@ -113,14 +115,14 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
     if (e.hasDocs === false || e.keyKind === 'internal') continue;
     const h = canonicalHkid(e.key);
     if (h) byHkid.set(h, e);
-    for (const n of e.staffNos ?? []) byNo.set(cleanNo(n)!, [...(byNo.get(cleanNo(n)!) ?? []), e]);
+    for (const n of e.staffNos ?? []) byNo.set(cmpNo(n)!, [...(byNo.get(cmpNo(n)!) ?? []), e]);
   }
   const used = new Set<ExtPerson>();
 
   const extFor = (p: V2Person): ExtPerson | null => {
     const h = canonicalHkid(p.hkid.value ?? '');
     if (h && byHkid.has(h)) return byHkid.get(h)!;
-    const c = [...new Set(p.staffNumbers.flatMap((n) => byNo.get(cleanNo(n.number)!) ?? []))];
+    const c = [...new Set(p.staffNumbers.flatMap((n) => byNo.get(cmpNo(n.number)!) ?? []))];
     return c.length === 1 ? c[0]! : null;
   };
 
@@ -221,7 +223,7 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       const cand = docsExt[pi]!;
       const h = canonicalHkid(p.hkid.value ?? '');
       const hkidOk = !!h && cand.keyKind === 'hkid' && canonicalHkid(cand.key) === h;
-      const staffOk = p.staffNumbers.some((n) => (cand.staffNos ?? []).map(cleanNo).includes(cleanNo(n.number)));
+      const staffOk = p.staffNumbers.some((n) => (cand.staffNos ?? []).map(cmpNo).includes(cmpNo(n.number)));
       const docsOk = sameSet(o.v2DocIds![pi]!, (cand as { docIds?: string[] }).docIds ?? []);
       if (docsOk && (hkidOk || staffOk) && !used.has(cand)) {
         e = cand;
@@ -288,7 +290,7 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
     const hk = e.keyKind === 'hkid' ? canonicalHkid(e.key) : null;
     const nos = [...new Set((e.staffNos ?? []).map(cleanNo).filter((x): x is string => !!x))];
     if (e.keyKind === 'staffNo' && !nos.includes(cleanNo(e.key)!)) nos.push(cleanNo(e.key)!);
-    const row = typedRows.find((r) => (hk && canonicalHkid(r.hkid ?? '') === hk) || (r.staffNo && nos.includes(cleanNo(r.staffNo)!)));
+    const row = typedRows.find((r) => (hk && canonicalHkid(r.hkid ?? '') === hk) || (r.staffNo && nos.map(cmpNo).includes(cmpNo(r.staffNo))));
     const staffNumbers = nos.flatMap((n) => {
       const m = /^([A-Z]{1,4})\d[0-9A-Z-]{0,15}$/.exec(n);
       return m ? [{ scheme: m[1]!, number: n }] : [];

@@ -124,6 +124,7 @@ export const REASON_LABEL: Record<string, string> = {
   maxwell_payee_differs: "Maxwell 名單收款人同 Payroll Editor 唔同",
   typed_list_only_person: "淨係喺打字名單出現",
   ext_identity_check: "工號／身份同另一位唔一致",
+  longterm_hire_via_triage: "長工入職日期會影響長工糧計算，要喺分診題逐條確認，唔可以批量決定",
   bank_incomplete: "包內銀行資料四欄唔齊（編號／戶口／收款人／名稱），只可以跳過，唔准砌半套戶口",
   bank_acct_belongs_to_other: "呢個戶口已屬於另一位保安員",
   bank_acct_shared_by_persons: "同一個戶口出現喺導入包內多個人",
@@ -135,7 +136,7 @@ export function reasonLabel(code: string): string {
 }
 
 const STATUS_LABEL: Record<string, string> = { confirmed: "已確認", review: "待核對", missing: "冇資料" };
-const CHECK_LABEL: Record<string, string> = { hidden: "你冇權限睇現有資料",  fill: "現有資料冇，會補", differs: "同現有資料唔同", invalid_date: "日期唔合法", new: "新", add: "會加多一位", same: "同現有資料一樣", not_stored: "系統未儲存" };
+const CHECK_LABEL: Record<string, string> = { hidden: "你冇權限睇現有資料",  fill: "現有資料冇，會補", differs: "同現有資料唔同", invalid_date: "日期唔合法", new: "新", held: "待你決定", add: "會加多一位", same: "同現有資料一樣", not_stored: "系統未儲存" };
 
 function FieldRow({ label, f }: { label: string; f: Field }) {
   if (f.status === "missing" && !f.value) return null;
@@ -327,7 +328,6 @@ function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | nu
 export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: string; onClose: () => void; onChanged?: () => void }) {
   const [queue, setQueue] = useState<Question[] | null>(null);
   const router = useRouter();
-  const [totals, setTotals] = useState<{ imp: number; sup: number } | null>(null);
   const [done, setDone] = useState({ imp: 0, sup: 0 });
   const [suppStarted, setSuppStarted] = useState(false);
   const [choice, setChoice] = useState<string>("");
@@ -350,7 +350,6 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       return;
     }
     setQueue(res.data.questions);
-    setTotals((t) => t ?? { imp: res.data.questions.filter((x) => !isSupp(x.kind)).length, sup: res.data.questions.filter((x) => isSupp(x.kind)).length });
   }, [sessionId]);
   useEffect(() => {
     void load();
@@ -415,6 +414,8 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     router.refresh(); // 左欄 badge 即時更新
     setQueue((cur) => (cur ? cur.filter((x) => x.id !== q.id) : cur));
     setDone((d) => ({ ...d, [tier]: d[tier] + 1 }));
+    // 身份確認之後可能即時補開跟進題（長工入職日期／銀行／衝突）：重新載入題目清單，同一個對話框即時見到
+    if (q.kind === "ext_identity_check") await load();
   }
 
   async function onConfirm() {
@@ -459,7 +460,9 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   };
   const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy;
   const suppNow = !!q && isSupp(q.kind);
-  const progressTotal = totals ? (suppNow ? totals.sup : totals.imp) : 0;
+  // 總數＝已答＋仍然未答（身份題答完補開跟進題後都計到）
+  const liveTotals = queue === null ? null : { imp: done.imp + imp.length, sup: done.sup + sup.length };
+  const progressTotal = liveTotals ? (suppNow ? liveTotals.sup : liveTotals.imp) : 0;
   const progressDone = suppNow ? done.sup : done.imp;
 
   return (
@@ -472,10 +475,10 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
             {q && (
               <div className="text-[12px] text-zk-muted" data-testid="triage-progress">
                 {suppNow ? "補充資料 " : ""}第 {Math.min(progressDone + 1, progressTotal)} 題／共 {progressTotal} 題
-                {!suppNow && totals && totals.sup > 0 ? `（另有 ${totals.sup} 題補充資料可以遲啲先做）` : ""}
+                {!suppNow && liveTotals && liveTotals.sup > 0 ? `（另有 ${liveTotals.sup} 題補充資料可以遲啲先做）` : ""}
               </div>
             )}
-            {!q && totals && totals.imp + totals.sup > 0 && <div className="text-[12px] text-zk-muted">重要 {totals.imp} 題，補充資料 {totals.sup} 題</div>}
+            {!q && liveTotals && liveTotals.imp + liveTotals.sup > 0 && <div className="text-[12px] text-zk-muted">重要 {liveTotals.imp} 題，補充資料 {liveTotals.sup} 題</div>}
           </div>
           <button type="button" onClick={onClose} className="rounded px-2 py-1 text-[13px] text-zk-muted hover:bg-zk-header" data-testid="triage-later">
             遲啲先答
@@ -487,7 +490,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
           {queue === null && <div className="text-[13px] text-zk-muted">載入緊…</div>}
           {gate && (
             <div className="space-y-2 py-6 text-center" data-testid="triage-gate">
-              <div className="text-[15px] font-semibold">{totals && totals.imp > 0 ? "重要嘅問題答完喇" : "冇重要嘅問題"}</div>
+              <div className="text-[15px] font-semibold">{liveTotals && liveTotals.imp > 0 ? "重要嘅問題答完喇" : "冇重要嘅問題"}</div>
               <div className="text-[13px] text-zk-muted">仲有 {sup.length} 題補充資料（逐欄核對英文名、出生日期、電話、地址），唔急，可以遲啲先做。</div>
               <div className="flex justify-center gap-2">
                 <Button variant="primary" onClick={() => setSuppStarted(true)} data-testid="triage-continue-supp">

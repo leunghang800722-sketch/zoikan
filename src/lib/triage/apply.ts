@@ -18,6 +18,7 @@ import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
 import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
 import { sameEnglishTokens } from "./generators/guard-import";
+import { V3_ONLY_KINDS } from "./session";
 import { identityFollowUps } from "./generators/guard-import";
 import { BANK_KINDS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
@@ -52,10 +53,23 @@ function assertAnswerable(q: QRow): void {
   if (q.status === "superseded") throw Conflict("已有較新資料，請答新題");
 }
 
-/** 有較新（createdAt 較後）嘅同 group_key＋kind 題（任何狀態，未被 superseded）→ 舊題唔可以再答（防止寫入舊值）。tx 內再查一次防並發。 */
-async function assertNoNewer(db: Pick<typeof prisma, "triageQuestion">, q: QRow): Promise<void> {
-  const n = await db.triageQuestion.count({ where: { groupKey: q.groupKey, kind: q.kind, id: { not: q.id }, createdAt: { gt: q.createdAt }, status: { not: "superseded" } } });
-  if (n > 0) throw Conflict("已有較新資料，請答新題");
+/**
+ * 只有「最近一次包含呢個人嘅包」所出嘅題先答得（Opus 第四輪）：同一個人（人 key 或鎖定目標 guard）喺 triage_person_applies
+ * 有較新嘅包（其他包 hash）→ 409。ext／bank 類題淨睇 v3 包。tx 內再查一次防並發。
+ * 訊息唔洩露佢冇權睇嘅嘢：新 session 擁有人唔係佢（又唔係老闆）→ 「請搵上載較新檔案嘅同事或者老闆跟進」。
+ */
+async function assertNoNewer(db: Pick<typeof prisma, "triagePersonApply" | "triageSession">, q: QRow, actor?: Pick<AuthedSession, "userId" | "baseRole">): Promise<void> {
+  if (!q.personKey && !q.targetGuardId) return; // 舊資料（冇記錄）
+  const mine = await db.triageSession.findUnique({ where: { id: q.sessionId }, select: { sourceRef: true } });
+  const v3Only = (V3_ONLY_KINDS as readonly string[]).includes(q.kind);
+  const latest = await db.triagePersonApply.findFirst({
+    where: { OR: [...(q.personKey ? [{ personKey: q.personKey }] : []), ...(q.targetGuardId ? [{ guardId: q.targetGuardId }] : [])], ...(v3Only ? { isV3: true } : {}) },
+    orderBy: [{ appliedAt: "desc" }, { id: "desc" }],
+  });
+  if (!latest || latest.sourceRef === mine?.sourceRef) return;
+  const newer = await db.triageSession.findUnique({ where: { sourceType_sourceRef: { sourceType: "guard_import", sourceRef: latest.sourceRef } }, select: { ownerUserId: true } });
+  if (newer && actor && newer.ownerUserId !== actor.userId && actor.baseRole !== "老闆") throw Conflict("已有較新嘅導入取代咗呢題，請搵上載較新檔案嘅同事或者老闆跟進");
+  throw Conflict(newer ? "已有較新嘅導入取代咗呢題，請答較新嗰批嘅題" : "已有較新嘅導入取代咗呢題（新資料已經唔需要處理）");
 }
 
 export const BANK_QUESTION_DENIED_MSG = "要有安員銀行資料權限嘅同事處理";
@@ -129,7 +143,7 @@ export interface PreviewOutput {
 
 export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, caps: ViewerCaps, ip: string | null): Promise<PreviewOutput> {
   assertAnswerable(q);
-  await assertNoNewer(prisma, q);
+  await assertNoNewer(prisma, q, actor);
   assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
   assertBankAnswerRules(q, answer, caps);
@@ -174,7 +188,7 @@ export interface AnswerOutput {
 
 export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, previewHash: string | undefined, caps: ViewerCaps, ip: string | null): Promise<AnswerOutput> {
   assertAnswerable(q);
-  await assertNoNewer(prisma, q);
+  await assertNoNewer(prisma, q, actor);
   assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
   assertBankAnswerRules(q, answer, caps);
@@ -202,7 +216,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
     kind: "commit",
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
     beforeCommit: async (tx, outcome) => {
-      await assertNoNewer(tx, q);
+      await assertNoNewer(tx, q, actor);
       const bp = bankProblem(answer, outcome.result);
       if (bp) throw new ApiError(422, "unprocessable", caps.bankView ? bp : BANK_GENERIC_FAIL);
       impact = buildImpact(outcome.result, outcome.changes, caps);
@@ -231,6 +245,8 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
               sessionId: q.sessionId,
               kind: d.kind,
               groupKey: d.groupKey,
+              personKey: d.personKey,
+              targetGuardId: d.targetGuardId,
               sort: d.sort,
               title: d.title,
               evidenceJson: JSON.parse(JSON.stringify(d.evidence)),

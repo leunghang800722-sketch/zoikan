@@ -93,6 +93,28 @@ export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg:
 export { maskPreviewForViewer, maskApplyForViewer } from "./project";
 
 /** decisions 指向包內唔存在嘅人，或者指向一個冇值又冇帶 value 嘅欄（skip 除外）→ 400。 */
+/**
+ * decisions 嘅 key：`@<index>`＝上載包 persons 位置（對返 package_hash 綁定嘅包；UI 一律用呢個，因為伺服器 `ref` 喺同包兩行相同身份證／工號集合時會撞）；
+ * 亦接受包內 `key`（向後兼容、API 直接用）。`@index` 越界／同包內 key 撞 → 400。
+ */
+export function resolveDecisionKeys<T>(pkg: ImportPackage, decisions: Record<string, T> | undefined): Record<string, T> | undefined {
+  if (!decisions) return decisions;
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(decisions)) {
+    if (!k.startsWith("@")) {
+      if (k in out) throw BadRequest("decisions 有重複目標");
+      out[k] = v;
+      continue;
+    }
+    const i = Number(k.slice(1));
+    const p = Number.isInteger(i) && i >= 0 ? pkg.persons[i] : undefined;
+    if (!p) throw BadRequest("decisions 指向導入包內唔存在嘅位置");
+    if (p.key in out) throw BadRequest("decisions 有重複目標");
+    out[p.key] = v;
+  }
+  return out;
+}
+
 export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<string, Record<string, unknown>> | undefined): void {
   if (!decisions) return;
   const byKey = new Map(pkg.persons.map((p) => [p.key, p]));

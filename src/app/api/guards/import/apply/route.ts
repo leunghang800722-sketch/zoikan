@@ -3,7 +3,7 @@
 //  - 冇 decisions：自動套用（link／create 嘅人，只寫 status=confirmed 嘅欄）。
 //  - 有 decisions（覆核頁）：只處理有決定嘅人；逐欄 confirm／replace／skip。
 // 冪等；分批 transaction；每筆 writeAuditTx。導入包唔入 DB（要重新帶）。
-import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, assertBankPermissionForPackage, redactRowKeys } from "@/lib/guards/import/request";
+import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, resolveDecisionKeys, assertBankPermissionForPackage, redactRowKeys } from "@/lib/guards/import/request";
 import { hashPackage } from "@/lib/guards/import/package";
 import { Conflict, Forbidden } from "@/lib/api/errors";
 import { applyImport } from "@/lib/guards/import/apply";
@@ -21,13 +21,14 @@ export async function POST(req: Request) {
     const session = await requireImportPermission(req, "apply");
     const body = parseBody(applyBodySchema, await readJson(req));
     const pkg = parsePackage(body.package);
+    const decisions = resolveDecisionKeys(pkg, body.decisions);
     assertPackageSize(session, pkg);
-    assertDecisionTargets(pkg, body.decisions);
+    assertDecisionTargets(pkg, decisions);
     await assertBankPermissionForPackage(session, pkg);
     const pii = await hasPermission(session, "安員個人資料", "view");
     if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
     // decisions.ext（繞過自動寫入閘）要「安員個人資料:view」＋「安員:update」
-    const hasExtDecision = !!body.decisions && Object.values(body.decisions).some((d) => d.ext && Object.values(d.ext).some((a) => a !== "skip"));
+    const hasExtDecision = !!decisions && Object.values(decisions).some((d) => d.ext && Object.values(d.ext).some((a) => a !== "skip"));
     if (hasExtDecision && !(pii && (await hasPermission(session, "安員", "update")))) throw Forbidden("呢類決定要有安員個人資料查看＋安員修改權限嘅同事做");
     const canOverwritePii = await hasPermission(session, "安員個人資料", "update");
     const canEditGuard = await hasPermission(session, "安員", "update");
@@ -37,12 +38,12 @@ export async function POST(req: Request) {
     // 其他包照舊（有 decisions 嘅覆核唔計）。失敗唔退還次數。
     if (pkg.source === "single_ocr") await reserveQuota(session, "single_ocr");
     // 帶 decisions.ext 嘅請求同樣計配額（否則可以無限試 decisions 探測現值）
-    else if (!body.decisions || Object.values(body.decisions).some((d) => d.ext)) await reserveQuota(session, "batch");
+    else if (!decisions || Object.values(decisions).some((d) => d.ext)) await reserveQuota(session, "batch");
     const result = await applyImport(pkg, {
       actorUserId: session.userId,
       ip: getClientIp(req),
       personKeys: body.person_keys,
-      decisions: mapDecisions(body.decisions),
+      decisions: mapDecisions(decisions),
       canOverwritePii,
       canEditGuard,
       canEditBank,
@@ -52,10 +53,10 @@ export async function POST(req: Request) {
     // WP-AI-OPS §28.4：自動項（冇 decisions）完成後開分診 session；失敗唔影響導入結果。回 triage＝上載者自己嗰批。
     let triage: Awaited<ReturnType<typeof createGuardImportTriage>> = null;
     // 單人證件包（single_ocr）apply 本身就帶 decisions（用戶已逐欄確認）：決定咗嘅欄當已解決，剩低嘅（同名候選、衝突…）照樣出題
-    const triageEligible = !body.decisions || pkg.source === "single_ocr";
+    const triageEligible = !decisions || pkg.source === "single_ocr";
     if (triageEligible && (await hasPermission(session, "導入分診", "view"))) {
       try {
-        triage = await createGuardImportTriage({ pkg: pkg.source === "single_ocr" && body.decisions ? resolveDecidedFields(pkg, body.decisions) : pkg, packageHash: body.package_hash, actor: session, ip: getClientIp(req), personKeys: body.person_keys, results: result.results });
+        triage = await createGuardImportTriage({ pkg: pkg.source === "single_ocr" && decisions ? resolveDecidedFields(pkg, decisions) : pkg, packageHash: body.package_hash, actor: session, ip: getClientIp(req), personKeys: body.person_keys, results: result.results });
       } catch (e) {
         console.error("triage session create failed", safeErrorSummary(e));
       }
