@@ -9,6 +9,7 @@ type St = 'confirmed' | 'review' | 'missing';
 type Leaf = { value: string | null; status: St };
 interface ExtField { value?: string | null; status?: string; reasons?: string[]; sources?: string[] }
 export interface ExtPerson {
+  docIds?: string[];
   key: string;
   keyKind?: string;
   hasDocs?: boolean;
@@ -53,7 +54,14 @@ export interface BuildCounts {
   by_field: Record<string, Record<St, number>>;
 }
 
-export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSources, now = new Date()) {
+export interface BuildOpts {
+  /** person-fields.json 每人嘅 docIds（次序同 v2.persons 一致）：按次序 join 時逐對核對 docIds 集合；冇提供就唔做次序 join（只按 key join） */
+  v2DocIds?: string[][];
+  now?: Date;
+}
+export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSources, opts: BuildOpts | Date = {}) {
+  const o: BuildOpts = opts instanceof Date ? { now: opts } : opts;
+  const now = o.now ?? new Date();
   const counts: BuildCounts = {
     persons_total: 0, persons_with_docs: 0, persons_typed_only: 0, ext_joined: 0, ext_not_joined_docs: 0, unassigned_bank: 0, unassigned_dropped: 0,
     leaves_skipped_handwritten_unverified: 0, leaves_not_decidable_review: 0, bank_copy_only_skipped: 0, bank_review_pe_persons: 0, join_by_index: 0, join_fallback: 0, join_failed: 0, leaves_dropped_invalid: 0, identity_check_persons: 0, typed_only_no_identity_skipped: 0, by_field: {},
@@ -134,7 +142,8 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
     const peSourced = ['bankAccountNo', 'bankCode', 'bankPayeeName'].some((k) => ((F[k] as ExtField | undefined)?.sources ?? []).includes('typed_pe'));
     const hasCopyOnly = ['bankAccountNo'].some((k) => ((F[k] as ExtField | undefined)?.reasons ?? []).includes('bank_copy_only'));
     if (!peSourced && hasCopyOnly) counts.bank_copy_only_skipped += 1;
-    const B = (k: string) => (peSourced ? leafOf(F[k], `bank.${k}`, 'bank') : MISSING);
+    // Payroll Editor 過濾按欄：每隻欄自己嘅 sources 要含 typed_pe
+    const B = (k: string) => (((F[k] as ExtField | undefined)?.sources ?? []).includes('typed_pe') ? leafOf(F[k], `bank.${k}`, 'bank') : MISSING);
     const code = B('bankCode');
     const rawCode = peSourced ? ((F.bankCode as ExtField | undefined)?.value ?? null) : null;
     const codeBad = !!rawCode && !HKICL_BANK_CODE_SET.has(String(rawCode).padStart(3, '0'));
@@ -195,28 +204,46 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
   // join：v2 包由 person-fields.json 逐個 map 出嚟，ext 有文件嗰批同一次序（docIds 一致）→ 先按次序 join，
   // 有 hkid 兩邊都有時要一致先認；否則退回 hkid／工號 join。
   const docsExt = ext.filter((e) => e.hasDocs === true);
-  const byIndex = docsExt.length === v2.persons.length;
+  const sameSet = (a: string[], b: string[]) => a.length === b.length && new Set([...a, ...b]).size === a.length;
+  const pairHkidClash = (p: V2Person, cand: ExtPerson) => {
+    const h = canonicalHkid(p.hkid.value ?? '');
+    return !!h && cand.keyKind === 'hkid' && canonicalHkid(cand.key) !== h;
+  };
+  // 次序 join 只喺：長度一致、有 docIds 可核對、而且冇任何一對身份證對唔上 先用；任何一對身份證衝突 → 成批放棄，改用 key join
+  let byIndex = !!o.v2DocIds && o.v2DocIds.length === v2.persons.length && docsExt.length === v2.persons.length;
+  if (byIndex) byIndex = !v2.persons.some((p, i) => pairHkidClash(p, docsExt[i]!));
   for (const [pi, p] of v2.persons.entries()) {
     let e: ExtPerson | null = null;
     if (byIndex) {
       const cand = docsExt[pi]!;
       const h = canonicalHkid(p.hkid.value ?? '');
-      if (!h || cand.keyKind !== 'hkid' || canonicalHkid(cand.key) === h) {
+      const hkidOk = !!h && cand.keyKind === 'hkid' && canonicalHkid(cand.key) === h;
+      const staffOk = p.staffNumbers.some((n) => (cand.staffNos ?? []).map(cleanNo).includes(cleanNo(n.number)));
+      const docsOk = sameSet(o.v2DocIds![pi]!, (cand as { docIds?: string[] }).docIds ?? []);
+      if (docsOk && (hkidOk || staffOk) && !used.has(cand)) {
         e = cand;
         counts.join_by_index += 1;
+      } else {
+        counts.join_failed += 1;
+        curPerson = p.key;
+        persons.push(sanitize({ ...p }));
+        continue;
       }
     }
     if (!e) {
       e = extFor(p);
-      if (e) counts.join_fallback += 1;
-      else counts.join_failed += 1;
+      if (e && !used.has(e)) counts.join_fallback += 1;
+      else {
+        e = null;
+        counts.join_failed += 1;
+      }
     }
     curPerson = p.key;
     const base: Record<string, unknown> = { ...p };
     delete base.conflicts;
     const conflicts = (p as { conflicts?: string[] }).conflicts;
     if (!e) {
-      counts.ext_not_joined_docs += 1; // join_failed
+      counts.ext_not_joined_docs += 1;
       persons.push(sanitize({ ...p, ...(conflicts ? { conflicts } : {}) }));
       continue;
     }

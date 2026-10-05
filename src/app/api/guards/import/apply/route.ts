@@ -33,7 +33,8 @@ export async function POST(req: Request) {
     // 預留配額（短 transaction；鎖外先套用）。single_ocr 單人包：獨立配額，apply（含 decisions）一律計；
     // 其他包照舊（有 decisions 嘅覆核唔計）。失敗唔退還次數。
     if (pkg.source === "single_ocr") await reserveQuota(session, "single_ocr");
-    else if (!body.decisions) await reserveQuota(session, "batch");
+    // 帶 decisions.ext 嘅請求同樣計配額（否則可以無限試 decisions 探測現值）
+    else if (!body.decisions || Object.values(body.decisions).some((d) => d.ext)) await reserveQuota(session, "batch");
     const result = await applyImport(pkg, {
       actorUserId: session.userId,
       ip: getClientIp(req),

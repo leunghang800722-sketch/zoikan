@@ -18,6 +18,10 @@ import { BadRequest } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { writeAudit } from "@/lib/audit";
 import { buildBochkAutopayWorkbook } from "@/lib/longterm-payroll/bochk-autopay-export";
+import { prisma } from "@/lib/db";
+
+/** M5：已鎖月份嘅 autopay 金額係快照，但收款戶口係即時讀安員資料（補咗戶口之後匯出行數會變）→ 要提示，下載要確認，免重複出糧。 */
+const LOCKED_MONTH_WARNING = "呢個月已鎖定；收款戶口用緊而家嘅資料，匯出前請確認呢個月未出過糧";
 
 export async function GET(req: Request, { params }: { params: Promise<{ month: string }> }) {
   return withApiError(async () => {
@@ -33,7 +37,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
       throw BadRequest(e instanceof Error ? e.message : "計唔到 BOCHK autopay 檔");
     }
 
-    const isPreview = new URL(req.url).searchParams.get("preview") === "1";
+    const sp = new URL(req.url).searchParams;
+    const isPreview = sp.get("preview") === "1";
+    const lockedMonth = !!(await prisma.monthClose.findUnique({ where: { month }, select: { lockedAt: true } }))?.lockedAt;
+    const confirmedLocked = sp.get("confirm_locked") === "1";
+    if (lockedMonth && !isPreview && !confirmedLocked) throw BadRequest(`${LOCKED_MONTH_WARNING}（下載要加 confirm_locked=1）`);
     await writeAudit({
       actorUserId: session.userId,
       tableName: "longterm_payroll_runs",
@@ -46,6 +54,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
         missingCount: result.missing.length,
         preview: isPreview,
         formatVerified: result.formatVerified,
+        ...(lockedMonth ? { lockedMonth: true, confirmedLocked } : {}),
       },
       ip: getClientIp(req),
     });
@@ -59,6 +68,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
           missing: result.missing,
           format_verified: result.formatVerified,
           format_source: result.formatSource,
+          locked_month_warning: lockedMonth ? LOCKED_MONTH_WARNING : null,
         }),
       );
     }
@@ -72,6 +82,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
         "content-disposition": `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
         "X-Missing-Bank-Info-Count": String(result.missing.length),
         "X-Format-Verified": "true",
+        ...(lockedMonth ? { "X-Locked-Month-Warning": "1" } : {}),
       },
     });
   });

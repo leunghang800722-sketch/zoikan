@@ -63,7 +63,7 @@ interface Question {
     reasons: string[];
     candidates: Candidate[];
     review_fields: { field: string; label: string; check: string }[];
-    ext_review: { key: string; label: string; check: string; status: string }[];
+    ext_review: { key: string; label: string; check: string; status: string; held?: string }[];
     unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
   };
 }
@@ -332,6 +332,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const [extChoices, setExtChoices] = useState<Record<string, ExtChoice>>({});
   const [pickedGuard, setPickedGuard] = useState<{ id: string; name: string } | null>(null);
   const [replaceExisting, setReplaceExisting] = useState(false);
+  const [confirmIdentity, setConfirmIdentity] = useState(false);
   const [impact, setImpact] = useState<Impact | null>(null);
   const [hash, setHash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -363,6 +364,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     setExtChoices({});
     setPickedGuard(null);
     setReplaceExisting(false);
+    setConfirmIdentity(false);
     setImpact(null);
     setHash(null);
     setError(null);
@@ -376,11 +378,11 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   function buildAnswer(): Record<string, unknown> | null {
     if (!selected) return null;
     if (selected.id === "apply_fields") return { option: "apply_fields", fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, { action: v.action, ...(v.action !== "skip" && v.value ? { value: v.value } : {}) }])) };
-    if (selected.id === "apply_ext_fields") return { option: "apply_ext_fields", ext_fields: extChoices };
+    if (selected.id === "apply_ext_fields") return { option: "apply_ext_fields", ext_fields: extChoices, ...(replaceExisting ? { replace_existing: true } : {}) };
     if (selected.id === "assign_bank") {
       const gid = selected.guard_id ?? pickedGuard?.id;
       if (!gid) return null;
-      return { option: "assign_bank", guard_id: gid, ...(replaceExisting ? { replace_existing: true } : {}) };
+      return { option: "assign_bank", guard_id: gid, ...(replaceExisting ? { replace_existing: true } : {}), ...(confirmIdentity ? { confirm_identity: true } : {}) };
     }
     return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: text } : {}) };
   }
@@ -562,8 +564,14 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                             <span className="mt-2 block rounded border border-zk-border p-2" data-testid="replace-existing">
                               <label className="flex items-start gap-2 text-[12.5px]">
                                 <input type="checkbox" className="mt-0.5" checked={replaceExisting} onChange={(e) => { setReplaceExisting(e.target.checked); setImpact(null); setHash(null); }} />
-                                <span>如果佢已經有唔同戶口：取代現有戶口{pickedGuard ? `（${pickedGuard.name}）` : ""}（預設唔覆蓋）</span>
+                                <span>如果佢已經有唔同戶口：取代現有戶口{pickedGuard ? `（${pickedGuard.name}）` : ""}（預設唔覆蓋{!q.evidence.bank_view ? "；你冇銀行資料睇權，睇唔到現有戶口，要剔先可以寫" : ""}）</span>
                               </label>
+                              {impact?.notes.some((n) => n.startsWith("警告")) && (
+                                <label className="mt-1 flex items-start gap-2 text-[12.5px] text-orange-800" data-testid="confirm-identity">
+                                  <input type="checkbox" className="mt-0.5" checked={confirmIdentity} onChange={(e) => { setConfirmIdentity(e.target.checked); setImpact(null); setHash(null); }} />
+                                  <span>我確認呢個戶口屬於呢位保安員</span>
+                                </label>
+                              )}
                             </span>
                           )}
                           {choice === val && o.id === "apply_ext_fields" && (
@@ -572,8 +580,15 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                 <span key={rf.key} className="block rounded border border-zk-border p-2" data-testid="ext-review-row">
                                   <span className="block text-[12px] text-zk-faint">
                                     {rf.label}（{CHECK_LABEL[rf.check] ?? rf.check}
-                                    {rf.status === "review" ? "、導入值待核對" : ""}）
+                                    {rf.status === "review" ? "、導入值待核對" : ""}
+                                    {rf.held === "longterm" ? "、長工糧計算會讀呢個日期，所以唔自動寫" : ""}）
                                   </span>
+                                  {rf.key === "bank" && (
+                                    <label className="mt-1 flex items-start gap-2 text-[12px]" data-testid="bank-replace-existing">
+                                      <input type="checkbox" className="mt-0.5" checked={replaceExisting} onChange={(e) => { setReplaceExisting(e.target.checked); setImpact(null); setHash(null); }} />
+                                      <span>如果現有戶口唔同：取代現有戶口（要剔先會覆蓋{!q.evidence.bank_view ? "；你冇銀行資料睇權，一定要剔" : ""}）</span>
+                                    </label>
+                                  )}
                                   <span className="mt-1 flex flex-wrap items-center gap-1.5">
                                     {(["use_import", "keep_current", "skip"] as const).map((c) => (
                                       <button

@@ -101,7 +101,7 @@ export interface QuestionEvidence {
   /** 連去嘅現有安員（field_review） */
   guard_id?: string | null;
   /** WP-STAFF-FIELDS：ext 題要覆核／處理嘅新欄（key 見 import/ext.ts）＋同現有值比較 */
-  ext_review?: { key: string; check: string; status: string }[];
+  ext_review?: { key: string; check: string; status: string; held?: string }[];
   /** bank_identity_unknown：Payroll Editor 對唔到人嘅戶口（含完整戶口號——同 guards 表同級，只存 DB，API 層按銀行資料權限遮罩） */
   unassigned?: { key: string; bankCode: string; accountNo: string; payeeName: string };
 }
@@ -127,6 +127,8 @@ export const answerSchema = z
     ext_fields: z.record(z.string().regex(/^[A-Za-z.0-9-]{1,60}$/), z.enum(EXT_CHOICES)).optional(),
     /** assign_bank：目標安員已有唔同戶口時，明確揀「取代現有戶口」 */
     replace_existing: z.boolean().optional(),
+    /** assign_bank：目標安員英文名同收款人唔夾／唔係長工 autopay 時，要額外確認「我確認呢個戶口屬於呢位保安員」 */
+    confirm_identity: z.boolean().optional(),
   })
   .strict();
 export type TriageAnswer = z.infer<typeof answerSchema>;

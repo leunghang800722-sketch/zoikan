@@ -24,6 +24,8 @@ import { addressSourceOf, fieldValue, hashPackage, packageConflicts, type Import
 import { parseBirthDate, maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
 import {
   type ExtOutcomeRow,
+  type ExtGate,
+  extGateFor,
   EMPTY_BANK,
   OVERWRITE_DENIED_MSGS,
   PII_OVERWRITE_DENIED_MSG,
@@ -36,7 +38,7 @@ import {
   type ExtOutcome,
   type GuardExtSnap,
 } from "./ext";
-import { applyDerivedPermit, applyExtRelations, planExtColumns } from "./ext-apply";
+import { acctTakenByOther, applyDerivedPermit, applyExtRelations, planExtColumns } from "./ext-apply";
 
 type Tx = Prisma.TransactionClient;
 
@@ -66,21 +68,28 @@ interface GuardSnap {
 interface DbCtx {
   index: DbIndex;
   byId: Map<string, GuardSnap>;
+  /** 戶口（銀行編號＋戶口數字）→ 用緊嘅 guard id（預覽用；寫入時再喺 transaction 內鎖＋查 DB） */
+  acctOwners: Map<string, string[]>;
 }
+const acctKey = (code: string | null | undefined, acct: string | null | undefined): string | null => {
+  const d = (acct ?? "").replace(/\D/g, "");
+  return d ? d : null;
+};
 
 async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
-  const [guards, phones, nos, addrs, contacts, rosterRows] = await Promise.all([
+  const [guards, phones, nos, addrs, contacts, contractRows, rosterRows] = await Promise.all([
     db.guard.findMany({
       select: {
         id: true, nameZh: true, nameEn: true, hkid: true, tel: true, dateOfBirth: true, siaPermitAExpiry: true, siaPermitBExpiry: true, identityReviewFields: true,
         siaPermitNo: true, safetyCardNo: true, safetyCardExpiry: true, qasIssueDate: true, qasExpiryDate: true, hireDate: true,
-        bankCode: true, bankName: true, bankAccountNo: true, bankPayeeName: true, emergencyContactName: true, emergencyContactTel: true,
+        bankCode: true, bankName: true, bankAccountNo: true, bankPayeeName: true, emergencyContactName: true, emergencyContactTel: true, employmentType: true,
       },
     }),
     db.guardPhone.findMany({ select: { guardId: true, tel: true } }),
     db.guardStaffNumber.findMany({ select: { guardId: true, scheme: true, number: true, status: true, validFrom: true } }),
     db.guardAddress.findMany({ select: { guardId: true, address: true } }),
     db.guardEmergencyContact.findMany({ select: { guardId: true, name: true, tel: true }, orderBy: { sortOrder: "asc" } }),
+    db.guardLongtermContract.findMany({ select: { guardId: true }, distinct: ["guardId"] }),
     // 更表佐證（name_only 輔助判斷 c；只計 by_staff_no／by_name_tel／override 等有獨立鍵嘅行，by_name／ambiguous 唔計）：一次過預載未作廢上載入面各 guard 出現過嘅原始工號／電話（DISTINCT，唔 N+1）
     db.$queryRaw<{ guard_id: string; staff_no_raw: string | null; tel_raw: string | null }[]>`
       SELECT DISTINCT r.guard_id, r.staff_no_raw, r.tel_raw
@@ -106,6 +115,12 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
   const addrBy = new Map<string, string[]>();
   for (const a of addrs) addrBy.set(a.guardId, [...(addrBy.get(a.guardId) ?? []), a.address]);
 
+  const contractSet = new Set(contractRows.map((c) => c.guardId));
+  const acctOwners = new Map<string, string[]>();
+  for (const g of guards) {
+    const k = acctKey(g.bankCode, g.bankAccountNo);
+    if (k) acctOwners.set(k, [...(acctOwners.get(k) ?? []), g.id]);
+  }
   const byId = new Map<string, GuardSnap>();
   const dbGuards: DbGuard[] = guards.map((g) => {
     const tels = [...new Set([...(phoneBy.get(g.id) ?? []), ...(g.tel ? [g.tel] : [])])];
@@ -139,11 +154,12 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
               ? [{ name: g.emergencyContactName?.trim() || null, tel: g.emergencyContactTel?.trim() || null }]
               : [],
         staffRows: staffRowBy.get(g.id) ?? [],
+        longterm: g.employmentType === "longterm_autopay" || contractSet.has(g.id),
       },
     });
     return { id: g.id, nameZh: g.nameZh, hkid: canonicalHkid(g.hkid), tels, staffNos: (noBy.get(g.id) ?? []).map((n) => n.number), dob: isoDate(g.dateOfBirth) };
   });
-  return { index: buildDbIndex(dbGuards, roster), byId };
+  return { index: buildDbIndex(dbGuards, roster), byId, acctOwners };
 }
 
 // ---------------------------------------------------------------------------
@@ -164,13 +180,15 @@ export interface Evaluation {
   checks: Record<PersonField, FieldCheck>;
   /** WP-STAFF-FIELDS：v3 新欄逐欄評估（v2 包＝空陣列） */
   ext: ExtItem[];
+  /** 自動寫入閘（typed_list_only／銀行身份證相同／長工入職日期） */
+  gate: ExtGate;
 }
 
 function isoDate(d: Date | null | undefined): string | null {
   return d ? d.toISOString().slice(0, 10) : null;
 }
 
-function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[], dec?: PersonDecisions, forced?: ForcedMatch): Evaluation {
+function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[], dec?: PersonDecisions, forced?: ForcedMatch, piiView = true): Evaluation {
   const hkidCanon = canonicalHkid(fieldValue(p.hkid));
   const nameZh = fieldValue(p.nameZh);
   // 電話淨係 confirmed 先用嚟對齊（review 電話唔可靠，唔好用佢 link 人／觸發衝突）
@@ -305,13 +323,22 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
       }
     }
   }
-  const ext = evaluateExt(p, action === "link" && g ? g.ext : null);
-  return { person: p, action, guardId, reasons: [...new Set(reasons)], basis, candidates: d.candidates, hkidCanon, checks, ext };
+  const linked = action === "link" && g ? g : null;
+  const gate = extGateFor({ p, guard: linked ? { hkid: linked.hkid, nameZh: linked.nameZh, longterm: linked.ext.longterm } : null, hkidCanon, piiView });
+  const bl = bankLeaves(p);
+  const takenBy = bl?.accountNo ? (ctx.acctOwners.get(acctKey(bl.code, bl.accountNo) ?? "") ?? []) : [];
+  const ext = evaluateExt(p, linked ? linked.ext : null, {
+    gate,
+    bankTaken: takenBy.some((id) => id !== linked?.id),
+    ownerOf: (n) => ctx.index.byNo.get(n)?.[0]?.id ?? null,
+    guardId: linked?.id ?? null,
+  });
+  return { person: p, action, guardId, reasons: [...new Set(reasons)], basis, candidates: d.candidates, hkidCanon, checks, ext, gate };
 }
 
-function evaluateAll(pkg: ImportPackage, ctx: DbCtx, decisions?: Readonly<Record<string, PersonDecisions>>): Evaluation[] {
+function evaluateAll(pkg: ImportPackage, ctx: DbCtx, decisions?: Readonly<Record<string, PersonDecisions>>, piiView = true): Evaluation[] {
   const conflicts = packageConflicts(pkg.persons);
-  return pkg.persons.map((p) => evaluate(p, ctx, conflicts.get(p.key) ?? [], decisions?.[p.key]));
+  return pkg.persons.map((p) => evaluate(p, ctx, conflicts.get(p.key) ?? [], decisions?.[p.key], undefined, piiView));
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +368,7 @@ export interface PreviewRow {
   fields: Record<PersonField, { status: string; check: FieldCheck }>;
   staff_numbers: number;
   /** WP-STAFF-FIELDS：v3 新欄（冇新欄就唔出） */
-  ext?: { key: string; status: string; check: string }[];
+  ext?: { key: string; status: string; check: string; held?: string }[];
   /** 銀行戶口遮罩（尾 4 位）；冇「安員銀行資料:view」嘅讀者 projection 會改成 { present: true } */
   bank_masked?: { present: true; code?: string | null; name?: string | null; account_masked?: string | null } | null;
 }
@@ -377,9 +404,9 @@ export function maskAccountNo(v: string | null | undefined): string | null {
 }
 
 /** decisions（淨係單人證件包 preview 用）：令預覽同帶 decisions 嘅 apply 用同一套判斷（例如姓名已由用戶確認就唔再報 name_not_confirmed）。 */
-export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Record<string, PersonDecisions>>): Promise<PreviewResult> {
+export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Record<string, PersonDecisions>>, viewer: { pii: boolean } = { pii: true }): Promise<PreviewResult> {
   const ctx = await loadCtx(prisma);
-  const evals = evaluateAll(pkg, ctx, decisions);
+  const evals = evaluateAll(pkg, ctx, decisions, viewer.pii);
   const fieldStats = Object.fromEntries(["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"].map((f) => [f, { confirmed: 0, review: 0, missing: 0 }])) as PreviewResult["field_stats"];
   const personStats: Record<Action, number> = { link: 0, create: 0, conflict: 0, needs_review: 0 };
   const reviewFields = Object.fromEntries(["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"].map((f) => [f, 0])) as Record<PersonField, number>;
@@ -451,7 +478,7 @@ export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Rec
       name_review_pending: !!g?.identityReviewFields.includes("name_zh"),
       fields: Object.fromEntries((Object.keys(fieldStats) as PersonField[]).map((f) => [f, { status: p[f].status, check: e.checks[f] }])) as PreviewRow["fields"],
       staff_numbers: p.staffNumbers.length,
-      ...(e.ext.length > 0 ? { ext: e.ext.map((x) => ({ key: x.key, status: x.status, check: x.check })) } : {}),
+      ...(e.ext.length > 0 ? { ext: e.ext.map((x) => ({ key: x.key, status: x.status, check: x.check, ...(x.held ? { held: x.held } : {}) })) } : {}),
       ...(bankLeaves(p) ? { bank_masked: { present: true as const, code: p.bank?.code ? fieldValue(p.bank.code) : null, name: p.bank?.name ? fieldValue(p.bank.name) : null, account_masked: maskAccountNo(p.bank?.accountNo ? fieldValue(p.bank.accountNo) : null) } } : {}),
     });
   }
@@ -614,6 +641,10 @@ function assertMayEditGuard(opts: ApplyOptions): void {
   if (opts.canEditGuard === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
 }
 
+async function bankTakenFor(tx: Tx, p: PackagePerson, guardId: string | null): Promise<boolean> {
+  const bl = bankLeaves(p);
+  return bl?.accountNo ? acctTakenByOther(tx, guardId, bl.code, bl.accountNo) : false;
+}
 const extCaps = (opts: ApplyOptions) => ({ canEditGuard: opts.canEditGuard, canOverwritePii: opts.canOverwritePii, canEditBank: opts.canEditBank, fillOnlyPii: opts.fillOnlyPii });
 
 async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writeAuditTx>[1]): Promise<void> {
@@ -624,7 +655,7 @@ async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writ
 }
 
 async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: readonly string[], dec: PersonDecisions | undefined, opts: ApplyOptions, acc: ApplyResult): Promise<PersonResult> {
-  const ev = evaluate(p, ctx, groupReasons, dec, opts.forced?.[p.key]);
+  const ev = evaluate(p, ctx, groupReasons, dec, opts.forced?.[p.key], !opts.fillOnlyPii);
   const res: PersonResult = { key: p.key, outcome: "needs_review", reasons: ev.reasons, fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
   if (ev.action === "conflict" || ev.action === "needs_review") {
     res.outcome = ev.action;
@@ -648,7 +679,8 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
   let guardId: string;
   let g: GuardSnap | null = null;
   const review = new Set<string>();
-  let extPlan: ReturnType<typeof planExtColumns> = { data: {}, outcomes: {} };
+  let extPlan: ReturnType<typeof planExtColumns> = { data: {}, outcomes: {}, reasons: [] };
+  let bankTaken = false;
 
   if (ev.action === "create") {
     const nameVal = nameW && nameW !== "skip" ? nameW.value : fieldValue(p.nameZh)!;
@@ -659,7 +691,8 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     if (p.nameZh.status !== "confirmed" && !(nameW && nameW !== "skip" && nameW.decided && !nameW.pending)) review.add("name_zh");
     const nameEnVal = nameEnW && nameEnW !== "skip" ? nameEnW.value : null;
     // WP-STAFF-FIELDS：新欄（新建人全部係空＝全部補空；牌照衍生欄同 PATCH 一致）
-    extPlan = planExtColumns(p, null, dec?.ext, extCaps(opts));
+    bankTaken = await bankTakenFor(tx, p, null);
+    extPlan = planExtColumns(p, null, dec?.ext, extCaps(opts), ev.gate, bankTaken);
     const createData: Prisma.GuardUncheckedCreateInput = {
       nameZh: nameVal,
       nameEn: nameEnVal,
@@ -733,7 +766,8 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     } else bump("dateOfBirth", isoDate(g.dateOfBirth) === dobW.value ? "same" : "conflict");
     if (marker.size !== g.identityReviewFields.length) data.identityReviewFields = [...marker];
     // WP-STAFF-FIELDS：新欄（只補空欄；現值唔同＝conflict；覆蓋權喺 planExtColumns 內檢查）
-    extPlan = planExtColumns(p, g.ext, dec?.ext, extCaps(opts));
+    bankTaken = await bankTakenFor(tx, p, g.id);
+    extPlan = planExtColumns(p, g.ext, dec?.ext, extCaps(opts), ev.gate, bankTaken);
     Object.assign(data, extPlan.data);
     // 同 PATCH /api/guards/:id 一致：甲／乙到期日或出生日期有變就重算牌照衍生值（merged 值）
     applyDerivedPermit(data, { a: g.siaPermitAExpiry, b: g.siaPermitBExpiry, dob: g.dateOfBirth });
@@ -786,7 +820,9 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     caps: extCaps(opts),
     actorUserId: opts.actorUserId,
     audit: (i) => auditTx(tx, opts, { actorUserId: opts.actorUserId, ip: opts.ip, ...i }),
+    gate: ev.gate,
   });
+  for (const r of extPlan.reasons) if (!res.reasons.includes(r)) res.reasons.push(r);
   const extOutcomes = { ...extPlan.outcomes, ...rel.outcomes };
   if (Object.keys(extOutcomes).length > 0) res.ext = Object.entries(extOutcomes).map(([key, outcome]) => ({ key, outcome }));
   if (rel.contactsAdded > 0) res.contacts_added = rel.contactsAdded;
@@ -929,7 +965,8 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
     rowId: opts.actorUserId,
     action: "guard_import_apply",
     after: {
-      ...(acc.ext_written ? { ext_written: acc.ext_written, ext_conflicts: acc.ext_conflicts ?? 0, contacts_added: acc.contacts_added ?? 0 } : {}),
+      // 唔放 ext_conflicts：衝突數等於「同現值唔同」嘅 oracle，而 audit 讀者可能冇對應 view
+      ...(acc.ext_written ? { ext_written: acc.ext_written, contacts_added: acc.contacts_added ?? 0 } : {}),
       persons: acc.persons_total,
       outcomes: acc.outcomes,
       guards_created: acc.guards_created,
@@ -951,9 +988,9 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
 // WP-AI-OPS §28.4：分診用嘅 export（唔改上面 preview／apply 行為）
 // ---------------------------------------------------------------------------
 /** 對齊評估（唔寫 DB）：分診出題用——apply 完成後重新評估，剩低 needs_review／conflict 嘅就係要問嘅人。 */
-export async function evaluateImportPackage(pkg: ImportPackage): Promise<{ evals: Evaluation[]; guards: ReadonlyMap<string, Readonly<GuardSnap>> }> {
+export async function evaluateImportPackage(pkg: ImportPackage, piiView = true): Promise<{ evals: Evaluation[]; guards: ReadonlyMap<string, Readonly<GuardSnap>> }> {
   const ctx = await loadCtx(prisma);
-  return { evals: evaluateAll(pkg, ctx), guards: ctx.byId };
+  return { evals: evaluateAll(pkg, ctx, undefined, piiView), guards: ctx.byId };
 }
 
 class DryRunRollback extends Error {}

@@ -17,6 +17,9 @@ import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
 import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
+import { sameEnglishTokens } from "./generators/guard-import";
+import { isBankKey } from "@/lib/guards/import/ext";
+import { KIND_LABEL } from "./types";
 import { BANK_KINDS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
 type QRow = TriageQuestion;
@@ -34,6 +37,13 @@ function hmacKey(): string {
 // HMAC（server secret）：冇 secret 就算知道寫入指紋格式都唔可以離線算出 hash 去分辨預覽結果（oracle）
 const hashOf = (qid: string, a: TriageAnswer, fingerprint: string): string => createHmac("sha256", hmacKey()).update(`${qid}|${canon(a)}|${fingerprint}`).digest("hex");
 
+/** audit 摘要唔放 ext_conflicts（衝突數會洩露「同現值唔同」，而 audit 讀者可能冇對應 view） */
+const omitConflicts = <T extends { ext_conflicts?: number }>(s: T): Omit<T, "ext_conflicts"> => {
+  const { ext_conflicts: _c, ...rest } = s;
+  void _c;
+  return rest;
+};
+
 function load(q: QRow) {
   return { kind: q.kind as QuestionKind, evidence: q.evidenceJson as unknown as QuestionEvidence, options: q.optionsJson as unknown as QuestionOption[] };
 }
@@ -45,6 +55,36 @@ function assertAnswerable(q: QRow): void {
 export const BANK_QUESTION_DENIED_MSG = "要有安員銀行資料權限嘅同事處理";
 function assertBankAllowed(q: QRow, caps: ViewerCaps): void {
   if ((BANK_KINDS as readonly string[]).includes(q.kind) && !caps.bankUpdate) throw Forbidden(BANK_QUESTION_DENIED_MSG);
+}
+
+/** 銀行答案規則（喺 resolve 同評估之前檢查，結果唔准取決於現有戶口）：冇「安員銀行資料:view」睇唔到現有戶口 → 一律要明確揀「取代現有戶口」。 */
+function assertBankAnswerRules(q: QRow, answer: TriageAnswer, caps: ViewerCaps): void {
+  const writesBank = answer.option === "assign_bank" || (answer.option === "apply_ext_fields" && answer.ext_fields?.bank === "use_import");
+  if (writesBank && (BANK_KINDS as readonly string[]).includes(q.kind) && !caps.bankView && !answer.replace_existing) {
+    throw new ApiError(422, "unprocessable", "你冇「安員銀行資料」睇權，睇唔到現有戶口，要明確剔「取代現有戶口」先可以寫入");
+  }
+}
+
+/** 銀行寫入問題（回 null＝冇問題）：用導入值／assign_bank 但實際冇寫（現有唔同而冇明確取代、戶口屬另一人…）。 */
+function bankProblem(answer: TriageAnswer, result: import("@/lib/guards/import/apply").PersonResult): string | null {
+  const wants = answer.option === "assign_bank" || (answer.option === "apply_ext_fields" && answer.ext_fields?.bank === "use_import");
+  if (!wants) return null;
+  const o = extOutcomeOf(result, "bank");
+  if (o === "written" || (o === "same" && answer.option === "apply_ext_fields")) return null;
+  if (result.reasons.includes("bank_acct_belongs_to_other")) return "呢個戶口已屬於另一位保安員，唔可以再派俾其他人";
+  return BANK_NOT_WRITTEN_NOTE;
+}
+
+/** M7：經搜尋揀咗唔夾英文名／唔係長工 autopay 嘅人 → 要額外確認。 */
+async function identityMismatch(q: QRow, answer: TriageAnswer): Promise<string | null> {
+  if (answer.option !== "assign_bank" || !answer.guard_id) return null;
+  const u = (q.evidenceJson as unknown as QuestionEvidence).unassigned;
+  const g = await prisma.guard.findUnique({ where: { id: answer.guard_id }, select: { nameEn: true, employmentType: true } });
+  if (!u || !g) return null;
+  const reasons: string[] = [];
+  if (!g.nameEn || !sameEnglishTokens(u.payeeName, g.nameEn)) reasons.push("收款人英文名同呢位保安員嘅英文名唔夾（或者佢冇英文名）");
+  if (g.employmentType !== "longterm_autopay") reasons.push("呢位保安員唔係長工 autopay");
+  return reasons.length ? `警告：${reasons.join("；")}。要剔「我確認呢個戶口屬於呢位保安員」先可以確認` : null;
 }
 
 const BANK_NOT_WRITTEN_NOTE = "呢個答案唔會寫入戶口：目標安員已有唔同戶口（要明確揀「取代現有戶口」，而且要有安員銀行資料修改權限），或者戶口已經係佢嘅";
@@ -80,17 +120,24 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   assertAnswerable(q);
   assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
+  assertBankAnswerRules(q, answer, caps);
   const resolved = resolveAnswer(load(q), answer);
   const warnOwner = await checkHkidOwner(q, answer);
+  const mismatch = await identityMismatch(q, answer);
   if (resolved.mode === "skip") {
     return { preview_hash: hashOf(q.id, answer, "skip"), writes: false, impact: { can_confirm: true, summary: ["跳過：唔寫任何資料，呢條留返人手處理"], changes: [], field_outcomes: [], notes: [] } };
   }
   const out = await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip, caps), { kind: "dry" });
   const impact = buildImpact(out.result, out.changes, caps);
   if (warnOwner) impact.notes.unshift("呢個身份證號已屬於現有安員（唔喺候選名單），而且姓名相同，會連去佢");
-  if (answer.option === "assign_bank" && extOutcomeOf(out.result, "bank") !== "written") {
+  const problem = bankProblem(answer, out.result);
+  if (problem) {
     impact.can_confirm = false;
-    impact.notes.unshift(BANK_NOT_WRITTEN_NOTE);
+    impact.notes.unshift(problem);
+  }
+  if (mismatch) {
+    impact.notes.unshift(mismatch);
+    if (!answer.confirm_identity) impact.can_confirm = false;
   }
   return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: impact.can_confirm, impact };
 }
@@ -115,8 +162,11 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
   assertAnswerable(q);
   assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
+  assertBankAnswerRules(q, answer, caps);
   const resolved = resolveAnswer(load(q), answer);
   await checkHkidOwner(q, answer);
+  const mismatch = await identityMismatch(q, answer);
+  if (mismatch && !answer.confirm_identity) throw new ApiError(422, "unprocessable", mismatch);
   const now = new Date();
 
   if (resolved.mode === "skip") {
@@ -137,7 +187,8 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
     kind: "commit",
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
     beforeCommit: async (tx, outcome) => {
-      if (answer.option === "assign_bank" && extOutcomeOf(outcome.result, "bank") !== "written") throw new ApiError(422, "unprocessable", BANK_NOT_WRITTEN_NOTE);
+      const bp = bankProblem(answer, outcome.result);
+      if (bp) throw new ApiError(422, "unprocessable", bp);
       impact = buildImpact(outcome.result, outcome.changes, caps);
       const n = await tx.triageQuestion.updateMany({
         where: { id: q.id, status: { in: ["open", "skipped"] } },
@@ -153,6 +204,29 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         },
       });
       if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
+      // ext_identity_check 由冇銀行 update 權嘅人答：銀行冇寫 → 留一條 bank_review 俾有權限嘅人（鎖定同一個目標 guard）
+      if (q.kind === "ext_identity_check") {
+        const ev = q.evidenceJson as unknown as QuestionEvidence;
+        const bankItem = ev.ext_review?.find((x) => isBankKey(x.key));
+        const bo = extOutcomeOf(outcome.result, "bank");
+        if (bankItem && bo !== "written" && bo !== "same") {
+          const bankEv = { ...ev, ext_review: [{ ...bankItem, held: "bank" }] };
+          await tx.triageQuestion.createMany({
+            skipDuplicates: true,
+            data: [
+              {
+                sessionId: q.sessionId,
+                kind: "bank_review",
+                groupKey: `${ev.person.key}:bank`,
+                sort: q.sort,
+                title: KIND_LABEL.bank_review,
+                evidenceJson: JSON.parse(JSON.stringify(bankEv)),
+                optionsJson: JSON.parse(JSON.stringify([{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, { id: "skip", label: "跳過，留返人手處理" }])),
+              },
+            ],
+          });
+        }
+      }
       const r = outcome.result;
       await writeAuditTx(tx, {
         actorUserId: actor.userId,
@@ -176,7 +250,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
           phones_added: r.phones_added,
           addresses_added: r.addresses_added,
           staff_numbers_added: r.staff_numbers_added,
-          ...summarizeExt([r]),
+          ...omitConflicts(summarizeExt([r])),
           field_conflicts: Object.values(r.fields).filter((v) => v === "conflict").length,
           review_decisions: 1,
           via: "triage",

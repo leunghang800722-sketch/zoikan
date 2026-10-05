@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     // 預留配額（短 transaction；鎖外先做預覽）。失敗唔退還次數。
     await reserveQuota(session, pkg.source === "single_ocr" ? "single_ocr" : "batch");
     const pii = await hasPermission(session, "安員個人資料", "view");
-    const result = await previewImport(pkg, mapDecisions(body.decisions));
+    const result = await previewImport(pkg, mapDecisions(body.decisions), { pii });
     await auditImportPreview(session, getClientIp(req), result.package_hash, result.package.persons, result.person_stats, pkg.source);
     const bank = await hasPermission(session, "安員銀行資料", "view");
     const viewer = { pii_update: await hasPermission(session, "安員個人資料", "update"), guard_update: await hasPermission(session, "安員", "update"), bank_view: bank, pii_view: pii };

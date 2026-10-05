@@ -423,21 +423,28 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       const q = (await qs("bank_review"))[0]!;
       expect(q).toBeTruthy();
       // 預覽：用導入值（replace）可確認，寫入後戶口變咗
-      const ans = { option: "apply_ext_fields", ext_fields: { bank: "use_import" } };
+      // M2：現有戶口唔同，「用導入值」冇明確揀「取代現有戶口」→ 預覽 can_confirm=false、強行確認 422
+      const noRep = { option: "apply_ext_fields", ext_fields: { bank: "use_import" } };
+      const pv0 = await (await qPreview(owner, q.id, noRep)).json();
+      expect(pv0.impact.can_confirm).toBe(false);
+      expect((await qAnswer(owner, q.id, noRep, pv0.preview_hash)).status).toBe(422);
+      expect((await prisma.guard.findUniqueOrThrow({ where: { id: g0.id } })).bankAccountNo).toBe(ACCT2);
+      const ans = { option: "apply_ext_fields", ext_fields: { bank: "use_import" }, replace_existing: true };
       const { res } = await confirm(owner, q.id, ans);
       expect(res.status).toBe(200);
-      expect((await prisma.guard.findUniqueOrThrow({ where: { id: g0.id } })).bankAccountNo).toBe(ACCT);
+      const after = await prisma.guard.findUniqueOrThrow({ where: { id: g0.id } });
+      expect([after.bankCode, after.bankName, after.bankAccountNo, after.bankPayeeName]).toEqual(["004", "匯豐銀行", ACCT, PAYEE]); // 四欄一齊
       // review 狀態、現有戶口空
       await prisma.triageQuestion.deleteMany({});
       await prisma.triageSession.deleteMany({});
       const g1 = await prisma.guard.create({ data: { nameZh: "測試員乙", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
-      const rr = await applyPkg(owner, pkg3([person({ hkid: H[1]!, bank: { st: "review" }, reasons: ["bank_copy_disagrees"] })]));
+      const rr = await applyPkg(owner, pkg3([person({ hkid: H[1]!, bank: { st: "review", acct: "000011112222" }, reasons: ["bank_copy_disagrees"] })]));
       expect(outs(rr.body.results[0].ext).bank).toBe("not_confirmed");
       expect((await prisma.guard.findUniqueOrThrow({ where: { id: g1.id } })).bankAccountNo).toBeNull();
       const q2 = (await qs("bank_review"))[0]!;
       const { res: res2 } = await confirm(owner, q2.id, { option: "apply_ext_fields", ext_fields: { bank: "use_import" } });
       expect(res2.status).toBe(200);
-      expect((await prisma.guard.findUniqueOrThrow({ where: { id: g1.id } })).bankAccountNo).toBe(ACCT);
+      expect((await prisma.guard.findUniqueOrThrow({ where: { id: g1.id } })).bankAccountNo).toBe("000011112222");
     });
 
     it("冇「安員銀行資料:view」（update 保留）：preview／apply 估啱 vs 估錯現有戶口，整個回應深比較相同；有 view 嘅會計睇到分別", async () => {
@@ -466,6 +473,8 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect(JSON.stringify(pr)).not.toContain(ACCT.slice(-4));
       // apply：估啱（same）vs 估錯（conflict）回應一樣；現有戶口冇被改
       const ar = strip((await applyPkg(accountant, right)).body);
+      await prisma.triageQuestion.deleteMany({}); // M4 跨 session 去重：兩次估法係同一個人同一條題，清走先比較
+      await prisma.triageSession.deleteMany({});
       const aw = strip((await applyPkg(accountant, wrong)).body);
       expect(aw).toEqual(ar);
       expect((ar as { counts_hidden?: boolean }).counts_hidden).toBeUndefined(); // 有 PII view → 只遮銀行
@@ -511,7 +520,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
     });
 
     it("bank_identity_unknown：候選＝英文名 token 完全相同；題目顯示尾 4 位；揀人先預覽＝實際寫入；跳過可再答；冪等", async () => {
-      const cand = await prisma.guard.create({ data: { nameZh: "測試員候選", nameEn: "ONE TEST PAYEE", employmentType: "cash_casual", createdBy: "t" } });
+      const cand = await prisma.guard.create({ data: { nameZh: "測試員候選", nameEn: "ONE TEST PAYEE", employmentType: "longterm_autopay", createdBy: "t" } });
       await prisma.guard.create({ data: { nameZh: "測試員另一個", nameEn: "PAYEE TEST TWO", employmentType: "cash_casual", createdBy: "t" } });
       await prisma.guard.create({ data: { nameZh: "測試員同名但唔同", nameEn: "PAYEE TEST", employmentType: "cash_casual", createdBy: "t" } });
       const other = await prisma.guard.create({ data: { nameZh: "測試員搜尋", employmentType: "cash_casual", createdBy: "t" } });
@@ -548,13 +557,18 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       await applyPkg(owner, pkgB);
       const q2 = (await qs("bank_identity_unknown")).find((x) => (x.evidenceJson as { unassigned: { accountNo: string } }).unassigned.accountNo === ACCT2)!;
       expect((q2.evidenceJson as { candidate_guard_ids: string[] }).candidate_guard_ids).toEqual([]);
-      const { res: res2 } = await confirm(owner, q2.id, { option: "assign_bank", guard_id: other.id });
+      // M7：搜尋揀咗英文名唔夾／唔係長工 autopay 嘅人 → 預覽警告，冇 confirm_identity 唔可以確認（server 端亦驗）
+      const warn = await (await qPreview(owner, q2.id, { option: "assign_bank", guard_id: other.id })).json();
+      expect(warn.impact.can_confirm).toBe(false);
+      expect(JSON.stringify(warn.impact.notes)).toContain("警告");
+      expect((await qAnswer(owner, q2.id, { option: "assign_bank", guard_id: other.id }, warn.preview_hash)).status).toBe(422);
+      const { res: res2 } = await confirm(owner, q2.id, { option: "assign_bank", guard_id: other.id, confirm_identity: true });
       expect(res2.status).toBe(200);
       expect((await prisma.guard.findUniqueOrThrow({ where: { id: other.id } })).bankAccountNo).toBe(ACCT2);
     });
 
     it("bank_identity_unknown：目標已有唔同戶口 → 唔准直接覆蓋（預覽 can_confirm=false、強行確認 422）；明確揀「取代現有戶口」先寫；跳過唔寫", async () => {
-      const g = await prisma.guard.create({ data: { nameZh: "測試員候選", nameEn: "ONE TEST PAYEE", employmentType: "cash_casual", bankCode: "024", bankAccountNo: ACCT2, bankPayeeName: "TEST ONE PAYEE", createdBy: "t" } });
+      const g = await prisma.guard.create({ data: { nameZh: "測試員候選", nameEn: "ONE TEST PAYEE", employmentType: "longterm_autopay", bankCode: "024", bankAccountNo: ACCT2, bankPayeeName: "TEST ONE PAYEE", createdBy: "t" } });
       await applyPkg(owner, pkg3([], [{ key: "pe:004:5678", bankCode: "004", accountNo: ACCT, payeeName: "TEST ONE PAYEE" }]));
       const q = (await qs("bank_identity_unknown"))[0]!;
       const ans = { option: "assign_bank", guard_id: g.id };
@@ -608,6 +622,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
         bank: { code: "004", name: null, accountNo: ACCT2, payee: null },
         contacts: [{ name: "測試聯絡人甲", tel: "91000011" }],
         staffRows: [],
+        longterm: false,
       };
       const items = Object.fromEntries(evaluateExt(p, snap).map((i) => [i.key, i.check]));
       expect(items).toMatchObject({ "siaPermit.no": "same", "siaPermit.aExpiry": "same", "siaPermit.bExpiry": "fill", bank: "differs", "emergency.1": "same" });

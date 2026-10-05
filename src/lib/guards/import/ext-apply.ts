@@ -3,13 +3,18 @@
 // 而且有權限（覆蓋權檢查喺比較現值之前做，只取決於「現值係咪非空」，避免變成探測現值嘅 oracle）。
 import type { Prisma } from "@prisma/client";
 import { ApiError } from "@/lib/api/errors";
+import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { fieldValue, type PackagePerson } from "./package";
 import { createGuardEmergencyContact, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 import { canOverrideDerivedSiaPermit, deriveSiaPermitExpiry } from "@/lib/guards/staff-numbers";
 import {
   BANK_OVERWRITE_DENIED_MSG,
   EMPTY_BANK,
+  OPEN_GATE,
   PII_OVERWRITE_DENIED_MSG,
+  digits,
+  heldBy,
+  type ExtGate,
   SCALARS,
   bankCompare,
   bankLeaves,
@@ -47,12 +52,32 @@ const wants = (d: string | undefined, status: string): "skip" | "go" | "not_conf
 export interface ExtColumnPlan {
   data: Prisma.GuardUncheckedUpdateInput;
   outcomes: Record<string, ExtOutcome>;
+  reasons: string[];
+}
+
+/**
+ * 同一個戶口（銀行編號＋戶口數字）唔可以屬於兩個安員：喺 transaction 內先鎖戶口 key（advisory lock），
+ * 再查有冇其他安員已用。所有寫銀行嘅路徑（自動、bank_review、assign_bank、ext_identity_check、decisions）都經 applyPerson → 呢度。
+ */
+export async function acctTakenByOther(tx: Tx, guardId: string | null, code: string | null, acct: string): Promise<boolean> {
+  const d = digits(acct);
+  if (!d) return false;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`bankacct:${d}`}))`;
+  const c = code ? code.padStart(3, "0") : "";
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM guards
+    WHERE regexp_replace(coalesce(bank_account_no, ''), '\D', '', 'g') = ${d}
+      AND (${c} = '' OR bank_code IS NULL OR lpad(bank_code, 3, '0') = ${c})
+      AND (${guardId}::text IS NULL OR id <> ${guardId})
+    LIMIT 1`;
+  return rows.length > 0;
 }
 
 /** 純量欄＋銀行 unit → guards 欄位（無 DB 存取；可能丟 403）。snap=null＝新建（全部係空）。 */
-export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec: ExtDecisions | undefined, caps: ExtCaps): ExtColumnPlan {
+export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec: ExtDecisions | undefined, caps: ExtCaps, gate: ExtGate = OPEN_GATE, bankTaken = false): ExtColumnPlan {
   const data: Record<string, unknown> = {};
   const outcomes: Record<string, ExtOutcome> = {};
+  const reasons: string[] = [];
   for (const s of SCALARS) {
     const leaf = s.get(p);
     const v = leaf ? fieldValue(leaf) : null;
@@ -69,6 +94,10 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
     }
     if (w === "not_confirmed") {
       outcomes[s.key] = "not_confirmed";
+      continue;
+    }
+    if (heldBy(gate, s.key) && d !== "confirm" && d !== "replace") {
+      outcomes[s.key] = "held"; // 身份未夠證據／長工入職日期：等人手確認
       continue;
     }
     const cur = snap ? s.cur(snap) : null;
@@ -94,22 +123,31 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
     else if (caps.canEditBank === false) {
       if (d === "replace" && cmp.anyCurrent) deny(BANK_OVERWRITE_DENIED_MSG);
       outcomes.bank = "not_written";
+    } else if (heldBy(gate, "bank") && d !== "confirm" && d !== "replace") {
+      outcomes.bank = "held"; // 銀行：身份證未相同／身份未夠證據 → 要人明確確認（bank_review）
     } else {
       // 全有或全無：現有四欄全空先補空；現有有任何資料 → same／conflict（replace 先覆蓋，要銀行資料 update 權——上面已檢查）
       const overwrite = d === "replace";
-      if (cmp.state === "fill" || overwrite) {
-        const put = (col: "bankCode" | "bankName" | "bankAccountNo" | "bankPayeeName", v: string | null, curV: string | null) => {
-          if (v && (!curV || overwrite)) data[col] = v;
-        };
-        put("bankCode", bank.code, cur.code);
-        put("bankName", bank.name, cur.name);
-        put("bankAccountNo", bank.accountNo, cur.accountNo);
-        put("bankPayeeName", bank.payee, cur.payee);
-        outcomes.bank = "bankCode" in data || "bankName" in data || "bankAccountNo" in data || "bankPayeeName" in data ? (cmp.state === "same" ? "same" : "written") : "same";
+      const wouldWrite = cmp.state === "fill" || (overwrite && cmp.state !== "same");
+      // 寫入一律四欄一齊（銀行名稱可由 HKICL 編號推出）；包內唔齊 → 自動路徑唔寫，人手決定路徑拒絕（唔砌半套戶口）
+      const nameDerived = bank.name ?? (bank.code ? (HKICL_BANK_OPTIONS.find((b) => b.code === bank.code!.padStart(3, "0"))?.nameZhShort ?? null) : null);
+      const complete = !!bank.code && !!bank.accountNo && !!bank.payee && !!nameDerived;
+      if (wouldWrite && bankTaken) {
+        outcomes.bank = "conflict";
+        reasons.push("bank_acct_belongs_to_other");
+      } else if (wouldWrite && !complete) {
+        if (d === "confirm" || d === "replace") throw new ApiError(422, "unprocessable", "包內銀行資料四欄唔齊，唔可以寫入（唔准砌半套戶口）");
+        outcomes.bank = "not_confirmed";
+      } else if (wouldWrite) {
+        data.bankCode = bank.code!.padStart(3, "0");
+        data.bankName = nameDerived;
+        data.bankAccountNo = bank.accountNo;
+        data.bankPayeeName = bank.payee;
+        outcomes.bank = "written";
       } else outcomes.bank = cmp.state === "same" ? "same" : "conflict";
     }
   }
-  return { data: data as Prisma.GuardUncheckedUpdateInput, outcomes };
+  return { data: data as Prisma.GuardUncheckedUpdateInput, outcomes, reasons };
 }
 
 /**
@@ -141,9 +179,10 @@ export interface ExtRelationResult {
 /** 緊急聯絡人（guard_emergency_contacts）＋逐工號入職日期（guard_staff_numbers.valid_from）。 */
 export async function applyExtRelations(
   tx: Tx,
-  args: { guardId: string; p: PackagePerson; snap: GuardExtSnap | null; dec: ExtDecisions | undefined; caps: ExtCaps; actorUserId: string; audit: AuditFn },
+  args: { guardId: string; p: PackagePerson; snap: GuardExtSnap | null; dec: ExtDecisions | undefined; caps: ExtCaps; actorUserId: string; audit: AuditFn; gate?: ExtGate },
 ): Promise<ExtRelationResult> {
   const { guardId, p, snap, dec, caps, actorUserId, audit } = args;
+  const gate = args.gate ?? OPEN_GATE;
   const outcomes: Record<string, ExtOutcome> = {};
   let contactsAdded = 0;
   let hiresWritten = 0;
@@ -165,13 +204,18 @@ export async function applyExtRelations(
     }
     // 人手決定（confirm／replace）寫完整值；自動寫入只寫 confirmed 嘅欄
     const useFull = d === "confirm" || d === "replace";
+    if (!useFull && !gate.scalars) {
+      outcomes[key] = "held";
+      continue;
+    }
+    // 覆蓋權：已有聯絡人嘅安員再加一位＝加 PII，deny 與否喺比較「之前」決定（只睇現有聯絡人係咪非空）
+    if (useFull && existing.length > 0 && caps.canOverwritePii === false) deny(PII_OVERWRITE_DENIED_MSG);
     const wName = useFull ? c.full.name : c.name;
     const wTel = useFull ? c.full.tel : c.tel;
     const wRel = useFull ? c.full.relationship : c.relationship;
     const row = { name: wName, tel: wTel };
     // 同一個聯絡人欄位值衝突（同電話唔同名／同名唔同電話）：人手揀 confirm／replace＝加為另一位（要個人資料 update 權；先查權限，唔理新值同現值）
     const partial = existing.some((x) => partialContact(x, row));
-    if ((d === "confirm" || d === "replace") && partial && caps.canOverwritePii === false) deny(PII_OVERWRITE_DENIED_MSG);
     if (existing.some((x) => sameContact(x, row)) || added.some((x) => sameContact(x, row))) {
       outcomes[key] = "same";
       continue;
@@ -203,6 +247,10 @@ export async function applyExtRelations(
     }
     if (w === "not_confirmed") {
       outcomes[key] = "not_confirmed";
+      continue;
+    }
+    if (d !== "confirm" && d !== "replace" && !gate.scalars) {
+      outcomes[key] = "held";
       continue;
     }
     const row = await tx.guardStaffNumber.findUnique({ where: { number: h.number } });

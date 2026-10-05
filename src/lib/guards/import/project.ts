@@ -20,6 +20,8 @@ const COMPARED: PersonField[] = ["hkid", "dateOfBirth", "phone", "address", "nam
 const HIDDEN_CHECKS = new Set(["same", "differs", "conflict"]);
 /** 淨洩露「姓名同現有安員唔同」嘅 reason code（已有 current_name_hidden 旗，唔再重複）。 */
 export const NAME_REASONS = new Set(["name_differs_from_guard"]);
+/** 戶口已屬另一位安員：冇「安員銀行資料:view」唔回（否則變戶口存在 oracle） */
+export const BANK_TAKEN_REASON = "bank_acct_belongs_to_other";
 
 function basisCategory(b: string): string {
   return b === "hkid" || b === "staff_no" || b === "tel" ? "identity_key" : b.startsWith("name") ? "name" : b;
@@ -32,19 +34,24 @@ function maskCurrentNames(r: PreviewRow): Pick<PreviewRow, "current_name_zh" | "
 }
 
 function maskRow(r: PreviewRow, v: ProjectionViewer): PreviewRow {
-  const extItems: ExtItem[] | null = r.ext ? r.ext.map((x) => ({ key: x.key, status: x.status as ExtItem["status"], check: x.check as ExtItem["check"] })) : null;
+  const extItems: ExtItem[] | null = r.ext ? r.ext.map((x) => ({ key: x.key, status: x.status as ExtItem["status"], check: x.check as ExtItem["check"], ...(x.held ? { held: x.held as ExtItem["held"] } : {}) })) : null;
   const maskedExt = extItems ? maskExtChecks(extItems, { pii: v.pii, bank: v.bank }) : null;
+  const reasons = r.reasons.filter((x) => (v.pii || !NAME_REASONS.has(x)) && (v.bank || x !== BANK_TAKEN_REASON));
   return {
     ...r,
-    ...(maskedExt ? { ext: maskedExt.map((i) => ({ key: i.key, status: i.status, check: i.check })) } : {}),
+    ...(maskedExt ? { ext: maskedExt.map((i) => ({ key: i.key, status: i.status, check: i.check, ...(i.held ? { held: i.held } : {}) })) } : {}),
     // 冇「安員銀行資料:view」：銀行戶口連尾 4 位都唔回（淨係話「有銀行資料」）
     ...(r.bank_masked && !v.bank ? { bank_masked: { present: true as const } } : {}),
-    ...maskCurrentNames(r),
-    basis: r.basis.map(basisCategory).filter((x, i, a) => a.indexOf(x) === i),
-    reasons: r.reasons.filter((x) => !NAME_REASONS.has(x)),
-    fields: Object.fromEntries(
-      Object.entries(r.fields).map(([f, v]) => [f, COMPARED.includes(f as PersonField) && HIDDEN_CHECKS.has(v.check) ? { ...v, check: "hidden" } : v]),
-    ) as PreviewRow["fields"],
+    reasons,
+    ...(v.pii
+      ? {}
+      : {
+          ...maskCurrentNames(r),
+          basis: r.basis.map(basisCategory).filter((x, i, a) => a.indexOf(x) === i),
+          fields: Object.fromEntries(
+            Object.entries(r.fields).map(([f, v2]) => [f, COMPARED.includes(f as PersonField) && HIDDEN_CHECKS.has(v2.check) ? { ...v2, check: "hidden" } : v2]),
+          ) as PreviewRow["fields"],
+        }),
   };
 }
 
@@ -52,7 +59,7 @@ function extAggregateOf(rows: readonly PreviewRow[]): { ext_stats: ReturnType<ty
   if (!rows.some((r) => r.ext)) return {};
   return {
     ext_stats: aggregateExt(
-      rows.filter((r) => r.auto_apply && r.ext).map((r) => r.ext!.map((x) => ({ key: x.key, status: x.status as ExtItem["status"], check: x.check as ExtItem["check"] }))),
+      rows.filter((r) => r.auto_apply && r.ext).map((r) => r.ext!.map((x) => ({ key: x.key, status: x.status as ExtItem["status"], check: x.check as ExtItem["check"], ...(x.held ? { held: x.held as ExtItem["held"] } : {}) }))),
     ),
   };
 }
@@ -65,7 +72,9 @@ export function projectPreviewForViewer(p: PreviewResult, viewer: ProjectionView
     // 有 PII view、冇銀行 view：只重算新欄彙總（PII 彙總照原樣）
     const { ext_stats: _drop, ...rest } = p;
     void _drop;
-    return { ...rest, rows, ...extAggregateOf(rows) };
+    const reason_counts: Record<string, number> = {};
+    for (const r of rows) for (const x of r.reasons) reason_counts[x] = (reason_counts[x] ?? 0) + 1;
+    return { ...rest, rows, reason_counts, ...extAggregateOf(rows) };
   }
   const applicable = rows.filter((r) => r.auto_apply);
   const create = applicable.filter((r) => r.action === "create");
@@ -102,10 +111,14 @@ function maskResult(r: PersonResult, v: ProjectionViewer): PersonResult {
           ext: r.ext.map(({ key: k, outcome: o }) => ({ key: k, outcome: ((isBankKey(k) && !v.bank) || (isEmergencyKey(k) && !v.pii)) && (o === "same" || o === "conflict") ? ("not_written" as const) : o })),
         }
       : {}),
-    reasons: r.reasons.filter((x) => !NAME_REASONS.has(x)),
-    fields: Object.fromEntries(
-      Object.entries(r.fields).map(([f, v]) => [f, COMPARED.includes(f as PersonField) && (v === "same" || v === "conflict") ? "not_written" : v]),
-    ) as PersonResult["fields"],
+    reasons: r.reasons.filter((x) => (v.pii || !NAME_REASONS.has(x)) && (v.bank || x !== BANK_TAKEN_REASON)),
+    ...(v.pii
+      ? {}
+      : {
+          fields: Object.fromEntries(
+            Object.entries(r.fields).map(([f, o]) => [f, COMPARED.includes(f as PersonField) && (o === "same" || o === "conflict") ? "not_written" : o]),
+          ) as PersonResult["fields"],
+        }),
   };
 }
 

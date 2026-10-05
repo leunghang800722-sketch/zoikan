@@ -74,7 +74,7 @@ function extView(p: PackagePerson, c: ViewerCaps) {
     label: extLabel(`emergency.${x.slot}`),
     status: x.status,
     name: c.pii ? x.name : x.name ? "（冇權限睇）" : null,
-    relationship: x.relationship,
+    relationship: c.pii ? x.relationship : x.relationship ? "（冇權限睇）" : null,
     tel: x.tel ? (c.pii ? x.tel : maskTelImport(x.tel)) : null,
   }));
   const hires = staffHiresOf(p).map((h) => ({ key: `staffHire.${h.number}`, label: extLabel(`staffHire.${h.number}`), value: h.value, status: h.status }));
@@ -130,7 +130,8 @@ export async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<
       tels: tels.map((t) => mTel(t, c)!).filter(Boolean),
       staff_numbers: nos.filter((n) => n.guardId === g.id).map((n) => n.number),
       recent_sites: sites,
-      bank: { has: !!g.bankAccountNo, tail4: c.bankView && g.bankAccountNo ? g.bankAccountNo.replace(/\D/g, "").slice(-4) || null : null },
+      // 冇「安員銀行資料:view」：唔回「已有銀行戶口」（否則變 oracle）
+      ...(c.bankView ? { bank: { has: !!g.bankAccountNo, tail4: g.bankAccountNo ? g.bankAccountNo.replace(/\D/g, "").slice(-4) || null : null } } : {}),
     });
   }
   return out;
@@ -295,6 +296,7 @@ const REASON_LABEL: Record<string, string> = {
   staffno_belongs_to_other: "有工號屬於另一個安員，已跳過",
   staffno_scheme_has_other_current: "有工號同現有工號類別重複，已跳過",
   staffno_invalid: "有工號格式唔合法，已跳過",
+  bank_acct_belongs_to_other: "呢個戶口已屬於另一位保安員，唔會寫入",
 };
 
 const PII_OUTCOME_FIELDS = new Set(["hkid", "dateOfBirth", "phone", "address", "nameEn", "nameZh"]);
@@ -363,12 +365,15 @@ export interface ImpactView {
 export function buildImpact(result: PersonResult, changes: readonly WriteChange[], c: ViewerCaps): ImpactView {
   const norm = JSON.parse(JSON.stringify(changes)) as WriteChange[];
   const out: ImpactView["changes"] = [];
+  // 冇「安員銀行資料:view」：銀行相關結果一律 generic（唔准視乎現值：寫入／同現值一樣／衝突睇落要一樣）
+  const bankHidden = !c.bankView && (result.ext ?? []).some((x) => isBankKey(x.key));
   for (const ch of norm) {
     const before = (ch.before ?? {}) as Record<string, unknown>;
     const after = (ch.after ?? {}) as Record<string, unknown>;
     if (ch.table === "guards") {
       const keys = Object.keys(GUARD_FIELD_LABEL);
       const fields = keys
+        .filter((k) => !(bankHidden && BANK_KEYS.has(k)))
         .filter((k) => ch.action === "create" ? !(after[k] == null || (Array.isArray(after[k]) && (after[k] as unknown[]).length === 0)) : JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null))
         .map((k) => {
           const to = fmt(k, after[k], c);
@@ -377,6 +382,7 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
           if (!c.pii && from !== null && (k === "nameZh" || k === "nameEn") && from !== to) from = "（同導入包唔同，冇權限睇）";
           return { label: GUARD_FIELD_LABEL[k]!, from, to };
         });
+      if (bankHidden && ch.action === "update" && fields.length === 0) continue;
       out.push({ table: "guards", action: ch.action as "create" | "update", label: ch.action === "create" ? "新增安員" : "更新安員資料", guard_id: ch.action === "update" && c.pii ? ch.rowId : null, fields });
     } else if (ch.table === "guard_staff_numbers" && ch.action === "update") {
       out.push({ table: ch.table, action: "update", label: "補工號入職日期", guard_id: null, fields: [{ label: `入職日期（${String(after.number ?? "")}）`, from: fmt("hireDate", before.validFrom, c), to: fmt("hireDate", after.validFrom, c) }] });
@@ -388,7 +394,7 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
         guard_id: null,
         fields: [
           { label: "姓名", from: null, to: after.name ? (c.pii ? String(after.name) : "（冇權限睇）") : "（空）" },
-          { label: "關係", from: null, to: String(after.relationship ?? "（空）") },
+          { label: "關係", from: null, to: after.relationship ? (c.pii ? String(after.relationship) : "（冇權限睇）") : "（空）" },
           { label: "電話", from: null, to: after.tel ? (c.pii ? String(after.tel) : (maskTelImport(String(after.tel)) ?? "")) : "（空）" },
         ],
       });
@@ -403,14 +409,14 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
   const written = result.outcome === "created" || result.outcome === "linked";
   const summary: string[] = [];
   if (result.outcome === "created") summary.push("新增 1 個安員");
-  if (result.outcome === "linked") summary.push(out.some((x) => x.table === "guards" && x.action === "update") ? "連去現有安員，補填／更新佢嘅資料" : "連去現有安員（本身冇欄位需要更新）");
+  if (result.outcome === "linked") summary.push(bankHidden ? "連去現有安員（銀行資料部分你冇權限睇結果）" : out.some((x) => x.table === "guards" && x.action === "update") ? "連去現有安員，補填／更新佢嘅資料" : "連去現有安員（本身冇欄位需要更新）");
   if (result.staff_numbers_added) summary.push(`新增工號 ${result.staff_numbers_added} 個`);
   if (result.phones_added) summary.push(`新增電話 ${result.phones_added} 個`);
   if (result.addresses_added) summary.push(`新增地址 ${result.addresses_added} 個`);
   if (result.contacts_added) summary.push(`新增緊急聯絡人 ${result.contacts_added} 位`);
   if (!written) summary.push("照呢個答案，仍然唔會寫入任何資料（要揀其他選項，或者跳過）");
   // 「姓名同現有安員唔同」呢類 reason 冇 PII view 唔回（同 import project.ts 一致）
-  const notes = [...new Set(result.reasons)].filter((r) => c.pii || r !== "name_differs_from_guard").map((r) => REASON_LABEL[r] ?? `原因碼：${r}`);
+  const notes = [...new Set(result.reasons)].filter((r) => (c.pii || r !== "name_differs_from_guard") && (c.bankView || r !== "bank_acct_belongs_to_other")).map((r) => REASON_LABEL[r] ?? `原因碼：${r}`);
   return {
     can_confirm: written,
     summary,
@@ -421,6 +427,7 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
         .map(([f, v]) => ({ field: f, label: FIELD_NAME_LABEL[f] ?? f, outcome: outcomeLabel(f, v as string, c) })),
       ...(result.ext ?? []).map(({ key: k, outcome: v }) => {
         const hide = (isBankKey(k) && !c.bankView) || (isEmergencyKey(k) && !c.pii);
+        if (isBankKey(k) && !c.bankView) return { field: k, label: extLabel(k), outcome: v === "skipped" ? EXT_OUTCOME_LABEL.skipped! : "（冇權限睇結果）" };
         return { field: k, label: extLabel(k), outcome: hide && (v === "same" || v === "conflict" || v === "not_written") ? "冇寫入（已有資料）" : (EXT_OUTCOME_LABEL[v] ?? String(v)) };
       }),
     ],

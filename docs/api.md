@@ -2293,3 +2293,14 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 **權限**：包內有任何銀行欄（`persons[].bank` 有值或 `unassignedBankAccounts` 非空）→ preview／apply 要求「安員銀行資料:update」，冇就 403（訊息講明銀行資料冇寫入）；覆蓋現有銀行／牌照／入職日期等非空值要對應 update 權（銀行＝銀行資料；其餘＝「安員:update」；加多聯絡人衝突＝「安員個人資料:update」），403 規則同 §28.8（逐人 savepoint，只擋該人）。冇「安員銀行資料:view」嘅讀者，銀行欄 projection 一律 generic（same／differs 都顯示 `hidden`／`not_written`，彙總由遮罩後 rows 重算）；冇「安員個人資料:view」嘅讀者，已有聯絡人嘅安員唔自動加、same／differs／add 一律 hidden。
 
 **分診新題型**（規則出題，冇外部 AI；一人一類一題，group_key 帶後綴 → 冪等）：`ext_field_conflict`／`ext_field_review`（補充資料層；逐欄 `use_import`／`keep_current`／`skip`，answer `{option:"apply_ext_fields", ext_fields:{<key>:…}}`）；`bank_review`（重要層）；`bank_identity_unknown`（重要層；候選＝英文名 token 完全相同嘅現有安員最多 5 個＋搜尋其他保安員；answer `{option:"assign_bank", guard_id, replace_existing?}`，目標已有唔同戶口而冇 `replace_existing` → 預覽 `can_confirm=false`、強行確認 422）；`ext_identity_check`（重要層；疑似重複／工號身份唔一致：`confirm_ext_identity`／跳過）。銀行題只有「安員銀行資料:update」嘅人睇到內容同可作答；冇權限嘅擁有人見到題目數，題目 `restricted:true`，標題「要有安員銀行資料權限嘅同事處理」，預覽／作答 403。冇銀行 view 嘅上載者，銀行題不論同現有戶口比較結果一律出（令題目數唔洩露現值）。
+
+### WP-STAFF-FIELDS 驗收修正（Opus 5.5，B1／M1–M7）
+
+- **自動寫入閘（B1）**：`typed_list_only_person` 只有 (a) DB 身份證同名單完全相同 → 全部可寫；(b) DB 冇身份證而中文姓名完全相同 → 非銀行可寫，銀行出 `bank_review`；(c) 其他 → 新欄全部 `held`（唔寫），出 `ext_identity_check`。有文件嘅人：銀行自動寫要求身份證相同（confirmed）。冇「安員個人資料:view」嘅操作者閘結果與現有身份證／姓名無關（typed 一律 (c)、銀行一律 hold）。人手 decision（confirm／replace）可繞過 hold。新 outcome `held`、新 check `taken`、ext 行 `held`（identity／bank／longterm）。
+- **戶口唯一（M1）**：所有銀行寫入經 `acctTakenByOther`（advisory lock＋正規化編號＋戶口數字查其他安員）；自動路徑標 conflict＋reason `bank_acct_belongs_to_other`（冇銀行 view 唔回）出 `bank_review`；分診 422。
+- **銀行取代（M2）**：寫入一律四欄一齊（名稱可由 HKICL 編號推出），包內唔齊 → 422（自動路徑唔寫）；`bank_review`／`assign_bank` 現有戶口唔同要 `replace_existing:true` 先取代；冇「安員銀行資料:view」一律要 `replace_existing:true`（令回應唔視乎現值）。
+- **差分（M3）**：冇 PII view 嘅聯絡人 decisions 覆蓋 deny／出題與否唔取決於比較；含 `decisions.ext` 嘅 apply 計批量配額；冇銀行 view 嘅預覽 changes／summary／field_outcomes 銀行部分一律 generic。
+- **跨 session 去重（M4）**：出題時 `guard_import` 其他 session 已有同 group_key＋同 kind＋證據核心（v2 身份欄值／候選／要覆核欄名／ext key／戶口）相同嘅題（任何狀態）唔再出。unassigned 題 group_key 前綴 `bankpe:`。
+- **M5**：`GET /api/longterm/payroll/:month/autopay` 對已鎖月份：preview 回 `locked_month_warning`；下載要 `confirm_locked=1`（否則 400）；audit 帶 `lockedMonth／confirmedLocked`（冇戶口）。金額照舊。
+- **M7**：`assign_bank` 目標英文名同收款人唔夾／唔係 `longterm_autopay` → 預覽警告，要 `confirm_identity:true`（server 驗，冇就 422）。
+- **其他**：`single_ocr` 包只准 v2（400）；`todayIso()` 用香港時區；候選卡冇銀行 view 唔回 `bank`；聯絡人關係按 PII 遮罩；逐工號入職日期「工號屬另一人」預覽 `not_stored`；audit 摘要唔含 `ext_conflicts`；長工（`longterm_autopay` 或有長工合約）人層面入職日期唔自動寫（長工糧讀 `guards.hire_date`：`src/lib/longterm-payroll/aggregate.ts:334,440,477,513,548,593`；`guard_staff_numbers.valid_from` 長工糧冇讀）→ `ext_field_review`。

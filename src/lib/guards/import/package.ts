@@ -38,7 +38,8 @@ export function isIsoCalendarDate(v: string): boolean {
   const d = new Date(`${v}T00:00:00.000Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
 }
-const todayIso = (): string => new Date().toISOString().slice(0, 10);
+/** 香港時區嘅「今日」（UTC+8），避免香港凌晨 0–8 點驗證日期上限差一日 */
+const todayIso = (): string => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
 /** 屆滿日 2015–2040（同第一階段 expiryInRange 一致）；簽發日 2000–今日；入職日 1990–今日。 */
 export const dateInRange = (kind: "expiry" | "issue" | "hire") => (v: string): boolean => {
   if (!isIsoCalendarDate(v)) return false;

@@ -6,25 +6,67 @@
 //  - ext key：`siaPermit.no`／`siaPermit.aExpiry`…／`safetyCard.*`／`qas.*`／`hireDate`／`bank`（四欄一個 unit）／
 //    `emergency.1`／`emergency.2`（每位聯絡人一個 unit）／`staffHire.<工號>`（逐工號入職日期）。
 //  - 權限：銀行 unit＝「安員銀行資料」；緊急聯絡人＝「安員個人資料」；其餘＝「安員」module。
-import { normZh, normTel8 } from "./text";
+import { normZh, normTel8, sameNameStrict } from "./text";
 import { fieldValue, type FieldStatus, type PackagePerson } from "./package";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 
 export type ExtDecision = "confirm" | "replace" | "skip";
 export type ExtDecisions = Readonly<Record<string, ExtDecision>>;
 
-export type ExtCheck = "new" | "fill" | "add" | "same" | "differs" | "not_stored" | "hidden";
-export type ExtOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "not_stored" | "not_written";
+export type ExtCheck = "new" | "fill" | "add" | "same" | "differs" | "taken" | "not_stored" | "hidden";
+export type ExtOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "not_stored" | "not_written" | "held";
 
 export interface ExtOutcomeRow {
   key: string;
   outcome: ExtOutcome;
 }
 
+/** 等人確認（唔自動寫）：identity＝身份未夠硬證據；bank＝銀行要身份證相同先自動寫；longterm＝長工糧讀 guards.hire_date */
+export type ExtHeld = "identity" | "bank" | "longterm";
+
 export interface ExtItem {
   key: string;
   status: FieldStatus;
   check: ExtCheck;
+  held?: ExtHeld;
+}
+
+/**
+ * 自動寫入閘（B1，Opus 驗收）：
+ *  - typed_list_only_person：(a) DB 安員有身份證而且同名單完全相同 → 全部可寫（包括銀行）；
+ *    (b) DB 冇身份證、中文姓名完全相同（sameNameStrict）→ 非銀行可寫，銀行出 bank_review；
+ *    (c) 其他 → 新欄全部唔寫，出 ext_identity_check。
+ *  - 有文件嘅人：銀行自動寫要求身份證相同（confirmed）；否則出 bank_review。
+ *  - 冇「安員個人資料:view」嘅操作者：閘結果唔可以取決於現有身份證／姓名（否則變 oracle）→ typed 一律 (c)，銀行一律 hold。
+ *  - 長工（longterm_autopay 或有長工合約）嘅人層面入職日期：長工糧讀 guards.hire_date
+ *    （src/lib/longterm-payroll/aggregate.ts:334,440,477,513,548,593）→ 唔自動寫，出 ext_field_review。
+ */
+export interface ExtGate {
+  scalars: boolean;
+  bank: boolean;
+  longtermHire: boolean;
+}
+export const OPEN_GATE: ExtGate = { scalars: true, bank: true, longtermHire: false };
+export function extGateFor(args: { p: PackagePerson; guard: { hkid: string | null; nameZh: string; longterm: boolean } | null; hkidCanon: string | null; piiView: boolean }): ExtGate {
+  const { p, guard, hkidCanon, piiView } = args;
+  if (!guard) return OPEN_GATE;
+  const typed = p.reasons.includes("typed_list_only_person");
+  const longtermHire = guard.longterm;
+  if (!piiView) return { scalars: !typed, bank: false, longtermHire };
+  const hkidSame = !!hkidCanon && guard.hkid === hkidCanon;
+  if (typed) {
+    if (hkidSame) return { scalars: true, bank: true, longtermHire };
+    if (!guard.hkid && sameNameStrict(guard.nameZh, fieldValue(p.nameZh))) return { scalars: true, bank: false, longtermHire };
+    return { scalars: false, bank: false, longtermHire };
+  }
+  return { scalars: true, bank: hkidSame && p.hkid.status === "confirmed", longtermHire };
+}
+/** 呢個 key 喺閘之下係咪要 hold（冇人手決定先）。 */
+export function heldBy(gate: ExtGate, key: string): ExtHeld | null {
+  if (!gate.scalars) return "identity";
+  if (key === "bank") return gate.bank ? null : "bank";
+  if (key === "hireDate" && gate.longtermHire) return "longterm";
+  return null;
 }
 
 export const PII_OVERWRITE_DENIED_MSG = "呢條要有安員個人資料修改權限嘅同事（例如老闆）答";
@@ -47,6 +89,8 @@ export interface GuardExtSnap {
   /** 有效緊急聯絡人：子表有行就用子表；子表 0 行但 legacy 欄有值就當 1 位（寫入前會自癒搬入子表） */
   contacts: { name: string | null; tel: string | null }[];
   staffRows: { number: string; validFrom: string | null }[];
+  /** 長工（employment_type=longterm_autopay 或有長工合約） */
+  longterm: boolean;
 }
 
 export const EMPTY_BANK = { code: null, name: null, accountNo: null, payee: null } as const;
@@ -92,6 +136,7 @@ export const EXT_OUTCOME_LABEL: Record<string, string> = {
   not_confirmed: "未確認，唔寫",
   not_stored: "系統未儲存",
   not_written: "冇寫入",
+  held: "身份未夠證據／要人確認，未寫",
 };
 
 export const isBankKey = (k: string): boolean => k === "bank";
@@ -214,7 +259,22 @@ export function bankCompare(bank: NonNullable<ReturnType<typeof bankLeaves>>, cu
  * 唯讀評估：每個有值嘅新欄一行 { key, status(包內), check(對現有) }。
  * snap=null（新建／未對上現有安員）→ 有值嘅一律 `new`。
  */
-export function evaluateExt(p: PackagePerson, snap: GuardExtSnap | null): ExtItem[] {
+export interface EvalOpts {
+  gate?: ExtGate;
+  /** 呢個戶口（銀行編號＋戶口數字）已被另一位安員使用 */
+  bankTaken?: boolean;
+  /** 工號 → 現時擁有者 guard id（逐工號入職日期預覽要同寫入一致：屬另一個人就唔會寫） */
+  ownerOf?: (n: string) => string | null;
+  guardId?: string | null;
+}
+export function evaluateExt(p: PackagePerson, snap: GuardExtSnap | null, opts: EvalOpts = {}): ExtItem[] {
+  const gate = opts.gate ?? OPEN_GATE;
+  return evaluateExtRaw(p, snap, opts).map((i) => {
+    const held = i.key.startsWith("staffHire.") ? (gate.scalars ? null : "identity") : heldBy(gate, i.key);
+    return held && i.check !== "not_stored" ? { ...i, held } : i;
+  });
+}
+function evaluateExtRaw(p: PackagePerson, snap: GuardExtSnap | null, opts: EvalOpts): ExtItem[] {
   const out: ExtItem[] = [];
   for (const s of SCALARS) {
     const leaf = s.get(p);
@@ -229,10 +289,9 @@ export function evaluateExt(p: PackagePerson, snap: GuardExtSnap | null): ExtIte
   }
   const bank = bankLeaves(p);
   if (bank) {
-    if (!snap) out.push({ key: "bank", status: bank.status, check: "new" });
-    else {
-      out.push({ key: "bank", status: bank.status, check: bankCompare(bank, snap.bank).state });
-    }
+    if (opts.bankTaken) out.push({ key: "bank", status: bank.status, check: "taken" });
+    else if (!snap) out.push({ key: "bank", status: bank.status, check: "new" });
+    else out.push({ key: "bank", status: bank.status, check: bankCompare(bank, snap.bank).state });
   }
   for (const c of contactsOf(p)) {
     const key = `emergency.${c.slot}`;
@@ -244,6 +303,11 @@ export function evaluateExt(p: PackagePerson, snap: GuardExtSnap | null): ExtIte
   for (const h of staffHiresOf(p)) {
     const key = `staffHire.${h.number}`;
     const row = snap?.staffRows.find((r) => normalizeStaffNumber(r.number) === h.number);
+    const owner = !row ? (opts.ownerOf?.(h.number) ?? null) : null;
+    if (owner && owner !== opts.guardId) {
+      out.push({ key, status: h.status, check: "not_stored" }); // 工號屬另一個人：唔會寫
+      continue;
+    }
     out.push({ key, status: h.status, check: !snap || !row ? "new" : !row.validFrom ? "fill" : row.validFrom === h.value ? "same" : "differs" });
   }
   return out;
@@ -253,7 +317,7 @@ export function evaluateExt(p: PackagePerson, snap: GuardExtSnap | null): ExtIte
 export function maskExtChecks(items: readonly ExtItem[], opts: { pii: boolean; bank: boolean }): ExtItem[] {
   return items.map((i) => {
     const hide = isBankKey(i.key) ? !opts.bank : isEmergencyKey(i.key) ? !opts.pii : false;
-    return hide && (i.check === "same" || i.check === "differs" || i.check === "add") ? { ...i, check: "hidden" } : i;
+    return hide && (i.check === "same" || i.check === "differs" || i.check === "add" || i.check === "taken") ? { ...i, check: "hidden" } : i;
   });
 }
 
@@ -268,20 +332,24 @@ export interface ExtAggregate {
   to_write: { key: string; count: number }[];
   /** confirmed 但同現有唔同（會出衝突題）；冇權限讀現值嘅讀者一律 0（hidden 唔計） */
   conflicts: number;
+  /** 等人確認（唔自動寫）嘅 confirmed 欄數 */
+  held: number;
 }
 /** 單一彙總函數：preview（有權限）同 projection（遮罩後）都由 rows 重新計，唔直接用未遮罩資料。 */
 export function aggregateExt(rowItems: readonly (readonly ExtItem[])[]): ExtAggregate {
   const fields: Record<string, { confirmed: number; review: number }> = {};
   const toWrite: Record<string, number> = {};
   let conflicts = 0;
+  let held = 0;
   for (const items of rowItems) {
     for (const i of items) {
       const k = extStatKey(i.key);
+      if (i.held && i.status === "confirmed") held += 1;
       const f = (fields[k] ??= { confirmed: 0, review: 0 });
       if (i.status === "confirmed") f.confirmed += 1;
       else if (i.status === "review") f.review += 1;
-      if (i.status === "confirmed" && (i.check === "fill" || i.check === "new" || i.check === "add")) toWrite[k] = (toWrite[k] ?? 0) + 1;
-      if (i.status === "confirmed" && i.check === "differs") conflicts += 1;
+      if (i.status === "confirmed" && !i.held && (i.check === "fill" || i.check === "new" || i.check === "add")) toWrite[k] = (toWrite[k] ?? 0) + 1;
+      if (i.status === "confirmed" && (i.check === "differs" || i.check === "taken")) conflicts += 1;
     }
   }
   const byKey = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key);
@@ -289,5 +357,6 @@ export function aggregateExt(rowItems: readonly (readonly ExtItem[])[]): ExtAggr
     fields: Object.entries(fields).map(([key, v]) => ({ key, ...v })).sort(byKey),
     to_write: Object.entries(toWrite).map(([key, count]) => ({ key, count })).sort(byKey),
     conflicts,
+    held,
   };
 }

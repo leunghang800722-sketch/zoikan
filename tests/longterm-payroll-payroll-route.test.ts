@@ -107,6 +107,7 @@ describe("/api/longterm/payroll/:month", () => {
   });
 
   it("autopay xlsx（BOCHK Payroll Editor 格式）：有齊銀行資料先出現，缺資料嘅人剔走列入「缺資料」sheet＋preview 列出邊個缺；audit 記低下載", async () => {
+    const auditBefore = await prisma.auditLog.count({ where: { action: "export_download", tableName: "longterm_payroll_runs" } }); // audit_log append-only，跨檔累積，用差值
     const withBank = await makeLongtermGuard("6009999999", "004");
     const withoutAccount = await makeLongtermGuard(null);
     const withoutBankCode = await makeLongtermGuard("6008888888", null);
@@ -147,7 +148,7 @@ describe("/api/longterm/payroll/:month", () => {
     expect(missingSheet.rowCount).toBe(3); // header + 2 缺資料
 
     const auditRows = await prisma.auditLog.findMany({ where: { action: "export_download", tableName: "longterm_payroll_runs" } });
-    expect(auditRows.length).toBe(2); // preview 一次 + 真下載一次
+    expect(auditRows.length - auditBefore).toBe(2); // preview 一次 + 真下載一次
     void withBank;
     void withoutAccount;
     void withoutBankCode;

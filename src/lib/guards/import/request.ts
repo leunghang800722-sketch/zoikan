@@ -17,6 +17,8 @@ export function parsePackage(raw: unknown): ImportPackage {
   }
   // WP-GUARD-OCR §29：單人包只准 1 人（獨立配額唔可以變批量導入嘅後門）
   if (r.data.source === "single_ocr" && r.data.persons.length !== 1) throw BadRequest("單人證件包只可以有 1 個人");
+  // single_ocr 只係 v2 證件欄；唔准帶 v3 新欄（牌照／銀行／聯絡人…）
+  if (r.data.source === "single_ocr" && r.data.version !== 2) throw BadRequest("單人證件包只可以係 v2 格式");
   return r.data;
 }
 

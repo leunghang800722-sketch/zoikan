@@ -147,28 +147,19 @@ export function sameEnglishTokens(a: string | null | undefined, b: string | null
   return x.length >= 2 && x.length === y.length && x.every((t, i) => t === y[i]);
 }
 
-/** 新欄題目（對已 link 嘅人）：銀行 → bank_review；其餘 review → ext_field_review；confirmed 但同現值唔同 → ext_field_conflict。 */
+/**
+ * 新欄題目（對已 link 嘅人）：
+ *  - 身份閘未過（typed 名單 only 但身份證／姓名對唔硬）或 ext_identity_check 標記 → ext_identity_check（重要層）；
+ *  - 銀行：review／同現有戶口唔同／戶口已屬另一人／銀行閘 hold → bank_review（重要層）；
+ *  - 長工入職日期（長工糧讀 guards.hire_date）→ ext_field_review；
+ *  - 其餘 review → ext_field_review；confirmed 但同現值唔同 → ext_field_conflict。
+ */
 function extDrafts(e: Evaluation, order: number, opts: DraftOptions): QuestionDraft[] {
   const p = e.person;
   if (e.action !== "link" || !e.guardId || e.ext.length === 0) return [];
+  // 冇對應 view 嘅作答者：出題與否唔准取決於「同現有值比較」（same／differs／add／taken 一律當 differs）
   const uniform = (k: string) => (isBankKey(k) ? opts.viewBank === false : isEmergencyKey(k) ? opts.viewPii === false : false);
-  const eff = (i: ExtItem): string => (uniform(i.key) && (i.check === "same" || i.check === "differs") ? "differs" : i.check);
-  // 疑似重複／身份唔一致：先問身份（重要層），唔再逐欄問
-  if (p.reasons.includes("ext_identity_check") && e.ext.some((i) => i.status === "review")) {
-    return [
-      {
-        kind: "ext_identity_check",
-        groupKey: `${p.key}:extidentity`,
-        sort: KIND_ORDER.indexOf("ext_identity_check") * 100000 + order,
-        title: KIND_LABEL.ext_identity_check,
-        evidence: { v: 1, person: p, reasons: [...new Set(e.reasons)], candidate_guard_ids: [], ext_review: e.ext.filter((i) => i.status === "review").map((i) => ({ key: i.key, check: i.check, status: i.status })), guard_id: e.guardId },
-        options: [{ id: "confirm_ext_identity", label: "身份冇錯，照寫入呢個人（只補空欄）" }, { id: "skip", label: "跳過，留人手" }],
-      },
-    ];
-  }
-  const bank = e.ext.filter((i) => isBankKey(i.key) && (i.status === "review" || eff(i) === "differs"));
-  const review = e.ext.filter((i) => extKeyGroup(i.key) !== "bank" && i.status === "review" && i.check !== "not_stored");
-  const conflict = e.ext.filter((i) => extKeyGroup(i.key) !== "bank" && i.status === "confirmed" && eff(i) === "differs");
+  const eff = (i: ExtItem): string => (uniform(i.key) && ["same", "differs", "add", "taken"].includes(i.check) ? "differs" : i.check === "taken" ? "differs" : i.check);
   const mk = (kind: QuestionKind, suffix: string, items: ExtItem[]): QuestionDraft => ({
     kind,
     groupKey: `${p.key}:${suffix}`,
@@ -179,11 +170,26 @@ function extDrafts(e: Evaluation, order: number, opts: DraftOptions): QuestionDr
       person: p,
       reasons: [...new Set([...e.reasons])],
       candidate_guard_ids: [],
-      ext_review: items.map((i) => ({ key: i.key, check: eff(i), status: i.status })),
+      ext_review: items.map((i) => ({ key: i.key, check: eff(i), status: i.status, ...(i.held ? { held: i.held } : {}) })),
       guard_id: e.guardId,
     },
-    options: [{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, SKIP_OPTION],
+    options:
+      kind === "ext_identity_check"
+        ? [{ id: "confirm_ext_identity", label: "身份冇錯，照寫入（只補空欄）" }, SKIP_OPTION]
+        : [{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, SKIP_OPTION],
   });
+  const live = e.ext.filter((i) => i.check !== "not_stored");
+  // 身份閘 / 重複標記
+  if (!e.gate.scalars || (p.reasons.includes("ext_identity_check") && live.some((i) => i.status === "review"))) {
+    const items = live.filter((i) => (i.status === "review" || i.held === "identity") && !(i.status === "confirmed" && i.check === "same"));
+    if (items.length) return [mk("ext_identity_check", "extidentity", items)];
+  }
+  // 銀行：review／同現有唔同／閘 hold；另外 confirmed 但 apply 後仍然係「補空」（fill／new）＝有原因冇自動寫（例如 link 前後身份證先補上），都要人確認
+  const bank = live.filter((i) => isBankKey(i.key) && (i.status === "review" || eff(i) === "differs" || i.held === "bank" || (i.status === "confirmed" && (i.check === "fill" || i.check === "new"))));
+  const longterm = live.filter((i) => i.held === "longterm");
+  const review = live.filter((i) => extKeyGroup(i.key) !== "bank" && (i.status === "review" || i.held === "longterm") && i.check !== "same");
+  const conflict = live.filter((i) => extKeyGroup(i.key) !== "bank" && i.status === "confirmed" && !i.held && eff(i) === "differs");
+  void longterm;
   const out: QuestionDraft[] = [];
   if (bank.length) out.push(mk("bank_review", "bank", bank));
   if (review.length) out.push(mk("ext_field_review", "extreview", review));
@@ -203,8 +209,8 @@ function unassignedBankDrafts(pkg: ImportPackage, opts: DraftOptions): QuestionD
   list.forEach((u, i) => {
     if (seen.has(u.key)) return;
     seen.add(u.key);
-    // 已經有安員用緊呢個戶口（已答／已由包內人帶入）→ 唔再問
-    if (inPersons.has(u.accountNo) || haveAcct.has(digits(u.accountNo))) return;
+    // 已經有安員用緊呢個戶口（已答／已由包內人帶入）→ 唔再問；冇銀行 view 嘅作答者唔准因此改變出唔出題（交俾跨 session 去重）
+    if (inPersons.has(u.accountNo) || (opts.viewBank !== false && haveAcct.has(digits(u.accountNo)))) return;
     const cands = guards.filter((g) => sameEnglishTokens(u.payeeName, g.nameEn)).slice(0, MAX_CANDIDATES).map((g) => g.id);
     const synthetic: PackagePerson = {
       key: u.key,
@@ -227,7 +233,7 @@ function unassignedBankDrafts(pkg: ImportPackage, opts: DraftOptions): QuestionD
     };
     out.push({
       kind: "bank_identity_unknown",
-      groupKey: u.key,
+      groupKey: `bankpe:${u.key}`,
       sort: KIND_ORDER.indexOf("bank_identity_unknown") * 100000 + i,
       title: KIND_LABEL.bank_identity_unknown,
       evidence: { v: 1, person: synthetic, reasons: ["bank_identity_unknown"], candidate_guard_ids: cands, unassigned: { key: u.key, bankCode: u.bankCode, accountNo: u.accountNo, payeeName: u.payeeName } },

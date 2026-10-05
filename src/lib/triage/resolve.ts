@@ -135,9 +135,12 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       for (const [k, c] of entries) {
         if (!allowed.has(k)) throw BadRequest("呢個欄位唔屬於呢條問題");
         // 用導入值＝replace（現值空＝補空；現值唔同＝覆蓋，要權限）；保留現值／跳過＝唔寫
-        ext[k] = c === "use_import" ? "replace" : "skip";
+        // 銀行例外：現值唔同要明確揀「取代現有戶口」（replace_existing）先 replace，否則只補空（confirm）
+        ext[k] = c !== "use_import" ? "skip" : k === "bank" && !answer.replace_existing ? "confirm" : "replace";
       }
       dec.ext = ext;
+      // 鎖定寫入目標＝題目建立時嘅 guard（唔重新評估對齊）
+      if (q.evidence.guard_id) forced = { mode: "link", guardId: q.evidence.guard_id };
       break;
     }
     case "confirm_ext_identity": {
@@ -146,6 +149,7 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       const ext: Record<string, ExtDecision> = {};
       for (const r of q.evidence.ext_review ?? []) ext[r.key] = "confirm";
       dec.ext = ext;
+      if (q.evidence.guard_id) forced = { mode: "link", guardId: q.evidence.guard_id };
       break;
     }
     case "assign_bank": {
