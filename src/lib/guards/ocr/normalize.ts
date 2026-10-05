@@ -48,7 +48,7 @@ export function dobPlausible(iso: string, now: Date = new Date()): boolean {
 
 /** 簡體專用字（同繁體唔同形）——部分清單，淨係做「疑似簡體」警示（reason simplified_chars）；唔係完整判斷。 */
 const SIMPLIFIED_ONLY = new Set(
-  "陈张刘黄吴严谢叶华国伟杰马郑邓冯萧罗蒋韩许杨陆龙赵钱孙叶闫贺顾师齐汤贾钟庞龚丽艳红绿蓝阳阴阵际难离鸿鸣鹏鹤鲁鲍鲜鸡鱼麦齿龄龟见观规觉视览亲计认讯记讲许设访证评识诚诗话该详语误说请诸读课谁调谈谊谋谓谢谦谨负财货贤质购贯贵贸费资赏赖赞赵赶趋跃践踪轩软轮轻载轿辉输辈辑边辽达迁运这连迟进远违选递逻遗邮邻酿释针钉钓钢钱钻铁铃铜银铭链销锐锋锦键锻镇长门闪闭问闯间闲闷闹阅队阳阶际陆陕险随隐难雏雾霁静页顶项顺须顾顿预领频题颜额风飞饭饮饰饱馆驱驶驻驾骄验骑鱼鸟鸭鸿黄齐".split(""),
+  "陈张刘黄吴严谢叶华国伟马郑邓冯萧罗蒋韩许杨陆龙赵钱孙闫贺顾师齐汤贾钟庞龚丽艳红绿蓝阳阴阵际难鸿鸣鹏鹤鲁鲍鲜鸡鱼麦齿龄龟见观规觉视览亲计认讯记讲设访证评识诚诗话该详语误说请诸读课谁调谈谊谋谓谦谨负财货贤质购贯贵贸费资赏赖赞趋跃践踪轩软轮轻载轿辉输辈辑边辽达迁运这连迟进远违选递逻遗邮邻酿释针钉钓钢钻铁铃铜银铭链销锐锋锦键锻镇长门闪闭问闯间闲闷闹阅队阶陕险随隐雏雾霁静页顶项顺须顿预领频题颜额风飞饭饮饰饱馆驱驶驻驾骄验骑鸟鸭".split(""),
 );
 // 清單只放「簡體專用」字；繁簡同形嘅字（李、王、林、梁、何、蔡、麻、紫…）唔入清單
 function hasSimplifiedOnly(s: string): boolean {
@@ -92,9 +92,9 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
       return /^[2-9]\d{7}$/.test(n) ? { canon: n, display: n, valid: true } : { canon: n, display: n, valid: false, reason: "phone_not_hk" };
     }
     case "name_zh": {
-      const c = t.replace(/\s+/g, "");
+      const c = t.replace(/\s+/g, "").replace(/[·・•‧]/g, "·"); // 間隔號統一（· ・ • ‧）
       // 每個字都要係中文字（容許間隔號 ·），任何 ?／□／*／英數佔位 → review
-      const allCjk = c.length > 0 && /^[\p{Script=Han}·・•]+$/u.test(c) && /\p{Script=Han}/u.test(c);
+      const allCjk = c.length > 0 && /^[\p{Script=Han}·]+$/u.test(c) && /\p{Script=Han}/u.test(c);
       const ok0 = allCjk && c.length >= 2 && c.length <= 12;
       if (ok0 && hasSimplifiedOnly(c)) return { canon: c, display: c, valid: false, reason: "simplified_chars" };
       return { canon: c, display: c, valid: ok0, ...(ok0 ? {} : { reason: "name_zh_format" }) };
@@ -105,9 +105,9 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
       return { canon: c, display: c, valid: ok, ...(ok ? {} : { reason: "name_en_format" }) };
     }
     case "address": {
-      // 只折疊空白＋全半形統一（NFKC 已做）；保留數字之間嘅分隔符（, - / 號 樓 室…），
-      // 避免「Block 1, 23/F」同「Block 12, 3/F」當相同
-      const canon = t.toUpperCase().replace(/\s+/g, "");
+      // 逗號／空白差異忽略，但當「token 分隔」（折疊成單一空格，唔係刪走）；數字之間嘅 / - 同 號／樓／室／座 保留。
+      // 「15/F, Block A」＝「15/F Block A」；「Block 1, 23/F」(BLOCK 1 23/F) ≠「Block 12, 3/F」(BLOCK 12 3/F)
+      const canon = t.toUpperCase().replace(/[\s,，、;；]+/g, " ").trim();
       const ok = canon.length >= 6 && canon.length <= 200;
       return { canon, display: t, valid: ok, ...(ok ? {} : { reason: "address_format" }) };
     }

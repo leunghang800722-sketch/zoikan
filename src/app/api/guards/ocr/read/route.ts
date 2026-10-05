@@ -8,7 +8,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ApiError, BadRequest, NotFound } from "@/lib/api/errors";
 import { getClientIp, handleApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
-import { assertOcrReadQuota, withUserQuotaLock } from "@/lib/guards/import/limits";
+import { reserveQuota } from "@/lib/guards/import/limits";
 import { OCR_DOC_TYPES, OCR_MAX_BODY_CHARS, OCR_MAX_DOCS, OCR_MAX_IMAGE_CHARS, OCR_MAX_TILES, isGuardOcrConfigured } from "@/lib/guards/ocr/config";
 import { OcrUnavailableError, getVisionClient } from "@/lib/guards/ocr/vision-client";
 import { readDocument, type DocumentReadResult } from "@/lib/guards/ocr/read";
@@ -90,9 +90,9 @@ async function handle(req: Request): Promise<NextResponse> {
   const docs = parsed.data.documents;
   if (new Set(docs.map((d) => d.type)).size !== docs.length) throw BadRequest("每種文件只可以傳一份");
 
-  // 配額檢查 → 呼叫模型 → 寫 audit（計數）整段按用戶上鎖：並發請求逐個過 check，繞唔過每日上限
-  return withUserQuotaLock(session, "ocr", async () => {
-    await assertOcrReadQuota(session);
+  // 預留配額（短 transaction，鎖外先呼叫模型）。失敗／超時唔退還次數。
+  await reserveQuota(session, "ocr");
+  {
     const client = getVisionClient();
     const t0 = Date.now();
     const imagesCount = docs.reduce((n, d) => n + 1 + d.tiles.length, 0);
@@ -130,5 +130,5 @@ async function handle(req: Request): Promise<NextResponse> {
       usage: { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, calls: usage.calls },
       documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok })),
     });
-  });
+  }
 }

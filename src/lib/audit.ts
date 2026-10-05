@@ -85,6 +85,8 @@ export type AuditAction =
   | "guard_import_preview"
   // WP-GUARD-OCR §29：證件辨識讀取——after 淨係文件類型、欄位狀態計數、模型、tokens、耗時（冇圖、冇任何欄位值）。
   | "guard_ocr_read"
+  // 配額預留行（限額只數呢種行；after 只有 kind＋request_id，冇 PII）
+  | "guard_quota_reserve"
   // WP-AI-OPS §28.4：導入後對話式分診——開 session／作答（含跳過）／老闆轉交。after 淨係 id＋類別＋計數（冇姓名／身份證等 PII）。
   | "triage_session_create"
   | "triage_answer"

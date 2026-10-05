@@ -15,7 +15,7 @@ import { isGuardOcrConfigured, OCR_DOC_FIELDS } from "@/lib/guards/ocr/config";
 import { CRITICAL_MSG, ackAfterEdit, applySummaryText, criticalPending, groupHkid, initialAck, reviewProblems } from "@/lib/guards/ocr/review-state";
 import { openAiClientOptions } from "@/lib/guards/ocr/vision-client";
 import { tileRects } from "@/lib/guards/ocr/browser-images";
-import { NON_BOSS_MAX_OCR_READS_PER_DAY, NON_BOSS_MAX_RUNS_PER_DAY, NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY } from "@/lib/guards/import/limits";
+import { QUOTA_RESERVE_ACTION, NON_BOSS_MAX_OCR_READS_PER_DAY, NON_BOSS_MAX_RUNS_PER_DAY, NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY } from "@/lib/guards/import/limits";
 import { hashPackage, importPackageSchema, personKeyForHkid, type PackagePerson } from "@/lib/guards/import/package";
 import { POST as ocrRoute } from "@/app/api/guards/ocr/read/route";
 import { POST as previewRoute } from "@/app/api/guards/import/preview/route";
@@ -59,6 +59,10 @@ function fakeVision(opts: { a?: Record<string, unknown>; b?: Record<string, unkn
   };
   return { client, calls };
 }
+
+const reserveRows = (uid: string, n: number, kind: "ocr" | "batch" | "single_ocr", hoursAgo = 0) =>
+  prisma.auditLog.createMany({ data: Array.from({ length: n }, () => ({ actorUserId: uid, tableName: "guard_quota", rowId: uid, action: QUOTA_RESERVE_ACTION, createdAt: new Date(Date.now() - hoursAgo * 3600_000), after: { kind, request_id: "seed" } })) });
+const reserveCount = (uid: string, kind: string) => prisma.auditLog.count({ where: { actorUserId: uid, action: QUOTA_RESERVE_ACTION, after: { path: ["kind"], equals: kind } } });
 
 describe("正規化／格式驗證／reconcile（純函數）", () => {
   it("兩讀一致＋格式啱 → confirmed", () => {
@@ -362,7 +366,7 @@ describe("POST /api/guards/ocr/read", () => {
 
   it("每日讀取上限：非老闆第 101 次 429（audit 計數）；老闆唔受限", async () => {
     setVisionClientForTests(fakeVision().client);
-    await prisma.auditLog.createMany({ data: Array.from({ length: NON_BOSS_MAX_OCR_READS_PER_DAY }, () => ({ actorUserId: accountantId, tableName: "guard_ocr", rowId: accountantId, action: "guard_ocr_read", after: { ok: true } })) });
+    await reserveRows(accountantId, NON_BOSS_MAX_OCR_READS_PER_DAY, "ocr");
     expect((await call(accountant, body([doc()]))).status).toBe(429);
     expect((await call(owner, body([doc()]))).status).toBe(200);
   });
@@ -513,24 +517,23 @@ describe("single_ocr 單人導入包", () => {
       const u = await prisma.user.create({ data: { name: "測試會計配額", tel, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } });
       return { id: u.id, cookie: await sessionCookieForUser(u.id) };
     };
-    const seed = (uid: string, n: number, action: string, after: Record<string, unknown>) =>
-      prisma.auditLog.createMany({ data: Array.from({ length: n }, () => ({ actorUserId: uid, tableName: "guard_import", rowId: uid, action, after: after as never })) });
     const batch = pkgOf([onePerson()], null);
     const single = pkgOf([onePerson()]);
     // 批量配額用晒 → 批量 429，單人包仍然得
     const a = await freshUser();
-    await seed(a.id, NON_BOSS_MAX_RUNS_PER_DAY, "guard_import_preview", { persons: 1 });
+    await reserveRows(a.id, NON_BOSS_MAX_RUNS_PER_DAY, "batch");
     expect((await post(previewRoute, a.cookie, { package: batch })).status).toBe(429);
     expect((await post(previewRoute, a.cookie, { package: single })).status).toBe(200);
-    // 單人包紀錄（50 條）唔食批量配額：批量仍有 1 次
+    // 單人包預留（50 條）唔食批量配額：批量仍有 1 次
     const b = await freshUser();
-    await seed(b.id, NON_BOSS_MAX_RUNS_PER_DAY - 1, "guard_import_preview", { persons: 1 });
-    await seed(b.id, 50, "guard_import_preview", { package_source: "single_ocr" });
+    await reserveRows(b.id, NON_BOSS_MAX_RUNS_PER_DAY - 1, "batch");
+    await reserveRows(b.id, 50, "single_ocr");
     expect((await post(previewRoute, b.cookie, { package: batch })).status).toBe(200);
-    // 單人包封頂：preview＋apply 合計 100
+    // 單人包封頂 100：preview＋apply 合計；OCR 預留行唔食單人包配額
     const c = await freshUser();
-    await seed(c.id, 60, "guard_import_preview", { package_source: "single_ocr" });
-    await seed(c.id, NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY - 60, "guard_import_apply", { package_source: "single_ocr", review_decisions: 1 });
+    await reserveRows(c.id, NON_BOSS_MAX_OCR_READS_PER_DAY, "ocr");
+    await reserveRows(c.id, NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY - 1, "single_ocr");
+    expect((await post(previewRoute, c.cookie, { package: single })).status).toBe(200); // 第 100 次
     expect((await post(previewRoute, c.cookie, { package: single })).status).toBe(429);
     expect((await post(applyRoute, c.cookie, { package: single, package_hash: hashOf(single) })).status).toBe(429);
     // 老闆唔受限
@@ -598,7 +601,9 @@ describe("Opus 驗收修正（M1／m1／m2／m7／m12 純函數）", () => {
     const b = normalizeField("address", "Block 12, 3/F, Test Rd").canon;
     expect(a).not.toBe(b);
     expect(reconcile("address", "Block 1, 23/F, Test Rd", "Block 12, 3/F, Test Rd").status).toBe("review");
-    expect(reconcile("address", "1座23樓A室 示範街", "1座2 3樓A室 示範街").status).toBe("confirmed"); // 純空白差異
+    expect(reconcile("address", "1座23樓A室 示範街", "1座2 3樓A室 示範街").status).toBe("review"); // 空白係 token 分隔，數字之間嘅空白有意義
+    expect(reconcile("address", "15/F, Block A, Test Rd", "15/F Block A Test Rd").status).toBe("confirmed"); // 逗號／空白差異忽略
+    expect(reconcile("address", "Block 1 23/F Test Rd", "Block 12 3/F Test Rd").status).toBe("review");
     expect(reconcile("address", "示範街１０號３樓", "示範街10號3樓").status).toBe("confirmed"); // 全半形
     expect(reconcile("address", "示範街1-23號", "示範街12-3號").status).toBe("review");
   });
@@ -606,6 +611,15 @@ describe("Opus 驗收修正（M1／m1／m2／m7／m12 純函數）", () => {
     for (const bad of ["陳?文", "陳□文", "陳*文", "陳大A", "陳大1"]) expect(reconcile("name_zh", bad, bad).status, bad).toBe("review");
     expect(reconcile("name_zh", "陳大文", "陳大文").status).toBe("confirmed");
     expect(reconcile("name_zh", "歐陽·大文", "歐陽·大文").status).toBe("confirmed");
+  });
+  it("n3：間隔號 · ・ • ‧ 統一再比較", () => {
+    expect(reconcile("name_zh", "歐陽·大文", "歐陽‧大文").status).toBe("confirmed");
+    expect(reconcile("name_zh", "歐陽・大文", "歐陽•大文").value).toBe("歐陽·大文");
+  });
+  it("n1：簡體清單唔含 Big5 收錄字（杰／离／赶…）", async () => {
+    expect(reconcile("name_zh", "杰大文", "杰大文").status).toBe("confirmed");
+    expect(reconcile("name_zh", "陳大离", "陳大离").status).toBe("confirmed");
+    expect(reconcile("name_zh", "陈大文", "陈大文").status).toBe("review");
   });
   it("m12：兩讀都係簡體專用字 → review（simplified_chars），繁體照 confirmed", () => {
     expect(reconcile("name_zh", "陈大文", "陈大文")).toMatchObject({ status: "review", reason: "simplified_chars" });
@@ -621,7 +635,9 @@ describe("Opus 驗收修正（M1／m1／m2／m7／m12 純函數）", () => {
     const base = { guards_created: 0, guards_updated: 0, phones_added: 0, addresses_added: 0 };
     expect(applySummaryText({ ...base, phones_added: 1 })).toContain("電話");
     expect(applySummaryText({ ...base, phones_added: 1 })).not.toContain("未有寫入");
-    expect(applySummaryText({ ...base, guards_created: 1, fields_written: { hkid: 1, date_of_birth: 1 } })).toMatch(/已新增保安員.*身份證號.*出生日期/);
+    expect(applySummaryText({ ...base, guards_created: 1, fields_written: { hkid: 1, date_of_birth: 1, name_zh: 1 } })).toBe("已新增保安員：身份證號、出生日期、中文姓名");
+    expect(applySummaryText({ ...base, guards_updated: 1, fields_written: { name_en: 1, weird_key: 1, phone: 1 }, phones_added: 1 })).toBe("補咗：英文姓名、其他資料、電話");
+    expect(applySummaryText({ ...base, guards_updated: 1, fields_written: { name_en: 1 } })).not.toMatch(/[a-z_]{4,}/);
     expect(applySummaryText({ ...base, addresses_added: 1 })).toContain("地址");
     expect(applySummaryText(base)).toContain("未有寫入任何資料");
     expect(applySummaryText({ ...base, counts_hidden: true })).toContain("權限");
@@ -655,7 +671,7 @@ describe("Opus 驗收修正（route：m5／m6／m8／m10／m11）", () => {
 
   it("m5：已用 99 次，同時 5 個 OCR 請求最多 1 個通過", async () => {
     setVisionClientForTests(fakeVision().client);
-    await prisma.auditLog.createMany({ data: Array.from({ length: NON_BOSS_MAX_OCR_READS_PER_DAY - 1 }, () => ({ actorUserId: userId, tableName: "guard_ocr", rowId: userId, action: "guard_ocr_read", after: { ok: true } })) });
+    await reserveRows(userId, NON_BOSS_MAX_OCR_READS_PER_DAY - 1, "ocr");
     const res = await Promise.all(Array.from({ length: 5 }, () => ocr(cookie)));
     const codes = res.map((r) => r.status).sort();
     expect(codes.filter((c) => c === 200)).toHaveLength(1);
@@ -665,10 +681,51 @@ describe("Opus 驗收修正（route：m5／m6／m8／m10／m11）", () => {
     const hk = mkHkid("A", "123456");
     const person = { key: personKeyForHkid(hk), hkid: { value: hk, status: "confirmed" }, nameZh: { value: SYN_NAME, status: "confirmed" }, nameEn: { value: null, status: "missing" }, dateOfBirth: { value: null, status: "missing" }, sex: { value: null, status: "missing" }, phone: { value: null, status: "missing" }, address: { value: null, status: "missing" }, staffNumbers: [], rating: "review", reasons: [] };
     const pkg = { version: 2, generatedAt: "2026-10-05T00:00:00.000Z", source: "single_ocr", persons: [person] };
-    await prisma.auditLog.createMany({ data: Array.from({ length: NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY - 1 }, () => ({ actorUserId: userId, tableName: "guard_import", rowId: userId, action: "guard_import_preview", after: { package_source: "single_ocr" } })) });
+    await reserveRows(userId, NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY - 1, "single_ocr");
     const res = await Promise.all(Array.from({ length: 5 }, () => previewRoute(new Request("http://t/p", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ package: pkg }) }))));
     expect(res.filter((r) => r.status === 200)).toHaveLength(1);
     expect(res.filter((r) => r.status === 429)).toHaveLength(4);
+  });
+  it("m5：批量包已用 19 次，同時 5 個 preview 最多 1 個通過", async () => {
+    const hk = mkHkid("A", "123456");
+    const person = { key: personKeyForHkid(hk), hkid: { value: hk, status: "confirmed" }, nameZh: { value: SYN_NAME, status: "confirmed" }, nameEn: { value: null, status: "missing" }, dateOfBirth: { value: null, status: "missing" }, sex: { value: null, status: "missing" }, phone: { value: null, status: "missing" }, address: { value: null, status: "missing" }, staffNumbers: [], rating: "review", reasons: [] };
+    const pkg = { version: 2, generatedAt: "2026-10-05T00:00:00.000Z", persons: [person] };
+    await reserveRows(userId, NON_BOSS_MAX_RUNS_PER_DAY - 1, "batch");
+    const res = await Promise.all(Array.from({ length: 5 }, () => previewRoute(new Request("http://t/p", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ package: pkg }) }))));
+    expect(res.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(res.filter((r) => r.status === 429)).toHaveLength(4);
+  });
+  it("失敗／超時唔退還次數：模型失敗（503）都已經扣咗一次預留；結果 audit 唔計入限額（冇雙重計數）", async () => {
+    setVisionClientForTests(fakeVision({ fail: new OcrUnavailableError(500) }).client);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect((await ocr(cookie)).status).toBe(503);
+    expect(await reserveCount(userId, "ocr")).toBe(1);
+    setVisionClientForTests(fakeVision().client);
+    expect((await ocr(cookie)).status).toBe(200);
+    expect(await reserveCount(userId, "ocr")).toBe(2); // 兩次請求＝兩條預留；兩條結果 audit 都存在但唔計
+    expect(await prisma.auditLog.count({ where: { actorUserId: userId, action: "guard_ocr_read" } })).toBe(2);
+    // 用咗 98 條結果 audit 都唔影響（限額只數預留行）
+    await prisma.auditLog.createMany({ data: Array.from({ length: 120 }, () => ({ actorUserId: userId, tableName: "guard_ocr", rowId: userId, action: "guard_ocr_read", after: { ok: true } })) });
+    expect((await ocr(cookie)).status).toBe(200);
+  });
+  it("老闆唔受限，亦唔寫預留行；預留行 after 只有 kind＋request_id（冇 PII）", async () => {
+    setVisionClientForTests(fakeVision().client);
+    expect((await ocr(owner)).status).toBe(200);
+    expect(await prisma.auditLog.count({ where: { actorUserId: fx.userIds["老闆"], action: QUOTA_RESERVE_ACTION } })).toBe(0);
+    expect((await ocr(cookie)).status).toBe(200);
+    const rows = await prisma.auditLog.findMany({ where: { actorUserId: userId, action: QUOTA_RESERVE_ACTION } });
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0]!.after as object).sort()).toEqual(["kind", "request_id"]);
+    expect(JSON.stringify(rows)).not.toMatch(/陳大文|A123456|6123/);
+  });
+  it("digest 唔將預留行計做修正類別（內容不變）", async () => {
+    const { buildOpsDigest } = await import("@/lib/ops/digest");
+    const sys = { userId: fx.userIds["老闆"], tel: "", name: "", roleId: "", roleName: "老闆", baseRole: "老闆", brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString() } as never;
+    const m = new Date("2019-03-01T00:00:00.000Z");
+    const now = new Date("2019-09-01T00:00:00.000Z");
+    const before = JSON.stringify(await buildOpsDigest(m, sys, now));
+    await prisma.auditLog.createMany({ data: Array.from({ length: 5 }, () => ({ actorUserId: userId, tableName: "guard_quota", rowId: userId, action: QUOTA_RESERVE_ACTION, createdAt: new Date("2019-03-10T00:00:00.000Z"), after: { kind: "batch", request_id: "x" } })) });
+    expect(JSON.stringify(await buildOpsDigest(m, sys, now))).toBe(before);
   });
   it("m6：非預期錯誤 → 通用 500，只 log 錯誤類別，唔 log message", async () => {
     setVisionClientForTests(fakeVision({ fail: new TypeError("SECRET-MESSAGE-123") }).client);

@@ -7,7 +7,7 @@ import { hasPermission } from "@/lib/rbac/requirePermission";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { BadRequest } from "@/lib/api/errors";
-import { assertImportQuota, auditImportPreview, withUserQuotaLock } from "@/lib/guards/import/limits";
+import { auditImportPreview, reserveQuota } from "@/lib/guards/import/limits";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 
@@ -20,14 +20,12 @@ export async function POST(req: Request) {
     if (body.decisions && pkg.source !== "single_ocr") throw BadRequest("decisions 淨係單人證件包可用");
     assertPackageSize(session, pkg);
     assertDecisionTargets(pkg, body.decisions);
-    // 檢查配額 → 預覽 → 寫 preview audit（計數）整段按用戶上鎖，並發請求繞唔過
-    return withUserQuotaLock(session, "import", async () => {
-      await assertImportQuota(session, undefined, pkg.source);
-      const pii = await hasPermission(session, "安員個人資料", "view");
-      const result = await previewImport(pkg, mapDecisions(body.decisions));
-      await auditImportPreview(session, getClientIp(req), result.package_hash, result.package.persons, result.person_stats, pkg.source);
-      const viewer = { pii_update: await hasPermission(session, "安員個人資料", "update"), guard_update: await hasPermission(session, "安員", "update") };
-      return ok(brandSafeResponse({ ...maskPreviewForViewer(result, pii), viewer }));
-    });
+    // 預留配額（短 transaction；鎖外先做預覽）。失敗唔退還次數。
+    await reserveQuota(session, pkg.source === "single_ocr" ? "single_ocr" : "batch");
+    const pii = await hasPermission(session, "安員個人資料", "view");
+    const result = await previewImport(pkg, mapDecisions(body.decisions));
+    await auditImportPreview(session, getClientIp(req), result.package_hash, result.package.persons, result.person_stats, pkg.source);
+    const viewer = { pii_update: await hasPermission(session, "安員個人資料", "update"), guard_update: await hasPermission(session, "安員", "update") };
+    return ok(brandSafeResponse({ ...maskPreviewForViewer(result, pii), viewer }));
   });
 }

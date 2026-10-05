@@ -63,7 +63,10 @@ export function groupHkid(v: string): string {
   return m ? `${m[1]} ${m[2]} (${m[3]})` : v;
 }
 
-const WRITTEN_LABEL: Record<string, string> = { hkid: "身份證號", name_zh: "中文姓名", name_en: "英文姓名", date_of_birth: "出生日期", nameZh: "中文姓名", nameEn: "英文姓名", dateOfBirth: "出生日期" };
+const WRITTEN_LABEL: Record<string, string> = {
+  hkid: "身份證號", name_zh: "中文姓名", name_en: "英文姓名", date_of_birth: "出生日期", phone: "電話", address: "地址",
+  nameZh: "中文姓名", nameEn: "英文姓名", dateOfBirth: "出生日期", sex: "性別",
+};
 
 export interface ApplySummaryInput {
   guards_created: number;
@@ -75,15 +78,17 @@ export interface ApplySummaryInput {
   counts_hidden?: boolean;
 }
 
-/** 完成提示：講清楚寫咗乜（連去現有保安員只加電話都要講）。 */
+/** 完成提示：講清楚寫咗乜。新建人＝「已新增保安員：姓名、身份證號…」；連去現有＝「補咗…」。唔出英文 key（未知 key 顯示「其他資料」）。 */
 export function applySummaryText(r: ApplySummaryInput): string {
-  const parts: string[] = [];
-  if (r.guards_created > 0) parts.push("已新增保安員");
-  const fields = Object.entries(r.fields_written ?? {}).filter(([, n]) => n > 0).map(([k]) => WRITTEN_LABEL[k] ?? k);
-  if (fields.length) parts.push(`補咗${fields.join("、")}`);
-  if (r.phones_added > 0) parts.push(`加咗 ${r.phones_added} 個電話`);
-  if (r.addresses_added > 0) parts.push(`加咗 ${r.addresses_added} 個地址`);
-  if ((r.staff_numbers_added ?? 0) > 0) parts.push(`加咗 ${r.staff_numbers_added} 個工號`);
-  if (parts.length) return parts.join("；");
+  const labels: string[] = [];
+  const add = (l: string) => {
+    if (!labels.includes(l)) labels.push(l);
+  };
+  for (const [k, n] of Object.entries(r.fields_written ?? {})) if (n > 0) add(WRITTEN_LABEL[k] ?? "其他資料");
+  if (r.phones_added > 0) add("電話");
+  if (r.addresses_added > 0) add("地址");
+  if ((r.staff_numbers_added ?? 0) > 0) add("工號");
+  if (r.guards_created > 0) return labels.length ? `已新增保安員：${labels.join("、")}` : "已新增保安員";
+  if (labels.length) return `補咗：${labels.join("、")}`;
   return r.counts_hidden ? "已提交（寫入結果要有安員個人資料權限先睇到）" : "未有寫入任何資料（現有紀錄已齊，或者要人手處理）";
 }

@@ -12,7 +12,7 @@ import { parseBody } from "@/lib/api/validate";
 import { createGuardImportTriage } from "@/lib/triage/session";
 import { hasPermission } from "@/lib/rbac/requirePermission";
 import { resolveDecidedFields } from "@/lib/guards/import/single-ocr";
-import { assertImportQuota, withUserQuotaLock } from "@/lib/guards/import/limits";
+import { reserveQuota } from "@/lib/guards/import/limits";
 import { ok, getClientIp, safeErrorSummary, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 
@@ -27,21 +27,19 @@ export async function POST(req: Request) {
     if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
     const canOverwritePii = await hasPermission(session, "安員個人資料", "update");
     const canEditGuard = await hasPermission(session, "安員", "update");
-    // 配額檢查 → 套用（寫 summary audit 計數）整段按用戶上鎖，並發請求繞唔過。
-    // single_ocr 單人包：獨立配額，apply（含 decisions）一律計；其他包照舊（有 decisions 嘅覆核唔計）
-    const result = await withUserQuotaLock(session, "import", async () => {
-      if (pkg.source === "single_ocr") await assertImportQuota(session, undefined, "single_ocr");
-      else if (!body.decisions) await assertImportQuota(session);
-      return applyImport(pkg, {
-        actorUserId: session.userId,
-        ip: getClientIp(req),
-        personKeys: body.person_keys,
-        decisions: mapDecisions(body.decisions),
-        canOverwritePii,
-        canEditGuard,
-        fillOnlyPii: !pii,
-        ...(pkg.source === "single_ocr" ? { via: "single_ocr" as const } : {}),
-      });
+    // 預留配額（短 transaction；鎖外先套用）。single_ocr 單人包：獨立配額，apply（含 decisions）一律計；
+    // 其他包照舊（有 decisions 嘅覆核唔計）。失敗唔退還次數。
+    if (pkg.source === "single_ocr") await reserveQuota(session, "single_ocr");
+    else if (!body.decisions) await reserveQuota(session, "batch");
+    const result = await applyImport(pkg, {
+      actorUserId: session.userId,
+      ip: getClientIp(req),
+      personKeys: body.person_keys,
+      decisions: mapDecisions(body.decisions),
+      canOverwritePii,
+      canEditGuard,
+      fillOnlyPii: !pii,
+      ...(pkg.source === "single_ocr" ? { via: "single_ocr" as const } : {}),
     });
     // WP-AI-OPS §28.4：自動項（冇 decisions）完成後開分診 session；失敗唔影響導入結果。回 triage＝上載者自己嗰批。
     let triage: Awaited<ReturnType<typeof createGuardImportTriage>> = null;

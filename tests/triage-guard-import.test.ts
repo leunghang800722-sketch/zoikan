@@ -935,11 +935,11 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(await prisma.guardAddress.count({ where: { guardId: gFull.id } })).toBe(1);
   });
 
-  it("Minor-3：每日限額視窗唔受 session 時區影響（UTC／Asia/Hong_Kong 一致：17 小時前計入、25 小時前唔計）", async () => {
-    const { assertImportQuota, NON_BOSS_MAX_RUNS_PER_DAY } = await import("@/lib/guards/import/limits");
+  it("Minor-3：每日限額視窗唔受 session 時區影響（UTC／Asia/Hong_Kong 一致：17 小時前計入、25 小時前唔計；限額只數預留行）", async () => {
+    const { countReservations, QUOTA_RESERVE_ACTION, NON_BOSS_MAX_RUNS_PER_DAY } = await import("@/lib/guards/import/limits");
     const seed = async (userId: string, hoursAgo: number) => {
       const t = new Date(Date.now() - hoursAgo * 3600_000);
-      for (let i = 0; i < NON_BOSS_MAX_RUNS_PER_DAY; i++) await prisma.auditLog.create({ data: { actorUserId: userId, tableName: "guard_import", rowId: userId, action: "guard_import_preview", createdAt: t, after: { persons: 1 } } });
+      for (let i = 0; i < NON_BOSS_MAX_RUNS_PER_DAY; i++) await prisma.auditLog.create({ data: { actorUserId: userId, tableName: "guard_quota", rowId: userId, action: QUOTA_RESERVE_ACTION, createdAt: t, after: { kind: "batch", request_id: "t" } } });
     };
     const mkU = async () => (await prisma.user.create({ data: { name: "限額測試", tel: `7${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id;
     const recent = await mkU();
@@ -949,8 +949,8 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     for (const tz of ["UTC", "Asia/Hong_Kong", "America/Los_Angeles"]) {
       await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe(`SET LOCAL TIME ZONE '${tz}'`);
-        await expect(assertImportQuota({ baseRole: "會計", userId: recent }, tx as never), tz).rejects.toMatchObject({ status: 429 });
-        await expect(assertImportQuota({ baseRole: "會計", userId: old }, tx as never), tz).resolves.toBeUndefined();
+        expect(await countReservations(tx, recent, "batch"), tz).toBe(NON_BOSS_MAX_RUNS_PER_DAY);
+        expect(await countReservations(tx, old, "batch"), tz).toBe(0);
       });
     }
   });
