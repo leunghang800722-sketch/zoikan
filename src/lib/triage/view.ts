@@ -3,12 +3,14 @@
 import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { canonicalHkid } from "@/lib/guards/identity";
-import type { PersonResult, WriteChange } from "@/lib/guards/import/apply";
+import { maskAccountNo, type PersonResult, type WriteChange } from "@/lib/guards/import/apply";
+import { EXT_CHECK_LABEL, EXT_OUTCOME_LABEL, SCALARS, bankLeaves, contactsOf, extLabel, isBankKey, isEmergencyKey, staffHiresOf } from "@/lib/guards/import/ext";
 import { NAME_REASONS } from "@/lib/guards/import/project";
 import { fieldValue, type PackagePerson } from "@/lib/guards/import/package";
 import { maskAddressImport, maskHkidImport, maskTelImport, sameNameStrict } from "@/lib/guards/import/text";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
-import { KIND_LABEL, REVIEW_FIELD_LABEL, type QuestionEvidence, type QuestionKind, type QuestionOption } from "./types";
+import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
+import { BANK_KINDS, KIND_LABEL, REVIEW_FIELD_LABEL, type QuestionEvidence, type QuestionKind, type QuestionOption } from "./types";
 
 export interface ViewerCaps {
   /** 「安員個人資料:view」 */
@@ -17,10 +19,20 @@ export interface ViewerCaps {
   piiUpdate: boolean;
   /** 「安員:update」：冇就唔准經導入改寫現有安員姓名 */
   guardUpdate: boolean;
+  /** 「安員銀行資料:view」：冇就銀行戶口／收款人／現有戶口比較一律 generic */
+  bankView: boolean;
+  /** 「安員銀行資料:update」：冇就唔准睇銀行題內容／作答 */
+  bankUpdate: boolean;
 }
 export async function viewerCaps(actor: AuthedSession): Promise<ViewerCaps> {
-  const [pii, piiUpdate, guardUpdate] = await Promise.all([hasPermission(actor, "安員個人資料", "view"), hasPermission(actor, "安員個人資料", "update"), hasPermission(actor, "安員", "update")]);
-  return { pii, piiUpdate, guardUpdate };
+  const [pii, piiUpdate, guardUpdate, bankView, bankUpdate] = await Promise.all([
+    hasPermission(actor, "安員個人資料", "view"),
+    hasPermission(actor, "安員個人資料", "update"),
+    hasPermission(actor, "安員", "update"),
+    hasPermission(actor, "安員銀行資料", "view"),
+    hasPermission(actor, "安員銀行資料", "update"),
+  ]);
+  return { pii, piiUpdate, guardUpdate, bankView, bankUpdate };
 }
 
 const mHkid = (v: string | null, c: ViewerCaps) => (v ? (c.pii ? v : maskHkidImport(canonicalHkid(v) ?? v)) : null);
@@ -40,7 +52,34 @@ function personView(p: PackagePerson, c: ViewerCaps) {
     address: { ...f(p.address), value: mAddr(fieldValue(p.address), c) },
     staff_numbers: p.staffNumbers.map((n) => n.number),
     rating: p.rating,
+    ext: extView(p, c),
   };
+}
+
+/** v3 新欄顯示（牌照／平安咭／QAS／入職日期＝「安員」module，唔遮罩；緊急聯絡人跟 PII；銀行跟銀行資料 view）。 */
+function extView(p: PackagePerson, c: ViewerCaps) {
+  const scalars = SCALARS.flatMap((s) => {
+    const l = s.get(p);
+    const v = l ? fieldValue(l) : null;
+    return l && v ? [{ key: s.key, label: extLabel(s.key), value: v, status: l.status }] : [];
+  });
+  const bl = bankLeaves(p);
+  const bank = bl
+    ? c.bankView
+      ? { status: bl.status, code: bl.code, name: bl.name, account_masked: maskAccountNo(bl.accountNo), account_full: bl.accountNo, payee_name: bl.payee }
+      : { status: bl.status, hidden: true as const }
+    : null;
+  const contacts = contactsOf(p).map((x) => ({
+    key: `emergency.${x.slot}`,
+    label: extLabel(`emergency.${x.slot}`),
+    status: x.status,
+    name: c.pii ? x.name : x.name ? "（冇權限睇）" : null,
+    relationship: x.relationship,
+    tel: x.tel ? (c.pii ? x.tel : maskTelImport(x.tel)) : null,
+  }));
+  const hires = staffHiresOf(p).map((h) => ({ key: `staffHire.${h.number}`, label: extLabel(`staffHire.${h.number}`), value: h.value, status: h.status }));
+  if (scalars.length === 0 && !bank && contacts.length === 0 && hires.length === 0) return null;
+  return { scalars, bank, emergency_contacts: contacts, staff_hires: hires };
 }
 
 interface CandidateRow {
@@ -56,6 +95,8 @@ interface CandidateRow {
   name_hidden?: boolean;
   /** 內部用（唔出街） */
   hkid_canon?: string | null;
+  /** bank_identity_unknown 用：目標安員有冇戶口（尾 4 位淨係有「安員銀行資料:view」先回） */
+  bank?: { has: boolean; tail4: string | null };
 }
 
 /** 候選安員卡（live 讀，批量 query，唔 N+1）。 */
@@ -63,7 +104,7 @@ export async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<
   const out = new Map<string, CandidateRow>();
   if (ids.length === 0) return out;
   const [guards, phones, nos, recent] = await Promise.all([
-    prisma.guard.findMany({ where: { id: { in: ids } }, select: { id: true, nameZh: true, nameEn: true, hkid: true, dateOfBirth: true, tel: true } }),
+    prisma.guard.findMany({ where: { id: { in: ids } }, select: { id: true, nameZh: true, nameEn: true, hkid: true, dateOfBirth: true, tel: true, bankAccountNo: true } }),
     prisma.guardPhone.findMany({ where: { guardId: { in: ids } }, select: { guardId: true, tel: true } }),
     prisma.guardStaffNumber.findMany({ where: { guardId: { in: ids } }, select: { guardId: true, number: true } }),
     prisma.$queryRaw<{ guard_id: string; name: string; last_date: Date }[]>`
@@ -89,6 +130,7 @@ export async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<
       tels: tels.map((t) => mTel(t, c)!).filter(Boolean),
       staff_numbers: nos.filter((n) => n.guardId === g.id).map((n) => n.number),
       recent_sites: sites,
+      bank: { has: !!g.bankAccountNo, tail4: c.bankView && g.bankAccountNo ? g.bankAccountNo.replace(/\D/g, "").slice(-4) || null : null },
     });
   }
   return out;
@@ -103,19 +145,30 @@ export interface QuestionView {
   sort: number;
   status: string;
   options: QuestionOption[];
+  /** 銀行題而讀者冇「安員銀行資料:update」：內容全部收埋，淨係話要有權限嘅同事處理 */
+  restricted?: boolean;
   evidence: {
     pii_visible: boolean;
     pii_update: boolean;
     guard_update: boolean;
-    person: ReturnType<typeof personView>;
+    bank_view: boolean;
+    bank_update: boolean;
+    person: ReturnType<typeof personView> | null;
     reasons: string[];
     candidates: CandidateRow[];
     review_fields: { field: string; label: string; check: string }[];
+    ext_review: { key: string; label: string; check: string; status: string }[];
+    /** bank_identity_unknown：戶口（遮罩；全號淨係有銀行資料 view 先回） */
+    unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
   };
   answer: { option: string; guard_id?: string } | null;
   answered_by: string | null;
   answered_at: Date | null;
   impact: unknown;
+}
+
+function bankNameOf(code: string): string | null {
+  return HKICL_BANK_OPTIONS.find((b) => b.code === code)?.nameZhShort ?? null;
 }
 
 export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Promise<QuestionView[]> {
@@ -125,6 +178,24 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
   return rows.map((r, i) => {
     const e = ev[i]!;
     const ans = r.answerJson as { option?: string; guard_id?: string } | null;
+    if ((BANK_KINDS as readonly string[]).includes(r.kind) && !c.bankUpdate) {
+      return {
+        id: r.id,
+        session_id: r.sessionId,
+        kind: r.kind as QuestionKind,
+        kind_label: KIND_LABEL[r.kind as QuestionKind] ?? r.kind,
+        title: "要有安員銀行資料權限嘅同事處理",
+        sort: r.sort,
+        status: r.status,
+        options: [],
+        restricted: true,
+        evidence: { pii_visible: c.pii, pii_update: c.piiUpdate, guard_update: c.guardUpdate, bank_view: c.bankView, bank_update: false, person: null, reasons: [], candidates: [], review_fields: [], ext_review: [], unassigned: null },
+        answer: ans?.option ? { option: ans.option } : null,
+        answered_by: r.answeredBy,
+        answered_at: r.answeredAt,
+        impact: null,
+      } satisfies QuestionView;
+    }
     const candIds = e.candidate_guard_ids.length ? e.candidate_guard_ids : e.guard_id ? [e.guard_id] : [];
     const pkgHkid = canonicalHkid(fieldValue(e.person.hkid));
     const pkgName = fieldValue(e.person.nameZh);
@@ -151,11 +222,22 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         pii_visible: c.pii,
         pii_update: c.piiUpdate,
         guard_update: c.guardUpdate,
+        bank_view: c.bankView,
+        bank_update: c.bankUpdate,
         person: personView(e.person, c),
         reasons: c.pii ? e.reasons : e.reasons.filter((x) => !NAME_REASONS.has(x)),
         candidates,
         // 逐欄 check 反映現有 DB 值嘅比較結果：冇「安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),
+        ext_review: (e.ext_review ?? []).map((f) => {
+          const hide = isBankKey(f.key) ? !c.bankView : isEmergencyKey(f.key) ? !c.pii : false;
+          return { key: f.key, label: extLabel(f.key), check: hide && ["same", "differs", "conflict"].includes(f.check) ? "hidden" : f.check, status: f.status };
+        }),
+        unassigned: e.unassigned
+          ? c.bankView
+            ? { bank_code: e.unassigned.bankCode, bank_name: bankNameOf(e.unassigned.bankCode), account_masked: maskAccountNo(e.unassigned.accountNo), account_full: e.unassigned.accountNo, payee_name: e.unassigned.payeeName }
+            : { bank_code: "", bank_name: null, account_masked: null, account_full: null, payee_name: null, hidden: true }
+          : null,
       },
       // 答案內容（可能含輸入嘅身份證號）唔回傳，淨回選項
       answer: ans?.option ? { option: ans.option, ...(ans.guard_id ? { guard_id: ans.guard_id } : {}) } : null,
@@ -178,7 +260,21 @@ const GUARD_FIELD_LABEL: Record<string, string> = {
   identityReviewFields: "待核對欄",
   siaPermitExpiry: "牌照到期（衍生）",
   siaPermitType: "牌照類別（衍生）",
+  siaPermitNo: "保安人員許可證號碼",
+  siaPermitAExpiry: "許可證甲類屆滿日",
+  siaPermitBExpiry: "許可證乙類屆滿日",
+  safetyCardNo: "平安咭號碼",
+  safetyCardExpiry: "平安咭屆滿日",
+  qasIssueDate: "QAS 簽發日",
+  qasExpiryDate: "QAS 屆滿日",
+  hireDate: "入職日期",
+  bankCode: "銀行編號",
+  bankName: "銀行名稱",
+  bankAccountNo: "銀行戶口",
+  bankPayeeName: "收款人",
 };
+const BANK_KEYS = new Set(["bankCode", "bankName", "bankAccountNo", "bankPayeeName"]);
+const DATE_KEYS = new Set(["siaPermitExpiry", "siaPermitAExpiry", "siaPermitBExpiry", "safetyCardExpiry", "qasIssueDate", "qasExpiryDate", "hireDate"]);
 const FIELD_OUTCOME_LABEL: Record<string, string> = {
   written: "會寫入",
   same: "同現值一樣，唔郁",
@@ -218,18 +314,21 @@ function fmt(key: string, v: unknown, c: ViewerCaps): string {
   if (key === "hkid") return mHkid(s, c) ?? "（空）";
   if (key === "dateOfBirth") return c.pii ? s.slice(0, 10) : "（冇權限睇）";
   if (key === "siaPermitExpiry" || key === "siaPermitType") return c.pii ? s.slice(0, 10) : "（冇權限睇）";
+  if (BANK_KEYS.has(key)) return !c.bankView ? "（冇權限睇）" : key === "bankAccountNo" ? (maskAccountNo(s) ?? "（空）") : s;
+  if (DATE_KEYS.has(key)) return s.slice(0, 10);
   return s;
 }
 
 /** 存入 DB 嘅影響來源（原始值，只留顯示用白名單欄；讀取時再按讀者遮罩）。 */
 export interface ImpactSource {
-  result: Pick<PersonResult, "outcome" | "fields" | "reasons" | "staff_numbers_added" | "phones_added" | "addresses_added">;
+  result: Pick<PersonResult, "outcome" | "fields" | "reasons" | "staff_numbers_added" | "phones_added" | "addresses_added"> & Partial<Pick<PersonResult, "ext" | "contacts_added">>;
   changes: WriteChange[];
 }
 
 const KEEP_COLS: Record<string, string[]> = {
   guards: Object.keys(GUARD_FIELD_LABEL),
-  guard_staff_numbers: ["number"],
+  guard_staff_numbers: ["number", "validFrom"],
+  guard_emergency_contacts: ["name", "tel", "relationship"],
   guard_phones: ["tel"],
   guard_addresses: ["address"],
 };
@@ -244,7 +343,7 @@ export function toImpactSource(result: PersonResult, changes: readonly WriteChan
     .filter((c) => c.table in KEEP_COLS)
     .map((c) => ({ table: c.table, action: c.action, rowId: c.action === "update" ? c.rowId : "", before: pick(c.table, c.before), after: pick(c.table, c.after) }));
   const r = result;
-  return JSON.parse(JSON.stringify({ result: { outcome: r.outcome, fields: r.fields, reasons: r.reasons, staff_numbers_added: r.staff_numbers_added, phones_added: r.phones_added, addresses_added: r.addresses_added }, changes: slim })) as ImpactSource;
+  return JSON.parse(JSON.stringify({ result: { outcome: r.outcome, fields: r.fields, reasons: r.reasons, staff_numbers_added: r.staff_numbers_added, phones_added: r.phones_added, addresses_added: r.addresses_added, ...(r.ext ? { ext: r.ext } : {}), ...(r.contacts_added ? { contacts_added: r.contacts_added } : {}) }, changes: slim })) as ImpactSource;
 }
 
 function storedImpactView(raw: unknown, c: ViewerCaps): ImpactView | null {
@@ -279,6 +378,20 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
           return { label: GUARD_FIELD_LABEL[k]!, from, to };
         });
       out.push({ table: "guards", action: ch.action as "create" | "update", label: ch.action === "create" ? "新增安員" : "更新安員資料", guard_id: ch.action === "update" && c.pii ? ch.rowId : null, fields });
+    } else if (ch.table === "guard_staff_numbers" && ch.action === "update") {
+      out.push({ table: ch.table, action: "update", label: "補工號入職日期", guard_id: null, fields: [{ label: `入職日期（${String(after.number ?? "")}）`, from: fmt("hireDate", before.validFrom, c), to: fmt("hireDate", after.validFrom, c) }] });
+    } else if (ch.table === "guard_emergency_contacts") {
+      out.push({
+        table: ch.table,
+        action: "create",
+        label: "新增緊急聯絡人",
+        guard_id: null,
+        fields: [
+          { label: "姓名", from: null, to: after.name ? (c.pii ? String(after.name) : "（冇權限睇）") : "（空）" },
+          { label: "關係", from: null, to: String(after.relationship ?? "（空）") },
+          { label: "電話", from: null, to: after.tel ? (c.pii ? String(after.tel) : (maskTelImport(String(after.tel)) ?? "")) : "（空）" },
+        ],
+      });
     } else if (ch.table === "guard_staff_numbers") {
       out.push({ table: ch.table, action: "create", label: "新增工號", guard_id: null, fields: [{ label: "工號", from: null, to: String(after.number ?? "") }] });
     } else if (ch.table === "guard_phones") {
@@ -294,6 +407,7 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
   if (result.staff_numbers_added) summary.push(`新增工號 ${result.staff_numbers_added} 個`);
   if (result.phones_added) summary.push(`新增電話 ${result.phones_added} 個`);
   if (result.addresses_added) summary.push(`新增地址 ${result.addresses_added} 個`);
+  if (result.contacts_added) summary.push(`新增緊急聯絡人 ${result.contacts_added} 位`);
   if (!written) summary.push("照呢個答案，仍然唔會寫入任何資料（要揀其他選項，或者跳過）");
   // 「姓名同現有安員唔同」呢類 reason 冇 PII view 唔回（同 import project.ts 一致）
   const notes = [...new Set(result.reasons)].filter((r) => c.pii || r !== "name_differs_from_guard").map((r) => REASON_LABEL[r] ?? `原因碼：${r}`);
@@ -301,9 +415,15 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
     can_confirm: written,
     summary,
     changes: out,
-    field_outcomes: Object.entries(result.fields)
-      .filter(([, v]) => !!v)
-      .map(([f, v]) => ({ field: f, label: FIELD_NAME_LABEL[f] ?? f, outcome: outcomeLabel(f, v as string, c) })),
+    field_outcomes: [
+      ...Object.entries(result.fields)
+        .filter(([, v]) => !!v)
+        .map(([f, v]) => ({ field: f, label: FIELD_NAME_LABEL[f] ?? f, outcome: outcomeLabel(f, v as string, c) })),
+      ...(result.ext ?? []).map(({ key: k, outcome: v }) => {
+        const hide = (isBankKey(k) && !c.bankView) || (isEmergencyKey(k) && !c.pii);
+        return { field: k, label: extLabel(k), outcome: hide && (v === "same" || v === "conflict" || v === "not_written") ? "冇寫入（已有資料）" : (EXT_OUTCOME_LABEL[v] ?? String(v)) };
+      }),
+    ],
     notes,
   };
 }

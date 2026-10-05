@@ -9,6 +9,8 @@ import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { evaluateImportPackage } from "@/lib/guards/import/apply";
 import type { ImportPackage } from "@/lib/guards/import/package";
 import { draftGuardImportQuestions } from "./generators/guard-import";
+import { SUPPLEMENTARY_KINDS } from "./types";
+import { hasPermission } from "@/lib/rbac/requirePermission";
 
 export const isBoss = (s: Pick<AuthedSession, "baseRole">): boolean => s.baseRole === "老闆";
 
@@ -40,8 +42,8 @@ export interface SessionSummary {
   counts: { open: number; answered: number; skipped: number; total: number; important_open: number; supplementary_open: number };
 }
 
-/** 「補充資料」層（field_review）：唔急，排喺要人手／衝突之後，badge 唔計。 */
-export const SUPPLEMENTARY_KIND = "field_review";
+/** 「補充資料」層（field_review／ext_field_conflict／ext_field_review）：唔急，排喺要人手／衝突／銀行之後，badge 唔計。 */
+export const isSupplementary = (kind: string): boolean => (SUPPLEMENTARY_KINDS as readonly string[]).includes(kind);
 
 export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolean }): Promise<SessionSummary[]> {
   const where = isBoss(actor) && !opts.mine ? {} : { ownerUserId: actor.userId };
@@ -53,7 +55,7 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
     for (const g of grouped) {
       if (g.sessionId !== s.id) continue;
       if (g.status === "open" || g.status === "answered" || g.status === "skipped") counts[g.status] += g._count._all;
-      if (g.status === "open") counts[g.kind === SUPPLEMENTARY_KIND ? "supplementary_open" : "important_open"] += g._count._all;
+      if (g.status === "open") counts[isSupplementary(g.kind) ? "supplementary_open" : "important_open"] += g._count._all;
       counts.total += g._count._all;
     }
     return { id: s.id, source_type: s.sourceType, owner_user_id: s.ownerUserId, owner_name: s.owner.name, status: s.status, created_at: s.createdAt, completed_at: s.completedAt, counts };
@@ -62,7 +64,7 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
 
 /** 「待答問題」數（badge 用，淨計重要嗰層，唔計補充資料）：老闆＝全部；其他＝自己嗰批。 */
 export async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId">): Promise<number> {
-  return prisma.triageQuestion.count({ where: { status: "open", kind: { not: SUPPLEMENTARY_KIND }, session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
+  return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS] }, session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
 }
 
 /** 所有未答都答晒（冇 open）就收尾；有新 open 就重開。 */
@@ -106,10 +108,11 @@ export interface OwnedByOtherResult {
  * 已經有嘅 group_key（無論 open／answered／skipped）唔再出。冇題目就唔開。
  * 呢度**唔會**寫任何安員資料（淨係讀＋寫 triage 表）。
  */
-export async function createGuardImportTriage(input: { pkg: ImportPackage; packageHash: string; actor: Pick<AuthedSession, "userId">; ip: string | null; personKeys?: readonly string[] }): Promise<CreateTriageResult | OwnedByOtherResult | null> {
+export async function createGuardImportTriage(input: { pkg: ImportPackage; packageHash: string; actor: AuthedSession; ip: string | null; personKeys?: readonly string[] }): Promise<CreateTriageResult | OwnedByOtherResult | null> {
   const only = input.personKeys ? new Set(input.personKeys) : null;
-  const { evals } = await evaluateImportPackage(input.pkg);
-  const drafts = draftGuardImportQuestions(input.pkg, only ? evals.filter((e) => only.has(e.person.key)) : evals);
+  const { evals, guards } = await evaluateImportPackage(input.pkg);
+  const [viewPii, viewBank] = await Promise.all([hasPermission(input.actor, "安員個人資料", "view"), hasPermission(input.actor, "安員銀行資料", "view")]);
+  const drafts = draftGuardImportQuestions(input.pkg, only ? evals.filter((e) => only.has(e.person.key)) : evals, { viewPii, viewBank, guards });
   const existing = await prisma.triageSession.findUnique({ where: { sourceType_sourceRef: { sourceType: "guard_import", sourceRef: input.packageHash } } });
   if (!existing && drafts.length === 0) return null;
   // 已經有 session 但屬於另一個人：唔動，亦唔俾上載者睇（只可以由老闆轉交）
@@ -153,6 +156,6 @@ export async function createGuardImportTriage(input: { pkg: ImportPackage; packa
   void status;
   // 屬於別人嘅 session：唔回 session 內容，淨係話俾上載者知
   if (session.ownerUserId !== input.actor.userId) return { owned_by_other: true, new_questions: fresh.length };
-  const supplementary = await prisma.triageQuestion.count({ where: { sessionId: session.id, status: "open", kind: SUPPLEMENTARY_KIND } });
+  const supplementary = await prisma.triageQuestion.count({ where: { sessionId: session.id, status: "open", kind: { in: [...SUPPLEMENTARY_KINDS] } } });
   return { session_id: session.id, open_questions: open, new_questions: fresh.length, total_questions: total, important_open: open - supplementary, supplementary_open: supplementary };
 }

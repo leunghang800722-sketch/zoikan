@@ -2,7 +2,10 @@
 import { z } from "zod";
 import { BadRequest } from "@/lib/api/errors";
 import { requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
-import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
+import { importPackageSchema, packageHasBank, type ImportPackage, type PersonField } from "./package";
+import { evaluateExt, type ExtDecision } from "./ext";
+import { Forbidden } from "@/lib/api/errors";
+import { hasPermission } from "@/lib/rbac/requirePermission";
 import { NON_BOSS_MAX_PERSONS } from "./limits";
 import { type PersonDecisions } from "./apply";
 
@@ -34,6 +37,8 @@ const personDecisionSchema = z
     date_of_birth: decisionNoPendingSchema.optional(),
     phone: decisionNoPendingSchema.optional(),
     address: decisionNoPendingSchema.optional(),
+    /** WP-STAFF-FIELDS：新欄逐欄決定（key＝ext key；值 confirm／replace／skip） */
+    ext: z.record(z.string().regex(/^[A-Za-z.0-9-]{1,60}$/), z.enum(["confirm", "replace", "skip"])).optional(),
   })
   .strict();
 
@@ -56,7 +61,13 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
   const out: Record<string, PersonDecisions> = {};
   for (const [key, d] of Object.entries(raw)) {
     const m: PersonDecisions = {};
-    for (const [k, v] of Object.entries(d)) if (v) m[SNAKE_TO_FIELD[k]!] = { action: v.action, ...(v.value ? { value: v.value } : {}) };
+    for (const [k, v] of Object.entries(d)) {
+      if (k === "ext") {
+        if (v) m.ext = v as Record<string, ExtDecision>;
+        continue;
+      }
+      if (v) m[SNAKE_TO_FIELD[k]!] = { action: (v as { action: "confirm" | "replace" | "skip" | "keep_pending" }).action, ...((v as { value?: string }).value ? { value: (v as { value?: string }).value } : {}) };
+    }
     out[key] = m;
   }
   return out;
@@ -79,13 +90,19 @@ export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg:
 export { maskPreviewForViewer, maskApplyForViewer } from "./project";
 
 /** decisions 指向包內唔存在嘅人，或者指向一個冇值又冇帶 value 嘅欄（skip 除外）→ 400。 */
-export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<string, Record<string, { action: string; value?: string } | undefined>> | undefined): void {
+export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<string, Record<string, unknown>> | undefined): void {
   if (!decisions) return;
   const byKey = new Map(pkg.persons.map((p) => [p.key, p]));
-  for (const [key, d] of Object.entries(decisions)) {
+  for (const [key, d0] of Object.entries(decisions)) {
+    const d = d0 as Record<string, { action: string; value?: string } | undefined>;
     const person = byKey.get(key);
     if (!person) throw BadRequest("decisions 指向導入包內唔存在嘅人");
+    if (d.ext) {
+      const have = new Set(evaluateExt(person, null).map((i) => i.key));
+      for (const k of Object.keys(d.ext)) if (!have.has(k)) throw BadRequest("decisions 指向冇值嘅新欄");
+    }
     for (const [snake, dec] of Object.entries(d)) {
+      if (snake === "ext") continue;
       if (!dec || dec.action === "skip") continue;
       const f = SNAKE_TO_FIELD[snake];
       if (!f) throw BadRequest("decisions 指向唔存在嘅欄位");
@@ -93,4 +110,13 @@ export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<stri
       if (!hasValue) throw BadRequest("decisions 指向冇值嘅欄位");
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// WP-STAFF-FIELDS：銀行欄權限。包內有任何銀行欄（person.bank 有值／unassignedBankAccounts 非空）→
+// preview／apply 要求上載者有「安員銀行資料:update」，冇就 403（訊息講明；唔靜靜 strip）。
+// ---------------------------------------------------------------------------
+export const BANK_PACKAGE_DENIED_MSG = "導入包含銀行資料，要有「安員銀行資料」修改權限嘅同事先可以上載（銀行資料冇寫入）";
+export async function assertBankPermissionForPackage(session: AuthedSession, pkg: ImportPackage): Promise<void> {
+  if (packageHasBank(pkg) && !(await hasPermission(session, "安員銀行資料", "update"))) throw Forbidden(BANK_PACKAGE_DENIED_MSG);
 }

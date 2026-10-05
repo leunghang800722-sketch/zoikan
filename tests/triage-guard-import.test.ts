@@ -961,7 +961,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     const q = await qOfKind("name_only_candidate");
     const { previewAnswer } = await import("@/lib/triage/apply");
     const actor = { userId: fx.userIds["會計"], baseRole: "會計" } as never;
-    const caps = { pii: true, piiUpdate: true, guardUpdate: true };
+    const caps = { pii: true, piiUpdate: true, guardUpdate: true, bankView: true, bankUpdate: true };
     const ans = { option: "link", guard_id: gName.id };
     expect((await previewAnswer(actor, q, ans, caps, null)).preview_hash).toHaveLength(64);
     const saved = process.env.SESSION_SECRET;

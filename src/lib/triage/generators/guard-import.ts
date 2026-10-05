@@ -2,7 +2,8 @@
 // 輸入：導入包＋apply 完成後重新評估嘅結果（剩低 needs_review／conflict 同 link 但仍有 review 欄嘅人）。
 // 一個人最多一條題目（group_key＝導入人 key）→ 冪等、已解決嘅唔會再出。
 import type { Evaluation } from "@/lib/guards/import/apply";
-import { fieldValue, packageConflicts, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
+import { fieldValue, packageConflicts, unassignedBankOf, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
+import { digits, extKeyGroup, isBankKey, isEmergencyKey, normPayee, type ExtItem } from "@/lib/guards/import/ext";
 import { hkidCheckDigitValid, canonicalHkid } from "@/lib/guards/identity";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { KIND_LABEL, REVIEW_FIELDS, type QuestionEvidence, type QuestionKind, type QuestionOption, type ReviewField } from "../types";
@@ -29,7 +30,12 @@ const KIND_ORDER: QuestionKind[] = [
   "package_conflict",
   "other_review",
   "db_conflict",
+  "ext_identity_check",
+  "bank_identity_unknown",
+  "bank_review",
   "field_review",
+  "ext_field_conflict",
+  "ext_field_review",
 ];
 
 export const SKIP_OPTION: QuestionOption = { id: "skip", label: "跳過，留返人手處理" };
@@ -120,7 +126,122 @@ function optionsFor(kind: QuestionKind, p: PackagePerson, candidateIds: string[]
   return opts;
 }
 
-export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Evaluation[]): QuestionDraft[] {
+export interface DraftOptions {
+  /** 作答／上載者冇「安員個人資料:view」：緊急聯絡人嘅出題唔准取決於「同現有聯絡人係咪一樣」（否則題目數變 oracle） */
+  viewPii?: boolean;
+  /** 冇「安員銀行資料:view」：銀行題同上（有銀行資料就一律出題，唔睇同現有戶口比較） */
+  viewBank?: boolean;
+  /** 現有安員（bank_identity_unknown 揾英文名 token 相同嘅候選、以及剔走已經有呢個戶口嘅） */
+  guards?: ReadonlyMap<string, { id: string; nameEn: string | null; ext: { bank: { accountNo: string | null } } }>;
+}
+
+const enTokens = (v: string | null | undefined): string[] =>
+  normPayee(v)
+    .split(" ")
+    .filter((t) => t && !/^(MR|MS|MRS|MISS)$/.test(t))
+    .sort();
+/** 英文名 token 完全相同（至少 2 個 token）先算候選。 */
+export function sameEnglishTokens(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = enTokens(a);
+  const y = enTokens(b);
+  return x.length >= 2 && x.length === y.length && x.every((t, i) => t === y[i]);
+}
+
+/** 新欄題目（對已 link 嘅人）：銀行 → bank_review；其餘 review → ext_field_review；confirmed 但同現值唔同 → ext_field_conflict。 */
+function extDrafts(e: Evaluation, order: number, opts: DraftOptions): QuestionDraft[] {
+  const p = e.person;
+  if (e.action !== "link" || !e.guardId || e.ext.length === 0) return [];
+  const uniform = (k: string) => (isBankKey(k) ? opts.viewBank === false : isEmergencyKey(k) ? opts.viewPii === false : false);
+  const eff = (i: ExtItem): string => (uniform(i.key) && (i.check === "same" || i.check === "differs") ? "differs" : i.check);
+  // 疑似重複／身份唔一致：先問身份（重要層），唔再逐欄問
+  if (p.reasons.includes("ext_identity_check") && e.ext.some((i) => i.status === "review")) {
+    return [
+      {
+        kind: "ext_identity_check",
+        groupKey: `${p.key}:extidentity`,
+        sort: KIND_ORDER.indexOf("ext_identity_check") * 100000 + order,
+        title: KIND_LABEL.ext_identity_check,
+        evidence: { v: 1, person: p, reasons: [...new Set(e.reasons)], candidate_guard_ids: [], ext_review: e.ext.filter((i) => i.status === "review").map((i) => ({ key: i.key, check: i.check, status: i.status })), guard_id: e.guardId },
+        options: [{ id: "confirm_ext_identity", label: "身份冇錯，照寫入呢個人（只補空欄）" }, { id: "skip", label: "跳過，留人手" }],
+      },
+    ];
+  }
+  const bank = e.ext.filter((i) => isBankKey(i.key) && (i.status === "review" || eff(i) === "differs"));
+  const review = e.ext.filter((i) => extKeyGroup(i.key) !== "bank" && i.status === "review" && i.check !== "not_stored");
+  const conflict = e.ext.filter((i) => extKeyGroup(i.key) !== "bank" && i.status === "confirmed" && eff(i) === "differs");
+  const mk = (kind: QuestionKind, suffix: string, items: ExtItem[]): QuestionDraft => ({
+    kind,
+    groupKey: `${p.key}:${suffix}`,
+    sort: KIND_ORDER.indexOf(kind) * 100000 + order,
+    title: KIND_LABEL[kind],
+    evidence: {
+      v: 1,
+      person: p,
+      reasons: [...new Set([...e.reasons])],
+      candidate_guard_ids: [],
+      ext_review: items.map((i) => ({ key: i.key, check: eff(i), status: i.status })),
+      guard_id: e.guardId,
+    },
+    options: [{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, SKIP_OPTION],
+  });
+  const out: QuestionDraft[] = [];
+  if (bank.length) out.push(mk("bank_review", "bank", bank));
+  if (review.length) out.push(mk("ext_field_review", "extreview", review));
+  if (conflict.length) out.push(mk("ext_field_conflict", "extconflict", conflict));
+  return out;
+}
+
+/** Payroll Editor 有戶口但對唔到人 → 逐條一題（候選＝英文名 token 完全相同嘅現有安員，最多 5 個）。 */
+function unassignedBankDrafts(pkg: ImportPackage, opts: DraftOptions): QuestionDraft[] {
+  const list = unassignedBankOf(pkg);
+  if (list.length === 0) return [];
+  const inPersons = new Set(pkg.persons.map((p) => (p.bank?.accountNo ? fieldValue(p.bank.accountNo) : null)).filter((x): x is string => !!x));
+  const guards = [...(opts.guards?.values() ?? [])];
+  const haveAcct = new Set(guards.map((g) => digits(g.ext.bank.accountNo)).filter(Boolean));
+  const seen = new Set<string>();
+  const out: QuestionDraft[] = [];
+  list.forEach((u, i) => {
+    if (seen.has(u.key)) return;
+    seen.add(u.key);
+    // 已經有安員用緊呢個戶口（已答／已由包內人帶入）→ 唔再問
+    if (inPersons.has(u.accountNo) || haveAcct.has(digits(u.accountNo))) return;
+    const cands = guards.filter((g) => sameEnglishTokens(u.payeeName, g.nameEn)).slice(0, MAX_CANDIDATES).map((g) => g.id);
+    const synthetic: PackagePerson = {
+      key: u.key,
+      hkid: { value: null, status: "missing" },
+      nameZh: { value: null, status: "missing" },
+      nameEn: { value: null, status: "missing" },
+      dateOfBirth: { value: null, status: "missing" },
+      sex: { value: null, status: "missing" },
+      phone: { value: null, status: "missing" },
+      address: { value: null, status: "missing" },
+      staffNumbers: [],
+      rating: "review",
+      reasons: ["bank_identity_unknown"],
+      bank: {
+        code: { value: u.bankCode, status: "review" },
+        name: { value: null, status: "missing" },
+        accountNo: { value: u.accountNo, status: "review" },
+        payeeName: { value: u.payeeName, status: "review" },
+      },
+    };
+    out.push({
+      kind: "bank_identity_unknown",
+      groupKey: u.key,
+      sort: KIND_ORDER.indexOf("bank_identity_unknown") * 100000 + i,
+      title: KIND_LABEL.bank_identity_unknown,
+      evidence: { v: 1, person: synthetic, reasons: ["bank_identity_unknown"], candidate_guard_ids: cands, unassigned: { key: u.key, bankCode: u.bankCode, accountNo: u.accountNo, payeeName: u.payeeName } },
+      options: [
+        ...cands.map((id, n): QuestionOption => ({ id: "assign_bank", guard_id: id, label: `呢個戶口係候選 ${n + 1} 嘅` })),
+        { id: "assign_bank", label: "搜尋其他保安員", input: "guard_search" },
+        SKIP_OPTION,
+      ],
+    });
+  });
+  return out;
+}
+
+export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Evaluation[], opts: DraftOptions = {}): QuestionDraft[] {
   const group = packageConflicts(pkg.persons);
   // 包內共用工號
   const noOwners = new Map<string, Set<string>>();
@@ -137,6 +258,7 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
     if (seen.has(p.key)) continue; // duplicate_key_in_package：只問一次
     seen.add(p.key);
     const gr = group.get(p.key) ?? [];
+    drafts.push(...extDrafts(e, order.get(p.key) ?? 0, opts));
     let kind = kindForEvaluation(e, gr);
     let reviewFields: { field: ReviewField; check: string }[] | undefined;
     if (!kind && e.action === "link" && e.guardId) {
@@ -167,5 +289,6 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
       options: optionsFor(kind, p, evidence.candidate_guard_ids, gr),
     });
   }
+  drafts.push(...unassignedBankDrafts(pkg, opts));
   return drafts.sort((a, b) => a.sort - b.sort);
 }

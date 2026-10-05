@@ -18,6 +18,12 @@ export const QUESTION_KINDS = [
   "package_conflict", // 其他包內衝突（例如重複身份證）
   "db_conflict", // 同現有資料矛盾（只可留返人手）
   "field_review", // 逐欄 review（姓名／英文名／出生日期／電話／地址）
+  // WP-STAFF-FIELDS 第二階段
+  "ext_identity_check", // 疑似重複／工號身份唔一致嘅人：新欄全部 review，先確認身份——重要層
+  "ext_field_conflict", // 新欄（牌照／平安咭／QAS／入職日期／緊急聯絡人）現有值唔同——補充資料層
+  "ext_field_review", // 新欄 review 狀態——補充資料層
+  "bank_review", // 銀行欄 review／衝突（包括 bank_copy_disagrees）——重要層，要銀行資料權限
+  "bank_identity_unknown", // Payroll Editor 有戶口但對唔到人——重要層，要銀行資料權限
   "other_review",
 ] as const;
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
@@ -34,6 +40,11 @@ export const KIND_LABEL: Record<QuestionKind, string> = {
   package_conflict: "導入包內衝突",
   db_conflict: "同現有資料矛盾",
   field_review: "待覆核欄位",
+  ext_identity_check: "呢份文件嘅工號／身份同另一位唔一致，請確認",
+  ext_field_conflict: "新增資料同現值唔同",
+  ext_field_review: "新增資料待覆核",
+  bank_review: "銀行資料待覆核",
+  bank_identity_unknown: "收款戶口對唔到人",
   other_review: "要人手判斷",
 };
 
@@ -49,6 +60,9 @@ export const OPTION_IDS = [
   "keep", // 照包內資料套用（確認冇問題）
   "drop_shared", // 唔寫有爭議嘅工號／電話
   "apply_fields", // 逐欄決定（field_review）
+  "apply_ext_fields", // 新欄逐欄決定（用導入值／保留現值／跳過）
+  "confirm_ext_identity", // 確認身份冇錯，照包內新欄寫入（只補空欄）
+  "assign_bank", // 收款戶口歸邊個安員（bank_identity_unknown；要 guard_id）
   "skip", // 跳過，留返人手
 ] as const;
 export type OptionId = (typeof OPTION_IDS)[number];
@@ -58,7 +72,7 @@ export interface QuestionOption {
   label: string;
   hint?: string;
   /** 需要用戶輸入嘅類型 */
-  input?: "text" | "hkid";
+  input?: "text" | "hkid" | "guard_search";
   /** link 選項對應嘅候選安員 id（顯示時由 server 加候選卡） */
   guard_id?: string;
 }
@@ -86,7 +100,18 @@ export interface QuestionEvidence {
   review_fields?: { field: ReviewField; check: string }[];
   /** 連去嘅現有安員（field_review） */
   guard_id?: string | null;
+  /** WP-STAFF-FIELDS：ext 題要覆核／處理嘅新欄（key 見 import/ext.ts）＋同現有值比較 */
+  ext_review?: { key: string; check: string; status: string }[];
+  /** bank_identity_unknown：Payroll Editor 對唔到人嘅戶口（含完整戶口號——同 guards 表同級，只存 DB，API 層按銀行資料權限遮罩） */
+  unassigned?: { key: string; bankCode: string; accountNo: string; payeeName: string };
 }
+
+/** 「補充資料」層：唔急，排喺要人手／衝突／銀行之後，badge 唔計。 */
+export const SUPPLEMENTARY_KINDS: readonly QuestionKind[] = ["field_review", "ext_field_conflict", "ext_field_review"];
+/** 銀行層：要「安員銀行資料:update」先可以睇內容／作答。 */
+export const BANK_KINDS: readonly QuestionKind[] = ["bank_review", "bank_identity_unknown"];
+
+export const EXT_CHOICES = ["use_import", "keep_current", "skip"] as const;
 
 const fieldAnswer = z
   .object({ action: z.enum(["confirm", "replace", "skip"]), value: z.string().trim().max(500).optional() })
@@ -98,6 +123,10 @@ export const answerSchema = z
     guard_id: z.string().min(1).max(64).optional(),
     value: z.string().trim().max(500).optional(),
     fields: z.partialRecord(z.enum(REVIEW_FIELDS), fieldAnswer).optional(),
+    /** apply_ext_fields：key → 用導入值／保留現值／跳過 */
+    ext_fields: z.record(z.string().regex(/^[A-Za-z.0-9-]{1,60}$/), z.enum(EXT_CHOICES)).optional(),
+    /** assign_bank：目標安員已有唔同戶口時，明確揀「取代現有戶口」 */
+    replace_existing: z.boolean().optional(),
   })
   .strict();
 export type TriageAnswer = z.infer<typeof answerSchema>;

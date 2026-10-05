@@ -2,7 +2,7 @@
 // 非老闆攞人哋嘅 session id → 403。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { getSessionFor, SUPPLEMENTARY_KIND } from "@/lib/triage/session";
+import { getSessionFor, isSupplementary } from "@/lib/triage/session";
 import { questionViews, viewerCaps } from "@/lib/triage/view";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -18,7 +18,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const c = { open: 0, answered: 0, skipped: 0, total: 0, important_open: 0, supplementary_open: 0 };
     for (const g of counts) {
       if (g.status === "open" || g.status === "answered" || g.status === "skipped") c[g.status] += g._count._all;
-      if (g.status === "open") c[g.kind === SUPPLEMENTARY_KIND ? "supplementary_open" : "important_open"] += g._count._all;
+      if (g.status === "open") c[isSupplementary(g.kind) ? "supplementary_open" : "important_open"] += g._count._all;
       c.total += g._count._all;
     }
     const questions = await questionViews(rows, await viewerCaps(actor));

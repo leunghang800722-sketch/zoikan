@@ -5,6 +5,14 @@
 import type { ApplyResult, PersonResult, PreviewResult, PreviewRow } from "./apply";
 import type { PersonField } from "./package";
 import { sameNameStrict } from "./text";
+import { aggregateExt, isBankKey, isEmergencyKey, maskExtChecks, type ExtItem } from "./ext";
+import { summarizeExt } from "./apply";
+
+/** 讀者權限：pii＝「安員個人資料:view」；bank＝「安員銀行資料:view」。 */
+export interface ProjectionViewer {
+  pii: boolean;
+  bank: boolean;
+}
 
 /** 「現值 vs 新值」比較會洩露現有資料嘅欄（hkid／出生日期／電話／地址／英文名／中文名）。 */
 const COMPARED: PersonField[] = ["hkid", "dateOfBirth", "phone", "address", "nameEn", "nameZh"];
@@ -23,9 +31,14 @@ function maskCurrentNames(r: PreviewRow): Pick<PreviewRow, "current_name_zh" | "
   return { current_name_zh: null, current_name_en: null, current_name_hidden: true };
 }
 
-function maskRow(r: PreviewRow): PreviewRow {
+function maskRow(r: PreviewRow, v: ProjectionViewer): PreviewRow {
+  const extItems: ExtItem[] | null = r.ext ? r.ext.map((x) => ({ key: x.key, status: x.status as ExtItem["status"], check: x.check as ExtItem["check"] })) : null;
+  const maskedExt = extItems ? maskExtChecks(extItems, { pii: v.pii, bank: v.bank }) : null;
   return {
     ...r,
+    ...(maskedExt ? { ext: maskedExt.map((i) => ({ key: i.key, status: i.status, check: i.check })) } : {}),
+    // 冇「安員銀行資料:view」：銀行戶口連尾 4 位都唔回（淨係話「有銀行資料」）
+    ...(r.bank_masked && !v.bank ? { bank_masked: { present: true as const } } : {}),
     ...maskCurrentNames(r),
     basis: r.basis.map(basisCategory).filter((x, i, a) => a.indexOf(x) === i),
     reasons: r.reasons.filter((x) => !NAME_REASONS.has(x)),
@@ -35,9 +48,25 @@ function maskRow(r: PreviewRow): PreviewRow {
   };
 }
 
-export function projectPreviewForViewer(p: PreviewResult, pii: boolean): PreviewResult {
-  if (pii) return p;
-  const rows = p.rows.map(maskRow);
+function extAggregateOf(rows: readonly PreviewRow[]): { ext_stats: ReturnType<typeof aggregateExt> } | Record<string, never> {
+  if (!rows.some((r) => r.ext)) return {};
+  return {
+    ext_stats: aggregateExt(
+      rows.filter((r) => r.auto_apply && r.ext).map((r) => r.ext!.map((x) => ({ key: x.key, status: x.status as ExtItem["status"], check: x.check as ExtItem["check"] }))),
+    ),
+  };
+}
+
+export function projectPreviewForViewer(p: PreviewResult, viewer: ProjectionViewer): PreviewResult {
+  if (viewer.pii && viewer.bank) return p;
+  const pii = viewer.pii;
+  const rows = p.rows.map((r) => maskRow(r, viewer));
+  if (pii) {
+    // 有 PII view、冇銀行 view：只重算新欄彙總（PII 彙總照原樣）
+    const { ext_stats: _drop, ...rest } = p;
+    void _drop;
+    return { ...rest, rows, ...extAggregateOf(rows) };
+  }
   const applicable = rows.filter((r) => r.auto_apply);
   const create = applicable.filter((r) => r.action === "create");
   const confirmed = (r: PreviewRow, f: PersonField) => r.fields[f]?.status === "confirmed";
@@ -61,12 +90,18 @@ export function projectPreviewForViewer(p: PreviewResult, pii: boolean): Preview
       staff_numbers_to_add: p.auto_apply.staff_numbers_to_add,
       field_conflicts: 0,
     },
+    ...extAggregateOf(rows),
   };
 }
 
-function maskResult(r: PersonResult): PersonResult {
+function maskResult(r: PersonResult, v: ProjectionViewer): PersonResult {
   return {
     ...r,
+    ...(r.ext
+      ? {
+          ext: r.ext.map(({ key: k, outcome: o }) => ({ key: k, outcome: ((isBankKey(k) && !v.bank) || (isEmergencyKey(k) && !v.pii)) && (o === "same" || o === "conflict") ? ("not_written" as const) : o })),
+        }
+      : {}),
     reasons: r.reasons.filter((x) => !NAME_REASONS.has(x)),
     fields: Object.fromEntries(
       Object.entries(r.fields).map(([f, v]) => [f, COMPARED.includes(f as PersonField) && (v === "same" || v === "conflict") ? "not_written" : v]),
@@ -74,12 +109,16 @@ function maskResult(r: PersonResult): PersonResult {
   };
 }
 
-export function projectApplyForViewer(a: ApplyResult, pii: boolean): ApplyResult {
-  if (pii) return a;
-  const results = a.results.map(maskResult);
+export function projectApplyForViewer(a: ApplyResult, viewer: ProjectionViewer): ApplyResult {
+  if (viewer.pii && viewer.bank) return a;
+  const results = a.results.map((r) => maskResult(r, viewer));
+  const { ext_written: _w, ext_conflicts: _c, contacts_added: _n, ...rest } = a;
+  void _w; void _c; void _n;
+  const extSum = summarizeExt(results);
+  if (viewer.pii) return { ...rest, ...extSum, results };
   const fields_written: Record<string, number> = {};
   for (const r of results) for (const [f, v] of Object.entries(r.fields)) if (v === "written") fields_written[f] = (fields_written[f] ?? 0) + 1;
-  return { ...a, counts_hidden: true, results, fields_written, field_conflicts: 0 };
+  return { ...rest, ...extSum, counts_hidden: true, results, fields_written, field_conflicts: 0 };
 }
 
 export const maskPreviewForViewer = projectPreviewForViewer;

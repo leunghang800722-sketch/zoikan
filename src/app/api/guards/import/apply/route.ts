@@ -3,7 +3,7 @@
 //  - 冇 decisions：自動套用（link／create 嘅人，只寫 status=confirmed 嘅欄）。
 //  - 有 decisions（覆核頁）：只處理有決定嘅人；逐欄 confirm／replace／skip。
 // 冪等；分批 transaction；每筆 writeAuditTx。導入包唔入 DB（要重新帶）。
-import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets } from "@/lib/guards/import/request";
+import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, assertBankPermissionForPackage } from "@/lib/guards/import/request";
 import { hashPackage } from "@/lib/guards/import/package";
 import { Conflict } from "@/lib/api/errors";
 import { applyImport } from "@/lib/guards/import/apply";
@@ -23,10 +23,13 @@ export async function POST(req: Request) {
     const pkg = parsePackage(body.package);
     assertPackageSize(session, pkg);
     assertDecisionTargets(pkg, body.decisions);
+    await assertBankPermissionForPackage(session, pkg);
     const pii = await hasPermission(session, "安員個人資料", "view");
     if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
     const canOverwritePii = await hasPermission(session, "安員個人資料", "update");
     const canEditGuard = await hasPermission(session, "安員", "update");
+    const bankView = await hasPermission(session, "安員銀行資料", "view");
+    const canEditBank = await hasPermission(session, "安員銀行資料", "update");
     // 預留配額（短 transaction；鎖外先套用）。single_ocr 單人包：獨立配額，apply（含 decisions）一律計；
     // 其他包照舊（有 decisions 嘅覆核唔計）。失敗唔退還次數。
     if (pkg.source === "single_ocr") await reserveQuota(session, "single_ocr");
@@ -38,6 +41,7 @@ export async function POST(req: Request) {
       decisions: mapDecisions(body.decisions),
       canOverwritePii,
       canEditGuard,
+      canEditBank,
       fillOnlyPii: !pii,
       ...(pkg.source === "single_ocr" ? { via: "single_ocr" as const } : {}),
     });
@@ -52,6 +56,6 @@ export async function POST(req: Request) {
         console.error("triage session create failed", safeErrorSummary(e));
       }
     }
-    return ok(brandSafeResponse({ ...maskApplyForViewer(result, pii), triage: triage ? { ...triage } : null }));
+    return ok(brandSafeResponse({ ...maskApplyForViewer(result, { pii, bank: bankView }), triage: triage ? { ...triage } : null }));
   });
 }

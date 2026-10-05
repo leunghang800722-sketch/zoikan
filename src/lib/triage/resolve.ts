@@ -6,6 +6,8 @@ import { canonicalHkid, hkidCheckDigitValid } from "@/lib/guards/identity";
 import type { FieldDecision, ForcedMatch, PersonDecisions } from "@/lib/guards/import/apply";
 import { fieldValue, type ImportPackage, type PackagePerson } from "@/lib/guards/import/package";
 import { normTel8, normZh, parseBirthDate } from "@/lib/guards/import/text";
+import type { ExtDecision } from "@/lib/guards/import/ext";
+import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import type { QuestionEvidence, QuestionKind, QuestionOption, ReviewField, TriageAnswer } from "./types";
 
@@ -125,13 +127,51 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       }
       break;
     }
+    case "apply_ext_fields": {
+      const allowed = new Set((q.evidence.ext_review ?? []).map((r) => r.key));
+      const entries = Object.entries(answer.ext_fields ?? {});
+      if (entries.length === 0) throw BadRequest("請最少對一個欄位作出決定");
+      const ext: Record<string, ExtDecision> = {};
+      for (const [k, c] of entries) {
+        if (!allowed.has(k)) throw BadRequest("呢個欄位唔屬於呢條問題");
+        // 用導入值＝replace（現值空＝補空；現值唔同＝覆蓋，要權限）；保留現值／跳過＝唔寫
+        ext[k] = c === "use_import" ? "replace" : "skip";
+      }
+      dec.ext = ext;
+      break;
+    }
+    case "confirm_ext_identity": {
+      if (q.kind !== "ext_identity_check") throw BadRequest("呢個選項唔屬於呢條問題");
+      // 人手確認咗身份：包內 review 嘅新欄當 confirmed（仍然只補空欄，現值唔同＝conflict 唔覆蓋）
+      const ext: Record<string, ExtDecision> = {};
+      for (const r of q.evidence.ext_review ?? []) ext[r.key] = "confirm";
+      dec.ext = ext;
+      break;
+    }
+    case "assign_bank": {
+      const u = q.evidence.unassigned;
+      if (q.kind !== "bank_identity_unknown" || !u) throw BadRequest("呢個選項唔屬於呢條問題");
+      if (!answer.guard_id) throw BadRequest("要揀邊個保安員");
+      forced = { mode: "link", guardId: answer.guard_id };
+      // 人手已經揀咗戶口屬於邊個：呢度先將戶口當 confirmed 寫入（銀行名稱由 HKICL 編號推出）
+      const bankName = HKICL_BANK_OPTIONS.find((b) => b.code === u.bankCode)?.nameZhShort ?? null;
+      person.bank = {
+        code: { value: u.bankCode, status: "confirmed" },
+        name: { value: bankName, status: bankName ? "confirmed" : "missing" },
+        accountNo: { value: u.accountNo, status: "confirmed" },
+        payeeName: { value: u.payeeName, status: "confirmed" },
+      };
+      // 目標安員已有唔同戶口：預設 confirm（衝突、唔覆蓋）；明確揀「取代現有戶口」先 replace
+      dec.ext = { bank: answer.replace_existing ? "replace" : "confirm" };
+      break;
+    }
     default:
       throw BadRequest("唔支援嘅選項");
   }
 
   return {
     mode: "write",
-    pkg: { version: 2, generatedAt: "triage", persons: [person] },
+    pkg: { version: 3, generatedAt: "triage", persons: [person] },
     key,
     ...(Object.keys(dec).length ? { decisions: { [key]: dec } } : {}),
     ...(forced ? { forced: { [key]: forced } } : {}),

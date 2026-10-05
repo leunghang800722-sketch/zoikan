@@ -8,16 +8,16 @@ import { createHmac } from "node:crypto";
 import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
-import { ApiError, BadRequest, Conflict } from "@/lib/api/errors";
+import { ApiError, BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
 import { canonicalHkid } from "@/lib/guards/identity";
 import { fieldValue } from "@/lib/guards/import/package";
 import { normZh } from "@/lib/guards/import/text";
-import { applyOnePerson, type ApplyOptions } from "@/lib/guards/import/apply";
+import { applyOnePerson, extOutcomeOf, summarizeExt, type ApplyOptions } from "@/lib/guards/import/apply";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
 import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
-import { answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
+import { BANK_KINDS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
 type QRow = TriageQuestion;
 
@@ -42,9 +42,16 @@ function assertAnswerable(q: QRow): void {
   if (q.status === "answered") throw Conflict("呢條問題已經答過，唔可以重複套用");
 }
 
+export const BANK_QUESTION_DENIED_MSG = "要有安員銀行資料權限嘅同事處理";
+function assertBankAllowed(q: QRow, caps: ViewerCaps): void {
+  if ((BANK_KINDS as readonly string[]).includes(q.kind) && !caps.bankUpdate) throw Forbidden(BANK_QUESTION_DENIED_MSG);
+}
+
+const BANK_NOT_WRITTEN_NOTE = "呢個答案唔會寫入戶口：目標安員已有唔同戶口（要明確揀「取代現有戶口」，而且要有安員銀行資料修改權限），或者戶口已經係佢嘅";
+
 function optsFor(r: ResolvedWrite, actor: AuthedSession, ip: string | null, caps: ViewerCaps): ApplyOptions {
   // 冇「安員個人資料:update」：可以新建／補空欄／確認包內值，唔准覆蓋現有唔同嘅 PII（applyPerson 會 403）
-  return { actorUserId: actor.userId, ip, decisions: r.decisions, forced: r.forced, autoKeepPendingName: r.autoKeepPendingName, canOverwritePii: caps.piiUpdate, canEditGuard: caps.guardUpdate, fillOnlyPii: !caps.pii, via: "triage" };
+  return { actorUserId: actor.userId, ip, decisions: r.decisions, forced: r.forced, autoKeepPendingName: r.autoKeepPendingName, canOverwritePii: caps.piiUpdate, canEditGuard: caps.guardUpdate, canEditBank: caps.bankUpdate, fillOnlyPii: !caps.pii, via: "triage" };
 }
 
 /**
@@ -71,6 +78,7 @@ export interface PreviewOutput {
 
 export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, caps: ViewerCaps, ip: string | null): Promise<PreviewOutput> {
   assertAnswerable(q);
+  assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
   const resolved = resolveAnswer(load(q), answer);
   const warnOwner = await checkHkidOwner(q, answer);
@@ -80,6 +88,10 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   const out = await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip, caps), { kind: "dry" });
   const impact = buildImpact(out.result, out.changes, caps);
   if (warnOwner) impact.notes.unshift("呢個身份證號已屬於現有安員（唔喺候選名單），而且姓名相同，會連去佢");
+  if (answer.option === "assign_bank" && extOutcomeOf(out.result, "bank") !== "written") {
+    impact.can_confirm = false;
+    impact.notes.unshift(BANK_NOT_WRITTEN_NOTE);
+  }
   return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: impact.can_confirm, impact };
 }
 
@@ -101,6 +113,7 @@ export interface AnswerOutput {
 
 export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, previewHash: string | undefined, caps: ViewerCaps, ip: string | null): Promise<AnswerOutput> {
   assertAnswerable(q);
+  assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
   const resolved = resolveAnswer(load(q), answer);
   await checkHkidOwner(q, answer);
@@ -124,6 +137,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
     kind: "commit",
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
     beforeCommit: async (tx, outcome) => {
+      if (answer.option === "assign_bank" && extOutcomeOf(outcome.result, "bank") !== "written") throw new ApiError(422, "unprocessable", BANK_NOT_WRITTEN_NOTE);
       impact = buildImpact(outcome.result, outcome.changes, caps);
       const n = await tx.triageQuestion.updateMany({
         where: { id: q.id, status: { in: ["open", "skipped"] } },
@@ -135,7 +149,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
           // 存原始結構化值（白名單欄），讀取時按讀者權限遮罩；唔存答題人視角嘅已遮罩版本
           impactJson: JSON.parse(JSON.stringify(toImpactSource(outcome.result, outcome.changes))),
           // 寫入結果：淨係結果碼／計數（冇 PII）
-          applyResultJson: JSON.parse(JSON.stringify({ outcome: outcome.result.outcome, fields: outcome.result.fields, reasons: outcome.result.reasons, staff_numbers_added: outcome.result.staff_numbers_added, phones_added: outcome.result.phones_added, addresses_added: outcome.result.addresses_added })),
+          applyResultJson: JSON.parse(JSON.stringify({ outcome: outcome.result.outcome, fields: outcome.result.fields, reasons: outcome.result.reasons, staff_numbers_added: outcome.result.staff_numbers_added, phones_added: outcome.result.phones_added, addresses_added: outcome.result.addresses_added, ...(outcome.result.ext ? { ext: outcome.result.ext } : {}) })),
         },
       });
       if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
@@ -162,6 +176,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
           phones_added: r.phones_added,
           addresses_added: r.addresses_added,
           staff_numbers_added: r.staff_numbers_added,
+          ...summarizeExt([r]),
           field_conflicts: Object.values(r.fields).filter((v) => v === "conflict").length,
           review_decisions: 1,
           via: "triage",
