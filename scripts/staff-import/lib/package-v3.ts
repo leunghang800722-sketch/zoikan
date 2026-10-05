@@ -38,13 +38,14 @@ export interface BuildCounts {
   leaves_skipped_handwritten_unverified: number;
   leaves_dropped_invalid: number;
   identity_check_persons: number;
+  typed_only_no_identity_skipped: number;
   by_field: Record<string, Record<St, number>>;
 }
 
 export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSources, now = new Date()) {
   const counts: BuildCounts = {
     persons_total: 0, persons_with_docs: 0, persons_typed_only: 0, ext_joined: 0, ext_not_joined_docs: 0, unassigned_bank: 0, unassigned_dropped: 0,
-    leaves_skipped_handwritten_unverified: 0, leaves_dropped_invalid: 0, identity_check_persons: 0, by_field: {},
+    leaves_skipped_handwritten_unverified: 0, leaves_dropped_invalid: 0, identity_check_persons: 0, typed_only_no_identity_skipped: 0, by_field: {},
   };
   const tally = (name: string, l: Leaf) => {
     const c = (counts.by_field[name] ??= { confirmed: 0, review: 0, missing: 0 });
@@ -130,6 +131,7 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       const r = packagePersonSchema.safeParse(cur);
       if (r.success) return r.data as Record<string, unknown>;
       const path = r.error.issues[0]!.path;
+      if (process.env.PKG_DEBUG) console.error('sanitize', guard, path.join('.'), r.error.issues[0]!.code);
       // 把出錯位置（leaf 本身，path 最後係 value/status 或 leaf 名）改成 missing leaf
       let target: unknown = cur;
       const leafPath = path.length && (path[path.length - 1] === 'value' || path[path.length - 1] === 'status') ? path.slice(0, -1) : path;
@@ -142,7 +144,7 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       counts.leaves_dropped_invalid += 1;
       cur = next;
     }
-    throw new Error('package-v3: sanitize loop');
+    throw new Error(`package-v3: sanitize loop ${JSON.stringify(packagePersonSchema.safeParse(cur).error?.issues.slice(0, 3).map((i) => [i.path.join('.'), i.code]))}`);
   };
 
   const persons: Record<string, unknown>[] = [];
@@ -170,7 +172,7 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
   const unassigned: Record<string, unknown>[] = [];
   for (const e of ext) {
     if (used.has(e)) continue;
-    if (e.keyKind === 'internal' || (e.flags ?? []).includes('payroll_editor_only_person')) {
+    if (e.key.startsWith('pe:') || (e.flags ?? []).includes('payroll_editor_only_person')) {
       const F = (e.fields ?? {}) as Record<string, unknown>;
       const code = leafOf(F.bankCode).value?.padStart(3, '0') ?? '';
       const acct = leafOf(F.bankAccountNo).value ?? '';
@@ -186,11 +188,18 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       counts.ext_not_joined_docs += 1;
       continue;
     }
+    if (e.keyKind === 'internal') {
+      counts.typed_only_no_identity_skipped += 1; // 冇身份證／工號做 key，對唔到人，唔入包
+      continue;
+    }
     const hk = e.keyKind === 'hkid' ? canonicalHkid(e.key) : null;
     const nos = [...new Set((e.staffNos ?? []).map(cleanNo).filter((x): x is string => !!x))];
     if (e.keyKind === 'staffNo' && !nos.includes(cleanNo(e.key)!)) nos.push(cleanNo(e.key)!);
     const row = typedRows.find((r) => (hk && canonicalHkid(r.hkid ?? '') === hk) || (r.staffNo && nos.includes(cleanNo(r.staffNo)!)));
-    const staffNumbers = nos.map((n) => ({ scheme: n.match(/^[A-Z]+/)?.[0] ?? 'U', number: n })).filter((n) => /^[A-Z]{1,4}[0-9A-Z-]{1,16}$/.test(n.number));
+    const staffNumbers = nos.flatMap((n) => {
+      const m = /^([A-Z]{1,4})\d[0-9A-Z-]{0,15}$/.exec(n);
+      return m ? [{ scheme: m[1]!, number: n }] : [];
+    });
     const x = extFields(e, staffNumbers);
     // 打字名單唔係身份來源（§26.2）：hkid／姓名一律 review，唔會用嚟自動建人；只用嚟 link 現有安員
     const person = {
