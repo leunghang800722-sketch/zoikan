@@ -284,7 +284,12 @@ export const GuardUpdateSchema = z
     hire_date: nullableDateOnly,
     leave_date: nullableDateOnly,
     bank_name: z.string().optional(),
-    bank_account_no: z.string().optional(),
+    // 戶口輸入先正規化（全形數字轉半形、去空白）；淨收數字同 `-` 分隔符，其他字符 400
+    bank_account_no: z
+      .string()
+      .transform((v) => v.normalize("NFKC").replace(/\s+/g, ""))
+      .refine((v) => /^[0-9-]*$/.test(v), { message: "銀行戶口淨係可以有數字同「-」分隔符" })
+      .optional(),
     bank_payee_name: z.string().optional(),
     // WP-BOSS5 §25.4：3 位 HKICL 清算銀行編號——`""` 清空、非空一定要
     // 3 位數字（BOCHK Payroll Editor 要求嘅格式）。淨係一個「建議下拉」

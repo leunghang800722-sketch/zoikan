@@ -34,6 +34,18 @@ def hdr_index(header, *needles):
     return None
 
 
+STAFF_NO_RE = re.compile(r'^[A-Z]{1,4}\d{2,7}$')
+DROPPED = {'maxwell': 0, 'uteam': 0, 'parttime': 0}
+
+
+def good_row(kind, staff_no, *names):
+    # 剔走表尾統計行／小計行：工號唔符格式，或者冇身份證時姓名係純數字／空
+    ok = bool(staff_no) and bool(STAFF_NO_RE.match(re.sub(r'\s+', '', staff_no).upper()))
+    if not ok:
+        DROPPED[kind] += 1
+    return ok
+
+
 def maxwell():
     wb = openpyxl.load_workbook(MSG / 'Maxwell All Staff List (Front Line).xlsx', read_only=True, data_only=True)
     rows = []
@@ -51,6 +63,8 @@ def maxwell():
         for r, row in enumerate(data[2:], start=3):
             g = lambda k: row[ix[k]] if ix[k] is not None and ix[k] < len(row) else None
             if not (s(g('staffNo')) or s(g('hkid')) or s(g('nameEn'))):
+                continue
+            if not good_row('maxwell', s(g('staffNo'))):
                 continue
             rows.append({
                 'ref': f'maxwell:{ws.title}:{r}', 'sheet': ws.title, 'staffNo': s(g('staffNo')), 'nameEn': s(g('nameEn')), 'nameZh': s(g('nameZh')),
@@ -70,11 +84,28 @@ def uteam():
         no = s(g(13)) or s(g(0))
         if not (no or s(g(15))):
             continue
+        if not good_row('uteam', no):
+            continue
         rows.append({
             'ref': f'uteam:{r}', 'staffNo': no, 'join': iso(g(1)), 'status': s(g(4)), 'hkid': s(g(14)), 'nameZh': s(g(15)),
             'nameEn': ' '.join(x for x in [s(g(16)), s(g(17))] if x) or None,
             'emergency': [s(g(20)), s(g(21)), s(g(22))], 'bankCode': s(g(23)), 'acct': s(g(25)),
         })
+    return rows
+
+
+def parttime():
+    # 「在勤兼職資料.xlsx 的副本」係普通 xlsx（openpyxl 淨係因副檔名「的副本」拒讀）；內容同 在勤兼職資料-copy.xlsx 逐位元相同，讀後者
+    wb = openpyxl.load_workbook(MSG / '在勤兼職資料-copy.xlsx', read_only=True, data_only=True)
+    ws = wb.worksheets[0]
+    rows = []
+    for r, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        g = lambda i: row[i] if i < len(row) else None
+        if not s(g(0)):
+            continue
+        if not good_row('parttime', s(g(0))):
+            continue
+        rows.append({'ref': f'parttime:{r}', 'staffNo': s(g(0)), 'hkid': s(g(3)), 'firstStamp': iso(g(7)), 'lastStamp': iso(g(8))})
     return rows
 
 
@@ -100,7 +131,9 @@ def payroll_editor():
 
 
 if __name__ == '__main__':
-    d = {'maxwell': maxwell(), 'uteam': uteam(), 'payrollEditor': payroll_editor()}
+    d = {'maxwell': maxwell(), 'uteam': uteam(), 'payrollEditor': payroll_editor(), 'parttime': parttime()}
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(d, ensure_ascii=False))
-    print({k: len(v) for k, v in d.items()})
+    d['dropped'] = DROPPED
+    OUT.write_text(json.dumps(d, ensure_ascii=False))
+    print({k: (len(v) if isinstance(v, list) else v) for k, v in d.items()})

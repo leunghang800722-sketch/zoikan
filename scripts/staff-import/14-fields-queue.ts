@@ -10,6 +10,18 @@ async function main() {
   const all: PersonCrops[] = [];
   for (const f of files) all.push(...(JSON.parse(await fs.readFile(path.join(FIELDS_OUT, f), 'utf8')) as PersonCrops[]));
   all.sort((a, b) => a.idx - b.idx);
+  // 同一個人可能喺多個 manifest（補裁）出現：合併裁圖（id 唯一），missing 取最後一份
+  const merged = new Map<string, PersonCrops>();
+  for (const p of all) {
+    const o = merged.get(p.key);
+    if (!o) { merged.set(p.key, { ...p, crops: [...p.crops] }); continue; }
+    const ids = new Set(o.crops.map((c) => c.id));
+    o.crops.push(...p.crops.filter((c) => !ids.has(c.id)));
+    o.missing = p.missing;
+  }
+  all.length = 0;
+  all.push(...merged.values());
+  all.sort((a, b) => a.idx - b.idx);
   const tasks: { id: string; person: number; file: string; spec: string; fields: string[]; handwritten: boolean }[] = [];
   for (const p of all) for (const c of p.crops) {
     const spec = specKey(c.kind, c.how);

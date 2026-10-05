@@ -117,3 +117,41 @@ export function resolveField(cands: Cand[], opts: ResolveOpts = {}): FieldOut {
 
 /** 兩個手寫值（read1／read2）+ 其他來源 → Cand；hand 讀數留空表示「欄位空白」，唔當候選。 */
 export const fromRead = (src: SrcKind, norm: string | null, raw?: string | null): Cand[] => (norm ? [{ src, value: norm, ref: raw ?? undefined }] : []);
+
+// ---------- Opus 核對後新增規則 ----------
+export function splitPermit(no: string): { prefix: string; serial: string | null } {
+  const parts = no.split('-');
+  return { prefix: parts.slice(0, 3).join('-'), serial: parts[3] ?? null };
+}
+/** 卡底控制編號（字母＋7 位，冇連字符）唔係牌照號碼。 */
+export const isCardControlNo = (raw: string | null | undefined) => /^[A-Z]\d{7}$/.test((raw ?? '').normalize('NFKC').toUpperCase().replace(/\s+/g, ''));
+export const isPureHand = (sources: string[]) => sources.length > 0 && sources.every((s) => s === 'hand_read1' || s === 'hand_read2');
+/** 日 ≤12 且日≠月 → 日／月可對調 */
+export const dateAmbiguous = (iso: string) => { const m = Number(iso.slice(5, 7)); const d = Number(iso.slice(8, 10)); return d <= 12 && d !== m; };
+
+/** 純手寫來源嘅降級：unverified＝handwritten_unverified（無論兩讀一致）；date＝日月歧義。 */
+export function applyHandRules(f: FieldOut, o: { date?: boolean; unverified?: boolean }): FieldOut {
+  if (f.status === 'missing' || !isPureHand(f.sources)) return f;
+  const reasons = [...f.reasons];
+  let status = f.status;
+  if (o.unverified) { if (!reasons.includes('handwritten_unverified')) reasons.push('handwritten_unverified'); status = 'review'; }
+  else if (o.date && f.value && f.status === 'confirmed' && dateAmbiguous(f.value)) { reasons.push('handwritten_date_ambiguous'); status = 'review'; }
+  return { ...f, status, reasons };
+}
+export const acctEq = (a: string | null, b: string | null, code: string | null) => {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const c = (code ?? '').padStart(3, '0');
+  return !!code && ((a.startsWith(c) && a.slice(3) === b) || (b.startsWith(c) && b.slice(3) === a));
+};
+
+/** 銀行副本 vs Payroll Editor 戶口：去銀行代號前綴後逐位相同＝eq；副本欠 3 位分行碼而尾段相同＝nobranch；其餘 no。 */
+export function acctAgreeKind(copy: string, pe: string, code: string | null): 'eq' | 'nobranch' | 'no' {
+  const c = (code ?? '').padStart(3, '0');
+  const strip = (x: string) => (code && x.startsWith(c) && x.length > 3 ? x.slice(3) : x);
+  if (copy === pe || strip(copy) === strip(pe) || strip(copy) === pe || copy === strip(pe)) return 'eq';
+  const [a, b] = [strip(copy), strip(pe)];
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (long.length - short.length === 3 && short.length >= 6 && long.endsWith(short)) return 'nobranch';
+  return 'no';
+}

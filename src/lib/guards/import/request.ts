@@ -2,7 +2,11 @@
 import { z } from "zod";
 import { BadRequest } from "@/lib/api/errors";
 import { requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
-import { importPackageSchema, type ImportPackage, type PersonField } from "./package";
+import { importPackageSchema, packageHasBank, type ImportPackage, type PersonField } from "./package";
+import { evaluateExt, type ExtDecision } from "./ext";
+import { serverPersonKey } from "./person-key";
+import { Forbidden } from "@/lib/api/errors";
+import { hasPermission } from "@/lib/rbac/requirePermission";
 import { NON_BOSS_MAX_PERSONS } from "./limits";
 import { type PersonDecisions } from "./apply";
 
@@ -14,6 +18,8 @@ export function parsePackage(raw: unknown): ImportPackage {
   }
   // WP-GUARD-OCR §29：單人包只准 1 人（獨立配額唔可以變批量導入嘅後門）
   if (r.data.source === "single_ocr" && r.data.persons.length !== 1) throw BadRequest("單人證件包只可以有 1 個人");
+  // single_ocr 只係 v2 證件欄；唔准帶 v3 新欄（牌照／銀行／聯絡人…）
+  if (r.data.source === "single_ocr" && r.data.version !== 2) throw BadRequest("單人證件包只可以係 v2 格式");
   return r.data;
 }
 
@@ -34,6 +40,8 @@ const personDecisionSchema = z
     date_of_birth: decisionNoPendingSchema.optional(),
     phone: decisionNoPendingSchema.optional(),
     address: decisionNoPendingSchema.optional(),
+    /** WP-STAFF-FIELDS：新欄逐欄決定（key＝ext key；值 confirm／replace／skip） */
+    ext: z.record(z.string().regex(/^[A-Za-z.0-9-]{1,60}$/), z.enum(["confirm", "replace", "skip"])).optional(),
   })
   .strict();
 
@@ -56,7 +64,13 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
   const out: Record<string, PersonDecisions> = {};
   for (const [key, d] of Object.entries(raw)) {
     const m: PersonDecisions = {};
-    for (const [k, v] of Object.entries(d)) if (v) m[SNAKE_TO_FIELD[k]!] = { action: v.action, ...(v.value ? { value: v.value } : {}) };
+    for (const [k, v] of Object.entries(d)) {
+      if (k === "ext") {
+        if (v) m.ext = v as Record<string, ExtDecision>;
+        continue;
+      }
+      if (v) m[SNAKE_TO_FIELD[k]!] = { action: (v as { action: "confirm" | "replace" | "skip" | "keep_pending" }).action, ...((v as { value?: string }).value ? { value: (v as { value?: string }).value } : {}) };
+    }
     out[key] = m;
   }
   return out;
@@ -79,18 +93,80 @@ export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg:
 export { maskPreviewForViewer, maskApplyForViewer } from "./project";
 
 /** decisions 指向包內唔存在嘅人，或者指向一個冇值又冇帶 value 嘅欄（skip 除外）→ 400。 */
-export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<string, Record<string, { action: string; value?: string } | undefined>> | undefined): void {
+/**
+ * decisions 嘅 key：`@<index>`＝上載包 persons 位置（對返 package_hash 綁定嘅包；UI 一律用呢個，因為伺服器 `ref` 喺同包兩行相同身份證／工號集合時會撞）；
+ * 亦接受包內 `key`（向後兼容、API 直接用）。`@index` 越界／同包內 key 撞 → 400。
+ */
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+export function resolveDecisionKeys<T>(pkg: ImportPackage, decisions: Record<string, T> | undefined): Record<string, T> | undefined {
+  if (!decisions) return decisions;
+  const out = Object.create(null) as Record<string, T>;
+  for (const k of Object.keys(decisions)) {
+    if (FORBIDDEN_KEYS.has(k)) throw BadRequest("decisions key 唔合法");
+    const v = (decisions as Record<string, T>)[k]!;
+    const m = /^@(0|[1-9]\d*)$/.exec(k);
+    if (k.startsWith("@") && !m) throw BadRequest("decisions 位置格式要 @0、@1…（唔准前導零／負數／小數）");
+    if (!m) {
+      if (k in out) throw BadRequest("decisions 有重複目標");
+      out[k] = v;
+      continue;
+    }
+    const p = pkg.persons[Number(m[1])];
+    if (!p) throw BadRequest("decisions 指向導入包內唔存在嘅位置");
+    if (FORBIDDEN_KEYS.has(p.key) || p.key in out) throw BadRequest("decisions 有重複目標");
+    out[p.key] = v;
+  }
+  return out;
+}
+
+export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<string, Record<string, unknown>> | undefined): void {
   if (!decisions) return;
   const byKey = new Map(pkg.persons.map((p) => [p.key, p]));
-  for (const [key, d] of Object.entries(decisions)) {
+  for (const [key, d0] of Object.entries(decisions)) {
+    const d = d0 as Record<string, { action: string; value?: string } | undefined>;
     const person = byKey.get(key);
     if (!person) throw BadRequest("decisions 指向導入包內唔存在嘅人");
+    if (d.ext) {
+      const have = new Set(evaluateExt(person, null).map((i) => i.key));
+      for (const k of Object.keys(d.ext)) if (!have.has(k)) throw BadRequest("decisions 指向冇值嘅新欄");
+    }
     for (const [snake, dec] of Object.entries(d)) {
+      if (snake === "ext") continue;
       if (!dec || dec.action === "skip") continue;
       const f = SNAKE_TO_FIELD[snake];
       if (!f) throw BadRequest("decisions 指向唔存在嘅欄位");
       const hasValue = !!dec.value?.trim() || !!person[f].value?.trim();
       if (!hasValue) throw BadRequest("decisions 指向冇值嘅欄位");
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// WP-STAFF-FIELDS：銀行欄權限。包內有任何銀行欄（person.bank 有值／unassignedBankAccounts 非空）→
+// preview／apply 要求上載者有「安員銀行資料:update」，冇就 403（訊息講明；唔靜靜 strip）。
+// ---------------------------------------------------------------------------
+export const BANK_PACKAGE_DENIED_MSG = "導入包含銀行資料，要有「安員銀行資料」修改權限嘅同事先可以上載（銀行資料冇寫入）";
+export async function assertBankPermissionForPackage(session: AuthedSession, pkg: ImportPackage): Promise<void> {
+  if (packageHasBank(pkg) && !(await hasPermission(session, "安員銀行資料", "update"))) throw Forbidden(BANK_PACKAGE_DENIED_MSG);
+}
+
+// ---------------------------------------------------------------------------
+// R3：包內 key（上載者提供，可能含／衍生自身份證）唔回俾任何讀者。回應改用 `index`（喺上載包 persons 嘅位置，
+// 瀏覽器自己有包可以對返）＋ `ref`（伺服器 HMAC key，唔可反推）。
+// ---------------------------------------------------------------------------
+export function redactRowKeys<T extends { key: string }>(pkg: ImportPackage, items: readonly T[]): (Omit<T, "key"> & { index: number; ref: string })[] {
+  const at = new Map(pkg.persons.map((p, i) => [p.key, { index: i, ref: serverPersonKey(p) }]));
+  return items.map(({ key, ...rest }) => ({ ...rest, ...(at.get(key) ?? { index: -1, ref: "" }) })) as never;
+}
+
+/** 原始 body 嘅 decisions key 唔准係 __proto__／constructor／prototype（zod 解析前先查，因為 JSON.parse 嘅 own `__proto__` key 會俾 zod record 靜靜吞咗）。 */
+export function assertSafeDecisionKeys(raw: unknown): void {
+  const d = raw && typeof raw === "object" ? (raw as { decisions?: unknown }).decisions : undefined;
+  if (d && typeof d === "object") {
+    for (const k of Object.keys(d)) {
+      if (FORBIDDEN_KEYS.has(k)) throw BadRequest("decisions key 唔合法");
+      const v = (d as Record<string, unknown>)[k];
+      if (v && typeof v === "object") for (const kk of Object.keys(v)) if (FORBIDDEN_KEYS.has(kk)) throw BadRequest("decisions 欄位 key 唔合法");
     }
   }
 }

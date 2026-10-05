@@ -138,7 +138,8 @@ export default function LongtermPayrollPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expandedGuard, setExpandedGuard] = useState<string | null>(null);
-  const [autopayPreview, setAutopayPreview] = useState<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string } | null>(null);
+  const [autopayPreview, setAutopayPreview] = useState<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string; locked_month_warning?: string | null } | null>(null);
+  const [confirmLocked, setConfirmLocked] = useState(false);
 
   const load = useCallback(async (m: string) => {
     setLoading(true);
@@ -179,7 +180,7 @@ export default function LongtermPayrollPage() {
   }
 
   async function loadAutopayPreview() {
-    const res = await apiGet<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string }>(
+    const res = await apiGet<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string; locked_month_warning?: string | null }>(
       `/api/longterm/payroll/${month}/autopay?preview=1`,
     );
     if (res.ok) setAutopayPreview(res.data);
@@ -350,12 +351,21 @@ export default function LongtermPayrollPage() {
           </Button>
           {/* 同頁下載（唔開新 tab）——Content-Disposition: attachment 已經令
               瀏覽器當檔案下載處理，唔會離開現時頁面。 */}
-          <a href={`/api/longterm/payroll/${month}/autopay`}>
-            <Button variant="primary" disabled={!payroll?.run}>
+          <a href={`/api/longterm/payroll/${month}/autopay${payroll?.locked ? "?confirm_locked=1" : ""}`} onClick={(e) => { if (payroll?.locked && !confirmLocked) e.preventDefault(); }}>
+            <Button variant="primary" disabled={!payroll?.run || (!!payroll?.locked && !confirmLocked)}>
               下載 BOCHK Payroll Editor 格式（貼入 Editor 產生 .DAT）
             </Button>
           </a>
         </div>
+        {payroll?.locked && (
+          <div className="rounded border border-orange-300 bg-orange-50 p-2 text-[12.5px] text-orange-800" data-testid="locked-month-warning">
+            <div className="font-semibold">呢個月已鎖定；收款戶口用緊而家嘅資料，匯出前請確認呢個月未出過糧。</div>
+            <label className="mt-1 flex items-center gap-2">
+              <input type="checkbox" checked={confirmLocked} onChange={(e) => setConfirmLocked(e.target.checked)} />
+              <span>我確認呢個月未出過糧，照下載</span>
+            </label>
+          </div>
+        )}
         {autopayPreview && (
           <div className="text-[12.5px] text-zk-text">
             會有 {autopayPreview.row_count} 行，總金額 {fmtMoney(autopayPreview.total_amount)}。

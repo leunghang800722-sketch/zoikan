@@ -5,7 +5,7 @@
 //   review 欄逐欄「確認／改正後確認／略過」。
 // 導入包只留喺瀏覽器記憶體，每次請求重新帶上去；伺服器唔存檔。回應內 hkid／電話／地址已遮罩，
 // 要核對嘅抽取值（姓名／地址）來自你自己揀嗰個本機檔。
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -34,7 +34,29 @@ interface Pkg {
   version: number;
   generatedAt: string;
   persons: PkgPerson[];
+  unassignedBankAccounts?: { key: string; bankCode: string; accountNo: string; payeeName: string }[];
 }
+
+// WP-STAFF-FIELDS：v3 新欄標籤（動態 key 一律以陣列 [{key,…}] 傳，因為 response 會將物件 key 轉 snake_case）
+const EXT_LABEL: Record<string, string> = {
+  "siaPermit.no": "許可證號碼",
+  "siaPermit.aExpiry": "許可證甲類屆滿日",
+  "siaPermit.bExpiry": "許可證乙類屆滿日",
+  "siaPermit.cExpiry": "許可證丙類屆滿日（未儲存）",
+  "siaPermit.dExpiry": "許可證丁類屆滿日（未儲存）",
+  "safetyCard.no": "平安咭號碼",
+  "safetyCard.expiry": "平安咭屆滿日",
+  "qas.issueDate": "QAS 簽發日",
+  "qas.expiryDate": "QAS 屆滿日",
+  hireDate: "入職日期",
+  bank: "銀行資料",
+  "emergency.1": "緊急聯絡人 1",
+  "emergency.2": "緊急聯絡人 2",
+  "emergency.3": "緊急聯絡人 3",
+  "emergency.4": "緊急聯絡人 4",
+  staffHire: "工號入職日期",
+};
+const maskAcct = (v: string) => (v.length <= 4 ? "****" : `${"*".repeat(Math.min(v.length - 4, 12))}${v.slice(-4)}`);
 
 const FIELD_LABEL: Record<string, string> = {
   hkid: "身份證",
@@ -51,7 +73,9 @@ const ACTION_LABEL: Record<string, string> = { link: "對上現有安員", creat
 const CHECK_LABEL: Record<string, string> = { new: "新", fill: "補空欄", same: "同現值一樣", differs: "同現值唔同", conflict: "衝突", missing: "冇", not_stored: "唔儲存", invalid_date: "日期唔合法" };
 
 interface Row {
-  key: string;
+  /** 回應唔再帶包內 key（可能衍生自身份證）：index＝喺上載包 persons 嘅位置，ref＝伺服器 HMAC key */
+  index: number;
+  ref: string;
   action: string;
   reasons: string[];
   rating: string;
@@ -63,6 +87,8 @@ interface Row {
   address_masked: string | null;
   address_source?: string;
   basis?: string[];
+  ext?: { key: string; status: string; check: string }[];
+  bank_masked?: { present: true; code?: string | null; name?: string | null; account_masked?: string | null } | null;
   current_name_zh: string | null;
   current_name_en: string | null;
   current_name_hidden?: boolean;
@@ -71,7 +97,7 @@ interface Row {
 }
 interface Preview {
   package_hash: string;
-  package: { version: number; generated_at: string; persons: number };
+  package: { version: number; generated_at: string; persons: number; unassigned_bank_accounts?: number };
   person_stats: Record<string, number>;
   field_stats: Record<string, { confirmed: number; review: number; missing: number }>;
   auto_apply: Record<string, number>;
@@ -79,7 +105,8 @@ interface Preview {
   reason_counts: Record<string, number>;
   rows: Row[];
   counts_hidden?: boolean;
-  viewer?: { pii_update: boolean; guard_update: boolean };
+  viewer?: { pii_update: boolean; guard_update: boolean; bank_view?: boolean; pii_view?: boolean };
+  ext_stats?: { fields: { key: string; confirmed: number; review: number }[]; to_write: { key: string; count: number }[]; conflicts: number };
 }
 interface ApplyRes {
   persons_total: number;
@@ -92,7 +119,7 @@ interface ApplyRes {
   field_conflicts: number;
   counts_hidden?: boolean;
   overwrite_blocked?: number;
-  results?: { key: string; reasons: string[] }[];
+  results?: { index: number; ref: string; reasons: string[] }[];
   fields_written: Record<string, number>;
   /** WP-AI-OPS §28.4：自動項完成後剩低要人手嘅問題（上載者自己嗰批） */
   triage?: { session_id?: string; open_questions?: number; new_questions: number; total_questions?: number; important_open?: number; supplementary_open?: number; owned_by_other?: boolean } | null;
@@ -112,9 +139,9 @@ export default function GuardImportPage() {
   const [done, setDone] = useState<Record<string, string>>({});
   const [triageSession, setTriageSession] = useState<string | null>(null);
   const [triageOpen, setTriageOpen] = useState(0);
+  const [showFull, setShowFull] = useState<Record<string, boolean>>({});
 
-  const personByKey = useMemo(() => new Map((pkg?.persons ?? []).map((p) => [p.key, p])), [pkg]);
-
+  
   async function onFile(file: File | undefined) {
     setError(null);
     setNotice(null);
@@ -165,15 +192,15 @@ export default function GuardImportPage() {
     await runPreview(pkg);
   }
 
-  async function onDecide(key: string, field: (typeof REVIEWABLE)[number], action: "confirm" | "replace" | "skip" | "keep_pending") {
+  async function onDecide(index: number, field: (typeof REVIEWABLE)[number], action: "confirm" | "replace" | "skip" | "keep_pending") {
     if (!pkg) return;
-    const edit = edits[`${key}:${field}`];
+    const edit = edits[`${index}:${field}`];
     setBusy(true);
     setError(null);
     const res = await apiPost<ApplyRes>("/api/guards/import/apply", {
       package: pkg,
       package_hash: preview?.package_hash,
-      decisions: { [key]: { [field]: { action, ...(action !== "skip" && edit ? { value: edit } : {}) } } },
+      decisions: { [`@${index}`]: { [field]: { action, ...(action !== "skip" && edit ? { value: edit } : {}) } } },
     });
     setBusy(false);
     if (!res.ok) {
@@ -181,11 +208,12 @@ export default function GuardImportPage() {
       return;
     }
     if (res.data.results?.some((x) => x.reasons.includes("overwrite_forbidden"))) {
-      setDone((d) => ({ ...d, [`${key}:${field}`]: "未處理：要有安員個人資料／安員修改權限嘅同事處理" }));
+      const lt = res.data.results.some((x) => x.reasons.includes("longterm_hire_via_triage"));
+      setDone((d) => ({ ...d, [`${index}:${field}`]: lt ? "未處理：長工入職日期會影響長工糧計算，要喺分診題逐條確認" : "未處理：要有安員個人資料／安員修改權限嘅同事處理" }));
       return;
     }
     const conflict = !res.data.counts_hidden && res.data.field_conflicts > 0;
-    setDone((d) => ({ ...d, [`${key}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有安員個人資料權限先睇到）" : "已確認" }));
+    setDone((d) => ({ ...d, [`${index}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有安員個人資料權限先睇到）" : "已確認" }));
     // 唔再每次決定後重新 preview：preview 對非老闆有每日次數上限，而且 done 已記低結果
   }
 
@@ -254,6 +282,65 @@ export default function GuardImportPage() {
             </table>
           </div>
 
+          {(preview.ext_stats || (preview.package.unassigned_bank_accounts ?? 0) > 0) && (
+            <div className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-ext-summary">
+              <div className="font-semibold">新增欄位（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人）</div>
+              {preview.ext_stats && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12.5px]">
+                    <thead>
+                      <tr className="text-left text-zk-faint">
+                        <th className="p-1">欄位</th>
+                        <th className="p-1">已確認</th>
+                        <th className="p-1">待覆核</th>
+                        <th className="p-1">自動會寫</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.ext_stats.fields.map((f) => (
+                        <tr key={f.key} className="border-t border-zk-border">
+                          <td className="p-1">{EXT_LABEL[f.key] ?? "其他資料"}</td>
+                          <td className="p-1">{f.confirmed}</td>
+                          <td className="p-1">{f.review}</td>
+                          <td className="p-1">{preview.ext_stats!.to_write.find((w) => w.key === f.key)?.count ?? 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="mt-1 text-[12px] text-zk-muted">只補空欄；{preview.counts_hidden || preview.viewer?.bank_view === false ? "" : `現值唔同（唔覆蓋、會出分診題）：${preview.ext_stats.conflicts}；`}待覆核同現值唔同嘅會出分診題。</div>
+                </div>
+              )}
+              {(preview.package.unassigned_bank_accounts ?? 0) > 0 && (
+                <div className="text-orange-700" data-testid="import-unassigned-bank">有 {preview.package.unassigned_bank_accounts} 個 Payroll Editor 戶口對唔到人，套用後會喺待答問題逐個問你歸邊個。</div>
+              )}
+              {preview.rows.filter((r) => r.bank_masked).length > 0 && (
+                <div className="space-y-1" data-testid="import-bank-rows">
+                  <div className="text-[12px] font-semibold text-zk-muted">銀行戶口（預設遮罩）</div>
+                  {preview.rows.filter((r) => r.bank_masked).slice(0, shown).map((r) => {
+                    const full = preview.viewer?.bank_view ? (pkg?.persons[r.index]?.bank as { accountNo?: { value: string | null } } | undefined)?.accountNo?.value : null;
+                    return (
+                      <div key={r.index} className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
+                        <span className="text-zk-faint">{r.hkid_masked ?? "—"}</span>
+                        {r.bank_masked && "account_masked" in r.bank_masked ? (
+                          <span className="break-all">{r.bank_masked.name ?? r.bank_masked.code ?? "—"} · 戶口 {showFull[r.index] && full ? full : (r.bank_masked.account_masked ?? "—")}</span>
+                        ) : (
+                          <span className="text-zk-faint">有銀行資料（你冇「安員銀行資料」睇權，唔顯示）</span>
+                        )}
+                        {full && (
+                          <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-[11.5px]" onClick={() => setShowFull((m) => ({ ...m, [r.index]: !m[r.index] }))}>
+                            {showFull[r.index] ? "隱藏全號" : "顯示全號"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {pkg?.unassignedBankAccounts && preview.viewer?.bank_view && (
+                    <div className="text-[12px] text-zk-muted">對唔到人嘅戶口（尾 4 位）：{pkg.unassignedBankAccounts.map((u) => maskAcct(u.accountNo)).join("、")}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-auto-summary">
             自動套用（淨寫已確認欄）：{preview.auto_apply.persons} 人 · 新增安員 {preview.auto_apply.guards_to_create} · 補欄 {preview.auto_apply.guard_fields_to_fill} ·
             電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} {preview.counts_hidden ? "" : `· 現值唔同（唔覆蓋）${preview.auto_apply.field_conflicts}`}
@@ -291,9 +378,9 @@ export default function GuardImportPage() {
           <h2 className="text-sm font-semibold">覆核清單（{reviewRows.length} 人）</h2>
           {reviewRows.length === 0 && <EmptyState title="冇待覆核嘅欄" />}
           {reviewRows.slice(0, shown).map((r) => {
-            const person = personByKey.get(r.key);
+            const person = pkg?.persons[r.index];
             return (
-              <div key={r.key} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-review-card">
+              <div key={r.index} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-review-card">
                 <div className="flex flex-wrap items-center gap-2">
                   <Pill variant="neutral">{ACTION_LABEL[r.action]}</Pill>
                   <span className="text-zk-faint">身份證 {r.hkid_masked ?? "—"} · 電話 {r.phone_masked ?? "—"}</span>
@@ -307,7 +394,7 @@ export default function GuardImportPage() {
                   ))}
                 </div>
                 {REVIEWABLE.filter((f) => r.fields[f]?.status === "review" || (f === "name_zh" && r.name_review_pending)).map((f) => {
-                  const k = `${r.key}:${f}`;
+                  const k = `${r.index}:${f}`;
                   const extracted = (person?.[PKG_KEY[f]!] as PkgField | undefined)?.value ?? "";
                   const current = f === "name_zh" ? r.current_name_zh : f === "name_en" ? r.current_name_en : null;
                   return (
@@ -331,18 +418,18 @@ export default function GuardImportPage() {
                           <span className="text-[12px] text-zk-muted">{done[k]}</span>
                         ) : (
                           <>
-                            <Button variant="primary" disabled={busy} onClick={() => onDecide(r.key, f, "confirm")}>
+                            <Button variant="primary" disabled={busy} onClick={() => onDecide(r.index, f, "confirm")}>
                               確認
                             </Button>
-                            <Button disabled={busy || replaceDenied(f, r.fields[f]?.check ?? "")} onClick={() => onDecide(r.key, f, "replace")}>
+                            <Button disabled={busy || replaceDenied(f, r.fields[f]?.check ?? "")} onClick={() => onDecide(r.index, f, "replace")}>
                               改正後確認
                             </Button>
                             {f === "name_zh" && r.reasons.includes("name_not_confirmed") && (
-                              <Button disabled={busy} onClick={() => onDecide(r.key, f, "keep_pending")}>
+                              <Button disabled={busy} onClick={() => onDecide(r.index, f, "keep_pending")}>
                                 照建但標待核對
                               </Button>
                             )}
-                            <Button disabled={busy} onClick={() => onDecide(r.key, f, "skip")}>
+                            <Button disabled={busy} onClick={() => onDecide(r.index, f, "skip")}>
                               略過
                             </Button>
                           </>

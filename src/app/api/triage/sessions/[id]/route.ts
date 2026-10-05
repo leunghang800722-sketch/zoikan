@@ -2,7 +2,7 @@
 // 非老闆攞人哋嘅 session id → 403。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { getSessionFor, SUPPLEMENTARY_KIND } from "@/lib/triage/session";
+import { getSessionFor, isSupplementary, restrictedKindsFor } from "@/lib/triage/session";
 import { questionViews, viewerCaps } from "@/lib/triage/view";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -15,10 +15,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const onlyOpen = new URL(req.url).searchParams.get("status") === "open";
     const rows = await prisma.triageQuestion.findMany({ where: { sessionId: session.id, ...(onlyOpen ? { status: "open" } : {}) }, orderBy: [{ sort: "asc" }, { id: "asc" }] });
     const counts = await prisma.triageQuestion.groupBy({ by: ["status", "kind"], where: { sessionId: session.id }, _count: { _all: true } });
-    const c = { open: 0, answered: 0, skipped: 0, total: 0, important_open: 0, supplementary_open: 0 };
+    const restricted = new Set(await restrictedKindsFor(actor));
+    const c = { open: 0, answered: 0, skipped: 0, superseded: 0, total: 0, important_open: 0, supplementary_open: 0, restricted_open: 0 };
     for (const g of counts) {
+      if (g.status === "superseded") {
+        c.superseded += g._count._all;
+        continue;
+      }
       if (g.status === "open" || g.status === "answered" || g.status === "skipped") c[g.status] += g._count._all;
-      if (g.status === "open") c[g.kind === SUPPLEMENTARY_KIND ? "supplementary_open" : "important_open"] += g._count._all;
+      if (g.status === "open" && !restricted.has(g.kind)) c[isSupplementary(g.kind) ? "supplementary_open" : "important_open"] += g._count._all;
+      if (g.status === "open" && restricted.has(g.kind)) c.restricted_open += g._count._all;
       c.total += g._count._all;
     }
     const questions = await questionViews(rows, await viewerCaps(actor));

@@ -23,6 +23,7 @@ export async function clearAll() {
   // granted 值會俾測試改（例如 tests/wp2-roles-permissions-endpoint.
   // test.ts 開一格 off→on）——所以呢度每次都刪晒再照出廠矩陣重種一次，
   // 保證每個 test 開始都係出廠設定，唔會俾第啲 test file 嘅改動漏過嚟。
+  await prisma.triagePersonApply.deleteMany({}); // 分診「最近一次包含呢個人」記錄（append 式）：每個 test 清走，唔好跨檔累積
   await prisma.rolePermission.deleteMany({});
   const roles = await prisma.role.findMany();
   const permissions = await prisma.permission.findMany();

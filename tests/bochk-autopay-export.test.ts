@@ -5,7 +5,7 @@
 // 呢度專攻 `bochk-autopay-export.ts` 本身嘅細節規則。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
-import { seedWp2Fixture, type Wp2Fixture } from "./fixtures/wp2-fixture";
+import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
 import { buildBochkAutopayWorkbook, BOCHK_FORMAT_SOURCE, primaryPhone8, normalizeBankAccountNo } from "@/lib/longterm-payroll/bochk-autopay-export";
 import { HKICL_BANK_OPTIONS, HKICL_BANK_CODE_SET } from "@/lib/longterm-payroll/hkicl-bank-codes";
@@ -230,5 +230,25 @@ describe("buildBochkAutopayWorkbook：HKICL 字元過濾／缺資料判斷", () 
     const names = result.workbook.worksheets.map((w) => w.name);
     expect(names).toEqual(["Payroll Editor 明細", "檔頭資料", "缺資料"]);
     for (const nm of names) expect(nm).not.toMatch(/[/\\?*[\]:／＼？＊［］：]/);
+  });
+
+  it("M5：已鎖月份——preview 回 locked_month_warning；下載要 confirm_locked=1；兩者都寫 audit（月份／行數／總額，冇戶口）；金額唔變", async () => {
+    await makeGuard({ tel: "91234567", bankAccountNo: "6009990001" });
+    await recomputeLongtermPayroll(new Date("2026-08-01"), fx.userIds["老闆"], null);
+    const before = await buildBochkAutopayWorkbook(new Date("2026-08-01"));
+    await prisma.monthClose.create({ data: { month: new Date("2026-08-01"), lockedAt: new Date(), lockedBy: fx.userIds["老闆"], createdBy: "t" } });
+    const { GET } = await import("@/app/api/longterm/payroll/[month]/autopay/route");
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    const call = (q: string) => GET(new Request(`http://t/api/longterm/payroll/2026-08/autopay${q}`, { headers: { cookie } }), { params: Promise.resolve({ month: "2026-08" }) } as never);
+    const pv = await call("?preview=1");
+    const pj = await pv.json();
+    expect(pj.locked_month_warning).toContain("請確認呢個月未出過糧");
+    expect(pj.total_amount).toBe(before.totalAmount);
+    expect((await call("")).status).toBe(400);
+    const ok = await call("?confirm_locked=1");
+    expect(ok.status).toBe(200);
+    const aud = await prisma.auditLog.findMany({ where: { rowId: "bochk-autopay:2026-08", action: "export_download" }, orderBy: { createdAt: "desc" }, take: 2 });
+    expect(JSON.stringify(aud)).toContain("confirmedLocked");
+    expect(JSON.stringify(aud)).not.toContain("6009990001");
   });
 });

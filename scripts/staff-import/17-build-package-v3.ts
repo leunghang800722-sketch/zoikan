@@ -1,0 +1,34 @@
+// WP-STAFF-FIELDS 第二階段：v2 導入包（327 人）＋ person-fields-ext.json → import-package-v3.json（gitignored）。
+// console 只印計數，唔印任何姓名／號碼。
+import { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { buildPackageV3, type ExtPerson, type TypedSources, type V2Package } from './lib/package-v3';
+
+const IN_V2 = path.join(process.cwd(), 'data/2026-10/staff-import/out/import-package.json');
+const FIELDS = path.join(process.cwd(), 'data/2026-10/staff-fields');
+
+async function main() {
+  const v2 = JSON.parse(await fs.readFile(IN_V2, 'utf8')) as V2Package;
+  const ext = JSON.parse(await fs.readFile(path.join(FIELDS, 'person-fields-ext.json'), 'utf8')) as ExtPerson[];
+  let typed: TypedSources = {};
+  try { typed = JSON.parse(await fs.readFile(path.join(FIELDS, 'typed-sources.json'), 'utf8')) as TypedSources; } catch { /* 容忍冇 */ }
+  let v2DocIds: string[][] | undefined;
+  try {
+    v2DocIds = (JSON.parse(await fs.readFile(path.join(process.cwd(), 'data/2026-10/staff-import/out/person-fields.json'), 'utf8')) as { docIds: string[] }[]).map((r) => r.docIds);
+  } catch { /* 冇 person-fields.json 就唔做次序 join */ }
+  // 私密對照檔（gitignored）：身份證／工號／戶口 → 隨機 id，已有就重用（跨 build 穩定）
+  const mapPath = path.join(FIELDS, 'person-keys.json');
+  let map: Record<string, string> = {};
+  try { map = JSON.parse(await fs.readFile(mapPath, 'utf8')) as Record<string, string>; } catch { /* 第一次 */ }
+  const idFor = (kind: 'typed' | 'pe', value: string) => (map[`${kind}|${value}`] ??= randomUUID().replace(/-/g, '').slice(0, 16));
+  const { pkg, counts, report } = buildPackageV3(v2, ext, typed, { v2DocIds, idFor });
+  await fs.writeFile(mapPath, JSON.stringify(map));
+  // 未核實欄報告：只有內部 key＋欄位名＋reason，冇值
+  await fs.writeFile(path.join(FIELDS, 'unverified-report.json'), JSON.stringify(report));
+  const out = path.join(FIELDS, 'import-package-v3.json');
+  await fs.writeFile(out, JSON.stringify(pkg));
+  console.log(JSON.stringify(counts));
+  console.log(`persons=${pkg.persons.length} unassignedBank=${pkg.unassignedBankAccounts?.length ?? 0} bytes=${(await fs.stat(out)).size}（非老闆上限 500 人：${pkg.persons.length <= 500 ? '符合' : '超出'}）`);
+}
+main();

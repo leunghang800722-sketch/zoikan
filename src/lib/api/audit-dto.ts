@@ -125,6 +125,7 @@ export const AUDIT_ROW_MAPPED_ACTIONS: ReadonlySet<AuditAction> = new Set([
 export const AUDIT_META_PASSTHROUGH_KEYS = [
   // WP-AI-OPS：批量導入／分診寫 guards audit 嘅硬標記（guard_import｜triage；非 PII），月度修正摘要排除身份欄用
   "import_via",
+  "hold_override",
   "void_reason",
   "unlock_reason",
   "copied_from",

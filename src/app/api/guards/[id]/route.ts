@@ -21,6 +21,8 @@ import {
   assertNoLegacySiaPermitWrite,
   assertBrokerNoLegacyStaffNoWrite,
 } from "@/lib/guards/staff-numbers";
+import { acctTakenByOther } from "@/lib/guards/import/ext-apply";
+import { Conflict } from "@/lib/api/errors";
 import { identityStatus, canonicalHkid, prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, type IdentityStatus } from "@/lib/guards/identity";
 import { applyLegacyGuardContactPatch, writeLegacyContactAudits, normalizeTel } from "@/lib/guards/contacts";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
@@ -270,6 +272,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const { guardAfter, legacyChanges, contactPatchResult } = await prisma.$transaction(async (tx) => {
       if (hkidCanonical) await assertHkidAvailable(tx, hkidCanonical, id);
       if (telLegacy) await assertTelAvailable(tx, telLegacy, id);
+      // 銀行戶口唔可以同另一位安員重複（同導入路徑同一個 acctTakenByOther：advisory lock＋編號＋戶口數字）；唔講係邊個
+      const bd = data as Record<string, unknown>;
+      // 只改銀行編號都要查（戶口取新值，冇就用現有）
+      if ("bankAccountNo" in bd || "bankCode" in bd) {
+        const acct = typeof bd.bankAccountNo === "string" ? bd.bankAccountNo : before.bankAccountNo;
+        const code = typeof bd.bankCode === "string" && bd.bankCode ? bd.bankCode : "bankCode" in bd ? null : before.bankCode;
+        if (acct && acct.replace(/\D/g, "") && (await acctTakenByOther(tx, id, code, acct))) throw Conflict("呢個銀行戶口已經登記咗喺另一位保安員");
+      }
       let guardAfter: Guard = before;
       if (Object.keys(data).length > 0) {
         guardAfter = await tx.guard.update({ where: { id }, data });

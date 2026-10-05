@@ -525,6 +525,9 @@ model TriageSession {
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
   completedAt DateTime? @map("completed_at")
+  /// HMAC key 版本指紋（SESSION_SECRET 輪換偵測：同而家唔同＝舊 key，open 題一律當 superseded）
+  keyFp         String?   @map("key_fp")
+  lastAppliedAt DateTime? @map("last_applied_at")
 
   questions TriageQuestion[]
 
@@ -538,6 +541,9 @@ model TriageQuestion {
   sessionId String        @map("session_id")
   session   TriageSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
 
+  /// 題目建立時嘅人 key（serverPersonKey；bank_identity_unknown＝戶口 ref）同鎖定嘅目標 guard（ext／bank 題）
+  personKey     String? @map("person_key")
+  targetGuardId String? @map("target_guard_id")
   kind     String // name_not_confirmed｜hkid_not_confirmed｜name_only_candidate｜…（見 src/lib/triage/types.ts）
   groupKey String @map("group_key") // 同一 session 內唯一（導入人 key）——保證冪等、已解決唔再出
   sort     Int    @default(0)
@@ -547,7 +553,7 @@ model TriageQuestion {
   optionsJson  Json  @default("[]") @map("options_json")
   impactJson   Json? @map("impact_json") // 最近一次預覽嘅影響摘要（唔含 hash）
 
-  status          String    @default("open") // open｜answered｜skipped
+  status          String    @default("open") // open｜answered｜skipped｜superseded（較新同 group_key＋kind 題出現後，舊 open 題）
   answerJson      Json?     @map("answer_json")
   answeredBy      String?   @map("answered_by")
   answeredAt      DateTime? @map("answered_at")
@@ -556,9 +562,31 @@ model TriageQuestion {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@unique([sessionId, groupKey])
+  @@index([sessionId, groupKey])
   @@index([sessionId, status, sort])
+  @@index([personKey])
+  @@index([targetGuardId])
+  @@index([groupKey])
   @@map("triage_questions")
+}
+
+/// 每次自動 apply 導入包，對包內每個人記一行：「最近一次包含呢個人嘅包」先可以答佢嘅題。
+model TriagePersonApply {
+  id        Int      @id @default(autoincrement())
+  personKey String   @map("person_key")
+  guardId   String?  @map("guard_id")
+  sourceRef String   @map("source_ref")
+  isV3      Boolean  @default(false) @map("is_v3")
+  /// 呢個包有冇銀行段（任何人有 bank 欄或者有 unassignedBankAccounts）
+  hasBank   Boolean  @default(false) @map("has_bank")
+  /// 弱身份：身份證 HMAC＋每個工號 HMAC（工號用同 DB 配對一致嘅 normalizeStaffNumber）
+  weakIds   String[] @default([]) @map("weak_ids")
+  appliedAt DateTime @default(now()) @map("applied_at")
+
+  @@unique([personKey, sourceRef])
+  @@index([guardId])
+  @@index([personKey, appliedAt])
+  @@map("triage_person_applies")
 }
 
 // WP-MULTI：保安員可以有幾多個緊急聯絡人就記幾多個。`name`／`tel` 唔可以

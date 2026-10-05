@@ -36,10 +36,21 @@ async function main() {
   const manPath = path.join(FIELDS_OUT, mi >= 0 ? `crops-manifest-${process.argv[mi + 1]}.json` : 'crops-manifest.json');
   let man: PersonCrops[] = [];
   try { man = await J<PersonCrops[]>(manPath); } catch { /* 新開 */ }
+  const redo = process.argv.includes('--redo-missing'); // 只補裁上次 label 定位失敗嘅人（新 id 先出）
+  const existing = new Set<string>();
+  const redoKeys = new Set<string>();
+  if (redo) {
+    for (const f of (await fs.readdir(FIELDS_OUT)).filter((x) => /^crops-manifest.*\.json$/.test(x) && x !== path.basename(manPath))) {
+      for (const pr of await J<PersonCrops[]>(path.join(FIELDS_OUT, f))) {
+        pr.crops.forEach((c) => existing.add(c.id));
+        if (pr.missing.some((m) => /form_labels_not_located|emergency_label_not_located/.test(m.reason))) redoKeys.add(pr.key);
+      }
+    }
+  }
   const done = new Set(man.map((m) => m.key));
   for (let i = offset; i < Math.min(persons.length, offset + limit); i++) {
     const p = persons[i];
-    if (done.has(p.key)) continue;
+    if (done.has(p.key) || (redo && !redoKeys.has(p.key))) continue;
     const rec: PersonCrops = { key: p.key, idx: i, templates: {}, crops: [], missing: [] };
     for (const docId of p.docIds) {
       const m = index.get(docId); const e = ex.get(docId);
@@ -49,6 +60,7 @@ async function main() {
       const emit = async (page: number, kind: CropKind, box: Parameters<typeof cropBox>[1], how: string, scale?: number) => {
         const img = await renderPage(m, page, 300);
         const id = `${docId}-p${page}-${kind}`;
+        if (existing.has(id)) return;
         const file = await cropBox(img, box, `crops/${id}.png`, { scale });
         rec.crops.push({ id, docId, page, kind, file, how });
       };

@@ -2280,3 +2280,58 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
   - 所有保護（projection／覆蓋權逐人 savepoint／hkid 電話唯一／package_hash 綁定／audit）同批量導入共用同一條 `previewImport`／`applyImport` 路徑。apply 後如有剩低要人手嘅題目（同名候選、衝突…），回 `triage` 照樣彈 `TriageDialog`；用戶已逐欄決定嘅欄當已解決（`resolveDecidedFields`）。
 - 頁面：`/guards/new-from-docs`（保安員頁工具列「用證件新增」；權限＝「安員批量導入」create＋update＋view，且有 `DEEPSEEK_API_KEY`）。PDF 用 `pdfjs-dist`（dynamic import）喺瀏覽器轉圖（多頁可揀頁）；縮圖長邊 ≤1,600px JPEG；切 2×2 重疊分格（長邊 ≤1,000px）。圖片只留喺瀏覽器記憶體（object URL），儲存／重新開始／離開頁面即 revoke。並排核對：逐欄「已確認／要核對／讀唔到」，`review`／`missing` 欄要「對住圖確認」或改正（或標明冇資料，身份證號同中文姓名必填）先可以「下一步：預覽」；「全部自己輸入」唔需要 DeepSeek。
 - 啟動自檢 `scripts/ai/guard-ocr-selftest.ts`（Dockerfile CMD 背景跑，`(… &) && node server.js`，唔阻啟動、≤30 秒、永遠 exit 0）：用 `scripts/ai/fixtures/synthetic-id-card.jpg`（合成，內容虛構）打一次 `GUARD_OCR_MODEL`，log `[guard-ocr-selftest] ok|fail model=… ms=… prompt_tokens=… completion_tokens=… hkid_read_ok=true|false`；冇 key → `skipped`。真 API 冒煙 `scripts/ai/guard-ocr-smoke.ts <dir>`（淨用 `scripts/ai/fixtures/make-synthetic-docs.py` 生成嘅合成圖，禁止指去 `data/`）。
+
+### WP-STAFF-FIELDS 第二階段（§30.6）：導入包 v3 新欄寫入路徑
+
+**導入包 v3**（`version:3`，向後兼容 v2；v2 包帶任何 v3 欄 → 400）。每人新增可選欄，每個 leaf 都係 `{value,status}`（status ∈ confirmed／review／missing），值經 zod 嚴格驗證（日期曆法＋範圍：屆滿日 2015–2040、簽發日 2000–今日、入職日 1990–今日；電話香港 8 位；銀行編號喺 HKICL 表；戶口純數字 6–20 位；許可證 `K-123456-7-001` 形式）：
+`siaPermit{no,aExpiry,bExpiry,cExpiry?,dExpiry?}`、`safetyCard{no,expiry}`、`qas{issueDate,expiryDate}`、`bank{code,name,accountNo,payeeName}`、`emergencyContacts[{name,relationship,tel}]`（最多 4）、`hireDate`（人層面）、`staffNumbers[].hireDate`（逐工號）。包頂層另有 `unassignedBankAccounts[{key,bankCode,accountNo,payeeName}]`（Payroll Editor 有戶口但對唔到人，唔係 persons）。
+
+**寫入規則**（`applyPerson`，同一條已驗收路徑）：新欄只寫 confirmed；只補空欄；現有值唔同 → conflict（唔覆蓋）並出分診題；牌照甲／乙到期日寫入後按 PATCH 同一套邏輯重算 `sia_permit_expiry`／`sia_permit_type`（merged 值、`canOverrideDerivedSiaPermit`）；丙／丁到期日系統未儲存（`not_stored`）。銀行 unit 全有或全無（現有四欄全空先補，否則 same／conflict）；緊急聯絡人入 `guard_emergency_contacts`（同名同電話已存在唔重複；同電話唔同名／同名唔同電話＝衝突才出題；其餘 confirmed 逐個加；寫完同步 legacy 欄；legacy 有值而子表 0 行會先自癒搬入）；逐工號入職日期只補 `valid_from` 空嘅行。audit 沿用 `guards`／`guard_emergency_contacts`／`guard_staff_numbers` 嘅 DTO（帶 `import_via`），`ai.audit_log` 照舊 scrub／排除；導入摘要同 triage audit 只有計數。
+
+**回應形狀注意**：新欄動態 key（`siaPermit.no`、`bank`、`emergency.1`、`staffHire.<工號>`）一律用陣列 `[{key,…}]` 輸出（物件 key 會被 snake_case 轉換）：`rows[].ext[{key,status,check}]`、`results[].ext[{key,outcome}]`、`ext_stats{fields[],to_write[],conflicts}`、`ext_written[{key,count}]`、`ext_conflicts`、`contacts_added`；`rows[].bank_masked`（戶口尾 4 位；冇「安員銀行資料:view」只回 `{present:true}`）。`decisions[<person key>].ext`＝`{<ext key>: confirm|replace|skip}`。
+
+**權限**：包內有任何銀行欄（`persons[].bank` 有值或 `unassignedBankAccounts` 非空）→ preview／apply 要求「安員銀行資料:update」，冇就 403（訊息講明銀行資料冇寫入）；覆蓋現有銀行／牌照／入職日期等非空值要對應 update 權（銀行＝銀行資料；其餘＝「安員:update」；加多聯絡人衝突＝「安員個人資料:update」），403 規則同 §28.8（逐人 savepoint，只擋該人）。冇「安員銀行資料:view」嘅讀者，銀行欄 projection 一律 generic（same／differs 都顯示 `hidden`／`not_written`，彙總由遮罩後 rows 重算）；冇「安員個人資料:view」嘅讀者，已有聯絡人嘅安員唔自動加、same／differs／add 一律 hidden。
+
+**分診新題型**（規則出題，冇外部 AI；一人一類一題，group_key 帶後綴 → 冪等）：`ext_field_conflict`／`ext_field_review`（補充資料層；逐欄 `use_import`／`keep_current`／`skip`，answer `{option:"apply_ext_fields", ext_fields:{<key>:…}}`）；`bank_review`（重要層）；`bank_identity_unknown`（重要層；候選＝英文名 token 完全相同嘅現有安員最多 5 個＋搜尋其他保安員；answer `{option:"assign_bank", guard_id, replace_existing?}`，目標已有唔同戶口而冇 `replace_existing` → 預覽 `can_confirm=false`、強行確認 422）；`ext_identity_check`（重要層；疑似重複／工號身份唔一致：`confirm_ext_identity`／跳過）。銀行題只有「安員銀行資料:update」嘅人睇到內容同可作答；冇權限嘅擁有人見到題目數，題目 `restricted:true`，標題「要有安員銀行資料權限嘅同事處理」，預覽／作答 403。冇銀行 view 嘅上載者，銀行題不論同現有戶口比較結果一律出（令題目數唔洩露現值）。
+
+### WP-STAFF-FIELDS 驗收修正（Opus 5.5，B1／M1–M7）
+
+- **自動寫入閘（B1）**：`typed_list_only_person` 只有 (a) DB 身份證同名單完全相同 → 全部可寫；(b) DB 冇身份證而中文姓名完全相同 → 非銀行可寫，銀行出 `bank_review`；(c) 其他 → 新欄全部 `held`（唔寫），出 `ext_identity_check`。有文件嘅人：銀行自動寫要求身份證相同（confirmed）。冇「安員個人資料:view」嘅操作者閘結果與現有身份證／姓名無關（typed 一律 (c)、銀行一律 hold）。人手 decision（confirm／replace）可繞過 hold。新 outcome `held`、新 check `taken`、ext 行 `held`（identity／bank／longterm）。
+- **戶口唯一（M1）**：所有銀行寫入經 `acctTakenByOther`（advisory lock＋正規化編號＋戶口數字查其他安員）；自動路徑標 conflict＋reason `bank_acct_belongs_to_other`（冇銀行 view 唔回）出 `bank_review`；分診 422。
+- **銀行取代（M2）**：寫入一律四欄一齊（名稱可由 HKICL 編號推出），包內唔齊 → 422（自動路徑唔寫）；`bank_review`／`assign_bank` 現有戶口唔同要 `replace_existing:true` 先取代；冇「安員銀行資料:view」一律要 `replace_existing:true`（令回應唔視乎現值）。
+- **差分（M3）**：冇 PII view 嘅聯絡人 decisions 覆蓋 deny／出題與否唔取決於比較；含 `decisions.ext` 嘅 apply 計批量配額；冇銀行 view 嘅預覽 changes／summary／field_outcomes 銀行部分一律 generic。
+- **跨 session 去重（M4）**：出題時 `guard_import` 其他 session 已有同 group_key＋同 kind＋證據核心（v2 身份欄值／候選／要覆核欄名／ext key／戶口）相同嘅題（任何狀態）唔再出。unassigned 題 group_key 前綴 `bankpe:`。
+- **M5**：`GET /api/longterm/payroll/:month/autopay` 對已鎖月份：preview 回 `locked_month_warning`；下載要 `confirm_locked=1`（否則 400）；audit 帶 `lockedMonth／confirmedLocked`（冇戶口）。金額照舊。
+- **M7**：`assign_bank` 目標英文名同收款人唔夾／唔係 `longterm_autopay` → 預覽警告，要 `confirm_identity:true`（server 驗，冇就 422）。
+- **其他**：`single_ocr` 包只准 v2（400）；`todayIso()` 用香港時區；候選卡冇銀行 view 唔回 `bank`；聯絡人關係按 PII 遮罩；逐工號入職日期「工號屬另一人」預覽 `not_stored`；audit 摘要唔含 `ext_conflicts`；長工（`longterm_autopay` 或有長工合約）人層面入職日期唔自動寫（長工糧讀 `guards.hire_date`：`src/lib/longterm-payroll/aggregate.ts:334,440,477,513,548,593`；`guard_staff_numbers.valid_from` 長工糧冇讀）→ `ext_field_review`。
+
+### WP-STAFF-FIELDS Opus 覆核第二輪（N1–N4／Minor）
+
+- **N1** 生成器所有比較一律經 `eff()`（冇對應 view 嘅作答者：same／differs／add／taken 當 differs），聯絡人 review 估中估錯出題數一致。**N2** `ext_*`／`bank_*` 題嘅跨 session 去重核心加入涉及欄位嘅值＋狀態 hash（v2 類題不變）：跳過後新包改值會再出題，值冇變唔再出。**N3** 冇「安員銀行資料:view」：`assign_bank`／`bank_review` 預覽一律 generic（`can_confirm=true`＋同一句提示），戶口已被用等留到確認時先擋，回 generic 422「寫入唔到，請搵有安員銀行資料查看權限嘅同事處理」。**N4** 新 decision 值 `confirm_id`（`ext_identity_check`「照寫入」）只繞過身份／銀行閘，唔繞過長工入職日期閘；長工 `hireDate` 留／出 `ext_field_review`。
+- **Minor**：繞過 hold 嘅 guards audit 帶 `hold_override:true`、summary 帶 `hold_overrides`（冇值）；答 `ext_identity_check`／帶非 skip `decisions.ext` 要「安員個人資料:view」＋「安員:update」（view 顯示 `restricted`）；打字名單 only 嘅 person key＝`typed:<sha256 頭 12 位>`（跨 build 穩定）；預覽 `acctOwners` 同寫入一樣按編號＋戶口比；`PATCH /api/guards/:id` 改銀行戶口同導入用同一個 `acctTakenByOther`（撞＝409，不講係邊個）；已鎖月 autopay 下載未確認被擋寫 audit `export_download_blocked`；`confirm_identity` 長工判斷＝`longterm_autopay` 或有合約；四欄唔齊嘅 `bank_review` 只有跳過（reason `bank_incomplete`）；銀行 held 而 check=same（有 view）唔出題；分診搜尋加 `include_inactive=1`；`POST /api/guards/:id/convert-to-longterm` 回應 `hire_date_import_notice`（入職日期由導入寫入時提示核對）。
+
+
+### WP-STAFF-FIELDS Opus 覆核第三輪（R1–R5）
+
+- **R1**：`triage_questions.status` 加 `superseded`（migration `20261005120000_wp_staff_fields_triage_superseded`：CHECK constraint 換新，冪等）。出新題時其他 session 同 `group_key`＋同 kind 嘅 open 題標 `superseded`（唔計待答；預覽／作答 409「已有較新資料，請答新題」）；答題預覽同 commit（tx 內）都再查有冇較新嘅同 group_key＋kind 題。
+- **R2**：`ext_identity_check`「照寫入」commit 後，按實際結果補開跟進題：長工入職日期仍 held → `ext_field_review`；銀行冇寫到 → `bank_review`（四欄唔齊＝只有跳過＋`bank_incomplete`）；其他欄衝突 → `ext_field_conflict`；答「跳過」唔開。**R2b**：題目 `ext_review[].held` 回 generic code `longterm_hire_date`／`identity`／`bank`；介面對長工入職日期顯示長工糧提示。
+- **R3**：所有由身份證／工號／戶口衍生嘅 key 一律 `person-key.ts` 嘅 HMAC-SHA256（`SESSION_SECRET` 經 label `zoikan:person-key:v1` 衍生，截 24 hex；冇 secret 就 throw）：triage `group_key`（`serverPersonKey`：身份證→工號集合→包內 key）、題目 evidence 內 person.key、`bank_identity_unknown` 嘅 `bankpe:` key（`bankAccountRef`）、`personKeyForHkid`（改 HMAC）。包內 `key` 唔再出現喺任何回應：preview rows／apply results 改 `index`（上載包位置）＋`ref`（HMAC）。builder 嘅 typed／`pe:` key 改由私密對照檔 `data/2026-10/staff-fields/person-keys.json`（gitignored，隨機 id）攞。
+- **R4**：身份確認對唔齊嘅銀行當 skip，其他欄照寫。**R5**：`acctTakenByOther` SQL 正則由 `'\D'`（喺 JS 模板被吞咗反斜線變 `D`）改 `'[^0-9]'`；`PATCH /api/guards/:id` 只改銀行編號都查重。
+- **Minor**：批量 `decisions.ext` 對長工 `hireDate` 只准 skip（其他逐人 `overwrite_forbidden`，要經分診題）；`hold_override` 亦標聯絡人／逐工號入職日期 audit；apply 後再評估唔對「啱啱寫入」嘅欄出題；`hire_date_import_notice` 收窄到「最近一次改 hire_date 嗰筆 audit 係導入」；restricted 題唔計入冇權限者 badge（session counts 另有 `restricted_open`）。
+
+### WP-STAFF-FIELDS Opus 第四輪（結構性：只有最近一次包含呢個人嘅導入包所出嘅題先答得）
+
+- **單一規則**（`src/lib/triage/session.ts` `createGuardImportTriage`，取代逐題 supersede）：每次**自動 apply** 一個 guard_import 包（淨 decisions 唔算），對包內每個人：① 喺 `triage_person_applies` 記「呢個包包含呢個人」（人 key＝`serverPersonKey`、目標 guard、包 hash、是否 v3、時間；Payroll Editor 對唔到人嘅戶口記 `bankAccountRef`）；② 其他 session 入面同一個人（key 相同**或**題目鎖定嘅 `target_guard_id` 相同）嘅所有 open `ext_*`／`bank_*` 題（唔理 kind）→ `superseded`（淨 v3 包）；其他 session 同 `group_key` 嘅 open v2 類題（唔理 kind）→ `superseded`；未指派戶口（`bankpe:`）同理；③ 去重只對照**未 superseded** 嘅題＋證據核心／值簽名相同（superseded 永不參與去重）；④ 自己 session 入面已 superseded 嘅同 group_key 題（同包被較新包取代後再 apply）重開；⑤ 全部 open 都冇嘅 session 自動 `done`。
+- **答題**（`src/lib/triage/apply.ts` `assertNoNewer`）：預覽同 commit（tx 內）都查：同一個人（人 key 或目標 guard）喺 `triage_person_applies` 嘅最近一行（ext／bank 題淨睇 v3 行）如果唔係呢題所屬嘅包 → 409。非擁有人收到「請搵上載較新檔案嘅同事或者老闆跟進」，唔洩露細節。
+- **Migration** `20261005140000_wp_staff_fields_triage_person_applies`：`triage_questions.person_key／target_guard_id`、`triage_sessions.key_fp／last_applied_at`、新表 `triage_person_applies`（全 IF NOT EXISTS，冪等，唔動資料，正式站 0 行）。
+- **SESSION_SECRET 輪換**：所有 HMAC key（`group_key`、人 key、戶口 ref）都由 `SESSION_SECRET` 衍生，輪換後全部會變。後果：舊 session 嘅題目 key 對唔上新 key。步驟：① 輪換前先答／跳過晒 open 題（或接受佢哋被取代）；② 輪換後第一次自動 apply 會比對 session 記低嘅 `key_fp`（`HMAC(secret,"fingerprint")` 頭 8 hex，唔洩露 secret），唔同就將該 session 嘅 open 題一律標 `superseded`，之後照常出新題。啟動時唔做任何嘢。
+- **decisions 用 `@<index>`**（`request.ts` `resolveDecisionKeys`）：`/guards/import` 覆核卡 state 同提交一律用 index（`ref` 喺同包兩行相同身份證／工號集合時會撞）；server 對返 package_hash 綁定嘅包，越界 400；仍然兼容包內 key（API／單人證件包）。
+- 其他：session 列表 `counts.superseded`（唔計入 `total`）、`superseded_all`（顯示「已被較新嘅導入取代」）；身份題答完對話框即時 reload 出跟進題；`PATCH /api/guards/:id` 戶口先正規化（NFKC、去空白，淨收數字同 `-`，其他 400）；工號比較統一去 `-`（`MW-123`＝`MW123`，只用喺 key／join 比較）。
+
+### WP-STAFF-FIELDS Opus 第五輪（簡化：作廢＋重新出題；取代第四輪嘅「保留／搬移／重開」）
+
+- **生命週期**（`src/lib/triage/session.ts` `createGuardImportTriage`；全域 advisory lock `guard_import_triage`＋同一個 transaction）：每次**自動 apply** 一個 guard_import 包——A 記錄（`triage_person_applies`：強身份＝`serverPersonKey`＋目標 guard〔所有 link 情況都記〕；弱身份＝身份證 HMAC＋每個工號 HMAC〔`normalizeStaffNumber`，同 DB 配對一致〕；包 hash／`is_v3`／`has_bank`／時間；系統查詢，唔受用戶權限影響，即使上載者冇「導入分診:view」亦會記同作廢，只係唔開新題）；B 作廢所有 session（包括自己）入面強身份相同嘅 open 題（v2 類一律；`ext_*` 只喺 v3 包；`bank_*` 包括 `bank_identity_unknown` 只喺有銀行段嘅包——v2／single_ocr／冇銀行段嘅包唔會令銀行題或新欄題消失）；C 由今次評估全新建立 open 題（**新 row**，唔搬移、唔重開舊 row）；D 唔再問：同一條未 superseded 嘅 answered／skipped 題（任何 session）強身份＋kind＋**完整簽名**（v2 證據核心＋人嘅全部 ext 值同狀態——因為答案經 `resolveAnswer` 用成個 person 寫入）相同；G SESSION_SECRET 指紋唔同嘅舊 session open 題一律作廢（包括自己）。
+- **同包再 apply**＝作廢舊 open＋重新出（題數同內容一樣；已答／已跳過嘅唔重出；open 題 id 會變）。`triage_questions` 嘅 `(session_id, group_key)` 唯一索引改為普通索引（同 session 可有已作廢舊 row 同新 row 並存）。擁有人＝該包 session 嘅建立者（同一包由另一人再 apply 時，新題入原 session，回應係 `owned_by_other`）；配額失敗唔退還次數（沿用 §29.6）。
+- **作答**（`src/lib/triage/apply.ts` `assertNoNewer`；預覽＋commit 在同一把 lock／tx 內）：題目必須屬於最近一次包含呢個強身份嘅「同類包」（v2 類＝任何包；ext＝v3；bank＝有銀行段）；另外如果有較新嘅包入面有人同呢條題嘅人弱身份重疊（身份證或工號 HMAC 相同）而強身份唔同（有／冇身份證交替、工號集合變）→ 409「呢位保安員有較新嘅導入資料，請重新上載最新檔案再答」。
+- **Migration** `20261005160000_wp_staff_fields_triage_simplify`：`triage_person_applies` 加 `weak_ids`／`has_bank`；`triage_questions` 唯一索引改普通索引（全部 IF NOT EXISTS／IF EXISTS，冪等）。
+- **decisions**：`@index` 用嚴格正則 `^@(0|[1-9]\d*)$`；原始 body 嘅 `__proto__`／`constructor`／`prototype` key 一律 400（zod 前先查）；解析後 map 用 null-prototype object。

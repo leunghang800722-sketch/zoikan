@@ -18,16 +18,28 @@ import { writeAudit, writeAuditTx } from "@/lib/audit";
 import { ApiError } from "@/lib/api/errors";
 import { canonicalHkid, hkidCheckDigitValid, assertTelAvailable } from "@/lib/guards/identity";
 import { createGuardPhone, createGuardAddress, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
-import {
-  upsertCurrentStaffNumber,
-  syncLegacyStaffNoColumns,
-  normalizeStaffNumber,
-  deriveSiaPermitExpiry,
-  canOverrideDerivedSiaPermit,
-} from "@/lib/guards/staff-numbers";
+import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns, normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { buildDbIndex, decideMatch, type Action, type DbGuard, type DbIndex, type RosterEvidence } from "./match";
 import { addressSourceOf, fieldValue, hashPackage, packageConflicts, type ImportPackage, type PackagePerson, type PersonField } from "./package";
 import { parseBirthDate, maskAddressImport, maskHkidImport, maskTelImport, normAddress, normTel8, normZh } from "./text";
+import {
+  type ExtOutcomeRow,
+  type ExtGate,
+  extGateFor,
+  EMPTY_BANK,
+  OVERWRITE_DENIED_MSGS,
+  LONGTERM_HIRE_VIA_TRIAGE_MSG,
+  PII_OVERWRITE_DENIED_MSG,
+  aggregateExt,
+  bankLeaves,
+  evaluateExt,
+  type ExtAggregate,
+  type ExtDecisions,
+  type ExtItem,
+  type ExtOutcome,
+  type GuardExtSnap,
+} from "./ext";
+import { acctTakenByOther, applyDerivedPermit, applyExtRelations, planExtColumns } from "./ext-apply";
 
 type Tx = Prisma.TransactionClient;
 
@@ -50,21 +62,40 @@ interface GuardSnap {
   tels: string[];
   staffNumbers: { scheme: string; number: string; status: string }[];
   addresses: string[];
+  /** WP-STAFF-FIELDS：新欄現有值（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人／逐工號入職日期） */
+  ext: GuardExtSnap;
 }
 
 interface DbCtx {
   index: DbIndex;
   byId: Map<string, GuardSnap>;
+  /** 戶口數字 → 用緊嘅 guard（連銀行編號；預覽用，同寫入一樣按「銀行編號＋戶口數字」比；寫入時再喺 transaction 內鎖＋查 DB） */
+  acctOwners: Map<string, { id: string; code: string | null }[]>;
 }
+const acctDigits = (acct: string | null | undefined): string | null => {
+  const d = (acct ?? "").replace(/\D/g, "");
+  return d ? d : null;
+};
+/** 同 acctTakenByOther 同一規則：其中一邊冇銀行編號當唔排除；兩邊都有就要一樣 */
+const acctTakenInCtx = (ctx: DbCtx, code: string | null, acct: string, selfId: string | null): boolean => {
+  const c = code ? code.padStart(3, "0") : "";
+  return (ctx.acctOwners.get(acctDigits(acct) ?? "") ?? []).some((o) => o.id !== selfId && (!c || !o.code || o.code.padStart(3, "0") === c));
+};
 
 async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
-  const [guards, phones, nos, addrs, rosterRows] = await Promise.all([
+  const [guards, phones, nos, addrs, contacts, contractRows, rosterRows] = await Promise.all([
     db.guard.findMany({
-      select: { id: true, nameZh: true, nameEn: true, hkid: true, tel: true, dateOfBirth: true, siaPermitAExpiry: true, siaPermitBExpiry: true, identityReviewFields: true },
+      select: {
+        id: true, nameZh: true, nameEn: true, hkid: true, tel: true, dateOfBirth: true, siaPermitAExpiry: true, siaPermitBExpiry: true, identityReviewFields: true,
+        siaPermitNo: true, safetyCardNo: true, safetyCardExpiry: true, qasIssueDate: true, qasExpiryDate: true, hireDate: true,
+        bankCode: true, bankName: true, bankAccountNo: true, bankPayeeName: true, emergencyContactName: true, emergencyContactTel: true, employmentType: true,
+      },
     }),
     db.guardPhone.findMany({ select: { guardId: true, tel: true } }),
-    db.guardStaffNumber.findMany({ select: { guardId: true, scheme: true, number: true, status: true } }),
+    db.guardStaffNumber.findMany({ select: { guardId: true, scheme: true, number: true, status: true, validFrom: true } }),
     db.guardAddress.findMany({ select: { guardId: true, address: true } }),
+    db.guardEmergencyContact.findMany({ select: { guardId: true, name: true, tel: true }, orderBy: { sortOrder: "asc" } }),
+    db.guardLongtermContract.findMany({ select: { guardId: true }, distinct: ["guardId"] }),
     // 更表佐證（name_only 輔助判斷 c；只計 by_staff_no／by_name_tel／override 等有獨立鍵嘅行，by_name／ambiguous 唔計）：一次過預載未作廢上載入面各 guard 出現過嘅原始工號／電話（DISTINCT，唔 N+1）
     db.$queryRaw<{ guard_id: string; staff_no_raw: string | null; tel_raw: string | null }[]>`
       SELECT DISTINCT r.guard_id, r.staff_no_raw, r.tel_raw
@@ -83,9 +114,19 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
   for (const p of phones) phoneBy.set(p.guardId, [...(phoneBy.get(p.guardId) ?? []), p.tel]);
   const noBy = new Map<string, GuardSnap["staffNumbers"]>();
   for (const n of nos) noBy.set(n.guardId, [...(noBy.get(n.guardId) ?? []), { scheme: n.scheme, number: n.number, status: n.status }]);
+  const contactBy = new Map<string, { name: string | null; tel: string | null }[]>();
+  for (const c of contacts) contactBy.set(c.guardId, [...(contactBy.get(c.guardId) ?? []), { name: c.name, tel: c.tel }]);
+  const staffRowBy = new Map<string, { number: string; validFrom: string | null }[]>();
+  for (const n of nos) staffRowBy.set(n.guardId, [...(staffRowBy.get(n.guardId) ?? []), { number: n.number, validFrom: isoDate(n.validFrom) }]);
   const addrBy = new Map<string, string[]>();
   for (const a of addrs) addrBy.set(a.guardId, [...(addrBy.get(a.guardId) ?? []), a.address]);
 
+  const contractSet = new Set(contractRows.map((c) => c.guardId));
+  const acctOwners = new Map<string, { id: string; code: string | null }[]>();
+  for (const g of guards) {
+    const k = acctDigits(g.bankAccountNo);
+    if (k) acctOwners.set(k, [...(acctOwners.get(k) ?? []), { id: g.id, code: g.bankCode }]);
+  }
   const byId = new Map<string, GuardSnap>();
   const dbGuards: DbGuard[] = guards.map((g) => {
     const tels = [...new Set([...(phoneBy.get(g.id) ?? []), ...(g.tel ? [g.tel] : [])])];
@@ -101,10 +142,30 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
       tels,
       staffNumbers: noBy.get(g.id) ?? [],
       addresses: addrBy.get(g.id) ?? [],
+      ext: {
+        siaPermitNo: g.siaPermitNo,
+        siaPermitA: isoDate(g.siaPermitAExpiry),
+        siaPermitB: isoDate(g.siaPermitBExpiry),
+        safetyCardNo: g.safetyCardNo,
+        safetyCardExpiry: isoDate(g.safetyCardExpiry),
+        qasIssue: isoDate(g.qasIssueDate),
+        qasExpiry: isoDate(g.qasExpiryDate),
+        hire: isoDate(g.hireDate),
+        bank: { code: g.bankCode ?? EMPTY_BANK.code, name: g.bankName, accountNo: g.bankAccountNo, payee: g.bankPayeeName },
+        // 子表有行就用子表；子表 0 行但 legacy 欄有值＝當 1 位（寫入前 createGuardEmergencyContact 會自癒搬入子表）
+        contacts:
+          (contactBy.get(g.id) ?? []).length > 0
+            ? contactBy.get(g.id)!
+            : g.emergencyContactName?.trim() || g.emergencyContactTel?.trim()
+              ? [{ name: g.emergencyContactName?.trim() || null, tel: g.emergencyContactTel?.trim() || null }]
+              : [],
+        staffRows: staffRowBy.get(g.id) ?? [],
+        longterm: g.employmentType === "longterm_autopay" || contractSet.has(g.id),
+      },
     });
     return { id: g.id, nameZh: g.nameZh, hkid: canonicalHkid(g.hkid), tels, staffNos: (noBy.get(g.id) ?? []).map((n) => n.number), dob: isoDate(g.dateOfBirth) };
   });
-  return { index: buildDbIndex(dbGuards, roster), byId };
+  return { index: buildDbIndex(dbGuards, roster), byId, acctOwners };
 }
 
 // ---------------------------------------------------------------------------
@@ -123,13 +184,17 @@ export interface Evaluation {
   candidates: string[];
   hkidCanon: string | null;
   checks: Record<PersonField, FieldCheck>;
+  /** WP-STAFF-FIELDS：v3 新欄逐欄評估（v2 包＝空陣列） */
+  ext: ExtItem[];
+  /** 自動寫入閘（typed_list_only／銀行身份證相同／長工入職日期） */
+  gate: ExtGate;
 }
 
 function isoDate(d: Date | null | undefined): string | null {
   return d ? d.toISOString().slice(0, 10) : null;
 }
 
-function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[], dec?: PersonDecisions, forced?: ForcedMatch): Evaluation {
+function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[], dec?: PersonDecisions, forced?: ForcedMatch, piiView = true): Evaluation {
   const hkidCanon = canonicalHkid(fieldValue(p.hkid));
   const nameZh = fieldValue(p.nameZh);
   // 電話淨係 confirmed 先用嚟對齊（review 電話唔可靠，唔好用佢 link 人／觸發衝突）
@@ -264,12 +329,22 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
       }
     }
   }
-  return { person: p, action, guardId, reasons: [...new Set(reasons)], basis, candidates: d.candidates, hkidCanon, checks };
+  const linked = action === "link" && g ? g : null;
+  const gate = extGateFor({ p, guard: linked ? { hkid: linked.hkid, nameZh: linked.nameZh, longterm: linked.ext.longterm } : null, hkidCanon, piiView });
+  const bl = bankLeaves(p);
+
+  const ext = evaluateExt(p, linked ? linked.ext : null, {
+    gate,
+    bankTaken: !!bl?.accountNo && acctTakenInCtx(ctx, bl.code, bl.accountNo, linked?.id ?? null),
+    ownerOf: (n) => ctx.index.byNo.get(n)?.[0]?.id ?? null,
+    guardId: linked?.id ?? null,
+  });
+  return { person: p, action, guardId, reasons: [...new Set(reasons)], basis, candidates: d.candidates, hkidCanon, checks, ext, gate };
 }
 
-function evaluateAll(pkg: ImportPackage, ctx: DbCtx, decisions?: Readonly<Record<string, PersonDecisions>>): Evaluation[] {
+function evaluateAll(pkg: ImportPackage, ctx: DbCtx, decisions?: Readonly<Record<string, PersonDecisions>>, piiView = true): Evaluation[] {
   const conflicts = packageConflicts(pkg.persons);
-  return pkg.persons.map((p) => evaluate(p, ctx, conflicts.get(p.key) ?? [], decisions?.[p.key]));
+  return pkg.persons.map((p) => evaluate(p, ctx, conflicts.get(p.key) ?? [], decisions?.[p.key], undefined, piiView));
 }
 
 // ---------------------------------------------------------------------------
@@ -298,13 +373,17 @@ export interface PreviewRow {
   name_review_pending: boolean;
   fields: Record<PersonField, { status: string; check: FieldCheck }>;
   staff_numbers: number;
+  /** WP-STAFF-FIELDS：v3 新欄（冇新欄就唔出） */
+  ext?: { key: string; status: string; check: string; held?: string }[];
+  /** 銀行戶口遮罩（尾 4 位）；冇「安員銀行資料:view」嘅讀者 projection 會改成 { present: true } */
+  bank_masked?: { present: true; code?: string | null; name?: string | null; account_masked?: string | null } | null;
 }
 
 export interface PreviewResult {
   /** 冇「安員個人資料:view」：依賴「新值 vs 現值」比較嘅彙總計數已隱藏（見 project.ts） */
   counts_hidden?: boolean;
   package_hash: string;
-  package: { version: number; generated_at: string; persons: number };
+  package: { version: number; generated_at: string; persons: number; unassigned_bank_accounts?: number };
   person_stats: Record<Action, number>;
   field_stats: Record<PersonField, { confirmed: number; review: number; missing: number }>;
   auto_apply: {
@@ -318,13 +397,22 @@ export interface PreviewResult {
   };
   review: { persons: number; fields: Record<PersonField, number> };
   reason_counts: Record<string, number>;
+  /** v3 新欄彙總（包內冇新欄就唔出）；projection 之後由遮罩後 rows 重新計 */
+  ext_stats?: ExtAggregate;
   rows: PreviewRow[];
 }
 
+/** 銀行戶口只顯示尾 4 位 */
+export function maskAccountNo(v: string | null | undefined): string | null {
+  const d = (v ?? "").replace(/\D/g, "");
+  if (!d) return null;
+  return d.length <= 4 ? "****" : `${"*".repeat(Math.min(d.length - 4, 12))}${d.slice(-4)}`;
+}
+
 /** decisions（淨係單人證件包 preview 用）：令預覽同帶 decisions 嘅 apply 用同一套判斷（例如姓名已由用戶確認就唔再報 name_not_confirmed）。 */
-export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Record<string, PersonDecisions>>): Promise<PreviewResult> {
+export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Record<string, PersonDecisions>>, viewer: { pii: boolean } = { pii: true }): Promise<PreviewResult> {
   const ctx = await loadCtx(prisma);
-  const evals = evaluateAll(pkg, ctx, decisions);
+  const evals = evaluateAll(pkg, ctx, decisions, viewer.pii);
   const fieldStats = Object.fromEntries(["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"].map((f) => [f, { confirmed: 0, review: 0, missing: 0 }])) as PreviewResult["field_stats"];
   const personStats: Record<Action, number> = { link: 0, create: 0, conflict: 0, needs_review: 0 };
   const reviewFields = Object.fromEntries(["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"].map((f) => [f, 0])) as Record<PersonField, number>;
@@ -333,6 +421,8 @@ export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Rec
   let reviewPersons = 0;
   const rows: PreviewRow[] = [];
   const claimedNos = new Set<string>();
+  const extApplicable: ExtItem[][] = [];
+  let anyExt = false;
 
   for (const e of evals) {
     const p = e.person;
@@ -347,8 +437,11 @@ export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Rec
       }
     }
     const applicable = e.action === "link" || e.action === "create";
+    if (e.ext.length > 0) anyExt = true;
+    if (e.ext.some((x) => x.status === "review")) hasReview = true;
     if (hasReview && applicable) reviewPersons += 1;
     if (applicable) {
+      if (e.ext.length > 0) extApplicable.push(e.ext);
       aa.persons += 1;
       const g = e.guardId ? ctx.byId.get(e.guardId) : null;
       if (e.action === "create") aa.guards_to_create += 1;
@@ -391,16 +484,19 @@ export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Rec
       name_review_pending: !!g?.identityReviewFields.includes("name_zh"),
       fields: Object.fromEntries((Object.keys(fieldStats) as PersonField[]).map((f) => [f, { status: p[f].status, check: e.checks[f] }])) as PreviewRow["fields"],
       staff_numbers: p.staffNumbers.length,
+      ...(e.ext.length > 0 ? { ext: e.ext.map((x) => ({ key: x.key, status: x.status, check: x.check, ...(x.held ? { held: x.held } : {}) })) } : {}),
+      ...(bankLeaves(p) ? { bank_masked: { present: true as const, code: p.bank?.code ? fieldValue(p.bank.code) : null, name: p.bank?.name ? fieldValue(p.bank.name) : null, account_masked: maskAccountNo(p.bank?.accountNo ? fieldValue(p.bank.accountNo) : null) } } : {}),
     });
   }
   return {
     package_hash: hashPackage(pkg),
-    package: { version: pkg.version, generated_at: pkg.generatedAt, persons: pkg.persons.length },
+    package: { version: pkg.version, generated_at: pkg.generatedAt, persons: pkg.persons.length, ...(pkg.unassignedBankAccounts ? { unassigned_bank_accounts: pkg.unassignedBankAccounts.length } : {}) },
     person_stats: personStats,
     field_stats: fieldStats,
     auto_apply: aa,
     review: { persons: reviewPersons, fields: reviewFields },
     reason_counts: reasonCounts,
+    ...(anyExt ? { ext_stats: aggregateExt(extApplicable) } : {}),
     rows,
   };
 }
@@ -415,7 +511,10 @@ export interface FieldDecision {
   /** 改正後嘅值（confirm 可以帶；replace 必帶或用包內值） */
   value?: string;
 }
-export type PersonDecisions = Partial<Record<PersonField, FieldDecision>>;
+export type PersonDecisions = Partial<Record<PersonField, FieldDecision>> & {
+  /** WP-STAFF-FIELDS：新欄逐欄決定（key 見 ext.ts；confirm＝確認包內值補空欄，replace＝覆蓋現值，skip＝略過） */
+  ext?: ExtDecisions;
+};
 
 export type FieldOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "invalid" | "invalid_date" | "not_stored" | "not_written";
 
@@ -428,6 +527,36 @@ export interface PersonResult {
   staff_numbers_skipped: number;
   phones_added: number;
   addresses_added: number;
+  /** WP-STAFF-FIELDS：新欄逐欄結果（冇新欄就唔出） */
+  ext?: ExtOutcomeRow[];
+  contacts_added?: number;
+  hold_overrides?: number;
+}
+
+/** 新欄結果：按 key 攞 outcome（內部用；response 一律用陣列，因為動態 key 會被 snake_case 轉換）。 */
+export const extOutcomeOf = (r: Pick<PersonResult, "ext">, key: string): ExtOutcome | undefined => r.ext?.find((x) => x.key === key)?.outcome;
+
+/** 由逐人結果彙總新欄寫入／衝突（單一彙總函數：未遮罩同 projection 之後都由 results 重新計）。冇新欄結果＝空物件。 */
+export function summarizeExt(results: readonly PersonResult[]): Pick<ApplyResult, "ext_written" | "ext_conflicts" | "contacts_added" | "hold_overrides"> {
+  const written: Record<string, number> = {};
+  let conflicts = 0;
+  let contacts = 0;
+  let holds = 0;
+  let any = false;
+  for (const r of results) {
+    if (!r.ext) continue;
+    any = true;
+    for (const { key: k, outcome: o } of r.ext) {
+      const sk = k.startsWith("staffHire.") ? "staffHire" : k;
+      if (o === "written") written[sk] = (written[sk] ?? 0) + 1;
+      if (o === "conflict") conflicts += 1;
+    }
+    contacts += r.contacts_added ?? 0;
+    holds += r.hold_overrides ?? 0;
+  }
+  return any
+    ? { ext_written: Object.entries(written).map(([key, count]) => ({ key, count })).sort((a, b) => a.key.localeCompare(b.key)), ext_conflicts: conflicts, contacts_added: contacts, ...(holds ? { hold_overrides: holds } : {}) }
+    : {};
 }
 
 export interface ApplyResult {
@@ -443,6 +572,11 @@ export interface ApplyResult {
   /** 因冇權限覆蓋現有非空值而被擋嘅人數（reason overwrite_forbidden；只取決於現值係咪非空） */
   overwrite_blocked: number;
   fields_written: Record<string, number>;
+  /** WP-STAFF-FIELDS：新欄寫入數（按欄；冇就唔出） */
+  ext_written?: { key: string; count: number }[];
+  contacts_added?: number;
+  ext_conflicts?: number;
+  hold_overrides?: number;
   results: PersonResult[];
 }
 
@@ -475,6 +609,10 @@ export interface ApplyOptions {
   canOverwritePii?: boolean;
   /** 單人套用：結果係 name_not_confirmed（未寫任何嘢）就自動加「照建但標待核對」再行一次——分診答案已經由人手確認咗其他嘢，姓名仍然標待核對 */
   autoKeepPendingName?: boolean;
+  /** false＝操作人冇「安員銀行資料:update」：銀行欄一律唔寫（outcome not_written）。undefined 當 true（內部呼叫）。 */
+  canEditBank?: boolean;
+  /** 內部：呢個人有 hold 被人手 decision 繞過 → guards audit 加 hold_override:true（冇值） */
+  holdOverride?: boolean;
   /** 淨係處理呢啲 key（冇＝全部） */
   personKeys?: readonly string[];
   /** 覆核頁逐人逐欄決定 */
@@ -504,26 +642,37 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
   return null;
 }
 
-export const PII_OVERWRITE_DENIED_MSG = "呢條要有安員個人資料修改權限嘅同事（例如老闆）答";
+export { PII_OVERWRITE_DENIED_MSG };
 function assertMayOverwritePii(opts: ApplyOptions): void {
   if (opts.canOverwritePii === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
 }
 export function isOverwriteForbidden(e: unknown): boolean {
-  return e instanceof ApiError && e.status === 403 && e.message === PII_OVERWRITE_DENIED_MSG;
+  return e instanceof ApiError && e.status === 403 && OVERWRITE_DENIED_MSGS.includes(e.message);
 }
 function assertMayEditGuard(opts: ApplyOptions): void {
   if (opts.canEditGuard === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
 }
 
+async function bankTakenFor(tx: Tx, p: PackagePerson, guardId: string | null): Promise<boolean> {
+  const bl = bankLeaves(p);
+  return bl?.accountNo ? acctTakenByOther(tx, guardId, bl.code, bl.accountNo) : false;
+}
+const extCaps = (opts: ApplyOptions) => ({ batch: (opts.via ?? "guard_import") === "guard_import", canEditGuard: opts.canEditGuard, canOverwritePii: opts.canOverwritePii, canEditBank: opts.canEditBank, fillOnlyPii: opts.fillOnlyPii });
+
 async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writeAuditTx>[1]): Promise<void> {
   opts.collect?.push({ table: input.tableName, action: input.action, rowId: input.rowId, before: input.before ?? null, after: input.after ?? null });
   // 硬標記只落 guards（create／update）after：DTO mapper 之外經 AUDIT_META_PASSTHROUGH_KEYS 保留；非 PII
-  const marked = input.tableName === "guards" && input.after && typeof input.after === "object" ? { ...input, after: { ...(input.after as object), import_via: opts.via ?? "guard_import" } } : input;
+  // hold 被人手繞過：聯絡人／逐工號入職日期 audit 同樣標 hold_override（冇值）
+  if (opts.holdOverride && (input.tableName === "guard_emergency_contacts" || input.tableName === "guard_staff_numbers") && input.after && typeof input.after === "object") {
+    await writeAuditTx(tx, { ...input, after: { ...(input.after as object), hold_override: true } });
+    return;
+  }
+  const marked = input.tableName === "guards" && input.after && typeof input.after === "object" ? { ...input, after: { ...(input.after as object), import_via: opts.via ?? "guard_import", ...(opts.holdOverride ? { hold_override: true } : {}) } } : input;
   await writeAuditTx(tx, marked);
 }
 
 async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: readonly string[], dec: PersonDecisions | undefined, opts: ApplyOptions, acc: ApplyResult): Promise<PersonResult> {
-  const ev = evaluate(p, ctx, groupReasons, dec, opts.forced?.[p.key]);
+  const ev = evaluate(p, ctx, groupReasons, dec, opts.forced?.[p.key], !opts.fillOnlyPii);
   const res: PersonResult = { key: p.key, outcome: "needs_review", reasons: ev.reasons, fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
   if (ev.action === "conflict" || ev.action === "needs_review") {
     res.outcome = ev.action;
@@ -547,6 +696,8 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
   let guardId: string;
   let g: GuardSnap | null = null;
   const review = new Set<string>();
+  let extPlan: ReturnType<typeof planExtColumns> = { data: {}, outcomes: {}, reasons: [], overrides: 0 };
+  let bankTaken = false;
 
   if (ev.action === "create") {
     const nameVal = nameW && nameW !== "skip" ? nameW.value : fieldValue(p.nameZh)!;
@@ -556,19 +707,23 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     // 姓名未確認（review 且冇人手決定）→ 仍然建人，記待核對
     if (p.nameZh.status !== "confirmed" && !(nameW && nameW !== "skip" && nameW.decided && !nameW.pending)) review.add("name_zh");
     const nameEnVal = nameEnW && nameEnW !== "skip" ? nameEnW.value : null;
-    const created = await tx.guard.create({
-      data: {
-        nameZh: nameVal,
-        nameEn: nameEnVal,
-        hkid: ev.hkidCanon!,
-        dateOfBirth: dobOk,
-        employmentType: "cash_casual",
-        status: "active",
-        identityReviewFields: [...review],
-        createdBy: opts.actorUserId,
-      },
-    });
-    await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: opts.ip });
+    // WP-STAFF-FIELDS：新欄（新建人全部係空＝全部補空；牌照衍生欄同 PATCH 一致）
+    bankTaken = await bankTakenFor(tx, p, null);
+    extPlan = planExtColumns(p, null, dec?.ext, extCaps(opts), ev.gate, bankTaken);
+    const createData: Prisma.GuardUncheckedCreateInput = {
+      nameZh: nameVal,
+      nameEn: nameEnVal,
+      hkid: ev.hkidCanon!,
+      dateOfBirth: dobOk,
+      employmentType: "cash_casual",
+      status: "active",
+      identityReviewFields: [...review],
+      createdBy: opts.actorUserId,
+      ...(extPlan.data as Partial<Prisma.GuardUncheckedCreateInput>),
+    };
+    applyDerivedPermit(createData as Prisma.GuardUncheckedUpdateInput, null);
+    const created = await tx.guard.create({ data: createData });
+    await auditTx(tx, extPlan.overrides > 0 ? { ...opts, holdOverride: true } : opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: created.id, action: "create", after: created, ip: opts.ip });
     guardId = created.id;
     res.outcome = "created";
     acc.guards_created += 1;
@@ -622,23 +777,21 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     else if (!g.dateOfBirth || dobW.replace) {
       if (g.dateOfBirth && isoDate(g.dateOfBirth) === dobW.value) bump("dateOfBirth", "same");
       else {
-        const dob = parseBirthDate(dobW.value)!;
-        data.dateOfBirth = dob;
-        // 同 PATCH /api/guards/:id 一致：出生日期變咗要重算牌照衍生值
-        const hadValueBefore = g.siaPermitAExpiry != null || g.siaPermitBExpiry != null;
-        if (canOverrideDerivedSiaPermit({ siaPermitAExpiry: g.siaPermitAExpiry, siaPermitBExpiry: g.siaPermitBExpiry, hadValueBefore })) {
-          const derived = deriveSiaPermitExpiry({ siaPermitAExpiry: g.siaPermitAExpiry, siaPermitBExpiry: g.siaPermitBExpiry, dateOfBirth: dob });
-          data.siaPermitExpiry = derived.siaPermitExpiry;
-          data.siaPermitType = derived.siaPermitType;
-        }
+        data.dateOfBirth = parseBirthDate(dobW.value)!;
         bump("dateOfBirth", "written");
       }
     } else bump("dateOfBirth", isoDate(g.dateOfBirth) === dobW.value ? "same" : "conflict");
     if (marker.size !== g.identityReviewFields.length) data.identityReviewFields = [...marker];
+    // WP-STAFF-FIELDS：新欄（只補空欄；現值唔同＝conflict；覆蓋權喺 planExtColumns 內檢查）
+    bankTaken = await bankTakenFor(tx, p, g.id);
+    extPlan = planExtColumns(p, g.ext, dec?.ext, extCaps(opts), ev.gate, bankTaken);
+    Object.assign(data, extPlan.data);
+    // 同 PATCH /api/guards/:id 一致：甲／乙到期日或出生日期有變就重算牌照衍生值（merged 值）
+    applyDerivedPermit(data, { a: g.siaPermitAExpiry, b: g.siaPermitBExpiry, dob: g.dateOfBirth });
     if (Object.keys(data).length > 0) {
       const before = await tx.guard.findUniqueOrThrow({ where: { id: g.id } });
       const after = await tx.guard.update({ where: { id: g.id }, data });
-      await auditTx(tx, opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: g.id, action: "update", before, after, ip: opts.ip });
+      await auditTx(tx, extPlan.overrides > 0 ? { ...opts, holdOverride: true } : opts, { actorUserId: opts.actorUserId, tableName: "guards", rowId: g.id, action: "update", before, after, ip: opts.ip });
       acc.guards_updated += 1;
     }
   }
@@ -674,6 +827,23 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     }
   }
   if (res.staff_numbers_added > 0) await syncLegacyStaffNoColumns(tx, guardId);
+
+  // --- WP-STAFF-FIELDS：緊急聯絡人（guard_emergency_contacts）＋逐工號入職日期（valid_from 空先補） ---
+  const rel = await applyExtRelations(tx, {
+    guardId,
+    p,
+    snap: g?.ext ?? null,
+    dec: dec?.ext,
+    caps: extCaps(opts),
+    actorUserId: opts.actorUserId,
+    audit: (i, ho) => auditTx(tx, ho ? { ...opts, holdOverride: true } : opts, { actorUserId: opts.actorUserId, ip: opts.ip, ...i }),
+    gate: ev.gate,
+  });
+  for (const r of extPlan.reasons) if (!res.reasons.includes(r)) res.reasons.push(r);
+  const extOutcomes = { ...extPlan.outcomes, ...rel.outcomes };
+  if (Object.keys(extOutcomes).length > 0) res.ext = Object.entries(extOutcomes).map(([key, outcome]) => ({ key, outcome }));
+  if (rel.contactsAdded > 0) res.contacts_added = rel.contactsAdded;
+  if (extPlan.overrides + rel.overrides > 0) res.hold_overrides = extPlan.overrides + rel.overrides;
 
   // --- 電話（confirmed／已決定；全表唯一） ---
   if (phoneW === "skip") bump("phone", "skipped");
@@ -763,7 +933,7 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
             await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT import_person");
             Object.assign(part, snap);
             part.overwrite_blocked += 1;
-            r = { key: p.key, outcome: "needs_review", reasons: ["overwrite_forbidden"], fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
+            r = { key: p.key, outcome: "needs_review", reasons: e instanceof ApiError && e.message === LONGTERM_HIRE_VIA_TRIAGE_MSG ? ["overwrite_forbidden", "longterm_hire_via_triage"] : ["overwrite_forbidden"], fields: {}, staff_numbers_added: 0, staff_numbers_skipped: 0, phones_added: 0, addresses_added: 0 };
           }
           rs.push(r);
           if (r.outcome === "created" || r.staff_numbers_added || r.phones_added || r.addresses_added || Object.values(r.fields).includes("written")) ctx = await loadCtx(tx);
@@ -806,12 +976,15 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
     }
   }
 
+  Object.assign(acc, summarizeExt(acc.results));
   await writeAudit({
     actorUserId: opts.actorUserId,
     tableName: "guard_import",
     rowId: opts.actorUserId,
     action: "guard_import_apply",
     after: {
+      // 唔放 ext_conflicts：衝突數等於「同現值唔同」嘅 oracle，而 audit 讀者可能冇對應 view
+      ...(acc.ext_written ? { ext_written: acc.ext_written, contacts_added: acc.contacts_added ?? 0, ...(acc.hold_overrides ? { hold_overrides: acc.hold_overrides } : {}) } : {}),
       persons: acc.persons_total,
       outcomes: acc.outcomes,
       guards_created: acc.guards_created,
@@ -833,9 +1006,9 @@ export async function applyImport(pkg: ImportPackage, opts: ApplyOptions): Promi
 // WP-AI-OPS §28.4：分診用嘅 export（唔改上面 preview／apply 行為）
 // ---------------------------------------------------------------------------
 /** 對齊評估（唔寫 DB）：分診出題用——apply 完成後重新評估，剩低 needs_review／conflict 嘅就係要問嘅人。 */
-export async function evaluateImportPackage(pkg: ImportPackage): Promise<{ evals: Evaluation[]; guards: ReadonlyMap<string, Readonly<GuardSnap>> }> {
+export async function evaluateImportPackage(pkg: ImportPackage, piiView = true): Promise<{ evals: Evaluation[]; guards: ReadonlyMap<string, Readonly<GuardSnap>> }> {
   const ctx = await loadCtx(prisma);
-  return { evals: evaluateAll(pkg, ctx), guards: ctx.byId };
+  return { evals: evaluateAll(pkg, ctx, undefined, piiView), guards: ctx.byId };
 }
 
 class DryRunRollback extends Error {}

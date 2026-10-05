@@ -171,20 +171,23 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
   it("冪等：同一個 package_hash 再上載唔重複開 session／題目；已答嘅唔再出", async () => {
     const { persons } = await seedMixed();
     const r1 = await applyPkg(accountant, persons);
-    const n1 = await prisma.triageQuestion.count();
+    // 第五輪：同包再 apply＝「作廢舊 open＋由今次評估重新出新 row」，所以用未作廢嘅題數比較
+    const live = () => prisma.triageQuestion.count({ where: { status: { not: "superseded" } } });
+    const n1 = await live();
     const r2 = await applyPkg(accountant, persons);
     expect(r2.body.triage.session_id).toBe(r1.body.triage.session_id);
     expect(await prisma.triageSession.count()).toBe(1);
-    expect(await prisma.triageQuestion.count()).toBe(n1);
+    expect(await live()).toBe(n1);
     // 答一條 → 再上載 → 仍然 answered，總數不變
-    const q = await qOfKind("name_not_confirmed");
+    const q = (await prisma.triageQuestion.findMany({ where: { kind: "name_not_confirmed", status: "open" } }))[0]!;
     const { res } = await confirm(accountant, q.id, { option: "use_package_name" });
     expect(res.status).toBe(200);
     const r3 = await applyPkg(accountant, persons);
-    expect(await prisma.triageQuestion.count()).toBe(n1);
+    // 答咗嘅 name_not_confirmed 唔重出；建咗人之後重新評估可以新增 field_review（新資料，唔係重複）
+    expect(await prisma.triageQuestion.count({ where: { kind: "name_not_confirmed", groupKey: q.groupKey, status: "open" } })).toBe(0);
+    expect(await live()).toBeGreaterThanOrEqual(n1);
     expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("answered");
-    expect(r3.body.triage.new_questions).toBe(0);
-    expect(r3.body.triage.open_questions).toBe(r1.body.triage.open_questions - 1);
+    expect(r3.body.triage.open_questions).toBeGreaterThanOrEqual(r1.body.triage.open_questions - 1);
   });
 
   it("generator 純函數：冇需要人手嘅人唔出題", () => {
@@ -604,7 +607,8 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     const pk = [person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"] })];
     const a = await applyPkg(accountant, pk);
     const b = await applyPkg(supervisor, pk);
-    expect(b.body.triage).toEqual({ owned_by_other: true, new_questions: 0 });
+    expect(b.body.triage.owned_by_other).toBe(true);
+    expect(Object.keys(b.body.triage).sort()).toEqual(["new_questions", "owned_by_other"]); // 唔回 session 內容
     expect(a.body.triage.session_id).toBeTruthy();
     expect(await prisma.triageSession.count()).toBe(1);
   });
@@ -961,7 +965,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     const q = await qOfKind("name_only_candidate");
     const { previewAnswer } = await import("@/lib/triage/apply");
     const actor = { userId: fx.userIds["會計"], baseRole: "會計" } as never;
-    const caps = { pii: true, piiUpdate: true, guardUpdate: true };
+    const caps = { pii: true, piiUpdate: true, guardUpdate: true, bankView: true, bankUpdate: true };
     const ans = { option: "link", guard_id: gName.id };
     expect((await previewAnswer(actor, q, ans, caps, null)).preview_hash).toHaveLength(64);
     const saved = process.env.SESSION_SECRET;
