@@ -4,6 +4,7 @@ import { BadRequest } from "@/lib/api/errors";
 import { requirePermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { importPackageSchema, packageHasBank, type ImportPackage, type PersonField } from "./package";
 import { evaluateExt, type ExtDecision } from "./ext";
+import { serverPersonKey } from "./person-key";
 import { Forbidden } from "@/lib/api/errors";
 import { hasPermission } from "@/lib/rbac/requirePermission";
 import { NON_BOSS_MAX_PERSONS } from "./limits";
@@ -121,4 +122,13 @@ export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<stri
 export const BANK_PACKAGE_DENIED_MSG = "導入包含銀行資料，要有「安員銀行資料」修改權限嘅同事先可以上載（銀行資料冇寫入）";
 export async function assertBankPermissionForPackage(session: AuthedSession, pkg: ImportPackage): Promise<void> {
   if (packageHasBank(pkg) && !(await hasPermission(session, "安員銀行資料", "update"))) throw Forbidden(BANK_PACKAGE_DENIED_MSG);
+}
+
+// ---------------------------------------------------------------------------
+// R3：包內 key（上載者提供，可能含／衍生自身份證）唔回俾任何讀者。回應改用 `index`（喺上載包 persons 嘅位置，
+// 瀏覽器自己有包可以對返）＋ `ref`（伺服器 HMAC key，唔可反推）。
+// ---------------------------------------------------------------------------
+export function redactRowKeys<T extends { key: string }>(pkg: ImportPackage, items: readonly T[]): (Omit<T, "key"> & { index: number; ref: string })[] {
+  const at = new Map(pkg.persons.map((p, i) => [p.key, { index: i, ref: serverPersonKey(p) }]));
+  return items.map(({ key, ...rest }) => ({ ...rest, ...(at.get(key) ?? { index: -1, ref: "" }) })) as never;
 }

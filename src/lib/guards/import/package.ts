@@ -164,9 +164,8 @@ export function packageHasBank(pkg: ImportPackage): boolean {
   return pkg.persons.some((p) => !!p.bank && Object.values(p.bank).some((l) => !!l.value?.trim()));
 }
 
-export function personKeyForHkid(canon: string): string {
-  return createHash("sha1").update(canon).digest("hex");
-}
+/** 測試／工具用嘅人 key（HMAC，唔再係無鹽 sha1）；正式 key 見 person-key.ts */
+export { personKeyForHkid } from "./person-key";
 
 /** 欄位值（missing 或空值＝null）。 */
 export function fieldValue(f: { value: string | null; status: FieldStatus }): string | null {

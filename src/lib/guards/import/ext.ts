@@ -88,7 +88,8 @@ export function heldBy(gate: ExtGate, key: string): ExtHeld | null {
 
 export const PII_OVERWRITE_DENIED_MSG = "呢條要有安員個人資料修改權限嘅同事（例如老闆）答";
 export const BANK_OVERWRITE_DENIED_MSG = "呢條要有安員銀行資料修改權限嘅同事答";
-export const OVERWRITE_DENIED_MSGS: readonly string[] = [PII_OVERWRITE_DENIED_MSG, BANK_OVERWRITE_DENIED_MSG];
+export const LONGTERM_HIRE_VIA_TRIAGE_MSG = "長工入職日期會影響長工糧計算，要經分診題逐條確認，唔可以批量決定";
+export const OVERWRITE_DENIED_MSGS: readonly string[] = [PII_OVERWRITE_DENIED_MSG, BANK_OVERWRITE_DENIED_MSG, LONGTERM_HIRE_VIA_TRIAGE_MSG];
 
 // ---------------------------------------------------------------------------
 // 現有資料快照（apply.ts loadCtx 載入；日期一律 YYYY-MM-DD 字串）

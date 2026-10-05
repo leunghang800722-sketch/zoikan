@@ -656,11 +656,16 @@ async function bankTakenFor(tx: Tx, p: PackagePerson, guardId: string | null): P
   const bl = bankLeaves(p);
   return bl?.accountNo ? acctTakenByOther(tx, guardId, bl.code, bl.accountNo) : false;
 }
-const extCaps = (opts: ApplyOptions) => ({ canEditGuard: opts.canEditGuard, canOverwritePii: opts.canOverwritePii, canEditBank: opts.canEditBank, fillOnlyPii: opts.fillOnlyPii });
+const extCaps = (opts: ApplyOptions) => ({ batch: (opts.via ?? "guard_import") === "guard_import", canEditGuard: opts.canEditGuard, canOverwritePii: opts.canOverwritePii, canEditBank: opts.canEditBank, fillOnlyPii: opts.fillOnlyPii });
 
 async function auditTx(tx: Tx, opts: ApplyOptions, input: Parameters<typeof writeAuditTx>[1]): Promise<void> {
   opts.collect?.push({ table: input.tableName, action: input.action, rowId: input.rowId, before: input.before ?? null, after: input.after ?? null });
   // 硬標記只落 guards（create／update）after：DTO mapper 之外經 AUDIT_META_PASSTHROUGH_KEYS 保留；非 PII
+  // hold 被人手繞過：聯絡人／逐工號入職日期 audit 同樣標 hold_override（冇值）
+  if (opts.holdOverride && (input.tableName === "guard_emergency_contacts" || input.tableName === "guard_staff_numbers") && input.after && typeof input.after === "object") {
+    await writeAuditTx(tx, { ...input, after: { ...(input.after as object), hold_override: true } });
+    return;
+  }
   const marked = input.tableName === "guards" && input.after && typeof input.after === "object" ? { ...input, after: { ...(input.after as object), import_via: opts.via ?? "guard_import", ...(opts.holdOverride ? { hold_override: true } : {}) } } : input;
   await writeAuditTx(tx, marked);
 }
@@ -830,7 +835,7 @@ async function applyPerson(tx: Tx, ctx: DbCtx, p: PackagePerson, groupReasons: r
     dec: dec?.ext,
     caps: extCaps(opts),
     actorUserId: opts.actorUserId,
-    audit: (i) => auditTx(tx, opts, { actorUserId: opts.actorUserId, ip: opts.ip, ...i }),
+    audit: (i, ho) => auditTx(tx, ho ? { ...opts, holdOverride: true } : opts, { actorUserId: opts.actorUserId, ip: opts.ip, ...i }),
     gate: ev.gate,
   });
   for (const r of extPlan.reasons) if (!res.reasons.includes(r)) res.reasons.push(r);

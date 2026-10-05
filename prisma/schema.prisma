@@ -547,7 +547,7 @@ model TriageQuestion {
   optionsJson  Json  @default("[]") @map("options_json")
   impactJson   Json? @map("impact_json") // 最近一次預覽嘅影響摘要（唔含 hash）
 
-  status          String    @default("open") // open｜answered｜skipped
+  status          String    @default("open") // open｜answered｜skipped｜superseded（較新同 group_key＋kind 題出現後，舊 open 題）
   answerJson      Json?     @map("answer_json")
   answeredBy      String?   @map("answered_by")
   answeredAt      DateTime? @map("answered_at")

@@ -12,6 +12,7 @@ import {
   EMPTY_BANK,
   OPEN_GATE,
   PII_OVERWRITE_DENIED_MSG,
+  LONGTERM_HIRE_VIA_TRIAGE_MSG,
   bypassesHold,
   isGoDecision,
   digits,
@@ -39,10 +40,12 @@ export interface ExtCaps {
   canOverwritePii?: boolean;
   /** true＝冇「安員個人資料:view」：已有聯絡人嘅安員唔自動加（令寫入結果唔反映「估啱聯絡人」） */
   fillOnlyPii?: boolean;
+  /** true＝批量導入 decisions（唔係分診題）：長工人層面入職日期只准 skip */
+  batch?: boolean;
   /** false＝冇「安員銀行資料:update」：銀行欄一律唔寫（outcome not_written）；要覆蓋現有戶口會 403 */
   canEditBank?: boolean;
 }
-export type AuditFn = (input: { tableName: string; rowId: string; action: "create" | "update"; before?: unknown; after?: unknown }) => Promise<void>;
+export type AuditFn = (input: { tableName: string; rowId: string; action: "create" | "update"; before?: unknown; after?: unknown }, holdOverride?: boolean) => Promise<void>;
 
 const isoToDate = (v: string): Date => new Date(`${v}T00:00:00.000Z`);
 const deny = (msg: string): never => {
@@ -70,7 +73,7 @@ export async function acctTakenByOther(tx: Tx, guardId: string | null, code: str
   const c = code ? code.padStart(3, "0") : "";
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT id FROM guards
-    WHERE regexp_replace(coalesce(bank_account_no, ''), '\D', '', 'g') = ${d}
+    WHERE regexp_replace(coalesce(bank_account_no, ''), '[^0-9]', '', 'g') = ${d}
       AND (${c} = '' OR bank_code IS NULL OR lpad(bank_code, 3, '0') = ${c})
       AND (${guardId}::text IS NULL OR id <> ${guardId})
     LIMIT 1`;
@@ -102,6 +105,7 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
       continue;
     }
     const sh = heldAll(gate, s.key);
+    if (caps.batch && s.key === "hireDate" && gate.longtermHire && isGoDecision(d)) deny(LONGTERM_HIRE_VIA_TRIAGE_MSG);
     if (!bypassesHold(d, sh)) {
       outcomes[s.key] = "held"; // 身份未夠證據／長工入職日期：等人手確認
       continue;
@@ -144,7 +148,8 @@ export function planExtColumns(p: PackagePerson, snap: GuardExtSnap | null, dec:
         outcomes.bank = "conflict";
         reasons.push("bank_acct_belongs_to_other");
       } else if (wouldWrite && !complete) {
-        if (isGoDecision(d)) throw new ApiError(422, "unprocessable", "包內銀行資料四欄唔齊，唔可以寫入（唔准砌半套戶口）");
+        // 人手揀「用導入值」唔齊 → 422；「身份確認」(confirm_id) 當 skip（其他欄照寫，銀行留 bank_review＋bank_incomplete）
+        if (d === "confirm" || d === "replace") throw new ApiError(422, "unprocessable", "包內銀行資料四欄唔齊，唔可以寫入（唔准砌半套戶口）");
         outcomes.bank = "not_confirmed";
       } else if (wouldWrite) {
         data.bankCode = bank.code!.padStart(3, "0");
@@ -242,7 +247,7 @@ export async function applyExtRelations(
       continue;
     }
     const created = await createGuardEmergencyContact(tx, { guardId, name: wName, tel: wTel, relationship: wRel, source: "staff_fields_import", createdBy: actorUserId });
-    await audit({ tableName: "guard_emergency_contacts", rowId: created.id, action: "create", after: created });
+    await audit({ tableName: "guard_emergency_contacts", rowId: created.id, action: "create", after: created }, !gate.scalars && useFull);
     added.push(row);
     contactsAdded += 1;
     outcomes[key] = "written";
@@ -279,7 +284,7 @@ export async function applyExtRelations(
     if (cur === h.value) outcomes[key] = "same";
     else if (!cur || d === "replace") {
       const after = await tx.guardStaffNumber.update({ where: { id: row.id }, data: { validFrom: isoToDate(h.value) } });
-      await audit({ tableName: "guard_staff_numbers", rowId: row.id, action: "update", before: row, after });
+      await audit({ tableName: "guard_staff_numbers", rowId: row.id, action: "update", before: row, after }, !gate.scalars && isGoDecision(d));
       hiresWritten += 1;
       outcomes[key] = "written";
     } else outcomes[key] = "conflict";

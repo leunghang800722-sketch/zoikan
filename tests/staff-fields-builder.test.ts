@@ -75,7 +75,7 @@ describe("v3 builder", () => {
     expect(c.staffNumbers[0]).toMatchObject({ scheme: "MG", number: "MG90003" });
     expect(c.staffNumbers[0]!.hireDate?.value).toBe("2022-02-02");
     expect(pkg.unassignedBankAccounts).toHaveLength(1);
-    expect(pkg.unassignedBankAccounts![0]!.key).toBe("pe:004:abc");
+    expect(pkg.unassignedBankAccounts![0]!.key).toMatch(/^pe:[0-9a-f]{16}$/); // 隨機 id，唔含戶口 hash
   });
   it("次序 join 逐對核對：錯位一行／docIds 唔同 → join_failed（唔寫新欄）；身份證對唔上 → 成批放棄次序 join 改用 key", () => {
     // docIds 錯位

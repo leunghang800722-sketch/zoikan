@@ -18,8 +18,7 @@ import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
 import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
 import { sameEnglishTokens } from "./generators/guard-import";
-import { isBankKey } from "@/lib/guards/import/ext";
-import { KIND_LABEL } from "./types";
+import { identityFollowUps } from "./generators/guard-import";
 import { BANK_KINDS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
 type QRow = TriageQuestion;
@@ -50,6 +49,13 @@ function load(q: QRow) {
 
 function assertAnswerable(q: QRow): void {
   if (q.status === "answered") throw Conflict("呢條問題已經答過，唔可以重複套用");
+  if (q.status === "superseded") throw Conflict("已有較新資料，請答新題");
+}
+
+/** 有較新（createdAt 較後）嘅同 group_key＋kind 題（任何狀態，未被 superseded）→ 舊題唔可以再答（防止寫入舊值）。tx 內再查一次防並發。 */
+async function assertNoNewer(db: Pick<typeof prisma, "triageQuestion">, q: QRow): Promise<void> {
+  const n = await db.triageQuestion.count({ where: { groupKey: q.groupKey, kind: q.kind, id: { not: q.id }, createdAt: { gt: q.createdAt }, status: { not: "superseded" } } });
+  if (n > 0) throw Conflict("已有較新資料，請答新題");
 }
 
 export const BANK_QUESTION_DENIED_MSG = "要有安員銀行資料權限嘅同事處理";
@@ -123,6 +129,7 @@ export interface PreviewOutput {
 
 export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, caps: ViewerCaps, ip: string | null): Promise<PreviewOutput> {
   assertAnswerable(q);
+  await assertNoNewer(prisma, q);
   assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
   assertBankAnswerRules(q, answer, caps);
@@ -167,6 +174,7 @@ export interface AnswerOutput {
 
 export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, previewHash: string | undefined, caps: ViewerCaps, ip: string | null): Promise<AnswerOutput> {
   assertAnswerable(q);
+  await assertNoNewer(prisma, q);
   assertBankAllowed(q, caps);
   const answer = parseAnswer(rawAnswer);
   assertBankAnswerRules(q, answer, caps);
@@ -194,6 +202,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
     kind: "commit",
     verify: (fp) => hashOf(q.id, answer, fp) === previewHash,
     beforeCommit: async (tx, outcome) => {
+      await assertNoNewer(tx, q);
       const bp = bankProblem(answer, outcome.result);
       if (bp) throw new ApiError(422, "unprocessable", caps.bankView ? bp : BANK_GENERIC_FAIL);
       impact = buildImpact(outcome.result, outcome.changes, caps);
@@ -211,44 +220,22 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         },
       });
       if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
-      // ext_identity_check 由冇銀行 update 權嘅人答：銀行冇寫 → 留一條 bank_review 俾有權限嘅人（鎖定同一個目標 guard）
-      if (q.kind === "ext_identity_check") {
+      // R2：身份確認（照寫入）之後，仍然 held／冇寫到／衝突嘅欄（長工入職日期、銀行、衝突）補開跟進題；鎖定同一個目標 guard
+      if (q.kind === "ext_identity_check" && answer.option === "confirm_ext_identity") {
         const ev = q.evidenceJson as unknown as QuestionEvidence;
-        const bankItem = ev.ext_review?.find((x) => isBankKey(x.key));
-        const bo = extOutcomeOf(outcome.result, "bank");
-        const hireItem = ev.ext_review?.find((x) => x.key === "hireDate");
-        // N4：長工嘅人層面入職日期唔經「身份確認」繞過 → 留一條 ext_field_review（講明會影響長工糧計算）
-        if (hireItem && extOutcomeOf(outcome.result, "hireDate") === "held") {
+        const follow = identityFollowUps(ev.person, outcome.result.ext ?? [], ev.guard_id ?? null, q.sort);
+        if (follow.length) {
           await tx.triageQuestion.createMany({
             skipDuplicates: true,
-            data: [
-              {
-                sessionId: q.sessionId,
-                kind: "ext_field_review",
-                groupKey: `${ev.person.key}:extreview`,
-                sort: q.sort,
-                title: KIND_LABEL.ext_field_review,
-                evidenceJson: JSON.parse(JSON.stringify({ ...ev, ext_review: [{ ...hireItem, held: "longterm" }] })),
-                optionsJson: JSON.parse(JSON.stringify([{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, { id: "skip", label: "跳過，留返人手處理" }])),
-              },
-            ],
-          });
-        }
-        if (bankItem && bo !== "written" && bo !== "same") {
-          const bankEv = { ...ev, ext_review: [{ ...bankItem, held: "bank" }] };
-          await tx.triageQuestion.createMany({
-            skipDuplicates: true,
-            data: [
-              {
-                sessionId: q.sessionId,
-                kind: "bank_review",
-                groupKey: `${ev.person.key}:bank`,
-                sort: q.sort,
-                title: KIND_LABEL.bank_review,
-                evidenceJson: JSON.parse(JSON.stringify(bankEv)),
-                optionsJson: JSON.parse(JSON.stringify([{ id: "apply_ext_fields", label: "逐欄決定（用導入值／保留現值／跳過）" }, { id: "skip", label: "跳過，留返人手處理" }])),
-              },
-            ],
+            data: follow.map((d) => ({
+              sessionId: q.sessionId,
+              kind: d.kind,
+              groupKey: d.groupKey,
+              sort: d.sort,
+              title: d.title,
+              evidenceJson: JSON.parse(JSON.stringify(d.evidence)),
+              optionsJson: JSON.parse(JSON.stringify(d.options)),
+            })),
           });
         }
       }

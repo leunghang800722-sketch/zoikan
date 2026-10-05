@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { draftGuardImportQuestions } from "./generators/guard-import";
 import type { QuestionEvidence } from "./types";
 import { extValueSig } from "@/lib/guards/import/ext";
-import { SUPPLEMENTARY_KINDS } from "./types";
+import { BANK_KINDS, SUPPLEMENTARY_KINDS } from "./types";
 import { hasPermission } from "@/lib/rbac/requirePermission";
 
 export const isBoss = (s: Pick<AuthedSession, "baseRole">): boolean => s.baseRole === "老闆";
@@ -42,23 +42,32 @@ export interface SessionSummary {
   status: string;
   created_at: Date;
   completed_at: Date | null;
-  counts: { open: number; answered: number; skipped: number; total: number; important_open: number; supplementary_open: number };
+  counts: { open: number; answered: number; skipped: number; total: number; important_open: number; supplementary_open: number; restricted_open: number };
 }
 
 /** 「補充資料」層（field_review／ext_field_conflict／ext_field_review）：唔急，排喺要人手／衝突／銀行之後，badge 唔計。 */
 export const isSupplementary = (kind: string): boolean => (SUPPLEMENTARY_KINDS as readonly string[]).includes(kind);
 
+/** 呢個讀者答唔到（restricted）嘅題目類別：銀行題要銀行 update 權；身份確認要個人資料 view＋安員 update。唔計入佢嘅待答數。 */
+export async function restrictedKindsFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<string[]> {
+  const a = actor as AuthedSession;
+  const [bankU, pii, guardU] = await Promise.all([hasPermission(a, "安員銀行資料", "update"), hasPermission(a, "安員個人資料", "view"), hasPermission(a, "安員", "update")]);
+  return [...(bankU ? [] : BANK_KINDS), ...(pii && guardU ? [] : ["ext_identity_check"])];
+}
+
 export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolean }): Promise<SessionSummary[]> {
   const where = isBoss(actor) && !opts.mine ? {} : { ownerUserId: actor.userId };
   const sessions = await prisma.triageSession.findMany({ where, orderBy: { createdAt: "desc" }, take: 200, include: { owner: { select: { name: true } } } });
   if (sessions.length === 0) return [];
+  const restricted = new Set(await restrictedKindsFor(actor));
   const grouped = await prisma.triageQuestion.groupBy({ by: ["sessionId", "status", "kind"], where: { sessionId: { in: sessions.map((s) => s.id) } }, _count: { _all: true } });
   return sessions.map((s) => {
-    const counts = { open: 0, answered: 0, skipped: 0, total: 0, important_open: 0, supplementary_open: 0 };
+    const counts = { open: 0, answered: 0, skipped: 0, total: 0, important_open: 0, supplementary_open: 0, restricted_open: 0 };
     for (const g of grouped) {
       if (g.sessionId !== s.id) continue;
       if (g.status === "open" || g.status === "answered" || g.status === "skipped") counts[g.status] += g._count._all;
-      if (g.status === "open") counts[isSupplementary(g.kind) ? "supplementary_open" : "important_open"] += g._count._all;
+      if (g.status === "open" && !restricted.has(g.kind)) counts[isSupplementary(g.kind) ? "supplementary_open" : "important_open"] += g._count._all;
+      if (g.status === "open" && restricted.has(g.kind)) counts.restricted_open += g._count._all; // 要有權限嘅同事處理（唔計入佢嘅待答數／badge）
       counts.total += g._count._all;
     }
     return { id: s.id, source_type: s.sourceType, owner_user_id: s.ownerUserId, owner_name: s.owner.name, status: s.status, created_at: s.createdAt, completed_at: s.completedAt, counts };
@@ -66,8 +75,9 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
 }
 
 /** 「待答問題」數（badge 用，淨計重要嗰層，唔計補充資料）：老闆＝全部；其他＝自己嗰批。 */
-export async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId">): Promise<number> {
-  return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS] }, session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
+export async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<number> {
+  const restricted = await restrictedKindsFor(actor);
+  return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS, ...restricted] }, session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
 }
 
 /** 所有未答都答晒（冇 open）就收尾；有新 open 就重開。 */
@@ -135,11 +145,16 @@ export interface OwnedByOtherResult {
  * 已經有嘅 group_key（無論 open／answered／skipped）唔再出。冇題目就唔開。
  * 呢度**唔會**寫任何安員資料（淨係讀＋寫 triage 表）。
  */
-export async function createGuardImportTriage(input: { pkg: ImportPackage; packageHash: string; actor: AuthedSession; ip: string | null; personKeys?: readonly string[] }): Promise<CreateTriageResult | OwnedByOtherResult | null> {
+export async function createGuardImportTriage(input: { pkg: ImportPackage; packageHash: string; actor: AuthedSession; ip: string | null; personKeys?: readonly string[]; results?: readonly { key: string; ext?: { key: string; outcome: string }[] }[] }): Promise<CreateTriageResult | OwnedByOtherResult | null> {
   const only = input.personKeys ? new Set(input.personKeys) : null;
   const [viewPii, viewBank] = await Promise.all([hasPermission(input.actor, "安員個人資料", "view"), hasPermission(input.actor, "安員銀行資料", "view")]);
   const { evals, guards } = await evaluateImportPackage(input.pkg, viewPii);
-  const allDrafts = draftGuardImportQuestions(input.pkg, only ? evals.filter((e) => only.has(e.person.key)) : evals, { viewPii, viewBank, guards });
+  const written = new Map<string, Set<string>>();
+  for (const r of input.results ?? []) {
+    const ks = (r.ext ?? []).filter((x) => x.outcome === "written").map((x) => x.key);
+    if (ks.length) written.set(r.key, new Set([...(written.get(r.key) ?? []), ...ks]));
+  }
+  const allDrafts = draftGuardImportQuestions(input.pkg, only ? evals.filter((e) => only.has(e.person.key)) : evals, { viewPii, viewBank, guards, written });
   // M4：跨 session 去重（同 source_type、同一個人、同 kind、證據核心相同，其他 session 已有就唔再出——open／answered／skipped 都計）
   const otherSessions = await prisma.triageQuestion.findMany({
     where: { groupKey: { in: allDrafts.map((d) => d.groupKey) }, session: { sourceType: "guard_import", sourceRef: { not: input.packageHash } } },
@@ -170,6 +185,16 @@ export async function createGuardImportTriage(input: { pkg: ImportPackage; packa
         optionsJson: JSON.parse(JSON.stringify(d.options)),
       })),
     });
+  }
+  // R1：新題出現 → 其他 session 入面同 group_key＋同 kind 嘅 open 題標 superseded（唔計待答、預覽／作答 409）
+  if (fresh.length > 0) {
+    const kinds = [...new Set(fresh.map((d) => d.kind))];
+    for (const k of kinds) {
+      await prisma.triageQuestion.updateMany({
+        where: { kind: k, groupKey: { in: fresh.filter((d) => d.kind === k).map((d) => d.groupKey) }, status: "open", sessionId: { not: session.id } },
+        data: { status: "superseded" },
+      });
+    }
   }
   const byKind: Record<string, number> = {};
   for (const g of await prisma.triageQuestion.groupBy({ by: ["kind"], where: { sessionId: session.id }, _count: { _all: true } })) byKind[g.kind] = g._count._all;

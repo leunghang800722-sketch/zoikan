@@ -63,7 +63,7 @@ interface Question {
     reasons: string[];
     candidates: Candidate[];
     review_fields: { field: string; label: string; check: string }[];
-    ext_review: { key: string; label: string; check: string; status: string; held?: string }[];
+    ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
     unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
   };
 }
@@ -585,8 +585,13 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                   <span className="block text-[12px] text-zk-faint">
                                     {rf.label}（{CHECK_LABEL[rf.check] ?? rf.check}
                                     {rf.status === "review" ? "、導入值待核對" : ""}
-                                    {rf.held === "longterm" ? "、長工糧計算會讀呢個日期，所以唔自動寫" : ""}）
+                                    {rf.held === "identity" ? "、身份未夠證據，所以唔自動寫" : rf.held === "bank" ? "、銀行資料要人確認先寫" : ""}）
                                   </span>
+                                  {rf.held === "longterm_hire_date" && (
+                                    <span className="mt-1 block rounded border border-orange-300 bg-orange-50 px-2 py-1 text-[12px] text-orange-800" data-testid="longterm-hire-warning">
+                                      呢位係長工，入職日期會影響長工糧（強積金／假期）計算，請核實先確認
+                                    </span>
+                                  )}
                                   {rf.key === "bank" && (
                                     <label className="mt-1 flex items-start gap-2 text-[12px]" data-testid="bank-replace-existing">
                                       <input type="checkbox" className="mt-0.5" checked={replaceExisting} onChange={(e) => { setReplaceExisting(e.target.checked); setImpact(null); setHash(null); }} />

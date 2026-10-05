@@ -3,7 +3,7 @@
 //  - 冇 decisions：自動套用（link／create 嘅人，只寫 status=confirmed 嘅欄）。
 //  - 有 decisions（覆核頁）：只處理有決定嘅人；逐欄 confirm／replace／skip。
 // 冪等；分批 transaction；每筆 writeAuditTx。導入包唔入 DB（要重新帶）。
-import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, assertBankPermissionForPackage } from "@/lib/guards/import/request";
+import { requireImportPermission, parsePackage, applyBodySchema, mapDecisions, assertPackageSize, maskApplyForViewer, assertDecisionTargets, assertBankPermissionForPackage, redactRowKeys } from "@/lib/guards/import/request";
 import { hashPackage } from "@/lib/guards/import/package";
 import { Conflict, Forbidden } from "@/lib/api/errors";
 import { applyImport } from "@/lib/guards/import/apply";
@@ -55,11 +55,12 @@ export async function POST(req: Request) {
     const triageEligible = !body.decisions || pkg.source === "single_ocr";
     if (triageEligible && (await hasPermission(session, "導入分診", "view"))) {
       try {
-        triage = await createGuardImportTriage({ pkg: pkg.source === "single_ocr" && body.decisions ? resolveDecidedFields(pkg, body.decisions) : pkg, packageHash: body.package_hash, actor: session, ip: getClientIp(req), personKeys: body.person_keys });
+        triage = await createGuardImportTriage({ pkg: pkg.source === "single_ocr" && body.decisions ? resolveDecidedFields(pkg, body.decisions) : pkg, packageHash: body.package_hash, actor: session, ip: getClientIp(req), personKeys: body.person_keys, results: result.results });
       } catch (e) {
         console.error("triage session create failed", safeErrorSummary(e));
       }
     }
-    return ok(brandSafeResponse({ ...maskApplyForViewer(result, { pii, bank: bankView }), triage: triage ? { ...triage } : null }));
+    const masked = maskApplyForViewer(result, { pii, bank: bankView });
+    return ok(brandSafeResponse({ ...masked, results: redactRowKeys(pkg, masked.results), triage: triage ? { ...triage } : null }));
   });
 }

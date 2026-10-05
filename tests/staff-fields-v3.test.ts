@@ -503,7 +503,8 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       const sid = r.body.triage.session_id as string;
       await post(reassignRoute as never, `/api/triage/sessions/${sid}/reassign`, owner, { owner_user_id: fx.userIds["主管"] }, sid);
       const list = await (await get(listRoute as never, "/api/triage/sessions?mine=1", supervisor)).json();
-      expect(JSON.stringify(list)).toContain('"important_open":1');
+      expect(JSON.stringify(list)).toContain('"restricted_open":1'); // 睇到題目數，但唔計入佢嘅待答（important_open）
+      expect(JSON.stringify(list)).toContain('"important_open":0');
       const sess = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, supervisor, sid)).json();
       const q = sess.questions[0];
       expect(q.restricted).toBe(true);

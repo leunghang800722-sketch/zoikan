@@ -5,7 +5,7 @@
 //   review 欄逐欄「確認／改正後確認／略過」。
 // 導入包只留喺瀏覽器記憶體，每次請求重新帶上去；伺服器唔存檔。回應內 hkid／電話／地址已遮罩，
 // 要核對嘅抽取值（姓名／地址）來自你自己揀嗰個本機檔。
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -73,7 +73,9 @@ const ACTION_LABEL: Record<string, string> = { link: "對上現有安員", creat
 const CHECK_LABEL: Record<string, string> = { new: "新", fill: "補空欄", same: "同現值一樣", differs: "同現值唔同", conflict: "衝突", missing: "冇", not_stored: "唔儲存", invalid_date: "日期唔合法" };
 
 interface Row {
-  key: string;
+  /** 回應唔再帶包內 key（可能衍生自身份證）：index＝喺上載包 persons 嘅位置，ref＝伺服器 HMAC key */
+  index: number;
+  ref: string;
   action: string;
   reasons: string[];
   rating: string;
@@ -117,7 +119,7 @@ interface ApplyRes {
   field_conflicts: number;
   counts_hidden?: boolean;
   overwrite_blocked?: number;
-  results?: { key: string; reasons: string[] }[];
+  results?: { index: number; ref: string; reasons: string[] }[];
   fields_written: Record<string, number>;
   /** WP-AI-OPS §28.4：自動項完成後剩低要人手嘅問題（上載者自己嗰批） */
   triage?: { session_id?: string; open_questions?: number; new_questions: number; total_questions?: number; important_open?: number; supplementary_open?: number; owned_by_other?: boolean } | null;
@@ -139,8 +141,7 @@ export default function GuardImportPage() {
   const [triageOpen, setTriageOpen] = useState(0);
   const [showFull, setShowFull] = useState<Record<string, boolean>>({});
 
-  const personByKey = useMemo(() => new Map((pkg?.persons ?? []).map((p) => [p.key, p])), [pkg]);
-
+  
   async function onFile(file: File | undefined) {
     setError(null);
     setNotice(null);
@@ -191,9 +192,9 @@ export default function GuardImportPage() {
     await runPreview(pkg);
   }
 
-  async function onDecide(key: string, field: (typeof REVIEWABLE)[number], action: "confirm" | "replace" | "skip" | "keep_pending") {
+  async function onDecide(key: string, ref: string, field: (typeof REVIEWABLE)[number], action: "confirm" | "replace" | "skip" | "keep_pending") {
     if (!pkg) return;
-    const edit = edits[`${key}:${field}`];
+    const edit = edits[`${ref}:${field}`];
     setBusy(true);
     setError(null);
     const res = await apiPost<ApplyRes>("/api/guards/import/apply", {
@@ -207,11 +208,11 @@ export default function GuardImportPage() {
       return;
     }
     if (res.data.results?.some((x) => x.reasons.includes("overwrite_forbidden"))) {
-      setDone((d) => ({ ...d, [`${key}:${field}`]: "未處理：要有安員個人資料／安員修改權限嘅同事處理" }));
+      setDone((d) => ({ ...d, [`${ref}:${field}`]: "未處理：要有安員個人資料／安員修改權限嘅同事處理" }));
       return;
     }
     const conflict = !res.data.counts_hidden && res.data.field_conflicts > 0;
-    setDone((d) => ({ ...d, [`${key}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有安員個人資料權限先睇到）" : "已確認" }));
+    setDone((d) => ({ ...d, [`${ref}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有安員個人資料權限先睇到）" : "已確認" }));
     // 唔再每次決定後重新 preview：preview 對非老闆有每日次數上限，而且 done 已記低結果
   }
 
@@ -315,18 +316,18 @@ export default function GuardImportPage() {
                 <div className="space-y-1" data-testid="import-bank-rows">
                   <div className="text-[12px] font-semibold text-zk-muted">銀行戶口（預設遮罩）</div>
                   {preview.rows.filter((r) => r.bank_masked).slice(0, shown).map((r) => {
-                    const full = preview.viewer?.bank_view ? (personByKey.get(r.key)?.bank as { accountNo?: { value: string | null } } | undefined)?.accountNo?.value : null;
+                    const full = preview.viewer?.bank_view ? (pkg?.persons[r.index]?.bank as { accountNo?: { value: string | null } } | undefined)?.accountNo?.value : null;
                     return (
-                      <div key={r.key} className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
+                      <div key={r.ref || r.index} className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
                         <span className="text-zk-faint">{r.hkid_masked ?? "—"}</span>
                         {r.bank_masked && "account_masked" in r.bank_masked ? (
-                          <span className="break-all">{r.bank_masked.name ?? r.bank_masked.code ?? "—"} · 戶口 {showFull[r.key] && full ? full : (r.bank_masked.account_masked ?? "—")}</span>
+                          <span className="break-all">{r.bank_masked.name ?? r.bank_masked.code ?? "—"} · 戶口 {showFull[r.ref] && full ? full : (r.bank_masked.account_masked ?? "—")}</span>
                         ) : (
                           <span className="text-zk-faint">有銀行資料（你冇「安員銀行資料」睇權，唔顯示）</span>
                         )}
                         {full && (
-                          <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-[11.5px]" onClick={() => setShowFull((m) => ({ ...m, [r.key]: !m[r.key] }))}>
-                            {showFull[r.key] ? "隱藏全號" : "顯示全號"}
+                          <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-[11.5px]" onClick={() => setShowFull((m) => ({ ...m, [r.ref]: !m[r.ref] }))}>
+                            {showFull[r.ref] ? "隱藏全號" : "顯示全號"}
                           </button>
                         )}
                       </div>
@@ -376,9 +377,10 @@ export default function GuardImportPage() {
           <h2 className="text-sm font-semibold">覆核清單（{reviewRows.length} 人）</h2>
           {reviewRows.length === 0 && <EmptyState title="冇待覆核嘅欄" />}
           {reviewRows.slice(0, shown).map((r) => {
-            const person = personByKey.get(r.key);
+            const person = pkg?.persons[r.index];
+            const pkgKey = person?.key ?? "";
             return (
-              <div key={r.key} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-review-card">
+              <div key={r.ref || r.index} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-review-card">
                 <div className="flex flex-wrap items-center gap-2">
                   <Pill variant="neutral">{ACTION_LABEL[r.action]}</Pill>
                   <span className="text-zk-faint">身份證 {r.hkid_masked ?? "—"} · 電話 {r.phone_masked ?? "—"}</span>
@@ -392,7 +394,7 @@ export default function GuardImportPage() {
                   ))}
                 </div>
                 {REVIEWABLE.filter((f) => r.fields[f]?.status === "review" || (f === "name_zh" && r.name_review_pending)).map((f) => {
-                  const k = `${r.key}:${f}`;
+                  const k = `${r.ref}:${f}`;
                   const extracted = (person?.[PKG_KEY[f]!] as PkgField | undefined)?.value ?? "";
                   const current = f === "name_zh" ? r.current_name_zh : f === "name_en" ? r.current_name_en : null;
                   return (
@@ -416,18 +418,18 @@ export default function GuardImportPage() {
                           <span className="text-[12px] text-zk-muted">{done[k]}</span>
                         ) : (
                           <>
-                            <Button variant="primary" disabled={busy} onClick={() => onDecide(r.key, f, "confirm")}>
+                            <Button variant="primary" disabled={busy} onClick={() => onDecide(pkgKey, r.ref, f, "confirm")}>
                               確認
                             </Button>
-                            <Button disabled={busy || replaceDenied(f, r.fields[f]?.check ?? "")} onClick={() => onDecide(r.key, f, "replace")}>
+                            <Button disabled={busy || replaceDenied(f, r.fields[f]?.check ?? "")} onClick={() => onDecide(pkgKey, r.ref, f, "replace")}>
                               改正後確認
                             </Button>
                             {f === "name_zh" && r.reasons.includes("name_not_confirmed") && (
-                              <Button disabled={busy} onClick={() => onDecide(r.key, f, "keep_pending")}>
+                              <Button disabled={busy} onClick={() => onDecide(pkgKey, r.ref, f, "keep_pending")}>
                                 照建但標待核對
                               </Button>
                             )}
-                            <Button disabled={busy} onClick={() => onDecide(r.key, f, "skip")}>
+                            <Button disabled={busy} onClick={() => onDecide(pkgKey, r.ref, f, "skip")}>
                               略過
                             </Button>
                           </>

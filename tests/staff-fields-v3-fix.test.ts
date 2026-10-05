@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { hkidCheckDigitValid } from "@/lib/guards/identity";
+import { serverPersonKey } from "@/lib/guards/import/person-key";
 import { hashPackage, importPackageSchema, personKeyForHkid, type PackagePerson } from "@/lib/guards/import/package";
 import { POST as applyRoute } from "@/app/api/guards/import/apply/route";
 import { POST as previewImportRoute } from "@/app/api/guards/import/preview/route";
@@ -329,7 +330,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       const r3 = await applyPkg(owner, pkg3(p3 as never));
       const after = await prisma.triageQuestion.findMany({ where: { kind: "field_review" } });
       expect(after.filter((q) => q.groupKey === answeredKey)).toHaveLength(1); // 已答嗰條冇重出
-      expect(after.some((q) => q.groupKey === "k3")).toBe(true); // 新人先出新題
+      expect(after.some((q) => q.groupKey === serverPersonKey(mk2(H[6]!, "k3", "THREE EN") as never))).toBe(true); // 新人先出新題
       expect(r3.body.triage.new_questions).toBeLessThanOrEqual(2);
       expect(await prisma.triageQuestion.count()).toBeLessThanOrEqual(before + 2);
     });
@@ -531,10 +532,13 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       const { buildPackageV3 } = await import("../scripts/staff-import/lib/package-v3");
       const v2 = { version: 2 as const, generatedAt: "t", persons: [] };
       const ext = [{ key: H[2]!, keyKind: "hkid", hasDocs: false, staffNos: ["U77001"], flags: ["typed_list_only_person"], fields: {} }];
-      const a = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] });
-      const b = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] });
-      expect(a.pkg.persons[0]!.key).toBe(b.pkg.persons[0]!.key);
-      expect(a.pkg.persons[0]!.key).toMatch(/^typed:[0-9a-f]{12}$/);
+      const map: Record<string, string> = {};
+      const idFor = (k: string, v: string) => (map[`${k}|${v}`] ??= `rnd${Object.keys(map).length}`);
+      const a = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] }, { idFor });
+      const b = buildPackageV3(v2, ext, { maxwell: [{ hkid: H[2]!, nameZh: "測試", staffNo: "U77001" }] }, { idFor });
+      expect(a.pkg.persons[0]!.key).toBe(b.pkg.persons[0]!.key); // 對照檔令跨 build 穩定
+      expect(a.pkg.persons[0]!.key).toMatch(/^typed:rnd0$/);
+      expect(a.pkg.persons[0]!.key).not.toContain(H[2]!); // 唔含身份證，亦唔係身份證 hash
     });
 
     it("分診搜尋：GET /api/guards 用工號（含非在職）搵到人", async () => {

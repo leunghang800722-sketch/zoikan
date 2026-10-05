@@ -140,7 +140,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     // 入職日期如果係由文件導入寫入（guards audit 有 import_via 而且帶 hire_date）→ 提示核對（只提示，唔改計算；長工糧讀 guards.hire_date）
     const importedHire = result.guardAfter.hireDate
-      ? (await prisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM audit_log WHERE table_name = 'guards' AND row_id = ${id} AND action IN ('create','update') AND after ? 'import_via' AND coalesce(after->>'hire_date', '') <> ''`)[0]!.n > 0
+      ? (await prisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM audit_log WHERE table_name = 'guards' AND row_id = ${id} AND action IN ('create','update') AND after ? 'import_via' AND coalesce(after->>'hire_date', '') <> '' AND left(after->>'hire_date', 10) = ${result.guardAfter.hireDate.toISOString().slice(0, 10)} AND (before IS NULL OR before->>'hire_date' IS DISTINCT FROM after->>'hire_date')
+          AND created_at = (SELECT max(created_at) FROM audit_log WHERE table_name = 'guards' AND row_id = ${id} AND action IN ('create','update') AND coalesce(after->>'hire_date', '') <> '' AND (before IS NULL OR before->>'hire_date' IS DISTINCT FROM after->>'hire_date'))`)[0]!.n > 0
       : false;
     return ok(
       brandSafeResponse({

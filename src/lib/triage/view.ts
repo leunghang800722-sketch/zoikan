@@ -158,7 +158,7 @@ export interface QuestionView {
     reasons: string[];
     candidates: CandidateRow[];
     review_fields: { field: string; label: string; check: string }[];
-    ext_review: { key: string; label: string; check: string; status: string }[];
+    ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
     /** bank_identity_unknown：戶口（遮罩；全號淨係有銀行資料 view 先回） */
     unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
   };
@@ -232,7 +232,9 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),
         ext_review: (e.ext_review ?? []).map((f) => {
           const hide = isBankKey(f.key) ? !c.bankView : isEmergencyKey(f.key) ? !c.pii : false;
-          return { key: f.key, label: extLabel(f.key), check: hide && ["same", "differs", "conflict"].includes(f.check) ? "hidden" : f.check, status: f.status };
+          // held 原因 code（generic，冇值）：longterm_hire_date／identity／bank
+          const held = f.held === "longterm" ? "longterm_hire_date" : f.held === "identity" || f.held === "bank" ? f.held : undefined;
+          return { key: f.key, label: extLabel(f.key), check: hide && ["same", "differs", "conflict"].includes(f.check) ? "hidden" : f.check, status: f.status, ...(held ? { held } : {}) };
         }),
         unassigned: e.unassigned
           ? c.bankView

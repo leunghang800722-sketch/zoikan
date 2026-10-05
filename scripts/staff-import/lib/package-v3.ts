@@ -1,6 +1,6 @@
 // WP-STAFF-FIELDS 第二階段：由 v2 導入包（327 人）＋ person-fields-ext.json ＋ typed-sources.json 砌 v3 包。
 // 純函數（唔讀檔、唔印值）；輸入容忍欄位唔存在／舊格式。console 只准印計數（見 17-build-package-v3.ts）。
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { HKICL_BANK_CODE_SET, HKICL_BANK_OPTIONS } from '@/lib/longterm-payroll/hkicl-bank-codes';
 import { canonicalHkid } from '@/lib/guards/identity';
 import { importPackageSchemaV3, packagePersonSchema, unassignedBankAccountSchema } from '@/lib/guards/import/package';
@@ -58,10 +58,13 @@ export interface BuildOpts {
   /** person-fields.json 每人嘅 docIds（次序同 v2.persons 一致）：按次序 join 時逐對核對 docIds 集合；冇提供就唔做次序 join（只按 key join） */
   v2DocIds?: string[][];
   now?: Date;
+  /** 打字名單 only／Payroll Editor 對唔到人嘅 key：由私密對照檔（身份證／工號／戶口 → 隨機 id，已有就重用）攞，唔由身份證／戶口 hash 出嚟（無鹽 hash 可窮舉反推）。冇提供就每次隨機。 */
+  idFor?: (kind: 'typed' | 'pe', value: string) => string;
 }
 export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSources, opts: BuildOpts | Date = {}) {
   const o: BuildOpts = opts instanceof Date ? { now: opts } : opts;
   const now = o.now ?? new Date();
+  const idFor = o.idFor ?? (() => randomUUID().replace(/-/g, '').slice(0, 16));
   const counts: BuildCounts = {
     persons_total: 0, persons_with_docs: 0, persons_typed_only: 0, ext_joined: 0, ext_not_joined_docs: 0, unassigned_bank: 0, unassigned_dropped: 0,
     leaves_skipped_handwritten_unverified: 0, leaves_not_decidable_review: 0, bank_copy_only_skipped: 0, bank_review_pe_persons: 0, join_by_index: 0, join_fallback: 0, join_failed: 0, leaves_dropped_invalid: 0, identity_check_persons: 0, typed_only_no_identity_skipped: 0, by_field: {},
@@ -267,7 +270,7 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       const code = leafOf(F.bankCode, 'bank.bankCode', 'bank').value?.padStart(3, '0') ?? '';
       const acct = leafOf(F.bankAccountNo, 'bank.bankAccountNo', 'bank').value ?? '';
       const payee = leafOf(F.bankPayeeName, 'bank.bankPayeeName', 'bank').value ?? '';
-      const cand = { key: e.key.slice(0, 64), bankCode: code, accountNo: acct, payeeName: payee };
+      const cand = { key: `pe:${idFor('pe', e.key)}`, bankCode: code, accountNo: acct, payeeName: payee };
       if (unassignedBankAccountSchema.safeParse(cand).success) {
         unassigned.push(cand);
         counts.unassigned_bank += 1;
@@ -290,8 +293,8 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
       const m = /^([A-Z]{1,4})\d[0-9A-Z-]{0,15}$/.exec(n);
       return m ? [{ scheme: m[1]!, number: n }] : [];
     });
-    // 確定性 key（跨 build 穩定，令跨 session 去重認得）：來源檔類別＋身份證／工號
-    const newKey = `typed:${createHash('sha256').update(`typed_list|${hk ?? nos[0] ?? e.key}`).digest('hex').slice(0, 12)}`;
+    // key：私密對照檔嘅隨機 id（跨 build 穩定；唔由身份證 hash）。伺服器 dedupe 另用 HMAC(身份證)，唔靠包內 key
+    const newKey = `typed:${idFor('typed', hk ?? nos[0] ?? e.key)}`;
     curPerson = newKey;
     const x = extFields(e, staffNumbers);
     // 打字名單唔係身份來源（§26.2）：hkid／姓名一律 review，唔會用嚟自動建人；只用嚟 link 現有安員

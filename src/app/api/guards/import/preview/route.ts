@@ -1,7 +1,7 @@
 // WP-STAFF-IMPORT B3：`POST /api/guards/import/preview`——上載導入包（JSON body `{package}`）
 // → 統計（逐欄 confirmed／review／missing＋逐人 link／create／conflict／needs_review）＋逐人結果。
 // 唯讀、導入包唔入 DB。回應入面 hkid／電話／地址一律遮罩。
-import { requireImportPermission, parsePackage, assertPackageSize, maskPreviewForViewer, previewBodySchema, mapDecisions, assertDecisionTargets, assertBankPermissionForPackage } from "@/lib/guards/import/request";
+import { requireImportPermission, parsePackage, assertPackageSize, maskPreviewForViewer, previewBodySchema, mapDecisions, assertDecisionTargets, assertBankPermissionForPackage, redactRowKeys } from "@/lib/guards/import/request";
 import { previewImport } from "@/lib/guards/import/apply";
 import { hasPermission } from "@/lib/rbac/requirePermission";
 import { readJson } from "@/lib/api/query";
@@ -29,6 +29,7 @@ export async function POST(req: Request) {
     await auditImportPreview(session, getClientIp(req), result.package_hash, result.package.persons, result.person_stats, pkg.source);
     const bank = await hasPermission(session, "安員銀行資料", "view");
     const viewer = { pii_update: await hasPermission(session, "安員個人資料", "update"), guard_update: await hasPermission(session, "安員", "update"), bank_view: bank, pii_view: pii };
-    return ok(brandSafeResponse({ ...maskPreviewForViewer(result, { pii, bank }), viewer }));
+    const masked = maskPreviewForViewer(result, { pii, bank });
+    return ok(brandSafeResponse({ ...masked, rows: redactRowKeys(pkg, masked.rows), viewer }));
   });
 }
