@@ -46,6 +46,17 @@ export function dobPlausible(iso: string, now: Date = new Date()): boolean {
   return age >= 16 && age <= 90;
 }
 
+/** 簡體專用字（同繁體唔同形）——部分清單，淨係做「疑似簡體」警示（reason simplified_chars）；唔係完整判斷。 */
+const SIMPLIFIED_ONLY = new Set(
+  "陈张刘黄吴严谢叶华国伟杰马郑邓冯萧罗蒋韩许杨陆龙赵钱孙叶闫贺顾师齐汤贾钟庞龚丽艳红绿蓝阳阴阵际难离鸿鸣鹏鹤鲁鲍鲜鸡鱼麦齿龄龟见观规觉视览亲计认讯记讲许设访证评识诚诗话该详语误说请诸读课谁调谈谊谋谓谢谦谨负财货贤质购贯贵贸费资赏赖赞赵赶趋跃践踪轩软轮轻载轿辉输辈辑边辽达迁运这连迟进远违选递逻遗邮邻酿释针钉钓钢钱钻铁铃铜银铭链销锐锋锦键锻镇长门闪闭问闯间闲闷闹阅队阳阶际陆陕险随隐难雏雾霁静页顶项顺须顾顿预领频题颜额风飞饭饮饰饱馆驱驶驻驾骄验骑鱼鸟鸭鸿黄齐".split(""),
+);
+// 清單只放「簡體專用」字；繁簡同形嘅字（李、王、林、梁、何、蔡、麻、紫…）唔入清單
+function hasSimplifiedOnly(s: string): boolean {
+  for (const ch of s) if (SIMPLIFIED_ONLY.has(ch)) return true;
+  return false;
+}
+export const hasSimplifiedChars = hasSimplifiedOnly;
+
 export interface Normalized {
   /** 比較用 canonical */
   canon: string;
@@ -82,9 +93,11 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
     }
     case "name_zh": {
       const c = t.replace(/\s+/g, "");
-      const hasCjk = /[㐀-鿿]/.test(c);
-      const ok = hasCjk && c.length >= 2 && c.length <= 12 && !/[A-Za-z0-9]/.test(c);
-      return { canon: c, display: c, valid: ok, ...(ok ? {} : { reason: "name_zh_format" }) };
+      // 每個字都要係中文字（容許間隔號 ·），任何 ?／□／*／英數佔位 → review
+      const allCjk = c.length > 0 && /^[\p{Script=Han}·・•]+$/u.test(c) && /\p{Script=Han}/u.test(c);
+      const ok0 = allCjk && c.length >= 2 && c.length <= 12;
+      if (ok0 && hasSimplifiedOnly(c)) return { canon: c, display: c, valid: false, reason: "simplified_chars" };
+      return { canon: c, display: c, valid: ok0, ...(ok0 ? {} : { reason: "name_zh_format" }) };
     }
     case "name_en": {
       const c = t.toUpperCase().replace(/,/g, " ").replace(/\s+/g, " ").trim();
@@ -92,7 +105,9 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
       return { canon: c, display: c, valid: ok, ...(ok ? {} : { reason: "name_en_format" }) };
     }
     case "address": {
-      const canon = t.toUpperCase().replace(/[\s,，.。、;；:：\-－()（）]/g, "");
+      // 只折疊空白＋全半形統一（NFKC 已做）；保留數字之間嘅分隔符（, - / 號 樓 室…），
+      // 避免「Block 1, 23/F」同「Block 12, 3/F」當相同
+      const canon = t.toUpperCase().replace(/\s+/g, "");
       const ok = canon.length >= 6 && canon.length <= 200;
       return { canon, display: t, valid: ok, ...(ok ? {} : { reason: "address_format" }) };
     }

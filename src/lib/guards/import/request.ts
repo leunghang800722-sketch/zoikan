@@ -77,3 +77,20 @@ export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg:
 // 喺 applyPerson 做：只取決於「現值係咪非空」，補空欄得；403 由 applyImport 丟出（唔取決於新值）。
 
 export { maskPreviewForViewer, maskApplyForViewer } from "./project";
+
+/** decisions 指向包內唔存在嘅人，或者指向一個冇值又冇帶 value 嘅欄（skip 除外）→ 400。 */
+export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<string, Record<string, { action: string; value?: string } | undefined>> | undefined): void {
+  if (!decisions) return;
+  const byKey = new Map(pkg.persons.map((p) => [p.key, p]));
+  for (const [key, d] of Object.entries(decisions)) {
+    const person = byKey.get(key);
+    if (!person) throw BadRequest("decisions 指向導入包內唔存在嘅人");
+    for (const [snake, dec] of Object.entries(d)) {
+      if (!dec || dec.action === "skip") continue;
+      const f = SNAKE_TO_FIELD[snake];
+      if (!f) throw BadRequest("decisions 指向唔存在嘅欄位");
+      const hasValue = !!dec.value?.trim() || !!person[f].value?.trim();
+      if (!hasValue) throw BadRequest("decisions 指向冇值嘅欄位");
+    }
+  }
+}

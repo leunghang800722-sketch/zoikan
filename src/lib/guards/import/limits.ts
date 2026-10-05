@@ -55,3 +55,19 @@ export async function assertOcrReadQuota(session: Pick<AuthedSession, "baseRole"
 export async function auditImportPreview(session: Pick<AuthedSession, "userId">, ip: string | null, packageHash: string, persons: number, personStats: Record<string, number>, packageSource?: string): Promise<void> {
   await writeAudit({ actorUserId: session.userId, tableName: "guard_import", rowId: session.userId, action: "guard_import_preview", after: { persons, person_stats: personStats, package_hash: packageHash, ...(packageSource ? { package_source: packageSource } : {}) }, ip });
 }
+
+/**
+ * 並發安全：非老闆喺「檢查配額 → 做嘢 → 寫 audit（計數用）」整段內按用戶持有 advisory lock（pg_advisory_xact_lock），
+ * 令同一用戶嘅並發請求逐個過 check（後面嘅一定睇到前面已寫嘅 audit），唔會同時通過「先檢查後寫 audit」嘅空窗。
+ * 內部嘅 DB 寫入照用全域 prisma（另一條 connection，已 commit 先釋放 lock）。老闆唔受限、唔上鎖。
+ */
+export async function withUserQuotaLock<T>(session: Pick<AuthedSession, "baseRole" | "userId">, scope: "import" | "ocr", fn: () => Promise<T>): Promise<T> {
+  if (session.baseRole === "老闆") return fn();
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`guard_${scope}_quota:${session.userId}`}))`;
+      return fn();
+    },
+    { timeout: 170_000, maxWait: 60_000 },
+  );
+}

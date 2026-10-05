@@ -12,6 +12,8 @@ import { parseModelJson, readDocument } from "@/lib/guards/ocr/read";
 import { buildSystemPrompt, buildUserTextFull, buildUserTextTiles } from "@/lib/guards/ocr/prompts";
 import { DeepSeekVisionClient, OcrUnavailableError, setVisionClientForTests, type VisionClient, type VisionRequest, type VisionResponse } from "@/lib/guards/ocr/vision-client";
 import { isGuardOcrConfigured, OCR_DOC_FIELDS } from "@/lib/guards/ocr/config";
+import { CRITICAL_MSG, ackAfterEdit, applySummaryText, criticalPending, groupHkid, initialAck, reviewProblems } from "@/lib/guards/ocr/review-state";
+import { openAiClientOptions } from "@/lib/guards/ocr/vision-client";
 import { tileRects } from "@/lib/guards/ocr/browser-images";
 import { NON_BOSS_MAX_OCR_READS_PER_DAY, NON_BOSS_MAX_RUNS_PER_DAY, NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY } from "@/lib/guards/import/limits";
 import { hashPackage, importPackageSchema, personKeyForHkid, type PackagePerson } from "@/lib/guards/import/package";
@@ -32,7 +34,7 @@ function mkHkid(prefix: string, digits: string): string {
 }
 
 /** 按文件類型出標準答案嘅 fake client；overrideA／overrideB 改某欄。記錄所有請求。 */
-function fakeVision(opts: { a?: Record<string, unknown>; b?: Record<string, unknown>; raw?: { a?: string; b?: string }; fail?: Error; tokens?: [number, number] } = {}) {
+function fakeVision(opts: { a?: Record<string, unknown>; b?: Record<string, unknown>; raw?: { a?: string; b?: string }; fail?: Error; tokens?: [number, number]; truncated?: boolean } = {}) {
   const calls: VisionRequest[] = [];
   const std: Record<string, unknown> = {
     name_zh: SYN_NAME,
@@ -52,7 +54,7 @@ function fakeVision(opts: { a?: Record<string, unknown>; b?: Record<string, unkn
       const raw = isA ? opts.raw?.a : opts.raw?.b;
       const over = isA ? opts.a : opts.b;
       const [pt, ct] = opts.tokens ?? [800, 100];
-      return { text: raw ?? JSON.stringify({ ...std, ...(over ?? {}) }), promptTokens: pt, completionTokens: ct };
+      return { text: raw ?? JSON.stringify({ ...std, ...(over ?? {}) }), promptTokens: pt, completionTokens: ct, truncated: opts.truncated };
     },
   };
   return { client, calls };
@@ -142,7 +144,7 @@ describe("readDocument：兩次獨立讀", () => {
     }
     expect(r.fields.name_zh).toMatchObject({ status: "review", candidates: ["甲甲甲", "乙乙乙"] });
     expect(r.fields.hkid).toMatchObject({ status: "confirmed", value: "A123456(3)" });
-    expect(r.usage).toEqual({ promptTokens: 1600, completionTokens: 200, calls: 2 });
+    expect(r.usage).toEqual({ promptTokens: 1600, completionTokens: 200, calls: 2, truncated: 0 });
   });
   it("只出該類文件要嘅欄位：住址證明＝address；入職表＝phone＋address", async () => {
     const { client } = fakeVision();
@@ -180,7 +182,7 @@ describe("DeepSeekVisionClient：請求形狀＋錯誤映射", () => {
     const create = vi.fn().mockResolvedValue({ choices: [{ message: { content: "{}" } }], usage: { prompt_tokens: 7, completion_tokens: 3 } });
     const c = new DeepSeekVisionClient({ client: { chat: { completions: { create } } } as never, model: "m-x" });
     const r = await c.complete({ system: "SYS", userText: "U", images: [IMG, IMG + "2"] });
-    expect(r).toEqual({ text: "{}", promptTokens: 7, completionTokens: 3 });
+    expect(r).toEqual({ text: "{}", promptTokens: 7, completionTokens: 3, truncated: false });
     const req = create.mock.calls[0]![0];
     expect(req.model).toBe("m-x");
     expect(req.messages[0]).toEqual({ role: "system", content: "SYS" });
@@ -547,5 +549,171 @@ describe("single_ocr 單人導入包", () => {
     const pj = await (await post(previewRoute, owner, { package: pkg })).json();
     const aj = await (await post(applyRoute, owner, { package: pkg, package_hash: pj.package_hash })).json();
     expect(aj.triage?.open_questions ?? 0).toBeGreaterThan(0);
+  });
+});
+
+
+describe("Opus 驗收修正（M1／m1／m2／m7／m12 純函數）", () => {
+  type K = "name_zh" | "name_en" | "hkid" | "dob" | "sex" | "phone" | "address";
+  const KEYS: K[] = ["name_zh", "name_en", "hkid", "dob", "sex", "phone", "address"];
+  const MSG: Record<string, string> = {};
+  const vals: Record<K, string> = { name_zh: SYN_NAME, name_en: "CHAN TAI MAN", hkid: "A123456(3)", dob: "1988-03-15", sex: "M", phone: SYN_TEL, address: SYN_ADDR };
+  const formAfterRead = () => Object.fromEntries(KEYS.map((k) => [k, { value: vals[k], ack: initialAck(k, "confirmed") }])) as Record<K, { value: string; ack: boolean }>;
+
+  it("M1：兩讀一致（confirmed）嘅姓名／身份證號／出生日期，未撳「對過證件，啱」都唔可以去預覽", () => {
+    const f = formAfterRead();
+    expect(f.name_zh.ack || f.hkid.ack || f.dob.ack).toBe(false);
+    expect([f.name_en.ack, f.sex.ack, f.phone.ack, f.address.ack]).toEqual([true, true, true, true]);
+    expect(criticalPending(f)).toBe(true);
+    expect(reviewProblems(f, MSG)).toHaveLength(3);
+    // 逐欄撳確認先清走
+    f.name_zh.ack = true;
+    f.hkid.ack = true;
+    expect(reviewProblems(f, MSG)).toHaveLength(1);
+    f.dob.ack = true;
+    expect(reviewProblems(f, MSG)).toEqual([]);
+    expect(criticalPending(f)).toBe(false);
+    expect(CRITICAL_MSG).toContain("姓名、身份證號、出生日期");
+  });
+  it("M1：確認後改咗關鍵欄要重新確認；改非關鍵欄 confirmed 照樣已確認", () => {
+    expect(ackAfterEdit("hkid", "confirmed", "A123456(4)")).toBe(false);
+    expect(ackAfterEdit("name_zh", "review", "陳大文")).toBe(false);
+    expect(ackAfterEdit("phone", "confirmed", "61230000")).toBe(true);
+    expect(ackAfterEdit("address", "review", "")).toBe(false);
+  });
+  it("M1：「全部自己輸入」（OCR 狀態 missing）打字即算確認，唔受影響", () => {
+    for (const k of ["name_zh", "hkid", "dob"] as const) {
+      expect(initialAck(k, "missing")).toBe(false);
+      expect(ackAfterEdit(k, "missing", "x")).toBe(true);
+    }
+    const f = Object.fromEntries(KEYS.map((k) => [k, { value: vals[k], ack: ackAfterEdit(k, "missing", vals[k]) }])) as Record<K, { value: string; ack: boolean }>;
+    expect(reviewProblems(f, MSG)).toEqual([]);
+  });
+  it("M1：身份證號分組顯示", () => {
+    expect(groupHkid("A123456(3)")).toBe("A 123456 (3)");
+    expect(groupHkid("a1234563")).toBe("A 123456 (3)");
+  });
+  it("m1：地址保留數字之間嘅分隔符——Block 1, 23/F ≠ Block 12, 3/F；只折疊空白／全半形同大小寫", () => {
+    const a = normalizeField("address", "Block 1, 23/F, Test Rd").canon;
+    const b = normalizeField("address", "Block 12, 3/F, Test Rd").canon;
+    expect(a).not.toBe(b);
+    expect(reconcile("address", "Block 1, 23/F, Test Rd", "Block 12, 3/F, Test Rd").status).toBe("review");
+    expect(reconcile("address", "1座23樓A室 示範街", "1座2 3樓A室 示範街").status).toBe("confirmed"); // 純空白差異
+    expect(reconcile("address", "示範街１０號３樓", "示範街10號3樓").status).toBe("confirmed"); // 全半形
+    expect(reconcile("address", "示範街1-23號", "示範街12-3號").status).toBe("review");
+  });
+  it("m2：中文名每個字都要係中文字（容許 ·）；?／□／*／英數佔位 → review", () => {
+    for (const bad of ["陳?文", "陳□文", "陳*文", "陳大A", "陳大1"]) expect(reconcile("name_zh", bad, bad).status, bad).toBe("review");
+    expect(reconcile("name_zh", "陳大文", "陳大文").status).toBe("confirmed");
+    expect(reconcile("name_zh", "歐陽·大文", "歐陽·大文").status).toBe("confirmed");
+  });
+  it("m12：兩讀都係簡體專用字 → review（simplified_chars），繁體照 confirmed", () => {
+    expect(reconcile("name_zh", "陈大文", "陈大文")).toMatchObject({ status: "review", reason: "simplified_chars" });
+    expect(reconcile("name_zh", "李大文", "李大文").status).toBe("confirmed");
+    expect(buildSystemPrompt("id_card")).toMatch(/never convert to Simplified/);
+  });
+  it("m7：OpenAI client 固定 logLevel off（OPENAI_LOG=debug 都唔會印 request body）", () => {
+    const o = openAiClientOptions("k", "https://x", 1000);
+    expect(o.logLevel).toBe("off");
+    expect(o.maxRetries).toBe(0);
+  });
+  it("m4：完成提示講清楚寫咗乜（淨加電話都要講；真係冇寫先寫未有寫入）", () => {
+    const base = { guards_created: 0, guards_updated: 0, phones_added: 0, addresses_added: 0 };
+    expect(applySummaryText({ ...base, phones_added: 1 })).toContain("電話");
+    expect(applySummaryText({ ...base, phones_added: 1 })).not.toContain("未有寫入");
+    expect(applySummaryText({ ...base, guards_created: 1, fields_written: { hkid: 1, date_of_birth: 1 } })).toMatch(/已新增保安員.*身份證號.*出生日期/);
+    expect(applySummaryText({ ...base, addresses_added: 1 })).toContain("地址");
+    expect(applySummaryText(base)).toContain("未有寫入任何資料");
+    expect(applySummaryText({ ...base, counts_hidden: true })).toContain("權限");
+  });
+});
+
+describe("Opus 驗收修正（route：m5／m6／m8／m10／m11）", () => {
+  let fx: Wp2Fixture;
+  let owner: string;
+  let userId: string;
+  let cookie: string;
+  const savedKey = process.env.DEEPSEEK_API_KEY;
+  beforeEach(async () => {
+    await clearAll();
+    await prisma.triageQuestion.deleteMany({});
+    await prisma.triageSession.deleteMany({});
+    fx = await seedWp2Fixture();
+    const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+    userId = (await prisma.user.create({ data: { name: "測試會計並發", tel, passwordHash: "x", roleId: fx.roleIds["會計"], createdBy: "t" } })).id;
+    cookie = await sessionCookieForUser(userId);
+    owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    delete process.env.DEEPSEEK_API_KEY;
+  });
+  afterEach(() => {
+    setVisionClientForTests(null);
+    vi.restoreAllMocks();
+    if (savedKey !== undefined) process.env.DEEPSEEK_API_KEY = savedKey;
+  });
+  const docBody = JSON.stringify({ documents: [{ type: "id_card", full: IMG, tiles: [IMG, IMG, IMG, IMG] }] });
+  const ocr = (c: string, b: BodyInit = docBody) => ocrRoute(new Request("http://t/api/guards/ocr/read", { method: "POST", headers: { "content-type": "application/json", cookie: c }, body: b }));
+
+  it("m5：已用 99 次，同時 5 個 OCR 請求最多 1 個通過", async () => {
+    setVisionClientForTests(fakeVision().client);
+    await prisma.auditLog.createMany({ data: Array.from({ length: NON_BOSS_MAX_OCR_READS_PER_DAY - 1 }, () => ({ actorUserId: userId, tableName: "guard_ocr", rowId: userId, action: "guard_ocr_read", after: { ok: true } })) });
+    const res = await Promise.all(Array.from({ length: 5 }, () => ocr(cookie)));
+    const codes = res.map((r) => r.status).sort();
+    expect(codes.filter((c) => c === 200)).toHaveLength(1);
+    expect(codes.filter((c) => c === 429)).toHaveLength(4);
+  });
+  it("m5：單人包 preview 配額並發——已用 99 次，同時 5 個 preview 最多 1 個通過", async () => {
+    const hk = mkHkid("A", "123456");
+    const person = { key: personKeyForHkid(hk), hkid: { value: hk, status: "confirmed" }, nameZh: { value: SYN_NAME, status: "confirmed" }, nameEn: { value: null, status: "missing" }, dateOfBirth: { value: null, status: "missing" }, sex: { value: null, status: "missing" }, phone: { value: null, status: "missing" }, address: { value: null, status: "missing" }, staffNumbers: [], rating: "review", reasons: [] };
+    const pkg = { version: 2, generatedAt: "2026-10-05T00:00:00.000Z", source: "single_ocr", persons: [person] };
+    await prisma.auditLog.createMany({ data: Array.from({ length: NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY - 1 }, () => ({ actorUserId: userId, tableName: "guard_import", rowId: userId, action: "guard_import_preview", after: { package_source: "single_ocr" } })) });
+    const res = await Promise.all(Array.from({ length: 5 }, () => previewRoute(new Request("http://t/p", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ package: pkg }) }))));
+    expect(res.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(res.filter((r) => r.status === 429)).toHaveLength(4);
+  });
+  it("m6：非預期錯誤 → 通用 500，只 log 錯誤類別，唔 log message", async () => {
+    setVisionClientForTests(fakeVision({ fail: new TypeError("SECRET-MESSAGE-123") }).client);
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const res = await ocr(owner);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal_error", message: "系統錯誤" });
+    const logged = JSON.stringify(err.mock.calls);
+    expect(logged).toContain("TypeError");
+    expect(logged).not.toContain("SECRET-MESSAGE-123");
+  });
+  it("m8：冇 content-length 都串流讀，超上限即中止回 413（唔讀晒）", async () => {
+    setVisionClientForTests(fakeVision().client);
+    let pulled = 0;
+    const chunk = new TextEncoder().encode("A".repeat(1_000_000));
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled += 1;
+        if (pulled > 30) c.close();
+        else c.enqueue(chunk);
+      },
+    });
+    const res = await ocrRoute(new Request("http://t/api/guards/ocr/read", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: stream, duplex: "half" } as RequestInit));
+    expect(res.status).toBe(413);
+    expect(pulled).toBeLessThan(15);
+  });
+  it("m11：撞 output token 上限嘅呼叫數記入 audit（冇內容）", async () => {
+    setVisionClientForTests(fakeVision({ truncated: true }).client);
+    expect((await ocr(cookie)).status).toBe(200);
+    const a = (await prisma.auditLog.findFirstOrThrow({ where: { action: "guard_ocr_read", actorUserId: userId } })).after as Record<string, unknown>;
+    expect(a.truncated_calls).toBe(2);
+  });
+  it("m10：decisions 指向包內唔存在嘅人／冇值嘅欄 → 400（preview 同 apply）", async () => {
+    const hk = mkHkid("A", "123456");
+    const person = { key: personKeyForHkid(hk), hkid: { value: hk, status: "confirmed" }, nameZh: { value: SYN_NAME, status: "confirmed" }, nameEn: { value: null, status: "missing" }, dateOfBirth: { value: null, status: "missing" }, sex: { value: null, status: "missing" }, phone: { value: null, status: "missing" }, address: { value: null, status: "missing" }, staffNumbers: [], rating: "review", reasons: [] };
+    const pkg = { version: 2, generatedAt: "2026-10-05T00:00:00.000Z", source: "single_ocr", persons: [person] };
+    const hash = hashPackage(importPackageSchema.parse(pkg));
+    const post = (r: (q: Request) => Promise<Response>, b: unknown) => r(new Request("http://t/x", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify(b) }));
+    const ghost = { ghost: { phone: { action: "confirm", value: SYN_TEL } } };
+    const emptyField = { [person.key]: { phone: { action: "confirm" } } };
+    for (const d of [ghost, emptyField]) {
+      expect((await post(previewRoute, { package: pkg, decisions: d })).status).toBe(400);
+      expect((await post(applyRoute, { package: pkg, package_hash: hash, decisions: d })).status).toBe(400);
+    }
+    // 有 value 嘅 + skip 照常
+    expect((await post(previewRoute, { package: pkg, decisions: { [person.key]: { phone: { action: "confirm", value: SYN_TEL }, address: { action: "skip" } } } })).status).toBe(200);
   });
 });

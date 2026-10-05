@@ -36,6 +36,8 @@ export interface ReadUsage {
   promptTokens: number;
   completionTokens: number;
   calls: number;
+  /** 撞 output token 上限嘅呼叫數 */
+  truncated: number;
 }
 
 export interface DocumentReadResult {
@@ -67,6 +69,6 @@ export async function readDocument(client: VisionClient, type: OcrDocType, image
     type,
     fields: out,
     parse_ok: { a: pa !== null, b: pb !== null },
-    usage: { promptTokens: ra.promptTokens + rb.promptTokens, completionTokens: ra.completionTokens + rb.completionTokens, calls: 2 },
+    usage: { promptTokens: ra.promptTokens + rb.promptTokens, completionTokens: ra.completionTokens + rb.completionTokens, calls: 2, truncated: (ra.truncated ? 1 : 0) + (rb.truncated ? 1 : 0) },
   };
 }

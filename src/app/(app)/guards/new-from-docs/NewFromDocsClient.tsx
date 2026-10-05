@@ -12,14 +12,14 @@ import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 import { canvasFromImageFile, isPdfFile, openPdf, prepareFromCanvas, type PdfHandle, type PreparedImage } from "@/lib/guards/ocr/browser-images";
 import { normalizeField } from "@/lib/guards/ocr/normalize";
+import { CRITICAL_MSG, FIELD_LABEL, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
 import type { FieldStatus } from "@/lib/guards/ocr/normalize";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
 
 const DOC_LABEL: Record<OcrDocType, string> = { id_card: "身份證（必須）", address_proof: "住址證明（可選）", onboarding_form: "入職表（可選）" };
 const DOC_SHORT: Record<OcrDocType, string> = { id_card: "身份證", address_proof: "住址證明", onboarding_form: "入職表" };
-const FIELD_LABEL: Record<OcrFieldKey, string> = { name_zh: "中文姓名", name_en: "英文姓名", hkid: "身份證號", dob: "出生日期", sex: "性別", phone: "電話", address: "地址" };
 const FIELD_ORDER: OcrFieldKey[] = ["name_zh", "name_en", "hkid", "dob", "sex", "phone", "address"];
-const REQUIRED: OcrFieldKey[] = ["name_zh", "hkid"];
+const REQUIRED = REQUIRED_FIELDS;
 const REASON_MSG: Record<string, string> = {
   hkid_format: "身份證號格式唔啱",
   hkid_check_digit: "身份證號檢查碼唔啱，請對住圖核對",
@@ -34,6 +34,7 @@ const REASON_MSG: Record<string, string> = {
   reads_differ: "兩次辨識結果唔一樣，請對住圖揀一個或者自己改",
   one_read_unclear: "其中一次辨識睇唔清，請對住圖核對",
   unclear: "睇唔清，請自己輸入",
+  simplified_chars: "疑似簡體字，請對住證件核對原字",
 };
 
 interface OcrField {
@@ -112,7 +113,7 @@ const ACTION_TEXT: Record<string, string> = {
   conflict: "同現有資料有衝突，唔會自動寫入（可以交俾待答問題處理）",
   needs_review: "未能自動處理，唔會寫入（可以交俾待答問題處理）",
 };
-const CHECK_TEXT: Record<string, string> = { new: "會寫入", fill: "現有冇，會補", same: "現有一樣，唔使寫", differs: "現有唔同，唔會覆蓋", conflict: "現有唔同，唔會覆蓋", missing: "冇填", not_stored: "系統唔儲存", invalid_date: "日期唔合法" };
+const CHECK_TEXT: Record<string, string> = { new: "會寫入", fill: "現有冇，會補", same: "現有一樣，唔使寫", differs: "現有唔同，唔會覆蓋", conflict: "現有唔同，唔會覆蓋", missing: "冇填", not_stored: "系統唔儲存", invalid_date: "日期唔合法", hidden: "（冇權限睇比較）" };
 
 function statusPill(f: FormField) {
   if (f.ocrStatus === "confirmed") return <Pill variant="success">已確認</Pill>;
@@ -120,12 +121,7 @@ function statusPill(f: FormField) {
   return <Pill variant="neutral">讀唔到</Pill>;
 }
 
-/** 欄位驗證（淨驗格式；空值另外處理）。 */
-function fieldError(k: OcrFieldKey, v: string): string | null {
-  if (!v.trim()) return null;
-  const n = normalizeField(k, v);
-  return n.valid ? null : (REASON_MSG[n.reason ?? ""] ?? "格式唔啱");
-}
+const fieldError = (k: OcrFieldKey, v: string) => fieldErrorOf(k, v, REASON_MSG);
 
 export function NewFromDocsClient() {
   const [slots, setSlots] = useState<Record<OcrDocType, Slot>>({ id_card: emptySlot(), address_proof: emptySlot(), onboarding_form: emptySlot() });
@@ -209,7 +205,7 @@ export function NewFromDocsClient() {
     const put = (k: OcrFieldKey, d: OcrDocResult | undefined) => {
       const r = d?.fields[k];
       if (!r) return false;
-      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates, reason: r.reason, ack: r.status === "confirmed", edited: false, from: d!.type };
+      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates, reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type };
       return true;
     };
     for (const k of OCR_DOC_FIELDS.id_card) put(k, byType.get("id_card"));
@@ -241,22 +237,14 @@ export function NewFromDocsClient() {
   function setField(k: OcrFieldKey, v: string) {
     setForm((s) => {
       const f = s[k];
-      const edited = v !== f.ocrValue;
-      const ack = f.ocrStatus === "confirmed" ? true : v.trim() !== "" ? true : false;
-      return { ...s, [k]: { ...f, value: v, edited, ack } };
+      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v) } };
     });
   }
   const ackField = (k: OcrFieldKey, empty = false) => setForm((s) => ({ ...s, [k]: { ...s[k], ack: true, ...(empty ? { value: "", edited: s[k].ocrValue !== "" } : {}) } }));
 
-  const problems = FIELD_ORDER.map((k) => {
-    const f = form[k];
-    const v = f.value.trim();
-    if (REQUIRED.includes(k) && !v) return `${FIELD_LABEL[k]}要填`;
-    const err = fieldError(k, v);
-    if (err) return `${FIELD_LABEL[k]}：${err}`;
-    if (!f.ack) return `${FIELD_LABEL[k]}要確認`;
-    return null;
-  }).filter((x): x is string => !!x);
+  const problems = reviewProblems(form, REASON_MSG);
+  const critPending = criticalPending(form);
+  const [zoom, setZoom] = useState(false);
 
   function buildPackage() {
     const decisions: Record<string, Record<string, { action: "confirm"; value: string }>> = {};
@@ -332,7 +320,7 @@ export function NewFromDocsClient() {
     setSlots({ id_card: emptySlot(), address_proof: emptySlot(), onboarding_form: emptySlot() });
     const t = res.data.triage;
     if (t && !t.owned_by_other && (t.open_questions ?? 0) > 0 && t.session_id) setTriageSession(t.session_id);
-    setNotice(res.data.guards_created > 0 ? "已新增保安員" : res.data.guards_updated > 0 ? "已補充現有保安員資料" : "未有寫入任何資料");
+    setNotice(applySummaryText(res.data));
     setStep("done");
   }
 
@@ -410,7 +398,8 @@ export function NewFromDocsClient() {
         <div className="space-y-3" data-testid="ocr-step-review">
           {ocrInfo && <div className="text-[12.5px] text-zk-muted">{ocrInfo}。請對住圖逐欄核對：「要核對」同「讀唔到」嘅欄要你確認或者改正先可以繼續。</div>}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="space-y-2">
+            {/* 證件圖：手機 375 闊 sticky 細圖（撳一下放大），桌面 sticky 大圖——對欄值唔使捲上捲落 */}
+            <div className="sticky top-0 z-20 space-y-2 bg-zk-bg pb-2 md:top-2 md:self-start" data-testid="ocr-image-pane">
               {uploaded.length > 0 ? (
                 <>
                   <div className="flex flex-wrap gap-1.5">
@@ -422,7 +411,14 @@ export function NewFromDocsClient() {
                   </div>
                   {slots[viewDoc].prepared && (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={slots[viewDoc].prepared!.previewUrl} alt={`${DOC_SHORT[viewDoc]}原圖`} className="max-h-[50vh] w-full rounded border border-zk-border object-contain md:sticky md:top-2 md:max-h-[80vh]" data-testid="ocr-review-image" />
+                    <img
+                      src={slots[viewDoc].prepared!.previewUrl}
+                      alt={`${DOC_SHORT[viewDoc]}原圖`}
+                      onClick={() => setZoom((z) => !z)}
+                      title="撳一下放大／縮細"
+                      className={`w-full cursor-zoom-in rounded border border-zk-border object-contain ${zoom ? "max-h-[75vh]" : "max-h-32"} md:max-h-[80vh]`}
+                      data-testid="ocr-review-image"
+                    />
                   )}
                 </>
               ) : (
@@ -430,13 +426,19 @@ export function NewFromDocsClient() {
               )}
             </div>
             <div className="space-y-3">
-              {FIELD_ORDER.map((k) => {
+              {critPending && ocrInfo && (
+                <div className="rounded-lg border border-orange-300 bg-orange-50 p-2.5 text-[13px] font-semibold text-orange-800" data-testid="ocr-critical-notice">
+                  {CRITICAL_MSG}
+                </div>
+              )}
+              {[...FIELD_ORDER].sort((a, b) => Number(isCritical(b)) - Number(isCritical(a))).map((k) => {
                 const f = form[k];
                 const err = fieldError(k, f.value);
                 const needAck = !f.ack;
+                const crit = isCritical(k);
                 const reasonMsg = f.reason && f.ocrStatus !== "confirmed" ? REASON_MSG[f.reason] : null;
                 return (
-                  <div key={k} className="space-y-1 rounded-lg border border-zk-border p-2.5" data-testid={`ocr-field-${k}`} data-status={f.ocrStatus} data-ack={f.ack ? "1" : "0"}>
+                  <div key={k} className={`space-y-1 rounded-lg border p-2.5 ${crit ? "border-2 border-blue-300" : "border-zk-border"}`} data-testid={`ocr-field-${k}`} data-status={f.ocrStatus} data-ack={f.ack ? "1" : "0"}>
                     <div className="flex flex-wrap items-center gap-2 text-[13px]">
                       <span className="font-semibold">
                         {FIELD_LABEL[k]}
@@ -444,8 +446,14 @@ export function NewFromDocsClient() {
                       </span>
                       {statusPill(f)}
                       {f.edited && <Pill variant="shift">已改</Pill>}
+                      {crit && f.ack && f.value.trim() && <Pill variant="success">已對過證件</Pill>}
                       {k === "address" && addrFrom === "onboarding_form" && f.value && <Pill variant="neutral">來自入職表</Pill>}
                     </div>
+                    {crit && f.value.trim() && (
+                      <div className={`break-all rounded bg-zk-header px-2 py-1.5 text-[26px] font-bold leading-tight tracking-wide ${k === "hkid" ? "font-mono" : ""}`} data-testid={`ocr-big-${k}`}>
+                        {k === "hkid" ? groupHkid(f.value) : f.value}
+                      </div>
+                    )}
                     {k === "sex" ? (
                       <select className="w-full rounded-[5px] border border-zk-border px-2 py-1.5 text-[14px]" value={f.value} onChange={(e) => setField(k, e.target.value)} aria-label={FIELD_LABEL[k]}>
                         <option value="">（未填）</option>
@@ -476,8 +484,8 @@ export function NewFromDocsClient() {
                     {needAck && (
                       <div className="flex flex-wrap items-center gap-2">
                         {f.value.trim() ? (
-                          <Button variant="primary" disabled={!!err} onClick={() => ackField(k)}>
-                            對住圖確認
+                          <Button variant="primary" disabled={!!err} onClick={() => ackField(k)} data-testid={`ocr-ack-${k}`}>
+                            {crit ? "對過證件，啱" : "對住圖確認"}
                           </Button>
                         ) : !REQUIRED.includes(k) ? (
                           <Button onClick={() => ackField(k, true)}>呢項冇資料／略過</Button>
@@ -491,7 +499,7 @@ export function NewFromDocsClient() {
               })}
             </div>
           </div>
-          {problems.length > 0 && <div className="text-[12.5px] text-orange-700" data-testid="ocr-problems">仲有 {problems.length} 項要處理：{problems.slice(0, 4).join("、")}{problems.length > 4 ? "…" : ""}</div>}
+          {problems.length > 0 && <div className="text-[12.5px] text-orange-700" data-testid="ocr-problems">{critPending && ocrInfo ? `${CRITICAL_MSG}。` : ""}仲有 {problems.length} 項要處理：{problems.slice(0, 4).join("、")}{problems.length > 4 ? "…" : ""}</div>}
           <div className="flex flex-wrap gap-2">
             <Button onClick={startOver}>重新開始</Button>
             <Button variant="primary" disabled={busy || problems.length > 0} onClick={() => void onPreview()} data-testid="ocr-to-preview">
@@ -528,7 +536,7 @@ export function NewFromDocsClient() {
                   return (
                     <tr key={k} className="border-t border-zk-border first:border-t-0">
                       <td className="p-2 text-zk-faint">{FIELD_LABEL[k]}</td>
-                      <td className="p-2">{k === "phone" && c?.check === "differs" ? "現有有其他電話，會加入呢個號碼（冇「安員個人資料」權限只補空）" : (CHECK_TEXT[c?.check ?? "missing"] ?? c?.check)}</td>
+                      <td className="p-2">{k === "phone" && c?.check === "differs" ? "現有有其他電話，會加入呢個號碼（冇「安員個人資料」權限只補空）" : (CHECK_TEXT[c?.check ?? "missing"] ?? "（未能比較）")}</td>
                     </tr>
                   );
                 })}

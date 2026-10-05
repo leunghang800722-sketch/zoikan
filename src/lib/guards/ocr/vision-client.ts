@@ -15,6 +15,8 @@ export interface VisionResponse {
   text: string;
   promptTokens: number;
   completionTokens: number;
+  /** finish_reason==="length"＝撞咗 output token 上限（只記有冇，冇內容） */
+  truncated?: boolean;
 }
 export interface VisionClient {
   readonly model: string;
@@ -32,6 +34,11 @@ export class OcrUnavailableError extends Error {
 
 type ChatApi = Pick<OpenAI, "chat">;
 
+/** OpenAI client 設定：固定 logLevel "off"，就算 `OPENAI_LOG=debug` 都唔會印 request body（內含證件圖）。 */
+export function openAiClientOptions(apiKey: string, baseURL: string, timeoutMs: number) {
+  return { apiKey, baseURL, timeout: timeoutMs, maxRetries: 0, logLevel: "off" as const };
+}
+
 export class DeepSeekVisionClient implements VisionClient {
   readonly model: string;
   private readonly api: ChatApi;
@@ -44,7 +51,7 @@ export class DeepSeekVisionClient implements VisionClient {
     }
     const apiKey = opts?.apiKey ?? process.env.DEEPSEEK_API_KEY;
     if (!apiKey) throw new OcrUnavailableError(null);
-    this.api = new OpenAI({ apiKey, baseURL: opts?.baseURL ?? process.env.DEEPSEEK_BASE_URL ?? DEFAULT_OCR_BASE_URL, timeout: opts?.timeoutMs ?? OCR_CALL_TIMEOUT_MS, maxRetries: 0 });
+    this.api = new OpenAI(openAiClientOptions(apiKey, opts?.baseURL ?? process.env.DEEPSEEK_BASE_URL ?? DEFAULT_OCR_BASE_URL, opts?.timeoutMs ?? OCR_CALL_TIMEOUT_MS));
   }
 
   async complete(req: VisionRequest): Promise<VisionResponse> {
@@ -59,7 +66,7 @@ export class DeepSeekVisionClient implements VisionClient {
           { role: "user", content: [{ type: "text", text: req.userText }, ...req.images.map((url) => ({ type: "image_url" as const, image_url: { url } }))] },
         ],
       });
-      return { text: res.choices[0]?.message?.content ?? "", promptTokens: res.usage?.prompt_tokens ?? 0, completionTokens: res.usage?.completion_tokens ?? 0 };
+      return { text: res.choices[0]?.message?.content ?? "", promptTokens: res.usage?.prompt_tokens ?? 0, completionTokens: res.usage?.completion_tokens ?? 0, truncated: res.choices[0]?.finish_reason === "length" };
     } catch (e) {
       // OpenAI.APIError 包括連線／超時子類；其餘（例如 bug）原樣拋，唔吞
       if (e instanceof OpenAI.APIError) throw new OcrUnavailableError(typeof e.status === "number" ? e.status : null);
