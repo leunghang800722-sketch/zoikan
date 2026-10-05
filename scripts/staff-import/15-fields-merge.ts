@@ -19,6 +19,7 @@ interface Task { id: string; person: number; file: string; spec: string; fields:
 interface Typed {
   maxwell: { ref: string; staffNo: string | null; nameEn: string | null; nameZh: string | null; hkid: string | null; join: string | null; payee: string | null; bankCode: string | null; acct: string | null; sppNo: string | null; sppA: string | null; sppB: string | null; qas: string | null; green: string | null; emergency: (string | null)[] }[];
   uteam: { ref: string; staffNo: string | null; join: string | null; hkid: string | null; nameZh: string | null; nameEn: string | null; emergency: (string | null)[]; bankCode: string | null; acct: string | null }[];
+  parttime?: { ref: string; staffNo: string | null; hkid: string | null; firstStamp: string | null; lastStamp: string | null }[];
   payrollEditor: { month: string; bankCode: string | null; acct: string; name: string }[];
 }
 interface Person {
@@ -43,6 +44,7 @@ async function main() {
   };
   const first = await loadReads('first-read');
   const second = await loadReads('second-read');
+  const ocr2 = await J<Record<string, { nos: string[]; to: string[] }>>(path.join(FIELDS_OUT, 'permit-ocr2.json'), {});
   const taskById = new Map(tasks.map((t) => [t.id, t]));
   const summaryFlags: Record<string, number> = {};
   const bump = (k: string) => (summaryFlags[k] = (summaryFlags[k] ?? 0) + 1);
@@ -81,6 +83,17 @@ async function main() {
     for (const r of p.ut) if (r.nameEn) p.names.push(r.nameEn);
   }
 
+  const ptLinked: Record<string, string[]> = {};
+  let ptUnlinked = 0;
+  for (const r of typed.parttime ?? []) {
+    const p = link(r.hkid, r.staffNo);
+    if (!p) { ptUnlinked++; continue; }
+    const sn = cleanNo(r.staffNo);
+    if (sn && !p.staffNos.includes(sn)) (ptLinked[p.key] ??= []).push(sn);
+  }
+  summaryFlags.parttime_rows_unlinked = ptUnlinked;
+  summaryFlags.parttime_extra_staffno_persons = Object.keys(ptLinked).length;
+
   // ---- Payroll Editor 對人 ----
   const peAccts = new Map<string, { acct: string; code: string | null; name: string; months: string[] }>();
   for (const r of typed.payrollEditor) {
@@ -103,25 +116,34 @@ async function main() {
   persons.push(...peOnly);
 
   // ---- 讀數 → 候選 ----
-  const permitOcr = new Map<string, { no: string | null; to: Set<string> }>();
+  const permitOcr = new Map<string, { no: string | null; nos: string[]; to: Set<string> }>();
   async function ocrOfPermit(docId: string, page: number) {
     const k = `${docId}-p${page}`;
     if (permitOcr.has(k)) return permitOcr.get(k)!;
     const pages = (await fs.readFile(path.join(OUT, 'ocr', `${docId}.jsonl`), 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l) as OcrPage).filter((o) => !o.alt);
     const lines = pages.find((o) => o.page === page)?.lines ?? [];
     const txt = lines.map((l) => l.t).join(' ');
-    let no: string | null = null;
-    for (const m of txt.matchAll(/[A-Z]{1,2}\s*-?\s*\d{6}\s*-?\s*[0-9A]\s*-?\s*\d{3}/g)) { const n = normPermitNo(m[0]); if (n) { no = n; break; } }
+    const nos: string[] = [];
+    for (const m of txt.matchAll(/[A-Z]{1,2}\s*-?\s*\d{6}\s*-?\s*[0-9A]\s*-?\s*\d{3}/g)) { const n = normPermitNo(m[0]); if (n && !nos.includes(n)) nos.push(n); }
+    const no = nos[0] ?? null;
     const to = new Set<string>();
     for (const l of lines) { const m = /^\s*(20\d{2}-\d{2}-\d{2})\s*$/.exec(l.t); if (m) to.add(m[1]); }
-    const v = { no, to };
+    const v = { no, nos, to };
     permitOcr.set(k, v);
     return v;
+  }
+  // 整頁 OCR ∪ 裁圖四向重跑 OCR（兩者都係本機 Apple Vision，同屬「本機 OCR」一個證據類別）
+  async function ocrFor(tid: string, docId: string, page: number) {
+    const a = await ocrOfPermit(docId, page);
+    const b = ocr2[tid];
+    return { nos: [...new Set([...a.nos, ...(b?.nos ?? []).filter((x) => x.length > 0)])], to: new Set([...a.to, ...(b?.to ?? [])]), no: a.no };
   }
   const dates = (v: string | null | undefined) => normDate(v ?? null);
   for (const p of persons) {
     const C: Record<string, Cand[]> = {};
     const add = (f: string, src: SrcKind, v: string | null | undefined, ref?: string) => { if (v) (C[f] ??= []).push({ src, value: v, ref }); };
+    const hireBy = new Map<string, Cand[]>();
+    const addHire = (sn: string | null, src: SrcKind, v: string | null) => { if (v) hireBy.set(sn ?? '?', [...(hireBy.get(sn ?? '?') ?? []), { src, value: v }]); };
     const emContacts: { src: SrcKind; slot: number; name: string | null; rel: string | null; tel: string | null; telRaw: string | null }[] = [];
     // 打字名單
     for (const r of p.mx) {
@@ -132,12 +154,12 @@ async function main() {
       const q = dates(r.qas);
       if (q) add(q <= TODAY ? 'qasIssueDate' : 'qasExpiryDate', 'typed_maxwell', q);
       add('safetyCardExpiry', 'typed_maxwell', dates(r.green));
-      add('hireDate', 'typed_maxwell', dates(r.join));
+      addHire(cleanNo(r.staffNo), 'typed_maxwell', dates(r.join));
       const [en, er, et] = r.emergency;
       if (en || et) emContacts.push({ src: 'typed_maxwell', slot: 9, name: en, rel: er, tel: normalizeTelHk(et), telRaw: et });
     }
     for (const r of p.ut) {
-      add('hireDate', 'typed_uteam', dates(r.join));
+      addHire(cleanNo(r.staffNo), 'typed_uteam', dates(r.join));
       const [en, er, et] = r.emergency;
       if (en || et) emContacts.push({ src: 'typed_uteam', slot: 9, name: en, rel: er, tel: normalizeTelHk(et), telRaw: et });
     }
@@ -147,8 +169,8 @@ async function main() {
       for (const t of tasks.filter((x) => x.id.startsWith(`${docId}-`))) {
         const reads: [SrcKind, ReadMap[string] | undefined][] = [[t.handwritten ? 'hand_read1' : 'printed_read1', first[t.id]], [t.handwritten ? 'hand_read2' : 'printed_read2', second[t.id]]];
         if (t.spec === 'permit_card') {
-          const o = await ocrOfPermit(docId, Number(/-p(\d+)-/.exec(t.id)![1]));
-          add('siaPermitNo', 'printed_ocr', o.no);
+          const o = await ocrFor(t.id, docId, Number(/-p(\d+)-/.exec(t.id)![1]));
+          for (const n of o.nos) add('siaPermitNo', 'printed_ocr', n);
           for (const f of ['siaPermitAExpiry', 'siaPermitBExpiry']) o.to.forEach((d) => { (C[`${f}__ocrset`] ??= []).push({ src: 'printed_ocr', value: d }); });
         }
         for (const [src, rd] of reads) {
@@ -164,7 +186,7 @@ async function main() {
           add('siaPermitCExpiry', src, dates(f.exp_c ?? f.c_to)); add('siaPermitDExpiry', src, dates(f.exp_d ?? f.d_to));
           add('qasIssueDate', src, dates(f.qas_issue)); add('qasExpiryDate', src, dates(f.qas_expiry));
           add('safetyCardNo', src, f.green_no ? f.green_no.toUpperCase().replace(/\s+/g, '') : null); add('safetyCardExpiry', src, dates(f.green_expiry));
-          add('hireDate', src, dates(f.join));
+          addHire(cleanNo(index.get(docId)?.staffNo), src, dates(f.join));
           if (f.staff_no) staffForm.push(cleanNo(f.staff_no)!);
           for (const s of [1, 2]) {
             const nm = f[`em${s}_name`], tl = f[`em${s}_tel`], rl = f[`em${s}_rel`];
@@ -180,15 +202,31 @@ async function main() {
       for (const c of [...(C[f] ?? [])]) if ((c.src === 'printed_read1' || c.src === 'printed_read2') && set.includes(c.value)) add(f, 'printed_ocr', c.value);
     }
     {
-      // 打字名單欠序號（3 段）而讀數有 4 段、前 3 段相同 → 升為 4 段（記 reason 喺 flags）
-      const full = (C.siaPermitNo ?? []).filter((c) => c.value.length > 12).map((c) => c.value);
-      for (const c of C.siaPermitNo ?? []) if (c.value.length <= 12) { const f = full.find((x) => x.startsWith(c.value)); if (f) { c.value = f; p.flags.push('typed_permit_no_serial_filled'); } }
+      // (1) 前段相同、其一欠序號 → 補成較長嗰個（flag）；(2) 有身份證號時，前段唔等於身份證號嘅候選剔走（有對得上先剔，flag）
+      let cs = C.siaPermitNo ?? [];
+      const longer = cs.map((c) => c.value).filter((v) => v.length > 12);
+      for (const c of cs) if (c.value.length <= 12) { const f = longer.find((x) => x.startsWith(c.value)); if (f) { c.value = f; p.flags.push('permit_no_serial_filled'); } }
+      if (p.hkid && cs.some((c) => permitMatchesHkid(c.value, p.hkid))) {
+        const kept = cs.filter((c) => permitMatchesHkid(c.value, p.hkid));
+        if (kept.length < cs.length) p.flags.push('permit_no_candidates_discarded_not_matching_hkid');
+        cs = kept;
+      }
+      C.siaPermitNo = cs;
     }
     const F = p.fields;
+    if (ptLinked[p.key]) F.extraStaffNosFromParttimeList = ptLinked[p.key];
     F.siaPermitNo = resolveField(C.siaPermitNo ?? [], { validate: (v) => (p.hkid && !permitMatchesHkid(v, p.hkid) ? 'permit_no_not_matching_hkid' : null) });
     for (const f of ['siaPermitAExpiry', 'siaPermitBExpiry', 'siaPermitCExpiry', 'siaPermitDExpiry', 'safetyCardExpiry', 'qasExpiryDate']) F[f] = resolveField(C[f] ?? [], { validate: (v) => (expiryInRange(v) ? null : 'date_out_of_range') });
     F.qasIssueDate = resolveField(C.qasIssueDate ?? [], { validate: (v) => (issueInRange(v) ? null : 'date_out_of_range') });
-    F.hireDate = resolveField(C.hireDate ?? [], { validate: (v) => (joinInRange(v) ? null : 'date_out_of_range') });
+    {
+      // 入職日期掛喺每個工號行（老闆 2026-09-19：全部保留）：逐工號 resolve；人層面取最早，來源註明
+      const rows = [...hireBy.entries()].map(([sn, cs]) => ({ staffNo: sn, field: resolveField(cs, { validate: (v) => (joinInRange(v) ? null : 'date_out_of_range') }) }));
+      F.staffNumbers = rows.map((r) => ({ staffNo: r.staffNo, hireDate: r.field }));
+      const vals = rows.flatMap((r) => r.field.candidates.map((c) => ({ v: c.value, src: c.sources })));
+      const earliest = vals.length ? vals.reduce((a, b) => (b.v < a.v ? b : a)) : null;
+      const anyReview = rows.some((r) => r.field.status === 'review');
+      F.hireDate = !earliest ? { value: null, status: 'missing', candidates: [], sources: [], reasons: [] } : { value: earliest.v, status: anyReview ? 'review' : 'confirmed', candidates: vals.map((x) => ({ value: x.v, sources: x.src })), sources: [...new Set(vals.flatMap((x) => x.src))], reasons: [...(rows.length > 1 ? ['earliest_of_staff_numbers'] : []), ...(anyReview ? ['same_staff_no_sources_disagree'] : []), ...rows.flatMap((r) => r.field.reasons.filter((x) => x === 'typed_list_only'))] } satisfies FieldOut;
+    }
     F.safetyCardNo = resolveField(C.safetyCardNo ?? []);
     {
       const ex = ['siaPermitAExpiry', 'siaPermitBExpiry', 'siaPermitCExpiry', 'siaPermitDExpiry'] as const;
@@ -250,6 +288,23 @@ async function main() {
     }
   }
 
+  // ---- 印刷牌照卡：本機 OCR vs 視覺第一讀 一致率 ----
+  const agree = { permitNo: { both: 0, same: 0 }, toDates: { both: 0, same: 0 } };
+  for (const t of tasks.filter((x) => x.spec === 'permit_card')) {
+    const rd = first[t.id];
+    if (!rd || rd.legible === 'illegible') continue;
+    const m = /^(.+)-p(\d+)-permit_card$/.exec(t.id)!;
+    const o = await ocrFor(t.id, m[1], Number(m[2]));
+    const vn = rd.fields.permit_no && !(rd.unsure ?? []).includes('permit_no') ? normPermitNo(rd.fields.permit_no) : null;
+    if (vn && o.nos.length) { agree.permitNo.both++; if (o.nos.includes(vn)) agree.permitNo.same++; }
+    for (const k of ['a_to', 'b_to', 'c_to', 'd_to']) {
+      const dv = rd.fields[k] && !(rd.unsure ?? []).includes(k) ? normDate(rd.fields[k]) : null;
+      if (dv && o.to.size) { agree.toDates.both++; if (o.to.has(dv)) agree.toDates.same++; }
+    }
+  }
+  summaryFlags.ocr_vs_vision_permitNo_both = agree.permitNo.both; summaryFlags.ocr_vs_vision_permitNo_same = agree.permitNo.same;
+  summaryFlags.ocr_vs_vision_toDates_both = agree.toDates.both; summaryFlags.ocr_vs_vision_toDates_same = agree.toDates.same;
+
   // ---- 輸出 ----
   const out = persons.map((p) => ({ key: p.key, keyKind: p.keyKind, hasDocs: p.hasDocs, docIds: p.docIds, staffNos: p.staffNos, typedSources: { maxwell: p.mx.length, uteam: p.ut.length, payrollEditor: p.pe.length }, flags: [...new Set(p.flags)], fields: p.fields }));
   await fs.writeFile(path.join(FIELDS_OUT, 'person-fields-ext.json'), JSON.stringify(out, null, 1));
@@ -263,9 +318,17 @@ async function main() {
   }));
   const srcDist: Record<string, Record<string, number>> = {};
   fieldNames.forEach((f) => { srcDist[f] = {}; out.forEach((o) => ((o.fields[f] as FieldOut)?.sources ?? []).forEach((s) => (srcDist[f][s] = (srcDist[f][s] ?? 0) + 1))); });
+  const cropMissingReasons: Record<string, number> = {};
+  {
+    const last = new Map<string, { missing: { reason: string }[] }>();
+    for (const f of (await fs.readdir(FIELDS_OUT)).filter((x) => /^crops-manifest.*\.json$/.test(x)).sort()) for (const pr of await J<{ key: string; missing: { reason: string }[] }[]>(path.join(FIELDS_OUT, f))) last.set(pr.key, pr);
+    for (const pr of last.values()) for (const m of pr.missing) cropMissingReasons[m.reason] = (cropMissingReasons[m.reason] ?? 0) + 1;
+  }
   const summary = {
     persons: { total: out.length, withDocs: groupsOf((p) => p.hasDocs).length, typedListOnly: groupsOf((p) => p.flags.includes('typed_list_only_person')).length, payrollEditorOnly: groupsOf((p) => p.flags.includes('payroll_editor_only_person')).length },
-    fieldStatus: { allPersons: stat(out), withDocs: stat(groupsOf((p) => p.hasDocs)) },
+    fieldStatus: { allPersons: stat(out), withDocs: stat(groupsOf((p) => p.hasDocs)), typedListOnly: stat(groupsOf((p) => p.flags.includes('typed_list_only_person'))), payrollEditorOnly: stat(groupsOf((p) => p.flags.includes('payroll_editor_only_person'))) },
+    cropMissingReasons,
+    readQueue: { handwritten: tasks.filter((t) => t.handwritten).length, printed: 0, note: '印刷頁（牌照卡、銀行副本）以 本機OCR＝視覺讀數 確認，唔入第二讀數隊列' },
     sourceDistribution: srcDist,
     matching: summaryFlags,
     readUnits: { tasks: tasks.length, firstRead: Object.keys(first).length, secondRead: Object.keys(second).length },

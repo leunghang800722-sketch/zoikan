@@ -29,3 +29,12 @@
 
 ## 申請表版式
 `lib/fields-locate.ts detectTemplate`：威信（wilson；第 1 頁個人資料，第 2 頁續頁含其他牌照＋兩位緊急聯絡人，部分版式第 1 頁有銀行欄）、在勤（maxwell；單頁，只有 1 個緊急聯絡人格）、other。威信第一款版式冇緊急聯絡人格（`template_without_emergency_section`）。「可到職日期」係可上班日，唔當入職日期。
+
+## 補充（全量視覺讀數後）
+- `py/fields-batch-sheets.py [--only ids.json --prefix r1-]`：按 spec 分組疊成批次聯絡表（`bsheets/`，標籤＝裁圖 id）供視覺讀（可分批交 sub-agent，每批寫 `first-read-bNN-pKK.json`）。銀行副本只出 OCR 有銀行字眼嘅頁。
+- `13-fields-crops.ts --redo-missing --manifest r1`：對 label 定位失敗（OCR 標籤被讀花）嘅申請表，用版式相對位置補裁（`how` 為 `relative_*`／`maxwell_relative_title`）；`14` 會按 key 合併多份 manifest。
+- `16-permit-ocr.ts`：牌照卡裁圖放大＋四向重跑本機 Apple Vision → `permit-ocr2.json`（獨立「本機 OCR」讀數；與整頁 OCR 同屬一個證據類別）。
+- 入職日期：逐工號帶自己嘅入職日期（`staffNumbers[].hireDate`，Maxwell／U Team／申請表各自來源）；人層面 `hireDate` 取最早，reason `earliest_of_staff_numbers`；同一工號內來源自相矛盾先 `review`。
+- 牌照號碼：候選前段須等於身份證號（有對得上先剔走其餘，flag `permit_no_candidates_discarded_not_matching_hkid`）；其一欠序號時補成較長嗰個（flag `permit_no_serial_filled`）。
+- 「在勤兼職資料.xlsx 的副本」其實係普通 xlsx（與 `在勤兼職資料-copy.xlsx` md5 相同），只係 openpyxl 拒讀副檔名「的副本」；已改讀 `-copy.xlsx`，取 MP 工號（補 `extraStaffNosFromParttimeList`）。表內「頭印日期／尾印日期」唔係入職日期，只存喺 typed-sources.json，唔當入職來源。
+- 盲讀包 `second-read-queue.json` 只含手寫裁圖；印刷頁（牌照卡、銀行副本）以 本機OCR＝視覺讀數 確認。

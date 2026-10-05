@@ -17,6 +17,10 @@ const RE = {
   emergM: /緊急事故聯絡人|緊急.{0,4}聯絡人/,
   otherPermits: /其他牌照|Other Permits/i,
   qasM: /QAS|QAIHT/i,
+  title: /職位申請表|EMPLOYMENT APP|Application Form/i,
+  section: /個人資料\s*Person|Person\s*Particulars|申請人個人資料/i,
+  emergFuzzy: /(事故|紧|緊|紧).{0,3}聯絡人|聯絡人姓名|Emergency|Contacts/i,
+  contFuzzy: /牌照|Permits|Green Card|Q\.?A\.?S\.?\s*(證|Cert)|急救|Driving/i,
 };
 const t = (l: OcrLine) => norm(l.t);
 const find = (ls: OcrLine[], re: RegExp, pred: (l: OcrLine) => boolean = () => true) => ls.find((l) => re.test(t(l)) && pred(l));
@@ -35,19 +39,29 @@ export function locateFormCrops(lines: OcrLine[], template: FormTemplate): { kin
   const ls = lines.filter((l) => l.t.trim());
   const out: { kind: CropKind; box: NBox; how: string }[] = [];
   if (template === 'maxwell') {
-    const em = find(ls, RE.emergM);
-    const pm = find(ls, RE.permitNo);
+    const em = find(ls, RE.emergM) ?? find(ls, RE.emergFuzzy, (l) => l.x < 0.4);
+    const pm = find(ls, RE.permitNo) ?? find(ls, /可證號碼|可証號碼|許可.{0,2}號/, (l) => l.x < 0.4);
     const top = em ? em.y + em.h + 0.012 : null;
     const bottom = pm ? pm.y - 0.012 : null;
     if (top !== null && bottom !== null && top > bottom) out.push({ kind: 'form_emergency', box: box(0.05, bottom - 0.012, 0.99, top + 0.012), how: 'maxwell_band' });
     else if (top !== null) out.push({ kind: 'form_emergency', box: box(0.05, top - 0.11, 0.99, top), how: 'maxwell_em_only' });
+    else {
+      const ti = find(ls, RE.title);
+      if (ti) out.push({ kind: 'form_emergency', box: box(0.05, ti.y - 0.345, 0.99, ti.y - 0.215), how: 'maxwell_relative_title' });
+    }
     return out;
   }
   // wilson / other
   const jn = find(ls, RE.join);
   if (jn) out.push({ kind: 'form_join', box: box(0.02, jn.y - 0.05, 0.99, jn.y + jn.h + 0.015), how: 'join_label' });
   const bk = find(ls, RE.bank);
+  const sec = find(ls, RE.section);
   const pe = find(ls, RE.permitExp) ?? find(ls, RE.permitNo);
+  if (!jn) {
+    const ti = find(ls, RE.title);
+    if (ti) out.push({ kind: 'form_join', box: box(0.02, ti.y - 0.14, 0.99, ti.y - 0.01), how: 'relative_title' });
+  }
+  if (!pe && sec) out.push({ kind: 'form_personal', box: box(0.02, sec.y - 0.37, 0.99, sec.y - 0.19), how: 'relative_section' });
   if (pe) {
     const top = bk ? bk.y + bk.h + 0.012 : pe.y + pe.h + 0.07;
     out.push({ kind: 'form_personal', box: box(0.02, pe.y - 0.045, 0.99, top), how: bk ? 'bank_to_permit' : 'permit_only' });
@@ -61,14 +75,16 @@ export function locateContinuationCrops(lines: OcrLine[]): { kind: CropKind; box
   const out: { kind: CropKind; box: NBox; how: string }[] = [];
   const em = find(ls, RE.emergW);
   if (em) out.push({ kind: 'form_emergency', box: box(0.04, em.y - 0.125, 0.99, em.y + em.h + 0.012), how: 'two_emergency' });
+  if (!em) out.push({ kind: 'form_emergency', box: box(0.04, 0.0, 0.99, 0.2), how: 'relative_bottom' });
   const op = find(ls, RE.otherPermits);
   if (op) out.push({ kind: 'form_permits', box: box(0.04, op.y - 0.17, 0.99, op.y + op.h + 0.01), how: 'other_permits' });
+  else out.push({ kind: 'form_permits', box: box(0.04, 0.27, 0.99, 0.5), how: 'relative_mid' });
   return out;
 }
 
 export function isContinuation(lines: OcrLine[]): boolean {
   const txt = lines.map(t).join(' ');
-  return RE.emergW.test(txt) || RE.otherPermits.test(txt);
+  return RE.emergW.test(txt) || RE.otherPermits.test(txt) || RE.contFuzzy.test(txt);
 }
 
 /** 整頁／卡面 bbox（permit_card、bank_page 用）。 */

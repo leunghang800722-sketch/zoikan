@@ -78,6 +78,19 @@ def uteam():
     return rows
 
 
+def parttime():
+    # 「在勤兼職資料.xlsx 的副本」係普通 xlsx（openpyxl 淨係因副檔名「的副本」拒讀）；內容同 在勤兼職資料-copy.xlsx 逐位元相同，讀後者
+    wb = openpyxl.load_workbook(MSG / '在勤兼職資料-copy.xlsx', read_only=True, data_only=True)
+    ws = wb.worksheets[0]
+    rows = []
+    for r, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        g = lambda i: row[i] if i < len(row) else None
+        if not s(g(0)):
+            continue
+        rows.append({'ref': f'parttime:{r}', 'staffNo': s(g(0)), 'hkid': s(g(3)), 'firstStamp': iso(g(7)), 'lastStamp': iso(g(8))})
+    return rows
+
+
 def payroll_editor():
     import msoffcrypto, xlrd
     out = []
@@ -100,7 +113,7 @@ def payroll_editor():
 
 
 if __name__ == '__main__':
-    d = {'maxwell': maxwell(), 'uteam': uteam(), 'payrollEditor': payroll_editor()}
+    d = {'maxwell': maxwell(), 'uteam': uteam(), 'payrollEditor': payroll_editor(), 'parttime': parttime()}
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(d, ensure_ascii=False))
     print({k: len(v) for k, v in d.items()})
