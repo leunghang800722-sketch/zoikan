@@ -34,7 +34,29 @@ interface Pkg {
   version: number;
   generatedAt: string;
   persons: PkgPerson[];
+  unassignedBankAccounts?: { key: string; bankCode: string; accountNo: string; payeeName: string }[];
 }
+
+// WP-STAFF-FIELDS：v3 新欄標籤（動態 key 一律以陣列 [{key,…}] 傳，因為 response 會將物件 key 轉 snake_case）
+const EXT_LABEL: Record<string, string> = {
+  "siaPermit.no": "許可證號碼",
+  "siaPermit.aExpiry": "許可證甲類屆滿日",
+  "siaPermit.bExpiry": "許可證乙類屆滿日",
+  "siaPermit.cExpiry": "許可證丙類屆滿日（未儲存）",
+  "siaPermit.dExpiry": "許可證丁類屆滿日（未儲存）",
+  "safetyCard.no": "平安咭號碼",
+  "safetyCard.expiry": "平安咭屆滿日",
+  "qas.issueDate": "QAS 簽發日",
+  "qas.expiryDate": "QAS 屆滿日",
+  hireDate: "入職日期",
+  bank: "銀行資料",
+  "emergency.1": "緊急聯絡人 1",
+  "emergency.2": "緊急聯絡人 2",
+  "emergency.3": "緊急聯絡人 3",
+  "emergency.4": "緊急聯絡人 4",
+  staffHire: "工號入職日期",
+};
+const maskAcct = (v: string) => (v.length <= 4 ? "****" : `${"*".repeat(Math.min(v.length - 4, 12))}${v.slice(-4)}`);
 
 const FIELD_LABEL: Record<string, string> = {
   hkid: "身份證",
@@ -63,6 +85,8 @@ interface Row {
   address_masked: string | null;
   address_source?: string;
   basis?: string[];
+  ext?: { key: string; status: string; check: string }[];
+  bank_masked?: { present: true; code?: string | null; name?: string | null; account_masked?: string | null } | null;
   current_name_zh: string | null;
   current_name_en: string | null;
   current_name_hidden?: boolean;
@@ -71,7 +95,7 @@ interface Row {
 }
 interface Preview {
   package_hash: string;
-  package: { version: number; generated_at: string; persons: number };
+  package: { version: number; generated_at: string; persons: number; unassigned_bank_accounts?: number };
   person_stats: Record<string, number>;
   field_stats: Record<string, { confirmed: number; review: number; missing: number }>;
   auto_apply: Record<string, number>;
@@ -79,7 +103,8 @@ interface Preview {
   reason_counts: Record<string, number>;
   rows: Row[];
   counts_hidden?: boolean;
-  viewer?: { pii_update: boolean; guard_update: boolean };
+  viewer?: { pii_update: boolean; guard_update: boolean; bank_view?: boolean; pii_view?: boolean };
+  ext_stats?: { fields: { key: string; confirmed: number; review: number }[]; to_write: { key: string; count: number }[]; conflicts: number };
 }
 interface ApplyRes {
   persons_total: number;
@@ -112,6 +137,7 @@ export default function GuardImportPage() {
   const [done, setDone] = useState<Record<string, string>>({});
   const [triageSession, setTriageSession] = useState<string | null>(null);
   const [triageOpen, setTriageOpen] = useState(0);
+  const [showFull, setShowFull] = useState<Record<string, boolean>>({});
 
   const personByKey = useMemo(() => new Map((pkg?.persons ?? []).map((p) => [p.key, p])), [pkg]);
 
@@ -254,6 +280,65 @@ export default function GuardImportPage() {
             </table>
           </div>
 
+          {(preview.ext_stats || (preview.package.unassigned_bank_accounts ?? 0) > 0) && (
+            <div className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-ext-summary">
+              <div className="font-semibold">新增欄位（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人）</div>
+              {preview.ext_stats && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12.5px]">
+                    <thead>
+                      <tr className="text-left text-zk-faint">
+                        <th className="p-1">欄位</th>
+                        <th className="p-1">已確認</th>
+                        <th className="p-1">待覆核</th>
+                        <th className="p-1">自動會寫</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.ext_stats.fields.map((f) => (
+                        <tr key={f.key} className="border-t border-zk-border">
+                          <td className="p-1">{EXT_LABEL[f.key] ?? "其他資料"}</td>
+                          <td className="p-1">{f.confirmed}</td>
+                          <td className="p-1">{f.review}</td>
+                          <td className="p-1">{preview.ext_stats!.to_write.find((w) => w.key === f.key)?.count ?? 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="mt-1 text-[12px] text-zk-muted">只補空欄；{preview.counts_hidden || preview.viewer?.bank_view === false ? "" : `現值唔同（唔覆蓋、會出分診題）：${preview.ext_stats.conflicts}；`}待覆核同現值唔同嘅會出分診題。</div>
+                </div>
+              )}
+              {(preview.package.unassigned_bank_accounts ?? 0) > 0 && (
+                <div className="text-orange-700" data-testid="import-unassigned-bank">有 {preview.package.unassigned_bank_accounts} 個 Payroll Editor 戶口對唔到人，套用後會喺待答問題逐個問你歸邊個。</div>
+              )}
+              {preview.rows.filter((r) => r.bank_masked).length > 0 && (
+                <div className="space-y-1" data-testid="import-bank-rows">
+                  <div className="text-[12px] font-semibold text-zk-muted">銀行戶口（預設遮罩）</div>
+                  {preview.rows.filter((r) => r.bank_masked).slice(0, shown).map((r) => {
+                    const full = preview.viewer?.bank_view ? (personByKey.get(r.key)?.bank as { accountNo?: { value: string | null } } | undefined)?.accountNo?.value : null;
+                    return (
+                      <div key={r.key} className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
+                        <span className="text-zk-faint">{r.hkid_masked ?? "—"}</span>
+                        {r.bank_masked && "account_masked" in r.bank_masked ? (
+                          <span className="break-all">{r.bank_masked.name ?? r.bank_masked.code ?? "—"} · 戶口 {showFull[r.key] && full ? full : (r.bank_masked.account_masked ?? "—")}</span>
+                        ) : (
+                          <span className="text-zk-faint">有銀行資料（你冇「安員銀行資料」睇權，唔顯示）</span>
+                        )}
+                        {full && (
+                          <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-[11.5px]" onClick={() => setShowFull((m) => ({ ...m, [r.key]: !m[r.key] }))}>
+                            {showFull[r.key] ? "隱藏全號" : "顯示全號"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {pkg?.unassignedBankAccounts && preview.viewer?.bank_view && (
+                    <div className="text-[12px] text-zk-muted">對唔到人嘅戶口（尾 4 位）：{pkg.unassignedBankAccounts.map((u) => maskAcct(u.accountNo)).join("、")}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-auto-summary">
             自動套用（淨寫已確認欄）：{preview.auto_apply.persons} 人 · 新增安員 {preview.auto_apply.guards_to_create} · 補欄 {preview.auto_apply.guard_fields_to_fill} ·
             電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} {preview.counts_hidden ? "" : `· 現值唔同（唔覆蓋）${preview.auto_apply.field_conflicts}`}

@@ -4,7 +4,7 @@ import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { canonicalHkid } from "@/lib/guards/identity";
 import { maskAccountNo, type PersonResult, type WriteChange } from "@/lib/guards/import/apply";
-import { EXT_CHECK_LABEL, EXT_OUTCOME_LABEL, SCALARS, bankLeaves, contactsOf, extLabel, isBankKey, isEmergencyKey, staffHiresOf } from "@/lib/guards/import/ext";
+import { EXT_OUTCOME_LABEL, SCALARS, bankLeaves, contactsOf, extLabel, isBankKey, isEmergencyKey, staffHiresOf } from "@/lib/guards/import/ext";
 import { NAME_REASONS } from "@/lib/guards/import/project";
 import { fieldValue, type PackagePerson } from "@/lib/guards/import/package";
 import { maskAddressImport, maskHkidImport, maskTelImport, sameNameStrict } from "@/lib/guards/import/text";
