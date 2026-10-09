@@ -4,7 +4,7 @@
 //
 // 鐵則：合成 fixture 用假人名。
 import { describe, it, expect } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
   parsePostorderFromPairsCsv,
   parsePostorderLongtermPostsFromWorkbook,
   loadPostorderWorkbook,
+  MAX_WORKBOOK_BYTES,
 } from "@/lib/guard-fix/postorder";
 
 const VALID_CSV = ["site_label,site_short,guard_name,cell_count", "測試盤 甲蟲蟲,測試,甲蟲蟲,10", "另一盤 乙屎蟲,另一,乙屎蟲,5"].join("\r\n") + "\r\n";
@@ -97,7 +98,8 @@ describe("WP-POSTORDER-PAIRS-CSV：parsePostorderFromPairsCsv()", () => {
 // 逐項相等。
 // ---------------------------------------------------------------------------
 const REAL_POSTORDER_FILE = path.resolve(__dirname, "../data/2026-09/msg-file/Postorder - Aug 2026.xlsm");
-const hasRealFile = existsSync(REAL_POSTORDER_FILE);
+// 記憶體保險：伺服器唔再載入大過 MAX_WORKBOOK_BYTES 嘅 xlsm（會 OOM），真檔太大就 skip（本機工具另用 stream reader 驗證）。
+const hasRealFile = existsSync(REAL_POSTORDER_FILE) && statSync(REAL_POSTORDER_FILE).size <= MAX_WORKBOOK_BYTES;
 
 describe.skipIf(!hasRealFile)("WP-POSTORDER-PAIRS-CSV：真檔 xlsm 路徑 vs 匯出 longterm-pairs.csv 重新解析（data/ gitignored，冇呢個檔嘅環境自動 skip）", () => {
   it("組數／逐組格數逐項相等", async () => {

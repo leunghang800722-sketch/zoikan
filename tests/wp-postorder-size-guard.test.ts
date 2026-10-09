@@ -56,7 +56,7 @@ describe("Postorder xlsm 記憶體保險", () => {
 
   it("已存嘅超大 xlsm（保險加入前上載）：一鍵結算唔爆，Postorder 證據略過", async () => {
     const up = await seedPostorder(new Date(Date.UTC(2026, 8, 1)), fx.userIds["老闆"]);
-    await prisma.postorderUpload.update({ where: { id: up.id }, data: { fileBytes: bigZip(2 * 1024 * 1024) } });
+    await prisma.postorderUpload.update({ where: { id: up.id }, data: { fileBytes: new Uint8Array(bigZip(2 * 1024 * 1024)) } });
     const { AutoCollector } = await import("@/lib/month-close/auto/context");
     const ctx = new AutoCollector(null, new Date(Date.UTC(2026, 8, 1)), fx.userIds["老闆"], null);
     expect(await ctx.postorder()).toBeNull();
