@@ -270,8 +270,9 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   const siteNameById = new Map(sites.map((s) => [s.id, s.canonicalName]));
   const paidByClientSiteIds = new Set(sites.filter((s) => s.guardsPaidByClient).map((s) => s.id));
   const shiftTypeIds = [...new Set(combos.map((c) => c.shiftTypeId).filter((v): v is string => !!v))];
-  const shiftTypes = shiftTypeIds.length ? await prisma.shiftType.findMany({ where: { id: { in: shiftTypeIds } }, select: { id: true, code: true } }) : [];
+  const shiftTypes = shiftTypeIds.length ? await prisma.shiftType.findMany({ where: { id: { in: shiftTypeIds } }, select: { id: true, code: true, voidedAt: true } }) : [];
   const shiftTypeById = new Map(shiftTypes.map((s) => [s.id, s.code]));
+  const voidedShiftTypeIds = new Set(shiftTypes.filter((s) => s.voidedAt).map((s) => s.id));
 
   let siteMissingShiftTypeCount = 0;
   // WP-PHASE3（§20.4 Phase 3 item 3，老闆／規劃裁定「§20.3 原意係建議＋
@@ -321,6 +322,11 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     // LINK（guards_paid_by_client）盤：客戶直接出糧、唔逐更計价，本身就唔
     // 需要逐更卡（同 unpriced.ts 一致），唔查。
     if (paidByClientSiteIds.has(siteId)) continue;
+    // 格仍指住已作廢更種（對數會當未配對）：唔提示設價卡，改出一行 warning（盤名＋格數）。
+    if (voidedShiftTypeIds.has(shiftTypeId)) {
+      warnings.push(`盤「${siteName}」有 ${combo._count} 格指住已作廢嘅更種「${shiftTypeCode}」（更種已作廢），對數唔會套用——請重新解析上載或者復原該更種`);
+      continue;
+    }
     const hasActiveCard = activeCardCombos.has(`${siteId}|${shiftTypeId}`) || activeCardCombos.has(`${siteId}|`);
     if (hasActiveCard) continue;
     cardsMissingNoCarryover++;
@@ -367,15 +373,20 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
       siteMissingShiftTypeCount++;
       const name = siteNameById.get(sid) ?? (await prisma.site.findUnique({ where: { id: sid }, select: { canonicalName: true } }))?.canonicalName ?? sid.slice(0, 8);
       const plan = await planShiftTypesForSite(sid, start);
-      if (plan.eligible && plan.creatable > 0) {
-        // 一鍵結算 parse_health 步驟會自動由本月更表推更種（可撤銷）——唔使人手去盤管理。
+      const fixable = plan.creatable + plan.revivable;
+      if (plan.eligible && fixable > 0) {
+        // 一鍵結算 parse_health 步驟會自動處理（可撤銷）——唔使人手去盤管理。
+        const parts = [plan.creatable > 0 ? `由本月更表自動推出 ${plan.creatable} 個更種` : "", plan.revivable > 0 ? `復原之前撤銷嘅 ${plan.revivable} 個更種` : ""].filter(Boolean).join("，並");
         const partial = plan.unparsedCodes.length > 0 ? `；代號「${plan.unparsedCodes.join("、")}」時段解析唔到，唔會建更種，嗰啲格暫時未計入` : "";
-        warnings.push(`盤「${name}」未設更種，會由本月更表自動推出 ${plan.creatable} 個更種（可撤銷）${partial}`);
-      } else {
+        warnings.push(`盤「${name}」未設更種，會${parts}（可撤銷）${partial}`);
+      }
+      if (plan.blocked.length > 0) {
+        needsHuman.push(`盤「${name}」未設更種（本月有 ${r._count} 格）：${plan.blocked.join("；")}，要人手處理（已入分診）`);
+      } else if (!(plan.eligible && fixable > 0)) {
         const why = plan.unparsedCodes.length > 0
           ? `更表時段解析唔到（代號 ${plan.unparsedCodes.join("、")}，要 0700-1900 呢類寫法），冇法自動推更種`
           : plan.eligible
-            ? "冇可建嘅更種（更種可能已被撤銷）"
+            ? "冇可建嘅更種"
             : "呢個盤冇已解析嘅本月上載（或者係有子盤嘅母盤），冇法自動推更種";
         needsHuman.push(`盤「${name}」完全未設更種（本月有 ${r._count} 格）：${why}，要先喺「盤」管理加更種`);
       }
@@ -502,9 +513,10 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
   // A2. 現有盤有效更種 = 0（例如舊版一鍵結算建咗盤但冇更種）：由本月上載格自動推更種，令同一 run 嘅 reconcile_apply 套用到。
   try {
     for (const r of await ensureShiftTypesForEmptySites(ctx, start)) {
-      if (ctx.newSiteIds.has(r.siteId)) continue;
-      if (r.created > 0) warnings.push(`盤「${r.siteName}」未設更種，已自動建好 ${r.created} 個更種（可撤銷），本月格已重新配對`);
+      if (r.created > 0) warnings.push(`盤「${r.siteName}」已自動建好／復原 ${r.created} 個更種（可撤銷）${r.reparsedOk ? "，本月格已重新配對" : "；但重新解析未全部成功，請去更表上載頁重新解析該盤上載"}`);
+      else if (r.repairOnly && r.reparsedOk) warnings.push(`盤「${r.siteName}」有格未配到已建更種，已重新解析上載`);
       if (r.unparsedCodes.length > 0) needsHuman.push(`盤「${r.siteName}」更表代號「${r.unparsedCodes.join("、")}」時段解析唔到，冇自動建更種——請去「盤」管理手動加更種`);
+      if (r.blocked.length > 0) needsHuman.push(`盤「${r.siteName}」${r.blocked.join("；")}——已入分診`);
     }
   } catch (e) {
     needsHuman.push(`自動補更種失敗（${safeErrorSummary(e)}）——請去「盤」管理手動加更種`);

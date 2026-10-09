@@ -194,4 +194,63 @@ describe("WP-ONE-CLICK-AUTO hotfix1：0 更種現有盤自我修復", () => {
     await stepParseHealth(SEPT, boss(), new AutoCollector(null, SEPT, boss(), null));
     expect(await prisma.shiftType.count({ where: { siteId: site.id } })).toBe(1);
   });
+
+  async function failedRunThenUndo(siteId: string) {
+    const blocker = await prisma.reconcileAllRun.create({ data: { month: SEPT, status: "running", startedById: boss() } });
+    const r1 = await newRun();
+    await runOneClickMonthClose(r1.id, SEPT, boss(), null);
+    await undoAutoChanges(r1.id, boss(), null);
+    await prisma.reconcileAllRun.update({ where: { id: blocker.id }, data: { status: "done", finishedAt: new Date() } });
+    expect(await activeTypes(siteId)).toHaveLength(0);
+  }
+
+  it("(j) 人手作廢同 code 同開工時間 → 唔復原、唔另建，出分診題＋precheck 講明原因", async () => {
+    const site = await seed();
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date("1970-01-01T08:00:00Z"), endTime: new Date("1970-01-01T20:00:00Z"), hours: 12, createdBy: "t", voidedAt: new Date(), voidedBy: boss() } });
+    const pre = await stepPrecheck(SEPT, boss(), null);
+    expect(pre.needsHuman.some((h) => h.includes("人手作廢嘅更種") && h.includes("08:00-20:00"))).toBe(true);
+    const ctx = new AutoCollector(null, SEPT, boss(), null);
+    await stepParseHealth(SEPT, boss(), ctx);
+    expect((await activeTypes(site.id)).map((s) => s.code)).toEqual(["N"]);
+    expect(await prisma.shiftType.count({ where: { siteId: site.id, code: "D" } })).toBe(1);
+    expect(ctx.questions.some((q) => q.groupKey === `site_shift_type_voided:${site.id}`)).toBe(true);
+  });
+
+  it("(k) 一鍵 undo 作廢、規格相同 → 復原（audit unvoid，無另建）", async () => {
+    const site = await seed();
+    await failedRunThenUndo(site.id);
+    const pre = await stepPrecheck(SEPT, boss(), null);
+    expect(pre.warnings.some((w) => w.includes("復原之前撤銷嘅 2 個更種"))).toBe(true);
+    const r2 = await newRun();
+    await runOneClickMonthClose(r2.id, SEPT, boss(), null);
+    expect(await activeTypes(site.id)).toHaveLength(2);
+    expect(await prisma.shiftType.count({ where: { siteId: site.id } })).toBe(2);
+    const ids = (await prisma.shiftType.findMany({ where: { siteId: site.id }, select: { id: true } })).map((x) => x.id);
+    expect(await prisma.auditLog.count({ where: { tableName: "shift_types", action: "unvoid", rowId: { in: ids } } })).toBe(2);
+  });
+
+  it("(l) 一鍵 undo 作廢但鐘數／收工時間唔同 → 唔復原、唔另建，出題", async () => {
+    const site = await seed();
+    await failedRunThenUndo(site.id);
+    await prisma.shiftType.updateMany({ where: { siteId: site.id, code: "D" }, data: { endTime: new Date("1970-01-01T17:00:00Z"), hours: 9 } });
+    const pre = await stepPrecheck(SEPT, boss(), null);
+    expect(pre.needsHuman.some((h) => h.includes("一鍵結算撤銷咗嘅更種") && h.includes("9 小時"))).toBe(true);
+    const r2 = await newRun();
+    await runOneClickMonthClose(r2.id, SEPT, boss(), null);
+    const d = await prisma.shiftType.findMany({ where: { siteId: site.id, code: "D" } });
+    expect(d).toHaveLength(1);
+    expect(d[0]!.voidedAt).not.toBeNull();
+    expect(await prisma.shiftRecord.count({ where: { shiftType: { voidedAt: { not: null } }, status: { not: "cancelled" } } })).toBe(0);
+    expect(await prisma.triageQuestion.count({ where: { groupKey: `site_shift_type_voided:${site.id}` } })).toBeGreaterThanOrEqual(1);
+  });
+
+  it("(m) 盤有其他生效更種、格仍指住已作廢更種 → precheck 出 warning（盤名＋格數），唔提示設價卡", async () => {
+    const site = await seed({ preShiftTypes: true });
+    const n = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", startTime: new Date("1970-01-01T20:00:00Z"), endTime: new Date("1970-01-01T08:00:00Z"), hours: 12, createdBy: "t", voidedAt: new Date() } });
+    await prisma.rosterUploadRow.updateMany({ where: { rawCode: "N", upload: { siteId: site.id } }, data: { shiftTypeId: n.id } });
+    const pre = await stepPrecheck(SEPT, boss(), null);
+    expect(pre.warnings.some((w) => w.includes(SITE) && w.includes("2 格") && w.includes("更種已作廢"))).toBe(true);
+    expect(pre.needsHuman.some((h) => h.includes("「N」冇生效價卡") || h.includes("「N」冇本月生效卡"))).toBe(false);
+  });
 });
+
