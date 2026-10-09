@@ -99,7 +99,7 @@ export function AutoSummaryCard({ auto, busy, locked, onUndo }: { auto: AutoRepo
                       <tbody>
                         {shown.map((r, i) => (
                           <tr key={i} className="border-t border-zk-border-soft align-top">
-                            <td className="px-3 py-2 font-medium">{humanize(r.site) || "—"}</td>
+                            <td className="px-3 py-2 font-medium">{r.site || "—"}</td>
                             {showPrice && <td className="px-2 py-2">{r.shiftType ? <span className="rounded bg-zk-primary-tint px-1.5 py-px text-[11px] font-semibold text-zk-primary-deep">{r.shiftType}</span> : "—"}</td>}
                             {showBroker && <td className="px-2 py-2">{r.broker || "—"}</td>}
                             <td className="px-2 py-2 text-right">{r.n ?? "—"}</td>

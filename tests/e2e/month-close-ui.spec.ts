@@ -246,6 +246,7 @@ test.describe("月結頁 1a 桌面", () => {
     await page.goto(`/month-close`);
     await page.getByTestId("month-close-month-input").fill(MONTH);
     await page.getByTestId("open-triage").click();
+    await expect(page.getByTestId("mc-pick")).toHaveCount(0); // 未揀任何候選：冇「用所揀候選」
     await page.getByLabel(/價卡 B/).check();
     await expect(page.getByTestId("mc-accept")).toHaveCount(0);
     await page.getByTestId("mc-pick").click();
@@ -361,6 +362,26 @@ test.describe("月結頁 1e 手機", () => {
     await page.getByTestId("mc-pick").click();
     await expect.poll(() => st.bodies.length, { timeout: 12_000 }).toBe(1);
     expect(st.bodies[0]).toEqual({ option: "mc_pick", candidate_id: "c2" });
+  });
+  test("1e 揀 B 後收起面板 → 清走所揀，主掣變返確認建議，送 mc_accept", async ({ page }) => {
+    test.setTimeout(60_000);
+    const st = await mockApis(page, ["q1"]);
+    await loginAs(page, "老闆");
+    await page.goto(`/month-close`);
+    await page.getByTestId("month-close-month-input").fill(MONTH);
+    await page.getByTestId("rail-open-triage").click();
+    await page.getByTestId("mc-other").click();
+    await page.getByLabel(/價卡 B/).check();
+    await expect(page.getByTestId("mc-pick")).toBeVisible();
+    await page.getByTestId("mc-other").click(); // 收起
+    await expect(page.getByTestId("mc-accept")).toHaveText("確認建議");
+    await expect(page.getByTestId("mc-pick")).toHaveCount(0);
+    await page.getByTestId("mc-other").click(); // 再展開：B 冇揀住
+    await expect(page.getByLabel(/價卡 B/)).not.toBeChecked();
+    await page.getByTestId("mc-other").click();
+    await page.getByTestId("mc-accept").click();
+    await expect.poll(() => st.bodies.length, { timeout: 12_000 }).toBe(1);
+    expect(st.bodies[0]).toEqual({ option: "mc_accept" });
   });
 });
 

@@ -10,7 +10,7 @@ import { Pill } from "@/components/ui/Pill";
 import { apiGet, apiRequest, type ApiResult } from "@/lib/ui/api-client";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
-import { UNDO_NOTE_SHORT, humanize, kindChip } from "@/components/month-close/derive";
+import { UNDO_NOTE_SHORT, humanize, kindChip, shortHuman } from "@/components/month-close/derive";
 import { clearUnsent, pruneUnsent, recordUnsent } from "@/components/month-close/unsent";
 
 // 送出一律 keepalive：離開頁面時盡力完成（URL／method／body 同原本一樣）。
@@ -55,7 +55,6 @@ interface Impact {
   notes: string[];
 }
 
-const shortTitle = (t: string) => (t.length > 26 ? `${t.slice(0, 26)}…` : t);
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 767px)").matches : false));
@@ -189,6 +188,15 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     if (sender.failedCount() > 0) return;
     onClose();
   }
+  // 收起「揀其他答案」＝放棄所揀嘅其他答案（候選／雞頭／價錢），主掣變返「確認建議」；想保留就唔好收起。
+  function toggleOther() {
+    if (expanded) {
+      setCandidate("");
+      setBroker("");
+      setPrice({ client: "", wage: "", fee: "" });
+    }
+    setExpanded(!expanded);
+  }
   async function abandonUnsent() {
     await sender.flush();
     onClose();
@@ -204,7 +212,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     });
     clearUnsent(q.id); // 重試中；再失敗會重新記低
     drafts.current[q.id] = { candidate, broker, price };
-    void sender.schedule({ id: q.id, kind, answer, doneLabel, title: shortTitle(q.title) });
+    void sender.schedule({ id: q.id, kind, answer, doneLabel, title: q.title });
   }
   const skip = () => schedule("skip", { option: "skip" }, "跳過");
   const has = (id: string) => q?.options.some((o) => o.id === id) ?? false;
@@ -298,7 +306,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   ) : null;
 
   // 各答案動作（桌面／手機共用）
-  const canPick = !!q && !q.mc.needs_broker_pick && has("mc_pick") && !!(candidate || q.mc.prefill_candidate_id) && candidate !== q.mc.prefill_candidate_id;
+  const canPick = !!q && !q.mc.needs_broker_pick && has("mc_pick") && !!candidate && candidate !== q.mc.prefill_candidate_id;
   const actions = {
     accept: () => schedule("confirm", { option: "mc_accept" }, "一撳確認"),
     ack: () => schedule("confirm", { option: "mc_ack" }, "已覆核"),
@@ -315,7 +323,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   const failedBanner =
     failedIds.length > 0 ? (
       <div className="flex flex-col gap-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-[12.5px] text-red-700" data-testid="mc-failed-banner" role="alert">
-        <div>有 {failedIds.length} 題未送出，請再試：{failedIds.map((id) => humanize(failed[id]!.title)).join("、")}</div>
+        <div>有 {failedIds.length} 題未送出，請再試：{failedIds.map((id) => shortHuman(failed[id]!.title)).join("、")}</div>
         <button type="button" onClick={abandonUnsent} className="self-start rounded border border-red-300 bg-white px-2.5 py-1 text-red-700" data-testid="mc-abandon">
           放棄未送出嘅 {failedIds.length} 題（留返待答問題）
         </button>
@@ -398,7 +406,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 </div>
               )}
               {(canAccept || !ackOnly) && (
-                <button type="button" className="text-center text-[13.5px] text-zk-primary" onClick={() => setExpanded((v) => !v)} data-testid="mc-other">
+                <button type="button" className="text-center text-[13.5px] text-zk-primary" onClick={toggleOther} data-testid="mc-other">
                   揀其他答案／自己輸入
                 </button>
               )}

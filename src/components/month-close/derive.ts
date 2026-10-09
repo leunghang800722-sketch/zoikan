@@ -416,8 +416,8 @@ function nameList(names: string[], max = 5): string {
 export function lockRequirements(report: ReportDTO, pricingQuestions: number): LockReq[] {
   const lp = report.lock_precondition;
   const out: LockReq[] = [];
-  if (lp.missing_upload_sites.length > 0) out.push({ key: "missing_upload", title: `${lp.missing_upload_sites.length} 個盤未上載更表`, detail: humanize(nameList(lp.missing_upload_sites)), action: "roster-uploads", actionLabel: "去更表上載 ›" });
-  if (lp.unconfirmed_upload_sites.length > 0) out.push({ key: "unconfirmed", title: `${lp.unconfirmed_upload_sites.length} 個盤嘅更表未對數確認`, detail: humanize(nameList(lp.unconfirmed_upload_sites)), action: "roster-uploads", actionLabel: "去更表上載 ›" });
+  if (lp.missing_upload_sites.length > 0) out.push({ key: "missing_upload", title: `${lp.missing_upload_sites.length} 個盤未上載更表`, detail: nameList(lp.missing_upload_sites).replace(/（parsed）/g, "（已解析，未對數）"), action: "roster-uploads", actionLabel: "去更表上載 ›" });
+  if (lp.unconfirmed_upload_sites.length > 0) out.push({ key: "unconfirmed", title: `${lp.unconfirmed_upload_sites.length} 個盤嘅更表未對數確認`, detail: nameList(lp.unconfirmed_upload_sites).replace(/（parsed）/g, "（已解析，未對數）"), action: "roster-uploads", actionLabel: "去更表上載 ›" });
   const unpriced = lp.unpriced_count ?? 0;
   if (unpriced > 0) {
     out.push({
@@ -528,6 +528,12 @@ function humanizePlain(t: string): string {
     .replace(/(?<![A-Za-z_])leave(?![A-Za-z_])/gi, "假")
     .replace(/(?<![A-Za-z_])external(?![A-Za-z_])/gi, "客戶自己人")
     .replace(/(?<![A-Za-z_])parsed(?![A-Za-z_])/gi, "已解析");
+}
+
+/** 標題：先 humanize 再截斷（避免截斷位喺「」中間令盤名被改）。 */
+export function shortHuman(t: string, max = 26): string {
+  const h = humanize(t);
+  return h.length > max ? `${h.slice(0, max)}…` : h;
 }
 
 /** 題型 chip：UI 自己按 kind 對應（唔直接顯示 API kind_label，佢會出「冇依據」等禁用詞）。 */

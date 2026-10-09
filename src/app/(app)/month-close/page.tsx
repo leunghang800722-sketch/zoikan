@@ -10,7 +10,7 @@ import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
 import type { RunDTO } from "@/components/month-close/types";
-import { UNDO_NOTE, humanize, needsHumanCount, deriveStages, deriveUploads, groupReview, stepByKey } from "@/components/month-close/derive";
+import { UNDO_NOTE, shortHuman, needsHumanCount, deriveStages, deriveUploads, groupReview, stepByKey } from "@/components/month-close/derive";
 import { peekUnsent } from "@/components/month-close/unsent";
 import { StageBar } from "./StageBar";
 import { UploadSection } from "./UploadSection";
@@ -39,7 +39,7 @@ export default function MonthCloseOneClickPage() {
   const [unsentMsg, setUnsentMsg] = useState<string | null>(null);
   const reportUnsent = () => {
     const un = peekUnsent();
-    setUnsentMsg(un.length > 0 ? `有 ${un.length} 題未送出，請重新答：${un.map((x) => humanize(x.title)).join("、")}` : null);
+    setUnsentMsg(un.length > 0 ? `有 ${un.length} 題未送出，請重新答：${un.map((x) => shortHuman(x.title)).join("、")}` : null);
   };
 
   async function loadRuns() {

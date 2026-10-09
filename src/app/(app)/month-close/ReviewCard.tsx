@@ -50,7 +50,7 @@ export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto:
               ))}
               {g.more > 0 &&
                 (canAnswer ? (
-                  <button type="button" className="text-left text-[11.5px] text-zk-primary" onClick={onOpenTriage}>
+                  <button type="button" className="text-left text-[11.5px] text-zk-primary disabled:opacity-[.45]" onClick={onOpenTriage} disabled={busy || locked}>
                     再多 {g.more} 題 ›
                   </button>
                 ) : (
