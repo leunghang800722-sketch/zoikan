@@ -318,12 +318,13 @@ export interface EmptySiteResult {
 
 /**
  * 盤嘅生效更種比上載最後一次解析新（更種喺上載解析之後建／復原／被 PATCH／unvoid）→ 該上載要 reparse 一次，格先配到更種。
- * 以時間比較：上載解析時間＝rows 最後 created_at（reparse 會重建 rows）；更種時間＝生效更種最大 updated_at。
+ * 兩個條件都要成立：(1) 時間比較（見下）；(2) 上載有未配、而代號對得到生效更種嘅格。以時間比較：上載解析時間＝rows 最後 created_at（reparse 會重建 rows）；更種時間＝生效更種最大 updated_at。
  * reparse 之後 rows 就新過更種，下個 run 唔會再 reparse（永遠配唔到嘅格唔會令每個 run 重複 reparse）。
  */
 async function uploadsStaleAgainstShiftTypes(siteId: string, month: Date): Promise<string[]> {
   const stMax = (await prisma.shiftType.aggregate({ where: { siteId, voidedAt: null }, _max: { updatedAt: true } }))._max.updatedAt;
   if (!stMax) return [];
+  const activeCodes = new Set((await prisma.shiftType.findMany({ where: { siteId, voidedAt: null }, select: { code: true } })).map((t) => t.code.toUpperCase()));
   const uploads = await prisma.rosterUpload.findMany({
     where: { month, status: { in: ["parsed", "confirmed"] }, OR: [{ siteId }, { rows: { some: { resolvedSiteId: siteId } } }] },
     select: { id: true },
@@ -331,7 +332,13 @@ async function uploadsStaleAgainstShiftTypes(siteId: string, month: Date): Promi
   const stale: string[] = [];
   for (const u of uploads) {
     const parsedAt = (await prisma.rosterUploadRow.aggregate({ where: { uploadId: u.id }, _max: { createdAt: true } }))._max.createdAt;
-    if (parsedAt && parsedAt < stMax) stale.push(u.id);
+    if (!parsedAt || parsedAt >= stMax) continue;
+    // 條件 (2)：上載至少有一格未配、而代號對得到該盤某張生效更種——格全部已配好就唔 reparse（避免洗走已 confirmed 上載嘅人手對數決定）。
+    const unmatched = await prisma.rosterUploadRow.findMany({
+      where: { uploadId: u.id, codeKind: { in: ["shift", "ot"] }, shiftTypeId: null, OR: [{ resolvedSiteId: siteId }, { resolvedSiteId: null, upload: { siteId } }] },
+      select: { rawCode: true },
+    });
+    if (unmatched.some((r) => activeCodes.has(r.rawCode.trim().toUpperCase()))) stale.push(u.id);
   }
   return stale;
 }

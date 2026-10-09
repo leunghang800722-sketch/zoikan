@@ -292,5 +292,21 @@ describe("WP-ONE-CLICK-AUTO hotfix1：0 更種現有盤自我修復", () => {
     await runOneClickMonthClose(r3.id, SEPT, boss(), null);
     expect(await rowIds(site.id)).toBe(ids2);
   });
+
+  it("(q) 更種 updatedAt 新過上載，但上載所有格已配好 → 唔 reparse（row id 不變、對數決定保留）", async () => {
+    const site = await seed({ preShiftTypes: true });
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "N", startTime: new Date("1970-01-01T20:00:00Z"), endTime: new Date("1970-01-01T08:00:00Z"), hours: 12, createdBy: "t" } });
+    const up = await prisma.rosterUpload.findFirstOrThrow({ where: { siteId: site.id, month: SEPT } });
+    await stepParseHealth(SEPT, boss(), new AutoCollector(null, SEPT, boss(), null)); // 先令所有格配好
+    await prisma.rosterUpload.update({ where: { id: up.id }, data: { status: "confirmed" } });
+    expect(await prisma.rosterUploadRow.count({ where: { uploadId: up.id, codeKind: "shift", shiftTypeId: null } })).toBe(0);
+    const one = await prisma.rosterUploadRow.findFirstOrThrow({ where: { uploadId: up.id } });
+    await prisma.rosterReconcileDecision.create({ data: { uploadId: up.id, reconcileKey: `row:${one.id}`, category: "unresolved", action: "exception", reason: "t", decidedBy: boss() } });
+    const before = await rowIds(site.id);
+    await prisma.shiftType.updateMany({ where: { siteId: site.id }, data: { billingGroup: "per_shift" } }); // 觸發 updatedAt 變新
+    await stepParseHealth(SEPT, boss(), new AutoCollector(null, SEPT, boss(), null));
+    expect(await rowIds(site.id)).toBe(before);
+    expect(await prisma.rosterReconcileDecision.count({ where: { uploadId: up.id } })).toBe(1);
+  });
 });
 
