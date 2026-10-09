@@ -527,6 +527,10 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
 // ---------------------------------------------------------------------------
 // step2 安員修復——循環最多 3 輪直至冇新（可套用嘅）動作
 // ---------------------------------------------------------------------------
+async function loadPostorderForPlan(postorderUpload: Awaited<ReturnType<typeof prisma.postorderUpload.findFirst>>) {
+  return postorderUpload ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderUploadRow(postorderUpload)) } : undefined;
+}
+
 export async function stepGuardFix(month: Date, actorUserId: string, auto?: AutoCollector) {
   const warnings: string[] = [];
   const needsHuman: string[] = [];
@@ -550,7 +554,13 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     // （`ONE_CLICK_ADVISORY_LOCK_KEY`）保證同一時間淨係一個 run，兩把鎖
     // 唔會撞。
     const postorderUpload = await prisma.postorderUpload.findFirst({ where: { month: start, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
-    const postorder = postorderUpload ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderUploadRow(postorderUpload)) } : undefined;
+    let postorder: Awaited<ReturnType<typeof loadPostorderForPlan>> = undefined;
+    try {
+      postorder = await loadPostorderForPlan(postorderUpload);
+    } catch (e) {
+      // 已存嘅超大 xlsm（上載保險加入前）唔載入，淨靠歷史行（Postorder 係可選來源）。
+      warnings.push(`本月 Postorder 唔載入（${safeErrorSummary(e)}），安員修復／定價／歸屬靠歷史`);
+    }
 
     let plan;
     try {
@@ -880,7 +890,12 @@ export async function stepPostorderCompare(month: Date, referralSystemTotal: num
   if (!postorderUpload) {
     return { numbers: { uploaded: false }, warnings: [] as string[] };
   }
-  const parsed = await parsePostorderUploadRow(postorderUpload);
+  let parsed: Awaited<ReturnType<typeof parsePostorderUploadRow>>;
+  try {
+    parsed = await parsePostorderUploadRow(postorderUpload);
+  } catch (e) {
+    return { numbers: { uploaded: true, fileName: postorderUpload.fileName, referralRowCount: 0, referralExcelTotal: null, referralSystemTotal, referralDiff: null, brokerPayoutCompare: "總表冇提供" }, warnings: [`Postorder 讀唔到，略過對照（${safeErrorSummary(e)}）`] };
+  }
   const rowsWithAmount = parsed.referralRows.filter((r) => r.excelAmount !== null);
   const excelTotal = rowsWithAmount.length ? round2(rowsWithAmount.reduce((a, r) => a + (r.excelAmount ?? 0), 0)) : null;
   const diff = excelTotal !== null ? round2(referralSystemTotal - excelTotal) : null;

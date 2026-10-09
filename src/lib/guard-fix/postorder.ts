@@ -126,6 +126,19 @@
 // `plan.ts` `mergeLongtermPostCells()` 做，唔喺呢個檔。
 import ExcelJS from "exceljs";
 import { parse as parseCsvSync } from "csv-parse/sync";
+import { BadRequest } from "@/lib/api/errors";
+
+/** 記憶體保險（正式站 2026-10-08 實證：4.1MB .xlsm 用 exceljs 成本載入 → Node heap OOM → 全站 502）。
+ * exceljs `xlsx.load()` 會將所有 sheet／樣式／rich text 展開入記憶體，4MB 嘅 xlsm 已經食幾 GB。
+ * 揀「大過上限一律拒絕、改上載 CSV」而唔做 stream reader：現有解析要讀 Roster 分頁逐日 7 欄 block、
+ * PostOrder 分頁 col F 公式文字（介紹費行 rate／AM 參照），stream reader 唔保證同等結果；CSV 路徑
+ * （PostOrder.csv／Roster.csv，分頁另存）解析結果已驗證等價。所有會成本載入 xlsm 嘅入口都經
+ * `loadPostorderWorkbook()`，喺度統一擋。 */
+export const MAX_WORKBOOK_BYTES = 1.5 * 1024 * 1024;
+export const WORKBOOK_TOO_LARGE_MESSAGE = "Postorder xlsm／xlsx 檔案大過 1.5MB，伺服器唔會載入（會爆記憶體）。請將 Roster 同 PostOrder 兩個分頁另存做 CSV 上載（Google Sheets：檔案 → 下載 → 逗號分隔值）。";
+export function assertWorkbookSizeOk(bytes: number): void {
+  if (bytes > MAX_WORKBOOK_BYTES) throw BadRequest(WORKBOOK_TOO_LARGE_MESSAGE);
+}
 
 export const ROSTER_SHEET_NAME = "Roster";
 export const POSTORDER_SHEET_NAME = "PostOrder";
@@ -544,6 +557,7 @@ function parsePostorderReferralRowsFromGrid(grid: PostorderGrid, formulaAt: ((r:
 // ---------------------------------------------------------------------------
 
 export async function loadPostorderWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
+  assertWorkbookSizeOk(buffer.length);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   return wb;

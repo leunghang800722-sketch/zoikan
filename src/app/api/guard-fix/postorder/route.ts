@@ -47,6 +47,7 @@ import { monthStart } from "@/lib/month-lock";
 import type { Prisma } from "@prisma/client";
 import {
   parsePostorderWorkbookBuffer,
+  assertWorkbookSizeOk,
   parsePostorderFromCsv,
   parsePostorderFromPairsCsv,
   derivePostorderLongtermPostsFromPostorderCsv,
@@ -173,6 +174,8 @@ export async function POST(req: Request) {
 
     if (fileEntry instanceof File) {
       // --- xlsm/xlsx 路徑（原有）---
+      // 記憶體保險：讀入記憶體／exceljs 之前先按大小擋（見 postorder.ts MAX_WORKBOOK_BYTES）。
+      assertWorkbookSizeOk(fileEntry.size);
       if (fileEntry.size > MAX_UPLOAD_BYTES) throw BadRequest(`檔案太大（上限 ${MAX_UPLOAD_BYTES / 1024 / 1024}MB）`);
       const buffer = Buffer.from(await fileEntry.arrayBuffer());
       if (!buffer.length) throw BadRequest("檔案係空嘅");

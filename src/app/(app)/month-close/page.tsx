@@ -275,7 +275,7 @@ export default function MonthCloseOneClickPage() {
             <label className="block text-[12.5px] text-zk-muted">Postorder 總表——過渡對照（可選）</label>
             <input type="file" multiple accept=".xlsm,.xlsx,.csv" data-testid="month-close-postorder-file-input" onChange={(e) => setPostorderFiles(Array.from(e.target.files ?? []))} className="mt-1 text-sm" />
             <div className="mt-1 text-[11.5px] text-zk-faint">
-              §20.5：系統本身已經係總表，Postorder 純粹俾 8、9 月過渡對照用——以後淨係長工崗位盤／介紹雞頭要以系統資料為準；.xlsm 一個檔；或者 CSV：PostOrder.csv（可另加 longterm-pairs.csv 或 Roster.csv）
+              §20.5：系統本身已經係總表，Postorder 純粹俾 8、9 月過渡對照用——以後淨係長工崗位盤／介紹雞頭要以系統資料為準。請將 Roster 同 PostOrder 兩個分頁另存做 CSV 上載（Google Sheets：檔案 → 下載 → 逗號分隔值）：PostOrder.csv（可另加 longterm-pairs.csv 或 Roster.csv）。.xlsm／.xlsx 大過 1.5MB 會被拒絕（會令伺服器爆記憶體）。
             </div>
             <Button className="mt-2" onClick={uploadPostorder} disabled={busy || jobRunning || postorderFiles.length === 0}>
               上載總表
