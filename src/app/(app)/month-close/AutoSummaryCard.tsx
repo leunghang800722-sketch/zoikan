@@ -1,54 +1,26 @@
 "use client";
-// WP-ONE-CLICK-AUTO §31.3 E：報告嘅「自動處理摘要」＋「要你睇」＋撤銷掣。
-// 冇 PII：淨係盤名、雞頭代號、更種代號、數目。
-import Link from "next/link";
+// WP-ONE-CLICK-AUTO §31.3 E＋WP-MC-UI 1a：「系統自動幫你做咗 N 項」——5 格 tab（新盤更種／自動建價卡／
+// 自動定價／歸屬結算雞頭／解釋更數差異；其他類有數先出）＋明細表（頭 6 行＋睇晒）；0 類併一行灰字。
+// 降級（§32.1）：逐類／逐行撤銷無 API，淨係保留「還原所有自動改動」。冇 PII：盤名、雞頭代號、更種代號、數目。
+import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
+import type { AutoReportDTO } from "@/components/month-close/types";
+import { UNDO_NOTE, humanize, deriveAutoCategories, type AutoCatKey } from "@/components/month-close/derive";
 
-export interface AutoReportDTO {
-  summary: {
-    sites_aliased: number;
-    sites_created: number;
-    shift_types_created: number;
-    aliases_from_postorder: number;
-    cards_created: number;
-    records_priced: number;
-    records_settled: number;
-    guard_matches_auto: number;
-    variances_explained: number;
-    variances_unexplained: number;
-    unpriced_records: number;
-    counts: { countable: number; external: number; internal_cash: number };
-  };
-  auto_lines: Array<{ kind: string; text: string }>;
-  review: Array<{ kind: string; text: string; confidence: "propose" | "unknown"; question_id: string | null }>;
-  triage_session_id: string | null;
-  undone: boolean;
-  undone_at: string | null;
-  voided_card_price_check?: { count: number; record_ids: string[] };
-}
+export type { AutoReportDTO };
+const HEAD_ROWS = 6;
 
-const KIND_LABEL: Record<string, string> = {
-  month_close_site_alias: "盤名",
-  month_close_site_new: "新盤",
-  month_close_pricing: "定價",
-  month_close_settlement: "結算雞頭",
-  month_close_guard_match: "安員配對",
-  month_close_shift_variance: "更數差異",
-};
-
-export function AutoSummaryCard({ auto, busy, onUndo, onOpenTriage }: { auto: AutoReportDTO; busy: boolean; onUndo: () => void; onOpenTriage: () => void }) {
+export function AutoSummaryCard({ auto, busy, locked, onUndo }: { auto: AutoReportDTO; busy: boolean; locked: boolean; onUndo: () => void }) {
   const s = auto.summary;
-  const items: Array<[string, number]> = [
-    ["自動對盤", s.sites_aliased],
-    ["自動建新盤", s.sites_created],
-    ["新盤更種", s.shift_types_created],
-    ["自動建價卡", s.cards_created],
-    ["自動定價（更）", s.records_priced],
-    ["自動歸屬結算雞頭（更）", s.records_settled],
-    ["自動安員配對", s.guard_matches_auto],
-    ["解釋咗嘅更數異常", s.variances_explained],
-  ];
+  const { cats, zero, total } = deriveAutoCategories(auto);
+  const [sel, setSel] = useState<AutoCatKey | null>(null);
+  const [all, setAll] = useState(false);
+  const active = cats.find((c) => c.key === sel) ?? cats[0] ?? null;
+  const rows = active?.rows ?? [];
+  const shown = all ? rows : rows.slice(0, HEAD_ROWS);
+  const showPrice = active?.key === "cards" || active?.key === "priced";
+  const showBroker = showPrice || active?.key === "settled";
   return (
     <div className="flex flex-col gap-3" data-testid="auto-summary">
       {auto.undone && (
@@ -61,64 +33,101 @@ export function AutoSummaryCard({ auto, busy, onUndo, onOpenTriage }: { auto: Au
           {auto.voided_card_price_check!.count} 更價錢同已作廢卡相同但冇自動定價紀錄，可能係人手輸入，請檢查（更 id：{auto.voided_card_price_check!.record_ids.slice(0, 10).map((x) => x.slice(0, 8)).join("、")}{auto.voided_card_price_check!.record_ids.length > 10 ? "…" : ""}）
         </div>
       )}
-      <div className="rounded border border-zk-border p-3">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[13px] font-medium text-zk-text">
-            自動處理摘要 {auto.undone && <Pill variant="warning">已還原</Pill>}
+      <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
+        <div className="flex flex-wrap items-center gap-3 border-b border-zk-border-soft px-4 py-3.5">
+          <span className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-[#ccfbf1] text-[13px] font-bold text-[#0f766e]">✓</span>
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold text-zk-text">
+              系統自動幫你做咗 {total} 項 {auto.undone && <Pill variant="warning">已還原</Pill>}
+            </div>
+            <div className="text-[12px] text-zk-muted">{UNDO_NOTE}</div>
           </div>
-          <Button variant="secondary" onClick={onUndo} disabled={busy || auto.undone} data-testid="undo-auto">
-            還原所有自動改動
+          <Button variant="danger" className="ml-auto whitespace-nowrap" onClick={onUndo} disabled={busy || auto.undone || locked} data-testid="undo-auto">
+            ↺ 還原所有自動改動
           </Button>
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {items.map(([label, n]) => (
-            <div key={label} className="rounded border border-zk-border px-2.5 py-2">
-              <div className="text-[11px] text-zk-muted">{label}</div>
-              <div className="text-base font-bold">{n}</div>
+
+        {cats.length > 0 ? (
+          <>
+            <div className="grid grid-cols-2 border-b border-zk-border-soft sm:grid-cols-3 lg:grid-cols-5" role="tablist">
+              {cats.map((c) => {
+                const on = c.key === active?.key;
+                return (
+                  <button
+                    key={c.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => {
+                      setSel(c.key);
+                      setAll(false);
+                    }}
+                    className="border-r border-zk-border-soft px-3.5 py-3 text-left"
+                    style={{ background: on ? "#f0f7ff" : "#fff", boxShadow: on ? "inset 0 -2px 0 #2563eb" : "none" }}
+                  >
+                    <div className="text-[11.5px] text-zk-muted">{c.name}</div>
+                    <div className="mt-0.5 flex items-baseline gap-1">
+                      <span className="text-xl font-bold text-zk-text">{c.n}</span>
+                      <span className="text-[11.5px] text-zk-muted">{c.unit}</span>
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-zk-faint">{c.sub}</div>
+                  </button>
+                );
+              })}
             </div>
-          ))}
-        </div>
-        <div className="mt-2 text-[11.5px] text-zk-muted" data-testid="auto-counts">
-          本月更數（shift 記錄）：計數更次 {s.counts.countable}（其中公司兵 {s.counts.internal_cash}）；客戶自己人（external）{s.counts.external} 更另計，唔入收入／成本。
+            {active && (
+              <div className="px-4 pb-3 pt-2.5">
+                <div className="mb-2 flex items-center gap-2.5">
+                  <span className="text-[13px] font-semibold text-zk-text">{active.name}</span>
+                  <span className="text-[12px] text-zk-muted">{active.n} {active.unit}</span>
+                </div>
+                {rows.length === 0 ? (
+                  <div className="rounded-lg border border-zk-border px-3 py-2.5 text-[12px] text-zk-muted">呢類冇逐項紀錄（逐項最多記 80 項）。</div>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border border-zk-border">
+                    <table className="w-full min-w-[560px] text-[12.5px]" data-testid="auto-rows">
+                      <thead>
+                        <tr className="bg-zk-header text-left text-[11px] font-semibold text-zk-muted">
+                          <th className="px-3 py-1.5">盤</th>
+                          {showPrice && <th className="px-2 py-1.5">更種</th>}
+                          {showBroker && <th className="px-2 py-1.5">雞頭</th>}
+                          <th className="px-2 py-1.5 text-right">更數</th>
+                          {showPrice && <th className="px-2 py-1.5">定咗嘅價</th>}
+                          <th className="px-2 py-1.5">依據</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shown.map((r, i) => (
+                          <tr key={i} className="border-t border-zk-border-soft align-top">
+                            <td className="px-3 py-2 font-medium">{r.site || "—"}</td>
+                            {showPrice && <td className="px-2 py-2">{r.shiftType ? <span className="rounded bg-zk-primary-tint px-1.5 py-px text-[11px] font-semibold text-zk-primary-deep">{r.shiftType}</span> : "—"}</td>}
+                            {showBroker && <td className="px-2 py-2">{r.broker || "—"}</td>}
+                            <td className="px-2 py-2 text-right">{r.n ?? "—"}</td>
+                            {showPrice && <td className="px-2 py-2">{humanize(r.price) || "—"}</td>}
+                            <td className="px-2 py-2">{r.basis ? <span className="inline-block rounded-[10px] bg-zk-surface px-2 py-0.5 text-[11px] text-[#475569]">{humanize(r.basis)}</span> : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {rows.length > HEAD_ROWS && (
+                      <button type="button" className="w-full border-t border-zk-border-soft bg-white px-3 py-1.5 text-left text-[12px] text-zk-primary" onClick={() => setAll((v) => !v)}>
+                        {all ? "收埋 ›" : `睇晒其餘 ${rows.length - HEAD_ROWS} 組 ›`}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="px-4 py-3 text-[12.5px] text-zk-muted">呢次一鍵結算冇需要自動處理嘅項目。</div>
+        )}
+
+        <div className="border-t border-zk-border-soft bg-zk-header px-4 py-2.5 text-[11.5px] text-zk-faint" data-testid="auto-counts">
+          {zero.length > 0 && <>冇需要處理：{zero.join(" · ")}　·　</>}
+          本月更次記錄：計數更次 {s.counts.countable}（其中公司兵 {s.counts.internal_cash}）；客戶自己人{s.counts.external} 更另計，唔入收入／成本。
           {s.variances_unexplained > 0 ? ` 仲有 ${s.variances_unexplained} 個更數差異解釋唔到。` : ""}
         </div>
-        {auto.auto_lines.length > 0 && (
-          <details className="mt-2 text-[12px]">
-            <summary className="cursor-pointer text-zk-muted">逐項睇（{auto.auto_lines.length}）</summary>
-            <ul className="mt-1 list-disc pl-4 text-zk-muted">
-              {auto.auto_lines.map((l, i) => (
-                <li key={i}>{l.text}</li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </div>
-
-      <div className="rounded border border-orange-200 bg-orange-50 p-3" data-testid="auto-review">
-        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[13px] font-medium text-orange-900">要你睇（{auto.review.length}）</div>
-          <div className="flex items-center gap-2">
-            {auto.triage_session_id && auto.review.length > 0 && (
-              <Button variant="primary" onClick={onOpenTriage} disabled={busy} data-testid="open-triage">
-                逐條一撳確認
-              </Button>
-            )}
-            <Link href="/triage" className="text-[12px] text-orange-900 underline">
-              去分診頁
-            </Link>
-          </div>
-        </div>
-        {auto.review.length === 0 ? (
-          <div className="text-[12.5px] text-orange-900">冇要你睇嘅項目——系統全部有依據、已自動處理。</div>
-        ) : (
-          <ul className="list-disc space-y-0.5 pl-4 text-[12.5px] text-orange-900">
-            {auto.review.map((r, i) => (
-              <li key={i}>
-                <Pill variant="neutral">{KIND_LABEL[r.kind] ?? r.kind}</Pill> {r.confidence === "propose" ? "（有建議）" : "（冇依據）"} {r.text}
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
     </div>
   );
