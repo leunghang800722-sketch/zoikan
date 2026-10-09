@@ -36,7 +36,7 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
   const doneN = run.steps.filter((s) => s.status === "done" || s.status === "skipped").length;
   const headline = run.status === "running" && !run.stalled ? `執行緊 · ${doneN} / ${run.steps.length} 步` : run.status === "failed" || run.stalled ? `${doneN} / ${run.steps.length} 步完成，之後停咗` : `${run.steps.length} 步全部跑完${auto ? ` · 自動做咗 ${autoTotal} 項 · 出咗 ${qTotal} 題` : ""}`;
   return (
-    <section className="overflow-hidden rounded-[10px] border border-zk-border bg-white" data-testid="progress-section">
+    <section id="progress-section" className="scroll-mt-4 overflow-hidden rounded-[10px] border border-zk-border bg-white" data-testid="progress-section">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-zk-border-soft px-4 py-3">
         <h2 className="text-[14px] font-semibold text-zk-text">③ 進度</h2>
         <span className="text-[12px] text-zk-muted">{headline}</span>
@@ -86,6 +86,13 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
                 </span>
                 <span className="col-start-3 row-start-1 text-right text-[11.5px] text-zk-faint md:col-start-5">{stepSeconds(s)}</span>
               </button>
+              {s.needs_human.length > 0 && (
+                <ul className="mx-4 mb-2 list-disc pl-6 text-[11.5px] text-red-700 md:ml-14" data-testid="step-needs-human">
+                  {s.needs_human.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              )}
               {isOpen && (
                 <div className="mx-4 mb-3 rounded-md border border-zk-border bg-zk-surface-2 px-3 py-2.5 md:ml-14">
                   {s.warnings.length > 0 && (

@@ -10,7 +10,8 @@ import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
 import type { RunDTO } from "@/components/month-close/types";
-import { UNDO_NOTE, deriveStages, deriveUploads, groupReview, stepByKey } from "@/components/month-close/derive";
+import { UNDO_NOTE, needsHumanCount, deriveStages, deriveUploads, groupReview, stepByKey } from "@/components/month-close/derive";
+import { takeUnsent } from "@/components/month-close/unsent";
 import { StageBar } from "./StageBar";
 import { UploadSection } from "./UploadSection";
 import { RunSection } from "./RunSection";
@@ -40,6 +41,12 @@ export default function MonthCloseOneClickPage() {
     const res = await apiGet<{ runs: RunDTO[] }>(`/api/month-close/one-click?month=${month}`);
     if (res.ok) setRuns(res.data.runs);
   }
+
+  // 上次對話框關閉／離開時有題送出失敗（記喺 sessionStorage）→ 提示重新答。
+  useEffect(() => {
+    const un = takeUnsent();
+    if (un.length > 0) setError(`有 ${un.length} 題未送出，請重新答：${un.map((x) => x.title).join("、")}`);
+  }, []);
 
   useEffect(() => {
     setFacts({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
@@ -281,7 +288,7 @@ export default function MonthCloseOneClickPage() {
         </div>
         {report && (
           <div className="order-1 min-w-0 lg:order-2 lg:sticky lg:top-4">
-            <RightRail report={report} month={month} busy={busy} locked={locked} health={health} onOpenTriage={openTriage} onLock={lockMonth} onUndo={() => latestRun && undoAuto(latestRun.id)} />
+            <RightRail needsHuman={needsHumanCount(latestRun)} report={report} month={month} busy={busy} locked={locked} health={health} onOpenTriage={openTriage} onLock={lockMonth} onUndo={() => latestRun && undoAuto(latestRun.id)} />
           </div>
         )}
       </div>

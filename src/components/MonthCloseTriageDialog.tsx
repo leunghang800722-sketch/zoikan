@@ -7,10 +7,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { apiGet, apiPost } from "@/lib/ui/api-client";
+import { apiGet, apiRequest, type ApiResult } from "@/lib/ui/api-client";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
-import { UNDO_NOTE_SHORT } from "@/components/month-close/derive";
+import { UNDO_NOTE_SHORT, kindChip } from "@/components/month-close/derive";
+import { clearUnsent, recordUnsent } from "@/components/month-close/unsent";
+
+// 送出一律 keepalive：離開頁面時盡力完成（URL／method／body 同原本一樣）。
+function apiPost<T = unknown>(path: string, body?: unknown): Promise<ApiResult<T>> {
+  return apiRequest<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body), keepalive: true });
+}
 
 interface Candidate {
   id: string;
@@ -74,10 +80,11 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   const [okN, setOkN] = useState(0);
   const [skipN, setSkipN] = useState(0);
   const [results, setResults] = useState<Record<string, "ok" | "skip">>({});
-  const [view, setView] = useState<DeferredView>({ pending: null, deadline: null, sending: false });
+  const [view, setView] = useState<DeferredView>({ pending: null, deadline: null, sending: false, inFlight: [] });
   const [candidate, setCandidate] = useState<string>("");
   const [broker, setBroker] = useState<string>("");
   const [price, setPrice] = useState<{ client: string; wage: string; fee: string }>({ client: "", wage: "", fee: "" });
+  const drafts = useRef<Record<string, { candidate: string; broker: string; price: { client: string; wage: string; fee: string } }>>({});
   const [mode, setMode] = useState<"accept" | "pick" | "price" | "other">("accept");
   const [expanded, setExpanded] = useState(false);
 
@@ -119,17 +126,21 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
           delete n[item.id];
           return n;
         });
+        delete drafts.current[item.id];
+        clearUnsent(item.id);
         setResults((r) => ({ ...r, [item.id]: item.kind === "skip" ? "skip" : "ok" }));
         if (item.kind === "skip") setSkipN((n) => n + 1);
         else {
           setOkN((n) => n + 1);
           setDone((d) => [...d, `${item.doneLabel}：${detail ?? ""}`]);
         }
-        cbRef.current.onChanged?.();
+        // 跳過唔改報告數字，唔使再 reload 報告（淨係 reload 分診 session）。
+        if (item.kind !== "skip") cbRef.current.onChanged?.();
         void cbRef.current.load();
       },
       onFailed: (item, message) => {
         setFailed((f) => ({ ...f, [item.id]: message }));
+        recordUnsent({ id: item.id, title: item.title, option: String(item.answer.option ?? "") });
         setError(`「${item.title}」未送出，請再試：${message}`);
       },
     });
@@ -158,24 +169,27 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   }, [sender]);
 
   const pendingId = view.pending?.id ?? null;
-  const visible = (qs ?? []).filter((x) => x.id !== pendingId && !results[x.id]);
+  const visible = (qs ?? []).filter((x) => !view.inFlight.includes(x.id) && !results[x.id]);
   const q = visible[0] ?? null;
   useEffect(() => {
-    setCandidate("");
-    setBroker("");
-    setPrice({ client: "", wage: "", fee: "" });
-    setExpanded(false);
+    const d = q ? drafts.current[q.id] : undefined;
+    setCandidate(d?.candidate ?? "");
+    setBroker(d?.broker ?? "");
+    setPrice(d?.price ?? { client: "", wage: "", fee: "" });
+    setExpanded(!!d);
     setMode(q?.mc.prefill_candidate_id ? "accept" : q?.mc.needs_price_input ? "price" : "pick");
   }, [q?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function closeDialog() {
-    await sender.flush();
+    const ok = await sender.flush();
+    if (!ok) return; // 送出失敗：唔關對話框，題目返回並標「未送出，請再試」
     onClose();
   }
 
   function schedule(kind: "confirm" | "skip", answer: Record<string, unknown>, doneLabel: string) {
     if (!q) return;
     setError(null);
+    drafts.current[q.id] = { candidate, broker, price };
     void sender.schedule({ id: q.id, kind, answer, doneLabel, title: shortTitle(q.title) });
   }
   const skip = () => schedule("skip", { option: "skip" }, "跳過");
@@ -332,7 +346,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
             <div className="flex flex-col gap-4">
               {retryTag}
               <div className="flex gap-1.5">
-                <span className="rounded-[10px] bg-zk-surface px-2 py-[3px] text-[11.5px] font-semibold text-[#475569]">{q.kind_label}</span>
+                <span className="rounded-[10px] bg-zk-surface px-2 py-[3px] text-[11.5px] font-semibold text-[#475569]">{kindChip(q.kind, q.kind_label)}</span>
                 <span className="rounded-[10px] px-2 py-[3px] text-[11.5px] font-semibold" style={q.mc.confidence === "propose" ? { background: "#dbeafe", color: "#1e40af" } : { background: "#ffedd5", color: "#c2410c" }}>
                   {q.mc.confidence === "propose" ? "有建議" : "要你揀"}
                 </span>
@@ -421,7 +435,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
         <div className="flex items-center justify-between gap-2 border-b border-zk-border px-4 py-3">
           <div>
             <div className="text-[15px] font-semibold">一鍵結算——要你睇</div>
-            {qs && <div className="text-[12px] text-zk-muted">仲有 {visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.pending || view.sending ? " · 1 題送出中（可撤銷）" : ""}</div>}
+            {qs && <div className="text-[12px] text-zk-muted">仲有 {visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.inFlight.length > 0 ? ` · ${view.inFlight.length} 題送出中${view.pending ? "（可撤銷）" : ""}` : ""}</div>}
           </div>
           <button type="button" onClick={closeDialog} className="rounded px-2 py-1 text-[13px] text-zk-muted hover:bg-zk-header" data-testid="mc-later">
             遲啲先答
@@ -439,7 +453,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
           {qs === null && <div className="text-[13px] text-zk-muted">載入緊…</div>}
           {allClear && (
             <div className="space-y-2 py-6 text-center">
-              <div className="text-[15px] font-semibold" data-testid="mc-finish">{waiting ? "等緊最後一題送出（5 秒內可撤銷）" : "全部處理完"}</div>
+              <div className="text-[15px] font-semibold" data-testid="mc-finish">{waiting ? "等緊最後一題送出（5 秒內可撤銷）" : `${handled} 題處理完`}</div>
+              {!waiting && <div className="text-[12.5px] text-zk-muted">確認 {okN} · 跳過 {skipN}　跳過嘅留咗喺「待答問題」。</div>}
               {!waiting && (
                 <Button variant="primary" onClick={closeDialog}>
                   完成
@@ -451,7 +466,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
             <>
               {retryTag}
               <div className="flex flex-wrap items-center gap-2">
-                <Pill variant="neutral">{q.kind_label}</Pill>
+                <Pill variant="neutral">{kindChip(q.kind, q.kind_label)}</Pill>
                 <Pill variant={q.mc.confidence === "propose" ? "warning" : "danger"}>{q.mc.confidence === "propose" ? "有建議" : "要你揀"}</Pill>
               </div>
               <div className="text-[14px] font-medium">{q.title}</div>

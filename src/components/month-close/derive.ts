@@ -17,6 +17,7 @@ export const REVIEW_GROUP_DEFS = [
   { key: "settlement", name: "結算雞頭", kinds: ["month_close_settlement"] },
   { key: "variance", name: "更數差異", kinds: ["month_close_shift_variance"] },
   { key: "site", name: "盤名／新盤", kinds: ["month_close_site_alias", "month_close_site_new"] },
+  { key: "other", name: "其他", kinds: [] },
 ] as const;
 export type ReviewGroupKey = (typeof REVIEW_GROUP_DEFS)[number]["key"];
 
@@ -35,8 +36,10 @@ export function groupReview(review: AutoReportDTO["review"] | undefined | null):
   const list = review ?? [];
   const out: ReviewGroup[] = [];
   for (const def of REVIEW_GROUP_DEFS) {
-    const items = list.filter((r) => (def.kinds as readonly string[]).includes(r.kind));
-    if (def.key === "site" && items.length === 0) continue;
+    const known = REVIEW_GROUP_DEFS.flatMap((d) => d.kinds as readonly string[]);
+    // 未知 kind 唔准靜靜丟：歸入「其他」，顯示原文。
+    const items = def.key === "other" ? list.filter((r) => !known.includes(r.kind)) : list.filter((r) => (def.kinds as readonly string[]).includes(r.kind));
+    if ((def.key === "site" || def.key === "other") && items.length === 0) continue;
     out.push({
       key: def.key,
       name: def.name,
@@ -305,7 +308,7 @@ export function stepKv(step: StepDTO): string[] {
 // ---------------------------------------------------------------------------
 // ④ 自動處理摘要：分類 + 明細行
 // ---------------------------------------------------------------------------
-export type AutoCatKey = "shift_types" | "cards" | "priced" | "settled" | "variance" | "sites_aliased" | "sites_created" | "guard_auto";
+export type AutoCatKey = "other" | "shift_types" | "cards" | "priced" | "settled" | "variance" | "sites_aliased" | "sites_created" | "guard_auto";
 
 export interface AutoRow {
   site: string;
@@ -352,6 +355,7 @@ export function deriveAutoCategories(auto: AutoReportDTO): { cats: AutoCategory[
   const rowsAlias: AutoRow[] = [];
   const rowsNew: AutoRow[] = [];
   const rowsGuard: AutoRow[] = [];
+  const rowsOther: AutoRow[] = [];
   for (const l of lines) {
     const t = l.text;
     if (l.kind === "shift_type_created") {
@@ -375,6 +379,8 @@ export function deriveAutoCategories(auto: AutoReportDTO): { cats: AutoCategory[
     } else if (l.kind === "guard_match") {
       const m = GUARD_RE.exec(t);
       rowsGuard.push(m ? { ...blankRow(), site: m[1]!, n: Number(m[2]), basis: m[3]! } : { ...blankRow(), basis: t });
+    } else {
+      rowsOther.push({ ...blankRow(), basis: t });
     }
   }
   const all: AutoCategory[] = [
@@ -385,9 +391,10 @@ export function deriveAutoCategories(auto: AutoReportDTO): { cats: AutoCategory[
     { key: "variance", name: "解釋更數差異", n: s.variances_explained, unit: "個盤", sub: "更數同上月差好遠，但搵到原因", rows: rowsVariance },
     { key: "sites_aliased", name: "自動對盤", n: s.sites_aliased, unit: "個", sub: "更表盤名對上現有盤", rows: rowsAlias },
     { key: "sites_created", name: "自動建新盤", n: s.sites_created, unit: "個", sub: "更表有、系統未有嘅盤", rows: rowsNew },
-    { key: "guard_auto", name: "自動安員配對", n: s.guard_matches_auto, unit: "組", sub: "有依據先自動配", rows: rowsGuard },
+    { key: "guard_auto", name: "自動安員配對", n: s.guard_matches_auto, unit: "組", sub: "有建議先自動配", rows: rowsGuard },
+    { key: "other", name: "其他", n: rowsOther.length, unit: "項", sub: "未分類，睇原文", rows: rowsOther },
   ];
-  return { cats: all.filter((c) => c.n > 0), zero: all.filter((c) => c.n === 0).map((c) => `${c.name} 0`), total: all.reduce((a, c) => a + c.n, 0) };
+  return { cats: all.filter((c) => c.n > 0), zero: all.filter((c) => c.n === 0 && c.key !== "other").map((c) => `${c.name} 0`), total: all.reduce((a, c) => a + c.n, 0) };
 }
 
 // ---------------------------------------------------------------------------
@@ -497,5 +504,29 @@ export function splitSiteRevenue(rows: ReportDTO["site_revenue"]): { shown: Repo
 }
 
 /** 「還原所有自動改動」說明（老闆 2026-10-09 指定；桌面右欄／摘要頭／確認對話框／手機完成頁共用）。 */
-export const UNDO_NOTE = "只還原系統自動做嘅改動（自動建嘅更種、價卡、補價、歸屬、別名）。你喺「要你睇」一撳確認咗嘅答案唔會還原；仲未答嘅題會作廢，下次重跑會重新出。已經人手改過價嘅更唔會郁。";
+export const UNDO_NOTE = "只還原系統自動做嘅改動（自動建嘅更種、價卡、補價、歸屬、別名；安員自動登記嘅別名／工號都會還原）。自動建嘅盤唔會刪。你喺「要你睇」一撳確認咗嘅答案唔會還原；仲未答嘅題會作廢，下次重跑會重新出。已經人手改過價嘅更唔會郁。";
 export const UNDO_NOTE_SHORT = "只還原系統自動做嘅改動；你一撳確認咗嘅答案唔會還原，未答嘅題會作廢，人手改過價嘅更唔會郁。";
+
+/** 題型 chip：UI 自己按 kind 對應（唔直接顯示 API kind_label，佢會出「冇依據」等禁用詞）。 */
+export function kindChip(kind: string, fallbackLabel: string): string {
+  switch (kind) {
+    case "month_close_pricing":
+      return "定價";
+    case "month_close_guard_match":
+      return "安員配對";
+    case "month_close_settlement":
+      return "結算雞頭";
+    case "month_close_shift_variance":
+      return "更數差異";
+    case "month_close_site_alias":
+    case "month_close_site_new":
+      return "盤名";
+    default:
+      return fallbackLabel.replace(/冇依據/g, "要你揀").replace(/有依據/g, "有建議").replace(/\bshift\b/g, "更").replace(/\bleave\b/g, "假").replace(/\bunmatched\b/g, "對唔到安員").replace(/\bambiguous\b/g, "有多個可能").replace(/\bname_only\b/g, "淨靠姓名配對");
+  }
+}
+
+/** 全部步驟 needs_human 項數（③ 逐行直接顯示；規則：needs_human 行全部顯示，唔同「要你睇」去重——簡單規則）。 */
+export function needsHumanCount(run: RunDTO | null): number {
+  return run ? run.steps.reduce((a, s) => a + s.needs_human.length, 0) : 0;
+}

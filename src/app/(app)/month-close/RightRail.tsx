@@ -5,7 +5,7 @@ import { UNDO_NOTE_SHORT, deriveAutoCategories, lockRequirements, reviewTotals }
 
 const card = "rounded-[10px] border border-zk-border bg-white";
 
-export function RightRail({ report, month, busy, locked, health, onOpenTriage, onLock, onUndo }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; health: { critical: number; warn: number; info: number } | null; onOpenTriage: () => void; onLock: () => void; onUndo: () => void }) {
+export function RightRail({ report, month, busy, locked, health, needsHuman, onOpenTriage, onLock, onUndo }: { needsHuman: number; report: ReportDTO; month: string; busy: boolean; locked: boolean; health: { critical: number; warn: number; info: number } | null; onOpenTriage: () => void; onLock: () => void; onUndo: () => void }) {
   const auto = report.auto;
   const t = reviewTotals(auto?.review);
   const cats = auto ? deriveAutoCategories(auto) : null;
@@ -13,10 +13,11 @@ export function RightRail({ report, month, busy, locked, health, onOpenTriage, o
   const unpriced = report.unpriced.count;
   const ready = report.lock_precondition.ready_to_lock && !locked;
   const reqs = lockRequirements(report, 0);
-  const rows: Array<{ c: string; t: string; v: string | number }> = [
+  const rows: Array<{ c: string; t: string; v: string | number; href?: string }> = [
     { c: unpriced > 0 ? "#f97316" : "#0f766e", t: "更未定價", v: unpriced },
     { c: unconfirmed > 0 ? "#dc2626" : "#0f766e", t: "個盤未對數確認", v: unconfirmed },
     { c: health && health.critical > 0 ? "#dc2626" : "#0f766e", t: "體檢嚴重項", v: health ? health.critical : "—" },
+    ...(needsHuman > 0 ? [{ c: "#dc2626", t: "項要人手處理（睇 ③ 進度）", v: needsHuman, href: "#progress-section" }] : []),
   ];
   return (
     <aside className="flex flex-col gap-3" data-testid="right-rail" aria-label="本月仲差咩">
@@ -39,7 +40,13 @@ export function RightRail({ report, month, busy, locked, health, onOpenTriage, o
         {rows.map((r) => (
           <div key={r.t} className="flex items-center gap-2.5 border-b border-zk-border-soft px-3.5 py-2.5 text-[12.5px]">
             <span className="h-2 w-2 flex-none rounded-full" style={{ background: r.c }} />
-            <span className="flex-1">{r.t}</span>
+            {r.href ? (
+              <a href={r.href} className="flex-1 text-zk-primary hover:underline" data-testid="rail-needs-human">
+                {r.t}
+              </a>
+            ) : (
+              <span className="flex-1">{r.t}</span>
+            )}
             <span className="font-bold">{r.v}</span>
           </div>
         ))}

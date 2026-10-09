@@ -16,7 +16,7 @@ export function ReviewCard({ auto, groups, busy, onOpenTriage }: { auto: AutoRep
         <span className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-[#ffedd5] text-[13px] font-bold text-[#c2410c]">?</span>
         <div className="min-w-0">
           <div className="text-[14px] font-semibold text-zk-text">{t.total === 0 ? "要你睇：冇" : `要你睇：仲有 ${t.total} 題`}</div>
-          <div className="text-[12px] text-zk-muted">{t.total === 0 ? "冇要你睇嘅項目——系統全部有依據、已自動處理。" : `系統唔肯自己決定嘅嘢。${t.propose} 題有建議答案，${t.unknown} 題要你自己揀；唔答都得，跳過就留返人手處理。`}</div>
+          <div className="text-[12px] text-zk-muted">{t.total === 0 ? "冇要你睇嘅項目——系統全部有建議、已自動處理。" : `系統唔肯自己決定嘅嘢。${t.propose} 題有建議答案，${t.unknown} 題要你自己揀；唔答都得，跳過就留返人手處理。`}</div>
         </div>
         <div className="ml-auto flex items-center gap-3">
           <Link href="/triage" className="text-[12px] text-zk-muted underline">

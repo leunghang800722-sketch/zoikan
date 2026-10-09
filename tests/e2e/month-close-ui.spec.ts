@@ -49,7 +49,7 @@ const RUN = {
   finished_at: "2026-09-10T05:33:09.000Z",
   current_step: null,
   stalled: false,
-  steps: steps(),
+  steps: steps().map((x) => (x.key === "reconcile_apply" ? { ...x, needs_human: ["「測試盤甲」對數套用有 1 項失敗——要人手喺對數頁覆核"] } : x)),
   error_message: null,
   report: {
     month: MONTH,
@@ -184,6 +184,12 @@ test.describe("月結頁 1a 桌面", () => {
     await expect(page.getByTestId("lock-month")).toBeDisabled();
     // 右欄
     await expect(page.getByTestId("rail-review-count")).toHaveText("3");
+    // needs_human 每步直接顯示＋右欄入口
+    await expect(page.locator('[data-step="reconcile_apply"]').getByTestId("step-needs-human")).toContainText("對數套用有 1 項失敗");
+    await expect(page.getByTestId("rail-needs-human")).toBeVisible();
+    // 禁用詞
+    const bodyText = await page.locator("body").innerText();
+    for (const w of ["有依據", "冇依據", "unmatched", "ambiguous", "name_only", "（external）", "（shift"]) expect(bodyText).not.toContain(w);
     // 保留 testid
     for (const id of ["month-close-month-input", "month-close-roster-file-input", "month-close-staff-list-file-input", "month-close-postorder-file-input", "auto-summary", "auto-counts", "auto-review", "undo-auto", "unpriced-gap", "open-triage", "month-health-card"]) {
       await expect(page.getByTestId(id)).toHaveCount(1);
@@ -215,7 +221,7 @@ test.describe("月結頁 1a 桌面", () => {
     expect(st.previews).toEqual(["q1"]);
   });
 
-  test("送出失敗 → 標返未送出，題目返回", async ({ page }) => {
+  test("送出失敗 → 關閉對話框唔關，標返未送出；重試成功先可關閉", async ({ page }) => {
     const st = await mockApis(page);
     await loginAs(page, "老闆");
     await page.goto(`/month-close`);
@@ -224,8 +230,13 @@ test.describe("月結頁 1a 桌面", () => {
     st.failNext = true;
     await page.getByTestId("mc-accept").click();
     await page.getByTestId("mc-later").click();
-    await page.getByTestId("open-triage").click();
+    await expect(page.getByTestId("mc-triage-dialog")).toBeVisible();
+    await expect(page.getByTestId("mc-unsent")).toContainText("未送出，請再試");
     expect(st.answers).toEqual([]);
+    await page.getByTestId("mc-accept").click();
+    await page.getByTestId("mc-later").click();
+    await expect(page.getByTestId("mc-triage-dialog")).toHaveCount(0);
+    expect(st.answers).toEqual(["q1:mc_accept"]);
   });
 });
 

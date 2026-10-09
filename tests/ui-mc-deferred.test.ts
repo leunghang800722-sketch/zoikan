@@ -41,6 +41,7 @@ describe("DeferredSender", () => {
     const { s, send, sent } = make();
     await s.schedule(item("a"));
     await s.schedule(item("b", "skip"));
+    await vi.advanceTimersByTimeAsync(0);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0].id).toBe("a");
     expect(sent).toEqual(["a"]);
@@ -75,6 +76,44 @@ describe("DeferredSender", () => {
     await s.schedule(item("a"));
     await s.flush();
     expect(failed).toEqual(["network"]);
+  });
+
+  it("失敗時 flush 返回 false，成功返回 true", async () => {
+    const bad = make({ ok: false, message: "500" });
+    await bad.s.schedule(item("a"));
+    expect(await bad.s.flush()).toBe(false);
+    const good = make();
+    await good.s.schedule(item("a"));
+    expect(await good.s.flush()).toBe(true);
+  });
+
+  it("A 送出期間 schedule B、C → A、B、C 各送一次、次序正確；in-flight 全部收埋", async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const views: string[][] = [];
+    const s = new DeferredSender({
+      send: async (i) => {
+        order.push(i.id);
+        if (i.id === "a") await gate;
+        return { ok: true };
+      },
+      onSent: () => {},
+      onFailed: () => {},
+      onChange: (v) => views.push(v.inFlight),
+    });
+    await s.schedule(item("a"));
+    await s.schedule(item("b")); // a 排入送出（卡住），b 成 pending
+    await s.schedule(item("c")); // b 排入隊列，c 成 pending
+    expect(s.inFlightIds().sort()).toEqual(["a", "b", "c"]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(order).toEqual(["a"]); // 逐個送，a 未完 b 未開始
+    release();
+    await s.flush();
+    expect(order).toEqual(["a", "b", "c"]);
+    expect(s.inFlightIds()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(order).toEqual(["a", "b", "c"]);
   });
 
   it("冇 pending 時 flush／undo 無副作用", async () => {

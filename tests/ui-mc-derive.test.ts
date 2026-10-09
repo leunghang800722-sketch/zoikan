@@ -8,6 +8,8 @@ import {
   groupReview,
   healthDupReviewCount,
   humanizeHealth,
+  kindChip,
+  needsHumanCount,
   lockRequirements,
   parsePricingLine,
   splitSiteRevenue,
@@ -188,5 +190,28 @@ describe("splitSiteRevenue", () => {
     expect(r.shown[0]!.site_id).toBe("s11");
     expect(r.rest).toHaveLength(2);
     expect(r.zeroCount).toBe(2);
+  });
+});
+
+describe("kindChip／其他類／needs_human", () => {
+  it("題型 chip 按 kind 對應，唔出禁用詞", () => {
+    expect(kindChip("month_close_pricing", "未定價（有候選／冇依據）")).toBe("定價");
+    expect(kindChip("month_close_guard_match", "x")).toBe("安員配對");
+    expect(kindChip("month_close_site_new", "x")).toBe("盤名");
+    expect(kindChip("future_kind", "未定價（有候選／冇依據）")).toBe("未定價（有候選／要你揀）");
+  });
+  it("未知 review kind／auto_line kind 歸入「其他」", () => {
+    const g = groupReview([{ kind: "mystery", text: "原文一", confidence: "unknown", question_id: null }]);
+    expect(g.find((x) => x.key === "other")).toMatchObject({ count: 1, preview: [{ text: "原文一", confidence: "unknown" }] });
+    const a = auto({ auto_lines: [{ kind: "brand_new_kind", text: "新種類原文" }] });
+    const { cats } = deriveAutoCategories(a);
+    expect(cats.find((c) => c.key === "other")?.rows[0]?.basis).toBe("新種類原文");
+  });
+  it("needsHumanCount 合計各步驟", () => {
+    const r = run();
+    r.steps[0]!.needs_human = ["a", "b"];
+    r.steps[1]!.needs_human = ["c"];
+    expect(needsHumanCount(r)).toBe(3);
+    expect(needsHumanCount(null)).toBe(0);
   });
 });

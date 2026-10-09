@@ -125,7 +125,7 @@ export function AutoSummaryCard({ auto, busy, locked, onUndo }: { auto: AutoRepo
 
         <div className="border-t border-zk-border-soft bg-zk-header px-4 py-2.5 text-[11.5px] text-zk-faint" data-testid="auto-counts">
           {zero.length > 0 && <>冇需要處理：{zero.join(" · ")}　·　</>}
-          本月更數（shift 記錄）：計數更次 {s.counts.countable}（其中公司兵 {s.counts.internal_cash}）；客戶自己人（external）{s.counts.external} 更另計，唔入收入／成本。
+          本月更次記錄：計數更次 {s.counts.countable}（其中公司兵 {s.counts.internal_cash}）；客戶自己人{s.counts.external} 更另計，唔入收入／成本。
           {s.variances_unexplained > 0 ? ` 仲有 ${s.variances_unexplained} 個更數差異解釋唔到。` : ""}
         </div>
       </div>
