@@ -2375,3 +2375,13 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - **B**：每格只歸一個成分（重複→公司兵→子盤→雞頭組成），`components` 加埋＋截短推算＋剩餘＝差額；截短（<80% 日數或表頭警告）獨立於 30% 閘口，一律 warning＋needs_human＋分診題，唔當 explained（沒有上月比較嘅新盤亦會報）；needs_human 口徑＝剩餘 >20 更，或（>15% 而且 >5 更）。
 - **D**：結算歷史回溯只准同一 `guard_id`；`previousMonthPaired` 淨姓名唔 auto（要工號／電話硬鍵＋上月同盤已配對同一 guard）；plan 判工號衝突（reason 含「工號」）一律唔 auto 出分診題；加唔到任何登記（已存在／被佔用）唔計 auto。
 - **順手**：新盤時段解析唔到（`7am-7pm`／空）唔建 null 時段更種，出 `month_close_site_new`（空 groups，可「我已處理」）＋warning；`codeKind=unknown` 代號格（如 `D-2`）喺 parse_health warning＋needs_human 列出；undo 後 `/month-close` 摘要卡頂顯示「已撤銷」橫額；`tests/wp-postorder-pairs-csv-parse.test.ts` 讀 `data/` 嘅死測試搬去 `scripts/guard-fix/verify-postorder-pairs-local.ts`。
+
+### WP-ONE-CLICK-AUTO Opus 5.5 第二輪驗收修正（7 項＋順手項）
+
+- **1 取消整月通用補價**：`auto_pricing` 唔再叫 `repriceMonthForSites`；只對今次有 auto 建卡（或重用）嘅組（盤×更種×雞頭）補價，淨填 null（或工資 0＋雞頭費 null）嘅欄，逐更 journal（舊值／新值）。`resolveShiftPricingFromCards()` 加閘：`auto:one-click:*` 卡只對自己嘅雞頭（或通用卡）生效，唔准經客價 fallback 填其他雞頭（`RateCardLite.source`）。分診確認 propose 價（`createCardAndPrice(..., overwriteAuto:true)`）可以覆蓋 journal 記低嘅「系統自動填入值」，永遠唔覆蓋人手快照；答題回應多 `result{records_priced, overwritten_auto}`＋`note`（補咗幾多更；0 更講明原因）。
+- **2 undo 只按 journal**：刪走 `sweepCardPrices`（值相等掃描）；`price_snapshots` 逐更按 journal 還原舊值（當前值仍等於 journal `after` 先還原）。人手價（就算同 auto 卡價一樣）、另一雞頭同價人手價唔郁。限制：rerun 套用新建嘅更若按 auto 卡定價（冇 journal）唔會被 undo 清走。
+- **3 分診建卡＋補價同一 `$transaction`**（`createCardAndPrice(writer, input, tx)`＋`ChangeWriter.auditTx`）：補價途中失敗成個 rollback，冇孤兒卡；分診路徑重用舊卡要同來源且價錢一樣。
+- **4 截短改認表頭**：`parse.ts` 由 `mapping.dateValues` 抽 `headerDateRange`／`headerDays` 存入 `parse_summary`；截短＝表頭覆蓋 <80%；表頭完整但有解析警告只 warning；舊上載（冇表頭資料）只當月頭／月尾連續缺 ≥20% 日數而且覆蓋率比上月低 ≥20% 先算；冇上月嘅新盤頭段缺只出「由 N 號開始」資訊（warning，唔 needs_human）。截短句唔再寫「少約 N 更」。
+- **5 跨 run 防重複建卡**：本月同組合（盤×更種×雞頭，per_shift）已有任何有效 `auto:one-click:*` 卡（唔理邊個 run）就唔再建，重用並補價。
+- **6** 異體表刪走「邨/村」。**7** `resolveUploadSite`：exact／auto 對中有 >1 個子盤嘅母盤 → 降做 propose（同上載時一致）。
+- **順手**：並發 undo 逐項 claim（`undo_note: undoing`）；0 改動 undo 唔作廢 open 題；`applying` 題失敗退回原狀態（skipped 唔變 open）；新盤嘅定價題標題保留「新盤」；guard-fix `NeedsBossAction.code`（`staff_no_conflict` 等結構化碼），自動配對唔再靠 reason 字串；`guard-match.ts`／`variance.ts` 檔頭註解同實際一致；測試 `clearAll` 清 `reconcile_all_runs`／`month_close_runs`（避免跨檔 running 殘留）。

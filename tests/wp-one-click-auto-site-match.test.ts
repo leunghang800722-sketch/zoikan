@@ -88,8 +88,8 @@ describe("classifySiteName：正例", () => {
     const r = classifySiteName("卓弘", sites(["s1", "卓弘物業服務有限公司"]));
     expect(r.level).toBe("exact");
   });
-  it("異體字（邨/村、臺/台、峯/峰）當相同 → exact；真係唔同嘅中文字（東涌／東區、景湖居／樂湖居、領峯／領都）最多 propose，永遠唔 auto", () => {
-    expect(classifySiteName("南豐新村大廈管理處", sites(["s1", "南豐新邨大廈管理處"], ["s2", "完全唔related嘅盤"])).level).toBe("exact");
+  it("異體字（臺/台、峯/峰）當相同 → exact；真係唔同嘅中文字（東涌／東區、景湖居／樂湖居、領峯／領都）最多 propose，永遠唔 auto", () => {
+    expect(classifySiteName("南豐新村大廈管理處", sites(["s1", "南豐新邨大廈管理處"], ["s2", "完全唔related嘅盤"])).level).not.toMatch(/^(exact|auto)$/); // 邨／村係兩個真係唔同嘅地方，唔係異體
     expect(classifySiteName("臺北街1號", sites(["s1", "台北街1號"])).level).toBe("exact");
     for (const [raw, known] of [["東涌城巴車廠", "東區城巴車廠"], ["景湖居", "樂湖居"], ["領都", "領峯"], ["愉景灣管理處甲", "愉景灣管理處乙"]] as const) {
       const r = classifySiteName(raw, sites(["s1", known], ["s2", "完全唔related嘅盤"]));

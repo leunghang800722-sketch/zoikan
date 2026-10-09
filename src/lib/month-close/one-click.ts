@@ -601,6 +601,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
         cellCount: identity?.totalCellCount ?? 0,
         candidateGuardIds: a.candidateGuardIds,
         reason: a.reason,
+        code: a.code,
       };
     });
 

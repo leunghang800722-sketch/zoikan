@@ -354,6 +354,7 @@ export interface McAnswerOutput {
   session_status: "open" | "done";
   open_remaining: number;
   result: Record<string, unknown>;
+  note: string | null;
 }
 
 export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, rawAnswer: unknown, previewHash: string | undefined, ip: string | null): Promise<McAnswerOutput> {
@@ -370,7 +371,7 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
       await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: "skip", writes: false }, ip });
     });
     const session_status = await refreshSessionStatus(q.sessionId);
-    return { status: "skipped", impact: null, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result: {} };
+    return { status: "skipped", impact: null, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result: {}, note: null };
   }
 
   if (!previewHash) throw BadRequest("要先預覽影響，再帶返 preview_hash 確認");
@@ -382,6 +383,7 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
 
   // 先 claim（open／skipped／卡死嘅 applying → applying），並發淨係一個攞到；寫失敗退返 open，retry 安全
   //（建卡係冪等：同來源已有卡唔重複建）。
+  const prevStatus = q.status === "skipped" ? "skipped" : "open";
   const claimed = await prisma.triageQuestion.updateMany({
     where: { id: q.id, OR: [{ status: { in: ["open", "skipped"] } }, { status: "applying", updatedAt: { lt: new Date(Date.now() - APPLYING_STALE_MS) } }] },
     data: { status: "applying" },
@@ -409,18 +411,37 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
       break;
     }
     case "pricing": {
-      let priced = 0;
-      const cards: string[] = [];
-      for (const g of plan.groups) {
-        const need = { client: g.needClient && plan.values.clientRate !== null, payout: g.needPayout && (plan.values.guardWage !== null || plan.values.brokerFee !== null || plan.values.payoutRate !== null) };
-        if (!need.client && !need.payout) continue;
-        const res = await createCardAndPrice(writer, { month, group: g.ref, need, values: plan.values, evidence: plan.evidence, note: `分診一撳確認（題目 ${q.id.slice(0, 8)}）：${plan.evidence}`, confidence: "confirmed" });
-        priced += res.recordsPriced;
-        cards.push(res.cardId);
+      // 建卡＋補價＋audit 放同一個 transaction：失敗成個 rollback，唔留孤兒卡；重試冪等。
+      const out = await prisma.$transaction(
+        async (tx) => {
+          let priced = 0;
+          let over = 0;
+          let skippedHas = 0;
+          let cards = 0;
+          for (const g of plan.groups) {
+            const need = { client: g.needClient && plan.values.clientRate !== null, payout: g.needPayout && (plan.values.guardWage !== null || plan.values.brokerFee !== null || plan.values.payoutRate !== null) };
+            if (!need.client && !need.payout) continue;
+            const res = await createCardAndPrice(writer, { month, group: g.ref, need, values: plan.values, evidence: plan.evidence, note: `分診一撳確認（題目 ${q.id.slice(0, 8)}）：${plan.evidence}`, confidence: "confirmed", overwriteAuto: true }, tx);
+            priced += res.recordsPriced;
+            over += res.overwrittenAuto;
+            skippedHas += res.skippedHasPrice;
+            cards++;
+          }
+          if (cards === 0) throw new ApiError(422, "unprocessable", "呢個答案冇齊所需價錢，唔會建卡");
+          return { priced, over, skippedHas, cards };
+        },
+        { timeout: 120_000, maxWait: 10_000 },
+      );
+      result.records_priced = out.priced;
+      result.overwritten_auto = out.over;
+      result.cards = out.cards;
+      if (out.priced === 0) {
+        result.note = out.skippedHas > 0 ? `價卡已建立，但冇更次補到價：呢組 ${out.skippedHas} 更已經有價（人手或其他來源嘅價唔會覆蓋）` : "價卡已建立，但冇更次補到價：呢組暫時冇需要補價嘅更次（可能已經處理，或者要重新撳一鍵結算）";
+      } else if (out.over > 0) {
+        result.note = `補咗 ${out.priced} 更，其中 ${out.over} 更覆蓋咗系統之前自動填嘅價`;
+      } else {
+        result.note = `補咗 ${out.priced} 更`;
       }
-      result.records_priced = priced;
-      result.cards = cards.length;
-      if (cards.length === 0) throw new ApiError(422, "unprocessable", "呢個答案冇齊所需價錢，唔會建卡");
       break;
     }
     case "settlement": {
@@ -452,7 +473,7 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
       break;
   }
   } catch (e) {
-    await prisma.triageQuestion.updateMany({ where: { id: q.id, status: "applying" }, data: { status: "open" } });
+    await prisma.triageQuestion.updateMany({ where: { id: q.id, status: "applying" }, data: { status: prevStatus } });
     throw e;
   }
 
@@ -465,5 +486,5 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
     await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, run_id: ev.runId, auto_source: `triage:${q.id}`, ...result }, ip });
   });
   const session_status = await refreshSessionStatus(q.sessionId);
-  return { status: "answered", impact, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result };
+  return { status: "answered", impact, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result, note: typeof result.note === "string" ? result.note : null };
 }

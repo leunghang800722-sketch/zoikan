@@ -544,6 +544,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
     if (distinctGuardIds.size > 1) {
       needsBoss.push({
         type: "needs_boss",
+        code: "conflicting_methods",
         seq: identity.seq,
         reason: `多種判斷方法搵到唔同人（${methodsFound.map((m) => m.method).join("／")}），決定唔到，交老闆睇`,
         candidateGuardIds: [...distinctGuardIds],
@@ -572,7 +573,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
               ? `淨係一種弱證據（${methodsFound.map((m) => m.method).join("／")}），可能係家人／雞頭共用電話或同名唔同人`
               : null;
       if (refuse) {
-        needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: `${refuse}，唔自動 link，交老闆睇`, candidateGuardIds: [guardId] });
+        needsBoss.push({ type: "needs_boss", code: snOwner && snOwner !== guardId ? "staff_no_conflict" : hasOtherCurrentSameScheme ? "staff_no_conflict" : "weak_evidence", seq: identity.seq, reason: `${refuse}，唔自動 link，交老闆睇`, candidateGuardIds: [guardId] });
         continue;
       }
       const nameMatches = identity.nameRaw === guard.nameZh.trim();
@@ -612,6 +613,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       }
       needsBoss.push({
         type: "needs_boss",
+        code: snOwnedByOther ? "staff_no_conflict" : "ambiguous",
         seq: identity.seq,
         reason: snOwnedByOther
           ? "更表工號屬 DB 另一位安員（姓名對唔上，唔准配），電話／身份證都判斷唔到係邊個，交老闆睇"
@@ -668,7 +670,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
         continue;
       }
       if (refuse) {
-        needsBoss.push({ type: "needs_boss", seq: identity.seq, reason: `${refuse}，唔自動建人，交老闆睇`, candidateGuardIds: [] });
+        needsBoss.push({ type: "needs_boss", code: uNumberForCreate && staffNoOwner.has(uNumberForCreate) ? "staff_no_conflict" : "other", seq: identity.seq, reason: `${refuse}，唔自動建人，交老闆睇`, candidateGuardIds: [] });
         continue;
       }
     }

@@ -4,7 +4,7 @@
 // `runId=null`（直接 call step 函數、唔經 run）時 journal 唔寫（冇 run 可以掛），其餘照做。
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { writeAudit, type AuditAction } from "@/lib/audit";
+import { writeAudit, writeAuditTx, type AuditAction } from "@/lib/audit";
 import { safeErrorSummary } from "@/lib/api/http";
 import { loadPostorderEvidence, type BrokerLite, type PostorderEvidence } from "./postorder-evidence";
 import { emptyAutoSummary, type AutoChangeKind, type AutoItemLine, type AutoSummary, type McQuestionDraft } from "./types";
@@ -34,6 +34,8 @@ export interface ChangeWriter {
   ip: string | null;
   journal(input: { kind: AutoChangeKind; refTable?: string; refId?: string; summary: string; detail?: unknown; undoable?: boolean }): Promise<string | null>;
   audit(input: { tableName: string; rowId: string; action: AuditAction; before?: unknown; after?: unknown }): Promise<void>;
+  /** 喺 transaction 內寫 audit（分診一撳確認：建卡＋補價＋audit 同生同死）。 */
+  auditTx?(tx: Prisma.TransactionClient, input: { tableName: string; rowId: string; action: AuditAction; before?: unknown; after?: unknown }): Promise<void>;
 }
 
 /** 分診題確認寫入：audit 帶 `triage:<questionId>`，唔寫還原流水帳（用戶明確確認，唔屬 auto）。 */
@@ -49,6 +51,10 @@ export class SimpleWriter implements ChangeWriter {
   async audit(input: { tableName: string; rowId: string; action: AuditAction; before?: unknown; after?: unknown }): Promise<void> {
     const after = input.after && typeof input.after === "object" ? { ...(input.after as Record<string, unknown>), auto_source: this.source } : { auto_source: this.source };
     await writeAudit({ actorUserId: this.actorUserId, tableName: input.tableName, rowId: input.rowId, action: input.action, before: input.before, after, ip: this.ip });
+  }
+  async auditTx(tx: Prisma.TransactionClient, input: { tableName: string; rowId: string; action: AuditAction; before?: unknown; after?: unknown }): Promise<void> {
+    const after = input.after && typeof input.after === "object" ? { ...(input.after as Record<string, unknown>), auto_source: this.source } : { auto_source: this.source };
+    await writeAuditTx(tx, { actorUserId: this.actorUserId, tableName: input.tableName, rowId: input.rowId, action: input.action, before: input.before, after, ip: this.ip });
   }
 }
 

@@ -82,6 +82,8 @@ export interface NeedsBossAction {
   type: "needs_boss";
   seq: string;
   reason: string;
+  /** 結構化原因碼（一鍵結算自動化用，唔靠 reason 字串）：staff_no_conflict＝工號衝突（工號屬另一人／同現有工號唔同）。 */
+  code?: "staff_no_conflict" | "conflicting_methods" | "weak_evidence" | "ambiguous" | "other";
   /** ambiguous 嗰陣嘅候選 guardId 清單（決定唔到，交老闆睇）。 */
   candidateGuardIds: string[];
 }

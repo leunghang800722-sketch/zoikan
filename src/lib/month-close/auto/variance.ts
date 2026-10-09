@@ -1,12 +1,13 @@
 // WP-ONE-CLICK-AUTO（§31.3 B）：更數異常自動解釋。
 //
-// 口徑：「計數更次」＝更表 shift 格，排除 external（客戶自己人，雞頭種類 external、
-// rank／姓名命中 external 別名、或安員係 external 類）同 leave／ot／marker。
-// 同上月「計數更次」比較，差異 >30%（或者連 external 一齊計嘅原始格數差 >30%）就拆：
-//   external 格、公司兵（internal_cash）、同日同更種重複行、子盤變化、日期覆蓋（截短）、
-//   雞頭組成（新增／消失嘅雞頭）、Postorder 同盤更數。
-// 輸出一句解釋＋explained；剩餘解釋唔到 >15% 且 >20 更先 needs_human（任務書口徑，
-// 文件 §31.3 B 寫「或者」——以任務書「且」為準，見 §31.6 同文件嘅出入）。
+// 口徑：「計數更次」＝更表 shift 格排除 external（雞頭種類 external、rank／姓名命中 external 別名、
+// 安員係 external 類）同 leave／ot／marker。同上月「計數更次」比較，差異 >30%（或連 external 一齊計嘅
+// 原始格數差 >30%）就拆；每格只歸一個成分（順序：重複行 → 公司兵 → 子盤變化 → 雞頭組成），
+// 成分＋截短推算＋剩餘＝差額（`components`）。Postorder 同盤更數（±5% 且最少 ±3）一致就當解釋晒。
+// needs_human：剩餘 >20 更，或（>15% 而且 >5 更）（主規劃決定；文件 §31.3 B 舊寫法已更新）。
+// 截短獨立於 30% 閘口：新上載只認「表頭（parse_summary.headerDays）覆蓋 <80%」；表頭完整但有解析警告只 warning；
+// 舊上載（冇表頭日期）只當月頭／月尾連續缺 ≥20% 日數而且覆蓋率比上月低 ≥20% 先算；冇上月嘅新盤頭段缺只出資訊。
+// 截短一律 needs_human，唔當 explained；句子唔寫估算更數。
 import { prisma } from "@/lib/db";
 import { monthRange } from "@/lib/reports/money";
 import { externalBrokerForRow, type ExternalBrokerLite } from "@/lib/roster-upload/external-alias";
@@ -200,16 +201,31 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
     const cur = classifyRows(curRows, lk);
     const curCount = cur.countable.length;
 
-    // 截短（日期覆蓋 <80%，或表頭偵測有警告）——獨立於 30% 閘口：一律 warning＋needs_human，唔當 explained。
+    // 截短判斷（獨立於 30% 閘口）：
+    //  - 新上載有表頭真日期（parse_summary.headerDays）：只認「表頭覆蓋 <80%」；表頭完整（例如 31/31）但有 headerWarn 只 warning，唔算截短；
+    //  - 舊上載冇表頭資料：只當「月尾或月頭連續缺 ≥20% 日數」而且「同上月覆蓋率差 ≥20%」先算（見下面 prev 之後）；
+    //  - 冇上月嘅新盤頭段缺：只出一行資訊（「由 N 號開始」），唔出 needs_human。
+    const headerDays = typeof (summary as { headerDays?: number } | null)?.headerDays === "number" ? (summary as { headerDays: number }).headerDays : null;
+    const headerRange = (summary as { headerDateRange?: { min: string; max: string } | null } | null)?.headerDateRange ?? null;
     const headerWarn = (summary?.warnings ?? []).some((w) => w.startsWith("[分頁跳過]") || w.includes("block 邊界"));
-    const coverage = cur.dates.size / daysInMonth;
-    const truncated = curRows.length > 0 && (coverage < COVERAGE_TRUNCATED_BELOW || headerWarn);
-    const missing = truncated ? missingDays(cur.dates, month) : [];
-    const estMissing = truncated && cur.dates.size > 0 ? Math.round((curCount / cur.dates.size) * (daysInMonth - cur.dates.size)) : 0;
-    const truncSentence = truncated
-      ? `檔案可能截短：只覆蓋 ${cur.dates.size}／${daysInMonth} 日${missing.length ? `（缺 ${missing.slice(0, 8).map((d) => d.slice(8)).join("、")}${missing.length > 8 ? "…" : ""} 號）` : ""}${headerWarn ? "，表頭偵測有警告" : ""}，按日均推算少約 ${estMissing} 更`
-      : "";
-
+    const rowCoverage = cur.dates.size / daysInMonth;
+    const sortedRowDays = [...cur.dates].sort().map((d) => Number(d.slice(8)));
+    const firstDay = sortedRowDays[0] ?? 1;
+    const lastDay = sortedRowDays[sortedRowDays.length - 1] ?? daysInMonth;
+    const edgeMissing = Math.max(firstDay - 1, daysInMonth - lastDay); // 月頭／月尾連續缺嘅日數
+    let truncated = false;
+    let truncSentence = "";
+    let estMissing = 0;
+    if (curRows.length > 0 && headerDays !== null) {
+      if (headerDays / daysInMonth < COVERAGE_TRUNCATED_BELOW) {
+        truncated = true;
+        const missingHeader = headerRange ? missingDays(new Set(Array.from({ length: daysInMonth }, (_, i) => new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), i + 1)).toISOString().slice(0, 10)).filter((d) => d >= headerRange.min && d <= headerRange.max)), month) : [];
+        truncSentence = `檔案可能截短：表頭只覆蓋 ${headerDays}／${daysInMonth} 日${missingHeader.length ? `（缺 ${missingHeader.slice(0, 8).map((d) => d.slice(8)).join("、")}${missingHeader.length > 8 ? "…" : ""} 號）` : ""}`;
+        estMissing = cur.dates.size > 0 ? Math.round((curCount / cur.dates.size) * (daysInMonth - cur.dates.size)) : 0;
+      } else if (headerWarn) {
+        result.warnings.push(`「${siteName}」表頭完整（${headerDays}／${daysInMonth} 日）但解析有警告，請留意`);
+      }
+    }
     const prevUpload = await prisma.rosterUpload.findFirst({
       where: { month: prevMonth, siteId: u.siteId, status: { notIn: ["superseded", "voided"] } },
       select: { id: true, parseSummary: true },
@@ -230,6 +246,9 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
           }
         }
       }
+      if (!truncated && headerDays === null && firstDay > 1 && curRows.length > 0 && !prevUpload) {
+        result.warnings.push(`「${siteName}」（冇上月比較）更表由 ${firstDay} 號開始有更，如係新開盤正常`);
+      }
       if (truncated) {
         const sentence = `「${siteName}」本月 ${curCount} 更：${truncSentence}`;
         ctx.summary.variancesUnexplained++;
@@ -244,6 +263,16 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
 
     const prev = classifyRows(prevRows, lk);
     const prevCount = prev.countable.length;
+    // 舊上載（冇表頭日期）：月頭／月尾連續缺 ≥20% 日數，而且覆蓋率比上月低 ≥20% 先算截短。
+    if (!truncated && headerDays === null && curRows.length > 0) {
+      const prevCoverage0 = prev.dates.size / prevDays;
+      if (edgeMissing / daysInMonth >= 0.2 && prevCoverage0 - rowCoverage >= 0.2) {
+        truncated = true;
+        const missingDaysList = missingDays(cur.dates, month).filter((d) => Number(d.slice(8)) < firstDay || Number(d.slice(8)) > lastDay);
+        truncSentence = `檔案可能截短：只有 ${firstDay}–${lastDay} 號有更，覆蓋 ${cur.dates.size}／${daysInMonth} 日（缺 ${missingDaysList.slice(0, 8).map((d) => d.slice(8)).join("、")}${missingDaysList.length > 8 ? "…" : ""} 號），上月覆蓋 ${prev.dates.size}／${prevDays} 日`;
+        estMissing = cur.dates.size > 0 ? Math.round((curCount / cur.dates.size) * (daysInMonth - cur.dates.size)) : 0;
+      }
+    }
     const delta = curCount - prevCount;
     const pct = prevCount > 0 ? Math.abs(delta) / prevCount : curCount > 0 ? 1 : 0;
     const curRaw = curCount + cur.external.length;

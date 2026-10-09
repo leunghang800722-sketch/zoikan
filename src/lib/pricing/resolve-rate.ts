@@ -114,6 +114,8 @@ export interface RateCardLite {
   billingModel: "per_shift" | "monthly_fixed" | "admin_fee" | "special" | null;
   effectiveFrom: Date;
   effectiveTo: Date | null;
+  /** rate_cards.source——一鍵結算自動建嘅卡（`auto:one-click:*`）只准該雞頭（或通用卡）用，唔准跨雞頭 fallback。 */
+  source?: string | null;
 }
 
 /** M1：淨係 `per_shift`（或者未填，向下相容）嘅卡先可以做逐更
@@ -251,6 +253,7 @@ export async function fetchEffectiveRateCards(siteId: string, monthStart: Date, 
     billingModel: r.billingModel,
     effectiveFrom: r.effectiveFrom,
     effectiveTo: r.effectiveTo,
+    source: r.source,
   }));
 }
 
@@ -261,7 +264,12 @@ export async function fetchEffectiveRateCards(siteId: string, monthStart: Date, 
  * external／longterm／no_broker／揾唔到卡／正常）唔使逐個分支手動加
  * 乘數，唔會漏改。 */
 export function resolveShiftPricingFromCards(cards: RateCardLite[], input: ResolveShiftPricingInput): ResolvedShiftPricing {
-  return applyOtHourlyPricing(resolveShiftPricingFromCardsCore(cards, input), input);
+  // WP-ONE-CLICK-AUTO（Opus 驗收）：auto 卡唔准跨雞頭——客價 resolver 本來唔理雞頭 fallback，會用 K 嘅 auto 卡填 W 嘅客價，
+  // 令本應 propose 嘅組被靜靜填咗。auto 卡只對佢自己嘅雞頭（或通用卡 brokerId=null）生效。
+  const usable = cards.some((c) => c.source?.startsWith("auto:one-click:") && c.brokerId !== null && c.brokerId !== input.settlementBrokerId)
+    ? cards.filter((c) => !(c.source?.startsWith("auto:one-click:") && c.brokerId !== null && c.brokerId !== input.settlementBrokerId))
+    : cards;
+  return applyOtHourlyPricing(resolveShiftPricingFromCardsCore(usable, input), input);
 }
 
 function resolveShiftPricingFromCardsCore(cards: RateCardLite[], input: ResolveShiftPricingInput): ResolvedShiftPricing {

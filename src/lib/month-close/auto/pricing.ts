@@ -12,9 +12,9 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { monthRange, n, round2 } from "@/lib/reports/money";
-import { fetchEffectiveRateCards, resolveShiftPricingFromCards, LONGTERM_REFERRAL_AUTOCOMPUTE_FROM, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
+import { resolveShiftPricingFromCards, LONGTERM_REFERRAL_AUTOCOMPUTE_FROM, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
 import { loadUnpricedLookups, unpricedCategoriesOf, type UnpricedCategory } from "@/lib/pricing/unpriced";
-import { numOrNull, repriceMonthForSites } from "@/lib/pricing/reprice";
+import { numOrNull, sameRepriceValue } from "@/lib/pricing/reprice";
 import { shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
 import { isMixedBillingMonth } from "@/lib/reports/mixed-billing";
 import type { AutoCollector, ChangeWriter } from "./context";
@@ -303,37 +303,83 @@ export async function findPriceSource(
 // ---------------------------------------------------------------------------
 // 建卡＋補價（auto 同分診一撳確認共用）
 // ---------------------------------------------------------------------------
+export type Db = Prisma.TransactionClient | typeof prisma;
+
 export interface ApplyPriceResult {
   cardId: string;
   recordsPriced: number;
+  /** 其中覆蓋咗「系統之前自動填嘅值」嘅更數（journal 有記錄；永遠唔覆蓋人手快照）。 */
+  overwrittenAuto: number;
+  /** 呢組本月仲有幾多更因為已經有價（人手或其他來源）而冇補。 */
+  skippedHasPrice: number;
+  reusedCard: boolean;
 }
 
-/** 建一張卡（effective_from＝本月 1 號，到月尾），並只對呢組「未定價」記錄補價。 */
+async function auditVia(writer: ChangeWriter, db: Db, input: Parameters<ChangeWriter["audit"]>[0]): Promise<void> {
+  if (db !== prisma && writer.auditTx) await writer.auditTx(db as Prisma.TransactionClient, input);
+  else await writer.audit(input);
+}
+
+async function fetchCardsVia(db: Db, siteId: string, start: Date, end: Date) {
+  const rows = await db.rateCard.findMany({ where: { siteId, voidedAt: null, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] } });
+  return rows.map((r) => ({
+    id: r.id,
+    shiftTypeId: r.shiftTypeId,
+    brokerId: r.brokerId,
+    guardId: r.guardId,
+    clientRate: r.clientRate !== null ? n(r.clientRate) : null,
+    guardWage: r.guardWage !== null ? n(r.guardWage) : null,
+    brokerFee: r.brokerFee !== null ? n(r.brokerFee) : null,
+    payoutRate: r.payoutRate !== null ? n(r.payoutRate) : null,
+    billingModel: r.billingModel,
+    effectiveFrom: r.effectiveFrom,
+    effectiveTo: r.effectiveTo,
+    source: r.source,
+  }));
+}
+
+/** 建一張卡（effective_from＝本月 1 號，到月尾），並對呢組（盤×更種×雞頭）補價（只填 null 欄）。
+ * `db` 係 transaction client 時（分診一撳確認）建卡＋補價同生同死。
+ * 冪等／唔重複建卡：
+ *   - auto 路徑：本月同組合已有**任何** run 建嘅有效 `auto:one-click:*` 卡 → 唔再建（重用）；
+ *   - 分診路徑：同來源（`triage:<題目>`）而且價錢一樣先重用，價唔同就唔重用（建新卡）。 */
 export async function createCardAndPrice(
   writer: ChangeWriter,
-  input: { month: Date; group: PricingGroupRef; need: PriceNeed; values: PriceValues; evidence: string; note: string; confidence: string; recordIds?: string[]; generic?: boolean },
+  input: { month: Date; group: PricingGroupRef; need: PriceNeed; values: PriceValues; evidence: string; note: string; confidence: string; recordIds?: string[]; generic?: boolean; overwriteAuto?: boolean },
+  db: Db = prisma,
 ): Promise<ApplyPriceResult> {
   const { start, end } = monthRange(input.month);
   if (start < LONGTERM_REFERRAL_AUTOCOMPUTE_FROM) throw new Error("8 月之前嘅月份唔做自動定價");
-  const locked = await prisma.monthClose.findUnique({ where: { month: start } });
+  const locked = await db.monthClose.findUnique({ where: { month: start } });
   if (locked?.lockedAt) throw new Error("本月已鎖定，唔會改價");
   const v = restrictValues(input.values, input.need);
   if (!coversNeed(v, input.need)) throw new Error("價錢唔齊（客價／出街價要有數）");
   const dec = (x: number | null) => (x === null ? null : new Prisma.Decimal(round2(x)));
-  // 冪等：同盤同更種同雞頭本月已經有未作廢嘅 auto／同一來源卡（卡建咗但更次仍未定價）→ 唔重複建卡，淨係再補價。
   const cardBrokerId = input.generic ? null : input.group.brokerId;
-  const dup = await prisma.rateCard.findFirst({
-    where: { siteId: input.group.siteId, shiftTypeId: input.group.shiftTypeId, brokerId: cardBrokerId, guardId: null, voidedAt: null, source: writer.source, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] },
+  const overlap = { effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] };
+  const isAutoWriter = writer.source.startsWith("auto:one-click:");
+  const dup = await db.rateCard.findFirst({
+    where: {
+      siteId: input.group.siteId,
+      shiftTypeId: input.group.shiftTypeId,
+      brokerId: cardBrokerId,
+      guardId: null,
+      voidedAt: null,
+      ...overlap,
+      ...(isAutoWriter
+        ? { source: { startsWith: "auto:one-click:" }, OR: overlap.OR }
+        : { source: writer.source, clientRate: dec(v.clientRate), guardWage: dec(v.guardWage), brokerFee: dec(v.brokerFee), payoutRate: dec(v.payoutRate) }),
+    },
   });
   if (dup) {
-    const n = await repriceMonth(writer, input.month, input.group, input.need, dup.id);
-    return { cardId: dup.id, recordsPriced: n };
+    const r = await repriceMonth(writer, input.month, input.group, input.need, dup.id, { overwriteAuto: input.overwriteAuto, db });
+    return { cardId: dup.id, ...r, reusedCard: true };
   }
-  const card = await prisma.rateCard.create({
+  const card = await db.rateCard.create({
     data: {
       siteId: input.group.siteId,
       shiftTypeId: input.group.shiftTypeId,
-      brokerId: input.generic ? null : input.group.brokerId,
+      brokerId: cardBrokerId,
       guardId: null,
       clientRate: dec(v.clientRate),
       guardWage: dec(v.guardWage),
@@ -349,7 +395,7 @@ export async function createCardAndPrice(
       createdBy: writer.actorUserId,
     },
   });
-  await writer.audit({ tableName: "rate_cards", rowId: card.id, action: "create", after: card });
+  await auditVia(writer, db, { tableName: "rate_cards", rowId: card.id, action: "create", after: card });
   await writer.journal({
     kind: "rate_card_created",
     refTable: "rate_cards",
@@ -357,36 +403,66 @@ export async function createCardAndPrice(
     summary: `自動建價卡（${describeValues(v)}）：${input.evidence}`,
     detail: { cardId: card.id, siteId: input.group.siteId, shiftTypeId: input.group.shiftTypeId, month: start.toISOString().slice(0, 10) },
   });
-  const recordsPriced = await repriceMonth(writer, input.month, input.group, input.need, card.id);
-  return { cardId: card.id, recordsPriced };
+  const r = await repriceMonth(writer, input.month, input.group, input.need, card.id, { overwriteAuto: input.overwriteAuto, db });
+  return { cardId: card.id, ...r, reusedCard: false };
 }
 
-/** 建卡之後對呢組（盤×更種×雞頭）**全月**重新補價，loop 到冇變（每輪都 journal，undo 逐輪還原）。 */
-async function repriceMonth(writer: ChangeWriter, month: Date, group: PricingGroupRef, need: PriceNeed, cardId: string): Promise<number> {
+/** 對呢組（盤×更種×雞頭）補價，loop 到冇變（淨係呢一組，唔做整月通用補價）。 */
+async function repriceMonth(writer: ChangeWriter, month: Date, group: PricingGroupRef, need: PriceNeed, cardId: string, opts: { overwriteAuto?: boolean; db: Db }): Promise<{ recordsPriced: number; overwrittenAuto: number; skippedHasPrice: number }> {
   let total = 0;
+  let over = 0;
+  let skipped = 0;
   for (let i = 0; i < 6; i++) {
-    const n = await applyCardToRecords(writer, month, group, need, undefined, cardId);
-    total += n;
-    if (n === 0) break;
+    const r = await applyCardToRecords(writer, month, group, need, undefined, cardId, opts);
+    total += r.changed;
+    over += r.overwritten;
+    skipped = r.skippedHasPrice;
+    if (r.changed === 0) break;
   }
-  return total;
+  return { recordsPriced: total, overwrittenAuto: over, skippedHasPrice: skipped };
 }
 
-/** 對呢組未定價記錄補價（targeted：淨係補 null／（工資 0＋雞頭費 null）嘅欄位，唔覆蓋已有價）。 */
-export async function applyCardToRecords(writer: ChangeWriter, month: Date, group: PricingGroupRef, need: PriceNeed, recordIds: string[] | undefined, cardId: string): Promise<number> {
+/** 逐更 journal 入面「系統自動填過」嘅現值：recordId → 當時填入嘅 [客價, 工資, 雞頭費]（取最新一次）。 */
+async function loadAutoFilled(db: Db, month: Date, ids: string[]): Promise<Map<string, [number | null, number | null, number | null]>> {
+  const out = new Map<string, [number | null, number | null, number | null]>();
+  if (ids.length === 0) return out;
+  const want = new Set(ids);
+  const changes = await db.monthCloseAutoChange.findMany({ where: { kind: "price_snapshots", run: { month } }, orderBy: { createdAt: "asc" }, select: { detailJson: true } });
+  for (const c of changes) {
+    const rows = ((c.detailJson as { rows?: Array<{ id: string; after: [number | null, number | null, number | null] }> }).rows ?? []);
+    for (const r of rows) if (want.has(r.id)) out.set(r.id, r.after);
+  }
+  return out;
+}
+
+/** 對呢組記錄補價：淨係填 null（或「工資 0＋雞頭費 null」）嘅欄；`overwriteAuto`（分診一撳確認用）先可以覆蓋
+ * 「現值仍然等於 journal 記低嘅自動填入值」嗰啲欄——永遠唔覆蓋人手快照。逐更 journal（舊值／新值），undo 靠佢。 */
+export async function applyCardToRecords(
+  writer: ChangeWriter,
+  month: Date,
+  group: PricingGroupRef,
+  need: PriceNeed,
+  recordIds: string[] | undefined,
+  cardId: string,
+  opts: { overwriteAuto?: boolean; db?: Db } = {},
+): Promise<{ changed: number; overwritten: number; skippedHasPrice: number }> {
+  const db = opts.db ?? prisma;
   const { start, end } = monthRange(month);
-  const cards = await fetchEffectiveRateCards(group.siteId, start, end);
+  const cards = await fetchCardsVia(db, group.siteId, start, end);
   const where: Prisma.ShiftRecordWhereInput = recordIds
     ? { id: { in: recordIds } }
     : { siteId: group.siteId, shiftTypeId: group.shiftTypeId, settlementBrokerId: group.brokerId, recordType: group.ot ? "ot" : "shift", status: { not: "cancelled" }, workDate: { gte: start, lte: end } };
-  const records = await prisma.shiftRecord.findMany({
+  const records = await db.shiftRecord.findMany({
     where: { ...where, status: { not: "cancelled" } },
     select: { id: true, workDate: true, guardId: true, isExternal: true, recordType: true, otHours: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true, settlementBrokerId: true, shiftType: { select: { code: true, billingGroup: true } } },
   });
-  if (records.length === 0) return 0;
-  const brokers = await prisma.broker.findMany({ where: { id: { in: [...new Set(records.map((r) => r.settlementBrokerId).filter((x): x is string => !!x))] } }, select: { id: true, kind: true } });
+  if (records.length === 0) return { changed: 0, overwritten: 0, skippedHasPrice: 0 };
+  const brokers = await db.broker.findMany({ where: { id: { in: [...new Set(records.map((r) => r.settlementBrokerId).filter((x): x is string => !!x))] } }, select: { id: true, kind: true } });
   const kindById = new Map(brokers.map((b) => [b.id, b.kind as BrokerKindLike]));
-  const changes: Array<{ id: string; before: [number | null, number | null, number | null]; after: [number | null, number | null, number | null] }> = [];
+  const autoFilled = opts.overwriteAuto ? await loadAutoFilled(db, month, records.map((r) => r.id)) : new Map<string, [number | null, number | null, number | null]>();
+  const changes: Array<{ id: string; cardId: string; fields: string[]; before: [number | null, number | null, number | null]; after: [number | null, number | null, number | null] }> = [];
+  let overwritten = 0;
+  let skippedHasPrice = 0;
   for (const r of records) {
     const kind = r.settlementBrokerId ? (kindById.get(r.settlementBrokerId) ?? null) : null;
     const pricing = resolveShiftPricingFromCards(cards, {
@@ -405,21 +481,34 @@ export async function applyCardToRecords(writer: ChangeWriter, month: Date, grou
     const c0 = numOrNull(r.clientRateSnapshot);
     const w0 = numOrNull(r.guardWageSnapshot);
     const f0 = numOrNull(r.brokerFeeSnapshot);
+    const af = autoFilled.get(r.id) ?? null;
+    // 現值仍然等於系統自動填入嘅值 → 可以覆蓋；否則（人手價或其他來源）絕不覆蓋。
+    const clientAuto = af !== null && c0 !== null && sameRepriceValue(c0, af[0]);
+    const payoutAuto = af !== null && w0 !== null && sameRepriceValue(w0, af[1]) && sameRepriceValue(f0, af[2]);
     let c1 = c0;
     let w1 = w0;
     let f1 = f0;
-    if (need.client && c0 === null && pricing.clientCardFound) c1 = pricing.clientRate;
-    if (need.payout && kind !== "internal_longterm" && kind !== "external" && f0 === null && (w0 === null || w0 === 0) && pricing.payoutCardFound) {
+    const fields: string[] = [];
+    if (need.client && pricing.clientCardFound && (c0 === null || clientAuto) && !(c0 !== null && sameRepriceValue(c0, pricing.clientRate))) {
+      c1 = pricing.clientRate;
+      fields.push("client");
+      if (c0 !== null) overwritten++;
+    }
+    if (need.payout && kind !== "internal_longterm" && kind !== "external" && pricing.payoutCardFound && ((f0 === null && (w0 === null || w0 === 0)) || payoutAuto) && !(w0 !== null && sameRepriceValue(w0, pricing.guardWage) && sameRepriceValue(f0, pricing.brokerFee))) {
       w1 = pricing.guardWage;
       f1 = pricing.brokerFee;
+      fields.push("payout");
+      if (w0 !== null && w0 !== 0) overwritten++;
     }
-    if (c1 !== c0 || w1 !== w0 || f1 !== f0) changes.push({ id: r.id, before: [c0, w0, f0], after: [c1, w1, f1] });
-  }
-  for (let i = 0; i < changes.length; i += 300) {
-    const batch = changes.slice(i, i + 300);
-    await prisma.$transaction(batch.map((u) => prisma.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.after[0], guardWageSnapshot: u.after[1], brokerFeeSnapshot: u.after[2] } })));
+    if (fields.length > 0) changes.push({ id: r.id, cardId, fields, before: [c0, w0, f0], after: [c1, w1, f1] });
+    else if ((need.client && c0 !== null) || (need.payout && w0 !== null && w0 !== 0)) skippedHasPrice++;
   }
   if (changes.length > 0) {
+    for (let i = 0; i < changes.length; i += 300) {
+      const batch = changes.slice(i, i + 300);
+      if (db === prisma) await prisma.$transaction(batch.map((u) => prisma.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.after[0], guardWageSnapshot: u.after[1], brokerFeeSnapshot: u.after[2] } })));
+      else for (const u of batch) await db.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.after[0], guardWageSnapshot: u.after[1], brokerFeeSnapshot: u.after[2] } });
+    }
     for (let i = 0; i < changes.length; i += 500) {
       await writer.journal({
         kind: "price_snapshots",
@@ -429,14 +518,14 @@ export async function applyCardToRecords(writer: ChangeWriter, month: Date, grou
         detail: { cardId, rows: changes.slice(i, i + 500) },
       });
     }
-    await writer.audit({
+    await auditVia(writer, db, {
       tableName: "shift_records",
       rowId: `auto_price:${cardId}`,
       action: "reprice_month",
-      after: { month: start.toISOString().slice(0, 10), site_id: group.siteId, shift_type_id: group.shiftTypeId, changed: changes.length, card_id: cardId, mode: "auto_targeted" },
+      after: { month: start.toISOString().slice(0, 10), site_id: group.siteId, shift_type_id: group.shiftTypeId, changed: changes.length, overwritten_auto: overwritten, card_id: cardId, mode: "auto_targeted" },
     });
   }
-  return changes.length;
+  return { changed: changes.length, overwritten, skippedHasPrice };
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +610,7 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
   // 先用現有生效卡補價（例如上載之後先加咗卡）——唔建新卡，淨係補 null；之後先睇仲有咩未定價。
   let all = await collectUnpricedGroups(month);
   let prefilled = 0;
-  for (const a of all) prefilled += await applyCardToRecords(ctx, month, a.ref, a.need, a.recordIds, "existing");
+  for (const a of all) prefilled += (await applyCardToRecords(ctx, month, a.ref, a.need, a.recordIds, "existing")).changed;
   if (prefilled > 0) {
     ctx.summary.recordsPriced += prefilled;
     ctx.line("pricing", `${prefilled} 更按現有生效價卡補價`);
@@ -571,15 +660,6 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
     pending.push({ agg, proposals: found.proposals });
   }
 
-  // 同 reconcile 開頭嘅 reprice（fill 模式）對齊：建咗 auto 卡嘅盤，全月再行一次同一個 reprice，令第一次跑已經去到
-  // 「重新對數」會去到嘅不動點——否則 rerun 嗰陣 reconcile 開頭 reprice 會再補一批價（第二次收入同第一次唔同）。
-  // 呢啲補價冇逐更 journal，undo 靠 sweepCardPrices（按卡價清走）還原。
-  if (result.autoGroups > 0) {
-    const siteIds = [...new Set(aggs.map((a) => a.ref.siteId))];
-    const r = await repriceMonthForSites(month, siteIds, ctx.actorUserId, ctx.ip);
-    if (r.changed > 0) ctx.summary.recordsPriced += r.changed;
-  }
-
   // propose／unknown → 分診題
   const bySite = new Map<string, Pending[]>();
   for (const p of pending) bySite.set(p.agg.ref.siteId, [...(bySite.get(p.agg.ref.siteId) ?? []), p]);
@@ -623,7 +703,7 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
         kind: "month_close_pricing",
         groupKey: `pricing:${siteId}:${p.agg.ref.shiftTypeId}:${p.agg.ref.brokerId ?? "none"}:${p.agg.ref.ot ? "ot" : "shift"}`,
         sort: unknown ? 40 : 30,
-        title: `盤「${site?.canonicalName ?? ""}」${kindLabel}更種「${code}」${p.agg.ref.brokerId ? `雞頭 ${brokerLabel(p.agg.ref.brokerId)}` : ""}：${p.agg.recordIds.length} 更未定${needLabel}`,
+        title: `${ctx.newSiteIds.has(siteId) ? "新盤" : "盤"}「${site?.canonicalName ?? ""}」${kindLabel}更種「${code}」${p.agg.ref.brokerId ? `雞頭 ${brokerLabel(p.agg.ref.brokerId)}` : ""}：${p.agg.recordIds.length} 更未定${needLabel}`,
         evidence: {
           v: 1,
           mc: true,

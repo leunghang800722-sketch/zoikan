@@ -1,6 +1,6 @@
 // WP-ONE-CLICK-AUTO（§31.2／§31.3 E）：`POST /api/month-close/one-click/:id/undo-auto`——
 // 一鍵還原呢個 run 所有 `auto` 改動（按 month_close_auto_changes 流水帳倒序）：
-//   price_snapshots   補咗嘅價 → 還原（淨係當前值仍然係自動補嗰個值先還原，之後人手改過嘅唔郁）
+//   price_snapshots   補咗嘅價 → 按 journal 逐更還原舊值（淨係當前值仍然等於 journal 記低嘅自動填入值先還原，之後人手改過嘅唔郁；唔做值相等掃描）
 //   rate_card_created 價卡作廢（void）
 //   settlement_set    結算雞頭還原（同上，當前值仍然係自動歸屬嗰個先還原）
 //   guard_staffno_added／guard_alias_added  自動配對還原（移除登記嘅工號／別名）
@@ -20,31 +20,6 @@ export interface UndoAutoResult {
   skipped: Array<{ kind: string; summary: string; reason: string }>;
   alreadyUndone: boolean;
   supersededQuestions: number;
-}
-
-async function sweepCardPrices(card: { id: string; siteId: string; shiftTypeId: string | null; brokerId: string | null; clientRate: unknown; guardWage: unknown; brokerFee: unknown; payoutRate: unknown; effectiveFrom: Date; effectiveTo: Date | null; createdAt: Date }): Promise<number> {
-  if (!card.shiftTypeId) return 0;
-  const client = numOrNull(card.clientRate);
-  const wage = numOrNull(card.guardWage) ?? numOrNull(card.payoutRate);
-  const fee = numOrNull(card.brokerFee) ?? (numOrNull(card.guardWage) === null && numOrNull(card.payoutRate) !== null ? 0 : null);
-  const recs = await prisma.shiftRecord.findMany({
-    where: { siteId: card.siteId, shiftTypeId: card.shiftTypeId, status: { not: "cancelled" }, workDate: { gte: card.effectiveFrom, ...(card.effectiveTo ? { lte: card.effectiveTo } : {}) }, updatedAt: { gte: card.createdAt } },
-    select: { id: true, settlementBrokerId: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
-  });
-  let n = 0;
-  for (const r of recs) {
-    const c0 = numOrNull(r.clientRateSnapshot);
-    const w0 = numOrNull(r.guardWageSnapshot);
-    const f0 = numOrNull(r.brokerFeeSnapshot);
-    const clearClient = client !== null && c0 !== null && sameRepriceValue(c0, client);
-    const payoutFromCard = wage !== null;
-    // 客價 resolver 會跨雞頭 fallback，所以客價唔限雞頭；出街價淨係該卡嘅雞頭。
-    const clearPayout = payoutFromCard && (!card.brokerId || r.settlementBrokerId === card.brokerId) && w0 !== null && sameRepriceValue(w0, wage) && (f0 === null || fee === null || sameRepriceValue(f0, fee));
-    if (!clearClient && !clearPayout) continue;
-    await prisma.shiftRecord.update({ where: { id: r.id }, data: { ...(clearClient ? { clientRateSnapshot: null } : {}), ...(clearPayout ? { guardWageSnapshot: null, brokerFeeSnapshot: null } : {}) } });
-    n++;
-  }
-  return n;
 }
 
 export async function undoAutoChanges(runId: string, actorUserId: string, ip: string | null): Promise<UndoAutoResult> {
@@ -73,6 +48,17 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
 
   // 倒序（最後做嘅最先還原）：createdAt desc
   for (const c of pending) {
+    // 並發 undo：逐項 claim（undoNote null → 'undoing'），兩個請求唔會還原同一項兩次；失敗退回。
+    const claim = await prisma.monthCloseAutoChange.updateMany({ where: { id: c.id, status: "applied", undoNote: null }, data: { undoNote: "undoing" } });
+    if (claim.count !== 1) continue;
+    try {
+    await undoOne(c);
+    } catch (e) {
+      await prisma.monthCloseAutoChange.updateMany({ where: { id: c.id, status: "applied", undoNote: "undoing" }, data: { undoNote: null } });
+      throw e;
+    }
+  }
+  async function undoOne(c: (typeof changes)[number]): Promise<void> {
     const d = c.detailJson as Record<string, unknown>;
     switch (c.kind) {
       case "price_snapshots": {
@@ -100,13 +86,6 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
         const after = await prisma.rateCard.update({ where: { id: card.id }, data: { voidedAt: new Date(), voidedBy: actorUserId } });
         await audit("rate_cards", card.id, "void", card, { ...after, void_reason: source });
         bump("rate_cards");
-        // 掃走因呢張 auto 卡而補上、但冇入 journal 嘅價（例如之後 reconcile 開頭 reprice／新套用嘅更按卡定價）：
-        // 同盤同更種（卡有雞頭就同雞頭）、卡建立之後先更新、而且 snapshot 等如卡價嘅欄位 → 清走（只清等於卡價嗰啲欄）。
-        const swept = await sweepCardPrices(card);
-        if (swept > 0) {
-          bump("price_snapshots_swept", swept);
-          await audit("shift_records", `undo_price_sweep:${card.id}`, "update", { card_id: card.id }, { swept, card_id: card.id });
-        }
         await mark(c.id, "undone", null);
         break;
       }
@@ -188,7 +167,8 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
   }
 
   // 呢個 run 嘅 open 分診題一律作廢（改動已還原，建議唔再成立）。
-  const sessions = await prisma.triageSession.findMany({ where: { sourceType: "month_close", sourceRef: runId }, select: { id: true } });
+  // 淨係真係還原咗嘢（pending>0）先作廢題；0 改動嘅 undo 唔掂分診題。
+  const sessions = pending.length > 0 ? await prisma.triageSession.findMany({ where: { sourceType: "month_close", sourceRef: runId }, select: { id: true } }) : [];
   if (sessions.length > 0) {
     const res = await prisma.triageQuestion.updateMany({ where: { sessionId: { in: sessions.map((s) => s.id) }, status: "open" }, data: { status: "superseded" } });
     result.supersededQuestions = res.count;

@@ -204,7 +204,7 @@ describe("WP-ONE-CLICK-AUTO E：分診＋一撳確認＋撤銷", () => {
       // 修12：淨姓名（上月同盤同姓名已配對，但冇工號／電話硬鍵）唔 auto
       { seq: "I004", staffNoRaw: null, nameRaw: "測試舊稱", telRaw: null, siteLabels: [site2.canonicalName], cellCount: 4, candidateGuardIds: [cand.id], reason: "弱證據" },
       // 修12／13：plan 已判工號衝突，就算電話＋姓名一致都唔 auto，出分診題（預填候選）
-      { seq: "I005", staffNoRaw: "U90098", nameRaw: "測試真名", telRaw: cand.tel, siteLabels: [site2.canonicalName], cellCount: 6, candidateGuardIds: [cand.id], reason: "更表工號已經屬 DB 另一位安員，同電話／名單判斷到嘅人唔一致，唔自動 link，交老闆睇" },
+      { seq: "I005", staffNoRaw: "U90098", nameRaw: "測試真名", telRaw: cand.tel, siteLabels: [site2.canonicalName], cellCount: 6, candidateGuardIds: [cand.id], reason: "（原因文字唔含關鍵字都應該按結構化碼判斷）", code: "staff_no_conflict" },
     ];
     const run = await mkRun();
     const ctx = new AutoCollector(run.id, SEPT, boss(), null);
@@ -471,7 +471,7 @@ describe("WP-ONE-CLICK-AUTO E：分診＋一撳確認＋撤銷", () => {
     // 令寫入失敗：預覽之後鎖月以外嘅方式——直接令 rate_cards 唔可寫（刪咗個 site 嘅 shift type 引用會 FK 失敗）
     const before = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qid } });
     const { SimpleWriter } = await import("@/lib/month-close/auto/context");
-    const spy = (await import("vitest")).vi.spyOn(SimpleWriter.prototype, "audit").mockRejectedValueOnce(new Error("boom")); // 建卡後 audit 失敗＝寫到一半死
+    const spy = (await import("vitest")).vi.spyOn(SimpleWriter.prototype, "auditTx").mockRejectedValueOnce(new Error("boom")); // 建卡後 audit 失敗＝寫到一半死
     const res = await answerRoute(req(`http://x/a`, cookie, "POST", { answer: ans, preview_hash }), { params: Promise.resolve({ id: qid }) });
     spy.mockRestore();
     expect(res.status).toBeGreaterThanOrEqual(400);
@@ -480,4 +480,60 @@ describe("WP-ONE-CLICK-AUTO E：分診＋一撳確認＋撤銷", () => {
     expect(ok.status).toBe(200);
     expect(await prisma.rateCard.count({ where: { source: `triage:${qid}` } })).toBe(1); // retry 重用咗已建嗰張，冇重複
   });
+
+  it("第二輪 (ii)：並發 undo 只還原一次；0 改動 undo 唔令 open 題 superseded；skipped 題答失敗退返 skipped；新盤定價題保留「新盤」", async () => {
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: K.id, clientRate: 900, guardWage: 700, brokerFee: 0 });
+    for (let i = 1; i <= 3; i++) await rec(d.id, K.id, i, guard, site.id, null);
+    const run = await mkRun("running");
+    const ctx = new AutoCollector(run.id, SEPT, boss(), null);
+    await runAutoPricing(ctx, SEPT);
+    await prisma.monthCloseRun.update({ where: { id: run.id }, data: { status: "done" } });
+    const { undoAutoChanges } = await import("@/lib/month-close/auto/undo");
+    const [a, b] = await Promise.all([undoAutoChanges(run.id, boss(), null), undoAutoChanges(run.id, boss(), null)]);
+    expect((a.undone.rate_cards ?? 0) + (b.undone.rate_cards ?? 0)).toBe(1);
+    expect((a.undone.price_snapshots ?? 0) + (b.undone.price_snapshots ?? 0)).toBe(3);
+
+    // 0 改動 undo：open 題唔受影響
+    await prisma.shiftRecord.deleteMany({ where: { siteId: site.id } });
+    await proposeScenarioFor("測試二輪盤");
+    const run2 = await mkRun();
+    const ctx2 = new AutoCollector(run2.id, SEPT, boss(), null);
+    await runAutoPricing(ctx2, SEPT);
+    const rep = await sessionFor(run2.id, ctx2);
+    const openBefore = await prisma.triageQuestion.count({ where: { sessionId: rep.triageSessionId!, status: "open" } });
+    expect(openBefore).toBeGreaterThan(0);
+    await undoAutoChanges(run2.id, boss(), null); // 呢個 run 冇 auto 改動（全部 propose）
+    expect(await prisma.triageQuestion.count({ where: { sessionId: rep.triageSessionId!, status: "open" } })).toBe(openBefore);
+
+    // skipped 之後答，寫入失敗 → 退返 skipped（唔係 open）；新盤字眼
+    const qrow = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: rep.triageSessionId! } });
+    const cookie = await sessionCookieForUser(boss());
+    await answerRoute(req(`http://x/a`, cookie, "POST", { answer: { option: "skip" } }), { params: Promise.resolve({ id: qrow.id }) });
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qrow.id } })).status).toBe("skipped");
+    const { SimpleWriter } = await import("@/lib/month-close/auto/context");
+    const spy = (await import("vitest")).vi.spyOn(SimpleWriter.prototype, "auditTx").mockRejectedValueOnce(new Error("boom"));
+    const ans = { option: "mc_accept" };
+    const pv = await previewRoute(req(`http://x/p`, cookie, "POST", { answer: ans }), { params: Promise.resolve({ id: qrow.id }) });
+    const { preview_hash } = (await pv.json()) as { preview_hash: string };
+    const bad = await answerRoute(req(`http://x/a`, cookie, "POST", { answer: ans, preview_hash }), { params: Promise.resolve({ id: qrow.id }) });
+    spy.mockRestore();
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qrow.id } })).status).toBe("skipped");
+    expect(await prisma.rateCard.count({ where: { source: `triage:${qrow.id}` } })).toBe(0); // 冇孤兒卡
+
+    const ctx3 = new AutoCollector(run2.id, SEPT, boss(), null);
+    ctx3.newSiteIds.add((await prisma.site.findFirstOrThrow({ where: { canonicalName: "測試二輪盤" } })).id);
+    await runAutoPricing(ctx3, SEPT);
+    expect(ctx3.questions.some((q) => q.kind === "month_close_pricing" && q.title.startsWith("新盤"))).toBe(true);
+  });
+
+  async function proposeScenarioFor(name: string) {
+    const s2 = await prisma.site.create({ data: { canonicalName: name, clientName: "x", billingModel: "per_shift", createdBy: "t" } });
+    const d2 = await prisma.shiftType.create({ data: { siteId: s2.id, code: "D", startTime: time("0700"), endTime: time("1900"), hours: 12, createdBy: "t" } });
+    const Z2 = await mkBroker("TZ2", "broker");
+    await card({ siteId: s2.id, shiftTypeId: d2.id, brokerId: W.id, guardWage: 700, effectiveFrom: sep(1), effectiveTo: null });
+    await card({ siteId: s2.id, shiftTypeId: d2.id, brokerId: Z2.id, guardWage: 650, effectiveFrom: sep(1), effectiveTo: null });
+    const g2 = await mkGuard();
+    for (let i = 1; i <= 3; i++) await rec(d2.id, K.id, i, g2, s2.id, 900);
+  }
 });

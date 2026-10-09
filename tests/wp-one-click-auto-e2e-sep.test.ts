@@ -48,7 +48,7 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
     const r = await uploadRoster({ siteRaw, month: AUG, lines, uploaderUserId: boss(), dayCount: 31 });
     await prisma.rosterUpload.update({ where: { id: r.upload.id }, data: { status: "confirmed" } });
   }
-  const sepUpload = (siteRaw: string, lines: RosterLine[]) => uploadRoster({ siteRaw, month: SEPT, lines, uploaderUserId: boss(), dayCount: 30 });
+  const sepUpload = (siteRaw: string, lines: RosterLine[], dayCount = 30) => uploadRoster({ siteRaw, month: SEPT, lines, uploaderUserId: boss(), dayCount });
 
   beforeEach(async () => {
     await clearAll();
@@ -110,7 +110,7 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
       line(await g({ name: "測試客戶人員乙", employmentType: "external" }), days(1, 10), { rank: "Wilson Supervisor" }),
       line(y1, days(1, 25), { broker: "EY" }),
     ]);
-    await sepUpload(e3.site.canonicalName, kLines([a1, a2], days(1, 15)));
+    await sepUpload(e3.site.canonicalName, kLines([a1, a2], days(1, 15)), 15); // 表頭只到 15 號＝檔案截短
     await sepUpload(e4.site.canonicalName, [line(a3, days(1, 30), { broker: "EK" }), line(a3, days(1, 30), { broker: "EK" })]);
     await sepUpload(e5.site.canonicalName, kLines([a4], days(1, 30)));
     await sepUpload(e6.site.canonicalName, kLines([a5, posts[0]!, posts[1]!], days(1, 30)));
@@ -202,13 +202,13 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
 
     // 2. 更數異常：8 個，7 個 explained（external／公司兵／截短／重複／小增減／雞頭組成／Postorder），1 個解釋唔到
     const vf = (steps.find((x) => x.key === "parse_health")!.numbers.varianceFindings as Array<{ site: string; explained: boolean; sentence: string; external: number; internalCash: number }>) ?? [];
-    // 截短（<80% 日數）獨立於 30% 閘口，一律出 finding：呢個合成場景好多盤只覆蓋部分日子（新盤 9–10 日、皓日 8 日、Event 2 日）
+    // 截短只認表頭覆蓋 <80%：呢個場景其他盤雖然只有部分日子有更，但表頭 30/30 日 → 唔再出假截短題
     const MAIN8 = ["測試數碼港CP", "測試截短盤", "測試重複盤", "測試小增減盤", "測試真增減盤", "測試PO對盤", "測試公司兵盤", "測試雞頭組成盤"];
-    expect(vf.filter((x) => MAIN8.includes(x.site))).toHaveLength(8);
-    expect(vf.filter((x) => !MAIN8.includes(x.site)).every((x) => !x.explained && x.sentence.includes("檔案可能截短"))).toBe(true);
+    expect(vf).toHaveLength(8);
+    expect(vf.every((x) => MAIN8.includes(x.site))).toBe(true);
     expect(vf.filter((x) => x.explained)).toHaveLength(5); // 小增減盤 +10（50%）剩餘 10 >5 且 >15% 而家要人睇；截短一律唔當 explained（要人確認檔案齊唔齊）
     expect(auto.summary.variancesExplained).toBe(5);
-    expect(auto.summary.variancesUnexplained).toBe(vf.length - 5);
+    expect(auto.summary.variancesUnexplained).toBe(3);
     for (const f of vf as Array<{ components?: { delta: number; dup: number; ic: number; sub: number; broker: number; trunc: number; residual: number } }>) {
       const c = f.components;
       if (!c) continue; // 冇上月比較（新盤）嘅截短 finding 冇差額可拆

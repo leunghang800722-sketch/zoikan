@@ -1,12 +1,14 @@
 // WP-ONE-CLICK-AUTO（§31.3 D 尾段）：安員配對修復「要老闆核實」（needs_boss）自動化。
 //
-//   auto     單一候選安員，而且：
-//            (a) 上月同盤、同一更表姓名（工號有就要相同）嘅格全部已配對到呢位候選（≥3 格），或者
-//            (b) 電話硬鍵——更表電話等於候選安員嘅電話，而且更表姓名同候選本名／別名完全一致。
-//   propose  單一候選但冇硬證據（淨姓名／淨一種弱證據）→ 分診題預填候選。
+//   auto     單一候選安員，而且**同時**：
+//            (1) 有硬鍵——更表有工號（上月嗰啲格工號都要一樣），或者電話等於候選安員電話而且姓名完全一致；
+//            (2) 上月同盤、同一更表姓名（有工號就同工號）嘅格 ≥3 格，全部已配對到同一個 guard_id；
+//            (3) plan 冇判「工號衝突」（`code=staff_no_conflict`，結構化碼，唔靠字串）。
+//            淨姓名（冇工號／電話硬鍵）永遠唔 auto。
+//   propose  單一候選但冇硬證據／工號衝突 → 分診題預填候選（唔計 auto）。
 //   unknown  冇候選／多個候選 → 分診題冇預填（列候選）。
-// 「配對」嘅做法同 guard-fix link 一致：加更表姓名做安員別名、加（未被佔用嘅）工號——
-// 之後 reparse 先會配到。每個動作 journal（undo 時移除）＋audit 帶 run id。
+// 「配對」嘅做法同 guard-fix link 一致：加更表姓名做安員別名、加（未被佔用嘅）工號——之後 reparse 先會配到。
+// 加唔到任何登記（已存在／被佔用）唔計 auto，出分診題。每個動作 journal（undo 時移除）＋audit 帶 run id。
 import { prisma } from "@/lib/db";
 import { normalizeTelHk } from "@/lib/guards/identity";
 import { normalizeStaffNumber, upsertCurrentStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards/staff-numbers";
@@ -22,6 +24,8 @@ export interface NeedsBossIdentity {
   cellCount: number;
   candidateGuardIds: string[];
   reason: string;
+  /** plan 嘅結構化原因碼（staff_no_conflict＝工號衝突，一律唔 auto）。 */
+  code?: string;
 }
 
 const nameKey = (s: string): string => s.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
@@ -109,7 +113,7 @@ export async function autoResolveNeedsBoss(ctx: AutoCollector, month: Date, item
     const only = it.candidateGuardIds.length === 1 ? it.candidateGuardIds[0]! : null;
     let evidence: string | null = null;
     // plan 已判「工號衝突」嘅一律唔 auto（交分診）。
-    const staffNoConflict = it.reason.includes("工號");
+    const staffNoConflict = it.code === "staff_no_conflict";
     if (only && !staffNoConflict) {
       // auto 只喺有硬鍵（工號／電話）而且上月同盤已配對同一 guard_id：淨姓名一樣唔夠。
       const hasStaffNo = !!it.staffNoRaw;

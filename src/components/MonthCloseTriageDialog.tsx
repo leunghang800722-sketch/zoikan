@@ -84,13 +84,13 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
       setError(pv.message);
       return;
     }
-    const res = await apiPost<{ status: string; impact: Impact | null }>(`/api/triage/questions/${q.id}/answer`, { answer, preview_hash: pv.data.preview_hash });
+    const res = await apiPost<{ status: string; impact: Impact | null; note?: string | null }>(`/api/triage/questions/${q.id}/answer`, { answer, preview_hash: pv.data.preview_hash });
     setBusy(false);
     if (!res.ok) {
       setError(res.message);
       return;
     }
-    setDone((d) => [...d, `${doneLabel}：${pv.data.impact.summary.join("；")}`]);
+    setDone((d) => [...d, `${doneLabel}：${pv.data.impact.summary.join("；")}${res.data.note ? `——${res.data.note}` : ""}`]);
     onChanged?.();
     await load();
   }

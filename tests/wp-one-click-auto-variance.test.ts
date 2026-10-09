@@ -81,17 +81,44 @@ describe("WP-ONE-CLICK-AUTO B：更數異常自動解釋", () => {
     const { res, ctx } = await scenario(K_ROWS(100), half);
     const f = res.findings[0]!;
     expect(f.sentence).toContain("檔案可能截短");
-    expect(f.sentence).toContain("只覆蓋 15／30 日");
+    expect(f.sentence).toContain("覆蓋 15／30 日");
     expect(f.sentence).toContain("16"); // 缺 16 號起
     expect(f.explained).toBe(false);
     expect(res.needsHuman).toHaveLength(1);
     expect(ctx.questions).toHaveLength(1);
-    // 差異 <30%（上月都只得 15 日，格數相近）但本月只覆蓋 15 日 → 照樣要人睇
+    // 舊上載（冇表頭日期）：上月都只得 15 日 → 覆蓋率冇差 → 唔算截短（8 月 gate 假題來源）
     const sameHalf = K_ROWS(100).filter((r) => r.day <= 15);
     const r2 = await scenario(sameHalf, sameHalf.map((r) => ({ ...r })));
-    expect(r2.res.findings).toHaveLength(1);
-    expect(r2.res.findings[0]!.explained).toBe(false);
-    expect(r2.res.needsHuman).toHaveLength(1);
+    expect(r2.res.findings).toHaveLength(0);
+    expect(r2.res.needsHuman).toHaveLength(0);
+    // 句子冇「少約 N 更」估算數
+    expect(f.sentence).not.toMatch(/少約/);
+  });
+
+  it("截短只認表頭覆蓋：headerDays 31/31＋headerWarn 只 warning；headerDays 12/30 即使冇上月都 needs_human；冇上月新盤頭段缺只出資訊", async () => {
+    siteSeq++;
+    const boss = fx.userIds["老闆"];
+    const mk = async (name: string, summary: Record<string, unknown> | undefined, rows: RowOpt[], withPrev: boolean) => {
+      const site = await prisma.site.create({ data: { canonicalName: name, clientName: name, billingModel: "per_shift", createdBy: "t" } });
+      if (withPrev) await seedUploadWithRows({ month: AUG, siteId: site.id, siteNameRaw: name, uploaderUserId: boss, status: "confirmed", rows: K_ROWS(60) });
+      const cur = await seedUploadWithRows({ month: SEPT, siteId: site.id, siteNameRaw: name, uploaderUserId: boss, rows, parseSummary: summary });
+      const ctx = new AutoCollector(null, SEPT, boss, null);
+      const res = await explainVariances(ctx, SEPT, [{ id: cur.id, siteId: site.id, siteNameRaw: name, parseSummary: summary ?? null }]);
+      return { res, ctx };
+    };
+    // 表頭完整 31/31（9 月 30 日→headerDays 30）、行只覆蓋 12 日、有 headerWarn → 唔算截短
+    const full = await mk("測試表頭完整盤", { headerDays: 30, headerDateRange: { min: "2026-09-01", max: "2026-09-30" }, warnings: ["[分頁跳過] x：y"] }, K_ROWS(60).map((r) => ({ ...r, day: (r.day % 12) + 1 })), true);
+    expect(full.res.needsHuman).toHaveLength(0);
+    expect(full.res.findings.filter((f) => !f.explained)).toHaveLength(0);
+    expect(full.res.warnings.some((w) => w.includes("表頭完整"))).toBe(true);
+    // 表頭只 12/30 日 → 截短，冇上月都出
+    const cut = await mk("測試表頭截短盤", { headerDays: 12, headerDateRange: { min: "2026-09-01", max: "2026-09-12" } }, K_ROWS(60).filter((r) => r.day <= 12), false);
+    expect(cut.res.needsHuman).toHaveLength(1);
+    expect(cut.res.findings[0]!.sentence).toContain("表頭只覆蓋 12／30 日");
+    // 冇上月新盤、冇表頭資料、頭段缺：只出資訊，唔出 needs_human
+    const fresh = await mk("測試新開中段盤", undefined, K_ROWS(60).map((r) => ({ ...r, day: 10 + (r.day % 20) })), false);
+    expect(fresh.res.needsHuman).toHaveLength(0);
+    expect(fresh.res.warnings.some((w) => w.includes("由 10 號開始"))).toBe(true);
   });
 
   it("成分互斥：重複行同公司兵／子盤／雞頭唔雙重計；成分加埋＝差額", async () => {

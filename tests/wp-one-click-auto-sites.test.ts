@@ -127,7 +127,9 @@ describe("WP-ONE-CLICK-AUTO A：盤名比對", () => {
     const ctx = new AutoCollector(null, SEPT, boss, null);
     const result = await stepParseHealth(SEPT, boss, ctx);
     const up1 = await prisma.rosterUpload.findFirstOrThrow({ where: { month: SEPT, siteNameRaw: "測試南豐新村大廈管理處" } });
-    expect(up1.siteId).toBe(nf.id);
+    // 邨／村唔再當異體：只 propose（預填現有盤），唔自動歸
+    expect(up1.siteId).toBeNull();
+    expect(ctx.questions.find((q) => q.kind === "month_close_site_alias")?.evidence.candidates[0]?.refId).toBe(nf.id);
     const up2 = await prisma.rosterUpload.findFirstOrThrow({ where: { month: SEPT, siteNameRaw: "測試數碼港 CP1-4" } });
     expect(up2.siteId).not.toBeNull();
     expect(up2.siteId).not.toBe(cp5.id);
@@ -204,5 +206,21 @@ describe("WP-ONE-CLICK-AUTO A：盤名比對", () => {
     expect(res.warnings.some((w) => w.includes("時段解析唔到"))).toBe(true);
     expect(res.warnings.some((w) => w.includes("代號系統唔識") && w.includes("D-2"))).toBe(true);
     expect(res.needsHuman.some((w) => w.includes("D-2"))).toBe(true);
+  });
+
+  it("多子盤母盤：exact 對中有 >1 個子盤嘅母盤 → 降做 propose（唔自動歸母盤）", async () => {
+    const boss = fx.userIds["老闆"];
+    const brokerK = await mkBroker("TK", "broker");
+    await mkGuard({ name: "測試甲", staffNo: "U90001", defaultBrokerId: brokerK.id });
+    const parent = await prisma.site.create({ data: { canonicalName: "測試多子盤母盤", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
+    for (const n of ["甲區", "乙區"]) await prisma.site.create({ data: { canonicalName: `測試多子盤母盤 ${n}`, clientName: "x", parentSiteId: parent.id, billingModel: "per_shift", createdBy: "t" } });
+    await uploadRoster({ siteRaw: "測試多子盤母盤　", month: SEPT, uploaderUserId: boss, lines: [{ broker: "TK", time: "0700-1900", staffNo: "U90001", name: "測試甲", codes: { 1: "D" } }] });
+    const ctx = new AutoCollector(null, SEPT, boss, null);
+    const before = await prisma.site.count();
+    await stepParseHealth(SEPT, boss, ctx);
+    const up = await prisma.rosterUpload.findFirstOrThrow({ where: { month: SEPT } });
+    expect(up.siteId).toBeNull();
+    expect(await prisma.site.count()).toBe(before);
+    expect(ctx.questions.map((q) => q.kind)).toEqual(["month_close_site_alias"]);
   });
 });

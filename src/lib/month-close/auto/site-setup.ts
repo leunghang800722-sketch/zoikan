@@ -190,18 +190,30 @@ export async function resolveUploadSite(
     const sites = await loadSites();
     // 子盤（parent_site_id）都參與比對：對到子盤就歸子盤，唔另建重複頂層盤。
     const cls = classifySiteName(upload.siteNameRaw, sites);
-    if ((cls.level === "exact" || cls.level === "auto") && cls.siteId) {
+    // 多子盤母盤安全網（同上載時 `resolveRosterUploadSite()` 一致）：對中一個有 >1 個子盤嘅母盤，
+    // 唔肯定係邊個子盤 → 降做 propose（候選＝母盤同佢嘅子盤）。
+    let level = cls.level;
+    let proposeCandidates = cls.candidates;
+    if ((level === "exact" || level === "auto") && cls.siteId) {
+      const kids = sites.filter((x) => x.parentSiteId === cls.siteId);
+      if (kids.length > 1) {
+        level = "propose";
+        proposeCandidates = [{ siteId: cls.siteId, score: cls.score }, ...kids.slice(0, 2).map((k) => ({ siteId: k.id, score: cls.score }))];
+        cls.reason = `對中嘅盤有 ${kids.length} 個子盤，唔肯定歸邊個子盤`;
+      }
+    }
+    if ((level === "exact" || level === "auto") && cls.siteId) {
       const siteName = sites.find((s) => s.id === cls.siteId)?.canonicalName ?? "";
       const added = await addSiteAlias(ctx, cls.siteId, upload.siteNameRaw.trim(), { uploadId: upload.id });
       await finishAssign(ctx, upload, cls.siteId);
       ctx.summary.sitesAliased++;
-      ctx.line("site_alias", `更表盤名「${upload.siteNameRaw.trim()}」自動對上盤「${siteName}」（${cls.level === "exact" ? "正規化後相同" : cls.reason}）${added ? "，已加別名" : ""}`);
+      ctx.line("site_alias", `更表盤名「${upload.siteNameRaw.trim()}」自動對上盤「${siteName}」（${level === "exact" ? "正規化後相同" : cls.reason}）${added ? "，已加別名" : ""}`);
       builtThisRun.set(looseKey, cls.siteId);
-      return { outcome: "assigned", siteId: cls.siteId, via: cls.level };
+      return { outcome: "assigned", siteId: cls.siteId, via: level as "exact" | "auto" };
     }
-    if (cls.level === "propose" && cls.candidates.length > 0) {
+    if (level === "propose" && proposeCandidates.length > 0) {
       const byId = new Map(sites.map((s) => [s.id, s.canonicalName]));
-      const cands = cls.candidates.map((c) => ({ id: c.siteId, label: byId.get(c.siteId) ?? c.siteId, refId: c.siteId, evidence: `相似度 ${c.score.toFixed(2)}` }));
+      const cands = proposeCandidates.map((c) => ({ id: c.siteId, label: byId.get(c.siteId) ?? c.siteId, refId: c.siteId, evidence: `相似度 ${c.score.toFixed(2)}` }));
       const draft: McQuestionDraft = {
         kind: "month_close_site_alias",
         groupKey: `site_alias:${upload.id}`,

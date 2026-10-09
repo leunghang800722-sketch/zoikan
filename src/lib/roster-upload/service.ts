@@ -69,6 +69,9 @@ export interface RosterUploadParseSummary {
   codeBreakdown: Record<string, number>;
   codeKindBreakdown: Record<string, number>;
   dateRange: { min: string; max: string } | null;
+  /** 表頭真日期範圍／日數（舊上載冇）。 */
+  headerDateRange?: { min: string; max: string } | null;
+  headerDays?: number;
   subSiteNames: string[];
   unmatchedGuardCount: number;
   ambiguousGuardCount: number;
@@ -442,6 +445,8 @@ async function matchRowsAndSummarize(
     codeBreakdown: parseResult.codeBreakdown,
     codeKindBreakdown: parseResult.codeKindBreakdown,
     dateRange: parseResult.dateRange,
+    headerDateRange: parseResult.headerDateRange,
+    headerDays: parseResult.headerDays,
     subSiteNames: parseResult.subSiteNames,
     unmatchedGuardCount,
     ambiguousGuardCount,

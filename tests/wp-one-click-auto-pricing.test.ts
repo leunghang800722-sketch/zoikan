@@ -1,6 +1,6 @@
 // WP-ONE-CLICK-AUTO（§31.3 C）：自動定價——次序 1–6 各一；auto 卡金額＝來源值（唔平均／唔估）、
 // reprice 生效；propose／unknown 入分診；未定價唔當 0（估算缺口分開列）；OT 淨係配同 OT 更種卡。
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { Broker, Guard, Site, ShiftType } from "@prisma/client";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -416,19 +416,80 @@ describe("WP-ONE-CLICK-AUTO C：自動定價", () => {
     for (const s of await snap(site.id)) expect(s).toEqual([900, 700, 0]);
   });
 
-  it("修7：undo 連「之後 reconcile 補價（冇 journal）」嘅價都還原，唔留已作廢卡嘅價", async () => {
+  it("修7（第二輪）：undo 只按 journal 還原舊值——人手價（就算同 auto 卡價一樣）同另一雞頭同價人手價都唔郁", async () => {
     const { site, d } = await mkSite("測試價盤7x");
     await card({ siteId: site.id, shiftTypeId: d.id, brokerId: K.id, clientRate: 900, guardWage: 700, brokerFee: 0 });
     await mkRecords(site.id, d.id, K.id, 3);
+    // 人手價：K 同 W 各一條，數值同 auto 卡一樣（冇 journal）
+    const g2 = await mkGuard();
+    const hand = async (brokerId: string, day: number) =>
+      prisma.shiftRecord.create({ data: { workDate: sep(day), siteId: site.id, shiftTypeId: d.id, guardId: g2.id, settlementBrokerId: brokerId, operationalBrokerId: brokerId, recordType: "shift", status: "confirmed", clientRateSnapshot: 900, guardWageSnapshot: 700, brokerFeeSnapshot: 0, createdBy: "t" } });
+    const handK = await hand(K.id, 28);
+    const handW = await hand(W.id, 29);
     const { run, ctx } = await runCtx();
     await runAutoPricing(ctx, SEPT);
-    // 之後（例如 rerun 嘅 reconcile 開頭 reprice）新增一條用 auto 卡定價嘅更，冇 journal
-    n++;
-    const late = await prisma.shiftRecord.create({ data: { workDate: sep(29), siteId: site.id, shiftTypeId: d.id, guardId: (await mkGuard()).id, settlementBrokerId: K.id, operationalBrokerId: K.id, recordType: "shift", status: "confirmed", clientRateSnapshot: 900, guardWageSnapshot: 700, brokerFeeSnapshot: 0, createdBy: "t" } });
     await prisma.monthCloseRun.update({ where: { id: run.id }, data: { status: "done" } });
     const { undoAutoChanges } = await import("@/lib/month-close/auto/undo");
-    await undoAutoChanges(run.id, fx.userIds["老闆"], null);
-    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: site.id } })) expect([r.clientRateSnapshot, r.guardWageSnapshot, r.brokerFeeSnapshot]).toEqual([null, null, null]);
-    expect(late.id).toBeTruthy();
+    const res = await undoAutoChanges(run.id, fx.userIds["老闆"], null);
+    expect(res.undone.price_snapshots).toBe(3);
+    expect(res.undone.price_snapshots_swept).toBeUndefined();
+    const journaled = await prisma.shiftRecord.findMany({ where: { siteId: site.id, id: { notIn: [handK.id, handW.id] } } });
+    for (const r of journaled) expect([r.clientRateSnapshot, r.guardWageSnapshot, r.brokerFeeSnapshot]).toEqual([null, null, null]);
+    for (const id of [handK.id, handW.id]) {
+      const r = await prisma.shiftRecord.findUniqueOrThrow({ where: { id } });
+      expect([Number(r.clientRateSnapshot), Number(r.guardWageSnapshot), Number(r.brokerFeeSnapshot)]).toEqual([900, 700, 0]);
+    }
+  });
+
+  it("第二輪 1：auto 建卡唔會經 resolver 客價 fallback 填其他雞頭；分診確認 propose 價可以覆蓋「自動填嘅值」但唔覆蓋人手價，回報補咗幾多更", async () => {
+    const { site, d } = await mkSite("測試價盤8x");
+    // K 有上月卡 → auto；W 兩個來源唔一致 → propose（淨缺客價）
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: K.id, clientRate: 900, guardWage: 700, brokerFee: 0 });
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: Z.id, clientRate: 950 });
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: Y.id, clientRate: 900 });
+    await mkRecords(site.id, d.id, K.id, 2);
+    for (let i = 0; i < 3; i++) {
+      n++;
+      await prisma.shiftRecord.create({ data: { workDate: sep((n % 28) + 1), siteId: site.id, shiftTypeId: d.id, guardId: (await mkGuard()).id, settlementBrokerId: W.id, operationalBrokerId: W.id, recordType: "shift", status: "confirmed", guardWageSnapshot: 700, brokerFeeSnapshot: 0, createdBy: "t" } });
+    }
+    const { ctx } = await runCtx();
+    await runAutoPricing(ctx, SEPT);
+    // W 客價冇被 K 嘅 auto 卡靜靜填
+    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: site.id, settlementBrokerId: W.id } })) expect(r.clientRateSnapshot).toBeNull();
+    // 分診確認 950：寫 3 更
+    const writer = new SimpleWriter("triage:t1", fx.userIds["老闆"], null);
+    const grp = { siteId: site.id, shiftTypeId: d.id, brokerId: W.id, ot: false };
+    const res = await prisma.$transaction((tx) => createCardAndPrice(writer, { month: SEPT, group: grp, need: { client: true, payout: false }, values: { clientRate: 950, guardWage: null, brokerFee: null, payoutRate: null }, evidence: "t", note: "t", confidence: "confirmed", overwriteAuto: true }, tx));
+    expect(res.recordsPriced).toBe(3);
+    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: site.id, settlementBrokerId: W.id } })) expect(Number(r.clientRateSnapshot)).toBe(950);
+  });
+
+  it("第二輪 5：跨 run 重複建卡——本月同組合已有任何有效 auto 卡就唔再建", async () => {
+    const { site, d } = await mkSite("測試價盤9x");
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: K.id, clientRate: 900, guardWage: 700, brokerFee: 0 });
+    await mkRecords(site.id, d.id, K.id, 2);
+    const first = await runCtx();
+    await runAutoPricing(first.ctx, SEPT);
+    await prisma.shiftRecord.updateMany({ where: { siteId: site.id }, data: { clientRateSnapshot: null, guardWageSnapshot: null, brokerFeeSnapshot: null } });
+    const second = await runCtx();
+    await runAutoPricing(second.ctx, SEPT);
+    expect(await prisma.rateCard.count({ where: { siteId: site.id, source: { startsWith: "auto:one-click:" }, voidedAt: null } })).toBe(1);
+  });
+
+  it("第二輪 3：分診建卡＋補價同一 transaction——補價途中失敗，卡一齊 rollback（唔留孤兒卡）；冪等重用要價錢一樣", async () => {
+    const { site, d } = await mkSite("測試價盤10x");
+    await mkRecords(site.id, d.id, K.id, 2);
+    const writer = new SimpleWriter("triage:t2", fx.userIds["老闆"], null);
+    const grp = { siteId: site.id, shiftTypeId: d.id, brokerId: K.id, ot: false };
+    const input = { month: SEPT, group: grp, need: { client: true, payout: true }, values: { clientRate: 900, guardWage: 700, brokerFee: 0, payoutRate: 700 }, evidence: "t", note: "t", confidence: "confirmed" };
+    const spy = vi.spyOn(SimpleWriter.prototype, "auditTx").mockImplementation(async (_tx, i) => { if (i.tableName === "shift_records") throw new Error("boom"); });
+    await expect(prisma.$transaction((tx) => createCardAndPrice(writer, input, tx))).rejects.toThrow("boom");
+    spy.mockRestore();
+    expect(await prisma.rateCard.count({ where: { siteId: site.id } })).toBe(0);
+    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: site.id } })) expect(r.clientRateSnapshot).toBeNull();
+    // 同來源但價唔同 → 唔重用舊卡
+    const a = await prisma.$transaction((tx) => createCardAndPrice(writer, input, tx));
+    const b = await prisma.$transaction((tx) => createCardAndPrice(writer, { ...input, values: { ...input.values, clientRate: 910 } }, tx));
+    expect(b.cardId).not.toBe(a.cardId);
   });
 });
