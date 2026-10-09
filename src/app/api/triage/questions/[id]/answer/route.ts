@@ -3,6 +3,7 @@
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { getQuestionFor } from "@/lib/triage/session";
 import { submitAnswer } from "@/lib/triage/apply";
+import { submitMcAnswer } from "@/lib/month-close/auto/triage";
 import { answerBodySchema } from "@/lib/triage/types";
 import { viewerCaps } from "@/lib/triage/view";
 import { getClientIp, ok, withApiError } from "@/lib/api/http";
@@ -18,6 +19,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const body = (await readJson(req)) as Record<string, unknown>;
     const parsed = answerBodySchema.safeParse({ ...body, preview_hash: body.preview_hash ?? "0".repeat(64) });
     if (!parsed.success) throw BadRequest("答案格式唔啱");
+    if (q.session.sourceType === "month_close") {
+      const mc = await submitMcAnswer(actor, q, body.answer, typeof body.preview_hash === "string" ? body.preview_hash : undefined, getClientIp(req));
+      return ok(brandSafeResponse({ status: mc.status, impact: mc.impact ? { ...mc.impact } : null, session_status: mc.session_status, open_remaining: mc.open_remaining, result: mc.result, note: mc.note }));
+    }
     const out = await submitAnswer(actor, q, body.answer, typeof body.preview_hash === "string" ? body.preview_hash : undefined, await viewerCaps(actor), getClientIp(req));
     return ok(brandSafeResponse({ status: out.status, impact: out.impact ? { ...out.impact } : null, session_status: out.session_status, open_remaining: out.open_remaining }));
   });

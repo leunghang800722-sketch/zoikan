@@ -86,6 +86,8 @@ export interface ParsedSheet {
   /** Phase B-0：呢個 sheet 入面由橫向合併格展開出嚟嘅格數（3 格合併 D
    * ＝計 3，唔包括冇合併嘅格）。 */
   mergedExpandedCount: number;
+  /** 表頭（Date 列）真日期（YYYY-MM-DD，去重）——截短判斷只認表頭覆蓋，唔睇「有更嘅日子」。 */
+  headerDates: string[];
   rows: ParsedCellRow[];
   warnings: SheetParseWarning[];
 }
@@ -103,6 +105,11 @@ export interface ParseSuccess {
   codeBreakdown: Record<string, number>;
   codeKindBreakdown: Record<CodeKind, number>;
   dateRange: { min: string; max: string } | null;
+  /** 表頭真日期範圍／日數（所有分頁聯集）——WP-ONE-CLICK-AUTO 截短判斷用。 */
+  headerDateRange: { min: string; max: string } | null;
+  headerDays: number;
+  /** N5：表頭所有真日期（ISO，排序）——variance 只數落喺上載月份內嘅日子。 */
+  headerDates: string[];
   subSiteNames: string[];
   /** Phase B-0：全檔由橫向合併格展開出嚟嘅格數總和。 */
   mergedExpandedCount: number;
@@ -313,10 +320,12 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
   let maxGap = 0;
   let mergedExpandedCount = 0;
   const subSiteNames = new Set<string>();
+  const headerDates = new Set<string>();
 
   for (let i = 0; i < headers.length; i++) {
     const [dateRow, labelCol] = headers[i]!;
     const mapping = buildMapping(ws, dateRow, labelCol);
+    for (const d of mapping.dateValues.values()) headerDates.add(isoDateUTC(d));
     layouts.add(mapping.layout);
     if (mapping.noBrokerCol) noBrokerCol = true;
     if (mapping.dateHeaderGap > maxGap) maxGap = mapping.dateHeaderGap;
@@ -429,6 +438,7 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
     blockCount: headers.length,
     subSiteNames: [...subSiteNames],
     mergedExpandedCount,
+    headerDates: [...headerDates].sort(),
     rows,
     warnings,
   };
@@ -504,6 +514,8 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
     if (dateMax === null || row.workDate > dateMax) dateMax = row.workDate;
     if (row.subSiteName) subSiteNames.add(row.subSiteName);
   }
+  const allHeader = new Set<string>(sheets.flatMap((sh) => sh.headerDates));
+  const headerSorted = [...allHeader].sort();
   for (const s of sheets) {
     for (const w of s.warnings) warnings.push(`[${s.sheetName}] row ${w.row}：${w.reason}`);
   }
@@ -524,6 +536,9 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
     codeBreakdown,
     codeKindBreakdown,
     dateRange: dateMin && dateMax ? { min: dateMin, max: dateMax } : null,
+    headerDateRange: headerSorted.length ? { min: headerSorted[0]!, max: headerSorted[headerSorted.length - 1]! } : null,
+    headerDays: headerSorted.length,
+    headerDates: headerSorted,
     subSiteNames: [...subSiteNames],
     mergedExpandedCount: sheets.reduce((sum, s) => sum + s.mergedExpandedCount, 0),
     warnings,

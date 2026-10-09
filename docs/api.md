@@ -2335,3 +2335,73 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - **作答**（`src/lib/triage/apply.ts` `assertNoNewer`；預覽＋commit 在同一把 lock／tx 內）：題目必須屬於最近一次包含呢個強身份嘅「同類包」（v2 類＝任何包；ext＝v3；bank＝有銀行段）；另外如果有較新嘅包入面有人同呢條題嘅人弱身份重疊（身份證或工號 HMAC 相同）而強身份唔同（有／冇身份證交替、工號集合變）→ 409「呢位保安員有較新嘅導入資料，請重新上載最新檔案再答」。
 - **Migration** `20261005160000_wp_staff_fields_triage_simplify`：`triage_person_applies` 加 `weak_ids`／`has_bank`；`triage_questions` 唯一索引改普通索引（全部 IF NOT EXISTS／IF EXISTS，冪等）。
 - **decisions**：`@index` 用嚴格正則 `^@(0|[1-9]\d*)$`；原始 body 嘅 `__proto__`／`constructor`／`prototype` key 一律 400（zod 前先查）；解析後 map 用 null-prototype object。
+
+## WP-ONE-CLICK-AUTO（§31，2026-10-08）：一鍵結算自我修復
+
+**目標**：每月上載更表撳一鍵，系統自己識別同解決常見問題（新盤、更數差異、未定價、無結算雞頭、安員配對要核實），只剩多候選／冇依據嘅先入分診（`month_close_*`，預填建議答案，一撳確認）。全部自動改動帶 run id、可一鍵撤銷。
+
+### 信心分級（實際門檻）
+
+| 級別 | 做法 | 門檻 |
+|---|---|---|
+| `auto` | 即刻做＋journal（`month_close_auto_changes`）＋audit（`auto_source=auto:one-click:<runId>`） | 見下面逐項 |
+| `propose` | 分診題，預填候選，一撳確認 | 有候選但唔夠硬 |
+| `unknown` | 分診題，冇預填 | 冇依據 |
+
+- **A 盤名**（`src/lib/month-close/auto/site-match.ts`，`stepParseHealth`）：NFKC＋去空白／標點／括號符號＋去常見後綴後同現有 canonical／alias 完全相同（只一個盤）→ `exact`；否則 Jaro-Winkler ≥ **0.90**、「分辨字」（英文字母段、數字段、中文數字、方位字）完全相同、編輯距離 ≤ 1（名長 ≥12 字 ≤2）、第二候選低 ≥ **0.08** → `auto` 加 alias＋歸盤；相似度 **0.75–0.90**／差異字數過多／第二候選太近／exact 撞兩個盤 → `propose`（編輯距離 ≤ 名長 34%，否則當新盤）；其餘（包括分辨字唔同——CP1-4／CP5、厚A／厚B、Weave OL／Robinson、第一期／第二期、東／西，永遠唔合併亦唔 propose）→ 新盤。同一 run 同正規化名只建一個盤。
+- **新盤自動建齊**（`site-setup.ts`）：`sites`（`billing_model=per_shift`）；更種由該上載 `raw_code`＋`time_raw` 推出（code、起止時間、鐘數；OT 代號建 OT 更種，鐘數＝OT 小時）；客戶名＝本月 Postorder（`PostOrder` 分頁）「客戶群 block」（標題無數字／斜線／括號、下面 ≥2 個唔同盤名先算）；別名＝Postorder 物業名稱／盤名部分（唔撞其他盤）。reparse 後同一 run 內更次套用得到。
+- **B 更數異常**（`variance.ts`）：口徑＝**計數更次**＝shift 格排除 external（雞頭種類 external、rank／姓名命中 external 別名、安員 external 類）；同上月差 >30%（或連 external 一齊計嘅原始格數差 >30%）就拆：external、公司兵（internal_cash）、同人同日同更種重複行、子盤變化、日期覆蓋（<80% 日數＝「檔案可能截短」並列缺邊幾號；parse 表頭警告）、雞頭組成（新增／消失）、Postorder 同盤更數（±5% 且最少 ±3）。輸出一句解釋＋`explained`；剩餘解釋唔到 **>15% 且 >20 更**先 `needs_human`（分診 `month_close_shift_variance`，冇預填）。冇逐格資料（只有 `parse_summary`）沿用舊口徑警告。
+- **C 自動定價**（`pricing.ts`，新 step `auto_pricing`，喺 `reconcile_apply` 之後、`pricing_check`／`compute` 之前）：先用現有生效卡補 null（唔建卡）；再對每組未定價（盤×更種×雞頭）按次序：(1) 同盤同更種同雞頭上期卡（最近 3 個月內完結，取最近一張）→ `auto`；(2) Postorder 同盤同崗位（時段對時段）同雞頭（尾 token＝雞頭 code／name／alias）嘅上單價／外判價，值唯一（逐人特價行剔走）→ `auto`；只有泛用行（冇指明雞頭）→ `propose`；(3) 同盤同更種其他**同類**雞頭（broker↔broker、internal_cash↔internal_cash）嘅生效卡，全部一樣 → `auto`，唔一樣 → `propose`（列候選）；(4) 同雞頭同盤其他更種、鐘數相同 → `propose`；(5) 盤通用客價（`*|*`）＋該雞頭喺同客戶群其他盤嘅最常見外判價 → `propose`；(6) 冇 → `unknown`。新盤全部冇依據 → 一條 `month_close_site_new`。OT 更種淨係配同一個 OT 更種卡（§20）。`auto` 建卡：`effective_from`＝本月 1 號、`effective_to`＝月尾、`source=auto:one-click:<runId>`、`evidence`＝來源、`confidence=auto`；金額一律等於來源值（唔平均／唔估）；Postorder 外判價入 `payout_rate`（未拆分口徑，wage＝payout、fee＝0）；淨係帶需要嘅成分（只欠出街價就唔帶客價）；auto 卡唔做其他 auto 卡嘅證據。補價係 targeted（淨補 null 或「工資 0＋雞頭費 null」）。2026-08 之前嘅月份唔做。
+- **報告唔准將未定價當 0 成本**：`report.unpriced.gap`＝未定價更數＋估算缺口（用同盤同更種最近已知卡價，只作提示，唔入任何金額表）；`pricing_check` 仍列未定價總數。
+- **D 結算雞頭歸屬**（`settlement.ts`）：`reconcile_apply` 後 `settlement_broker_id` 仍 null 嘅更，按次序：Postorder 同崗位同日雞頭（`Roster` 分頁逐日「雞頭名」，唯一而且對得到雞頭；「長工」不計）→ 長工類安員（B07）／external 類（只得一個 external 雞頭）→ 安員預設雞頭 → 近 3 個月同盤結算雞頭（安員自己嘅更，冇就用本月更表姓名／工號喺上月更表行嘅雞頭欄），多數決而且唯一 → 全部冇就分診 `month_close_settlement`（預填同盤本月最常見雞頭，唯一先預填）。**external**：解析時（`service.ts`）更表冇雞頭碼而 rank／姓名命中 external 雞頭別名（例如 B10「Wilson Guard／Wilson Supervisor」）→ `settlement_broker_id` 設做 external 雞頭；永遠分開計（`report.auto.summary.counts.external`），唔入收入／成本。
+- **guard_fix 「要老闆核實」**（`guard-match.ts`，`stepGuardFix` 尾）：單一候選＋（上月同盤同一更表姓名≥3 格全部已配對到佢，或電話硬鍵＋姓名完全一致）→ `auto`（加更表用名做別名＋登記未被佔用嘅工號，冇同 scheme 現有工號先加；reparse）；淨姓名／弱證據 → `month_close_guard_match`（單一候選預填）；多候選／冇候選 → 冇預填。
+
+### Migration `20261008120000_wp_one_click_auto`
+
+新表 `month_close_auto_changes`（public，**唔入 ai schema**；`ai.audit_log` 排除；冪等、冇 `gen_random_uuid()`／`RAISE`）：`run_id`（FK `month_close_runs`）、`kind`（site_alias｜site_created｜shift_type_created｜rate_card_created｜price_snapshots｜settlement_set｜guard_alias_added｜guard_staffno_added）、`ref_table`／`ref_id`、`summary`、`detail_json`（還原所需 before／after，冇 PII）、`undoable`、`status`（applied｜undone｜undo_skipped）、`undo_note`、`created_at`／`undone_at`／`undone_by`。`AUDIT_META_PASSTHROUGH_KEYS` 加 `auto_source`。
+
+### API
+
+- `POST /api/month-close/one-click/:id/undo-auto`——`一鍵結算:update`（老闆／會計；主管／雞頭／安員 403）→ `{run_id, undone{rate_cards,price_snapshots,settlement,site_aliases,shift_types,guard_aliases,guard_staff_numbers}, skipped[{kind,summary,reason}], already_undone, superseded_questions}`。倒序還原：價 snapshot（淨係當前值仍係自動補嗰個值先還原）、價卡作廢、結算雞頭（同上）、自動配對（移除登記嘅工號／別名）、更種作廢（**冇更次用緊先准**，否則 `skipped`）、盤別名移除；自動建嘅盤保留（`site_created` 不可還原）；open 分診題作廢；`report.auto.undone=true`。已鎖月份 409、`running` 409；冪等；全部 audit（`auto_source=undo:one-click:<runId>`）。你喺分診題一撳確認嘅改動（`triage:<題目 id>`）唔屬 auto，唔還原。
+- `report_json.auto`（`GET /api/month-close/one-click` 回應 `report.auto`）：`{summary{sites_aliased, sites_created, shift_types_created, aliases_from_postorder, cards_created, records_priced, records_settled, guard_matches_auto, variances_explained, variances_unexplained, unpriced_records, unpriced_client_gap_estimate, unpriced_payout_gap_estimate, counts{countable, external, internal_cash}}, auto_lines[{kind,text}], review[{kind,text,confidence,question_id}], triage_session_id, undone, undone_at}`。步驟新增 `auto_pricing`（`steps` 10 步）；`parse_health.numbers.varianceFindings[]`（盤名、更數、external／公司兵、explained、一句解釋）。
+- 分診：`triage_sessions.source_type=month_close`（`source_ref`＝run id，**擁有人＝撳一鍵嗰個人**）；題型 `month_close_site_alias｜month_close_site_new｜month_close_pricing｜month_close_settlement｜month_close_guard_match｜month_close_shift_variance`。`GET /api/triage/sessions/:id` 對 month_close session 回 `questions[{..., mc{summary, suggestion, confidence, action_type, count, candidates[{id,label,evidence,values,values_text}], prefill_candidate_id, needs_price_input, needs_broker_pick, broker_options[], identity_label}}]`（`identity_label` 淨係「安員個人資料:view」先有）。答案新增選項 `mc_accept`（一撳確認預填）｜`mc_pick`（`candidate_id` 或 `value`＝雞頭 id）｜`mc_new`（當新盤）｜`mc_price`（`price{client_rate,guard_wage,broker_fee}`）｜`mc_ack`（更數差異已覆核）｜`skip`。仍然兩步：`preview`（唔寫）→ `answer`（`preview_hash` HMAC，綁題目＋答案＋當刻狀態指紋，資料中途變咗 409）。答題要「導入分診:update」＋**「一鍵結算:create」**（老闆／會計），非擁有人（非老闆）403；已鎖月份 409；已答／已作廢 409。audit：`triage_answer`＋逐項寫入帶 `auto_source=triage:<題目 id>`。
+- 頁面：`/month-close` 報告加「自動處理摘要」（自動做咗乜 N 項、本月更數三堆）、「要你睇」（每項一句原因，「逐條一撳確認」開 `MonthCloseTriageDialog`）、「還原所有自動改動」掣、未定價估算缺口提示；`/triage` 列 month_close session，繼續答用同一個 dialog。
+
+### WP-ONE-CLICK-AUTO Opus 5.5 驗收修正（13 項＋順手項）
+
+- **A**：中文字替換一律唔 auto——`site-match.ts` 只有細異體表（臺/台、峯/峰、邨/村、廠/厰、樓/楼…）入面嘅字當相同（歸一後 exact）；其餘中文字唔同（東涌／東區、景湖居／樂湖居…）最多 propose（auto 要求 CJK 序列相同＋原有門檻）。子盤（`parent_site_id`）參與比對，對到子盤歸子盤。
+- **C**：次序 2 泛用行只准 `kind=broker` auto，公司兵（internal_cash）唔用泛用行，同崗位有逐人／逐雞頭行只 propose；次序 1 淨缺客價——同雞頭卡優先，其他雞頭卡全部一致先 auto，卡一律帶 `brokerId`（來源係 `*|*` 通用卡先建通用卡）；`source=auto:one-click:*` 嘅卡唔做來源（最多 propose）；auto 建卡後對該組**全月**補價 loop 到冇變，再同 reconcile 開頭 reprice 對齊（rerun 不動點，第二次報告逐欄相同）；同盤同更種同雞頭同期已有同來源卡就唔重複建；冇結算雞頭組合唔另出定價題。undo 另掃走「因 auto 卡而補上但冇 journal」嘅價（`price_snapshots_swept`）。
+- **E**：`triage_questions.status` 加 `applying`（migration `20261009000000_wp_one_click_auto_triage_applying`）；`submitMcAnswer` 先 claim（open→applying，並發只一個成功），寫失敗退返 open（建卡按 `source=triage:<qid>` 冪等，retry 安全）；卡死 10 分鐘可重新 claim。新 run 將同月其他 run 嘅 open `month_close_*` 題作廢。
+- **B**：每格只歸一個成分（重複→公司兵→子盤→雞頭組成），`components` 加埋＋截短推算＋剩餘＝差額；截短（<80% 日數或表頭警告）獨立於 30% 閘口，一律 warning＋needs_human＋分診題，唔當 explained（沒有上月比較嘅新盤亦會報）；needs_human 口徑＝剩餘 >20 更，或（>15% 而且 >5 更）。
+- **D**：結算歷史回溯只准同一 `guard_id`；`previousMonthPaired` 淨姓名唔 auto（要工號／電話硬鍵＋上月同盤已配對同一 guard）；plan 判工號衝突（reason 含「工號」）一律唔 auto 出分診題；加唔到任何登記（已存在／被佔用）唔計 auto。
+- **順手**：新盤時段解析唔到（`7am-7pm`／空）唔建 null 時段更種，出 `month_close_site_new`（空 groups，可「我已處理」）＋warning；`codeKind=unknown` 代號格（如 `D-2`）喺 parse_health warning＋needs_human 列出；undo 後 `/month-close` 摘要卡頂顯示「已撤銷」橫額；`tests/wp-postorder-pairs-csv-parse.test.ts` 讀 `data/` 嘅死測試搬去 `scripts/guard-fix/verify-postorder-pairs-local.ts`。
+
+### WP-ONE-CLICK-AUTO Opus 5.5 第二輪驗收修正（7 項＋順手項）
+
+- **1 取消整月通用補價**：`auto_pricing` 唔再叫 `repriceMonthForSites`；只對今次有 auto 建卡（或重用）嘅組（盤×更種×雞頭）補價，淨填 null（或工資 0＋雞頭費 null）嘅欄，逐更 journal（舊值／新值）。`resolveShiftPricingFromCards()` 加閘：`auto:one-click:*` 卡只對自己嘅雞頭（或通用卡）生效，唔准經客價 fallback 填其他雞頭（`RateCardLite.source`）。分診確認 propose 價（`createCardAndPrice(..., overwriteAuto:true)`）可以覆蓋 journal 記低嘅「系統自動填入值」，永遠唔覆蓋人手快照；答題回應多 `result{records_priced, overwritten_auto}`＋`note`（補咗幾多更；0 更講明原因）。
+- **2 undo 只按 journal**：刪走 `sweepCardPrices`（值相等掃描）；`price_snapshots` 逐更按 journal 還原舊值（當前值仍等於 journal `after` 先還原）。人手價（就算同 auto 卡價一樣）、另一雞頭同價人手價唔郁。限制：rerun 套用新建嘅更若按 auto 卡定價（冇 journal）唔會被 undo 清走。
+- **3 分診建卡＋補價同一 `$transaction`**（`createCardAndPrice(writer, input, tx)`＋`ChangeWriter.auditTx`）：補價途中失敗成個 rollback，冇孤兒卡；分診路徑重用舊卡要同來源且價錢一樣。
+- **4 截短改認表頭**：`parse.ts` 由 `mapping.dateValues` 抽 `headerDateRange`／`headerDays` 存入 `parse_summary`；截短＝表頭覆蓋 <80%；表頭完整但有解析警告只 warning；舊上載（冇表頭資料）只當月頭／月尾連續缺 ≥20% 日數而且覆蓋率比上月低 ≥20% 先算；冇上月嘅新盤頭段缺只出「由 N 號開始」資訊（warning，唔 needs_human）。截短句唔再寫「少約 N 更」。
+- **5 跨 run 防重複建卡**：本月同組合（盤×更種×雞頭，per_shift）已有任何有效 `auto:one-click:*` 卡（唔理邊個 run）就唔再建，重用並補價。
+- **6** 異體表刪走「邨/村」。**7** `resolveUploadSite`：exact／auto 對中有 >1 個子盤嘅母盤 → 降做 propose（同上載時一致）。
+- **順手**：並發 undo 逐項 claim（`undo_note: undoing`）；0 改動 undo 唔作廢 open 題；`applying` 題失敗退回原狀態（skipped 唔變 open）；新盤嘅定價題標題保留「新盤」；guard-fix `NeedsBossAction.code`（`staff_no_conflict` 等結構化碼），自動配對唔再靠 reason 字串；`guard-match.ts`／`variance.ts` 檔頭註解同實際一致；測試 `clearAll` 清 `reconcile_all_runs`／`month_close_runs`（避免跨檔 running 殘留）。
+
+### WP-ONE-CLICK-AUTO Opus 5.5 第三輪驗收修正（N1–N7＋側項）
+
+- **N1** `loadAutoFilled` 只計 `status=applied` 嘅 journal（undo 後人手價唔會畀 `overwriteAuto` 覆蓋）。**N2** overwriteAuto 逐欄：只用 journal `fields` 列出嘅欄，同一欄取最新 applied 記錄；undo 還原同樣按 `fields` 逐欄。
+- **N3** 跨 run 重用 `auto:one-click:*` 卡前要「覆蓋成個月＋有齊 need 欄」，否則拋錯、該組改入分診（唔疊重疊新卡）；重用舊卡但補唔到任何一更 → 一律降級入分診；`cardsCreated` 唔計重用。
+- **N4** reconcile-apply（create／update／settlement_diff）、`repriceMonthForSites`、settlement-resync 寫 price snapshot 時，若 resolver 用到 `auto:one-click:<runId>` 卡 → 補寫 `price_snapshots` journal（`src/lib/pricing/auto-card-journal.ts`，`detail.via=later_write`）去該 run；undo 仍然「只按 journal」，回應新增 `stillUsingVoidedCardPrices`（正常 0）。人手「重新計价」（`mode:full`）路徑唔喺此列。
+- **N5** parse_summary 新增 `headerDates`；variance 表頭覆蓋只數落喺上載月份內嘅日子（舊 summary 只有 range 時用 range∩月份）。**N6** 分診定價確認用 `pg_advisory_xact_lock`（盤×更種×雞頭×OT×月）串行；鎖內見到另一題已確認、價錢唔同嘅 `triage:*` 卡 → 409「已有人確認過另一個價」。
+- **N7** 舊上載截短用整數比較（缺日×5 ≥ 總日數；覆蓋差 ×5…）；無上月＋月尾缺 ≥20% 出資訊行；舊上載冇 headerDates 時 rerun 嘗試由原檔 bytes 重 parse 補寫，補唔到出資訊行叫重新上載；舊上載 `headerWarn` 唔再靜音。
+- **側項**：表頭完整但有警告併成一行列盤名；測試／註解假名；rerun 摘要卡／價數按 journal 累計；`RateCardLite.source` 必填；`runAutoPricing` 內鎖月雙保險；`pricing.ts` 檔頭註明分診卡客價跨雞頭 fallback 係刻意。
+- **已知限制（唔做）**：C2b 人手值剛好等於系統值會被覆蓋；C3b 摘要價可能同實際不同；E8d reclaim 理論上雙寫；7am–7pm 格未歸更種。
+
+### WP-ONE-CLICK-AUTO 第四輪覆核修正
+- `POST /api/shift-records`（雞頭／內部）、`PATCH /api/shift-records/:id`（OT 重計）、`POST /api/shift-records/:id/approve`、`POST /api/shift-records/batch` 寫價 snapshot 用到 `auto:one-click:<runId>` 卡 → 補寫 `price_snapshots` journal（best effort，唔拖冧主寫入）。
+- `POST /api/month-close/one-click/:id/undo-auto` 回應加 `still_using_voided_card_prices`：安全網，掃本月價等於已作廢 auto 卡值而冇 journal 嘅更（只報數，唔清）；UI 提示「N 更價錢同已作廢卡相同但冇紀錄，請人手檢查」。
+- OT 冇 `ot_hours`：resolver 答 null，null→null 唔計 changed、唔寫 journal；降級分診題預填原本來源值（propose）；`repriceMonthForSites` 寫價＋journal 同一 transaction；舊上載截短口徑＝缺 >20%（剛好 80% 唔算）。
+
+### WP-ONE-CLICK-AUTO 第五輪覆核修正
+- `POST /api/shift-records/reprice`（`dry_run:false`）用到 auto 卡嘅更同價一齊補寫 journal（同一 transaction）。內部 `POST /api/shift-records` 人手帶部分出街價：journal before＝人手值，undo 只還原 auto 填嗰幾欄。
+- 分診：OT 組內冇 `ot_hours` 嘅更 → `month_close_pricing` 題 `action.type=ot_hours`（options 淨係 `mc_ack`＋`skip`，唔建卡）；降級定價題候選次序＝原來源值第一，「未經人確認」候選唔預填（`mc_accept` 隱藏，只可 `mc_pick`／`mc_price`）。
+- undo 回應加 `still_using_voided_card_ids`（最多 50）；`report.auto.voided_card_price_check {count, record_ids}` 持久化，refresh 後摘要卡仍顯示警告。

@@ -40,6 +40,7 @@ import {
   type ShiftTypeCandidate,
   type RosterUploadSiteResolution,
 } from "./match";
+import { externalBrokerForRow, type ExternalBrokerLite } from "./external-alias";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -68,6 +69,10 @@ export interface RosterUploadParseSummary {
   codeBreakdown: Record<string, number>;
   codeKindBreakdown: Record<string, number>;
   dateRange: { min: string; max: string } | null;
+  /** 表頭真日期範圍／日數（舊上載冇）。 */
+  headerDateRange?: { min: string; max: string } | null;
+  headerDays?: number;
+  headerDates?: string[];
   subSiteNames: string[];
   unmatchedGuardCount: number;
   ambiguousGuardCount: number;
@@ -250,6 +255,7 @@ async function matchRowsAndSummarize(
     }
   }
 
+  const externalBrokers: ExternalBrokerLite[] = (await tx.broker.findMany({ where: { kind: "external" }, select: { id: true, code: true, name: true, aliases: true } })).map((b) => ({ id: b.id, code: b.code, name: b.name, aliases: b.aliases }));
   let unmatchedGuardCount = 0;
   let ambiguousGuardCount = 0;
   let unmatchedShiftTypeCount = 0;
@@ -271,7 +277,7 @@ async function matchRowsAndSummarize(
 
   for (let rowPos = 0; rowPos < parseResult.rows.length; rowPos++) {
     const r = parseResult.rows[rowPos]!;
-    const brokerId = matchBroker(r.brokerCodeRaw, brokers);
+    let brokerId = matchBroker(r.brokerCodeRaw, brokers);
     if (r.brokerCodeRaw && !brokerId) unmatchedBrokerCount += 1;
 
     // Phase B-0 第 3 項：先決定呢行「解析後實際盤」——冇子盤嘅上載（絕
@@ -280,6 +286,15 @@ async function matchRowsAndSummarize(
     let effectiveSiteId = resolvedSiteId;
     let resolvedSiteManual = false;
     const warnings = [...r.warnings];
+    // WP-ONE-CLICK-AUTO（§31.3 D）：更表冇雞頭碼，但 rank／姓名命中 external 雞頭（客戶自己人，
+    // 例如 B10 別名「Wilson Guard」）→ 歸 external，永遠分開計。有雞頭碼就信雞頭碼，唔覆寫。
+    if (!brokerId && (r.codeKind === "shift" || r.codeKind === "ot")) {
+      const ext = externalBrokerForRow(r, externalBrokers);
+      if (ext) {
+        brokerId = ext.id;
+        warnings.push("rank／姓名命中客戶自己人別名，歸 external 雞頭（唔計入更數主數／收入／成本）");
+      }
+    }
     // WP-UPLOAD-AUTOFIX 個案 1：呢個上載嘅盤係靠檔名鍵（`roster_file_
     // keys`）對到嘅——逐行留痕「由邊條鍵對盤」，等會計覆核（同「子盤對
     // 唔到」呢類 warning 一樣係逐行加，唔淨係頂層一句）。
@@ -431,6 +446,9 @@ async function matchRowsAndSummarize(
     codeBreakdown: parseResult.codeBreakdown,
     codeKindBreakdown: parseResult.codeKindBreakdown,
     dateRange: parseResult.dateRange,
+    headerDateRange: parseResult.headerDateRange,
+    headerDays: parseResult.headerDays,
+    headerDates: parseResult.headerDates,
     subSiteNames: parseResult.subSiteNames,
     unmatchedGuardCount,
     ambiguousGuardCount,

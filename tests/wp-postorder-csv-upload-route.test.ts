@@ -158,7 +158,9 @@ describe("WP-POSTORDER-CSV：POST /api/guard-fix/postorder CSV 路徑", () => {
     // `longterm_pairs_from_postorder`／`longterm_cells_from_postorder`
     // 呢兩個欄（xlsm 路徑冇——見上面 PostorderUploadDTO 註解），去咗先比
     // 其餘欄一致。
-    const { longterm_pairs_from_postorder: _p, longterm_cells_from_postorder: _c, ...csvSummaryRest } = csvBody.upload.parse_summary ?? {};
+    const csvSummaryRest = { ...(csvBody.upload.parse_summary ?? {}) } as Record<string, unknown>;
+    delete csvSummaryRest.longterm_pairs_from_postorder;
+    delete csvSummaryRest.longterm_cells_from_postorder;
     expect(csvSummaryRest).toEqual(xlsmBody.upload.parse_summary);
 
     // 兩個 CSV bytes 各自存低，fileBytes 都有值（佔位，NOT NULL）。

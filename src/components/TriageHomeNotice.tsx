@@ -12,7 +12,7 @@ export async function TriageHomeNotice({ session }: { session: CurrentSession })
   if (n === 0) return null;
   return (
     <Notice variant="warning" action={<Link href="/triage" className="font-semibold underline">去答</Link>}>
-      待答問題（{n}）——安員導入後有項目要人手決定
+      待答問題（{n}）——安員導入或者一鍵結算後有項目要人手決定
     </Notice>
   );
 }

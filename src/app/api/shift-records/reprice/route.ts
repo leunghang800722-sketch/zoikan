@@ -34,6 +34,7 @@ import { writeAudit } from "@/lib/audit";
 import { Conflict, NotFound } from "@/lib/api/errors";
 import { monthRange } from "@/lib/reports/money";
 import { fetchEffectiveRateCards, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
+import { journalAutoCardUses, type AutoCardUse } from "@/lib/pricing/auto-card-journal";
 import { decideReprice } from "@/lib/pricing/reprice";
 // 必修 2（Opus 第二輪驗收）：「未定价」口徑（response 嘅 `unpriced`／
 // `groups`）一律用同 `buildUnpricedSummary()`（GET /api/shift-records/
@@ -187,9 +188,11 @@ export async function POST(req: Request) {
     // 拗開。呢度嘅 `unpricedLookups` 結構同 `RepriceLookups` 一致
     // （`brokerKindById`／`shiftTypeCodeById`／`shiftTypeBillingGroupById`／
     // `siteGuardsPaidByClientById`），直接傳落去。
+    const sourcesById = new Map<string, { clientCardId?: string; payoutCardId?: string }>();
     for (const r of records) {
       const decision = decideReprice(r, unpricedLookups, cardsBySite.get(r.siteId) ?? [], "full");
       if (decision.keptUnresolved) keptUnresolvedCount++;
+      sourcesById.set(r.id, decision.sources ?? {});
 
       updates.push({ id: r.id, clientRate: decision.after.clientRate, guardWage: decision.after.guardWage, brokerFee: decision.after.brokerFee });
 
@@ -264,14 +267,16 @@ export async function POST(req: Request) {
     });
     for (let i = 0; i < changedUpdates.length; i += BATCH_SIZE) {
       const batch = changedUpdates.slice(i, i + BATCH_SIZE);
-      await prisma.$transaction(
-        batch.map((u) =>
-          prisma.shiftRecord.update({
-            where: { id: u.id },
-            data: { clientRateSnapshot: u.clientRate, guardWageSnapshot: u.guardWage, brokerFeeSnapshot: u.brokerFee },
-          }),
-        ),
-      );
+      const recById = new Map(records.map((r) => [r.id, r]));
+      // N4：用到 auto 卡嘅更同價一齊補寫 journal（同一 transaction）
+      const uses: AutoCardUse[] = batch.map((u) => {
+        const r = recById.get(u.id)!;
+        return { recordId: u.id, before: [numOrNull(r.clientRateSnapshot), numOrNull(r.guardWageSnapshot), numOrNull(r.brokerFeeSnapshot)], after: [u.clientRate, u.guardWage, u.brokerFee], ...(sourcesById.get(u.id) ?? {}) };
+      });
+      await prisma.$transaction(async (tx) => {
+        for (const u of batch) await tx.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.clientRate, guardWageSnapshot: u.guardWage, brokerFeeSnapshot: u.brokerFee } });
+        await journalAutoCardUses(uses, tx);
+      }, { timeout: 120_000, maxWait: 10_000 });
     }
 
     // audit：after 含全部 changed 記錄嘅 {id, before, after}（可逆）——

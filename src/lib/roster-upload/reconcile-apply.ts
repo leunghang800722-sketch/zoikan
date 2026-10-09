@@ -23,6 +23,7 @@ import { assertMonthNotLocked, monthStart as toMonthStart } from "@/lib/month-lo
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { resolveShiftPricing, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
+import { journalAutoCardUses } from "@/lib/pricing/auto-card-journal";
 import { reconcileUpload, type ReconcileCategory, type ReconcileItem } from "./reconcile";
 
 export type ReconcileDecisionAction = "apply_roster" | "keep_system" | "exception";
@@ -44,7 +45,7 @@ export interface ReconcileActionResult {
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
-type Pricing = { clientRate: number | null; guardWage: number | null; brokerFee: number | null };
+type Pricing = { clientRate: number | null; guardWage: number | null; brokerFee: number | null; sources?: { clientCardId?: string; payoutCardId?: string } };
 
 /** 驗收修正（Opus 5.5，2026-09-24）：`writeAudit()` 用外層 `prisma`
  * 寫，唔喺 transaction 入面——所以一律喺 transaction 入面收集，commit
@@ -110,7 +111,7 @@ async function computeRosterPricing(ctx: WriteContext, roster: NonNullable<Recon
     // 淨係 recordType==="ot" 先有意義）。
     otHours: recordType === "ot" ? (roster.hours ?? null) : null,
   });
-  return { clientRate: resolved.clientRate, guardWage: resolved.guardWage, brokerFee: resolved.brokerFee };
+  return { clientRate: resolved.clientRate, guardWage: resolved.guardWage, brokerFee: resolved.brokerFee, sources: resolved.source };
 }
 
 /** roster_only／guard_diff／shift_type_diff 嘅「喺更表嗰個 key 度
@@ -160,9 +161,12 @@ async function upsertRosterShiftRecord(
     brokerFeeSnapshot: pricing.brokerFee,
   };
 
+  const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number((v as { toString(): string }).toString()));
+  const afterTuple: [number | null, number | null, number | null] = [pricing.clientRate, pricing.guardWage, pricing.brokerFee];
   if (existing) {
     const updated = await tx.shiftRecord.update({ where: { id: existing.id }, data });
     audits.push({ tableName: "shift_records", rowId: updated.id, action: "update", before: existing, after: updated });
+    await journalAutoCardUses([{ recordId: updated.id, before: [num(existing.clientRateSnapshot), num(existing.guardWageSnapshot), num(existing.brokerFeeSnapshot)], after: afterTuple, ...pricing.sources }], tx);
     return updated.id;
   }
 
@@ -170,6 +174,7 @@ async function upsertRosterShiftRecord(
     data: { ...data, workDate: workDateObj, shiftTypeId: roster.shiftTypeId, guardId: roster.guardId, createdBy: actorUserId },
   });
   audits.push({ tableName: "shift_records", rowId: created.id, action: "create", after: created });
+  await journalAutoCardUses([{ recordId: created.id, before: [null, null, null], after: afterTuple, ...pricing.sources }], tx);
   return created.id;
 }
 
@@ -458,6 +463,10 @@ async function applyOneRosterAction(tx: Tx, ctx: WriteContext, plan: Plan, actor
         },
       });
       audits.push({ tableName: "shift_records", rowId: system.id, action: "update", before, after });
+      if (plan.pricing) {
+        const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number((v as { toString(): string }).toString()));
+        await journalAutoCardUses([{ recordId: system.id, before: [num(before.clientRateSnapshot), num(before.guardWageSnapshot), num(before.brokerFeeSnapshot)], after: [plan.pricing.clientRate, plan.pricing.guardWage, plan.pricing.brokerFee], ...plan.pricing.sources }], tx);
+      }
       return [system.id];
     }
     default:

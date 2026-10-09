@@ -12,6 +12,7 @@ import { snakeToCamelShallow } from "@/lib/api/case";
 import { ShiftRecordUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
+import { journalAutoCardUsesSafe, toNum } from "@/lib/pricing/auto-card-journal";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards, OT_HOURLY_PRICING_FROM, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
 import type { Prisma } from "@prisma/client";
 
@@ -103,6 +104,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         "改 ot_hours 同時要帶 client_rate_snapshot／guard_wage_snapshot／broker_fee_snapshot 就要三個一齊帶，唔可以淨帶其中一兩個。",
       );
     }
+    let otPricingSource: { clientCardId?: string; payoutCardId?: string } = {};
     if (otReconsiderApplies && !allPricingFieldsProvided) {
       const effectiveShiftTypeId = parsed.shift_type_id ?? before.shiftTypeId;
       const [shiftType, broker] = await Promise.all([
@@ -124,6 +126,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         otHours: Number(parsed.ot_hours),
       });
 
+      otPricingSource = pricing.source;
       // 收客價：獨立判斷。
       if (pricing.clientCardFound) {
         data.clientRateSnapshot = pricing.clientRate;
@@ -144,6 +147,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     const after = await prisma.shiftRecord.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: id, action: "update", before, after, ip: getClientIp(req) });
+    if (otPricingSource.clientCardId || otPricingSource.payoutCardId) {
+      await journalAutoCardUsesSafe([{ recordId: id, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...otPricingSource }]);
+    }
     return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(after)));
   });
 }

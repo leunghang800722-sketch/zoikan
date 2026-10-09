@@ -11,6 +11,7 @@ import { writeAudit } from "@/lib/audit";
 import { Conflict, NotFound } from "@/lib/api/errors";
 // WP-PRICE：批核嗰陣如果 snapshot 仲係 null（雞頭自己開嗰陣可能重計唔到
 // ——例如嗰陣仲未有對應卡），呢度補計一次先至 confirm，唔准帶住 0 過主。
+import { journalAutoCardUsesSafe, toNum } from "@/lib/pricing/auto-card-journal";
 import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -30,6 +31,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
     // 盤嘅保安員由客戶直接出糧——就算將來有人誤加通用價目卡都唔可以
     // 喺呢度補計，見 batch/route.ts、reprice/route.ts 同一個 gate。
+    let pricingSource: { clientCardId?: string; payoutCardId?: string } = {};
     const pricingSite = await prisma.site.findUnique({ where: { id: before.siteId }, select: { guardsPaidByClient: true } });
     if (!pricingSite?.guardsPaidByClient && (before.clientRateSnapshot === null || before.guardWageSnapshot === null || before.brokerFeeSnapshot === null)) {
       const [brokerForPricing, shiftTypeForPricing] = await Promise.all([
@@ -49,6 +51,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         // WP-BOSS5 §25.1：OT 卡＝每小時价。
         otHours: before.otHours !== null ? Number(before.otHours) : null,
       });
+      pricingSource = pricing.source;
       if (before.clientRateSnapshot === null) data.clientRateSnapshot = pricing.clientRate;
       if (before.guardWageSnapshot === null) data.guardWageSnapshot = pricing.guardWage;
       if (before.brokerFeeSnapshot === null) data.brokerFeeSnapshot = pricing.brokerFee;
@@ -56,6 +59,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     const after = await prisma.shiftRecord.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: id, action: "update", before, after, ip: getClientIp(req) });
+    await journalAutoCardUsesSafe([{ recordId: id, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...pricingSource }]);
     return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(after)));
   });
 }

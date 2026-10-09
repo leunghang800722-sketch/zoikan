@@ -2,6 +2,8 @@
 // 定義——`month_close_runs.steps_json`／`report_json` 嘅契約，`src/lib/
 // month-close/one-click.ts`（job 邏輯）同 API route／頁面共用同一份型別。
 //
+import type { AutoReport } from "./auto/types";
+
 // 鐵則：呢度嘅 `warnings`／`needsHuman` 一律唔准帶姓名／工號／電話——
 // 淨係盤名／雞頭代號／數目（同 `guard-fix/plan.ts` needsBoss「盤＋格數
 // ＋原因」一致紀律），因為 `report_json` 經「一鍵結算」module 嘅 view
@@ -13,6 +15,7 @@ export const STEP_KEYS = [
   "guard_fix",
   "longterm_settlement",
   "reconcile_apply",
+  "auto_pricing",
   "pricing_check",
   "compute",
   "postorder_compare",
@@ -26,6 +29,7 @@ export const STEP_LABELS: Record<StepKey, string> = {
   guard_fix: "安員修復",
   longterm_settlement: "長工結算",
   reconcile_apply: "全月對數套用",
+  auto_pricing: "自動歸屬／定價",
   pricing_check: "定價檢查",
   compute: "計數",
   postorder_compare: "對照（可選）",
@@ -69,7 +73,16 @@ export interface MonthCloseReport {
   payrollByBroker: Array<{ brokerCode: string; brokerName: string; shifts: number; amount: number }>;
   siteRevenue: Array<{ siteId: string; siteName: string; shifts: number; revenue: number }>;
   referralFee: { total: number; count: number };
-  unpriced: { count: number; payoutCount: number; clientCount: number; noSettlementCount: number; otUnpricedCount: number };
+  unpriced: {
+    count: number;
+    payoutCount: number;
+    clientCount: number;
+    noSettlementCount: number;
+    otUnpricedCount: number;
+    /** WP-ONE-CLICK-AUTO §31.3 C：未定價更數／估算缺口——報告唔准將未定價當 0 成本，分開列。
+     * 估算用同盤同更種最近已知卡價，淨係提示，唔入任何金額表。 */
+    gap?: { records: number; clientGapEstimate: number | null; payoutGapEstimate: number | null; noReferenceRecords: number } | null;
+  };
   postorderCompare: {
     uploaded: boolean;
     referralExcelTotal: number | null;
@@ -95,6 +108,8 @@ export interface MonthCloseReport {
   // §21 任務 5a（老闆定案，§16.2 第一層口徑）：合併成本摘要——更次成本／
   // 長工 Autopay／介紹費／合計／MPF ER（另列，唔入合計）。淨係 2026-08
   // 起有值，7 月（或更早）恆 null（同 `longtermPayroll` 一致嘅月份閘）。
+  /** WP-ONE-CLICK-AUTO §31.3 E：自動處理摘要＋要你睇＋撤銷狀態（舊 run 冇）。 */
+  auto?: AutoReport;
   combinedCostSummary: {
     perShiftCostTotal: number;
     referralFeeTotal: number;

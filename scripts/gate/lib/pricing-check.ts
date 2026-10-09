@@ -215,6 +215,7 @@ export async function runPricingJulyGate(databaseUrl?: string): Promise<PricingG
         billingModel: c.billingModel,
         effectiveFrom: c.effectiveFrom,
         effectiveTo: c.effectiveTo,
+        source: c.source,
       };
       const list = cardsBySite.get(c.siteId) ?? [];
       list.push(lite);

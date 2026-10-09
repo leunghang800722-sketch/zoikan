@@ -3,7 +3,7 @@
 import { z } from "zod";
 import type { PackagePerson } from "@/lib/guards/import/package";
 
-export const SOURCE_TYPES = ["guard_import", "roster_upload"] as const;
+export const SOURCE_TYPES = ["guard_import", "roster_upload", "month_close"] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
 export const QUESTION_KINDS = [
@@ -25,6 +25,13 @@ export const QUESTION_KINDS = [
   "bank_review", // 銀行欄 review／衝突（包括 bank_copy_disagrees）——重要層，要銀行資料權限
   "bank_identity_unknown", // Payroll Editor 有戶口但對唔到人——重要層，要銀行資料權限
   "other_review",
+  // WP-ONE-CLICK-AUTO §31.3 E：一鍵結算自我修復——propose／unknown 項目入分診，預填建議答案，一撳確認
+  "month_close_site_alias", // 更表盤名似現有盤（propose）
+  "month_close_site_new", // 新盤冇價可推
+  "month_close_pricing", // 未定價（候選價／冇依據）
+  "month_close_settlement", // 冇結算雞頭
+  "month_close_guard_match", // 安員配對要核實
+  "month_close_shift_variance", // 更數差異解釋唔到
 ] as const;
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 
@@ -46,6 +53,12 @@ export const KIND_LABEL: Record<QuestionKind, string> = {
   bank_review: "銀行資料待覆核",
   bank_identity_unknown: "收款戶口對唔到人",
   other_review: "要人手判斷",
+  month_close_site_alias: "更表盤名似現有盤",
+  month_close_site_new: "新盤冇價可推",
+  month_close_pricing: "未定價",
+  month_close_settlement: "冇結算雞頭",
+  month_close_guard_match: "安員配對要核實",
+  month_close_shift_variance: "更數差異解釋唔到",
 };
 
 /** 一題入面可揀嘅選項 id。`skip` 永遠有，唔經 apply。 */
@@ -63,6 +76,12 @@ export const OPTION_IDS = [
   "apply_ext_fields", // 新欄逐欄決定（用導入值／保留現值／跳過）
   "confirm_ext_identity", // 確認身份冇錯，照包內新欄寫入（只補空欄）
   "assign_bank", // 收款戶口歸邊個安員（bank_identity_unknown；要 guard_id）
+  // WP-ONE-CLICK-AUTO：month_close_* 題專用
+  "mc_accept", // 一撳確認預填建議答案
+  "mc_pick", // 揀指定候選（candidate_id）
+  "mc_new", // 當新盤（site_alias 題）
+  "mc_price", // 自己輸入價錢（pricing／site_new 題）
+  "mc_ack", // 我已覆核，冇問題（更數差異題）
   "skip", // 跳過，留返人手
 ] as const;
 export type OptionId = (typeof OPTION_IDS)[number];
@@ -129,6 +148,13 @@ export const answerSchema = z
     replace_existing: z.boolean().optional(),
     /** assign_bank：目標安員英文名同收款人唔夾／唔係長工 autopay 時，要額外確認「我確認呢個戶口屬於呢位保安員」 */
     confirm_identity: z.boolean().optional(),
+    /** month_close_*：揀咗邊個候選（evidence.candidates[].id） */
+    candidate_id: z.string().min(1).max(64).optional(),
+    /** month_close_pricing／site_new：自己輸入嘅價（元／更） */
+    price: z
+      .object({ client_rate: z.number().min(0).max(1_000_000).optional(), guard_wage: z.number().min(0).max(1_000_000).optional(), broker_fee: z.number().min(0).max(1_000_000).optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type TriageAnswer = z.infer<typeof answerSchema>;

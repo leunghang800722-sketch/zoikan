@@ -26,6 +26,7 @@
 //     唔郁**（驗收修正：7 月已過 gate，唔靠資料巧合保證）。兩種模式都一樣：`guardsPaidByClient` 嘅盤（LINK）
 //     完全唔郁。
 import { prisma } from "@/lib/db";
+import { journalAutoCardUses, type AutoCardUse } from "./auto-card-journal";
 import { writeAudit } from "@/lib/audit";
 import { monthRange } from "@/lib/reports/money";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards, LONGTERM_REFERRAL_AUTOCOMPUTE_FROM, type BrokerKindLike, type RateCardLite, type ShiftPricingRecordType } from "./resolve-rate";
@@ -74,6 +75,8 @@ export interface RepriceDecision {
    * （唔係本身就係 null）。fill_and_fix_b07 模式一律 false（呢個模式
    * 嘅「保留」係故意、唔算「搵唔到」）。 */
   keptUnresolved: boolean;
+  /** N4：resolver 用到嘅價卡 id（auto 卡 journal 用）。 */
+  sources?: { clientCardId?: string; payoutCardId?: string };
 }
 
 export function numOrNull(v: unknown): number | null {
@@ -155,7 +158,7 @@ export function decideReprice(record: RepriceRecordInput, lookups: RepriceLookup
 
   const after: RepriceValues = { clientRate: afterClient, guardWage: afterWage, brokerFee: afterFee };
   const changed = !(sameRepriceValue(before.clientRate, after.clientRate) && sameRepriceValue(before.guardWage, after.guardWage) && sameRepriceValue(before.brokerFee, after.brokerFee));
-  return { id: record.id, before, after, changed, keptUnresolved };
+  return { id: record.id, before, after, changed, keptUnresolved, sources: pricing.source };
 }
 
 const BATCH_SIZE = 500;
@@ -221,16 +224,23 @@ export async function repriceMonthForSites(month: Date, siteIds: string[], actor
   const cardsBySite = new Map(cardsEntries);
 
   const changedUpdates: Array<{ id: string; clientRate: number | null; guardWage: number | null; brokerFee: number | null }> = [];
+  const journalUses: AutoCardUse[] = [];
   for (const r of records) {
     const decision = decideReprice({ ...r, recordType: r.recordType === "ot" ? "ot" : "shift" }, lookups, cardsBySite.get(r.siteId) ?? [], "fill_and_fix_b07");
-    if (decision.changed) changedUpdates.push({ id: r.id, clientRate: decision.after.clientRate, guardWage: decision.after.guardWage, brokerFee: decision.after.brokerFee });
+    if (decision.changed) {
+      changedUpdates.push({ id: r.id, clientRate: decision.after.clientRate, guardWage: decision.after.guardWage, brokerFee: decision.after.brokerFee });
+      journalUses.push({ recordId: r.id, before: [decision.before.clientRate, decision.before.guardWage, decision.before.brokerFee], after: [decision.after.clientRate, decision.after.guardWage, decision.after.brokerFee], ...decision.sources });
+    }
   }
 
+  // N4：寫價同補寫 auto 卡 journal 放同一個 transaction（同生同死）。
   for (let i = 0; i < changedUpdates.length; i += BATCH_SIZE) {
     const batch = changedUpdates.slice(i, i + BATCH_SIZE);
-    await prisma.$transaction(
-      batch.map((u) => prisma.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.clientRate, guardWageSnapshot: u.guardWage, brokerFeeSnapshot: u.brokerFee } })),
-    );
+    const uses = journalUses.slice(i, i + BATCH_SIZE);
+    await prisma.$transaction(async (tx) => {
+      for (const u of batch) await tx.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.clientRate, guardWageSnapshot: u.guardWage, brokerFeeSnapshot: u.brokerFee } });
+      await journalAutoCardUses(uses, tx);
+    }, { timeout: 120_000, maxWait: 10_000 });
   }
 
   if (changedUpdates.length > 0) {

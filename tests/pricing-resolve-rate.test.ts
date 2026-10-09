@@ -26,6 +26,7 @@ function card(overrides: Partial<RateCardLite>): RateCardLite {
     billingModel: "per_shift",
     effectiveFrom: new Date(Date.UTC(2026, 6, 1)),
     effectiveTo: null,
+    source: null,
     ...overrides,
   };
 }

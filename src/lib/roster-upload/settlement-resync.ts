@@ -19,6 +19,7 @@
 // 鏈（`resolveSettlementBrokerFallback`）唔喺呢度重跑，避免引入新嘅
 // 行為變動風險。
 import type { Prisma } from "@prisma/client";
+import { journalAutoCardUses } from "@/lib/pricing/auto-card-journal";
 import { prisma } from "@/lib/db";
 import { monthStart as toMonthStart } from "@/lib/month-lock";
 import { writeAuditTx } from "@/lib/audit";
@@ -111,7 +112,7 @@ export async function recomputeSettlement(uploadId: string, actorUserId: string 
     settlementBrokerId: string | null;
     operationalBrokerId: string | null;
     /** null＝唔郁 snapshot（LINK 盤／leave／PR 佔位，同 reconcile-apply 一致）。 */
-    pricing: { clientRateSnapshot: number | null; guardWageSnapshot: number | null; brokerFeeSnapshot: number | null } | null;
+    pricing: { clientRateSnapshot: number | null; guardWageSnapshot: number | null; brokerFeeSnapshot: number | null; sources?: { clientCardId?: string; payoutCardId?: string } } | null;
   }[] = [];
   const brokerKindById = new Map<string, BrokerKindLike>((await prisma.broker.findMany({ select: { id: true, kind: true } })).map((b) => [b.id, b.kind as BrokerKindLike]));
 
@@ -168,7 +169,7 @@ export async function recomputeSettlement(uploadId: string, actorUserId: string 
         // WP-BOSS5 §25.1：OT 卡＝每小時价，要傳呢條記錄本身嘅 OT 時數。
         otHours: numOrNull(r.otHours),
       });
-      pricing = { clientRateSnapshot: resolved.clientRate, guardWageSnapshot: resolved.guardWage, brokerFeeSnapshot: resolved.brokerFee };
+      pricing = { clientRateSnapshot: resolved.clientRate, guardWageSnapshot: resolved.guardWage, brokerFeeSnapshot: resolved.brokerFee, sources: resolved.source };
     }
     changes.push({
       shiftRecordId: r.id,
@@ -187,12 +188,17 @@ export async function recomputeSettlement(uploadId: string, actorUserId: string 
     for (const u of updates) {
       const sel = { id: true, settlementBrokerId: true, operationalBrokerId: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true } as const;
       const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: u.id }, select: sel });
+      const { sources: pricingSources, ...pricingData } = u.pricing ?? {};
       const after = await tx.shiftRecord.update({
         where: { id: u.id },
-        data: { settlementBrokerId: u.settlementBrokerId, operationalBrokerId: u.operationalBrokerId, ...(u.pricing ?? {}) },
+        data: { settlementBrokerId: u.settlementBrokerId, operationalBrokerId: u.operationalBrokerId, ...pricingData },
         select: sel,
       });
       await writeAuditTx(tx, { actorUserId, tableName: "shift_records", rowId: u.id, action: "update", before, after, ip: null });
+      if (u.pricing) {
+        const nn = (v: unknown): number | null => (v === null || v === undefined ? null : Number((v as { toString(): string }).toString()));
+        await journalAutoCardUses([{ recordId: u.id, before: [nn(before.clientRateSnapshot), nn(before.guardWageSnapshot), nn(before.brokerFeeSnapshot)], after: [nn(after.clientRateSnapshot), nn(after.guardWageSnapshot), nn(after.brokerFeeSnapshot)], ...pricingSources }], tx);
+      }
     }
   }, { timeout: 120_000, maxWait: 10_000 });
 

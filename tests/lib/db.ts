@@ -23,6 +23,11 @@ export async function clearAll() {
   // granted 值會俾測試改（例如 tests/wp2-roles-permissions-endpoint.
   // test.ts 開一格 off→on）——所以呢度每次都刪晒再照出廠矩陣重種一次，
   // 保證每個 test 開始都係出廠設定，唔會俾第啲 test file 嘅改動漏過嚟。
+  await prisma.monthCloseAutoChange.deleteMany({}); // WP-ONE-CLICK-AUTO：自動改動流水帳（FK 落 month_close_runs）
+  await prisma.reconcileAllRun.deleteMany({}); // 唔好令前一個 test 檔留低嘅 running 對數 run 擋住下一個
+  await prisma.monthCloseRun.deleteMany({});
+  await prisma.triageQuestion.deleteMany({ where: { session: { sourceType: "month_close" } } }); // WP-ONE-CLICK-AUTO 分診題（唔跨檔累積）
+  await prisma.triageSession.deleteMany({ where: { sourceType: "month_close" } });
   await prisma.triagePersonApply.deleteMany({}); // 分診「最近一次包含呢個人」記錄（append 式）：每個 test 清走，唔好跨檔累積
   await prisma.rolePermission.deleteMany({});
   const roles = await prisma.role.findMany();
@@ -56,6 +61,7 @@ export async function clearAll() {
   // 驗收（Opus 5.5）：Postorder 上載／guard-fix run 會影響「本月 Postorder
   // 係咪生效」同介紹費費率同步——測試之間要清，唔好互相污染。
   await prisma.guardFixRun.deleteMany({});
+  await prisma.staffListUpload.deleteMany({}); // 名單上載（FK 落 users；guard_fix_runs 先刪），唔跨檔累積
   await prisma.postorderUpload.deleteMany({});
   await prisma.shiftRecord.updateMany({ data: { parentShiftId: null } });
   await prisma.shiftRecord.deleteMany({});

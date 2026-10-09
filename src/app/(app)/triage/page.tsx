@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
 import { TriageDialog } from "@/components/TriageDialog";
+import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 
 interface SessionRow {
@@ -27,7 +28,7 @@ interface ListRes {
   eligible_owners: { id: string; name: string; role_name: string }[];
 }
 
-const SOURCE_LABEL: Record<string, string> = { guard_import: "安員證件資料導入", roster_upload: "更表上載" };
+const SOURCE_LABEL: Record<string, string> = { guard_import: "安員證件資料導入", roster_upload: "更表上載", month_close: "一鍵結算（要你睇）" };
 
 export default function TriagePage() {
   const router = useRouter();
@@ -68,7 +69,7 @@ export default function TriagePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader kicker="主檔" title="待答問題" subtitle="安員證件資料導入後，系統唔肯自動決定嘅項目——逐條答，答完先寫入（會先俾你睇影響）。" />
+      <PageHeader kicker="主檔" title="待答問題" subtitle="安員證件資料導入／一鍵結算後，系統唔肯自動決定嘅項目——逐條答，答完先寫入（一鍵結算嘅題預填建議答案，一撳確認）。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       {isBossView && (
@@ -121,7 +122,18 @@ export default function TriagePage() {
           </div>
         ))}
       </div>
-      {openId && (
+      {openId && data?.sessions.find((s) => s.id === openId)?.source_type === "month_close" && (
+        <MonthCloseTriageDialog
+          sessionId={openId}
+          onClose={() => {
+            setOpenId(null);
+            router.refresh();
+            void load();
+          }}
+          onChanged={() => void load()}
+        />
+      )}
+      {openId && data?.sessions.find((s) => s.id === openId)?.source_type !== "month_close" && (
         <TriageDialog
           sessionId={openId}
           onClose={() => {
