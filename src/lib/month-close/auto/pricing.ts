@@ -9,6 +9,8 @@
 // `auto` 即建卡（effective_from＝本月 1 號，source＝auto:one-click:<runId>，evidence 寫來源）
 // 並只對呢組未定價記錄補價（targeted reprice，唔郁已有價）。卡金額一定等於來源值
 // （上月卡／Postorder／同類卡），絕不平均、絕不估。OT 更種淨係配掛住同一個 OT 更種嘅卡（§20 規矩）。
+// 注意（有意為之）：分診建嘅卡（source＝`triage:*`）維持主線行為——客價喺 resolver 內可以跨雞頭 fallback；
+// 只有 `auto:one-click:*` 卡先限制雞頭。呢個係刻意設計，唔好改。
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { monthRange, n, round2 } from "@/lib/reports/money";
@@ -358,19 +360,34 @@ export async function createCardAndPrice(
   const cardBrokerId = input.generic ? null : input.group.brokerId;
   const overlap = { effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] };
   const isAutoWriter = writer.source.startsWith("auto:one-click:");
-  const dup = await db.rateCard.findFirst({
-    where: {
-      siteId: input.group.siteId,
-      shiftTypeId: input.group.shiftTypeId,
-      brokerId: cardBrokerId,
-      guardId: null,
-      voidedAt: null,
-      ...overlap,
-      ...(isAutoWriter
-        ? { source: { startsWith: "auto:one-click:" }, OR: overlap.OR }
-        : { source: writer.source, clientRate: dec(v.clientRate), guardWage: dec(v.guardWage), brokerFee: dec(v.brokerFee), payoutRate: dec(v.payoutRate) }),
-    },
-  });
+  let dup: { id: string } | null = null;
+  if (isAutoWriter) {
+    // N3：跨 run 重用自動卡之前，要確認舊卡「覆蓋成個月」而且「有齊 need 嘅欄」；唔夠就唔重用，
+    // 亦唔再疊一張重疊嘅新卡（resolver 揀邊張會不明確）→ 拋錯，由 runAutoPricing 改入分診題。
+    const cands = await db.rateCard.findMany({
+      where: { siteId: input.group.siteId, shiftTypeId: input.group.shiftTypeId, brokerId: cardBrokerId, guardId: null, voidedAt: null, ...overlap, source: { startsWith: "auto:one-click:" } },
+    });
+    const num = (x: Prisma.Decimal | null) => (x === null ? null : Number(x.toString()));
+    const covering = cands.find((c) => c.effectiveFrom <= start && (c.effectiveTo === null || c.effectiveTo >= end) && coversNeed({ clientRate: num(c.clientRate), guardWage: num(c.guardWage), brokerFee: num(c.brokerFee), payoutRate: num(c.payoutRate) }, input.need));
+    if (covering) dup = covering;
+    else if (cands.length > 0) throw new Error("本月已有 auto 價卡但欄位唔齊或者冇覆蓋成個月，改入分診");
+  } else {
+    dup = await db.rateCard.findFirst({
+      where: {
+        siteId: input.group.siteId,
+        shiftTypeId: input.group.shiftTypeId,
+        brokerId: cardBrokerId,
+        guardId: null,
+        voidedAt: null,
+        ...overlap,
+        source: writer.source,
+        clientRate: dec(v.clientRate),
+        guardWage: dec(v.guardWage),
+        brokerFee: dec(v.brokerFee),
+        payoutRate: dec(v.payoutRate),
+      },
+    });
+  }
   if (dup) {
     const r = await repriceMonth(writer, input.month, input.group, input.need, dup.id, { overwriteAuto: input.overwriteAuto, db });
     return { cardId: dup.id, ...r, reusedCard: true };
@@ -422,15 +439,24 @@ async function repriceMonth(writer: ChangeWriter, month: Date, group: PricingGro
   return { recordsPriced: total, overwrittenAuto: over, skippedHasPrice: skipped };
 }
 
-/** 逐更 journal 入面「系統自動填過」嘅現值：recordId → 當時填入嘅 [客價, 工資, 雞頭費]（取最新一次）。 */
-async function loadAutoFilled(db: Db, month: Date, ids: string[]): Promise<Map<string, [number | null, number | null, number | null]>> {
-  const out = new Map<string, [number | null, number | null, number | null]>();
+type AutoFilledEntry = { client?: number | null; payout?: [number | null, number | null] };
+/** 逐更 journal 入面「系統自動填過」嘅現值，逐欄記（N2）：recordId → { client?, payout? }，每欄取**最新一次 applied** 記錄。
+ * 只計 status=applied（N1：undo 咗嘅唔算，否則 undo 後人手價會畀 overwriteAuto 覆蓋）。 */
+async function loadAutoFilled(db: Db, month: Date, ids: string[]): Promise<Map<string, AutoFilledEntry>> {
+  const out = new Map<string, AutoFilledEntry>();
   if (ids.length === 0) return out;
   const want = new Set(ids);
-  const changes = await db.monthCloseAutoChange.findMany({ where: { kind: "price_snapshots", run: { month } }, orderBy: { createdAt: "asc" }, select: { detailJson: true } });
+  const changes = await db.monthCloseAutoChange.findMany({ where: { kind: "price_snapshots", status: "applied", run: { month } }, orderBy: { createdAt: "asc" }, select: { detailJson: true } });
   for (const c of changes) {
-    const rows = ((c.detailJson as { rows?: Array<{ id: string; after: [number | null, number | null, number | null] }> }).rows ?? []);
-    for (const r of rows) if (want.has(r.id)) out.set(r.id, r.after);
+    const rows = ((c.detailJson as { rows?: Array<{ id: string; fields?: string[]; after: [number | null, number | null, number | null] }> }).rows ?? []);
+    for (const r of rows) {
+      if (!want.has(r.id)) continue;
+      const fields = r.fields && r.fields.length > 0 ? r.fields : ["client", "payout"];
+      const e = out.get(r.id) ?? {};
+      if (fields.includes("client")) e.client = r.after[0];
+      if (fields.includes("payout")) e.payout = [r.after[1], r.after[2]];
+      out.set(r.id, e);
+    }
   }
   return out;
 }
@@ -459,7 +485,7 @@ export async function applyCardToRecords(
   if (records.length === 0) return { changed: 0, overwritten: 0, skippedHasPrice: 0 };
   const brokers = await db.broker.findMany({ where: { id: { in: [...new Set(records.map((r) => r.settlementBrokerId).filter((x): x is string => !!x))] } }, select: { id: true, kind: true } });
   const kindById = new Map(brokers.map((b) => [b.id, b.kind as BrokerKindLike]));
-  const autoFilled = opts.overwriteAuto ? await loadAutoFilled(db, month, records.map((r) => r.id)) : new Map<string, [number | null, number | null, number | null]>();
+  const autoFilled = opts.overwriteAuto ? await loadAutoFilled(db, month, records.map((r) => r.id)) : new Map<string, AutoFilledEntry>();
   const changes: Array<{ id: string; cardId: string; fields: string[]; before: [number | null, number | null, number | null]; after: [number | null, number | null, number | null] }> = [];
   let overwritten = 0;
   let skippedHasPrice = 0;
@@ -483,8 +509,8 @@ export async function applyCardToRecords(
     const f0 = numOrNull(r.brokerFeeSnapshot);
     const af = autoFilled.get(r.id) ?? null;
     // 現值仍然等於系統自動填入嘅值 → 可以覆蓋；否則（人手價或其他來源）絕不覆蓋。
-    const clientAuto = af !== null && c0 !== null && sameRepriceValue(c0, af[0]);
-    const payoutAuto = af !== null && w0 !== null && sameRepriceValue(w0, af[1]) && sameRepriceValue(f0, af[2]);
+    const clientAuto = af?.client !== undefined && c0 !== null && sameRepriceValue(c0, af.client);
+    const payoutAuto = af?.payout !== undefined && w0 !== null && sameRepriceValue(w0, af.payout[0]) && sameRepriceValue(f0, af.payout[1]);
     let c1 = c0;
     let w1 = w0;
     let f1 = f0;
@@ -603,6 +629,12 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
     result.skippedReason = "2026-08 之前嘅月份唔做自動定價";
     return result;
   }
+  // 雙重保險：鎖定月份一律唔郁（createCardAndPrice 內亦有檢查）。
+  const lockedRow = await prisma.monthClose.findUnique({ where: { month: start } });
+  if (lockedRow?.lockedAt) {
+    result.skippedReason = "本月已鎖定，唔做自動定價";
+    return result;
+  }
   // rerun：呢個 run 較早（第一次執行）建嘅新盤要記得（site_new 題型靠佢，否則 rerun 題型會變）。
   if (ctx.runId) {
     for (const c of await prisma.monthCloseAutoChange.findMany({ where: { runId: ctx.runId, kind: "site_created" }, select: { refId: true } })) if (c.refId) ctx.newSiteIds.add(c.refId);
@@ -646,7 +678,8 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
           generic: found.auto.generic,
         });
         env.cardsBySite.delete(agg.ref.siteId);
-        ctx.summary.cardsCreated++;
+        if (res.reusedCard && res.recordsPriced === 0) throw new Error("重用舊 auto 價卡但一更都補唔到價，改入分診");
+        if (!res.reusedCard) ctx.summary.cardsCreated++;
         ctx.summary.recordsPriced += res.recordsPriced;
         ctx.line("pricing", `盤「${site?.canonicalName ?? ""}」更種「${code}」${agg.ref.brokerId ? `雞頭 ${brokerLabel(agg.ref.brokerId)} ` : ""}${res.recordsPriced} 更自動定價（${describeValues(found.auto.values)}；${found.auto.evidence}）`);
         result.autoGroups++;

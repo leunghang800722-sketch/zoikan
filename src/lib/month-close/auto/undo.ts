@@ -20,6 +20,8 @@ export interface UndoAutoResult {
   skipped: Array<{ kind: string; summary: string; reason: string }>;
   alreadyUndone: boolean;
   supersededQuestions: number;
+  /** N4：undo 之後仍然帶住被作廢 auto 卡價錢嘅更數（journal 完整時應該係 0）。 */
+  stillUsingVoidedCardPrices: number;
 }
 
 export async function undoAutoChanges(runId: string, actorUserId: string, ip: string | null): Promise<UndoAutoResult> {
@@ -31,7 +33,7 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
 
   const changes = await prisma.monthCloseAutoChange.findMany({ where: { runId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
   const pending = changes.filter((c) => c.status === "applied" && c.undoable);
-  const result: UndoAutoResult = { runId, undone: {}, skipped: [], alreadyUndone: pending.length === 0 && changes.some((c) => c.status === "undone"), supersededQuestions: 0 };
+  const result: UndoAutoResult = { runId, undone: {}, skipped: [], alreadyUndone: pending.length === 0 && changes.some((c) => c.status === "undone"), supersededQuestions: 0, stillUsingVoidedCardPrices: 0 };
   const source = `undo:one-click:${runId}`;
   const audit = (tableName: string, rowId: string, action: "update" | "void" | "delete", before: unknown, after: unknown) =>
     writeAudit({ actorUserId, tableName, rowId, action, before, after: after && typeof after === "object" ? { ...(after as Record<string, unknown>), auto_source: source } : { auto_source: source }, ip });
@@ -62,14 +64,21 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
     const d = c.detailJson as Record<string, unknown>;
     switch (c.kind) {
       case "price_snapshots": {
-        const rows = (d.rows as Array<{ id: string; before: [number | null, number | null, number | null]; after: [number | null, number | null, number | null] }>) ?? [];
+        const rows = (d.rows as Array<{ id: string; fields?: string[]; before: [number | null, number | null, number | null]; after: [number | null, number | null, number | null] }>) ?? [];
         let restored = 0;
         for (const r of rows) {
           const cur = await prisma.shiftRecord.findUnique({ where: { id: r.id }, select: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true } });
           if (!cur) continue;
-          const same = sameRepriceValue(numOrNull(cur.clientRateSnapshot), r.after[0]) && sameRepriceValue(numOrNull(cur.guardWageSnapshot), r.after[1]) && sameRepriceValue(numOrNull(cur.brokerFeeSnapshot), r.after[2]);
-          if (!same) continue; // 之後被人手改過，唔郁
-          await prisma.shiftRecord.update({ where: { id: r.id }, data: { clientRateSnapshot: r.before[0], guardWageSnapshot: r.before[1], brokerFeeSnapshot: r.before[2] } });
+          // 逐欄還原（N2）：淨係 journal `fields` 列出嘅欄，而且現值仍然等於當時填入值先還原。
+          const fields = r.fields && r.fields.length > 0 ? r.fields : ["client", "payout"];
+          const data: { clientRateSnapshot?: number | null; guardWageSnapshot?: number | null; brokerFeeSnapshot?: number | null } = {};
+          if (fields.includes("client") && sameRepriceValue(numOrNull(cur.clientRateSnapshot), r.after[0])) data.clientRateSnapshot = r.before[0];
+          if (fields.includes("payout") && sameRepriceValue(numOrNull(cur.guardWageSnapshot), r.after[1]) && sameRepriceValue(numOrNull(cur.brokerFeeSnapshot), r.after[2])) {
+            data.guardWageSnapshot = r.before[1];
+            data.brokerFeeSnapshot = r.before[2];
+          }
+          if (Object.keys(data).length === 0) continue; // 之後被人手改過，唔郁
+          await prisma.shiftRecord.update({ where: { id: r.id }, data });
           restored++;
         }
         if (restored > 0) await audit("shift_records", `undo_price:${c.refId ?? c.id}`, "update", { rows: rows.length }, { restored, card_id: c.refId });
@@ -164,6 +173,24 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
       default:
         await skip(c, "呢類改動唔支援自動還原");
     }
+  }
+
+  // N4：核對——journal 入面記過嘅更，現值仍然等於 auto 卡填入值（即未還原到）嘅數目。
+  if (pending.length > 0) {
+    const stillUsing = new Set<string>();
+    for (const c of changes) {
+      if (c.kind !== "price_snapshots") continue;
+      const rows = ((c.detailJson as { rows?: Array<{ id: string; fields?: string[]; before: Array<number | null>; after: Array<number | null> }> }).rows ?? []);
+      for (const r of rows) {
+        const cur = await prisma.shiftRecord.findUnique({ where: { id: r.id }, select: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true } });
+        if (!cur) continue;
+        const fields = r.fields && r.fields.length > 0 ? r.fields : ["client", "payout"];
+        const clientStill = fields.includes("client") && r.after[0] !== null && !sameRepriceValue(r.before[0] ?? null, r.after[0]) && sameRepriceValue(numOrNull(cur.clientRateSnapshot), r.after[0]);
+        const payoutStill = fields.includes("payout") && r.after[1] !== null && !(sameRepriceValue(r.before[1] ?? null, r.after[1]) && sameRepriceValue(r.before[2] ?? null, r.after[2])) && sameRepriceValue(numOrNull(cur.guardWageSnapshot), r.after[1]) && sameRepriceValue(numOrNull(cur.brokerFeeSnapshot), r.after[2] ?? null);
+        if (clientStill || payoutStill) stillUsing.add(r.id);
+      }
+    }
+    result.stillUsingVoidedCardPrices = stillUsing.size;
   }
 
   // 呢個 run 嘅 open 分診題一律作廢（改動已還原，建議唔再成立）。

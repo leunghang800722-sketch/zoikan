@@ -72,6 +72,7 @@ export interface RosterUploadParseSummary {
   /** 表頭真日期範圍／日數（舊上載冇）。 */
   headerDateRange?: { min: string; max: string } | null;
   headerDays?: number;
+  headerDates?: string[];
   subSiteNames: string[];
   unmatchedGuardCount: number;
   ambiguousGuardCount: number;
@@ -447,6 +448,7 @@ async function matchRowsAndSummarize(
     dateRange: parseResult.dateRange,
     headerDateRange: parseResult.headerDateRange,
     headerDays: parseResult.headerDays,
+    headerDates: parseResult.headerDates,
     subSiteNames: parseResult.subSiteNames,
     unmatchedGuardCount,
     ambiguousGuardCount,

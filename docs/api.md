@@ -2385,3 +2385,13 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - **5 跨 run 防重複建卡**：本月同組合（盤×更種×雞頭，per_shift）已有任何有效 `auto:one-click:*` 卡（唔理邊個 run）就唔再建，重用並補價。
 - **6** 異體表刪走「邨/村」。**7** `resolveUploadSite`：exact／auto 對中有 >1 個子盤嘅母盤 → 降做 propose（同上載時一致）。
 - **順手**：並發 undo 逐項 claim（`undo_note: undoing`）；0 改動 undo 唔作廢 open 題；`applying` 題失敗退回原狀態（skipped 唔變 open）；新盤嘅定價題標題保留「新盤」；guard-fix `NeedsBossAction.code`（`staff_no_conflict` 等結構化碼），自動配對唔再靠 reason 字串；`guard-match.ts`／`variance.ts` 檔頭註解同實際一致；測試 `clearAll` 清 `reconcile_all_runs`／`month_close_runs`（避免跨檔 running 殘留）。
+
+### WP-ONE-CLICK-AUTO Opus 5.5 第三輪驗收修正（N1–N7＋側項）
+
+- **N1** `loadAutoFilled` 只計 `status=applied` 嘅 journal（undo 後人手價唔會畀 `overwriteAuto` 覆蓋）。**N2** overwriteAuto 逐欄：只用 journal `fields` 列出嘅欄，同一欄取最新 applied 記錄；undo 還原同樣按 `fields` 逐欄。
+- **N3** 跨 run 重用 `auto:one-click:*` 卡前要「覆蓋成個月＋有齊 need 欄」，否則拋錯、該組改入分診（唔疊重疊新卡）；重用舊卡但補唔到任何一更 → 一律降級入分診；`cardsCreated` 唔計重用。
+- **N4** reconcile-apply（create／update／settlement_diff）、`repriceMonthForSites`、settlement-resync 寫 price snapshot 時，若 resolver 用到 `auto:one-click:<runId>` 卡 → 補寫 `price_snapshots` journal（`src/lib/pricing/auto-card-journal.ts`，`detail.via=later_write`）去該 run；undo 仍然「只按 journal」，回應新增 `stillUsingVoidedCardPrices`（正常 0）。人手「重新計价」（`mode:full`）路徑唔喺此列。
+- **N5** parse_summary 新增 `headerDates`；variance 表頭覆蓋只數落喺上載月份內嘅日子（舊 summary 只有 range 時用 range∩月份）。**N6** 分診定價確認用 `pg_advisory_xact_lock`（盤×更種×雞頭×OT×月）串行；鎖內見到另一題已確認、價錢唔同嘅 `triage:*` 卡 → 409「已有人確認過另一個價」。
+- **N7** 舊上載截短用整數比較（缺日×5 ≥ 總日數；覆蓋差 ×5…）；無上月＋月尾缺 ≥20% 出資訊行；舊上載冇 headerDates 時 rerun 嘗試由原檔 bytes 重 parse 補寫，補唔到出資訊行叫重新上載；舊上載 `headerWarn` 唔再靜音。
+- **側項**：表頭完整但有警告併成一行列盤名；測試／註解假名；rerun 摘要卡／價數按 journal 累計；`RateCardLite.source` 必填；`runAutoPricing` 內鎖月雙保險；`pricing.ts` 檔頭註明分診卡客價跨雞頭 fallback 係刻意。
+- **已知限制（唔做）**：C2b 人手值剛好等於系統值會被覆蓋；C3b 摘要價可能同實際不同；E8d reclaim 理論上雙寫；7am–7pm 格未歸更種。

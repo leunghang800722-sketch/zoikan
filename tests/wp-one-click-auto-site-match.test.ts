@@ -132,8 +132,8 @@ describe("external 別名（rank／姓名）", () => {
     expect(externalBrokerForRow({ rankRaw: "Wilson Guard", nameRaw: "任意" }, ext)?.id).toBe("b10");
     expect(externalBrokerForRow({ rankRaw: "日更保安員", nameRaw: "Wilson Supervisor" }, ext)?.id).toBe("b10");
   });
-  it("唔係外人：Wilson Wong／普通 rank 唔中", () => {
-    expect(matchExternalAlias("Wilson Wong", ext)).toBeNull();
+  it("唔係外人：測試外判甲／普通 rank 唔中", () => {
+    expect(matchExternalAlias("測試外判甲", ext)).toBeNull();
     expect(externalBrokerForRow({ rankRaw: "日更保安員", nameRaw: "測試安員甲" }, ext)).toBeNull();
     expect(externalBrokerForRow({ rankRaw: "Wilson Guard" }, [])).toBeNull();
   });

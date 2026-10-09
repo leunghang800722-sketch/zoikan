@@ -108,6 +108,8 @@ export interface ParseSuccess {
   /** 表頭真日期範圍／日數（所有分頁聯集）——WP-ONE-CLICK-AUTO 截短判斷用。 */
   headerDateRange: { min: string; max: string } | null;
   headerDays: number;
+  /** N5：表頭所有真日期（ISO，排序）——variance 只數落喺上載月份內嘅日子。 */
+  headerDates: string[];
   subSiteNames: string[];
   /** Phase B-0：全檔由橫向合併格展開出嚟嘅格數總和。 */
   mergedExpandedCount: number;
@@ -536,6 +538,7 @@ export async function parseRosterWorkbook(buffer: Buffer | ArrayBuffer, fileName
     dateRange: dateMin && dateMax ? { min: dateMin, max: dateMax } : null,
     headerDateRange: headerSorted.length ? { min: headerSorted[0]!, max: headerSorted[headerSorted.length - 1]! } : null,
     headerDays: headerSorted.length,
+    headerDates: headerSorted,
     subSiteNames: [...subSiteNames],
     mergedExpandedCount: sheets.reduce((sum, s) => sum + s.mergedExpandedCount, 0),
     warnings,

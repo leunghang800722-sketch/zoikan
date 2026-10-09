@@ -758,6 +758,18 @@ export async function stepAutoPricing(month: Date, actorUserId: string, auto?: A
   }
   const settlement = await runAutoSettlement(ctx, start);
   const pricing = await runAutoPricing(ctx, start);
+  // 側項 3：rerun 時本次冇新建卡／補價，摘要改按 journal 顯示呢個 run 嘅累計數。
+  if (ctx.runId) {
+    const jr = await prisma.monthCloseAutoChange.findMany({ where: { runId: ctx.runId, status: "applied", kind: { in: ["rate_card_created", "price_snapshots"] } }, select: { kind: true, detailJson: true } });
+    const priced = new Set<string>();
+    let cards = 0;
+    for (const j of jr) {
+      if (j.kind === "rate_card_created") cards++;
+      else for (const r of ((j.detailJson as { rows?: Array<{ id: string }> } | null)?.rows ?? [])) priced.add(r.id);
+    }
+    ctx.summary.cardsCreated = Math.max(ctx.summary.cardsCreated, cards);
+    ctx.summary.recordsPriced = Math.max(ctx.summary.recordsPriced, priced.size);
+  }
   const warnings = ctx.warnings.splice(0);
   return {
     numbers: {

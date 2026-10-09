@@ -421,6 +421,18 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
           for (const g of plan.groups) {
             const need = { client: g.needClient && plan.values.clientRate !== null, payout: g.needPayout && (plan.values.guardWage !== null || plan.values.brokerFee !== null || plan.values.payoutRate !== null) };
             if (!need.client && !need.payout) continue;
+            // N6：同一組（盤×更種×雞頭×月份）嘅確認用 advisory xact lock 串行；
+            // 鎖內見到已有（另一題）分診價卡，價錢唔同 → 第二個請求失敗，唔建矛盾卡。
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`mc-triage-price:${g.ref.siteId}:${g.ref.shiftTypeId}:${g.ref.brokerId ?? ""}:${g.ref.ot ? 1 : 0}:${ev.month.slice(0, 7)}`}))`;
+            const monthR = monthRange(month);
+            const existing = await tx.rateCard.findMany({
+              where: { siteId: g.ref.siteId, shiftTypeId: g.ref.shiftTypeId, brokerId: g.ref.brokerId, guardId: null, voidedAt: null, source: { startsWith: "triage:" }, NOT: { source: writer.source }, effectiveFrom: { lte: monthR.end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: monthR.start } }] },
+              select: { clientRate: true, guardWage: true, brokerFee: true },
+            });
+            const same = (a: unknown, b: number | null) => (a === null || a === undefined ? b === null : b !== null && Math.abs(Number(a) - b) < 0.005);
+            if (existing.some((c) => (need.client && !same(c.clientRate, plan.values.clientRate)) || (need.payout && !(same(c.guardWage, plan.values.guardWage) && same(c.brokerFee, plan.values.brokerFee))))) {
+              throw Conflict("已有人確認過另一個價");
+            }
             const res = await createCardAndPrice(writer, { month, group: g.ref, need, values: plan.values, evidence: plan.evidence, note: `分診一撳確認（題目 ${q.id.slice(0, 8)}）：${plan.evidence}`, confidence: "confirmed", overwriteAuto: true }, tx);
             priced += res.recordsPriced;
             over += res.overwrittenAuto;

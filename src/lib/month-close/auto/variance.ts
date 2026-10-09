@@ -9,6 +9,8 @@
 // 舊上載（冇表頭日期）只當月頭／月尾連續缺 ≥20% 日數而且覆蓋率比上月低 ≥20% 先算；冇上月嘅新盤頭段缺只出資訊。
 // 截短一律 needs_human，唔當 explained；句子唔寫估算更數。
 import { prisma } from "@/lib/db";
+import { Prisma } from "@prisma/client";
+import { parseRosterWorkbook } from "@/lib/roster-upload/parse";
 import { monthRange } from "@/lib/reports/money";
 import { externalBrokerForRow, type ExternalBrokerLite } from "@/lib/roster-upload/external-alias";
 import type { AutoCollector, VarianceFinding } from "./context";
@@ -137,6 +139,21 @@ function missingDays(dates: Set<string>, month: Date): string[] {
   return out;
 }
 
+/** 舊上載由原檔 bytes 重新 parse 補返表頭日期（決定性、只補寫 parse_summary 嘅 headerDates／headerDays／headerDateRange）。 */
+async function backfillHeaderDates(uploadId: string): Promise<{ headerDays: number; headerDates: string[]; headerDateRange: { min: string; max: string } | null } | null> {
+  try {
+    const up = await prisma.rosterUpload.findUnique({ where: { id: uploadId }, select: { fileBytes: true, fileName: true, fileSize: true, parseSummary: true } });
+    if (!up || up.fileSize > 5 * 1024 * 1024) return null;
+    const parsed = await parseRosterWorkbook(Buffer.from(up.fileBytes), up.fileName);
+    if (!parsed.ok || parsed.headerDates.length === 0) return null;
+    const patch = { headerDays: parsed.headerDays, headerDates: parsed.headerDates, headerDateRange: parsed.headerDateRange };
+    await prisma.rosterUpload.update({ where: { id: uploadId }, data: { parseSummary: { ...((up.parseSummary as Record<string, unknown> | null) ?? {}), ...patch } as unknown as Prisma.InputJsonValue } });
+    return patch;
+  } catch {
+    return null;
+  }
+}
+
 export interface VarianceResult {
   findings: VarianceFinding[];
   warnings: string[];
@@ -193,6 +210,7 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
     void unexplained;
   };
 
+  const headerWarnSites: string[] = [];
   for (const u of uploads) {
     const site = await prisma.site.findUnique({ where: { id: u.siteId }, select: { canonicalName: true, aliases: true } });
     const siteName = site?.canonicalName ?? u.siteNameRaw;
@@ -205,8 +223,21 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
     //  - 新上載有表頭真日期（parse_summary.headerDays）：只認「表頭覆蓋 <80%」；表頭完整（例如 31/31）但有 headerWarn 只 warning，唔算截短；
     //  - 舊上載冇表頭資料：只當「月尾或月頭連續缺 ≥20% 日數」而且「同上月覆蓋率差 ≥20%」先算（見下面 prev 之後）；
     //  - 冇上月嘅新盤頭段缺：只出一行資訊（「由 N 號開始」），唔出 needs_human。
-    const headerDays = typeof (summary as { headerDays?: number } | null)?.headerDays === "number" ? (summary as { headerDays: number }).headerDays : null;
-    const headerRange = (summary as { headerDateRange?: { min: string; max: string } | null } | null)?.headerDateRange ?? null;
+    let sumAny = summary as { headerDays?: number; headerDates?: string[]; headerDateRange?: { min: string; max: string } | null } | null;
+    // 舊上載（冇表頭資料）：嘗試由原檔重新 parse 補返 headerDates（只讀、補寫 parse_summary）；補唔到就留一行資訊叫佢重新上載。
+    if (sumAny && typeof sumAny.headerDays !== "number" && curRows.length > 0) {
+      const backfilled = await backfillHeaderDates(u.id);
+      if (backfilled) sumAny = { ...sumAny, ...backfilled };
+      else result.warnings.push(`「${siteName}」舊上載冇表頭日期資料、原檔亦補唔到，截短判斷較粗略；如有疑問請重新上載最新更表`);
+    }
+    const monthPrefix = month.toISOString().slice(0, 7);
+    // N5：表頭日數只數落喺上載月份內嘅日子（跨月表頭／多月分頁唔可以灌水）。
+    const headerInMonth: string[] | null = Array.isArray(sumAny?.headerDates)
+      ? sumAny.headerDates.filter((d) => d.startsWith(monthPrefix))
+      : sumAny?.headerDateRange
+        ? Array.from({ length: daysInMonth }, (_, i) => new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), i + 1)).toISOString().slice(0, 10)).filter((d) => d >= sumAny!.headerDateRange!.min && d <= sumAny!.headerDateRange!.max)
+        : null;
+    const headerDays: number | null = headerInMonth ? headerInMonth.length : typeof sumAny?.headerDays === "number" ? sumAny.headerDays : null;
     const headerWarn = (summary?.warnings ?? []).some((w) => w.startsWith("[分頁跳過]") || w.includes("block 邊界"));
     const rowCoverage = cur.dates.size / daysInMonth;
     const sortedRowDays = [...cur.dates].sort().map((d) => Number(d.slice(8)));
@@ -217,14 +248,17 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
     let truncSentence = "";
     let estMissing = 0;
     if (curRows.length > 0 && headerDays !== null) {
-      if (headerDays / daysInMonth < COVERAGE_TRUNCATED_BELOW) {
+      if (headerDays * 5 < daysInMonth * 4) {
         truncated = true;
-        const missingHeader = headerRange ? missingDays(new Set(Array.from({ length: daysInMonth }, (_, i) => new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), i + 1)).toISOString().slice(0, 10)).filter((d) => d >= headerRange.min && d <= headerRange.max)), month) : [];
+        const have = new Set(headerInMonth ?? []);
+        const missingHeader = headerInMonth ? missingDays(have, month) : [];
         truncSentence = `檔案可能截短：表頭只覆蓋 ${headerDays}／${daysInMonth} 日${missingHeader.length ? `（缺 ${missingHeader.slice(0, 8).map((d) => d.slice(8)).join("、")}${missingHeader.length > 8 ? "…" : ""} 號）` : ""}`;
         estMissing = cur.dates.size > 0 ? Math.round((curCount / cur.dates.size) * (daysInMonth - cur.dates.size)) : 0;
       } else if (headerWarn) {
-        result.warnings.push(`「${siteName}」表頭完整（${headerDays}／${daysInMonth} 日）但解析有警告，請留意`);
+        headerWarnSites.push(siteName);
       }
+    } else if (curRows.length > 0 && headerDays === null && headerWarn) {
+      headerWarnSites.push(siteName); // 舊上載：冇表頭資料但有解析警告，照樣提示（唔再靜音）
     }
     const prevUpload = await prisma.rosterUpload.findFirst({
       where: { month: prevMonth, siteId: u.siteId, status: { notIn: ["superseded", "voided"] } },
@@ -249,6 +283,10 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
       if (!truncated && headerDays === null && firstDay > 1 && curRows.length > 0 && !prevUpload) {
         result.warnings.push(`「${siteName}」（冇上月比較）更表由 ${firstDay} 號開始有更，如係新開盤正常`);
       }
+      // N7b：舊上載、冇上月比較、月尾連續缺 ≥20% 日數：至少出一行資訊（唔出 needs_human）。
+      if (!truncated && headerDays === null && curRows.length > 0 && (daysInMonth - lastDay) * 5 >= daysInMonth) {
+        result.warnings.push(`「${siteName}」（冇上月比較）更表只到 ${lastDay} 號有更（月尾缺 ${daysInMonth - lastDay} 日），如更表未做齊請重新上載`);
+      }
       if (truncated) {
         const sentence = `「${siteName}」本月 ${curCount} 更：${truncSentence}`;
         ctx.summary.variancesUnexplained++;
@@ -265,8 +303,8 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
     const prevCount = prev.countable.length;
     // 舊上載（冇表頭日期）：月頭／月尾連續缺 ≥20% 日數，而且覆蓋率比上月低 ≥20% 先算截短。
     if (!truncated && headerDays === null && curRows.length > 0) {
-      const prevCoverage0 = prev.dates.size / prevDays;
-      if (edgeMissing / daysInMonth >= 0.2 && prevCoverage0 - rowCoverage >= 0.2) {
+      // 整數比較（N7a）：缺日×5 ≥ 總日數；覆蓋率差 ≥20% ⇔ 5×(上月覆蓋日×本月日數 − 本月覆蓋日×上月日數) ≥ 本月日數×上月日數
+      if (edgeMissing * 5 >= daysInMonth && 5 * (prev.dates.size * daysInMonth - cur.dates.size * prevDays) >= daysInMonth * prevDays) {
         truncated = true;
         const missingDaysList = missingDays(cur.dates, month).filter((d) => Number(d.slice(8)) < firstDay || Number(d.slice(8)) > lastDay);
         truncSentence = `檔案可能截短：只有 ${firstDay}–${lastDay} 號有更，覆蓋 ${cur.dates.size}／${daysInMonth} 日（缺 ${missingDaysList.slice(0, 8).map((d) => d.slice(8)).join("、")}${missingDaysList.length > 8 ? "…" : ""} 號），上月覆蓋 ${prev.dates.size}／${prevDays} 日`;
@@ -368,5 +406,9 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
     }
   }
   ctx.variance.push(...result.findings);
+  if (headerWarnSites.length > 0) {
+    // 側項 1：表頭完整但有解析警告，併成一行列出盤名（唔逐個盤一行）。
+    result.warnings.push(`${headerWarnSites.length} 個盤表頭完整但解析有警告，請留意：${headerWarnSites.slice(0, 20).join("、")}${headerWarnSites.length > 20 ? "…" : ""}`);
+  }
   return result;
 }

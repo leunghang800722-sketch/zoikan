@@ -115,7 +115,7 @@ export interface RateCardLite {
   effectiveFrom: Date;
   effectiveTo: Date | null;
   /** rate_cards.source——一鍵結算自動建嘅卡（`auto:one-click:*`）只准該雞頭（或通用卡）用，唔准跨雞頭 fallback。 */
-  source?: string | null;
+  source: string | null;
 }
 
 /** M1：淨係 `per_shift`（或者未填，向下相容）嘅卡先可以做逐更

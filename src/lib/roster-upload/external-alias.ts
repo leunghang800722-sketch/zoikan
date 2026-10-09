@@ -18,7 +18,7 @@ function tokens(raw: string): string[] {
 }
 
 /** `text` 嘅開頭 token 序列等於某個別名（或代號）嘅 token 序列 → 命中。
- * 「Wilson Guard」「Wilson Guard 2」命中別名「Wilson Guard」；「Wilson Wong」唔中。 */
+ * 「Wilson Guard」「Wilson Guard 2」命中別名「Wilson Guard」；「測試外判甲」唔中。 */
 export function matchExternalAlias(text: string | null | undefined, externals: readonly ExternalBrokerLite[]): ExternalBrokerLite | null {
   if (!text) return null;
   const t = tokens(text);
