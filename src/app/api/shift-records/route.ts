@@ -23,6 +23,7 @@ import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
 import type { Prisma } from "@prisma/client";
 // WP-PRICE：單條建立都要計价（同 batch/route.ts 一樣，之前完全冇寫
 // snapshot 三個欄）——見 src/lib/pricing/resolve-rate.ts 頂註解。
+import { journalAutoCardUsesSafe, toNum } from "@/lib/pricing/auto-card-journal";
 import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
 // P0（Opus 驗收重現）：settlement_broker_id 冇填就喺糧明細完全消失——
 // 單筆新建都要行同一條 fallback 鏈，見 settlement-broker-fallback.ts。
@@ -142,6 +143,7 @@ export async function POST(req: Request) {
       //
       // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
       // 盤唔寫 snapshot——同 batch/route.ts、reprice/route.ts 一致嘅 gate。
+      let brokerPricingSource: { clientCardId?: string; payoutCardId?: string } = {};
       const brokerPricingSite = await prisma.site.findUnique({ where: { id: parsedBroker.site_id }, select: { guardsPaidByClient: true } });
       if (brokerPricingSite?.guardsPaidByClient) {
         data.clientRateSnapshot = null;
@@ -166,6 +168,7 @@ export async function POST(req: Request) {
         data.clientRateSnapshot = brokerPricing.clientRate;
         data.guardWageSnapshot = brokerPricing.guardWage;
         data.brokerFeeSnapshot = brokerPricing.brokerFee;
+        brokerPricingSource = brokerPricing.source;
       }
 
       await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
@@ -173,6 +176,7 @@ export async function POST(req: Request) {
       try {
         const created = await prisma.shiftRecord.create({ data: { ...data, createdBy: session.userId } });
         await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
+        await journalAutoCardUsesSafe([{ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...brokerPricingSource }]);
         return ok(scrubForBrokerSession(session, toBrokerShiftRecordDTO(created)), 201);
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
@@ -251,6 +255,7 @@ export async function POST(req: Request) {
     // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
     // 盤自動計价呢一步跳過（冇傳嘅欄保持 null）——手動明確傳咗嘅值仍然
     // 尊重（老闆／會計可以人手補一次性特殊安排），唔喺呢度硬性擋。
+    const internalSource: { clientCardId?: string; payoutCardId?: string } = {};
     const internalPricingSite = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { guardsPaidByClient: true } });
     if (!internalPricingSite?.guardsPaidByClient && (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null)) {
       const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
@@ -271,7 +276,9 @@ export async function POST(req: Request) {
         // WP-BOSS5 §25.1：OT 卡＝每小時价。
         otHours: data.otHours != null ? Number(data.otHours) : null,
       });
-      if (data.clientRateSnapshot == null) data.clientRateSnapshot = internalPricing.clientRate;
+      // journal 只歸因畀 resolver 真係填咗嗰幾欄（人手明確傳嘅值唔算 auto 卡）
+      if (data.clientRateSnapshot == null) { data.clientRateSnapshot = internalPricing.clientRate; internalSource.clientCardId = internalPricing.source.clientCardId; }
+      if (data.guardWageSnapshot == null || data.brokerFeeSnapshot == null) internalSource.payoutCardId = internalPricing.source.payoutCardId;
       if (data.guardWageSnapshot == null) data.guardWageSnapshot = internalPricing.guardWage;
       if (data.brokerFeeSnapshot == null) data.brokerFeeSnapshot = internalPricing.brokerFee;
     }
@@ -281,6 +288,7 @@ export async function POST(req: Request) {
     try {
       const created = await prisma.shiftRecord.create({ data: { ...data, createdBy: session.userId } });
       await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
+      await journalAutoCardUsesSafe([{ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...internalSource }]);
       return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(created)), 201);
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {

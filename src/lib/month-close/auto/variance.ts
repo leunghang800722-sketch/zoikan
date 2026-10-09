@@ -239,7 +239,6 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
         : null;
     const headerDays: number | null = headerInMonth ? headerInMonth.length : typeof sumAny?.headerDays === "number" ? sumAny.headerDays : null;
     const headerWarn = (summary?.warnings ?? []).some((w) => w.startsWith("[分頁跳過]") || w.includes("block 邊界"));
-    const rowCoverage = cur.dates.size / daysInMonth;
     const sortedRowDays = [...cur.dates].sort().map((d) => Number(d.slice(8)));
     const firstDay = sortedRowDays[0] ?? 1;
     const lastDay = sortedRowDays[sortedRowDays.length - 1] ?? daysInMonth;
@@ -284,7 +283,7 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
         result.warnings.push(`「${siteName}」（冇上月比較）更表由 ${firstDay} 號開始有更，如係新開盤正常`);
       }
       // N7b：舊上載、冇上月比較、月尾連續缺 ≥20% 日數：至少出一行資訊（唔出 needs_human）。
-      if (!truncated && headerDays === null && curRows.length > 0 && (daysInMonth - lastDay) * 5 >= daysInMonth) {
+      if (!truncated && headerDays === null && curRows.length > 0 && (daysInMonth - lastDay) * 5 > daysInMonth) {
         result.warnings.push(`「${siteName}」（冇上月比較）更表只到 ${lastDay} 號有更（月尾缺 ${daysInMonth - lastDay} 日），如更表未做齊請重新上載`);
       }
       if (truncated) {
@@ -301,10 +300,10 @@ export async function explainVariances(ctx: AutoCollector, month: Date, uploads:
 
     const prev = classifyRows(prevRows, lk);
     const prevCount = prev.countable.length;
-    // 舊上載（冇表頭日期）：月頭／月尾連續缺 ≥20% 日數，而且覆蓋率比上月低 ≥20% 先算截短。
+    // 舊上載（冇表頭日期）：月頭／月尾連續缺 >20% 日數，而且覆蓋率比上月低 >20% 先算截短（同表頭路一致，剛好 80% 唔算）。
     if (!truncated && headerDays === null && curRows.length > 0) {
-      // 整數比較（N7a）：缺日×5 ≥ 總日數；覆蓋率差 ≥20% ⇔ 5×(上月覆蓋日×本月日數 − 本月覆蓋日×上月日數) ≥ 本月日數×上月日數
-      if (edgeMissing * 5 >= daysInMonth && 5 * (prev.dates.size * daysInMonth - cur.dates.size * prevDays) >= daysInMonth * prevDays) {
+      // 整數比較（N7a），口徑同表頭路一致：缺 >20% 先算（剛好 80% 唔算，少假題優先）；覆蓋率差 >20% ⇔ 5×(上月覆蓋日×本月日數 − 本月覆蓋日×上月日數) ≥ 本月日數×上月日數
+      if (edgeMissing * 5 > daysInMonth && 5 * (prev.dates.size * daysInMonth - cur.dates.size * prevDays) > daysInMonth * prevDays) {
         truncated = true;
         const missingDaysList = missingDays(cur.dates, month).filter((d) => Number(d.slice(8)) < firstDay || Number(d.slice(8)) > lastDay);
         truncSentence = `檔案可能截短：只有 ${firstDay}–${lastDay} 號有更，覆蓋 ${cur.dates.size}／${daysInMonth} 日（缺 ${missingDaysList.slice(0, 8).map((d) => d.slice(8)).join("、")}${missingDaysList.length > 8 ? "…" : ""} 號），上月覆蓋 ${prev.dates.size}／${prevDays} 日`;

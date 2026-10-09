@@ -2395,3 +2395,8 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - **N7** 舊上載截短用整數比較（缺日×5 ≥ 總日數；覆蓋差 ×5…）；無上月＋月尾缺 ≥20% 出資訊行；舊上載冇 headerDates 時 rerun 嘗試由原檔 bytes 重 parse 補寫，補唔到出資訊行叫重新上載；舊上載 `headerWarn` 唔再靜音。
 - **側項**：表頭完整但有警告併成一行列盤名；測試／註解假名；rerun 摘要卡／價數按 journal 累計；`RateCardLite.source` 必填；`runAutoPricing` 內鎖月雙保險；`pricing.ts` 檔頭註明分診卡客價跨雞頭 fallback 係刻意。
 - **已知限制（唔做）**：C2b 人手值剛好等於系統值會被覆蓋；C3b 摘要價可能同實際不同；E8d reclaim 理論上雙寫；7am–7pm 格未歸更種。
+
+### WP-ONE-CLICK-AUTO 第四輪覆核修正
+- `POST /api/shift-records`（雞頭／內部）、`PATCH /api/shift-records/:id`（OT 重計）、`POST /api/shift-records/:id/approve`、`POST /api/shift-records/batch` 寫價 snapshot 用到 `auto:one-click:<runId>` 卡 → 補寫 `price_snapshots` journal（best effort，唔拖冧主寫入）。
+- `POST /api/month-close/one-click/:id/undo-auto` 回應加 `still_using_voided_card_prices`：安全網，掃本月價等於已作廢 auto 卡值而冇 journal 嘅更（只報數，唔清）；UI 提示「N 更價錢同已作廢卡相同但冇紀錄，請人手檢查」。
+- OT 冇 `ot_hours`：resolver 答 null，null→null 唔計 changed、唔寫 journal；降級分診題預填原本來源值（propose）；`repriceMonthForSites` 寫價＋journal 同一 transaction；舊上載截短口徑＝缺 >20%（剛好 80% 唔算）。

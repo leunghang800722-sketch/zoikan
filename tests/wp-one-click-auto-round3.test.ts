@@ -140,9 +140,11 @@ describe("WP-ONE-CLICK-AUTO 第三輪 N1–N7", () => {
       expect(bad.needsHuman).toHaveLength(1);
       expect(bad.findings[0]!.sentence).toContain("12／30 日");
     });
-    it("N7a：舊上載整數比較——上月 31 日齊、今月 1–24 號有更（缺 6 日）→ 截短（浮點 0.19999… 會漏）", async () => {
-      const res = await run1({ shiftCount: 60, warnings: [] }, rowsFor(60, 24), rowsFor(62, 31));
+    it("N7a：舊上載整數比較——上月 31 日齊、今月 1–23 號有更（缺 7 日）→ 截短；剛好 24/30（80%）唔算（第四輪統一口徑）", async () => {
+      const res = await run1({ shiftCount: 60, warnings: [] }, rowsFor(60, 23), rowsFor(62, 31));
       expect(res.needsHuman.concat(res.warnings).join("|")).toContain("檔案可能截短");
+      const edge = await run1({ shiftCount: 60, warnings: [] }, rowsFor(60, 24), rowsFor(62, 31));
+      expect(edge.needsHuman.concat(edge.warnings).join("|")).not.toContain("檔案可能截短");
     });
     it("N7b：舊上載、冇上月、月尾缺 ≥20% → 至少一行資訊，唔 needs_human", async () => {
       const res = await run1({ shiftCount: 60, warnings: [] }, rowsFor(60, 20));

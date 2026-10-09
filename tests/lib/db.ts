@@ -61,6 +61,7 @@ export async function clearAll() {
   // 驗收（Opus 5.5）：Postorder 上載／guard-fix run 會影響「本月 Postorder
   // 係咪生效」同介紹費費率同步——測試之間要清，唔好互相污染。
   await prisma.guardFixRun.deleteMany({});
+  await prisma.staffListUpload.deleteMany({}); // 名單上載（FK 落 users；guard_fix_runs 先刪），唔跨檔累積
   await prisma.postorderUpload.deleteMany({});
   await prisma.shiftRecord.updateMany({ data: { parentShiftId: null } });
   await prisma.shiftRecord.deleteMany({});

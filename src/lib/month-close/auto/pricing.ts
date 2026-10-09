@@ -526,7 +526,10 @@ export async function applyCardToRecords(
       fields.push("payout");
       if (w0 !== null && w0 !== 0) overwritten++;
     }
-    if (fields.length > 0) changes.push({ id: r.id, cardId, fields, before: [c0, w0, f0], after: [c1, w1, f1] });
+    // 新舊值全部一樣（例如 OT 冇 ot_hours，resolver 答 null，null→null）就唔計 changed、唔寫 journal。
+    const eq = sameRepriceValue;
+    const realFields = fields.filter((f) => (f === "client" ? !eq(c0, c1) : !(eq(w0, w1) && eq(f0, f1))));
+    if (realFields.length > 0) changes.push({ id: r.id, cardId, fields: realFields, before: [c0, w0, f0], after: [c1, w1, f1] });
     else if ((need.client && c0 !== null) || (need.payout && w0 !== null && w0 !== 0)) skippedHasPrice++;
   }
   if (changes.length > 0) {
@@ -686,6 +689,8 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
         continue;
       } catch (e) {
         ctx.warnings.push(`自動定價建卡失敗（${e instanceof Error ? e.message.slice(0, 120) : "unknown"}），改入分診`);
+        // 降級入分診：預填原本搵到嘅來源值做 propose（唔好寫成「冇依據」）。
+        found.proposals.push({ step: found.auto.step, level: "propose", values: found.auto.values, generic: found.auto.generic, label: "原本自動定價嘅來源值（自動套用唔成功，請確認）", evidence: found.auto.evidence });
       }
     }
     // 冇結算雞頭嘅組合：價錢要等歸屬雞頭先定得，已有 settlement 分診題，唔再重複出定價題。

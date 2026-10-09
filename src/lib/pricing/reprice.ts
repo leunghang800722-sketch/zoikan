@@ -233,15 +233,16 @@ export async function repriceMonthForSites(month: Date, siteIds: string[], actor
     }
   }
 
+  // N4：寫價同補寫 auto 卡 journal 放同一個 transaction（同生同死）。
   for (let i = 0; i < changedUpdates.length; i += BATCH_SIZE) {
     const batch = changedUpdates.slice(i, i + BATCH_SIZE);
-    await prisma.$transaction(
-      batch.map((u) => prisma.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.clientRate, guardWageSnapshot: u.guardWage, brokerFeeSnapshot: u.brokerFee } })),
-    );
+    const uses = journalUses.slice(i, i + BATCH_SIZE);
+    await prisma.$transaction(async (tx) => {
+      for (const u of batch) await tx.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.clientRate, guardWageSnapshot: u.guardWage, brokerFeeSnapshot: u.brokerFee } });
+      await journalAutoCardUses(uses, tx);
+    }, { timeout: 120_000, maxWait: 10_000 });
   }
 
-  // N4：用到 auto 價卡嘅更，補寫 journal 去建卡嗰個 run（undo 只睇 journal）。
-  await journalAutoCardUses(journalUses);
   if (changedUpdates.length > 0) {
     await writeAudit({
       actorUserId,

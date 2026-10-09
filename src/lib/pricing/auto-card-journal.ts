@@ -46,3 +46,14 @@ export async function journalAutoCardUses(uses: AutoCardUse[], db: Db = prisma):
   }
   return n;
 }
+
+/** 人手 route 用：journal 失敗唔可以拖冧主要寫入（best effort）。 */
+export async function journalAutoCardUsesSafe(uses: AutoCardUse[], db: Db = prisma): Promise<void> {
+  try {
+    await journalAutoCardUses(uses, db);
+  } catch (e) {
+    console.error("[auto-card-journal] 補寫 journal 失敗", e instanceof Error ? e.message : e);
+  }
+}
+
+export const toNum = (v: unknown): number | null => (v === null || v === undefined ? null : Number((v as { toString(): string }).toString()));

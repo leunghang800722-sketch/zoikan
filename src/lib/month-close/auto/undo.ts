@@ -9,6 +9,7 @@
 //   site_created      盤保留（有更種／更次／上載掛住，唔會刪盤）
 // 已鎖月份唔准還原（0 變）。全部 audit，`auto_source=undo:one-click:<runId>`。冪等：已還原嘅唔再做。
 import { prisma } from "@/lib/db";
+import { monthRange } from "@/lib/reports/money";
 import { writeAudit } from "@/lib/audit";
 import { Conflict, NotFound } from "@/lib/api/errors";
 import { sameRepriceValue, numOrNull } from "@/lib/pricing/reprice";
@@ -175,19 +176,39 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
     }
   }
 
-  // N4：核對——journal 入面記過嘅更，現值仍然等於 auto 卡填入值（即未還原到）嘅數目。
+  // N4 安全網（只報數，唔清）：(1) journal 記過但現值仍等於 auto 卡填入值；
+  // (2) 冇 journal 嘅更（例如人手開更繞過咗 journal），現值等於本 run 已作廢 auto 卡嘅值。
   if (pending.length > 0) {
     const stillUsing = new Set<string>();
+    const journaled = new Set<string>();
     for (const c of changes) {
       if (c.kind !== "price_snapshots") continue;
       const rows = ((c.detailJson as { rows?: Array<{ id: string; fields?: string[]; before: Array<number | null>; after: Array<number | null> }> }).rows ?? []);
       for (const r of rows) {
+        journaled.add(r.id);
         const cur = await prisma.shiftRecord.findUnique({ where: { id: r.id }, select: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true } });
         if (!cur) continue;
         const fields = r.fields && r.fields.length > 0 ? r.fields : ["client", "payout"];
         const clientStill = fields.includes("client") && r.after[0] !== null && !sameRepriceValue(r.before[0] ?? null, r.after[0]) && sameRepriceValue(numOrNull(cur.clientRateSnapshot), r.after[0]);
         const payoutStill = fields.includes("payout") && r.after[1] !== null && !(sameRepriceValue(r.before[1] ?? null, r.after[1]) && sameRepriceValue(r.before[2] ?? null, r.after[2])) && sameRepriceValue(numOrNull(cur.guardWageSnapshot), r.after[1]) && sameRepriceValue(numOrNull(cur.brokerFeeSnapshot), r.after[2] ?? null);
         if (clientStill || payoutStill) stillUsing.add(r.id);
+      }
+    }
+    const { start, end } = monthRange(run.month);
+    const voidedCards = await prisma.rateCard.findMany({ where: { source: source.replace("undo:", "auto:"), voidedAt: { not: null } } });
+    for (const card of voidedCards) {
+      const recs = await prisma.shiftRecord.findMany({
+        where: { siteId: card.siteId, ...(card.shiftTypeId ? { shiftTypeId: card.shiftTypeId } : {}), ...(card.brokerId ? { settlementBrokerId: card.brokerId } : {}), status: { not: "cancelled" }, workDate: { gte: start, lte: end } },
+        select: { id: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
+      });
+      const cc = numOrNull(card.clientRate);
+      const cw = numOrNull(card.guardWage);
+      const cf = numOrNull(card.brokerFee);
+      for (const r of recs) {
+        if (journaled.has(r.id)) continue;
+        const clientSame = cc !== null && sameRepriceValue(numOrNull(r.clientRateSnapshot), cc);
+        const payoutSame = cw !== null && sameRepriceValue(numOrNull(r.guardWageSnapshot), cw) && sameRepriceValue(numOrNull(r.brokerFeeSnapshot), cf);
+        if (clientSame || payoutSame) stillUsing.add(r.id);
       }
     }
     result.stillUsingVoidedCardPrices = stillUsing.size;

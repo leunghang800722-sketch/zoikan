@@ -11,6 +11,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const session = await requirePermission(req, "一鍵結算", "update");
     const { id } = await params;
     const result = await undoAutoChanges(id, session.userId, getClientIp(req));
-    return ok(brandSafeResponse({ run_id: result.runId, undone: result.undone, skipped: result.skipped, already_undone: result.alreadyUndone, superseded_questions: result.supersededQuestions }));
+    return ok(brandSafeResponse({ run_id: result.runId, undone: result.undone, skipped: result.skipped, already_undone: result.alreadyUndone, superseded_questions: result.supersededQuestions, still_using_voided_card_prices: result.stillUsingVoidedCardPrices }));
   });
 }

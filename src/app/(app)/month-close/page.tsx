@@ -208,14 +208,14 @@ export default function MonthCloseOneClickPage() {
     if (!window.confirm("還原呢次一鍵結算所有「自動」改動？（價卡作廢、別名移除、結算雞頭還原、自動配對還原；你喺分診題一撳確認嘅唔會還原）")) return;
     setBusy(true);
     setError(null);
-    const res = await apiPost<{ undone: Record<string, number>; skipped: Array<{ kind: string; reason: string }>; already_undone: boolean }>(`/api/month-close/one-click/${runId}/undo-auto`);
+    const res = await apiPost<{ undone: Record<string, number>; skipped: Array<{ kind: string; reason: string }>; already_undone: boolean; still_using_voided_card_prices?: number }>(`/api/month-close/one-click/${runId}/undo-auto`);
     setBusy(false);
     if (!res.ok) {
       setError(res.message);
       return;
     }
     const total = Object.values(res.data.undone).reduce((a, b) => a + b, 0);
-    setNotice(res.data.already_undone ? "之前已經還原過" : `已還原 ${total} 項自動改動${res.data.skipped.length ? `；${res.data.skipped.length} 項保留（${res.data.skipped.map((x) => x.reason).slice(0, 2).join("；")}）` : ""}`);
+    setNotice(res.data.already_undone ? "之前已經還原過" : `已還原 ${total} 項自動改動${res.data.skipped.length ? `；${res.data.skipped.length} 項保留（${res.data.skipped.map((x) => x.reason).slice(0, 2).join("；")}）` : ""}${res.data.still_using_voided_card_prices ? `；注意：${res.data.still_using_voided_card_prices} 更價錢同已作廢卡相同但冇紀錄，請人手檢查` : ""}`);
     await loadRuns();
   }
 

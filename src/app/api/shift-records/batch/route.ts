@@ -48,6 +48,7 @@ import { LeaveCode, type Prisma, type ShiftRecordStatus } from "@prisma/client";
 // src/lib/pricing/resolve-rate.ts 頂註解。`fetchEffectiveRateCards()`
 // 一次攞晒呢個盤呢個月範圍嘅有效卡，`resolveShiftPricingFromCards()`
 // 喺記憶體逐格揀價，唔逐格打 DB。
+import { journalAutoCardUsesSafe, toNum, type AutoCardUse } from "@/lib/pricing/auto-card-journal";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards, isUnpricedShift, type ResolvedShiftPricing } from "@/lib/pricing/resolve-rate";
 import { n } from "@/lib/reports/money";
 // P0（Opus 驗收重現）：新建記錄冇 settlement_broker_id 就喺糧明細完全
@@ -435,6 +436,7 @@ export async function POST(req: Request) {
     const results: { key: string; id: string; action: string; settlement_inferred?: boolean }[] = [];
     type PendingAudit = { rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
     const pendingAudits: PendingAudit[] = [];
+    const autoCardUses: AutoCardUse[] = [];
     try {
       await prisma.$transaction(async (tx) => {
         for (const plan of plans) {
@@ -468,6 +470,7 @@ export async function POST(req: Request) {
               },
             });
             pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
+            autoCardUses.push({ recordId: plan.existingId, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
             results.push({ key, id: plan.existingId, action: "updated", settlement_inferred: plan.settlementInferred });
           } else {
             const data: Prisma.ShiftRecordUncheckedCreateInput = {
@@ -489,6 +492,7 @@ export async function POST(req: Request) {
             };
             const created = await tx.shiftRecord.create({ data });
             pendingAudits.push({ rowId: created.id, action: "create", after: created });
+            autoCardUses.push({ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
             results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
           }
         }
@@ -504,6 +508,8 @@ export async function POST(req: Request) {
     for (const a of pendingAudits) {
       await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip });
     }
+
+    await journalAutoCardUsesSafe(autoCardUses);
 
     const warnings = await computeWarnings(guardIds, parsed.site_id, month, monthEnd, broker);
 
