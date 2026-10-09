@@ -158,6 +158,10 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
         const after = await prisma.shiftType.update({ where: { id: st.id }, data: { voidedAt: new Date(), voidedBy: actorUserId } });
         await audit("shift_types", st.id, "void", st, { ...after, void_reason: source });
         bump("shift_types");
+        // 作廢更種後，未鎖月上載行唔可以仍然指住佢（否則 rerun 會將更次寫落已作廢更種）：清返 shift_type_id，
+        // 下次一鍵 parse_health 會重新補更種＋reparse。
+        const cleared = await prisma.rosterUploadRow.updateMany({ where: { shiftTypeId: st.id }, data: { shiftTypeId: null } });
+        if (cleared.count > 0) bump("roster_upload_rows");
         await mark(c.id, "undone", null);
         break;
       }

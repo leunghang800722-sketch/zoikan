@@ -44,7 +44,7 @@ describe("WP-ONE-CLICK-AUTO hotfix1：0 更種現有盤自我修復", () => {
     const site = await seed();
     const pre = await stepPrecheck(SEPT, boss(), null);
     expect(pre.needsHuman.some((h) => h.includes("完全未設更種"))).toBe(false);
-    expect(pre.warnings.some((w) => w.includes("已由本月更表自動推出 2 個更種"))).toBe(true);
+    expect(pre.warnings.some((w) => w.includes("會由本月更表自動推出 2 個更種"))).toBe(true);
 
     const run = await newRun();
     await runOneClickMonthClose(run.id, SEPT, boss(), null);
@@ -115,5 +115,83 @@ describe("WP-ONE-CLICK-AUTO hotfix1：0 更種現有盤自我修復", () => {
     expect(ctx.summary.shiftTypesCreated).toBe(0);
     expect((await activeTypes(site.id)).map((s) => s.code)).toEqual(["D"]);
     expect(await prisma.monthCloseAutoChange.count({ where: { kind: "shift_type_created" } })).toBe(0);
+  });
+
+  it("(f) 必修1：reconcile_apply 前失敗 → undo 作廢更種 → rerun：唔會有更次掛喺已作廢更種，更種復用、5 更入數", async () => {
+    const site = await seed();
+    const blocker = await prisma.reconcileAllRun.create({ data: { month: SEPT, status: "running", startedById: boss() } });
+    const r1 = await newRun();
+    await runOneClickMonthClose(r1.id, SEPT, boss(), null);
+    expect((await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: r1.id } })).status).toBe("failed");
+    expect(await activeTypes(site.id)).toHaveLength(2);
+    await undoAutoChanges(r1.id, boss(), null);
+    expect(await activeTypes(site.id)).toHaveLength(0);
+    // undo 之後上載行唔再指住已作廢更種
+    const voidedIds = (await prisma.shiftType.findMany({ where: { siteId: site.id }, select: { id: true } })).map((x) => x.id);
+    expect(await prisma.rosterUploadRow.count({ where: { shiftTypeId: { in: voidedIds } } })).toBe(0);
+    await prisma.reconcileAllRun.update({ where: { id: blocker.id }, data: { status: "done", finishedAt: new Date() } });
+    const r2 = await newRun();
+    await runOneClickMonthClose(r2.id, SEPT, boss(), null);
+    expect(await activeTypes(site.id)).toHaveLength(2);
+    expect(await prisma.shiftType.count({ where: { siteId: site.id } })).toBe(2);
+    expect(await prisma.shiftRecord.count({ where: { status: { not: "cancelled" }, shiftType: { voidedAt: { not: null } } } })).toBe(0);
+    expect(await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: SEPT }, status: { not: "cancelled" } } })).toBe(5);
+  });
+
+  it("(f2) 防線：上載行仍指住已作廢更種 → 對數當 unresolved，唔寫 shift_records", async () => {
+    const site = await seed();
+    const ctx = new AutoCollector(null, SEPT, boss(), null);
+    await stepParseHealth(SEPT, boss(), ctx);
+    // 人手作廢更種但唔 reparse（模擬舊 undo 殘留）
+    await prisma.shiftType.updateMany({ where: { siteId: site.id }, data: { voidedAt: new Date() } });
+    const run = await newRun();
+    // 直接行對數步驟
+    const { stepReconcileApply } = await import("@/lib/month-close/one-click");
+    await stepReconcileApply(SEPT, boss(), null);
+    void run;
+    expect(await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: SEPT } } })).toBe(0);
+  });
+
+  it("(g) 必修2：同盤兩個 active 上載，淨係第一個建更種 → 第二個都要 reparse 配到更種", async () => {
+    const site = await seed();
+    await mkGuard({ name: "測試丙", staffNo: "U90003" });
+    const u2 = (
+      await uploadRoster({ siteRaw: SITE + "分冊", month: SEPT, uploaderUserId: boss(), siteIdHint: null, lines: [{ broker: "HK", time: "0800-2000", staffNo: "U90003", name: "測試丙", codes: { 10: "D", 11: "D" } }] })
+    ).upload;
+    await prisma.rosterUpload.update({ where: { id: u2.id }, data: { siteId: site.id } });
+    await prisma.rosterUploadRow.updateMany({ where: { uploadId: u2.id }, data: { resolvedSiteId: site.id } });
+    const ctx = new AutoCollector(null, SEPT, boss(), null);
+    await stepParseHealth(SEPT, boss(), ctx);
+    expect(await activeTypes(site.id)).toHaveLength(2);
+    expect(await prisma.rosterUploadRow.count({ where: { uploadId: u2.id, codeKind: "shift", shiftTypeId: null } })).toBe(0);
+  });
+
+  it("(h) C2b：上載掛母盤、格歸 0 更種子盤 → 子盤補更種，母盤唔郁", async () => {
+    const parent = await prisma.site.create({ data: { canonicalName: "測試母盤乙", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
+    const child = await prisma.site.create({ data: { canonicalName: "測試子盤乙", clientName: "x", parentSiteId: parent.id, billingModel: "per_shift", createdBy: "t" } });
+    await mkGuard({ name: "測試甲", staffNo: "U90001" });
+    const up = (await uploadRoster({ siteRaw: "測試母盤乙", month: SEPT, uploaderUserId: boss(), siteIdHint: parent.id, lines: [{ broker: "HK", time: "0800-2000", staffNo: "U90001", name: "測試甲", codes: { 1: "D", 2: "D" } }] })).upload;
+    await prisma.rosterUploadRow.updateMany({ where: { uploadId: up.id }, data: { resolvedSiteId: child.id, resolvedSiteManual: true } });
+    const pre = await stepPrecheck(SEPT, boss(), null);
+    expect(pre.warnings.some((w) => w.includes("測試子盤乙") && w.includes("會由本月更表自動推出"))).toBe(true);
+    const ctx = new AutoCollector(null, SEPT, boss(), null);
+    await stepParseHealth(SEPT, boss(), ctx);
+    expect(await activeTypes(child.id)).toHaveLength(1);
+    expect(await activeTypes(parent.id)).toHaveLength(0);
+    expect(await prisma.rosterUploadRow.count({ where: { uploadId: up.id, shiftTypeId: null } })).toBe(0);
+  });
+
+  it("(i) 混合可解析／解析唔到代號：precheck info 提解析唔到嘅代號；d／D 只建一個更種", async () => {
+    const site = await prisma.site.create({ data: { canonicalName: "測試混合盤", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
+    await mkGuard({ name: "測試甲", staffNo: "U90001" });
+    await mkGuard({ name: "測試乙", staffNo: "U90002" });
+    await uploadRoster({ siteRaw: "測試混合盤", month: SEPT, uploaderUserId: boss(), siteIdHint: site.id, lines: [
+      { broker: "HK", time: "0800-2000", staffNo: "U90001", name: "測試甲", codes: { 1: "D", 2: "d" } },
+      { broker: "HK", time: "7pm-7am", staffNo: "U90002", name: "測試乙", codes: { 3: "N" } },
+    ] });
+    const pre = await stepPrecheck(SEPT, boss(), null);
+    expect(pre.warnings.some((w) => w.includes("會由本月更表自動推出 1 個更種") && w.includes("N"))).toBe(true);
+    await stepParseHealth(SEPT, boss(), new AutoCollector(null, SEPT, boss(), null));
+    expect(await prisma.shiftType.count({ where: { siteId: site.id } })).toBe(1);
   });
 });

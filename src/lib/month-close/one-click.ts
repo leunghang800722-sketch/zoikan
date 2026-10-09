@@ -369,7 +369,8 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
       const plan = await planShiftTypesForSite(sid, start);
       if (plan.eligible && plan.creatable > 0) {
         // 一鍵結算 parse_health 步驟會自動由本月更表推更種（可撤銷）——唔使人手去盤管理。
-        warnings.push(`盤「${name}」未設更種，已由本月更表自動推出 ${plan.creatable} 個更種（可撤銷）`);
+        const partial = plan.unparsedCodes.length > 0 ? `；代號「${plan.unparsedCodes.join("、")}」時段解析唔到，唔會建更種，嗰啲格暫時未計入` : "";
+        warnings.push(`盤「${name}」未設更種，會由本月更表自動推出 ${plan.creatable} 個更種（可撤銷）${partial}`);
       } else {
         const why = plan.unparsedCodes.length > 0
           ? `更表時段解析唔到（代號 ${plan.unparsedCodes.join("、")}，要 0700-1900 呢類寫法），冇法自動推更種`
@@ -502,7 +503,7 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
   try {
     for (const r of await ensureShiftTypesForEmptySites(ctx, start)) {
       if (ctx.newSiteIds.has(r.siteId)) continue;
-      if (r.created > 0) warnings.push(`盤「${r.siteName}」未設更種，已由本月更表自動推出 ${r.created} 個更種（可撤銷）`);
+      if (r.created > 0) warnings.push(`盤「${r.siteName}」未設更種，已自動建好 ${r.created} 個更種（可撤銷），本月格已重新配對`);
       if (r.unparsedCodes.length > 0) needsHuman.push(`盤「${r.siteName}」更表代號「${r.unparsedCodes.join("、")}」時段解析唔到，冇自動建更種——請去「盤」管理手動加更種`);
     }
   } catch (e) {

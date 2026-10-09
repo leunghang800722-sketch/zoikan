@@ -281,6 +281,12 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
     : [];
   const shiftTypeCandidates: LeaveShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime) }));
 
+  // 防線：upload row 仍然指住已作廢更種（例如 undo／人手作廢之後未 reparse）——一律當未配對，唔准套用。
+  const rowShiftTypeIds = [...new Set(rows.map((r) => r.shiftTypeId).filter((v): v is string => !!v))];
+  const voidedShiftTypeIds = new Set(
+    rowShiftTypeIds.length ? (await prisma.shiftType.findMany({ where: { id: { in: rowShiftTypeIds }, voidedAt: { not: null } }, select: { id: true } })).map((s) => s.id) : [],
+  );
+
   const leaveShiftTypeByRowId = resolveLeaveShiftTypeIds(rowsWithEffectiveSite, shiftTypeCandidates);
 
   // 規則 8：冇雞頭碼欄嘅行（settlementBrokerId null）用
@@ -374,6 +380,8 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
       if (!shiftTypeId) reasons.push("請假格推斷唔到屬邊個更別（Time 欄同同一行都冇夠訊號），人手覆核");
     } else if (!shiftTypeId) {
       reasons.push("更別未配對");
+    } else if (voidedShiftTypeIds.has(shiftTypeId)) {
+      reasons.push("更種已作廢，請重新解析上載或者一鍵結算補更種");
     }
 
     if (reasons.length > 0 || !r.guardId || !r.effectiveSiteId || !shiftTypeId) {
