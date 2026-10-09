@@ -1,0 +1,69 @@
+"use client";
+// 1a ⑤ 鎖定本月：「一定要做好先可以鎖」＋鎖月前體檢＋鎖定掣（未達條件 opacity .35，邏輯照舊）。
+import Link from "next/link";
+import { Pill } from "@/components/ui/Pill";
+import type { ReportDTO } from "@/components/month-close/types";
+import { lockRequirements, type ReviewGroup } from "@/components/month-close/derive";
+import { MonthHealthCard } from "./MonthHealthCard";
+
+export function LockSection({ report, month, busy, locked, groups, onLock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onLock: () => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
+  const pricingQ = groups.find((g) => g.key === "pricing")?.count ?? 0;
+  const reqs = lockRequirements(report, pricingQ);
+  const lp = report.lock_precondition;
+  const ready = lp.ready_to_lock && !locked;
+  const canTriage = !!report.auto?.triage_session_id && pricingQ > 0;
+  return (
+    <section className="overflow-hidden rounded-[10px] border border-zk-border bg-white" data-testid="lock-section">
+      <div className="flex flex-wrap items-center gap-2.5 border-b border-zk-border-soft px-4 py-3">
+        <h2 className="text-[14px] font-semibold text-zk-text">⑤ 鎖定本月</h2>
+        {locked ? <Pill variant="warning">已鎖定</Pill> : <span className={`text-[12px] ${ready ? "text-zk-success" : "text-zk-danger-dark"}`}>{ready ? "條件齊，可以鎖" : reqs.length > 0 ? `仲有 ${reqs.length} 樣未做好，未可以鎖` : "未可以鎖"}</span>}
+      </div>
+      {!locked && reqs.length > 0 && (
+        <div className="flex flex-col gap-2 border-b border-zk-border-soft px-4 py-3.5">
+          <div className="text-[11.5px] font-semibold text-zk-muted">一定要做好先可以鎖</div>
+          {reqs.map((r) => (
+            <div key={r.key} className="flex items-center gap-3 rounded-lg border border-[#fecaca] bg-[#fffafa] px-3 py-2.5" data-lock-req={r.key}>
+              <span className="h-[18px] w-[18px] flex-none rounded-full border-[1.5px] border-[#dc2626]" />
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium text-zk-text">{r.title}</div>
+                <div className="text-[11.5px] text-zk-muted">{r.detail}</div>
+              </div>
+              {r.action === "roster-uploads" ? (
+                <Link href={`/roster-uploads?month=${month}`} className="whitespace-nowrap text-[12.5px] text-zk-primary hover:underline">
+                  {r.actionLabel}
+                </Link>
+              ) : (
+                canTriage && (
+                  <button type="button" onClick={onOpenTriage} className="whitespace-nowrap text-[12.5px] text-zk-primary hover:underline">
+                    {r.actionLabel}
+                  </button>
+                )
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {/* WP-AI-OPS §28.3：鎖月前體檢（只提示，唔擋鎖月）。 */}
+      <div className="px-4 py-3.5">
+        <MonthHealthCard month={report.month} groups={groups} onLoaded={onHealth} onOpenTriage={canTriage ? onOpenTriage : undefined} />
+      </div>
+      <div className="flex flex-wrap items-center gap-3 border-t border-zk-border-soft bg-zk-header px-4 py-3">
+        <span className="min-w-0 flex-1 text-[12px] text-zk-muted">鎖咗之後成個月只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</span>
+        {locked ? (
+          <Pill variant="warning">已鎖定</Pill>
+        ) : (
+          <button
+            type="button"
+            data-testid="lock-month"
+            onClick={onLock}
+            disabled={busy || !ready}
+            className="whitespace-nowrap rounded-md bg-[#0f172a] px-[18px] py-2 text-[13px] font-semibold text-white hover:bg-[#1e293b] disabled:cursor-not-allowed"
+            style={{ opacity: ready ? 1 : 0.35 }}
+          >
+            鎖定 {month}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
