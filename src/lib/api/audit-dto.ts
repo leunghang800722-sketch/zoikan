@@ -139,4 +139,7 @@ export const AUDIT_META_PASSTHROUGH_KEYS = [
   // （id／版本號，冇 PII）——之前 service 有傳但唔喺白名單，靜靜雞俾剝走。
   "revived_upload_id",
   "revived_version",
+  // WP-ONE-CLICK-AUTO（§31）：一鍵結算自動改動嘅來源標記（`auto:one-click:<runId>`
+  // ／undo 還原 `undo:one-click:<runId>`／分診一撳確認 `triage:<questionId>`），冇 PII。
+  "auto_source",
 ] as const;

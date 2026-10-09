@@ -1324,8 +1324,40 @@ model MonthCloseRun {
   reportJson     Json?               @map("report_json")
   errorMessage   String?             @map("error_message")
 
+  autoChanges MonthCloseAutoChange[]
+
   @@index([month, startedAt])
   @@map("month_close_runs")
+}
+
+// ---------------------------------------------------------------------------
+// WP-ONE-CLICK-AUTO（§31，老闆 2026-10-08）：一鍵結算「自動改動」流水帳——
+// 每個 `auto` 信心嘅自動改動（加盤別名／建盤／建更種／建價卡／改價 snapshot／
+// 補結算雞頭／安員配對）寫一行，`POST /api/month-close/one-click/:id/undo-auto`
+// 就係按呢張表逐項還原。`detail_json` 存還原所需嘅 before／after（只有 id、
+// 數字、盤名、別名；冇安員姓名／電話／身份證）。新表放 public，唔放 ai schema，
+// ai.audit_log 排除佢。
+// ---------------------------------------------------------------------------
+model MonthCloseAutoChange {
+  id         String        @id @default(uuid())
+  runId      String        @map("run_id")
+  run        MonthCloseRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  /// site_alias｜site_created｜shift_type_created｜rate_card_created｜price_snapshots｜settlement_set｜guard_alias_added｜guard_staffno_added
+  kind       String
+  refTable   String?       @map("ref_table")
+  refId      String?       @map("ref_id")
+  summary    String
+  detailJson Json          @default("{}") @map("detail_json")
+  undoable   Boolean       @default(true)
+  /// applied｜undone｜undo_skipped
+  status     String        @default("applied")
+  undoNote   String?       @map("undo_note")
+  createdAt  DateTime      @default(now()) @map("created_at")
+  undoneAt   DateTime?     @map("undone_at")
+  undoneBy   String?       @map("undone_by")
+
+  @@index([runId, kind])
+  @@map("month_close_auto_changes")
 }
 
 enum MonthCloseRunStatus {
