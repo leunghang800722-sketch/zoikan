@@ -36,6 +36,11 @@ export default function MonthCloseOneClickPage() {
   const [lockedNow, setLockedNow] = useState(false);
   const [health, setHealth] = useState<{ critical: number; warn: number; info: number } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [unsentMsg, setUnsentMsg] = useState<string | null>(null);
+  const reportUnsent = () => {
+    const un = takeUnsent();
+    setUnsentMsg(un.length > 0 ? `有 ${un.length} 題未送出，請重新答：${un.map((x) => x.title).join("、")}` : null);
+  };
 
   async function loadRuns() {
     const res = await apiGet<{ runs: RunDTO[] }>(`/api/month-close/one-click?month=${month}`);
@@ -44,8 +49,7 @@ export default function MonthCloseOneClickPage() {
 
   // 上次對話框關閉／離開時有題送出失敗（記喺 sessionStorage）→ 提示重新答。
   useEffect(() => {
-    const un = takeUnsent();
-    if (un.length > 0) setError(`有 ${un.length} 題未送出，請重新答：${un.map((x) => x.title).join("、")}`);
+    reportUnsent();
   }, []);
 
   useEffect(() => {
@@ -237,6 +241,7 @@ export default function MonthCloseOneClickPage() {
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
+      <Banner kind="error" message={unsentMsg} />
       {locked && <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-3 py-2 text-[12.5px] text-zk-warning-dark">{month} 已鎖定，成頁只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</div>}
 
       <StageBar stages={stages} />
@@ -298,9 +303,13 @@ export default function MonthCloseOneClickPage() {
           sessionId={triageOpen}
           onClose={() => {
             setTriageOpen(null);
+            reportUnsent(); // 仲有未送出嘅題先提示；全部送出就清走
             void loadRuns();
           }}
-          onChanged={() => void loadRuns()}
+          onChanged={() => {
+            setUnsentMsg(null);
+            void loadRuns();
+          }}
         />
       )}
     </div>

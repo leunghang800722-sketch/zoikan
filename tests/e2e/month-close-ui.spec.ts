@@ -33,7 +33,7 @@ const AUTO = {
   ],
   review: [
     { kind: "month_close_pricing", text: "測試盤甲 更種 N 未定價 3 更（有候選）", confidence: "propose", question_id: "q1" },
-    { kind: "month_close_pricing", text: "測試盤乙 更種 E 未定價 2 更", confidence: "unknown", question_id: "q2" },
+    { kind: "month_close_pricing", text: "測試盤乙 更種 E 未定價 2 更，價目表都冇依據（unmatched）", confidence: "unknown", question_id: "q2" },
     { kind: "month_close_shift_variance", text: "測試盤丙 更數差異解釋唔到", confidence: "unknown", question_id: "q3" },
   ],
   triage_session_id: "sess1",
@@ -96,7 +96,7 @@ function question(id: string, title: string, over: Record<string, unknown> = {})
     title,
     status: "open",
     options: [{ id: "mc_accept", label: "一撳確認" }, { id: "skip", label: "跳過" }],
-    mc: { summary: "同盤同更種最近已知價", suggestion: "客價 100／工資 80", confidence: "propose", action_type: "x", count: 3, candidates: [{ id: "c1", label: "價卡 A", evidence: "Postorder 第 374 行", values_text: "100／80" }], prefill_candidate_id: "c1", needs_price_input: false, needs_broker_pick: false, broker_options: [], identity_label: null },
+    mc: { summary: "同盤同更種最近已知價；價目表、歷史、Postorder 都冇依據", suggestion: "客價 100／工資 80", confidence: "propose", action_type: "x", count: 3, candidates: [{ id: "c1", label: "價卡 A", evidence: "Postorder 第 374 行", values_text: "100／80" }], prefill_candidate_id: "c1", needs_price_input: false, needs_broker_pick: false, broker_options: [], identity_label: null },
     ...over,
   };
 }
@@ -189,7 +189,8 @@ test.describe("月結頁 1a 桌面", () => {
     await expect(page.getByTestId("rail-needs-human")).toBeVisible();
     // 禁用詞
     const bodyText = await page.locator("body").innerText();
-    for (const w of ["有依據", "冇依據", "unmatched", "ambiguous", "name_only", "（external）", "（shift"]) expect(bodyText).not.toContain(w);
+    for (const w of ["有依據", "冇依據", "unmatched", "ambiguous", "name_only", "（external）", "（shift", "（parsed）"]) expect(bodyText).not.toContain(w);
+    await expect(page.getByTestId("auto-review")).toContainText("要你揀");
     // 保留 testid
     for (const id of ["month-close-month-input", "month-close-roster-file-input", "month-close-staff-list-file-input", "month-close-postorder-file-input", "auto-summary", "auto-counts", "auto-review", "undo-auto", "unpriced-gap", "open-triage", "month-health-card"]) {
       await expect(page.getByTestId(id)).toHaveCount(1);
@@ -205,6 +206,7 @@ test.describe("月結頁 1a 桌面", () => {
     await page.getByTestId("month-close-month-input").fill(MONTH);
     await page.getByTestId("open-triage").click();
     await expect(page.getByTestId("mc-triage-dialog")).toHaveAttribute("data-mode", "desktop");
+    await expect(page.getByTestId("mc-summary")).not.toContainText("冇依據");
     await page.getByTestId("mc-accept").click();
     await expect(page.getByTestId("mc-undo-toast")).toContainText("已確認「測試盤甲 更種 N 未定價」");
     await page.getByTestId("mc-undo").click();
@@ -219,6 +221,21 @@ test.describe("月結頁 1a 桌面", () => {
     await expect(page.getByTestId("mc-triage-dialog")).toHaveCount(0);
     expect(st.answers).toEqual(["q1:mc_accept"]);
     expect(st.previews).toEqual(["q1"]);
+  });
+
+  test("timer 自動送出失敗 → 6.5 秒後撳遲啲先答，對話框唔關", async ({ page }) => {
+    const st = await mockApis(page);
+    await loginAs(page, "老闆");
+    await page.goto(`/month-close`);
+    await page.getByTestId("month-close-month-input").fill(MONTH);
+    await page.getByTestId("open-triage").click();
+    st.failNext = true;
+    await page.getByTestId("mc-accept").click();
+    await page.waitForTimeout(6500);
+    await page.getByTestId("mc-later").click();
+    await expect(page.getByTestId("mc-triage-dialog")).toBeVisible();
+    await expect(page.getByTestId("mc-unsent")).toContainText("未送出，請再試");
+    expect(st.answers).toEqual([]);
   });
 
   test("送出失敗 → 關閉對話框唔關，標返未送出；重試成功先可關閉", async ({ page }) => {
@@ -259,6 +276,7 @@ test.describe("月結頁 1e 手機", () => {
     await expect(page.getByTestId("mc-segs").locator("span")).toHaveCount(3);
     await expect(page.getByTestId("mc-pos")).toHaveText("1 / 3");
     await expect(page.getByTestId("mc-suggest-card")).toBeVisible();
+    await expect(page.getByTestId("mc-triage-dialog")).not.toContainText("冇依據");
     await expect(page.getByTestId("mc-skip")).toHaveText("跳過，留返人手");
     const h = await page.getByTestId("mc-accept").evaluate((e) => e.getBoundingClientRect().height);
     expect(h).toBe(54);

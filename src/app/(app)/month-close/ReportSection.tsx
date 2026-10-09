@@ -5,7 +5,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { fmtMoney } from "@/lib/ui/format";
 import type { ReportDTO, RunDTO } from "@/components/month-close/types";
-import { deriveCostStack, fmtMdHm, marginPct, splitSiteRevenue, type ReviewGroup } from "@/components/month-close/derive";
+import { humanize, deriveCostStack, fmtMdHm, marginPct, splitSiteRevenue, type ReviewGroup } from "@/components/month-close/derive";
 import { AutoSummaryCard } from "./AutoSummaryCard";
 import { ReviewCard } from "./ReviewCard";
 
@@ -101,7 +101,7 @@ export function ReportSection({ run, report, busy, locked, groups, onUndo, onOpe
         ) : (
           <span>本月 0 位長工有糧計入。</span>
         )}
-        {report.longterm_payroll_note && <span className="min-w-0 text-zk-faint">{report.longterm_payroll_note}</span>}
+        {report.longterm_payroll_note && <span className="min-w-0 text-zk-faint">{humanize(report.longterm_payroll_note)}</span>}
         <Link href="/longterm-payroll" className="ml-auto whitespace-nowrap text-zk-primary hover:underline">
           去長工糧 ›
         </Link>
@@ -186,7 +186,7 @@ export function ReportSection({ run, report, busy, locked, groups, onUndo, onOpe
               </>
             )}
           </span>
-          <span className="text-zk-faint">{report.postorder_compare.note}</span>
+          <span className="text-zk-faint">{humanize(report.postorder_compare.note)}</span>
         </div>
       )}
     </div>

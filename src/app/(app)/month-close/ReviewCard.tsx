@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
-import { reviewTotals, type ReviewGroup } from "@/components/month-close/derive";
+import { humanize, reviewTotals, type ReviewGroup } from "@/components/month-close/derive";
 
 export function ReviewCard({ auto, groups, busy, onOpenTriage }: { auto: AutoReportDTO; groups: ReviewGroup[]; busy: boolean; onOpenTriage: () => void }) {
   const t = reviewTotals(auto.review);
@@ -45,7 +45,7 @@ export function ReviewCard({ auto, groups, busy, onOpenTriage }: { auto: AutoRep
               {g.count === 0 && <div className="text-[12px] text-zk-faint">冇</div>}
               {g.preview.map((it, i) => (
                 <div key={i} className="border-t border-dashed border-zk-border pt-1.5 text-[12px] leading-snug text-[#334155]">
-                  <Pill variant={it.confidence === "propose" ? "shift" : "warning"}>{it.confidence === "propose" ? "有建議" : "要你揀"}</Pill> {it.text}
+                  <Pill variant={it.confidence === "propose" ? "shift" : "warning"}>{it.confidence === "propose" ? "有建議" : "要你揀"}</Pill> {humanize(it.text)}
                 </div>
               ))}
               {g.more > 0 &&

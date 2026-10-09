@@ -7,6 +7,7 @@ import {
   deriveUploads,
   groupReview,
   healthDupReviewCount,
+  humanize,
   humanizeHealth,
   kindChip,
   needsHumanCount,
@@ -213,5 +214,15 @@ describe("kindChip／其他類／needs_human", () => {
     r.steps[1]!.needs_human = ["c"];
     expect(needsHumanCount(r)).toBe(3);
     expect(needsHumanCount(null)).toBe(0);
+  });
+});
+
+describe("humanize（顯示 API 文字前去禁用詞）", () => {
+  it("替換禁用詞，唔郁 code 識別字", () => {
+    expect(humanize("價目表、歷史、Postorder 都冇依據")).toBe("價目表、歷史、Postorder 都要你揀");
+    expect(humanize("有依據：unmatched／ambiguous／name_only")).toBe("有建議：對唔到安員／有多個可能／淨靠姓名配對");
+    expect(humanize("shift 記錄 external leave")).toBe("更 記錄 客戶自己人 假");
+    expect(humanize("測試盤（parsed）")).toBe("測試盤（已解析，未對數）");
+    expect(humanize("shift_type_created")).toBe("shift_type_created");
   });
 });

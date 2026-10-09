@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
-import { UNDO_NOTE, deriveAutoCategories, type AutoCatKey } from "@/components/month-close/derive";
+import { UNDO_NOTE, humanize, deriveAutoCategories, type AutoCatKey } from "@/components/month-close/derive";
 
 export type { AutoReportDTO };
 const HEAD_ROWS = 6;
@@ -99,12 +99,12 @@ export function AutoSummaryCard({ auto, busy, locked, onUndo }: { auto: AutoRepo
                       <tbody>
                         {shown.map((r, i) => (
                           <tr key={i} className="border-t border-zk-border-soft align-top">
-                            <td className="px-3 py-2 font-medium">{r.site || "—"}</td>
+                            <td className="px-3 py-2 font-medium">{humanize(r.site) || "—"}</td>
                             {showPrice && <td className="px-2 py-2">{r.shiftType ? <span className="rounded bg-zk-primary-tint px-1.5 py-px text-[11px] font-semibold text-zk-primary-deep">{r.shiftType}</span> : "—"}</td>}
                             {showBroker && <td className="px-2 py-2">{r.broker || "—"}</td>}
                             <td className="px-2 py-2 text-right">{r.n ?? "—"}</td>
-                            {showPrice && <td className="px-2 py-2">{r.price || "—"}</td>}
-                            <td className="px-2 py-2">{r.basis ? <span className="inline-block rounded-[10px] bg-zk-surface px-2 py-0.5 text-[11px] text-[#475569]">{r.basis}</span> : "—"}</td>
+                            {showPrice && <td className="px-2 py-2">{humanize(r.price) || "—"}</td>}
+                            <td className="px-2 py-2">{r.basis ? <span className="inline-block rounded-[10px] bg-zk-surface px-2 py-0.5 text-[11px] text-[#475569]">{humanize(r.basis)}</span> : "—"}</td>
                           </tr>
                         ))}
                       </tbody>

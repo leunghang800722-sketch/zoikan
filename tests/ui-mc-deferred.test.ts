@@ -116,6 +116,26 @@ describe("DeferredSender", () => {
     expect(order).toEqual(["a", "b", "c"]);
   });
 
+  it("timer 自動送出失敗 → 失敗集合保留，之後 flush 都係 false（唔會被重設）", async () => {
+    const { s, failed } = make({ ok: false, message: "500" });
+    await s.schedule(item("a"));
+    await vi.advanceTimersByTimeAsync(DEFERRED_UNDO_MS + 1500);
+    expect(failed).toEqual([["a", "500"]]);
+    expect(s.failedCount()).toBe(1);
+    expect(await s.flush()).toBe(false);
+    expect(await s.flush()).toBe(false);
+  });
+
+  it("A 由 B 觸發送出失敗、B 由 timer 送出失敗 → 兩個都保留；重試先清", async () => {
+    const { s } = make({ ok: false, message: "x" });
+    await s.schedule(item("a"));
+    await s.schedule(item("b"));
+    await vi.advanceTimersByTimeAsync(DEFERRED_UNDO_MS + 1500);
+    expect(s.failedCount()).toBe(2);
+    await s.schedule(item("a")); // 重試 a
+    expect(s.failedCount()).toBe(1);
+  });
+
   it("冇 pending 時 flush／undo 無副作用", async () => {
     const { s, send } = make();
     await s.flush();

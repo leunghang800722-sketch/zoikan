@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import type { RunDTO } from "@/components/month-close/types";
-import { deriveAutoCategories, stepChips, stepKv, stepSeconds, stepSummary } from "@/components/month-close/derive";
+import { humanize, deriveAutoCategories, stepChips, stepKv, stepSeconds, stepSummary } from "@/components/month-close/derive";
 
 function Dot({ status, q }: { status: string; q: number }) {
   let cls = "bg-[#ccfbf1] text-[#0f766e]";
@@ -59,7 +59,7 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
       {(run.stalled || run.error_message) && (
         <div className="flex flex-col gap-2 border-b border-zk-border-soft px-4 py-3">
           {run.stalled && <Banner kind="error" message="呢個 run 卡住咗（超過 15 分鐘冇進度）——撳「重新執行」安全（冪等，唔會重複計）" />}
-          {run.error_message && <Banner kind="error" message={run.error_message} />}
+          {run.error_message && <Banner kind="error" message={humanize(run.error_message)} />}
         </div>
       )}
       <div>
@@ -89,7 +89,7 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
               {s.needs_human.length > 0 && (
                 <ul className="mx-4 mb-2 list-disc pl-6 text-[11.5px] text-red-700 md:ml-14" data-testid="step-needs-human">
                   {s.needs_human.map((w, i) => (
-                    <li key={i}>{w}</li>
+                    <li key={i}>{humanize(w)}</li>
                   ))}
                 </ul>
               )}
@@ -98,7 +98,7 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
                   {s.warnings.length > 0 && (
                     <ul className="mb-2 list-disc pl-4 text-[11.5px] text-orange-700">
                       {s.warnings.map((w, i) => (
-                        <li key={i}>{w}</li>
+                        <li key={i}>{humanize(w)}</li>
                       ))}
                     </ul>
                   )}

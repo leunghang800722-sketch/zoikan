@@ -10,7 +10,7 @@ import { Pill } from "@/components/ui/Pill";
 import { apiGet, apiRequest, type ApiResult } from "@/lib/ui/api-client";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
-import { UNDO_NOTE_SHORT, kindChip } from "@/components/month-close/derive";
+import { UNDO_NOTE_SHORT, humanize, kindChip } from "@/components/month-close/derive";
 import { clearUnsent, recordUnsent } from "@/components/month-close/unsent";
 
 // 送出一律 keepalive：離開頁面時盡力完成（URL／method／body 同原本一樣）。
@@ -87,6 +87,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   const drafts = useRef<Record<string, { candidate: string; broker: string; price: { client: string; wage: string; fee: string } }>>({});
   const [mode, setMode] = useState<"accept" | "pick" | "price" | "other">("accept");
   const [expanded, setExpanded] = useState(false);
+  const [closeBlocked, setCloseBlocked] = useState(false);
+  const [tapLock, setTapLock] = useState(false);
 
   const load = useCallback(async () => {
     const res = await apiGet<SessionRes>(`/api/triage/sessions/${sessionId}`);
@@ -177,12 +179,21 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     setBroker(d?.broker ?? "");
     setPrice(d?.price ?? { client: "", wage: "", fee: "" });
     setExpanded(!!d);
+    setTapLock(true); // 1e：新題出現後 400ms 內唔俾撳，避免雙撳撞中下一題
+    const t = setTimeout(() => setTapLock(false), 400);
+    return () => clearTimeout(t);
     setMode(q?.mc.prefill_candidate_id ? "accept" : q?.mc.needs_price_input ? "price" : "pick");
   }, [q?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function closeDialog() {
-    const ok = await sender.flush();
-    if (!ok) return; // 送出失敗：唔關對話框，題目返回並標「未送出，請再試」
+    await sender.flush();
+    // 送出失敗（含 5 秒 timer 自動送出失敗）：唔關對話框，題目返回並標「未送出，請再試」；
+    // 撳多一次先放棄（失敗題已記低，頁面會提示重新答）。
+    if (sender.failedCount() > 0 && !closeBlocked) {
+      setCloseBlocked(true);
+      setError("有題未送出，請再試；如要放棄，再撳一次關閉（頁面會提示你重新答）");
+      return;
+    }
     onClose();
   }
 
@@ -231,9 +242,9 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 }}
               />
               <span className="flex-1">
-                {c.label}
+                {humanize(c.label)}
                 {c.values_text ? <b className="ml-1">{c.values_text}</b> : null}
-                {c.evidence ? <span className="block text-[11.5px] text-zk-faint">{c.evidence}</span> : null}
+                {c.evidence ? <span className="block text-[11.5px] text-zk-faint">{humanize(c.evidence)}</span> : null}
               </span>
             </label>
           ))}
@@ -352,22 +363,22 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 </span>
               </div>
               <div>
-                <div className="text-[21px] font-bold leading-[1.35]">{q.title}</div>
+                <div className="text-[21px] font-bold leading-[1.35]">{humanize(q.title)}</div>
                 <div className="mt-1 text-[15px] text-[#334155]" data-testid="mc-summary">
-                  {q.mc.summary}
+                  {humanize(q.mc.summary)}
                 </div>
-                {q.mc.identity_label && <div className="mt-1 text-[12px] text-zk-faint">更表身份：{q.mc.identity_label}</div>}
+                {q.mc.identity_label && <div className="mt-1 text-[12px] text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
               </div>
               {canAccept ? (
                 <div className="rounded-[14px] border-2 border-[#2563eb] bg-[#f8fbff] px-4 py-3.5" data-testid="mc-suggest-card">
                   <div className="text-[12px] font-semibold text-[#1d4ed8]">系統建議</div>
-                  <div className="mt-1 text-[20px] font-bold">{q.mc.suggestion ?? (suggestCand ? `${suggestCand.label}${suggestCand.values_text ? ` ${suggestCand.values_text}` : ""}` : "按建議答案")}</div>
-                  {suggestCand?.evidence && <div className="mt-1.5 text-[12px] text-zk-muted">依據：{suggestCand.evidence}</div>}
+                  <div className="mt-1 text-[20px] font-bold">{humanize(q.mc.suggestion ?? (suggestCand ? `${suggestCand.label}${suggestCand.values_text ? ` ${suggestCand.values_text}` : ""}` : "按建議答案"))}</div>
+                  {suggestCand?.evidence && <div className="mt-1.5 text-[12px] text-zk-muted">依據：{humanize(suggestCand.evidence)}</div>}
                 </div>
               ) : (
                 <div className="rounded-[14px] border border-dashed border-[#cbd5e1] bg-zk-surface-2 px-4 py-3.5" data-testid="mc-nosuggest-card">
                   <div className="text-[12px] font-semibold text-zk-muted">冇建議答案</div>
-                  <div className="mt-1 text-[13.5px] leading-normal text-[#334155]">系統冇足夠依據自己決定，要你揀。</div>
+                  <div className="mt-1 text-[13.5px] leading-normal text-[#334155]">系統唔肯自己決定，要你揀。</div>
                 </div>
               )}
               {(canAccept || !ackOnly) && (
@@ -414,10 +425,10 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
           {toast}
           {q && primary && (
             <div className="flex gap-2.5">
-              <button type="button" onClick={skip} className="h-[54px] flex-1 rounded-xl border border-[#cbd5e1] bg-white text-[15px] font-semibold text-[#334155]" data-testid="mc-skip">
+              <button type="button" onClick={skip} disabled={tapLock} className="h-[54px] flex-1 disabled:opacity-40 rounded-xl border border-[#cbd5e1] bg-white text-[15px] font-semibold text-[#334155]" data-testid="mc-skip">
                 跳過，留返人手
               </button>
-              <button type="button" onClick={primary.run} disabled={primary.disabled} data-testid={primary.testid} className="h-[54px] flex-1 rounded-xl text-[15px] font-semibold text-white disabled:opacity-40" style={{ background: primary.dark ? "#0f172a" : "#2563eb" }}>
+              <button type="button" onClick={primary.run} disabled={primary.disabled || tapLock} data-testid={primary.testid} className="h-[54px] flex-1 rounded-xl text-[15px] font-semibold text-white disabled:opacity-40" style={{ background: primary.dark ? "#0f172a" : "#2563eb" }}>
                 {primary.label}
               </button>
             </div>
@@ -469,11 +480,11 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 <Pill variant="neutral">{kindChip(q.kind, q.kind_label)}</Pill>
                 <Pill variant={q.mc.confidence === "propose" ? "warning" : "danger"}>{q.mc.confidence === "propose" ? "有建議" : "要你揀"}</Pill>
               </div>
-              <div className="text-[14px] font-medium">{q.title}</div>
+              <div className="text-[14px] font-medium">{humanize(q.title)}</div>
               <div className="text-[12.5px] text-zk-muted" data-testid="mc-summary">
-                {q.mc.summary}
+                {humanize(q.mc.summary)}
               </div>
-              {q.mc.identity_label && <div className="text-[12px] text-zk-faint">更表身份：{q.mc.identity_label}</div>}
+              {q.mc.identity_label && <div className="text-[12px] text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
               {form}
             </>
           )}

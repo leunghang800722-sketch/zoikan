@@ -34,7 +34,8 @@ export class DeferredSender {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private chain: Promise<void> = Promise.resolve();
   private queued = new Set<string>();
-  private failures = 0;
+  /** 送出失敗（含 timer 自動送出失敗）嘅題目：只有該題重試（schedule）先清，唔會因 flush 而重設。 */
+  private failed = new Map<string, string>();
 
   constructor(
     private readonly opts: {
@@ -54,6 +55,11 @@ export class DeferredSender {
 
   private notify() {
     this.opts.onChange?.(this.view());
+  }
+
+  /** 未送出（失敗）嘅題目數。 */
+  failedCount(): number {
+    return this.failed.size;
   }
 
   inFlightIds(): string[] {
@@ -80,9 +86,11 @@ export class DeferredSender {
         res = { ok: false, message: e instanceof Error ? e.message : "送出失敗" };
       }
       this.queued.delete(item.id);
-      if (res.ok) this.opts.onSent(item, res.detail);
-      else {
-        this.failures++;
+      if (res.ok) {
+        this.failed.delete(item.id);
+        this.opts.onSent(item, res.detail);
+      } else {
+        this.failed.set(item.id, res.message);
         this.opts.onFailed(item, res.message);
       }
       this.notify();
@@ -91,6 +99,7 @@ export class DeferredSender {
 
   /** 同步設新 pending（可撤銷 5 秒）；上一個 pending（如有）即刻排入送出隊列。 */
   schedule(item: DeferredItem): Promise<void> {
+    this.failed.delete(item.id); // 用戶重新答呢題＝重試
     if (this.pending) {
       const prev = this.pending;
       this.pending = null;
@@ -126,10 +135,6 @@ export class DeferredSender {
       this.dispatch(it);
       this.notify();
     }
-    return this.chain.then(() => {
-      const ok = this.failures === 0;
-      this.failures = 0;
-      return ok;
-    });
+    return this.chain.then(() => this.failed.size === 0);
   }
 }

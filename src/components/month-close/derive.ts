@@ -416,8 +416,8 @@ function nameList(names: string[], max = 5): string {
 export function lockRequirements(report: ReportDTO, pricingQuestions: number): LockReq[] {
   const lp = report.lock_precondition;
   const out: LockReq[] = [];
-  if (lp.missing_upload_sites.length > 0) out.push({ key: "missing_upload", title: `${lp.missing_upload_sites.length} 個盤未上載更表`, detail: nameList(lp.missing_upload_sites), action: "roster-uploads", actionLabel: "去更表上載 ›" });
-  if (lp.unconfirmed_upload_sites.length > 0) out.push({ key: "unconfirmed", title: `${lp.unconfirmed_upload_sites.length} 個盤嘅更表未對數確認`, detail: nameList(lp.unconfirmed_upload_sites), action: "roster-uploads", actionLabel: "去更表上載 ›" });
+  if (lp.missing_upload_sites.length > 0) out.push({ key: "missing_upload", title: `${lp.missing_upload_sites.length} 個盤未上載更表`, detail: humanize(nameList(lp.missing_upload_sites)), action: "roster-uploads", actionLabel: "去更表上載 ›" });
+  if (lp.unconfirmed_upload_sites.length > 0) out.push({ key: "unconfirmed", title: `${lp.unconfirmed_upload_sites.length} 個盤嘅更表未對數確認`, detail: humanize(nameList(lp.unconfirmed_upload_sites)), action: "roster-uploads", actionLabel: "去更表上載 ›" });
   const unpriced = lp.unpriced_count ?? 0;
   if (unpriced > 0) {
     out.push({
@@ -507,6 +507,21 @@ export function splitSiteRevenue(rows: ReportDTO["site_revenue"]): { shown: Repo
 export const UNDO_NOTE = "只還原系統自動做嘅改動（自動建嘅更種、價卡、補價、歸屬、別名；安員自動登記嘅別名／工號都會還原）。自動建嘅盤唔會刪。你喺「要你睇」一撳確認咗嘅答案唔會還原；仲未答嘅題會作廢，下次重跑會重新出。已經人手改過價嘅更唔會郁。";
 export const UNDO_NOTE_SHORT = "只還原系統自動做嘅改動；你一撳確認咗嘅答案唔會還原，未答嘅題會作廢，人手改過價嘅更唔會郁。";
 
+/** 顯示 API 文字前嘅禁用詞替換（集中處理；API 文字唔改）。 */
+export function humanize(text: string): string {
+  return text
+    .replace(/（parsed）/g, "（已解析，未對數）")
+    .replace(/冇依據/g, "要你揀")
+    .replace(/有依據/g, "有建議")
+    .replace(/(?<![A-Za-z_])unmatched(?![A-Za-z_])/gi, "對唔到安員")
+    .replace(/(?<![A-Za-z_])ambiguous(?![A-Za-z_])/gi, "有多個可能")
+    .replace(/(?<![A-Za-z_])name_only(?![A-Za-z_])/gi, "淨靠姓名配對")
+    .replace(/(?<![A-Za-z_])shift(?![A-Za-z_])/gi, "更")
+    .replace(/(?<![A-Za-z_])leave(?![A-Za-z_])/gi, "假")
+    .replace(/(?<![A-Za-z_])external(?![A-Za-z_])/gi, "客戶自己人")
+    .replace(/(?<![A-Za-z_])parsed(?![A-Za-z_])/gi, "已解析");
+}
+
 /** 題型 chip：UI 自己按 kind 對應（唔直接顯示 API kind_label，佢會出「冇依據」等禁用詞）。 */
 export function kindChip(kind: string, fallbackLabel: string): string {
   switch (kind) {
@@ -522,7 +537,7 @@ export function kindChip(kind: string, fallbackLabel: string): string {
     case "month_close_site_new":
       return "盤名";
     default:
-      return fallbackLabel.replace(/冇依據/g, "要你揀").replace(/有依據/g, "有建議").replace(/\bshift\b/g, "更").replace(/\bleave\b/g, "假").replace(/\bunmatched\b/g, "對唔到安員").replace(/\bambiguous\b/g, "有多個可能").replace(/\bname_only\b/g, "淨靠姓名配對");
+      return humanize(fallbackLabel);
   }
 }
 
