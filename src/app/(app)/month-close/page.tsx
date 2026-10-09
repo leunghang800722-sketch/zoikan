@@ -13,6 +13,8 @@ import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
 import { fmtDateTime, fmtMoney, currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { MonthHealthCard } from "./MonthHealthCard";
+import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
+import { AutoSummaryCard, type AutoReportDTO } from "./AutoSummaryCard";
 
 interface StepDTO {
   key: string;
@@ -31,7 +33,16 @@ interface ReportDTO {
   payroll_by_broker: Array<{ broker_code: string; broker_name: string; shifts: number; amount: number }>;
   site_revenue: Array<{ site_id: string; site_name: string; shifts: number; revenue: number }>;
   referral_fee: { total: number; count: number };
-  unpriced: { count: number; payout_count: number; client_count: number; no_settlement_count: number; ot_unpriced_count: number };
+  unpriced: {
+    count: number;
+    payout_count: number;
+    client_count: number;
+    no_settlement_count: number;
+    ot_unpriced_count: number;
+    gap?: { records: number; client_gap_estimate: number | null; payout_gap_estimate: number | null; no_reference_records: number } | null;
+  };
+  /** WP-ONE-CLICK-AUTO §31.3 E：自動處理摘要＋要你睇＋撤銷狀態（舊 run 冇）。 */
+  auto?: AutoReportDTO;
   postorder_compare: { uploaded: boolean; referral_excel_total: number | null; referral_system_total: number; referral_diff: number | null; note: string } | null;
   needs_human: string[];
   health?: { critical: number; warn: number; info: number } | null;
@@ -81,6 +92,7 @@ export default function MonthCloseOneClickPage() {
   const [staffListFile, setStaffListFile] = useState<File | null>(null);
   const [postorderFiles, setPostorderFiles] = useState<File[]>([]);
   const pollingRef = useRef<string | null>(null);
+  const [triageOpen, setTriageOpen] = useState<string | null>(null);
 
   async function loadRuns() {
     const res = await apiGet<{ runs: RunDTO[] }>(`/api/month-close/one-click?month=${month}`);
@@ -188,6 +200,22 @@ export default function MonthCloseOneClickPage() {
     const res = await apiPost(`/api/month-close/one-click/${runId}/rerun`);
     setBusy(false);
     if (!res.ok) setError(res.message);
+    await loadRuns();
+  }
+
+  // WP-ONE-CLICK-AUTO §31.3 E：一撳還原呢個 run 所有 auto 改動。
+  async function undoAuto(runId: string) {
+    if (!window.confirm("還原呢次一鍵結算所有「自動」改動？（價卡作廢、別名移除、結算雞頭還原、自動配對還原；你喺分診題一撳確認嘅唔會還原）")) return;
+    setBusy(true);
+    setError(null);
+    const res = await apiPost<{ undone: Record<string, number>; skipped: Array<{ kind: string; reason: string }>; already_undone: boolean }>(`/api/month-close/one-click/${runId}/undo-auto`);
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    const total = Object.values(res.data.undone).reduce((a, b) => a + b, 0);
+    setNotice(res.data.already_undone ? "之前已經還原過" : `已還原 ${total} 項自動改動${res.data.skipped.length ? `；${res.data.skipped.length} 項保留（${res.data.skipped.map((x) => x.reason).slice(0, 2).join("；")}）` : ""}`);
     await loadRuns();
   }
 
@@ -372,6 +400,8 @@ export default function MonthCloseOneClickPage() {
           )}
           <Banner kind="info" message={report.longterm_payroll_note} />
 
+          {report.auto && <AutoSummaryCard auto={report.auto} busy={busy} onUndo={() => latestRun && undoAuto(latestRun.id)} onOpenTriage={() => setTriageOpen(report.auto?.triage_session_id ?? null)} />}
+
           {report.combined_cost_summary && (
             <div>
               <div className="mb-1 text-[13px] font-medium text-zk-text">合併成本（§16.2 口徑，2026-08 起）</div>
@@ -467,6 +497,14 @@ export default function MonthCloseOneClickPage() {
               <div className="text-[11px] text-zk-muted">
                 收客 {report.unpriced.client_count}／出街 {report.unpriced.payout_count}／冇結算單位 {report.unpriced.no_settlement_count}／OT {report.unpriced.ot_unpriced_count}
               </div>
+              {report.unpriced.count > 0 && (
+                <div className="mt-1 text-[11px] text-orange-700" data-testid="unpriced-gap">
+                  未定價更數唔當 0 成本：上面成本／毛利未包呢 {report.unpriced.count} 更。
+                  {report.unpriced.gap && (report.unpriced.gap.client_gap_estimate !== null || report.unpriced.gap.payout_gap_estimate !== null)
+                    ? `估算缺口（按同盤同更種最近已知價，只作提示）：收入約 ${report.unpriced.gap.client_gap_estimate !== null ? fmtMoney(report.unpriced.gap.client_gap_estimate) : "—"}／成本約 ${report.unpriced.gap.payout_gap_estimate !== null ? fmtMoney(report.unpriced.gap.payout_gap_estimate) : "—"}${report.unpriced.gap.no_reference_records > 0 ? `；另有 ${report.unpriced.gap.no_reference_records} 更冇任何參考價` : ""}。`
+                    : "冇參考價可以估算。"}
+                </div>
+              )}
             </div>
           </div>
 
@@ -515,6 +553,17 @@ export default function MonthCloseOneClickPage() {
             )}
           </div>
         </section>
+      )}
+
+      {triageOpen && (
+        <MonthCloseTriageDialog
+          sessionId={triageOpen}
+          onClose={() => {
+            setTriageOpen(null);
+            void loadRuns();
+          }}
+          onChanged={() => void loadRuns()}
+        />
       )}
 
       <section className="rounded-lg border border-zk-border bg-white p-4">

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { getSessionFor, isSupplementary, restrictedKindsFor } from "@/lib/triage/session";
 import { questionViews, viewerCaps } from "@/lib/triage/view";
+import { mcQuestionViews } from "@/lib/month-close/auto/triage";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 
@@ -27,7 +28,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       if (g.status === "open" && restricted.has(g.kind)) c.restricted_open += g._count._all;
       c.total += g._count._all;
     }
-    const questions = await questionViews(rows, await viewerCaps(actor));
+    const caps = await viewerCaps(actor);
+    // WP-ONE-CLICK-AUTO：month_close 分診題（一鍵結算自我修復）用自己嘅 DTO，唔經安員導入證據遮罩。
+    const questions = session.sourceType === "month_close" ? await mcQuestionViews(rows, { pii: caps.pii }) : await questionViews(rows, caps);
     return ok(
       brandSafeResponse({
         session: { id: session.id, source_type: session.sourceType, owner_user_id: session.ownerUserId, status: session.status, created_at: session.createdAt, completed_at: session.completedAt, counts: c },
