@@ -252,5 +252,45 @@ describe("WP-ONE-CLICK-AUTO hotfix1：0 更種現有盤自我修復", () => {
     expect(pre.warnings.some((w) => w.includes(SITE) && w.includes("2 格") && w.includes("更種已作廢"))).toBe(true);
     expect(pre.needsHuman.some((h) => h.includes("「N」冇生效價卡") || h.includes("「N」冇本月生效卡"))).toBe(false);
   });
+
+  const rowIds = async (siteId: string) => (await prisma.rosterUploadRow.findMany({ where: { upload: { siteId } }, select: { id: true }, orderBy: { id: "asc" } })).map((r) => r.id).join(",");
+
+  it("(n)+(p) 永遠配唔到嘅格（7am-7pm 兩個候選）：run1 reparse 一次＋warning 有格數；run2／run3 唔再 reparse（row id 不變、對數決定保留）", async () => {
+    const site = await prisma.site.create({ data: { canonicalName: "測試歧義盤", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
+    await mkGuard({ name: "測試甲", staffNo: "U90001" });
+    const up = (await uploadRoster({ siteRaw: "測試歧義盤", month: SEPT, uploaderUserId: boss(), siteIdHint: site.id, lines: [{ broker: "HK", time: "7am-7pm", staffNo: "U90001", name: "測試甲", codes: { 1: "D", 2: "D" } }] })).upload;
+    // 更種喺上載解析之後先建（兩個 D，開工時間唔同）
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date("1970-01-01T07:00:00Z"), endTime: new Date("1970-01-01T19:00:00Z"), hours: 12, createdBy: "t" } });
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date("1970-01-01T08:00:00Z"), endTime: new Date("1970-01-01T20:00:00Z"), hours: 12, createdBy: "t" } });
+    const before = await rowIds(site.id);
+    const r1 = await stepParseHealth(SEPT, boss(), new AutoCollector(null, SEPT, boss(), null));
+    const after1 = await rowIds(site.id);
+    expect(after1).not.toBe(before);
+    expect(r1.warnings.some((w) => w.includes("仍有 2 格") && w.includes("測試歧義盤"))).toBe(true);
+    const one = await prisma.rosterUploadRow.findFirstOrThrow({ where: { uploadId: up.id } });
+    await prisma.rosterReconcileDecision.create({ data: { uploadId: up.id, reconcileKey: `row:${one.id}`, category: "unresolved", action: "exception", reason: "t", decidedBy: boss() } });
+    await stepParseHealth(SEPT, boss(), new AutoCollector(null, SEPT, boss(), null));
+    await stepParseHealth(SEPT, boss(), new AutoCollector(null, SEPT, boss(), null));
+    expect(await rowIds(site.id)).toBe(after1);
+    expect(await prisma.rosterReconcileDecision.count({ where: { uploadId: up.id } })).toBe(1);
+  });
+
+  it("(o) 人手 unvoid＋PATCH 更種之後再撳一鍵 → reparse 一次、格配到、更次入數；之後唔再 reparse", async () => {
+    const site = await seed();
+    const d = await prisma.shiftType.create({ data: { siteId: site.id, code: "D", startTime: new Date("1970-01-01T09:00:00Z"), endTime: new Date("1970-01-01T21:00:00Z"), hours: 12, createdBy: "t", voidedAt: new Date(), voidedBy: boss() } });
+    await prisma.shiftType.create({ data: { siteId: site.id, code: "N", startTime: new Date("1970-01-01T20:00:00Z"), endTime: new Date("1970-01-01T08:00:00Z"), hours: 12, createdBy: "t" } });
+    const r1 = await newRun();
+    await runOneClickMonthClose(r1.id, SEPT, boss(), null);
+    expect(await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: SEPT }, status: { not: "cancelled" } } })).toBe(2);
+    // 用戶跟分診題：unvoid＋改時間
+    await prisma.shiftType.update({ where: { id: d.id }, data: { voidedAt: null, voidedBy: null, startTime: new Date("1970-01-01T08:00:00Z"), endTime: new Date("1970-01-01T20:00:00Z") } });
+    const r2 = await newRun();
+    await runOneClickMonthClose(r2.id, SEPT, boss(), null);
+    expect(await prisma.shiftRecord.count({ where: { siteId: site.id, workDate: { gte: SEPT }, status: { not: "cancelled" } } })).toBe(5);
+    const ids2 = await rowIds(site.id);
+    const r3 = await newRun();
+    await runOneClickMonthClose(r3.id, SEPT, boss(), null);
+    expect(await rowIds(site.id)).toBe(ids2);
+  });
 });
 

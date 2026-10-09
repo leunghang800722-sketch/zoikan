@@ -52,7 +52,7 @@ function optionsFor(d: McQuestionDraft): QuestionOption[] {
   if (ev.prefillCandidateId) out.push({ id: "mc_accept", label: ev.suggestion ? `一撳確認：${ev.suggestion}` : "一撳確認建議答案" });
   if (ev.candidates.length > 1 || (ev.candidates.length === 1 && !ev.prefillCandidateId)) out.push({ id: "mc_pick", label: "揀另一個候選" });
   if (ev.kind === "month_close_site_alias") out.push({ id: "mc_new", label: "唔係，當新盤（自動建更種）" });
-  if (ev.kind === "month_close_pricing" || ev.kind === "month_close_site_new") out.push({ id: "mc_price", label: "自己輸入價錢", hint: "客價／工資／雞頭費（元／更）" });
+  if (ev.kind === "month_close_pricing" || (ev.kind === "month_close_site_new" && !(ev.action.type === "site_new" && ev.action.groups.length === 0))) out.push({ id: "mc_price", label: "自己輸入價錢", hint: "客價／工資／雞頭費（元／更）" });
   if (ev.kind === "month_close_settlement" && !out.some((o) => o.id === "mc_pick")) out.push({ id: "mc_pick", label: "揀其他結算雞頭" });
   if (ev.kind === "month_close_shift_variance" || ev.action.type === "ot_hours" || (ev.action.type === "site_new" && ev.action.groups.length === 0)) out.push({ id: "mc_ack", label: "我已處理／已覆核" });
   out.push({ id: "skip", label: "跳過，留返人手" });

@@ -149,8 +149,11 @@ async function classifyGroup(siteId: string, g: ShiftTypeGroup): Promise<{ actio
   const undone = await prisma.monthCloseAutoChange.findFirst({ where: { kind: "shift_type_created", refId: exists.id, status: "undone" }, select: { id: true } });
   const identical = sameTime(exists.endTime, end) && sameHours(exists.hours, hours);
   if (undone && identical) return { action: { kind: "revive", stId: exists.id, code: exists.code }, start, end, hours };
-  const who = undone ? "一鍵結算撤銷咗嘅" : "人手作廢嘅";
-  const reason = `同 code 同開工時間已有${who}更種「${exists.code}」（${hmOf(exists.startTime)}-${hmOf(exists.endTime)}，${exists.hours === null ? "—" : Number(exists.hours)} 小時），上載係 ${hmOf(start)}-${hmOf(end)}（${hours ?? "—"} 小時），收工時間或鐘數唔同，唔自動復原亦唔另建`;
+  const spec = `更種「${exists.code}」（${hmOf(exists.startTime)}-${hmOf(exists.endTime)}，${exists.hours === null ? "—" : Number(exists.hours)} 小時）`;
+  const upl = `上載係 ${hmOf(start)}-${hmOf(end)}（${hours ?? "—"} 小時）`;
+  const reason = !undone
+    ? `同 code 同開工時間已有人手作廢嘅${spec}，${upl}；人手作廢，唔自動復原亦唔另建`
+    : `同 code 同開工時間已有一鍵結算撤銷咗嘅${spec}，${upl}；收工時間或鐘數唔同，唔自動復原亦唔另建`;
   return { action: { kind: "blocked", reason }, start, end, hours };
 }
 
@@ -202,7 +205,6 @@ export async function ensureShiftTypesFromUpload(
     }
   }
   if (blocked.length > 0) {
-    ctx.warnings.push(`${label}「${site.canonicalName}」有更種唔自動復原／建立：${blocked.join("；")}`);
     ctx.addQuestion({
       kind: "month_close_site_new",
       groupKey: `site_shift_type_voided:${site.id}`,
@@ -214,7 +216,7 @@ export async function ensureShiftTypesFromUpload(
         runId: ctx.runId ?? "",
         month: ctx.month.toISOString().slice(0, 10),
         kind: "month_close_site_new",
-        summary: `${blocked.join("；")}。相關格未計入——請去「盤」管理確認：復原該更種（並改啱收工時間／鐘數）或者另加不同開工時間嘅更種，再重新撳一鍵結算`,
+        summary: `${blocked.join("；")}。相關格未計入——請去「盤」管理確認：復原該更種（並改啱收工時間／鐘數）或者另加不同開工時間嘅更種。處理完再撳一鍵結算，系統會自動重新配對該盤本月更表`,
         suggestion: null,
         confidence: "unknown",
         action: { type: "site_new", siteId: site.id, groups: [] },
@@ -225,7 +227,7 @@ export async function ensureShiftTypesFromUpload(
   }
   if (unparsedCodes.length > 0) {
     const codesText = [...new Set(unparsedCodes)].join("、");
-    ctx.warnings.push(`${label}「${site.canonicalName}」更表代號「${codesText}」嘅時段解析唔到（要 0700-1900 呢類寫法），未建更種，呢啲格暫時未計入`);
+    if (opts.isNewSite) ctx.warnings.push(`${label}「${site.canonicalName}」更表代號「${codesText}」嘅時段解析唔到（要 0700-1900 呢類寫法），未建更種，呢啲格暫時未計入`);
     ctx.addQuestion({
       kind: "month_close_site_new",
       groupKey: `site_new_times:${site.id}`,
@@ -308,28 +310,42 @@ export interface EmptySiteResult {
   blocked: string[];
   /** 全部 reparse 都成功（冇建更種時恆為 true）。 */
   reparsedOk: boolean;
-  /** 只係補 reparse（盤已有更種，但有格應該配到而未配）。 */
+  /** 只係補 reparse（盤已有更種，但更種比上載最後解析新）。 */
   repairOnly: boolean;
+  /** reparse 之後仍然有代號對得到生效更種、但冇配到嘅格數（歧義）。 */
+  ambiguousCells: number;
 }
 
-/** 盤已有更種、但有格代號對得到某個生效更種而未配（例如上次建更種後 reparse 失敗）嘅本月 active 上載。 */
-async function uploadsNeedingRematch(siteId: string, month: Date): Promise<string[]> {
-  const types = await prisma.shiftType.findMany({ where: { siteId, voidedAt: null }, select: { id: true, code: true } });
-  if (types.length === 0) return [];
-  // 只修復一鍵結算自己建／復原過嘅更種（人手建嘅更種唔郁，避免每次都 reparse confirmed 上載）。
-  const journaled = await prisma.monthCloseAutoChange.count({ where: { kind: "shift_type_created", status: "applied", refId: { in: types.map((t) => t.id) } } });
-  if (journaled === 0) return [];
-  const codes = [...new Set(types.map((t) => t.code.toUpperCase()))];
-  const rows = await prisma.rosterUploadRow.findMany({
-    where: {
-      codeKind: { in: ["shift", "ot"] },
-      shiftTypeId: null,
-      upload: { month, status: { in: ["parsed", "confirmed"] } },
-      OR: [{ resolvedSiteId: siteId }, { resolvedSiteId: null, upload: { siteId } }],
-    },
-    select: { uploadId: true, rawCode: true },
+/**
+ * 盤嘅生效更種比上載最後一次解析新（更種喺上載解析之後建／復原／被 PATCH／unvoid）→ 該上載要 reparse 一次，格先配到更種。
+ * 以時間比較：上載解析時間＝rows 最後 created_at（reparse 會重建 rows）；更種時間＝生效更種最大 updated_at。
+ * reparse 之後 rows 就新過更種，下個 run 唔會再 reparse（永遠配唔到嘅格唔會令每個 run 重複 reparse）。
+ */
+async function uploadsStaleAgainstShiftTypes(siteId: string, month: Date): Promise<string[]> {
+  const stMax = (await prisma.shiftType.aggregate({ where: { siteId, voidedAt: null }, _max: { updatedAt: true } }))._max.updatedAt;
+  if (!stMax) return [];
+  const uploads = await prisma.rosterUpload.findMany({
+    where: { month, status: { in: ["parsed", "confirmed"] }, OR: [{ siteId }, { rows: { some: { resolvedSiteId: siteId } } }] },
+    select: { id: true },
   });
-  return [...new Set(rows.filter((r) => codes.includes(r.rawCode.trim().toUpperCase())).map((r) => r.uploadId))];
+  const stale: string[] = [];
+  for (const u of uploads) {
+    const parsedAt = (await prisma.rosterUploadRow.aggregate({ where: { uploadId: u.id }, _max: { createdAt: true } }))._max.createdAt;
+    if (parsedAt && parsedAt < stMax) stale.push(u.id);
+  }
+  return stale;
+}
+
+/** reparse 之後，盤仍有 shift／ot 格代號對得到某個生效更種、但冇配到（例如多過一個候選、時段對唔到）嘅格數。 */
+async function ambiguousUnmatchedCells(siteId: string, month: Date): Promise<number> {
+  const types = await prisma.shiftType.findMany({ where: { siteId, voidedAt: null }, select: { code: true } });
+  const codes = new Set(types.map((t) => t.code.toUpperCase()));
+  if (codes.size === 0) return 0;
+  const rows = await prisma.rosterUploadRow.findMany({
+    where: { codeKind: { in: ["shift", "ot"] }, shiftTypeId: null, upload: { month, status: { in: ["parsed", "confirmed"] } }, OR: [{ resolvedSiteId: siteId }, { resolvedSiteId: null, upload: { siteId } }] },
+    select: { rawCode: true },
+  });
+  return rows.filter((r) => codes.has(r.rawCode.trim().toUpperCase())).length;
 }
 
 /**
@@ -364,11 +380,10 @@ export async function ensureShiftTypesForEmptySites(ctx: AutoCollector, month: D
     const plan = await planShiftTypesForSite(siteId, month);
     if (!plan.eligible) {
       if ((await prisma.site.count({ where: { parentSiteId: siteId } })) > 0) continue;
-      const pending = await uploadsNeedingRematch(siteId, month);
+      const pending = await uploadsStaleAgainstShiftTypes(siteId, month);
       if (pending.length === 0) continue;
       const ok = await rematch(pending);
-      if (!ok) ctx.warnings.push(`盤「${siteName}」更種已建，但部分上載重新解析失敗，有格未配到更種——請去更表上載頁重新解析該盤上載`);
-      out.push({ siteId, siteName, created: 0, unparsedCodes: [], blocked: [], reparsedOk: ok, repairOnly: true });
+      out.push({ siteId, siteName, created: 0, unparsedCodes: [], blocked: [], reparsedOk: ok, repairOnly: true, ambiguousCells: await ambiguousUnmatchedCells(siteId, month) });
       continue;
     }
     let created = 0;
@@ -383,9 +398,8 @@ export async function ensureShiftTypesForEmptySites(ctx: AutoCollector, month: D
     let ok = true;
     if (created > 0) {
       ok = await rematch(plan.uploadIds);
-      if (!ok) ctx.warnings.push(`盤「${siteName}」更種已建，但部分上載重新解析失敗，有格未配到更種——請去更表上載頁重新解析該盤上載`);
     }
-    out.push({ siteId, siteName, created, unparsedCodes: [...unparsed], blocked: [...blocked], reparsedOk: ok, repairOnly: false });
+    out.push({ siteId, siteName, created, unparsedCodes: [...unparsed], blocked: [...blocked], reparsedOk: ok, repairOnly: false, ambiguousCells: created > 0 ? await ambiguousUnmatchedCells(siteId, month) : 0 });
   }
   return out;
 }

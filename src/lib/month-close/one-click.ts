@@ -513,8 +513,10 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
   // A2. 現有盤有效更種 = 0（例如舊版一鍵結算建咗盤但冇更種）：由本月上載格自動推更種，令同一 run 嘅 reconcile_apply 套用到。
   try {
     for (const r of await ensureShiftTypesForEmptySites(ctx, start)) {
-      if (r.created > 0) warnings.push(`盤「${r.siteName}」已自動建好／復原 ${r.created} 個更種（可撤銷）${r.reparsedOk ? "，本月格已重新配對" : "；但重新解析未全部成功，請去更表上載頁重新解析該盤上載"}`);
-      else if (r.repairOnly && r.reparsedOk) warnings.push(`盤「${r.siteName}」有格未配到已建更種，已重新解析上載`);
+      const failNote = "重新解析未全部成功，有格未配到更種，請去更表上載頁重新解析該盤上載";
+      if (r.created > 0) warnings.push(`盤「${r.siteName}」已自動建好／復原 ${r.created} 個更種（可撤銷）${r.reparsedOk ? "，本月格已重新配對" : `；但${failNote}`}`);
+      else if (r.repairOnly) warnings.push(`盤「${r.siteName}」更種有改動，${r.reparsedOk ? "已重新解析本月上載並重新配對" : failNote}`);
+      if (r.reparsedOk && r.ambiguousCells > 0) warnings.push(`盤「${r.siteName}」重新解析後仍有 ${r.ambiguousCells} 格代號對得到生效更種但配唔到（可能多過一個候選更種、或者時段寫法對唔到），未計入——請去「盤」管理檢查更種開工時間`);
       if (r.unparsedCodes.length > 0) needsHuman.push(`盤「${r.siteName}」更表代號「${r.unparsedCodes.join("、")}」時段解析唔到，冇自動建更種——請去「盤」管理手動加更種`);
       if (r.blocked.length > 0) needsHuman.push(`盤「${r.siteName}」${r.blocked.join("；")}——已入分診`);
     }
