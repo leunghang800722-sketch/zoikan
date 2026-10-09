@@ -2335,3 +2335,34 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - **作答**（`src/lib/triage/apply.ts` `assertNoNewer`；預覽＋commit 在同一把 lock／tx 內）：題目必須屬於最近一次包含呢個強身份嘅「同類包」（v2 類＝任何包；ext＝v3；bank＝有銀行段）；另外如果有較新嘅包入面有人同呢條題嘅人弱身份重疊（身份證或工號 HMAC 相同）而強身份唔同（有／冇身份證交替、工號集合變）→ 409「呢位保安員有較新嘅導入資料，請重新上載最新檔案再答」。
 - **Migration** `20261005160000_wp_staff_fields_triage_simplify`：`triage_person_applies` 加 `weak_ids`／`has_bank`；`triage_questions` 唯一索引改普通索引（全部 IF NOT EXISTS／IF EXISTS，冪等）。
 - **decisions**：`@index` 用嚴格正則 `^@(0|[1-9]\d*)$`；原始 body 嘅 `__proto__`／`constructor`／`prototype` key 一律 400（zod 前先查）；解析後 map 用 null-prototype object。
+
+## WP-ONE-CLICK-AUTO（§31，2026-10-08）：一鍵結算自我修復
+
+**目標**：每月上載更表撳一鍵，系統自己識別同解決常見問題（新盤、更數差異、未定價、無結算雞頭、安員配對要核實），只剩多候選／冇依據嘅先入分診（`month_close_*`，預填建議答案，一撳確認）。全部自動改動帶 run id、可一鍵撤銷。
+
+### 信心分級（實際門檻）
+
+| 級別 | 做法 | 門檻 |
+|---|---|---|
+| `auto` | 即刻做＋journal（`month_close_auto_changes`）＋audit（`auto_source=auto:one-click:<runId>`） | 見下面逐項 |
+| `propose` | 分診題，預填候選，一撳確認 | 有候選但唔夠硬 |
+| `unknown` | 分診題，冇預填 | 冇依據 |
+
+- **A 盤名**（`src/lib/month-close/auto/site-match.ts`，`stepParseHealth`）：NFKC＋去空白／標點／括號符號＋去常見後綴後同現有 canonical／alias 完全相同（只一個盤）→ `exact`；否則 Jaro-Winkler ≥ **0.90**、「分辨字」（英文字母段、數字段、中文數字、方位字）完全相同、編輯距離 ≤ 1（名長 ≥12 字 ≤2）、第二候選低 ≥ **0.08** → `auto` 加 alias＋歸盤；相似度 **0.75–0.90**／差異字數過多／第二候選太近／exact 撞兩個盤 → `propose`（編輯距離 ≤ 名長 34%，否則當新盤）；其餘（包括分辨字唔同——CP1-4／CP5、厚A／厚B、Weave OL／Robinson、第一期／第二期、東／西，永遠唔合併亦唔 propose）→ 新盤。同一 run 同正規化名只建一個盤。
+- **新盤自動建齊**（`site-setup.ts`）：`sites`（`billing_model=per_shift`）；更種由該上載 `raw_code`＋`time_raw` 推出（code、起止時間、鐘數；OT 代號建 OT 更種，鐘數＝OT 小時）；客戶名＝本月 Postorder（`PostOrder` 分頁）「客戶群 block」（標題無數字／斜線／括號、下面 ≥2 個唔同盤名先算）；別名＝Postorder 物業名稱／盤名部分（唔撞其他盤）。reparse 後同一 run 內更次套用得到。
+- **B 更數異常**（`variance.ts`）：口徑＝**計數更次**＝shift 格排除 external（雞頭種類 external、rank／姓名命中 external 別名、安員 external 類）；同上月差 >30%（或連 external 一齊計嘅原始格數差 >30%）就拆：external、公司兵（internal_cash）、同人同日同更種重複行、子盤變化、日期覆蓋（<80% 日數＝「檔案可能截短」並列缺邊幾號；parse 表頭警告）、雞頭組成（新增／消失）、Postorder 同盤更數（±5% 且最少 ±3）。輸出一句解釋＋`explained`；剩餘解釋唔到 **>15% 且 >20 更**先 `needs_human`（分診 `month_close_shift_variance`，冇預填）。冇逐格資料（只有 `parse_summary`）沿用舊口徑警告。
+- **C 自動定價**（`pricing.ts`，新 step `auto_pricing`，喺 `reconcile_apply` 之後、`pricing_check`／`compute` 之前）：先用現有生效卡補 null（唔建卡）；再對每組未定價（盤×更種×雞頭）按次序：(1) 同盤同更種同雞頭上期卡（最近 3 個月內完結，取最近一張）→ `auto`；(2) Postorder 同盤同崗位（時段對時段）同雞頭（尾 token＝雞頭 code／name／alias）嘅上單價／外判價，值唯一（逐人特價行剔走）→ `auto`；只有泛用行（冇指明雞頭）→ `propose`；(3) 同盤同更種其他**同類**雞頭（broker↔broker、internal_cash↔internal_cash）嘅生效卡，全部一樣 → `auto`，唔一樣 → `propose`（列候選）；(4) 同雞頭同盤其他更種、鐘數相同 → `propose`；(5) 盤通用客價（`*|*`）＋該雞頭喺同客戶群其他盤嘅最常見外判價 → `propose`；(6) 冇 → `unknown`。新盤全部冇依據 → 一條 `month_close_site_new`。OT 更種淨係配同一個 OT 更種卡（§20）。`auto` 建卡：`effective_from`＝本月 1 號、`effective_to`＝月尾、`source=auto:one-click:<runId>`、`evidence`＝來源、`confidence=auto`；金額一律等於來源值（唔平均／唔估）；Postorder 外判價入 `payout_rate`（未拆分口徑，wage＝payout、fee＝0）；淨係帶需要嘅成分（只欠出街價就唔帶客價）；auto 卡唔做其他 auto 卡嘅證據。補價係 targeted（淨補 null 或「工資 0＋雞頭費 null」）。2026-08 之前嘅月份唔做。
+- **報告唔准將未定價當 0 成本**：`report.unpriced.gap`＝未定價更數＋估算缺口（用同盤同更種最近已知卡價，只作提示，唔入任何金額表）；`pricing_check` 仍列未定價總數。
+- **D 結算雞頭歸屬**（`settlement.ts`）：`reconcile_apply` 後 `settlement_broker_id` 仍 null 嘅更，按次序：Postorder 同崗位同日雞頭（`Roster` 分頁逐日「雞頭名」，唯一而且對得到雞頭；「長工」不計）→ 長工類安員（B07）／external 類（只得一個 external 雞頭）→ 安員預設雞頭 → 近 3 個月同盤結算雞頭（安員自己嘅更，冇就用本月更表姓名／工號喺上月更表行嘅雞頭欄），多數決而且唯一 → 全部冇就分診 `month_close_settlement`（預填同盤本月最常見雞頭，唯一先預填）。**external**：解析時（`service.ts`）更表冇雞頭碼而 rank／姓名命中 external 雞頭別名（例如 B10「Wilson Guard／Wilson Supervisor」）→ `settlement_broker_id` 設做 external 雞頭；永遠分開計（`report.auto.summary.counts.external`），唔入收入／成本。
+- **guard_fix 「要老闆核實」**（`guard-match.ts`，`stepGuardFix` 尾）：單一候選＋（上月同盤同一更表姓名≥3 格全部已配對到佢，或電話硬鍵＋姓名完全一致）→ `auto`（加更表用名做別名＋登記未被佔用嘅工號，冇同 scheme 現有工號先加；reparse）；淨姓名／弱證據 → `month_close_guard_match`（單一候選預填）；多候選／冇候選 → 冇預填。
+
+### Migration `20261008120000_wp_one_click_auto`
+
+新表 `month_close_auto_changes`（public，**唔入 ai schema**；`ai.audit_log` 排除；冪等、冇 `gen_random_uuid()`／`RAISE`）：`run_id`（FK `month_close_runs`）、`kind`（site_alias｜site_created｜shift_type_created｜rate_card_created｜price_snapshots｜settlement_set｜guard_alias_added｜guard_staffno_added）、`ref_table`／`ref_id`、`summary`、`detail_json`（還原所需 before／after，冇 PII）、`undoable`、`status`（applied｜undone｜undo_skipped）、`undo_note`、`created_at`／`undone_at`／`undone_by`。`AUDIT_META_PASSTHROUGH_KEYS` 加 `auto_source`。
+
+### API
+
+- `POST /api/month-close/one-click/:id/undo-auto`——`一鍵結算:update`（老闆／會計；主管／雞頭／安員 403）→ `{run_id, undone{rate_cards,price_snapshots,settlement,site_aliases,shift_types,guard_aliases,guard_staff_numbers}, skipped[{kind,summary,reason}], already_undone, superseded_questions}`。倒序還原：價 snapshot（淨係當前值仍係自動補嗰個值先還原）、價卡作廢、結算雞頭（同上）、自動配對（移除登記嘅工號／別名）、更種作廢（**冇更次用緊先准**，否則 `skipped`）、盤別名移除；自動建嘅盤保留（`site_created` 不可還原）；open 分診題作廢；`report.auto.undone=true`。已鎖月份 409、`running` 409；冪等；全部 audit（`auto_source=undo:one-click:<runId>`）。你喺分診題一撳確認嘅改動（`triage:<題目 id>`）唔屬 auto，唔還原。
+- `report_json.auto`（`GET /api/month-close/one-click` 回應 `report.auto`）：`{summary{sites_aliased, sites_created, shift_types_created, aliases_from_postorder, cards_created, records_priced, records_settled, guard_matches_auto, variances_explained, variances_unexplained, unpriced_records, unpriced_client_gap_estimate, unpriced_payout_gap_estimate, counts{countable, external, internal_cash}}, auto_lines[{kind,text}], review[{kind,text,confidence,question_id}], triage_session_id, undone, undone_at}`。步驟新增 `auto_pricing`（`steps` 10 步）；`parse_health.numbers.varianceFindings[]`（盤名、更數、external／公司兵、explained、一句解釋）。
+- 分診：`triage_sessions.source_type=month_close`（`source_ref`＝run id，**擁有人＝撳一鍵嗰個人**）；題型 `month_close_site_alias｜month_close_site_new｜month_close_pricing｜month_close_settlement｜month_close_guard_match｜month_close_shift_variance`。`GET /api/triage/sessions/:id` 對 month_close session 回 `questions[{..., mc{summary, suggestion, confidence, action_type, count, candidates[{id,label,evidence,values,values_text}], prefill_candidate_id, needs_price_input, needs_broker_pick, broker_options[], identity_label}}]`（`identity_label` 淨係「安員個人資料:view」先有）。答案新增選項 `mc_accept`（一撳確認預填）｜`mc_pick`（`candidate_id` 或 `value`＝雞頭 id）｜`mc_new`（當新盤）｜`mc_price`（`price{client_rate,guard_wage,broker_fee}`）｜`mc_ack`（更數差異已覆核）｜`skip`。仍然兩步：`preview`（唔寫）→ `answer`（`preview_hash` HMAC，綁題目＋答案＋當刻狀態指紋，資料中途變咗 409）。答題要「導入分診:update」＋**「一鍵結算:create」**（老闆／會計），非擁有人（非老闆）403；已鎖月份 409；已答／已作廢 409。audit：`triage_answer`＋逐項寫入帶 `auto_source=triage:<題目 id>`。
+- 頁面：`/month-close` 報告加「自動處理摘要」（自動做咗乜 N 項、本月更數三堆）、「要你睇」（每項一句原因，「逐條一撳確認」開 `MonthCloseTriageDialog`）、「還原所有自動改動」掣、未定價估算缺口提示；`/triage` 列 month_close session，繼續答用同一個 dialog。
