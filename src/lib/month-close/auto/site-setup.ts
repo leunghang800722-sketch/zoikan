@@ -1,0 +1,219 @@
+// WP-ONE-CLICK-AUTO（§31.3 A）：更表盤名對盤——exact／auto 加 alias 對上；
+// propose 出分診題；其餘當新盤，並且「自動建齊」：更種由該上載嘅
+// `roster_upload_rows.raw_code`＋`time_raw` 推出（code／起止時間／鐘數），
+// 客戶名同別名由本月 Postorder（如有）推出，令新盤嘅更次同一個 run 內套用到。
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
+import { safeErrorSummary } from "@/lib/api/http";
+import { assignRosterUploadSite, reparseRosterUpload } from "@/lib/roster-upload/service";
+import { normalizeTimeRange } from "@/lib/roster-upload/time-range";
+import { otHoursFromCode } from "@/lib/roster-upload/cell-codes";
+import type { AutoCollector, ChangeWriter } from "./context";
+import { classifySiteName, normalizeSiteKey, stripSiteSuffix, type SiteNameCandidate } from "./site-match";
+import { rowsForSite, type PostorderEvidence } from "./postorder-evidence";
+import type { McQuestionDraft } from "./types";
+
+export type UploadSiteOutcome =
+  | { outcome: "assigned"; siteId: string; via: "exact" | "auto" | "this_run" }
+  | { outcome: "created"; siteId: string; shiftTypes: number }
+  | { outcome: "proposed" }
+  | { outcome: "failed"; message: string };
+
+interface SiteRow {
+  id: string;
+  canonicalName: string;
+  aliases: string[];
+  parentSiteId: string | null;
+}
+
+async function loadSites(): Promise<SiteRow[]> {
+  return prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true, parentSiteId: true } });
+}
+
+/** 加 alias 到盤（冪等）：journal `site_alias`＋audit。回傳係咪真係新加。 */
+export async function addSiteAlias(ctx: ChangeWriter, siteId: string, alias: string, extra: { uploadId?: string } = {}): Promise<boolean> {
+  const alt = alias.trim();
+  if (!alt) return false;
+  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { id: true, canonicalName: true, aliases: true } });
+  if (!site) return false;
+  const altKey = normalizeSiteKey(alt);
+  if (normalizeSiteKey(site.canonicalName) === altKey && site.canonicalName === alt) return false;
+  if (site.aliases.includes(alt)) return false;
+  const updated = await prisma.site.update({ where: { id: siteId }, data: { aliases: [...site.aliases, alt] } });
+  await ctx.audit({ tableName: "sites", rowId: siteId, action: "update", before: { id: siteId, aliases: site.aliases }, after: { ...updated, aliases: updated.aliases } });
+  await ctx.journal({
+    kind: "site_alias",
+    refTable: "sites",
+    refId: siteId,
+    summary: `盤「${site.canonicalName}」加別名「${alt}」`,
+    detail: { siteId, alias: alt, uploadId: extra.uploadId ?? null },
+  });
+  return true;
+}
+
+function hhmmToDate(hhmm: string): Date {
+  return new Date(Date.UTC(1970, 0, 1, Number(hhmm.slice(0, 2)), Number(hhmm.slice(2, 4))));
+}
+
+function slotHours(slot: string): number | null {
+  const [a, b] = slot.split("-");
+  if (!a || !b) return null;
+  const s = Number(a.slice(0, 2)) * 60 + Number(a.slice(2, 4));
+  const e = Number(b.slice(0, 2)) * 60 + Number(b.slice(2, 4));
+  const diff = (e - s + 24 * 60) % (24 * 60);
+  return diff === 0 ? null : Math.round((diff / 60) * 100) / 100;
+}
+
+/** 由 Postorder 推新盤嘅客戶名（客戶群 block）同別名（物業名稱）。別名唔可以撞其他盤嘅名／別名。 */
+export function derivePostorderSiteInfo(name: string, ev: PostorderEvidence | null, otherSites: readonly SiteNameCandidate[]): { clientName: string | null; aliases: string[] } {
+  if (!ev) return { clientName: null, aliases: [] };
+  const rows = rowsForSite(ev.priceRows, [name]);
+  if (rows.length === 0) return { clientName: null, aliases: [] };
+  const groups = new Map<string, number>();
+  for (const r of rows) if (r.clientGroup) groups.set(r.clientGroup, (groups.get(r.clientGroup) ?? 0) + 1);
+  const clientName = [...groups.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const taken = new Set(otherSites.flatMap((s) => [s.canonicalName, ...s.aliases]).map((n) => normalizeSiteKey(n)));
+  const ownKey = normalizeSiteKey(name);
+  const aliases: string[] = [];
+  const cands = new Set<string>();
+  for (const r of rows) {
+    if (r.propertyShort) cands.add(r.propertyShort.trim());
+    if (r.labelHead) cands.add(r.labelHead.trim());
+  }
+  for (const c of cands) {
+    const k = normalizeSiteKey(c);
+    if (!k || k === ownKey || stripSiteSuffix(k) === stripSiteSuffix(ownKey) || k.length < 2 || taken.has(k)) continue;
+    aliases.push(c);
+  }
+  return { clientName: clientName && normalizeSiteKey(clientName) !== ownKey ? clientName : null, aliases: aliases.slice(0, 3) };
+}
+
+/** 新盤：建 site＋更種（由上載行推）＋客戶名／別名（Postorder）。 */
+async function createSiteFromUpload(ctx: AutoCollector, upload: { id: string; siteNameRaw: string }, otherSites: readonly SiteRow[]): Promise<{ siteId: string; shiftTypes: number; fromPostorder: boolean }> {
+  const name = upload.siteNameRaw.trim();
+  const ev = await ctx.postorder();
+  const info = derivePostorderSiteInfo(name, ev, otherSites);
+  const site = await prisma.site.create({
+    data: { canonicalName: name, clientName: info.clientName ?? name, aliases: info.aliases, billingModel: "per_shift", status: "active", createdBy: ctx.actorUserId },
+  });
+  await ctx.audit({ tableName: "sites", rowId: site.id, action: "create", after: site });
+  await ctx.journal({ kind: "site_created", refTable: "sites", refId: site.id, summary: `自動建新盤「${site.canonicalName}」`, detail: { siteId: site.id, uploadId: upload.id }, undoable: false });
+  ctx.summary.sitesCreated++;
+  ctx.newSiteIds.add(site.id);
+  ctx.summary.aliasesFromPostorder += info.aliases.length;
+  ctx.line("site_created", `新盤「${site.canonicalName}」已自動建立${info.clientName ? `（客戶「${info.clientName}」，來自 Postorder）` : ""}`);
+
+  // 更種：由該上載嘅格推出。
+  const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: upload.id, codeKind: { in: ["shift", "ot"] } }, select: { rawCode: true, timeRaw: true, codeKind: true } });
+  const groups = new Map<string, { code: string; slot: string | null; ot: boolean }>();
+  for (const r of rows) {
+    const code = r.rawCode.trim();
+    if (!code) continue;
+    const slot = r.codeKind === "ot" ? null : normalizeTimeRange(r.timeRaw);
+    groups.set(`${code.toUpperCase()}|${slot ?? ""}`, { code, slot, ot: r.codeKind === "ot" });
+  }
+  // 同一個 code 有帶時段嘅，就唔另建冇時段嗰個（matchShiftType 單一候選照配）。
+  for (const [key, g] of [...groups]) {
+    if (!g.slot && !g.ot && [...groups.values()].some((o) => o !== g && o.code.toUpperCase() === g.code.toUpperCase() && o.slot)) groups.delete(key);
+  }
+  let created = 0;
+  for (const g of groups.values()) {
+    const start = g.slot ? hhmmToDate(g.slot.split("-")[0]!) : null;
+    const end = g.slot ? hhmmToDate(g.slot.split("-")[1]!) : null;
+    const hours = g.ot ? otHoursFromCode(g.code) : g.slot ? slotHours(g.slot) : null;
+    const exists = await prisma.shiftType.findFirst({ where: { siteId: site.id, code: g.code, startTime: start } });
+    if (exists) continue;
+    try {
+      const st = await prisma.shiftType.create({
+        data: { siteId: site.id, code: g.code, startTime: start, endTime: end, hours: hours !== null ? new Prisma.Decimal(hours) : null, billingGroup: "per_shift", createdBy: ctx.actorUserId },
+      });
+      await ctx.audit({ tableName: "shift_types", rowId: st.id, action: "create", after: st });
+      await ctx.journal({ kind: "shift_type_created", refTable: "shift_types", refId: st.id, summary: `盤「${site.canonicalName}」自動建更種「${g.code}」${g.slot ? `（${g.slot}）` : ""}`, detail: { shiftTypeId: st.id, siteId: site.id } });
+      created++;
+    } catch (e) {
+      ctx.warnings.push(`盤「${site.canonicalName}」建更種「${g.code}」失敗：${safeErrorSummary(e)}`);
+    }
+  }
+  ctx.summary.shiftTypesCreated += created;
+  if (created > 0) ctx.line("shift_type_created", `新盤「${site.canonicalName}」自動建 ${created} 個更種（由更表代號＋時段推出）`);
+  return { siteId: site.id, shiftTypes: created, fromPostorder: !!info.clientName || info.aliases.length > 0 };
+}
+
+async function finishAssign(ctx: ChangeWriter, upload: { id: string }, siteId: string): Promise<void> {
+  await assignRosterUploadSite(upload.id, siteId);
+  await reparseRosterUpload(upload.id, { autoResolveSite: false });
+  await ctx.audit({ tableName: "roster_uploads", rowId: upload.id, action: "update", after: { id: upload.id, site_id: siteId } });
+}
+
+/** 一個冇指定盤嘅上載：決定歸邊個盤／建新盤／出分診題。caller 已經試過 `reparse autoResolve`。 */
+export async function resolveUploadSite(
+  ctx: AutoCollector,
+  upload: { id: string; siteNameRaw: string },
+  builtThisRun: Map<string, string>,
+): Promise<UploadSiteOutcome> {
+  try {
+    const looseKey = normalizeSiteKey(upload.siteNameRaw);
+    const done = builtThisRun.get(looseKey);
+    if (done) {
+      await finishAssign(ctx, upload, done);
+      return { outcome: "assigned", siteId: done, via: "this_run" };
+    }
+    const sites = await loadSites();
+    const cls = classifySiteName(
+      upload.siteNameRaw,
+      sites.filter((s) => s.parentSiteId === null),
+    );
+    if ((cls.level === "exact" || cls.level === "auto") && cls.siteId) {
+      const siteName = sites.find((s) => s.id === cls.siteId)?.canonicalName ?? "";
+      const added = await addSiteAlias(ctx, cls.siteId, upload.siteNameRaw.trim(), { uploadId: upload.id });
+      await finishAssign(ctx, upload, cls.siteId);
+      ctx.summary.sitesAliased++;
+      ctx.line("site_alias", `更表盤名「${upload.siteNameRaw.trim()}」自動對上盤「${siteName}」（${cls.level === "exact" ? "正規化後相同" : cls.reason}）${added ? "，已加別名" : ""}`);
+      builtThisRun.set(looseKey, cls.siteId);
+      return { outcome: "assigned", siteId: cls.siteId, via: cls.level };
+    }
+    if (cls.level === "propose" && cls.candidates.length > 0) {
+      const byId = new Map(sites.map((s) => [s.id, s.canonicalName]));
+      const cands = cls.candidates.map((c) => ({ id: c.siteId, label: byId.get(c.siteId) ?? c.siteId, refId: c.siteId, evidence: `相似度 ${c.score.toFixed(2)}` }));
+      const draft: McQuestionDraft = {
+        kind: "month_close_site_alias",
+        groupKey: `site_alias:${upload.id}`,
+        sort: 10,
+        title: `更表盤名「${upload.siteNameRaw.trim()}」係咪現有盤「${cands[0]!.label}」？`,
+        evidence: {
+          v: 1,
+          mc: true,
+          runId: ctx.runId ?? "",
+          month: ctx.month.toISOString().slice(0, 10),
+          kind: "month_close_site_alias",
+          summary: `更表盤名「${upload.siteNameRaw.trim()}」同現有盤似但唔夠硬（${cls.reason}），未歸盤，呢個盤本月更次暫時未計入`,
+          suggestion: `當作現有盤「${cands[0]!.label}」嘅別名並歸盤`,
+          confidence: "propose",
+          action: { type: "site_alias", uploadId: upload.id, siteNameRaw: upload.siteNameRaw.trim() },
+          candidates: cands,
+          prefillCandidateId: cands[0]!.id,
+        },
+      };
+      ctx.addQuestion(draft);
+      return { outcome: "proposed" };
+    }
+
+    // 新盤
+    if (cls.lookalikeSiteIds.length > 0) {
+      const byId = new Map(sites.map((s) => [s.id, s.canonicalName]));
+      ctx.warnings.push(`更表盤名「${upload.siteNameRaw.trim()}」似「${cls.lookalikeSiteIds.map((i) => byId.get(i) ?? "").filter(Boolean).join("」「")}」但數字／字母唔同，當新盤（唔會自動合併）`);
+    }
+    const made = await createSiteFromUpload(ctx, upload, sites);
+    builtThisRun.set(looseKey, made.siteId);
+    await finishAssign(ctx, upload, made.siteId);
+    return { outcome: "created", siteId: made.siteId, shiftTypes: made.shiftTypes };
+  } catch (e) {
+    return { outcome: "failed", message: safeErrorSummary(e) };
+  }
+}
+
+/** 分診「當新盤」：同一鍵結算自動建新盤一樣（建盤＋更種＋Postorder 客戶名／別名），audit 來源由 collector 標記。 */
+export async function createSiteFromUploadForTriage(ctx: AutoCollector, upload: { id: string; siteNameRaw: string }): Promise<{ siteId: string; shiftTypes: number }> {
+  const made = await createSiteFromUpload(ctx, upload, await loadSites());
+  return { siteId: made.siteId, shiftTypes: made.shiftTypes };
+}

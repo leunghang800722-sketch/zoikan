@@ -39,9 +39,11 @@ import { buildGuardFixPlan, summarizePlan } from "@/lib/guard-fix/plan";
 import { applyGuardFixPlan, reparseAllActiveUploads, GUARD_FIX_ADVISORY_LOCK_KEY } from "@/lib/guard-fix/apply";
 import { APPLY_STALE_MS } from "@/lib/guard-fix/view";
 import { safeErrorSummary } from "@/lib/api/http";
+import { reparseRosterUpload } from "@/lib/roster-upload/service";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
 import { parsePostorderUploadRow } from "@/lib/guard-fix/postorder";
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
+import { LONGTERM_REFERRAL_AUTOCOMPUTE_FROM } from "@/lib/pricing/resolve-rate";
 import { buildMonthlyClose } from "@/lib/reports/monthly-close";
 import { buildGrossMargin } from "@/lib/reports/gross-margin";
 import { buildPayrollTotals, buildPayrollSourceSummary } from "@/lib/reports/payroll";
@@ -52,6 +54,13 @@ import { writeAudit } from "@/lib/audit";
 import { buildMonthHealth, summarizeHealthForReport } from "@/lib/ops/month-health";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { STEP_KEYS, STEP_LABELS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
+import { AutoCollector } from "./auto/context";
+import { resolveUploadSite } from "./auto/site-setup";
+import { explainVariances } from "./auto/variance";
+import { runAutoPricing, estimateUnpricedGap } from "./auto/pricing";
+import { runAutoSettlement } from "./auto/settlement";
+import { autoResolveNeedsBoss, type NeedsBossIdentity } from "./auto/guard-match";
+import { buildAutoReport } from "./auto/report";
 
 export const ONE_CLICK_ADVISORY_LOCK_KEY = 7_710_270_927; // 自己一個 key，唔同 guard-fix(...925)／reconcile-all(...926)
 export const ONE_CLICK_STALE_MS = 15 * 60 * 1000;
@@ -416,11 +425,14 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
 }
 
 // ---------------------------------------------------------------------------
-// step1 解析健康
+// step1 解析健康（WP-ONE-CLICK-AUTO §31.3 A／B）
+//   A. 冇指定盤嘅上載：正規化＋相似度對盤（exact／auto 加 alias、propose 入分診、其餘新盤
+//      自動建齊更種＋Postorder 客戶名／別名）；
+//   B. 更數異常自動拆解（external、公司兵、重複行、子盤、截短、雞頭組成、Postorder 更數）。
 // ---------------------------------------------------------------------------
-export async function stepParseHealth(month: Date, actorUserId: string) {
+export async function stepParseHealth(month: Date, actorUserId: string, auto?: AutoCollector) {
   const { start } = monthRange(month);
-  const prevMonth = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() - 1, 1));
+  const ctx = auto ?? new AutoCollector(null, start, actorUserId, null);
   const warnings: string[] = [];
   const needsHuman: string[] = [];
 
@@ -430,37 +442,18 @@ export async function stepParseHealth(month: Date, actorUserId: string) {
     orderBy: { uploadedAt: "asc" },
   });
 
-  // Opus 驗收：同一次 run 入面兩個上載盤名寫法唔同（全形／空白／大細楷）
-  // 都唔好建兩個盤——用 `normalizeSiteLabel()`（同 matchSite 一致 NFKC＋
-  // 空白摺合）做 key。
-  const { normalizeSiteLabel, matchSite } = await import("@/lib/roster-upload/match");
+  // Opus 驗收：同一次 run 入面兩個上載盤名寫法唔同（全形／空白／大細楷）都唔好建兩個盤——
+  // 用 `normalizeSiteKey()` 做 key（一個 run 同名淨係建一個盤，A 節「一次過」）。
   const builtThisRun = new Map<string, string>(); // normName → siteId
   const autoBuiltSiteNames: string[] = [];
   let rematchedSites = 0;
   let autoBuiltSites = 0;
-  let formatDiffWarnings = 0;
+  let proposedSites = 0;
   let totalShiftCount = 0;
   for (const u of uploads) {
     const summary = (u.parseSummary as { shiftCount?: number } | null) ?? null;
-    const shiftCount = summary?.shiftCount ?? 0;
-    totalShiftCount += shiftCount;
-
-    if (u.siteId) {
-      const prevUpload = await prisma.rosterUpload.findFirst({
-        where: { month: prevMonth, siteId: u.siteId, status: { notIn: ["superseded", "voided"] } },
-        select: { parseSummary: true },
-        orderBy: { uploadedAt: "desc" },
-      });
-      const prevCount = (prevUpload?.parseSummary as { shiftCount?: number } | null)?.shiftCount ?? null;
-      if (prevCount && prevCount > 0) {
-        const diffPct = Math.abs(shiftCount - prevCount) / prevCount;
-        if (diffPct > 0.3) {
-          formatDiffWarnings++;
-          warnings.push(`「${u.siteNameRaw}」本月 ${shiftCount} 格 vs 上月 ${prevCount} 格，相差 ${round2(diffPct * 100)}%——可能截短／格式異常，請人手覆核`);
-        }
-      }
-      continue;
-    }
+    totalShiftCount += summary?.shiftCount ?? 0;
+    if (u.siteId) continue;
 
     // 解析失敗嘅上載：`site_name_raw` 會跌返做檔名——唔可以攞檔名建盤。
     if (u.status === "parse_failed") {
@@ -468,12 +461,9 @@ export async function stepParseHealth(month: Date, actorUserId: string) {
       continue;
     }
 
-    // site_id=null——(a) 先用而家嘅盤主檔（含之後先加嘅 aliases／檔名鍵）
-    // 重新自動配對一次（同上載時一樣經 `resolveRosterUploadSite()`）；
-    // (b) 真係對唔到先用檔內盤名建盤（`SiteStatus` 冇「待核」值，用
-    // `active`，喺報告「要人決定」列出「待核盤」），同一 run 同名唔重複建。
+    // site_id=null——(a) 先用而家嘅盤主檔（含之後先加嘅 aliases／檔名鍵）重新自動配對一次；
+    // (b) 對唔到先走新流程（相似度分級）。
     try {
-      const { assignRosterUploadSite, reparseRosterUpload } = await import("@/lib/roster-upload/service");
       await reparseRosterUpload(u.id, { autoResolveSite: true });
       const after = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: u.id }, select: { siteId: true } });
       if (after.siteId) {
@@ -481,37 +471,54 @@ export async function stepParseHealth(month: Date, actorUserId: string) {
         warnings.push(`上載「${u.siteNameRaw}」而家對到現有盤（盤主檔之後有更新），已自動指定`);
         continue;
       }
-      // 建盤防重複嘅 key 再寬少少：連空白都唔計（「XX (東)」／「XX（東）」／
-      // 「XX(東)」當同一個），淨係用嚟決定「唔好再建多個」，唔影響
-      // matchSite() 本身嘅嚴格比對。
-      const looseKey = (raw: string) => normalizeSiteLabel(raw).replace(/\s+/g, "");
-      const normName = looseKey(u.siteNameRaw);
-      const allSites = await prisma.site.findMany({ select: { id: true, canonicalName: true, aliases: true } });
-      let siteId =
-        builtThisRun.get(normName) ??
-        matchSite(u.siteNameRaw, allSites) ??
-        allSites.find((s) => looseKey(s.canonicalName) === normName || s.aliases.some((a) => looseKey(a) === normName))?.id ??
-        null;
-      if (!siteId) {
-        const newSite = await prisma.site.create({
-          data: { canonicalName: u.siteNameRaw.trim(), clientName: u.siteNameRaw.trim(), billingModel: "per_shift", status: "active", createdBy: actorUserId },
-        });
-        await writeAudit({ actorUserId, tableName: "sites", rowId: newSite.id, action: "create", after: newSite, ip: null });
-        siteId = newSite.id;
-        builtThisRun.set(normName, siteId);
+      const r = await resolveUploadSite(ctx, u, builtThisRun);
+      if (r.outcome === "created") {
         autoBuiltSites++;
-        autoBuiltSiteNames.push(newSite.canonicalName);
-        needsHuman.push(`【待核盤】上載「${u.siteNameRaw}」對唔到任何現有盤，已自動建新盤「${newSite.canonicalName}」（按更計、未有更種／價卡）——請去「盤」管理核實，係舊盤另一個寫法就將佢併返（加 alias）`);
+        autoBuiltSiteNames.push(u.siteNameRaw.trim());
+        warnings.push(`更表盤名「${u.siteNameRaw.trim()}」對唔到現有盤，已自動建新盤（${r.shiftTypes} 個更種，由更表代號＋時段推出）——價錢由「自動歸屬／定價」步驟處理`);
+      } else if (r.outcome === "proposed") {
+        proposedSites++;
+        needsHuman.push(`更表盤名「${u.siteNameRaw.trim()}」似現有盤但唔夠硬，未歸盤（已入分診，一撳確認），呢個上載本月更次暫時未計入`);
+      } else if (r.outcome === "failed") {
+        needsHuman.push(`上載「${u.siteNameRaw}」盤名對唔到，自動建盤失敗（${r.message}），要人手喺更表上載頁指定盤`);
       }
-      await assignRosterUploadSite(u.id, siteId);
-      await reparseRosterUpload(u.id, { autoResolveSite: false });
     } catch (e) {
       needsHuman.push(`上載「${u.siteNameRaw}」盤名對唔到，自動建盤失敗（${safeErrorSummary(e)}），要人手喺更表上載頁指定盤`);
     }
   }
 
+  // B. 更數異常自動拆解（重新讀返上載：有新指定嘅盤、rows 已經 reparse）。
+  const assigned = await prisma.rosterUpload.findMany({
+    where: { month: start, status: { notIn: ["superseded", "voided", "parse_failed"] }, siteId: { not: null } },
+    select: { id: true, siteId: true, siteNameRaw: true, parseSummary: true },
+    orderBy: { uploadedAt: "asc" },
+  });
+  const variance = await explainVariances(
+    ctx,
+    start,
+    assigned.map((u) => ({ id: u.id, siteId: u.siteId!, siteNameRaw: u.siteNameRaw, parseSummary: u.parseSummary })),
+  );
+  warnings.push(...variance.warnings);
+  needsHuman.push(...variance.needsHuman.map((x) => `${x}——已入分診`));
+  const explainedCount = variance.findings.filter((f) => f.explained).length;
+  warnings.push(...ctx.warnings.splice(0));
+
   return {
-    numbers: { uploadCount: uploads.length, totalShiftCount, autoBuiltSites, autoBuiltSiteNames, rematchedSites, formatDiffWarnings },
+    numbers: {
+      uploadCount: uploads.length,
+      totalShiftCount,
+      autoBuiltSites,
+      autoBuiltSiteNames,
+      rematchedSites,
+      proposedSites,
+      sitesAliased: ctx.summary.sitesAliased,
+      shiftTypesCreated: ctx.summary.shiftTypesCreated,
+      formatDiffWarnings: variance.legacyFlagged,
+      varianceFlagged: variance.findings.length,
+      varianceExplained: explainedCount,
+      varianceUnexplained: variance.findings.length - explainedCount,
+      varianceFindings: variance.findings.map((f) => ({ site: f.siteName, current: f.current, previous: f.previous, external: f.external, internalCash: f.internalCash, explained: f.explained, sentence: f.sentence })),
+    },
     warnings,
     needsHuman,
   };
@@ -520,7 +527,7 @@ export async function stepParseHealth(month: Date, actorUserId: string) {
 // ---------------------------------------------------------------------------
 // step2 安員修復——循環最多 3 輪直至冇新（可套用嘅）動作
 // ---------------------------------------------------------------------------
-export async function stepGuardFix(month: Date, actorUserId: string) {
+export async function stepGuardFix(month: Date, actorUserId: string, auto?: AutoCollector) {
   const warnings: string[] = [];
   const needsHuman: string[] = [];
   const rounds: Array<Record<string, number>> = [];
@@ -533,7 +540,7 @@ export async function stepGuardFix(month: Date, actorUserId: string) {
   const uTeamRows = await parseUTeamWorkbookBuffer(Buffer.from(staffList.fileBytes));
 
   const { start } = monthRange(month);
-  let lastPlanNeedsBoss: { seq: string; siteLabels: string[]; totalCellCount: number }[] = [];
+  let lastPlanNeedsBoss: NeedsBossIdentity[] = [];
 
   let converged = false;
   for (let round = 1; round <= GUARD_FIX_MAX_ROUNDS; round++) {
@@ -559,7 +566,16 @@ export async function stepGuardFix(month: Date, actorUserId: string) {
 
     lastPlanNeedsBoss = plan.actions.needsBoss.map((a) => {
       const identity = plan.identities.find((i) => i.seq === a.seq);
-      return { seq: a.seq, siteLabels: identity?.cells.map((c) => `${c.siteLabel}×${c.cellCount}`) ?? [], totalCellCount: identity?.totalCellCount ?? 0 };
+      return {
+        seq: a.seq,
+        staffNoRaw: identity?.staffNoRaw ?? null,
+        nameRaw: identity?.nameRaw ?? "",
+        telRaw: identity?.telRaw ?? null,
+        siteLabels: identity?.cells.map((c) => c.siteLabel) ?? [],
+        cellCount: identity?.totalCellCount ?? 0,
+        candidateGuardIds: a.candidateGuardIds,
+        reason: a.reason,
+      };
     });
 
     if (actionable === 0) {
@@ -610,13 +626,29 @@ export async function stepGuardFix(month: Date, actorUserId: string) {
     needsHuman.push(`安員修復跑咗 ${GUARD_FIX_MAX_ROUNDS} 輪仲有新動作未收斂——再撳一次「一鍵結算」會接住做`);
   }
 
+  // WP-ONE-CLICK-AUTO §31.3 D：needs_boss「要老闆核實」——有硬鍵（電話＋姓名）或者上月同盤同人已配對
+  // → 自動配對；其餘入分診（單一候選預填、否則冇預填）。
+  let autoLinked = 0;
+  let autoLinkedCells = 0;
+  let remaining = lastPlanNeedsBoss.length;
   if (lastPlanNeedsBoss.length > 0) {
-    for (const item of lastPlanNeedsBoss) {
-      needsHuman.push(`未配對安員（${item.seq}）：${item.siteLabels.join("、")}，共 ${item.totalCellCount} 格——要老闆喺「安員配對修復」頁睇 needs_boss 逐條核實`);
+    const ctx = auto ?? new AutoCollector(null, start, actorUserId, null);
+    const res = await autoResolveNeedsBoss(ctx, start, lastPlanNeedsBoss);
+    autoLinked = res.autoLinked;
+    autoLinkedCells = res.cellsLinked;
+    remaining = res.remaining;
+    if (res.autoLinked > 0) {
+      await reparseAllActiveUploads(prisma, start, { txTimeoutMs: 10 * 60 * 1000 });
+    }
+    if (res.remaining > 0) {
+      const autoNote = auto ? "（已入分診，預填建議答案，一撳確認）" : "——要老闆喺「安員配對修復」頁睇 needs_boss 逐條核實";
+      for (const item of res.remainingItems) {
+        needsHuman.push(`未配對安員（${item.seq}）：${item.siteLabels.join("、")}，共 ${item.cellCount} 格${autoNote}`);
+      }
     }
   }
 
-  return { numbers: { rounds, remainingNeedsBoss: lastPlanNeedsBoss.length }, warnings, needsHuman };
+  return { numbers: { rounds, remainingNeedsBoss: remaining, autoLinked, autoLinkedCells }, warnings, needsHuman };
 }
 
 // ---------------------------------------------------------------------------
@@ -687,13 +719,55 @@ export async function stepReconcileApply(month: Date, actorUserId: string, ip: s
 }
 
 // ---------------------------------------------------------------------------
+// step4b 自動歸屬／定價（WP-ONE-CLICK-AUTO §31.3 C／D）——reconcile_apply 之後、compute 之前
+//   D. 冇結算雞頭嘅更：Postorder 同崗位同日雞頭 → 長工 → 預設雞頭 → 近 3 個月同盤多數決，否則分診；
+//   C. 未定價組合按次序 1–6 搵價，auto 即建卡＋補價，propose／unknown 入分診。
+// ---------------------------------------------------------------------------
+export async function stepAutoPricing(month: Date, actorUserId: string, auto?: AutoCollector) {
+  const { start } = monthRange(month);
+  const ctx = auto ?? new AutoCollector(null, start, actorUserId, null);
+  if (start < LONGTERM_REFERRAL_AUTOCOMPUTE_FROM) {
+    return { numbers: { skipped: true }, warnings: ["2026-08 之前嘅月份唔做自動歸屬／定價"] as string[], needsHuman: [] as string[] };
+  }
+  const settlement = await runAutoSettlement(ctx, start);
+  const pricing = await runAutoPricing(ctx, start);
+  const warnings = ctx.warnings.splice(0);
+  return {
+    numbers: {
+      settlementScanned: settlement.scanned,
+      settlementAssigned: settlement.assigned,
+      settlementUnresolved: settlement.unresolved,
+      pricingGroups: pricing.groups,
+      pricingAutoGroups: pricing.autoGroups,
+      pricingProposeGroups: pricing.proposeGroups,
+      pricingUnknownGroups: pricing.unknownGroups,
+      cardsCreated: ctx.summary.cardsCreated,
+      recordsPriced: ctx.summary.recordsPriced,
+    },
+    warnings,
+    needsHuman: [] as string[],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // step5 定價檢查
 // ---------------------------------------------------------------------------
-export async function stepPricingCheck(month: Date, actorUserId: string) {
+export async function stepPricingCheck(month: Date, actorUserId: string, auto?: AutoCollector) {
   const summary = await buildUnpricedSummary(systemSession(actorUserId), month);
-  const needsHuman = summary.groups.slice(0, 30).map((g) => `盤「${g.site_name}」雞頭「${g.broker_code ?? "（未定）"}」更種「${g.shift_type_code}」：${g.count} 更未定價（${g.category}）`);
+  let needsHuman: string[];
+  let gap: Awaited<ReturnType<typeof estimateUnpricedGap>> | null = null;
+  if (auto) {
+    // 分診題已經逐組列出（propose／unknown）——呢度淨係一句匯總，唔重複列。
+    needsHuman = summary.count > 0 ? [`仍有 ${summary.count} 更未定價（${summary.groups.length} 組，未定價唔會當 0 成本入數，下面有估算缺口）——已入分診，逐組一撳確認或者輸入價錢`] : [];
+    gap = summary.count > 0 ? await estimateUnpricedGap(month) : null;
+    auto.summary.unpricedRecords = summary.count;
+    auto.summary.unpricedClientGapEstimate = gap?.clientGapEstimate ?? null;
+    auto.summary.unpricedPayoutGapEstimate = gap?.payoutGapEstimate ?? null;
+  } else {
+    needsHuman = summary.groups.slice(0, 30).map((g) => `盤「${g.site_name}」雞頭「${g.broker_code ?? "（未定）"}」更種「${g.shift_type_code}」：${g.count} 更未定價（${g.category}）`);
+  }
   return {
-    numbers: { count: summary.count, payoutCount: summary.payoutCount, clientCount: summary.clientCount, noSettlementCount: summary.noSettlementCount, otUnpricedCount: summary.otUnpricedCount, groupCount: summary.groups.length },
+    numbers: { count: summary.count, payoutCount: summary.payoutCount, clientCount: summary.clientCount, noSettlementCount: summary.noSettlementCount, otUnpricedCount: summary.otUnpricedCount, groupCount: summary.groups.length, gap },
     needsHuman,
   };
 }
@@ -837,6 +911,8 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
   // 每次（重新）執行都由全新 steps 開始——唔好保留上一次失敗／停低嘅
   // 狀態（Opus 驗收：原版重新執行停低時，舊 run 嘅 done/skipped 會殘留）。
   const runner = new StepRunner(runId);
+  // WP-ONE-CLICK-AUTO：呢個 run 嘅自動處理收集器（journal／audit／report／分診題草稿）。
+  const auto = new AutoCollector(runId, monthStartDate, actorUserId, ip);
 
   try {
     let halt: string | undefined;
@@ -852,11 +928,12 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
       return;
     }
 
-    await runner.run("parse_health", () => stepParseHealth(monthStartDate, actorUserId));
-    await runner.run("guard_fix", () => stepGuardFix(monthStartDate, actorUserId));
+    await runner.run("parse_health", () => stepParseHealth(monthStartDate, actorUserId, auto));
+    await runner.run("guard_fix", () => stepGuardFix(monthStartDate, actorUserId, auto));
     await runner.run("longterm_settlement", () => stepLongtermSettlement(monthStartDate, actorUserId));
     await runner.run("reconcile_apply", () => stepReconcileApply(monthStartDate, actorUserId, ip));
-    await runner.run("pricing_check", () => stepPricingCheck(monthStartDate, actorUserId));
+    await runner.run("auto_pricing", () => stepAutoPricing(monthStartDate, actorUserId, auto));
+    await runner.run("pricing_check", () => stepPricingCheck(monthStartDate, actorUserId, auto));
     const compute = await runner.run("compute", () => stepCompute(monthStartDate, actorUserId, ip));
     const referralSystemTotal = (compute.numbers.referralFeeTotal as number) ?? 0;
     await runner.run("postorder_compare", () => stepPostorderCompare(monthStartDate, referralSystemTotal));
@@ -865,6 +942,8 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
       const coverage = await checkRosterUploadCoverage(monthStartDate);
       const currentClose = await prisma.monthClose.findUnique({ where: { month: monthStartDate } });
       const unpricedCount = (runner.get("pricing_check").numbers.count as number) ?? 0;
+      // WP-ONE-CLICK-AUTO §31.3 E：自動處理摘要＋要你睇（開／刷新分診 session，擁有人＝撳一鍵嗰個人）。
+      const autoReport = await buildAutoReport(auto, monthStartDate, runId);
       const report: MonthCloseReport = {
         month: monthLabel(monthStartDate),
         totals: {
@@ -888,6 +967,7 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
           clientCount: (runner.get("pricing_check").numbers.clientCount as number) ?? 0,
           noSettlementCount: (runner.get("pricing_check").numbers.noSettlementCount as number) ?? 0,
           otUnpricedCount: (runner.get("pricing_check").numbers.otUnpricedCount as number) ?? 0,
+          gap: (runner.get("pricing_check").numbers.gap as MonthCloseReport["unpriced"]["gap"]) ?? null,
         },
         postorderCompare: runner.get("postorder_compare").numbers.uploaded
           ? {
@@ -899,6 +979,7 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
             }
           : null,
         needsHuman: runner.allNeedsHuman(),
+        auto: autoReport,
         lockPrecondition: {
           currentMonthAlreadyLocked: !!currentClose?.lockedAt,
           missingUploadSites: coverage.missingUploadSites.map((s) => s.siteName),

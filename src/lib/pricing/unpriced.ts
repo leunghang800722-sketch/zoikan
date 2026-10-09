@@ -251,6 +251,18 @@ export async function buildUnpricedSummary(session: AuthedSession, month: Date, 
   });
   if (records.length === 0) return { count: 0, groups: [], payoutCount: 0, clientCount: 0, noSettlementCount: 0, otUnpricedCount: 0 };
 
+  const lookups = await loadUnpricedLookups(records, month);
+
+  return computeUnpricedSummary(records, lookups, { month });
+}
+
+/** 由一批 shift_records 砌 `UnpricedLookups`（brokers／sites／shiftTypes 一次過查）——
+ * `buildUnpricedSummary()` 同一鍵結算自動定價（WP-ONE-CLICK-AUTO §31.3 C）共用，口徑唔會飄開。 */
+export async function loadUnpricedLookups(
+  records: Array<{ settlementBrokerId: string | null; siteId: string; shiftTypeId: string }>,
+  month: Date,
+): Promise<UnpricedLookups> {
+  const { start, end } = monthRange(month);
   const brokerIds = [...new Set(records.map((r) => r.settlementBrokerId).filter((v): v is string => v !== null))];
   const siteIds = [...new Set(records.map((r) => r.siteId))];
   const [brokers, sites, shiftTypes] = await Promise.all([
@@ -258,7 +270,7 @@ export async function buildUnpricedSummary(session: AuthedSession, month: Date, 
     prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true, billingModel: true, guardsPaidByClient: true } }),
     prisma.shiftType.findMany({ where: { id: { in: [...new Set(records.map((r) => r.shiftTypeId))] } }, select: { id: true, code: true, billingGroup: true } }),
   ]);
-  const lookups: UnpricedLookups = {
+  return {
     brokerKindById: new Map(brokers.map((b) => [b.id, b.kind as BrokerKindLike])),
     brokerCodeById: new Map(brokers.map((b) => [b.id, b.code])),
     siteNameById: new Map(sites.map((s) => [s.id, s.canonicalName])),
@@ -268,6 +280,9 @@ export async function buildUnpricedSummary(session: AuthedSession, month: Date, 
     siteGuardsPaidByClientById: new Map(sites.map((s) => [s.id, s.guardsPaidByClient])),
     mixedBillingInfoBySiteId: isMixedBillingMonth(start) ? await loadMixedBillingInfo(siteIds, start, end) : undefined,
   };
+}
 
-  return computeUnpricedSummary(records, lookups, { month });
+/** 單條記錄屬邊啲未定价類別（同 `computeUnpricedSummary()` 同一口徑）。 */
+export function unpricedCategoriesOf(r: UnpricedRecordLike, lookups: UnpricedLookups, opts: { month?: Date | null } = {}): UnpricedCategory[] {
+  return computeUnpricedSummary([r], lookups, opts).groups.map((g) => g.category);
 }

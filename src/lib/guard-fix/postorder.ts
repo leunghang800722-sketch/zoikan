@@ -127,11 +127,11 @@
 import ExcelJS from "exceljs";
 import { parse as parseCsvSync } from "csv-parse/sync";
 
-const ROSTER_SHEET_NAME = "Roster";
-const POSTORDER_SHEET_NAME = "PostOrder";
-const AM_COLUMN = 39; // "Total Shift"（COUNTA(H:AL)嘅計算結果）
+export const ROSTER_SHEET_NAME = "Roster";
+export const POSTORDER_SHEET_NAME = "PostOrder";
+export const AM_COLUMN = 39; // "Total Shift"（COUNTA(H:AL)嘅計算結果）
 const DAYS_IN_GRID = 31; // 更表格位固定 31 日（大月留位；細月尾幾組全空，唔影響）
-const ROSTER_MIN_COLS = 10 + 7 * DAYS_IN_GRID; // 逐日 7 欄，最後一組嘅備註欄
+export const ROSTER_MIN_COLS = 10 + 7 * DAYS_IN_GRID; // 逐日 7 欄，最後一組嘅備註欄
 
 const POSTORDER_VISA_UNSUPPORTED_REASON =
   "Postorder 總表冇顯式「簽證形式長工」標記（冇獨立分頁／專屬欄位）——" +
@@ -283,15 +283,15 @@ function trailingChineseName(s: string | null): string | null {
 // 嘅格本身就淨係字串，xlsm 嗰邊用 `cellText()` 攤平之後都係字串，
 // 兩條路徑先可以用同一套 grid 邏輯）。
 // ---------------------------------------------------------------------------
-type PostorderGrid = (string | null)[][];
+export type PostorderGrid = (string | null)[][];
 
-function gridText(grid: PostorderGrid, r: number, c: number): string | null {
+export function gridText(grid: PostorderGrid, r: number, c: number): string | null {
   return grid[r]?.[c] ?? null;
 }
 
 const NUMBER_RE = /^-?\d+(\.\d+)?$/;
 
-function gridNumber(grid: PostorderGrid, r: number, c: number): number | null {
+export function gridNumber(grid: PostorderGrid, r: number, c: number): number | null {
   const t = gridText(grid, r, c);
   if (t === null) return null;
   // Sheets 匯出嘅數字格有時帶千分位逗號（例如 "1,250"）——去咗先解析。
@@ -304,7 +304,7 @@ function gridNumber(grid: PostorderGrid, r: number, c: number): number | null {
 /** 由 ExcelJS worksheet 起一個 grid（`minCols` 保證起碼有幾多欄，
  * 就算 ExcelJS 話 `columnCount` 冇咁多、最尾幾欄全空都照樣讀到——
  * 例如 Roster sheet 最尾幾組 31 日格位可能一格都冇填）。 */
-function gridFromWorksheet(ws: ExcelJS.Worksheet, minCols: number): PostorderGrid {
+export function gridFromWorksheet(ws: ExcelJS.Worksheet, minCols: number): PostorderGrid {
   const grid: PostorderGrid = [[]];
   const maxCol = Math.max(ws.columnCount, minCols);
   for (let r = 1; r <= ws.rowCount; r++) {
@@ -319,7 +319,7 @@ function gridFromWorksheet(ws: ExcelJS.Worksheet, minCols: number): PostorderGri
 /** 由 CSV 文字（Google Sheets「下載為 CSV」嘅格式：逗號、引號包裹、
  * cell 入面可以有換行——RFC4180）起一個 grid。`skip_empty_lines:false`
  * 保留晒空行，等行號唔會飄（`rowIndex`／`AM<row>` 呢類參照要行號準）。 */
-function gridFromCsvText(csvText: string): PostorderGrid {
+export function gridFromCsvText(csvText: string): PostorderGrid {
   const stripped = csvText.replace(/^﻿/, ""); // Google Sheets CSV 匯出帶 UTF-8 BOM
   const rows = parseCsvSync(stripped, {
     bom: true,
@@ -348,7 +348,7 @@ function gridFromCsvText(csvText: string): PostorderGrid {
 // ---------------------------------------------------------------------------
 const HEADER_SEARCH_ROWS = 15; // 表頭理應喺呢個範圍內（真樣本：第 8 行）
 
-interface RosterHeader {
+export interface RosterHeader {
   headerRow: number;
   clientCol: number; // 「客戶名稱」
   propCol: number; // 「物業名稱」
@@ -363,7 +363,7 @@ interface RosterHeader {
 /** 頭 `HEADER_SEARCH_ROWS` 行搵一行同時有「客戶名稱」／「物業名稱」
  * 文字嗰行做表頭，再喺嗰行搵晒每個「雞頭名」子欄嘅位置——搵唔到就
  * `null`，等上層老實答 parseError（唔會靜靜當 0）。 */
-function detectRosterHeader(grid: PostorderGrid): RosterHeader | null {
+export function detectRosterHeader(grid: PostorderGrid): RosterHeader | null {
   const rowCount = grid.length - 1;
   const searchRows = Math.min(HEADER_SEARCH_ROWS, rowCount);
   for (let r = 1; r <= searchRows; r++) {
