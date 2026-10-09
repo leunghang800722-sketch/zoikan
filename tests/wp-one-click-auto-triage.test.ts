@@ -195,29 +195,35 @@ describe("WP-ONE-CLICK-AUTO E：分診＋一撳確認＋撤銷", () => {
     const site2 = await prisma.site.create({ data: { canonicalName: "測試配對盤", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
     const st2 = await prisma.shiftType.create({ data: { siteId: site2.id, code: "D", startTime: time("0700"), endTime: time("1900"), hours: 12, createdBy: "t" } });
     // 上月同盤、更表姓名「測試舊稱」已配對到 cand（6 格）
-    await seedUploadWithRows({ month: AUG, siteId: site2.id, siteNameRaw: site2.canonicalName, uploaderUserId: boss(), status: "confirmed", rows: Array.from({ length: 6 }, (_, i) => ({ day: i + 1, nameRaw: "測試舊稱", guardId: cand.id })) });
+    await seedUploadWithRows({ month: AUG, siteId: site2.id, siteNameRaw: site2.canonicalName, uploaderUserId: boss(), status: "confirmed", rows: Array.from({ length: 6 }, (_, i) => ({ day: i + 1, nameRaw: "測試舊稱", staffNoRaw: "U90099", guardId: cand.id })) });
     const other = await mkGuard({ name: "測試第二", staffNo: "U90056" });
     const items: NeedsBossIdentity[] = [
       { seq: "I001", staffNoRaw: "U90099", nameRaw: "測試舊稱", telRaw: null, siteLabels: [site2.canonicalName], cellCount: 5, candidateGuardIds: [cand.id], reason: "弱證據" },
       { seq: "I002", staffNoRaw: null, nameRaw: "測試無歷史", telRaw: null, siteLabels: [site2.canonicalName], cellCount: 3, candidateGuardIds: [other.id], reason: "弱證據" },
       { seq: "I003", staffNoRaw: null, nameRaw: "測試多候選", telRaw: null, siteLabels: [site2.canonicalName], cellCount: 2, candidateGuardIds: [cand.id, other.id], reason: "多候選" },
+      // 修12：淨姓名（上月同盤同姓名已配對，但冇工號／電話硬鍵）唔 auto
+      { seq: "I004", staffNoRaw: null, nameRaw: "測試舊稱", telRaw: null, siteLabels: [site2.canonicalName], cellCount: 4, candidateGuardIds: [cand.id], reason: "弱證據" },
+      // 修12／13：plan 已判工號衝突，就算電話＋姓名一致都唔 auto，出分診題（預填候選）
+      { seq: "I005", staffNoRaw: "U90098", nameRaw: "測試真名", telRaw: cand.tel, siteLabels: [site2.canonicalName], cellCount: 6, candidateGuardIds: [cand.id], reason: "更表工號已經屬 DB 另一位安員，同電話／名單判斷到嘅人唔一致，唔自動 link，交老闆睇" },
     ];
     const run = await mkRun();
     const ctx = new AutoCollector(run.id, SEPT, boss(), null);
     const res = await autoResolveNeedsBoss(ctx, SEPT, items);
     expect(res.autoLinked).toBe(1);
-    expect(res.remaining).toBe(2);
+    expect(res.remaining).toBe(4);
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: cand.id } })).nameAliases).toContain("測試舊稱");
+    expect(await prisma.guardStaffNumber.count({ where: { number: "U90098" } })).toBe(0);
     expect(await prisma.guardStaffNumber.count({ where: { guardId: cand.id, number: "U90099" } })).toBe(1);
     const kinds = (await prisma.monthCloseAutoChange.findMany({ where: { runId: run.id } })).map((c) => c.kind).sort();
     expect(kinds).toEqual(["guard_alias_added", "guard_staffno_added"]);
-    expect(ctx.questions.map((q) => [q.evidence.confidence, q.evidence.prefillCandidateId])).toEqual([["propose", "g0"], ["unknown", null]]);
+    expect(ctx.questions.map((q) => [q.evidence.confidence, q.evidence.prefillCandidateId])).toEqual([["propose", "g0"], ["unknown", null], ["propose", "g0"], ["propose", "g0"]]);
 
     // 分診一撳確認 I002 → 加別名
     const report = await sessionFor(run.id, ctx);
     const cookie = await sessionCookieForUser(boss());
     const qs = await loadQuestions(report.triageSessionId!, cookie);
-    const q2 = qs.find((q) => (q.mc.action_type as string) === "guard_match" && q.mc.prefill_candidate_id === "g0")!;
+    const q2row = (await prisma.triageQuestion.findMany({ where: { sessionId: report.triageSessionId! } })).find((q) => (q.evidenceJson as { action: { identity?: { nameRaw: string } } }).action.identity?.nameRaw === "測試無歷史")!;
+    const q2 = qs.find((q) => q.id === q2row.id)!;
     const { res: ar } = await answer(q2.id, cookie, { option: "mc_accept" });
     expect(ar.status).toBe(200);
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: other.id } })).nameAliases).toContain("測試無歷史");
@@ -416,5 +422,62 @@ describe("WP-ONE-CLICK-AUTO E：分診＋一撳確認＋撤銷", () => {
     await runAutoPricing(ctx, SEPT);
     await sessionFor(run.id, ctx);
     expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qid } })).status).toBe("superseded");
+  });
+
+  it("修8：並發答同一題——只一個成功、DB 只得一張卡；寫失敗退返 open；新 run 作廢舊 run 同月 open 題", async () => {
+    await proposeScenario();
+    const run = await mkRun();
+    const ctx = new AutoCollector(run.id, SEPT, boss(), null);
+    await runAutoPricing(ctx, SEPT);
+    const report = await sessionFor(run.id, ctx);
+    const cookie = await sessionCookieForUser(boss());
+    const qid = (await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: report.triageSessionId! } })).id;
+    const ans = { option: "mc_accept" };
+    const pv = await previewRoute(req(`http://x/p`, cookie, "POST", { answer: ans }), { params: Promise.resolve({ id: qid }) });
+    const { preview_hash } = (await pv.json()) as { preview_hash: string };
+    const go = () => answerRoute(req(`http://x/a`, cookie, "POST", { answer: ans, preview_hash }), { params: Promise.resolve({ id: qid }) });
+    const results = await Promise.all([go(), go(), go()]);
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 409)).toHaveLength(2);
+    expect(await prisma.rateCard.count({ where: { source: { startsWith: "triage:" } } })).toBe(1);
+
+    // 新 run 作廢舊 run 同月 open 題
+    const run2 = await mkRun();
+    await prisma.rateCard.updateMany({ data: { voidedAt: new Date() } });
+    await prisma.shiftRecord.updateMany({ data: { guardWageSnapshot: null, brokerFeeSnapshot: null } });
+    const ctx2 = new AutoCollector(run2.id, SEPT, boss(), null);
+    await runAutoPricing(ctx2, SEPT);
+    const r2 = await sessionFor(run2.id, ctx2);
+    expect(r2.triageSessionId).not.toBe(report.triageSessionId);
+    const run3 = await mkRun();
+    const ctx3 = new AutoCollector(run3.id, SEPT, boss(), null);
+    await runAutoPricing(ctx3, SEPT);
+    await sessionFor(run3.id, ctx3);
+    expect(await prisma.triageQuestion.count({ where: { sessionId: r2.triageSessionId!, status: "open" } })).toBe(0);
+    expect(await prisma.triageQuestion.count({ where: { sessionId: r2.triageSessionId!, status: "superseded" } })).toBeGreaterThan(0);
+  });
+
+  it("修8：寫入失敗 → 題目退返 open（可 retry）", async () => {
+    for (let i = 1; i <= 3; i++) await rec(d.id, K.id, i, guard, site.id, null);
+    const run = await mkRun();
+    const ctx = new AutoCollector(run.id, SEPT, boss(), null);
+    await runAutoPricing(ctx, SEPT);
+    const report = await sessionFor(run.id, ctx);
+    const cookie = await sessionCookieForUser(boss());
+    const qid = (await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: report.triageSessionId! } })).id;
+    const ans = { option: "mc_price", price: { client_rate: 880, guard_wage: 720 } };
+    const pv = await previewRoute(req(`http://x/p`, cookie, "POST", { answer: ans }), { params: Promise.resolve({ id: qid }) });
+    const { preview_hash } = (await pv.json()) as { preview_hash: string };
+    // 令寫入失敗：預覽之後鎖月以外嘅方式——直接令 rate_cards 唔可寫（刪咗個 site 嘅 shift type 引用會 FK 失敗）
+    const before = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qid } });
+    const { SimpleWriter } = await import("@/lib/month-close/auto/context");
+    const spy = (await import("vitest")).vi.spyOn(SimpleWriter.prototype, "audit").mockRejectedValueOnce(new Error("boom")); // 建卡後 audit 失敗＝寫到一半死
+    const res = await answerRoute(req(`http://x/a`, cookie, "POST", { answer: ans, preview_hash }), { params: Promise.resolve({ id: qid }) });
+    spy.mockRestore();
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qid } })).status).toBe(before.status);
+    const ok = await answerRoute(req(`http://x/a`, cookie, "POST", { answer: ans, preview_hash }), { params: Promise.resolve({ id: qid }) });
+    expect(ok.status).toBe(200);
+    expect(await prisma.rateCard.count({ where: { source: `triage:${qid}` } })).toBe(1); // retry 重用咗已建嗰張，冇重複
   });
 });

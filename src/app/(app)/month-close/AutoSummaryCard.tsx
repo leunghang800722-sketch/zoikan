@@ -50,6 +50,11 @@ export function AutoSummaryCard({ auto, busy, onUndo, onOpenTriage }: { auto: Au
   ];
   return (
     <div className="flex flex-col gap-3" data-testid="auto-summary">
+      {auto.undone && (
+        <div className="rounded border border-orange-300 bg-orange-50 px-3 py-2 text-[12.5px] text-orange-900" data-testid="auto-undone-banner">
+          已撤銷：呢次一鍵結算嘅自動改動（價卡、別名、結算雞頭、自動配對）已經還原{auto.undone_at ? `（${new Date(auto.undone_at).toLocaleString("zh-HK")}）` : ""}；下面數字係還原前嘅摘要。想重做請再撳「一鍵結算」。
+        </div>
+      )}
       <div className="rounded border border-zk-border p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="text-[13px] font-medium text-zk-text">

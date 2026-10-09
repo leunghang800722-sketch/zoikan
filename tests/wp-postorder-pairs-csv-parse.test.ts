@@ -4,15 +4,9 @@
 //
 // 鐵則：合成 fixture 用假人名。
 import { describe, it, expect } from "vitest";
-import { existsSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import {
   parseLongtermPairsCsv,
   parsePostorderFromPairsCsv,
-  parsePostorderLongtermPostsFromWorkbook,
-  loadPostorderWorkbook,
-  MAX_WORKBOOK_BYTES,
 } from "@/lib/guard-fix/postorder";
 
 const VALID_CSV = ["site_label,site_short,guard_name,cell_count", "測試盤 甲蟲蟲,測試,甲蟲蟲,10", "另一盤 乙屎蟲,另一,乙屎蟲,5"].join("\r\n") + "\r\n";
@@ -91,43 +85,4 @@ describe("WP-POSTORDER-PAIRS-CSV：parsePostorderFromPairsCsv()", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 真檔比對（skipIf）：`data/2026-09/msg-file/Postorder - Aug 2026.xlsm`
-// （gitignored，冇呢個檔嘅環境自動 skip）——`export-postorder-pairs.ts`
-// 匯出嘅 `longterm-pairs.csv` 重新解析，同直接讀 xlsm 嘅結果組數／格數
-// 逐項相等。
-// ---------------------------------------------------------------------------
-const REAL_POSTORDER_FILE = path.resolve(__dirname, "../data/2026-09/msg-file/Postorder - Aug 2026.xlsm");
-// 記憶體保險：伺服器唔再載入大過 MAX_WORKBOOK_BYTES 嘅 xlsm（會 OOM），真檔太大就 skip（本機工具另用 stream reader 驗證）。
-const hasRealFile = existsSync(REAL_POSTORDER_FILE) && statSync(REAL_POSTORDER_FILE).size <= MAX_WORKBOOK_BYTES;
-
-describe.skipIf(!hasRealFile)("WP-POSTORDER-PAIRS-CSV：真檔 xlsm 路徑 vs 匯出 longterm-pairs.csv 重新解析（data/ gitignored，冇呢個檔嘅環境自動 skip）", () => {
-  it("組數／逐組格數逐項相等", async () => {
-    const buffer = await readFile(REAL_POSTORDER_FILE);
-    const wb = await loadPostorderWorkbook(buffer);
-    const fromWorkbook = parsePostorderLongtermPostsFromWorkbook(wb);
-
-    // 同 scripts/guard-fix/export-postorder-pairs.ts 一致嘅 CSV escape／
-    // 排序邏輯，直接喺 memory 做（唔寫檔），逼真模擬匯出→重新解析嘅
-    // 一致性。
-    function csvEscape(s: string): string {
-      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    }
-    const sorted = [...fromWorkbook].sort((a, b) => {
-      const bySite = a.siteLabelRaw.localeCompare(b.siteLabelRaw, "zh-Hant");
-      if (bySite !== 0) return bySite;
-      return a.guardNameRaw.localeCompare(b.guardNameRaw, "zh-Hant");
-    });
-    const csvText =
-      ["site_label,site_short,guard_name,cell_count", ...sorted.map((c) => [csvEscape(c.siteLabelRaw), csvEscape(c.siteLabelFallbackRaw ?? ""), csvEscape(c.guardNameRaw), String(c.cellCount)].join(","))].join(
-        "\r\n",
-      ) + "\r\n";
-
-    const outcome = parseLongtermPairsCsv(csvText);
-    expect(outcome.parseError).toBeNull();
-    expect(outcome.cells).toHaveLength(fromWorkbook.length);
-    expect(outcome.cells.reduce((acc, c) => acc + c.cellCount, 0)).toBe(fromWorkbook.reduce((acc, c) => acc + c.cellCount, 0));
-    console.log(`[wp-postorder-pairs-csv] ${outcome.cells.length} 個 (盤,人) 組合、${outcome.cells.reduce((acc, c) => acc + c.cellCount, 0)} 格——xlsm 直讀 vs pairs-csv 重新解析一致`);
-  });
-});
-
+// 真檔 xlsm 比對（讀 data/，永遠 skip 嘅死測試）已搬去本機工具 scripts/guard-fix/verify-postorder-pairs-local.ts。

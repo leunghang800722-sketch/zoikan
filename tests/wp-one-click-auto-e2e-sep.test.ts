@@ -202,16 +202,25 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
 
     // 2. 更數異常：8 個，7 個 explained（external／公司兵／截短／重複／小增減／雞頭組成／Postorder），1 個解釋唔到
     const vf = (steps.find((x) => x.key === "parse_health")!.numbers.varianceFindings as Array<{ site: string; explained: boolean; sentence: string; external: number; internalCash: number }>) ?? [];
-    expect(vf).toHaveLength(8);
-    expect(vf.filter((x) => x.explained)).toHaveLength(7);
-    expect(auto.summary.variancesExplained).toBe(7);
-    expect(auto.summary.variancesUnexplained).toBe(1);
+    // 截短（<80% 日數）獨立於 30% 閘口，一律出 finding：呢個合成場景好多盤只覆蓋部分日子（新盤 9–10 日、皓日 8 日、Event 2 日）
+    const MAIN8 = ["測試數碼港CP", "測試截短盤", "測試重複盤", "測試小增減盤", "測試真增減盤", "測試PO對盤", "測試公司兵盤", "測試雞頭組成盤"];
+    expect(vf.filter((x) => MAIN8.includes(x.site))).toHaveLength(8);
+    expect(vf.filter((x) => !MAIN8.includes(x.site)).every((x) => !x.explained && x.sentence.includes("檔案可能截短"))).toBe(true);
+    expect(vf.filter((x) => x.explained)).toHaveLength(5); // 小增減盤 +10（50%）剩餘 10 >5 且 >15% 而家要人睇；截短一律唔當 explained（要人確認檔案齊唔齊）
+    expect(auto.summary.variancesExplained).toBe(5);
+    expect(auto.summary.variancesUnexplained).toBe(vf.length - 5);
+    for (const f of vf as Array<{ components?: { delta: number; dup: number; ic: number; sub: number; broker: number; trunc: number; residual: number } }>) {
+      const c = f.components;
+      if (!c) continue; // 冇上月比較（新盤）嘅截短 finding 冇差額可拆
+      expect(c.dup + c.ic + c.sub + c.broker + c.trunc + c.residual).toBe(c.delta); // 每格只歸一個成分
+    }
     const e1f = vf.find((x) => x.site === "測試數碼港CP")!;
     expect(e1f.external).toBe(40);
     expect(e1f.internalCash).toBe(25);
     expect(e1f.sentence).toContain("已排除客戶自己人 40 格");
     expect(e1f.sentence).toContain("公司兵 25 更");
     expect(vf.find((x) => x.site === "測試截短盤")!.sentence).toContain("檔案可能截短");
+    expect(vf.find((x) => x.site === "測試截短盤")!.explained).toBe(false);
     expect(vf.find((x) => x.site === "測試重複盤")!.sentence).toContain("重複行 30 更");
     expect(vf.find((x) => x.site === "測試雞頭組成盤")!.sentence).toContain("新增 EW");
     expect(vf.find((x) => x.site === "測試PO對盤")!.sentence).toContain("Postorder 同盤共 60 更");
@@ -221,11 +230,12 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
     const e1recs = await prisma.shiftRecord.findMany({ where: { siteId: s.e1.site.id, status: { not: "cancelled" } }, include: { settlementBroker: true } });
     expect(e1recs.filter((r) => r.settlementBroker?.kind === "external").length).toBe(40);
 
-    // 3. 無結算雞頭：皓日（上月同姓名 EW）＋Event（Postorder 同日雞頭 EK）自動歸屬
-    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: s.hoR.site.id } })) expect(r.settlementBrokerId).toBe(EW.id);
+    // 3. 無結算雞頭：Event（Postorder 同日雞頭 EK）自動歸屬；皓日係新安員（冇同一 guard_id 歷史）→ 唔靠姓名跨安員回溯，入分診
     for (const r of await prisma.shiftRecord.findMany({ where: { siteId: s.ev.site.id } })) expect(r.settlementBrokerId).toBe(EK.id);
-    expect(auto.summary.recordsSettled).toBe(10);
-    expect(report.unpriced.noSettlementCount).toBe(0);
+    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: s.hoR.site.id } })) expect(r.settlementBrokerId).toBeNull();
+    expect(auto.summary.recordsSettled).toBe(2);
+    expect(report.unpriced.noSettlementCount).toBe(8);
+    expect(auto.review.some((x) => x.kind === "month_close_settlement")).toBe(true);
 
     // 4. 未定價：auto 之後剩 propose（海景／娉廷）＋冇依據（公司兵 Y 25+20、南豐新 9）
     expect(auto.summary.cardsCreated).toBeGreaterThanOrEqual(12);
@@ -237,7 +247,7 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
     expect(auto.review.every((x) => x.confidence === "propose" || x.confidence === "unknown")).toBe(true);
     expect(auto.review.every((x) => x.text.length > 0 && x.questionId)).toBe(true);
     const unpricedNow = await buildUnpricedSummary({ userId: boss(), baseRole: "老闆", brokerId: null } as never, SEPT);
-    expect(unpricedNow.count).toBe(10 + 9 + 25 + 20); // 海景（propose）＋南豐（冇依據）＋公司兵 Y（冇依據）；娉廷 Postorder 冇按雞頭分價、值唯一 → auto
+    expect(unpricedNow.count).toBe(10 + 9 + 25 + 20 + 8); // 皓日 8 更（冇結算雞頭，入分診）＋海景（propose）＋南豐（冇依據）＋公司兵 Y（冇依據）；娉廷 Postorder 冇按雞頭分價、值唯一 → auto
     expect(report.unpriced.count).toBe(unpricedNow.count);
     expect(report.unpriced.gap).toBeDefined();
     expect(auto.summary.unpricedRecords).toBe(unpricedNow.count);
@@ -267,29 +277,59 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
       expect(ar.status).toBe(200);
     }
     const unpricedAfterConfirm = await buildUnpricedSummary({ userId: boss(), baseRole: "老闆", brokerId: null } as never, SEPT);
-    expect(unpricedAfterConfirm.count).toBe(9 + 25 + 20);
+    expect(unpricedAfterConfirm.count).toBe(9 + 25 + 20 + 8); // 南豐＋公司兵 Y＋皓日（冇結算雞頭）
     const remainingSites = new Set(unpricedAfterConfirm.groups.map((x) => x.site_name));
-    expect([...remainingSites].sort()).toEqual(["測試公司兵盤", "測試南豐新", "測試數碼港CP"].sort());
+    expect([...remainingSites].sort()).toEqual(["測試公司兵盤", "測試南豐新", "測試數碼港CP", "測試皓日"].sort());
 
     // 6. undo-auto：自動改動完全還原（價卡作廢、價 snapshot 還原、alias 移除、結算還原）；人手確認嘅（triage:）唔還原；8 月 0 變
     const undo = await undoRoute(req(`http://x/u`, owner, "POST"), { params: Promise.resolve({ id: run.id }) });
     expect(undo.status).toBe(200);
     const ub = (await undo.json()) as { undone: Record<string, number>; skipped: Array<{ kind: string }> };
     expect(ub.undone.rate_cards).toBe(auto.summary.cardsCreated);
-    expect(ub.undone.settlement).toBe(10);
+    expect(ub.undone.settlement).toBe(2);
     // 新盤更種有更次用緊 → 唔作廢
     expect(ub.skipped.every((x) => x.kind === "shift_type_created")).toBe(true);
     const autoCards = await prisma.rateCard.findMany({ where: { source: `auto:one-click:${run.id}` } });
     expect(autoCards.length).toBeGreaterThan(0);
     expect(autoCards.every((c) => c.voidedAt !== null)).toBe(true);
-    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: s.hoR.site.id } })) expect(r.settlementBrokerId).toBeNull();
+    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: s.ev.site.id } })) expect(r.settlementBrokerId).toBeNull();
     const triageCards = await prisma.rateCard.findMany({ where: { source: { startsWith: "triage:" } } });
     expect(triageCards.every((c) => c.voidedAt === null)).toBe(true);
     // 價 snapshot：例如 e10 正常盤 auto 價之後被還原（無 auto 卡）→ 未定價
     const afterUndo = await buildUnpricedSummary({ userId: boss(), baseRole: "老闆", brokerId: null } as never, SEPT);
     expect(afterUndo.count).toBeGreaterThan(unpricedAfterConfirm.count);
+    // 已作廢嘅 auto 卡唔准留低佢嘅價：冇任何九月更次 snapshot 仲等如已作廢 auto 卡嘅價
+    for (const c of autoCards) {
+      const left = await prisma.shiftRecord.count({ where: { siteId: c.siteId, shiftTypeId: c.shiftTypeId!, workDate: { gte: SEPT }, status: { not: "cancelled" }, ...(c.clientRate !== null ? { clientRateSnapshot: c.clientRate } : { guardWageSnapshot: c.payoutRate ?? c.guardWage }) } });
+      expect(left, `卡 ${c.id.slice(0, 8)} 嘅價未清走`).toBe(0);
+    }
     expect(await snapshotAug()).toBe(aug0);
     void MonthLabel;
+  });
+
+  it("rerun 冪等：第一次同第二次（同一個 run 重新執行）報告收入／成本／逐盤／逐雞頭／未定價逐欄相同，唔重複建卡", async () => {
+    await seedScenario();
+    const run = await prisma.monthCloseRun.create({ data: { month: SEPT, status: "running", startedById: boss(), applyStartedAt: new Date() } });
+    await runOneClickMonthClose(run.id, SEPT, boss(), null);
+    const first = (await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: run.id } })).reportJson as unknown as MonthCloseReport;
+    const cards1 = await prisma.rateCard.count({ where: { source: { startsWith: "auto:one-click:" }, voidedAt: null } });
+    const snaps1 = JSON.stringify((await prisma.shiftRecord.findMany({ where: { workDate: { gte: SEPT } }, select: { id: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true, settlementBrokerId: true }, orderBy: { id: "asc" } })).map((r) => [r.id, String(r.clientRateSnapshot), String(r.guardWageSnapshot), String(r.brokerFeeSnapshot), r.settlementBrokerId]));
+    await prisma.monthCloseRun.update({ where: { id: run.id }, data: { status: "running", applyStartedAt: new Date(), finishedAt: null } });
+    await runOneClickMonthClose(run.id, SEPT, boss(), null);
+    const second = (await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: run.id } })).reportJson as unknown as MonthCloseReport;
+    expect(await prisma.rateCard.count({ where: { source: { startsWith: "auto:one-click:" }, voidedAt: null } })).toBe(cards1);
+    const snaps2 = JSON.stringify((await prisma.shiftRecord.findMany({ where: { workDate: { gte: SEPT } }, select: { id: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true, settlementBrokerId: true }, orderBy: { id: "asc" } })).map((r) => [r.id, String(r.clientRateSnapshot), String(r.guardWageSnapshot), String(r.brokerFeeSnapshot), r.settlementBrokerId]));
+    expect(snaps2).toBe(snaps1);
+    const pick = (r: MonthCloseReport) => ({ totals: r.totals, siteRevenue: [...r.siteRevenue].sort((a, b) => a.siteName.localeCompare(b.siteName)).map(({ siteName, shifts, revenue }) => ({ siteName, shifts, revenue })), payroll: r.payrollByBroker, unpriced: r.unpriced, review: r.auto!.review.map((x) => [x.kind, x.confidence]).sort() });
+    expect(pick(second)).toEqual(pick(first));
+    // undo 後再跑（同一個 run）：報告同第一次逐欄相同——證明 undo 冇留低任何舊價／結算影響收入
+    await prisma.monthCloseRun.update({ where: { id: run.id }, data: { status: "done" } });
+    const { undoAutoChanges } = await import("@/lib/month-close/auto/undo");
+    await undoAutoChanges(run.id, boss(), null);
+    await prisma.monthCloseRun.update({ where: { id: run.id }, data: { status: "running", applyStartedAt: new Date(), finishedAt: null } });
+    await runOneClickMonthClose(run.id, SEPT, boss(), null);
+    const third = (await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: run.id } })).reportJson as unknown as MonthCloseReport;
+    expect(pick(third)).toEqual(pick(first));
   });
 
   it("已鎖 9 月：一鍵 halt，唔寫任何自動改動", async () => {

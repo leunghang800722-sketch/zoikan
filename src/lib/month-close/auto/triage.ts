@@ -25,6 +25,9 @@ import { setSettlementBatch } from "./settlement";
 import { linkIdentityToGuard } from "./guard-match";
 import { MC_KINDS, type McEvidence, type McKind, type McQuestionDraft, type PriceValues, type PricingGroupRef } from "./types";
 
+/** applying 超過呢個時間（寫入中途程式死咗）當卡死，容許重新 claim。 */
+const APPLYING_STALE_MS = 10 * 60 * 1000;
+
 export const isMcKind = (kind: string): kind is McKind => (MC_KINDS as readonly string[]).includes(kind);
 
 type QRowWithSession = TriageQuestion & { session: TriageSession };
@@ -51,13 +54,24 @@ function optionsFor(d: McQuestionDraft): QuestionOption[] {
   if (ev.kind === "month_close_site_alias") out.push({ id: "mc_new", label: "唔係，當新盤（自動建更種）" });
   if (ev.kind === "month_close_pricing" || ev.kind === "month_close_site_new") out.push({ id: "mc_price", label: "自己輸入價錢", hint: "客價／工資／雞頭費（元／更）" });
   if (ev.kind === "month_close_settlement" && !out.some((o) => o.id === "mc_pick")) out.push({ id: "mc_pick", label: "揀其他結算雞頭" });
-  if (ev.kind === "month_close_shift_variance") out.push({ id: "mc_ack", label: "我已覆核，冇問題" });
+  if (ev.kind === "month_close_shift_variance" || (ev.action.type === "site_new" && ev.action.groups.length === 0)) out.push({ id: "mc_ack", label: "我已處理／已覆核" });
   out.push({ id: "skip", label: "跳過，留返人手" });
   return out;
 }
 
 /** 開（或者刷新）呢個 run 嘅分診 session。重新執行同一個 run：已答／已跳過嘅題保留，open 題刷新，唔再出現嘅 open 題作廢。 */
-export async function upsertMonthCloseTriage(runId: string, ownerUserId: string, drafts: readonly McQuestionDraft[], ip: string | null): Promise<{ sessionId: string | null; created: number; total: number }> {
+export async function upsertMonthCloseTriage(runId: string, ownerUserId: string, drafts: readonly McQuestionDraft[], ip: string | null, monthIso: string): Promise<{ sessionId: string | null; created: number; total: number }> {
+  // 新 run：同月份其他 run 嘅 open month_close_* 題一律作廢（跟 §28：以最新一次運行嘅題為準）。
+  {
+    const month = monthIso;
+    const others = await prisma.triageSession.findMany({ where: { sourceType: "month_close", sourceRef: { not: runId } }, select: { id: true } });
+    if (others.length) {
+      const olds = await prisma.triageQuestion.findMany({ where: { sessionId: { in: others.map((o) => o.id) }, status: "open" }, select: { id: true, evidenceJson: true } });
+      const stale = olds.filter((o) => (o.evidenceJson as { month?: string }).month === month).map((o) => o.id);
+      if (stale.length) await prisma.triageQuestion.updateMany({ where: { id: { in: stale } }, data: { status: "superseded" } });
+      for (const o of others) await refreshSessionStatus(o.id);
+    }
+  }
   const existing = await prisma.triageSession.findUnique({ where: { sourceType_sourceRef: { sourceType: "month_close", sourceRef: runId } } });
   if (!existing && drafts.length === 0) return { sessionId: null, created: 0, total: 0 };
   const session =
@@ -157,7 +171,7 @@ export async function mcQuestionViews(rows: TriageQuestion[], caps: { pii: boole
         count,
         candidates: ev.candidates.map((c) => ({ id: c.id, label: c.label, evidence: c.evidence ?? null, values: c.values ?? null, values_text: c.values ? describeValues(c.values) : null })),
         prefill_candidate_id: ev.prefillCandidateId,
-        needs_price_input: ev.kind === "month_close_pricing" || ev.kind === "month_close_site_new",
+        needs_price_input: ev.kind === "month_close_pricing" || (ev.kind === "month_close_site_new" && !(ev.action.type === "site_new" && ev.action.groups.length === 0)),
         needs_broker_pick: ev.kind === "month_close_settlement",
         broker_options: ev.kind === "month_close_settlement" ? brokers : [],
         identity_label: action.type === "guard_match" ? (caps.pii ? action.identity.nameRaw : null) : null,
@@ -193,6 +207,7 @@ type Plan =
 async function assertCanAnswer(actor: AuthedSession, q: QRowWithSession): Promise<void> {
   if (q.status === "answered") throw Conflict("呢條問題已經答過，唔可以重複套用");
   if (q.status === "superseded") throw Conflict("呢條問題已經唔適用（改動已還原或者較新一次一鍵結算取代）");
+  if (q.status === "applying" && Date.now() - q.updatedAt.getTime() < APPLYING_STALE_MS) throw Conflict("呢條問題而家有人處理緊，等佢完成");
   if (!(await hasPermission(actor, "一鍵結算", "create"))) throw Forbidden("要有「一鍵結算」權限嘅同事（老闆／會計）先可以答呢類問題");
 }
 
@@ -254,6 +269,11 @@ async function resolvePlan(q: QRowWithSession, answer: TriageAnswer): Promise<{ 
     }
     case "pricing":
     case "site_new": {
+      if (ev.action.type === "site_new" && ev.action.groups.length === 0) {
+        if (answer.option !== "mc_ack") throw BadRequest("呢題淨係可以揀「我已處理」或者跳過");
+        impact.summary.push("確認已處理：唔會改任何資料");
+        return { plan: { type: "ack" }, fingerprint: "ack", impact };
+      }
       const groupsAll = await collectUnpricedGroups(month);
       const wanted = ev.action.type === "pricing" ? [ev.action.group] : ev.action.groups;
       const groups = wanted
@@ -360,6 +380,14 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
   const writer = new SimpleWriter(`triage:${q.id}`, actor.userId, ip);
   const result: Record<string, unknown> = {};
 
+  // 先 claim（open／skipped／卡死嘅 applying → applying），並發淨係一個攞到；寫失敗退返 open，retry 安全
+  //（建卡係冪等：同來源已有卡唔重複建）。
+  const claimed = await prisma.triageQuestion.updateMany({
+    where: { id: q.id, OR: [{ status: { in: ["open", "skipped"] } }, { status: "applying", updatedAt: { lt: new Date(Date.now() - APPLYING_STALE_MS) } }] },
+    data: { status: "applying" },
+  });
+  if (claimed.count !== 1) throw Conflict("呢條問題已經有人處理緊或者答咗，唔可以重複套用");
+  try {
   switch (plan.type) {
     case "ack":
       break;
@@ -423,10 +451,14 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
     default:
       break;
   }
+  } catch (e) {
+    await prisma.triageQuestion.updateMany({ where: { id: q.id, status: "applying" }, data: { status: "open" } });
+    throw e;
+  }
 
   await prisma.$transaction(async (tx) => {
     const n = await tx.triageQuestion.updateMany({
-      where: { id: q.id, status: { in: ["open", "skipped"] } },
+      where: { id: q.id, status: "applying" },
       data: { status: "answered", answerJson: JSON.parse(JSON.stringify(answer)), answeredBy: actor.userId, answeredAt: now, impactJson: JSON.parse(JSON.stringify(impact)), applyResultJson: JSON.parse(JSON.stringify(result)) },
     });
     if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");

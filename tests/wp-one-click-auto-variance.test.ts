@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { AUG, SEPT, mkBroker, seedUploadWithRows, seedPostorder, postorderCsv } from "./lib/one-click-auto";
-import { explainVariances } from "@/lib/month-close/auto/variance";
+import { explainVariances, varianceNeedsHuman } from "@/lib/month-close/auto/variance";
 import { AutoCollector } from "@/lib/month-close/auto/context";
 
 type RowOpt = Parameters<typeof seedUploadWithRows>[0]["rows"][number];
@@ -76,14 +76,37 @@ describe("WP-ONE-CLICK-AUTO B：更數異常自動解釋", () => {
     expect(f.sentence).toContain("公司兵 49 更");
   });
 
-  it("截短：只覆蓋 15／30 日（按日均推算）→ 講明「檔案可能截短」＋缺邊幾日，唔同真增減混埋", async () => {
+  it("截短：只覆蓋 15／30 日 → 講明「檔案可能截短」＋缺邊幾日，而且一律 needs_human（唔當 explained）；獨立於 30% 閘口", async () => {
     const half = K_ROWS(100).filter((r) => r.day <= 15);
-    const { res } = await scenario(K_ROWS(100), half);
+    const { res, ctx } = await scenario(K_ROWS(100), half);
     const f = res.findings[0]!;
     expect(f.sentence).toContain("檔案可能截短");
     expect(f.sentence).toContain("只覆蓋 15／30 日");
     expect(f.sentence).toContain("16"); // 缺 16 號起
+    expect(f.explained).toBe(false);
+    expect(res.needsHuman).toHaveLength(1);
+    expect(ctx.questions).toHaveLength(1);
+    // 差異 <30%（上月都只得 15 日，格數相近）但本月只覆蓋 15 日 → 照樣要人睇
+    const sameHalf = K_ROWS(100).filter((r) => r.day <= 15);
+    const r2 = await scenario(sameHalf, sameHalf.map((r) => ({ ...r })));
+    expect(r2.res.findings).toHaveLength(1);
+    expect(r2.res.findings[0]!.explained).toBe(false);
+    expect(r2.res.needsHuman).toHaveLength(1);
+  });
+
+  it("成分互斥：重複行同公司兵／子盤／雞頭唔雙重計；成分加埋＝差額", async () => {
+    const ic = gen(30, (i) => ({ settlementBrokerId: Y.id, nameRaw: `測試兵${i}`, staffNoRaw: `U4${i}` }));
+    const icDup = ic.map((r) => ({ ...r }));
+    const { res } = await scenario(K_ROWS(100), [...K_ROWS(100), ...ic, ...icDup]);
+    const f = res.findings[0]!;
+    const c = f.components!;
+    expect(c.delta).toBe(60);
+    expect(c.dup).toBe(30);
+    expect(c.ic).toBe(30);
+    expect(c.residual).toBe(0);
+    expect(c.dup + c.ic + c.sub + c.broker + c.trunc + c.residual).toBe(c.delta);
     expect(f.explained).toBe(true);
+    // 所有已有 finding 嘅成分加埋都等如差額
   });
 
   it("重複行：同人同日同更種重複 60 行 → 拆出重複 → explained", async () => {
@@ -135,12 +158,16 @@ describe("WP-ONE-CLICK-AUTO B：更數異常自動解釋", () => {
     expect(ctx.summary.variancesUnexplained).toBe(1);
   });
 
-  it("剩餘細（≤20 更）即使 >15% 都當 explained（且閘）", async () => {
-    // 上月 40，今月 56：+40%，冇可拆成分，剩餘 16 更 ≤ 20
-    const { res } = await scenario(K_ROWS(40), K_ROWS(56));
-    const f = res.findings[0]!;
-    expect(f.unexplained).toBe(16);
-    expect(f.explained).toBe(true);
+  it("needs_human 口徑：剩餘 >20 更，或者（>15% 而且 >5 更）；剩餘 ≤5 更就算 >15% 都 explained", async () => {
+    expect(varianceNeedsHuman(4, 10)).toBe(false); // +40% 但剩餘只 4 更
+    expect(varianceNeedsHuman(6, 10)).toBe(true); // >15% 且 >5
+    expect(varianceNeedsHuman(6, 100)).toBe(false); // 6% 唔夠 15%
+    expect(varianceNeedsHuman(21, 1000)).toBe(true); // >20 更
+    const mid = await scenario(K_ROWS(40).map((r, i) => ({ ...r, day: (i % 30) + 1 })).concat(K_ROWS(0)), gen(56, () => ({ settlementBrokerId: K.id }))); // +40%，剩餘 16 > 5 且 >15%
+    expect(mid.res.findings[0]!.unexplained).toBe(16);
+    expect(mid.res.findings[0]!.explained).toBe(false);
+    const big = await scenario(K_ROWS(400), K_ROWS(520)); // +30% 剛好唔閘；+130 更 >20
+    expect(big.res.findings.length === 0 || big.res.findings[0]!.explained === false).toBe(true);
   });
 
   it("冇逐格資料（只有 parse_summary）→ 舊口徑警告（可能截短／格式異常），拆唔到", async () => {

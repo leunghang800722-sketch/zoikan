@@ -37,7 +37,8 @@ async function previousMonthPaired(month: Date, id: NeedsBossIdentity, candidate
   const relevant = rows.filter((r) => {
     const siteOk = (r.resolvedSite && labels.has(nameKey(r.resolvedSite.canonicalName))) || labels.has(nameKey(r.upload.siteNameRaw));
     if (!siteOk) return false;
-    if (sn && r.staffNoRaw && normalizeStaffNumber(r.staffNoRaw) !== sn) return false;
+    // 有工號就要求上月嗰啲格工號都一樣（淨姓名一樣唔夠）。
+    if (sn && (!r.staffNoRaw || normalizeStaffNumber(r.staffNoRaw) !== sn)) return false;
     return true;
   });
   return { ok: relevant.length >= 3 && relevant.every((r) => r.guardId === candidateId), rows: relevant.length };
@@ -107,10 +108,14 @@ export async function autoResolveNeedsBoss(ctx: AutoCollector, month: Date, item
   for (const it of items) {
     const only = it.candidateGuardIds.length === 1 ? it.candidateGuardIds[0]! : null;
     let evidence: string | null = null;
-    if (only) {
+    // plan 已判「工號衝突」嘅一律唔 auto（交分診）。
+    const staffNoConflict = it.reason.includes("工號");
+    if (only && !staffNoConflict) {
+      // auto 只喺有硬鍵（工號／電話）而且上月同盤已配對同一 guard_id：淨姓名一樣唔夠。
+      const hasStaffNo = !!it.staffNoRaw;
       const prev = await previousMonthPaired(month, it, only);
-      if (prev.ok) evidence = `上月同盤同一更表姓名已配對到呢位安員（${prev.rows} 格）`;
-      else if (await telHardKey(it, only)) evidence = "電話硬鍵＋姓名一致";
+      const telKey = await telHardKey(it, only);
+      if (prev.ok && (hasStaffNo || telKey)) evidence = `上月同盤同一更表${hasStaffNo ? "工號" : "電話＋姓名"}已配對到呢位安員（${prev.rows} 格）`;
     }
     if (only && evidence) {
       const res = await linkIdentityToGuard(ctx, it, only);
@@ -121,10 +126,7 @@ export async function autoResolveNeedsBoss(ctx: AutoCollector, month: Date, item
         ctx.line("guard_match", `安員配對 ${it.seq}（${it.siteLabels.join("、")}，${it.cellCount} 格）自動配對：${evidence}`);
         continue;
       }
-      // 已經登記晒（冪等）——下一輪 reparse 會配到，唔使問。
-      out.autoLinked++;
-      out.cellsLinked += it.cellCount;
-      continue;
+      // 加唔到任何登記（別名／工號都已經存在或者被佔用）＝reparse 後都未必配到 → 唔計 auto，出分診題。
     }
     out.remaining++;
     out.remainingItems.push(it);

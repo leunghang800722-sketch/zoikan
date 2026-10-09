@@ -14,7 +14,7 @@ import { prisma } from "@/lib/db";
 import { monthRange, n, round2 } from "@/lib/reports/money";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards, LONGTERM_REFERRAL_AUTOCOMPUTE_FROM, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
 import { loadUnpricedLookups, unpricedCategoriesOf, type UnpricedCategory } from "@/lib/pricing/unpriced";
-import { numOrNull } from "@/lib/pricing/reprice";
+import { numOrNull, repriceMonthForSites } from "@/lib/pricing/reprice";
 import { shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
 import { isMixedBillingMonth } from "@/lib/reports/mixed-billing";
 import type { AutoCollector, ChangeWriter } from "./context";
@@ -31,6 +31,8 @@ export interface PriceSource {
   level: "auto" | "propose";
   values: PriceValues;
   evidence: string;
+  /** 來源本身係通用卡（brokerId null）→ 建出嚟嘅卡先可以係通用卡；否則一定帶該雞頭 brokerId。 */
+  generic?: boolean;
 }
 
 const EMPTY_VALUES: PriceValues = { clientRate: null, guardWage: null, brokerFee: null, payoutRate: null };
@@ -156,16 +158,39 @@ export async function findPriceSource(
   const broker = group.brokerId ? (env.brokers.find((b) => b.id === group.brokerId) ?? null) : null;
   if (!site || !st) return { auto: null, proposals };
 
-  // 1. 同盤同更種同雞頭上月（最近 3 個月內完結）嘅卡
+  // 1. 同盤同更種同雞頭上月（最近 3 個月內完結）嘅卡。
+  //    - 出街價：淨係同雞頭嘅卡；
+  //    - 淨缺客價：同雞頭嘅卡優先；用其他雞頭／通用卡要全部一致先 auto（唔一致 → propose）；
+  //    - 來源唔准係 auto:one-click:* 嘅卡（未經人確認），最多 propose。
   {
-    const cands = cards
-      .filter((c) => c.shiftTypeId === st.id && c.effectiveTo !== null && c.effectiveTo < env.start && c.effectiveTo >= env.threeMonthsAgo && c.effectiveFrom < env.start && (need.payout ? c.brokerId === group.brokerId : true))
-      .sort((a, b) => b.effectiveTo!.getTime() - a.effectiveTo!.getTime() || b.effectiveFrom.getTime() - a.effectiveFrom.getTime());
-    for (const c of cands) {
-      const v = restrictValues(cardValues(c), need);
-      if (coversNeed(v, need)) {
-        return { auto: { step: 1, level: "auto", values: v, evidence: `沿用同盤同更種${need.payout && broker ? `同雞頭 ${broker.code}` : ""}上期卡（${fmtDate(c.effectiveFrom)}～${fmtDate(c.effectiveTo)}，卡 ${c.id.slice(0, 8)}）` }, proposals };
+    const win = cards.filter((c) => c.shiftTypeId === st.id && c.effectiveTo !== null && c.effectiveTo < env.start && c.effectiveTo >= env.threeMonthsAgo && c.effectiveFrom < env.start);
+    const byRecent = (a: CardRow, b: CardRow) => b.effectiveTo!.getTime() - a.effectiveTo!.getTime() || b.effectiveFrom.getTime() - a.effectiveFrom.getTime();
+    const search = (pool: CardRow[]): { card: CardRow; generic: boolean } | { conflict: PriceValues[] } | null => {
+      const sorted = [...pool].sort(byRecent);
+      const covering = (list: CardRow[]) => list.map((c) => ({ c, v: restrictValues(cardValues(c), need) })).filter((x) => coversNeed(x.v, need));
+      if (need.payout) {
+        const own = covering(sorted.filter((c) => c.brokerId === group.brokerId));
+        return own[0] ? { card: own[0].c, generic: own[0].c.brokerId === null } : null;
       }
+      const own = group.brokerId ? covering(sorted.filter((c) => c.brokerId === group.brokerId)) : [];
+      if (own[0]) return { card: own[0].c, generic: false };
+      const others = covering(sorted);
+      const keys = new Map(others.map((x) => [tupleKey(x.v), x.v]));
+      if (keys.size === 1) return { card: others[0]!.c, generic: others.every((x) => x.c.brokerId === null) };
+      if (keys.size > 1) return { conflict: [...keys.values()] };
+      return null;
+    };
+    const human = search(win.filter((c) => !isAutoCard(c)));
+    if (human && "card" in human) {
+      const c = human.card;
+      const v = restrictValues(cardValues(c), need);
+      return { auto: { step: 1, level: "auto", values: v, generic: human.generic, evidence: `沿用同盤同更種${need.payout && broker ? `同雞頭 ${broker.code}` : ""}上期卡（${fmtDate(c.effectiveFrom)}～${fmtDate(c.effectiveTo)}，卡 ${c.id.slice(0, 8)}）` }, proposals };
+    }
+    if (human && "conflict" in human) {
+      for (const v of human.conflict.slice(0, 3)) proposals.push({ step: 1, level: "propose", values: v, label: "上期卡（各雞頭唔一致）", evidence: "同盤同更種上期卡因雞頭而異，淨缺客價，唔肯定用邊個" });
+    } else {
+      const auto = search(win.filter((c) => isAutoCard(c)));
+      if (auto && "card" in auto) proposals.push({ step: 1, level: "propose", values: restrictValues(cardValues(auto.card), need), generic: auto.generic, label: "上月自動定價卡（未經人確認）", evidence: `上期卡 ${auto.card.id.slice(0, 8)} 係一鍵結算自動建嘅，未經人確認，唔自動沿用` });
     }
   }
 
@@ -189,7 +214,9 @@ export async function findPriceSource(
         const generic = classified.filter((r) => r.kind === "generic");
         const gv = generic.length && rows.length === 0 ? uniqueCover(valuesOf(generic)) : null;
         if (gv) {
-          const anyBrokerRows = classified.some((r) => r.kind === "broker");
+          // 泛用行只准 kind=broker 嘅外判雞頭 auto；公司兵（internal_cash）一律唔用泛用行；
+          // 同崗位有逐人／逐雞頭行時只 propose。
+          const anyBrokerRows = classified.some((r) => r.kind === "broker" || r.kind === "person") || broker.kind !== "broker";
           const evidenceRows = `第 ${generic.map((r) => r.row.rowIndex).slice(0, 3).join("、")} 行`;
           // 同盤同崗位 Postorder 完全冇按雞頭分價（冇任何雞頭專屬行），泛用價值唯一 → 呢個崗位嘅價就係佢，auto；
           // 有其他雞頭嘅專屬行（價可能因雞頭而異）而呢個雞頭冇 → 只係 propose。
@@ -284,7 +311,7 @@ export interface ApplyPriceResult {
 /** 建一張卡（effective_from＝本月 1 號，到月尾），並只對呢組「未定價」記錄補價。 */
 export async function createCardAndPrice(
   writer: ChangeWriter,
-  input: { month: Date; group: PricingGroupRef; need: PriceNeed; values: PriceValues; evidence: string; note: string; confidence: string; recordIds?: string[] },
+  input: { month: Date; group: PricingGroupRef; need: PriceNeed; values: PriceValues; evidence: string; note: string; confidence: string; recordIds?: string[]; generic?: boolean },
 ): Promise<ApplyPriceResult> {
   const { start, end } = monthRange(input.month);
   if (start < LONGTERM_REFERRAL_AUTOCOMPUTE_FROM) throw new Error("8 月之前嘅月份唔做自動定價");
@@ -293,11 +320,20 @@ export async function createCardAndPrice(
   const v = restrictValues(input.values, input.need);
   if (!coversNeed(v, input.need)) throw new Error("價錢唔齊（客價／出街價要有數）");
   const dec = (x: number | null) => (x === null ? null : new Prisma.Decimal(round2(x)));
+  // 冪等：同盤同更種同雞頭本月已經有未作廢嘅 auto／同一來源卡（卡建咗但更次仍未定價）→ 唔重複建卡，淨係再補價。
+  const cardBrokerId = input.generic ? null : input.group.brokerId;
+  const dup = await prisma.rateCard.findFirst({
+    where: { siteId: input.group.siteId, shiftTypeId: input.group.shiftTypeId, brokerId: cardBrokerId, guardId: null, voidedAt: null, source: writer.source, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] },
+  });
+  if (dup) {
+    const n = await repriceMonth(writer, input.month, input.group, input.need, dup.id);
+    return { cardId: dup.id, recordsPriced: n };
+  }
   const card = await prisma.rateCard.create({
     data: {
       siteId: input.group.siteId,
       shiftTypeId: input.group.shiftTypeId,
-      brokerId: input.need.payout ? input.group.brokerId : null,
+      brokerId: input.generic ? null : input.group.brokerId,
       guardId: null,
       clientRate: dec(v.clientRate),
       guardWage: dec(v.guardWage),
@@ -321,8 +357,19 @@ export async function createCardAndPrice(
     summary: `自動建價卡（${describeValues(v)}）：${input.evidence}`,
     detail: { cardId: card.id, siteId: input.group.siteId, shiftTypeId: input.group.shiftTypeId, month: start.toISOString().slice(0, 10) },
   });
-  const recordsPriced = await applyCardToRecords(writer, input.month, input.group, input.need, input.recordIds, card.id);
+  const recordsPriced = await repriceMonth(writer, input.month, input.group, input.need, card.id);
   return { cardId: card.id, recordsPriced };
+}
+
+/** 建卡之後對呢組（盤×更種×雞頭）**全月**重新補價，loop 到冇變（每輪都 journal，undo 逐輪還原）。 */
+async function repriceMonth(writer: ChangeWriter, month: Date, group: PricingGroupRef, need: PriceNeed, cardId: string): Promise<number> {
+  let total = 0;
+  for (let i = 0; i < 6; i++) {
+    const n = await applyCardToRecords(writer, month, group, need, undefined, cardId);
+    total += n;
+    if (n === 0) break;
+  }
+  return total;
 }
 
 /** 對呢組未定價記錄補價（targeted：淨係補 null／（工資 0＋雞頭費 null）嘅欄位，唔覆蓋已有價）。 */
@@ -467,6 +514,10 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
     result.skippedReason = "2026-08 之前嘅月份唔做自動定價";
     return result;
   }
+  // rerun：呢個 run 較早（第一次執行）建嘅新盤要記得（site_new 題型靠佢，否則 rerun 題型會變）。
+  if (ctx.runId) {
+    for (const c of await prisma.monthCloseAutoChange.findMany({ where: { runId: ctx.runId, kind: "site_created" }, select: { refId: true } })) if (c.refId) ctx.newSiteIds.add(c.refId);
+  }
   // 先用現有生效卡補價（例如上載之後先加咗卡）——唔建新卡，淨係補 null；之後先睇仲有咩未定價。
   let all = await collectUnpricedGroups(month);
   let prefilled = 0;
@@ -503,7 +554,7 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
           evidence: found.auto.evidence,
           note: `一鍵結算自動定價（次序 ${found.auto.step}）：${found.auto.evidence}`,
           confidence: "auto",
-          recordIds: agg.recordIds,
+          generic: found.auto.generic,
         });
         env.cardsBySite.delete(agg.ref.siteId);
         ctx.summary.cardsCreated++;
@@ -515,7 +566,18 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
         ctx.warnings.push(`自動定價建卡失敗（${e instanceof Error ? e.message.slice(0, 120) : "unknown"}），改入分診`);
       }
     }
+    // 冇結算雞頭嘅組合：價錢要等歸屬雞頭先定得，已有 settlement 分診題，唔再重複出定價題。
+    if (agg.ref.brokerId === null) continue;
     pending.push({ agg, proposals: found.proposals });
+  }
+
+  // 同 reconcile 開頭嘅 reprice（fill 模式）對齊：建咗 auto 卡嘅盤，全月再行一次同一個 reprice，令第一次跑已經去到
+  // 「重新對數」會去到嘅不動點——否則 rerun 嗰陣 reconcile 開頭 reprice 會再補一批價（第二次收入同第一次唔同）。
+  // 呢啲補價冇逐更 journal，undo 靠 sweepCardPrices（按卡價清走）還原。
+  if (result.autoGroups > 0) {
+    const siteIds = [...new Set(aggs.map((a) => a.ref.siteId))];
+    const r = await repriceMonthForSites(month, siteIds, ctx.actorUserId, ctx.ip);
+    if (r.changed > 0) ctx.summary.recordsPriced += r.changed;
   }
 
   // propose／unknown → 分診題

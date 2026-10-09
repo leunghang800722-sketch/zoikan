@@ -172,4 +172,37 @@ describe("WP-ONE-CLICK-AUTO A：盤名比對", () => {
     const ups = await prisma.rosterUpload.findMany({ where: { month: SEPT, siteNameRaw: { startsWith: "測試新盤" } } });
     expect(new Set(ups.map((u) => u.siteId)).size).toBe(1);
   });
+
+  it("子盤參與比對：全形括號寫法對到子盤就歸子盤，唔另建重複頂層盤", async () => {
+    const boss = fx.userIds["老闆"];
+    const brokerK = await mkBroker("TK", "broker");
+    await mkGuard({ name: "測試甲", staffNo: "U90001", defaultBrokerId: brokerK.id });
+    const parent = await prisma.site.create({ data: { canonicalName: "測試母盤城巴", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
+    const child = await prisma.site.create({ data: { canonicalName: "測試母盤城巴 (柴灣)", clientName: "x", parentSiteId: parent.id, billingModel: "per_shift", createdBy: "t" } });
+    await uploadRoster({ siteRaw: "測試母盤城巴（柴灣）", month: SEPT, uploaderUserId: boss, lines: [{ broker: "TK", time: "0700-1900", staffNo: "U90001", name: "測試甲", codes: { 1: "D" } }] });
+    const before = await prisma.site.count();
+    await stepParseHealth(SEPT, boss, new AutoCollector(null, SEPT, boss, null));
+    expect(await prisma.site.count()).toBe(before);
+    const up = await prisma.rosterUpload.findFirstOrThrow({ where: { month: SEPT, siteNameRaw: "測試母盤城巴（柴灣）" } });
+    expect(up.siteId).toBe(child.id);
+  });
+
+  it("新盤時段解析唔到（7am-7pm／空）：唔建 null 時段更種，出題＋warning；unknown 代號格（D-2）要提示", async () => {
+    const boss = fx.userIds["老闆"];
+    const brokerK = await mkBroker("TK", "broker");
+    await mkGuard({ name: "測試甲", staffNo: "U90001", defaultBrokerId: brokerK.id });
+    await mkGuard({ name: "測試乙", staffNo: "U90002", defaultBrokerId: brokerK.id });
+    await uploadRoster({ siteRaw: "測試怪時段新盤", month: SEPT, uploaderUserId: boss, lines: [{ broker: "TK", time: "7am-7pm", staffNo: "U90001", name: "測試甲", codes: { 1: "D", 2: "D-2" } }] });
+    await uploadRoster({ siteRaw: "完全唔同嘅獨特新盤XYZ", month: SEPT, uploaderUserId: boss, lines: [{ broker: "TK", staffNo: "U90002", name: "測試乙", codes: { 1: "N" } }] });
+    const ctx = new AutoCollector(null, SEPT, boss, null);
+    const res = await stepParseHealth(SEPT, boss, ctx);
+    for (const name of ["測試怪時段新盤", "完全唔同嘅獨特新盤XYZ"]) {
+      const site = await prisma.site.findUniqueOrThrow({ where: { canonicalName: name } });
+      expect(await prisma.shiftType.count({ where: { siteId: site.id } })).toBe(0);
+    }
+    expect(ctx.questions.filter((q) => q.kind === "month_close_site_new")).toHaveLength(2);
+    expect(res.warnings.some((w) => w.includes("時段解析唔到"))).toBe(true);
+    expect(res.warnings.some((w) => w.includes("代號系統唔識") && w.includes("D-2"))).toBe(true);
+    expect(res.needsHuman.some((w) => w.includes("D-2"))).toBe(true);
+  });
 });

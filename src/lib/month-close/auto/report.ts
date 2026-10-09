@@ -28,7 +28,7 @@ export async function computeShiftCounts(month: Date): Promise<AutoSummary["coun
 /** 收尾：數更數、開／刷新分診 session（擁有人＝撳一鍵嗰個人），砌 `report.auto`。 */
 export async function buildAutoReport(ctx: AutoCollector, month: Date, runId: string): Promise<AutoReport> {
   ctx.summary.counts = await computeShiftCounts(month);
-  const triage = await upsertMonthCloseTriage(runId, ctx.actorUserId, ctx.questions, ctx.ip);
+  const triage = await upsertMonthCloseTriage(runId, ctx.actorUserId, ctx.questions, ctx.ip, month.toISOString().slice(0, 10));
   let ids = new Map<string, string>();
   if (triage.sessionId) {
     const qs = await prisma.triageQuestion.findMany({ where: { sessionId: triage.sessionId, status: "open" }, select: { id: true, groupKey: true } });

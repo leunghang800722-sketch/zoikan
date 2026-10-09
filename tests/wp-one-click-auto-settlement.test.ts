@@ -105,18 +105,19 @@ describe("WP-ONE-CLICK-AUTO D：結算雞頭歸屬", () => {
     expect(res.unresolved).toBe(1);
   });
 
-  it("次序 5：新安員（冇歷史記錄）靠同一更表姓名嘅上月更表雞頭歸屬（皓日／蔚峰園個案）", async () => {
+  it("修11：新安員（冇歷史）唔准靠更表姓名跨安員回溯 → 唔自動歸屬，入分診", async () => {
     const { site, d } = await mkSite("測試歸屬盤E");
     const oldGuard = await mkGuard({ name: "測試舊人" });
     const newGuard = await mkGuard({ name: "測試新人（同一個人）" });
-    // 上月更表：同姓名嘅行有雞頭欄 → W
     await seedUploadWithRows({ month: AUG, siteId: site.id, siteNameRaw: site.canonicalName, uploaderUserId: fx.userIds["老闆"], status: "confirmed", rows: Array.from({ length: 6 }, (_, i) => ({ day: i + 1, nameRaw: "測試舊名", staffNoRaw: "U8888", guardId: oldGuard.id, settlementBrokerId: W.id })) });
-    // 本月更表：同一更表姓名，但配對到新安員、冇雞頭欄
     await seedUploadWithRows({ month: SEPT, siteId: site.id, siteNameRaw: site.canonicalName, uploaderUserId: fx.userIds["老闆"], rows: [{ day: 3, nameRaw: "測試舊名", staffNoRaw: "U8888", guardId: newGuard.id, settlementBrokerId: null }] });
     await rec(site.id, d.id, newGuard.id, sep(3));
     const { ctx } = await runCtx();
-    await runAutoSettlement(ctx, SEPT);
-    expect((await prisma.shiftRecord.findFirstOrThrow({ where: { guardId: newGuard.id } })).settlementBrokerId).toBe(W.id);
+    const res = await runAutoSettlement(ctx, SEPT);
+    expect(res.assigned).toBe(0);
+    expect(res.unresolved).toBe(1);
+    expect((await prisma.shiftRecord.findFirstOrThrow({ where: { guardId: newGuard.id } })).settlementBrokerId).toBeNull();
+    expect(ctx.questions).toHaveLength(1);
   });
 
   it("次序 6：全部冇 → 分診題 month_close_settlement，預填同盤本月最常見雞頭（唯一先預填）", async () => {

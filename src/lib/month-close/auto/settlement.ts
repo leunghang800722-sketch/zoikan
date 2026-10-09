@@ -5,7 +5,7 @@
 //   (2) Postorder 同崗位同日嘅雞頭（Roster 分頁逐日「雞頭名」，值唯一先用）；
 //   (3) 長工崗位／合約（B07）——安員係長工類（或 external 類、而且只得一個 external 雞頭）；
 //   (4) 安員預設雞頭；
-//   (5) 該安員（或者同一更表姓名）近 3 個月喺同盤嘅結算雞頭，多數決而且唯一；
+//   (5) 該安員（只准同一個 guard_id，唔靠姓名）近 3 個月喺同盤嘅結算雞頭，多數決而且唯一；
 //   (6) 全部冇 → 分診題 `month_close_settlement`，預填最可能候選（同盤本月最常見嘅雞頭，唯一先預填）。
 // 客戶自己人（external）：解析時 rank／姓名命中 external 別名已歸 external（service.ts），永遠分開計。
 import { prisma } from "@/lib/db";
@@ -99,21 +99,7 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
   }
   const prevStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 3, 1));
 
-  // 本月更表名（同一安員同盤嘅 nameRaw／staffNoRaw），歷史行 lookup 用。
-  const thisMonthRows = await prisma.rosterUploadRow.findMany({
-    where: { guardId: { in: guards.map((g) => g.id) }, codeKind: { in: ["shift", "ot"] }, upload: { month: start, status: { notIn: ["superseded", "voided"] } } },
-    select: { guardId: true, resolvedSiteId: true, nameRaw: true, staffNoRaw: true },
-  });
-  const idsByGuardSite = new Map<string, { names: Set<string>; staffNos: Set<string> }>();
-  for (const r of thisMonthRows) {
-    if (!r.guardId || !r.resolvedSiteId) continue;
-    const k = `${r.guardId}|${r.resolvedSiteId}`;
-    const e = idsByGuardSite.get(k) ?? { names: new Set<string>(), staffNos: new Set<string>() };
-    if (r.nameRaw?.trim()) e.names.add(r.nameRaw.trim());
-    if (r.staffNoRaw?.trim()) e.staffNos.add(r.staffNoRaw.trim());
-    idsByGuardSite.set(k, e);
-  }
-
+  // 歷史回溯只准同一個 guard_id（唔准靠更表姓名／工號跨安員）。
   const historyCache = new Map<string, Promise<string | null>>();
   const historyBroker = (guardId: string, siteId: string): Promise<string | null> => {
     const key = `${guardId}|${siteId}`;
@@ -123,21 +109,6 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
         const counts = new Map<string, number>();
         const own = await prisma.shiftRecord.groupBy({ by: ["settlementBrokerId"], where: { guardId, siteId, status: { not: "cancelled" }, settlementBrokerId: { not: null }, workDate: { gte: prevStart, lt: start } }, _count: { _all: true } });
         for (const g of own) if (g.settlementBrokerId) counts.set(g.settlementBrokerId, (counts.get(g.settlementBrokerId) ?? 0) + g._count._all);
-        const ids = idsByGuardSite.get(key);
-        if (counts.size === 0 && ids && (ids.names.size > 0 || ids.staffNos.size > 0)) {
-          const rows = await prisma.rosterUploadRow.groupBy({
-            by: ["settlementBrokerId"],
-            where: {
-              resolvedSiteId: siteId,
-              settlementBrokerId: { not: null },
-              codeKind: { in: ["shift", "ot"] },
-              upload: { month: { gte: prevStart, lt: start }, status: { notIn: ["superseded", "voided"] } },
-              OR: [...(ids.names.size ? [{ nameRaw: { in: [...ids.names] } }] : []), ...(ids.staffNos.size ? [{ staffNoRaw: { in: [...ids.staffNos] } }] : [])],
-            },
-            _count: { _all: true },
-          });
-          for (const g of rows) if (g.settlementBrokerId) counts.set(g.settlementBrokerId, (counts.get(g.settlementBrokerId) ?? 0) + g._count._all);
-        }
         return pickUniqueMajority(counts);
       })();
       historyCache.set(key, p);

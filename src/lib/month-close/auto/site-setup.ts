@@ -117,7 +117,13 @@ async function createSiteFromUpload(ctx: AutoCollector, upload: { id: string; si
     if (!g.slot && !g.ot && [...groups.values()].some((o) => o !== g && o.code.toUpperCase() === g.code.toUpperCase() && o.slot)) groups.delete(key);
   }
   let created = 0;
+  const unparsedTimes: string[] = [];
   for (const g of groups.values()) {
+    // 時段解析唔到（例如「7am-7pm」或者空）而又唔係 OT：唔好建 null 時段更種（日後配對會撞），改出題。
+    if (!g.slot && !g.ot) {
+      unparsedTimes.push(g.code);
+      continue;
+    }
     const start = g.slot ? hhmmToDate(g.slot.split("-")[0]!) : null;
     const end = g.slot ? hhmmToDate(g.slot.split("-")[1]!) : null;
     const hours = g.ot ? otHoursFromCode(g.code) : g.slot ? slotHours(g.slot) : null;
@@ -133,6 +139,29 @@ async function createSiteFromUpload(ctx: AutoCollector, upload: { id: string; si
     } catch (e) {
       ctx.warnings.push(`盤「${site.canonicalName}」建更種「${g.code}」失敗：${safeErrorSummary(e)}`);
     }
+  }
+  if (unparsedTimes.length > 0) {
+    const codesText = [...new Set(unparsedTimes)].join("、");
+    ctx.warnings.push(`新盤「${site.canonicalName}」更表代號「${codesText}」嘅時段解析唔到（要 0700-1900 呢類寫法），未建更種，呢啲格暫時未計入`);
+    ctx.addQuestion({
+      kind: "month_close_site_new",
+      groupKey: `site_new_times:${site.id}`,
+      sort: 15,
+      title: `新盤「${site.canonicalName}」更種時段解析唔到（代號 ${codesText}）`,
+      evidence: {
+        v: 1,
+        mc: true,
+        runId: ctx.runId ?? "",
+        month: ctx.month.toISOString().slice(0, 10),
+        kind: "month_close_site_new",
+        summary: `新盤「${site.canonicalName}」嘅更表時段寫法解析唔到（代號 ${codesText}），冇自動建更種，相關格未計入——請去「盤」管理手動加更種（開工／收工時間）再重新撳一鍵結算`,
+        suggestion: null,
+        confidence: "unknown",
+        action: { type: "site_new", siteId: site.id, groups: [] },
+        candidates: [],
+        prefillCandidateId: null,
+      },
+    });
   }
   ctx.summary.shiftTypesCreated += created;
   if (created > 0) ctx.line("shift_type_created", `新盤「${site.canonicalName}」自動建 ${created} 個更種（由更表代號＋時段推出）`);
@@ -159,10 +188,8 @@ export async function resolveUploadSite(
       return { outcome: "assigned", siteId: done, via: "this_run" };
     }
     const sites = await loadSites();
-    const cls = classifySiteName(
-      upload.siteNameRaw,
-      sites.filter((s) => s.parentSiteId === null),
-    );
+    // 子盤（parent_site_id）都參與比對：對到子盤就歸子盤，唔另建重複頂層盤。
+    const cls = classifySiteName(upload.siteNameRaw, sites);
     if ((cls.level === "exact" || cls.level === "auto") && cls.siteId) {
       const siteName = sites.find((s) => s.id === cls.siteId)?.canonicalName ?? "";
       const added = await addSiteAlias(ctx, cls.siteId, upload.siteNameRaw.trim(), { uploadId: upload.id });

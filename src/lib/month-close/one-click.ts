@@ -499,6 +499,22 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
     assigned.map((u) => ({ id: u.id, siteId: u.siteId!, siteNameRaw: u.siteNameRaw, parseSummary: u.parseSummary })),
   );
   warnings.push(...variance.warnings);
+  // 代號唔識（codeKind=unknown，例如 D-2）——呢啲格唔會計入，要明確提示。
+  const unknownCodes = await prisma.rosterUploadRow.groupBy({
+    by: ["uploadId", "rawCode"],
+    where: { uploadId: { in: assigned.map((u) => u.id) }, codeKind: "unknown" },
+    _count: { _all: true },
+  });
+  if (unknownCodes.length > 0) {
+    const nameByUpload = new Map(assigned.map((u) => [u.id, u.siteNameRaw]));
+    const bySite = new Map<string, string[]>();
+    for (const g of unknownCodes) bySite.set(nameByUpload.get(g.uploadId) ?? "?", [...(bySite.get(nameByUpload.get(g.uploadId) ?? "?") ?? []), `${g.rawCode.trim().slice(0, 12)}×${g._count._all}`]);
+    for (const [site, codes] of bySite) {
+      const line = `「${site}」有代號系統唔識嘅格（${codes.slice(0, 6).join("、")}），冇計入——請確認係咪新代號（例如 D-2）`;
+      warnings.push(line);
+      needsHuman.push(line);
+    }
+  }
   needsHuman.push(...variance.needsHuman.map((x) => `${x}——已入分診`));
   const explainedCount = variance.findings.filter((f) => f.explained).length;
   warnings.push(...ctx.warnings.splice(0));
@@ -517,7 +533,7 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
       varianceFlagged: variance.findings.length,
       varianceExplained: explainedCount,
       varianceUnexplained: variance.findings.length - explainedCount,
-      varianceFindings: variance.findings.map((f) => ({ site: f.siteName, current: f.current, previous: f.previous, external: f.external, internalCash: f.internalCash, explained: f.explained, sentence: f.sentence })),
+      varianceFindings: variance.findings.map((f) => ({ site: f.siteName, current: f.current, previous: f.previous, external: f.external, internalCash: f.internalCash, explained: f.explained, sentence: f.sentence, components: f.components })),
     },
     warnings,
     needsHuman,

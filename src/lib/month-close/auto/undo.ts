@@ -22,6 +22,31 @@ export interface UndoAutoResult {
   supersededQuestions: number;
 }
 
+async function sweepCardPrices(card: { id: string; siteId: string; shiftTypeId: string | null; brokerId: string | null; clientRate: unknown; guardWage: unknown; brokerFee: unknown; payoutRate: unknown; effectiveFrom: Date; effectiveTo: Date | null; createdAt: Date }): Promise<number> {
+  if (!card.shiftTypeId) return 0;
+  const client = numOrNull(card.clientRate);
+  const wage = numOrNull(card.guardWage) ?? numOrNull(card.payoutRate);
+  const fee = numOrNull(card.brokerFee) ?? (numOrNull(card.guardWage) === null && numOrNull(card.payoutRate) !== null ? 0 : null);
+  const recs = await prisma.shiftRecord.findMany({
+    where: { siteId: card.siteId, shiftTypeId: card.shiftTypeId, status: { not: "cancelled" }, workDate: { gte: card.effectiveFrom, ...(card.effectiveTo ? { lte: card.effectiveTo } : {}) }, updatedAt: { gte: card.createdAt } },
+    select: { id: true, settlementBrokerId: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
+  });
+  let n = 0;
+  for (const r of recs) {
+    const c0 = numOrNull(r.clientRateSnapshot);
+    const w0 = numOrNull(r.guardWageSnapshot);
+    const f0 = numOrNull(r.brokerFeeSnapshot);
+    const clearClient = client !== null && c0 !== null && sameRepriceValue(c0, client);
+    const payoutFromCard = wage !== null;
+    // 客價 resolver 會跨雞頭 fallback，所以客價唔限雞頭；出街價淨係該卡嘅雞頭。
+    const clearPayout = payoutFromCard && (!card.brokerId || r.settlementBrokerId === card.brokerId) && w0 !== null && sameRepriceValue(w0, wage) && (f0 === null || fee === null || sameRepriceValue(f0, fee));
+    if (!clearClient && !clearPayout) continue;
+    await prisma.shiftRecord.update({ where: { id: r.id }, data: { ...(clearClient ? { clientRateSnapshot: null } : {}), ...(clearPayout ? { guardWageSnapshot: null, brokerFeeSnapshot: null } : {}) } });
+    n++;
+  }
+  return n;
+}
+
 export async function undoAutoChanges(runId: string, actorUserId: string, ip: string | null): Promise<UndoAutoResult> {
   const run = await prisma.monthCloseRun.findUnique({ where: { id: runId } });
   if (!run) throw NotFound("搵唔到呢個一鍵結算 run");
@@ -75,6 +100,13 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
         const after = await prisma.rateCard.update({ where: { id: card.id }, data: { voidedAt: new Date(), voidedBy: actorUserId } });
         await audit("rate_cards", card.id, "void", card, { ...after, void_reason: source });
         bump("rate_cards");
+        // 掃走因呢張 auto 卡而補上、但冇入 journal 嘅價（例如之後 reconcile 開頭 reprice／新套用嘅更按卡定價）：
+        // 同盤同更種（卡有雞頭就同雞頭）、卡建立之後先更新、而且 snapshot 等如卡價嘅欄位 → 清走（只清等於卡價嗰啲欄）。
+        const swept = await sweepCardPrices(card);
+        if (swept > 0) {
+          bump("price_snapshots_swept", swept);
+          await audit("shift_records", `undo_price_sweep:${card.id}`, "update", { card_id: card.id }, { swept, card_id: card.id });
+        }
         await mark(c.id, "undone", null);
         break;
       }

@@ -22,12 +22,30 @@ const SUFFIXES = ["有限公司", "物業服務", "物業管理", "管理處", "
 const CJK_NUMERALS = "〇零一二三四五六七八九十百";
 const DIRECTION_CHARS = "東西南北上下中前後內外";
 
-/** NFKC、細楷、去晒非字母數字（空白／標點／括號符號）。括號入面嘅內容保留。 */
+/** 異體／繁簡對照（細表，自己維護）：左邊嘅字當右邊（正體常用字）。淨係呢啲字先可以當「相同」；
+ * 其餘中文字唔同一律唔准 auto（東涌／東區、景湖居／樂湖居、領峯／領都 都係真係唔同嘅盤）。 */
+const VARIANT_PAIRS: Array<[string, string]> = [
+  ["臺", "台"], ["裏", "裡"], ["峯", "峰"], ["邨", "村"], ["廠", "厰"], ["樓", "楼"], ["灣", "湾"], ["區", "区"], ["龍", "龙"],
+  ["園", "园"], ["國", "国"], ["廈", "厦"], ["門", "门"], ["東", "东"], ["馬", "马"], ["場", "场"], ["務", "务"], ["業", "业"],
+  ["學", "学"], ["醫", "医"], ["體", "体"], ["與", "与"], ["會", "会"], ["華", "华"], ["興", "兴"], ["順", "顺"], ["環", "环"],
+];
+const VARIANT_MAP = new Map<string, string>(VARIANT_PAIRS.flatMap(([a, b]) => [[b, a], [a, a]] as Array<[string, string]>));
+export function canonVariants(s: string): string {
+  return [...s].map((c) => VARIANT_MAP.get(c) ?? c).join("");
+}
+/** 淨剩中文字（變體歸一之後）——兩個盤名中文字序列唔同就唔准 auto。 */
+export function cjkSequence(s: string): string {
+  return canonVariants(s.normalize("NFKC")).replace(/[^\p{Script=Han}]+/gu, "");
+}
+
+/** NFKC、細楷、去晒非字母數字（空白／標點／括號符號）、異體字歸一。括號入面嘅內容保留。 */
 export function normalizeSiteKey(raw: string): string {
-  return raw
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "");
+  return canonVariants(
+    raw
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ""),
+  );
 }
 
 /** 去常見後綴（重複，淨係剩 ≥2 個字先剝）。 */
@@ -50,7 +68,7 @@ export function stripSiteSuffix(key: string): string {
 /** 分辨字：英文字母連續段、數字連續段、中文數字、方位字——兩個盤名呢啲唔同，
  * 就一定唔係同一個盤（CP1-4／CP5、厚A／厚B、OL／Robinson、第一期／第二期、東／西）。 */
 export function distinguishingTokens(raw: string): string[] {
-  const s = raw.normalize("NFKC").toLowerCase();
+  const s = canonVariants(raw.normalize("NFKC").toLowerCase());
   const out: string[] = [];
   for (const m of s.matchAll(/[a-z]+|\d+/g)) out.push(m[0]);
   for (const ch of s) {
@@ -149,12 +167,13 @@ interface Scored {
   score: number;
   exact: boolean;
   tokensEqual: boolean;
+  cjkEqual: boolean;
   edit: number;
   keyLen: number;
 }
 
 function scoreAgainst(rawKey: string, rawStripped: string, rawName: string, site: SiteNameCandidate): Scored {
-  let best: Scored = { siteId: site.id, score: 0, exact: false, tokensEqual: false, edit: 99, keyLen: rawKey.length };
+  let best: Scored = { siteId: site.id, score: 0, exact: false, tokensEqual: false, cjkEqual: false, edit: 99, keyLen: rawKey.length };
   for (const name of [site.canonicalName, ...site.aliases]) {
     const k = normalizeSiteKey(name);
     if (!k) continue;
@@ -162,9 +181,10 @@ function scoreAgainst(rawKey: string, rawStripped: string, rawName: string, site
     const exact = k === rawKey || ks === rawStripped || k === rawStripped || ks === rawKey;
     const score = exact ? 1 : jaroWinkler(rawKey, k);
     const tokensEqual = sameTokens(rawName, name);
+    const cjkEqual = cjkSequence(rawName) === cjkSequence(name);
     const edit = levenshtein(rawKey, k);
     const better = (exact && !best.exact) || (exact === best.exact && score > best.score);
-    if (better) best = { siteId: site.id, score, exact, tokensEqual, edit, keyLen: Math.max(rawKey.length, k.length) };
+    if (better) best = { siteId: site.id, score, exact, tokensEqual, cjkEqual, edit, keyLen: Math.max(rawKey.length, k.length) };
   }
   return best;
 }
@@ -199,7 +219,7 @@ export function classifySiteName(rawName: string, sites: readonly SiteNameCandid
   const top = sameTok[0] ?? best;
   const topSecond = sameTok[1]?.score ?? Math.max(0, ...scored.filter((s) => s.siteId !== top.siteId).map((s) => s.score));
   const maxEdit = top.keyLen >= 12 ? 2 : 1;
-  if (top.score >= SITE_AUTO_MIN && top.edit <= maxEdit && top.score - topSecond >= SITE_MARGIN) {
+  if (top.score >= SITE_AUTO_MIN && top.cjkEqual && top.edit <= maxEdit && top.score - topSecond >= SITE_MARGIN) {
     return { level: "auto", siteId: top.siteId, score: top.score, second: topSecond, reason: `相似度 ${top.score.toFixed(2)}、數字／字母一致、只差 ${top.edit} 個字`, candidates: [], lookalikeSiteIds: [] };
   }
   // propose 都要「差得唔多」：編輯距離唔可以超過名長約三分一（短名同共用前後綴嘅無關盤名，例如「測試海景新」vs「測試娉廷新」，唔建議）。
@@ -211,7 +231,7 @@ export function classifySiteName(rawName: string, sites: readonly SiteNameCandid
     siteId: proposeTop.siteId,
     score: proposeTop.score,
     second: topSecond,
-    reason: top.score >= SITE_AUTO_MIN ? "相似度夠高但差異字數多／第二候選太近，唔夠硬" : `相似度 ${top.score.toFixed(2)}（0.75–0.90）`,
+    reason: top.score >= SITE_AUTO_MIN ? (top.cjkEqual ? "相似度夠高但差異字數多／第二候選太近，唔夠硬" : "中文字有分別（唔係異體字），唔自動合併") : `相似度 ${top.score.toFixed(2)}（0.75–0.90）`,
     candidates: cands,
     lookalikeSiteIds: [],
   };

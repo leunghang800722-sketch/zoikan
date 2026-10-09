@@ -16,6 +16,8 @@ export interface VarianceFinding {
   siteName: string;
   current: number;
   previous: number | null;
+  /** 差額拆解：delta ＝ dup+ic+sub+broker+trunc+residual（每格只歸一個成分）。 */
+  components?: { delta: number; dup: number; ic: number; sub: number; broker: number; trunc: number; residual: number };
   external: number;
   internalCash: number;
   deltaPct: number | null;

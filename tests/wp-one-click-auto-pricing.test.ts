@@ -325,4 +325,110 @@ describe("WP-ONE-CLICK-AUTO C：自動定價", () => {
     expect(await prisma.rateCard.count({ where: { siteId: site.id } })).toBe(0);
     void AUG;
   });
+
+  // ---- Opus 驗收修正 ----
+  it("修3：公司兵（internal_cash）一律唔用 Postorder 泛用行（只 propose）；泛用行 + 逐人行 → 外判雞頭亦只 propose", async () => {
+    const { site, d } = await mkSite("測試價盤3x");
+    await seedPostorder(SEPT, fx.userIds["老闆"], {
+      postorderCsv: postorderCsv([{ label: "測試價盤3x", prop: "測3x", shift: "Day", client: 850, payout: 740, time: "0700-1900", total: 30 }]),
+    });
+    await mkRecords(site.id, d.id, Y.id, 2);
+    let { ctx } = await runCtx();
+    let res = await runAutoPricing(ctx, SEPT);
+    expect(res.autoGroups).toBe(0);
+    expect(await prisma.rateCard.count({ where: { siteId: site.id } })).toBe(0);
+    // 泛用行＋逐人行：K 亦只 propose
+    const b = await mkSite("測試價盤3y");
+    await prisma.postorderUpload.deleteMany({});
+    await seedPostorder(SEPT, fx.userIds["老闆"], {
+      postorderCsv: postorderCsv([
+        { label: "測試價盤3y", prop: "測3y", shift: "Day", client: 850, payout: 740, time: "0700-1900", total: 30 },
+        { label: "測試價盤3y 陳大文", prop: "測3y", shift: "Day", client: 850, payout: 601, time: "0700-1900", total: 20 },
+      ]),
+    });
+    await mkRecords(b.site.id, b.d.id, K.id, 2);
+    ({ ctx } = await runCtx());
+    res = await runAutoPricing(ctx, SEPT);
+    expect(res.autoGroups).toBe(0);
+    expect(await prisma.rateCard.count({ where: { siteId: b.site.id } })).toBe(0);
+  });
+
+  it("修4：淨缺客價——同雞頭卡優先；其他雞頭卡要全部一致先 auto 而且卡帶該雞頭 brokerId；通用卡來源先可以建通用卡", async () => {
+    const mk = async (name: string, cards: Array<Record<string, unknown>>) => {
+      const x = await mkSite(name);
+      for (const c of cards) await card({ siteId: x.site.id, shiftTypeId: x.d.id, ...c });
+      // 淨缺客價：出街價已有
+      for (let i = 0; i < 2; i++) {
+        n++;
+        await prisma.shiftRecord.create({ data: { workDate: sep((n % 28) + 1), siteId: x.site.id, shiftTypeId: x.d.id, guardId: guard.id, settlementBrokerId: K.id, operationalBrokerId: K.id, recordType: "shift", status: "confirmed", guardWageSnapshot: 700, brokerFeeSnapshot: 0, createdBy: "t" } });
+        if (n % 28 === 0) guard = await mkGuard();
+      }
+      return x;
+    };
+    // a. 同雞頭卡 880 + W 900 → 用 K 自己 880，卡 brokerId=K
+    const a = await mk("測試價盤4a", [{ brokerId: K.id, clientRate: 880 }, { brokerId: W.id, clientRate: 900 }]);
+    // b. 其他雞頭一致 → auto，brokerId=K（唔係 null）
+    const b = await mk("測試價盤4b", [{ brokerId: W.id, clientRate: 900 }, { brokerId: Z.id, clientRate: 900 }]);
+    // c. 其他雞頭唔一致 → propose，唔建卡
+    const c = await mk("測試價盤4c", [{ brokerId: W.id, clientRate: 900 }, { brokerId: Z.id, clientRate: 950 }]);
+    // d. 來源係通用卡 → 通用卡
+    const dd = await mk("測試價盤4d", [{ brokerId: null, clientRate: 870 }]);
+    const { ctx } = await runCtx();
+    await runAutoPricing(ctx, SEPT);
+    const get = (id: string) => prisma.rateCard.findFirst({ where: { siteId: id, source: { startsWith: "auto:one-click:" } } });
+    const ca = await get(a.site.id);
+    expect([Number(ca?.clientRate), ca?.brokerId]).toEqual([880, K.id]);
+    const cb = await get(b.site.id);
+    expect([Number(cb?.clientRate), cb?.brokerId]).toEqual([900, K.id]);
+    expect(await get(c.site.id)).toBeNull();
+    expect(ctx.questions.some((q) => q.groupKey.includes(c.site.id))).toBe(true);
+    const cd = await get(dd.site.id);
+    expect([Number(cd?.clientRate), cd?.brokerId]).toEqual([870, null]);
+  });
+
+  it("修5：上月 auto 卡（未經人確認）唔做 auto 來源，最多 propose", async () => {
+    const { site, d } = await mkSite("測試價盤5x");
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: K.id, clientRate: 900, guardWage: 700, brokerFee: 0, source: "auto:one-click:old-run" });
+    await mkRecords(site.id, d.id, K.id, 3);
+    const { ctx } = await runCtx();
+    const res = await runAutoPricing(ctx, SEPT);
+    expect(res.autoGroups).toBe(0);
+    expect(res.proposeGroups).toBe(1);
+    expect(ctx.questions[0]!.evidence.candidates[0]!.label).toContain("自動定價卡");
+  });
+
+  it("修6：卡建咗但更次仍然未定價 → 重跑唔重複建卡（同盤同更種同雞頭同期已有 auto 卡），只再補價", async () => {
+    const { site, d } = await mkSite("測試價盤6x");
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: K.id, clientRate: 900, guardWage: 700, brokerFee: 0 });
+    await mkRecords(site.id, d.id, K.id, 3);
+    const { ctx } = await runCtx();
+    await runAutoPricing(ctx, SEPT);
+    expect(await prisma.rateCard.count({ where: { siteId: site.id, source: { startsWith: "auto:one-click:" } } })).toBe(1);
+    // 模擬價 snapshot 被清走（卡仲在，更次又未定價）
+    await prisma.shiftRecord.updateMany({ where: { siteId: site.id }, data: { clientRateSnapshot: null, guardWageSnapshot: null, brokerFeeSnapshot: null } });
+    // 先令「現有生效卡補價」唔處理：作廢現有生效 auto 卡以外嘅路徑——直接叫 createCardAndPrice 兩次
+    const writer = ctx;
+    const grp = { siteId: site.id, shiftTypeId: d.id, brokerId: K.id, ot: false };
+    const r1 = await createCardAndPrice(writer, { month: SEPT, group: grp, need: { client: true, payout: true }, values: { clientRate: 900, guardWage: 700, brokerFee: 0, payoutRate: 700 }, evidence: "t", note: "t", confidence: "auto" });
+    const r2 = await createCardAndPrice(writer, { month: SEPT, group: grp, need: { client: true, payout: true }, values: { clientRate: 900, guardWage: 700, brokerFee: 0, payoutRate: 700 }, evidence: "t", note: "t", confidence: "auto" });
+    expect(r1.cardId).toBe(r2.cardId);
+    expect(await prisma.rateCard.count({ where: { siteId: site.id, source: { startsWith: "auto:one-click:" } } })).toBe(1);
+    for (const s of await snap(site.id)) expect(s).toEqual([900, 700, 0]);
+  });
+
+  it("修7：undo 連「之後 reconcile 補價（冇 journal）」嘅價都還原，唔留已作廢卡嘅價", async () => {
+    const { site, d } = await mkSite("測試價盤7x");
+    await card({ siteId: site.id, shiftTypeId: d.id, brokerId: K.id, clientRate: 900, guardWage: 700, brokerFee: 0 });
+    await mkRecords(site.id, d.id, K.id, 3);
+    const { run, ctx } = await runCtx();
+    await runAutoPricing(ctx, SEPT);
+    // 之後（例如 rerun 嘅 reconcile 開頭 reprice）新增一條用 auto 卡定價嘅更，冇 journal
+    n++;
+    const late = await prisma.shiftRecord.create({ data: { workDate: sep(29), siteId: site.id, shiftTypeId: d.id, guardId: (await mkGuard()).id, settlementBrokerId: K.id, operationalBrokerId: K.id, recordType: "shift", status: "confirmed", clientRateSnapshot: 900, guardWageSnapshot: 700, brokerFeeSnapshot: 0, createdBy: "t" } });
+    await prisma.monthCloseRun.update({ where: { id: run.id }, data: { status: "done" } });
+    const { undoAutoChanges } = await import("@/lib/month-close/auto/undo");
+    await undoAutoChanges(run.id, fx.userIds["老闆"], null);
+    for (const r of await prisma.shiftRecord.findMany({ where: { siteId: site.id } })) expect([r.clientRateSnapshot, r.guardWageSnapshot, r.brokerFeeSnapshot]).toEqual([null, null, null]);
+    expect(late.id).toBeTruthy();
+  });
 });
