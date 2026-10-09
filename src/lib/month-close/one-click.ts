@@ -55,7 +55,7 @@ import { buildMonthHealth, summarizeHealthForReport } from "@/lib/ops/month-heal
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { STEP_KEYS, STEP_LABELS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
 import { AutoCollector } from "./auto/context";
-import { resolveUploadSite } from "./auto/site-setup";
+import { ensureShiftTypesForEmptySites, planShiftTypesForSite, resolveUploadSite } from "./auto/site-setup";
 import { explainVariances } from "./auto/variance";
 import { runAutoPricing, estimateUnpricedGap } from "./auto/pricing";
 import { runAutoSettlement } from "./auto/settlement";
@@ -366,7 +366,18 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     if (!sitesWithShiftTypes.has(sid)) {
       siteMissingShiftTypeCount++;
       const name = siteNameById.get(sid) ?? (await prisma.site.findUnique({ where: { id: sid }, select: { canonicalName: true } }))?.canonicalName ?? sid.slice(0, 8);
-      needsHuman.push(`盤「${name}」完全未設更種（本月有 ${r._count} 格），要先喺「盤」管理加更種`);
+      const plan = await planShiftTypesForSite(sid, start);
+      if (plan.eligible && plan.creatable > 0) {
+        // 一鍵結算 parse_health 步驟會自動由本月更表推更種（可撤銷）——唔使人手去盤管理。
+        warnings.push(`盤「${name}」未設更種，已由本月更表自動推出 ${plan.creatable} 個更種（可撤銷）`);
+      } else {
+        const why = plan.unparsedCodes.length > 0
+          ? `更表時段解析唔到（代號 ${plan.unparsedCodes.join("、")}，要 0700-1900 呢類寫法），冇法自動推更種`
+          : plan.eligible
+            ? "冇可建嘅更種（更種可能已被撤銷）"
+            : "呢個盤冇已解析嘅本月上載（或者係有子盤嘅母盤），冇法自動推更種";
+        needsHuman.push(`盤「${name}」完全未設更種（本月有 ${r._count} 格）：${why}，要先喺「盤」管理加更種`);
+      }
     }
   }
   numbers.siteMissingShiftTypeCount = siteMissingShiftTypeCount;
@@ -485,6 +496,17 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
     } catch (e) {
       needsHuman.push(`上載「${u.siteNameRaw}」盤名對唔到，自動建盤失敗（${safeErrorSummary(e)}），要人手喺更表上載頁指定盤`);
     }
+  }
+
+  // A2. 現有盤有效更種 = 0（例如舊版一鍵結算建咗盤但冇更種）：由本月上載格自動推更種，令同一 run 嘅 reconcile_apply 套用到。
+  try {
+    for (const r of await ensureShiftTypesForEmptySites(ctx, start)) {
+      if (ctx.newSiteIds.has(r.siteId)) continue;
+      if (r.created > 0) warnings.push(`盤「${r.siteName}」未設更種，已由本月更表自動推出 ${r.created} 個更種（可撤銷）`);
+      if (r.unparsedCodes.length > 0) needsHuman.push(`盤「${r.siteName}」更表代號「${r.unparsedCodes.join("、")}」時段解析唔到，冇自動建更種——請去「盤」管理手動加更種`);
+    }
+  } catch (e) {
+    needsHuman.push(`自動補更種失敗（${safeErrorSummary(e)}）——請去「盤」管理手動加更種`);
   }
 
   // B. 更數異常自動拆解（重新讀返上載：有新指定嘅盤、rows 已經 reparse）。

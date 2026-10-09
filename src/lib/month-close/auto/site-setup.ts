@@ -88,6 +88,143 @@ export function derivePostorderSiteInfo(name: string, ev: PostorderEvidence | nu
   return { clientName: clientName && normalizeSiteKey(clientName) !== ownKey ? clientName : null, aliases: aliases.slice(0, 3) };
 }
 
+interface ShiftTypeGroup {
+  code: string;
+  slot: string | null;
+  ot: boolean;
+}
+
+/** 由上載嘅 shift／ot 格推更種分組（code＋時段）；同 code 有時段就唔另建冇時段嗰個；時段解析唔到而唔係 OT 嘅 code 放 unparsed。 */
+export async function deriveShiftTypeGroups(uploadId: string): Promise<{ groups: ShiftTypeGroup[]; unparsedCodes: string[] }> {
+  const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId, codeKind: { in: ["shift", "ot"] } }, select: { rawCode: true, timeRaw: true, codeKind: true } });
+  const groups = new Map<string, ShiftTypeGroup>();
+  for (const r of rows) {
+    const code = r.rawCode.trim();
+    if (!code) continue;
+    const slot = r.codeKind === "ot" ? null : normalizeTimeRange(r.timeRaw);
+    groups.set(`${code.toUpperCase()}|${slot ?? ""}`, { code, slot, ot: r.codeKind === "ot" });
+  }
+  for (const [key, g] of [...groups]) {
+    if (!g.slot && !g.ot && [...groups.values()].some((o) => o !== g && o.code.toUpperCase() === g.code.toUpperCase() && o.slot)) groups.delete(key);
+  }
+  const unparsedCodes: string[] = [];
+  const ok: ShiftTypeGroup[] = [];
+  for (const g of groups.values()) {
+    if (!g.slot && !g.ot) unparsedCodes.push(g.code);
+    else ok.push(g);
+  }
+  return { groups: ok, unparsedCodes };
+}
+
+/**
+ * 由上載格自動建更種（新盤建盤時、或者一鍵結算對「有效更種 = 0」嘅現有盤自我修復）。
+ * 冪等：同盤同 code＋開工時間已存在就 skip。每張更種 journal `shift_type_created`（可撤銷）＋audit。
+ * 建完會 reparse 該上載，令格配到新更種。
+ */
+export async function ensureShiftTypesFromUpload(
+  ctx: AutoCollector,
+  siteId: string,
+  uploadId: string,
+  opts: { isNewSite?: boolean } = {},
+): Promise<{ created: number; unparsedCodes: string[] }> {
+  const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { id: true, canonicalName: true } });
+  const { groups, unparsedCodes } = await deriveShiftTypeGroups(uploadId);
+  const label = opts.isNewSite ? "新盤" : "盤";
+  let created = 0;
+  for (const g of groups) {
+    const start = g.slot ? hhmmToDate(g.slot.split("-")[0]!) : null;
+    const end = g.slot ? hhmmToDate(g.slot.split("-")[1]!) : null;
+    const hours = g.ot ? otHoursFromCode(g.code) : g.slot ? slotHours(g.slot) : null;
+    // 連已作廢嗰張都當存在（unique 約束，亦尊重人手／undo 嘅作廢）。
+    const exists = await prisma.shiftType.findFirst({ where: { siteId: site.id, code: g.code, startTime: start } });
+    if (exists) continue;
+    try {
+      const st = await prisma.shiftType.create({
+        data: { siteId: site.id, code: g.code, startTime: start, endTime: end, hours: hours !== null ? new Prisma.Decimal(hours) : null, billingGroup: "per_shift", createdBy: ctx.actorUserId },
+      });
+      await ctx.audit({ tableName: "shift_types", rowId: st.id, action: "create", after: st });
+      await ctx.journal({ kind: "shift_type_created", refTable: "shift_types", refId: st.id, summary: `盤「${site.canonicalName}」自動建更種「${g.code}」${g.slot ? `（${g.slot}）` : ""}`, detail: { shiftTypeId: st.id, siteId: site.id } });
+      created++;
+    } catch (e) {
+      ctx.warnings.push(`盤「${site.canonicalName}」建更種「${g.code}」失敗：${safeErrorSummary(e)}`);
+    }
+  }
+  if (unparsedCodes.length > 0) {
+    const codesText = [...new Set(unparsedCodes)].join("、");
+    ctx.warnings.push(`${label}「${site.canonicalName}」更表代號「${codesText}」嘅時段解析唔到（要 0700-1900 呢類寫法），未建更種，呢啲格暫時未計入`);
+    ctx.addQuestion({
+      kind: "month_close_site_new",
+      groupKey: `site_new_times:${site.id}`,
+      sort: 15,
+      title: `${label}「${site.canonicalName}」更種時段解析唔到（代號 ${codesText}）`,
+      evidence: {
+        v: 1,
+        mc: true,
+        runId: ctx.runId ?? "",
+        month: ctx.month.toISOString().slice(0, 10),
+        kind: "month_close_site_new",
+        summary: `${label}「${site.canonicalName}」嘅更表時段寫法解析唔到（代號 ${codesText}），冇自動建更種，相關格未計入——請去「盤」管理手動加更種（開工／收工時間）再重新撳一鍵結算`,
+        suggestion: null,
+        confidence: "unknown",
+        action: { type: "site_new", siteId: site.id, groups: [] },
+        candidates: [],
+        prefillCandidateId: null,
+      },
+    });
+  }
+  ctx.summary.shiftTypesCreated += created;
+  if (created > 0) {
+    ctx.line("shift_type_created", `${label}「${site.canonicalName}」自動建 ${created} 個更種（由更表代號＋時段推出）`);
+    if (!opts.isNewSite) await reparseRosterUpload(uploadId, { autoResolveSite: false });
+  }
+  return { created, unparsedCodes };
+}
+
+/** 本月、呢個盤（上載 site_id = 盤）有效更種 = 0 時，可由上載格自動推出幾多個更種（唔寫任何資料）。 */
+export async function planShiftTypesForSite(siteId: string, month: Date): Promise<{ eligible: boolean; uploadIds: string[]; creatable: number; unparsedCodes: string[] }> {
+  const none = { eligible: false, uploadIds: [] as string[], creatable: 0, unparsedCodes: [] as string[] };
+  if ((await prisma.shiftType.count({ where: { siteId, voidedAt: null } })) > 0) return none;
+  // 母盤（有子盤）刻意冇更種，格歸子盤——唔好喺母盤度推更種。
+  if ((await prisma.site.count({ where: { parentSiteId: siteId } })) > 0) return none;
+  const uploads = await prisma.rosterUpload.findMany({ where: { month, siteId, status: { in: ["parsed", "confirmed"] } }, select: { id: true }, orderBy: { uploadedAt: "asc" } });
+  if (uploads.length === 0) return none;
+  const keys = new Set<string>();
+  const unparsed = new Set<string>();
+  for (const u of uploads) {
+    const d = await deriveShiftTypeGroups(u.id);
+    for (const g of d.groups) {
+      const start = g.slot ? hhmmToDate(g.slot.split("-")[0]!) : null;
+      if (!(await prisma.shiftType.findFirst({ where: { siteId, code: g.code, startTime: start }, select: { id: true } }))) keys.add(`${g.code}|${g.slot ?? ""}`);
+    }
+    d.unparsedCodes.forEach((c) => unparsed.add(c));
+  }
+  return { eligible: true, uploadIds: uploads.map((u) => u.id), creatable: keys.size, unparsedCodes: [...unparsed] };
+}
+
+/** 一鍵結算：本月有已解析上載、而盤有效更種係 0 嘅盤，自動由上載格補更種。回傳每盤結果。 */
+export async function ensureShiftTypesForEmptySites(ctx: AutoCollector, month: Date): Promise<Array<{ siteId: string; siteName: string; created: number; unparsedCodes: string[] }>> {
+  const uploads = await prisma.rosterUpload.findMany({
+    where: { month, status: { in: ["parsed", "confirmed"] }, siteId: { not: null } },
+    select: { siteId: true },
+  });
+  const out: Array<{ siteId: string; siteName: string; created: number; unparsedCodes: string[] }> = [];
+  for (const siteId of new Set(uploads.map((u) => u.siteId!))) {
+    if (ctx.newSiteIds.has(siteId)) continue;
+    const plan = await planShiftTypesForSite(siteId, month);
+    if (!plan.eligible) continue;
+    const site = await prisma.site.findUnique({ where: { id: siteId }, select: { canonicalName: true } });
+    let created = 0;
+    const unparsed = new Set<string>();
+    for (const uid of plan.uploadIds) {
+      const r = await ensureShiftTypesFromUpload(ctx, siteId, uid);
+      created += r.created;
+      r.unparsedCodes.forEach((c) => unparsed.add(c));
+    }
+    out.push({ siteId, siteName: site?.canonicalName ?? siteId.slice(0, 8), created, unparsedCodes: [...unparsed] });
+  }
+  return out;
+}
+
 /** 新盤：建 site＋更種（由上載行推）＋客戶名／別名（Postorder）。 */
 async function createSiteFromUpload(ctx: AutoCollector, upload: { id: string; siteNameRaw: string }, otherSites: readonly SiteRow[]): Promise<{ siteId: string; shiftTypes: number; fromPostorder: boolean }> {
   const name = upload.siteNameRaw.trim();
@@ -104,67 +241,8 @@ async function createSiteFromUpload(ctx: AutoCollector, upload: { id: string; si
   ctx.line("site_created", `新盤「${site.canonicalName}」已自動建立${info.clientName ? `（客戶「${info.clientName}」，來自 Postorder）` : ""}`);
 
   // 更種：由該上載嘅格推出。
-  const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId: upload.id, codeKind: { in: ["shift", "ot"] } }, select: { rawCode: true, timeRaw: true, codeKind: true } });
-  const groups = new Map<string, { code: string; slot: string | null; ot: boolean }>();
-  for (const r of rows) {
-    const code = r.rawCode.trim();
-    if (!code) continue;
-    const slot = r.codeKind === "ot" ? null : normalizeTimeRange(r.timeRaw);
-    groups.set(`${code.toUpperCase()}|${slot ?? ""}`, { code, slot, ot: r.codeKind === "ot" });
-  }
-  // 同一個 code 有帶時段嘅，就唔另建冇時段嗰個（matchShiftType 單一候選照配）。
-  for (const [key, g] of [...groups]) {
-    if (!g.slot && !g.ot && [...groups.values()].some((o) => o !== g && o.code.toUpperCase() === g.code.toUpperCase() && o.slot)) groups.delete(key);
-  }
-  let created = 0;
-  const unparsedTimes: string[] = [];
-  for (const g of groups.values()) {
-    // 時段解析唔到（例如「7am-7pm」或者空）而又唔係 OT：唔好建 null 時段更種（日後配對會撞），改出題。
-    if (!g.slot && !g.ot) {
-      unparsedTimes.push(g.code);
-      continue;
-    }
-    const start = g.slot ? hhmmToDate(g.slot.split("-")[0]!) : null;
-    const end = g.slot ? hhmmToDate(g.slot.split("-")[1]!) : null;
-    const hours = g.ot ? otHoursFromCode(g.code) : g.slot ? slotHours(g.slot) : null;
-    const exists = await prisma.shiftType.findFirst({ where: { siteId: site.id, code: g.code, startTime: start } });
-    if (exists) continue;
-    try {
-      const st = await prisma.shiftType.create({
-        data: { siteId: site.id, code: g.code, startTime: start, endTime: end, hours: hours !== null ? new Prisma.Decimal(hours) : null, billingGroup: "per_shift", createdBy: ctx.actorUserId },
-      });
-      await ctx.audit({ tableName: "shift_types", rowId: st.id, action: "create", after: st });
-      await ctx.journal({ kind: "shift_type_created", refTable: "shift_types", refId: st.id, summary: `盤「${site.canonicalName}」自動建更種「${g.code}」${g.slot ? `（${g.slot}）` : ""}`, detail: { shiftTypeId: st.id, siteId: site.id } });
-      created++;
-    } catch (e) {
-      ctx.warnings.push(`盤「${site.canonicalName}」建更種「${g.code}」失敗：${safeErrorSummary(e)}`);
-    }
-  }
-  if (unparsedTimes.length > 0) {
-    const codesText = [...new Set(unparsedTimes)].join("、");
-    ctx.warnings.push(`新盤「${site.canonicalName}」更表代號「${codesText}」嘅時段解析唔到（要 0700-1900 呢類寫法），未建更種，呢啲格暫時未計入`);
-    ctx.addQuestion({
-      kind: "month_close_site_new",
-      groupKey: `site_new_times:${site.id}`,
-      sort: 15,
-      title: `新盤「${site.canonicalName}」更種時段解析唔到（代號 ${codesText}）`,
-      evidence: {
-        v: 1,
-        mc: true,
-        runId: ctx.runId ?? "",
-        month: ctx.month.toISOString().slice(0, 10),
-        kind: "month_close_site_new",
-        summary: `新盤「${site.canonicalName}」嘅更表時段寫法解析唔到（代號 ${codesText}），冇自動建更種，相關格未計入——請去「盤」管理手動加更種（開工／收工時間）再重新撳一鍵結算`,
-        suggestion: null,
-        confidence: "unknown",
-        action: { type: "site_new", siteId: site.id, groups: [] },
-        candidates: [],
-        prefillCandidateId: null,
-      },
-    });
-  }
-  ctx.summary.shiftTypesCreated += created;
-  if (created > 0) ctx.line("shift_type_created", `新盤「${site.canonicalName}」自動建 ${created} 個更種（由更表代號＋時段推出）`);
+  const ens = await ensureShiftTypesFromUpload(ctx, site.id, upload.id, { isNewSite: true });
+  const created = ens.created;
   return { siteId: site.id, shiftTypes: created, fromPostorder: !!info.clientName || info.aliases.length > 0 };
 }
 
