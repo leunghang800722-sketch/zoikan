@@ -53,7 +53,9 @@ export type McAction =
   | { type: "pricing"; group: PricingGroupRef; needClient: boolean; needPayout: boolean; count: number }
   | { type: "settlement"; siteId: string; guardId: string; count: number }
   | { type: "guard_match"; identity: { staffNoNorm: string | null; nameRaw: string; telRaw: string | null }; siteLabel: string; cellCount: number }
-  | { type: "shift_variance"; siteId: string };
+  | { type: "shift_variance"; siteId: string }
+  /** OT 更冇 ot_hours：唔建卡，叫人補時數（淨係可以「我已處理」或跳過）。 */
+  | { type: "ot_hours"; group: PricingGroupRef; count: number };
 
 export interface McCandidate {
   /** 答案 `candidate_id` 對應呢個。 */
@@ -160,4 +162,6 @@ export interface AutoReport {
   triageSessionId: string | null;
   undone: boolean;
   undoneAt: string | null;
+  /** undo 安全網：價錢同已作廢 auto 卡相同但冇自動定價紀錄嘅更（只報數，唔清）；recordIds 最多 50 個。 */
+  voidedCardPriceCheck?: { count: number; recordIds: string[] };
 }

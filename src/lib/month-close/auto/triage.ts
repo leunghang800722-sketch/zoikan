@@ -54,7 +54,7 @@ function optionsFor(d: McQuestionDraft): QuestionOption[] {
   if (ev.kind === "month_close_site_alias") out.push({ id: "mc_new", label: "唔係，當新盤（自動建更種）" });
   if (ev.kind === "month_close_pricing" || ev.kind === "month_close_site_new") out.push({ id: "mc_price", label: "自己輸入價錢", hint: "客價／工資／雞頭費（元／更）" });
   if (ev.kind === "month_close_settlement" && !out.some((o) => o.id === "mc_pick")) out.push({ id: "mc_pick", label: "揀其他結算雞頭" });
-  if (ev.kind === "month_close_shift_variance" || (ev.action.type === "site_new" && ev.action.groups.length === 0)) out.push({ id: "mc_ack", label: "我已處理／已覆核" });
+  if (ev.kind === "month_close_shift_variance" || ev.action.type === "ot_hours" || (ev.action.type === "site_new" && ev.action.groups.length === 0)) out.push({ id: "mc_ack", label: "我已處理／已覆核" });
   out.push({ id: "skip", label: "跳過，留返人手" });
   return out;
 }
@@ -153,7 +153,7 @@ export async function mcQuestionViews(rows: TriageQuestion[], caps: { pii: boole
     const ev = r.evidenceJson as unknown as McEvidence;
     const ans = r.answerJson as { option?: string; candidate_id?: string } | null;
     const action = ev.action;
-    const count = action.type === "pricing" || action.type === "settlement" ? action.count : action.type === "guard_match" ? action.cellCount : null;
+    const count = action.type === "pricing" || action.type === "settlement" || action.type === "ot_hours" ? action.count : action.type === "guard_match" ? action.cellCount : null;
     return {
       id: r.id,
       session_id: r.sessionId,
@@ -171,7 +171,7 @@ export async function mcQuestionViews(rows: TriageQuestion[], caps: { pii: boole
         count,
         candidates: ev.candidates.map((c) => ({ id: c.id, label: c.label, evidence: c.evidence ?? null, values: c.values ?? null, values_text: c.values ? describeValues(c.values) : null })),
         prefill_candidate_id: ev.prefillCandidateId,
-        needs_price_input: ev.kind === "month_close_pricing" || (ev.kind === "month_close_site_new" && !(ev.action.type === "site_new" && ev.action.groups.length === 0)),
+        needs_price_input: (ev.kind === "month_close_pricing" && ev.action.type !== "ot_hours") || (ev.kind === "month_close_site_new" && !(ev.action.type === "site_new" && ev.action.groups.length === 0)),
         needs_broker_pick: ev.kind === "month_close_settlement",
         broker_options: ev.kind === "month_close_settlement" ? brokers : [],
         identity_label: action.type === "guard_match" ? (caps.pii ? action.identity.nameRaw : null) : null,
@@ -246,6 +246,11 @@ async function resolvePlan(q: QRowWithSession, answer: TriageAnswer): Promise<{ 
   if ((answer.option === "mc_accept" || answer.option === "mc_pick") && !cand && ev.kind !== "month_close_settlement") throw BadRequest("請揀一個候選");
 
   switch (ev.action.type) {
+    case "ot_hours": {
+      if (answer.option !== "mc_ack") throw BadRequest("呢題淨係可以揀「我已處理」或者跳過（要喺更表補返 OT 時數 ot_hours）");
+      impact.summary.push("確認已補 OT 時數：唔會改任何資料；補好 ot_hours 後重新撳一鍵結算先會定價");
+      return { plan: { type: "ack" }, fingerprint: "ack", impact };
+    }
     case "shift_variance": {
       impact.summary.push("確認已覆核：唔會改任何資料，只係記低你睇過");
       return { plan: { type: "ack" }, fingerprint: "ack", impact };

@@ -256,6 +256,8 @@ export async function POST(req: Request) {
     // 盤自動計价呢一步跳過（冇傳嘅欄保持 null）——手動明確傳咗嘅值仍然
     // 尊重（老闆／會計可以人手補一次性特殊安排），唔喺呢度硬性擋。
     const internalSource: { clientCardId?: string; payoutCardId?: string } = {};
+    // journal 嘅 before＝人手明確傳入嘅值（auto 卡填入之前）；undo 只會還原 auto 填咗嗰幾欄
+    const manualBefore: [number | null, number | null, number | null] = [toNum(data.clientRateSnapshot), toNum(data.guardWageSnapshot), toNum(data.brokerFeeSnapshot)];
     const internalPricingSite = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { guardsPaidByClient: true } });
     if (!internalPricingSite?.guardsPaidByClient && (data.clientRateSnapshot == null || data.guardWageSnapshot == null || data.brokerFeeSnapshot == null)) {
       const settlementBrokerId = (data.settlementBrokerId as string | null | undefined) ?? null;
@@ -288,7 +290,7 @@ export async function POST(req: Request) {
     try {
       const created = await prisma.shiftRecord.create({ data: { ...data, createdBy: session.userId } });
       await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
-      await journalAutoCardUsesSafe([{ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...internalSource }]);
+      await journalAutoCardUsesSafe([{ recordId: created.id, before: manualBefore, after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...internalSource }]);
       return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(created)), 201);
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {

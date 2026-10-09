@@ -2400,3 +2400,8 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - `POST /api/shift-records`（雞頭／內部）、`PATCH /api/shift-records/:id`（OT 重計）、`POST /api/shift-records/:id/approve`、`POST /api/shift-records/batch` 寫價 snapshot 用到 `auto:one-click:<runId>` 卡 → 補寫 `price_snapshots` journal（best effort，唔拖冧主寫入）。
 - `POST /api/month-close/one-click/:id/undo-auto` 回應加 `still_using_voided_card_prices`：安全網，掃本月價等於已作廢 auto 卡值而冇 journal 嘅更（只報數，唔清）；UI 提示「N 更價錢同已作廢卡相同但冇紀錄，請人手檢查」。
 - OT 冇 `ot_hours`：resolver 答 null，null→null 唔計 changed、唔寫 journal；降級分診題預填原本來源值（propose）；`repriceMonthForSites` 寫價＋journal 同一 transaction；舊上載截短口徑＝缺 >20%（剛好 80% 唔算）。
+
+### WP-ONE-CLICK-AUTO 第五輪覆核修正
+- `POST /api/shift-records/reprice`（`dry_run:false`）用到 auto 卡嘅更同價一齊補寫 journal（同一 transaction）。內部 `POST /api/shift-records` 人手帶部分出街價：journal before＝人手值，undo 只還原 auto 填嗰幾欄。
+- 分診：OT 組內冇 `ot_hours` 嘅更 → `month_close_pricing` 題 `action.type=ot_hours`（options 淨係 `mc_ack`＋`skip`，唔建卡）；降級定價題候選次序＝原來源值第一，「未經人確認」候選唔預填（`mc_accept` 隱藏，只可 `mc_pick`／`mc_price`）。
+- undo 回應加 `still_using_voided_card_ids`（最多 50）；`report.auto.voided_card_price_check {count, record_ids}` 持久化，refresh 後摘要卡仍顯示警告。

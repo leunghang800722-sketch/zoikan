@@ -25,6 +25,7 @@ export interface AutoReportDTO {
   triage_session_id: string | null;
   undone: boolean;
   undone_at: string | null;
+  voided_card_price_check?: { count: number; record_ids: string[] };
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -53,6 +54,11 @@ export function AutoSummaryCard({ auto, busy, onUndo, onOpenTriage }: { auto: Au
       {auto.undone && (
         <div className="rounded border border-orange-300 bg-orange-50 px-3 py-2 text-[12.5px] text-orange-900" data-testid="auto-undone-banner">
           已撤銷：呢次一鍵結算嘅自動改動（價卡、別名、結算雞頭、自動配對）已經還原{auto.undone_at ? `（${new Date(auto.undone_at).toLocaleString("zh-HK")}）` : ""}；下面數字係還原前嘅摘要。想重做請再撳「一鍵結算」。
+        </div>
+      )}
+      {auto.undone && (auto.voided_card_price_check?.count ?? 0) > 0 && (
+        <div className="rounded border border-orange-300 bg-orange-50 px-3 py-2 text-[12.5px] text-orange-900" data-testid="auto-voided-price-warning">
+          {auto.voided_card_price_check!.count} 更價錢同已作廢卡相同但冇自動定價紀錄，可能係人手輸入，請檢查（更 id：{auto.voided_card_price_check!.record_ids.slice(0, 10).map((x) => x.slice(0, 8)).join("、")}{auto.voided_card_price_check!.record_ids.length > 10 ? "…" : ""}）
         </div>
       )}
       <div className="rounded border border-zk-border p-3">

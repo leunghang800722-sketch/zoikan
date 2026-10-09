@@ -664,7 +664,45 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
 
   type Pending = { agg: Agg; proposals: Awaited<ReturnType<typeof findPriceSource>>["proposals"] };
   const pending: Pending[] = [];
+  // OT 更冇 ot_hours：resolver 答 null（每小時價 × 時數），建卡／降級分診都冇用 → 出專題「補 ot_hours」。
+  const otNoHours = new Map<Agg, number>();
   for (const agg of aggs) {
+    if (!agg.ref.ot) continue;
+    const bad = await prisma.shiftRecord.count({ where: { id: { in: agg.recordIds }, OR: [{ otHours: null }, { otHours: { lte: 0 } }] } });
+    if (bad > 0) otNoHours.set(agg, bad);
+  }
+  const otHoursQuestion = async (agg: Agg, count: number) => {
+    const site = env.sites.get(agg.ref.siteId);
+    const code = await stLabel(agg.ref.siteId, agg.ref.shiftTypeId);
+    ctx.addQuestion({
+      kind: "month_close_pricing",
+      groupKey: `ot_hours:${agg.ref.siteId}:${agg.ref.shiftTypeId}:${agg.ref.brokerId ?? "none"}`,
+      sort: 35,
+      title: `盤「${site?.canonicalName ?? ""}」OT 更種「${code}」${agg.ref.brokerId ? `雞頭 ${brokerLabel(agg.ref.brokerId)}` : ""}：${count} 更 OT 冇時數，請補 ot_hours`,
+      evidence: {
+        v: 1,
+        mc: true,
+        runId: ctx.runId ?? "",
+        month: month.toISOString().slice(0, 10),
+        kind: "month_close_pricing",
+        summary: `${count} 更 OT 冇 ot_hours（OT 按每小時價 × 時數計），唔會建卡；請喺更表補返時數再重新撳一鍵結算`,
+        suggestion: null,
+        confidence: "unknown",
+        action: { type: "ot_hours", group: agg.ref, count },
+        candidates: [],
+        prefillCandidateId: null,
+      } satisfies McQuestionDraft["evidence"],
+    });
+    result.unknownGroups++;
+  };
+  for (const agg of aggs) {
+    const noHours = otNoHours.get(agg) ?? 0;
+    if (noHours > 0 && noHours === agg.recordIds.length) {
+      // 成組都冇時數：唔建 auto 卡、唔出定價題
+      await otHoursQuestion(agg, noHours);
+      continue;
+    }
+    if (noHours > 0) await otHoursQuestion(agg, noHours);
     const found = await findPriceSource(ctx, env, agg.ref, agg.need);
     if (found.auto) {
       try {
@@ -690,7 +728,8 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
       } catch (e) {
         ctx.warnings.push(`自動定價建卡失敗（${e instanceof Error ? e.message.slice(0, 120) : "unknown"}），改入分診`);
         // 降級入分診：預填原本搵到嘅來源值做 propose（唔好寫成「冇依據」）。
-        found.proposals.push({ step: found.auto.step, level: "propose", values: found.auto.values, generic: found.auto.generic, label: "原本自動定價嘅來源值（自動套用唔成功，請確認）", evidence: found.auto.evidence });
+        if (noHours > 0) continue; // 組內有冇時數 OT：專題已出，唔降級做定價題
+        found.proposals.unshift({ step: found.auto.step, level: "propose", values: found.auto.values, generic: found.auto.generic, label: "原本自動定價嘅來源值（自動套用唔成功，請確認）", evidence: found.auto.evidence });
       }
     }
     // 冇結算雞頭嘅組合：價錢要等歸屬雞頭先定得，已有 settlement 分診題，唔再重複出定價題。
@@ -733,6 +772,8 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
       const code = await stLabel(siteId, p.agg.ref.shiftTypeId);
       const needLabel = p.agg.need.client && p.agg.need.payout ? "客價＋出街價" : p.agg.need.client ? "客價" : "出街價";
       const cands: McCandidate[] = p.proposals.slice(0, 5).map((pr, i) => ({ id: `c${i}`, label: pr.label, values: pr.values, evidence: pr.evidence }));
+      // 預填：永遠唔揀「未經人確認」嘅 auto 卡候選
+      const prefill = cands.find((c) => !c.label.includes("未經人確認")) ?? null;
       const unknown = cands.length === 0;
       if (unknown) result.unknownGroups++;
       else result.proposeGroups++;
@@ -749,11 +790,11 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
           month: month.toISOString().slice(0, 10),
           kind: "month_close_pricing",
           summary: unknown ? `價目表、歷史、Postorder 都冇依據，${p.agg.recordIds.length} 更未定${needLabel}` : `搵到 ${cands.length} 個候選價但唔夠硬（${cands[0]!.evidence ?? ""}），${p.agg.recordIds.length} 更未定${needLabel}`,
-          suggestion: unknown ? null : `${cands[0]!.label}：${describeValues(cands[0]!.values ?? EMPTY_VALUES)}`,
+          suggestion: prefill ? `${prefill.label}：${describeValues(prefill.values ?? EMPTY_VALUES)}` : null,
           confidence: unknown ? "unknown" : "propose",
           action: { type: "pricing", group: p.agg.ref, needClient: p.agg.need.client, needPayout: p.agg.need.payout, count: p.agg.recordIds.length },
           candidates: cands,
-          prefillCandidateId: cands[0]?.id ?? null,
+          prefillCandidateId: prefill?.id ?? null,
         } satisfies McQuestionDraft["evidence"],
       });
     }

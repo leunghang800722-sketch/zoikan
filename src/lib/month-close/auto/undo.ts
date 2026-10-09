@@ -9,7 +9,7 @@
 //   site_created      盤保留（有更種／更次／上載掛住，唔會刪盤）
 // 已鎖月份唔准還原（0 變）。全部 audit，`auto_source=undo:one-click:<runId>`。冪等：已還原嘅唔再做。
 import { prisma } from "@/lib/db";
-import { monthRange } from "@/lib/reports/money";
+import { monthRange, round2 } from "@/lib/reports/money";
 import { writeAudit } from "@/lib/audit";
 import { Conflict, NotFound } from "@/lib/api/errors";
 import { sameRepriceValue, numOrNull } from "@/lib/pricing/reprice";
@@ -23,6 +23,8 @@ export interface UndoAutoResult {
   supersededQuestions: number;
   /** N4：undo 之後仍然帶住被作廢 auto 卡價錢嘅更數（journal 完整時應該係 0）。 */
   stillUsingVoidedCardPrices: number;
+  /** 上面嘅更 id（最多 50 個）。 */
+  stillUsingVoidedCardIds: string[];
 }
 
 export async function undoAutoChanges(runId: string, actorUserId: string, ip: string | null): Promise<UndoAutoResult> {
@@ -34,7 +36,7 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
 
   const changes = await prisma.monthCloseAutoChange.findMany({ where: { runId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
   const pending = changes.filter((c) => c.status === "applied" && c.undoable);
-  const result: UndoAutoResult = { runId, undone: {}, skipped: [], alreadyUndone: pending.length === 0 && changes.some((c) => c.status === "undone"), supersededQuestions: 0, stillUsingVoidedCardPrices: 0 };
+  const result: UndoAutoResult = { runId, undone: {}, skipped: [], alreadyUndone: pending.length === 0 && changes.some((c) => c.status === "undone"), supersededQuestions: 0, stillUsingVoidedCardPrices: 0, stillUsingVoidedCardIds: [] };
   const source = `undo:one-click:${runId}`;
   const audit = (tableName: string, rowId: string, action: "update" | "void" | "delete", before: unknown, after: unknown) =>
     writeAudit({ actorUserId, tableName, rowId, action, before, after: after && typeof after === "object" ? { ...(after as Record<string, unknown>), auto_source: source } : { auto_source: source }, ip });
@@ -199,19 +201,23 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
     for (const card of voidedCards) {
       const recs = await prisma.shiftRecord.findMany({
         where: { siteId: card.siteId, ...(card.shiftTypeId ? { shiftTypeId: card.shiftTypeId } : {}), ...(card.brokerId ? { settlementBrokerId: card.brokerId } : {}), status: { not: "cancelled" }, workDate: { gte: start, lte: end } },
-        select: { id: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
+        select: { id: true, recordType: true, otHours: true, clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true },
       });
       const cc = numOrNull(card.clientRate);
       const cw = numOrNull(card.guardWage);
       const cf = numOrNull(card.brokerFee);
       for (const r of recs) {
         if (journaled.has(r.id)) continue;
-        const clientSame = cc !== null && sameRepriceValue(numOrNull(r.clientRateSnapshot), cc);
-        const payoutSame = cw !== null && sameRepriceValue(numOrNull(r.guardWageSnapshot), cw) && sameRepriceValue(numOrNull(r.brokerFeeSnapshot), cf);
+        // OT 卡係每小時價：預期值＝卡值 × ot_hours（冇時數就比卡值本身）
+        const hrs = r.recordType === "ot" ? numOrNull(r.otHours) : null;
+        const mul = (v: number | null) => (v !== null && hrs !== null && hrs > 0 ? round2(v * hrs) : v);
+        const clientSame = cc !== null && sameRepriceValue(numOrNull(r.clientRateSnapshot), mul(cc));
+        const payoutSame = cw !== null && sameRepriceValue(numOrNull(r.guardWageSnapshot), mul(cw)) && sameRepriceValue(numOrNull(r.brokerFeeSnapshot), mul(cf));
         if (clientSame || payoutSame) stillUsing.add(r.id);
       }
     }
     result.stillUsingVoidedCardPrices = stillUsing.size;
+    result.stillUsingVoidedCardIds = [...stillUsing].slice(0, 50);
   }
 
   // 呢個 run 嘅 open 分診題一律作廢（改動已還原，建議唔再成立）。
@@ -227,7 +233,7 @@ export async function undoAutoChanges(runId: string, actorUserId: string, ip: st
   const report = (run.reportJson as Record<string, unknown> | null) ?? null;
   if (report && pending.length > 0) {
     const auto = (report.auto as Record<string, unknown> | undefined) ?? {};
-    await prisma.monthCloseRun.update({ where: { id: runId }, data: { reportJson: JSON.parse(JSON.stringify({ ...report, auto: { ...auto, undone: true, undoneAt: new Date().toISOString() } })) } });
+    await prisma.monthCloseRun.update({ where: { id: runId }, data: { reportJson: JSON.parse(JSON.stringify({ ...report, auto: { ...auto, undone: true, undoneAt: new Date().toISOString(), voidedCardPriceCheck: { count: result.stillUsingVoidedCardPrices, recordIds: result.stillUsingVoidedCardIds } } })) } });
   }
   if (pending.length > 0) {
     await writeAudit({ actorUserId, tableName: "month_close_runs", rowId: runId, action: "update", after: { id: runId, undo_auto: result.undone, skipped: result.skipped.length, auto_source: source }, ip });

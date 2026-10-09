@@ -215,7 +215,7 @@ export default function MonthCloseOneClickPage() {
       return;
     }
     const total = Object.values(res.data.undone).reduce((a, b) => a + b, 0);
-    setNotice(res.data.already_undone ? "之前已經還原過" : `已還原 ${total} 項自動改動${res.data.skipped.length ? `；${res.data.skipped.length} 項保留（${res.data.skipped.map((x) => x.reason).slice(0, 2).join("；")}）` : ""}${res.data.still_using_voided_card_prices ? `；注意：${res.data.still_using_voided_card_prices} 更價錢同已作廢卡相同但冇紀錄，請人手檢查` : ""}`);
+    setNotice(res.data.already_undone ? "之前已經還原過" : `已還原 ${total} 項自動改動${res.data.skipped.length ? `；${res.data.skipped.length} 項保留（${res.data.skipped.map((x) => x.reason).slice(0, 2).join("；")}）` : ""}${res.data.still_using_voided_card_prices ? `；注意：${res.data.still_using_voided_card_prices} 更價錢同已作廢卡相同但冇自動定價紀錄，可能係人手輸入，請檢查` : ""}`);
     await loadRuns();
   }
 
