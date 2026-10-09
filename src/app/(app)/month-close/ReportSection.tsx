@@ -108,7 +108,7 @@ export function ReportSection({ run, report, busy, locked, groups, onUndo, onOpe
       </div>
 
       {report.auto && <AutoSummaryCard auto={report.auto} busy={busy} locked={locked} onUndo={onUndo} />}
-      {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} onOpenTriage={onOpenTriage} />}
+      {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} locked={locked} onOpenTriage={onOpenTriage} />}
 
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className={`${card} overflow-hidden`}>

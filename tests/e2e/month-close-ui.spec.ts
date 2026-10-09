@@ -101,17 +101,18 @@ function question(id: string, title: string, over: Record<string, unknown> = {})
   };
 }
 
-async function mockApis(page: Page) {
-  const state = { answers: [] as string[], previews: [] as string[], status: { q1: "open", q2: "open", q3: "open" } as Record<string, string>, failNext: false };
+async function mockApis(page: Page, ids: string[] = ["q1", "q2", "q3"]) {
+  const state = { bodies: [] as Array<Record<string, unknown>>, answers: [] as string[], previews: [] as string[], status: { q1: "open", q2: "open", q3: "open", q4: "open" } as Record<string, string>, failNext: false };
   const qs = {
-    q1: question("q1", "測試盤甲 更種 N 未定價"),
+    q1: question("q1", "測試盤甲 更種 N 未定價", { options: [{ id: "mc_accept", label: "一撳確認" }, { id: "mc_pick", label: "揀" }, { id: "skip", label: "跳過" }], mc: { ...question("x", "x").mc, candidates: [{ id: "c1", label: "價卡 A", evidence: "Postorder 第 374 行", values_text: "100／80" }, { id: "c2", label: "價卡 B", evidence: "歷史", values_text: "120／90" }] } }),
+    q4: question("q4", "測試盤丁 更種 M 未定價"),
     q2: question("q2", "測試盤乙 更種 E 未定價", { options: [{ id: "mc_price", label: "輸入" }, { id: "skip", label: "跳過" }], mc: { ...question("x", "x").mc, suggestion: null, confidence: "unknown", candidates: [], prefill_candidate_id: null, needs_price_input: true } }),
     q3: question("q3", "測試盤丙 更數差異", { kind: "month_close_shift_variance", kind_label: "更數差異", options: [{ id: "mc_ack", label: "我已覆核" }, { id: "skip", label: "跳過" }], mc: { ...question("x", "x").mc, suggestion: null, confidence: "unknown", candidates: [], prefill_candidate_id: null } }),
   } as Record<string, ReturnType<typeof question>>;
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   await page.route("**/api/month-close/one-click?*", (r) => json(r, { runs: [RUN] }));
   await page.route("**/api/reports/month-health?*", (r) => json(r, HEALTH));
-  await page.route("**/api/triage/sessions/sess1", (r) => json(r, { session: { id: "sess1", status: "open", counts: { open: 3, answered: 0, skipped: 0, total: 3 } }, questions: Object.values(qs).map((q) => ({ ...q, status: state.status[q.id] })) }));
+  await page.route("**/api/triage/sessions/sess1", (r) => json(r, { session: { id: "sess1", status: "open", counts: { open: 3, answered: 0, skipped: 0, total: 3 } }, questions: ids.map((i) => qs[i]!).map((q) => ({ ...q, status: state.status[q.id] })) }));
   await page.route("**/api/triage/questions/*/preview", (r) => {
     const id = r.request().url().split("/questions/")[1]!.split("/")[0]!;
     state.previews.push(id);
@@ -124,6 +125,7 @@ async function mockApis(page: Page) {
       return json(r, { error: "conflict", message: "資料已改變" }, 409);
     }
     const body = r.request().postDataJSON() as { answer: { option: string } };
+    state.bodies.push(body.answer);
     state.answers.push(`${id}:${body.answer.option}`);
     state.status[id] = body.answer.option === "skip" ? "skipped" : "answered";
     return json(r, { status: "answered", impact: null });
@@ -190,7 +192,7 @@ test.describe("月結頁 1a 桌面", () => {
     // 禁用詞
     const bodyText = await page.locator("body").innerText();
     for (const w of ["有依據", "冇依據", "unmatched", "ambiguous", "name_only", "（external）", "（shift", "（parsed）"]) expect(bodyText).not.toContain(w);
-    await expect(page.getByTestId("auto-review")).toContainText("要你揀");
+    await expect(page.getByTestId("auto-review")).toContainText("冇參考");
     // 保留 testid
     for (const id of ["month-close-month-input", "month-close-roster-file-input", "month-close-staff-list-file-input", "month-close-postorder-file-input", "auto-summary", "auto-counts", "auto-review", "undo-auto", "unpriced-gap", "open-triage", "month-health-card"]) {
       await expect(page.getByTestId(id)).toHaveCount(1);
@@ -235,6 +237,43 @@ test.describe("月結頁 1a 桌面", () => {
     await page.getByTestId("mc-later").click();
     await expect(page.getByTestId("mc-triage-dialog")).toBeVisible();
     await expect(page.getByTestId("mc-unsent")).toContainText("未送出，請再試");
+    expect(st.answers).toEqual([]);
+  });
+
+  test("揀非建議候選送出後，下一題主掣係確認建議；送出 option 正確", async ({ page }) => {
+    const st = await mockApis(page, ["q1", "q4"]);
+    await loginAs(page, "老闆");
+    await page.goto(`/month-close`);
+    await page.getByTestId("month-close-month-input").fill(MONTH);
+    await page.getByTestId("open-triage").click();
+    await page.getByLabel(/價卡 B/).check();
+    await expect(page.getByTestId("mc-accept")).toHaveCount(0);
+    await page.getByTestId("mc-pick").click();
+    await expect(page.getByTestId("mc-summary")).toBeVisible();
+    await expect(page.getByTestId("mc-accept")).toBeVisible();
+    await expect(page.getByTestId("mc-pick")).toHaveCount(0);
+    await page.getByTestId("mc-accept").click();
+    await page.getByTestId("mc-later").click();
+    await expect(page.getByTestId("mc-triage-dialog")).toHaveCount(0);
+    expect(st.bodies).toEqual([{ option: "mc_pick", candidate_id: "c2" }, { option: "mc_accept" }]);
+  });
+
+  test("送出失敗：dblclick 關閉／撳遮罩都唔關；撳「放棄未送出」先關，頁面有 banner", async ({ page }) => {
+    const st = await mockApis(page);
+    await loginAs(page, "老闆");
+    await page.goto(`/month-close`);
+    await page.getByTestId("month-close-month-input").fill(MONTH);
+    await page.getByTestId("open-triage").click();
+    st.failNext = true;
+    await page.getByTestId("mc-accept").click();
+    await page.getByTestId("mc-later").dblclick();
+    await expect(page.getByTestId("mc-failed-banner")).toContainText("有 1 題未送出");
+    await expect(page.getByTestId("mc-triage-dialog")).toBeVisible();
+    await page.mouse.click(5, 5);
+    await expect(page.getByTestId("mc-triage-dialog")).toBeVisible();
+    await page.getByTestId("mc-abandon").click();
+    await expect(page.getByTestId("mc-triage-dialog")).toHaveCount(0);
+    await expect(page.getByText(/有 1 題未送出，請重新答/)).toBeVisible();
     expect(st.answers).toEqual([]);
   });
 
@@ -307,6 +346,21 @@ test.describe("月結頁 1e 手機", () => {
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/mock-1e-finish.png` });
     await page.getByTestId("mc-back").click();
     await expect(dlg).toHaveCount(0);
+  });
+  test("1e 有建議時揀其他候選 → 主掣改用所揀答案（mc_pick＋candidate_id）", async ({ page }) => {
+    test.setTimeout(60_000);
+    const st = await mockApis(page, ["q1"]);
+    await loginAs(page, "老闆");
+    await page.goto(`/month-close`);
+    await page.getByTestId("month-close-month-input").fill(MONTH);
+    await page.getByTestId("rail-open-triage").click();
+    await page.getByTestId("mc-other").click();
+    await page.getByLabel(/價卡 B/).check();
+    await expect(page.getByTestId("mc-pick")).toHaveText("用所揀答案");
+    await expect(page.getByTestId("mc-accept")).toHaveCount(0);
+    await page.getByTestId("mc-pick").click();
+    await expect.poll(() => st.bodies.length, { timeout: 12_000 }).toBe(1);
+    expect(st.bodies[0]).toEqual({ option: "mc_pick", candidate_id: "c2" });
   });
 });
 

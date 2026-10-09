@@ -11,7 +11,7 @@ export function LockSection({ report, month, busy, locked, groups, onLock, onOpe
   const reqs = lockRequirements(report, pricingQ);
   const lp = report.lock_precondition;
   const ready = lp.ready_to_lock && !locked;
-  const canTriage = !!report.auto?.triage_session_id && pricingQ > 0;
+  const canTriage = !!report.auto?.triage_session_id && pricingQ > 0 && !locked;
   return (
     <section className="overflow-hidden rounded-[10px] border border-zk-border bg-white" data-testid="lock-section">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-zk-border-soft px-4 py-3">

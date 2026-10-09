@@ -11,7 +11,7 @@ import { apiGet, apiRequest, type ApiResult } from "@/lib/ui/api-client";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
 import { UNDO_NOTE_SHORT, humanize, kindChip } from "@/components/month-close/derive";
-import { clearUnsent, recordUnsent } from "@/components/month-close/unsent";
+import { clearUnsent, pruneUnsent, recordUnsent } from "@/components/month-close/unsent";
 
 // 送出一律 keepalive：離開頁面時盡力完成（URL／method／body 同原本一樣）。
 function apiPost<T = unknown>(path: string, body?: unknown): Promise<ApiResult<T>> {
@@ -75,7 +75,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   const [qs, setQs] = useState<McQuestion[] | null>(null);
   const [initial, setInitial] = useState<McQuestion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [failed, setFailed] = useState<Record<string, string>>({});
+  const [failed, setFailed] = useState<Record<string, { title: string; msg: string }>>({});
   const [done, setDone] = useState<string[]>([]);
   const [okN, setOkN] = useState(0);
   const [skipN, setSkipN] = useState(0);
@@ -85,9 +85,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   const [broker, setBroker] = useState<string>("");
   const [price, setPrice] = useState<{ client: string; wage: string; fee: string }>({ client: "", wage: "", fee: "" });
   const drafts = useRef<Record<string, { candidate: string; broker: string; price: { client: string; wage: string; fee: string } }>>({});
-  const [mode, setMode] = useState<"accept" | "pick" | "price" | "other">("accept");
   const [expanded, setExpanded] = useState(false);
-  const [closeBlocked, setCloseBlocked] = useState(false);
   const [tapLock, setTapLock] = useState(false);
 
   const load = useCallback(async () => {
@@ -98,6 +96,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     }
     const open = res.data.questions.filter((q) => q.status === "open");
     setQs(open);
+    pruneUnsent(open.map((x) => x.id));
     setInitial((prev) => prev ?? open);
   }, [sessionId]);
   useEffect(() => {
@@ -134,16 +133,15 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
         if (item.kind === "skip") setSkipN((n) => n + 1);
         else {
           setOkN((n) => n + 1);
-          setDone((d) => [...d, `${item.doneLabel}：${detail ?? ""}`]);
+          setDone((d) => [...d, `${item.doneLabel}：${humanize(detail ?? "")}`]);
         }
         // 跳過唔改報告數字，唔使再 reload 報告（淨係 reload 分診 session）。
         if (item.kind !== "skip") cbRef.current.onChanged?.();
         void cbRef.current.load();
       },
       onFailed: (item, message) => {
-        setFailed((f) => ({ ...f, [item.id]: message }));
+        setFailed((f) => ({ ...f, [item.id]: { title: item.title, msg: message } }));
         recordUnsent({ id: item.id, title: item.title, option: String(item.answer.option ?? "") });
-        setError(`「${item.title}」未送出，請再試：${message}`);
       },
     });
   }
@@ -182,24 +180,29 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     setTapLock(true); // 1e：新題出現後 400ms 內唔俾撳，避免雙撳撞中下一題
     const t = setTimeout(() => setTapLock(false), 400);
     return () => clearTimeout(t);
-    setMode(q?.mc.prefill_candidate_id ? "accept" : q?.mc.needs_price_input ? "price" : "pick");
   }, [q?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function closeDialog() {
     await sender.flush();
-    // 送出失敗（含 5 秒 timer 自動送出失敗）：唔關對話框，題目返回並標「未送出，請再試」；
-    // 撳多一次先放棄（失敗題已記低，頁面會提示重新答）。
-    if (sender.failedCount() > 0 && !closeBlocked) {
-      setCloseBlocked(true);
-      setError("有題未送出，請再試；如要放棄，再撳一次關閉（頁面會提示你重新答）");
-      return;
-    }
+    // 送出失敗（含 5 秒 timer 自動送出失敗）：一律唔關對話框（✕／遲啲先答／撳遮罩都一樣），
+    // 失敗 banner 有明確掣「放棄未送出嘅 N 題」先放棄（失敗題已記 sessionStorage，頁面會提示重新答）。
+    if (sender.failedCount() > 0) return;
+    onClose();
+  }
+  async function abandonUnsent() {
+    await sender.flush();
     onClose();
   }
 
   function schedule(kind: "confirm" | "skip", answer: Record<string, unknown>, doneLabel: string) {
     if (!q) return;
     setError(null);
+    setFailed((f) => {
+      const n = { ...f };
+      delete n[q.id];
+      return n;
+    });
+    clearUnsent(q.id); // 重試中；再失敗會重新記低
     drafts.current[q.id] = { candidate, broker, price };
     void sender.schedule({ id: q.id, kind, answer, doneLabel, title: shortTitle(q.title) });
   }
@@ -218,7 +221,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     setError(null);
   };
 
-  const failedMsg = q ? failed[q.id] : undefined;
+  const failedMsg = q ? failed[q.id]?.msg : undefined;
+  const failedIds = Object.keys(failed);
   const handled = okN + skipN;
   const allClear = qs !== null && !q;
   const waiting = allClear && (view.pending !== null || view.sending);
@@ -238,7 +242,6 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 checked={(candidate || q.mc.prefill_candidate_id || "") === c.id}
                 onChange={() => {
                   setCandidate(c.id);
-                  setMode(c.id === q.mc.prefill_candidate_id ? "accept" : "pick");
                 }}
               />
               <span className="flex-1">
@@ -259,7 +262,6 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
             value={broker}
             onChange={(e) => {
               setBroker(e.target.value);
-              setMode("pick");
             }}
           >
             <option value="">揀雞頭…</option>
@@ -285,7 +287,6 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                   value={price[k]}
                   onChange={(e) => {
                     setPrice((p) => ({ ...p, [k]: e.target.value.replace(/[^0-9.]/g, "") }));
-                    setMode("price");
                   }}
                 />
               </label>
@@ -297,7 +298,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
   ) : null;
 
   // 各答案動作（桌面／手機共用）
-  const canPick = !!q && !q.mc.needs_broker_pick && has("mc_pick") && !!(candidate || q.mc.prefill_candidate_id) && candidate !== q.mc.prefill_candidate_id && mode === "pick";
+  const canPick = !!q && !q.mc.needs_broker_pick && has("mc_pick") && !!(candidate || q.mc.prefill_candidate_id) && candidate !== q.mc.prefill_candidate_id;
   const actions = {
     accept: () => schedule("confirm", { option: "mc_accept" }, "一撳確認"),
     ack: () => schedule("confirm", { option: "mc_ack" }, "已覆核"),
@@ -307,9 +308,20 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     pick: () => schedule("confirm", { option: "mc_pick", candidate_id: candidate }, "揀候選"),
   };
   const priceReady = !!(price.client || price.wage || price.fee);
+  // 用戶揀咗建議以外嘅答案（其他候選／雞頭／自己輸入價錢）→ 主掣改寫入所揀答案，唔再寫建議答案。
+  const choseOther = !!q && ((!!candidate && candidate !== q.mc.prefill_candidate_id) || !!broker || (q.mc.needs_price_input && priceReady));
 
   const toast = view.pending && view.deadline ? <UndoToast item={view.pending} deadline={view.deadline} onUndo={undo} /> : null;
-  const retryTag = failedMsg ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-[12.5px] text-red-700" data-testid="mc-unsent">未送出，請再試（{failedMsg}）</div> : null;
+  const failedBanner =
+    failedIds.length > 0 ? (
+      <div className="flex flex-col gap-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-[12.5px] text-red-700" data-testid="mc-failed-banner" role="alert">
+        <div>有 {failedIds.length} 題未送出，請再試：{failedIds.map((id) => humanize(failed[id]!.title)).join("、")}</div>
+        <button type="button" onClick={abandonUnsent} className="self-start rounded border border-red-300 bg-white px-2.5 py-1 text-red-700" data-testid="mc-abandon">
+          放棄未送出嘅 {failedIds.length} 題（留返待答問題）
+        </button>
+      </div>
+    ) : null;
+  const retryTag = failedMsg ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-[12.5px] text-red-700" data-testid="mc-unsent">未送出，請再試（{humanize(failedMsg)}）</div> : null;
 
   // ------------------------------------------------------------------ 手機 1e
   if (mobile) {
@@ -326,7 +338,10 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
     // 主掣
     let primary: { label: string; run: () => void; dark?: boolean; disabled?: boolean; testid: string } | null = null;
     if (q) {
-      if (canAccept) primary = { label: "確認建議", run: actions.accept, testid: "mc-accept" };
+      if (expanded && choseOther && q.mc.needs_price_input && has("mc_price") && priceReady) primary = { label: "用我輸入嘅價錢", run: actions.price, dark: true, testid: "mc-price" };
+      else if (expanded && choseOther && q.mc.needs_broker_pick && broker) primary = { label: "歸所揀雞頭", run: actions.pickBroker, dark: true, testid: "mc-pick-broker" };
+      else if (expanded && choseOther && canPick) primary = { label: "用所揀答案", run: actions.pick, dark: true, testid: "mc-pick" };
+      else if (canAccept) primary = { label: "確認建議", run: actions.accept, testid: "mc-accept" };
       else if (ackOnly) primary = { label: "我已覆核，冇問題", run: actions.ack, testid: "mc-ack" };
       else if (!expanded) primary = { label: "揀答案 ›", run: () => setExpanded(true), dark: true, testid: "mc-choose" };
       else if (q.mc.needs_price_input && has("mc_price") && priceReady) primary = { label: "用我輸入嘅價錢", run: actions.price, dark: true, testid: "mc-price" };
@@ -351,6 +366,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-5 pb-40 pt-5">
+          {failedBanner}
           {error && !failedMsg && <div className="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</div>}
           {qs === null && <div className="text-[13px] text-zk-muted">載入緊…</div>}
           {q && (
@@ -370,7 +386,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 {q.mc.identity_label && <div className="mt-1 text-[12px] text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
               </div>
               {canAccept ? (
-                <div className="rounded-[14px] border-2 border-[#2563eb] bg-[#f8fbff] px-4 py-3.5" data-testid="mc-suggest-card">
+                <div className={`rounded-[14px] border-2 px-4 py-3.5 ${choseOther ? "border-[#cbd5e1] bg-white opacity-60" : "border-[#2563eb] bg-[#f8fbff]"}`} data-testid="mc-suggest-card">
                   <div className="text-[12px] font-semibold text-[#1d4ed8]">系統建議</div>
                   <div className="mt-1 text-[20px] font-bold">{humanize(q.mc.suggestion ?? (suggestCand ? `${suggestCand.label}${suggestCand.values_text ? ` ${suggestCand.values_text}` : ""}` : "按建議答案"))}</div>
                   {suggestCand?.evidence && <div className="mt-1.5 text-[12px] text-zk-muted">依據：{humanize(suggestCand.evidence)}</div>}
@@ -453,6 +469,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
           </button>
         </div>
         <div className="space-y-3 overflow-y-auto px-4 py-3">
+          {failedBanner}
           {error && !failedMsg && <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</div>}
           {done.length > 0 && (
             <ul className="list-disc space-y-0.5 rounded border border-green-300 bg-green-50 px-5 py-2 text-[12px] text-green-800" data-testid="mc-done">
@@ -523,7 +540,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                       用所揀候選
                     </Button>
                   )}
-                  {has("mc_accept") && q.mc.prefill_candidate_id && (
+                  {has("mc_accept") && q.mc.prefill_candidate_id && !choseOther && (
                     <Button variant="primary" onClick={actions.accept} data-testid="mc-accept">
                       一撳確認
                     </Button>

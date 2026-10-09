@@ -7,7 +7,7 @@ import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
 import { humanize, reviewTotals, type ReviewGroup } from "@/components/month-close/derive";
 
-export function ReviewCard({ auto, groups, busy, onOpenTriage }: { auto: AutoReportDTO; groups: ReviewGroup[]; busy: boolean; onOpenTriage: () => void }) {
+export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto: AutoReportDTO; groups: ReviewGroup[]; busy: boolean; locked: boolean; onOpenTriage: () => void }) {
   const t = reviewTotals(auto.review);
   const canAnswer = !!auto.triage_session_id && t.total > 0;
   return (
@@ -23,7 +23,7 @@ export function ReviewCard({ auto, groups, busy, onOpenTriage }: { auto: AutoRep
             去分診頁
           </Link>
           {canAnswer && (
-            <Button variant="primary" className="!px-4 !py-2 font-semibold" onClick={onOpenTriage} disabled={busy} data-testid="open-triage">
+            <Button variant="primary" className="!px-4 !py-2 font-semibold" onClick={onOpenTriage} disabled={busy || locked} data-testid="open-triage">
               開始逐條答（{t.total}）
             </Button>
           )}

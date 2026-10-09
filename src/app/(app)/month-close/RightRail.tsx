@@ -32,7 +32,7 @@ export function RightRail({ report, month, busy, locked, health, needsHuman, onO
           </div>
           <div className="text-[11.5px] text-zk-muted">{t.total > 0 ? `${t.propose} 題有建議 · ${t.unknown} 題要自己揀` : "冇題要答"}</div>
           {auto?.triage_session_id && t.total > 0 && (
-            <button type="button" onClick={onOpenTriage} disabled={busy} data-testid="rail-open-triage" className="mt-1.5 rounded-[7px] bg-zk-primary py-[9px] text-[13px] font-semibold text-white hover:bg-zk-primary-dark disabled:opacity-[.45]">
+            <button type="button" onClick={onOpenTriage} disabled={busy || locked} data-testid="rail-open-triage" className="mt-1.5 rounded-[7px] bg-zk-primary py-[9px] text-[13px] font-semibold text-white hover:bg-zk-primary-dark disabled:opacity-[.45]">
               開始逐條答
             </button>
           )}

@@ -509,9 +509,17 @@ export const UNDO_NOTE_SHORT = "只還原系統自動做嘅改動；你一撳確
 
 /** 顯示 API 文字前嘅禁用詞替換（集中處理；API 文字唔改）。 */
 export function humanize(text: string): string {
+  // 「」入面係盤名／人名／檔名，原樣保留；淨係改引號以外嘅文字。
   return text
+    .split(/(「[^」]*」)/)
+    .map((seg) => (seg.startsWith("「") && seg.endsWith("」") ? seg : humanizePlain(seg)))
+    .join("");
+}
+
+function humanizePlain(t: string): string {
+  return t
     .replace(/（parsed）/g, "（已解析，未對數）")
-    .replace(/冇依據/g, "要你揀")
+    .replace(/冇依據/g, "冇參考")
     .replace(/有依據/g, "有建議")
     .replace(/(?<![A-Za-z_])unmatched(?![A-Za-z_])/gi, "對唔到安員")
     .replace(/(?<![A-Za-z_])ambiguous(?![A-Za-z_])/gi, "有多個可能")

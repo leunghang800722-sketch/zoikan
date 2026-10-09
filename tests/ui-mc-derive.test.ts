@@ -199,7 +199,7 @@ describe("kindChip／其他類／needs_human", () => {
     expect(kindChip("month_close_pricing", "未定價（有候選／冇依據）")).toBe("定價");
     expect(kindChip("month_close_guard_match", "x")).toBe("安員配對");
     expect(kindChip("month_close_site_new", "x")).toBe("盤名");
-    expect(kindChip("future_kind", "未定價（有候選／冇依據）")).toBe("未定價（有候選／要你揀）");
+    expect(kindChip("future_kind", "未定價（有候選／冇依據）")).toBe("未定價（有候選／冇參考）");
   });
   it("未知 review kind／auto_line kind 歸入「其他」", () => {
     const g = groupReview([{ kind: "mystery", text: "原文一", confidence: "unknown", question_id: null }]);
@@ -219,7 +219,8 @@ describe("kindChip／其他類／needs_human", () => {
 
 describe("humanize（顯示 API 文字前去禁用詞）", () => {
   it("替換禁用詞，唔郁 code 識別字", () => {
-    expect(humanize("價目表、歷史、Postorder 都冇依據")).toBe("價目表、歷史、Postorder 都要你揀");
+    expect(humanize("價目表、歷史、Postorder 都冇依據")).toBe("價目表、歷史、Postorder 都冇參考");
+    expect(humanize("盤「shift 冇依據 leave」有 shift")).toBe("盤「shift 冇依據 leave」有 更");
     expect(humanize("有依據：unmatched／ambiguous／name_only")).toBe("有建議：對唔到安員／有多個可能／淨靠姓名配對");
     expect(humanize("shift 記錄 external leave")).toBe("更 記錄 客戶自己人 假");
     expect(humanize("測試盤（parsed）")).toBe("測試盤（已解析，未對數）");

@@ -29,8 +29,13 @@ export function recordUnsent(it: UnsentItem) {
 export function clearUnsent(id: string) {
   write(read().filter((x) => x.id !== id));
 }
-export function takeUnsent(): UnsentItem[] {
+/** 只讀唔清：答完（clearUnsent）先清。 */
+export function peekUnsent(): UnsentItem[] {
+  return read();
+}
+/** 只保留仲係 open 嘅題（其他地方已答／作廢嘅唔再提示）。 */
+export function pruneUnsent(openIds: string[]) {
   const l = read();
-  write([]);
-  return l;
+  const k = l.filter((x) => openIds.includes(x.id));
+  if (k.length !== l.length) write(k);
 }
