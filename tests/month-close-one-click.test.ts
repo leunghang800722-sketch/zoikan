@@ -304,7 +304,9 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       await prisma.rosterUpload.update({ where: { id: u2.id }, data: { fileName: "另一個檔名.xlsx" } });
       const result = await stepParseHealth(SEPT, fx.userIds["老闆"]);
       expect(result.numbers.autoBuiltSites).toBe(1);
-      expect(result.needsHuman.filter((h) => h.includes("待核盤")).length).toBe(1);
+      // WP-ONE-CLICK-AUTO §31.3 A：新盤自動建齊（更種／Postorder 客戶名），唔再留「待核盤」要人睇，改列喺 warnings／自動處理摘要。
+      expect(result.needsHuman.filter((h) => h.includes("待核盤")).length).toBe(0);
+      expect(result.warnings.filter((h) => h.includes("已自動建新盤")).length).toBe(1);
       const ups = await prisma.rosterUpload.findMany({ where: { month: SEPT, siteNameRaw: { startsWith: "一鍵新盤" } } });
       expect(new Set(ups.map((u) => u.siteId)).size).toBe(1);
       expect(ups[0]!.siteId).not.toBeNull();
