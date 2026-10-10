@@ -7,7 +7,7 @@
 import { prisma } from "@/lib/db";
 import { monthRange, monthStart, monthLabel } from "./money";
 
-export type BrokerDashboardSiteRow = {
+type BrokerDashboardSiteRow = {
   siteId: string;
   siteName: string;
   shifts: number;

@@ -100,7 +100,7 @@ interface CandidateRow {
 }
 
 /** 候選保安員卡（live 讀，批量 query，唔 N+1）。 */
-export async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<Map<string, CandidateRow>> {
+async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<Map<string, CandidateRow>> {
   const out = new Map<string, CandidateRow>();
   if (ids.length === 0) return out;
   const [guards, phones, nos, recent] = await Promise.all([

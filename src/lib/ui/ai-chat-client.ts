@@ -15,7 +15,7 @@ export interface AiChatMessage {
   actions?: unknown[];
 }
 
-export interface AiChatDoneResult {
+interface AiChatDoneResult {
   text: string;
   toolsUsed: string[];
   guardTriggered: boolean;

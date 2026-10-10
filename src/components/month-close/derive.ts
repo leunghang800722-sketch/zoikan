@@ -11,7 +11,7 @@ const fmtN = (n: number) => n.toLocaleString("zh-HK", { maximumFractionDigits: 2
 // ---------------------------------------------------------------------------
 // 要你睇：按題型分組
 // ---------------------------------------------------------------------------
-export const REVIEW_GROUP_DEFS = [
+const REVIEW_GROUP_DEFS = [
   { key: "pricing", name: "定價", kinds: ["month_close_pricing"] },
   { key: "guard", name: "保安員配對", kinds: ["month_close_guard_match"] },
   { key: "settlement", name: "結算雞頭", kinds: ["month_close_settlement"] },
@@ -19,7 +19,7 @@ export const REVIEW_GROUP_DEFS = [
   { key: "site", name: "盤名／新盤", kinds: ["month_close_site_alias", "month_close_site_new"] },
   { key: "other", name: "其他", kinds: [] },
 ] as const;
-export type ReviewGroupKey = (typeof REVIEW_GROUP_DEFS)[number]["key"];
+type ReviewGroupKey = (typeof REVIEW_GROUP_DEFS)[number]["key"];
 
 export interface ReviewGroup {
   key: ReviewGroupKey;
@@ -62,7 +62,7 @@ export function reviewTotals(review: AutoReportDTO["review"] | undefined | null)
 // ---------------------------------------------------------------------------
 // 五步狀態列
 // ---------------------------------------------------------------------------
-export type StageState = "ok" | "warn" | "todo";
+type StageState = "ok" | "warn" | "todo";
 export interface Stage {
   key: "upload" | "run" | "progress" | "report" | "lock";
   name: string;

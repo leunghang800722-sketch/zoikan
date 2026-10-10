@@ -231,7 +231,7 @@ export async function readOpsDigest(month: Date, session: AuthedSession) {
 // ---------------------------------------------------------------------------
 // 5. site_setup
 // ---------------------------------------------------------------------------
-export async function findSitesByKeyword(keyword: string): Promise<Array<{ id: string; canonicalName: string }>> {
+async function findSitesByKeyword(keyword: string): Promise<Array<{ id: string; canonicalName: string }>> {
   const exact = await prisma.site.findFirst({ where: { canonicalName: { equals: keyword, mode: "insensitive" } }, select: { id: true, canonicalName: true } });
   if (exact) return [exact];
   return prisma.site.findMany({

@@ -63,7 +63,7 @@ export interface ProcessRosterUploadResult {
   duplicateOfVersion: number | null;
 }
 
-export interface RosterUploadParseSummary {
+interface RosterUploadParseSummary {
   ok: boolean;
   totalCellCount: number;
   shiftCount: number;

@@ -55,7 +55,7 @@ function setCell(ws: ExcelJS.Worksheet, row: number, col: number, value: string 
   ws.getCell(row, col).value = value;
 }
 
-export interface BochkAutopayMissingRow {
+interface BochkAutopayMissingRow {
   staff_no: string;
   reason: string;
 }

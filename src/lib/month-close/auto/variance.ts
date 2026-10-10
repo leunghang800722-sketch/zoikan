@@ -16,12 +16,12 @@ import { externalBrokerForRow, type ExternalBrokerLite } from "@/lib/roster-uplo
 import type { AutoCollector, VarianceFinding } from "./context";
 import { rowsForSite } from "./postorder-evidence";
 
-export const VARIANCE_FLAG_PCT = 0.3;
-export const VARIANCE_UNEXPLAINED_PCT = 0.15;
-export const VARIANCE_UNEXPLAINED_MIN = 20;
+const VARIANCE_FLAG_PCT = 0.3;
+const VARIANCE_UNEXPLAINED_PCT = 0.15;
+const VARIANCE_UNEXPLAINED_MIN = 20;
 /** 剩餘 >15% 而且 >5 更，或者剩餘 >20 更 → needs_human（主規劃決定）。 */
-export const VARIANCE_UNEXPLAINED_PCT_MIN = 5;
-export const COVERAGE_TRUNCATED_BELOW = 0.8;
+const VARIANCE_UNEXPLAINED_PCT_MIN = 5;
+const COVERAGE_TRUNCATED_BELOW = 0.8;
 
 interface RowLite {
   workDate: Date;
@@ -54,7 +54,7 @@ interface Classified {
   dates: Set<string>;
 }
 
-export interface VarianceLookups {
+interface VarianceLookups {
   externals: ExternalBrokerLite[];
   externalBrokerIds: Set<string>;
   internalCashBrokerIds: Set<string>;
@@ -62,7 +62,7 @@ export interface VarianceLookups {
   brokerCodeById: Map<string, string>;
 }
 
-export async function loadVarianceLookups(): Promise<VarianceLookups> {
+async function loadVarianceLookups(): Promise<VarianceLookups> {
   const brokers = await prisma.broker.findMany({ select: { id: true, code: true, name: true, kind: true, aliases: true } });
   const externals = brokers.filter((b) => b.kind === "external").map((b) => ({ id: b.id, code: b.code, name: b.name, aliases: b.aliases }));
   const extGuards = await prisma.guard.findMany({ where: { employmentType: "external" }, select: { id: true } });
@@ -75,7 +75,7 @@ export async function loadVarianceLookups(): Promise<VarianceLookups> {
   };
 }
 
-export function classifyRows(rows: readonly RowLite[], lk: VarianceLookups): Classified {
+function classifyRows(rows: readonly RowLite[], lk: VarianceLookups): Classified {
   const out: Classified = { countable: [], dupRows: new Set(), external: [], internalCash: [], duplicates: 0, dates: new Set() };
   const seen = new Set<string>();
   for (const r of rows) {
@@ -161,7 +161,7 @@ export interface VarianceResult {
   legacyFlagged: number;
 }
 
-export interface VarianceComponents {
+interface VarianceComponents {
   delta: number;
   dup: number;
   ic: number;

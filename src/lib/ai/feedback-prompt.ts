@@ -76,7 +76,7 @@ export function buildFeedbackInterviewPrompt(session: AuthedSession, context?: A
 // 平時嗰句通用假回覆）——見 llm.ts 嘅用法，唔影響任何真 provider（真
 // provider 見到呢句純粹當普通 prompt 文字處理）。
 // ---------------------------------------------------------------------------
-export const FEEDBACK_SUMMARIZE_MARKER = "ZOIKAN_P25_FEEDBACK_SUMMARIZE_MODE";
+const FEEDBACK_SUMMARIZE_MARKER = "ZOIKAN_P25_FEEDBACK_SUMMARIZE_MODE";
 
 export function buildFeedbackSummarizePrompt(): string {
   return `${FEEDBACK_SUMMARIZE_MARKER}

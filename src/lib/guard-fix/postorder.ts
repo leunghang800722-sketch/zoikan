@@ -135,7 +135,7 @@ import { BadRequest } from "@/lib/api/errors";
  * （PostOrder.csv／Roster.csv，分頁另存）解析結果已驗證等價。所有會成本載入 xlsm 嘅入口都經
  * `loadPostorderWorkbook()`，喺度統一擋。 */
 export const MAX_WORKBOOK_BYTES = 1.5 * 1024 * 1024;
-export const WORKBOOK_TOO_LARGE_MESSAGE = "Postorder xlsm／xlsx 檔案大過 1.5MB，伺服器唔會載入（會爆記憶體）。請將 Roster 同 PostOrder 兩個分頁另存做 CSV 上載（Google Sheets：檔案 → 下載 → 逗號分隔值）。";
+const WORKBOOK_TOO_LARGE_MESSAGE = "Postorder xlsm／xlsx 檔案大過 1.5MB，伺服器唔會載入（會爆記憶體）。請將 Roster 同 PostOrder 兩個分頁另存做 CSV 上載（Google Sheets：檔案 → 下載 → 逗號分隔值）。";
 export function assertWorkbookSizeOk(bytes: number): void {
   if (bytes > MAX_WORKBOOK_BYTES) throw BadRequest(WORKBOOK_TOO_LARGE_MESSAGE);
 }
@@ -416,7 +416,7 @@ function modeDiff(cols: number[]): number | null {
   return best;
 }
 
-export interface RosterLongtermParseOutcome {
+interface RosterLongtermParseOutcome {
   cells: PostorderLongtermPostCell[];
   headerRow: number | null;
   dayBlockWidth: number | null;
@@ -802,7 +802,7 @@ export function parsePostorderFromPairsCsv(source: PostorderPairsCsvSource): Pos
  * 見檔頭 (c) 個案）。同一個 (盤,人) 喺 grid 出現多過一行就加埋
  * cellCount（理論上 PostOrder 一個人一個盤一個月得一行，呢度純粹
  * 保守處理，唔假設）。 */
-export function derivePostorderLongtermPostsFromPostorderGrid(
+function derivePostorderLongtermPostsFromPostorderGrid(
   grid: PostorderGrid,
   knownNames: Set<string>,
   longtermEmploymentNames: Set<string> = new Set(),

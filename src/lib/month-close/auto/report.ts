@@ -7,7 +7,7 @@ import { computePostorderDependency } from "./dependency";
 import type { AutoReport, AutoSummary, ReviewItem } from "./types";
 
 /** 本月更數（shift_records，非 cancelled，record_type=shift）分三堆：客戶自己人（external）／公司兵／其餘（計數更次）。 */
-export async function computeShiftCounts(month: Date): Promise<AutoSummary["counts"]> {
+async function computeShiftCounts(month: Date): Promise<AutoSummary["counts"]> {
   const { start, end } = monthRange(month);
   const rows = await prisma.shiftRecord.findMany({
     where: { recordType: "shift", status: { not: "cancelled" }, workDate: { gte: start, lte: end } },

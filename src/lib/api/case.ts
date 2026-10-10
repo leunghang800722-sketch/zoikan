@@ -2,7 +2,7 @@
 // <-> camelCase（Prisma model 欄位名）淺層轉換——淨係轉頂層 key，唔會
 // 遞歸行入 JSON blob 欄位（`bank_info`／`provenance`）嘅內部結構，因為
 // 嗰啲係「值」唔係我哋自己定義嘅 schema 欄位。
-export function snakeToCamel(s: string): string {
+function snakeToCamel(s: string): string {
   return s.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 }
 

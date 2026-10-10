@@ -49,7 +49,7 @@ async function handle<T>(res: Response): Promise<T> {
   return body as T;
 }
 
-export type ListResponse<T> = { rows: T[]; total: number; skip: number; take: number };
+type ListResponse<T> = { rows: T[]; total: number; skip: number; take: number };
 
 export async function apiGet<T>(
   path: string,

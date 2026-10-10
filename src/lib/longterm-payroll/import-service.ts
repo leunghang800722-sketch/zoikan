@@ -36,7 +36,7 @@ function isoToDate(iso: string | null): Date | null {
  * 一致）：Maxwell「Monthly Salary」欄細過 5,000 嘅其實係「每更價」。
  * Opus 5.5 驗收修正：原本導入一律當月薪，日薪制長工會變成「全月 Net Basic
  * ＝一更價」（少出九成幾人工）。 */
-export const DAILY_RATE_THRESHOLD = 5000;
+const DAILY_RATE_THRESHOLD = 5000;
 
 function buildSegmentsFromRow(row: MaxwellStaffRow): Array<{ monthlySalary: number; effectiveFrom: Date; effectiveTo: Date | null }> {
   const commencement = isoToDate(row.commencement);

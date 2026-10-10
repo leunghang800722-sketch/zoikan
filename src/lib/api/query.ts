@@ -23,7 +23,7 @@ export function paginationParams(url: URL): { skip: number; take: number } {
 }
 
 /** 淨係揀白名單入面嘅欄位，其他 body 傳入嘅嘢一律忽略（防止亂改唔准改嘅欄位，例如 id/createdAt）。 */
-export function pickFields<T extends Record<string, unknown>>(body: unknown, allowed: readonly (keyof T)[]): Partial<T> {
+function pickFields<T extends Record<string, unknown>>(body: unknown, allowed: readonly (keyof T)[]): Partial<T> {
   const out: Partial<T> = {};
   if (!body || typeof body !== "object") return out;
   const src = body as Record<string, unknown>;
@@ -42,7 +42,7 @@ export function pickFields<T extends Record<string, unknown>>(body: unknown, all
  * 淨係 "YYYY-MM-DD"，呢個 helper 喺 pickFields() 之後、傳入 prisma
  * create/update 之前，將指定嘅欄位由 string 轉做 Date。
  */
-export function coerceDateFields<T extends Record<string, unknown>>(data: T, fields: readonly (keyof T)[]): T {
+function coerceDateFields<T extends Record<string, unknown>>(data: T, fields: readonly (keyof T)[]): T {
   for (const key of fields) {
     const v = data[key];
     if (typeof v === "string" && v.length > 0) {

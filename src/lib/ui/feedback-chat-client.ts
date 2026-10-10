@@ -6,7 +6,7 @@
 import type { AiPageContext } from "./ai-context";
 import { streamChatSse } from "./chat-stream";
 
-export interface FeedbackChatDoneResult {
+interface FeedbackChatDoneResult {
   text: string;
   toolsUsed: string[];
   guardTriggered: boolean;

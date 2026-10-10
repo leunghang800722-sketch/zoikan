@@ -18,7 +18,7 @@ export const stepOfAutoCardNote = (note: string | null): 1 | 2 | 3 | 4 | 5 | nul
   return m ? (Number(m[1]) as 1 | 2 | 3 | 4 | 5) : null;
 };
 
-export function emptyDependency(): PostorderDependency {
+function emptyDependency(): PostorderDependency {
   return {
     pricing: { total: 0, unpriced: 0, byStep: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, existing: 0 }, withoutPostorder: 0 },
     settlement: { total: 0, byReason: { roster: 0, postorder: 0, longterm: 0, external: 0, guardDefault: 0, siteDefault: 0, history: 0, other: 0, unresolved: 0 }, withoutPostorder: 0 },

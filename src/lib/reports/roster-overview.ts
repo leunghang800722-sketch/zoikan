@@ -28,7 +28,7 @@ import { scopeShiftRecordWhere, isBrokerRole } from "@/lib/broker-isolation";
 import { monthRange, monthStart } from "./money";
 import { computeSiteDayShortfall, type ShiftTypeForShortfall } from "./shortfall";
 
-export type RosterOverviewSiteRow = {
+type RosterOverviewSiteRow = {
   siteId: string;
   siteName: string;
   guardCount: number;

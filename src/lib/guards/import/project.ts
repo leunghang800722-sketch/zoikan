@@ -9,7 +9,7 @@ import { aggregateExt, isBankKey, isEmergencyKey, maskExtChecks, type ExtItem } 
 import { summarizeExt } from "./apply";
 
 /** 讀者權限：pii＝「保安員個人資料:view」；bank＝「保安員銀行資料:view」。 */
-export interface ProjectionViewer {
+interface ProjectionViewer {
   pii: boolean;
   bank: boolean;
 }
@@ -21,7 +21,7 @@ const HIDDEN_CHECKS = new Set(["same", "differs", "conflict"]);
 /** 淨洩露「姓名同現有保安員唔同」嘅 reason code（已有 current_name_hidden 旗，唔再重複）。 */
 export const NAME_REASONS = new Set(["name_differs_from_guard"]);
 /** 戶口已屬另一位保安員：冇「保安員銀行資料:view」唔回（否則變戶口存在 oracle） */
-export const BANK_TAKEN_REASON = "bank_acct_belongs_to_other";
+const BANK_TAKEN_REASON = "bank_acct_belongs_to_other";
 
 function basisCategory(b: string): string {
   return b === "hkid" || b === "staff_no" || b === "tel" ? "identity_key" : b.startsWith("name") ? "name" : b;
@@ -64,7 +64,7 @@ function extAggregateOf(rows: readonly PreviewRow[]): { ext_stats: ReturnType<ty
   };
 }
 
-export function projectPreviewForViewer(p: PreviewResult, viewer: ProjectionViewer): PreviewResult {
+function projectPreviewForViewer(p: PreviewResult, viewer: ProjectionViewer): PreviewResult {
   if (viewer.pii && viewer.bank) return p;
   const pii = viewer.pii;
   const rows = p.rows.map((r) => maskRow(r, viewer));
@@ -122,7 +122,7 @@ function maskResult(r: PersonResult, v: ProjectionViewer): PersonResult {
   };
 }
 
-export function projectApplyForViewer(a: ApplyResult, viewer: ProjectionViewer): ApplyResult {
+function projectApplyForViewer(a: ApplyResult, viewer: ProjectionViewer): ApplyResult {
   if (viewer.pii && viewer.bank) return a;
   const results = a.results.map((r) => maskResult(r, viewer));
   const { ext_written: _w, ext_conflicts: _c, contacts_added: _n, ...rest } = a;

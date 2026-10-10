@@ -14,9 +14,9 @@
 // 「城巴各車廠」呢類冇數字／字母、只靠地名分辨嘅盤：編輯距離 ≤ 1 嘅硬閘令
 // 「柴灣城巴車廠」「上環城巴車廠」呢類差兩個字嘅唔會被自動合併。
 export const SITE_AUTO_MIN = 0.9;
-export const SITE_PROPOSE_MIN = 0.75;
-export const SITE_MARGIN = 0.08;
-export const SITE_PROPOSE_MAX_EDIT_RATIO = 0.34;
+const SITE_PROPOSE_MIN = 0.75;
+const SITE_MARGIN = 0.08;
+const SITE_PROPOSE_MAX_EDIT_RATIO = 0.34;
 
 const SUFFIXES = ["有限公司", "物業服務", "物業管理", "管理處", "公司", "管理", "物業"];
 const CJK_NUMERALS = "〇零一二三四五六七八九十百";
@@ -30,11 +30,11 @@ const VARIANT_PAIRS: Array<[string, string]> = [
   ["學", "学"], ["醫", "医"], ["體", "体"], ["與", "与"], ["會", "会"], ["華", "华"], ["興", "兴"], ["順", "顺"], ["環", "环"],
 ];
 const VARIANT_MAP = new Map<string, string>(VARIANT_PAIRS.flatMap(([a, b]) => [[b, a], [a, a]] as Array<[string, string]>));
-export function canonVariants(s: string): string {
+function canonVariants(s: string): string {
   return [...s].map((c) => VARIANT_MAP.get(c) ?? c).join("");
 }
 /** 淨剩中文字（變體歸一之後）——兩個盤名中文字序列唔同就唔准 auto。 */
-export function cjkSequence(s: string): string {
+function cjkSequence(s: string): string {
   return canonVariants(s.normalize("NFKC")).replace(/[^\p{Script=Han}]+/gu, "");
 }
 
@@ -147,7 +147,7 @@ export interface SiteNameCandidate {
   aliases: string[];
 }
 
-export type SiteMatchLevel = "exact" | "auto" | "propose" | "new";
+type SiteMatchLevel = "exact" | "auto" | "propose" | "new";
 
 export interface SiteMatchResult {
   level: SiteMatchLevel;

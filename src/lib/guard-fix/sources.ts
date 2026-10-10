@@ -73,7 +73,7 @@ function cellText(row: ExcelJS.Row, col1based: number): string | null {
 /** U Team 名單 sheet1 逐行解析——同一份邏輯俾 script（讀本機檔案路徑）
  * 同 `POST /api/guard-fix/staff-list`（讀上載嘅 xlsx bytes）共用，唔准
  * 各自抄一份（WP-GUARD-FIX-UI 鐵則）。 */
-export function parseUTeamWorksheet(ws: ExcelJS.Worksheet): UTeamRow[] {
+function parseUTeamWorksheet(ws: ExcelJS.Worksheet): UTeamRow[] {
   const rows: UTeamRow[] = [];
   for (let r = 2; r <= ws.rowCount; r++) {
     const row = ws.getRow(r);
@@ -99,7 +99,7 @@ export function parseUTeamWorksheet(ws: ExcelJS.Worksheet): UTeamRow[] {
   return rows;
 }
 
-export async function loadUTeamList(filePath: string = U_TEAM_XLSX_PATH): Promise<UTeamRow[]> {
+async function loadUTeamList(filePath: string = U_TEAM_XLSX_PATH): Promise<UTeamRow[]> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
   return parseUTeamWorksheet(wb.worksheets[0]!);

@@ -11,7 +11,7 @@ import type {
 
 // 純函數 helper（日期計算全部用 UTC，避免時區令「幾號」跳日）。
 
-export function pad2(n: number): string {
+function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
@@ -58,7 +58,7 @@ export function hongKongTodayYMD(): { y: number; m: number; d: number } {
   return { y: get("year"), m: get("month"), d: get("day") };
 }
 
-export const WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+const WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
 
 export type DayMeta = {
   weekday: string;

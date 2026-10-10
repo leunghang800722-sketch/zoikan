@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { monthRange as sharedMonthRange, monthStart, monthLabel } from "./money";
 import { buildGrossMargin, DEFAULT_MARGIN_THRESHOLD_PCT } from "./gross-margin";
 
-export type ShortfallSiteRow = {
+type ShortfallSiteRow = {
   siteId: string;
   siteName: string;
   required: number;

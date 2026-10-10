@@ -65,7 +65,7 @@ function slotHours(slot: string): number | null {
 }
 
 /** 由 Postorder 推新盤嘅客戶名（客戶群 block）同別名（物業名稱）。別名唔可以撞其他盤嘅名／別名。 */
-export function derivePostorderSiteInfo(name: string, ev: PostorderEvidence | null, otherSites: readonly SiteNameCandidate[]): { clientName: string | null; aliases: string[] } {
+function derivePostorderSiteInfo(name: string, ev: PostorderEvidence | null, otherSites: readonly SiteNameCandidate[]): { clientName: string | null; aliases: string[] } {
   if (!ev) return { clientName: null, aliases: [] };
   const rows = rowsForSite(ev.priceRows, [name]);
   if (rows.length === 0) return { clientName: null, aliases: [] };
@@ -102,7 +102,7 @@ interface ShiftTypeGroup {
  * `forSiteId`：只計歸呢個盤嘅格（resolved_site_id = 盤，或者 resolved_site_id 空而上載本身掛呢個盤）——母盤上載、格歸子盤時用。
  * 冇傳（新盤建盤，上載未指定盤）＝全部格。
  */
-export async function deriveShiftTypeGroups(uploadId: string, forSiteId?: string): Promise<{ groups: ShiftTypeGroup[]; unparsedCodes: string[] }> {
+async function deriveShiftTypeGroups(uploadId: string, forSiteId?: string): Promise<{ groups: ShiftTypeGroup[]; unparsedCodes: string[] }> {
   const siteFilter = forSiteId ? { OR: [{ resolvedSiteId: forSiteId }, { resolvedSiteId: null, upload: { siteId: forSiteId } }] } : {};
   const rows = await prisma.rosterUploadRow.findMany({ where: { uploadId, codeKind: { in: ["shift", "ot"] }, ...siteFilter }, select: { rawCode: true, timeRaw: true, codeKind: true } });
   const groups = new Map<string, ShiftTypeGroup>();
@@ -162,7 +162,7 @@ async function classifyGroup(siteId: string, g: ShiftTypeGroup): Promise<{ actio
  * 冪等：同盤同 code＋開工時間已存在就 skip。每張更種 journal `shift_type_created`（可撤銷）＋audit。
  * 建完會 reparse 該上載，令格配到新更種。
  */
-export async function ensureShiftTypesFromUpload(
+async function ensureShiftTypesFromUpload(
   ctx: AutoCollector,
   siteId: string,
   uploadId: string,

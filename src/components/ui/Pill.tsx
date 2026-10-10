@@ -3,7 +3,7 @@
 // 嘅 `brokerColor()`），其餘 variant 用固定色。
 import type { ReactNode } from "react";
 
-export type PillVariant = "success" | "neutral" | "warning" | "shift" | "monthly" | "broker" | "danger";
+type PillVariant = "success" | "neutral" | "warning" | "shift" | "monthly" | "broker" | "danger";
 
 const VARIANT_STYLE: Record<Exclude<PillVariant, "broker">, { bg: string; fg: string }> = {
   success: { bg: "var(--zk-success-bg)", fg: "var(--zk-success-dark)" },

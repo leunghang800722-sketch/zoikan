@@ -79,7 +79,7 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
 // ---------------------------------------------------------------------------
 // WP-AI-OPS 驗收修正（Major-1）：「保安員個人資料」權限
 // ---------------------------------------------------------------------------
-export { NON_BOSS_MAX_PERSONS } from "./limits";
+;
 
 export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg: ImportPackage): void {
   if (session.baseRole !== "老闆" && pkg.persons.length > NON_BOSS_MAX_PERSONS) {
@@ -145,7 +145,7 @@ export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<stri
 // WP-STAFF-FIELDS：銀行欄權限。包內有任何銀行欄（person.bank 有值／unassignedBankAccounts 非空）→
 // preview／apply 要求上載者有「保安員銀行資料:update」，冇就 403（訊息講明；唔靜靜 strip）。
 // ---------------------------------------------------------------------------
-export const BANK_PACKAGE_DENIED_MSG = "導入包含銀行資料，要有「保安員銀行資料」修改權限嘅同事先可以上載（銀行資料冇寫入）";
+const BANK_PACKAGE_DENIED_MSG = "導入包含銀行資料，要有「保安員銀行資料」修改權限嘅同事先可以上載（銀行資料冇寫入）";
 export async function assertBankPermissionForPackage(session: AuthedSession, pkg: ImportPackage): Promise<void> {
   if (packageHasBank(pkg) && !(await hasPermission(session, "安員銀行資料", "update"))) throw Forbidden(BANK_PACKAGE_DENIED_MSG);
 }

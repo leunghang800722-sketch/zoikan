@@ -36,7 +36,7 @@ export const STEP_LABELS: Record<StepKey, string> = {
   report: "報告",
 };
 
-export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
+type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface StepRecord {
   key: StepKey;

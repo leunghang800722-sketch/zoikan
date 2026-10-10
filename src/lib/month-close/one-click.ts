@@ -200,7 +200,7 @@ class StepRunner {
  *     一張「上月仲生效、上月底先完」嘅卡）——唔沿用未來卡（會將下月價
  *     倒灌返本月）、唔沿用早幾個月已經收咗嘅舊卡（過期卡）。
  * LINK（guards_paid_by_client）盤喺 caller 已經略過。 */
-export async function findCarryoverCard(siteId: string, shiftTypeId: string, monthStartDate: Date) {
+async function findCarryoverCard(siteId: string, shiftTypeId: string, monthStartDate: Date) {
   const prevMonthEnd = new Date(monthStartDate.getTime() - 24 * 60 * 60 * 1000);
   return prisma.rateCard.findFirst({
     where: {
@@ -961,7 +961,7 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
 // ---------------------------------------------------------------------------
 // step7 對照（可選）——本月有 Postorder 上載先做，唔准估。
 // ---------------------------------------------------------------------------
-export async function stepPostorderCompare(month: Date, referralSystemTotal: number) {
+async function stepPostorderCompare(month: Date, referralSystemTotal: number) {
   const { start } = monthRange(month);
   const postorderUpload = await prisma.postorderUpload.findFirst({ where: { month: start, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
   if (!postorderUpload) {
@@ -1124,4 +1124,4 @@ async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserI
   }
 }
 
-export { STEP_KEYS, STEP_LABELS };
+;

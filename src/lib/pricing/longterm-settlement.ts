@@ -31,7 +31,7 @@ import { prisma } from "@/lib/db";
 
 type PrismaLike = PrismaClient | Prisma.TransactionClient;
 
-export type LongtermSettlementReason =
+type LongtermSettlementReason =
   | "visa_sponsor" // 簽證形式長工，永遠跟贊助雞頭
   | "longterm_post" // 喺生效崗位盤（manual/july_backfill）
   | "longterm_inferred_post" // 喺推算崗位盤（本次先發現，ratio>=50%）

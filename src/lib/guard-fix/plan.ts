@@ -43,7 +43,7 @@ export class NoActiveUploadsError extends Error {
 
 /** 目標 DB 唔同（plan 對住另一個 DB build）——`describeDbTarget()` 一致
  * 做法，script 同 API 都要停。 */
-export function describeDbTarget(): string {
+function describeDbTarget(): string {
   const raw = process.env.DATABASE_URL;
   if (!raw) return "（DATABASE_URL 未設）";
   try {
@@ -834,7 +834,7 @@ export function summarizePlan(plan: GuardFixPlan): {
   };
 }
 
-export function formatPlanSummaryMd(plan: GuardFixPlan): string {
+function formatPlanSummaryMd(plan: GuardFixPlan): string {
   const cellsBySiteFor = (actions: GuardFixAction[]): Map<string, number> => {
     const m = new Map<string, number>();
     for (const a of actions) {

@@ -20,7 +20,7 @@ import { pickWhitelist, brandSafeResponse, type Dto } from "./api/serialize";
 // 唔應該畀雞頭嘅白名單——剔走。雞頭照舊淨係見到 `siaPermitExpiry` 呢個
 // 到期日係空（同「未填」睇落一樣，冇獨立警示），呢個係刻意嘅取捨（私
 // 隱 > UI 精準度）。
-export const GUARD_BROKER_FIELDS = [
+const GUARD_BROKER_FIELDS = [
   "id",
   "staffNo",
   "staffNoMw",
@@ -42,7 +42,7 @@ export const GUARD_BROKER_FIELDS = [
 ] as const;
 
 // 雞頭（自己資料）：淨係基本資料，bankInfo 已經喺 blocklist 剝埋（defense-in-depth）。
-export const BROKER_SELF_FIELDS = [
+const BROKER_SELF_FIELDS = [
   "id",
   "code",
   "name",
@@ -56,7 +56,7 @@ export const BROKER_SELF_FIELDS = [
 
 // 價目（雞頭睇自己出街價）：guard_wage/broker_fee/payout_rate 得，
 // client_rate/note/evidence/source/confidence 一律唔畀（C2 硬性規則1）。
-export const RATE_CARD_BROKER_FIELDS = [
+const RATE_CARD_BROKER_FIELDS = [
   "id",
   "siteId",
   "shiftTypeId",
@@ -74,7 +74,7 @@ export const RATE_CARD_BROKER_FIELDS = [
 
 // 更次記錄（雞頭睇自己保安員嘅更）：guard_wage_snapshot/broker_fee_snapshot
 // 得，client_rate_snapshot/settlement_page/provenance/source 一律唔畀。
-export const SHIFT_RECORD_BROKER_FIELDS = [
+const SHIFT_RECORD_BROKER_FIELDS = [
   "id",
   "workDate",
   "siteId",
@@ -114,14 +114,14 @@ export const SHIFT_RECORD_BROKER_FIELDS = [
 // WP-MISC（老闆 2026-09-20 拍板）：`guardsPaidByClient` 加落嚟——雞頭自己
 //排 LINK 呢類盤嘅更都要見到「客戶直接出糧」呢個 Notice（RosterEditor
 // 用），呢個係業務安排 boolean，唔係金錢數字，冇敏感度顧慮。
-export const SITE_BROKER_FIELDS = ["id", "canonicalName", "aliases", "status", "hasRosterLayout", "guardsPaidByClient"] as const;
+const SITE_BROKER_FIELDS = ["id", "canonicalName", "aliases", "status", "hasRosterLayout", "guardsPaidByClient"] as const;
 
 // P1-WP3：更別（shift_types）——雞頭要睇到自己有份嗰啲盤嘅更別代號／
 // 時段先填得到自己配額（設計文件§4.1「雞頭：喺自己配額內填人」），但
 // 「盤」module 本身對雞頭係硬性 deny（盤管理，同雞頭角色無關）——呢個
 // GET 用 module resolver 改行「更表」（見 shift-types/route.ts），呢個
 // 白名單冇 createdBy/voidedBy（內部用戶 id，雞頭唔需要知邊個 admin 改嘅）。
-export const SHIFT_TYPE_BROKER_FIELDS = [
+const SHIFT_TYPE_BROKER_FIELDS = [
   "id",
   "siteId",
   "code",
@@ -136,7 +136,7 @@ export const SHIFT_TYPE_BROKER_FIELDS = [
 ] as const;
 
 // 所需人手（daily_requirements）：本身冇金錢/自由文字欄，全部欄都安全。
-export const DAILY_REQUIREMENT_BROKER_FIELDS = [
+const DAILY_REQUIREMENT_BROKER_FIELDS = [
   "id",
   "siteId",
   "shiftTypeId",
@@ -151,11 +151,11 @@ export const DAILY_REQUIREMENT_BROKER_FIELDS = [
 // （內部備註，可能有敏感文字）／lockedBy／createdBy（內部用戶 id）唔應該
 // 俾雞頭見到，佢淨係需要知「邊個月鎖咗」（月／幾時鎖，唔使知邊個做／
 // 點解）。
-export const MONTH_CLOSE_BROKER_FIELDS = ["id", "month", "lockedAt"] as const;
+const MONTH_CLOSE_BROKER_FIELDS = ["id", "month", "lockedAt"] as const;
 
 // P1-WP3：配額（雞頭 GET 只見自己——query-scope 喺 broker-isolation.ts
 // scopeQuotaWhere() 做；呢個 DTO 本身冇金錢欄，白名單純粹一致性處理）。
-export const QUOTA_BROKER_FIELDS = ["id", "month", "siteId", "shiftTypeId", "brokerId", "targetShifts", "createdAt"] as const;
+const QUOTA_BROKER_FIELDS = ["id", "month", "siteId", "shiftTypeId", "brokerId", "targetShifts", "createdAt"] as const;
 
 // P1-WP3（E）：介紹費率（雞頭 GET 只見自己——query-scope 喺
 // broker-isolation.ts scopeReferralFeeRateWhere() 做）。呢個 feePerShift
@@ -163,14 +163,14 @@ export const QUOTA_BROKER_FIELDS = ["id", "month", "siteId", "shiftTypeId", "bro
 // 一致做法——雞頭見自己嘅費率一向准，唔經「出街價」field-group gate
 // （嗰個 gate 係管緊內部角色見唔見到*其他*雞頭嘅成本數，唔係管雞頭見
 // 自己）。
-export const REFERRAL_FEE_RATE_BROKER_FIELDS = ["id", "brokerId", "siteId", "month", "feePerShift", "voidedAt", "createdAt"] as const;
+const REFERRAL_FEE_RATE_BROKER_FIELDS = ["id", "brokerId", "siteId", "month", "feePerShift", "voidedAt", "createdAt"] as const;
 
 // S6（Opus 驗收）：雞頭讀 `GET /api/guards/:id/staff-numbers`（「自己安
 // 員」module，出廠有 view）淨係要見到工號本身——`note`（可能有內部備
 // 註文字）／`source`（例如 "manual:legacy-patch(...)"）／`created_by`
 // （內部用戶 id）一律唔畀，同 GUARD_STAFF_NUMBER_FIELDS（內部角色版，
 // src/lib/api/dto/index.ts）拆開一份獨立白名單。
-export const GUARD_STAFF_NUMBER_BROKER_FIELDS = ["id", "scheme", "number", "status", "validFrom", "validTo"] as const;
+const GUARD_STAFF_NUMBER_BROKER_FIELDS = ["id", "scheme", "number", "status", "validFrom", "validTo"] as const;
 
 // WP-MULTI（老闆 2026-09-19 拍板）：雞頭讀 `GET /api/guards/:id/phones`
 // （「自己保安員」module，出廠有 view；POST/PATCH/DELETE 硬擋——「雞頭
@@ -181,7 +181,7 @@ export const GUARD_STAFF_NUMBER_BROKER_FIELDS = ["id", "scheme", "number", "stat
 // 緊急聯絡人／地址跟「保安員個人資料」module——雞頭對呢個 module 出廠
 // `uniformRow(D)`（見 src/lib/rbac/matrix.ts），route 層 `requirePermission()`
 // 直接 403，冧本冧用唔到呢個白名單，唔需要獨立 broker DTO。
-export const GUARD_PHONE_BROKER_FIELDS = ["id", "tel", "label", "isPrimary"] as const;
+const GUARD_PHONE_BROKER_FIELDS = ["id", "tel", "label", "isPrimary"] as const;
 
 function mapRow<T extends Record<string, unknown>>(row: T, fields: readonly string[]): Dto {
   return pickWhitelist(row, fields);

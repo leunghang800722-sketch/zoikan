@@ -60,6 +60,6 @@ export const toGuardLeaveBalanceWithGuardDTO = <T extends Record<string, unknown
 export const toLongtermRunDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, RUN_FIELDS);
 export const toLongtermLineWithGuardDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LINE_WITH_GUARD_FIELDS);
 
-export function mapListDTO<T extends Record<string, unknown>>(rows: T[], mapper: (row: T) => Dto): Dto<{ rows: Dto[] }> {
+function mapListDTO<T extends Record<string, unknown>>(rows: T[], mapper: (row: T) => Dto): Dto<{ rows: Dto[] }> {
   return brandSafeResponse({ rows: rows.map(mapper) });
 }
