@@ -161,17 +161,6 @@ export interface SetVisaAction {
   reason: string;
 }
 
-export type GuardFixAction =
-  | LinkAction
-  | CreateAction
-  | CreateMinimalAction
-  | NeedsBossAction
-  | SetLongtermAction
-  | SetLongtermPostAction
-  | SetReferralAction
-  | SetReferralInferredAction
-  | SetVisaAction;
-
 export interface GuardFixPlan {
   generatedAt: string;
   /** 目標 DB（host:port/db，唔帶帳號密碼）——同 apply-aug-plan.ts

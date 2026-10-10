@@ -46,10 +46,6 @@ function toJpegDataUrl(c: HTMLCanvasElement): string {
   return c.toDataURL("image/jpeg", 0.3);
 }
 
-function canvasSize(c: { width: number; height: number }): { w: number; h: number } {
-  return { w: c.width, h: c.height };
-}
-
 /** 分格座標（2×2 重疊）：回傳 TL,TR,BL,BR 嘅 [x,y,w,h]。純函數，方便測試。 */
 export function tileRects(width: number, height: number, fraction = TILE_FRACTION): [number, number, number, number][] {
   const tw = Math.round(width * fraction);

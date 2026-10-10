@@ -77,9 +77,6 @@ const actionCardSchema = z.discriminatedUnion("type", [
 export type ActionCard = z.infer<typeof actionCardSchema>;
 export type ActionCardType = ActionCard["type"];
 
-/** 要寫入嘅 type（open_page 唯一唔寫入）。 */
-const WRITE_ACTION_TYPES: readonly ActionCardType[] = ["triage_answer", "site_set_default_broker", "roster_reparse", "one_click_run", "backfill_from_postorder"];
-
 /** 呢兩種要 server 查月份鎖（其餘寫入 type 靠現有 API 本身嘅鎖月檢查）。 */
 export const MONTH_LOCK_FILTERED_TYPES: readonly ActionCardType[] = ["one_click_run", "backfill_from_postorder"];
 

@@ -3,7 +3,7 @@
 // /api/guard-fix/runs(+/:id)。短 TTL 記憶體快取，同一頁／同一個分診 dialog 多條題唔會重複打。
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiGetAll, type ApiListResult } from "@/lib/ui/api-client";
-import { findSimilar, guardSearchTerm, hasPerson, personKey, type GuardLite, type NeedsBossItem, type Person, type SimilarGuard } from "./derive";
+import { findSimilar, hasPerson, personKey, type GuardLite, type NeedsBossItem, type Person, type SimilarGuard } from "./derive";
 
 const TTL_MS = 30_000;
 const cache = new Map<string, { at: number; p: Promise<unknown> }>();
@@ -17,11 +17,6 @@ function cached<T>(key: string, load: () => Promise<T | null>): Promise<T | null
   });
   cache.set(key, { at: Date.now(), p });
   return p;
-}
-
-/** 測試／重新載入用。 */
-function clearReconcileDataCache(): void {
-  cache.clear();
 }
 
 export function loadGuardDirectory(): Promise<{ rows: GuardLite[]; total: number } | null> {

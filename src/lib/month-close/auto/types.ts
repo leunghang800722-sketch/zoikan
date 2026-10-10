@@ -12,24 +12,13 @@ export type AutoChangeKind =
   | "guard_alias_added"
   | "guard_staffno_added";
 
-export const MC_KINDS = [
-  "month_close_site_alias",
-  "month_close_site_new",
-  "month_close_pricing",
-  "month_close_settlement",
-  "month_close_guard_match",
-  "month_close_shift_variance",
-] as const;
-export type McKind = (typeof MC_KINDS)[number];
-
-const MC_KIND_LABEL: Record<McKind, string> = {
-  month_close_site_alias: "更表盤名似現有盤",
-  month_close_site_new: "新盤冇價可推",
-  month_close_pricing: "未定價（有候選／冇依據）",
-  month_close_settlement: "冇結算雞頭",
-  month_close_guard_match: "保安員配對要核實",
-  month_close_shift_variance: "更數差異解釋唔到",
-};
+type McKind =
+  | "month_close_site_alias"
+  | "month_close_site_new"
+  | "month_close_pricing"
+  | "month_close_settlement"
+  | "month_close_guard_match"
+  | "month_close_shift_variance";
 
 export interface PricingGroupRef {
   siteId: string;

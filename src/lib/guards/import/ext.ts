@@ -78,13 +78,6 @@ export function heldAll(gate: ExtGate, key: string): ExtHeld[] {
   if (key === "hireDate" && gate.longtermHire) out.push("longterm");
   return out;
 }
-/** 呢個 key 喺閘之下係咪要 hold（冇人手決定先）。 */
-function heldBy(gate: ExtGate, key: string): ExtHeld | null {
-  if (!gate.scalars) return "identity";
-  if (key === "bank") return gate.bank ? null : "bank";
-  if (key === "hireDate" && gate.longtermHire) return "longterm";
-  return null;
-}
 
 export const PII_OVERWRITE_DENIED_MSG = "呢條要有保安員個人資料修改權限嘅同事（例如老闆）答";
 export const BANK_OVERWRITE_DENIED_MSG = "呢條要有保安員銀行資料修改權限嘅同事答";
@@ -138,14 +131,6 @@ export function extLabel(key: string): string {
   if (key.startsWith("staffHire.")) return `${EXT_LABEL.staffHire}（${key.slice("staffHire.".length)}）`;
   return EXT_LABEL[key] ?? "其他資料";
 }
-const EXT_CHECK_LABEL: Record<string, string> = {
-  new: "新增",
-  fill: "補空欄",
-  same: "同現值一樣",
-  differs: "同現值唔同",
-  not_stored: "系統未儲存",
-  hidden: "（冇權限睇比較）",
-};
 export const EXT_OUTCOME_LABEL: Record<string, string> = {
   written: "會寫入",
   same: "同現值一樣，唔郁",
