@@ -609,3 +609,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 8. `pricing.spec` 重新計價取消 case 補斷言：冇 `dry_run:false` 請求。
 9. audit-log 欄位名加 `title` 顯示原 key（區分 `effectiveFrom`／`validFrom`、`id`／`number` 同名）。
 10. 清走 codemod 留低嘅純空白行（44＋1 行）。**數字改正**：真實 `window.confirm` 呼叫 9＋`window.alert` 5＝14 處（§8.4 表原寫 13／5）；hex 程式內非註解行：本機 grep 量得 27（Opus 驗收量得 25，計法略有出入，兩者都 <40）。
+
+#### 8.4.2 驗收、部署、正式站核對（2026-10-11 清晨）
+- Opus 5.5 第一輪**唔通過**（2 必修：`ReportSection` 兩張表 `xl:`→`lg:` 令 1024–1279px 雞頭名逐字斷行；手機 KPI 卡成本卡夾中間＋`break-all` 令金額斷行）；執行員修 2 必修＋10 項（Drawer 散落欄入基本 tab、隱藏 tab invalid 自動跳、rate-cards 讀 `?month=`、`loadMonthClose` race、手機 sticky bar 停用原因＋「去填原因 ›」、手機登出提示、pricing.spec 補 `dry_run:false` 斷言、audit-log `title` 原 key、清 44 行空白、數字改正）；第二輪通過（0 必修）。驗收員自跑：vitest 3,446 過；tsc 0；lint 0 warning；build 過；**Playwright 全部 215／5／0**；codemod 重放 `a18ce3b` 得出同一 commit（可重現）；1024／1100／1280／1512 名欄 242／318／113／219px；375px 營業額＋毛利同行、金額單行、`scrollWidth` 375。(ii)：多個隱藏 tab 同時 invalid 跳去最後一個；「去填原因」無 e2e；手機 sticky bar 81px；`ReviewCard` 四欄 1024–1279 擠（舊有）；對比度兩組 4.38／4.41（未同時使用）——交階段 5。
+- merge main `59ed20c`；部署 `6acaa71dc0a5252069b835d9` RUNNING 21:05Z：56 migrations／No pending、助手 claude、OCR 自檢 ok、login 200。
+- **正式站核對（老闆 Chrome 唯讀）**：`/month-close?month=2026-08`（舊流程鎖、無 run）：StageBar「⑤ 已鎖定」、`locked-info`＋`unlock-box`（含解鎖原因欄）齊，「已鎖定」字樣 5 處，無 inline hex 色；`/reports/monthly-close?month=2026-08`：「已鎖定 · 去一鍵結算解鎖 ›」連結、0 個鎖／解鎖掣、「更多 ▾」；保安員 Drawer：tab「基本／證件／聯絡／長工」＋散落欄喺基本 tab（「銀行」tab 未出現——視乎老闆帳號該權限格，待核）；糧明細「重新計價」撳落（只到預覽，未確認）；月結頁 StageBar 一行、底部 sticky CTA 81px、金額單行（規劃者 Chrome 無法真正縮到 375px，手機尺寸靠 Opus Chromium 量度）。
