@@ -147,7 +147,7 @@ async function shiftTypesForSite(env: PricingEnv, siteId: string): Promise<Shift
 
 /** 照 §31.3 C 次序 1–5 搵價。回傳 auto（可直接建卡）、propose 候選、或者 none。 */
 export async function findPriceSource(
-  ctx: AutoCollector,
+  _ctx: AutoCollector,
   env: PricingEnv,
   group: PricingGroupRef,
   need: PriceNeed,
@@ -667,7 +667,7 @@ export async function runAutoPricing(ctx: AutoCollector, month: Date): Promise<A
   const env = await buildEnv(ctx, month, aggs);
   const brokerLabel = (id: string | null) => env.brokers.find((b) => b.id === id)?.code ?? "（未定）";
   const stCache = new Map<string, string>();
-  const stLabel = async (siteId: string, stId: string): Promise<string> => {
+  const stLabel = async (_siteId: string, stId: string): Promise<string> => {
     if (!stCache.size) for (const siteIdEach of new Set(aggs.map((a) => a.ref.siteId))) for (const s of await shiftTypesForSite(env, siteIdEach)) stCache.set(s.id, s.code);
     return stCache.get(stId) ?? stId.slice(0, 8);
   };
