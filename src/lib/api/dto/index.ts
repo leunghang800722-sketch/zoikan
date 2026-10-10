@@ -22,7 +22,7 @@ const BROKER_FIELDS = ["id", "code", "name", "kind", "settlementType", "bankInfo
 // Site model 大註解。
 // WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求）：`rosterFileKeys`——更表檔名鍵，
 // 見 prisma/schema.prisma Site model 註解／src/lib/roster-upload/match.ts。
-const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "guardsPaidByClient", "rosterFileKeys", "status", "createdAt", "updatedAt", "createdBy"] as const;
+const SITE_FIELDS = ["id", "canonicalName", "aliases", "clientName", "clientGroup", "parentSiteId", "billingModel", "monthlyFee", "monthlyPosts", "prorataBasis", "inScope", "outsideMonthlyClose", "guardsPaidByClient", "rosterFileKeys", "defaultSettlementBrokerId", "status", "createdAt", "updatedAt", "createdBy"] as const;
 const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTime", "hours", "headcountRequired", "billingGroup", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 // S4（Opus 驗收修復）：`monthShiftCount` 係 P2-A 加嘅衍生欄（唔係
 // Prisma model 本身有嘅欄，`GET /api/guards?with_month_shifts=YYYY-MM`

@@ -5,6 +5,7 @@
 //   (2) Postorder 同崗位同日嘅雞頭（Roster 分頁逐日「雞頭名」，值唯一先用）；
 //   (3) 長工崗位／合約（B07）——安員係長工類（或 external 類、而且只得一個 external 雞頭）；
 //   (4) 安員預設雞頭；
+//   (4b) 盤預設雞頭（WP-POSTORDER-FREE §34 B：sites.default_settlement_broker_id，reason「盤預設雞頭」）；
 //   (5) 該安員（只准同一個 guard_id，唔靠姓名）近 3 個月喺同盤嘅結算雞頭，多數決而且唯一；
 //   (6) 全部冇 → 分診題 `month_close_settlement`，預填最可能候選（同盤本月最常見嘅雞頭，唯一先預填）。
 // 客戶自己人（external）：解析時 rank／姓名命中 external 別名已歸 external（service.ts），永遠分開計。
@@ -18,6 +19,16 @@ import { normalizeSiteKey } from "./site-match";
 import type { McCandidate } from "./types";
 
 export const SETTLEMENT_QUESTION_MAX = 40;
+
+/** settlement_set journal 嘅 reason 文字（報告 postorderDependency 按佢分類，兩邊用同一組常數）。 */
+export const SETTLEMENT_REASON = {
+  postorder: "Postorder 同崗位同日嘅雞頭",
+  longterm: "長工（結算單位 B07）",
+  external: "客戶自己人（external）",
+  guardDefault: "安員預設雞頭",
+  siteDefault: "盤預設雞頭",
+  history: "近 3 個月同盤嘅結算雞頭（多數決）",
+} as const;
 
 interface NullRec {
   id: string;
@@ -76,7 +87,7 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
   const longtermBrokerId = await findInternalLongtermBrokerId(prisma);
   const externalBrokers = brokers.filter((b) => b.kind === "external");
   const ev = await ctx.postorder();
-  const sites = await prisma.site.findMany({ where: { id: { in: [...new Set(recs.map((r) => r.siteId))] } }, select: { id: true, canonicalName: true, aliases: true } });
+  const sites = await prisma.site.findMany({ where: { id: { in: [...new Set(recs.map((r) => r.siteId))] } }, select: { id: true, canonicalName: true, aliases: true, defaultSettlementBrokerId: true } });
   const siteById = new Map(sites.map((s) => [s.id, s]));
   const shiftTypes = await prisma.shiftType.findMany({ where: { id: { in: [...new Set(recs.map((r) => r.shiftTypeId))] } }, select: { id: true, startTime: true, endTime: true } });
   const slotByStId = new Map(shiftTypes.map((s) => [s.id, shiftTypeTimeSlot(s.startTime, s.endTime)]));
@@ -125,6 +136,8 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
     assign.set(k, e);
   };
   const brokerIdSet = new Set(brokers.map((b) => b.id));
+  // (4b) 盤預設雞頭只用生效（active）雞頭，停用咗唔用。
+  const activeBrokerIds = new Set((await prisma.broker.findMany({ where: { status: "active" }, select: { id: true } })).map((b) => b.id));
 
   for (const r of recs) {
     const guard = guardById.get(r.guardId);
@@ -141,19 +154,24 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
         if (set) for (const l of set) if (!l.includes("長工")) labels.add(l);
       }
       const matched = [...labels].map((l) => matchBrokerLabel(l, brokers));
-      if (labels.size >= 1 && matched.every((m) => m) && new Set(matched.map((m) => m!.id)).size === 1) found = { id: matched[0]!.id, reason: "Postorder 同崗位同日嘅雞頭" };
+      if (labels.size >= 1 && matched.every((m) => m) && new Set(matched.map((m) => m!.id)).size === 1) found = { id: matched[0]!.id, reason: SETTLEMENT_REASON.postorder };
     }
     // (3) 長工／external
     if (!found && guard) {
-      if (guard.employmentType.startsWith("longterm_") && longtermBrokerId) found = { id: longtermBrokerId, reason: "長工（結算單位 B07）" };
-      else if (guard.employmentType === "external" && externalBrokers.length === 1) found = { id: externalBrokers[0]!.id, reason: "客戶自己人（external）" };
+      if (guard.employmentType.startsWith("longterm_") && longtermBrokerId) found = { id: longtermBrokerId, reason: SETTLEMENT_REASON.longterm };
+      else if (guard.employmentType === "external" && externalBrokers.length === 1) found = { id: externalBrokers[0]!.id, reason: SETTLEMENT_REASON.external };
     }
     // (4) 安員預設雞頭
-    if (!found && guard?.defaultBrokerId && brokerIdSet.has(guard.defaultBrokerId)) found = { id: guard.defaultBrokerId, reason: "安員預設雞頭" };
+    if (!found && guard?.defaultBrokerId && brokerIdSet.has(guard.defaultBrokerId)) found = { id: guard.defaultBrokerId, reason: SETTLEMENT_REASON.guardDefault };
+    // (4b) 盤預設雞頭（§34 B）：安員預設雞頭之後、近 3 個月歷史之前
+    if (!found) {
+      const sd = siteById.get(r.siteId)?.defaultSettlementBrokerId ?? null;
+      if (sd && brokerIdSet.has(sd) && activeBrokerIds.has(sd)) found = { id: sd, reason: SETTLEMENT_REASON.siteDefault };
+    }
     // (5) 近 3 個月同盤多數決
     if (!found) {
       const h = await historyBroker(r.guardId, r.siteId);
-      if (h) found = { id: h, reason: "近 3 個月同盤嘅結算雞頭（多數決）" };
+      if (h) found = { id: h, reason: SETTLEMENT_REASON.history };
     }
     if (found) add(found.id, found.reason, r.id);
     else {

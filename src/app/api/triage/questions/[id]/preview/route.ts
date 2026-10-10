@@ -18,7 +18,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const q = await getQuestionFor(actor, id);
     const body = (await readJson(req)) as Record<string, unknown>;
     if (!previewBodySchema.safeParse(body).success) throw BadRequest("答案格式唔啱");
-    if (q.session.sourceType === "month_close") {
+    if (q.session.sourceType === "month_close" || q.session.sourceType === "postorder_backfill") {
       const mc = await previewMcAnswer(actor, q, body.answer);
       return ok(brandSafeResponse({ preview_hash: mc.preview_hash, writes: mc.writes, impact: { ...mc.impact } }));
     }

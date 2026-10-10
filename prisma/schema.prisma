@@ -193,6 +193,7 @@ model Broker {
   createdBy String?  @map("created_by")
 
   defaultForGuards        Guard[]                @relation("GuardDefaultBroker")
+  defaultForSites         Site[]                 @relation("SiteDefaultSettlementBroker")
   rateCards               RateCard[]
   referralFeeRates        ReferralFeeRate[]
   settlementShiftRecords  ShiftRecord[]          @relation("ShiftRecordSettlementBroker")
@@ -730,6 +731,10 @@ model Site {
   activityProxySiteId String?       @map("activity_proxy_site_id")
   activityProxySite   Site?         @relation("SiteActivityProxy", fields: [activityProxySiteId], references: [id])
   activityProxyFor    Site[]        @relation("SiteActivityProxy")
+  // WP-POSTORDER-FREE（§34）：盤預設結算雞頭——一鍵結算 settlement 推斷次序 (4b)，
+  // 喺安員預設雞頭之後、近 3 個月歷史之前。nullable＝冇設（行為不變）。
+  defaultSettlementBrokerId String?  @map("default_settlement_broker_id")
+  defaultSettlementBroker   Broker?  @relation("SiteDefaultSettlementBroker", fields: [defaultSettlementBrokerId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

@@ -2,7 +2,7 @@
 // WP-ONE-CLICK-AUTO §31.3 E＋WP-MC-UI 1a：「系統自動幫你做咗 N 項」——5 格 tab（新盤更種／自動建價卡／
 // 自動定價／歸屬結算雞頭／解釋更數差異；其他類有數先出）＋明細表（頭 6 行＋睇晒）；0 類併一行灰字。
 // 降級（§32.1）：逐類／逐行撤銷無 API，淨係保留「還原所有自動改動」。冇 PII：盤名、雞頭代號、更種代號、數目。
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
@@ -11,7 +11,7 @@ import { UNDO_NOTE, humanize, deriveAutoCategories, type AutoCatKey } from "@/co
 export type { AutoReportDTO };
 const HEAD_ROWS = 6;
 
-export function AutoSummaryCard({ auto, busy, locked, onUndo }: { auto: AutoReportDTO; busy: boolean; locked: boolean; onUndo: () => void }) {
+export function AutoSummaryCard({ auto, busy, locked, onUndo, extraFooter }: { auto: AutoReportDTO; busy: boolean; locked: boolean; onUndo: () => void; extraFooter?: ReactNode }) {
   const s = auto.summary;
   const { cats, zero, total } = deriveAutoCategories(auto);
   const [sel, setSel] = useState<AutoCatKey | null>(null);
@@ -123,6 +123,7 @@ export function AutoSummaryCard({ auto, busy, locked, onUndo }: { auto: AutoRepo
           <div className="px-4 py-3 text-[12.5px] text-zk-muted">呢次一鍵結算冇需要自動處理嘅項目。</div>
         )}
 
+        {extraFooter}
         <div className="border-t border-zk-border-soft bg-zk-header px-4 py-2.5 text-[11.5px] text-zk-faint" data-testid="auto-counts">
           {zero.length > 0 && <>冇需要處理：{zero.join(" · ")}　·　</>}
           本月更次記錄：計數更次 {s.counts.countable}（其中公司兵 {s.counts.internal_cash}）；客戶自己人{s.counts.external} 更另計，唔入收入／成本。
