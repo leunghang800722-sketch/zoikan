@@ -30,7 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     }
     const caps = await viewerCaps(actor);
     // WP-ONE-CLICK-AUTO：month_close 分診題（一鍵結算自我修復）用自己嘅 DTO，唔經安員導入證據遮罩。
-    const questions = session.sourceType === "month_close" ? await mcQuestionViews(rows, { pii: caps.pii }) : await questionViews(rows, caps);
+    const questions = session.sourceType === "month_close" || session.sourceType === "postorder_backfill" ? await mcQuestionViews(rows, { pii: caps.pii }) : await questionViews(rows, caps);
     return ok(
       brandSafeResponse({
         session: { id: session.id, source_type: session.sourceType, owner_user_id: session.ownerUserId, status: session.status, created_at: session.createdAt, completed_at: session.completedAt, counts: c },
