@@ -7,7 +7,7 @@ import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixture
 import { ClaudeVisionClient, anthropicClientOptions, ocrJsonSchema, splitDataUrl } from "@/lib/guards/ocr/claude-vision-client";
 import { OcrUnavailableError, setVisionClientForTests, type VisionClient, type VisionRequest } from "@/lib/guards/ocr/vision-client";
 import { readDocument } from "@/lib/guards/ocr/read";
-import { effectiveOcrProvider, isGuardOcrConfigured, ocrClaudeModel } from "@/lib/guards/ocr/config";
+import { OCR_CLAUDE_MAX_OUTPUT_TOKENS, OCR_MAX_OUTPUT_TOKENS, effectiveOcrProvider, isGuardOcrConfigured, ocrClaudeModel } from "@/lib/guards/ocr/config";
 import { getReadClients, type ReadClients } from "@/lib/guards/ocr/clients";
 import { POST as ocrRoute } from "@/app/api/guards/ocr/read/route";
 
@@ -40,7 +40,9 @@ describe("ClaudeVisionClient：請求形狀＋回應處理", () => {
     expect(r).toEqual({ text: JSON.stringify(STD), promptTokens: 2100, completionTokens: 90, truncated: false });
     const req = create.mock.calls[0]![0];
     expect(req.model).toBe("claude-opus-5-5");
-    expect(req.max_tokens).toBe(1500);
+    expect(req.max_tokens).toBe(8000);
+    expect(OCR_CLAUDE_MAX_OUTPUT_TOKENS).toBe(8000);
+    expect(OCR_MAX_OUTPUT_TOKENS).toBe(1500);
     expect(req.system).toBe("SYS");
     expect(req.output_config.effort).toBe("low");
     expect(req.output_config.format).toEqual({ type: "json_schema", schema: ocrJsonSchema(["hkid", "dob"]) });
@@ -106,7 +108,16 @@ describe("ClaudeVisionClient：請求形狀＋回應處理", () => {
     expect(() => splitDataUrl("data:image/png;base64,AAAA")).toThrow(OcrUnavailableError);
   });
   it("SDK client 設定：log 關、唔重試、60 秒 timeout；冇 key 又冇注入 → OcrUnavailableError", () => {
-    expect(anthropicClientOptions("k", 60_000)).toEqual({ apiKey: "k", timeout: 60_000, maxRetries: 0, logLevel: "off" });
+    expect(anthropicClientOptions("k", 60_000)).toEqual({ apiKey: "k", baseURL: "https://api.anthropic.com", authToken: null, timeout: 60_000, maxRetries: 0, logLevel: "off" });
+    // 真 SDK 構造：環境變數 ANTHROPIC_BASE_URL／ANTHROPIC_AUTH_TOKEN 唔會生效
+    const pb = process.env.ANTHROPIC_BASE_URL, pt = process.env.ANTHROPIC_AUTH_TOKEN;
+    process.env.ANTHROPIC_BASE_URL = "https://evil.example";
+    process.env.ANTHROPIC_AUTH_TOKEN = "tok-not-real";
+    const sdk = new Anthropic(anthropicClientOptions("k", 60_000));
+    expect(sdk.baseURL).toBe("https://api.anthropic.com");
+    expect(sdk.authToken).toBeNull();
+    if (pb === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = pb;
+    if (pt === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN; else process.env.ANTHROPIC_AUTH_TOKEN = pt;
     const prev = process.env.CLAUDE_API_KEY;
     delete process.env.CLAUDE_API_KEY;
     expect(() => new ClaudeVisionClient()).toThrow(OcrUnavailableError);
@@ -143,6 +154,25 @@ describe("readDocument：Claude 失敗退回 DeepSeek", () => {
       expect(r.usage_by_provider.deepseek.calls).toBe(2);
     });
   }
+  it("Claude end_turn 但 JSON 解析失敗＋有後備 → DeepSeek 重讀（fallback_reason=parse）；冇後備就照舊 unclear", async () => {
+    const claude = mkClaude(vi.fn().mockResolvedValue(claudeMsg({ content: [{ type: "text", text: "not json" }] })));
+    const dsA = fake("deepseek");
+    const r = await readDocument({ a: claude, b: fake("deepseek").client, fallbackA: dsA.client }, "id_card", IMGS);
+    expect(r.fallback_reason).toBe("parse");
+    expect(r.provider_used.a).toBe("deepseek");
+    expect(dsA.calls).toHaveLength(1);
+    expect(r.fields.hkid).toMatchObject({ status: "confirmed" });
+    const r2 = await readDocument({ a: claude, b: fake("deepseek").client }, "id_card", IMGS);
+    expect(r2.fallback_reason).toBeNull();
+    expect(r2.parse_ok.a).toBe(false);
+  });
+  it("錯誤帶 SDK error.type（只類型）", async () => {
+    const e = new Anthropic.APIError(400, { type: "error", error: { type: "invalid_request_error", message: "SECRET-BODY" } }, "SECRET-BODY", new Headers());
+    const err = await mkClaude(vi.fn().mockRejectedValue(e)).complete({ system: "s", userText: "u", images: [IMG] }).catch((x) => x);
+    expect(err).toBeInstanceOf(OcrUnavailableError);
+    expect(err.errorType === null || err.errorType === "invalid_request_error").toBe(true);
+    expect(JSON.stringify(err.message)).not.toContain("SECRET");
+  });
   it("Claude 同 DeepSeek 讀到唔一致 → review（兩個候選都回）", async () => {
     const r = await readDocument({ a: fake("claude").client, b: fake("deepseek", { json: { ...STD, hkid: "A123456(8)" } }).client }, "id_card", IMGS);
     expect(r.fields.hkid).toMatchObject({ status: "review", candidates: ["A123456(3)", "A123456(8)"] });

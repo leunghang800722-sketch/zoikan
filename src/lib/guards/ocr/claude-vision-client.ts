@@ -4,14 +4,15 @@
 // - 回應先 check stop_reason：refusal／max_tokens 都當失敗（OcrUnavailableError），由 read.ts 退回 DeepSeek。
 // - 錯誤用 SDK 型別映射，全部變 OcrUnavailableError（訊息唔帶請求內容）。SDK log 關（唔印 request body）。
 import Anthropic from "@anthropic-ai/sdk";
-import { OCR_CALL_TIMEOUT_MS, OCR_MAX_OUTPUT_TOKENS, ocrClaudeModel, type OcrFieldKey } from "./config";
+import { OCR_CALL_TIMEOUT_MS, OCR_CLAUDE_MAX_OUTPUT_TOKENS, ocrClaudeModel, type OcrFieldKey } from "./config";
 import { OcrUnavailableError, type VisionClient, type VisionRequest, type VisionResponse } from "./vision-client";
 
 type MessagesApi = { messages: Pick<Anthropic["messages"], "create"> };
 
 /** Anthropic client 設定：log 關、唔重試（重試/退回由 read.ts 決定）。 */
 export function anthropicClientOptions(apiKey: string, timeoutMs: number) {
-  return { apiKey, timeout: timeoutMs, maxRetries: 0, logLevel: "off" as const };
+  // baseURL／authToken 明確指定：防 ANTHROPIC_BASE_URL／ANTHROPIC_AUTH_TOKEN 環境變數令證件圖打去錯地方
+  return { apiKey, baseURL: "https://api.anthropic.com", authToken: null, timeout: timeoutMs, maxRetries: 0, logLevel: "off" as const };
 }
 
 /** 每個欄位：字串（含 "unclear"）或 null；全部 required、唔准多餘 key。 */
@@ -31,6 +32,12 @@ export function splitDataUrl(url: string): { mediaType: "image/jpeg"; data: stri
   const m = /^data:(image\/jpeg);base64,([A-Za-z0-9+/]+={0,2})$/.exec(url);
   if (!m) throw new OcrUnavailableError(null, "bad_image");
   return { mediaType: "image/jpeg", data: m[2]! };
+}
+
+/** SDK 錯誤嘅 error.type（例如 invalid_request_error）——只係類型字串，唔帶 message。 */
+export function sdkErrorType(e: unknown): string | null {
+  const t = e instanceof Anthropic.APIError ? (e as { type?: unknown }).type : null;
+  return typeof t === "string" && /^[a-z_]{1,64}$/.test(t) ? t : null;
 }
 
 export class ClaudeVisionClient implements VisionClient {
@@ -55,7 +62,7 @@ export class ClaudeVisionClient implements VisionClient {
     try {
       res = await this.api.messages.create({
         model: this.model,
-        max_tokens: OCR_MAX_OUTPUT_TOKENS,
+        max_tokens: OCR_CLAUDE_MAX_OUTPUT_TOKENS,
         output_config: { effort: "low", format: { type: "json_schema", schema: ocrJsonSchema(req.fields ?? DEFAULT_FIELDS) } },
         system: req.system,
         messages: [
@@ -70,9 +77,9 @@ export class ClaudeVisionClient implements VisionClient {
       });
     } catch (e) {
       if (e instanceof Anthropic.APIConnectionError) throw new OcrUnavailableError(null, "connection");
-      if (e instanceof Anthropic.AuthenticationError) throw new OcrUnavailableError(e.status ?? 401, "auth");
-      if (e instanceof Anthropic.RateLimitError) throw new OcrUnavailableError(e.status ?? 429, "rate_limit");
-      if (e instanceof Anthropic.APIError) throw new OcrUnavailableError(typeof e.status === "number" ? e.status : null, "api_error");
+      if (e instanceof Anthropic.AuthenticationError) throw new OcrUnavailableError(e.status ?? 401, "auth", sdkErrorType(e));
+      if (e instanceof Anthropic.RateLimitError) throw new OcrUnavailableError(e.status ?? 429, "rate_limit", sdkErrorType(e));
+      if (e instanceof Anthropic.APIError) throw new OcrUnavailableError(typeof e.status === "number" ? e.status : null, "api_error", sdkErrorType(e));
       throw e; // 其餘（bug）原樣拋，唔吞
     }
     if (res.stop_reason === "refusal") throw new OcrUnavailableError(null, "refusal");

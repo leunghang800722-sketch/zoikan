@@ -32,11 +32,14 @@ export class OcrUnavailableError extends Error {
   readonly status: number | null;
   /** 失敗類別（只係固定字串，唔帶內容）：refusal／max_tokens／api_error… */
   readonly reason: string | null;
-  constructor(status: number | null, reason: string | null = null) {
+  /** SDK error.type（只係類型字串） */
+  readonly errorType: string | null;
+  constructor(status: number | null, reason: string | null = null, errorType: string | null = null) {
     super("ocr_provider_unavailable");
     this.name = "OcrUnavailableError";
     this.status = status;
     this.reason = reason;
+    this.errorType = errorType;
   }
 }
 
