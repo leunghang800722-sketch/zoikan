@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { buildGrossMargin } from "@/lib/reports/gross-margin";
+import { withReportContext } from "@/lib/reports/context";
 import type { AiToolContext } from "./common";
 import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 
@@ -31,7 +32,7 @@ export function createGrossMarginTool(ctx: AiToolContext) {
       if (denied) return deniedResult(denied);
 
       const monthDate = new Date(`${month}-01T00:00:00.000Z`);
-      const result = await buildGrossMargin(monthDate);
+      const result = await withReportContext(() => buildGrossMargin(monthDate));
       const { clientRateVisible, settlementVisible } = ctx.fieldVisibility;
 
       let sites = result.sites;

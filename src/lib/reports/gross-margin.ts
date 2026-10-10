@@ -45,6 +45,7 @@ import {
   type CombinedCostSummary,
 } from "./monthly-close";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
+import { memoized } from "./context";
 import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type MixedBillingSiteInfo } from "./mixed-billing";
 
 export const DEFAULT_MARGIN_THRESHOLD_PCT = 8;
@@ -127,7 +128,12 @@ function recordCost(r: { guardWageSnapshot: Prisma.Decimal | null; brokerFeeSnap
   return n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot);
 }
 
-export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?: { thresholdPct?: number }): Promise<GrossMarginResult> {
+export function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?: { thresholdPct?: number }): Promise<GrossMarginResult> {
+  const thresholdPct = opts?.thresholdPct ?? DEFAULT_MARGIN_THRESHOLD_PCT;
+  return memoized(`margin:${sharedMonthRange(month).start.toISOString()}:${thresholdPct}`, () => buildGrossMarginUncached(month, opts));
+}
+
+async function buildGrossMarginUncached(month: Date, opts?: { thresholdPct?: number }): Promise<GrossMarginResult> {
   const thresholdPct = opts?.thresholdPct ?? DEFAULT_MARGIN_THRESHOLD_PCT;
   const { start: MONTH_START, end: MONTH_END } = sharedMonthRange(month);
 

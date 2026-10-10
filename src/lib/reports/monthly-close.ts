@@ -26,6 +26,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { n, round2 } from "./money";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
+import { memoized } from "./context";
 import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type MixedBillingSiteInfo } from "./mixed-billing";
 
 export const DEFAULT_REPORT_MONTH = new Date(Date.UTC(2026, 6, 1));
@@ -52,7 +53,12 @@ export type MonthlyCloseSiteRow = {
   fullMarginPct: number | null;
 };
 
-export async function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
+/** 同一 request／report context 內同一月只計一次（見 `./context.ts`）。 */
+export function buildMonthlyClose(month: Date = DEFAULT_REPORT_MONTH) {
+  return memoized(`close:${monthRange(month).start.toISOString()}`, () => buildMonthlyCloseUncached(month));
+}
+
+async function buildMonthlyCloseUncached(month: Date) {
   const { start: MONTH_START, end: MONTH_END } = monthRange(month);
   const sites = await prisma.site.findMany({ orderBy: { canonicalName: "asc" } });
 
