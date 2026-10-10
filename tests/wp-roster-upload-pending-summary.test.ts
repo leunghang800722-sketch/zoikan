@@ -62,8 +62,9 @@ describe("WP-ROSTER-UPLOAD Phase B-1（B1-2）：pending-summary", () => {
     expect(body.total).toBeGreaterThan(0);
     expect(body.entries.some((e) => e.site_id === fx.site.id && e.pending_count > 0)).toBe(true);
 
-    // 驗收（Opus 5.5）：唔帶 month＝所有月份——首頁卡喺 9 月都要見到 8 月未對完嘅上載。
-    const all = await pendingSummary(req(`http://test.local/api/roster-uploads/pending-summary`, ownerCookie));
+    // 驗收（Opus 5.5）：`months=0`＝所有月份——首頁卡喺 9 月都要見到 8 月未對完嘅上載。
+    // P3-1.5：唔帶 month 預設只計本月＋上月（`months=2`），要睇全部月份用 `?months=0`（窗口行為見 tests/p3-1-pending-summary.test.ts）。
+    const all = await pendingSummary(req(`http://test.local/api/roster-uploads/pending-summary?months=0`, ownerCookie));
     const allBody = (await all.json()) as { entries: { upload_id: string; month: string }[] };
     expect(allBody.entries.some((e) => e.upload_id === upload.id && e.month === "2026-08")).toBe(true);
     // 另一個月份篩走。

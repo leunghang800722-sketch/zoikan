@@ -30,7 +30,7 @@ import {
   inferGuardMonthlyTopSite,
   hasParsedPostorderForMonth,
 } from "@/lib/pricing/longterm-settlement";
-import type { RosterUpload, RosterUploadRow, ShiftRecord } from "@prisma/client";
+import type { Prisma, RosterUpload, RosterUploadRow } from "@prisma/client";
 import { ROSTER_UPLOAD_META_SELECT, type RosterUploadMeta } from "@/lib/roster-upload/meta-select";
 
 export type ReconcileCategory = "match" | "roster_only" | "system_only" | "guard_diff" | "settlement_diff" | "shift_type_diff" | "unresolved";
@@ -251,12 +251,38 @@ function toDateStr(d: Date): string {
 /** 一個 DB loader：攞晒呢個上載對數要用嘅全部資料，交俾
  * `reconcileRosterUpload()`（純函數）分類。 */
 export async function loadReconcileInput(uploadId: string): Promise<ReconcileInput> {
-  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId }, select: ROSTER_UPLOAD_META_SELECT });
-  const rows = await prisma.rosterUploadRow.findMany({
-    where: { uploadId, codeKind: { in: ["shift", "ot", "leave"] } },
+  const inputs = await loadReconcileInputs([uploadId]);
+  return inputs.get(uploadId)!;
+}
+
+/**
+ * P3-1.5（P3 §3.1 P2／附錄 b A-2）：批量版 loader——一批上載共用同一組 DB 查詢
+ * （rows／更種／保安員／盤／長工崗位／系統更次各一條 `IN (…)`），而唔係每份上載
+ * 各打約 15 條。每份上載嘅對數結果同逐份 `loadReconcileInput()` 完全一致
+ * （單份就係 `loadReconcileInputs([id])`）；`pending-summary` 用佢將 894 條查詢壓到
+ * 十幾條。找不到上載 id 即拋錯（同 `findUniqueOrThrow` 一致）。
+ */
+export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<string, ReconcileInput>> {
+  const result = new Map<string, ReconcileInput>();
+  const ids = [...new Set(uploadIds)];
+  if (ids.length === 0) return result;
+
+  const uploads = await prisma.rosterUpload.findMany({ where: { id: { in: ids } }, select: ROSTER_UPLOAD_META_SELECT });
+  const uploadById = new Map(uploads.map((u) => [u.id, u]));
+  for (const id of ids) {
+    if (!uploadById.has(id)) throw new Error(`No RosterUpload found (id=${id})`);
+  }
+  const allRows = await prisma.rosterUploadRow.findMany({
+    where: { uploadId: { in: ids }, codeKind: { in: ["shift", "ot", "leave"] } },
     // 驗收修正：固定次序（重複 key 嘅「第一行」要穩定）。
     orderBy: [{ rowIndex: "asc" }, { workDate: "asc" }, { id: "asc" }],
   });
+  const rowsByUpload = new Map<string, typeof allRows>();
+  for (const r of allRows) {
+    const list = rowsByUpload.get(r.uploadId);
+    if (list) list.push(r);
+    else rowsByUpload.set(r.uploadId, [r]);
+  }
 
   // B1-8 第 5 項：對數用嘅盤＝resolved_site_id ?? upload.site_id。
   // 驗收修正（Opus 5.5）：`resolved_site_id=null` 但呢行有 `sub_site_name`
@@ -270,35 +296,44 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
   // 揀（`AMBIGUOUS_SUBSITE_WARNING_PREFIX` 呢個 marker 就係嗰種 null，
   // 同「舊上載未 reparse」嘅 null 唔同——後者要靜靜跌返母盤，前者一定要
   // 入 unresolved，唔可以裝作「已經歸咗母盤」）。
-  const rowsWithEffectiveSite = rows.map((r) => {
-    const warningsArr = Array.isArray(r.warnings) ? (r.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
-    const subSiteAmbiguous = !r.resolvedSiteId && !r.subSiteName && warningsArr.some((w) => w.startsWith(AMBIGUOUS_SUBSITE_WARNING_PREFIX));
-    const effectiveSiteId = r.resolvedSiteId ?? (r.subSiteName || subSiteAmbiguous ? null : upload.siteId);
-    return { ...r, effectiveSiteId, subSiteAmbiguous };
+  const prepared = ids.map((id) => {
+    const upload = uploadById.get(id)!;
+    const rows = rowsByUpload.get(id) ?? [];
+    const rowsWithEffectiveSite = rows.map((r) => {
+      const warningsArr = Array.isArray(r.warnings) ? (r.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
+      const subSiteAmbiguous = !r.resolvedSiteId && !r.subSiteName && warningsArr.some((w) => w.startsWith(AMBIGUOUS_SUBSITE_WARNING_PREFIX));
+      const effectiveSiteId = r.resolvedSiteId ?? (r.subSiteName || subSiteAmbiguous ? null : upload.siteId);
+      return { ...r, effectiveSiteId, subSiteAmbiguous };
+    });
+    const effectiveSiteIds = [...new Set(rowsWithEffectiveSite.map((r) => r.effectiveSiteId).filter((v): v is string => v !== null))];
+    return { upload, rows, rowsWithEffectiveSite, effectiveSiteIds };
   });
-  const uploadMonthPrefix = toDateStr(toMonthStart(upload.month)).slice(0, 7);
 
-  const effectiveSiteIds = [...new Set(rowsWithEffectiveSite.map((r) => r.effectiveSiteId).filter((v): v is string => v !== null))];
-  const shiftTypesRaw = effectiveSiteIds.length
-    ? await prisma.shiftType.findMany({ where: { siteId: { in: effectiveSiteIds }, voidedAt: null }, select: { id: true, siteId: true, startTime: true, endTime: true } })
+  const unionOf = (lists: string[][]): string[] => [...new Set(lists.flat())];
+  const allEffectiveSiteIds = unionOf(prepared.map((p) => p.effectiveSiteIds));
+  const shiftTypesRaw = allEffectiveSiteIds.length
+    ? await prisma.shiftType.findMany({ where: { siteId: { in: allEffectiveSiteIds }, voidedAt: null }, select: { id: true, siteId: true, startTime: true, endTime: true } })
     : [];
-  const shiftTypeCandidates: LeaveShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime) }));
+  const shiftTypesBySite = new Map<string, typeof shiftTypesRaw>();
+  for (const st of shiftTypesRaw) {
+    const list = shiftTypesBySite.get(st.siteId);
+    if (list) list.push(st);
+    else shiftTypesBySite.set(st.siteId, [st]);
+  }
 
   // 防線：upload row 仍然指住已作廢更種（例如 undo／人手作廢之後未 reparse）——一律當未配對，唔准套用。
-  const rowShiftTypeIds = [...new Set(rows.map((r) => r.shiftTypeId).filter((v): v is string => !!v))];
+  const allRowShiftTypeIds = unionOf(prepared.map((p) => p.rows.map((r) => r.shiftTypeId).filter((v): v is string => !!v)));
   const voidedShiftTypeIds = new Set(
-    rowShiftTypeIds.length ? (await prisma.shiftType.findMany({ where: { id: { in: rowShiftTypeIds }, voidedAt: { not: null } }, select: { id: true } })).map((s) => s.id) : [],
+    allRowShiftTypeIds.length ? (await prisma.shiftType.findMany({ where: { id: { in: allRowShiftTypeIds }, voidedAt: { not: null } }, select: { id: true } })).map((s) => s.id) : [],
   );
-
-  const leaveShiftTypeByRowId = resolveLeaveShiftTypeIds(rowsWithEffectiveSite, shiftTypeCandidates);
 
   // 規則 8：冇雞頭碼欄嘅行（settlementBrokerId null）用
   // `resolveSettlementBrokerFallback()` 補，標 settlement_inferred。跟
   // batch/route.ts 一致，memoize（同一 guard+site 喺呢張上載入面出現
-  //好多次，唔逐行都打 DB）。
-  const guardIds = [...new Set(rowsWithEffectiveSite.map((r) => r.guardId).filter((v): v is string => v !== null))];
-  const guards = guardIds.length
-    ? await prisma.guard.findMany({ where: { id: { in: guardIds } }, select: { id: true, employmentType: true, defaultBrokerId: true, visaSponsoredByBrokerId: true } })
+  //好多次，唔逐行都打 DB）。批量版：整批上載共用同一個 resolver（key＝guard|site）。
+  const allGuardIds = unionOf(prepared.map((p) => p.rowsWithEffectiveSite.map((r) => r.guardId).filter((v): v is string => v !== null)));
+  const guards = allGuardIds.length
+    ? await prisma.guard.findMany({ where: { id: { in: allGuardIds } }, select: { id: true, employmentType: true, defaultBrokerId: true, visaSponsoredByBrokerId: true } })
     : [];
   const guardById = new Map(guards.map((g) => [g.id, g]));
   const resolveFallback = createSettlementBrokerFallbackResolver(prisma);
@@ -313,82 +348,238 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
   //      跨全部上載，唔淨係呢張——長工可能同月喺幾個盤嘅上載都出現）。
   //   4. siteParentMap：`resolveLongtermSettlement()` 要知每格所在盤嘅
   //      母盤 id，先可以判斷「崗位登記喺母盤，呢格喺子盤」呢種情況。
-  const longtermGuardIds = guards.filter((g) => isLongtermEmploymentType(g.employmentType)).map((g) => g.id);
-  const internalLongtermBrokerId = longtermGuardIds.length ? await findInternalLongtermBrokerId(prisma) : null;
-  // 驗收（Opus 5.5）：本月有 Postorder（權威）→ 唔推算、唔睇 inferred 崗位。
-  const postorderAuthoritative = longtermGuardIds.length ? await hasParsedPostorderForMonth(upload.month, prisma) : false;
-  const activePostsByGuard = longtermGuardIds.length
-    ? await loadActiveLongtermPosts(longtermGuardIds, toMonthStart(upload.month), prisma, { excludeInferred: postorderAuthoritative })
-    : new Map<string, Set<string>>();
-  // 淨係冇任何生效崗位嘅長工先使占比推算，但一次過查晒（DB 查詢成本
-  // 唔會因為「先篩選邊個冇崗位」而細好多，直接對全部長工查算簡單啲）。
-  const monthlyTopSiteByGuard =
-    longtermGuardIds.length && !postorderAuthoritative ? await inferGuardMonthlyTopSite(longtermGuardIds, upload.month, prisma) : new Map<string, { siteId: string; ratio: number }>();
-  const siteParentRows = effectiveSiteIds.length ? await prisma.site.findMany({ where: { id: { in: effectiveSiteIds } }, select: { id: true, parentSiteId: true } }) : [];
-  const siteParentMap = new Map(siteParentRows.map((s) => [s.id, s.parentSiteId]));
-  // 呢個月新推算出嚟嘅崗位盤（reason=longterm_inferred_post 先有）——
-  // caller（reconcile-apply.ts）apply_roster 嗰陣要 upsert 落
-  // guard_longterm_posts。呢度淨係收集 preview 用，唔喺對數（讀）階段
-  // 寫 DB（跟返「對數只係 preview，apply 先寫入」嘅一貫做法）。
-  const inferredLongtermPosts = new Map<string, { siteId: string; ratio: number }>();
-
-  // 驗收（Opus 5.5，2026-09-26）：更表有雞頭碼欄、但部分行漏填——同一張
-  // 上載同一個（解析後）盤其他行嘅雞頭碼**只有一個**，漏填嗰啲行就跟佢
-  // （同總表 `s05_price.py`「補：總表該盤唯一雞頭」一致；多過一個雞頭
-  // 唔估，跌返規則 8 fallback 鏈）。成張更表冇雞頭碼欄（全部 null）唔受
-  // 影響。8 月實測：港深創新及科技園 11 格新散工 default_broker 冇值
-  // 跌咗落 Y，少畀 K 14,520。
-  const codedBrokersBySite = new Map<string, Set<string>>();
-  for (const r of rowsWithEffectiveSite) {
-    if (!r.effectiveSiteId || !r.settlementBrokerId || (r.codeKind !== "shift" && r.codeKind !== "ot")) continue;
-    const set = codedBrokersBySite.get(r.effectiveSiteId) ?? new Set<string>();
-    set.add(r.settlementBrokerId);
-    codedBrokersBySite.set(r.effectiveSiteId, set);
+  // 批量版：長工預查資料按「上載月份」分組一次過查（結果只按 guard 獨立，唔受同批其他 guard 影響）。
+  const ltGuardIdsOf = (guardIds: string[]) => guardIds.filter((gid) => {
+    const g = guardById.get(gid);
+    return !!g && isLongtermEmploymentType(g.employmentType);
+  });
+  const monthGroups = new Map<string, { month: Date; guardIds: Set<string> }>();
+  for (const p of prepared) {
+    const key = toMonthStart(p.upload.month).toISOString();
+    const grp = monthGroups.get(key) ?? { month: p.upload.month, guardIds: new Set<string>() };
+    for (const gid of ltGuardIdsOf([...new Set(p.rowsWithEffectiveSite.map((r) => r.guardId).filter((v): v is string => v !== null))])) grp.guardIds.add(gid);
+    monthGroups.set(key, grp);
   }
-  const singleCodedBrokerForSite = (siteId: string | null): string | null => {
-    const set = siteId ? codedBrokersBySite.get(siteId) : undefined;
-    return set && set.size === 1 ? [...set][0]! : null;
-  };
+  const anyLongterm = [...monthGroups.values()].some((g) => g.guardIds.size > 0);
+  const internalLongtermBrokerId = anyLongterm ? await findInternalLongtermBrokerId(prisma) : null;
+  const longtermByMonth = new Map<string, { postorderAuthoritative: boolean; activePostsByGuard: Map<string, Set<string>>; monthlyTopSiteByGuard: Map<string, { siteId: string; ratio: number }> }>();
+  await Promise.all(
+    [...monthGroups.entries()].map(async ([key, grp]) => {
+      const longtermGuardIds = [...grp.guardIds];
+      if (!longtermGuardIds.length) return;
+      // 驗收（Opus 5.5）：本月有 Postorder（權威）→ 唔推算、唔睇 inferred 崗位。
+      const postorderAuthoritative = await hasParsedPostorderForMonth(grp.month, prisma);
+      const [activePostsByGuard, monthlyTopSiteByGuard] = await Promise.all([
+        loadActiveLongtermPosts(longtermGuardIds, toMonthStart(grp.month), prisma, { excludeInferred: postorderAuthoritative }),
+        // 淨係冇任何生效崗位嘅長工先使占比推算，但一次過查晒（DB 查詢成本
+        // 唔會因為「先篩選邊個冇崗位」而細好多，直接對全部長工查算簡單啲）。
+        postorderAuthoritative ? Promise.resolve(new Map<string, { siteId: string; ratio: number }>()) : inferGuardMonthlyTopSite(longtermGuardIds, grp.month, prisma),
+      ]);
+      longtermByMonth.set(key, { postorderAuthoritative, activePostsByGuard, monthlyTopSiteByGuard });
+    }),
+  );
+  const siteParentRows = allEffectiveSiteIds.length ? await prisma.site.findMany({ where: { id: { in: allEffectiveSiteIds } }, select: { id: true, parentSiteId: true } }) : [];
+  const siteParentMap = new Map(siteParentRows.map((s) => [s.id, s.parentSiteId]));
 
-  const rosterEntries: ReconcileRosterEntry[] = [];
-  const unresolvedEntries: ReconcileUnresolvedEntry[] = [];
-
-  for (const r of rowsWithEffectiveSite) {
-    const workDate = toDateStr(r.workDate);
-    const reasons: string[] = [];
-    if (!r.effectiveSiteId) {
-      if (r.subSiteAmbiguous) {
-        reasons.push("子盤未定，歷史紀錄有多過一個候選，人手覆核並批量指定子盤（或者確認歸母盤）");
-      } else if (r.subSiteName && upload.siteId) {
-        reasons.push(`子盤「${r.subSiteName}」對唔到（或者未 reparse），請先喺「盤」管理掛好子盤再重新解析`);
-      } else {
-        reasons.push("上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤");
+  // 驗收修正（Opus 5.5）：系統嗰邊要攞「上載盤＋佢全部子盤」，唔係淨係
+  // 更表有出現過嘅盤——否則某個子盤成個月喺更表冇人，系統入面嗰啲更
+  // 永遠唔會列做 system_only。
+  const uploadSiteIds = unionOf(prepared.map((p) => (p.upload.siteId ? [p.upload.siteId] : [])));
+  const childRows = uploadSiteIds.length ? await prisma.site.findMany({ where: { parentSiteId: { in: uploadSiteIds } }, select: { id: true, parentSiteId: true } }) : [];
+  const childIdsByParent = new Map<string, string[]>();
+  for (const c of childRows) {
+    const list = childIdsByParent.get(c.parentSiteId!);
+    if (list) list.push(c.id);
+    else childIdsByParent.set(c.parentSiteId!, [c.id]);
+  }
+  const systemSiteIdsOf = (p: (typeof prepared)[number]): string[] => [...new Set([...p.effectiveSiteIds, ...(p.upload.siteId ? [p.upload.siteId] : []), ...(p.upload.siteId ? (childIdsByParent.get(p.upload.siteId) ?? []) : [])])];
+  const systemSelect = {
+    id: true,
+    workDate: true,
+    siteId: true,
+    guardId: true,
+    shiftTypeId: true,
+    settlementBrokerId: true,
+    operationalBrokerId: true,
+    recordType: true,
+    leaveCode: true,
+    status: true,
+    source: true,
+  } as const;
+  type SystemRecord = Prisma.ShiftRecordGetPayload<{ select: typeof systemSelect }>;
+  const systemByMonth = new Map<string, Map<string, SystemRecord[]>>();
+  await Promise.all(
+    [...monthGroups.entries()].map(async ([key, grp]) => {
+      const mStart = toMonthStart(grp.month);
+      const mEnd = new Date(Date.UTC(mStart.getUTCFullYear(), mStart.getUTCMonth() + 1, 0));
+      const sites = unionOf(prepared.filter((p) => toMonthStart(p.upload.month).toISOString() === key).map(systemSiteIdsOf));
+      const recs: SystemRecord[] = sites.length
+        ? await prisma.shiftRecord.findMany({
+            where: { siteId: { in: sites }, workDate: { gte: mStart, lte: mEnd }, status: { not: "cancelled" } },
+            select: systemSelect,
+          })
+        : [];
+      const bySite = new Map<string, SystemRecord[]>();
+      for (const r of recs) {
+        const list = bySite.get(r.siteId);
+        if (list) list.push(r);
+        else bySite.set(r.siteId, [r]);
       }
-    }
-    // 驗收修正（Opus 5.5）：格仔日期唔係上載月份——唔准寫入（之前實測會
-    // 寫入另一個月，包括已鎖定月份：assertMonthNotLocked 淨係 check 上載
-    // 月份）。
-    if (!workDate.startsWith(`${uploadMonthPrefix}-`)) reasons.push(`格仔日期 ${workDate} 唔係上載月份（${uploadMonthPrefix}），唔可以寫入`);
-    // 驗收修正（Opus 5.5，規則 8）：有雞頭碼但對唔到 brokers——唔准用
-    // fallback 靜靜補（fallback 淨係俾「冇雞頭碼欄」嘅盤用）。
-    if (r.brokerCodeRaw && r.brokerCodeRaw.trim() && !r.settlementBrokerId) reasons.push(`雞頭碼「${r.brokerCodeRaw.trim()}」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析`);
-    if (!r.guardId) reasons.push("保安員未配對");
+      systemByMonth.set(key, bySite);
+    }),
+  );
 
-    let shiftTypeId: string | null = r.shiftTypeId;
-    let shiftTypeInferred = false;
-    if (r.codeKind === "leave") {
-      const inferred = leaveShiftTypeByRowId.get(r.id) ?? { shiftTypeId: null, inferred: false };
-      shiftTypeId = inferred.shiftTypeId;
-      shiftTypeInferred = inferred.inferred;
-      if (!shiftTypeId) reasons.push("請假格推斷唔到屬邊個更別（Time 欄同同一行都冇夠訊號），人手覆核");
-    } else if (!shiftTypeId) {
-      reasons.push("更別未配對");
-    } else if (voidedShiftTypeIds.has(shiftTypeId)) {
-      reasons.push("更種已作廢，請重新解析上載或者一鍵結算補更種");
-    }
+  for (const p of prepared) {
+    const { upload, rowsWithEffectiveSite, effectiveSiteIds } = p;
+    const monthKey = toMonthStart(upload.month).toISOString();
+    const uploadMonthPrefix = toDateStr(toMonthStart(upload.month)).slice(0, 7);
+    const shiftTypeCandidates: LeaveShiftTypeCandidate[] = effectiveSiteIds
+      .flatMap((sid) => shiftTypesBySite.get(sid) ?? [])
+      .map((s) => ({ id: s.id, siteId: s.siteId, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime) }));
+    const leaveShiftTypeByRowId = resolveLeaveShiftTypeIds(rowsWithEffectiveSite, shiftTypeCandidates);
+    const lt = longtermByMonth.get(monthKey);
+    const postorderAuthoritative = lt?.postorderAuthoritative ?? false;
+    const activePostsByGuard = lt?.activePostsByGuard ?? new Map<string, Set<string>>();
+    const monthlyTopSiteByGuard = lt?.monthlyTopSiteByGuard ?? new Map<string, { siteId: string; ratio: number }>();
+    // 呢個月新推算出嚟嘅崗位盤（reason=longterm_inferred_post 先有）——
+    // caller（reconcile-apply.ts）apply_roster 嗰陣要 upsert 落
+    // guard_longterm_posts。呢度淨係收集 preview 用，唔喺對數（讀）階段
+    // 寫 DB（跟返「對數只係 preview，apply 先寫入」嘅一貫做法）。
+    const inferredLongtermPosts = new Map<string, { siteId: string; ratio: number }>();
 
-    if (reasons.length > 0 || !r.guardId || !r.effectiveSiteId || !shiftTypeId) {
-      unresolvedEntries.push({
+    // 驗收（Opus 5.5，2026-09-26）：更表有雞頭碼欄、但部分行漏填——同一張
+    // 上載同一個（解析後）盤其他行嘅雞頭碼**只有一個**，漏填嗰啲行就跟佢
+    // （同總表 `s05_price.py`「補：總表該盤唯一雞頭」一致；多過一個雞頭
+    // 唔估，跌返規則 8 fallback 鏈）。成張更表冇雞頭碼欄（全部 null）唔受
+    // 影響。8 月實測：港深創新及科技園 11 格新散工 default_broker 冇值
+    // 跌咗落 Y，少畀 K 14,520。
+    const codedBrokersBySite = new Map<string, Set<string>>();
+    for (const r of rowsWithEffectiveSite) {
+      if (!r.effectiveSiteId || !r.settlementBrokerId || (r.codeKind !== "shift" && r.codeKind !== "ot")) continue;
+      const set = codedBrokersBySite.get(r.effectiveSiteId) ?? new Set<string>();
+      set.add(r.settlementBrokerId);
+      codedBrokersBySite.set(r.effectiveSiteId, set);
+    }
+    const singleCodedBrokerForSite = (siteId: string | null): string | null => {
+      const set = siteId ? codedBrokersBySite.get(siteId) : undefined;
+      return set && set.size === 1 ? [...set][0]! : null;
+    };
+
+    const rosterEntries: ReconcileRosterEntry[] = [];
+    const unresolvedEntries: ReconcileUnresolvedEntry[] = [];
+
+    for (const r of rowsWithEffectiveSite) {
+      const workDate = toDateStr(r.workDate);
+      const reasons: string[] = [];
+      if (!r.effectiveSiteId) {
+        if (r.subSiteAmbiguous) {
+          reasons.push("子盤未定，歷史紀錄有多過一個候選，人手覆核並批量指定子盤（或者確認歸母盤）");
+        } else if (r.subSiteName && upload.siteId) {
+          reasons.push(`子盤「${r.subSiteName}」對唔到（或者未 reparse），請先喺「盤」管理掛好子盤再重新解析`);
+        } else {
+          reasons.push("上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤");
+        }
+      }
+      // 驗收修正（Opus 5.5）：格仔日期唔係上載月份——唔准寫入（之前實測會
+      // 寫入另一個月，包括已鎖定月份：assertMonthNotLocked 淨係 check 上載
+      // 月份）。
+      if (!workDate.startsWith(`${uploadMonthPrefix}-`)) reasons.push(`格仔日期 ${workDate} 唔係上載月份（${uploadMonthPrefix}），唔可以寫入`);
+      // 驗收修正（Opus 5.5，規則 8）：有雞頭碼但對唔到 brokers——唔准用
+      // fallback 靜靜補（fallback 淨係俾「冇雞頭碼欄」嘅盤用）。
+      if (r.brokerCodeRaw && r.brokerCodeRaw.trim() && !r.settlementBrokerId) reasons.push(`雞頭碼「${r.brokerCodeRaw.trim()}」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析`);
+      if (!r.guardId) reasons.push("保安員未配對");
+
+      let shiftTypeId: string | null = r.shiftTypeId;
+      let shiftTypeInferred = false;
+      if (r.codeKind === "leave") {
+        const inferred = leaveShiftTypeByRowId.get(r.id) ?? { shiftTypeId: null, inferred: false };
+        shiftTypeId = inferred.shiftTypeId;
+        shiftTypeInferred = inferred.inferred;
+        if (!shiftTypeId) reasons.push("請假格推斷唔到屬邊個更別（Time 欄同同一行都冇夠訊號），人手覆核");
+      } else if (!shiftTypeId) {
+        reasons.push("更別未配對");
+      } else if (voidedShiftTypeIds.has(shiftTypeId)) {
+        reasons.push("更種已作廢，請重新解析上載或者一鍵結算補更種");
+      }
+
+      if (reasons.length > 0 || !r.guardId || !r.effectiveSiteId || !shiftTypeId) {
+        unresolvedEntries.push({
+          rowId: r.id,
+          workDate,
+          siteId: r.effectiveSiteId,
+          guardId: r.guardId,
+          shiftTypeId,
+          codeKind: r.codeKind as "shift" | "ot" | "leave",
+          rawCode: r.rawCode,
+          reason: reasons.join("；") || "未配對",
+        });
+        continue;
+      }
+
+      // WP-LTSHIFT（§2）：長工結算單位第一層——喺規則 8 舊 fallback 鏈之前
+      // 行，只對 employment_type 開頭 longterm_ 嘅保安員生效，覆寫（唔理更表
+      // 雞頭碼欄本身有冇值，總表 8 月長工行雞頭碼一律填緊 K，唔可以照抄，
+      // 見 longterm-settlement.ts 頂大註解）。
+      let settlementBrokerId: string | null = null;
+      let operationalBrokerId: string | null = null;
+      let settlementReason: string | null = null;
+      let longtermWarning: string | null = null;
+      let longtermLayerUsed = false;
+      const guard = guardById.get(r.guardId);
+      // 驗收（Opus 5.5）：呢行漏填雞頭碼、同盤其他行得一個雞頭 → 當呢行嘅
+      // 「更表雞頭碼」（見上面 singleCodedBrokerForSite 註解）。
+      const rowBrokerId = r.settlementBrokerId ?? singleCodedBrokerForSite(r.effectiveSiteId);
+      if (guard && isLongtermEmploymentType(guard.employmentType)) {
+        const siteId = r.effectiveSiteId as string; // 上面 reasons.length>0 已經 continue 咗，呢度一定非 null
+        const lt = resolveLongtermSettlement({
+          employmentType: guard.employmentType,
+          visaSponsoredByBrokerId: guard.visaSponsoredByBrokerId ?? null,
+          effectiveSiteId: siteId,
+          parentSiteId: siteParentMap.get(siteId) ?? null,
+          rosterBrokerId: rowBrokerId,
+          activePostSiteIds: activePostsByGuard.get(r.guardId as string) ?? new Set<string>(),
+          monthlyTopSite: monthlyTopSiteByGuard.get(r.guardId as string) ?? null,
+          postorderAuthoritative,
+        });
+        // longterm_non_post_broker／longterm_no_post_postorder 但呢行本身冇
+        // 雞頭碼（rosterBrokerId null）——冇嘢可以跟，唔算「用得到」嘅判斷，
+        // 跌返舊 fallback 鏈。
+        const usable = lt && !((lt.reason === "longterm_non_post_broker" || lt.reason === "longterm_no_post_postorder") && !rowBrokerId);
+        if (usable && lt) {
+          longtermLayerUsed = true;
+          settlementBrokerId = lt.settlementBrokerId ?? internalLongtermBrokerId;
+          operationalBrokerId = lt.operationalBrokerId ?? settlementBrokerId;
+          settlementReason = lt.reason;
+          longtermWarning = lt.warning;
+          if (lt.reason === "longterm_inferred_post" && lt.inferredPostSiteId && lt.inferredPostRatio !== undefined) {
+            inferredLongtermPosts.set(r.guardId as string, { siteId: lt.inferredPostSiteId, ratio: lt.inferredPostRatio });
+          }
+        }
+      }
+      if (!longtermLayerUsed) {
+        // 舊行為（規則 8）：更表本身有雞頭碼欄就直接用（呢度冇長工覆寫），
+        // 冇先至行 fallback 鏈——WP-LTSHIFT 之前呢度係
+        // `let settlementBrokerId = r.settlementBrokerId;`，唔可以因為加咗
+        // 長工第一層就漏咗呢個「payload 優先」嘅原則。
+        settlementBrokerId = rowBrokerId;
+        operationalBrokerId = rowBrokerId;
+        if (!settlementBrokerId) {
+          settlementBrokerId = await resolveFallback({
+            guardId: r.guardId,
+            siteId: r.effectiveSiteId,
+            employmentType: guard?.employmentType ?? "cash_casual",
+            defaultBrokerId: guard?.defaultBrokerId ?? null,
+          });
+          operationalBrokerId = settlementBrokerId;
+        }
+      }
+      // 「推算／覆寫」旗標：同更表原始解析值（雞頭碼欄，或者冇欄）比較，
+      // 有分別（包括規則 8 舊 fallback、或者呢個長工新第一層）先標，等
+      // 會計覆核；長工跟返更表雞頭碼、冇改到任何嘢嗰種（settlementBrokerId
+      // 同 r.settlementBrokerId 一致）唔標。
+      const settlementInferred = (settlementBrokerId ?? null) !== (r.settlementBrokerId ?? null);
+
+      rosterEntries.push({
         rowId: r.id,
         workDate,
         siteId: r.effectiveSiteId,
@@ -396,123 +587,40 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
         shiftTypeId,
         codeKind: r.codeKind as "shift" | "ot" | "leave",
         rawCode: r.rawCode,
-        reason: reasons.join("；") || "未配對",
+        hours: r.hours !== null ? Number(r.hours.toString()) : null,
+        // B1-4：保留原檔字面（RD/OFF/AL/SL/NL/NPL/SH），唔歸一——見呢個
+        // model 頂嘅大註解（同 prisma/schema.prisma LeaveCode enum 嘅
+        // 既有設計精神一致：seed 有原檔字面就用原檔字面）。
+        leaveCode: r.codeKind === "leave" ? r.rawCode.trim().toUpperCase() : null,
+        shiftTypeInferred,
+        settlementBrokerId: settlementBrokerId ?? null,
+        operationalBrokerId: operationalBrokerId ?? settlementBrokerId ?? null,
+        settlementInferred,
+        settlementReason,
+        settlementWarning: longtermWarning,
       });
-      continue;
     }
 
-    // WP-LTSHIFT（§2）：長工結算單位第一層——喺規則 8 舊 fallback 鏈之前
-    // 行，只對 employment_type 開頭 longterm_ 嘅保安員生效，覆寫（唔理更表
-    // 雞頭碼欄本身有冇值，總表 8 月長工行雞頭碼一律填緊 K，唔可以照抄，
-    // 見 longterm-settlement.ts 頂大註解）。
-    let settlementBrokerId: string | null = null;
-    let operationalBrokerId: string | null = null;
-    let settlementReason: string | null = null;
-    let longtermWarning: string | null = null;
-    let longtermLayerUsed = false;
-    const guard = guardById.get(r.guardId);
-    // 驗收（Opus 5.5）：呢行漏填雞頭碼、同盤其他行得一個雞頭 → 當呢行嘅
-    // 「更表雞頭碼」（見上面 singleCodedBrokerForSite 註解）。
-    const rowBrokerId = r.settlementBrokerId ?? singleCodedBrokerForSite(r.effectiveSiteId);
-    if (guard && isLongtermEmploymentType(guard.employmentType)) {
-      const siteId = r.effectiveSiteId as string; // 上面 reasons.length>0 已經 continue 咗，呢度一定非 null
-      const lt = resolveLongtermSettlement({
-        employmentType: guard.employmentType,
-        visaSponsoredByBrokerId: guard.visaSponsoredByBrokerId ?? null,
-        effectiveSiteId: siteId,
-        parentSiteId: siteParentMap.get(siteId) ?? null,
-        rosterBrokerId: rowBrokerId,
-        activePostSiteIds: activePostsByGuard.get(r.guardId as string) ?? new Set<string>(),
-        monthlyTopSite: monthlyTopSiteByGuard.get(r.guardId as string) ?? null,
-        postorderAuthoritative,
-      });
-      // longterm_non_post_broker／longterm_no_post_postorder 但呢行本身冇
-      // 雞頭碼（rosterBrokerId null）——冇嘢可以跟，唔算「用得到」嘅判斷，
-      // 跌返舊 fallback 鏈。
-      const usable = lt && !((lt.reason === "longterm_non_post_broker" || lt.reason === "longterm_no_post_postorder") && !rowBrokerId);
-      if (usable && lt) {
-        longtermLayerUsed = true;
-        settlementBrokerId = lt.settlementBrokerId ?? internalLongtermBrokerId;
-        operationalBrokerId = lt.operationalBrokerId ?? settlementBrokerId;
-        settlementReason = lt.reason;
-        longtermWarning = lt.warning;
-        if (lt.reason === "longterm_inferred_post" && lt.inferredPostSiteId && lt.inferredPostRatio !== undefined) {
-          inferredLongtermPosts.set(r.guardId as string, { siteId: lt.inferredPostSiteId, ratio: lt.inferredPostRatio });
-        }
-      }
-    }
-    if (!longtermLayerUsed) {
-      // 舊行為（規則 8）：更表本身有雞頭碼欄就直接用（呢度冇長工覆寫），
-      // 冇先至行 fallback 鏈——WP-LTSHIFT 之前呢度係
-      // `let settlementBrokerId = r.settlementBrokerId;`，唔可以因為加咗
-      // 長工第一層就漏咗呢個「payload 優先」嘅原則。
-      settlementBrokerId = rowBrokerId;
-      operationalBrokerId = rowBrokerId;
-      if (!settlementBrokerId) {
-        settlementBrokerId = await resolveFallback({
-          guardId: r.guardId,
-          siteId: r.effectiveSiteId,
-          employmentType: guard?.employmentType ?? "cash_casual",
-          defaultBrokerId: guard?.defaultBrokerId ?? null,
-        });
-        operationalBrokerId = settlementBrokerId;
-      }
-    }
-    // 「推算／覆寫」旗標：同更表原始解析值（雞頭碼欄，或者冇欄）比較，
-    // 有分別（包括規則 8 舊 fallback、或者呢個長工新第一層）先標，等
-    // 會計覆核；長工跟返更表雞頭碼、冇改到任何嘢嗰種（settlementBrokerId
-    // 同 r.settlementBrokerId 一致）唔標。
-    const settlementInferred = (settlementBrokerId ?? null) !== (r.settlementBrokerId ?? null);
 
-    rosterEntries.push({
-      rowId: r.id,
-      workDate,
-      siteId: r.effectiveSiteId,
-      guardId: r.guardId,
-      shiftTypeId,
-      codeKind: r.codeKind as "shift" | "ot" | "leave",
-      rawCode: r.rawCode,
-      hours: r.hours !== null ? Number(r.hours.toString()) : null,
-      // B1-4：保留原檔字面（RD/OFF/AL/SL/NL/NPL/SH），唔歸一——見呢個
-      // model 頂嘅大註解（同 prisma/schema.prisma LeaveCode enum 嘅
-      // 既有設計精神一致：seed 有原檔字面就用原檔字面）。
-      leaveCode: r.codeKind === "leave" ? r.rawCode.trim().toUpperCase() : null,
-      shiftTypeInferred,
-      settlementBrokerId: settlementBrokerId ?? null,
-      operationalBrokerId: operationalBrokerId ?? settlementBrokerId ?? null,
-      settlementInferred,
-      settlementReason,
-      settlementWarning: longtermWarning,
-    });
+    const systemBySite = systemByMonth.get(monthKey) ?? new Map<string, SystemRecord[]>();
+    const systemRecordsRaw: SystemRecord[] = systemSiteIdsOf(p).flatMap((sid) => systemBySite.get(sid) ?? []);
+    const systemEntries: ReconcileSystemEntry[] = systemRecordsRaw.map((s) => ({
+      id: s.id,
+      workDate: toDateStr(s.workDate),
+      siteId: s.siteId,
+      guardId: s.guardId,
+      shiftTypeId: s.shiftTypeId,
+      settlementBrokerId: s.settlementBrokerId,
+      operationalBrokerId: s.operationalBrokerId,
+      recordType: s.recordType,
+      leaveCode: s.leaveCode,
+      status: s.status,
+      source: s.source,
+    }));
+
+    result.set(upload.id, { upload: { id: upload.id, siteId: upload.siteId, month: upload.month }, uploadMeta: upload, rosterEntries, unresolvedEntries, systemEntries, inferredLongtermPosts });
   }
-
-  const monthStartDate = toMonthStart(upload.month);
-  const monthEnd = new Date(Date.UTC(monthStartDate.getUTCFullYear(), monthStartDate.getUTCMonth() + 1, 0));
-  // 驗收修正（Opus 5.5）：系統嗰邊要攞「上載盤＋佢全部子盤」，唔係淨係
-  // 更表有出現過嘅盤——否則某個子盤成個月喺更表冇人，系統入面嗰啲更
-  // 永遠唔會列做 system_only。
-  const childSiteIds = upload.siteId ? (await prisma.site.findMany({ where: { parentSiteId: upload.siteId }, select: { id: true } })).map((s) => s.id) : [];
-  const systemSiteIds = [...new Set([...effectiveSiteIds, ...(upload.siteId ? [upload.siteId] : []), ...childSiteIds])];
-  const systemRecordsRaw: ShiftRecord[] = systemSiteIds.length
-    ? await prisma.shiftRecord.findMany({
-        where: { siteId: { in: systemSiteIds }, workDate: { gte: monthStartDate, lte: monthEnd }, status: { not: "cancelled" } },
-      })
-    : [];
-  const systemEntries: ReconcileSystemEntry[] = systemRecordsRaw.map((s) => ({
-    id: s.id,
-    workDate: toDateStr(s.workDate),
-    siteId: s.siteId,
-    guardId: s.guardId,
-    shiftTypeId: s.shiftTypeId,
-    settlementBrokerId: s.settlementBrokerId,
-    operationalBrokerId: s.operationalBrokerId,
-    recordType: s.recordType,
-    leaveCode: s.leaveCode,
-    status: s.status,
-    source: s.source,
-  }));
-
-  return { upload: { id: upload.id, siteId: upload.siteId, month: upload.month }, uploadMeta: upload, rosterEntries, unresolvedEntries, systemEntries, inferredLongtermPosts };
+  return result;
 }
 
 /** 純函數：逐更配對＋分類（見檔案頂註解嘅七類）。冇任何 DB 依賴，單元
