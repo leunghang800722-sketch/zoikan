@@ -1,5 +1,5 @@
-// WP-GUARD-OCR §29：「用證件新增」——單人新增保安員，上載證件由 DeepSeek 辨識自動填表。
-// 冇 DEEPSEEK_API_KEY → 404（入口亦隱藏）；權限同「安員批量導入」。
+// WP-GUARD-OCR §29：「用證件新增」——單人新增保安員，上載證件由 Claude＋DeepSeek 雙讀辨識自動填表。
+// 冇 CLAUDE_API_KEY 同 DEEPSEEK_API_KEY → 404（入口亦隱藏）；權限同「安員批量導入」。
 import { notFound, redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { hasPermission } from "@/lib/rbac/requirePermission";

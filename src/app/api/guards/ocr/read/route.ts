@@ -1,4 +1,4 @@
-// WP-GUARD-OCR §29：`POST /api/guards/ocr/read`——瀏覽器上載縮好嘅證件圖（data URL）→ DeepSeek 視覺辨識 →
+// WP-GUARD-OCR §29：`POST /api/guards/ocr/read`——瀏覽器上載縮好嘅證件圖（data URL）→ Claude（讀 A）＋DeepSeek（讀 B）視覺辨識 →
 // 逐欄 confirmed／review／missing。
 // 鐵則：圖片同辨識出嚟嘅欄位值只喺記憶體處理——唔寫磁碟／DB／log／audit／error message（console.* 都唔帶值）。
 // audit `guard_ocr_read` 淨係記文件類型、欄位狀態計數、模型、tokens、耗時。
@@ -10,7 +10,8 @@ import { getClientIp, handleApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
 import { reserveQuota } from "@/lib/guards/import/limits";
 import { OCR_DOC_TYPES, OCR_MAX_BODY_CHARS, OCR_MAX_DOCS, OCR_MAX_IMAGE_CHARS, OCR_MAX_TILES, isGuardOcrConfigured } from "@/lib/guards/ocr/config";
-import { OcrUnavailableError, getVisionClient } from "@/lib/guards/ocr/vision-client";
+import { OcrUnavailableError } from "@/lib/guards/ocr/vision-client";
+import { getReadClients } from "@/lib/guards/ocr/clients";
 import { readDocument, type DocumentReadResult } from "@/lib/guards/ocr/read";
 
 export const dynamic = "force-dynamic";
@@ -93,7 +94,13 @@ async function handle(req: Request): Promise<NextResponse> {
   // 預留配額（短 transaction，鎖外先呼叫模型）。失敗／超時唔退還次數。
   await reserveQuota(session, "ocr");
   {
-    const client = getVisionClient();
+    let client: ReturnType<typeof getReadClients>;
+    try {
+      client = getReadClients();
+    } catch (e) {
+      if (e instanceof OcrUnavailableError) return NextResponse.json({ error: "ocr_unavailable", message: OCR_UNAVAILABLE_MSG }, { status: 503 });
+      throw e;
+    }
     const t0 = Date.now();
     const imagesCount = docs.reduce((n, d) => n + 1 + d.tiles.length, 0);
     let results: DocumentReadResult[];
@@ -103,13 +110,25 @@ async function handle(req: Request): Promise<NextResponse> {
       const ms = Date.now() - t0;
       if (e instanceof OcrUnavailableError) {
         console.error(`[guard-ocr] provider unavailable status=${e.status ?? "n/a"}`);
-        await writeAudit({ actorUserId: session.userId, tableName: "guard_ocr", rowId: session.userId, action: "guard_ocr_read", after: { ok: false, error: "provider_unavailable", provider_status: e.status, model: client.model, documents: docs.map((d) => d.type), images: imagesCount, ms }, ip: getClientIp(req) });
+        await writeAudit({ actorUserId: session.userId, tableName: "guard_ocr", rowId: session.userId, action: "guard_ocr_read", after: { ok: false, error: "provider_unavailable", provider_status: e.status, provider_reason: e.reason, model: client.a.model, documents: docs.map((d) => d.type), images: imagesCount, ms }, ip: getClientIp(req) });
         return NextResponse.json({ error: "ocr_unavailable", message: OCR_UNAVAILABLE_MSG }, { status: 503 });
       }
       throw e;
     }
     const ms = Date.now() - t0;
     const usage = results.reduce((a, r) => ({ prompt_tokens: a.prompt_tokens + r.usage.promptTokens, completion_tokens: a.completion_tokens + r.usage.completionTokens, calls: a.calls + r.usage.calls, truncated_calls: a.truncated_calls + r.usage.truncated }), { prompt_tokens: 0, completion_tokens: 0, calls: 0, truncated_calls: 0 });
+    // 供應商：任何一份文件讀 A 退回咗 DeepSeek，頂層就報 deepseek（每份文件另有自己嘅 provider_used）
+    const providerUsed = { a: results.every((r) => r.provider_used.a === "claude") ? ("claude" as const) : ("deepseek" as const), b: results.every((r) => r.provider_used.b === "claude") ? ("claude" as const) : ("deepseek" as const) };
+    const fallbackReasons = results.flatMap((r) => (r.fallback_reason ? [r.fallback_reason] : []));
+    const byProvider = {
+      claude: { prompt_tokens: 0, completion_tokens: 0, calls: 0 },
+      deepseek: { prompt_tokens: 0, completion_tokens: 0, calls: 0 },
+    };
+    for (const r of results) for (const p of ["claude", "deepseek"] as const) {
+      byProvider[p].prompt_tokens += r.usage_by_provider[p].promptTokens;
+      byProvider[p].completion_tokens += r.usage_by_provider[p].completionTokens;
+      byProvider[p].calls += r.usage_by_provider[p].calls;
+    }
     const summary = results.map((r) => {
       const counts = { confirmed: 0, review: 0, missing: 0 };
       for (const f of Object.values(r.fields)) if (f) counts[f.status] += 1;
@@ -121,14 +140,18 @@ async function handle(req: Request): Promise<NextResponse> {
       rowId: session.userId,
       action: "guard_ocr_read",
       // truncated_calls：撞 output token 上限嘅呼叫數（只記數量，冇內容）
-      after: { ok: true, model: client.model, documents: summary, images: imagesCount, ms, ...usage },
+      after: { ok: true, model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, ...usage },
       ip: getClientIp(req),
     });
     return NextResponse.json({
-      model: client.model,
+      model: client.a.model,
       ms,
       usage: { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, calls: usage.calls },
-      documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok })),
+      usage_by_provider: byProvider,
+      // WP-OCR-CLAUDE §36（additive）：兩次讀實際用咗邊個供應商／型號（淨係標籤，冇圖片、冇欄位值）
+      provider_used: providerUsed,
+      models_used: { a: results.every((r) => r.model_used.a === results[0]!.model_used.a) ? results[0]!.model_used.a : results.find((r) => r.provider_used.a === "deepseek")!.model_used.a, b: results[0]?.model_used.b ?? client.b.model },
+      documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used })),
     });
   }
 }
