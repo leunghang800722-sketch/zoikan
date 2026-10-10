@@ -28,6 +28,8 @@ export const DEFAULT_OCR_MODEL = "deepseek-flash";
 export const DEFAULT_OCR_BASE_URL = "https://api.deepseek.com";
 export const OCR_CALL_TIMEOUT_MS = 60_000;
 export const OCR_MAX_OUTPUT_TOKENS = 1500;
+/** Claude（Opus 5.5）thinking 計入 max_tokens，1500 會令每次 max_tokens 退回 DeepSeek，所以另設。 */
+export const OCR_CLAUDE_MAX_OUTPUT_TOKENS = 8000;
 
 /** WP-OCR-CLAUDE §36：讀 A 用 Claude（老闆 2026-10-10 揀 Opus 5.5）。 */
 export const DEFAULT_OCR_CLAUDE_MODEL = "claude-opus-5-5";

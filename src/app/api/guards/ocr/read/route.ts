@@ -150,7 +150,7 @@ async function handle(req: Request): Promise<NextResponse> {
       usage_by_provider: byProvider,
       // WP-OCR-CLAUDE §36（additive）：兩次讀實際用咗邊個供應商／型號（淨係標籤，冇圖片、冇欄位值）
       provider_used: providerUsed,
-      models_used: { a: results[0]?.model_used.a ?? client.a.model, b: results[0]?.model_used.b ?? client.b.model },
+      models_used: { a: results.every((r) => r.model_used.a === results[0]!.model_used.a) ? results[0]!.model_used.a : results.find((r) => r.provider_used.a === "deepseek")!.model_used.a, b: results[0]?.model_used.b ?? client.b.model },
       documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used })),
     });
   }

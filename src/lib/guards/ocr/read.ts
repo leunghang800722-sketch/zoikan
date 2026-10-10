@@ -74,14 +74,22 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
   let usedA = clients.a;
   let fallbackReason: string | null = null;
   const readA = async (): Promise<VisionResponse> => {
+    let r: VisionResponse;
     try {
-      return await clients.a.complete(reqA);
+      r = await clients.a.complete(reqA);
     } catch (e) {
       if (!(e instanceof OcrUnavailableError) || !clients.fallbackA) throw e;
       fallbackReason = e.reason ?? (e.status !== null ? `status_${e.status}` : "unavailable");
       usedA = clients.fallbackA;
       return clients.fallbackA.complete(reqA);
     }
+    // Claude 正常完結但 JSON 解析唔到、而有後備 → 交 DeepSeek 重讀一次
+    if (clients.fallbackA && parseModelJson(r.text, fields) === null) {
+      fallbackReason = "parse";
+      usedA = clients.fallbackA;
+      return clients.fallbackA.complete(reqA);
+    }
+    return r;
   };
   // 兩次獨立讀：同時發出；B 嘅 request 只由 (type, tiles) 構成。
   const [ra, rb] = await Promise.all([readA(), clients.b.complete(reqB)]);
