@@ -829,6 +829,7 @@ model RateCard {
   voidedAt  DateTime? @map("voided_at")
   voidedBy  String?   @map("voided_by")
 
+  @@index([siteId, shiftTypeId, brokerId, effectiveFrom(sort: Desc)])
   @@map("rate_cards")
 }
 
@@ -885,6 +886,9 @@ model ShiftRecord {
   @@unique([guardId, workDate, shiftTypeId])
   @@index([siteId, workDate])
   @@index([workDate])
+  // P3-1.3：partial index `shift_records_pending_approval_idx`（status WHERE status='pending_approval'）只存在於 migration。
+  @@index([settlementBrokerId, workDate])
+  @@index([parentShiftId])
   @@map("shift_records")
 }
 
@@ -1249,6 +1253,7 @@ model DailyRequirement {
   voidedBy  String?   @map("voided_by")
 
   @@unique([siteId, shiftTypeId, workDate])
+  @@index([workDate])
   @@map("daily_requirements")
 }
 
@@ -1274,6 +1279,7 @@ model SpecialItem {
   voidedAt  DateTime? @map("voided_at")
   voidedBy  String?   @map("voided_by")
 
+  // P3-1.3：partial index `special_items_month_kind_active_idx`（month, kind WHERE voided_at IS NULL）只存在於 migration。
   @@map("special_items")
 }
 
@@ -1502,6 +1508,8 @@ model AuditLog {
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@index([tableName, rowId])
+  @@index([createdAt(sort: Desc)])
+  @@index([actorUserId, createdAt(sort: Desc)])
   @@map("audit_log")
 }
 
