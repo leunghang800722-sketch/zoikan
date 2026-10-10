@@ -1,7 +1,7 @@
 "use client";
 // P2-A：配額頁（README §05）——換皮，邏輯／API 呼叫全部保留。
 import { useEffect, useState } from "react";
-import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";

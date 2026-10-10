@@ -16,7 +16,7 @@
 // （`?take=500`），呢個 filter 淨係喺已經攞到手嘅列表客戶端篩，唔使
 // 加 API 參數。
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPatch, apiPost, type ApiListResult, apiGetAll } from "@/lib/ui/api-client";
+import { apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Notice } from "@/components/ui/Notice";

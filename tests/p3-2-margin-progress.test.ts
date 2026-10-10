@@ -40,7 +40,8 @@ describe("P3-2.2 margin-progress／日級 shortfall 拆分", () => {
     const full = (await (await shortfall(req("http://t/api/reports/shortfall?date=2026-08-01", cookie))).json());
     const day = (await (await shortfall(req("http://t/api/reports/shortfall?date=2026-08-01&include_margin=0", cookie))).json());
     expect("month_progress" in day).toBe(false);
-    const { month_progress: _mp, ...rest } = full;
+    const rest: Record<string, unknown> = { ...full };
+    delete rest.month_progress;
     expect(day).toEqual(rest);
   });
 
