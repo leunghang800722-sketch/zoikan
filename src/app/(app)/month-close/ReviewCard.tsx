@@ -1,8 +1,8 @@
 "use client";
 // 1a 「要你睇」卡（橙邊）：4 欄按題型分組（定價／保安員配對／結算雞頭／更數差異）各頭 2 題＋「再多 N 題 ›」。
-// 「開始逐條答」開現有 MonthCloseTriageDialog（桌面照用；手機 <768px 由 dialog 自己切 1e 一次一題）。
+// P3-3.4：「開始逐條答」掣只留右欄 RightRail（唯一 CTA 區，testid rail-open-triage）；呢張卡淨係「再多 N 題 ›」文字連結。
+// 現有 MonthCloseTriageDialog（桌面照用；手機 <768px 由 dialog 自己切 1e 一次一題）。
 import Link from "next/link";
-import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
 import { humanize, reviewTotals, type ReviewGroup } from "@/components/month-close/derive";
@@ -22,11 +22,6 @@ export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto:
           <Link href="/triage" className="text-[12px] text-zk-muted underline">
             去分診頁
           </Link>
-          {canAnswer && (
-            <Button variant="primary" className="!px-4 !py-2 font-semibold" onClick={onOpenTriage} disabled={busy || locked} data-testid="open-triage">
-              開始逐條答（{t.total}）
-            </Button>
-          )}
         </div>
       </div>
       {t.total > 0 && (

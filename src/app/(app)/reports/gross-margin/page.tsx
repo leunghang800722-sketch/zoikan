@@ -95,7 +95,7 @@ function sortByMarginAsc(sites: SiteRow[]): SiteRow[] {
 }
 
 export default function GrossMarginPage() {
-  const [month, setMonth] = useMonthState();
+  const [month, setMonth] = useMonthState(undefined, { persistDefault: true });
   const [data, setData] = useState<Result | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);

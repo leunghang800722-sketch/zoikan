@@ -56,7 +56,7 @@ function fmtNum(v: number | null) {
 }
 
 export default function OpsDigestPage() {
-  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1));
+  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [digest, setDigest] = useState<DigestDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [aiText, setAiText] = useState<string | null>(null);

@@ -2158,8 +2158,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         <Notice
           variant="warning"
           action={
-            <Link href="/reports/monthly-close" className="text-[12px] underline" style={{ color: "inherit" }}>
-              去月結工作台
+            <Link href={`/month-close?month=${month}`} className="text-[12px] underline" style={{ color: "inherit" }}>
+              去一鍵結算
             </Link>
           }
         >

@@ -35,7 +35,8 @@ export default function MonthCloseOneClickPage() {
   const pollingRef = useRef<string | null>(null);
   const [triageOpen, setTriageOpen] = useState<string | null>(null);
   const [facts, setFacts] = useState({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
-  const [lockedNow, setLockedNow] = useState(false);
+  // null＝跟最新 run 報告；鎖／解鎖之後蓋過（run 報告係結算當時嘅快照）。
+  const [lockedOverride, setLockedOverride] = useState<boolean | null>(null);
   const [health, setHealth] = useState<{ critical: number; warn: number; info: number } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [unsentMsg, setUnsentMsg] = useState<string | null>(null);
@@ -65,7 +66,7 @@ export default function MonthCloseOneClickPage() {
 
   useEffect(() => {
     setFacts({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
-    setLockedNow(false);
+    setLockedOverride(null);
     setHealth(null);
     loadRuns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -216,7 +217,27 @@ export default function MonthCloseOneClickPage() {
     if (!res.ok) setError(res.message);
     else {
       setNotice(`${month} 已鎖定`);
-      setLockedNow(true);
+      setLockedOverride(true);
+    }
+  }
+
+  // P3-3.4：解鎖（只喺已鎖定時由 LockSection 出現）。API 不變：POST /api/month-closes/:id/unlock { reason }。
+  async function unlockMonth(reason: string) {
+    setBusy(true);
+    setError(null);
+    const gen = await apiPost<{ month_close: { id: string } }>(`/api/month-closes/${month}/generate`);
+    if (!gen.ok) {
+      setBusy(false);
+      setError(gen.message);
+      return;
+    }
+    const res = await apiPost(`/api/month-closes/${gen.data.month_close.id}/unlock`, { reason });
+    setBusy(false);
+    if (!res.ok) setError(res.message);
+    else {
+      setNotice(`${month} 已解鎖`);
+      setLockedOverride(false);
+      await loadRuns();
     }
   }
 
@@ -224,7 +245,7 @@ export default function MonthCloseOneClickPage() {
   const report = latestRun?.report ?? null;
   // Opus 驗收：job 行緊嗰陣唔俾再上載（會開新版本／改名單，job 讀到一半嘅資料）。
   const jobRunning = !!latestRun && latestRun.status === "running" && !latestRun.stalled;
-  const locked = lockedNow || report?.lock_precondition.current_month_already_locked === true || stepByKey(latestRun, "precheck")?.numbers.currentMonthLocked === true;
+  const locked = lockedOverride ?? (report?.lock_precondition.current_month_already_locked === true || stepByKey(latestRun, "precheck")?.numbers.currentMonthLocked === true);
 
   const uploads = useMemo(() => deriveUploads(latestRun, facts, report), [latestRun, facts, report]);
   const stages = useMemo(() => deriveStages({ run: latestRun, report, uploads, locked }), [latestRun, report, uploads, locked]);
@@ -287,7 +308,6 @@ export default function MonthCloseOneClickPage() {
                 busy={busy}
                 locked={locked}
                 groups={groups}
-                onUndo={() => latestRun && undoAuto(latestRun.id)}
                 onOpenTriage={openTriage}
               />
               <LockSection
@@ -296,7 +316,7 @@ export default function MonthCloseOneClickPage() {
                 busy={busy}
                 locked={locked}
                 groups={groups}
-                onLock={lockMonth}
+                onUnlock={unlockMonth}
                 onOpenTriage={openTriage}
                 onHealth={setHealth}
               />

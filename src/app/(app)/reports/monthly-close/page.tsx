@@ -3,19 +3,9 @@
 // 卡＋左下「月結總表」；右邊 sticky「狀態卡」（鎖定／解鎖）。Generate／
 // 鎖定／解鎖 API 流程唔變（同 P1 一樣）。
 //
-// 保持向下相容（tests/e2e/wp4.spec.ts (b) 呢個舊 e2e 唔喺呢次 P2-B 範圍
-// 內，但一齊跑喺 `npx playwright test tests/e2e/`，唔可以整壞）：
-//  - `input[type="month"]` 照喺（FilterChip 包住）。
-//  - 撳掣文字用 substring match（Playwright getByRole name 預設 substring）
-//    ——「重新 Generate」仲係揾到 name:"Generate"；「鎖定 2026-10」揾到
-//    name:"鎖定"；「解鎖 2026-10」揾到 name:"解鎖"。
-//  - 「§6.3 五條自動對數規則」呢串文字原封不動保留（唔改做純 README
-//    「五條自動對數規則」，怕另一個 test 用 exact text 揾——保守做法係
-//    兩個字串都出現：卡標題用 README 版，副標維持 §6.3 呢個 anchor）。
-//  - 解鎖 input 嘅 `placeholder` 屬性一定要係「解鎖原因」呢隻字面值
-//    （舊 test 用 `input[placeholder="解鎖原因"]` CSS attribute selector，
-//    唔係 substring）——README 想要「解鎖原因（必填）」呢個顯示，改用
-//    上面獨立一行 label 顯示「（必填）」，`placeholder` 屬性維持原字面值。
+// P3-3.4：頁頂有報表 tab（`reports/layout.tsx`）；頁首主掣「生成月結」，匯出 Excel／Postorder
+// 格式／重算介紹費收入「更多 ▾」；鎖定／解鎖掣已刪（老闆 3A：鎖月只喺 `/month-close` 做），
+// 狀態卡只顯示鎖定狀態＋連結。
 import { useEffect, useState } from "react";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
@@ -24,11 +14,11 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
 import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { inputCls } from "@/components/ui/Field";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateTime } from "@/lib/ui/format";
 import type { ApiListResult } from "@/lib/ui/api-client";
-import { MonthHealthCard } from "../../month-close/MonthHealthCard";
+import Link from "next/link";
+import { MenuButton } from "@/components/ui/MenuButton";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
@@ -192,13 +182,11 @@ function RuleCard({ rule }: { rule: ReconciliationRule }) {
 }
 
 export default function MonthlyCloseWorkbenchPage() {
-  const [month, setMonth] = useMonthState();
+  const [month, setMonth] = useMonthState(undefined, { persistDefault: true });
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [overrideReason, setOverrideReason] = useState("");
-  const [unlockReason, setUnlockReason] = useState("");
   const [showOutside, setShowOutside] = useState(false);
   // 應修①：狀態卡「毛利」要同毛利即時表口徑一致（唔係月結總表 main_rows
   // 加返出嚟嗰個數——兩份報表 scope 唔同，見 gross-margin.ts 檔頭註解），
@@ -211,14 +199,6 @@ export default function MonthlyCloseWorkbenchPage() {
   // 應修 1：獨立於「未定價」——settlement_broker_id IS NULL 嘅格，就算
   // 未定價 count＝0 都要顯示。
   const [noSettlementCount, setNoSettlementCount] = useState(0);
-  // B1-6（規則 10，§14）：月結鎖定前檢查——邊啲盤呢個月有出更但未上載
-  // 更表／未對數完成，鎖定會 400。呢度入頁／Generate 就查一次，等用戶
-  // 撳「鎖定」之前已經見到清單（唔使撞 400 先知）。
-  const [rosterCoverage, setRosterCoverage] = useState<{
-    missing_upload_sites: { site_id: string; site_name: string }[];
-    unconfirmed_upload_sites: { site_id: string; site_name: string; status: string }[];
-  } | null>(null);
-  const [forceOverride, setForceOverride] = useState(false);
   // A1（Opus 整合驗收）：入頁／切月份時，先查呢個月有冇 month_closes 行
   // （`GET /api/month-closes?month=`）——已經有就自動行一次 Generate（見
   // src/app/api/month-closes/[id]/generate/route.ts 檔頭註解：
@@ -232,12 +212,9 @@ export default function MonthlyCloseWorkbenchPage() {
     setLoading(true);
     setError(null);
     // month 段接受 "YYYY-MM"——見 src/lib/month-lock.ts resolveMonthCloseIdOrMonth()
-    const [res, marginRes, coverageRes] = await Promise.all([
+    const [res, marginRes] = await Promise.all([
       apiPost<GenerateResult>(`/api/month-closes/${month}/generate`),
       apiGet<GrossMarginTotalsResult>(`/api/reports/gross-margin?month=${month}`),
-      apiGet<{ missing_upload_sites: { site_id: string; site_name: string }[]; unconfirmed_upload_sites: { site_id: string; site_name: string; status: string }[] }>(
-        `/api/month-closes/roster-coverage?month=${month}`,
-      ),
     ]);
     setLoading(false);
     if (!res.ok) {
@@ -249,7 +226,6 @@ export default function MonthlyCloseWorkbenchPage() {
     setUnpricedCount(marginRes.ok ? (marginRes.data.unpriced_count ?? 0) : 0);
     setUnpricedGroups(marginRes.ok ? (marginRes.data.unpriced_groups ?? []) : []);
     setNoSettlementCount(marginRes.ok ? (marginRes.data.no_settlement_count ?? 0) : 0);
-    setRosterCoverage(coverageRes.ok ? coverageRes.data : null);
   }
 
   // WP-LTSHIFT §19 交付 D：月結頁「重算介紹費」——呼叫已有嘅
@@ -291,36 +267,6 @@ export default function MonthlyCloseWorkbenchPage() {
     await generate(); // 月結總表／毛利即時表要反映新嘅 special_items
   }
 
-  async function lock() {
-    if (!result) return;
-    setError(null);
-    const body: Record<string, unknown> = {};
-    if (result.reconciliation.has_diff) body.override_reason = overrideReason;
-    if (forceOverride) body.force = true;
-    const res = await apiPost(`/api/month-closes/${result.month_close.id}/lock`, body);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已鎖定");
-    setOverrideReason("");
-    setForceOverride(false);
-    await generate();
-  }
-
-  async function unlock() {
-    if (!result) return;
-    setError(null);
-    const res = await apiPost(`/api/month-closes/${result.month_close.id}/unlock`, { reason: unlockReason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已解鎖");
-    setUnlockReason("");
-    await generate();
-  }
-
   // A1：入頁／切月份查呢個月有冇 month_closes 行，有就自動 Generate。
   useEffect(() => {
     let cancelled = false;
@@ -350,25 +296,24 @@ export default function MonthlyCloseWorkbenchPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         kicker={kickerFor("/reports/monthly-close")}
-        title="月結工作台"
-        subtitle="生成月結總表＋五條自動對數規則；鎖定前必須先 Generate 一次。"
+        title="月結總表"
+        subtitle="生成月結總表＋五條自動對數規則；鎖月喺「月結 › 一鍵結算」做。"
         actions={
           <>
             <MonthPicker label="月份" value={month} onChange={setMonth} />
-            <a href={`/api/reports/monthly-close?month=${month}&export=1`}>
-              <Button variant="secondary">匯出 Excel</Button>
-            </a>
-            {/* §20.4 Phase 4：系統輸出 Postorder 格式總表 Excel——月結鎖定
-                後仍然可以下載。 */}
-            <a href={`/api/reports/postorder/${month}`}>
-              <Button variant="secondary">下載總表 Excel（Postorder 格式）</Button>
-            </a>
-            <Button variant="secondary" onClick={recomputeReferralFee} disabled={recomputingReferralFee}>
-              {recomputingReferralFee ? "重算緊…" : "重算介紹費"}
+            <Button variant="dark" onClick={generate} disabled={loading} data-testid="generate-month-close">
+              {loading ? "生成緊…" : "生成月結"}
             </Button>
-            <Button variant="dark" onClick={generate} disabled={loading}>
-              {loading ? "生成緊…" : "重新 Generate"}
-            </Button>
+            <MenuButton
+              label="更多"
+              testId="more-menu"
+              items={[
+                { label: "匯出 Excel", href: `/api/reports/monthly-close?month=${month}&export=1`, download: true },
+                // §20.4 Phase 4：系統輸出 Postorder 格式總表 Excel——月結鎖定後仍然可以下載。
+                { label: "下載總表 Excel（Postorder 格式）", href: `/api/reports/postorder/${month}`, download: true },
+                { label: recomputingReferralFee ? "重算緊…" : "重算介紹費", onSelect: recomputeReferralFee, disabled: recomputingReferralFee, testId: "recompute-referral-fee" },
+              ]}
+            />
           </>
         }
       />
@@ -447,10 +392,10 @@ export default function MonthlyCloseWorkbenchPage() {
         <div className="rounded-[10px] border border-zk-border bg-white">
           <EmptyState
             title={`${month} 未有月結記錄`}
-            description="呢個月未 Generate 過——撳「Generate」建立月結總表＋五條自動對數規則。"
+            description="呢個月未生成過——撳「生成月結」建立月結總表＋五條自動對數規則。"
             cta={
               <Button variant="dark" onClick={generate} disabled={loading}>
-                {loading ? "生成緊…" : "Generate"}
+                {loading ? "生成緊…" : "生成月結"}
               </Button>
             }
           />
@@ -467,7 +412,7 @@ export default function MonthlyCloseWorkbenchPage() {
                     唔拆開）——tests/e2e/wp4.spec.ts (b) 用
                     `page.getByText("§6.3 五條自動對數規則")` 揾呢一句，
                     拆成兩個 element 會令個 substring 唔連續，揾唔到。 */}
-                <div className="text-[13.5px] font-semibold text-zk-text">§6.3 五條自動對數規則</div>
+                <div className="text-[13.5px] font-semibold text-zk-text" data-testid="recon-rules-title">五條自動對數規則</div>
                 <div className="text-xs text-zk-muted">
                   {passCount} 通過 · {notEnabledCount} 未啟用
                   {diffCount > 0 && (
@@ -486,7 +431,7 @@ export default function MonthlyCloseWorkbenchPage() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <h2 className="text-[13.5px] font-semibold text-zk-text">月結總表</h2>
+              <h2 className="text-[13.5px] font-semibold text-zk-text">逐盤月結</h2>
               <div className={tableCls.wrap}>
                 <table className={tableCls.table} style={{ minWidth: tableMinWidth(CLOSE_COLS) }}>
                   <thead>
@@ -615,62 +560,13 @@ export default function MonthlyCloseWorkbenchPage() {
 
             <hr className="border-zk-border" />
 
-            {/* WP-AI-OPS §28.3：鎖月前體檢（只提示，唔擋鎖月）。 */}
-            {!locked && <MonthHealthCard month={month} />}
-
-            {!locked ? (
-              <div className="flex flex-col gap-2">
-                {/* B1-6（規則 10，§14）：未上載／未對數完成嘅盤清單——撳
-                    「鎖定」之前已經見到，唔使撞 400 先知。 */}
-                {rosterCoverage && (rosterCoverage.missing_upload_sites.length > 0 || rosterCoverage.unconfirmed_upload_sites.length > 0) && (
-                  <div className="rounded-md border border-orange-200 bg-orange-50 p-2.5 text-[12px] text-orange-800" data-testid="roster-coverage-issues">
-                    <div className="font-medium">更表上載/對數未齊，會擋鎖定：</div>
-                    {rosterCoverage.missing_upload_sites.length > 0 && (
-                      <div className="mt-1">未上載：{rosterCoverage.missing_upload_sites.map((s) => s.site_name).join("、")}</div>
-                    )}
-                    {rosterCoverage.unconfirmed_upload_sites.length > 0 && (
-                      <div className="mt-1">未對數完成：{rosterCoverage.unconfirmed_upload_sites.map((s) => `${s.site_name}（${s.status}）`).join("、")}</div>
-                    )}
-                    <label className="mt-2 flex items-center gap-1.5">
-                      <input type="checkbox" checked={forceOverride} onChange={(e) => setForceOverride(e.target.checked)} />
-                      強制鎖定（淨係老闆做得到，會記落操作紀錄）
-                    </label>
-                  </div>
-                )}
-                {result.reconciliation.has_diff && (
-                  <>
-                    <span className="text-xs text-zk-muted">有紅色差異，鎖定要填 override 原因（必填）</span>
-                    <input
-                      className={inputCls}
-                      placeholder="有紅色差異，鎖定要填 override 原因"
-                      value={overrideReason}
-                      onChange={(e) => setOverrideReason(e.target.value)}
-                    />
-                  </>
-                )}
-                <Button
-                  variant="dark"
-                  onClick={lock}
-                  disabled={
-                    (result.reconciliation.has_diff && !overrideReason.trim()) ||
-                    (!!rosterCoverage && (rosterCoverage.missing_upload_sites.length > 0 || rosterCoverage.unconfirmed_upload_sites.length > 0) && !forceOverride)
-                  }
-                >
-                  鎖定 {month}
-                </Button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                <span className="text-[11px] leading-relaxed text-zk-faint">
-                  解鎖會令更表重新可改；需要「月結鎖定解鎖」權限 · 原因會寫入操作紀錄。
-                </span>
-                <span className="text-xs text-zk-muted">解鎖原因（必填）</span>
-                <input className={inputCls} placeholder="解鎖原因" value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} />
-                <Button variant="danger" onClick={unlock} disabled={!unlockReason.trim()}>
-                  解鎖 {month}
-                </Button>
-              </div>
-            )}
+            {/* P3-3.4（老闆 3A）：鎖月只喺「月結 › 一鍵結算」頁做（鎖月前體檢、條件、鎖／解鎖掣都喺嗰度）。 */}
+            <div className="flex flex-col gap-1.5" data-testid="lock-pointer">
+              <div className="text-[12px] leading-relaxed text-zk-muted">{locked ? "已鎖定。要解鎖或者睇鎖月紀錄，去一鍵結算頁。" : "鎖月前體檢同鎖定掣喺一鍵結算頁。"}</div>
+              <Link href={`/month-close?month=${month}`} className="text-[13px] font-semibold text-zk-primary hover:underline" data-testid="goto-month-close">
+                去一鍵結算{locked ? "" : "鎖月"} ›
+              </Link>
+            </div>
           </div>
         </div>
       )}

@@ -130,7 +130,7 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 };
 
 export default function LongtermPayrollPage() {
-  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1));
+  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [payroll, setPayroll] = useState<PayrollMonthDTO | null>(null);
   const [inputs, setInputs] = useState<InputDTO[]>([]);
   const [contracts, setContracts] = useState<ContractDTO[]>([]);
