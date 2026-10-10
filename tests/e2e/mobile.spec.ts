@@ -51,10 +51,12 @@ test.describe("手機版佈局（375×812）", () => {
 
     await shot(page, "home-drawer-open.png");
 
-    await expect(drawer.getByRole("link", { name: "更表" })).toBeVisible();
-    await expect(drawer.getByRole("link", { name: "保安員" })).toBeVisible();
+    // P3-3.8：「更表」substring 撞「更表上載」（strict mode）——改用 NAV_SCHEMA 嘅 testid（mnav-<href>）。
+    await expect(drawer.getByTestId("mnav-/roster")).toBeVisible();
+    await expect(drawer.getByTestId("mnav-/roster")).toHaveText("更表");
+    await expect(drawer.getByTestId("mnav-/guards")).toHaveText("保安員");
 
-    await drawer.getByRole("link", { name: "更表" }).click();
+    await drawer.getByTestId("mnav-/roster").click();
     await page.waitForURL((u) => u.pathname === "/roster", { timeout: 15_000 });
     await expect(drawer).toBeHidden();
   });
@@ -96,7 +98,7 @@ test.describe("手機版佈局（375×812）", () => {
     // 淨係靠 `usePathname()` 變化嗰個 effect 關抽屜嘅寫法喺呢種情況會
     // 漏（抽屜賴喺度）——`MobileNav.tsx` 每條 `<Link>` 而家加咗顯式
     // `onClick={() => setOpen(false)}`，唔理 pathname 變唔變都會關。
-    await drawer.getByRole("link", { name: "更表" }).click();
+    await drawer.getByTestId("mnav-/roster").click();
     await expect(drawer).toBeHidden();
     expect(new URL(page.url()).pathname).toBe("/roster");
   });

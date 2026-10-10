@@ -527,7 +527,7 @@ export default function MonthlyCloseWorkbenchPage() {
                   audit_log 查返（見 generate route 註解），而家現況一律
                   「—」（冇任何 route 寫呢種 audit action）。 */}
               <div className="flex justify-between gap-2">
-                <dt className="text-zk-muted">最後 Generate</dt>
+                <dt className="text-zk-muted">最後生成</dt>
                 <dd>{result.last_generated_at ? fmtDateTime(result.last_generated_at) : "—"}</dd>
               </div>
               {locked && (

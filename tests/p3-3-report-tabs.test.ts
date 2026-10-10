@@ -1,6 +1,6 @@
 // P3-3.4：報表 tab 按 grants 顯示（`reports/layout.tsx` 用同一份 REPORT_TABS＋getViewGrants）。
 import { describe, expect, it } from "vitest";
-import { REPORT_TABS } from "@/components/reports/ReportTabs";
+import { REPORT_TABS } from "@/lib/nav/report-tabs";
 import { MODULES, isGrantedByDefault, type Module, type RoleName } from "@/lib/rbac/matrix";
 
 function visible(role: RoleName, over: Partial<Record<Module, boolean>> = {}) {
