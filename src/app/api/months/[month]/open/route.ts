@@ -24,7 +24,7 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { MonthOpenSchema } from "@/lib/api/schemas";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { writeAudit } from "@/lib/audit";
+import { writeAuditMany } from "@/lib/audit";
 import { BadRequest, Forbidden } from "@/lib/api/errors";
 
 function addMonths(d: Date, n: number): Date {
@@ -61,42 +61,46 @@ export async function POST(req: Request, { params }: { params: Promise<{ month: 
     const pendingAudits: PendingAudit[] = [];
 
     const { assignmentsCreated, quotasCreated, drCreated, drSkippedOutOfRange, sourceHadAnything } = await prisma.$transaction(async (tx) => {
+      // P3-2.9（附錄 b A-15）：每張表「一次 findMany 攞 target 已存在 key → createManyAndReturn
+      // （skipDuplicates 防並發）→ 用返回嘅行寫 audit」，取代逐行 findUnique＋create。
+      const copiedFrom = sourceMonth.toISOString().slice(0, 7);
+
       // 1) broker_site_assignments（同 scripts/assignments/rollover.ts 邏輯一致）
       const sourceAssignments = await tx.brokerSiteAssignment.findMany({ where: { month: sourceMonth } });
-      let assignmentsCreated = 0;
-      for (const row of sourceAssignments) {
-        const existing = await tx.brokerSiteAssignment.findUnique({
-          where: { brokerId_siteId_month: { brokerId: row.brokerId, siteId: row.siteId, month: targetMonth } },
-        });
-        if (existing) continue;
-        const created = await tx.brokerSiteAssignment.create({
-          data: { brokerId: row.brokerId, siteId: row.siteId, month: targetMonth, createdBy: session.userId },
-        });
-        pendingAudits.push({ tableName: "broker_site_assignments", rowId: created.id, after: { ...created, copied_from: sourceMonth.toISOString().slice(0, 7) } });
-        assignmentsCreated++;
-      }
+      const existingAssignments = await tx.brokerSiteAssignment.findMany({ where: { month: targetMonth }, select: { brokerId: true, siteId: true } });
+      const existingAssignmentKeys = new Set(existingAssignments.map((r) => `${r.brokerId}|${r.siteId}`));
+      const newAssignments = sourceAssignments.filter((r) => !existingAssignmentKeys.has(`${r.brokerId}|${r.siteId}`));
+      const createdAssignments = newAssignments.length
+        ? await tx.brokerSiteAssignment.createManyAndReturn({
+            data: newAssignments.map((row) => ({ brokerId: row.brokerId, siteId: row.siteId, month: targetMonth, createdBy: session.userId })),
+            skipDuplicates: true,
+          })
+        : [];
+      for (const created of createdAssignments) pendingAudits.push({ tableName: "broker_site_assignments", rowId: created.id, after: { ...created, copied_from: copiedFrom } });
+      const assignmentsCreated = createdAssignments.length;
 
       // 2) quotas
       const sourceQuotas = await tx.quota.findMany({ where: { month: sourceMonth, voidedAt: null } });
-      let quotasCreated = 0;
-      for (const row of sourceQuotas) {
-        const existing = await tx.quota.findUnique({
-          where: { month_siteId_shiftTypeId_brokerId: { month: targetMonth, siteId: row.siteId, shiftTypeId: row.shiftTypeId, brokerId: row.brokerId } },
-        });
-        if (existing) continue;
-        const created = await tx.quota.create({
-          data: { month: targetMonth, siteId: row.siteId, shiftTypeId: row.shiftTypeId, brokerId: row.brokerId, targetShifts: row.targetShifts, createdBy: session.userId },
-        });
-        pendingAudits.push({ tableName: "quotas", rowId: created.id, after: { ...created, copied_from: sourceMonth.toISOString().slice(0, 7) } });
-        quotasCreated++;
-      }
+      const existingQuotas = await tx.quota.findMany({ where: { month: targetMonth }, select: { siteId: true, shiftTypeId: true, brokerId: true } });
+      const existingQuotaKeys = new Set(existingQuotas.map((r) => `${r.siteId}|${r.shiftTypeId}|${r.brokerId}`));
+      const newQuotas = sourceQuotas.filter((r) => !existingQuotaKeys.has(`${r.siteId}|${r.shiftTypeId}|${r.brokerId}`));
+      const createdQuotas = newQuotas.length
+        ? await tx.quota.createManyAndReturn({
+            data: newQuotas.map((row) => ({ month: targetMonth, siteId: row.siteId, shiftTypeId: row.shiftTypeId, brokerId: row.brokerId, targetShifts: row.targetShifts, createdBy: session.userId })),
+            skipDuplicates: true,
+          })
+        : [];
+      for (const created of createdQuotas) pendingAudits.push({ tableName: "quotas", rowId: created.id, after: { ...created, copied_from: copiedFrom } });
+      const quotasCreated = createdQuotas.length;
 
       // 3) daily_requirements——逐日搬去新月份「同一日」（新月份日數少過來源
       // 月份時，多出嗰幾日冇對應，跳過；唔硬 clamp 落最後一日，避免將 31
       // 號嘅所需人手錯誤地疊落 30 號度）。
       const sourceDR = await tx.dailyRequirement.findMany({ where: { workDate: { gte: sourceMonth, lte: sourceMonthEnd }, voidedAt: null } });
-      let drCreated = 0;
+      const existingDR = await tx.dailyRequirement.findMany({ where: { workDate: { gte: targetMonth, lte: targetMonthEnd } }, select: { siteId: true, shiftTypeId: true, workDate: true } });
+      const existingDRKeys = new Set(existingDR.map((r) => `${r.siteId}|${r.shiftTypeId}|${r.workDate.getTime()}`));
       let drSkippedOutOfRange = 0;
+      const newDR: Array<{ siteId: string; shiftTypeId: string; workDate: Date; headcountRequired: number; createdBy: string }> = [];
       for (const row of sourceDR) {
         const day = row.workDate.getUTCDate();
         if (day > targetDaysInMonth) {
@@ -104,16 +108,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ month: 
           continue;
         }
         const targetDate = new Date(Date.UTC(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth(), day));
-        const existing = await tx.dailyRequirement.findUnique({
-          where: { siteId_shiftTypeId_workDate: { siteId: row.siteId, shiftTypeId: row.shiftTypeId, workDate: targetDate } },
-        });
-        if (existing) continue;
-        const created = await tx.dailyRequirement.create({
-          data: { siteId: row.siteId, shiftTypeId: row.shiftTypeId, workDate: targetDate, headcountRequired: row.headcountRequired, createdBy: session.userId },
-        });
-        pendingAudits.push({ tableName: "daily_requirements", rowId: created.id, after: { ...created, copied_from: sourceMonth.toISOString().slice(0, 7) } });
-        drCreated++;
+        if (existingDRKeys.has(`${row.siteId}|${row.shiftTypeId}|${targetDate.getTime()}`)) continue;
+        newDR.push({ siteId: row.siteId, shiftTypeId: row.shiftTypeId, workDate: targetDate, headcountRequired: row.headcountRequired, createdBy: session.userId });
       }
+      const createdDR = newDR.length ? await tx.dailyRequirement.createManyAndReturn({ data: newDR, skipDuplicates: true }) : [];
+      for (const created of createdDR) pendingAudits.push({ tableName: "daily_requirements", rowId: created.id, after: { ...created, copied_from: copiedFrom } });
+      const drCreated = createdDR.length;
 
       return {
         assignmentsCreated,
@@ -125,9 +125,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ month: 
     }, { timeout: 60_000, maxWait: 10_000 }); // P3-1.7（B-3）：daily_requirements 逐行 round trip，預設 5 s 太短
 
     // transaction 已經成功 commit——而家先逐條真係寫 audit_log。
-    for (const a of pendingAudits) {
-      await writeAudit({ actorUserId: session.userId, tableName: a.tableName, rowId: a.rowId, action: "create", after: a.after, ip });
-    }
+    await writeAuditMany(pendingAudits.map((a) => ({ actorUserId: session.userId, tableName: a.tableName, rowId: a.rowId, action: "create" as const, after: a.after, ip })));
 
     // Opus 對抗式驗收 A3：重複開同一個月份——三張表都冇新嘢複製（源頭
     // 有嘢但全部已經存在）就當「已經開咗」，回 200＋`already_open:true`
