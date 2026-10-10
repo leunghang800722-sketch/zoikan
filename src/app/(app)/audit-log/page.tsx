@@ -26,6 +26,7 @@ import { FilterChip } from "@/components/ui/FilterChip";
 import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtDateTime, todayLocalStr, addDaysStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
+import { diffAuditFields } from "@/lib/ui/audit-field-labels";
 
 interface AuditLogRow {
   id: string;
@@ -73,6 +74,42 @@ function actionPill(action: string) {
     <Pill variant="broker" color={{ bg: "var(--zk-surface-2)", fg: "var(--zk-muted)" }}>
       {action}
     </Pill>
+  );
+}
+
+// P3-4.3（H16）：key→中文欄名，只顯示有改嘅欄；原始 JSON 收埋。
+function AuditDiff({ before, after }: { before: unknown; after: unknown }) {
+  const diff = diffAuditFields(before, after);
+  return (
+    <div className="mt-1 space-y-1" data-testid="audit-diff">
+      {diff.length === 0 ? (
+        <div className="text-zk-xs text-zk-muted">冇欄位改動（或只係建立／作廢紀錄）</div>
+      ) : (
+        <table className="w-full max-w-md text-zk-xs">
+          <thead>
+            <tr className="text-left text-zk-muted">
+              <th className="pr-2 font-medium">欄位</th>
+              <th className="pr-2 font-medium">之前</th>
+              <th className="font-medium">之後</th>
+            </tr>
+          </thead>
+          <tbody>
+            {diff.map((d) => (
+              <tr key={d.key} className="align-top">
+                <td className="pr-2 font-medium text-zk-text-secondary">{d.label}</td>
+                <td className="pr-2 break-all text-zk-muted">{d.before}</td>
+                <td className="break-all text-zk-text">{d.after}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <details>
+        <summary className="cursor-pointer text-zk-2xs text-zk-faint">原始 JSON</summary>
+        <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">before: {JSON.stringify(before, null, 2)}</pre>
+        <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">after: {JSON.stringify(after, null, 2)}</pre>
+      </details>
+    </div>
   );
 }
 
@@ -254,11 +291,8 @@ export default function AuditLogPage() {
                 </td>
                 <td className={tableCls.tdNum}>
                   <details className="text-left">
-                    <summary className="cursor-pointer text-xs text-zk-primary">展開 before/after</summary>
-                    <div className="mt-1 space-y-1">
-                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">before: {JSON.stringify(r.before, null, 2)}</pre>
-                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">after: {JSON.stringify(r.after, null, 2)}</pre>
-                    </div>
+                    <summary className="cursor-pointer text-xs text-zk-primary">展開改動</summary>
+                    <AuditDiff before={r.before} after={r.after} />
                   </details>
                 </td>
               </tr>

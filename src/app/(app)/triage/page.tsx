@@ -41,6 +41,9 @@ export default function TriagePage() {
   const [mineOnly, setMineOnly] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [owner, setOwner] = useState<Record<string, string>>({});
+  // P3-4.3（H14）：預設只顯示「有未答」嘅 session；已處理晒／被取代嘅摺埋，「顯示全部」先出。轉交收入每張卡嘅「⋯」。
+  const [showAll, setShowAll] = useState(false);
+  const [moreOpen, setMoreOpen] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await apiGet<ListRes>(`/api/triage/sessions${mineOnly ? "?mine=1" : ""}`);
@@ -69,6 +72,10 @@ export default function TriagePage() {
   }
 
   const isBossView = (data?.eligible_owners.length ?? 0) > 0;
+  const allSessions = data?.sessions ?? [];
+  const actionable = allSessions.filter((s) => s.counts.open > 0 && !s.superseded_all);
+  const visibleSessions = showAll ? allSessions : actionable;
+  const hiddenCount = allSessions.length - actionable.length;
 
   return (
     <div className="space-y-4">
@@ -82,8 +89,17 @@ export default function TriagePage() {
         </label>
       )}
       {data && data.sessions.length === 0 && <EmptyState title="冇待答問題" />}
+      {data && data.sessions.length > 0 && actionable.length === 0 && !showAll && <EmptyState title="冇未答嘅問題" description="全部都處理晒或者已被較新嘅導入取代。" />}
+      {data && hiddenCount > 0 && (
+        <div className="text-zk-sm text-zk-muted" data-testid="triage-show-all-row">
+          {showAll ? "顯示緊全部" : `已摺埋 ${hiddenCount} 張處理晒／被取代嘅卡`} ·{" "}
+          <Button variant="link" size="sm" onClick={() => setShowAll((v) => !v)} data-testid="triage-show-all">
+            {showAll ? "只睇未答 ›" : "顯示全部 ›"}
+          </Button>
+        </div>
+      )}
       <div className="space-y-3">
-        {(data?.sessions ?? []).map((s) => (
+        {visibleSessions.map((s) => (
           <div key={s.id} className="space-y-2 rounded-lg border border-zk-border p-3 text-zk-base" data-testid="triage-session-card">
             <div className="flex flex-wrap items-center gap-2">
               <b>{SOURCE_LABEL[s.source_type] ?? s.source_type}</b>
@@ -100,6 +116,11 @@ export default function TriagePage() {
                 {s.counts.open > 0 ? "繼續答" : "冇未答"}
               </Button>
               {isBossView && (
+                <Button variant="ghost" size="sm" aria-label="更多" onClick={() => setMoreOpen((v) => (v === s.id ? null : s.id))} data-testid="triage-more">
+                  ⋯
+                </Button>
+              )}
+              {isBossView && moreOpen === s.id && (
                 <>
                   <select
                     className="rounded-[5px] border border-zk-border px-2 py-1.5"
