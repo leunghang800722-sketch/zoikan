@@ -1,9 +1,8 @@
 "use client";
 // WP-ONE-CLICK-AUTO §31.3 E＋WP-MC-UI 1a：「系統自動幫你做咗 N 項」——5 格 tab（新盤更種／自動建價卡／
 // 自動定價／歸屬結算雞頭／解釋更數差異；其他類有數先出）＋明細表（頭 6 行＋睇晒）；0 類併一行灰字。
-// 降級（§32.1）：逐類／逐行撤銷無 API，淨係保留「還原所有自動改動」。冇 PII：盤名、雞頭代號、更種代號、數目。
+// 降級（§32.1）：逐類／逐行撤銷無 API；「還原所有自動改動」掣只留右欄 RightRail（P3-3.4 唯一 CTA 區，testid undo-auto-rail）。冇 PII：盤名、雞頭代號、更種代號、數目。
 import { useState, type ReactNode } from "react";
-import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
 import { UNDO_NOTE, humanize, deriveAutoCategories, type AutoCatKey } from "@/components/month-close/derive";
@@ -11,7 +10,7 @@ import { UNDO_NOTE, humanize, deriveAutoCategories, type AutoCatKey } from "@/co
 export type { AutoReportDTO };
 const HEAD_ROWS = 6;
 
-export function AutoSummaryCard({ auto, busy, locked, onUndo, extraFooter }: { auto: AutoReportDTO; busy: boolean; locked: boolean; onUndo: () => void; extraFooter?: ReactNode }) {
+export function AutoSummaryCard({ auto, extraFooter }: { auto: AutoReportDTO; extraFooter?: ReactNode }) {
   const s = auto.summary;
   const { cats, zero, total } = deriveAutoCategories(auto);
   const [sel, setSel] = useState<AutoCatKey | null>(null);
@@ -42,9 +41,6 @@ export function AutoSummaryCard({ auto, busy, locked, onUndo, extraFooter }: { a
             </div>
             <div className="text-[12px] text-zk-muted">{UNDO_NOTE}</div>
           </div>
-          <Button variant="danger" className="ml-auto whitespace-nowrap" onClick={onUndo} disabled={busy || auto.undone || locked} data-testid="undo-auto">
-            ↺ 還原所有自動改動
-          </Button>
         </div>
 
         {cats.length > 0 ? (

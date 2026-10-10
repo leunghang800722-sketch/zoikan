@@ -167,15 +167,18 @@ test("(e) 月結工作台：2026-07 已有 month_closes 行——入頁自動 Ge
   await page.goto("/reports/monthly-close");
   await page.locator('input[type="month"]').fill("2026-07");
 
-  await expect(page.getByRole("heading", { name: "月結工作台" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Generate/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "月結總表" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /生成月結/ })).toBeVisible();
+  await expect(page.getByTestId("report-tabs")).toBeVisible();
+  await page.getByTestId("more-menu").click();
   await expect(page.locator('a:has-text("匯出 Excel")')).toBeVisible();
+  await page.keyboard.press("Escape");
   // A1（Opus 整合驗收）：2026-07 已經有 month_closes 行（鎖定咗）——入頁
   // 應該自動行一次 Generate，直接見到規則卡／總表／狀態卡，唔使自己
   // 撳「Generate」（呢個 test 全程冇撳過任何掣，`generate()` 淨係 no-op
   // upsert，唔會觸發 lock/unlock）。
-  await expect(page.getByText("§6.3 五條自動對數規則")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole("heading", { name: "月結總表" })).toBeVisible();
+  await expect(page.getByTestId("recon-rules-title")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "逐盤月結" })).toBeVisible();
   await expect(page.getByText("2026-07 狀態")).toBeVisible();
   await expect(page.getByText("已鎖定")).toBeVisible();
 

@@ -1,5 +1,5 @@
 "use client";
-// 1a 歷史：一行「今個月一鍵結算跑咗 N 次 … 睇歷史 ›」，展開現有 runs 表。
+// 1a 過往執行紀錄（P3-3.4 由「歷史 runs」改名）：一行「今個月一鍵結算跑咗 N 次 … 睇歷史 ›」，展開現有 runs 表。
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
@@ -16,14 +16,14 @@ export function HistorySection({ runs, busy, open, onToggle, onRerun }: { runs: 
           <>
             {" · "}
             <button type="button" className="text-zk-primary hover:underline" onClick={onToggle} aria-expanded={open}>
-              {open ? "收埋歷史 ›" : "睇歷史 ›"}
+              {open ? "收埋過往紀錄 ›" : "睇過往紀錄 ›"}
             </button>
           </>
         )}
       </div>
       {open && runs.length > 0 && (
         <div className="mt-2 rounded-[10px] border border-zk-border bg-white p-4">
-          <div className="mb-2 text-sm font-semibold text-zk-text">歷史 runs</div>
+          <div className="mb-2 text-sm font-semibold text-zk-text">過往執行紀錄</div>
           <div className={tableCls.wrap}>
             <table className={tableCls.table} style={{ minWidth: tableMinWidth(4) }}>
               <thead>

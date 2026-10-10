@@ -61,7 +61,7 @@ function KindPill({ kind }: { kind?: string }) {
 }
 
 export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
-  const [month, setMonth] = useMonthState();
+  const [month, setMonth] = useMonthState(undefined, { persistDefault: true });
   const [totals, setTotals] = useState<Total[]>([]);
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);

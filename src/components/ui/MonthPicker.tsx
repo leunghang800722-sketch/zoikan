@@ -11,7 +11,7 @@ import { addMonthsStr, currentMonthStr } from "@/lib/ui/format";
 import { isValidMonth, readInitialMonth, rememberMonth } from "@/lib/ui/month-store";
 
 /** 頁面用嘅 state hook：回 `[month, setMonth]`。`defaultMonth` 係冇 URL／sessionStorage 時用（預設本月）。 */
-export function useMonthState(defaultMonth?: string): [string, (m: string) => void] {
+export function useMonthState(defaultMonth?: string, opts: { persistDefault?: boolean } = {}): [string, (m: string) => void] {
   const fallback = defaultMonth ?? currentMonthStr();
   // SSR／首次 client render 一律用 fallback（避免 hydration mismatch）；mount 後 effect 先切去 URL／sessionStorage 嘅月。
   const [month, setMonthState] = useState<string>(fallback);
@@ -21,6 +21,9 @@ export function useMonthState(defaultMonth?: string): [string, (m: string) => vo
     if (r.source !== "default") {
       setMonthState(r.month);
       // 由 sessionStorage 還原嘅，URL 補返 ?month=（分享／重新整理都一致）；URL 本身帶嘅就記入 sessionStorage。
+      rememberMonth(r.month, { syncUrl: true });
+    } else if (opts.persistDefault) {
+      // 報表族（tab 之間換頁月份跟住）：連預設月份都記低，下一個 tab 還原同一個月。
       rememberMonth(r.month, { syncUrl: true });
     }
     // 只係 mount 跑一次

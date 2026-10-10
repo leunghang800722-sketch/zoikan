@@ -1,12 +1,15 @@
 "use client";
-// 1a ⑤ 鎖定本月：「一定要做好先可以鎖」＋鎖月前體檢＋鎖定掣（未達條件 opacity .35，邏輯照舊）。
+// 1a ⑤ 鎖定本月：「一定要做好先可以鎖」＋鎖月前體檢。P3-3.4（老闆 3A）：鎖定掣只留右欄 RightRail；已鎖定時呢度有解鎖（原因必填，API 不變）。
+import { useState } from "react";
 import Link from "next/link";
+import { inputCls } from "@/components/ui/Field";
 import { Pill } from "@/components/ui/Pill";
 import type { ReportDTO } from "@/components/month-close/types";
 import { lockRequirements, type ReviewGroup } from "@/components/month-close/derive";
 import { MonthHealthCard } from "./MonthHealthCard";
 
-export function LockSection({ report, month, busy, locked, groups, onLock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onLock: () => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
+export function LockSection({ report, month, busy, locked, groups, onUnlock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
+  const [unlockReason, setUnlockReason] = useState("");
   const pricingQ = groups.find((g) => g.key === "pricing")?.count ?? 0;
   const reqs = lockRequirements(report, pricingQ);
   const lp = report.lock_precondition;
@@ -48,22 +51,26 @@ export function LockSection({ report, month, busy, locked, groups, onLock, onOpe
         <MonthHealthCard month={report.month} groups={groups} onLoaded={onHealth} onOpenTriage={canTriage ? onOpenTriage : undefined} />
       </div>
       <div className="flex flex-wrap items-center gap-3 border-t border-zk-border-soft bg-zk-header px-4 py-3">
-        <span className="min-w-0 flex-1 text-[12px] text-zk-muted">鎖咗之後成個月只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</span>
-        {locked ? (
-          <Pill variant="warning">已鎖定</Pill>
-        ) : (
+        <span className="min-w-0 flex-1 text-[12px] text-zk-muted">
+          鎖咗之後成個月只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。{!locked && " 鎖定掣喺右欄（唯一鎖月入口）。"}
+        </span>
+        {locked && <Pill variant="warning">已鎖定</Pill>}
+      </div>
+      {locked && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-zk-border-soft px-4 py-3" data-testid="unlock-box">
+          <span className="text-[12px] text-zk-muted">解鎖原因（必填，會寫入操作紀錄）</span>
+          <input className={inputCls} placeholder="解鎖原因" value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} data-testid="unlock-reason" />
           <button
             type="button"
-            data-testid="lock-month"
-            onClick={onLock}
-            disabled={busy || !ready}
-            className="whitespace-nowrap rounded-md bg-[#0f172a] px-[18px] py-2 text-[13px] font-semibold text-white hover:bg-[#1e293b] disabled:cursor-not-allowed"
-            style={{ opacity: ready ? 1 : 0.35 }}
+            data-testid="unlock-month"
+            onClick={() => onUnlock(unlockReason.trim())}
+            disabled={busy || !unlockReason.trim()}
+            className="whitespace-nowrap rounded-md border border-[#fecaca] bg-white px-4 py-2 text-[13px] font-semibold text-[#b91c1c] hover:bg-[#fef2f2] disabled:cursor-not-allowed disabled:opacity-[.45]"
           >
-            鎖定 {month}
+            解鎖 {month}
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }
