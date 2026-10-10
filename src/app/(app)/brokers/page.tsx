@@ -8,6 +8,7 @@
 // GET /api/broker-site-assignments（已存在，配額前身白名單），按當月
 // （currentMonthStr()）過濾，加月份 FilterChip 俾人揀返第啲月。
 import { useEffect, useState } from "react";
+import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
@@ -146,6 +147,11 @@ export default function BrokersPage() {
       if (res.ok) setAssignments(res.data.rows);
     });
   }, []);
+
+  // WP-RECONCILE-UI（§33.3 D）：`/brokers?focus=<雞頭碼>` 高亮＋捲到該雞頭（純 UI；碼未登記就冇得高亮）。
+  const focusCode = useFocusParam();
+  useScrollToFocus(focusCode, !loading && rows.length > 0);
+  const isFocus = (r: { code: string }) => !!focusCode && r.code.trim().toUpperCase() === focusCode.toUpperCase();
 
   function siteLabel(id?: string | null): string {
     if (!id) return "（全盤預設）";
@@ -381,7 +387,7 @@ export default function BrokersPage() {
                   </tr>
                 )}
                 {rows.map((r) => (
-                  <tr key={r.id} className={tableCls.rowHover}>
+                  <tr key={r.id} className={`${tableCls.rowHover} ${isFocus(r) ? FOCUS_CLS : ""}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
                     <td className={`${tableCls.td} font-semibold`} style={{ color: brokerColor(r.code).fg }}>
                       {r.code}
                     </td>
@@ -426,7 +432,7 @@ export default function BrokersPage() {
 
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
-              <div key={r.id} className="rounded-lg border border-zk-border bg-white p-3">
+              <div key={r.id} className={`rounded-lg border bg-white p-3 ${isFocus(r) ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[13.5px] font-medium text-zk-text">
                     {r.name} <span className="text-zk-faint">（{r.code}）</span>
