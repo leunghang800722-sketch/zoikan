@@ -600,6 +600,9 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
   const { start } = monthRange(month);
   let lastPlanNeedsBoss: NeedsBossIdentity[] = [];
 
+  let postorderLoaded = false;
+  let postorderUpload: Awaited<ReturnType<typeof prisma.postorderUpload.findFirst>> = null;
+  let postorder: Awaited<ReturnType<typeof loadPostorderForPlan>> = undefined;
   let converged = false;
   for (let round = 1; round <= GUARD_FIX_MAX_ROUNDS; round++) {
     // 注意：唔使喺呢度自己攞 GUARD_FIX_ADVISORY_LOCK_KEY——`applyGuardFixPlan()`
@@ -607,13 +610,18 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     // build plan（讀），冇寫入，唔需要鎖；一鍵結算本身用另一把獨立鎖
     // （`ONE_CLICK_ADVISORY_LOCK_KEY`）保證同一時間淨係一個 run，兩把鎖
     // 唔會撞。
-    const postorderUpload = await prisma.postorderUpload.findFirst({ where: { month: start, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
-    let postorder: Awaited<ReturnType<typeof loadPostorderForPlan>> = undefined;
-    try {
-      postorder = await loadPostorderForPlan(postorderUpload);
-    } catch (e) {
-      // 已存嘅超大 xlsm（上載保險加入前）唔載入，淨靠歷史行（Postorder 係可選來源）。
-      warnings.push(`本月 Postorder 唔載入（${safeErrorSummary(e)}），保安員修復／定價／歸屬靠歷史`);
+    // P3-2.6（附錄 b A-14）：Postorder 上載（連最大 30 MB bytes）同其 xlsx 解析係 loop 不變量——
+    // applyGuardFixPlan／reparseAllActiveUploads 唔會改 postorder_uploads——只讀＋解析一次，
+    // 其後各輪重用（plan 本身每輪照舊重算）。
+    if (!postorderLoaded) {
+      postorderLoaded = true;
+      postorderUpload = await prisma.postorderUpload.findFirst({ where: { month: start, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
+      try {
+        postorder = await loadPostorderForPlan(postorderUpload);
+      } catch (e) {
+        // 已存嘅超大 xlsm（上載保險加入前）唔載入，淨靠歷史行（Postorder 係可選來源）。
+        warnings.push(`本月 Postorder 唔載入（${safeErrorSummary(e)}），保安員修復／定價／歸屬靠歷史`);
+      }
     }
 
     let plan;
