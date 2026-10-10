@@ -7,7 +7,7 @@
 // 型別（wire format，一律 snake_case，同 request/response body 一致——
 // 見 docs/api.md「欄位命名」／src/lib/api/http.ts `ok()` 嘅
 // `camelToSnakeDeep()`）。
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
@@ -16,6 +16,10 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate } from "@/lib/ui/format";
+import { loadGuardDirectory, useGuardDirectory, useNeedsBoss } from "@/components/reconcile/data";
+import { classifyReason, hasPerson, personFromRow, personKey, telTail, type RawRosterRow } from "@/components/reconcile/derive";
+import { SimilarGuards } from "@/components/reconcile/GuardHints";
+import { ReasonLinks, ReasonText, WroteCell, reasonHasActions, type ActionCtx } from "./UnresolvedCells";
 
 type ReconcileCategory = "match" | "roster_only" | "system_only" | "guard_diff" | "settlement_diff" | "shift_type_diff" | "unresolved";
 
@@ -152,12 +156,12 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
   useEffect(() => {
     (async () => {
       const [guards, sites, shiftTypes, brokers] = await Promise.all([
-        apiGet<ApiListResult<{ id: string; name_zh: string }>>("/api/guards?take=500"),
+        loadGuardDirectory(),
         apiGet<ApiListResult<{ id: string; canonical_name: string; parent_site_id: string | null }>>("/api/sites?take=500"),
         apiGet<ApiListResult<{ id: string; code: string }>>("/api/shift-types?take=500"),
         apiGet<ApiListResult<{ id: string; code: string }>>("/api/brokers?take=500"),
       ]);
-      if (guards.ok) setGuardNames(new Map(guards.data.rows.map((g) => [g.id, g.name_zh])));
+      if (guards) setGuardNames(new Map(guards.rows.map((g) => [g.id, g.name_zh])));
       if (sites.ok) {
         setSiteNames(new Map(sites.data.rows.map((s) => [s.id, s.canonical_name])));
         setAllSites(sites.data.rows);
@@ -182,7 +186,101 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
     });
   }
 
-  const rows = data?.items.rows ?? [];
+  const rows = useMemo(() => data?.items.rows ?? [], [data]);
+
+  // ---- WP-RECONCILE-UI（§33）：未配對行嘅原始資料（只讀現有 rows API）、名冊、guard-fix needs_boss ----
+  const month7 = data?.upload.month.slice(0, 7) ?? "";
+  const dir = useGuardDirectory();
+  const nbRes = useNeedsBoss(month7 || null, !!month7);
+  const [rawRows, setRawRows] = useState<Map<string, RawRosterRow>>(new Map());
+  const [rawLoading, setRawLoading] = useState(false);
+  const rawTried = useRef<Set<string>>(new Set());
+  const [reparsing, setReparsing] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [groupReason, setGroupReason] = useState<Record<string, string>>({});
+
+  const unresolvedIds = useMemo(() => rows.filter((i) => i.category === "unresolved").map((i) => i.key.replace(/^row:/, "")), [rows]);
+  useEffect(() => {
+    const missing = unresolvedIds.filter((id) => !rawTried.current.has(id));
+    if (missing.length === 0) return;
+    for (const id of missing) rawTried.current.add(id);
+    (async () => {
+      setRawLoading(true);
+      const need = new Set(missing);
+      const found = new Map<string, RawRosterRow>();
+      // 先攞 guard_match=unmatched（安員未配對），仲有冇攞到嘅（雞頭碼／更別／盤…）先逐頁掃全部行。
+      const scan = async (guardMatch?: string) => {
+        for (let skip = 0; found.size < need.size; skip += 500) {
+          const params = new URLSearchParams({ take: "500", skip: String(skip) });
+          if (guardMatch) params.set("guard_match", guardMatch);
+          const res = await apiGet<{ rows: ApiListResult<RawRosterRow> }>(`/api/roster-uploads/${uploadId}?${params.toString()}`);
+          if (!res.ok) return;
+          for (const r of res.data.rows.rows) if (need.has(r.id)) found.set(r.id, r);
+          if (res.data.rows.rows.length === 0 || skip + res.data.rows.rows.length >= res.data.rows.total) return;
+        }
+      };
+      await scan("unmatched");
+      if (found.size < need.size) await scan();
+      setRawRows((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of found) next.set(k, v);
+        return next;
+      });
+      setRawLoading(false);
+    })();
+  }, [unresolvedIds, uploadId]);
+
+  async function doReparse() {
+    setReparsing(true);
+    const res = await apiPost(`/api/roster-uploads/${uploadId}/reparse`);
+    setReparsing(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    rawTried.current = new Set();
+    setRawRows(new Map());
+    setNotice("已重新解析呢份上載，下面清單已重新載入");
+    await load();
+  }
+
+  // 同一人（姓名＋工號）、同一原因，出現 3 行或以上 → 合併成一行摘要（可摺）。
+  interface PersonGroup {
+    id: string;
+    items: ReconcileItemDto[];
+    raw: RawRosterRow;
+  }
+  type Unit = { kind: "row"; item: ReconcileItemDto } | { kind: "group"; group: PersonGroup };
+  const units: Unit[] = useMemo(() => {
+    const buckets = new Map<string, ReconcileItemDto[]>();
+    const keyOf = (it: ReconcileItemDto): string | null => {
+      if (it.category !== "unresolved") return null;
+      const raw = rawRows.get(it.key.replace(/^row:/, ""));
+      if (!raw) return null;
+      const p = personFromRow(raw);
+      if (!hasPerson(p)) return null;
+      return `${personKey(p)}#${it.unresolved_reason ?? ""}`;
+    };
+    for (const it of rows) {
+      const k = keyOf(it);
+      if (k) buckets.set(k, [...(buckets.get(k) ?? []), it]);
+    }
+    const out: Unit[] = [];
+    const emitted = new Set<string>();
+    for (const it of rows) {
+      const k = keyOf(it);
+      const members = k ? buckets.get(k)! : null;
+      if (k && members && members.length >= 3) {
+        if (emitted.has(k)) continue;
+        emitted.add(k);
+        out.push({ kind: "group", group: { id: k, items: members, raw: rawRows.get(members[0]!.key.replace(/^row:/, ""))! } });
+      } else {
+        out.push({ kind: "row", item: it });
+      }
+    }
+    return out;
+  }, [rows, rawRows]);
+
 
   const [bulkBusy, setBulkBusy] = useState(false);
   async function bulkApplyRosterForVisible() {
@@ -321,6 +419,302 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
     await load();
   }
 
+
+  const actionCtx: ActionCtx = {
+    uploadId,
+    uploadSiteId: data?.upload.site_id ?? null,
+    month: month7,
+    needsBoss: nbRes?.items ?? null,
+    onReparse: () => void doReparse(),
+    reparsing,
+    siteNameOf: (id) => nameOrId(siteNames, id),
+  };
+  const showSides = tab !== "unresolved";
+  const showWrote = tab === "unresolved" || tab === "all";
+  const tableCols = 5 + (showSides ? 2 : 0) + (showWrote ? 1 : 0);
+
+  function toggleGroup(id: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function markGroupException(g: PersonGroup) {
+    const reason = (groupReason[g.id] ?? "").trim();
+    if (!reason) return;
+    setDecisions((prev) => {
+      const next = new Map(prev);
+      for (const it of g.items) next.set(it.key, { action: "exception", reason });
+      return next;
+    });
+  }
+  function groupTitle(g: PersonGroup): string {
+    const p = personFromRow(g.raw);
+    return `同一人：${p.name || p.staffNo}${p.name && p.staffNo ? `（${p.staffNo}）` : ""}共 ${g.items.length} 更`;
+  }
+  function groupMeta(g: PersonGroup): string {
+    const dates = g.items.map((i) => i.work_date).sort();
+    const sites = [...new Set(g.items.map((i) => nameOrId(siteNames, i.site_id)))];
+    return `${fmtDate(dates[0]!)}–${fmtDate(dates[dates.length - 1]!)}・${sites.slice(0, 2).join("、")}${sites.length > 2 ? "…" : ""}`;
+  }
+  function groupBody(g: PersonGroup) {
+    const first = g.items[0]!;
+    const p = personFromRow(g.raw);
+    const expanded = expandedGroups.has(g.id);
+    return (
+      <div className="space-y-1.5" data-testid="reconcile-person-group" data-group-size={g.items.length}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-semibold text-zk-text" data-testid="reconcile-group-title">
+            {groupTitle(g)}
+          </span>
+          <span className="text-[11.5px] text-zk-muted">{groupMeta(g)}</span>
+          <button type="button" onClick={() => toggleGroup(g.id)} className="text-[12px] text-zk-primary underline" data-testid="reconcile-group-toggle">
+            {expanded ? "摺埋" : `展開 ${g.items.length} 條`}
+          </button>
+        </div>
+        <div className="text-[11px] text-zk-muted">
+          {[telTail(g.raw.tel_raw), g.raw.broker_code_raw?.trim() ? `雞頭碼 ${g.raw.broker_code_raw.trim()}` : null].filter(Boolean).join("・")}
+        </div>
+        <ReasonText item={first} raw={g.raw} />
+        {classifyReason(first.unresolved_reason).some((x) => x.kind === "guard") && hasPerson(p) && <SimilarGuards person={p} dir={dir} />}
+        <ReasonLinks item={first} raw={g.raw} ctx={actionCtx} />
+        {!locked && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <input
+              type="text"
+              placeholder="整組標例外嘅原因"
+              value={groupReason[g.id] ?? ""}
+              onChange={(e) => setGroupReason((prev) => ({ ...prev, [g.id]: e.target.value }))}
+              className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-[11.5px]"
+              data-testid="reconcile-group-reason"
+            />
+            <button
+              type="button"
+              disabled={!(groupReason[g.id] ?? "").trim()}
+              onClick={() => markGroupException(g)}
+              className="rounded-[5px] border border-zk-border px-2 py-[3px] text-[11.5px] text-[#334155] disabled:opacity-40"
+              data-testid="reconcile-group-exception"
+            >
+              整組 {g.items.length} 條標例外
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function exceptionButtons(item: ReconcileItemDto, decision: { action: PendingAction; reason: string } | undefined) {
+    return (
+      <>
+        <div className="flex flex-wrap gap-1">
+          <button
+            type="button"
+            onClick={() => setDecision(item.key, "exception", decision?.reason ?? "")}
+            className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "exception" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
+          >
+            例外
+          </button>
+          {decision && (
+            <button type="button" onClick={() => clearDecision(item.key)} className="text-[11px] text-zk-faint underline">
+              清除
+            </button>
+          )}
+        </div>
+        {decision?.action === "exception" && (
+          <input
+            type="text"
+            placeholder="必填原因"
+            value={decision.reason}
+            onChange={(e) => setDecision(item.key, "exception", e.target.value)}
+            className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-[11.5px]"
+          />
+        )}
+      </>
+    );
+  }
+
+  function renderDesktopRow(item: ReconcileItemDto) {
+    const decision = decisions.get(item.key);
+    const raw = item.category === "unresolved" ? rawRows.get(rowIdFromKey(item.key)) : undefined;
+    return (
+      <tr key={item.key} data-testid="reconcile-item-row" data-reconcile-key={item.key} data-category={item.category} className={tableCls.rowHover}>
+        <td className={tableCls.td}>{fmtDate(item.work_date)}</td>
+        <td className={tableCls.td}>{nameOrId(siteNames, item.site_id)}</td>
+        <td className={tableCls.td}>{item.shift_type_id ? nameOrId(shiftTypeCodes, item.shift_type_id) : "—"}</td>
+        {showWrote && (
+          <td className={tableCls.td}>
+            {item.category === "unresolved" ? <WroteCell raw={raw} loading={rawLoading} item={item} dir={dir} /> : <span className="text-zk-faint">—</span>}
+          </td>
+        )}
+        {showSides && (
+          <>
+            <td className={tableCls.td}>
+              {item.roster ? (
+                <div>
+                  <div>{nameOrId(guardNames, item.roster.guard_id)}</div>
+                  <div className="text-[11px] text-zk-muted">
+                    {item.roster.settlement_broker_id ? nameOrId(brokerCodes, item.roster.settlement_broker_id) : "冇雞頭碼"}
+                    {item.roster.settlement_inferred && <span className="ml-1 rounded bg-orange-100 px-1 text-orange-700">推算</span>}
+                  </div>
+                </div>
+              ) : (
+                <span className="text-zk-faint">—</span>
+              )}
+            </td>
+            <td className={tableCls.td}>
+              {item.system ? (
+                <div>
+                  <div>{nameOrId(guardNames, item.system.guard_id)}</div>
+                  <div className="text-[11px] text-zk-muted">
+                    {item.system.settlement_broker_id ? nameOrId(brokerCodes, item.system.settlement_broker_id) : "冇結算單位"} · {SOURCE_LABEL[item.system.source ?? ""] ?? "未標記"}
+                  </div>
+                </div>
+              ) : (
+                <span className="text-zk-faint">—</span>
+              )}
+            </td>
+          </>
+        )}
+        <td className={tableCls.td}>
+          <Pill variant={CATEGORY_TONE[item.category]}>{CATEGORY_LABEL[item.category]}</Pill>
+          {item.category === "unresolved" ? <ReasonText item={item} raw={raw} /> : item.unresolved_reason && <div className="mt-1 text-[11px] text-red-600">{item.unresolved_reason}</div>}
+        </td>
+        <td className={tableCls.td}>
+          {locked ? (
+            <span className="text-zk-faint">已鎖定</span>
+          ) : item.category === "match" ? (
+            <span className="text-zk-faint">—</span>
+          ) : item.category === "unresolved" ? (
+            // 驗收修正（Opus 5.5）：unresolved 之前完全冇動作——但「非 match 項全部有決定」先會轉
+            // confirmed，而月結鎖定要 confirmed，即係一格真係配唔到（例如外判／唔喺名冊嘅人）就永遠
+            // 卡死。後端本身接受 exception，呢度開返。
+            <div className="flex flex-col gap-1">
+              {isSubSiteAmbiguous(item) && (
+                <label className="flex items-center gap-1.5 text-[11.5px] text-orange-800">
+                  <input type="checkbox" checked={subSiteSelected.has(rowIdFromKey(item.key))} onChange={() => toggleSubSiteSelected(rowIdFromKey(item.key))} />
+                  子盤未定——剔選後用上面「批量指定子盤」／「全部歸母盤確認」
+                </label>
+              )}
+              <ReasonLinks item={item} raw={raw} ctx={actionCtx} />
+              {!isSubSiteAmbiguous(item) && !reasonHasActions(item) && <span className="text-[11px] text-zk-muted">先去上載列表頁指定盤／別名再重新解析；確認唔使寫入就標「例外」</span>}
+              {exceptionButtons(item, decision)}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => setDecision(item.key, "apply_roster")}
+                  className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "apply_roster" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
+                >
+                  以更表為準
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDecision(item.key, "keep_system")}
+                  className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "keep_system" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
+                >
+                  保留系統
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDecision(item.key, "exception", decision?.reason ?? "")}
+                  className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "exception" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
+                >
+                  例外
+                </button>
+                {decision && (
+                  <button type="button" onClick={() => clearDecision(item.key)} className="text-[11px] text-zk-faint underline">
+                    清除
+                  </button>
+                )}
+              </div>
+              {decision?.action === "exception" && (
+                <input
+                  type="text"
+                  placeholder="必填原因"
+                  value={decision.reason}
+                  onChange={(e) => setDecision(item.key, "exception", e.target.value)}
+                  className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-[11.5px]"
+                />
+              )}
+            </div>
+          )}
+        </td>
+      </tr>
+    );
+  }
+
+  function renderMobileCard(item: ReconcileItemDto) {
+    const decision = decisions.get(item.key);
+    const raw = item.category === "unresolved" ? rawRows.get(rowIdFromKey(item.key)) : undefined;
+    return (
+      <div key={item.key} className="rounded-lg border border-zk-border bg-white p-3" data-testid="reconcile-item-card">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[13px] font-medium text-zk-text">
+            {fmtDate(item.work_date)} · {nameOrId(siteNames, item.site_id)}
+          </span>
+          <Pill variant={CATEGORY_TONE[item.category]}>{CATEGORY_LABEL[item.category]}</Pill>
+        </div>
+        <div className="mt-1 text-[11.5px] text-zk-muted">更種：{item.shift_type_id ? nameOrId(shiftTypeCodes, item.shift_type_id) : "—"}</div>
+        {item.category === "unresolved" ? (
+          <div className="mt-1 rounded border border-zk-border-soft bg-zk-header px-2 py-1">
+            <div className="text-[10.5px] text-zk-muted">更表寫咗</div>
+            <WroteCell raw={raw} loading={rawLoading} item={item} dir={dir} />
+          </div>
+        ) : (
+          <>
+            <div className="mt-1 text-[12px] text-zk-text">
+              更表：{item.roster ? `${nameOrId(guardNames, item.roster.guard_id)}（${item.roster.settlement_broker_id ? nameOrId(brokerCodes, item.roster.settlement_broker_id) : "冇雞頭碼"}${item.roster.settlement_inferred ? "・推算" : ""}）` : "—"}
+            </div>
+            <div className="mt-0.5 text-[12px] text-zk-text">
+              系統：{item.system ? `${nameOrId(guardNames, item.system.guard_id)}（${item.system.settlement_broker_id ? nameOrId(brokerCodes, item.system.settlement_broker_id) : "冇結算單位"}・${SOURCE_LABEL[item.system.source ?? ""] ?? "未標記"}）` : "—"}
+            </div>
+          </>
+        )}
+        {item.category === "unresolved" ? <ReasonText item={item} raw={raw} /> : item.unresolved_reason && <div className="mt-1 text-[11px] text-red-600">{item.unresolved_reason}</div>}
+        {!locked && item.category === "unresolved" && (
+          <div className="mt-1.5">
+            <ReasonLinks item={item} raw={raw} ctx={actionCtx} />
+          </div>
+        )}
+        {!locked && isSubSiteAmbiguous(item) && (
+          <label className="mt-1 flex items-center gap-1.5 text-[11.5px] text-orange-800">
+            <input type="checkbox" checked={subSiteSelected.has(rowIdFromKey(item.key))} onChange={() => toggleSubSiteSelected(rowIdFromKey(item.key))} />
+            子盤未定——剔選後用上面「批量指定子盤」／「全部歸母盤確認」
+          </label>
+        )}
+        {!locked && item.category !== "match" && (
+          <div className="mt-2 flex flex-col gap-1">
+            <div className="flex flex-wrap gap-1">
+              {((item.category === "unresolved" ? ["exception"] : ["apply_roster", "keep_system", "exception"]) as PendingAction[]).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  onClick={() => setDecision(item.key, a, decision?.reason ?? "")}
+                  className={`rounded-[5px] border px-2 py-[4px] text-[11.5px] ${decision?.action === a ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
+                >
+                  {a === "apply_roster" ? "以更表為準" : a === "keep_system" ? "保留系統" : "例外"}
+                </button>
+              ))}
+            </div>
+            {decision?.action === "exception" && (
+              <input
+                type="text"
+                placeholder="必填原因"
+                value={decision.reason}
+                onChange={(e) => setDecision(item.key, "exception", e.target.value)}
+                className="rounded-[5px] border border-zk-border px-1.5 py-[4px] text-[12px]"
+              />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (loading && !data) return <div className="p-6 text-center text-[13px] text-zk-muted">載入緊…</div>;
 
   const summary = data?.summary;
@@ -408,14 +802,15 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
       )}
 
       <div className={`hidden md:block ${tableCls.wrap}`}>
-        <table className={tableCls.table} style={{ minWidth: tableMinWidth(8) }}>
+        <table className={tableCls.table} style={{ minWidth: tableMinWidth(tableCols) }}>
           <thead>
             <tr>
               <th className={tableCls.th}>日期</th>
               <th className={tableCls.th}>（子）盤</th>
               <th className={tableCls.th}>更種</th>
-              <th className={tableCls.th}>更表嗰邊</th>
-              <th className={tableCls.th}>系統嗰邊</th>
+              {showWrote && <th className={tableCls.th}>更表寫咗</th>}
+              {showSides && <th className={tableCls.th}>更表嗰邊</th>}
+              {showSides && <th className={tableCls.th}>系統嗰邊</th>}
               <th className={tableCls.th}>分類</th>
               <th className={tableCls.th}>動作</th>
             </tr>
@@ -423,143 +818,29 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td className={tableCls.tdMuted} colSpan={7}>
+                <td className={tableCls.tdMuted} colSpan={tableCols}>
                   {loading ? "載入緊…" : "冇符合條件嘅項目"}
                 </td>
               </tr>
             )}
-            {rows.map((item) => {
-              const decision = decisions.get(item.key);
-              return (
-                <tr key={item.key} data-testid="reconcile-item-row" data-reconcile-key={item.key} data-category={item.category} className={tableCls.rowHover}>
-                  <td className={tableCls.td}>{fmtDate(item.work_date)}</td>
-                  <td className={tableCls.td}>{nameOrId(siteNames, item.site_id)}</td>
-                  <td className={tableCls.td}>{item.shift_type_id ? nameOrId(shiftTypeCodes, item.shift_type_id) : "—"}</td>
-                  <td className={tableCls.td}>
-                    {item.roster ? (
-                      <div>
-                        <div>{nameOrId(guardNames, item.roster.guard_id)}</div>
-                        <div className="text-[11px] text-zk-muted">
-                          {item.roster.settlement_broker_id ? nameOrId(brokerCodes, item.roster.settlement_broker_id) : "冇雞頭碼"}
-                          {item.roster.settlement_inferred && <span className="ml-1 rounded bg-orange-100 px-1 text-orange-700">推算</span>}
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="text-zk-faint">—</span>
-                    )}
-                  </td>
-                  <td className={tableCls.td}>
-                    {item.system ? (
-                      <div>
-                        <div>{nameOrId(guardNames, item.system.guard_id)}</div>
-                        <div className="text-[11px] text-zk-muted">
-                          {item.system.settlement_broker_id ? nameOrId(brokerCodes, item.system.settlement_broker_id) : "冇結算單位"} ·{" "}
-                          {SOURCE_LABEL[item.system.source ?? ""] ?? "未標記"}
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="text-zk-faint">—</span>
-                    )}
-                  </td>
-                  <td className={tableCls.td}>
-                    <Pill variant={CATEGORY_TONE[item.category]}>{CATEGORY_LABEL[item.category]}</Pill>
-                    {item.unresolved_reason && <div className="mt-1 text-[11px] text-red-600">{item.unresolved_reason}</div>}
-                  </td>
-                  <td className={tableCls.td}>
-                    {locked ? (
-                      <span className="text-zk-faint">已鎖定</span>
-                    ) : item.category === "match" ? (
-                      <span className="text-zk-faint">—</span>
-                    ) : item.category === "unresolved" ? (
-                      // 驗收修正（Opus 5.5）：unresolved 之前完全冇動作——但
-                      // 「非 match 項全部有決定」先會轉 confirmed，而月結鎖定
-                      // 要 confirmed，即係一格真係配唔到（例如外判／唔喺名冊
-                      // 嘅人）就永遠卡死。後端本身接受 exception，呢度開返。
-                      <div className="flex flex-col gap-1">
-                        {isSubSiteAmbiguous(item) ? (
-                          <label className="flex items-center gap-1.5 text-[11.5px] text-orange-800">
-                            <input
-                              type="checkbox"
-                              checked={subSiteSelected.has(rowIdFromKey(item.key))}
-                              onChange={() => toggleSubSiteSelected(rowIdFromKey(item.key))}
-                            />
-                            子盤未定——剔選後用上面「批量指定子盤」／「全部歸母盤確認」
-                          </label>
-                        ) : (
-                          <span className="text-[11px] text-zk-muted">先去上載列表頁指定盤／別名再重新解析；確認唔使寫入就標「例外」</span>
-                        )}
-                        <div className="flex flex-wrap gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setDecision(item.key, "exception", decision?.reason ?? "")}
-                            className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "exception" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
-                          >
-                            例外
-                          </button>
-                          {decision && (
-                            <button type="button" onClick={() => clearDecision(item.key)} className="text-[11px] text-zk-faint underline">
-                              清除
-                            </button>
-                          )}
-                        </div>
-                        {decision?.action === "exception" && (
-                          <input
-                            type="text"
-                            placeholder="必填原因"
-                            value={decision.reason}
-                            onChange={(e) => setDecision(item.key, "exception", e.target.value)}
-                            className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-[11.5px]"
-                          />
-                        )}
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-1">
-                        <div className="flex flex-wrap gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setDecision(item.key, "apply_roster")}
-                            className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "apply_roster" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
-                          >
-                            以更表為準
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDecision(item.key, "keep_system")}
-                            className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "keep_system" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
-                          >
-                            保留系統
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDecision(item.key, "exception", decision?.reason ?? "")}
-                            className={`rounded-[5px] border px-2 py-[3px] text-[11.5px] ${decision?.action === "exception" ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
-                          >
-                            例外
-                          </button>
-                          {decision && (
-                            <button type="button" onClick={() => clearDecision(item.key)} className="text-[11px] text-zk-faint underline">
-                              清除
-                            </button>
-                          )}
-                        </div>
-                        {decision?.action === "exception" && (
-                          <input
-                            type="text"
-                            placeholder="必填原因"
-                            value={decision.reason}
-                            onChange={(e) => setDecision(item.key, "exception", e.target.value)}
-                            className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-[11.5px]"
-                          />
-                        )}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            {units.map((u) =>
+              u.kind === "row" ? (
+                renderDesktopRow(u.item)
+              ) : (
+                <Fragment key={`g:${u.group.id}`}>
+                  <tr className="bg-zk-header" data-testid="reconcile-group-row">
+                    <td className={tableCls.td} colSpan={tableCols}>
+                      {groupBody(u.group)}
+                    </td>
+                  </tr>
+                  {expandedGroups.has(u.group.id) && u.group.items.map((it) => renderDesktopRow(it))}
+                </Fragment>
+              ),
+            )}
           </tbody>
         </table>
       </div>
+
 
       {data && data.items.total > rows.length && (
         <div className="text-[12px] text-orange-700">
@@ -570,58 +851,16 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
       {/* 手機：卡列表（README 慣例——七欄表格喺窄屏幕唔用得）。 */}
       <div className="space-y-2 md:hidden">
         {rows.length === 0 && <EmptyState title={loading ? "載入緊…" : "冇符合條件嘅項目"} />}
-        {rows.map((item) => {
-          const decision = decisions.get(item.key);
-          return (
-            <div key={item.key} className="rounded-lg border border-zk-border bg-white p-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[13px] font-medium text-zk-text">
-                  {fmtDate(item.work_date)} · {nameOrId(siteNames, item.site_id)}
-                </span>
-                <Pill variant={CATEGORY_TONE[item.category]}>{CATEGORY_LABEL[item.category]}</Pill>
-              </div>
-              <div className="mt-1 text-[11.5px] text-zk-muted">更種：{item.shift_type_id ? nameOrId(shiftTypeCodes, item.shift_type_id) : "—"}</div>
-              <div className="mt-1 text-[12px] text-zk-text">
-                更表：{item.roster ? `${nameOrId(guardNames, item.roster.guard_id)}（${item.roster.settlement_broker_id ? nameOrId(brokerCodes, item.roster.settlement_broker_id) : "冇雞頭碼"}${item.roster.settlement_inferred ? "・推算" : ""}）` : "—"}
-              </div>
-              <div className="mt-0.5 text-[12px] text-zk-text">
-                系統：{item.system ? `${nameOrId(guardNames, item.system.guard_id)}（${item.system.settlement_broker_id ? nameOrId(brokerCodes, item.system.settlement_broker_id) : "冇結算單位"}・${SOURCE_LABEL[item.system.source ?? ""] ?? "未標記"}）` : "—"}
-              </div>
-              {item.unresolved_reason && <div className="mt-1 text-[11px] text-red-600">{item.unresolved_reason}</div>}
-              {!locked && isSubSiteAmbiguous(item) && (
-                <label className="mt-1 flex items-center gap-1.5 text-[11.5px] text-orange-800">
-                  <input type="checkbox" checked={subSiteSelected.has(rowIdFromKey(item.key))} onChange={() => toggleSubSiteSelected(rowIdFromKey(item.key))} />
-                  子盤未定——剔選後用上面「批量指定子盤」／「全部歸母盤確認」
-                </label>
-              )}
-              {!locked && item.category !== "match" && (
-                <div className="mt-2 flex flex-col gap-1">
-                  <div className="flex flex-wrap gap-1">
-                    {((item.category === "unresolved" ? ["exception"] : ["apply_roster", "keep_system", "exception"]) as PendingAction[]).map((a) => (
-                      <button
-                        key={a}
-                        type="button"
-                        onClick={() => setDecision(item.key, a, decision?.reason ?? "")}
-                        className={`rounded-[5px] border px-2 py-[4px] text-[11.5px] ${decision?.action === a ? "border-zk-primary bg-blue-50 font-semibold text-zk-primary" : "border-zk-border text-[#334155]"}`}
-                      >
-                        {a === "apply_roster" ? "以更表為準" : a === "keep_system" ? "保留系統" : "例外"}
-                      </button>
-                    ))}
-                  </div>
-                  {decision?.action === "exception" && (
-                    <input
-                      type="text"
-                      placeholder="必填原因"
-                      value={decision.reason}
-                      onChange={(e) => setDecision(item.key, "exception", e.target.value)}
-                      className="rounded-[5px] border border-zk-border px-1.5 py-[4px] text-[12px]"
-                    />
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {units.map((u) =>
+          u.kind === "row" ? (
+            renderMobileCard(u.item)
+          ) : (
+            <Fragment key={`g:${u.group.id}`}>
+              <div className="rounded-lg border border-zk-border bg-zk-header p-3">{groupBody(u.group)}</div>
+              {expandedGroups.has(u.group.id) && u.group.items.map((it) => renderMobileCard(it))}
+            </Fragment>
+          ),
+        )}
       </div>
 
       {confirmOpen && (
