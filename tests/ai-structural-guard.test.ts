@@ -156,6 +156,7 @@ describe("WP-AI1 §6：結構性保證——src/lib/ai/** 同 src/app/api/ai/**"
     "src/lib/rbac/requirePermission.ts",
     "src/lib/rbac/matrix.ts", // `Module` type——規劃裁定：工具要跟返畫面權限（見 tools/common.ts）
     "src/lib/api/field-groups.ts",
+    "src/lib/app-error-log.ts", // WP-AI-DIAG：`recent_app_errors` 嘅專用 reader（`listRecentAppErrors()`，只讀已遮罩日誌；跟 list_feedback 先例，tool 檔本身唔含 prisma.／@/lib/db）
     "src/lib/ui/broker-kind.ts", // P2-B 應修⑤：`BROKER_KIND_LABEL` 搬咗去呢度，tools/common.ts re-export（純字面量 map，唔碰 DB）
   ];
 

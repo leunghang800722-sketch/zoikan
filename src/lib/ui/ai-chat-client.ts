@@ -8,6 +8,8 @@ export interface AiChatMessage {
   role: "user" | "assistant";
   content: string;
   createdAt?: string;
+  /** WP-AI-DIAG（additive）：assistant 訊息嘅建議動作卡（前端用 `sanitizeActionCards()` 再驗一次）。 */
+  actions?: unknown[];
 }
 
 export interface AiChatDoneResult {

@@ -7,11 +7,14 @@
 // 呢類應用狀態，唔屬於「AI 查詢業務數據必須唯讀」嗰條邊界（好似
 // audit_log 一樣係正常寫入路徑）。
 import { prisma } from "./db";
+import { sanitizeActionCards, type ActionCard } from "./ai/actions";
 
 export interface StoredChatMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string; // ISO
+  /** WP-AI-DIAG（additive）：assistant turn 嘅建議動作卡（已驗證）；舊記錄冇呢個欄照讀。 */
+  actions?: ActionCard[];
 }
 
 const MAX_TURNS = 30; // 一個 turn = 一問一答，最多保留 30 turn = 60 條 message
@@ -28,7 +31,15 @@ function isStoredChatMessageArray(value: unknown): value is StoredChatMessage[] 
 export async function getConversation(userId: string): Promise<StoredChatMessage[]> {
   const row = await prisma.aiConversation.findUnique({ where: { userId } });
   if (!row) return [];
-  return isStoredChatMessageArray(row.messages) ? row.messages : [];
+  if (!isStoredChatMessageArray(row.messages)) return [];
+  // 讀出嚟再驗一次 actions（白名單／strict）——history 被人手改過都唔會畀非法卡去到畫面
+  return row.messages.map((m) => {
+    if (m.actions === undefined) return m;
+    const actions = sanitizeActionCards(m.actions);
+    const { actions: _drop, ...rest } = m;
+    void _drop;
+    return actions.length ? { ...rest, actions } : rest;
+  });
 }
 
 /** 加一個問答 turn，超過 30 turn 就淨係保留最尾 30 個。 */
@@ -36,13 +47,14 @@ export async function appendConversationTurn(
   userId: string,
   userMessage: string,
   assistantMessage: string,
+  actions?: ActionCard[],
 ): Promise<void> {
   const existing = await getConversation(userId);
   const now = new Date().toISOString();
   const updated: StoredChatMessage[] = [
     ...existing,
     { role: "user", content: userMessage, createdAt: now },
-    { role: "assistant", content: assistantMessage, createdAt: now },
+    { role: "assistant", content: assistantMessage, createdAt: now, ...(actions && actions.length ? { actions } : {}) },
   ];
   const capped = updated.slice(-MAX_TURNS * 2);
   // JSON.stringify→parse：抹走 TS 介面型別資訊，變返純 JSON-safe plain

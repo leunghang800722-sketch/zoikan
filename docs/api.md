@@ -237,6 +237,11 @@ script 共用嘅 `buildGuardFixPlan()`／`applyGuardFixPlan()` 冇行為
 | GET | `/api/ai/conversation` | 助手:view | 攞返自己同助手嘅對話記錄（最多 30 turn） |
 | DELETE | `/api/ai/conversation` | 助手:view | 清空自己嘅對話記錄 |
 
+**WP-AI-DIAG（§37，全部 additive，現有 request shape 不變）**：
+- `POST /api/ai/chat` SSE `done` event 加 `provider`、`model`、`suggested_actions`（`[{type,label,basis,params}]`，已過白名單／鎖月過濾；安全 guard triggered 時 `[]`）；chat audit `after` 加 `provider`、`model`、`suggested_actions:[{type,label}]`。
+- `GET /api/ai/conversation` 嘅 assistant message 可帶 `actions`（建議動作卡；舊記錄冇呢個欄）。
+- 新表 `app_error_log`（public schema，**唔入 `ai` schema、冇 `ai` view**）：`id／created_at／method／route（只 pathname）／status／error_code／error_name／message_masked（≤300 字，email／sk- token／≥6 位數字已遮罩）／actor_user_id`；唔存 body／header／IP／stack／query string；由 `handleApiError()`（未預期 500）同 `/api/ai/chat` stream catch fire-and-forget 寫入，寫入時 prune 30 日前；唔經 `writeAudit`。助手 tool `recent_app_errors` 經 `src/lib/app-error-log.ts` 讀（要 `操作紀錄:view`）。無新增 HTTP endpoint。
+
 **架構上做唔到任何寫入／修改／部署**——四層唯讀保證＋工具清單＋輸出
 過濾詳見 [`docs/ai-assistant.md`](ai-assistant.md)。
 
