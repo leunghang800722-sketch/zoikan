@@ -25,6 +25,7 @@ import { BadRequest } from "@/lib/api/errors";
 import { resolveShiftPricing, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
 import { journalAutoCardUses } from "@/lib/pricing/auto-card-journal";
 import { reconcileUpload, type ReconcileCategory, type ReconcileItem } from "./reconcile";
+import { ROSTER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
 
 export type ReconcileDecisionAction = "apply_roster" | "keep_system" | "exception";
 
@@ -231,7 +232,7 @@ export interface ApplyReconcileResult {
 type Plan = { input: ReconcileActionInput; item: ReconcileItem; pricing: Pricing | null };
 
 export async function applyReconcileDecisions(params: ApplyReconcileParams): Promise<ApplyReconcileResult> {
-  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
+  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId }, select: ROSTER_UPLOAD_META_SELECT });
   if (upload.status !== "parsed" && upload.status !== "confirmed") {
     throw BadRequest(`呢個上載狀態係「${upload.status}」，唔可以對數（要 parsed 或 confirmed）`);
   }
