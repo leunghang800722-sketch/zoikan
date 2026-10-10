@@ -88,7 +88,7 @@ describe("相似保安員（四種規則，最多 3 個）", () => {
 
 describe("連結", () => {
   it("每類目標", () => {
-    expect(LINK.guardFix("2026-09-01")).toBe("/guard-fix?month=2026-09");
+    expect(LINK.guardFix("2026-09-01")).toBe("/roster-uploads?tab=fix&month=2026-09");
     expect(LINK.guards("U90001")).toBe("/guards?q=U90001");
     expect(LINK.guards("甲測試")).toBe(`/guards?q=${encodeURIComponent("甲測試")}`);
     expect(LINK.newFromDocs("甲測試", "U90001")).toBe(`/guards/new-from-docs?name=${encodeURIComponent("甲測試")}&staff_no=U90001`);

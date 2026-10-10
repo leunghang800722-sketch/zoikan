@@ -90,7 +90,13 @@ test.describe("P2-A 主檔＋排更列表頁：老闆登入", () => {
     const table = main.locator("table").first();
     await expect(table).toBeVisible({ timeout: 20_000 });
     const rowCount = await table.locator("tbody tr").count();
-    expect(rowCount).toBe(ownGuardCount);
+    // P3-3.8：唔再同 DB 直接 count 硬比（雞頭 session 嘅可見範圍由 API scope 決定，DB 數字隨 seed／gate 數據狀態變）；
+    // 改為同同一個 session 打 API 嘅 total 比對——UI 列數必須等於 API 回報嘅可見保安員總數。
+    const apiRes = await page.request.get("/api/guards?fields=lite&take=1");
+    expect(apiRes.ok()).toBe(true);
+    const apiTotal = ((await apiRes.json()) as { total: number }).total;
+    expect(apiTotal).toBeGreaterThan(0);
+    expect(rowCount).toBe(apiTotal);
     if (otherGuard) {
       await expect(main.getByText(otherGuard.nameZh, { exact: true })).toHaveCount(0);
     }

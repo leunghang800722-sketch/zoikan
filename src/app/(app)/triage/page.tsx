@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/DataTable";
 import { TriageDialog } from "@/components/TriageDialog";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface SessionRow {
   id: string;
@@ -71,7 +72,7 @@ export default function TriagePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader kicker="主檔" title="待答問題" subtitle="保安員證件資料導入／一鍵結算後，系統唔肯自動決定嘅項目——逐條答，答完先寫入（一鍵結算嘅題預填建議答案，一撳確認）。" />
+      <PageHeader kicker={kickerFor("/triage")} title="待答問題" subtitle="保安員證件資料導入／一鍵結算後，系統唔肯自動決定嘅項目——逐條答，答完先寫入（一鍵結算嘅題預填建議答案，一撳確認）。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       {isBossView && (

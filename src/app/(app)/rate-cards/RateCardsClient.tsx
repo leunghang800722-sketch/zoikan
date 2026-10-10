@@ -22,7 +22,8 @@ import { fmtDate, fmtMoney } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
-import { kickerFor } from "@/lib/ui/nav-active";
+import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker } from "@/components/ui/MonthPicker";
 
 const PAGE_SIZE = 50;
 
@@ -105,7 +106,7 @@ export function RateCardsClient({
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
   const [siteFilter, setSiteFilter] = useState("");
-  // A4：「生效月」FilterChip——`type="month"`，純客戶端篩（唔加新 API
+  // A4：「生效月」FilterChip——月份輸入，純客戶端篩（唔加新 API
   // query param）；預設空字串＝全部，唔篩。
   const [effectiveMonthFilter, setEffectiveMonthFilter] = useState("");
   const [sites, setSites] = useState<SiteRow[]>([]);
@@ -431,14 +432,7 @@ export function RateCardsClient({
                 ))}
               </select>
             </FilterChip>
-            <FilterChip label="生效月">
-              <input
-                type="month"
-                data-testid="rate-cards-effective-month"
-                value={effectiveMonthFilter}
-                onChange={(e) => setEffectiveMonthFilter(e.target.value)}
-              />
-            </FilterChip>
+            <MonthPicker label="生效月" value={effectiveMonthFilter} onChange={setEffectiveMonthFilter} testId="rate-cards-effective-month" ariaLabel="生效月" allowEmpty />
             {canReprice && (
               <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
                 {repricing ? "計價緊…" : `重新計價（${effectiveMonthFilter || "本月"}）`}

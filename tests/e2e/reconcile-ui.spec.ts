@@ -183,7 +183,7 @@ test.describe("對數頁 1440", () => {
     await expect(rowB.getByTestId("reconcile-reason")).toContainText("更表寫「乙測試／U90002」，名冊搵唔到");
     await expect(rowB.getByTestId("similar-guard")).toHaveCount(1);
     await expect(rowB.getByTestId("similar-guard")).toContainText("同姓＋一字相同");
-    expect(await hrefOf(page, "link-guard-fix", rowB)).toBe("/guard-fix?month=2026-09");
+    expect(await hrefOf(page, "link-guard-fix", rowB)).toBe("/roster-uploads?tab=fix&month=2026-09");
     expect(await hrefOf(page, "link-find-guard", rowB)).toBe("/guards?q=U90002");
     expect(await hrefOf(page, "link-new-from-docs", rowB)).toBe(`/guards/new-from-docs?name=${encodeURIComponent("乙測試")}&staff_no=U90002`);
     await expect(rowB.getByTestId("reconcile-needs-boss")).toContainText("U Team 名單同名多過一個");
@@ -286,7 +286,7 @@ test.describe("對數頁 375", () => {
     await expect(page.locator('[data-testid="reconcile-person-group"]:visible')).toBeVisible();
     const cardB = page.getByTestId("reconcile-item-card").filter({ hasText: "乙測試／U90002" });
     await expect(cardB.getByTestId("reconcile-wrote")).toContainText("原始第 25 行");
-    await expect(cardB.getByTestId("link-guard-fix")).toHaveAttribute("href", "/guard-fix?month=2026-09");
+    await expect(cardB.getByTestId("link-guard-fix")).toHaveAttribute("href", "/roster-uploads?tab=fix&month=2026-09");
     await expect(cardB.getByTestId("reconcile-needs-boss")).toContainText("U Team 名單同名多過一個");
     await expect(cardB.getByRole("button", { name: "例外" })).toBeVisible();
     await noHScroll(page);
@@ -409,7 +409,7 @@ test.describe("分診對話框：保安員配對題", () => {
     await expect(info.getByTestId("mc-guard-cells")).toContainText("電話 ****0002");
     await expect(info.getByTestId("mc-guard-reason")).toHaveText("U Team 名單同名多過一個");
     await expect(info.getByTestId("similar-guard")).toContainText("乙測丙");
-    await expect(info.getByTestId("mc-link-guard-fix")).toHaveAttribute("href", "/guard-fix?month=2026-09");
+    await expect(info.getByTestId("mc-link-guard-fix")).toHaveAttribute("href", "/roster-uploads?tab=fix&month=2026-09");
     await expect(info.getByTestId("mc-link-find-guard")).toHaveAttribute("href", "/guards?q=U90002");
     await expect(info.getByTestId("mc-link-new-from-docs")).toHaveAttribute("href", `/guards/new-from-docs?name=${encodeURIComponent("乙測試")}&staff_no=U90002`);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/triage-1440.png` });

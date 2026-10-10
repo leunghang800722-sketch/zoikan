@@ -15,7 +15,8 @@ import { apiGet } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { tableCls, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, fmtYearMonthZh, fmtMonthDayWeekday, greetingWord, todayLocalStr, currentMonthStr, addMonthsStr } from "@/lib/ui/format";
+import { fmtMoney, fmtYearMonthZh, fmtMonthDayWeekday, greetingWord, todayLocalStr, addMonthsStr } from "@/lib/ui/format";
+import { useMonthState } from "@/components/ui/MonthPicker";
 
 interface BrokerSiteRow {
   site_id: string;
@@ -33,18 +34,6 @@ interface DashboardResult {
 }
 interface ReceivableResult {
   total: number;
-}
-
-/** B8：URL query `?month=` 讀（一次性，載入時）——同 `ShortfallDashboard`
- * 嘅 `readDateFromUrl()` 一致手法。 */
-function readMonthFromUrl(): string | null {
-  if (typeof window === "undefined") return null;
-  return new URLSearchParams(window.location.search).get("month");
-}
-function writeMonthToUrl(month: string): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("month", month);
-  window.history.replaceState(null, "", url.toString());
 }
 
 /** B8：月份切換 chip——同 `ShortfallDashboard` 嘅 `DateChip` 同款樣式，
@@ -80,20 +69,15 @@ export interface BrokerDashboardProps {
 }
 
 export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
-  // SSR／首次 client render 一律用 `currentMonthStr()`（香港時區，避免
-  // hydration mismatch）；URL 已有 `?month=` 就喺下面 effect 入面先切換。
-  const [month, setMonth] = useState<string>(() => currentMonthStr());
+  // P3-3.2：月份經 useMonthState（URL → sessionStorage → 本月）同全站共用。
+  const [month, setMonth, monthReady] = useMonthState();
   const [data, setData] = useState<DashboardResult | null>(null);
   const [receivable, setReceivable] = useState<ReceivableResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fromUrl = readMonthFromUrl();
-    if (fromUrl && fromUrl !== month) {
-      setMonth(fromUrl); // 觸發呢個 effect 用正確月份重新行一次，落面就唔使 fetch
-      return;
-    }
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -115,12 +99,8 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
     return () => {
       cancelled = true;
     };
-  }, [month]);
+  }, [month, monthReady]);
 
-  function changeMonth(next: string) {
-    setMonth(next);
-    writeMonthToUrl(next);
-  }
 
   if (error) return <Banner kind="error" message={error} />;
 
@@ -144,7 +124,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
             <span className="hidden md:inline">{`歡迎返嚟，${userName}`}</span>
           </h1>
         </div>
-        <MonthChip month={month} onChange={changeMonth} />
+        <MonthChip month={month} onChange={setMonth} />
       </div>
 
       {loading && !data ? (

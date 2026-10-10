@@ -166,11 +166,14 @@ test.describe("首頁／尚欠總覽（WP-R3）", () => {
     await expect(page).toHaveURL(/date=2026-07-16/);
   });
 
-  test("(d) 尚欠總覽頁（/reports/shortfall）：H1「尚欠總覽」，KPI 卡唔可撳去自己", async ({ page }) => {
+  test("(d) 舊路徑 /reports/shortfall → redirect 首頁（保留 ?date=），首頁有待辦收件箱＋今日尚欠（P3-3.3）", async ({ page }) => {
     await loginAs(page, "老闆");
     await page.goto("/reports/shortfall?date=2026-07-15");
-    await expect(page.getByRole("heading", { name: "尚欠總覽" })).toBeVisible({ timeout: 20_000 });
+    await page.waitForURL((u) => u.pathname === "/", { timeout: 20_000 });
+    await expect(page.getByTestId("shortfall-date-label")).toContainText("2026-07-15", { timeout: 20_000 });
+    await expect(page.getByTestId("home-inbox")).toBeVisible();
     await expect(page.locator("main").getByText("今日尚欠盤數").first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "尚欠總覽" })).toHaveCount(0);
   });
 
   test("(e) 雞頭首頁：4 個 KPI 卡＋「我有份嘅盤」表", async ({ page }) => {

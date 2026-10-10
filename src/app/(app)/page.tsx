@@ -16,12 +16,15 @@
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { LogoutButton } from "@/components/LogoutButton";
 import ShortfallDashboard from "./ShortfallDashboard";
 import BrokerDashboard from "./BrokerDashboard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getNavLinks, getViewGrants } from "@/lib/rbac/nav";
 import { shortfallCardVisibility } from "@/lib/ui/shortfall-cards";
-import { TriageHomeNotice } from "@/components/TriageHomeNotice";
+import { HomeInbox } from "@/components/home/HomeInbox";
+import { getPendingCounts } from "@/lib/rbac/pending-counts";
+import { countOpenFor } from "@/lib/triage/session";
 
 // 純顯示層——淨係俾呢個快速連結卡加一行副題文字，唔影響邊條連結顯示
 // （顯示與否一律由 `getNavLinks()` 決定）；冇對應到嘅 href 就冇副題，
@@ -38,7 +41,6 @@ const LINK_DESCRIPTIONS: Record<string, string> = {
   "/reports/gross-margin": "全公司毛利率即時表",
   "/reports/monthly-close": "月結對數同鎖定",
   "/reports/payroll": "按雞頭出嘅糧明細",
-  "/reports/shortfall": "今日各盤尚欠情況",
   "/users": "用戶帳號管理",
   "/roles": "角色權限矩陣",
   "/audit-log": "操作紀錄（唯讀）",
@@ -55,11 +57,29 @@ export default async function DashboardPage() {
   const isBroker = session.baseRole === "雞頭";
 
   if (canViewShortfall) {
-    const cards = shortfallCardVisibility(await getViewGrants(session));
+    const grants = await getViewGrants(session);
+    const cards = shortfallCardVisibility(grants);
+    // P3-3.3：待辦收件箱——審批數同 layout 側欄 badge 共用同一次查詢（react cache，參數一致）；
+    // 待答數 `countOpenFor` 亦 cache。其餘（未對數／月結進度／要老闆決定）喺 client 按 grants 唯讀 fetch。
+    const showFeedback = grants["助手"] && session.baseRole === "老闆";
+    const [pendingCounts, triageOpen] = await Promise.all([
+      getPendingCounts(!!grants["審批"], showFeedback),
+      grants["導入分診"] ? countOpenFor(session) : Promise.resolve(0),
+    ]);
     return (
       <div className="flex flex-col gap-4">
-        <TriageHomeNotice session={session} />
-        <ShortfallDashboard variant="home" userName={session.name} roleLabel={session.roleName} showApprovals={cards.showApprovals} showMargin={cards.showMargin} />
+        <ShortfallDashboard
+          userName={session.name} roleLabel={session.roleName} showMargin={cards.showMargin}
+          afterHeader={
+        <HomeInbox
+          approvals={cards.showApprovals ? pendingCounts.approvals : null}
+          triage={grants["導入分診"] ? triageOpen : null}
+          canRosterUploads={!!grants["更表上載"]}
+          canMonthClose={!!grants["一鍵結算"]}
+          canGuardFix={!!grants["安員配對修復"]}
+        />
+          }
+        />
       </div>
     );
   }
@@ -68,7 +88,25 @@ export default async function DashboardPage() {
     return <BrokerDashboard userName={session.name} />;
   }
 
-  // 保安員／其他自訂角色：快速連結卡——只顯示 `getNavLinks()` 判過權限嘅
+  // P3-3.7：保安員角色登入見說明頁——系統功能稍後開放。
+  if (session.baseRole === "安員") {
+    return (
+      <div className="flex flex-col gap-4">
+        <PageHeader title={`你好，${session.name}`} />
+        <div data-testid="guard-landing" className="rounded-lg border border-zk-border bg-white px-5 py-6 text-[14px] leading-relaxed text-zk-text">
+          <p>你嘅帳號係保安員帳號，系統功能稍後開放。如要改密碼請按下面。</p>
+          <div className="mt-4 flex items-center gap-4 text-[13.5px]">
+            <Link href="/change-password" className="font-semibold text-zk-primary underline">
+              改密碼
+            </Link>
+            <LogoutButton className="p-0 text-[13.5px] font-semibold text-zk-text-secondary underline underline-offset-2 hover:text-zk-text" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 其他自訂角色：快速連結卡——只顯示 `getNavLinks()` 判過權限嘅
   // 連結（排走「/」首頁本身，因為就係呢一頁）。
   const grants = await getViewGrants(session);
   const links = (await getNavLinks(session, grants)).filter((l) => l.href !== "/");

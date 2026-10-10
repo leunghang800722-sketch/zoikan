@@ -59,6 +59,8 @@ function runWith(over: { uploaded: boolean; withDependency: boolean }) {
 async function mockMonthClose(page: Page, opts: { uploaded: boolean; withDependency: boolean; openBackfill: number }) {
   const calls: string[] = [];
   await page.route("**/api/month-close/one-click?*", (r) => json(r, { runs: [runWith(opts)] }));
+  // P3-1.6 之後最新 run 再拉單一 route 攞全份 report——要一齊 mock（P3-3.8 修舊失敗）。
+  await page.route("**/api/month-close/one-click/run1", (r) => json(r, { run: runWith(opts) }));
   await page.route("**/api/reports/month-health?*", (r) => json(r, { month: MONTH, summary: { critical: 0, warn: 0, info: 0 }, findings: [] }));
   await page.route("**/api/rate-cards/backfill-from-postorder*", (r) => {
     if (r.request().method() === "POST") {
@@ -103,6 +105,8 @@ test.describe("月結頁：補齊價目卡＋唔靠 Postorder 比例", () => {
     // 舊 report
     await page.unroute("**/api/month-close/one-click?*");
     await page.route("**/api/month-close/one-click?*", (r) => json(r, { runs: [runWith({ uploaded: true, withDependency: false })] }));
+    await page.unroute("**/api/month-close/one-click/run1");
+    await page.route("**/api/month-close/one-click/run1", (r) => json(r, { run: runWith({ uploaded: true, withDependency: false }) }));
     await page.reload();
     await page.getByTestId("month-close-month-input").fill(MONTH);
     await expect(page.getByTestId("auto-summary")).toBeVisible();

@@ -11,13 +11,14 @@ import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
 import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
+import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // P0（Opus 驗收重現）：`broker_id` 可以係 `null`——代表「未歸屬結算
@@ -60,7 +61,7 @@ function KindPill({ kind }: { kind?: string }) {
 }
 
 export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
-  const [month, setMonth] = useState(() => currentMonthStr());
+  const [month, setMonth, monthReady] = useMonthState(undefined, { persistDefault: true });
   const [totals, setTotals] = useState<Total[]>([]);
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
@@ -74,6 +75,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     (async () => {
       setLoading(true);
       setError(null);
@@ -91,7 +93,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       setNoSettlementCount(res.data.no_settlement_count ?? 0);
       setLoading(false);
     })();
-  }, [month, reloadTick]);
+  }, [month, reloadTick, monthReady]);
 
   // WP-PRICE §M3：「重新計價」——見 src/app/(app)/roster/[site]/[month]/
   // RosterEditor.tsx 同一段設計註解——dry-run 預覽（diff 摘要）→ confirm
@@ -137,14 +139,12 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/reports/payroll")}
         title="糧明細（按雞頭）"
         subtitle="逐結算單位（雞頭）本月更數／工資／雞頭費／金額。"
         actions={
           <>
-            <FilterChip label="月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={month} onChange={setMonth} />
             {canReprice && (
               <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
                 {repricing ? "計價緊…" : `重新計價（${month}）`}

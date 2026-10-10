@@ -23,6 +23,8 @@
 import { cache } from "react";
 import { MODULES, isGrantedByDefault, type Module } from "./matrix";
 import type { CurrentSession } from "../auth/current-session";
+import { addMonthsStr, currentMonthStr } from "../ui/format";
+import { groupOrderFor, schemaFor, type BadgeKey } from "../nav/schema";
 import { loadPermissionSet, permissionSetHas, type AuthedSession } from "./requirePermission";
 
 /** WP-AI2：側欄 AI 助手嘅入口 tab 同呢個左欄導航列一樣，用「呢個角色
@@ -51,121 +53,54 @@ export const getViewGrants = cache(async function getViewGrants(session: Current
 export interface NavLink {
   href: string;
   label: string;
+  /** 所屬組（由 NAV_SCHEMA 派生，見 `@/lib/nav/schema`）。 */
+  group: string;
+  badge?: BadgeKey;
 }
 
+/** P3-3.1：連結清單由 NAV_SCHEMA 派生；顯示與否仍然全部由 `grants[module]` 決定（權限邏輯不變）。
+ * 保安員角色只有首頁。 */
 export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Record<Module, boolean>): Promise<NavLink[]> {
   const grants = prefetchedGrants ?? (await getViewGrants(session));
   const links: NavLink[] = [];
-  const push = (href: string, label: string, mod: Module) => {
-    if (grants[mod]) links.push({ href, label });
-  };
-
-  // WP-R1：「首頁」（dashboard，內部角色＝尚欠總覽式歡迎頁、雞頭＝自己
-  // 嘅 4 KPI 首頁）唔對應任何 module 權限格——凡已登入嘅用戶都見得到，
-  // 一律加返（唔經 push()，唔使揀 module）。
-  links.push({ href: "/", label: "首頁" });
-
-  push("/roster", "更表", "更表");
-  push("/roster-uploads", "更表上載", "更表上載");
-  // WP-GUARD-FIX-UI：淨係老闆（module 硬性單一角色）——push() 本身已經
-  // 用 grants 判斷，唔使額外 baseRole 判斷。
-  push("/guard-fix", "未配對保安員修復", "安員配對修復");
-  push("/quotas", "配額", "配額");
-  push("/approvals", "審批隊列", "審批");
-  push("/sites", "盤", "盤");
-  // 雞頭端睇自己保安員用「自己保安員」module；內部角色用「保安員」——兩者
-  // 都連去同一個 /guards 路徑，API 自己會 scope（見 src/app/api/guards）。
-  push("/guards", "保安員", session.baseRole === "雞頭" ? "自己安員" : "安員");
-  // P3-0.3：雞頭角色唔出「雞頭」導覽（否則落入「其他」組；/brokers 頁面本身權限不變）。
-  if (session.baseRole !== "雞頭") push("/brokers", "雞頭", "雞頭");
-  // WP-AI-OPS §28.4：保安員證件資料批量導入（老闆／會計／主管）＋導入後「待答問題」（badge＝自己未答數，老闆見全部）。
-  push("/guards/import", "證件資料導入", "安員批量導入");
-  push("/triage", "待答問題", "導入分診");
-  push("/rate-cards", "價目", "出街價");
-  // P1-WP4：報表 module——每份報表獨立一行權限（設計文件§5.0）。雞頭端
-  // 「本月應收」都經「出街價」呢個雞頭出廠已有嘅 module（§6.2），連去
-  // 獨立路徑 /my-receivable，唔會撞 /rate-cards（內部角色嘅價目管理）。
-  if (session.baseRole === "雞頭") {
-    push("/my-receivable", "本月應收", "出街價");
-  } else {
-    push("/reports/gross-margin", "毛利即時表", "毛利即時表");
-    push("/reports/monthly-close", "月結工作台", "月結總表");
-    // WP-AI-OPS §28.2：每月修正摘要（權限＝module「月結總表」view）。
-    push("/reports/ops-digest", "每月修正摘要", "月結總表");
-    push("/reports/payroll", "糧明細", "糧明細");
-    // WP-ONE-CLICK：「一鍵全月結算」——老闆／會計全開，主管淨係 view
-    // （grants 已經反映呢個分別，push() 唔使再判斷 baseRole）。
-    push("/month-close", "一鍵結算", "一鍵結算");
-    // WP-LTPAY §21 任務 5b：長工月薪糧——同「保安員銀行資料」一致粒度，
-    // 淨係老闆／會計見得到（主管/雞頭/保安員硬性拒，push() 已經反映）。
-    push("/reports/longterm-payroll", "長工糧", "長工糧");
+  for (const e of schemaFor(session.baseRole)) {
+    if (session.baseRole === "安員" && e.href !== "/") continue;
+    if (e.onlyBaseRole && session.baseRole !== e.onlyBaseRole) continue;
+    let href = e.href;
+    if (e.module !== "always") {
+      const mods = Array.isArray(e.module) ? e.module : [e.module];
+      const granted = mods.filter((m) => grants[m]);
+      if (granted.length === 0) continue;
+      // 多 module 連結：主 module（第一個）冇 grant 就改連去第一個有 grant 嘅替代 href。
+      if (!grants[mods[0]!] && e.hrefByModule) {
+        const alt = granted.map((m) => e.hrefByModule![m]).find((h) => !!h);
+        if (alt) href = alt;
+      }
+    }
+    // 未配對保安員修復係對已完結月份做嘅（例如 10 月修 9 月），連結帶上個月（香港時區）。
+    if (href === "/roster-uploads?tab=fix") href = `${href}&month=${addMonthsStr(currentMonthStr(), -1)}`;
+    links.push({ href, label: e.label, group: e.group, ...(e.badge ? { badge: e.badge } : {}) });
   }
-  push("/reports/shortfall", "尚欠總覽", "尚欠總覽");
-  push("/users", "用戶管理", "用戶管理");
-  push("/roles", "角色權限管理", "用戶管理");
-  push("/audit-log", "操作紀錄", "操作紀錄");
-
-  // P2.5「現場反映」開會模式——「現場意見」清單頁淨係老闆先睇得到（老闆
-  // 讀主管/會計/老闆自己開會送出嘅意見）。呢度刻意唔用 push()（module
-  // grant 淨係決定「助手」有冇 view，唔識分「老闆 vs 主管/會計」）——
-  // 用「助手」module（雞頭/保安員硬性冇）＋`session.baseRole==="老闆"`
-  // 雙重判斷，冇加新 module 落 matrix.ts（鐵律「唔改權限矩陣」，同
-  // `src/app/api/feedback/**` 嘅 `assertBoss()` 一致做法）。
-  if (grants["助手"] && session.baseRole === "老闆") {
-    links.push({ href: "/feedback", label: "現場意見" });
-  }
-
   return links;
 }
 
-// ---------------------------------------------------------------------------
-// WP-R1：左欄／手機抽屜嘅分組顯示——設計稿（README「桌面外殼」）將
-// `getNavLinks()` 已經算好嘅連結按主題分堆（排更／主檔／財務／系統，
-// 雞頭端排更／我的），純粹顯示層，唔改 `getNavLinks()` 嗰套權限邏輯：
-// 一個角色見唔見到某條連結，仍然全部由上面 push() 嗰句決定；呢度淨係
-// 決定「見到嘅連結擺去邊組」，冇連結嘅組唔顯示（見 groupNavLinks()
-// 尾嗰個 filter）。用 href 對照（唔用 module）——因為同一個 module
-// 喺唔同角色會連去唔同 href（例如「出街價」module 內部角色係
-// /rate-cards 擺喺「主檔」，雞頭係 /my-receivable 擺喺「我的」）。
+// 分組顯示（純顯示層）：按 NAV_SCHEMA 嘅組次序，冇連結嘅組唔顯示。
 export interface NavGroup {
   /** 空字串＝冇組標題（例：頂部「首頁」）。 */
   title: string;
   links: NavLink[];
 }
 
-const INTERNAL_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
-  { title: "", hrefs: ["/"] },
-  { title: "排更", hrefs: ["/roster", "/roster-uploads", "/guard-fix", "/quotas", "/approvals"] },
-  { title: "主檔", hrefs: ["/sites", "/guards", "/guards/import", "/triage", "/brokers", "/rate-cards"] },
-  { title: "財務", hrefs: ["/reports/gross-margin", "/reports/monthly-close", "/reports/ops-digest", "/reports/payroll", "/reports/shortfall", "/month-close", "/reports/longterm-payroll"] },
-  { title: "系統", hrefs: ["/users", "/roles", "/audit-log", "/feedback"] },
-];
-
-const BROKER_GROUP_ORDER: { title: string; hrefs: string[] }[] = [
-  { title: "排更", hrefs: ["/", "/roster", "/quotas"] },
-  { title: "我的", hrefs: ["/my-receivable", "/guards", "/rate-cards"] },
-];
-
-/** 純函數（冇 DB／網絡）——`baseRole` 淨係用嚟揀「雞頭 vs 內部角色」
- * 呢個分組版面，唔重新判斷權限（`links` 入面已經係 `getNavLinks()`
- * 篩選完嘅結果）。方便 unit test（唔使起 DB／mock session）。
- *
- * R1 驗收修正：以前淨係揀 `order` 表入面有列出嘅 href，`getNavLinks()`
- * 有但呢個分組表漏咗嘅 href 會靜靜哋喺導航消失（用戶見唔到條連結，但
- * 冇任何錯誤／log）。而家做法：分組完之後，仲剩低未被任何組攞走嘅
- * link（保持 `links` 原本次序），統一擺去尾組「其他」——寧願樣衰過
- * 消失，起碼用戶／QA 一眼見到漏咗分組。 */
+/** 純函數（冇 DB／網絡）。`links` 已經係 `getNavLinks()` 篩選完嘅結果；組名由每條 link 自帶（schema 派生）。
+ * schema 之外嘅 link（理論上唔會出現）落尾組「其他」，等漏咗登記一眼睇到。 */
 export function groupNavLinks(baseRole: string, links: NavLink[]): NavGroup[] {
-  const order = baseRole === "雞頭" ? BROKER_GROUP_ORDER : INTERNAL_GROUP_ORDER;
-  const byHref = new Map(links.map((l) => [l.href, l]));
-  const placed = new Set<string>();
+  const order = groupOrderFor(baseRole);
   const groups: NavGroup[] = [];
-  for (const g of order) {
-    const groupLinks = g.hrefs.map((h) => byHref.get(h)).filter((l): l is NavLink => l !== undefined);
-    groupLinks.forEach((l) => placed.add(l.href));
-    if (groupLinks.length > 0) groups.push({ title: g.title, links: groupLinks });
+  for (const title of order) {
+    const groupLinks = links.filter((l) => l.group === title);
+    if (groupLinks.length > 0) groups.push({ title, links: groupLinks });
   }
-  const leftover = links.filter((l) => !placed.has(l.href));
+  const leftover = links.filter((l) => !order.includes(l.group));
   if (leftover.length > 0) groups.push({ title: "其他", links: leftover });
   return groups;
 }

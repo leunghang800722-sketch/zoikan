@@ -1,58 +1,31 @@
-// WP-R1 驗收修正：桌面左欄（`DesktopNav.tsx`）同手機抽屜
-// （`MobileNav.tsx`）本來各自複製一份 active 判斷邏輯，容易兩邊飄
-// 開（例如更表索引 `/roster` 同編輯器 `/roster/[site]/[month]` 呢種
-// 特例，之前得 DesktopNav 有做，MobileNav 冇跟）。抽出嚟做單一
-// source of truth，兩個 component 都 import 呢個。
-export function isLinkActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
-  if (pathname === href) return true;
-  // 更表索引與編輯器共用「更表」active（README「Interactions」）。
-  if (href === "/roster") return pathname.startsWith("/roster");
-  // WP-AI-OPS：「保安員」(/guards) 唔連 /guards/import（證件資料導入有自己條連結），免得雙重 active。
-  if (href === "/guards" && pathname.startsWith("/guards/import")) return false;
-  return pathname.startsWith(`${href}/`);
-}
+// WP-R1 驗收修正：桌面左欄（`DesktopNav.tsx`）同手機抽屜（`MobileNav.tsx`）
+// 共用嘅 active 判斷（單一 source of truth）。
+// P3-3.1：連結 href 可帶 query（例：`/roster-uploads?tab=fix`），`search` 係當前
+// URL 嘅 query；頁首 kicker 搬去 `@/lib/nav/schema` 派生，呢度只 re-export。
+export { kickerFor } from "@/lib/nav/schema";
 
-// A3（Opus 整合驗收）：`/guards`（保安員）／`/rate-cards`（價目）呢兩條
-// 連結，雞頭 session 睇嘅係「我的」組，內部角色睇嘅係「主檔」組（見
-// `src/lib/rbac/nav.ts` 嘅 `BROKER_GROUP_ORDER`/`INTERNAL_GROUP_ORDER`）
-// ——但呢兩頁本身係 client component（"use client"），冇辦法直接 import
-// `nav.ts`（嗰檔用 `next/headers`，係 server-only API，client component
-// 入面 import 會喺 build 爆）。呢個 helper 特登喺呢個 client-safe 檔度
-// 抄一份靜態對照（純 href → kicker 字面值，唔係邏輯），等頁首 kicker
-// 跟返導航分組一致；`nav.ts` 分組表改嘅話，呢度要跟手改（兩邊都有
-// 註解互相指返對方）。
-const INTERNAL_KICKER_BY_HREF: Record<string, string> = {
-  "/roster": "排更",
-  "/quotas": "排更",
-  "/approvals": "排更",
-  "/sites": "主檔",
-  "/guards": "主檔",
-  "/guards/import": "主檔",
-  "/triage": "主檔",
-  "/brokers": "主檔",
-  "/rate-cards": "主檔",
-  "/reports/gross-margin": "財務",
-  "/reports/ops-digest": "財務",
-  "/reports/monthly-close": "財務",
-  "/reports/payroll": "財務",
-  "/reports/shortfall": "財務",
-  "/users": "系統",
-  "/roles": "系統",
-  "/audit-log": "系統",
-};
-const BROKER_KICKER_BY_HREF: Record<string, string> = {
-  "/": "排更",
-  "/roster": "排更",
-  "/quotas": "排更",
-  "/my-receivable": "我的",
-  "/guards": "我的",
-  "/rate-cards": "我的",
-};
-
-/** 跟 `nav.ts` 嘅導航分組畀返呢條 href 嘅 kicker 字面值——`isBroker` 揀
- * 用邊份對照表。搵唔到就回空字串（同 `PageHeader` 其他頁面冇 kicker
- * 嘅寫法一致，唔會顯示奇怪字樣）。 */
-export function kickerFor(href: string, isBroker: boolean): string {
-  return (isBroker ? BROKER_KICKER_BY_HREF : INTERNAL_KICKER_BY_HREF)[href] ?? "";
+export function isLinkActive(pathname: string, href: string, search?: URLSearchParams | null): boolean {
+  const [path, query] = href.split("?");
+  const p = path ?? href;
+  if (query) {
+    // 帶 query 嘅連結：路徑相同且 query 全部吻合先 active。
+    if (pathname !== p) return false;
+    const want = new URLSearchParams(query);
+    for (const [k, v] of want) if (k !== "month" && search?.get(k) !== v) return false; // month 係動態（導覽帶上個月），唔比較
+    return true;
+  }
+  if (p === "/") return pathname === "/";
+  // 更表上載：`?tab=fix` 嗰條有自己連結，唔雙重 active。
+  if (p === "/roster-uploads") {
+    if (pathname === "/roster-uploads") return search?.get("tab") !== "fix";
+    return pathname.startsWith("/roster-uploads/");
+  }
+  if (pathname === p) return true;
+  // 更表索引與編輯器共用「更表」active（README「Interactions」）；唔搶「更表上載」。
+  if (p === "/roster") return pathname.startsWith("/roster/");
+  // 「報表」：五份報表共用 active；尚欠總覽已搬去首頁（redirect）。
+  if (p === "/reports/monthly-close" || p === "/reports/gross-margin" || p === "/reports/payroll" || p === "/reports/longterm-payroll") {
+    return pathname.startsWith("/reports/") && pathname !== "/reports/shortfall";
+  }
+  return pathname.startsWith(`${p}/`);
 }

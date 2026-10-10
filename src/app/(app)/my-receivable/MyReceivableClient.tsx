@@ -6,17 +6,18 @@
 // ShortfallDashboard.tsx 嘅 `?date=`／RosterEditor.tsx 嘅 `?broker=`
 // 一致（`history.replaceState`，唔用 `useSearchParams()`避免 Suspense
 // boundary）。
+import { kickerFor } from "@/lib/nav/schema";
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, fmtDate, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney, fmtDate } from "@/lib/ui/format";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // M4（Opus 驗收）：`grouped_days` 按 (日期, 盤, 更別, 出街價) 合併——一
@@ -73,7 +74,7 @@ function writeBrokerToUrl(broker: string): void {
 const COLS = 6; // 日期／盤／更別／更數／出街價／金額
 
 export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean; roleLabel: string }) {
-  const [month, setMonth] = useState(() => currentMonthStr());
+  const [month, setMonth, monthReady] = useMonthState();
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   // M1（Opus 整合驗收）：initial state 唔可以喺 `useState` initializer
   // 度讀 `readBrokerFromUrl()`——SSR 冇 `window`，會令 SSR 輸出（空字串）
@@ -110,6 +111,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
   }, [isBroker]);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     if (!isBroker && !brokerParam) return; // 等雞頭清單攞完先 fetch
     let cancelled = false;
     (async () => {
@@ -132,7 +134,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
     return () => {
       cancelled = true;
     };
-  }, [month, brokerParam, isBroker]);
+  }, [month, brokerParam, isBroker, monthReady]);
 
   function changeBroker(next: string) {
     setBrokerParam(next);
@@ -144,13 +146,11 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker={isBroker ? "我的" : "財務"}
+        kicker={isBroker ? kickerFor("/my-receivable", true) : "資料"}
         title="本月應收"
         subtitle="自己保安員本月更數 × 自己出街價，逐日明細。"
         actions={
-          <FilterChip label="月份">
-            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-          </FilterChip>
+          <MonthPicker label="月份" value={month} onChange={setMonth} />
         }
       />
 

@@ -435,3 +435,78 @@ API 單獨 p50（3 次）：最輕 API 地板 ~360 ms（香港→新加坡 TLS�
 
 - 未達／留意：字型 CSS 41 KB gz（目標 <40，差 1 KB；`next/font/local` 切片留待老闆要唔要）；更表編輯器冷載仍 10 個 API（暖載 7）；`/guards` 頁仍載全欄（名冊頁本身需要），DOM 節點數係階段 5 拆 GuardsClient 時做分頁／虛擬 render。
 - 行為改變（已話俾老闆知）：更表編輯器「每日已排／所需」只計本月（舊版將該盤所有月份按「幾號」加埋，係顯示 bug）；首頁毛利卡仍每次開即時重計（無 cache），換日唔重拉毛利。
+
+### 8.3 階段 3 落實紀錄（Sonnet 5.5，2026-10-11，branch p3-phase3）
+逐項獨立 commit（P3-3.1 至 P3-3.8）。**只搬 UI**：API 合約、權限矩陣、任何定價／結算／報表計算全部冇改；冇 migration；舊路徑全部保留（redirect 或照 render）。
+
+1. **P3-3.1 NAV_SCHEMA**：新 `src/lib/nav/schema.ts`（client-safe）係導覽單一真相——`INTERNAL_NAV`／`BROKER_NAV` 每條 `{ href, label, group, kicker, module, badge? }`；`getNavLinks()`／`groupNavLinks()`（`rbac/nav.ts`）、`isLinkActive()`／`kickerFor()`（`ui/nav-active.ts` 只 re-export）、各頁 `PageHeader kicker`（30 幾處手寫字串全換 `kickerFor(href)`）全部由 schema 派生，刪咗三份手寫表。顯示與否仍然全部由 `grants[module]` 決定（權限邏輯不變）。內部角色 6 組：首頁／排更（更表、配額、審批）／對數（更表上載、未配對保安員修復）／月結（一鍵結算、待答問題、報表）／資料（盤、保安員、雞頭、價目）／設定（用戶、角色權限、操作紀錄、現場意見）；雞頭 3 組（首頁／排更／我的：本月應收、我的保安員、價目）；保安員只有首頁。「報表」連結任一報表 module 有 view 就出（主 module「月結總表」冇 grant 就改連去有權限嗰份）。`/reports/shortfall`、`/guard-fix`、`/guards/import`、`/guards/new-from-docs`、4 份報表由導覽拎走。`DesktopNav` 收緊（連結 `py` 3px＋`leading-5`、組距收窄、用戶區一行、「登出會同時登出所有裝置」改 `title`），1512×700 老闆 nav `scrollHeight`＝`clientHeight`＝594（唔使捲）；每條連結加 testid（桌面 `nav-<href>`、手機 `mnav-<href>`）。`isLinkActive` 識帶 query 嘅連結（`/roster-uploads?tab=fix`），並修正舊寫法「更表」連結會喺 `/roster-uploads` 雙重 active。
+2. **P3-3.2 共用月份選擇器**：新 `components/ui/MonthPicker.tsx`（‹ 月份 ›＋原生 month 輸入，唯一實作）＋`useMonthState(defaultMonth?, { persistDefault? })`＋`lib/ui/month-store.ts`（純函數）。月份來源次序 URL `?month=` → `sessionStorage["zk.month"]` → 頁面預設（本月，香港；月結／長工糧／修正摘要維持上個月）；改變時用 `history.replaceState` 更新 URL（唔加 history）同寫 sessionStorage。14 個 `useMonthState` call site（brokers、quotas、roster、roster-uploads、my-receivable、guards、gross-margin、monthly-close、ops-digest、payroll、month-close、longterm-payroll、BrokerDashboard、HomeInbox）；rate-cards 生效月用 `MonthPicker` 但本地 state；guard-fix 面板經父頁 roster-uploads 嘅月份；RosterEditor 月份喺路徑，經 `rememberMonth` 寫入 sessionStorage；`BrokerDashboard` 改用 hook；`RosterEditor`（月份喺路徑）寫入 sessionStorage。`EmptyMonthNotice` 擴到 brokers、roster-uploads、ops-digest、longterm-payroll（my-receivable 本來有）。
+3. **P3-3.3 首頁待辦收件箱**：新 `components/home/HomeInbox.tsx`：待審批（更）、待答問題（題）、更表未對數（盤；`pending-summary` entries 數；API 預設「本月＋上月」`months=2`）、「YYYY-MM 月結」進度（`/api/month-close/one-click?month=` 最新 run：未開始／進行中 n/N 步／已完成／失敗）、要老闆決定（項；`/api/guard-fix/runs` 最新 run `summary.needs_boss`，淨係老闆，冇 run 就唔出）。每格按 grants，冇權限唔打 API。審批／待答由 server page 傳落（新 `rbac/pending-counts.ts` `getPendingCounts` react `cache()`，layout 側欄 badge 同首頁共用同一次查詢）。`TriageHomeNotice` 刪；`ShortfallDashboard` 刪 `variant="overview"`、待審批卡、更表對數卡（搬入收件箱）；`/reports/shortfall` 改 `redirect("/")`（保留合法 `?date=`）。
+4. **P3-3.4 月結**：新 `reports/layout.tsx`（server，按 grants）＋`ReportTabs`（5 tab：月結總表／毛利／糧明細／長工糧／修正摘要，路徑不變，換 tab 帶 `?month=`；定義放 `lib/nav/report-tabs.ts`，因 server 唔可以 import "use client" 檔嘅常數）；5 頁 kicker「月結 › 報表」。`/reports/monthly-close`：右欄**刪鎖定／解鎖掣**（連同 override 原因、強制鎖定 checkbox、roster-coverage fetch、`MonthHealthCard`），改顯示鎖定狀態＋「去一鍵結算鎖月 ›」；頁首主掣「生成月結」，匯出 Excel／Postorder 格式／重算介紹費入新 `MenuButton`「更多 ▾」；標題「月結總表」、卡標題「五條自動對數規則」（testid `recon-rules-title`）。`/month-close`：主欄 ReviewCard「開始逐條答」、LockSection「鎖定」、AutoSummaryCard「還原」三個重複掣刪，右欄 RightRail 係唯一 CTA 區（testid `rail-open-triage`／`rail-lock-month`／`undo-auto-rail`）；「歷史 runs」→「過往執行紀錄」。
+5. **P3-3.5 對數**：`guard-fix/page.tsx` `git mv` 做 `roster-uploads/GuardFixPanel.tsx`（邏輯不變）；`roster-uploads/page.tsx` 變 server wrapper（`canFix`＝「安員配對修復」view），原 client 頁搬去 `RosterUploadsClient.tsx`，tab「上載與對數」／「未配對保安員修復」（`?tab=fix`，兩邊保持 mount、切 tab 唔丟狀態）；`/guard-fix` 改 `redirect("/roster-uploads?tab=fix[&month=]")`。修復 tab：兩個 CSV 過渡面板收入 `<details>`「其他上載方式（9 月過渡用）」、「歷史 runs」→「過往紀錄」預設收起（套用失敗／卡住提示會自動展開）、頁首 PageHeader 由父頁出。上載列表預設只顯示「有嘢要做」（`needsAction`：盤名未配對／解析失敗／未對數確認／仲有未配對或多重配對），其餘摺成一行「未上載 N 盤、已完成 M 盤，已摺埋｜顯示全部 ›」（sessionStorage `zk.rosterUploads.showAll` 記住）。「重新對數全月結果」改人話（共用新 `lib/roster-upload/category-labels.ts`，ReconcileClient 同用）：預設一句總結，明細收入 `<details>`；詳情頭 `layout:` 刪。一鍵結算 UploadSection 加「亦可以喺『對數 › 更表上載』逐盤上載同對數」。
+6. **P3-3.6 資料**：`/guards` 三個入口收成「新增 ▾」（手動新增／用證件新增／批量導入；雞頭保持單一「新增保安員」）；`/guards/import`、`/guards/new-from-docs` 加「‹ 返回保安員」。`/brokers` Drawer「銀行資料（JSON）」改「銀行名」「戶口號碼」兩格（新 `lib/ui/broker-bank.ts`）：現有程式冇任何地方讀 `bank_info` 內部 key，只有舊提示例 `bank_name`／`account_no`，所以寫呢兩個 key；舊 JSON 已用其他拼寫（`bankName`／`account_number` 等）就沿用，其他 key 原封保留；送出仍然係同一個 `bank_info` JSON。銀行資料屬 PII：test 只用假值，唔 log。
+7. **P3-3.7 保安員角色**：`baseRole`＝安員（顯示「保安員」）登入 `/` 見說明頁（「你嘅帳號係保安員帳號，系統功能稍後開放。如要改密碼請按下面。」＋改密碼／登出）；導覽只有首頁（`getNavLinks` 強制）。（代碼改動喺 P3-3.3 commit 一齊做，P3-3.7 commit 係 e2e。）
+8. **P3-3.8 e2e 舊失敗**：見下。
+
+**行為改變清單**
+- 導覽：老闆 23→17 條、5→6 組；主管／會計各 11 條；雞頭 6 條（3 組）；保安員 1 條。連結改名：審批隊列→審批、用戶管理→用戶、角色權限管理→角色權限、價目 unchanged、雞頭端「保安員」→「我的保安員」、月結工作台／毛利／糧明細／長工糧／修正摘要→合成「報表」一條。
+- 尚欠總覽併入首頁；證件資料導入（導覽）→保安員頁「新增 ▾」；未配對保安員修復→對數 tab；4 份報表→報表 tab。
+- 鎖月：`/reports/monthly-close` 唔再有鎖定／解鎖／強制鎖定／override 原因輸入。`/month-close` 嘅鎖定掣照舊條件（`ready_to_lock`）；**解鎖**（簡報寫「解鎖都刪」，但刪咗就冇 UI 可以解鎖）搬入 `/month-close` LockSection（已鎖定先出現，原因必填，API 不變）。
+- 更表編輯器手機（compact）取消 mouseenter 範圍拖選（`onCellMouseEnter`）：鍵盤彈出令容器縮細、格仔移位，指標下面換咗格會將單格選擇變範圍選擇令鍵盤收埋（wp-r2 (f) 揭出）；桌面唔受影響。
+- 月份：換頁跟住（URL→sessionStorage）；初始值＝預設（同 SSR 一致），paint 前由 `useLayoutEffect` 解出 URL→sessionStorage→預設後先 `ready`，頁面只 fetch 一次（第二輪修正，見 §8.3.2）。
+
+**e2e 改動清單**（Playwright 全部 spec 0 fail；固定帳號冇碰）
+- 新增 `tests/e2e/p3-3-nav.spec.ts`（導覽 5 角色條數／組／唔使捲、手機抽屜 17 條、月份跟住、報表 tab、首頁收件箱、redirect、修復 tab、新增 ▾、雞頭銀行兩格〔假值，測後還原〕、保安員說明頁）。
+- 跟新架構改：`home.spec (d)`（尚欠總覽→redirect＋收件箱）、`roster-reconcile`（「更表對數待處理」→`inbox-unreconciled`）、`roster-upload`（作廢後「未上載」要撳顯示全部）、`wp4 (b)`（鎖月／解鎖改喺 `/month-close` 做；run 報告用 `page.route` 假、generate／lock／unlock 打真 API 並用 API 核對）、`p2b (d)(e)(e2)`、`month-close-ui`（`rail-*` testid、主欄冇重複掣斷言）、`guard-fix`（redirect）、`reconcile-ui`（guard-fix 連結）。
+- **舊失敗修正**：`mobile.spec` (b)(e)（strict mode，改 `mnav-/roster`）；`p2a-master-pages` 雞頭A保安員列數（改同 session 嘅 `/api/guards?fields=lite` total 比對）；`pricing (c)`（dry-run 摘要兩種現行文案都收）。簡報冇列但同環境一齊揭出、一併修：`month-close-ui`／`postorder-free`（P3-1.6 之後列表係摘要版，要另外 mock `/api/month-close/one-click/run1`——9＋2 條）、`pii (a)`（身份證 check digit 驗證之後舊假值 A123456(7) 會 400，且畫面顯示規範化 `A1234563`）、`p2b (d)`（7 月 race，等 7 月 response）、`ai-actions (d)`（真 POST 會對 2099-01 起真 run，連帶令 `longterm-payroll` 重算 2026-08 被「後面月份已計過」擋住；改 fulfill 假回應）、`wp-r2 (h)`（唔再假設第 0 行 27／29 日係空）、`wp-r2 (f)`（上面 RosterEditor compact 修正）。
+- vitest：`rbac-nav-groups` 重寫（5 角色逐個斷言分組＋次序＋條數；schema href 掃描）；`triage-guard-import`、`ai-action-requests`（檔案路徑）、`ui-reconcile-derive`（guardFix 連結）跟改；新增 `p3-3-month-store`、`p3-3-report-tabs`、`p3-3-redirects`、`p3-3-needs-action`、`p3-3-broker-bank`。
+
+**驗證**
+- `tsc --noEmit` 0；`npm run lint` 0；`rm -rf .next && npm run build` 過（`/` First Load 115 kB；共用 103 kB 不變）。
+- `npx vitest run`（隔離 PG 54385）：213 檔（212 過、1 skip），3,429 passed｜10 skipped（階段 2 為 3,414）。
+- Playwright 全部 spec（隔離 PG 54386、`next start` 3190、`AI_LLM=fake`；`db:reset` 後即跑）：**179 passed｜5 skipped（原有 test.skip）｜0 failed**。
+- `npm run gate:locked-months`：12/12 rc=0（本分支兩次獨立跑）；兩次 `snapshot.json` 嘅 5,080 個數字葉 multiset 相等（逐 path 比對只差隨機 uuid 同 20 個同名盤排序錯位，同階段 1／2 紀錄一致）。本階段冇碰任何報表／定價／結算計算，gate 只係保險。
+- 五個角色（出廠矩陣）桌面 1512×700＋手機 375 導覽截圖（seed 假資料，唔入 repo）：`/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/perf/p3-3/shots/`（`<角色>-desktop-1512x700.png`、`<角色>-mobile-375.png`）；實測連結數 老闆 17／主管 11／會計 11／雞頭 6／保安員 1，nav `scrollHeight`＝`clientHeight`＝594。
+
+**Before → after**
+| 指標 | before | after |
+|---|---|---|
+| 老闆導覽連結／組 | 23／5 | 17／6 |
+| 老闆 1512×700 導覽要捲 | 要（財務組喺下面） | 唔使（`scrollHeight` 594 ＝ `clientHeight` 594） |
+| 月份選擇器實作（`type="month"` 於 `src`，唔計註解） | 16 | 1（`MonthPicker`）＋3 個表單欄（開更表、新增配額、雞頭掛盤）；呢三處月份欄冇改 |
+| 讀網址月份嘅頁 | 3 | 16（URL→sessionStorage→預設） |
+| 「待處理」計法 | 9 處各自計（題／更／格／盤／項） | 1 個收件箱（更／題／盤／項，單位寫清楚） |
+| 導覽分組真相 | 3 份（`nav.ts`、`nav-active.ts`、各頁 kicker） | 1 份 `NAV_SCHEMA` |
+| redirect 舊路徑 | 0 | 2（`/reports/shortfall`、`/guard-fix`） |
+| 鎖月入口 | `/reports/monthly-close`、`/month-close`（主欄＋右欄） | `/month-close` 右欄（唯一鎖定）；解鎖喺同頁 LockSection |
+| Playwright 失敗 | 主分支 3 條已知＋環境揭出多條 | 0 |
+
+**偏離／風險（請規劃者決定）**
+1. **強制鎖定／override 原因**：`/reports/monthly-close` 嗰兩個輸入（紅色差異要填原因、roster-coverage 未齊嘅「強制鎖定」checkbox，後者淨係老闆）隨鎖定掣一齊刪咗；`/month-close` 嘅 `lockMonth()` 一向送空 body，`ready_to_lock` 唔齊就掣停用。**API 仍然支援**（`override_reason`、`force`），但而家冇 UI 入口——如果老闆日後要喺條件未齊時強制鎖月，要喺 `/month-close` LockSection 補（只係 UI，未做）。
+2. 簡報「刪解鎖」→ 實際搬去 LockSection（見上），否則冇方法解鎖。
+3. 「要老闆決定 N 項」用現成 `/api/guard-fix/runs` 最新 run 嘅 `summary.needs_boss`（簡報寫 `needs_decision`，代碼冇呢個名）；冇 run 就唔出該格。
+4. 月份 URL 同步用 `history.replaceState`（同 `BrokerDashboard`／`ShortfallDashboard` 既有手法，唔觸發 RSC 重載），唔係 `router.replace`。
+5. 價目頁「生效月」係篩選（空＝全部），用 `MonthPicker allowEmpty` 但保持本地 state，唔入全站月份。
+6. 簡報要求 8 個部分按「搬 UI」做；`RosterEditor` compact 拖選修正、`pending-counts` 抽出屬為達成 0 fail／共用查詢嘅最小 app 改動。
+
+**未測**
+- 冇喺 production／真機觸控驗證（手機 e2e 係 Chromium 模擬）；`useMonthState` 冇 jsdom 單元測（純函數有，hook 行為由 `p3-3-nav.spec` 覆蓋）；「要老闆決定」格喺有 guard-fix run 嘅數據下嘅顯示冇專門 e2e（冇 run 時唔出，主管冇呢格有 e2e）。
+
+#### 8.3.1 規劃者裁定後補（同日，Sonnet 5.5）
+1. **強制鎖定補返**：`/month-close` LockSection 加「強制鎖定」——淨係老闆（server wrapper `month-close/page.tsx` 傳 `isBoss`＝`baseRole==="老闆"`；API 本身一樣只准老闆）、只喺 `lock_precondition` 有未上載／未對數盤（鎖月條件未齊）且未鎖定時顯示；勾選後出「override 原因」輸入，必填先可撳；call 同一個 `POST /api/month-closes/:id/lock`，body `{ force: true, override_reason }`（舊 `/reports/monthly-close` 嘅 `force`／`override_reason` 欄位名一字不差；`generate` 先行亦同舊 `lockMonth`）。e2e：`p3-3-nav.spec.ts` 老闆（條件未齊先出、原因必填、request body、鎖完 API 核對並解返）＋主管見唔到；一般右欄鎖定掣照舊停用。
+2. **解鎖搬 LockSection**、**`needs_boss`**、**生效月本地 state**：規劃者接受。
+3. **月份只 fetch 一次**：`useMonthState` 初始值改喺第一次 client render 前讀（`useState(() => readInitialMonth(fallback).month)`，次序 URL → sessionStorage → 預設；SSR 冇 window 用預設），唔再先用預設月份 fetch 再切；`MonthPicker` input 加 `suppressHydrationWarning`（hydration 時 value 屬性可能同 server HTML 唔同）。新增 devDependency `jsdom`，`tests/p3-3-use-month-state.test.ts`（jsdom）覆蓋初始值次序、第一次 render 已係最終值、補 URL／storage、setMonth。
+4. **RosterEditor 手機（compact）`onCellMouseEnter`**：舊行為——mousedown 開始「拖曳填充」狀態（`draggingRef`），之後指標進入任何格都將選擇範圍延伸到嗰格。手機單撳一格會彈出底部更別鍵盤，容器因此縮細、格仔上移，**指標位置不變但下面換咗另一格**，瀏覽器觸發 mouseenter，將單格選擇（`sel.a==sel.b`）變成多格範圍，鍵盤顯示條件（單一格）唔再成立，鍵盤即刻收埋——用家見到「撳咗格鍵盤閃一下／唔出」，特別係近底部嘅格（e2e wp-r2 (f) 重現）。新行為——compact 下 `onCellMouseEnter` 直接 return，唔延伸範圍。桌面（≥640px）完全不變（拖曳填充照用）。係 bug 唔係功能：手機冇滑鼠拖曳填充操作（觸控冇 hover），範圍選擇喺手機只會由呢個佈局位移意外觸發；e2e 本身斷言（格喺鍵盤上面）正確，所以改 app 唔改 e2e。唯一副作用：窗口 <640px 嘅桌面滑鼠用家失去拖曳填充。
+
+4（8.3.1 補）：e2e 數字 181 passed｜5 skipped｜0 failed（第一次補完後）；第 3 點「`useState(() => readInitialMonth…)` 讀 storage」被 §8.3.2 第 1 點取代（會 hydration mismatch）。
+
+#### 8.3.2 第二輪修正（Opus 5.5 驗收後，Sonnet 5.5）
+1. **Hydration #418**：`useMonthState` 初始值改回 fallback（同 SSR 一致），回傳 `[month, setMonth, ready]`；`useLayoutEffect`（paint 前、passive effects 前）解出 URL→sessionStorage→預設後 `setReady(true)`。13 個頁面（含 HomeInbox）嘅月份 fetch effect 全部 `if (!monthReady) return` 並以 `monthReady` 做 dep → 仍然只用最終月份 fetch 一次；GuardFixPanel 等 `monthReady` 先 mount。月份派生文字（HomeInbox「YYYY-MM 月結」）未 ready 時係預設月份、ready 後切換（hydration 安全）。新增 e2e（`p3-3-nav.spec.ts`）：`?month=` 同 sessionStorage 月份≠預設兩種情況各開 `/`、`/month-close`、`/reports/payroll`、`/reports/longterm-payroll`，斷言 0 `pageerror`／console #418／hydration，`/reports/payroll` 只打 `month=2026-08`；jsdom 單元測改用 `renderToString`＋`hydrateRoot`（`onRecoverableError` 同 `console.error` 都 0、fetch 只一次）。
+2. **§6.3 紅色差異鎖唔到**：`lockMonth` 用 generate 回應 `reconciliation.has_diff`；有差異但未填原因就唔打 lock，LockSection（`diff-reason-box`）同右欄（`rail-diff-reason`，原因空時鎖定掣停用）出「override 原因（必填）」，body `{ override_reason }`；強制鎖定（coverage 未齊）body `{ force: true, override_reason }`。兩樣都有時 lock API 淨係得一個 `override_reason` 欄，合併成「差異原因；強制鎖定：強制原因」。e2e：mock `has_diff` 驗證唔打 lock → 填原因 → body。
+3. **修復預設月份**：舊版預設上個月（修復係對已完結月份）。而家 `tab==="fix"` 且月份來源係預設時用上個月（`useMonthState(tab==="fix" ? 上個月 : undefined)`）；導覽「未配對保安員修復」連結（`getNavLinks` 動態帶 `&month=上個月`，`isLinkActive` 比較 query 時忽略 `month`，testid 去走 `&month=`）、首頁「要老闆決定」格、tab 切換連結都帶月份；`RosterUploadsClient` 跟 URL `?month=` 變化（soft navigation）。
+4. **解鎖輸入按權限**：server wrapper `hasPermission("月結鎖定解鎖","void")`（同 lock／unlock API 一樣）→ `canUnlock`；冇權（主管）已鎖定都唔出 `unlock-box`。e2e 主管 0／老闆 1。
+5. **RosterEditor 拖選**：改用 `pointerType`（容器 `onPointerDown` 記低，`mouse` 先容許 `mouseenter` 範圍拖選），唔再用闊度（`compact`）判斷，所以窄窗口桌面滑鼠用家仍然拖得；觸控／筆唔延伸。wp-r2 (f) 改用 `tap()`（touch pointer）。
+6. **收件箱**：註解／§8.3 第 3 點改正「本月＋上月」；「更表未對數」卡連結帶 entries 最早有嘢做嗰個月（`/roster-uploads?month=…`）。
+7. **版面**：首頁待辦收件箱放喺歡迎標題（PageHeader）下面（`ShortfallDashboard` `afterHeader` slot）；`MonthPicker` input 闊度 118→150px（英文 locale「October 2026」唔再黐住日曆 icon）。
+8. **文件**：§8.3 過時句改正；e2e 數字、「14 頁」寫清楚（見上）；`p2b-finance-pages.spec` 註解更新。**設計取捨**：月份記憶跨頁共用（含 `persistDefault` 報表族）——揀過／睇過某月之後，其他頁（包括 `/month-close`）唔再預設上個月而係跟住該月；`/month-close` 只有喺完全冇 URL／sessionStorage 月份時先預設上個月。要避免請喺 `/month-close` 連結帶 `?month=`（鎖月連結已經帶；首頁月結格暫時靠 sessionStorage，去到嘅月份一樣——驗收 (ii)，階段 4 可補 `?month=`）。
+9. **第二輪驗證**：tsc 0；lint 0；`rm -rf .next` build 過；vitest 214 檔（213 過、1 skip），3,434 passed｜10 skipped（含 term-guard）；Playwright 全部 spec（`db:reset` 後）192 passed｜5 skipped｜0 failed；gate 冇重跑（無計算改動）。

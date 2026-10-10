@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { SimpleMarkdown } from "@/components/ai/SimpleMarkdown";
 import { fmtDateTime } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 type FeedbackStatus = "new" | "read" | "forwarded" | "declined";
 
@@ -84,7 +85,7 @@ export function FeedbackDetailClient({ id }: { id: string }) {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="系統"
+        kicker={kickerFor("/feedback")}
         title={report.title}
         subtitle={`${report.role_name} · ${fmtDateTime(report.created_at)}`}
         actions={

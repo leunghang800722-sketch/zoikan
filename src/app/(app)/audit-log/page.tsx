@@ -25,6 +25,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDateTime, todayLocalStr, addDaysStr } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface AuditLogRow {
   id: string;
@@ -133,7 +134,7 @@ export default function AuditLogPage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="系統"
+        kicker={kickerFor("/audit-log")}
         title="操作紀錄"
         subtitle="只讀 — 寫入一律由各 API 內部觸發。"
         actions={
