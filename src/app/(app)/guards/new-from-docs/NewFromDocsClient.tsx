@@ -369,7 +369,7 @@ export function NewFromDocsClient() {
             </div>
           )}
           <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px] text-orange-800" data-testid="ocr-privacy-notice">
-            圖片會傳送去 DeepSeek（內地伺服器）做辨識，本系統唔會儲存圖片。圖片只留喺你部機嘅瀏覽器記憶體，儲存或者離開頁面就會清走。
+            圖片會傳送去 Claude（Anthropic，美國伺服器）同 DeepSeek（內地伺服器）做辨識，兩邊讀到一致先會預填；本系統唔會儲存圖片。圖片只留喺你部機嘅瀏覽器記憶體，儲存或者離開頁面就會清走。
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             {(Object.keys(DOC_LABEL) as OcrDocType[]).map((t) => {

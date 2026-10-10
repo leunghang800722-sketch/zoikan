@@ -1,4 +1,4 @@
-// WP-GUARD-OCR §29：DeepSeek 視覺呼叫（OpenAI SDK，chat completions）。
+// WP-GUARD-OCR §29：DeepSeek 視覺呼叫（§36 起係讀 B／Claude 後備）（OpenAI SDK，chat completions）。
 // - 圖片只准放喺 user message 嘅 content 陣列（image_url）；system message 係純文字（放圖會 400）。
 // - 唔改 `LlmClient`／AI 助手。client 可注入（測試用 fake，vitest 唔准真打外部 API）。
 // - 錯誤：超時／401／429／5xx／網絡 → OcrUnavailableError（route 回 503）。錯誤訊息唔帶任何請求內容。
@@ -10,6 +10,8 @@ export interface VisionRequest {
   userText: string;
   /** data:image/jpeg;base64,… */
   images: readonly string[];
+  /** 要抽嘅欄位 key（Claude structured output 用嚟砌 JSON schema；DeepSeek 忽略） */
+  fields?: readonly string[];
 }
 export interface VisionResponse {
   text: string;
@@ -18,17 +20,23 @@ export interface VisionResponse {
   /** finish_reason==="length"＝撞咗 output token 上限（只記有冇，冇內容） */
   truncated?: boolean;
 }
+export type OcrProviderName = "claude" | "deepseek";
 export interface VisionClient {
   readonly model: string;
+  /** 供應商標籤（冇寫＝deepseek／測試 fake） */
+  readonly provider?: OcrProviderName;
   complete(req: VisionRequest): Promise<VisionResponse>;
 }
 
 export class OcrUnavailableError extends Error {
   readonly status: number | null;
-  constructor(status: number | null) {
+  /** 失敗類別（只係固定字串，唔帶內容）：refusal／max_tokens／api_error… */
+  readonly reason: string | null;
+  constructor(status: number | null, reason: string | null = null) {
     super("ocr_provider_unavailable");
     this.name = "OcrUnavailableError";
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -41,6 +49,7 @@ export function openAiClientOptions(apiKey: string, baseURL: string, timeoutMs: 
 
 export class DeepSeekVisionClient implements VisionClient {
   readonly model: string;
+  readonly provider = "deepseek" as const;
   private readonly api: ChatApi;
 
   constructor(opts?: { apiKey?: string; baseURL?: string; model?: string; timeoutMs?: number; client?: ChatApi }) {
@@ -78,6 +87,10 @@ export class DeepSeekVisionClient implements VisionClient {
 /** 測試注入 fake client（傳 null 清除）。 */
 export function setVisionClientForTests(client: VisionClient | null): void {
   setOcrClientOverrideFlag(client);
+}
+
+export function getOcrOverrideClient(): VisionClient | undefined {
+  return getOcrClientOverride<VisionClient>();
 }
 
 export function getVisionClient(): VisionClient {
