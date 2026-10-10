@@ -56,7 +56,7 @@ export async function GET(req: Request) {
     where = scopeShiftRecordWhere(session, where);
 
     const [rows, total] = await Promise.all([
-      prisma.shiftRecord.findMany({ where, skip, take, orderBy: { workDate: "desc" } }),
+      prisma.shiftRecord.findMany({ where, skip, take, orderBy: [{ workDate: "desc" }, { id: "asc" }] }),
       prisma.shiftRecord.count({ where }),
     ]);
     if (isBrokerRole(session)) {

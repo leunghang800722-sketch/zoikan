@@ -34,7 +34,7 @@ export async function GET(req: Request) {
     };
     where = scopeQuotaWhere(session, where);
     const [rows, total] = await Promise.all([
-      prisma.quota.findMany({ where, skip, take, orderBy: [{ month: "desc" }] }),
+      prisma.quota.findMany({ where, skip, take, orderBy: [{ month: "desc" }, { id: "asc" }] }),
       prisma.quota.count({ where }),
     ]);
     if (isBrokerRole(session)) {

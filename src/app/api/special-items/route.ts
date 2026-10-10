@@ -23,7 +23,7 @@ export async function GET(req: Request) {
       ...(includeVoided ? {} : { voidedAt: null }),
     };
     const [rows, total] = await Promise.all([
-      prisma.specialItem.findMany({ where, skip, take, orderBy: { createdAt: "desc" } }),
+      prisma.specialItem.findMany({ where, skip, take, orderBy: [{ createdAt: "desc" }, { id: "asc" }] }),
       prisma.specialItem.count({ where }),
     ]);
     // M1/M3：special_items.revenue 受「收客價」field-level gate 管（主管

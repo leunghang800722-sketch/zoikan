@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     where = scopeBrokerWhere(session, where);
 
     const [rows, total] = await Promise.all([
-      prisma.broker.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
+      prisma.broker.findMany({ where, skip, take, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
       prisma.broker.count({ where }),
     ]);
     if (isBrokerRole(session)) {

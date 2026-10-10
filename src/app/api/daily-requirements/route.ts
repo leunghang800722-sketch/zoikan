@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     let where: Prisma.DailyRequirementWhereInput = { ...(siteId ? { siteId } : {}), ...(includeVoided ? {} : { voidedAt: null }) };
     where = scopeBySiteHavingBrokerShifts(session, where);
     const [rows, total] = await Promise.all([
-      prisma.dailyRequirement.findMany({ where, skip, take, orderBy: { workDate: "asc" } }),
+      prisma.dailyRequirement.findMany({ where, skip, take, orderBy: [{ workDate: "asc" }, { id: "asc" }] }),
       prisma.dailyRequirement.count({ where }),
     ]);
     if (isBrokerRole(session)) {

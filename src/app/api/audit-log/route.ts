@@ -96,7 +96,7 @@ export async function GET(req: Request) {
       ...(hasCreatedAtFilter ? { createdAt: createdAtFilter } : {}),
     };
     const [rows, total] = await Promise.all([
-      prisma.auditLog.findMany({ where, skip, take, orderBy: { createdAt: "desc" } }),
+      prisma.auditLog.findMany({ where, skip, take, orderBy: [{ createdAt: "desc" }, { id: "asc" }] }),
       prisma.auditLog.count({ where }),
     ]);
 
