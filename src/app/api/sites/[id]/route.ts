@@ -36,6 +36,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // status="ended" 一定要經 void endpoint（強制填原因、留痕），唔准直接
     // update 繞過——見設計文件§5.0「只有作廢冇刪除」。
     if (parsed.status === "ended") throw BadRequest("盤「結束」要用 /void（強制填原因）");
+    // WP-POSTORDER-FREE（§34 B）：盤預設結算雞頭要係存在而且啟用中嘅雞頭（null＝清走）。
+    if (parsed.default_settlement_broker_id) {
+      const b = await prisma.broker.findUnique({ where: { id: parsed.default_settlement_broker_id }, select: { status: true } });
+      if (!b) throw BadRequest("搵唔到呢個雞頭");
+      if (b.status !== "active") throw BadRequest("呢個雞頭已停用，唔可以做盤預設雞頭");
+    }
     const data = snakeToCamelShallow(parsed) as Prisma.SiteUncheckedUpdateInput;
     const after = await prisma.site.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "sites", rowId: id, action: "update", before, after, ip: getClientIp(req) });
