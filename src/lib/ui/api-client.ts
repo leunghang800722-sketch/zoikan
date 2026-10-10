@@ -37,6 +37,27 @@ export async function apiRequest<T = unknown>(path: string, init?: RequestInit):
   return { ok: true, status: res.status, data: body as T };
 }
 
+/**
+ * P3-1.9（B-5）：攞某個 list API 嘅**全部**行——逐頁（每頁 `pageSize`，server 上限 500）拉，
+ * 直至拉齊 `total`，避免 `?take=500` 超過 500 行時靜靜截斷。`path` 可以已帶 query（例如
+ * `/api/brokers?include_inactive=1`），唔好自己加 `take`／`skip`。回傳形狀同單頁 `ApiListResult`
+ * 一致（`rows` 係全部、`total` 係 server 回報總數），所以 call site 淨係將 `apiGet(...?take=500)` 換成
+ * `apiGetAll(path)`。任何一頁失敗即回傳該錯誤。
+ */
+export async function apiGetAll<T>(path: string, pageSize = 500): Promise<ApiResult<ApiListResult<T>>> {
+  const sep = path.includes("?") ? "&" : "?";
+  const rows: T[] = [];
+  let total = 0;
+  for (;;) {
+    const res = await apiRequest<ApiListResult<T>>(`${path}${sep}skip=${rows.length}&take=${pageSize}`);
+    if (!res.ok) return res;
+    rows.push(...res.data.rows);
+    total = res.data.total;
+    if (res.data.rows.length === 0 || rows.length >= total) break;
+  }
+  return { ok: true, status: 200, data: { rows, total, skip: 0, take: rows.length } };
+}
+
 export function apiGet<T = unknown>(path: string): Promise<ApiResult<T>> {
   return apiRequest<T>(path);
 }
