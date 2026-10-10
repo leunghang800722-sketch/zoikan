@@ -6,6 +6,7 @@
 // 就係揀中呢個 bulk 掣，唔可以因為換皮打亂順序。
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
@@ -79,10 +80,10 @@ export default function ApprovalsPage() {
     const guardIds = Array.from(new Set(res.data.rows.map((r) => r.guard_id)));
     const shiftTypeIds = Array.from(new Set(res.data.rows.map((r) => r.shift_type_id)));
     const [siteList, guardList, shiftTypeList, brokerList] = await Promise.all([
-      apiGet<ApiListResult<SiteRow>>("/api/sites?take=500"),
-      apiGet<ApiListResult<GuardRow>>("/api/guards?take=500&include_inactive=1"),
-      apiGet<ApiListResult<ShiftTypeRow>>("/api/shift-types?take=500&include_voided=1"),
-      apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500&include_inactive=1"),
+      cachedGetAll<SiteRow>("/api/sites"),
+      cachedGetAll<GuardRow>("/api/guards?fields=lite&include_inactive=1"),
+      cachedGetAll<ShiftTypeRow>("/api/shift-types?include_voided=1"),
+      cachedGetAll<BrokerRow>("/api/brokers?include_inactive=1"),
     ]);
     if (siteList.ok) setSites(Object.fromEntries(siteList.data.rows.filter((s) => siteIds.includes(s.id)).map((s) => [s.id, s])));
     if (guardList.ok) setGuards(Object.fromEntries(guardList.data.rows.filter((g) => guardIds.includes(g.id)).map((g) => [g.id, g])));

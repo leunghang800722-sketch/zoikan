@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiGet, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -74,7 +75,7 @@ export default function RosterEntryPage() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const res = await apiGet<ApiListResult<SiteRow>>("/api/sites?take=500");
+      const res = await cachedGetAll<SiteRow>("/api/sites");
       if (!res.ok) {
         setError(res.message);
       } else {

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toBrokerGuardDTO, mapListForBroker } from "@/lib/broker-dto";
-import { toGuardFullDTO, toGuardListDTO, mapListDTO } from "@/lib/api/dto";
+import { toGuardFullDTO, toGuardListDTO, toGuardLiteDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate, applyFieldGroupGateToList, assertFieldGroupWritable } from "@/lib/api/field-groups";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError , okGzip } from "@/lib/api/http";
@@ -232,6 +232,28 @@ export async function GET(req: Request) {
     // 種寫法一旦第二個欄都想咁做，個白名單就形同虛設）。`rows` 冇呢個
     // key 嘅時候（冇傳 `with_month_shifts`）`pickWhitelist()` 嘅
     // `hasOwnProperty` 檢查會自然跳過，同以前「乜都唔加」行為一致。
+    // P3-2.4：`?fields=lite`——輕量列表（id＋顯示名＋工號 chip＋status＋雞頭代號＋牌照到期日），
+    // 唔帶電話／證件／銀行等；唔做本月更數／電話存在 flag 等額外查詢。additive：冇呢個參數＝舊 shape。
+    const isLite = url.searchParams.get("fields") === "lite";
+    if (isLite) {
+      const [staffNumbersByGuardLite, brokerRows] = await Promise.all([
+        loadCurrentStaffNumbers(rows.map((r) => r.id)),
+        prisma.broker.findMany({ select: { id: true, code: true } }),
+      ]);
+      const brokerCode = new Map(brokerRows.map((b) => [b.id, b.code]));
+      const liteRows = rows.map((r) => ({
+        ...r,
+        staffNumbers: staffNumbersByGuardLite[r.id] ?? [],
+        defaultBrokerCode: r.defaultBrokerId ? (brokerCode.get(r.defaultBrokerId) ?? null) : null,
+      }));
+      if (isBrokerRole(session)) {
+        const list = scrubForBrokerSession(session, mapListForBroker({ rows: liteRows, total, skip, take }, toBrokerGuardDTO));
+        return okGzip(req, list);
+      }
+      const liteDto = mapListDTO({ rows: liteRows, total, skip, take }, toGuardLiteDTO);
+      const liteGated = await applyFieldGroupGateToList(session, "guards", liteDto);
+      return okGzip(req, brandSafeResponse({ ...liteGated }));
+    }
     const monthShiftCounts = withMonthShiftsParam
       ? await loadMonthShiftCounts(rows.map((r) => r.id), withMonthShiftsParam)
       : null;

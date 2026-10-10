@@ -20,7 +20,14 @@ export async function GET(req: Request) {
     const { skip, take } = paginationParams(url);
     const siteId = url.searchParams.get("site_id");
     const includeVoided = url.searchParams.get("include_voided") === "1";
-    let where: Prisma.DailyRequirementWhereInput = { ...(siteId ? { siteId } : {}), ...(includeVoided ? {} : { voidedAt: null }) };
+    // P3-2.4（additive）：`work_date_from`／`work_date_to`——更表編輯器只攞本月，唔再攞該盤所有月份。
+    const workDateFrom = url.searchParams.get("work_date_from");
+    const workDateTo = url.searchParams.get("work_date_to");
+    let where: Prisma.DailyRequirementWhereInput = {
+      ...(siteId ? { siteId } : {}),
+      ...(includeVoided ? {} : { voidedAt: null }),
+      ...(workDateFrom || workDateTo ? { workDate: { ...(workDateFrom ? { gte: new Date(workDateFrom) } : {}), ...(workDateTo ? { lte: new Date(workDateTo) } : {}) } } : {}),
+    };
     where = scopeBySiteHavingBrokerShifts(session, where);
     const [rows, total] = await Promise.all([
       prisma.dailyRequirement.findMany({ where, skip, take, orderBy: [{ workDate: "asc" }, { id: "asc" }] }),
