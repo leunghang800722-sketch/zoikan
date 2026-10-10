@@ -251,7 +251,7 @@ export default function QuotasPage() {
                             <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() => onUnvoid(r.id)}
-                             
+
                             >
                               解除作廢
                             </Button>

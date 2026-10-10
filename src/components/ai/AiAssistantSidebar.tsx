@@ -489,7 +489,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   onClick={handleStartMeeting}
                   disabled={meetingStarting}
                   title="開會反映——同助手講清楚想反映嘅現場問題／改動訴求"
-                 
+
                 >
                   {meetingStarting ? "開緊…" : "開會反映"}
                 </Button>
@@ -499,7 +499,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   type="button"
                   onClick={toggleWidth}
                   aria-label={width >= WIDE_WIDTH ? "縮窄側欄" : "擴闊側欄"}
-                 
+
                 >
                   {width >= WIDE_WIDTH ? "窄" : "闊"}
                 </Button>
@@ -509,7 +509,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   type="button"
                   data-testid="ai-clear-conversation"
                   onClick={() => setConfirmingClear(true)}
-                 
+
                 >
                   清空
                 </Button>
@@ -518,7 +518,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 type="button"
                 aria-label="關閉在勤助手"
                 onClick={() => setOpen(false)}
-               
+
               >
                 關閉
               </Button>
@@ -579,14 +579,14 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                     data-testid="ai-feedback-submit"
                     onClick={handleConfirmSubmit}
                     disabled={submitting}
-                   
+
                   >
                     {submitting ? "送出緊…" : "確認送出"}
                   </Button>
                   <Button variant="secondary" size="md"
                     type="button"
                     onClick={() => setPreview(null)}
-                   
+
                   >
                     返回對話
                   </Button>
@@ -743,7 +743,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                     data-testid="ai-feedback-summarize"
                     onClick={handleSummarize}
                     disabled={meetingTurnCount < 2 || summarizing || meetingSending}
-                   
+
                   >
                     {summarizing ? "整理緊…" : "整理並送出"}
                   </Button>
@@ -751,7 +751,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                     type="button"
                     data-testid="ai-feedback-cancel"
                     onClick={handleCancelMeeting}
-                   
+
                   >
                     取消開會
                   </Button>

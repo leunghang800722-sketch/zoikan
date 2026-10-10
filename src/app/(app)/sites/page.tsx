@@ -309,7 +309,7 @@ export default function SitesPage() {
                         <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => setShiftTypesFor(r)}
-                         
+
                         >
                           更別
                         </Button>
@@ -317,7 +317,7 @@ export default function SitesPage() {
                           <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                           
+
                           >
                             恢復
                           </Button>
@@ -719,7 +719,7 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
                         <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                         
+
                         >
                           解除作廢
                         </Button>

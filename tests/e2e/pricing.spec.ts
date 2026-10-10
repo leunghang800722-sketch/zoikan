@@ -237,6 +237,10 @@ test("(c) 老闆撳「重新計價」（2026-08）→ dry-run 預覽 dialog（�
     const repriceBtn = page.getByRole("button", { name: /重新計價/ });
     if (await repriceBtn.count()) {
       const before = await prisma.shiftRecord.count({ where: { siteId, workDate: { gte: AUG, lte: AUG_END }, recordType: "shift" } });
+      const writeReqs: string[] = [];
+      page.on("request", (r) => {
+        if (r.method() === "POST" && r.url().includes("/api/shift-records/reprice") && (r.postDataJSON() as { dry_run?: boolean } | null)?.dry_run === false) writeReqs.push(r.url());
+      });
       await repriceBtn.click();
       // P3-4.2：window.confirm／alert 改 ConfirmDialog／info banner。有更次會變 → ConfirmDialog（我哋「取消」唔寫入）；
       // 冇更次會變 → info banner（「…冇嘢寫入」）。兩種都證明經咗 dry-run 預覽（唔係舊版單一 confirm）。
@@ -252,6 +256,8 @@ test("(c) 老闆撳「重新計價」（2026-08）→ dry-run 預覽 dialog（�
       }
       expect(/重新計價預覽/.test(msg) && /會改變|會變/.test(msg)).toBe(true);
       expect(msg.includes("完成")).toBe(false);
+      await page.waitForTimeout(500);
+      expect(writeReqs).toEqual([]); // 取消／冇改動：冇任何 dry_run:false 請求
       await expect(page.getByText(/重新計價失敗/)).toHaveCount(0);
 
       // 確認真係冇寫入——DB 記錄數／內容冇變（dry-run 淨係回摘要）。

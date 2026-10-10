@@ -559,7 +559,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 | 手寫 `<button` | 210 | 64（含 `Button.tsx`）；literal className 種類 33 → 14 |
 | `btnPrimary`／`btnSecondary` | 47 | 0 |
 | `<Notice` ／ `<Banner` | 24 ／ 61 | 0 ／ 91 |
-| `window.confirm`／`alert` | 18（含註解） | 1（`unsaved-guard`，要同步） |
+| `window.confirm`／`alert` | 18（含註解） | `confirm` 9（真實呼叫：改成 `ConfirmDialog`／`unsaved-guard`）＋`alert` 5 已改橫幅；剩 `unsaved-guard` 1 個 `window.confirm` |
 | 自寫 `<table>`／`<th>` 無 `tableCls` | 9／23 | 2（格仔表、markdown）／4 |
 | 斷點門檻（Tailwind＋JS） | `sm`／`md`／`lg`／`xl`＋JS 639／767／1024 | `sm`／`lg` ＋ `breakpoints.ts` 常數 |
 | 月結頁 375px 整頁高（假資料） | 5,793px | 4,018px；「④ 報告」標題喺 3 屏（2,400px）內（e2e 斷言） |
@@ -589,3 +589,16 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 6. `unsaved-guard` 仍用 `window.confirm`（同步攔截）。
 
 **未測**：production／真機觸控（手機 e2e 係 Chromium 模擬）；`ConfirmDialog` 鍵盤焦點陷阱未做（Esc／點遮罩可取消）；`audit-field-labels` 對照表只覆蓋常見欄位；tab 內 `required` 欄喺隱藏 tab 嘅原生驗證提示（目前 `required` 只有基本 tab 嘅姓名）。
+
+#### 8.4.1 驗收後修正（Opus 5.5 驗收唔通過 → 修正，Sonnet 5.5）
+斷點政策＝**兩門檻（`sm`／`lg`）＋ReportSection 內層例外**。
+1. `ReportSection` 逐雞頭應付／逐盤收入兩張表並排改返 `xl:`（1024–1279px 名欄逐字斷行）；呢處係斷點唯一例外。
+2. 手機 KPI 卡：成本卡 `max-lg:order-last`（營業額＋毛利同一行）；金額 `break-all`→`whitespace-nowrap`＋`max-lg:text-zk-xl`；`month-close-ui` 手機 e2e 加斷言（同一行、金額單行）。
+3. 保安員 Drawer：預設雞頭／聘用形式／月薪／Polo 尺碼搬入「基本」tab；隱藏 tab 有 invalid／required 欄時（`onInvalidCapture`）自動跳去該 tab 並顯示原生提示。
+4. `RateCardsClient` mount 後讀 `?month=` 做生效月初始值（本地 state；唔帶＝空＝全部；mount 後讀避免 hydration mismatch）。
+5. `loadMonthClose` 用 ref 對返 request 月份先 set（快速換月 race）。
+6. 手機 sticky bar：鎖定掣停用時顯示「條件未齊，未可以鎖」／「要填差異原因先鎖得 · 去填原因 ›」（錨去 LockSection `#diff-reason-box`）。
+7. 手機抽屜登出掣旁邊保留一行「登出會同時登出所有裝置」。
+8. `pricing.spec` 重新計價取消 case 補斷言：冇 `dry_run:false` 請求。
+9. audit-log 欄位名加 `title` 顯示原 key（區分 `effectiveFrom`／`validFrom`、`id`／`number` 同名）。
+10. 清走 codemod 留低嘅純空白行（44＋1 行）。**數字改正**：真實 `window.confirm` 呼叫 9＋`window.alert` 5＝14 處（§8.4 表原寫 13／5）；hex 程式內非註解行：本機 grep 量得 27（Opus 驗收量得 25，計法略有出入，兩者都 <40）。

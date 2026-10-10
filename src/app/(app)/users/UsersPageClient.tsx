@@ -297,7 +297,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                               data-testid="user-reset-password-confirm"
                               disabled={resetting}
                               onClick={() => onResetPassword(r)}
-                             
+
                             >
                               {resetting ? "重設緊…" : "確定重設"}
                             </Button>
@@ -310,7 +310,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                             type="button"
                             data-testid="user-reset-password-button"
                             onClick={() => setConfirmResetId(r.id)}
-                           
+
                           >
                             重設密碼
                           </Button>
@@ -319,7 +319,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                         <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                         
+
                         >
                           恢復
                         </Button>

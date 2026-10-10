@@ -111,6 +111,11 @@ export function RateCardsClient({
   // A4：「生效月」FilterChip——月份輸入，純客戶端篩（唔加新 API
   // query param）；預設空字串＝全部，唔篩。
   const [effectiveMonthFilter, setEffectiveMonthFilter] = useState("");
+  // P3-4：「去處理 ›」帶 `?month=` 入嚟就當初始生效月（mount 後讀，避免 hydration mismatch；仍然係本地 state，唔帶＝空＝全部）。
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get("month");
+    if (m && /^\d{4}-\d{2}$/.test(m)) setEffectiveMonthFilter(m);
+  }, []);
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
@@ -535,7 +540,7 @@ export function RateCardsClient({
                           <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                           
+
                           >
                             解除作廢
                           </Button>

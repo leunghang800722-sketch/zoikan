@@ -77,7 +77,10 @@ test.describe("P3-4.3 面板清理", () => {
     expect(await tabs.count()).toBeGreaterThanOrEqual(4);
     await expect(page.getByTestId("guard-tab-panel-basic")).toBeVisible();
     await expect(page.locator('[data-testid^="guard-tab-panel-docs"]').first()).toBeHidden();
+    // 預設雞頭／聘用形式／月薪／Polo 尺碼屬「基本」tab，切走就隱藏
+    await expect(page.getByText("聘用形式（employment_type）")).toBeVisible();
     await page.getByTestId("guard-tab-docs").click();
+    await expect(page.getByText("聘用形式（employment_type）")).toBeHidden();
     await expect(page.locator('[data-testid^="guard-tab-panel-docs"]').first()).toBeVisible();
     await expect(page.locator('[data-testid^="guard-tab-panel-basic"]').first()).toBeHidden();
     await page.getByTestId("guard-tab-longterm").click();
@@ -121,6 +124,12 @@ test.describe("P3-4.3 面板清理", () => {
       expect(await cards.count()).toBeGreaterThanOrEqual(n);
     }
   });
+});
+
+test("價目頁：?month= 做生效月初始值", async ({ page }) => {
+  await loginAs(page, "老闆");
+  await page.goto("/rate-cards?month=2026-08");
+  await expect(page.getByTestId("rate-cards-effective-month")).toHaveValue("2026-08", { timeout: 15_000 });
 });
 
 test.describe("P3-4.4 手機版面（375px）無橫向溢出", () => {

@@ -63,9 +63,15 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     setRuns(list);
   }
 
+  // 快速換月 race：response 回嚟時月份已經變咗就唔 set（用 ref 對返 request 月份）。
+  const monthRef = useRef(month);
+  useEffect(() => {
+    monthRef.current = month;
+  }, [month]);
   async function loadMonthClose() {
-    const res = await apiGet<{ rows: Array<{ id: string; locked_at: string | null }> }>(`/api/month-closes?month=${month}`);
-    if (unmountedRef.current) return;
+    const reqMonth = month;
+    const res = await apiGet<{ rows: Array<{ id: string; locked_at: string | null }> }>(`/api/month-closes?month=${reqMonth}`);
+    if (unmountedRef.current || monthRef.current !== reqMonth) return;
     setMcRecord(res.ok ? (res.data.rows[0] ?? null) : null);
   }
 

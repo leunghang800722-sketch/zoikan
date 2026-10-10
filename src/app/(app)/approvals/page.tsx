@@ -267,7 +267,7 @@ export default function ApprovalsPage() {
                               type="button"
                               disabled={busy || !rejectReason.trim()}
                               onClick={() => reject(r.id, rejectReason.trim())}
-                             
+
                             >
                               確認退回
                             </Button>
@@ -277,7 +277,7 @@ export default function ApprovalsPage() {
                                 setRejectingId(null);
                                 setRejectReason("");
                               }}
-                             
+
                             >
                               取消
                             </Button>
@@ -288,7 +288,7 @@ export default function ApprovalsPage() {
                               type="button"
                               disabled={busy}
                               onClick={() => setRejectingId(r.id)}
-                             
+
                             >
                               退回
                             </Button>
@@ -296,7 +296,7 @@ export default function ApprovalsPage() {
                               type="button"
                               disabled={busy}
                               onClick={() => approve(r.id)}
-                             
+
                             >
                               批准
                             </Button>
@@ -360,7 +360,7 @@ export default function ApprovalsPage() {
                         type="button"
                         disabled={busy || !rejectReason.trim()}
                         onClick={() => reject(r.id, rejectReason.trim())}
-                       
+
                       >
                         確認退回
                       </Button>
@@ -371,7 +371,7 @@ export default function ApprovalsPage() {
                         type="button"
                         disabled={busy}
                         onClick={() => setRejectingId(r.id)}
-                       
+
                       >
                         退回
                       </Button>
@@ -379,7 +379,7 @@ export default function ApprovalsPage() {
                         type="button"
                         disabled={busy}
                         onClick={() => approve(r.id)}
-                       
+
                       >
                         批准
                       </Button>

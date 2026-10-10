@@ -489,7 +489,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
               type="button"
               disabled={!(groupReason[g.id] ?? "").trim()}
               onClick={() => markGroupException(g)}
-             
+
               data-testid="reconcile-group-exception"
             >
               整組 {g.items.length} 條標例外
