@@ -21,16 +21,16 @@ import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
 import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { inputCls } from "@/components/ui/Field";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, fmtDateTime, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney, fmtDateTime } from "@/lib/ui/format";
 import type { ApiListResult } from "@/lib/ui/api-client";
 import { MonthHealthCard } from "../../month-close/MonthHealthCard";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface MonthCloseDto {
@@ -192,7 +192,7 @@ function RuleCard({ rule }: { rule: ReconciliationRule }) {
 }
 
 export default function MonthlyCloseWorkbenchPage() {
-  const [month, setMonth] = useState(() => currentMonthStr());
+  const [month, setMonth] = useMonthState();
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -354,9 +354,7 @@ export default function MonthlyCloseWorkbenchPage() {
         subtitle="生成月結總表＋五條自動對數規則；鎖定前必須先 Generate 一次。"
         actions={
           <>
-            <FilterChip label="月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={month} onChange={setMonth} />
             <a href={`/api/reports/monthly-close?month=${month}&export=1`}>
               <Button variant="secondary">匯出 Excel</Button>
             </a>

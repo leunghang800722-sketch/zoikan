@@ -13,11 +13,11 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, fmtDate, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney, fmtDate } from "@/lib/ui/format";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // M4（Opus 驗收）：`grouped_days` 按 (日期, 盤, 更別, 出街價) 合併——一
@@ -74,7 +74,7 @@ function writeBrokerToUrl(broker: string): void {
 const COLS = 6; // 日期／盤／更別／更數／出街價／金額
 
 export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean; roleLabel: string }) {
-  const [month, setMonth] = useState(() => currentMonthStr());
+  const [month, setMonth] = useMonthState();
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   // M1（Opus 整合驗收）：initial state 唔可以喺 `useState` initializer
   // 度讀 `readBrokerFromUrl()`——SSR 冇 `window`，會令 SSR 輸出（空字串）
@@ -149,9 +149,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
         title="本月應收"
         subtitle="自己保安員本月更數 × 自己出街價，逐日明細。"
         actions={
-          <FilterChip label="月份">
-            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-          </FilterChip>
+          <MonthPicker label="月份" value={month} onChange={setMonth} />
         }
       />
 

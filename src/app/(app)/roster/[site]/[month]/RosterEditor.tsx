@@ -32,6 +32,7 @@ import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 // 提示條嗰啲）照舊用普通 `Link` 就夠。
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { confirmLeaveIfUnsaved, setUnsavedCount } from "@/lib/ui/unsaved-guard";
+import { rememberMonth } from "@/lib/ui/month-store";
 
 // ---------------------------------------------------------------------------
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
@@ -501,6 +502,10 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const { year, monthNum } = parseMonthStr(month);
   const days = daysInMonth(year, monthNum);
   const dayList = useMemo(() => Array.from({ length: days }, (_, i) => i + 1), [days]);
+  // P3-3.2：月份來自路徑，記入 sessionStorage 等其他頁（月份選擇器）跟住呢個月。
+  useEffect(() => {
+    rememberMonth(month);
+  }, [month]);
 
   const [loading, setLoading] = useState(true);
   // 2026-09-13 緊急：手機闊度下左邊固定四欄（56+96+88+104=344px）闊過整個容器（~324px），

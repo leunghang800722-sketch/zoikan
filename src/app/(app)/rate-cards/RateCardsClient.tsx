@@ -23,6 +23,7 @@ import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker } from "@/components/ui/MonthPicker";
 
 const PAGE_SIZE = 50;
 
@@ -431,14 +432,7 @@ export function RateCardsClient({
                 ))}
               </select>
             </FilterChip>
-            <FilterChip label="生效月">
-              <input
-                type="month"
-                data-testid="rate-cards-effective-month"
-                value={effectiveMonthFilter}
-                onChange={(e) => setEffectiveMonthFilter(e.target.value)}
-              />
-            </FilterChip>
+            <MonthPicker label="生效月" value={effectiveMonthFilter} onChange={setEffectiveMonthFilter} testId="rate-cards-effective-month" ariaLabel="生效月" allowEmpty />
             {canReprice && (
               <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
                 {repricing ? "計價緊…" : `重新計價（${effectiveMonthFilter || "本月"}）`}

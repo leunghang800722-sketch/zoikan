@@ -16,14 +16,15 @@ import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { BROKER_KIND_LABEL, brokerKindPillTone, type BrokerKindLiteral } from "@/lib/ui/broker-kind";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 
 // A2（Opus 整合驗收）：呢頁「種類」select 嘅選項同表格 pill 之前各自有
 // 一套標籤（select 出 raw kind 字面值；表格 `kindPill()` 自己砌一套
@@ -116,7 +117,7 @@ export default function BrokersPage() {
   // M3：「掛邊啲盤」改用 broker_site_assignments（一次過攞晒，前端按
   // 月份 FilterChip 篩）。
   const [assignments, setAssignments] = useState<BrokerSiteAssignmentRow[]>([]);
-  const [month, setMonth] = useState(currentMonthStr());
+  const [month, setMonth] = useMonthState();
 
   async function load() {
     setLoading(true);
@@ -347,9 +348,7 @@ export default function BrokersPage() {
         subtitle="每行「介紹費率」開返嗰個雞頭嘅逐盤逐月費率子表；「掛邊啲盤」按下面月份 FilterChip 嘅月睇。"
         actions={
           <>
-            <FilterChip label="月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={month} onChange={setMonth} />
             <Button variant="primary" onClick={openCreate}>
               新增雞頭
             </Button>
@@ -357,6 +356,7 @@ export default function BrokersPage() {
         }
       />
 
+      <EmptyMonthNotice month={month} isEmpty={!loading && assignments.length === 0} onJump={setMonth} />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 

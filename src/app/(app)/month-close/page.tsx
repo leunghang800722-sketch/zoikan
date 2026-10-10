@@ -21,9 +21,10 @@ import { LockSection } from "./LockSection";
 import { RightRail } from "./RightRail";
 import { HistorySection } from "./HistorySection";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 export default function MonthCloseOneClickPage() {
-  const [month, setMonth] = useState(() => addMonthsStr(currentMonthStr(), -1));
+  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1));
   const [runs, setRuns] = useState<RunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -232,7 +233,6 @@ export default function MonthCloseOneClickPage() {
   const openTriage = () => {
     if (sessionId) setTriageOpen(sessionId);
   };
-  const stepMonth = (d: number) => setMonth(addMonthsStr(month, d));
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
@@ -241,15 +241,7 @@ export default function MonthCloseOneClickPage() {
         title="一鍵全月結算"
         actions={
           <>
-            <div className="flex items-center gap-1 rounded-md border border-zk-border bg-white px-1.5 py-0.5 text-[13px] text-zk-text-secondary">
-              <button type="button" aria-label="上一個月" className="px-1.5 text-zk-faint hover:text-zk-text" onClick={() => stepMonth(-1)}>
-                ‹
-              </button>
-              <input type="month" data-testid="month-close-month-input" aria-label="月份" value={month} onChange={(e) => setMonth(e.target.value)} className="w-[120px] bg-transparent py-0.5 text-[13px] outline-none" />
-              <button type="button" aria-label="下一個月" className="px-1.5 text-zk-faint hover:text-zk-text" onClick={() => stepMonth(1)}>
-                ›
-              </button>
-            </div>
+            <MonthPicker value={month} onChange={setMonth} testId="month-close-month-input" />
             {/* §20.4 Phase 4：系統輸出 Postorder 格式總表 Excel——月結鎖定後仍然可以下載。同頁下載（Content-Disposition: attachment）。 */}
             {report && (
               <a href={`/api/reports/postorder/${report.month}`}>

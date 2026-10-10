@@ -23,12 +23,13 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmt, fmtDate, isExpired, isExpiringSoon, currentMonthStr, todayLocalStr } from "@/lib/ui/format";
+import { fmt, fmtDate, isExpired, isExpiringSoon, todayLocalStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { kickerFor } from "@/lib/nav/schema";
 // WP-BOSS5 §25.4：銀行編號「建議下拉」——純資料，冇 DB 依賴，client
 // component 用得。
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
 const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
@@ -288,7 +289,7 @@ export function GuardsClient({
   // S3（Opus 驗收修復）：原本冇 setter，月份寫死；而家加返 setter＋月份
   // FilterChip，改月份要重新 fetch `with_month_shifts`（見下面 useEffect
   // dep）。
-  const [month, setMonth] = useState(currentMonthStr());
+  const [month, setMonth] = useMonthState();
   // WP-PII：「牌照／平安卡 90 日內到期」FilterChip——`?expiring_within_days=90`
   // （API 早已經 OR 埋 safety_card_expiry，見 src/app/api/guards/route.ts；
   // 呢度改嘅淨係文案＋表格 pill 顯示，唔使改 API）。
@@ -1722,9 +1723,7 @@ export function GuardsClient({
             <FilterChip label="搜尋" showCaret={false}>
               <input type="text" placeholder={searchHasHkid ? "姓名 / 工號 / 電話 / 身份證" : "姓名 / 工號 / 電話"} value={search} onChange={(e) => setSearch(e.target.value)} className="w-36" />
             </FilterChip>
-            <FilterChip label="本月更數月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="本月更數月份" value={month} onChange={setMonth} />
             {/* WP-PII：老闆決定「雞頭視角完全唔變」——呢個新 FilterChip
                 淨係內部角色顯示，雞頭個 toolbar 保持原樣。 */}
             {!isBroker && (
