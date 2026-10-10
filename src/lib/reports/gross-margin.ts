@@ -327,7 +327,17 @@ async function buildGrossMarginUncached(month: Date, opts?: { thresholdPct?: num
   const mixedInfo = mixedBillingMonth ? await loadMixedBillingInfo(siteIds, MONTH_START, MONTH_END) : new Map<string, MixedBillingSiteInfo>();
   const otRecords = await prisma.shiftRecord.findMany({
     where: { siteId: { in: siteIds }, recordType: "ot", workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } },
-    include: { parentShift: { include: { shiftType: true } } },
+    // P3-2.2（附錄 b A-18）：淨讀用到嘅欄（原本 include 成條 parent shift＋整個 shiftType）。
+    select: {
+      siteId: true,
+      shiftTypeId: true,
+      otHours: true,
+      settlementBrokerId: true,
+      clientRateSnapshot: true,
+      guardWageSnapshot: true,
+      brokerFeeSnapshot: true,
+      parentShift: { select: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true, shiftType: { select: { hours: true } } } },
+    },
   });
   const otRateCardCache = new Map<string, { clientHourly: number; guardHourly: number } | null>();
   async function otHourlyRatesFallback(siteId: string, shiftTypeId: string, brokerId: string | null): Promise<{ clientHourly: number; guardHourly: number } | null> {
