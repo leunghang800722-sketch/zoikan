@@ -31,6 +31,7 @@ import {
   hasParsedPostorderForMonth,
 } from "@/lib/pricing/longterm-settlement";
 import type { RosterUpload, RosterUploadRow, ShiftRecord } from "@prisma/client";
+import { ROSTER_UPLOAD_META_SELECT, type RosterUploadMeta } from "@/lib/roster-upload/meta-select";
 
 export type ReconcileCategory = "match" | "roster_only" | "system_only" | "guard_diff" | "settlement_diff" | "shift_type_diff" | "unresolved";
 
@@ -145,6 +146,8 @@ export interface ReconcileItem {
 
 export interface ReconcileInput {
   upload: { id: string; siteId: string | null; month: Date };
+  /** P3-1.5：loader 已讀嘅完整 metadata（唔含 file_bytes），`reconcileUpload()` 直接重用，唔再重複查 roster_uploads。 */
+  uploadMeta?: RosterUploadMeta;
   rosterEntries: ReconcileRosterEntry[];
   unresolvedEntries: ReconcileUnresolvedEntry[];
   systemEntries: ReconcileSystemEntry[];
@@ -248,7 +251,7 @@ function toDateStr(d: Date): string {
 /** 一個 DB loader：攞晒呢個上載對數要用嘅全部資料，交俾
  * `reconcileRosterUpload()`（純函數）分類。 */
 export async function loadReconcileInput(uploadId: string): Promise<ReconcileInput> {
-  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
+  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId }, select: ROSTER_UPLOAD_META_SELECT });
   const rows = await prisma.rosterUploadRow.findMany({
     where: { uploadId, codeKind: { in: ["shift", "ot", "leave"] } },
     // 驗收修正：固定次序（重複 key 嘅「第一行」要穩定）。
@@ -509,7 +512,7 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
     source: s.source,
   }));
 
-  return { upload: { id: upload.id, siteId: upload.siteId, month: upload.month }, rosterEntries, unresolvedEntries, systemEntries, inferredLongtermPosts };
+  return { upload: { id: upload.id, siteId: upload.siteId, month: upload.month }, uploadMeta: upload, rosterEntries, unresolvedEntries, systemEntries, inferredLongtermPosts };
 }
 
 /** 純函數：逐更配對＋分類（見檔案頂註解嘅七類）。冇任何 DB 依賴，單元
@@ -707,9 +710,9 @@ export function summarizeReconcile(items: readonly ReconcileItem[]): ReconcileSu
 /** 對數引擎入口——loader＋純函數合埋一齊用（API route 用呢個）。 */
 export async function reconcileUpload(
   uploadId: string,
-): Promise<{ items: ReconcileItem[]; summary: ReconcileSummary; upload: RosterUpload; inferredLongtermPosts: Map<string, { siteId: string; ratio: number }> }> {
+): Promise<{ items: ReconcileItem[]; summary: ReconcileSummary; upload: RosterUploadMeta; inferredLongtermPosts: Map<string, { siteId: string; ratio: number }> }> {
   const input = await loadReconcileInput(uploadId);
-  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
+  const upload = input.uploadMeta ?? (await prisma.rosterUpload.findUniqueOrThrow({ where: { id: uploadId }, select: ROSTER_UPLOAD_META_SELECT }));
   const items = reconcileRosterUpload(input);
   const summary = summarizeReconcile(items);
   return { items, summary, upload, inferredLongtermPosts: input.inferredLongtermPosts };
