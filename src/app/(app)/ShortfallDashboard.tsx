@@ -164,7 +164,7 @@ function MarginSlot({ progress, error }: { progress: MarginProgress | null; erro
   if (progress) return <MarginProgressCard monthProgress={progress} href="/reports/gross-margin" />;
   return (
     <div data-testid="margin-progress-loading" className="col-span-2 flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 text-xs text-zk-muted md:px-[18px] md:py-4">
-      {error ? `本月毛利進度載入失敗：${error}` : "本月毛利進度載入緊…"}
+      {error ? `本月毛利進度載入失敗：${error}` : "本月毛利進度計算中…"}
     </div>
   );
 }
