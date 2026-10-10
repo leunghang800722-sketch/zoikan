@@ -79,3 +79,27 @@ describe("P3-1.1 per-request 權限 Set", () => {
     expect(rpQueries() - before).toBeLessThanOrEqual(2);
   });
 });
+
+// P3-1.2：老闆 getViewGrants 直讀 DB（唔再 loopback fetch；冇 request context 都得）。
+import { getViewGrants } from "@/lib/rbac/nav";
+import { MODULES } from "@/lib/rbac/matrix";
+import type { CurrentSession } from "@/lib/auth/current-session";
+
+describe("P3-1.2 getViewGrants 老闆直讀 DB", () => {
+  it("老闆：結果 = role_permissions 嘅 view 格（granted && 非硬性 deny），並反映客製化；全程只 1 條 role_permissions 查詢", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const role = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });
+    const sess = { userId: fx.userIds["老闆"], tel: "x", name: "x", roleId: role.id, roleName: "老闆", baseRole: "老闆", brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString(), mustChangePwd: false } as unknown as CurrentSession;
+    const before = rpQueries();
+    const grants = await getViewGrants(sess);
+    expect(rpQueries() - before).toBe(1);
+    expect(grants["盤"]).toBe(true);
+    // 客製化：老闆角色關掉「配額:view」→ 新 session 物件即時反映
+    const perm = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module: "配額", action: "view" } } });
+    await prisma.rolePermission.updateMany({ where: { roleId: role.id, permissionId: perm.id }, data: { granted: false } });
+    const grants2 = await getViewGrants({ ...sess });
+    expect(grants2["配額"]).toBe(false);
+    expect(Object.keys(grants2).sort()).toEqual([...MODULES].sort());
+  });
+});
