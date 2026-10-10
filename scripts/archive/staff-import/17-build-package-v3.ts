@@ -3,7 +3,7 @@
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { buildPackageV3, type ExtPerson, type TypedSources, type V2Package } from './lib/package-v3';
+import { buildPackageV3, type ExtPerson, type TypedSources, type V2Package } from '../../staff-import/lib/package-v3';
 
 const IN_V2 = path.join(process.cwd(), 'data/2026-10/staff-import/out/import-package.json');
 const FIELDS = path.join(process.cwd(), 'data/2026-10/staff-fields');

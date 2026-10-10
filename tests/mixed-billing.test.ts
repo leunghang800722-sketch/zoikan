@@ -186,7 +186,7 @@ describe("WP-MIXED-BILLING：對照組——純 monthly_ic 盤／純 per_shift �
 // Opus 5.5 驗收（雙重計算風險）：月費盤（7 月 flat 卡無限期覆蓋 8 月）上面
 // 嘅 per_shift 更種，如果冇 effective_from>=2026-08-01 嘅逐更收客卡，就算
 // 記錄帶住 client snapshot（例：IFC 8 月試算 E=853.66＝35,000÷41 嘅倒算
-// 值、7 月匯入嘅派生卡），都當「已包喺月費」——唔加收入、唔標未定价。
+// 值、7 月匯入嘅派生卡），都當「已包喺月費」——唔加收入、唔標未定價。
 describe("WP-MIXED-BILLING（Opus 5.5 驗收）：月費盤唔會 flat＋倒算逐更雙重計", () => {
   afterEach(async () => {
     await clearAll();

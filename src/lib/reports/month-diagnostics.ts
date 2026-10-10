@@ -104,16 +104,16 @@ export interface MonthDiagnostics {
   };
   /** WP-BOSS5 驗收項 7（新增診斷）：本月 OT 記錄逐 `ot_hours` 值嘅分組
    * 摘要——用途：正式站部署後，操作員開 `GET /api/diagnostics/month?
-   * month=2026-08` 確認 8 月冇「小時≠1 而且已定价」嘅 OT 記錄（§25.1
+   * month=2026-08` 確認 8 月冇「小時≠1 而且已定價」嘅 OT 記錄（§25.1
    * 起 OT snapshot 本身已經係「呢粒記錄嘅總金額」，gross-margin.ts 唔
    * 再 ×otHours；如果 8 月有呢類記錄，代表口徑轉咗，8 月毛利會變）。
    * 冇 PII——逐 `ot_hours` 值一組，唔係逐條記錄。 */
   ot: {
-    /** OT 卡＝每小時价呢個新口徑生效日（同 resolve-rate.ts
+    /** OT 卡＝每小時價呢個新口徑生效日（同 resolve-rate.ts
      * `OT_HOURLY_PRICING_FROM` 一致，"YYYY-MM-DD"）。 */
     otHourlyPricingFrom: string;
     byHours: Array<{
-      otHours: number | null; // null = 未填 ot_hours（未定价 OT）
+      otHours: number | null; // null = 未填 ot_hours（未定價 OT）
       count: number;
       /** 三個 snapshot（client/guard_wage/broker_fee）任一非 null 就算 priced。 */
       pricedCount: number;

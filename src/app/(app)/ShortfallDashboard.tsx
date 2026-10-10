@@ -162,9 +162,12 @@ export interface ShortfallDashboardProps {
   variant: "home" | "overview";
   userName: string;
   roleLabel: string;
+  // P3-0.4：按權限隱藏卡（預設顯示，保持舊 caller 行為）。
+  showApprovals?: boolean;
+  showMargin?: boolean;
 }
 
-export default function ShortfallDashboard({ variant, userName, roleLabel }: ShortfallDashboardProps) {
+export default function ShortfallDashboard({ variant, userName, roleLabel, showApprovals = true, showMargin = true }: ShortfallDashboardProps) {
   // SSR／首次 client render 一律用 `todayLocalStr()`（避免 hydration
   // mismatch——`window` 喺 SSR 冇得攞，見 `readDateFromUrl()`）；URL 已有
   // `?date=` 就喺下面呢個 effect 入面先切換，同 RosterEditor.tsx 嘅
@@ -289,7 +292,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                 </div>
               )}
             </KpiCard>
-            <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />
+            {showApprovals && <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />}
             {/* B1-2：更表對數待處理——冇權限／未有資料就唔顯示（見上面
                 useEffect 嘅 catch），唔會逼多一張永遠 0 嘅卡出嚟。 */}
             {reconcilePending && reconcilePending.total > 0 && (
@@ -301,7 +304,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
                 note={reconcilePending.entries.slice(0, 3).map((e) => `${e.site_name} ${e.pending_count}`).join("、") + (reconcilePending.name_only && reconcilePending.name_only.total > 0 ? `；${reconcilePending.name_only.total} 格淨靠姓名配對，建議補工號或電話` : "")}
               />
             )}
-            <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />
+            {showMargin && <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />}
           </div>
 
           {/* 手機 KPI 2×2（尚欠／待審批；毛利跨 2 欄）。 */}
@@ -313,11 +316,11 @@ export default function ShortfallDashboard({ variant, userName, roleLabel }: Sho
               note={shortfallSites.length > 0 ? `共欠 ${totalShort} 更` : "人手足夠"}
               href={variant === "home" ? "/reports/shortfall" : undefined}
             />
-            <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />
+            {showApprovals && <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />}
             {reconcilePending && reconcilePending.total > 0 && (
               <KpiCard label="更表對數待處理" value={reconcilePending.total} tone="danger" href="/roster-uploads" />
             )}
-            <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />
+            {showMargin && <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />}
           </div>
 
           {/* 桌面表格。 */}

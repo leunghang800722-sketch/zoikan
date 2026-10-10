@@ -1,13 +1,13 @@
 // WP-BOSS5 驗收項 2（+ Opus 5.5 覆核應修 a）：PATCH /api/shift-records/[id]
 // 改 `ot_hours`（OT 記錄、workDate≥2026-08-01）要用 resolver 用新小時
-// 重新計价——唔可以淨改小時唔跟住變金額（snapshot 本身係「每小時价×
-// 小時」嘅金額，小時變咗金額要跟住變，否則個「每小時价」會靜靜錯咗）。
+// 重新計價——唔可以淨改小時唔跟住變金額（snapshot 本身係「每小時價×
+// 小時」嘅金額，小時變咗金額要跟住變，否則個「每小時價」會靜靜錯咗）。
 //
 // 揀嘅做法（見 src/app/api/shift-records/[id]/route.ts PATCH）：
 //   0. 帶咗 ot_hours 又帶咗三個 snapshot 欄其中一兩個（唔係三個一齊帶）
 //      → 400。
 //   1. 冇帶齊三個 snapshot 欄（帶齊就當用戶自己指定成套金額，唔喺呢度
-//      插手）、記錄係 OT、workDate≥2026-08-01 先觸發自動重新計价。
+//      插手）、記錄係 OT、workDate≥2026-08-01 先觸發自動重新計價。
 //   2. **逐邊獨立判斷**：
 //      - 收客價：resolver 揾到收客卡 → 覆蓋；揾唔到但之前非 null → 409；
 //        揾唔到而之前已經 null → 維持 null。
@@ -22,7 +22,7 @@ function req(url: string, cookie: string, method: string, body?: unknown) {
   return new Request(url, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
 }
 
-describe("PATCH /api/shift-records/[id]：改 ot_hours 用 resolver 重新計价（WP-BOSS5 驗收項 2 + 應修 a）", () => {
+describe("PATCH /api/shift-records/[id]：改 ot_hours 用 resolver 重新計價（WP-BOSS5 驗收項 2 + 應修 a）", () => {
   let fx: Wp2Fixture;
   let ownerCookie: string;
   let otShiftTypeWithCardId: string;
@@ -39,7 +39,7 @@ describe("PATCH /api/shift-records/[id]：改 ot_hours 用 resolver 重新計价
       data: { siteId: fx.site.id, code: "OT1", label: "1Hr OT", billingGroup: "per_shift", createdBy: "test" },
     });
     otShiftTypeWithCardId = otShiftTypeWithCard.id;
-    // 盤級（brokerId/guardId 都 null）OT 卡——收客+出街都有，每小時价 84.85／73。
+    // 盤級（brokerId/guardId 都 null）OT 卡——收客+出街都有，每小時價 84.85／73。
     await prisma.rateCard.create({
       data: {
         siteId: fx.site.id,
@@ -91,7 +91,7 @@ describe("PATCH /api/shift-records/[id]：改 ot_hours 用 resolver 重新計价
     });
   });
 
-  it("揾到 OT 卡（收客+出街都有）→ 改 ot_hours 觸發三欄覆蓋做「每小時价×新小時」", async () => {
+  it("揾到 OT 卡（收客+出街都有）→ 改 ot_hours 觸發三欄覆蓋做「每小時價×新小時」", async () => {
     const record = await prisma.shiftRecord.create({
       data: {
         workDate: fx.unlockedMonth, // 2026-08-01
@@ -121,7 +121,7 @@ describe("PATCH /api/shift-records/[id]：改 ot_hours 用 resolver 重新計价
     expect(after.brokerFeeSnapshot).toBeNull(); // 卡冇拆 broker_fee，維持 null
   });
 
-  it("揾唔到卡、之前三欄本身全部 null（本來未定价）→ 改 ot_hours 成功，三欄維持 null", async () => {
+  it("揾唔到卡、之前三欄本身全部 null（本來未定價）→ 改 ot_hours 成功，三欄維持 null", async () => {
     const record = await prisma.shiftRecord.create({
       data: {
         workDate: fx.unlockedMonth,
@@ -334,7 +334,7 @@ describe("PATCH /api/shift-records/[id]：改 ot_hours 用 resolver 重新計价
     expect(Number(after.brokerFeeSnapshot)).toBe(0);
   });
 
-  it("7 月 OT 記錄（workDate < 2026-08-01）改 ot_hours 唔觸發重新計价，就算揾到卡都唔覆蓋", async () => {
+  it("7 月 OT 記錄（workDate < 2026-08-01）改 ot_hours 唔觸發重新計價，就算揾到卡都唔覆蓋", async () => {
     const record = await prisma.shiftRecord.create({
       data: {
         workDate: new Date(Date.UTC(2026, 6, 15)), // 2026-07-15
@@ -364,7 +364,7 @@ describe("PATCH /api/shift-records/[id]：改 ot_hours 用 resolver 重新計价
     expect(Number(after.guardWageSnapshot)).toBe(146);
   });
 
-  it("正更記錄（record_type=shift）改 ot_hours 唔觸發 OT 重新計价邏輯", async () => {
+  it("正更記錄（record_type=shift）改 ot_hours 唔觸發 OT 重新計價邏輯", async () => {
     // fx.shiftRecordA 係正更（recordType=shift），呢度淨係想證明呢個分支
     // 唔會炸（正更記錄本身唔應該有 ot_hours，但 PATCH 唔應該因為呢個
     // 分支噴錯）。

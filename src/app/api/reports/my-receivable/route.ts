@@ -29,7 +29,7 @@ import { parseMonthParam } from "@/lib/reports/money";
 import { buildMyReceivable } from "@/lib/reports/my-receivable";
 import { prisma } from "@/lib/db";
 import { BadRequest, Forbidden } from "@/lib/api/errors";
-// WP-PRICE §3：頁頂「N 更未定价，金額未計入」Notice 要用嘅 additive 欄。
+// WP-PRICE §3：頁頂「N 更未定價，金額未計入」Notice 要用嘅 additive 欄。
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
 const monthParamSchema = z.string().regex(/^\d{4}-\d{2}$/, "月份格式要係 YYYY-MM");
@@ -76,7 +76,7 @@ export async function GET(req: Request) {
           broker_name: previewBroker?.name,
           unpriced_count: unpriced.count,
           unpriced_groups: unpriced.groups,
-          // WP-MIXED-BILLING：OT 未定价獨立數目（見 gross-margin/route.ts 同一段註解）。
+          // WP-MIXED-BILLING：OT 未定價獨立數目（見 gross-margin/route.ts 同一段註解）。
           ot_unpriced_count: unpriced.otUnpricedCount,
         }),
       ),

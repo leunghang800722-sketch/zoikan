@@ -1,6 +1,6 @@
 // 驗收修正（2026-09-26）：`src/lib/pricing/reprice.ts` `decideReprice()`
 // 單元測試——純函數（同 pricing-resolve-rate.test.ts 一致手法，自建
-// fixture 卡）。兩個模式：`full`（更表頁「重新計价」，覆蓋已有值）／
+// fixture 卡）。兩個模式：`full`（更表頁「重新計價」，覆蓋已有值）／
 // `fill_and_fix_b07`（`runReconcileAllForMonth()` 開頭自動 reprice，
 // 保守：淨係補 null，B07 例外）。
 import { describe, it, expect } from "vitest";
@@ -60,7 +60,7 @@ function lookups(overrides: Partial<RepriceLookups> = {}): RepriceLookups {
   };
 }
 
-describe("decideReprice() mode:full（更表頁「重新計价」，同 route.ts 原有行為一致）", () => {
+describe("decideReprice() mode:full（更表頁「重新計價」，同 route.ts 原有行為一致）", () => {
   it("搵到卡就覆蓋——包括覆蓋緊已有值", () => {
     const cards = [card({ id: "c1", shiftTypeId: SHIFT_TYPE, clientRate: 999 })];
     const rec = record({ clientRateSnapshot: 500 });

@@ -119,7 +119,7 @@ type BrokerDto = {
 };
 
 // WP-PRICE（老闆 2026-09-16 拍板）：batch 儲存回應加咗 pricing 統計——
-// 「未定价」＝清楚警告，唔准靜靜 0（見 src/app/api/shift-records/
+// 「未定價」＝清楚警告，唔准靜靜 0（見 src/app/api/shift-records/
 // batch/route.ts）。
 type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
 type BatchResponse = {
@@ -127,13 +127,13 @@ type BatchResponse = {
   warnings: string[];
   pricing?: { priced: number; unpriced: number; unpriced_cells: UnpricedCellSummary[] };
   // P0（Opus 驗收重現）：呢次儲存完之後仲有幾多個 shift 格
-  // settlement_broker_id 係 NULL（會喺糧明細完全消失，唔止未定价）。
+  // settlement_broker_id 係 NULL（會喺糧明細完全消失，唔止未定價）。
   no_settlement_count?: number;
   // B1-5（WP-ATTRIB）：呢次儲存幾多格結算單位係靠 fallback 推算出嚟
   // （唔係人手/更表明確指定）。
   settlement_inferred_count?: number;
 };
-// S3：`category` 分「出街价未定」／「收客价未定」／（P0）「冇結算單位」
+// S3：`category` 分「出街價未定」／「收客價未定」／（P0）「冇結算單位」
 // （見 src/lib/pricing/unpriced.ts）。`payoutCount`/`clientCount` 用
 // `?? 0` fallback——`/api/shift-records/reprice` 嘅 `groups`（handleReprice
 // 撳完之後 setUnpricedSummary 用嗰批）冇呢兩個欄，向下相容。
@@ -564,11 +564,11 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // WP-R2：儲存成功 toast（README §04「儲存後 Toast」）——右下深色 toast，
   // 3 秒後自動消失。
   const [showSaveToast, setShowSaveToast] = useState(false);
-  // WP-PRICE：儲存呢次帶嚟嘅未定价數（null＝呢次儲存全部有价，唔顯示
-  // 警告字眼；>0＝toast 改講「已儲存 · N 格未定价」）。
+  // WP-PRICE：儲存呢次帶嚟嘅未定價數（null＝呢次儲存全部有價，唔顯示
+  // 警告字眼；>0＝toast 改講「已儲存 · N 格未定價」）。
   const [saveToastUnpriced, setSaveToastUnpriced] = useState<number | null>(null);
   // P0（Opus 驗收重現）：儲存呢次帶嚟嘅「冇結算單位」格數——呢批更
-  // 唔止未定价，係喺糧明細完全消失，一定要獨立、更顯眼咁警告。
+  // 唔止未定價，係喺糧明細完全消失，一定要獨立、更顯眼咁警告。
   const [saveToastNoSettlement, setSaveToastNoSettlement] = useState<number | null>(null);
   // B1-5（WP-ATTRIB）：儲存呢次帶嚟「結算單位推算」（settlement_
   // inferred，見 batch/route.ts）嘅格數——推算唔係錯，但建議會計覆核，
@@ -579,7 +579,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     const t = setTimeout(() => setShowSaveToast(false), 3000);
     return () => clearTimeout(t);
   }, [showSaveToast]);
-  // WP-PRICE §3：頁首持續顯示嘅「呢個月有 N 更未定价」Notice——載入時同
+  // WP-PRICE §3：頁首持續顯示嘅「呢個月有 N 更未定價」Notice——載入時同
   // 儲存後（`reloadTick` 一齊帶）刷新，用 GET /api/shift-records/unpriced。
   const [unpricedSummary, setUnpricedSummary] = useState<UnpricedSummary | null>(null);
   useEffect(() => {
@@ -589,7 +589,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         if (!cancelled) setUnpricedSummary(res);
       })
       .catch(() => {
-        // 未定价 Notice 純粹 additive 提示，攞唔到就靜靜唔顯示（唔阻住成個更表編輯器）。
+        // 未定價 Notice 純粹 additive 提示，攞唔到就靜靜唔顯示（唔阻住成個更表編輯器）。
         if (!cancelled) setUnpricedSummary(null);
       });
     return () => {
@@ -1368,8 +1368,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       const res = await apiPost<BatchResponse>("/api/shift-records/batch", { site_id: siteId, month, cells: diffCells });
       setWarnings(res.warnings ?? []);
       skipExtraRowsResetRef.current = true;
-      // WP-PRICE：呢次儲存有未定价格就喺 toast 講清楚（唔准靜靜當儲存
-      // 成功；`reloadTick`＋1 同時會觸發上面嘅未定价 Notice 刷新）。
+      // WP-PRICE：呢次儲存有未定價格就喺 toast 講清楚（唔准靜靜當儲存
+      // 成功；`reloadTick`＋1 同時會觸發上面嘅未定價 Notice 刷新）。
       setSaveToastUnpriced(res.pricing && res.pricing.unpriced > 0 ? res.pricing.unpriced : null);
       setSaveToastNoSettlement(res.no_settlement_count && res.no_settlement_count > 0 ? res.no_settlement_count : null);
       setSaveToastSettlementInferred(res.settlement_inferred_count && res.settlement_inferred_count > 0 ? res.settlement_inferred_count : null);
@@ -1392,7 +1392,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     }
   }, [monthLocked, saving, allRows, baseline, cells, siteId, month, year, monthNum, rowBrokerOverrides]);
 
-  // WP-PRICE §M3：「重新計价」——價目卡補咗／改咗之後，一鍵將呢個盤呢個
+  // WP-PRICE §M3：「重新計價」——價目卡補咗／改咗之後，一鍵將呢個盤呢個
   // 月全部 shift 記錄嘅 snapshot 追返卡（見 POST /api/shift-records/
   // reprice）。M3（Opus 驗收「reprice 清空數據」修正）：改為 dry-run 預覽
   // →確認流程——先用 `dry_run:true`（預設）攞 diff 摘要（changed／
@@ -1407,17 +1407,17 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       // 必修 2（Opus 第二輪驗收）：dry-run 預覽淨係用嚟俾用戶睇 diff 摘要
       // （confirm() 嗰句文字入面），**唔再** `setUnpricedSummary(...)`
       // 覆蓋頁首 banner——dry-run 冇寫 DB，banner 應該繼續顯示緊「而家
-      // DB 入面真實」嘅未定价數（由 `/api/shift-records/unpriced`、即
+      // DB 入面真實」嘅未定價數（由 `/api/shift-records/unpriced`、即
       // `buildUnpricedSummary()` 提供），唔可以俾 reprice 自己嗰套
       // 「模擬」數頂替咗。
       const preview = await apiPost<RepriceDryRunResult>("/api/shift-records/reprice", { month, site_id: siteId, dry_run: true });
       if (preview.changed === 0) {
-        window.alert(`重新計价預覽：呢個盤呢個月冇任何更次嘅收客價／出街價會變（同現有 snapshot 一致），${preview.unpriced} 更仍然未定价（冇對應價目卡）。冇嘢寫入。`);
+        window.alert(`重新計價預覽：呢個盤呢個月冇任何更次嘅收客價／出街價會變（同現有 snapshot 一致），${preview.unpriced} 更仍然未定價（冇對應價目卡）。冇嘢寫入。`);
         return;
       }
       const keptNote = preview.kept_unresolved > 0 ? `（其中 ${preview.kept_unresolved} 更資料庫搵唔到對應卡，保留原有 snapshot 唔會清走）` : "";
       const proceed = window.confirm(
-        `重新計价預覽 ${month}（${siteName || siteId}）：${preview.changed} 更嘅收客價／出街價會改變，${preview.unchanged} 更不變${keptNote}，仲有 ${preview.unpriced} 更未定价。確定要寫入？`,
+        `重新計價預覽 ${month}（${siteName || siteId}）：${preview.changed} 更嘅收客價／出街價會改變，${preview.unchanged} 更不變${keptNote}，仲有 ${preview.unpriced} 更未定價。確定要寫入？`,
       );
       if (!proceed) {
         return;
@@ -1433,9 +1433,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       skipExtraRowsResetRef.current = true;
       setReloadTick((t) => t + 1);
       setErrorBanner(null);
-      window.alert(`重新計价完成：${res.repriced} 更已改寫，仲有 ${res.unpriced} 更未定价。`);
+      window.alert(`重新計價完成：${res.repriced} 更已改寫，仲有 ${res.unpriced} 更未定價。`);
     } catch (err) {
-      setErrorBanner(err instanceof ApiClientError ? err.message : err instanceof Error ? err.message : "重新計价失敗");
+      setErrorBanner(err instanceof ApiClientError ? err.message : err instanceof Error ? err.message : "重新計價失敗");
     } finally {
       setRepricing(false);
     }
@@ -2175,7 +2175,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           呢個盤嘅保安員由客戶直接出糧，我哋只收每月服務費——呢度嘅更唔計工資／客價（糧單入面更數照計、金額為 0）。
         </Notice>
       )}
-      {/* WP-PRICE §3：呢個盤呢個月未定价格持續提示（唔止儲存嗰下先出——
+      {/* WP-PRICE §3：呢個盤呢個月未定價格持續提示（唔止儲存嗰下先出——
           載入頁面已經攞緊，等用戶就算冇改動都睇到舊有缺價格）。 */}
       {unpricedSummary && unpricedSummary.count > 0 && (
         <Notice
@@ -2188,39 +2188,39 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 disabled={repricing}
                 className="rounded border border-current px-2 py-1 text-[12px] disabled:opacity-50"
               >
-                {repricing ? "計价緊…" : `重新計价（${month}）`}
+                {repricing ? "計價緊…" : `重新計價（${month}）`}
               </button>
             ) : undefined
           }
         >
-          <p className="font-medium">呢個月有 {unpricedSummary.count} 更未定价（冇對應價目卡），金額未計入報表：</p>
-          {/* S3：分開講「出街价未定」／「收客价未定」（後者淨係逐更盤先算，
+          <p className="font-medium">呢個月有 {unpricedSummary.count} 更未定價（冇對應價目卡），金額未計入報表：</p>
+          {/* S3：分開講「出街價未定」／「收客價未定」（後者淨係逐更盤先算，
               月費／admin_fee／special 盤 client_rate=null 屬正常）。 */}
           <p className="text-[12px] opacity-80">
-            出街价未定 {unpricedSummary.payoutCount ?? unpricedSummary.count} 更；收客价未定（逐更盤）{unpricedSummary.clientCount ?? 0} 更
+            出街價未定 {unpricedSummary.payoutCount ?? unpricedSummary.count} 更；收客價未定（逐更盤）{unpricedSummary.clientCount ?? 0} 更
           </p>
           <ul className="list-disc pl-5 mt-1">
             {/* P0：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更搶眼
-                嘅 Notice，見下面）——留喺呢度就會誤標做「出街价未定」，
+                嘅 Notice，見下面）——留喺呢度就會誤標做「出街價未定」，
                 令用戶以為補張卡就得，但真正要做嘅係指定雞頭。 */}
             {unpricedSummary.groups
               .filter((g) => g.category !== "no_settlement")
               .map((g) => (
                 <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                  {g.category === "client_unpriced" ? "收客价未定 · " : "出街价未定 · "}
+                  {g.category === "client_unpriced" ? "收客價未定 · " : "出街價未定 · "}
                   {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
                 </li>
               ))}
           </ul>
           <p className="mt-1">
             去<Link href="/rate-cards" className="underline" style={{ color: "inherit" }}>價目頁</Link>補卡後
-            {canReprice ? "，撳右邊「重新計价」。" : "，請有「出街價:update」權限嘅同事撳「重新計价」。"}
+            {canReprice ? "，撳右邊「重新計價」。" : "，請有「出街價:update」權限嘅同事撳「重新計價」。"}
           </p>
         </Notice>
       )}
       {/* P0（Opus 驗收重現）：呢個盤呢個月有幾多格 settlement_broker_id
-          係 NULL——呢批更喺糧明細完全消失（唔止未定价，成條記錄搵唔
-          到），獨立、更搶眼（danger）嘅 Notice，唔可以同上面「未定价」
+          係 NULL——呢批更喺糧明細完全消失（唔止未定價，成條記錄搵唔
+          到），獨立、更搶眼（danger）嘅 Notice，唔可以同上面「未定價」
           混埋一齊（會令人以為補張卡就搞掂）。 */}
       {unpricedSummary && (unpricedSummary.noSettlementCount ?? 0) > 0 && (
         <Notice variant="error">
@@ -2771,7 +2771,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           className="fixed bottom-5 right-5 z-50 rounded-md px-4 py-2.5 text-[13px] text-white"
           style={{
             // WP-PRICE／P0：有「冇結算單位」就用更搶眼嘅紅色（呢批更會喺
-            // 糧明細完全消失，比「未定价」更嚴重）；有未定价格用警示色
+            // 糧明細完全消失，比「未定價」更嚴重）；有未定價格用警示色
             // （唔係「儲存成功」嗰隻深藍色）；B1-5：淨係「結算單位推算」
             // 優先序最低（用同一個警示色，唔算錯，淨係建議覆核）。
             background: saveToastNoSettlement ? "#b91c1c" : saveToastUnpriced ? "#b45309" : saveToastSettlementInferred ? "#b45309" : "#0f172a",
@@ -2781,7 +2781,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           {saveToastNoSettlement
             ? `已儲存 · ${saveToastNoSettlement} 格冇結算單位（唔會出現喺糧單，請盡快指定雞頭）`
             : saveToastUnpriced
-              ? `已儲存 · ${saveToastUnpriced} 格未定价（冇對應價目卡）`
+              ? `已儲存 · ${saveToastUnpriced} 格未定價（冇對應價目卡）`
               : saveToastSettlementInferred
                 ? `已儲存 · ${saveToastSettlementInferred} 格結算單位係推算出嚟，建議覆核`
                 : "已儲存"}

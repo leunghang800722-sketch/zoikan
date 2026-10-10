@@ -253,6 +253,15 @@ export default function RosterUploadsPage() {
   const [reconcileAllRunning, setReconcileAllRunning] = useState(false);
   const [reconcileAllResult, setReconcileAllResult] = useState<ReconcileAllRunDTO | null>(null);
   const reconcileAllPollRef = useRef<string | null>(null);
+  // P3-0.6（B-10）：unmount 即停 polling（唔再打 API／setState）。
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
 
   async function loadList() {
     setLoading(true);
@@ -297,6 +306,7 @@ export default function RosterUploadsPage() {
 
   async function pollReconcileAllUntilDone(runId: string, forMonth: string): Promise<ReconcileAllRunDTO | null> {
     for (let i = 0; i < 1200; i++) {
+      if (unmountedRef.current) return null;
       const res = await apiGet<{ runs: ReconcileAllRunDTO[] }>(`/api/roster-uploads/reconcile-all?month=${forMonth}-01`);
       if (res.ok) {
         const run = res.data.runs.find((r) => r.id === runId);
@@ -323,6 +333,7 @@ export default function RosterUploadsPage() {
     reconcileAllPollRef.current = res.data.run_id;
     const finalRun = await pollReconcileAllUntilDone(res.data.run_id, month);
     reconcileAllPollRef.current = null;
+    if (unmountedRef.current) return;
     setReconcileAllRunning(false);
     if (!finalRun) {
       setError("重新對數全月仲未完成（等咗 40 分鐘）——請稍後撳「重新整理」");

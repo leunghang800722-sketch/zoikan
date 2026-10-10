@@ -233,7 +233,7 @@ function priceFromAnswer(a: TriageAnswer): PriceValues {
 /** 補齊價目卡題嘅預覽（唔郁資料）：驗證 auto 卡仍然生效／組合未有正式卡，砌 plan＋指紋。 */
 async function resolveBackfillPlan(
   q: QRowWithSession,
-  ev: McEvidence,
+  _ev: McEvidence,
   action: Extract<McEvidence["action"], { type: "pricing" }>,
   answer: TriageAnswer,
   cand: McEvidence["candidates"][number] | undefined,

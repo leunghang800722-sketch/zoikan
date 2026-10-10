@@ -300,12 +300,12 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   }
 
   // 2. OT——WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，個個盤
-  //    個個人都唔同，系統唔准自動套公式計 OT 价）：**2026-08 起嘅月份**
+  //    個個人都唔同，系統唔准自動套公式計 OT 價）：**2026-08 起嘅月份**
   //    唔再用「parent 更 snapshot ÷ hours × ot_hours」呢條公式（或者呢個
   //    更別自己嘅 rate_card ÷ hours 嘅 fallback）derive 時薪——直接用 OT
   //    記錄自己嘅 client_rate_snapshot／guard_wage_snapshot／broker_fee_
   //    snapshot（由 resolve-rate.ts 嘅 OT 更種卡 site／broker／guard 級
-  //    resolve，或者人手輸入）當「每粒鐘」嘅价，乘 ot_hours。完全冇任何
+  //    resolve，或者人手輸入）當「每粒鐘」嘅價，乘 ot_hours。完全冇任何
   //    snapshot（冇卡冇人手輸入）嘅 OT 記錄計入 `unresolved`（同
   //    unpriced.ts 嘅 `ot_unpriced` 同一個口徑）。
   //
@@ -363,14 +363,14 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
       }
     } else {
       // 8 月起：唔再套公式——直接用 OT 記錄自己嘅 snapshot 做金額。
-      // WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价，
+      // WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時價，
       // 呢個決定由 resolve-rate.ts 嘅 resolver 喺**寫入嗰刻**已經做咗
       // 「卡金額 × otHours」（`applyOtHourlyPricing()`）——snapshot 存低嘅
       // 就係「呢條記錄嘅金額」，同 payroll.ts／my-receivable.ts／
       // broker-dashboard.ts／reconciliation.ts 一直嘅口徑一致，呢度**唔
       // 再乘 otH**（之前乘多一次會令 client_rate_snapshot 已經係總額嘅
       // OT 記錄雙重計算）。收客／出街可以各自獨立有冇（例如淨係起咗
-      // 收客价嘅 OT 卡），完全冇任何一邊先算 unresolved（未定价 OT）——
+      // 收客價嘅 OT 卡），完全冇任何一邊先算 unresolved（未定價 OT）——
       // 呢個 unresolved 判斷本身唔受呢次改動影響。
       const hasClient = r.clientRateSnapshot !== null;
       const hasGuardOrFee = r.guardWageSnapshot !== null || r.brokerFeeSnapshot !== null;

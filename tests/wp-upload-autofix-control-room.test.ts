@@ -5,7 +5,7 @@
 //   - 月結／毛利：收入 22,000＋22×840＝40,480，成本 47×800＝37,600；
 //   - 糧單（buildPayrollTotals）：結算單位 47 更 wage 37,600；
 //   - 雞頭應收（buildMyReceivable）：37,600，DTO 冇 client 欄；
-//   - 未定价：月薪崗嗰位 client_rate_snapshot=0 唔算「收客价未定」。
+//   - 未定價：月薪崗嗰位 client_rate_snapshot=0 唔算「收客價未定」。
 // 全部合成資料（測試名／測試號碼），冇真名真號。
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma, clearAll } from "./lib/db";
@@ -122,7 +122,7 @@ describe("WP-UPLOAD-AUTOFIX 個案 2（Opus 5.5 驗收）：控制室 guard 級 
     expect(JSON.stringify(recv).toLowerCase()).not.toContain("client");
   });
 
-  it("未定价：月薪崗 client_rate_snapshot=0 唔算「收客价未定」", async () => {
+  it("未定價：月薪崗 client_rate_snapshot=0 唔算「收客價未定」", async () => {
     const info = (await loadMixedBillingInfo([siteId], AUG, AUG_END)).get(siteId);
     const r = await prisma.shiftRecord.findFirstOrThrow({ where: { siteId, guardId: monthlyGuardId } });
     expect(isClientUnpricedShift(r, "per_shift", { month: AUG, includedInSiteFlatFee: includedInSiteFlatFee(info, nTypeId) })).toBe(false);

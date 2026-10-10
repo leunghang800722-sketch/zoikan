@@ -21,7 +21,7 @@ import { ShiftRecordCreateSchema, BrokerShiftRecordCreateSchema } from "@/lib/ap
 import { writeAudit } from "@/lib/audit";
 import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
 import type { Prisma } from "@prisma/client";
-// WP-PRICE：單條建立都要計价（同 batch/route.ts 一樣，之前完全冇寫
+// WP-PRICE：單條建立都要計價（同 batch/route.ts 一樣，之前完全冇寫
 // snapshot 三個欄）——見 src/lib/pricing/resolve-rate.ts 頂註解。
 import { journalAutoCardUsesSafe, toNum } from "@/lib/pricing/auto-card-journal";
 import { resolveShiftPricing, type ShiftPricingRecordType } from "@/lib/pricing/resolve-rate";
@@ -139,7 +139,7 @@ export async function POST(req: Request) {
       data.status = broker.requiresApproval ? "pending_approval" : "confirmed";
 
       // WP-PRICE：雞頭自己開嘅更（呢個 schema 冇任何 snapshot 欄可以自己填）
-      // 一律 runtime 計价，唔准靜靜 0。
+      // 一律 runtime 計價，唔准靜靜 0。
       //
       // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
       // 盤唔寫 snapshot——同 batch/route.ts、reprice/route.ts 一致嘅 gate。
@@ -161,7 +161,7 @@ export async function POST(req: Request) {
           workDate,
           isExternal: false,
           recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
-          // WP-BOSS5 §25.1：OT 卡＝每小時价，`data.otHours` 已經由
+          // WP-BOSS5 §25.1：OT 卡＝每小時價，`data.otHours` 已經由
           // `BrokerShiftRecordCreateSchema`（`ot_hours`）解析好。
           otHours: data.otHours != null ? Number(data.otHours) : null,
         });
@@ -249,11 +249,11 @@ export async function POST(req: Request) {
     }
 
     // WP-PRICE：內部角色呢個 schema 本身容許手動傳 *_snapshot（保留
-    // 手動覆寫能力，例如補漏單／人手核價）——淨係冇傳嗰啲先自動計价，
+    // 手動覆寫能力，例如補漏單／人手核價）——淨係冇傳嗰啲先自動計價，
     // 傳咗嘅一律尊重，唔覆蓋。
     //
     // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類
-    // 盤自動計价呢一步跳過（冇傳嘅欄保持 null）——手動明確傳咗嘅值仍然
+    // 盤自動計價呢一步跳過（冇傳嘅欄保持 null）——手動明確傳咗嘅值仍然
     // 尊重（老闆／會計可以人手補一次性特殊安排），唔喺呢度硬性擋。
     const internalSource: { clientCardId?: string; payoutCardId?: string } = {};
     // journal 嘅 before＝人手明確傳入嘅值（auto 卡填入之前）；undo 只會還原 auto 填咗嗰幾欄
@@ -275,7 +275,7 @@ export async function POST(req: Request) {
         workDate,
         isExternal: data.isExternal ?? false,
         recordType: (data.recordType ?? "shift") as ShiftPricingRecordType,
-        // WP-BOSS5 §25.1：OT 卡＝每小時价。
+        // WP-BOSS5 §25.1：OT 卡＝每小時價。
         otHours: data.otHours != null ? Number(data.otHours) : null,
       });
       // journal 只歸因畀 resolver 真係填咗嗰幾欄（人手明確傳嘅值唔算 auto 卡）

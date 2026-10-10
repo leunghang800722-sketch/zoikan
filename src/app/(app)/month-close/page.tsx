@@ -69,10 +69,21 @@ export default function MonthCloseOneClickPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs]);
 
+  // P3-0.6（B-10）：unmount 即停 polling（唔再打 API／setState）。
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
   async function pollUntilDone(runId: string) {
     for (let i = 0; i < 240; i++) {
       await new Promise((r) => setTimeout(r, 5000));
+      if (unmountedRef.current) break;
       const res = await apiGet<{ runs: RunDTO[] }>(`/api/month-close/one-click?month=${month}`);
+      if (unmountedRef.current) break;
       if (!res.ok) continue;
       setRuns(res.data.runs);
       const cur = res.data.runs.find((r) => r.id === runId);

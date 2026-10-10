@@ -18,7 +18,8 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { isBrokerRole, requireOwnBrokerId, scrubForBrokerSession } from "@/lib/broker-isolation";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { parseMonthParam, monthStart } from "@/lib/reports/money";
+import { parseMonthParam } from "@/lib/reports/money";
+import { hkMonthStart } from "@/lib/dates";
 import { buildBrokerDashboard } from "@/lib/reports/broker-dashboard";
 import { Forbidden, BadRequest } from "@/lib/api/errors";
 
@@ -34,7 +35,7 @@ export async function GET(req: Request) {
     const monthParamRaw = url.searchParams.get("month");
     let month: Date;
     if (monthParamRaw === null) {
-      month = monthStart(new Date());
+      month = hkMonthStart();
     } else {
       const parsed = monthParamSchema.safeParse(monthParamRaw);
       if (!parsed.success) throw BadRequest("month 格式唔啱（要 YYYY-MM）");
