@@ -22,6 +22,7 @@ import { EmptyState } from "@/components/ui/DataTable";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { inputCls } from "@/components/ui/Field";
 import { currentMonthStr } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 // A7（Opus 整合驗收）：呢頁本地嘅 input 樣式已刪走，改用
 // `@/components/ui/Field` 嘅 `inputCls`（README「表單控件」規格，三份
@@ -114,7 +115,7 @@ export default function RosterEntryPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader kicker="排更" title="更表" subtitle="揀盤揀月，開啟嗰個月嘅更表編輯器。" />
+      <PageHeader kicker={kickerFor("/roster")} title="更表" subtitle="揀盤揀月，開啟嗰個月嘅更表編輯器。" />
 
       <Banner kind="error" message={error} />
       <EmptyMonthNotice month={month} isEmpty={!overviewLoading && overview.length === 0} onJump={setMonth} />

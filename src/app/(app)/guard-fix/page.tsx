@@ -17,6 +17,7 @@ import { EmptyState } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { fmtDateTime, currentMonthStr } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface StaffListDTO {
   id: string;
@@ -584,7 +585,7 @@ export default function GuardFixPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader kicker="排更" title="未配對保安員修復" subtitle="更表大量「未配對」保安員——上載 U Team 名單、計算修復計劃、一撳套用。" />
+      <PageHeader kicker={kickerFor("/roster-uploads?tab=fix")} title="未配對保安員修復" subtitle="更表大量「未配對」保安員——上載 U Team 名單、計算修復計劃、一撳套用。" />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />

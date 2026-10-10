@@ -6,6 +6,7 @@
 // ShortfallDashboard.tsx 嘅 `?date=`／RosterEditor.tsx 嘅 `?broker=`
 // 一致（`history.replaceState`，唔用 `useSearchParams()`避免 Suspense
 // boundary）。
+import { kickerFor } from "@/lib/nav/schema";
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
@@ -144,7 +145,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker={isBroker ? "我的" : "財務"}
+        kicker={isBroker ? kickerFor("/my-receivable", true) : "資料"}
         title="本月應收"
         subtitle="自己保安員本月更數 × 自己出街價，逐日明細。"
         actions={

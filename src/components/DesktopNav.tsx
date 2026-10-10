@@ -9,7 +9,7 @@
 // R1 驗收修正：斷點由 `md`（768）改 `lg`（1024）——README「桌面外殼
 // （≥ 1024px）」／「手機外殼（375px）」中間嗰段（768–1023px）設計上
 // 都算「手機外殼」（漢堡＋抽屜），呢個 `<aside>` 淨係喺 `≥ lg` 先顯示。
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import type { NavGroup } from "@/lib/rbac/nav";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isLinkActive } from "@/lib/ui/nav-active";
@@ -34,27 +34,29 @@ export function DesktopNav({
   badges: Record<string, number>;
 }) {
   const pathname = usePathname();
+  const search = useSearchParams();
 
   return (
-    <aside className="sticky top-0 hidden h-screen w-[216px] shrink-0 flex-col border-r border-zk-border bg-white px-3.5 py-5 lg:flex">
-      <div className="mb-[18px] flex items-center gap-2 px-1.5">
+    <aside className="sticky top-0 hidden h-screen w-[216px] shrink-0 flex-col border-r border-zk-border bg-white px-3 py-3 lg:flex">
+      <div className="mb-2.5 flex items-center gap-2 px-1.5">
         <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] bg-zk-primary text-[13px] font-bold text-white">在</div>
         <div className="text-[15px] font-bold text-zk-text">在勤</div>
       </div>
 
       <nav className="flex flex-1 flex-col overflow-y-auto">
         {groups.map((g) => (
-          <div key={g.title || "_top"} className="mb-3.5">
-            {g.title && <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[.06em] text-zk-faint">{g.title}</div>}
+          <div key={g.title || "_top"} className="mb-2">
+            {g.title && <div className="px-2 pb-0.5 text-[10.5px] font-semibold leading-[14px] tracking-[.06em] text-zk-faint">{g.title}</div>}
             <div className="flex flex-col">
               {g.links.map((l) => {
-                const active = isLinkActive(pathname, l.href);
+                const active = isLinkActive(pathname, l.href, search);
                 const badge = badges[l.href];
                 return (
                   <GuardedLink
                     key={l.href}
                     href={l.href}
-                    className={`flex items-center justify-between rounded-md px-2 py-[7px] text-[13.5px] ${
+                    data-testid={`nav-${l.href}`}
+                    className={`flex items-center justify-between rounded-md px-2 py-[3px] text-[13.5px] leading-5 ${
                       active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
                     }`}
                   >
@@ -70,7 +72,7 @@ export function DesktopNav({
         ))}
       </nav>
 
-      <div className="mt-auto flex items-center gap-2.5 border-t border-zk-border pt-3.5 pl-1.5">
+      <div className="mt-auto flex items-center gap-2.5 border-t border-zk-border pt-2.5 pl-1.5">
         <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-[#e0e7ff] text-xs font-semibold text-[#3730a3]">
           {initials(userName)}
         </div>
@@ -83,9 +85,8 @@ export function DesktopNav({
               改密碼
             </GuardedLink>
             <span>·</span>
-            <LogoutButton className="p-0 text-[11px] font-normal text-zk-muted underline-offset-2 hover:text-zk-text-secondary hover:underline" />
+            <span title="登出會同時登出所有裝置"><LogoutButton className="p-0 text-[11px] font-normal text-zk-muted underline-offset-2 hover:text-zk-text-secondary hover:underline" /></span>
           </div>
-          <div className="mt-1 text-[10.5px] leading-snug text-zk-faint">登出會同時登出所有裝置</div>
         </div>
       </div>
     </aside>

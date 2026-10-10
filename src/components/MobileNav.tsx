@@ -20,7 +20,7 @@
 // 顯示文字／badge 數字呢啲數據由嗰邊 fetch 好再傳落嚟，呢個 component
 // 淨係管抽屜開關嘅 client state。
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isLinkActive } from "@/lib/ui/nav-active";
 import type { NavGroup } from "@/lib/rbac/nav";
@@ -52,6 +52,7 @@ export function MobileNav({
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const search = useSearchParams();
 
   // 撳連結跳轉之後（pathname 變咗）自動關抽屜。
   useEffect(() => {
@@ -120,12 +121,13 @@ export function MobileNav({
                   {g.title && <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[.06em] text-zk-faint">{g.title}</div>}
                   <div className="flex flex-col">
                     {g.links.map((l) => {
-                      const active = isLinkActive(pathname, l.href);
+                      const active = isLinkActive(pathname, l.href, search);
                       const badge = badges[l.href];
                       return (
                         <GuardedLink
                           key={l.href}
                           href={l.href}
+                          data-testid={`mnav-${l.href}`}
                           onClick={() => setOpen(false)}
                           className={`flex items-center justify-between rounded-md px-2 py-2.5 text-[14px] ${
                             active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"

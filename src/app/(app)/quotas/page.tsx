@@ -16,6 +16,7 @@ import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface QuotaRow {
   id: string;
@@ -186,7 +187,7 @@ export default function QuotasPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        kicker="排更"
+        kicker={kickerFor("/quotas")}
         title="配額"
         subtitle="雞頭每月每盤每更別可排幾多更 — 軟性限制，超額會提示但唔會封。"
         actions={

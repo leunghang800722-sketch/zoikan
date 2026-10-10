@@ -8,6 +8,7 @@ import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FeedbackDetailClient } from "./FeedbackDetailClient";
+import { kickerFor } from "@/lib/nav/schema";
 
 export default async function FeedbackDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getCurrentSession();
@@ -17,7 +18,7 @@ export default async function FeedbackDetailPage({ params }: { params: Promise<{
   if (session.baseRole !== "老闆") {
     return (
       <div className="flex flex-col gap-4">
-        <PageHeader kicker="系統" title="現場意見" />
+        <PageHeader kicker={kickerFor("/feedback")} title="現場意見" />
         <div className="flex flex-col items-center gap-2 rounded-lg border border-zk-border bg-white px-6 py-16 text-center" data-testid="feedback-forbidden">
           <div className="text-sm font-semibold text-zk-text">你冇權睇呢一頁</div>
           <div className="max-w-[380px] text-[12.5px] leading-relaxed text-zk-muted">「現場意見」清單淨係老闆先睇得到。</div>

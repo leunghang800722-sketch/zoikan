@@ -20,6 +20,7 @@ import { ReportSection } from "./ReportSection";
 import { LockSection } from "./LockSection";
 import { RightRail } from "./RightRail";
 import { HistorySection } from "./HistorySection";
+import { kickerFor } from "@/lib/nav/schema";
 
 export default function MonthCloseOneClickPage() {
   const [month, setMonth] = useState(() => addMonthsStr(currentMonthStr(), -1));
@@ -236,7 +237,7 @@ export default function MonthCloseOneClickPage() {
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/month-close")}
         title="一鍵全月結算"
         actions={
           <>

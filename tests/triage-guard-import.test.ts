@@ -485,16 +485,16 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     }
   });
 
-  it("導航：會計／主管見到「證件資料導入」「待答問題」；「每月修正摘要」跟月結總表 view；雞頭見唔到", async () => {
+  it("導航：會計／主管見到「待答問題」；證件導入入口搬咗去保安員頁（P3-3.1 導覽無）；「報表」跟月結總表 view；雞頭見唔到", async () => {
     const allGrants = Object.fromEntries(MODULES.map((m) => [m, true])) as Record<Module, boolean>;
     const mk = (baseRole: RoleName) => ({ userId: "u", roleId: "r", roleName: baseRole, baseRole, brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString(), mustChangePwd: false }) as unknown as CurrentSession;
     for (const role of ["會計", "主管"] as RoleName[]) {
       const grants = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(role, m, "view")])) as Record<Module, boolean>;
       const hrefs = (await getNavLinks(mk(role), grants)).map((l) => l.href);
       expect(hrefs).toContain("/triage");
-      expect(hrefs).toContain("/guards/import");
-      // 每月修正摘要＝module「月結總表」view：會計出廠有、主管出廠關（老闆可開）
-      expect(hrefs.includes("/reports/ops-digest")).toBe(role === "會計");
+      expect(hrefs).not.toContain("/guards/import");
+      // 「報表」＝module「月結總表」view：會計出廠有、主管出廠關（老闆可開）
+      expect(hrefs.includes("/reports/monthly-close")).toBe(role === "會計");
     }
     const links = await getNavLinks(mk("老闆"), allGrants);
     const groups = groupNavLinks("老闆", links);
@@ -502,7 +502,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     void ROLE_NAMES;
     const brokerGrants = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault("雞頭", m, "view")])) as Record<Module, boolean>;
     const brokerHrefs = (await getNavLinks(mk("雞頭"), brokerGrants)).map((l) => l.href);
-    for (const h of ["/triage", "/guards/import", "/reports/ops-digest"]) expect(brokerHrefs).not.toContain(h);
+    for (const h of ["/triage", "/guards/import", "/reports/monthly-close"]) expect(brokerHrefs).not.toContain(h);
   });
 
   // ---------------------------------------------------------------------------

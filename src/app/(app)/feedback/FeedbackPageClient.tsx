@@ -10,6 +10,7 @@ import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { fmtDateTime } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface FeedbackReportRow {
   id: string;
@@ -64,7 +65,7 @@ export function FeedbackPageClient() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="系統"
+        kicker={kickerFor("/feedback")}
         title="現場意見"
         subtitle="主管／會計／老闆用「開會反映」送出嘅現場改動訴求——只讀清單，未評估可行性。"
         actions={

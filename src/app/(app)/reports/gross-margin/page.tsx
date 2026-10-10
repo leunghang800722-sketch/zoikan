@@ -18,6 +18,7 @@ import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts 嘅 ok()/
 // camelToSnakeDeep()）——呢啲 interface 要同 wire format 一致，唔係
@@ -136,7 +137,7 @@ export default function GrossMarginPage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/reports/gross-margin")}
         title="毛利即時表"
         subtitle={`每盤×更別，本月至今更數／營業額／成本／毛利／毛利率。毛利率低於 ${data?.threshold_pct ?? 8}% 標紅。`}
         actions={
