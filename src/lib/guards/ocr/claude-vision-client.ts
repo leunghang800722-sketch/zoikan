@@ -40,14 +40,14 @@ function apiBodyError(e: unknown): { type?: unknown; message?: unknown } {
 }
 
 /** API 回傳嘅 error.type（例如 permission_error）；冇 body 就用 SDK 嘅 type。只係類型字串。 */
-export function sdkErrorType(e: unknown): string | null {
+function sdkErrorType(e: unknown): string | null {
   if (!(e instanceof Anthropic.APIError)) return null;
   const t = apiBodyError(e).type ?? (e as { type?: unknown }).type;
   return typeof t === "string" && /^[a-z_]{1,64}$/.test(t) ? t : null;
 }
 
 /** 4xx 嘅 API error.message：去換行、截 200 字；出現 sk-ant 整段換 [redacted]。其他情況 null。 */
-export function sdkErrorMessage(e: unknown): string | null {
+function sdkErrorMessage(e: unknown): string | null {
   if (!(e instanceof Anthropic.APIError)) return null;
   if (typeof e.status !== "number" || e.status < 400 || e.status > 499) return null;
   const m = apiBodyError(e).message;

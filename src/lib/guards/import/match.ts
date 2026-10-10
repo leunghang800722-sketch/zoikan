@@ -215,13 +215,13 @@ export function decideMatch(i: MatchInput, db: DbIndex, groupReasons: readonly s
   }
 }
 
-export interface NameGroupInput {
+interface NameGroupInput {
   key: string;
   nameZh: string | null;
 }
 
 /** 同 hkid 多檔嘅中文名差異 → group_name_differs（Stage A 04 用）。 */
-export function nameGroupDiffers(names: readonly (string | null)[]): boolean {
+function nameGroupDiffers(names: readonly (string | null)[]): boolean {
   const ns = names.map(normZh).filter((x): x is string => !!x);
   return ns.some((n) => ns.some((m) => editDistance(n, m) > 1 && Math.min(n.length, m.length) >= 2));
 }

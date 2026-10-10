@@ -63,7 +63,7 @@ const perShiftEligible = (c: CardRow): boolean => c.billingModel === null || c.b
 const isAutoCard = (c: CardRow): boolean => (c.source ?? "").startsWith("auto:one-click:");
 
 /** 淨係保留需要嘅成分（唔畀「只補出街價」嘅卡帶埋客價去蓋住現有客價卡）。 */
-export function restrictValues(v: PriceValues, need: PriceNeed): PriceValues {
+function restrictValues(v: PriceValues, need: PriceNeed): PriceValues {
   return {
     clientRate: need.client ? v.clientRate : null,
     guardWage: need.payout ? v.guardWage : null,
@@ -72,7 +72,7 @@ export function restrictValues(v: PriceValues, need: PriceNeed): PriceValues {
   };
 }
 
-export function coversNeed(v: PriceValues, need: PriceNeed): boolean {
+function coversNeed(v: PriceValues, need: PriceNeed): boolean {
   if (need.client && (v.clientRate === null || v.clientRate <= 0)) return false;
   if (need.payout && v.guardWage === null && v.brokerFee === null && v.payoutRate === null) return false;
   if (need.payout && (v.guardWage ?? 0) <= 0 && (v.brokerFee ?? 0) <= 0 && (v.payoutRate ?? 0) <= 0) return false;

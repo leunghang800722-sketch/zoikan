@@ -18,7 +18,7 @@ import { matchBrokerLabel, rowsForSite, type BrokerLite } from "./postorder-evid
 import { normalizeSiteKey } from "./site-match";
 import type { McCandidate } from "./types";
 
-export const SETTLEMENT_QUESTION_MAX = 40;
+const SETTLEMENT_QUESTION_MAX = 40;
 
 /** settlement_set journal 嘅 reason 文字（報告 postorderDependency 按佢分類，兩邊用同一組常數）。 */
 export const SETTLEMENT_REASON = {

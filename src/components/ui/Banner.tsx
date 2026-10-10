@@ -3,7 +3,7 @@
 // - `compact`：圓點＋12.5px 嘅「通知橫幅」外觀（舊 Notice 樣式），有 action slot（例如「去處理 ›」）。
 import type { HTMLAttributes, ReactNode } from "react";
 
-export type BannerKind = "info" | "success" | "warning" | "error";
+type BannerKind = "info" | "success" | "warning" | "error";
 
 const KIND_CLS: Record<BannerKind, { box: string; dot: string }> = {
   info: { box: "border-zk-primary/30 bg-zk-primary-tint-soft text-zk-primary-deep", dot: "bg-zk-primary" },
@@ -45,7 +45,7 @@ export function Banner({ kind, message, children, action, compact, className, ..
 }
 
 /** 表單欄位旁嘅單行錯誤字（取代手寫 `text-red-*`）。 */
-export function FieldError({ children, className }: { children: ReactNode; className?: string }) {
+function FieldError({ children, className }: { children: ReactNode; className?: string }) {
   if (!children) return null;
   return <p className={`text-zk-sm text-zk-danger ${className ?? ""}`} role="alert">{children}</p>;
 }

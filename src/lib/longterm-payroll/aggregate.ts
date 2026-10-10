@@ -92,7 +92,7 @@ function iso(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-export interface LongtermPayrollLineResult {
+interface LongtermPayrollLineResult {
   guardId: string;
   guardName: string;
   contractSnapshot: Array<{ monthlySalary: number; effectiveFrom: string; effectiveTo: string | null }>;
@@ -145,7 +145,7 @@ export interface BuildLongtermPayrollResult {
 /** run 合計。`visaPassthrough`＝簽證形式長工（§14 規則 12）嘅部分——
  * 已經包喺 grossTotal／autopayTotal／mpf*Total 入面（公司真係要出呢筆
  * 糧），另外列出嚟俾月結「合併成本」剔走（雞頭結算扣返）。 */
-export interface LongtermPayrollTotals {
+interface LongtermPayrollTotals {
   grossTotal: number;
   autopayTotal: number;
   mpfEeTotal: number;

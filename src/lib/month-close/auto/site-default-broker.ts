@@ -7,7 +7,7 @@ import { AutoCollector } from "./context";
 import { matchBrokerLabel, rowsForSite } from "./postorder-evidence";
 import { normalizeSiteKey } from "./site-match";
 
-export type SuggestionReason = "unique" | "no_postorder" | "no_roster" | "no_site_rows" | "no_broker_cells" | "not_unique" | "unmatched_label" | "broker_inactive";
+type SuggestionReason = "unique" | "no_postorder" | "no_roster" | "no_site_rows" | "no_broker_cells" | "not_unique" | "unmatched_label" | "broker_inactive";
 
 export interface DefaultBrokerSuggestion {
   month: string | null;

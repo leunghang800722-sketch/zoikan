@@ -15,11 +15,11 @@
 // ---------------------------------------------------------------------------
 // 常數（§14 規則 9；同 s07_longterm_payroll.py 頂部常數一致）
 // ---------------------------------------------------------------------------
-export const MPF_RATE = 0.05;
+const MPF_RATE = 0.05;
 export const MPF_CAP = 1500;
 export const MPF_MIN_GROSS = 7100;
-export const MPF_MIN_DAYS_EMPLOYED = 60;
-export const MPF_EXEMPT_AGE = 65;
+const MPF_MIN_DAYS_EMPLOYED = 60;
+const MPF_EXEMPT_AGE = 65;
 
 // 老闆 2026-09-28（WP-BOSS5 §25.6 追加決定 #3）：MPF 首月唔再用「入職未滿
 // 60 日全免」——首月（＝入職日所在嗰個月）改做「員工唔供、公司照供 ER
@@ -33,15 +33,15 @@ export const MPF_FIRST_MONTH_RULE_FROM = "2026-09-01";
 // 口徑冇變，唔准手多改（有單元測試 assert 呢個常數＝2，見
 // tests/longterm-payroll-compute.test.ts）。
 export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH
-export const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
-export const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限
-export const SL_MIN_CONSECUTIVE = 4; // BA.SL_MIN_CONSECUTIVE
-export const SL_RATE = 0.8; // BA.SL_RATE——4/5 疾病津貼
+const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
+const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限
+const SL_MIN_CONSECUTIVE = 4; // BA.SL_MIN_CONSECUTIVE
+const SL_RATE = 0.8; // BA.SL_RATE——4/5 疾病津貼
 
 // 老闆 2026-09-23（第十六節）：試用期滿嗰日唔算「已經過咗」——要離完結日
 // 之後（leave_date >= 完結日）先算過。BA.PROBATION_END_DAY_COUNTS_AS_PASSED
 // 現值 False；呢個常數保留做文件對照，compute.ts 主線行為固定跟 False。
-export const PROBATION_END_DAY_COUNTS_AS_PASSED = false;
+const PROBATION_END_DAY_COUNTS_AS_PASSED = false;
 
 // ---------------------------------------------------------------------------
 // 小工具

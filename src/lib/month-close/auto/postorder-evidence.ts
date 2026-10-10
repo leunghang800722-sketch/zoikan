@@ -27,7 +27,7 @@ import {
 import { normalizeTimeRange } from "@/lib/roster-upload/time-range";
 import { normalizeSiteKey, stripSiteSuffix } from "./site-match";
 
-export type PostorderShiftLabel = "Day" | "Middle" | "Night";
+type PostorderShiftLabel = "Day" | "Middle" | "Night";
 
 export interface PostorderPriceRow {
   rowIndex: number;
@@ -78,7 +78,7 @@ function shiftLabelOf(raw: string | null): PostorderShiftLabel | null {
 
 /** 客戶群標題：唔含數字／斜線／括號（排除「XX 12hrs (D/S)」「XX 27000/M」呢類盤＋更份標題），
  * 而且下面最少兩個唔同盤名（由 caller 驗證）。 */
-export function isClientGroupBlock(label: string): boolean {
+function isClientGroupBlock(label: string): boolean {
   return !/[\d/()（）]/.test(label);
 }
 
@@ -88,7 +88,7 @@ function splitTrailing(label: string): { head: string; token: string | null } {
   return { head: parts.slice(0, -1).join(" "), token: parts[parts.length - 1]! };
 }
 
-export function parsePostorderPriceRows(grid: PostorderGrid): PostorderPriceRow[] {
+function parsePostorderPriceRows(grid: PostorderGrid): PostorderPriceRow[] {
   const rowCount = grid.length - 1;
   let headerRow = -1;
   const col = { client: 1, prop: 3, shift: 4, clientPrice: 5, payout: 6, time: 7, total: AM_COLUMN };
@@ -173,7 +173,7 @@ export function parsePostorderPriceRows(grid: PostorderGrid): PostorderPriceRow[
 const BROKER_LABEL_PREFIX_RE = /^\(\s*\d+\s*\)\s*/;
 
 /** Roster 分頁逐日「雞頭名」：同崗位（物業名稱＋更份）同日嘅雞頭集合。 */
-export function parsePostorderDayBrokers(grid: PostorderGrid, month: Date): Map<string, Set<string>> {
+function parsePostorderDayBrokers(grid: PostorderGrid, month: Date): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   const header = detectRosterHeader(grid);
   if (!header || header.brokerCols.length === 0) return out;
@@ -266,7 +266,7 @@ export function classifyPriceRow(row: PostorderPriceRow, brokers: readonly Broke
   return { kind: "other", broker: null };
 }
 
-export { gridText };
+;
 
 // ---------------------------------------------------------------------------
 // 盤 ↔ Postorder 崗位行

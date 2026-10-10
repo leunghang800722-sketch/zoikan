@@ -33,7 +33,7 @@ export function parseModelJson(text: string, fields: readonly OcrFieldKey[]): Pa
   return r.data as Partial<Record<OcrFieldKey, string | null>>;
 }
 
-export interface ReadUsage {
+interface ReadUsage {
   promptTokens: number;
   completionTokens: number;
   calls: number;
@@ -41,7 +41,7 @@ export interface ReadUsage {
   truncated: number;
 }
 
-export type UsageByProvider = Record<OcrProviderName, { promptTokens: number; completionTokens: number; calls: number }>;
+type UsageByProvider = Record<OcrProviderName, { promptTokens: number; completionTokens: number; calls: number }>;
 
 export interface DocumentReadResult {
   type: OcrDocType;

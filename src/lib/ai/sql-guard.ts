@@ -48,7 +48,7 @@ export type SqlGuardResult = { ok: true; sql: string } | { ok: false; reason: st
  * 換成同長度嘅底線——之後嘅 keyword/schema 掃描唔會誤中字串值入面嘅
  * 文字（例如 `WHERE description ILIKE '%update%'`），亦保持索引位置
  * 一致（等 LIMIT 改寫可以直接用 codeOnly 嘅 match index 落原字串切）。 */
-export function stripStringLiterals(sql: string): string {
+function stripStringLiterals(sql: string): string {
   let out = "";
   let i = 0;
   while (i < sql.length) {
@@ -147,7 +147,7 @@ export function validateSqlSelect(rawQuery: string): SqlGuardResult {
 // `ai.*` view 對應邊個 module（同其他工具/現有 REST API 用緊嗰個
 // module 一致，例如 `guard_lookup`→保安員、`rate_cards`→出街價）。
 // ---------------------------------------------------------------------------
-export const TABLE_MODULE_MAP: Record<string, Module> = {
+const TABLE_MODULE_MAP: Record<string, Module> = {
   sites: "盤",
   shift_types: "盤",
   brokers: "雞頭",

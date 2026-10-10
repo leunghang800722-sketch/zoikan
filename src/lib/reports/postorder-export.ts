@@ -154,7 +154,7 @@ function mode(values: number[]): number | null {
   return best;
 }
 
-export interface PostorderBrokerPayout {
+interface PostorderBrokerPayout {
   brokerId: string | null;
   brokerCode: string;
   brokerName: string;

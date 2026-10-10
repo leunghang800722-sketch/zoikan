@@ -60,7 +60,7 @@ export interface RepriceLookups {
   siteGuardsPaidByClientById: Map<string, boolean>;
 }
 
-export interface RepriceValues {
+interface RepriceValues {
   clientRate: number | null;
   guardWage: number | null;
   brokerFee: number | null;

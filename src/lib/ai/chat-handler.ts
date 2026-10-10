@@ -21,8 +21,8 @@ import { computeFieldVisibility } from "@/lib/ai/field-scrub";
 import { buildAiTools } from "@/lib/ai/tools";
 import { getLlmClient, LlmUnavailableError, type LlmChatResult, type LlmClient, type LlmHistoryTurn } from "@/lib/ai/llm";
 
-export const MAX_TOOL_ROUNDS = 8;
-export const SSE_CHUNK_SIZE = 40;
+const MAX_TOOL_ROUNDS = 8;
+const SSE_CHUNK_SIZE = 40;
 
 /** 前端側欄由網址解析出嚟嘅頁面提示——純粹俾 prompt 用，唔係指令、唔經權限判斷（長度上限防濫用）。 */
 export const ChatContextSchema = z
@@ -42,7 +42,7 @@ export function jsonResponse(status: number, body: unknown): Response {
 }
 
 /** ApiError → JSON error response；其他錯誤照拋。 */
-export function apiErrorResponse(err: unknown): Response {
+function apiErrorResponse(err: unknown): Response {
   if (err instanceof ApiError) return jsonResponse(err.status, { error: err.code, message: err.message });
   throw err;
 }
@@ -51,17 +51,17 @@ export function withEmptyReplyFallback(text: string, fallback: string): string {
   return text.trim() === "" ? fallback : text;
 }
 
-export function sseEvent(event: string, data: unknown): string {
+function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-export function chunk(text: string, size: number): string[] {
+function chunk(text: string, size: number): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
   return out.length ? out : [""];
 }
 
-export interface ChatFinalized {
+interface ChatFinalized {
   /** 過晒所有輸出 guard 之後、會切 chunk 送出同存落對話嘅最終文字。 */
   finalText: string;
   /** 送完 `delta` 之後、audit 之前執行（存對話 turn）。 */

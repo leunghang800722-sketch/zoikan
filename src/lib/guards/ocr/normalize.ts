@@ -40,7 +40,7 @@ export function parseDob(raw: string): string | null {
 }
 
 /** 出生年份合理範圍：現時 16–90 歲（保安員）。 */
-export function dobPlausible(iso: string, now: Date = new Date()): boolean {
+function dobPlausible(iso: string, now: Date = new Date()): boolean {
   const y = Number(iso.slice(0, 4));
   const age = now.getUTCFullYear() - y;
   return age >= 16 && age <= 90;
@@ -55,7 +55,7 @@ function hasSimplifiedOnly(s: string): boolean {
   for (const ch of s) if (SIMPLIFIED_ONLY.has(ch)) return true;
   return false;
 }
-export const hasSimplifiedChars = hasSimplifiedOnly;
+const hasSimplifiedChars = hasSimplifiedOnly;
 
 export interface Normalized {
   /** 比較用 canonical */

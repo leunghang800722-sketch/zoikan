@@ -23,7 +23,7 @@ export interface FeedbackFields {
 /** 用戶（喺預覽面板）可以編輯嘅欄——`reporter`／`footer` 唔喺呢度，
  * server 永遠自己填/覆蓋，防止用戶側竄改。 */
 export const EDITABLE_FIELD_KEYS = ["title", "current_problem", "desired_change", "reason", "related", "open_questions"] as const;
-export type EditableFieldKey = (typeof EDITABLE_FIELD_KEYS)[number];
+type EditableFieldKey = (typeof EDITABLE_FIELD_KEYS)[number];
 export type EditableFields = Record<EditableFieldKey, string>;
 
 export function buildReporterLine(params: { name: string; roleName: string; dateStr: string; path?: string }): string {
@@ -68,7 +68,7 @@ export function buildSummaryMarkdown(fields: FeedbackFields): string {
 // `session.ts` 嘅 `countSubmittedReportsToday()` 計，呢度淨係放常數）。
 // ---------------------------------------------------------------------------
 export const MAX_FIELD_LEN = 2000;
-export const MAX_TOTAL_LEN = 12000;
+const MAX_TOTAL_LEN = 12000;
 export const MAX_REPORTS_PER_DAY = 3;
 
 /** 得返 null＝驗證過；唔係就係俾用戶睇嘅錯誤訊息。 */

@@ -6,10 +6,10 @@ import { apiGetAll, type ApiResult, type ApiListResult } from "./api-client";
 import { cachedLookup, invalidateLookups } from "./lookup-cache";
 import { ApiClientError } from "../api-client";
 
-export { invalidateLookups };
+;
 
 /** 輕量保安員（`GET /api/guards?fields=lite`）——唔帶電話／證件／銀行。 */
-export interface GuardLite {
+interface GuardLite {
   id: string;
   staff_no?: string | null;
   name_zh: string;
@@ -21,13 +21,13 @@ export interface GuardLite {
   staff_numbers?: Array<{ scheme?: string; number: string; status?: string }> | null;
 }
 
-export const LOOKUP_PATHS = {
+const LOOKUP_PATHS = {
   sites: "/api/sites",
   brokers: "/api/brokers",
   shiftTypes: "/api/shift-types",
   guardsLite: "/api/guards?fields=lite",
 } as const;
-export type LookupName = keyof typeof LOOKUP_PATHS;
+type LookupName = keyof typeof LOOKUP_PATHS;
 
 /** 逐頁拉齊全部行，並按 path 記憶 60 s；失敗回傳 ApiResult（唔記）。 */
 export function cachedGetAll<T>(path: string): Promise<ApiResult<ApiListResult<T>>> {
@@ -59,7 +59,7 @@ interface LookupState<S, B, T> {
   error: string | null;
 }
 
-export function useLookups<S = { id: string; canonical_name: string }, B = { id: string; code: string; name?: string }, T = { id: string; site_id: string; code: string }>(want: Want): LookupState<S, B, T> {
+function useLookups<S = { id: string; canonical_name: string }, B = { id: string; code: string; name?: string }, T = { id: string; site_id: string; code: string }>(want: Want): LookupState<S, B, T> {
   const [state, setState] = useState<LookupState<S, B, T>>({ sites: [], brokers: [], shiftTypes: [], guardsLite: [], loading: true, error: null });
   const wantKey = (Object.keys(want) as LookupName[]).filter((k) => want[k]).sort().join(",");
   useEffect(() => {

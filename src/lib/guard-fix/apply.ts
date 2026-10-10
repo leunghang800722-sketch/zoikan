@@ -24,7 +24,7 @@ const SYSTEM_ACTOR = "system:guard-fix";
  * （create_minimal 冇 unique constraint 兜底）。 */
 export const GUARD_FIX_ADVISORY_LOCK_KEY = 7_710_250_925;
 
-export interface Diff {
+interface Diff {
   create: string[]; // seq
   skip: string[]; // seq（（原因））
   /** WP-STAFF-IMPORT B-fix M1：電話撞咗現有 guard_phones（全表唯一）→ 跳過唔寫，記 `seq:tel_skipped_duplicate`。有先出現。 */
@@ -397,7 +397,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
   return diffs;
 }
 
-export interface ReparseSiteResult {
+interface ReparseSiteResult {
   siteLabel: string;
   uploadId: string;
   before: { unmatched: number; ambiguous: number };

@@ -3,8 +3,8 @@
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
 // docs/api.md「欄位命名」；淨係列出呢個畫面用得到嘅欄）。
 
-export type RecordStatus = "draft" | "pending_approval" | "confirmed" | "completed" | "cancelled";
-export type RecordType = "shift" | "leave" | "ot";
+type RecordStatus = "draft" | "pending_approval" | "confirmed" | "completed" | "cancelled";
+type RecordType = "shift" | "leave" | "ot";
 
 export type SiteDto = {
   id: string;
@@ -88,7 +88,7 @@ export type BrokerDto = {
 // WP-PRICE（老闆 2026-09-16 拍板）：batch 儲存回應加咗 pricing 統計——
 // 「未定價」＝清楚警告，唔准靜靜 0（見 src/app/api/shift-records/
 // batch/route.ts）。
-export type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
+type UnpricedCellSummary = { key: string; site_name?: string; shift_type_code: string; broker_code: string | null; reason?: string; count: number };
 export type BatchResponse = {
   results: { key: string; id: string; action: string; settlement_inferred?: boolean }[];
   warnings: string[];

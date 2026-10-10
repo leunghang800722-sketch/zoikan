@@ -12,8 +12,8 @@
 // 純顯示層：唔改任何 API、權限矩陣或計算。
 import type { Module } from "@/lib/rbac/matrix";
 
-export const INTERNAL_GROUPS = ["", "排更", "對數", "月結", "資料", "設定"] as const;
-export const BROKER_GROUPS = ["", "排更", "我的"] as const;
+const INTERNAL_GROUPS = ["", "排更", "對數", "月結", "資料", "設定"] as const;
+const BROKER_GROUPS = ["", "排更", "我的"] as const;
 
 export type BadgeKey = "approvals" | "triage" | "feedback";
 
@@ -71,7 +71,7 @@ export const BROKER_NAV: NavSchemaEntry[] = [
 ];
 
 /** 導覽拎走（或唔喺導覽）但頁首仍要有 kicker 嘅頁。 */
-export const EXTRA_KICKERS: Record<string, string> = {
+const EXTRA_KICKERS: Record<string, string> = {
   "/guards/import": "資料",
   "/guards/new-from-docs": "資料",
   "/reports/gross-margin": "月結 › 報表",

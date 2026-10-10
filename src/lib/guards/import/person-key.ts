@@ -15,7 +15,7 @@ function derivedKey(): Buffer {
 }
 
 /** HMAC(類別|值) 截 24 hex。 */
-export function hmacRef(kind: string, value: string): string {
+function hmacRef(kind: string, value: string): string {
   return createHmac("sha256", derivedKey()).update(`${kind}|${value}`).digest("hex").slice(0, 24);
 }
 

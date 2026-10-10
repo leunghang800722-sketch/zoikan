@@ -827,4 +827,4 @@ export async function reconcileUpload(
 }
 
 // 型別重新導出（route.ts／UI 用）。
-export type { RosterUpload, RosterUploadRow };
+;

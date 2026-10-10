@@ -32,7 +32,7 @@ export interface SiteCandidate {
  * Postorder 逐格「客戶名稱」有時空白／括號寫法同 `sites.canonical_
  * name`／`aliases` 唔完全一樣），唔改「對唔到就 null，唔准估」原則
  * （仍然要正規化之後完全相等先算撞中，唔係 substring／fuzzy）。 */
-export function normalizeSiteLabel(raw: string): string {
+function normalizeSiteLabel(raw: string): string {
   return raw
     .normalize("NFKC")
     .replace(/[（）]/g, (c) => (c === "（" ? "(" : ")"))
@@ -384,9 +384,9 @@ export function matchShiftType(
 
 /** WP-STAFF-IMPORT B2：逐格配對依據（寫入 `roster_upload_rows.match_basis`）。
  * `name_only`＝淨靠姓名配到（無工號／電話佐證），上載頁／待處理摘要出警告。 */
-export type GuardMatchBasis = "staff_no" | "tel" | "name_tel" | "name_only" | "alias" | "override";
+type GuardMatchBasis = "staff_no" | "tel" | "name_tel" | "name_only" | "alias" | "override";
 
-export type GuardMatchKind = "by_staff_no" | "by_name_tel" | "by_name" | "unmatched" | "ambiguous";
+type GuardMatchKind = "by_staff_no" | "by_name_tel" | "by_name" | "unmatched" | "ambiguous";
 
 // Phase B-0（§15.3 第 4 項）：「二揀一」——`guard_match` enum 本身唔加值
 // （唔使 migration，跟分支鐵則「唔改 schema 就最好」），細分結果全部用

@@ -13,7 +13,7 @@ import type { BrokerRow, GuardRow } from "./guards-types";
 import { earlierExpiry } from "./guards-utils";
 
 /** 一次最多 render 嘅行數（540 人一次 render 會有 ~19k DOM 節點）；搜尋／篩選照舊由 server 做，唔受影響。 */
-export const GUARDS_PAGE_SIZE = 100;
+const GUARDS_PAGE_SIZE = 100;
 // S2：加返「聘用形式」欄——8 欄變 9 欄。
 const colCount = 9;
 

@@ -4,7 +4,7 @@
 import { prisma } from "@/lib/db";
 import { n, round2, monthRange as sharedMonthRange, monthLabel } from "./money";
 
-export type MyReceivableDayRow = {
+type MyReceivableDayRow = {
   workDate: string;
   siteId: string;
   siteName: string;
@@ -18,7 +18,7 @@ export type MyReceivableDayRow = {
 // key 本身已經含出街價，即係組入面逐更金額一定相等）。`days`（逐
 // record）保持唔變，俾舊有 consumer／unit test 用；`groupedDays` 純粹
 // additive，UI 改用呢個。
-export type MyReceivableGroupRow = {
+type MyReceivableGroupRow = {
   workDate: string;
   siteId: string;
   siteName: string;

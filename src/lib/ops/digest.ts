@@ -27,9 +27,9 @@ import { DIGEST_REPEAT_MIN_STREAK, DIGEST_TOP_N } from "./thresholds";
  * 同一 actor 喺該筆之後 30 分鐘內有 guard_import_apply summary 就當導入。（冇日期分界，唔受時區影響。）
  */
 
-export type DigestGroupKey = "guard_fix" | "reconcile" | "match" | "pricing" | "shifts" | "identity" | "import" | "special" | "lock";
+type DigestGroupKey = "guard_fix" | "reconcile" | "match" | "pricing" | "shifts" | "identity" | "import" | "special" | "lock";
 
-export const DIGEST_GROUP_LABELS: Record<DigestGroupKey, string> = {
+const DIGEST_GROUP_LABELS: Record<DigestGroupKey, string> = {
   guard_fix: "保安員修復",
   reconcile: "對數決定",
   match: "配對規則",
@@ -41,7 +41,7 @@ export const DIGEST_GROUP_LABELS: Record<DigestGroupKey, string> = {
   lock: "鎖月",
 };
 
-export const DIGEST_CATEGORIES: ReadonlyArray<{ key: string; group: DigestGroupKey; label: string }> = [
+const DIGEST_CATEGORIES: ReadonlyArray<{ key: string; group: DigestGroupKey; label: string }> = [
   { key: "guard_fix_link", group: "guard_fix", label: "連結到現有保安員（link）" },
   { key: "guard_fix_create", group: "guard_fix", label: "新建保安員（create）" },
   { key: "guard_fix_create_minimal", group: "guard_fix", label: "最簡新建（待 HR 補資料）" },
@@ -84,7 +84,7 @@ export interface DigestWindow {
   basis: "first_upload_to_lock" | "first_upload_to_next_month" | "first_upload_to_now";
 }
 
-export interface DigestCategoryRow {
+interface DigestCategoryRow {
   key: string;
   group: DigestGroupKey;
   label: string;

@@ -32,7 +32,7 @@ export const REFERRAL_FEE_EXEMPT_CLIENT_GROUP = "卓弘";
 /** 驗收（Opus 5.5，2026-09-26）：規則 12a 原文「8 月結算跟月結表全數支付
  * （唔扣）」、「規則由 9 月起生效」——之前 8 月都豁免咗，少計 T 1,380
  * （同總表 60,520 對唔上）。豁免由呢個月份起先生效。 */
-export const REFERRAL_FEE_EXEMPT_FROM_MONTH = "2026-09-01";
+const REFERRAL_FEE_EXEMPT_FROM_MONTH = "2026-09-01";
 
 /** 呢個 recompute 唔可以碰嘅月份——7 月總表已經人手入咗 referral_fee
  * special_items（`scripts/seed/lib/py/extract_referral_fees.py`），唔可以
@@ -62,7 +62,7 @@ export interface ReferralFeeSiteInput {
   clientGroup: string | null;
 }
 
-export interface ReferralFeeLineItem {
+interface ReferralFeeLineItem {
   brokerId: string;
   guardId: string;
   siteId: string;
@@ -71,7 +71,7 @@ export interface ReferralFeeLineItem {
   amount: number;
 }
 
-export interface ReferralFeeWarning {
+interface ReferralFeeWarning {
   guardId: string;
   brokerId: string;
   siteId: string;
@@ -198,7 +198,7 @@ export async function computeReferralFeesForMonth(month: Date): Promise<ComputeR
   });
 }
 
-export interface PostorderReferralRateSync {
+interface PostorderReferralRateSync {
   /** 呢次新寫（或者改咗費率）嘅 (broker, site) 組合數。 */
   upserted: number;
   /** 對唔到雞頭／盤、或者同一 (broker, site) 喺總表出現兩個唔同費率（唔估）。 */
@@ -270,7 +270,7 @@ export function referralRatesFromPostorderRows(
  * migration 種低嗰批，見 prisma/migrations/
  * 20260926200000_wp_postorder_csv_aug_referral_rates）。
  */
-export async function syncReferralRatesFromPostorder(month: Date, actorUserId: string, ip: string | null): Promise<PostorderReferralRateSync> {
+async function syncReferralRatesFromPostorder(month: Date, actorUserId: string, ip: string | null): Promise<PostorderReferralRateSync> {
   const monthStartDate = toMonthStart(month);
   const po = await prisma.postorderUpload.findFirst({
     where: { month: monthStartDate, status: "parsed" },

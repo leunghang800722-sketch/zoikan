@@ -4,8 +4,8 @@
 // 只有格仔表／鍵盤／icon 專用按鈕先用 `button-classes.ts` 嘅 3 個命名 class。
 import type { ButtonHTMLAttributes } from "react";
 
-export type ButtonVariant = "primary" | "secondary" | "dark" | "danger" | "dangerSolid" | "ghost" | "link" | "linkMuted" | "linkDanger";
-export type ButtonSize = "sm" | "md";
+type ButtonVariant = "primary" | "secondary" | "dark" | "danger" | "dangerSolid" | "ghost" | "link" | "linkMuted" | "linkDanger";
+type ButtonSize = "sm" | "md";
 
 const VARIANT_CLS: Record<ButtonVariant, string> = {
   primary: "border-zk-primary bg-zk-primary text-white font-semibold hover:bg-zk-primary-dark",

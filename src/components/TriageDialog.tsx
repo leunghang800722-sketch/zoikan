@@ -84,7 +84,7 @@ interface SessionRes {
 const SUPP_KINDS = ["field_review", "ext_field_conflict", "ext_field_review"];
 const isSupp = (k: string) => SUPP_KINDS.includes(k);
 
-export const REASON_LABEL: Record<string, string> = {
+const REASON_LABEL: Record<string, string> = {
   name_not_confirmed: "姓名未能確認（身份證副本讀數唔一致或者未核對）",
   create_no_name: "導入包冇姓名",
   hkid_not_confirmed_no_other_key: "身份證號未確認，又冇工號／電話可以對上現有保安員",

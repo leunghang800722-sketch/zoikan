@@ -3,10 +3,10 @@
 import { z } from "zod";
 import type { PackagePerson } from "@/lib/guards/import/package";
 
-export const SOURCE_TYPES = ["guard_import", "roster_upload", "month_close", "postorder_backfill"] as const;
-export type SourceType = (typeof SOURCE_TYPES)[number];
+const SOURCE_TYPES = ["guard_import", "roster_upload", "month_close", "postorder_backfill"] as const;
+type SourceType = (typeof SOURCE_TYPES)[number];
 
-export const QUESTION_KINDS = [
+const QUESTION_KINDS = [
   "no_id_card", // 冇／唔合法身份證號
   "name_not_confirmed", // 姓名未確認（建人前）
   "hkid_not_confirmed", // 身份證號未確認
@@ -84,7 +84,7 @@ export const OPTION_IDS = [
   "mc_ack", // 我已覆核，冇問題（更數差異題）
   "skip", // 跳過，留返人手
 ] as const;
-export type OptionId = (typeof OPTION_IDS)[number];
+type OptionId = (typeof OPTION_IDS)[number];
 
 export interface QuestionOption {
   id: OptionId;
@@ -130,7 +130,7 @@ export const SUPPLEMENTARY_KINDS: readonly QuestionKind[] = ["field_review", "ex
 /** 銀行層：要「保安員銀行資料:update」先可以睇內容／作答。 */
 export const BANK_KINDS: readonly QuestionKind[] = ["bank_review", "bank_identity_unknown"];
 
-export const EXT_CHOICES = ["use_import", "keep_current", "skip"] as const;
+const EXT_CHOICES = ["use_import", "keep_current", "skip"] as const;
 
 const fieldAnswer = z
   .object({ action: z.enum(["confirm", "replace", "skip"]), value: z.string().trim().max(500).optional() })

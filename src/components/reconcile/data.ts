@@ -20,7 +20,7 @@ function cached<T>(key: string, load: () => Promise<T | null>): Promise<T | null
 }
 
 /** 測試／重新載入用。 */
-export function clearReconcileDataCache(): void {
+function clearReconcileDataCache(): void {
   cache.clear();
 }
 
@@ -99,7 +99,7 @@ export function useSimilarGuards(person: Person | null, dir: { rows: GuardLite[]
   return { status: "loading", list: [] };
 }
 
-export { guardSearchTerm };
+;
 
 // ---------------------------------------------------------------------------
 // guard-fix 最新 run 嘅 needs_boss
@@ -123,7 +123,7 @@ export interface NeedsBossResult {
 }
 
 /** 該月（YYYY-MM，唔傳就全部 run 最新一個）最新 guard-fix run 嘅 needs_boss；冇權限／冇 run → null／空。 */
-export function loadNeedsBoss(month: string | null): Promise<NeedsBossResult | null> {
+function loadNeedsBoss(month: string | null): Promise<NeedsBossResult | null> {
   return cached(`needsboss:${month ?? "*"}`, async () => {
     const list = await apiGet<{ runs: RunListItem[] }>(`/api/guard-fix/runs${month ? `?month=${encodeURIComponent(month.slice(0, 7))}` : ""}`);
     if (!list.ok) return null;

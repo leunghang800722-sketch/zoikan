@@ -18,12 +18,12 @@ import { buildPayrollTotals } from "./payroll";
 
 const EPS = 0.01;
 
-export type ReconciliationRuleStatus = "pass" | "diff" | "not_enabled";
+type ReconciliationRuleStatus = "pass" | "diff" | "not_enabled";
 
 // Opus 驗收 A5：`rule`（1-5，同 `ruleNo` 一樣，前端揀 icon/顏色用呢個
 // 短欄名）同 `key`／`label`（穩定嘅英文 slug + 短中文標籤，俾前端唔使
 // 淨係靠成句 `title` 嚟判斷邊條規則、顯示邊條紅）。
-export const RULE_KEY_LABEL: Record<1 | 2 | 3 | 4 | 5, { key: string; label: string }> = {
+const RULE_KEY_LABEL: Record<1 | 2 | 3 | 4 | 5, { key: string; label: string }> = {
   1: { key: "revenue_per_site", label: "營業額逐盤" },
   2: { key: "payroll_per_broker", label: "糧明細逐雞頭" },
   3: { key: "three_table_shifts", label: "三表更數" },
@@ -31,7 +31,7 @@ export const RULE_KEY_LABEL: Record<1 | 2 | 3 | 4 | 5, { key: string; label: str
   5: { key: "yellow_warnings", label: "黃色警示清單" },
 };
 
-export interface ReconciliationRule {
+interface ReconciliationRule {
   ruleNo: 1 | 2 | 3 | 4 | 5;
   rule: 1 | 2 | 3 | 4 | 5;
   key: string;

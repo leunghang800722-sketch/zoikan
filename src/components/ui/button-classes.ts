@@ -4,7 +4,7 @@ export const iconBtn = "inline-flex items-center justify-center px-1 text-zk-fai
 /** 彈出選單入面每一項。 */
 export const menuItemBtn = "block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40";
 /** 手機大掣（鍵盤／對話框底部 sticky 動作）。 */
-export const touchBtn = "flex h-[54px] flex-1 items-center justify-center rounded-xl text-zk-md font-semibold disabled:opacity-40";
+const touchBtn = "flex h-[54px] flex-1 items-center justify-center rounded-xl text-zk-md font-semibold disabled:opacity-40";
 /** 單選／多選 chip（選中＝藍框）。 */
 export function choiceBtn(selected: boolean, extra = ""): string {
   return `rounded-[5px] border px-2 py-[3px] text-zk-xs ${selected ? "border-zk-primary bg-zk-primary-tint-soft font-semibold text-zk-primary" : "border-zk-border text-zk-text-secondary hover:bg-zk-header"} ${extra}`;

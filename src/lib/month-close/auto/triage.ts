@@ -29,7 +29,7 @@ import { MC_KINDS, type McEvidence, type McKind, type McQuestionDraft, type Pric
 /** applying 超過呢個時間（寫入中途程式死咗）當卡死，容許重新 claim。 */
 const APPLYING_STALE_MS = 10 * 60 * 1000;
 
-export const isMcKind = (kind: string): kind is McKind => (MC_KINDS as readonly string[]).includes(kind);
+const isMcKind = (kind: string): kind is McKind => (MC_KINDS as readonly string[]).includes(kind);
 
 type QRowWithSession = TriageQuestion & { session: TriageSession };
 
@@ -189,7 +189,7 @@ export async function mcQuestionViews(rows: TriageQuestion[], caps: { pii: boole
 // ---------------------------------------------------------------------------
 // 答（預覽＋確認）
 // ---------------------------------------------------------------------------
-export interface McImpact {
+interface McImpact {
   can_confirm: boolean;
   summary: string[];
   changes: Array<{ table: string; action: string; label: string; fields: Array<{ label: string; from: string | null; to: string }> }>;

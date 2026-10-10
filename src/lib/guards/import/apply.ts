@@ -43,7 +43,7 @@ import { acctTakenByOther, applyDerivedPermit, applyExtRelations, planExtColumns
 
 type Tx = Prisma.TransactionClient;
 
-export const IMPORT_BATCH_SIZE = 25;
+const IMPORT_BATCH_SIZE = 25;
 const IMPORT_ADVISORY_LOCK_KEY = 7261003;
 const IMPORT_TX_TIMEOUT_MS = 120_000;
 
@@ -171,7 +171,7 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
 // ---------------------------------------------------------------------------
 // 單人評估（preview 同 apply 共用）
 // ---------------------------------------------------------------------------
-export type FieldCheck = "new" | "fill" | "same" | "differs" | "conflict" | "missing" | "not_stored" | "invalid_date" | "hidden";
+type FieldCheck = "new" | "fill" | "same" | "differs" | "conflict" | "missing" | "not_stored" | "invalid_date" | "hidden";
 
 export interface Evaluation {
   person: PackagePerson;
@@ -505,7 +505,7 @@ export async function previewImport(pkg: ImportPackage, decisions?: Readonly<Rec
 // 套用
 // ---------------------------------------------------------------------------
 /** keep_pending＝（姓名）照建但標「待核對」，淨係人手覆核時可揀，自動路徑唔用。 */
-export type ReviewAction = "confirm" | "replace" | "skip" | "keep_pending";
+type ReviewAction = "confirm" | "replace" | "skip" | "keep_pending";
 export interface FieldDecision {
   action: ReviewAction;
   /** 改正後嘅值（confirm 可以帶；replace 必帶或用包內值） */
@@ -516,7 +516,7 @@ export type PersonDecisions = Partial<Record<PersonField, FieldDecision>> & {
   ext?: ExtDecisions;
 };
 
-export type FieldOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "invalid" | "invalid_date" | "not_stored" | "not_written";
+type FieldOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "invalid" | "invalid_date" | "not_stored" | "not_written";
 
 export interface PersonResult {
   key: string;
@@ -642,11 +642,11 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
   return null;
 }
 
-export { PII_OVERWRITE_DENIED_MSG };
+;
 function assertMayOverwritePii(opts: ApplyOptions): void {
   if (opts.canOverwritePii === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
 }
-export function isOverwriteForbidden(e: unknown): boolean {
+function isOverwriteForbidden(e: unknown): boolean {
   return e instanceof ApiError && e.status === 403 && OVERWRITE_DENIED_MSGS.includes(e.message);
 }
 function assertMayEditGuard(opts: ApplyOptions): void {
@@ -1029,7 +1029,7 @@ function fpNormalize(v: unknown): unknown {
 }
 
 /** 一個人嘅「寫入指紋」：結果 + 每筆寫入（去咗 id／時間戳；update 保留 rowId）。預覽同實際寫入逐字相同先准 commit。 */
-export function writeFingerprint(res: PersonResult, changes: readonly WriteChange[]): string {
+function writeFingerprint(res: PersonResult, changes: readonly WriteChange[]): string {
   const norm = JSON.parse(
     JSON.stringify({ res, changes: changes.map((c) => ({ table: c.table, action: c.action, rowId: c.action === "update" ? c.rowId : null, before: c.before, after: c.after })) }),
   ) as unknown;
