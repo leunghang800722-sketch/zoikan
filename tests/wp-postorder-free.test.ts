@@ -261,7 +261,7 @@ describe("WP-POSTORDER-FREE A＋C：補齊價目卡＋報告比例（合成 9 �
     expect(end.every((r) => Number(r.clientRateSnapshot) === 900)).toBe(true);
   });
 
-  it("A：權限（會計得；主管／雞頭／安員 403）＋已鎖月 409＋月份格式 400；GET 狀態", async () => {
+  it("A：權限（會計得；主管／雞頭／保安員 403）＋已鎖月 409＋月份格式 400；GET 狀態", async () => {
     const { run1, ctx1 } = await seedSeptShape();
     await buildAutoReport(ctx1, SEPT, run1.id);
     for (const role of ["主管", "雞頭", "安員"] as const) {
@@ -322,7 +322,7 @@ describe("WP-POSTORDER-FREE B：盤預設雞頭", () => {
     prisma.shiftRecord.create({ data: { workDate: sep(day), siteId, shiftTypeId, guardId, settlementBrokerId, operationalBrokerId: settlementBrokerId, recordType: "shift", status: "confirmed", source: "roster_upload", createdBy: "t" } });
   const noSettlement = async () => (await buildUnpricedSummary({ userId: boss, baseRole: "老闆", brokerId: null } as never, SEPT)).noSettlementCount;
 
-  it("設咗盤預設雞頭 → 一鍵歸屬 no_settlement 0，reason「盤預設雞頭」；冇設嘅盤行為不變；安員預設雞頭優先、歷史排後", async () => {
+  it("設咗盤預設雞頭 → 一鍵歸屬 no_settlement 0，reason「盤預設雞頭」；冇設嘅盤行為不變；保安員預設雞頭優先、歷史排後", async () => {
     const withDefault = await mkSite("測試預設盤甲", W.id);
     const noDefault = await mkSite("測試預設盤乙");
     const g = await mkGuard();
@@ -333,7 +333,7 @@ describe("WP-POSTORDER-FREE B：盤預設雞頭", () => {
     await prisma.shiftRecord.create({ data: { workDate: new Date(Date.UTC(2026, 7, 10)), siteId: histSite.site.id, shiftTypeId: histSite.d.id, guardId: gHist.id, settlementBrokerId: K.id, operationalBrokerId: K.id, recordType: "shift", status: "confirmed", source: "roster_upload", createdBy: "t" } });
     await rec(withDefault.site.id, withDefault.d.id, g.id, 1);
     await rec(withDefault.site.id, withDefault.d.id, g.id, 2);
-    await rec(withDefault.site.id, withDefault.d.id, gDef.id, 3); // 安員預設雞頭 K 優先過盤預設 W
+    await rec(withDefault.site.id, withDefault.d.id, gDef.id, 3); // 保安員預設雞頭 K 優先過盤預設 W
     await rec(histSite.site.id, histSite.d.id, gHist.id, 4);
     await rec(noDefault.site.id, noDefault.d.id, g.id, 5); // 冇設盤預設、冇歷史 → 仍然冇歸屬
     const run = await prisma.monthCloseRun.create({ data: { month: SEPT, status: "running", startedById: boss, applyStartedAt: new Date() } });

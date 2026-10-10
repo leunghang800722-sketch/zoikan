@@ -1,4 +1,4 @@
-// WP-RECONCILE-UI（§33）：對數頁未配對行顯示原始資料＋動作直達連結、deep link 落地、分診安員配對題。
+// WP-RECONCILE-UI（§33）：對數頁未配對行顯示原始資料＋動作直達連結、deep link 落地、分診保安員配對題。
 // 全部用 page.route 假 API（假名「甲測試」、假工號 U9xxxx、假電話），唔依賴 dev DB 數據，亦唔郁真資料。
 // 截圖：RECONCILE_UI_SHOTS=out/reconcile-ui 時存檔。
 // 執行：PW_PORT=3411 npx playwright test tests/e2e/reconcile-ui.spec.ts
@@ -43,11 +43,11 @@ function build() {
     items.push({ key: `row:${id}`, category: "unresolved", work_date: date, site_id: siteId, guard_id: null, shift_type_id: null, roster: null, system: null, unresolved_reason: reason });
   };
   // 啟航1331 式：同一人 9/1–9/15 連續 15 條
-  for (let d = 1; d <= 15; d++) add(`a${d}`, `2026-09-${String(d).padStart(2, "0")}`, "安員未配對", { name_raw: "甲測試", staff_no_raw: "U90001", tel_raw: TEL_A });
+  for (let d = 1; d <= 15; d++) add(`a${d}`, `2026-09-${String(d).padStart(2, "0")}`, "保安員未配對", { name_raw: "甲測試", staff_no_raw: "U90001", tel_raw: TEL_A });
   // HKU Y 更 9/25 式：單條，guard-fix 有對應 needs_boss
-  add("b1", "2026-09-25", "安員未配對", { name_raw: "乙測試", staff_no_raw: "U90002", tel_raw: "98760002", broker_code_raw: "Y", time_raw: "1900-0700" });
+  add("b1", "2026-09-25", "保安員未配對", { name_raw: "乙測試", staff_no_raw: "U90002", tel_raw: "98760002", broker_code_raw: "Y", time_raw: "1900-0700" });
   // 名冊完全冇相似
-  add("c1", "2026-09-26", "安員未配對", { name_raw: "庚獨行", staff_no_raw: "U90003" });
+  add("c1", "2026-09-26", "保安員未配對", { name_raw: "庚獨行", staff_no_raw: "U90003" });
   add("d1", "2026-09-27", "上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤", { name_raw: "甲測試", staff_no_raw: "U90001" }, null);
   add("e1", "2026-09-28", "雞頭碼「ZZ」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析", { name_raw: "戊測試", staff_no_raw: "U90005", broker_code_raw: "ZZ" });
   add("f1", "2026-09-29", "更別未配對", { name_raw: "戊測試", staff_no_raw: "U90005", raw_code: "XQ", time_raw: "0800-1600" });
@@ -144,7 +144,7 @@ const hrefOf = async (page: Page, testid: string, scope?: ReturnType<Page["locat
 test.describe("對數頁 1440", () => {
   test.use({ viewport: { width: 1440, height: 1000 } });
 
-  test("未配對行顯示更表原始資料、人話原因、15 條同一人合併、連結目標、相似安員、reparse", async ({ page }) => {
+  test("未配對行顯示更表原始資料、人話原因、15 條同一人合併、連結目標、相似保安員、reparse", async ({ page }) => {
     const st = await mockApis(page);
     await loginAs(page, "老闆");
     await page.goto(`/roster-uploads/${UP}/reconcile`);
@@ -160,7 +160,7 @@ test.describe("對數頁 1440", () => {
     await group.getByTestId("reconcile-group-toggle").click();
     await expect(page.getByTestId("reconcile-item-row")).toHaveCount(8);
 
-    // 合併摘要：電話只見尾 4、相似安員 3 個（工號相同 > 同名 > 電話尾 4），連去 /guards?q=
+    // 合併摘要：電話只見尾 4、相似保安員 3 個（工號相同 > 同名 > 電話尾 4），連去 /guards?q=
     await expect(group).toContainText("電話 ****0001");
     const sim = group.getByTestId("similar-guard");
     await expect(sim).toHaveCount(3);
@@ -262,7 +262,7 @@ test.describe("對數頁 1440", () => {
 
 test.describe("冇個人資料權限（主管）", () => {
   test.use({ viewport: { width: 1440, height: 1000 } });
-  test("顯示「冇權限睇姓名／工號」，唔出去安員配對修復連結，唔做相似提示", async ({ page }) => {
+  test("顯示「冇權限睇姓名／工號」，唔出去保安員配對修復連結，唔做相似提示", async ({ page }) => {
     await mockApis(page, { needsBoss: false, hidePii: true });
     await loginAs(page, "老闆");
     await page.goto(`/roster-uploads/${UP}/reconcile`);
@@ -358,13 +358,13 @@ test.describe("deep link 落地", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 分診對話框：安員配對題顯示 needs_boss 資料
+// 分診對話框：保安員配對題顯示 needs_boss 資料
 // ---------------------------------------------------------------------------
 function guardQuestion(id: string, title: string, summary: string, identity: string | null) {
   return {
     id,
     kind: "month_close_guard_match",
-    kind_label: "安員配對要核實",
+    kind_label: "保安員配對要核實",
     title,
     status: "open",
     options: [{ id: "mc_accept", label: "一撳確認" }, { id: "skip", label: "跳過" }],
@@ -381,8 +381,8 @@ async function mockTriage(page: Page) {
     json(route, {
       session: { id: "sess1", status: "open", counts: { open: 2, answered: 0, skipped: 0, total: 2 } },
       questions: [
-        guardQuestion("q1", "安員配對要核實（測試盤甲，1 格）", "測試盤甲 共 1 格嘅安員未配對：U Team 名單同名多過一個", "乙測試"),
-        guardQuestion("q2", "安員配對要核實（測試盤甲、測試盤乙，6 格）", "測試盤甲、測試盤乙 共 6 格嘅安員未配對：名單冇呢個人 (I002)", null),
+        guardQuestion("q1", "保安員配對要核實（測試盤甲，1 格）", "測試盤甲 共 1 格嘅保安員未配對：U Team 名單同名多過一個", "乙測試"),
+        guardQuestion("q2", "保安員配對要核實（測試盤甲、測試盤乙，6 格）", "測試盤甲、測試盤乙 共 6 格嘅保安員未配對：名單冇呢個人 (I002)", null),
       ],
     }),
   );
@@ -393,7 +393,7 @@ async function mockTriage(page: Page) {
   return st;
 }
 
-test.describe("分診對話框：安員配對題", () => {
+test.describe("分診對話框：保安員配對題", () => {
   test("桌面：姓名／工號／格數／reason＋相似提示＋連結；唔自動答", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const st = await mockTriage(page);

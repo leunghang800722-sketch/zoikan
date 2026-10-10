@@ -1,6 +1,6 @@
 // P1-執行計劃.md §4 WP4 item 3：糧明細報表（`糧明細:view/export`）——搬入
 // src/lib/reports/payroll.ts 出 API＋xlsx（同 `npm run report:regen` 同
-//一份 code）。逐雞頭結算單位一行；`?export=1` 匯出 xlsx（含逐安員明細
+//一份 code）。逐雞頭結算單位一行；`?export=1` 匯出 xlsx（含逐保安員明細
 // sheet）。
 import fs from "node:fs";
 import { NextResponse } from "next/server";

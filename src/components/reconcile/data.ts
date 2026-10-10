@@ -63,7 +63,7 @@ export interface SimilarState {
 }
 
 /**
- * 相似安員：先用已載入名冊算；冇結果先按需 `?q=<名>`、`?q=<工號>`（去抖 400ms，每個人最多兩次，
+ * 相似保安員：先用已載入名冊算；冇結果先按需 `?q=<名>`、`?q=<工號>`（去抖 400ms，每個人最多兩次，
  * 結果有快取）。包括離職員工（include_inactive=1）。純提示：唔配對、唔寫入。
  */
 export function useSimilarGuards(person: Person | null, dir: { rows: GuardLite[]; total: number; loaded: boolean }): SimilarState {

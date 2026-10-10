@@ -5,7 +5,7 @@
 //
 // 執行前提：`PW_PORT=3000 npx playwright test tests/e2e/roster-reconcile.spec.ts`，
 // dev DB 要已經 `npm run db:seed`。鐵則：呢個檔案冇任何真名／工號／電話
-// 字面——盤名／安員資料一律 runtime 查（`findSiteIdByName()`／
+// 字面——盤名／保安員資料一律 runtime 查（`findSiteIdByName()`／
 // `prisma`），唔寫死。自給自足＋`finally` 清走呢個 spec 自己寫落 dev DB
 // 嘅嘢（roster_uploads／roster_upload_rows／roster_reconcile_decisions／
 // 呢個 spec 自己新建嘅 shift_records）。
@@ -27,7 +27,7 @@ async function findTwoGuardsWithUNumber(): Promise<[{ id: string; nameZh: string
     take: 2,
     orderBy: { staffNo: "asc" },
   });
-  if (guards.length < 2) throw new Error("e2e setup: 搵唔到兩個 staffNo 開頭係 U 嘅在職安員");
+  if (guards.length < 2) throw new Error("e2e setup: 搵唔到兩個 staffNo 開頭係 U 嘅在職保安員");
   return [guards[0]!, guards[1]!] as [{ id: string; nameZh: string; staffNo: string; tel: string | null }, { id: string; nameZh: string; staffNo: string; tel: string | null }];
 }
 
@@ -72,7 +72,7 @@ test("老闆：上載→對數（roster_only）以更表為準套用→shift_rec
   const shiftType = await prisma.shiftType.findFirstOrThrow({ where: { siteId, voidedAt: null }, select: { id: true, code: true } });
 
   // 保證測試由乾淨狀態開始——清走呢個（site,month）舊嘅上載/對數決定，
-  // 同呢個 spec 專用嘅 work_date 上面兩個安員嘅 shift_records（如果之前
+  // 同呢個 spec 專用嘅 work_date 上面兩個保安員嘅 shift_records（如果之前
   // 有跑漏低）。
   await cleanupUploads(siteId);
   await prisma.shiftRecord.deleteMany({ where: { siteId, workDate: new Date(`${WORK_DATE_ISO}T00:00:00.000Z`), guardId: { in: [guardA.id, guardB.id] } } });

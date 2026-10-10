@@ -63,7 +63,7 @@ test("(a) 主管登入 → 開 2026-08 → 啟航1331 更表 → 複製上月 �
   const reloadedIndex = Number(await reloadedRow.getAttribute("data-row-index"));
   await expect(page.getByTestId(`roster-cell-${reloadedIndex}-15`)).toHaveText("AL", { timeout: 20_000 });
 
-  // Opus 對抗式驗收第三輪（B2）：新月份（8 月）匯出唔可以再係零安員行
+  // Opus 對抗式驗收第三輪（B2）：新月份（8 月）匯出唔可以再係零保安員行
   // ——呢度落單匯出 8 月 xlsx，斷言真係匯出到（同 (d) 果條 7 月匯出斷言
   // 對稱），確保 B2 個 fix（`allRecords` NULL-filter bug）喺真實 UI 路徑
   // （唔淨係 gate script 直接 call 函數）都生效。
@@ -153,7 +153,7 @@ test("(e) 主管開啟航1331 7 月更表 → 雞頭篩選（統計條撳一行 
   await loginAs(page, "主管");
   await page.goto(`/roster/${siteId}/2026-07`);
 
-  // 統計條同更表本身一齊喺初次載入 effect 出嚟——等第一個安員行出現，
+  // 統計條同更表本身一齊喺初次載入 effect 出嚟——等第一個保安員行出現，
   // 即代表編輯器已經載入完成（同其他 (a)-(d) 場景一致嘅等法）。
   await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
 

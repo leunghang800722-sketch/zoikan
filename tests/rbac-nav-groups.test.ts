@@ -120,7 +120,7 @@ describe("groupNavLinks（WP-R1 左欄分組，純顯示層）", () => {
 
 // A10（Opus 整合驗收）：`getViewGrants()` 之前唔理 baseRole 一律打
 // `GET /api/roles/:id/permissions`，但呢個 endpoint 要求「用戶管理:
-// view」——主管/會計/雞頭/安員呢 4 個 base_role 喺 matrix.ts 硬性 deny
+// view」——主管/會計/雞頭/保安員呢 4 個 base_role 喺 matrix.ts 硬性 deny
 // 咗成個「用戶管理」module，即係呢個 fetch 對呢 4 個角色**一定** 403，
 // 每次都經 `requirePermission()` 寫一行 `permission_denied` audit——
 // 一個頁面（layout+page 各打一次）就兩行，操作紀錄俾呢啲必敗嘅內部

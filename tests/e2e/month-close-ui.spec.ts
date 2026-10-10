@@ -12,7 +12,7 @@ function steps() {
   return [
     mk("precheck", "前置檢查", { prevMonthHasData: true, prevMonthLocked: true, siteMissingShiftTypeCount: 6, staffListAgeDays: 0, currentMonthLocked: false }),
     mk("parse_health", "解析健康", { uploadCount: 37, totalShiftCount: 3629, varianceFlagged: 8, varianceExplained: 7 }),
-    mk("guard_fix", "安員修復", { remainingNeedsBoss: 1, autoLinkedCells: 0 }),
+    mk("guard_fix", "保安員修復", { remainingNeedsBoss: 1, autoLinkedCells: 0 }),
     mk("longterm_settlement", "長工結算", { longtermRowsScanned: 1506, longtermRowsChanged: 115 }),
     mk("reconcile_apply", "全月對數套用", { uploadCount: 37, uploadsWithErrors: 0 }),
     mk("auto_pricing", "自動歸屬／定價", { cardsCreated: 1, recordsPriced: 12, settlementAssigned: 3 }),
@@ -82,7 +82,7 @@ const HEALTH = {
   summary: { critical: 2, warn: 1, info: 0, total: 3 },
   can_view_detail: true,
   findings: [
-    { code: "unmatched_cells", severity: "critical", count: 30, message: "30 格安員配對唔到（unmatched）", fix_link: "/guard-fix", detail: null, detail_truncated: false },
+    { code: "unmatched_cells", severity: "critical", count: 30, message: "30 格保安員配對唔到（unmatched）", fix_link: "/guard-fix", detail: null, detail_truncated: false },
     { code: "unpriced_payout", severity: "critical", count: 3, message: "3 更未有出街價", fix_link: "/pricing", detail: null, detail_truncated: false },
     { code: "name_only_cells", severity: "warn", count: 9, message: "9 格淨靠姓名配對（建議補工號或電話）", fix_link: "/roster-uploads", detail: null, detail_truncated: false },
   ],
@@ -180,7 +180,7 @@ test.describe("月結頁 1a 桌面", () => {
     // 鎖定前置
     await expect(page.locator('[data-lock-req="unconfirmed"]')).toContainText("2 個盤嘅更表未對數確認");
     await expect(page.locator('[data-lock-req="unpriced"]')).toContainText("即係「要你睇」入面嘅 2 題定價題");
-    await expect(page.getByTestId("month-health-card")).toContainText("30 格對唔到安員");
+    await expect(page.getByTestId("month-health-card")).toContainText("30 格對唔到保安員");
     await expect(page.getByTestId("month-health-card")).toContainText("＝ 要你睇 2 題");
     await expect(page.getByTestId("month-health-card")).not.toContainText("unmatched");
     await expect(page.getByTestId("lock-month")).toBeDisabled();

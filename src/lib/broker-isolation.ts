@@ -1,7 +1,7 @@
 // 雞頭隔離（設計文件§5.1 硬性規則1；P1-執行計劃.md §3 硬性規則1；Opus
 // 對抗式驗收 C1/C2 加固）：雞頭角色嘅 API 回應永遠唔含 client_rate*、
 // 毛利/gross/margin/profit 欄、其他 broker 任何記錄；寫入亦唔可以「憑空
-// 開更」幫唔屬於自己嘅安員／喺自己冇份嘅盤開更次。
+// 開更」幫唔屬於自己嘅保安員／喺自己冇份嘅盤開更次。
 //
 // 三重防線：
 //   (a) 歸屬檢查（C1）——寫入之前驗證 guard.default_broker_id=自己、同
@@ -52,7 +52,7 @@ export function isBrokerRole(session: AuthedSession): boolean {
 
 // WP-STAFFNO（Opus 驗收 M2b）：「內部角色」＝老闆／主管／會計——409
 // response 帶 `guard_id`（例如工號撞號）呢類結構化 detail 淨係俾內部
-// 角色見到，雞頭（＋理論上嘅「安員」自助角色）一律唔畀，唔靠「唔係雞頭
+// 角色見到，雞頭（＋理論上嘅「保安員」自助角色）一律唔畀，唔靠「唔係雞頭
 // 就畀」（`!isBrokerRole()`）咁鬆——用白名單（明列三個內部角色）先係
 // default-deny。
 const INTERNAL_ROLES = ["老闆", "主管", "會計"] as const;
@@ -69,7 +69,7 @@ export function requireOwnBrokerId(session: AuthedSession): string {
 // C1：寫入前歸屬檢查——「憑空開更＋guard嫁接」防線
 // ---------------------------------------------------------------------------
 
-/** 雞頭淨係可以幫 default_broker_id=自己嘅安員開更（唔可以「嫁接」第二個雞頭嘅人）。 */
+/** 雞頭淨係可以幫 default_broker_id=自己嘅保安員開更（唔可以「嫁接」第二個雞頭嘅人）。 */
 export async function assertGuardOwnedByBroker(guardId: string, brokerId: string): Promise<void> {
   const guard = await prisma.guard.findUnique({ where: { id: guardId }, select: { defaultBrokerId: true } });
   if (!guard || guard.defaultBrokerId !== brokerId) {

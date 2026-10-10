@@ -60,7 +60,7 @@ export interface MonthDiagnostics {
      * 呢個值只喺 reconcile 記憶體運算果一刻存在，`shift_records` 本身冇欄位存低（provenance
      * json 淨係 upload_id/row_id/version），所以呢度冇資料可以摘要，一律空陣列。 */
     shiftsBySettlementReason: Array<{ reason: string; count: number }>;
-    longtermGuardRowsOnBrokerCode: number; // 長工安員嘅更仍然掛 K/W/T/G/D/Y 嘅數
+    longtermGuardRowsOnBrokerCode: number; // 長工保安員嘅更仍然掛 K/W/T/G/D/Y 嘅數
     referralBrokerSetCount: number;
     referralBrokerNullCount: number;
   };

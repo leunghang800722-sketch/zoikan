@@ -119,7 +119,7 @@ describe("WP-ROSTER-UPLOAD：AI 隔離——zoikan_ai_ro 真連線攻擊測試",
     ws.getCell("A6").value = "TEST-BA";
     ws.getCell("D6").value = "T-A01";
     ws.getCell("E6").value = "6100001";
-    ws.getCell("F6").value = "測試安員甲——呢段文字唔應該俾AI讀到";
+    ws.getCell("F6").value = "測試保安員甲——呢段文字唔應該俾AI讀到";
     ws.getCell("G6").value = "N";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 

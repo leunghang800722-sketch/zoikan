@@ -6,7 +6,7 @@
 //
 // 直接起 `roster_uploads`／`roster_upload_rows`（唔經 xlsx 解析）——對數
 // 引擎只讀 DB，咁樣可以精準砌出子盤／OT／leave／重複行等情景。鐵則：
-// 全部合成資料（測試安員甲乙丙丁、TEST-* 雞頭碼）。
+// 全部合成資料（測試保安員甲乙丙丁、TEST-* 雞頭碼）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -210,8 +210,8 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
   });
 
   it("同日同更種 3 個人（更表甲乙丙、系統甲乙丁）→ match×2＋roster_only 丙＋system_only 丁，唔亂配 guard_diff", async () => {
-    const guardC = await prisma.guard.create({ data: { nameZh: "測試安員丙", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
-    const guardD = await prisma.guard.create({ data: { nameZh: "測試安員丁", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
+    const guardC = await prisma.guard.create({ data: { nameZh: "測試保安員丙", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
+    const guardD = await prisma.guard.create({ data: { nameZh: "測試保安員丁", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
     for (const g of [fx.guardA.id, fx.guardB.id, guardD.id]) {
       await prisma.shiftRecord.create({ data: { workDate: aug(12), siteId: fx.site.id, shiftTypeId: fx.shiftType.id, guardId: g, settlementBrokerId: g === fx.guardB.id ? fx.brokerB.id : fx.brokerA.id } });
     }
@@ -243,13 +243,13 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
 
   it("WP-LTSHIFT §2：長工有登記崗位盤（喺另一個盤），呢張上載嘅盤唔喺崗位入面 → 頂雞頭更，結算單位跟更表雞頭碼；冇雞頭碼→fallback＋settlement_inferred；雞頭碼對唔到→unresolved", async () => {
     const lt = await prisma.broker.create({ data: { code: "TEST-LT", name: "測試長工單位", kind: "internal_longterm", settlementType: "autopay", isInternal: true, createdBy: "t" } });
-    const longterm = await prisma.guard.create({ data: { nameZh: "測試安員戊", employmentType: "longterm_autopay", defaultBrokerId: lt.id, createdBy: "t" } });
+    const longterm = await prisma.guard.create({ data: { nameZh: "測試保安員戊", employmentType: "longterm_autopay", defaultBrokerId: lt.id, createdBy: "t" } });
     // 呢個長工嘅崗位盤登記喺「另一個盤」（唔係呢張上載嘅 fx.site）——
     // 咁樣先至真係測到「有崗位但呢更唔喺崗位盤，跟更表雞頭碼」呢條規則
     // （WP-LTSHIFT §2 第 2 點）；如果冇任何崗位記錄，新第一層會用本月
     // 占比推算，單一盤 100% 會被當自己崗位（B07），唔會跟雞頭碼——呢個
     // 先係任務書要修嘅 B3 bug 本身嘅正確行為，見另一個 it()。
-    const otherSite = await prisma.site.create({ data: { canonicalName: "測試安員戊崗位盤", clientName: "測試客戶WP2", billingModel: "per_shift", createdBy: "t" } });
+    const otherSite = await prisma.site.create({ data: { canonicalName: "測試保安員戊崗位盤", clientName: "測試客戶WP2", billingModel: "per_shift", createdBy: "t" } });
     await prisma.guardLongtermPost.create({ data: { guardId: longterm.id, siteId: otherSite.id, effectiveFrom: aug(1), source: "manual", createdBy: "t" } });
     const up = await mkUpload(fx, [
       { date: aug(14), guardId: longterm.id, settlementBrokerId: fx.brokerB.id, brokerCodeRaw: "TEST-BB" },
@@ -266,7 +266,7 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
 
   it("WP-LTSHIFT §2：長工完全冇崗位記錄，本月全部行喺同一個盤（占比 100%）→ 保守自動當自己崗位，結算單位＝internal_longterm（B07），operational 保留更表雞頭碼", async () => {
     const lt = await prisma.broker.create({ data: { code: "TEST-LT2", name: "測試長工單位2", kind: "internal_longterm", settlementType: "autopay", isInternal: true, createdBy: "t" } });
-    const longterm = await prisma.guard.create({ data: { nameZh: "測試安員己", employmentType: "longterm_autopay", defaultBrokerId: lt.id, createdBy: "t" } });
+    const longterm = await prisma.guard.create({ data: { nameZh: "測試保安員己", employmentType: "longterm_autopay", defaultBrokerId: lt.id, createdBy: "t" } });
     const up = await mkUpload(fx, [{ date: aug(14), guardId: longterm.id, settlementBrokerId: fx.brokerB.id, brokerCodeRaw: "TEST-BB" }]);
     const { items } = await reconcileUpload(up.id);
     const item = items.find((i) => i.workDate === "2026-08-14")!;
@@ -319,7 +319,7 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
   });
 
   it("一項撞 DB 錯誤（unique_violation）：其他項照 commit、回應逐項如實、冇孤兒 audit（SAVEPOINT）", async () => {
-    const guardC = await prisma.guard.create({ data: { nameZh: "測試安員丙", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
+    const guardC = await prisma.guard.create({ data: { nameZh: "測試保安員丙", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
     const up = await mkUpload(fx, [{ date: aug(2) }, { date: aug(3), guardId: fx.guardB.id, settlementBrokerId: fx.brokerB.id, brokerCodeRaw: "TEST-BB" }, { date: aug(4), guardId: guardC.id }]);
     await prisma.$executeRawUnsafe(
       `CREATE OR REPLACE FUNCTION zz_reconcile_test_fail() RETURNS trigger AS $$ BEGIN IF NEW.guard_id = '${fx.guardB.id}' AND NEW.work_date = DATE '2026-08-03' THEN RAISE unique_violation USING MESSAGE = 'test dup'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;`,
@@ -343,7 +343,7 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
   });
 
   it("v1 套用後上載 v2（改咗一個人）→ 淨係一項 guard_diff；套用後新記錄 provenance 指 v2", async () => {
-    const guardC = await prisma.guard.create({ data: { nameZh: "測試安員丙", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
+    const guardC = await prisma.guard.create({ data: { nameZh: "測試保安員丙", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, createdBy: "t" } });
     const v1 = await mkUpload(fx, [{ date: aug(1) }, { date: aug(1), guardId: fx.guardB.id, settlementBrokerId: fx.brokerB.id, brokerCodeRaw: "TEST-BB" }, { date: aug(5) }]);
     await applyAll(fx, v1.id, nonMatchToRoster);
     await prisma.rosterUpload.update({ where: { id: v1.id }, data: { status: "superseded" } });
@@ -358,7 +358,7 @@ describe("WP-ROSTER-UPLOAD Phase B-1 驗收：對數套用寫入語意", () => {
     await expect(applyAll(fx, v1.id, () => "apply_roster")).rejects.toThrow();
   });
 
-  it("API：雞頭／安員 GET reconcile、POST apply 一律 403；已鎖月份 POST apply → 403＋permission_denied audit；未指定盤 → 400", async () => {
+  it("API：雞頭／保安員 GET reconcile、POST apply 一律 403；已鎖月份 POST apply → 403＋permission_denied audit；未指定盤 → 400", async () => {
     const up = await mkUpload(fx, [{ date: aug(2) }]);
     const ctx = { params: Promise.resolve({ id: up.id }) };
     for (const role of ["雞頭", "安員"] as const) {

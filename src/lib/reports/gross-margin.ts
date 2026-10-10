@@ -14,7 +14,7 @@
 // 2. 毛利表列**所有喺呢個月有 shift_records 嘅盤**（Opus 驗收 A2 裁定），
 //    唔止 `buildMonthlyClose()` 嗰 40 個「有 P0 對數基準」嘅盤——多出嚟
 //    嘅盤（例如舊 P0 分類跌咗出 mainRows/outsideRows 之外，但實際上個
-//    月有安員出更）revenue 顯示 0（冇 P0 基準可以計佢哋嘅真實收客
+//    月有保安員出更）revenue 顯示 0（冇 P0 基準可以計佢哋嘅真實收客
 //    revenue，已知限制），cost 照樣逐項加總顯示，等長工月薪分攤總額
 //    可以真係等於 Σ monthly_salary（唔會因為個人跨咗去一個「唔存在」
 //    嘅盤度做更而漏咗嗰份分攤）。
@@ -104,7 +104,7 @@ export type GrossMarginResult = {
    * site（或者配對到嘅 site 冇顯示喺 `sites` 度）嘅部分——已經計入
    * totals.cost，但冇顯示喺任何一個盤嘅個別行。 */
   specialCostUnattributed: number;
-  /** Opus 驗收 A2：Σ本月有出更嘅 longterm_autopay 安員月薪（唔理其他
+  /** Opus 驗收 A2：Σ本月有出更嘅 longterm_autopay 保安員月薪（唔理其他
    * gate 條件）——同 `Σsite.longtermSalaryAllocated` 應該相等（容差
    * 0.05，見 gate:reports (g)）。 */
   longtermSalaryTotalAllocatable: number;

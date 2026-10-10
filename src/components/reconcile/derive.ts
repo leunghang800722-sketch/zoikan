@@ -1,5 +1,5 @@
 // WP-RECONCILE-UI（§33）：對數頁／月結分診共用嘅純函數——未配對原因分類＋人話、
-// 相似安員（純提示，唔配對唔寫入）、直達連結、needs_boss 對應。冇 React、冇 API 呼叫。
+// 相似保安員（純提示，唔配對唔寫入）、直達連結、needs_boss 對應。冇 React、冇 API 呼叫。
 
 // ---------------------------------------------------------------------------
 // 型別（wire format，snake_case，只取要用嘅欄）
@@ -67,7 +67,7 @@ export function personKey(p: Person): string {
   return `${normName(p.name)}|${normStaffNo(p.staffNo)}`;
 }
 
-/** 冇「安員個人資料」權限：rows API 會成個欄位剷走（唔係 null）。 */
+/** 冇「保安員個人資料」權限：rows API 會成個欄位剷走（唔係 null）。 */
 export const piiHidden = (r: object | null | undefined): boolean => !!r && !Object.prototype.hasOwnProperty.call(r, "name_raw") && !Object.prototype.hasOwnProperty.call(r, "staff_no_raw");
 
 export const hasPerson = (p: Person): boolean => !!(normName(p.name) || normStaffNo(p.staffNo));
@@ -81,7 +81,7 @@ export function personLabel(p: Person): string {
 }
 
 // ---------------------------------------------------------------------------
-// 相似安員（純提示）
+// 相似保安員（純提示）
 // ---------------------------------------------------------------------------
 export type SimilarWhy = "staff_no" | "name" | "tel4" | "surname_char";
 export const SIMILAR_WHY_LABEL: Record<SimilarWhy, string> = {
@@ -173,7 +173,7 @@ export function classifyReason(reason: string | null | undefined): ReasonPart[] 
       if (raw.includes("上載未指定盤")) return { kind: "no_site", raw };
       const bc = raw.match(/雞頭碼「(.*?)」對唔到/);
       if (bc) return { kind: "broker_code", raw, value: bc[1] };
-      if (raw.startsWith("安員未配對")) return { kind: "guard", raw };
+      if (/^保?安員未配對/.test(raw)) return { kind: "guard", raw };
       if (raw.includes("請假格推斷唔到")) return { kind: "leave_shift", raw };
       if (raw.startsWith("更別未配對")) return { kind: "shift_type", raw };
       if (raw.includes("更種已作廢")) return { kind: "voided_shift_type", raw };
@@ -183,7 +183,7 @@ export function classifyReason(reason: string | null | undefined): ReasonPart[] 
     });
 }
 
-/** 人話：安員未配對講明更表寫咗啲乜；其餘跟後端原句（本身已經係廣東話）。 */
+/** 人話：保安員未配對講明更表寫咗啲乜；其餘跟後端原句（本身已經係廣東話）。 */
 export function humanizeReasonPart(part: ReasonPart, person: Person | null, piiHidden = false): string {
   if (part.kind === "guard") {
     if (piiHidden) return "更表有一個保安員名冊搵唔到（冇權限睇姓名／工號）";
@@ -225,7 +225,7 @@ export const LINK = {
   triage: "/triage",
 } as const;
 
-/** 搵安員搜尋字：工號優先（唯一），冇就姓名。 */
+/** 搵保安員搜尋字：工號優先（唯一），冇就姓名。 */
 export const guardSearchTerm = (p: Person): string => p.staffNo.trim() || p.name.trim();
 
 // ---------------------------------------------------------------------------
@@ -246,7 +246,7 @@ export function matchNeedsBossForQuestion(q: { title: string; summary: string; i
     const bySeq = items.find((x) => x.seq === seqM[1]);
     if (bySeq) return bySeq;
   }
-  // 題目標題：「安員配對要核實（盤甲、盤乙，12 格）」
+  // 題目標題：「保安員配對要核實（盤甲、盤乙，12 格）」
   const t = q.title.match(/（(.*)[，,]\s*(\d+)\s*格）/);
   const siteLabels = t ? t[1]!.split("、").map((x) => x.trim()).filter(Boolean) : [];
   const cellCount = t ? Number(t[2]) : null;

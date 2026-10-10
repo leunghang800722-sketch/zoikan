@@ -1,4 +1,4 @@
-// WP-GUARD-FIX-UI：8 月（或指定月份）更表「未配對安員」自動修復——
+// WP-GUARD-FIX-UI：8 月（或指定月份）更表「未配對保安員」自動修復——
 // 純邏輯模組，舊 `scripts/guard-fix/build-guard-fix-plan.ts`（2026-09-28 已刪；老闆 Terminal
 // 用）同 `POST /api/guard-fix/plan`（老闆手機頁用）共用同一套判斷，
 // 唔准複製貼上一份新邏輯（WP-GUARD-FIX-UI 鐵則）。
@@ -243,7 +243,7 @@ interface PostorderPlanResult {
 
 /** WP-POSTORDER-PO-PAIRS：由 DB `guards` 表建兩個 name set，俾
  * `derivePostorderLongtermPostsFromPostorderGrid()` 呢個純函數用——
- * `all`＝`name_zh`＋`name_aliases`（NFKC 正規化，任何安員，用嚟濾走
+ * `all`＝`name_zh`＋`name_aliases`（NFKC 正規化，任何保安員，用嚟濾走
  * 一般客戶／盤名尾段啱啱好似人名嗰啲行）；`longterm`＝`all` 嘅子集，
  * 淨係 `employment_type` 已經係 `longterm_` 開頭嗰啲（幫罕見「外判價
  * 係數字但已經係長工」個案，見 `postorder.ts` 檔頭註解）。 */
@@ -566,9 +566,9 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       const strongEvidence = methodsFound.some((m) => m === byHkid) || methodsFound.length >= 2 || snCorroborates;
       const refuse =
         snOwner && snOwner !== guardId
-          ? "更表工號已經屬 DB 另一位安員，同電話／名單判斷到嘅人唔一致"
+          ? "更表工號已經屬 DB 另一位保安員，同電話／名單判斷到嘅人唔一致"
           : hasOtherCurrentSameScheme
-            ? "更表工號同目標安員現有工號唔同（加咗會令佢現有號變已取消），可能係兩個人"
+            ? "更表工號同目標保安員現有工號唔同（加咗會令佢現有號變已取消），可能係兩個人"
             : !strongEvidence
               ? `淨係一種弱證據（${methodsFound.map((m) => m.method).join("／")}），可能係家人／雞頭共用電話或同名唔同人`
               : null;
@@ -595,9 +595,9 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
       const sameNameInDb = (guardIndex.byName.get(identity.nameRaw)?.length ?? 0) + (guardIndex.byAlias.get(identity.nameRaw)?.length ?? 0);
       if (snOwnedByOther && snNormForReason && sameNameInDb === 0) {
         // 驗收（Opus 5.5，2026-09-26）：老闆指令唔准留「要老闆決定」——保守
-        // 預設：工號屬另一人、DB 冇同名安員 → 按更表姓名（＋更表電話）建
-        // 獨立安員（cash_casual、無工號），寫 guard_match_overrides 令呢個
-        // 「工號＋姓名」組合 reparse 配返新安員；唔會搶走工號主人嘅記錄
+        // 預設：工號屬另一人、DB 冇同名保安員 → 按更表姓名（＋更表電話）建
+        // 獨立保安員（cash_casual、無工號），寫 guard_match_overrides 令呢個
+        // 「工號＋姓名」組合 reparse 配返新保安員；唔會搶走工號主人嘅記錄
         // （B1-8 原則不變），audit＋override.reason 留「工號衝突待核」。
         createMinimal.push({
           type: "create_minimal",
@@ -605,7 +605,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
           nameZh: identity.nameRaw,
           tel: identity.telRaw ? normalizeTel(identity.telRaw) : null,
           defaultBrokerCode,
-          reason: "更表工號屬 DB 另一位安員（姓名對唔上）——保守預設：按更表姓名建獨立安員（無工號），工號衝突待核",
+          reason: "更表工號屬 DB 另一位保安員（姓名對唔上）——保守預設：按更表姓名建獨立保安員（無工號），工號衝突待核",
           conservative: "staff_no_conflict",
           matchOverrideStaffNo: snNormForReason,
         });
@@ -616,7 +616,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
         code: snOwnedByOther ? "staff_no_conflict" : "ambiguous",
         seq: identity.seq,
         reason: snOwnedByOther
-          ? "更表工號屬 DB 另一位安員（姓名對唔上，唔准配），電話／身份證都判斷唔到係邊個，交老闆睇"
+          ? "更表工號屬 DB 另一位保安員（姓名對唔上，唔准配），電話／身份證都判斷唔到係邊個，交老闆睇"
           : "DB 同名多人，工號／電話／身份證都判斷唔到邊一個，交老闆睇",
         candidateGuardIds: [...(guardIndex.byName.get(identity.nameRaw) ?? [])],
       });
@@ -641,9 +641,9 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
         uRow.hkidNote === "mentions_other_number"
           ? "名單身份證欄備註話呢個人用緊另一個工號（DB 可能已經有呢個人）"
           : uRowHkidCanon && hkidIndex.has(uRowHkidCanon)
-            ? "名單身份證已經喺 DB（同身份證已有安員），唔可以再起一個"
+            ? "名單身份證已經喺 DB（同身份證已有保安員），唔可以再起一個"
             : uNumberForCreate && staffNoOwner.has(uNumberForCreate)
-              ? "名單工號已經屬 DB 另一位安員（任何狀態，含已取消——規則 8 唔復用）"
+              ? "名單工號已經屬 DB 另一位保安員（任何狀態，含已取消——規則 8 唔復用）"
               : !uRowByNumber && (!rowTel || !uRow.tel || rowTel !== uRow.tel)
                 ? !rowTel || !uRow.tel
                   ? "淨係靠姓名喺名單搵到，更表／名單冇電話可以核對（可能同名唔同人）"
@@ -651,7 +651,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
                 : null;
       // 驗收（Opus 5.5，2026-09-26）：「淨係靠姓名喺名單搵到」嘅兩種（名單／
       // 更表冇電話核對、或者電話對唔上）唔再留 needs_boss——保守預設：唔用
-      // 名單嗰行資料（可能係同名另一人），按更表姓名＋更表電話建獨立安員
+      // 名單嗰行資料（可能係同名另一人），按更表姓名＋更表電話建獨立保安員
       // （cash_casual、無工號、無身份證），待核。其餘拒絕原因（身份證／
       // 工號已喺 DB）照舊交老闆（嗰啲係「DB 可能已經有呢個人」，唔可以
       // 再起一個）。
@@ -663,7 +663,7 @@ export async function buildGuardFixPlan(opts: BuildGuardFixPlanOptions): Promise
           nameZh: identity.nameRaw,
           tel: rowTel,
           defaultBrokerCode,
-          reason: `${refuse}——保守預設：唔用名單資料，按更表姓名建獨立安員（無工號），待核`,
+          reason: `${refuse}——保守預設：唔用名單資料，按更表姓名建獨立保安員（無工號），待核`,
           conservative: "name_only_unverified",
           matchOverrideStaffNo: null,
         });

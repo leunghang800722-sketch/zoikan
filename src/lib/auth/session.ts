@@ -15,7 +15,7 @@ export interface SessionData {
   roleName: string; // 顯示名——可以係自訂角色（例：「高級雞頭」）
   baseRole: string; // Opus 驗收殘留2：硬性 deny 矩陣查詢用呢個（複製來源，五個出廠角色=自己個name），唔用 roleName
   brokerId: string | null; // 雞頭登入先有值
-  guardId: string | null; // 安員登入先有值（P1 唔用，預留）
+  guardId: string | null; // 保安員登入先有值（P1 唔用，預留）
   payoutApprovalLimit: string | null; // Decimal 轉 string 存，用時再 parse
   tokenVersion: number; // Opus 驗收殘留1：session 作廢——每請求同 DB users.token_version 核對
   loggedInAt: string; // ISO——絕對上限由此起計，續期唔改

@@ -79,7 +79,7 @@ describe("WP-POSTORDER-PAIRS-CSV：POST /api/guard-fix/postorder longterm_pairs_
     expect(row?.postorderCsvBytes).toBeTruthy();
   });
 
-  it("雞頭上載 → 403（安員配對修復淨係老闆）", async () => {
+  it("雞頭上載 → 403（保安員配對修復淨係老闆）", async () => {
     const res = await uploadPostorder(reqMultipartPairsCsv("http://test.local/api/guard-fix/postorder", brokerCookie, VALID_PAIRS_CSV, null, "2026-08-01"));
     expect(res.status).toBe(403);
   });

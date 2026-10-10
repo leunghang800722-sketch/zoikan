@@ -1,6 +1,6 @@
 // P1-WP3（第二輪規劃裁定，2026-09-12）：反推每個 site 嘅更表「序列骨架」
 // （`sites.roster_layout`）——逐行行過原檔（`data/2026-07/*.xlsx`），
-// 配合 `tools/importer/out/wp1/rows.csv`（邊行係安員行、邊個 block）、
+// 配合 `tools/importer/out/wp1/rows.csv`（邊行係保安員行、邊個 block）、
 // `tools/importer/out/wp2b/shift_records.csv`（file→DB site_id、
 // roster_broker_code）、`tools/importer/out/wp2b/shift_types.csv`
 // （(site_id,time_slot,rank)→code）逐行分類做 section：banner／header／
@@ -82,7 +82,7 @@ function isBlankCellValue(cell: ExcelJS.Cell): boolean {
 }
 
 /** 原檔有啲檔喺日期欄之後多一格「行內合計」（例如
- * `COUNTIF(G5:AK5,"D")`——一個安員嗰行自己嘅月更數，或者 Total 行嘅
+ * `COUNTIF(G5:AK5,"D")`——一個保安員嗰行自己嘅月更數，或者 Total 行嘅
  * `SUM(G10:AK10)`）。用嗰行第一格（`labelCol+JULY_DAYS+1`）有冇嘢嚟
  * 判斷。 */
 function hasTrailingTotalAt(ws: ExcelJS.Worksheet, row: number, labelCol: number): boolean {
@@ -167,7 +167,7 @@ export async function seedRosterLayouts(
   // 字面）——原因：`(site_id, code, start_time)` 先至係 unique，同一個
   // site 入面兩個唔同 shift_type 可以有**一樣嘅 code**（例：啟航1331
   // 早/夜兩個 Zone IC 都叫 "IC"）。如果用 code 字串嚟揀「呢個 section
-  // 揀邊啲 guard」，會將唔同 shift_type、但 code 撞名嘅安員錯誤咁撈埋
+  // 揀邊啲 guard」，會將唔同 shift_type、但 code 撞名嘅保安員錯誤咁撈埋
   // 同一行，導致成個檔案 row 數對唔返原檔（實測 3172/啟航1331 都撞到
   // 呢個 bug）。用 DB id 先保證每個 section 揀返*嗰一個*shift_type。
   const dbShiftTypeIdByKey = new Map<string, string>(); // site_id|time_slot|rank -> DB shift_type.id
@@ -348,7 +348,7 @@ export async function seedRosterLayouts(
       }
 
       // P1-WP3 第三輪規劃裁定（2026-09-12）：**唔准用啟發式分辨「齊整定
-      // 交錯」**——一個 block 嘅成個安員區域一律開**一個** guard_rows
+      // 交錯」**——一個 block 嘅成個保安員區域一律開**一個** guard_rows
       // section，記低 `rowFrom`/`rowTo`（原檔 row 範圍）。Export 時直接
       // 用 provenance.cell 嘅 row 喺呢個範圍之內嘅記錄，照 row 次序逐行
       // 出（有記錄先出，冇就係 blank_guard_row）——自然還原原檔逐行
@@ -362,7 +362,7 @@ export async function seedRosterLayouts(
         if (firstGuardRow > cursor) sections.push({ kind: "blank", rows: firstGuardRow - cursor });
         // Gate 1 階段 1（純加法）：逐行捕捉 raw 字面，做 `rawRows`
         // fallback——蓋住「呢一行成個 7 月都冇任何一日有值，冇對應
-        // shift_record 可以掛 provenance.raw_row」嘅安員行（見
+        // shift_record 可以掛 provenance.raw_row」嘅保安員行（見
         // `scripts/seed/lib/roster-raw.ts` 頂註解、`src/lib/
         // roster-export.ts` 嘅揀選優先次序）。
         const rawRows: Record<string, RawRow> = {};

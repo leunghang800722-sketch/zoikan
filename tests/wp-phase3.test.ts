@@ -1,9 +1,9 @@
 // WP-PHASE3（§20.4 Phase 3，老闆 2026-09-27 指令）：長工／價卡日常維護
-// 做入系統——安員抽屜「長工」區、「轉長工」一步動作、價目卡「複製上月
+// 做入系統——保安員抽屜「長工」區、「轉長工」一步動作、價目卡「複製上月
 // 卡到本月」。
 //
 // §1 guard_longterm_posts CRUD（GET/POST/PATCH）＋RBAC（老闆／主管可
-//    寫，雞頭硬性 403，會計出廠冇「安員:update」403）
+//    寫，雞頭硬性 403，會計出廠冇「保安員:update」403）
 // §2 guards PATCH referral_broker_id／visa_sponsored_by_broker_id——寫入
 //    ／清空／雞頭結構性睇唔到
 // §3 POST /api/guards/:id/convert-to-longterm——一步轉長工（employment_
@@ -68,7 +68,7 @@ describe("WP-PHASE3 §1：guard_longterm_posts CRUD + RBAC", () => {
     expect(audits.some((a) => a.action === "update")).toBe(true);
   });
 
-  it("主管出廠有「安員:update」→ POST 一樣 201", async () => {
+  it("主管出廠有「保安員:update」→ POST 一樣 201", async () => {
     const res = await postsCreate(
       req(`http://test.local/api/guards/${fx.guardA.id}/longterm-posts`, supervisorCookie, "POST", { site_id: fx.site.id, effective_from: "2026-08-01" }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
@@ -76,7 +76,7 @@ describe("WP-PHASE3 §1：guard_longterm_posts CRUD + RBAC", () => {
     expect(res.status).toBe(201);
   });
 
-  it("會計出廠冇「安員:update」（off）→ POST 403", async () => {
+  it("會計出廠冇「保安員:update」（off）→ POST 403", async () => {
     const res = await postsCreate(
       req(`http://test.local/api/guards/${fx.guardA.id}/longterm-posts`, accountantCookie, "POST", { site_id: fx.site.id, effective_from: "2026-08-01" }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
@@ -138,7 +138,7 @@ describe("WP-PHASE3 §2：guards PATCH referral_broker_id／visa_sponsored_by_br
     expect(Object.prototype.hasOwnProperty.call(body2, "referral_broker_id")).toBe(true);
   });
 
-  it("雞頭讀自己安員——結構性見唔到呢兩欄（GUARD_BROKER_FIELDS 冇加）", async () => {
+  it("雞頭讀自己保安員——結構性見唔到呢兩欄（GUARD_BROKER_FIELDS 冇加）", async () => {
     await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, await sessionCookieForUser(fx.userIds["老闆"]), "PATCH", { referral_broker_id: fx.brokerA.id }), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });

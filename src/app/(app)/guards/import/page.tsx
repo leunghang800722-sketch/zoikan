@@ -1,5 +1,5 @@
 "use client";
-// WP-STAFF-IMPORT B3：安員證件資料批量導入（老闆／會計／主管；WP-AI-OPS §28.4 開放）。
+// WP-STAFF-IMPORT B3：保安員證件資料批量導入（老闆／會計／主管；WP-AI-OPS §28.4 開放）。
 //   ① 揀本機產生嘅導入包（import-package.json，淨文字）→ ② 預覽統計（逐欄 confirmed／review／missing
 //   ＋逐人 link／create／conflict／needs_review）→ ③「套用自動項」（淨寫 confirmed 欄）→ ④ 覆核清單：
 //   review 欄逐欄「確認／改正後確認／略過」。
@@ -69,7 +69,7 @@ const FIELD_LABEL: Record<string, string> = {
 };
 const PKG_KEY: Record<string, keyof PkgPerson> = { name_zh: "nameZh", name_en: "nameEn", date_of_birth: "dateOfBirth", phone: "phone", address: "address" };
 const REVIEWABLE = ["name_zh", "name_en", "date_of_birth", "phone", "address"] as const;
-const ACTION_LABEL: Record<string, string> = { link: "對上現有安員", create: "新增安員", conflict: "衝突", needs_review: "要人手" };
+const ACTION_LABEL: Record<string, string> = { link: "對上現有保安員", create: "新增保安員", conflict: "衝突", needs_review: "要人手" };
 const CHECK_LABEL: Record<string, string> = { new: "新", fill: "補空欄", same: "同現值一樣", differs: "同現值唔同", conflict: "衝突", missing: "冇", not_stored: "唔儲存", invalid_date: "日期唔合法" };
 
 interface Row {
@@ -209,15 +209,15 @@ export default function GuardImportPage() {
     }
     if (res.data.results?.some((x) => x.reasons.includes("overwrite_forbidden"))) {
       const lt = res.data.results.some((x) => x.reasons.includes("longterm_hire_via_triage"));
-      setDone((d) => ({ ...d, [`${index}:${field}`]: lt ? "未處理：長工入職日期會影響長工糧計算，要喺分診題逐條確認" : "未處理：要有安員個人資料／安員修改權限嘅同事處理" }));
+      setDone((d) => ({ ...d, [`${index}:${field}`]: lt ? "未處理：長工入職日期會影響長工糧計算，要喺分診題逐條確認" : "未處理：要有保安員個人資料／保安員修改權限嘅同事處理" }));
       return;
     }
     const conflict = !res.data.counts_hidden && res.data.field_conflicts > 0;
-    setDone((d) => ({ ...d, [`${index}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有安員個人資料權限先睇到）" : "已確認" }));
+    setDone((d) => ({ ...d, [`${index}:${field}`]: action === "skip" ? "已略過" : conflict ? "同現值唔同（未覆蓋；用「改正後確認」可覆蓋）" : res.data.counts_hidden ? "已提交（結果要有保安員個人資料權限先睇到）" : "已確認" }));
     // 唔再每次決定後重新 preview：preview 對非老闆有每日次數上限，而且 done 已記低結果
   }
 
-  // 冇修改權限：replace 類選項預先停用（server 一樣會 403）。出生日期／地址要「安員個人資料」修改權；姓名要「安員」修改權
+  // 冇修改權限：replace 類選項預先停用（server 一樣會 403）。出生日期／地址要「保安員個人資料」修改權；姓名要「保安員」修改權
   // 只有覆蓋現有非空值先要權限：現有係空（fill）或者新建（new）屬補空欄，得
   const replaceDenied = (f: string, check: string): boolean => {
     if (check === "fill" || check === "new") return false;
@@ -228,7 +228,7 @@ export default function GuardImportPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader kicker="主檔" title="安員證件資料導入" subtitle="上載本機產生嘅導入包 → 預覽 → 套用自動項 → 覆核待確認欄。導入包唔會存入系統。" />
+      <PageHeader kicker="主檔" title="保安員證件資料導入" subtitle="上載本機產生嘅導入包 → 預覽 → 套用自動項 → 覆核待確認欄。導入包唔會存入系統。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
@@ -324,7 +324,7 @@ export default function GuardImportPage() {
                         {r.bank_masked && "account_masked" in r.bank_masked ? (
                           <span className="break-all">{r.bank_masked.name ?? r.bank_masked.code ?? "—"} · 戶口 {showFull[r.index] && full ? full : (r.bank_masked.account_masked ?? "—")}</span>
                         ) : (
-                          <span className="text-zk-faint">有銀行資料（你冇「安員銀行資料」睇權，唔顯示）</span>
+                          <span className="text-zk-faint">有銀行資料（你冇「保安員銀行資料」睇權，唔顯示）</span>
                         )}
                         {full && (
                           <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-[11.5px]" onClick={() => setShowFull((m) => ({ ...m, [r.index]: !m[r.index] }))}>
@@ -342,7 +342,7 @@ export default function GuardImportPage() {
             </div>
           )}
           <div className="rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-auto-summary">
-            自動套用（淨寫已確認欄）：{preview.auto_apply.persons} 人 · 新增安員 {preview.auto_apply.guards_to_create} · 補欄 {preview.auto_apply.guard_fields_to_fill} ·
+            自動套用（淨寫已確認欄）：{preview.auto_apply.persons} 人 · 新增保安員 {preview.auto_apply.guards_to_create} · 補欄 {preview.auto_apply.guard_fields_to_fill} ·
             電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} {preview.counts_hidden ? "" : `· 現值唔同（唔覆蓋）${preview.auto_apply.field_conflicts}`}
             <div className="mt-2 flex items-center gap-2">
               {!confirming ? (
@@ -410,8 +410,8 @@ export default function GuardImportPage() {
                           aria-label={`${FIELD_LABEL[f]}抽取值`}
                         />
                         {current ? <div className="mt-0.5 text-[11.5px] text-zk-faint">現值：{current}</div> : null}
-                        {!current && r.current_name_hidden && (f === "name_zh" || f === "name_en") ? <div className="mt-0.5 text-[11.5px] text-zk-faint">姓名同現有安員紀錄唔同（要有安員個人資料權限先睇到）</div> : null}
-                        {replaceDenied(f, r.fields[f]?.check ?? "") ? <div className="mt-0.5 text-[11.5px] text-orange-700">呢條要有安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
+                        {!current && r.current_name_hidden && (f === "name_zh" || f === "name_en") ? <div className="mt-0.5 text-[11.5px] text-zk-faint">姓名同現有保安員紀錄唔同（要有保安員個人資料權限先睇到）</div> : null}
+                        {replaceDenied(f, r.fields[f]?.check ?? "") ? <div className="mt-0.5 text-[11.5px] text-orange-700">呢條要有保安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
                       </div>
                       <div className="flex items-center gap-1.5">
                         {done[k] ? (

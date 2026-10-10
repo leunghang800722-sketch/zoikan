@@ -1,6 +1,6 @@
 // §20.4 Phase 4：`GET /api/reports/postorder/:month` RBAC + audit
 // integration test——老闆／會計可下載，主管出廠 403（可由老闆開）、
-// 雞頭／安員硬性 403；下載會寫 audit_log（action=export_download）。
+// 雞頭／保安員硬性 403；下載會寫 audit_log（action=export_download）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -30,7 +30,7 @@ describe("GET /api/reports/postorder/:month", () => {
     guardCookie = await sessionCookieForUser(fx.userIds["安員"]);
   });
 
-  it("主管／雞頭／安員 403（出廠矩陣「月結總表」export 唔開）", async () => {
+  it("主管／雞頭／保安員 403（出廠矩陣「月結總表」export 唔開）", async () => {
     for (const cookie of [supervisorCookie, brokerCookie, guardCookie]) {
       const res = await getPostorderExport(req("http://test.local/api/reports/postorder/2026-08", cookie), params("2026-08"));
       expect(res.status).toBe(403);

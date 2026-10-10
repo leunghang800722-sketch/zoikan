@@ -86,7 +86,7 @@ describe("WP-ONE-CLICK：一鍵全月結算", () => {
       expect(getRes.status).toBe(403);
     });
 
-    it("安員 403", async () => {
+    it("保安員 403", async () => {
       const cookie = await sessionCookieForUser(fx.userIds["安員"]);
       const res = await startOneClick(reqJson("http://x/api/month-close/one-click", cookie, "POST", { month: "2026-09" }));
       expect(res.status).toBe(403);

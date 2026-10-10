@@ -269,7 +269,7 @@ describe("POST /api/guards/ocr/read", () => {
     expect(isGuardOcrConfigured()).toBe(true);
   });
 
-  it("權限：老闆／會計／主管 200；雞頭／安員 403；未登入 401", async () => {
+  it("權限：老闆／會計／主管 200；雞頭／保安員 403；未登入 401", async () => {
     setVisionClientForTests(fakeVision().client);
     for (const c of [owner, accountant, supervisor]) expect((await call(c, body([doc()]))).status).toBe(200);
     expect((await call(await sessionCookieForUser(fx.userIds["雞頭"]), body([doc()]))).status).toBe(403);
@@ -484,20 +484,20 @@ describe("single_ocr 單人導入包", () => {
     expect((await post(previewRoute, owner, { package: batch, decisions: { [batch.persons[0]!.key]: { phone: { action: "confirm" } } } })).status).toBe(400);
   });
 
-  it("projection 保護對單人包一樣生效：冇「安員個人資料:view」（主管）preview／apply 回應剝走現值比較；經 hkid 對中而姓名唔同唔回名", async () => {
-    await prisma.guard.create({ data: { nameZh: "既有安員乙", employmentType: "cash_casual", hkid: H, createdBy: "t" } });
+  it("projection 保護對單人包一樣生效：冇「保安員個人資料:view」（主管）preview／apply 回應剝走現值比較；經 hkid 對中而姓名唔同唔回名", async () => {
+    await prisma.guard.create({ data: { nameZh: "既有保安員乙", employmentType: "cash_casual", hkid: H, createdBy: "t" } });
     const pkg = pkgOf([onePerson({ name: SYN_NAME })]);
     const sup = await (await post(previewRoute, supervisor, { package: pkg })).json();
     expect(sup.rows[0].fields.hkid.check).toBe("hidden");
-    expect(JSON.stringify(sup)).not.toContain("既有安員乙");
+    expect(JSON.stringify(sup)).not.toContain("既有保安員乙");
     const acc = await (await post(previewRoute, accountant, { package: pkg })).json();
     expect(acc.rows[0].fields.hkid.check).toBe("same");
     const ap = await (await post(applyRoute, supervisor, { package: pkg, package_hash: sup.package_hash })).json();
     expect(ap.results[0].fields.hkid).toBe("not_written");
-    expect(JSON.stringify(ap)).not.toContain("既有安員乙");
+    expect(JSON.stringify(ap)).not.toContain("既有保安員乙");
   });
 
-  it("覆蓋權：冇「安員個人資料:update」嘅主管，單人包 replace 覆蓋現有非空出生日期 → 逐人 savepoint 擋（overwrite_forbidden），冇寫入", async () => {
+  it("覆蓋權：冇「保安員個人資料:update」嘅主管，單人包 replace 覆蓋現有非空出生日期 → 逐人 savepoint 擋（overwrite_forbidden），冇寫入", async () => {
     const g = await prisma.guard.create({ data: { nameZh: SYN_NAME, employmentType: "cash_casual", hkid: H, dateOfBirth: new Date("1985-01-01T00:00:00.000Z"), createdBy: "t" } });
     const pkg = pkgOf([onePerson({ dobStatus: "review" })]);
     const key = pkg.persons[0]!.key;
@@ -546,7 +546,7 @@ describe("single_ocr 單人導入包", () => {
   });
 
   it("單人包完成後如有剩低要人手嘅題目，apply 回應帶 triage（照樣彈 TriageDialog）", async () => {
-    // 同名但冇身份證嘅現有安員 → name_only 候選 → needs_review → 出分診題
+    // 同名但冇身份證嘅現有保安員 → name_only 候選 → needs_review → 出分診題
     await prisma.guard.create({ data: { nameZh: SYN_NAME, employmentType: "cash_casual", createdBy: "t" } });
     const pkg = pkgOf([onePerson()]);
     const pj = await (await post(previewRoute, owner, { package: pkg })).json();

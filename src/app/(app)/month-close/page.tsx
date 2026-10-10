@@ -119,7 +119,7 @@ export default function MonthCloseOneClickPage() {
 
   // Opus 驗收：正式站操作員淨係上載得 CSV（讀唔到 .xlsm binary）——按副檔名／檔名分流到
   // `POST /api/guard-fix/postorder` 現有嘅四個入口（xlsm／roster_csv＋postorder_csv／
-  // longterm_pairs_csv／淨 postorder_csv），同「安員配對修復」頁一致。
+  // longterm_pairs_csv／淨 postorder_csv），同「保安員配對修復」頁一致。
   async function uploadPostorder() {
     if (postorderFiles.length === 0) return;
     setBusy(true);

@@ -66,7 +66,7 @@ describe("computeReferralFees（純函數）", () => {
     expect(r.warnings).toEqual([{ guardId: "guard-1", brokerId: "broker-k", siteId: "site-a", shifts: 5, reason: expect.stringContaining("冇設介紹費率") }]);
   });
 
-  it("冇 referral_broker 嘅安員——B07 更數唔計入任何雞頭（唔屈估邊個介紹）", () => {
+  it("冇 referral_broker 嘅保安員——B07 更數唔計入任何雞頭（唔屈估邊個介紹）", () => {
     const r = computeReferralFees({
       guards: [],
       shiftCounts: [{ guardId: "guard-1", siteId: "site-a", count: 5 }],

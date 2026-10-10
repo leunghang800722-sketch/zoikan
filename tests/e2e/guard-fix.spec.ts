@@ -70,7 +70,7 @@ async function cleanup(siteId: string) {
   const created = await prisma.guard.findFirst({ where: { nameZh: TEST_NAME } });
   if (created) {
     // FK RESTRICT——guard_phones/guard_staff_numbers 要先刪先可以刪 guard
-    // 本身（同 guards.ts §鐵則一致：cash_casual 呢類測試安員全部經
+    // 本身（同 guards.ts §鐵則一致：cash_casual 呢類測試保安員全部經
     // apply.ts 嘅正常路徑起，一樣要跟正常刪除順序清走）。
     // audit_log 係 append-only（DB trigger 拒絕 UPDATE/DELETE），唔清——
     // 淨係清 guard_phones/guard_staff_numbers（FK RESTRICT 擋住刪 guard）。
@@ -104,7 +104,7 @@ test("老闆：上載 U Team 名單 → 計算修復計劃 → 套用 → 對數
     expect(uploadRes.status()).toBe(201);
 
     await page.goto("/guard-fix");
-    await expect(page.getByRole("heading", { name: "未配對安員修復" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "未配對保安員修復" })).toBeVisible();
 
     // ① 上載 U Team 名單。
     const uTeamBuf = await buildUTeamXlsx();
@@ -121,7 +121,7 @@ test("老闆：上載 U Team 名單 → 計算修復計劃 → 套用 → 對數
     await page.getByRole("button", { name: "計算修復計劃" }).click();
     const planRes = await planResponse;
     expect(planRes.status()).toBe(201);
-    await expect(page.getByText("新建安員")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("新建保安員")).toBeVisible({ timeout: 15_000 });
 
     // ③ 套用。
     await page.getByRole("button", { name: "③ 套用" }).click();
@@ -129,7 +129,7 @@ test("老闆：上載 U Team 名單 → 計算修復計劃 → 套用 → 對數
     await page.getByRole("button", { name: "確認套用" }).click();
     await expect(page.getByText("已套用完成")).toBeVisible({ timeout: 30_000 });
 
-    // 新安員真係建咗，reparse 完之後呢行更表配到呢個新安員。
+    // 新保安員真係建咗，reparse 完之後呢行更表配到呢個新保安員。
     const created = await prisma.guard.findFirst({ where: { nameZh: TEST_NAME } });
     expect(created).not.toBeNull();
     const uploadAfter = await prisma.rosterUpload.findFirstOrThrow({ where: { siteId, month: TEST_MONTH_DATE, fileName: "e2e-guard-fix-roster.xlsx" } });
@@ -141,9 +141,9 @@ test("老闆：上載 U Team 名單 → 計算修復計劃 → 套用 → 對數
   }
 });
 
-test("雞頭：未配對安員修復硬性 403（連導航都見唔到條連結）", async ({ page }) => {
+test("雞頭：未配對保安員修復硬性 403（連導航都見唔到條連結）", async ({ page }) => {
   await loginAs(page, "雞頭A");
-  await expect(page.getByRole("link", { name: "未配對安員修復" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "未配對保安員修復" })).toHaveCount(0);
   const res = await page.request.get("/api/guard-fix/staff-list");
   expect(res.status()).toBe(403);
 });

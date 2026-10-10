@@ -11,7 +11,7 @@
 // 做唔做到全部 0-diff 老實報數，唔砌數。
 //
 // **Gate 1 現況（2026-09-12 分階段規劃裁定後）**：21/21 份 0-diff，exit 0
-// ——`src/lib/roster-export.ts` 逐個安員行／banner／header／total_group
+// ——`src/lib/roster-export.ts` 逐個保安員行／banner／header／total_group
 // 優先用 seed 時由原檔逐行讀出嘅 raw 字面（`provenance.raw_row`／
 // `roster_layout` 嘅 `rawRow(s)`，見嗰個檔案頂註解），DB 推導淨係喺
 // raw 字面唔存在（新月份）先用返。
@@ -243,7 +243,7 @@ function matchSiteForFile<T extends { canonicalName: string; aliases: string[] }
 type CellBucket = { same: number; diff: number; excluded: number };
 // A1（Opus 對抗式驗收第三輪）：`raw_fallback_cells` 逐檔記低「呢個 block
 // 用咗 raw-literal fallback（唔係純 DB 推導）」嘅行數，分 external（呢行
-// 喺冇 isExternal/source 濾走嘅版本其實有紀錄——即外援/借調安員，DB 冇
+// 喺冇 isExternal/source 濾走嘅版本其實有紀錄——即外援/借調保安員，DB 冇
 // 佢哋嘅完整 provenance 但存在過）／zeroShift（真係成個月嗰行乜更都冇
 // 排過，純粹跟原檔印）兩類，等回報有真實嘅「純推導覆蓋率」數字。
 type RawFallbackCells = { external: number; zeroShift: number; allCancelled: number };
@@ -566,7 +566,7 @@ async function runDerivedGate(
     rawFallbackCells: {
       ...totalRawFallback,
       totalRows: totalRawFallbackRows,
-      note: "呢度嘅數係「用咗 raw-literal fallback 嘅行數／同原檔已經唔一致嘅行數」（一行可能跨多個逐日格），唔係逐格數——external＝該行喺冇 isExternal/source 濾走版本其實有紀錄（外援/借調安員），zeroShift＝成個月嗰行乜更都冇排過，純粹跟原檔印；allCancelled＝呢一行曾經有記錄但全部已經 void（R1/R2）——純 DB 推導、唔用 raw 字面，但內容已經同原檔唔一致。",
+      note: "呢度嘅數係「用咗 raw-literal fallback 嘅行數／同原檔已經唔一致嘅行數」（一行可能跨多個逐日格），唔係逐格數——external＝該行喺冇 isExternal/source 濾走版本其實有紀錄（外援/借調保安員），zeroShift＝成個月嗰行乜更都冇排過，純粹跟原檔印；allCancelled＝呢一行曾經有記錄但全部已經 void（R1/R2）——純 DB 推導、唔用 raw 字面，但內容已經同原檔唔一致。",
       pureDerivationCoveragePctApprox: pureDerivationCoveragePct,
     },
     unmatchedFiles: derivedUnmatchedFiles,

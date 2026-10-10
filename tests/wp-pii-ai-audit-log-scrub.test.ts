@@ -96,7 +96,7 @@ describe("WP-PII：AI 助手 recent_audit／sql_select 讀 guards audit row—�
         blacklist_check_date: "2026-01-01",
         bank_name: "測試銀行",
         bank_account_no: "999-888777-001",
-        bank_payee_name: "測試安員甲",
+        bank_payee_name: "測試保安員甲",
       }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
     );

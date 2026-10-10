@@ -1,5 +1,5 @@
-// WP-AI-OPS §28.4：分診題目／影響預覽嘅回應 DTO（snake_case；遮罩跟「安員個人資料」欄位組權限）。
-// 冇「安員個人資料:view」：hkid／電話／地址只俾遮罩版本（同批量導入 preview 一致），出生日期剝走。
+// WP-AI-OPS §28.4：分診題目／影響預覽嘅回應 DTO（snake_case；遮罩跟「保安員個人資料」欄位組權限）。
+// 冇「保安員個人資料:view」：hkid／電話／地址只俾遮罩版本（同批量導入 preview 一致），出生日期剝走。
 import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { canonicalHkid } from "@/lib/guards/identity";
@@ -13,15 +13,15 @@ import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { BANK_KINDS, KIND_LABEL, REVIEW_FIELD_LABEL, type QuestionEvidence, type QuestionKind, type QuestionOption } from "./types";
 
 export interface ViewerCaps {
-  /** 「安員個人資料:view」 */
+  /** 「保安員個人資料:view」 */
   pii: boolean;
-  /** 「安員個人資料:update」：冇就唔准覆蓋現有唔同嘅 PII */
+  /** 「保安員個人資料:update」：冇就唔准覆蓋現有唔同嘅 PII */
   piiUpdate: boolean;
-  /** 「安員:update」：冇就唔准經導入改寫現有安員姓名 */
+  /** 「保安員:update」：冇就唔准經導入改寫現有保安員姓名 */
   guardUpdate: boolean;
-  /** 「安員銀行資料:view」：冇就銀行戶口／收款人／現有戶口比較一律 generic */
+  /** 「保安員銀行資料:view」：冇就銀行戶口／收款人／現有戶口比較一律 generic */
   bankView: boolean;
-  /** 「安員銀行資料:update」：冇就唔准睇銀行題內容／作答 */
+  /** 「保安員銀行資料:update」：冇就唔准睇銀行題內容／作答 */
   bankUpdate: boolean;
 }
 export async function viewerCaps(actor: AuthedSession): Promise<ViewerCaps> {
@@ -56,7 +56,7 @@ function personView(p: PackagePerson, c: ViewerCaps) {
   };
 }
 
-/** v3 新欄顯示（牌照／平安咭／QAS／入職日期＝「安員」module，唔遮罩；緊急聯絡人跟 PII；銀行跟銀行資料 view）。 */
+/** v3 新欄顯示（牌照／平安咭／QAS／入職日期＝「保安員」module，唔遮罩；緊急聯絡人跟 PII；銀行跟銀行資料 view）。 */
 function extView(p: PackagePerson, c: ViewerCaps) {
   const scalars = SCALARS.flatMap((s) => {
     const l = s.get(p);
@@ -91,15 +91,15 @@ interface CandidateRow {
   tels: string[];
   staff_numbers: string[];
   recent_sites: { name: string; last_date: string }[];
-  /** 冇「安員個人資料:view」而呢個候選係經身份證號對中、姓名同導入包唔同：唔回名 */
+  /** 冇「保安員個人資料:view」而呢個候選係經身份證號對中、姓名同導入包唔同：唔回名 */
   name_hidden?: boolean;
   /** 內部用（唔出街） */
   hkid_canon?: string | null;
-  /** bank_identity_unknown 用：目標安員有冇戶口（尾 4 位淨係有「安員銀行資料:view」先回） */
+  /** bank_identity_unknown 用：目標保安員有冇戶口（尾 4 位淨係有「保安員銀行資料:view」先回） */
   bank?: { has: boolean; tail4: string | null };
 }
 
-/** 候選安員卡（live 讀，批量 query，唔 N+1）。 */
+/** 候選保安員卡（live 讀，批量 query，唔 N+1）。 */
 export async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<Map<string, CandidateRow>> {
   const out = new Map<string, CandidateRow>();
   if (ids.length === 0) return out;
@@ -130,7 +130,7 @@ export async function loadCandidateCards(ids: string[], c: ViewerCaps): Promise<
       tels: tels.map((t) => mTel(t, c)!).filter(Boolean),
       staff_numbers: nos.filter((n) => n.guardId === g.id).map((n) => n.number),
       recent_sites: sites,
-      // 冇「安員銀行資料:view」：唔回「已有銀行戶口」（否則變 oracle）
+      // 冇「保安員銀行資料:view」：唔回「已有銀行戶口」（否則變 oracle）
       ...(c.bankView ? { bank: { has: !!g.bankAccountNo, tail4: g.bankAccountNo ? g.bankAccountNo.replace(/\D/g, "").slice(-4) || null : null } } : {}),
     });
   }
@@ -146,7 +146,7 @@ export interface QuestionView {
   sort: number;
   status: string;
   options: QuestionOption[];
-  /** 銀行題而讀者冇「安員銀行資料:update」：內容全部收埋，淨係話要有權限嘅同事處理 */
+  /** 銀行題而讀者冇「保安員銀行資料:update」：內容全部收埋，淨係話要有權限嘅同事處理 */
   restricted?: boolean;
   evidence: {
     pii_visible: boolean;
@@ -185,7 +185,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         session_id: r.sessionId,
         kind: r.kind as QuestionKind,
         kind_label: KIND_LABEL[r.kind as QuestionKind] ?? r.kind,
-        title: r.kind === "ext_identity_check" ? "要有安員個人資料查看＋安員修改權限嘅同事處理" : "要有安員銀行資料權限嘅同事處理",
+        title: r.kind === "ext_identity_check" ? "要有保安員個人資料查看＋保安員修改權限嘅同事處理" : "要有保安員銀行資料權限嘅同事處理",
         sort: r.sort,
         status: r.status,
         options: [],
@@ -204,7 +204,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
       .map((id) => cards.get(id))
       .filter((x): x is CandidateRow => !!x)
       .map((card) => {
-        // 經身份證號對中嘅現有安員，姓名同導入包唔同 → 冇 PII view 嘅人唔俾睇名（否則可以用 hkid 查名）
+        // 經身份證號對中嘅現有保安員，姓名同導入包唔同 → 冇 PII view 嘅人唔俾睇名（否則可以用 hkid 查名）
         const hide = !c.pii && !!pkgHkid && card.hkid_canon === pkgHkid && !sameNameStrict(card.name_zh, pkgName);
         const { hkid_canon: _omit, ...rest } = card;
         void _omit;
@@ -228,7 +228,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         person: personView(e.person, c),
         reasons: c.pii ? e.reasons : e.reasons.filter((x) => !NAME_REASONS.has(x)),
         candidates,
-        // 逐欄 check 反映現有 DB 值嘅比較結果：冇「安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
+        // 逐欄 check 反映現有 DB 值嘅比較結果：冇「保安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),
         ext_review: (e.ext_review ?? []).map((f) => {
           const hide = isBankKey(f.key) ? !c.bankView : isEmergencyKey(f.key) ? !c.pii : false;
@@ -292,10 +292,10 @@ const FIELD_NAME_LABEL: Record<string, string> = { hkid: "身份證", nameZh: "�
 const REASON_LABEL: Record<string, string> = {
   name_not_confirmed: "姓名未確認，唔會自動建人",
   create_hkid_not_confirmed: "身份證號未確認，唔會建人",
-  guard_hkid_differs: "該安員已有另一個身份證號",
-  hkid_belongs_to_other_guard: "呢個身份證號已屬於另一個安員",
-  forced_guard_missing: "揀咗嘅安員已經唔存在",
-  staffno_belongs_to_other: "有工號屬於另一個安員，已跳過",
+  guard_hkid_differs: "該保安員已有另一個身份證號",
+  hkid_belongs_to_other_guard: "呢個身份證號已屬於另一個保安員",
+  forced_guard_missing: "揀咗嘅保安員已經唔存在",
+  staffno_belongs_to_other: "有工號屬於另一個保安員，已跳過",
   staffno_scheme_has_other_current: "有工號同現有工號類別重複，已跳過",
   staffno_invalid: "有工號格式唔合法，已跳過",
   bank_acct_belongs_to_other: "呢個戶口已屬於另一位保安員，唔會寫入",
@@ -367,7 +367,7 @@ export interface ImpactView {
 export function buildImpact(result: PersonResult, changes: readonly WriteChange[], c: ViewerCaps): ImpactView {
   const norm = JSON.parse(JSON.stringify(changes)) as WriteChange[];
   const out: ImpactView["changes"] = [];
-  // 冇「安員銀行資料:view」：銀行相關結果一律 generic（唔准視乎現值：寫入／同現值一樣／衝突睇落要一樣）
+  // 冇「保安員銀行資料:view」：銀行相關結果一律 generic（唔准視乎現值：寫入／同現值一樣／衝突睇落要一樣）
   const bankHidden = !c.bankView && (result.ext ?? []).some((x) => isBankKey(x.key));
   for (const ch of norm) {
     const before = (ch.before ?? {}) as Record<string, unknown>;
@@ -385,7 +385,7 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
           return { label: GUARD_FIELD_LABEL[k]!, from, to };
         });
       if (bankHidden && ch.action === "update" && fields.length === 0) continue;
-      out.push({ table: "guards", action: ch.action as "create" | "update", label: ch.action === "create" ? "新增安員" : "更新安員資料", guard_id: ch.action === "update" && c.pii ? ch.rowId : null, fields });
+      out.push({ table: "guards", action: ch.action as "create" | "update", label: ch.action === "create" ? "新增保安員" : "更新保安員資料", guard_id: ch.action === "update" && c.pii ? ch.rowId : null, fields });
     } else if (ch.table === "guard_staff_numbers" && ch.action === "update") {
       out.push({ table: ch.table, action: "update", label: "補工號入職日期", guard_id: null, fields: [{ label: `入職日期（${String(after.number ?? "")}）`, from: fmt("hireDate", before.validFrom, c), to: fmt("hireDate", after.validFrom, c) }] });
     } else if (ch.table === "guard_emergency_contacts") {
@@ -410,14 +410,14 @@ export function buildImpact(result: PersonResult, changes: readonly WriteChange[
   }
   const written = result.outcome === "created" || result.outcome === "linked";
   const summary: string[] = [];
-  if (result.outcome === "created") summary.push("新增 1 個安員");
-  if (result.outcome === "linked") summary.push(bankHidden ? "連去現有安員（銀行資料部分你冇權限睇結果）" : out.some((x) => x.table === "guards" && x.action === "update") ? "連去現有安員，補填／更新佢嘅資料" : "連去現有安員（本身冇欄位需要更新）");
+  if (result.outcome === "created") summary.push("新增 1 個保安員");
+  if (result.outcome === "linked") summary.push(bankHidden ? "連去現有保安員（銀行資料部分你冇權限睇結果）" : out.some((x) => x.table === "guards" && x.action === "update") ? "連去現有保安員，補填／更新佢嘅資料" : "連去現有保安員（本身冇欄位需要更新）");
   if (result.staff_numbers_added) summary.push(`新增工號 ${result.staff_numbers_added} 個`);
   if (result.phones_added) summary.push(`新增電話 ${result.phones_added} 個`);
   if (result.addresses_added) summary.push(`新增地址 ${result.addresses_added} 個`);
   if (result.contacts_added) summary.push(`新增緊急聯絡人 ${result.contacts_added} 位`);
   if (!written) summary.push("照呢個答案，仍然唔會寫入任何資料（要揀其他選項，或者跳過）");
-  // 「姓名同現有安員唔同」呢類 reason 冇 PII view 唔回（同 import project.ts 一致）
+  // 「姓名同現有保安員唔同」呢類 reason 冇 PII view 唔回（同 import project.ts 一致）
   const notes = [...new Set(result.reasons)].filter((r) => (c.pii || r !== "name_differs_from_guard") && (c.bankView || r !== "bank_acct_belongs_to_other")).map((r) => REASON_LABEL[r] ?? `原因碼：${r}`);
   return {
     can_confirm: written,

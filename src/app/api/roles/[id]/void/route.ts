@@ -1,5 +1,5 @@
 // 淨係 is_custom=true 嘅角色（複製出嚟嘅）先可以 void；五個出廠角色
-// （老闆/主管/會計/雞頭/安員）唔准 void——唔係硬性規則 module/action 格，
+// （老闆/主管/會計/雞頭/保安員）唔准 void——唔係硬性規則 module/action 格，
 // 而係實體層面嘅保護（冇咗出廠角色，成個 RBAC seed 假設就散晒）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";

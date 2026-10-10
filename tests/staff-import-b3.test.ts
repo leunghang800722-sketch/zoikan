@@ -103,7 +103,7 @@ describe("導入 API", () => {
     return route(new Request("http://t/api/guards/import/x", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(withHash) }));
   };
 
-  it("RBAC：老闆／會計／主管 200（WP-AI-OPS §28.4 開放）；雞頭／安員 403（preview／apply）", async () => {
+  it("RBAC：老闆／會計／主管 200（WP-AI-OPS §28.4 開放）；雞頭／保安員 403（preview／apply）", async () => {
     const pkg = pkgOf([person({})]);
     const accountant = await sessionCookieForUser(fx.userIds["會計"]);
     const broker = await sessionCookieForUser(fx.userIds["雞頭"]);
@@ -115,7 +115,7 @@ describe("導入 API", () => {
     }
   });
 
-  it("RBAC：雞頭就算開晒「安員」create＋「安員個人資料」view／update，仍然 403（安員批量導入硬性拒）", async () => {
+  it("RBAC：雞頭就算開晒「保安員」create＋「保安員個人資料」view／update，仍然 403（保安員批量導入硬性拒）", async () => {
     const broker = await sessionCookieForUser(fx.userIds["雞頭"]);
     for (const [module, action] of [["安員", "create"], ["安員個人資料", "view"], ["安員個人資料", "update"], ["安員批量導入", "view"]] as const) {
       const perm = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module, action } } });

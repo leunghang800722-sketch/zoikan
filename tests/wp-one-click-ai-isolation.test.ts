@@ -1,5 +1,5 @@
 // WP-ONE-CLICK Phase 1：AI 隔離——`month_close_runs`（`steps_json`／
-// `report_json` 冇 PII，但係財務結算流程控制表，同「安員配對修復」一致
+// `report_json` 冇 PII，但係財務結算流程控制表，同「保安員配對修復」一致
 // 粒度，唔開俾 AI 助手直接查）。做法同 WP-ROSTER-UPLOAD／WP-GUARD-FIX-UI
 // 一致：
 //   (1) `ai.*` schema 完全冇 `ai.month_close_runs` view——結構性接觸唔到。

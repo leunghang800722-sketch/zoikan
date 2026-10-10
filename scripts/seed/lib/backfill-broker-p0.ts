@@ -2,11 +2,11 @@
 // `backfill-broker.ts`，S6 Opus 對抗式驗收）淨係為咗 `scopeGuardWhere()`
 // 嘅雞頭隔離用途而設——刻意剔走 internal_cash/internal_longterm/
 // external/special（見嗰個檔案頂註解「淨係計外判雞頭」），令長工／
-// 公司兵（93/265 個安員）跑完之後 `default_broker_id` 仍然係 NULL。
+// 公司兵（93/265 個保安員）跑完之後 `default_broker_id` 仍然係 NULL。
 //
 // 但 `default_broker_id` 仲有第二個用途：batch/route.ts、單筆
 // POST /api/shift-records 嘅結算單位 fallback 鏈（見
-// src/lib/pricing/settlement-broker-fallback.ts）——呢批安員嘅
+// src/lib/pricing/settlement-broker-fallback.ts）——呢批保安員嘅
 // `default_broker_id` 一路係 NULL，新月份「複製上月」／新增格如果
 // payload 又冇送 settlement_broker_id，就會跌到 fallback 鏈末端，起低
 // `settlement_broker_id=NULL` 嘅記錄，令呢批更喺
@@ -18,24 +18,24 @@
 // migration.sql`（正式站用嗰個 migration，呢度係 dev `db:seed` 嘅對等
 // 版本，因為 `db:reset` 係 migrate 先、seed 後，migration 喺 dev 一定
 // 0 行夾中）：
-//   1. `default_broker_id` 仍然 NULL 嘅安員 → 喺 shift_records（非作廢、
+//   1. `default_broker_id` 仍然 NULL 嘅保安員 → 喺 shift_records（非作廢、
 //      settlement_broker_id 非 null，**唔限 kind=broker**，同
 //      backfill-broker.ts 唔同；**應修 3：仲要求嗰個 broker.status=
 //      'active'**——已停用嘅結算單位唔計入候選）出現最多次嗰個結算單位；
 //      同票取最近 work_date，再同票用 broker_id 做穩定 tie-break。
-//   2. 完全冇符合上面條件記錄嘅安員，`employment_type='longterm_autopay'`
+//   2. 完全冇符合上面條件記錄嘅保安員，`employment_type='longterm_autopay'`
 //      （長工）→ kind=internal_longterm **且 status='active'** 嗰個
 //      broker（用 kind 搵，唔寫死 id／code；應修 3：同樣要求 active）。
 //   3. 其餘（包括長工但搵唔到 active 嘅 internal_longterm broker）保持
 //      NULL。
 //
-// 逐個被改嘅安員寫一行 audit_log（action=migration_backfill_
+// 逐個被改嘅保安員寫一行 audit_log（action=migration_backfill_
 // default_broker，before/after）——同 migration 嗰行用同一個 action
 // 字串，等查 audit trail 唔使分兩種字串搵。
 import type { PrismaClient } from "@prisma/client";
 
 export interface BroaderBackfillStats {
-  /** 逐 broker.kind 分佈——呢個 helper 究竟幫幾多個安員填咗邊種 kind
+  /** 逐 broker.kind 分佈——呢個 helper 究竟幫幾多個保安員填咗邊種 kind
    * 嘅結算單位（前端/報告用嚟核實「冇令雞頭多睇到人」嗰個分析）。 */
   byBrokerKind: Record<string, number>;
   backfilledFromHistory: number;

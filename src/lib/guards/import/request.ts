@@ -23,8 +23,8 @@ export function parsePackage(raw: unknown): ImportPackage {
   return r.data;
 }
 
-/** module「安員批量導入」（preview=view，apply=update）：老闆／會計／主管（WP-AI-OPS §28.4，老闆 2026-10-04 開放）；
- * 雞頭／安員硬性 403。導入包唔入 DB、冇「批次」可以俾人睇，所以「非老闆淨係自己上載嗰批」由分診 session
+/** module「保安員批量導入」（preview=view，apply=update）：老闆／會計／主管（WP-AI-OPS §28.4，老闆 2026-10-04 開放）；
+ * 雞頭／保安員硬性 403。導入包唔入 DB、冇「批次」可以俾人睇，所以「非老闆淨係自己上載嗰批」由分診 session
  * （owner＝上載者）強制。 */
 export async function requireImportPermission(req: Request, mode: "preview" | "apply"): Promise<AuthedSession> {
   return requirePermission(req, "安員批量導入", mode === "preview" ? "view" : "update");
@@ -77,7 +77,7 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
 }
 
 // ---------------------------------------------------------------------------
-// WP-AI-OPS 驗收修正（Major-1）：「安員個人資料」權限
+// WP-AI-OPS 驗收修正（Major-1）：「保安員個人資料」權限
 // ---------------------------------------------------------------------------
 export { NON_BOSS_MAX_PERSONS } from "./limits";
 
@@ -87,7 +87,7 @@ export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg:
   }
 }
 
-// replace 覆蓋現值嘅權限檢查（出生日期／地址：「安員個人資料:update」；姓名／英文名：「安員:update」）
+// replace 覆蓋現值嘅權限檢查（出生日期／地址：「保安員個人資料:update」；姓名／英文名：「保安員:update」）
 // 喺 applyPerson 做：只取決於「現值係咪非空」，補空欄得；403 由 applyImport 丟出（唔取決於新值）。
 
 export { maskPreviewForViewer, maskApplyForViewer } from "./project";
@@ -143,9 +143,9 @@ export function assertDecisionTargets(pkg: ImportPackage, decisions: Record<stri
 
 // ---------------------------------------------------------------------------
 // WP-STAFF-FIELDS：銀行欄權限。包內有任何銀行欄（person.bank 有值／unassignedBankAccounts 非空）→
-// preview／apply 要求上載者有「安員銀行資料:update」，冇就 403（訊息講明；唔靜靜 strip）。
+// preview／apply 要求上載者有「保安員銀行資料:update」，冇就 403（訊息講明；唔靜靜 strip）。
 // ---------------------------------------------------------------------------
-export const BANK_PACKAGE_DENIED_MSG = "導入包含銀行資料，要有「安員銀行資料」修改權限嘅同事先可以上載（銀行資料冇寫入）";
+export const BANK_PACKAGE_DENIED_MSG = "導入包含銀行資料，要有「保安員銀行資料」修改權限嘅同事先可以上載（銀行資料冇寫入）";
 export async function assertBankPermissionForPackage(session: AuthedSession, pkg: ImportPackage): Promise<void> {
   if (packageHasBank(pkg) && !(await hasPermission(session, "安員銀行資料", "update"))) throw Forbidden(BANK_PACKAGE_DENIED_MSG);
 }

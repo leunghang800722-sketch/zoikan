@@ -300,7 +300,7 @@ export function buildPackageV3(v2: V2Package, ext: ExtPerson[], typed: TypedSour
     const newKey = `typed:${idFor('typed', hk ?? nos[0] ?? e.key)}`;
     curPerson = newKey;
     const x = extFields(e, staffNumbers);
-    // 打字名單唔係身份來源（§26.2）：hkid／姓名一律 review，唔會用嚟自動建人；只用嚟 link 現有安員
+    // 打字名單唔係身份來源（§26.2）：hkid／姓名一律 review，唔會用嚟自動建人；只用嚟 link 現有保安員
     const person = {
       key: newKey,
       hkid: hk ? { value: hk, status: 'review' as St } : MISSING,

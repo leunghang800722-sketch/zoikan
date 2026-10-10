@@ -1,7 +1,7 @@
 // WP-LTPAY Phase 2（§20.4 交付 3）：`POST /api/longterm/contracts/import`
 // ——Maxwell 長工名單（xlsx）上載，建／更新 `guard_longterm_contracts`。
-// module「長工糧」（同「安員銀行資料」一致粒度——老闆／會計先有，主管／
-// 雞頭／安員硬性拒）。
+// module「長工糧」（同「保安員銀行資料」一致粒度——老闆／會計先有，主管／
+// 雞頭／保安員硬性拒）。
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { BadRequest } from "@/lib/api/errors";

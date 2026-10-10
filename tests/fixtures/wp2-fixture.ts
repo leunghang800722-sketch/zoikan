@@ -114,10 +114,10 @@ export async function seedWp2Fixture(): Promise<Wp2Fixture> {
   await prisma.user.update({ where: { id: brokerBUserId }, data: { brokerId: brokerB.id } });
 
   const guardA = await prisma.guard.create({
-    data: { staffNo: "T-A01", nameZh: "測試安員甲", employmentType: "cash_casual", defaultBrokerId: brokerA.id, tel: "6100001", createdBy: "test-fixture:wp2" },
+    data: { staffNo: "T-A01", nameZh: "測試保安員甲", employmentType: "cash_casual", defaultBrokerId: brokerA.id, tel: "6100001", createdBy: "test-fixture:wp2" },
   });
   const guardB = await prisma.guard.create({
-    data: { staffNo: "T-B01", nameZh: "測試安員乙", employmentType: "cash_casual", defaultBrokerId: brokerB.id, tel: "6100002", createdBy: "test-fixture:wp2" },
+    data: { staffNo: "T-B01", nameZh: "測試保安員乙", employmentType: "cash_casual", defaultBrokerId: brokerB.id, tel: "6100002", createdBy: "test-fixture:wp2" },
   });
 
   const site = await prisma.site.create({

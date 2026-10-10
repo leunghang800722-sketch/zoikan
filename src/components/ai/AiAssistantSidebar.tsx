@@ -1,7 +1,7 @@
 "use client";
 // WP-AI2：全站右邊緣「在勤助手」直向 tab＋側欄——`(app)/layout.tsx` 淨係
 // 喺 `助手:view` 為 true 先會 render 呢個 component（見 layout.tsx 註
-// 解），所以呢度內部唔使再做多一次權限判斷——雞頭／安員嗰邊連呢個
+// 解），所以呢度內部唔使再做多一次權限判斷——雞頭／保安員嗰邊連呢個
 // component 都唔會出現喺 DOM（唔係淨係 CSS 隱藏）。
 //
 // UI 只經 API（硬規則）：問答經 `streamAiChat()`（`@/lib/ui/ai-chat-client`

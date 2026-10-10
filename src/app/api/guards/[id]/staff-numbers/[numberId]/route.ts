@@ -26,7 +26,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "update");
     // WP-STAFFNO：同 POST 一致——「雞頭 session 只可以讀自己啲人，唔可
-    // 以寫」係硬性規則，唔靠矩陣「自己安員:update」出廠 off 呢個可開關
+    // 以寫」係硬性規則，唔靠矩陣「自己保安員:update」出廠 off 呢個可開關
     // 嘅 cell（見 src/app/api/guards/[id]/staff-numbers/route.ts 同段
     // 註解）。
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以改員工編號");

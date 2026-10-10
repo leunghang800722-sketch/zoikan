@@ -2,9 +2,9 @@
 // （`A123***(7)`），詳情／編輯有權先見全號。呢個同 field-group gate
 // （src/lib/api/field-groups.ts 嘅 GUARD_PII_FIELDS，管「有冇權見到
 // 呢粒欄」）係兩件唔同事：遮罩管嘅係「見到，但唔畀睇晒成個號碼」——
-// 就算老闆/會計有「安員個人資料:view」，列表都照樣遮，淨係
+// 就算老闆/會計有「保安員個人資料:view」，列表都照樣遮，淨係
 // `GET /api/guards/[id]`（單項詳情，同 PATCH 之後嘅 response）先畀睇
-// 全號。冇 `hkid` 呢個 key 嘅 row（例如主管/雞頭冇「安員個人資料:view」
+// 全號。冇 `hkid` 呢個 key 嘅 row（例如主管/雞頭冇「保安員個人資料:view」
 // 已經被 field-group gate 剝走成粒欄）原樣跳過，唔會報錯。
 //
 // WP-PII（Opus 驗收應修 3）：fail-closed——之前「格式意外」一律回原值

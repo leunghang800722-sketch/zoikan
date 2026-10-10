@@ -1,10 +1,10 @@
 // WP-GUARD-FIX-UI：`GuardFixRun.planJson`（帶 PII）→ 俾頁面睇嘅
 // needs_boss 逐條 view——`POST /api/guard-fix/plan`／`GET /api/guard-fix/
 // runs/:id` 共用。老闆見到姓名／工號／候選描述，但仲要多一重
-// 「安員個人資料:view」（同 GUARD_PII_FIELDS 一致嘅資源，見
-// src/lib/api/field-groups.ts）先俾姓名/工號/電話/候選姓名出街——`安員
+// 「保安員個人資料:view」（同 GUARD_PII_FIELDS 一致嘅資源，見
+// src/lib/api/field-groups.ts）先俾姓名/工號/電話/候選姓名出街——`保安員
 // 配對修復` module 本身已經淨係老闆，但保留呢層 defense-in-depth（同
-// 「安員個人資料」PII field group 一致嘅 gate 邏輯），等老闆將呢個
+// 「保安員個人資料」PII field group 一致嘅 gate 邏輯），等老闆將呢個
 // module 開俾第二個角色都唔會意外漏 PII。
 import type { PrismaClient } from "@prisma/client";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";

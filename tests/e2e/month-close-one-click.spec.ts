@@ -147,7 +147,7 @@ test("老闆：上載更表＋U Team 名單 → 一鍵結算 → 睇進度 → �
     await expect(page.getByText("逐雞頭應付")).toBeVisible();
     await expect(page.getByText("逐盤收入")).toBeVisible();
 
-    // 新散工真係經一鍵結算建咗（安員修復 step 做嘅）。
+    // 新散工真係經一鍵結算建咗（保安員修復 step 做嘅）。
     const created = await prisma.guard.findFirst({ where: { nameZh: TEST_NAME } });
     expect(created).not.toBeNull();
   } finally {

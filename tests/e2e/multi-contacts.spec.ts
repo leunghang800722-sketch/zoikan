@@ -167,12 +167,12 @@ test("老闆：加兩個緊急聯絡人", async ({ page }) => {
   }
 });
 
-test("雞頭：睇自己安員——見電話但冇新增/編輯/刪除掣，見唔到緊急聯絡人／地址分區", async ({ page }) => {
+test("雞頭：睇自己保安員——見電話但冇新增/編輯/刪除掣，見唔到緊急聯絡人／地址分區", async ({ page }) => {
   const guard = await ensureE2eGuard();
   await cleanupContactTables(guard.id);
   const tel = "6" + Date.now().toString().slice(-7);
   try {
-    // 老闆先幫呢個安員加一個電話，等雞頭有嘢好睇。
+    // 老闆先幫呢個保安員加一個電話，等雞頭有嘢好睇。
     await loginAs(page, "老闆");
     await page.goto("/guards");
     await openEditByName(page, guard.nameZh);
@@ -193,7 +193,7 @@ test("雞頭：睇自己安員——見電話但冇新增/編輯/刪除掣，見
     await expect(page.getByRole("button", { name: "設為主要" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "刪除" })).toHaveCount(0);
 
-    // 「安員個人資料」module 對雞頭硬性拒——緊急聯絡人／地址分區完全
+    // 「保安員個人資料」module 對雞頭硬性拒——緊急聯絡人／地址分區完全
     // 唔顯示（response 403，`hasPiiField` 為 false）。
     await expect(page.getByRole("heading", { name: "緊急聯絡人列表" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "地址列表" })).toHaveCount(0);

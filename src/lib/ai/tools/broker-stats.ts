@@ -13,7 +13,7 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "broker_stats",
     description:
-      "睇雞頭喺某個月嘅更次統計——幾多更、幾多安員、（有出街價權限先見到）出街價合計。回傳帶 broker_display_name（雞頭顯示名，答用戶一律用呢個，唔准用 broker_code）；有啲盤啲卡源頭冇拆開保安員工資/雞頭費，呢啲雞頭嘅 fee_split=\"combined\"，broker_fee_total 會係 null（唔係 0，唔准話雞頭費係 0，只可以講出街價合計）；公司長工（internal_longterm）桶嘅 payout_total 一律 null＋payout_note（月薪唔計逐更出街價，唔准答出街價 0）。仲帶 latest_month_with_data（呢個盤/全公司最近有記錄嘅月份）——查嗰個月冇數就可以用嚟自動退一步答（唔使再問用戶）。可選 site 篩選淨係睇某個盤。**可選 broker（雞頭名／代號關鍵字）淨係睇一個雞頭，同時回傳 sites（呢個雞頭嗰個月逐盤嘅更數／保安員數，按更數排）＋site_count——用戶問「某個雞頭派咗邊幾個盤」「佢啲更分布喺邊幾個盤」「邊個盤最多」，或者上一輪問完某個雞頭之後跟住問「有邊幾個盤」，一律用呢個帶 broker 嘅查法，唔好用 list_sites（嗰個係全公司盤名單）。要「更表:view」。",
+      "睇雞頭喺某個月嘅更次統計——幾多更、幾多保安員、（有出街價權限先見到）出街價合計。回傳帶 broker_display_name（雞頭顯示名，答用戶一律用呢個，唔准用 broker_code）；有啲盤啲卡源頭冇拆開保安員工資/雞頭費，呢啲雞頭嘅 fee_split=\"combined\"，broker_fee_total 會係 null（唔係 0，唔准話雞頭費係 0，只可以講出街價合計）；公司長工（internal_longterm）桶嘅 payout_total 一律 null＋payout_note（月薪唔計逐更出街價，唔准答出街價 0）。仲帶 latest_month_with_data（呢個盤/全公司最近有記錄嘅月份）——查嗰個月冇數就可以用嚟自動退一步答（唔使再問用戶）。可選 site 篩選淨係睇某個盤。**可選 broker（雞頭名／代號關鍵字）淨係睇一個雞頭，同時回傳 sites（呢個雞頭嗰個月逐盤嘅更數／保安員數，按更數排）＋site_count——用戶問「某個雞頭派咗邊幾個盤」「佢啲更分布喺邊幾個盤」「邊個盤最多」，或者上一輪問完某個雞頭之後跟住問「有邊幾個盤」，一律用呢個帶 broker 嘅查法，唔好用 list_sites（嗰個係全公司盤名單）。要「更表:view」。",
     inputSchema: z
       .object({
         site: z.string().optional().describe("盤名稱（可選，唔填即全公司）"),
@@ -103,7 +103,7 @@ export function createBrokerStatsTool(ctx: AiToolContext) {
       // 系統計嘅總計——`pg` driver 對 COUNT()/SUM() 呢類 bigint/numeric
       // 欄預設會用字串返（避免大數精度損失），逐個工具自己加總嗰陣要
       // 手動 `Number()` 轉返做數字先可以相加。`guard_count` 唔可以直接
-      // 逐 broker 相加（同一個安員同月可能跨兩個雞頭做過嘢會計多），
+      // 逐 broker 相加（同一個保安員同月可能跨兩個雞頭做過嘢會計多），
       // 所以另外用 `COUNT(DISTINCT sr.guard_id)`（冇 GROUP BY broker）
       // 查一次去重總數。
       const totalShiftCount = rows.reduce((sum, r) => sum + Number(r.shift_count), 0);

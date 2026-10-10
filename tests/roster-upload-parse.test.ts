@@ -1,5 +1,5 @@
 // WP-ROSTER-UPLOAD Phase A（§15.3）：TS 解析器單元測試——合成 xlsx
-// （exceljs 生成，鐵則：唔用真員工資料，名用「測試安員甲/乙/丙」、U 號
+// （exceljs 生成，鐵則：唔用真員工資料，名用「測試保安員甲/乙/丙」、U 號
 // `U9xxxx`、電話 `6xxxxxxx`）覆蓋 8 月試算 7 個 patch 逐個場景。真實
 // 36 個 8 月更表嘅整體比對留俾 `npm run gate:roster-parse`（見
 // scripts/gate/roster-parse.ts + tests/fixtures/roster-parse-aug-2026.json，
@@ -20,7 +20,7 @@ async function toBuffer(wb: ExcelJS.Workbook): Promise<Buffer> {
 }
 
 describe("roster-upload parse：standard layout", () => {
-  it("基本一個 block，兩個安員、逐日代號", async () => {
+  it("基本一個 block，兩個保安員、逐日代號", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("2026");
     ws.getCell("A2").value = "測試盤A";
@@ -39,7 +39,7 @@ describe("roster-upload parse：standard layout", () => {
     ws.getCell("C6").value = "日更保安員";
     ws.getCell("D6").value = "U91234";
     ws.getCell("E6").value = "61234567";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("G6").value = "D";
     ws.getCell("H6").value = "N";
     ws.getCell("A7").value = "K";
@@ -47,7 +47,7 @@ describe("roster-upload parse：standard layout", () => {
     ws.getCell("C7").value = "夜更保安員";
     ws.getCell("D7").value = "U91235";
     ws.getCell("E7").value = "61234568";
-    ws.getCell("F7").value = "測試安員乙";
+    ws.getCell("F7").value = "測試保安員乙";
     ws.getCell("I7").value = "N";
 
     const result = await parseRosterWorkbook(await toBuffer(wb), "standard.xlsx");
@@ -58,7 +58,7 @@ describe("roster-upload parse：standard layout", () => {
     expect(result.totalCellCount).toBe(3);
     expect(result.shiftCount).toBe(3);
     expect(result.dateRange).toEqual({ min: "2026-08-01", max: "2026-08-03" });
-    const first = result.rows.find((r) => r.nameRaw === "測試安員甲" && r.workDate === "2026-08-01");
+    const first = result.rows.find((r) => r.nameRaw === "測試保安員甲" && r.workDate === "2026-08-01");
     expect(first?.rawCode).toBe("D");
     expect(first?.staffNoRaw).toBe("U91234");
     expect(first?.telRaw).toBe("61234567");
@@ -76,7 +76,7 @@ describe("roster-upload parse：standard layout", () => {
     ws.getCell("H4").value = aug(2);
     ws.getCell("I4").value = aug(3);
     ws.getCell("F5").value = "Name";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("D6").value = "U91234";
     ws.getCell("G6").value = "AL"; // leave
     ws.getCell("H6").value = "OT1"; // ot
@@ -101,7 +101,7 @@ describe("roster-upload parse：standard layout", () => {
     ws.getCell("G4").value = aug(1);
     ws.getCell("H4").value = aug(2);
     ws.getCell("F5").value = "Name";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("D6").value = "U91234";
     ws.getCell("G6").value = "M";
     ws.getCell("H6").value = "OT3.5";
@@ -115,14 +115,14 @@ describe("roster-upload parse：standard layout", () => {
     expect(byDate.get("2026-08-02")?.hours).toBe(3.5);
   });
 
-  it("Total/所需人手/尚欠 統計行成行跳過，唔當安員行", async () => {
+  it("Total/所需人手/尚欠 統計行成行跳過，唔當保安員行", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("2026");
     ws.getCell("A2").value = "測試盤D";
     ws.getCell("F4").value = "Date";
     ws.getCell("G4").value = aug(1);
     ws.getCell("F5").value = "Name";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("D6").value = "U91234";
     ws.getCell("G6").value = "D";
     ws.getCell("F7").value = "Total";
@@ -136,7 +136,7 @@ describe("roster-upload parse：standard layout", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.totalCellCount).toBe(1);
-    expect(result.rows[0]!.nameRaw).toBe("測試安員甲");
+    expect(result.rows[0]!.nameRaw).toBe("測試保安員甲");
   });
 
   it("patch 6：冇雞頭碼欄（Name 喺欄位令 broker offset < 1）唔准 abort", async () => {
@@ -150,7 +150,7 @@ describe("roster-upload parse：standard layout", () => {
     ws.getCell("D4").value = aug(2);
     ws.getCell("A5").value = "Time";
     ws.getCell("B5").value = "Name";
-    ws.getCell("B6").value = "測試安員甲";
+    ws.getCell("B6").value = "測試保安員甲";
     ws.getCell("A6").value = "0700-1900";
     ws.getCell("C6").value = "D";
 
@@ -176,7 +176,7 @@ describe("roster-upload parse：standard layout", () => {
     ws.getCell("F5").value = "Date";
     ws.getCell("G5").value = aug(1);
     ws.getCell("F6").value = "Name";
-    ws.getCell("F7").value = "測試安員甲";
+    ws.getCell("F7").value = "測試保安員甲";
     ws.getCell("G7").value = "D";
 
     const result = await parseRosterWorkbook(await toBuffer(wb), "a1-fallback.xlsx");
@@ -206,7 +206,7 @@ describe("roster-upload parse：digital_port layout", () => {
     ws.getCell("D6").value = "U91236";
     ws.getCell("E6").value = "61234569";
     ws.getCell("F6").value = "Sample Guard One"; // name_en
-    ws.getCell("G6").value = "測試安員丙";
+    ws.getCell("G6").value = "測試保安員丙";
     ws.getCell("H6").value = "IC";
 
     const result = await parseRosterWorkbook(await toBuffer(wb), "digital-port.xlsx");
@@ -216,7 +216,7 @@ describe("roster-upload parse：digital_port layout", () => {
     expect(result.siteRaw).toBe("測試盤F");
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.rawCode).toBe("IC");
-    expect(result.rows[0]!.nameRaw).toBe("測試安員丙");
+    expect(result.rows[0]!.nameRaw).toBe("測試保安員丙");
   });
 });
 
@@ -240,12 +240,12 @@ describe("roster-upload parse：citybus layout（一檔多子盤）", () => {
     ws.getCell("D6").value = "測試車廠甲";
     ws.getCell("E6").value = "U91237";
     ws.getCell("F6").value = "61234570";
-    ws.getCell("G6").value = "測試安員甲";
+    ws.getCell("G6").value = "測試保安員甲";
     ws.getCell("H6").value = "D";
     ws.getCell("A7").value = "K";
     ws.getCell("D7").value = "測試車廠乙";
     ws.getCell("E7").value = "U91238";
-    ws.getCell("G7").value = "測試安員乙";
+    ws.getCell("G7").value = "測試保安員乙";
     ws.getCell("H7").value = "N";
 
     const result = await parseRosterWorkbook(await toBuffer(wb), "citybus.xlsx");
@@ -269,7 +269,7 @@ describe("roster-upload parse：patch 1（日期表頭 gap）／patch 5（工作
     ws.getCell("H4").value = aug(1);
     ws.getCell("I4").value = aug(2);
     ws.getCell("F5").value = "Name";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("D6").value = "U91234";
     ws.getCell("H6").value = "D";
     ws.getCell("I6").value = "N";
@@ -289,7 +289,7 @@ describe("roster-upload parse：patch 1（日期表頭 gap）／patch 5（工作
     ws.getCell("F4").value = "Date";
     ws.getCell("G4").value = aug(1);
     ws.getCell("F5").value = "Name";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("D6").value = "U91234";
     ws.getCell("G6").value = "D";
 
@@ -311,7 +311,7 @@ describe("roster-upload parse：patch 1（日期表頭 gap）／patch 5（工作
     ws.getCell("F4").value = "Date";
     ws.getCell("G4").value = aug(1);
     ws.getCell("F5").value = "Name";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("D6").value = "U91234";
     ws.getCell("G6").value = "D";
 
@@ -354,7 +354,7 @@ describe("roster-upload parse：驗收補測", () => {
     ws.getCell("F4").value = "Date";
     dates.forEach((d, i) => (ws.getRow(4).getCell(7 + i).value = d));
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Staff No.", "Tel", "Name"];
-    ws.getRow(6).values = ["K", "0700-1900", "Guard", "U91234", "61234567", "測試安員甲"];
+    ws.getRow(6).values = ["K", "0700-1900", "Guard", "U91234", "61234567", "測試保安員甲"];
   }
 
   // Phase B-0（老闆 2026-09-23 答）：橫向合併跨 N 個日期欄＝嗰 N 日每日一
@@ -482,7 +482,7 @@ describe("roster-upload parse：驗收補測", () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("2026");
     baseSheet(ws, [aug(1), aug(2)]);
-    ws.getRow(7).values = ["K", "1900-0700", "Guard", "U91235", "61234568", "測試安員乙"];
+    ws.getRow(7).values = ["K", "1900-0700", "Guard", "U91235", "61234568", "測試保安員乙"];
     ws.getCell("G6").value = "D";
     ws.mergeCells("G6:G7");
     ws.getCell("H7").value = "N";

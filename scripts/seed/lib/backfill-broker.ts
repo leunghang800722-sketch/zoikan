@@ -5,7 +5,7 @@
 // 度冇料到——雞頭登入之後見唔到自己啲人，因為 database 入面冇任何 guard
 // 嘅 default_broker_id 有值。
 //
-// 規則：7 月該安員 settlement broker（kind=broker，即係外判雞頭，唔計
+// 規則：7 月該保安員 settlement broker（kind=broker，即係外判雞頭，唔計
 // internal_cash/internal_longterm/external/special）出現最多嗰個，就係
 // 佢嘅 default_broker_id；淨係喺 internal 或 external（kind=
 // internal_cash/internal_longterm/external/special）出過更嘅人，冇雞頭

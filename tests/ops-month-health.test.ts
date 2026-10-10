@@ -212,7 +212,7 @@ describe("buildMonthHealth（DB）", () => {
       expect(f.detail_withheld).toBe(true);
     });
 
-    it("有「更表」但冇「安員個人資料」／「安員銀行資料」view：缺身份證／銀行編號只有數量，其他明細照有", async () => {
+    it("有「更表」但冇「保安員個人資料」／「保安員銀行資料」view：缺身份證／銀行編號只有數量，其他明細照有", async () => {
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: { in: ["安員個人資料", "安員銀行資料"] }, action: "view" } }, data: { granted: false } });
       const json = (await (await healthRoute(req(url, await sessionCookieForUser(fx.userIds["會計"])))).json()) as { findings: Array<{ code: string; count: number; detail: unknown[] | null; detail_withheld?: boolean }> };
       const hk = json.findings.find((x) => x.code === "gap_hkid")!;
@@ -224,7 +224,7 @@ describe("buildMonthHealth（DB）", () => {
       expect(json.findings.find((x) => x.code === "overlap_same_day")!.detail).not.toBeNull();
     });
 
-    it("主管（月結總表 view 預設關）／雞頭／安員 403", async () => {
+    it("主管（月結總表 view 預設關）／雞頭／保安員 403", async () => {
       for (const role of ["主管", "雞頭", "安員"] as const) {
         expect((await healthRoute(req(url, await sessionCookieForUser(fx.userIds[role])))).status).toBe(403);
       }

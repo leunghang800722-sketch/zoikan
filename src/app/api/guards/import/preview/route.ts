@@ -23,7 +23,7 @@ export async function POST(req: Request) {
     if (decisions && pkg.source !== "single_ocr") throw BadRequest("decisions 淨係單人證件包可用");
     assertPackageSize(session, pkg);
     assertDecisionTargets(pkg, decisions);
-    // WP-STAFF-FIELDS：包內有任何銀行欄 → 要「安員銀行資料:update」（冇就 403，唔靜靜 strip）
+    // WP-STAFF-FIELDS：包內有任何銀行欄 → 要「保安員銀行資料:update」（冇就 403，唔靜靜 strip）
     await assertBankPermissionForPackage(session, pkg);
     // 預留配額（短 transaction；鎖外先做預覽）。失敗唔退還次數。
     await reserveQuota(session, pkg.source === "single_ocr" ? "single_ocr" : "batch");

@@ -46,7 +46,7 @@ describe("/api/longterm/contracts", () => {
     expect(body.guard_id).toBe(guardId);
   });
 
-  it("GET 列表 join 埋安員姓名／工號", async () => {
+  it("GET 列表 join 埋保安員姓名／工號", async () => {
     await createContract(req("http://test.local/api/longterm/contracts", ownerCookie, "POST", { guard_id: guardId, effective_from: "2026-08-01", monthly_salary: 15500 }));
     const res = await listContracts(req("http://test.local/api/longterm/contracts", ownerCookie));
     expect(res.status).toBe(200);

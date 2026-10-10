@@ -76,7 +76,7 @@ describe("/api/longterm/leave-balances", () => {
     balanceId = balance.id;
   });
 
-  it("GET 列表 join 埋安員姓名", async () => {
+  it("GET 列表 join 埋保安員姓名", async () => {
     const res = await listLeaveBalances(req("http://test.local/api/longterm/leave-balances?year=2026", ownerCookie));
     expect(res.status).toBe(200);
     const body = await res.json();

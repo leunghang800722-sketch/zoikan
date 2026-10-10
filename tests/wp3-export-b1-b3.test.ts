@@ -1,6 +1,6 @@
 // Opus 對抗式驗收第三輪（B1／B3，兩條匯出必修）：
 // B1 雞頭版匯出（`buildRosterWorkbookForSite(..., {broker_id})`）唔可以
-// 洩漏其他雞頭嘅安員（真名/工號/電話/英文名）——逐格掃描整份 xlsx，
+// 洩漏其他雞頭嘅保安員（真名/工號/電話/英文名）——逐格掃描整份 xlsx，
 // 確保零命中，同埋格數要明顯少過老闆版（冇 brokerId）匯出。
 // B3 作廢（status=cancelled）嘅更次唔可以再印落 xlsx——用真實 void API
 // 作廢一格，重新匯出，斷言嗰一格變晒空白。
@@ -45,24 +45,24 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("Opus 對抗式驗收第三輪 B1：雞頭版匯出唔可以洩漏其他雞頭嘅安員", () => {
+describe("Opus 對抗式驗收第三輪 B1：雞頭版匯出唔可以洩漏其他雞頭嘅保安員", () => {
   it("brokerA 版匯出：掃描全份 xlsx，零命中 brokerB 嘅 guardB 姓名/工號/電話；格數明顯少過老闆版", async () => {
     const fx = await seedWp2Fixture();
 
-    // 老闆版（冇 brokerId）：兩個雞頭嘅安員行都應該出到（對照組，
+    // 老闆版（冇 brokerId）：兩個雞頭嘅保安員行都應該出到（對照組，
     // 順便確認 fixture 本身真係會產生一個「同一個 block 入面有兩個
-    // 唔同雞頭嘅安員」嘅情況，B1 個 fix 先測得有意義）。
+    // 唔同雞頭嘅保安員」嘅情況，B1 個 fix 先測得有意義）。
     const ownerResult = await buildRosterWorkbookForSite(fx.site.id, fx.unlockedMonth);
     const ownerWs = ownerResult.workbook.getWorksheet("2026")!;
     const ownerScan = scanSheet(ownerWs);
-    expect(ownerScan.values.some((v) => v.includes("測試安員乙"))).toBe(true); // guardB 應該喺老闆版見得到
+    expect(ownerScan.values.some((v) => v.includes("測試保安員乙"))).toBe(true); // guardB 應該喺老闆版見得到
 
     // brokerA 版：guardB 嘅真名/工號/電話一律唔准出現。
     const brokerAResult = await buildRosterWorkbookForSite(fx.site.id, fx.unlockedMonth, { brokerId: fx.brokerA.id });
     const brokerAWs = brokerAResult.workbook.getWorksheet("2026")!;
     const brokerAScan = scanSheet(brokerAWs);
 
-    const guardBNeedles = ["測試安員乙", "T-B01", "6100 002", "61000 02", "6100002"];
+    const guardBNeedles = ["測試保安員乙", "T-B01", "6100 002", "61000 02", "6100002"];
     for (const needle of guardBNeedles) {
       const hits = brokerAScan.values.filter((v) => v.includes(needle));
       expect(hits, `brokerA 版匯出唔應該出現 guardB 嘅 "${needle}"：命中 ${JSON.stringify(hits)}`).toEqual([]);
@@ -71,12 +71,12 @@ describe("Opus 對抗式驗收第三輪 B1：雞頭版匯出唔可以洩漏其�
     expect(brokerAScan.values.some((v) => v.includes(fx.brokerB.name))).toBe(false);
     expect(brokerAScan.values.some((v) => v.includes("TEST-BB"))).toBe(false);
 
-    // brokerA 版格數要明顯少過老闆版（老闆版兩個安員行都有，brokerA
+    // brokerA 版格數要明顯少過老闆版（老闆版兩個保安員行都有，brokerA
     // 版淨係得自己一行，guardB 嗰行留空）。
     expect(brokerAScan.cellCount).toBeLessThan(ownerScan.cellCount);
 
-    // brokerA 自己嘅安員（guardA）梗係要仲見得到——唔係一刀切清晒個 sheet。
-    expect(brokerAScan.values.some((v) => v.includes("測試安員甲"))).toBe(true);
+    // brokerA 自己嘅保安員（guardA）梗係要仲見得到——唔係一刀切清晒個 sheet。
+    expect(brokerAScan.values.some((v) => v.includes("測試保安員甲"))).toBe(true);
   });
 
   it("brokerB 版匯出：反過來零命中 guardA", async () => {
@@ -85,12 +85,12 @@ describe("Opus 對抗式驗收第三輪 B1：雞頭版匯出唔可以洩漏其�
     const brokerBWs = brokerBResult.workbook.getWorksheet("2026")!;
     const brokerBScan = scanSheet(brokerBWs);
 
-    const guardANeedles = ["測試安員甲", "T-A01"];
+    const guardANeedles = ["測試保安員甲", "T-A01"];
     for (const needle of guardANeedles) {
       const hits = brokerBScan.values.filter((v) => v.includes(needle));
       expect(hits, `brokerB 版匯出唔應該出現 guardA 嘅 "${needle}"：命中 ${JSON.stringify(hits)}`).toEqual([]);
     }
-    expect(brokerBScan.values.some((v) => v.includes("測試安員乙"))).toBe(true); // 自己嘅仲見得到
+    expect(brokerBScan.values.some((v) => v.includes("測試保安員乙"))).toBe(true); // 自己嘅仲見得到
   });
 });
 
@@ -109,7 +109,7 @@ describe("Opus 對抗式驗收第三輪 B3：作廢咗嘅更次唔可以再印�
     const before = await buildRosterWorkbookForSite(fx.site.id, fx.unlockedMonth);
     const wsBefore = before.workbook.getWorksheet("2026")!;
     const beforeScan = scanSheet(wsBefore);
-    expect(beforeScan.values.some((v) => v.includes("測試安員甲"))).toBe(true);
+    expect(beforeScan.values.some((v) => v.includes("測試保安員甲"))).toBe(true);
 
     // 用真實 void API 作廢（老闆角色，「更表:void」冇硬性 deny）。
     const voidRes = await voidShiftRecord(req(`http://test.local/api/shift-records/${fx.shiftRecordA.id}/void`, ownerCookie, "POST", { reason: "測試B3作廢" }), {
@@ -126,13 +126,13 @@ describe("Opus 對抗式驗收第三輪 B3：作廢咗嘅更次唔可以再印�
     const after = await buildRosterWorkbookForSite(fx.site.id, fx.unlockedMonth);
     const wsAfter = after.workbook.getWorksheet("2026")!;
     const afterScan = scanSheet(wsAfter);
-    expect(afterScan.values.some((v) => v.includes("測試安員甲")), "作廢咗嘅記錄唔應該再印落匯出").toBe(false);
+    expect(afterScan.values.some((v) => v.includes("測試保安員甲")), "作廢咗嘅記錄唔應該再印落匯出").toBe(false);
 
     // guardB（同一個 site、另一個雞頭）嘅記錄冇被 void 過，唔應該受影響。
-    expect(afterScan.values.some((v) => v.includes("測試安員乙"))).toBe(true);
+    expect(afterScan.values.some((v) => v.includes("測試保安員乙"))).toBe(true);
   });
 
-  it("同一個安員喺同一個 shift_type 多過一格：void 其中一格，另一格照印（唔係一刀切成行）", async () => {
+  it("同一個保安員喺同一個 shift_type 多過一格：void 其中一格，另一格照印（唔係一刀切成行）", async () => {
     // 幫 guardA 加多一日記錄（同一個 shift_type，第 2 日），等呢個
     // guard 喺呢個 block 有兩格：一格 void、一格保留。
     const secondRecord = await prisma.shiftRecord.create({
@@ -159,7 +159,7 @@ describe("Opus 對抗式驗收第三輪 B3：作廢咗嘅更次唔可以再印�
 
     // guardA 呢一行仲要存在（因為第 2 日嗰格仲係 active）。
     const scan = scanSheet(ws);
-    expect(scan.values.some((v) => v.includes("測試安員甲"))).toBe(true);
+    expect(scan.values.some((v) => v.includes("測試保安員甲"))).toBe(true);
 
     // 逐行搵返 guardA 嗰行，第 1 格（day1，已 void）應該空白，
     // 第 2 格（day2，未 void）應該有更別代號。呢度用 row.values 直接
@@ -167,7 +167,7 @@ describe("Opus 對抗式驗收第三輪 B3：作廢咗嘅更次唔可以再印�
     let guardARow: ExcelJSNS.Row | null = null;
     ws.eachRow((row) => {
       const first = row.getCell(6).value; // labelCol=6=姓名（standard layout）
-      if (typeof first === "string" && first.includes("測試安員甲")) guardARow = row;
+      if (typeof first === "string" && first.includes("測試保安員甲")) guardARow = row;
     });
     expect(guardARow, "搵唔到 guardA 嗰行").not.toBeNull();
     const row = guardARow as unknown as ExcelJSNS.Row;

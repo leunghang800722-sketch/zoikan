@@ -39,10 +39,10 @@ export interface TotalGroupRow {
 /** Gate 1 階段 1（規劃裁定，2026-09-12：分階段純加法）：一格 raw 字面——
  * formula 格存 `{formula,result}`（result=cached 值），其餘格直接存
  * resolved 字面。呢個形狀同時俾兩條路用：(a) `shift_records.provenance.
- * raw_row`（見 `scripts/seed/lib/roster-raw.ts`，逐條有更次記錄嘅安員行
+ * raw_row`（見 `scripts/seed/lib/roster-raw.ts`，逐條有更次記錄嘅保安員行
  * 用）；(b) `guard_rows` section 嘅 `rawRows`（下面，逐個原檔 row 一份，
  * 唔理呢一行有冇對應 shift_record——蓋住「成月零更、冇任何 shift_record
- * 掛得住」嘅安員行，例如淨係喺 special_items 記單一調整、7 月冇正式更
+ * 掛得住」嘅保安員行，例如淨係喺 special_items 記單一調整、7 月冇正式更
  * 記錄嘅人）。 */
 export type RawCellValue = string | number | { formula: string; result: string | number | null };
 export type RawRow = Record<string, RawCellValue>;
@@ -73,7 +73,7 @@ export type RosterSection =
       trailingSummaryCodes?: string[];
     }
   /** P1-WP3 第三輪規劃裁定（2026-09-12）：**唔准用啟發式分辨「齊整定
-   * 交錯」**——`rowFrom`／`rowTo` = 原檔呢個 block 嘅安員行 row 範圍
+   * 交錯」**——`rowFrom`／`rowTo` = 原檔呢個 block 嘅保安員行 row 範圍
    * （由 `wp1/rows.csv` 反推）。Export 時直接攞呢個 site×月**任何**
    * shift_record 嘅 `provenance.cell` row 落喺呢個範圍之內嘅記錄，
    * **照原檔 row 次序**逐行出（唔存在嘅 row=blank_guard_row）；7 月
@@ -114,7 +114,7 @@ export type RosterSection =
     }
   | { kind: "blank"; rows: number }
   /** 一組 Total/所需人手/尚欠（或者原檔用嘅其他字眼）——`rowFrom`／
-   * `rowTo` = 呢組數值涵蓋邊個原檔 row 範圍嘅安員（同 guard_rows 一樣
+   * `rowTo` = 呢組數值涵蓋邊個原檔 row 範圍嘅保安員（同 guard_rows 一樣
    * 用 provenance row 直接對應，唔靠 fuzzy-match rank 文字估）；
    * `scopeCodes`（DB shift_type.id，fallback 用）留低做冇 provenance
    * 情況嘅後備 scope。 */

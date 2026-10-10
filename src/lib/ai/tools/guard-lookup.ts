@@ -5,11 +5,11 @@ import { scrubRowsForResource } from "../field-scrub";
 import type { AiToolContext } from "./common";
 import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 
-// 要「安員:view」（規劃裁定）。
+// 要「保安員:view」（規劃裁定）。
 export function createGuardLookupTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "guard_lookup",
-    description: "用姓名或工號搵安員基本資料（唔會回電話——呢個系統嘅 AI 助手一律唔接觸電話）。要「安員:view」。",
+    description: "用姓名或工號搵保安員基本資料（唔會回電話——呢個系統嘅 AI 助手一律唔接觸電話）。要「保安員:view」。",
     inputSchema: z.object({ query: z.string().describe("姓名（中/英）或工號關鍵字") }).strict(),
     run: async ({ query }) => {
       const denied = await requireModuleOrDenied(ctx, "安員");

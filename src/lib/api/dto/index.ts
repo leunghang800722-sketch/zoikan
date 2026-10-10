@@ -30,11 +30,11 @@ const SHIFT_TYPE_FIELDS = ["id", "siteId", "code", "label", "startTime", "endTim
 // DTO／field-group gate 之前就 merge，唔使再靠「gate 之後先手動加返」
 // 嗰種繞過白名單機制嘅寫法。
 // WP-PII：加 16 個保安員個人資料/牌照/銀行欄——白名單只係「呢個資源
-// response 結構上准出現邊啲欄」，field-level gate（安員個人資料/安員
+// response 結構上准出現邊啲欄」，field-level gate（保安員個人資料/保安員
 // 銀行資料 view 權限）喺呢個白名單之上再由 applyFieldGroupGate() 做
 // （見 src/lib/api/field-groups.ts）。
 // WP-STAFFNO（老闆 2026-09-19 拍板）：`siaPermitAExpiry`／`siaPermitBExpiry`
-// 甲／乙類分開存（跟現有「安員」module，同 `siaPermitNo`/`siaPermitType`
+// 甲／乙類分開存（跟現有「保安員」module，同 `siaPermitNo`/`siaPermitType`
 // 一致層級，唔屬於 PII 組）；`staffNumbers` 係 additive 衍生欄（淨係
 // current，`[{scheme,number,status}]`，見 src/app/api/guards/route.ts
 // `loadCurrentStaffNumbers()`）——工號本身雞頭一直見到，所以
@@ -76,7 +76,7 @@ const GUARD_FIELDS = [
   "safetyCardNo",
   "safetyCardExpiry",
   // WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）日期——跟現有
-  // 「安員」module（同 safetyCardExpiry 一致層級，唔屬於 PII 組），列表
+  // 「保安員」module（同 safetyCardExpiry 一致層級，唔屬於 PII 組），列表
   // 都要（90 日內到期高亮／列表最近到期 pill 用），唔放入
   // GUARD_LIST_DETAIL_ONLY_FIELDS。
   "qasIssueDate",
@@ -87,13 +87,13 @@ const GUARD_FIELDS = [
   "bankAccountNo",
   "bankPayeeName",
   // WP-BOSS5 §25.4：3 位 HKICL 清算銀行編號，同上面三個 bank* 欄一組
-  // field group「安員銀行資料」，一齊淨係詳情有（見下面
+  // field group「保安員銀行資料」，一齊淨係詳情有（見下面
   // GUARD_LIST_DETAIL_ONLY_FIELDS）。
   "bankCode",
   "blacklistCheckResult",
   "blacklistCheckDate",
   // WP-GUARD-FIX（老闆 2026-09-25 要求）：「更表用名（別名）」——屬於
-  // 「安員個人資料」field group（見 field-groups.ts GUARD_PII_FIELDS），
+  // 「保安員個人資料」field group（見 field-groups.ts GUARD_PII_FIELDS），
   // 雞頭 DTO（GUARD_BROKER_FIELDS，broker-dto.ts）刻意唔加。
   "nameAliases",
   "staffNumbers",
@@ -108,7 +108,7 @@ const GUARD_FIELDS = [
   "formerNumberHit",
   // WP-PHASE3（§20.4 Phase 3 item 1）：長工介紹雞頭／簽證形式贊助雞頭
   // ——WP-LTSHIFT（§19）已經加落 schema，之前淨係內部寫，冇經呢個白名
-  // 單出街；安員抽屜「長工」區要顯示。跟「安員」module，唔係 PII 組
+  // 單出街；保安員抽屜「長工」區要顯示。跟「保安員」module，唔係 PII 組
   // （雞頭本身睇唔到呢個資源，見 broker-dto.ts GUARD_BROKER_FIELDS 冇
   // 呢兩欄，結構性隔離）。
   "referralBrokerId",
@@ -183,7 +183,7 @@ export const toGuardFullDTO = <T extends Record<string, unknown>>(row: T) => map
 // 銀行資料）先撳「編輯」叫 `GET /api/guards/:id`（詳情，仍然經同一個
 // field-group gate）。`hkid` 刻意保留（列表遮罩顯示，見
 // src/lib/api/guard-pii.ts maskHkidForList()）；牌照/平安卡/入職離職
-// 日期跟現有「安員」module，列表要用（到期 pill／篩選），一樣保留。
+// 日期跟現有「保安員」module，列表要用（到期 pill／篩選），一樣保留。
 const GUARD_LIST_DETAIL_ONLY_FIELDS = [
   "dateOfBirth",
   "address",
@@ -201,18 +201,18 @@ const GUARD_LIST_FIELDS = GUARD_FIELDS.filter(
 ) as unknown as readonly (typeof GUARD_FIELDS)[number][];
 export const toGuardListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LIST_FIELDS);
 // WP-STAFFNO：`GET/POST/PATCH /api/guards/:id/staff-numbers*` 白名單——
-// 工號本身（唔係身份證／銀行）跟「安員」module，冇獨立 field-group。
+// 工號本身（唔係身份證／銀行）跟「保安員」module，冇獨立 field-group。
 const GUARD_STAFF_NUMBER_FIELDS = ["id", "guardId", "scheme", "number", "status", "validFrom", "validTo", "note", "source", "createdAt", "updatedAt", "createdBy"] as const;
 export const toGuardStaffNumberDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_STAFF_NUMBER_FIELDS);
 // WP-PHASE3（§20.4 Phase 3 item 1）：`guard_longterm_posts` CRUD 白名單
 // ——「盤名」（site）唔係 PII（見 schema.prisma 呢個 model 頂註解），
-// 跟「安員」module 一般 view/update 就夠，冇獨立 field-group。
+// 跟「保安員」module 一般 view/update 就夠，冇獨立 field-group。
 const GUARD_LONGTERM_POST_FIELDS = ["id", "guardId", "siteId", "effectiveFrom", "effectiveTo", "source", "note", "voidedAt", "voidedBy", "createdAt", "updatedAt", "createdBy"] as const;
 export const toGuardLongtermPostDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LONGTERM_POST_FIELDS);
 // WP-MULTI（老闆 2026-09-19 拍板）：`GET/POST/PATCH/DELETE
 // /api/guards/:id/phones*`／`emergency-contacts*`／`addresses*`——內部
-// 角色（老闆/主管/會計）用嘅完整白名單。工號本身跟「安員」module
-// （電話），緊急聯絡人／地址跟「安員個人資料」module（見
+// 角色（老闆/主管/會計）用嘅完整白名單。工號本身跟「保安員」module
+// （電話），緊急聯絡人／地址跟「保安員個人資料」module（見
 // src/app/api/guards/[id]/phones/route.ts 等 route 頂註解），冇獨立
 // field-group（呢三個係獨立子資源，唔係 guards resource 嘅欄，field-
 // groups.ts 嗰套「field-level gate」機制唔適用，直接由 route 層
@@ -296,8 +296,8 @@ export const AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE: Record<string, FieldGroupResou
   referral_fee_rates: "referral_fee_rates",
   // WP-MULTI（老闆 2026-09-19 拍板）：三張新子表嘅 audit_log 一樣要跟
   // guards 一致模型——讀出嗰陣再按讀者權限 gate 一次（`guard_
-  // emergency_contacts`/`guard_addresses` 冇「安員個人資料:view」就要
-  // 剝走 name/tel/relationship/address；`guard_phones` 跟「安員」
+  // emergency_contacts`/`guard_addresses` 冇「保安員個人資料:view」就要
+  // 剝走 name/tel/relationship/address；`guard_phones` 跟「保安員」
   // module，呢個 mapping 純粹一致性處理，實際冧走任何欄，見
   // src/lib/api/field-groups.ts GUARD_PII_FIELDS 對呢三個 resource 嘅
   // 定義）。
@@ -307,8 +307,8 @@ export const AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE: Record<string, FieldGroupResou
   // WP-ROSTER-UPLOAD Phase A：roster_upload_rows 嘅 name_raw/tel_raw/
   // staff_no_raw 一樣要喺 GET /api/audit-log 讀出嗰陣再 gate 一次（同
   // guards/guard_phones 一致模型，唔可以淨係得寫入路徑受保護）——呢個
-  // mapping 漏咗嘅話，冇「安員個人資料:view」嘅內部角色（例如關咗呢格
-  // 嘅主管）都會經操作紀錄睇到未配對安員嘅姓名/電話/工號原文，WP-MULTI
+  // mapping 漏咗嘅話，冇「保安員個人資料:view」嘅內部角色（例如關咗呢格
+  // 嘅主管）都會經操作紀錄睇到未配對保安員嘅姓名/電話/工號原文，WP-MULTI
   // 已經撞過一次呢個漏洞（見 P2-版面重設計計劃.md §12）。
   roster_uploads: "roster_uploads",
   roster_upload_rows: "roster_upload_rows",

@@ -27,7 +27,7 @@ const WP_PII_NEW_GUARD_COLUMNS = [
   "blacklist_check_date",
 ];
 // WP-BOSS5 §25.4：新增嘅 bank_code（HKICL 銀行編號）同上面呢批一樣屬於
-// 「安員銀行資料」PII，一樣要驗證 ai.guards 睇唔到——獨立一個 array（唔
+// 「保安員銀行資料」PII，一樣要驗證 ai.guards 睇唔到——獨立一個 array（唔
 // 塞入上面果個「16 個新欄」常數，避免改埋成班歷史測試名/註解嘅 magic
 // number），下面兩條 it() 各自加一段。
 const WP_BOSS5_BANK_CODE_COLUMN = "bank_code";

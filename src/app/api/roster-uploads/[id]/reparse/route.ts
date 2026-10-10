@@ -1,5 +1,5 @@
 // WP-ROSTER-UPLOAD Phase A（§15.3）：`POST /api/roster-uploads/:id/reparse`
-// ——用返原檔 bytes 重新解析＋對照（唔使用戶重新上載），例如安員名冊／
+// ——用返原檔 bytes 重新解析＋對照（唔使用戶重新上載），例如保安員名冊／
 // 更別加咗新資料之後想重新配對一次。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";

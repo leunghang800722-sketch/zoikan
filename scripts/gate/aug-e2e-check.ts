@@ -86,8 +86,8 @@ async function main() {
   push("1. `db:reset && db:seed`");
   push("2. `build-aug-plan.ts` → `apply-aug-plan.ts --plan`（盤新建 7／alias 改 2／client_group 改 2／parent 改 8；更種新建 29；卡新建 113／7 月卡加 effective_to 改 2；散工新建 4——同 `--apply` 完全一樣）→ `--apply`");
   push("3. `verify-aug.ts`（唯讀）：101 組驗 95、一致 95、差異 0；逐人卡 8/8；控制室混合billing、CTB 6907 檔名鍵、HKU座頭 OT 卡全部 ✓");
-  push("4. 真實上載 36 個 `data/2026-09/aug-rosters/*.xlsx`（`processRosterUpload()`，seed 老闆 user，唔傳 `siteIdHint`）：site 未對到 0／36；unmatched_shift_type=0；ambiguous_shift_type=0；unmatched_sub_site=0；guard unmatched=440；guard ambiguous=21（合共 461 格未配對安員）");
-  push("5. `guard-fix` 收斂（驗收 Opus 5.5 重跑：461 格 → 10 → 0；needs_boss 5 格改保守預設建獨立安員）→ 上載 Postorder → guard-fix 四類計劃（set_longterm 8／set_longterm_post 56／set_referral 51）套用");
+  push("4. 真實上載 36 個 `data/2026-09/aug-rosters/*.xlsx`（`processRosterUpload()`，seed 老闆 user，唔傳 `siteIdHint`）：site 未對到 0／36；unmatched_shift_type=0；ambiguous_shift_type=0；unmatched_sub_site=0；guard unmatched=440；guard ambiguous=21（合共 461 格未配對保安員）");
+  push("5. `guard-fix` 收斂（驗收 Opus 5.5 重跑：461 格 → 10 → 0；needs_boss 5 格改保守預設建獨立保安員）→ 上載 Postorder → guard-fix 四類計劃（set_longterm 8／set_longterm_post 56／set_referral 51）套用");
   push("6. 「重新對數全月」（`runReconcileAllForMonth()`：recomputeSettlement＋roster_only/settlement_diff 全部 apply_roster）→ 月結「重算介紹費」（`recomputeReferralFees()`，含 Postorder 費率同步）。正式站次序（先逐盤套用、後上載 Postorder）同乾淨次序兩種都驗過，結果一致。");
   push("");
 
@@ -246,7 +246,7 @@ async function main() {
     );
   }
   push("");
-  push("逐雞頭拆開「仍然跟緊雞頭碼」嘅長工更（即 `longterm_non_post_broker`／`longterm_dispersed_b07` 兩種：安員有崗位但呢更唔喺崗位盤、或者完全冇崗位記錄推算唔到）——理論上應該接近 0，因為絕大部分長工更而家已經正確歸咗 B07：");
+  push("逐雞頭拆開「仍然跟緊雞頭碼」嘅長工更（即 `longterm_non_post_broker`／`longterm_dispersed_b07` 兩種：保安員有崗位但呢更唔喺崗位盤、或者完全冇崗位記錄推算唔到）——理論上應該接近 0，因為絕大部分長工更而家已經正確歸咗 B07：");
   push("");
   push("| 雞頭 | 系統總更數 | 其中長工但跟緊雞頭碼嘅更數 | 其中金額 | 非長工更數 | 非長工金額（同總表 by_unit 比對） |");
   push("|---|---:|---:|---:|---:|---:|");
@@ -290,11 +290,11 @@ async function main() {
   // ---- B5. 其他已知落差彙總 ----
   push("### B5. 其他已知落差（口徑不同／資料未入，非 bug）");
   push("");
-  push("- **淺水灣道11號蔚峰園**：7 月 flat 卡已加到期（8 月逐更 935.48）。剩 1 更／935.48（W 850）：更表同一人同日同更出現兩行（重複行，Postorder 當晚有兩格夜更），系統 unique（安員＋日＋更種）只記一更、對數標 unresolved——更表資料問題，要更表補返第二格嘅真正安員先入到數。");
+  push("- **淺水灣道11號蔚峰園**：7 月 flat 卡已加到期（8 月逐更 935.48）。剩 1 更／935.48（W 850）：更表同一人同日同更出現兩行（重複行，Postorder 當晚有兩格夜更），系統 unique（保安員＋日＋更種）只記一更、對數標 unresolved——更表資料問題，要更表補返第二格嘅真正保安員先入到數。");
   push(
     "- **HKU座頭 OT**（1Hr OT，84.85／更）：`buildMonthlyClose()`（呢個 script 讀嘅 P0 口徑）嘅逐盤更數/收入淨計 `record_type=shift`，唔含 `ot`——呢個係報表設計本身（OT 另有 `ot_unpriced` 統計），令呢個 B1 對比見到 -1 更／-84.85 嘅系統性落差，唔係缺失。WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）之後，`buildPostorderWorkbook()`（Postorder 總表 Excel export，`gate:postorder-export-aug`）已經將 OT 折入 Roster／PostOrder／siteRevenue，對真 Postorder 總表 0 差——呢個落差**淨係喺呢個 script（B1，直接讀 `buildMonthlyClose()`）先見到**，Postorder export 本身冇呢條落差。",
   );
-  push("- **needs_boss 5 格（國泰城 3／屯門凱和山 1／港深創新及科技園 1）**：驗收（Opus 5.5）改做保守預設——按更表姓名建獨立安員（cash_casual、無工號、audit「待核」），工號衝突嗰類寫 `guard_match_overrides`；已全部寫入。屯門凱和山收入 +870.97：Postorder 將 8/21 夜更標做唔收客（E 欄空），系統照逐更收客卡計——Postorder 逐格「Unbilled」未有自動規則（見驗收報告未修項）。");
+  push("- **needs_boss 5 格（國泰城 3／屯門凱和山 1／港深創新及科技園 1）**：驗收（Opus 5.5）改做保守預設——按更表姓名建獨立保安員（cash_casual、無工號、audit「待核」），工號衝突嗰類寫 `guard_match_overrides`；已全部寫入。屯門凱和山收入 +870.97：Postorder 將 8/21 夜更標做唔收客（E 欄空），系統照逐更收客卡計——Postorder 逐格「Unbilled」未有自動規則（見驗收報告未修項）。");
   push("- **Weave Hospital Road 2 格（T −1,600）**：更表寫長工 8/19、8/20 返工，老闆確認實際病假、T 派人頂——更表漏記，系統跟更表（B07），要更表改返先對到。");
   push("- **啟航1331**：系統收入 1,231,500 vs 總表 1,236,900（差 5,400＝1,350×4），更數 1,150 vs 1,154（差 4）——實查 `roster_upload_rows`（codeKind=shift）同 `shift_records` 都係 1,150，寫入本身冇問題；差嘅 4 更 1,350／更係「啟航1331 Event」獨立盤（§17.7 修3，K 1,350／990 卡）嘅更，總表 44 碼表用 S017 一個碼將 Event 更同主盤更合併計，系統就分成兩個盤（「啟航1331」＋「啟航1331 Event」）顯示——盤層面「分／合」口徑唔同，唔係漏更／唔是 bug（全公司總收入層面「系統全部盤」欄已經計埋呢 5,400）。");
   push(
@@ -325,7 +325,7 @@ async function main() {
   push("");
   const sitePctMatch = round2(((44 - siteDiffCount) / 44) * 100);
   push(
-    `**一句總結**：7 月——系統數＝總表（337/337 比對點 pass，100% 一致）。8 月——逐盤更數/收入 ${44 - siteDiffCount}/44（${sitePctMatch}%）盤零差額，長工結算單位判斷（WP-LTSHIFT §19）已實施（B07 更數 ${payrollByCode.get("B07")?.shifts ?? 0}）；長工介紹費後端已實施（本次系統合計 ${referralFeeSystemTotal}）；剩低差額主因：①長工 Autopay／K passthrough 兩項未入系統（WP-LTPAY／規則12機制均未做）；②未配對安員已按保守預設寫入（needs_boss＝0）；③${cp5IcInSystemReport ? "冇新疑似 bug" : "數碼港 CP5 IC 盤喺月結報表消失（monthly-close.ts:153-167，見 B4）"}；④其餘為更表資料問題（Weave 漏記病假 2 格、蔚峰園重複行 1 格、凱和山唔收客 1 格）同口徑差異（OT 唔入逐盤統計、啟航1331/Event 盤分合、CP5 IC 構造盤）。`,
+    `**一句總結**：7 月——系統數＝總表（337/337 比對點 pass，100% 一致）。8 月——逐盤更數/收入 ${44 - siteDiffCount}/44（${sitePctMatch}%）盤零差額，長工結算單位判斷（WP-LTSHIFT §19）已實施（B07 更數 ${payrollByCode.get("B07")?.shifts ?? 0}）；長工介紹費後端已實施（本次系統合計 ${referralFeeSystemTotal}）；剩低差額主因：①長工 Autopay／K passthrough 兩項未入系統（WP-LTPAY／規則12機制均未做）；②未配對保安員已按保守預設寫入（needs_boss＝0）；③${cp5IcInSystemReport ? "冇新疑似 bug" : "數碼港 CP5 IC 盤喺月結報表消失（monthly-close.ts:153-167，見 B4）"}；④其餘為更表資料問題（Weave 漏記病假 2 格、蔚峰園重複行 1 格、凱和山唔收客 1 格）同口徑差異（OT 唔入逐盤統計、啟航1331/Event 盤分合、CP5 IC 構造盤）。`,
   );
   push("");
 

@@ -1,7 +1,7 @@
 "use client";
 // WP-GUARD-FIX-UI（老闆 2026-09-25 要求，緊急，直接影響出糧）：「未配對
-// 安員修復」做入系統——老闆手機撳兩下就搞掂，唔使再喺 Terminal 貼 DB
-// 連線字串。呢個 module（`安員配對修復`）淨係老闆（`src/lib/rbac/
+// 保安員修復」做入系統——老闆手機撳兩下就搞掂，唔使再喺 Terminal 貼 DB
+// 連線字串。呢個 module（`保安員配對修復`）淨係老闆（`src/lib/rbac/
 // matrix.ts`），會批量建人、睇 U Team 名單身份證。
 //
 // 流程：① 上載 U Team 名單（拖放，現用一份）→ ② 揀月份「計算修復計劃」
@@ -57,7 +57,7 @@ interface PostorderDTO {
     roster_first_day_col: number | null;
     parse_error: string | null;
     // WP-POSTORDER-PO-PAIRS：淨係上載 PostOrder.csv（冇 Roster／
-    // pairs）嗰陣，長工組合唔喺呢個上載即刻計（要 DB 安員名），淨係
+    // pairs）嗰陣，長工組合唔喺呢個上載即刻計（要 DB 保安員名），淨係
     // 喺度俾個提示——真正組合喺「計算修復計劃」先計埋（見 plan.ts）。
     longterm_pairs_from_postorder?: number;
     longterm_cells_from_postorder?: number;
@@ -572,7 +572,7 @@ export default function GuardFixPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader kicker="排更" title="未配對安員修復" subtitle="更表大量「未配對」安員——上載 U Team 名單、計算修復計劃、一撳套用。" />
+      <PageHeader kicker="排更" title="未配對保安員修復" subtitle="更表大量「未配對」保安員——上載 U Team 名單、計算修復計劃、一撳套用。" />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
@@ -860,7 +860,7 @@ export default function GuardFixPage() {
             <div className="text-[13px] font-medium text-zk-text">{plan.month} 修復計劃</div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <SummaryTile label="補工號／別名" value={plan.summary.link} />
-              <SummaryTile label="新建安員" value={plan.summary.create + plan.summary.create_minimal} />
+              <SummaryTile label="新建保安員" value={plan.summary.create + plan.summary.create_minimal} />
               <SummaryTile label="要老闆決定" value={plan.summary.needs_boss} warn={plan.summary.needs_boss > 0} />
               <SummaryTile label="身份證缺（要 HR 補）" value={plan.summary.hkid_dropped_count} />
               <SummaryTile label="定做長工" value={plan.summary.set_longterm ?? 0} />
@@ -913,12 +913,12 @@ export default function GuardFixPage() {
 
             {plan.needsBoss.length > 0 && (
               <div>
-                <div className="mb-1 text-[13px] font-medium text-zk-text">要老闆決定（{plan.needsBoss.length} 項，喺安員頁／對數頁人手處理）</div>
+                <div className="mb-1 text-[13px] font-medium text-zk-text">要老闆決定（{plan.needsBoss.length} 項，喺保安員頁／對數頁人手處理）</div>
                 <div className="space-y-2">
                   {plan.needsBoss.map((n) => (
                     <div key={n.seq} className="break-words rounded border border-amber-200 bg-amber-50 p-2.5 text-[12.5px]">
                       <div className="font-medium text-zk-text">
-                        {n.name_raw ?? "（冇「安員個人資料」查閱權限，睇唔到姓名）"}
+                        {n.name_raw ?? "（冇「保安員個人資料」查閱權限，睇唔到姓名）"}
                         {n.staff_no_raw ? `　工號：${n.staff_no_raw}` : ""}
                         {n.tel_raw ? `　電話：${n.tel_raw}` : ""}
                       </div>
@@ -949,7 +949,7 @@ export default function GuardFixPage() {
           <div className="w-full max-w-sm rounded-lg bg-white p-4">
             <div className="mb-2 text-[15px] font-semibold text-zk-text">{confirmingApply.retry ? "確認重新套用" : "確認套用"}</div>
             <div className="mb-4 text-[13px] text-zk-muted">
-              會建 {confirmingApply.summary.create + confirmingApply.summary.create_minimal} 位新安員、幫 {confirmingApply.summary.link} 位登記工號／加別名
+              會建 {confirmingApply.summary.create + confirmingApply.summary.create_minimal} 位新保安員、幫 {confirmingApply.summary.link} 位登記工號／加別名
               {(confirmingApply.summary.set_longterm ?? 0) +
                 (confirmingApply.summary.set_longterm_post ?? 0) +
                 (confirmingApply.summary.set_referral ?? 0) +

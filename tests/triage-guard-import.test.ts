@@ -194,7 +194,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(draftGuardImportQuestions(pkgOf([]), [])).toEqual([]);
   });
 
-  it("權限：會計／主管只見自己嗰批；攞人哋 session／question 回 403；老闆見全部；轉交；雞頭／安員 403", async () => {
+  it("權限：會計／主管只見自己嗰批；攞人哋 session／question 回 403；老闆見全部；轉交；雞頭／保安員 403", async () => {
     const a = await applyPkg(accountant, [person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"] })]);
     const b = await applyPkg(supervisor, [person({ hkid: H[2], name: "導入測試員乙", nameStatus: "review", nos: ["U90002"] })]);
     const sa = a.body.triage.session_id as string;
@@ -224,7 +224,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, supervisor, sa)).status).toBe(200);
     expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, accountant, sa)).status).toBe(403);
     expect(await prisma.auditLog.count({ where: { action: "triage_reassign", rowId: sa } })).toBe(1);
-    // 雞頭／安員
+    // 雞頭／保安員
     for (const c of [broker, guardCk]) {
       expect((await get(listRoute as never, "/api/triage/sessions", c)).status).toBe(403);
       expect((await get(sessionRoute as never, `/api/triage/sessions/${sa}`, c, sa)).status).toBe(403);
@@ -233,7 +233,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     }
   });
 
-  it("遮罩：冇「安員個人資料」權限（主管出廠）睇唔到完整 hkid／出生日期／地址；有權限（會計）睇到", async () => {
+  it("遮罩：冇「保安員個人資料」權限（主管出廠）睇唔到完整 hkid／出生日期／地址；有權限（會計）睇到", async () => {
     const pk = [person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"], tel: "91000001" })];
     const a = await applyPkg(accountant, pk);
     const sid = a.body.triage.session_id as string;
@@ -298,7 +298,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     const q = await qOfKind("name_only_candidate");
     const ans = { option: "link", guard_id: gName.id };
     const pv = await (await preview(accountant, q.id, ans)).json();
-    // 預覽之後有人手改咗該安員：加咗另一個電話（影響會變）／改咗出生日期
+    // 預覽之後有人手改咗該保安員：加咗另一個電話（影響會變）／改咗出生日期
     await prisma.guard.update({ where: { id: gName.id }, data: { dateOfBirth: new Date("1985-01-01T00:00:00.000Z") } });
     const res = await answer(accountant, q.id, ans, pv.preview_hash);
     expect(res.status).toBe(409);
@@ -313,14 +313,14 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: gName.id } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1985-01-01");
   });
 
-  it("唯一性：身份證已屬另一安員 → 預覽 can_confirm=false，強行確認 422／409，不寫入；唔合法 hkid 400；電話撞號只標 conflict", async () => {
+  it("唯一性：身份證已屬另一保安員 → 預覽 can_confirm=false，強行確認 422／409，不寫入；唔合法 hkid 400；電話撞號只標 conflict", async () => {
     const { persons } = await seedMixed();
     await applyPkg(accountant, persons);
     const other = await prisma.guard.create({ data: { nameZh: "測試持有人", employmentType: "cash_casual", hkid: H[13]!, createdBy: "t" } });
     const q = await qOfKind("hkid_not_confirmed");
     // 唔合法
     expect((await preview(accountant, q.id, { option: "enter_hkid", value: "Z9999999" })).status).toBe(400);
-    // Minor-1：hkid 屬「非候選」現有安員，姓名唔同 → 422（留返人手）
+    // Minor-1：hkid 屬「非候選」現有保安員，姓名唔同 → 422（留返人手）
     const r422 = await preview(accountant, q.id, { option: "enter_hkid", value: H[13]! });
     expect(r422.status).toBe(422);
     expect(await prisma.guard.count({ where: { hkid: H[13] } })).toBe(1);
@@ -475,7 +475,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(views[0]!.n).toBe(1);
   });
 
-  it("矩陣：導入分診／安員批量導入——老闆／會計／主管出廠 grant；雞頭／安員硬性拒", () => {
+  it("矩陣：導入分診／保安員批量導入——老闆／會計／主管出廠 grant；雞頭／保安員硬性拒", () => {
     for (const mod of ["導入分診", "安員批量導入"] as const) {
       for (const role of ["老闆", "會計", "主管"] as RoleName[]) {
         expect(isGrantedByDefault(role, mod, "view")).toBe(true);
@@ -543,7 +543,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     for (const secret of SECRETS(H[3]!)) expect(supText).not.toContain(secret);
   });
 
-  it("Major-1(a)：冇「安員個人資料:view」，導入 preview／apply 回應剝走逐欄現值比較；有權限照舊", async () => {
+  it("Major-1(a)：冇「保安員個人資料:view」，導入 preview／apply 回應剝走逐欄現值比較；有權限照舊", async () => {
     await prisma.guard.create({ data: { nameZh: "導入測試員甲", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
     const pkg = pkgOf([person({ hkid: H[1], name: "導入測試員甲", nos: ["U90001"] })]);
     const call = (c: string) => post((async (r: Request) => (await import("@/app/api/guards/import/preview/route")).POST(r)) as never, "/api/guards/import/preview", c, { package: pkg });
@@ -555,7 +555,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(ap.body.results[0].fields.hkid).toBe("not_written");
   });
 
-  it("Major-1(b)：冇「安員個人資料:update」唔准覆蓋現有唔同出生日期／地址（403、題目 open、冇寫入）；老闆可以", async () => {
+  it("Major-1(b)：冇「保安員個人資料:update」唔准覆蓋現有唔同出生日期／地址（403、題目 open、冇寫入）；老闆可以", async () => {
     const g = await prisma.guard.create({ data: { nameZh: "導入測試員甲", employmentType: "cash_casual", hkid: H[1]!, dateOfBirth: new Date("1985-01-01T00:00:00.000Z"), createdBy: "t" } });
     const a = await applyPkg(supervisor, [person({ hkid: H[1], name: "導入測試員甲", nos: ["U90001"], dobStatus: "review" })]);
     expect(a.body.triage.open_questions).toBe(1);
@@ -563,7 +563,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     const ans = { option: "apply_fields", fields: { dateOfBirth: { action: "replace", value: "1990-05-06" } } };
     const r = await preview(supervisor, q.id, ans);
     expect(r.status).toBe(403);
-    expect(JSON.stringify(await r.json())).toContain("安員個人資料修改權限");
+    expect(JSON.stringify(await r.json())).toContain("保安員個人資料修改權限");
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id } })).dateOfBirth?.toISOString().slice(0, 10)).toBe("1985-01-01");
     // 確認包內值（唔覆蓋）主管得
     const ok = await confirm(supervisor, q.id, { option: "apply_fields", fields: { nameEn: { action: "skip" }, dateOfBirth: { action: "confirm" } } });
@@ -652,7 +652,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(same.rows[0].current_name_hidden).toBe(false);
   });
 
-  it("M1a-1：分診候選——經 hkid 對中而姓名唔同嘅現有安員，冇 PII view 唔回名；經工號對中嘅照顯示", async () => {
+  it("M1a-1：分診候選——經 hkid 對中而姓名唔同嘅現有保安員，冇 PII view 唔回名；經工號對中嘅照顯示", async () => {
     await prisma.guard.create({ data: { nameZh: "測試甲現有", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
     const b = await prisma.guard.create({ data: { nameZh: "測試乙現有", employmentType: "cash_casual", createdBy: "t" } });
     await prisma.guardStaffNumber.create({ data: { guardId: b.id, scheme: "U", number: "U90020", status: "current" } });
@@ -667,7 +667,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(boss).toContain("測試甲現有");
   });
 
-  it("M1a-2：冇「安員個人資料:update」改正有現值嘅出生日期，新值＝現值／≠現值都係 403（無現值先可補）；outcome 只分已補上／冇寫入", async () => {
+  it("M1a-2：冇「保安員個人資料:update」改正有現值嘅出生日期，新值＝現值／≠現值都係 403（無現值先可補）；outcome 只分已補上／冇寫入", async () => {
     await prisma.guard.create({ data: { nameZh: "導入測試員甲", employmentType: "cash_casual", hkid: H[1]!, dateOfBirth: new Date("1985-01-01T00:00:00.000Z"), createdBy: "t" } });
     await prisma.guard.create({ data: { nameZh: "導入測試員乙", employmentType: "cash_casual", hkid: H[2]!, createdBy: "t" } });
     await applyPkg(supervisor, [person({ hkid: H[1], name: "導入測試員甲", nos: ["U90001"], dobStatus: "review" }), person({ hkid: H[2], name: "導入測試員乙", nos: ["U90002"], dobStatus: "review" })]);
@@ -685,7 +685,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect(await outcome(owner, withDob)).toContain("唔同");
   });
 
-  it("第 3 點：姓名 replace 要「安員:update」——會計 403、主管 200；批量導入 decisions 同樣", async () => {
+  it("第 3 點：姓名 replace 要「保安員:update」——會計 403、主管 200；批量導入 decisions 同樣", async () => {
     const ga = await prisma.guard.create({ data: { nameZh: "測試舊名甲", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
     const gb = await prisma.guard.create({ data: { nameZh: "測試舊名乙", employmentType: "cash_casual", hkid: H[2]!, createdBy: "t" } });
     await applyPkg(accountant, [person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"] })]);
@@ -867,7 +867,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
     expect((await previewRoute0(accountant, pk)).status).toBe(200);
   });
 
-  it("補空欄：冇「安員:update」嘅會計，英文名現有係空→改正後確認得；現有非空→403", async () => {
+  it("補空欄：冇「保安員:update」嘅會計，英文名現有係空→改正後確認得；現有非空→403", async () => {
     const g1 = await prisma.guard.create({ data: { nameZh: "導入測試員甲", employmentType: "cash_casual", hkid: H[1]!, createdBy: "t" } });
     await prisma.guard.create({ data: { nameZh: "導入測試員乙", nameEn: "HAS EN", employmentType: "cash_casual", hkid: H[2]!, createdBy: "t" } });
     const a = await applyPkg(accountant, [person({ hkid: H[1], name: "導入測試員甲", nos: ["U90001"] }), person({ hkid: H[2], name: "導入測試員乙", nos: ["U90002"] })]);
@@ -918,7 +918,7 @@ describe("WP-AI-OPS §28.4 導入後對話式分診", () => {
       const pkg = pkgOf([p]);
       return post(applyRoute as never, "/api/guards/import/apply", cookie, { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)), decisions: { [p.key]: dec } });
     };
-    // 補空欄：冇「安員個人資料:update」嘅主管補空地址得；冇「安員:update」嘅會計補空英文名得
+    // 補空欄：冇「保安員個人資料:update」嘅主管補空地址得；冇「保安員:update」嘅會計補空英文名得
     expect((await run(supervisor, H[1]!, "導入測試員甲", { address: { action: "replace", value: "新地址9號" } })).status).toBe(200);
     expect(await prisma.guardAddress.count({ where: { guardId: gEmpty.id } })).toBe(1);
     expect((await run(accountant, H[1]!, "導入測試員甲", { name_en: { action: "replace", value: "FILLED EN" } })).status).toBe(200);

@@ -2,7 +2,7 @@
 // （multipart xlsx，同 `/api/roster-uploads` 一致「即時存 bytes＋sha256
 // →解析→存摘要」pattern，但唔另存逐行 PII——`buildGuardFixPlan()` 要用
 // 嗰陣先由 bytes 重新解析）；`GET` 列現用（最新一份 status=parsed）＋
-// 歷史。`安員配對修復` module 老闆專用。
+// 歷史。`保安員配對修復` module 老闆專用。
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";

@@ -94,7 +94,7 @@ describe("Opus 對抗式驗收第二輪 R1／R2：成行 void 晒唔准跌返 se
     const before = await buildRosterWorkbookForSite(fx.site.id, fx.unlockedMonth);
     const wsBefore = before.workbook.getWorksheet("2026")!;
     const valuesBefore = scanSheet(wsBefore);
-    expect(valuesBefore.some((v) => v.includes("測試安員甲"))).toBe(true);
+    expect(valuesBefore.some((v) => v.includes("測試保安員甲"))).toBe(true);
     expect(valuesBefore.includes(RAW_MARKER)).toBe(false); // 有 active 記錄，唔應該用 section.rawRows
     expect(before.rawFallbackCells?.allCancelled).toBe(0);
   });
@@ -119,7 +119,7 @@ describe("Opus 對抗式驗收第二輪 R1／R2：成行 void 晒唔准跌返 se
     // 行首欄（R1 容許「仍出（由 guards 推導）或空」，呢度驗證嘅係
     // 「仍出」呢個分支——我哋實際實現用 cancelled 記錄嘅 guard 身份
     // 推導行首欄）：guardA 個名應該仍然搵到。
-    expect(valuesAfter.some((v) => v.includes("測試安員甲")), "行首欄應該仍然由 guard 推導出（R1 容許嘅其中一種寫法）").toBe(true);
+    expect(valuesAfter.some((v) => v.includes("測試保安員甲")), "行首欄應該仍然由 guard 推導出（R1 容許嘅其中一種寫法）").toBe(true);
 
     // R2：呢一行計落 rawFallbackCells.allCancelled。
     expect(after.rawFallbackCells?.allCancelled).toBe(1);
@@ -141,7 +141,7 @@ describe("Opus 對抗式驗收第二輪 R1／R2：成行 void 晒唔准跌返 se
     let guardARow: ExcelJSNS.Row | null = null;
     wsAfter.eachRow((row) => {
       const v = row.getCell(6).value;
-      if (typeof v === "string" && v.includes("測試安員甲")) guardARow = row;
+      if (typeof v === "string" && v.includes("測試保安員甲")) guardARow = row;
     });
     expect(guardARow).not.toBeNull();
     const row = guardARow as unknown as ExcelJSNS.Row;

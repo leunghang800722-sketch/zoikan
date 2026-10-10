@@ -2,7 +2,7 @@
 // 唔喺 runtime 讀 README-P1.md/docs/api.md 原檔——嗰兩份文件本身冇 PDPO
 // 資料但體積大過需要，呢度手抄一份精簡摘要，符合「讀操作說明」呢個需求
 // 同時控制 token 用量）。冇 DB 查詢，全部工具入面淨係呢個唔使 session
-// 權限判斷（除咗雞頭/安員硬性擋，但 route 層已經擋晒，呢個工具本身冇
+// 權限判斷（除咗雞頭/保安員硬性擋，但 route 層已經擋晒，呢個工具本身冇
 // 敏感內容）。
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
@@ -13,17 +13,17 @@ const SYSTEM_SUMMARY = `
 在勤保安排更系統——精簡操作說明（AI 助手用，唔含真名/電話/工號）
 
 ## 角色
-老闆／主管／會計／雞頭／安員。AI 助手（呢個工具）淨係老闆／主管／會計
-可以用；雞頭／安員完全接觸唔到。
+老闆／主管／會計／雞頭／保安員。AI 助手（呢個工具）淨係老闆／主管／會計
+可以用；雞頭／保安員完全接觸唔到。
 
 ## 核心概念
 - 盤（site）：一個保安服務地點，掛住客戶名、收費模式（按更/月費/行政費）。
 - 更別（shift_type）：某個盤嘅更次類型（例如 N/C/A/B/OT）,有開始/完結時間。
-- 安員（guard）：保安員個人資料（唔含電話——AI 助手睇唔到電話）。
+- 保安員（guard）：保安員個人資料（唔含電話——AI 助手睇唔到電話）。
 - 雞頭（broker）：外判判頭／公司兵／長工／客戶自己嘅人，每個雞頭有代號
   （例如 K/W/G/D/T/Y），真名唔會出現喺呢個系統嘅程式碼/文件入面。
-- 更次記錄（shift_record）：邊個安員、邊日、邊個更別，出咗勤定請咗假。
-- 價目（rate_card）：某個盤/更別/雞頭/安員嘅收費——client_rate（收客價，
+- 更次記錄（shift_record）：邊個保安員、邊日、邊個更別，出咗勤定請咗假。
+- 價目（rate_card）：某個盤/更別/雞頭/保安員嘅收費——client_rate（收客價，
   問客收幾多）、guard_wage+broker_fee=payout_rate（出街價，公司俾雞頭幾
   多）。
 - 特殊項（special_item）：散 Event／獨立雞頭費／專車／補單等特殊收支。
@@ -48,7 +48,7 @@ export function createDescribeSystemTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "describe_system",
     description:
-      "讀在勤系統嘅操作說明摘要（角色/盤/更別/安員/雞頭/價目/月結等核心概念，同呢個 AI 助手本身嘅權限規則）。當用戶問「呢個系統點用」「乜嘢係雞頭」「點解我睇唔到收客價」呢類概念性問題時用呢個工具，唔係查實際數據。",
+      "讀在勤系統嘅操作說明摘要（角色/盤/更別/保安員/雞頭/價目/月結等核心概念，同呢個 AI 助手本身嘅權限規則）。當用戶問「呢個系統點用」「乜嘢係雞頭」「點解我睇唔到收客價」呢類概念性問題時用呢個工具，唔係查實際數據。",
     inputSchema: z.object({}).strict(),
     run: async () => {
       const denied = denyIfBroker(ctx);

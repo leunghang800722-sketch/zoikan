@@ -14,14 +14,14 @@
 // 一鍵完全同一條路，會寫 `guard_fix_runs` 令 Postorder 生效做權威），
 // 冇先 fallback 落下面舊做法。以下係舊註解（冇 U Team 名單嘅情況）：
 //
-// **老實講低**：呢個 dev 環境冇 U Team 名單 xlsx（`安員配對修復`模組
-// 用嚟 link/create 未配對安員嗰個檔案），所以 guard-fix 嘅
+// **老實講低**：呢個 dev 環境冇 U Team 名單 xlsx（`保安員配對修復`模組
+// 用嚟 link/create 未配對保安員嗰個檔案），所以 guard-fix 嘅
 // link／create／createMinimal／needsBoss 呢幾類 action 呢度做唔到（冇
 // 檔案，唔可以自己作一份假嘅 U Team 名單），改用 `buildGuardFixPlan({
 // uTeamRows: [] })`——`set_longterm_post`（長工自己崗位盤，WP-LTSHIFT
 // §19 嘅核心，靠 Postorder `longterm-pairs.csv`／`PostOrder.csv`，同
 // U Team 名單完全獨立）同 `set_referral`／`set_referral_inferred`
-// 照計唔受影響；受影響嘅淨係「將更表入面完全未配對嘅姓名連/建做安員」
+// 照計唔受影響；受影響嘅淨係「將更表入面完全未配對嘅姓名連/建做保安員」
 // 呢批（§20.6 dev 全流程實測見過 440 格），對長工糧嚟講唔核心——長工
 // 本身喺 seed 已經有 Guard 記錄（`guards.csv`／Maxwell 匯入），更表姓名
 // 同已有 Guard.nameZh 直接文字對到就得，唔靠 U Team。呢個限制嘅實際
@@ -182,7 +182,7 @@ async function main() {
       const g = await prisma.guard.findFirst({ where: { OR: [{ staffNoMw: row.staffNo }, { staffNo: row.staffNo }] } });
       const vb = await prisma.broker.findUnique({ where: { code: row.visaBrokerCode! } });
       if (g && vb) await prisma.guard.update({ where: { id: g.id }, data: { visaSponsoredByBrokerId: vb.id } });
-      console.log(`[${GATE_TAG}] 簽證形式長工標記：${g && vb ? "已設" : "⚠ 揾唔到安員或雞頭"}`);
+      console.log(`[${GATE_TAG}] 簽證形式長工標記：${g && vb ? "已設" : "⚠ 揾唔到保安員或雞頭"}`);
     }
 
     // ------------------------------------------------------------- 5. 長工結算單位重算 + 全月對數套用
@@ -204,7 +204,7 @@ async function main() {
       if (!guard) {
         // 8 月新入職長工（唔喺 7 月 seed CSV 範圍內，dev DB 冇對應
         // Guard）——更表上載／guard-fix `createMinimal` 好可能已經按
-        // 更表姓名建咗一個獨立安員（`employmentType=cash_casual`，冇
+        // 更表姓名建咗一個獨立保安員（`employmentType=cash_casual`，冇
         // `staffNoMw`），試下用 `nameZh` 撈返嗰個，等佢個 shift_records
         // 唔會走失；揾唔到先真係建新（dev-only，兩種情況都要補
         // `staffNoMw`／`employmentType` 先至配對得到）。
@@ -331,7 +331,7 @@ async function main() {
         });
       }
     }
-    console.log(`[${GATE_TAG}] 配對：${matched}/${fixture.length}（其中 ${nameMatchedCount} 人靠 nameZh 撈返 guard-fix createMinimal 建嘅獨立安員、${createdCount} 人 dev DB 完全冇記錄先新建）`);
+    console.log(`[${GATE_TAG}] 配對：${matched}/${fixture.length}（其中 ${nameMatchedCount} 人靠 nameZh 撈返 guard-fix createMinimal 建嘅獨立保安員、${createdCount} 人 dev DB 完全冇記錄先新建）`);
 
     // ------------------------------------------------------------- 8. 重算
     console.log(`[${GATE_TAG}] === 8. recomputeLongtermPayroll(2026-08) ===`);

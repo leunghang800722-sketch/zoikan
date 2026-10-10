@@ -1,7 +1,7 @@
 // WP-MULTI（老闆 2026-09-19 拍板）：緊急聯絡人獨立子表——GET（`sort_
 // order` 排序）／POST（新增一行，冇傳 `sort_order` 就自動排尾）。跟
-// 「安員個人資料」module（唔用 module selector——雞頭／安員出廠都係
-// `uniformRow(D)`，同「自己安員」冇關；主管跟現有規則 `row(O,…)`，見
+// 「保安員個人資料」module（唔用 module selector——雞頭／保安員出廠都係
+// `uniformRow(D)`，同「自己保安員」冇關；主管跟現有規則 `row(O,…)`，見
 // src/lib/rbac/matrix.ts）。呢個 module 本身已經令雞頭讀寫兩邊一致
 // 403（同 GUARD_PII_FIELDS 保護 `guards.emergency_contact_*` 一致嘅
 // module，唔需要額外硬擋）。

@@ -130,7 +130,7 @@ describe("WP-POSTORDER-CSV：POST /api/guard-fix/postorder CSV 路徑", () => {
     supervisorCookie = await sessionCookieForUser(fx.userIds["主管"]);
   });
 
-  it("§1 主管上載 CSV → 403（安員配對修復淨係老闆）", async () => {
+  it("§1 主管上載 CSV → 403（保安員配對修復淨係老闆）", async () => {
     const res = await uploadPostorder(reqMultipartCsv("http://test.local/api/guard-fix/postorder", supervisorCookie, "a,b\n1,2", "a,b\n1,2", "2026-08-01"));
     expect(res.status).toBe(403);
   });

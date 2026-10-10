@@ -6,6 +6,7 @@
 // API（GET/PATCH /api/roles/:id/permissions、POST /api/roles 複製）完全
 // 不變，淨係換皮。
 import { uiLabel } from "@/lib/ui/format";
+import { moduleLabel } from "@/lib/rbac/labels";
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Notice } from "@/components/ui/Notice";
@@ -309,8 +310,8 @@ export default function RolesPage() {
 
                   {MODULES.map((mod) => (
                     <div key={mod} className="flex h-[38px] items-center border-b border-[#f1f5f9] last:border-b-0">
-                      <div className="min-w-[160px] flex-1 truncate px-4 text-[13px] text-zk-text" title={uiLabel(mod)}>
-                        {uiLabel(mod)}
+                      <div className="min-w-[160px] flex-1 truncate px-4 text-[13px] text-zk-text" title={moduleLabel(mod)}>
+                        {moduleLabel(mod)}
                       </div>
                       {ACTIONS.map((action) => {
                         const { granted, hardDenied } = cellValue(mod, action);
