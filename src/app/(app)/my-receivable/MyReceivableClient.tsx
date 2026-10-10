@@ -165,7 +165,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
             brokers.length > 0 && (
               <select
                 data-testid="my-receivable-broker-select"
-                className="rounded border-0 bg-transparent text-[12.5px] font-semibold text-[#1e40af] outline-none"
+                className="rounded border-0 bg-transparent text-zk-sm font-semibold text-zk-primary-deep outline-none"
                 value={brokerParam}
                 onChange={(e) => changeBroker(e.target.value)}
               >
@@ -278,18 +278,18 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
         ) : (
           <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
             {data?.grouped_days.map((g, i) => (
-              <div key={i} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0" data-testid="my-receivable-row-mobile">
+              <div key={i} className="flex items-center justify-between gap-2.5 border-b border-zk-border-soft px-3.5 py-2.5 last:border-b-0" data-testid="my-receivable-row-mobile">
                 <div className="min-w-0">
-                  <div className="truncate text-[13px] font-medium text-zk-text">{g.site_name}</div>
-                  <div className="mt-0.5 text-[11.5px] text-zk-muted">
+                  <div className="truncate text-zk-base font-medium text-zk-text">{g.site_name}</div>
+                  <div className="mt-0.5 text-zk-xs text-zk-muted">
                     {fmtDate(g.work_date)} · {g.shift_type_code} · {g.shifts} × {fmtMoney(g.outside_rate)}
                   </div>
                 </div>
-                <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(g.amount)}</div>
+                <div className="shrink-0 text-zk-base font-semibold text-zk-text">{fmtMoney(g.amount)}</div>
               </div>
             ))}
             {data && (
-              <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-[13px] font-bold text-zk-text">
+              <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-zk-base font-bold text-zk-text">
                 <span>合計 {data.total_shifts} 更</span>
                 <span>{fmtMoney(data.total)}</span>
               </div>

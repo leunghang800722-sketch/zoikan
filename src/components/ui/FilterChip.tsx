@@ -14,13 +14,13 @@ export interface FilterChipProps {
 export function FilterChip({ label, children, showCaret = true, className }: FilterChipProps) {
   return (
     <div
-      className={`flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[6px] text-[13px] text-[#334155] ${className ?? ""}`}
+      className={`flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[6px] text-zk-base text-zk-text-secondary ${className ?? ""}`}
     >
       <span className="text-xs text-zk-faint">{label}</span>
-      <span className="[&_select]:cursor-pointer [&_select]:border-0 [&_select]:bg-transparent [&_select]:p-0 [&_select]:text-[13px] [&_select]:text-[#334155] [&_select]:outline-none [&_input]:border-0 [&_input]:bg-transparent [&_input]:p-0 [&_input]:text-[13px] [&_input]:text-[#334155] [&_input]:outline-none">
+      <span className="[&_select]:cursor-pointer [&_select]:border-0 [&_select]:bg-transparent [&_select]:p-0 [&_select]:text-zk-base [&_select]:text-zk-text-secondary [&_select]:outline-none [&_input]:border-0 [&_input]:bg-transparent [&_input]:p-0 [&_input]:text-zk-base [&_input]:text-zk-text-secondary [&_input]:outline-none">
         {children}
       </span>
-      {showCaret && <span className="text-[10px] text-zk-faint">▾</span>}
+      {showCaret && <span className="text-zk-2xs text-zk-faint">▾</span>}
     </div>
   );
 }

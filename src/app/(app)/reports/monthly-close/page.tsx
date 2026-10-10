@@ -141,37 +141,37 @@ function RuleCard({ rule }: { rule: ReconciliationRule }) {
         <div className="flex min-w-0 items-center gap-2">
           <span className="h-[10px] w-[10px] shrink-0 rounded-full" style={{ background: statusDot(rule.status) }} />
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium text-zk-text">
+            <div className="truncate text-zk-base font-medium text-zk-text">
               {rule.rule}. {rule.label}
             </div>
-            <div className="truncate text-[11.5px] text-zk-muted">{rule.title}</div>
+            <div className="truncate text-zk-xs text-zk-muted">{rule.title}</div>
           </div>
         </div>
         <div className="shrink-0">
           {rule.status === "pass" && <Pill variant="success">通過</Pill>}
           {rule.status === "not_enabled" && <Pill variant="neutral">未啟用</Pill>}
           {rule.status === "diff" && (
-            <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap" style={{ background: "#fee2e2", color: "#b91c1c" }}>
+            <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap" style={{ background: "#fee2e2", color: "#b91c1c" }}>
               {rule.diff_count} 項差異
             </span>
           )}
         </div>
       </div>
-      {rule.note && <div className="mt-1 pl-5 text-[11.5px] text-zk-muted">{rule.note}</div>}
+      {rule.note && <div className="mt-1 pl-5 text-zk-xs text-zk-muted">{rule.note}</div>}
       {rule.status === "diff" && rule.details.length > 0 && (
         <div className="mt-2 overflow-hidden rounded-md border" style={{ borderColor: "#fecaca" }}>
           {shown.map((d, i) => {
             const { kind, who, detail } = ruleDetailRow(rule.key, d);
             return (
-              <div key={i} className="flex gap-2 border-b bg-white px-2.5 py-1.5 text-[11.5px] last:border-b-0" style={{ borderColor: "#fef2f2" }}>
-                <span className="w-[110px] shrink-0 font-semibold text-[#b91c1c]">{kind}</span>
+              <div key={i} className="flex gap-2 border-b bg-white px-2.5 py-1.5 text-zk-xs last:border-b-0" style={{ borderColor: "#fef2f2" }}>
+                <span className="w-[110px] shrink-0 font-semibold text-zk-danger-dark">{kind}</span>
                 <span className="w-[100px] shrink-0 font-medium text-zk-text">{who}</span>
                 <span className="min-w-0 truncate text-zk-muted">{detail}</span>
               </div>
             );
           })}
           {rule.details.length > 5 && (
-            <button type="button" onClick={() => setShowAll((v) => !v)} className="w-full bg-white px-2.5 py-1.5 text-left text-[11.5px] text-zk-primary hover:bg-zk-header">
+            <button type="button" onClick={() => setShowAll((v) => !v)} className="w-full bg-white px-2.5 py-1.5 text-left text-zk-xs text-zk-primary hover:bg-zk-header">
               {showAll ? "收埋 ‹" : `睇全部 ${rule.details.length} 項 ›`}
             </button>
           )}
@@ -323,7 +323,7 @@ export default function MonthlyCloseWorkbenchPage() {
       <Banner kind="success" message={notice} />
 
       {referralFeeResult && (
-        <div className="rounded-lg border border-zk-border bg-white p-3 text-[12.5px]" data-testid="referral-fee-result">
+        <div className="rounded-lg border border-zk-border bg-white p-3 text-zk-sm" data-testid="referral-fee-result">
           <div className="mb-1 font-medium text-zk-text">介紹費重算結果（{month}）——合共 {fmtMoney(referralFeeResult.total_amount)}</div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-zk-muted">
             {Object.entries(referralFeeResult.totals_by_broker_code).map(([code, amount]) => (
@@ -337,7 +337,7 @@ export default function MonthlyCloseWorkbenchPage() {
             <div className="mt-1 text-zk-muted" data-testid="referral-rate-sync">
               Postorder 費率同步：寫入 {referralFeeResult.rate_sync.upserted} 組
               {referralFeeResult.rate_sync.skipped.length > 0 ? (
-                <span className="text-amber-700">、跳過 {referralFeeResult.rate_sync.skipped.length} 行（對唔到雞頭／盤或者費率打架）</span>
+                <span className="text-zk-warning-darker">、跳過 {referralFeeResult.rate_sync.skipped.length} 行（對唔到雞頭／盤或者費率打架）</span>
               ) : (
                 "、冇跳過"
               )}
@@ -345,7 +345,7 @@ export default function MonthlyCloseWorkbenchPage() {
           )}
           {referralFeeResult.exempt_shift_count > 0 && <div className="mt-1 text-zk-muted">卓弘客戶盤豁免咗 {referralFeeResult.exempt_shift_count} 格。</div>}
           {referralFeeResult.warnings.length > 0 && (
-            <div className="mt-1 text-amber-700">{referralFeeResult.warnings.length} 個 (長工,盤) 組合冇設費率，未計入（見 audit / referral_fee_rates）。</div>
+            <div className="mt-1 text-zk-warning-darker">{referralFeeResult.warnings.length} 個 (長工,盤) 組合冇設費率，未計入（見 audit / referral_fee_rates）。</div>
           )}
         </div>
       )}
@@ -413,13 +413,13 @@ export default function MonthlyCloseWorkbenchPage() {
                     唔拆開）——tests/e2e/wp4.spec.ts (b) 用
                     `page.getByText("§6.3 五條自動對數規則")` 揾呢一句，
                     拆成兩個 element 會令個 substring 唔連續，揾唔到。 */}
-                <div className="text-[13.5px] font-semibold text-zk-text" data-testid="recon-rules-title">五條自動對數規則</div>
+                <div className="text-zk-base font-semibold text-zk-text" data-testid="recon-rules-title">五條自動對數規則</div>
                 <div className="text-xs text-zk-muted">
                   {passCount} 通過 · {notEnabledCount} 未啟用
                   {diffCount > 0 && (
                     <>
                       {" "}
-                      · <span className="font-semibold text-[#dc2626]">{diffCount} 有差異</span>
+                      · <span className="font-semibold text-zk-danger">{diffCount} 有差異</span>
                     </>
                   )}
                 </div>
@@ -432,7 +432,7 @@ export default function MonthlyCloseWorkbenchPage() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <h2 className="text-[13.5px] font-semibold text-zk-text">逐盤月結</h2>
+              <h2 className="text-zk-base font-semibold text-zk-text">逐盤月結</h2>
               <div className={tableCls.wrap}>
                 <table className={tableCls.table} style={{ minWidth: tableMinWidth(CLOSE_COLS) }}>
                   <thead>
@@ -453,7 +453,7 @@ export default function MonthlyCloseWorkbenchPage() {
                         <td className={tableCls.tdNum}>{fmtMoney(r.revenue)}</td>
                         <td className={tableCls.tdNum}>{fmtMoney(r.cost)}</td>
                         <td className={tableCls.tdNum}>{fmtMoney(r.profit)}</td>
-                        <td className={r.margin_pct != null && r.margin_pct < 8 ? "border-b border-[#f1f5f9] px-3.5 py-2.5 text-right font-bold text-[#dc2626]" : tableCls.tdNum}>
+                        <td className={r.margin_pct != null && r.margin_pct < 8 ? "border-b border-zk-border-soft px-3.5 py-2.5 text-right font-bold text-zk-danger" : tableCls.tdNum}>
                           {r.margin_pct == null ? "n/a" : `${r.margin_pct}%`}
                         </td>
                       </tr>
@@ -479,7 +479,7 @@ export default function MonthlyCloseWorkbenchPage() {
                   <button
                     type="button"
                     onClick={() => setShowOutside((v) => !v)}
-                    className="w-fit text-left text-[12.5px] text-zk-primary hover:underline"
+                    className="w-fit text-left text-zk-sm text-zk-primary hover:underline"
                   >
                     {showOutside ? "收埋 ‹" : `額外盤 ${result.monthly_close.outside_rows.length} 個（唔入月結對數）›`}
                   </button>
@@ -519,10 +519,10 @@ export default function MonthlyCloseWorkbenchPage() {
           {/* 右邊 sticky 狀態卡。 */}
           <div className="flex h-fit flex-col gap-3 rounded-[10px] border border-zk-border bg-white p-4 lg:sticky lg:top-6">
             <div className="flex items-center justify-between">
-              <div className="text-[13.5px] font-semibold text-zk-text">{month} 狀態</div>
+              <div className="text-zk-base font-semibold text-zk-text">{month} 狀態</div>
               <Pill variant={locked ? "warning" : "success"}>{locked ? "已鎖定" : "未鎖定"}</Pill>
             </div>
-            <dl className="flex flex-col gap-1.5 text-[12.5px] text-zk-text">
+            <dl className="flex flex-col gap-1.5 text-zk-sm text-zk-text">
               {/* 應修①：刪重覆「月份」row（頁首 FilterChip 已經顯示緊）；
                   「最後 Generate」——month_closes 冇 generated_at 欄，由
                   audit_log 查返（見 generate route 註解），而家現況一律
@@ -563,8 +563,8 @@ export default function MonthlyCloseWorkbenchPage() {
 
             {/* P3-3.4（老闆 3A）：鎖月只喺「月結 › 一鍵結算」頁做（鎖月前體檢、條件、鎖／解鎖掣都喺嗰度）。 */}
             <div className="flex flex-col gap-1.5" data-testid="lock-pointer">
-              <div className="text-[12px] leading-relaxed text-zk-muted">{locked ? "已鎖定。要解鎖或者睇鎖月紀錄，去一鍵結算頁。" : "鎖月前體檢同鎖定掣喺一鍵結算頁。"}</div>
-              <Link href={`/month-close?month=${month}`} className="text-[13px] font-semibold text-zk-primary hover:underline" data-testid="goto-month-close">
+              <div className="text-zk-sm leading-relaxed text-zk-muted">{locked ? "已鎖定。要解鎖或者睇鎖月紀錄，去一鍵結算頁。" : "鎖月前體檢同鎖定掣喺一鍵結算頁。"}</div>
+              <Link href={`/month-close?month=${month}`} className="text-zk-base font-semibold text-zk-primary hover:underline" data-testid="goto-month-close">
                 去一鍵結算{locked ? "" : "鎖月"} ›
               </Link>
             </div>

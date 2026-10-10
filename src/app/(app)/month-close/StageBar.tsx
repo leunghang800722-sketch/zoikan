@@ -15,12 +15,12 @@ export function StageBar({ stages }: { stages: Stage[] }) {
         const c = DOT[s.state];
         return (
           <li key={s.key} data-stage={s.key} data-state={s.state} className="flex items-center gap-2.5 border-b border-zk-border-soft px-4 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0" style={{ background: c.cell }}>
-            <span className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-full text-[12px] font-bold" style={{ background: c.bg, color: c.fg, border: `1.5px solid ${c.bd}` }}>
+            <span className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-full text-zk-sm font-bold" style={{ background: c.bg, color: c.fg, border: `1.5px solid ${c.bd}` }}>
               {s.state === "ok" ? "✓" : i + 1}
             </span>
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-zk-text">{s.name}</div>
-              <div className="truncate text-[11.5px]" style={{ color: c.sub }}>
+              <div className="text-zk-base font-semibold text-zk-text">{s.name}</div>
+              <div className="truncate text-zk-xs" style={{ color: c.sub }}>
                 {s.sub}
               </div>
             </div>

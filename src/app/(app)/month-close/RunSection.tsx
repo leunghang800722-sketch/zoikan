@@ -21,8 +21,8 @@ export function RunSection({ month, run, busy, locked, havePostorder = false, on
   const ranBefore = !!run && run.status === "done";
   return (
     <section className="flex flex-wrap items-center gap-x-3.5 gap-y-2 rounded-[10px] border border-zk-border bg-white px-4 py-3.5" data-testid="run-section">
-      <h2 className="text-[14px] font-semibold text-zk-text">② 一鍵結算</h2>
-      <span className="min-w-0 text-[12.5px] text-zk-muted">{bits.join(" · ")}</span>
+      <h2 className="text-zk-md font-semibold text-zk-text">② 一鍵結算</h2>
+      <span className="min-w-0 text-zk-sm text-zk-muted">{bits.join(" · ")}</span>
       <Button variant={ranBefore ? "secondary" : "primary"} className="ml-auto !px-4 !py-2 font-semibold" onClick={onStart} disabled={busy || running || locked}>
         {ranBefore ? "重新一鍵結算" : "一鍵結算"} {month}
       </Button>

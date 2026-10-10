@@ -43,7 +43,7 @@ export function EmptyMonthNotice({ month, isEmpty, onJump }: { month: string; is
     <Notice
       variant="info"
       action={
-        <button type="button" data-testid="empty-month-jump" onClick={() => onJump(latestMonth)} className="font-semibold text-[#1e40af] underline">
+        <button type="button" data-testid="empty-month-jump" onClick={() => onJump(latestMonth)} className="font-semibold text-zk-primary-deep underline">
           去 {latestMonth}
         </button>
       }

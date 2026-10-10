@@ -36,7 +36,7 @@ export function LogoutButton({ className }: { className?: string } = {}) {
       type="button"
       onClick={onLogout}
       disabled={loading}
-      className={className ?? "w-full rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"}
+      className={className ?? "w-full rounded border border-zk-input-border px-3 py-1.5 text-sm text-zk-text-secondary hover:bg-zk-surface disabled:opacity-50"}
     >
       {loading ? "登出中…" : "登出"}
     </button>

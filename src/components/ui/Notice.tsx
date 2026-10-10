@@ -22,7 +22,7 @@ export function Notice({ variant, children, action, className }: NoticeProps) {
   const s = VARIANT_STYLE[variant];
   return (
     <div
-      className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-[12.5px] ${className ?? ""}`}
+      className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-zk-sm ${className ?? ""}`}
       style={{ background: s.bg, borderColor: s.border, color: s.fg }}
     >
       <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.dot }} />

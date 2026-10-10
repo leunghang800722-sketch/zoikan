@@ -28,7 +28,7 @@ export function Pill({ variant, children, color, className }: PillProps) {
   const style = variant === "broker" ? (color ?? { bg: "#f1f5f9", fg: "#475569" }) : VARIANT_STYLE[variant];
   return (
     <span
-      className={`inline-flex items-center rounded-[10px] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${className ?? ""}`}
+      className={`inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap ${className ?? ""}`}
       style={{ background: style.bg, color: style.fg }}
     >
       {children}

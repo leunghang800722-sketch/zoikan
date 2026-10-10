@@ -5,17 +5,17 @@ import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import type { UploadRow } from "@/components/month-close/derive";
 
-const pickCls = "inline-flex cursor-pointer items-center rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] transition-colors hover:bg-zk-header focus-within:ring-2 focus-within:ring-zk-primary";
+const pickCls = "inline-flex cursor-pointer items-center rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header focus-within:ring-2 focus-within:ring-zk-primary";
 
 function Row({ row, children, extra }: { row: UploadRow; children: ReactNode; extra?: ReactNode }) {
   return (
     <div className="grid grid-cols-1 items-center gap-x-4 gap-y-2 border-b border-zk-border-soft px-4 py-3 md:grid-cols-[200px_minmax(0,1fr)_auto]" data-upload={row.key}>
       <div>
-        <div className="text-[13px] font-medium text-zk-text">{row.name}</div>
-        <div className="text-[11px] text-zk-faint">{row.hint}</div>
+        <div className="text-zk-base font-medium text-zk-text">{row.name}</div>
+        <div className="text-zk-xs text-zk-faint">{row.hint}</div>
       </div>
-      <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-zk-text-secondary">
-        <span className={`flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full text-[11px] font-bold ${row.have ? "bg-[#ccfbf1] text-[#0f766e]" : "bg-zk-surface text-zk-faint"}`}>{row.have ? "✓" : "–"}</span>
+      <div className="flex min-w-0 items-center gap-2 text-zk-sm text-zk-text-secondary">
+        <span className={`flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full text-zk-xs font-bold ${row.have ? "bg-zk-success-tint text-zk-success" : "bg-zk-surface text-zk-faint"}`}>{row.have ? "✓" : "–"}</span>
         <span className="min-w-0 break-words">
           {row.status}
           {extra}
@@ -51,10 +51,10 @@ export function UploadSection(props: {
   return (
     <section className="overflow-hidden rounded-[10px] border border-zk-border bg-white" data-testid="upload-section">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-zk-border-soft px-4 py-3">
-        <h2 className="text-[14px] font-semibold text-zk-text">① 上載</h2>
-        <span className={`ml-auto text-[12px] ${allHave ? "text-zk-success" : "text-zk-muted"}`}>{allHave ? "更表同名單都有，可以結算" : "更表同 U Team 名單上載咗先可以結算"}</span>
+        <h2 className="text-zk-md font-semibold text-zk-text">① 上載</h2>
+        <span className={`ml-auto text-zk-sm ${allHave ? "text-zk-success" : "text-zk-muted"}`}>{allHave ? "更表同名單都有，可以結算" : "更表同 U Team 名單上載咗先可以結算"}</span>
       </div>
-      {props.jobRunning && <div className="border-b border-zk-border-soft px-4 py-2 text-[12.5px] text-orange-700">一鍵結算執行緊——完成之前唔可以再上載</div>}
+      {props.jobRunning && <div className="border-b border-zk-border-soft px-4 py-2 text-zk-sm text-zk-warning">一鍵結算執行緊——完成之前唔可以再上載</div>}
 
       <Row row={roster} extra={nRoster > 0 ? <span className="ml-2 text-zk-primary">已揀 {nRoster} 檔，撳右邊上載</span> : null}>
         <label className={`${pickCls} ${disabled ? "pointer-events-none opacity-[.45]" : ""}`}>
@@ -66,7 +66,7 @@ export function UploadSection(props: {
             上載更表（{nRoster} 檔）
           </Button>
         )}
-        <Link href={`/roster-uploads?month=${props.month}`} className="px-1 text-[12.5px] text-zk-primary hover:underline">
+        <Link href={`/roster-uploads?month=${props.month}`} className="px-1 text-zk-sm text-zk-primary hover:underline">
           去更表上載 ›
         </Link>
       </Row>
@@ -95,11 +95,11 @@ export function UploadSection(props: {
         )}
       </Row>
 
-      <div className="border-b border-zk-border-soft px-4 py-2 text-[11.5px] text-zk-muted" data-testid="upload-section-hint">
+      <div className="border-b border-zk-border-soft px-4 py-2 text-zk-xs text-zk-muted" data-testid="upload-section-hint">
         亦可以喺「對數 › 更表上載」逐盤上載同對數。
       </div>
 
-      <details className="bg-zk-header px-4 py-2.5 text-[11.5px] text-zk-muted">
+      <details className="bg-zk-header px-4 py-2.5 text-zk-xs text-zk-muted">
         <summary className="cursor-pointer">
           Postorder 只係 8、9 月過渡對照用。正式站讀唔到 .xlsm？<span className="text-zk-primary">睇點樣匯出 CSV ›</span>
         </summary>

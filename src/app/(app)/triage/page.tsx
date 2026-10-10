@@ -76,7 +76,7 @@ export default function TriagePage() {
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       {isBossView && (
-        <label className="flex items-center gap-2 text-[13px]">
+        <label className="flex items-center gap-2 text-zk-base">
           <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} />
           只睇我自己上載嘅
         </label>
@@ -84,7 +84,7 @@ export default function TriagePage() {
       {data && data.sessions.length === 0 && <EmptyState title="冇待答問題" />}
       <div className="space-y-3">
         {(data?.sessions ?? []).map((s) => (
-          <div key={s.id} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="triage-session-card">
+          <div key={s.id} className="space-y-2 rounded-lg border border-zk-border p-3 text-zk-base" data-testid="triage-session-card">
             <div className="flex flex-wrap items-center gap-2">
               <b>{SOURCE_LABEL[s.source_type] ?? s.source_type}</b>
               <Pill variant={s.status === "done" ? "success" : "warning"}>{s.superseded_all ? "已被較新嘅導入取代" : s.counts.open === 0 ? "已處理晒" : `重要 ${s.counts.important_open}`}</Pill>

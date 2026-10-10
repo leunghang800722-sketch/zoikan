@@ -19,7 +19,7 @@ export default async function FeedbackPage() {
         <PageHeader kicker={kickerFor("/feedback")} title="現場意見" />
         <div className="flex flex-col items-center gap-2 rounded-lg border border-zk-border bg-white px-6 py-16 text-center" data-testid="feedback-forbidden">
           <div className="text-sm font-semibold text-zk-text">你冇權睇呢一頁</div>
-          <div className="max-w-[380px] text-[12.5px] leading-relaxed text-zk-muted">「現場意見」清單淨係老闆先睇得到。</div>
+          <div className="max-w-[380px] text-zk-sm leading-relaxed text-zk-muted">「現場意見」清單淨係老闆先睇得到。</div>
         </div>
       </div>
     );

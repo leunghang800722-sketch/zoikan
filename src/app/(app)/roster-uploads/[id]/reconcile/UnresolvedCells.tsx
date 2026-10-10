@@ -32,7 +32,7 @@ export interface UnresolvedItemLite {
 
 type Dir = { rows: GuardLite[]; total: number; loaded: boolean };
 
-const linkCls = "inline-block rounded-[5px] border border-zk-primary px-2 py-[3px] text-[11.5px] font-medium text-zk-primary hover:bg-blue-50";
+const linkCls = "inline-block rounded-[5px] border border-zk-primary px-2 py-[3px] text-zk-xs font-medium text-zk-primary hover:bg-zk-primary-tint-soft";
 
 export function reasonKinds(item: UnresolvedItemLite): Set<ReasonKind> {
   return new Set(classifyReason(item.unresolved_reason).map((p) => p.kind));
@@ -46,7 +46,7 @@ export function ReasonText({ item, raw }: { item: UnresolvedItemLite; raw: RawRo
   return (
     <div className="mt-1 space-y-0.5" data-testid="reconcile-reason" data-raw-reason={item.unresolved_reason ?? ""}>
       {parts.map((p, i) => (
-        <div key={i} className="text-[11px] text-red-600" data-reason-kind={p.kind}>
+        <div key={i} className="text-zk-xs text-zk-danger" data-reason-kind={p.kind}>
           {humanizeReasonPart(p, person, piiHidden(raw))}
         </div>
       ))}
@@ -56,18 +56,18 @@ export function ReasonText({ item, raw }: { item: UnresolvedItemLite; raw: RawRo
 
 /** 「更表寫咗」欄：姓名、工號、電話尾 4、雞頭碼、職級／時段、原始第 N 行＋相似保安員。 */
 export function WroteCell({ raw, loading, item, dir }: { raw: RawRosterRow | null | undefined; loading: boolean; item: UnresolvedItemLite; dir: Dir }) {
-  if (!raw) return <span className="text-[11px] text-zk-faint">{loading ? "載入緊…" : "—"}</span>;
+  if (!raw) return <span className="text-zk-xs text-zk-faint">{loading ? "載入緊…" : "—"}</span>;
   const person = personFromRow(raw);
   const tel = telTail(raw.tel_raw);
   const rt = rankTimeText(raw);
   const hidden = piiHidden(raw);
   const showSimilar = reasonKinds(item).has("guard") && !hidden;
   return (
-    <div className="space-y-0.5 text-[12px]" data-testid="reconcile-wrote" data-row-index={raw.row_index}>
+    <div className="space-y-0.5 text-zk-sm" data-testid="reconcile-wrote" data-row-index={raw.row_index}>
       <div className="font-medium text-zk-text" data-testid="reconcile-wrote-name">
         {hidden ? <span className="text-zk-faint">冇權限睇姓名／工號</span> : hasPerson(person) ? personLabel(person) : <span className="text-zk-faint">（更表冇寫姓名／工號）</span>}
       </div>
-      <div className="text-[11px] text-zk-muted">
+      <div className="text-zk-xs text-zk-muted">
         {[tel, raw.broker_code_raw?.trim() ? `雞頭碼 ${raw.broker_code_raw.trim()}` : null, rt || null, `原始第 ${raw.row_index} 行`].filter(Boolean).join("・")}
       </div>
       {showSimilar && hasPerson(person) && <SimilarGuards person={person} dir={dir} />}
@@ -78,7 +78,7 @@ export function WroteCell({ raw, loading, item, dir }: { raw: RawRosterRow | nul
 /** 同一人多日嘅行合併摘要用：同一份 needs_boss 提示。 */
 export function NeedsBossBox({ nb }: { nb: NeedsBossItem }) {
   return (
-    <div className="rounded border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] text-orange-800" data-testid="reconcile-needs-boss">
+    <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-2 py-1 text-zk-xs text-zk-warning-dark" data-testid="reconcile-needs-boss">
       <div>一鍵結算有待答題（{nb.seq}，{nb.total_cell_count} 格）：{nb.reason}</div>
       <Link href={LINK.triage} className="font-medium text-zk-primary underline">
         去答題 ›
@@ -147,7 +147,7 @@ export function ReasonLinks({ item, raw, ctx }: { item: UnresolvedItemLite; raw:
       const code = raw?.raw_code?.trim();
       const time = raw?.time_raw?.trim();
       notes.push(
-        <div key="st" className="text-[11px] text-zk-muted" data-testid="reconcile-shift-raw">
+        <div key="st" className="text-zk-xs text-zk-muted" data-testid="reconcile-shift-raw">
           更表寫嘅更種碼：{code ? `「${code}」` : "—"}
           {time ? `・時段 ${time}` : ""}
         </div>,
@@ -159,7 +159,7 @@ export function ReasonLinks({ item, raw, ctx }: { item: UnresolvedItemLite; raw:
       );
     } else if (p.kind === "broker_code") {
       notes.push(
-        <div key={`bc-${p.value}`} className="text-[11px] text-zk-muted" data-testid="reconcile-broker-raw">
+        <div key={`bc-${p.value}`} className="text-zk-xs text-zk-muted" data-testid="reconcile-broker-raw">
           更表寫嘅雞頭碼：「{p.value}」
         </div>,
       );

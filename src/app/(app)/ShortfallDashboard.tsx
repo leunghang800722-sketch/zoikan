@@ -70,7 +70,7 @@ function writeDateToUrl(date: string): void {
 
 function DateChip({ date, onChange }: { date: string; onChange: (next: string) => void }) {
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[5px] text-[13px] text-[#334155]">
+    <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[5px] text-zk-base text-zk-text-secondary">
       <button
         type="button"
         aria-label="前一日"
@@ -104,13 +104,13 @@ function MarginProgressCard({ monthProgress, href }: { monthProgress: MarginProg
       <div className="flex items-start justify-between gap-2">
         <div className="text-xs text-zk-muted">本月毛利進度（{monthProgress.month}）</div>
         {monthProgress.below_threshold_site_count > 0 && (
-          <div className="shrink-0 text-[11.5px] font-semibold text-[#dc2626]">
+          <div className="shrink-0 text-zk-xs font-semibold text-zk-danger">
             {monthProgress.below_threshold_site_count} 個盤毛利率低於 {monthProgress.threshold_pct}%
           </div>
         )}
       </div>
       <div className="mt-1 flex flex-wrap items-baseline gap-2.5">
-        <span data-testid="margin-pct-value" className="text-[28px] leading-[1.1] font-bold text-zk-text md:text-[30px]">
+        <span data-testid="margin-pct-value" className="text-zk-2xl leading-[1.1] font-bold text-zk-text md:text-zk-2xl">
           {monthProgress.margin_pct == null ? "—" : `${monthProgress.margin_pct}%`}
         </span>
         {monthProgress.revenue !== undefined && (
@@ -121,11 +121,11 @@ function MarginProgressCard({ monthProgress, href }: { monthProgress: MarginProg
       </div>
       <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-zk-surface">
         <div className="absolute inset-y-0 left-0 bg-zk-primary" style={{ width: `${pct}%` }} />
-        <div className="absolute inset-y-0 w-0.5 bg-[#dc2626]" style={{ left: `${thresholdLeft}%` }} />
+        <div className="absolute inset-y-0 w-0.5 bg-zk-danger" style={{ left: `${thresholdLeft}%` }} />
       </div>
-      <div className="mt-1 flex justify-between text-[10.5px] text-zk-faint">
+      <div className="mt-1 flex justify-between text-zk-2xs text-zk-faint">
         <span>0%</span>
-        <span className="text-[#dc2626]">{monthProgress.threshold_pct}% 警戒線</span>
+        <span className="text-zk-danger">{monthProgress.threshold_pct}% 警戒線</span>
         <span>{MARGIN_SCALE_MAX}%</span>
       </div>
     </>
@@ -237,11 +237,11 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-4">
         <div>
-          <div className="text-xs text-zk-muted md:text-[12.5px]">
+          <div className="text-xs text-zk-muted md:text-zk-sm">
             <span className="md:hidden">{`${fmtMonthDayWeekday(date)} · ${roleLabel}`}</span>
             <span className="hidden md:inline">{kicker}</span>
           </div>
-          <h1 className="mt-0.5 text-[20px] font-bold text-zk-text md:text-[22px] md:tracking-[-0.01em]">
+          <h1 className="mt-0.5 text-zk-xl font-bold text-zk-text md:text-zk-xl md:tracking-[-0.01em]">
             <span className="md:hidden">{mobileHeading}</span>
             <span className="hidden md:inline">{title}</span>
           </h1>
@@ -271,7 +271,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
               {shortfallSites.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
                   {shortfallSites.slice(0, 6).map((s) => (
-                    <span key={s.site_id} className="rounded-[10px] bg-[#fef2f2] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap text-[#b91c1c]">
+                    <span key={s.site_id} className="rounded-[10px] bg-zk-danger-bg px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap text-zk-danger-dark">
                       {s.site_name} 欠 {s.shortfall}
                     </span>
                   ))}
@@ -347,7 +347,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
                           <span>{s.confirmed}</span>
                         </div>
                       </td>
-                      <td className={s.shortfall > 0 ? "border-b border-[#f1f5f9] px-3.5 py-2.5 text-right font-bold text-[#dc2626]" : `${tableCls.tdMuted} text-right`}>
+                      <td className={s.shortfall > 0 ? "border-b border-zk-border-soft px-3.5 py-2.5 text-right font-bold text-zk-danger" : `${tableCls.tdMuted} text-right`}>
                         {s.shortfall > 0 ? s.shortfall : "—"}
                       </td>
                     </tr>
@@ -360,7 +360,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
           {/* 手機：「今日出勤 vs 所需」列表卡（README §21）。 */}
           <div className="flex flex-col gap-2 md:hidden">
             <div className="flex items-baseline justify-between">
-              <div className="text-[13.5px] font-semibold text-zk-text">今日出勤 vs 所需</div>
+              <div className="text-zk-base font-semibold text-zk-text">今日出勤 vs 所需</div>
             </div>
             <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
               {data.today.length === 0 ? (
@@ -374,9 +374,9 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
                     key={s.site_id}
                     href={`/roster/${s.site_id}/${date.slice(0, 7)}`}
                     data-testid="shortfall-row-mobile"
-                    className="flex items-center gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
+                    className="flex items-center gap-2.5 border-b border-zk-border-soft px-3.5 py-2.5 last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
                   >
-                    <div className="min-w-0 flex-1 truncate text-[13px] text-zk-text">{s.site_name}</div>
+                    <div className="min-w-0 flex-1 truncate text-zk-base text-zk-text">{s.site_name}</div>
                     <div className="h-[5px] w-20 shrink-0 overflow-hidden rounded-full bg-zk-surface">
                       <div className="h-full" style={{ width: `${confirmedBarPct(s)}%`, background: confirmedBarColor(s) }} />
                     </div>
@@ -384,7 +384,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
                       {s.confirmed}
                       <span className="text-zk-faint">/{s.required}</span>
                     </div>
-                    <div className={`w-6 shrink-0 text-right text-[12.5px] font-bold ${s.shortfall > 0 ? "text-[#dc2626]" : "text-zk-faintest"}`}>
+                    <div className={`w-6 shrink-0 text-right text-zk-sm font-bold ${s.shortfall > 0 ? "text-zk-danger" : "text-zk-faintest"}`}>
                       {s.shortfall > 0 ? s.shortfall : "—"}
                     </div>
                   </Link>

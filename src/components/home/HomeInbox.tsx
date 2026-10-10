@@ -39,10 +39,10 @@ function Card({ testId, label, value, unit, note, href, tone }: { testId: string
     >
       <div className="text-xs text-zk-muted">{label}</div>
       <div className="mt-0.5 flex items-baseline gap-1">
-        <span className={`text-[22px] leading-[1.15] font-bold ${tone === "danger" ? "text-[#dc2626]" : tone === "ok" ? "text-[#0f766e]" : "text-zk-text"}`}>{value}</span>
+        <span className={`text-zk-xl leading-[1.15] font-bold ${tone === "danger" ? "text-zk-danger" : tone === "ok" ? "text-zk-success" : "text-zk-text"}`}>{value}</span>
         {unit && <span className="text-xs text-zk-muted">{unit}</span>}
       </div>
-      {note && <div className="mt-0.5 truncate text-[11.5px] text-zk-muted">{note}</div>}
+      {note && <div className="mt-0.5 truncate text-zk-xs text-zk-muted">{note}</div>}
     </Link>
   );
 }

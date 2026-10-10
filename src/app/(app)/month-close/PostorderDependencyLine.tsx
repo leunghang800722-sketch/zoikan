@@ -29,7 +29,7 @@ export function PostorderDependencyLine({ auto, month }: { auto: AutoReportDTO; 
   }, [month, hasLine]);
   if (!line) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-zk-border-soft px-4 py-2.5 text-[12.5px] text-[#334155]" data-testid="auto-dependency">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-zk-border-soft px-4 py-2.5 text-zk-sm text-zk-text-secondary" data-testid="auto-dependency">
       <span data-testid="auto-dependency-price">{line.price}</span>
       <span className="text-zk-faint">；</span>
       <span data-testid="auto-dependency-settle">{line.settle}</span>

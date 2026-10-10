@@ -2,7 +2,7 @@
 // WP-RECONCILE-UI（§33.3 D）：deep link `?focus=<id>`——只做高亮＋捲到，唔觸發任何寫入。
 import { useEffect, useRef, useState } from "react";
 
-export const FOCUS_CLS = "bg-yellow-50 outline outline-2 -outline-offset-2 outline-zk-primary";
+export const FOCUS_CLS = "bg-zk-warning-bg outline outline-2 -outline-offset-2 outline-zk-primary";
 
 /** 讀 URL `?focus=`（掛載後讀，避免 SSR hydration 不一致）。 */
 export function useFocusParam(name = "focus"): string | null {

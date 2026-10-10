@@ -273,7 +273,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
           <Notice
             variant="info"
             action={
-              <button type="button" onClick={() => setResetResult(null)} className="text-[12px] font-semibold text-zk-primary">
+              <button type="button" onClick={() => setResetResult(null)} className="text-zk-sm font-semibold text-zk-primary">
                 知道了
               </button>
             }
@@ -363,7 +363,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                         <button
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                          className="rounded-[5px] border border-[#a7f3d0] px-[9px] py-[3px] text-xs text-[#047857] hover:bg-[#ecfdf5]"
+                          className="rounded-[5px] border border-[#a7f3d0] px-[9px] py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                         >
                           恢復
                         </button>

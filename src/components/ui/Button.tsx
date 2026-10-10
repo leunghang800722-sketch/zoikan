@@ -5,10 +5,10 @@ import type { ButtonHTMLAttributes } from "react";
 export type ButtonVariant = "primary" | "secondary" | "dark" | "danger";
 
 const VARIANT_CLS: Record<ButtonVariant, string> = {
-  primary: "border-[#2563eb] bg-[#2563eb] text-white font-semibold hover:bg-[#1d4ed8]",
-  secondary: "border-[#d1d5db] bg-white text-[#334155] hover:bg-zk-header",
-  dark: "border-transparent bg-[#0f172a] text-white font-semibold hover:bg-[#1e293b]",
-  danger: "border-[#fecaca] bg-white text-[#b91c1c] hover:bg-[#fef2f2]",
+  primary: "border-zk-primary bg-zk-primary text-white font-semibold hover:bg-zk-primary-dark",
+  secondary: "border-zk-input-border bg-white text-zk-text-secondary hover:bg-zk-header",
+  dark: "border-transparent bg-zk-dark text-white font-semibold hover:bg-zk-dark-hover",
+  danger: "border-zk-danger-border bg-white text-zk-danger-dark hover:bg-zk-danger-bg",
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -20,7 +20,7 @@ export function Button({ variant = "secondary", className, disabled, ...rest }: 
     <button
       type="button"
       disabled={disabled}
-      className={`rounded-md border px-3.5 py-[7px] text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-[.45] ${VARIANT_CLS[variant]} ${className ?? ""}`}
+      className={`rounded-md border px-3.5 py-[7px] text-zk-base transition-colors disabled:cursor-not-allowed disabled:opacity-[.45] ${VARIANT_CLS[variant]} ${className ?? ""}`}
       {...rest}
     />
   );

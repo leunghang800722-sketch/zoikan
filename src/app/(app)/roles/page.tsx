@@ -59,7 +59,7 @@ function MatrixCheckbox({ granted, hardDenied, onToggle }: { granted: boolean; h
       data-testid="role-matrix-checkbox"
       data-hard-denied={hardDenied ? "1" : "0"}
       title={hardDenied ? "硬性禁止" : undefined}
-      className={`flex h-[18px] w-[18px] items-center justify-center rounded-[5px] border text-[12px] font-bold ${
+      className={`flex h-[18px] w-[18px] items-center justify-center rounded-[5px] border text-zk-sm font-bold ${
         hardDenied
           ? "cursor-not-allowed border-zk-border bg-zk-surface text-transparent"
           : granted
@@ -252,7 +252,7 @@ export default function RolesPage() {
                   type="button"
                   data-testid="role-list-item"
                   onClick={() => setSelectedId(r.id)}
-                  className={`flex w-full items-center justify-between border-b border-[#f1f5f9] px-3.5 py-[11px] text-left text-[13.5px] last:border-b-0 hover:bg-zk-header ${
+                  className={`flex w-full items-center justify-between border-b border-zk-border-soft px-3.5 py-[11px] text-left text-zk-base last:border-b-0 hover:bg-zk-header ${
                     r.id === selectedId ? "bg-zk-primary-tint-soft font-semibold" : "font-normal"
                   }`}
                 >
@@ -260,13 +260,13 @@ export default function RolesPage() {
                     {uiLabel(r.name)}
                     {r.is_custom && <span className="ml-1 text-xs font-normal text-zk-faint">（自訂）</span>}
                   </span>
-                  <span className="shrink-0 text-[11px] text-zk-faint">{accountCountByRole.get(r.id) ?? 0} 人</span>
+                  <span className="shrink-0 text-zk-xs text-zk-faint">{accountCountByRole.get(r.id) ?? 0} 人</span>
                 </button>
               ))}
           </div>
 
           <form onSubmit={onCopy} className="flex flex-col gap-2 rounded-[10px] border border-zk-border bg-white p-3.5">
-            <div className="text-[12.5px] font-semibold text-zk-text">複製角色</div>
+            <div className="text-zk-sm font-semibold text-zk-text">複製角色</div>
             {copyError && <Notice variant="error">{copyError}</Notice>}
             <select className={selectCls} value={copySourceId} onChange={(e) => setCopySourceId(e.target.value)} required>
               <option value="">來源角色</option>
@@ -291,8 +291,8 @@ export default function RolesPage() {
               {!matrixLoading && matrix && selectedRole && (
                 <>
                   <div className="flex items-baseline gap-2.5 border-b border-zk-border px-4 py-3">
-                    <span className="text-[15px] font-bold text-zk-text">{uiLabel(selectedRole.name)}</span>
-                    <span className="text-[12px] text-zk-muted">
+                    <span className="text-zk-md font-bold text-zk-text">{uiLabel(selectedRole.name)}</span>
+                    <span className="text-zk-sm text-zk-muted">
                       {selectedRole.is_custom ? "自訂角色" : "系統預設角色"} · {accountCountByRole.get(selectedRole.id) ?? 0} 個帳號
                     </span>
                     {selectedRole.is_custom && !selectedRole.voided_at && (
@@ -300,7 +300,7 @@ export default function RolesPage() {
                     )}
                   </div>
 
-                  <div className="flex border-b border-zk-border bg-zk-header text-[11.5px] font-semibold text-zk-muted">
+                  <div className="flex border-b border-zk-border bg-zk-header text-zk-xs font-semibold text-zk-muted">
                     <div className="min-w-[160px] flex-1 whitespace-nowrap px-4 py-[9px]">模組</div>
                     {ACTIONS.map((a) => (
                       <div key={a} className="w-[72px] shrink-0 py-[9px] text-center">
@@ -310,8 +310,8 @@ export default function RolesPage() {
                   </div>
 
                   {MODULES.map((mod) => (
-                    <div key={mod} className="flex h-[38px] items-center border-b border-[#f1f5f9] last:border-b-0">
-                      <div className="min-w-[160px] flex-1 truncate px-4 text-[13px] text-zk-text" title={moduleLabel(mod)}>
+                    <div key={mod} className="flex h-[38px] items-center border-b border-zk-border-soft last:border-b-0">
+                      <div className="min-w-[160px] flex-1 truncate px-4 text-zk-base text-zk-text" title={moduleLabel(mod)}>
                         {moduleLabel(mod)}
                       </div>
                       {ACTIONS.map((action) => {
