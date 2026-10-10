@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
 import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -178,7 +179,7 @@ export default function SitesPage() {
     // 雞頭名單只喺開編輯抽屜先攞（列表頁 request 集合不變）。
     if (brokers.length === 0) {
       void (async () => {
-        const bres = await apiGetAll<BrokerLite>("/api/brokers");
+        const bres = await cachedGetAll<BrokerLite>("/api/brokers");
         if (bres.ok) setBrokers(bres.data.rows.filter((b) => b.status === undefined || b.status === "active"));
       })();
     }

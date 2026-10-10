@@ -10,6 +10,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
@@ -157,9 +158,9 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
     (async () => {
       const [guards, sites, shiftTypes, brokers] = await Promise.all([
         loadGuardDirectory(),
-        apiGet<ApiListResult<{ id: string; canonical_name: string; parent_site_id: string | null }>>("/api/sites?take=500"),
-        apiGet<ApiListResult<{ id: string; code: string }>>("/api/shift-types?take=500"),
-        apiGet<ApiListResult<{ id: string; code: string }>>("/api/brokers?take=500"),
+        cachedGetAll<{ id: string; canonical_name: string; parent_site_id: string | null }>("/api/sites"),
+        cachedGetAll<{ id: string; code: string }>("/api/shift-types"),
+        cachedGetAll<{ id: string; code: string }>("/api/brokers"),
       ]);
       if (guards) setGuardNames(new Map(guards.rows.map((g) => [g.id, g.name_zh])));
       if (sites.ok) {

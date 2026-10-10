@@ -1,6 +1,8 @@
 // 前端 client component 共用嘅 fetch helper——統一處理 snake_case JSON、
 // {error,message} 錯誤形狀、網絡例外。所有寫入一律用相對路徑（瀏覽器自動帶
 // cookie），唔使手動處理 session。
+import { invalidateLookups, isLookupWritePath } from "./lookup-cache";
+
 export interface ApiListResult<T> {
   rows: T[];
   total: number;
@@ -34,6 +36,8 @@ export async function apiRequest<T = unknown>(path: string, init?: RequestInit):
     const b = (body ?? {}) as Partial<{ error: string; message: string }>;
     return { ok: false, status: res.status, error: b.error ?? "error", message: b.message ?? `請求失敗（HTTP ${res.status}）` };
   }
+  // P3-2.4：寫入參考資料相關資源成功 → 前端參考資料 cache 作廢（見 lookup-cache.ts）。
+  if (init?.method && init.method !== "GET" && isLookupWritePath(path)) invalidateLookups();
   return { ok: true, status: res.status, data: body as T };
 }
 

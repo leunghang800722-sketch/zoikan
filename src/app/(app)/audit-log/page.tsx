@@ -17,7 +17,7 @@
 // 新增嘅 additive `GET /api/audit-log/tables`（distinct table_name，
 // 同一權限、只讀）提供，冇資料就唔會出現。
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, type ApiListResult, apiGetAll } from "@/lib/ui/api-client";
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
@@ -118,7 +118,7 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     // 用戶名對照——盡力而為，冇「用戶管理:view」就攞唔到，靜靜哋跌返用 id。
-    apiGet<ApiListResult<UserRow>>("/api/users?take=500&include_inactive=1").then((res) => {
+    apiGetAll<UserRow>("/api/users?include_inactive=1").then((res) => {
       if (res.ok) {
         setUsers(Object.fromEntries(res.data.rows.map((u) => [u.id, u.name])));
         setUserOptions(res.data.rows);

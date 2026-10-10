@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiUpload, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
@@ -357,7 +358,7 @@ export default function RosterUploadsPage() {
   }
 
   useEffect(() => {
-    apiGet<ApiListResult<SiteOption>>("/api/sites?take=500").then((res) => {
+    cachedGetAll<SiteOption>("/api/sites").then((res) => {
       if (res.ok) setSites(res.data.rows);
     });
   }, []);
