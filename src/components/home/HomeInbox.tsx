@@ -17,7 +17,7 @@ export interface HomeInboxProps {
   triage: number | null;
   canRosterUploads: boolean;
   canMonthClose: boolean;
-  /** 老闆專用：「安員配對修復」view。 */
+  /** 老闆專用：保安員配對修復 view。 */
   canGuardFix: boolean;
 }
 

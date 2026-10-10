@@ -77,7 +77,7 @@ describe("人手操作 call site 仍然同卡一致（原始碼掃描）", () =>
     expect(src("src/app/(app)/sites/page.tsx")).toContain("apiPatch(`/api/sites/${editingId}`, { default_settlement_broker_id: suggestion.suggestion.broker_id })");
   });
   it("更表上載「重新解析」：apiPost(`/api/roster-uploads/${uploadId}/reparse`)（冇 body）", () => {
-    expect(src("src/app/(app)/roster-uploads/page.tsx")).toContain("apiPost(`/api/roster-uploads/${uploadId}/reparse`)");
+    expect(src("src/app/(app)/roster-uploads/RosterUploadsClient.tsx")).toContain("apiPost(`/api/roster-uploads/${uploadId}/reparse`)");
   });
   it("分診：preview { answer } → answer { answer, preview_hash }", () => {
     const s = src("src/components/MonthCloseTriageDialog.tsx");

@@ -1133,11 +1133,17 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     [monthLocked, editing, commitEdit, visibleRows, cells, compact],
   );
 
-  const onCellMouseEnter = useCallback((r: number, d: number) => {
-    if (!draggingRef.current) return;
-    dragCurrentRef.current = { r, d };
-    setSel((prev) => (prev ? { a: prev.a, b: { r, d } } : prev));
-  }, []);
+  const onCellMouseEnter = useCallback(
+    (r: number, d: number) => {
+      if (!draggingRef.current) return;
+      // P3-3.8：手機（compact）冇拖曳填充。彈出底部鍵盤令表格容器縮細、格仔移位，原本喺 mousedown→mouseup 之間
+      // 指標下面換咗另一格就會觸發 mouseenter，將單格選擇變成範圍選擇（sel.a≠sel.b）→ 鍵盤即刻收埋（e2e wp-r2 (f)）。
+      if (compact) return;
+      dragCurrentRef.current = { r, d };
+      setSel((prev) => (prev ? { a: prev.a, b: { r, d } } : prev));
+    },
+    [compact],
+  );
 
   useEffect(() => {
     function onUp() {

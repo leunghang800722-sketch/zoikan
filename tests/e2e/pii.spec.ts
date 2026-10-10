@@ -13,8 +13,10 @@ import { prisma } from "./db-helpers";
 
 test.describe.configure({ mode: "serial" });
 
-const TEST_HKID = "A123456(7)";
-const TEST_HKID_MASKED = "A123***(7)";
+// P3-3.8：身份證 check digit 驗證（identity.ts）之後，舊假值 A123456(7) 會 400——改用 check digit 啱嘅假值 A123456(3)。
+const TEST_HKID = "A123456(3)"; // 填入嘅格式
+const TEST_HKID_STORED = "A1234563"; // 系統存／顯示嘅規範化格式（canonicalHkid：去括號）
+const TEST_HKID_MASKED = "A123***(3)"; // 列表 API 遮罩格式（maskHkid）
 
 async function findBrokerAOwnGuard() {
   const brokerAUser = await prisma.user.findFirstOrThrow({ where: { tel: "90000004" }, select: { brokerId: true } });
@@ -140,7 +142,7 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
 
     // 重開見全號（詳情/編輯有權先見全號）。
     await openEditByName(page, guard.nameZh);
-    await expect(fieldControl(page, "身份證號碼").locator("input")).toHaveValue(TEST_HKID);
+    await expect(fieldControl(page, "身份證號碼").locator("input")).toHaveValue(TEST_HKID_STORED);
     await expect(fieldControl(page, "銀行", true).locator("input")).toHaveValue("測試銀行");
     await expect(fieldControl(page, "牌照號碼").locator("input")).toHaveValue("SIA-E2E-01");
     await expect(fieldControl(page, "甲類到期").locator("input")).toHaveValue("2027-06-01");
@@ -159,7 +161,7 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
     // 詳情 API 見全號。
     const detailRes = await page.request.get(`/api/guards/${guard.id}`);
     const detailBody = (await detailRes.json()) as { hkid?: string };
-    expect(detailBody.hkid).toBe(TEST_HKID);
+    expect(detailBody.hkid).toBe(TEST_HKID_STORED);
   } finally {
     // 清走呢個 test 填低嘅測試值——PATCH schema 嘅新欄係
     // optional（唔係 nullable），API 冇辦法「清返做 null」，直接用

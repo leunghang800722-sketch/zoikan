@@ -84,7 +84,7 @@ export default async function DashboardPage() {
     return <BrokerDashboard userName={session.name} />;
   }
 
-  // P3-3.7：保安員（base role「安員」）登入見說明頁——系統功能稍後開放。
+  // P3-3.7：保安員角色登入見說明頁——系統功能稍後開放。
   if (session.baseRole === "安員") {
     return (
       <div className="flex flex-col gap-4">

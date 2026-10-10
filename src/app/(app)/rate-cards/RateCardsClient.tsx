@@ -106,7 +106,7 @@ export function RateCardsClient({
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
   const [siteFilter, setSiteFilter] = useState("");
-  // A4：「生效月」FilterChip——`type="month"`，純客戶端篩（唔加新 API
+  // A4：「生效月」FilterChip——月份輸入，純客戶端篩（唔加新 API
   // query param）；預設空字串＝全部，唔篩。
   const [effectiveMonthFilter, setEffectiveMonthFilter] = useState("");
   const [sites, setSites] = useState<SiteRow[]>([]);

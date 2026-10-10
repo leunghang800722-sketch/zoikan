@@ -1,5 +1,5 @@
 // P3-3.5：「更表上載」頁 server wrapper——按 grants 決定有冇「未配對保安員修復」tab（淨係老闆：
-// 「安員配對修復:view」），再 render client 頁（`RosterUploadsClient`，tab 由 `?tab=fix` 驅動）。
+// 「保安員配對修復」view 權），再 render client 頁（`RosterUploadsClient`，tab 由 `?tab=fix` 驅動）。
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { getViewGrants } from "@/lib/rbac/nav";

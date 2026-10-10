@@ -58,7 +58,7 @@ export interface NavLink {
 }
 
 /** P3-3.1：連結清單由 NAV_SCHEMA 派生；顯示與否仍然全部由 `grants[module]` 決定（權限邏輯不變）。
- * 保安員（base role「安員」）只有首頁。 */
+ * 保安員角色只有首頁。 */
 export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Record<Module, boolean>): Promise<NavLink[]> {
   const grants = prefetchedGrants ?? (await getViewGrants(session));
   const links: NavLink[] = [];
