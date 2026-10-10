@@ -34,10 +34,27 @@ export function splitDataUrl(url: string): { mediaType: "image/jpeg"; data: stri
   return { mediaType: "image/jpeg", data: m[2]! };
 }
 
-/** SDK 錯誤嘅 error.type（例如 invalid_request_error）——只係類型字串，唔帶 message。 */
+function apiBodyError(e: unknown): { type?: unknown; message?: unknown } {
+  const body = (e as { error?: unknown }).error as { error?: { type?: unknown; message?: unknown } } | undefined;
+  return body?.error ?? {};
+}
+
+/** API 回傳嘅 error.type（例如 permission_error）；冇 body 就用 SDK 嘅 type。只係類型字串。 */
 export function sdkErrorType(e: unknown): string | null {
-  const t = e instanceof Anthropic.APIError ? (e as { type?: unknown }).type : null;
+  if (!(e instanceof Anthropic.APIError)) return null;
+  const t = apiBodyError(e).type ?? (e as { type?: unknown }).type;
   return typeof t === "string" && /^[a-z_]{1,64}$/.test(t) ? t : null;
+}
+
+/** 4xx 嘅 API error.message：去換行、截 200 字；出現 sk-ant 整段換 [redacted]。其他情況 null。 */
+export function sdkErrorMessage(e: unknown): string | null {
+  if (!(e instanceof Anthropic.APIError)) return null;
+  if (typeof e.status !== "number" || e.status < 400 || e.status > 499) return null;
+  const m = apiBodyError(e).message;
+  if (typeof m !== "string" || !m) return null;
+  if (/sk-ant/i.test(m)) return "[redacted]";
+  const t = m.replace(/\s+/g, " ").trim().slice(0, 200);
+  return /sk-ant/i.test(t) ? "[redacted]" : t;
 }
 
 export class ClaudeVisionClient implements VisionClient {
@@ -77,9 +94,9 @@ export class ClaudeVisionClient implements VisionClient {
       });
     } catch (e) {
       if (e instanceof Anthropic.APIConnectionError) throw new OcrUnavailableError(null, "connection");
-      if (e instanceof Anthropic.AuthenticationError) throw new OcrUnavailableError(e.status ?? 401, "auth", sdkErrorType(e));
-      if (e instanceof Anthropic.RateLimitError) throw new OcrUnavailableError(e.status ?? 429, "rate_limit", sdkErrorType(e));
-      if (e instanceof Anthropic.APIError) throw new OcrUnavailableError(typeof e.status === "number" ? e.status : null, "api_error", sdkErrorType(e));
+      if (e instanceof Anthropic.AuthenticationError) throw new OcrUnavailableError(e.status ?? 401, "auth", sdkErrorType(e), sdkErrorMessage(e));
+      if (e instanceof Anthropic.RateLimitError) throw new OcrUnavailableError(e.status ?? 429, "rate_limit", sdkErrorType(e), sdkErrorMessage(e));
+      if (e instanceof Anthropic.APIError) throw new OcrUnavailableError(typeof e.status === "number" ? e.status : null, "api_error", sdkErrorType(e), sdkErrorMessage(e));
       throw e; // 其餘（bug）原樣拋，唔吞
     }
     if (res.stop_reason === "refusal") throw new OcrUnavailableError(null, "refusal");

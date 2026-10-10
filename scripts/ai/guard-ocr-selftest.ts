@@ -10,6 +10,7 @@ import { ClaudeVisionClient } from "../../src/lib/guards/ocr/claude-vision-clien
 import { ocrClaudeModel, ocrModel } from "../../src/lib/guards/ocr/config";
 import { buildSystemPrompt, buildUserTextFull } from "../../src/lib/guards/ocr/prompts";
 import { parseModelJson } from "../../src/lib/guards/ocr/read";
+import { selftestFailLine } from "../../src/lib/guards/ocr/selftest-log";
 import { normalizeField } from "../../src/lib/guards/ocr/normalize";
 
 const TIMEOUT_MS = 25_000;
@@ -35,8 +36,7 @@ async function runOne(provider: "claude" | "deepseek", img: Buffer): Promise<voi
     console.log(`[guard-ocr-selftest] ${parsed ? "ok" : "fail"} provider=${provider} model=${model} ms=${Date.now() - t0} prompt_tokens=${r.promptTokens} completion_tokens=${r.completionTokens} hkid_read_ok=${hkidOk}`);
   } catch (e) {
     // 唔 log 錯誤訊息內容：淨係類別／HTTP status／固定 reason
-    const x = e as { status?: number | null; reason?: string | null; errorType?: string | null };
-    console.warn(`[guard-ocr-selftest] fail provider=${provider} model=${model} ms=${Date.now() - t0} prompt_tokens=0 completion_tokens=0 hkid_read_ok=false reason=${x.reason ?? (e instanceof Error ? e.name : "error")}${x.status ? ` status=${x.status}` : ""}${x.errorType ? ` error_type=${x.errorType}` : ""}`);
+    console.warn(selftestFailLine(provider, model, Date.now() - t0, e));
   }
 }
 

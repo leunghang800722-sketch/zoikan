@@ -8,6 +8,7 @@ import { ClaudeVisionClient, anthropicClientOptions, ocrJsonSchema, splitDataUrl
 import { OcrUnavailableError, setVisionClientForTests, type VisionClient, type VisionRequest } from "@/lib/guards/ocr/vision-client";
 import { readDocument } from "@/lib/guards/ocr/read";
 import { OCR_CLAUDE_MAX_OUTPUT_TOKENS, OCR_MAX_OUTPUT_TOKENS, effectiveOcrProvider, isGuardOcrConfigured, ocrClaudeModel } from "@/lib/guards/ocr/config";
+import { selftestFailLine } from "@/lib/guards/ocr/selftest-log";
 import { getReadClients, type ReadClients } from "@/lib/guards/ocr/clients";
 import { POST as ocrRoute } from "@/app/api/guards/ocr/read/route";
 
@@ -122,6 +123,33 @@ describe("ClaudeVisionClient：請求形狀＋回應處理", () => {
     delete process.env.CLAUDE_API_KEY;
     expect(() => new ClaudeVisionClient()).toThrow(OcrUnavailableError);
     if (prev !== undefined) process.env.CLAUDE_API_KEY = prev;
+  });
+});
+
+describe("自檢 fail log：API error.type／error.message", () => {
+  const body = (message: string) => ({ type: "error", error: { type: "permission_error", message } });
+  const run = async (status: number, message: string) => {
+    const e = new Anthropic.APIError(status, body(message), message, new Headers());
+    const err = await mkClaude(vi.fn().mockRejectedValue(e)).complete({ system: "s", userText: "u", images: [IMG] }).catch((x) => x);
+    return selftestFailLine("claude", "claude-opus-5-5", 67, err);
+  };
+  it("403 permission_error → error_type＋error_message（去換行、截 200 字）", async () => {
+    const line = await run(403, "Your org\nis not allowed to use this model. ".repeat(10));
+    expect(line).toContain("provider=claude model=claude-opus-5-5 ms=67");
+    expect(line).toContain("status=403 error_type=permission_error error_message=\"Your org is not allowed");
+    expect(line).not.toContain("\n");
+    expect(/error_message="([^"]*)"/.exec(line)![1]!.length).toBeLessThanOrEqual(200);
+    expect(await run(403, "Model not enabled for this workspace.")).toContain('error_type=permission_error error_message="Model not enabled for this workspace."');
+  });
+  it("訊息含 sk-ant → [redacted]", async () => {
+    const line = await run(401, "invalid x-api-key sk-ant-api03-xxxx");
+    expect(line).toContain('error_message="[redacted]"');
+    expect(line).not.toContain("sk-ant");
+  });
+  it("5xx 唔帶 message；audit／route 用嘅 reason 欄不變", async () => {
+    const line = await run(500, "internal detail");
+    expect(line).not.toContain("error_message");
+    expect(line).toContain("reason=api_error");
   });
 });
 
