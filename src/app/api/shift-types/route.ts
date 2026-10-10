@@ -1,3 +1,4 @@
+import { siteReadModule } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeBySiteHavingBrokerShifts, isBrokerRole } from "@/lib/broker-isolation";
@@ -20,7 +21,7 @@ export async function GET(req: Request) {
     // 內部角色維持「盤」。query 層再用 broker_site_assignments 白名單
     // scope（scopeBySiteHavingBrokerShifts），response 用雞頭專屬白名單
     // DTO（toBrokerShiftTypeDTO，冇 createdBy/voidedBy）。
-    const session = await requirePermission(req, (s) => (isBrokerRole(s) ? "更表" : "盤"), "view");
+    const session = await requirePermission(req, siteReadModule, "view");
     const url = new URL(req.url);
     const { skip, take } = paginationParams(url);
     const siteId = url.searchParams.get("site_id");

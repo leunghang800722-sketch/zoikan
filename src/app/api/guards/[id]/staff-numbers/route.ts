@@ -6,9 +6,10 @@
 // （scopeGuardWhere），唔可以寫」係呢個子資源嘅絕對規則，唔靠矩陣個
 // cell 出廠開關（`自己保安員:update` 出廠 off 但老闆理論上可以開，開咗
 // 唔應該連帶解鎖呢個新子資源）。
+import { guardModule, assertScopedGuard } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
+import { isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toGuardStaffNumberDTO } from "@/lib/api/dto";
 import { toGuardStaffNumberBrokerDTO } from "@/lib/broker-dto";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -18,20 +19,12 @@ import { parseBody } from "@/lib/api/validate";
 import { GuardStaffNumberCreateSchema } from "@/lib/api/schemas";
 import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns, writeStaffNumberAudits } from "@/lib/guards/staff-numbers";
 import { NotFound, Forbidden } from "@/lib/api/errors";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
-
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "view");
     const { id } = await params;
-    const where = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
     const rows = await prisma.guardStaffNumber.findMany({ where: { guardId: id }, orderBy: { createdAt: "desc" } });
     // current 先、former 後（同一組 status 入面按新到舊）。
     const current = rows.filter((r) => r.status === "current");

@@ -2,9 +2,10 @@
 // 備註／設做 primary）；DELETE 刪一行（俾用戶自己更正打錯用，audit 留
 // 底——「離職嘅人所有資料完整保留」，冇任何自動流程會觸發呢個 DELETE，
 // 見 src/lib/guards/contacts.ts 頂註解）。
+import { guardModule, assertScopedGuard } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { isBrokerRole } from "@/lib/broker-isolation";
 import { toGuardPhoneDTO } from "@/lib/api/dto";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -15,22 +16,14 @@ import { setPrimaryGuardPhone, deleteGuardPhone, syncLegacyGuardContactColumns, 
 import { assertTelAvailable, rethrowIdentityConflict } from "@/lib/guards/identity";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden, Conflict, BadRequest } from "@/lib/api/errors";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
 import type { GuardPhone } from "@prisma/client";
-
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string; phoneId: string }> }) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "update");
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以改電話");
     const { id, phoneId } = await params;
-    const guardWhere = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
 
     const body = await readJson(req);
     const parsed = parseBody(GuardPhoneUpdateSchema, body);
@@ -107,9 +100,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     const session = await requirePermission(req, guardModule, "update");
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以刪電話");
     const { id, phoneId } = await params;
-    const guardWhere = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
 
     const result = await prisma.$transaction(async (tx) => {
       const deleted = await deleteGuardPhone(tx, id, phoneId);

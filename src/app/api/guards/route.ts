@@ -1,3 +1,4 @@
+import { guardModule } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
@@ -26,18 +27,12 @@ import {
 } from "@/lib/guards/staff-numbers";
 import { hkidSearchKey, prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, identityStatus } from "@/lib/guards/identity";
 import { createGuardPhone, syncLegacyGuardContactColumns, writeLegacyContactAudits } from "@/lib/guards/contacts";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
 import type { Prisma, Guard } from "@prisma/client";
 
 // C3：雞頭睇/管自己保安員用「自己保安員」module（§6.2「自己保安員名冊管理」），
 // 內部角色（老闆/主管/會計）睇全公司保安員用「保安員」module——同一個
 // route，依 session 嘅 base_role 動態揀 module（見
 // src/lib/rbac/requirePermission.ts 嘅 ModuleSelector）。
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
-
 // P2-A：加「本月更數」欄（README §08）用嘅 additive、唯讀 query
 // 參數——`?with_month_shifts=YYYY-MM` 先計，唔傳就同以前一樣乜都唔加。
 // 計法：嗰個月 `record_type=shift` 且非 cancelled 嘅 shift_records 逐

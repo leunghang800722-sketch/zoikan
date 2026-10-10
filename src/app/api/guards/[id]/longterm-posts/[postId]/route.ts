@@ -1,9 +1,10 @@
 // WP-PHASE3（§20.4 Phase 3 item 1）：PATCH 改一條長工崗位盤記錄——最常
 // 用「終止」＝寫 `effective_to`（冇硬刪，同 `guard_staff_numbers`／
 // `rate_cards` 一致「冇硬刪」精神，歷史記錄留低）。
+import { guardModule, assertScopedGuard } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { isBrokerRole } from "@/lib/broker-isolation";
 import { toGuardLongtermPostDTO } from "@/lib/api/dto";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
@@ -12,21 +13,13 @@ import { GuardLongtermPostUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden } from "@/lib/api/errors";
 import { assertLongtermPostPeriodOk } from "@/lib/guards/longterm-posts";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
-
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string; postId: string }> }) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "update");
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以改長工崗位盤");
     const { id, postId } = await params;
-    const guardWhere = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
     const before = await prisma.guardLongtermPost.findFirst({ where: { id: postId, guardId: id } });
     if (!before) throw NotFound("搵唔到呢條長工崗位盤記錄");
 
