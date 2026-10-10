@@ -5,7 +5,7 @@
 // 用法（老闆自己喺 Terminal 行，兩個值都唔會印出嚟）：
 //   read -s "DATABASE_URL?舊密碼嘅連線字串: " && export DATABASE_URL
 //   read -s "NEW_DB_PASSWORD?新密碼: " && export NEW_DB_PASSWORD
-//   npx tsx scripts/db/one-off/rotate-db-password.ts
+//   npx tsx scripts/archive/db/one-off/rotate-db-password.ts
 //   unset DATABASE_URL NEW_DB_PASSWORD
 //
 // 之後喺 Zeabur PostgreSQL 服務嘅 Variables 將 POSTGRES_PASSWORD 設做同一個

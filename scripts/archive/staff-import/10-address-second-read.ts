@@ -2,9 +2,9 @@
 // （淨含 docId／page／裁圖路徑，唔含地址值）。之後由人手盲讀 → out/address-vision-2.json。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { DocExtract } from './lib/aggregate';
-import { normAddr } from './lib/person-fields';
-import { OUT } from './lib/render';
+import type { DocExtract } from '../../staff-import/lib/aggregate';
+import { normAddr } from '../../staff-import/lib/person-fields';
+import { OUT } from '../../staff-import/lib/render';
 
 interface PF {
   docIds: string[];

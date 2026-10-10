@@ -5,13 +5,13 @@
 // 第二讀數由另一個模型盲讀 → out/name-vision-2.json（本 script 唔做第二讀、唔建該檔）。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { DocExtract } from './lib/aggregate';
-import { locateNameBoxB } from './lib/crop-box';
-import type { DocMeta } from './lib/doc-index';
-import type { OcrPage } from './lib/ocr';
-import type { NameVision } from './lib/person-fields';
-import { toPixels } from './lib/phone-crop';
-import { OUT, renderPage, run } from './lib/render';
+import type { DocExtract } from '../../staff-import/lib/aggregate';
+import { locateNameBoxB } from '../../staff-import/lib/crop-box';
+import type { DocMeta } from '../../staff-import/lib/doc-index';
+import type { OcrPage } from '../../staff-import/lib/ocr';
+import type { NameVision } from '../../staff-import/lib/person-fields';
+import { toPixels } from '../../staff-import/lib/phone-crop';
+import { OUT, renderPage, run } from '../../staff-import/lib/render';
 
 interface PF {
   key: string;
