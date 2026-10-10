@@ -11,6 +11,7 @@
 // `token_version`／`status`（Opus 驗收殘留1——logout/改密碼/改角色/改
 // broker/void user 都會 bump，舊 cookie 要當失效），所以呢個 helper 都
 // 經 DB 查詢，唔淨係 unseal cookie 就算。
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
 import { SESSION_COOKIE_NAME, unsealSessionCookie, type SessionData } from "./session";
@@ -25,7 +26,8 @@ export interface CurrentSession extends SessionData {
 /** 喺 Server Component（page.tsx／layout.tsx）讀取已登入用戶；未登入／
  * session 已作廢一律回 null（畫面自己決定 redirect 去 /login，唔喺呢個
  * helper 內部做 redirect，等唔同頁面可以自己決定行為）。 */
-export async function getCurrentSession(): Promise<CurrentSession | null> {
+// P3-1.2：`cache()`——同一個 render（layout＋page）內共用，users 只查一次。
+export const getCurrentSession = cache(async function getCurrentSession(): Promise<CurrentSession | null> {
   const jar = await cookies();
   const raw = jar.get(SESSION_COOKIE_NAME)?.value;
   if (!raw) return null;
@@ -37,4 +39,4 @@ export async function getCurrentSession(): Promise<CurrentSession | null> {
   if (!user || user.status !== "active" || user.tokenVersion !== data.tokenVersion) return null;
 
   return { ...(data as SessionData), baseRole: data.baseRole as RoleName, mustChangePwd: user.mustChangePwd };
-}
+});

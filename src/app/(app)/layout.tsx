@@ -9,6 +9,7 @@ import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
 import { MobileNav } from "@/components/MobileNav";
 import { DesktopNav } from "@/components/DesktopNav";
 import { isAiConfigured } from "@/lib/ai/config";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { countOpenFor } from "@/lib/triage/session";
 
@@ -37,14 +38,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // `src/app/(app)/approvals/page.tsx`），之前呢度加咗 `workDate` 本月
   // 篩選，會令 badge 數字細過 `/approvals` 頁實際筆數，令人以為「仲有
   // 未算入 badge 嘅待批」。改成同頁面一樣唔篩月份。
-  const approvalsPending = grants["審批"] ? await prisma.shiftRecord.count({ where: { status: "pending_approval" } }) : 0;
-  // P2.5「現場反映」開會模式——「現場意見」badge＝status=new 嘅報告數
-  // （同審批 badge 一樣做法：server count，淨係老闆先查，見
-  // `src/lib/rbac/nav.ts` 嘅「現場意見」連結一樣用「助手」module＋
-  // baseRole==="老闆" 雙重判斷）。
-  const unreadFeedback = grants["助手"] && session.baseRole === "老闆" ? await prisma.feedbackReport.count({ where: { status: "new" } }) : 0;
-  // WP-AI-OPS §28.4：「待答問題」badge＝自己上載嗰批未答數（老闆＝全部）。
-  const triageOpen = grants["導入分診"] ? await countOpenFor(session) : 0;
+  // P3-1.2：兩個 badge count（審批、現場意見）合成一條查詢，連同待答問題 count 並行；
+  // 老闆 layout 總共：users(1) + 權限 Set(1) + 兩個 count(1) + 待答 count(1) = 4 條，0 HTTP。
+  const showFeedback = grants["助手"] && session.baseRole === "老闆";
+  const [pendingCounts, triageOpen] = await Promise.all([
+    grants["審批"] || showFeedback
+      ? prisma.$queryRaw<Array<{ approvals: number; feedback: number }>>(
+          Prisma.sql`SELECT ${grants["審批"] ? Prisma.sql`(SELECT count(*)::int FROM shift_records WHERE status = 'pending_approval')` : Prisma.sql`0`} AS approvals, ${showFeedback ? Prisma.sql`(SELECT count(*)::int FROM feedback_reports WHERE status = 'new')` : Prisma.sql`0`} AS feedback`,
+        )
+      : Promise.resolve(null),
+    // WP-AI-OPS §28.4：「待答問題」badge＝自己上載嗰批未答數（老闆＝全部）。
+    grants["導入分診"] ? countOpenFor(session) : Promise.resolve(0),
+  ]);
+  // WP-R1：「審批隊列」右側紅 badge＝待審批更次總數（口徑同 `/approvals` 頁一致，唔篩月份）。
+  const approvalsPending = pendingCounts?.[0]?.approvals ?? 0;
+  // P2.5「現場反映」開會模式——「現場意見」badge＝status=new 嘅報告數（淨係老闆）。
+  const unreadFeedback = pendingCounts?.[0]?.feedback ?? 0;
   const badges: Record<string, number> = {
     ...(triageOpen > 0 ? { "/triage": triageOpen } : {}),
     ...(approvalsPending > 0 ? { "/approvals": approvalsPending } : {}),
