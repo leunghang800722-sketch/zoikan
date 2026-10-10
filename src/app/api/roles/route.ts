@@ -18,7 +18,7 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const { skip, take } = paginationParams(url);
     const [rows, total] = await Promise.all([
-      prisma.role.findMany({ where: { voidedAt: null }, skip, take, orderBy: { createdAt: "asc" } }),
+      prisma.role.findMany({ where: { voidedAt: null }, skip, take, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
       prisma.role.count({ where: { voidedAt: null } }),
     ]);
     return ok(mapListDTO({ rows, total, skip, take }, toRoleDTO));

@@ -9,7 +9,7 @@
 // （currentMonthStr()）過濾，加月份 FilterChip 俾人揀返第啲月。
 import { useEffect, useState } from "react";
 import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
-import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -119,7 +119,7 @@ export default function BrokersPage() {
   async function load() {
     setLoading(true);
     setError(null);
-    const res = await apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500");
+    const res = await apiGetAll<BrokerRow>("/api/brokers");
     if (!res.ok) {
       setError(res.message);
       setLoading(false);
@@ -131,10 +131,10 @@ export default function BrokersPage() {
 
   useEffect(() => {
     load();
-    apiGet<ApiListResult<SiteRow>>("/api/sites?take=500").then((res) => {
+    apiGetAll<SiteRow>("/api/sites").then((res) => {
       if (res.ok) setSites(res.data.rows);
     });
-    apiGet<ApiListResult<GuardRow>>("/api/guards?take=500").then((res) => {
+    apiGetAll<GuardRow>("/api/guards").then((res) => {
       if (!res.ok) return;
       const counts: Record<string, number> = {};
       for (const g of res.data.rows) {
@@ -143,7 +143,7 @@ export default function BrokersPage() {
       }
       setGuardCountByBroker(counts);
     });
-    apiGet<ApiListResult<BrokerSiteAssignmentRow>>("/api/broker-site-assignments?take=500").then((res) => {
+    apiGetAll<BrokerSiteAssignmentRow>("/api/broker-site-assignments").then((res) => {
       if (res.ok) setAssignments(res.data.rows);
     });
   }, []);

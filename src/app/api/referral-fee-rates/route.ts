@@ -42,7 +42,7 @@ export async function GET(req: Request) {
     };
     where = scopeReferralFeeRateWhere(session, where);
     const [rows, total] = await Promise.all([
-      prisma.referralFeeRate.findMany({ where, skip, take, orderBy: [{ month: "desc" }] }),
+      prisma.referralFeeRate.findMany({ where, skip, take, orderBy: [{ month: "desc" }, { id: "asc" }] }),
       prisma.referralFeeRate.count({ where }),
     ]);
     if (isBrokerRole(session)) {

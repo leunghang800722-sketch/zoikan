@@ -2,7 +2,7 @@
 // P2-A：盤管理頁（README §07）——換皮，邏輯／API 呼叫全部保留。
 import { useEffect, useState } from "react";
 import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
-import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -115,7 +115,7 @@ export default function SitesPage() {
   async function load() {
     setLoading(true);
     setError(null);
-    const res = await apiGet<ApiListResult<SiteRow>>("/api/sites?take=500");
+    const res = await apiGetAll<SiteRow>("/api/sites");
     if (!res.ok) {
       setError(res.message);
       setLoading(false);
@@ -129,7 +129,7 @@ export default function SitesPage() {
     // 一次 GET /api/shift-types?site_id=（64 個盤＝64 條 request，N+1）。
     // 改為一次過 GET /api/shift-types?take=500，前端 group by site_id。
     setShiftTypesLoading(true);
-    const stRes = await apiGet<ApiListResult<ShiftTypeRow>>("/api/shift-types?take=500");
+    const stRes = await apiGetAll<ShiftTypeRow>("/api/shift-types");
     if (stRes.ok) {
       const map: Record<string, ShiftTypeRow[]> = {};
       for (const st of stRes.data.rows) {
@@ -178,7 +178,7 @@ export default function SitesPage() {
     // 雞頭名單只喺開編輯抽屜先攞（列表頁 request 集合不變）。
     if (brokers.length === 0) {
       void (async () => {
-        const bres = await apiGet<ApiListResult<BrokerLite>>("/api/brokers?take=500");
+        const bres = await apiGetAll<BrokerLite>("/api/brokers");
         if (bres.ok) setBrokers(bres.data.rows.filter((b) => b.status === undefined || b.status === "active"));
       })();
     }

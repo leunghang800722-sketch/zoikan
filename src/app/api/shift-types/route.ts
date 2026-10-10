@@ -28,7 +28,7 @@ export async function GET(req: Request) {
     let where: Prisma.ShiftTypeWhereInput = { ...(siteId ? { siteId } : {}), ...(includeVoided ? {} : { voidedAt: null }) };
     where = scopeBySiteHavingBrokerShifts(session, where);
     const [rows, total] = await Promise.all([
-      prisma.shiftType.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
+      prisma.shiftType.findMany({ where, skip, take, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
       prisma.shiftType.count({ where }),
     ]);
     if (isBrokerRole(session)) {

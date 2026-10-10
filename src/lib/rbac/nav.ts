@@ -14,64 +14,39 @@
 // （例如幫會計開審批:view）」呢種客製化，喺呢 4 個角色自己登入嗰陣，
 // 導航列暫時反映唔到（要老闆用角色權限管理頁對照確認）。呢個係現有
 // API 權限模型嘅結構性限制，唔係呢頁漏做。
-import { cookies, headers } from "next/headers";
+//
+// P3-1.2（附錄 b A-5／B-11）：老闆分支唔再 loopback `fetch` 自己個
+// `/api/roles/:id/permissions`，改直讀 DB（用 P3-1.1 嘅 per-request 權限
+// Set，一條查詢），並用 react `cache()` 包住——同一個 render 內 layout＋
+// page＋TriageHomeNotice 共用同一個結果。語意同 API 嗰個 cell 一樣：
+// `granted && !hard_denied`。
+import { cache } from "react";
 import { MODULES, isGrantedByDefault, type Module } from "./matrix";
 import type { CurrentSession } from "../auth/current-session";
-
-interface PermissionCell {
-  module: string;
-  action: string;
-  granted: boolean;
-  hard_denied: boolean;
-}
+import { loadPermissionSet, permissionSetHas, type AuthedSession } from "./requirePermission";
 
 /** WP-AI2：側欄 AI 助手嘅入口 tab 同呢個左欄導航列一樣，用「呢個角色
  * 有冇 `助手:view`」決定顯示（唔顯示 = DOM 零元素，唔係淨係 CSS
  * 隱藏）——輸出返成個 grants 表等 `(app)/layout.tsx` 可以一次 fetch
  * 拎晒（唔使為咗助手 tab 再打多一次 `/api/roles/:id/permissions`）。 */
-export async function getViewGrants(session: CurrentSession): Promise<Record<Module, boolean>> {
+export const getViewGrants = cache(async function getViewGrants(session: CurrentSession): Promise<Record<Module, boolean>> {
   const fallback = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(session.baseRole, m, "view")])) as Record<Module, boolean>;
 
-  // A10（Opus 整合驗收）：`/api/roles/:id/permissions` 要求「用戶管理:
-  // view」，喺 matrix.ts 對主管/會計/雞頭/保安員呢 4 個 base_role 全部硬性
-  // deny（見上面檔頭註解）——即係話呢 4 個角色打呢個 fetch **一定** 403。
-  // 之前唔理 baseRole 一律照打，令呢 4 個角色每次 render（`(app)/layout.
-  // tsx` 同 `(app)/page.tsx` 各打一次，一個頁面兩次）都寫一行
-  // `permission_denied` audit（`requirePermission()` 拒絕一定寫
-  // audit，見 requirePermission.ts），操作紀錄俾呢啲必敗嘅內部 fetch
-  // 洗版。而家淨係老闆先真係打呢個 fetch（老闆本身有「用戶管理:view」
-  // ，先有可能成功，攞返可能俾人客製化過嘅角色矩陣）；其餘 4 個角色
-  // 直接用出廠矩陣 fallback（本身就係佢哋實際會攞到嘅結果，唯一分別係
-  // 老闆事後幫呢個角色開多一格出廠係○嘅權限嗰種客製化，呢 4 個角色
-  // 自己登入時導航列反映唔到——呢個限制之前個註解已經講咗，唔係新增
-  // 缺陷）。
+  // A10（Opus 整合驗收）：非老闆 4 個 base_role 一律用出廠矩陣 fallback
+  // （「用戶管理:view」對佢哋硬性 deny，舊版 loopback 必 403 兼寫
+  // permission_denied audit）。老闆先讀角色實際（可能被客製化過）權限。
   if (session.baseRole !== "老闆") return fallback;
 
+  // P3-1.2：直讀 DB。失敗唔再靜靜 fallback（B-11）——寫 console.error 方便追查，
+  // 然後先 fallback（導航寧可顯示出廠預設，都唔好令整頁 500）。
   try {
-    const [cookieStore, headerStore] = await Promise.all([cookies(), headers()]);
-    const host = headerStore.get("host");
-    if (!host) return fallback;
-    const proto = headerStore.get("x-forwarded-proto") ?? (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
-    const cookieHeader = cookieStore
-      .getAll()
-      .map((c) => `${c.name}=${c.value}`)
-      .join("; ");
-
-    const res = await fetch(`${proto}://${host}/api/roles/${session.roleId}/permissions`, {
-      headers: { cookie: cookieHeader },
-      cache: "no-store",
-    });
-    if (!res.ok) return fallback;
-    const data = (await res.json()) as { cells: PermissionCell[] };
-    const real: Partial<Record<Module, boolean>> = {};
-    for (const cell of data.cells) {
-      if (cell.action === "view") real[cell.module as Module] = cell.granted && !cell.hard_denied;
-    }
-    return Object.fromEntries(MODULES.map((m) => [m, real[m] ?? fallback[m]])) as Record<Module, boolean>;
-  } catch {
+    const set = await loadPermissionSet(session as unknown as AuthedSession);
+    return Object.fromEntries(MODULES.map((m) => [m, permissionSetHas(session as unknown as AuthedSession, set, m, "view")])) as Record<Module, boolean>;
+  } catch (e) {
+    console.error("[nav] getViewGrants 讀角色權限失敗，用出廠預設矩陣", e instanceof Error ? e.message : e);
     return fallback;
   }
-}
+});
 
 export interface NavLink {
   href: string;

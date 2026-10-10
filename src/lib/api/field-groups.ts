@@ -12,7 +12,7 @@
 // 見 src/lib/api/schemas.ts／src/lib/api/dto/）。
 import type { Module } from "../rbac/matrix";
 import type { AuthedSession } from "../rbac/requirePermission";
-import { hasPermission } from "../rbac/requirePermission";
+import { hasPermission, loadPermissionSet, permissionSetHas } from "../rbac/requirePermission";
 import { Forbidden } from "./errors";
 import { brandSafeResponse, type Dto } from "./serialize";
 
@@ -163,23 +163,38 @@ export async function applyFieldGroupGate<T extends Record<string, unknown>>(
   resource: FieldGroupResource,
   row: T,
 ): Promise<T> {
+  return gateRow(await loadViewFlags(session), resource, row);
+}
+
+// P3-1.1：四個 field group 嘅 view 權限一次過由 per-request 權限 Set 讀出，
+// 之後逐行 gate 係純函數（唔再逐行逐組查 DB）。
+interface ViewFlags {
+  clientRate: boolean;
+  settlement: boolean;
+  guardPii: boolean;
+  guardBank: boolean;
+}
+
+async function loadViewFlags(session: AuthedSession): Promise<ViewFlags> {
+  const set = await loadPermissionSet(session);
+  return {
+    clientRate: permissionSetHas(session, set, "收客價", "view"),
+    settlement: permissionSetHas(session, set, "出街價", "view"),
+    guardPii: permissionSetHas(session, set, "安員個人資料", "view"),
+    guardBank: permissionSetHas(session, set, "安員銀行資料", "view"),
+  };
+}
+
+function gateRow<T extends Record<string, unknown>>(flags: ViewFlags, resource: FieldGroupResource, row: T): T {
   let out = row;
   const clientFields = CLIENT_RATE_FIELDS[resource];
-  if (clientFields.length && !(await hasPermission(session, "收客價", "view"))) {
-    out = omit(out, clientFields);
-  }
+  if (clientFields.length && !flags.clientRate) out = omit(out, clientFields);
   const settlementFields = SETTLEMENT_FIELDS[resource];
-  if (settlementFields.length && !(await hasPermission(session, "出街價", "view"))) {
-    out = omit(out, settlementFields);
-  }
+  if (settlementFields.length && !flags.settlement) out = omit(out, settlementFields);
   const guardPiiFields = GUARD_PII_FIELDS[resource];
-  if (guardPiiFields.length && !(await hasPermission(session, "安員個人資料", "view"))) {
-    out = omit(out, guardPiiFields);
-  }
+  if (guardPiiFields.length && !flags.guardPii) out = omit(out, guardPiiFields);
   const guardBankFields = GUARD_BANK_FIELDS[resource];
-  if (guardBankFields.length && !(await hasPermission(session, "安員銀行資料", "view"))) {
-    out = omit(out, guardBankFields);
-  }
+  if (guardBankFields.length && !flags.guardBank) out = omit(out, guardBankFields);
   return out;
 }
 
@@ -188,7 +203,8 @@ export async function applyFieldGroupGateToList<T extends Record<string, unknown
   resource: FieldGroupResource,
   list: { rows: T[]; total: number; skip: number; take: number },
 ): Promise<Dto<{ rows: T[]; total: number; skip: number; take: number }>> {
-  const rows = await Promise.all(list.rows.map((r) => applyFieldGroupGate(session, resource, r)));
+  const flags = await loadViewFlags(session);
+  const rows = list.rows.map((r) => gateRow(flags, resource, r));
   return brandSafeResponse({ ...list, rows });
 }
 

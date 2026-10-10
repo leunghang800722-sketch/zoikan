@@ -54,6 +54,7 @@ import {
   summarizePostorderParse,
   type PostorderParseResult,
 } from "@/lib/guard-fix/postorder";
+import { POSTORDER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
 
 const MAX_UPLOAD_BYTES = 30 * 1024 * 1024; // Postorder 總表帶 rich text／樣式，比 U Team 名單大好多
 const MAX_CSV_BYTES = 30 * 1024 * 1024; // 每個 CSV 檔上限（同 xlsm 一致，見§19 指示）
@@ -82,8 +83,8 @@ export async function GET(req: Request) {
     const monthParam = url.searchParams.get("month");
     const month = monthParam ? monthStart(new Date(monthParam)) : null;
     const [current, history] = await Promise.all([
-      prisma.postorderUpload.findFirst({ where: { status: "parsed", ...(month ? { month } : {}) }, orderBy: { uploadedAt: "desc" } }),
-      prisma.postorderUpload.findMany({ where: month ? { month } : undefined, orderBy: { uploadedAt: "desc" }, take: 20 }),
+      prisma.postorderUpload.findFirst({ where: { status: "parsed", ...(month ? { month } : {}) }, select: POSTORDER_UPLOAD_META_SELECT, orderBy: { uploadedAt: "desc" } }),
+      prisma.postorderUpload.findMany({ where: month ? { month } : undefined, select: POSTORDER_UPLOAD_META_SELECT, orderBy: { uploadedAt: "desc" }, take: 20 }),
     ]);
     return ok(
       brandSafeResponse({

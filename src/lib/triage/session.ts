@@ -1,6 +1,7 @@
 // WP-AI-OPS §28.4：分診 session 建立／列出／權限／轉交。
 // 擁有人＝上載者（owner_user_id）。老闆睇全部、可轉交；其他人（會計／主管）只睇／答自己嗰批——
 // API 層強制（呢度），唔係淨係前端收埋。
+import { cache } from "react";
 import type { TriageQuestion, TriageSession } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
@@ -83,10 +84,11 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
 }
 
 /** 「待答問題」數（badge 用，淨計重要嗰層，唔計補充資料）：老闆＝全部；其他＝自己嗰批。 */
-export async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<number> {
+// P3-1.2：`cache()`——layout 同首頁 TriageHomeNotice 同一個 render 內共用（按 actor 物件識別）。
+export const countOpenFor = cache(async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<number> {
   const restricted = await restrictedKindsFor(actor);
   return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS, ...restricted] }, session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
-}
+});
 
 /** 所有未答都答晒（冇 open）就收尾；有新 open 就重開。 */
 export async function refreshSessionStatus(sessionId: string): Promise<"open" | "done"> {

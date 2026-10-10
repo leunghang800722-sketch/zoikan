@@ -27,7 +27,7 @@ export async function GET(req: Request) {
     let where: Prisma.RateCardWhereInput = { ...(siteId ? { siteId } : {}), ...(includeVoided ? {} : { voidedAt: null }) };
     where = scopeRateCardWhere(session, where);
     const [rows, total] = await Promise.all([
-      prisma.rateCard.findMany({ where, skip, take, orderBy: { effectiveFrom: "desc" } }),
+      prisma.rateCard.findMany({ where, skip, take, orderBy: [{ effectiveFrom: "desc" }, { id: "asc" }] }),
       prisma.rateCard.count({ where }),
     ]);
 

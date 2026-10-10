@@ -1,6 +1,7 @@
 // WP-STAFF-IMPORT B2：淨靠姓名配對（`roster_upload_rows.match_basis='name_only'`）格數——
 // 上載詳情頁、pending-summary、一鍵結算 precheck 共用。只計有配到人（guard_id 非 null）嘅格。
 import { prisma } from "@/lib/db";
+import { pendingUploadWhere } from "@/lib/roster-upload/pending-summary";
 
 export const NAME_ONLY_WARNING = "淨靠姓名配對，建議補工號或電話";
 
@@ -22,9 +23,9 @@ export interface NameOnlySummary {
 }
 
 /** pending-summary 用：status=parsed 嘅上載（month=null＝所有月份）各自 name_only 格數。 */
-export async function buildNameOnlySummary(month: Date | null): Promise<NameOnlySummary> {
+export async function buildNameOnlySummary(month: Date | null, opts: { months?: number } = {}): Promise<NameOnlySummary> {
   const uploads = await prisma.rosterUpload.findMany({
-    where: { ...(month ? { month } : {}), status: "parsed" },
+    where: pendingUploadWhere(month, opts.months),
     select: { id: true, siteNameRaw: true, month: true },
   });
   const counts = await nameOnlyCountsByUpload(uploads.map((u) => u.id));

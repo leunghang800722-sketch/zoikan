@@ -2,7 +2,9 @@
 // `POST /api/month-close/one-click { month }`——開一個新 run，即刻 202
 // 返，背景用 Next `after()` 跑（同 guard-fix apply／reconcile-all 一致
 // pattern：advisory lock 認領＋15 分鐘卡死復原）。
-// `GET /api/month-close/one-click?month=`——run 歷史（含 steps／report）。
+// `GET /api/month-close/one-click?month=`——run 歷史。P3-1.6：預設只回摘要欄（唔帶 steps／report，
+// 列表由 ~160 KB 降到幾 KB）；`?include=full` 先帶全份 steps／report（同舊版一模一樣）；
+// 單一 run 全份用 `GET /api/month-close/one-click/:id`。
 import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -12,8 +14,8 @@ import { readJson } from "@/lib/api/query";
 import { BadRequest, Conflict } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { writeAudit } from "@/lib/audit";
-import { findOneClickRuns } from "@/lib/month-close/one-click-read";
-import { runOneClickMonthClose, ONE_CLICK_ADVISORY_LOCK_KEY, ONE_CLICK_STALE_MS, monthCloseRunStalled } from "@/lib/month-close/one-click";
+import { findOneClickRuns, findOneClickRunSummaries, oneClickRunToDTO, oneClickRunSummaryToDTO } from "@/lib/month-close/one-click-read";
+import { runOneClickMonthClose, ONE_CLICK_ADVISORY_LOCK_KEY, ONE_CLICK_STALE_MS } from "@/lib/month-close/one-click";
 
 export async function POST(req: Request) {
   return withApiError(async () => {
@@ -56,22 +58,14 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const monthParam = url.searchParams.get("month");
     const month = monthParam ? parseMonthParam(monthParam) : null;
-    const runs = await findOneClickRuns(month);
-    return ok(
-      brandSafeResponse({
-        runs: runs.map((r) => ({
-          id: r.id,
-          month: r.month.toISOString().slice(0, 10),
-          status: r.status,
-          started_at: r.startedAt.toISOString(),
-          finished_at: r.finishedAt?.toISOString() ?? null,
-          current_step: r.currentStep,
-          stalled: monthCloseRunStalled(r),
-          steps: r.stepsJson,
-          report: r.reportJson,
-          error_message: r.errorMessage,
-        })),
-      }),
-    );
+    const full = url.searchParams.get("include") === "full";
+    // P3-1.6：預設列表唔讀 steps_json／report_json（兩欄係大 JSON），只讀摘要要用嘅欄；
+    // totals／steps 完成數由 DB 側 jsonb 運算攞，唔經 Node 解析整份報告。
+    if (full) {
+      const runs = await findOneClickRuns(month);
+      return ok(brandSafeResponse({ runs: runs.map(oneClickRunToDTO) }));
+    }
+    const runs = await findOneClickRunSummaries(month);
+    return ok(brandSafeResponse({ runs: runs.map(oneClickRunSummaryToDTO) }));
   });
 }

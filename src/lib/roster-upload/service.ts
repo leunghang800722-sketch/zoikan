@@ -41,6 +41,7 @@ import {
   type RosterUploadSiteResolution,
 } from "./match";
 import { externalBrokerForRow, type ExternalBrokerLite } from "./external-alias";
+import { ROSTER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -667,7 +668,7 @@ export async function bulkResolveAmbiguousSubSite(params: {
   actorUserId: string | null;
   ip: string | null;
 }): Promise<BulkResolveSubSiteResult> {
-  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
+  const upload = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId }, select: ROSTER_UPLOAD_META_SELECT });
   if (!upload.siteId) throw BadRequest("呢個上載未指定盤，請先指定盤先可以批量指定子盤");
   // WP-GUARD-FIX 驗收（Opus 5.5）：同 `applyReconcileDecisions()` 一致——
   // 淨係 parsed／confirmed 先可以改；鎖咗嘅月份一律拒（寫 permission_denied
@@ -713,7 +714,7 @@ export async function bulkResolveAmbiguousSubSite(params: {
       await writeAuditTx(tx, { actorUserId: params.actorUserId, tableName: "roster_upload_rows", rowId: row.id, action: "update", before: row, after, ip: params.ip });
       result.updated.push(row.id);
     }
-  });
+  }, { timeout: 60_000, maxWait: 10_000 }); // P3-1.7（B-3）：逐行 update＋audit，預設 5 s 太短
   return result;
 }
 
@@ -724,7 +725,7 @@ export async function bulkResolveAmbiguousSubSite(params: {
  * 指定一個舊檔而蓋咗較新嘅上載）。返回被轉 superseded 嘅 id。 */
 export async function assignRosterUploadSite(uploadId: string, siteId: string | null): Promise<{ supersededIds: string[] }> {
   return prisma.$transaction(async (tx) => {
-    const upload = await tx.rosterUpload.findUniqueOrThrow({ where: { id: uploadId } });
+    const upload = await tx.rosterUpload.findUniqueOrThrow({ where: { id: uploadId }, select: ROSTER_UPLOAD_META_SELECT });
     await lockVersionGroup(tx, siteId, upload.siteNameRaw, upload.month);
     if (upload.siteId === siteId) return { supersededIds: [] };
 
@@ -809,14 +810,14 @@ export async function voidRosterUpload(params: { uploadId: string; reason: strin
   // connection 一齊做）；transaction 入面攞 advisory lock 之後再撈多次
   // 最新狀態覆核一次（防止檢查完至開 transaction 呢段空隙撞另一個並發
   // 請求，例如兩個人同時作廢同一個上載）。
-  const before = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
+  const before = await prisma.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId }, select: ROSTER_UPLOAD_META_SELECT });
   if (before.status === "confirmed") throw Conflict("呢個上載已經對數確認，要先去對數頁處理（keep_system/exception/apply_roster），先可以作廢");
   if (before.status === "voided") throw Conflict("呢個上載已經作廢");
   await assertMonthNotLocked({ workDate: before.month, actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
 
   return prisma.$transaction(async (tx) => {
     await lockVersionGroup(tx, before.siteId, before.siteNameRaw, before.month);
-    const current = await tx.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId } });
+    const current = await tx.rosterUpload.findUniqueOrThrow({ where: { id: params.uploadId }, select: ROSTER_UPLOAD_META_SELECT });
     if (current.status === "confirmed") throw Conflict("呢個上載已經對數確認，要先去對數頁處理（keep_system/exception/apply_roster），先可以作廢");
     if (current.status === "voided") throw Conflict("呢個上載已經作廢");
 
@@ -832,6 +833,7 @@ export async function voidRosterUpload(params: { uploadId: string; reason: strin
     if (wasActive) {
       const candidates = await tx.rosterUpload.findMany({
         where: { ...monthGroupWhere(before.siteId, before.siteNameRaw, before.month), status: "superseded" },
+        select: ROSTER_UPLOAD_META_SELECT,
         orderBy: { version: "desc" },
         take: 1,
       });
