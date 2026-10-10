@@ -14,6 +14,21 @@ export type ApiResult<T> =
   | { ok: true; status: number; data: T }
   | { ok: false; status: number; error: string; message: string };
 
+/** 讀 response body（JSON，讀唔到就當 null）並轉做統一 `ApiResult`；非 2xx 帶 server 嘅 error／message。 */
+async function readResult<T>(res: Response): Promise<ApiResult<T>> {
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  if (!res.ok) {
+    const b = (body ?? {}) as Partial<{ error: string; message: string }>;
+    return { ok: false, status: res.status, error: b.error ?? "error", message: b.message ?? `請求失敗（HTTP ${res.status}）` };
+  }
+  return { ok: true, status: res.status, data: body as T };
+}
+
 export async function apiRequest<T = unknown>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   let res: Response;
   try {
@@ -25,20 +40,10 @@ export async function apiRequest<T = unknown>(path: string, init?: RequestInit):
     return { ok: false, status: 0, error: "network_error", message: "網絡錯誤，請檢查連線後重試" };
   }
 
-  let body: unknown = null;
-  try {
-    body = await res.json();
-  } catch {
-    body = null;
-  }
-
-  if (!res.ok) {
-    const b = (body ?? {}) as Partial<{ error: string; message: string }>;
-    return { ok: false, status: res.status, error: b.error ?? "error", message: b.message ?? `請求失敗（HTTP ${res.status}）` };
-  }
+  const result = await readResult<T>(res);
   // P3-2.4：寫入參考資料相關資源成功 → 前端參考資料 cache 作廢（見 lookup-cache.ts）。
-  if (init?.method && init.method !== "GET" && isLookupWritePath(path)) invalidateLookups();
-  return { ok: true, status: res.status, data: body as T };
+  if (result.ok && init?.method && init.method !== "GET" && isLookupWritePath(path)) invalidateLookups();
+  return result;
 }
 
 /**
@@ -99,15 +104,5 @@ export async function apiUpload<T = unknown>(path: string, formData: FormData): 
   } catch {
     return { ok: false, status: 0, error: "network_error", message: "網絡錯誤，請檢查連線後重試" };
   }
-  let body: unknown = null;
-  try {
-    body = await res.json();
-  } catch {
-    body = null;
-  }
-  if (!res.ok) {
-    const b = (body ?? {}) as Partial<{ error: string; message: string }>;
-    return { ok: false, status: res.status, error: b.error ?? "error", message: b.message ?? `請求失敗（HTTP ${res.status}）` };
-  }
-  return { ok: true, status: res.status, data: body as T };
+  return readResult<T>(res);
 }

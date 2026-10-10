@@ -110,8 +110,8 @@ export type Action = (typeof ACTIONS)[number];
 export const ROLE_NAMES = ["老闆", "主管", "會計", "雞頭", "安員"] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
-export type Cell = "grant" | "off" | "deny";
-export type ModuleRow = Record<Action, Cell>;
+type Cell = "grant" | "off" | "deny";
+type ModuleRow = Record<Action, Cell>;
 export type RoleMatrix = Record<Module, ModuleRow>;
 
 function row(view: Cell, create: Cell, update: Cell, del: Cell, exp: Cell): ModuleRow {
@@ -337,7 +337,7 @@ export const DEFAULT_MATRIX: Record<RoleName, RoleMatrix> = {
   安員: GUARD_SELF,
 };
 
-export function cellFor(role: RoleName, mod: Module, action: Action): Cell {
+function cellFor(role: RoleName, mod: Module, action: Action): Cell {
   return DEFAULT_MATRIX[role][mod][action];
 }
 

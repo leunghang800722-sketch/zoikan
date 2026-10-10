@@ -5,7 +5,7 @@ import { isMonthLocked } from "./month-lock";
 import { checkOutputGuard } from "./ai/output-guard";
 import { MONTH_LOCK_FILTERED_TYPES, type ActionCard } from "./ai/actions";
 
-export function monthStringToDate(month: string): Date {
+function monthStringToDate(month: string): Date {
   const [y, m] = month.split("-").map(Number) as [number, number];
   return new Date(Date.UTC(y, m - 1, 1));
 }

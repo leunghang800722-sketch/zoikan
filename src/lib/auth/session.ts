@@ -23,9 +23,9 @@ export interface SessionData {
 }
 
 export const SESSION_COOKIE_NAME = "zoikan_session";
-export const DEFAULT_SESSION_IDLE_DAYS = 30;
-export const DEFAULT_SESSION_ABSOLUTE_DAYS = 90;
-export const SESSION_RENEW_AFTER_SECONDS = 60 * 60 * 24; // 距上次簽發 ≥24 小時先續期
+const DEFAULT_SESSION_IDLE_DAYS = 30;
+const DEFAULT_SESSION_ABSOLUTE_DAYS = 90;
+const SESSION_RENEW_AFTER_SECONDS = 60 * 60 * 24; // 距上次簽發 ≥24 小時先續期
 const DAY = 60 * 60 * 24;
 
 const warned = new Set<string>();
@@ -65,7 +65,7 @@ export function _resetSessionTtlWarnings(): void {
 }
 
 /** 距絕對上限仲剩幾多秒（≤0＝已過） */
-export function absoluteRemainingSeconds(data: Pick<SessionData, "loggedInAt">, nowMs = Date.now()): number {
+function absoluteRemainingSeconds(data: Pick<SessionData, "loggedInAt">, nowMs = Date.now()): number {
   const t = Date.parse(data.loggedInAt);
   if (!Number.isFinite(t)) return 0;
   return Math.floor((t + getSessionTtlConfig().absoluteSeconds * 1000 - nowMs) / 1000);

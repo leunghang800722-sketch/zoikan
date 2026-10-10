@@ -19,9 +19,6 @@ export const REFERRAL_SWING_PCT = 30;
 /** 明細最多回幾多行（每個 finding）。 */
 export const MAX_DETAIL_ROWS = 50;
 
-/** 修正摘要：「結算視窗」由首份更表上載起計到鎖月（未鎖就到而家），最長幾多日。 */
-export const DIGEST_WINDOW_MAX_DAYS = 60;
-
 /** 修正摘要：top N 盤／雞頭代號。 */
 export const DIGEST_TOP_N = 5;
 

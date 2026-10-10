@@ -22,7 +22,7 @@ export const bypassesHold = (d: string | undefined, held: ExtHeld | readonly Ext
 };
 export type ExtDecisions = Readonly<Record<string, ExtDecision>>;
 
-export type ExtCheck = "new" | "fill" | "add" | "same" | "differs" | "taken" | "not_stored" | "hidden";
+type ExtCheck = "new" | "fill" | "add" | "same" | "differs" | "taken" | "not_stored" | "hidden";
 export type ExtOutcome = "written" | "same" | "conflict" | "skipped" | "not_confirmed" | "not_stored" | "not_written" | "held";
 
 export interface ExtOutcomeRow {
@@ -78,13 +78,6 @@ export function heldAll(gate: ExtGate, key: string): ExtHeld[] {
   if (key === "hireDate" && gate.longtermHire) out.push("longterm");
   return out;
 }
-/** 呢個 key 喺閘之下係咪要 hold（冇人手決定先）。 */
-export function heldBy(gate: ExtGate, key: string): ExtHeld | null {
-  if (!gate.scalars) return "identity";
-  if (key === "bank") return gate.bank ? null : "bank";
-  if (key === "hireDate" && gate.longtermHire) return "longterm";
-  return null;
-}
 
 export const PII_OVERWRITE_DENIED_MSG = "呢條要有保安員個人資料修改權限嘅同事（例如老闆）答";
 export const BANK_OVERWRITE_DENIED_MSG = "呢條要有保安員銀行資料修改權限嘅同事答";
@@ -116,7 +109,7 @@ export const EMPTY_BANK = { code: null, name: null, accountNo: null, payee: null
 // ---------------------------------------------------------------------------
 // 標籤
 // ---------------------------------------------------------------------------
-export const EXT_LABEL: Record<string, string> = {
+const EXT_LABEL: Record<string, string> = {
   "siaPermit.no": "保安人員許可證號碼",
   "siaPermit.aExpiry": "許可證甲類屆滿日",
   "siaPermit.bExpiry": "許可證乙類屆滿日",
@@ -138,14 +131,6 @@ export function extLabel(key: string): string {
   if (key.startsWith("staffHire.")) return `${EXT_LABEL.staffHire}（${key.slice("staffHire.".length)}）`;
   return EXT_LABEL[key] ?? "其他資料";
 }
-export const EXT_CHECK_LABEL: Record<string, string> = {
-  new: "新增",
-  fill: "補空欄",
-  same: "同現值一樣",
-  differs: "同現值唔同",
-  not_stored: "系統未儲存",
-  hidden: "（冇權限睇比較）",
-};
 export const EXT_OUTCOME_LABEL: Record<string, string> = {
   written: "會寫入",
   same: "同現值一樣，唔郁",
@@ -165,7 +150,7 @@ export const extKeyGroup = (k: string): "bank" | "pii" | "guard" => (isBankKey(k
 // ---------------------------------------------------------------------------
 // 比較用正規化
 // ---------------------------------------------------------------------------
-export const normNo = (v: string | null | undefined): string => (v ?? "").toUpperCase().replace(/[\s-]/g, "");
+const normNo = (v: string | null | undefined): string => (v ?? "").toUpperCase().replace(/[\s-]/g, "");
 export const normPayee = (v: string | null | undefined): string => (v ?? "").normalize("NFKC").toUpperCase().replace(/[\s,.·\-]+/g, " ").trim();
 export const digits = (v: string | null | undefined): string => (v ?? "").replace(/\D/g, "");
 const telKey = (v: string | null | undefined): string | null => (v ? normTel8(v) ?? (digits(v) || null) : null);
@@ -186,7 +171,7 @@ export function sameContact(a: { name: string | null; tel: string | null }, b: {
 // ---------------------------------------------------------------------------
 // 純量欄定義
 // ---------------------------------------------------------------------------
-export type ScalarCol = "siaPermitNo" | "siaPermitAExpiry" | "siaPermitBExpiry" | "safetyCardNo" | "safetyCardExpiry" | "qasIssueDate" | "qasExpiryDate" | "hireDate";
+type ScalarCol = "siaPermitNo" | "siaPermitAExpiry" | "siaPermitBExpiry" | "safetyCardNo" | "safetyCardExpiry" | "qasIssueDate" | "qasExpiryDate" | "hireDate";
 type Leaf = { value: string | null; status: FieldStatus } | undefined;
 interface ScalarSpec {
   key: string;
@@ -373,7 +358,7 @@ export function maskExtChecks(items: readonly ExtItem[], opts: { pii: boolean; b
 }
 
 /** 依 key 分組統計用（staffHire.<工號> → staffHire）。 */
-export const extStatKey = (k: string): string => (k.startsWith("staffHire.") ? "staffHire" : k);
+const extStatKey = (k: string): string => (k.startsWith("staffHire.") ? "staffHire" : k);
 
 // 注意：response 經 brandSafeResponse 會將物件 key 轉 snake_case，所以動態 key（ext key）一律用陣列 [{key,…}] 輸出，唔用 record。
 export interface ExtAggregate {

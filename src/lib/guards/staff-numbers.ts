@@ -44,7 +44,7 @@ type Tx = Prisma.TransactionClient;
 /** scheme 格式：1-4 位大寫英文字母。已知 U／MP／MG／MW（見上面業務規則
  * (1)），但呢度刻意唔用寫死 enum——將來加新種類（例如第三間公司又有新
  * 代號）淨係改 UI 下拉，唔使 migration。 */
-export const STAFF_NUMBER_SCHEME_RE = /^[A-Z]{1,4}$/;
+const STAFF_NUMBER_SCHEME_RE = /^[A-Z]{1,4}$/;
 
 // S2（Opus 驗收）：`number` 正規化後嘅格式——scheme 前綴（1-4 位大寫英文
 // 字母）+ 1-16 位大寫英文字母／數字／連字符（`-`），總長自然 ≤20（4+16）。

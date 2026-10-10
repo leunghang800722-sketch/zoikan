@@ -49,7 +49,7 @@ async function handle<T>(res: Response): Promise<T> {
   return body as T;
 }
 
-export type ListResponse<T> = { rows: T[]; total: number; skip: number; take: number };
+type ListResponse<T> = { rows: T[]; total: number; skip: number; take: number };
 
 export async function apiGet<T>(
   path: string,
@@ -77,7 +77,10 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 
 /**
  * 攞晒一個 list endpoint 嘅全部 rows，自動跟 `total`/`skip` 分頁攞到晒
- * （單次 request 上限 500，一個月一個盤可能多過 500 行）。
+ * （server 單次 `take` 上限 500，一個月一個盤可能多過 500 行）。
+ * `pageSize` 唔可以大過 server 嘅 `take` 上限（預設 500 就係上限）：`skip` 係按 `pageSize` 前進，
+ * 如果 server 靜靜截短咗一頁，中間幾行就會被跳過。同埋唔保證 `rows.length === pageSize`
+ * （server 可能喺分頁後剔行，見 ui/api-client.ts），所以停止條件睇 `total` 同空頁，唔睇已收行數。
  */
 export async function apiGetAll<T>(
   path: string,

@@ -1,7 +1,7 @@
 "use client";
 // WP-RECONCILE-UI（§33.3 B）：相似保安員提示——純顯示＋連去 /guards?q=，唔配對、唔寫入。
 import Link from "next/link";
-import { LINK, SIMILAR_WHY_LABEL, guardStatusLabel, guardSearchTerm, type Person } from "./derive";
+import { LINK, SIMILAR_WHY_LABEL, guardStatusLabel, type Person } from "./derive";
 import { useSimilarGuards } from "./data";
 import type { GuardLite } from "./derive";
 
@@ -32,4 +32,3 @@ export function SimilarGuards({ person, dir }: { person: Person; dir: { rows: Gu
   );
 }
 
-export { guardSearchTerm };

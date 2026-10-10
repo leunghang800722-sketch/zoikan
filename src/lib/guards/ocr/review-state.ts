@@ -4,7 +4,7 @@
 import { OCR_FIELDS, type OcrFieldKey } from "./config";
 import { normalizeField, type FieldStatus } from "./normalize";
 
-export const CRITICAL_FIELDS: readonly OcrFieldKey[] = ["name_zh", "hkid", "dob"];
+const CRITICAL_FIELDS: readonly OcrFieldKey[] = ["name_zh", "hkid", "dob"];
 export const REQUIRED_FIELDS: readonly OcrFieldKey[] = ["name_zh", "hkid"];
 export const CRITICAL_MSG = "請對住證件逐個確認姓名、身份證號、出生日期";
 

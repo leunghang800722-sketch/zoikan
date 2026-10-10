@@ -1,0 +1,135 @@
+{
+  "ai-basic": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"你好，我係在勤 AI 助手。\"}\n\nevent: done\ndata: {\"text\":\"你好，我係在勤 AI 助手。\",\"tools_used\":[],\"guard_triggered\":false,\"style_rewritten\":false,\"input_tokens\":10,\"output_tokens\":14,\"provider\":null,\"model\":null,\"suggested_actions\":[]}\n\n"
+  },
+  "ai-long": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"好的，呢個月嘅更數同上個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長\"}\n\nevent: delta\ndata: {\"text\":\"工，所以整體人手分佈有啲變化，建議你去月結頁睇下詳細數字。好的，呢個月嘅更數同上\"}\n\nevent: delta\ndata: {\"text\":\"個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長工，所以整體人手分佈有\"}\n\nevent: delta\ndata: {\"text\":\"啲變化，建議你去月結頁睇下詳細數字。\"}\n\nevent: done\ndata: {\"text\":\"好的，呢個月嘅更數同上個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長工，所以整體人手分佈有啲變化，建議你去月結頁睇下詳細數字。好的，呢個月嘅更數同上個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長工，所以整體人手分佈有啲變化，建議你去月結頁睇下詳細數字。\",\"tools_used\":[],\"guard_triggered\":false,\"style_rewritten\":false,\"input_tokens\":10,\"output_tokens\":138,\"provider\":null,\"model\":null,\"suggested_actions\":[]}\n\n"
+  },
+  "ai-empty": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"唔知點答呢條問題，可以講清楚啲想問邊方面，或者換個講法再問一次？\"}\n\nevent: done\ndata: {\"text\":\"唔知點答呢條問題，可以講清楚啲想問邊方面，或者換個講法再問一次？\",\"tools_used\":[],\"guard_triggered\":false,\"style_rewritten\":false,\"input_tokens\":10,\"output_tokens\":3,\"provider\":null,\"model\":null,\"suggested_actions\":[]}\n\n"
+  },
+  "ai-guard": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"呢類改動請聯絡 Eric（老闆）。\"}\n\nevent: done\ndata: {\"text\":\"呢類改動請聯絡 Eric（老闆）。\",\"tools_used\":[],\"guard_triggered\":true,\"style_rewritten\":false,\"input_tokens\":10,\"output_tokens\":44,\"provider\":null,\"model\":null,\"suggested_actions\":[]}\n\n"
+  },
+  "ai-unavailable": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: error\ndata: {\"message\":\"AI 服務暫時連唔到，請稍後再試\"}\n\n"
+  },
+  "ai-error": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: error\ndata: {\"message\":\"系統錯誤，請稍後再試\"}\n\n"
+  },
+  "ai-401": {
+    "status": 401,
+    "contentType": "application/json",
+    "cacheControl": null,
+    "connection": null,
+    "body": "{\"error\":\"unauthorized\",\"message\":\"未登入\"}"
+  },
+  "ai-400-empty": {
+    "status": 400,
+    "contentType": "application/json",
+    "cacheControl": null,
+    "connection": null,
+    "body": "{\"error\":\"bad_request\",\"message\":\"輸入驗證失敗：message: 問題唔可以係空\"}"
+  },
+  "ai-400-strict": {
+    "status": 400,
+    "contentType": "application/json",
+    "cacheControl": null,
+    "connection": null,
+    "body": "{\"error\":\"bad_request\",\"message\":\"輸入驗證失敗：(root): Unrecognized key: \\\"extra\\\"\"}"
+  },
+  "fb-basic": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"明白，仲有咩想補充？\"}\n\nevent: done\ndata: {\"text\":\"明白，仲有咩想補充？\",\"tools_used\":[],\"guard_triggered\":false,\"feasibility_guard_triggered\":false}\n\n"
+  },
+  "fb-long": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"好的，呢個月嘅更數同上個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長\"}\n\nevent: delta\ndata: {\"text\":\"工，所以整體人手分佈有啲變化，建議你去月結頁睇下詳細數字。好的，呢個月嘅更數同上\"}\n\nevent: delta\ndata: {\"text\":\"個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長工，所以整體人手分佈有\"}\n\nevent: delta\ndata: {\"text\":\"啲變化，建議你去月結頁睇下詳細數字。\"}\n\nevent: done\ndata: {\"text\":\"好的，呢個月嘅更數同上個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長工，所以整體人手分佈有啲變化，建議你去月結頁睇下詳細數字。好的，呢個月嘅更數同上個月比較，主要分別喺於新增咗兩個盤，而且有三位保安員轉咗長工，所以整體人手分佈有啲變化，建議你去月結頁睇下詳細數字。\",\"tools_used\":[],\"guard_triggered\":false,\"feasibility_guard_triggered\":false}\n\n"
+  },
+  "fb-empty": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"唔知點答，可以講清楚啲你想反映邊方面，或者換個講法再講一次？\"}\n\nevent: done\ndata: {\"text\":\"唔知點答，可以講清楚啲你想反映邊方面，或者換個講法再講一次？\",\"tools_used\":[],\"guard_triggered\":false,\"feasibility_guard_triggered\":false}\n\n"
+  },
+  "fb-guard": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"呢類改動請聯絡 Eric（老闆）。\"}\n\nevent: done\ndata: {\"text\":\"呢類改動請聯絡 Eric（老闆）。\",\"tools_used\":[],\"guard_triggered\":true,\"feasibility_guard_triggered\":false}\n\n"
+  },
+  "fb-feasibility": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: delta\ndata: {\"text\":\"可行性由 Eric 同技術團隊評估，我淨係幫你整理清楚訴求。\"}\n\nevent: done\ndata: {\"text\":\"可行性由 Eric 同技術團隊評估，我淨係幫你整理清楚訴求。\",\"tools_used\":[],\"guard_triggered\":false,\"feasibility_guard_triggered\":true}\n\n"
+  },
+  "fb-unavailable": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: error\ndata: {\"message\":\"AI 服務暫時連唔到，請稍後再試\"}\n\n"
+  },
+  "fb-error": {
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8",
+    "cacheControl": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "body": "event: error\ndata: {\"message\":\"系統錯誤，請稍後再試\"}\n\n"
+  },
+  "fb-401": {
+    "status": 401,
+    "contentType": "application/json",
+    "cacheControl": null,
+    "connection": null,
+    "body": "{\"error\":\"unauthorized\",\"message\":\"未登入\"}"
+  },
+  "fb-404": {
+    "status": 404,
+    "contentType": "application/json",
+    "cacheControl": null,
+    "connection": null,
+    "body": "{\"error\":\"not_found\",\"message\":\"呢個開會 session 唔存在或者已經結束\"}"
+  },
+  "fb-400": {
+    "status": 400,
+    "contentType": "application/json",
+    "cacheControl": null,
+    "connection": null,
+    "body": "{\"error\":\"bad_request\",\"message\":\"輸入驗證失敗：message: 問題唔可以係空\"}"
+  }
+}

@@ -14,7 +14,52 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/** 括號配對攞 `orderBy: [ ... ]` 陣列內容（元素內可以有巢狀 `[]`／`{}`），再睇有冇頂層 `{ id: "asc"|"desc" }` 元素。 */
+function orderByHasIdTieBreaker(line: string): boolean {
+  const m = /orderBy:\s*\[/.exec(line);
+  if (!m) return false;
+  let depth = 0;
+  let start = -1;
+  let end = -1;
+  for (let k = m.index + m[0].length - 1; k < line.length; k++) {
+    const ch = line[k];
+    if (ch === "[") {
+      if (depth === 0) start = k + 1;
+      depth++;
+    } else if (ch === "]") {
+      depth--;
+      if (depth === 0) {
+        end = k;
+        break;
+      }
+    }
+  }
+  if (start < 0 || end < 0) return false;
+  // 頂層元素：以逗號分隔（忽略巢狀括號內嘅逗號）。
+  const elems: string[] = [];
+  let d = 0;
+  let cur = "";
+  for (const ch of line.slice(start, end)) {
+    if ("[{(".includes(ch)) d++;
+    if ("]})".includes(ch)) d--;
+    if (ch === "," && d === 0) {
+      elems.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  elems.push(cur);
+  return elems.some((e) => /^\s*\{\s*id:\s*"(asc|desc)"\s*\}\s*$/.test(e));
+}
+
 describe("P3-1.8 分頁 orderBy 加 id tie-breaker", () => {
+  it("括號配對 helper：巢狀陣列／物件都識處理", () => {
+    expect(orderByHasIdTieBreaker('findMany({ orderBy: [{ createdAt: "asc" }, { id: "asc" }] })')).toBe(true);
+    expect(orderByHasIdTieBreaker('findMany({ orderBy: [{ a: { b: [1, 2] } }, { id: "desc" }], skip, take })')).toBe(true);
+    expect(orderByHasIdTieBreaker('findMany({ orderBy: [{ a: { b: [1, 2] } }, { name: "asc" }], skip, take })')).toBe(false);
+    expect(orderByHasIdTieBreaker('findMany({ orderBy: [{ id: "asc" }, { name: "asc" }] })')).toBe(true);
+    expect(orderByHasIdTieBreaker('findMany({ orderBy: { id: "asc" } })')).toBe(false);
+  });
+
   it("所有帶 skip＋take 嘅 findMany，orderBy 都含 id", () => {
     const bad: string[] = [];
     let checked = 0;
@@ -23,7 +68,7 @@ describe("P3-1.8 分頁 orderBy 加 id tie-breaker", () => {
       lines.forEach((line, i) => {
         if (!/\.findMany\(/.test(line) || !/\bskip\b/.test(line) || !/\btake\b/.test(line)) return;
         checked++;
-        if (!/orderBy:\s*\[[^\]]*\{\s*id:\s*"(asc|desc)"\s*\}\s*\]/.test(line)) bad.push(`${path.relative(root, file)}:${i + 1}`);
+        if (!orderByHasIdTieBreaker(line)) bad.push(`${path.relative(root, file)}:${i + 1}`);
       });
     }
     expect(checked).toBeGreaterThanOrEqual(15);

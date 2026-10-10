@@ -14,18 +14,18 @@
 // session 次數另外用一個獨立嘅每日上限）。
 import { prisma } from "./db";
 
-export const DEFAULT_AI_DAILY_LIMIT = 100;
+const DEFAULT_AI_DAILY_LIMIT = 100;
 
 /** 計入呢個共用每日額度嘅 audit_log `(table_name, action)` 組合——逐個
  * 會叫 LLM 嘅 route 每次都要（唔止 guard 觸發先）寫一行呢度列明嘅
  * audit，先至保證「叫幾多次 LLM 就計幾多次」呢個口徑成立。 */
-export const AI_QUOTA_ACTIONS: ReadonlyArray<{ tableName: string; action: string }> = [
+const AI_QUOTA_ACTIONS: ReadonlyArray<{ tableName: string; action: string }> = [
   { tableName: "ai_chat", action: "ai_chat" }, // 主助手 /api/ai/chat
   { tableName: "ai_feedback_chat", action: "ai_feedback_chat" }, // 開會反映訪談 /api/feedback/session/chat
   { tableName: "ai_feedback_chat", action: "ai_feedback_summarize" }, // 開會反映整理 /api/feedback/session/summarize
 ];
 
-export function getAiDailyLimit(): number {
+function getAiDailyLimit(): number {
   const raw = process.env.AI_DAILY_LIMIT;
   const n = raw ? Number(raw) : NaN;
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_AI_DAILY_LIMIT;

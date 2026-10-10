@@ -18,4 +18,5 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 // 已刪走，改 import 呢度。
 export const inputCls =
   "w-full rounded-[7px] border border-zk-input-border bg-white px-3 py-[9px] text-zk-base text-zk-text focus:border-zk-primary focus:outline-none focus:ring-[3px] focus:ring-zk-primary/20";
-export const selectCls = inputCls;
+/** `<select>` 同 `<input>` 同一套樣式（刻意同值；唔用 alias export，避免兩個名指同一個 export）。 */
+export const selectCls: string = `${inputCls}`;

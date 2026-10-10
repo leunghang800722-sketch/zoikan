@@ -63,7 +63,7 @@ const perShiftEligible = (c: CardRow): boolean => c.billingModel === null || c.b
 const isAutoCard = (c: CardRow): boolean => (c.source ?? "").startsWith("auto:one-click:");
 
 /** 淨係保留需要嘅成分（唔畀「只補出街價」嘅卡帶埋客價去蓋住現有客價卡）。 */
-export function restrictValues(v: PriceValues, need: PriceNeed): PriceValues {
+function restrictValues(v: PriceValues, need: PriceNeed): PriceValues {
   return {
     clientRate: need.client ? v.clientRate : null,
     guardWage: need.payout ? v.guardWage : null,
@@ -72,7 +72,7 @@ export function restrictValues(v: PriceValues, need: PriceNeed): PriceValues {
   };
 }
 
-export function coversNeed(v: PriceValues, need: PriceNeed): boolean {
+function coversNeed(v: PriceValues, need: PriceNeed): boolean {
   if (need.client && (v.clientRate === null || v.clientRate <= 0)) return false;
   if (need.payout && v.guardWage === null && v.brokerFee === null && v.payoutRate === null) return false;
   if (need.payout && (v.guardWage ?? 0) <= 0 && (v.brokerFee ?? 0) <= 0 && (v.payoutRate ?? 0) <= 0) return false;
@@ -322,6 +322,8 @@ async function auditVia(writer: ChangeWriter, db: Db, input: Parameters<ChangeWr
   else await writer.audit(input);
 }
 
+// P3-5.3：呢段「攞有效卡 → RateCardLite」同 `src/lib/pricing/resolve-rate.ts` 嘅 `fetchEffectiveRateCards()`（尾段 rows.map）刻意重複、
+// 唔合併——兩邊都屬定價核心，一邊改欄位／條件要人手同步另一邊（改前後都跑 `npm run gate:pricing`＋`gate:locked-months`）。
 async function fetchCardsVia(db: Db, siteId: string, start: Date, end: Date) {
   const rows = await db.rateCard.findMany({ where: { siteId, voidedAt: null, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] } });
   return rows.map((r) => ({

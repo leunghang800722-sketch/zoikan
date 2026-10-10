@@ -1,3 +1,4 @@
+import { siteReadModule } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeSiteWhere, isBrokerRole } from "@/lib/broker-isolation";
@@ -15,7 +16,7 @@ import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
-    const session = await requirePermission(req, (s) => (isBrokerRole(s) ? "更表" : "盤"), "view");
+    const session = await requirePermission(req, siteReadModule, "view");
     const { id } = await params;
     const where = scopeSiteWhere(session, { id });
     const row = await prisma.site.findFirst({ where });

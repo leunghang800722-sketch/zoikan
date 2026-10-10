@@ -13,13 +13,13 @@ export const NON_BOSS_MAX_RUNS_PER_DAY = 20;
 export const NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY = 100;
 /** 非老闆每 24 小時證件辨識（POST /api/guards/ocr/read）次數。 */
 export const NON_BOSS_MAX_OCR_READS_PER_DAY = 100;
-export const OCR_QUOTA_MSG = "今日證件辨識次數已達上限，請搵老闆，或者全部自己輸入";
-export const QUOTA_MSG = "今日導入次數已達上限，請搵老闆";
+const OCR_QUOTA_MSG = "今日證件辨識次數已達上限，請搵老闆，或者全部自己輸入";
+const QUOTA_MSG = "今日導入次數已達上限，請搵老闆";
 
 export type QuotaKind = "ocr" | "batch" | "single_ocr";
-export const QUOTA_LIMIT: Record<QuotaKind, number> = { ocr: NON_BOSS_MAX_OCR_READS_PER_DAY, batch: NON_BOSS_MAX_RUNS_PER_DAY, single_ocr: NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY };
+const QUOTA_LIMIT: Record<QuotaKind, number> = { ocr: NON_BOSS_MAX_OCR_READS_PER_DAY, batch: NON_BOSS_MAX_RUNS_PER_DAY, single_ocr: NON_BOSS_MAX_SINGLE_OCR_RUNS_PER_DAY };
 const QUOTA_MSG_BY_KIND: Record<QuotaKind, string> = { ocr: OCR_QUOTA_MSG, batch: QUOTA_MSG, single_ocr: QUOTA_MSG };
-export const QUOTA_BUSY_MSG = "上一個請求未完成，請稍後再試";
+const QUOTA_BUSY_MSG = "上一個請求未完成，請稍後再試";
 /** 預留行 action：限額「只數」呢種行；結果 audit（guard_ocr_read／guard_import_preview／guard_import_apply）唔計，冇雙重計數。 */
 export const QUOTA_RESERVE_ACTION = "guard_quota_reserve";
 

@@ -28,7 +28,7 @@ export function pendingUploadWhere(month: Date | null, months: number = PENDING_
 const RECONCILE_CHUNK = 15; // 每批上載共用一組 IN 查詢
 const RECONCILE_CONCURRENCY = 4;
 
-export interface PendingSummaryEntry {
+interface PendingSummaryEntry {
   site_id: string | null;
   site_name: string;
   upload_id: string;

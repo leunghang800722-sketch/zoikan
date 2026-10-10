@@ -10,20 +10,14 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { RosterReconcileApplySchema } from "@/lib/api/schemas";
-import { Conflict, NotFound } from "@/lib/api/errors";
 import { applyReconcileDecisions } from "@/lib/roster-upload/reconcile-apply";
-import { prisma } from "@/lib/db";
+import { assertUploadReconcilable } from "@/lib/roster-upload/reconcile-guard";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
     const session = await requirePermission(req, "更表上載", "update");
     const { id } = await params;
-    const exists = await prisma.rosterUpload.findUnique({ where: { id }, select: { id: true, status: true } });
-    if (!exists) throw NotFound();
-    // WP-UPLOAD-VOID：已作廢嘅上載一律 409（`applyReconcileDecisions()`
-    // 內部嘅狀態檢查用 400，呢度做返任務書明文要求嘅 409，喺入去 service
-    // 層之前擋)。
-    if (exists.status === "voided") throw Conflict("呢個上載已經作廢，唔可以對數");
+    await assertUploadReconcilable(id);
 
     const body = await readJson(req);
     const parsed = parseBody(RosterReconcileApplySchema, body);

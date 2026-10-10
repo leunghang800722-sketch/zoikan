@@ -78,7 +78,7 @@ function extractRawRow(provenance: unknown): RawRow | undefined {
 
 export type RosterLayout = "standard" | "digital_port" | "citybus";
 
-export interface RosterExportSiteLike {
+interface RosterExportSiteLike {
   canonicalName: string;
   aliases: string[];
 }
@@ -93,7 +93,7 @@ export interface RosterExportSiteLike {
  * 計劃.md 本身都成日提到「數碼港 CP1-4」「城巴 8 廠」），唔係保安員/雞頭
  * 個人姓名，唔違反 PDPO。
  */
-export function detectLayout(site: RosterExportSiteLike): RosterLayout {
+function detectLayout(site: RosterExportSiteLike): RosterLayout {
   const names = [site.canonicalName, ...site.aliases];
   if (names.some((n) => n.includes("數碼港"))) return "digital_port";
   if (names.some((n) => n.includes("城巴"))) return "citybus";
@@ -136,7 +136,7 @@ function timeSlotLabel(startTime: Date | null, endTime: Date | null): string {
  * label="早Zone IC（Zone IC / 早更IC 一般代號）"），呢度攞「（」之前
  * 嗰部分，反推返原檔「Rank」/職級 欄嘅原始文字。
  */
-export function rankFromShiftTypeLabel(label: string | null): string {
+function rankFromShiftTypeLabel(label: string | null): string {
   if (!label) return "";
   const idx = label.indexOf("（");
   return idx >= 0 ? label.slice(0, idx) : label;

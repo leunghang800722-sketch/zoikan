@@ -12,7 +12,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { MODULES, ACTIONS, DEFAULT_MATRIX, ROLE_NAMES, type RoleName } from "./matrix";
 
-export const DEFAULT_PAYOUT_APPROVAL_LIMIT: Record<RoleName, number | null> = {
+const DEFAULT_PAYOUT_APPROVAL_LIMIT: Record<RoleName, number | null> = {
   老闆: null,
   主管: null,
   會計: 50000,

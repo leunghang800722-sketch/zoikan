@@ -23,7 +23,7 @@ import type { AuthedSession } from "@/lib/rbac/requirePermission";
 // 老闆總表口徑（8 月）——正式站冇 `data/` 目錄，唔可以讀
 // `data/2026-09/aug-payroll-trial/out/broker_settlement.json`，呢兩個
 // 數字（金額＋雞頭代號本身唔係 PII）硬編碼做對照欄，見任務書。
-export const EXPECTED_AUG_BY_UNIT: Record<string, number> = {
+const EXPECTED_AUG_BY_UNIT: Record<string, number> = {
   K: 1_023_730,
   W: 173_370,
   T: 211_160,
@@ -31,7 +31,7 @@ export const EXPECTED_AUG_BY_UNIT: Record<string, number> = {
   D: 100_130,
   Y: 226_433,
 };
-export const EXPECTED_AUG_REFERRAL_FEE_TOTAL = 60_520;
+const EXPECTED_AUG_REFERRAL_FEE_TOTAL = 60_520;
 const EXPECTED_BASELINE_MONTH = "2026-08";
 
 const LONGTERM_BROKER_CODES = ["K", "W", "T", "G", "D", "Y"] as const;

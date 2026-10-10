@@ -38,7 +38,7 @@ export function reconcileAllApplyAllowed(run: { status: string; startedAt: Date 
 
 const APPLY_BATCH_SIZE = 2000; // 同 RosterReconcileApplySchema 上限一致
 
-export interface ReconcileAllPerUploadResult {
+interface ReconcileAllPerUploadResult {
   uploadId: string;
   siteLabel: string;
   before: { rosterOnly: number; settlementDiff: number; unresolved: number };

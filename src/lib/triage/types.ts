@@ -3,37 +3,32 @@
 import { z } from "zod";
 import type { PackagePerson } from "@/lib/guards/import/package";
 
-export const SOURCE_TYPES = ["guard_import", "roster_upload", "month_close", "postorder_backfill"] as const;
-export type SourceType = (typeof SOURCE_TYPES)[number];
-
-export const QUESTION_KINDS = [
-  "no_id_card", // 冇／唔合法身份證號
-  "name_not_confirmed", // 姓名未確認（建人前）
-  "hkid_not_confirmed", // 身份證號未確認
-  "tel_only_candidate", // 淨電話對到現有保安員
-  "name_only_candidate", // 淨姓名對到現有保安員
-  "staffno_shared_by_persons", // 同一工號掛喺多個人
-  "dup_tel_across_persons", // 同一電話掛喺多個人
-  "group_name_differs", // 同身份證多檔姓名差異
-  "package_conflict", // 其他包內衝突（例如重複身份證）
-  "db_conflict", // 同現有資料矛盾（只可留返人手）
-  "field_review", // 逐欄 review（姓名／英文名／出生日期／電話／地址）
+export type QuestionKind =
+  | "no_id_card" // 冇／唔合法身份證號
+  | "name_not_confirmed" // 姓名未確認（建人前）
+  | "hkid_not_confirmed" // 身份證號未確認
+  | "tel_only_candidate" // 淨電話對到現有保安員
+  | "name_only_candidate" // 淨姓名對到現有保安員
+  | "staffno_shared_by_persons" // 同一工號掛喺多個人
+  | "dup_tel_across_persons" // 同一電話掛喺多個人
+  | "group_name_differs" // 同身份證多檔姓名差異
+  | "package_conflict" // 其他包內衝突（例如重複身份證）
+  | "db_conflict" // 同現有資料矛盾（只可留返人手）
+  | "field_review" // 逐欄 review（姓名／英文名／出生日期／電話／地址）
   // WP-STAFF-FIELDS 第二階段
-  "ext_identity_check", // 疑似重複／工號身份唔一致嘅人：新欄全部 review，先確認身份——重要層
-  "ext_field_conflict", // 新欄（牌照／平安咭／QAS／入職日期／緊急聯絡人）現有值唔同——補充資料層
-  "ext_field_review", // 新欄 review 狀態——補充資料層
-  "bank_review", // 銀行欄 review／衝突（包括 bank_copy_disagrees）——重要層，要銀行資料權限
-  "bank_identity_unknown", // Payroll Editor 有戶口但對唔到人——重要層，要銀行資料權限
-  "other_review",
+  | "ext_identity_check" // 疑似重複／工號身份唔一致嘅人：新欄全部 review，先確認身份——重要層
+  | "ext_field_conflict" // 新欄（牌照／平安咭／QAS／入職日期／緊急聯絡人）現有值唔同——補充資料層
+  | "ext_field_review" // 新欄 review 狀態——補充資料層
+  | "bank_review" // 銀行欄 review／衝突（包括 bank_copy_disagrees）——重要層，要銀行資料權限
+  | "bank_identity_unknown" // Payroll Editor 有戶口但對唔到人——重要層，要銀行資料權限
+  | "other_review"
   // WP-ONE-CLICK-AUTO §31.3 E：一鍵結算自我修復——propose／unknown 項目入分診，預填建議答案，一撳確認
-  "month_close_site_alias", // 更表盤名似現有盤（propose）
-  "month_close_site_new", // 新盤冇價可推
-  "month_close_pricing", // 未定價（候選價／冇依據）
-  "month_close_settlement", // 冇結算雞頭
-  "month_close_guard_match", // 保安員配對要核實
-  "month_close_shift_variance", // 更數差異解釋唔到
-] as const;
-export type QuestionKind = (typeof QUESTION_KINDS)[number];
+  | "month_close_site_alias" // 更表盤名似現有盤（propose）
+  | "month_close_site_new" // 新盤冇價可推
+  | "month_close_pricing" // 未定價（候選價／冇依據）
+  | "month_close_settlement" // 冇結算雞頭
+  | "month_close_guard_match" // 保安員配對要核實
+  | "month_close_shift_variance" // 更數差異解釋唔到;
 
 export const KIND_LABEL: Record<QuestionKind, string> = {
   no_id_card: "冇可用嘅身份證號",
@@ -84,7 +79,7 @@ export const OPTION_IDS = [
   "mc_ack", // 我已覆核，冇問題（更數差異題）
   "skip", // 跳過，留返人手
 ] as const;
-export type OptionId = (typeof OPTION_IDS)[number];
+type OptionId = (typeof OPTION_IDS)[number];
 
 export interface QuestionOption {
   id: OptionId;
@@ -130,7 +125,7 @@ export const SUPPLEMENTARY_KINDS: readonly QuestionKind[] = ["field_review", "ex
 /** 銀行層：要「保安員銀行資料:update」先可以睇內容／作答。 */
 export const BANK_KINDS: readonly QuestionKind[] = ["bank_review", "bank_identity_unknown"];
 
-export const EXT_CHOICES = ["use_import", "keep_current", "skip"] as const;
+const EXT_CHOICES = ["use_import", "keep_current", "skip"] as const;
 
 const fieldAnswer = z
   .object({ action: z.enum(["confirm", "replace", "skip"]), value: z.string().trim().max(500).optional() })

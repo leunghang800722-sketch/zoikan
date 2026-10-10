@@ -86,7 +86,7 @@ async function assertNoNewer(db: Prisma.TransactionClient | typeof prisma, q: QR
   }
 }
 
-export const BANK_QUESTION_DENIED_MSG = "要有保安員銀行資料權限嘅同事處理";
+const BANK_QUESTION_DENIED_MSG = "要有保安員銀行資料權限嘅同事處理";
 function assertBankAllowed(q: QRow, caps: ViewerCaps): void {
   // 身份確認會繞過自動寫入閘：要「保安員個人資料:view」＋「保安員:update」
   if (q.kind === "ext_identity_check" && !(caps.pii && caps.guardUpdate)) throw Forbidden("要有保安員個人資料查看＋保安員修改權限嘅同事處理");
@@ -184,7 +184,7 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: impact.can_confirm, impact };
 }
 
-export function parseAnswer(raw: unknown): TriageAnswer {
+function parseAnswer(raw: unknown): TriageAnswer {
   const r = answerSchema.safeParse(raw);
   if (!r.success) {
     const i = r.error.issues[0];

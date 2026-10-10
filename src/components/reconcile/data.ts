@@ -3,7 +3,7 @@
 // /api/guard-fix/runs(+/:id)。短 TTL 記憶體快取，同一頁／同一個分診 dialog 多條題唔會重複打。
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiGetAll, type ApiListResult } from "@/lib/ui/api-client";
-import { findSimilar, guardSearchTerm, hasPerson, personKey, type GuardLite, type NeedsBossItem, type Person, type SimilarGuard } from "./derive";
+import { findSimilar, hasPerson, personKey, type GuardLite, type NeedsBossItem, type Person, type SimilarGuard } from "./derive";
 
 const TTL_MS = 30_000;
 const cache = new Map<string, { at: number; p: Promise<unknown> }>();
@@ -17,11 +17,6 @@ function cached<T>(key: string, load: () => Promise<T | null>): Promise<T | null
   });
   cache.set(key, { at: Date.now(), p });
   return p;
-}
-
-/** 測試／重新載入用。 */
-export function clearReconcileDataCache(): void {
-  cache.clear();
 }
 
 export function loadGuardDirectory(): Promise<{ rows: GuardLite[]; total: number } | null> {
@@ -99,7 +94,6 @@ export function useSimilarGuards(person: Person | null, dir: { rows: GuardLite[]
   return { status: "loading", list: [] };
 }
 
-export { guardSearchTerm };
 
 // ---------------------------------------------------------------------------
 // guard-fix 最新 run 嘅 needs_boss
@@ -123,7 +117,7 @@ export interface NeedsBossResult {
 }
 
 /** 該月（YYYY-MM，唔傳就全部 run 最新一個）最新 guard-fix run 嘅 needs_boss；冇權限／冇 run → null／空。 */
-export function loadNeedsBoss(month: string | null): Promise<NeedsBossResult | null> {
+function loadNeedsBoss(month: string | null): Promise<NeedsBossResult | null> {
   return cached(`needsboss:${month ?? "*"}`, async () => {
     const list = await apiGet<{ runs: RunListItem[] }>(`/api/guard-fix/runs${month ? `?month=${encodeURIComponent(month.slice(0, 7))}` : ""}`);
     if (!list.ok) return null;

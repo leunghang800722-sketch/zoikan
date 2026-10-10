@@ -13,7 +13,7 @@ const queries = await vi.hoisted(async () => {
 import { clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { prisma } from "@/lib/db";
-import { writeAudit } from "@/lib/audit";
+import { writeAudit, writeAuditMany, orderedAuditIds } from "@/lib/audit";
 import { POST as batchSave } from "@/app/api/shift-records/batch/route";
 import { createSettlementBrokerFallbackResolver, resolveSettlementBrokerFallback } from "@/lib/pricing/settlement-broker-fallback";
 
@@ -153,5 +153,34 @@ describe("P3-2.5 shift-records/batch 批量寫入", () => {
     expect(queries.length - before).toBe(0); // prefetch 後唔再查
     expect(batched).toEqual(single);
     expect(single).toEqual([fx.brokerA.id, fx.brokerB.id, fx.brokerB.id, ltBroker.id, null]);
+  });
+});
+
+describe("P3-5.5 writeAuditMany 同批次序", () => {
+  beforeEach(async () => {
+    await clearAll();
+  });
+
+  it("orderedAuditIds：升序、唯一、合法 uuid 形狀", () => {
+    const ids = orderedAuditIds(300);
+    expect(new Set(ids).size).toBe(300);
+    expect([...ids].sort()).toEqual(ids);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(orderedAuditIds(2)[0]).not.toBe(orderedAuditIds(2)[0]); // 跨批唔撞
+  });
+
+  it("同批 createMany：audit-log 排序（createdAt desc, id asc）＝插入次序", async () => {
+    const fx = await seedWp2Fixture();
+    const inputs = Array.from({ length: 40 }, (_, i) => ({
+      actorUserId: fx.userIds["老闆"],
+      tableName: "shift_records",
+      rowId: `p35-ordered-${String(i).padStart(2, "0")}`,
+      action: "create" as const,
+      after: { n: i },
+    }));
+    await writeAuditMany(inputs);
+    const rows = await prisma.auditLog.findMany({ where: { tableName: "shift_records", rowId: { startsWith: "p35-ordered-" } }, orderBy: [{ createdAt: "desc" }, { id: "asc" }] });
+    expect(rows.map((r) => r.rowId)).toEqual(inputs.map((x) => x.rowId));
+    expect(new Set(rows.map((r) => r.createdAt.getTime())).size).toBe(1); // 同批同一個 createdAt
   });
 });

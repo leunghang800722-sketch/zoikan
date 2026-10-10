@@ -4,10 +4,10 @@
 // - 圖片只留喺瀏覽器記憶體（Blob／object URL）；儲存／離開頁面即 revoke
 import { OCR_MAX_IMAGE_CHARS } from "./config";
 
-export const FULL_MAX_EDGE = 1600;
-export const TILE_MAX_EDGE = 1000;
+const FULL_MAX_EDGE = 1600;
+const TILE_MAX_EDGE = 1000;
 /** 分格佔原圖邊長比例；2×2 之間重疊 = 2×0.6-1 = 20%。 */
-export const TILE_FRACTION = 0.6;
+const TILE_FRACTION = 0.6;
 const SOURCE_MAX_EDGE = 2400;
 
 export interface PreparedImage {
@@ -38,16 +38,12 @@ function drawScaled(src: CanvasImageSource, sx: number, sy: number, sw: number, 
 }
 
 /** canvas → JPEG data URL，過大就逐步降質素（保證 ≤ 單張上限）。 */
-export function toJpegDataUrl(c: HTMLCanvasElement): string {
+function toJpegDataUrl(c: HTMLCanvasElement): string {
   for (const q of [0.85, 0.75, 0.65, 0.5, 0.4]) {
     const url = c.toDataURL("image/jpeg", q);
     if (url.length <= OCR_MAX_IMAGE_CHARS) return url;
   }
   return c.toDataURL("image/jpeg", 0.3);
-}
-
-export function canvasSize(c: { width: number; height: number }): { w: number; h: number } {
-  return { w: c.width, h: c.height };
 }
 
 /** 分格座標（2×2 重疊）：回傳 TL,TR,BL,BR 嘅 [x,y,w,h]。純函數，方便測試。 */

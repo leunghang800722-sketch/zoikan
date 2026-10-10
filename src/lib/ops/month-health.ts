@@ -28,7 +28,7 @@ import {
 
 export type HealthSeverity = "info" | "warn" | "critical";
 
-export interface HealthFinding {
+interface HealthFinding {
   code: string;
   severity: HealthSeverity;
   count: number;

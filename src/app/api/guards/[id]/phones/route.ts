@@ -6,9 +6,10 @@
 // （POST）一樣硬性擋雞頭——「雞頭 session 只可以讀自己啲人，唔可以寫」
 // 係呢個子資源嘅絕對規則，唔靠矩陣個 cell 出廠開關（同 staff-numbers 一
 // 致理由，見嗰個檔案頂註解）。
+import { guardModule, assertScopedGuard } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { isBrokerRole } from "@/lib/broker-isolation";
 import { toGuardPhoneDTO } from "@/lib/api/dto";
 import { toGuardPhoneBrokerDTO } from "@/lib/broker-dto";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -19,21 +20,13 @@ import { GuardPhoneCreateSchema } from "@/lib/api/schemas";
 import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 import { assertTelAvailable, rethrowIdentityConflict } from "@/lib/guards/identity";
 import { writeAudit } from "@/lib/audit";
-import { NotFound, Forbidden } from "@/lib/api/errors";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
-
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
+import { Forbidden } from "@/lib/api/errors";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
     const session = await requirePermission(req, guardModule, "view");
     const { id } = await params;
-    const where = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
     const rows = await prisma.guardPhone.findMany({ where: { guardId: id }, orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] });
     // 雞頭讀呢個 sub-resource 用窄版 DTO（tel／label／is_primary，冇
     // note／source／created_by），內部角色先見全欄，見
@@ -48,9 +41,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const session = await requirePermission(req, guardModule, "update");
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以新增電話");
     const { id } = await params;
-    const guardWhere = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
     const body = await readJson(req);
     const parsed = parseBody(GuardPhoneCreateSchema, body);
 

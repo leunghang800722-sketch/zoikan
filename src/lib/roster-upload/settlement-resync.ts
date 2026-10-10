@@ -34,7 +34,7 @@ import {
 import { resolveShiftPricing, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
 import { numOrNull } from "@/lib/pricing/reprice";
 
-export interface RecomputeSettlementChange {
+interface RecomputeSettlementChange {
   shiftRecordId: string;
   fromSettlementBrokerId: string | null;
   toSettlementBrokerId: string | null;

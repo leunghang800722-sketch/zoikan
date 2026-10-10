@@ -25,7 +25,7 @@ export interface RosterUploadPostData {
  * 等呢個檔案可以保持零 DOM/React 依賴、獨立畀 vitest（node 環境）測。 */
 export type RosterUploadApiResult = { ok: true; status: number; data: RosterUploadPostData } | { ok: false; status: number; error: string; message: string };
 
-export type UploadOutcomeKind = "success" | "parse_failed" | "unresolved" | "error";
+type UploadOutcomeKind = "success" | "parse_failed" | "unresolved" | "error";
 
 export interface UploadOutcome {
   kind: UploadOutcomeKind;

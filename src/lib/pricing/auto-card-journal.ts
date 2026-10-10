@@ -5,7 +5,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
 type Db = PrismaClient | Prisma.TransactionClient;
-export type PriceTuple = [number | null, number | null, number | null];
+type PriceTuple = [number | null, number | null, number | null];
 export interface AutoCardUse {
   recordId: string;
   before: PriceTuple;

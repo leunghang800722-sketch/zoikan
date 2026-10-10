@@ -87,6 +87,29 @@ test.describe("P3-4.3 面板清理", () => {
     await expect(page.getByTestId("guard-tab-panel-longterm")).toBeVisible();
   });
 
+  test("保安員 Drawer：多個隱藏 tab 同時 invalid → 跳去 DOM 次序最前嗰個 tab", async ({ page }) => {
+    await loginAs(page, "老闆");
+    await page.goto("/guards");
+    const main = page.locator("main");
+    await expect(main.getByText("載入緊…")).toHaveCount(0, { timeout: 20_000 });
+    await main.locator("table tbody tr").first().getByRole("button", { name: "編輯" }).click();
+    await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("button", { name: "儲存" })).toBeEnabled({ timeout: 15_000 });
+    // 「證件」同「銀行」tab 各一個欄設自訂驗證錯誤（模擬多個隱藏 tab 同時 invalid）；基本 tab 係當前 tab。
+    const marked = await page.evaluate(() => {
+      const docs = document.querySelector<HTMLInputElement>('[data-testid="guard-tab-panel-docs"] input');
+      const bank = document.querySelector<HTMLInputElement>('[data-testid="guard-tab-panel-bank"] input');
+      docs?.setCustomValidity("e2e docs invalid");
+      bank?.setCustomValidity("e2e bank invalid");
+      return { docs: !!docs, bank: !!bank };
+    });
+    expect(marked.docs).toBe(true);
+    if (!marked.bank) test.skip(true, "呢個 seed 保安員冇銀行 tab");
+    await page.getByRole("button", { name: "儲存" }).click();
+    await expect(page.getByTestId("guard-tab-docs")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("guard-tab-bank")).toHaveAttribute("aria-selected", "false");
+  });
+
   test("長工糧頁：4 個 tab", async ({ page }) => {
     await loginAs(page, "老闆");
     await page.goto("/reports/longterm-payroll");

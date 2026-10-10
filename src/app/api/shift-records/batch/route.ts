@@ -86,6 +86,41 @@ type PlannedOp =
       settlementInferred: boolean;
     };
 
+type UpsertPlan = Extract<PlannedOp, { kind: "upsert" }>;
+
+// P3-5.3：逐格路徑同批量路徑共用嘅 data 組裝（兩邊以前各寫一份，欄位一字不差）。
+// WP-PRICE：snapshot 跟返 plan.pricing（喺 plans 起晒之後一次過計好，見「計價」段）——
+// 新記錄一律填 snapshot；更新時 settlement_broker 或者 record_type（shift↔leave）有變都會反映喺 plan.pricing。
+function upsertUpdateData(plan: UpsertPlan) {
+  return {
+    recordType: plan.recordType,
+    leaveCode: plan.leaveCode as never,
+    settlementBrokerId: plan.settlementBrokerId,
+    operationalBrokerId: plan.operationalBrokerId,
+    status: plan.status,
+    clientRateSnapshot: plan.pricing?.clientRate ?? null,
+    guardWageSnapshot: plan.pricing?.guardWage ?? null,
+    brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
+  };
+}
+function upsertCreateData(plan: UpsertPlan, siteId: string, createdBy: string) {
+  return {
+    workDate: plan.cell.work_date,
+    siteId,
+    shiftTypeId: plan.cell.shift_type_id,
+    guardId: plan.cell.guard_id,
+    settlementBrokerId: plan.settlementBrokerId,
+    operationalBrokerId: plan.operationalBrokerId,
+    recordType: plan.recordType,
+    leaveCode: plan.leaveCode as never,
+    status: plan.status,
+    createdBy,
+    clientRateSnapshot: plan.pricing?.clientRate ?? null,
+    guardWageSnapshot: plan.pricing?.guardWage ?? null,
+    brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
+  };
+}
+
 export async function POST(req: Request) {
   return withApiError(async () => {
     // baseline 進閘：更表:create（雞頭出廠 grant——「雞頭配額內填人」；
@@ -470,44 +505,12 @@ export async function POST(req: Request) {
               // upsert
               if (plan.existingId) {
                 const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: plan.existingId } });
-                const after = await tx.shiftRecord.update({
-                  where: { id: plan.existingId },
-                  data: {
-                    recordType: plan.recordType,
-                    leaveCode: plan.leaveCode as never,
-                    settlementBrokerId: plan.settlementBrokerId,
-                    operationalBrokerId: plan.operationalBrokerId,
-                    status: plan.status,
-                    // WP-PRICE：snapshot 跟返 plan.pricing（喺 plans 起晒之後一次過計好，
-                    // 見上面「計價」段）——shift_type/guard 唔會變（本身就係揀返
-                    // 呢條記錄嘅 key），settlement_broker 或者 record_type（shift↔leave）
-                    // 有變都會反映喺呢個 plan.pricing。
-                    clientRateSnapshot: plan.pricing?.clientRate ?? null,
-                    guardWageSnapshot: plan.pricing?.guardWage ?? null,
-                    brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
-                  },
-                });
+                const after = await tx.shiftRecord.update({ where: { id: plan.existingId }, data: upsertUpdateData(plan) });
                 pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
                 autoCardUses.push({ recordId: plan.existingId, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
                 results.push({ key, id: plan.existingId, action: "updated", settlement_inferred: plan.settlementInferred });
               } else {
-                const data: Prisma.ShiftRecordUncheckedCreateInput = {
-                  workDate: plan.cell.work_date,
-                  siteId: parsed.site_id,
-                  shiftTypeId: plan.cell.shift_type_id,
-                  guardId: plan.cell.guard_id,
-                  settlementBrokerId: plan.settlementBrokerId,
-                  operationalBrokerId: plan.operationalBrokerId,
-                  recordType: plan.recordType,
-                  leaveCode: plan.leaveCode as never,
-                  status: plan.status,
-                  createdBy: session.userId,
-                  // WP-PRICE：新記錄一律填 snapshot（見上面「計價」段）——
-                  // 呢個 route 之前完全冇寫呢三個欄，令新更次金額靜靜變 0。
-                  clientRateSnapshot: plan.pricing?.clientRate ?? null,
-                  guardWageSnapshot: plan.pricing?.guardWage ?? null,
-                  brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
-                };
+                const data: Prisma.ShiftRecordUncheckedCreateInput = upsertCreateData(plan, parsed.site_id, session.userId);
                 const created = await tx.shiftRecord.create({ data });
                 pendingAudits.push({ rowId: created.id, action: "create", after: created });
                 autoCardUses.push({ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
@@ -535,16 +538,7 @@ export async function POST(req: Request) {
           // 更新：相同 data 嘅格併成一條 updateMany
           const updateGroups = new Map<string, { data: Prisma.ShiftRecordUncheckedUpdateManyInput; ids: string[] }>();
           for (const plan of updatePlans) {
-            const data: Prisma.ShiftRecordUncheckedUpdateManyInput = {
-              recordType: plan.recordType,
-              leaveCode: plan.leaveCode as never,
-              settlementBrokerId: plan.settlementBrokerId,
-              operationalBrokerId: plan.operationalBrokerId,
-              status: plan.status,
-              clientRateSnapshot: plan.pricing?.clientRate ?? null,
-              guardWageSnapshot: plan.pricing?.guardWage ?? null,
-              brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
-            };
+            const data: Prisma.ShiftRecordUncheckedUpdateManyInput = upsertUpdateData(plan);
             const gk = JSON.stringify(data);
             const g = updateGroups.get(gk) ?? { data, ids: [] };
             g.ids.push(plan.existingId);
@@ -560,23 +554,7 @@ export async function POST(req: Request) {
           const createdByKey = new Map<string, Awaited<ReturnType<typeof tx.shiftRecord.createManyAndReturn>>[number]>();
           if (createPlans.length > 0) {
             const created = await tx.shiftRecord.createManyAndReturn({
-              data: createPlans.map(
-                (plan): Prisma.ShiftRecordCreateManyInput => ({
-                  workDate: plan.cell.work_date,
-                  siteId: parsed.site_id,
-                  shiftTypeId: plan.cell.shift_type_id,
-                  guardId: plan.cell.guard_id,
-                  settlementBrokerId: plan.settlementBrokerId,
-                  operationalBrokerId: plan.operationalBrokerId,
-                  recordType: plan.recordType,
-                  leaveCode: plan.leaveCode as never,
-                  status: plan.status,
-                  createdBy: session.userId,
-                  clientRateSnapshot: plan.pricing?.clientRate ?? null,
-                  guardWageSnapshot: plan.pricing?.guardWage ?? null,
-                  brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
-                }),
-              ),
+              data: createPlans.map((plan): Prisma.ShiftRecordCreateManyInput => upsertCreateData(plan, parsed.site_id, session.userId)),
             });
             for (const r of created) createdByKey.set(`${r.guardId}|${r.workDate.toISOString().slice(0, 10)}|${r.shiftTypeId}`, r);
           }

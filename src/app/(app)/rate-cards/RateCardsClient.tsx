@@ -6,6 +6,7 @@
 // component，攞 session）傳 `isBroker` 落嚟，跟 `my-receivable` 果頁
 // 同一個 pattern——雞頭 session 頁首 kicker 要顯示「我的」（跟
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
+import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
@@ -25,6 +26,7 @@ import { BILLING_MODELS } from "@/lib/ui/billing-model";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker } from "@/components/ui/MonthPicker";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 const PAGE_SIZE = 50;
 
@@ -104,7 +106,12 @@ export function RateCardsClient({
   canCopyLastMonth?: boolean;
 }) {
   const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
-  const [rows, setRows] = useState<RateCardRow[]>([]);
+  // P3-5.3：rows／loading／error／notice／drawer／form／saving 改用共用 `useCrudPage`（同 brokers／sites／quotas／users 一致）。
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, setNotice,
+    drawerOpen, setDrawerOpen, form, setForm, formError, saving,
+    openCreate: openCreateDrawer, saveForm, runAction,
+  } = useCrudPage<RateCardRow, typeof emptyForm>(emptyForm);
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
   const [siteFilter, setSiteFilter] = useState("");
@@ -120,16 +127,8 @@ export function RateCardsClient({
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [guards, setGuards] = useState<GuardRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [hasClientRate, setHasClientRate] = useState(true);
   const [hasPayoutRate, setHasPayoutRate] = useState(true);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -178,9 +177,7 @@ export function RateCardsClient({
   function openCreateForOt(siteId: string, code: string, brokerCode: string | null) {
     const st = shiftTypes.find((s) => s.site_id === siteId && s.code === code);
     const b = brokerCode ? brokers.find((x) => x.code === brokerCode) : undefined;
-    setForm({ ...emptyForm, site_id: siteId, shift_type_id: st?.id ?? "", broker_id: b?.id ?? "" });
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer({ ...emptyForm, site_id: siteId, shift_type_id: st?.id ?? "", broker_id: b?.id ?? "" });
   }
 
   // WP-PHASE3（item 3）：「複製上月卡到本月」——dry-run 預覽→confirm。
@@ -341,15 +338,11 @@ export function RateCardsClient({
   }
 
   function openCreate() {
-    setForm({ ...emptyForm, site_id: siteFilter || "" });
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer({ ...emptyForm, site_id: siteFilter || "" });
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setFormError(null);
     const body: Record<string, unknown> = {
       site_id: form.site_id,
       shift_type_id: form.shift_type_id || undefined,
@@ -365,37 +358,15 @@ export function RateCardsClient({
     if (hasClientRate && form.client_rate !== "") body.client_rate = Number(form.client_rate);
     if (hasPayoutRate && form.payout_rate !== "") body.payout_rate = Number(form.payout_rate);
 
-    const res = await apiPost("/api/rate-cards", body);
-    setSaving(false);
-    if (!res.ok) {
-      setFormError(res.message);
-      return;
-    }
-    setDrawerOpen(false);
-    setNotice("已新增");
-    await load();
+    await saveForm(() => apiPost("/api/rate-cards", body), load);
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/rate-cards/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已作廢");
-    await load();
+    await runAction(() => apiPost(`/api/rate-cards/${id}/void`, { reason }), "已作廢", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/rate-cards/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已解除作廢");
-    await load();
+    await runAction(() => apiPost(`/api/rate-cards/${id}/unvoid`), "已解除作廢", load);
   }
 
   const colCount = 10;
@@ -731,14 +702,7 @@ export function RateCardsClient({
           <Field label="備註">
             <input className={inputCls} value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
           </Field>
-          <div className="flex gap-2 pt-2">
-            <Button variant="primary" size="sm" type="submit" disabled={saving}>
-              {saving ? "儲存緊…" : "儲存"}
-            </Button>
-            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
-              取消
-            </Button>
-          </div>
+          <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>
       </Drawer>
     </div>

@@ -20,11 +20,11 @@ import { buildEnv, collectUnpricedGroups, describeValues, findPriceSource } from
 import { optionsFor } from "./triage";
 import type { McCandidate, McQuestionDraft, PriceValues, PricingGroupRef } from "./types";
 
-export const BACKFILL_SOURCE_TYPE = "postorder_backfill";
+const BACKFILL_SOURCE_TYPE = "postorder_backfill";
 const AUTO_PREFIX = "auto:one-click:";
 
-export const backfillGroupKey = (ref: { siteId: string; shiftTypeId: string; brokerId: string | null }): string => `backfill:${ref.siteId}:${ref.shiftTypeId}:${ref.brokerId ?? "none"}`;
-export const monthKeyOf = (month: Date): string => month.toISOString().slice(0, 7);
+const backfillGroupKey = (ref: { siteId: string; shiftTypeId: string; brokerId: string | null }): string => `backfill:${ref.siteId}:${ref.shiftTypeId}:${ref.brokerId ?? "none"}`;
+const monthKeyOf = (month: Date): string => month.toISOString().slice(0, 7);
 
 export interface BackfillResult {
   sessionId: string | null;

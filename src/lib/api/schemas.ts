@@ -753,7 +753,7 @@ export const RejectReasonSchema = z.object({ reason: z.string().min(1, "退回�
 // P1-WP3：更表編輯器批量儲存——同一 site × month 內多格一次寫入，逐格
 // 同樣過閘，任何一格失敗整批 rollback（見 src/app/api/shift-records/
 // batch/route.ts）。
-export const ShiftRecordBatchCellSchema = z
+const ShiftRecordBatchCellSchema = z
   .object({
     guard_id: uuid,
     shift_type_id: uuid, // 呢格所屬嘅「行」（更別／時段）
