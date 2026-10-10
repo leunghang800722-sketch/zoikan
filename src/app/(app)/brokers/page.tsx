@@ -7,6 +7,7 @@
 // 改用真正代表「邊個雞頭喺邊個盤邊個月有份」嘅
 // GET /api/broker-site-assignments（已存在，配額前身白名單），按當月
 // （currentMonthStr()）過濾，加月份 FilterChip 俾人揀返第啲月。
+import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
 import { useEffect, useState } from "react";
 import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
 import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
@@ -544,14 +545,7 @@ export default function BrokersPage() {
             />
             requires_approval（排更要主管審批先確認）
           </label>
-          <div className="flex gap-2 pt-2">
-            <Button variant="primary" size="sm" type="submit" disabled={saving}>
-              {saving ? "儲存緊…" : "儲存"}
-            </Button>
-            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
-              取消
-            </Button>
-          </div>
+          <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>
       </Drawer>
 

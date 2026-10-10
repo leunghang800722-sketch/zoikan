@@ -68,35 +68,7 @@ export function RosterBrokerStats({
               );
             })}
           </div>
-          {!isBrokerSession && (
-            <div className="flex items-center gap-2">
-              {/* 舊雞頭篩選下拉：卡本身已經可以撳篩選，呢個下拉保留做
-                  輔助／後備（testid 要留喺 DOM），視覺上隱藏。 */}
-              <label htmlFor="broker-filter-select" className="sr-only">
-                雞頭篩選
-              </label>
-              <select
-                id="broker-filter-select"
-                data-testid="broker-filter-select"
-                className="sr-only"
-                value={selectedBrokerCode ?? ""}
-                onChange={(e) => setSelectedBrokerCode(e.target.value || null)}
-              >
-                <option value="">全部</option>
-                {brokerStats.map((b) => (
-                  <option key={b.brokerId} value={b.code}>
-                    {b.code}
-                    {b.name ? `（${b.name}）` : ""}
-                  </option>
-                ))}
-              </select>
-              {selectedBrokerCode && (
-                <Button variant="link" size="sm" type="button" data-testid="broker-filter-clear" onClick={() => setSelectedBrokerCode(null)}>
-                  清除篩選
-                </Button>
-              )}
-            </div>
-          )}
+          {!isBrokerSession && <BrokerFilterControls brokerStats={brokerStats} selectedBrokerCode={selectedBrokerCode} setSelectedBrokerCode={setSelectedBrokerCode} compact={false} />}
         </div>
       )}
 
@@ -125,32 +97,53 @@ export function RosterBrokerStats({
               );
             })}
           </div>
-          {!isBrokerSession && (
-            <div className="flex items-center gap-2">
-              <select
-                id="broker-filter-select"
-                data-testid="broker-filter-select"
-                className="sr-only"
-                value={selectedBrokerCode ?? ""}
-                onChange={(e) => setSelectedBrokerCode(e.target.value || null)}
-                aria-hidden
-              >
-                <option value="">全部</option>
-                {brokerStats.map((b) => (
-                  <option key={b.brokerId} value={b.code}>
-                    {b.code}
-                  </option>
-                ))}
-              </select>
-              {selectedBrokerCode && (
-                <Button variant="link" size="sm" type="button" data-testid="broker-filter-clear" onClick={() => setSelectedBrokerCode(null)}>
-                  清除篩選
-                </Button>
-              )}
-            </div>
-          )}
+          {!isBrokerSession && <BrokerFilterControls brokerStats={brokerStats} selectedBrokerCode={selectedBrokerCode} setSelectedBrokerCode={setSelectedBrokerCode} compact />}
         </div>
       )}
     </>
+  );
+}
+
+/** 舊雞頭篩選下拉：卡／chips 本身已經可以撳篩選，呢個下拉保留做輔助／後備（testid 要留喺 DOM），視覺上隱藏。 */
+function BrokerFilterControls({
+  brokerStats,
+  selectedBrokerCode,
+  setSelectedBrokerCode,
+  compact,
+}: {
+  brokerStats: BrokerStat[];
+  selectedBrokerCode: string | null;
+  setSelectedBrokerCode: (code: string | null) => void;
+  compact: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      {!compact && (
+        <label htmlFor="broker-filter-select" className="sr-only">
+          雞頭篩選
+        </label>
+      )}
+      <select
+        id="broker-filter-select"
+        data-testid="broker-filter-select"
+        className="sr-only"
+        value={selectedBrokerCode ?? ""}
+        onChange={(e) => setSelectedBrokerCode(e.target.value || null)}
+        aria-hidden={compact || undefined}
+      >
+        <option value="">全部</option>
+        {brokerStats.map((b) => (
+          <option key={b.brokerId} value={b.code}>
+            {b.code}
+            {!compact && b.name ? `（${b.name}）` : ""}
+          </option>
+        ))}
+      </select>
+      {selectedBrokerCode && (
+        <Button variant="link" size="sm" type="button" data-testid="broker-filter-clear" onClick={() => setSelectedBrokerCode(null)}>
+          清除篩選
+        </Button>
+      )}
+    </div>
   );
 }
