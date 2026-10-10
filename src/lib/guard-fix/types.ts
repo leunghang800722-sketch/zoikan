@@ -1,4 +1,4 @@
-// WP-GUARD-FIX（老闆 2026-09-25 要求）：8 月更表「未配對安員」自動修復
+// WP-GUARD-FIX（老闆 2026-09-25 要求）：8 月更表「未配對保安員」自動修復
 // ——plan.json 嘅型別定義。呢個檔冇 DB 依賴，純粹型別，build-guard-fix-
 // plan.ts／apply.ts（舊 apply-guard-fix-plan.ts script 已刪）共用，保證兩邊讀寫同一份契約。同
 // scripts/opening/lib/types.ts 一致模式。
@@ -69,11 +69,11 @@ export interface CreateMinimalAction {
   defaultBrokerCode: string;
   reason: string;
   /** 驗收（Opus 5.5，2026-09-26）：老闆指令「唔准留要老闆決定」——以前
-   * needs_boss 嘅兩類改做保守預設（按更表姓名建獨立安員、cash_casual、
+   * needs_boss 嘅兩類改做保守預設（按更表姓名建獨立保安員、cash_casual、
    * 無工號）：`conservative` 標明呢個係保守預設（待核），唔係名單／DB
    * 搵唔到嘅普通 needs_hr。`matchOverrideStaffNo`：更表工號屬 DB 另一位
-   * 安員嘅情況，套用時順手寫 `guard_match_overrides`（呢個工號＋更表
-   * 姓名 → 新安員），reparse 先配得返。optional：舊 plan.json 冇呢兩欄。 */
+   * 保安員嘅情況，套用時順手寫 `guard_match_overrides`（呢個工號＋更表
+   * 姓名 → 新保安員），reparse 先配得返。optional：舊 plan.json 冇呢兩欄。 */
   conservative?: "staff_no_conflict" | "name_only_unverified";
   matchOverrideStaffNo?: string | null;
 }
@@ -99,7 +99,7 @@ export interface SetLongtermAction {
   type: "set_longterm";
   seq: string;
   guardId: string;
-  /** 呢個安員喺 Postorder 撞中幾多個「(8) 長工」格（跨盤合計）——
+  /** 呢個保安員喺 Postorder 撞中幾多個「(8) 長工」格（跨盤合計）——
    * plan-summary 可以印（唔係 PII）。 */
   cellCount: number;
   /** 套用前嘅 employment_type（`cash_casual`先會被改；已經係

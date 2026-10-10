@@ -1,10 +1,10 @@
 // WP-STAFFNO（老闆 2026-09-19 拍板）：員工編號獨立表（方案 B）——
 // GET（current 先、former 後）／POST（新增一個 scheme 嘅新 current 號，
 // 舊 current 自動轉 former）。跟 `src/app/api/guards/[id]/route.ts`
-// 一致嘅 module selector 模式（內部角色「安員」，雞頭「自己安員」），
+// 一致嘅 module selector 模式（內部角色「保安員」，雞頭「自己保安員」），
 // 但寫（POST）額外硬性擋雞頭——「雞頭 session 只可以讀自己啲人
 // （scopeGuardWhere），唔可以寫」係呢個子資源嘅絕對規則，唔靠矩陣個
-// cell 出廠開關（`自己安員:update` 出廠 off 但老闆理論上可以開，開咗
+// cell 出廠開關（`自己保安員:update` 出廠 off 但老闆理論上可以開，開咗
 // 唔應該連帶解鎖呢個新子資源）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";

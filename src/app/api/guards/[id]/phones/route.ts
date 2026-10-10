@@ -2,7 +2,7 @@
 // 電話獨立子表——GET（primary 先、其餘跟住，`createdAt` 排序）／POST
 // （新增一行；第一行自動變 primary，之後跟 `is_primary`，原 primary
 // 自動降級）。跟 `src/app/api/guards/[id]/staff-numbers/route.ts` 一致
-// 嘅 module selector 模式（內部角色「安員」，雞頭「自己安員」），寫入
+// 嘅 module selector 模式（內部角色「保安員」，雞頭「自己保安員」），寫入
 // （POST）一樣硬性擋雞頭——「雞頭 session 只可以讀自己啲人，唔可以寫」
 // 係呢個子資源嘅絕對規則，唔靠矩陣個 cell 出廠開關（同 staff-numbers 一
 // 致理由，見嗰個檔案頂註解）。
@@ -55,7 +55,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const parsed = parseBody(GuardPhoneCreateSchema, body);
 
     const result = await prisma.$transaction(async (tx) => {
-      // WP-STAFF-IMPORT B1：電話全表唯一——同另一個安員重複 → 409（唔回顯對方資料）。
+      // WP-STAFF-IMPORT B1：電話全表唯一——同另一個保安員重複 → 409（唔回顯對方資料）。
       await assertTelAvailable(tx, parsed.tel, id);
       const created = await createGuardPhone(tx, {
         guardId: id,

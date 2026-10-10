@@ -19,7 +19,7 @@ import { CLIENT_RATE_FIELDS, SETTLEMENT_FIELDS, GUARD_PII_FIELDS, GUARD_BANK_FIE
 
 export type { FieldGroupResource };
 
-/** 攞返「呢個 session 而家睇唔睇得到收客價／出街價／安員個人資料／安員
+/** 攞返「呢個 session 而家睇唔睇得到收客價／出街價／保安員個人資料／保安員
  * 銀行資料」——工具層攞一次，之後同一個 request 入面幾多個工具都可以
  * 重用，唔使逐次查 DB。 */
 export interface AiFieldVisibility {
@@ -27,7 +27,7 @@ export interface AiFieldVisibility {
   settlementVisible: boolean;
   // WP-PII（Opus 驗收必修 1b）：`recent_audit`／`sql_select` 呢類「唔知
   // 邊個 resource」嘅通用工具，之前完全冇檢查呢兩個新 field group——冇
-  // 「安員個人資料/安員銀行資料:view」都一樣經呢兩個工具讀到 hkid／
+  // 「保安員個人資料/保安員銀行資料:view」都一樣經呢兩個工具讀到 hkid／
   // bank_account_no（DB 層 `ai.audit_log` 嘅 scrub_json blocklist 已經
   // 喺另一個 migration 加咗做第一重防線，呢度係應用層第二重
   // defense-in-depth）。

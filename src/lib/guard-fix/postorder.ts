@@ -109,10 +109,10 @@
 //   (c) 「外判價」＝`#REF!` 但 Total Shift＝0（Roster 表其實有格）——
 //       都要保留呢個 (盤,人) 組合（`cellCount:0`），唔會因為呢一行冧
 //       唔到格數就成個組合漏晒。
-// 規則：「客戶名稱」尾 token 係一個系統已知安員姓名（`guards.name_zh`
+// 規則：「客戶名稱」尾 token 係一個系統已知保安員姓名（`guards.name_zh`
 // 或 `name_aliases`，NFKC 正規化）**且**（外判價＝`#REF!` **或**
-// 呢個安員 `employment_type` 已經係 `longterm_` 開頭）→ 呢一行就係
-// 「呢個安員自己嘅崗位」。對比 Roster 真值 60 組／1,295 格，呢條規則
+// 呢個保安員 `employment_type` 已經係 `longterm_` 開頭）→ 呢一行就係
+// 「呢個保安員自己嘅崗位」。對比 Roster 真值 60 組／1,295 格，呢條規則
 // 覆蓋到 59 組／1,294 格（只差 1 格 OT——太泛用嘅代號，同
 // docs/api.md A. 段落講嘅 matchSite 剩低 2 格 OT 落差一致，向來留返
 // 人手覆核，唔會屈估）。
@@ -222,7 +222,7 @@ export interface PostorderParseResult {
   rosterParseError: string | null;
   /** WP-POSTORDER-PO-PAIRS：PostOrder 分頁 CSV 原文（冇上載就 `null`）
    * ——`plan.ts` 用嚟 call `derivePostorderLongtermPostsFromPostorderCsv()`
-   * 補推(盤,人)組合（要 DB 安員名先做到，呢個檔本身唔存 DB 依賴，所以
+   * 補推(盤,人)組合（要 DB 保安員名先做到，呢個檔本身唔存 DB 依賴，所以
    * 淨係留低原文俾識 DB 嗰邊用）。xlsm 路徑冇獨立 CSV 原文，一律
    * `null`（呢個功能專門解正式站「淨係傳到 PostOrder.csv」嗰個場景）。 */
   postorderCsvText: string | null;
@@ -791,8 +791,8 @@ export function parsePostorderFromPairsCsv(source: PostorderPairsCsvSource): Pos
 /** PostOrder grid 逐行推「長工崗位 (盤,人)」組合——見檔頭 WP-POSTORDER-
  * PO-PAIRS 段落嘅規則：「客戶名稱」（col A）尾 token 係 `knownNames`
  * 入面一個名，且（「外判價」col F＝`#REF!`，或者呢個名喺
- * `longtermEmploymentNames`——即係 DB 已經係 `longterm_*` 嘅安員）先
- * 當呢一行係「呢個安員自己嘅崗位」。已經由
+ * `longtermEmploymentNames`——即係 DB 已經係 `longterm_*` 嘅保安員）先
+ * 當呢一行係「呢個保安員自己嘅崗位」。已經由
  * `parsePostorderReferralRowsFromGrid()` 處理嗰啲「長工雞頭費」行
  * （col A 含「雞頭費」）唔會喺呢度再計一次。
  *
@@ -814,7 +814,7 @@ export function derivePostorderLongtermPostsFromPostorderGrid(
     if (!clientRaw) continue;
     if (clientRaw.includes("雞頭費")) continue; // 介紹費行由 parsePostorderReferralRowsFromGrid() 處理
     const guardNameRaw = trailingChineseName(clientRaw);
-    if (!guardNameRaw || !knownNames.has(guardNameRaw)) continue; // 尾段唔係已知安員姓名——一般客戶／盤名，唔計
+    if (!guardNameRaw || !knownNames.has(guardNameRaw)) continue; // 尾段唔係已知保安員姓名——一般客戶／盤名，唔計
     const priceRaw = gridText(grid, r, 6); // 「外判價」
     const isRefPrice = priceRaw === "#REF!";
     if (!isRefPrice && !longtermEmploymentNames.has(guardNameRaw)) continue; // 兩個條件都唔中——保守唔計（避免 false positive）

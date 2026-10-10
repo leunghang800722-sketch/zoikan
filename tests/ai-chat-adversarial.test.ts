@@ -116,7 +116,7 @@ describe("WP-AI1 §5：對抗式測試（≥25 條）", () => {
   });
 
   it("正常問題（唔係攻擊）唔會誤觸安全 guard", async () => {
-    setLlmClientForTests(fakeLlmReplying("呢個盤而家有 5 個安員喺度返緊工，資料嚟自 site_overview 工具。"));
+    setLlmClientForTests(fakeLlmReplying("呢個盤而家有 5 個保安員喺度返緊工，資料嚟自 site_overview 工具。"));
     const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
     const res = await chatPost(chatRequest(cookie, "呢個盤而家咩情況？"));
     const done = await collectDoneEvent(res);

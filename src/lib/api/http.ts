@@ -46,7 +46,7 @@ export function okGzip(req: Request, data: Dto | Dto[] | null, init?: number): N
 // PrismaClientValidationError 呢類錯誤，`err.message`／`String(err)`
 // 成段包住成個 query（包括 `data: { work_date: "...", ... }`），直接
 // `console.error("...", err)` 會將呢啲值全部印落 server log——如果個
-// payload 有安員個人資料就漏晒。呢度淨係揀最後一行（Prisma 錯誤訊息嘅
+// payload 有保安員個人資料就漏晒。呢度淨係揀最後一行（Prisma 錯誤訊息嘅
 // 慣例：診斷句喺最尾一行，中間先係俾佢拆爛嘅 query dump），加個長度上限，
 // 唔會有成個物件被 console.error 遞歸 inspect。
 export function safeErrorSummary(err: unknown): string {

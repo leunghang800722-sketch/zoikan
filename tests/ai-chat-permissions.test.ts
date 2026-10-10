@@ -1,4 +1,4 @@
-// WP-AI1：`助手` module 權限——雞頭／安員 403（硬性），主管/會計/老闆
+// WP-AI1：`助手` module 權限——雞頭／保安員 403（硬性），主管/會計/老闆
 // 出廠都有 助手:view（跟矩陣），成功可以攞到 SSE 回覆。
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 import { clearAll } from "./lib/db";
@@ -53,7 +53,7 @@ describe("WP-AI1 §3：助手 module 權限", () => {
     expect(res.status).toBe(403);
   });
 
-  it("安員 → 403（硬性）", async () => {
+  it("保安員 → 403（硬性）", async () => {
     const cookie = await sessionCookieForUser(fx.userIds["安員"]);
     const res = await chatPost(chatRequest(cookie));
     expect(res.status).toBe(403);

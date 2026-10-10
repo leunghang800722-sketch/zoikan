@@ -4,7 +4,7 @@
 // 檢查。呢度直接起 `roster_uploads`（唔經 xlsx 解析，`wp-roster-upload-
 // reconcile-apply.test.ts` 都係用呢個做法）。
 //
-// §1 雞頭/安員 403
+// §1 雞頭/保安員 403
 // §2 老闆作廢 parsed 版本 → 200，voided_at/voided_by/void_reason 有值，
 //    audit 一條 action=void，after 帶 reason
 // §3 GET list 預設唔列作廢咗嘅盤（變返 not_uploaded）；?include_voided=1
@@ -63,7 +63,7 @@ async function buildXlsx(siteName: string): Promise<Buffer> {
   ws.getCell("C6").value = "日更保安員";
   ws.getCell("D6").value = "T-A01";
   ws.getCell("E6").value = "6100001";
-  ws.getCell("F6").value = "測試安員甲";
+  ws.getCell("F6").value = "測試保安員甲";
   ws.getCell("G6").value = "N";
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -126,7 +126,7 @@ describe("WP-UPLOAD-VOID：更表上載記錄作廢", () => {
     guardSelfCookie = await sessionCookieForUser(fx.userIds["安員"]);
   });
 
-  it("§1 雞頭/安員 403", async () => {
+  it("§1 雞頭/保安員 403", async () => {
     const u = await mkUpload(fx, {});
     const res1 = await voidUpload(req(`http://test.local/api/roster-uploads/${u.id}/void`, brokerCookie, "POST", { reason: "測試" }), { params: Promise.resolve({ id: u.id }) });
     expect(res1.status).toBe(403);

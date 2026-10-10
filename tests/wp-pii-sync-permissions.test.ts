@@ -1,5 +1,5 @@
 // WP-PII：`syncPermissions()`（src/lib/rbac/sync.ts）——部署時自動補新
-// module（安員個人資料／安員銀行資料）行，逐角色補齊，幂等，唔覆蓋老闆
+// module（保安員個人資料／保安員銀行資料）行，逐角色補齊，幂等，唔覆蓋老闆
 // 已經改過嘅格。手法同 tests/rbac-sync-permissions.test.ts「缺一個
 // module 嘅行」個 test 一致，專登針對呢兩個新 module 重現一次。
 import { describe, it, expect, beforeEach } from "vitest";
@@ -15,14 +15,14 @@ async function ids() {
   return { roleId, permId };
 }
 
-describe("WP-PII：sync-permissions 對新 module（安員個人資料／安員銀行資料）幂等", () => {
+describe("WP-PII：sync-permissions 對新 module（保安員個人資料／保安員銀行資料）幂等", () => {
   beforeEach(async () => {
     await clearAll();
     await syncPermissions(prisma, "test-baseline");
   });
 
   it("再跑一次：零新增（已經有齊晒），零改動老闆手動設定過嘅格", async () => {
-    // 老闆手動開咗主管嘅「安員個人資料:view」（出廠 off）。
+    // 老闆手動開咗主管嘅「保安員個人資料:view」（出廠 off）。
     const { roleId, permId } = await ids();
     const supervisor = roleId("主管");
     const permView = permId("安員個人資料", "view");

@@ -3,7 +3,7 @@
 > 呢個檔案本身唔准有真名／工號／電話（PDPO）。
 
 側欄 AI 助手——「全能解答」：讀操作說明＋讀真實系統數據答問題。只有
-**老闆／主管／會計**用得（雞頭／安員硬性禁止，`助手` module，見
+**老闆／主管／會計**用得（雞頭／保安員硬性禁止，`助手` module，見
 `src/lib/rbac/matrix.ts`）。**鐵律**：呢個助手架構上做唔到任何寫入／
 修改／部署；用戶叫佢改嘢一律答「呢類改動請聯絡 Eric（老闆）」；亦唔
 准生成 SQL／指令俾人手動執行改動，只解釋現狀。老闆已接受業務數據送去
@@ -16,7 +16,7 @@ Anthropic（美國）處理，但**電話、銀行資料、密碼、OTP 一律�
   │  POST /api/ai/chat  { message }
   ▼
 src/app/api/ai/chat/route.ts
-  │ 1. requirePermission(req, "助手", "view")  ← 硬性擋雞頭/安員
+  │ 1. requirePermission(req, "助手", "view")  ← 硬性擋雞頭/保安員
   │ 2. 每日上限（src/lib/ai-rate-limit.ts，讀 audit_log 計數）
   │ 3. 讀對話 history（src/lib/ai-conversation.ts，ai_conversations 表）
   │ 4. computeFieldVisibility()（收客價/出街價 view 權）
@@ -82,7 +82,7 @@ src/app/api/ai/chat/route.ts
      resource」嘅通用工具，讀完 `ai.audit_log`（或者任何 `ai.*` view）
      出嚟嘅 row 再過一次欄位*名*嘅 blocklist——`GUARD_PII_FIELDS`／
      `GUARD_BANK_FIELDS`（連 camelCase 變體都加埋，萬一第二個 call
-     site 日後傳 camelCase 落嚟）冇「安員個人資料／安員銀行資料:view」
+     site 日後傳 camelCase 落嚟）冇「保安員個人資料／保安員銀行資料:view」
      一樣會剝。呢層防嘅係「DB view 萬一漏咗、或者未來新增第二個讀
      audit_log 嘅工具冇經返 view」呢類情況，唔係第一重防線本身。
 3. **獨立連線**：`src/lib/ai/db.ts` 用 `pg`（**唔用** `@/lib/db` 嘅
@@ -134,7 +134,7 @@ zod`）定義，逐個 request 由 `buildAiTools({session, fieldVisibility})`
 | `broker_stats` | `ai.shift_records`+`brokers` | `更表` | 手動剝 `estimated_payout`（聚合欄，唔喺 blocklist） |
 | `shift_history` | `ai.shift_records` | `更表` | `shift_records` |
 | `rate_cards`／`explain_rate_card` | `ai.rate_cards` | `出街價`（基本存取） | `rate_cards`（`client_rate`／`guard_wage`/`broker_fee`/`payout_rate`等） |
-| `guard_lookup` | `ai.guards` | `安員` | `guards`（`monthly_salary`；`tel` DB 層已經冇） |
+| `guard_lookup` | `ai.guards` | `保安員` | `guards`（`monthly_salary`；`tel` DB 層已經冇） |
 | `gross_margin` | `@/lib/reports/gross-margin.ts`（純讀，用緊 `@/lib/db`——見下） | `毛利即時表` | 手動歸零 revenue/cost/profit/marginPct |
 | `monthly_close` | `@/lib/reports/monthly-close.ts` | `月結總表` | 同上 |
 | `shortfall` | `@/lib/reports/shortfall.ts` | `尚欠總覽` | 同上（`monthProgress` 入面） |
@@ -156,7 +156,7 @@ snake_case（DB 欄位名），同呢兩個清單完全對得上，唔使做 cam
 
 隔離線而家係三條（由粗到細）：
 
-1. **`助手` module**（route 層）——雞頭/安員完全用唔到（硬性）。
+1. **`助手` module**（route 層）——雞頭/保安員完全用唔到（硬性）。
 2. **逐個工具嘅 module:view**（`src/lib/ai/tools/common.ts` 嘅
    `requireModuleOrDenied()`）——冇對應 module 嘅 view 權，工具直接回
    `{error:"permission_denied", message:"你冇權睇「<module>」，呢個
@@ -178,7 +178,7 @@ module，一句查詢涉及嘅每張表都要有 view 權（AND，唔係 OR）�
 |---|---|
 | `sites`／`shift_types` | `盤` |
 | `brokers`／`broker_site_assignments` | `雞頭` |
-| `guards` | `安員` |
+| `guards` | `保安員` |
 | `shift_records`／`daily_requirements`／`quotas` | `更表` |
 | `rate_cards`／`referral_fee_rates` | `出街價` |
 | `special_items`／`month_closes` | `月結總表` |
@@ -359,7 +359,7 @@ AiAssistantSidebar.tsx`，`(app)/layout.tsx` 掛出嚟）——撳開由右滑�
 `(app)/layout.tsx` 用 `getViewGrants()`（`src/lib/rbac/nav.ts`，同左欄
 導航列共用一次 `/api/roles/:id/permissions` fetch）攞返「呢個人有冇
 `助手:view`」，冇就連 `<AiAssistantSidebar>` 呢個 component 都唔會
-render——雞頭／安員登入，DOM 入面零元素（唔淨係 CSS `display:none`）。
+render——雞頭／保安員登入，DOM 入面零元素（唔淨係 CSS `display:none`）。
 
 ### 側欄本身
 
@@ -417,7 +417,7 @@ boundary，同 `RosterEditor.tsx` 避開嘅理由一致）：
 - Vitest 純函數（`tests/ai-ui-context.test.ts`／
   `tests/ai-ui-markdown.test.ts`／`tests/ai-ui-chat-client.test.ts`）：
   `deriveAiContext()`／`parseSimpleMarkdown()`／`friendlyAiError()`。
-  「助手」module 嘅逐角色 grant 判斷（老闆/主管/會計✓、雞頭/安員✗）已經
+  「助手」module 嘅逐角色 grant 判斷（老闆/主管/會計✓、雞頭/保安員✗）已經
   由 `tests/wp2-rbac-matrix.test.ts`（逐 `MODULES × ACTIONS × ROLE_NAMES`
   通用跑）覆蓋，`getNavLinks()`/`getViewGrants()` 本身要 `next/headers`
   嘅 request context，冇沿用嗰種直接 vitest 手法，留俾底下嘅 e2e 驗證
@@ -616,7 +616,7 @@ session` 就 `429`；續用現有 draft（唔開新嘅）唔受呢個上限影�
 - `tests/feedback-feasibility-guard.test.ts`——可行性 guard 字眼表（13
   正例、5 反例，包括標準句本身唔被誤殺）。
 - `tests/feedback-flow.test.ts`——session/summarize/submit API 整合：權限
-  （雞頭/安員 403）、一個用戶最多一個 draft、summarize 出返固定範本、
+  （雞頭/保安員 403）、一個用戶最多一個 draft、summarize 出返固定範本、
   submit 長度校驗（400）、每日 3 份上限（429）、reports 讀取權限（作者
   本人／老闆全睇／主管睇他人 403）、PATCH 改狀態 audit、unread-count
   權限。

@@ -27,7 +27,7 @@ export const MC_KIND_LABEL: Record<McKind, string> = {
   month_close_site_new: "新盤冇價可推",
   month_close_pricing: "未定價（有候選／冇依據）",
   month_close_settlement: "冇結算雞頭",
-  month_close_guard_match: "安員配對要核實",
+  month_close_guard_match: "保安員配對要核實",
   month_close_shift_variance: "更數差異解釋唔到",
 };
 
@@ -68,7 +68,7 @@ export interface McCandidate {
   /** 答案 `candidate_id` 對應呢個。 */
   id: string;
   label: string;
-  /** pricing：候選價；site_alias：盤；settlement：雞頭；guard_match：安員。 */
+  /** pricing：候選價；site_alias：盤；settlement：雞頭；guard_match：保安員。 */
   values?: PriceValues;
   /** 候選指向嘅 id（siteId／brokerId／guardId）。 */
   refId?: string;

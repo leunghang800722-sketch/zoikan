@@ -91,7 +91,7 @@ interface GroupKey {
 interface DayCell {
   siteAlias: string;
   brokerLabel: string;
-  note: string | null; // 長工行：安員姓名
+  note: string | null; // 長工行：保安員姓名
   rescueRate: number | null;
   unbilled: boolean;
   guardId: string;
@@ -120,7 +120,7 @@ interface RosterGroup {
   clientRateSamples: number[];
   guardWageSamples: number[];
   longtermGuardIds: Set<string>;
-  /** B07 行逐安員更數——外判價（月薪按更數比例拆）用。 */
+  /** B07 行逐保安員更數——外判價（月薪按更數比例拆）用。 */
   longtermShiftsByGuard: Map<string, number>;
   /** 排序用：物業顯示名＋真盤名（Event 盤排喺母盤後面）。 */
   sortKey: string;
@@ -549,7 +549,7 @@ async function writePostOrderSheet(
 
   // 逐雞頭逐盤匯總（referral-fee.ts 純函數已經逐 (broker,guard,site) 計
   // 好，呢度按 (broker,site) 加埋——Postorder 總表只顯示到盤一級，唔顯示
-  // 個別安員）。
+  // 個別保安員）。
   const byBrokerSite = new Map<string, { brokerId: string; siteId: string; shifts: number; amount: number; feePerShift: number }>();
   for (const li of referral.lineItems) {
     // 驗收：key 包埋費率——同一 (雞頭,盤) 有唔同費率嘅人唔可以合埋一行
@@ -812,17 +812,17 @@ async function writeLegendSheet(wb: ExcelJS.Workbook, month: Date): Promise<void
     "",
     "資料來源：shift_records（非 cancelled）＋ rate_cards snapshot（寫喺 shift_records 上嘅 client_rate_snapshot/guard_wage_snapshot/broker_fee_snapshot）＋ special_items（介紹費）＋ longterm_payroll_runs（長工糧）。",
     "",
-    "Roster／PostOrder 逐行 = 一個 (盤, 更種/時段, 結算單位) 組合，唔係逐個安員一行。",
+    "Roster／PostOrder 逐行 = 一個 (盤, 更種/時段, 結算單位) 組合，唔係逐個保安員一行。",
     "日期格「盤簡稱」= sites.aliases 入面最短嗰個，冇 aliases 就用 canonicalName。",
     "雞頭名：brokers.name；結算單位 kind=internal_longterm（B07）恆寫「(8) 長工」（呢個 broker 喺 DB name 本身係佔位符 \"B07\"）。",
-    "備註：長工行寫安員姓名（來自 guards.name_zh）；散工雞頭行留空。",
+    "備註：長工行寫保安員姓名（來自 guards.name_zh）；散工雞頭行留空。",
     "其他：頂更/賣假等 special mark——schema 未有對應欄位追蹤單一更嘅呢類標記，恆留空（唔屈估）。",
     "救更價：shift_records.rescue_rate（有值先寫）。",
     "Unbilled：client_rate_snapshot 為 null，或者呢個盤 sites.guards_paid_by_client=true（LINK 客戶自己出糧）→ 1；其餘留空。",
     "Paid：month_closes 該月已鎖定（locked_at 非 null）→ 1；未鎖定留空。",
     "取消：該 (盤,更種,結算單位) 組合本月 status=cancelled 嘅記錄數。",
     "甩更：schema 冇對應終態（ShiftRecordStatus 冇「甩更」值），恆 0——如老闆要追蹤呢個概念，要先喺 shift_records 加狀態/欄位。",
-    "長工（B07）行：「上單價」同散工行一樣＝收客價；「外判價」＝月薪÷當月更數（真 Postorder 呢格係 #REF!，任務書要求系統出實數）——每位長工月薪（本月生效長工合約；日薪制直接用每更價；冇合約先用安員檔案月薪）按佢喺呢行嘅更數÷佢本月長工總更數拆落呢行，再÷呢行更數。一人一行做足全月＝月薪÷當月更數。呢個係參考單價，唔計入「當月成本」（長工成本以長工糧 Autopay 實數計，見 Summary）。B07 長工嘅 OT 行（isOt）唔計入呢條攤分——OT 更數（Σ ot_hours）唔會攤薄正更行嘅外判價分母，OT 行自己嘅外判價留空（唔攤月薪）。",
+    "長工（B07）行：「上單價」同散工行一樣＝收客價；「外判價」＝月薪÷當月更數（真 Postorder 呢格係 #REF!，任務書要求系統出實數）——每位長工月薪（本月生效長工合約；日薪制直接用每更價；冇合約先用保安員檔案月薪）按佢喺呢行嘅更數÷佢本月長工總更數拆落呢行，再÷呢行更數。一人一行做足全月＝月薪÷當月更數。呢個係參考單價，唔計入「當月成本」（長工成本以長工糧 Autopay 實數計，見 Summary）。B07 長工嘅 OT 行（isOt）唔計入呢條攤分——OT 更數（Σ ot_hours）唔會攤薄正更行嘅外判價分母，OT 行自己嘅外判價留空（唔攤月薪）。",
     "「月費」行／「收入調整（月結口徑）」行：逐盤收入一律以月結總表（buildMonthlyClose()）為準——月費／admin fee／特別計法嘅盤，逐更收客價加埋同月結口徑唔同，差額寫一行（正數＝月費，負數＝收入調整，例：構造盤／月費盤嘅更同時帶咗逐更收客價），所以 Roster「當月收入」逐盤加總永遠等於月結總表。",
     "Event 分盤（例：啟航1331 Event）：系統係獨立盤（獨立價卡），跟老闆 Postorder 習慣放喺母盤 block——物業名稱寫母盤簡稱、更份前加「Event」、排喺母盤後面；逐行收入唔合併，逐盤加總同月結總表一致。",
     "",

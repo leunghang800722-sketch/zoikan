@@ -5,7 +5,7 @@
 //  - 新欄只寫 confirmed；只補空欄；現有值唔同 → conflict（唔覆蓋、出分診題）；review → 出分診題。
 //  - ext key：`siaPermit.no`／`siaPermit.aExpiry`…／`safetyCard.*`／`qas.*`／`hireDate`／`bank`（四欄一個 unit）／
 //    `emergency.1`／`emergency.2`（每位聯絡人一個 unit）／`staffHire.<工號>`（逐工號入職日期）。
-//  - 權限：銀行 unit＝「安員銀行資料」；緊急聯絡人＝「安員個人資料」；其餘＝「安員」module。
+//  - 權限：銀行 unit＝「保安員銀行資料」；緊急聯絡人＝「保安員個人資料」；其餘＝「保安員」module。
 import { normZh, normTel8, sameNameStrict } from "./text";
 import { fieldValue, type FieldStatus, type PackagePerson } from "./package";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
@@ -42,11 +42,11 @@ export interface ExtItem {
 
 /**
  * 自動寫入閘（B1，Opus 驗收）：
- *  - typed_list_only_person：(a) DB 安員有身份證而且同名單完全相同 → 全部可寫（包括銀行）；
+ *  - typed_list_only_person：(a) DB 保安員有身份證而且同名單完全相同 → 全部可寫（包括銀行）；
  *    (b) DB 冇身份證、中文姓名完全相同（sameNameStrict）→ 非銀行可寫，銀行出 bank_review；
  *    (c) 其他 → 新欄全部唔寫，出 ext_identity_check。
  *  - 有文件嘅人：銀行自動寫要求身份證相同（confirmed）；否則出 bank_review。
- *  - 冇「安員個人資料:view」嘅操作者：閘結果唔可以取決於現有身份證／姓名（否則變 oracle）→ typed 一律 (c)，銀行一律 hold。
+ *  - 冇「保安員個人資料:view」嘅操作者：閘結果唔可以取決於現有身份證／姓名（否則變 oracle）→ typed 一律 (c)，銀行一律 hold。
  *  - 長工（longterm_autopay 或有長工合約）嘅人層面入職日期：長工糧讀 guards.hire_date
  *    （src/lib/longterm-payroll/aggregate.ts:334,440,477,513,548,593）→ 唔自動寫，出 ext_field_review。
  */
@@ -86,8 +86,8 @@ export function heldBy(gate: ExtGate, key: string): ExtHeld | null {
   return null;
 }
 
-export const PII_OVERWRITE_DENIED_MSG = "呢條要有安員個人資料修改權限嘅同事（例如老闆）答";
-export const BANK_OVERWRITE_DENIED_MSG = "呢條要有安員銀行資料修改權限嘅同事答";
+export const PII_OVERWRITE_DENIED_MSG = "呢條要有保安員個人資料修改權限嘅同事（例如老闆）答";
+export const BANK_OVERWRITE_DENIED_MSG = "呢條要有保安員銀行資料修改權限嘅同事答";
 export const LONGTERM_HIRE_VIA_TRIAGE_MSG = "長工入職日期會影響長工糧計算，要經分診題逐條確認，唔可以批量決定";
 export const OVERWRITE_DENIED_MSGS: readonly string[] = [PII_OVERWRITE_DENIED_MSG, BANK_OVERWRITE_DENIED_MSG, LONGTERM_HIRE_VIA_TRIAGE_MSG];
 
@@ -307,11 +307,11 @@ export function bankCompare(bank: NonNullable<ReturnType<typeof bankLeaves>>, cu
 
 /**
  * 唯讀評估：每個有值嘅新欄一行 { key, status(包內), check(對現有) }。
- * snap=null（新建／未對上現有安員）→ 有值嘅一律 `new`。
+ * snap=null（新建／未對上現有保安員）→ 有值嘅一律 `new`。
  */
 export interface EvalOpts {
   gate?: ExtGate;
-  /** 呢個戶口（銀行編號＋戶口數字）已被另一位安員使用 */
+  /** 呢個戶口（銀行編號＋戶口數字）已被另一位保安員使用 */
   bankTaken?: boolean;
   /** 工號 → 現時擁有者 guard id（逐工號入職日期預覽要同寫入一致：屬另一個人就唔會寫） */
   ownerOf?: (n: string) => string | null;

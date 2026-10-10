@@ -115,7 +115,7 @@ describe("deriveUploads", () => {
 describe("stepSummary / stepChips", () => {
   it("人話總結，唔出 key=value", () => {
     expect(stepSummary(step("parse_health", { uploadCount: 37, totalShiftCount: 3629, varianceFlagged: 8, varianceExplained: 7 }))).toBe("37 份更表、共讀到 3,629 更；8 個盤更數同上月差好遠，7 個已搵到原因");
-    expect(stepSummary(step("guard_fix", { remainingNeedsBoss: 6, autoLinkedCells: 0 }))).toBe("6 組對唔到安員，系統唔敢自己決定");
+    expect(stepSummary(step("guard_fix", { remainingNeedsBoss: 6, autoLinkedCells: 0 }))).toBe("6 組對唔到保安員，系統唔敢自己決定");
     expect(stepSummary(step("longterm_settlement", { longtermRowsScanned: 1506, longtermRowsChanged: 115 }))).toBe("掃咗 1,506 行長工資料，更新咗 115 行");
     expect(stepSummary(step("auto_pricing", { cardsCreated: 12, recordsPriced: 87, settlementAssigned: 6 }))).toBe("建咗 12 張價卡、定價 87 更、6 更歸屬雞頭");
     expect(stepSummary(step("pricing_check", { count: 103, payoutCount: 99, clientCount: 4, noSettlementCount: 0 }))).toBe("仲有 99 更未有出街價、4 更未有客價");
@@ -138,7 +138,7 @@ describe("deriveAutoCategories", () => {
     const { cats, zero, total } = deriveAutoCategories(auto());
     expect(cats.map((c) => c.key)).toEqual(["shift_types", "cards", "priced", "settled", "variance"]);
     expect(total).toBe(2 + 1 + 12 + 3 + 1);
-    expect(zero).toEqual(["自動對盤 0", "自動建新盤 0", "自動安員配對 0"]);
+    expect(zero).toEqual(["自動對盤 0", "自動建新盤 0", "自動保安員配對 0"]);
     const priced = cats.find((c) => c.key === "priced")!;
     expect(priced.rows[0]).toMatchObject({ site: "測試盤甲", shiftType: "D", broker: "W", n: 12, price: "客價 100／工資 80／雞頭費 5", basis: "Postorder 第 374 行" });
     expect(cats.find((c) => c.key === "settled")!.rows[0]).toMatchObject({ broker: "W", n: 3 });
@@ -172,8 +172,8 @@ describe("lockRequirements / 體檢", () => {
     expect(reqs[1]!.actionLabel).toBe("去答 3 題 ›");
   });
   it("體檢人話化、重複標記", () => {
-    expect(humanizeHealth("30 格安員配對唔到（unmatched）")).toBe("30 格對唔到安員");
-    expect(humanizeHealth("5 格安員配對有多個候選（ambiguous）")).toBe("5 格安員有多個可能");
+    expect(humanizeHealth("30 格保安員配對唔到（unmatched）")).toBe("30 格對唔到保安員");
+    expect(humanizeHealth("5 格保安員配對有多個候選（ambiguous）")).toBe("5 格保安員有多個可能");
     expect(humanizeHealth("9 格淨靠姓名配對（建議補工號或電話）")).toBe("9 格淨靠姓名配對（建議補工號或電話）");
     const g = groupReview(auto().review);
     expect(healthDupReviewCount("unpriced_payout", g)).toBe(3);
@@ -197,7 +197,7 @@ describe("splitSiteRevenue", () => {
 describe("kindChip／其他類／needs_human", () => {
   it("題型 chip 按 kind 對應，唔出禁用詞", () => {
     expect(kindChip("month_close_pricing", "未定價（有候選／冇依據）")).toBe("定價");
-    expect(kindChip("month_close_guard_match", "x")).toBe("安員配對");
+    expect(kindChip("month_close_guard_match", "x")).toBe("保安員配對");
     expect(kindChip("month_close_site_new", "x")).toBe("盤名");
     expect(kindChip("future_kind", "未定價（有候選／冇依據）")).toBe("未定價（有候選／冇參考）");
   });
@@ -221,7 +221,7 @@ describe("humanize（顯示 API 文字前去禁用詞）", () => {
   it("替換禁用詞，唔郁 code 識別字", () => {
     expect(humanize("價目表、歷史、Postorder 都冇依據")).toBe("價目表、歷史、Postorder 都冇參考");
     expect(humanize("盤「shift 冇依據 leave」有 shift")).toBe("盤「shift 冇依據 leave」有 更");
-    expect(humanize("有依據：unmatched／ambiguous／name_only")).toBe("有建議：對唔到安員／有多個可能／淨靠姓名配對");
+    expect(humanize("有依據：unmatched／ambiguous／name_only")).toBe("有建議：對唔到保安員／有多個可能／淨靠姓名配對");
     expect(humanize("shift 記錄 external leave")).toBe("更 記錄 客戶自己人 假");
     expect(humanize("測試盤（parsed）")).toBe("測試盤（已解析，未對數）");
     expect(humanize("shift_type_created")).toBe("shift_type_created");

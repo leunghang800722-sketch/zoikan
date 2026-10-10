@@ -1,5 +1,5 @@
 // WP-ONE-CLICK-AUTO（§31.3 D）：結算雞頭自動歸屬——次序 Postorder 同崗位同日雞頭 → 長工 → 預設雞頭 →
-// 近 3 個月同盤多數決（安員或同一更表姓名）→ 分診（預填最可能候選）；external 永遠分開計。
+// 近 3 個月同盤多數決（保安員或同一更表姓名）→ 分診（預填最可能候選）；external 永遠分開計。
 import { describe, it, expect, beforeEach } from "vitest";
 import type { Broker } from "@prisma/client";
 import { prisma, clearAll } from "./lib/db";
@@ -78,7 +78,7 @@ describe("WP-ONE-CLICK-AUTO D：結算雞頭歸屬", () => {
     expect((await prisma.shiftRecord.findFirstOrThrow({ where: { guardId: ex.id } })).settlementBrokerId).toBe(B10.id);
   });
 
-  it("次序 4：安員預設雞頭", async () => {
+  it("次序 4：保安員預設雞頭", async () => {
     const { site, d } = await mkSite("測試歸屬盤C");
     const g = await mkGuard({ defaultBrokerId: W.id });
     await rec(site.id, d.id, g.id, sep(2));
@@ -105,7 +105,7 @@ describe("WP-ONE-CLICK-AUTO D：結算雞頭歸屬", () => {
     expect(res.unresolved).toBe(1);
   });
 
-  it("修11：新安員（冇歷史）唔准靠更表姓名跨安員回溯 → 唔自動歸屬，入分診", async () => {
+  it("修11：新保安員（冇歷史）唔准靠更表姓名跨保安員回溯 → 唔自動歸屬，入分診", async () => {
     const { site, d } = await mkSite("測試歸屬盤E");
     const oldGuard = await mkGuard({ name: "測試舊人" });
     const newGuard = await mkGuard({ name: "測試新人（同一個人）" });

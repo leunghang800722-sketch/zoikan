@@ -88,7 +88,7 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
   // 文字：
   //   (i) 冇結算單位（no_settlement_count）＝0——呢個先係 P0 真正要守嘅
   //       invariant（settlement_broker_id 一定要有值，糧單先見到呢批
-  //       更；呢個 test 本身填嘅係一個已存在嘅安員/更別/雞頭組合，儲存
+  //       更；呢個 test 本身填嘅係一個已存在嘅保安員/更別/雞頭組合，儲存
   //       之後唔應該整出任何一格冇結算單位）。
   //   (ii) 未定价格數（呢個 site+shift_type+broker 組合，excl.
   //       no_settlement）唔准多過「上月（2026-07）同一個組合本身已經
@@ -370,12 +370,12 @@ test("(e) 新建 PR 記錄 → batch/route.ts 400（PR 已封死，唔可以排�
 // P0（Opus 驗收重現）：新月份更表記錄冇咗結算單位→喺糧單成行消失——見
 // RosterEditor.tsx handleSave()／batch/route.ts／
 // src/lib/pricing/settlement-broker-fallback.ts 頂註解。呢個場景專登整
-// 一個 `default_broker_id=NULL` 嘅安員（模擬 bug repro 講嘅 93/265 個
+// 一個 `default_broker_id=NULL` 嘅保安員（模擬 bug repro 講嘅 93/265 個
 // 長工/公司兵）——修復之前，「複製上月」個 payload 冇送
 // settlement_broker_id，跌到 batch route 嘅 `guard.default_broker_id ??
 // null` fallback，新記錄會係 NULL。自己起獨立 site/guard（唔靠 seed
 // 數據嘅巧合），自給自足＋finally 清走。
-test("(f) 複製上月：安員 default_broker_id=NULL 都要跟返上月記錄嘅 settlement broker，唔會跌做 NULL 喺糧單消失", async ({ page }) => {
+test("(f) 複製上月：保安員 default_broker_id=NULL 都要跟返上月記錄嘅 settlement broker，唔會跌做 NULL 喺糧單消失", async ({ page }) => {
   const brokerK = await findBrokerIdByCode("K");
   const testSite = await prisma.site.create({
     data: { canonicalName: `E2E-P0-結算單位-${Date.now()}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "e2e:pricing-p0" },
@@ -384,7 +384,7 @@ test("(f) 複製上月：安員 default_broker_id=NULL 都要跟返上月記錄�
     data: { siteId: testSite.id, code: "N", label: "測試夜更", hours: 12, createdBy: "e2e:pricing-p0" },
   });
   const testGuard = await prisma.guard.create({
-    data: { nameZh: "E2E測試安員", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "e2e:pricing-p0" },
+    data: { nameZh: "E2E測試保安員", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "e2e:pricing-p0" },
   });
   const julyDate = new Date(Date.UTC(2026, 6, 10));
   await prisma.shiftRecord.create({
@@ -466,7 +466,7 @@ test("(g) 同一行兩日唔同結算單位：改「較早日」（X）嘅 code�
     data: { siteId: testSite.id, code: "N", label: "測試夜更", hours: 12, createdBy: "e2e:pricing-item2" },
   });
   const testGuard = await prisma.guard.create({
-    data: { nameZh: "E2E測試安員二", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "e2e:pricing-item2" },
+    data: { nameZh: "E2E測試保安員二", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "e2e:pricing-item2" },
   });
   // 較早日＝X（brokerK）——呢個 test 會改呢一格；較遲日＝Y（brokerW）——
   // `GET /api/shift-records` desc 排序令呢日先俾 buildRowsAndCells() 見

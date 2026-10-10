@@ -1,11 +1,11 @@
 // WP-PII（老闆 2026-09-17 拍板）：保安員個人資料欄位＋權限。
 //
-// 1. 矩陣出廠值——「安員個人資料」／「安員銀行資料」兩個新 module 逐格
-//    對照老闆決定原文（老闆/會計全睇、主管睇部分、雞頭/安員硬性拒；
+// 1. 矩陣出廠值——「保安員個人資料」／「保安員銀行資料」兩個新 module 逐格
+//    對照老闆決定原文（老闆/會計全睇、主管睇部分、雞頭/保安員硬性拒；
 //    銀行資料主管都係硬性拒）。呢部分純粹讀 DEFAULT_MATRIX，唔使 DB。
 // 2. field-group gate（GET /api/guards list/detail）逐角色。
 // 3. PATCH 權限——身份證/銀行 field group 冇對應 update 權限 → 403，
-//    DB 唔變；牌照（跟「安員」module）唔受呢兩個新 field group 影響。
+//    DB 唔變；牌照（跟「保安員」module）唔受呢兩個新 field group 影響。
 // 4. audit_log before/after 同讀出嗰陣一樣要經 field-group gate 遮。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
@@ -25,33 +25,33 @@ const PII_KEYS = ["hkid", "date_of_birth", "address", "emergency_contact_name", 
 const BANK_KEYS = ["bank_name", "bank_account_no", "bank_payee_name"];
 const LICENCE_KEYS = ["sia_permit_no", "sia_permit_type", "sia_permit_a_expiry", "sia_permit_b_expiry", "safety_card_no", "safety_card_expiry", "hire_date", "leave_date"];
 
-describe("WP-PII §1：矩陣出廠值——安員個人資料／安員銀行資料", () => {
+describe("WP-PII §1：矩陣出廠值——保安員個人資料／保安員銀行資料", () => {
   it("老闆：兩個 module view/update 都 grant", () => {
-    expect(DEFAULT_MATRIX.老闆.安員個人資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.老闆.安員個人資料.update).toBe("grant");
-    expect(DEFAULT_MATRIX.老闆.安員銀行資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.老闆.安員銀行資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.保安員個人資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.保安員個人資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.保安員銀行資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.保安員銀行資料.update).toBe("grant");
   });
 
   it("會計：兩個 module view/update 都 grant（老闆話「會計全睇」）", () => {
-    expect(DEFAULT_MATRIX.會計.安員個人資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.會計.安員個人資料.update).toBe("grant");
-    expect(DEFAULT_MATRIX.會計.安員銀行資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.會計.安員銀行資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.保安員個人資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.保安員個人資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.保安員銀行資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.保安員銀行資料.update).toBe("grant");
   });
 
-  it("主管：安員個人資料出廠關（老闆可以開）；安員銀行資料硬性拒", () => {
-    expect(DEFAULT_MATRIX.主管.安員個人資料.view).toBe("off");
-    expect(DEFAULT_MATRIX.主管.安員個人資料.update).toBe("off");
-    expect(DEFAULT_MATRIX.主管.安員銀行資料.view).toBe("deny");
-    expect(DEFAULT_MATRIX.主管.安員銀行資料.update).toBe("deny");
+  it("主管：保安員個人資料出廠關（老闆可以開）；保安員銀行資料硬性拒", () => {
+    expect(DEFAULT_MATRIX.主管.保安員個人資料.view).toBe("off");
+    expect(DEFAULT_MATRIX.主管.保安員個人資料.update).toBe("off");
+    expect(DEFAULT_MATRIX.主管.保安員銀行資料.view).toBe("deny");
+    expect(DEFAULT_MATRIX.主管.保安員銀行資料.update).toBe("deny");
   });
 
-  it("雞頭／安員：兩個 module 全部 action 硬性拒", () => {
+  it("雞頭／保安員：兩個 module 全部 action 硬性拒", () => {
     for (const role of ["雞頭", "安員"] as const) {
       for (const action of ["view", "create", "update", "void", "export"] as const) {
-        expect(DEFAULT_MATRIX[role].安員個人資料[action]).toBe("deny");
-        expect(DEFAULT_MATRIX[role].安員銀行資料[action]).toBe("deny");
+        expect(DEFAULT_MATRIX[role].保安員個人資料[action]).toBe("deny");
+        expect(DEFAULT_MATRIX[role].保安員銀行資料[action]).toBe("deny");
       }
     }
   });
@@ -87,10 +87,10 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
         blacklist_check_date: "2026-01-01",
         bank_name: "測試銀行",
         bank_account_no: "123-456789-001",
-        bank_payee_name: "測試安員甲",
+        bank_payee_name: "測試保安員甲",
         sia_permit_no: "SIA-TEST-01",
         // WP-STAFFNO：`sia_permit_type` 而家係衍生值（唔可以直接寫），
-        // 用甲類到期日代替去 exercise 同一組「牌照跟安員 module」欄。
+        // 用甲類到期日代替去 exercise 同一組「牌照跟保安員 module」欄。
         sia_permit_a_expiry: "2028-01-01",
         safety_card_no: "SAFE-TEST-01",
         safety_card_expiry: "2027-01-01",
@@ -140,7 +140,7 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
     expect(detail.bank_name).toBe("測試銀行");
   });
 
-  it("主管（出廠）：見牌照（安員 module），零命中身份證/銀行 PII 欄", async () => {
+  it("主管（出廠）：見牌照（保安員 module），零命中身份證/銀行 PII 欄", async () => {
     const listRes = await guardsList(req("http://test.local/api/guards", supervisorCookie));
     expect(listRes.status).toBe(200);
     const json = await listRes.json();
@@ -155,14 +155,14 @@ describe("WP-PII §2：field-group gate——GET /api/guards", () => {
     expect((detailJson as Record<string, unknown>).sia_permit_no).toBe("SIA-TEST-01");
   });
 
-  it("雞頭（自己安員）：GUARD_BROKER_FIELDS 白名單——零命中全部 16 個新欄", async () => {
+  it("雞頭（自己保安員）：GUARD_BROKER_FIELDS 白名單——零命中全部 16 個新欄", async () => {
     const listRes = await guardsList(req("http://test.local/api/guards", brokerACookie));
     expect(listRes.status).toBe(200);
     const json = await listRes.json();
     expect(findKeysDeep(json, [...PII_KEYS, ...BANK_KEYS, ...LICENCE_KEYS])).toEqual([]);
   });
 
-  it("安員角色：GET /api/guards 403（「安員」module 對安員角色硬性拒，同呢個 WP 無關但一致覆蓋）", async () => {
+  it("保安員角色：GET /api/guards 403（「保安員」module 對保安員角色硬性拒，同呢個 WP 無關但一致覆蓋）", async () => {
     const res = await guardsList(req("http://test.local/api/guards", guardSelfCookie));
     expect(res.status).toBe(403);
   });
@@ -218,7 +218,7 @@ describe("WP-PII §3：PATCH 權限", () => {
     expect(after.hkid).toBe(before.hkid);
   });
 
-  it("Opus 覆核 M1（oracle）：主管冇「安員個人資料:view」——PATCH hkid 就算同現值一樣都要 403，唔准變成猜中／猜錯嘅回應碼 oracle", async () => {
+  it("Opus 覆核 M1（oracle）：主管冇「保安員個人資料:view」——PATCH hkid 就算同現值一樣都要 403，唔准變成猜中／猜錯嘅回應碼 oracle", async () => {
     await prisma.guard.update({ where: { id: fx.guardA.id }, data: { hkid: "A123456(3)", bankAccountNo: "123-456789-001" } });
     try {
       for (const guess of ["A123456(3)", "B999888(1)"]) {
@@ -257,7 +257,7 @@ describe("WP-PII §3：PATCH 權限", () => {
     }
   });
 
-  it("主管 PATCH 牌照號碼 → 200（跟「安員」module，主管出廠有）", async () => {
+  it("主管 PATCH 牌照號碼 → 200（跟「保安員」module，主管出廠有）", async () => {
     const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { sia_permit_no: "SIA-999" }), {
       params: Promise.resolve({ id: fx.guardA.id }),
     });
@@ -266,14 +266,14 @@ describe("WP-PII §3：PATCH 權限", () => {
     expect(after.siaPermitNo).toBe("SIA-999");
   });
 
-  it("會計 PATCH 銀行戶口 → 200（老闆話「會計全睇」，安員銀行資料:update=grant）", async () => {
-    // 會計出廠「安員」module 本身 update=off（會計預設淨係睇安員名冊，
+  it("會計 PATCH 銀行戶口 → 200（老闆話「會計全睇」，保安員銀行資料:update=grant）", async () => {
+    // 會計出廠「保安員」module 本身 update=off（會計預設淨係睇保安員名冊，
     // 唔開放改任何欄——呢個係 PATCH /api/guards route 嘅*基本*進入權，
-    // 同「安員銀行資料」field-group gate 係兩層唔同嘅閘，見 route.ts
+    // 同「保安員銀行資料」field-group gate 係兩層唔同嘅閘，見 route.ts
     // `guardModule()` + `assertFieldGroupWritable()`）。老闆話「會計全
     // 睇」銀行資料，指嘅係銀行呢組欄嘅 field-level 權限（矩陣已經係
     // grant）；要實際改到（包括銀行戶口），仲要老闆喺角色權限頁開埋
-    // 「安員:update」呢個基本閘先——呢度模擬「老闆已經開咗」嗰個狀態，
+    // 「保安員:update」呢個基本閘先——呢度模擬「老闆已經開咗」嗰個狀態，
     // 專登驗證開咗之後，銀行 field-group grant 真係生效（唔係測緊
     // 「會計出廠即刻改得到」）。
     const permission = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module: "安員", action: "update" } } });
@@ -290,7 +290,7 @@ describe("WP-PII §3：PATCH 權限", () => {
     expect(after.bankName).toBe("會計改嘅銀行");
   });
 
-  it("會計出廠（未開「安員:update」）：PATCH 銀行戶口 → 403（基本閘未開，field-group grant 都冇用）", async () => {
+  it("會計出廠（未開「保安員:update」）：PATCH 銀行戶口 → 403（基本閘未開，field-group grant 都冇用）", async () => {
     const res = await guardUpdate(
       req(`http://test.local/api/guards/${fx.guardA.id}`, accountantCookie, "PATCH", { bank_name: "唔應該成功" }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
@@ -298,7 +298,7 @@ describe("WP-PII §3：PATCH 權限", () => {
     expect(res.status).toBe(403);
   });
 
-  it("主管 PATCH 銀行戶口 → 403，DB 不變（安員銀行資料主管硬性拒）", async () => {
+  it("主管 PATCH 銀行戶口 → 403，DB 不變（保安員銀行資料主管硬性拒）", async () => {
     const before = await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } });
     const res = await guardUpdate(
       req(`http://test.local/api/guards/${fx.guardA.id}`, supervisorCookie, "PATCH", { bank_name: "主管想改" }),
@@ -338,7 +338,7 @@ describe("WP-PII §4：audit_log before/after 同讀出嗰陣一樣要經 field-
     expect(patchRes.status).toBe(200);
 
     // 主管出廠冇「操作紀錄:view」，手動開返嚟先入得 audit-log route——
-    // 呢個 test 專登想證明「就算有咗操作紀錄:view，冇安員個人資料/安員
+    // 呢個 test 專登想證明「就算有咗操作紀錄:view，冇保安員個人資料/保安員
     // 銀行資料:view 都照樣剝」，同 wp2-m1-m5 嗰個 test 一致做法。
     const permission = await prisma.permission.findUniqueOrThrow({ where: { module_action: { module: "操作紀錄", action: "view" } } });
     await prisma.rolePermission.update({

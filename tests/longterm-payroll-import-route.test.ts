@@ -1,6 +1,6 @@
 // WP-LTPAY Phase 2：`POST /api/longterm/contracts/import` RBAC + 上載
 // integration test（module「長工糧」——老闆／會計 200，主管／雞頭／
-// 安員 403）。合成 fixture，跟 tests/wp-roster-upload.test.ts 一致風格。
+// 保安員 403）。合成 fixture，跟 tests/wp-roster-upload.test.ts 一致風格。
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { clearAll } from "./lib/db";
@@ -44,7 +44,7 @@ describe("POST /api/longterm/contracts/import", () => {
     guardSelfCookie = await sessionCookieForUser(fx.userIds["安員"]);
   });
 
-  it("主管／雞頭／安員 403（硬性拒——長工糧同安員銀行資料一致粒度）", async () => {
+  it("主管／雞頭／保安員 403（硬性拒——長工糧同保安員銀行資料一致粒度）", async () => {
     const buf = await buildWorkbook();
     for (const cookie of [supervisorCookie, brokerCookie, guardSelfCookie]) {
       const res = await importContracts(reqMultipart("http://test.local/api/longterm/contracts/import", cookie, buf));

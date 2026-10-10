@@ -37,7 +37,7 @@ async function buildStandardXlsx(opts: { siteName: string; staffNo?: string; nam
   ws.getCell("C6").value = "日更保安員";
   ws.getCell("D6").value = opts.staffNo ?? "T-A01";
   ws.getCell("E6").value = "6100001";
-  ws.getCell("F6").value = opts.name ?? "測試安員甲";
+  ws.getCell("F6").value = opts.name ?? "測試保安員甲";
   ws.getCell("G6").value = "D";
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -67,7 +67,7 @@ async function buildCitybusXlsx(opts: { siteName: string; subSiteName: string; s
   ws.getCell("D6").value = opts.subSiteName;
   ws.getCell("E6").value = opts.staffNo ?? "T-B01";
   ws.getCell("F6").value = "6100002";
-  ws.getCell("G6").value = opts.name ?? "測試安員乙";
+  ws.getCell("G6").value = opts.name ?? "測試保安員乙";
   ws.getCell("H6").value = "D";
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -123,7 +123,7 @@ describe("WP-UPLOAD-AUTOFIX 個案 1：更表檔名鍵自動配盤", () => {
 
   it("§1 檔名鍵優先於檔內盤名——CTB 6907 式場景：內文盤名寫母盤，檔名鍵配去目標盤，唔撞母盤主檔", async () => {
     // 母盤自己先上載一份（真正嘅母盤主檔——citybus layout，真係有 sub_site 欄值）。
-    const parentBuf = await buildCitybusXlsx({ siteName: "測試母盤WP-UPLOAD-AUTOFIX", subSiteName: "測試母盤WP-UPLOAD-AUTOFIX-子盤A", staffNo: "T-B01", name: "測試安員乙" });
+    const parentBuf = await buildCitybusXlsx({ siteName: "測試母盤WP-UPLOAD-AUTOFIX", subSiteName: "測試母盤WP-UPLOAD-AUTOFIX-子盤A", staffNo: "T-B01", name: "測試保安員乙" });
     const parentRes = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, parentBuf, "2026-08", "Roster - 測試母盤WP-UPLOAD-AUTOFIX - Aug 2026.xlsx"));
     expect(parentRes.status).toBe(201);
     const parentBody = (await parentRes.json()) as { upload: { id: string; site_id: string } };
@@ -131,9 +131,9 @@ describe("WP-UPLOAD-AUTOFIX 個案 1：更表檔名鍵自動配盤", () => {
 
     // 「CTB 6907」式檔：內文盤名一樣寫「測試母盤WP-UPLOAD-AUTOFIX」，但
     // 檔名含目標盤嘅 roster_file_keys「TESTKEY001」。
-    const keyedBuf = await buildStandardXlsx({ siteName: "測試母盤WP-UPLOAD-AUTOFIX", staffNo: "T-A01", name: "測試安員甲" });
+    const keyedBuf = await buildStandardXlsx({ siteName: "測試母盤WP-UPLOAD-AUTOFIX", staffNo: "T-A01", name: "測試保安員甲" });
     const keyedRes = await createUpload(
-      reqMultipart("http://test.local/api/roster-uploads", ownerCookie, keyedBuf, "2026-08", "Roster - TESTKEY001 測試安員甲 Aug 2026.xlsx"),
+      reqMultipart("http://test.local/api/roster-uploads", ownerCookie, keyedBuf, "2026-08", "Roster - TESTKEY001 測試保安員甲 Aug 2026.xlsx"),
     );
     expect(keyedRes.status).toBe(201);
     const keyedBody = (await keyedRes.json()) as { upload: { id: string; site_id: string } };

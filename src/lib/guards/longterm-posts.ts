@@ -1,7 +1,7 @@
-// WP-PHASE3 Opus 5.5 驗收：`guard_longterm_posts` 寫入共用檢查——安員
+// WP-PHASE3 Opus 5.5 驗收：`guard_longterm_posts` 寫入共用檢查——保安員
 // 抽屜「長工」區（POST／PATCH）同「轉長工」共用。
 //
-// - 同一個安員、同一個盤，未作廢嘅崗位記錄生效期唔可以重疊（重疊會令長
+// - 同一個保安員、同一個盤，未作廢嘅崗位記錄生效期唔可以重疊（重疊會令長
 //   工結算／介紹雞頭推算讀到兩條一樣嘅盤，亦令「終止」唔知終止邊條）；
 //   唔同盤可以同時生效（長工短期掛兩個盤，由人手判斷，同 guard-fix
 //   `set_longterm_post` 一致）。
@@ -35,7 +35,7 @@ export async function assertLongtermPostPeriodOk(input: {
   if (clash) {
     const from = clash.effectiveFrom.toISOString().slice(0, 10);
     const to = clash.effectiveTo ? clash.effectiveTo.toISOString().slice(0, 10) : "現在";
-    throw Conflict(`呢個安員喺呢個盤已經有一條生效期重疊嘅崗位記錄（${from}～${to}）——要改請先終止嗰條`, { conflictPostId: clash.id });
+    throw Conflict(`呢個保安員喺呢個盤已經有一條生效期重疊嘅崗位記錄（${from}～${to}）——要改請先終止嗰條`, { conflictPostId: clash.id });
   }
 }
 

@@ -98,7 +98,7 @@ export function prepareHkidForWrite(raw: string, opts: { allowInvalid?: boolean 
 /** 擋重複身份證（app 層；DB unique index 存在與否都要擋）。訊息不回顯對方資料。 */
 export async function assertHkidAvailable(db: Db, canon: string, exceptGuardId?: string | null): Promise<void> {
   const hit = await db.guard.findFirst({ where: { hkid: canon, ...(exceptGuardId ? { id: { not: exceptGuardId } } : {}) }, select: { id: true } });
-  if (hit) throw Conflict("呢個身份證號碼已經登記喺另一個安員", { field: "hkid" });
+  if (hit) throw Conflict("呢個身份證號碼已經登記喺另一個保安員", { field: "hkid" });
 }
 
 /** 擋重複電話（全表唯一；8 位／852／+852 三種寫法都查）。 */
@@ -109,7 +109,7 @@ export async function assertTelAvailable(db: Db, rawTel: string, exceptGuardId?:
     where: { tel: { in: variants }, ...(exceptGuardId ? { guardId: { not: exceptGuardId } } : {}) },
     select: { id: true },
   });
-  if (hit) throw Conflict("呢個電話號碼已經登記喺另一個安員", { field: "tel" });
+  if (hit) throw Conflict("呢個電話號碼已經登記喺另一個保安員", { field: "tel" });
 }
 
 /** DB unique index（guards_hkid_key／guard_phones_tel_key）race 撞到嘅 P2002 → 一般 409
@@ -117,8 +117,8 @@ export async function assertTelAvailable(db: Db, rawTel: string, exceptGuardId?:
 export function rethrowIdentityConflict(err: unknown): never {
   if (err && typeof err === "object" && (err as { code?: string }).code === "P2002") {
     const text = JSON.stringify((err as { meta?: unknown }).meta ?? "") + String((err as { message?: string }).message ?? "");
-    if (/guards_hkid_key|hkid/.test(text)) throw Conflict("呢個身份證號碼已經登記喺另一個安員", { field: "hkid" });
-    if (/guard_phones_tel_key|tel/.test(text) && !/guard_id/.test(text)) throw Conflict("呢個電話號碼已經登記喺另一個安員", { field: "tel" });
+    if (/guards_hkid_key|hkid/.test(text)) throw Conflict("呢個身份證號碼已經登記喺另一個保安員", { field: "hkid" });
+    if (/guard_phones_tel_key|tel/.test(text) && !/guard_id/.test(text)) throw Conflict("呢個電話號碼已經登記喺另一個保安員", { field: "tel" });
   }
   throw err;
 }

@@ -144,7 +144,7 @@ test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 
 });
 
 // Fable5.1（4 個細修 1）：`sia_permit_b_lapsed_by_age` 原本塞喺
-// `licenceExpiryPill()` 嘅 `if (!expiry)` 分支——安員平安卡
+// `licenceExpiryPill()` 嘅 `if (!expiry)` 分支——保安員平安卡
 // （safety_card_expiry）仲有效嗰陣，`nearestExpiry`（牌照/平安卡取較早）
 // 就唔係 falsy，成粒 pill 跌落「有效」綠色分支，完全冚蓋咗「乙類已
 // 失效」呢個警示。呢個 test 專登整一個「乙類因年齡失效、但平安卡遠期

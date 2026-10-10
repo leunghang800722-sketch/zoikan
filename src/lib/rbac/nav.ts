@@ -6,7 +6,7 @@
 //      （可能俾老闆喺角色權限頁改過）嘅 105 格矩陣覆蓋 view 呢個 action。
 //
 // 已知限制：`/api/roles/:id/permissions` 本身要求呼叫者有「用戶管理:view」
-// ——喺 matrix.ts 呢個 module 對主管/會計/雞頭/安員 4 個 base_role 全部
+// ——喺 matrix.ts 呢個 module 對主管/會計/雞頭/保安員 4 個 base_role 全部
 // 硬性 deny（uniformRow(D)），亦即淨係老闆先可以成功打呢個 endpoint（連
 // 老闆自己都好，因為五個出廠角色冇一個可以「開放」呢粒硬性 deny 格）。
 // 所以對呢 4 個 base_role 嚟講，呢個 fetch 一定 403，會靜靜哋 fallback
@@ -33,7 +33,7 @@ export async function getViewGrants(session: CurrentSession): Promise<Record<Mod
   const fallback = Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(session.baseRole, m, "view")])) as Record<Module, boolean>;
 
   // A10（Opus 整合驗收）：`/api/roles/:id/permissions` 要求「用戶管理:
-  // view」，喺 matrix.ts 對主管/會計/雞頭/安員呢 4 個 base_role 全部硬性
+  // view」，喺 matrix.ts 對主管/會計/雞頭/保安員呢 4 個 base_role 全部硬性
   // deny（見上面檔頭註解）——即係話呢 4 個角色打呢個 fetch **一定** 403。
   // 之前唔理 baseRole 一律照打，令呢 4 個角色每次 render（`(app)/layout.
   // tsx` 同 `(app)/page.tsx` 各打一次，一個頁面兩次）都寫一行
@@ -94,15 +94,15 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   push("/roster-uploads", "更表上載", "更表上載");
   // WP-GUARD-FIX-UI：淨係老闆（module 硬性單一角色）——push() 本身已經
   // 用 grants 判斷，唔使額外 baseRole 判斷。
-  push("/guard-fix", "未配對安員修復", "安員配對修復");
+  push("/guard-fix", "未配對保安員修復", "安員配對修復");
   push("/quotas", "配額", "配額");
   push("/approvals", "審批隊列", "審批");
   push("/sites", "盤", "盤");
-  // 雞頭端睇自己安員用「自己安員」module；內部角色用「安員」——兩者
+  // 雞頭端睇自己保安員用「自己保安員」module；內部角色用「保安員」——兩者
   // 都連去同一個 /guards 路徑，API 自己會 scope（見 src/app/api/guards）。
   push("/guards", "保安員", session.baseRole === "雞頭" ? "自己安員" : "安員");
   push("/brokers", "雞頭", "雞頭");
-  // WP-AI-OPS §28.4：安員證件資料批量導入（老闆／會計／主管）＋導入後「待答問題」（badge＝自己未答數，老闆見全部）。
+  // WP-AI-OPS §28.4：保安員證件資料批量導入（老闆／會計／主管）＋導入後「待答問題」（badge＝自己未答數，老闆見全部）。
   push("/guards/import", "證件資料導入", "安員批量導入");
   push("/triage", "待答問題", "導入分診");
   push("/rate-cards", "價目", "出街價");
@@ -120,8 +120,8 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
     // WP-ONE-CLICK：「一鍵全月結算」——老闆／會計全開，主管淨係 view
     // （grants 已經反映呢個分別，push() 唔使再判斷 baseRole）。
     push("/month-close", "一鍵結算", "一鍵結算");
-    // WP-LTPAY §21 任務 5b：長工月薪糧——同「安員銀行資料」一致粒度，
-    // 淨係老闆／會計見得到（主管/雞頭/安員硬性拒，push() 已經反映）。
+    // WP-LTPAY §21 任務 5b：長工月薪糧——同「保安員銀行資料」一致粒度，
+    // 淨係老闆／會計見得到（主管/雞頭/保安員硬性拒，push() 已經反映）。
     push("/reports/longterm-payroll", "長工糧", "長工糧");
   }
   push("/reports/shortfall", "尚欠總覽", "尚欠總覽");
@@ -132,7 +132,7 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   // P2.5「現場反映」開會模式——「現場意見」清單頁淨係老闆先睇得到（老闆
   // 讀主管/會計/老闆自己開會送出嘅意見）。呢度刻意唔用 push()（module
   // grant 淨係決定「助手」有冇 view，唔識分「老闆 vs 主管/會計」）——
-  // 用「助手」module（雞頭/安員硬性冇）＋`session.baseRole==="老闆"`
+  // 用「助手」module（雞頭/保安員硬性冇）＋`session.baseRole==="老闆"`
   // 雙重判斷，冇加新 module 落 matrix.ts（鐵律「唔改權限矩陣」，同
   // `src/app/api/feedback/**` 嘅 `assertBoss()` 一致做法）。
   if (grants["助手"] && session.baseRole === "老闆") {

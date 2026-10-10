@@ -1,6 +1,6 @@
 // WP-BOSS5 §25.4（老闆 2026-09-28 決定 6）：BOCHK Payroll Editor 要
 // 「員工賬戶銀行編號 Employee A/C Bank Code」呢欄——3 位 HKICL（Hong Kong
-// Interbank Clearing Limited）清算銀行編號。呢個檔**淨係俾安員抽屜銀行
+// Interbank Clearing Limited）清算銀行編號。呢個檔**淨係俾保安員抽屜銀行
 // 區起一個「建議下拉」**（常見銀行名 → 編號），**唔會自動填** `bank_
 // code`——會計揀完先由前端寫入 `guards.bank_code`，`bank_name`（自由
 // 文字）唔可以反推呢個對照（見 §25.4 任務書：「唔准憑 bank_name 自動填」）。

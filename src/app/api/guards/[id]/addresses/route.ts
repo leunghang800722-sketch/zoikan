@@ -1,6 +1,6 @@
 // WP-MULTI（老闆 2026-09-19 拍板，規劃師延伸同一原則）：地址獨立子表——
 // GET（primary 先）／POST（新增一行；第一行自動變 primary，之後跟
-// `is_primary`，原 primary 自動降級）。跟「安員個人資料」module（同
+// `is_primary`，原 primary 自動降級）。跟「保安員個人資料」module（同
 // `guards.address` 舊欄一致層級，雞頭出廠 `uniformRow(D)`，唔需要額外
 // 硬擋）。
 import { prisma } from "@/lib/db";

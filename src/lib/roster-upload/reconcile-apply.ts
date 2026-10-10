@@ -53,7 +53,7 @@ type Pricing = { clientRate: number | null; guardWage: number | null; brokerFee:
  * rollback 之後留低「孤兒」audit。 */
 type PendingAudit = { tableName: string; rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
 
-/** OT 記錉要掛靠返呢個安員呢日嘅正更記錉（`parent_shift_id`）——搵唔到
+/** OT 記錉要掛靠返呢個保安員呢日嘅正更記錉（`parent_shift_id`）——搵唔到
  * 就 null（唔擋，OT 冇 parent 都可以存在，見 schema `parentShiftId`
  * optional）。喺同一個 transaction 入面查，見得到呢個 transaction內
  * 之前先寫低嘅正更記錉（見 `applyReconcileDecisions()` 分兩輪寫嘅
@@ -261,7 +261,7 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
     }
     if (input.action === "apply_roster") {
       if (item.category === "unresolved") {
-        results.push({ key: input.key, category: item.category, action: input.action, ok: false, error: "呢行未配對齊（安員/更別/子盤），唔可以以更表為準寫入，先去 Phase A 頁面／指定盤／別名解決" });
+        results.push({ key: input.key, category: item.category, action: input.action, ok: false, error: "呢行未配對齊（保安員/更別/子盤），唔可以以更表為準寫入，先去 Phase A 頁面／指定盤／別名解決" });
         continue;
       }
       if (item.category === "match") {

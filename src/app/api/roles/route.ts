@@ -1,6 +1,6 @@
 // 角色可複製再改（設計文件§5.0）：POST body { source_role_id, name } 複製
 // 一個現有角色（連埋佢成套 role_permissions）做新角色，is_custom=true。
-// 五個出廠角色（老闆/主管/會計/雞頭/安員）is_custom=false，唔可以 void
+// 五個出廠角色（老闆/主管/會計/雞頭/保安員）is_custom=false，唔可以 void
 // （見 [id]/void/route.ts）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";

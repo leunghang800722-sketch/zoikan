@@ -1,7 +1,7 @@
 "use client";
 // WP-LTPAY §21 任務 5b（老闆 2026-09-26「長工月薪糧」）：`/reports/
-// longterm-payroll`——財務區（老闆／會計，module「長工糧」，同「安員
-// 銀行資料」一致粒度，主管/雞頭/安員硬性 403，nav.ts 已經唔顯示連結俾
+// longterm-payroll`——財務區（老闆／會計，module「長工糧」，同「保安員
+// 銀行資料」一致粒度，主管/雞頭/保安員硬性 403，nav.ts 已經唔顯示連結俾
 // 佢哋）。① 月份選擇＋「重算本月」；② 逐人結算表（可展開逐項來源、
 // 同上月比較）；③ 人手輸入區（津貼/扣款/病假段/年假段/離職結算 CRUD，
 // 月鎖後唯讀）；④ 合約管理（列表/編輯/Maxwell 導入）；⑤ 平均工資／
@@ -255,7 +255,7 @@ export default function LongtermPayrollPage() {
             <table className={tableCls.table} style={{ minWidth: tableMinWidth(11) }}>
               <thead>
                 <tr>
-                  <th className={tableCls.th}>安員</th>
+                  <th className={tableCls.th}>保安員</th>
                   <th className={tableCls.thNum}>返工日</th>
                   <th className={tableCls.thNum}>OT 時數</th>
                   <th className={tableCls.thNum}>Net Basic</th>
@@ -410,7 +410,7 @@ function InputsSection({
   const [saving, setSaving] = useState(false);
 
   async function submit() {
-    if (!guardId) return onError("要揀安員");
+    if (!guardId) return onError("要揀保安員");
     setSaving(true);
     const res = await apiPost(`/api/longterm/inputs`, {
       month: `${month}-01`,
@@ -445,7 +445,7 @@ function InputsSection({
       <div className="text-sm font-semibold text-zk-text">人手輸入項</div>
       {!locked && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-          <Field label="安員">
+          <Field label="保安員">
             <select className={selectCls} value={guardId} onChange={(e) => setGuardId(e.target.value)}>
               <option value="">請揀</option>
               {guardOptions.map((g) => (
@@ -494,7 +494,7 @@ function InputsSection({
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
           <thead>
             <tr>
-              <th className={tableCls.th}>安員</th>
+              <th className={tableCls.th}>保安員</th>
               <th className={tableCls.th}>種類</th>
               <th className={tableCls.thNum}>金額</th>
               <th className={tableCls.th}>日期段</th>
@@ -599,7 +599,7 @@ function ContractsSection({
       const sm = res.data.summary;
       onNotice(
         `Maxwell 導入完成：${sm.total_rows} 行，建 ${sm.contracts_created}／更新 ${sm.contracts_updated}` +
-          `${sm.unmatched.length ? `，${sm.unmatched.length} 行對唔到安員（要人手配對）` : ""}` +
+          `${sm.unmatched.length ? `，${sm.unmatched.length} 行對唔到保安員（要人手配對）` : ""}` +
           `${sm.skipped_manual_contract.length ? `，${sm.skipped_manual_contract.length} 人已有人手合約冇覆蓋` : ""}` +
           `${sm.warnings.length ? `。注意：${sm.warnings.join("；")}` : ""}`,
       );
@@ -669,7 +669,7 @@ function ContractsSection({
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(8) }}>
           <thead>
             <tr>
-              <th className={tableCls.th}>安員</th>
+              <th className={tableCls.th}>保安員</th>
               <th className={tableCls.th}>生效區間</th>
               <th className={tableCls.thNum}>月薪</th>
               <th className={tableCls.th}>計薪基礎</th>
@@ -770,7 +770,7 @@ function AvgWageLeaveBalanceSection({
   const [awValue, setAwValue] = useState("");
   const [awSource, setAwSource] = useState("");
   async function saveAvgWage() {
-    if (!awGuardId || !awValue) return onError("要揀安員同填平均日薪");
+    if (!awGuardId || !awValue) return onError("要揀保安員同填平均日薪");
     const res = await apiPost(`/api/longterm/avg-wages`, { guard_id: awGuardId, month: `${month}-01`, avg_daily_wage: Number(awValue), source: awSource || "人手輸入（計糧表平均工資）" });
     if (res.ok) {
       setAwValue("");
@@ -811,7 +811,7 @@ function AvgWageLeaveBalanceSection({
         <div className="text-[11.5px] text-zk-faint">SL 4/5／AL 離職結算派彩優先讀呢張表，冇記錄先 fallback 日薪；同一人同月再入會覆蓋</div>
         {!locked && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Field label="安員">
+            <Field label="保安員">
               <select className={selectCls} value={awGuardId} onChange={(e) => setAwGuardId(e.target.value)}>
                 <option value="">請揀</option>
                 {guardOptions.map((g) => (
@@ -839,7 +839,7 @@ function AvgWageLeaveBalanceSection({
           <table className={tableCls.table} style={{ minWidth: tableMinWidth(3) }}>
             <thead>
               <tr>
-                <th className={tableCls.th}>安員</th>
+                <th className={tableCls.th}>保安員</th>
                 <th className={tableCls.thNum}>平均日薪</th>
                 <th className={tableCls.th}>來源</th>
               </tr>
@@ -873,7 +873,7 @@ function AvgWageLeaveBalanceSection({
           <table className={tableCls.table} style={{ minWidth: tableMinWidth(5) }}>
             <thead>
               <tr>
-                <th className={tableCls.th}>安員</th>
+                <th className={tableCls.th}>保安員</th>
                 <th className={tableCls.thNum}>AL 已放（累積）</th>
                 <th className={tableCls.thNum}>SL 已放 4/5（累積）</th>
                 <th className={tableCls.thNum}>SL 結餘</th>

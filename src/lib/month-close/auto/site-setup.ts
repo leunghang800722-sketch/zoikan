@@ -88,7 +88,7 @@ export function derivePostorderSiteInfo(name: string, ev: PostorderEvidence | nu
   return { clientName: clientName && normalizeSiteKey(clientName) !== ownKey ? clientName : null, aliases: aliases.slice(0, 3) };
 }
 
-// 大上載 reparse 用嘅 interactive transaction timeout（同 one-click 安員修復後 reparse 一致）。
+// 大上載 reparse 用嘅 interactive transaction timeout（同 one-click 保安員修復後 reparse 一致）。
 const REPARSE_TX_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface ShiftTypeGroup {

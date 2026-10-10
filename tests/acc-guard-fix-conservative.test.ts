@@ -1,5 +1,5 @@
 // 驗收（Opus 5.5，2026-09-26）：guard-fix「唔准留要老闆決定」——兩類以前
-// needs_boss 嘅身份改做保守預設（按更表姓名建獨立安員、cash_casual、無
+// needs_boss 嘅身份改做保守預設（按更表姓名建獨立保安員、cash_casual、無
 // 工號），工號衝突嗰類寫 guard_match_overrides 令 reparse 配得返。
 // 合成 fixture：名用「測試…」、工號 U9xxx、電話 6xxxxxxx。
 import { describe, it, expect, beforeEach } from "vitest";
@@ -11,7 +11,7 @@ import type { UTeamRow } from "@/lib/guard-fix/sources";
 
 const MONTH = new Date("2026-08-01T00:00:00.000Z");
 
-describe("guard-fix 保守預設（needs_boss → 建獨立安員）", () => {
+describe("guard-fix 保守預設（needs_boss → 建獨立保安員）", () => {
   beforeEach(async () => {
     await clearAll();
   });
@@ -27,7 +27,7 @@ describe("guard-fix 保守預設（needs_boss → 建獨立安員）", () => {
     return { upload, site };
   }
 
-  it("更表工號屬 DB 另一位安員、DB 冇同名 → create_minimal（staff_no_conflict），套用後寫 override，matchGuard 配返新安員", async () => {
+  it("更表工號屬 DB 另一位保安員、DB 冇同名 → create_minimal（staff_no_conflict），套用後寫 override，matchGuard 配返新保安員", async () => {
     const { upload, site } = await setup();
     const owner = await prisma.guard.create({ data: { nameZh: "測試工號主人", employmentType: "cash_casual", staffNo: "U90001", createdBy: "test" } });
     await prisma.guardStaffNumber.create({ data: { guardId: owner.id, scheme: "U", number: "U90001", status: "current" } });
@@ -82,7 +82,7 @@ describe("guard-fix 保守預設（needs_boss → 建獨立安員）", () => {
     expect(await prisma.guardMatchOverride.count()).toBe(0);
   });
 
-  it("DB 已經有同名安員（真係多過一個候選）→ 照舊 needs_boss（唔可以再起一個同名人令佢更加分唔到）", async () => {
+  it("DB 已經有同名保安員（真係多過一個候選）→ 照舊 needs_boss（唔可以再起一個同名人令佢更加分唔到）", async () => {
     const { upload, site } = await setup();
     const owner = await prisma.guard.create({ data: { nameZh: "測試工號主人丙", employmentType: "cash_casual", createdBy: "test" } });
     await prisma.guardStaffNumber.create({ data: { guardId: owner.id, scheme: "U", number: "U90003", status: "current" } });

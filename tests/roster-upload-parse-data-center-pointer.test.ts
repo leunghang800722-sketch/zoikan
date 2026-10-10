@@ -17,7 +17,7 @@ function cell(overrides: Partial<ParsedCellRow> & Pick<ParsedCellRow, "rowIndex"
   return {
     subSiteName: null,
     staffNoRaw: "U90001",
-    nameRaw: "測試安員甲",
+    nameRaw: "測試保安員甲",
     telRaw: "6100001",
     rankRaw: null,
     timeRaw: null,
@@ -44,7 +44,7 @@ describe("WP-ROSTER-UPLOAD Phase B-1：applyDataCenterMarkerPointer()", () => {
     expect(bySubSite.get("2026-09-04")).toBe("數據中心");
   });
 
-  it("唔同 row_index（下一位安員）唔會俾上一行嘅 marker 影響——天然邊界", () => {
+  it("唔同 row_index（下一位保安員）唔會俾上一行嘅 marker 影響——天然邊界", () => {
     const rows = [
       cell({ rowIndex: 10, workDate: "2026-09-01", rawCode: "數據中心", codeKind: "marker" }),
       cell({ rowIndex: 10, workDate: "2026-09-02", rawCode: "N", codeKind: "shift" }),

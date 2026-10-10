@@ -1,7 +1,7 @@
 // WP-ONE-CLICK-AUTO（§31.3 B）：更數異常自動解釋。
 //
 // 口徑：「計數更次」＝更表 shift 格排除 external（雞頭種類 external、rank／姓名命中 external 別名、
-// 安員係 external 類）同 leave／ot／marker。同上月「計數更次」比較，差異 >30%（或連 external 一齊計嘅
+// 保安員係 external 類）同 leave／ot／marker。同上月「計數更次」比較，差異 >30%（或連 external 一齊計嘅
 // 原始格數差 >30%）就拆；每格只歸一個成分（順序：重複行 → 公司兵 → 子盤變化 → 雞頭組成），
 // 成分＋截短推算＋剩餘＝差額（`components`）。Postorder 同盤更數（±5% 且最少 ±3）一致就當解釋晒。
 // needs_human：剩餘 >20 更，或（>15% 而且 >5 更）（主規劃決定；文件 §31.3 B 舊寫法已更新）。

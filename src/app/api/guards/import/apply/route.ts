@@ -29,9 +29,9 @@ export async function POST(req: Request) {
     await assertBankPermissionForPackage(session, pkg);
     const pii = await hasPermission(session, "安員個人資料", "view");
     if (hashPackage(pkg) !== body.package_hash) throw Conflict("導入包同預覽唔一致，請重新預覽", { field: "package_hash" });
-    // decisions.ext（繞過自動寫入閘）要「安員個人資料:view」＋「安員:update」
+    // decisions.ext（繞過自動寫入閘）要「保安員個人資料:view」＋「保安員:update」
     const hasExtDecision = !!decisions && Object.values(decisions).some((d) => d.ext && Object.values(d.ext).some((a) => a !== "skip"));
-    if (hasExtDecision && !(pii && (await hasPermission(session, "安員", "update")))) throw Forbidden("呢類決定要有安員個人資料查看＋安員修改權限嘅同事做");
+    if (hasExtDecision && !(pii && (await hasPermission(session, "安員", "update")))) throw Forbidden("呢類決定要有保安員個人資料查看＋保安員修改權限嘅同事做");
     const canOverwritePii = await hasPermission(session, "安員個人資料", "update");
     const canEditGuard = await hasPermission(session, "安員", "update");
     const bankView = await hasPermission(session, "安員銀行資料", "view");

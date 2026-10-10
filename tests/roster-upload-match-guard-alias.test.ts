@@ -1,4 +1,4 @@
-// WP-GUARD-FIX（老闆 2026-09-25 要求）：「安員別名」配對——純函數單元
+// WP-GUARD-FIX（老闆 2026-09-25 要求）：「保安員別名」配對——純函數單元
 // 測試（`src/lib/roster-upload/match.ts` `buildGuardMatchIndex()`／
 // `matchGuard()`）。全部姓名／電話／工號都係虛構測試值，唔可以出現真名
 // （鐵則）。配對次序：(1) 工號 →(2) 姓名∪別名＋電話 →(3) 姓名∪別名
@@ -118,7 +118,7 @@ describe("驗收（Opus 5.5）：工號衝突保守預設 guard_match_overrides"
     expect(matchGuard({ staffNoRaw: "U88880011", nameRaw: "測試甲", telRaw: null }, build([]))).toMatchObject({ guardId: null, guardMatch: "ambiguous", staffNoBelongsToOther: true });
   });
 
-  it("有完全相同「工號＋姓名」override → 配到獨立安員，標 matchedViaStaffNoConflictOverride", () => {
+  it("有完全相同「工號＋姓名」override → 配到獨立保安員，標 matchedViaStaffNoConflictOverride", () => {
     const r = matchGuard({ staffNoRaw: "u88880011", nameRaw: " 測試甲 ", telRaw: null }, build([{ staffNo: "U88880011", nameRaw: "測試甲", guardId: "gNew" }]));
     expect(r).toMatchObject({ guardId: "gNew", guardMatch: "by_name", matchedViaStaffNoConflictOverride: true, staffNoBelongsToOther: false });
   });

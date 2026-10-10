@@ -26,7 +26,7 @@ export function fmtDateTime(v: unknown): string {
   return d.toLocaleString("zh-HK", { hour12: false });
 }
 
-/** 許可證喺 60 日內或已過期——安員名冊高亮用。 */
+/** 許可證喺 60 日內或已過期——保安員名冊高亮用。 */
 export function isExpiringSoon(dateStr: unknown, withinDays = 60): boolean {
   if (!dateStr) return false;
   const d = new Date(String(dateStr));
@@ -42,10 +42,10 @@ export function isExpired(dateStr: unknown): boolean {
   return d.getTime() < Date.now();
 }
 
-/** 顯示層改名（老闆 2026-09-12）：「安員」一律顯示做「保安員」。權限模組 key
- * （安員／自己安員）同角色名（安員）係內部識別，唔改，只喺顯示時經呢個對照。 */
+/** 顯示層改名（老闆 2026-09-12）：舊稱一律顯示做「保安員」。權限模組 key
+ * 同角色名仍係舊稱（內部識別，唔改），只喺顯示時經呢個對照（module 見 rbac/labels.ts）。 */
 export function uiLabel(s: string): string {
-  return s.replace(/(?<!保)安員/g, "保安員");
+  return s.replace(/(?<!保)保安員/g, "保安員");
 }
 
 const ZH_WEEKDAY = ["日", "一", "二", "三", "四", "五", "六"];

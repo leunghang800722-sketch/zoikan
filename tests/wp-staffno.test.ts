@@ -147,7 +147,7 @@ describe("WP-STAFFNO §2：legacy 欄同步 + PATCH /api/guards/:id 舊寫法", 
 
   // B（老闆 2026-09-19 拍板業務規則 (4)：離職後編號取消，永遠唔復用）：
   // 原本「冇 current 就寫 null」——而家改做 fallback 用「最近取消」嗰行，
-  // 等呢個安員舊月份嘅更表／匯出仲顯示得返個 U 號（唔會因為取消咗就變
+  // 等呢個保安員舊月份嘅更表／匯出仲顯示得返個 U 號（唔會因為取消咗就變
   // 空白，見 src/lib/guards/staff-numbers.ts syncLegacyStaffNoColumns()）。
   // 完整嘅 fallback 場景測試見 §23。
   it("將現用 U 轉 former（冇第二個 U）→ guards.staff_no 唔變 null，fallback 用返嗰個已取消嘅號", async () => {
@@ -201,7 +201,7 @@ describe("WP-STAFFNO §2：legacy 欄同步 + PATCH /api/guards/:id 舊寫法", 
     const res = await guardCreate(
       req("http://test.local/api/guards", ownerCookie, "POST", {
         staff_no: "U90060",
-        name_zh: "測試新安員",
+        name_zh: "測試新保安員",
         employment_type: "cash_casual",
       }),
     );
@@ -312,7 +312,7 @@ describe("WP-STAFFNO §4：雞頭隔離——讀自己人 200、讀人哋 404、
     expect(res.status).toBe(404);
   });
 
-  it("雞頭A 幫自己人加工號 → 403（硬性——唔可以寫，唔靠矩陣「自己安員:update」出廠 off 個 cell）", async () => {
+  it("雞頭A 幫自己人加工號 → 403（硬性——唔可以寫，唔靠矩陣「自己保安員:update」出廠 off 個 cell）", async () => {
     const res = await staffNumberCreate(
       req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, brokerACookie, "POST", { scheme: "U", number: "U90300" }),
       { params: Promise.resolve({ id: fx.guardA.id }) },
@@ -511,8 +511,8 @@ describe("WP-STAFFNO §9（M2）：雞頭寫 staff_no*／409 guard_id 白名單"
     expect(res.status).toBe(403);
   });
 
-  it("(a) 雞頭 PATCH 帶普通欄（冇 staff_no）→ 唔會因為呢個修復被額外擋（開咗「自己安員:update」之後照樣 200）", async () => {
-    // 「自己安員:update」出廠 off（雞頭預設淨係讀自己名冊，見矩陣）——
+  it("(a) 雞頭 PATCH 帶普通欄（冇 staff_no）→ 唔會因為呢個修復被額外擋（開咗「自己保安員:update」之後照樣 200）", async () => {
+    // 「自己保安員:update」出廠 off（雞頭預設淨係讀自己名冊，見矩陣）——
     // 要模擬老闆已經開咗呢個基本閘嘅狀態，先可以驗證 M2a 呢個修復（擋
     // `staff_no`／`staff_no_mw`）冇連累埋普通欄一齊被擋（同
     // wp-pii-field-groups.test.ts 會計銀行戶口嗰個 test 一致手法）。
@@ -1132,7 +1132,7 @@ describe("WP-STAFFNO §20（必修4）：乙類滿70歲失效 flag（sia_permit_
     expect(row?.sia_permit_b_lapsed_by_age).toBe(true);
   });
 
-  it("Fable5.1（私隱保守）：雞頭白名單冇呢粒 key（呢個 flag 等於間接話俾雞頭知安員個人資料——滿70歲/生日，雞頭冇「安員個人資料」view 權）", async () => {
+  it("Fable5.1（私隱保守）：雞頭白名單冇呢粒 key（呢個 flag 等於間接話俾雞頭知保安員個人資料——滿70歲/生日，雞頭冇「保安員個人資料」view 權）", async () => {
     await prisma.guard.update({
       where: { id: fx.guardA.id },
       data: { dateOfBirth: new Date("1950-01-01T00:00:00.000Z"), siaPermitAExpiry: null, siaPermitBExpiry: new Date("2030-01-01T00:00:00.000Z") },
@@ -1210,7 +1210,7 @@ describe("WP-STAFFNO §22（必修5）：number 正規化去空白包埋 NBSP（
 });
 
 // B（老闆 2026-09-19 拍板業務規則 (4)：離職後編號取消，永遠唔復用）：
-// `syncLegacyStaffNoColumns()` 原本「冇 current 就寫 null」會令一個安員
+// `syncLegacyStaffNoColumns()` 原本「冇 current 就寫 null」會令一個保安員
 // 離職（U 號取消）之後，佢舊月份嘅更表／匯出／`gate:export` 對數就會漏咗
 // 個 U 號（`guards.staff_no` 變晒 null）。而家 fallback 用「最近取消」嗰
 // 一行——呢度用 POST／PATCH .../staff-numbers* 兩條 route（唔直接 call
@@ -1273,7 +1273,7 @@ describe("WP-STAFFNO §23（B）：syncLegacyStaffNoColumns legacy 欄 fallback�
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: fx.guardA.id } })).staffNo).toBe("U92012");
   });
 
-  it("Opus 覆核 S1：已取消號嘅歷史顯示值撞到另一個安員嘅舊工號欄——唔阻住取消（唔 409），保留原值", async () => {
+  it("Opus 覆核 S1：已取消號嘅歷史顯示值撞到另一個保安員嘅舊工號欄——唔阻住取消（唔 409），保留原值", async () => {
     const created = await staffNumberCreate(
       req(`http://test.local/api/guards/${fx.guardA.id}/staff-numbers`, ownerCookie, "POST", { scheme: "U", number: "U92021" }),
       { params: Promise.resolve({ id: fx.guardA.id }) },

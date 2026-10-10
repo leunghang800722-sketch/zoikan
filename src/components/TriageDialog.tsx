@@ -50,7 +50,7 @@ interface Question {
   kind_label: string;
   status: string;
   title?: string;
-  /** 銀行題而你冇「安員銀行資料」修改權：內容收埋 */
+  /** 銀行題而你冇「保安員銀行資料」修改權：內容收埋 */
   restricted?: boolean;
   options: Option[];
   evidence: {
@@ -85,33 +85,33 @@ const isSupp = (k: string) => SUPP_KINDS.includes(k);
 export const REASON_LABEL: Record<string, string> = {
   name_not_confirmed: "姓名未能確認（身份證副本讀數唔一致或者未核對）",
   create_no_name: "導入包冇姓名",
-  hkid_not_confirmed_no_other_key: "身份證號未確認，又冇工號／電話可以對上現有安員",
+  hkid_not_confirmed_no_other_key: "身份證號未確認，又冇工號／電話可以對上現有保安員",
   create_hkid_not_confirmed: "身份證號未確認",
-  guard_has_other_hkid_unconfirmed: "同名現有安員已有另一個身份證號，而導入包嘅身份證號未確認",
+  guard_has_other_hkid_unconfirmed: "同名現有保安員已有另一個身份證號，而導入包嘅身份證號未確認",
   extract_fail: "證件讀取失敗／冇可用嘅身份證號",
-  tel_only_candidate: "淨係電話對到現有安員，其他資料對唔上",
-  name_only_candidate: "淨係姓名對到現有安員，冇硬證據",
-  name_multi_candidate: "有幾個同名嘅現有安員",
-  same_name_different_dob: "同名現有安員，但出生日期唔同",
+  tel_only_candidate: "淨係電話對到現有保安員，其他資料對唔上",
+  name_only_candidate: "淨係姓名對到現有保安員，冇硬證據",
+  name_multi_candidate: "有幾個同名嘅現有保安員",
+  same_name_different_dob: "同名現有保安員，但出生日期唔同",
   staffno_shared_by_persons: "同一個工號出現喺導入包內多個人",
   dup_tel_across_persons: "同一個電話出現喺導入包內多個人",
   group_name_differs: "同一個身份證喺唔同檔案嘅姓名唔一致",
   duplicate_hkid_in_package: "導入包內有重複身份證",
   duplicate_key_in_package: "導入包內有重複記錄",
-  hkid_multi_guard: "多個現有安員用同一個身份證號",
-  staffno_multi_guard: "工號對到多個現有安員",
-  hkid_vs_staffno_differ: "身份證同工號指向唔同嘅現有安員",
-  guard_hkid_differs: "現有安員已有另一個身份證號",
-  tel_belongs_to_other_guard: "電話屬於另一個現有安員",
-  tel_guard_has_other_hkid: "電話對到嘅現有安員有另一個身份證號",
-  tel_multi_guard: "電話對到多個現有安員",
-  name_differs_from_guard: "姓名同現有安員紀錄唔同",
-  same_name_different_hkid: "同名但現有安員嘅身份證號唔同",
-  forced_guard_missing: "揀咗嘅安員已經唔存在",
-  hkid_belongs_to_other_guard: "呢個身份證號已屬於另一個安員",
+  hkid_multi_guard: "多個現有保安員用同一個身份證號",
+  staffno_multi_guard: "工號對到多個現有保安員",
+  hkid_vs_staffno_differ: "身份證同工號指向唔同嘅現有保安員",
+  guard_hkid_differs: "現有保安員已有另一個身份證號",
+  tel_belongs_to_other_guard: "電話屬於另一個現有保安員",
+  tel_guard_has_other_hkid: "電話對到嘅現有保安員有另一個身份證號",
+  tel_multi_guard: "電話對到多個現有保安員",
+  name_differs_from_guard: "姓名同現有保安員紀錄唔同",
+  same_name_different_hkid: "同名但現有保安員嘅身份證號唔同",
+  forced_guard_missing: "揀咗嘅保安員已經唔存在",
+  hkid_belongs_to_other_guard: "呢個身份證號已屬於另一個保安員",
   apply_failed: "套用失敗，請稍後再試",
-  overwrite_forbidden: "要有安員個人資料／安員修改權限嘅同事處理",
-  staffno_belongs_to_other: "有工號屬於另一個安員",
+  overwrite_forbidden: "要有保安員個人資料／保安員修改權限嘅同事處理",
+  staffno_belongs_to_other: "有工號屬於另一個保安員",
   staffno_scheme_has_other_current: "有工號同現有工號類別重複",
   staffno_invalid: "有工號格式唔合法",
   bank_copy_disagrees: "銀行卡／存摺副本同 Payroll Editor 戶口唔一致",
@@ -149,10 +149,10 @@ function FieldRow({ label, f }: { label: string; f: Field }) {
   );
 }
 
-/** 銀行戶口：預設淨顯示尾 4 位；有「安員銀行資料:view」先有「顯示全號」，撳先出（確認寫入前核對用）。 */
+/** 銀行戶口：預設淨顯示尾 4 位；有「保安員銀行資料:view」先有「顯示全號」，撳先出（確認寫入前核對用）。 */
 function BankLine({ b }: { b: NonNullable<ExtView["bank"]> }) {
   const [full, setFull] = useState(false);
-  if (b.hidden) return <div className="text-[13px] text-zk-faint" data-testid="bank-hidden">銀行資料（你冇「安員銀行資料」睇權，內容唔顯示）</div>;
+  if (b.hidden) return <div className="text-[13px] text-zk-faint" data-testid="bank-hidden">銀行資料（你冇「保安員銀行資料」睇權，內容唔顯示）</div>;
   return (
     <div className="flex flex-wrap items-center gap-x-2 text-[13px]" data-testid="bank-line">
       <span className="w-[72px] shrink-0 text-zk-faint">銀行</span>
@@ -210,7 +210,7 @@ function PersonCard({ q }: { q: Question }) {
       <div className="space-y-1 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="triage-unassigned">
         <div className="text-[12px] font-semibold text-zk-muted">Payroll Editor 嘅戶口（對唔到人）</div>
         {u.hidden ? (
-          <div className="text-[13px] text-zk-faint">你冇「安員銀行資料」睇權，內容唔顯示。</div>
+          <div className="text-[13px] text-zk-faint">你冇「保安員銀行資料」睇權，內容唔顯示。</div>
         ) : (
           <BankLine b={{ status: "review", code: u.bank_code, name: u.bank_name, account_masked: u.account_masked, account_full: u.account_full, payee_name: u.payee_name }} />
         )}
@@ -234,7 +234,7 @@ function PersonCard({ q }: { q: Question }) {
         </div>
       )}
       <ExtLines ext={p.ext} />
-      {!q.evidence.pii_visible && <div className="text-[11.5px] text-zk-faint">你冇「安員個人資料」權限，身份證／電話／地址已遮罩，出生日期唔顯示。</div>}
+      {!q.evidence.pii_visible && <div className="text-[11.5px] text-zk-faint">你冇「保安員個人資料」權限，身份證／電話／地址已遮罩，出生日期唔顯示。</div>}
     </div>
   );
 }
@@ -242,9 +242,9 @@ function PersonCard({ q }: { q: Question }) {
 function CandidateCard({ c, idx }: { c: Candidate; idx: number }) {
   return (
     <div className="space-y-0.5 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="triage-candidate">
-      <div className="text-[12px] font-semibold text-zk-muted">現有安員（候選 {idx + 1}）</div>
+      <div className="text-[12px] font-semibold text-zk-muted">現有保安員（候選 {idx + 1}）</div>
       <div>
-        {c.name_hidden ? <span className="text-zk-faint">姓名同導入包唔同（要有安員個人資料權限先睇到）</span> : c.name_zh}
+        {c.name_hidden ? <span className="text-zk-faint">姓名同導入包唔同（要有保安員個人資料權限先睇到）</span> : c.name_zh}
         {c.name_en ? <span className="ml-1 text-zk-faint">{c.name_en}</span> : null}
       </div>
       <div className="text-zk-muted">
@@ -452,7 +452,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     (selected?.id !== "apply_fields" || Object.keys(fields).length > 0) &&
     (selected?.id !== "apply_ext_fields" || Object.keys(extChoices).length > 0) &&
     (selected?.id !== "assign_bank" || !!selected.guard_id || !!pickedGuard);
-  // 冇修改權限：「改正後確認」選項本身停用（server 一樣會 403）。出生日期／地址要「安員個人資料」修改權；姓名要「安員」修改權
+  // 冇修改權限：「改正後確認」選項本身停用（server 一樣會 403）。出生日期／地址要「保安員個人資料」修改權；姓名要「保安員」修改權
   // 只有覆蓋現有非空值先要權限：欄位現有係空（check=fill）或者新建（new）屬補空欄，得
   const replaceDenied = (f: string, check: string): boolean => {
     if (!q || check === "fill" || check === "new") return false;
@@ -521,7 +521,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               </div>
               {q.restricted && (
                 <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px]" data-testid="triage-restricted">
-                  要有安員銀行資料權限嘅同事處理。你可以按「遲啲先答」，由老闆或有權限嘅同事跟進。
+                  要有保安員銀行資料權限嘅同事處理。你可以按「遲啲先答」，由老闆或有權限嘅同事跟進。
                 </div>
               )}
               <PersonCard q={q} />

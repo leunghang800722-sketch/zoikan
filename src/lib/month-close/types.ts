@@ -7,7 +7,7 @@ import type { AutoReport } from "./auto/types";
 // 鐵則：呢度嘅 `warnings`／`needsHuman` 一律唔准帶姓名／工號／電話——
 // 淨係盤名／雞頭代號／數目（同 `guard-fix/plan.ts` needsBoss「盤＋格數
 // ＋原因」一致紀律），因為 `report_json` 經「一鍵結算」module 嘅 view
-// 會俾主管睇到（主管出廠未必有「安員個人資料」view）。
+// 會俾主管睇到（主管出廠未必有「保安員個人資料」view）。
 
 export const STEP_KEYS = [
   "precheck",
@@ -26,7 +26,7 @@ export type StepKey = (typeof STEP_KEYS)[number];
 export const STEP_LABELS: Record<StepKey, string> = {
   precheck: "前置檢查",
   parse_health: "解析健康",
-  guard_fix: "安員修復",
+  guard_fix: "保安員修復",
   longterm_settlement: "長工結算",
   reconcile_apply: "全月對數套用",
   auto_pricing: "自動歸屬／定價",

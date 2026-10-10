@@ -1,6 +1,6 @@
 // WP-LTPAY §21 任務 5d：`GET/POST/PATCH/DELETE /api/longterm/inputs`
-// integration test——RBAC（module「長工糧」同「安員銀行資料」一致粒度）＋
-// 月鎖後唯讀＋作廢（軟刪）行為。合成安員／合約（PDPO：冇真名/真工號）。
+// integration test——RBAC（module「長工糧」同「保安員銀行資料」一致粒度）＋
+// 月鎖後唯讀＋作廢（軟刪）行為。合成保安員／合約（PDPO：冇真名/真工號）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -36,7 +36,7 @@ describe("/api/longterm/inputs", () => {
     });
   });
 
-  it("主管／雞頭／安員 GET/POST 一律 403（同安員銀行資料一致粒度）", async () => {
+  it("主管／雞頭／保安員 GET/POST 一律 403（同保安員銀行資料一致粒度）", async () => {
     for (const cookie of [supervisorCookie, brokerCookie, guardSelfCookie]) {
       const getRes = await listInputs(req("http://test.local/api/longterm/inputs", cookie));
       expect(getRes.status).toBe(403);
@@ -47,7 +47,7 @@ describe("/api/longterm/inputs", () => {
     }
   });
 
-  it("老闆新增津貼項成功，GET 列出（join 埋安員姓名）", async () => {
+  it("老闆新增津貼項成功，GET 列出（join 埋保安員姓名）", async () => {
     const createRes = await createInput(
       req("http://test.local/api/longterm/inputs", ownerCookie, "POST", { month: "2026-08-01", guard_id: guardId, kind: "special_allowance", amount: 500, note: "測試勤工獎" }),
     );

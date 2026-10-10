@@ -3,7 +3,7 @@
 // 加「本月更數」欄（GET /api/guards?with_month_shifts=YYYY-MM，additive
 // 唯讀參數，見 src/app/api/guards/route.ts）同「搜尋 姓名/工號/電話」
 // filter（純前端篩選 rows，唔加新 API）。雞頭登入呢頁本身已經淨係見自
-// 己安員（API scopeGuardWhere() 隔離，未改）。
+// 己保安員（API scopeGuardWhere() 隔離，未改）。
 //
 // A3（Opus 整合驗收）：呢個 client component 由 `./page.tsx`（server
 // component，攞 session）傳 `isBroker` 落嚟，跟 `my-receivable` 果頁
@@ -72,7 +72,7 @@ interface GuardRow {
   identity_status?: "complete" | "missing_hkid" | "missing_tel" | "missing_both";
   identity_review_fields?: string[];
   // WP-PII：新欄一律 optional——response 有冇呢粒 key 視乎 field-group
-  // gate（冇「安員個人資料/安員銀行資料:view」成粒 key 都唔會出現，
+  // gate（冇「保安員個人資料/保安員銀行資料:view」成粒 key 都唔會出現，
   // 唔係值做 null），見 src/lib/api/field-groups.ts。
   hkid?: string | null;
   date_of_birth?: string | null;
@@ -80,7 +80,7 @@ interface GuardRow {
   emergency_contact_name?: string | null;
   emergency_contact_tel?: string | null;
   sia_permit_no?: string | null;
-  // WP-STAFFNO：甲／乙類到期日分開存——跟現有「安員」module（PATCH-only，
+  // WP-STAFFNO：甲／乙類到期日分開存——跟現有「保安員」module（PATCH-only，
   // 同 sia_permit_no 一致層級）。
   sia_permit_a_expiry?: string | null;
   sia_permit_b_expiry?: string | null;
@@ -110,11 +110,11 @@ interface GuardRow {
   referral_broker_id?: string | null;
   visa_sponsored_by_broker_id?: string | null;
   // WP-BOSS5 §25.2：詳情 GET 先有（唔喺列表 DTO），淨係 detail response
-  // 帶呢粒 key——true＝呢個安員嘅 `referral_broker_id` 曾經俾 migration
+  // 帶呢粒 key——true＝呢個保安員嘅 `referral_broker_id` 曾經俾 migration
   // 清走過（原本指住 Y／internal_cash，老闆決定 Y 唔可以做介紹雞頭）。
   referral_broker_migration_cleared?: boolean;
 }
-// WP-PHASE3（item 1）：安員抽屜「長工」區——盤名下拉／崗位盤列表用。
+// WP-PHASE3（item 1）：保安員抽屜「長工」區——盤名下拉／崗位盤列表用。
 interface SiteRow {
   id: string;
   canonical_name: string;
@@ -257,7 +257,7 @@ export function GuardsClient({
   canUpdateSettlement: boolean;
   canUpdatePii: boolean;
   canUpdateBank: boolean;
-  /** WP-GUARD-OCR §29：有 DEEPSEEK_API_KEY 同「安員批量導入」權限先顯示「用證件新增」 */
+  /** WP-GUARD-OCR §29：有 DEEPSEEK_API_KEY 同「保安員批量導入」權限先顯示「用證件新增」 */
   canOcr?: boolean;
 }) {
   const [rows, setRows] = useState<GuardRow[]>([]);
@@ -270,11 +270,11 @@ export function GuardsClient({
   // group gate 嘅結果）決定編輯抽屜顯唔顯示嗰個分區，唔靠前端自己判斷
   // 權限（單一事實來源：backend response 形狀）。
   const [hasPiiField, setHasPiiField] = useState(true);
-  // 搜尋框 placeholder：列表 row 有 `hkid` key（＝session 有「安員個人資料」view，API 先會用 q 配身份證）
+  // 搜尋框 placeholder：列表 row 有 `hkid` key（＝session 有「保安員個人資料」view，API 先會用 q 配身份證）
   // 先顯示「身份證」；預設 false（唔洩露權限），有 row 先更新，冇 row 保持上一個值。
   const [searchHasHkid, setSearchHasHkid] = useState(false);
   const [hasBankField, setHasBankField] = useState(true);
-  // WP-BOSS5 §25.2：呢個安員嘅介紹雞頭曾經俾 migration 清走（原本係
+  // WP-BOSS5 §25.2：呢個保安員嘅介紹雞頭曾經俾 migration 清走（原本係
   // Y／internal_cash）——detail GET 先知，淨係編輯模式先有值。
   const [referralBrokerMigrationCleared, setReferralBrokerMigrationCleared] = useState(false);
   // WP-PII：牌照/平安卡/入職離職日期（GuardCreateSchema 冇，PATCH-only）
@@ -383,7 +383,7 @@ export function GuardsClient({
   const [contactEditingId, setContactEditingId] = useState<string | null>(null);
   const [contactEditForm, setContactEditForm] = useState({ name: "", tel: "", relationship: "", note: "" });
 
-  // WP-PHASE3（§20.4 Phase 3 item 1）：安員抽屜「長工」區——崗位盤（`GET/
+  // WP-PHASE3（§20.4 Phase 3 item 1）：保安員抽屜「長工」區——崗位盤（`GET/
   // POST/PATCH /api/guards/:id/longterm-posts`）。`sites` 淨係揀盤下拉用
   // （呢頁之前完全冇載盤清單）。
   const [sites, setSites] = useState<SiteRow[]>([]);
@@ -733,7 +733,7 @@ export function GuardsClient({
     // 逼佢一次過填晒先儲得到）。
     //
     // Opus 驗收必修 2：夾唔夾落 body 用 `canUpdatePii`/`canUpdateBank`
-    // （grants，「安員個人資料/安員銀行資料:update」）判斷，唔用
+    // （grants，「保安員個人資料/保安員銀行資料:update」）判斷，唔用
     // `hasPiiField`/`hasBankField`（view-based，「response 有冇呢粒
     // key」）——後者純粹決定分區顯唔顯示；有 view 冇 update 嘅角色
     // （理論上出廠矩陣兩個 action 一致開關，但自訂角色可以拆開）見到
@@ -795,8 +795,8 @@ export function GuardsClient({
           if (form.bank_code) body.bank_code = form.bank_code;
         }
       }
-      // 牌照/平安卡/入職離職日期跟現有「安員」module，唔受 hasPiiField/
-      // hasBankField 影響（有 `安員:update` 就見得/改得到）；
+      // 牌照/平安卡/入職離職日期跟現有「保安員」module，唔受 hasPiiField/
+      // hasBankField 影響（有 `保安員:update` 就見得/改得到）；
       // hasLicenceExtraField 一樣係「response 形狀」判斷，雞頭冇呢批
       // key，自動唔會夾落 body。
       if (hasLicenceExtraField) {
@@ -822,7 +822,7 @@ export function GuardsClient({
         body.leave_date = form.leave_date || null;
       }
       // WP-PHASE3（item 1）：長工介紹雞頭／簽證形式贊助雞頭——冇獨立
-      // field-group，跟「安員」module（同 employment_type 一致層級）；
+      // field-group，跟「保安員」module（同 employment_type 一致層級）；
       // `!isBroker` 純粹保守（呢兩個 input 本身淨係喺 `!isBroker` 先
       // render，呢度加多一層唔靠淨係 UI 冇 render 就保證唔送）。一律送
       // `|| null`（可以清空）。
@@ -1392,7 +1392,7 @@ export function GuardsClient({
   // 嘅 diffDays 係負數，一樣會 `<=90`，但呢度優先判 `isExpired` 出紅）。
   // Fable5.1（4 個細修 1）：原本必修 4 個做法係將「乙類已失效」塞喺
   // `!expiry` 分支入面——但 `expiry` 呢度傳嘅係 `earlierExpiry(牌照,
-  // 平安卡)`，安員平安卡（safety_card_expiry）仲有效嗰陣 `expiry` 就唔
+  // 平安卡)`，保安員平安卡（safety_card_expiry）仲有效嗰陣 `expiry` 就唔
   // 會係 falsy，成粒 pill 會跌落「有效」綠色分支，完全冚蓋咗「乙類已
   // 失效」呢個警示，用戶睇唔出。改法：`licenceExpiryPill()` 淨係反映
   // `expiry`（最近到期日）本身，「乙類已失效」拆做獨立
@@ -1980,7 +1980,7 @@ export function GuardsClient({
             <input className={inputCls} value={form.polo_size} onChange={(e) => setForm((f) => ({ ...f, polo_size: e.target.value }))} />
           </Field>
 
-          {/* WP-PHASE3（§20.4 Phase 3 item 1）：安員抽屜「長工」區——老闆／
+          {/* WP-PHASE3（§20.4 Phase 3 item 1）：保安員抽屜「長工」區——老闆／
               主管；雞頭（`isBroker`）結構性唔見（呢個 component 雞頭
               session 根本唔會行到呢個分支，`!isBroker` 淨係防禦性）。
               淨係編輯先顯示（同員工編號／電話等子資源一致——新增保安員
@@ -2252,7 +2252,7 @@ export function GuardsClient({
           {/* WP-STAFFNO：員工編號獨立表——新增保安員嗰陣（`!editingId`）
               個 guard 仲未存在，`POST .../staff-numbers` 用唔到，同牌照/
               PII/銀行分區一致做法，淨係編輯先顯示。雞頭（`isBroker`）
-              可以見到（`GET .../staff-numbers` 跟「自己安員:view」，出廠
+              可以見到（`GET .../staff-numbers` 跟「自己保安員:view」，出廠
               有），但冇「新增編號」表單——「雞頭視角：chips 只讀，冇新增
               掣」（老闆決定原文）。 */}
           {editingId && (
@@ -2366,7 +2366,7 @@ export function GuardsClient({
           {editingId && hasPiiField && (
             <>
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">個人資料</h3>
-              <Field label="身份證號碼" hint="格式例：A123456(3)；系統會驗 check digit，同另一位安員重複會擋">
+              <Field label="身份證號碼" hint="格式例：A123456(3)；系統會驗 check digit，同另一位保安員重複會擋">
                 <input className={inputCls} value={form.hkid} onChange={(e) => setForm((f) => ({ ...f, hkid: e.target.value }))} />
               </Field>
               <label className="flex items-center gap-2 text-xs text-zk-faint">

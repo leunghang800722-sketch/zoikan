@@ -1,4 +1,4 @@
-// WP-AI-OPS 驗收（第三輪）：非老闆導入規模限制（防止用批量 hkid／姓名探測現有安員）。老闆唔受限。
+// WP-AI-OPS 驗收（第三輪）：非老闆導入規模限制（防止用批量 hkid／姓名探測現有保安員）。老闆唔受限。
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/api/errors";
 import { writeAudit, writeAuditTx } from "@/lib/audit";

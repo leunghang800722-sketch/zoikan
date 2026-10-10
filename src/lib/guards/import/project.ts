@@ -1,4 +1,4 @@
-// WP-AI-OPS 驗收（第三輪）：冇「安員個人資料:view」讀者嘅**唯一**投影函數。
+// WP-AI-OPS 驗收（第三輪）：冇「保安員個人資料:view」讀者嘅**唯一**投影函數。
 // 原則：先遮罩逐行結果，再由遮罩後嘅 rows／results 重新彙總——唔准直接回由未遮罩資料計出嚟嘅數，
 // 否則頂層計數（field_conflicts 等）會反映「估啱／估錯現有出生日期、地址、電話、英文名」。
 // preview、apply（包括帶 decisions）都經呢度；分診 impact 用同一套規則（src/lib/triage/view.ts）。
@@ -8,7 +8,7 @@ import { sameNameStrict } from "./text";
 import { aggregateExt, isBankKey, isEmergencyKey, maskExtChecks, type ExtItem } from "./ext";
 import { summarizeExt } from "./apply";
 
-/** 讀者權限：pii＝「安員個人資料:view」；bank＝「安員銀行資料:view」。 */
+/** 讀者權限：pii＝「保安員個人資料:view」；bank＝「保安員銀行資料:view」。 */
 export interface ProjectionViewer {
   pii: boolean;
   bank: boolean;
@@ -18,9 +18,9 @@ export interface ProjectionViewer {
 const COMPARED: PersonField[] = ["hkid", "dateOfBirth", "phone", "address", "nameEn", "nameZh"];
 /** 呢幾個 check 值代表「現有欄位非空」——要遮；`fill`（現有係空）同 `new` 唔洩露比較結果，保留。 */
 const HIDDEN_CHECKS = new Set(["same", "differs", "conflict"]);
-/** 淨洩露「姓名同現有安員唔同」嘅 reason code（已有 current_name_hidden 旗，唔再重複）。 */
+/** 淨洩露「姓名同現有保安員唔同」嘅 reason code（已有 current_name_hidden 旗，唔再重複）。 */
 export const NAME_REASONS = new Set(["name_differs_from_guard"]);
-/** 戶口已屬另一位安員：冇「安員銀行資料:view」唔回（否則變戶口存在 oracle） */
+/** 戶口已屬另一位保安員：冇「保安員銀行資料:view」唔回（否則變戶口存在 oracle） */
 export const BANK_TAKEN_REASON = "bank_acct_belongs_to_other";
 
 function basisCategory(b: string): string {
@@ -40,7 +40,7 @@ function maskRow(r: PreviewRow, v: ProjectionViewer): PreviewRow {
   return {
     ...r,
     ...(maskedExt ? { ext: maskedExt.map((i) => ({ key: i.key, status: i.status, check: i.check, ...(i.held ? { held: i.held } : {}) })) } : {}),
-    // 冇「安員銀行資料:view」：銀行戶口連尾 4 位都唔回（淨係話「有銀行資料」）
+    // 冇「保安員銀行資料:view」：銀行戶口連尾 4 位都唔回（淨係話「有銀行資料」）
     ...(r.bank_masked && !v.bank ? { bank_masked: { present: true as const } } : {}),
     reasons,
     ...(v.pii

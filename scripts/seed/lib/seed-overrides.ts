@@ -15,7 +15,7 @@ const SEED_OVERRIDES_JSON = DATA("mappings-private/seed-overrides.json");
 interface SeedOverrides {
   knownUnmappedSettlementUnits?: string[];
   // P1-WP4 WP1 遺留 item 5：長工月薪缺數（guards.csv/longterm_staff_
-  // 2026-07.csv 冇填 monthly_salary 嘅 longterm_autopay 安員）。權威來源
+  // 2026-07.csv 冇填 monthly_salary 嘅 longterm_autopay 保安員）。權威來源
   // 本應係 data/2026-07/reference/ 嗰份 BOCHK autopay 發薪檔（Excel
   // VelvetSweatshop 加密，P0 tools 用 msoffcrypto+xlrd 解），但呢部開發
   // 機冇裝任何 python 套件（連 requirements.txt 列嘅 openpyxl 都冇裝到，

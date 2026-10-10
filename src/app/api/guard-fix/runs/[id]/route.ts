@@ -1,5 +1,5 @@
 // WP-GUARD-FIX-UI：`GET /api/guard-fix/runs/:id`——單一 run 詳情（摘要
-// 卡＋needs_boss 逐條，PII 受「安員個人資料:view」gate）。
+// 卡＋needs_boss 逐條，PII 受「保安員個人資料:view」gate）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { brandSafeResponse } from "@/lib/api/serialize";

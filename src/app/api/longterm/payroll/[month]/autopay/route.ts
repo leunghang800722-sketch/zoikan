@@ -20,7 +20,7 @@ import { writeAudit } from "@/lib/audit";
 import { buildBochkAutopayWorkbook } from "@/lib/longterm-payroll/bochk-autopay-export";
 import { prisma } from "@/lib/db";
 
-/** M5：已鎖月份嘅 autopay 金額係快照，但收款戶口係即時讀安員資料（補咗戶口之後匯出行數會變）→ 要提示，下載要確認，免重複出糧。 */
+/** M5：已鎖月份嘅 autopay 金額係快照，但收款戶口係即時讀保安員資料（補咗戶口之後匯出行數會變）→ 要提示，下載要確認，免重複出糧。 */
 const LOCKED_MONTH_WARNING = "呢個月已鎖定；收款戶口用緊而家嘅資料，匯出前請確認呢個月未出過糧";
 
 export async function GET(req: Request, { params }: { params: Promise<{ month: string }> }) {

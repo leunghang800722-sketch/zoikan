@@ -109,8 +109,8 @@ describe("matchMaxwellRows", () => {
   const candidates: GuardCandidate[] = [
     { guardId: "g1", nameZh: "測試長工甲", staffNoMw: "MG9001", staffNo: null },
     { guardId: "g2", nameZh: "測試長工乙", staffNoMw: null, staffNo: null },
-    { guardId: "g3", nameZh: "撞名安員", staffNoMw: null, staffNo: null },
-    { guardId: "g4", nameZh: "撞名安員", staffNoMw: null, staffNo: null },
+    { guardId: "g3", nameZh: "撞名保安員", staffNoMw: null, staffNo: null },
+    { guardId: "g4", nameZh: "撞名保安員", staffNoMw: null, staffNo: null },
   ];
 
   it("MG 員工編號完全一致 → matched_staff_no", async () => {
@@ -130,7 +130,7 @@ describe("matchMaxwellRows", () => {
   });
 
   it("撞名（多過一個候選）→ unmatched，唔會亂咁揀一個", () => {
-    const row = { staffNo: null, name: "撞名安員" } as unknown as Parameters<typeof matchMaxwellRows>[0][number];
+    const row = { staffNo: null, name: "撞名保安員" } as unknown as Parameters<typeof matchMaxwellRows>[0][number];
     const [result] = matchMaxwellRows([row], candidates);
     expect(result.status).toBe("unmatched");
     expect(result.guardId).toBeNull();

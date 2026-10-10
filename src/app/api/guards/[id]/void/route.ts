@@ -10,7 +10,7 @@ import { writeAudit } from "@/lib/audit";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
-    // 雞頭角色喺 matrix.ts 「安員:void」係硬性 deny（限自己安員都唔包括
+    // 雞頭角色喺 matrix.ts 「保安員:void」係硬性 deny（限自己保安員都唔包括
     // void），所以呢度冇再額外做 broker scope——requirePermission 已經
     // 喺雞頭 role 嗰陣拋 403。
     const session = await requirePermission(req, "安員", "void");

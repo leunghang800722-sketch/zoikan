@@ -7,7 +7,7 @@
 // 同 P0 importer 唔同嘅地方（刻意簡化，Phase A 唔需要）：
 //   - 唔做 Total/所需人手/尚欠 嘅逐日對數（果套喺 P0 WP1 用嚟驗證匯入
 //     結果，Phase A「更表 vs 系統已報更」對數留返 Phase B，呢層淨係讀
-//     Total/所需人手/尚欠 三種標籤行嚟識別「呢行唔係安員行」，成行跳過，
+//     Total/所需人手/尚欠 三種標籤行嚟識別「呢行唔係保安員行」，成行跳過，
 //     唔生成 roster_upload_rows，亦唔理呢啲行自己嘅日格數值）。
 //   - 唔做 HKU Y更姓名 "(上)"/"(摩)" 後綴拆分、external marker 判斷——
 //     Phase A schema 冇 location_tag/is_external 呢類欄，呢層留返 Phase B
@@ -16,7 +16,7 @@
 //     Total/尚欠格先會中招，呢層根本唔讀呢啲格嘅數值。
 //
 // 輸出純結構（呢個檔案零 DB 依賴，`import type {} from "@/lib/db"` 都冇）
-// ——盤名/更別/安員/雞頭嘅對照留俾 `src/lib/roster-upload/match.ts`
+// ——盤名/更別/保安員/雞頭嘅對照留俾 `src/lib/roster-upload/match.ts`
 // （拎住呢度嘅輸出＋DB 查詢結果先做）。
 import ExcelJS from "exceljs";
 import { buildMapping, findDateHeaders, fieldCol, rawCell, LAYOUT_OFFSETS, type ColumnMapping, type LayoutName } from "./layout";
@@ -54,7 +54,7 @@ function asDate(value: unknown): Date | null {
 const ROSTER_SHEET_RE = /^20\d{2}(\.\d{1,2})?$/;
 
 export interface ParsedCellRow {
-  /** 原檔行號（呢個安員行嘅 row number），一個安員行可以有多個 ParsedCellRow（逐日一格）。 */
+  /** 原檔行號（呢個保安員行嘅 row number），一個保安員行可以有多個 ParsedCellRow（逐日一格）。 */
   rowIndex: number;
   subSiteName: string | null;
   workDate: string; // ISO date "YYYY-MM-DD"
@@ -269,9 +269,9 @@ function collectDateMergeGroups(ws: ExcelJS.Worksheet, row: number, startCol: nu
 
 /** WP-ROSTER-UPLOAD Phase B-1（B1-8 第 5 項）：CP5「數據中心」指針格
  * ——`code_kind=marker` 嘅「數據中心」格代表「呢個格之後（同一行，即
- * 同一個安員嗰條 `row_index`，跟住落嚟嘅日子）」轉咗去數據中心子盤，
+ * 同一個保安員嗰條 `row_index`，跟住落嚟嘅日子）」轉咗去數據中心子盤，
  * 直至（呢個 row_index 行本身完結）。逐個 `row_index` 天然就係「下一個
- * 標題」嘅邊界（一個安員一條完整月線），唔使額外追蹤空白段。淨係喺
+ * 標題」嘅邊界（一個保安員一條完整月線），唔使額外追蹤空白段。淨係喺
  * 呢行本身未由「子盤」欄（`subSite` 直接讀嘅值）填過先套用——有真實
  * 子盤欄值就尊重佢，唔畀 marker 蓋過去。
  *
@@ -337,7 +337,7 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
       if (isRowBlank(ws, r, mapping)) continue;
 
       const labelVal = clean(rawCell(ws, r, mapping.labelCol));
-      if (labelVal && STAT_ROW_LABELS.has(labelVal)) continue; // Total/所需人手/尚欠/早加夜——唔係安員行
+      if (labelVal && STAT_ROW_LABELS.has(labelVal)) continue; // Total/所需人手/尚欠/早加夜——唔係保安員行
 
       if (!hasIdentitySignal(ws, r, mapping)) {
         warnings.push({
@@ -358,7 +358,7 @@ function extractSheet(ws: ExcelJS.Worksheet, sheetName: string): ParsedSheet | {
       if (subSite) subSiteNames.add(subSite);
 
       if (nameRaw === null) {
-        warnings.push({ row: r, reason: "安員行冇姓名（Name 欄空白）但呢行有其他欄有值，懷疑 block 邊界判斷錯咗" });
+        warnings.push({ row: r, reason: "保安員行冇姓名（Name 欄空白）但呢行有其他欄有值，懷疑 block 邊界判斷錯咗" });
         continue;
       }
 

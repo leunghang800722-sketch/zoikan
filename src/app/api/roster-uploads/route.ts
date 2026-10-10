@@ -2,7 +2,7 @@
 // （逐盤狀態：未上載／已上載 vN／解析失敗）、`POST /api/roster-uploads`
 // （multipart：file、month、site_id 可選——即時存 bytes＋sha256→解析→
 // 存 rows→回 summary；同盤同月舊版自動 supersede）。`更表上載` module
-// ——老闆／主管／會計 G，雞頭／安員硬性 deny（`requirePermission()` 第
+// ——老闆／主管／會計 G，雞頭／保安員硬性 deny（`requirePermission()` 第
 // 一道閘已經擋晒，呢個 route 唔使額外雞頭隔離邏輯）。**唔寫入
 // shift_records**（Phase A 範圍）。
 //

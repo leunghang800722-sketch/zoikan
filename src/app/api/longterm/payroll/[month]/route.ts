@@ -1,10 +1,10 @@
 // WP-LTPAY §21 任務 5b：`GET /api/longterm/payroll/:month`——`/reports/
 // longterm-payroll` 頁面主資料源。讀最新一個未 void 嘅
 // `longterm_payroll_runs`／`_lines`（未跑過就 `run:null`／`lines:[]`，
-// 前端顯示「未計過，撳『重算本月』」）；逐行 join 埋安員姓名／工號
+// 前端顯示「未計過，撳『重算本月』」）；逐行 join 埋保安員姓名／工號
 // （PDPO：淨係呢兩個非敏感識別欄，銀行/身份證留喺 `/guards` 詳情頁）；
 // 帶埋上個月嘅 Gross／Autopay 做「同上月比較」。module「長工糧」
-// （老闆／會計，同「安員銀行資料」一致粒度）。
+// （老闆／會計，同「保安員銀行資料」一致粒度）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { toLongtermRunDTO, toLongtermLineWithGuardDTO } from "@/lib/longterm-payroll/dto";

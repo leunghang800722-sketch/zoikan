@@ -1,5 +1,5 @@
 "use client";
-// 1a 「要你睇」卡（橙邊）：4 欄按題型分組（定價／安員配對／結算雞頭／更數差異）各頭 2 題＋「再多 N 題 ›」。
+// 1a 「要你睇」卡（橙邊）：4 欄按題型分組（定價／保安員配對／結算雞頭／更數差異）各頭 2 題＋「再多 N 題 ›」。
 // 「開始逐條答」開現有 MonthCloseTriageDialog（桌面照用；手機 <768px 由 dialog 自己切 1e 一次一題）。
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";

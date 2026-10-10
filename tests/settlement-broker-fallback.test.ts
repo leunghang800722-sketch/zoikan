@@ -17,7 +17,7 @@ async function makeSite(name: string) {
 }
 async function makeGuard(employmentType: "cash_casual" | "longterm_autopay", defaultBrokerId: string | null = null) {
   return prisma.guard.create({
-    data: { nameZh: "測試安員", employmentType, defaultBrokerId, createdBy: "test:settlement-broker-fallback" },
+    data: { nameZh: "測試保安員", employmentType, defaultBrokerId, createdBy: "test:settlement-broker-fallback" },
   });
 }
 async function makeShiftType(siteId: string, code = "N") {
@@ -51,7 +51,7 @@ describe("resolveSettlementBrokerFallback（第 3-7 級 fallback 鏈）", () => 
     await clearAll();
   });
 
-  it("第 3 級：同一安員、同一盤，最近一條非作廢記錄嘅 settlement_broker_id", async () => {
+  it("第 3 級：同一保安員、同一盤，最近一條非作廢記錄嘅 settlement_broker_id", async () => {
     const brokerOld = await makeBroker("OLD");
     const brokerNew = await makeBroker("NEW");
     const site = await makeSite("盤A");
@@ -87,7 +87,7 @@ describe("resolveSettlementBrokerFallback（第 3-7 級 fallback 鏈）", () => 
     expect(result).toBe(brokerSameSite.id);
   });
 
-  it("第 4 級：呢個盤冇記錄，但同一安員第啲盤有——用最近嗰條", async () => {
+  it("第 4 級：呢個盤冇記錄，但同一保安員第啲盤有——用最近嗰條", async () => {
     const brokerOtherSite = await makeBroker("OTHER");
     const site = await makeSite("盤A（冇記錄）");
     const otherSite = await makeSite("盤B");

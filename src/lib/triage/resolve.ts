@@ -91,7 +91,7 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       dec.nameZh = { action: "keep_pending" };
       break;
     case "link": {
-      if (!answer.guard_id) throw BadRequest("要揀邊個現有安員");
+      if (!answer.guard_id) throw BadRequest("要揀邊個現有保安員");
       forced = { mode: "link", guardId: answer.guard_id };
       break;
     }
@@ -165,7 +165,7 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
         accountNo: { value: u.accountNo, status: "confirmed" },
         payeeName: { value: u.payeeName, status: "confirmed" },
       };
-      // 目標安員已有唔同戶口：預設 confirm（衝突、唔覆蓋）；明確揀「取代現有戶口」先 replace
+      // 目標保安員已有唔同戶口：預設 confirm（衝突、唔覆蓋）；明確揀「取代現有戶口」先 replace
       dec.ext = { bank: answer.replace_existing ? "replace" : "confirm" };
       break;
     }

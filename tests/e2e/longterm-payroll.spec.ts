@@ -3,7 +3,7 @@
 // spec 好似 month-close-one-click.spec.ts 一致做法：長工糧要寫入
 // （合約/人手輸入/重算）嘅測試一律用 2026-08——未鎖定）。
 //
-// 為咗完全唔靠任何真實安員資料（PDPO：合成安員，冇真名/真工號/真電話/
+// 為咗完全唔靠任何真實保安員資料（PDPO：合成保安員，冇真名/真工號/真電話/
 // 個別月薪/銀行帳號），呢個 spec 自己起一個獨立嘅測試盤／更別／長工
 // （用 `test-e2e-longterm-payroll` 前綴，`afterAll` 清走），淨係借用
 // 標準 seed 已經有嘅 `kind=internal_longterm`（B07）結算單位。
@@ -115,7 +115,7 @@ test("老闆：開頁→重算→逐人結算出現→加津貼→重算→Autop
   await expect(autopayCardValue).not.toHaveText(autopayCardBefore, { timeout: 15_000 });
 
   // ⑥ BOCHK autopay 檔（WP-BOSS5 §25.4：BOCHK Payroll Editor 格式
-  // xlsx，唔再係 CSV）：下載（有齊銀行資料嘅安員應該出現喺明細入面）
+  // xlsx，唔再係 CSV）：下載（有齊銀行資料嘅保安員應該出現喺明細入面）
   const [download] = await Promise.all([
     page.waitForEvent("download"),
     page.getByRole("link", { name: "下載 BOCHK Payroll Editor 格式（貼入 Editor 產生 .DAT）" }).click(),
@@ -133,9 +133,9 @@ test("雞頭：nav 見唔到「長工糧」連結，直接打 URL 見 403 banner
   await expect(page.getByText(/硬性禁止 長工糧:view/)).toBeVisible({ timeout: 10_000 });
 });
 
-// Opus 5.5 驗收（2026-09-27）：主管／安員都要 403（任務書「雞頭／主管／
-// 安員 403」）；Maxwell CSV 路徑（正式站操作員淨係可以傳 CSV）。
-test("主管／安員：nav 見唔到「長工糧」，直接打 URL 見 403 banner", async ({ page }) => {
+// Opus 5.5 驗收（2026-09-27）：主管／保安員都要 403（任務書「雞頭／主管／
+// 保安員 403」）；Maxwell CSV 路徑（正式站操作員淨係可以傳 CSV）。
+test("主管／保安員：nav 見唔到「長工糧」，直接打 URL 見 403 banner", async ({ page }) => {
   for (const who of ["主管", "安員"] as const) {
     await page.context().clearCookies();
     await loginAs(page, who);
@@ -153,5 +153,5 @@ test("老闆：Maxwell 導入（CSV）——在職／離職兩個 CSV 上載，�
   await page.getByTestId("maxwell-active-csv").setInputFiles({ name: "active.csv", mimeType: "text/csv", buffer: Buffer.from(`Maxwell\r\n${header}\r\n${row}\r\n`) });
   await page.getByTestId("maxwell-left-csv").setInputFiles({ name: "left.csv", mimeType: "text/csv", buffer: Buffer.from(`Maxwell\r\n${header}\r\n`) });
   await page.getByRole("button", { name: "導入 CSV" }).click();
-  await expect(page.getByText(/Maxwell 導入完成：1 行，建 0／更新 0，1 行對唔到安員/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/Maxwell 導入完成：1 行，建 0／更新 0，1 行對唔到保安員/)).toBeVisible({ timeout: 15_000 });
 });

@@ -1,6 +1,6 @@
 // WP-AI-OPS §28.3：`GET /api/reports/month-health?month=`（`月結總表:view`）——
 // 鎖月前體檢＋資料補齊提示。**只提示，唔擋鎖月**。明細（姓名／工號）要「更表」view；
-// 缺身份證要再有「安員個人資料」view、缺銀行編號要再有「安員銀行資料」view；
+// 缺身份證要再有「保安員個人資料」view、缺銀行編號要再有「保安員銀行資料」view；
 // 冇權限只回數量（`detail_withheld: true`）。hkid／電話號碼本身永遠唔回。
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";

@@ -61,7 +61,7 @@ export function createSiteOverviewTool(ctx: AiToolContext) {
 
       // 系統計嘅總計——`shift_count` 逐雞頭相加就係呢個盤總更數（唔會
       // 重複，一個更次淨係屬於一個雞頭），`guard_count` 就唔可以逐行
-      // 相加（同一個安員可能喺呢個盤下跨雞頭做過），所以另外用
+      // 相加（同一個保安員可能喺呢個盤下跨雞頭做過），所以另外用
       // `COUNT(DISTINCT guard_id)` 查一次去重總數。
       const totalShiftCount = brokerCounts.rows.reduce((sum, r) => sum + Number((r as { shift_count: unknown }).shift_count), 0);
       const { rows: guardTotalRows } = await aiQuery(

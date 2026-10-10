@@ -28,7 +28,7 @@ interface ListRes {
   eligible_owners: { id: string; name: string; role_name: string }[];
 }
 
-const SOURCE_LABEL: Record<string, string> = { guard_import: "安員證件資料導入", roster_upload: "更表上載", month_close: "一鍵結算（要你睇）", postorder_backfill: "補齊價目卡（Postorder／自動卡）" };
+const SOURCE_LABEL: Record<string, string> = { guard_import: "保安員證件資料導入", roster_upload: "更表上載", month_close: "一鍵結算（要你睇）", postorder_backfill: "補齊價目卡（Postorder／自動卡）" };
 // month_close 同 postorder_backfill 都係 month_close_* 題型，用同一個對話框。
 const isMcSource = (t: string | undefined): boolean => t === "month_close" || t === "postorder_backfill";
 
@@ -71,7 +71,7 @@ export default function TriagePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader kicker="主檔" title="待答問題" subtitle="安員證件資料導入／一鍵結算後，系統唔肯自動決定嘅項目——逐條答，答完先寫入（一鍵結算嘅題預填建議答案，一撳確認）。" />
+      <PageHeader kicker="主檔" title="待答問題" subtitle="保安員證件資料導入／一鍵結算後，系統唔肯自動決定嘅項目——逐條答，答完先寫入（一鍵結算嘅題預填建議答案，一撳確認）。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       {isBossView && (

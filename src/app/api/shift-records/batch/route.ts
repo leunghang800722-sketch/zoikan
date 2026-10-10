@@ -519,7 +519,7 @@ export async function POST(req: Request) {
     const pricing = { priced: pricedCount, unpriced: unpricedCount, unpriced_cells: [...unpricedByKey.values()] };
 
     // P0（D 項）：就算加強咗 fallback 鏈，理論上仍然可能出現全部級都搵
-    // 唔到嘅情況（全新安員、乜記錄都冇、又唔係長工）——呢種格唔准再靜靜
+    // 唔到嘅情況（全新保安員、乜記錄都冇、又唔係長工）——呢種格唔准再靜靜
     // 消失，response 帶 `no_settlement_count` 等前端 toast／banner 明確
     // 講畀用戶知呢幾格「唔會出現喺糧單」。
     const noSettlementCount = upsertPlans.filter((p) => p.recordType === "shift" && p.settlementBrokerId === null).length;

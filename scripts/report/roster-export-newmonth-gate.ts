@@ -1,5 +1,5 @@
 // Opus 對抗式驗收第三輪 B2（必修）gate：新月份（未 seed 過原檔字面）
-// 匯出唔可以再係零安員行。
+// 匯出唔可以再係零保安員行。
 //
 // 做法（跟 coordinator 個裁定逐步）：
 //   1. `npm run db:reset`（停→刪→起→migrate→seed，由零重新種一次真實
@@ -12,7 +12,7 @@
 //      **唔複製 shift_records**——呢個先係 B2 個 bug 場景嘅成因：8 月
 //      一開始梗係零 shift_records）。
 //   3. 用同一個主管 session，call `/api/shift-records/batch` 真實批量
-//      填 N 格（每格一個唔同嘅「7 月做過呢個盤」嘅安員×更別組合，落
+//      填 N 格（每格一個唔同嘅「7 月做過呢個盤」嘅保安員×更別組合，落
 //      喺 8 月一個未填過嘅日子）。
 //   4. 匯出 2026-08 xlsx（`buildRosterWorkbookForSite`，唔經 HTTP，
 //      同 gate 腳本 roster-export-diff.ts 一致做法）。
@@ -26,7 +26,7 @@
 // 並 exit 1（唔會吞聲跑埋晒先話畀你知）。
 //
 // PDPO：呢個腳本淨係印統計數字／boolean／真假結果，唔會印任何真實
-// 安員/雞頭姓名、工號、電話（逐格比對用嘅係 in-memory 字串比較，唔會
+// 保安員/雞頭姓名、工號、電話（逐格比對用嘅係 in-memory 字串比較，唔會
 // console.log 出嚟）。
 import { execSync } from "node:child_process";
 import { prisma } from "../seed/lib/db";
@@ -178,7 +178,7 @@ async function main() {
   // (b) 骨架斷言：8 月同 7 月嘅 render 總行數要一致（roster_layout 掛喺
   //     site 本身，唔跟月份，兩個月理論上應該一樣——呢度用真實兩次
   //     render 實測驗證，唔淨係睇 template JSON）。呢個唔係「8 月冇
-  //     resolved 出嚟嘅 guard 位」呢種內容差異（e.g. 冇填嘅安員行點計
+  //     resolved 出嚟嘅 guard 位」呢種內容差異（e.g. 冇填嘅保安員行點計
   //     都可能唔同），淨係比較*結構性* section 數——banner/header/
   //     total_group/blank 呢類「唔跟實際填幾多格變」嘅行數固定唔變，
   //     所以兩個月嘅 `rowCount` 應該完全相等（guard_rows 嘅 rowFrom~
@@ -195,7 +195,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  console.log("[roster-export-newmonth-gate] PASS：8 月新月份匯出唔再係零安員行，N 格全部位置啱，骨架同 7 月一致。exit 0");
+  console.log("[roster-export-newmonth-gate] PASS：8 月新月份匯出唔再係零保安員行，N 格全部位置啱，骨架同 7 月一致。exit 0");
 }
 
 main()

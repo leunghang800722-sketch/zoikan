@@ -293,22 +293,22 @@ async function main() {
       }
       let guardId = cp.guardStaffNo ? (guardIdByStaffNo.get(cp.guardStaffNo) ?? null) : null;
       if (cp.guardStaffNo && !guardId) {
-        diffs.rateCards.skip.push(`U 號 ${cp.guardStaffNo} 搵唔到安員（${cp.siteCanonicalName}）`);
+        diffs.rateCards.skip.push(`U 號 ${cp.guardStaffNo} 搵唔到保安員（${cp.siteCanonicalName}）`);
         return;
       }
       // Opus 5.5 驗收（WP-UPLOAD-AUTOFIX 個案 2）：冇 U 號、build 用姓名＋
-      // 電話／姓名後備對到嘅安員，plan 直接記 guardId——喺同一個 DB 核實
+      // 電話／姓名後備對到嘅保安員，plan 直接記 guardId——喺同一個 DB 核實
       // 仲存在先用（唔存在＝build 同 apply 唔係同一個 DB，skip 唔估）。
       if (!cp.guardStaffNo && cp.guardId) {
         const g = await tx.guard.findUnique({ where: { id: cp.guardId }, select: { id: true } });
         if (!g) {
-          diffs.rateCards.skip.push(`安員（${cp.guardMatchMethod ?? "guardId"}）喺呢個 DB 搵唔到——build 同 apply 要用同一個 DB，重新 build（${cp.siteCanonicalName}）`);
+          diffs.rateCards.skip.push(`保安員（${cp.guardMatchMethod ?? "guardId"}）喺呢個 DB 搵唔到——build 同 apply 要用同一個 DB，重新 build（${cp.siteCanonicalName}）`);
           return;
         }
         guardId = g.id;
       }
       const effectiveFrom = dateOnly(cp.effectiveFrom);
-      const guardLabel = cp.guardStaffNo ?? (cp.guardId ? `安員(${cp.guardMatchMethod ?? "guardId"})` : "-");
+      const guardLabel = cp.guardStaffNo ?? (cp.guardId ? `保安員(${cp.guardMatchMethod ?? "guardId"})` : "-");
       const label = `${cp.siteCanonicalName}|${cp.shiftType ? `${cp.shiftType.code}@${cp.shiftType.startTime}` : "flat"}|${cp.brokerCode ?? "-"}|${guardLabel}|${cp.effectiveFrom}`;
 
       // 依賴嘅盤／更種喺呢次 --plan 入面都係「仲未真係建」（sentinel）——
