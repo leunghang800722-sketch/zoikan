@@ -51,6 +51,8 @@ interface SummaryRow {
 
 /** 摘要版：唔讀整份 steps_json／report_json，jsonb 運算喺 DB 側做。 */
 export async function findOneClickRunSummaries(month: Date | null, take = 20): Promise<SummaryRow[]> {
+  // P3-5.5：月份用 `YYYY-MM-DD` 字串（`month` 係 UTC 月初）再 `::date`——唔好傳 Date（timestamptz）俾 PG 靠 session TimeZone 轉做 date。
+  const monthStr = month ? month.toISOString().slice(0, 10) : null;
   const rows = await prisma.$queryRaw<
     Array<{
       id: string;
@@ -77,7 +79,7 @@ export async function findOneClickRunSummaries(month: Date | null, take = 20): P
       report_json->'totals'->>'cost' AS totals_cost,
       report_json->'totals'->>'gross_margin' AS totals_gross_margin
     FROM month_close_runs
-    WHERE (${month}::date IS NULL OR month = ${month}::date)
+    WHERE (${monthStr}::date IS NULL OR month = ${monthStr}::date)
     ORDER BY started_at DESC
     LIMIT ${take}
   `;

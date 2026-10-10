@@ -33,6 +33,11 @@ export function withReportContext<T>(fn: () => Promise<T>): Promise<T> {
   return als.run(new Map(), fn);
 }
 
+/** 而家 async 鏈所屬嘅 memo Map（冇 context 回 undefined）。純粹俾守護 test 驗證「run 開咗自己嘅全新 context」，業務 code 唔好用。 */
+export function currentReportMemoStore(): Map<string, Promise<unknown>> | undefined {
+  return als.getStore();
+}
+
 export function invalidateReportMemo(): void {
   als.getStore()?.clear();
 }
