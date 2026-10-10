@@ -34,12 +34,15 @@ export class OcrUnavailableError extends Error {
   readonly reason: string | null;
   /** SDK error.type（只係類型字串） */
   readonly errorType: string | null;
-  constructor(status: number | null, reason: string | null = null, errorType: string | null = null) {
+  /** 已消毒嘅 Anthropic error.message（淨 4xx、≤200 字）；只供啟動自檢 log，route／audit／response 唔用 */
+  readonly errorMessage: string | null;
+  constructor(status: number | null, reason: string | null = null, errorType: string | null = null, errorMessage: string | null = null) {
     super("ocr_provider_unavailable");
     this.name = "OcrUnavailableError";
     this.status = status;
     this.reason = reason;
     this.errorType = errorType;
+    this.errorMessage = errorMessage;
   }
 }
 
