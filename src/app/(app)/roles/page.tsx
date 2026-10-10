@@ -9,7 +9,7 @@ import { uiLabel } from "@/lib/ui/format";
 import { moduleLabel } from "@/lib/rbac/labels";
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -234,8 +234,8 @@ export default function RolesPage() {
         }
       />
 
-      {error && <Notice variant="error">{error}</Notice>}
-      {notice && <Notice variant="info">{notice}</Notice>}
+      {error && <Banner compact kind="error">{error}</Banner>}
+      {notice && <Banner compact kind="info">{notice}</Banner>}
 
       {/* 規格觀感修復：README §17 grid 由 `auto-fit minmax(240px,1fr)`
           （寬度夠就左右對半，矩陣卡好迫）改做 `minmax(240px,1fr)
@@ -267,7 +267,7 @@ export default function RolesPage() {
 
           <form onSubmit={onCopy} className="flex flex-col gap-2 rounded-[10px] border border-zk-border bg-white p-3.5">
             <div className="text-zk-sm font-semibold text-zk-text">複製角色</div>
-            {copyError && <Notice variant="error">{copyError}</Notice>}
+            {copyError && <Banner compact kind="error">{copyError}</Banner>}
             <select className={selectCls} value={copySourceId} onChange={(e) => setCopySourceId(e.target.value)} required>
               <option value="">來源角色</option>
               {roles.map((r) => (

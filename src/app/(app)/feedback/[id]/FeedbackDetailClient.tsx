@@ -2,6 +2,7 @@
 // P2.5「現場反映」開會模式——意見詳情（老闆）：完整摘要（markdown）、
 // 原對話節錄摺埋、狀態掣（已睇／已轉交／唔做）＋備註、「複製摘要」。
 import { useCallback, useEffect, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { apiGet, apiPatch } from "@/lib/ui/api-client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
@@ -79,7 +80,7 @@ export function FeedbackDetailClient({ id }: { id: string }) {
   }, [report]);
 
   if (loading) return <div className="text-sm text-zk-muted">載入緊…</div>;
-  if (error && !report) return <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">{error}</div>;
+  if (error && !report) return <Banner kind="error">{error}</Banner>;
   if (!report) return null;
 
   return (
@@ -101,7 +102,7 @@ export function FeedbackDetailClient({ id }: { id: string }) {
         }
       />
 
-      {error && <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">{error}</div>}
+      {error && <Banner kind="error">{error}</Banner>}
 
       <div className="rounded-lg border border-zk-border bg-white px-5 py-4" data-testid="feedback-summary">
         <SimpleMarkdown text={report.summary_md} />

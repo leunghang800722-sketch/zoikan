@@ -332,9 +332,9 @@ export default function GuardImportPage() {
                           <span className="text-zk-faint">有銀行資料（你冇「保安員銀行資料」睇權，唔顯示）</span>
                         )}
                         {full && (
-                          <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-zk-xs" onClick={() => setShowFull((m) => ({ ...m, [r.index]: !m[r.index] }))}>
+                          <Button variant="secondary" size="sm" type="button" onClick={() => setShowFull((m) => ({ ...m, [r.index]: !m[r.index] }))}>
                             {showFull[r.index] ? "隱藏全號" : "顯示全號"}
-                          </button>
+                          </Button>
                         )}
                       </div>
                     );

@@ -8,6 +8,7 @@ import type { ReportDTO } from "@/components/month-close/types";
 import { lockRequirements, type ReviewGroup } from "@/components/month-close/derive";
 import { MonthHealthCard } from "./MonthHealthCard";
 
+import { Button } from "@/components/ui/Button";
 export function LockSection({ report, month, busy, locked, groups, onUnlock, canUnlock, needDiffReason, diffReason, onDiffReason, isBoss, onForceLock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; canUnlock: boolean; needDiffReason: boolean; diffReason: string; onDiffReason: (v: string) => void; isBoss: boolean; onForceLock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
   const [unlockReason, setUnlockReason] = useState("");
   const [forceOn, setForceOn] = useState(false);
@@ -39,9 +40,9 @@ export function LockSection({ report, month, busy, locked, groups, onUnlock, can
                 </Link>
               ) : (
                 canTriage && (
-                  <button type="button" onClick={onOpenTriage} className="whitespace-nowrap text-zk-sm text-zk-primary hover:underline">
+                  <Button variant="link" size="sm" className="whitespace-nowrap" type="button" onClick={onOpenTriage}>
                     {r.actionLabel}
-                  </button>
+                  </Button>
                 )
               )}
             </div>
@@ -74,15 +75,15 @@ export function LockSection({ report, month, busy, locked, groups, onUnlock, can
           {forceOn && (
             <div className="flex flex-wrap items-center gap-2">
               <input className={inputCls} placeholder="override 原因（必填）" value={forceReason} onChange={(e) => setForceReason(e.target.value)} data-testid="force-lock-reason" />
-              <button
+              <Button variant="danger" size="md" className="whitespace-nowrap disabled:cursor-not-allowed"
                 type="button"
                 data-testid="force-lock-month"
                 onClick={() => onForceLock(forceReason.trim())}
                 disabled={busy || !forceReason.trim()}
-                className="whitespace-nowrap rounded-md border border-zk-danger-border bg-white px-4 py-2 text-zk-base font-semibold text-zk-danger-dark hover:bg-zk-danger-bg disabled:cursor-not-allowed disabled:opacity-[.45]"
+               
               >
                 強制鎖定 {month}
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -91,15 +92,15 @@ export function LockSection({ report, month, busy, locked, groups, onUnlock, can
         <div className="flex flex-wrap items-center gap-2 border-t border-zk-border-soft px-4 py-3" data-testid="unlock-box">
           <span className="text-zk-sm text-zk-muted">解鎖原因（必填，會寫入操作紀錄）</span>
           <input className={inputCls} placeholder="解鎖原因" value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} data-testid="unlock-reason" />
-          <button
+          <Button variant="danger" size="md" className="whitespace-nowrap disabled:cursor-not-allowed"
             type="button"
             data-testid="unlock-month"
             onClick={() => onUnlock(unlockReason.trim())}
             disabled={busy || !unlockReason.trim()}
-            className="whitespace-nowrap rounded-md border border-zk-danger-border bg-white px-4 py-2 text-zk-base font-semibold text-zk-danger-dark hover:bg-zk-danger-bg disabled:cursor-not-allowed disabled:opacity-[.45]"
+           
           >
             解鎖 {month}
-          </button>
+          </Button>
         </div>
       )}
     </section>

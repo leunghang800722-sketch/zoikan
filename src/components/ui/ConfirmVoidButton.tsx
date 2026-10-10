@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { Button } from "@/components/ui/Button";
 
 /** 作廢/退回用嘅行內二次確認按鈕——強制要求填 reason，唔用 window.confirm()。 */
 export function ConfirmVoidButton({
@@ -21,13 +22,9 @@ export function ConfirmVoidButton({
 
   if (!open) {
     return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className={`rounded border border-zk-danger-border px-2 py-1 text-xs text-zk-danger-dark hover:bg-zk-danger-bg ${className}`}
-      >
+      <Button variant="danger" size="sm" onClick={() => setOpen(true)} className={className}>
         {label}
-      </button>
+      </Button>
     );
   }
 
@@ -40,8 +37,9 @@ export function ConfirmVoidButton({
         placeholder="填原因先可以確認"
         className="w-40 rounded border border-zk-input-border px-2 py-1 text-xs"
       />
-      <button
-        type="button"
+      <Button
+        variant="dangerSolid"
+        size="sm"
         disabled={busy || !reason.trim()}
         onClick={async () => {
           setBusy(true);
@@ -53,20 +51,19 @@ export function ConfirmVoidButton({
             setBusy(false);
           }
         }}
-        className="rounded bg-zk-danger px-2 py-1 text-xs text-white disabled:opacity-50"
       >
         {busy ? busyLabel : confirmLabel}
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => {
           setOpen(false);
           setReason("");
         }}
-        className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
       >
         取消
-      </button>
+      </Button>
     </div>
   );
 }

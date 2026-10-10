@@ -12,7 +12,6 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
-import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateTime } from "@/lib/ui/format";
@@ -351,7 +350,7 @@ export default function MonthlyCloseWorkbenchPage() {
       )}
       {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
       {unpricedCount > 0 && (
-        <Notice variant="warning">
+        <Banner compact kind="warning">
           <p className="font-medium">呢個月有 {unpricedCount} 更未定價（冇對應價目卡），金額未計入月結總表：</p>
           <ul className="list-disc pl-5 mt-1">
             {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
@@ -364,13 +363,13 @@ export default function MonthlyCloseWorkbenchPage() {
                 </li>
               ))}
           </ul>
-        </Notice>
+        </Banner>
       )}
       {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
           唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
           單位」行。就算未定價 count＝0 都要顯示。 */}
       {noSettlementCount > 0 && (
-        <Notice variant="error">
+        <Banner compact kind="error">
           <p className="font-medium">
             呢個月有 {noSettlementCount} 格冇結算單位（唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算單位」行）：
           </p>
@@ -383,7 +382,7 @@ export default function MonthlyCloseWorkbenchPage() {
                 </li>
               ))}
           </ul>
-        </Notice>
+        </Banner>
       )}
       <EmptyMonthNotice month={month} isEmpty={!checkingExisting && !result} onJump={setMonth} />
 
@@ -476,13 +475,13 @@ export default function MonthlyCloseWorkbenchPage() {
               {/* 應修②：額外盤（outside_rows）摺埋顯示，唔入月結對數。 */}
               {result.monthly_close.outside_rows.length > 0 && (
                 <div className="flex flex-col gap-2">
-                  <button
+                  <Button variant="link" size="sm" className="w-fit"
                     type="button"
                     onClick={() => setShowOutside((v) => !v)}
-                    className="w-fit text-left text-zk-sm text-zk-primary hover:underline"
+                   
                   >
                     {showOutside ? "收埋 ‹" : `額外盤 ${result.monthly_close.outside_rows.length} 個（唔入月結對數）›`}
-                  </button>
+                  </Button>
                   {showOutside && (
                     <div className={tableCls.wrap}>
                       <table className={tableCls.table} style={{ minWidth: tableMinWidth(CLOSE_COLS) }}>

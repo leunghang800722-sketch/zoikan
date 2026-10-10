@@ -296,9 +296,9 @@ export default function LongtermPayrollPage() {
                         )}
                       </td>
                       <td className={tableCls.td}>
-                        <button className="text-zk-sm text-zk-primary underline" onClick={() => setExpandedGuard(expandedGuard === l.id ? null : l.id)}>
+                        <Button variant="link" size="sm" onClick={() => setExpandedGuard(expandedGuard === l.id ? null : l.id)}>
                           {expandedGuard === l.id ? "收起" : "逐項來源"}
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                     {expandedGuard === l.id && (
@@ -523,9 +523,9 @@ function InputsSection({
                   <td className={tableCls.td}>{i.voided_at ? <Pill variant="neutral">已作廢</Pill> : <Pill variant="success">生效</Pill>}</td>
                   <td className={tableCls.td}>
                     {!i.voided_at && !locked && (
-                      <button className="text-zk-sm text-zk-danger underline" onClick={() => voidInput(i.id)}>
+                      <Button variant="linkDanger" size="sm" onClick={() => voidInput(i.id)}>
                         作廢
-                      </button>
+                      </Button>
                     )}
                   </td>
                 </tr>
@@ -703,12 +703,12 @@ function ContractsSection({
                   <td className={tableCls.td}>
                     {!c.voided_at && (
                       <div className="flex gap-2">
-                        <button className="text-zk-sm text-zk-primary underline" onClick={() => startEdit(c)}>
+                        <Button variant="link" size="sm" onClick={() => startEdit(c)}>
                           編輯
-                        </button>
-                        <button className="text-zk-sm text-zk-danger underline" onClick={() => voidContract(c.id)}>
+                        </Button>
+                        <Button variant="linkDanger" size="sm" onClick={() => voidContract(c.id)}>
                           作廢
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </td>
@@ -897,9 +897,9 @@ function AvgWageLeaveBalanceSection({
                     <td className={tableCls.tdNum}>{b.sl_taken}</td>
                     <td className={tableCls.tdNum}>{b.sl_accrued}</td>
                     <td className={tableCls.td}>
-                      <button className="text-zk-sm text-zk-primary underline" onClick={() => startEdit(b)}>
+                      <Button variant="link" size="sm" onClick={() => startEdit(b)}>
                         人手覆核
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))

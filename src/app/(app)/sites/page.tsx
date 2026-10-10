@@ -7,7 +7,7 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
@@ -340,24 +340,24 @@ export default function SitesPage() {
                     </td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                        <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                           編輯
-                        </button>
-                        <button
+                        </Button>
+                        <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => setShiftTypesFor(r)}
-                          className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header"
+                         
                         >
                           更別
-                        </button>
+                        </Button>
                         {r.status === "ended" ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
+                           
                           >
                             恢復
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton label="結束" confirmLabel="確認結束" onConfirm={(reason) => onVoid(r.id, reason)} />
                         )}
@@ -389,16 +389,16 @@ export default function SitesPage() {
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
+                  <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                     編輯
-                  </button>
-                  <button type="button" onClick={() => setShiftTypesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
+                  </Button>
+                  <Button variant="secondary" size="sm" type="button" onClick={() => setShiftTypesFor(r)}>
                     更別
-                  </button>
+                  </Button>
                   {r.status === "ended" ? (
-                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                       恢復
-                    </button>
+                    </Button>
                   ) : (
                     <ConfirmVoidButton label="結束" confirmLabel="確認結束" onConfirm={(reason) => onVoid(r.id, reason)} />
                   )}
@@ -452,9 +452,9 @@ export default function SitesPage() {
                   <span>
                     建議：{suggestion.suggestion.broker_code}（由 {suggestion.month ? `${Number(suggestion.month.slice(5, 7))} 月 ` : ""}Postorder 推出，同盤 {suggestion.suggestion.days} 個雞頭格全部係佢）
                   </span>
-                  <button type="button" onClick={adoptSuggestion} disabled={adopting} className="rounded-[5px] border border-zk-border px-2 py-[2px] text-xs text-zk-primary hover:bg-zk-header disabled:opacity-50">
+                  <Button variant="secondary" size="sm" type="button" onClick={adoptSuggestion} disabled={adopting}>
                     {adopting ? "採用緊…" : "採用"}
-                  </button>
+                  </Button>
                 </div>
               )}
             </Field>
@@ -526,12 +526,12 @@ export default function SitesPage() {
             客戶直接出糧（保安員由客戶直接出糧，我哋淨係收每月服務費，呢個盤嘅更唔計工資／客價）
           </label>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>
@@ -658,9 +658,9 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
       <div className="space-y-3">
         <Banner kind="error" message={error} />
         <div className="flex justify-end">
-          <button type="button" onClick={openCreate} className={btnPrimary}>
+          <Button variant="primary" size="sm" type="button" onClick={openCreate}>
             新增更別
-          </button>
+          </Button>
         </div>
 
         {showForm && (
@@ -713,12 +713,12 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
               </select>
             </Field>
             <div className="flex gap-2 pt-1">
-              <button type="submit" disabled={saving} className={btnPrimary}>
+              <Button variant="primary" size="sm" type="submit" disabled={saving}>
                 {saving ? "儲存緊…" : "儲存"}
-              </button>
-              <button type="button" onClick={() => setShowForm(false)} className={btnSecondary}>
+              </Button>
+              <Button variant="secondary" size="sm" type="button" onClick={() => setShowForm(false)}>
                 取消
-              </button>
+              </Button>
             </div>
           </form>
         )}
@@ -757,17 +757,17 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
                   </td>
                   <td className="px-2 py-1.5">
                     <div className="flex flex-wrap items-center gap-1">
-                      <button type="button" onClick={() => openEdit(r)} className="rounded border border-zk-input-border px-1.5 py-0.5 hover:bg-zk-header">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯
-                      </button>
+                      </Button>
                       {r.voided_at ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                          className="rounded border border-zk-success/30 px-1.5 py-0.5 text-zk-success-dark hover:bg-zk-success-bg"
+                         
                         >
                           解除作廢
-                        </button>
+                        </Button>
                       ) : (
                         <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                       )}

@@ -19,5 +19,3 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 export const inputCls =
   "w-full rounded-[7px] border border-zk-input-border bg-white px-3 py-[9px] text-zk-base text-zk-text focus:border-zk-primary focus:outline-none focus:ring-[3px] focus:ring-zk-primary/20";
 export const selectCls = inputCls;
-export const btnPrimary = "rounded bg-zk-dark px-3 py-1.5 text-sm font-medium text-white hover:bg-zk-dark-hover disabled:opacity-50";
-export const btnSecondary = "rounded border border-zk-input-border px-3 py-1.5 text-sm text-zk-text-secondary hover:bg-zk-header disabled:opacity-50";

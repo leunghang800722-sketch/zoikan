@@ -7,7 +7,7 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { apiPost } from "@/lib/ui/api-client";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Field, inputCls } from "@/components/ui/Field";
@@ -60,8 +60,8 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
     <div className="flex flex-col gap-4">
       <PageHeader kicker="帳號" title="改密碼" />
       <div className="flex w-full max-w-[420px] flex-col gap-3.5 rounded-[10px] border border-zk-border bg-white p-[22px]">
-        {mustChangePwd && <Notice variant="info">首次登入請先設定新密碼。</Notice>}
-        {message && <Notice variant={message.kind === "error" ? "error" : "info"}>{message.text}</Notice>}
+        {mustChangePwd && <Banner compact kind="info">首次登入請先設定新密碼。</Banner>}
+        {message && <Banner compact kind={message.kind === "error" ? "error" : "info"}>{message.text}</Banner>}
 
         <form onSubmit={onSubmit} className="flex flex-col gap-3.5">
           <Field label="舊密碼">

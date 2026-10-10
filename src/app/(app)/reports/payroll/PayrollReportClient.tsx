@@ -12,13 +12,13 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
-import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // P0（Opus 驗收重現）：`broker_id` 可以係 `null`——代表「未歸屬結算
@@ -61,6 +61,7 @@ function KindPill({ kind }: { kind?: string }) {
 }
 
 export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
+  const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
   const [month, setMonth, monthReady] = useMonthState(undefined, { persistDefault: true });
   const [totals, setTotals] = useState<Total[]>([]);
   const [unpricedCount, setUnpricedCount] = useState(0);
@@ -71,6 +72,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   const [noSettlementCount, setNoSettlementCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [repricing, setRepricing] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
 
@@ -101,6 +103,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   const handleReprice = useCallback(async () => {
     if (repricing) return;
     setRepricing(true);
+    setNotice(null);
     try {
       const preview = await apiPost<{ changed: number; unchanged: number; kept_unresolved: number; unpriced: number; groups: UnpricedGroup[] }>(
         "/api/shift-records/reprice",
@@ -111,14 +114,15 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         return;
       }
       if (preview.data.changed === 0) {
-        window.alert(`重新計價預覽：呢個月全公司冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定價。冇嘢寫入。`);
+        setNotice(`重新計價預覽：呢個月全公司冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定價。冇嘢寫入。`);
         return;
       }
       const keptNote = preview.data.kept_unresolved > 0 ? `（其中 ${preview.data.kept_unresolved} 更搵唔到對應卡，保留原有 snapshot）` : "";
       if (
-        !window.confirm(
-          `重新計價預覽 ${month}（全公司）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
-        )
+        !(await askConfirm({
+          message: `重新計價預覽 ${month}（全公司）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
+          confirmLabel: "寫入",
+        }))
       ) {
         return;
       }
@@ -127,17 +131,18 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         setError(res.message);
         return;
       }
-      window.alert(`重新計價完成：${res.data.repriced} 更已改寫，仲有 ${res.data.unpriced} 更未定價。`);
+      setNotice(`重新計價完成：${res.data.repriced} 更已改寫，仲有 ${res.data.unpriced} 更未定價。`);
       setReloadTick((t) => t + 1);
     } finally {
       setRepricing(false);
     }
-  }, [repricing, month]);
+  }, [repricing, month, askConfirm]);
 
   const grand = totals.reduce((a, t) => ({ shifts: a.shifts + t.shifts, wage: a.wage + t.wage, fee: a.fee + t.fee, amount: a.amount + t.amount }), { shifts: 0, wage: 0, fee: 0, amount: 0 });
 
   return (
     <div className="flex flex-col gap-4">
+      {confirmDialog}
       <PageHeader
         kicker={kickerFor("/reports/payroll")}
         title="糧明細（按雞頭）"
@@ -158,9 +163,10 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       />
 
       <Banner kind="error" message={error} />
+      <Banner kind="info" message={notice} data-testid="payroll-notice" />
       {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
       {unpricedCount > 0 && (
-        <Notice variant="warning">
+        <Banner compact kind="warning">
           <p className="font-medium">呢個月有 {unpricedCount} 更未定價（冇對應價目卡），金額未計入呢份糧明細：</p>
           <ul className="list-disc pl-5 mt-1">
             {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
@@ -174,14 +180,14 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
                 </li>
               ))}
           </ul>
-        </Notice>
+        </Banner>
       )}
       {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
           唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
           單位」行。就算未定價 count＝0 都要顯示（同 RosterEditor.tsx 一
           致嘅獨立 error Notice）。 */}
       {noSettlementCount > 0 && (
-        <Notice variant="error">
+        <Banner compact kind="error">
           <p className="font-medium">
             呢個月有 {noSettlementCount} 格冇結算單位（唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算單位」行）：
           </p>
@@ -194,7 +200,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
                 </li>
               ))}
           </ul>
-        </Notice>
+        </Banner>
       )}
       <EmptyMonthNotice month={month} isEmpty={!loading && totals.length === 0} onJump={setMonth} />
 

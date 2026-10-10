@@ -23,6 +23,7 @@ import { SimilarGuards } from "@/components/reconcile/GuardHints";
 import { ReasonLinks, ReasonText, WroteCell, reasonHasActions, type ActionCtx } from "./UnresolvedCells";
 import { kickerFor } from "@/lib/nav/schema";
 import { CATEGORY_LABEL, type ReconcileCategory } from "@/lib/roster-upload/category-labels";
+import { choiceBtn, choiceBtnText } from "@/components/ui/button-classes";
 
 
 const CATEGORY_ORDER: ReconcileCategory[] = ["unresolved", "guard_diff", "shift_type_diff", "settlement_diff", "roster_only", "system_only", "match"];
@@ -464,9 +465,9 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
             {groupTitle(g)}
           </span>
           <span className="text-zk-xs text-zk-muted">{groupMeta(g)}</span>
-          <button type="button" onClick={() => toggleGroup(g.id)} className="text-zk-sm text-zk-primary underline" data-testid="reconcile-group-toggle">
+          <Button variant="link" size="sm" type="button" onClick={() => toggleGroup(g.id)} data-testid="reconcile-group-toggle">
             {expanded ? "摺埋" : `展開 ${g.items.length} 條`}
-          </button>
+          </Button>
         </div>
         <div className="text-zk-xs text-zk-muted">
           {[telTail(g.raw.tel_raw), g.raw.broker_code_raw?.trim() ? `雞頭碼 ${g.raw.broker_code_raw.trim()}` : null].filter(Boolean).join("・")}
@@ -484,15 +485,15 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
               className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-zk-xs"
               data-testid="reconcile-group-reason"
             />
-            <button
+            <Button variant="secondary" size="sm"
               type="button"
               disabled={!(groupReason[g.id] ?? "").trim()}
               onClick={() => markGroupException(g)}
-              className="rounded-[5px] border border-zk-border px-2 py-[3px] text-zk-xs text-zk-text-secondary disabled:opacity-40"
+             
               data-testid="reconcile-group-exception"
             >
               整組 {g.items.length} 條標例外
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -506,14 +507,14 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
           <button
             type="button"
             onClick={() => setDecision(item.key, "exception", decision?.reason ?? "")}
-            className={`rounded-[5px] border px-2 py-[3px] text-zk-xs ${decision?.action === "exception" ? "border-zk-primary bg-zk-primary-tint-soft font-semibold text-zk-primary" : "border-zk-border text-zk-text-secondary"}`}
+            className={choiceBtn(decision?.action === "exception")}
           >
             例外
           </button>
           {decision && (
-            <button type="button" onClick={() => clearDecision(item.key)} className="text-zk-xs text-zk-faint underline">
+            <Button variant="linkMuted" size="sm" type="button" onClick={() => clearDecision(item.key)}>
               清除
-            </button>
+            </Button>
           )}
         </div>
         {decision?.action === "exception" && (
@@ -601,28 +602,28 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
                 <button
                   type="button"
                   onClick={() => setDecision(item.key, "apply_roster")}
-                  className={`rounded-[5px] border px-2 py-[3px] text-zk-xs ${decision?.action === "apply_roster" ? "border-zk-primary bg-zk-primary-tint-soft font-semibold text-zk-primary" : "border-zk-border text-zk-text-secondary"}`}
+                  className={choiceBtn(decision?.action === "apply_roster")}
                 >
                   以更表為準
                 </button>
                 <button
                   type="button"
                   onClick={() => setDecision(item.key, "keep_system")}
-                  className={`rounded-[5px] border px-2 py-[3px] text-zk-xs ${decision?.action === "keep_system" ? "border-zk-primary bg-zk-primary-tint-soft font-semibold text-zk-primary" : "border-zk-border text-zk-text-secondary"}`}
+                  className={choiceBtn(decision?.action === "keep_system")}
                 >
                   保留系統
                 </button>
                 <button
                   type="button"
                   onClick={() => setDecision(item.key, "exception", decision?.reason ?? "")}
-                  className={`rounded-[5px] border px-2 py-[3px] text-zk-xs ${decision?.action === "exception" ? "border-zk-primary bg-zk-primary-tint-soft font-semibold text-zk-primary" : "border-zk-border text-zk-text-secondary"}`}
+                  className={choiceBtn(decision?.action === "exception")}
                 >
                   例外
                 </button>
                 {decision && (
-                  <button type="button" onClick={() => clearDecision(item.key)} className="text-zk-xs text-zk-faint underline">
+                  <Button variant="linkMuted" size="sm" type="button" onClick={() => clearDecision(item.key)}>
                     清除
-                  </button>
+                  </Button>
                 )}
               </div>
               {decision?.action === "exception" && (
@@ -688,7 +689,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
                   key={a}
                   type="button"
                   onClick={() => setDecision(item.key, a, decision?.reason ?? "")}
-                  className={`rounded-[5px] border px-2 py-[4px] text-zk-xs ${decision?.action === a ? "border-zk-primary bg-zk-primary-tint-soft font-semibold text-zk-primary" : "border-zk-border text-zk-text-secondary"}`}
+                  className={choiceBtn(decision?.action === a)}
                 >
                   {a === "apply_roster" ? "以更表為準" : a === "keep_system" ? "保留系統" : "例外"}
                 </button>
@@ -751,7 +752,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => setTab("all")} className={`text-zk-sm ${tab === "all" ? "font-semibold text-zk-primary" : "text-zk-muted"}`}>
+        <button type="button" onClick={() => setTab("all")} className={choiceBtnText(tab === "all")}>
           全部
         </button>
         {!locked && (
@@ -789,9 +790,9 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
           <Button variant="secondary" disabled={subSiteBusy} onClick={() => applySubSiteBulk(null)}>
             全部歸母盤確認
           </Button>
-          <button type="button" className="text-zk-xs text-zk-faint underline" onClick={() => setSubSiteSelected(new Set())}>
+          <Button variant="linkMuted" size="sm" type="button" onClick={() => setSubSiteSelected(new Set())}>
             清除選取
-          </button>
+          </Button>
         </div>
       )}
 

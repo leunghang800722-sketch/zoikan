@@ -745,9 +745,9 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                 {item.status === "pending" && (
                   <>
                     <Pill variant="neutral">等緊</Pill>
-                    <button type="button" onClick={() => cancelQueueItem(item.localId)} className="rounded-[5px] border border-zk-border px-2 py-[2px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => cancelQueueItem(item.localId)}>
                       取消
-                    </button>
+                    </Button>
                   </>
                 )}
                 {item.status === "uploading" && <Pill variant="warning">上載緊…</Pill>}
@@ -855,9 +855,9 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {u && (
-                            <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                            <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                               睇詳情
-                            </button>
+                            </Button>
                           )}
                           {/* B1-3：對數頁入口——冇解到盤（entry.site_id 未定）就冧唔到
                               盤，先要 PATCH 指定盤先可以對數。 */}
@@ -918,9 +918,9 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                   {u?.status === "parse_failed" && u.parse_error && <div className="mt-1 text-zk-xs text-zk-danger">{u.parse_error}</div>}
                   {u && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                         睇詳情
-                      </button>
+                      </Button>
                       {entry.site_id && (u.status === "parsed" || u.status === "confirmed") && (
                         <Link href={`/roster-uploads/${u.id}/reconcile`} className="rounded-[5px] border border-zk-primary px-2.5 py-[3px] text-xs font-medium text-zk-primary">
                           對數
@@ -959,9 +959,9 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                   未上載 {hiddenNotUploaded} 盤{hiddenDone > 0 ? `、已完成 ${hiddenDone} 盤` : ""}，已摺埋
                 </span>
               )}
-              <button type="button" onClick={toggleShowAll} className="text-zk-primary hover:underline" data-testid="roster-upload-show-all">
+              <Button variant="link" size="sm" type="button" onClick={toggleShowAll} data-testid="roster-upload-show-all">
                 {showAll ? "只顯示有嘢要做嘅盤" : "顯示全部 ›"}
-              </button>
+              </Button>
             </div>
           )}
         </>
@@ -996,9 +996,9 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                       <td className={tableCls.td}>{u.void_reason ?? "—"}</td>
                       <td className={tableCls.tdMuted}>{fmtDateTime(u.voided_at)}</td>
                       <td className={tableCls.td}>
-                        <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                        <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                           睇詳情
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   );
@@ -1021,9 +1021,9 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                   <div className="mt-1 text-zk-xs text-zk-muted">原因：{u.void_reason ?? "—"}</div>
                   <div className="mt-1 text-zk-xs text-zk-faint">{fmtDateTime(u.voided_at)}</div>
                   <div className="mt-2">
-                    <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                       睇詳情
-                    </button>
+                    </Button>
                   </div>
                 </div>
               );

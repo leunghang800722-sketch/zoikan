@@ -6,7 +6,7 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
@@ -279,17 +279,17 @@ export default function QuotasPage() {
                       <td className={tableCls.tdNum}>{r.target_shifts}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                          <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                             編輯
-                          </button>
+                          </Button>
                           {r.voided_at ? (
-                            <button
+                            <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() => onUnvoid(r.id)}
-                              className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
+                             
                             >
                               解除作廢
-                            </button>
+                            </Button>
                           ) : (
                             <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                           )}
@@ -330,13 +330,13 @@ export default function QuotasPage() {
                     )}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                       編輯
-                    </button>
+                    </Button>
                     {r.voided_at ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                         解除作廢
-                      </button>
+                      </Button>
                     ) : (
                       <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                     )}
@@ -413,12 +413,12 @@ export default function QuotasPage() {
             />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

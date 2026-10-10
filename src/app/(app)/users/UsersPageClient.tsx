@@ -19,7 +19,6 @@ import { useEffect, useMemo, useState } from "react";
 import { apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
-import { Notice } from "@/components/ui/Notice";
 import { Drawer } from "@/components/ui/Drawer";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
@@ -27,7 +26,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { fmt, fmtDateTime, uiLabel } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
 
@@ -266,21 +265,21 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
         }
       />
 
-      {error && <Notice variant="error">{error}</Notice>}
-      {notice && <Notice variant="info">{notice}</Notice>}
+      {error && <Banner compact kind="error">{error}</Banner>}
+      {notice && <Banner compact kind="info">{notice}</Banner>}
       {resetResult && (
         <div data-testid="user-reset-password-result">
-          <Notice
-            variant="info"
+          <Banner compact
+            kind="info"
             action={
-              <button type="button" onClick={() => setResetResult(null)} className="text-zk-sm font-semibold text-zk-primary">
+              <Button variant="link" size="sm" type="button" onClick={() => setResetResult(null)}>
                 知道了
-              </button>
+              </Button>
             }
           >
             已重設「{resetResult.name}」嘅密碼，臨時密碼：<strong className="font-mono">{resetResult.password}</strong>
             ——請盡快通知佢，離開此頁後將唔會再顯示，佢下次登入會被要求即時設定新密碼。
-          </Notice>
+          </Banner>
         </div>
       )}
 
@@ -328,45 +327,45 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                   </td>
                   <td className={tableCls.tdNum}>
                     <div className="flex flex-wrap items-center justify-end gap-1.5">
-                      <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-[9px] py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯
-                      </button>
+                      </Button>
                       {/* A2：自己嗰行唔顯示「重設密碼」——同 API 側 id === session.userId
                           擋一致，應該用改密碼頁改自己嘅密碼。 */}
                       {r.id !== currentUserId &&
                         (confirmResetId === r.id ? (
                           <span className="flex items-center gap-1">
-                            <button
+                            <Button variant="primary" size="sm"
                               type="button"
                               data-testid="user-reset-password-confirm"
                               disabled={resetting}
                               onClick={() => onResetPassword(r)}
-                              className="rounded-[5px] bg-zk-primary px-[9px] py-[3px] text-xs font-semibold text-white disabled:opacity-50"
+                             
                             >
                               {resetting ? "重設緊…" : "確定重設"}
-                            </button>
-                            <button type="button" onClick={() => setConfirmResetId(null)} className="rounded-[5px] px-[9px] py-[3px] text-xs text-zk-muted hover:bg-zk-header">
+                            </Button>
+                            <Button variant="ghost" size="sm" type="button" onClick={() => setConfirmResetId(null)}>
                               取消
-                            </button>
+                            </Button>
                           </span>
                         ) : (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             data-testid="user-reset-password-button"
                             onClick={() => setConfirmResetId(r.id)}
-                            className="rounded-[5px] border border-zk-border px-[9px] py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header"
+                           
                           >
                             重設密碼
-                          </button>
+                          </Button>
                         ))}
                       {r.status === "inactive" ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                          className="rounded-[5px] border border-zk-success/30 px-[9px] py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
+                         
                         >
                           恢復
-                        </button>
+                        </Button>
                       ) : (
                         <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                       )}
@@ -432,12 +431,12 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
             <input className={inputCls} value={form.allowed_ip} onChange={(e) => setForm((f) => ({ ...f, allowed_ip: e.target.value }))} />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

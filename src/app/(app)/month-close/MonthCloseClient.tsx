@@ -22,8 +22,10 @@ import { RightRail } from "./RightRail";
 import { HistorySection } from "./HistorySection";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: boolean; canUnlock: boolean }) {
+  const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
   const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1));
   const [runs, setRuns] = useState<RunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -190,7 +192,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
 
   // WP-ONE-CLICK-AUTO §31.3 E：一撳還原呢個 run 所有 auto 改動。
   async function undoAuto(runId: string) {
-    if (!window.confirm(`還原呢次一鍵結算所有「自動」改動？\n\n${UNDO_NOTE}`)) return;
+    if (!(await askConfirm({ message: `還原呢次一鍵結算所有「自動」改動？\n\n${UNDO_NOTE}`, confirmLabel: "還原", tone: "danger" }))) return;
     setBusy(true);
     setError(null);
     const res = await apiPost<{ undone: Record<string, number>; skipped: Array<{ kind: string; reason: string }>; already_undone: boolean; still_using_voided_card_prices?: number }>(`/api/month-close/one-click/${runId}/undo-auto`);
@@ -276,6 +278,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
+      {confirmDialog}
       <PageHeader
         kicker={kickerFor("/month-close")}
         title="一鍵全月結算"

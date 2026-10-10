@@ -15,6 +15,7 @@ import { DEFERRED_UNDO_MS } from "@/components/month-close/deferred";
 import { UndoBar } from "@/components/ui/UndoBar";
 import { describeAction, requestForAction, runSpec, triageAnswerRequest, triagePreviewRequest } from "@/lib/ui/ai-action-requests";
 
+import { Button } from "@/components/ui/Button";
 type Phase =
   | { kind: "idle" }
   | { kind: "previewing" }
@@ -142,18 +143,18 @@ function ActionCardView({ card, onDone }: { card: ActionCard; onDone?: (label: s
           </span>
         ) : card.type === "triage_answer" ? (
           phase.kind === "previewed" ? (
-            <button type="button" onClick={() => confirmTriage(phase.hash)} className="rounded-md bg-zk-primary px-2.5 py-1 text-zk-sm font-semibold text-white" data-testid="ai-action-confirm">
+            <Button variant="primary" size="sm" type="button" onClick={() => confirmTriage(phase.hash)} data-testid="ai-action-confirm">
               確認
-            </button>
+            </Button>
           ) : (
-            <button type="button" disabled={busy} onClick={() => void startPreview()} className="rounded-md bg-zk-primary px-2.5 py-1 text-zk-sm font-semibold text-white disabled:opacity-50" data-testid="ai-action-preview">
+            <Button variant="primary" size="sm" type="button" disabled={busy} onClick={() => void startPreview()} data-testid="ai-action-preview">
               {phase.kind === "previewing" ? "預覽緊…" : "預覽影響"}
-            </button>
+            </Button>
           )
         ) : (
-          <button type="button" disabled={busy} onClick={() => schedule(sendWrite)} className="rounded-md bg-zk-primary px-2.5 py-1 text-zk-sm font-semibold text-white disabled:opacity-50" data-testid="ai-action-run">
+          <Button variant="primary" size="sm" type="button" disabled={busy} onClick={() => schedule(sendWrite)} data-testid="ai-action-run">
             {phase.kind === "sending" ? "送出中…" : "執行"}
-          </button>
+          </Button>
         )}
       </div>
 
