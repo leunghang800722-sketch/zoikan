@@ -20,6 +20,7 @@ import Link from "next/link";
 import { MenuButton } from "@/components/ui/MenuButton";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { UnpricedNotice } from "@/components/UnpricedNotice";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface MonthCloseDto {
@@ -348,42 +349,8 @@ export default function MonthlyCloseWorkbenchPage() {
           )}
         </div>
       )}
-      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
-      {unpricedCount > 0 && (
-        <Banner compact kind="warning">
-          <p className="font-medium">呢個月有 {unpricedCount} 更未定價（冇對應價目卡），金額未計入月結總表：</p>
-          <ul className="list-disc pl-5 mt-1">
-            {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
-                搶眼嘅 Notice，見下面）。 */}
-            {unpricedGroups
-              .filter((g) => g.category !== "no_settlement")
-              .map((g) => (
-                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Banner>
-      )}
-      {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
-          唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
-          單位」行。就算未定價 count＝0 都要顯示。 */}
-      {noSettlementCount > 0 && (
-        <Banner compact kind="error">
-          <p className="font-medium">
-            呢個月有 {noSettlementCount} 格冇結算單位（唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算單位」行）：
-          </p>
-          <ul className="list-disc pl-5 mt-1">
-            {unpricedGroups
-              .filter((g) => g.category === "no_settlement")
-              .map((g) => (
-                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Banner>
-      )}
+      {/* WP-PRICE §3：頁頂「N 更未定價」——P3-4.2 共用 <UnpricedNotice>（報表頁一行＋「去處理 ›」）。 */}
+      <UnpricedNotice variant="compact" month={month} unpricedCount={unpricedCount} noSettlementCount={noSettlementCount} groups={unpricedGroups} scope="月結總表" />
       <EmptyMonthNotice month={month} isEmpty={!checkingExisting && !result} onJump={setMonth} />
 
       {checkingExisting && !result && <div className="text-sm text-zk-faint">載入緊…</div>}

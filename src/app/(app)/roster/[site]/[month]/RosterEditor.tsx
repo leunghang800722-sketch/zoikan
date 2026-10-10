@@ -38,6 +38,7 @@ import { MQ_BELOW_SM } from "@/lib/ui/breakpoints";
 import { Button } from "@/components/ui/Button";
 import { iconBtn, menuItemBtn } from "@/components/ui/button-classes";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { UnpricedNotice } from "@/components/UnpricedNotice";
 // ---------------------------------------------------------------------------
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
 // docs/api.md「欄位命名」；淨係列出呢個畫面用得到嘅欄）。
@@ -2234,67 +2235,20 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       )}
       {/* WP-PRICE §3：呢個盤呢個月未定價格持續提示（唔止儲存嗰下先出——
           載入頁面已經攞緊，等用戶就算冇改動都睇到舊有缺價格）。 */}
-      {unpricedSummary && unpricedSummary.count > 0 && (
-        <Banner compact
-          kind="warning"
-          action={
-            canReprice ? (
-              <button
-                type="button"
-                onClick={handleReprice}
-                disabled={repricing}
-                className="rounded border border-current px-2 py-1 text-zk-sm disabled:opacity-50"
-              >
-                {repricing ? "計價緊…" : `重新計價（${month}）`}
-              </button>
-            ) : undefined
-          }
-        >
-          <p className="font-medium">呢個月有 {unpricedSummary.count} 更未定價（冇對應價目卡），金額未計入報表：</p>
-          {/* S3：分開講「出街價未定」／「收客價未定」（後者淨係逐更盤先算，
-              月費／admin_fee／special 盤 client_rate=null 屬正常）。 */}
-          <p className="text-zk-sm opacity-80">
-            出街價未定 {unpricedSummary.payoutCount ?? unpricedSummary.count} 更；收客價未定（逐更盤）{unpricedSummary.clientCount ?? 0} 更
-          </p>
-          <ul className="list-disc pl-5 mt-1">
-            {/* P0：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更搶眼
-                嘅 Notice，見下面）——留喺呢度就會誤標做「出街價未定」，
-                令用戶以為補張卡就得，但真正要做嘅係指定雞頭。 */}
-            {unpricedSummary.groups
-              .filter((g) => g.category !== "no_settlement")
-              .map((g) => (
-                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                  {g.category === "client_unpriced" ? "收客價未定 · " : "出街價未定 · "}
-                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-          <p className="mt-1">
-            去<Link href="/rate-cards" className="underline" style={{ color: "inherit" }}>價目頁</Link>補卡後
-            {canReprice ? "，撳右邊「重新計價」。" : "，請有「出街價:update」權限嘅同事撳「重新計價」。"}
-          </p>
-        </Banner>
-      )}
-      {/* P0（Opus 驗收重現）：呢個盤呢個月有幾多格 settlement_broker_id
-          係 NULL——呢批更喺糧明細完全消失（唔止未定價，成條記錄搵唔
-          到），獨立、更搶眼（danger）嘅 Notice，唔可以同上面「未定價」
-          混埋一齊（會令人以為補張卡就搞掂）。 */}
-      {unpricedSummary && (unpricedSummary.noSettlementCount ?? 0) > 0 && (
-        <Banner compact kind="error">
-          <p className="font-medium">
-            呢個月有 {unpricedSummary.noSettlementCount} 更冇結算單位（settlement_broker_id 未定）——
-            <strong>呢批更唔會出現喺任何雞頭嘅糧明細</strong>，請盡快幫呢啲格指定雞頭再儲存。
-          </p>
-          <ul className="list-disc pl-5 mt-1">
-            {unpricedSummary.groups
-              .filter((g) => g.category === "no_settlement")
-              .map((g) => (
-                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Banner>
+      {/* WP-PRICE §3：呢個盤呢個月未定價／冇結算單位持續提示（載入頁面已經攞緊，就算冇改動都睇到）。P3-4.2：共用 <UnpricedNotice variant="full">。 */}
+      {unpricedSummary && (
+        <UnpricedNotice
+          variant="full"
+          month={month}
+          unpricedCount={unpricedSummary.count}
+          noSettlementCount={unpricedSummary.noSettlementCount ?? 0}
+          groups={unpricedSummary.groups}
+          payoutCount={unpricedSummary.payoutCount}
+          clientCount={unpricedSummary.clientCount}
+          canReprice={canReprice}
+          repricing={repricing}
+          onReprice={handleReprice}
+        />
       )}
       {warnings.length > 0 && (
         <div className="rounded border border-zk-warning-border bg-zk-warning-bg text-zk-warning-dark text-sm px-3 py-2 space-y-1">

@@ -13,7 +13,7 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { Pill } from "@/components/ui/Pill";
-import { EmptyState, tableCls, tableMinWidth } from "@/components/ui/DataTable";
+import { EmptyState, tableCls, tableMinWidth, TableEmptyRow } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "@/lib/ui/api-client";
 import { fmtMoney, fmtDate, currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
@@ -504,11 +504,7 @@ function InputsSection({
           </thead>
           <tbody>
             {inputs.length === 0 ? (
-              <tr>
-                <td colSpan={7} className={tableCls.tdMuted}>
-                  呢個月未有人手輸入項
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={7}>呢個月未有人手輸入項</TableEmptyRow>
             ) : (
               inputs.map((i) => (
                 <tr key={i.id} className={tableCls.rowHover}>
@@ -680,11 +676,7 @@ function ContractsSection({
           </thead>
           <tbody>
             {visible.length === 0 ? (
-              <tr>
-                <td colSpan={8} className={tableCls.tdMuted}>
-                  未有合約——用「Maxwell 導入」或者呼叫 POST /api/longterm/contracts 新增
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={8}>未有合約——用「Maxwell 導入」或者呼叫 POST /api/longterm/contracts 新增</TableEmptyRow>
             ) : (
               visible.map((c) => (
                 <tr key={c.id} className={tableCls.rowHover}>
@@ -845,11 +837,7 @@ function AvgWageLeaveBalanceSection({
             </thead>
             <tbody>
               {avgWages.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className={tableCls.tdMuted}>
-                    冇記錄——fallback 用日薪
-                  </td>
-                </tr>
+                <TableEmptyRow colSpan={3}>冇記錄——fallback 用日薪</TableEmptyRow>
               ) : (
                 avgWages.map((w) => (
                   <tr key={w.id} className={tableCls.rowHover}>
@@ -881,11 +869,7 @@ function AvgWageLeaveBalanceSection({
             </thead>
             <tbody>
               {leaveBalances.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className={tableCls.tdMuted}>
-                    冇記錄——重算本月後自動寫回
-                  </td>
-                </tr>
+                <TableEmptyRow colSpan={5}>冇記錄——重算本月後自動寫回</TableEmptyRow>
               ) : (
                 leaveBalances.map((b) => (
                   <tr key={b.id} className={tableCls.rowHover}>

@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtDateTime, todayLocalStr, addDaysStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
 
@@ -228,11 +228,7 @@ export default function AuditLogPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr>
-                <td className="px-3.5 py-4 text-zk-faint" colSpan={6}>
-                  載入緊…
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={6} />
             )}
             {!loading && rows.length === 0 && (
               <tr>

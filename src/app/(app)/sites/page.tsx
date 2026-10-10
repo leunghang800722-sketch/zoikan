@@ -11,10 +11,11 @@ import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow, TableEmptyRow } from "@/components/ui/DataTable";
 import { fmt, fmtMoney } from "@/lib/ui/format";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
 import { kickerFor } from "@/lib/nav/schema";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 const PRORATA_BASIS = ["div_31", "div_month_days"] as const;
 const BILLING_GROUPS = ["per_shift", "monthly_ic"] as const;
@@ -92,21 +93,15 @@ function billingModelPill(model: string) {
 }
 
 export default function SitesPage() {
-  const [rows, setRows] = useState<SiteRow[]>([]);
   const [shiftTypesBySite, setShiftTypesBySite] = useState<Record<string, ShiftTypeRow[]>>({});
   // S1（Opus 驗收）：「更別」欄未讀到之前顯示「載入緊…」，唔好當佢真係
   // 冇更別（「—」）——落面 load() 一次過攞晒 shift-types 先會清呢個 flag。
   const [shiftTypesLoading, setShiftTypesLoading] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [hasMoneyField, setHasMoneyField] = useState(true);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptySiteForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, setNotice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, setFormError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<SiteRow, typeof emptySiteForm>(emptySiteForm);
 
   const [shiftTypesFor, setShiftTypesFor] = useState<SiteRow | null>(null);
   // WP-POSTORDER-FREE（§34 B）：雞頭名單（揀盤預設雞頭用）＋「建議」。
@@ -145,21 +140,18 @@ export default function SitesPage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // WP-RECONCILE-UI（§33.3 D）：`/sites?focus=<siteId>` 高亮＋捲到該盤（純 UI）。
   const focusSite = useFocusParam();
   useScrollToFocus(focusSite, !loading && rows.length > 0);
 
   function openCreate() {
-    setEditingId(null);
-    setForm(emptySiteForm);
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer();
   }
 
   function openEdit(row: SiteRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       canonical_name: row.canonical_name,
       aliases: (row.aliases ?? []).join(", "),
       client_name: row.client_name,
@@ -174,9 +166,7 @@ export default function SitesPage() {
       roster_file_keys: (row.roster_file_keys ?? []).join(", "),
       default_settlement_broker_id: row.default_settlement_broker_id ?? "",
     });
-    setFormError(null);
     setSuggestion(null);
-    setDrawerOpen(true);
     // 雞頭名單只喺開編輯抽屜先攞（列表頁 request 集合不變）。
     if (brokers.length === 0) {
       void (async () => {
@@ -208,8 +198,6 @@ export default function SitesPage() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setFormError(null);
     const aliases = form.aliases
       .split(",")
       .map((s) => s.trim())
@@ -233,39 +221,18 @@ export default function SitesPage() {
     if (hasMoneyField && form.monthly_fee !== "") body.monthly_fee = Number(form.monthly_fee);
     if (editingId) body.default_settlement_broker_id = form.default_settlement_broker_id || null;
 
-    const res = editingId
-      ? await apiPatch(`/api/sites/${editingId}`, body)
-      : await apiPost("/api/sites", { ...body, canonical_name: form.canonical_name });
-    setSaving(false);
-    if (!res.ok) {
-      setFormError(res.message);
-      return;
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+    await saveForm(
+      () => (editingId ? apiPatch(`/api/sites/${editingId}`, body) : apiPost("/api/sites", { ...body, canonical_name: form.canonical_name })),
+      load,
+    );
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/sites/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已結束");
-    await load();
+    await runAction(() => apiPost(`/api/sites/${id}/void`, { reason }), "已結束", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/sites/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已恢復");
-    await load();
+    await runAction(() => apiPost(`/api/sites/${id}/unvoid`), "已恢復", load);
   }
 
   // 其他（Opus 驗收）：頭列實際係 盤名/客戶/結算模式/(月費)/更別/狀態/
@@ -310,11 +277,7 @@ export default function SitesPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {rows.map((r) => (
                   <tr key={r.id} className={`${tableCls.rowHover} ${focusSite === r.id ? FOCUS_CLS : ""}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
@@ -724,38 +687,30 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
         )}
 
         <div className="overflow-x-auto rounded border border-zk-border">
-          <table className="w-full text-xs">
-            <thead className="bg-zk-header text-left text-zk-muted">
+          <table className={tableCls.table}>
+            <thead>
               <tr>
-                <th className="px-2 py-1.5">代號</th>
-                <th className="px-2 py-1.5">名稱</th>
-                <th className="px-2 py-1.5">時段</th>
-                <th className="px-2 py-1.5">操作</th>
+                <th className={tableCls.th}>代號</th>
+                <th className={tableCls.th}>名稱</th>
+                <th className={tableCls.th}>時段</th>
+                <th className={tableCls.th}>操作</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr>
-                  <td className="px-2 py-3 text-zk-faint" colSpan={4}>
-                    載入緊…
-                  </td>
-                </tr>
+                <TableLoadingRow colSpan={4} />
               )}
               {!loading && rows.length === 0 && (
-                <tr>
-                  <td className="px-2 py-3 text-zk-faint" colSpan={4}>
-                    暫時冇更別
-                  </td>
-                </tr>
+                <TableEmptyRow colSpan={4}>暫時冇更別</TableEmptyRow>
               )}
               {rows.map((r) => (
-                <tr key={r.id} className="border-t border-zk-border-soft">
-                  <td className="px-2 py-1.5">{r.code}</td>
-                  <td className="px-2 py-1.5">{fmt(r.label)}</td>
-                  <td className="px-2 py-1.5">
+                <tr key={r.id}>
+                  <td className={tableCls.td}>{r.code}</td>
+                  <td className={tableCls.td}>{fmt(r.label)}</td>
+                  <td className={tableCls.td}>
                     {fmt(r.start_time)}–{fmt(r.end_time)}
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className={tableCls.td}>
                     <div className="flex flex-wrap items-center gap-1">
                       <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯

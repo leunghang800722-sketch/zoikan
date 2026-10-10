@@ -24,11 +24,12 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { fmt, fmtDateTime, uiLabel } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 interface UserRow {
   id: string;
@@ -82,19 +83,13 @@ function statusPill(row: UserRow): React.ReactNode {
 }
 
 export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
-  const [rows, setRows] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [roleFilter, setRoleFilter] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<UserRow, typeof emptyForm>(emptyForm);
 
   // 「重設密碼」二次確認 ＋ 一次性顯示臨時密碼（見頂註解）。
   const [confirmResetId, setConfirmResetId] = useState<string | null>(null);
@@ -122,6 +117,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function roleOf(id: string): RoleRow | undefined {
@@ -138,15 +134,11 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
   }
 
   function openCreate() {
-    setEditingId(null);
-    setForm({ ...emptyForm, role_id: roles[0]?.id ?? "" });
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer({ ...emptyForm, role_id: roles[0]?.id ?? "" });
   }
 
   function openEdit(row: UserRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       name: row.name,
       tel: row.tel,
       password: "",
@@ -157,31 +149,22 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
         row.payout_approval_limit !== undefined && row.payout_approval_limit !== null ? String(row.payout_approval_limit) : "",
       allowed_ip: row.allowed_ip ?? "",
     });
-    setFormError(null);
-    setDrawerOpen(true);
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setFormError(null);
-
-    if (editingId) {
-      const body: Record<string, unknown> = {
-        name: form.name,
-        role_id: form.role_id,
-        guard_id: form.guard_id || undefined,
-        broker_id: form.broker_id || undefined,
-        payout_approval_limit: form.payout_approval_limit ? Number(form.payout_approval_limit) : undefined,
-        allowed_ip: form.allowed_ip || undefined,
-      };
-      const res = await apiPatch(`/api/users/${editingId}`, body);
-      setSaving(false);
-      if (!res.ok) {
-        setFormError(res.message);
-        return;
+    await saveForm(() => {
+      if (editingId) {
+        const body: Record<string, unknown> = {
+          name: form.name,
+          role_id: form.role_id,
+          guard_id: form.guard_id || undefined,
+          broker_id: form.broker_id || undefined,
+          payout_approval_limit: form.payout_approval_limit ? Number(form.payout_approval_limit) : undefined,
+          allowed_ip: form.allowed_ip || undefined,
+        };
+        return apiPatch(`/api/users/${editingId}`, body);
       }
-    } else {
       const body: Record<string, unknown> = {
         name: form.name,
         tel: form.tel,
@@ -192,38 +175,16 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
         payout_approval_limit: form.payout_approval_limit ? Number(form.payout_approval_limit) : undefined,
         allowed_ip: form.allowed_ip || undefined,
       };
-      const res = await apiPost("/api/users", body);
-      setSaving(false);
-      if (!res.ok) {
-        setFormError(res.message);
-        return;
-      }
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+      return apiPost("/api/users", body);
+    }, load);
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/users/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已停用");
-    await load();
+    await runAction(() => apiPost(`/api/users/${id}/void`, { reason }), "已停用", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/users/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已恢復");
-    await load();
+    await runAction(() => apiPost(`/api/users/${id}/unvoid`), "已恢復", load);
   }
 
   async function onResetPassword(row: UserRow) {
@@ -298,11 +259,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
           </thead>
           <tbody>
             {loading && (
-              <tr>
-                <td className="px-3.5 py-4 text-zk-faint" colSpan={7}>
-                  載入緊…
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={7} />
             )}
             {!loading && filteredRows.length === 0 && (
               <tr>

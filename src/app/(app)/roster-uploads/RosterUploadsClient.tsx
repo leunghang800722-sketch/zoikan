@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { Field, selectCls } from "@/components/ui/Field";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow, TableEmptyRow } from "@/components/ui/DataTable";
 import { fmtDate, fmtDateTime } from "@/lib/ui/format";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { classifyUploadResult, runQueueWithConcurrency, summarizeOutcomes, type RosterUploadPostData, type UploadOutcome } from "@/lib/roster-upload/upload-queue";
@@ -810,18 +810,10 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {!loading && visibleEntries.length === 0 && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount} data-testid="roster-upload-nothing-to-do">
-                      冇需要處理嘅盤（上載更表之後，未對數／有未配對嘅盤會出現喺呢度）。
-                    </td>
-                  </tr>
+                  <TableEmptyRow colSpan={colCount}>冇需要處理嘅盤（上載更表之後，未對數／有未配對嘅盤會出現喺呢度）。</TableEmptyRow>
                 )}
                 {visibleEntries.map((entry) => {
                   const u = entry.upload;
@@ -1111,11 +1103,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                 </thead>
                 <tbody>
                   {detail.rows.rows.length === 0 && (
-                    <tr>
-                      <td className={tableCls.tdMuted} colSpan={7}>
-                        冇符合條件嘅記錄
-                      </td>
-                    </tr>
+                    <TableEmptyRow colSpan={7}>冇符合條件嘅記錄</TableEmptyRow>
                   )}
                   {detail.rows.rows.map((r) => {
                     const style = shiftCodeStyle(r.raw_code, { isLeave: r.code_kind === "leave" });

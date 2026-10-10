@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { EmptyState } from "@/components/ui/DataTable";
+import { EmptyState, tableCls } from "@/components/ui/DataTable";
 import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 import { kickerFor } from "@/lib/nav/schema";
@@ -265,22 +265,22 @@ export default function GuardImportPage() {
           </div>
 
           <div className="overflow-x-auto rounded-lg border border-zk-border">
-            <table className="w-full text-zk-sm">
+            <table className={tableCls.table}>
               <thead>
                 <tr className="text-left text-zk-faint">
-                  <th className="p-2">欄位</th>
-                  <th className="p-2">已確認</th>
-                  <th className="p-2">待覆核</th>
-                  <th className="p-2">冇資料</th>
+                  <th className={tableCls.th}>欄位</th>
+                  <th className={tableCls.th}>已確認</th>
+                  <th className={tableCls.th}>待覆核</th>
+                  <th className={tableCls.th}>冇資料</th>
                 </tr>
               </thead>
               <tbody>
                 {Object.entries(preview.field_stats).map(([f, s]) => (
-                  <tr key={f} className="border-t border-zk-border">
-                    <td className="p-2">{FIELD_LABEL[f] ?? f}</td>
-                    <td className="p-2">{s.confirmed}</td>
-                    <td className="p-2">{s.review}</td>
-                    <td className="p-2">{s.missing}</td>
+                  <tr key={f}>
+                    <td className={tableCls.td}>{FIELD_LABEL[f] ?? f}</td>
+                    <td className={tableCls.td}>{s.confirmed}</td>
+                    <td className={tableCls.td}>{s.review}</td>
+                    <td className={tableCls.td}>{s.missing}</td>
                   </tr>
                 ))}
               </tbody>
@@ -292,22 +292,22 @@ export default function GuardImportPage() {
               <div className="font-semibold">新增欄位（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人）</div>
               {preview.ext_stats && (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-zk-sm">
+                  <table className={tableCls.table}>
                     <thead>
                       <tr className="text-left text-zk-faint">
-                        <th className="p-1">欄位</th>
-                        <th className="p-1">已確認</th>
-                        <th className="p-1">待覆核</th>
-                        <th className="p-1">自動會寫</th>
+                        <th className={tableCls.th}>欄位</th>
+                        <th className={tableCls.th}>已確認</th>
+                        <th className={tableCls.th}>待覆核</th>
+                        <th className={tableCls.th}>自動會寫</th>
                       </tr>
                     </thead>
                     <tbody>
                       {preview.ext_stats.fields.map((f) => (
-                        <tr key={f.key} className="border-t border-zk-border">
-                          <td className="p-1">{EXT_LABEL[f.key] ?? "其他資料"}</td>
-                          <td className="p-1">{f.confirmed}</td>
-                          <td className="p-1">{f.review}</td>
-                          <td className="p-1">{preview.ext_stats!.to_write.find((w) => w.key === f.key)?.count ?? 0}</td>
+                        <tr key={f.key}>
+                          <td className={tableCls.td}>{EXT_LABEL[f.key] ?? "其他資料"}</td>
+                          <td className={tableCls.td}>{f.confirmed}</td>
+                          <td className={tableCls.td}>{f.review}</td>
+                          <td className={tableCls.td}>{preview.ext_stats!.to_write.find((w) => w.key === f.key)?.count ?? 0}</td>
                         </tr>
                       ))}
                     </tbody>

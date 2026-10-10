@@ -18,7 +18,7 @@ import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow, TableEmptyRow } from "@/components/ui/DataTable";
 import { fmtMoney } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { BROKER_KIND_LABEL, brokerKindPillTone, type BrokerKindLiteral } from "@/lib/ui/broker-kind";
@@ -26,6 +26,7 @@ import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { buildBankInfo, readBankFields } from "@/lib/ui/broker-bank";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 // A2（Opus 整合驗收）：呢頁「種類」select 嘅選項同表格 pill 之前各自有
 // 一套標籤（select 出 raw kind 字面值；表格 `kindPill()` 自己砌一套
@@ -91,16 +92,10 @@ function kindPill(kind: string) {
 }
 
 export default function BrokersPage() {
-  const [rows, setRows] = useState<BrokerRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, setNotice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<BrokerRow, typeof emptyForm>(emptyForm);
 
   const [feeRatesBroker, setFeeRatesBroker] = useState<BrokerRow | null>(null);
   const [feeRates, setFeeRates] = useState<ReferralFeeRateRow[]>([]);
@@ -151,6 +146,7 @@ export default function BrokersPage() {
     apiGetAll<BrokerSiteAssignmentRow>("/api/broker-site-assignments").then((res) => {
       if (res.ok) setAssignments(res.data.rows);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // WP-RECONCILE-UI（§33.3 D）：`/brokers?focus=<雞頭碼>` 高亮＋捲到該雞頭（純 UI；碼未登記就冇得高亮）。
@@ -258,15 +254,11 @@ export default function BrokersPage() {
   }
 
   function openCreate() {
-    setEditingId(null);
-    setForm(emptyForm);
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer();
   }
 
   function openEdit(row: BrokerRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       code: row.code,
       name: row.name,
       kind: row.kind,
@@ -276,16 +268,12 @@ export default function BrokersPage() {
       requires_approval: row.requires_approval,
       aliases: (row.aliases ?? []).join(", "),
     });
-    setFormError(null);
-    setDrawerOpen(true);
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setFormError(null);
     // P3-3.6：銀行名／戶口號碼兩格存返同一個 bank_info JSON；舊 JSON 其他 key 保留。
     const bankInfo = buildBankInfo(editingId ? rows.find((r) => r.id === editingId)?.bank_info : undefined, form.bank_name, form.bank_account_no);
-    setSaving(true);
     const aliases = form.aliases
       .split(",")
       .map((s) => s.trim())
@@ -297,39 +285,18 @@ export default function BrokersPage() {
       requires_approval: form.requires_approval,
       aliases,
     };
-    const res = editingId
-      ? await apiPatch(`/api/brokers/${editingId}`, body)
-      : await apiPost("/api/brokers", { ...body, code: form.code, kind: form.kind });
-    setSaving(false);
-    if (!res.ok) {
-      setFormError(res.message);
-      return;
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+    await saveForm(
+      () => (editingId ? apiPatch(`/api/brokers/${editingId}`, body) : apiPost("/api/brokers", { ...body, code: form.code, kind: form.kind })),
+      load,
+    );
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/brokers/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已停用");
-    await load();
+    await runAction(() => apiPost(`/api/brokers/${id}/void`, { reason }), "已停用", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/brokers/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已恢復");
-    await load();
+    await runAction(() => apiPost(`/api/brokers/${id}/unvoid`), "已恢復", load);
   }
 
   // S2：加返「需要審批」欄（README 冇逐個列，但 base 有，丟咗會少
@@ -378,11 +345,7 @@ export default function BrokersPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {rows.map((r) => (
                   <tr key={r.id} className={`${tableCls.rowHover} ${isFocus(r) ? FOCUS_CLS : ""}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
@@ -494,18 +457,10 @@ export default function BrokersPage() {
               </thead>
               <tbody>
                 {feeRatesLoading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={5}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={5} />
                 )}
                 {!feeRatesLoading && feeRates.length === 0 && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={5}>
-                      暫時冇費率行
-                    </td>
-                  </tr>
+                  <TableEmptyRow colSpan={5}>暫時冇費率行</TableEmptyRow>
                 )}
                 {feeRates.map((r) => (
                   <tr key={r.id} className={`${tableCls.rowHover} ${r.voided_at ? "opacity-45" : ""}`}>
