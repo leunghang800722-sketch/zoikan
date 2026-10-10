@@ -173,7 +173,7 @@ export function classifyReason(reason: string | null | undefined): ReasonPart[] 
       if (raw.includes("上載未指定盤")) return { kind: "no_site", raw };
       const bc = raw.match(/雞頭碼「(.*?)」對唔到/);
       if (bc) return { kind: "broker_code", raw, value: bc[1] };
-      if (/^保?保安員未配對/.test(raw)) return { kind: "guard", raw };
+      if (/^保?安員未配對/.test(raw)) return { kind: "guard", raw };
       if (raw.includes("請假格推斷唔到")) return { kind: "leave_shift", raw };
       if (raw.startsWith("更別未配對")) return { kind: "shift_type", raw };
       if (raw.includes("更種已作廢")) return { kind: "voided_shift_type", raw };

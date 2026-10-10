@@ -23,7 +23,7 @@ def files():
     out = subprocess.check_output(
         "git ls-files src tests docs scripts README.md", shell=True, text=True).split("\n")
     for f in out:
-        if not f or f == "scripts/one-off/term-guard-scan.py": continue
+        if not f or f in ("scripts/one-off/term-guard-scan.py", "tests/term-guard.test.ts"): continue
         if f.endswith(CODE_EXT + DOC_EXT): yield f
 
 def classify_line(f, line):
@@ -71,6 +71,8 @@ def classify_line(f, line):
             res.append((p, m.end(), "comment")); continue
         # 字串外、非註解：JSX 文字 or 識別字
         before = line[:p]; after = line[m.end():]
+        if re.search(r"[A-Za-z0-9_$\u4e00-\u9fff]\.$", before):
+            res.append((p, m.end(), "skip-ident")); continue  # 屬性存取（老闆.安員個人資料）
         if re.search(r"[A-Za-z0-9_$]$", before) or re.match(r"[A-Za-z0-9_$]", after):
             res.append((p, m.end(), "skip-ident")); continue
         if re.match(r"[\p{Han}\w]*\s*:" if False else r"\w*\s*:(?!:)", after) and re.search(r"[\s{,]$|^$", before) and not re.search(r">", before[-1:]):

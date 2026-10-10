@@ -7,14 +7,14 @@ export const MODULE_LABELS: Readonly<Record<string, string>> = {
   安員批量導入: "保安員批量導入",
   安員配對修復: "保安員配對修復",
   安員銀行資料: "保安員銀行資料",
-  自己保安員: "自己保安員",
+  自己安員: "自己保安員",
 };
 
 export function moduleLabel(key: string): string {
-  return MODULE_LABELS[key] ?? key.replace(/(?<!保)保安員/g, "保安員");
+  return MODULE_LABELS[key] ?? key.replace(/(?<!保)安員/g, "保安員");
 }
 
-/** 角色名（base_role／自訂角色名）顯示：內部識別「保安員」→ 顯示「保安員」。 */
+/** 角色名（base_role／自訂角色名）顯示：內部識別「安員」→ 顯示「保安員」。 */
 export function roleDisplay(name: string): string {
-  return name.replace(/(?<!保)保安員/g, "保安員");
+  return name.replace(/(?<!保)安員/g, "保安員");
 }

@@ -27,31 +27,31 @@ const LICENCE_KEYS = ["sia_permit_no", "sia_permit_type", "sia_permit_a_expiry",
 
 describe("WP-PII §1：矩陣出廠值——保安員個人資料／保安員銀行資料", () => {
   it("老闆：兩個 module view/update 都 grant", () => {
-    expect(DEFAULT_MATRIX.老闆.保安員個人資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.老闆.保安員個人資料.update).toBe("grant");
-    expect(DEFAULT_MATRIX.老闆.保安員銀行資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.老闆.保安員銀行資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.安員個人資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.安員個人資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.安員銀行資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.老闆.安員銀行資料.update).toBe("grant");
   });
 
   it("會計：兩個 module view/update 都 grant（老闆話「會計全睇」）", () => {
-    expect(DEFAULT_MATRIX.會計.保安員個人資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.會計.保安員個人資料.update).toBe("grant");
-    expect(DEFAULT_MATRIX.會計.保安員銀行資料.view).toBe("grant");
-    expect(DEFAULT_MATRIX.會計.保安員銀行資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.安員個人資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.安員個人資料.update).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.安員銀行資料.view).toBe("grant");
+    expect(DEFAULT_MATRIX.會計.安員銀行資料.update).toBe("grant");
   });
 
   it("主管：保安員個人資料出廠關（老闆可以開）；保安員銀行資料硬性拒", () => {
-    expect(DEFAULT_MATRIX.主管.保安員個人資料.view).toBe("off");
-    expect(DEFAULT_MATRIX.主管.保安員個人資料.update).toBe("off");
-    expect(DEFAULT_MATRIX.主管.保安員銀行資料.view).toBe("deny");
-    expect(DEFAULT_MATRIX.主管.保安員銀行資料.update).toBe("deny");
+    expect(DEFAULT_MATRIX.主管.安員個人資料.view).toBe("off");
+    expect(DEFAULT_MATRIX.主管.安員個人資料.update).toBe("off");
+    expect(DEFAULT_MATRIX.主管.安員銀行資料.view).toBe("deny");
+    expect(DEFAULT_MATRIX.主管.安員銀行資料.update).toBe("deny");
   });
 
   it("雞頭／保安員：兩個 module 全部 action 硬性拒", () => {
     for (const role of ["雞頭", "安員"] as const) {
       for (const action of ["view", "create", "update", "void", "export"] as const) {
-        expect(DEFAULT_MATRIX[role].保安員個人資料[action]).toBe("deny");
-        expect(DEFAULT_MATRIX[role].保安員銀行資料[action]).toBe("deny");
+        expect(DEFAULT_MATRIX[role].安員個人資料[action]).toBe("deny");
+        expect(DEFAULT_MATRIX[role].安員銀行資料[action]).toBe("deny");
       }
     }
   });
