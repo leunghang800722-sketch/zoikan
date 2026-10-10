@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { buildShortfall } from "@/lib/reports/shortfall";
+import { withReportContext } from "@/lib/reports/context";
 import type { AiToolContext } from "./common";
 import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 
@@ -18,7 +19,7 @@ export function createShortfallTool(ctx: AiToolContext) {
       if (denied) return deniedResult(denied);
 
       const dateObj = new Date(`${date}T00:00:00.000Z`);
-      const result = await buildShortfall(dateObj);
+      const result = await withReportContext(() => buildShortfall(dateObj));
       const { clientRateVisible, settlementVisible } = ctx.fieldVisibility;
       const moneyVisible = clientRateVisible && settlementVisible;
 

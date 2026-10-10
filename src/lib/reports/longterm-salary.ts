@@ -10,6 +10,7 @@
 // 已經驗證嘅 P0 對數 gate。
 import { prisma } from "@/lib/db";
 import { n, round2, monthRange } from "./money";
+import { memoized } from "./context";
 
 export interface LongtermSalaryAllocationResult {
   bySite: Map<string, number>;
@@ -23,7 +24,11 @@ export interface LongtermSalaryAllocationResult {
   missingSalary: Array<{ guardRef: string; siteIds: string[] }>;
 }
 
-export async function buildLongtermSalaryAllocation(month: Date): Promise<LongtermSalaryAllocationResult> {
+export function buildLongtermSalaryAllocation(month: Date): Promise<LongtermSalaryAllocationResult> {
+  return memoized(`ltsalary:${monthRange(month).start.toISOString()}`, () => buildLongtermSalaryAllocationUncached(month));
+}
+
+async function buildLongtermSalaryAllocationUncached(month: Date): Promise<LongtermSalaryAllocationResult> {
   const { start: MONTH_START, end: MONTH_END } = monthRange(month);
   const guards = await prisma.guard.findMany({
     where: { employmentType: "longterm_autopay" },

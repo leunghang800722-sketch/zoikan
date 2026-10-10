@@ -17,6 +17,7 @@ import {
   readPricingExplain,
   monthFromYm,
 } from "../../reports/ai-diagnostics";
+import { withReportContext } from "@/lib/reports/context";
 import type { AiToolContext } from "./common";
 import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 
@@ -68,7 +69,7 @@ export function createMonthHealthTool(ctx: AiToolContext) {
     run: async ({ month }) => {
       const denied = await requireModuleOrDenied(ctx, "月結總表");
       if (denied) return deniedResult(denied);
-      return toolResultJson(await readMonthHealth(monthFromYm(month), ctx.session));
+      return toolResultJson(await withReportContext(() => readMonthHealth(monthFromYm(month), ctx.session)));
     },
   });
 }

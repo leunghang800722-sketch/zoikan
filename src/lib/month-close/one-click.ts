@@ -45,6 +45,7 @@ import { parsePostorderUploadRow } from "@/lib/guard-fix/postorder";
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 import { LONGTERM_REFERRAL_AUTOCOMPUTE_FROM } from "@/lib/pricing/resolve-rate";
 import { buildMonthlyClose } from "@/lib/reports/monthly-close";
+import { invalidateReportMemo, withReportContext } from "@/lib/reports/context";
 import { buildGrossMargin } from "@/lib/reports/gross-margin";
 import { buildPayrollTotals, buildPayrollSourceSummary } from "@/lib/reports/payroll";
 import { computeReferralFeesForMonth, recomputeReferralFees, REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH } from "@/lib/reports/referral-fee";
@@ -898,6 +899,8 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
     warnings.push(longtermPayrollNote);
   }
 
+  // 長工糧／介紹費啱啱重算完，之前喺同一 context 讀過嘅報表結果過時，要作廢。
+  invalidateReportMemo();
   const [close, margin, payroll, payrollSource] = await Promise.all([buildMonthlyClose(month), buildGrossMargin(month), buildPayrollTotals(month), buildPayrollSourceSummary(month)]);
   // 總收入＝月結總表（主表＋月結以外）；成本／毛利＝毛利即時表 `totals`
   // （同一 lib、同頁面一致）。Opus 驗收：原版用「月結總表收入 − 毛利」
@@ -1015,11 +1018,15 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
     await runner.run("reconcile_apply", () => stepReconcileApply(monthStartDate, actorUserId, ip));
     await runner.run("auto_pricing", () => stepAutoPricing(monthStartDate, actorUserId, auto));
     await runner.run("pricing_check", () => stepPricingCheck(monthStartDate, actorUserId, auto));
+    // P3-2.1（附錄 b A-13）：step6 計數＋Postorder 對照＋報告共用一個報表 memo context——
+    // 同一月 `buildMonthlyClose` 由 3 次降到 1 次。context 只活喺呢段（run 結束即棄），
+    // 唔跨 run；compute 內長工糧重算之後會 `invalidateReportMemo()`。
+    const reportStep = await withReportContext(async () => {
     const compute = await runner.run("compute", () => stepCompute(monthStartDate, actorUserId, ip));
     const referralSystemTotal = (compute.numbers.referralFeeTotal as number) ?? 0;
     await runner.run("postorder_compare", () => stepPostorderCompare(monthStartDate, referralSystemTotal));
 
-    const reportStep = await runner.run("report", async () => {
+    return await runner.run("report", async () => {
       const coverage = await checkRosterUploadCoverage(monthStartDate);
       const currentClose = await prisma.monthClose.findUnique({ where: { month: monthStartDate } });
       const unpricedCount = (runner.get("pricing_check").numbers.count as number) ?? 0;
@@ -1083,6 +1090,7 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
         console.error("[one-click] 體檢失敗（略過）：", safeErrorSummary(e));
       }
       return { numbers: { ...(report as unknown as Record<string, unknown>), health } };
+    });
     });
 
     await prisma.monthCloseRun.update({

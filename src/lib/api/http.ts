@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withReportContext } from "@/lib/reports/context";
 import { gzipSync } from "node:zlib";
 import { ApiError } from "./errors";
 import { camelToSnakeDeep, type Dto } from "./serialize";
@@ -76,7 +77,9 @@ export function handleApiError(err: unknown): NextResponse {
 
 export async function withApiError(fn: () => Promise<NextResponse>): Promise<NextResponse> {
   try {
-    return await fn();
+    // P3-2.1：每個 API request 一個報表 memo context（同 request 內唔重複計同一月報表；
+    // 唔跨 request，見 src/lib/reports/context.ts）。
+    return await withReportContext(fn);
   } catch (err) {
     return handleApiError(err);
   }
