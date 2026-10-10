@@ -109,6 +109,17 @@ describe("groupNavLinks（WP-R1 左欄分組，純顯示層）", () => {
     }
   });
 
+  it("P3-0.3 雞頭（有「雞頭:view」grant）：getNavLinks 唔出 /brokers，分組後冇「其他」組；內部角色照出", async () => {
+    const allGrants = Object.fromEntries(MODULES.map((m) => [m, true])) as Record<Module, boolean>;
+    const mk = (baseRole: string) => ({ userId: "u", roleId: "r", baseRole, brokerId: null, guardId: null }) as unknown as CurrentSession;
+    const brokerGrants = { ...(Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault("雞頭", m, "view")])) as Record<Module, boolean>), 雞頭: true };
+    const brokerLinks = await getNavLinks(mk("雞頭"), brokerGrants);
+    expect(brokerLinks.map((l) => l.href)).not.toContain("/brokers");
+    expect(groupNavLinks("雞頭", brokerLinks).map((g) => g.title)).not.toContain("其他");
+    const bossLinks = await getNavLinks(mk("老闆"), allGrants);
+    expect(bossLinks.map((l) => l.href)).toContain("/brokers");
+  });
+
   it("分組表冇列出嘅 href（未知連結）落尾組「其他」，唔會靜靜消失", () => {
     const linksWithUnknown: NavLink[] = [...FULL_INTERNAL_LINKS, { href: "/some-new-page", label: "新頁面" }];
     const groups = groupNavLinks("老闆", linksWithUnknown);
