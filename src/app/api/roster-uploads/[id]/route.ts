@@ -18,12 +18,13 @@ import { writeAudit } from "@/lib/audit";
 import { NotFound, BadRequest, Conflict } from "@/lib/api/errors";
 import { assignRosterUploadSite, reparseRosterUpload } from "@/lib/roster-upload/service";
 import type { Prisma } from "@prisma/client";
+import { ROSTER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
     const session = await requirePermission(req, "更表上載", "view");
     const { id } = await params;
-    const upload = await prisma.rosterUpload.findUnique({ where: { id } });
+    const upload = await prisma.rosterUpload.findUnique({ where: { id }, select: ROSTER_UPLOAD_META_SELECT });
     if (!upload) throw NotFound();
 
     const url = new URL(req.url);
@@ -67,7 +68,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     };
 
     const [rows, total] = await Promise.all([
-      prisma.rosterUploadRow.findMany({ where, skip, take, orderBy: [{ workDate: "asc" }, { rowIndex: "asc" }] }),
+      prisma.rosterUploadRow.findMany({ where, skip, take, orderBy: [{ workDate: "asc" }, { rowIndex: "asc" }, { id: "asc" }] }),
       prisma.rosterUploadRow.count({ where }),
     ]);
 
@@ -94,7 +95,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   return withApiError(async () => {
     const session = await requirePermission(req, "更表上載", "update");
     const { id } = await params;
-    const before = await prisma.rosterUpload.findUnique({ where: { id } });
+    const before = await prisma.rosterUpload.findUnique({ where: { id }, select: ROSTER_UPLOAD_META_SELECT });
     if (!before) throw NotFound();
     // WP-UPLOAD-VOID：已作廢嘅上載係歷史記錄，唔准再人手指定盤——要
     // 「改盤」即係當呢個上載未作廢過（老闆要求上載唔准人手補救嘅精神
@@ -118,7 +119,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // autoResolveSite=false：人手清返 null 就係 null，唔好又用盤名自動配返。
     await reparseRosterUpload(id, { autoResolveSite: false });
 
-    const after = await prisma.rosterUpload.findUniqueOrThrow({ where: { id } });
+    const after = await prisma.rosterUpload.findUniqueOrThrow({ where: { id }, select: ROSTER_UPLOAD_META_SELECT });
     await writeAudit({
       actorUserId: session.userId,
       tableName: "roster_uploads",

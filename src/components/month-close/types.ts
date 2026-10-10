@@ -85,3 +85,36 @@ export interface RunDTO {
   report: ReportDTO | null;
   error_message: string | null;
 }
+
+/** P3-1.6：`GET /api/month-close/one-click?month=`（預設摘要版）每個 run。完整 steps／report 用
+ * `GET /api/month-close/one-click/:id`（或列表 `?include=full`）。 */
+export interface RunSummaryDTO {
+  id: string;
+  month: string;
+  status: "running" | "done" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  current_step: string | null;
+  stalled: boolean;
+  error_message: string | null;
+  steps_total: number;
+  steps_done: number;
+  totals: { revenue: number | null; cost: number | null; gross_margin: number | null } | null;
+}
+
+/** 摘要 → RunDTO（steps／report 留空；淨係最新一個 run 會再拉單一 route 補全份）。 */
+export function runFromSummary(r: RunSummaryDTO): RunDTO {
+  return {
+    id: r.id,
+    month: r.month,
+    status: r.status,
+    started_at: r.started_at,
+    finished_at: r.finished_at,
+    current_step: r.current_step,
+    stalled: r.stalled,
+    steps: [],
+    report: null,
+    error_message: r.error_message,
+  };
+}
+

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
-import type { RunDTO } from "@/components/month-close/types";
+import { runFromSummary, type RunDTO, type RunSummaryDTO } from "@/components/month-close/types";
 import { UNDO_NOTE, shortHuman, needsHumanCount, deriveStages, deriveUploads, groupReview, stepByKey } from "@/components/month-close/derive";
 import { peekUnsent } from "@/components/month-close/unsent";
 import { StageBar } from "./StageBar";
@@ -42,9 +42,18 @@ export default function MonthCloseOneClickPage() {
     setUnsentMsg(un.length > 0 ? `有 ${un.length} 題未送出，請重新答：${un.map((x) => shortHuman(x.title)).join("、")}` : null);
   };
 
+  // P3-1.6：列表只拉摘要（~幾 KB），最新一個 run 再拉單一 route 攞全份 steps／report。
   async function loadRuns() {
-    const res = await apiGet<{ runs: RunDTO[] }>(`/api/month-close/one-click?month=${month}`);
-    if (res.ok) setRuns(res.data.runs);
+    const res = await apiGet<{ runs: RunSummaryDTO[] }>(`/api/month-close/one-click?month=${month}`);
+    if (!res.ok) return;
+    const list = res.data.runs.map(runFromSummary);
+    const latest = list[0];
+    if (latest) {
+      const one = await apiGet<{ run: RunDTO }>(`/api/month-close/one-click/${latest.id}`);
+      if (unmountedRef.current) return;
+      if (one.ok) list[0] = one.data.run;
+    }
+    setRuns(list);
   }
 
   // 上次對話框關閉／離開時有題送出失敗（記喺 sessionStorage）→ 提示重新答。
@@ -66,7 +75,6 @@ export default function MonthCloseOneClickPage() {
       pollingRef.current = running.id;
       void pollUntilDone(running.id);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs]);
 
   // P3-0.6（B-10）：unmount 即停 polling（唔再打 API／setState）。
@@ -82,12 +90,13 @@ export default function MonthCloseOneClickPage() {
     for (let i = 0; i < 240; i++) {
       await new Promise((r) => setTimeout(r, 5000));
       if (unmountedRef.current) break;
-      const res = await apiGet<{ runs: RunDTO[] }>(`/api/month-close/one-click?month=${month}`);
+      // P3-1.6：polling 只拉呢個 running run 嘅單一 route（~幾 KB），唔再每 5 秒拉 20 個 run 全份報告。
+      const res = await apiGet<{ run: RunDTO }>(`/api/month-close/one-click/${runId}`);
       if (unmountedRef.current) break;
       if (!res.ok) continue;
-      setRuns(res.data.runs);
-      const cur = res.data.runs.find((r) => r.id === runId);
-      if (!cur || cur.status !== "running" || cur.stalled) break;
+      const cur = res.data.run;
+      setRuns((prev) => prev.map((r) => (r.id === cur.id ? cur : r)));
+      if (cur.status !== "running" || cur.stalled) break;
     }
     pollingRef.current = null;
   }

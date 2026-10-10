@@ -87,7 +87,7 @@ describe("name_only 警告（上載詳情／pending-summary／precheck）", () =
     expect(body.rows.rows.length).toBe(2);
     expect(body.rows.rows[0].match_basis).toBe("name_only");
 
-    const ps = await (await pendingSummary(new Request("http://t/api/roster-uploads/pending-summary", { headers: { cookie } }))).json();
+    const ps = await (await pendingSummary(new Request("http://t/api/roster-uploads/pending-summary?months=0", { headers: { cookie } }))).json();
     expect(ps.name_only.total).toBe(2);
     expect(ps.name_only.entries[0].name_only_count).toBe(2);
 

@@ -24,7 +24,7 @@ export async function GET(req: Request) {
     let where: Prisma.SiteWhereInput = includeInactive ? {} : { status: { in: ["active", "paused"] } };
     where = scopeSiteWhere(session, where);
     const [rows, total] = await Promise.all([
-      prisma.site.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
+      prisma.site.findMany({ where, skip, take, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
       prisma.site.count({ where }),
     ]);
     if (isBrokerRole(session)) {

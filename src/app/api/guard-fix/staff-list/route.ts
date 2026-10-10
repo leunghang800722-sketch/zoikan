@@ -11,6 +11,7 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { parseUTeamWorkbookBuffer } from "@/lib/guard-fix/sources";
+import { STAFF_LIST_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -33,8 +34,8 @@ export async function GET(req: Request) {
   return withApiError(async () => {
     await requirePermission(req, "安員配對修復", "view");
     const [current, history] = await Promise.all([
-      prisma.staffListUpload.findFirst({ where: { status: "parsed" }, orderBy: { uploadedAt: "desc" } }),
-      prisma.staffListUpload.findMany({ orderBy: { uploadedAt: "desc" }, take: 20 }),
+      prisma.staffListUpload.findFirst({ where: { status: "parsed" }, select: STAFF_LIST_UPLOAD_META_SELECT, orderBy: { uploadedAt: "desc" } }),
+      prisma.staffListUpload.findMany({ select: STAFF_LIST_UPLOAD_META_SELECT, orderBy: { uploadedAt: "desc" }, take: 20 }),
     ]);
     return ok(
       brandSafeResponse({

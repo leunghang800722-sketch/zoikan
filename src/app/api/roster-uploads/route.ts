@@ -21,7 +21,7 @@ import { monthStart } from "@/lib/month-lock";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { processRosterUpload } from "@/lib/roster-upload/service";
-import type { RosterUpload } from "@prisma/client";
+import { ROSTER_UPLOAD_META_SELECT, type RosterUploadMeta } from "@/lib/roster-upload/meta-select";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB——更表 xlsx 正常幾百 KB，呢個上限純粹防呆
 const MONTH_PARAM_RE = /^\d{4}-(0[1-9]|1[0-2])(-\d{2})?$/;
@@ -49,12 +49,12 @@ export async function GET(req: Request) {
 
     const [sites, uploads, voidedUploads] = await Promise.all([
       prisma.site.findMany({ where: { status: { not: "ended" } }, select: { id: true, canonicalName: true }, orderBy: { canonicalName: "asc" } }),
-      prisma.rosterUpload.findMany({ where: { month, status: { notIn: ["superseded", "voided"] } }, orderBy: { version: "desc" } }),
-      includeVoided ? prisma.rosterUpload.findMany({ where: { month, status: "voided" }, orderBy: { version: "desc" } }) : Promise.resolve([]),
+      prisma.rosterUpload.findMany({ where: { month, status: { notIn: ["superseded", "voided"] } }, select: ROSTER_UPLOAD_META_SELECT, orderBy: { version: "desc" } }),
+      includeVoided ? prisma.rosterUpload.findMany({ where: { month, status: "voided" }, select: ROSTER_UPLOAD_META_SELECT, orderBy: { version: "desc" } }) : Promise.resolve([]),
     ]);
 
-    const bySite = new Map<string, RosterUpload>();
-    const unresolved: RosterUpload[] = [];
+    const bySite = new Map<string, RosterUploadMeta>();
+    const unresolved: RosterUploadMeta[] = [];
     for (const u of uploads) {
       if (u.siteId) {
         if (!bySite.has(u.siteId)) bySite.set(u.siteId, u); // version desc 排咗先，第一個掃到即最新

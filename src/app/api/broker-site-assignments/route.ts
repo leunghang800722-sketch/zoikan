@@ -28,7 +28,7 @@ export async function GET(req: Request) {
     };
     where = scopeBrokerSiteAssignmentWhere(session, where);
     const [rows, total] = await Promise.all([
-      prisma.brokerSiteAssignment.findMany({ where, skip, take, orderBy: { month: "desc" } }),
+      prisma.brokerSiteAssignment.findMany({ where, skip, take, orderBy: [{ month: "desc" }, { id: "asc" }] }),
       prisma.brokerSiteAssignment.count({ where }),
     ]);
     return ok(mapListDTO({ rows, total, skip, take }, toBrokerSiteAssignmentDTO));
