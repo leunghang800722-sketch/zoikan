@@ -75,7 +75,6 @@ export default function MonthCloseOneClickPage() {
       pollingRef.current = running.id;
       void pollUntilDone(running.id);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs]);
 
   // P3-0.6（B-10）：unmount 即停 polling（唔再打 API／setState）。
