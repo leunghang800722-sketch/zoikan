@@ -174,12 +174,12 @@ describe("P3-5.5 writeAuditMany 同批次序", () => {
     const inputs = Array.from({ length: 40 }, (_, i) => ({
       actorUserId: fx.userIds["老闆"],
       tableName: "shift_records",
-      rowId: `row-${String(i).padStart(2, "0")}`,
+      rowId: `p35-ordered-${String(i).padStart(2, "0")}`,
       action: "create" as const,
       after: { n: i },
     }));
     await writeAuditMany(inputs);
-    const rows = await prisma.auditLog.findMany({ where: { tableName: "shift_records", rowId: { startsWith: "row-" } }, orderBy: [{ createdAt: "desc" }, { id: "asc" }] });
+    const rows = await prisma.auditLog.findMany({ where: { tableName: "shift_records", rowId: { startsWith: "p35-ordered-" } }, orderBy: [{ createdAt: "desc" }, { id: "asc" }] });
     expect(rows.map((r) => r.rowId)).toEqual(inputs.map((x) => x.rowId));
     expect(new Set(rows.map((r) => r.createdAt.getTime())).size).toBe(1); // 同批同一個 createdAt
   });

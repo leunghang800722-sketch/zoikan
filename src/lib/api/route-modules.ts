@@ -6,7 +6,7 @@ import { isBrokerRole, scopeGuardWhere } from "@/lib/broker-isolation";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 
-/** 保安員資源：雞頭用「自己安員」（只見自己嘅人），內部角色用「安員」。 */
+/** 保安員資源：雞頭用 self-scope 嘅 module key（只見自己嘅人），內部角色用全局 module key。 */
 export function guardModule(session: AuthedSession): Module {
   return isBrokerRole(session) ? "自己安員" : "安員";
 }
