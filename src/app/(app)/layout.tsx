@@ -10,8 +10,7 @@ import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
 import { MobileNav } from "@/components/MobileNav";
 import { DesktopNav } from "@/components/DesktopNav";
 import { isAiConfigured } from "@/lib/ai/config";
-import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { getPendingCounts } from "@/lib/rbac/pending-counts";
 import { countOpenFor } from "@/lib/triage/session";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -43,18 +42,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // 老闆 layout 總共：users(1) + 權限 Set(1) + 兩個 count(1) + 待答 count(1) = 4 條，0 HTTP。
   const showFeedback = grants["助手"] && session.baseRole === "老闆";
   const [pendingCounts, triageOpen] = await Promise.all([
-    grants["審批"] || showFeedback
-      ? prisma.$queryRaw<Array<{ approvals: number; feedback: number }>>(
-          Prisma.sql`SELECT ${grants["審批"] ? Prisma.sql`(SELECT count(*)::int FROM shift_records WHERE status = 'pending_approval')` : Prisma.sql`0`} AS approvals, ${showFeedback ? Prisma.sql`(SELECT count(*)::int FROM feedback_reports WHERE status = 'new')` : Prisma.sql`0`} AS feedback`,
-        )
-      : Promise.resolve(null),
+    getPendingCounts(!!grants["審批"], showFeedback),
     // WP-AI-OPS §28.4：「待答問題」badge＝自己上載嗰批未答數（老闆＝全部）。
     grants["導入分診"] ? countOpenFor(session) : Promise.resolve(0),
   ]);
   // WP-R1：「審批隊列」右側紅 badge＝待審批更次總數（口徑同 `/approvals` 頁一致，唔篩月份）。
-  const approvalsPending = pendingCounts?.[0]?.approvals ?? 0;
+  const approvalsPending = pendingCounts.approvals;
   // P2.5「現場反映」開會模式——「現場意見」badge＝status=new 嘅報告數（淨係老闆）。
-  const unreadFeedback = pendingCounts?.[0]?.feedback ?? 0;
+  const unreadFeedback = pendingCounts.feedback;
   const badges: Record<string, number> = {
     ...(triageOpen > 0 ? { "/triage": triageOpen } : {}),
     ...(approvalsPending > 0 ? { "/approvals": approvalsPending } : {}),

@@ -1,10 +1,7 @@
 "use client";
-// P2-WP-R3：老闆／主管／會計首頁（＝尚欠總覽頁，兩頁共用呢個
-// component，見 README §02／§15；手機 §21）。`variant="home"` 用喺
-// `/`（kicker 用角色名、H1「歡迎返嚟」、第一張 KPI 卡可撳去 /reports/
-// shortfall）；`variant="overview"` 用喺 `/reports/shortfall`（kicker
-// 「財務 · 尚欠總覽」、H1「尚欠總覽」、第一張 KPI 卡唔使 href——已經喺
-// 呢一頁）。日期切換 chip 撳 ‹ › 前後一日、重新 fetch `?date=`，並用
+// P2-WP-R3：老闆／主管／會計首頁「今日尚欠」（README §02／§15；手機 §21）。
+// P3-3.3：尚欠總覽頁 `/reports/shortfall` 已併入首頁（redirect `/`），`variant="overview"` 分支刪走；
+// 待審批／更表對數待處理兩張卡搬去 `HomeInbox`（待辦收件箱）。日期切換 chip 撳 ‹ › 前後一日、重新 fetch `?date=`，並用
 // `history.replaceState` 同步落 URL（唔用 `useSearchParams()`，跟
 // RosterEditor.tsx 同一個理由：避免呢個 client component 被迫加
 // Suspense boundary）。
@@ -46,22 +43,6 @@ interface MarginProgress {
 }
 
 const MARGIN_SCALE_MAX = 20; // README：進度條 0%–20% 刻度
-
-// P2 整合驗收應修③：首頁「待審批」大數用 `pending_approval_total`（全部
-//未審批，同側欄 badge 口徑一致），淨係當本月數（`pending_approval_count`）
-// 同全部數唔同先加一行 note 講明「本月 X · 全部 Y」，等用戶知道呢個大數
-// 唔淨係本月；兩者一樣就照舊顯示「去審批 ›」提示（大部分月份都係一樣，
-// 冇需要加多行解釋）。
-function pendingApprovalNote(data: Pick<Result, "pending_approval_count" | "pending_approval_total">) {
-  if (data.pending_approval_count !== data.pending_approval_total) {
-    return (
-      <span>
-        本月 {data.pending_approval_count} · 全部 {data.pending_approval_total}
-      </span>
-    );
-  }
-  return <span className="text-zk-primary">去審批 ›</span>;
-}
 
 // 用 shortfall（=required-confirmed）判斷紅／綠，唔淨係比較 required/
 // confirmed——先夾得埋「required=0 但有額外出勤」呢種盤（冇正式所需人手
@@ -170,15 +151,13 @@ function MarginSlot({ progress, error }: { progress: MarginProgress | null; erro
 }
 
 export interface ShortfallDashboardProps {
-  variant: "home" | "overview";
   userName: string;
   roleLabel: string;
   // P3-0.4：按權限隱藏卡（預設顯示，保持舊 caller 行為）。
-  showApprovals?: boolean;
   showMargin?: boolean;
 }
 
-export default function ShortfallDashboard({ variant, userName, roleLabel, showApprovals = true, showMargin = true }: ShortfallDashboardProps) {
+export default function ShortfallDashboard({ userName, roleLabel, showMargin = true }: ShortfallDashboardProps) {
   // SSR／首次 client render 一律用 `todayLocalStr()`（避免 hydration
   // mismatch——`window` 喺 SSR 冇得攞，見 `readDateFromUrl()`）；URL 已有
   // `?date=` 就喺下面呢個 effect 入面先切換，同 RosterEditor.tsx 嘅
@@ -187,13 +166,9 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
   const [data, setData] = useState<Result | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // B1-2（WP-ROSTER-UPLOAD Phase B-1）：「更表對數待處理」——最簡單做法
-  // （任務書原話，唔做 email）：首頁卡列「已上載但未對數完成」嘅盤數。
-  // 獨立 fetch，失敗都唔影響主 dashboard（見 catch）。
   const [marginProgress, setMarginProgress] = useState<MarginProgress | null>(null);
   const [marginError, setMarginError] = useState<string | null>(null);
   const marginMonth = date.slice(0, 7);
-  const [reconcilePending, setReconcilePending] = useState<{ total: number; entries: { site_name: string; pending_count: number }[]; name_only?: { total: number } } | null>(null);
 
   useEffect(() => {
     const fromUrl = readDateFromUrl();
@@ -237,22 +212,6 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
     };
   }, [marginMonth, showMargin]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      // 驗收修正（Opus 5.5）：唔帶 month＝所有月份未對完嘅上載（上個月更表
-      // 通常今個月先對數）。
-      const res = await apiGet<{ total: number; entries: { site_name: string; pending_count: number }[]; name_only?: { total: number } }>(`/api/roster-uploads/pending-summary`);
-      if (cancelled) return;
-      if (res.ok) setReconcilePending(res.data);
-      // 冇權限（例如自訂角色冇「更表上載:view」）或者其他錯誤——靜靜唔顯示
-      // 呢張卡，唔阻主 dashboard。
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   function changeDate(next: string) {
     setDate(next);
     writeDateToUrl(next);
@@ -262,22 +221,22 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
 
   const shortfallSites = data?.today.filter((s) => s.shortfall > 0) ?? [];
   const totalShort = shortfallSites.reduce((a, s) => a + s.shortfall, 0);
-  const kicker = variant === "overview" ? "財務 · 尚欠總覽" : `${roleLabel} · 今日尚欠情況一覽`;
-  const title = variant === "overview" ? "尚欠總覽" : `歡迎返嚟，${userName}`;
+  const kicker = `${roleLabel} · 今日尚欠情況一覽`;
+  const title = `歡迎返嚟，${userName}`;
   // B3 驗收修正：手機版原本冇任何可見 <h1>（桌面 <h1> 由 PageHeader
   // 出，但成個 PageHeader 包喺 `hidden md:block` 度，手機淨係得一個
   // `<div>` 重複文字，等於手機頁面完全冇 heading）。改做「同一個 h1、
   // 兩邊都係 heading」：淨係一個 <h1> 元素，入面兩個 <span> 用
   // `hidden`/`md:hidden` responsive class 互相排斥，唔再用兩個獨立
   // block 各自 hidden 嗰種寫法。
-  const mobileHeading = variant === "home" ? `${greetingWord()}，${userName}` : title;
+  const mobileHeading = `${greetingWord()}，${userName}`;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-4">
         <div>
           <div className="text-xs text-zk-muted md:text-[12.5px]">
-            <span className="md:hidden">{variant === "home" ? `${fmtMonthDayWeekday(date)} · ${roleLabel}` : kicker}</span>
+            <span className="md:hidden">{`${fmtMonthDayWeekday(date)} · ${roleLabel}`}</span>
             <span className="hidden md:inline">{kicker}</span>
           </div>
           <h1 className="mt-0.5 text-[20px] font-bold text-zk-text md:text-[22px] md:tracking-[-0.01em]">
@@ -286,14 +245,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
           </h1>
         </div>
         <div className="flex items-center gap-2">
-          {/* 手機：home 版問候語頁首唔使日期 chip（README §21 冇畫呢個
-              掣）；overview 簡化頁首要（原本已經有）。桌面兩個 variant
-              都要。 */}
-          {variant === "overview" && (
-            <div className="md:hidden">
-              <DateChip date={date} onChange={changeDate} />
-            </div>
-          )}
+          {/* 手機：問候語頁首唔使日期 chip（README §21 冇畫呢個掣）。 */}
           <div className="hidden md:block">
             <DateChip date={date} onChange={changeDate} />
           </div>
@@ -311,7 +263,6 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
               value={<span data-testid="shortfall-count-value">{shortfallSites.length}</span>}
               tone={shortfallSites.length > 0 ? "danger" : "default"}
               note={shortfallSites.length > 0 ? `共欠 ${totalShort} 更` : "今日各盤人手足夠"}
-              href={variant === "home" ? "/reports/shortfall" : undefined}
             >
               {shortfallSites.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -323,18 +274,6 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
                 </div>
               )}
             </KpiCard>
-            {showApprovals && <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />}
-            {/* B1-2：更表對數待處理——冇權限／未有資料就唔顯示（見上面
-                useEffect 嘅 catch），唔會逼多一張永遠 0 嘅卡出嚟。 */}
-            {reconcilePending && reconcilePending.total > 0 && (
-              <KpiCard
-                label="更表對數待處理"
-                value={reconcilePending.total}
-                tone="danger"
-                href="/roster-uploads"
-                note={reconcilePending.entries.slice(0, 3).map((e) => `${e.site_name} ${e.pending_count}`).join("、") + (reconcilePending.name_only && reconcilePending.name_only.total > 0 ? `；${reconcilePending.name_only.total} 格淨靠姓名配對，建議補工號或電話` : "")}
-              />
-            )}
             {showMargin && <MarginSlot progress={marginProgress} error={marginError} />}
           </div>
 
@@ -345,12 +284,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
               value={<span data-testid="shortfall-count-value">{shortfallSites.length}</span>}
               tone={shortfallSites.length > 0 ? "danger" : "default"}
               note={shortfallSites.length > 0 ? `共欠 ${totalShort} 更` : "人手足夠"}
-              href={variant === "home" ? "/reports/shortfall" : undefined}
             />
-            {showApprovals && <KpiCard label="待審批" value={data.pending_approval_total} href="/approvals" note={pendingApprovalNote(data)} />}
-            {reconcilePending && reconcilePending.total > 0 && (
-              <KpiCard label="更表對數待處理" value={reconcilePending.total} tone="danger" href="/roster-uploads" />
-            )}
             {showMargin && <MarginSlot progress={marginProgress} error={marginError} />}
           </div>
 
@@ -423,11 +357,6 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
           <div className="flex flex-col gap-2 md:hidden">
             <div className="flex items-baseline justify-between">
               <div className="text-[13.5px] font-semibold text-zk-text">今日出勤 vs 所需</div>
-              {variant === "home" && (
-                <Link href="/reports/shortfall" className="text-xs text-zk-primary">
-                  尚欠總覽 ›
-                </Link>
-              )}
             </div>
             <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
               {data.today.length === 0 ? (
