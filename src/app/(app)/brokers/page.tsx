@@ -24,6 +24,7 @@ import { brokerColor } from "@/lib/ui/broker-color";
 import { BROKER_KIND_LABEL, brokerKindPillTone, type BrokerKindLiteral } from "@/lib/ui/broker-kind";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { buildBankInfo, readBankFields } from "@/lib/ui/broker-bank";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 
 // A2（Opus 整合驗收）：呢頁「種類」select 嘅選項同表格 pill 之前各自有
@@ -51,7 +52,8 @@ const emptyForm = {
   name: "",
   kind: BROKER_KINDS[0] as string,
   settlement_type: SETTLEMENT_TYPES[0] as string,
-  bank_info: "",
+  bank_name: "",
+  bank_account_no: "",
   requires_approval: false,
   aliases: "",
 };
@@ -269,7 +271,8 @@ export default function BrokersPage() {
       name: row.name,
       kind: row.kind,
       settlement_type: row.settlement_type,
-      bank_info: row.bank_info ? JSON.stringify(row.bank_info, null, 2) : "",
+      bank_name: readBankFields(row.bank_info).bankName,
+      bank_account_no: readBankFields(row.bank_info).accountNo,
       requires_approval: row.requires_approval,
       aliases: (row.aliases ?? []).join(", "),
     });
@@ -280,15 +283,8 @@ export default function BrokersPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    let bankInfo: unknown = undefined;
-    if (form.bank_info.trim()) {
-      try {
-        bankInfo = JSON.parse(form.bank_info);
-      } catch {
-        setFormError("bank_info 唔係合法嘅 JSON");
-        return;
-      }
-    }
+    // P3-3.6：銀行名／戶口號碼兩格存返同一個 bank_info JSON；舊 JSON 其他 key 保留。
+    const bankInfo = buildBankInfo(editingId ? rows.find((r) => r.id === editingId)?.bank_info : undefined, form.bank_name, form.bank_account_no);
     setSaving(true);
     const aliases = form.aliases
       .split(",")
@@ -576,12 +572,11 @@ export default function BrokersPage() {
               ))}
             </select>
           </Field>
-          <Field label="銀行資料（bank_info，JSON）" hint='例如：{"bank_name":"...","account_no":"..."}'>
-            <textarea
-              className={`${inputCls} h-24 font-mono text-xs`}
-              value={form.bank_info}
-              onChange={(e) => setForm((f) => ({ ...f, bank_info: e.target.value }))}
-            />
+          <Field label="銀行名">
+            <input className={inputCls} value={form.bank_name} onChange={(e) => setForm((f) => ({ ...f, bank_name: e.target.value }))} autoComplete="off" data-testid="broker-bank-name" />
+          </Field>
+          <Field label="戶口號碼">
+            <input className={inputCls} value={form.bank_account_no} onChange={(e) => setForm((f) => ({ ...f, bank_account_no: e.target.value }))} autoComplete="off" inputMode="numeric" data-testid="broker-bank-account" />
           </Field>
           <Field label="更別（逗號分隔）">
             <input className={inputCls} value={form.aliases} onChange={(e) => setForm((f) => ({ ...f, aliases: e.target.value }))} />
