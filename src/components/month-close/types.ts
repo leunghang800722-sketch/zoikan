@@ -12,6 +12,11 @@ export interface StepDTO {
   needs_human: string[];
 }
 
+export interface PostorderDependencyDTO {
+  pricing: { total: number; unpriced: number; by_step: { "1": number; "2": number; "3": number; "4": number; "5": number; existing: number }; without_postorder: number };
+  settlement: { total: number; by_reason: Record<string, number>; without_postorder: number };
+}
+
 export interface AutoReportDTO {
   summary: {
     sites_aliased: number;
@@ -26,6 +31,8 @@ export interface AutoReportDTO {
     variances_unexplained: number;
     unpriced_records: number;
     counts: { countable: number; external: number; internal_cash: number };
+    /** WP-POSTORDER-FREE（§34 C）：舊 report 冇。 */
+    postorder_dependency?: PostorderDependencyDTO;
   };
   auto_lines: Array<{ kind: string; text: string }>;
   review: Array<{ kind: string; text: string; confidence: "propose" | "unknown"; question_id: string | null }>;
