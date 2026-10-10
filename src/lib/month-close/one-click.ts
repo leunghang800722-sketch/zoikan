@@ -998,7 +998,13 @@ export async function stepPostorderCompare(month: Date, referralSystemTotal: num
 // ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
-export async function runOneClickMonthClose(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
+export function runOneClickMonthClose(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
+  // 驗收修正：背景 run（`after()`）會繼承發起 request 嘅 AsyncLocalStorage——包一層全新報表 memo context，
+  // 唔會讀到發起 request 較早時間點計出嚟嘅結果。
+  return withReportContext(() => runOneClickMonthCloseInner(runId, month, actorUserId, ip));
+}
+
+async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
   const monthStartDate = toMonthStart(month);
   // 每次（重新）執行都由全新 steps 開始——唔好保留上一次失敗／停低嘅
   // 狀態（Opus 驗收：原版重新執行停低時，舊 run 嘅 done/skipped 會殘留）。

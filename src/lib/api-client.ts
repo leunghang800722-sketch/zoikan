@@ -85,12 +85,11 @@ export async function apiGetAll<T>(
   pageSize = 500,
 ): Promise<T[]> {
   const out: T[] = [];
-  let skip = 0;
-  for (;;) {
+  // skip 按頁（pageSize）前進，唔按已收 rows 數（server 可能喺分頁後剔行，見 ui/api-client.ts）。
+  for (let skip = 0; ; skip += pageSize) {
     const page = await apiGet<ListResponse<T>>(path, { ...params, skip, take: pageSize });
     out.push(...page.rows);
-    skip += page.rows.length;
-    if (page.rows.length === 0 || out.length >= page.total) break;
+    if (page.rows.length === 0 || skip + pageSize >= page.total) break;
   }
   return out;
 }

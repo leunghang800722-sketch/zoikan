@@ -1,4 +1,5 @@
 "use client";
+import { invalidateLookups } from "@/lib/ui/lookup-cache";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -27,6 +28,7 @@ function LoginForm({ idleDays }: { idleDays: number }) {
         setError(body.message ?? "登入失敗");
         return;
       }
+      invalidateLookups(); // 驗收修正：登入成功即清 lookup cache（唔承接上一個用戶）
       router.push(body.user?.must_change_pwd ? "/change-password" : next);
       router.refresh();
     } catch {

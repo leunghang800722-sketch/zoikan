@@ -75,8 +75,10 @@ describe("P3-2.5 shift-records/batch 批量寫入", () => {
       expect(got.after).toEqual(ref.after);
       expect(got.actorUserId).toBe(fx.userIds["老闆"]);
     }
-    // 次序＝plan 次序（createdAt 遞增）
-    expect(mine.map((a) => a.rowId)).toEqual([fx.shiftRecordA.id, fx.shiftRecordB.id, ...createdIds]);
+    // 同一批共用同一個 created_at（唔偽造未來時間）
+    expect(new Set(mine.map((a) => a.createdAt.getTime())).size).toBe(1);
+    expect(Math.abs(mine[0]!.createdAt.getTime() - Date.now())).toBeLessThan(60_000);
+    expect(mine.map((a) => a.rowId).sort()).toEqual([fx.shiftRecordA.id, fx.shiftRecordB.id, ...createdIds].sort());
   });
 
   it("查詢數唔隨格數／保安員數增長（20 人×2 日 vs 200 人×2 日，差 ≤ 6 條）", async () => {
