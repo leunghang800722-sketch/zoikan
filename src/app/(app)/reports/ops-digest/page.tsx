@@ -56,13 +56,14 @@ function fmtNum(v: number | null) {
 }
 
 export default function OpsDigestPage() {
-  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
+  const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [digest, setDigest] = useState<DigestDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [aiText, setAiText] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     let cancelled = false;
     setDigest(null);
     setAiText(null);
@@ -75,7 +76,7 @@ export default function OpsDigestPage() {
     return () => {
       cancelled = true;
     };
-  }, [month]);
+  }, [month, monthReady]);
 
   async function askAi() {
     setAiBusy(true);

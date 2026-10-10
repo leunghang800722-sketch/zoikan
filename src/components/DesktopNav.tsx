@@ -55,7 +55,7 @@ export function DesktopNav({
                   <GuardedLink
                     key={l.href}
                     href={l.href}
-                    data-testid={`nav-${l.href}`}
+                    data-testid={`nav-${l.href.split("&month=")[0]}`}
                     className={`flex items-center justify-between rounded-md px-2 py-[3px] text-[13.5px] leading-5 ${
                       active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
                     }`}

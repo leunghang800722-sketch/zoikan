@@ -11,7 +11,7 @@ export function isLinkActive(pathname: string, href: string, search?: URLSearchP
     // 帶 query 嘅連結：路徑相同且 query 全部吻合先 active。
     if (pathname !== p) return false;
     const want = new URLSearchParams(query);
-    for (const [k, v] of want) if (search?.get(k) !== v) return false;
+    for (const [k, v] of want) if (k !== "month" && search?.get(k) !== v) return false; // month 係動態（導覽帶上個月），唔比較
     return true;
   }
   if (p === "/") return pathname === "/";

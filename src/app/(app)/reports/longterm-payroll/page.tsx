@@ -130,7 +130,7 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 };
 
 export default function LongtermPayrollPage() {
-  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
+  const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [payroll, setPayroll] = useState<PayrollMonthDTO | null>(null);
   const [inputs, setInputs] = useState<InputDTO[]>([]);
   const [contracts, setContracts] = useState<ContractDTO[]>([]);
@@ -165,8 +165,9 @@ export default function LongtermPayrollPage() {
   }, []);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     load(month);
-  }, [month, load]);
+  }, [month, load, monthReady]);
 
   async function recompute() {
     setRecomputing(true);

@@ -454,7 +454,8 @@ test.describe("手機（375×812）", () => {
     const lastRowIndex = rowCount - 1;
     const cell = page.getByTestId(`roster-cell-${lastRowIndex}-28`);
     await cell.scrollIntoViewIfNeeded();
-    await cell.click();
+    // 手機用觸控 tap（pointerType=touch）；滑鼠 click 喺窄窗口仍然係滑鼠拖選語意（見 RosterEditor onCellMouseEnter）。
+    await cell.tap();
 
     const keypad = page.getByTestId("roster-mobile-keypad");
     await expect(keypad).toBeVisible({ timeout: 10_000 });

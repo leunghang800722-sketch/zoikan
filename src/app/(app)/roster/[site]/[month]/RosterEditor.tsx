@@ -629,6 +629,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // 顯示借用選格 `sel` 本身——mouseenter 會不斷更新 `sel.b`，唔使額外
   // state）。
   const draggingRef = useRef(false);
+  // 最近一次 pointerdown 嘅輸入類型（mouse／touch／pen）：淨係滑鼠先容許 mouseenter 範圍拖選（見 onCellMouseEnter）。
+  const pointerTypeRef = useRef<string>("mouse");
   const dragSourceRef = useRef<{ r: number; d: number; code: string | null } | null>(null);
   const dragCurrentRef = useRef<{ r: number; d: number } | null>(null);
 
@@ -1136,13 +1138,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const onCellMouseEnter = useCallback(
     (r: number, d: number) => {
       if (!draggingRef.current) return;
-      // P3-3.8：手機（compact）冇拖曳填充。彈出底部鍵盤令表格容器縮細、格仔移位，原本喺 mousedown→mouseup 之間
-      // 指標下面換咗另一格就會觸發 mouseenter，將單格選擇變成範圍選擇（sel.a≠sel.b）→ 鍵盤即刻收埋（e2e wp-r2 (f)）。
-      if (compact) return;
+      // P3-3.8：觸控（pointerType≠mouse）冇拖曳填充。彈出底部鍵盤令表格容器縮細、格仔移位，指標下面換咗另一格會觸發
+      // 合成 mouseenter，將單格選擇變範圍選擇（sel.a≠sel.b）→ 鍵盤即刻收埋（e2e wp-r2 (f)）。用 pointerType 判斷（唔用闊度），
+      // 所以窄窗口嘅桌面滑鼠用家仍然可以拖曳填充。
+      if (pointerTypeRef.current !== "mouse") return;
       dragCurrentRef.current = { r, d };
       setSel((prev) => (prev ? { a: prev.a, b: { r, d } } : prev));
     },
-    [compact],
+    [],
   );
 
   useEffect(() => {
@@ -2300,6 +2303,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       <div className="overflow-hidden rounded-lg border border-zk-border bg-white" style={{ opacity: monthLocked ? 0.8 : 1 }}>
         <div
           ref={containerRef}
+          onPointerDown={(e) => {
+            pointerTypeRef.current = e.pointerType;
+          }}
           tabIndex={0}
           onKeyDown={onKeyDown}
           className="outline-none overflow-auto select-none"

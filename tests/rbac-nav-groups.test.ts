@@ -22,7 +22,8 @@ async function navFor(role: RoleName) {
   const links = await getNavLinks(mk(role), factoryGrants(role));
   return { links, groups: groupNavLinks(role, links) };
 }
-const sig = (groups: ReturnType<typeof groupNavLinks>) => groups.map((g) => `${g.title}:${g.links.map((l) => l.href).join(",")}`);
+// 修復連結動態帶上個月（`&month=YYYY-MM`），簽名比較時去走。
+const sig = (groups: ReturnType<typeof groupNavLinks>) => groups.map((g) => `${g.title}:${g.links.map((l) => l.href.replace(/&month=\d{4}-\d{2}$/, "")).join(",")}`);
 
 describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
   it("老闆：17 條、6 組（首頁／排更／對數／月結／資料／設定），次序同組內次序固定", async () => {
@@ -38,6 +39,11 @@ describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
       "設定:/users,/roles,/audit-log,/feedback",
     ]);
     expect(groups[3]!.links.map((l) => l.label)).toEqual(["一鍵結算", "待答問題", "報表"]);
+  });
+
+  it("老闆：修復連結帶上個月（香港時區）", async () => {
+    const { links } = await navFor("老闆");
+    expect(links.find((l) => l.label === "未配對保安員修復")!.href).toMatch(/^\/roster-uploads\?tab=fix&month=\d{4}-\d{2}$/);
   });
 
   it("主管：11 條（按出廠權限減——冇修復、報表、設定組）", async () => {

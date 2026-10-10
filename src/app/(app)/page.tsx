@@ -68,6 +68,9 @@ export default async function DashboardPage() {
     ]);
     return (
       <div className="flex flex-col gap-4">
+        <ShortfallDashboard
+          userName={session.name} roleLabel={session.roleName} showMargin={cards.showMargin}
+          afterHeader={
         <HomeInbox
           approvals={cards.showApprovals ? pendingCounts.approvals : null}
           triage={grants["導入分診"] ? triageOpen : null}
@@ -75,7 +78,8 @@ export default async function DashboardPage() {
           canMonthClose={!!grants["一鍵結算"]}
           canGuardFix={!!grants["安員配對修復"]}
         />
-        <ShortfallDashboard userName={session.name} roleLabel={session.roleName} showMargin={cards.showMargin} />
+          }
+        />
       </div>
     );
   }

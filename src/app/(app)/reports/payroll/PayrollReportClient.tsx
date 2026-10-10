@@ -61,7 +61,7 @@ function KindPill({ kind }: { kind?: string }) {
 }
 
 export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
-  const [month, setMonth] = useMonthState(undefined, { persistDefault: true });
+  const [month, setMonth, monthReady] = useMonthState(undefined, { persistDefault: true });
   const [totals, setTotals] = useState<Total[]>([]);
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
@@ -75,6 +75,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     (async () => {
       setLoading(true);
       setError(null);
@@ -92,7 +93,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       setNoSettlementCount(res.data.no_settlement_count ?? 0);
       setLoading(false);
     })();
-  }, [month, reloadTick]);
+  }, [month, reloadTick, monthReady]);
 
   // WP-PRICE §M3：「重新計價」——見 src/app/(app)/roster/[site]/[month]/
   // RosterEditor.tsx 同一段設計註解——dry-run 預覽（diff 摘要）→ confirm

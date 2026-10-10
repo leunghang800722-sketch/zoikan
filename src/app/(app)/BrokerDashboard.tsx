@@ -70,13 +70,14 @@ export interface BrokerDashboardProps {
 
 export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
   // P3-3.2：月份經 useMonthState（URL → sessionStorage → 本月）同全站共用。
-  const [month, setMonth] = useMonthState();
+  const [month, setMonth, monthReady] = useMonthState();
   const [data, setData] = useState<DashboardResult | null>(null);
   const [receivable, setReceivable] = useState<ReceivableResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -98,7 +99,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
     return () => {
       cancelled = true;
     };
-  }, [month]);
+  }, [month, monthReady]);
 
 
   if (error) return <Banner kind="error" message={error} />;

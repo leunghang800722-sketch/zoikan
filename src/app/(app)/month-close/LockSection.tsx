@@ -8,7 +8,7 @@ import type { ReportDTO } from "@/components/month-close/types";
 import { lockRequirements, type ReviewGroup } from "@/components/month-close/derive";
 import { MonthHealthCard } from "./MonthHealthCard";
 
-export function LockSection({ report, month, busy, locked, groups, onUnlock, isBoss, onForceLock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; isBoss: boolean; onForceLock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
+export function LockSection({ report, month, busy, locked, groups, onUnlock, canUnlock, needDiffReason, diffReason, onDiffReason, isBoss, onForceLock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; canUnlock: boolean; needDiffReason: boolean; diffReason: string; onDiffReason: (v: string) => void; isBoss: boolean; onForceLock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
   const [unlockReason, setUnlockReason] = useState("");
   const [forceOn, setForceOn] = useState(false);
   const [forceReason, setForceReason] = useState("");
@@ -58,6 +58,12 @@ export function LockSection({ report, month, busy, locked, groups, onUnlock, isB
         </span>
         {locked && <Pill variant="warning">已鎖定</Pill>}
       </div>
+      {!locked && needDiffReason && (
+        <div className="flex flex-col gap-1.5 border-t border-zk-border-soft px-4 py-3" data-testid="diff-reason-box">
+          <label className="text-[12.5px] font-medium text-zk-text">§6.3 對數有紅色差異——override 原因（必填）</label>
+          <input className={inputCls} placeholder="override 原因（必填）" value={diffReason} onChange={(e) => onDiffReason(e.target.value)} data-testid="diff-reason" />
+        </div>
+      )}
       {/* 強制鎖定：淨係老闆、鎖月條件（更表上載／對數）未齊先出；call 同一個 lock API（body { force: true, override_reason }），原因必填。 */}
       {!locked && isBoss && (lp.missing_upload_sites.length > 0 || lp.unconfirmed_upload_sites.length > 0) && (
         <div className="flex flex-col gap-2 border-t border-zk-border-soft px-4 py-3" data-testid="force-lock-box">
@@ -81,7 +87,7 @@ export function LockSection({ report, month, busy, locked, groups, onUnlock, isB
           )}
         </div>
       )}
-      {locked && (
+      {locked && canUnlock && (
         <div className="flex flex-wrap items-center gap-2 border-t border-zk-border-soft px-4 py-3" data-testid="unlock-box">
           <span className="text-[12px] text-zk-muted">解鎖原因（必填，會寫入操作紀錄）</span>
           <input className={inputCls} placeholder="解鎖原因" value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} data-testid="unlock-reason" />
