@@ -3,8 +3,9 @@
 import { Button } from "@/components/ui/Button";
 import type { RunDTO } from "@/components/month-close/types";
 import { fmtMdHm, runSeconds, stepByKey } from "@/components/month-close/derive";
+import { BackfillButton } from "./BackfillButton";
 
-export function RunSection({ month, run, busy, locked, onStart }: { month: string; run: RunDTO | null; busy: boolean; locked: boolean; onStart: () => void }) {
+export function RunSection({ month, run, busy, locked, havePostorder = false, onStart }: { month: string; run: RunDTO | null; busy: boolean; locked: boolean; havePostorder?: boolean; onStart: () => void }) {
   const running = !!run && run.status === "running" && !run.stalled;
   const secs = runSeconds(run);
   const files = typeof stepByKey(run, "parse_health")?.numbers.uploadCount === "number" ? (stepByKey(run, "parse_health")!.numbers.uploadCount as number) : null;
@@ -25,6 +26,7 @@ export function RunSection({ month, run, busy, locked, onStart }: { month: strin
       <Button variant={ranBefore ? "secondary" : "primary"} className="ml-auto !px-4 !py-2 font-semibold" onClick={onStart} disabled={busy || running || locked}>
         {ranBefore ? "重新一鍵結算" : "一鍵結算"} {month}
       </Button>
+      <BackfillButton month={month} havePostorder={havePostorder} locked={locked} />
     </section>
   );
 }

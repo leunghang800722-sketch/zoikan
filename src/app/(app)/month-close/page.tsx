@@ -264,7 +264,7 @@ export default function MonthCloseOneClickPage() {
             onUploadStaffList={uploadStaffList}
             onUploadPostorder={uploadPostorder}
           />
-          <RunSection month={month} run={latestRun} busy={busy} locked={locked} onStart={startOneClick} />
+          <RunSection month={month} run={latestRun} busy={busy} locked={locked} havePostorder={uploads.find((u) => u.key === "postorder")?.have === true} onStart={startOneClick} />
           {latestRun && <ProgressSection run={latestRun} busy={busy} locked={locked} onRerun={() => rerun(latestRun.id)} />}
           {report && (
             <>

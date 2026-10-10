@@ -2,7 +2,7 @@
 // 要你睇分組、⑤ 鎖定前置、體檢人話化）。全部由現有 API 回傳嘅數字砌出，
 // 唔寫死示意數據；冇資料就回空／null，由 UI 顯示空狀態。冇 PII：淨係盤名、
 // 雞頭代號、更種代號、數目。
-import type { AutoReportDTO, ReportDTO, RunDTO, StepDTO } from "./types";
+import type { AutoReportDTO, PostorderDependencyDTO, ReportDTO, RunDTO, StepDTO } from "./types";
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
@@ -558,4 +558,25 @@ export function kindChip(kind: string, fallbackLabel: string): string {
 /** 全部步驟 needs_human 項數（③ 逐行直接顯示；規則：needs_human 行全部顯示，唔同「要你睇」去重——簡單規則）。 */
 export function needsHumanCount(run: RunDTO | null): number {
   return run ? run.steps.reduce((a, s) => a + s.needs_human.length, 0) : 0;
+}
+
+// ---------------------------------------------------------------------------
+// WP-POSTORDER-FREE（§34 C）：「冇 Postorder 都計到嘅比例」一行字（純函數）。
+// ---------------------------------------------------------------------------
+const pctOf = (n: number, m: number): number => (m > 0 ? Math.round((n / m) * 100) : 0);
+
+/** 報告冇呢組數（舊 report）或者兩邊總數都係 0 就 null（唔顯示）。 */
+export function dependencyLine(dep: PostorderDependencyDTO | undefined | null): { price: string; settle: string; pricePct: number; settlePct: number } | null {
+  if (!dep) return null;
+  const p = dep.pricing;
+  const s = dep.settlement;
+  if (p.total <= 0 && s.total <= 0) return null;
+  const pricePct = pctOf(p.without_postorder, p.total);
+  const settlePct = pctOf(s.without_postorder, s.total);
+  return {
+    price: `價錢：${p.without_postorder}／${p.total} 更唔靠 Postorder 都計到（${pricePct}%）`,
+    settle: `雞頭歸屬：${s.without_postorder}／${s.total}（${settlePct}%）`,
+    pricePct,
+    settlePct,
+  };
 }
