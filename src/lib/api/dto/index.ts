@@ -200,6 +200,12 @@ const GUARD_LIST_FIELDS = GUARD_FIELDS.filter(
   (f) => !(GUARD_LIST_DETAIL_ONLY_FIELDS as readonly string[]).includes(f),
 ) as unknown as readonly (typeof GUARD_FIELDS)[number][];
 export const toGuardListDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LIST_FIELDS);
+// P3-2.4（P3 §3.1 P5）：`GET /api/guards?fields=lite` 輕量白名單——下拉／對照表／姓名顯示用。
+// 刻意唔帶電話、證件號、銀行、地址、出生日期、月薪等任何 PII／敏感欄（`siaPermitExpiry`
+// 係牌照到期日，跟「保安員」module，唔屬 PII 組，更表編輯器「牌照已過期」提示要用）。
+// `defaultBrokerCode` 係 route 補嘅衍生欄（雞頭代號，唔係 DB 欄）。
+const GUARD_LITE_FIELDS = ["id", "staffNo", "nameZh", "nameEn", "status", "defaultBrokerId", "defaultBrokerCode", "siaPermitExpiry", "staffNumbers"] as const;
+export const toGuardLiteDTO = <T extends Record<string, unknown>>(row: T) => mapRow(row, GUARD_LITE_FIELDS);
 // WP-STAFFNO：`GET/POST/PATCH /api/guards/:id/staff-numbers*` 白名單——
 // 工號本身（唔係身份證／銀行）跟「保安員」module，冇獨立 field-group。
 const GUARD_STAFF_NUMBER_FIELDS = ["id", "guardId", "scheme", "number", "status", "validFrom", "validTo", "note", "source", "createdAt", "updatedAt", "createdBy"] as const;

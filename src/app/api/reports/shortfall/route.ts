@@ -11,7 +11,7 @@
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { buildShortfall } from "@/lib/reports/shortfall";
+import { buildShortfall, buildDayShortfall } from "@/lib/reports/shortfall";
 import { BadRequest } from "@/lib/api/errors";
 
 export async function GET(req: Request) {
@@ -21,7 +21,10 @@ export async function GET(req: Request) {
     const dateRaw = url.searchParams.get("date") ?? url.searchParams.get("month");
     const date = dateRaw ? new Date(dateRaw.length <= 7 ? `${dateRaw}-01` : dateRaw) : new Date();
     if (Number.isNaN(date.getTime())) throw BadRequest("date/month 格式唔啱");
-    const result = await buildShortfall(date);
+    // P3-2.2（additive）：`?include_margin=0` 只回日級部分（唔含 month_progress，唔跑毛利表）；
+    // 月級毛利進度改由 `GET /api/reports/margin-progress?month=` 提供。唔帶參數＝舊 shape。
+    const includeMargin = url.searchParams.get("include_margin") !== "0";
+    const result = includeMargin ? await buildShortfall(date) : await buildDayShortfall(date);
     return ok(brandSafeResponse({ ...result }));
   });
 }

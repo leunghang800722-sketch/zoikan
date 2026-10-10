@@ -7,7 +7,8 @@
 // 同一個 pattern——雞頭 session 頁首 kicker 要顯示「我的」（跟
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
 import { useEffect, useState } from "react";
-import { apiGet, apiGetAll, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -271,10 +272,10 @@ export function RateCardsClient({
       // （API 已有呢個唯讀參數，additive），先可以分辨「通用」（broker_id
       // 為 null）同「指向咗一個已停用嘅雞頭」。
       const [siteRes, brokerRes, guardRes, shiftTypeRes] = await Promise.all([
-        apiGetAll<SiteRow>("/api/sites"),
-        apiGetAll<BrokerRow>("/api/brokers?include_inactive=1"),
-        apiGetAll<GuardRow>("/api/guards"),
-        apiGetAll<ShiftTypeRow>("/api/shift-types"),
+        cachedGetAll<SiteRow>("/api/sites"),
+        cachedGetAll<BrokerRow>("/api/brokers?include_inactive=1"),
+        cachedGetAll<GuardRow>("/api/guards?fields=lite"),
+        cachedGetAll<ShiftTypeRow>("/api/shift-types"),
       ]);
       if (siteRes.ok) setSites(siteRes.data.rows);
       if (brokerRes.ok) setBrokers(brokerRes.data.rows);

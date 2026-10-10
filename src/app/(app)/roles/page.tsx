@@ -8,7 +8,7 @@
 import { uiLabel } from "@/lib/ui/format";
 import { moduleLabel } from "@/lib/rbac/labels";
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -93,8 +93,8 @@ export default function RolesPage() {
     setLoading(true);
     setError(null);
     const [roleRes, userRes] = await Promise.all([
-      apiGet<ApiListResult<RoleRow>>("/api/roles?take=500"),
-      apiGet<ApiListResult<UserRow>>("/api/users?take=500&include_inactive=1"),
+      apiGetAll<RoleRow>("/api/roles"),
+      apiGetAll<UserRow>("/api/users?include_inactive=1"),
     ]);
     if (!roleRes.ok) {
       setError(roleRes.message);

@@ -11,6 +11,7 @@
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { n, round2 } from "./money";
+import { memoized } from "./context";
 
 export const DEFAULT_REPORT_MONTH = new Date(Date.UTC(2026, 6, 1));
 function monthRange(month: Date): { start: Date; end: Date } {
@@ -34,7 +35,11 @@ const UNATTRIBUTED_BROKER_LABEL = "未歸屬結算單位";
 // cancelled`——之前完全冇篩 status，但 B1 對數套用（system_only／
 // guard_diff／shift_type_diff）同更表編輯器清格都係將記錄轉 cancelled，
 // 唔排除就會「舊人＋新人」兩份糧都計。7 月冇 cancelled 記錄，數字唔變。
-export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Promise<BrokerPayrollTotal[]> {
+export function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Promise<BrokerPayrollTotal[]> {
+  return memoized(`payroll:${monthRange(month).start.toISOString()}`, () => buildPayrollTotalsUncached(month));
+}
+
+async function buildPayrollTotalsUncached(month: Date): Promise<BrokerPayrollTotal[]> {
   const { start, end } = monthRange(month);
   // 效能優化（老闆 2026-09-28 指令）：原本逐雞頭打一條 aggregate（~12 條），
   // 改做一條 groupBy(settlementBrokerId) 一次過攞齊（where 條件一樣，加總

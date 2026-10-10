@@ -32,15 +32,17 @@ interface Result {
   // `/approvals` 頁口徑一致，KPI 大數改用呢個（`pending_approval_count`
   // 淨係用嚟喺兩者唔同時加多一行 note，見底下 `PendingApprovalNote`）。
   pending_approval_total: number;
-  month_progress: {
-    month: string;
-    revenue?: number;
-    cost?: number;
-    profit?: number;
-    margin_pct: number | null;
-    threshold_pct: number;
-    below_threshold_site_count: number;
-  };
+}
+// P3-2.2：月級毛利進度改由 `GET /api/reports/margin-progress?month=` 提供（同日級並行載入、
+// 唔互相等；每次開／換月即時重計，冇 cache）。
+interface MarginProgress {
+  month: string;
+  revenue?: number;
+  cost?: number;
+  profit?: number;
+  margin_pct: number | null;
+  threshold_pct: number;
+  below_threshold_site_count: number;
 }
 
 const MARGIN_SCALE_MAX = 20; // README：進度條 0%–20% 刻度
@@ -111,7 +113,7 @@ function DateChip({ date, onChange }: { date: string; onChange: (next: string) =
   );
 }
 
-function MarginProgressCard({ monthProgress, href }: { monthProgress: Result["month_progress"]; href?: string }) {
+function MarginProgressCard({ monthProgress, href }: { monthProgress: MarginProgress; href?: string }) {
   const pct = monthProgress.margin_pct == null ? 0 : Math.min(100, Math.max(0, (monthProgress.margin_pct / MARGIN_SCALE_MAX) * 100));
   const thresholdLeft = Math.min(100, Math.max(0, (monthProgress.threshold_pct / MARGIN_SCALE_MAX) * 100));
   const cls = "flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 md:px-[18px] md:py-4 col-span-2";
@@ -158,6 +160,15 @@ function MarginProgressCard({ monthProgress, href }: { monthProgress: Result["mo
   return <div className={cls}>{inner}</div>;
 }
 
+function MarginSlot({ progress, error }: { progress: MarginProgress | null; error: string | null }) {
+  if (progress) return <MarginProgressCard monthProgress={progress} href="/reports/gross-margin" />;
+  return (
+    <div data-testid="margin-progress-loading" className="col-span-2 flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 text-xs text-zk-muted md:px-[18px] md:py-4">
+      {error ? `本月毛利進度載入失敗：${error}` : "本月毛利進度計算中…"}
+    </div>
+  );
+}
+
 export interface ShortfallDashboardProps {
   variant: "home" | "overview";
   userName: string;
@@ -179,6 +190,9 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
   // B1-2（WP-ROSTER-UPLOAD Phase B-1）：「更表對數待處理」——最簡單做法
   // （任務書原話，唔做 email）：首頁卡列「已上載但未對數完成」嘅盤數。
   // 獨立 fetch，失敗都唔影響主 dashboard（見 catch）。
+  const [marginProgress, setMarginProgress] = useState<MarginProgress | null>(null);
+  const [marginError, setMarginError] = useState<string | null>(null);
+  const marginMonth = date.slice(0, 7);
   const [reconcilePending, setReconcilePending] = useState<{ total: number; entries: { site_name: string; pending_count: number }[]; name_only?: { total: number } } | null>(null);
 
   useEffect(() => {
@@ -190,7 +204,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const res = await apiGet<Result>(`/api/reports/shortfall?date=${date}`);
+      const res = await apiGet<Result>(`/api/reports/shortfall?date=${date}&include_margin=0`);
       if (cancelled) return;
       if (!res.ok) {
         setError(res.message);
@@ -205,6 +219,23 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
       cancelled = true;
     };
   }, [date]);
+
+  // 月級毛利進度：只喺月份變先重拉（撳 ‹ › 喺同一個月內換日唔重拉）。
+  useEffect(() => {
+    if (!showMargin) return;
+    let cancelled = false;
+    setMarginProgress(null);
+    setMarginError(null);
+    (async () => {
+      const res = await apiGet<MarginProgress>(`/api/reports/margin-progress?month=${marginMonth}`);
+      if (cancelled) return;
+      if (res.ok) setMarginProgress(res.data);
+      else setMarginError(res.message);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [marginMonth, showMargin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -304,7 +335,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
                 note={reconcilePending.entries.slice(0, 3).map((e) => `${e.site_name} ${e.pending_count}`).join("、") + (reconcilePending.name_only && reconcilePending.name_only.total > 0 ? `；${reconcilePending.name_only.total} 格淨靠姓名配對，建議補工號或電話` : "")}
               />
             )}
-            {showMargin && <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />}
+            {showMargin && <MarginSlot progress={marginProgress} error={marginError} />}
           </div>
 
           {/* 手機 KPI 2×2（尚欠／待審批；毛利跨 2 欄）。 */}
@@ -320,7 +351,7 @@ export default function ShortfallDashboard({ variant, userName, roleLabel, showA
             {reconcilePending && reconcilePending.total > 0 && (
               <KpiCard label="更表對數待處理" value={reconcilePending.total} tone="danger" href="/roster-uploads" />
             )}
-            {showMargin && <MarginProgressCard monthProgress={data.month_progress} href="/reports/gross-margin" />}
+            {showMargin && <MarginSlot progress={marginProgress} error={marginError} />}
           </div>
 
           {/* 桌面表格。 */}

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { buildMonthlyClose } from "@/lib/reports/monthly-close";
 import { round2 } from "@/lib/reports/money";
+import { withReportContext } from "@/lib/reports/context";
 import type { AiToolContext } from "./common";
 import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 
@@ -20,7 +21,7 @@ export function createMonthlyCloseTool(ctx: AiToolContext) {
       if (denied) return deniedResult(denied);
 
       const monthDate = new Date(`${month}-01T00:00:00.000Z`);
-      const { mainRows, outsideRows } = await buildMonthlyClose(monthDate);
+      const { mainRows, outsideRows } = await withReportContext(() => buildMonthlyClose(monthDate));
       const { clientRateVisible, settlementVisible } = ctx.fieldVisibility;
 
       const shape = (rows: typeof mainRows) =>

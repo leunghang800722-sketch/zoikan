@@ -20,7 +20,17 @@ export async function GET(req: Request) {
     const { skip, take } = paginationParams(url);
     const siteId = url.searchParams.get("site_id");
     const includeVoided = url.searchParams.get("include_voided") === "1";
-    let where: Prisma.DailyRequirementWhereInput = { ...(siteId ? { siteId } : {}), ...(includeVoided ? {} : { voidedAt: null }) };
+    // P3-2.4（additive）：`work_date_from`／`work_date_to`——更表編輯器只攞本月，唔再攞該盤所有月份。
+    const workDateFrom = url.searchParams.get("work_date_from");
+    const workDateTo = url.searchParams.get("work_date_to");
+    for (const [name, v] of [["work_date_from", workDateFrom], ["work_date_to", workDateTo]] as const) {
+      if (v !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(new Date(v).getTime()))) throw BadRequest(`${name} 格式唔啱（YYYY-MM-DD）`);
+    }
+    let where: Prisma.DailyRequirementWhereInput = {
+      ...(siteId ? { siteId } : {}),
+      ...(includeVoided ? {} : { voidedAt: null }),
+      ...(workDateFrom || workDateTo ? { workDate: { ...(workDateFrom ? { gte: new Date(workDateFrom) } : {}), ...(workDateTo ? { lte: new Date(workDateTo) } : {}) } } : {}),
+    };
     where = scopeBySiteHavingBrokerShifts(session, where);
     const [rows, total] = await Promise.all([
       prisma.dailyRequirement.findMany({ where, skip, take, orderBy: [{ workDate: "asc" }, { id: "asc" }] }),

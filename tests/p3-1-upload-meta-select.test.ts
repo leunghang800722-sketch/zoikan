@@ -42,6 +42,21 @@ function callArgs(src: string, openIdx: number): string {
   return src.slice(openIdx, i - 1);
 }
 
+/** 只認「頂層」`select:`（呼叫參數物件第一層）——巢狀喺 where／include 入面嘅 select 唔算。 */
+function hasTopLevelSelect(args: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < args.length; i++) {
+    const c = args[i];
+    if (c === "{" || c === "(" || c === "[") depth++;
+    else if (c === "}" || c === ")" || c === "]") depth--;
+    else if (depth === 1 && (i === 0 || !/[A-Za-z0-9_$]/.test(args[i - 1]!)) && args.startsWith("select", i)) {
+      const rest = args.slice(i + 6);
+      if (/^\s*:/.test(rest)) return true;
+    }
+  }
+  return false;
+}
+
 describe("P3-1.4 上載表 find* 必須有 select（唔讀 bytea）", () => {
   it("冇白名單以外嘅無 select 呼叫；白名單冇過期項", () => {
     const root = path.resolve(__dirname, "../src");
@@ -53,7 +68,7 @@ describe("P3-1.4 上載表 find* 必須有 select（唔讀 bytea）", () => {
       let n = 0;
       for (const m of src.matchAll(FIND_RE)) {
         const args = callArgs(src, m.index! + m[0].length);
-        if (/\bselect\s*:/.test(args)) continue;
+        if (hasTopLevelSelect(args)) continue;
         n++;
         const key = `${rel}#${n}`;
         if (key in NEEDS_BYTES) seenAllowed.add(key);
@@ -62,5 +77,16 @@ describe("P3-1.4 上載表 find* 必須有 select（唔讀 bytea）", () => {
     }
     expect(missing).toEqual([]);
     expect([...seenAllowed].sort()).toEqual(Object.keys(NEEDS_BYTES).sort());
+  });
+});
+
+describe("P3-2：hasTopLevelSelect 只認頂層 select", () => {
+  it("頂層 select 認；巢狀喺 where／include 入面嘅 select 唔認", () => {
+    expect(hasTopLevelSelect("{ where: { id }, select: { id: true } })")).toBe(true);
+    expect(hasTopLevelSelect("{ select: { id: true } })")).toBe(true);
+    expect(hasTopLevelSelect("{ where: { id }, include: { site: { select: { id: true } } } })")).toBe(false);
+    expect(hasTopLevelSelect("{ where: { x: { select: 1 } } })")).toBe(false);
+    expect(hasTopLevelSelect("{ where: { id }, orderBy: { a: 1 } })")).toBe(false);
+    expect(hasTopLevelSelect("{ where: { preselect: 1 } })")).toBe(false);
   });
 });

@@ -1,6 +1,8 @@
 // 前端 client component 共用嘅 fetch helper——統一處理 snake_case JSON、
 // {error,message} 錯誤形狀、網絡例外。所有寫入一律用相對路徑（瀏覽器自動帶
 // cookie），唔使手動處理 session。
+import { invalidateLookups, isLookupWritePath } from "./lookup-cache";
+
 export interface ApiListResult<T> {
   rows: T[];
   total: number;
@@ -34,6 +36,8 @@ export async function apiRequest<T = unknown>(path: string, init?: RequestInit):
     const b = (body ?? {}) as Partial<{ error: string; message: string }>;
     return { ok: false, status: res.status, error: b.error ?? "error", message: b.message ?? `請求失敗（HTTP ${res.status}）` };
   }
+  // P3-2.4：寫入參考資料相關資源成功 → 前端參考資料 cache 作廢（見 lookup-cache.ts）。
+  if (init?.method && init.method !== "GET" && isLookupWritePath(path)) invalidateLookups();
   return { ok: true, status: res.status, data: body as T };
 }
 
@@ -48,12 +52,14 @@ export async function apiGetAll<T>(path: string, pageSize = 500): Promise<ApiRes
   const sep = path.includes("?") ? "&" : "?";
   const rows: T[] = [];
   let total = 0;
-  for (;;) {
-    const res = await apiRequest<ApiListResult<T>>(`${path}${sep}skip=${rows.length}&take=${pageSize}`);
+  // skip 按「頁」前進（唔係按已收 rows 數）：有啲 list（例如雞頭 session 嘅 DTO 轉換）可能喺分頁之後
+  // 再剔走個別行，用 rows.length 做 skip 會重複／錯位拉到後面嘅行。
+  for (let skip = 0; ; skip += pageSize) {
+    const res = await apiRequest<ApiListResult<T>>(`${path}${sep}skip=${skip}&take=${pageSize}`);
     if (!res.ok) return res;
     rows.push(...res.data.rows);
     total = res.data.total;
-    if (res.data.rows.length === 0 || rows.length >= total) break;
+    if (res.data.rows.length === 0 || skip + pageSize >= total) break;
   }
   return { ok: true, status: 200, data: { rows, total, skip: 0, take: rows.length } };
 }

@@ -15,6 +15,7 @@ import { Field, selectCls } from "@/components/ui/Field";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { fmtDateTime, currentMonthStr } from "@/lib/ui/format";
 
 interface StaffListDTO {
@@ -251,7 +252,7 @@ export default function GuardFixPage() {
   const [resolvingAliasLabel, setResolvingAliasLabel] = useState<string | null>(null);
 
   async function loadBrokers() {
-    const res = await apiGet<{ rows: BrokerOption[] }>("/api/brokers?take=200");
+    const res = await cachedGetAll<BrokerOption>("/api/brokers");
     if (res.ok) setBrokers(res.data.rows);
   }
 

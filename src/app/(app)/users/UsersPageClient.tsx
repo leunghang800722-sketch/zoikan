@@ -16,7 +16,8 @@
 // （`?take=500`），呢個 filter 淨係喺已經攞到手嘅列表客戶端篩，唔使
 // 加 API 參數。
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Notice } from "@/components/ui/Notice";
 import { Drawer } from "@/components/ui/Drawer";
@@ -104,9 +105,9 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
     setLoading(true);
     setError(null);
     const [userRes, roleRes, brokerRes] = await Promise.all([
-      apiGet<ApiListResult<UserRow>>("/api/users?take=500"),
-      apiGet<ApiListResult<RoleRow>>("/api/roles?take=500"),
-      apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
+      apiGetAll<UserRow>("/api/users"),
+      apiGetAll<RoleRow>("/api/roles"),
+      cachedGetAll<BrokerRow>("/api/brokers"),
     ]);
     if (!userRes.ok) {
       setError(userRes.message);

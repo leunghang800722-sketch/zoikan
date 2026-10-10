@@ -55,6 +55,24 @@ function getCurrentAiContext(): AiPageContext {
 }
 
 const OPEN_STORAGE_KEY = "zoikan-ai-panel-open";
+// P3-2.8（P12）：對話紀錄只喺「用戶開側欄」先載。面板上次開住、換頁後 mount 還原開住嗰陣，
+// 用 sessionStorage（同一分頁）記住上次對話，唔再每頁重 fetch（`/api/ai/conversation` ~7.5 KB／頁）；
+// 用戶主動撳開側欄一律攞最新。
+const CONVERSATION_CACHE_KEY = "zoikan-ai-conversation-cache";
+// 快取連同「用戶名＋時間」一齊存：換咗用戶（同一分頁登出再登入）或者超過 30 分鐘就唔用；
+// 登出時 LogoutButton 亦會清走。
+const CONVERSATION_CACHE_TTL_MS = 30 * 60_000;
+function readCachedConversation(userName: string): AiChatMessage[] | null {
+  try {
+    const raw = window.sessionStorage.getItem(CONVERSATION_CACHE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { u?: string; t?: number; m?: unknown };
+    if (v.u !== userName || typeof v.t !== "number" || Date.now() - v.t > CONVERSATION_CACHE_TTL_MS) return null;
+    return Array.isArray(v.m) ? (v.m as AiChatMessage[]) : null;
+  } catch {
+    return null;
+  }
+}
 const WIDTH_STORAGE_KEY = "zoikan-ai-panel-width";
 const NARROW_WIDTH = 380;
 const WIDE_WIDTH = 560;
@@ -128,10 +146,22 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
   // 首次掛載先讀 localStorage／偵測手機闊度——喺 client component 但
   // SSR 都會跑一次 render，讀 window 要留喺 effect 入面，避免 hydration
   // 唔對版。
+  const restoredFromCacheRef = useRef(false);
+  const conversationLoadedRef = useRef(false);
   useEffect(() => {
-    setOpen(readStoredOpen());
+    const storedOpen = readStoredOpen();
+    if (storedOpen) {
+      const cached = readCachedConversation(userName);
+      if (cached) {
+        restoredFromCacheRef.current = true;
+        conversationLoadedRef.current = true;
+        setMessages(cached);
+      }
+    }
+    setOpen(storedOpen);
     setWidth(readStoredWidth());
     setMounted(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只喺 mount 讀一次還原狀態
   }, []);
 
   useEffect(() => {
@@ -190,12 +220,31 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
     setLoadingHistory(true);
     const res = await apiGet<{ messages: AiChatMessage[] }>("/api/ai/conversation");
     setLoadingHistory(false);
-    if (res.ok) setMessages(res.data.messages);
+    if (res.ok) {
+      conversationLoadedRef.current = true;
+      setMessages(res.data.messages);
+    }
   }, []);
 
   useEffect(() => {
-    if (open) void loadConversation();
+    if (!open) return;
+    if (restoredFromCacheRef.current) {
+      // 換頁後還原開住：用 sessionStorage 內嘅上次對話，唔重 fetch。
+      restoredFromCacheRef.current = false;
+      return;
+    }
+    void loadConversation();
   }, [open, loadConversation]);
+
+  // 對話有變（載入／發送／清除）就寫入 sessionStorage，供下一頁還原用。
+  useEffect(() => {
+    if (!mounted || !conversationLoadedRef.current && messages.length === 0) return;
+    try {
+      window.sessionStorage.setItem(CONVERSATION_CACHE_KEY, JSON.stringify({ u: userName, t: Date.now(), m: messages }));
+    } catch {
+      // sessionStorage 唔到就算
+    }
+  }, [mounted, messages, userName]);
 
   // Esc 關閉。
   useEffect(() => {

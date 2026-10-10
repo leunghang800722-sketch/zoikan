@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
 import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -131,10 +132,10 @@ export default function BrokersPage() {
 
   useEffect(() => {
     load();
-    apiGetAll<SiteRow>("/api/sites").then((res) => {
+    cachedGetAll<SiteRow>("/api/sites").then((res) => {
       if (res.ok) setSites(res.data.rows);
     });
-    apiGetAll<GuardRow>("/api/guards").then((res) => {
+    cachedGetAll<GuardRow>("/api/guards?fields=lite").then((res) => {
       if (!res.ok) return;
       const counts: Record<string, number> = {};
       for (const g of res.data.rows) {

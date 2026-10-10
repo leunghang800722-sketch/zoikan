@@ -1,4 +1,5 @@
 "use client";
+import { invalidateLookups } from "@/lib/ui/lookup-cache";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -15,7 +16,14 @@ export function LogoutButton({ className }: { className?: string } = {}) {
     if (loading) return;
     setLoading(true);
     try {
+      invalidateLookups(); // 登出前後都清（驗收修正：cache 唔跨用戶殘留）
       await fetch("/api/auth/logout", { method: "POST" });
+      invalidateLookups();
+      try {
+        window.sessionStorage.removeItem("zoikan-ai-conversation-cache"); // P3-2.8：登出清走側欄對話快取
+      } catch {
+        // 忽略
+      }
       router.push("/login");
       router.refresh();
     } finally {
