@@ -5,7 +5,7 @@
 // WP-PRICE（老闆 2026-09-16 拍板）：呢度由原本嘅 page.tsx 搬出嚟做
 // client component——`canReprice`（「出街價:update」）要喺 server
 // component 查一次先傳落嚟（同 src/app/(app)/rate-cards/page.tsx 一樣
-// 嘅 pattern），「重新計价」掣先可以做到「有權先顯示」。
+// 嘅 pattern），「重新計價」掣先可以做到「有權先顯示」。
 import { useEffect, useState, useCallback } from "react";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
@@ -41,7 +41,7 @@ interface UnpricedGroup {
   broker_code: string | null;
   broker_display: string;
   // 應修 1：同 RosterEditor.tsx 一致——`no_settlement`（冇結算單位）唔係
-  // 「未定价」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
+  // 「未定價」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
   category?: "payout_unpriced" | "client_unpriced" | "no_settlement";
   count: number;
 }
@@ -64,9 +64,9 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   const [totals, setTotals] = useState<Total[]>([]);
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
-  // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格喺任何
+  // 應修 1：獨立於「未定價」——settlement_broker_id IS NULL 嘅格喺任何
   // 雞頭／長工／公司兵嘅糧單都唔會出現，只會出現喺「未歸屬結算單位」
-  // 行，要有自己嘅警告，就算未定价 count＝0 都要顯示。
+  // 行，要有自己嘅警告，就算未定價 count＝0 都要顯示。
   const [noSettlementCount, setNoSettlementCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +93,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
     })();
   }, [month, reloadTick]);
 
-  // WP-PRICE §M3：「重新計价」——見 src/app/(app)/roster/[site]/[month]/
+  // WP-PRICE §M3：「重新計價」——見 src/app/(app)/roster/[site]/[month]/
   // RosterEditor.tsx 同一段設計註解——dry-run 預覽（diff 摘要）→ confirm
   // →先至真係 dry_run:false 寫入（唔再係單一 confirm 就直接覆蓋）。
   const handleReprice = useCallback(async () => {
@@ -109,13 +109,13 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         return;
       }
       if (preview.data.changed === 0) {
-        window.alert(`重新計价預覽：呢個月全公司冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定价。冇嘢寫入。`);
+        window.alert(`重新計價預覽：呢個月全公司冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定價。冇嘢寫入。`);
         return;
       }
       const keptNote = preview.data.kept_unresolved > 0 ? `（其中 ${preview.data.kept_unresolved} 更搵唔到對應卡，保留原有 snapshot）` : "";
       if (
         !window.confirm(
-          `重新計价預覽 ${month}（全公司）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定价。確定要寫入？`,
+          `重新計價預覽 ${month}（全公司）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
         )
       ) {
         return;
@@ -125,7 +125,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         setError(res.message);
         return;
       }
-      window.alert(`重新計价完成：${res.data.repriced} 更已改寫，仲有 ${res.data.unpriced} 更未定价。`);
+      window.alert(`重新計價完成：${res.data.repriced} 更已改寫，仲有 ${res.data.unpriced} 更未定價。`);
       setReloadTick((t) => t + 1);
     } finally {
       setRepricing(false);
@@ -147,7 +147,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
             </FilterChip>
             {canReprice && (
               <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
-                {repricing ? "計价緊…" : `重新計价（${month}）`}
+                {repricing ? "計價緊…" : `重新計價（${month}）`}
               </Button>
             )}
             <a href={`/api/reports/payroll?month=${month}&export=1`}>
@@ -158,10 +158,10 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       />
 
       <Banner kind="error" message={error} />
-      {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
+      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
       {unpricedCount > 0 && (
         <Notice variant="warning">
-          <p className="font-medium">呢個月有 {unpricedCount} 更未定价（冇對應價目卡），金額未計入呢份糧明細：</p>
+          <p className="font-medium">呢個月有 {unpricedCount} 更未定價（冇對應價目卡），金額未計入呢份糧明細：</p>
           <ul className="list-disc pl-5 mt-1">
             {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
                 搶眼嘅 Notice，見下面）——留喺呢度會令人以為補張卡就得，
@@ -178,7 +178,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       )}
       {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
           唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
-          單位」行。就算未定价 count＝0 都要顯示（同 RosterEditor.tsx 一
+          單位」行。就算未定價 count＝0 都要顯示（同 RosterEditor.tsx 一
           致嘅獨立 error Notice）。 */}
       {noSettlementCount > 0 && (
         <Notice variant="error">

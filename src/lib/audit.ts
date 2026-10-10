@@ -43,7 +43,7 @@ export type AuditAction =
   // （after 淨係 {id, conservative, note}，冇 PII）。
   | "guard_fix_conservative_default"
   // WP-PRICE（老闆 2026-09-16 拍板）：`POST /api/shift-records/reprice`
-  // 一個月/一個盤重新計价，一次過覆蓋整段範圍嘅 snapshot（價目卡改咗
+  // 一個月/一個盤重新計價，一次過覆蓋整段範圍嘅 snapshot（價目卡改咗
   // 要生效）——一行 audit（table_name="shift_records"，row_id=
   // "reprice:<month>[:<site_id>]"），after 存 counts（唔存逐條 before/
   // after，成千上萬條會令 audit_log 爆），詳情見

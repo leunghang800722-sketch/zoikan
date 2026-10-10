@@ -776,7 +776,7 @@ export const ShiftRecordBatchSchema = z
   })
   .strict();
 
-// WP-PRICE：`POST /api/shift-records/reprice`——重新計价，`site_id` 冇填
+// WP-PRICE：`POST /api/shift-records/reprice`——重新計價，`site_id` 冇填
 // 即係成個月全部盤。S5（Opus 驗收）：月份格式收緊做真日曆月（01-12），
 // 唔止「四位數字」。M3：`dry_run` 預設 true——一定要用戶睇過預覽（diff
 // 摘要）先至可以確認 `dry_run:false` 真係寫入。

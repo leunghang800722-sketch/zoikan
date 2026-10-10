@@ -68,10 +68,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const data = snakeToCamelShallow(parsed) as Prisma.ShiftRecordUncheckedUpdateInput;
 
     // WP-BOSS5 驗收項 2（Opus 5.5 覆核應修 a）：改 `ot_hours`（OT 記錄、
-    // workDate≥2026-08-01）要用 resolver 用新小時重新計价——snapshot 本身
-    // 係「金額」＝每小時价×小時，淨改小時、唔跟住重算金額嘅話，個「每
-    // 小時价」會靜靜錯咗（例如 3.5 小時卡×2 小時嘅金額改成 3.5 小時就
-    // 代表緊錯咗嘅每小時价）。
+    // workDate≥2026-08-01）要用 resolver 用新小時重新計價——snapshot 本身
+    // 係「金額」＝每小時價×小時，淨改小時、唔跟住重算金額嘅話，個「每
+    // 小時價」會靜靜錯咗（例如 3.5 小時卡×2 小時嘅金額改成 3.5 小時就
+    // 代表緊錯咗嘅每小時價）。
     // 揀嘅做法：
     //   0. 帶咗 `ot_hours` 又帶咗三個 snapshot 欄其中一兩個（唔係三個一
     //      齊帶）→ 400——唔准淨帶部分欄，等 client／wage／fee 三個一齊
@@ -79,7 +79,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     //      值」呢種夾雜狀態。
     //   1. 有帶 `ot_hours`、冇同時帶齊三個 snapshot 欄（帶齊三個就當用戶
     //      自己指定成套金額，唔喺呢度插手）、記錄本身係 OT、
-    //      workDate≥2026-08-01 先觸發自動重新計价；
+    //      workDate≥2026-08-01 先觸發自動重新計價；
     //   2. **逐邊獨立判斷**（唔係「有一邊搵到就成組覆蓋」）：
     //      - 收客價：resolver 揾到收客卡 → 覆蓋 `client_rate_snapshot`；
     //        揾唔到但之前非 null（人手輸入冇對應卡）→ 409；揾唔到而之前

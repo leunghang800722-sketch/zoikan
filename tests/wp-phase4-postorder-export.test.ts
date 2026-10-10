@@ -374,8 +374,8 @@ describe("buildPostorderWorkbook：§25.7 OT 折入 Roster（合成小月份）"
     });
 
     // §25.7 例子：2 小時 OT，snapshot 記錄金額 169.70（§25.1 之後 snapshot
-    // 已經係「呢條記錄嘅金額」＝卡金額×otHours，唔係每小時价）→ Roster
-    // 行更數應該＝2（Σ ot_hours）、上單價應該＝169.70÷2＝84.85（每小時价）。
+    // 已經係「呢條記錄嘅金額」＝卡金額×otHours，唔係每小時價）→ Roster
+    // 行更數應該＝2（Σ ot_hours）、上單價應該＝169.70÷2＝84.85（每小時價）。
     await prisma.shiftRecord.create({
       data: { workDate: new Date(Date.UTC(2025, 7, 10)), siteId, shiftTypeId: otShiftTypeId, guardId: guard.id, settlementBrokerId: brokerId, recordType: "ot", otHours: 2, status: "confirmed", clientRateSnapshot: 169.7, guardWageSnapshot: 100, brokerFeeSnapshot: 0, createdBy: "test" },
     });

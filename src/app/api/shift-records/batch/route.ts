@@ -44,7 +44,7 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest, Forbidden, Conflict } from "@/lib/api/errors";
 import { LeaveCode, type Prisma, type ShiftRecordStatus } from "@prisma/client";
-// WP-PRICE（老闆 2026-09-16 拍板）：儲存時自動計价——見
+// WP-PRICE（老闆 2026-09-16 拍板）：儲存時自動計價——見
 // src/lib/pricing/resolve-rate.ts 頂註解。`fetchEffectiveRateCards()`
 // 一次攞晒呢個盤呢個月範圍嘅有效卡，`resolveShiftPricingFromCards()`
 // 喺記憶體逐格揀價，唔逐格打 DB。
@@ -78,8 +78,8 @@ type PlannedOp =
       settlementBrokerId: string | null;
       operationalBrokerId: string | null;
       status: ShiftRecordStatus;
-      existingIsExternal: boolean; // WP-PRICE：計价 external 判斷要用——現存記錄保留佢原本嘅 is_external，新記錄預設 false
-      pricing: ResolvedShiftPricing | null; // WP-PRICE：喺 plans 起晒之後先一次過計（見下面「計价」段），呢度淨係佔位
+      existingIsExternal: boolean; // WP-PRICE：計價 external 判斷要用——現存記錄保留佢原本嘅 is_external，新記錄預設 false
+      pricing: ResolvedShiftPricing | null; // WP-PRICE：喺 plans 起晒之後先一次過計（見下面「計價」段），呢度淨係佔位
       // B1-5（WP-ATTRIB）：settlement_broker_id 冇喺 payload／現存記錄
       // 度攞到，靠 resolveSettlementBrokerFallback() 推算——response 要
       // additive 標返俾前端，等 RosterEditor 儲存後 toast「推算」。
@@ -279,11 +279,11 @@ export async function POST(req: Request) {
       });
     }
 
-    // ---- WP-PRICE：計价（老闆 2026-09-16 拍板）------------------------
+    // ---- WP-PRICE：計價（老闆 2026-09-16 拍板）------------------------
     // 喺 plans 起晒之後、開 transaction 之前一次過計——一次 query 攞晒
     // 呢個盤本月範圍嘅有效卡（`fetchEffectiveRateCards`），逐格喺記憶體
     // 揀價（`resolveShiftPricingFromCards`），唔逐格打 DB。淨係
-    // record_type=shift 先計「未定价」統計（leave 冇「呢更嘅價」呢個
+    // record_type=shift 先計「未定價」統計（leave 冇「呢更嘅價」呢個
     // 概念，resolver 本身對 leave 已經回全 null＋unpriced:false）。
     //
     // S4（Opus 驗收）：舊版每次都無條件覆寫已存在記錄嘅 snapshot——人手
@@ -293,9 +293,9 @@ export async function POST(req: Request) {
     //   1. 新建記錄（existingId=null）；
     //   2. record_type 變咗（shift↔leave）；
     //   3. settlement_broker 變咗（邊個雞頭出糧變咗，出街價自然要追）；
-    //   4. 現存三個 snapshot 全部 null（本身就未定价，冇嘢好「保留」）；
+    //   4. 現存三個 snapshot 全部 null（本身就未定價，冇嘢好「保留」）；
     //   5.（應修，Opus 第二輪驗收）is_external 翻轉咗但 snapshot 未追——
-    //      現存記錄 `is_external=true`（external 記錄理應收客价／出街价
+    //      現存記錄 `is_external=true`（external 記錄理應收客價／出街價
     //      全部 null）但 snapshot 仲有非 null 值，即係呢條記錄嘅
     //      external 狀態同 snapshot 唔一致（例如原本內部記錄，之後有人
     //      經 PATCH 改咗 is_external，但冇追過 snapshot）——強制全部重計
@@ -316,8 +316,8 @@ export async function POST(req: Request) {
     const rateCards = await fetchEffectiveRateCards(parsed.site_id, month, monthEnd);
     // WP-MISC（老闆 2026-09-20 拍板，LINK：TKO Gateway 厚A/B/C）：呢類盤
     // 嘅保安員由客戶直接出糧，公司淨係收每月服務費——唔逐更計客價／
-    // 工資，唔使價目卡。下面「計价」段對呢類盤（`guardsPaidByClient`）
-    // 一律行「保留現有值、唔寫新 snapshot、唔算未定价」分支，見
+    // 工資，唔使價目卡。下面「計價」段對呢類盤（`guardsPaidByClient`）
+    // 一律行「保留現有值、唔寫新 snapshot、唔算未定價」分支，見
     // src/lib/pricing/unpriced.ts、resolve-rate.ts 頂註解。
     const pricingSite = await prisma.site.findUnique({ where: { id: parsed.site_id }, select: { canonicalName: true, guardsPaidByClient: true } });
     const siteGuardsPaidByClient = pricingSite?.guardsPaidByClient ?? false;
@@ -360,7 +360,7 @@ export async function POST(req: Request) {
         // WP-MISC：LINK 呢類盤——唔行 resolver、唔寫新 snapshot（新記錄
         // 三個欄一律 null，`existingClient/Wage/Fee` 對新記錄本身已經係
         // null）；已有值（例如未拍板前舊資料）保留原封不動，唔清；一律
-        // 唔算未定价（payout 同 client 都唔算）。
+        // 唔算未定價（payout 同 client 都唔算）。
         plan.pricing = {
           clientRate: existingClient,
           guardWage: existingWage,
@@ -407,7 +407,7 @@ export async function POST(req: Request) {
           payoutCardFound: false,
         };
       }
-      if (plan.recordType !== "shift") continue; // leave 唔計入「未定价」統計
+      if (plan.recordType !== "shift") continue; // leave 唔計入「未定價」統計
       if (plan.pricing.unpriced) {
         unpricedCount++;
         const shiftTypeCode = shiftTypeById.get(plan.cell.shift_type_id)!.code;
@@ -461,7 +461,7 @@ export async function POST(req: Request) {
                 operationalBrokerId: plan.operationalBrokerId,
                 status: plan.status,
                 // WP-PRICE：snapshot 跟返 plan.pricing（喺 plans 起晒之後一次過計好，
-                // 見上面「計价」段）——shift_type/guard 唔會變（本身就係揀返
+                // 見上面「計價」段）——shift_type/guard 唔會變（本身就係揀返
                 // 呢條記錄嘅 key），settlement_broker 或者 record_type（shift↔leave）
                 // 有變都會反映喺呢個 plan.pricing。
                 clientRateSnapshot: plan.pricing?.clientRate ?? null,
@@ -484,7 +484,7 @@ export async function POST(req: Request) {
               leaveCode: plan.leaveCode as never,
               status: plan.status,
               createdBy: session.userId,
-              // WP-PRICE：新記錄一律填 snapshot（見上面「計价」段）——
+              // WP-PRICE：新記錄一律填 snapshot（見上面「計價」段）——
               // 呢個 route 之前完全冇寫呢三個欄，令新更次金額靜靜變 0。
               clientRateSnapshot: plan.pricing?.clientRate ?? null,
               guardWageSnapshot: plan.pricing?.guardWage ?? null,
@@ -513,7 +513,7 @@ export async function POST(req: Request) {
 
     const warnings = await computeWarnings(guardIds, parsed.site_id, month, monthEnd, broker);
 
-    // WP-PRICE：「未定价」＝清楚警告，唔准靜靜 0——回應加返呢次儲存嘅計价
+    // WP-PRICE：「未定價」＝清楚警告，唔准靜靜 0——回應加返呢次儲存嘅計價
     // 結果，等 RosterEditor 儲存後可以即刻 toast/Notice 出嚟（見
     // src/components/roster/RosterEditor.tsx）。
     const pricing = { priced: pricedCount, unpriced: unpricedCount, unpriced_cells: [...unpricedByKey.values()] };

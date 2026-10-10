@@ -28,7 +28,7 @@ import { n, round2 } from "@/lib/reports/money";
  * 分界日，避免兩處各自寫一次呢個日期拗開。 */
 export const LONGTERM_REFERRAL_AUTOCOMPUTE_FROM = new Date("2026-08-01T00:00:00.000Z");
 
-/** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价——淨係
+/** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時價——淨係
  * `workDate >= 2026-08-01` 先生效，同一日起（同 `LONGTERM_REFERRAL_
  * AUTOCOMPUTE_FROM` 一樣嘅分界日，但概念唔同，獨立命名方便以後各自拗
  * 開）。7 月 OT snapshot 一直由 seed 直接寫入、`gate:pricing` 對住，
@@ -51,9 +51,9 @@ export interface ResolveShiftPricingInput {
    * （極罕見）。見 `requireExactShiftTypeMatch()`。 */
   shiftTypeCode: string;
   /** 應修（Opus 第二輪驗收）：呢個更別本身嘅 `shift_type.billing_group`
-   * ——淨係 `per_shift`（逐更收客价）先可以喺呢度揀中收客价卡；
+   * ——淨係 `per_shift`（逐更收客價）先可以喺呢度揀中收客價卡；
    * `monthly_ic`（例：數碼港 CP5「D」更，成個盤呢類更別走獨立 IC 月費
-   * 結構，唔逐更收客价）一律 client 保持 null，唔理張卡本身係咪
+   * 結構，唔逐更收客價）一律 client 保持 null，唔理張卡本身係咪
    * per_shift 卡、係咪夾中——冇呢個欄位就當 `per_shift`（向下相容，
    * 大部份更別冇呢個顧慮，同 DB `billing_group` 欄嘅 `@default(per_shift)`
    * 一致）。呢個同 `RateCardLite.billingModel`（卡本身嘅收費模式）係
@@ -65,7 +65,7 @@ export interface ResolveShiftPricingInput {
   workDate: Date;
   isExternal: boolean;
   recordType: ShiftPricingRecordType;
-  /** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价——
+  /** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時價——
    * `recordType==="ot"` 而且 `workDate >= OT_HOURLY_PRICING_FROM`
    * （2026-08-01，7 月唔郁）先生效，揀到 OT 更種卡之後 client／
    * guardWage／brokerFee 各乘呢個數（round2）。呢個更（記錄）嘅 OT
@@ -87,12 +87,12 @@ export interface ResolvedShiftPricing {
   source: { clientCardId?: string; payoutCardId?: string };
   unpriced: boolean;
   reason?: string;
-  /** 應修（Opus 第二輪驗收）：獨立標明「呢次有冇搵到收客价／出街价
-   * 卡」——同 `unpriced` 分開，`unpriced` 淨係反映出街价嗰邊嘅業務
-   * 「未定价」判斷（external／longterm 呢兩類「正常冇出街价」一律
+  /** 應修（Opus 第二輪驗收）：獨立標明「呢次有冇搵到收客價／出街價
+   * 卡」——同 `unpriced` 分開，`unpriced` 淨係反映出街價嗰邊嘅業務
+   * 「未定價」判斷（external／longterm 呢兩類「正常冇出街價」一律
    * `unpriced:false`），唔可以借嚟判斷「resolver 呢次有冇真係揾到
    * client/payout 卡」——reprice 依家用呢兩個 flag 決定「搵唔到就保留
-   * 原值」，唔會將 external/longterm 嘅「正常冇价」錯誤當「搵到咗
+   * 原值」，唔會將 external/longterm 嘅「正常冇價」錯誤當「搵到咗
    * null」覆蓋落去。 */
   clientCardFound: boolean;
   payoutCardFound: boolean;
@@ -164,12 +164,12 @@ function isEffectiveOn(card: RateCardLite, workDate: Date): boolean {
  *
  * 冇任何一項唔夾（guard/broker/shift_type 三個 FK 入面，凡卡有指定值就
  * 一定要同輸入相符）就回 null（呢張卡根本唔適用）。`opts.ignoreBroker`
- * （gate:pricing 對 7 月數據逐條驗證證實嘅口徑）：收客价（client_rate）
+ * （gate:pricing 對 7 月數據逐條驗證證實嘅口徑）：收客價（client_rate）
  * 本質上係「呢個盤呢個更別」嘅價，唔係「邊個雞頭」嘅價——雞頭專属嘅
- * 收客价卡（例：啟航1331 D 更掛咗喺 K 雞頭嘅 $1200 卡）其實係成個更別嘅
- * 標準收客价，7 月數據入面唔理實際結算雞頭係邊個（K／B07／Y……）都套用
- * 同一個收客价。所以出街价（guard_wage/broker_fee）先要求 broker 一定要
- * 夾，收客价搵唔到夾嘅 broker 就擴大搜尋（`ignoreBroker:true`，見
+ * 收客價卡（例：啟航1331 D 更掛咗喺 K 雞頭嘅 $1200 卡）其實係成個更別嘅
+ * 標準收客價，7 月數據入面唔理實際結算雞頭係邊個（K／B07／Y……）都套用
+ * 同一個收客價。所以出街價（guard_wage/broker_fee）先要求 broker 一定要
+ * 夾，收客價搵唔到夾嘅 broker 就擴大搜尋（`ignoreBroker:true`，見
  * resolveShiftPricingFromCards 兩段式揀 clientCard）唔理張卡本身掛咗邊個
  * 雞頭。
  *   0：guard 专属 + 同 shift_type
@@ -259,7 +259,7 @@ export async function fetchEffectiveRateCards(siteId: string, monthStart: Date, 
 
 /** 純函數：對住已經攞好嘅卡（喺記憶體）揀出呢一格嘅價。單元測試主力測呢個。
  * WP-BOSS5 §25.1：淨係做「揀卡」（同之前一樣，OT 揀嘅仍然係 OT 更種
- * 自己嗰張卡，張卡金額＝每小時价）——「乘 otHours」呢步刻意拆做獨立嘅
+ * 自己嗰張卡，張卡金額＝每小時價）——「乘 otHours」呢步刻意拆做獨立嘅
  * `applyOtHourlyPricing()`（喺函數尾包一層），咁所有 return path（
  * external／longterm／no_broker／揾唔到卡／正常）唔使逐個分支手動加
  * 乘數，唔會漏改。 */
@@ -274,16 +274,16 @@ export function resolveShiftPricingFromCards(cards: RateCardLite[], input: Resol
 
 function resolveShiftPricingFromCardsCore(cards: RateCardLite[], input: ResolveShiftPricingInput): ResolvedShiftPricing {
   if (input.recordType === "leave") {
-    // leave 冇「呢更嘅收客/出街价」呢個概念，同 7 月 seed 口徑一致：唔算「未定价」。
+    // leave 冇「呢更嘅收客/出街價」呢個概念，同 7 月 seed 口徑一致：唔算「未定價」。
     return { clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false, clientCardFound: false, payoutCardFound: false };
   }
   // WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，個個盤個個人都
-  // 唔同，系統唔准自動套公式計 OT 价）：OT 記錄而家都行落面同 shift 一樣
+  // 唔同，系統唔准自動套公式計 OT 價）：OT 記錄而家都行落面同 shift 一樣
   // 嘅卡揀邏輯（site／broker／guard 級），揀嘅係「OT 更種」自己嘅卡（掛
   // 住 OT 嗰個 shift_type_id，例：HKU座頭 1Hr OT——見 site+shiftType 級
   // 卡，broker Y，client=84.85/guard=73，呢張卡嘅金額本身就係「每粒鐘」
-  // 嘅价，唔使再除 hours）；搵唔到卡就 client/guard/fee 全部 null，交俾
-  // 報表層（gross-margin.ts）／unpriced.ts 分類做「未定价 OT」——資料由
+  // 嘅價，唔使再除 hours）；搵唔到卡就 client/guard/fee 全部 null，交俾
+  // 報表層（gross-margin.ts）／unpriced.ts 分類做「未定價 OT」——資料由
   // (i) 呢張卡，或者 (ii) 人手輸入 snapshot 決定，resolver 唔會自己計。
   // 7 月既有嘅「parent 更 snapshot ÷ hours × ot_hours」公式**唔喺呢度
   // 做**（果條公式喺 gross-margin.ts 報表層，唔係呢個 resolver）——7 月
@@ -298,33 +298,33 @@ function resolveShiftPricingFromCardsCore(cards: RateCardLite[], input: ResolveS
     // Opus 5.5 驗收：OT 記錄**淨係**配掛住呢個 OT 更種（shift_type_id 完全
     // 相等）嘅卡——唔准跌落 shift_type=null 嘅盤級／雞頭級／guard 級正更卡
     // （dev DB 實測：HKU座頭 OT1＋雞頭 W 會配中 7 月 W 雞頭正更卡 700／620，
-    // 當「每粒鐘」價計 ⇒ 大幅多計）。OT 冇卡就係未定价 OT（老闆：逐盤逐人
+    // 當「每粒鐘」價計 ⇒ 大幅多計）。OT 冇卡就係未定價 OT（老闆：逐盤逐人
     // 人手設卡）。
     requireExactShiftType: requireExactShiftTypeMatch(input.shiftTypeCode) || input.recordType === "ot",
   };
   const source: ResolvedShiftPricing["source"] = {};
 
   // ---- external（gate:pricing 對 7 月數據驗證推翻咗原本「external 都要
-  // 计收客价」嘅假設）：external＝客戶自己嘅人（例如數碼港 Wilson Guard/
+  // 计收客價」嘅假設）：external＝客戶自己嘅人（例如數碼港 Wilson Guard/
   // Supervisor），公司根本唔開單俾客戶（monthly-close.ts 都成行剔走），
-  // 7 月 286 條 external 記錄 client_rate_snapshot 100% 係 null——收客价／
-  // 出街价一律 null，唔计任何卡。
+  // 7 月 286 條 external 記錄 client_rate_snapshot 100% 係 null——收客價／
+  // 出街價一律 null，唔计任何卡。
   const isExternal = input.isExternal || input.brokerKind === "external";
   if (isExternal) {
     return { clientRate: null, guardWage: null, brokerFee: null, source, unpriced: false, reason: "external", clientCardFound: false, payoutCardFound: false };
   }
 
-  // ---- 收客价：长工都要计（收入照計）--------------------------------
+  // ---- 收客價：长工都要计（收入照計）--------------------------------
   // M1（Opus 驗收）：淨係 per_shift（或者未填 billing_model，向下相容）
   // 嘅卡先可以做逐更 client_rate_snapshot——月費／admin_fee／special 嘅
   // 「成個月總額」卡（唔理掛喺 site 級定更別級）一律唔可以喺呢度被揀中。
   // 兩段式揀卡（gate:pricing 驗證）：先試「同結算雞頭夾」，夾唔到（例如
-  // 呢個更別嘅收客价卡掛咗喺另一個雞頭度，但收客价本質上係成個更別嘅
+  // 呢個更別嘅收客價卡掛咗喺另一個雞頭度，但收客價本質上係成個更別嘅
   // 標準價）先擴大做 `ignoreBroker:true`（唔理張卡掛咗邊個雞頭）。
   //
   // 應修（Opus 第二輪驗收）：仲要夾 `shiftTypeBillingGroup==="per_shift"`
   // ——`monthly_ic` 呢類更別（目前淨係數碼港 CP5「D」更）根本唔係逐更
-  // 收客价結構，就算揾到一張形狀啱嘅 per_shift 卡（例如 site 級 flat 卡）
+  // 收客價結構，就算揾到一張形狀啱嘅 per_shift 卡（例如 site 級 flat 卡）
   // 都唔可以誤用嚟填呢個更別嘅 client_rate_snapshot（見 gate:pricing
   // 例外(3) 嘅歷史包袱——而家喺呢度修正咗，資料本身 51 條 CP5 D 記錄
   // client_rate_snapshot 100% null，同呢個修正吻合，例外(3) 唔再觸發）。
@@ -335,12 +335,12 @@ function resolveShiftPricingFromCardsCore(cards: RateCardLite[], input: ResolveS
   const clientCardFound = clientCard !== null;
   if (clientCard) source.clientCardId = clientCard.id;
 
-  // gate:pricing 對 7 月數據驗證推翻咗「longterm 出街价一律 null」嘅
+  // gate:pricing 對 7 月數據驗證推翻咗「longterm 出街價一律 null」嘅
   // 假設：長工掛喺個別雞頭（例如 B07）名下，雞頭有時仍然收一筆純介紹費
   // （broker_fee 有值、guard_wage 保持 null——長工本身月薪 autopay，唔
-  // 經呢張卡出糧），要照跑落面嘅出街价 payout 揀卡（同正常路徑一樣），
-  // 搵唔到卡先至當「冇出街价」（unpriced 依然 false——longterm 本身
-  // 「冇出街价」屬正常，唔係缺价）。
+  // 經呢張卡出糧），要照跑落面嘅出街價 payout 揀卡（同正常路徑一樣），
+  // 搵唔到卡先至當「冇出街價」（unpriced 依然 false——longterm 本身
+  // 「冇出街價」屬正常，唔係缺價）。
   // 驗收（Opus 5.5，2026-09-26）：長工自己崗位更（B07）**永遠冇
   // guard_wage**——人工由月薪 autopay 覆蓋（總表 B07 payout_rate=0）。
   // 之前照用揀中張卡嘅 guard_wage：8 月盤卡／逐人卡好多係「唔分雞頭」
@@ -380,11 +380,11 @@ function resolveShiftPricingFromCardsCore(cards: RateCardLite[], input: ResolveS
   return { clientRate, guardWage: payout.guardWage, brokerFee: payout.brokerFee, source, unpriced: false, clientCardFound, payoutCardFound: true };
 }
 
-/** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡＝每小時价——`base`
+/** WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡＝每小時價——`base`
  * 已經用同一套「揀卡」邏輯揀到 OT 更種自己嗰張卡（張卡金額本身就係
- * 每粒鐘价），呢層淨係負責「乘 otHours」，`recordType!=="ot"` 或者
+ * 每粒鐘價），呢層淨係負責「乘 otHours」，`recordType!=="ot"` 或者
  * `workDate < OT_HOURLY_PRICING_FROM`（7 月）原樣放行。
- * `otHours` 空／0（揾到卡但冧唔到呢更做咗幾耐）＝未定价 OT，三欄
+ * `otHours` 空／0（揾到卡但冧唔到呢更做咗幾耐）＝未定價 OT，三欄
  * 強制 null＋`unpriced:true`，唔准估（同「揾唔到卡」一致嘅保守方向）；
  * `base` 本身已經全 null（例如 external／揾唔到卡）就原樣返（reason
  * 唔會俾冇意義嘅 "ot_hours_missing" 蓋走）。 */
@@ -407,7 +407,7 @@ function applyOtHourlyPricing(base: ResolvedShiftPricing, input: ResolveShiftPri
 }
 
 /**
- * S2 出街价取值規則（gate:pricing 對 7 月數據逐條驗證）——淨係 per_shift
+ * S2 出街價取值規則（gate:pricing 對 7 月數據逐條驗證）——淨係 per_shift
  * 嘅卡先可以做逐更 guard_wage_snapshot／broker_fee_snapshot：
  *   guard_wage 有值 → wage=guard_wage、fee=broker_fee（唔補算）——gate:
  *     pricing 逐條驗證推翻咗「payout_rate−guard_wage 反推 fee」呢個假設：
@@ -463,11 +463,11 @@ function toNumberLike(v: unknown): number | null {
 }
 
 /**
- * 「未定价」定義（規劃裁定，WP-PRICE §3；S3 擴大）：record_type=shift、非
+ * 「未定價」定義（規劃裁定，WP-PRICE §3；S3 擴大）：record_type=shift、非
  * cancelled、broker kind 唔係 internal_longterm／external（呢兩類
- * wage/fee=null 屬正常，唔算未定价）——**出街价未定**（payout_unpriced）：
+ * wage/fee=null 屬正常，唔算未定價）——**出街價未定**（payout_unpriced）：
  * broker_fee_snapshot 係 null，而且 guard_wage_snapshot 係 null 或者 0
- * （S3：`wage=0 且 fee=null` 都算未定价，唔止兩者皆 null 先算）。
+ * （S3：`wage=0 且 fee=null` 都算未定價，唔止兩者皆 null 先算）。
  *
  * 應修（Opus 第二輪驗收）：加 `record.isExternal`——排除條件唔淨係睇
  * `brokerKind==="external"`（結算雞頭本身係咪外判類），仲要睇記錄本身
@@ -478,7 +478,7 @@ function toNumberLike(v: unknown): number | null {
  *
  * WP-MISC（老闆 2026-09-20 拍板）：加 `opts.guardsPaidByClient`——LINK
  * （TKO Gateway 厚A/B/C）呢類「客戶直接出糧」嘅盤，我哋唔逐更計工資，
- * 呢類盤嘅更一律唔算未定价（payout 同 client 都唔算，見
+ * 呢類盤嘅更一律唔算未定價（payout 同 client 都唔算，見
  * `isClientUnpricedShift` 同一個 opts）。
  */
 export function isUnpricedShift(
@@ -498,17 +498,17 @@ export function isUnpricedShift(
 }
 
 /**
- * S3：**收客价未定**（client_unpriced）——淨係逐更盤（site billing_model=
+ * S3：**收客價未定**（client_unpriced）——淨係逐更盤（site billing_model=
  * per_shift）先算：client_rate_snapshot 係 null。月費／admin_fee／special
- * 等非逐更盤，收客价本身就唔係逐更計，client_rate_snapshot=null 屬正常，
- * 唔算未定价。
+ * 等非逐更盤，收客價本身就唔係逐更計，client_rate_snapshot=null 屬正常，
+ * 唔算未定價。
  *
  * 應修（Opus 第二輪驗收）：判斷基準由 `site.billing_model` 改用
- * `shift_type.billing_group`——「逐更收客价」係更別層面嘅事（同一個盤
- * 入面可以有嘅更別逐更收客价、有嘅走月費 IC 結構，例如數碼港 CP5 嘅
+ * `shift_type.billing_group`——「逐更收客價」係更別層面嘅事（同一個盤
+ * 入面可以有嘅更別逐更收客價、有嘅走月費 IC 結構，例如數碼港 CP5 嘅
  * 「D」更），唔應該用成個盤嘅 billing_model 一刀切。仲加咗
  * `record.isExternal`——external 記錄（客戶自己嘅人）根本唔開單，唔算
- * 「收客价未定」（同 `isUnpricedShift` 同一個口徑，B10 外判喺數碼港
+ * 「收客價未定」（同 `isUnpricedShift` 同一個口徑，B10 外判喺數碼港
  * CP5「D」更嘅記錄就係人手查證咗嘅例子）。
  *
  * WP-MIXED-BILLING（老闆 2026-09-24 拍板方案 (a)）＋Opus 5.5 驗收收窄：
@@ -518,8 +518,8 @@ export function isUnpricedShift(
  * 100% null，撤走豁免會令 7 月數字變（鐵則唔准）。8 月起改用
  * `opts.includedInSiteFlatFee`（由 `src/lib/reports/mixed-billing.ts`
  * 判斷：盤有 flat 收入、而呢個更種冇「逐更另收」卡＝已包喺月費）——
- * 包喺月費嘅更種唔算未定价；「逐更另收」更種（例：控制室日薪崗 N）冇
- * client snapshot 就算「收客价未定」。月費盤本身 `site.billing_model`
+ * 包喺月費嘅更種唔算未定價；「逐更另收」更種（例：控制室日薪崗 N）冇
+ * client snapshot 就算「收客價未定」。月費盤本身 `site.billing_model`
  * 唔再用（控制室／蔚峰園／屯門小欖 billing_model=per_shift 但有 flat 卡，
  * 靠佢判斷唔準）。
  */

@@ -90,7 +90,7 @@ async function computeRosterPricing(ctx: WriteContext, roster: NonNullable<Recon
   const recordType = rosterRecordType(roster);
   // WP-MIXED-BILLING（Opus 5.5 驗收）：OT 都行 resolver——resolver 對 OT
   // 淨係配「掛住呢個 OT 更種」嘅卡（老闆：OT 逐盤逐人人手設卡，例：HKU座頭
-  // 1Hr OT 84.85／73），冇卡就 null＝未定价 OT。之前呢度 OT 一律 null，
+  // 1Hr OT 84.85／73），冇卡就 null＝未定價 OT。之前呢度 OT 一律 null，
   // 令上載嘅 OT 永遠用唔到 OT 卡。leave 照舊冇 snapshot。
   if (siteUnpriced || recordType === "leave") return { clientRate: null, guardWage: null, brokerFee: null };
   const st = ctx.shiftTypeById.get(roster.shiftTypeId);
@@ -106,7 +106,7 @@ async function computeRosterPricing(ctx: WriteContext, roster: NonNullable<Recon
     workDate: new Date(`${roster.workDate}T00:00:00.000Z`),
     isExternal,
     recordType: recordType === "ot" ? "ot" : "shift",
-    // WP-BOSS5 §25.1：OT 卡＝每小時价，resolver 要有呢更嘅 OT 時數先識
+    // WP-BOSS5 §25.1：OT 卡＝每小時價，resolver 要有呢更嘅 OT 時數先識
     // 乘（`roster.hours`同 `data.otHours` 寫入 shift_record 嗰個值一致，
     // 淨係 recordType==="ot" 先有意義）。
     otHours: recordType === "ot" ? (roster.hours ?? null) : null,
@@ -287,7 +287,7 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
   const settlementDiffById = new Map(settlementDiffRecords.map((r) => [r.id, r]));
   for (const plan of [...shiftPlans, ...otPlans]) {
     const { item } = plan;
-    if (!item.roster) continue; // system_only：淨係 cancel，唔使計价
+    if (!item.roster) continue; // system_only：淨係 cancel，唔使計價
     if (item.category === "settlement_diff") {
       const rec = settlementDiffById.get(item.system!.id);
       const siteUnpriced = ctx.siteGuardsPaidByClient.get(item.roster.siteId) ?? false;

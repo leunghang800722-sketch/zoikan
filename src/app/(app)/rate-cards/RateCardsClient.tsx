@@ -214,7 +214,7 @@ export function RateCardsClient({
     await load();
   }
 
-  // WP-PRICE §M3（老闆 2026-09-16 拍板）：「重新計价」——用「生效月」
+  // WP-PRICE §M3（老闆 2026-09-16 拍板）：「重新計價」——用「生效月」
   // 篩選器揀嘅月份（冇揀就用返家陣個月）。改為 dry-run 預覽→confirm→
   // 先至真係 dry_run:false 寫入，同 payroll/roster 頁一樣嘅設計。
   const [repricing, setRepricing] = useState(false);
@@ -234,12 +234,12 @@ export function RateCardsClient({
     }
     if (preview.data.changed === 0) {
       setRepricing(false);
-      setNotice(`重新計价預覽：${month}（${scopeLabel}）冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定价。冇嘢寫入。`);
+      setNotice(`重新計價預覽：${month}（${scopeLabel}）冇任何更次嘅 snapshot 會變，${preview.data.unpriced} 更仍然未定價。冇嘢寫入。`);
       return;
     }
     const keptNote = preview.data.kept_unresolved > 0 ? `（其中 ${preview.data.kept_unresolved} 更搵唔到對應卡，保留原有 snapshot）` : "";
     const proceed = window.confirm(
-      `重新計价預覽 ${month}（${scopeLabel}）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定价。確定要寫入？`,
+      `重新計價預覽 ${month}（${scopeLabel}）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
     );
     if (!proceed) {
       setRepricing(false);
@@ -259,7 +259,7 @@ export function RateCardsClient({
     const qs = new URLSearchParams({ month, ...(siteFilter ? { site_id: siteFilter } : {}) });
     const unpricedRes = await apiGet<{ count: number }>(`/api/shift-records/unpriced?${qs.toString()}`);
     const unpricedCount = unpricedRes.ok ? unpricedRes.data.count : res.data.unpriced;
-    setNotice(`重新計价完成：${res.data.repriced} 更已改寫，仲有 ${unpricedCount} 更未定价。`);
+    setNotice(`重新計價完成：${res.data.repriced} 更已改寫，仲有 ${unpricedCount} 更未定價。`);
   }
 
   useEffect(() => {
@@ -440,7 +440,7 @@ export function RateCardsClient({
             </FilterChip>
             {canReprice && (
               <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
-                {repricing ? "計价緊…" : `重新計价（${effectiveMonthFilter || "本月"}）`}
+                {repricing ? "計價緊…" : `重新計價（${effectiveMonthFilter || "本月"}）`}
               </Button>
             )}
             {/* WP-PHASE3（§20.4 Phase 3 item 3）：「複製上月卡到本月」——
@@ -465,7 +465,7 @@ export function RateCardsClient({
 
       {/* WP-PHASE3（§20.4 Phase 3 item 4）：OT 卡管理——未定價 OT 清單，
           每項有「建卡」快捷（預填盤／更別／雞頭，開返「新增價目」抽屜）。
-          WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价，
+          WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時價，
           系統寫入時已乘 OT 時數（淨係 2026-08-01 起嘅記錄；7 月 OT
           snapshot 由 seed 直接寫，唔受呢個決定影響）。建卡之後 OT 記錄
           由「重新對數全月」／一鍵結算開頭嘅自動補價補返（reprice.ts）。 */}
@@ -657,7 +657,7 @@ export function RateCardsClient({
               單位——WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）已經拍板。 */}
           {shiftTypes.find((s) => s.id === form.shift_type_id)?.code?.startsWith("OT") && (
             <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12.5px] text-amber-800">
-              老闆 2026-09-28 決定：OT 卡金額＝每小時价，系統寫入時已乘 OT 時數（2026-08-01 起嘅記錄；淨係 1 個鐘嘅 OT 同「每條記錄」睇落一樣）。人手直接輸入嘅 OT snapshot（唔經呢張卡自動計）一律當「該條記錄金額」，唔會再乘時數。
+              老闆 2026-09-28 決定：OT 卡金額＝每小時價，系統寫入時已乘 OT 時數（2026-08-01 起嘅記錄；淨係 1 個鐘嘅 OT 同「每條記錄」睇落一樣）。人手直接輸入嘅 OT snapshot（唔經呢張卡自動計）一律當「該條記錄金額」，唔會再乘時數。
             </div>
           )}
           {hasClientRate && (

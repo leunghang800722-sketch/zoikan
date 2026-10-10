@@ -3,7 +3,7 @@
 // 「主檔」，跟 `src/lib/rbac/nav.ts` 導航分組）——同 `src/app/(app)/
 // my-receivable/page.tsx` 同一個 pattern。
 //
-// WP-PRICE：`canReprice`（「出街價:update」）——「重新計价」掣要有權先
+// WP-PRICE：`canReprice`（「出街價:update」）——「重新計價」掣要有權先
 // 顯示，同 payroll/roster 頁一樣做法。
 // WP-PHASE3（§20.4 Phase 3 item 3）：`canCopyLastMonth`（「出街價:
 // create」）——「複製上月卡到本月」會建新 `rate_cards` 行，跟 `POST
