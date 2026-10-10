@@ -208,6 +208,11 @@ const UPLOAD_CONCURRENCY = 2;
 
 export default function RosterUploadsPage() {
   const [month, setMonth] = useState(currentMonthStr());
+  // WP-RECONCILE-UI（§33.3 D）：deep link `?month=YYYY-MM&focus=<uploadId>`——只做預選月份＋捲到／高亮該上載，
+  // 唔觸發任何寫入。URL 解析完（urlReady）先載列表，避免先載當月再載目標月份互相覆蓋。
+  const [urlReady, setUrlReady] = useState(false);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const focusDoneRef = useRef<string | null>(null);
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [list, setList] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -265,9 +270,30 @@ export default function RosterUploadsPage() {
   }
 
   useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const m = sp.get("month");
+    if (m && /^\d{4}-(0[1-9]|1[0-2])$/.test(m)) setMonth(m);
+    const f = sp.get("focus");
+    if (f) setFocusId(f);
+    setUrlReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!urlReady) return;
     loadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, includeVoided]);
+  }, [month, includeVoided, urlReady]);
+
+  // 列表載入後：捲到目標上載（桌面表／手機卡二揀一，取當前可見嗰個）、聚焦「指定盤」下拉。
+  useEffect(() => {
+    if (!focusId || !list || focusDoneRef.current === focusId) return;
+    const els = [...document.querySelectorAll<HTMLElement>(`[data-upload-id="${CSS.escape(focusId)}"]`)];
+    const el = els.find((e) => e.getClientRects().length > 0);
+    if (!el) return;
+    focusDoneRef.current = focusId;
+    el.scrollIntoView({ block: "center" });
+    el.querySelector<HTMLElement>("select")?.focus({ preventScroll: true });
+  }, [focusId, list]);
 
   async function pollReconcileAllUntilDone(runId: string, forMonth: string): Promise<ReconcileAllRunDTO | null> {
     for (let i = 0; i < 1200; i++) {
@@ -697,7 +723,12 @@ export default function RosterUploadsPage() {
                   const u = entry.upload;
                   const summary = u?.parse_summary;
                   return (
-                    <tr key={entry.site_id ?? `unresolved:${u?.id}`} className={tableCls.rowHover}>
+                    <tr
+                      key={entry.site_id ?? `unresolved:${u?.id}`}
+                      className={`${tableCls.rowHover} ${u && u.id === focusId ? "bg-yellow-50 outline outline-2 -outline-offset-2 outline-zk-primary" : ""}`}
+                      data-upload-id={u?.id}
+                      data-focused={u && u.id === focusId ? "1" : undefined}
+                    >
                       <td className={`${tableCls.td} font-medium`}>
                         {entry.site_name}
                         {!entry.site_id && <span className="ml-1.5 text-[11px] text-orange-600">（盤名未配對）</span>}
@@ -766,7 +797,12 @@ export default function RosterUploadsPage() {
               const u = entry.upload;
               const summary = u?.parse_summary;
               return (
-                <div key={entry.site_id ?? `unresolved:${u?.id}`} className="rounded-lg border border-zk-border bg-white p-3">
+                <div
+                  key={entry.site_id ?? `unresolved:${u?.id}`}
+                  className={`rounded-lg border bg-white p-3 ${u && u.id === focusId ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`}
+                  data-upload-id={u?.id}
+                  data-focused={u && u.id === focusId ? "1" : undefined}
+                >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[13.5px] font-medium text-zk-text">{entry.site_name}</span>
                     <Pill variant={statusPillVariant(entry.upload_status)}>{STATUS_LABEL[entry.upload_status] ?? entry.upload_status}</Pill>

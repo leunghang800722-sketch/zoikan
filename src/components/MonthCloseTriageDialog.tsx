@@ -12,6 +12,7 @@ import { DeferredSender, type DeferredView } from "@/components/month-close/defe
 import { UndoToast } from "@/components/month-close/UndoToast";
 import { UNDO_NOTE_SHORT, humanize, kindChip, shortHuman } from "@/components/month-close/derive";
 import { clearUnsent, pruneUnsent, recordUnsent } from "@/components/month-close/unsent";
+import { GuardMatchInfo } from "@/components/reconcile/GuardMatchInfo";
 
 // 送出一律 keepalive：離開頁面時盡力完成（URL／method／body 同原本一樣）。
 function apiPost<T = unknown>(path: string, body?: unknown): Promise<ApiResult<T>> {
@@ -69,7 +70,7 @@ function useIsMobile(): boolean {
   return m;
 }
 
-export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sessionId: string; onClose: () => void; onChanged?: () => void }) {
+export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = null }: { sessionId: string; onClose: () => void; onChanged?: () => void; month?: string | null }) {
   const mobile = useIsMobile();
   const [qs, setQs] = useState<McQuestion[] | null>(null);
   const [initial, setInitial] = useState<McQuestion[] | null>(null);
@@ -393,6 +394,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 </div>
                 {q.mc.identity_label && <div className="mt-1 text-[12px] text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
               </div>
+              <GuardMatchInfo question={q} month={month} compact />
               {canAccept ? (
                 <div className={`rounded-[14px] border-2 px-4 py-3.5 ${choseOther ? "border-[#cbd5e1] bg-white opacity-60" : "border-[#2563eb] bg-[#f8fbff]"}`} data-testid="mc-suggest-card">
                   <div className="text-[12px] font-semibold text-[#1d4ed8]">系統建議</div>
@@ -510,6 +512,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged }: { sess
                 {humanize(q.mc.summary)}
               </div>
               {q.mc.identity_label && <div className="text-[12px] text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
+              <GuardMatchInfo question={q} month={month} />
               {form}
             </>
           )}

@@ -472,6 +472,12 @@ export function GuardsClient({
   // API）；月份／90日篩選改變唔使等（用戶撳完期望即刻反映，呢兩個唔會
   // 好似打字咁密集），但為咗淨係得一條 effect 管全部 reload、邏輯簡單
   // 啲，一律用同一個 debounce（300ms 用戶感覺唔到延遲）。
+  // WP-RECONCILE-UI（§33.3 D）：deep link `?q=<名或工號>` 只係預填搜尋框（純 UI，唔寫入）。
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (q && q.trim()) setSearch(q.trim());
+  }, []);
+
   useEffect(() => {
     const t = setTimeout(() => load(search), 300);
     return () => clearTimeout(t);
