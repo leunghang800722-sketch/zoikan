@@ -210,7 +210,7 @@ export function telTail(s: string | null | undefined): string | null {
 // ---------------------------------------------------------------------------
 const enc = encodeURIComponent;
 export const LINK = {
-  guardFix: (month: string) => `/guard-fix?month=${enc(month.slice(0, 7))}`,
+  guardFix: (month: string) => `/roster-uploads?tab=fix&month=${enc(month.slice(0, 7))}`,
   guards: (q: string) => `/guards?q=${enc(q)}`,
   newFromDocs: (name: string, staffNo: string) => {
     const p = new URLSearchParams();

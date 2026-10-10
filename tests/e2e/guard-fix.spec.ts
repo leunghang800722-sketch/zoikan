@@ -103,7 +103,9 @@ test("老闆：上載 U Team 名單 → 計算修復計劃 → 套用 → 對數
     const uploadRes = await uploadResponse;
     expect(uploadRes.status()).toBe(201);
 
+    // P3-3.5：/guard-fix 已 redirect 去 /roster-uploads?tab=fix（見下面 redirect 斷言）
     await page.goto("/guard-fix");
+    await expect(page).toHaveURL(/\/roster-uploads\?tab=fix/);
     await expect(page.getByRole("heading", { name: "未配對保安員修復" })).toBeVisible();
 
     // ① 上載 U Team 名單。

@@ -22,19 +22,10 @@ import { classifyReason, hasPerson, personFromRow, personKey, telTail, type RawR
 import { SimilarGuards } from "@/components/reconcile/GuardHints";
 import { ReasonLinks, ReasonText, WroteCell, reasonHasActions, type ActionCtx } from "./UnresolvedCells";
 import { kickerFor } from "@/lib/nav/schema";
+import { CATEGORY_LABEL, type ReconcileCategory } from "@/lib/roster-upload/category-labels";
 
-type ReconcileCategory = "match" | "roster_only" | "system_only" | "guard_diff" | "settlement_diff" | "shift_type_diff" | "unresolved";
 
 const CATEGORY_ORDER: ReconcileCategory[] = ["unresolved", "guard_diff", "shift_type_diff", "settlement_diff", "roster_only", "system_only", "match"];
-const CATEGORY_LABEL: Record<ReconcileCategory, string> = {
-  match: "一致",
-  roster_only: "更表有・系統冇",
-  system_only: "系統有・更表冇",
-  guard_diff: "人唔同",
-  settlement_diff: "結算單位唔同",
-  shift_type_diff: "更別唔同",
-  unresolved: "未配對（唔可以寫入）",
-};
 const CATEGORY_TONE: Record<ReconcileCategory, "success" | "warning" | "danger" | "neutral"> = {
   match: "success",
   roster_only: "warning",
