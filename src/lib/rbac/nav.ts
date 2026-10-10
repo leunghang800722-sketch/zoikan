@@ -101,7 +101,8 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
   // 雞頭端睇自己保安員用「自己保安員」module；內部角色用「保安員」——兩者
   // 都連去同一個 /guards 路徑，API 自己會 scope（見 src/app/api/guards）。
   push("/guards", "保安員", session.baseRole === "雞頭" ? "自己安員" : "安員");
-  push("/brokers", "雞頭", "雞頭");
+  // P3-0.3：雞頭角色唔出「雞頭」導覽（否則落入「其他」組；/brokers 頁面本身權限不變）。
+  if (session.baseRole !== "雞頭") push("/brokers", "雞頭", "雞頭");
   // WP-AI-OPS §28.4：保安員證件資料批量導入（老闆／會計／主管）＋導入後「待答問題」（badge＝自己未答數，老闆見全部）。
   push("/guards/import", "證件資料導入", "安員批量導入");
   push("/triage", "待答問題", "導入分診");
