@@ -35,7 +35,23 @@ interface SiteRow {
   // WP-UPLOAD-AUTOFIX（老闆 2026-09-25 要求）：更表檔名鍵——上載時檔名
   // stem 含任一鍵（唔分大小寫）就直接用呢個盤，優先過檔內盤名對照。
   roster_file_keys?: string[];
+  // WP-POSTORDER-FREE（§34 B）：盤預設結算雞頭（一鍵結算 settlement 推斷 (4b)）。
+  default_settlement_broker_id?: string | null;
   status: string;
+}
+
+interface BrokerLite {
+  id: string;
+  code: string;
+  name: string;
+  status?: string;
+}
+
+interface DefaultBrokerSuggestion {
+  month: string | null;
+  reason: string;
+  current_broker_id: string | null;
+  suggestion: { broker_id: string; broker_code: string; broker_name: string; days: number; source: string } | null;
 }
 
 interface ShiftTypeRow {
@@ -64,6 +80,7 @@ const emptySiteForm = {
   outside_monthly_close: false,
   guards_paid_by_client: false,
   roster_file_keys: "",
+  default_settlement_broker_id: "",
 };
 
 function billingModelPill(model: string) {
@@ -90,6 +107,10 @@ export default function SitesPage() {
   const [saving, setSaving] = useState(false);
 
   const [shiftTypesFor, setShiftTypesFor] = useState<SiteRow | null>(null);
+  // WP-POSTORDER-FREE（§34 B）：雞頭名單（揀盤預設雞頭用）＋「建議」。
+  const [brokers, setBrokers] = useState<BrokerLite[]>([]);
+  const [suggestion, setSuggestion] = useState<DefaultBrokerSuggestion | null>(null);
+  const [adopting, setAdopting] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -122,6 +143,10 @@ export default function SitesPage() {
 
   useEffect(() => {
     load();
+    void (async () => {
+      const res = await apiGet<ApiListResult<BrokerLite>>("/api/brokers?take=500");
+      if (res.ok) setBrokers(res.data.rows.filter((b) => b.status === undefined || b.status === "active"));
+    })();
   }, []);
   // WP-RECONCILE-UI（§33.3 D）：`/sites?focus=<siteId>` 高亮＋捲到該盤（純 UI）。
   const focusSite = useFocusParam();
@@ -149,9 +174,31 @@ export default function SitesPage() {
       outside_monthly_close: row.outside_monthly_close ?? false,
       guards_paid_by_client: row.guards_paid_by_client ?? false,
       roster_file_keys: (row.roster_file_keys ?? []).join(", "),
+      default_settlement_broker_id: row.default_settlement_broker_id ?? "",
     });
     setFormError(null);
+    setSuggestion(null);
     setDrawerOpen(true);
+    void (async () => {
+      const res = await apiGet<DefaultBrokerSuggestion>(`/api/sites/${row.id}/default-broker-suggestion`);
+      if (res.ok) setSuggestion(res.data);
+    })();
+  }
+
+  // 「採用」：直接 PATCH 盤預設雞頭（用戶撳先寫，建議本身唔會自動寫入）。
+  async function adoptSuggestion() {
+    if (!editingId || !suggestion?.suggestion) return;
+    setAdopting(true);
+    setFormError(null);
+    const res = await apiPatch(`/api/sites/${editingId}`, { default_settlement_broker_id: suggestion.suggestion.broker_id });
+    setAdopting(false);
+    if (!res.ok) {
+      setFormError(res.message);
+      return;
+    }
+    setForm((f) => ({ ...f, default_settlement_broker_id: suggestion.suggestion!.broker_id }));
+    setNotice(`已採用盤預設雞頭 ${suggestion.suggestion.broker_code}`);
+    await load();
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -179,6 +226,7 @@ export default function SitesPage() {
       roster_file_keys: rosterFileKeys,
     };
     if (hasMoneyField && form.monthly_fee !== "") body.monthly_fee = Number(form.monthly_fee);
+    if (editingId) body.default_settlement_broker_id = form.default_settlement_broker_id || null;
 
     const res = editingId
       ? await apiPatch(`/api/sites/${editingId}`, body)
@@ -282,6 +330,7 @@ export default function SitesPage() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
                         {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
+                        {r.default_settlement_broker_id && <Pill variant="neutral">預設雞頭 {brokers.find((b) => b.id === r.default_settlement_broker_id)?.code ?? "已設"}</Pill>}
                       </div>
                     </td>
                     <td className={tableCls.td}>
@@ -329,6 +378,7 @@ export default function SitesPage() {
                   {billingModelPill(r.billing_model)}
                   {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
                   {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
+                  {r.default_settlement_broker_id && <Pill variant="neutral">預設雞頭 {brokers.find((b) => b.id === r.default_settlement_broker_id)?.code ?? "已設"}</Pill>}
                   <span className="text-[11.5px] text-zk-muted">
                     {shiftTypesLoading ? "載入緊…" : (shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}
                   </span>
@@ -376,6 +426,34 @@ export default function SitesPage() {
               onChange={(e) => setForm((f) => ({ ...f, roster_file_keys: e.target.value }))}
             />
           </Field>
+          {editingId && (
+            <Field label="盤預設結算雞頭" hint="一鍵結算時，更表／Postorder／安員預設雞頭都推唔到嘅更，先歸呢個雞頭（再冇先睇近 3 個月歷史）。留空＝唔設。">
+              <select
+                className={selectCls}
+                data-testid="site-default-broker"
+                value={form.default_settlement_broker_id}
+                onChange={(e) => setForm((f) => ({ ...f, default_settlement_broker_id: e.target.value }))}
+              >
+                <option value="">（唔設）</option>
+                {form.default_settlement_broker_id && !brokers.some((b) => b.id === form.default_settlement_broker_id) && <option value={form.default_settlement_broker_id}>（已設）</option>}
+                {brokers.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.code}（{b.name}）
+                  </option>
+                ))}
+              </select>
+              {suggestion?.suggestion && suggestion.suggestion.broker_id !== form.default_settlement_broker_id && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-zk-muted" data-testid="site-default-broker-suggestion">
+                  <span>
+                    建議：{suggestion.suggestion.broker_code}（由 {suggestion.month ? `${Number(suggestion.month.slice(5, 7))} 月 ` : ""}Postorder 推出，同盤 {suggestion.suggestion.days} 個雞頭格全部係佢）
+                  </span>
+                  <button type="button" onClick={adoptSuggestion} disabled={adopting} className="rounded-[5px] border border-zk-border px-2 py-[2px] text-xs text-zk-primary hover:bg-zk-header disabled:opacity-50">
+                    {adopting ? "採用緊…" : "採用"}
+                  </button>
+                </div>
+              )}
+            </Field>
+          )}
           <Field label="客戶名稱">
             <input className={inputCls} value={form.client_name} onChange={(e) => setForm((f) => ({ ...f, client_name: e.target.value }))} required />
           </Field>

@@ -182,6 +182,8 @@ export const SiteUpdateSchema = z
     // 檔內盤名對照。見 prisma/schema.prisma Site.rosterFileKeys、
     // src/lib/roster-upload/match.ts `matchSiteByFileName()`。老闆／主管可改。
     roster_file_keys: z.array(z.string()).optional(),
+    // WP-POSTORDER-FREE（§34 B）：盤預設結算雞頭（null＝清走）。見 prisma Site.defaultSettlementBrokerId。
+    default_settlement_broker_id: uuid.nullable().optional(),
   })
   .strict();
 
