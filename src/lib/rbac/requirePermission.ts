@@ -104,12 +104,14 @@ const permissionSetCache = new WeakMap<AuthedSession, Promise<ReadonlySet<string
 export function loadPermissionSet(session: AuthedSession): Promise<ReadonlySet<string>> {
   let p = permissionSetCache.get(session);
   if (!p) {
-    p = prisma.rolePermission
+    // 由 permissions 表出發 + `rolePermissions: { some }` 過濾＝單一 SQL（用 role_permissions 做 relation select
+    // Prisma 會拆成 2 條查詢）。
+    p = prisma.permission
       .findMany({
-        where: { roleId: session.roleId, granted: true },
-        select: { permission: { select: { module: true, action: true } } },
+        where: { rolePermissions: { some: { roleId: session.roleId, granted: true } } },
+        select: { module: true, action: true },
       })
-      .then((rows) => new Set(rows.map((r) => permissionKey(r.permission.module as Module, r.permission.action as Action))));
+      .then((rows) => new Set(rows.map((r) => permissionKey(r.module as Module, r.action as Action))));
     // 查詢失敗唔好永久記住 rejected promise
     p.catch(() => permissionSetCache.delete(session));
     permissionSetCache.set(session, p);
