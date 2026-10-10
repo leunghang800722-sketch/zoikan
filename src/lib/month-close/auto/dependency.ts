@@ -25,7 +25,7 @@ export function emptyDependency(): PostorderDependency {
   };
 }
 
-export async function computePostorderDependency(month: Date, summary: Pick<AutoSummary, "counts" | "unpricedRecords">): Promise<PostorderDependency> {
+export async function computePostorderDependency(month: Date, summary: Pick<AutoSummary, "unpricedRecords">): Promise<PostorderDependency> {
   const { start, end } = monthRange(month);
   const out = emptyDependency();
 
@@ -46,8 +46,10 @@ export async function computePostorderDependency(month: Date, summary: Pick<Auto
   }
 
   // ---- 價錢 ----
-  const total = summary.counts.countable;
+  // total：該月非 cancelled、非客戶自己人（external）嘅 shift＋OT 更（同 journal 涵蓋範圍一致）。
+  const total = await prisma.shiftRecord.count({ where: { recordType: { in: ["shift", "ot"] }, status: { not: "cancelled" }, isExternal: false, NOT: { settlementBroker: { is: { kind: "external" } } }, workDate: { gte: start, lte: end } } });
   const unpriced = Math.min(summary.unpricedRecords, total);
+  const priced = Math.max(0, total - unpriced);
   out.pricing.total = total;
   out.pricing.unpriced = unpriced;
   const cardIds = [...new Set(priceCardByRecord.values())].filter((x) => x !== "existing");
@@ -58,22 +60,14 @@ export async function computePostorderDependency(month: Date, summary: Pick<Auto
     if (st) stepOfCard.set(c.id, st);
   }
   const live = await liveRecordIds([...priceCardByRecord.keys()], start, end);
-  let autoPriced = 0;
   for (const [rid, cid] of priceCardByRecord) {
     if (!live.has(rid)) continue;
     const st = stepOfCard.get(cid);
     if (st) {
       out.pricing.byStep[String(st) as "1"]++;
-      autoPriced++;
     }
   }
-  // 防呆：journal 統計不可能多過「已定價更數」
-  const priced = Math.max(0, total - unpriced);
-  if (autoPriced > priced) {
-    const f = priced / autoPriced;
-    for (const k of ["1", "2", "3", "4", "5"] as const) out.pricing.byStep[k] = Math.floor(out.pricing.byStep[k] * f);
-    autoPriced = (["1", "2", "3", "4", "5"] as const).reduce((a, k) => a + out.pricing.byStep[k], 0);
-  }
+  const autoPriced = (["1", "2", "3", "4", "5"] as const).reduce((a, k) => a + out.pricing.byStep[k], 0);
   out.pricing.byStep.existing = Math.max(0, priced - autoPriced);
   out.pricing.withoutPostorder = Math.max(0, priced - out.pricing.byStep["2"]);
 

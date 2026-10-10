@@ -136,6 +136,8 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
     assign.set(k, e);
   };
   const brokerIdSet = new Set(brokers.map((b) => b.id));
+  // (4b) 盤預設雞頭只用生效（active）雞頭，停用咗唔用。
+  const activeBrokerIds = new Set((await prisma.broker.findMany({ where: { status: "active" }, select: { id: true } })).map((b) => b.id));
 
   for (const r of recs) {
     const guard = guardById.get(r.guardId);
@@ -164,7 +166,7 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
     // (4b) 盤預設雞頭（§34 B）：安員預設雞頭之後、近 3 個月歷史之前
     if (!found) {
       const sd = siteById.get(r.siteId)?.defaultSettlementBrokerId ?? null;
-      if (sd && brokerIdSet.has(sd)) found = { id: sd, reason: SETTLEMENT_REASON.siteDefault };
+      if (sd && brokerIdSet.has(sd) && activeBrokerIds.has(sd)) found = { id: sd, reason: SETTLEMENT_REASON.siteDefault };
     }
     // (5) 近 3 個月同盤多數決
     if (!found) {

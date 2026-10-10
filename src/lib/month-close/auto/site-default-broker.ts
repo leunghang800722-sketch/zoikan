@@ -7,7 +7,7 @@ import { AutoCollector } from "./context";
 import { matchBrokerLabel, rowsForSite } from "./postorder-evidence";
 import { normalizeSiteKey } from "./site-match";
 
-export type SuggestionReason = "unique" | "no_postorder" | "no_roster" | "no_site_rows" | "no_broker_cells" | "not_unique" | "unmatched_label";
+export type SuggestionReason = "unique" | "no_postorder" | "no_roster" | "no_site_rows" | "no_broker_cells" | "not_unique" | "unmatched_label" | "broker_inactive";
 
 export interface DefaultBrokerSuggestion {
   month: string | null;
@@ -44,6 +44,8 @@ export async function suggestSiteDefaultBroker(siteId: string, monthParam: Date 
   const ids = new Set(matched.map((m) => m!.id));
   if (ids.size !== 1) return { month: monthIso, reason: "not_unique", suggestion: null };
   const b = matched[0]!;
+  const live = await prisma.broker.findUnique({ where: { id: b.id }, select: { status: true } });
+  if (live?.status !== "active") return { month: monthIso, reason: "broker_inactive", suggestion: null };
   const days = [...labels.values()].reduce((a, x) => a + x, 0);
   return { month: monthIso, reason: "unique", suggestion: { brokerId: b.id, brokerCode: b.code, brokerName: b.name, days, source: `Postorder「${ev.fileName}」Roster 分頁` } };
 }

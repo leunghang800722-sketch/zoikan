@@ -15,7 +15,9 @@ interface BackfillStatus {
 export function PostorderDependencyLine({ auto, month }: { auto: AutoReportDTO; month: string }) {
   const line = dependencyLine(auto.summary.postorder_dependency);
   const [st, setSt] = useState<BackfillStatus | null>(null);
+  const hasLine = line !== null;
   useEffect(() => {
+    if (!hasLine) return; // 舊 report 冇比例行就唔打 GET
     let alive = true;
     void (async () => {
       const res = await apiGet<BackfillStatus>(`/api/rate-cards/backfill-from-postorder?month=${month}`);
@@ -24,7 +26,7 @@ export function PostorderDependencyLine({ auto, month }: { auto: AutoReportDTO; 
     return () => {
       alive = false;
     };
-  }, [month]);
+  }, [month, hasLine]);
   if (!line) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-zk-border-soft px-4 py-2.5 text-[12.5px] text-[#334155]" data-testid="auto-dependency">
