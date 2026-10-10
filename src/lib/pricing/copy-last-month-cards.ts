@@ -2,7 +2,7 @@
 // 一鍵按鈕，代替 8 月教訓入面「新月份要人手逐張補卡」嘅重複工作。
 //
 // 唔可以直接重用 `src/lib/month-close/one-click.ts` 嘅
-// `findCarryoverCard()`：嗰個函數淨係搵「盤級通用」（`broker_id`／
+// `（已移除嘅 findCarryoverCard）()`：嗰個函數淨係搵「盤級通用」（`broker_id`／
 // `guard_id` 皆 null）嘅卡，一鍵結算 step0 用嚟做「揾唔到就 needs_human」
 // 嘅保守單張沿用；呢度任務書明文要求覆蓋 (盤, 更種, 雞頭／通用) 呢個更
 // 闊嘅組合（包括雞頭專屬價），批量複製一整個月，兩個係唔同用途嘅函數
@@ -10,7 +10,7 @@
 //
 // 排除規則（任務書原文）：special／guard 級／LINK 盤／已有本月卡。
 //   - special：`billingModel` 唔係 null／`per_shift`（月費/行政費/特殊卡
-//     唔係「逐更卡」，唔喺呢個功能範圍——同 `findCarryoverCard()` 一致
+//     唔係「逐更卡」，唔喺呢個功能範圍——同 `（已移除嘅 findCarryoverCard）()` 一致
 //     嘅 `OR:[{billingModel:null},{billingModel:"per_shift"}]`）。
 //   - guard 級：`guardId` 唔係 null（人專屬價，通常係長工日均價，逐人
 //     手動維護，唔應該批量複製）。
@@ -20,7 +20,7 @@
 //     （`effectiveFrom<=本月最後一日 && (effectiveTo=null || effectiveTo>=
 //     本月第一日)`）就跳過——保證冪等（連撳兩次，第二次候選一定 0）。
 //
-// 「上月生效嘅逐更卡」——同 `findCarryoverCard()` 一致嘅嚴謹口徑：
+// 「上月生效嘅逐更卡」——同 `（已移除嘅 findCarryoverCard）()` 一致嘅嚴謹口徑：
 // `effectiveTo` 逐字等如「上月最後一日」（唔係「效期跨住上月」呢種寬鬆
 // 判斷）——呢個係現有 8 月資料一路嘅慣例（月結會俾每張卡明確補
 // `effective_to`，見 `build-aug-plan.ts` closeJuly 呢類 entry），窄啲嘅

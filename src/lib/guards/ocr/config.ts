@@ -24,7 +24,7 @@ export const OCR_MAX_IMAGE_CHARS = 900_000;
 /** 整個請求體字元上限（3 份文件 × 5 張）。 */
 export const OCR_MAX_BODY_CHARS = 8_000_000;
 
-export const DEFAULT_OCR_MODEL = "deepseek-flash";
+const DEFAULT_OCR_MODEL = "deepseek-flash";
 export const DEFAULT_OCR_BASE_URL = "https://api.deepseek.com";
 export const OCR_CALL_TIMEOUT_MS = 60_000;
 export const OCR_MAX_OUTPUT_TOKENS = 1500;
@@ -32,10 +32,10 @@ export const OCR_MAX_OUTPUT_TOKENS = 1500;
 export const OCR_CLAUDE_MAX_OUTPUT_TOKENS = 8000;
 
 /** WP-OCR-CLAUDE §36：讀 A 用 Claude（老闆 2026-10-10 揀 Opus 5.5）。 */
-export const DEFAULT_OCR_CLAUDE_MODEL = "claude-opus-5-5";
-export const OCR_PROVIDERS = ["claude+deepseek", "claude", "deepseek"] as const;
+const DEFAULT_OCR_CLAUDE_MODEL = "claude-opus-5-5";
+const OCR_PROVIDERS = ["claude+deepseek", "claude", "deepseek"] as const;
 export type OcrProviderMode = (typeof OCR_PROVIDERS)[number];
-export const DEFAULT_OCR_PROVIDER: OcrProviderMode = "claude+deepseek";
+const DEFAULT_OCR_PROVIDER: OcrProviderMode = "claude+deepseek";
 
 export function ocrClaudeModel(): string {
   return process.env.GUARD_OCR_CLAUDE_MODEL?.trim() || DEFAULT_OCR_CLAUDE_MODEL;
@@ -66,7 +66,7 @@ export function isGuardOcrConfigured(): boolean {
 
 // 測試注入點放喺 vision-client.ts；呢度用 globalThis 旗避免 config.ts import client（保持零重 import）
 const OVERRIDE_KEY = "__guardOcrClientOverride";
-export function ocrClientOverrideActive(): boolean {
+function ocrClientOverrideActive(): boolean {
   return !!(globalThis as Record<string, unknown>)[OVERRIDE_KEY];
 }
 export function setOcrClientOverrideFlag(client: unknown): void {

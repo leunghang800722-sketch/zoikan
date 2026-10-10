@@ -24,12 +24,10 @@ import { addSiteAlias, createSiteFromUploadForTriage } from "./site-setup";
 import { applyCardToRecords, collectUnpricedGroups, createCardAndPrice, describeValues, type PriceChangeRow } from "./pricing";
 import { setSettlementBatch } from "./settlement";
 import { linkIdentityToGuard } from "./guard-match";
-import { MC_KINDS, type McEvidence, type McKind, type McQuestionDraft, type PriceValues, type PricingGroupRef } from "./types";
+import { type McEvidence, type McQuestionDraft, type PriceValues, type PricingGroupRef } from "./types";
 
 /** applying 超過呢個時間（寫入中途程式死咗）當卡死，容許重新 claim。 */
 const APPLYING_STALE_MS = 10 * 60 * 1000;
-
-export const isMcKind = (kind: string): kind is McKind => (MC_KINDS as readonly string[]).includes(kind);
 
 type QRowWithSession = TriageQuestion & { session: TriageSession };
 
@@ -189,7 +187,7 @@ export async function mcQuestionViews(rows: TriageQuestion[], caps: { pii: boole
 // ---------------------------------------------------------------------------
 // 答（預覽＋確認）
 // ---------------------------------------------------------------------------
-export interface McImpact {
+interface McImpact {
   can_confirm: boolean;
   summary: string[];
   changes: Array<{ table: string; action: string; label: string; fields: Array<{ label: string; from: string | null; to: string }> }>;
@@ -570,7 +568,6 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
   void _journal;
   return { status: "answered", impact, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result: publicResult, note: typeof result.note === "string" ? result.note : null };
 }
-
 
 // ---------------------------------------------------------------------------
 // WP-POSTORDER-FREE（§34 A）：補齊價目卡——確認＝建 `triage:*` 正式卡（本月 1 號起、無限期）＋作廢對應 auto 卡＋補價。

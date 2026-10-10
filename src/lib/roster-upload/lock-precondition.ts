@@ -5,7 +5,7 @@
 import { prisma } from "@/lib/db";
 import { monthStart } from "@/lib/month-lock";
 
-export interface RosterCoverageIssueSite {
+interface RosterCoverageIssueSite {
   siteId: string;
   siteName: string;
 }
@@ -22,7 +22,7 @@ export interface RosterCoverageCheckResult {
  * 生效——2026-07（P0 已鎖定入庫、數據來自 importer，冇任何更表上載）同
  * 更早月份唔檢查，否則 7 月一旦解鎖改嘢再鎖，就會俾呢條規則擋住（要老闆
  * force）。8 月係第一個用更表上載計糧嘅月份（§15）。 */
-export const ROSTER_UPLOAD_REQUIRED_FROM = new Date(Date.UTC(2026, 7, 1));
+const ROSTER_UPLOAD_REQUIRED_FROM = new Date(Date.UTC(2026, 7, 1));
 
 /** 規則 10：邊啲盤呢個月有出更（shift_records 或 daily_requirements）但
  * 未齊上載／未對數完成。 */

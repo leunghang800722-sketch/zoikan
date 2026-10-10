@@ -67,7 +67,7 @@ export type GrossMarginShiftTypeRow = {
  * `site.revenue`/`site.cost` 呢兩個聚合數字。`revenue.base` = 呢個盤喺
  * `buildMonthlyClose()` 嗰個 P0 口徑嘅營業額（月費盤已經包埋喺度，唔係
  * 額外一項）；冇喺 mainRows 出現嘅「額外盤」（見頂註解 2）呢欄固定 0。 */
-export interface GrossMarginComponents {
+interface GrossMarginComponents {
   revenue: { base: number; ot: number; special: number };
   cost: { perShift: number; ot: number; special: number; referral: number; longtermAlloc: number };
 }

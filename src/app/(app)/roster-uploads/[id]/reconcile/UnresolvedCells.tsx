@@ -34,7 +34,7 @@ type Dir = { rows: GuardLite[]; total: number; loaded: boolean };
 
 const linkCls = "inline-block rounded-[5px] border border-zk-primary px-2 py-[3px] text-zk-xs font-medium text-zk-primary hover:bg-zk-primary-tint-soft";
 
-export function reasonKinds(item: UnresolvedItemLite): Set<ReasonKind> {
+function reasonKinds(item: UnresolvedItemLite): Set<ReasonKind> {
   return new Set(classifyReason(item.unresolved_reason).map((p) => p.kind));
 }
 
@@ -76,7 +76,7 @@ export function WroteCell({ raw, loading, item, dir }: { raw: RawRosterRow | nul
 }
 
 /** 同一人多日嘅行合併摘要用：同一份 needs_boss 提示。 */
-export function NeedsBossBox({ nb }: { nb: NeedsBossItem }) {
+function NeedsBossBox({ nb }: { nb: NeedsBossItem }) {
   return (
     <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-2 py-1 text-zk-xs text-zk-warning-dark" data-testid="reconcile-needs-boss">
       <div>一鍵結算有待答題（{nb.seq}，{nb.total_cell_count} 格）：{nb.reason}</div>

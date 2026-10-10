@@ -11,16 +11,15 @@ import { normTel8 } from "./text";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { HKICL_BANK_CODE_SET } from "@/lib/longterm-payroll/hkicl-bank-codes";
 
-export const FIELD_STATUSES = ["confirmed", "review", "missing"] as const;
+const FIELD_STATUSES = ["confirmed", "review", "missing"] as const;
 export type FieldStatus = (typeof FIELD_STATUSES)[number];
 
-export const PERSON_FIELDS = ["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"] as const;
-export type PersonField = (typeof PERSON_FIELDS)[number];
+export type PersonField = "hkid" | "nameZh" | "nameEn" | "dateOfBirth" | "sex" | "phone" | "address";
 
 const fieldSchema = z.object({ value: z.string().max(500).nullable(), status: z.enum(FIELD_STATUSES) }).strict();
 
 /** 地址來源：住址證明（預設，舊包冇 source 當呢個）／申請表（冇住址證明嘅人，老闆 2026-10-03 決定）。 */
-export const ADDRESS_SOURCES = ["address_proof", "application_form"] as const;
+const ADDRESS_SOURCES = ["address_proof", "application_form"] as const;
 export type AddressSource = (typeof ADDRESS_SOURCES)[number];
 const addressFieldSchema = z
   .object({ value: z.string().max(500).nullable(), status: z.enum(FIELD_STATUSES), source: z.enum(ADDRESS_SOURCES).optional() })
@@ -33,7 +32,7 @@ export function addressSourceOf(a: { source?: AddressSource }): AddressSource {
 // ---------------------------------------------------------------------------
 // WP-STAFF-FIELDS 第二階段：導入包 v3 新欄（全部可選；每個 leaf 都係 {value,status}，值要通過嚴格格式驗證）
 // ---------------------------------------------------------------------------
-export function isIsoCalendarDate(v: string): boolean {
+function isIsoCalendarDate(v: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
   const d = new Date(`${v}T00:00:00.000Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
@@ -41,16 +40,16 @@ export function isIsoCalendarDate(v: string): boolean {
 /** 香港時區嘅「今日」（UTC+8），避免香港凌晨 0–8 點驗證日期上限差一日 */
 const todayIso = (): string => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
 /** 屆滿日 2015–2040（同第一階段 expiryInRange 一致）；簽發日 2000–今日；入職日 1990–今日。 */
-export const dateInRange = (kind: "expiry" | "issue" | "hire") => (v: string): boolean => {
+const dateInRange = (kind: "expiry" | "issue" | "hire") => (v: string): boolean => {
   if (!isIsoCalendarDate(v)) return false;
   if (kind === "expiry") return v >= "2015-01-01" && v <= "2040-12-31";
   if (kind === "issue") return v >= "2000-01-01" && v <= todayIso();
   return v >= "1990-01-01" && v <= todayIso();
 };
-export const PERMIT_NO_RE = /^[A-Z]{1,2}-\d{6}-[0-9A](-\d{3})?$/;
-export const SAFETY_CARD_NO_RE = /^[A-Z0-9-]{4,24}$/;
-export const HK_TEL8_RE = /^[2-9]\d{7}$/;
-export const BANK_ACCT_RE = /^\d{6,20}$/;
+const PERMIT_NO_RE = /^[A-Z]{1,2}-\d{6}-[0-9A](-\d{3})?$/;
+const SAFETY_CARD_NO_RE = /^[A-Z0-9-]{4,24}$/;
+const HK_TEL8_RE = /^[2-9]\d{7}$/;
+const BANK_ACCT_RE = /^\d{6,20}$/;
 
 const leaf = (ok: (v: string) => boolean, max = 200) =>
   z
@@ -65,12 +64,12 @@ const issueLeaf = leaf(dateInRange("issue"), 10);
 const hireLeaf = leaf(dateInRange("hire"), 10);
 const telLeaf = leaf((v) => HK_TEL8_RE.test(v), 8);
 
-export const siaPermitSchema = z
+const siaPermitSchema = z
   .object({ no: permitNoLeaf, aExpiry: expiryLeaf, bExpiry: expiryLeaf, cExpiry: expiryLeaf.optional(), dExpiry: expiryLeaf.optional() })
   .strict();
-export const safetyCardSchema = z.object({ no: leaf((v) => SAFETY_CARD_NO_RE.test(v), 24), expiry: expiryLeaf }).strict();
-export const qasSchema = z.object({ issueDate: issueLeaf, expiryDate: expiryLeaf }).strict();
-export const bankSchema = z
+const safetyCardSchema = z.object({ no: leaf((v) => SAFETY_CARD_NO_RE.test(v), 24), expiry: expiryLeaf }).strict();
+const qasSchema = z.object({ issueDate: issueLeaf, expiryDate: expiryLeaf }).strict();
+const bankSchema = z
   .object({
     code: leaf((v) => HKICL_BANK_CODE_SET.has(v), 3),
     name: textLeaf(60),
@@ -78,7 +77,7 @@ export const bankSchema = z
     payeeName: textLeaf(100),
   })
   .strict();
-export const emergencyContactSchema = z.object({ name: textLeaf(50), relationship: textLeaf(30), tel: telLeaf }).strict();
+const emergencyContactSchema = z.object({ name: textLeaf(50), relationship: textLeaf(30), tel: telLeaf }).strict();
 
 export const unassignedBankAccountSchema = z
   .object({
@@ -111,7 +110,7 @@ const personTail = {
 };
 
 // 欄位次序刻意同 v2 一致（hashPackage 用 JSON.stringify，key 次序即 hash）。
-export const packagePersonSchemaV2 = z.object({ ...personHead, staffNumbers: z.array(staffNumberV2).max(20), ...personTail }).strict();
+const packagePersonSchemaV2 = z.object({ ...personHead, staffNumbers: z.array(staffNumberV2).max(20), ...personTail }).strict();
 export const packagePersonSchema = z
   .object({
     ...personHead,
@@ -130,7 +129,7 @@ export const packagePersonSchema = z
 
 const packageHead = { generatedAt: z.string().max(40), source: z.enum(["single_ocr"]).optional() };
 
-export const importPackageSchemaV2 = z.object({ version: z.literal(2), ...packageHead, persons: z.array(packagePersonSchemaV2).max(5000) }).strict();
+const importPackageSchemaV2 = z.object({ version: z.literal(2), ...packageHead, persons: z.array(packagePersonSchemaV2).max(5000) }).strict();
 export const importPackageSchemaV3 = z
   .object({
     version: z.literal(3),

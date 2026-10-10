@@ -50,8 +50,8 @@ export interface Person {
 // ---------------------------------------------------------------------------
 // 正規化
 // ---------------------------------------------------------------------------
-export const normName = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, "").toUpperCase();
-export const normStaffNo = (s: string | null | undefined): string => (s ?? "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+const normName = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, "").toUpperCase();
+const normStaffNo = (s: string | null | undefined): string => (s ?? "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
 
 /** 電話尾 4 位（淨係數字，少過 4 位當冇）。 */
 export function tel4(s: string | null | undefined): string | null {

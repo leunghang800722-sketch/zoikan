@@ -70,12 +70,12 @@ export interface ParsedCellRow {
   warnings: string[];
 }
 
-export interface SheetParseWarning {
+interface SheetParseWarning {
   row: number;
   reason: string;
 }
 
-export interface ParsedSheet {
+interface ParsedSheet {
   sheetName: string;
   siteRaw: string | null;
   layouts: LayoutName[]; // 呢個 sheet 入面出現過嘅 layout（正常一個 sheet 得一種，但唔寫死）
@@ -92,7 +92,7 @@ export interface ParsedSheet {
   warnings: SheetParseWarning[];
 }
 
-export interface ParseSuccess {
+interface ParseSuccess {
   ok: true;
   fileName: string;
   sheets: ParsedSheet[];
@@ -116,7 +116,7 @@ export interface ParseSuccess {
   warnings: string[];
 }
 
-export interface ParseFailure {
+interface ParseFailure {
   ok: false;
   fileName: string;
   error: string;

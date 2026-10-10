@@ -1,3 +1,4 @@
+import { guardModule } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeGuardWhere, scrubForBrokerSession, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
@@ -25,13 +26,7 @@ import { acctTakenByOther } from "@/lib/guards/import/ext-apply";
 import { Conflict } from "@/lib/api/errors";
 import { identityStatus, canonicalHkid, prepareHkidForWrite, assertHkidAvailable, assertTelAvailable, rethrowIdentityConflict, type IdentityStatus } from "@/lib/guards/identity";
 import { applyLegacyGuardContactPatch, writeLegacyContactAudits, normalizeTel } from "@/lib/guards/contacts";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
 import type { Guard, Prisma } from "@prisma/client";
-
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
 
 // S5（Opus 驗收修復）：`sia_permit_expiry`／`sia_permit_type` 讀取時一律
 // 現算（覆蓋 DB 欄）——同 `src/app/api/guards/route.ts` 列表一致理由

@@ -13,21 +13,7 @@ import { normalizeTel } from "@/lib/guards/contacts";
 import { buildUTeamIndex, canonicalHkid, type UTeamRow, type UTeamIndex } from "@/lib/guard-fix/sources";
 import { derivePostorderLongtermPostsFromPostorderCsv, type PostorderLongtermPostCell, type PostorderReferralRow, type PostorderVisaResult } from "@/lib/guard-fix/postorder";
 import { inferReferralBrokerFromRosters } from "@/lib/pricing/longterm-settlement";
-import type {
-  GuardFixPlan,
-  GuardFixIdentity,
-  GuardFixAction,
-  LinkAction,
-  CreateAction,
-  CreateMinimalAction,
-  NeedsBossAction,
-  GuardFixCellRef,
-  SetLongtermAction,
-  SetLongtermPostAction,
-  SetReferralAction,
-  SetReferralInferredAction,
-  SetVisaAction,
-} from "@/lib/guard-fix/types";
+import type { GuardFixPlan, GuardFixIdentity, LinkAction, CreateAction, CreateMinimalAction, NeedsBossAction, GuardFixCellRef, SetLongtermAction, SetLongtermPostAction, SetReferralAction, SetReferralInferredAction, SetVisaAction } from "@/lib/guard-fix/types";
 
 export type { GuardFixPlan } from "@/lib/guard-fix/types";
 
@@ -43,7 +29,7 @@ export class NoActiveUploadsError extends Error {
 
 /** 目標 DB 唔同（plan 對住另一個 DB build）——`describeDbTarget()` 一致
  * 做法，script 同 API 都要停。 */
-export function describeDbTarget(): string {
+function describeDbTarget(): string {
   const raw = process.env.DATABASE_URL;
   if (!raw) return "（DATABASE_URL 未設）";
   try {
@@ -832,48 +818,4 @@ export function summarizePlan(plan: GuardFixPlan): {
     setReferralInferred: plan.actions.setReferralInferred.length,
     setVisa: plan.actions.setVisa.length,
   };
-}
-
-export function formatPlanSummaryMd(plan: GuardFixPlan): string {
-  const cellsBySiteFor = (actions: GuardFixAction[]): Map<string, number> => {
-    const m = new Map<string, number>();
-    for (const a of actions) {
-      const identity = plan.identities.find((i) => i.seq === a.seq)!;
-      for (const c of identity.cells) m.set(c.siteLabel, (m.get(c.siteLabel) ?? 0) + c.cellCount);
-    }
-    return m;
-  };
-  const fmtSiteBreakdown = (m: Map<string, number>) => [...m.entries()].map(([site, n]) => `  - ${site}：${n} 格`).join("\n") || "  （冇）";
-  const s = summarizePlan(plan);
-  return `# WP-GUARD-FIX plan-summary（${plan.generatedAt}）
-
-目標 DB：${plan.dbTarget}
-資料嚟源：${plan.sourceMode === "db_rows" ? "DB roster_upload_rows（active 上載）" : "records.jsonl fallback（dev 冇上載）"}
-
-## 總數
-- 身份總數：${s.totalIdentities}（格總數：${s.totalCells}）
-- link：${s.link}
-- create：${s.create}
-- create_minimal：${s.createMinimal}（＝ needs_hr）
-- needs_hr：${s.createMinimal}
-- needs_boss：${s.needsBoss}
-- create 入面名單身份證欄唔係身份證格式、冇寫入（要 HR 補）：${plan.hkidDroppedCount}
-- set_longterm：${s.setLongterm}
-- set_longterm_post：${s.setLongtermPost}
-- set_referral：${s.setReferral}
-- set_referral_inferred（WP-REFERRAL-FALLBACK，唔靠 Postorder，睇更表雞頭碼推算）：${s.setReferralInferred}
-- set_visa：${s.setVisa}（Postorder 冇顯式簽證標記，暫時一律 0——${plan.postorder?.visaNote ?? "冇上載 Postorder"}）
-
-## Postorder 上載（WP-LTSHIFT §19）
-${plan.postorder ? `- 檔案：${plan.postorder.fileName}（upload ${plan.postorder.uploadId}）\n- 長工格總數：${plan.postorder.longtermPostCellCount}\n- 介紹費行數：${plan.postorder.referralRowCount}\n- 單靠 PostOrder CSV 補推嘅 (盤,人) 組合數（WP-POSTORDER-PO-PAIRS）：${plan.postorder.longtermPairsFromPostorderCount}\n- 對唔到嘅盤名：${plan.postorder.unresolvedSiteLabels.join("、") || "（冇）"}\n- 對唔到嘅雞頭稱呼：${plan.postorder.unresolvedBrokerLabels.join("、") || "（冇）"}` : "（呢次冇上載 Postorder，set_longterm/set_longterm_post/set_referral/set_visa 一律 0 項）"}
-
-## needs_hr（盤＋格數，U Team 名單／核對表都搵唔到，要 HR 補資料）
-${fmtSiteBreakdown(cellsBySiteFor(plan.actions.createMinimal))}
-
-## needs_boss（盤＋格數，決定唔到，要老闆睇）
-${fmtSiteBreakdown(cellsBySiteFor(plan.actions.needsBoss))}
-
-## needs_boss 逐項（序號＋盤＋格數＋原因，唔列名；序號對返 plan.json）
-${plan.actions.needsBoss.map((a) => `  - ${a.seq} ${plan.identities.find((i) => i.seq === a.seq)!.cells.map((c) => `${c.siteLabel} ${c.cellCount} 格`).join("、")}——${a.reason}`).join("\n") || "  （冇）"}
-`;
 }

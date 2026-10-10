@@ -1,8 +1,8 @@
 // WP-MULTI（老闆 2026-09-19 拍板）：PATCH 改一行地址（地址本文／備註／
 // 設做 primary）；DELETE 刪一行（更正打錯用，audit 留底）。
+import { assertScopedGuard } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere } from "@/lib/broker-isolation";
 import { toGuardAddressDTO } from "@/lib/api/dto";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -18,9 +18,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   return withApiError(async () => {
     const session = await requirePermission(req, "安員個人資料", "update");
     const { id, addressId } = await params;
-    const guardWhere = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
 
     const body = await readJson(req);
     const parsed = parseBody(GuardAddressUpdateSchema, body);
@@ -84,9 +82,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   return withApiError(async () => {
     const session = await requirePermission(req, "安員個人資料", "update");
     const { id, addressId } = await params;
-    const guardWhere = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
 
     const result = await prisma.$transaction(async (tx) => {
       const deleted = await deleteGuardAddress(tx, id, addressId);

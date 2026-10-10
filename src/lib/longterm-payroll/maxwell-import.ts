@@ -387,7 +387,7 @@ export interface GuardCandidate {
   staffNo: string | null; // U 號
 }
 
-export type MaxwellMatchStatus = "matched_staff_no" | "matched_name" | "unmatched";
+type MaxwellMatchStatus = "matched_staff_no" | "matched_name" | "unmatched";
 
 export interface MaxwellMatchResult {
   row: MaxwellStaffRow;

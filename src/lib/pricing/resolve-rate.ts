@@ -232,6 +232,8 @@ function pickBestCard(
 }
 
 /** 一次 query 攞晒呢個盤、喺 [monthStart, monthEnd] 範圍內任何一日都可能生效嘅卡（batch 儲存用，唔逐格打 DB）。 */
+// P3-5.3：尾段 rows.map 同 `src/lib/month-close/auto/pricing.ts` 嘅 `fetchCardsVia()` 刻意重複、唔合併（兩邊都屬定價核心，
+// 改欄位／條件要人手同步另一邊；改前後都跑 `npm run gate:pricing`＋`gate:locked-months`）。
 export async function fetchEffectiveRateCards(siteId: string, monthStart: Date, monthEnd: Date): Promise<RateCardLite[]> {
   const rows = await prisma.rateCard.findMany({
     where: {

@@ -22,36 +22,6 @@ export function paginationParams(url: URL): { skip: number; take: number } {
   return { skip, take };
 }
 
-/** 淨係揀白名單入面嘅欄位，其他 body 傳入嘅嘢一律忽略（防止亂改唔准改嘅欄位，例如 id/createdAt）。 */
-export function pickFields<T extends Record<string, unknown>>(body: unknown, allowed: readonly (keyof T)[]): Partial<T> {
-  const out: Partial<T> = {};
-  if (!body || typeof body !== "object") return out;
-  const src = body as Record<string, unknown>;
-  for (const key of allowed) {
-    if (Object.prototype.hasOwnProperty.call(src, key)) {
-      out[key] = src[key as string] as T[keyof T];
-    }
-  }
-  return out;
-}
-
-/**
- * Prisma 嘅 `@db.Date`/`@db.Time` 欄位一樣要求完整 ISO-8601 datetime
- * string（"2026-08-01" 呢種日期-only string 會俾 Prisma 拒——"premature
- * end of input. Expected ISO-8601 DateTime"）。前端/測試傳嚟嘅 body 通常
- * 淨係 "YYYY-MM-DD"，呢個 helper 喺 pickFields() 之後、傳入 prisma
- * create/update 之前，將指定嘅欄位由 string 轉做 Date。
- */
-export function coerceDateFields<T extends Record<string, unknown>>(data: T, fields: readonly (keyof T)[]): T {
-  for (const key of fields) {
-    const v = data[key];
-    if (typeof v === "string" && v.length > 0) {
-      (data as Record<string, unknown>)[key as string] = new Date(v);
-    }
-  }
-  return data;
-}
-
 export async function readJson(req: Request): Promise<Record<string, unknown>> {
   try {
     const body = await req.json();

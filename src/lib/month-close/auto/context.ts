@@ -9,7 +9,7 @@ import { safeErrorSummary } from "@/lib/api/http";
 import { loadPostorderEvidence, type BrokerLite, type PostorderEvidence } from "./postorder-evidence";
 import { emptyAutoSummary, type AutoChangeKind, type AutoItemLine, type AutoSummary, type McQuestionDraft } from "./types";
 
-export const AUTO_LINES_MAX = 80;
+const AUTO_LINES_MAX = 80;
 
 export interface VarianceFinding {
   siteId: string;

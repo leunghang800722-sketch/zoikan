@@ -2,7 +2,7 @@
 // 次序：hkid → 工號（任何 scheme）→ 電話 → （姓名相同且唯一＋輔助判斷 a–e：見 decideNameOnly）。
 // 結果 link／create／conflict／needs_review，理由碼同 Stage A `04-match-plan.ts` 一致
 // （script 改 import 呢份，唔再有第二套）。
-import { normZh, normTel8, editDistance } from "./text";
+import { normZh, normTel8 } from "./text";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 
 export type Action = "link" | "create" | "conflict" | "needs_review";
@@ -213,15 +213,4 @@ export function decideMatch(i: MatchInput, db: DbIndex, groupReasons: readonly s
     basis.push("no_existing_guard");
     return out("create", null);
   }
-}
-
-export interface NameGroupInput {
-  key: string;
-  nameZh: string | null;
-}
-
-/** 同 hkid 多檔嘅中文名差異 → group_name_differs（Stage A 04 用）。 */
-export function nameGroupDiffers(names: readonly (string | null)[]): boolean {
-  const ns = names.map(normZh).filter((x): x is string => !!x);
-  return ns.some((n) => ns.some((m) => editDistance(n, m) > 1 && Math.min(n.length, m.length) >= 2));
 }

@@ -1,5 +1,6 @@
 "use client";
 // P2-A：盤管理頁（README §07）——換皮，邏輯／API 呼叫全部保留。
+import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
 import { useEffect, useState } from "react";
 import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
 import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
@@ -488,14 +489,7 @@ export default function SitesPage() {
             />
             客戶直接出糧（保安員由客戶直接出糧，我哋淨係收每月服務費，呢個盤嘅更唔計工資／客價）
           </label>
-          <div className="flex gap-2 pt-2">
-            <Button variant="primary" size="sm" type="submit" disabled={saving}>
-              {saving ? "儲存緊…" : "儲存"}
-            </Button>
-            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
-              取消
-            </Button>
-          </div>
+          <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>
       </Drawer>
 

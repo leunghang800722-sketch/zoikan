@@ -6,7 +6,7 @@
 // module 一致粒度嘅硬性 gate（老闆／會計先入到 route，主管/雞頭/保安員
 // 連 `requirePermission()` 都過唔到），唔需要中央檔嗰種逐 field-group
 // 再細分嘅機制。
-import { pickWhitelist, brandSafeResponse, type Dto } from "@/lib/api/serialize";
+import { pickWhitelist, type Dto } from "@/lib/api/serialize";
 
 const CONTRACT_FIELDS = [
   "id", "guardId", "effectiveFrom", "effectiveTo", "monthlySalary", "payBasis", "dailyRate",
@@ -59,7 +59,3 @@ export const toGuardLeaveBalanceDTO = <T extends Record<string, unknown>>(row: T
 export const toGuardLeaveBalanceWithGuardDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LEAVE_BALANCE_WITH_GUARD_FIELDS);
 export const toLongtermRunDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, RUN_FIELDS);
 export const toLongtermLineWithGuardDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LINE_WITH_GUARD_FIELDS);
-
-export function mapListDTO<T extends Record<string, unknown>>(rows: T[], mapper: (row: T) => Dto): Dto<{ rows: Dto[] }> {
-  return brandSafeResponse({ rows: rows.map(mapper) });
-}

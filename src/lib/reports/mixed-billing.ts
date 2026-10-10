@@ -24,7 +24,7 @@
 import { prisma } from "@/lib/db";
 
 /** 規則生效日——7 月（< 呢日）保留舊口徑，鐵則唔准變 7 月 gate。 */
-export const MIXED_BILLING_FROM = new Date(Date.UTC(2026, 7, 1));
+const MIXED_BILLING_FROM = new Date(Date.UTC(2026, 7, 1));
 
 export function isMixedBillingMonth(monthStart: Date): boolean {
   return monthStart.getTime() >= MIXED_BILLING_FROM.getTime();

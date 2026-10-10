@@ -1,3 +1,4 @@
+import { siteReadModule } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeSiteWhere, isBrokerRole } from "@/lib/broker-isolation";
@@ -17,7 +18,7 @@ export async function GET(req: Request) {
     // P1-WP3：module resolver——雞頭用「更表」（先揀得到更表編輯器嘅盤，
     // 見 broker-isolation.ts scopeSiteWhere 頂註解），內部角色維持「盤」
     // （盤管理，硬性 deny 唔變）。
-    const session = await requirePermission(req, (s) => (isBrokerRole(s) ? "更表" : "盤"), "view");
+    const session = await requirePermission(req, siteReadModule, "view");
     const url = new URL(req.url);
     const { skip, take } = paginationParams(url);
     const includeInactive = url.searchParams.get("include_inactive") === "1";

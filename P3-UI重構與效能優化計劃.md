@@ -614,3 +614,100 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - Opus 5.5 第一輪**唔通過**（2 必修：`ReportSection` 兩張表 `xl:`→`lg:` 令 1024–1279px 雞頭名逐字斷行；手機 KPI 卡成本卡夾中間＋`break-all` 令金額斷行）；執行員修 2 必修＋10 項（Drawer 散落欄入基本 tab、隱藏 tab invalid 自動跳、rate-cards 讀 `?month=`、`loadMonthClose` race、手機 sticky bar 停用原因＋「去填原因 ›」、手機登出提示、pricing.spec 補 `dry_run:false` 斷言、audit-log `title` 原 key、清 44 行空白、數字改正）；第二輪通過（0 必修）。驗收員自跑：vitest 3,446 過；tsc 0；lint 0 warning；build 過；**Playwright 全部 215／5／0**；codemod 重放 `a18ce3b` 得出同一 commit（可重現）；1024／1100／1280／1512 名欄 242／318／113／219px；375px 營業額＋毛利同行、金額單行、`scrollWidth` 375。(ii)：多個隱藏 tab 同時 invalid 跳去最後一個；「去填原因」無 e2e；手機 sticky bar 81px；`ReviewCard` 四欄 1024–1279 擠（舊有）；對比度兩組 4.38／4.41（未同時使用）——交階段 5。
 - merge main `59ed20c`；部署 `6acaa71dc0a5252069b835d9` RUNNING 21:05Z：56 migrations／No pending、助手 claude、OCR 自檢 ok、login 200。
 - **正式站核對（老闆 Chrome 唯讀）**：`/month-close?month=2026-08`（舊流程鎖、無 run）：StageBar「⑤ 已鎖定」、`locked-info`＋`unlock-box`（含解鎖原因欄）齊，「已鎖定」字樣 5 處，無 inline hex 色；`/reports/monthly-close?month=2026-08`：「已鎖定 · 去一鍵結算解鎖 ›」連結、0 個鎖／解鎖掣、「更多 ▾」；保安員 Drawer：tab「基本／證件／聯絡／長工」＋散落欄喺基本 tab（「銀行」tab 未出現——視乎老闆帳號該權限格，待核）；糧明細「重新計價」撳落（只到預覽，未確認）；月結頁 StageBar 一行、底部 sticky CTA 81px、金額單行（規劃者 Chrome 無法真正縮到 375px，手機尺寸靠 Opus Chromium 量度）。
+
+---
+
+### 8.5 階段 5 落實紀錄（Sonnet 5.5，2026-10-11，branch p3-phase5）
+逐項獨立 commit（P3-5.1 至 P3-5.5）。**純重構**：行為、API 合約、權限矩陣、任何定價／結算／報表計算全部冇改；冇 migration；唯一「行為」改動係 `/guards` 名冊改為分頁 render（簡報明文要求，API 不變）。
+
+**P3-5.1 拆 RosterEditor（2,807 行）→ `roster/[site]/[month]/editor/` 18 檔，最大 564 行**
+- `RosterEditor.tsx`（容器＋state 接線 564）｜`useRosterData.ts`（載入／重新 fetch／靜態資料快取／未定價摘要 218）｜`useCellSelection.ts`（選格／編輯／拖選／鍵盤／手機鍵盤 buffer／右鍵選單 509）｜`useRosterActions.ts`（儲存／重新計價／還原／複製上月／加保安員／整行填＋儲存 toast 狀態 462）｜`RosterGrid.tsx`（格仔表 469）｜`RosterHeader.tsx`（桌面＋手機頁首 263）｜`RosterBrokerStats.tsx`｜`RosterNotices.tsx`（橫幅＋本月配額列）｜`MobileKeyboard.tsx`｜`ContextMenu.tsx`｜`FillRowModal.tsx`｜`AddGuardModal.tsx`｜`SaveToast.tsx`｜`DayCell.tsx`｜`roster-types.ts`｜`roster-utils.ts`（純函數，含 `computeBrokerStats`）。
+- 全部 `data-testid` 不變；DOM 結構同拆前一樣（子元件用 Fragment）。載入完成後要重置嘅 UI 狀態（警告／錯誤／選格）由容器經 `onLoadedRef` 注入，呼叫位置同拆前一致。
+- 簡報原定 `useCellSelection`／`RosterGrid`／`RosterToolbar` 等名稱照用；`RosterToolbar` 實際拆成 `RosterHeader`＋`RosterBrokerStats`＋`RosterNotices` 三個（每個 <300 行）。
+
+**P3-5.2 拆 GuardsClient（2,638 行）→ `guards/` 15 檔，最大 445 行；名冊分頁 render**
+- `GuardsClient.tsx`（容器 272）｜`GuardsTable.tsx`（桌面表＋手機卡＋分頁）｜`GuardsFilters.tsx`｜`GuardDrawer.tsx`（Drawer 殼＋tab 組合）｜`drawer/BasicTab|DocsTab|ContactsTab|LongtermTab|BankTab.tsx`｜`useGuardForm.ts`（表單／開關／儲存）＋三個子資源 hook `useGuardStaffNumbers`／`useGuardContacts`／`useGuardLongterm`｜`guards-types.ts`｜`guards-utils.ts`。
+- Drawer 各區塊 **DOM 次序同拆前完全一致**（e2e 有靠 `.first()` 揀欄，tab 只係分檔唔改次序）；PII／銀行／出街價 field-group 嘅「送唔送」判斷（`canUpdate*`、`detailAvailable`）原封搬過去。
+- **`/guards` 分頁 render**：一次最多 render 100 行（桌面表＋手機卡同一個 slice），底部「顯示 100 / N 位」＋「載入更多（還有 N 位）」；搜尋／篩選照舊 server 做（`GET /api/guards?q=`，API 不變），搜尋／篩選改變先由頭開始（儲存後 reload 唔會跳返頂）。本機 seed 266 人：DOM 節點 9,553 → **3,710**（每行 ~35 節點；540 人 ≈19.2k → 3.7k）。新增 e2e `p3-5-guards-page.spec.ts`。
+
+**P3-5.3 合併重複**
+- `src/lib/ai/chat-handler.ts`：兩條 chat route（`api/ai/chat`、`api/feedback/session/chat`）共用 SSE 骨架（session → 每日額度 → body 校驗 → route 專屬前置 → LlmClient → history／tools → loop → 切 chunk → 存對話 → audit → `done`／`error`）。每條 route 只剩差異：prompt、輸出 guard 鏈、存儲、audit／done payload、錯誤日誌。**byte-equal 證明**：`tests/p3-5-chat-sse.test.ts` 用**重構前舊碼**錄低 15 個場景（一般／長回覆多 chunk／空白 fallback／輸出 guard 觸發／可行性 guard／LLM 錯誤兩種／401／400×3／404）嘅 status＋header＋SSE 全文 golden（`tests/fixtures/p3-5-chat-sse-golden.json`），重構後逐字相同。`src/lib/ui/chat-stream.ts`：兩個 client（`ai-chat-client`、`feedback-chat-client`）共用 `streamChatSse()`。
+- API 小樣板：`lib/api/route-modules.ts`（`guardModule`／`siteReadModule` resolver——8＋3 處重複定義；`assertScopedGuard()`——11 個保安員子資源 route 17 處）、`lib/roster-upload/reconcile-guard.ts`（`assertUploadReconcilable()`，reconcile apply／resolve-subsite）。response 不變。
+- `rate-cards` 改用 `useCrudPage`（GuardsClient 用 `useGuardForm`）；`DrawerFormFooter`（5 頁儲存／取消掣）、`FeedbackForbidden`、`shift-records/batch` 逐格／批量兩條路徑共用 `upsertUpdateData`／`upsertCreateData`、`ui/api-client` 共用 `readResult()`、`BrokerFilterControls`。
+- **唔合併**（定價核心）：`month-close/auto/pricing.ts` `fetchCardsVia` ↔ `pricing/resolve-rate.ts` `fetchEffectiveRateCards`——只加互相指向註解。
+
+**P3-5.4 死碼**
+- `npx knip --fix`（exports,types）＋級聯清理：src 多餘 `export` 191 → 0、多餘 type export 105 → 0（約 40 個同檔未用嘅宣告連帶刪走：`pickFields`／`coerceDateFields`／`formatPlanSummaryMd`／`loadUTeamList`／`clearReconcileDataCache`／`findCarryoverCard`／`useLookups`／`FieldError`／`touchBtn` 等；附錄 a §2.5 十三個「疑似死函數」：5 個確認無人用已刪，其餘同檔仍有用只取消 export）；`QUESTION_KINDS`／`MC_KINDS`／`PERSON_FIELDS` 等只作型別用嘅常數改成 union type。`Duplicate exports` 3 → 0（`selectCls` 不再 alias `inputCls`；`project.ts` 兩組 alias 隨 export 清理消失）。新增 `knip.json`：`scripts/**`、`tests/**` 當 entry（CLI／測試入口，原本被當「unused files」同「unused exports」），所以 `npx knip` 現時 0 項；**唔用 config**（`knip（唔用 knip.json）`）src 範圍亦係 0，剩 scripts 範圍 52 exports／27 types／25 files（一次性 CLI 腳本之間互相 import）。
+- 依賴宣告：`@prisma/client`、`prisma`、`tsx`、`exceljs`、`csv-parse`、`dotenv` 由 devDependencies 搬入 dependencies（production code 或 Dockerfile 啟動腳本實際用緊；`package-lock.json` 同步，`npm ci --dry-run` 過；Dockerfile `--include=dev` 不變）。
+- `scripts/one-off/p3-4-tokens*.mjs` 歸檔去 `scripts/archive/one-off/`；`README.md` 改寫成真正 README（一句描述、技術棧、本機起法、測試、目錄、部署）；`docs/api.md` 去 `formatPlanSummaryMd` 提及。§8.4 提到嘅 `FieldError`／`touchBtn` 一直冇人用，今次刪走。
+
+**P3-5.5 階段 1–4 驗收 (ii) 收尾**
+- 階段 1：`pending-summary` 查詢數唔隨份數增長斷言（已由階段 1 驗收員補入 `p3-1-pending-summary.test.ts`，核實存在）；tie-breaker test 改括號配對（`orderByHasIdTieBreaker()`，巢狀 `[]`／`{}` 都識，有自測）；`one-click-read.ts` `::date` 改傳 `YYYY-MM-DD` 字串（唔再靠 PG session TimeZone；`TZ=America/Los_Angeles` 跑 `p3-1-one-click-list` 過）。
+- 階段 2：`runOneClickMonthClose` 開自己全新 memo context 嘅守護 test 改讀 `als.getStore()`（`currentReportMemoStore()`）——以 DB 寫入做時間標記，斷言「開新 context 先於任何 DB 寫入／memo」，**變異驗證**：拿走 `one-click.ts` 嘅 `withReportContext` 包裝，新 test 即紅（舊毒值 test 兩邊都過，鑑別力不足）；`writeAuditMany` 同批 audit 次序：同批 id 改為批內序號升序（`orderedAuditIds()`，前 8 hex＝序號、其餘隨機，**唔加 migration／seq 欄**），audit-log 列表 `createdAt desc, id asc` 因此保持 plan 次序（test 40 條）；`api-client.ts` `apiGetAll` 註解改準（`pageSize` 唔可以大過 server `take` 上限、停止條件睇 `total`）。**已知／未處理**：兩批同時 create 同組新 key 次序相反會死鎖回 500（舊有，記錄為已知）。
+- 階段 3：新增 e2e——強制鎖定＋紅色差異同時有：先要差異原因，body 合併成 `{ force: true, override_reason: "差異；強制鎖定：原因" }`。
+- 階段 4 遺留：Drawer 多個隱藏 tab 同時 invalid → 跳去 **DOM 次序第一個** invalid 欄嘅 tab（`onInvalidCapture` 只處理 `:invalid` 第一個；e2e 用 `setCustomValidity` 喺「證件」＋「銀行」tab 各設一個）；手機 sticky bar「去填原因 ›」錨點 e2e（375px：撳鎖定 → 出提示 → 撳連結 → URL `#diff-reason-box` 且輸入框入畫面）；`ReviewCard` 四欄改 `sm:grid-cols-2 xl:grid-cols-4`（1024–1279px 兩欄，唔再擠）——**斷點政策**更新為「兩門檻（`sm`／`lg`）＋`ReportSection`、`ReviewCard` 兩處 `xl:` 內層例外」。
+
+**Before → after**
+| 指標 | before | after |
+|---|---|---|
+| src 檔數／行數 | 463／76,590 | 498／77,762（拆檔加咗 import／props 樣板，去重＋刪死碼抵銷大部分） |
+| `RosterEditor` 最大檔 | 2,807 行（單檔） | 564 行（`editor/` 16 檔） |
+| `GuardsClient` 最大檔 | 2,638 行（單檔） | 445 行（`guards/` 15 檔） |
+| src 其餘超過 600 行嘅檔 | 25（另 2 個巨型檔） | 25（唔屬今次範圍：`roster-export.ts` 1,178、`RosterUploadsClient.tsx` 1,158 …） |
+| knip 多餘 export／type／重複 export | 245／105／3（src 191／105） | **0／0／0**（`knip.json`；無 config 時 src 亦 0） |
+| jscpd（src，min-tokens 60） | 2.62%（194 組，2,005 行） | **1.99%**（161 組，1,543 行） |
+| `/guards` DOM 節點（本機 266 人；540 人推算） | 9,553（19.2k） | **3,710**（3.7k） |
+| vitest | 213 過／1 skip，3,446 條 | 215 過／1 skip，3,470 條 passed｜10 skipped（新增 `p3-5-chat-sse` 15 條、tie-breaker helper 自測、memo 守護、audit 次序等） |
+| Playwright | 214 passed｜5 skipped｜0 failed（§8.4）→ 215（§8.4.1） | **220 passed｜5 skipped｜0 failed**（production server `next start`，5.1 分鐘；新增 5 條：`p3-5-guards-page` 2、強制＋差異 body 1、sticky bar 錨點 1、Drawer 多 tab invalid 1）。`next dev` 全套另跑：219 passed｜5 skipped｜1 failed——失敗位置每次都撞正「dev server approaching the used memory threshold, restarting」（pricing (g)／(f)、reconcile-ui deep link，每次係不同 test），單獨重跑全部過，屬 dev server 自己重啟，唔係 code |
+| `tsc`／`eslint`（0 warning）／`rm -rf .next && next build` | 過 | 過（`/` First Load 116 kB；共用 103 kB 不變；`/guards` 132 kB、`/roster/[site]/[month]` 129 kB） |
+| `gate:locked-months` | 12/12 | **12/12 rc=0**；`snapshot.json` 5,080 個數字葉同階段 4 gate 逐項一致（uuid 不計） |
+| chat SSE byte-equal（15 場景） | — | 逐字相同 |
+
+**偏離／風險（請規劃者決定）**
+1. 「`/guards` 分頁 render」係唯一有可見行為嘅改動（首屏 100 行＋載入更多）；用瀏覽器 Ctrl+F 搵唔喺首 100 行嘅人要先撳「載入更多」或用搜尋框。若老闆想要「一次顯示全部」，把 `GUARDS_PAGE_SIZE` 改大即可。
+2. 超過 600 行嘅檔仍有 25 個（簡報只指定兩個巨型檔；其餘如 `roster-export.ts`、`one-click.ts` 屬定價／匯出核心，唔郁）。
+3. `knip.json` 令 scripts／tests 當 entry——scripts 之間嘅「只被一次性腳本用」export 唔再報；若要連 scripts 都清，要逐個決定歸檔邊啲 CLI。
+4. 依賴搬動靠手改 `package-lock.json`（離線環境，`npm install --package-lock-only` 要連 registry）：root 兩組依賴同每個套件嘅 `dev` 旗按可達性重算（先驗算法：用舊 lock 重算同現有旗 0 差異，740 個套件）；`npm ci --dry-run` 過。部署用 `npm ci --include=dev`，唔受影響。
+5. bundle：`/guards` 124 → 132 kB、`/roster/[site]/[month]` 124 → 129 kB first load（附錄 a 基線 → 今次 build；主要係階段 4 加嘅 Tabs／ConfirmDialog／Drawer 分 tab，唔係階段 5 拆檔）。
+
+**未測**：production／真機觸控；540 人真實 DOM（用 266 人 seed 量度＋每行節點數推算）；`/guards` 分頁喺正式站嘅 Ctrl+F／無障礙行為。
+
+
+---
+
+## 9. 總結 before／after 總表（階段 0–5，P3 完結）
+
+§4 每項目標逐項對照。「量法」同各階段紀錄一致：本機＝合成數據（540 保安員、60 盤、9,408 更、20k audit）；正式站＝老闆 Chrome、香港→新加坡、單次。
+
+| # | 指標（§4） | Before | 目標 | After | 達標？ | 出處 |
+|---|---|---|---|---|---|---|
+| 1 | `/api/guards?take=500` DB 查詢數 | 1,506 | ≤20 | **6** | ✓ | §8.1 |
+| 2 | `/api/audit-log`／`rate-cards`／`shift-records`（單盤）查詢數 | 270／204／134 | ≤15／≤10／≤10 | **4／4／4** | ✓ | §8.1 |
+| 3 | `pending-summary` 查詢數／本機 p50／正式站 p50 | 894／462 ms／1,151 ms | 本機 <150／<120 ms；正式站 <400 ms | 62／51 ms／**763 ms** | 本機 ✓；**正式站 ✗**（RTT 地板 ~370 ms 主導；首頁頁內 953 ms） | §8.1 |
+| 4 | 正式站 `/guards` 頁最慢 API | 2,221 ms | <800 ms | **624 ms** | ✓ | §8.1 |
+| 5 | 更表編輯器頁內 API 數 | 11 | ≤6 | 冷載 10（lite guards 26 KB）／暖載 7（不計未定價 banner 6） | **部分**（暖載達標、冷載未） | §8.2 |
+| 6 | layout 每頁查詢（老闆） | 12＋1 HTTP | ≤4，0 HTTP | **4，0 HTTP** | ✓ | §8.1 |
+| 7 | 月結工作台同一月 `buildMonthlyClose` 呼叫 | 4 | 1 | 單一 request 內 3→**1**；月結工作台入頁（兩個 request，唔跨 request 共用係鐵則）4→**2** | **部分** | §8.2 |
+| 8 | 字型 CSS（gz）每頁 | 193 KB | <40 KB | **~52 KB**（41＋10） | ✗（差 ~12 KB；`next/font/local` 切片待老闆揀） | §8.2 |
+| 9 | `/api/month-close/one-click` 回應 | 191 KB | <20 KB | **1.9 KB**（`?include=full` 照舊） | ✓ | §8.1 |
+| 10 | 老闆側欄連結／組 | 23／5 | 17／6，700px 唔使捲 | **17／6**，唔使捲（正式站核對） | ✓ | §8.3 |
+| 11 | 月份選擇器實作 | 5 種／16 頁 | 1 元件 | **1 元件**（`MonthPicker`＋`useMonthState`） | ✓ | §8.3 |
+| 12 | 色值寫死／字號寫死 | 398／662 | <40／<60 | hex 程式內 **27**（連 css／註解 65）；`text-[Npx]` **0**；Tailwind 原生色 0 | ✓ | §8.4 |
+| 13 | 手寫 `<button>` className 種類 | 76 | <10 | **14**（`<button` 210 → 64，其餘係格仔表／鍵盤／icon／選單） | ✗（差 4 種） | §8.4 |
+| 14 | 「待處理」計法 | 9 處 | 1 收件箱＋各頁引用 | **首頁 `HomeInbox` 唯一彙總** | ✓ | §8.3 |
+| 15 | 「价」 | 30 行 | 0 | **0** | ✓ | §8.0 |
+| 16 | 鎖月 gate | 12/12 | 12/12、0 差 | 12/12，0 差（snapshot 5,080 數字葉同階段 4 一致） | ✓ | §8.5 |
+| 17 | 測試 | vitest 3,323（194 檔） | 不減，新增覆蓋 | vitest **3,470 過（215 檔）**；Playwright **220 passed／0 failed** | ✓ | §8.5 |
+
+**階段 5 專項（§3.3）**
+
+| 指標 | Before | 目標 | After | 達標？ |
+|---|---|---|---|---|
+| `RosterEditor`／`GuardsClient` 最大檔行數 | 2,807／2,638 | ≤600 | **564／445**（各 18／15 檔） | ✓ |
+| knip 多餘 export／type | 245／105（src 191／105） | <20 | **0／0** | ✓ |
+| jscpd 重複碼 | 2.62%（2,005 行） | <2.0% | **1.99%**（1,543 行） | ✓（邊緣） |
+| `/guards` DOM 節點（540 人推算） | ~19.2k（量得 266 人 9,553） | <5,000 | **~3.7k**（量得 3,710） | ✓ |
+| 兩條 chat route | ~150 行重複 | response 逐 byte 一樣 | `chat-handler.ts`＋15 場景 golden 相同 | ✓ |
+
+**未達標項目（交規劃者／老闆決定）**：#3 正式站 pending-summary（RTT 主導，需要 CDN／同區部署先有改善）、#5 更表編輯器冷載 API 數、#7 月結入頁 `buildMonthlyClose`（跨 request 共用違反鐵則 6）、#8 字型 CSS ~52 KB、#13 按鈕種類 14。
+**小結**：17 項 §4 目標入面，完全達標 12 項（#1、2、4、6、9–12、14–17）；部分 2 項（#5、#7）；未達 3 項（#3 正式站、#8、#13）。冇任何計算改動；7／8 月鎖月數字經 `gate:locked-months` 12/12 逐階段核對。

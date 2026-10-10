@@ -345,6 +345,64 @@ test.describe("§6.3 紅色差異／強制鎖定／解鎖權限／修復預設�
     expect(lockBodies[0]).toEqual({ override_reason: "差異已核對" });
   });
 
+  // P3-5.5：mock generate 回 has_diff＋lock 只記 body（唔打真 API）。
+  async function mockDiffLock(page: Page, ready: boolean): Promise<unknown[]> {
+    expect([200, 201, 409]).toContain((await page.request.post(`/api/months/${M}/open`, { data: { roster_version_note: "e2e diff" } })).status());
+    const run = forceRun(M, false);
+    if (ready) run.report.lock_precondition = { current_month_already_locked: false, missing_upload_sites: [], unconfirmed_upload_sites: [], unpriced_count: 0, ready_to_lock: true } as never;
+    await page.route("**/api/month-close/one-click?*", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runs: [run] }) }));
+    await page.route("**/api/month-close/one-click/run-e2e-force", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run }) }));
+    await page.route(/\/api\/month-closes\/[^/]+\/generate$/, async (r) => {
+      const real = await r.fetch();
+      const j = await real.json();
+      j.reconciliation = { ...(j.reconciliation ?? {}), has_diff: true };
+      await r.fulfill({ response: real, body: JSON.stringify(j) });
+    });
+    const lockBodies: unknown[] = [];
+    await page.route(/\/api\/month-closes\/[^/]+\/lock$/, (r) => {
+      lockBodies.push(r.request().postDataJSON());
+      return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ locked: true }) });
+    });
+    return lockBodies;
+  }
+
+  test("強制鎖定＋紅色差異同時有：先要差異原因；body 合併成一個 override_reason", async ({ page }) => {
+    await loginAs(page, "老闆");
+    const lockBodies = await mockDiffLock(page, false);
+    await page.goto(`/month-close?month=${M}`);
+    await expect(page.getByTestId("force-lock-box")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("force-lock-check").check();
+    await page.getByTestId("force-lock-reason").fill("強制原因");
+    await page.getByTestId("force-lock-month").click();
+    await expect(page.getByTestId("diff-reason-box")).toBeVisible(); // 有差異但未填原因：唔打 lock
+    expect(lockBodies).toEqual([]);
+    await page.getByTestId("diff-reason").fill("差異已核對");
+    await page.getByTestId("force-lock-month").click();
+    await expect.poll(() => lockBodies.length).toBe(1);
+    expect(lockBodies[0]).toEqual({ force: true, override_reason: "差異已核對；強制鎖定：強制原因" });
+  });
+
+  test.describe("手機（375）", () => {
+    test.use({ viewport: { width: 375, height: 812 } });
+    test("sticky bar「去填原因 ›」錨去 #diff-reason-box，輸入框入畫面", async ({ page }) => {
+      await loginAs(page, "老闆");
+      const lockBodies = await mockDiffLock(page, true);
+      await page.goto(`/month-close?month=${M}`);
+      await expect(page.getByTestId("rail-lock-month")).toBeEnabled({ timeout: 20_000 });
+      await page.getByTestId("rail-lock-month").click();
+      expect(lockBodies).toEqual([]);
+      const reason = page.getByTestId("rail-lock-reason");
+      await expect(reason).toContainText("要填差異原因先鎖得");
+      const link = reason.getByRole("link", { name: /去填原因/ });
+      await expect(link).toHaveAttribute("href", "#diff-reason-box");
+      await link.click();
+      await expect(page).toHaveURL(/#diff-reason-box$/);
+      await expect(page.getByTestId("diff-reason-box")).toBeInViewport();
+      await page.getByTestId("diff-reason").fill("差異已核對");
+      await expect(page.getByTestId("rail-lock-reason")).toHaveCount(0); // 填咗原因，提示消失
+    });
+  });
+
   test("冇「月結鎖定解鎖」權限（主管）：已鎖定都唔出解鎖輸入；老闆出", async ({ page }) => {
     for (const [who, expected] of [["主管", 0], ["老闆", 1]] as const) {
       await page.context().clearCookies();

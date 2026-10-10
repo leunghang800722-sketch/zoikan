@@ -14,7 +14,7 @@ export interface ConfirmOptions {
   tone?: "default" | "danger";
 }
 
-export function ConfirmDialog({
+function ConfirmDialog({
   open,
   title,
   message,

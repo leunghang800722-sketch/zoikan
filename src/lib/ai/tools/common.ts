@@ -85,8 +85,6 @@ export function deniedResult(d: ToolDenied): string {
 // 去 `src/lib/ui/broker-kind.ts`（UI 頁面唔應該 import `ai/` 目錄），呢度
 // re-export 返（tests/ai-structural-guard.test.ts 嘅 allowlist 已經加咗
 // `../../ui/broker-kind`），內容冇改。
-export type { BrokerKindLiteral } from "../../ui/broker-kind";
-export { BROKER_KIND_LABEL } from "../../ui/broker-kind";
 
 export const FEE_SPLIT_NOTE = "呢個盤嘅出街價未拆開保安員工資同雞頭費（源頭只有合計），只可以俾合計數。";
 
@@ -102,7 +100,7 @@ export type FeeSplit = "split" | "combined";
 
 /** pg 驅動對 numeric/decimal 欄位預設用字串返（避免精度損失）——呢個
  * helper 逐個工具都要用，統一擺一個地方轉。 */
-export function toNum(v: unknown): number | null {
+function toNum(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;

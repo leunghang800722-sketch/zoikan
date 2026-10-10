@@ -115,7 +115,7 @@ export async function reassignSession(actor: AuthedSession, sessionId: string, n
  * 跨 session 去重用嘅「證據核心」：同一個人（穩定 person key＝group_key 基底）、同一 kind，v2 身份欄／候選／要覆核嘅欄名／銀行戶口相同即同一條題。
  * 唔包 reasons、v3 新欄值（v2 包升 v3 包時，已答／已跳過嘅 v2 類題唔應該重出）；ext 類題以 ext_review 嘅 key 計，多咗新欄先算新題。
  */
-export function evidenceCore(kind: string, ev: QuestionEvidence): string {
+function evidenceCore(kind: string, ev: QuestionEvidence): string {
   const p = ev.person;
   const core = {
     kind,
@@ -151,17 +151,16 @@ export interface OwnedByOtherResult {
 }
 
 /** 題類：v2＝身份欄類；ext＝新欄類（只由 v3 包決定）；bank＝銀行類（只由有銀行段嘅包決定）。 */
-export const EXT_ONLY_KINDS: readonly string[] = ["ext_identity_check", "ext_field_conflict", "ext_field_review"];
-export const BANK_STRUCT_KINDS: readonly string[] = ["bank_review", "bank_identity_unknown"];
-export const EXT_BANK_KINDS: readonly string[] = [...EXT_ONLY_KINDS, "bank_review"];
-export const V3_ONLY_KINDS: readonly string[] = [...EXT_ONLY_KINDS, ...BANK_STRUCT_KINDS];
+const EXT_ONLY_KINDS: readonly string[] = ["ext_identity_check", "ext_field_conflict", "ext_field_review"];
+const BANK_STRUCT_KINDS: readonly string[] = ["bank_review", "bank_identity_unknown"];
+const V3_ONLY_KINDS: readonly string[] = [...EXT_ONLY_KINDS, ...BANK_STRUCT_KINDS];
 export type KindClass = "v2" | "ext" | "bank";
 export const kindClass = (kind: string): KindClass => (EXT_ONLY_KINDS.includes(kind) ? "ext" : BANK_STRUCT_KINDS.includes(kind) ? "bank" : "v2");
 /** 全域 advisory lock：所有改 triage 題目嘅動作（自動 apply 出題、作答 commit）序列化，解決並發交錯。 */
 export const TRIAGE_LOCK = "guard_import_triage";
 
 /** 完整簽名＝證據核心＋人嘅全部 ext 值（答案用成個 person 寫入）。 */
-export function fullSignature(kind: string, ev: QuestionEvidence): string {
+function fullSignature(kind: string, ev: QuestionEvidence): string {
   return createHash("sha1").update(evidenceCore(kind, ev)).update(JSON.stringify(allExtSig(ev.person))).digest("hex");
 }
 

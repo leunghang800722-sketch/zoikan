@@ -9,9 +9,10 @@
 // 「同一時間只可以有一個生效崗位」檢查（同 guard-fix `set_longterm_post`
 // 一致，長工短期可能同時掛兩個盤嘅記錄，由人手判斷）；**同一個盤**生效
 // 期重疊就 409（Opus 5.5 驗收，見 src/lib/guards/longterm-posts.ts）。
+import { guardModule, assertScopedGuard } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole } from "@/lib/broker-isolation";
+import { isBrokerRole } from "@/lib/broker-isolation";
 import { toGuardLongtermPostDTO } from "@/lib/api/dto";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
@@ -20,12 +21,6 @@ import { GuardLongtermPostCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden } from "@/lib/api/errors";
 import { assertLongtermPostPeriodOk } from "@/lib/guards/longterm-posts";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
-
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
@@ -35,9 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     // 嘅設計唔一致；雞頭前端本身冇 call 呢個 endpoint）。
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以睇長工崗位盤");
     const { id } = await params;
-    const where = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
     const rows = await prisma.guardLongtermPost.findMany({
       where: { guardId: id },
       orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],

@@ -20,7 +20,7 @@ import { Pool, type QueryResult, type QueryResultRow } from "pg";
 
 let pool: Pool | undefined;
 
-export class AiDbNotConfiguredError extends Error {
+class AiDbNotConfiguredError extends Error {
   constructor() {
     super("AI_DATABASE_URL 未設定——AI 助手嘅唯讀 DB 連線未開通");
     this.name = "AiDbNotConfiguredError";

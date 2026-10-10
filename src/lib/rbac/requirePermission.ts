@@ -86,7 +86,7 @@ async function denyAndAudit(session: AuthedSession, mod: Module, action: Action,
 }
 
 /** P3-1.1：`Set` 入面嘅 key 格式 `module:action`。 */
-export function permissionKey(mod: Module, action: Action): string {
+function permissionKey(mod: Module, action: Action): string {
   return `${mod}:${action}`;
 }
 

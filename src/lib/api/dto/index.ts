@@ -124,7 +124,7 @@ const ROLE_FIELDS = ["id", "name", "payoutApprovalLimit", "isCustom", "baseRole"
 // （route 本身已經要求呢個權限先入得嚟，但抽做獨立 field group 令呢個
 // 限制唔靠「岩岩好個 route 要求緊」，係結構性保證）。
 const USER_BASE_FIELDS = ["id", "name", "tel", "roleId", "guardId", "brokerId", "payoutApprovalLimit", "status", "lastLoginAt", "lastLoginIp", "mustChangePwd", "tokenVersion", "createdAt", "updatedAt", "createdBy"] as const;
-export const USER_MANAGEMENT_ONLY_FIELDS = ["failedAttempts", "lockedUntil", "allowedIp"] as const;
+const USER_MANAGEMENT_ONLY_FIELDS = ["failedAttempts", "lockedUntil", "allowedIp"] as const;
 const BROKER_SITE_ASSIGNMENT_FIELDS = ["id", "brokerId", "siteId", "month", "createdAt", "createdBy"] as const;
 // P1-WP3：quotas（配額）——冇金錢欄，內部角色/雞頭白名單一致（雞頭版
 // 見 broker-dto.ts 嘅 QUOTA_BROKER_FIELDS，query-scope 已限自己 broker_id）。

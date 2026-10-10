@@ -42,7 +42,7 @@ const KIND_ORDER: QuestionKind[] = [
   "ext_field_review",
 ];
 
-export const SKIP_OPTION: QuestionOption = { id: "skip", label: "跳過，留返人手處理" };
+const SKIP_OPTION: QuestionOption = { id: "skip", label: "跳過，留返人手處理" };
 
 const hasValidHkid = (p: PackagePerson): boolean => {
   const c = canonicalHkid(fieldValue(p.hkid));
@@ -54,7 +54,7 @@ function linkOptions(ids: string[]): QuestionOption[] {
   return ids.slice(0, MAX_CANDIDATES).map((id, i) => ({ id: "link", guard_id: id, label: `係同一個人（連去候選 ${i + 1}）` }));
 }
 
-export function kindForEvaluation(e: Evaluation, groupReasons: readonly string[]): QuestionKind | null {
+function kindForEvaluation(e: Evaluation, groupReasons: readonly string[]): QuestionKind | null {
   const r = new Set(e.reasons);
   if (e.action === "conflict") {
     if (groupReasons.length === 0) return "db_conflict";

@@ -75,7 +75,7 @@ function rawCell(ws: Worksheet, row: number, col: number): unknown {
 }
 
 /** 呢格係咪「被合併、唔係左上角」嗰啲格。 */
-export function isMergedSlave(cell: { isMerged: boolean; address: string; master: { address: string } }): boolean {
+function isMergedSlave(cell: { isMerged: boolean; address: string; master: { address: string } }): boolean {
   return cell.isMerged && cell.master.address !== cell.address;
 }
 
@@ -128,7 +128,7 @@ export function findDateHeaders(ws: Worksheet): Array<[number, number]> {
 
 const CITYBUS_MARKER = "Property Name";
 
-export function detectLayout(ws: Worksheet, headerRow: number, labelCol: number): LayoutName {
+function detectLayout(ws: Worksheet, headerRow: number, labelCol: number): LayoutName {
   for (let c = 1; c <= labelCol; c++) {
     if (clean(rawCell(ws, headerRow, c)) === CITYBUS_MARKER) return "citybus";
   }
@@ -198,4 +198,4 @@ export function buildMapping(ws: Worksheet, dateRow: number, labelCol: number): 
   };
 }
 
-export { clean, rawCell };
+export {  rawCell };

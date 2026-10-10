@@ -27,7 +27,7 @@ import { journalAutoCardUses } from "@/lib/pricing/auto-card-journal";
 import { reconcileUpload, type ReconcileCategory, type ReconcileItem } from "./reconcile";
 import { ROSTER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
 
-export type ReconcileDecisionAction = "apply_roster" | "keep_system" | "exception";
+type ReconcileDecisionAction = "apply_roster" | "keep_system" | "exception";
 
 export interface ReconcileActionInput {
   key: string;
@@ -35,7 +35,7 @@ export interface ReconcileActionInput {
   reason?: string;
 }
 
-export interface ReconcileActionResult {
+interface ReconcileActionResult {
   key: string;
   category: ReconcileCategory | "unknown";
   action: ReconcileDecisionAction;

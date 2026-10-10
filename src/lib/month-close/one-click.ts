@@ -54,7 +54,7 @@ import { findCopyLastMonthCandidates, type CopyLastMonthCandidate } from "@/lib/
 import { writeAudit } from "@/lib/audit";
 import { buildMonthHealth, summarizeHealthForReport } from "@/lib/ops/month-health";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import { STEP_KEYS, STEP_LABELS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
+import { STEP_KEYS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
 import { AutoCollector } from "./auto/context";
 import { ensureShiftTypesForEmptySites, planShiftTypesForSite, resolveUploadSite } from "./auto/site-setup";
 import { explainVariances } from "./auto/variance";
@@ -184,39 +184,6 @@ class StepRunner {
   allWarnings(): string[] {
     return this.steps.flatMap((s) => s.warnings.map((w) => `【${s.label}】${w}`));
   }
-}
-
-// ---------------------------------------------------------------------------
-// step0 前置檢查
-// ---------------------------------------------------------------------------
-/** Opus 驗收收窄嘅「卡沿用」規則——淨係沿用「上月通用逐更卡」：
- *   - 同盤同更種、`broker_id`／`guard_id` 皆 null（唔沿用雞頭級／逐人卡，
- *     例如 B07／長工日均卡）；
- *   - `billing_model` 係 null 或 `per_shift`（唔沿用 `special` 特殊卡——
- *     例如 7 月 Event Guard 一筆過收入卡——同 `monthly_fixed`／`admin_fee`
- *     月費卡）；
- *   - `client_rate`／`guard_wage` 都有值、未作廢；
- *   - `effective_from` 早過本月、`effective_to` 啱啱係上月最後一日（即係
- *     一張「上月仲生效、上月底先完」嘅卡）——唔沿用未來卡（會將下月價
- *     倒灌返本月）、唔沿用早幾個月已經收咗嘅舊卡（過期卡）。
- * LINK（guards_paid_by_client）盤喺 caller 已經略過。 */
-export async function findCarryoverCard(siteId: string, shiftTypeId: string, monthStartDate: Date) {
-  const prevMonthEnd = new Date(monthStartDate.getTime() - 24 * 60 * 60 * 1000);
-  return prisma.rateCard.findFirst({
-    where: {
-      siteId,
-      shiftTypeId,
-      brokerId: null,
-      guardId: null,
-      voidedAt: null,
-      clientRate: { not: null },
-      guardWage: { not: null },
-      OR: [{ billingModel: null }, { billingModel: "per_shift" }],
-      effectiveFrom: { lt: monthStartDate },
-      effectiveTo: prevMonthEnd,
-    },
-    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
-  });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 簽名保留 _actorUserId／_ip：呼叫方（runOneClickMonthClose）一律傳呢兩個參數，Phase 3 之後 step0 唔再寫卡／audit（見下面大註解），暫時用唔著，但保留簽名等日後 step0 加返其他需要 actor/ip 嘅動作唔使改晒 call site。
@@ -961,7 +928,7 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
 // ---------------------------------------------------------------------------
 // step7 對照（可選）——本月有 Postorder 上載先做，唔准估。
 // ---------------------------------------------------------------------------
-export async function stepPostorderCompare(month: Date, referralSystemTotal: number) {
+async function stepPostorderCompare(month: Date, referralSystemTotal: number) {
   const { start } = monthRange(month);
   const postorderUpload = await prisma.postorderUpload.findFirst({ where: { month: start, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
   if (!postorderUpload) {
@@ -1124,4 +1091,3 @@ async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserI
   }
 }
 
-export { STEP_KEYS, STEP_LABELS };

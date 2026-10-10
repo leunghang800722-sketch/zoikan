@@ -1,5 +1,6 @@
 "use client";
 // P2-A：配額頁（README §05）——換皮，邏輯／API 呼叫全部保留。
+import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
 import { useEffect, useState } from "react";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
@@ -377,14 +378,7 @@ export default function QuotasPage() {
               required
             />
           </Field>
-          <div className="flex gap-2 pt-2">
-            <Button variant="primary" size="sm" type="submit" disabled={saving}>
-              {saving ? "儲存緊…" : "儲存"}
-            </Button>
-            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
-              取消
-            </Button>
-          </div>
+          <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>
       </Drawer>
     </div>

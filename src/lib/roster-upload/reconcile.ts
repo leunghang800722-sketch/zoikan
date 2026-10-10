@@ -30,7 +30,7 @@ import {
   inferGuardMonthlyTopSite,
   hasParsedPostorderForMonth,
 } from "@/lib/pricing/longterm-settlement";
-import type { Prisma, RosterUpload, RosterUploadRow } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { ROSTER_UPLOAD_META_SELECT, type RosterUploadMeta } from "@/lib/roster-upload/meta-select";
 
 export type ReconcileCategory = "match" | "roster_only" | "system_only" | "guard_diff" | "settlement_diff" | "shift_type_diff" | "unresolved";
@@ -601,7 +601,6 @@ export async function loadReconcileInputs(uploadIds: string[]): Promise<Map<stri
       });
     }
 
-
     const systemBySite = systemByMonth.get(monthKey) ?? new Map<string, SystemRecord[]>();
     const systemRecordsRaw: SystemRecord[] = systemSiteIdsOf(p).flatMap((sid) => systemBySite.get(sid) ?? []);
     const systemEntries: ReconcileSystemEntry[] = systemRecordsRaw.map((s) => ({
@@ -827,4 +826,3 @@ export async function reconcileUpload(
 }
 
 // 型別重新導出（route.ts／UI 用）。
-export type { RosterUpload, RosterUploadRow };
