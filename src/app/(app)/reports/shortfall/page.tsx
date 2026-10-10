@@ -3,9 +3,12 @@
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import ShortfallDashboard from "../../ShortfallDashboard";
+import { getViewGrants } from "@/lib/rbac/nav";
+import { shortfallCardVisibility } from "@/lib/ui/shortfall-cards";
 
 export default async function ShortfallPage() {
   const session = await getCurrentSession();
   if (!session) redirect("/login");
-  return <ShortfallDashboard variant="overview" userName={session.name} roleLabel={session.roleName} />;
+  const cards = shortfallCardVisibility(await getViewGrants(session));
+  return <ShortfallDashboard variant="overview" userName={session.name} roleLabel={session.roleName} showApprovals={cards.showApprovals} showMargin={cards.showMargin} />;
 }
