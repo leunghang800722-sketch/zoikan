@@ -22,7 +22,8 @@ export interface NameOnlySummary {
   warning: string;
 }
 
-/** pending-summary 用：status=parsed 嘅上載（month=null＝所有月份）各自 name_only 格數。 */
+/** pending-summary 用：status=parsed 嘅上載各自 name_only 格數。範圍同 `pendingUploadWhere()`：帶 month＝淨該月；
+ * month=null＝預設只計本月＋上月（`opts.months` 可改，`0`＝全部月份）。 */
 export async function buildNameOnlySummary(month: Date | null, opts: { months?: number } = {}): Promise<NameOnlySummary> {
   const uploads = await prisma.rosterUpload.findMany({
     where: pendingUploadWhere(month, opts.months),

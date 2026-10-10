@@ -453,6 +453,16 @@ export function GuardsClient({
       signal: ctrl.signal,
     });
     if (seq !== loadSeqRef.current) return; // 已有更新嘅一次 load，呢個舊 response 丟棄
+    // B-5（階段 1 驗收員補充）：保安員 >500 時 `take=500` 會靜靜截斷——逐頁拉齊 `total`。
+    while (guardRes.ok && guardRes.data.rows.length < guardRes.data.total) {
+      const next = await apiRequest<ApiListResult<GuardRow>>(
+        `/api/guards?take=500&skip=${guardRes.data.rows.length}&with_month_shifts=${month}${expiringParam}${identityParam}`,
+        { headers: qHeaders, signal: ctrl.signal },
+      );
+      if (seq !== loadSeqRef.current) return;
+      if (!next.ok || next.data.rows.length === 0) break;
+      guardRes.data.rows.push(...next.data.rows);
+    }
     if (!guardRes.ok) {
       setError(guardRes.message);
       setLoading(false);

@@ -1,5 +1,16 @@
 // P3-1.5：pending-summary 批量 loader／月份窗口／mapLimit。
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// P3-2.x：計 src 側（`@/lib/db`）嘅 SQL 查詢數——喺 `@/lib/db` 載入前先放一個帶 query log 嘅
+// PrismaClient 入 globalThis 單例。
+const queries = await vi.hoisted(async () => {
+  const { PrismaClient } = await import("@prisma/client");
+  const list: string[] = [];
+  const client = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+  (client as unknown as { $on: (e: string, cb: (q: { query: string }) => void) => void }).$on("query", (q) => list.push(q.query));
+  (globalThis as unknown as { prisma: unknown }).prisma = client;
+  return list;
+});
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { GET as pendingSummary } from "@/app/api/roster-uploads/pending-summary/route";
@@ -94,6 +105,28 @@ describe("P3-1.5 pending-summary", () => {
       const got = summary.entries.find((e) => e.upload_id === u.id)?.pending_count ?? 0;
       expect(got).toBe(expected);
     }
+  });
+});
+
+describe("pending-summary 查詢數唔隨上載份數增長（階段 1 驗收員補充）", () => {
+  it("3 份 vs 14 份（同一批 15 份內）查詢數相差 ≤ 2；30 份（兩批）相差有界", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const count = async () => {
+      const q0 = queries.length;
+      await buildPendingSummary(null, { months: 0 });
+      return queries.length - q0;
+    };
+    for (let i = 0; i < 3; i++) await mkUpload(fx, monthAgo(0), 6);
+    const few = await count();
+    expect(few).toBeGreaterThan(0); // 計數器真係有效
+    for (let i = 0; i < 11; i++) await mkUpload(fx, monthAgo(0), 6);
+    const many = await count(); // 14 份，仍然一批
+    expect(many - few).toBeLessThanOrEqual(2);
+    for (let i = 0; i < 16; i++) await mkUpload(fx, monthAgo(1), 6);
+    const batches = await count(); // 30 份＝兩批（每批 15）
+    expect(batches).toBeLessThanOrEqual(many * 2 + 2); // 每多一批只加一批固定條數，唔係每份加
+    expect(batches).toBeLessThan(30 * 3); // 遠少於逐份 ~15 條
   });
 });
 
