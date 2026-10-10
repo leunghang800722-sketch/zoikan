@@ -714,7 +714,7 @@ export async function bulkResolveAmbiguousSubSite(params: {
       await writeAuditTx(tx, { actorUserId: params.actorUserId, tableName: "roster_upload_rows", rowId: row.id, action: "update", before: row, after, ip: params.ip });
       result.updated.push(row.id);
     }
-  });
+  }, { timeout: 60_000, maxWait: 10_000 }); // P3-1.7（B-3）：逐行 update＋audit，預設 5 s 太短
   return result;
 }
 

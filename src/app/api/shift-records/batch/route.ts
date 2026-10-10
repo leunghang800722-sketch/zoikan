@@ -496,7 +496,8 @@ export async function POST(req: Request) {
             results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
           }
         }
-      });
+        // P3-1.7（B-3）：Prisma interactive tx 預設 5 s，2,000 格逐格 round trip 會 P2028——放寬到 60 s。
+      }, { timeout: 60_000, maxWait: 10_000 });
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
         throw Conflict("批量寫入撞到唯一約束（同一保安員、同一日、同一更別已經有記錄）——成批已 rollback");

@@ -122,7 +122,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ month: 
         drSkippedOutOfRange,
         sourceHadAnything: sourceAssignments.length > 0 || sourceQuotas.length > 0 || sourceDR.length > 0,
       };
-    });
+    }, { timeout: 60_000, maxWait: 10_000 }); // P3-1.7（B-3）：daily_requirements 逐行 round trip，預設 5 s 太短
 
     // transaction 已經成功 commit——而家先逐條真係寫 audit_log。
     for (const a of pendingAudits) {
