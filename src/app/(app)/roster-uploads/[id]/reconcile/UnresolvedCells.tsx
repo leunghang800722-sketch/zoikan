@@ -16,6 +16,7 @@ import {
   rankTimeText,
   telTail,
   matchNeedsBossByPerson,
+  piiHidden,
   type GuardLite,
   type NeedsBossItem,
   type RawRosterRow,
@@ -46,7 +47,7 @@ export function ReasonText({ item, raw }: { item: UnresolvedItemLite; raw: RawRo
     <div className="mt-1 space-y-0.5" data-testid="reconcile-reason" data-raw-reason={item.unresolved_reason ?? ""}>
       {parts.map((p, i) => (
         <div key={i} className="text-[11px] text-red-600" data-reason-kind={p.kind}>
-          {humanizeReasonPart(p, person)}
+          {humanizeReasonPart(p, person, piiHidden(raw))}
         </div>
       ))}
     </div>
@@ -59,11 +60,12 @@ export function WroteCell({ raw, loading, item, dir }: { raw: RawRosterRow | nul
   const person = personFromRow(raw);
   const tel = telTail(raw.tel_raw);
   const rt = rankTimeText(raw);
-  const showSimilar = reasonKinds(item).has("guard");
+  const hidden = piiHidden(raw);
+  const showSimilar = reasonKinds(item).has("guard") && !hidden;
   return (
     <div className="space-y-0.5 text-[12px]" data-testid="reconcile-wrote" data-row-index={raw.row_index}>
       <div className="font-medium text-zk-text" data-testid="reconcile-wrote-name">
-        {hasPerson(person) ? personLabel(person) : <span className="text-zk-faint">（冇寫姓名／工號）</span>}
+        {hidden ? <span className="text-zk-faint">冇權限睇姓名／工號</span> : hasPerson(person) ? personLabel(person) : <span className="text-zk-faint">（更表冇寫姓名／工號）</span>}
       </div>
       <div className="text-[11px] text-zk-muted">
         {[tel, raw.broker_code_raw?.trim() ? `雞頭碼 ${raw.broker_code_raw.trim()}` : null, rt || null, `原始第 ${raw.row_index} 行`].filter(Boolean).join("・")}
@@ -90,6 +92,8 @@ export interface ActionCtx {
   uploadSiteId: string | null;
   month: string; // YYYY-MM
   needsBoss: NeedsBossItem[] | null;
+  /** false＝冇權限用安員配對修復（guard-fix 403）——唔出相關連結。 */
+  canGuardFix: boolean;
   onReparse: () => void;
   reparsing: boolean;
   siteNameOf: (id: string | null) => string;
@@ -106,11 +110,13 @@ export function ReasonLinks({ item, raw, ctx }: { item: UnresolvedItemLite; raw:
     if (seen.has(p.kind) && p.kind !== "broker_code") continue;
     seen.add(p.kind);
     if (p.kind === "guard") {
-      links.push(
-        <Link key="gf" href={LINK.guardFix(ctx.month)} className={linkCls} data-testid="link-guard-fix">
-          去安員配對修復 ›
-        </Link>,
-      );
+      if (ctx.canGuardFix) {
+        links.push(
+          <Link key="gf" href={LINK.guardFix(ctx.month)} className={linkCls} data-testid="link-guard-fix">
+            去安員配對修復 ›
+          </Link>,
+        );
+      }
       if (hasPerson(person)) {
         links.push(
           <Link key="gs" href={LINK.guards(guardSearchTerm(person))} className={linkCls} data-testid="link-find-guard">

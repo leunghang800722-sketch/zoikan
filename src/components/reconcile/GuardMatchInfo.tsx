@@ -13,16 +13,17 @@ export function GuardMatchInfo({ question, month, compact = false }: { question:
   const nbRes = useNeedsBoss(month, isGuard);
   const dir = useGuardDirectory(isGuard);
   if (!isGuard) return null;
-  const nb = matchNeedsBossForQuestion({ title: question.title, summary: question.mc.summary, identity_label: question.mc.identity_label }, nbRes?.items);
+  const nb = matchNeedsBossForQuestion({ title: question.title, summary: question.mc.summary, identity_label: question.mc.identity_label }, nbRes && nbRes !== "denied" ? nbRes.items : null);
   const person: Person | null = nb ? { name: nb.name_raw ?? "", staffNo: nb.staff_no_raw ?? "", tel: nb.tel_raw ?? "" } : question.mc.identity_label ? { name: question.mc.identity_label, staffNo: "", tel: "" } : null;
-  const mon = (nb && nbRes?.month ? nbRes.month : month) ?? "";
+  const canGuardFix = nbRes !== "denied";
+  const mon = (nb && nbRes && nbRes !== "denied" && nbRes.month ? nbRes.month : month) ?? "";
   return (
     <div className={`space-y-1.5 rounded-lg border border-zk-border bg-zk-header ${compact ? "px-3 py-2.5" : "px-2.5 py-2"}`} data-testid="mc-guard-info">
       <div className="text-[11.5px] font-semibold text-zk-muted">更表寫咗</div>
       {nb ? (
         <div className="space-y-0.5 text-[12.5px]">
           <div className="font-medium text-zk-text" data-testid="mc-guard-name">
-            {person && hasPerson(person) ? personLabel(person) : "（更表冇寫姓名／工號）"}
+            {person && hasPerson(person) ? personLabel(person) : "（冇權限睇姓名／工號）"}
             <span className="ml-1.5 text-[11px] font-normal text-zk-faint">{nb.seq}</span>
           </div>
           <div className="text-[11.5px] text-zk-muted" data-testid="mc-guard-cells">
@@ -37,11 +38,11 @@ export function GuardMatchInfo({ question, month, compact = false }: { question:
           {personLabel(person)}
         </div>
       ) : (
-        <div className="text-[11.5px] text-zk-faint">搵唔到對應嘅安員配對修復資料（可能冇權限睇姓名，或者未計算過修復計劃）。</div>
+        <div className="text-[11.5px] text-zk-faint">冇權限睇姓名／工號，或者搵唔到對應嘅安員配對修復資料。</div>
       )}
       {person && hasPerson(person) && <SimilarGuards person={person} dir={dir} />}
       <div className="flex flex-wrap gap-1">
-        {mon && (
+        {mon && canGuardFix && (
           <Link href={LINK.guardFix(mon)} className={linkCls} data-testid="mc-link-guard-fix">
             去安員配對修復 ›
           </Link>
