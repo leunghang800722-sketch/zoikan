@@ -13,17 +13,14 @@ import { isValidMonth, readInitialMonth, rememberMonth } from "@/lib/ui/month-st
 /** 頁面用嘅 state hook：回 `[month, setMonth]`。`defaultMonth` 係冇 URL／sessionStorage 時用（預設本月）。 */
 export function useMonthState(defaultMonth?: string, opts: { persistDefault?: boolean } = {}): [string, (m: string) => void] {
   const fallback = defaultMonth ?? currentMonthStr();
-  // SSR／首次 client render 一律用 fallback（避免 hydration mismatch）；mount 後 effect 先切去 URL／sessionStorage 嘅月。
-  const [month, setMonthState] = useState<string>(fallback);
+  // 初始值喺第一次 render 前就按 URL → sessionStorage → fallback 解出（client），令頁面只 fetch 一次（唔會先用預設月份 fetch 再切）。
+  // SSR（冇 window）一律 fallback；hydration 期間 input value 屬性可能同 server HTML 唔同，由 input 嘅 suppressHydrationWarning 吸收。
+  const [month, setMonthState] = useState<string>(() => readInitialMonth(fallback).month);
 
   useEffect(() => {
     const r = readInitialMonth(fallback);
-    if (r.source !== "default") {
-      setMonthState(r.month);
-      // 由 sessionStorage 還原嘅，URL 補返 ?month=（分享／重新整理都一致）；URL 本身帶嘅就記入 sessionStorage。
-      rememberMonth(r.month, { syncUrl: true });
-    } else if (opts.persistDefault) {
-      // 報表族（tab 之間換頁月份跟住）：連預設月份都記低，下一個 tab 還原同一個月。
+    if (r.source !== "default" || opts.persistDefault) {
+      // 由 sessionStorage 還原嘅，URL 補返 ?month=；URL 本身帶嘅就記入 sessionStorage；報表族連預設月份都記低。
       rememberMonth(r.month, { syncUrl: true });
     }
     // 只係 mount 跑一次
@@ -62,6 +59,7 @@ export function MonthPicker({ value, onChange, label, testId, ariaLabel = "月�
       <input
         type="month"
         data-testid={testId}
+        suppressHydrationWarning
         aria-label={ariaLabel}
         value={value}
         onChange={(e) => {

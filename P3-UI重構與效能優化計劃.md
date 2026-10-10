@@ -474,3 +474,9 @@ API 單獨 p50（3 次）：最輕 API 地板 ~360 ms（香港→新加坡 TLS�
 
 **未測**
 - 冇喺 production／真機觸控驗證（手機 e2e 係 Chromium 模擬）；`useMonthState` 冇 jsdom 單元測（純函數有，hook 行為由 `p3-3-nav.spec` 覆蓋）；「要老闆決定」格喺有 guard-fix run 嘅數據下嘅顯示冇專門 e2e（冇 run 時唔出，主管冇呢格有 e2e）。
+
+#### 8.3.1 規劃者裁定後補（同日，Sonnet 5.5）
+1. **強制鎖定補返**：`/month-close` LockSection 加「強制鎖定」——淨係老闆（server wrapper `month-close/page.tsx` 傳 `isBoss`＝`baseRole==="老闆"`；API 本身一樣只准老闆）、只喺 `lock_precondition` 有未上載／未對數盤（鎖月條件未齊）且未鎖定時顯示；勾選後出「override 原因」輸入，必填先可撳；call 同一個 `POST /api/month-closes/:id/lock`，body `{ force: true, override_reason }`（舊 `/reports/monthly-close` 嘅 `force`／`override_reason` 欄位名一字不差；`generate` 先行亦同舊 `lockMonth`）。e2e：`p3-3-nav.spec.ts` 老闆（條件未齊先出、原因必填、request body、鎖完 API 核對並解返）＋主管見唔到；一般右欄鎖定掣照舊停用。
+2. **解鎖搬 LockSection**、**`needs_boss`**、**生效月本地 state**：規劃者接受。
+3. **月份只 fetch 一次**：`useMonthState` 初始值改喺第一次 client render 前讀（`useState(() => readInitialMonth(fallback).month)`，次序 URL → sessionStorage → 預設；SSR 冇 window 用預設），唔再先用預設月份 fetch 再切；`MonthPicker` input 加 `suppressHydrationWarning`（hydration 時 value 屬性可能同 server HTML 唔同）。新增 devDependency `jsdom`，`tests/p3-3-use-month-state.test.ts`（jsdom）覆蓋初始值次序、第一次 render 已係最終值、補 URL／storage、setMonth。
+4. **RosterEditor 手機（compact）`onCellMouseEnter`**：舊行為——mousedown 開始「拖曳填充」狀態（`draggingRef`），之後指標進入任何格都將選擇範圍延伸到嗰格。手機單撳一格會彈出底部更別鍵盤，容器因此縮細、格仔上移，**指標位置不變但下面換咗另一格**，瀏覽器觸發 mouseenter，將單格選擇（`sel.a==sel.b`）變成多格範圍，鍵盤顯示條件（單一格）唔再成立，鍵盤即刻收埋——用家見到「撳咗格鍵盤閃一下／唔出」，特別係近底部嘅格（e2e wp-r2 (f) 重現）。新行為——compact 下 `onCellMouseEnter` 直接 return，唔延伸範圍。桌面（≥640px）完全不變（拖曳填充照用）。係 bug 唔係功能：手機冇滑鼠拖曳填充操作（觸控冇 hover），範圍選擇喺手機只會由呢個佈局位移意外觸發；e2e 本身斷言（格喺鍵盤上面）正確，所以改 app 唔改 e2e。唯一副作用：窗口 <640px 嘅桌面滑鼠用家失去拖曳填充。

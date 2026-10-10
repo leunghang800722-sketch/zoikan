@@ -68,7 +68,7 @@ describe("卡 → request（字面對照）", () => {
 
 describe("人手操作 call site 仍然同卡一致（原始碼掃描）", () => {
   it("月結頁「一鍵結算」：apiPost(`/api/month-close/one-click`, { month })", () => {
-    expect(src("src/app/(app)/month-close/page.tsx")).toContain("apiPost<{ run_id: string; status: string }>(`/api/month-close/one-click`, { month })");
+    expect(src("src/app/(app)/month-close/MonthCloseClient.tsx")).toContain("apiPost<{ run_id: string; status: string }>(`/api/month-close/one-click`, { month })");
   });
   it("補齊價目卡掣：apiPost(\"/api/rate-cards/backfill-from-postorder\", { month })", () => {
     expect(src("src/app/(app)/month-close/BackfillButton.tsx")).toContain('apiPost<BackfillRes>("/api/rate-cards/backfill-from-postorder", { month })');
