@@ -16,6 +16,11 @@ export function LogoutButton({ className }: { className?: string } = {}) {
     setLoading(true);
     try {
       await fetch("/api/auth/logout", { method: "POST" });
+      try {
+        window.sessionStorage.removeItem("zoikan-ai-conversation-cache"); // P3-2.8：登出清走側欄對話快取
+      } catch {
+        // 忽略
+      }
       router.push("/login");
       router.refresh();
     } finally {
