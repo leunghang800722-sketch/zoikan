@@ -36,12 +36,7 @@ export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH
 const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
 const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限
 const SL_MIN_CONSECUTIVE = 4; // BA.SL_MIN_CONSECUTIVE
-const SL_RATE = 0.8; // BA.SL_RATE——4/5 疾病津貼
-
-// 老闆 2026-09-23（第十六節）：試用期滿嗰日唔算「已經過咗」——要離完結日
-// 之後（leave_date >= 完結日）先算過。BA.PROBATION_END_DAY_COUNTS_AS_PASSED
-// 現值 False；呢個常數保留做文件對照，compute.ts 主線行為固定跟 False。
-const PROBATION_END_DAY_COUNTS_AS_PASSED = false;
+const SL_RATE = 0.8;
 
 // ---------------------------------------------------------------------------
 // 小工具

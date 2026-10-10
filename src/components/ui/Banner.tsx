@@ -43,9 +43,3 @@ export function Banner({ kind, message, children, action, compact, className, ..
     </div>
   );
 }
-
-/** 表單欄位旁嘅單行錯誤字（取代手寫 `text-red-*`）。 */
-function FieldError({ children, className }: { children: ReactNode; className?: string }) {
-  if (!children) return null;
-  return <p className={`text-zk-sm text-zk-danger ${className ?? ""}`} role="alert">{children}</p>;
-}

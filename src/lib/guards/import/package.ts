@@ -14,8 +14,7 @@ import { HKICL_BANK_CODE_SET } from "@/lib/longterm-payroll/hkicl-bank-codes";
 const FIELD_STATUSES = ["confirmed", "review", "missing"] as const;
 export type FieldStatus = (typeof FIELD_STATUSES)[number];
 
-const PERSON_FIELDS = ["hkid", "nameZh", "nameEn", "dateOfBirth", "sex", "phone", "address"] as const;
-export type PersonField = (typeof PERSON_FIELDS)[number];
+export type PersonField = "hkid" | "nameZh" | "nameEn" | "dateOfBirth" | "sex" | "phone" | "address";
 
 const fieldSchema = z.object({ value: z.string().max(500).nullable(), status: z.enum(FIELD_STATUSES) }).strict();
 

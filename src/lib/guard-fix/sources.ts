@@ -99,12 +99,6 @@ function parseUTeamWorksheet(ws: ExcelJS.Worksheet): UTeamRow[] {
   return rows;
 }
 
-async function loadUTeamList(filePath: string = U_TEAM_XLSX_PATH): Promise<UTeamRow[]> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
-  return parseUTeamWorksheet(wb.worksheets[0]!);
-}
-
 /** `POST /api/guard-fix/staff-list` 用——由上載嘅 xlsx bytes（記憶體）
  * 解析，唔存落磁碟。回傳 rows＋`row_count`（`staff_list_uploads.
  * row_count`／`parse_summary` 用，唔存逐行 PII）。 */

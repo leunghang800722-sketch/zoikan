@@ -55,7 +55,6 @@ function hasSimplifiedOnly(s: string): boolean {
   for (const ch of s) if (SIMPLIFIED_ONLY.has(ch)) return true;
   return false;
 }
-const hasSimplifiedChars = hasSimplifiedOnly;
 
 export interface Normalized {
   /** 比較用 canonical */

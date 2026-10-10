@@ -23,7 +23,7 @@ export const STEP_KEYS = [
 ] as const;
 export type StepKey = (typeof STEP_KEYS)[number];
 
-export const STEP_LABELS: Record<StepKey, string> = {
+const STEP_LABELS: Record<StepKey, string> = {
   precheck: "前置檢查",
   parse_health: "解析健康",
   guard_fix: "保安員修復",

@@ -153,7 +153,6 @@ export interface OwnedByOtherResult {
 /** 題類：v2＝身份欄類；ext＝新欄類（只由 v3 包決定）；bank＝銀行類（只由有銀行段嘅包決定）。 */
 const EXT_ONLY_KINDS: readonly string[] = ["ext_identity_check", "ext_field_conflict", "ext_field_review"];
 const BANK_STRUCT_KINDS: readonly string[] = ["bank_review", "bank_identity_unknown"];
-const EXT_BANK_KINDS: readonly string[] = [...EXT_ONLY_KINDS, "bank_review"];
 const V3_ONLY_KINDS: readonly string[] = [...EXT_ONLY_KINDS, ...BANK_STRUCT_KINDS];
 export type KindClass = "v2" | "ext" | "bank";
 export const kindClass = (kind: string): KindClass => (EXT_ONLY_KINDS.includes(kind) ? "ext" : BANK_STRUCT_KINDS.includes(kind) ? "bank" : "v2");
