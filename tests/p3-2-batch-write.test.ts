@@ -15,6 +15,7 @@ import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixture
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { POST as batchSave } from "@/app/api/shift-records/batch/route";
+import { createSettlementBrokerFallbackResolver, resolveSettlementBrokerFallback } from "@/lib/pricing/settlement-broker-fallback";
 
 const post = (cookie: string, body: unknown) =>
   batchSave(new Request("http://test.local/api/shift-records/batch", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }));
@@ -78,22 +79,22 @@ describe("P3-2.5 shift-records/batch 批量寫入", () => {
     expect(mine.map((a) => a.rowId)).toEqual([fx.shiftRecordA.id, fx.shiftRecordB.id, ...createdIds]);
   });
 
-  it("查詢數唔隨格數增長（40 格 vs 400 格，差 ≤ 6 條）", async () => {
+  it("查詢數唔隨格數／保安員數增長（20 人×2 日 vs 200 人×2 日，差 ≤ 6 條）", async () => {
     const guards = await Promise.all(
-      Array.from({ length: 40 }, (_, i) => prisma.guard.create({ data: { nameZh: `G${i}`, tel: `6000${String(i).padStart(4, "0")}`, createdBy: "t", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id } })),
+      Array.from({ length: 200 }, (_, i) => prisma.guard.create({ data: { nameZh: `G${i}`, tel: `6000${String(i).padStart(4, "0")}`, createdBy: "t", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id } })),
     );
-    const mk = (days: number, gs: typeof guards) =>
-      gs.flatMap((g) => Array.from({ length: days }, (_, d) => ({ guard_id: g.id, shift_type_id: fx.shiftType.id, work_date: `2026-08-${String(10 + d).padStart(2, "0")}`, code: "N" })));
+    const mk = (days: number[], gs: typeof guards) =>
+      gs.flatMap((g) => days.map((d) => ({ guard_id: g.id, shift_type_id: fx.shiftType.id, work_date: `2026-08-${String(d).padStart(2, "0")}`, code: "N" })));
     const run = async (cells: ReturnType<typeof mk>) => {
       const before = queries.length;
       const res = await post(cookie, { site_id: fx.site.id, month: "2026-08", cells });
       expect(res.status).toBe(200);
       return queries.length - before;
     };
-    const small = await run(mk(1, guards.slice(0, 40))); // 40 格
-    const big = await run(mk(10, guards.slice(0, 40)).slice(40)); // 360 格（排除已存在第 10 日）
+    const small = await run(mk([10, 11], guards.slice(0, 20))); // 40 格、20 個 guard
+    const big = await run(mk([12, 13], guards)); // 400 格、200 個 guard
     expect(big - small).toBeLessThanOrEqual(6);
-    expect(big).toBeLessThan(80);
+    expect(big).toBeLessThan(60);
   });
 
   it("payload 有重複格 → 舊逐格路徑，行為不變（既有格兩次 update 都成功）", async () => {
@@ -120,5 +121,35 @@ describe("P3-2.5 shift-records/batch 批量寫入", () => {
     expect(actual).toBeGreaterThan(1);
     expect(warnings.some((w) => w.includes(`已排 ${actual} / 配額 1`))).toBe(true);
     void iso;
+  });
+
+  it("settlement broker fallback：prefetch（DISTINCT ON）同逐個 resolve 逐級一致", async () => {
+    const mkGuard = (name: string, extra: Record<string, unknown> = {}) =>
+      prisma.guard.create({ data: { nameZh: name, tel: `65${Math.floor(Math.random() * 1e6)}`, createdBy: "t", employmentType: "cash_casual", ...extra } as never });
+    const ltBroker = await prisma.broker.create({ data: { code: "LTX", name: "LT", kind: "internal_longterm", isInternal: true, settlementType: "autopay", createdBy: "t" } as never });
+    const otherSite = await prisma.site.create({ data: { canonicalName: "另一個盤", clientName: "x", billingModel: "per_shift", createdBy: "t" } });
+    const otherSt = await prisma.shiftType.create({ data: { siteId: otherSite.id, code: "N", createdBy: "t" } });
+    const gSame = await mkGuard("同盤有記錄");
+    const gOther = await mkGuard("只他盤有記錄");
+    const gDefault = await mkGuard("只有預設雞頭", { defaultBrokerId: fx.brokerB.id });
+    const gLongterm = await mkGuard("長工無預設", { employmentType: "longterm_autopay" });
+    const gNone = await mkGuard("乜都冇");
+    const rec = (guardId: string, siteId: string, shiftTypeId: string, day: number, brokerId: string | null, status: "confirmed" | "cancelled" = "confirmed") =>
+      prisma.shiftRecord.create({ data: { workDate: new Date(Date.UTC(2026, 7, day)), siteId, shiftTypeId, guardId, settlementBrokerId: brokerId, operationalBrokerId: brokerId, recordType: "shift", status, createdBy: "t" } });
+    await rec(gSame.id, fx.site.id, fx.shiftType.id, 3, fx.brokerB.id);
+    await rec(gSame.id, fx.site.id, fx.shiftType.id, 9, fx.brokerA.id); // 較新
+    await rec(gSame.id, fx.site.id, fx.shiftType.id, 20, fx.brokerB.id, "cancelled"); // 作廢，唔計
+    await rec(gSame.id, otherSite.id, otherSt.id, 25, fx.brokerB.id); // 他盤更新，但同盤優先
+    await rec(gOther.id, otherSite.id, otherSt.id, 5, fx.brokerB.id);
+    const all = [gSame, gOther, gDefault, gLongterm, gNone];
+    const inputs = all.map((g) => ({ guardId: g.id, siteId: fx.site.id, employmentType: g.employmentType, defaultBrokerId: g.defaultBrokerId }));
+    const single = await Promise.all(inputs.map((i) => resolveSettlementBrokerFallback(i)));
+    const resolver = createSettlementBrokerFallbackResolver(prisma);
+    await resolver.prefetch(inputs);
+    const before = queries.length;
+    const batched = await Promise.all(inputs.map((i) => resolver(i)));
+    expect(queries.length - before).toBe(0); // prefetch 後唔再查
+    expect(batched).toEqual(single);
+    expect(single).toEqual([fx.brokerA.id, fx.brokerB.id, fx.brokerB.id, ltBroker.id, null]);
   });
 });
