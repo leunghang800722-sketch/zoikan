@@ -7,7 +7,7 @@ import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { BadRequest } from "@/lib/api/errors";
 import { monthStart } from "@/lib/month-lock";
-import { buildPendingSummary } from "@/lib/roster-upload/pending-summary";
+import { buildPendingSummary, PENDING_SUMMARY_DEFAULT_MONTHS } from "@/lib/roster-upload/pending-summary";
 import { buildNameOnlySummary } from "@/lib/roster-upload/name-only";
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])(-\d{2})?$/;
@@ -18,13 +18,20 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const monthParam = url.searchParams.get("month");
     if (monthParam && !MONTH_RE.test(monthParam)) throw BadRequest("month 格式要係 YYYY-MM 或 YYYY-MM-DD");
-    // 驗收修正（Opus 5.5）：冇帶 month＝所有月份（之前預設「今個月」——但
-    // 8 月更表係 9 月先上載對數，首頁卡用今日個月就永遠見唔到上個月未對
-    // 完嘅數）。有帶 month 就淨係嗰個月（舊行為）。
+    // 驗收修正（Opus 5.5）：冇帶 month＝唔限定單一月份（8 月更表係 9 月先上載對數，首頁卡要見到上個月未對完嘅數）；
+    // P3-1.5：預設收窄做「本月＋上月」（`months=2`），要全部月份用 `?months=0`。有帶 month 就淨係嗰個月（舊行為）。
     const month = monthParam ? monthStart(new Date(monthParam)) : null;
+    // P3-1.5（additive）：冇帶 month 時，`?months=N`＝只計「本月往前數 N 個月」（預設 2＝本月＋上月，首頁用法）；
+    // `months=0`＝全部月份（舊行為）。帶 month 時 months 唔生效。
+    const monthsParam = url.searchParams.get("months");
+    let months = PENDING_SUMMARY_DEFAULT_MONTHS;
+    if (monthsParam !== null) {
+      if (!/^\d{1,3}$/.test(monthsParam)) throw BadRequest("months 要係 0–999 嘅整數（0＝全部月份）");
+      months = Number(monthsParam);
+    }
 
     // 核心抽做 lib（Opus 5.5 驗收建議 2026-09-28），perf:snapshot 同用。
     // WP-STAFF-IMPORT B2：加 `name_only`（淨靠姓名配對格數警告；additive，原有欄位不變）。
-    return ok(brandSafeResponse({ ...(await buildPendingSummary(month)), name_only: await buildNameOnlySummary(month) }));
+    return ok(brandSafeResponse({ ...(await buildPendingSummary(month, { months })), name_only: await buildNameOnlySummary(month, { months }) }));
   });
 }
