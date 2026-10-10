@@ -59,7 +59,7 @@ interface UnpricedGroup {
   broker_code: string | null;
   broker_display: string;
   // 應修 1：同 RosterEditor.tsx 一致——`no_settlement`（冇結算單位）唔係
-  // 「未定价」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
+  // 「未定價」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
   category?: "payout_unpriced" | "client_unpriced" | "no_settlement";
   count: number;
 }
@@ -70,8 +70,8 @@ interface Result {
   totals: { shifts: number; revenue?: number; cost?: number; profit?: number; margin_pct?: number | null };
   unpriced_count?: number;
   unpriced_groups?: UnpricedGroup[];
-  // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格喺毛利表
-  // 都會完全消失，要有自己嘅警告，就算未定价 count＝0 都要顯示。
+  // 應修 1：獨立於「未定價」——settlement_broker_id IS NULL 嘅格喺毛利表
+  // 都會完全消失，要有自己嘅警告，就算未定價 count＝0 都要顯示。
   no_settlement_count?: number;
 }
 
@@ -159,10 +159,10 @@ export default function GrossMarginPage() {
       />
 
       <Banner kind="error" message={error} />
-      {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
+      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
       {(data?.unpriced_count ?? 0) > 0 && (
         <Notice variant="warning">
-          <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定价（冇對應價目卡），金額未計入毛利表：</p>
+          <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定價（冇對應價目卡），金額未計入毛利表：</p>
           <ul className="list-disc pl-5 mt-1">
             {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
                 搶眼嘅 Notice，見下面）。 */}
@@ -178,7 +178,7 @@ export default function GrossMarginPage() {
       )}
       {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
           唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
-          單位」行。就算未定价 count＝0 都要顯示。 */}
+          單位」行。就算未定價 count＝0 都要顯示。 */}
       {(data?.no_settlement_count ?? 0) > 0 && (
         <Notice variant="error">
           <p className="font-medium">

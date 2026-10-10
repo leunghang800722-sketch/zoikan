@@ -501,9 +501,19 @@ export default function GuardFixPage() {
     setNotice(`「${label}」已對應去 ${res.data.broker.code}，已經自動重新計劃。`);
   }
 
+  // P3-0.6（B-10）：unmount 即停 polling（唔再打 API／setState）。
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
   async function pollRunUntilDone(runId: string): Promise<RunDetail | null> {
     // 最多 poll 40 分鐘（apply transaction timeout 30 分鐘＋reparse）。
     for (let i = 0; i < 1200; i++) {
+      if (unmountedRef.current) return null;
       const res = await apiGet<RunDetail>(`/api/guard-fix/runs/${runId}`);
       if (res.ok && (res.data.status === "applied" || res.data.status === "failed")) return res.data;
       if (res.ok && res.data.status === "applying" && res.data.apply_allowed) return res.data; // 卡死（>15 分鐘）
@@ -520,6 +530,7 @@ export default function GuardFixPage() {
     setPlan(null);
     const finalRun = await pollRunUntilDone(runId);
     pollingRef.current = null;
+    if (unmountedRef.current) return;
     setApplyingRunId(null);
     const list = await loadRuns();
     if (!finalRun) {

@@ -56,7 +56,7 @@ export interface ReconcileAllResult {
   uploadCount: number;
   /** 驗收修正（任務 3）：開頭自動 reprice 嘅結果（淨係補 null／修 B07
    * 舊價，唔覆蓋人手價，見 `src/lib/pricing/reprice.ts`）——之前呢步要
-   * 老闆喺更表頁自己撳「重新計价」，而家「重新對數全月」自動做埋。 */
+   * 老闆喺更表頁自己撳「重新計價」，而家「重新對數全月」自動做埋。 */
   repriced: { scanned: number; changed: number };
   perUpload: ReconcileAllPerUploadResult[];
   totals: {
@@ -95,7 +95,7 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
 
   // 驗收修正（任務 3）：對數／套用之前，先幫呢個月有上載嘅盤 reprice
   // 一次（補 null／修 B07 舊價，唔覆蓋人手價）——之前要老闆喺更表頁自己
-  // 撳一次「重新計价」（見 docs/api.md「WP-LTSHIFT 驗收修正」正式站
+  // 撳一次「重新計價」（見 docs/api.md「WP-LTSHIFT 驗收修正」正式站
   // 步驟 3），而家「重新對數全月」呢一鍵自動做埋，正式站唔使再撳嗰個掣。
   //
   // WP-PHASE3 Opus 5.5 驗收：一檔多子盤（例：城巴車廠母盤，格全部歸子盤）

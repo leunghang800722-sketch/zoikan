@@ -126,7 +126,7 @@ describe("§4 複製上月卡排除", () => {
 });
 
 describe("§5 自動補價：OT／子盤", () => {
-  it("OT 記錄 snapshot 全 null、之後先補 OT 卡 → repriceMonthForSites 補返（WP-BOSS5 §25.1：卡金額每小時价 × otHours=3）", async () => {
+  it("OT 記錄 snapshot 全 null、之後先補 OT 卡 → repriceMonthForSites 補返（WP-BOSS5 §25.1：卡金額每小時價 × otHours=3）", async () => {
     const ot = await prisma.shiftType.create({ data: { siteId: fx.site.id, code: "OT3", createdBy: "test" } });
     const rec = await prisma.shiftRecord.create({
       data: { workDate: aug(5), siteId: fx.site.id, shiftTypeId: ot.id, guardId: fx.guardA.id, settlementBrokerId: fx.brokerA.id, operationalBrokerId: fx.brokerA.id, recordType: "ot", otHours: 3, createdBy: "test" },
@@ -135,8 +135,8 @@ describe("§5 自動補價：OT／子盤", () => {
     const r = await repriceMonthForSites(aug(1), [fx.site.id], fx.userIds["老闆"], null);
     expect(r.changed).toBeGreaterThanOrEqual(1);
     const after = await prisma.shiftRecord.findUniqueOrThrow({ where: { id: rec.id } });
-    // 卡係「每小時价」100／80，呢條記錄 otHours=3 → snapshot＝300／240（呢
-    // 條記錄嘅金額，唔再係每小時价）。
+    // 卡係「每小時價」100／80，呢條記錄 otHours=3 → snapshot＝300／240（呢
+    // 條記錄嘅金額，唔再係每小時價）。
     expect(Number(after.clientRateSnapshot)).toBe(300);
     expect(Number(after.guardWageSnapshot)).toBe(240);
   });

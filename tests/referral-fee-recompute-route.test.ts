@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
+import { recomputeReferralFees } from "@/lib/reports/referral-fee";
 import { POST as recomputeRoute } from "@/app/api/reports/referral-fee/recompute/route";
 
 function req(cookie: string, body: unknown) {
@@ -56,5 +57,34 @@ describe("POST /api/reports/referral-fee/recompute", () => {
     const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
     const res = await recomputeRoute(req(cookie, {}));
     expect(res.status).toBe(400);
+  });
+
+  // P3-0.1（B-1）：鎖咗嘅月拒絕重算，DB 零改動。
+  async function seedLockedAug() {
+    const b07 = await prisma.broker.create({ data: { code: "TEST-B07L", name: "測試B07", kind: "internal_longterm", settlementType: "salary", createdBy: "t" } });
+    const guard = await prisma.guard.create({ data: { nameZh: "測試長工", employmentType: "longterm_autopay", referralBrokerId: fx.brokerA.id, createdBy: "t" } });
+    await prisma.referralFeeRate.create({ data: { brokerId: fx.brokerA.id, siteId: null, month: new Date("2026-08-01"), feePerShift: 100, createdBy: "t" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-08-05"), siteId: fx.site.id, shiftTypeId: fx.shiftType.id, guardId: guard.id, settlementBrokerId: b07.id, operationalBrokerId: fx.brokerA.id } });
+    await prisma.monthClose.create({ data: { month: new Date("2026-08-01"), lockedAt: new Date(), lockedBy: fx.userIds["老闆"], createdBy: "t" } });
+  }
+  async function snapshot() {
+    return [await prisma.specialItem.count(), await prisma.referralFeeRate.count()];
+  }
+
+  it("已鎖月份：403 month_locked，special_items／費率零改動", async () => {
+    await seedLockedAug();
+    const before = await snapshot();
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    const res = await recomputeRoute(req(cookie, { month: "2026-08" }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("month_locked");
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("lib 直接 call（繞過 route）：已鎖月份拋 month_locked，零改動", async () => {
+    await seedLockedAug();
+    const before = await snapshot();
+    await expect(recomputeReferralFees(new Date("2026-08-01"), fx.userIds["老闆"], null)).rejects.toMatchObject({ code: "month_locked" });
+    expect(await snapshot()).toEqual(before);
   });
 });

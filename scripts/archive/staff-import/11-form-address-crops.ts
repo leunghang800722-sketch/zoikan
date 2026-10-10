@@ -4,12 +4,12 @@
 // 輸出（淨路徑／docId，無地址）：out/form-address-crops.json、out/form-address-second-read-todo.json、out/form-address-nolabel.json
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { DocExtract } from './lib/aggregate';
-import type { DocMeta } from './lib/doc-index';
-import { locateFormAddressBox, type Variant } from './lib/form-address-crop';
-import type { OcrPage } from './lib/ocr';
-import { toPixels } from './lib/phone-crop';
-import { OUT, renderPage, run } from './lib/render';
+import type { DocExtract } from '../../staff-import/lib/aggregate';
+import type { DocMeta } from '../../staff-import/lib/doc-index';
+import { locateFormAddressBox, type Variant } from '../../staff-import/lib/form-address-crop';
+import type { OcrPage } from '../../staff-import/lib/ocr';
+import { toPixels } from '../../staff-import/lib/phone-crop';
+import { OUT, renderPage, run } from '../../staff-import/lib/render';
 
 async function main() {
   const index = new Map((JSON.parse(await fs.readFile(path.join(OUT, 'index.json'), 'utf8')) as DocMeta[]).map((m) => [m.docId, m]));

@@ -78,7 +78,7 @@ interface UnpricedGroup {
   broker_code: string | null;
   broker_display: string;
   // 應修 1：同 RosterEditor.tsx 一致——`no_settlement`（冇結算單位）唔係
-  // 「未定价」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
+  // 「未定價」，唔可以喺同一個清單重複顯示，要獨立 filter 出嚟。
   category?: "payout_unpriced" | "client_unpriced" | "no_settlement";
   count: number;
 }
@@ -86,10 +86,10 @@ interface GrossMarginTotalsResult {
   totals: { revenue?: number; profit?: number; margin_pct?: number | null };
   // WP-PRICE §3：呢個 route 已經 additive 加咗呢兩個欄（見
   // src/app/api/reports/gross-margin/route.ts）——月結工作台借嚟顯示
-  // 「N 更未定价」Notice，唔使另外打 API。
+  // 「N 更未定價」Notice，唔使另外打 API。
   unpriced_count?: number;
   unpriced_groups?: UnpricedGroup[];
-  // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格。
+  // 應修 1：獨立於「未定價」——settlement_broker_id IS NULL 嘅格。
   no_settlement_count?: number;
 }
 
@@ -203,12 +203,12 @@ export default function MonthlyCloseWorkbenchPage() {
   // 加返出嚟嗰個數——兩份報表 scope 唔同，見 gross-margin.ts 檔頭註解），
   // 呢度另外攞 `/api/reports/gross-margin?month=` 嘅 totals。
   const [marginTotals, setMarginTotals] = useState<GrossMarginTotalsResult["totals"] | null>(null);
-  // WP-PRICE §3：頁頂「N 更未定价，金額未計入」——同 marginTotals 一齊由
+  // WP-PRICE §3：頁頂「N 更未定價，金額未計入」——同 marginTotals 一齊由
   // gross-margin API 攞（additive 欄，唔使多打一次 API）。
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
-  // 應修 1：獨立於「未定价」——settlement_broker_id IS NULL 嘅格，就算
-  // 未定价 count＝0 都要顯示。
+  // 應修 1：獨立於「未定價」——settlement_broker_id IS NULL 嘅格，就算
+  // 未定價 count＝0 都要顯示。
   const [noSettlementCount, setNoSettlementCount] = useState(0);
   // B1-6（規則 10，§14）：月結鎖定前檢查——邊啲盤呢個月有出更但未上載
   // 更表／未對數完成，鎖定會 400。呢度入頁／Generate 就查一次，等用戶
@@ -404,10 +404,10 @@ export default function MonthlyCloseWorkbenchPage() {
           )}
         </div>
       )}
-      {/* WP-PRICE §3：頁頂「N 更未定价，金額未計入」——逐組列表。 */}
+      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
       {unpricedCount > 0 && (
         <Notice variant="warning">
-          <p className="font-medium">呢個月有 {unpricedCount} 更未定价（冇對應價目卡），金額未計入月結總表：</p>
+          <p className="font-medium">呢個月有 {unpricedCount} 更未定價（冇對應價目卡），金額未計入月結總表：</p>
           <ul className="list-disc pl-5 mt-1">
             {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
                 搶眼嘅 Notice，見下面）。 */}
@@ -423,7 +423,7 @@ export default function MonthlyCloseWorkbenchPage() {
       )}
       {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
           唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
-          單位」行。就算未定价 count＝0 都要顯示。 */}
+          單位」行。就算未定價 count＝0 都要顯示。 */}
       {noSettlementCount > 0 && (
         <Notice variant="error">
           <p className="font-medium">

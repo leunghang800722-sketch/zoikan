@@ -20,6 +20,7 @@ import ShortfallDashboard from "./ShortfallDashboard";
 import BrokerDashboard from "./BrokerDashboard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getNavLinks, getViewGrants } from "@/lib/rbac/nav";
+import { shortfallCardVisibility } from "@/lib/ui/shortfall-cards";
 import { TriageHomeNotice } from "@/components/TriageHomeNotice";
 
 // 純顯示層——淨係俾呢個快速連結卡加一行副題文字，唔影響邊條連結顯示
@@ -54,10 +55,11 @@ export default async function DashboardPage() {
   const isBroker = session.baseRole === "雞頭";
 
   if (canViewShortfall) {
+    const cards = shortfallCardVisibility(await getViewGrants(session));
     return (
       <div className="flex flex-col gap-4">
         <TriageHomeNotice session={session} />
-        <ShortfallDashboard variant="home" userName={session.name} roleLabel={session.roleName} />
+        <ShortfallDashboard variant="home" userName={session.name} roleLabel={session.roleName} showApprovals={cards.showApprovals} showMargin={cards.showMargin} />
       </div>
     );
   }

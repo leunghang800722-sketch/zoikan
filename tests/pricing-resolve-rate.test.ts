@@ -1,4 +1,4 @@
-// WP-PRICE：計价 resolver 單元測試——淨係測純函數
+// WP-PRICE：計價 resolver 單元測試——淨係測純函數
 // `resolveShiftPricingFromCards()`／`isUnpricedShift()`（唔碰 DB，用自建
 // fixture 卡），涵蓋優先次序、日期邊界、拆分／合計口徑、external／
 // longterm／leave／ot、冇卡。
@@ -130,7 +130,7 @@ describe("resolveShiftPricingFromCards：日期邊界", () => {
   });
 });
 
-describe("resolveShiftPricingFromCards：出街价拆分／合計口徑", () => {
+describe("resolveShiftPricingFromCards：出街價拆分／合計口徑", () => {
   it("guard_wage 且 broker_fee 都非 null → 照拆", () => {
     const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800, guardWage: 690, brokerFee: 60 })];
     const result = resolveShiftPricingFromCards(cards, baseInput());
@@ -152,7 +152,7 @@ describe("resolveShiftPricingFromCards：出街价拆分／合計口徑", () => 
     expect(result.brokerFee).toBeNull();
   });
 
-  it("收客价卡同出街价卡可以係唔同嘅兩張（各自揀最具體嗰張）", () => {
+  it("收客價卡同出街價卡可以係唔同嘅兩張（各自揀最具體嗰張）", () => {
     const cards: RateCardLite[] = [
       card({ id: "client-only", clientRate: 900 }),
       card({ id: "payout-only", guardWage: 700, brokerFee: 50 }),
@@ -166,7 +166,7 @@ describe("resolveShiftPricingFromCards：出街价拆分／合計口徑", () => 
 });
 
 describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇卡", () => {
-  it("external（brokerKind=external）：收客价／出街价都 null，unpriced=false，reason=external（gate:pricing 對 7 月 286 條 external 記錄驗證：client_rate_snapshot 100% null，公司唔開單俾客戶自己嘅人）", () => {
+  it("external（brokerKind=external）：收客價／出街價都 null，unpriced=false，reason=external（gate:pricing 對 7 月 286 條 external 記錄驗證：client_rate_snapshot 100% null，公司唔開單俾客戶自己嘅人）", () => {
     const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800, guardWage: 700, brokerFee: 50 })];
     const result = resolveShiftPricingFromCards(cards, baseInput({ brokerKind: "external", isExternal: true }));
     expect(result.clientRate).toBeNull();
@@ -176,7 +176,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     expect(result.reason).toBe("external");
   });
 
-  it("is_external=true 就算 brokerKind 唔係 external 都當 external 處理（收客价都 null）", () => {
+  it("is_external=true 就算 brokerKind 唔係 external 都當 external 處理（收客價都 null）", () => {
     const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800, guardWage: 700, brokerFee: 50 })];
     const result = resolveShiftPricingFromCards(cards, baseInput({ brokerKind: "broker", isExternal: true }));
     expect(result.clientRate).toBeNull();
@@ -184,7 +184,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     expect(result.reason).toBe("external");
   });
 
-  it("internal_longterm、冇任何出街价卡：收客价照計，出街价 null（月薪 autopay），unpriced=false，reason=longterm", () => {
+  it("internal_longterm、冇任何出街價卡：收客價照計，出街價 null（月薪 autopay），unpriced=false，reason=longterm", () => {
     const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800 })];
     const result = resolveShiftPricingFromCards(cards, baseInput({ brokerKind: "internal_longterm" }));
     expect(result.clientRate).toBe(800);
@@ -217,7 +217,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     expect(jul.brokerFee).toBe(30);
   });
 
-  it("冇结算雞頭（settlementBrokerId=null）：只計收客价，出街 unpriced=true，reason=no_broker", () => {
+  it("冇结算雞頭（settlementBrokerId=null）：只計收客價，出街 unpriced=true，reason=no_broker", () => {
     const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800, guardWage: 700, brokerFee: 50 })];
     const result = resolveShiftPricingFromCards(cards, baseInput({ settlementBrokerId: null, brokerKind: null }));
     expect(result.clientRate).toBe(800);
@@ -232,7 +232,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     expect(result).toEqual({ clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: false, clientCardFound: false, payoutCardFound: false });
   });
 
-  it("ot：冇卡就全 null（WP-MIXED-BILLING 之前嘅口徑，冇卡冇 snapshot＝未定价 OT，見 unpriced.ts）", () => {
+  it("ot：冇卡就全 null（WP-MIXED-BILLING 之前嘅口徑，冇卡冇 snapshot＝未定價 OT，見 unpriced.ts）", () => {
     const result = resolveShiftPricingFromCards([], baseInput({ recordType: "ot" }));
     expect(result).toEqual({ clientRate: null, guardWage: null, brokerFee: null, source: {}, unpriced: true, clientCardFound: false, payoutCardFound: false });
   });
@@ -249,7 +249,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     expect(result.brokerFee).toBeNull();
   });
 
-  it("WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，OT 记录行同 shift 一樣嘅卡揀邏輯）：OT 更種有卡就照用，1 個鐘嘅 OT 同「每條記錄」睇落一樣（WP-BOSS5 §25.1：卡金額每小時价 × otHours=1）", () => {
+  it("WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，OT 记录行同 shift 一樣嘅卡揀邏輯）：OT 更種有卡就照用，1 個鐘嘅 OT 同「每條記錄」睇落一樣（WP-BOSS5 §25.1：卡金額每小時價 × otHours=1）", () => {
     const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
     const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", otHours: 1 }));
     expect(result).toEqual({
@@ -263,7 +263,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
     });
   });
 
-  describe("WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時价，揀到卡之後乘 otHours——淨係 workDate>=2026-08-01 生效", () => {
+  describe("WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）：OT 卡金額＝每小時價，揀到卡之後乘 otHours——淨係 workDate>=2026-08-01 生效", () => {
     it("2.5 個鐘 OT：client／guardWage／brokerFee 各乘 2.5（round2）", () => {
       const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 84.85, guardWage: 73, brokerFee: 10.33 })];
       const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", otHours: 2.5 }));
@@ -273,7 +273,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
       expect(result.unpriced).toBe(false);
     });
 
-    it("otHours 冇傳（undefined）：揾到卡都當未定价 OT，三欄 null，unpriced=true", () => {
+    it("otHours 冇傳（undefined）：揾到卡都當未定價 OT，三欄 null，unpriced=true", () => {
       const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
       const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot" }));
       expect(result.clientRate).toBeNull();
@@ -283,7 +283,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
       expect(result.reason).toBe("ot_hours_missing");
     });
 
-    it("otHours=0：一樣當未定价 OT，唔可以當「0 個鐘＝0 蚊」", () => {
+    it("otHours=0：一樣當未定價 OT，唔可以當「0 個鐘＝0 蚊」", () => {
       const cards: RateCardLite[] = [card({ id: "c1", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 800, guardWage: 700, brokerFee: 50 })];
       const result = resolveShiftPricingFromCards(cards, baseInput({ recordType: "ot", otHours: 0 }));
       expect(result.clientRate).toBeNull();
@@ -325,7 +325,7 @@ describe("resolveShiftPricingFromCards：external／longterm／leave／ot／冇�
 });
 
 describe("resolveShiftPricingFromCards：M1 billing_model 過濾（月費／admin_fee／special 卡唔可以做逐更 snapshot）", () => {
-  it("更別級 special 卡（例：Event Guard $11,700）唔可以當逐更收客价——冇 per_shift 卡就 unpriced", () => {
+  it("更別級 special 卡（例：Event Guard $11,700）唔可以當逐更收客價——冇 per_shift 卡就 unpriced", () => {
     const cards: RateCardLite[] = [
       card({ id: "event-guard-special", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 11700, billingModel: "special" }),
     ];
@@ -334,7 +334,7 @@ describe("resolveShiftPricingFromCards：M1 billing_model 過濾（月費／admi
     expect(result.source.clientCardId).toBeUndefined();
   });
 
-  it("site 級 monthly_fixed/admin_fee flat 卡（三個 FK 皆空）唔可以當逐更收客价", () => {
+  it("site 級 monthly_fixed/admin_fee flat 卡（三個 FK 皆空）唔可以當逐更收客價", () => {
     const cards: RateCardLite[] = [
       card({ id: "monthly-flat", clientRate: 19804, billingModel: "monthly_fixed" }),
       card({ id: "admin-flat", clientRate: 25200, billingModel: "admin_fee" }),
@@ -379,14 +379,14 @@ describe("resolveShiftPricingFromCards：M1 billing_model 過濾（月費／admi
   });
 });
 
-describe("resolveShiftPricingFromCards：收客价 broker-agnostic fallback（gate:pricing 對 7 月數據驗證）", () => {
-  it("冇夾到結算雞頭嘅收客价卡——擴大搜尋，唔理張卡掛咗邊個雞頭（例：啟航1331 D 更收客价卡掛咗喺 K 雞頭，但 B07 長工做呢個更別都係收返同一個價）", () => {
+describe("resolveShiftPricingFromCards：收客價 broker-agnostic fallback（gate:pricing 對 7 月數據驗證）", () => {
+  it("冇夾到結算雞頭嘅收客價卡——擴大搜尋，唔理張卡掛咗邊個雞頭（例：啟航1331 D 更收客價卡掛咗喺 K 雞頭，但 B07 長工做呢個更別都係收返同一個價）", () => {
     const cards: RateCardLite[] = [
       card({ id: "K-card", shiftTypeId: SITE_SHIFT_TYPE, brokerId: "broker-K-other", clientRate: 1200, guardWage: 820, brokerFee: 60 }),
     ];
     const result = resolveShiftPricingFromCards(cards, baseInput({ settlementBrokerId: "broker-B07", brokerKind: "internal_longterm" }));
-    expect(result.clientRate).toBe(1200); // 收客价：擴大搜尋揾到
-    expect(result.guardWage).toBeNull(); // 出街价：longterm 本身唔计
+    expect(result.clientRate).toBe(1200); // 收客價：擴大搜尋揾到
+    expect(result.guardWage).toBeNull(); // 出街價：longterm 本身唔计
   });
 
   it("夾到結算雞頭嘅卡就優先用（唔使擴大搜尋）", () => {
@@ -428,7 +428,7 @@ describe("resolveShiftPricingFromCards：code=PR（糧明細生成 reconciliatio
   });
 });
 
-describe("resolveShiftPricingFromCards：S2 出街价取值規則", () => {
+describe("resolveShiftPricingFromCards：S2 出街價取值規則", () => {
   it("guard_wage 有值、broker_fee null（就算 payout_rate 有值）→ fee=null（gate:pricing 推翻咗『payout_rate−guard_wage』反推：guard 专属卡好多時 payout_rate 純粹等於 guard_wage，冇拆開嘅歷史遺留，逐差得出 0 同 7 月實際 broker_fee_snapshot=null 唔一致）", () => {
     const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800, guardWage: 690, payoutRate: 750 })];
     const result = resolveShiftPricingFromCards(cards, baseInput());
@@ -455,7 +455,7 @@ describe("isUnpricedShift", () => {
     expect(isUnpricedShift({ recordType: "shift", status: "confirmed", guardWageSnapshot: null, brokerFeeSnapshot: 50 }, "broker")).toBe(false);
   });
 
-  it("cancelled → false（作廢咗唔算未定价）", () => {
+  it("cancelled → false（作廢咗唔算未定價）", () => {
     expect(isUnpricedShift({ recordType: "shift", status: "cancelled", guardWageSnapshot: null, brokerFeeSnapshot: null }, "broker")).toBe(false);
   });
 
@@ -469,12 +469,12 @@ describe("isUnpricedShift", () => {
     expect(isUnpricedShift({ recordType: "shift", status: "confirmed", guardWageSnapshot: null, brokerFeeSnapshot: null }, "external")).toBe(false);
   });
 
-  it("internal_cash／null broker kind，wage/fee 皆 null → true（真係缺价）", () => {
+  it("internal_cash／null broker kind，wage/fee 皆 null → true（真係缺價）", () => {
     expect(isUnpricedShift({ recordType: "shift", status: "confirmed", guardWageSnapshot: null, brokerFeeSnapshot: null }, "internal_cash")).toBe(true);
     expect(isUnpricedShift({ recordType: "shift", status: "confirmed", guardWageSnapshot: null, brokerFeeSnapshot: null }, null)).toBe(true);
   });
 
-  it("S3：wage=0 且 fee=null → true（未定价，唔止兩者皆 null 先算）", () => {
+  it("S3：wage=0 且 fee=null → true（未定價，唔止兩者皆 null 先算）", () => {
     expect(isUnpricedShift({ recordType: "shift", status: "confirmed", guardWageSnapshot: 0, brokerFeeSnapshot: null }, "broker")).toBe(true);
   });
 
@@ -483,7 +483,7 @@ describe("isUnpricedShift", () => {
   });
 });
 
-describe("isClientUnpricedShift（S3：收客价未定，淨係逐更盤先算；應修：改用 shift_type.billing_group）", () => {
+describe("isClientUnpricedShift（S3：收客價未定，淨係逐更盤先算；應修：改用 shift_type.billing_group）", () => {
   it("per_shift 更別，client_rate_snapshot null → true", () => {
     expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift")).toBe(true);
   });
@@ -523,7 +523,7 @@ describe("isClientUnpricedShift（S3：收客价未定，淨係逐更盤先算�
       ).toBe(true);
     });
 
-    it("Opus 5.5 驗收：8 月起，月費盤上「已包喺月費」嘅 per_shift 更種（例：IFC D/N，includedInSiteFlatFee=true）client_rate null → false（唔標收客价未定）", () => {
+    it("Opus 5.5 驗收：8 月起，月費盤上「已包喺月費」嘅 per_shift 更種（例：IFC D/N，includedInSiteFlatFee=true）client_rate null → false（唔標收客價未定）", () => {
       expect(
         isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift", { siteBillingModel: "monthly_fixed", month: AUG, includedInSiteFlatFee: true }),
       ).toBe(false);
@@ -539,7 +539,7 @@ describe("isClientUnpricedShift（S3：收客价未定，淨係逐更盤先算�
       ).toBe(false);
     });
 
-    it("8 月起：「逐更另收」per_shift 更種有 client_rate → false（有卡就唔算未定价）", () => {
+    it("8 月起：「逐更另收」per_shift 更種有 client_rate → false（有卡就唔算未定價）", () => {
       expect(
         isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: 840 }, "per_shift", { siteBillingModel: "monthly_fixed", month: AUG, includedInSiteFlatFee: false }),
       ).toBe(false);
@@ -557,13 +557,13 @@ describe("isClientUnpricedShift（S3：收客价未定，淨係逐更盤先算�
     expect(isClientUnpricedShift({ recordType: "leave", status: "confirmed", clientRateSnapshot: null }, "per_shift")).toBe(false);
   });
 
-  it("應修：B10（external）——就算係 per_shift 更別，is_external=true 都唔算收客价未定 → false", () => {
+  it("應修：B10（external）——就算係 per_shift 更別，is_external=true 都唔算收客價未定 → false", () => {
     expect(isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null, isExternal: true }, "per_shift")).toBe(false);
   });
 });
 
 describe("應修（Opus 第二輪驗收）：ResolvedShiftPricing.clientCardFound／payoutCardFound", () => {
-  it("正常路徑揾到收客价卡＋出街价卡：兩個 flag 皆 true", () => {
+  it("正常路徑揾到收客價卡＋出街價卡：兩個 flag 皆 true", () => {
     const cards: RateCardLite[] = [card({ id: "c1", clientRate: 800, guardWage: 700, brokerFee: 50 })];
     const result = resolveShiftPricingFromCards(cards, baseInput());
     expect(result.clientCardFound).toBe(true);
@@ -593,7 +593,7 @@ describe("應修（Opus 第二輪驗收）：ResolvedShiftPricing.clientCardFoun
     expect(result.clientCardFound).toBe(false);
   });
 
-  it("monthly_ic 更別就算有張直接掛咗呢個 shift_type_id 嘅卡，一樣唔會計收客价（billing_group 淨係更別層面，同 shift_type_id 夾唔夾係兩回事）", () => {
+  it("monthly_ic 更別就算有張直接掛咗呢個 shift_type_id 嘅卡，一樣唔會計收客價（billing_group 淨係更別層面，同 shift_type_id 夾唔夾係兩回事）", () => {
     const cards: RateCardLite[] = [card({ id: "exact", shiftTypeId: SITE_SHIFT_TYPE, clientRate: 930 })];
     const result = resolveShiftPricingFromCards(cards, baseInput({ shiftTypeBillingGroup: "monthly_ic" }));
     expect(result.clientRate).toBeNull();
@@ -609,7 +609,7 @@ describe("應修（Opus 第二輪驗收）：ResolvedShiftPricing.clientCardFoun
 // WP-UPLOAD-AUTOFIX 個案 2（P2-版面重設計計劃.md §17.11）：控制室月薪崗
 // 保安員專屬卡——client_rate=0、guard_wage=800，冧 guard 专属+同 shift_type
 // 一定贏 site 级 840 卡；client_rate=0 唔准被 isClientUnpricedShift() 誤標
-// 「未定价」（0 係有效值，唔係 null）。
+// 「未定價」（0 係有效值，唔係 null）。
 describe("resolveShiftPricingFromCards：WP-UPLOAD-AUTOFIX 個案 2（月薪崗保安員 client_rate=0 專屬卡）", () => {
   it("guard 专属＋client_rate=0 卡贏 site 级 840 卡——呢位保安員嘅更 client=0（已包喺月費）、guard_wage=800", () => {
     const cards: RateCardLite[] = [
@@ -631,12 +631,12 @@ describe("resolveShiftPricingFromCards：WP-UPLOAD-AUTOFIX 個案 2（月薪崗�
     expect(result.guardWage).toBe(800);
   });
 
-  it("isClientUnpricedShift()：clientRateSnapshot=0 唔算未定价（0 係有效值，唔係 null）", () => {
+  it("isClientUnpricedShift()：clientRateSnapshot=0 唔算未定價（0 係有效值，唔係 null）", () => {
     const unpriced = isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: 0 }, "per_shift");
     expect(unpriced).toBe(false);
   });
 
-  it("對比：clientRateSnapshot=null 先算未定价", () => {
+  it("對比：clientRateSnapshot=null 先算未定價", () => {
     const unpriced = isClientUnpricedShift({ recordType: "shift", status: "confirmed", clientRateSnapshot: null }, "per_shift");
     expect(unpriced).toBe(true);
   });

@@ -110,7 +110,7 @@ test("C：盤管理頁——LINK（TKO Gateway 厚A/B/C）列表 pill「客戶�
   await expect(checkbox).toBeChecked();
 });
 
-test("C：更表編輯器——LINK 盤頂部 Notice 顯示，唔計「未定价」（就算 PR 更冇 snapshot）", async ({ page }) => {
+test("C：更表編輯器——LINK 盤頂部 Notice 顯示，唔計「未定價」（就算 PR 更冇 snapshot）", async ({ page }) => {
   const siteId = await findSiteIdByName("TKO Gateway 厚A");
 
   // 月結鎖定與否都要見到呢個 Notice——用已鎖定嘅 2026-07（有真實 PR 記錄）。
@@ -118,9 +118,9 @@ test("C：更表編輯器——LINK 盤頂部 Notice 顯示，唔計「未定价
   await page.goto(`/roster/${siteId}/2026-07`);
   await expect(page.getByText("已鎖定")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("呢個盤嘅保安員由客戶直接出糧，我哋只收每月服務費")).toBeVisible();
-  await expect(page.getByText(/未定价|未定價/)).toHaveCount(0);
+  await expect(page.getByText(/未定價|未定價/)).toHaveCount(0);
 
-  // API 層面雙重確認：呢個盤呢個月「未定价」統計係 0（就算 PR 更 snapshot 全 null）。
+  // API 層面雙重確認：呢個盤呢個月「未定價」統計係 0（就算 PR 更 snapshot 全 null）。
   const unpricedRes = await page.request.get(`/api/shift-records/unpriced?month=2026-07&site_id=${siteId}`);
   const unpricedBody = await unpricedRes.json();
   expect(unpricedBody.count).toBe(0);

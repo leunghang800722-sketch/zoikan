@@ -103,7 +103,7 @@ export function ReportSection({ run, report, busy, locked, groups, onUndo, onOpe
           <span>本月 0 位長工有糧計入。</span>
         )}
         {report.longterm_payroll_note && <span className="min-w-0 text-zk-faint">{humanize(report.longterm_payroll_note)}</span>}
-        <Link href="/longterm-payroll" className="ml-auto whitespace-nowrap text-zk-primary hover:underline">
+        <Link href="/reports/longterm-payroll" className="ml-auto whitespace-nowrap text-zk-primary hover:underline">
           去長工糧 ›
         </Link>
       </div>

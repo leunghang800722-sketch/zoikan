@@ -166,7 +166,7 @@ export async function recomputeSettlement(uploadId: string, actorUserId: string 
         workDate: r.workDate,
         isExternal: r.isExternal,
         recordType: r.recordType === "ot" ? "ot" : "shift",
-        // WP-BOSS5 §25.1：OT 卡＝每小時价，要傳呢條記錄本身嘅 OT 時數。
+        // WP-BOSS5 §25.1：OT 卡＝每小時價，要傳呢條記錄本身嘅 OT 時數。
         otHours: numOrNull(r.otHours),
       });
       pricing = { clientRateSnapshot: resolved.clientRate, guardWageSnapshot: resolved.guardWage, brokerFeeSnapshot: resolved.brokerFee, sources: resolved.source };

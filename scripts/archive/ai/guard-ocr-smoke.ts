@@ -1,14 +1,14 @@
 // WP-GUARD-OCR §29：真 API 冒煙——**只准用合成證件圖**（scripts/ai/fixtures/make-synthetic-docs.py 生成，內容全部虛構）。
-// 用法：npx tsx scripts/ai/guard-ocr-smoke.ts <synthDir>
+// 用法：npx tsx scripts/archive/ai/guard-ocr-smoke.ts <synthDir>
 // 會真係扣費（每份文件 2 次視覺呼叫）；冇 DEEPSEEK_API_KEY 即中止。絕對唔准指去 data/ 或者任何真實證件。
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DeepSeekVisionClient, type VisionClient, type VisionRequest, type VisionResponse } from "../../src/lib/guards/ocr/vision-client";
-import { readDocument } from "../../src/lib/guards/ocr/read";
-import { normalizeField } from "../../src/lib/guards/ocr/normalize";
-import { parseModelJson } from "../../src/lib/guards/ocr/read";
-import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "../../src/lib/guards/ocr/config";
+import { DeepSeekVisionClient, type VisionClient, type VisionRequest, type VisionResponse } from "../../../src/lib/guards/ocr/vision-client";
+import { readDocument } from "../../../src/lib/guards/ocr/read";
+import { normalizeField } from "../../../src/lib/guards/ocr/normalize";
+import { parseModelJson } from "../../../src/lib/guards/ocr/read";
+import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "../../../src/lib/guards/ocr/config";
 
 const dir = resolve(process.argv[2] ?? "");
 if (!process.argv[2] || /\/data(\/|$)/.test(dir)) {

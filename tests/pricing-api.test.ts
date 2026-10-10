@@ -16,7 +16,7 @@ function req(url: string, cookie: string, method: string, body?: unknown) {
   return new Request(url, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
 }
 
-describe("WP-PRICE：更表批量儲存自動計价", () => {
+describe("WP-PRICE：更表批量儲存自動計價", () => {
   let fx: Wp2Fixture;
   let ownerCookie: string;
 
@@ -254,7 +254,7 @@ describe("WP-PRICE：GET /api/shift-records/unpriced", () => {
     fx = await seedWp2Fixture();
     ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
     brokerACookie = await sessionCookieForUser(fx.userIds["雞頭"]); // 掛 brokerA
-    // shiftRecordA/B 本身已經有齊 snapshot（fixture 種嘅），呢度補一條冇卡嘅未定价記錄（brokerA）。
+    // shiftRecordA/B 本身已經有齊 snapshot（fixture 種嘅），呢度補一條冇卡嘅未定價記錄（brokerA）。
     await prisma.rateCard.updateMany({ where: { siteId: fx.site.id }, data: { voidedAt: new Date() } });
     await prisma.shiftRecord.create({
       data: {
@@ -282,14 +282,14 @@ describe("WP-PRICE：GET /api/shift-records/unpriced", () => {
     });
   });
 
-  it("老闆見到全部未定价（brokerA + brokerB）", async () => {
+  it("老闆見到全部未定價（brokerA + brokerB）", async () => {
     const res = await unpricedGet(req(`http://test.local/api/shift-records/unpriced?month=2026-08`, ownerCookie, "GET"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.count).toBe(2);
   });
 
-  it("雞頭（brokerA）淨係見到自己嘅未定价（隔離）", async () => {
+  it("雞頭（brokerA）淨係見到自己嘅未定價（隔離）", async () => {
     const brokerARow = await prisma.broker.findUniqueOrThrow({ where: { id: fx.brokerA.id } });
     const res = await unpricedGet(req(`http://test.local/api/shift-records/unpriced?month=2026-08`, brokerACookie, "GET"));
     expect(res.status).toBe(200);
@@ -343,7 +343,7 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     expect(after.clientRateSnapshot?.toString()).toBe("999");
   });
 
-  it("老闆重新計价 2026-08（dry_run:false）：改咗 rate_card 之後，重算完 snapshot 追返新卡值", async () => {
+  it("老闆重新計價 2026-08（dry_run:false）：改咗 rate_card 之後，重算完 snapshot 追返新卡值", async () => {
     // shiftRecordA 本身 snapshot 係 999/700/50（fixture 種嘅舊值）——改
     // 咗 rateCardBrokerA 嘅價之後，冇重計之前 snapshot 唔會自動變。
     await prisma.rateCard.update({ where: { id: fx.rateCardBrokerA.id }, data: { clientRate: 1200, guardWage: 900, brokerFee: 80 } });
@@ -360,7 +360,7 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     expect(after.brokerFeeSnapshot?.toString()).toBe("80");
   });
 
-  it("重新計价之後（dry_run:false）、搵唔到卡但本身有值嘅記錄——kept_unresolved 計及，唔計入 unpriced（必修 2：口徑統一用 buildUnpricedSummary()）", async () => {
+  it("重新計價之後（dry_run:false）、搵唔到卡但本身有值嘅記錄——kept_unresolved 計及，唔計入 unpriced（必修 2：口徑統一用 buildUnpricedSummary()）", async () => {
     await prisma.rateCard.updateMany({ where: { siteId: fx.site.id }, data: { voidedAt: new Date() } });
     const res = await reprice(req("http://test.local/api/shift-records/reprice", ownerCookie, "POST", { month: "2026-08", dry_run: false }));
     const body = await res.json();
@@ -368,8 +368,8 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     // `buildUnpricedSummary()`（同 GET /api/shift-records/unpriced 一致
     // 口徑）——shiftRecordA/B 原本 999/700/50（非 null），卡晒 void 之後
     // resolver 搵唔到卡，M3「保留原值」令 snapshot keep 咗 999/700/50，
-    // 真係未定价判斷（isUnpricedShift）睇嘅係*最終* snapshot 狀態，唔係
-    // 「呢次 reprice 有冇搵到卡」——非 null 嘅 snapshot 唔算未定价，所以
+    // 真係未定價判斷（isUnpricedShift）睇嘅係*最終* snapshot 狀態，唔係
+    // 「呢次 reprice 有冇搵到卡」——非 null 嘅 snapshot 唔算未定價，所以
     // `unpriced` 應該係 0，`kept_unresolved` 先反映「呢兩條搵唔到卡、
     // 保留返原值」。
     expect(body.kept_unresolved).toBeGreaterThanOrEqual(2);
@@ -380,7 +380,7 @@ describe("WP-PRICE：POST /api/shift-records/reprice", () => {
     expect(after.brokerFeeSnapshot?.toString()).toBe("50");
   });
 
-  it("M3：真係本身就未定价（snapshot 本身就 null）嘅記錄，搵唔到卡繼續係 null（唔係 kept 出嚟嘅假象）", async () => {
+  it("M3：真係本身就未定價（snapshot 本身就 null）嘅記錄，搵唔到卡繼續係 null（唔係 kept 出嚟嘅假象）", async () => {
     await prisma.rateCard.updateMany({ where: { siteId: fx.site.id }, data: { voidedAt: new Date() } });
     const freshGuard = await prisma.guard.create({ data: { nameZh: "測試新人", employmentType: "cash_casual", createdBy: "test" } });
     const brandNew = await prisma.shiftRecord.create({

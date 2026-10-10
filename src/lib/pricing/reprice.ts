@@ -1,5 +1,5 @@
-// 驗收修正（2026-09-26）：抽出嚟嘅「單條 shift_record 重新計价」核心
-// 決策規則——`POST /api/shift-records/reprice`（更表頁「重新計价」掣，
+// 驗收修正（2026-09-26）：抽出嚟嘅「單條 shift_record 重新計價」核心
+// 決策規則——`POST /api/shift-records/reprice`（更表頁「重新計價」掣，
 // 老闆人手撳，`mode:"full"`）同 `runReconcileAllForMonth()`（「重新對數
 // 全月」開頭自動行一次，`mode:"fill_and_fix_b07"`，見
 // src/lib/roster-upload/reconcile-all.ts）共用**同一個**純函數
@@ -10,18 +10,18 @@
 // 兩種模式：
 //   full —— 更表頁畀老闆人手撳，dry-run 預覽之後先確認寫入（見
 //     `src/app/api/shift-records/reprice/route.ts`）：resolver 揾到就
-//     覆蓋（包括覆蓋緊已經有值嘅收客/出街价，用嚟追返卡啱啱補／改咗
-//     嘅新价）；揾唔到就保留原值（`keptUnresolved`）。internal_longterm
-//     （B07）／external 嘅出街价（wage／fee）永遠唔喺呢個模式郁（呢兩類
+//     覆蓋（包括覆蓋緊已經有值嘅收客/出街價，用嚟追返卡啱啱補／改咗
+//     嘅新價）；揾唔到就保留原值（`keptUnresolved`）。internal_longterm
+//     （B07）／external 嘅出街價（wage／fee）永遠唔喺呢個模式郁（呢兩類
 //     嘅 wage/fee 由 `settlement-resync.ts` 專門處理，見
 //     `recomputeSettlement()`）。
 //   fill_and_fix_b07 —— `runReconcileAllForMonth()` 開頭自動行一次，冇人
 //     睇住 dry-run 預覽，要保守好多：淨係補「而家係 null」嘅欄位（唔會
-//     覆蓋人手／之前已經計過嘅非 null 价錢），**除咗** internal_longterm
+//     覆蓋人手／之前已經計過嘅非 null 價錢），**除咗** internal_longterm
 //     （B07）嘅 guard_wage／broker_fee——呢兩個欄位 B07 永遠應該係 null
 //     （8 月起；見 resolve-rate.ts「B07 snapshot」段），一旦條記錄而家係 B07 但仲帶住舊嘅非 null
 //     wage/fee（例如之前用 K／外判雞頭嘅卡計過、之後先改咗做 B07），
-//     就要覆蓋返做 null——呢啲先叫「B07 舊價」，唔算人手价。8 月
+//     就要覆蓋返做 null——呢啲先叫「B07 舊價」，唔算人手價。8 月
 //     （LONGTERM_REFERRAL_AUTOCOMPUTE_FROM）之前嘅記錄呢個模式**完全
 //     唔郁**（驗收修正：7 月已過 gate，唔靠資料巧合保證）。兩種模式都一樣：`guardsPaidByClient` 嘅盤（LINK）
 //     完全唔郁。
@@ -46,7 +46,7 @@ export interface RepriceRecordInput {
   guardWageSnapshot: unknown;
   brokerFeeSnapshot: unknown;
   /** WP-BOSS5 §25.1：`recordType==="ot"` 呢條記錄嘅 OT 時數，傳俾
-   * resolver 做「每小時价 × 時數」（淨係 8 月起生效，見
+   * resolver 做「每小時價 × 時數」（淨係 8 月起生效，見
    * `resolve-rate.ts` `OT_HOURLY_PRICING_FROM`）。 */
   otHours?: unknown;
 }
@@ -105,7 +105,7 @@ export function decideReprice(record: RepriceRecordInput, lookups: RepriceLookup
   // 驗收修正（Opus 5.5）：自動 reprice（reconcile-all 開頭）對 8 月之前嘅
   // 記錄**一律唔郁**——7 月已經過晒 gate，`reconcile-all` 本身冇擋 7 月
   // （淨係靠月鎖），唔可以靠「7 月啱啱好冇 null／冇 B07 舊價」呢類資料
-  // 巧合保證 7 月唔變。人手「重新計价」（mode:full）唔受呢條影響。
+  // 巧合保證 7 月唔變。人手「重新計價」（mode:full）唔受呢條影響。
   if (mode === "fill_and_fix_b07" && record.workDate.getTime() < LONGTERM_REFERRAL_AUTOCOMPUTE_FROM.getTime()) {
     return { id: record.id, before, after: before, changed: false, keptUnresolved: false };
   }
@@ -141,7 +141,7 @@ export function decideReprice(record: RepriceRecordInput, lookups: RepriceLookup
     const keptPayoutMeaningful = payoutNotFound && (beforeWage !== null || beforeFee !== null);
     keptUnresolved = keptClientMeaningful || keptPayoutMeaningful;
   } else {
-    // fill_and_fix_b07：收客价淨係補 null，永遠唔覆蓋已有值。
+    // fill_and_fix_b07：收客價淨係補 null，永遠唔覆蓋已有值。
     afterClient = beforeClient === null && pricing.clientCardFound ? pricing.clientRate : beforeClient;
     if (brokerKind === "internal_longterm") {
       // B07 嘅 wage／fee 8 月起（上面已經擋走 8 月前記錄）都應該 null
@@ -170,7 +170,7 @@ export interface RepriceMonthResult {
 
 /** 驗收修正（任務 3）：`runReconcileAllForMonth()` 開頭自動幫呢個月
  * 有上載嘅盤先 reprice 一次（`mode:"fill_and_fix_b07"`）——同更表頁
- * 「重新計价」（`POST /api/shift-records/reprice`）一樣用
+ * 「重新計價」（`POST /api/shift-records/reprice`）一樣用
  * `decideReprice()`，但保守好多（見檔頭註解），冇 dry-run、直接寫（分批
  * ≤500 一個 transaction，同 reprice route S6 一致）＋一行 audit（action
  * `reprice_month`，`after` 存 counts，唔存逐條——呢個係自動步驟，唔係

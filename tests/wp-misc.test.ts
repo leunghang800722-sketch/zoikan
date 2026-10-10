@@ -5,7 +5,7 @@
 //      內到期高亮。
 //   C. LINK（TKO Gateway 厚A/B/C）——`sites.guards_paid_by_client`：呢類
 //      盤嘅保安員由客戶直接出糧，我哋淨係收每月服務費，唔逐更計客價／
-//      工資、唔算「未定价」、reprice／batch save 唔寫 snapshot（已有值
+//      工資、唔算「未定價」、reprice／batch save 唔寫 snapshot（已有值
 //      唔清）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
@@ -118,7 +118,7 @@ describe("WP-MISC C：LINK（客戶直接出糧）嘅盤——guards_paid_by_cli
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    // 老闆拍板：呢類盤嘅更一律唔算未定价（payout 同 client 都唔算）。
+    // 老闆拍板：呢類盤嘅更一律唔算未定價（payout 同 client 都唔算）。
     expect(body.pricing.unpriced).toBe(0);
     const created = await prisma.shiftRecord.findFirst({ where: { guardId: fx.guardA.id, workDate: new Date(Date.UTC(2026, 7, 9)) } });
     expect(created).toBeTruthy();
@@ -201,7 +201,7 @@ describe("WP-MISC C：LINK（客戶直接出糧）嘅盤——guards_paid_by_cli
     expect(after!.brokerFeeSnapshot?.toString()).toBe("1");
   });
 
-  it("guards_paid_by_client=false（其他盤）：一切行為不變——batch save 照計价，reprice 照追", async () => {
+  it("guards_paid_by_client=false（其他盤）：一切行為不變——batch save 照計價，reprice 照追", async () => {
     // 冇拍板嘅盤（fx.site 保持預設 false）——確保呢個 gate 淨係影響開咗
     // flag 嘅盤，唔會誤傷其他盤嘅現有行為（同 gate:pricing 7 月 0 差異
     // 呼應）。
@@ -290,7 +290,7 @@ describe("WP-MISC C：LINK（客戶直接出糧）嘅盤——guards_paid_by_cli
     expect(body.broker_fee_snapshot).toBeNull();
   });
 
-  it("guards_paid_by_client：true→false 之後即刻生效——切走 flag 嗰刻之後嘅 batch save 照計价（gate 即時跟 site 現值，唔係俾之前嗰次讀取快取住）", async () => {
+  it("guards_paid_by_client：true→false 之後即刻生效——切走 flag 嗰刻之後嘅 batch save 照計價（gate 即時跟 site 現值，唔係俾之前嗰次讀取快取住）", async () => {
     await prisma.site.update({ where: { id: fx.site.id }, data: { guardsPaidByClient: true } });
     const resOn = await batchSave(
       req("http://test.local/api/shift-records/batch", ownerCookie, "POST", {
@@ -315,7 +315,7 @@ describe("WP-MISC C：LINK（客戶直接出糧）嘅盤——guards_paid_by_cli
     const bodyOff = await resOff.json();
     expect(bodyOff.pricing.priced).toBe(1);
     const createdOff = await prisma.shiftRecord.findFirst({ where: { guardId: fx.guardA.id, workDate: new Date(Date.UTC(2026, 7, 12)) } });
-    expect(createdOff!.clientRateSnapshot?.toString()).toBe("888"); // rateCardBrokerA（更具體），flag 關咗即刻照計价
+    expect(createdOff!.clientRateSnapshot?.toString()).toBe("888"); // rateCardBrokerA（更具體），flag 關咗即刻照計價
   });
 });
 

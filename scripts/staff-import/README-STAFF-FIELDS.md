@@ -58,3 +58,5 @@
 - `handwritten-unverified.json` 改用內部序號 `pNNN`（＝ `person-fields-ext.json` 內 `internalId`），唔再用身份證號做 key。計數類報告（summary.json、handwritten-unverified.json）冇身份證／工號／電話；`person-fields-ext.json`、`first-read*`、`second-read*`、`typed-sources.json` 係含值嘅資料檔，只留 data/（gitignored）。
 - 銀行副本：去銀行代號後尾段逐位相同而副本欠 3 位分行碼 → `bank_copy_agrees_without_branch`（仍可 confirmed）；其餘差異維持 `bank_copy_disagrees`。
 - 同一份 Maxwell 名單（兩個分頁）同名聯絡人而電話唔同 → 合併成一項，電話欄 review（兩個候選）。
+
+> P3-0.9：已完結步驟 `09`／`10`／`11`／`12`／`17` 號 script 已歸檔去 `scripts/archive/staff-import/`（唔刪，import 路徑已跟住改）。

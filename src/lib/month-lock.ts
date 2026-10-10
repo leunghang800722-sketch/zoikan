@@ -3,6 +3,7 @@
 import { prisma } from "./db";
 import { writeAudit } from "./audit";
 import { Locked, BadRequest } from "./api/errors";
+import { hkMonthStart } from "./dates";
 import type { MonthClose } from "@prisma/client";
 
 export function monthStart(date: Date): Date {
@@ -98,7 +99,7 @@ export async function assertMonthRangeNotLocked(params: {
   rowId: string;
   ip: string | null;
 }): Promise<void> {
-  const to = params.effectiveTo ?? addMonths(monthStart(new Date()), 1);
+  const to = params.effectiveTo ?? addMonths(hkMonthStart(), 1);
   const months = enumerateMonths(params.effectiveFrom, to);
   for (const m of months) {
     const locked = await isMonthLocked(m);
