@@ -48,6 +48,9 @@ export function GuardDrawer({
           // 隱藏 tab 入面有 invalid／required 欄：瀏覽器會靜靜擋住 submit——自動跳去嗰個 tab 再顯示原生提示。
           onInvalidCapture={(e) => {
             const el = e.target as HTMLInputElement;
+            // 多個欄同時 invalid：瀏覽器逐個欄觸發 invalid 事件，唔限制就會跳去最後一個——只處理 DOM 次序最前嗰個。
+            const first = e.currentTarget.querySelector("input:invalid, select:invalid, textarea:invalid");
+            if (first && first !== el) return;
             const m = el.closest('[data-testid^="guard-tab-panel-"]')?.getAttribute("data-testid")?.match(/guard-tab-panel-([a-z]+)/);
             const tab = m?.[1] as typeof drawerTab | undefined;
             if (tab && tab !== drawerTab) {
