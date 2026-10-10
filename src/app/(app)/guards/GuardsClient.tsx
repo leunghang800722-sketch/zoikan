@@ -30,6 +30,7 @@ import { kickerFor } from "@/lib/nav/schema";
 // component 用得。
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { MenuButton } from "@/components/ui/MenuButton";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
 const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
@@ -1741,19 +1742,23 @@ export function GuardsClient({
                 </select>
               </FilterChip>
             )}
-            {!isBroker && (
-              <a href="/guards/import" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">
-                證件資料導入
-              </a>
+            {/* P3-3.6：三個新增入口收成一個「新增 ▾」（手動／用證件／批量導入）；雞頭只有手動新增。 */}
+            {isBroker ? (
+              <Button variant="primary" onClick={openCreate}>
+                新增保安員
+              </Button>
+            ) : (
+              <MenuButton
+                label="新增"
+                variant="primary"
+                testId="guards-add-menu"
+                items={[
+                  { label: "手動新增", onSelect: openCreate, testId: "guards-add-manual" },
+                  ...(canOcr ? [{ label: "用證件新增", href: "/guards/new-from-docs", testId: "guards-new-from-docs" }] : []),
+                  { label: "批量導入", href: "/guards/import", testId: "guards-add-import" },
+                ]}
+              />
             )}
-            {!isBroker && canOcr && (
-              <a href="/guards/new-from-docs" data-testid="guards-new-from-docs" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">
-                用證件新增
-              </a>
-            )}
-            <Button variant="primary" onClick={openCreate}>
-              新增保安員
-            </Button>
           </>
         }
       />
@@ -1769,7 +1774,7 @@ export function GuardsClient({
         <div className={tableCls.wrap}>
           <EmptyState
             title={search ? "搵唔到符合嘅保安員" : "暫時冇保安員"}
-            description={search ? "試下改搜尋字眼（姓名／工號／電話）。" : "撳右上「新增保安員」開始建立名冊。"}
+            description={search ? "試下改搜尋字眼（姓名／工號／電話）。" : "撳右上「新增」開始建立名冊。"}
           />
         </div>
       ) : (

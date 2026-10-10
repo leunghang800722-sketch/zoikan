@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/DataTable";
 import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 import { kickerFor } from "@/lib/nav/schema";
+import Link from "next/link";
 
 type Status = "confirmed" | "review" | "missing";
 interface PkgField {
@@ -229,6 +230,9 @@ export default function GuardImportPage() {
 
   return (
     <div className="space-y-4">
+      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-[13px] text-zk-primary hover:underline">
+        ‹ 返回保安員
+      </Link>
       <PageHeader kicker={kickerFor("/guards/import")} title="保安員證件資料導入" subtitle="上載本機產生嘅導入包 → 預覽 → 套用自動項 → 覆核待確認欄。導入包唔會存入系統。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
