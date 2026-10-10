@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { monthRange } from "@/lib/reports/money";
 import type { AutoCollector } from "./context";
 import { upsertMonthCloseTriage } from "./triage";
+import { computePostorderDependency } from "./dependency";
 import type { AutoReport, AutoSummary, ReviewItem } from "./types";
 
 /** 本月更數（shift_records，非 cancelled，record_type=shift）分三堆：客戶自己人（external）／公司兵／其餘（計數更次）。 */
@@ -28,6 +29,8 @@ export async function computeShiftCounts(month: Date): Promise<AutoSummary["coun
 /** 收尾：數更數、開／刷新分診 session（擁有人＝撳一鍵嗰個人），砌 `report.auto`。 */
 export async function buildAutoReport(ctx: AutoCollector, month: Date, runId: string): Promise<AutoReport> {
   ctx.summary.counts = await computeShiftCounts(month);
+  // WP-POSTORDER-FREE（§34 C）：冇 Postorder 都計到嘅比例（additive）。
+  ctx.summary.postorderDependency = await computePostorderDependency(month, ctx.summary);
   const triage = await upsertMonthCloseTriage(runId, ctx.actorUserId, ctx.questions, ctx.ip, month.toISOString().slice(0, 10));
   let ids = new Map<string, string>();
   if (triage.sessionId) {

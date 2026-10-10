@@ -5,12 +5,13 @@
 //   - 答題人要有「一鍵結算:create」（老闆／會計），因為會建價卡／加別名／改結算；
 //   - 確認寫入嘅 audit 帶 `auto_source=triage:<題目 id>`，唔屬 auto（用戶明確確認），undo-auto 唔會還原。
 import { createHmac } from "node:crypto";
-import type { Prisma, TriageQuestion, TriageSession } from "@prisma/client";
+import { Prisma, type TriageQuestion, type TriageSession } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { ApiError, BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { monthRange } from "@/lib/reports/money";
+import { numOrNull, sameRepriceValue } from "@/lib/pricing/reprice";
 import { assertMonthNotLocked } from "@/lib/month-lock";
 import { assignRosterUploadSite, reparseRosterUpload } from "@/lib/roster-upload/service";
 import { reconcileUpload } from "@/lib/roster-upload/reconcile";
@@ -20,7 +21,7 @@ import { answerSchema, KIND_LABEL, type QuestionKind, type QuestionOption, type 
 import { refreshSessionStatus } from "@/lib/triage/session";
 import { AutoCollector, SimpleWriter } from "./context";
 import { addSiteAlias, createSiteFromUploadForTriage } from "./site-setup";
-import { collectUnpricedGroups, createCardAndPrice, describeValues } from "./pricing";
+import { applyCardToRecords, collectUnpricedGroups, createCardAndPrice, describeValues, type PriceChangeRow } from "./pricing";
 import { setSettlementBatch } from "./settlement";
 import { linkIdentityToGuard } from "./guard-match";
 import { MC_KINDS, type McEvidence, type McKind, type McQuestionDraft, type PriceValues, type PricingGroupRef } from "./types";
@@ -46,7 +47,7 @@ const hashOf = (qid: string, a: TriageAnswer, fp: string): string => createHmac(
 // ---------------------------------------------------------------------------
 // 開 session／題目
 // ---------------------------------------------------------------------------
-function optionsFor(d: McQuestionDraft): QuestionOption[] {
+export function optionsFor(d: McQuestionDraft): QuestionOption[] {
   const ev = d.evidence;
   const out: QuestionOption[] = [];
   if (ev.prefillCandidateId) out.push({ id: "mc_accept", label: ev.suggestion ? `一撳確認：${ev.suggestion}` : "一撳確認建議答案" });
@@ -201,6 +202,7 @@ type Plan =
   | { type: "ack" }
   | { type: "site_alias"; siteId: string | null; createNew: boolean }
   | { type: "pricing"; values: PriceValues; evidence: string; groups: Array<{ ref: PricingGroupRef; needClient: boolean; needPayout: boolean }> }
+  | { type: "pricing_backfill"; values: PriceValues; evidence: string; group: PricingGroupRef; needClient: boolean; needPayout: boolean; autoCardId: string | null; recordIds: string[] }
   | { type: "settlement"; brokerId: string }
   | { type: "guard_match"; guardId: string };
 
@@ -226,6 +228,58 @@ function priceFromAnswer(a: TriageAnswer): PriceValues {
   const wage = p.guard_wage ?? null;
   const fee = p.broker_fee ?? null;
   return { clientRate: p.client_rate ?? null, guardWage: wage, brokerFee: fee, payoutRate: wage !== null || fee !== null ? (wage ?? 0) + (fee ?? 0) : null };
+}
+
+/** 補齊價目卡題嘅預覽（唔郁資料）：驗證 auto 卡仍然生效／組合未有正式卡，砌 plan＋指紋。 */
+async function resolveBackfillPlan(
+  q: QRowWithSession,
+  ev: McEvidence,
+  action: Extract<McEvidence["action"], { type: "pricing" }>,
+  answer: TriageAnswer,
+  cand: McEvidence["candidates"][number] | undefined,
+  month: Date,
+  impact: McImpact,
+): Promise<{ plan: Plan; fingerprint: string; impact: McImpact }> {
+  const bf = action.backfill!;
+  const g = action.group;
+  const { start, end } = monthRange(month);
+  let values: PriceValues;
+  let evidenceText: string;
+  if (answer.option === "mc_price") {
+    values = priceFromAnswer(answer);
+    evidenceText = "用戶喺補齊價目卡題輸入嘅價錢";
+  } else {
+    if (!cand?.values) throw BadRequest("候選冇價錢");
+    values = cand.values;
+    evidenceText = `補齊價目卡一撳確認：${cand.label}（${cand.evidence ?? ""}）`;
+  }
+  if (bf.autoCardId) {
+    const c = await prisma.rateCard.findUnique({ where: { id: bf.autoCardId }, select: { voidedAt: true } });
+    if (!c || c.voidedAt) throw Conflict("呢張一鍵自動卡已經作廢或者唔存在（可能已經處理，或者一鍵結算已還原）");
+  }
+  // 組合已有非 auto 生效卡 → 唔再補（防止同人手卡重疊）
+  const cards = await prisma.rateCard.findMany({
+    where: { siteId: g.siteId, shiftTypeId: g.shiftTypeId, brokerId: g.brokerId, guardId: null, voidedAt: null, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] },
+    select: { id: true, source: true },
+  });
+  const humanCard = cards.find((c) => !(c.source ?? "").startsWith("auto:one-click:") && c.source !== `triage:${q.id}`);
+  if (humanCard) throw Conflict("呢組已經有正式價目卡（可能已經處理）");
+  const recs = await prisma.shiftRecord.findMany({
+    where: { siteId: g.siteId, shiftTypeId: g.shiftTypeId, ...(g.brokerId ? { settlementBrokerId: g.brokerId } : {}), recordType: g.ot ? "ot" : "shift", status: { not: "cancelled" }, workDate: { gte: start, lte: end } },
+    select: { id: true },
+  });
+  const needClient = action.needClient && values.clientRate !== null;
+  const needPayout = action.needPayout && (values.guardWage !== null || values.brokerFee !== null || values.payoutRate !== null);
+  if (!needClient && !needPayout) throw new ApiError(422, "unprocessable", "呢個答案冇齊所需價錢，唔會建卡");
+  impact.summary.push(`建正式價目卡（${describeValues(values)}；本月 1 號起、無限期）${bf.autoCardId ? "，作廢對應嘅一鍵自動卡" : ""}，覆蓋 ${recs.length} 更`);
+  impact.changes.push({ table: "rate_cards", action: "create", label: "新增正式價目卡（本月 1 號起、無限期）", fields: [{ label: "價錢", from: null, to: describeValues(values) }] });
+  if (bf.autoCardId) impact.changes.push({ table: "rate_cards", action: "void", label: "作廢一鍵自動卡（可撤銷）", fields: [{ label: "自動卡", from: bf.autoCardId.slice(0, 8), to: "作廢" }] });
+  impact.notes.push("確認後可以用「撤銷補齊」還原（作廢新卡、恢復自動卡）");
+  return {
+    plan: { type: "pricing_backfill", values, evidence: evidenceText, group: g, needClient, needPayout, autoCardId: bf.autoCardId, recordIds: recs.map((r) => r.id) },
+    fingerprint: `backfill:${bf.autoCardId ?? "-"}:${recs.length}:${JSON.stringify(values)}`,
+    impact,
+  };
 }
 
 async function resolvePlan(q: QRowWithSession, answer: TriageAnswer): Promise<{ plan: Plan; fingerprint: string; impact: McImpact }> {
@@ -274,6 +328,8 @@ async function resolvePlan(q: QRowWithSession, answer: TriageAnswer): Promise<{ 
     }
     case "pricing":
     case "site_new": {
+      // WP-POSTORDER-FREE（§34 A）：補齊價目卡題——唔經 collectUnpricedGroups（auto 卡已定價嘅組合都要處理）。
+      if (ev.action.type === "pricing" && ev.action.backfill) return resolveBackfillPlan(q, ev, ev.action, answer, cand, month, impact);
       if (ev.action.type === "site_new" && ev.action.groups.length === 0) {
         if (answer.option !== "mc_ack") throw BadRequest("呢題淨係可以揀「我已處理」或者跳過");
         impact.summary.push("確認已處理：唔會改任何資料");
@@ -429,15 +485,16 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
             // N6：同一組（盤×更種×雞頭×月份）嘅確認用 advisory xact lock 串行；
             // 鎖內見到已有（另一題）分診價卡，價錢唔同 → 第二個請求失敗，唔建矛盾卡。
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`mc-triage-price:${g.ref.siteId}:${g.ref.shiftTypeId}:${g.ref.brokerId ?? ""}:${g.ref.ot ? 1 : 0}:${ev.month.slice(0, 7)}`}))`;
+            // 入鎖後重新讀題目狀態：被補齊路徑取代（superseded）就唔准再建卡。
+            const curQ = await tx.triageQuestion.findUnique({ where: { id: q.id }, select: { status: true } });
+            if (curQ?.status !== "applying") throw Conflict("呢條問題已經被取代或者處理緊，唔可以重複套用");
             const monthR = monthRange(month);
             const existing = await tx.rateCard.findMany({
               where: { siteId: g.ref.siteId, shiftTypeId: g.ref.shiftTypeId, brokerId: g.ref.brokerId, guardId: null, voidedAt: null, source: { startsWith: "triage:" }, NOT: { source: writer.source }, effectiveFrom: { lte: monthR.end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: monthR.start } }] },
               select: { clientRate: true, guardWage: true, brokerFee: true },
             });
-            const same = (a: unknown, b: number | null) => (a === null || a === undefined ? b === null : b !== null && Math.abs(Number(a) - b) < 0.005);
-            if (existing.some((c) => (need.client && !same(c.clientRate, plan.values.clientRate)) || (need.payout && !(same(c.guardWage, plan.values.guardWage) && same(c.brokerFee, plan.values.brokerFee))))) {
-              throw Conflict("已有人確認過另一個價");
-            }
+            // 同組合已有任何生效 triage 卡（唔論同價定唔同價）→ 409，唔會疊第二張生效卡（N6，§34 驗收）。
+            if (existing.length > 0) throw Conflict("已有人確認過另一個價");
             const res = await createCardAndPrice(writer, { month, group: g.ref, need, values: plan.values, evidence: plan.evidence, note: `分診一撳確認（題目 ${q.id.slice(0, 8)}）：${plan.evidence}`, confidence: "confirmed", overwriteAuto: true }, tx);
             priced += res.recordsPriced;
             over += res.overwrittenAuto;
@@ -459,6 +516,11 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
       } else {
         result.note = `補咗 ${out.priced} 更`;
       }
+      break;
+    }
+    case "pricing_backfill": {
+      const out = await applyBackfill(writer, q, ev, plan, month, actor.userId);
+      Object.assign(result, out);
       break;
     }
     case "settlement": {
@@ -503,5 +565,220 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
     await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, run_id: ev.runId, auto_source: `triage:${q.id}`, ...result }, ip });
   });
   const session_status = await refreshSessionStatus(q.sessionId);
-  return { status: "answered", impact, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result, note: typeof result.note === "string" ? result.note : null };
+  // 補齊價目卡嘅逐更 journal 只存 DB（apply_result_json），唔經 API 回傳。
+  const { backfill: _journal, ...publicResult } = result;
+  void _journal;
+  return { status: "answered", impact, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result: publicResult, note: typeof result.note === "string" ? result.note : null };
+}
+
+
+// ---------------------------------------------------------------------------
+// WP-POSTORDER-FREE（§34 A）：補齊價目卡——確認＝建 `triage:*` 正式卡（本月 1 號起、無限期）＋作廢對應 auto 卡＋補價。
+// 「journal」放喺題目 apply_result_json.backfill（card_id／voided_card_id／補價逐更舊新值／被取代嘅一鍵結算題 id），
+// `undoBackfillAnswer()`（POST /api/triage/questions/:id/undo-backfill）按佢還原。
+// ---------------------------------------------------------------------------
+const REPRICE_ROWS_CAP = 3000;
+
+interface BackfillJournal {
+  card_id: string;
+  voided_card_id: string | null;
+  month: string;
+  reprice_rows: Array<{ id: string; fields: string[]; before: [number | null, number | null, number | null]; after: [number | null, number | null, number | null] }>;
+  reprice_rows_truncated: boolean;
+  superseded_question_ids: string[];
+  undone?: boolean;
+  undone_at?: string;
+}
+
+async function applyBackfill(
+  writer: SimpleWriter,
+  q: QRowWithSession,
+  ev: McEvidence,
+  plan: Extract<Plan, { type: "pricing_backfill" }>,
+  month: Date,
+  actorUserId: string,
+): Promise<Record<string, unknown>> {
+  const { start } = monthRange(month);
+  const g = plan.group;
+  const collect: PriceChangeRow[] = [];
+  const dec = (x: number | null) => (x === null ? null : new Prisma.Decimal(Math.round(x * 100) / 100));
+  const v = {
+    clientRate: plan.needClient ? plan.values.clientRate : null,
+    guardWage: plan.needPayout ? plan.values.guardWage : null,
+    brokerFee: plan.needPayout ? plan.values.brokerFee : null,
+    payoutRate: plan.needPayout ? plan.values.payoutRate : null,
+  };
+  const out = await prisma.$transaction(
+    async (tx) => {
+      // 同一組嘅確認串行（同 pricing 題同一把鎖）。
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`mc-triage-price:${g.siteId}:${g.shiftTypeId}:${g.brokerId ?? ""}:${g.ot ? 1 : 0}:${ev.month.slice(0, 7)}`}))`;
+      const monthR = monthRange(month);
+      const overlap = { effectiveFrom: { lte: monthR.end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: monthR.start } }] };
+      // 重試冪等：同來源已建過卡就重用。
+      let card = await tx.rateCard.findFirst({ where: { siteId: g.siteId, shiftTypeId: g.shiftTypeId, brokerId: g.brokerId, guardId: null, voidedAt: null, source: writer.source } });
+      const others = await tx.rateCard.findMany({ where: { siteId: g.siteId, shiftTypeId: g.shiftTypeId, brokerId: g.brokerId, guardId: null, voidedAt: null, ...overlap, NOT: { source: { startsWith: "auto:one-click:" } } }, select: { id: true, source: true } });
+      if (others.some((c) => c.source !== writer.source)) throw Conflict("呢組已經有正式價目卡（可能已經處理）");
+      if (plan.autoCardId) {
+        const ac = await tx.rateCard.findUnique({ where: { id: plan.autoCardId }, select: { voidedAt: true } });
+        if (!ac || ac.voidedAt) {
+          if (!card) throw Conflict("呢張一鍵自動卡已經作廢或者唔存在");
+        }
+      }
+      if (!card) {
+        card = await tx.rateCard.create({
+          data: {
+            siteId: g.siteId,
+            shiftTypeId: g.shiftTypeId,
+            brokerId: g.brokerId,
+            guardId: null,
+            clientRate: dec(v.clientRate),
+            guardWage: dec(v.guardWage),
+            brokerFee: dec(v.brokerFee),
+            payoutRate: dec(v.payoutRate),
+            billingModel: "per_shift",
+            effectiveFrom: start,
+            effectiveTo: null,
+            source: writer.source,
+            evidence: plan.evidence.slice(0, 500),
+            confidence: "confirmed",
+            note: `補齊價目卡一撳確認（題目 ${q.id.slice(0, 8)}）：${plan.evidence}`.slice(0, 500),
+            createdBy: actorUserId,
+          },
+        });
+        await writer.auditTx!(tx, { tableName: "rate_cards", rowId: card.id, action: "create", after: card });
+      }
+      let voidedCardId: string | null = null;
+      if (plan.autoCardId) {
+        const ac = await tx.rateCard.findUnique({ where: { id: plan.autoCardId } });
+        if (ac && !ac.voidedAt) {
+          const after = await tx.rateCard.update({ where: { id: ac.id }, data: { voidedAt: new Date(), voidedBy: actorUserId } });
+          await writer.auditTx!(tx, { tableName: "rate_cards", rowId: ac.id, action: "void", before: ac, after: { ...after, void_reason: `postorder_backfill:${q.id}` } });
+          voidedCardId = ac.id;
+        }
+      }
+      const need = { client: plan.needClient, payout: plan.needPayout };
+      let priced = 0;
+      let over = 0;
+      for (let i = 0; i < 6; i++) {
+        const before = collect.length;
+        const r = await applyCardToRecords(writer, month, g, need, plan.recordIds, card.id, { overwriteAuto: true, db: tx, collect });
+        priced += r.changed;
+        over += r.overwritten;
+        if (r.changed === 0 || collect.length === before) break;
+      }
+      // 對應嘅一鍵結算 open 定價題（同月、同盤同更種同雞頭）取代，免得重複答。
+      const sup: string[] = [];
+      const mcOpen = await tx.triageQuestion.findMany({ where: { status: { in: ["open", "applying"] }, id: { not: q.id }, kind: "month_close_pricing", session: { sourceType: "month_close" } }, select: { id: true, sessionId: true, evidenceJson: true } });
+      for (const o of mcOpen) {
+        const e = o.evidenceJson as unknown as McEvidence;
+        if (e.month === ev.month && e.action.type === "pricing" && !e.action.backfill && e.action.group.siteId === g.siteId && e.action.group.shiftTypeId === g.shiftTypeId && e.action.group.brokerId === g.brokerId && e.action.group.ot === g.ot) sup.push(o.id);
+      }
+      if (sup.length) await tx.triageQuestion.updateMany({ where: { id: { in: sup } }, data: { status: "superseded" } });
+      // 逐更 journal 同建卡／補價同一個 transaction 寫入（重試唔會丟逐更紀錄）。
+      const prevRaw = (await tx.triageQuestion.findUnique({ where: { id: q.id }, select: { applyResultJson: true } }))?.applyResultJson as { backfill?: BackfillJournal } | null;
+      const prev = prevRaw?.backfill && prevRaw.backfill.card_id === card.id && !prevRaw.backfill.undone ? prevRaw.backfill : null;
+      const allRows = [...(prev?.reprice_rows ?? []), ...collect.map((r) => ({ id: r.id, fields: r.fields, before: r.before, after: r.after }))];
+      const journal: BackfillJournal = {
+        card_id: card.id,
+        voided_card_id: voidedCardId ?? prev?.voided_card_id ?? null,
+        month: ev.month,
+        reprice_rows: allRows.slice(0, REPRICE_ROWS_CAP),
+        reprice_rows_truncated: allRows.length > REPRICE_ROWS_CAP,
+        superseded_question_ids: [...new Set([...(prev?.superseded_question_ids ?? []), ...sup])],
+      };
+      await tx.triageQuestion.update({ where: { id: q.id }, data: { applyResultJson: JSON.parse(JSON.stringify({ backfill: journal })) as Prisma.InputJsonValue } });
+      return { cardId: card.id, voidedCardId: journal.voided_card_id, priced, over, sup, journal };
+    },
+    { timeout: 120_000, maxWait: 10_000 },
+  );
+  const journal = out.journal;
+  for (const sid of new Set((await prisma.triageQuestion.findMany({ where: { id: { in: out.sup } }, select: { sessionId: true } })).map((x) => x.sessionId))) await refreshSessionStatus(sid);
+  return {
+    cards: 1,
+    card_id: out.cardId,
+    voided_card_id: out.voidedCardId,
+    records_priced: out.priced,
+    overwritten_auto: out.over,
+    backfill: journal,
+    reprice_truncated: journal.reprice_rows_truncated,
+    note: `${out.voidedCardId ? `已建正式價目卡並作廢一鍵自動卡${out.priced > 0 ? `；補咗 ${out.priced} 更` : "；價錢維持不變"}` : `已建正式價目卡${out.priced > 0 ? `；補咗 ${out.priced} 更` : "；冇更次需要補價"}`}${journal.reprice_rows_truncated ? `；注意：撤銷只能還原前 ${REPRICE_ROWS_CAP} 更嘅補價` : ""}`,
+  };
+}
+
+export interface UndoBackfillOutput {
+  question_id: string;
+  status: "open";
+  restored_card_id: string | null;
+  voided_card_id: string;
+  reverted_rows: number;
+  kept_rows: number;
+  reopened_questions: number;
+  session_status: "open" | "done";
+}
+
+/** 撤銷一條已答嘅補齊價目卡題：作廢新建嘅正式卡、恢復被作廢嘅 auto 卡、還原仍然等於補價值嘅更（人手改過嘅唔郁）、題目回到 open。 */
+export async function undoBackfillAnswer(actor: AuthedSession, q: QRowWithSession, ip: string | null): Promise<UndoBackfillOutput> {
+  if (!(await hasPermission(actor, "一鍵結算", "create"))) throw Forbidden("要有「一鍵結算」權限嘅同事（老闆／會計）先可以撤銷");
+  if (q.session.sourceType !== "postorder_backfill") throw BadRequest("淨係補齊價目卡嘅題先可以撤銷");
+  if (q.status !== "answered") throw Conflict("呢條問題未確認（或者已經撤銷），冇嘢可以撤銷");
+  const apply = (q.applyResultJson ?? {}) as { backfill?: BackfillJournal };
+  const j = apply.backfill;
+  if (!j || j.undone) throw Conflict("呢條問題冇可撤銷嘅補齊紀錄");
+  const ev = q.evidenceJson as unknown as McEvidence;
+  const month = new Date(`${ev.month}T00:00:00.000Z`);
+  await assertMonthNotLocked({ workDate: month, actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, ip });
+  const source = `undo:postorder_backfill:${q.id}`;
+  const out = await prisma.$transaction(
+    async (tx) => {
+      const claimed = await tx.triageQuestion.updateMany({ where: { id: q.id, status: "answered" }, data: { status: "applying" } });
+      if (claimed.count !== 1) throw Conflict("呢條問題而家有人處理緊或者已經撤銷");
+      const card = await tx.rateCard.findUnique({ where: { id: j.card_id } });
+      if (card && !card.voidedAt) {
+        const after = await tx.rateCard.update({ where: { id: card.id }, data: { voidedAt: new Date(), voidedBy: actor.userId } });
+        await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "rate_cards", rowId: card.id, action: "void", before: card, after: { ...after, void_reason: source, auto_source: source }, ip });
+      }
+      let restored: string | null = null;
+      if (j.voided_card_id) {
+        const ac = await tx.rateCard.findUnique({ where: { id: j.voided_card_id } });
+        if (ac && ac.voidedAt) {
+          const after = await tx.rateCard.update({ where: { id: ac.id }, data: { voidedAt: null, voidedBy: null } });
+          await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "rate_cards", rowId: ac.id, action: "unvoid", before: ac, after: { ...after, auto_source: source }, ip });
+          restored = ac.id;
+        }
+      }
+      let reverted = 0;
+      let kept = 0;
+      for (const r of j.reprice_rows) {
+        const cur = await tx.shiftRecord.findUnique({ where: { id: r.id }, select: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true } });
+        if (!cur) continue;
+        const data: { clientRateSnapshot?: number | null; guardWageSnapshot?: number | null; brokerFeeSnapshot?: number | null } = {};
+        if (r.fields.includes("client") && sameRepriceValue(numOrNull(cur.clientRateSnapshot), r.after[0])) data.clientRateSnapshot = r.before[0];
+        if (r.fields.includes("payout") && sameRepriceValue(numOrNull(cur.guardWageSnapshot), r.after[1]) && sameRepriceValue(numOrNull(cur.brokerFeeSnapshot), r.after[2])) {
+          data.guardWageSnapshot = r.before[1];
+          data.brokerFeeSnapshot = r.before[2];
+        }
+        if (Object.keys(data).length === 0) {
+          kept++;
+          continue;
+        }
+        await tx.shiftRecord.update({ where: { id: r.id }, data });
+        reverted++;
+      }
+      if (reverted > 0) await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "shift_records", rowId: `undo_backfill:${q.id}`, action: "update", before: { rows: j.reprice_rows.length }, after: { reverted, kept, card_id: j.card_id, auto_source: source }, ip });
+      let reopened = 0;
+      if (j.superseded_question_ids.length) {
+        const r = await tx.triageQuestion.updateMany({ where: { id: { in: j.superseded_question_ids }, status: "superseded" }, data: { status: "open" } });
+        reopened = r.count;
+      }
+      await tx.triageQuestion.update({
+        where: { id: q.id },
+        data: { status: "open", answerJson: Prisma.DbNull, answeredBy: null, answeredAt: null, applyResultJson: JSON.parse(JSON.stringify({ ...apply, backfill: { ...j, undone: true, undone_at: new Date().toISOString() } })) as Prisma.InputJsonValue },
+      });
+      await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "update", after: { undo_backfill: true, card_id: j.card_id, restored_card_id: restored, reverted, kept, auto_source: source }, ip });
+      return { restored, reverted, kept, reopened };
+    },
+    { timeout: 120_000, maxWait: 10_000 },
+  );
+  const session_status = await refreshSessionStatus(q.sessionId);
+  return { question_id: q.id, status: "open", restored_card_id: out.restored, voided_card_id: j.card_id, reverted_rows: out.reverted, kept_rows: out.kept, reopened_questions: out.reopened, session_status };
 }

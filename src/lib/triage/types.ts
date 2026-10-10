@@ -3,7 +3,7 @@
 import { z } from "zod";
 import type { PackagePerson } from "@/lib/guards/import/package";
 
-export const SOURCE_TYPES = ["guard_import", "roster_upload", "month_close"] as const;
+export const SOURCE_TYPES = ["guard_import", "roster_upload", "month_close", "postorder_backfill"] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
 export const QUESTION_KINDS = [

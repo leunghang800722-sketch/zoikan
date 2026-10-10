@@ -8,6 +8,7 @@ import type { ReportDTO, RunDTO } from "@/components/month-close/types";
 import { humanize, deriveCostStack, fmtMdHm, marginPct, splitSiteRevenue, type ReviewGroup } from "@/components/month-close/derive";
 import { AutoSummaryCard } from "./AutoSummaryCard";
 import { ReviewCard } from "./ReviewCard";
+import { PostorderDependencyLine } from "./PostorderDependencyLine";
 
 const card = "rounded-[10px] border border-zk-border bg-white";
 const STACK_COLOR = { shift: "#2563eb", referral: "#93c5fd", autopay: "#0f766e" } as const;
@@ -107,7 +108,7 @@ export function ReportSection({ run, report, busy, locked, groups, onUndo, onOpe
         </Link>
       </div>
 
-      {report.auto && <AutoSummaryCard auto={report.auto} busy={busy} locked={locked} onUndo={onUndo} />}
+      {report.auto && <AutoSummaryCard auto={report.auto} busy={busy} locked={locked} onUndo={onUndo} extraFooter={<PostorderDependencyLine auto={report.auto} month={report.month} />} />}
       {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} locked={locked} onOpenTriage={onOpenTriage} />}
 
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">

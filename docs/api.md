@@ -2405,3 +2405,19 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - `POST /api/shift-records/reprice`（`dry_run:false`）用到 auto 卡嘅更同價一齊補寫 journal（同一 transaction）。內部 `POST /api/shift-records` 人手帶部分出街價：journal before＝人手值，undo 只還原 auto 填嗰幾欄。
 - 分診：OT 組內冇 `ot_hours` 嘅更 → `month_close_pricing` 題 `action.type=ot_hours`（options 淨係 `mc_ack`＋`skip`，唔建卡）；降級定價題候選次序＝原來源值第一，「未經人確認」候選唔預填（`mc_accept` 隱藏，只可 `mc_pick`／`mc_price`）。
 - undo 回應加 `still_using_voided_card_ids`（最多 50）；`report.auto.voided_card_price_check {count, record_ids}` 持久化，refresh 後摘要卡仍顯示警告。
+
+## WP-POSTORDER-FREE（§34，2026-10-10）：唔靠 Postorder 都計到
+
+全部 additive（現有 endpoint 欄位不變）。Migration `20261010000000_wp_postorder_free_site_default_broker`：`sites.default_settlement_broker_id`（nullable FK → brokers，ON DELETE SET NULL；冪等；`ai.sites` view 顯式欄名，AI 角色讀唔到）。
+
+### 新 endpoint
+- `POST /api/rate-cards/backfill-from-postorder` `{month:"YYYY-MM"}`——權限 `一鍵結算:create`（老闆／會計；主管／雞頭／安員 403）。已鎖月 409、2026-08 之前 400。回 `{session_id, created, skipped_existing, skipped_has_card, skipped_no_records, from_auto_cards, from_postorder, has_postorder}`。冪等；唔寫任何價。題進 triage session（`source_type=postorder_backfill`，`source_ref=YYYY-MM`），題型 `month_close_pricing`，action `pricing`＋`backfill:{source:"auto_card"|"postorder",autoCardId}`；答題用現有 `/api/triage/questions/:id/{preview,answer}`（確認＝建 `triage:*` 卡，`effective_from` 該月 1 號、`effective_to` null；作廢對應 auto 卡）。
+- `GET /api/rate-cards/backfill-from-postorder?month=` ——權限 `一鍵結算:view`。回 `{session_id|null, open, answered, skipped, total}`。
+- `POST /api/triage/questions/:id/undo-backfill`——權限 `導入分診:update`＋`一鍵結算:create`；撤銷已確認嘅補齊題：作廢新卡、恢復 auto 卡、還原補價（現值仍等於補價值先還原）、題目回 open。未確認／已撤銷／非補齊題 409/400；已鎖月 409。回 `{question_id,status:"open",restored_card_id,voided_card_id,reverted_rows,kept_rows,reopened_questions,session_status}`。
+- `GET /api/sites/:id/default-broker-suggestion?month=`（唯讀，權限 `盤:view`）：回 `{month, reason:"unique"|"no_postorder"|"no_roster"|"no_site_rows"|"no_broker_cells"|"not_unique"|"unmatched_label"|"broker_inactive", current_broker_id, suggestion:{broker_id,broker_code,broker_name,days,source}|null}`。
+
+### 新 optional 欄位
+- `PATCH /api/sites/:id` 收 `default_settlement_broker_id`（uuid｜null 清走；雞頭要存在而且 active，否則 400）；`GET /api/sites`／`GET /api/sites/:id` 回傳 `default_settlement_broker_id`（雞頭角色 DTO 不變）。
+- `report.auto.summary.postorder_dependency`（一鍵結算 run 的 `report`）：`pricing{total,unpriced,by_step{"1".."5",existing},without_postorder}`、`settlement{total,by_reason{roster,postorder,longterm,external,guard_default,site_default,history,other,unresolved},without_postorder}`。統計口徑見 P2 §34.4。
+- settlement 推斷次序：更表 → Postorder 同崗位同日 → 長工／external → 安員預設雞頭 → **盤預設雞頭（reason「盤預設雞頭」）** → 近 3 個月同盤歷史 → 分診。
+
