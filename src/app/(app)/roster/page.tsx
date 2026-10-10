@@ -21,8 +21,8 @@ import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { inputCls } from "@/components/ui/Field";
-import { currentMonthStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
+import { useMonthState } from "@/components/ui/MonthPicker";
 
 // A7（Opus 整合驗收）：呢頁本地嘅 input 樣式已刪走，改用
 // `@/components/ui/Field` 嘅 `inputCls`（README「表單控件」規格，三份
@@ -65,7 +65,7 @@ export default function RosterEntryPage() {
   const router = useRouter();
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [siteId, setSiteId] = useState("");
-  const [month, setMonth] = useState(() => currentMonthStr());
+  const [month, setMonth] = useMonthState();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 

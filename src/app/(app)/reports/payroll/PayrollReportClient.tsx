@@ -11,14 +11,14 @@ import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
 import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // P0（Opus 驗收重現）：`broker_id` 可以係 `null`——代表「未歸屬結算
@@ -61,7 +61,7 @@ function KindPill({ kind }: { kind?: string }) {
 }
 
 export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
-  const [month, setMonth] = useState(() => currentMonthStr());
+  const [month, setMonth] = useMonthState();
   const [totals, setTotals] = useState<Total[]>([]);
   const [unpricedCount, setUnpricedCount] = useState(0);
   const [unpricedGroups, setUnpricedGroups] = useState<UnpricedGroup[]>([]);
@@ -143,9 +143,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
         subtitle="逐結算單位（雞頭）本月更數／工資／雞頭費／金額。"
         actions={
           <>
-            <FilterChip label="月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={month} onChange={setMonth} />
             {canReprice && (
               <Button variant="secondary" onClick={handleReprice} disabled={repricing}>
                 {repricing ? "計價緊…" : `重新計價（${month}）`}

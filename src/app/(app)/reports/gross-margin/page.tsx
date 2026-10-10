@@ -17,8 +17,9 @@ import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts 嘅 ok()/
 // camelToSnakeDeep()）——呢啲 interface 要同 wire format 一致，唔係
@@ -94,7 +95,7 @@ function sortByMarginAsc(sites: SiteRow[]): SiteRow[] {
 }
 
 export default function GrossMarginPage() {
-  const [month, setMonth] = useState(() => currentMonthStr());
+  const [month, setMonth] = useMonthState();
   const [data, setData] = useState<Result | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -149,9 +150,7 @@ export default function GrossMarginPage() {
                 <option value="outside">額外盤</option>
               </select>
             </FilterChip>
-            <FilterChip label="月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={month} onChange={setMonth} />
             <a href={`/api/reports/gross-margin?month=${month}&export=1`}>
               <Button variant="secondary">匯出 Excel</Button>
             </a>

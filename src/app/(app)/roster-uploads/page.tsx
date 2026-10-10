@@ -21,16 +21,17 @@ import { apiGet, apiUpload, apiPatch, apiPost, type ApiListResult } from "@/lib/
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { Field, selectCls } from "@/components/ui/Field";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtDate, fmtDateTime, currentMonthStr } from "@/lib/ui/format";
+import { fmtDate, fmtDateTime } from "@/lib/ui/format";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { classifyUploadResult, runQueueWithConcurrency, summarizeOutcomes, type RosterUploadPostData, type UploadOutcome } from "@/lib/roster-upload/upload-queue";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 
 interface SiteOption {
   id: string;
@@ -209,7 +210,7 @@ interface QueueItem {
 const UPLOAD_CONCURRENCY = 2;
 
 export default function RosterUploadsPage() {
-  const [month, setMonth] = useState(currentMonthStr());
+  const [month, setMonth] = useMonthState();
   // WP-RECONCILE-UI（§33.3 D）：deep link `?month=YYYY-MM&focus=<uploadId>`——只做預選月份＋捲到／高亮該上載，
   // 唔觸發任何寫入。URL 解析完（urlReady）先載列表，避免先載當月再載目標月份互相覆蓋。
   const [urlReady, setUrlReady] = useState(false);
@@ -282,8 +283,7 @@ export default function RosterUploadsPage() {
 
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
-    const m = sp.get("month");
-    if (m && /^\d{4}-(0[1-9]|1[0-2])$/.test(m)) setMonth(m);
+    // 月份由 useMonthState 處理（URL → sessionStorage → 本月），呢度淨係等佢跑完先載列表。
     const f = sp.get("focus");
     if (f) setFocusId(f);
     setUrlReady(true);
@@ -550,9 +550,7 @@ export default function RosterUploadsPage() {
         subtitle="會計／主管／老闆每月逐盤上載更表檔案（xlsx）——呢個係計糧嘅唯一依據，系統自己報更淨係參考／輔助。"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <FilterChip label="月份" showCaret={false}>
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={month} onChange={setMonth} />
             <label className="flex items-center gap-1.5 text-[12.5px] text-zk-muted">
               <input type="checkbox" checked={includeVoided} onChange={(e) => setIncludeVoided(e.target.checked)} />
               顯示已作廢
@@ -564,6 +562,7 @@ export default function RosterUploadsPage() {
         }
       />
 
+      <EmptyMonthNotice month={month} isEmpty={!loading && !!list && allEntries.every((e) => !e.upload)} onJump={setMonth} />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 

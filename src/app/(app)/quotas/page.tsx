@@ -17,6 +17,7 @@ import { fmtDate, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
 interface QuotaRow {
   id: string;
@@ -50,7 +51,7 @@ export default function QuotasPage() {
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [siteFilter, setSiteFilter] = useState("");
-  const [monthFilter, setMonthFilter] = useState(currentMonthStr());
+  const [monthFilter, setMonthFilter] = useMonthState();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -202,9 +203,7 @@ export default function QuotasPage() {
                 ))}
               </select>
             </FilterChip>
-            <FilterChip label="月份" showCaret={false}>
-              <input type="month" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={monthFilter} onChange={setMonthFilter} />
             <Button variant="primary" onClick={openCreate}>
               新增配額
             </Button>

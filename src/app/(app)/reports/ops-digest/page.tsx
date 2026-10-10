@@ -5,12 +5,13 @@ import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 
 interface CategoryDTO {
   key: string;
@@ -55,7 +56,7 @@ function fmtNum(v: number | null) {
 }
 
 export default function OpsDigestPage() {
-  const [month, setMonth] = useState(() => addMonthsStr(currentMonthStr(), -1));
+  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1));
   const [digest, setDigest] = useState<DigestDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [aiText, setAiText] = useState<string | null>(null);
@@ -95,11 +96,10 @@ export default function OpsDigestPage() {
         title="每月修正摘要"
         subtitle="呢個月結算要修正咗乜、同上月比、邊啲問題重複出現——只有類別同數字，冇人名。"
         actions={
-          <FilterChip label="月份">
-            <input type="month" data-testid="ops-digest-month" value={month} onChange={(e) => setMonth(e.target.value)} className="bg-transparent text-sm" />
-          </FilterChip>
+          <MonthPicker label="月份" value={month} onChange={setMonth} testId="ops-digest-month" />
         }
       />
+      <EmptyMonthNotice month={month} isEmpty={!!digest && digest.correction_total === 0 && digest.baseline.uploads.files === 0} onJump={setMonth} />
       <Banner kind="error" message={error} />
 
       {!digest && !error && <div className="text-sm text-zk-muted">載入緊……</div>}
