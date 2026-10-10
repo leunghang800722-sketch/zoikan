@@ -64,14 +64,7 @@ export async function requirePermission(req: Request, moduleSelector: ModuleSele
     throw Forbidden(`角色「${roleDisplay(session.roleName)}」（base_role=${roleDisplay(session.baseRole)}）硬性禁止 ${moduleLabel(mod)}:${action}`);
   }
 
-  const granted = await prisma.rolePermission.findFirst({
-    where: {
-      roleId: session.roleId,
-      granted: true,
-      permission: { module: mod, action: action as never },
-    },
-    select: { id: true },
-  });
+  const granted = (await loadPermissionSet(session)).has(permissionKey(mod, action));
 
   if (!granted) {
     await denyAndAudit(session, mod, action, ip, "not_granted");
@@ -92,12 +85,46 @@ async function denyAndAudit(session: AuthedSession, mod: Module, action: Action,
   });
 }
 
+/** P3-1.1：`Set` 入面嘅 key 格式 `module:action`。 */
+export function permissionKey(mod: Module, action: Action): string {
+  return `${mod}:${action}`;
+}
+
+// P3-1.1（附錄 b A-1）：per-request 權限 Set。`requireSession()` 每個 request
+// 都會 unseal 出一個新嘅 session 物件，所以用 `WeakMap<session, Promise<Set>>`
+// 記憶就等於「同一 request 內只查一次」；request 完結 session 物件被 GC，
+// cache 跟住消失，唔會跨 request 留住舊權限（改角色權限即時生效）。
+const permissionSetCache = new WeakMap<AuthedSession, Promise<ReadonlySet<string>>>();
+
+/**
+ * 一條 `role_permissions JOIN permissions` 查詢砌出該角色全部 granted=true 嘅
+ * `module:action`。硬性 deny 唔喺 Set 入面處理（`hasPermission()` 另外用
+ * `isHardDenied` 疊加），Set 淨係反映 role_permissions 表。
+ */
+export function loadPermissionSet(session: AuthedSession): Promise<ReadonlySet<string>> {
+  let p = permissionSetCache.get(session);
+  if (!p) {
+    p = prisma.rolePermission
+      .findMany({
+        where: { roleId: session.roleId, granted: true },
+        select: { permission: { select: { module: true, action: true } } },
+      })
+      .then((rows) => new Set(rows.map((r) => permissionKey(r.permission.module as Module, r.permission.action as Action))));
+    // 查詢失敗唔好永久記住 rejected promise
+    p.catch(() => permissionSetCache.delete(session));
+    permissionSetCache.set(session, p);
+  }
+  return p;
+}
+
+/** 同步版：已經攞到 Set 之後逐項判斷（硬性 deny 疊加）。 */
+export function permissionSetHas(session: AuthedSession, set: ReadonlySet<string>, mod: Module, action: Action): boolean {
+  if (isHardDenied(session.baseRole, mod, action)) return false;
+  return set.has(permissionKey(mod, action));
+}
+
 /** 唔拋錯嘅版本——route 想「先查有冇權限先決定 scrub 定唔 scrub」用呢個。 */
 export async function hasPermission(session: AuthedSession, mod: Module, action: Action): Promise<boolean> {
   if (isHardDenied(session.baseRole, mod, action)) return false;
-  const granted = await prisma.rolePermission.findFirst({
-    where: { roleId: session.roleId, granted: true, permission: { module: mod, action: action as never } },
-    select: { id: true },
-  });
-  return !!granted;
+  return (await loadPermissionSet(session)).has(permissionKey(mod, action));
 }
