@@ -1,5 +1,5 @@
-// WP-PRICE（老闆 2026-09-16 拍板）Playwright e2e——更表儲存自動計价＋
-// 「未定价」警告＋重新計价，喺真實 dev DB（`npm run db:seed`）／真實 UI
+// WP-PRICE（老闆 2026-09-16 拍板）Playwright e2e——更表儲存自動計價＋
+// 「未定價」警告＋重新計價，喺真實 dev DB（`npm run db:seed`）／真實 UI
 // 路徑（唔淨係 gate script 直接 call 函數）驗證。同 wp3.spec.ts／
 // wp4.spec.ts 一樣嘅 pattern：`test.describe.configure({mode:"serial"})`
 // 場景之間共用同一個 dev DB，順序執行；跑完要還原（unvoid 測試作廢咗嘅
@@ -23,7 +23,7 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
   await loginAs(page, "主管");
   await page.goto(`/roster/${siteId}/2026-08`);
   // 2026-08 喺 dev DB 唔一定有記錄（seed 只有 7 月；8 月係 e2e 自己造嘅，
-  // 其他 gate 跑完會清走）——冇行就先「複製上月」，儲存嗰下會一齊計价。
+  // 其他 gate 跑完會清走）——冇行就先「複製上月」，儲存嗰下會一齊計價。
   const copyBtn = page.getByRole("button", { name: /複製上月/ });
   await expect(copyBtn).toBeVisible({ timeout: 20_000 });
   if ((await page.getByTestId("roster-row").count()) === 0) {
@@ -79,18 +79,18 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
   await expect(toast).toBeVisible({ timeout: 90_000 }); // 冷啟動＋成個月複製儲存可以超過 30s
 
   // 應修 6（Opus 驗收覆核）：新 toast 優先級（「冇結算單位」toast 贏過
-  // 「未定价」toast，見 RosterEditor.tsx「已儲存 · N 格冇結算單位」／
-  // 「已儲存 · N 格未定价」互斥顯示）令舊版 `not.toContain("未定价")`
-  // 呢種純睇 toast 文字嘅斷言可以假通過——就算呢次動作真係整咗未定价
+  // 「未定價」toast，見 RosterEditor.tsx「已儲存 · N 格冇結算單位」／
+  // 「已儲存 · N 格未定價」互斥顯示）令舊版 `not.toContain("未定價")`
+  // 呢種純睇 toast 文字嘅斷言可以假通過——就算呢次動作真係整咗未定價
   // 格，只要同一次儲存**同時**觸發咗「冇結算單位」toast，文字已經唔
-  // 帶「未定价」呢個字，舊斷言一樣過，但實際上未定价問題完全冇被攔
+  // 帶「未定價」呢個字，舊斷言一樣過，但實際上未定價問題完全冇被攔
   // 到。而家改用兩條實質、直接打 API／DB 嘅斷言，唔再淨係睇 toast
   // 文字：
   //   (i) 冇結算單位（no_settlement_count）＝0——呢個先係 P0 真正要守嘅
   //       invariant（settlement_broker_id 一定要有值，糧單先見到呢批
   //       更；呢個 test 本身填嘅係一個已存在嘅保安員/更別/雞頭組合，儲存
   //       之後唔應該整出任何一格冇結算單位）。
-  //   (ii) 未定价格數（呢個 site+shift_type+broker 組合，excl.
+  //   (ii) 未定價格數（呢個 site+shift_type+broker 組合，excl.
   //       no_settlement）唔准多過「上月（2026-07）同一個組合本身已經
   //       缺價嘅格數」——用 `GET /api/shift-records/unpriced?month=&
   //       site_id=` 動態計，唔寫死數字（上月本身缺咗幾多張卡係 dev
@@ -123,7 +123,7 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
   // 唔應該整出任何一格冇結算單位。
   expect(augUnpriced.no_settlement_count ?? 0).toBe(0);
 
-  // (ii) 未定价格數唔准多過上月同組合本身已缺價嘅格數（動態計，唔寫死）。
+  // (ii) 未定價格數唔准多過上月同組合本身已缺價嘅格數（動態計，唔寫死）。
   if (savedRecord && savedShiftTypeCode) {
     const brokerCodeRow = savedRecord.settlementBrokerId ? await prisma.broker.findUnique({ where: { id: savedRecord.settlementBrokerId } }) : null;
     const brokerCode = brokerCodeRow?.code ?? null;
@@ -144,7 +144,7 @@ test("(a) 主管登入 2026-08 啟航1331 → 填一格 D → 儲存 → 糧明�
   await expect(dPayrollRow).toBeVisible({ timeout: 20_000 });
 });
 
-test("(b) 揀一個冇卡組合填格 → 儲存 → toast 講「未定价」＋頁頂 Notice 出現", async ({ page }) => {
+test("(b) 揀一個冇卡組合填格 → 儲存 → toast 講「未定價」＋頁頂 Notice 出現", async ({ page }) => {
   const siteId = await findSiteIdByName("啟航1331");
   const brokerKId = await findBrokerIdByCode("K");
 
@@ -156,7 +156,7 @@ test("(b) 揀一個冇卡組合填格 → 儲存 → toast 講「未定价」＋
 
   try {
     // 揀一條 settlement_broker=K（普通雞頭，唔係 external/longterm——
-    // 兩者就算冇卡都唔算「未定价」，唔啱呢個測試場景）嘅記錄，攞返佢嘅
+    // 兩者就算冇卡都唔算「未定價」，唔啱呢個測試場景）嘅記錄，攞返佢嘅
     // guard/shift_type，再喺 8 月搵一日呢個組合本身冇 shift_record（保證
     // 個格一開始係空，type 落去先真係 dirty）。
     const kRow = await prisma.shiftRecord.findFirst({
@@ -198,10 +198,10 @@ test("(b) 揀一個冇卡組合填格 → 儲存 → toast 講「未定价」＋
     await expect(saveBtn).toBeEnabled({ timeout: 5_000 }); // dirtyCount>0 先啟用
     await saveBtn.click();
     await expect(page.getByTestId("roster-save-toast")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("roster-save-toast")).toContainText("未定价");
+    await expect(page.getByTestId("roster-save-toast")).toContainText("未定價");
 
     await page.reload();
-    await expect(page.getByText(/更未定价（冇對應價目卡）/)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/更未定價（冇對應價目卡）/)).toBeVisible({ timeout: 20_000 });
   } finally {
     // 還原（老闆 unvoid）＋清走呢個 test 新填低嘅一格——鐵律：唔可以留低
     // 污染畀下一次跑。
@@ -214,7 +214,7 @@ test("(b) 揀一個冇卡組合填格 → 儲存 → toast 講「未定价」＋
   }
 });
 
-test("(c) 老闆撳「重新計价」（2026-08）→ dry-run 預覽 dialog（帶 changed/unchanged 數）→ 唔確認就唔會寫入", async ({ page }) => {
+test("(c) 老闆撳「重新計價」（2026-08）→ dry-run 預覽 dialog（帶 changed/unchanged 數）→ 唔確認就唔會寫入", async ({ page }) => {
   const siteId = await findSiteIdByName("啟航1331");
 
   // 空預覽（自給自足，唔靠其他 test 剩低嘅狀態）。淨係揀 billing_model=
@@ -246,7 +246,7 @@ test("(c) 老闆撳「重新計价」（2026-08）→ dry-run 預覽 dialog（�
     await page.goto(`/roster/${siteId}/2026-08`);
     await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
 
-    const repriceBtn = page.getByRole("button", { name: /重新計价/ });
+    const repriceBtn = page.getByRole("button", { name: /重新計價/ });
     if (await repriceBtn.count()) {
       const before = await prisma.shiftRecord.count({ where: { siteId, workDate: { gte: AUG, lte: AUG_END }, recordType: "shift" } });
       await repriceBtn.click();
@@ -255,7 +255,7 @@ test("(c) 老闆撳「重新計价」（2026-08）→ dry-run 預覽 dialog（�
       }).toPass({ timeout: 15_000 });
       expect(dialogMessages.some((m) => /會改變/.test(m))).toBe(true); // 證明真係經咗 dry-run 摘要（帶 changed 數），唔係舊版單一 confirm
       expect(dialogMessages.some((m) => m.includes("完成"))).toBe(false); // dismiss 咗 confirm，唔應該再有「完成」dialog
-      await expect(page.getByText(/重新計价失敗/)).toHaveCount(0);
+      await expect(page.getByText(/重新計價失敗/)).toHaveCount(0);
 
       // 確認真係冇寫入——DB 記錄數／內容冇變（dry-run 淨係回摘要）。
       const after = await prisma.shiftRecord.count({ where: { siteId, workDate: { gte: AUG, lte: AUG_END }, recordType: "shift" } });

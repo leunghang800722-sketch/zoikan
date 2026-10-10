@@ -20,7 +20,7 @@ describe("isExplicitPerShiftClientCard", () => {
   it("7 月匯入／派生卡（effective_from=2026-07-01）→ false", () => {
     expect(isExplicitPerShiftClientCard(card({ effectiveFrom: JUL1 }), AUG1, AUG31)).toBe(false);
   });
-  it("client null（淨係出街价卡）→ false", () => {
+  it("client null（淨係出街價卡）→ false", () => {
     expect(isExplicitPerShiftClientCard(card({ clientRate: null }), AUG1, AUG31)).toBe(false);
   });
   it("flat／special 卡 → false", () => {

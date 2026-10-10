@@ -108,7 +108,7 @@ interface RosterGroup {
    * （record_type='ot'）——同一 (盤, OT 更種, 結算雞頭) 一組，同散工/長工
    * 正更組獨立（OT 更種本身就係一個獨立 shiftTypeId，key 自然分開）。
    * OT 行「更數」＝Σ ot_hours（老闆「折入」：以小時做更數，配合決定 #1
-   * 每小時价），唔係逐格 +1。 */
+   * 每小時價），唔係逐格 +1。 */
   isOt: boolean;
   brokerCode: string;
   brokerLabel: string;
@@ -281,8 +281,8 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     }
 
     // §25.7：OT 行「更數」＝Σ ot_hours（老闆「折入」決定：以小時做更數，
-    // 配合 §25.1 OT 卡＝每小時价）；正更／請假照舊逐格 +1。冇 ot_hours
-    // （未定价 OT）＝呢格對「更數」貢獻 0（唔屈估，同 gross-margin.ts
+    // 配合 §25.1 OT 卡＝每小時價）；正更／請假照舊逐格 +1。冇 ot_hours
+    // （未定價 OT）＝呢格對「更數」貢獻 0（唔屈估，同 gross-margin.ts
     // 8 月起「冇 hours 唔可以估」呼應）。
     const otH = isOt ? (r.otHours === null ? 0 : n(r.otHours)) : 0;
     const countIncrement = isOt ? otH : 1;
@@ -294,7 +294,7 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     // resolve-rate.ts 寫入嗰刻已經計好），呢度加總唔使再乘 otHours。
     g.revenue = round2(g.revenue + (clientRate ?? 0));
     g.cost = round2(g.cost + guardWage + brokerFee);
-    // 「上單價」／「外判價」樣本：OT 行要顯示每小時价（snapshot÷otHours），
+    // 「上單價」／「外判價」樣本：OT 行要顯示每小時價（snapshot÷otHours），
     // 唔係嗰粒 OT 記錄嘅總金額；正更／長工行樣本照舊用記錄本身金額。
     if (isOt) {
       if (clientRate !== null && otH > 0) g.clientRateSamples.push(round2(clientRate / otH));
@@ -305,10 +305,10 @@ async function loadRosterGroups(month: Date): Promise<{ groups: RosterGroup[]; d
     }
     // 驗收修正（Opus 5.5，WP-BOSS5 §25.7 追蹤）：OT 組（isOt）唔准計入
     // `longtermShiftsByGuard`／`totalB07ShiftsByGuard`——OT 記錄以小時做
-    // 「更數」（配合 §25.1 每小時价），唔係月薪攤分嘅單位；之前冇擋走
+    // 「更數」（配合 §25.1 每小時價），唔係月薪攤分嘅單位；之前冇擋走
     // OT，令 B07 長工有 OT 嗰個月，正更行「外判價」（月薪÷正更更數）會被
     // OT 小時一齊攤薄（分母多咗，每更攤到嘅月薪就少咗），而 OT 行本身又
-    // 冇對應嘅「每小時月薪价」概念可攤（真人月薪按更數攤，OT 唔係「多
+    // 冇對應嘅「每小時月薪價」概念可攤（真人月薪按更數攤，OT 唔係「多
     // 做一更」）。而家 OT B07 行唔寫入 `longtermShiftsByGuard`——
     // `longtermRowPayoutRate()` 見呢個 guard 冇 entry（rowShifts=0）就
     // 回 null，OT 行外判價留空（唔攤月薪）；正更 B07 行嘅
@@ -835,7 +835,7 @@ async function writeLegendSheet(wb: ExcelJS.Workbook, month: Date): Promise<void
     "§14 規則 12a（卓弘豁免介紹費）：由 2026-09 起生效，8 月結算跟月結表全數支付。",
     "",
     "已知差異項目（§19，8 月驗收時記錄，未必每月都出現，出現時要人手核對）：蔚峰園(W)更表重複行、凱和山 Unbilled 判斷、Weave Hospital Road(T)更表漏記病假。呢啲屬於*上游更表資料*本身嘅已知落差，唔係呢個 export 模組嘅 bug——見 scripts/gate/postorder-export-aug.ts 差異表。",
-    "OT（record_type=ot）：WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）起折入 Roster／PostOrder——同一 (盤, OT 更種, 結算雞頭) 一組，行標籤用 OT 更種 label（例「1Hr OT」）；「更數」＝Σ ot_hours（以小時做更數，配合 §25.1 OT 卡＝每小時价）；上單價／外判價＝snapshot÷ot_hours（即每小時价）。呢部分收入已經計入 Roster「當月收入」／Summary「逐雞頭付款」／`siteRevenue.revenue`，但 `buildMonthlyClose()`（月結總表 P0 口徑）本身唔含 OT——Summary「總收入」呢個特定總數維持一鍵報告口徑（唔含 OT），另有一行「OT 收入（已折入 Roster 分頁）」俾老闆對數。",
+    "OT（record_type=ot）：WP-BOSS5 §25.7（老闆 2026-09-28 追加決定 #7）起折入 Roster／PostOrder——同一 (盤, OT 更種, 結算雞頭) 一組，行標籤用 OT 更種 label（例「1Hr OT」）；「更數」＝Σ ot_hours（以小時做更數，配合 §25.1 OT 卡＝每小時價）；上單價／外判價＝snapshot÷ot_hours（即每小時價）。呢部分收入已經計入 Roster「當月收入」／Summary「逐雞頭付款」／`siteRevenue.revenue`，但 `buildMonthlyClose()`（月結總表 P0 口徑）本身唔含 OT——Summary「總收入」呢個特定總數維持一鍵報告口徑（唔含 OT），另有一行「OT 收入（已折入 Roster 分頁）」俾老闆對數。",
   ];
   lines.forEach((l, i) => setCell(ws, i + 1, 1, l));
   ws.getColumn(1).width = 100;

@@ -15,7 +15,7 @@
 //   - guard 級：`guardId` 唔係 null（人專屬價，通常係長工日均價，逐人
 //     手動維護，唔應該批量複製）。
 //   - LINK 盤：`site.guardsPaidByClient=true`（客戶直接出糧，唔逐更計
-//     价，本身唔需要逐更卡，同 `stepPrecheck()` 一致排除）。
+//     價，本身唔需要逐更卡，同 `stepPrecheck()` 一致排除）。
 //   - 已有本月卡：同一 (site, shiftType, broker) 組合本月已經有生效卡
 //     （`effectiveFrom<=本月最後一日 && (effectiveTo=null || effectiveTo>=
 //     本月第一日)`）就跳過——保證冪等（連撳兩次，第二次候選一定 0）。

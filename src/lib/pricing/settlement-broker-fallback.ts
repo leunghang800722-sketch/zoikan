@@ -1,6 +1,6 @@
 // P0（Opus 驗收重現）：新月份更表記錄冇咗結算單位（`settlement_broker_id`
 // NULL）→ `buildPayrollTotals()`（src/lib/reports/payroll.ts）逐 broker
-// 查，冇雞頭嘅記錄喺糧明細**完全消失**（唔止「未定价」，係整條記錄喺
+// 查，冇雞頭嘅記錄喺糧明細**完全消失**（唔止「未定價」，係整條記錄喺
 // 報表憑空唔見咗）。根源：93/265 個保安員 `guards.default_broker_id` 係
 // NULL（長工／公司兵），「複製上月」／新增格嘅 payload 又冇帶
 // `settlement_broker_id`，令 batch/route.ts、單筆 POST 兩個 fallback 鏈

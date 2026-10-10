@@ -4,7 +4,7 @@
 //
 // 驗收發現（dev DB 實測，build→apply 之後）：IFC（853.66＝35,000÷41）、
 // 淺水灣道11號蔚峰園（935.48＝29,000÷31）、創富廠IC（1,050＝25,200÷24）
-// 呢啲盤嘅 8 月試算 E 值本身係「月費÷更數」嘅倒算值，唔係真逐更价；佢哋
+// 呢啲盤嘅 8 月試算 E 值本身係「月費÷更數」嘅倒算值，唔係真逐更價；佢哋
 // 7 月嘅 flat 卡又係無限期（WP-PRICE migration 伸長）——如果「flat＋所有
 // per_shift snapshot」咁加，8 月會雙重計收入（IFC 35,000＋35,000）。
 //
@@ -14,8 +14,8 @@
 // billing_model 係 per_shift（或者未填）嘅逐更收客卡，掛住呢個更種（或者
 // 盤級通用 shift_type=null）」嗰陣，先當「逐更另收」：
 //   - 收入：flat ＋ 呢啲「逐更另收」更種嘅 client_rate_snapshot 合計；
-//   - 未定价：呢啲更種冇 client snapshot 先算「收客价未定」。
-// 其餘 per_shift 更種當「已包喺月費」——唔加收入、唔標未定价。7 月匯入
+//   - 未定價：呢啲更種冇 client snapshot 先算「收客價未定」。
+// 其餘 per_shift 更種當「已包喺月費」——唔加收入、唔標未定價。7 月匯入
 // 嘅卡（effective_from=2026-07-01，例：控制室 r2_report 840 盤級卡、
 // `MR-` 更種嘅 master_roster_only_rate 卡）永遠唔會觸發。
 //
@@ -62,7 +62,7 @@ export type MixedBillingSiteInfo = {
   allShiftTypes: boolean;
 };
 
-/** 純函數：flat 收入盤上，呢個更種嘅逐更 snapshot 算唔算收入／要唔要求定价。 */
+/** 純函數：flat 收入盤上，呢個更種嘅逐更 snapshot 算唔算收入／要唔要求定價。 */
 export function isExplicitPerShiftType(info: MixedBillingSiteInfo | undefined, shiftTypeId: string): boolean {
   if (!info) return false;
   return info.allShiftTypes || info.explicitShiftTypeIds.has(shiftTypeId);

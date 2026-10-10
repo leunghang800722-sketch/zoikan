@@ -1,4 +1,4 @@
-// WP-PRICE §3：「未定价」逐組統計——`GET /api/shift-records/unpriced` 同
+// WP-PRICE §3：「未定價」逐組統計——`GET /api/shift-records/unpriced` 同
 // 更表編輯器／糧明細／本月應收／毛利即時表／月結工作台嘅頁頂 Notice
 // 共用同一份邏輯，唔准逐處各執一詞。
 import { prisma } from "@/lib/db";
@@ -9,23 +9,23 @@ import { isUnpricedShift, isClientUnpricedShift, type BrokerKindLike } from "./r
 import type { Prisma } from "@prisma/client";
 import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type MixedBillingSiteInfo } from "@/lib/reports/mixed-billing";
 
-// S3：未定价分兩類——payout_unpriced（出街价未定，舊有口徑，加咗
-// wage=0&&fee=null）／client_unpriced（收客价未定，淨係逐更盤先算，見
+// S3：未定價分兩類——payout_unpriced（出街價未定，舊有口徑，加咗
+// wage=0&&fee=null）／client_unpriced（收客價未定，淨係逐更盤先算，見
 // isClientUnpricedShift()）。`category` 令前端 Notice 可以分開講兩件事，
 // `count`/`groups`（向下相容，冇 filter 就係兩類合計）保留舊形狀。
 // P0（Opus 驗收重現）：`no_settlement`——`settlement_broker_id` 直情
-// NULL 嘅記錄（唔止「未定价」，係喺 `buildPayrollTotals()` 逐 broker 查
+// NULL 嘅記錄（唔止「未定價」，係喺 `buildPayrollTotals()` 逐 broker 查
 // 嗰陣**完全唔會出現**喺任何一個 broker 嘅明細，糧單見唔到呢批更）。
 // 同 `payout_unpriced`/`client_unpriced` 獨立計（唔互相排斥——冇結算
 // 單位嘅記錄通常都會同時係 payout_unpriced，但呢個分類專門畀用戶睇到
-// 「呢批更連邊個雞頭都未定，仲未計『有雞頭但未定价』果種」）。
+// 「呢批更連邊個雞頭都未定，仲未計『有雞頭但未定價』果種」）。
 //
 // WP-MIXED-BILLING（老闆 2026-09-24 答：OT 冇統一公式，個個盤個個人都
-// 唔同，系統唔准自動套公式計 OT 价）：`ot_unpriced`——OT 記錄（record_
+// 唔同，系統唔准自動套公式計 OT 價）：`ot_unpriced`——OT 記錄（record_
 // type=ot）完全冇任何 client/guard/fee snapshot（冇 OT 更種嘅 rate card
 // 都冇人手輸入）——同 `payout_unpriced`/`client_unpriced` 嗰套「拆開睇
 // 出街/收客邊個未定」唔同口徑，OT 淨係一個粗口徑「呢條 OT 記錄完全未
-// 定价」，前端報表頂部顯示數目（見 gross-margin.ts）。**只對 2026-08
+// 定價」，前端報表頂部顯示數目（見 gross-margin.ts）。**只對 2026-08
 // 起嘅月份計**（`buildUnpricedSummary()` 淨係喺 month>=8 月先將 OT 記錄
 // 攞埋落嚟——7 月 OT 記錄嘅 snapshot 一直由 seed 直接寫入，唔經呢個新
 // 分類，7 月 gate 唔變）。
@@ -44,13 +44,13 @@ export type UnpricedGroup = {
 export type UnpricedSummary = {
   count: number;
   groups: UnpricedGroup[];
-  /** S3：分類合計——payout（出街价未定）／client（收客价未定，淨係逐更盤）。 */
+  /** S3：分類合計——payout（出街價未定）／client（收客價未定，淨係逐更盤）。 */
   payoutCount: number;
   clientCount: number;
   /** P0：冇結算單位（settlement_broker_id NULL）嘅記錄數——呢批更喺
-   * 糧明細會完全消失，唔止未定价咁簡單，前端要獨立高亮。 */
+   * 糧明細會完全消失，唔止未定價咁簡單，前端要獨立高亮。 */
   noSettlementCount: number;
-  /** WP-MIXED-BILLING：完全未定价嘅 OT 記錄數（見上面 `ot_unpriced` 註解，
+  /** WP-MIXED-BILLING：完全未定價嘅 OT 記錄數（見上面 `ot_unpriced` 註解，
    * 只計 2026-08 起嘅月份）。 */
   otUnpricedCount: number;
 };
@@ -58,11 +58,11 @@ export type UnpricedSummary = {
 /** 必修 2（Opus 第二輪驗收）：`computeUnpricedSummary()` 抽出嚟做純函數——
  * `buildUnpricedSummary()`（真正 DB 讀）同 `POST /api/shift-records/
  * reprice`（見 src/app/api/shift-records/reprice/route.ts）兩邊都要用
- * *同一份* 「未定价」判斷邏輯（`isUnpricedShift`／`isClientUnpricedShift`），
+ * *同一份* 「未定價」判斷邏輯（`isUnpricedShift`／`isClientUnpricedShift`），
  * 唔可以各執一詞——reprice 嘅 dry-run 冇寫 DB，攞唔到「寫入之後」嘅
  * snapshot，所以淨係 `buildUnpricedSummary()` 做唔到（一定要打 DB）；
  * 抽呢個純函數出嚟等 reprice 用「模擬寫入之後」嘅記錄（after 值）一樣
- * 過返呢度計，保證口徑（邊條算未定价）永遠同 `buildUnpricedSummary()`
+ * 過返呢度計，保證口徑（邊條算未定價）永遠同 `buildUnpricedSummary()`
  * 一致，唔會有兩套邏輯飄開。 */
 export type UnpricedRecordLike = {
   siteId: string;
@@ -98,7 +98,7 @@ export type UnpricedLookups = {
   shiftTypeCodeById: Map<string, string>;
   shiftTypeBillingGroupById: Map<string, string>;
   // WP-MISC（老闆 2026-09-20 拍板）：LINK（TKO Gateway 厚A/B/C）呢類
-  // 「客戶直接出糧」嘅盤——true 嘅盤一律唔算未定价（payout 同 client
+  // 「客戶直接出糧」嘅盤——true 嘅盤一律唔算未定價（payout 同 client
   // 都唔算），見 resolve-rate.ts isUnpricedShift()／isClientUnpricedShift()。
   siteGuardsPaidByClientById: Map<string, boolean>;
   /** WP-MIXED-BILLING（Opus 5.5 驗收）：8 月起「月費盤邊啲 per_shift 更種
@@ -148,9 +148,9 @@ export function computeUnpricedSummary(records: UnpricedRecordLike[], lookups: U
 
     // WP-MIXED-BILLING：OT 記錄獨立分類——唔行落面 payout_unpriced／
     // client_unpriced 嗰套邏輯（嗰套係為 record_type=shift 設計，「出街
-    // 价未定」／「收客价未定」拆開睇嘅概念對 OT 唔啱用）。OT 淨係一個
+    // 價未定」／「收客價未定」拆開睇嘅概念對 OT 唔啱用）。OT 淨係一個
     // 粗口徑：完全冇任何 client/guard/fee snapshot（冇 OT 更種嘅 rate
-    // card，都冇人手輸入）就算「未定价 OT」。`buildUnpricedSummary()`
+    // card，都冇人手輸入）就算「未定價 OT」。`buildUnpricedSummary()`
     // 淨係喺 2026-08 起嘅月份先將 OT 記錄攞埋落嚟餵呢個函數（見嗰邊
     // `includeOt` gate），所以呢度唔使再判斷月份。
     if (recordType === "ot") {
@@ -215,7 +215,7 @@ export function computeUnpricedSummary(records: UnpricedRecordLike[], lookups: U
   };
 }
 
-// WP-MIXED-BILLING：OT 記錄（record_type=ot）要計「未定价 OT」——但淨係
+// WP-MIXED-BILLING：OT 記錄（record_type=ot）要計「未定價 OT」——但淨係
 // 2026-08 起嘅月份先計（7 月 OT 記錄嘅 snapshot 一直由 seed 直接寫入，唔
 // 經新嘅 ot_unpriced 分類，見 unpriced.ts 頂註解）。
 
@@ -229,7 +229,7 @@ export async function buildUnpricedSummary(session: AuthedSession, month: Date, 
     ...(siteId ? { siteId } : {}),
     // P2-B「本月應收」`?broker=` 預覽分支用——內部角色 session 本身唔經
     // scopeShiftRecordWhere() 隔離，呢個參數等預覽某個雞頭嗰陣淨係計
-    // 佢自己嘅未定价（唔係全公司）。
+    // 佢自己嘅未定價（唔係全公司）。
     ...(brokerId ? { settlementBrokerId: brokerId } : {}),
   };
   where = scopeShiftRecordWhere(session, where);
@@ -282,7 +282,7 @@ export async function loadUnpricedLookups(
   };
 }
 
-/** 單條記錄屬邊啲未定价類別（同 `computeUnpricedSummary()` 同一口徑）。 */
+/** 單條記錄屬邊啲未定價類別（同 `computeUnpricedSummary()` 同一口徑）。 */
 export function unpricedCategoriesOf(r: UnpricedRecordLike, lookups: UnpricedLookups, opts: { month?: Date | null } = {}): UnpricedCategory[] {
   return computeUnpricedSummary([r], lookups, opts).groups.map((g) => g.category);
 }

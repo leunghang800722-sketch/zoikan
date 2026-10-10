@@ -115,8 +115,8 @@ describe("GET /api/diagnostics/month", () => {
   });
 
   // WP-BOSS5 驗收項 7（新增診斷）：本月 OT 記錄逐 ot_hours 值嘅 {count,
-  // pricedCount}——一條 1 小時已定价、一條 3.5 小時已定价、一條 3.5
-  // 小時未定价（三個 snapshot 全 null）、一條未填 ot_hours（null）。
+  // pricedCount}——一條 1 小時已定價、一條 3.5 小時已定價、一條 3.5
+  // 小時未定價（三個 snapshot 全 null）、一條未填 ot_hours（null）。
   it("老闆：ot 區塊逐 ot_hours 值分組，priced 判斷同 otHourlyPricingFrom 正確", async () => {
     const otShiftType = await prisma.shiftType.create({ data: { siteId: fx.site.id, code: "OT1", label: "1Hr OT", createdBy: "t" } });
     const guard = await prisma.guard.create({ data: { nameZh: "測試OT保安員", employmentType: "cash_casual", createdBy: "t" } });
@@ -154,7 +154,7 @@ describe("GET /api/diagnostics/month", () => {
           settlementBrokerId: fx.brokerA.id,
           recordType: "ot",
           otHours: 3.5,
-          createdBy: "t", // 冇任何 snapshot ＝未定价
+          createdBy: "t", // 冇任何 snapshot ＝未定價
         },
         {
           workDate: new Date("2026-08-06"),
@@ -182,7 +182,7 @@ describe("GET /api/diagnostics/month", () => {
     expect(hour1).toEqual({ ot_hours: 1, count: 1, priced_count: 1 });
 
     const hour35 = byHours.find((g) => g.ot_hours === 3.5);
-    expect(hour35).toEqual({ ot_hours: 3.5, count: 2, priced_count: 1 }); // 一條已定价、一條未定价
+    expect(hour35).toEqual({ ot_hours: 3.5, count: 2, priced_count: 1 }); // 一條已定價、一條未定價
 
     const hourNull = byHours.find((g) => g.ot_hours === null);
     expect(hourNull).toEqual({ ot_hours: null, count: 1, priced_count: 0 });

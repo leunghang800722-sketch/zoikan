@@ -14,7 +14,7 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel, monthStart } from "@/lib/reports/money";
 import { buildMonthlyClose, writeMonthlyCloseXlsx, DEFAULT_REPORT_MONTH, type MonthlyCloseSiteRow } from "@/lib/reports/monthly-close";
 import { prisma } from "@/lib/db";
-// WP-PRICE §3：頁頂「N 更未定价，金額未計入」Notice 要用嘅 additive 欄。
+// WP-PRICE §3：頁頂「N 更未定價，金額未計入」Notice 要用嘅 additive 欄。
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
 function scrubRow(row: MonthlyCloseSiteRow, canClient: boolean): Record<string, unknown> {
@@ -65,7 +65,7 @@ export async function GET(req: Request) {
         unpriced_groups: unpriced.groups,
         // 應修 1：獨立畀前端顯示「N 格冇結算單位」警告。
         no_settlement_count: unpriced.noSettlementCount,
-        // WP-MIXED-BILLING：OT 未定价獨立數目（見 gross-margin/route.ts 同一段註解）。
+        // WP-MIXED-BILLING：OT 未定價獨立數目（見 gross-margin/route.ts 同一段註解）。
         ot_unpriced_count: unpriced.otUnpricedCount,
         // §21 任務 5a：長工糧實際總數／合併成本摘要——成本類數字，跟
         // gross-margin/route.ts 一致，淨係「出街價:view」先睇得到。

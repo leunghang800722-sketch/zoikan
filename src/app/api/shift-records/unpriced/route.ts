@@ -1,6 +1,6 @@
 // WP-PRICE §3：`GET /api/shift-records/unpriced?month=YYYY-MM[&site_id=]`——
 // 純讀，權限「更表:view」（同更表編輯器/報表頁本身嘅睇權一致；雞頭
-// session 經 `scopeShiftRecordWhere()` 淨係見到自己嘅未定价格）。
+// session 經 `scopeShiftRecordWhere()` 淨係見到自己嘅未定價格）。
 import { z } from "zod";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";

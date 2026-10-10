@@ -319,7 +319,7 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
     const shiftTypeId = combo.shiftTypeId!;
     const siteName = siteNameById.get(siteId) ?? siteId.slice(0, 8);
     const shiftTypeCode = shiftTypeById.get(shiftTypeId) ?? shiftTypeId.slice(0, 8);
-    // LINK（guards_paid_by_client）盤：客戶直接出糧、唔逐更計价，本身就唔
+    // LINK（guards_paid_by_client）盤：客戶直接出糧、唔逐更計價，本身就唔
     // 需要逐更卡（同 unpriced.ts 一致），唔查。
     if (paidByClientSiteIds.has(siteId)) continue;
     // 格仍指住已作廢更種（對數會當未配對）：唔提示設價卡，改出一行 warning（盤名＋格數）。

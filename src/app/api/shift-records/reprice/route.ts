@@ -1,20 +1,20 @@
 // WP-PRICE（老闆 2026-09-16 拍板）：`POST /api/shift-records/reprice`——
-// 重新計价（例如價目卡補咗／改咗之後，令舊有 snapshot 追返卡）。權限
+// 重新計價（例如價目卡補咗／改咗之後，令舊有 snapshot 追返卡）。權限
 // 「出街價:update」（老闆出廠有，主管/會計可以由老闆開；雞頭/保安員硬性
 // deny，見 rbac/matrix.ts，呢度唔改矩陣，淨係用返現有 module）。
 //
 // 月份已鎖定 → 409（唔用共用嘅 `Locked()`——嗰個係 403，呢個 endpoint
-// 規劃裁定明文要 409，因為「重新計价」語意上係「同呢個月已經鎖定嘅狀態
+// 規劃裁定明文要 409，因為「重新計價」語意上係「同呢個月已經鎖定嘅狀態
 // 有衝突」，唔係純粹權限拒絕）。
 //
 // M3（Opus 驗收「reprice 清空數據」修正，2026-09-16）：
-//   1. resolver 搵唔到某個欄位（收客价冇 clientCard／出街价冇
+//   1. resolver 搵唔到某個欄位（收客價冇 clientCard／出街價冇
 //      payoutCard）就**保留原值**，唔准靜靜清做 null（之前嘅版本一律
 //      覆蓋，令一張卡臨時冇咗都會將舊有正確 snapshot 洗走）——計入
 //      `kept_unresolved`。
 //   2. `dry_run`（預設 true）：唔寫 DB，淨係回 diff 摘要（changed／
 //      unchanged／kept_unresolved 數 + 前 50 條 before→after，用 id＋
-//      盤／更別／日期，唔用真名）——前端「重新計价」掣要先 dry-run
+//      盤／更別／日期，唔用真名）——前端「重新計價」掣要先 dry-run
 //      俾用戶睇過先撳確認，先真係 `dry_run:false` 寫入。
 //   3. audit 一行（`reprice_month`），`after` 除咗 counts 之外，仲要含
 //      *全部* changed 記錄嘅 `{id, before, after}`（可逆，等日後要 revert
@@ -36,7 +36,7 @@ import { monthRange } from "@/lib/reports/money";
 import { fetchEffectiveRateCards, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
 import { journalAutoCardUses, type AutoCardUse } from "@/lib/pricing/auto-card-journal";
 import { decideReprice } from "@/lib/pricing/reprice";
-// 必修 2（Opus 第二輪驗收）：「未定价」口徑（response 嘅 `unpriced`／
+// 必修 2（Opus 第二輪驗收）：「未定價」口徑（response 嘅 `unpriced`／
 // `groups`）一律用同 `buildUnpricedSummary()`（GET /api/shift-records/
 // unpriced、頁首 banner 嗰個 API）共用嘅核心邏輯——`computeUnpricedSummary()`
 // 係抽出嚟嘅純函數，dry-run 用「模擬寫入之後」嘅 in-memory 記錄餵佢，
@@ -63,7 +63,7 @@ type RepriceGroup = UnpricedGroup;
 // ／「出街價:view」嘅讀者先至真係睇唔到（之前用 camelCase
 // `clientRate`／`guardWage`／`brokerFee`，audit-log 嘅 field-group gate
 // 淨係識做頂層 key，完全冇拆到呢個 nested array，令冇權限嘅主管一樣經
-// GET /api/audit-log 見到 reprice 改過嘅收客/出街价——wp2-n1-audit-log-
+// GET /api/audit-log 見到 reprice 改過嘅收客/出街價——wp2-n1-audit-log-
 // gate.test.ts 全 suite 一齊跑就會發現）。
 type AuditSnapshot = { client_rate_snapshot: number | null; guard_wage_snapshot: number | null; broker_fee_snapshot: number | null };
 type PreviewRow = { id: string; site_name: string; shift_type_code: string; work_date: string; before: AuditSnapshot; after: AuditSnapshot };
@@ -97,7 +97,7 @@ export async function POST(req: Request) {
     }
 
     if (await isMonthLocked(month)) {
-      throw Conflict(`${parsed.month} 已鎖定，唔可以重新計价`);
+      throw Conflict(`${parsed.month} 已鎖定，唔可以重新計價`);
     }
 
     // Opus 第三輪 S1：dry-run 同 commit 後嘅 buildUnpricedSummary() 一樣行
@@ -149,7 +149,7 @@ export async function POST(req: Request) {
       // WP-MISC（老闆 2026-09-20 拍板）：加 `guardsPaidByClient`——LINK
       // 呢類盤 reprice 全部保留現值（唔掂），見下面 loop。
       prisma.site.findMany({ where: { id: { in: siteIdList } }, select: { id: true, canonicalName: true, billingModel: true, guardsPaidByClient: true } }),
-      // 應修：加 billingGroup——收客价 resolver／未定价判斷而家用
+      // 應修：加 billingGroup——收客價 resolver／未定價判斷而家用
       // shift_type.billing_group（唔再用 site.billing_model）。
       prisma.shiftType.findMany({ where: { id: { in: shiftTypeIdList } }, select: { id: true, code: true, billingGroup: true } }),
     ]);
@@ -213,11 +213,11 @@ export async function POST(req: Request) {
       }
     }
 
-    // 必修 2：「未定价」統計（`unpriced`／`groups`）唔再喺上面嗰個 loop
+    // 必修 2：「未定價」統計（`unpriced`／`groups`）唔再喺上面嗰個 loop
     // 各自另計一套（`clientNotFound && payoutNotFound`）——而家用「模擬
     // 寫入之後」嘅記錄，餵返 `computeUnpricedSummary()`（同 `buildUnpriced
     // Summary()` 共用嘅核心邏輯），保證同 GET /api/shift-records/unpriced
-    // 顯示嘅口徑一致（例如 external/longterm 唔會被計做未定价）。
+    // 顯示嘅口徑一致（例如 external/longterm 唔會被計做未定價）。
     const simulatedRecords: UnpricedRecordLike[] = records.map((r, i) => {
       const u = updates[i]!;
       return {
