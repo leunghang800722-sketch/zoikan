@@ -2,14 +2,14 @@
 // 定位唔到出生日期行就裁卡面下半。輸出 out/dob-crops.json（清單，無日期）。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { DocExtract } from './lib/aggregate';
-import { locateDobBox } from './lib/crop-box';
-import type { DocCheck } from './lib/crosscheck';
-import type { DocMeta } from './lib/doc-index';
-import type { OcrPage } from './lib/ocr';
-import { groupPersons } from './lib/persons';
-import { toPixels } from './lib/phone-crop';
-import { OUT, renderPage, run } from './lib/render';
+import type { DocExtract } from '../../staff-import/lib/aggregate';
+import { locateDobBox } from '../../staff-import/lib/crop-box';
+import type { DocCheck } from '../../staff-import/lib/crosscheck';
+import type { DocMeta } from '../../staff-import/lib/doc-index';
+import type { OcrPage } from '../../staff-import/lib/ocr';
+import { groupPersons } from '../../staff-import/lib/persons';
+import { toPixels } from '../../staff-import/lib/phone-crop';
+import { OUT, renderPage, run } from '../../staff-import/lib/render';
 
 async function main() {
   const index = new Map((JSON.parse(await fs.readFile(path.join(OUT, 'index.json'), 'utf8')) as DocMeta[]).map((m) => [m.docId, m]));
