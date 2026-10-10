@@ -7,14 +7,15 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow, TableEmptyRow } from "@/components/ui/DataTable";
 import { fmt, fmtMoney } from "@/lib/ui/format";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
 import { kickerFor } from "@/lib/nav/schema";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 const PRORATA_BASIS = ["div_31", "div_month_days"] as const;
 const BILLING_GROUPS = ["per_shift", "monthly_ic"] as const;
@@ -92,21 +93,15 @@ function billingModelPill(model: string) {
 }
 
 export default function SitesPage() {
-  const [rows, setRows] = useState<SiteRow[]>([]);
   const [shiftTypesBySite, setShiftTypesBySite] = useState<Record<string, ShiftTypeRow[]>>({});
   // S1（Opus 驗收）：「更別」欄未讀到之前顯示「載入緊…」，唔好當佢真係
   // 冇更別（「—」）——落面 load() 一次過攞晒 shift-types 先會清呢個 flag。
   const [shiftTypesLoading, setShiftTypesLoading] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [hasMoneyField, setHasMoneyField] = useState(true);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptySiteForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, setNotice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, setFormError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<SiteRow, typeof emptySiteForm>(emptySiteForm);
 
   const [shiftTypesFor, setShiftTypesFor] = useState<SiteRow | null>(null);
   // WP-POSTORDER-FREE（§34 B）：雞頭名單（揀盤預設雞頭用）＋「建議」。
@@ -145,21 +140,18 @@ export default function SitesPage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // WP-RECONCILE-UI（§33.3 D）：`/sites?focus=<siteId>` 高亮＋捲到該盤（純 UI）。
   const focusSite = useFocusParam();
   useScrollToFocus(focusSite, !loading && rows.length > 0);
 
   function openCreate() {
-    setEditingId(null);
-    setForm(emptySiteForm);
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer();
   }
 
   function openEdit(row: SiteRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       canonical_name: row.canonical_name,
       aliases: (row.aliases ?? []).join(", "),
       client_name: row.client_name,
@@ -174,9 +166,7 @@ export default function SitesPage() {
       roster_file_keys: (row.roster_file_keys ?? []).join(", "),
       default_settlement_broker_id: row.default_settlement_broker_id ?? "",
     });
-    setFormError(null);
     setSuggestion(null);
-    setDrawerOpen(true);
     // 雞頭名單只喺開編輯抽屜先攞（列表頁 request 集合不變）。
     if (brokers.length === 0) {
       void (async () => {
@@ -208,8 +198,6 @@ export default function SitesPage() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setFormError(null);
     const aliases = form.aliases
       .split(",")
       .map((s) => s.trim())
@@ -233,39 +221,18 @@ export default function SitesPage() {
     if (hasMoneyField && form.monthly_fee !== "") body.monthly_fee = Number(form.monthly_fee);
     if (editingId) body.default_settlement_broker_id = form.default_settlement_broker_id || null;
 
-    const res = editingId
-      ? await apiPatch(`/api/sites/${editingId}`, body)
-      : await apiPost("/api/sites", { ...body, canonical_name: form.canonical_name });
-    setSaving(false);
-    if (!res.ok) {
-      setFormError(res.message);
-      return;
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+    await saveForm(
+      () => (editingId ? apiPatch(`/api/sites/${editingId}`, body) : apiPost("/api/sites", { ...body, canonical_name: form.canonical_name })),
+      load,
+    );
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/sites/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已結束");
-    await load();
+    await runAction(() => apiPost(`/api/sites/${id}/void`, { reason }), "已結束", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/sites/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已恢復");
-    await load();
+    await runAction(() => apiPost(`/api/sites/${id}/unvoid`), "已恢復", load);
   }
 
   // 其他（Opus 驗收）：頭列實際係 盤名/客戶/結算模式/(月費)/更別/狀態/
@@ -310,11 +277,7 @@ export default function SitesPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {rows.map((r) => (
                   <tr key={r.id} className={`${tableCls.rowHover} ${focusSite === r.id ? FOCUS_CLS : ""}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
@@ -340,24 +303,24 @@ export default function SitesPage() {
                     </td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                        <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                           編輯
-                        </button>
-                        <button
+                        </Button>
+                        <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => setShiftTypesFor(r)}
-                          className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header"
+
                         >
                           更別
-                        </button>
+                        </Button>
                         {r.status === "ended" ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+
                           >
                             恢復
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton label="結束" confirmLabel="確認結束" onConfirm={(reason) => onVoid(r.id, reason)} />
                         )}
@@ -371,34 +334,34 @@ export default function SitesPage() {
 
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
-              <div key={r.id} className={`rounded-lg border bg-white p-3 ${focusSite === r.id ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
+              <div key={r.id} className={`rounded-lg border bg-white p-3 ${focusSite === r.id ? "border-zk-primary bg-zk-warning-bg ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[13.5px] font-medium text-zk-text">{r.canonical_name}</span>
+                  <span className="text-zk-base font-medium text-zk-text">{r.canonical_name}</span>
                   {hasMoneyField && (
-                    <span className="text-[13px] tabular-nums text-zk-text">{r.billing_model === "per_shift" ? "—" : fmtMoney(r.monthly_fee)}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{r.billing_model === "per_shift" ? "—" : fmtMoney(r.monthly_fee)}</span>
                   )}
                 </div>
-                <div className="mt-1 text-[11.5px] text-zk-muted">{r.client_name}</div>
+                <div className="mt-1 text-zk-xs text-zk-muted">{r.client_name}</div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {billingModelPill(r.billing_model)}
                   {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
                   {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
                   {r.default_settlement_broker_id && <Pill variant="neutral">已設預設雞頭</Pill>}
-                  <span className="text-[11.5px] text-zk-muted">
+                  <span className="text-zk-xs text-zk-muted">
                     {shiftTypesLoading ? "載入緊…" : (shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                     編輯
-                  </button>
-                  <button type="button" onClick={() => setShiftTypesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  </Button>
+                  <Button variant="secondary" size="sm" type="button" onClick={() => setShiftTypesFor(r)}>
                     更別
-                  </button>
+                  </Button>
                   {r.status === "ended" ? (
-                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                       恢復
-                    </button>
+                    </Button>
                   ) : (
                     <ConfirmVoidButton label="結束" confirmLabel="確認結束" onConfirm={(reason) => onVoid(r.id, reason)} />
                   )}
@@ -448,13 +411,13 @@ export default function SitesPage() {
                 ))}
               </select>
               {suggestion?.suggestion && suggestion.suggestion.broker_id !== form.default_settlement_broker_id && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-zk-muted" data-testid="site-default-broker-suggestion">
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-zk-sm text-zk-muted" data-testid="site-default-broker-suggestion">
                   <span>
                     建議：{suggestion.suggestion.broker_code}（由 {suggestion.month ? `${Number(suggestion.month.slice(5, 7))} 月 ` : ""}Postorder 推出，同盤 {suggestion.suggestion.days} 個雞頭格全部係佢）
                   </span>
-                  <button type="button" onClick={adoptSuggestion} disabled={adopting} className="rounded-[5px] border border-zk-border px-2 py-[2px] text-xs text-zk-primary hover:bg-zk-header disabled:opacity-50">
+                  <Button variant="secondary" size="sm" type="button" onClick={adoptSuggestion} disabled={adopting}>
                     {adopting ? "採用緊…" : "採用"}
-                  </button>
+                  </Button>
                 </div>
               )}
             </Field>
@@ -486,7 +449,7 @@ export default function SitesPage() {
             </Field>
           ) : (
             <Field label="月費（monthly_fee）">
-              <div className="text-sm text-gray-400">—（冇「收客價」權限）</div>
+              <div className="text-sm text-zk-faint">—（冇「收客價」權限）</div>
             </Field>
           )}
           <Field label="月費崗數（monthly_posts）">
@@ -507,7 +470,7 @@ export default function SitesPage() {
               ))}
             </select>
           </Field>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 text-sm text-zk-text-secondary">
             <input type="checkbox" checked={form.in_scope} onChange={(e) => setForm((f) => ({ ...f, in_scope: e.target.checked }))} />
             in_scope（計入報表範圍）
           </label>
@@ -526,12 +489,12 @@ export default function SitesPage() {
             客戶直接出糧（保安員由客戶直接出糧，我哋淨係收每月服務費，呢個盤嘅更唔計工資／客價）
           </label>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>
@@ -658,13 +621,13 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
       <div className="space-y-3">
         <Banner kind="error" message={error} />
         <div className="flex justify-end">
-          <button type="button" onClick={openCreate} className={btnPrimary}>
+          <Button variant="primary" size="sm" type="button" onClick={openCreate}>
             新增更別
-          </button>
+          </Button>
         </div>
 
         {showForm && (
-          <form onSubmit={onSubmit} className="space-y-2 rounded border border-gray-200 p-3">
+          <form onSubmit={onSubmit} className="space-y-2 rounded border border-zk-border p-3">
             <Field label="代號（code）">
               <input className={inputCls} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} required />
             </Field>
@@ -713,61 +676,53 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
               </select>
             </Field>
             <div className="flex gap-2 pt-1">
-              <button type="submit" disabled={saving} className={btnPrimary}>
+              <Button variant="primary" size="sm" type="submit" disabled={saving}>
                 {saving ? "儲存緊…" : "儲存"}
-              </button>
-              <button type="button" onClick={() => setShowForm(false)} className={btnSecondary}>
+              </Button>
+              <Button variant="secondary" size="sm" type="button" onClick={() => setShowForm(false)}>
                 取消
-              </button>
+              </Button>
             </div>
           </form>
         )}
 
-        <div className="overflow-x-auto rounded border border-gray-200">
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50 text-left text-gray-500">
+        <div className="overflow-x-auto rounded border border-zk-border">
+          <table className={tableCls.table}>
+            <thead>
               <tr>
-                <th className="px-2 py-1.5">代號</th>
-                <th className="px-2 py-1.5">名稱</th>
-                <th className="px-2 py-1.5">時段</th>
-                <th className="px-2 py-1.5">操作</th>
+                <th className={tableCls.th}>代號</th>
+                <th className={tableCls.th}>名稱</th>
+                <th className={tableCls.th}>時段</th>
+                <th className={tableCls.th}>操作</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr>
-                  <td className="px-2 py-3 text-gray-400" colSpan={4}>
-                    載入緊…
-                  </td>
-                </tr>
+                <TableLoadingRow colSpan={4} />
               )}
               {!loading && rows.length === 0 && (
-                <tr>
-                  <td className="px-2 py-3 text-gray-400" colSpan={4}>
-                    暫時冇更別
-                  </td>
-                </tr>
+                <TableEmptyRow colSpan={4}>暫時冇更別</TableEmptyRow>
               )}
               {rows.map((r) => (
-                <tr key={r.id} className="border-t border-gray-100">
-                  <td className="px-2 py-1.5">{r.code}</td>
-                  <td className="px-2 py-1.5">{fmt(r.label)}</td>
-                  <td className="px-2 py-1.5">
+                <tr key={r.id}>
+                  <td className={tableCls.td}>{r.code}</td>
+                  <td className={tableCls.td}>{fmt(r.label)}</td>
+                  <td className={tableCls.td}>
                     {fmt(r.start_time)}–{fmt(r.end_time)}
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className={tableCls.td}>
                     <div className="flex flex-wrap items-center gap-1">
-                      <button type="button" onClick={() => openEdit(r)} className="rounded border border-gray-300 px-1.5 py-0.5 hover:bg-gray-50">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯
-                      </button>
+                      </Button>
                       {r.voided_at ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                          className="rounded border border-green-300 px-1.5 py-0.5 text-green-700 hover:bg-green-50"
+
                         >
                           解除作廢
-                        </button>
+                        </Button>
                       ) : (
                         <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                       )}

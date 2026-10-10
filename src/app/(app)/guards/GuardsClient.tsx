@@ -16,13 +16,13 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmt, fmtDate, isExpired, isExpiringSoon, todayLocalStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { kickerFor } from "@/lib/nav/schema";
@@ -31,6 +31,8 @@ import { kickerFor } from "@/lib/nav/schema";
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { MenuButton } from "@/components/ui/MenuButton";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { Tabs } from "@/components/ui/Tabs";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
 const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
@@ -263,6 +265,7 @@ export function GuardsClient({
   /** WP-GUARD-OCR §29：有 DEEPSEEK_API_KEY 同「保安員批量導入」權限先顯示「用證件新增」 */
   canOcr?: boolean;
 }) {
+  const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
   const [rows, setRows] = useState<GuardRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -301,6 +304,9 @@ export function GuardsClient({
   const [allowInvalidHkid, setAllowInvalidHkid] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // P3-4.3（H18）：Drawer 分 tab（基本／證件／聯絡／長工／銀行）；只係分組顯示，各區塊（連權限遮罩）一律照舊 mount。
+  const [drawerTab, setDrawerTab] = useState<"basic" | "docs" | "contact" | "longterm" | "bank">("basic");
+  const tabCls = (t: string) => (drawerTab === t ? "space-y-3" : "hidden");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
@@ -575,6 +581,7 @@ export function GuardsClient({
     // 兩個都直接 true——Save 掣唔應該因為呢個防護機制喺新增模式度 disabled。
     setDetailLoaded(true);
     setDetailAvailable(true);
+    setDrawerTab("basic");
     setDrawerOpen(true);
   }
 
@@ -712,6 +719,7 @@ export function GuardsClient({
     // 空字串當做「清空」送落 DB。
     setDetailLoaded(false);
     setDetailAvailable(false);
+    setDrawerTab("basic");
     setDrawerOpen(true);
     const detailRes = await apiGet<GuardRow>(`/api/guards/${row.id}`);
     if (detailRes.ok) {
@@ -997,9 +1005,9 @@ export function GuardsClient({
     if (!editingId) return;
     const nextStatus: "current" | "former" = row.status === "current" ? "former" : "current";
     if (nextStatus === "current") {
-      const confirmed = window.confirm(
-        `已取消嘅編號正常唔會再用（再入職會攞新號）。確定要將 ${row.number} 改返現用？（只應該用嚟更正撳錯）`,
-      );
+      const confirmed = await askConfirm({
+        message: `已取消嘅編號正常唔會再用（再入職會攞新號）。確定要將 ${row.number} 改返現用？（只應該用嚟更正撳錯）`,
+      });
       if (!confirmed) return;
     }
     setNumberActionBusy(true);
@@ -1147,7 +1155,7 @@ export function GuardsClient({
 
   async function onDeletePhone(row: PhoneRow) {
     if (!editingId) return;
-    const confirmed = window.confirm(`確定要刪走電話 ${row.tel}？（更正打錯用，audit_log 留底）`);
+    const confirmed = await askConfirm({ message: `確定要刪走電話 ${row.tel}？（更正打錯用，audit_log 留底）`, confirmLabel: "刪走", tone: "danger" });
     if (!confirmed) return;
     setPhoneActionBusy(true);
     setPhoneActionError(null);
@@ -1224,7 +1232,7 @@ export function GuardsClient({
 
   async function onDeleteAddress(row: AddressRow) {
     if (!editingId) return;
-    const confirmed = window.confirm("確定要刪走呢個地址？（更正打錯用，audit_log 留底）");
+    const confirmed = await askConfirm({ message: "確定要刪走呢個地址？（更正打錯用，audit_log 留底）", confirmLabel: "刪走", tone: "danger" });
     if (!confirmed) return;
     setAddressActionBusy(true);
     setAddressActionError(null);
@@ -1295,7 +1303,7 @@ export function GuardsClient({
 
   async function onDeleteContact(row: ContactRow) {
     if (!editingId) return;
-    const confirmed = window.confirm(`確定要刪走呢個緊急聯絡人${row.name ? `（${row.name}）` : ""}？（更正打錯用，audit_log 留底）`);
+    const confirmed = await askConfirm({ message: `確定要刪走呢個緊急聯絡人${row.name ? `（${row.name}）` : ""}？（更正打錯用，audit_log 留底）`, confirmLabel: "刪走", tone: "danger" });
     if (!confirmed) return;
     setContactActionBusy(true);
     setContactActionError(null);
@@ -1467,7 +1475,7 @@ export function GuardsClient({
     return (
       <div
         key={n.id}
-        className={`rounded-[7px] border px-2.5 py-1.5 text-[13px] ${isCurrent ? "border-zk-border" : "border-zk-border bg-zk-header text-zk-muted"}`}
+        className={`rounded-[7px] border px-2.5 py-1.5 text-zk-base ${isCurrent ? "border-zk-border" : "border-zk-border bg-zk-header text-zk-muted"}`}
       >
         <div className="flex flex-wrap items-center gap-2">
           <Pill variant="neutral">{n.scheme}</Pill>
@@ -1482,21 +1490,21 @@ export function GuardsClient({
           {n.note && <span className="text-xs text-zk-muted">備註：{n.note}</span>}
           {!isBroker && (
             <div className="ml-auto flex gap-1.5">
-              <button
+              <Button variant="link" size="sm"
                 type="button"
                 disabled={numberActionBusy}
                 onClick={() => onToggleStaffNumberStatus(n)}
-                className="text-xs text-zk-primary underline"
+
               >
                 {isCurrent ? "取消呢個號" : "改返現用"}
-              </button>
-              <button
+              </Button>
+              <Button variant="link" size="sm"
                 type="button"
                 onClick={() => (isEditing ? onCancelNumberEdit() : onOpenNumberEdit(n))}
-                className="text-xs text-zk-primary underline"
+
               >
                 {isEditing ? "取消編輯" : "編輯"}
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -1535,12 +1543,12 @@ export function GuardsClient({
               <input className={inputCls} value={numberEditForm.note} onChange={(e) => setNumberEditForm((f) => ({ ...f, note: e.target.value }))} />
             </Field>
             <div className="flex gap-2">
-              <button type="button" disabled={numberActionBusy} onClick={onSaveNumberEdit} className={btnSecondary}>
+              <Button variant="secondary" size="sm" type="button" disabled={numberActionBusy} onClick={onSaveNumberEdit}>
                 {numberActionBusy ? "儲存緊…" : "儲存"}
-              </button>
-              <button type="button" onClick={onCancelNumberEdit} className={btnSecondary}>
+              </Button>
+              <Button variant="secondary" size="sm" type="button" onClick={onCancelNumberEdit}>
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -1553,7 +1561,7 @@ export function GuardsClient({
   function renderPhoneRow(p: PhoneRow) {
     const isEditing = phoneEditingId === p.id;
     return (
-      <div key={p.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+      <div key={p.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-zk-base">
         <div className="flex flex-wrap items-center gap-2">
           <span className={p.is_primary ? "font-medium text-zk-text" : undefined}>{p.tel}</span>
           {p.is_primary ? <Pill variant="success">主要</Pill> : null}
@@ -1561,16 +1569,16 @@ export function GuardsClient({
           {!isBroker && (
             <div className="ml-auto flex gap-1.5">
               {!p.is_primary && (
-                <button type="button" disabled={phoneActionBusy} onClick={() => onSetPhonePrimary(p)} className="text-xs text-zk-primary underline">
+                <Button variant="link" size="sm" type="button" disabled={phoneActionBusy} onClick={() => onSetPhonePrimary(p)}>
                   設為主要
-                </button>
+                </Button>
               )}
-              <button type="button" onClick={() => (isEditing ? onCancelPhoneEdit() : onOpenPhoneEdit(p))} className="text-xs text-zk-primary underline">
+              <Button variant="link" size="sm" type="button" onClick={() => (isEditing ? onCancelPhoneEdit() : onOpenPhoneEdit(p))}>
                 {isEditing ? "取消編輯" : "編輯"}
-              </button>
-              <button type="button" disabled={phoneActionBusy} onClick={() => onDeletePhone(p)} className="text-xs text-red-600 underline">
+              </Button>
+              <Button variant="linkDanger" size="sm" type="button" disabled={phoneActionBusy} onClick={() => onDeletePhone(p)}>
                 刪除
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -1589,12 +1597,12 @@ export function GuardsClient({
               <input className={inputCls} value={phoneEditForm.note} onChange={(e) => setPhoneEditForm((f) => ({ ...f, note: e.target.value }))} />
             </Field>
             <div className="flex gap-2">
-              <button type="button" disabled={phoneActionBusy} onClick={onSavePhoneEdit} className={btnSecondary}>
+              <Button variant="secondary" size="sm" type="button" disabled={phoneActionBusy} onClick={onSavePhoneEdit}>
                 {phoneActionBusy ? "儲存緊…" : "儲存"}
-              </button>
-              <button type="button" onClick={onCancelPhoneEdit} className={btnSecondary}>
+              </Button>
+              <Button variant="secondary" size="sm" type="button" onClick={onCancelPhoneEdit}>
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -1606,23 +1614,23 @@ export function GuardsClient({
   function renderAddressRow(a: AddressRow) {
     const isEditing = addressEditingId === a.id;
     return (
-      <div key={a.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+      <div key={a.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-zk-base">
         <div className="flex flex-wrap items-center gap-2">
           <span className={a.is_primary ? "font-medium text-zk-text" : undefined}>{a.address}</span>
           {a.is_primary ? <Pill variant="success">主要</Pill> : null}
           {!isBroker && (
             <div className="ml-auto flex gap-1.5">
               {!a.is_primary && (
-                <button type="button" disabled={addressActionBusy} onClick={() => onSetAddressPrimary(a)} className="text-xs text-zk-primary underline">
+                <Button variant="link" size="sm" type="button" disabled={addressActionBusy} onClick={() => onSetAddressPrimary(a)}>
                   設為主要
-                </button>
+                </Button>
               )}
-              <button type="button" onClick={() => (isEditing ? onCancelAddressEdit() : onOpenAddressEdit(a))} className="text-xs text-zk-primary underline">
+              <Button variant="link" size="sm" type="button" onClick={() => (isEditing ? onCancelAddressEdit() : onOpenAddressEdit(a))}>
                 {isEditing ? "取消編輯" : "編輯"}
-              </button>
-              <button type="button" disabled={addressActionBusy} onClick={() => onDeleteAddress(a)} className="text-xs text-red-600 underline">
+              </Button>
+              <Button variant="linkDanger" size="sm" type="button" disabled={addressActionBusy} onClick={() => onDeleteAddress(a)}>
                 刪除
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -1636,12 +1644,12 @@ export function GuardsClient({
               <input className={inputCls} value={addressEditForm.note} onChange={(e) => setAddressEditForm((f) => ({ ...f, note: e.target.value }))} />
             </Field>
             <div className="flex gap-2">
-              <button type="button" disabled={addressActionBusy} onClick={onSaveAddressEdit} className={btnSecondary}>
+              <Button variant="secondary" size="sm" type="button" disabled={addressActionBusy} onClick={onSaveAddressEdit}>
                 {addressActionBusy ? "儲存緊…" : "儲存"}
-              </button>
-              <button type="button" onClick={onCancelAddressEdit} className={btnSecondary}>
+              </Button>
+              <Button variant="secondary" size="sm" type="button" onClick={onCancelAddressEdit}>
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -1655,7 +1663,7 @@ export function GuardsClient({
   function renderContactRow(c: ContactRow, index: number) {
     const isEditing = contactEditingId === c.id;
     return (
-      <div key={c.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+      <div key={c.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-zk-base">
         <div className="flex flex-wrap items-center gap-2">
           {index === 0 && <Pill variant="success">代表（同步落舊欄）</Pill>}
           <span className="font-medium text-zk-text">{c.name || "（未填姓名）"}</span>
@@ -1663,23 +1671,23 @@ export function GuardsClient({
           {c.relationship && <Pill variant="neutral">{c.relationship}</Pill>}
           {!isBroker && (
             <div className="ml-auto flex gap-1.5">
-              <button type="button" disabled={contactActionBusy || index === 0} onClick={() => onMoveContact(index, -1)} className="text-xs text-zk-primary underline disabled:opacity-40">
+              <Button variant="link" size="sm" type="button" disabled={contactActionBusy || index === 0} onClick={() => onMoveContact(index, -1)}>
                 較先
-              </button>
-              <button
+              </Button>
+              <Button variant="link" size="sm"
                 type="button"
                 disabled={contactActionBusy || index === contacts.length - 1}
                 onClick={() => onMoveContact(index, 1)}
-                className="text-xs text-zk-primary underline disabled:opacity-40"
+
               >
                 較後
-              </button>
-              <button type="button" onClick={() => (isEditing ? onCancelContactEdit() : onOpenContactEdit(c))} className="text-xs text-zk-primary underline">
+              </Button>
+              <Button variant="link" size="sm" type="button" onClick={() => (isEditing ? onCancelContactEdit() : onOpenContactEdit(c))}>
                 {isEditing ? "取消編輯" : "編輯"}
-              </button>
-              <button type="button" disabled={contactActionBusy} onClick={() => onDeleteContact(c)} className="text-xs text-red-600 underline">
+              </Button>
+              <Button variant="linkDanger" size="sm" type="button" disabled={contactActionBusy} onClick={() => onDeleteContact(c)}>
                 刪除
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -1701,12 +1709,12 @@ export function GuardsClient({
               <input className={inputCls} value={contactEditForm.note} onChange={(e) => setContactEditForm((f) => ({ ...f, note: e.target.value }))} />
             </Field>
             <div className="flex gap-2">
-              <button type="button" disabled={contactActionBusy} onClick={onSaveContactEdit} className={btnSecondary}>
+              <Button variant="secondary" size="sm" type="button" disabled={contactActionBusy} onClick={onSaveContactEdit}>
                 {contactActionBusy ? "儲存緊…" : "儲存"}
-              </button>
-              <button type="button" onClick={onCancelContactEdit} className={btnSecondary}>
+              </Button>
+              <Button variant="secondary" size="sm" type="button" onClick={onCancelContactEdit}>
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -1716,6 +1724,7 @@ export function GuardsClient({
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <PageHeader
         kicker={kickerFor("/guards", isBroker)}
         title="保安員"
@@ -1797,11 +1806,7 @@ export function GuardsClient({
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {visibleRows.map((r) => {
                   // WP-PII（可接受但順手）：牌照／平安卡兩個到期日取較早
@@ -1830,22 +1835,22 @@ export function GuardsClient({
                         <div className="flex flex-wrap items-center gap-1.5">
                           {licenceExpiryPill(nearestExpiry)}
                           {siaPermitBLapsedPill(r.sia_permit_b_lapsed_by_age)}
-                          <span className="text-[11.5px] text-zk-muted">{fmtDate(nearestExpiry)}</span>
+                          <span className="text-zk-xs text-zk-muted">{fmtDate(nearestExpiry)}</span>
                         </div>
                       </td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                             編輯
-                          </button>
+                          </Button>
                           {r.status === "inactive" ? (
-                            <button
+                            <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() => onUnvoid(r.id)}
-                              className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+
                             >
                               恢復
-                            </button>
+                            </Button>
                           ) : (
                             <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                           )}
@@ -1864,12 +1869,12 @@ export function GuardsClient({
               const expired = isExpired(nearestExpiry);
               const b = broker(r.default_broker_id);
               return (
-                <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${expired ? "bg-[#fef2f2]" : ""}`}>
+                <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${expired ? "bg-zk-danger-bg" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{r.name_zh}</span>
-                    <span className="text-[13px] tabular-nums text-zk-text">{r.month_shift_count ?? "—"} 更</span>
+                    <span className="text-zk-base font-medium text-zk-text">{r.name_zh}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{r.month_shift_count ?? "—"} 更</span>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-zk-xs text-zk-muted">
                     {staffNumberChips(r)}
                     <span>{fmt(r.tel)}</span>
                     <span>{fmt(r.employment_type)}</span>
@@ -1883,13 +1888,13 @@ export function GuardsClient({
                     {siaPermitBLapsedPill(r.sia_permit_b_lapsed_by_age)}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                       編輯
-                    </button>
+                    </Button>
                     {r.status === "inactive" ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                         恢復
-                      </button>
+                      </Button>
                     ) : (
                       <ConfirmVoidButton confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                     )}
@@ -1902,7 +1907,20 @@ export function GuardsClient({
       )}
 
       <Drawer open={drawerOpen} title={editingId ? "編輯保安員" : "新增保安員"} onClose={() => setDrawerOpen(false)}>
-        <form onSubmit={onSubmit} className="space-y-3">
+        <form
+          onSubmit={onSubmit}
+          // 隱藏 tab 入面有 invalid／required 欄：瀏覽器會靜靜擋住 submit——自動跳去嗰個 tab 再顯示原生提示。
+          onInvalidCapture={(e) => {
+            const el = e.target as HTMLInputElement;
+            const m = el.closest('[data-testid^="guard-tab-panel-"]')?.getAttribute("data-testid")?.match(/guard-tab-panel-([a-z]+)/);
+            const tab = m?.[1] as typeof drawerTab | undefined;
+            if (tab && tab !== drawerTab) {
+              setDrawerTab(tab);
+              setTimeout(() => el.reportValidity?.(), 0);
+            }
+          }}
+          className="space-y-3"
+        >
           <Banner kind="error" message={formError} />
           {editingId && (() => {
             const st = rows.find((r) => r.id === editingId)?.identity_status;
@@ -1916,6 +1934,21 @@ export function GuardsClient({
               </div>
             );
           })()}
+          {editingId && (
+            <Tabs
+              testId="guard-drawer-tabs"
+              value={drawerTab}
+              onChange={setDrawerTab}
+              tabs={[
+                { key: "basic", label: "基本", testId: "guard-tab-basic" },
+                { key: "docs", label: "證件", testId: "guard-tab-docs" },
+                { key: "contact", label: "聯絡", testId: "guard-tab-contact" },
+                { key: "longterm", label: "長工", show: !isBroker, testId: "guard-tab-longterm" },
+                { key: "bank", label: "銀行", show: hasBankField, testId: "guard-tab-bank" },
+              ]}
+            />
+          )}
+          <div className={tabCls("basic")} data-testid="guard-tab-panel-basic">
           <div className="grid grid-cols-2 gap-2">
             {/* S1（Opus 驗收）：呢兩個係快速路（同步落 guards.staff_no／
                 staff_no_mw），淨係收固定種類——U／MG／MW 以外嘅種類（例如
@@ -1943,13 +1976,14 @@ export function GuardsClient({
           <Field label="電話">
             <input className={inputCls} value={form.tel} onChange={(e) => setForm((f) => ({ ...f, tel: e.target.value }))} />
           </Field>
+          </div>
 
           {/* WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀
               一個」）：主要電話照舊喺頂（above），呢度加多一個分區列晒
               所有電話（有幾多個記幾多個）。新增保安員嗰陣（!editingId）
               個 guard 仲未存在，同員工編號分區一致淨係編輯先顯示。 */}
           {editingId && (
-            <>
+            <div className={tabCls("contact")} data-testid="guard-tab-panel-contact">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">所有電話</h3>
               {phones.length === 0 ? (
                 <div className="text-sm text-zk-muted">未有記錄電話</div>
@@ -1967,14 +2001,15 @@ export function GuardsClient({
                       <input className={inputCls} value={phoneForm.label} onChange={(e) => setPhoneForm((f) => ({ ...f, label: e.target.value }))} />
                     </Field>
                   </div>
-                  <button type="button" disabled={phoneSaving || !phoneForm.tel} onClick={onAddPhone} className={`${btnSecondary} mt-2`}>
+                  <Button variant="secondary" size="sm" type="button" disabled={phoneSaving || !phoneForm.tel} onClick={onAddPhone} className="mt-2">
                     {phoneSaving ? "新增緊…" : "新增電話"}
-                  </button>
+                  </Button>
                 </div>
               )}
-            </>
+            </div>
           )}
 
+          <div className={tabCls("basic")} data-testid="guard-tab-panel-basic-misc">
           <Field label="預設雞頭" hint={editingId ? "建立之後唔可以喺呢頁改，要用用戶/雞頭管理" : undefined}>
             <select
               className={selectCls}
@@ -2015,12 +2050,13 @@ export function GuardsClient({
             </Field>
           ) : (
             <Field label="月薪（monthly_salary）">
-              <div className="text-sm text-gray-400">—（冇「出街價」權限）</div>
+              <div className="text-sm text-zk-faint">—（冇「出街價」權限）</div>
             </Field>
           )}
           <Field label="Polo 尺碼">
             <input className={inputCls} value={form.polo_size} onChange={(e) => setForm((f) => ({ ...f, polo_size: e.target.value }))} />
           </Field>
+          </div>
 
           {/* WP-PHASE3（§20.4 Phase 3 item 1）：保安員抽屜「長工」區——老闆／
               主管；雞頭（`isBroker`）結構性唔見（呢個 component 雞頭
@@ -2028,14 +2064,14 @@ export function GuardsClient({
               淨係編輯先顯示（同員工編號／電話等子資源一致——新增保安員
               嗰陣個 guard 仲未存在）。 */}
           {editingId && !isBroker && (
-            <>
+            <div className={tabCls("longterm")} data-testid="guard-tab-panel-longterm">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">長工</h3>
               {form.employment_type !== "longterm_autopay" && (
                 <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
                   {!convertOpen ? (
-                    <button type="button" onClick={() => setConvertOpen(true)} className={btnSecondary}>
+                    <Button variant="secondary" size="sm" type="button" onClick={() => setConvertOpen(true)}>
                       轉長工（一步：設聘用形式＋崗位盤＋介紹雞頭＋起始月薪）
-                    </button>
+                    </Button>
                   ) : (
                     <div className="space-y-2">
                       <Banner kind="error" message={convertError} />
@@ -2070,12 +2106,12 @@ export function GuardsClient({
                         </Field>
                       </div>
                       <div className="flex gap-2">
-                        <button type="button" disabled={convertSaving || !convertForm.site_id} onClick={onSubmitConvert} className={btnPrimary}>
+                        <Button variant="primary" size="sm" type="button" disabled={convertSaving || !convertForm.site_id} onClick={onSubmitConvert}>
                           {convertSaving ? "處理緊…" : "確認轉長工"}
-                        </button>
-                        <button type="button" onClick={() => setConvertOpen(false)} className={btnSecondary}>
+                        </Button>
+                        <Button variant="secondary" size="sm" type="button" onClick={() => setConvertOpen(false)}>
                           取消
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   )}
@@ -2118,16 +2154,16 @@ export function GuardsClient({
               </div>
 
               <div>
-                <div className="mb-1 text-[12.5px] text-zk-muted">長工崗位盤</div>
+                <div className="mb-1 text-zk-sm text-zk-muted">長工崗位盤</div>
                 <Banner kind="error" message={longtermPostError} />
                 {longtermPosts.length === 0 ? (
-                  <div className="text-[12.5px] text-zk-faint">未設崗位盤</div>
+                  <div className="text-zk-sm text-zk-faint">未設崗位盤</div>
                 ) : (
                   <ul className="space-y-1">
                     {longtermPosts.map((p) => {
                       const active = !p.voided_at && (!p.effective_to || p.effective_to >= todayLocalStr());
                       return (
-                        <li key={p.id} className="flex items-center justify-between gap-2 rounded border border-zk-border px-2 py-1 text-[12.5px]">
+                        <li key={p.id} className="flex items-center justify-between gap-2 rounded border border-zk-border px-2 py-1 text-zk-sm">
                           <span className="min-w-0 break-words">
                             {sites.find((s) => s.id === p.site_id)?.canonical_name ?? p.site_id.slice(0, 8)}
                             <span className="ml-1 text-zk-faint">
@@ -2135,9 +2171,9 @@ export function GuardsClient({
                             </span>
                           </span>
                           {active && !p.voided_at && (
-                            <button type="button" disabled={longtermPostActionBusy} onClick={() => onTerminateLongtermPost(p.id)} className="shrink-0 text-[12px] text-red-600 hover:underline">
+                            <Button variant="linkDanger" size="sm" className="shrink-0" type="button" disabled={longtermPostActionBusy} onClick={() => onTerminateLongtermPost(p.id)}>
                               終止
-                            </button>
+                            </Button>
                           )}
                         </li>
                       );
@@ -2169,19 +2205,19 @@ export function GuardsClient({
                     onChange={(e) => setLongtermPostForm((f) => ({ ...f, effective_from: e.target.value }))}
                   />
                 </div>
-                <button type="button" disabled={longtermPostSaving || !longtermPostForm.site_id} onClick={onAddLongtermPost} className={`${btnSecondary} mt-2`}>
+                <Button variant="secondary" size="sm" type="button" disabled={longtermPostSaving || !longtermPostForm.site_id} onClick={onAddLongtermPost} className="mt-2">
                   {longtermPostSaving ? "新增緊…" : "加崗位盤"}
-                </button>
+                </Button>
               </div>
 
-              <div className="text-[12.5px] text-zk-muted">
+              <div className="text-zk-sm text-zk-muted">
                 合約（月薪／假期結餘）去{" "}
                 <Link href="/reports/longterm-payroll" className="text-zk-primary underline">
                   長工糧頁
                 </Link>{" "}
                 管理。
               </div>
-            </>
+            </div>
           )}
 
           {/* WP-PII：新欄一律 PATCH-only（見上面 onSubmit()）——新增
@@ -2190,7 +2226,7 @@ export function GuardsClient({
               先發現 400）。冇對應 view 權限嘅分區直接唔顯示（唔係顯示
               「—」，跟老闆決定原文）。 */}
           {editingId && hasLicenceExtraField && (
-            <>
+            <div className={tabCls("docs")} data-testid="guard-tab-panel-docs">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">牌照與證件</h3>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="牌照號碼">
@@ -2211,7 +2247,7 @@ export function GuardsClient({
                   搬去新嘅甲／乙到期日兩欄；填咗任何一個之後（撳「儲存」
                   重新 GET）呢行就會自動消失，改用新計法。 */}
               {legacyPermitInfo && (
-                <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[13px] text-amber-800">
+                <div className="rounded-[7px] border border-zk-warning-border bg-zk-warning-bg px-2.5 py-1.5 text-zk-base text-zk-warning-dark">
                   舊記錄：類別 {legacyPermitInfo.type ?? "—"}、到期 {legacyPermitInfo.expiry ?? "—"}
                   （填咗甲／乙類到期日之後會改用新計法）
                 </div>
@@ -2288,7 +2324,7 @@ export function GuardsClient({
                   <input type="date" className={inputCls} value={form.leave_date} onChange={(e) => setForm((f) => ({ ...f, leave_date: e.target.value }))} />
                 </Field>
               </div>
-            </>
+            </div>
           )}
 
           {/* WP-STAFFNO：員工編號獨立表——新增保安員嗰陣（`!editingId`）
@@ -2298,7 +2334,7 @@ export function GuardsClient({
               有），但冇「新增編號」表單——「雞頭視角：chips 只讀，冇新增
               掣」（老闆決定原文）。 */}
           {editingId && (
-            <>
+            <div className={tabCls("docs")} data-testid="guard-tab-panel-docs">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">員工編號</h3>
               {/* C（老闆 2026-09-19 拍板四條業務規則）：分區標題下加一句提示，
                   等用戶（尤其主管／會計）睇得明「邊個號用嚟做乜」，同「取消
@@ -2314,13 +2350,13 @@ export function GuardsClient({
 
               {staffNumbers.filter((n) => n.status === "former").length > 0 && (
                 <div>
-                  <button
+                  <Button variant="link" size="sm"
                     type="button"
                     onClick={() => setShowFormerStaffNumbers((v) => !v)}
-                    className="text-xs text-zk-primary underline"
+
                   >
                     {showFormerStaffNumbers ? "隱藏已取消嘅號" : `顯示已取消嘅號 ${staffNumbers.filter((n) => n.status === "former").length} 個`}
-                  </button>
+                  </Button>
                   {showFormerStaffNumbers && (
                     <div className="mt-1.5 space-y-1.5">{staffNumbers.filter((n) => n.status === "former").map(renderStaffNumberRow)}</div>
                   )}
@@ -2392,21 +2428,20 @@ export function GuardsClient({
                       <input className={inputCls} value={staffNumberForm.note} onChange={(e) => setStaffNumberForm((f) => ({ ...f, note: e.target.value }))} />
                     </Field>
                   </div>
-                  <button
+                  <Button variant="secondary" size="sm"
                     type="button"
                     disabled={staffNumberSaving || !staffNumberForm.number}
-                    onClick={onAddStaffNumber}
-                    className={`${btnSecondary} mt-2`}
-                  >
+                    onClick={onAddStaffNumber} className="mt-2">
                     {staffNumberSaving ? "新增緊…" : "新增編號"}
-                  </button>
+                  </Button>
                 </div>
               )}
-            </>
+            </div>
           )}
 
           {editingId && hasPiiField && (
             <>
+            <div className={tabCls("basic")} data-testid="guard-tab-panel-basic-pii">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">個人資料</h3>
               <Field label="身份證號碼" hint="格式例：A123456(3)；系統會驗 check digit，同另一位保安員重複會擋">
                 <input className={inputCls} value={form.hkid} onChange={(e) => setForm((f) => ({ ...f, hkid: e.target.value }))} />
@@ -2448,6 +2483,8 @@ export function GuardsClient({
                 />
               </Field>
 
+            </div>
+            <div className={tabCls("contact")} data-testid="guard-tab-panel-contact-addr">
               {/* WP-MULTI（老闆 2026-09-19 拍板，規劃師延伸同一原則）：
                   上面「地址」單一 input 照舊（快速改主要地址，經 PATCH
                   舊寫法），呢度加地址列表（可以多個，一個主要）。 */}
@@ -2463,9 +2500,9 @@ export function GuardsClient({
                   <Field label="新增地址">
                     <input className={inputCls} value={addressForm.address} onChange={(e) => setAddressForm((f) => ({ ...f, address: e.target.value }))} />
                   </Field>
-                  <button type="button" disabled={addressSaving || !addressForm.address} onClick={onAddAddress} className={`${btnSecondary} mt-2`}>
+                  <Button variant="secondary" size="sm" type="button" disabled={addressSaving || !addressForm.address} onClick={onAddAddress} className="mt-2">
                     {addressSaving ? "新增緊…" : "新增地址"}
-                  </button>
+                  </Button>
                 </div>
               )}
 
@@ -2493,17 +2530,17 @@ export function GuardsClient({
                   <Field label="關係（選填）" hint="例：配偶／父母／子女">
                     <input className={inputCls} value={contactForm.relationship} onChange={(e) => setContactForm((f) => ({ ...f, relationship: e.target.value }))} />
                   </Field>
-                  <button
+                  <Button variant="secondary" size="sm"
                     type="button"
                     disabled={contactSaving || (!contactForm.name && !contactForm.tel)}
-                    onClick={onAddContact}
-                    className={`${btnSecondary} mt-2`}
-                  >
+                    onClick={onAddContact} className="mt-2">
                     {contactSaving ? "新增緊…" : "新增緊急聯絡人"}
-                  </button>
+                  </Button>
                 </div>
               )}
 
+            </div>
+            <div className={tabCls("docs")} data-testid="guard-tab-panel-docs-bl">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">Blacklist</h3>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Check 結果">
@@ -2529,11 +2566,12 @@ export function GuardsClient({
                   />
                 </Field>
               </div>
+            </div>
             </>
           )}
 
           {editingId && hasBankField && (
-            <>
+            <div className={tabCls("bank")} data-testid="guard-tab-panel-bank">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">銀行</h3>
               <Field label="銀行">
                 <input className={inputCls} value={form.bank_name} onChange={(e) => setForm((f) => ({ ...f, bank_name: e.target.value }))} />
@@ -2577,7 +2615,7 @@ export function GuardsClient({
                   </select>
                 </Field>
               </div>
-            </>
+            </div>
           )}
 
           <div className="flex gap-2 pt-2">
@@ -2586,12 +2624,12 @@ export function GuardsClient({
                 列表 row 起草嗰陣嘅空值（唔係真係「未填」，淨係列表 DTO
                 冇呢批欄）撳「儲存」送 `|| null` 清走已有資料，見 openEdit()
                 頂註解。 */}
-            <button type="submit" disabled={saving || !detailLoaded} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving || !detailLoaded}>
               {!detailLoaded ? "載入中…" : saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

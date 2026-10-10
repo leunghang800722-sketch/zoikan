@@ -4,6 +4,7 @@
 // 撳項目／撳外面／Esc 關閉。
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/Button";
 
 export interface MenuItem {
   label: string;
@@ -35,24 +36,13 @@ export function MenuButton({ label, items, variant = "secondary", testId }: { la
     };
   }, [open]);
 
-  const btnCls =
-    variant === "primary"
-      ? "border-[#2563eb] bg-[#2563eb] text-white font-semibold hover:bg-[#1d4ed8]"
-      : "border-[#d1d5db] bg-white text-[#334155] hover:bg-zk-header";
-  const itemCls = "block w-full px-3.5 py-2 text-left text-[13px] text-[#334155] hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-[.45]";
+  const itemCls = "block w-full px-3.5 py-2 text-left text-zk-base text-zk-text-secondary hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-[.45]";
 
   return (
     <div ref={ref} className="relative inline-block">
-      <button
-        type="button"
-        data-testid={testId}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className={`rounded-md border px-3.5 py-[7px] text-[13px] transition-colors ${btnCls}`}
-      >
+      <Button variant={variant} data-testid={testId} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         {label} ▾
-      </button>
+      </Button>
       {open && (
         <div role="menu" className="absolute right-0 z-30 mt-1 min-w-[200px] overflow-hidden rounded-md border border-zk-border bg-white py-1 shadow-[0_8px_24px_rgba(15,23,42,.14)]">
           {items.map((it) => {

@@ -7,7 +7,7 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { apiPost } from "@/lib/ui/api-client";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Field, inputCls } from "@/components/ui/Field";
@@ -60,8 +60,8 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
     <div className="flex flex-col gap-4">
       <PageHeader kicker="帳號" title="改密碼" />
       <div className="flex w-full max-w-[420px] flex-col gap-3.5 rounded-[10px] border border-zk-border bg-white p-[22px]">
-        {mustChangePwd && <Notice variant="info">首次登入請先設定新密碼。</Notice>}
-        {message && <Notice variant={message.kind === "error" ? "error" : "info"}>{message.text}</Notice>}
+        {mustChangePwd && <Banner compact kind="info">首次登入請先設定新密碼。</Banner>}
+        {message && <Banner compact kind={message.kind === "error" ? "error" : "info"}>{message.text}</Banner>}
 
         <form onSubmit={onSubmit} className="flex flex-col gap-3.5">
           <Field label="舊密碼">
@@ -75,7 +75,7 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
               required
             />
           </Field>
-          <label className="flex flex-col gap-1.5 text-[12.5px] text-zk-text-secondary">
+          <label className="flex flex-col gap-1.5 text-zk-sm text-zk-text-secondary">
             新密碼
             <input
               type="password"
@@ -88,10 +88,10 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
             />
             <div className="mt-0.5 flex gap-1" data-testid="change-password-strength" data-strength={strength}>
               {[0, 1, 2].map((i) => (
-                <span key={i} className="h-[3px] flex-1 rounded-sm" style={{ background: i < strength ? "#0f766e" : "#e5e7eb" }} />
+                <span key={i} className="h-[3px] flex-1 rounded-sm" style={{ background: i < strength ? "var(--zk-success)" : "var(--zk-border)" }} />
               ))}
             </div>
-            <span className="text-[11px] text-zk-muted">至少 8 位，建議加數字同英文</span>
+            <span className="text-zk-xs text-zk-muted">至少 8 位，建議加數字同英文</span>
           </label>
           <Field label="確認新密碼">
             <input
@@ -103,7 +103,7 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
               data-testid="change-password-confirm"
               required
             />
-            {mismatch && <span className="mt-1 block text-[11px] text-[#dc2626]">兩次輸入嘅新密碼唔一致</span>}
+            {mismatch && <span className="mt-1 block text-zk-xs text-zk-danger">兩次輸入嘅新密碼唔一致</span>}
           </Field>
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="secondary" onClick={() => router.push("/")}>

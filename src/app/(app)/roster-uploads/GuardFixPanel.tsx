@@ -272,7 +272,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
   useEffect(() => {
     void loadStaffList();
-    void loadPostorder(month);
+    // loadPostorder 由下面 [month] effect 負責（mount 時都會行一次）——P3-4：之前呢度重複打一次，同月 postorder 請求 ×2。
     void loadBrokers();
     void loadRuns().then((list) => {
       // 開頁（或者手機鎖機後重新整理）見到有 run 套用緊（未卡死）——即刻接住
@@ -574,26 +574,26 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="text-[13px] text-zk-muted">更表大量「未配對」保安員——上載 U Team 名單、計算修復計劃、一撳套用。月份跟頁首嘅月份選擇器。</div>
+      <div className="text-zk-base text-zk-muted">更表大量「未配對」保安員——上載 U Team 名單、計算修復計劃、一撳套用。月份跟頁首嘅月份選擇器。</div>
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
       {applyingNow && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px] text-zk-text" data-testid="guard-fix-applying">
+        <div className="rounded-lg border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base text-zk-text" data-testid="guard-fix-applying">
           套用緊…（建人＋重新配對全部更表，可能要幾分鐘）。可以留喺呢頁等；熄咗屏或者離開都唔會中斷，返嚟打開呢頁會自動接住。
         </div>
       )}
 
       {/* ① U Team 名單上載 */}
       <div className="rounded-lg border border-zk-border bg-white p-4">
-        <div className="mb-2 text-[14px] font-semibold text-zk-text">① U Team 名單</div>
+        <div className="mb-2 text-zk-md font-semibold text-zk-text">① U Team 名單</div>
         {currentStaffList ? (
-          <div className="mb-3 break-all text-[13px] text-zk-muted">
+          <div className="mb-3 break-all text-zk-base text-zk-muted">
             現用：{currentStaffList.file_name}（{fmtDateTime(currentStaffList.uploaded_at)} 上載，共 {currentStaffList.row_count} 行）
           </div>
         ) : (
-          <div className="mb-3 text-[13px] text-zk-muted">未上載過名單——請先上載先可以計算修復計劃。</div>
+          <div className="mb-3 text-zk-base text-zk-muted">未上載過名單——請先上載先可以計算修復計劃。</div>
         )}
         <label
           data-testid="staff-list-dropzone"
@@ -609,11 +609,11 @@ export default function GuardFixPanel({ month }: { month: string }) {
             if (e.dataTransfer.files.length) void onListFiles(e.dataTransfer.files);
           }}
           className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors ${
-            dragOver ? "border-[#2563eb] bg-blue-50" : "border-zk-border bg-zk-surface"
+            dragOver ? "border-zk-primary bg-zk-primary-tint-soft" : "border-zk-border bg-zk-surface"
           }`}
         >
-          <div className="text-[13px] font-medium text-zk-text">{uploadingList ? "上載緊…" : "撳呢度揀 U Team 名單 xlsx（電腦可以拖放）"}</div>
-          <div className="text-[12px] text-zk-muted">上載新一份會取代現用嗰份（用嚟計劃嘅永遠係最新一份）</div>
+          <div className="text-zk-base font-medium text-zk-text">{uploadingList ? "上載緊…" : "撳呢度揀 U Team 名單 xlsx（電腦可以拖放）"}</div>
+          <div className="text-zk-sm text-zk-muted">上載新一份會取代現用嗰份（用嚟計劃嘅永遠係最新一份）</div>
           <input
             id="staff-list-file-input"
             type="file"
@@ -630,9 +630,9 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
       {/* ①b Postorder 總表上載（WP-LTSHIFT §19） */}
       <div className="rounded-lg border border-zk-border bg-white p-4">
-        <div className="mb-2 text-[14px] font-semibold text-zk-text">①b Postorder 總表（長工崗位／介紹費，選填）</div>
+        <div className="mb-2 text-zk-md font-semibold text-zk-text">①b Postorder 總表（長工崗位／介紹費，選填）</div>
         {currentPostorder ? (
-          <div className="mb-3 text-[13px]">
+          <div className="mb-3 text-zk-base">
             <div className="break-all text-zk-muted">
               {month} 現用：{currentPostorder.file_name}（{fmtDateTime(currentPostorder.uploaded_at)} 上載）
               {currentPostorder.parse_summary && (
@@ -646,7 +646,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
                 紅字提示——之前解析器靜靜計到 0 都當上載成功，操作員睇唔出
                 個計劃點解「加長工崗位盤／定做長工」係 0。 */}
             {currentPostorder.parse_summary && currentPostorder.parse_summary.longterm_cell_count === 0 && (
-              <div className="mt-1 rounded border border-red-200 bg-red-50 px-2.5 py-1.5 text-[12.5px] text-red-700">
+              <div className="mt-1 rounded border border-zk-danger-border bg-zk-danger-bg px-2.5 py-1.5 text-zk-sm text-zk-danger-dark">
                 解析唔到長工格——請檢查係咪 Roster 分頁嘅 CSV
                 {currentPostorder.parse_summary.parse_error ? `（${currentPostorder.parse_summary.parse_error}）` : ""}
                 {currentPostorder.parse_summary.roster_header_row !== null && (
@@ -658,13 +658,13 @@ export default function GuardFixPanel({ month }: { month: string }) {
               </div>
             )}
             {postorderHistory.length > 1 && (
-              <ul className="mt-2 divide-y divide-zk-border rounded border border-zk-border text-[12px]">
+              <ul className="mt-2 divide-y divide-zk-border rounded border border-zk-border text-zk-sm">
                 {postorderHistory.map((h) => (
                   <li key={h.id} className="flex flex-wrap items-center justify-between gap-x-2 px-2 py-1">
                     <span className="min-w-0 break-all text-zk-muted">
                       {fmtDateTime(h.uploaded_at)}・{h.file_name}
                     </span>
-                    <span className={`shrink-0 tabular-nums ${h.parse_summary?.longterm_cell_count === 0 ? "font-medium text-red-600" : "text-zk-muted"}`}>
+                    <span className={`shrink-0 tabular-nums ${h.parse_summary?.longterm_cell_count === 0 ? "font-medium text-zk-danger" : "text-zk-muted"}`}>
                       長工格 {h.parse_summary?.longterm_cell_count ?? "?"}・介紹費行 {h.parse_summary?.referral_row_count ?? "?"}
                     </span>
                   </li>
@@ -673,7 +673,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
             )}
           </div>
         ) : (
-          <div className="mb-3 text-[13px] text-zk-muted">
+          <div className="mb-3 text-zk-base text-zk-muted">
             {month} 未上載過 Postorder 總表——唔上載都可以計劃（set_longterm/set_longterm_post/set_referral 一律 0 項；「定介紹雞頭（推算）」唔靠 Postorder，一樣會計）。
           </div>
         )}
@@ -691,11 +691,11 @@ export default function GuardFixPanel({ month }: { month: string }) {
             if (e.dataTransfer.files.length) void onPostorderFiles(e.dataTransfer.files);
           }}
           className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors ${
-            dragOverPostorder ? "border-[#2563eb] bg-blue-50" : "border-zk-border bg-zk-surface"
+            dragOverPostorder ? "border-zk-primary bg-zk-primary-tint-soft" : "border-zk-border bg-zk-surface"
           }`}
         >
-          <div className="text-[13px] font-medium text-zk-text">{uploadingPostorder ? "上載緊…" : `撳呢度揀 Postorder 總表（.xlsm/.xlsx，對應 ${month}）`}</div>
-          <div className="text-[12px] text-zk-muted">上載新一份會取代呢個月現用嗰份</div>
+          <div className="text-zk-base font-medium text-zk-text">{uploadingPostorder ? "上載緊…" : `撳呢度揀 Postorder 總表（.xlsm/.xlsx，對應 ${month}）`}</div>
+          <div className="text-zk-sm text-zk-muted">上載新一份會取代呢個月現用嗰份</div>
           <input
             id="postorder-file-input"
             type="file"
@@ -711,18 +711,18 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
         {/* P3-3.5（老闆 4A）：兩個 CSV 過渡面板收入「其他上載方式」，預設收起。 */}
         <details className="mt-3" data-testid="guard-fix-other-uploads">
-          <summary className="cursor-pointer text-[12.5px] font-medium text-zk-primary">其他上載方式（9 月過渡用）</summary>
+          <summary className="cursor-pointer text-zk-sm font-medium text-zk-primary">其他上載方式（9 月過渡用）</summary>
         {/* WP-POSTORDER-CSV（老闆 2026-09-26 緊急）：正式站操作員工具讀唔到
             binary，改用 Google Sheets「下載為 CSV」——呢度加兩個 CSV 檔案
             輸入（Roster／PostOrder 分頁各一份），效果同上面 .xlsm 上載一樣。 */}
         <div className="mt-3 rounded-lg border border-zk-border bg-zk-surface p-3">
-          <div className="mb-1.5 text-[13px] font-medium text-zk-text">或者上載兩個 CSV（Roster 分頁、PostOrder 分頁）</div>
-          <div className="mb-2 text-[12px] leading-relaxed text-zk-muted">
+          <div className="mb-1.5 text-zk-base font-medium text-zk-text">或者上載兩個 CSV（Roster 分頁、PostOrder 分頁）</div>
+          <div className="mb-2 text-zk-sm leading-relaxed text-zk-muted">
             正式站帳號讀唔到 .xlsm／.xlsx：喺 Google Drive 用「Google Sheets」打開 Postorder 總表→左上「檔案」→「下載」→「逗號分隔值檔案
             (.csv)（現時工作表）」，Roster 同 PostOrder 兩個分頁分別匯出、揀返落嚟。
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <label htmlFor="postorder-roster-csv-input" className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${rosterCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}>
+            <label htmlFor="postorder-roster-csv-input" className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-zk-sm ${rosterCsvFile ? "border-zk-primary bg-zk-primary-tint-soft text-zk-primary" : "border-zk-border text-zk-muted"}`}>
               {rosterCsvFile ? `Roster：${rosterCsvFile.name}` : "揀 Roster.csv"}
               <input
                 id="postorder-roster-csv-input"
@@ -738,7 +738,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
             </label>
             <label
               htmlFor="postorder-postorder-csv-input"
-              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${postorderCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}
+              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-zk-sm ${postorderCsvFile ? "border-zk-primary bg-zk-primary-tint-soft text-zk-primary" : "border-zk-border text-zk-muted"}`}
             >
               {postorderCsvFile ? `PostOrder：${postorderCsvFile.name}` : "揀 PostOrder.csv"}
               <input
@@ -771,8 +771,8 @@ export default function GuardFixPanel({ month }: { month: string }) {
             人手／AI 對住 Roster 分頁逐盤逐人手抄），~3KB，人手／AI 都
             可以準確轉錄，PostOrder.csv（介紹費行）可選。 */}
         <div className="mt-3 rounded-lg border border-zk-border bg-zk-surface p-3">
-          <div className="mb-1.5 text-[13px] font-medium text-zk-text">或上載精簡長工組合 CSV（longterm-pairs.csv）</div>
-          <div className="mb-2 text-[12px] leading-relaxed text-zk-muted">
+          <div className="mb-1.5 text-zk-base font-medium text-zk-text">或上載精簡長工組合 CSV（longterm-pairs.csv）</div>
+          <div className="mb-2 text-zk-sm leading-relaxed text-zk-muted">
             完整 Roster 分頁匯出太大時用：淨係四欄 `site_label,site_short,guard_name,cell_count`——每行一個
             (盤,人) 組合同格數，約 60 行、幾 KB，人手或者 AI 對住 Roster 分頁轉錄都準確。PostOrder.csv（介紹費行）可選，唔上載都可以計劃長工崗位。
             <br />
@@ -783,7 +783,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <label
               htmlFor="postorder-pairs-csv-input"
-              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${pairsCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}
+              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-zk-sm ${pairsCsvFile ? "border-zk-primary bg-zk-primary-tint-soft text-zk-primary" : "border-zk-border text-zk-muted"}`}
             >
               {pairsCsvFile ? `長工組合：${pairsCsvFile.name}` : "揀 longterm-pairs.csv"}
               <input
@@ -800,7 +800,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
             </label>
             <label
               htmlFor="postorder-pairs-postorder-csv-input"
-              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-[12.5px] ${pairsPostorderCsvFile ? "border-[#2563eb] bg-blue-50 text-[#2563eb]" : "border-zk-border text-zk-muted"}`}
+              className={`flex-1 cursor-pointer rounded-md border px-3 py-2 text-center text-zk-sm ${pairsPostorderCsvFile ? "border-zk-primary bg-zk-primary-tint-soft text-zk-primary" : "border-zk-border text-zk-muted"}`}
             >
               {pairsPostorderCsvFile ? `PostOrder：${pairsPostorderCsvFile.name}` : "揀 PostOrder.csv（可淨係揀呢個）"}
               <input
@@ -825,9 +825,9 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
       {/* ② 計算計劃 */}
       <div className="rounded-lg border border-zk-border bg-white p-4">
-        <div className="mb-2 text-[14px] font-semibold text-zk-text">② 計算修復計劃</div>
+        <div className="mb-2 text-zk-md font-semibold text-zk-text">② 計算修復計劃</div>
         <div className="flex flex-wrap items-end gap-3">
-          <div className="text-[13px] text-zk-text" data-testid="guard-fix-month">
+          <div className="text-zk-base text-zk-text" data-testid="guard-fix-month">
             月份：<span className="font-semibold">{month}</span>
           </div>
           <Button variant="primary" disabled={planning || applyingNow || !currentStaffList || !/^\d{4}-\d{2}$/.test(month)} onClick={onBuildPlan}>
@@ -837,16 +837,16 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
         {lastResult?.result.reparse && (
           <div className="mt-4 space-y-2" data-testid="guard-fix-result">
-            <div className="text-[13px] font-medium text-zk-text">
+            <div className="text-zk-base font-medium text-zk-text">
               {lastResult.month} 套用結果：未配對 {lastResult.result.reparse.total_before} → {lastResult.result.reparse.total_after} 格
               {lastResult.result.diffs
                 ? `（補工號／別名 ${lastResult.result.diffs.link.create.length}、新建 ${lastResult.result.diffs.create.create.length + lastResult.result.diffs.create_minimal.create.length}）`
                 : ""}
             </div>
             {!!lastResult.result.reparse.confirmed_skipped_count && (
-              <div className="text-[12.5px] text-zk-muted">{lastResult.result.reparse.confirmed_skipped_count} 個上載已經對數確認，冇重新配對（已寫入嘅更唔郁）。</div>
+              <div className="text-zk-sm text-zk-muted">{lastResult.result.reparse.confirmed_skipped_count} 個上載已經對數確認，冇重新配對（已寫入嘅更唔郁）。</div>
             )}
-            <ul className="divide-y divide-zk-border rounded border border-zk-border text-[12.5px]">
+            <ul className="divide-y divide-zk-border rounded border border-zk-border text-zk-sm">
               {lastResult.result.reparse.per_upload
                 .filter((u) => u.before.unmatched + u.before.ambiguous > 0 || u.after.unmatched + u.after.ambiguous > 0)
                 .map((u) => (
@@ -863,7 +863,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
         {plan && (
           <div className="mt-4 space-y-3" data-testid="guard-fix-plan">
-            <div className="text-[13px] font-medium text-zk-text">{plan.month} 修復計劃</div>
+            <div className="text-zk-base font-medium text-zk-text">{plan.month} 修復計劃</div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <SummaryTile label="補工號／別名" value={plan.summary.link} />
               <SummaryTile label="新建保安員" value={plan.summary.create + plan.summary.create_minimal} />
@@ -875,7 +875,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
               <SummaryTile label="定介紹雞頭（推算）" value={plan.summary.set_referral_inferred ?? 0} />
               <SummaryTile label="定簽證贊助雞頭" value={plan.summary.set_visa ?? 0} />
             </div>
-            <div className="break-all text-[12.5px] text-zk-muted">
+            <div className="break-all text-zk-sm text-zk-muted">
               呢個月共 {plan.summary.total_identities} 個身份（{plan.summary.total_cells} 格未配對）——名單：{plan.staffListFileName}
               {plan.postorderFileName ? `；Postorder：${plan.postorderFileName}` : "；呢次冇上載 Postorder"}
               {plan.postorder && (plan.postorder.longterm_pairs_from_postorder_count ?? 0) > 0
@@ -883,18 +883,18 @@ export default function GuardFixPanel({ month }: { month: string }) {
                 : ""}
             </div>
             {plan.postorder && plan.postorder.unresolved_site_labels.length > 0 && (
-              <div className="break-words rounded border border-amber-200 bg-amber-50 p-2.5 text-[12.5px] text-amber-800">
+              <div className="break-words rounded border border-zk-warning-border bg-zk-warning-bg p-2.5 text-zk-sm text-zk-warning-dark">
                 Postorder 對唔到嘅盤名（保守：唔建計劃，留 ≥50% 推算兜底）——{plan.postorder.unresolved_site_labels.join("、")}
               </div>
             )}
 
             {plan.postorder && plan.postorder.unresolved_broker_labels.length > 0 && (
-              <div className="space-y-2 rounded border border-amber-200 bg-amber-50 p-2.5 text-[12.5px] text-amber-800" data-testid="guard-fix-broker-alias">
+              <div className="space-y-2 rounded border border-zk-warning-border bg-zk-warning-bg p-2.5 text-zk-sm text-zk-warning-dark" data-testid="guard-fix-broker-alias">
                 <div>Postorder 對唔到嘅雞頭稱呼（保守：唔建 set_referral，留 ≥50% 推算兜底）——逐個揀返對應嘅系統雞頭：</div>
                 <div className="space-y-1.5">
                   {plan.postorder.unresolved_broker_labels.map((label) => (
                     <div key={label} className="flex flex-wrap items-center gap-2">
-                      <span className="min-w-0 break-all font-medium text-amber-900">{label}</span>
+                      <span className="min-w-0 break-all font-medium text-zk-warning-dark">{label}</span>
                       <select
                         className={`${selectCls} max-w-[10rem]`}
                         value={brokerAliasChoice[label] ?? ""}
@@ -919,10 +919,10 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
             {plan.needsBoss.length > 0 && (
               <div>
-                <div className="mb-1 text-[13px] font-medium text-zk-text">要老闆決定（{plan.needsBoss.length} 項，喺保安員頁／對數頁人手處理）</div>
+                <div className="mb-1 text-zk-base font-medium text-zk-text">要老闆決定（{plan.needsBoss.length} 項，喺保安員頁／對數頁人手處理）</div>
                 <div className="space-y-2">
                   {plan.needsBoss.map((n) => (
-                    <div key={n.seq} className="break-words rounded border border-amber-200 bg-amber-50 p-2.5 text-[12.5px]">
+                    <div key={n.seq} className="break-words rounded border border-zk-warning-border bg-zk-warning-bg p-2.5 text-zk-sm">
                       <div className="font-medium text-zk-text">
                         {n.name_raw ?? "（冇「保安員個人資料」查閱權限，睇唔到姓名）"}
                         {n.staff_no_raw ? `　工號：${n.staff_no_raw}` : ""}
@@ -944,7 +944,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
                 </Button>
               </div>
             ) : (
-              <div className="text-[12.5px] text-zk-muted">冇嘢可以自動修（淨係剩「要老闆決定」嗰啲）——唔使再套用。</div>
+              <div className="text-zk-sm text-zk-muted">冇嘢可以自動修（淨係剩「要老闆決定」嗰啲）——唔使再套用。</div>
             )}
           </div>
         )}
@@ -953,8 +953,8 @@ export default function GuardFixPanel({ month }: { month: string }) {
       {confirmingApply && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-lg bg-white p-4">
-            <div className="mb-2 text-[15px] font-semibold text-zk-text">{confirmingApply.retry ? "確認重新套用" : "確認套用"}</div>
-            <div className="mb-4 text-[13px] text-zk-muted">
+            <div className="mb-2 text-zk-md font-semibold text-zk-text">{confirmingApply.retry ? "確認重新套用" : "確認套用"}</div>
+            <div className="mb-4 text-zk-base text-zk-muted">
               會建 {confirmingApply.summary.create + confirmingApply.summary.create_minimal} 位新保安員、幫 {confirmingApply.summary.link} 位登記工號／加別名
               {(confirmingApply.summary.set_longterm ?? 0) +
                 (confirmingApply.summary.set_longterm_post ?? 0) +
@@ -980,7 +980,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
       {/* ④ 過往紀錄（P3-3.5：預設收起；套用失敗／卡住提示會自動展開） */}
       <details open={historyOpen} onToggle={(e) => setHistoryOpen((e.currentTarget as HTMLDetailsElement).open)} className="rounded-lg border border-zk-border bg-white p-4" data-testid="guard-fix-history">
-        <summary className="cursor-pointer text-[14px] font-semibold text-zk-text">過往紀錄{runs.length > 0 ? `（${runs.length}）` : ""}</summary>
+        <summary className="cursor-pointer text-zk-md font-semibold text-zk-text">過往紀錄{runs.length > 0 ? `（${runs.length}）` : ""}</summary>
         <div className="mb-2 mt-2 flex items-center justify-end">
           <Button variant="secondary" onClick={() => void loadRuns()} disabled={runsLoading}>
             重新整理
@@ -991,7 +991,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
         ) : (
           <ul className="space-y-2">
             {runs.map((r) => (
-              <li key={r.id} className="rounded border border-zk-border p-2.5 text-[12.5px]">
+              <li key={r.id} className="rounded border border-zk-border p-2.5 text-zk-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-zk-text">{r.month.slice(0, 7)}</span>
@@ -1005,7 +1005,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
                   補工號／別名 {r.summary.link}・新建 {r.summary.create + r.summary.create_minimal}・要決定 {r.summary.needs_boss}
                   {r.result?.reparse ? `・未配對 ${r.result.reparse.total_before}→${r.result.reparse.total_after} 格` : ""}
                 </div>
-                {r.status === "failed" && r.result?.error && <div className="mt-1 break-words text-red-700">失敗原因：{r.result.error}</div>}
+                {r.status === "failed" && r.result?.error && <div className="mt-1 break-words text-zk-danger-dark">失敗原因：{r.result.error}</div>}
                 {r.apply_allowed && r.status !== "planned" && (
                   <div className="mt-2">
                     <Button variant="secondary" disabled={applyingNow} onClick={() => setConfirmingApply({ runId: r.id, summary: r.summary, retry: true })}>
@@ -1024,9 +1024,9 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
 function SummaryTile({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
   return (
-    <div className={`rounded-lg border p-3 ${warn && value > 0 ? "border-amber-300 bg-amber-50" : "border-zk-border bg-zk-surface"}`}>
-      <div className="text-[12px] text-zk-muted">{label}</div>
-      <div className={`mt-0.5 text-[20px] font-bold ${warn && value > 0 ? "text-amber-700" : "text-zk-text"}`}>{value}</div>
+    <div className={`rounded-lg border p-3 ${warn && value > 0 ? "border-zk-warning-border bg-zk-warning-bg" : "border-zk-border bg-zk-surface"}`}>
+      <div className="text-zk-sm text-zk-muted">{label}</div>
+      <div className={`mt-0.5 text-zk-xl font-bold ${warn && value > 0 ? "text-zk-warning-darker" : "text-zk-text"}`}>{value}</div>
     </div>
   );
 }

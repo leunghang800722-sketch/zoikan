@@ -6,18 +6,19 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtDate, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 interface QuotaRow {
   id: string;
@@ -46,21 +47,15 @@ interface BrokerRow {
 const emptyForm = { month: currentMonthStr(), site_id: "", shift_type_id: "", broker_id: "", target_shifts: "" };
 
 export default function QuotasPage() {
-  const [rows, setRows] = useState<QuotaRow[]>([]);
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [siteFilter, setSiteFilter] = useState("");
   const [monthFilter, setMonthFilter, monthReady] = useMonthState();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<QuotaRow, typeof emptyForm>(emptyForm);
   const [formShiftTypes, setFormShiftTypes] = useState<ShiftTypeRow[]>([]);
 
   async function load() {
@@ -119,68 +114,42 @@ export default function QuotasPage() {
   }
 
   function openCreate() {
-    setEditingId(null);
-    setForm({ ...emptyForm, site_id: siteFilter, month: monthFilter || currentMonthStr() });
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer({ ...emptyForm, site_id: siteFilter, month: monthFilter || currentMonthStr() });
   }
 
   function openEdit(row: QuotaRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       month: row.month.slice(0, 7),
       site_id: row.site_id,
       shift_type_id: row.shift_type_id,
       broker_id: row.broker_id,
       target_shifts: String(row.target_shifts),
     });
-    setFormError(null);
-    setDrawerOpen(true);
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setFormError(null);
-    const res = editingId
-      ? await apiPatch(`/api/quotas/${editingId}`, { target_shifts: Number(form.target_shifts) })
-      : await apiPost("/api/quotas", {
-          month: form.month,
-          site_id: form.site_id,
-          shift_type_id: form.shift_type_id,
-          broker_id: form.broker_id,
-          target_shifts: Number(form.target_shifts),
-        });
-    setSaving(false);
-    if (!res.ok) {
-      setFormError(res.message);
-      return;
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+    await saveForm(
+      () =>
+        editingId
+          ? apiPatch(`/api/quotas/${editingId}`, { target_shifts: Number(form.target_shifts) })
+          : apiPost("/api/quotas", {
+              month: form.month,
+              site_id: form.site_id,
+              shift_type_id: form.shift_type_id,
+              broker_id: form.broker_id,
+              target_shifts: Number(form.target_shifts),
+            }),
+      load,
+    );
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/quotas/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已作廢");
-    await load();
+    await runAction(() => apiPost(`/api/quotas/${id}/void`, { reason }), "已作廢", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/quotas/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已解除作廢");
-    await load();
+    await runAction(() => apiPost(`/api/quotas/${id}/unvoid`), "已解除作廢", load);
   }
 
   const colCount = 6;
@@ -245,11 +214,7 @@ export default function QuotasPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {rows.map((r) => {
                   const st = shiftType(r.shift_type_id);
@@ -279,17 +244,17 @@ export default function QuotasPage() {
                       <td className={tableCls.tdNum}>{r.target_shifts}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                             編輯
-                          </button>
+                          </Button>
                           {r.voided_at ? (
-                            <button
+                            <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() => onUnvoid(r.id)}
-                              className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+
                             >
                               解除作廢
-                            </button>
+                            </Button>
                           ) : (
                             <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                           )}
@@ -306,17 +271,17 @@ export default function QuotasPage() {
               table 有「載入緊…」提示列，手機卡舊版冇——加返，唔好淨係
               一片空白。 */}
           <div className="space-y-2 sm:hidden">
-            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-[13px] text-zk-muted">載入緊…</div>}
+            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-zk-base text-zk-muted">載入緊…</div>}
             {rows.map((r) => {
               const st = shiftType(r.shift_type_id);
               const b = broker(r.broker_id);
               return (
                 <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{siteLabel(r.site_id)}</span>
-                    <span className="text-[13px] tabular-nums text-zk-text">{r.target_shifts} 更</span>
+                    <span className="text-zk-base font-medium text-zk-text">{siteLabel(r.site_id)}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{r.target_shifts} 更</span>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-zk-xs text-zk-muted">
                     <span>{fmtDate(r.month)}</span>
                     {st && (
                       <Pill variant="broker" color={shiftCodeStyle(st.code)}>
@@ -330,13 +295,13 @@ export default function QuotasPage() {
                     )}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                       編輯
-                    </button>
+                    </Button>
                     {r.voided_at ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                         解除作廢
-                      </button>
+                      </Button>
                     ) : (
                       <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                     )}
@@ -413,12 +378,12 @@ export default function QuotasPage() {
             />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

@@ -4,10 +4,12 @@
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { apiGet, apiPost, apiRequest, type ApiListResult } from "@/lib/ui/api-client";
+import { choiceBtn } from "@/components/ui/button-classes";
 
 interface Field {
   value: string | null;
@@ -141,7 +143,7 @@ const CHECK_LABEL: Record<string, string> = { hidden: "你冇權限睇現有資�
 function FieldRow({ label, f }: { label: string; f: Field }) {
   if (f.status === "missing" && !f.value) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 text-[13px]">
+    <div className="flex flex-wrap items-center gap-x-2 text-zk-base">
       <span className="w-[72px] shrink-0 text-zk-faint">{label}</span>
       <span className="break-all">{f.value ?? "（冇權限睇／無）"}</span>
       <Pill variant={f.status === "confirmed" ? "success" : "warning"}>{STATUS_LABEL[f.status] ?? f.status}</Pill>
@@ -152,18 +154,18 @@ function FieldRow({ label, f }: { label: string; f: Field }) {
 /** 銀行戶口：預設淨顯示尾 4 位；有「保安員銀行資料:view」先有「顯示全號」，撳先出（確認寫入前核對用）。 */
 function BankLine({ b }: { b: NonNullable<ExtView["bank"]> }) {
   const [full, setFull] = useState(false);
-  if (b.hidden) return <div className="text-[13px] text-zk-faint" data-testid="bank-hidden">銀行資料（你冇「保安員銀行資料」睇權，內容唔顯示）</div>;
+  if (b.hidden) return <div className="text-zk-base text-zk-faint" data-testid="bank-hidden">銀行資料（你冇「保安員銀行資料」睇權，內容唔顯示）</div>;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 text-[13px]" data-testid="bank-line">
+    <div className="flex flex-wrap items-center gap-x-2 text-zk-base" data-testid="bank-line">
       <span className="w-[72px] shrink-0 text-zk-faint">銀行</span>
       <span className="break-all">
         {b.name ?? b.code ?? "—"}（{b.code ?? "—"}）· 戶口 {full && b.account_full ? b.account_full : (b.account_masked ?? "—")} · 收款人 {b.payee_name ?? "—"}
       </span>
       <Pill variant={b.status === "confirmed" ? "success" : "warning"}>{STATUS_LABEL[b.status] ?? b.status}</Pill>
       {b.account_full && (
-        <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-[11.5px]" onClick={() => setFull((v) => !v)} data-testid="bank-show-full">
+        <Button variant="secondary" size="sm" type="button" onClick={() => setFull((v) => !v)} data-testid="bank-show-full">
           {full ? "隱藏全號" : "顯示全號"}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -174,21 +176,21 @@ function ExtLines({ ext }: { ext: ExtView | null }) {
   return (
     <>
       {ext.scalars.map((s) => (
-        <div key={s.key} className="flex flex-wrap items-center gap-x-2 text-[13px]">
+        <div key={s.key} className="flex flex-wrap items-center gap-x-2 text-zk-base">
           <span className="w-[72px] shrink-0 text-zk-faint">{s.label.replace(/（系統未儲存）/, "")}</span>
           <span className="break-all">{s.value}</span>
           <Pill variant={s.status === "confirmed" ? "success" : "warning"}>{STATUS_LABEL[s.status] ?? s.status}</Pill>
         </div>
       ))}
       {ext.staff_hires.map((s) => (
-        <div key={s.key} className="flex flex-wrap items-center gap-x-2 text-[13px]">
+        <div key={s.key} className="flex flex-wrap items-center gap-x-2 text-zk-base">
           <span className="shrink-0 text-zk-faint">{s.label}</span>
           <span>{s.value}</span>
           <Pill variant={s.status === "confirmed" ? "success" : "warning"}>{STATUS_LABEL[s.status] ?? s.status}</Pill>
         </div>
       ))}
       {ext.emergency_contacts.map((c) => (
-        <div key={c.key} className="flex flex-wrap items-center gap-x-2 text-[13px]">
+        <div key={c.key} className="flex flex-wrap items-center gap-x-2 text-zk-base">
           <span className="shrink-0 text-zk-faint">{c.label}</span>
           <span className="break-all">
             {c.name ?? "—"}
@@ -208,9 +210,9 @@ function PersonCard({ q }: { q: Question }) {
   if (u) {
     return (
       <div className="space-y-1 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="triage-unassigned">
-        <div className="text-[12px] font-semibold text-zk-muted">Payroll Editor 嘅戶口（對唔到人）</div>
+        <div className="text-zk-sm font-semibold text-zk-muted">Payroll Editor 嘅戶口（對唔到人）</div>
         {u.hidden ? (
-          <div className="text-[13px] text-zk-faint">你冇「保安員銀行資料」睇權，內容唔顯示。</div>
+          <div className="text-zk-base text-zk-faint">你冇「保安員銀行資料」睇權，內容唔顯示。</div>
         ) : (
           <BankLine b={{ status: "review", code: u.bank_code, name: u.bank_name, account_masked: u.account_masked, account_full: u.account_full, payee_name: u.payee_name }} />
         )}
@@ -220,7 +222,7 @@ function PersonCard({ q }: { q: Question }) {
   if (!p) return null;
   return (
     <div className="space-y-1 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="triage-person">
-      <div className="text-[12px] font-semibold text-zk-muted">導入包內嘅資料</div>
+      <div className="text-zk-sm font-semibold text-zk-muted">導入包內嘅資料</div>
       <FieldRow label="中文姓名" f={p.name_zh} />
       <FieldRow label="英文姓名" f={p.name_en} />
       <FieldRow label="身份證" f={p.hkid} />
@@ -228,21 +230,21 @@ function PersonCard({ q }: { q: Question }) {
       <FieldRow label="電話" f={p.phone} />
       <FieldRow label="地址" f={p.address} />
       {p.staff_numbers.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-2 text-[13px]">
+        <div className="flex flex-wrap items-center gap-x-2 text-zk-base">
           <span className="w-[72px] shrink-0 text-zk-faint">工號</span>
           <span>{p.staff_numbers.join("、")}</span>
         </div>
       )}
       <ExtLines ext={p.ext} />
-      {!q.evidence.pii_visible && <div className="text-[11.5px] text-zk-faint">你冇「保安員個人資料」權限，身份證／電話／地址已遮罩，出生日期唔顯示。</div>}
+      {!q.evidence.pii_visible && <div className="text-zk-xs text-zk-faint">你冇「保安員個人資料」權限，身份證／電話／地址已遮罩，出生日期唔顯示。</div>}
     </div>
   );
 }
 
 function CandidateCard({ c, idx }: { c: Candidate; idx: number }) {
   return (
-    <div className="space-y-0.5 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="triage-candidate">
-      <div className="text-[12px] font-semibold text-zk-muted">現有保安員（候選 {idx + 1}）</div>
+    <div className="space-y-0.5 rounded-lg border border-zk-border p-3 text-zk-base" data-testid="triage-candidate">
+      <div className="text-zk-sm font-semibold text-zk-muted">現有保安員（候選 {idx + 1}）</div>
       <div>
         {c.name_hidden ? <span className="text-zk-faint">姓名同導入包唔同（要有保安員個人資料權限先睇到）</span> : c.name_zh}
         {c.name_en ? <span className="ml-1 text-zk-faint">{c.name_en}</span> : null}
@@ -260,18 +262,18 @@ function CandidateCard({ c, idx }: { c: Candidate; idx: number }) {
 
 function ImpactCard({ impact }: { impact: Impact }) {
   return (
-    <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px]" data-testid="triage-impact">
-      <div className="font-semibold text-blue-900">影響預覽（未寫入）</div>
+    <div className="space-y-2 rounded-lg border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base" data-testid="triage-impact">
+      <div className="font-semibold text-zk-primary-deep">影響預覽（未寫入）</div>
       <ul className="list-disc pl-5">
         {impact.summary.map((s) => (
           <li key={s}>{s}</li>
         ))}
       </ul>
       {impact.changes.map((c, i) => (
-        <div key={i} className="rounded border border-blue-100 bg-white p-2">
-          <div className="text-[12px] font-semibold">{c.label}</div>
+        <div key={i} className="rounded border border-zk-primary-tint bg-white p-2">
+          <div className="text-zk-sm font-semibold">{c.label}</div>
           {c.fields.map((f) => (
-            <div key={f.label} className="text-[12.5px]">
+            <div key={f.label} className="text-zk-sm">
               {f.label}：{f.from !== null ? `${f.from} → ` : ""}
               <b>{f.to}</b>
             </div>
@@ -279,10 +281,10 @@ function ImpactCard({ impact }: { impact: Impact }) {
         </div>
       ))}
       {impact.field_outcomes.length > 0 && (
-        <div className="text-[12px] text-zk-muted">{impact.field_outcomes.map((o) => `${o.label}：${o.outcome}`).join(" · ")}</div>
+        <div className="text-zk-sm text-zk-muted">{impact.field_outcomes.map((o) => `${o.label}：${o.outcome}`).join(" · ")}</div>
       )}
       {impact.notes.map((n) => (
-        <div key={n} className="text-[12px] text-orange-700">
+        <div key={n} className="text-zk-sm text-zk-warning">
           {n}
         </div>
       ))}
@@ -314,11 +316,11 @@ function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | nu
     <span className="mt-1.5 block space-y-1" data-testid="guard-search">
       <input className="w-full rounded-[5px] border border-zk-border px-2 py-1.5" placeholder="輸入姓名／工號／電話搜尋" value={term} aria-label="搜尋保安員" onChange={(e) => { setTerm(e.target.value); setPicked(null); onPick(null); }} />
       {rows.map((r) => (
-        <button key={r.id} type="button" className={`block w-full rounded border px-2 py-1 text-left text-[12.5px] ${picked === r.id ? "border-zk-primary bg-blue-100" : "border-zk-border"}`} onClick={() => { setPicked(r.id); onPick({ id: r.id, name: r.name_zh }); }}>
+        <button key={r.id} type="button" className={choiceBtn(picked === r.id, "block w-full text-left")} onClick={() => { setPicked(r.id); onPick({ id: r.id, name: r.name_zh }); }}>
           {r.name_zh}
           {r.name_en ? <span className="ml-1 text-zk-faint">{r.name_en}</span> : null}
           {r.staff_numbers?.length ? <span className="ml-1 text-zk-faint">{r.staff_numbers.map((n) => n.number).join("、")}</span> : null}
-          {r.status && r.status !== "active" ? <span className="ml-1 text-orange-700">（非在職）</span> : null}
+          {r.status && r.status !== "active" ? <span className="ml-1 text-zk-warning">（非在職）</span> : null}
         </button>
       ))}
     </span>
@@ -471,27 +473,27 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       <div className="relative z-10 flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-xl bg-white shadow-xl sm:max-w-xl sm:rounded-xl">
         <div className="flex items-center justify-between gap-2 border-b border-zk-border px-4 py-3">
           <div>
-            <div className="text-[15px] font-semibold">導入完成，有幾條要你決定</div>
+            <div className="text-zk-md font-semibold">導入完成，有幾條要你決定</div>
             {q && (
-              <div className="text-[12px] text-zk-muted" data-testid="triage-progress">
+              <div className="text-zk-sm text-zk-muted" data-testid="triage-progress">
                 {suppNow ? "補充資料 " : ""}第 {Math.min(progressDone + 1, progressTotal)} 題／共 {progressTotal} 題
                 {!suppNow && liveTotals && liveTotals.sup > 0 ? `（另有 ${liveTotals.sup} 題補充資料可以遲啲先做）` : ""}
               </div>
             )}
-            {!q && liveTotals && liveTotals.imp + liveTotals.sup > 0 && <div className="text-[12px] text-zk-muted">重要 {liveTotals.imp} 題，補充資料 {liveTotals.sup} 題</div>}
+            {!q && liveTotals && liveTotals.imp + liveTotals.sup > 0 && <div className="text-zk-sm text-zk-muted">重要 {liveTotals.imp} 題，補充資料 {liveTotals.sup} 題</div>}
           </div>
-          <button type="button" onClick={onClose} className="rounded px-2 py-1 text-[13px] text-zk-muted hover:bg-zk-header" data-testid="triage-later">
+          <Button variant="ghost" size="sm" type="button" onClick={onClose} data-testid="triage-later">
             遲啲先答
-          </button>
+          </Button>
         </div>
 
         <div className="space-y-3 overflow-y-auto px-4 py-3">
-          {error && <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</div>}
-          {queue === null && <div className="text-[13px] text-zk-muted">載入緊…</div>}
+          {error && <Banner kind="error">{error}</Banner>}
+          {queue === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
           {gate && (
             <div className="space-y-2 py-6 text-center" data-testid="triage-gate">
-              <div className="text-[15px] font-semibold">{liveTotals && liveTotals.imp > 0 ? "重要嘅問題答完喇" : "冇重要嘅問題"}</div>
-              <div className="text-[13px] text-zk-muted">仲有 {sup.length} 題補充資料（逐欄核對英文名、出生日期、電話、地址），唔急，可以遲啲先做。</div>
+              <div className="text-zk-md font-semibold">{liveTotals && liveTotals.imp > 0 ? "重要嘅問題答完喇" : "冇重要嘅問題"}</div>
+              <div className="text-zk-base text-zk-muted">仲有 {sup.length} 題補充資料（逐欄核對英文名、出生日期、電話、地址），唔急，可以遲啲先做。</div>
               <div className="flex justify-center gap-2">
                 <Button variant="primary" onClick={() => setSuppStarted(true)} data-testid="triage-continue-supp">
                   繼續做補充資料
@@ -502,8 +504,8 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
           )}
           {queue !== null && !q && !gate && (
             <div className="space-y-2 py-6 text-center">
-              <div className="text-[15px] font-semibold">全部處理完</div>
-              <div className="text-[13px] text-zk-muted">本批共答咗 {done.imp + done.sup} 條。跳過嘅會留喺「待答問題」，隨時可以再答。</div>
+              <div className="text-zk-md font-semibold">全部處理完</div>
+              <div className="text-zk-base text-zk-muted">本批共答咗 {done.imp + done.sup} 條。跳過嘅會留喺「待答問題」，隨時可以再答。</div>
               <Button variant="primary" onClick={onClose}>
                 完成
               </Button>
@@ -514,13 +516,13 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               <div className="flex flex-wrap items-center gap-2">
                 <Pill variant="neutral">{q.kind_label}</Pill>
                 {q.evidence.reasons.slice(0, 3).map((r) => (
-                  <span key={r} className="text-[12px] text-zk-muted">
+                  <span key={r} className="text-zk-sm text-zk-muted">
                     {reasonLabel(r)}
                   </span>
                 ))}
               </div>
               {q.restricted && (
-                <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px]" data-testid="triage-restricted">
+                <div className="rounded-lg border border-zk-warning-border bg-zk-warning-bg p-3 text-zk-base" data-testid="triage-restricted">
                   要有保安員銀行資料權限嘅同事處理。你可以按「遲啲先答」，由老闆或有權限嘅同事跟進。
                 </div>
               )}
@@ -530,14 +532,14 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               ))}
 
               <fieldset className="space-y-2" disabled={busy}>
-                <legend className="mb-1 text-[13px] font-semibold">你點睇？</legend>
+                <legend className="mb-1 text-zk-base font-semibold">你點睇？</legend>
                 {q.options
                   .filter((o) => o.id !== "skip")
                   .map((o, i) => {
                     const val = `${o.id}:${o.guard_id ?? ""}:${i}`;
                     const cand = o.guard_id ? q.evidence.candidates.find((c) => c.guard_id === o.guard_id) : null;
                     return (
-                      <label key={val} className="flex cursor-pointer items-start gap-2 rounded-md border border-zk-border p-2.5 text-[13px] has-[:checked]:border-zk-primary has-[:checked]:bg-blue-50">
+                      <label key={val} className="flex cursor-pointer items-start gap-2 rounded-md border border-zk-border p-2.5 text-zk-base has-[:checked]:border-zk-primary has-[:checked]:bg-zk-primary-tint-soft">
                         <input
                           type="radio"
                           name="triage-option"
@@ -552,7 +554,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                         <span className="flex-1">
                           {o.label}
                           {cand ? <b className="ml-1">（{cand.name_zh}）</b> : null}
-                          {o.hint ? <span className="block text-[11.5px] text-zk-faint">{o.hint}</span> : null}
+                          {o.hint ? <span className="block text-zk-xs text-zk-faint">{o.hint}</span> : null}
                           {choice === val && o.input && o.input !== "guard_search" && (
                             <input
                               className="mt-1.5 w-full rounded-[5px] border border-zk-border px-2 py-1.5"
@@ -569,12 +571,12 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                           {choice === val && o.input === "guard_search" && <GuardSearch onPick={(g) => { setPickedGuard(g); setImpact(null); setHash(null); }} />}
                           {choice === val && o.id === "assign_bank" && (
                             <span className="mt-2 block rounded border border-zk-border p-2" data-testid="replace-existing">
-                              <label className="flex items-start gap-2 text-[12.5px]">
+                              <label className="flex items-start gap-2 text-zk-sm">
                                 <input type="checkbox" className="mt-0.5" checked={replaceExisting} onChange={(e) => { setReplaceExisting(e.target.checked); setImpact(null); setHash(null); }} />
                                 <span>如果佢已經有唔同戶口：取代現有戶口{pickedGuard ? `（${pickedGuard.name}）` : ""}（預設唔覆蓋{!q.evidence.bank_view ? "；你冇銀行資料睇權，睇唔到現有戶口，要剔先可以寫" : ""}）</span>
                               </label>
                               {impact?.notes.some((n) => n.startsWith("警告")) && (
-                                <label className="mt-1 flex items-start gap-2 text-[12.5px] text-orange-800" data-testid="confirm-identity">
+                                <label className="mt-1 flex items-start gap-2 text-zk-sm text-zk-warning-dark" data-testid="confirm-identity">
                                   <input type="checkbox" className="mt-0.5" checked={confirmIdentity} onChange={(e) => { setConfirmIdentity(e.target.checked); setImpact(null); setHash(null); }} />
                                   <span>我確認呢個戶口屬於呢位保安員</span>
                                 </label>
@@ -585,18 +587,18 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                             <span className="mt-2 block space-y-2">
                               {q.evidence.ext_review.map((rf) => (
                                 <span key={rf.key} className="block rounded border border-zk-border p-2" data-testid="ext-review-row">
-                                  <span className="block text-[12px] text-zk-faint">
+                                  <span className="block text-zk-sm text-zk-faint">
                                     {rf.label}（{CHECK_LABEL[rf.check] ?? rf.check}
                                     {rf.status === "review" ? "、導入值待核對" : ""}
                                     {rf.held === "identity" ? "、身份未夠證據，所以唔自動寫" : rf.held === "bank" ? "、銀行資料要人確認先寫" : ""}）
                                   </span>
                                   {rf.held === "longterm_hire_date" && (
-                                    <span className="mt-1 block rounded border border-orange-300 bg-orange-50 px-2 py-1 text-[12px] text-orange-800" data-testid="longterm-hire-warning">
+                                    <span className="mt-1 block rounded border border-zk-warning-border bg-zk-warning-bg px-2 py-1 text-zk-sm text-zk-warning-dark" data-testid="longterm-hire-warning">
                                       呢位係長工，入職日期會影響長工糧（強積金／假期）計算，請核實先確認
                                     </span>
                                   )}
                                   {rf.key === "bank" && (
-                                    <label className="mt-1 flex items-start gap-2 text-[12px]" data-testid="bank-replace-existing">
+                                    <label className="mt-1 flex items-start gap-2 text-zk-sm" data-testid="bank-replace-existing">
                                       <input type="checkbox" className="mt-0.5" checked={replaceExisting} onChange={(e) => { setReplaceExisting(e.target.checked); setImpact(null); setHash(null); }} />
                                       <span>如果現有戶口唔同：取代現有戶口（要剔先會覆蓋{!q.evidence.bank_view ? "；你冇銀行資料睇權，一定要剔" : ""}）</span>
                                     </label>
@@ -606,7 +608,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                       <button
                                         key={c}
                                         type="button"
-                                        className={`rounded border px-2 py-1 text-[12px] ${extChoices[rf.key] === c ? "border-zk-primary bg-blue-100 font-semibold" : "border-zk-border"}`}
+                                        className={choiceBtn(extChoices[rf.key] === c)}
                                         onClick={() => { setExtChoices((m) => ({ ...m, [rf.key]: c })); setImpact(null); setHash(null); }}
                                       >
                                         {EXT_CHOICE_LABEL[c]}
@@ -626,7 +628,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                   rf.field === "nameZh" ? pp.name_zh.value : rf.field === "nameEn" ? pp.name_en.value : rf.field === "dateOfBirth" ? pp.date_of_birth.value : rf.field === "phone" ? pp.phone.value : pp.address.value;
                                 return (
                                   <span key={rf.field} className="block rounded border border-zk-border p-2">
-                                    <span className="block text-[12px] text-zk-faint">
+                                    <span className="block text-zk-sm text-zk-faint">
                                       {rf.label}（{CHECK_LABEL[rf.check] ?? rf.check}）
                                     </span>
                                     <span className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -635,7 +637,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                           key={a}
                                           type="button"
                                           disabled={a === "replace" && replaceDenied(rf.field, rf.check)}
-                                          className={`rounded border px-2 py-1 text-[12px] ${cur?.action === a ? "border-zk-primary bg-blue-100 font-semibold" : "border-zk-border"} disabled:cursor-not-allowed disabled:opacity-40`}
+                                          className={choiceBtn(cur?.action === a, "disabled:cursor-not-allowed disabled:opacity-40")}
                                           onClick={() => {
                                             setFields((f) => ({ ...f, [rf.field]: { action: a, value: f[rf.field]?.value ?? undefined } }));
                                             setImpact(null);
@@ -646,7 +648,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                         </button>
                                       ))}
                                     </span>
-                                    {replaceDenied(rf.field, rf.check) && <span className="mt-1 block text-[11.5px] text-orange-700">「改正後確認」要有修改權限嘅同事（例如老闆）先可以做。</span>}
+                                    {replaceDenied(rf.field, rf.check) && <span className="mt-1 block text-zk-xs text-zk-warning">「改正後確認」要有修改權限嘅同事（例如老闆）先可以做。</span>}
                                     {cur && cur.action !== "skip" && (
                                       <input
                                         className="mt-1.5 w-full rounded-[5px] border border-zk-border px-2 py-1.5"
@@ -670,7 +672,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                       </label>
                     );
                   })}
-                {q.options.filter((o) => o.id !== "skip").length === 0 && <div className="text-[12.5px] text-zk-muted">呢條同現有資料矛盾，系統唔會自動處理——可以跳過留返人手。</div>}
+                {q.options.filter((o) => o.id !== "skip").length === 0 && <div className="text-zk-sm text-zk-muted">呢條同現有資料矛盾，系統唔會自動處理——可以跳過留返人手。</div>}
               </fieldset>
 
               {impact && <ImpactCard impact={impact} />}

@@ -94,6 +94,7 @@ test("老闆：加第二個電話 → 設主要 → 列表電話變 → 舊電�
 
     // 重開，加第二個電話（「所有電話」分區）。
     await openEditByName(page, guard.nameZh);
+    await page.getByTestId("guard-tab-contact").click();
     await expect(page.getByRole("heading", { name: "所有電話" })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("form").getByText(originalTel, { exact: true })).toBeVisible();
 
@@ -141,6 +142,7 @@ test("老闆：加兩個緊急聯絡人", async ({ page }) => {
     await loginAs(page, "老闆");
     await page.goto("/guards");
     await openEditByName(page, guard.nameZh);
+    await page.getByTestId("guard-tab-contact").click();
     await expect(page.getByRole("heading", { name: "緊急聯絡人列表" })).toBeVisible({ timeout: 10_000 });
 
     await fieldControl(page, "姓名（新增聯絡人）").locator("input").fill("測試聯絡人一");
@@ -185,6 +187,7 @@ test("雞頭：睇自己保安員——見電話但冇新增/編輯/刪除掣，
     await loginAs(page, "雞頭A");
     await page.goto("/guards");
     await openEditByName(page, guard.nameZh);
+    await page.getByTestId("guard-tab-contact").click();
 
     // 見到「所有電話」分區＋電話本身，但冇任何寫入掣。
     await expect(page.getByRole("heading", { name: "所有電話" })).toBeVisible({ timeout: 10_000 });

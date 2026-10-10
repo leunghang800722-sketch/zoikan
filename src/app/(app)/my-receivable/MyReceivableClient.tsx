@@ -11,13 +11,13 @@ import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
-import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDate } from "@/lib/ui/format";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { UnpricedNotice } from "@/components/UnpricedNotice";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // M4（Opus 驗收）：`grouped_days` 按 (日期, 盤, 更別, 出街價) 合併——一
@@ -156,16 +156,16 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
 
       {/* 冇「出街價」權限嘅內部角色——顯示專門嘅 warning Notice，唔顯示
           雞頭 select（揀咗都係照 403）。老闆 2026-09-15 拍板主管可以預覽。 */}
-      {!isBroker && forbiddenPreview && <Notice variant="warning">你嘅角色暫時唔可以預覽雞頭應收——需要「出街價」權限，請聯絡老闆開放。</Notice>}
+      {!isBroker && forbiddenPreview && <Banner compact kind="warning">你嘅角色暫時唔可以預覽雞頭應收——需要「出街價」權限，請聯絡老闆開放。</Banner>}
 
       {!isBroker && !forbiddenPreview && (
-        <Notice
-          variant="info"
+        <Banner compact
+          kind="info"
           action={
             brokers.length > 0 && (
               <select
                 data-testid="my-receivable-broker-select"
-                className="rounded border-0 bg-transparent text-[12.5px] font-semibold text-[#1e40af] outline-none"
+                className="rounded border-0 bg-transparent text-zk-sm font-semibold text-zk-primary-deep outline-none"
                 value={brokerParam}
                 onChange={(e) => changeBroker(e.target.value)}
               >
@@ -179,23 +179,12 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
           }
         >
           呢頁淨係俾雞頭角色用 — 你而家以{roleLabel}身份預覽{previewLabel ? ` ${previewLabel} ` : "（未揀雞頭）"}嘅數。
-        </Notice>
+        </Banner>
       )}
 
       <Banner kind="error" message={error} />
-      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
-      {(data?.unpriced_count ?? 0) > 0 && (
-        <Notice variant="warning">
-          <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定價（冇對應價目卡），金額未計入以上合計：</p>
-          <ul className="list-disc pl-5 mt-1">
-            {(data!.unpriced_groups ?? []).map((g) => (
-              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-              </li>
-            ))}
-          </ul>
-        </Notice>
-      )}
+      {/* WP-PRICE §3：頁頂「N 更未定價」——P3-4.2 共用 <UnpricedNotice>（報表頁一行＋「去處理 ›」）。 */}
+      <UnpricedNotice variant="compact" month={month} unpricedCount={(data?.unpriced_count ?? 0)} noSettlementCount={0} groups={(data?.unpriced_groups ?? [])} scope="以上合計" />
       {!forbiddenPreview && <EmptyMonthNotice month={month} isEmpty={!loading && (data?.grouped_days.length ?? 0) === 0} onJump={setMonth} />}
 
       {data && (
@@ -206,13 +195,13 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
             label="待審批"
             tone={data.pending_count > 0 ? "warning" : "default"}
             value={<span>{data.pending_count} 更</span>}
-            note={data.pending_count > 0 ? <span style={{ color: "#c2410c" }}>{fmtMoney(data.pending_amount)}</span> : undefined}
+            note={data.pending_count > 0 ? <span style={{ color: "var(--zk-warning)" }}>{fmtMoney(data.pending_amount)}</span> : undefined}
           />
         </div>
       )}
 
       {/* 桌面表。 */}
-      <div className="hidden md:block">
+      <div className="hidden lg:block">
         <div className={tableCls.wrap}>
           <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
             <thead>
@@ -227,11 +216,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
             </thead>
             <tbody>
               {loading && (
-                <tr>
-                  <td colSpan={COLS} className="px-3.5 py-4 text-sm text-zk-faint">
-                    載入緊…
-                  </td>
-                </tr>
+                <TableLoadingRow colSpan={COLS} />
               )}
               {!loading && (data?.grouped_days.length ?? 0) === 0 && (
                 <tr>
@@ -268,7 +253,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
       </div>
 
       {/* 手機：每行變卡。 */}
-      <div className="flex flex-col gap-2 md:hidden">
+      <div className="flex flex-col gap-2 lg:hidden">
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
         ) : (data?.grouped_days.length ?? 0) === 0 ? (
@@ -278,18 +263,18 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
         ) : (
           <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
             {data?.grouped_days.map((g, i) => (
-              <div key={i} className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0" data-testid="my-receivable-row-mobile">
+              <div key={i} className="flex items-center justify-between gap-2.5 border-b border-zk-border-soft px-3.5 py-2.5 last:border-b-0" data-testid="my-receivable-row-mobile">
                 <div className="min-w-0">
-                  <div className="truncate text-[13px] font-medium text-zk-text">{g.site_name}</div>
-                  <div className="mt-0.5 text-[11.5px] text-zk-muted">
+                  <div className="truncate text-zk-base font-medium text-zk-text">{g.site_name}</div>
+                  <div className="mt-0.5 text-zk-xs text-zk-muted">
                     {fmtDate(g.work_date)} · {g.shift_type_code} · {g.shifts} × {fmtMoney(g.outside_rate)}
                   </div>
                 </div>
-                <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(g.amount)}</div>
+                <div className="shrink-0 text-zk-base font-semibold text-zk-text">{fmtMoney(g.amount)}</div>
               </div>
             ))}
             {data && (
-              <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-[13px] font-bold text-zk-text">
+              <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-zk-base font-bold text-zk-text">
                 <span>合計 {data.total_shifts} 更</span>
                 <span>{fmtMoney(data.total)}</span>
               </div>

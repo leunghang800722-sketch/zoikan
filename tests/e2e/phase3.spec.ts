@@ -63,6 +63,7 @@ test("(a) 老闆抽屜「長工」區：加崗位盤 → 列表見到 → 終止
   await loginAs(page, "老闆");
   await page.goto("/guards");
   await openEditByName(page, GUARD_NAME);
+  await page.getByTestId("guard-tab-longterm").click();
 
   await expect(page.getByRole("heading", { name: "長工", exact: true })).toBeVisible({ timeout: 10_000 });
 
@@ -105,13 +106,14 @@ test("(b) 價目卡「複製上月卡到本月」：預覽 confirm → 新卡 no
   await page.getByTestId("rate-cards-site-filter").selectOption({ label: COPY_SITE_NAME });
   await page.getByTestId("rate-cards-effective-month").fill("2026-09");
 
-  page.once("dialog", (d) => d.accept());
   const previewResponse = page.waitForResponse((r) => r.url().includes("/api/rate-cards/copy-last-month") && r.request().method() === "POST");
   await page.getByRole("button", { name: /複製上月卡到本月/ }).click();
   await previewResponse;
-  // 第二次（dry_run:false）request 喺 window.confirm accept 之後先送，
+  // P3-4.2：window.confirm 改 ConfirmDialog——撳「建立」先送第二次（dry_run:false）request，
   // 用第二個 waitForResponse 等埋佢完成先斷言列表。
-  await page.waitForResponse((r) => r.url().includes("/api/rate-cards/copy-last-month") && r.request().method() === "POST").catch(() => null);
+  const secondResponse = page.waitForResponse((r) => r.url().includes("/api/rate-cards/copy-last-month") && r.request().method() === "POST");
+  await page.getByTestId("confirm-dialog-ok").click();
+  await secondResponse;
 
   await expect(page.getByText(/複製上月卡完成/)).toBeVisible({ timeout: 15_000 });
   const newCard = await prisma.rateCard.findFirst({ where: { siteId: site.id, source: "copy_last_month" } });

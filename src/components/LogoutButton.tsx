@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/Button";
 import { invalidateLookups } from "@/lib/ui/lookup-cache";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -32,13 +33,15 @@ export function LogoutButton({ className }: { className?: string } = {}) {
   }
 
   return (
-    <button
-      type="button"
-      onClick={onLogout}
-      disabled={loading}
-      className={className ?? "w-full rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"}
-    >
-      {loading ? "登出中…" : "登出"}
-    </button>
+    className ? (
+      // 外層（DesktopNav／MobileNav）自己決定外觀（純文字連結樣）——唔套 Button。
+      <button type="button" onClick={onLogout} disabled={loading} title="登出會同時登出所有裝置" className={className}>
+        {loading ? "登出中…" : "登出"}
+      </button>
+    ) : (
+      <Button variant="secondary" size="sm" onClick={onLogout} disabled={loading} title="登出會同時登出所有裝置" className="w-full">
+        {loading ? "登出中…" : "登出"}
+      </Button>
+    )
   );
 }

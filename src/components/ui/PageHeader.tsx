@@ -17,9 +17,9 @@ export function PageHeader({ kicker, title, subtitle, actions }: PageHeaderProps
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div>
-        {kicker && <div className="text-[12.5px] text-zk-muted">{kicker}</div>}
-        <h1 className="mt-0.5 text-[22px] font-bold tracking-[-0.01em] text-zk-text">{title}</h1>
-        {subtitle && <div className="mt-1 text-[13px] text-zk-muted">{subtitle}</div>}
+        {kicker && <div className="text-zk-sm text-zk-muted">{kicker}</div>}
+        <h1 className="mt-0.5 text-zk-xl font-bold tracking-[-0.01em] text-zk-text">{title}</h1>
+        {subtitle && <div className="mt-1 text-zk-base text-zk-muted">{subtitle}</div>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>

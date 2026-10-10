@@ -13,12 +13,13 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { Pill } from "@/components/ui/Pill";
-import { EmptyState, tableCls, tableMinWidth } from "@/components/ui/DataTable";
+import { EmptyState, tableCls, tableMinWidth, TableEmptyRow } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "@/lib/ui/api-client";
 import { fmtMoney, fmtDate, currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
+import { Tabs } from "@/components/ui/Tabs";
 
 // ---------------------------------------------------------------------------
 // 型別（snake_case，同 API response 一致）
@@ -130,6 +131,9 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 };
 
 export default function LongtermPayrollPage() {
+  // P3-4.3（H19）：7 區直排 → 4 個 tab（本月糧／人手輸入／合約／平均工資與假期）；只分組顯示，唔改計糧，鎖月唯讀照舊。
+  const [tab, setTab] = useState<"pay" | "inputs" | "contracts" | "avg">("pay");
+  const tabCls = (t: string) => (tab === t ? "flex flex-col gap-4" : "hidden");
   const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [payroll, setPayroll] = useState<PayrollMonthDTO | null>(null);
   const [inputs, setInputs] = useState<InputDTO[]>([]);
@@ -217,27 +221,40 @@ export default function LongtermPayrollPage() {
 
       {loading && <div className="text-sm text-zk-muted">載入緊…</div>}
 
+      <Tabs
+        testId="ltpay-tabs"
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { key: "pay", label: "本月糧", testId: "ltpay-tab-pay" },
+          { key: "inputs", label: "人手輸入", testId: "ltpay-tab-inputs" },
+          { key: "contracts", label: "合約", testId: "ltpay-tab-contracts" },
+          { key: "avg", label: "平均工資與假期", testId: "ltpay-tab-avg" },
+        ]}
+      />
+
+      <div className={tabCls("pay")} data-testid="ltpay-panel-pay">
       {/* ① 總額卡 */}
       {totals && (
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <div className="rounded-lg border border-zk-border bg-white p-3">
-            <div className="text-[11.5px] text-zk-muted">人數</div>
+            <div className="text-zk-xs text-zk-muted">人數</div>
             <div className="text-lg font-bold">{totals.guard_count ?? 0}</div>
           </div>
           <div className="rounded-lg border border-zk-border bg-white p-3">
-            <div className="text-[11.5px] text-zk-muted">Gross 合計</div>
+            <div className="text-zk-xs text-zk-muted">Gross 合計</div>
             <div className="text-lg font-bold">{fmtMoney(totals.gross_total)}</div>
           </div>
           <div className="rounded-lg border border-zk-border bg-white p-3">
-            <div className="text-[11.5px] text-zk-muted">Autopay 合計</div>
+            <div className="text-zk-xs text-zk-muted">Autopay 合計</div>
             <div className="text-lg font-bold">{fmtMoney(totals.autopay_total)}</div>
           </div>
           <div className="rounded-lg border border-zk-border bg-white p-3">
-            <div className="text-[11.5px] text-zk-muted">MPF 僱員</div>
+            <div className="text-zk-xs text-zk-muted">MPF 僱員</div>
             <div className="text-lg font-bold">{fmtMoney(totals.mpf_ee_total)}</div>
           </div>
           <div className="rounded-lg border border-zk-border bg-white p-3">
-            <div className="text-[11.5px] text-zk-muted">MPF 僱主</div>
+            <div className="text-zk-xs text-zk-muted">MPF 僱主</div>
             <div className="text-lg font-bold">{fmtMoney(totals.mpf_er_total)}</div>
           </div>
         </section>
@@ -289,22 +306,22 @@ export default function LongtermPayrollPage() {
                         {l.autopay_delta === null ? (
                           <span className="text-zk-faint">（冇上月）</span>
                         ) : (
-                          <span className={l.autopay_delta === 0 ? "text-zk-faint" : l.autopay_delta > 0 ? "text-emerald-700" : "text-red-600"}>
+                          <span className={l.autopay_delta === 0 ? "text-zk-faint" : l.autopay_delta > 0 ? "text-zk-success-dark" : "text-zk-danger"}>
                             {l.autopay_delta > 0 ? "+" : ""}
                             {fmtMoney(l.autopay_delta)}
                           </span>
                         )}
                       </td>
                       <td className={tableCls.td}>
-                        <button className="text-[12px] text-zk-primary underline" onClick={() => setExpandedGuard(expandedGuard === l.id ? null : l.id)}>
+                        <Button variant="link" size="sm" onClick={() => setExpandedGuard(expandedGuard === l.id ? null : l.id)}>
                           {expandedGuard === l.id ? "收起" : "逐項來源"}
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                     {expandedGuard === l.id && (
                       <tr>
-                        <td colSpan={11} className="border-b border-[#f1f5f9] bg-zk-header px-3.5 py-2.5">
-                          <ul className="list-disc space-y-0.5 pl-4 text-[12px] text-zk-text">
+                        <td colSpan={11} className="border-b border-zk-border-soft bg-zk-header px-3.5 py-2.5">
+                          <ul className="list-disc space-y-0.5 pl-4 text-zk-sm text-zk-text">
                             {l.notes_json.map((note, i) => (
                               <li key={i}>{note}</li>
                             ))}
@@ -320,27 +337,36 @@ export default function LongtermPayrollPage() {
         </section>
       )}
 
+      </div>
+
       {/* ③ 人手輸入區 */}
+      <div className={tabCls("inputs")} data-testid="ltpay-panel-inputs">
       <InputsSection month={month} inputs={inputs} guardOptions={guardOptions} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
+      </div>
 
       {/* ④ 合約管理 */}
+      <div className={tabCls("contracts")} data-testid="ltpay-panel-contracts">
       <ContractsSection contracts={contracts} onChanged={() => load(month)} onError={setError} onNotice={setNotice} />
+      </div>
 
       {/* ⑤ 平均工資／假期餘額 */}
+      <div className={tabCls("avg")} data-testid="ltpay-panel-avg">
       <AvgWageLeaveBalanceSection month={month} guardOptions={guardOptions} locked={!!payroll?.locked} avgWages={avgWages} leaveBalances={leaveBalances} onChanged={() => load(month)} onError={setError} />
+      </div>
 
+      <div className={tabCls("pay")} data-testid="ltpay-panel-pay-bochk">
       {/* ⑥ BOCHK autopay 檔——WP-BOSS5 §25.4（老闆 2026-09-28 決定 6）：
           格式已核實，出「BOCHK Payroll Editor 明細」xlsx（唔係最終
           .DAT——老闆／會計要用 BOCHK Payroll Editor 貼呢份 xlsx 嘅資料，
           由 Editor 產生正式 .DAT）。 */}
       <section className="flex flex-col gap-2 rounded-lg border border-zk-border bg-white p-4">
         <div className="text-sm font-semibold text-zk-text">BOCHK autopay 檔</div>
-        <div className="text-[12px] text-zk-faint">
+        <div className="text-zk-sm text-zk-faint">
           格式已核實（BOCHK Payroll (Payment Type) Editor and File Specification v1.2）——下載嘅 xlsx 跟 Payroll Editor 明細欄位次序，貼入 Editor 由佢產生正式
           .DAT。冇銀行編號／戶口號碼（只可以係 0-9／-）／賬戶名稱（含中文／非英文字元、或者長過 140 字元）／8
           位通知電話（e-Alert 類型／聯絡係 BOCHK 規格必填）嘅人唔會出現喺明細，列入檔內「缺資料」sheet。
         </div>
-        <div className="text-[12px] text-zk-faint">
+        <div className="text-zk-sm text-zk-faint">
           第 1 欄「編號 No.」淨係做內部序號輔助對數，貼入 BOCHK Payroll Editor 時由第 2 欄（B 欄，員工賬戶銀行編號）開始對應 Editor 第 10
           欄，唔使貼埋「編號 No.」呢欄。
         </div>
@@ -357,7 +383,7 @@ export default function LongtermPayrollPage() {
           </a>
         </div>
         {payroll?.locked && (
-          <div className="rounded border border-orange-300 bg-orange-50 p-2 text-[12.5px] text-orange-800" data-testid="locked-month-warning">
+          <div className="rounded border border-zk-warning-border bg-zk-warning-bg p-2 text-zk-sm text-zk-warning-dark" data-testid="locked-month-warning">
             <div className="font-semibold">呢個月已鎖定；收款戶口用緊而家嘅資料，匯出前請確認呢個月未出過糧。</div>
             <label className="mt-1 flex items-center gap-2">
               <input type="checkbox" checked={confirmLocked} onChange={(e) => setConfirmLocked(e.target.checked)} />
@@ -366,10 +392,10 @@ export default function LongtermPayrollPage() {
           </div>
         )}
         {autopayPreview && (
-          <div className="text-[12.5px] text-zk-text">
+          <div className="text-zk-sm text-zk-text">
             會有 {autopayPreview.row_count} 行，總金額 {fmtMoney(autopayPreview.total_amount)}。
             {autopayPreview.missing.length > 0 && (
-              <span className="text-red-600">
+              <span className="text-zk-danger">
                 {" "}
                 缺資料，唔會出現喺明細（列入「缺資料」sheet）：{autopayPreview.missing.map((m) => `${m.staff_no}（${m.reason}）`).join("、")}
               </span>
@@ -377,6 +403,7 @@ export default function LongtermPayrollPage() {
           </div>
         )}
       </section>
+      </div>
     </div>
   );
 }
@@ -477,7 +504,7 @@ function InputsSection({
             <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} />
           </Field>
           {kind === "leave" && (
-            <label className="col-span-2 flex items-center gap-2 text-[13px] text-zk-text">
+            <label className="col-span-2 flex items-center gap-2 text-zk-base text-zk-text">
               <input type="checkbox" checked={doctorNote} onChange={(e) => setDoctorNote(e.target.checked)} />
               有香港註冊醫生病假紙（已核實）
             </label>
@@ -504,11 +531,7 @@ function InputsSection({
           </thead>
           <tbody>
             {inputs.length === 0 ? (
-              <tr>
-                <td colSpan={7} className={tableCls.tdMuted}>
-                  呢個月未有人手輸入項
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={7}>呢個月未有人手輸入項</TableEmptyRow>
             ) : (
               inputs.map((i) => (
                 <tr key={i.id} className={tableCls.rowHover}>
@@ -523,9 +546,9 @@ function InputsSection({
                   <td className={tableCls.td}>{i.voided_at ? <Pill variant="neutral">已作廢</Pill> : <Pill variant="success">生效</Pill>}</td>
                   <td className={tableCls.td}>
                     {!i.voided_at && !locked && (
-                      <button className="text-[12px] text-red-600 underline" onClick={() => voidInput(i.id)}>
+                      <Button variant="linkDanger" size="sm" onClick={() => voidInput(i.id)}>
                         作廢
-                      </button>
+                      </Button>
                     )}
                   </td>
                 </tr>
@@ -625,12 +648,12 @@ function ContractsSection({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-semibold text-zk-text">合約管理</div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 text-[12.5px] text-zk-muted">
+          <label className="flex items-center gap-1 text-zk-sm text-zk-muted">
             <input type="checkbox" checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} />
             顯示歷史／已作廢
           </label>
           <label className="cursor-pointer">
-            <span className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] hover:bg-zk-header">
+            <span className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary hover:bg-zk-header">
               {uploading ? "上載緊…" : "Maxwell 導入（xlsx）"}
             </span>
             <input
@@ -650,7 +673,7 @@ function ContractsSection({
           </label>
         </div>
       </div>
-      <div className="flex flex-wrap items-end gap-2 rounded border border-dashed border-zk-border p-2 text-[12.5px] text-zk-muted">
+      <div className="flex flex-wrap items-end gap-2 rounded border border-dashed border-zk-border p-2 text-zk-sm text-zk-muted">
         <div className="w-full">Maxwell 導入（CSV）：喺 Excel 分別打開「在職名單」同「離職名單」分頁，「另存新檔 → CSV UTF-8」，兩個檔一齊上載。</div>
         <label className="flex flex-col gap-1">
           在職名單 CSV
@@ -680,11 +703,7 @@ function ContractsSection({
           </thead>
           <tbody>
             {visible.length === 0 ? (
-              <tr>
-                <td colSpan={8} className={tableCls.tdMuted}>
-                  未有合約——用「Maxwell 導入」或者呼叫 POST /api/longterm/contracts 新增
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={8}>未有合約——用「Maxwell 導入」或者呼叫 POST /api/longterm/contracts 新增</TableEmptyRow>
             ) : (
               visible.map((c) => (
                 <tr key={c.id} className={tableCls.rowHover}>
@@ -703,12 +722,12 @@ function ContractsSection({
                   <td className={tableCls.td}>
                     {!c.voided_at && (
                       <div className="flex gap-2">
-                        <button className="text-[12px] text-zk-primary underline" onClick={() => startEdit(c)}>
+                        <Button variant="link" size="sm" onClick={() => startEdit(c)}>
                           編輯
-                        </button>
-                        <button className="text-[12px] text-red-600 underline" onClick={() => voidContract(c.id)}>
+                        </Button>
+                        <Button variant="linkDanger" size="sm" onClick={() => voidContract(c.id)}>
                           作廢
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </td>
@@ -720,7 +739,7 @@ function ContractsSection({
       </div>
       {editing && (
         <div className="flex flex-wrap items-end gap-3 rounded border border-zk-border bg-zk-header p-3">
-          <div className="text-[13px] font-medium">
+          <div className="text-zk-base font-medium">
             編輯：{editing.guard_name}
             {editing.guard_staff_no ? `（${editing.guard_staff_no}）` : ""}
           </div>
@@ -807,7 +826,7 @@ function AvgWageLeaveBalanceSection({
     <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <div className="flex flex-col gap-2 rounded-lg border border-zk-border bg-white p-4">
         <div className="text-sm font-semibold text-zk-text">平均工資（呢個月）</div>
-        <div className="text-[11.5px] text-zk-faint">SL 4/5／AL 離職結算派彩優先讀呢張表，冇記錄先 fallback 日薪；同一人同月再入會覆蓋</div>
+        <div className="text-zk-xs text-zk-faint">SL 4/5／AL 離職結算派彩優先讀呢張表，冇記錄先 fallback 日薪；同一人同月再入會覆蓋</div>
         {!locked && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Field label="保安員">
@@ -845,11 +864,7 @@ function AvgWageLeaveBalanceSection({
             </thead>
             <tbody>
               {avgWages.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className={tableCls.tdMuted}>
-                    冇記錄——fallback 用日薪
-                  </td>
-                </tr>
+                <TableEmptyRow colSpan={3}>冇記錄——fallback 用日薪</TableEmptyRow>
               ) : (
                 avgWages.map((w) => (
                   <tr key={w.id} className={tableCls.rowHover}>
@@ -881,11 +896,7 @@ function AvgWageLeaveBalanceSection({
             </thead>
             <tbody>
               {leaveBalances.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className={tableCls.tdMuted}>
-                    冇記錄——重算本月後自動寫回
-                  </td>
-                </tr>
+                <TableEmptyRow colSpan={5}>冇記錄——重算本月後自動寫回</TableEmptyRow>
               ) : (
                 leaveBalances.map((b) => (
                   <tr key={b.id} className={tableCls.rowHover}>
@@ -897,9 +908,9 @@ function AvgWageLeaveBalanceSection({
                     <td className={tableCls.tdNum}>{b.sl_taken}</td>
                     <td className={tableCls.tdNum}>{b.sl_accrued}</td>
                     <td className={tableCls.td}>
-                      <button className="text-[12px] text-zk-primary underline" onClick={() => startEdit(b)}>
+                      <Button variant="link" size="sm" onClick={() => startEdit(b)}>
                         人手覆核
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))
@@ -909,11 +920,11 @@ function AvgWageLeaveBalanceSection({
         </div>
         {editingBalance && (
           <div className="flex flex-wrap items-end gap-3 rounded border border-zk-border bg-zk-header p-3">
-            <div className="text-[13px] font-medium">
+            <div className="text-zk-base font-medium">
               {editingBalance.guard_name}
               {editingBalance.guard_staff_no ? `（${editingBalance.guard_staff_no}）` : ""}
             </div>
-            <div className="w-full text-[11.5px] text-zk-muted">改「已放」＝設定開波數（計到下次重算嗰個月之前，唔包嗰個月），儲存後撳「重算本月」先生效。</div>
+            <div className="w-full text-zk-xs text-zk-muted">改「已放」＝設定開波數（計到下次重算嗰個月之前，唔包嗰個月），儲存後撳「重算本月」先生效。</div>
             <Field label="AL 已放（開波）">
               <input className={inputCls} value={alTaken} onChange={(e) => setAlTaken(e.target.value)} />
             </Field>

@@ -1,9 +1,9 @@
 export function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
     <label className="block space-y-1">
-      <span className="block text-sm text-gray-700">{label}</span>
+      <span className="block text-sm text-zk-text-secondary">{label}</span>
       {children}
-      {hint && <span className="block text-xs text-gray-400">{hint}</span>}
+      {hint && <span className="block text-xs text-zk-faint">{hint}</span>}
     </label>
   );
 }
@@ -17,7 +17,5 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 // `roster/page.tsx`／`reports/monthly-close/page.tsx` 嘅本地 `fieldCls`
 // 已刪走，改 import 呢度。
 export const inputCls =
-  "w-full rounded-[7px] border border-[#d1d5db] bg-white px-3 py-[9px] text-[13.5px] text-zk-text focus:border-zk-primary focus:outline-none focus:ring-[3px] focus:ring-[#2563eb]/20";
+  "w-full rounded-[7px] border border-zk-input-border bg-white px-3 py-[9px] text-zk-base text-zk-text focus:border-zk-primary focus:outline-none focus:ring-[3px] focus:ring-zk-primary/20";
 export const selectCls = inputCls;
-export const btnPrimary = "rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50";
-export const btnSecondary = "rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50";

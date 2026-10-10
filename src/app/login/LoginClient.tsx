@@ -55,35 +55,35 @@ function LoginForm({ idleDays }: { idleDays: number }) {
         <div className="text-base font-semibold text-zk-text">登入</div>
 
         {error && (
-          <div className="flex items-center gap-2 text-[12.5px] text-[#b91c1c]">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#dc2626]" />
+          <div className="flex items-center gap-2 text-zk-sm text-zk-danger-dark">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-zk-danger" />
             {error}
           </div>
         )}
 
-        <label className="flex flex-col gap-1.5 text-[12.5px] text-zk-text-secondary" htmlFor="tel">
+        <label className="flex flex-col gap-1.5 text-zk-sm text-zk-text-secondary" htmlFor="tel">
           電話
           <input
             id="tel"
             value={tel}
             onChange={(e) => setTel(e.target.value)}
-            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]/30 ${
-              error ? "border-[#dc2626] shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
+            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none focus-visible:ring-2 focus-visible:ring-zk-primary/30 ${
+              error ? "border-zk-danger shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
             }`}
             autoComplete="username"
             disabled={loading}
             required
           />
         </label>
-        <label className="flex flex-col gap-1.5 text-[12.5px] text-zk-text-secondary" htmlFor="password">
+        <label className="flex flex-col gap-1.5 text-zk-sm text-zk-text-secondary" htmlFor="password">
           密碼
           <input
             id="password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]/30 ${
-              error ? "border-[#dc2626] shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
+            className={`rounded-lg border px-3 py-2.5 text-sm text-zk-text focus:outline-none focus-visible:ring-2 focus-visible:ring-zk-primary/30 ${
+              error ? "border-zk-danger shadow-[0_0_0_3px_rgba(220,38,38,.08)]" : "border-zk-input-border focus:border-zk-primary"
             }`}
             autoComplete="current-password"
             disabled={loading}
@@ -97,7 +97,7 @@ function LoginForm({ idleDays }: { idleDays: number }) {
         >
           {loading ? "登入中…" : "登入"}
         </button>
-        <div className="text-center text-[11.5px] leading-relaxed text-zk-faint">
+        <div className="text-center text-zk-xs leading-relaxed text-zk-faint">
           帳號由老闆開立；首次登入會要求改密碼。
           <br />
           忘記密碼請聯絡老闆重設。

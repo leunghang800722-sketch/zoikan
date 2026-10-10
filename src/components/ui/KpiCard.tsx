@@ -20,14 +20,14 @@ export function KpiCard({ label, value, note, href, tone = "default", children, 
     <>
       <div className="text-xs text-zk-muted">{label}</div>
       <div className="mt-1 flex items-baseline gap-2">
-        <span className={`text-[28px] leading-[1.1] font-bold md:text-[30px] ${tone === "danger" ? "text-[#dc2626]" : "text-zk-text"}`}>{value}</span>
+        <span className={`text-zk-2xl leading-[1.1] font-bold lg:text-zk-2xl ${tone === "danger" ? "text-zk-danger" : "text-zk-text"}`}>{value}</span>
       </div>
       {note && <div className="mt-1.5 text-xs text-zk-muted">{note}</div>}
       {children}
     </>
   );
 
-  const cls = `flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 md:px-[18px] md:py-4 ${className ?? ""}`;
+  const cls = `flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 lg:px-[18px] lg:py-4 ${className ?? ""}`;
 
   if (href) {
     return (

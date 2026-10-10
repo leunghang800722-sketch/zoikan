@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { apiGet, apiGetAll, apiPost, ApiClientError } from "@/lib/api-client";
 import { cachedLookup, invalidateLookups } from "@/lib/ui/lookup-cache";
 import { cachedRows } from "@/lib/ui/lookups";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 // P2 整合驗收①：麵包屑／手機頁首「‹」呢兩條連結改用 `GuardedLink`——
@@ -33,7 +33,12 @@ import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { confirmLeaveIfUnsaved, setUnsavedCount } from "@/lib/ui/unsaved-guard";
 import { rememberMonth } from "@/lib/ui/month-store";
+import { MQ_BELOW_SM } from "@/lib/ui/breakpoints";
 
+import { Button } from "@/components/ui/Button";
+import { iconBtn, menuItemBtn } from "@/components/ui/button-classes";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { UnpricedNotice } from "@/components/UnpricedNotice";
 // ---------------------------------------------------------------------------
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
 // docs/api.md「欄位命名」；淨係列出呢個畫面用得到嘅欄）。
@@ -242,20 +247,20 @@ function dayMeta(y: number, m: number, day: number, today: { y: number; m: numbe
     weekday: WEEKDAY_LABELS[wd],
     isWeekend,
     isToday,
-    headerBg: isToday ? "#dbeafe" : isWeekend ? "#f1f5f9" : "#fafbfc",
-    weekdayColor: isToday ? "#2563eb" : "#94a3b8",
-    dayColor: isToday ? "#1d4ed8" : isWeekend ? "#64748b" : "#0f172a",
-    colBg: isToday ? "#eff6ff" : isWeekend ? "#f8fafc" : undefined,
+    headerBg: isToday ? "var(--zk-primary-tint)" : isWeekend ? "var(--zk-surface)" : "var(--zk-header)",
+    weekdayColor: isToday ? "var(--zk-primary)" : "var(--zk-faint)",
+    dayColor: isToday ? "var(--zk-primary-dark)" : isWeekend ? "var(--zk-muted)" : "var(--zk-text)",
+    colBg: isToday ? "var(--zk-primary-tint-soft)" : isWeekend ? "var(--zk-surface-2)" : undefined,
   };
 }
 
 // WP-R2：底部合計行「已排」數配色（README §04：≥所需 綠；<所需 但
 // ≥所需×0.55 中性；否則紅；冇所需設定＝中性）。
 function coverageColor(count: number, required: number): string {
-  if (!required || required <= 0) return "#334155";
-  if (count >= required) return "#0f766e";
-  if (count >= required * 0.55) return "#334155";
-  return "#dc2626";
+  if (!required || required <= 0) return "var(--zk-text-secondary)";
+  if (count >= required) return "var(--zk-success)";
+  if (count >= required * 0.55) return "var(--zk-text-secondary)";
+  return "var(--zk-danger)";
 }
 
 function workDateStr(year: number, monthNum: number, day: number): string {
@@ -415,7 +420,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
     onEditTextChange,
     onCommitEdit,
   } = props;
-  const tdBg = isError ? "#fecaca" : colBg;
+  const tdBg = isError ? "var(--zk-danger-border)" : colBg;
   // 三層可以同時出現、唔會互撞：選中＝outline（藍）；dirty＝inset ring
   // box-shadow（琥珀色 #f59e0b）；draft／請假＝chip 自己嘅 border（喺
   // chip span 層，唔喺呢度，draft 虛線藍／請假虛線橙）。
@@ -427,7 +432,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
   // 線 inset ring，唔會混淆），令「呢格未儲存」呢個狀態同「呢格揀緊」
   // 完全用唔同顏色，一眼分得出。
   const shadows: string[] = [];
-  if (isDirty) shadows.push("inset 0 0 0 2px #f59e0b");
+  if (isDirty) shadows.push("inset 0 0 0 2px var(--zk-amber)");
   if (inRange && !selected) shadows.push("inset 0 0 0 9999px rgba(37,99,235,.08)");
   return (
     <td
@@ -436,7 +441,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
         width: dayColW,
         height: rowH,
         background: tdBg,
-        outline: selected ? "2px solid #2563eb" : undefined,
+        outline: selected ? "2px solid var(--zk-primary)" : undefined,
         outlineOffset: selected ? -2 : undefined,
         boxShadow: shadows.length > 0 ? shadows.join(", ") : undefined,
       }}
@@ -472,7 +477,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
         // P2 整合驗收應修②：打緊未完成嘅多字代號（例如打咗「S」仲等緊
         // 「H」）——細字顯示喺格入面，蓋過原本個 chip（等夠鐘／打夠／
         // Enter 先變返正式 chip）。
-        <span data-testid="roster-cell-key-buffer" className="text-[11px] font-semibold text-[#b45309]">
+        <span data-testid="roster-cell-key-buffer" className="text-zk-xs font-semibold text-zk-warning-darker">
           {keyBufferText}
         </span>
       ) : (
@@ -498,6 +503,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
 });
 
 export default function RosterEditor({ siteId, month, canReprice = false }: { siteId: string; month: string; canReprice?: boolean }) {
+  const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
   const router = useRouter();
   const { year, monthNum } = parseMonthStr(month);
   const days = daysInMonth(year, monthNum);
@@ -512,7 +518,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // 日期欄永遠被固定欄遮住，捲極都見唔到。compact（<640px）改用窄欄並收起工號／雞頭欄。
   const [compact, setCompact] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 639px)");
+    const mq = window.matchMedia(MQ_BELOW_SM);
     const apply = () => setCompact(mq.matches);
     apply();
     mq.addEventListener("change", apply);
@@ -564,6 +570,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
 
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  // P3-4.2：取代 window.alert——一次過嘅結果提示（下一次動作時清走）。
+  const [infoBanner, setInfoBanner] = useState<string | null>(null);
   const [errorCellKey, setErrorCellKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
@@ -1225,6 +1233,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const handleCopyPrevMonth = useCallback(async () => {
     if (monthLocked) return;
     setErrorBanner(null);
+    setInfoBanner(null);
     try {
       const pm = prevMonthStr(month);
       const { year: py, monthNum: pm2 } = parseMonthStr(pm);
@@ -1280,7 +1289,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       setCells(nextCells);
       if (newExtra.length > 0) setExtraRows((prev) => [...prev, ...newExtra]);
       if (skippedPrRowKeys.size > 0) {
-        window.alert(`已略過 ${skippedPrRowKeys.size} 行對數佔位更別（PR）——呢類更別淨係 P0 匯入時對數用，唔可以排更。`);
+        setInfoBanner(`已略過 ${skippedPrRowKeys.size} 行對數佔位更別（PR）——呢類更別淨係 P0 匯入時對數用，唔可以排更。`);
       }
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : "複製上月失敗");
@@ -1445,6 +1454,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const handleReprice = useCallback(async () => {
     if (repricing) return;
     setRepricing(true);
+    setInfoBanner(null);
     try {
       // 必修 2（Opus 第二輪驗收）：dry-run 預覽淨係用嚟俾用戶睇 diff 摘要
       // （confirm() 嗰句文字入面），**唔再** `setUnpricedSummary(...)`
@@ -1454,13 +1464,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       // 「模擬」數頂替咗。
       const preview = await apiPost<RepriceDryRunResult>("/api/shift-records/reprice", { month, site_id: siteId, dry_run: true });
       if (preview.changed === 0) {
-        window.alert(`重新計價預覽：呢個盤呢個月冇任何更次嘅收客價／出街價會變（同現有 snapshot 一致），${preview.unpriced} 更仍然未定價（冇對應價目卡）。冇嘢寫入。`);
+        setInfoBanner(`重新計價預覽：呢個盤呢個月冇任何更次嘅收客價／出街價會變（同現有 snapshot 一致），${preview.unpriced} 更仍然未定價（冇對應價目卡）。冇嘢寫入。`);
         return;
       }
       const keptNote = preview.kept_unresolved > 0 ? `（其中 ${preview.kept_unresolved} 更資料庫搵唔到對應卡，保留原有 snapshot 唔會清走）` : "";
-      const proceed = window.confirm(
-        `重新計價預覽 ${month}（${siteName || siteId}）：${preview.changed} 更嘅收客價／出街價會改變，${preview.unchanged} 更不變${keptNote}，仲有 ${preview.unpriced} 更未定價。確定要寫入？`,
-      );
+      const proceed = await askConfirm({
+        message: `重新計價預覽 ${month}（${siteName || siteId}）：${preview.changed} 更嘅收客價／出街價會改變，${preview.unchanged} 更不變${keptNote}，仲有 ${preview.unpriced} 更未定價。確定要寫入？`,
+        confirmLabel: "寫入",
+      });
       if (!proceed) {
         return;
       }
@@ -1475,13 +1486,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       skipExtraRowsResetRef.current = true;
       setReloadTick((t) => t + 1);
       setErrorBanner(null);
-      window.alert(`重新計價完成：${res.repriced} 更已改寫，仲有 ${res.unpriced} 更未定價。`);
+      setInfoBanner(`重新計價完成：${res.repriced} 更已改寫，仲有 ${res.unpriced} 更未定價。`);
     } catch (err) {
       setErrorBanner(err instanceof ApiClientError ? err.message : err instanceof Error ? err.message : "重新計價失敗");
     } finally {
       setRepricing(false);
     }
-  }, [repricing, month, siteId, siteName]);
+  }, [repricing, month, siteId, siteName, askConfirm]);
 
   const handleRevert = useCallback(() => {
     setCells(new Map(baseline));
@@ -1679,14 +1690,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // ---- 畫面 ---------------------------------------------------------------
   if (loading) {
     return (
-      <div className="p-6 text-sm text-gray-500">
+      <div className="p-6 text-sm text-zk-muted">
         載入緊更表……
         {slowLoading && (
-          <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+          <div className="mt-3 rounded border border-zk-warning-border bg-zk-warning-bg p-3 text-zk-warning-dark">
             載入時間比平時長（超過 15 秒）——可能係網絡慢或者登入已過期。
             <div className="mt-2 flex gap-2">
-              <button type="button" className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700" onClick={() => window.location.reload()}>重新載入</button>
-              <a href={`/login?next=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname : "/")}`} className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">重新登入</a>
+              <Button variant="primary" size="md" type="button" onClick={() => window.location.reload()}>重新載入</Button>
+              <a href={`/login?next=${encodeURIComponent(typeof window !== "undefined" ? window.location.pathname : "/")}`} className="rounded border border-zk-input-border px-3 py-1.5 text-sm hover:bg-zk-header">重新登入</a>
             </div>
           </div>
         )}
@@ -1697,9 +1708,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   if (forbidden) {
     return (
       <div className="p-8 max-w-lg mx-auto text-center space-y-3" data-testid="roster-forbidden">
-        <h1 className="text-xl font-semibold text-gray-900">冇權限或搵唔到呢個盤</h1>
-        <p className="text-sm text-gray-600">{forbidden}——你可能冇份呢個盤，或者個網址打錯。</p>
-        <Link href="/" className="inline-block text-blue-600 underline text-sm">
+        <h1 className="text-xl font-semibold text-zk-dark">冇權限或搵唔到呢個盤</h1>
+        <p className="text-sm text-zk-text-secondary">{forbidden}——你可能冇份呢個盤，或者個網址打錯。</p>
+        <Link href="/" className="inline-block text-zk-primary underline text-sm">
           返首頁
         </Link>
       </div>
@@ -1709,11 +1720,11 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   if (loadError) {
     return (
       <div className="p-8 max-w-lg mx-auto text-center space-y-3">
-        <h1 className="text-xl font-semibold text-gray-900">讀取失敗</h1>
-        <p className="text-sm text-gray-600">{loadError}</p>
-        <button
+        <h1 className="text-xl font-semibold text-zk-dark">讀取失敗</h1>
+        <p className="text-sm text-zk-text-secondary">{loadError}</p>
+        <Button variant="secondary" size="md"
           type="button"
-          className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
+
           onClick={() => {
             invalidateLookups();
             staticRef.current = null;
@@ -1721,7 +1732,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           }}
         >
           重試
-        </button>
+        </Button>
       </div>
     );
   }
@@ -1796,7 +1807,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     const keyBufferText = keyBuffer && keyBuffer.r === r && keyBuffer.d === d ? keyBuffer.text : undefined;
     const m = dayMetaList[d - 1];
 
-    const chip = invalid ? { bg: "#fee2e2", fg: "#b91c1c", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
+    const chip = invalid ? { bg: "var(--zk-danger-tint)", fg: "var(--zk-danger-dark)", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
     const title = c?.status ? `狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
 
     return (
@@ -1837,6 +1848,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
 
   return (
     <div className="flex flex-col gap-3">
+      {confirmDialog}
       {/* ================= 桌面頁首（README §04） ================= */}
       {!compact && (
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -1845,13 +1857,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               更表 <span className="text-zk-faintest">/</span> {siteName || "…"}
             </GuardedLink>
             <div className="mt-0.5 flex flex-wrap items-baseline gap-3">
-              <h1 className="text-[22px] font-bold tracking-[-0.01em] text-zk-text">{siteName || "更表編輯器"}</h1>
-              <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[3px] text-[13px] text-[#334155]">
-                <button type="button" className="text-zk-faint hover:text-zk-text" onClick={() => goMonth(prevMonthStr(month))} aria-label="上一月">
+              <h1 className="text-zk-xl font-bold tracking-[-0.01em] text-zk-text">{siteName || "更表編輯器"}</h1>
+              <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[3px] text-zk-base text-zk-text-secondary">
+                <button type="button" className={iconBtn} onClick={() => goMonth(prevMonthStr(month))} aria-label="上一月">
                   ‹
                 </button>
                 {year} 年 {monthNum} 月
-                <button type="button" className="text-zk-faint hover:text-zk-text" onClick={() => goMonth(nextMonthStr(month))} aria-label="下一月">
+                <button type="button" className={iconBtn} onClick={() => goMonth(nextMonthStr(month))} aria-label="下一月">
                   ›
                 </button>
               </div>
@@ -1862,27 +1874,27 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
+            <Button variant="secondary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked}
-              className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-45"
+
               onClick={() => setShowAddGuard(true)}
             >
               加保安員
-            </button>
-            <button
+            </Button>
+            <Button variant="secondary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked}
-              className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-45"
+
               onClick={handleCopyPrevMonth}
             >
               複製上月（{prevMonthStr(month)}）
-            </button>
+            </Button>
             {hasRosterLayout === false ? (
               <span
                 data-testid="roster-export-unavailable"
                 title="呢個盤未有更表版面模板，唔可以匯出"
-                className="cursor-not-allowed rounded-md border border-zk-border px-3.5 py-[7px] text-[13px] text-zk-faintest"
+                className="cursor-not-allowed rounded-md border border-zk-border px-3.5 py-[7px] text-zk-base text-zk-faintest"
               >
                 未有更表模板，唔可以匯出
               </span>
@@ -1892,30 +1904,30 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 href={`/api/sites/${siteId}/roster-export?month=${month}`}
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] text-[#334155] hover:bg-zk-header"
+                className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary hover:bg-zk-header"
               >
                 匯出 Excel
               </a>
             )}
             <span className="mx-1 h-[22px] w-px bg-zk-border" />
-            <button
+            <Button variant="secondary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={dirtyCount === 0}
-              className="rounded-md border border-[#d1d5db] bg-white px-3.5 py-[7px] text-[13px] disabled:cursor-not-allowed disabled:opacity-45"
-              style={{ color: "#94a3b8" }}
+
+              style={{ color: "var(--zk-faint)" }}
               onClick={handleRevert}
             >
               還原
-            </button>
-            <button
+            </Button>
+            <Button variant="primary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked || saving || dirtyCount === 0}
-              className="rounded-md border border-[#2563eb] bg-[#2563eb] px-4 py-[7px] text-[13px] font-semibold text-white hover:bg-[#1d4ed8] disabled:cursor-not-allowed"
+
               style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
               onClick={handleSave}
             >
               {saving ? "儲存緊……" : "儲存"}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -1933,8 +1945,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               ‹
             </GuardedLink>
             <div className="min-w-0">
-              <div className="truncate text-[16px] font-bold text-zk-text">{siteName || "更表編輯器"}</div>
-              <div className="text-[11.5px] text-zk-muted">
+              <div className="truncate text-zk-lg font-bold text-zk-text">{siteName || "更表編輯器"}</div>
+              <div className="text-zk-xs text-zk-muted">
                 {year} 年 {monthNum} 月 · {monthLocked ? "已鎖定" : "排更中"}
               </div>
             </div>
@@ -1949,7 +1961,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 aria-label="更多操作"
                 aria-haspopup="menu"
                 aria-expanded={showMobileMore}
-                className="flex h-8 w-8 items-center justify-center rounded-md border border-[#d1d5db] text-[15px] leading-none text-[#334155]"
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-zk-input-border text-zk-md leading-none text-zk-text-secondary"
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={() => setShowMobileMore((v) => !v)}
               >
@@ -1958,14 +1970,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               {showMobileMore && (
                 <div
                   data-testid="roster-mobile-more-menu"
-                  className="absolute right-0 top-9 z-40 w-48 rounded-md border border-zk-border bg-white py-1 text-[13px] text-zk-text"
+                  className="absolute right-0 top-9 z-40 w-48 rounded-md border border-zk-border bg-white py-1 text-zk-base text-zk-text"
                   style={{ boxShadow: "0 6px 20px rgba(15,23,42,.15)" }}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   <button
                     type="button"
                     disabled={monthLocked}
-                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    className={menuItemBtn}
                     onClick={() => {
                       setShowMobileMore(false);
                       setShowAddGuard(true);
@@ -1976,7 +1988,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                   <button
                     type="button"
                     disabled={monthLocked}
-                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    className={menuItemBtn}
                     onClick={() => {
                       setShowMobileMore(false);
                       handleCopyPrevMonth();
@@ -2007,7 +2019,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                   <button
                     type="button"
                     disabled={dirtyCount === 0}
-                    className="block w-full px-3 py-1.5 text-left hover:bg-zk-header disabled:opacity-40"
+                    className={menuItemBtn}
                     onClick={() => {
                       setShowMobileMore(false);
                       handleRevert();
@@ -2018,15 +2030,15 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 </div>
               )}
             </div>
-            <button
+            <Button variant="primary" size="sm" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked || saving || dirtyCount === 0}
-              className="rounded-md border border-[#2563eb] bg-[#2563eb] px-3 py-[6px] text-[12.5px] font-semibold text-white disabled:cursor-not-allowed"
+
               style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
               onClick={handleSave}
             >
               {saving ? "儲存緊…" : "儲存"}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -2050,28 +2062,28 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                   data-testid="broker-stats-row"
                   data-broker-code={b.code}
                   className={`flex flex-col gap-1.5 rounded-lg border bg-white px-3.5 py-2.5 ${isBrokerSession ? "" : "cursor-pointer hover:bg-zk-header"}`}
-                  style={{ borderColor: isSelected ? bc.dot : "#e5e7eb" }}
+                  style={{ borderColor: isSelected ? bc.dot : "var(--zk-border)" }}
                   onClick={isBrokerSession ? undefined : () => setSelectedBrokerCode(isSelected ? null : b.code)}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-zk-text">
+                    <span className="inline-flex items-center gap-1.5 text-zk-sm font-semibold text-zk-text">
                       <span className="h-2 w-2 rounded-sm" style={{ background: bc.dot }} />
                       {b.code}
                       {b.name ? `（${b.name}）` : ""}
                     </span>
-                    <span className="text-[11.5px] text-zk-muted">{b.headcount} 人</span>
+                    <span className="text-zk-xs text-zk-muted">{b.headcount} 人</span>
                   </div>
                   <div className="flex items-baseline gap-1.5">
-                    <span className="text-[18px] font-bold text-zk-text">{b.confirmed}</span>
-                    <span className="text-[11.5px] text-zk-muted">
+                    <span className="text-zk-lg font-bold text-zk-text">{b.confirmed}</span>
+                    <span className="text-zk-xs text-zk-muted">
                       已確認 · 待審批{" "}
-                      <span style={{ color: b.pending > 0 ? "#b45309" : "#64748b", fontWeight: b.pending > 0 ? 600 : 400 }}>{b.pending}</span>
+                      <span style={{ color: b.pending > 0 ? "var(--zk-warning-darker)" : "var(--zk-muted)", fontWeight: b.pending > 0 ? 600 : 400 }}>{b.pending}</span>
                     </span>
                   </div>
                   <div className="h-1 overflow-hidden rounded-full bg-zk-surface">
                     <div className="h-full" style={{ width: `${pct}%`, background: bc.dot }} />
                   </div>
-                  <div className="text-[11px] text-zk-faint">
+                  <div className="text-zk-xs text-zk-faint">
                     {b.quotaTarget > 0 ? `配額 ${b.quotaTarget} · 已排 ${scheduled}` : "未設配額（軟性限制）"}
                   </div>
                 </div>
@@ -2101,9 +2113,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 ))}
               </select>
               {selectedBrokerCode && (
-                <button type="button" data-testid="broker-filter-clear" className="text-xs text-zk-primary underline" onClick={() => setSelectedBrokerCode(null)}>
+                <Button variant="link" size="sm" type="button" data-testid="broker-filter-clear" onClick={() => setSelectedBrokerCode(null)}>
                   清除篩選
-                </button>
+                </Button>
               )}
             </div>
           )}
@@ -2124,8 +2136,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                   data-testid="broker-stats-row"
                   data-broker-code={b.code}
                   disabled={isBrokerSession}
-                  className="flex shrink-0 items-center gap-1 rounded-[14px] border px-2 py-1 text-[11.5px] text-[#334155]"
-                  style={{ borderColor: isSelected ? bc.dot : "#e5e7eb" }}
+                  className="flex shrink-0 items-center gap-1 rounded-[14px] border px-2 py-1 text-zk-xs text-zk-text-secondary"
+                  style={{ borderColor: isSelected ? bc.dot : "var(--zk-border)" }}
                   onClick={() => setSelectedBrokerCode(isSelected ? null : b.code)}
                 >
                   <span className="h-[7px] w-[7px] rounded-sm" style={{ background: bc.dot }} />
@@ -2153,9 +2165,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 ))}
               </select>
               {selectedBrokerCode && (
-                <button type="button" data-testid="broker-filter-clear" className="text-[11.5px] text-zk-primary underline" onClick={() => setSelectedBrokerCode(null)}>
+                <Button variant="link" size="sm" type="button" data-testid="broker-filter-clear" onClick={() => setSelectedBrokerCode(null)}>
                   清除篩選
-                </button>
+                </Button>
               )}
             </div>
           )}
@@ -2164,16 +2176,16 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
 
       {/* ================= 鎖定／提示橫幅 ================= */}
       {monthLocked ? (
-        <Notice
-          variant="warning"
+        <Banner compact
+          kind="warning"
           action={
-            <Link href={`/month-close?month=${month}`} className="text-[12px] underline" style={{ color: "inherit" }}>
+            <Link href={`/month-close?month=${month}`} className="text-zk-sm underline" style={{ color: "inherit" }}>
               去一鍵結算
             </Link>
           }
         >
           {month} 已鎖定 — 更表只讀。如需修改，請聯絡有「月結鎖定解鎖」權限嘅同事。
-        </Notice>
+        </Banner>
       ) : (
         !compact && (
           <div className="flex items-center gap-3.5 rounded-md border border-zk-border bg-white px-3 py-2 text-xs text-zk-muted">
@@ -2183,24 +2195,24 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 const s = shiftCodeStyle(code);
                 return (
                   <span key={code} className="inline-flex items-center gap-1">
-                    <span className="h-3 w-3 rounded-[3px]" style={{ background: s.bg === "transparent" ? "#f1f5f9" : s.bg, border: s.border }} />
+                    <span className="h-3 w-3 rounded-[3px]" style={{ background: s.bg === "transparent" ? "var(--zk-surface)" : s.bg, border: s.border }} />
                     {code}
                   </span>
                 );
               })}
               <span className="inline-flex items-center gap-1">
-                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed #f59e0b" }} />
+                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed var(--zk-amber)" }} />
                 假
               </span>
               <span className="inline-flex items-center gap-1">
-                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed #2563eb" }} />
+                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed var(--zk-primary)" }} />
                 待批
               </span>
               {/* P2 整合驗收應修①：加返「未儲存」圖例——同格仔嘅 dirty inset
                   ring 同一個顏色（琥珀色），等用戶睇圖例就知呢個顏色代表
                   「未儲存」，唔使靠估。 */}
               <span className="inline-flex items-center gap-1">
-                <span className="h-3 w-3 rounded-[3px]" style={{ boxShadow: "inset 0 0 0 2px #f59e0b" }} />
+                <span className="h-3 w-3 rounded-[3px]" style={{ boxShadow: "inset 0 0 0 2px var(--zk-amber)" }} />
                 未儲存
               </span>
             </span>
@@ -2211,7 +2223,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           「客戶直接出糧」嘅盤——頁頂提示，同鎖定狀態獨立（鎖定與否都要
           畀用戶知呢個盤嘅更唔計工資／客價）。 */}
       {guardsPaidByClient && (
-        <Notice variant="info">
+        <Banner compact kind="info">
           {/* WP-MISC Opus 應修（P0 同一輪覆核）：舊文字講「亦唔會出現喺
               糧單」會令人以為呢個盤嘅更表記錄喺糧單完全睇唔到——實情係
               糧單入面呢個盤照計更數，淨係金額為 0（`buildPayrollTotals()`
@@ -2219,74 +2231,27 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               照樣出現喺對應 broker 明細）。唔准改報表本身，淨係改呢句
               文字令講法準確。 */}
           呢個盤嘅保安員由客戶直接出糧，我哋只收每月服務費——呢度嘅更唔計工資／客價（糧單入面更數照計、金額為 0）。
-        </Notice>
+        </Banner>
       )}
       {/* WP-PRICE §3：呢個盤呢個月未定價格持續提示（唔止儲存嗰下先出——
           載入頁面已經攞緊，等用戶就算冇改動都睇到舊有缺價格）。 */}
-      {unpricedSummary && unpricedSummary.count > 0 && (
-        <Notice
-          variant="warning"
-          action={
-            canReprice ? (
-              <button
-                type="button"
-                onClick={handleReprice}
-                disabled={repricing}
-                className="rounded border border-current px-2 py-1 text-[12px] disabled:opacity-50"
-              >
-                {repricing ? "計價緊…" : `重新計價（${month}）`}
-              </button>
-            ) : undefined
-          }
-        >
-          <p className="font-medium">呢個月有 {unpricedSummary.count} 更未定價（冇對應價目卡），金額未計入報表：</p>
-          {/* S3：分開講「出街價未定」／「收客價未定」（後者淨係逐更盤先算，
-              月費／admin_fee／special 盤 client_rate=null 屬正常）。 */}
-          <p className="text-[12px] opacity-80">
-            出街價未定 {unpricedSummary.payoutCount ?? unpricedSummary.count} 更；收客價未定（逐更盤）{unpricedSummary.clientCount ?? 0} 更
-          </p>
-          <ul className="list-disc pl-5 mt-1">
-            {/* P0：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更搶眼
-                嘅 Notice，見下面）——留喺呢度就會誤標做「出街價未定」，
-                令用戶以為補張卡就得，但真正要做嘅係指定雞頭。 */}
-            {unpricedSummary.groups
-              .filter((g) => g.category !== "no_settlement")
-              .map((g) => (
-                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                  {g.category === "client_unpriced" ? "收客價未定 · " : "出街價未定 · "}
-                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-          <p className="mt-1">
-            去<Link href="/rate-cards" className="underline" style={{ color: "inherit" }}>價目頁</Link>補卡後
-            {canReprice ? "，撳右邊「重新計價」。" : "，請有「出街價:update」權限嘅同事撳「重新計價」。"}
-          </p>
-        </Notice>
-      )}
-      {/* P0（Opus 驗收重現）：呢個盤呢個月有幾多格 settlement_broker_id
-          係 NULL——呢批更喺糧明細完全消失（唔止未定價，成條記錄搵唔
-          到），獨立、更搶眼（danger）嘅 Notice，唔可以同上面「未定價」
-          混埋一齊（會令人以為補張卡就搞掂）。 */}
-      {unpricedSummary && (unpricedSummary.noSettlementCount ?? 0) > 0 && (
-        <Notice variant="error">
-          <p className="font-medium">
-            呢個月有 {unpricedSummary.noSettlementCount} 更冇結算單位（settlement_broker_id 未定）——
-            <strong>呢批更唔會出現喺任何雞頭嘅糧明細</strong>，請盡快幫呢啲格指定雞頭再儲存。
-          </p>
-          <ul className="list-disc pl-5 mt-1">
-            {unpricedSummary.groups
-              .filter((g) => g.category === "no_settlement")
-              .map((g) => (
-                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Notice>
+      {/* WP-PRICE §3：呢個盤呢個月未定價／冇結算單位持續提示（載入頁面已經攞緊，就算冇改動都睇到）。P3-4.2：共用 <UnpricedNotice variant="full">。 */}
+      {unpricedSummary && (
+        <UnpricedNotice
+          variant="full"
+          month={month}
+          unpricedCount={unpricedSummary.count}
+          noSettlementCount={unpricedSummary.noSettlementCount ?? 0}
+          groups={unpricedSummary.groups}
+          payoutCount={unpricedSummary.payoutCount}
+          clientCount={unpricedSummary.clientCount}
+          canReprice={canReprice}
+          repricing={repricing}
+          onReprice={handleReprice}
+        />
       )}
       {warnings.length > 0 && (
-        <div className="rounded border border-yellow-300 bg-yellow-50 text-yellow-900 text-sm px-3 py-2 space-y-1">
+        <div className="rounded border border-zk-warning-border bg-zk-warning-bg text-zk-warning-dark text-sm px-3 py-2 space-y-1">
           <p className="font-medium">儲存成功，但有以下軟性警示（唔擋寫入，建議留意）：</p>
           <ul className="list-disc pl-5">
             {warnings.map((w, i) => (
@@ -2296,8 +2261,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         </div>
       )}
       {errorBanner && (
-        <div className="rounded border border-red-300 bg-red-50 text-red-800 text-sm px-3 py-2 whitespace-pre-wrap">{errorBanner}</div>
+        <Banner kind="error" className="whitespace-pre-wrap">{errorBanner}</Banner>
       )}
+      <Banner kind="info" message={infoBanner} data-testid="roster-info-banner" />
 
       {/* ================= 格仔表（README §04/§23） ================= */}
       <div className="overflow-hidden rounded-lg border border-zk-border bg-white" style={{ opacity: monthLocked ? 0.8 : 1 }}>
@@ -2321,21 +2287,21 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               <tr>
                 {!compact && (
                   <th
-                    className="sticky top-0 z-20 bg-[#fafbfc] text-left text-[11px] font-semibold text-zk-muted"
-                    style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid #e5e7eb", borderBottom: "1px solid #e5e7eb", padding: "8px 0 8px 12px" }}
+                    className="sticky top-0 z-20 bg-zk-header text-left text-zk-xs font-semibold text-zk-muted"
+                    style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid var(--zk-border)", borderBottom: "1px solid var(--zk-border)", padding: "8px 0 8px 12px" }}
                   >
                     更別
                   </th>
                 )}
                 <th
-                  className="sticky top-0 z-20 bg-[#fafbfc] text-left text-[11px] font-semibold text-zk-muted"
+                  className="sticky top-0 z-20 bg-zk-header text-left text-zk-xs font-semibold text-zk-muted"
                   style={{
                     left: leftOffsets.name,
                     width: nameColWidth,
                     minWidth: nameColWidth,
                     position: "sticky",
-                    borderRight: compact || !showBrokerCol ? "1px solid #e5e7eb" : undefined,
-                    borderBottom: "1px solid #e5e7eb",
+                    borderRight: compact || !showBrokerCol ? "1px solid var(--zk-border)" : undefined,
+                    borderBottom: "1px solid var(--zk-border)",
                     padding: compact ? "0 12px" : "8px 10px",
                     boxShadow: compact ? "2px 0 6px rgba(0,0,0,.04)" : undefined,
                   }}
@@ -2344,8 +2310,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 </th>
                 {showBrokerCol && (
                   <th
-                    className="sticky top-0 z-20 bg-[#fafbfc] text-left text-[11px] font-semibold text-zk-muted"
-                    style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, minWidth: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb", borderBottom: "1px solid #e5e7eb", padding: "8px 10px" }}
+                    className="sticky top-0 z-20 bg-zk-header text-left text-zk-xs font-semibold text-zk-muted"
+                    style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, minWidth: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid var(--zk-border)", borderBottom: "1px solid var(--zk-border)", padding: "8px 10px" }}
                   >
                     雞頭
                   </th>
@@ -2356,7 +2322,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     <th
                       key={d}
                       className="sticky top-0 z-10 text-center font-normal"
-                      style={{ width: dayColW, background: m.headerBg, borderBottom: "1px solid #e5e7eb", padding: "5px 0" }}
+                      style={{ width: dayColW, background: m.headerBg, borderBottom: "1px solid var(--zk-border)", padding: "5px 0" }}
                       data-testid={`roster-day-header-${d}`}
                       data-today={m.isToday || undefined}
                       data-weekend={m.isWeekend || undefined}
@@ -2383,27 +2349,27 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     data-testid="roster-row"
                     data-row-index={r}
                     data-row-key={row.key}
-                    className="hover:bg-[#fafbfc]"
-                    style={{ height: rowH, borderBottom: "1px solid #f1f5f9" }}
+                    className="hover:bg-zk-header"
+                    style={{ height: rowH, borderBottom: "1px solid var(--zk-surface)" }}
                   >
                     {!compact && (
                       <td
                         className="sticky z-10 bg-white text-center text-xs text-zk-muted"
-                        style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid #e5e7eb" }}
+                        style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid var(--zk-border)" }}
                       >
                         <div className="flex flex-col items-center gap-0.5">
                           <span>{row.shiftTypeCode}</span>
-                          <button
+                          <Button variant="link" size="sm"
                             type="button"
                             disabled={monthLocked}
-                            className="text-[10px] text-zk-primary underline disabled:opacity-40"
+
                             onClick={() => {
                               setFillRowKey(row.key === fillRowKey ? null : row.key);
                               setFillRowValue("");
                             }}
                           >
                             整行
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     )}
@@ -2415,7 +2381,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                         minWidth: nameColWidth,
                         maxWidth: nameColWidth,
                         position: "sticky",
-                        borderRight: compact || !showBrokerCol ? "1px solid #e5e7eb" : undefined,
+                        borderRight: compact || !showBrokerCol ? "1px solid var(--zk-border)" : undefined,
                         boxShadow: compact ? "2px 0 6px rgba(0,0,0,.04)" : undefined,
                       }}
                     >
@@ -2424,10 +2390,10 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                         // 兩行（名／雞頭·工號）——證件到期呢類第三行 44px
                         // 塞唔落，compact 唔顯示（桌面照樣顯示）。
                         <div className="flex h-full flex-col justify-center gap-0.5 px-3 py-1">
-                          <div className="truncate text-[13.5px] font-medium text-zk-text" title={row.guardName || "(未命名)"}>
+                          <div className="truncate text-zk-base font-medium text-zk-text" title={row.guardName || "(未命名)"}>
                             {row.guardName || "(未命名)"}
                           </div>
-                          <div className="flex items-center gap-1 truncate text-[10.5px] text-zk-faint">
+                          <div className="flex items-center gap-1 truncate text-zk-2xs text-zk-faint">
                             {broker && (
                               <span className="font-semibold" style={{ color: bc.dot }}>
                                 {broker.code}
@@ -2439,16 +2405,16 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                         </div>
                       ) : (
                         <div className="flex min-w-0 items-baseline gap-2 px-2.5">
-                          <span className="truncate text-[13px] font-medium" title={row.guardName || "(未命名)"}>
+                          <span className="truncate text-zk-base font-medium" title={row.guardName || "(未命名)"}>
                             {row.guardName || "(未命名)"}
                           </span>
-                          <span className="shrink-0 text-[11px] text-zk-faint">{row.staffNo}</span>
-                          {permitExpired && <span className="shrink-0 text-[10px] text-red-600">證件到期</span>}
+                          <span className="shrink-0 text-zk-xs text-zk-faint">{row.staffNo}</span>
+                          {permitExpired && <span className="shrink-0 text-zk-2xs text-zk-danger">證件到期</span>}
                         </div>
                       )}
                     </td>
                     {showBrokerCol && (
-                      <td className="sticky z-10 bg-white px-1.5" style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb" }}>
+                      <td className="sticky z-10 bg-white px-1.5" style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid var(--zk-border)" }}>
                         {/* B1-5（WP-ATTRIB）：內部角色可以逐行改結算單位
                             （對新格生效——已存在嘅格唔受影響，見
                             handleSave 嘅 isExistingRecord 判斷）；鎖定月
@@ -2510,8 +2476,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             <tfoot>
               <tr>
                 <td
-                  className="sticky z-10 bg-[#fafbfc] text-[11px] text-zk-muted"
-                  style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px" }}
+                  className="sticky z-10 bg-zk-header text-zk-xs text-zk-muted"
+                  style={{ left: 0, position: "sticky", borderTop: "1px solid var(--zk-border)", padding: "7px 12px" }}
                   colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
                 >
                   {isBrokerSession ? "自己已排" : "每日已排 / 所需"}
@@ -2522,8 +2488,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     return (
                       <td
                         key={i}
-                        className="text-center text-[11px] font-semibold"
-                        style={{ borderTop: "1px solid #e5e7eb", padding: "7px 0", color: "#334155" }}
+                        className="text-center text-zk-xs font-semibold"
+                        style={{ borderTop: "1px solid var(--zk-border)", padding: "7px 0", color: "var(--zk-text-secondary)" }}
                         title={`自己已排 ${t}`}
                       >
                         {t}
@@ -2534,13 +2500,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     <td
                       key={i}
                       className="text-center"
-                      style={{ borderTop: "1px solid #e5e7eb", padding: compact ? "5px 0" : "6px 0" }}
+                      style={{ borderTop: "1px solid var(--zk-border)", padding: compact ? "5px 0" : "6px 0" }}
                       title={`已排 ${t} / 所需 ${req}`}
                     >
-                      <div className="text-[11px] font-semibold" style={{ color: coverageColor(t, req) }}>
+                      <div className="text-zk-xs font-semibold" style={{ color: coverageColor(t, req) }}>
                         {t}
                       </div>
-                      <div className="text-[9.5px] text-[#94a3b8]">{req}</div>
+                      <div className="text-zk-2xs text-zk-faint">{req}</div>
                     </td>
                   );
                 })}
@@ -2548,14 +2514,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               {selectedBrokerTotals && (
                 <tr data-testid="roster-selected-broker-total">
                   <td
-                    className="sticky z-10 text-[11px] font-medium"
-                    style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px", background: "#eff6ff", color: "#1e40af" }}
+                    className="sticky z-10 text-zk-xs font-medium"
+                    style={{ left: 0, position: "sticky", borderTop: "1px solid var(--zk-border)", padding: "7px 12px", background: "var(--zk-primary-tint-soft)", color: "var(--zk-primary-deep)" }}
                     colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
                   >
                     所選雞頭合計（{selectedBrokerCode}）
                   </td>
                   {selectedBrokerTotals.map((t, i) => (
-                    <td key={i} className="text-center text-[11px]" style={{ borderTop: "1px solid #e5e7eb", background: "#eff6ff", color: "#1e40af" }}>
+                    <td key={i} className="text-center text-zk-xs" style={{ borderTop: "1px solid var(--zk-border)", background: "var(--zk-primary-tint-soft)", color: "var(--zk-primary-deep)" }}>
                       {t}
                     </td>
                   ))}
@@ -2591,11 +2557,11 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 <button
                   key={code}
                   type="button"
-                  className="h-11 w-full rounded-lg text-[13px] font-semibold"
+                  className="h-11 w-full rounded-lg text-zk-base font-semibold"
                   style={{
-                    background: s.bg === "transparent" ? "#fff" : s.bg,
-                    color: s.fg === "transparent" ? "#0f172a" : s.fg,
-                    border: "1px solid #e5e7eb",
+                    background: s.bg === "transparent" ? "var(--zk-card)" : s.bg,
+                    color: s.fg === "transparent" ? "var(--zk-text)" : s.fg,
+                    border: "1px solid var(--zk-border)",
                   }}
                   onClick={() => {
                     // 安全網：撳緊螢幕鍵盤嗰下，如果實體鍵盤仲有個 pending
@@ -2636,14 +2602,14 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
           return (
             <div
               data-testid="roster-context-menu"
-              className="fixed z-50 rounded-md border border-zk-border bg-white py-1 text-[13px] text-zk-text"
+              className="fixed z-50 rounded-md border border-zk-border bg-white py-1 text-zk-base text-zk-text"
               style={{ left, top, width: menuWidth, boxShadow: "0 6px 20px rgba(15,23,42,.15)" }}
               onMouseDown={(e) => e.stopPropagation()}
               onContextMenu={(e) => e.preventDefault()}
             >
               <button
                 type="button"
-                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                className={menuItemBtn}
                 onClick={() => {
                   clearSelectedRange();
                   closeContextMenu();
@@ -2653,7 +2619,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               </button>
               <button
                 type="button"
-                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                className={menuItemBtn}
                 onClick={() => {
                   setFillRowKey(row.key);
                   setFillRowValue(cellCode);
@@ -2664,7 +2630,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               </button>
               <button
                 type="button"
-                className="block w-full px-3 py-1.5 text-left hover:bg-zk-header"
+                className={menuItemBtn}
                 onClick={() => {
                   applyFillRow(row, "");
                   closeContextMenu();
@@ -2679,13 +2645,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       {fillRowKey && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30" onClick={() => setFillRowKey(null)}>
           <div className="bg-white rounded shadow-lg p-4 w-72 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm text-gray-700">
+            <p className="text-sm text-zk-text-secondary">
               整行填滿（成個月 {days} 日全部填同一個代號）——更別代號或者請假代號（AL/NL/RD/SL/SH）；留空撳「填滿全行」＝整行清（成行清空）：
             </p>
             <input
               autoFocus
               data-testid="roster-fill-row-input"
-              className="w-full border border-gray-300 rounded px-2 py-1 text-sm uppercase"
+              className="w-full border border-zk-input-border rounded px-2 py-1 text-sm uppercase"
               value={fillRowValue}
               onChange={(e) => setFillRowValue(e.target.value.toUpperCase())}
               onKeyDown={(e) => {
@@ -2696,19 +2662,19 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               }}
             />
             <div className="flex justify-end gap-2">
-              <button type="button" className="text-sm px-3 py-1 rounded border border-gray-300" onClick={() => setFillRowKey(null)}>
+              <Button variant="secondary" size="sm" type="button" onClick={() => setFillRowKey(null)}>
                 取消
-              </button>
-              <button
+              </Button>
+              <Button variant="primary" size="sm"
                 type="button"
-                className="text-sm px-3 py-1 rounded bg-blue-600 text-white"
+
                 onClick={() => {
                   const row = visibleRows.find((r) => r.key === fillRowKey);
                   if (row) applyFillRow(row, fillRowValue);
                 }}
               >
                 填滿全行
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -2717,13 +2683,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       {showAddGuard && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30" onClick={() => setShowAddGuard(false)}>
           <div className="bg-white rounded shadow-lg p-4 w-80 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-sm font-semibold text-gray-900">加保安員行</h2>
-            <label className="block text-xs text-gray-600">
+            <h2 className="text-sm font-semibold text-zk-dark">加保安員行</h2>
+            <label className="block text-xs text-zk-text-secondary">
               保安員
               <select
                 aria-label="加保安員行:保安員"
                 data-testid="add-guard-select-guard"
-                className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                className="mt-1 w-full border border-zk-input-border rounded px-2 py-1 text-sm"
                 value={addGuardId}
                 onChange={(e) => setAddGuardId(e.target.value)}
               >
@@ -2736,12 +2702,12 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 ))}
               </select>
             </label>
-            <label className="block text-xs text-gray-600">
+            <label className="block text-xs text-zk-text-secondary">
               更別
               <select
                 aria-label="加保安員行:更別"
                 data-testid="add-guard-select-shift-type"
-                className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                className="mt-1 w-full border border-zk-input-border rounded px-2 py-1 text-sm"
                 value={addShiftTypeId}
                 onChange={(e) => setAddShiftTypeId(e.target.value)}
               >
@@ -2758,12 +2724,12 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 驗收修正（Opus 5.5）：雞頭 session 唔顯示（自己永遠係自己，
                 後端亦強制）。 */}
             {!isBrokerSession && (
-            <label className="block text-xs text-gray-600">
+            <label className="block text-xs text-zk-text-secondary">
               結算單位（唔揀就跟保安員預設）
               <select
                 aria-label="加保安員行:結算單位"
                 data-testid="add-guard-select-broker"
-                className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                className="mt-1 w-full border border-zk-input-border rounded px-2 py-1 text-sm"
                 value={addBrokerId}
                 onChange={(e) => setAddBrokerId(e.target.value)}
               >
@@ -2777,32 +2743,32 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             </label>
             )}
             <div className="flex justify-end gap-2">
-              <button
+              <Button variant="secondary" size="sm"
                 type="button"
-                className="text-sm px-3 py-1 rounded border border-gray-300"
+
                 onClick={() => {
                   setShowAddGuard(false);
                   setAddBrokerId("");
                 }}
               >
                 取消
-              </button>
-              <button
+              </Button>
+              <Button variant="primary" size="sm"
                 type="button"
                 disabled={!addGuardId || !addShiftTypeId}
-                className="text-sm px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
+
                 onClick={handleAddGuardRow}
               >
                 加入
-              </button>
+              </Button>
             </div>
           </div>
         </div>
       )}
 
       {quotas.length > 0 && (
-        <div className="text-xs text-gray-500 border border-gray-200 rounded p-2">
-          <p className="font-medium text-gray-600 mb-1">本月配額（純顯示，超配額警示會喺儲存後嘅黃色提示出現）：</p>
+        <div className="text-xs text-zk-muted border border-zk-border rounded p-2">
+          <p className="font-medium text-zk-text-secondary mb-1">本月配額（純顯示，超配額警示會喺儲存後嘅黃色提示出現）：</p>
           <ul className="flex flex-wrap gap-x-4 gap-y-1">
             {quotas.map((q) => (
               <li key={q.id}>
@@ -2817,13 +2783,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       {showSaveToast && (
         <div
           data-testid="roster-save-toast"
-          className="fixed bottom-5 right-5 z-50 rounded-md px-4 py-2.5 text-[13px] text-white"
+          className="fixed bottom-5 right-5 z-50 rounded-md px-4 py-2.5 text-zk-base text-white"
           style={{
             // WP-PRICE／P0：有「冇結算單位」就用更搶眼嘅紅色（呢批更會喺
             // 糧明細完全消失，比「未定價」更嚴重）；有未定價格用警示色
             // （唔係「儲存成功」嗰隻深藍色）；B1-5：淨係「結算單位推算」
             // 優先序最低（用同一個警示色，唔算錯，淨係建議覆核）。
-            background: saveToastNoSettlement ? "#b91c1c" : saveToastUnpriced ? "#b45309" : saveToastSettlementInferred ? "#b45309" : "#0f172a",
+            background: saveToastNoSettlement ? "var(--zk-danger-dark)" : saveToastUnpriced ? "var(--zk-warning-darker)" : saveToastSettlementInferred ? "var(--zk-warning-darker)" : "var(--zk-text)",
             boxShadow: "0 6px 18px rgba(15,23,42,.3)",
           }}
         >

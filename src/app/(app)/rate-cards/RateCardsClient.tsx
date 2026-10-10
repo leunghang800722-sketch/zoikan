@@ -12,18 +12,19 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtDate, fmtMoney } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker } from "@/components/ui/MonthPicker";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 const PAGE_SIZE = 50;
 
@@ -102,6 +103,7 @@ export function RateCardsClient({
   canReprice?: boolean;
   canCopyLastMonth?: boolean;
 }) {
+  const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
   const [rows, setRows] = useState<RateCardRow[]>([]);
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
@@ -109,6 +111,11 @@ export function RateCardsClient({
   // A4：「生效月」FilterChip——月份輸入，純客戶端篩（唔加新 API
   // query param）；預設空字串＝全部，唔篩。
   const [effectiveMonthFilter, setEffectiveMonthFilter] = useState("");
+  // P3-4：「去處理 ›」帶 `?month=` 入嚟就當初始生效月（mount 後讀，避免 hydration mismatch；仍然係本地 state，唔帶＝空＝全部）。
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get("month");
+    if (m && /^\d{4}-\d{2}$/.test(m)) setEffectiveMonthFilter(m);
+  }, []);
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
@@ -201,7 +208,7 @@ export function RateCardsClient({
       .map((c) => `${c.site_name} ${c.shift_type_code}（${c.broker_label}）收客 ${c.client_rate ?? "—"}／工資 ${c.guard_wage ?? "—"}`)
       .join("\n");
     const more = preview.data.count > 20 ? `\n…仲有 ${preview.data.count - 20} 張` : "";
-    const proceed = window.confirm(`複製上月卡到本月 ${month}：搵到 ${preview.data.count} 張卡可以複製\n${lines}${more}\n\n確定要建立呢 ${preview.data.count} 張新卡？`);
+    const proceed = await askConfirm({ message: `複製上月卡到本月 ${month}：搵到 ${preview.data.count} 張卡可以複製\n${lines}${more}\n\n確定要建立呢 ${preview.data.count} 張新卡？`, confirmLabel: "建立" });
     if (!proceed) {
       setCopyingLastMonth(false);
       return;
@@ -240,9 +247,10 @@ export function RateCardsClient({
       return;
     }
     const keptNote = preview.data.kept_unresolved > 0 ? `（其中 ${preview.data.kept_unresolved} 更搵唔到對應卡，保留原有 snapshot）` : "";
-    const proceed = window.confirm(
-      `重新計價預覽 ${month}（${scopeLabel}）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
-    );
+    const proceed = await askConfirm({
+      message: `重新計價預覽 ${month}（${scopeLabel}）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
+      confirmLabel: "寫入",
+    });
     if (!proceed) {
       setRepricing(false);
       return;
@@ -409,6 +417,7 @@ export function RateCardsClient({
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <PageHeader
         kicker={kickerFor("/rate-cards", isBroker)}
         title="價目"
@@ -465,18 +474,18 @@ export function RateCardsClient({
           snapshot 由 seed 直接寫，唔受呢個決定影響）。建卡之後 OT 記錄
           由「重新對數全月」／一鍵結算開頭嘅自動補價補返（reprice.ts）。 */}
       {otUnpricedGroups.length > 0 && (
-        <div className="rounded-[7px] border border-amber-200 bg-amber-50 p-3">
-          <div className="text-[13px] font-medium text-amber-800">未定價 OT（{otUnpricedGroups.reduce((a, g) => a + g.count, 0)} 條記錄）——建卡後重跑「一鍵結算」或「重新對數全月」先會補返價</div>
+        <div className="rounded-[7px] border border-zk-warning-border bg-zk-warning-bg p-3">
+          <div className="text-zk-base font-medium text-zk-warning-dark">未定價 OT（{otUnpricedGroups.reduce((a, g) => a + g.count, 0)} 條記錄）——建卡後重跑「一鍵結算」或「重新對數全月」先會補返價</div>
           <ul className="mt-1.5 space-y-1">
             {otUnpricedGroups.map((g, i) => (
-              <li key={`${g.site_id}-${g.shift_type_code}-${g.broker_code ?? "none"}-${i}`} className="flex items-center justify-between gap-2 text-[12.5px] text-amber-800">
+              <li key={`${g.site_id}-${g.shift_type_code}-${g.broker_code ?? "none"}-${i}`} className="flex items-center justify-between gap-2 text-zk-sm text-zk-warning-dark">
                 <span className="min-w-0 break-words">
                   {g.site_name} · {g.shift_type_code} · {g.broker_display}（{g.count} 條）
                 </span>
                 <button
                   type="button"
                   onClick={() => openCreateForOt(g.site_id, g.shift_type_code, g.broker_code)}
-                  className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 text-[12px] text-amber-800 hover:bg-amber-100"
+                  className="shrink-0 rounded border border-zk-warning-border bg-white px-2 py-0.5 text-zk-sm text-zk-warning-dark hover:bg-zk-warning-tint"
                 >
                   建卡
                 </button>
@@ -510,11 +519,7 @@ export function RateCardsClient({
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {visibleRows.map((r) => {
                   return (
@@ -532,13 +537,13 @@ export function RateCardsClient({
                       </td>
                       <td className={tableCls.td}>
                         {r.voided_at ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+
                           >
                             解除作廢
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                         )}
@@ -555,22 +560,22 @@ export function RateCardsClient({
               return (
                 <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{siteLabel(r.site_id)}</span>
-                    <span className="text-[13px] tabular-nums text-zk-text">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</span>
+                    <span className="text-zk-base font-medium text-zk-text">{siteLabel(r.site_id)}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</span>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-zk-xs text-zk-muted">
                     {renderShiftTypeCell(r.shift_type_id)}
                     {r.broker_id && renderBrokerCell(r.broker_id)}
                     <span>{guardLabel(r.guard_id)}</span>
                   </div>
-                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 text-zk-xs text-zk-muted">
                     出街 {hasPayoutRate ? fmtMoney(r.payout_rate) : "—"} · 生效 {fmtDate(r.effective_from)}–{r.effective_to ? fmtDate(r.effective_to) : "無限期"}
                   </div>
                   <div className="mt-2">
                     {r.voided_at ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                         解除作廢
-                      </button>
+                      </Button>
                     ) : (
                       <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                     )}
@@ -580,7 +585,7 @@ export function RateCardsClient({
             })}
           </div>
 
-          <div className="flex items-center justify-between text-[12.5px] text-zk-muted">
+          <div className="flex items-center justify-between text-zk-sm text-zk-muted">
             <span>
               共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
             </span>
@@ -651,7 +656,7 @@ export function RateCardsClient({
           {/* WP-PHASE3（item 4）：揀咗 OT 更種（code 開頭 "OT"）就提示卡金額
               單位——WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）已經拍板。 */}
           {shiftTypes.find((s) => s.id === form.shift_type_id)?.code?.startsWith("OT") && (
-            <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12.5px] text-amber-800">
+            <div className="rounded-[7px] border border-zk-warning-border bg-zk-warning-bg px-2.5 py-1.5 text-zk-sm text-zk-warning-dark">
               老闆 2026-09-28 決定：OT 卡金額＝每小時價，系統寫入時已乘 OT 時數（2026-08-01 起嘅記錄；淨係 1 個鐘嘅 OT 同「每條記錄」睇落一樣）。人手直接輸入嘅 OT snapshot（唔經呢張卡自動計）一律當「該條記錄金額」，唔會再乘時數。
             </div>
           )}
@@ -727,12 +732,12 @@ export function RateCardsClient({
             <input className={inputCls} value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>
