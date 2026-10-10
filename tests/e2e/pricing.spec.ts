@@ -229,18 +229,6 @@ test("(c) 老闆撳「重新計價」（2026-08）→ dry-run 預覽 dialog（�
   const originalClientRate = targetCard.clientRate;
   await prisma.rateCard.update({ where: { id: targetCard.id }, data: { clientRate: Number(originalClientRate) + 1 } });
 
-  const dialogMessages: string[] = [];
-  page.on("dialog", (d) => {
-    dialogMessages.push(d.message());
-    // M3：呢個 test 淨係想驗證 dry-run 預覽 dialog 嘅內容（changed/
-    // unchanged/kept_unresolved 摘要）真係經咗兩段式流程——confirm()
-    // 就 dismiss（唔確認），令 handleReprice() 唔會再打第二轉
-    // dry_run:false，保證呢個 test 100% 唔寫 DB（自給自足，唔留低
-    // 污染畀下一次跑，連 unvoid/restore snapshot 都唔使做）。
-    if (d.type() === "confirm") d.dismiss();
-    else d.accept();
-  });
-
   try {
     await loginAs(page, "老闆");
     await page.goto(`/roster/${siteId}/2026-08`);
@@ -250,14 +238,20 @@ test("(c) 老闆撳「重新計價」（2026-08）→ dry-run 預覽 dialog（�
     if (await repriceBtn.count()) {
       const before = await prisma.shiftRecord.count({ where: { siteId, workDate: { gte: AUG, lte: AUG_END }, recordType: "shift" } });
       await repriceBtn.click();
-      await expect(async () => {
-        expect(dialogMessages.some((m) => m.includes("預覽"))).toBe(true);
-      }).toPass({ timeout: 15_000 });
-      // P3-3.8：dry-run 摘要有兩種現行文案——有更次會變（confirm：「N 更嘅收客價／出街價會改變」）、
-      // 冇更次會變（alert：「…嘅收客價／出街價會變（同現有 snapshot 一致）…冇嘢寫入」）。兩種都證明經咗 dry-run
-      // 預覽（唔係舊版單一 confirm），視乎當時 DB 有冇定價過嘅更次。
-      expect(dialogMessages.some((m) => /重新計價預覽/.test(m) && /會改變|會變/.test(m))).toBe(true);
-      expect(dialogMessages.some((m) => m.includes("完成"))).toBe(false); // dismiss 咗 confirm，唔應該再有「完成」dialog
+      // P3-4.2：window.confirm／alert 改 ConfirmDialog／info banner。有更次會變 → ConfirmDialog（我哋「取消」唔寫入）；
+      // 冇更次會變 → info banner（「…冇嘢寫入」）。兩種都證明經咗 dry-run 預覽（唔係舊版單一 confirm）。
+      const dlg = page.getByTestId("confirm-dialog");
+      const info = page.getByTestId("roster-info-banner");
+      await expect(dlg.or(info)).toBeVisible({ timeout: 15_000 });
+      let msg: string;
+      if (await dlg.count()) {
+        msg = await page.getByTestId("confirm-dialog-message").innerText();
+        await page.getByTestId("confirm-dialog-cancel").click(); // 唔確認：令 handleReprice() 唔會再打 dry_run:false，保證 100% 唔寫 DB
+      } else {
+        msg = await info.innerText();
+      }
+      expect(/重新計價預覽/.test(msg) && /會改變|會變/.test(msg)).toBe(true);
+      expect(msg.includes("完成")).toBe(false);
       await expect(page.getByText(/重新計價失敗/)).toHaveCount(0);
 
       // 確認真係冇寫入——DB 記錄數／內容冇變（dry-run 淨係回摘要）。
@@ -290,12 +284,6 @@ test("(d) 「複製上月」略過 PR：TKO Gateway 厚A 7 月有 25 條 PR 記�
   });
   expect(augPrBefore).toBe(0);
 
-  const dialogMessages: string[] = [];
-  page.on("dialog", (d) => {
-    dialogMessages.push(d.message());
-    d.accept();
-  });
-
   await loginAs(page, "主管");
   await page.goto(`/roster/${siteId}/2026-08`);
   const copyBtn = page.getByRole("button", { name: /複製上月/ }).first();
@@ -304,9 +292,7 @@ test("(d) 「複製上月」略過 PR：TKO Gateway 厚A 7 月有 25 條 PR 記�
 
   // handleCopyPrevMonth() 純前端 cells/extraRows 狀態變更，冇撳「儲存」
   // 前乜都唔會寫落 DB——等 alert() 講「已略過 N 行對數佔位更別」出現。
-  await expect(async () => {
-    expect(dialogMessages.some((m) => m.includes("已略過") && m.includes("對數佔位更別"))).toBe(true);
-  }).toPass({ timeout: 15_000 });
+  await expect(page.getByTestId("roster-info-banner")).toContainText(/已略過.*對數佔位更別/, { timeout: 15_000 });
 
   // 格仔層面都要驗證：PR 呢一行（shift_type_id=prShiftType.id）唔應該
   // 出現喺畫面（`data-row-key` 以 `${prShiftType.id}|` 開頭嘅 row 一個
