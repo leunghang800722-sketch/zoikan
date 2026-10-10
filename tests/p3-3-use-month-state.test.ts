@@ -27,6 +27,7 @@ function Page({ def, log, fetches }: { def?: string; log: Array<[string, boolean
   useEffect(() => {
     if (!ready) return;
     fetches.push(m);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `fetches` 係測試收集器，刻意唔入依賴
   }, [m, ready]);
   return createElement("span", { "data-m": m }, m);
 }
