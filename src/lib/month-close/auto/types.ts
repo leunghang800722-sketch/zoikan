@@ -40,6 +40,13 @@ export interface PricingGroupRef {
   ot: boolean;
 }
 
+/** WP-POSTORDER-FREE（§34 A）：補齊價目卡題。auto_card＝由一鍵自動卡轉正式卡（確認後作廢該 auto 卡）；
+ * postorder＝未定價組合，Postorder 有同盤同崗位價（確認後建 triage 卡）。 */
+export interface PricingBackfillRef {
+  source: "auto_card" | "postorder";
+  autoCardId: string | null;
+}
+
 export interface PriceValues {
   clientRate: number | null;
   guardWage: number | null;
@@ -50,7 +57,7 @@ export interface PriceValues {
 export type McAction =
   | { type: "site_alias"; uploadId: string; siteNameRaw: string }
   | { type: "site_new"; siteId: string; groups: PricingGroupRef[] }
-  | { type: "pricing"; group: PricingGroupRef; needClient: boolean; needPayout: boolean; count: number }
+  | { type: "pricing"; group: PricingGroupRef; needClient: boolean; needPayout: boolean; count: number; backfill?: PricingBackfillRef }
   | { type: "settlement"; siteId: string; guardId: string; count: number }
   | { type: "guard_match"; identity: { staffNoNorm: string | null; nameRaw: string; telRaw: string | null }; siteLabel: string; cellCount: number }
   | { type: "shift_variance"; siteId: string }
@@ -95,6 +102,28 @@ export interface McQuestionDraft {
   evidence: McEvidence;
 }
 
+/** WP-POSTORDER-FREE（§34 C）：「冇 Postorder 都計到」嘅比例——全部由 journal／現有資料統計（按月份，涵蓋該月所有未還原 run）。 */
+export interface PostorderDependency {
+  pricing: {
+    /** 計數更次（counts.countable）。 */
+    total: number;
+    /** 仍未定價更數（total 之內）。 */
+    unpriced: number;
+    /** 按「自動定價次序」分嘅更數（1–5＝有效 auto 卡嘅次序；existing＝人手／分診／補齊後嘅正式卡等其餘已定價更）。 */
+    byStep: { "1": number; "2": number; "3": number; "4": number; "5": number; existing: number };
+    /** 唔靠 Postorder 都計到嘅更數＝total − unpriced − byStep[2]。 */
+    withoutPostorder: number;
+  };
+  settlement: {
+    /** 結算雞頭統計範圍：該月非 cancelled 嘅 shift／ot 更（排除客戶直接出糧嘅盤）。 */
+    total: number;
+    /** roster＝更表雞頭欄／對數已有；其餘＝一鍵自動歸屬 reason；unresolved＝仍冇結算雞頭。 */
+    byReason: { roster: number; postorder: number; longterm: number; external: number; guardDefault: number; siteDefault: number; history: number; other: number; unresolved: number };
+    /** total − postorder − unresolved。 */
+    withoutPostorder: number;
+  };
+}
+
 export interface AutoSummary {
   /** 自動加別名對盤（exact＋auto）。 */
   sitesAliased: number;
@@ -117,6 +146,8 @@ export interface AutoSummary {
   unpricedPayoutGapEstimate: number | null;
   /** 客戶自己人（external）／公司兵／一般更數（shift_records，非 cancelled，recordType=shift）。 */
   counts: { countable: number; external: number; internalCash: number };
+  /** WP-POSTORDER-FREE（§34 C，additive）：舊 report 冇呢欄。 */
+  postorderDependency?: PostorderDependency;
 }
 
 export function emptyAutoSummary(): AutoSummary {

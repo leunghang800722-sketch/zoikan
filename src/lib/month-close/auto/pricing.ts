@@ -439,6 +439,15 @@ async function repriceMonth(writer: ChangeWriter, month: Date, group: PricingGro
   return { recordsPriced: total, overwrittenAuto: over, skippedHasPrice: skipped };
 }
 
+/** 補價逐更改動（journal／補齊價目卡撤銷用）。 */
+export interface PriceChangeRow {
+  id: string;
+  cardId: string;
+  fields: string[];
+  before: [number | null, number | null, number | null];
+  after: [number | null, number | null, number | null];
+}
+
 type AutoFilledEntry = { client?: number | null; payout?: [number | null, number | null] };
 /** 逐更 journal 入面「系統自動填過」嘅現值，逐欄記（N2）：recordId → { client?, payout? }，每欄取**最新一次 applied** 記錄。
  * 只計 status=applied（N1：undo 咗嘅唔算，否則 undo 後人手價會畀 overwriteAuto 覆蓋）。 */
@@ -470,7 +479,7 @@ export async function applyCardToRecords(
   need: PriceNeed,
   recordIds: string[] | undefined,
   cardId: string,
-  opts: { overwriteAuto?: boolean; db?: Db } = {},
+  opts: { overwriteAuto?: boolean; db?: Db; collect?: PriceChangeRow[] } = {},
 ): Promise<{ changed: number; overwritten: number; skippedHasPrice: number }> {
   const db = opts.db ?? prisma;
   const { start, end } = monthRange(month);
@@ -532,6 +541,7 @@ export async function applyCardToRecords(
     if (realFields.length > 0) changes.push({ id: r.id, cardId, fields: realFields, before: [c0, w0, f0], after: [c1, w1, f1] });
     else if ((need.client && c0 !== null) || (need.payout && w0 !== null && w0 !== 0)) skippedHasPrice++;
   }
+  if (opts.collect) opts.collect.push(...changes);
   if (changes.length > 0) {
     for (let i = 0; i < changes.length; i += 300) {
       const batch = changes.slice(i, i + 300);
@@ -560,7 +570,7 @@ export async function applyCardToRecords(
 // ---------------------------------------------------------------------------
 // stepAutoPricing 主流程
 // ---------------------------------------------------------------------------
-interface Agg {
+export interface Agg {
   ref: PricingGroupRef;
   need: PriceNeed;
   recordIds: string[];
@@ -593,7 +603,7 @@ export async function collectUnpricedGroups(month: Date): Promise<Agg[]> {
   return [...groups.values()];
 }
 
-async function buildEnv(ctx: AutoCollector, month: Date, aggs: Agg[]): Promise<PricingEnv> {
+export async function buildEnv(ctx: AutoCollector, month: Date, aggs: Agg[]): Promise<PricingEnv> {
   const { start, end } = monthRange(month);
   const siteIds = [...new Set(aggs.map((a) => a.ref.siteId))];
   const [brokers, sites] = await Promise.all([ctx.brokers(), prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true, aliases: true, clientName: true } })]);
