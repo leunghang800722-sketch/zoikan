@@ -11,7 +11,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { BetaRunnableTool } from "@anthropic-ai/sdk/lib/tools/BetaRunnableTool";
 import type { Anthropic as AnthropicTypes } from "@anthropic-ai/sdk";
-import { resolveAiProvider } from "./config";
+import { claudeModel, resolveAiProvider } from "./config";
 import { DeepSeekLlmClient } from "./providers/deepseek";
 
 export interface LlmHistoryTurn {
@@ -38,6 +38,9 @@ export interface LlmChatResult {
   toolsUsed: string[];
   inputTokens: number;
   outputTokens: number;
+  /** WP-AI-DIAG（additive）：邊個 provider／型號答嘅（audit／SSE `done` 用）；舊 client／測試 fake 可以冇。 */
+  provider?: string;
+  model?: string;
 }
 
 export interface LlmClient {
@@ -67,8 +70,22 @@ function historyToMessages(history: LlmHistoryTurn[]): AnthropicTypes.Beta.BetaM
 export class AnthropicLlmClient implements LlmClient {
   private client: Anthropic;
   private model: string;
+  private providerName: "anthropic" | "claude";
 
-  constructor(opts?: { baseURL?: string; apiKey?: string; model?: string }) {
+  /** WP-AI-DIAG：兩種 auth——
+   * - 預設（`anthropic`，Zeabur AI Hub）：Bearer `authToken`，baseURL／key 嚟自 `AI_HUB_*`（行為不變）。
+   * - `claude`（Anthropic 官方 API 直連）：`apiKey`（x-api-key）＝`CLAUDE_API_KEY`，baseURL 固定
+   *   `https://api.anthropic.com`，型號 `AI_CLAUDE_MODEL`（預設 `claude-opus-5-5`，**唔讀 `AI_MODEL`**），
+   *   `maxRetries:1`、`logLevel:"off"`、`authToken:null`（唔俾 SDK 自動讀 ANTHROPIC_* env）。 */
+  constructor(opts?: { baseURL?: string; apiKey?: string; model?: string; auth?: "bearer" | "api-key" }) {
+    if (opts?.auth === "api-key") {
+      const apiKey = opts.apiKey ?? process.env.CLAUDE_API_KEY;
+      if (!apiKey) throw new LlmUnavailableError(new Error("CLAUDE_API_KEY 未設定"));
+      this.client = new Anthropic({ baseURL: opts.baseURL ?? "https://api.anthropic.com", apiKey, authToken: null, maxRetries: 1, logLevel: "off" });
+      this.model = opts.model ?? claudeModel();
+      this.providerName = "claude";
+      return;
+    }
     const baseURL = opts?.baseURL ?? process.env.AI_HUB_BASE_URL;
     const apiKey = opts?.apiKey ?? process.env.AI_HUB_API_KEY;
     if (!baseURL || !apiKey) {
@@ -78,6 +95,7 @@ export class AnthropicLlmClient implements LlmClient {
     // 選項（唔係 `apiKey`，避免 SDK 自動加 `x-api-key` header）。
     this.client = new Anthropic({ baseURL, authToken: apiKey });
     this.model = opts?.model ?? process.env.AI_MODEL ?? "claude-opus-5";
+    this.providerName = "anthropic";
   }
 
   async chat(params: LlmChatParams): Promise<LlmChatResult> {
@@ -117,7 +135,7 @@ export class AnthropicLlmClient implements LlmClient {
         }
       }
 
-      return { text, toolsUsed: [...toolsUsed], inputTokens, outputTokens };
+      return { text, toolsUsed: [...toolsUsed], inputTokens, outputTokens, provider: this.providerName, model: this.model };
     } catch (err) {
       if (err instanceof Anthropic.APIError) {
         throw new LlmUnavailableError(err);
@@ -161,13 +179,28 @@ function fakeFeedbackSummaryJson(userMessage: string): string {
   });
 }
 
+// WP-AI-DIAG（§37.4）：userMessage 含「診斷」就回一段帶兩張建議動作卡（open_page＋one_click_run）嘅固定回覆，
+// 方便 e2e／人手睇；月份用固定假月份（2099-01，永遠唔會鎖）。卡 block 照真 provider 格式（fenced `actions`）。
+const FAKE_DIAG_REPLY = [
+  "（開發測試用嘅假診斷）2099-01 一鍵結算仲有 18 題未答，建議先去睇一鍵結算頁，再重新跑一次。",
+  "",
+  "```actions",
+  JSON.stringify([
+    { type: "open_page", label: "去睇 2099-01 一鍵結算", params: { href: "/month-close?month=2099-01" }, basis: "最新一次執行仲有 18 題未答" },
+    { type: "one_click_run", label: "重新跑 2099-01 一鍵結算", params: { month: "2099-01" }, basis: "上次執行有 18 題待人手處理" },
+  ]),
+  "```",
+].join("\n");
+
 class FakeDevLlmClient implements LlmClient {
   async chat(params: LlmChatParams): Promise<LlmChatResult> {
     const text = params.systemPrompt.includes(FEEDBACK_SUMMARIZE_MARKER)
       ? fakeFeedbackSummaryJson(params.userMessage)
-      : `（開發測試用嘅假 AI 回覆，未連接真 AI Hub）已收到你嘅問題：「${params.userMessage}」。`;
+      : params.userMessage.includes("診斷")
+        ? FAKE_DIAG_REPLY
+        : `（開發測試用嘅假 AI 回覆，未連接真 AI Hub）已收到你嘅問題：「${params.userMessage}」。`;
     for (const ch of text) params.onTextDelta?.(ch);
-    return { text, toolsUsed: [], inputTokens: 0, outputTokens: text.length };
+    return { text, toolsUsed: [], inputTokens: 0, outputTokens: text.length, provider: "fake", model: "fake" };
   }
 }
 
@@ -199,11 +232,14 @@ export function getLlmClient(): LlmClient {
     case "deepseek":
       singleton = new DeepSeekLlmClient();
       break;
+    case "claude":
+      singleton = new AnthropicLlmClient({ auth: "api-key" });
+      break;
     case "anthropic":
       singleton = new AnthropicLlmClient();
       break;
     default:
-      throw new LlmUnavailableError(new Error("AI_PROVIDER 未設定，亦搵唔到 DEEPSEEK_API_KEY/AI_HUB_API_KEY"));
+      throw new LlmUnavailableError(new Error("AI_PROVIDER 未設定，亦搵唔到 CLAUDE_API_KEY/DEEPSEEK_API_KEY/AI_HUB_API_KEY"));
   }
   return singleton;
 }

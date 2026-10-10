@@ -15,6 +15,16 @@ import { createMonthlyCloseTool } from "./monthly-close";
 import { createShortfallTool } from "./shortfall";
 import { createRecentAuditTool } from "./recent-audit";
 import { createSqlSelectTool } from "./sql-select";
+// WP-AI-DIAG（§37.3）：診斷用唯讀工具
+import {
+  createOneClickStatusTool,
+  createTriageSummaryTool,
+  createMonthHealthTool,
+  createOpsDigestTool,
+  createSiteSetupTool,
+  createPricingExplainTool,
+} from "./diagnostics";
+import { createRecentAppErrorsTool } from "./recent-app-errors";
 // P2.5：`list_feedback`——老闆讀「現場反映」意見用嘅只讀工具，`feedback_
 // reports` 唔喺 `ai` schema，工具本身用正常 Prisma（見該檔案頂註解嘅
 // 例外說明），刻意擺喺 `src/lib/feedback/`（唔喺 `src/lib/ai/tools/`），
@@ -41,6 +51,13 @@ export function buildAiTools(ctx: AiToolContext) {
     createShortfallTool(ctx),
     createRecentAuditTool(ctx),
     createSqlSelectTool(ctx),
+    createOneClickStatusTool(ctx),
+    createTriageSummaryTool(ctx),
+    createMonthHealthTool(ctx),
+    createOpsDigestTool(ctx),
+    createSiteSetupTool(ctx),
+    createPricingExplainTool(ctx),
+    createRecentAppErrorsTool(ctx),
   ];
   // P2.5：淨係老闆先掛載 `list_feedback`（規劃裁定，唔改 matrix.ts 加
   // module——直接用 baseRole 判斷，工具 run() 入面再核一次 defense-in-
