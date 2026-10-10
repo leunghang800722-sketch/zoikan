@@ -41,7 +41,7 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { ShiftRecordBatchSchema } from "@/lib/api/schemas";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { writeAudit } from "@/lib/audit";
+import { writeAuditMany } from "@/lib/audit";
 import { BadRequest, Forbidden, Conflict } from "@/lib/api/errors";
 import { LeaveCode, type Prisma, type ShiftRecordStatus } from "@prisma/client";
 // WP-PRICE（老闆 2026-09-16 拍板）：儲存時自動計價——見
@@ -167,6 +167,15 @@ export async function POST(req: Request) {
     // P0：memoize（同一 guard 喺呢批 cells 入面可能出現好多次，唔逐格
     // 都打 DB）——見 settlement-broker-fallback.ts。
     const resolveSettlementBrokerFallback = createSettlementBrokerFallbackResolver(prisma);
+    // P3-2.5：內部角色逐格 fallback 會逐個 guard 查 2–3 條——先一次過批量預填（雞頭 session 唔行 fallback）。
+    if (!broker) {
+      await resolveSettlementBrokerFallback.prefetch(
+        guardIds.map((gId) => {
+          const g = guardById.get(gId)!;
+          return { guardId: gId, siteId: parsed.site_id, employmentType: g.employmentType, defaultBrokerId: g.defaultBrokerId };
+        }),
+      );
+    }
     const plans: PlannedOp[] = [];
     for (const c of cells) {
       const st = shiftTypeById.get(c.shift_type_id)!;
@@ -437,67 +446,166 @@ export async function POST(req: Request) {
     type PendingAudit = { rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
     const pendingAudits: PendingAudit[] = [];
     const autoCardUses: AutoCardUse[] = [];
+    // P3-2.5（P9／附錄 b A-8）：批量化——tx 內用已讀 `existing` 做 before（唔再逐格 findUniqueOrThrow）；
+    // 清格／更新按「相同 data」分組 updateMany，新增用 createManyAndReturn；audit 一條 createMany；
+    // quota 警示一條 groupBy。寫入結果、audit before/after 內容同逐格寫法一致（tests/p3-2-batch-write.test.ts 對比）。
+    // payload 內有重複格（同一 guard+日+更別出現多次，API 容許但 UI 不會送）→ 行返舊逐格路徑，行為完全不變。
+    const keyOfPlan = (p: Exclude<PlannedOp, { kind: "noop" }>) => `${p.cell.guard_id}|${p.cell.work_date.toISOString().slice(0, 10)}|${p.cell.shift_type_id}`;
+    const activePlans = plans.filter((p): p is Exclude<PlannedOp, { kind: "noop" }> => p.kind !== "noop");
+    const hasDuplicateCells = new Set(activePlans.map(keyOfPlan)).size !== activePlans.length;
     try {
-      await prisma.$transaction(async (tx) => {
-        for (const plan of plans) {
-          const key = `${plan.cell.guard_id}|${plan.cell.work_date.toISOString().slice(0, 10)}|${plan.cell.shift_type_id}`;
-          if (plan.kind === "noop") continue;
-          if (plan.kind === "clear") {
-            const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: plan.existingId } });
-            const after = await tx.shiftRecord.update({ where: { id: plan.existingId }, data: { status: "cancelled" } });
-            pendingAudits.push({ rowId: plan.existingId, action: "void", before, after: { ...after, void_reason: "batch:clear_cell" } });
-            results.push({ key, id: plan.existingId, action: "cleared" });
-            continue;
+      await prisma.$transaction(
+        async (tx) => {
+          if (hasDuplicateCells) {
+            for (const plan of plans) {
+              const key = `${plan.cell.guard_id}|${plan.cell.work_date.toISOString().slice(0, 10)}|${plan.cell.shift_type_id}`;
+              if (plan.kind === "noop") continue;
+              if (plan.kind === "clear") {
+                const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: plan.existingId } });
+                const after = await tx.shiftRecord.update({ where: { id: plan.existingId }, data: { status: "cancelled" } });
+                pendingAudits.push({ rowId: plan.existingId, action: "void", before, after: { ...after, void_reason: "batch:clear_cell" } });
+                results.push({ key, id: plan.existingId, action: "cleared" });
+                continue;
+              }
+              // upsert
+              if (plan.existingId) {
+                const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: plan.existingId } });
+                const after = await tx.shiftRecord.update({
+                  where: { id: plan.existingId },
+                  data: {
+                    recordType: plan.recordType,
+                    leaveCode: plan.leaveCode as never,
+                    settlementBrokerId: plan.settlementBrokerId,
+                    operationalBrokerId: plan.operationalBrokerId,
+                    status: plan.status,
+                    // WP-PRICE：snapshot 跟返 plan.pricing（喺 plans 起晒之後一次過計好，
+                    // 見上面「計價」段）——shift_type/guard 唔會變（本身就係揀返
+                    // 呢條記錄嘅 key），settlement_broker 或者 record_type（shift↔leave）
+                    // 有變都會反映喺呢個 plan.pricing。
+                    clientRateSnapshot: plan.pricing?.clientRate ?? null,
+                    guardWageSnapshot: plan.pricing?.guardWage ?? null,
+                    brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
+                  },
+                });
+                pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
+                autoCardUses.push({ recordId: plan.existingId, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
+                results.push({ key, id: plan.existingId, action: "updated", settlement_inferred: plan.settlementInferred });
+              } else {
+                const data: Prisma.ShiftRecordUncheckedCreateInput = {
+                  workDate: plan.cell.work_date,
+                  siteId: parsed.site_id,
+                  shiftTypeId: plan.cell.shift_type_id,
+                  guardId: plan.cell.guard_id,
+                  settlementBrokerId: plan.settlementBrokerId,
+                  operationalBrokerId: plan.operationalBrokerId,
+                  recordType: plan.recordType,
+                  leaveCode: plan.leaveCode as never,
+                  status: plan.status,
+                  createdBy: session.userId,
+                  // WP-PRICE：新記錄一律填 snapshot（見上面「計價」段）——
+                  // 呢個 route 之前完全冇寫呢三個欄，令新更次金額靜靜變 0。
+                  clientRateSnapshot: plan.pricing?.clientRate ?? null,
+                  guardWageSnapshot: plan.pricing?.guardWage ?? null,
+                  brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
+                };
+                const created = await tx.shiftRecord.create({ data });
+                pendingAudits.push({ rowId: created.id, action: "create", after: created });
+                autoCardUses.push({ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
+                results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
+              }
+            }
+            return;
           }
-          // upsert
-          if (plan.existingId) {
-            const before = await tx.shiftRecord.findUniqueOrThrow({ where: { id: plan.existingId } });
-            const after = await tx.shiftRecord.update({
-              where: { id: plan.existingId },
-              data: {
-                recordType: plan.recordType,
-                leaveCode: plan.leaveCode as never,
-                settlementBrokerId: plan.settlementBrokerId,
-                operationalBrokerId: plan.operationalBrokerId,
-                status: plan.status,
-                // WP-PRICE：snapshot 跟返 plan.pricing（喺 plans 起晒之後一次過計好，
-                // 見上面「計價」段）——shift_type/guard 唔會變（本身就係揀返
-                // 呢條記錄嘅 key），settlement_broker 或者 record_type（shift↔leave）
-                // 有變都會反映喺呢個 plan.pricing。
-                clientRateSnapshot: plan.pricing?.clientRate ?? null,
-                guardWageSnapshot: plan.pricing?.guardWage ?? null,
-                brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
-              },
-            });
-            pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
-            autoCardUses.push({ recordId: plan.existingId, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
-            results.push({ key, id: plan.existingId, action: "updated", settlement_inferred: plan.settlementInferred });
-          } else {
-            const data: Prisma.ShiftRecordUncheckedCreateInput = {
-              workDate: plan.cell.work_date,
-              siteId: parsed.site_id,
-              shiftTypeId: plan.cell.shift_type_id,
-              guardId: plan.cell.guard_id,
-              settlementBrokerId: plan.settlementBrokerId,
-              operationalBrokerId: plan.operationalBrokerId,
+
+          // ---- 批量路徑 ----
+          // 驗收修正：before 喺 tx 內 `FOR UPDATE` 鎖住並重讀（唔用 tx 外較早讀嘅 `existing`），
+          // 並發改動下 audit before 先正確。（計價判斷仍用 tx 外嘅 plan，同逐格寫法一致。）
+          const lockIds = activePlans.flatMap((p) => (p.kind === "clear" ? [p.existingId] : p.existingId ? [p.existingId] : []));
+          if (lockIds.length > 0) {
+            await tx.$queryRaw`SELECT id FROM shift_records WHERE id = ANY(${lockIds}::text[]) ORDER BY id FOR UPDATE`;
+          }
+          const beforeById = new Map((lockIds.length ? await tx.shiftRecord.findMany({ where: { id: { in: lockIds } } }) : []).map((r) => [r.id, r]));
+          const clearPlans = activePlans.filter((p): p is Extract<PlannedOp, { kind: "clear" }> => p.kind === "clear");
+          const updatePlans = activePlans.filter((p): p is Extract<PlannedOp, { kind: "upsert" }> & { existingId: string } => p.kind === "upsert" && p.existingId !== null);
+          const createPlans = activePlans.filter((p): p is Extract<PlannedOp, { kind: "upsert" }> => p.kind === "upsert" && p.existingId === null);
+
+          if (clearPlans.length > 0) {
+            await tx.shiftRecord.updateMany({ where: { id: { in: clearPlans.map((p) => p.existingId) } }, data: { status: "cancelled" } });
+          }
+          // 更新：相同 data 嘅格併成一條 updateMany
+          const updateGroups = new Map<string, { data: Prisma.ShiftRecordUncheckedUpdateManyInput; ids: string[] }>();
+          for (const plan of updatePlans) {
+            const data: Prisma.ShiftRecordUncheckedUpdateManyInput = {
               recordType: plan.recordType,
               leaveCode: plan.leaveCode as never,
+              settlementBrokerId: plan.settlementBrokerId,
+              operationalBrokerId: plan.operationalBrokerId,
               status: plan.status,
-              createdBy: session.userId,
-              // WP-PRICE：新記錄一律填 snapshot（見上面「計價」段）——
-              // 呢個 route 之前完全冇寫呢三個欄，令新更次金額靜靜變 0。
               clientRateSnapshot: plan.pricing?.clientRate ?? null,
               guardWageSnapshot: plan.pricing?.guardWage ?? null,
               brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
             };
-            const created = await tx.shiftRecord.create({ data });
-            pendingAudits.push({ rowId: created.id, action: "create", after: created });
-            autoCardUses.push({ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
-            results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
+            const gk = JSON.stringify(data);
+            const g = updateGroups.get(gk) ?? { data, ids: [] };
+            g.ids.push(plan.existingId);
+            updateGroups.set(gk, g);
           }
-        }
-        // P3-1.7（B-3）：Prisma interactive tx 預設 5 s，2,000 格逐格 round trip 會 P2028——放寬到 60 s。
-      }, { timeout: 60_000, maxWait: 10_000 });
+          for (const g of updateGroups.values()) {
+            await tx.shiftRecord.updateMany({ where: { id: { in: g.ids } }, data: g.data });
+          }
+          // 清格／更新之後一次過讀返 after（拎 DB 實際值，包括 updated_at）
+          const touchedIds = [...clearPlans.map((p) => p.existingId), ...updatePlans.map((p) => p.existingId)];
+          const afterById = new Map((touchedIds.length ? await tx.shiftRecord.findMany({ where: { id: { in: touchedIds } } }) : []).map((r) => [r.id, r]));
+
+          const createdByKey = new Map<string, Awaited<ReturnType<typeof tx.shiftRecord.createManyAndReturn>>[number]>();
+          if (createPlans.length > 0) {
+            const created = await tx.shiftRecord.createManyAndReturn({
+              data: createPlans.map(
+                (plan): Prisma.ShiftRecordCreateManyInput => ({
+                  workDate: plan.cell.work_date,
+                  siteId: parsed.site_id,
+                  shiftTypeId: plan.cell.shift_type_id,
+                  guardId: plan.cell.guard_id,
+                  settlementBrokerId: plan.settlementBrokerId,
+                  operationalBrokerId: plan.operationalBrokerId,
+                  recordType: plan.recordType,
+                  leaveCode: plan.leaveCode as never,
+                  status: plan.status,
+                  createdBy: session.userId,
+                  clientRateSnapshot: plan.pricing?.clientRate ?? null,
+                  guardWageSnapshot: plan.pricing?.guardWage ?? null,
+                  brokerFeeSnapshot: plan.pricing?.brokerFee ?? null,
+                }),
+              ),
+            });
+            for (const r of created) createdByKey.set(`${r.guardId}|${r.workDate.toISOString().slice(0, 10)}|${r.shiftTypeId}`, r);
+          }
+
+          // 按 plan 次序砌 results／audit／autoCardUses（同逐格寫法次序一致）
+          for (const plan of activePlans) {
+            const key = keyOfPlan(plan);
+            if (plan.kind === "clear") {
+              const before = beforeById.get(plan.existingId)!;
+              const after = afterById.get(plan.existingId)!;
+              pendingAudits.push({ rowId: plan.existingId, action: "void", before, after: { ...after, void_reason: "batch:clear_cell" } });
+              results.push({ key, id: plan.existingId, action: "cleared" });
+            } else if (plan.existingId) {
+              const before = beforeById.get(plan.existingId)!;
+              const after = afterById.get(plan.existingId)!;
+              pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
+              autoCardUses.push({ recordId: plan.existingId, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
+              results.push({ key, id: plan.existingId, action: "updated", settlement_inferred: plan.settlementInferred });
+            } else {
+              const created = createdByKey.get(key)!;
+              pendingAudits.push({ rowId: created.id, action: "create", after: created });
+              autoCardUses.push({ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });
+              results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
+            }
+          }
+        },
+        // P3-1.7（B-3）：Prisma interactive tx 預設 5 s——放寬到 60 s。
+        { timeout: 60_000, maxWait: 10_000 },
+      );
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
         throw Conflict("批量寫入撞到唯一約束（同一保安員、同一日、同一更別已經有記錄）——成批已 rollback");
@@ -506,9 +614,8 @@ export async function POST(req: Request) {
     }
 
     // transaction 已經成功 commit——而家先逐條真係寫 audit_log。
-    for (const a of pendingAudits) {
-      await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip });
-    }
+    // P3-2.5：一條 createMany（createdAt 按 plan 次序逐 ms 遞增，保持列表次序）。
+    await writeAuditMany(pendingAudits.map((a) => ({ actorUserId: session.userId, tableName: "shift_records", rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip })));
 
     await journalAutoCardUsesSafe(autoCardUses);
 
@@ -600,17 +707,22 @@ async function computeWarnings(
     const siteName = site?.canonicalName ?? siteId.slice(0, 8);
     const shiftTypeCode = (id: string) => shiftTypes.find((s) => s.id === id)?.code ?? id.slice(0, 8);
     const brokerCode = (id: string) => brokers.find((b) => b.id === id)?.code ?? id.slice(0, 8);
+    // P3-2.5：每個 quota 一條 count → 一條 groupBy（site＋月內，按 shiftType×settlementBroker 分組）。
+    const actualRows = await prisma.shiftRecord.groupBy({
+      by: ["shiftTypeId", "settlementBrokerId"],
+      where: {
+        siteId,
+        shiftTypeId: { in: [...new Set(quotas.map((q) => q.shiftTypeId))] },
+        settlementBrokerId: { in: [...new Set(quotas.map((q) => q.brokerId))] },
+        recordType: "shift",
+        status: { not: "cancelled" },
+        workDate: { gte: month, lte: monthEnd },
+      },
+      _count: { _all: true },
+    });
+    const actualByQuotaKey = new Map(actualRows.map((r) => [`${r.shiftTypeId}|${r.settlementBrokerId}`, r._count._all]));
     for (const q of quotas) {
-      const actual = await prisma.shiftRecord.count({
-        where: {
-          siteId,
-          shiftTypeId: q.shiftTypeId,
-          settlementBrokerId: q.brokerId,
-          recordType: "shift",
-          status: { not: "cancelled" },
-          workDate: { gte: month, lte: monthEnd },
-        },
-      });
+      const actual = actualByQuotaKey.get(`${q.shiftTypeId}|${q.brokerId}`) ?? 0;
       if (actual > q.targetShifts) {
         warnings.push(`盤 ${siteName} 更別 ${shiftTypeCode(q.shiftTypeId)} 雞頭 ${brokerCode(q.brokerId)} 超配額：已排 ${actual} / 配額 ${q.targetShifts}`);
       }

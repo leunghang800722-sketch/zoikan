@@ -21,9 +21,14 @@ import "./globals.css";
 // `preload` 埋落 `<head>` 嘅其實淨係 latin 檔——但呢個頁面成日都要顯示
 // 廣東話（CJK）字，個 latin 檔對首屏冇乜用，preload 白白多一個 request，
 // 所以關咗。
+//
+// P3-2.3（P3 §3.1 P4）：原本逐個 weight（400／500／600／700）各宣告一套 CJK 切片
+// `@font-face`，CSS 472 KB（164 KB gz）每頁都載。Noto Sans HK 有 wght 100–900 variable 字體，
+// 改用 `weight: "variable"`：一套 `@font-face` 涵蓋所有字重，UI 嘅 font-medium／semibold／bold
+// 視覺完全不變（唔使映射 500→400／600→700），CSS 降到 119 KB（41 KB gz）。
 const notoSansHK = Noto_Sans_HK({
   variable: "--font-noto-sans-hk",
-  weight: ["400", "500", "600", "700"],
+  weight: "variable",
   subsets: ["latin"],
   display: "swap",
   preload: false,

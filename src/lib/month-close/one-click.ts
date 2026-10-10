@@ -45,6 +45,7 @@ import { parsePostorderUploadRow } from "@/lib/guard-fix/postorder";
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 import { LONGTERM_REFERRAL_AUTOCOMPUTE_FROM } from "@/lib/pricing/resolve-rate";
 import { buildMonthlyClose } from "@/lib/reports/monthly-close";
+import { invalidateReportMemo, withReportContext } from "@/lib/reports/context";
 import { buildGrossMargin } from "@/lib/reports/gross-margin";
 import { buildPayrollTotals, buildPayrollSourceSummary } from "@/lib/reports/payroll";
 import { computeReferralFeesForMonth, recomputeReferralFees, REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH } from "@/lib/reports/referral-fee";
@@ -599,6 +600,9 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
   const { start } = monthRange(month);
   let lastPlanNeedsBoss: NeedsBossIdentity[] = [];
 
+  let postorderLoaded = false;
+  let postorderUpload: Awaited<ReturnType<typeof prisma.postorderUpload.findFirst>> = null;
+  let postorder: Awaited<ReturnType<typeof loadPostorderForPlan>> = undefined;
   let converged = false;
   for (let round = 1; round <= GUARD_FIX_MAX_ROUNDS; round++) {
     // 注意：唔使喺呢度自己攞 GUARD_FIX_ADVISORY_LOCK_KEY——`applyGuardFixPlan()`
@@ -606,13 +610,18 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
     // build plan（讀），冇寫入，唔需要鎖；一鍵結算本身用另一把獨立鎖
     // （`ONE_CLICK_ADVISORY_LOCK_KEY`）保證同一時間淨係一個 run，兩把鎖
     // 唔會撞。
-    const postorderUpload = await prisma.postorderUpload.findFirst({ where: { month: start, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
-    let postorder: Awaited<ReturnType<typeof loadPostorderForPlan>> = undefined;
-    try {
-      postorder = await loadPostorderForPlan(postorderUpload);
-    } catch (e) {
-      // 已存嘅超大 xlsm（上載保險加入前）唔載入，淨靠歷史行（Postorder 係可選來源）。
-      warnings.push(`本月 Postorder 唔載入（${safeErrorSummary(e)}），保安員修復／定價／歸屬靠歷史`);
+    // P3-2.6（附錄 b A-14）：Postorder 上載（連最大 30 MB bytes）同其 xlsx 解析係 loop 不變量——
+    // applyGuardFixPlan／reparseAllActiveUploads 唔會改 postorder_uploads——只讀＋解析一次，
+    // 其後各輪重用（plan 本身每輪照舊重算）。
+    if (!postorderLoaded) {
+      postorderLoaded = true;
+      postorderUpload = await prisma.postorderUpload.findFirst({ where: { month: start, status: "parsed" }, orderBy: { uploadedAt: "desc" } });
+      try {
+        postorder = await loadPostorderForPlan(postorderUpload);
+      } catch (e) {
+        // 已存嘅超大 xlsm（上載保險加入前）唔載入，淨靠歷史行（Postorder 係可選來源）。
+        warnings.push(`本月 Postorder 唔載入（${safeErrorSummary(e)}），保安員修復／定價／歸屬靠歷史`);
+      }
     }
 
     let plan;
@@ -898,6 +907,8 @@ export async function stepCompute(month: Date, actorUserId: string, ip: string |
     warnings.push(longtermPayrollNote);
   }
 
+  // 長工糧／介紹費啱啱重算完，之前喺同一 context 讀過嘅報表結果過時，要作廢。
+  invalidateReportMemo();
   const [close, margin, payroll, payrollSource] = await Promise.all([buildMonthlyClose(month), buildGrossMargin(month), buildPayrollTotals(month), buildPayrollSourceSummary(month)]);
   // 總收入＝月結總表（主表＋月結以外）；成本／毛利＝毛利即時表 `totals`
   // （同一 lib、同頁面一致）。Opus 驗收：原版用「月結總表收入 − 毛利」
@@ -987,7 +998,13 @@ export async function stepPostorderCompare(month: Date, referralSystemTotal: num
 // ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
-export async function runOneClickMonthClose(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
+export function runOneClickMonthClose(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
+  // 驗收修正：背景 run（`after()`）會繼承發起 request 嘅 AsyncLocalStorage——包一層全新報表 memo context，
+  // 唔會讀到發起 request 較早時間點計出嚟嘅結果。
+  return withReportContext(() => runOneClickMonthCloseInner(runId, month, actorUserId, ip));
+}
+
+async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
   const monthStartDate = toMonthStart(month);
   // 每次（重新）執行都由全新 steps 開始——唔好保留上一次失敗／停低嘅
   // 狀態（Opus 驗收：原版重新執行停低時，舊 run 嘅 done/skipped 會殘留）。
@@ -1015,11 +1032,15 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
     await runner.run("reconcile_apply", () => stepReconcileApply(monthStartDate, actorUserId, ip));
     await runner.run("auto_pricing", () => stepAutoPricing(monthStartDate, actorUserId, auto));
     await runner.run("pricing_check", () => stepPricingCheck(monthStartDate, actorUserId, auto));
+    // P3-2.1（附錄 b A-13）：step6 計數＋Postorder 對照＋報告共用一個報表 memo context——
+    // 同一月 `buildMonthlyClose` 由 3 次降到 1 次。context 只活喺呢段（run 結束即棄），
+    // 唔跨 run；compute 內長工糧重算之後會 `invalidateReportMemo()`。
+    const reportStep = await withReportContext(async () => {
     const compute = await runner.run("compute", () => stepCompute(monthStartDate, actorUserId, ip));
     const referralSystemTotal = (compute.numbers.referralFeeTotal as number) ?? 0;
     await runner.run("postorder_compare", () => stepPostorderCompare(monthStartDate, referralSystemTotal));
 
-    const reportStep = await runner.run("report", async () => {
+    return await runner.run("report", async () => {
       const coverage = await checkRosterUploadCoverage(monthStartDate);
       const currentClose = await prisma.monthClose.findUnique({ where: { month: monthStartDate } });
       const unpricedCount = (runner.get("pricing_check").numbers.count as number) ?? 0;
@@ -1083,6 +1104,7 @@ export async function runOneClickMonthClose(runId: string, month: Date, actorUse
         console.error("[one-click] 體檢失敗（略過）：", safeErrorSummary(e));
       }
       return { numbers: { ...(report as unknown as Record<string, unknown>), health } };
+    });
     });
 
     await prisma.monthCloseRun.update({

@@ -1,3 +1,4 @@
+import { LookupScope } from "@/components/LookupScope";
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { getNavLinks, getViewGrants, groupNavLinks } from "@/lib/rbac/nav";
@@ -79,6 +80,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <DesktopNav groups={groups} userName={session.name} roleLabel={roleLabel} badges={badges} />
 
       <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-x-auto px-4 pt-3.5 pb-[90px] lg:px-7 lg:pt-6 lg:pb-6">
+        <LookupScope userId={session.userId} />
         <ChunkErrorReload />
         <SessionRefresh />
         <MustChangePwdGate mustChange={session.mustChangePwd} />

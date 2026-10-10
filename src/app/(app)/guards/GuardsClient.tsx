@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiRequest, apiPatch, apiPost, apiDelete, apiPut, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -432,21 +433,37 @@ export function GuardsClient({
   // `staff_numbers`（淨係 current），搵唔到 former（已取消，已經摺埋）
   // 嘅號。Server 端 `q` 用 `guard_staff_numbers`（唔限 status）搵，仲會標
   // `former_number_hit`。
+  // P3-2.7（P11／B-6）：每次 load 帶 request id＋AbortController——後發先至嘅舊 response 唔會蓋新結果；
+  // brokers／sites 唔再跟搜尋重拉（見下面 mount-only effect，經 60 s lookup cache）。
+  const loadSeqRef = useRef(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
   async function load(q: string) {
+    const seq = ++loadSeqRef.current;
+    loadAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    loadAbortRef.current = ctrl;
     setLoading(true);
     setError(null);
     const expiringParam = expiringOnly ? "&expiring_within_days=90" : "";
     // 搜尋字可能係身份證號：唔放 URL（避免落 access log／瀏覽器歷史），改用 request header（encodeURIComponent）
     const qHeaders = q.trim() ? { "x-guard-search": encodeURIComponent(q.trim()) } : undefined;
     const identityParam = identityFilter ? `&identity=${identityFilter}` : "";
-    const [guardRes, brokerRes, siteRes] = await Promise.all([
-      apiRequest<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${identityParam}`, { headers: qHeaders }),
-      apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500"),
-      // WP-PHASE3：淨係內部角色先揀到盤（雞頭 session「盤」module 硬性
-      // 拒絕，403 都冇所謂——`sites` 保持空陣列，「長工」分區本身雞頭都
-      // 見唔到）。
-      isBroker ? Promise.resolve({ ok: false as const, status: 0, error: "", message: "" }) : apiGet<ApiListResult<SiteRow>>("/api/sites?take=500"),
-    ]);
+    const guardRes = await apiRequest<ApiListResult<GuardRow>>(`/api/guards?take=500&with_month_shifts=${month}${expiringParam}${identityParam}`, {
+      headers: qHeaders,
+      signal: ctrl.signal,
+    });
+    if (seq !== loadSeqRef.current) return; // 已有更新嘅一次 load，呢個舊 response 丟棄
+    // B-5（階段 1 驗收員補充）：保安員 >500 時 `take=500` 會靜靜截斷——逐頁拉齊 `total`。
+    // （skip 按頁前進；有啲 session 嘅 DTO 轉換會喺分頁後剔走個別行，唔可以用 rows.length 做 skip。）
+    for (let skip = 500; guardRes.ok && skip < guardRes.data.total; skip += 500) {
+      const next = await apiRequest<ApiListResult<GuardRow>>(
+        `/api/guards?take=500&skip=${skip}&with_month_shifts=${month}${expiringParam}${identityParam}`,
+        { headers: qHeaders, signal: ctrl.signal },
+      );
+      if (seq !== loadSeqRef.current) return;
+      if (!next.ok || next.data.rows.length === 0) break;
+      guardRes.data.rows.push(...next.data.rows);
+    }
     if (!guardRes.ok) {
       setError(guardRes.message);
       setLoading(false);
@@ -463,10 +480,30 @@ export function GuardsClient({
       setHasBankField(guardRes.data.rows.length === 0 ? true : guardRes.data.rows.some((r) => "bank_name" in r));
       setHasLicenceExtraField(guardRes.data.rows.length === 0 ? !isBroker : guardRes.data.rows.some((r) => "sia_permit_no" in r));
     }
-    if (brokerRes.ok) setBrokers(brokerRes.data.rows);
-    if (siteRes.ok) setSites(siteRes.data.rows);
     setLoading(false);
   }
+
+  // P3-2.7：brokers／sites 淨係 mount 拉一次（共用 lookup cache），唔跟搜尋／篩選重拉。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [brokerRes, siteRes] = await Promise.all([
+        cachedGetAll<BrokerRow>("/api/brokers"),
+        // WP-PHASE3：淨係內部角色先揀到盤（雞頭 session「盤」module 硬性
+        // 拒絕，403 都冇所謂——`sites` 保持空陣列，「長工」分區本身雞頭都
+        // 見唔到）。
+        isBroker ? Promise.resolve({ ok: false as const, status: 0, error: "", message: "" }) : cachedGetAll<SiteRow>("/api/sites"),
+      ]);
+      if (cancelled) return;
+      if (brokerRes.ok) setBrokers(brokerRes.data.rows);
+      if (siteRes.ok) setSites(siteRes.data.rows);
+    })();
+    return () => {
+      cancelled = true;
+      loadAbortRef.current?.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // S7：搜尋字打緊嗰陣 debounce 300ms 先 fetch（唔係逐個字都打一次
   // API）；月份／90日篩選改變唔使等（用戶撳完期望即刻反映，呢兩個唔會

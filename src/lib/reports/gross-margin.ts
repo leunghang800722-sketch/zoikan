@@ -45,6 +45,7 @@ import {
   type CombinedCostSummary,
 } from "./monthly-close";
 import { buildLongtermSalaryAllocation } from "./longterm-salary";
+import { memoized } from "./context";
 import { isMixedBillingMonth, isExplicitPerShiftType, loadMixedBillingInfo, type MixedBillingSiteInfo } from "./mixed-billing";
 
 export const DEFAULT_MARGIN_THRESHOLD_PCT = 8;
@@ -127,7 +128,12 @@ function recordCost(r: { guardWageSnapshot: Prisma.Decimal | null; brokerFeeSnap
   return n(r.guardWageSnapshot) + n(r.brokerFeeSnapshot);
 }
 
-export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?: { thresholdPct?: number }): Promise<GrossMarginResult> {
+export function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?: { thresholdPct?: number }): Promise<GrossMarginResult> {
+  const thresholdPct = opts?.thresholdPct ?? DEFAULT_MARGIN_THRESHOLD_PCT;
+  return memoized(`margin:${sharedMonthRange(month).start.toISOString()}:${thresholdPct}`, () => buildGrossMarginUncached(month, opts));
+}
+
+async function buildGrossMarginUncached(month: Date, opts?: { thresholdPct?: number }): Promise<GrossMarginResult> {
   const thresholdPct = opts?.thresholdPct ?? DEFAULT_MARGIN_THRESHOLD_PCT;
   const { start: MONTH_START, end: MONTH_END } = sharedMonthRange(month);
 
@@ -321,7 +327,17 @@ export async function buildGrossMargin(month: Date = DEFAULT_REPORT_MONTH, opts?
   const mixedInfo = mixedBillingMonth ? await loadMixedBillingInfo(siteIds, MONTH_START, MONTH_END) : new Map<string, MixedBillingSiteInfo>();
   const otRecords = await prisma.shiftRecord.findMany({
     where: { siteId: { in: siteIds }, recordType: "ot", workDate: { gte: MONTH_START, lte: MONTH_END }, status: { not: "cancelled" } },
-    include: { parentShift: { include: { shiftType: true } } },
+    // P3-2.2（附錄 b A-18）：淨讀用到嘅欄（原本 include 成條 parent shift＋整個 shiftType）。
+    select: {
+      siteId: true,
+      shiftTypeId: true,
+      otHours: true,
+      settlementBrokerId: true,
+      clientRateSnapshot: true,
+      guardWageSnapshot: true,
+      brokerFeeSnapshot: true,
+      parentShift: { select: { clientRateSnapshot: true, guardWageSnapshot: true, brokerFeeSnapshot: true, shiftType: { select: { hours: true } } } },
+    },
   });
   const otRateCardCache = new Map<string, { clientHourly: number; guardHourly: number } | null>();
   async function otHourlyRatesFallback(siteId: string, shiftTypeId: string, brokerId: string | null): Promise<{ clientHourly: number; guardHourly: number } | null> {

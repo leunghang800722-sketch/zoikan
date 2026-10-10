@@ -76,7 +76,10 @@ export function computeSiteDayShortfall(params: {
 /** 今日（或指定日期）逐盤所需人手 vs confirmed 更次——daily_requirements
  * 冇 override 就跌返用 shift_types.headcount_required（設計 §3.2 daily_
  * requirements「每日所需人手 override」，冇 override 用更別本身嘅預設）。 */
-export async function buildShortfall(date: Date): Promise<ShortfallResult> {
+export type DayShortfallResult = Omit<ShortfallResult, "monthProgress">;
+
+/** P3-2.2：日級部分（唔含「本月毛利進度」，唔跑毛利表）。 */
+export async function buildDayShortfall(date: Date): Promise<DayShortfallResult> {
   const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const month = monthStart(dayStart);
   const { start: MONTH_START, end: MONTH_END } = sharedMonthRange(month);
@@ -110,22 +113,36 @@ export async function buildShortfall(date: Date): Promise<ShortfallResult> {
   });
   const pendingApprovalTotal = await prisma.shiftRecord.count({ where: { status: "pending_approval" } });
 
-  const margin = await buildGrossMargin(month);
-  const belowThresholdSiteCount = margin.sites.filter((s) => s.belowThreshold).length;
-
   return {
     date: dayStart.toISOString().slice(0, 10),
     today: today.sort((a, b) => b.shortfall - a.shortfall),
     pendingApprovalCount,
     pendingApprovalTotal,
-    monthProgress: {
-      month: monthLabel(month),
-      revenue: margin.totals.revenue,
-      cost: margin.totals.cost,
-      profit: margin.totals.profit,
-      marginPct: margin.totals.marginPct,
-      thresholdPct: margin.thresholdPct ?? DEFAULT_MARGIN_THRESHOLD_PCT,
-      belowThresholdSiteCount,
-    },
   };
+}
+
+export type MarginProgress = ShortfallResult["monthProgress"];
+
+/** P3-2.2：月級「本月毛利進度」——數字＝`buildGrossMargin(month).totals`（同毛利表同一把尺，
+ * test 斷言相等）；每次叫都即時重計（老闆第 6 條：唔准 TTL／跨 request cache）。 */
+export async function buildMarginProgress(month: Date): Promise<MarginProgress> {
+  const monthFirst = monthStart(month);
+  const margin = await buildGrossMargin(monthFirst);
+  const belowThresholdSiteCount = margin.sites.filter((s) => s.belowThreshold).length;
+  return {
+    month: monthLabel(monthFirst),
+    revenue: margin.totals.revenue,
+    cost: margin.totals.cost,
+    profit: margin.totals.profit,
+    marginPct: margin.totals.marginPct,
+    thresholdPct: margin.thresholdPct ?? DEFAULT_MARGIN_THRESHOLD_PCT,
+    belowThresholdSiteCount,
+  };
+}
+
+/** 日級＋月級（舊 `GET /api/reports/shortfall` 同 AI 工具用，行為同改動前一樣）。 */
+export async function buildShortfall(date: Date): Promise<ShortfallResult> {
+  const day = await buildDayShortfall(date);
+  const monthProgress = await buildMarginProgress(date);
+  return { ...day, monthProgress };
 }

@@ -20,6 +20,8 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiGet, apiGetAll, apiPost, ApiClientError } from "@/lib/api-client";
+import { cachedLookup, invalidateLookups } from "@/lib/ui/lookup-cache";
+import { cachedRows } from "@/lib/ui/lookups";
 import { Notice } from "@/components/ui/Notice";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
@@ -70,7 +72,6 @@ type GuardDto = {
   id: string;
   staff_no: string | null;
   name_zh: string;
-  tel: string | null;
   default_broker_id: string | null;
   sia_permit_expiry: string | null;
   status: string;
@@ -302,7 +303,7 @@ function buildRowsAndCells(
         shiftTypeCode: st?.code ?? "?",
         guardName: guard?.name_zh ?? "",
         staffNo: guard?.staff_no ?? "",
-        tel: guard?.tel ?? "",
+        tel: "", // P3-2.4：輕量 guards 唔帶電話；RowMeta.tel 本來就唔顯示
         brokerId: r.settlement_broker_id ?? guard?.default_broker_id ?? null,
       });
     }
@@ -561,6 +562,17 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const [errorCellKey, setErrorCellKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+  // P3-2.4：靜態載入資料（同一盤同一月內，儲存／重新計價唔重拉）。
+  const staticRef = useRef<{
+    key: string;
+    site: SiteDto;
+    shiftTypes: ShiftTypeDto[];
+    guards: GuardDto[];
+    dailyRequirements: DailyRequirementDto[];
+    quotaRows: QuotaDto[];
+    monthCloses: MonthCloseDto[];
+    brokers: BrokerDto[];
+  } | null>(null);
   // WP-R2：儲存成功 toast（README §04「儲存後 Toast」）——右下深色 toast，
   // 3 秒後自動消失。
   const [showSaveToast, setShowSaveToast] = useState(false);
@@ -668,27 +680,43 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       try {
         const { year: y, monthNum: m } = parseMonthStr(month);
         const d = daysInMonth(y, m);
-        const site = await apiGet<SiteDto>(`/api/sites/${siteId}`);
+        const workDateFrom = workDateStr(y, m, 1);
+        const workDateTo = workDateStr(y, m, d);
+
+        // P3-2.4（附錄 b A-9）：靜態資料（盤資料、更種、保安員輕量表、雞頭、每日所需人手、配額、
+        // 月結鎖定狀態）同「更次記錄」分開——儲存／重新計價（reloadTick）之後淨係重拉
+        // shift-records，唔再重拉 guards／brokers／month-closes 等。guards／brokers／month-closes
+        // 另經模組級 lookup cache（60 s，寫入相關資源即作廢），同一分頁切換盤時唔重複打。
+        const staticKey = `${siteId}|${month}`;
+        const fetchRecords = () =>
+          apiGetAll<ShiftRecordDto>("/api/shift-records", { site_id: siteId, work_date_from: workDateFrom, work_date_to: workDateTo, view: "grid" });
+        let st = staticRef.current?.key === staticKey ? staticRef.current : null;
+        let records: ShiftRecordDto[];
+        if (st) {
+          records = await fetchRecords();
+        } else {
+          const [site, shiftTypes, recs, guards, dailyRequirements, quotaRows, monthCloses, brokers] = await Promise.all([
+            apiGet<SiteDto>(`/api/sites/${siteId}`),
+            apiGetAll<ShiftTypeDto>("/api/shift-types", { site_id: siteId }),
+            fetchRecords(),
+            cachedRows<GuardDto>("/api/guards?fields=lite"),
+            apiGetAll<DailyRequirementDto>("/api/daily-requirements", { site_id: siteId, work_date_from: workDateFrom, work_date_to: workDateTo }),
+            apiGetAll<QuotaDto>("/api/quotas", { site_id: siteId, month }),
+            cachedLookup(`monthclose:${month}`, () => apiGetAll<MonthCloseDto>("/api/month-closes", { month })),
+            cachedRows<BrokerDto>("/api/brokers"),
+          ]);
+          if (cancelled) return;
+          records = recs;
+          st = { key: staticKey, site, shiftTypes, guards, dailyRequirements, quotaRows, monthCloses, brokers };
+          staticRef.current = st;
+        }
         if (cancelled) return;
+        const { site, shiftTypes, guards, dailyRequirements, quotaRows, monthCloses, brokers } = st;
         const brokerSession = !("created_by" in site);
         setIsBrokerSession(brokerSession);
         setSiteName(site.canonical_name);
         setHasRosterLayout(site.has_roster_layout ?? false);
         setGuardsPaidByClient(site.guards_paid_by_client ?? false);
-
-        const workDateFrom = workDateStr(y, m, 1);
-        const workDateTo = workDateStr(y, m, d);
-
-        const [shiftTypes, records, guards, dailyRequirements, quotaRows, monthCloses, brokers] = await Promise.all([
-          apiGetAll<ShiftTypeDto>("/api/shift-types", { site_id: siteId }),
-          apiGetAll<ShiftRecordDto>("/api/shift-records", { site_id: siteId, work_date_from: workDateFrom, work_date_to: workDateTo, view: "grid" }),
-          apiGetAll<GuardDto>("/api/guards", {}),
-          apiGetAll<DailyRequirementDto>("/api/daily-requirements", { site_id: siteId }),
-          apiGetAll<QuotaDto>("/api/quotas", { site_id: siteId, month }),
-          apiGetAll<MonthCloseDto>("/api/month-closes", {}),
-          apiGetAll<BrokerDto>("/api/brokers", {}),
-        ]);
-        if (cancelled) return;
 
         const stMap = new Map(shiftTypes.map((s) => [s.id, s]));
         const gMap = new Map(guards.map((g) => [g.id, g]));
@@ -1226,7 +1254,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             shiftTypeCode: st?.code ?? "?",
             guardName: guard?.name_zh ?? "",
             staffNo: guard?.staff_no ?? "",
-            tel: guard?.tel ?? "",
+            tel: "", // P3-2.4：輕量 guards 唔帶電話；RowMeta.tel 本來就唔顯示
             brokerId: r.settlement_broker_id ?? guard?.default_broker_id ?? null,
           });
           knownKeys.add(rowKey);
@@ -1281,7 +1309,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         shiftTypeCode: st?.code ?? "?",
         guardName: guard?.name_zh ?? "",
         staffNo: guard?.staff_no ?? "",
-        tel: guard?.tel ?? "",
+        tel: "", // P3-2.4：輕量 guards 唔帶電話；RowMeta.tel 本來就唔顯示
         // B1-5：人手揀咗結算單位就用嗰個，冇揀先跌返 guard.default_broker_id。
         brokerId: addBrokerId || guard?.default_broker_id || null,
       },
@@ -1672,7 +1700,11 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         <button
           type="button"
           className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
-          onClick={() => setReloadTick((t) => t + 1)}
+          onClick={() => {
+            invalidateLookups();
+            staticRef.current = null;
+            setReloadTick((t) => t + 1);
+          }}
         >
           重試
         </button>

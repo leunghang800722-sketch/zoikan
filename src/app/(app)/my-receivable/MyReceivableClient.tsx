@@ -7,7 +7,8 @@
 // 一致（`history.replaceState`，唔用 `useSearchParams()`避免 Suspense
 // boundary）。
 import { useEffect, useState } from "react";
-import { apiGet, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -97,7 +98,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
     const fromUrl = readBrokerFromUrl();
     if (fromUrl) setBrokerParam(fromUrl);
     (async () => {
-      const res = await apiGet<ApiListResult<BrokerRow>>("/api/brokers?take=500");
+      const res = await cachedGetAll<BrokerRow>("/api/brokers");
       if (!res.ok) return;
       setBrokers(res.data.rows);
       if (!fromUrl && res.data.rows.length > 0) {

@@ -1,7 +1,8 @@
 "use client";
 // P2-A：配額頁（README §05）——換皮，邏輯／API 呼叫全部保留。
 import { useEffect, useState } from "react";
-import { apiGet, apiGetAll, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
+import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
@@ -84,9 +85,9 @@ export default function QuotasPage() {
   useEffect(() => {
     (async () => {
       const [siteRes, brokerRes, shiftTypeRes] = await Promise.all([
-        apiGetAll<SiteRow>("/api/sites"),
-        apiGetAll<BrokerRow>("/api/brokers"),
-        apiGetAll<ShiftTypeRow>("/api/shift-types"),
+        cachedGetAll<SiteRow>("/api/sites"),
+        cachedGetAll<BrokerRow>("/api/brokers"),
+        cachedGetAll<ShiftTypeRow>("/api/shift-types"),
       ]);
       if (siteRes.ok) setSites(siteRes.data.rows);
       if (brokerRes.ok) setBrokers(brokerRes.data.rows);

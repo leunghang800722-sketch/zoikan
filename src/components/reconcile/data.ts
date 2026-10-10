@@ -2,7 +2,7 @@
 // WP-RECONCILE-UI（§33）：全部只讀現有 endpoint——/api/guards（?take=500 同 ?q=）、
 // /api/guard-fix/runs(+/:id)。短 TTL 記憶體快取，同一頁／同一個分診 dialog 多條題唔會重複打。
 import { useEffect, useRef, useState } from "react";
-import { apiGet, type ApiListResult } from "@/lib/ui/api-client";
+import { apiGet, apiGetAll, type ApiListResult } from "@/lib/ui/api-client";
 import { findSimilar, guardSearchTerm, hasPerson, personKey, type GuardLite, type NeedsBossItem, type Person, type SimilarGuard } from "./derive";
 
 const TTL_MS = 30_000;
@@ -25,8 +25,9 @@ export function clearReconcileDataCache(): void {
 }
 
 export function loadGuardDirectory(): Promise<{ rows: GuardLite[]; total: number } | null> {
-  return cached("guards:500", async () => {
-    const res = await apiGet<ApiListResult<GuardLite>>("/api/guards?take=500");
+  return cached("guards:all", async () => {
+    // P3-2.x（階段 1 驗收員補充）：`take=500` 會喺在職保安員 >500 時靜靜截斷——逐頁拉齊。
+    const res = await apiGetAll<GuardLite>("/api/guards");
     return res.ok ? { rows: res.data.rows, total: res.data.total } : null;
   });
 }
@@ -38,7 +39,7 @@ function loadGuardSearch(q: string): Promise<GuardLite[] | null> {
   });
 }
 
-/** 名冊（頭 500 位在職）。 */
+/** 名冊（全部在職）。 */
 export function useGuardDirectory(enabled = true): { rows: GuardLite[]; total: number; loaded: boolean } {
   const [dir, setDir] = useState<{ rows: GuardLite[]; total: number } | null>(null);
   const [loaded, setLoaded] = useState(false);
