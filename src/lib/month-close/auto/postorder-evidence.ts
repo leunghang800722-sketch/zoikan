@@ -266,7 +266,6 @@ export function classifyPriceRow(row: PostorderPriceRow, brokers: readonly Broke
   return { kind: "other", broker: null };
 }
 
-;
 
 // ---------------------------------------------------------------------------
 // 盤 ↔ Postorder 崗位行

@@ -85,8 +85,6 @@ export function deniedResult(d: ToolDenied): string {
 // 去 `src/lib/ui/broker-kind.ts`（UI 頁面唔應該 import `ai/` 目錄），呢度
 // re-export 返（tests/ai-structural-guard.test.ts 嘅 allowlist 已經加咗
 // `../../ui/broker-kind`），內容冇改。
-;
-;
 
 export const FEE_SPLIT_NOTE = "呢個盤嘅出街價未拆開保安員工資同雞頭費（源頭只有合計），只可以俾合計數。";
 
