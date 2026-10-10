@@ -34,7 +34,7 @@ export function splitDataUrl(url: string): { mediaType: "image/jpeg"; data: stri
   return { mediaType: "image/jpeg", data: m[2]! };
 }
 
-function apiBodyError(e: Anthropic.APIError): { type?: unknown; message?: unknown } {
+function apiBodyError(e: unknown): { type?: unknown; message?: unknown } {
   const body = (e as { error?: unknown }).error as { error?: { type?: unknown; message?: unknown } } | undefined;
   return body?.error ?? {};
 }
