@@ -265,7 +265,7 @@ describe("aggregateDoc（逐人）", () => {
 describe("比對正規化", () => {
   it("中文名", () => {
     expect(cmpZh("測試 保安員", "測試保安員").r).toBe("match");
-    expect(cmpZh("測試保安員", "測試安負")).toEqual({ r: "mismatch", near: true });
+    expect(cmpZh("測試保安員", "測試保安負")).toEqual({ r: "mismatch", near: true });
     expect(cmpZh("測試保安員", "路人甲乙丙").near).toBe(false);
     expect(cmpZh(null, "測試").r).toBe("no_reference");
   });
