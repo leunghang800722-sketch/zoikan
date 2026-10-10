@@ -158,3 +158,14 @@ export async function writeAudit(input: WriteAuditInput): Promise<void> {
 export async function writeAuditTx(tx: Prisma.TransactionClient, input: WriteAuditInput): Promise<void> {
   await tx.auditLog.create({ data: toAuditCreateData(input) });
 }
+
+/** P3-2.5：批量寫 audit——一條 `createMany`。`createdAt` 由 `baseTime` 起按次序逐 ms 遞增，
+ * 令同一批 audit 保持逐條寫入時嘅先後（audit_log 列表按 created_at 排）。內容經同一個
+ * `toAuditCreateData()`，同 `writeAudit()` 逐條寫入完全一樣。傳 `tx` 就寫喺呼叫者嘅 transaction。 */
+export async function writeAuditMany(inputs: WriteAuditInput[], client: Pick<Prisma.TransactionClient, "auditLog"> = prisma): Promise<void> {
+  if (inputs.length === 0) return;
+  const base = Date.now();
+  await client.auditLog.createMany({
+    data: inputs.map((input, i) => ({ ...toAuditCreateData(input), createdAt: new Date(base + i) })),
+  });
+}
