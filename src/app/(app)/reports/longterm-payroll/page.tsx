@@ -16,6 +16,7 @@ import { Pill } from "@/components/ui/Pill";
 import { EmptyState, tableCls, tableMinWidth } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "@/lib/ui/api-client";
 import { fmtMoney, fmtDate, currentMonthStr, addMonthsStr } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 // ---------------------------------------------------------------------------
 // 型別（snake_case，同 API response 一致）
@@ -193,7 +194,7 @@ export default function LongtermPayrollPage() {
   return (
     <div className="flex flex-col gap-5 p-4 sm:p-6">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/reports/longterm-payroll")}
         title="長工糧"
         subtitle="長工月薪糧——合約管理、逐月計糧、人手輸入、平均工資／假期餘額、BOCHK autopay 檔"
         actions={

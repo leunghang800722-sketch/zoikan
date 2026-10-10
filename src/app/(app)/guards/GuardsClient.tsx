@@ -25,7 +25,7 @@ import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmt, fmtDate, isExpired, isExpiringSoon, currentMonthStr, todayLocalStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
-import { kickerFor } from "@/lib/ui/nav-active";
+import { kickerFor } from "@/lib/nav/schema";
 // WP-BOSS5 §25.4：銀行編號「建議下拉」——純資料，冇 DB 依賴，client
 // component 用得。
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";

@@ -23,6 +23,7 @@ import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { BROKER_KIND_LABEL, brokerKindPillTone, type BrokerKindLiteral } from "@/lib/ui/broker-kind";
+import { kickerFor } from "@/lib/nav/schema";
 
 // A2（Opus 整合驗收）：呢頁「種類」select 嘅選項同表格 pill 之前各自有
 // 一套標籤（select 出 raw kind 字面值；表格 `kindPill()` 自己砌一套
@@ -341,7 +342,7 @@ export default function BrokersPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        kicker="主檔"
+        kicker={kickerFor("/brokers")}
         title="雞頭"
         subtitle="每行「介紹費率」開返嗰個雞頭嘅逐盤逐月費率子表；「掛邊啲盤」按下面月份 FilterChip 嘅月睇。"
         actions={

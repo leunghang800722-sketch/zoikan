@@ -22,7 +22,7 @@ import { fmtDate, fmtMoney } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
-import { kickerFor } from "@/lib/ui/nav-active";
+import { kickerFor } from "@/lib/nav/schema";
 
 const PAGE_SIZE = 50;
 

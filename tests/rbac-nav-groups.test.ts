@@ -1,131 +1,145 @@
-// WP-R1：左欄／手機抽屜導航分組（`src/lib/rbac/nav.ts` 嘅
-// `groupNavLinks()`）——純函數 unit test，唔使起 DB／session（同
-// `getNavLinks()` 嘅權限邏輯完全分開，見嗰個 function 頭嘅註解）。
+// P3-3.1：導覽列單一真相 NAV_SCHEMA（`src/lib/nav/schema.ts`）——連結清單、分組、
+// 頁首 kicker 全部由 schema 派生。純函數／出廠矩陣 unit test，唔使起 DB／session
+// （`getViewGrants` 嗰段除外）。
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { getNavLinks, getViewGrants, groupNavLinks, type NavLink } from "@/lib/rbac/nav";
+import { BROKER_NAV, INTERNAL_NAV, OFF_NAV_PATHS, kickerFor } from "@/lib/nav/schema";
+import { isLinkActive } from "@/lib/ui/nav-active";
 import { MODULES, ROLE_NAMES, isGrantedByDefault, type Module, type RoleName } from "@/lib/rbac/matrix";
 import type { CurrentSession } from "@/lib/auth/current-session";
 import { clearAll, prisma } from "./lib/db";
 
-// 老闆／主管／會計全部 module 都 grant（出廠矩陣）時 `getNavLinks()`
-// 會回嘅完整連結（唔包 /roles，等落面 case 分開測「冇連結嘅組唔顯示」）。
-const FULL_INTERNAL_LINKS: NavLink[] = [
-  { href: "/", label: "首頁" },
-  { href: "/roster", label: "更表" },
-  { href: "/quotas", label: "配額" },
-  { href: "/approvals", label: "審批隊列" },
-  { href: "/sites", label: "盤" },
-  { href: "/guards", label: "保安員" },
-  { href: "/brokers", label: "雞頭" },
-  { href: "/rate-cards", label: "價目" },
-  { href: "/reports/gross-margin", label: "毛利即時表" },
-  { href: "/reports/monthly-close", label: "月結工作台" },
-  { href: "/reports/payroll", label: "糧明細" },
-  { href: "/reports/shortfall", label: "尚欠總覽" },
-  { href: "/users", label: "用戶管理" },
-  { href: "/roles", label: "角色權限管理" },
-  { href: "/audit-log", label: "操作紀錄" },
-];
+function mk(baseRole: string): CurrentSession {
+  return { userId: "u", roleId: "r", roleName: baseRole, baseRole, brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: 0, loggedInAt: new Date().toISOString(), mustChangePwd: false } as unknown as CurrentSession;
+}
+function factoryGrants(role: RoleName): Record<Module, boolean> {
+  return Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault(role, m, "view")])) as Record<Module, boolean>;
+}
+const allGrants = Object.fromEntries(MODULES.map((m) => [m, true])) as Record<Module, boolean>;
+async function navFor(role: RoleName) {
+  const links = await getNavLinks(mk(role), factoryGrants(role));
+  return { links, groups: groupNavLinks(role, links) };
+}
+const sig = (groups: ReturnType<typeof groupNavLinks>) => groups.map((g) => `${g.title}:${g.links.map((l) => l.href).join(",")}`);
 
-const BROKER_LINKS: NavLink[] = [
-  { href: "/", label: "首頁" },
-  { href: "/roster", label: "更表" },
-  { href: "/quotas", label: "配額" },
-  { href: "/my-receivable", label: "本月應收" },
-  { href: "/guards", label: "保安員" },
-  { href: "/rate-cards", label: "價目" },
-];
-
-describe("groupNavLinks（WP-R1 左欄分組，純顯示層）", () => {
-  it("老闆（全部 module 都 grant）：5 組——首頁（冇標題）／排更／主檔／財務／系統", () => {
-    const groups = groupNavLinks("老闆", FULL_INTERNAL_LINKS);
-    expect(groups.map((g) => g.title)).toEqual(["", "排更", "主檔", "財務", "系統"]);
-
-    expect(groups[0].links.map((l) => l.label)).toEqual(["首頁"]);
-    expect(groups[1].links.map((l) => l.label)).toEqual(["更表", "配額", "審批隊列"]);
-    expect(groups[2].links.map((l) => l.label)).toEqual(["盤", "保安員", "雞頭", "價目"]);
-    expect(groups[3].links.map((l) => l.label)).toEqual(["毛利即時表", "月結工作台", "糧明細", "尚欠總覽"]);
-    expect(groups[4].links.map((l) => l.label)).toEqual(["用戶管理", "角色權限管理", "操作紀錄"]);
+describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
+  it("老闆：17 條、6 組（首頁／排更／對數／月結／資料／設定），次序同組內次序固定", async () => {
+    const { links, groups } = await navFor("老闆");
+    expect(links).toHaveLength(17);
+    expect(groups.map((g) => g.title)).toEqual(["", "排更", "對數", "月結", "資料", "設定"]);
+    expect(sig(groups)).toEqual([
+      ":/",
+      "排更:/roster,/quotas,/approvals",
+      "對數:/roster-uploads,/roster-uploads?tab=fix",
+      "月結:/month-close,/triage,/reports/monthly-close",
+      "資料:/sites,/guards,/brokers,/rate-cards",
+      "設定:/users,/roles,/audit-log,/feedback",
+    ]);
+    expect(groups[3]!.links.map((l) => l.label)).toEqual(["一鍵結算", "待答問題", "報表"]);
   });
 
-  it("雞頭：只有 2 組——排更（首頁／更表／配額）／我的（本月應收／保安員／價目）", () => {
-    const groups = groupNavLinks("雞頭", BROKER_LINKS);
-    expect(groups.map((g) => g.title)).toEqual(["排更", "我的"]);
-    expect(groups[0].links.map((l) => l.label)).toEqual(["首頁", "更表", "配額"]);
-    expect(groups[1].links.map((l) => l.label)).toEqual(["本月應收", "保安員", "價目"]);
+  it("主管：11 條（按出廠權限減——冇修復、報表、設定組）", async () => {
+    const { links, groups } = await navFor("主管");
+    expect(links).toHaveLength(11);
+    expect(sig(groups)).toEqual([":/", "排更:/roster,/quotas,/approvals", "對數:/roster-uploads", "月結:/month-close,/triage", "資料:/sites,/guards,/brokers,/rate-cards"]);
   });
 
-  it("冇連結嘅組唔顯示（例：主管冇「用戶管理」view，「系統」組整組消失）", () => {
-    const linksWithoutSystem = FULL_INTERNAL_LINKS.filter((l) => !["/users", "/roles", "/audit-log"].includes(l.href));
-    const groups = groupNavLinks("主管", linksWithoutSystem);
-    expect(groups.map((g) => g.title)).toEqual(["", "排更", "主檔", "財務"]);
+  it("會計：11 條（有報表，冇審批、修復、設定組）", async () => {
+    const { links, groups } = await navFor("會計");
+    expect(links).toHaveLength(11);
+    expect(sig(groups)).toEqual([":/", "排更:/roster,/quotas", "對數:/roster-uploads", "月結:/month-close,/triage,/reports/monthly-close", "資料:/sites,/guards,/brokers,/rate-cards"]);
   });
 
-  it("雞頭冇任何連結時（極端情況）：回空陣列，唔會出現得個標題冇項目嘅組", () => {
-    const groups = groupNavLinks("雞頭", []);
-    expect(groups).toEqual([]);
+  it("雞頭：6 條、3 組（首頁／排更／我的）；唔出 /brokers", async () => {
+    const { links, groups } = await navFor("雞頭");
+    expect(links).toHaveLength(6);
+    expect(sig(groups)).toEqual([":/", "排更:/roster,/quotas", "我的:/my-receivable,/guards,/rate-cards"]);
+    expect(links.map((l) => l.href)).not.toContain("/brokers");
+    expect(links.find((l) => l.href === "/guards")!.label).toBe("我的保安員");
+    // 即使「雞頭:view」被開，雞頭導覽都唔出 /brokers
+    const opened = await getNavLinks(mk("雞頭"), { ...factoryGrants("雞頭"), 雞頭: true });
+    expect(opened.map((l) => l.href)).not.toContain("/brokers");
   });
 
-  it("同一 module（出街價）喺內部角色連去 /rate-cards 擺「主檔」，雞頭連去 /my-receivable 擺「我的」——冇撞組", () => {
-    const bossGroups = groupNavLinks("老闆", FULL_INTERNAL_LINKS);
-    const mainGroup = bossGroups.find((g) => g.title === "主檔");
-    expect(mainGroup?.links.some((l) => l.href === "/rate-cards")).toBe(true);
-
-    const brokerGroups = groupNavLinks("雞頭", BROKER_LINKS);
-    const mineGroup = brokerGroups.find((g) => g.title === "我的");
-    expect(mineGroup?.links.some((l) => l.href === "/my-receivable")).toBe(true);
-    expect(mineGroup?.links.some((l) => l.href === "/rate-cards")).toBe(true);
+  it("保安員（安員）：只有首頁 1 條，即使 grants 全開", async () => {
+    const { links } = await navFor("安員");
+    expect(links.map((l) => l.href)).toEqual(["/"]);
+    expect((await getNavLinks(mk("安員"), allGrants)).map((l) => l.href)).toEqual(["/"]);
   });
 
-  // R1 驗收修正：分組表（INTERNAL_GROUP_ORDER/BROKER_GROUP_ORDER）同
-  // `getNavLinks()` 係兩份獨立維護嘅清單，之前如果分組表漏列一個
-  // href，個連結會靜靜哋喺導航消失，冇任何測試會爆。加返呢條：真係用
-  // `getNavLinks()`（老闆、全部 module 都 grant）計出嚟嘅連結，逐條
-  // 核對喺 `groupNavLinks()` 嘅結果度都揾到，確保兩份清單冚得住。
-  it("getNavLinks 老闆全部 href 都出現喺分組結果（分組表冚晒 getNavLinks 出嘅連結，唔會靜靜消失）", async () => {
-    const allGrants = Object.fromEntries(MODULES.map((m) => [m, true])) as Record<Module, boolean>;
-    const fakeSession = {
-      userId: "u1",
-      tel: "90000001",
-      name: "老闆",
-      roleId: "r1",
-      roleName: "老闆",
-      baseRole: "老闆",
-      brokerId: null,
-      guardId: null,
-      payoutApprovalLimit: null,
-      tokenVersion: 0,
-      loggedInAt: new Date().toISOString(),
-      mustChangePwd: false,
-    } as unknown as CurrentSession;
-
-    const links = await getNavLinks(fakeSession, allGrants);
-    const groups = groupNavLinks("老闆", links);
-    const groupedHrefs = new Set(groups.flatMap((g) => g.links.map((l) => l.href)));
-
-    expect(links.length).toBeGreaterThan(0);
-    for (const l of links) {
-      expect(groupedHrefs.has(l.href)).toBe(true);
+  it("「其他」組永遠唔出現（5 個角色，連同全 grant 嘅老闆）", async () => {
+    for (const role of ROLE_NAMES) {
+      const { groups } = await navFor(role);
+      expect(groups.map((g) => g.title)).not.toContain("其他");
     }
+    expect(groupNavLinks("老闆", await getNavLinks(mk("老闆"), allGrants)).map((g) => g.title)).not.toContain("其他");
   });
 
-  it("P3-0.3 雞頭（有「雞頭:view」grant）：getNavLinks 唔出 /brokers，分組後冇「其他」組；內部角色照出", async () => {
-    const allGrants = Object.fromEntries(MODULES.map((m) => [m, true])) as Record<Module, boolean>;
-    const mk = (baseRole: string) => ({ userId: "u", roleId: "r", baseRole, brokerId: null, guardId: null }) as unknown as CurrentSession;
-    const brokerGrants = { ...(Object.fromEntries(MODULES.map((m) => [m, isGrantedByDefault("雞頭", m, "view")])) as Record<Module, boolean>), 雞頭: true };
-    const brokerLinks = await getNavLinks(mk("雞頭"), brokerGrants);
-    expect(brokerLinks.map((l) => l.href)).not.toContain("/brokers");
-    expect(groupNavLinks("雞頭", brokerLinks).map((g) => g.title)).not.toContain("其他");
-    const bossLinks = await getNavLinks(mk("老闆"), allGrants);
-    expect(bossLinks.map((l) => l.href)).toContain("/brokers");
+  it("schema 以外嘅 link 落尾組「其他」（登記漏咗一眼睇到）", () => {
+    const links: NavLink[] = [{ href: "/", label: "首頁", group: "" }, { href: "/x", label: "新頁面", group: "未登記" }];
+    const groups = groupNavLinks("老闆", links);
+    expect(groups[groups.length - 1]).toEqual({ title: "其他", links: [{ href: "/x", label: "新頁面", group: "未登記" }] });
   });
 
-  it("分組表冇列出嘅 href（未知連結）落尾組「其他」，唔會靜靜消失", () => {
-    const linksWithUnknown: NavLink[] = [...FULL_INTERNAL_LINKS, { href: "/some-new-page", label: "新頁面" }];
-    const groups = groupNavLinks("老闆", linksWithUnknown);
-    const last = groups[groups.length - 1];
-    expect(last.title).toBe("其他");
-    expect(last.links.map((l) => l.href)).toEqual(["/some-new-page"]);
+  it("報表連結：冇「月結總表」但有「毛利即時表」→ 連去毛利頁；全部冇 → 不出", async () => {
+    const base = { ...factoryGrants("老闆"), 月結總表: false, 毛利即時表: true, 糧明細: false, 長工糧: false };
+    expect((await getNavLinks(mk("老闆"), base)).find((l) => l.label === "報表")!.href).toBe("/reports/gross-margin");
+    const none = { ...base, 毛利即時表: false };
+    expect((await getNavLinks(mk("老闆"), none)).some((l) => l.label === "報表")).toBe(false);
+  });
+
+  it("現場意見：只限老闆（會計即使有「助手」都唔出）", async () => {
+    expect((await getNavLinks(mk("會計"), allGrants)).map((l) => l.href)).not.toContain("/feedback");
+    expect((await getNavLinks(mk("老闆"), allGrants)).map((l) => l.href)).toContain("/feedback");
+  });
+
+  it("導覽拎走嘅路徑唔喺任何 schema（尚欠總覽、guard-fix、導入、4 份報表）", () => {
+    const hrefs = new Set([...INTERNAL_NAV, ...BROKER_NAV].map((e) => e.href));
+    for (const h of ["/reports/shortfall", "/guard-fix", "/guards/import", "/guards/new-from-docs", "/reports/gross-margin", "/reports/payroll", "/reports/longterm-payroll", "/reports/ops-digest"]) expect(hrefs.has(h)).toBe(false);
+    expect(OFF_NAV_PATHS).toContain("/guard-fix");
+  });
+
+  it("schema 每條 href 都對應現有 page（href 掃描覆蓋 schema）", () => {
+    const appDir = path.resolve(__dirname, "../src/app/(app)");
+    for (const e of [...INTERNAL_NAV, ...BROKER_NAV]) {
+      const p = e.href.split("?")[0]!;
+      const file = p === "/" ? path.join(appDir, "page.tsx") : path.join(appDir, p.slice(1), "page.tsx");
+      expect(fs.existsSync(file), e.href).toBe(true);
+    }
+    // hrefByModule 嘅替代連結同樣要存在
+    for (const e of INTERNAL_NAV) for (const h of Object.values(e.hrefByModule ?? {})) expect(fs.existsSync(path.join(appDir, h!.slice(1), "page.tsx")), h).toBe(true);
+  });
+
+  it("kicker 由 schema 派生：導覽組名；報表五頁「月結 › 報表」；導入頁「資料」；雞頭版「我的」", () => {
+    expect(kickerFor("/roster")).toBe("排更");
+    expect(kickerFor("/roster-uploads?tab=fix")).toBe("對數");
+    expect(kickerFor("/triage")).toBe("月結");
+    expect(kickerFor("/reports/monthly-close")).toBe("月結 › 報表");
+    expect(kickerFor("/reports/ops-digest")).toBe("月結 › 報表");
+    expect(kickerFor("/guards/import")).toBe("資料");
+    expect(kickerFor("/guards", false)).toBe("資料");
+    expect(kickerFor("/guards", true)).toBe("我的");
+    expect(kickerFor("/rate-cards", true)).toBe("我的");
+    expect(kickerFor("/roles")).toBe("設定");
+    expect(kickerFor("/nope")).toBe("");
+  });
+
+  it("isLinkActive：帶 query 嘅連結、更表上載 vs 修復、更表 vs 更表上載、報表族群", () => {
+    const q = (s: string) => new URLSearchParams(s);
+    expect(isLinkActive("/roster-uploads", "/roster-uploads?tab=fix", q("tab=fix"))).toBe(true);
+    expect(isLinkActive("/roster-uploads", "/roster-uploads?tab=fix", q(""))).toBe(false);
+    expect(isLinkActive("/roster-uploads", "/roster-uploads", q("tab=fix"))).toBe(false);
+    expect(isLinkActive("/roster-uploads", "/roster-uploads", q("month=2026-09"))).toBe(true);
+    expect(isLinkActive("/roster-uploads/abc/reconcile", "/roster-uploads", q(""))).toBe(true);
+    expect(isLinkActive("/roster-uploads", "/roster", q(""))).toBe(false);
+    expect(isLinkActive("/roster/s1/2026-09", "/roster", q(""))).toBe(true);
+    expect(isLinkActive("/reports/payroll", "/reports/monthly-close", q(""))).toBe(true);
+    expect(isLinkActive("/reports/shortfall", "/reports/monthly-close", q(""))).toBe(false);
+    expect(isLinkActive("/guards/import", "/guards", q(""))).toBe(true);
+    expect(isLinkActive("/", "/", q(""))).toBe(true);
+    expect(isLinkActive("/guards", "/", q(""))).toBe(false);
   });
 });
 

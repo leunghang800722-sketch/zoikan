@@ -15,6 +15,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { inputCls, selectCls } from "@/components/ui/Field";
 import { ACTIONS, MODULES, type Action, type Module } from "@/lib/rbac/matrix";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface RoleRow {
   id: string;
@@ -223,7 +224,7 @@ export default function RolesPage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="系統"
+        kicker={kickerFor("/roles")}
         title="角色權限管理"
         subtitle="灰格＝硬性禁止（唔可以開）；其餘格逐個開關，儲存先一齊送出。"
         actions={

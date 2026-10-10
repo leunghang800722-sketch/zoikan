@@ -16,6 +16,7 @@ import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface ShiftRecordRow {
   id: string;
@@ -166,7 +167,7 @@ export default function ApprovalsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        kicker="排更"
+        kicker={kickerFor("/approvals")}
         title="審批隊列"
         subtitle="雞頭排嘅更逐項確認（draft → confirmed）或者打返轉頭。"
         actions={

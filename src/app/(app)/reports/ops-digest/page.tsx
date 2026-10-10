@@ -10,6 +10,7 @@ import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface CategoryDTO {
   key: string;
@@ -90,7 +91,7 @@ export default function OpsDigestPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/reports/ops-digest")}
         title="每月修正摘要"
         subtitle="呢個月結算要修正咗乜、同上月比、邊啲問題重複出現——只有類別同數字，冇人名。"
         actions={

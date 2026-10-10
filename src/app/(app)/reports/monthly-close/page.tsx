@@ -30,6 +30,7 @@ import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateTime, currentMonthStr } from "@/lib/ui/format";
 import type { ApiListResult } from "@/lib/ui/api-client";
 import { MonthHealthCard } from "../../month-close/MonthHealthCard";
+import { kickerFor } from "@/lib/nav/schema";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface MonthCloseDto {
@@ -348,7 +349,7 @@ export default function MonthlyCloseWorkbenchPage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/reports/monthly-close")}
         title="月結工作台"
         subtitle="生成月結總表＋五條自動對數規則；鎖定前必須先 Generate 一次。"
         actions={

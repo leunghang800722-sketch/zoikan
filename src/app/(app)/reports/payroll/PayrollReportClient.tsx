@@ -18,6 +18,7 @@ import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
+import { kickerFor } from "@/lib/nav/schema";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // P0（Opus 驗收重現）：`broker_id` 可以係 `null`——代表「未歸屬結算
@@ -137,7 +138,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/reports/payroll")}
         title="糧明細（按雞頭）"
         subtitle="逐結算單位（雞頭）本月更數／工資／雞頭費／金額。"
         actions={

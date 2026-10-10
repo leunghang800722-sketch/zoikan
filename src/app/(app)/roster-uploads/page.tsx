@@ -30,6 +30,7 @@ import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmtDate, fmtDateTime, currentMonthStr } from "@/lib/ui/format";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { classifyUploadResult, runQueueWithConcurrency, summarizeOutcomes, type RosterUploadPostData, type UploadOutcome } from "@/lib/roster-upload/upload-queue";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface SiteOption {
   id: string;
@@ -544,7 +545,7 @@ export default function RosterUploadsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        kicker="排更"
+        kicker={kickerFor("/roster-uploads")}
         title="更表上載"
         subtitle="會計／主管／老闆每月逐盤上載更表檔案（xlsx）——呢個係計糧嘅唯一依據，系統自己報更淨係參考／輔助。"
         actions={

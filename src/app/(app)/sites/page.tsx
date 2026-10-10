@@ -14,6 +14,7 @@ import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { fmt, fmtMoney } from "@/lib/ui/format";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
+import { kickerFor } from "@/lib/nav/schema";
 
 const PRORATA_BASIS = ["div_31", "div_month_days"] as const;
 const BILLING_GROUPS = ["per_shift", "monthly_ic"] as const;
@@ -275,7 +276,7 @@ export default function SitesPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        kicker="主檔"
+        kicker={kickerFor("/sites")}
         title="盤"
         subtitle="盤管理——每個盤可以有多個更別（子表）。"
         actions={
