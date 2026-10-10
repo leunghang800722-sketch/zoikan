@@ -23,10 +23,20 @@ export function RightRail({ needDiffReason, diffReason, onDiffReason, report, mo
     <aside className="flex flex-col gap-3" data-testid="right-rail" aria-label="本月仲差咩">
       {/* P3-4.4：<lg 變底部 sticky 一行 CTA（要你睇 N／鎖定）；同一組 testid，唔重複 render。 */}
       <div
-        className={`${card} overflow-hidden max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 max-lg:flex max-lg:items-center max-lg:gap-2 max-lg:overflow-visible max-lg:rounded-none max-lg:border-x-0 max-lg:border-b-0 max-lg:p-2.5 max-lg:pr-[76px] max-lg:shadow-[0_-4px_12px_rgba(15,23,42,.1)]`}
+        className={`${card} overflow-hidden max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-30 max-lg:flex max-lg:flex-wrap max-lg:items-center max-lg:gap-2 max-lg:overflow-visible max-lg:rounded-none max-lg:border-x-0 max-lg:border-b-0 max-lg:p-2.5 max-lg:pr-[76px] max-lg:shadow-[0_-4px_12px_rgba(15,23,42,.1)]`}
         data-testid="rail-main"
       >
         <div className="border-b border-zk-border-soft px-3.5 py-3 text-zk-base font-semibold max-lg:hidden">本月仲差咩</div>
+        {/* 手機：鎖定掣停用時講明原因（右欄主內容隱藏咗桌面提示句）。 */}
+        {!locked && (!ready || (needDiffReason && !diffReason.trim())) && (
+          <div className="w-full text-center text-zk-xs text-zk-danger-dark lg:hidden" data-testid="rail-lock-reason">
+            {needDiffReason && !diffReason.trim() ? (
+              <>要填差異原因先鎖得 · <a href="#diff-reason-box" className="font-semibold underline" style={{ color: "inherit" }}>去填原因 ›</a></>
+            ) : (
+              "條件未齊，未可以鎖"
+            )}
+          </div>
+        )}
         <div className="flex flex-col gap-1.5 border-b border-zk-border-soft p-3.5 max-lg:flex-1 max-lg:flex-row max-lg:items-center max-lg:gap-2 max-lg:border-0 max-lg:p-0">
           <div className="flex items-baseline gap-2">
             <span className="text-zk-2xl font-bold leading-none" style={{ color: t.total > 0 ? "var(--zk-warning)" : "var(--zk-success)" }} data-testid="rail-review-count">

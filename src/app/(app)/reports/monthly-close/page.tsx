@@ -445,7 +445,7 @@ export default function MonthlyCloseWorkbenchPage() {
                   <Button variant="link" size="sm" className="w-fit"
                     type="button"
                     onClick={() => setShowOutside((v) => !v)}
-                   
+
                   >
                     {showOutside ? "收埋 ‹" : `額外盤 ${result.monthly_close.outside_rows.length} 個（唔入月結對數）›`}
                   </Button>

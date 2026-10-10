@@ -68,7 +68,7 @@ export function LockSection({ report, lockedAt, month, busy, locked, groups, onU
         {locked && <Pill variant="warning">已鎖定</Pill>}
       </div>
       {!locked && needDiffReason && (
-        <div className="flex flex-col gap-1.5 border-t border-zk-border-soft px-4 py-3" data-testid="diff-reason-box">
+        <div id="diff-reason-box" className="flex flex-col gap-1.5 border-t border-zk-border-soft px-4 py-3" data-testid="diff-reason-box">
           <label className="text-zk-sm font-medium text-zk-text">§6.3 對數有紅色差異——override 原因（必填）</label>
           <input className={inputCls} placeholder="override 原因（必填）" value={diffReason} onChange={(e) => onDiffReason(e.target.value)} data-testid="diff-reason" />
         </div>
@@ -88,7 +88,7 @@ export function LockSection({ report, lockedAt, month, busy, locked, groups, onU
                 data-testid="force-lock-month"
                 onClick={() => onForceLock(forceReason.trim())}
                 disabled={busy || !forceReason.trim()}
-               
+
               >
                 強制鎖定 {month}
               </Button>
@@ -105,7 +105,7 @@ export function LockSection({ report, lockedAt, month, busy, locked, groups, onU
             data-testid="unlock-month"
             onClick={() => onUnlock(unlockReason.trim())}
             disabled={busy || !unlockReason.trim()}
-           
+
           >
             解鎖 {month}
           </Button>

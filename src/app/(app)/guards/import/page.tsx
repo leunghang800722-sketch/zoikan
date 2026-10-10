@@ -143,7 +143,7 @@ export default function GuardImportPage() {
   const [triageOpen, setTriageOpen] = useState(0);
   const [showFull, setShowFull] = useState<Record<string, boolean>>({});
 
-  
+
   async function onFile(file: File | undefined) {
     setError(null);
     setNotice(null);

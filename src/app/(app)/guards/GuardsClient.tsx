@@ -1494,14 +1494,14 @@ export function GuardsClient({
                 type="button"
                 disabled={numberActionBusy}
                 onClick={() => onToggleStaffNumberStatus(n)}
-               
+
               >
                 {isCurrent ? "取消呢個號" : "改返現用"}
               </Button>
               <Button variant="link" size="sm"
                 type="button"
                 onClick={() => (isEditing ? onCancelNumberEdit() : onOpenNumberEdit(n))}
-               
+
               >
                 {isEditing ? "取消編輯" : "編輯"}
               </Button>
@@ -1678,7 +1678,7 @@ export function GuardsClient({
                 type="button"
                 disabled={contactActionBusy || index === contacts.length - 1}
                 onClick={() => onMoveContact(index, 1)}
-               
+
               >
                 較後
               </Button>
@@ -1847,7 +1847,7 @@ export function GuardsClient({
                             <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() => onUnvoid(r.id)}
-                             
+
                             >
                               恢復
                             </Button>
@@ -1907,7 +1907,20 @@ export function GuardsClient({
       )}
 
       <Drawer open={drawerOpen} title={editingId ? "編輯保安員" : "新增保安員"} onClose={() => setDrawerOpen(false)}>
-        <form onSubmit={onSubmit} className="space-y-3">
+        <form
+          onSubmit={onSubmit}
+          // 隱藏 tab 入面有 invalid／required 欄：瀏覽器會靜靜擋住 submit——自動跳去嗰個 tab 再顯示原生提示。
+          onInvalidCapture={(e) => {
+            const el = e.target as HTMLInputElement;
+            const m = el.closest('[data-testid^="guard-tab-panel-"]')?.getAttribute("data-testid")?.match(/guard-tab-panel-([a-z]+)/);
+            const tab = m?.[1] as typeof drawerTab | undefined;
+            if (tab && tab !== drawerTab) {
+              setDrawerTab(tab);
+              setTimeout(() => el.reportValidity?.(), 0);
+            }
+          }}
+          className="space-y-3"
+        >
           <Banner kind="error" message={formError} />
           {editingId && (() => {
             const st = rows.find((r) => r.id === editingId)?.identity_status;
@@ -1996,6 +2009,7 @@ export function GuardsClient({
             </div>
           )}
 
+          <div className={tabCls("basic")} data-testid="guard-tab-panel-basic-misc">
           <Field label="預設雞頭" hint={editingId ? "建立之後唔可以喺呢頁改，要用用戶/雞頭管理" : undefined}>
             <select
               className={selectCls}
@@ -2042,6 +2056,7 @@ export function GuardsClient({
           <Field label="Polo 尺碼">
             <input className={inputCls} value={form.polo_size} onChange={(e) => setForm((f) => ({ ...f, polo_size: e.target.value }))} />
           </Field>
+          </div>
 
           {/* WP-PHASE3（§20.4 Phase 3 item 1）：保安員抽屜「長工」區——老闆／
               主管；雞頭（`isBroker`）結構性唔見（呢個 component 雞頭
@@ -2338,7 +2353,7 @@ export function GuardsClient({
                   <Button variant="link" size="sm"
                     type="button"
                     onClick={() => setShowFormerStaffNumbers((v) => !v)}
-                   
+
                   >
                     {showFormerStaffNumbers ? "隱藏已取消嘅號" : `顯示已取消嘅號 ${staffNumbers.filter((n) => n.status === "former").length} 個`}
                   </Button>

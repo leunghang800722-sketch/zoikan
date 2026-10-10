@@ -1724,7 +1724,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         <p className="text-sm text-zk-text-secondary">{loadError}</p>
         <Button variant="secondary" size="md"
           type="button"
-         
+
           onClick={() => {
             invalidateLookups();
             staticRef.current = null;
@@ -1877,7 +1877,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             <Button variant="secondary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked}
-             
+
               onClick={() => setShowAddGuard(true)}
             >
               加保安員
@@ -1885,7 +1885,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             <Button variant="secondary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked}
-             
+
               onClick={handleCopyPrevMonth}
             >
               複製上月（{prevMonthStr(month)}）
@@ -1913,7 +1913,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             <Button variant="secondary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={dirtyCount === 0}
-             
+
               style={{ color: "var(--zk-faint)" }}
               onClick={handleRevert}
             >
@@ -1922,7 +1922,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             <Button variant="primary" size="md" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked || saving || dirtyCount === 0}
-             
+
               style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
               onClick={handleSave}
             >
@@ -2033,7 +2033,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             <Button variant="primary" size="sm" className="disabled:cursor-not-allowed"
               type="button"
               disabled={monthLocked || saving || dirtyCount === 0}
-             
+
               style={{ opacity: monthLocked ? 0.45 : saving || dirtyCount === 0 ? 0.6 : 1 }}
               onClick={handleSave}
             >
@@ -2362,7 +2362,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                           <Button variant="link" size="sm"
                             type="button"
                             disabled={monthLocked}
-                           
+
                             onClick={() => {
                               setFillRowKey(row.key === fillRowKey ? null : row.key);
                               setFillRowValue("");
@@ -2667,7 +2667,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               </Button>
               <Button variant="primary" size="sm"
                 type="button"
-               
+
                 onClick={() => {
                   const row = visibleRows.find((r) => r.key === fillRowKey);
                   if (row) applyFillRow(row, fillRowValue);
@@ -2745,7 +2745,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             <div className="flex justify-end gap-2">
               <Button variant="secondary" size="sm"
                 type="button"
-               
+
                 onClick={() => {
                   setShowAddGuard(false);
                   setAddBrokerId("");
@@ -2756,7 +2756,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               <Button variant="primary" size="sm"
                 type="button"
                 disabled={!addGuardId || !addShiftTypeId}
-               
+
                 onClick={handleAddGuardRow}
               >
                 加入

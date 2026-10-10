@@ -37,12 +37,12 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-testid="report-kpis">
         <div className={`${card} px-3 py-3.5 lg:px-[18px] lg:py-4`}>
           <div className="text-zk-sm text-zk-muted">總收入</div>
-          <div className="mt-1 break-all text-zk-2xl font-bold leading-tight text-zk-text">{fmtMoney(report.totals.revenue)}</div>
+          <div className="mt-1 whitespace-nowrap text-zk-2xl font-bold leading-tight text-zk-text max-lg:text-zk-xl">{fmtMoney(report.totals.revenue)}</div>
           <div className="mt-1.5 text-zk-xs text-zk-muted">{siteCount} 個盤 · {fmtMoney(shiftSum)} 更</div>
         </div>
-        <div className={`${card} col-span-2 px-[18px] py-4 lg:col-span-1`}>
+        <div className={`${card} col-span-2 px-[18px] py-4 max-lg:order-last lg:col-span-1`}>
           <div className="text-zk-sm text-zk-muted">總成本{report.totals.cost_basis === "combined" ? "（合併）" : "（毛利表口徑）"}</div>
-          <div className="mt-1 break-all text-zk-2xl font-bold leading-tight text-zk-text">{fmtMoney(report.totals.cost)}</div>
+          <div className="mt-1 whitespace-nowrap text-zk-2xl font-bold leading-tight text-zk-text max-lg:text-zk-xl">{fmtMoney(report.totals.cost)}</div>
           {stack && (
             <>
               <div className="mt-2.5 flex h-1.5 overflow-hidden rounded-[3px] bg-zk-surface" data-testid="cost-stack">
@@ -61,7 +61,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
         <div className={`${card} px-3 py-3.5 lg:px-[18px] lg:py-4`}>
           <div className="text-zk-sm text-zk-muted">毛利{report.totals.cost_basis === "combined" ? "（合併口徑）" : ""}</div>
           <div className="mt-1 flex flex-wrap items-baseline gap-2">
-            <span className="break-all text-zk-2xl font-bold leading-tight text-zk-text">{fmtMoney(report.totals.gross_margin)}</span>
+            <span className="whitespace-nowrap text-zk-2xl font-bold leading-tight text-zk-text max-lg:text-zk-xl">{fmtMoney(report.totals.gross_margin)}</span>
             {pct !== null && <span className="text-zk-base font-semibold text-zk-success">{pct}%</span>}
           </div>
           <details className="mt-1.5 text-zk-xs text-zk-muted" data-testid="margin-why">
@@ -111,7 +111,8 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
       {report.auto && <AutoSummaryCard auto={report.auto} extraFooter={<PostorderDependencyLine auto={report.auto} month={report.month} />} />}
       {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} locked={locked} onOpenTriage={onOpenTriage} />}
 
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      {/* 斷點例外：兩張表並排要 ≥1280（xl），1024–1279 名欄會逐字斷行——§8.4「兩門檻＋ReportSection 內層例外」。 */}
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className={`${card} overflow-hidden`}>
           <div className="flex items-baseline justify-between px-4 py-3 text-zk-base font-semibold">
             <h3>逐雞頭應付</h3>

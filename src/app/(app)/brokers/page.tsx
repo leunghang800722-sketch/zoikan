@@ -376,7 +376,7 @@ export default function BrokersPage() {
                           <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                           
+
                           >
                             恢復
                           </Button>
@@ -479,7 +479,7 @@ export default function BrokersPage() {
                           <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onFeeRateUnvoid(r.id)}
-                           
+
                           >
                             解除作廢
                           </Button>

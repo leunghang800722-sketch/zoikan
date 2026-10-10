@@ -96,7 +96,7 @@ function AuditDiff({ before, after }: { before: unknown; after: unknown }) {
           <tbody>
             {diff.map((d) => (
               <tr key={d.key} className="align-top">
-                <td className="pr-2 font-medium text-zk-text-secondary">{d.label}</td>
+                <td className="pr-2 font-medium text-zk-text-secondary" title={d.key}>{d.label}</td>
                 <td className="pr-2 break-all text-zk-muted">{d.before}</td>
                 <td className="break-all text-zk-text">{d.after}</td>
               </tr>
