@@ -454,9 +454,10 @@ export function GuardsClient({
     });
     if (seq !== loadSeqRef.current) return; // 已有更新嘅一次 load，呢個舊 response 丟棄
     // B-5（階段 1 驗收員補充）：保安員 >500 時 `take=500` 會靜靜截斷——逐頁拉齊 `total`。
-    while (guardRes.ok && guardRes.data.rows.length < guardRes.data.total) {
+    // （skip 按頁前進；有啲 session 嘅 DTO 轉換會喺分頁後剔走個別行，唔可以用 rows.length 做 skip。）
+    for (let skip = 500; guardRes.ok && skip < guardRes.data.total; skip += 500) {
       const next = await apiRequest<ApiListResult<GuardRow>>(
-        `/api/guards?take=500&skip=${guardRes.data.rows.length}&with_month_shifts=${month}${expiringParam}${identityParam}`,
+        `/api/guards?take=500&skip=${skip}&with_month_shifts=${month}${expiringParam}${identityParam}`,
         { headers: qHeaders, signal: ctrl.signal },
       );
       if (seq !== loadSeqRef.current) return;

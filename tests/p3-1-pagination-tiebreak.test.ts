@@ -86,4 +86,23 @@ describe("P3-1.9 apiGetAll（ui client）", () => {
     const rf = await apiGetAll("/api/y");
     expect(rf.ok).toBe(false);
   });
+
+  it("P3-2：server 喺分頁後剔走個別行（rows<take）→ skip 仍然按頁（0／500／1000）前進，唔重複唔錯位", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        const u = new URL(url, "http://t");
+        const skip = Number(u.searchParams.get("skip"));
+        const take = Number(u.searchParams.get("take"));
+        // 每頁 DB 行 skip..skip+take，但 server 剔走偶數行
+        const rows = Array.from({ length: Math.max(0, Math.min(take, 1234 - skip)) }, (_, i) => ({ n: skip + i })).filter((r) => r.n % 2 === 1);
+        return new Response(JSON.stringify({ rows, total: 1234, skip, take }), { status: 200 });
+      }),
+    );
+    const res = await apiGetAll<{ n: number }>("/api/z");
+    expect(urls).toEqual(["/api/z?skip=0&take=500", "/api/z?skip=500&take=500", "/api/z?skip=1000&take=500"]);
+    expect(res.ok && new Set(res.data.rows.map((r) => r.n)).size).toBe(617);
+  });
 });
