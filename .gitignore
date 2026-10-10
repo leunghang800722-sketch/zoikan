@@ -37,7 +37,7 @@ tsconfig.tsbuildinfo
 # 規劃文件含安員姓名／工號（老闆營運文件），本機保留唔入 git；設計文件冇真名照 track
 P0-執行計劃.md
 P1-執行計劃.md
-archive/
+/archive/
 # 所有生成輸出
 out/
 
