@@ -40,7 +40,7 @@ interface ReceivableResult {
  * 「‹ 2026 年 7 月 ›」。 */
 function MonthChip({ month, onChange }: { month: string; onChange: (next: string) => void }) {
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[5px] text-[13px] text-[#334155]">
+    <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[5px] text-zk-base text-zk-text-secondary">
       <button
         type="button"
         aria-label="上個月"
@@ -113,11 +113,11 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-4">
         <div>
-          <div className="text-xs text-zk-muted md:text-[12.5px]">
+          <div className="text-xs text-zk-muted md:text-zk-sm">
             <span className="md:hidden">{fmtMonthDayWeekday(todayLocalStr())} · 雞頭</span>
             <span className="hidden md:inline">{`雞頭 · ${fmtYearMonthZh(month)}`}</span>
           </div>
-          <h1 className="mt-0.5 text-[20px] font-bold text-zk-text md:text-[22px] md:tracking-[-0.01em]">
+          <h1 className="mt-0.5 text-zk-xl font-bold text-zk-text md:text-zk-xl md:tracking-[-0.01em]">
             <span className="md:hidden">
               {greetingWord()}，{userName}
             </span>
@@ -151,7 +151,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
               // `text-zk-text`（黑色 30px），README 明寫呢個狀態要用灰色
               // `#94a3b8`——`value` 本身接受 ReactNode，用 <span> 包裹
               // 單獨畀返個灰色，唔使改 KpiCard（R1 共用元件）。
-              value={data.quota ? `${data.quota.scheduled_shifts}/${data.quota.target_shifts}` : <span className="text-[#94a3b8]">未設</span>}
+              value={data.quota ? `${data.quota.scheduled_shifts}/${data.quota.target_shifts}` : <span className="text-zk-faint">未設</span>}
               tone="default"
               href="/quotas"
               note={data.quota ? undefined : `${fmtYearMonthZh(month)} 冇配額限制`}
@@ -165,7 +165,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
             <KpiCard label="本月應收" value={receivable ? fmtMoney(receivable.total) : "—"} href="/my-receivable" note={<span className="text-zk-primary">逐日明細 ›</span>} />
             <KpiCard
               label="配額"
-              value={data.quota ? `${data.quota.scheduled_shifts}/${data.quota.target_shifts}` : <span className="text-[#94a3b8]">未設</span>}
+              value={data.quota ? `${data.quota.scheduled_shifts}/${data.quota.target_shifts}` : <span className="text-zk-faint">未設</span>}
               href="/quotas"
             />
             <KpiCard label="自己保安員" value={data.guard_count} href="/guards" />
@@ -224,7 +224,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
 
           {/* 手機：「我有份嘅盤」列表卡。 */}
           <div className="flex flex-col gap-2 md:hidden">
-            <div className="text-[13.5px] font-semibold text-zk-text">我有份嘅盤</div>
+            <div className="text-zk-base font-semibold text-zk-text">我有份嘅盤</div>
             <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
               {data.sites.length === 0 ? (
                 <EmptyState title="呢個月未有份任何盤" description="呢個月未指派任何盤，亦未有排更記錄。" />
@@ -233,9 +233,9 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
                   <Link
                     key={s.site_id}
                     href={`/roster/${s.site_id}/${month}`}
-                    className="flex items-center gap-2.5 border-b border-[#f1f5f9] px-3.5 py-3 last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
+                    className="flex items-center gap-2.5 border-b border-zk-border-soft px-3.5 py-3 last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
                   >
-                    <div className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-zk-text">{s.site_name}</div>
+                    <div className="min-w-0 flex-1 truncate text-zk-base font-medium text-zk-text">{s.site_name}</div>
                     <div className="text-xs text-zk-muted">{s.shifts} 更</div>
                     <span className="text-zk-faint">›</span>
                   </Link>

@@ -56,7 +56,7 @@ export interface MonthPickerProps {
 export function MonthPicker({ value, onChange, label, testId, ariaLabel = "月份", allowEmpty = false, className }: MonthPickerProps) {
   const base = isValidMonth(value) ? value : currentMonthStr();
   return (
-    <div className={`inline-flex items-center gap-1 rounded-md border border-zk-border bg-white px-2 py-[3px] text-[13px] text-[#334155] ${className ?? ""}`} data-month-picker="">
+    <div className={`inline-flex items-center gap-1 rounded-md border border-zk-border bg-white px-2 py-[3px] text-zk-base text-zk-text-secondary ${className ?? ""}`} data-month-picker="">
       {label && <span className="text-xs text-zk-faint">{label}</span>}
       <button type="button" aria-label="上一個月" className="px-1 text-zk-faint hover:text-zk-text" onClick={() => onChange(addMonthsStr(base, -1))}>
         ‹
@@ -72,7 +72,7 @@ export function MonthPicker({ value, onChange, label, testId, ariaLabel = "月�
           if (v === "" && !allowEmpty) return; // 原生 month 清空會回 ""，月份欄唔接受
           onChange(v);
         }}
-        className="w-[150px] border-0 bg-transparent p-0 py-0.5 text-[13px] text-[#334155] outline-none"
+        className="w-[150px] border-0 bg-transparent p-0 py-0.5 text-zk-base text-zk-text-secondary outline-none"
       />
       <button type="button" aria-label="下一個月" className="px-1 text-zk-faint hover:text-zk-text" onClick={() => onChange(addMonthsStr(base, 1))}>
         ›

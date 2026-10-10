@@ -272,22 +272,22 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
             {totals.map((t) => (
               <div
                 key={t.broker_id ?? "unattributed"}
-                className="flex items-center justify-between gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0"
+                className="flex items-center justify-between gap-2.5 border-b border-zk-border-soft px-3.5 py-2.5 last:border-b-0"
                 style={t.broker_id === null ? { background: "#fef2f2" } : undefined}
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="truncate text-[13px] font-medium text-zk-text">{t.broker_name}</span>
+                    <span className="truncate text-zk-base font-medium text-zk-text">{t.broker_name}</span>
                     <Pill variant="neutral">{t.broker_code}</Pill>
                   </div>
-                  <div className="mt-0.5 text-[11.5px] text-zk-muted">
+                  <div className="mt-0.5 text-zk-xs text-zk-muted">
                     {t.broker_id === null ? "未歸屬" : kindLabel(t.broker_kind)} · {t.shifts} 更
                   </div>
                 </div>
-                <div className="shrink-0 text-[13px] font-semibold text-zk-text">{fmtMoney(t.amount)}</div>
+                <div className="shrink-0 text-zk-base font-semibold text-zk-text">{fmtMoney(t.amount)}</div>
               </div>
             ))}
-            <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-[13px] font-bold text-zk-text">
+            <div className="flex items-center justify-between border-t border-zk-border bg-zk-header px-3.5 py-2.5 text-zk-base font-bold text-zk-text">
               <span>Total {grand.shifts} 更</span>
               <span>{fmtMoney(grand.amount)}</span>
             </div>

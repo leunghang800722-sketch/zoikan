@@ -258,14 +258,14 @@ export default function GrossMarginPage() {
                   <td className={tableCls.tdNum}>{fmtMoney(s.revenue)}</td>
                   <td className={tableCls.tdNum}>{fmtMoney(s.cost)}</td>
                   <td className={tableCls.tdNum}>{fmtMoney(s.profit)}</td>
-                  <td className={s.below_threshold ? "border-b border-[#f1f5f9] px-3.5 py-2.5 text-right font-bold text-[#dc2626]" : tableCls.tdNum}>
+                  <td className={s.below_threshold ? "border-b border-zk-border-soft px-3.5 py-2.5 text-right font-bold text-zk-danger" : tableCls.tdNum}>
                     {s.margin_pct == null ? "—" : `${s.margin_pct}%`}
                   </td>
                   <td className={tableCls.tdMuted}>{s.note ?? (s.is_monthly_fee ? "月費盤 · 更數越多毛利越低" : "")}</td>
                 </tr>
                 {expanded[s.site_id] &&
                   s.shift_types.map((st, i) => (
-                    <tr key={`${s.site_id}-${i}`} className="border-b border-[#f1f5f9] bg-zk-header/50 text-xs text-zk-muted">
+                    <tr key={`${s.site_id}-${i}`} className="border-b border-zk-border-soft bg-zk-header/50 text-xs text-zk-muted">
                       <td className="px-3.5 py-1.5 pl-9">
                         {st.code}
                         {st.label ? `（${st.label}）` : ""}
@@ -282,7 +282,7 @@ export default function GrossMarginPage() {
                     </tr>
                   ))}
                 {expanded[s.site_id] && ((s.referral_fee ?? 0) > 0 || (s.longterm_salary_allocated ?? 0) > 0) && (
-                  <tr className="border-b border-[#f1f5f9] bg-zk-header/50 text-xs text-zk-muted">
+                  <tr className="border-b border-zk-border-soft bg-zk-header/50 text-xs text-zk-muted">
                     <td className="px-3.5 py-1.5 pl-9">長工雞頭費 / 長工月薪分攤</td>
                     <td></td>
                     <td></td>
@@ -323,13 +323,13 @@ export default function GrossMarginPage() {
               key={s.site_id}
               href={`/roster/${s.site_id}/${month}`}
               data-testid="gross-margin-row-mobile"
-              className={`flex flex-col gap-1 rounded-[10px] border border-zk-border px-3.5 py-3 ${s.below_threshold ? "bg-[#fef2f2]" : "bg-white"}`}
+              className={`flex flex-col gap-1 rounded-[10px] border border-zk-border px-3.5 py-3 ${s.below_threshold ? "bg-zk-danger-bg" : "bg-white"}`}
             >
               <div className="flex items-center justify-between">
-                <div className="truncate text-[13.5px] font-medium text-zk-text">{s.site_name}</div>
-                <div className={`text-[13px] font-bold ${s.below_threshold ? "text-[#dc2626]" : "text-zk-text"}`}>{s.margin_pct == null ? "—" : `${s.margin_pct}%`}</div>
+                <div className="truncate text-zk-base font-medium text-zk-text">{s.site_name}</div>
+                <div className={`text-zk-base font-bold ${s.below_threshold ? "text-zk-danger" : "text-zk-text"}`}>{s.margin_pct == null ? "—" : `${s.margin_pct}%`}</div>
               </div>
-              <div className="text-[11.5px] text-zk-muted">
+              <div className="text-zk-xs text-zk-muted">
                 {s.shifts} 更 · 毛利 {fmtMoney(s.profit)} / 營業額 {fmtMoney(s.revenue)}
               </div>
             </Link>

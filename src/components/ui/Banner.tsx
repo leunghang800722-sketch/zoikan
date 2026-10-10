@@ -2,9 +2,9 @@ export function Banner({ kind, message }: { kind: "error" | "success" | "info"; 
   if (!message) return null;
   const cls =
     kind === "error"
-      ? "border-red-300 bg-red-50 text-red-700"
+      ? "border-zk-danger-border bg-zk-danger-bg text-zk-danger-dark"
       : kind === "success"
-        ? "border-green-300 bg-green-50 text-green-700"
-        : "border-blue-300 bg-blue-50 text-blue-700";
+        ? "border-zk-success/30 bg-zk-success-bg text-zk-success-dark"
+        : "border-zk-primary/30 bg-zk-primary-tint-soft text-zk-primary-dark";
   return <div className={`rounded border px-3 py-2 text-sm ${cls}`}>{message}</div>;
 }

@@ -230,7 +230,7 @@ export default function GuardImportPage() {
 
   return (
     <div className="space-y-4">
-      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-[13px] text-zk-primary hover:underline">
+      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-zk-base text-zk-primary hover:underline">
         ‹ 返回保安員
       </Link>
       <PageHeader kicker={kickerFor("/guards/import")} title="保安員證件資料導入" subtitle="上載本機產生嘅導入包 → 預覽 → 套用自動項 → 覆核待確認欄。導入包唔會存入系統。" />
@@ -238,7 +238,7 @@ export default function GuardImportPage() {
       <Banner kind="success" message={notice} />
 
       <div className="rounded-lg border border-zk-border p-3">
-        <label className="flex flex-wrap items-center gap-2 text-[13px]">
+        <label className="flex flex-wrap items-center gap-2 text-zk-base">
           導入包（JSON）
           <input type="file" accept="application/json,.json" onChange={(e) => onFile(e.target.files?.[0])} data-testid="import-file" />
           {fileName && <span className="text-zk-faint">{fileName}</span>}
@@ -258,14 +258,14 @@ export default function GuardImportPage() {
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4" data-testid="import-person-stats">
             {(["link", "create", "conflict", "needs_review"] as const).map((a) => (
               <div key={a} className="rounded-lg border border-zk-border p-3">
-                <div className="text-[12px] text-zk-faint">{ACTION_LABEL[a]}</div>
+                <div className="text-zk-sm text-zk-faint">{ACTION_LABEL[a]}</div>
                 <div className="text-xl font-semibold">{preview.person_stats[a] ?? 0}</div>
               </div>
             ))}
           </div>
 
           <div className="overflow-x-auto rounded-lg border border-zk-border">
-            <table className="w-full text-[12.5px]">
+            <table className="w-full text-zk-sm">
               <thead>
                 <tr className="text-left text-zk-faint">
                   <th className="p-2">欄位</th>
@@ -288,11 +288,11 @@ export default function GuardImportPage() {
           </div>
 
           {(preview.ext_stats || (preview.package.unassigned_bank_accounts ?? 0) > 0) && (
-            <div className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-ext-summary">
+            <div className="space-y-2 rounded-lg border border-zk-border p-3 text-zk-base" data-testid="import-ext-summary">
               <div className="font-semibold">新增欄位（牌照／平安咭／QAS／入職日期／銀行／緊急聯絡人）</div>
               {preview.ext_stats && (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-[12.5px]">
+                  <table className="w-full text-zk-sm">
                     <thead>
                       <tr className="text-left text-zk-faint">
                         <th className="p-1">欄位</th>
@@ -312,19 +312,19 @@ export default function GuardImportPage() {
                       ))}
                     </tbody>
                   </table>
-                  <div className="mt-1 text-[12px] text-zk-muted">只補空欄；{preview.counts_hidden || preview.viewer?.bank_view === false ? "" : `現值唔同（唔覆蓋、會出分診題）：${preview.ext_stats.conflicts}；`}待覆核同現值唔同嘅會出分診題。</div>
+                  <div className="mt-1 text-zk-sm text-zk-muted">只補空欄；{preview.counts_hidden || preview.viewer?.bank_view === false ? "" : `現值唔同（唔覆蓋、會出分診題）：${preview.ext_stats.conflicts}；`}待覆核同現值唔同嘅會出分診題。</div>
                 </div>
               )}
               {(preview.package.unassigned_bank_accounts ?? 0) > 0 && (
-                <div className="text-orange-700" data-testid="import-unassigned-bank">有 {preview.package.unassigned_bank_accounts} 個 Payroll Editor 戶口對唔到人，套用後會喺待答問題逐個問你歸邊個。</div>
+                <div className="text-zk-warning" data-testid="import-unassigned-bank">有 {preview.package.unassigned_bank_accounts} 個 Payroll Editor 戶口對唔到人，套用後會喺待答問題逐個問你歸邊個。</div>
               )}
               {preview.rows.filter((r) => r.bank_masked).length > 0 && (
                 <div className="space-y-1" data-testid="import-bank-rows">
-                  <div className="text-[12px] font-semibold text-zk-muted">銀行戶口（預設遮罩）</div>
+                  <div className="text-zk-sm font-semibold text-zk-muted">銀行戶口（預設遮罩）</div>
                   {preview.rows.filter((r) => r.bank_masked).slice(0, shown).map((r) => {
                     const full = preview.viewer?.bank_view ? (pkg?.persons[r.index]?.bank as { accountNo?: { value: string | null } } | undefined)?.accountNo?.value : null;
                     return (
-                      <div key={r.index} className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
+                      <div key={r.index} className="flex flex-wrap items-center gap-x-2 text-zk-sm">
                         <span className="text-zk-faint">{r.hkid_masked ?? "—"}</span>
                         {r.bank_masked && "account_masked" in r.bank_masked ? (
                           <span className="break-all">{r.bank_masked.name ?? r.bank_masked.code ?? "—"} · 戶口 {showFull[r.index] && full ? full : (r.bank_masked.account_masked ?? "—")}</span>
@@ -332,7 +332,7 @@ export default function GuardImportPage() {
                           <span className="text-zk-faint">有銀行資料（你冇「保安員銀行資料」睇權，唔顯示）</span>
                         )}
                         {full && (
-                          <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-[11.5px]" onClick={() => setShowFull((m) => ({ ...m, [r.index]: !m[r.index] }))}>
+                          <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-zk-xs" onClick={() => setShowFull((m) => ({ ...m, [r.index]: !m[r.index] }))}>
                             {showFull[r.index] ? "隱藏全號" : "顯示全號"}
                           </button>
                         )}
@@ -340,13 +340,13 @@ export default function GuardImportPage() {
                     );
                   })}
                   {pkg?.unassignedBankAccounts && preview.viewer?.bank_view && (
-                    <div className="text-[12px] text-zk-muted">對唔到人嘅戶口（尾 4 位）：{pkg.unassignedBankAccounts.map((u) => maskAcct(u.accountNo)).join("、")}</div>
+                    <div className="text-zk-sm text-zk-muted">對唔到人嘅戶口（尾 4 位）：{pkg.unassignedBankAccounts.map((u) => maskAcct(u.accountNo)).join("、")}</div>
                   )}
                 </div>
               )}
             </div>
           )}
-          <div className="rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-auto-summary">
+          <div className="rounded-lg border border-zk-border p-3 text-zk-base" data-testid="import-auto-summary">
             自動套用（淨寫已確認欄）：{preview.auto_apply.persons} 人 · 新增保安員 {preview.auto_apply.guards_to_create} · 補欄 {preview.auto_apply.guard_fields_to_fill} ·
             電話 {preview.auto_apply.phones_to_add} · 地址 {preview.auto_apply.addresses_to_add} · 工號 {preview.auto_apply.staff_numbers_to_add} {preview.counts_hidden ? "" : `· 現值唔同（唔覆蓋）${preview.auto_apply.field_conflicts}`}
             <div className="mt-2 flex items-center gap-2">
@@ -356,7 +356,7 @@ export default function GuardImportPage() {
                 </Button>
               ) : (
                 <>
-                  <span className="text-orange-700">確認套用 {preview.auto_apply.persons} 人？會寫入並留 audit。</span>
+                  <span className="text-zk-warning">確認套用 {preview.auto_apply.persons} 人？會寫入並留 audit。</span>
                   <Button variant="danger" disabled={busy} onClick={onApplyAuto}>
                     {busy ? "套用緊…" : "確認套用"}
                   </Button>
@@ -365,14 +365,14 @@ export default function GuardImportPage() {
               )}
             </div>
           </div>
-          {applyRes && <div className="text-[12.5px] text-zk-muted">結果：{JSON.stringify(applyRes.outcomes)}</div>}
+          {applyRes && <div className="text-zk-sm text-zk-muted">結果：{JSON.stringify(applyRes.outcomes)}</div>}
           {applyRes?.triage?.owned_by_other && (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px]" data-testid="triage-owned-by-other">
+            <div className="rounded-lg border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base" data-testid="triage-owned-by-other">
               呢個檔案之前已經有同事上載過，問題會由佢（或者老闆）跟進。
             </div>
           )}
           {applyRes?.triage && !applyRes.triage.owned_by_other && triageOpen > 0 && !triageSession && (
-            <div className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px]" data-testid="triage-reopen">
+            <div className="flex items-center gap-2 rounded-lg border border-zk-warning-border bg-zk-warning-bg p-3 text-zk-base" data-testid="triage-reopen">
               <span>有 {triageOpen} 條待答問題</span>
               <Button variant="primary" onClick={() => setTriageSession(applyRes.triage!.session_id ?? null)}>
                 繼續答
@@ -385,7 +385,7 @@ export default function GuardImportPage() {
           {reviewRows.slice(0, shown).map((r) => {
             const person = pkg?.persons[r.index];
             return (
-              <div key={r.index} className="space-y-2 rounded-lg border border-zk-border p-3 text-[13px]" data-testid="import-review-card">
+              <div key={r.index} className="space-y-2 rounded-lg border border-zk-border p-3 text-zk-base" data-testid="import-review-card">
                 <div className="flex flex-wrap items-center gap-2">
                   <Pill variant="neutral">{ACTION_LABEL[r.action]}</Pill>
                   <span className="text-zk-faint">身份證 {r.hkid_masked ?? "—"} · 電話 {r.phone_masked ?? "—"}</span>
@@ -405,7 +405,7 @@ export default function GuardImportPage() {
                   return (
                     <div key={f} className="grid grid-cols-1 items-center gap-2 md:grid-cols-[90px_1fr_auto]">
                       <div className="text-zk-faint">
-                        {FIELD_LABEL[f]} <span className="text-[11px]">（{CHECK_LABEL[r.fields[f]?.check ?? ""] ?? ""}）</span>
+                        {FIELD_LABEL[f]} <span className="text-zk-xs">（{CHECK_LABEL[r.fields[f]?.check ?? ""] ?? ""}）</span>
                       </div>
                       <div>
                         <input
@@ -414,13 +414,13 @@ export default function GuardImportPage() {
                           onChange={(e) => setEdits((s) => ({ ...s, [k]: e.target.value }))}
                           aria-label={`${FIELD_LABEL[f]}抽取值`}
                         />
-                        {current ? <div className="mt-0.5 text-[11.5px] text-zk-faint">現值：{current}</div> : null}
-                        {!current && r.current_name_hidden && (f === "name_zh" || f === "name_en") ? <div className="mt-0.5 text-[11.5px] text-zk-faint">姓名同現有保安員紀錄唔同（要有保安員個人資料權限先睇到）</div> : null}
-                        {replaceDenied(f, r.fields[f]?.check ?? "") ? <div className="mt-0.5 text-[11.5px] text-orange-700">呢條要有保安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
+                        {current ? <div className="mt-0.5 text-zk-xs text-zk-faint">現值：{current}</div> : null}
+                        {!current && r.current_name_hidden && (f === "name_zh" || f === "name_en") ? <div className="mt-0.5 text-zk-xs text-zk-faint">姓名同現有保安員紀錄唔同（要有保安員個人資料權限先睇到）</div> : null}
+                        {replaceDenied(f, r.fields[f]?.check ?? "") ? <div className="mt-0.5 text-zk-xs text-zk-warning">呢條要有保安員個人資料修改權限嘅同事（例如老闆）答</div> : null}
                       </div>
                       <div className="flex items-center gap-1.5">
                         {done[k] ? (
-                          <span className="text-[12px] text-zk-muted">{done[k]}</span>
+                          <span className="text-zk-sm text-zk-muted">{done[k]}</span>
                         ) : (
                           <>
                             <Button variant="primary" disabled={busy} onClick={() => onDecide(r.index, f, "confirm")}>

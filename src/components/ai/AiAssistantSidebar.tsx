@@ -436,7 +436,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             data-testid="ai-assistant-tab"
             aria-label="開啟在勤助手"
             onClick={() => setOpen(true)}
-            className="fixed right-0 top-[120px] z-30 hidden rounded-l-md bg-[#0f172a] px-[7px] py-3 text-xs tracking-[.1em] text-white shadow-md hover:bg-[#1e293b] lg:block"
+            className="fixed right-0 top-[120px] z-30 hidden rounded-l-md bg-zk-dark px-[7px] py-3 text-xs tracking-[.1em] text-white shadow-md hover:bg-zk-dark-hover lg:block"
             style={{ writingMode: "vertical-rl" }}
           >
             在勤助手
@@ -447,7 +447,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             data-testid="ai-assistant-fab"
             aria-label="開啟在勤助手"
             onClick={() => setOpen(true)}
-            className="fixed right-4 bottom-6 z-30 flex h-[52px] w-[52px] items-center justify-center rounded-full bg-[#0f172a] text-xs font-semibold text-white shadow-[0_6px_18px_rgba(15,23,42,.3)] lg:hidden"
+            className="fixed right-4 bottom-6 z-30 flex h-[52px] w-[52px] items-center justify-center rounded-full bg-zk-dark text-xs font-semibold text-white shadow-[0_6px_18px_rgba(15,23,42,.3)] lg:hidden"
           >
             助手
           </button>
@@ -487,7 +487,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   onClick={handleStartMeeting}
                   disabled={meetingStarting}
                   title="開會反映——同助手講清楚想反映嘅現場問題／改動訴求"
-                  className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface disabled:opacity-50"
+                  className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface disabled:opacity-50"
                 >
                   {meetingStarting ? "開緊…" : "開會反映"}
                 </button>
@@ -497,7 +497,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   type="button"
                   onClick={toggleWidth}
                   aria-label={width >= WIDE_WIDTH ? "縮窄側欄" : "擴闊側欄"}
-                  className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface"
+                  className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface"
                 >
                   {width >= WIDE_WIDTH ? "窄" : "闊"}
                 </button>
@@ -507,7 +507,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   type="button"
                   data-testid="ai-clear-conversation"
                   onClick={() => setConfirmingClear(true)}
-                  className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface"
+                  className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface"
                 >
                   清空
                 </button>
@@ -516,7 +516,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 type="button"
                 aria-label="關閉在勤助手"
                 onClick={() => setOpen(false)}
-                className="rounded px-1.5 py-1 text-[11px] text-zk-muted hover:bg-zk-surface"
+                className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface"
               >
                 關閉
               </button>
@@ -524,13 +524,13 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
           </div>
 
           {!meetingMode && confirmingClear && (
-            <div className="flex items-center justify-between gap-2 border-b border-yellow-200 bg-yellow-50 px-4 py-2 text-xs text-yellow-800">
+            <div className="flex items-center justify-between gap-2 border-b border-zk-warning-border bg-zk-warning-bg px-4 py-2 text-xs text-zk-warning-dark">
               <span>確定清空成個對話記錄？呢個動作唔可以復原。</span>
               <div className="flex shrink-0 gap-2">
-                <button type="button" data-testid="ai-clear-confirm" onClick={handleClear} className="rounded bg-yellow-600 px-2 py-1 text-white">
+                <button type="button" data-testid="ai-clear-confirm" onClick={handleClear} className="rounded bg-zk-warning-darker px-2 py-1 text-white">
                   確定清空
                 </button>
-                <button type="button" onClick={() => setConfirmingClear(false)} className="rounded border border-yellow-300 px-2 py-1 text-yellow-800">
+                <button type="button" onClick={() => setConfirmingClear(false)} className="rounded border border-zk-warning-border px-2 py-1 text-zk-warning-dark">
                   取消
                 </button>
               </div>
@@ -547,27 +547,27 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             preview ? (
               <div data-testid="ai-feedback-preview" className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
                 <div className="space-y-1">
-                  <div className="text-[11px] font-semibold text-zk-faint">提出人（唔可以改）</div>
-                  <div className="rounded-md border border-zk-border bg-zk-surface px-3 py-2 text-[13px] text-zk-text-secondary">{preview.reporter}</div>
+                  <div className="text-zk-xs font-semibold text-zk-faint">提出人（唔可以改）</div>
+                  <div className="rounded-md border border-zk-border bg-zk-surface px-3 py-2 text-zk-base text-zk-text-secondary">{preview.reporter}</div>
                 </div>
                 {EDITABLE_FEEDBACK_FIELDS.map(({ key, label }) => (
                   <div key={key} className="space-y-1">
-                    <div className="text-[11px] font-semibold text-zk-faint">{label}</div>
+                    <div className="text-zk-xs font-semibold text-zk-faint">{label}</div>
                     <textarea
                       data-testid={`ai-feedback-field-${key}`}
                       value={preview[key]}
                       onChange={(e) => handlePreviewFieldChange(key, e.target.value)}
                       rows={key === "title" ? 1 : 3}
-                      className="w-full resize-none rounded-md border border-zk-input-border px-2.5 py-2 text-[13px] focus:border-zk-primary focus:outline-none"
+                      className="w-full resize-none rounded-md border border-zk-input-border px-2.5 py-2 text-zk-base focus:border-zk-primary focus:outline-none"
                     />
                   </div>
                 ))}
                 <div className="space-y-1">
-                  <div className="text-[11px] font-semibold text-zk-faint">（唔可以改）</div>
-                  <div className="rounded-md border border-zk-border bg-zk-surface px-3 py-2 text-[12px] text-zk-muted">{preview.footer}</div>
+                  <div className="text-zk-xs font-semibold text-zk-faint">（唔可以改）</div>
+                  <div className="rounded-md border border-zk-border bg-zk-surface px-3 py-2 text-zk-sm text-zk-muted">{preview.footer}</div>
                 </div>
                 {meetingError && (
-                  <div data-testid="ai-error" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  <div data-testid="ai-error" className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">
                     {meetingError}
                   </div>
                 )}
@@ -577,14 +577,14 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                     data-testid="ai-feedback-submit"
                     onClick={handleConfirmSubmit}
                     disabled={submitting}
-                    className="flex-1 rounded-md bg-zk-primary px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-50"
+                    className="flex-1 rounded-md bg-zk-primary px-3 py-2 text-zk-base font-semibold text-white disabled:opacity-50"
                   >
                     {submitting ? "送出緊…" : "確認送出"}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPreview(null)}
-                    className="rounded-md border border-zk-border px-3 py-2 text-[13px] text-zk-text-secondary hover:bg-zk-surface"
+                    className="rounded-md border border-zk-border px-3 py-2 text-zk-base text-zk-text-secondary hover:bg-zk-surface"
                   >
                     返回對話
                   </button>
@@ -602,8 +602,8 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                       data-testid={m.role === "user" ? "ai-message-user" : "ai-message-assistant"}
                       className={
                         m.role === "user"
-                          ? "max-w-[86%] rounded-xl bg-zk-primary px-3 py-[9px] text-[13px] leading-[1.55] text-white"
-                          : "max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[13px] leading-[1.55] text-zk-text"
+                          ? "max-w-[86%] rounded-xl bg-zk-primary px-3 py-[9px] text-zk-base leading-[1.55] text-white"
+                          : "max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-zk-base leading-[1.55] text-zk-text"
                       }
                     >
                       {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : <span className="whitespace-pre-wrap">{m.content}</span>}
@@ -612,13 +612,13 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 ))}
                 {meetingSending && (
                   <div className="flex justify-start">
-                    <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[13px] text-zk-muted">
+                    <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-zk-base text-zk-muted">
                       {meetingStreamingText ? <span className="whitespace-pre-wrap">{meetingStreamingText}</span> : "思考緊…"}
                     </div>
                   </div>
                 )}
                 {meetingError && (
-                  <div data-testid="ai-error" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  <div data-testid="ai-error" className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">
                     {meetingError}
                   </div>
                 )}
@@ -632,7 +632,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
           >
             {showWelcome && (
               <div className="space-y-3" data-testid="ai-welcome">
-                <p className="text-[13px] text-zk-text-secondary">你好，{userName}，今日想問啲咩？</p>
+                <p className="text-zk-base text-zk-text-secondary">你好，{userName}，今日想問啲咩？</p>
                 <div className="flex flex-col gap-2">
                   {EXAMPLE_QUESTIONS.map((ex) => (
                     <button
@@ -640,7 +640,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                       type="button"
                       data-testid="ai-example-button"
                       onClick={() => handleSubmit(ex)}
-                      className="rounded-xl border border-zk-border px-2.5 py-1 text-left text-[11.5px] text-zk-text-secondary hover:bg-zk-header"
+                      className="rounded-xl border border-zk-border px-2.5 py-1 text-left text-zk-xs text-zk-text-secondary hover:bg-zk-header"
                     >
                       {ex}
                     </button>
@@ -655,8 +655,8 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   data-testid={m.role === "user" ? "ai-message-user" : "ai-message-assistant"}
                   className={
                     m.role === "user"
-                      ? `max-w-[86%] bg-zk-primary text-white ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-[9px] text-[13px] leading-[1.55]"}`
-                      : `max-w-[86%] bg-zk-surface text-zk-text ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-[9px] text-[13px] leading-[1.55]"}`
+                      ? `max-w-[86%] bg-zk-primary text-white ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-[9px] text-zk-base leading-[1.55]"}`
+                      : `max-w-[86%] bg-zk-surface text-zk-text ${isMobile ? "rounded-[14px] px-[13px] py-2.5 text-sm leading-relaxed" : "rounded-xl px-3 py-[9px] text-zk-base leading-[1.55]"}`
                   }
                 >
                   {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : <span className="whitespace-pre-wrap">{m.content}</span>}
@@ -669,7 +669,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
 
             {actionNotes.map((note, i) => (
               <div key={`note-${i}`} className="flex justify-start">
-                <div data-testid="ai-action-note" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[12.5px] text-zk-text-secondary">
+                <div data-testid="ai-action-note" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-zk-sm text-zk-text-secondary">
                   {note}
                 </div>
               </div>
@@ -677,14 +677,14 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
 
             {sending && (
               <div className="flex justify-start">
-                <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[13px] text-zk-muted">
+                <div data-testid="ai-thinking" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-zk-base text-zk-muted">
                   {streamingText ? <span className="whitespace-pre-wrap">{streamingText}</span> : "思考緊…"}
                 </div>
               </div>
             )}
 
             {errorMessage && (
-              <div data-testid="ai-error" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+              <div data-testid="ai-error" className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">
                 {errorMessage}
               </div>
             )}
@@ -718,7 +718,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                     className={
                       isMobile
                         ? "min-h-[44px] flex-1 resize-none rounded-[22px] border border-zk-input-border px-3.5 py-2.5 text-sm focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
-                        : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-[13px] focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+                        : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-zk-base focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
                     }
                   />
                   <button
@@ -741,7 +741,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                     data-testid="ai-feedback-summarize"
                     onClick={handleSummarize}
                     disabled={meetingTurnCount < 2 || summarizing || meetingSending}
-                    className="flex-1 rounded-md bg-[#0f172a] px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-40"
+                    className="flex-1 rounded-md bg-zk-dark px-3 py-2 text-zk-base font-semibold text-white disabled:opacity-40"
                   >
                     {summarizing ? "整理緊…" : "整理並送出"}
                   </button>
@@ -749,7 +749,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                     type="button"
                     data-testid="ai-feedback-cancel"
                     onClick={handleCancelMeeting}
-                    className="rounded-md border border-zk-border px-3 py-2 text-[13px] text-zk-text-secondary hover:bg-zk-surface"
+                    className="rounded-md border border-zk-border px-3 py-2 text-zk-base text-zk-text-secondary hover:bg-zk-surface"
                   >
                     取消開會
                   </button>
@@ -782,7 +782,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 className={
                   isMobile
                     ? "min-h-[44px] flex-1 resize-none rounded-[22px] border border-zk-input-border px-3.5 py-2.5 text-sm focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
-                    : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-[13px] focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
+                    : "min-h-[40px] flex-1 resize-none rounded-[10px] border border-zk-input-border px-3 py-2 text-zk-base focus:border-zk-primary focus:outline-none disabled:bg-zk-header"
                 }
               />
               <button
@@ -803,7 +803,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
 
           {meetingToast && (
             <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-              <div className="rounded-full bg-[#0f172a] px-4 py-2 text-xs text-white shadow-lg">{meetingToast}</div>
+              <div className="rounded-full bg-zk-dark px-4 py-2 text-xs text-white shadow-lg">{meetingToast}</div>
             </div>
           )}
         </div>

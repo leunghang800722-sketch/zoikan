@@ -465,18 +465,18 @@ export function RateCardsClient({
           snapshot 由 seed 直接寫，唔受呢個決定影響）。建卡之後 OT 記錄
           由「重新對數全月」／一鍵結算開頭嘅自動補價補返（reprice.ts）。 */}
       {otUnpricedGroups.length > 0 && (
-        <div className="rounded-[7px] border border-amber-200 bg-amber-50 p-3">
-          <div className="text-[13px] font-medium text-amber-800">未定價 OT（{otUnpricedGroups.reduce((a, g) => a + g.count, 0)} 條記錄）——建卡後重跑「一鍵結算」或「重新對數全月」先會補返價</div>
+        <div className="rounded-[7px] border border-zk-warning-border bg-zk-warning-bg p-3">
+          <div className="text-zk-base font-medium text-zk-warning-dark">未定價 OT（{otUnpricedGroups.reduce((a, g) => a + g.count, 0)} 條記錄）——建卡後重跑「一鍵結算」或「重新對數全月」先會補返價</div>
           <ul className="mt-1.5 space-y-1">
             {otUnpricedGroups.map((g, i) => (
-              <li key={`${g.site_id}-${g.shift_type_code}-${g.broker_code ?? "none"}-${i}`} className="flex items-center justify-between gap-2 text-[12.5px] text-amber-800">
+              <li key={`${g.site_id}-${g.shift_type_code}-${g.broker_code ?? "none"}-${i}`} className="flex items-center justify-between gap-2 text-zk-sm text-zk-warning-dark">
                 <span className="min-w-0 break-words">
                   {g.site_name} · {g.shift_type_code} · {g.broker_display}（{g.count} 條）
                 </span>
                 <button
                   type="button"
                   onClick={() => openCreateForOt(g.site_id, g.shift_type_code, g.broker_code)}
-                  className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 text-[12px] text-amber-800 hover:bg-amber-100"
+                  className="shrink-0 rounded border border-zk-warning-border bg-white px-2 py-0.5 text-zk-sm text-zk-warning-dark hover:bg-zk-warning-tint"
                 >
                   建卡
                 </button>
@@ -535,7 +535,7 @@ export function RateCardsClient({
                           <button
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                           >
                             解除作廢
                           </button>
@@ -555,20 +555,20 @@ export function RateCardsClient({
               return (
                 <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{siteLabel(r.site_id)}</span>
-                    <span className="text-[13px] tabular-nums text-zk-text">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</span>
+                    <span className="text-zk-base font-medium text-zk-text">{siteLabel(r.site_id)}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{hasClientRate ? fmtMoney(r.client_rate) : "—"}</span>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-zk-xs text-zk-muted">
                     {renderShiftTypeCell(r.shift_type_id)}
                     {r.broker_id && renderBrokerCell(r.broker_id)}
                     <span>{guardLabel(r.guard_id)}</span>
                   </div>
-                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 text-zk-xs text-zk-muted">
                     出街 {hasPayoutRate ? fmtMoney(r.payout_rate) : "—"} · 生效 {fmtDate(r.effective_from)}–{r.effective_to ? fmtDate(r.effective_to) : "無限期"}
                   </div>
                   <div className="mt-2">
                     {r.voided_at ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
                         解除作廢
                       </button>
                     ) : (
@@ -580,7 +580,7 @@ export function RateCardsClient({
             })}
           </div>
 
-          <div className="flex items-center justify-between text-[12.5px] text-zk-muted">
+          <div className="flex items-center justify-between text-zk-sm text-zk-muted">
             <span>
               共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
             </span>
@@ -651,7 +651,7 @@ export function RateCardsClient({
           {/* WP-PHASE3（item 4）：揀咗 OT 更種（code 開頭 "OT"）就提示卡金額
               單位——WP-BOSS5 §25.1（老闆 2026-09-28 決定 1）已經拍板。 */}
           {shiftTypes.find((s) => s.id === form.shift_type_id)?.code?.startsWith("OT") && (
-            <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12.5px] text-amber-800">
+            <div className="rounded-[7px] border border-zk-warning-border bg-zk-warning-bg px-2.5 py-1.5 text-zk-sm text-zk-warning-dark">
               老闆 2026-09-28 決定：OT 卡金額＝每小時價，系統寫入時已乘 OT 時數（2026-08-01 起嘅記錄；淨係 1 個鐘嘅 OT 同「每條記錄」睇落一樣）。人手直接輸入嘅 OT snapshot（唔經呢張卡自動計）一律當「該條記錄金額」，唔會再乘時數。
             </div>
           )}

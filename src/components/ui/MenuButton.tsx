@@ -37,9 +37,9 @@ export function MenuButton({ label, items, variant = "secondary", testId }: { la
 
   const btnCls =
     variant === "primary"
-      ? "border-[#2563eb] bg-[#2563eb] text-white font-semibold hover:bg-[#1d4ed8]"
-      : "border-[#d1d5db] bg-white text-[#334155] hover:bg-zk-header";
-  const itemCls = "block w-full px-3.5 py-2 text-left text-[13px] text-[#334155] hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-[.45]";
+      ? "border-zk-primary bg-zk-primary text-white font-semibold hover:bg-zk-primary-dark"
+      : "border-zk-input-border bg-white text-zk-text-secondary hover:bg-zk-header";
+  const itemCls = "block w-full px-3.5 py-2 text-left text-zk-base text-zk-text-secondary hover:bg-zk-header disabled:cursor-not-allowed disabled:opacity-[.45]";
 
   return (
     <div ref={ref} className="relative inline-block">
@@ -49,7 +49,7 @@ export function MenuButton({ label, items, variant = "secondary", testId }: { la
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className={`rounded-md border px-3.5 py-[7px] text-[13px] transition-colors ${btnCls}`}
+        className={`rounded-md border px-3.5 py-[7px] text-zk-base transition-colors ${btnCls}`}
       >
         {label} ▾
       </button>

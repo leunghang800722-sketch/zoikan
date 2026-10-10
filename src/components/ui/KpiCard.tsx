@@ -20,7 +20,7 @@ export function KpiCard({ label, value, note, href, tone = "default", children, 
     <>
       <div className="text-xs text-zk-muted">{label}</div>
       <div className="mt-1 flex items-baseline gap-2">
-        <span className={`text-[28px] leading-[1.1] font-bold md:text-[30px] ${tone === "danger" ? "text-[#dc2626]" : "text-zk-text"}`}>{value}</span>
+        <span className={`text-zk-2xl leading-[1.1] font-bold md:text-zk-2xl ${tone === "danger" ? "text-zk-danger" : "text-zk-text"}`}>{value}</span>
       </div>
       {note && <div className="mt-1.5 text-xs text-zk-muted">{note}</div>}
       {children}

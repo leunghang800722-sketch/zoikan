@@ -1467,7 +1467,7 @@ export function GuardsClient({
     return (
       <div
         key={n.id}
-        className={`rounded-[7px] border px-2.5 py-1.5 text-[13px] ${isCurrent ? "border-zk-border" : "border-zk-border bg-zk-header text-zk-muted"}`}
+        className={`rounded-[7px] border px-2.5 py-1.5 text-zk-base ${isCurrent ? "border-zk-border" : "border-zk-border bg-zk-header text-zk-muted"}`}
       >
         <div className="flex flex-wrap items-center gap-2">
           <Pill variant="neutral">{n.scheme}</Pill>
@@ -1553,7 +1553,7 @@ export function GuardsClient({
   function renderPhoneRow(p: PhoneRow) {
     const isEditing = phoneEditingId === p.id;
     return (
-      <div key={p.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+      <div key={p.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-zk-base">
         <div className="flex flex-wrap items-center gap-2">
           <span className={p.is_primary ? "font-medium text-zk-text" : undefined}>{p.tel}</span>
           {p.is_primary ? <Pill variant="success">主要</Pill> : null}
@@ -1568,7 +1568,7 @@ export function GuardsClient({
               <button type="button" onClick={() => (isEditing ? onCancelPhoneEdit() : onOpenPhoneEdit(p))} className="text-xs text-zk-primary underline">
                 {isEditing ? "取消編輯" : "編輯"}
               </button>
-              <button type="button" disabled={phoneActionBusy} onClick={() => onDeletePhone(p)} className="text-xs text-red-600 underline">
+              <button type="button" disabled={phoneActionBusy} onClick={() => onDeletePhone(p)} className="text-xs text-zk-danger underline">
                 刪除
               </button>
             </div>
@@ -1606,7 +1606,7 @@ export function GuardsClient({
   function renderAddressRow(a: AddressRow) {
     const isEditing = addressEditingId === a.id;
     return (
-      <div key={a.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+      <div key={a.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-zk-base">
         <div className="flex flex-wrap items-center gap-2">
           <span className={a.is_primary ? "font-medium text-zk-text" : undefined}>{a.address}</span>
           {a.is_primary ? <Pill variant="success">主要</Pill> : null}
@@ -1620,7 +1620,7 @@ export function GuardsClient({
               <button type="button" onClick={() => (isEditing ? onCancelAddressEdit() : onOpenAddressEdit(a))} className="text-xs text-zk-primary underline">
                 {isEditing ? "取消編輯" : "編輯"}
               </button>
-              <button type="button" disabled={addressActionBusy} onClick={() => onDeleteAddress(a)} className="text-xs text-red-600 underline">
+              <button type="button" disabled={addressActionBusy} onClick={() => onDeleteAddress(a)} className="text-xs text-zk-danger underline">
                 刪除
               </button>
             </div>
@@ -1655,7 +1655,7 @@ export function GuardsClient({
   function renderContactRow(c: ContactRow, index: number) {
     const isEditing = contactEditingId === c.id;
     return (
-      <div key={c.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-[13px]">
+      <div key={c.id} className="rounded-[7px] border border-zk-border px-2.5 py-1.5 text-zk-base">
         <div className="flex flex-wrap items-center gap-2">
           {index === 0 && <Pill variant="success">代表（同步落舊欄）</Pill>}
           <span className="font-medium text-zk-text">{c.name || "（未填姓名）"}</span>
@@ -1677,7 +1677,7 @@ export function GuardsClient({
               <button type="button" onClick={() => (isEditing ? onCancelContactEdit() : onOpenContactEdit(c))} className="text-xs text-zk-primary underline">
                 {isEditing ? "取消編輯" : "編輯"}
               </button>
-              <button type="button" disabled={contactActionBusy} onClick={() => onDeleteContact(c)} className="text-xs text-red-600 underline">
+              <button type="button" disabled={contactActionBusy} onClick={() => onDeleteContact(c)} className="text-xs text-zk-danger underline">
                 刪除
               </button>
             </div>
@@ -1830,19 +1830,19 @@ export function GuardsClient({
                         <div className="flex flex-wrap items-center gap-1.5">
                           {licenceExpiryPill(nearestExpiry)}
                           {siaPermitBLapsedPill(r.sia_permit_b_lapsed_by_age)}
-                          <span className="text-[11.5px] text-zk-muted">{fmtDate(nearestExpiry)}</span>
+                          <span className="text-zk-xs text-zk-muted">{fmtDate(nearestExpiry)}</span>
                         </div>
                       </td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
                             編輯
                           </button>
                           {r.status === "inactive" ? (
                             <button
                               type="button"
                               onClick={() => onUnvoid(r.id)}
-                              className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                              className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                             >
                               恢復
                             </button>
@@ -1864,12 +1864,12 @@ export function GuardsClient({
               const expired = isExpired(nearestExpiry);
               const b = broker(r.default_broker_id);
               return (
-                <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${expired ? "bg-[#fef2f2]" : ""}`}>
+                <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${expired ? "bg-zk-danger-bg" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{r.name_zh}</span>
-                    <span className="text-[13px] tabular-nums text-zk-text">{r.month_shift_count ?? "—"} 更</span>
+                    <span className="text-zk-base font-medium text-zk-text">{r.name_zh}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{r.month_shift_count ?? "—"} 更</span>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-zk-xs text-zk-muted">
                     {staffNumberChips(r)}
                     <span>{fmt(r.tel)}</span>
                     <span>{fmt(r.employment_type)}</span>
@@ -1883,11 +1883,11 @@ export function GuardsClient({
                     {siaPermitBLapsedPill(r.sia_permit_b_lapsed_by_age)}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
                       編輯
                     </button>
                     {r.status === "inactive" ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
                         恢復
                       </button>
                     ) : (
@@ -2015,7 +2015,7 @@ export function GuardsClient({
             </Field>
           ) : (
             <Field label="月薪（monthly_salary）">
-              <div className="text-sm text-gray-400">—（冇「出街價」權限）</div>
+              <div className="text-sm text-zk-faint">—（冇「出街價」權限）</div>
             </Field>
           )}
           <Field label="Polo 尺碼">
@@ -2118,16 +2118,16 @@ export function GuardsClient({
               </div>
 
               <div>
-                <div className="mb-1 text-[12.5px] text-zk-muted">長工崗位盤</div>
+                <div className="mb-1 text-zk-sm text-zk-muted">長工崗位盤</div>
                 <Banner kind="error" message={longtermPostError} />
                 {longtermPosts.length === 0 ? (
-                  <div className="text-[12.5px] text-zk-faint">未設崗位盤</div>
+                  <div className="text-zk-sm text-zk-faint">未設崗位盤</div>
                 ) : (
                   <ul className="space-y-1">
                     {longtermPosts.map((p) => {
                       const active = !p.voided_at && (!p.effective_to || p.effective_to >= todayLocalStr());
                       return (
-                        <li key={p.id} className="flex items-center justify-between gap-2 rounded border border-zk-border px-2 py-1 text-[12.5px]">
+                        <li key={p.id} className="flex items-center justify-between gap-2 rounded border border-zk-border px-2 py-1 text-zk-sm">
                           <span className="min-w-0 break-words">
                             {sites.find((s) => s.id === p.site_id)?.canonical_name ?? p.site_id.slice(0, 8)}
                             <span className="ml-1 text-zk-faint">
@@ -2135,7 +2135,7 @@ export function GuardsClient({
                             </span>
                           </span>
                           {active && !p.voided_at && (
-                            <button type="button" disabled={longtermPostActionBusy} onClick={() => onTerminateLongtermPost(p.id)} className="shrink-0 text-[12px] text-red-600 hover:underline">
+                            <button type="button" disabled={longtermPostActionBusy} onClick={() => onTerminateLongtermPost(p.id)} className="shrink-0 text-zk-sm text-zk-danger hover:underline">
                               終止
                             </button>
                           )}
@@ -2174,7 +2174,7 @@ export function GuardsClient({
                 </button>
               </div>
 
-              <div className="text-[12.5px] text-zk-muted">
+              <div className="text-zk-sm text-zk-muted">
                 合約（月薪／假期結餘）去{" "}
                 <Link href="/reports/longterm-payroll" className="text-zk-primary underline">
                   長工糧頁
@@ -2211,7 +2211,7 @@ export function GuardsClient({
                   搬去新嘅甲／乙到期日兩欄；填咗任何一個之後（撳「儲存」
                   重新 GET）呢行就會自動消失，改用新計法。 */}
               {legacyPermitInfo && (
-                <div className="rounded-[7px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[13px] text-amber-800">
+                <div className="rounded-[7px] border border-zk-warning-border bg-zk-warning-bg px-2.5 py-1.5 text-zk-base text-zk-warning-dark">
                   舊記錄：類別 {legacyPermitInfo.type ?? "—"}、到期 {legacyPermitInfo.expiry ?? "—"}
                   （填咗甲／乙類到期日之後會改用新計法）
                 </div>

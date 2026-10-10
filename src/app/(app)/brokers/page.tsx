@@ -399,13 +399,13 @@ export default function BrokersPage() {
                     <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}</td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
                           編輯
                         </button>
                         <button
                           type="button"
                           onClick={() => openFeeRatesFor(r)}
-                          className={`rounded-[5px] border px-2.5 py-[3px] text-xs hover:bg-zk-header ${feeRatesBroker?.id === r.id ? "border-[#0f172a] bg-[#0f172a] text-white hover:bg-[#1e293b]" : "border-zk-border text-[#334155]"}`}
+                          className={`rounded-[5px] border px-2.5 py-[3px] text-xs hover:bg-zk-header ${feeRatesBroker?.id === r.id ? "border-zk-dark bg-zk-dark text-white hover:bg-zk-dark-hover" : "border-zk-border text-zk-text-secondary"}`}
                         >
                           介紹費率
                         </button>
@@ -413,7 +413,7 @@ export default function BrokersPage() {
                           <button
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                           >
                             恢復
                           </button>
@@ -430,28 +430,28 @@ export default function BrokersPage() {
 
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
-              <div key={r.id} className={`rounded-lg border bg-white p-3 ${isFocus(r) ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
+              <div key={r.id} className={`rounded-lg border bg-white p-3 ${isFocus(r) ? "border-zk-primary bg-zk-warning-bg ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[13.5px] font-medium text-zk-text">
+                  <span className="text-zk-base font-medium text-zk-text">
                     {r.name} <span className="text-zk-faint">（{r.code}）</span>
                   </span>
-                  <span className="text-[13px] tabular-nums text-zk-text">{guardCountByBroker[r.id] ?? 0} 人</span>
+                  <span className="text-zk-base tabular-nums text-zk-text">{guardCountByBroker[r.id] ?? 0} 人</span>
                 </div>
-                <div className="mt-1 text-[11.5px] text-zk-muted">{sitesLabel(r.id)}</div>
+                <div className="mt-1 text-zk-xs text-zk-muted">{sitesLabel(r.id)}</div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {kindPill(r.kind)}
                   {r.requires_approval ? <Pill variant="warning">需要審批</Pill> : <Pill variant="neutral">唔使審批</Pill>}
                   {r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
                     編輯
                   </button>
-                  <button type="button" onClick={() => openFeeRatesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  <button type="button" onClick={() => openFeeRatesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
                     介紹費率
                   </button>
                   {r.status === "inactive" ? (
-                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
                       恢復
                     </button>
                   ) : (
@@ -468,7 +468,7 @@ export default function BrokersPage() {
         <div className="space-y-2 rounded-lg border border-zk-border bg-white p-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-[13.5px] font-semibold text-zk-text">{feeRatesBroker.name}——介紹費率</h2>
+              <h2 className="text-zk-base font-semibold text-zk-text">{feeRatesBroker.name}——介紹費率</h2>
               <p className="text-xs text-zk-muted">site 留空＝呢個雞頭全盤預設費率；有 site 嘅行覆蓋預設。</p>
             </div>
             <div className="flex gap-2">
@@ -516,7 +516,7 @@ export default function BrokersPage() {
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {!r.voided_at && (
-                          <button type="button" onClick={() => openFeeRateEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          <button type="button" onClick={() => openFeeRateEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
                             編輯
                           </button>
                         )}
@@ -524,7 +524,7 @@ export default function BrokersPage() {
                           <button
                             type="button"
                             onClick={() => onFeeRateUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                           >
                             解除作廢
                           </button>
@@ -581,7 +581,7 @@ export default function BrokersPage() {
           <Field label="更別（逗號分隔）">
             <input className={inputCls} value={form.aliases} onChange={(e) => setForm((f) => ({ ...f, aliases: e.target.value }))} />
           </Field>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 text-sm text-zk-text-secondary">
             <input
               type="checkbox"
               checked={form.requires_approval}

@@ -295,7 +295,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       <Banner kind="error" message={unsentMsg} />
-      {locked && <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-3 py-2 text-[12.5px] text-zk-warning-dark">{month} 已鎖定，成頁只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</div>}
+      {locked && <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-3 py-2 text-zk-sm text-zk-warning-dark">{month} 已鎖定，成頁只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</div>}
 
       <StageBar stages={stages} />
 

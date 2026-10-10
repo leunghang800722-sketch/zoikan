@@ -24,7 +24,7 @@ export function ConfirmVoidButton({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className={`rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 ${className}`}
+        className={`rounded border border-zk-danger-border px-2 py-1 text-xs text-zk-danger-dark hover:bg-zk-danger-bg ${className}`}
       >
         {label}
       </button>
@@ -38,7 +38,7 @@ export function ConfirmVoidButton({
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         placeholder="填原因先可以確認"
-        className="w-40 rounded border border-gray-300 px-2 py-1 text-xs"
+        className="w-40 rounded border border-zk-input-border px-2 py-1 text-xs"
       />
       <button
         type="button"
@@ -53,7 +53,7 @@ export function ConfirmVoidButton({
             setBusy(false);
           }
         }}
-        className="rounded bg-red-600 px-2 py-1 text-xs text-white disabled:opacity-50"
+        className="rounded bg-zk-danger px-2 py-1 text-xs text-white disabled:opacity-50"
       >
         {busy ? busyLabel : confirmLabel}
       </button>
@@ -63,7 +63,7 @@ export function ConfirmVoidButton({
           setOpen(false);
           setReason("");
         }}
-        className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+        className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-surface"
       >
         取消
       </button>

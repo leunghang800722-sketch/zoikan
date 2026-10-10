@@ -108,10 +108,10 @@ function ActionCardView({ card, onDone }: { card: ActionCard; onDone?: (label: s
 
   if (card.type === "open_page") {
     return (
-      <div className="rounded-lg border border-zk-border bg-white px-3 py-2 text-[12.5px]" data-testid="ai-action-card" data-action-type="open_page">
+      <div className="rounded-lg border border-zk-border bg-white px-3 py-2 text-zk-sm" data-testid="ai-action-card" data-action-type="open_page">
         <div className="font-semibold text-zk-text">{card.label}</div>
-        <div className="mt-0.5 text-[11.5px] text-zk-muted">依據：{card.basis}</div>
-        <Link href={card.params.href} className="mt-1.5 inline-block text-[12.5px] font-semibold text-zk-primary hover:underline" data-testid="ai-action-open-page">
+        <div className="mt-0.5 text-zk-xs text-zk-muted">依據：{card.basis}</div>
+        <Link href={card.params.href} className="mt-1.5 inline-block text-zk-sm font-semibold text-zk-primary hover:underline" data-testid="ai-action-open-page">
           打開頁面 ›
         </Link>
       </div>
@@ -120,38 +120,38 @@ function ActionCardView({ card, onDone }: { card: ActionCard; onDone?: (label: s
 
   const busy = phase.kind === "previewing" || phase.kind === "pending" || phase.kind === "sending";
   return (
-    <div className="rounded-lg border border-zk-border bg-white px-3 py-2 text-[12.5px]" data-testid="ai-action-card" data-action-type={card.type}>
+    <div className="rounded-lg border border-zk-border bg-white px-3 py-2 text-zk-sm" data-testid="ai-action-card" data-action-type={card.type}>
       <div className="font-semibold text-zk-text">{card.label}</div>
-      <div className="mt-0.5 text-[11.5px] text-zk-text-secondary" data-testid="ai-action-what">
+      <div className="mt-0.5 text-zk-xs text-zk-text-secondary" data-testid="ai-action-what">
         會做乜：{describeAction(card)}
       </div>
-      <div className="mt-0.5 text-[11.5px] text-zk-muted" data-testid="ai-action-basis">
+      <div className="mt-0.5 text-zk-xs text-zk-muted" data-testid="ai-action-basis">
         依據：{card.basis}
       </div>
 
       {phase.kind === "previewed" && (
-        <div className="mt-1.5 rounded bg-zk-surface px-2 py-1.5 text-[11.5px] text-zk-text-secondary" data-testid="ai-action-impact">
+        <div className="mt-1.5 rounded bg-zk-surface px-2 py-1.5 text-zk-xs text-zk-text-secondary" data-testid="ai-action-impact">
           {phase.summary.length ? phase.summary.map((s, i) => <div key={i}>{s}</div>) : <div>預覽完成（冇額外影響摘要）</div>}
         </div>
       )}
 
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
         {phase.kind === "done" ? (
-          <span className="text-[12px] font-semibold text-[#15803d]" data-testid="ai-action-done">
+          <span className="text-zk-sm font-semibold text-[#15803d]" data-testid="ai-action-done">
             已做
           </span>
         ) : card.type === "triage_answer" ? (
           phase.kind === "previewed" ? (
-            <button type="button" onClick={() => confirmTriage(phase.hash)} className="rounded-md bg-zk-primary px-2.5 py-1 text-[12px] font-semibold text-white" data-testid="ai-action-confirm">
+            <button type="button" onClick={() => confirmTriage(phase.hash)} className="rounded-md bg-zk-primary px-2.5 py-1 text-zk-sm font-semibold text-white" data-testid="ai-action-confirm">
               確認
             </button>
           ) : (
-            <button type="button" disabled={busy} onClick={() => void startPreview()} className="rounded-md bg-zk-primary px-2.5 py-1 text-[12px] font-semibold text-white disabled:opacity-50" data-testid="ai-action-preview">
+            <button type="button" disabled={busy} onClick={() => void startPreview()} className="rounded-md bg-zk-primary px-2.5 py-1 text-zk-sm font-semibold text-white disabled:opacity-50" data-testid="ai-action-preview">
               {phase.kind === "previewing" ? "預覽緊…" : "預覽影響"}
             </button>
           )
         ) : (
-          <button type="button" disabled={busy} onClick={() => schedule(sendWrite)} className="rounded-md bg-zk-primary px-2.5 py-1 text-[12px] font-semibold text-white disabled:opacity-50" data-testid="ai-action-run">
+          <button type="button" disabled={busy} onClick={() => schedule(sendWrite)} className="rounded-md bg-zk-primary px-2.5 py-1 text-zk-sm font-semibold text-white disabled:opacity-50" data-testid="ai-action-run">
             {phase.kind === "sending" ? "送出中…" : "執行"}
           </button>
         )}
@@ -163,7 +163,7 @@ function ActionCardView({ card, onDone }: { card: ActionCard; onDone?: (label: s
         </div>
       )}
       {phase.kind === "error" && (
-        <div className="mt-1.5 text-[12px] text-[#b91c1c]" data-testid="ai-action-error">
+        <div className="mt-1.5 text-zk-sm text-zk-danger-dark" data-testid="ai-action-error">
           {phase.message}
         </div>
       )}

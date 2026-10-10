@@ -340,13 +340,13 @@ export default function SitesPage() {
                     </td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
                           編輯
                         </button>
                         <button
                           type="button"
                           onClick={() => setShiftTypesFor(r)}
-                          className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header"
+                          className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header"
                         >
                           更別
                         </button>
@@ -354,7 +354,7 @@ export default function SitesPage() {
                           <button
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                           >
                             恢復
                           </button>
@@ -371,32 +371,32 @@ export default function SitesPage() {
 
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
-              <div key={r.id} className={`rounded-lg border bg-white p-3 ${focusSite === r.id ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
+              <div key={r.id} className={`rounded-lg border bg-white p-3 ${focusSite === r.id ? "border-zk-primary bg-zk-warning-bg ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[13.5px] font-medium text-zk-text">{r.canonical_name}</span>
+                  <span className="text-zk-base font-medium text-zk-text">{r.canonical_name}</span>
                   {hasMoneyField && (
-                    <span className="text-[13px] tabular-nums text-zk-text">{r.billing_model === "per_shift" ? "—" : fmtMoney(r.monthly_fee)}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{r.billing_model === "per_shift" ? "—" : fmtMoney(r.monthly_fee)}</span>
                   )}
                 </div>
-                <div className="mt-1 text-[11.5px] text-zk-muted">{r.client_name}</div>
+                <div className="mt-1 text-zk-xs text-zk-muted">{r.client_name}</div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {billingModelPill(r.billing_model)}
                   {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
                   {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
                   {r.default_settlement_broker_id && <Pill variant="neutral">已設預設雞頭</Pill>}
-                  <span className="text-[11.5px] text-zk-muted">
+                  <span className="text-zk-xs text-zk-muted">
                     {shiftTypesLoading ? "載入緊…" : (shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
                     編輯
                   </button>
-                  <button type="button" onClick={() => setShiftTypesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  <button type="button" onClick={() => setShiftTypesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
                     更別
                   </button>
                   {r.status === "ended" ? (
-                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
                       恢復
                     </button>
                   ) : (
@@ -448,7 +448,7 @@ export default function SitesPage() {
                 ))}
               </select>
               {suggestion?.suggestion && suggestion.suggestion.broker_id !== form.default_settlement_broker_id && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-zk-muted" data-testid="site-default-broker-suggestion">
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-zk-sm text-zk-muted" data-testid="site-default-broker-suggestion">
                   <span>
                     建議：{suggestion.suggestion.broker_code}（由 {suggestion.month ? `${Number(suggestion.month.slice(5, 7))} 月 ` : ""}Postorder 推出，同盤 {suggestion.suggestion.days} 個雞頭格全部係佢）
                   </span>
@@ -486,7 +486,7 @@ export default function SitesPage() {
             </Field>
           ) : (
             <Field label="月費（monthly_fee）">
-              <div className="text-sm text-gray-400">—（冇「收客價」權限）</div>
+              <div className="text-sm text-zk-faint">—（冇「收客價」權限）</div>
             </Field>
           )}
           <Field label="月費崗數（monthly_posts）">
@@ -507,7 +507,7 @@ export default function SitesPage() {
               ))}
             </select>
           </Field>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 text-sm text-zk-text-secondary">
             <input type="checkbox" checked={form.in_scope} onChange={(e) => setForm((f) => ({ ...f, in_scope: e.target.checked }))} />
             in_scope（計入報表範圍）
           </label>
@@ -664,7 +664,7 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
         </div>
 
         {showForm && (
-          <form onSubmit={onSubmit} className="space-y-2 rounded border border-gray-200 p-3">
+          <form onSubmit={onSubmit} className="space-y-2 rounded border border-zk-border p-3">
             <Field label="代號（code）">
               <input className={inputCls} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} required />
             </Field>
@@ -723,9 +723,9 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
           </form>
         )}
 
-        <div className="overflow-x-auto rounded border border-gray-200">
+        <div className="overflow-x-auto rounded border border-zk-border">
           <table className="w-full text-xs">
-            <thead className="bg-gray-50 text-left text-gray-500">
+            <thead className="bg-zk-header text-left text-zk-muted">
               <tr>
                 <th className="px-2 py-1.5">代號</th>
                 <th className="px-2 py-1.5">名稱</th>
@@ -736,20 +736,20 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
             <tbody>
               {loading && (
                 <tr>
-                  <td className="px-2 py-3 text-gray-400" colSpan={4}>
+                  <td className="px-2 py-3 text-zk-faint" colSpan={4}>
                     載入緊…
                   </td>
                 </tr>
               )}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td className="px-2 py-3 text-gray-400" colSpan={4}>
+                  <td className="px-2 py-3 text-zk-faint" colSpan={4}>
                     暫時冇更別
                   </td>
                 </tr>
               )}
               {rows.map((r) => (
-                <tr key={r.id} className="border-t border-gray-100">
+                <tr key={r.id} className="border-t border-zk-border-soft">
                   <td className="px-2 py-1.5">{r.code}</td>
                   <td className="px-2 py-1.5">{fmt(r.label)}</td>
                   <td className="px-2 py-1.5">
@@ -757,14 +757,14 @@ function ShiftTypesDrawer({ site, onClose, onChanged }: { site: SiteRow | null; 
                   </td>
                   <td className="px-2 py-1.5">
                     <div className="flex flex-wrap items-center gap-1">
-                      <button type="button" onClick={() => openEdit(r)} className="rounded border border-gray-300 px-1.5 py-0.5 hover:bg-gray-50">
+                      <button type="button" onClick={() => openEdit(r)} className="rounded border border-zk-input-border px-1.5 py-0.5 hover:bg-zk-header">
                         編輯
                       </button>
                       {r.voided_at ? (
                         <button
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                          className="rounded border border-green-300 px-1.5 py-0.5 text-green-700 hover:bg-green-50"
+                          className="rounded border border-zk-success/30 px-1.5 py-0.5 text-zk-success-dark hover:bg-zk-success-bg"
                         >
                           解除作廢
                         </button>

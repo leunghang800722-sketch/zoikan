@@ -260,8 +260,8 @@ export default function AuditLogPage() {
                   <details className="text-left">
                     <summary className="cursor-pointer text-xs text-zk-primary">展開 before/after</summary>
                     <div className="mt-1 space-y-1">
-                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-[11px]">before: {JSON.stringify(r.before, null, 2)}</pre>
-                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-[11px]">after: {JSON.stringify(r.after, null, 2)}</pre>
+                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">before: {JSON.stringify(r.before, null, 2)}</pre>
+                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">after: {JSON.stringify(r.after, null, 2)}</pre>
                     </div>
                   </details>
                 </td>
@@ -271,7 +271,7 @@ export default function AuditLogPage() {
         </table>
       </div>
 
-      <div className="flex items-center justify-between text-[13px] text-zk-muted">
+      <div className="flex items-center justify-between text-zk-base text-zk-muted">
         <span>
           共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
         </span>

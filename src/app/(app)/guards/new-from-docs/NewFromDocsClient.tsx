@@ -357,7 +357,7 @@ export function NewFromDocsClient() {
 
   return (
     <div className="space-y-4">
-      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-[13px] text-zk-primary hover:underline">
+      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-zk-base text-zk-primary hover:underline">
         ‹ 返回保安員
       </Link>
       <PageHeader kicker={kickerFor("/guards/new-from-docs")} title="用證件新增保安員" subtitle="上載證件，由 AI 辨識自動填表；逐欄核對後先會寫入。" />
@@ -369,11 +369,11 @@ export function NewFromDocsClient() {
       {step === "upload" && (
         <div className="space-y-4" data-testid="ocr-step-upload">
           {(prefill.name || prefill.staffNo) && (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px] text-blue-900" data-testid="ocr-prefill-hint">
+            <div className="rounded-lg border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base text-zk-primary-deep" data-testid="ocr-prefill-hint">
               由更表對數帶過嚟：更表寫「{prefill.name || "—"}／{prefill.staffNo || "—"}」。呢兩項只作參考／預填，仍要上載證件（或「全部自己輸入」）逐欄核對先會寫入。
             </div>
           )}
-          <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px] text-orange-800" data-testid="ocr-privacy-notice">
+          <div className="rounded-lg border border-zk-warning-border bg-zk-warning-bg p-3 text-zk-base text-zk-warning-dark" data-testid="ocr-privacy-notice">
             圖片會傳送去 Claude（Anthropic，美國伺服器）同 DeepSeek（內地伺服器）做辨識，兩邊讀到一致先會預填；本系統唔會儲存圖片。圖片只留喺你部機嘅瀏覽器記憶體，儲存或者離開頁面就會清走。
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -381,12 +381,12 @@ export function NewFromDocsClient() {
               const s = slots[t];
               return (
                 <div key={t} className="space-y-2 rounded-lg border border-zk-border p-3" data-testid={`ocr-slot-${t}`}>
-                  <div className="text-[13px] font-semibold">{DOC_LABEL[t]}</div>
-                  <input type="file" accept="image/*,application/pdf" data-testid={`ocr-file-${t}`} className="w-full text-[13px]" onChange={(e) => void onPick(t, e.target.files?.[0])} />
-                  {s.busy && <div className="text-[12px] text-zk-muted">處理緊圖片…</div>}
-                  {s.error && <div className="text-[12px] text-red-600">{s.error}</div>}
+                  <div className="text-zk-base font-semibold">{DOC_LABEL[t]}</div>
+                  <input type="file" accept="image/*,application/pdf" data-testid={`ocr-file-${t}`} className="w-full text-zk-base" onChange={(e) => void onPick(t, e.target.files?.[0])} />
+                  {s.busy && <div className="text-zk-sm text-zk-muted">處理緊圖片…</div>}
+                  {s.error && <div className="text-zk-sm text-zk-danger">{s.error}</div>}
                   {s.pdf && s.pdf.pages > 1 && (
-                    <div className="flex items-center gap-2 text-[12.5px]">
+                    <div className="flex items-center gap-2 text-zk-sm">
                       <Button disabled={s.page <= 1 || s.busy} onClick={() => void loadPage(t, s.file!, s.pdf, s.page - 1)}>上一頁</Button>
                       <span>
                         第 {s.page} / {s.pdf.pages} 頁
@@ -418,7 +418,7 @@ export function NewFromDocsClient() {
 
       {step === "review" && (
         <div className="space-y-3" data-testid="ocr-step-review" data-sticky-page>
-          {ocrInfo && <div className="text-[12.5px] text-zk-muted">{ocrInfo}。請對住圖逐欄核對：「要核對」同「讀唔到」嘅欄要你確認或者改正先可以繼續。</div>}
+          {ocrInfo && <div className="text-zk-sm text-zk-muted">{ocrInfo}。請對住圖逐欄核對：「要核對」同「讀唔到」嘅欄要你確認或者改正先可以繼續。</div>}
           <div className="flex flex-col gap-4 md:flex-row md:items-start">
             {/* 證件圖：手機 375 闊 sticky 細圖（撳一下放大），桌面 sticky 大圖——對欄值唔使捲上捲落 */}
             <div className="sticky top-0 z-20 space-y-2 bg-zk-bg pb-2 md:top-2 md:w-1/2 md:self-start" data-testid="ocr-image-pane">
@@ -444,12 +444,12 @@ export function NewFromDocsClient() {
                   )}
                 </>
               ) : (
-                <div className="rounded-lg border border-zk-border p-3 text-[13px] text-zk-muted">全部自己輸入模式：冇上載圖片，請直接填寫。</div>
+                <div className="rounded-lg border border-zk-border p-3 text-zk-base text-zk-muted">全部自己輸入模式：冇上載圖片，請直接填寫。</div>
               )}
             </div>
             <div className="space-y-3 md:w-1/2">
               {critPending && ocrInfo && (
-                <div className="rounded-lg border border-orange-300 bg-orange-50 p-2.5 text-[13px] font-semibold text-orange-800" data-testid="ocr-critical-notice">
+                <div className="rounded-lg border border-zk-warning-border bg-zk-warning-bg p-2.5 text-zk-base font-semibold text-zk-warning-dark" data-testid="ocr-critical-notice">
                   {CRITICAL_MSG}
                 </div>
               )}
@@ -460,8 +460,8 @@ export function NewFromDocsClient() {
                 const crit = isCritical(k);
                 const reasonMsg = f.reason && f.ocrStatus !== "confirmed" ? REASON_MSG[f.reason] : null;
                 return (
-                  <div key={k} className={`space-y-1 rounded-lg border p-2.5 ${crit ? "border-2 border-blue-300" : "border-zk-border"}`} data-testid={`ocr-field-${k}`} data-status={f.ocrStatus} data-ack={f.ack ? "1" : "0"}>
-                    <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                  <div key={k} className={`space-y-1 rounded-lg border p-2.5 ${crit ? "border-2 border-zk-primary/30" : "border-zk-border"}`} data-testid={`ocr-field-${k}`} data-status={f.ocrStatus} data-ack={f.ack ? "1" : "0"}>
+                    <div className="flex flex-wrap items-center gap-2 text-zk-base">
                       <span className="font-semibold">
                         {FIELD_LABEL[k]}
                         {REQUIRED.includes(k) ? " *" : ""}
@@ -472,19 +472,19 @@ export function NewFromDocsClient() {
                       {k === "address" && addrFrom === "onboarding_form" && f.value && <Pill variant="neutral">來自入職表</Pill>}
                     </div>
                     {crit && f.value.trim() && (
-                      <div className={`break-all rounded bg-zk-header px-2 py-1.5 text-[26px] font-bold leading-tight tracking-wide ${k === "hkid" ? "font-mono" : ""}`} data-testid={`ocr-big-${k}`}>
+                      <div className={`break-all rounded bg-zk-header px-2 py-1.5 text-zk-2xl font-bold leading-tight tracking-wide ${k === "hkid" ? "font-mono" : ""}`} data-testid={`ocr-big-${k}`}>
                         {k === "hkid" ? groupHkid(f.value) : f.value}
                       </div>
                     )}
                     {k === "sex" ? (
-                      <select className="w-full rounded-[5px] border border-zk-border px-2 py-1.5 text-[14px]" value={f.value} onChange={(e) => setField(k, e.target.value)} aria-label={FIELD_LABEL[k]}>
+                      <select className="w-full rounded-[5px] border border-zk-border px-2 py-1.5 text-zk-md" value={f.value} onChange={(e) => setField(k, e.target.value)} aria-label={FIELD_LABEL[k]}>
                         <option value="">（未填）</option>
                         <option value="M">男 M</option>
                         <option value="F">女 F</option>
                       </select>
                     ) : (
                       <input
-                        className="w-full rounded-[5px] border border-zk-border px-2 py-1.5 text-[14px]"
+                        className="w-full rounded-[5px] border border-zk-border px-2 py-1.5 text-zk-md"
                         value={f.value}
                         onChange={(e) => setField(k, e.target.value)}
                         aria-label={FIELD_LABEL[k]}
@@ -492,7 +492,7 @@ export function NewFromDocsClient() {
                       />
                     )}
                     {f.candidates.length > 1 && (
-                      <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+                      <div className="flex flex-wrap items-center gap-1.5 text-zk-sm">
                         <span className="text-zk-faint">兩次辨識：</span>
                         {f.candidates.map((c) => (
                           <button key={c} type="button" className="rounded border border-zk-border px-1.5 py-0.5 hover:bg-zk-hover" onClick={() => setField(k, c)}>
@@ -501,8 +501,8 @@ export function NewFromDocsClient() {
                         ))}
                       </div>
                     )}
-                    {reasonMsg && <div className="text-[12px] text-orange-700">{reasonMsg}</div>}
-                    {err && <div className="text-[12px] text-red-600">{err}</div>}
+                    {reasonMsg && <div className="text-zk-sm text-zk-warning">{reasonMsg}</div>}
+                    {err && <div className="text-zk-sm text-zk-danger">{err}</div>}
                     {needAck && (
                       <div className="flex flex-wrap items-center gap-2">
                         {f.value.trim() ? (
@@ -512,7 +512,7 @@ export function NewFromDocsClient() {
                         ) : !REQUIRED.includes(k) ? (
                           <Button onClick={() => ackField(k, true)}>呢項冇資料／略過</Button>
                         ) : (
-                          <span className="text-[12px] text-zk-muted">請自己輸入</span>
+                          <span className="text-zk-sm text-zk-muted">請自己輸入</span>
                         )}
                       </div>
                     )}
@@ -521,7 +521,7 @@ export function NewFromDocsClient() {
               })}
             </div>
           </div>
-          {problems.length > 0 && <div className="text-[12.5px] text-orange-700" data-testid="ocr-problems">{critPending && ocrInfo ? `${CRITICAL_MSG}。` : ""}仲有 {problems.length} 項要處理：{problems.slice(0, 4).join("、")}{problems.length > 4 ? "…" : ""}</div>}
+          {problems.length > 0 && <div className="text-zk-sm text-zk-warning" data-testid="ocr-problems">{critPending && ocrInfo ? `${CRITICAL_MSG}。` : ""}仲有 {problems.length} 項要處理：{problems.slice(0, 4).join("、")}{problems.length > 4 ? "…" : ""}</div>}
           <div className="flex flex-wrap gap-2">
             <Button onClick={startOver}>重新開始</Button>
             <Button variant="primary" disabled={busy || problems.length > 0} onClick={() => void onPreview()} data-testid="ocr-to-preview">
@@ -533,9 +533,9 @@ export function NewFromDocsClient() {
 
       {step === "preview" && row && (
         <div className="space-y-3" data-testid="ocr-step-preview">
-          <div className="rounded-lg border border-zk-border p-3 text-[14px]">
+          <div className="rounded-lg border border-zk-border p-3 text-zk-md">
             <div className="font-semibold" data-testid="ocr-preview-action">{ACTION_TEXT[row.action]}</div>
-            <div className="mt-1 text-[12.5px] text-zk-muted">
+            <div className="mt-1 text-zk-sm text-zk-muted">
               身份證 {row.hkid_masked ?? "—"} · 電話 {row.phone_masked ?? "—"}
               {row.current_name_zh ? ` · 現有紀錄：${row.current_name_zh}` : ""}
             </div>
@@ -550,7 +550,7 @@ export function NewFromDocsClient() {
             )}
           </div>
           <div className="overflow-x-auto rounded-lg border border-zk-border">
-            <table className="w-full text-[13px]">
+            <table className="w-full text-zk-base">
               <tbody>
                 {FIELD_ORDER.filter((k) => k !== "sex").map((k) => {
                   // 回應經 camelToSnake：欄位 key 係 name_zh／name_en／date_of_birth…
@@ -577,9 +577,9 @@ export function NewFromDocsClient() {
       {step === "done" && (
         <div className="space-y-3" data-testid="ocr-step-done">
           {applyRes && (
-            <div className="rounded-lg border border-zk-border p-3 text-[13px]">
+            <div className="rounded-lg border border-zk-border p-3 text-zk-base">
               新增 {applyRes.guards_created} · 更新 {applyRes.guards_updated} · 電話 {applyRes.phones_added} · 地址 {applyRes.addresses_added}
-              {applyRes.results?.[0]?.reasons.length ? <div className="mt-1 text-orange-700">{applyRes.results[0].reasons.map(reasonLabel).join("、")}</div> : null}
+              {applyRes.results?.[0]?.reasons.length ? <div className="mt-1 text-zk-warning">{applyRes.results[0].reasons.map(reasonLabel).join("、")}</div> : null}
               {applyRes.triage?.owned_by_other ? <div className="mt-1">呢位已有同事跟進中。</div> : null}
             </div>
           )}

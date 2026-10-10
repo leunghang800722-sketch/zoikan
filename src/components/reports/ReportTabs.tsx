@@ -23,7 +23,7 @@ export function ReportTabs({ visible }: { visible: string[] }) {
             href={href}
             data-testid={`report-tab-${t.href.split("/").pop()}`}
             aria-current={active ? "page" : undefined}
-            className={`-mb-px border-b-2 px-3.5 py-2 text-[13.5px] ${active ? "border-zk-primary font-semibold text-zk-primary-dark" : "border-transparent text-zk-text-secondary hover:text-zk-text"}`}
+            className={`-mb-px border-b-2 px-3.5 py-2 text-zk-base ${active ? "border-zk-primary font-semibold text-zk-primary-dark" : "border-transparent text-zk-text-secondary hover:text-zk-text"}`}
           >
             {t.label}
           </GuardedLink>

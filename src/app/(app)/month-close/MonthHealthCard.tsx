@@ -81,21 +81,21 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
   }, [month]);
 
   if (err) return null; // 冇權限／出錯都唔阻鎖月流程
-  if (!health) return <div className="text-[12px] text-zk-faint">鎖月前體檢載入緊……</div>;
+  if (!health) return <div className="text-zk-sm text-zk-faint">鎖月前體檢載入緊……</div>;
 
   const s = health.summary;
   const list = health.findings.filter((f) => f.severity === tab);
   const pillCls = (t: Tab, on: boolean) => {
-    const base = "rounded-xl px-2.5 py-[3px] text-[11.5px] font-semibold border";
-    if (t === "critical") return `${base} ${s.critical > 0 ? "border-[#dc2626] bg-[#dc2626] text-white" : "border-zk-border bg-white text-zk-muted"} ${on ? "ring-2 ring-[#fecaca]" : ""}`;
-    if (t === "warn") return `${base} border-[#fed7aa] bg-white text-[#c2410c] ${on ? "ring-2 ring-[#fed7aa]" : ""}`;
-    return `${base} border-zk-border bg-white text-[#475569] ${on ? "ring-2 ring-zk-border" : ""}`;
+    const base = "rounded-xl px-2.5 py-[3px] text-zk-xs font-semibold border";
+    if (t === "critical") return `${base} ${s.critical > 0 ? "border-zk-danger bg-zk-danger text-white" : "border-zk-border bg-white text-zk-muted"} ${on ? "ring-2 ring-zk-danger-border" : ""}`;
+    if (t === "warn") return `${base} border-zk-warning-border bg-white text-zk-warning ${on ? "ring-2 ring-zk-warning-border" : ""}`;
+    return `${base} border-zk-border bg-white text-zk-text-secondary ${on ? "ring-2 ring-zk-border" : ""}`;
   };
 
   return (
     <div className="flex flex-col gap-2" data-testid="month-health-card">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11.5px] font-semibold text-zk-muted">鎖月前體檢（{health.month}）· 只係提示，唔會擋鎖月</span>
+        <span className="text-zk-xs font-semibold text-zk-muted">鎖月前體檢（{health.month}）· 只係提示，唔會擋鎖月</span>
         <span className="ml-auto flex gap-1.5">
           {(["critical", "warn", "info"] as const).map((t) => (
             <button key={t} type="button" aria-pressed={tab === t} className={pillCls(t, tab === t)} onClick={() => setTab(t)}>
@@ -104,9 +104,9 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
           ))}
         </span>
       </div>
-      {!health.has_prev && <div className="text-[11.5px] text-zk-faint">（上月冇數據，唔做逐盤比較）</div>}
-      {health.findings.length === 0 && <div className="text-[12.5px] text-green-700">冇發現問題。</div>}
-      {health.findings.length > 0 && list.length === 0 && <div className="text-[12.5px] text-zk-muted">呢一級冇項目。</div>}
+      {!health.has_prev && <div className="text-zk-xs text-zk-faint">（上月冇數據，唔做逐盤比較）</div>}
+      {health.findings.length === 0 && <div className="text-zk-sm text-zk-success-dark">冇發現問題。</div>}
+      {health.findings.length > 0 && list.length === 0 && <div className="text-zk-sm text-zk-muted">呢一級冇項目。</div>}
       {list.length > 0 && (
         <ul className="overflow-hidden rounded-lg border border-zk-border">
           {list.map((f) => {
@@ -115,30 +115,30 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
             const dot = f.severity === "critical" ? "#dc2626" : f.severity === "warn" ? "#f97316" : "#94a3b8";
             return (
               <li key={f.code} className="border-b border-zk-border-soft px-3 py-2 last:border-b-0" data-health={f.code}>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zk-base">
                   <span className="h-1.5 w-1.5 flex-none rounded-full" style={{ background: dot }} />
                   <span className="min-w-0 flex-1">{humanizeHealth(f.message)}</span>
                   {dup > 0 &&
                     (onOpenTriage ? (
-                      <button type="button" onClick={onOpenTriage} className="whitespace-nowrap rounded-[10px] bg-[#ffedd5] px-2 py-0.5 text-[11px] text-[#c2410c]">
+                      <button type="button" onClick={onOpenTriage} className="whitespace-nowrap rounded-[10px] bg-zk-warning-tint px-2 py-0.5 text-zk-xs text-zk-warning">
                         ＝ 要你睇 {dup} 題
                       </button>
                     ) : (
-                      <span className="whitespace-nowrap rounded-[10px] bg-[#ffedd5] px-2 py-0.5 text-[11px] text-[#c2410c]">＝ 要你睇 {dup} 題</span>
+                      <span className="whitespace-nowrap rounded-[10px] bg-zk-warning-tint px-2 py-0.5 text-zk-xs text-zk-warning">＝ 要你睇 {dup} 題</span>
                     ))}
                   {f.detail && f.detail.length > 0 && (
-                    <button type="button" className="whitespace-nowrap text-[12px] text-zk-muted underline" onClick={() => setOpen(open === f.code ? null : f.code)}>
+                    <button type="button" className="whitespace-nowrap text-zk-sm text-zk-muted underline" onClick={() => setOpen(open === f.code ? null : f.code)}>
                       {open === f.code ? "收埋" : "明細"}
                     </button>
                   )}
-                  <a href={f.fix_link} className="whitespace-nowrap text-[12px] text-zk-primary hover:underline">
+                  <a href={f.fix_link} className="whitespace-nowrap text-zk-sm text-zk-primary hover:underline">
                     去處理 ›
                   </a>
                 </div>
-                {f.detail_withheld && <div className="mt-1 text-[11.5px] text-zk-faint">冇權限睇明細，淨係顯示數量。</div>}
+                {f.detail_withheld && <div className="mt-1 text-zk-xs text-zk-faint">冇權限睇明細，淨係顯示數量。</div>}
                 {open === f.code && f.detail && (
                   <div className="mt-2 overflow-x-auto">
-                    <table className="min-w-full text-[11.5px]">
+                    <table className="min-w-full text-zk-xs">
                       <thead>
                         <tr>
                           {cols.map((c) => (
@@ -160,7 +160,7 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
                         ))}
                       </tbody>
                     </table>
-                    {f.detail_truncated && <div className="mt-1 text-[11px] text-zk-faint">只顯示頭 50 行。</div>}
+                    {f.detail_truncated && <div className="mt-1 text-zk-xs text-zk-faint">只顯示頭 50 行。</div>}
                   </div>
                 )}
               </li>

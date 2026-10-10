@@ -279,14 +279,14 @@ export default function QuotasPage() {
                       <td className={tableCls.tdNum}>{r.target_shifts}</td>
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
                             編輯
                           </button>
                           {r.voided_at ? (
                             <button
                               type="button"
                               onClick={() => onUnvoid(r.id)}
-                              className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+                              className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                             >
                               解除作廢
                             </button>
@@ -306,17 +306,17 @@ export default function QuotasPage() {
               table 有「載入緊…」提示列，手機卡舊版冇——加返，唔好淨係
               一片空白。 */}
           <div className="space-y-2 sm:hidden">
-            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-[13px] text-zk-muted">載入緊…</div>}
+            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-zk-base text-zk-muted">載入緊…</div>}
             {rows.map((r) => {
               const st = shiftType(r.shift_type_id);
               const b = broker(r.broker_id);
               return (
                 <div key={r.id} className={`rounded-lg border border-zk-border bg-white p-3 ${r.voided_at ? "opacity-45" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{siteLabel(r.site_id)}</span>
-                    <span className="text-[13px] tabular-nums text-zk-text">{r.target_shifts} 更</span>
+                    <span className="text-zk-base font-medium text-zk-text">{siteLabel(r.site_id)}</span>
+                    <span className="text-zk-base tabular-nums text-zk-text">{r.target_shifts} 更</span>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-zk-xs text-zk-muted">
                     <span>{fmtDate(r.month)}</span>
                     {st && (
                       <Pill variant="broker" color={shiftCodeStyle(st.code)}>
@@ -330,11 +330,11 @@ export default function QuotasPage() {
                     )}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
                       編輯
                     </button>
                     {r.voided_at ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
                         解除作廢
                       </button>
                     ) : (

@@ -75,7 +75,7 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
               required
             />
           </Field>
-          <label className="flex flex-col gap-1.5 text-[12.5px] text-zk-text-secondary">
+          <label className="flex flex-col gap-1.5 text-zk-sm text-zk-text-secondary">
             新密碼
             <input
               type="password"
@@ -91,7 +91,7 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
                 <span key={i} className="h-[3px] flex-1 rounded-sm" style={{ background: i < strength ? "#0f766e" : "#e5e7eb" }} />
               ))}
             </div>
-            <span className="text-[11px] text-zk-muted">至少 8 位，建議加數字同英文</span>
+            <span className="text-zk-xs text-zk-muted">至少 8 位，建議加數字同英文</span>
           </label>
           <Field label="確認新密碼">
             <input
@@ -103,7 +103,7 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
               data-testid="change-password-confirm"
               required
             />
-            {mismatch && <span className="mt-1 block text-[11px] text-[#dc2626]">兩次輸入嘅新密碼唔一致</span>}
+            {mismatch && <span className="mt-1 block text-zk-xs text-zk-danger">兩次輸入嘅新密碼唔一致</span>}
           </Field>
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="secondary" onClick={() => router.push("/")}>
