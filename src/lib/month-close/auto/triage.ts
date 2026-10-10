@@ -485,15 +485,16 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
             // N6：同一組（盤×更種×雞頭×月份）嘅確認用 advisory xact lock 串行；
             // 鎖內見到已有（另一題）分診價卡，價錢唔同 → 第二個請求失敗，唔建矛盾卡。
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`mc-triage-price:${g.ref.siteId}:${g.ref.shiftTypeId}:${g.ref.brokerId ?? ""}:${g.ref.ot ? 1 : 0}:${ev.month.slice(0, 7)}`}))`;
+            // 入鎖後重新讀題目狀態：被補齊路徑取代（superseded）就唔准再建卡。
+            const curQ = await tx.triageQuestion.findUnique({ where: { id: q.id }, select: { status: true } });
+            if (curQ?.status !== "applying") throw Conflict("呢條問題已經被取代或者處理緊，唔可以重複套用");
             const monthR = monthRange(month);
             const existing = await tx.rateCard.findMany({
               where: { siteId: g.ref.siteId, shiftTypeId: g.ref.shiftTypeId, brokerId: g.ref.brokerId, guardId: null, voidedAt: null, source: { startsWith: "triage:" }, NOT: { source: writer.source }, effectiveFrom: { lte: monthR.end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: monthR.start } }] },
               select: { clientRate: true, guardWage: true, brokerFee: true },
             });
-            const same = (a: unknown, b: number | null) => (a === null || a === undefined ? b === null : b !== null && Math.abs(Number(a) - b) < 0.005);
-            if (existing.some((c) => (need.client && !same(c.clientRate, plan.values.clientRate)) || (need.payout && !(same(c.guardWage, plan.values.guardWage) && same(c.brokerFee, plan.values.brokerFee))))) {
-              throw Conflict("已有人確認過另一個價");
-            }
+            // 同組合已有任何生效 triage 卡（唔論同價定唔同價）→ 409，唔會疊第二張生效卡（N6，§34 驗收）。
+            if (existing.length > 0) throw Conflict("已有人確認過另一個價");
             const res = await createCardAndPrice(writer, { month, group: g.ref, need, values: plan.values, evidence: plan.evidence, note: `分診一撳確認（題目 ${q.id.slice(0, 8)}）：${plan.evidence}`, confidence: "confirmed", overwriteAuto: true }, tx);
             priced += res.recordsPriced;
             over += res.overwrittenAuto;
@@ -667,24 +668,30 @@ async function applyBackfill(
       }
       // 對應嘅一鍵結算 open 定價題（同月、同盤同更種同雞頭）取代，免得重複答。
       const sup: string[] = [];
-      const mcOpen = await tx.triageQuestion.findMany({ where: { status: "open", id: { not: q.id }, kind: "month_close_pricing", session: { sourceType: "month_close" } }, select: { id: true, sessionId: true, evidenceJson: true } });
+      const mcOpen = await tx.triageQuestion.findMany({ where: { status: { in: ["open", "applying"] }, id: { not: q.id }, kind: "month_close_pricing", session: { sourceType: "month_close" } }, select: { id: true, sessionId: true, evidenceJson: true } });
       for (const o of mcOpen) {
         const e = o.evidenceJson as unknown as McEvidence;
         if (e.month === ev.month && e.action.type === "pricing" && !e.action.backfill && e.action.group.siteId === g.siteId && e.action.group.shiftTypeId === g.shiftTypeId && e.action.group.brokerId === g.brokerId && e.action.group.ot === g.ot) sup.push(o.id);
       }
       if (sup.length) await tx.triageQuestion.updateMany({ where: { id: { in: sup } }, data: { status: "superseded" } });
-      return { cardId: card.id, voidedCardId, priced, over, sup };
+      // 逐更 journal 同建卡／補價同一個 transaction 寫入（重試唔會丟逐更紀錄）。
+      const prevRaw = (await tx.triageQuestion.findUnique({ where: { id: q.id }, select: { applyResultJson: true } }))?.applyResultJson as { backfill?: BackfillJournal } | null;
+      const prev = prevRaw?.backfill && prevRaw.backfill.card_id === card.id && !prevRaw.backfill.undone ? prevRaw.backfill : null;
+      const allRows = [...(prev?.reprice_rows ?? []), ...collect.map((r) => ({ id: r.id, fields: r.fields, before: r.before, after: r.after }))];
+      const journal: BackfillJournal = {
+        card_id: card.id,
+        voided_card_id: voidedCardId ?? prev?.voided_card_id ?? null,
+        month: ev.month,
+        reprice_rows: allRows.slice(0, REPRICE_ROWS_CAP),
+        reprice_rows_truncated: allRows.length > REPRICE_ROWS_CAP,
+        superseded_question_ids: [...new Set([...(prev?.superseded_question_ids ?? []), ...sup])],
+      };
+      await tx.triageQuestion.update({ where: { id: q.id }, data: { applyResultJson: JSON.parse(JSON.stringify({ backfill: journal })) as Prisma.InputJsonValue } });
+      return { cardId: card.id, voidedCardId: journal.voided_card_id, priced, over, sup, journal };
     },
     { timeout: 120_000, maxWait: 10_000 },
   );
-  const journal: BackfillJournal = {
-    card_id: out.cardId,
-    voided_card_id: out.voidedCardId,
-    month: ev.month,
-    reprice_rows: collect.slice(0, REPRICE_ROWS_CAP).map((r) => ({ id: r.id, fields: r.fields, before: r.before, after: r.after })),
-    reprice_rows_truncated: collect.length > REPRICE_ROWS_CAP,
-    superseded_question_ids: out.sup,
-  };
+  const journal = out.journal;
   for (const sid of new Set((await prisma.triageQuestion.findMany({ where: { id: { in: out.sup } }, select: { sessionId: true } })).map((x) => x.sessionId))) await refreshSessionStatus(sid);
   return {
     cards: 1,
@@ -693,7 +700,8 @@ async function applyBackfill(
     records_priced: out.priced,
     overwritten_auto: out.over,
     backfill: journal,
-    note: out.voidedCardId ? `已建正式價目卡並作廢一鍵自動卡${out.priced > 0 ? `；補咗 ${out.priced} 更` : "；價錢維持不變"}` : `已建正式價目卡${out.priced > 0 ? `；補咗 ${out.priced} 更` : "；冇更次需要補價"}`,
+    reprice_truncated: journal.reprice_rows_truncated,
+    note: `${out.voidedCardId ? `已建正式價目卡並作廢一鍵自動卡${out.priced > 0 ? `；補咗 ${out.priced} 更` : "；價錢維持不變"}` : `已建正式價目卡${out.priced > 0 ? `；補咗 ${out.priced} 更` : "；冇更次需要補價"}`}${journal.reprice_rows_truncated ? `；注意：撤銷只能還原前 ${REPRICE_ROWS_CAP} 更嘅補價` : ""}`,
   };
 }
 

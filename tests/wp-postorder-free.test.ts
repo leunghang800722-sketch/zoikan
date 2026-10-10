@@ -191,6 +191,33 @@ describe("WP-POSTORDER-FREE A＋C：補齊價目卡＋報告比例（合成 9 �
     expect(third.skipped_existing).toBe(0);
   });
 
+  it("A：並發確認同一組合（補齊題＋一鍵結算題）→ [200,409]，只得 1 張生效 triage 卡；同一題並發 [200,409,409]", async () => {
+    const { run1, ctx1, sites } = await seedSeptShape();
+    const report = await buildAutoReport(ctx1, SEPT, run1.id);
+    const bf = (await (await callBackfill()).json()) as { session_id: string };
+    const bfQs = (await sessionQuestions(bf.session_id)).questions;
+    const mcQs = (await sessionQuestions(report.triageSessionId!)).questions;
+    const title = siteName("M");
+    const qb = bfQs.find((x) => x.title.includes(title))!;
+    const qm = mcQs.find((x) => x.title.includes(title) && x.status === "open")!;
+    const prev = async (qid: string) => {
+      const pv = await previewRoute(req(`http://x/api/triage/questions/${qid}/preview`, bossCookie, "POST", { answer: { option: "mc_accept" } }), { params: Promise.resolve({ id: qid }) });
+      expect(pv.status).toBe(200);
+      return ((await pv.json()) as { preview_hash: string }).preview_hash;
+    };
+    const go = async (qid: string, h: string) => (await answerRoute(req(`http://x/api/triage/questions/${qid}/answer`, bossCookie, "POST", { answer: { option: "mc_accept" }, preview_hash: h }), { params: Promise.resolve({ id: qid }) })).status;
+    const [hb, hm] = [await prev(qb.id), await prev(qm.id)];
+    const codes = (await Promise.all([go(qb.id, hb), go(qm.id, hm)])).sort();
+    expect(codes).toEqual([200, 409]);
+    expect(await prisma.rateCard.count({ where: { siteId: sites["M"]!.id, source: { startsWith: "triage:" }, voidedAt: null } })).toBe(1);
+    // 同一題並發
+    const qn = bfQs.find((x) => x.title.includes(siteName("N")))!;
+    const hn = await prev(qn.id);
+    const c3 = (await Promise.all([go(qn.id, hn), go(qn.id, hn), go(qn.id, hn)])).sort();
+    expect(c3).toEqual([200, 409, 409]);
+    expect(await prisma.rateCard.count({ where: { siteId: sites["N"]!.id, source: { startsWith: "triage:" }, voidedAt: null } })).toBe(1);
+  });
+
   it("A：撤銷一題 → 作廢新卡、恢復 auto 卡、題目回 open；之後 backfill 唔會重複出", async () => {
     const { run1, ctx1 } = await seedSeptShape();
     await buildAutoReport(ctx1, SEPT, run1.id);
@@ -327,6 +354,17 @@ describe("WP-POSTORDER-FREE B：盤預設雞頭", () => {
     // 只得設咗預設嘅盤：no_settlement 0
     await prisma.shiftRecord.deleteMany({ where: { siteId: noDefault.site.id } });
     expect(await noSettlement()).toBe(0);
+  });
+
+  it("盤預設雞頭指向停用雞頭 → 4b 唔用（保持冇歸屬）", async () => {
+    const { site, d } = await mkSite("測試停用預設盤", W.id);
+    const g = await mkGuard();
+    await rec(site.id, d.id, g.id, 1);
+    await prisma.broker.update({ where: { id: W.id }, data: { status: "inactive" } });
+    const run = await prisma.monthCloseRun.create({ data: { month: SEPT, status: "running", startedById: boss, applyStartedAt: new Date() } });
+    const out = await runAutoSettlement(new AutoCollector(run.id, SEPT, boss, null), SEPT);
+    expect(out.assigned).toBe(0);
+    expect(out.unresolved).toBe(1);
   });
 
   it("PATCH default_settlement_broker_id：設／null 清走／唔存在雞頭 400；GET /api/sites 回傳新欄", async () => {
