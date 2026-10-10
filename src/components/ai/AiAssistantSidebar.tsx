@@ -161,6 +161,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
     setOpen(storedOpen);
     setWidth(readStoredWidth());
     setMounted(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只喺 mount 讀一次還原狀態
   }, []);
 
   useEffect(() => {

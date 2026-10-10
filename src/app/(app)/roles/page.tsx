@@ -8,7 +8,7 @@
 import { uiLabel } from "@/lib/ui/format";
 import { moduleLabel } from "@/lib/rbac/labels";
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPatch, apiPost, type ApiListResult, apiGetAll } from "@/lib/ui/api-client";
+import { apiGet, apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
