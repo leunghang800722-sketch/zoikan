@@ -95,7 +95,7 @@ function sortByMarginAsc(sites: SiteRow[]): SiteRow[] {
 }
 
 export default function GrossMarginPage() {
-  const [month, setMonth] = useMonthState(undefined, { persistDefault: true });
+  const [month, setMonth, monthReady] = useMonthState(undefined, { persistDefault: true });
   const [data, setData] = useState<Result | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -116,9 +116,10 @@ export default function GrossMarginPage() {
   }
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month]);
+  }, [month, monthReady]);
 
   function toggle(siteId: string) {
     setExpanded((e) => ({ ...e, [siteId]: !e[siteId] }));

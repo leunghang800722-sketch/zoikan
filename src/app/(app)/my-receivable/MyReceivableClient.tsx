@@ -74,7 +74,7 @@ function writeBrokerToUrl(broker: string): void {
 const COLS = 6; // 日期／盤／更別／更數／出街價／金額
 
 export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean; roleLabel: string }) {
-  const [month, setMonth] = useMonthState();
+  const [month, setMonth, monthReady] = useMonthState();
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   // M1（Opus 整合驗收）：initial state 唔可以喺 `useState` initializer
   // 度讀 `readBrokerFromUrl()`——SSR 冇 `window`，會令 SSR 輸出（空字串）
@@ -111,6 +111,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
   }, [isBroker]);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     if (!isBroker && !brokerParam) return; // 等雞頭清單攞完先 fetch
     let cancelled = false;
     (async () => {
@@ -133,7 +134,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
     return () => {
       cancelled = true;
     };
-  }, [month, brokerParam, isBroker]);
+  }, [month, brokerParam, isBroker, monthReady]);
 
   function changeBroker(next: string) {
     setBrokerParam(next);

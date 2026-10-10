@@ -23,8 +23,8 @@ import { HistorySection } from "./HistorySection";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 
-export default function MonthCloseOneClickPage({ isBoss }: { isBoss: boolean }) {
-  const [month, setMonth] = useMonthState(addMonthsStr(currentMonthStr(), -1));
+export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: boolean; canUnlock: boolean }) {
+  const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1));
   const [runs, setRuns] = useState<RunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -65,12 +65,13 @@ export default function MonthCloseOneClickPage({ isBoss }: { isBoss: boolean }) 
   }, []);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     setFacts({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
     setLockedOverride(null);
     setHealth(null);
     loadRuns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month]);
+  }, [month, monthReady]);
 
   useEffect(() => {
     const running = runs.find((r) => r.status === "running" && !r.stalled);
@@ -203,21 +204,39 @@ export default function MonthCloseOneClickPage({ isBoss }: { isBoss: boolean }) 
     await loadRuns();
   }
 
+  // §6.3 對數有紅色差異（generate 回應 `reconciliation.has_diff`）：lock API 要 `override_reason`（同「強制鎖定」係兩樣嘢：
+  // force 繞過更表上載／對數未齊；override_reason 係紅色差異嘅原因）。有差異但未填原因就唔打 lock，出原因輸入（LockSection＋右欄）。
+  const [diffReason, setDiffReason] = useState("");
+  const [needDiffReason, setNeedDiffReason] = useState(false);
   async function lockMonth(force?: { reason: string }) {
     setBusy(true);
     setError(null);
-    const gen = await apiPost<{ month_close: { id: string } }>(`/api/month-closes/${month}/generate`);
+    const gen = await apiPost<{ month_close: { id: string }; reconciliation?: { has_diff?: boolean } }>(`/api/month-closes/${month}/generate`);
     if (!gen.ok) {
       setBusy(false);
       setError(gen.message);
       return;
     }
-    const res = await apiPost(`/api/month-closes/${gen.data.month_close.id}/lock`, force ? { force: true, override_reason: force.reason } : {});
+    const hasDiff = gen.data.reconciliation?.has_diff === true;
+    if (hasDiff && !diffReason.trim()) {
+      setBusy(false);
+      setNeedDiffReason(true);
+      setError("§6.3 對數規則有紅色差異，鎖定要填「override 原因」（鎖定區／右欄），填咗再撳鎖定。");
+      return;
+    }
+    // 只有差異：override_reason＝差異原因；只有強制：＝強制原因；兩樣都有：合併（lock API 淨係得一個 override_reason 欄）。
+    const reason = hasDiff && force ? `${diffReason.trim()}；強制鎖定：${force.reason}` : hasDiff ? diffReason.trim() : (force?.reason ?? "");
+    const body: Record<string, unknown> = {};
+    if (force) body.force = true;
+    if (reason) body.override_reason = reason;
+    const res = await apiPost(`/api/month-closes/${gen.data.month_close.id}/lock`, body);
     setBusy(false);
     if (!res.ok) setError(res.message);
     else {
       setNotice(`${month} 已鎖定`);
       setLockedOverride(true);
+      setNeedDiffReason(false);
+      setDiffReason("");
     }
   }
 
@@ -317,6 +336,10 @@ export default function MonthCloseOneClickPage({ isBoss }: { isBoss: boolean }) 
                 locked={locked}
                 groups={groups}
                 onUnlock={unlockMonth}
+                canUnlock={canUnlock}
+                needDiffReason={needDiffReason}
+                diffReason={diffReason}
+                onDiffReason={setDiffReason}
                 isBoss={isBoss}
                 onForceLock={(reason) => lockMonth({ reason })}
                 onOpenTriage={openTriage}
@@ -328,7 +351,7 @@ export default function MonthCloseOneClickPage({ isBoss }: { isBoss: boolean }) 
         </div>
         {report && (
           <div className="order-1 min-w-0 lg:order-2 lg:sticky lg:top-4">
-            <RightRail needsHuman={needsHumanCount(latestRun)} report={report} month={month} busy={busy} locked={locked} health={health} onOpenTriage={openTriage} onLock={() => lockMonth()} onUndo={() => latestRun && undoAuto(latestRun.id)} />
+            <RightRail needDiffReason={needDiffReason} diffReason={diffReason} onDiffReason={setDiffReason} needsHuman={needsHumanCount(latestRun)} report={report} month={month} busy={busy} locked={locked} health={health} onOpenTriage={openTriage} onLock={() => lockMonth()} onUndo={() => latestRun && undoAuto(latestRun.id)} />
           </div>
         )}
       </div>

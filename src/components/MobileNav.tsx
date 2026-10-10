@@ -127,7 +127,7 @@ export function MobileNav({
                         <GuardedLink
                           key={l.href}
                           href={l.href}
-                          data-testid={`mnav-${l.href}`}
+                          data-testid={`mnav-${l.href.split("&month=")[0]}`}
                           onClick={() => setOpen(false)}
                           className={`flex items-center justify-between rounded-md px-2 py-2.5 text-[14px] ${
                             active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"

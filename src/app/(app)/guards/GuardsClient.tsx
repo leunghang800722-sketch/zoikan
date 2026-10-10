@@ -290,7 +290,7 @@ export function GuardsClient({
   // S3（Opus 驗收修復）：原本冇 setter，月份寫死；而家加返 setter＋月份
   // FilterChip，改月份要重新 fetch `with_month_shifts`（見下面 useEffect
   // dep）。
-  const [month, setMonth] = useMonthState();
+  const [month, setMonth, monthReady] = useMonthState();
   // WP-PII：「牌照／平安卡 90 日內到期」FilterChip——`?expiring_within_days=90`
   // （API 早已經 OR 埋 safety_card_expiry，見 src/app/api/guards/route.ts；
   // 呢度改嘅淨係文案＋表格 pill 顯示，唔使改 API）。
@@ -518,10 +518,11 @@ export function GuardsClient({
   }, []);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     const t = setTimeout(() => load(search), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, expiringOnly, identityFilter, search]);
+  }, [month, expiringOnly, identityFilter, search, monthReady]);
 
   function broker(id?: string | null): BrokerRow | undefined {
     if (!id) return undefined;

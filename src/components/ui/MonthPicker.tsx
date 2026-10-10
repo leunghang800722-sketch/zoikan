@@ -6,25 +6,30 @@
 //     所以換頁、換報表 tab 都跟住同一個月。
 //   - `<MonthPicker>`：純顯示，受控（value／onChange）。
 // 表單入面嘅月份欄（開更表、新增配額、雞頭掛盤）唔屬呢個元件。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+
+const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 import { addMonthsStr, currentMonthStr } from "@/lib/ui/format";
 import { isValidMonth, readInitialMonth, rememberMonth } from "@/lib/ui/month-store";
 
-/** 頁面用嘅 state hook：回 `[month, setMonth]`。`defaultMonth` 係冇 URL／sessionStorage 時用（預設本月）。 */
-export function useMonthState(defaultMonth?: string, opts: { persistDefault?: boolean } = {}): [string, (m: string) => void] {
+/** 頁面用嘅 state hook：回 `[month, setMonth, ready]`。`defaultMonth` 係冇 URL／sessionStorage 時用（預設本月）。
+ * hydration 一致性：初始值一律 fallback（同 SSR 一樣，唔會 #418）；`useLayoutEffect`（paint 前、passive effects 前）
+ * 解出 URL → sessionStorage → fallback 嘅真正月份後先 `ready=true`。頁面嘅 fetch effect 要 `if (!ready) return` 並以 `ready` 做 dep，
+ * 咁就只會用最終月份 fetch 一次。 */
+export function useMonthState(defaultMonth?: string, opts: { persistDefault?: boolean } = {}): [string, (m: string) => void, boolean] {
   const fallback = defaultMonth ?? currentMonthStr();
-  // 初始值喺第一次 render 前就按 URL → sessionStorage → fallback 解出（client），令頁面只 fetch 一次（唔會先用預設月份 fetch 再切）。
-  // SSR（冇 window）一律 fallback；hydration 期間 input value 屬性可能同 server HTML 唔同，由 input 嘅 suppressHydrationWarning 吸收。
-  const [month, setMonthState] = useState<string>(() => readInitialMonth(fallback).month);
+  const [month, setMonthState] = useState<string>(fallback);
+  const [ready, setReady] = useState(false);
 
-  useEffect(() => {
+  useIsoLayoutEffect(() => {
     const r = readInitialMonth(fallback);
     if (r.source !== "default" || opts.persistDefault) {
       // 由 sessionStorage 還原嘅，URL 補返 ?month=；URL 本身帶嘅就記入 sessionStorage；報表族連預設月份都記低。
       rememberMonth(r.month, { syncUrl: true });
     }
+    setMonthState(r.month);
+    setReady(true);
     // 只係 mount 跑一次
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setMonth = useCallback((m: string) => {
@@ -32,7 +37,7 @@ export function useMonthState(defaultMonth?: string, opts: { persistDefault?: bo
     if (isValidMonth(m)) rememberMonth(m, { syncUrl: true });
   }, []);
 
-  return [month, setMonth];
+  return [month, setMonth, ready];
 }
 
 export interface MonthPickerProps {
@@ -67,7 +72,7 @@ export function MonthPicker({ value, onChange, label, testId, ariaLabel = "月�
           if (v === "" && !allowEmpty) return; // 原生 month 清空會回 ""，月份欄唔接受
           onChange(v);
         }}
-        className="w-[118px] border-0 bg-transparent p-0 py-0.5 text-[13px] text-[#334155] outline-none"
+        className="w-[150px] border-0 bg-transparent p-0 py-0.5 text-[13px] text-[#334155] outline-none"
       />
       <button type="button" aria-label="下一個月" className="px-1 text-zk-faint hover:text-zk-text" onClick={() => onChange(addMonthsStr(base, 1))}>
         ›

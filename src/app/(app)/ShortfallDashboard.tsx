@@ -155,9 +155,11 @@ export interface ShortfallDashboardProps {
   roleLabel: string;
   // P3-0.4：按權限隱藏卡（預設顯示，保持舊 caller 行為）。
   showMargin?: boolean;
+  /** 放喺歡迎標題（頁首）下面、KPI 上面——首頁待辦收件箱。 */
+  afterHeader?: React.ReactNode;
 }
 
-export default function ShortfallDashboard({ userName, roleLabel, showMargin = true }: ShortfallDashboardProps) {
+export default function ShortfallDashboard({ userName, roleLabel, showMargin = true, afterHeader }: ShortfallDashboardProps) {
   // SSR／首次 client render 一律用 `todayLocalStr()`（避免 hydration
   // mismatch——`window` 喺 SSR 冇得攞，見 `readDateFromUrl()`）；URL 已有
   // `?date=` 就喺下面呢個 effect 入面先切換，同 RosterEditor.tsx 嘅
@@ -251,6 +253,8 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
           </div>
         </div>
       </div>
+
+      {afterHeader}
 
       {loading && !data ? (
         <div className="text-sm text-zk-faint">載入緊…</div>

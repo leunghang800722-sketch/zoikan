@@ -23,6 +23,7 @@
 import { cache } from "react";
 import { MODULES, isGrantedByDefault, type Module } from "./matrix";
 import type { CurrentSession } from "../auth/current-session";
+import { addMonthsStr, currentMonthStr } from "../ui/format";
 import { groupOrderFor, schemaFor, type BadgeKey } from "../nav/schema";
 import { loadPermissionSet, permissionSetHas, type AuthedSession } from "./requirePermission";
 
@@ -76,6 +77,8 @@ export async function getNavLinks(session: CurrentSession, prefetchedGrants?: Re
         if (alt) href = alt;
       }
     }
+    // 未配對保安員修復係對已完結月份做嘅（例如 10 月修 9 月），連結帶上個月（香港時區）。
+    if (href === "/roster-uploads?tab=fix") href = `${href}&month=${addMonthsStr(currentMonthStr(), -1)}`;
     links.push({ href, label: e.label, group: e.group, ...(e.badge ? { badge: e.badge } : {}) });
   }
   return links;

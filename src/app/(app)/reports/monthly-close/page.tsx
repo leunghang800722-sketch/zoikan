@@ -182,7 +182,7 @@ function RuleCard({ rule }: { rule: ReconciliationRule }) {
 }
 
 export default function MonthlyCloseWorkbenchPage() {
-  const [month, setMonth] = useMonthState(undefined, { persistDefault: true });
+  const [month, setMonth, monthReady] = useMonthState(undefined, { persistDefault: true });
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -269,6 +269,7 @@ export default function MonthlyCloseWorkbenchPage() {
 
   // A1：入頁／切月份查呢個月有冇 month_closes 行，有就自動 Generate。
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     let cancelled = false;
     (async () => {
       setCheckingExisting(true);
@@ -284,7 +285,7 @@ export default function MonthlyCloseWorkbenchPage() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month]);
+  }, [month, monthReady]);
 
   const locked = !!result?.month_close.locked_at;
   const rules = result?.reconciliation.rules ?? [];

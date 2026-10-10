@@ -31,6 +31,8 @@ import { fmtDate, fmtDateTime } from "@/lib/ui/format";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { classifyUploadResult, runQueueWithConcurrency, summarizeOutcomes, type RosterUploadPostData, type UploadOutcome } from "@/lib/roster-upload/upload-queue";
 import { kickerFor } from "@/lib/nav/schema";
+import { addMonthsStr, currentMonthStr } from "@/lib/ui/format";
+import { isValidMonth } from "@/lib/ui/month-store";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import GuardFixPanel from "./GuardFixPanel";
@@ -244,7 +246,14 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
     });
   }
 
-  const [month, setMonth] = useMonthState();
+  // 未配對保安員修復係對已完結月份做嘅：fix tab 而月份來源係預設（冇 URL／sessionStorage）時，預設上個月（舊 /guard-fix 行為）。
+  const [month, setMonth, monthReady] = useMonthState(tab === "fix" ? addMonthsStr(currentMonthStr(), -1) : undefined);
+  // 導覽／首頁連結（soft navigation）帶新 ?month= 時跟住（hook 淨係 mount 讀一次）。
+  const urlMonth = searchParams.get("month");
+  useEffect(() => {
+    if (monthReady && urlMonth && isValidMonth(urlMonth) && urlMonth !== month) setMonth(urlMonth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlMonth, monthReady]);
   // WP-RECONCILE-UI（§33.3 D）：deep link `?month=YYYY-MM&focus=<uploadId>`——只做預選月份＋捲到／高亮該上載，
   // 唔觸發任何寫入。URL 解析完（urlReady）先載列表，避免先載當月再載目標月份互相覆蓋。
   const [urlReady, setUrlReady] = useState(false);
@@ -324,10 +333,11 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
   }, []);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     if (!urlReady) return;
     loadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, includeVoided, urlReady]);
+  }, [month, includeVoided, urlReady, monthReady]);
 
   // 列表載入後：捲到目標上載（桌面表／手機卡二揀一，取當前可見嗰個）、聚焦「指定盤」下拉。
   useEffect(() => {
@@ -608,8 +618,8 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
       {canFix && (
         <div role="tablist" aria-label="對數" data-testid="roster-uploads-tabs" className="-mb-1 flex gap-1 border-b border-zk-border">
           {([
-            ["upload", "上載與對數", "/roster-uploads"],
-            ["fix", "未配對保安員修復", "/roster-uploads?tab=fix"],
+            ["upload", "上載與對數", `/roster-uploads?month=${month}`],
+            ["fix", "未配對保安員修復", `/roster-uploads?tab=fix&month=${month}`],
           ] as const).map(([key, label, href]) => (
             <Link
               key={key}
@@ -1150,7 +1160,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
       )}
       </div>
 
-      {canFix && fixVisited && (
+      {canFix && fixVisited && monthReady && (
         <div hidden={tab !== "fix"} data-testid="roster-uploads-fix-tab">
           <GuardFixPanel month={month} />
         </div>

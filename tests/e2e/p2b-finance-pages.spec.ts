@@ -115,8 +115,8 @@ test("(c) 雞頭A：本月應收冇預覽橫幅，直接見自己（呢頁本身
 
 test("(d) 毛利即時表：3 張 stat 卡＋至少一行紅底（低於門檻）", async ({ page }) => {
   await loginAs(page, "老闆");
-  // P3-3.8：用 ?month= 直接開 7 月（月份選擇器讀網址），唔再 fill 之後賭資料載入先後（其他月有行但冇紅底時會 race）。
-  // 月份選擇器 mount 先由網址還原月份，所以會先打一次預設月份、再打 2026-07——等 7 月嗰條 response 先斷言。
+  // P3-3.8：用 ?month= 直接開 7 月（月份選擇器 mount 前讀網址，只 fetch 一次），唔再 fill 之後賭資料載入先後（其他月有行但冇紅底時會 race）。
+  // 等 7 月嗰條 response 先斷言。
   const julyLoaded = page.waitForResponse((r) => r.url().includes("/api/reports/gross-margin") && r.url().includes("month=2026-07"));
   await page.goto("/reports/gross-margin?month=2026-07");
   await julyLoaded;

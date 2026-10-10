@@ -278,6 +278,104 @@ test.describe("強制鎖定（/month-close LockSection）", () => {
   });
 });
 
+
+test.describe("hydration 一致＋只 fetch 一次（第二輪修正）", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  const PAGES = ["/", "/month-close", "/reports/payroll", "/reports/longterm-payroll"];
+  for (const variant of ["url", "storage"] as const) {
+    for (const path of PAGES) {
+      test(`${path}（${variant === "url" ? "?month= 同預設唔同" : "sessionStorage 月份同預設唔同"}）：0 pageerror／#418／hydration 警告`, async ({ page }) => {
+        const bad: string[] = [];
+        page.on("pageerror", (e) => bad.push(`pageerror: ${e.message}`));
+        page.on("console", (m) => {
+          const t = m.text();
+          if (m.type() === "error" && /418|hydrat/i.test(t)) bad.push(`console: ${t.slice(0, 200)}`);
+        });
+        const payrollMonths: string[] = [];
+        page.on("request", (r) => {
+          const u = new URL(r.url());
+          if (u.pathname === "/api/reports/payroll") payrollMonths.push(u.searchParams.get("month") ?? "");
+        });
+        await loginAs(page, "老闆");
+        if (variant === "storage") await page.addInitScript(() => sessionStorage.setItem("zk.month", "2026-08"));
+        await page.goto(variant === "url" ? `${path}?month=2026-08` : path);
+        await page.waitForLoadState("networkidle");
+        await page.waitForTimeout(500);
+        expect(bad).toEqual([]);
+        if (path === "/reports/payroll") expect(new Set(payrollMonths)).toEqual(new Set(["2026-08"])); // 只用最終月份 fetch
+        if (path === "/") await expect(page.getByTestId("inbox-month-close")).toContainText("2026-08 月結");
+      });
+    }
+  }
+});
+
+test.describe("§6.3 紅色差異／強制鎖定／解鎖權限／修復預設月份（第二輪修正）", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  const M = "2026-11";
+
+  test("has_diff：先唔打 lock，出 override 原因；填咗再撳先送 { override_reason }", async ({ page }) => {
+    await loginAs(page, "老闆");
+    expect([200, 201, 409]).toContain((await page.request.post(`/api/months/${M}/open`, { data: { roster_version_note: "e2e diff" } })).status());
+    const run = forceRun(M, false);
+    run.report.lock_precondition = { current_month_already_locked: false, missing_upload_sites: [], unconfirmed_upload_sites: [], unpriced_count: 0, ready_to_lock: true } as never;
+    await page.route("**/api/month-close/one-click?*", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runs: [run] }) }));
+    await page.route("**/api/month-close/one-click/run-e2e-force", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run }) }));
+    // generate 回應加 has_diff（lock 仍打真 API；真 API 無差異時唔會要 reason，所以 lock 用 fulfill 驗 body）
+    await page.route(/\/api\/month-closes\/[^/]+\/generate$/, async (r) => {
+      const real = await r.fetch();
+      const j = await real.json();
+      j.reconciliation = { ...(j.reconciliation ?? {}), has_diff: true };
+      await r.fulfill({ response: real, body: JSON.stringify(j) });
+    });
+    const lockBodies: unknown[] = [];
+    await page.route(/\/api\/month-closes\/[^/]+\/lock$/, (r) => {
+      lockBodies.push(r.request().postDataJSON());
+      return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ locked: true }) });
+    });
+    await page.goto(`/month-close?month=${M}`);
+    await expect(page.getByTestId("rail-lock-month")).toBeEnabled({ timeout: 20_000 });
+    await page.getByTestId("rail-lock-month").click();
+    await expect(page.getByTestId("diff-reason-box")).toBeVisible();
+    await expect(page.getByTestId("rail-diff-reason")).toBeVisible();
+    expect(lockBodies).toEqual([]);
+    await expect(page.getByTestId("rail-lock-month")).toBeDisabled(); // 原因必填
+    await page.getByTestId("rail-diff-reason").fill("差異已核對");
+    await page.getByTestId("rail-lock-month").click();
+    await expect.poll(() => lockBodies.length).toBe(1);
+    expect(lockBodies[0]).toEqual({ override_reason: "差異已核對" });
+  });
+
+  test("冇「月結鎖定解鎖」權限（主管）：已鎖定都唔出解鎖輸入；老闆出", async ({ page }) => {
+    for (const [who, expected] of [["主管", 0], ["老闆", 1]] as const) {
+      await page.context().clearCookies();
+      await loginAs(page, who);
+      const run = forceRun("2026-07", true);
+      await page.route("**/api/month-close/one-click?*", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runs: [run] }) }));
+      await page.route("**/api/month-close/one-click/run-e2e-force", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run }) }));
+      await page.goto("/month-close?month=2026-07");
+      await expect(page.getByTestId("lock-section")).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByTestId("unlock-box")).toHaveCount(expected);
+      await page.unrouteAll();
+    }
+  });
+
+  test("修復 tab 預設上個月；導覽連結帶 &month=上個月；首頁「要老闆決定」格同", async ({ page }) => {
+    await loginAs(page, "老闆");
+    const prev = await page.evaluate(() => {
+      const d = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Hong_Kong" }));
+      d.setDate(1);
+      d.setMonth(d.getMonth() - 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    });
+    await page.goto("/roster-uploads?tab=fix"); // 冇 month、冇 storage
+    await expect(page.locator('input[type="month"]').first()).toHaveValue(prev);
+    await expect(page.locator('aside [data-testid="nav-/roster-uploads?tab=fix"]')).toHaveAttribute("href", `/roster-uploads?tab=fix&month=${prev}`);
+    // 揀過其他月之後，URL／storage 優先
+    await page.goto("/roster-uploads?tab=fix&month=2026-07");
+    await expect(page.locator('input[type="month"]').first()).toHaveValue("2026-07");
+  });
+});
+
 test.afterAll(async () => {
   await prisma.$disconnect();
 });

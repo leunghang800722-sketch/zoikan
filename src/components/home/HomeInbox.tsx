@@ -23,7 +23,7 @@ export interface HomeInboxProps {
 
 interface PendingSummary {
   total: number;
-  entries: { site_name: string; pending_count: number }[];
+  entries: { site_name: string; pending_count: number; month: string }[];
   name_only?: { total: number };
 }
 interface GuardFixRunsResponse {
@@ -49,7 +49,8 @@ function Card({ testId, label, value, unit, note, href, tone }: { testId: string
 
 export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, canGuardFix }: HomeInboxProps) {
   // 月結進度睇緊邊個月：同全站月份選擇器共用（URL → sessionStorage → 上個月，同一鍵結算頁預設一致）。
-  const [month] = useMonthState(addMonthsStr(currentMonthStr(), -1));
+  const [month, , monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1));
+  const prevMonth = addMonthsStr(currentMonthStr(), -1);
   const [pending, setPending] = useState<PendingSummary | null>(null);
   const [run, setRun] = useState<RunSummaryDTO | null | undefined>(undefined); // undefined＝載入中；null＝未開始
   const [needsBoss, setNeedsBoss] = useState<number | null>(null);
@@ -58,7 +59,7 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
     if (!canRosterUploads) return;
     let cancelled = false;
     (async () => {
-      // 唔帶 month＝所有月份未對完嘅上載（上個月更表通常今個月先對數）。
+      // 唔帶 month＝預設「本月＋上月」未對完嘅上載（API 預設 months=2；上個月更表通常今個月先對數）。
       const res = await apiGet<PendingSummary>("/api/roster-uploads/pending-summary");
       if (!cancelled && res.ok) setPending(res.data);
     })();
@@ -68,6 +69,7 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
   }, [canRosterUploads]);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     if (!canMonthClose) return;
     let cancelled = false;
     setRun(undefined);
@@ -79,7 +81,7 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
     return () => {
       cancelled = true;
     };
-  }, [canMonthClose, month]);
+  }, [canMonthClose, month, monthReady]);
 
   useEffect(() => {
     if (!canGuardFix) return;
@@ -123,11 +125,11 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
             unit={pending ? "盤" : undefined}
             tone={pending && pending.entries.length > 0 ? "danger" : undefined}
             note={pending && pending.entries.length > 0 ? pending.entries.slice(0, 3).map((e) => `${e.site_name} ${e.pending_count} 格`).join("、") + (pending.name_only && pending.name_only.total > 0 ? `；${pending.name_only.total} 格淨靠姓名配對` : "") : undefined}
-            href="/roster-uploads"
+            href={pending && pending.entries.length > 0 ? `/roster-uploads?month=${pending.entries.map((e) => e.month).sort()[0]}` : "/roster-uploads"}
           />
         )}
         {runCard}
-        {canGuardFix && needsBoss !== null && <Card testId="inbox-needs-boss" label="要老闆決定" value={needsBoss} unit="項" tone={needsBoss > 0 ? "danger" : undefined} href="/roster-uploads?tab=fix" />}
+        {canGuardFix && needsBoss !== null && <Card testId="inbox-needs-boss" label="要老闆決定" value={needsBoss} unit="項" tone={needsBoss > 0 ? "danger" : undefined} href={`/roster-uploads?tab=fix&month=${prevMonth}`} />}
       </div>
     </section>
   );

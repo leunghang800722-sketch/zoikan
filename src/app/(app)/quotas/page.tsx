@@ -51,7 +51,7 @@ export default function QuotasPage() {
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [siteFilter, setSiteFilter] = useState("");
-  const [monthFilter, setMonthFilter] = useMonthState();
+  const [monthFilter, setMonthFilter, monthReady] = useMonthState();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -80,9 +80,10 @@ export default function QuotasPage() {
   }
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteFilter, monthFilter]);
+  }, [siteFilter, monthFilter, monthReady]);
 
   useEffect(() => {
     (async () => {

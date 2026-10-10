@@ -65,7 +65,7 @@ export default function RosterEntryPage() {
   const router = useRouter();
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [siteId, setSiteId] = useState("");
-  const [month, setMonth] = useMonthState();
+  const [month, setMonth, monthReady] = useMonthState();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -88,6 +88,7 @@ export default function RosterEntryPage() {
   }, []);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     let cancelled = false;
     (async () => {
       setOverviewLoading(true);
@@ -105,7 +106,7 @@ export default function RosterEntryPage() {
     return () => {
       cancelled = true;
     };
-  }, [month]);
+  }, [month, monthReady]);
 
   function onOpen(e: React.FormEvent) {
     e.preventDefault();
