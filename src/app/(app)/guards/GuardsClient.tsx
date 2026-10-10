@@ -32,6 +32,7 @@ import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { MenuButton } from "@/components/ui/MenuButton";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { Tabs } from "@/components/ui/Tabs";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
 const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
@@ -303,6 +304,9 @@ export function GuardsClient({
   const [allowInvalidHkid, setAllowInvalidHkid] = useState(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // P3-4.3（H18）：Drawer 分 tab（基本／證件／聯絡／長工／銀行）；只係分組顯示，各區塊（連權限遮罩）一律照舊 mount。
+  const [drawerTab, setDrawerTab] = useState<"basic" | "docs" | "contact" | "longterm" | "bank">("basic");
+  const tabCls = (t: string) => (drawerTab === t ? "space-y-3" : "hidden");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
@@ -577,6 +581,7 @@ export function GuardsClient({
     // 兩個都直接 true——Save 掣唔應該因為呢個防護機制喺新增模式度 disabled。
     setDetailLoaded(true);
     setDetailAvailable(true);
+    setDrawerTab("basic");
     setDrawerOpen(true);
   }
 
@@ -714,6 +719,7 @@ export function GuardsClient({
     // 空字串當做「清空」送落 DB。
     setDetailLoaded(false);
     setDetailAvailable(false);
+    setDrawerTab("basic");
     setDrawerOpen(true);
     const detailRes = await apiGet<GuardRow>(`/api/guards/${row.id}`);
     if (detailRes.ok) {
@@ -1915,6 +1921,21 @@ export function GuardsClient({
               </div>
             );
           })()}
+          {editingId && (
+            <Tabs
+              testId="guard-drawer-tabs"
+              value={drawerTab}
+              onChange={setDrawerTab}
+              tabs={[
+                { key: "basic", label: "基本", testId: "guard-tab-basic" },
+                { key: "docs", label: "證件", testId: "guard-tab-docs" },
+                { key: "contact", label: "聯絡", testId: "guard-tab-contact" },
+                { key: "longterm", label: "長工", show: !isBroker, testId: "guard-tab-longterm" },
+                { key: "bank", label: "銀行", show: hasBankField, testId: "guard-tab-bank" },
+              ]}
+            />
+          )}
+          <div className={tabCls("basic")} data-testid="guard-tab-panel-basic">
           <div className="grid grid-cols-2 gap-2">
             {/* S1（Opus 驗收）：呢兩個係快速路（同步落 guards.staff_no／
                 staff_no_mw），淨係收固定種類——U／MG／MW 以外嘅種類（例如
@@ -1942,13 +1963,14 @@ export function GuardsClient({
           <Field label="電話">
             <input className={inputCls} value={form.tel} onChange={(e) => setForm((f) => ({ ...f, tel: e.target.value }))} />
           </Field>
+          </div>
 
           {/* WP-MULTI（老闆 2026-09-19 拍板「全部資料都要保留，唔好揀
               一個」）：主要電話照舊喺頂（above），呢度加多一個分區列晒
               所有電話（有幾多個記幾多個）。新增保安員嗰陣（!editingId）
               個 guard 仲未存在，同員工編號分區一致淨係編輯先顯示。 */}
           {editingId && (
-            <>
+            <div className={tabCls("contact")} data-testid="guard-tab-panel-contact">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">所有電話</h3>
               {phones.length === 0 ? (
                 <div className="text-sm text-zk-muted">未有記錄電話</div>
@@ -1971,7 +1993,7 @@ export function GuardsClient({
                   </Button>
                 </div>
               )}
-            </>
+            </div>
           )}
 
           <Field label="預設雞頭" hint={editingId ? "建立之後唔可以喺呢頁改，要用用戶/雞頭管理" : undefined}>
@@ -2027,7 +2049,7 @@ export function GuardsClient({
               淨係編輯先顯示（同員工編號／電話等子資源一致——新增保安員
               嗰陣個 guard 仲未存在）。 */}
           {editingId && !isBroker && (
-            <>
+            <div className={tabCls("longterm")} data-testid="guard-tab-panel-longterm">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">長工</h3>
               {form.employment_type !== "longterm_autopay" && (
                 <div className="rounded-[7px] border border-dashed border-zk-border p-2.5">
@@ -2180,7 +2202,7 @@ export function GuardsClient({
                 </Link>{" "}
                 管理。
               </div>
-            </>
+            </div>
           )}
 
           {/* WP-PII：新欄一律 PATCH-only（見上面 onSubmit()）——新增
@@ -2189,7 +2211,7 @@ export function GuardsClient({
               先發現 400）。冇對應 view 權限嘅分區直接唔顯示（唔係顯示
               「—」，跟老闆決定原文）。 */}
           {editingId && hasLicenceExtraField && (
-            <>
+            <div className={tabCls("docs")} data-testid="guard-tab-panel-docs">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">牌照與證件</h3>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="牌照號碼">
@@ -2287,7 +2309,7 @@ export function GuardsClient({
                   <input type="date" className={inputCls} value={form.leave_date} onChange={(e) => setForm((f) => ({ ...f, leave_date: e.target.value }))} />
                 </Field>
               </div>
-            </>
+            </div>
           )}
 
           {/* WP-STAFFNO：員工編號獨立表——新增保安員嗰陣（`!editingId`）
@@ -2297,7 +2319,7 @@ export function GuardsClient({
               有），但冇「新增編號」表單——「雞頭視角：chips 只讀，冇新增
               掣」（老闆決定原文）。 */}
           {editingId && (
-            <>
+            <div className={tabCls("docs")} data-testid="guard-tab-panel-docs">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">員工編號</h3>
               {/* C（老闆 2026-09-19 拍板四條業務規則）：分區標題下加一句提示，
                   等用戶（尤其主管／會計）睇得明「邊個號用嚟做乜」，同「取消
@@ -2399,11 +2421,12 @@ export function GuardsClient({
                   </Button>
                 </div>
               )}
-            </>
+            </div>
           )}
 
           {editingId && hasPiiField && (
             <>
+            <div className={tabCls("basic")} data-testid="guard-tab-panel-basic-pii">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">個人資料</h3>
               <Field label="身份證號碼" hint="格式例：A123456(3)；系統會驗 check digit，同另一位保安員重複會擋">
                 <input className={inputCls} value={form.hkid} onChange={(e) => setForm((f) => ({ ...f, hkid: e.target.value }))} />
@@ -2445,6 +2468,8 @@ export function GuardsClient({
                 />
               </Field>
 
+            </div>
+            <div className={tabCls("contact")} data-testid="guard-tab-panel-contact-addr">
               {/* WP-MULTI（老闆 2026-09-19 拍板，規劃師延伸同一原則）：
                   上面「地址」單一 input 照舊（快速改主要地址，經 PATCH
                   舊寫法），呢度加地址列表（可以多個，一個主要）。 */}
@@ -2499,6 +2524,8 @@ export function GuardsClient({
                 </div>
               )}
 
+            </div>
+            <div className={tabCls("docs")} data-testid="guard-tab-panel-docs-bl">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">Blacklist</h3>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Check 結果">
@@ -2524,11 +2551,12 @@ export function GuardsClient({
                   />
                 </Field>
               </div>
+            </div>
             </>
           )}
 
           {editingId && hasBankField && (
-            <>
+            <div className={tabCls("bank")} data-testid="guard-tab-panel-bank">
               <h3 className="border-t border-zk-border pt-3 text-xs font-semibold text-zk-faint">銀行</h3>
               <Field label="銀行">
                 <input className={inputCls} value={form.bank_name} onChange={(e) => setForm((f) => ({ ...f, bank_name: e.target.value }))} />
@@ -2572,7 +2600,7 @@ export function GuardsClient({
                   </select>
                 </Field>
               </div>
-            </>
+            </div>
           )}
 
           <div className="flex gap-2 pt-2">

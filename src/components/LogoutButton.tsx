@@ -33,8 +33,15 @@ export function LogoutButton({ className }: { className?: string } = {}) {
   }
 
   return (
-    <Button variant="secondary" size="sm" onClick={onLogout} disabled={loading} className={className ?? "w-full"}>
-      {loading ? "登出中…" : "登出"}
-    </Button>
+    className ? (
+      // 外層（DesktopNav／MobileNav）自己決定外觀（純文字連結樣）——唔套 Button。
+      <button type="button" onClick={onLogout} disabled={loading} title="登出會同時登出所有裝置" className={className}>
+        {loading ? "登出中…" : "登出"}
+      </button>
+    ) : (
+      <Button variant="secondary" size="sm" onClick={onLogout} disabled={loading} title="登出會同時登出所有裝置" className="w-full">
+        {loading ? "登出中…" : "登出"}
+      </Button>
+    )
   );
 }

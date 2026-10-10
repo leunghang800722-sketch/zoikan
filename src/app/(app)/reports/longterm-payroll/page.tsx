@@ -19,6 +19,7 @@ import { fmtMoney, fmtDate, currentMonthStr, addMonthsStr } from "@/lib/ui/forma
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
+import { Tabs } from "@/components/ui/Tabs";
 
 // ---------------------------------------------------------------------------
 // 型別（snake_case，同 API response 一致）
@@ -130,6 +131,9 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 };
 
 export default function LongtermPayrollPage() {
+  // P3-4.3（H19）：7 區直排 → 4 個 tab（本月糧／人手輸入／合約／平均工資與假期）；只分組顯示，唔改計糧，鎖月唯讀照舊。
+  const [tab, setTab] = useState<"pay" | "inputs" | "contracts" | "avg">("pay");
+  const tabCls = (t: string) => (tab === t ? "flex flex-col gap-4" : "hidden");
   const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [payroll, setPayroll] = useState<PayrollMonthDTO | null>(null);
   const [inputs, setInputs] = useState<InputDTO[]>([]);
@@ -217,6 +221,19 @@ export default function LongtermPayrollPage() {
 
       {loading && <div className="text-sm text-zk-muted">載入緊…</div>}
 
+      <Tabs
+        testId="ltpay-tabs"
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { key: "pay", label: "本月糧", testId: "ltpay-tab-pay" },
+          { key: "inputs", label: "人手輸入", testId: "ltpay-tab-inputs" },
+          { key: "contracts", label: "合約", testId: "ltpay-tab-contracts" },
+          { key: "avg", label: "平均工資與假期", testId: "ltpay-tab-avg" },
+        ]}
+      />
+
+      <div className={tabCls("pay")} data-testid="ltpay-panel-pay">
       {/* ① 總額卡 */}
       {totals && (
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -320,15 +337,24 @@ export default function LongtermPayrollPage() {
         </section>
       )}
 
+      </div>
+
       {/* ③ 人手輸入區 */}
+      <div className={tabCls("inputs")} data-testid="ltpay-panel-inputs">
       <InputsSection month={month} inputs={inputs} guardOptions={guardOptions} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
+      </div>
 
       {/* ④ 合約管理 */}
+      <div className={tabCls("contracts")} data-testid="ltpay-panel-contracts">
       <ContractsSection contracts={contracts} onChanged={() => load(month)} onError={setError} onNotice={setNotice} />
+      </div>
 
       {/* ⑤ 平均工資／假期餘額 */}
+      <div className={tabCls("avg")} data-testid="ltpay-panel-avg">
       <AvgWageLeaveBalanceSection month={month} guardOptions={guardOptions} locked={!!payroll?.locked} avgWages={avgWages} leaveBalances={leaveBalances} onChanged={() => load(month)} onError={setError} />
+      </div>
 
+      <div className={tabCls("pay")} data-testid="ltpay-panel-pay-bochk">
       {/* ⑥ BOCHK autopay 檔——WP-BOSS5 §25.4（老闆 2026-09-28 決定 6）：
           格式已核實，出「BOCHK Payroll Editor 明細」xlsx（唔係最終
           .DAT——老闆／會計要用 BOCHK Payroll Editor 貼呢份 xlsx 嘅資料，
@@ -377,6 +403,7 @@ export default function LongtermPayrollPage() {
           </div>
         )}
       </section>
+      </div>
     </div>
   );
 }

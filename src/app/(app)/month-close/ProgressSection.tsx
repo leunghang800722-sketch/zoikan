@@ -30,6 +30,10 @@ function Dot({ status, q }: { status: string; q: number }) {
 
 export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; busy: boolean; locked: boolean; onRerun: () => void }) {
   const [open, setOpen] = useState<string | null>(null);
+  // P3-4.3（H12）：全部跑完、冇出錯、冇要人手處理就摺成一行「N / N 步完成」；有錯／有要人睇先展開。
+  const clean = run.status === "done" && !run.stalled && !run.error_message && run.steps.length > 0 && run.steps.every((st) => (st.status === "done" || st.status === "skipped") && st.needs_human.length === 0);
+  const [expanded, setExpanded] = useState(false);
+  const showSteps = !clean || expanded;
   const auto = run.report?.auto;
   const autoTotal = auto ? deriveAutoCategories(auto).total : 0;
   const qTotal = auto?.review.length ?? 0;
@@ -50,6 +54,11 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
             要你睇
           </span>
         </span>
+        {clean && (
+          <Button variant="link" size="sm" className="ml-auto lg:ml-0" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded} data-testid="progress-toggle">
+            {expanded ? "收埋 ‹" : `${run.steps.length} / ${run.steps.length} 步完成 · 展開 ›`}
+          </Button>
+        )}
         {(run.stalled || run.status === "failed") && (
           <Button variant="dark" onClick={onRerun} disabled={busy || locked}>
             重新執行
@@ -62,7 +71,7 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
           {run.error_message && <Banner kind="error" message={humanize(run.error_message)} />}
         </div>
       )}
-      <div>
+      {showSteps && <div>
         {run.steps.map((s) => {
           const chips = stepChips(s.key, auto);
           const isOpen = open === s.key;
@@ -102,24 +111,26 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
                       ))}
                     </ul>
                   )}
-                  <div className="mb-1.5 text-zk-2xs font-semibold tracking-[.04em] text-zk-faint">技術明細 · 俾 IT 對數用</div>
-                  {kv.length === 0 ? (
-                    <div className="text-zk-xs text-zk-faint">冇技術明細</div>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-x-[18px] gap-y-[3px] font-mono text-zk-xs text-zk-text-secondary sm:grid-cols-2 lg:grid-cols-3" data-testid="step-kv">
-                      {kv.map((x) => (
-                        <span key={x} className="break-all">
-                          {x}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  <details data-testid="step-tech">
+                    <summary className="cursor-pointer text-zk-2xs font-semibold tracking-[.04em] text-zk-faint">技術明細 · 俾 IT 對數用</summary>
+                    {kv.length === 0 ? (
+                      <div className="mt-1.5 text-zk-xs text-zk-faint">冇技術明細</div>
+                    ) : (
+                      <div className="mt-1.5 grid grid-cols-1 gap-x-[18px] gap-y-[3px] font-mono text-zk-xs text-zk-text-secondary sm:grid-cols-2 lg:grid-cols-3" data-testid="step-kv">
+                        {kv.map((x) => (
+                          <span key={x} className="break-all">
+                            {x}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </details>
                 </div>
               )}
             </div>
           );
         })}
-      </div>
+      </div>}
     </section>
   );
 }

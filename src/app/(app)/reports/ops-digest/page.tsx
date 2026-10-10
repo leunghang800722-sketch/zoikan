@@ -198,20 +198,22 @@ export default function OpsDigestPage() {
                 ))}
               </ol>
               {digest.top_sites.length === 0 && <div className="text-zk-sm text-zk-muted">冇</div>}
-              <div className="mb-1 mt-3 text-sm font-semibold text-zk-text">Top 雞頭代號</div>
-              <ol className="list-decimal pl-5 text-zk-base">
-                {digest.top_brokers.map((s) => (
-                  <li key={s.broker_code}>
-                    {s.broker_code}：{s.count}
-                  </li>
-                ))}
-              </ol>
-              {digest.top_brokers.length === 0 && <div className="text-zk-sm text-zk-muted">冇</div>}
+              <details className="mt-3" data-testid="ops-top-brokers">
+                <summary className="cursor-pointer text-sm font-semibold text-zk-text">Top 雞頭代號</summary>
+                <ol className="mt-1 list-decimal pl-5 text-zk-base">
+                  {digest.top_brokers.map((s) => (
+                    <li key={s.broker_code}>
+                      {s.broker_code}：{s.count}
+                    </li>
+                  ))}
+                </ol>
+                {digest.top_brokers.length === 0 && <div className="text-zk-sm text-zk-muted">冇</div>}
+              </details>
             </div>
 
-            <div className="rounded-lg border border-zk-border bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-zk-text">基線指標</div>
-              <table className={tableCls.table}>
+            <details className="rounded-lg border border-zk-border bg-white p-4" data-testid="ops-baseline">
+              <summary className="cursor-pointer text-sm font-semibold text-zk-text">基線指標（ops 量度用，日常唔使睇）</summary>
+              <table className={`mt-2 ${tableCls.table}`}>
                 <thead>
                   <tr className="text-left text-zk-muted">
                     <th className={tableCls.th}>指標</th>
@@ -241,7 +243,7 @@ export default function OpsDigestPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </details>
           </section>
         </>
       )}
