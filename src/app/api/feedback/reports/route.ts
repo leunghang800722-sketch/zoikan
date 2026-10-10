@@ -24,7 +24,7 @@ export async function GET(req: Request) {
     const where: Prisma.FeedbackReportWhereInput = status ? { status } : {};
 
     const [rows, total] = await Promise.all([
-      prisma.feedbackReport.findMany({ where, skip, take, orderBy: { createdAt: "desc" } }),
+      prisma.feedbackReport.findMany({ where, skip, take, orderBy: [{ createdAt: "desc" }, { id: "asc" }] }),
       prisma.feedbackReport.count({ where }),
     ]);
 

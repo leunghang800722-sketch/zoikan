@@ -204,7 +204,7 @@ export async function GET(req: Request) {
     let total: number;
     if (expiringWithinDaysParam !== null) {
       const cutoff = new Date(Date.now() + Number(expiringWithinDaysParam) * 86_400_000);
-      const all = await prisma.guard.findMany({ where, orderBy: { createdAt: "asc" } });
+      const all = await prisma.guard.findMany({ where, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
       // WP-MISC（老闆 2026-09-20 拍板）：QAS 到期日一齊納入「90 日內到期／
       // 已過期」篩選——同牌照／平安卡一致口徑（見 GuardsClient.tsx
       // earlierExpiry()）。
@@ -218,7 +218,7 @@ export async function GET(req: Request) {
       rows = filtered.slice(skip, skip + take);
     } else {
       const [dbRows, dbTotal] = await Promise.all([
-        prisma.guard.findMany({ where, skip, take, orderBy: { createdAt: "asc" } }),
+        prisma.guard.findMany({ where, skip, take, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
         prisma.guard.count({ where }),
       ]);
       rows = dbRows.map(withDerived);

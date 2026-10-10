@@ -34,7 +34,7 @@ export async function GET(req: Request) {
     const parsedMonth = monthRaw ? new Date(monthRaw.length <= 7 ? `${monthRaw}-01` : monthRaw) : null;
     const where = parsedMonth && !Number.isNaN(parsedMonth.getTime()) ? { month: monthStart(parsedMonth) } : undefined;
     const [rows, total] = await Promise.all([
-      prisma.monthClose.findMany({ where, skip, take, orderBy: { month: "desc" } }),
+      prisma.monthClose.findMany({ where, skip, take, orderBy: [{ month: "desc" }, { id: "asc" }] }),
       prisma.monthClose.count({ where }),
     ]);
     // C1（Opus 對抗式驗收第四輪）：雞頭而家有「更表:view」入得嚟，但淨係

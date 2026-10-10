@@ -68,7 +68,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     };
 
     const [rows, total] = await Promise.all([
-      prisma.rosterUploadRow.findMany({ where, skip, take, orderBy: [{ workDate: "asc" }, { rowIndex: "asc" }] }),
+      prisma.rosterUploadRow.findMany({ where, skip, take, orderBy: [{ workDate: "asc" }, { rowIndex: "asc" }, { id: "asc" }] }),
       prisma.rosterUploadRow.count({ where }),
     ]);
 

@@ -18,7 +18,7 @@ export async function GET(req: Request) {
     const includeInactive = url.searchParams.get("include_inactive") === "1";
     const where: Prisma.UserWhereInput = includeInactive ? {} : { status: "active" };
     const [rows, total] = await Promise.all([
-      prisma.user.findMany({ where, skip, take, orderBy: { createdAt: "asc" }, include: { role: true } }),
+      prisma.user.findMany({ where, skip, take, orderBy: [{ createdAt: "asc" }, { id: "asc" }], include: { role: true } }),
       prisma.user.count({ where }),
     ]);
     // P5：failed_attempts/locked_until/allowed_ip 淨係 用戶管理:view
