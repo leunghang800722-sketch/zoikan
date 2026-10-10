@@ -276,6 +276,12 @@ export default function GuardFixPage() {
     return res.data.runs;
   }
 
+  // WP-RECONCILE-UI（§33.3）：`/guard-fix?month=YYYY-MM` 只預選月份（純 UI，唔觸發計算）。
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get("month");
+    if (m && /^\d{4}-(0[1-9]|1[0-2])$/.test(m)) setMonth(m);
+  }, []);
+
   useEffect(() => {
     void loadStaffList();
     void loadPostorder(month);

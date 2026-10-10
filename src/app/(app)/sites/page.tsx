@@ -1,6 +1,7 @@
 "use client";
 // P2-A：盤管理頁（README §07）——換皮，邏輯／API 呼叫全部保留。
 import { useEffect, useState } from "react";
+import { FOCUS_CLS, useFocusParam, useScrollToFocus } from "@/components/reconcile/focus";
 import { apiGet, apiPatch, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
@@ -122,6 +123,9 @@ export default function SitesPage() {
   useEffect(() => {
     load();
   }, []);
+  // WP-RECONCILE-UI（§33.3 D）：`/sites?focus=<siteId>` 高亮＋捲到該盤（純 UI）。
+  const focusSite = useFocusParam();
+  useScrollToFocus(focusSite, !loading && rows.length > 0);
 
   function openCreate() {
     setEditingId(null);
@@ -260,7 +264,7 @@ export default function SitesPage() {
                   </tr>
                 )}
                 {rows.map((r) => (
-                  <tr key={r.id} className={tableCls.rowHover}>
+                  <tr key={r.id} className={`${tableCls.rowHover} ${focusSite === r.id ? FOCUS_CLS : ""}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
                     <td className={`${tableCls.td} font-medium`}>{r.canonical_name}</td>
                     <td className={tableCls.td}>{r.client_name}</td>
                     <td className={tableCls.td}>{billingModelPill(r.billing_model)}</td>
@@ -313,7 +317,7 @@ export default function SitesPage() {
 
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
-              <div key={r.id} className="rounded-lg border border-zk-border bg-white p-3">
+              <div key={r.id} className={`rounded-lg border bg-white p-3 ${focusSite === r.id ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={r.id} data-focused={focusSite === r.id ? "1" : undefined}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[13.5px] font-medium text-zk-text">{r.canonical_name}</span>
                   {hasMoneyField && (
