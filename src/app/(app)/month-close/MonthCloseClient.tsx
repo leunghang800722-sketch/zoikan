@@ -292,7 +292,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   };
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4 max-lg:pb-20">
       {confirmDialog}
       <PageHeader
         kicker={kickerFor("/month-close")}

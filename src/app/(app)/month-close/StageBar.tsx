@@ -10,11 +10,11 @@ const DOT = {
 
 export function StageBar({ stages }: { stages: Stage[] }) {
   return (
-    <ol className="grid grid-cols-1 overflow-hidden rounded-[10px] border border-zk-border bg-white lg:grid-cols-5" data-testid="stage-bar">
+    <ol className="flex overflow-x-auto rounded-[10px] border border-zk-border bg-white lg:grid lg:grid-cols-5 lg:overflow-hidden" data-testid="stage-bar">
       {stages.map((s, i) => {
         const c = DOT[s.state];
         return (
-          <li key={s.key} data-stage={s.key} data-state={s.state} className="flex items-center gap-2.5 border-b border-zk-border-soft px-4 py-3 last:border-b-0 lg:border-b-0 lg:border-r lg:last:border-r-0" style={{ background: c.cell }}>
+          <li key={s.key} data-stage={s.key} data-state={s.state} className="flex min-w-[124px] flex-none items-center gap-2 border-r border-zk-border-soft px-3 py-2.5 last:border-r-0 lg:min-w-0 lg:gap-2.5 lg:px-4 lg:py-3" style={{ background: c.cell }}>
             <span className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-full text-zk-sm font-bold" style={{ background: c.bg, color: c.fg, border: `1.5px solid ${c.bd}` }}>
               {s.state === "ok" ? "✓" : i + 1}
             </span>

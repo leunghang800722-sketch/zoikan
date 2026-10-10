@@ -33,7 +33,10 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
   // P3-4.3（H12）：全部跑完、冇出錯、冇要人手處理就摺成一行「N / N 步完成」；有錯／有要人睇先展開。
   const clean = run.status === "done" && !run.stalled && !run.error_message && run.steps.length > 0 && run.steps.every((st) => (st.status === "done" || st.status === "skipped") && st.needs_human.length === 0);
   const [expanded, setExpanded] = useState(false);
+  // 桌面：clean 先摺；手機（<lg）：一律預設摺（10 行好長），撳「展開」先見；有要人手處理嘅步驟標題列講明。
   const showSteps = !clean || expanded;
+  const needsHumanSteps = run.steps.filter((st) => st.needs_human.length > 0).length;
+  const stepsCls = expanded ? "" : "max-lg:hidden";
   const auto = run.report?.auto;
   const autoTotal = auto ? deriveAutoCategories(auto).total : 0;
   const qTotal = auto?.review.length ?? 0;
@@ -54,11 +57,10 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
             要你睇
           </span>
         </span>
-        {clean && (
-          <Button variant="link" size="sm" className="ml-auto lg:ml-0" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded} data-testid="progress-toggle">
-            {expanded ? "收埋 ‹" : `${run.steps.length} / ${run.steps.length} 步完成 · 展開 ›`}
-          </Button>
-        )}
+        {needsHumanSteps > 0 && <span className="text-zk-sm font-semibold text-zk-danger-dark lg:hidden">{needsHumanSteps} 步有項目要人手處理</span>}
+        <Button variant="link" size="sm" className={`ml-auto lg:ml-0 ${clean ? "" : "lg:hidden"}`} onClick={() => setExpanded((v) => !v)} aria-expanded={expanded} data-testid="progress-toggle">
+          {expanded ? "收埋 ‹" : clean ? `${run.steps.length} / ${run.steps.length} 步完成 · 展開 ›` : "展開 ›"}
+        </Button>
         {(run.stalled || run.status === "failed") && (
           <Button variant="dark" onClick={onRerun} disabled={busy || locked}>
             重新執行
@@ -71,7 +73,7 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
           {run.error_message && <Banner kind="error" message={humanize(run.error_message)} />}
         </div>
       )}
-      {showSteps && <div>
+      {showSteps && <div className={clean ? "" : stepsCls}>
         {run.steps.map((s) => {
           const chips = stepChips(s.key, auto);
           const isOpen = open === s.key;
