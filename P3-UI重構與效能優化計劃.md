@@ -510,3 +510,82 @@ API 單獨 p50（3 次）：最輕 API 地板 ~360 ms（香港→新加坡 TLS�
 7. **版面**：首頁待辦收件箱放喺歡迎標題（PageHeader）下面（`ShortfallDashboard` `afterHeader` slot）；`MonthPicker` input 闊度 118→150px（英文 locale「October 2026」唔再黐住日曆 icon）。
 8. **文件**：§8.3 過時句改正；e2e 數字、「14 頁」寫清楚（見上）；`p2b-finance-pages.spec` 註解更新。**設計取捨**：月份記憶跨頁共用（含 `persistDefault` 報表族）——揀過／睇過某月之後，其他頁（包括 `/month-close`）唔再預設上個月而係跟住該月；`/month-close` 只有喺完全冇 URL／sessionStorage 月份時先預設上個月。要避免請喺 `/month-close` 連結帶 `?month=`（鎖月連結已經帶；首頁月結格暫時靠 sessionStorage，去到嘅月份一樣——驗收 (ii)，階段 4 可補 `?month=`）。
 9. **第二輪驗證**：tsc 0；lint 0；`rm -rf .next` build 過；vitest 214 檔（213 過、1 skip），3,434 passed｜10 skipped（含 term-guard）；Playwright 全部 spec（`db:reset` 後）192 passed｜5 skipped｜0 failed；gate 冇重跑（無計算改動）。
+
+---
+### 8.4 階段 4 落實紀錄（Sonnet 5.5，2026-10-11，branch p3-phase4）
+逐項獨立 commit（P3-4.0 至 P3-4.4）。**只改顯示層**：API 合約、權限矩陣、任何定價／結算／報表計算全部冇改；冇 migration。
+
+**P3-4.0 鎖月狀態（規劃者加入：階段 3 上線後正式站發現）**
+- 一鍵結算頁 `locked` 以 `GET /api/month-closes?month=` 記錄為準（有記錄就用 `locked_at`；冇記錄先睇 run 報告），唔依賴有冇 run。7、8 月（舊月結工作台鎖嘅、冇 run）：StageBar「⑤ 鎖定 已鎖定（M/D）」、`LockSection` 單獨出（`report=null` 模式：已鎖定＋鎖定時間＋解鎖框，按「月結鎖定解鎖:void」權限，原因必填）；未鎖又冇 run 照舊「未到」。`month_closes.locked_by` 只係用戶 id（API 唔畀名），所以只顯示「鎖定人見操作紀錄」。
+- `/reports/monthly-close` 右欄狀態卡：「已鎖定（日期）· 去一鍵結算解鎖 ›」／「未鎖定 · 去一鍵結算鎖月 ›」（有 month_closes 記錄先出狀態卡，維持原行為）。
+- 首頁月結格連結補 `?month=`；修復 tab 載入時 `guard-fix/postorder` ×2：**舊有**（mount effect 同 `[month]` effect 各打一次），已去重。
+
+**P3-4.1 Design token／type scale／斷點**
+- `globals.css` 新增 6 色 token（`zk-success-tint`／`warning-tint`／`danger-tint`／`primary-light`／`dark-hover`／`amber`）＋8 級字號（`text-zk-2xs 10.5｜xs 11｜sm 12｜base 13｜md 14｜lg 16｜xl 20｜2xl 28`；內建 `text-xs`／`text-sm` 照用）。
+- 一次性 codemod 留喺 `scripts/one-off/p3-4-tokens.mjs`（class）、`p3-4-tokens-strings.mjs`（inline style／字串 → `var(--zk-*)`）：arbitrary hex class、Tailwind 原生色（red→danger、green→success、orange／amber／yellow→warning、blue→primary、gray→text／border／surface）、`text-[Npx]` 全部換 token；字號就近映射（半級向下：11.5→11、12.5→12、13.5→13、15→14、17／18→16、19–22→20、26／28／30→28）。
+- 斷點只剩 `sm`（640，表↔卡）同 `lg`（1024，外殼）：`md:` 全部改 `lg:`（15 個檔）；JS 用 `src/lib/ui/breakpoints.ts`（`MQ_BELOW_SM`／`MQ_BELOW_LG`／`LG_PX`），`RosterEditor` 639→`MQ_BELOW_SM`、`MonthCloseTriageDialog` 767→`MQ_BELOW_LG`（平板直向都係全屏手機版）、AI 側欄 1024→`LG_PX`。
+
+**P3-4.2 元件唯一化**
+- `Banner` 唯一（`kind` info／success／warning／error、`compact` 圓點樣式＋`action` slot、可傳 `children`／`data-testid`）；`Notice` 刪；手寫紅框錯誤 12 處改 `Banner`；新增 `FieldError`。
+- `Button` 唯一：variant `primary｜secondary｜dark｜danger｜dangerSolid｜ghost｜link｜linkMuted｜linkDanger`、size `sm｜md`；`btnPrimary`／`btnSecondary`（近黑）刪（47 處改藍／白 `Button`）；`button-classes.ts` 命名 class：`iconBtn`／`menuItemBtn`／`touchBtn`／`choiceBtn()`／`choiceBtnText()`。
+- 確認：新 `ConfirmDialog`／`useConfirm()`（Promise 式，取代 `window.confirm` 13 處：rate-cards 複製上月／重新計價、月結還原自動改動、保安員刪電話／地址／聯絡人／改返現用、糧明細／更表重新計價）；`window.alert` 5 處（重新計價結果、略過 PR）改 info `Banner`（`roster-info-banner`／`payroll-notice`）。唯一保留：`unsaved-guard`（同步攔截離頁／換月，要同步回傳）。
+- 表格：`TableLoadingRow`／`TableEmptyRow`（23 處取代「載入緊…」／空行）；自寫 `<table>` 7 個改 `tableCls`（剩 RosterEditor 格仔表、AI markdown 表兩個特例）；`<th>` 補 `tableCls.th`。
+- `UnpricedNotice`（`src/components/UnpricedNotice.tsx`）5 份合 1：報表頁（毛利／月結總表／糧明細／本月應收）`variant="compact"` 一行＋「去處理 ›」（`/rate-cards?month=`）；`RosterEditor` `variant="full"`（逐組清單＋重新計價掣＋冇結算單位獨立 error）。
+- `useCrudPage`（`src/lib/ui/use-crud-page.ts`）：brokers／sites／quotas／users 共用 rows／loading／error／notice／drawer／editingId／form／saving＋`saveForm()`／`runAction()`；GuardsClient／rate-cards 留階段 5。
+
+**P3-4.3 面板清理 H1–H22 對照**
+| H | 狀態 | 備註 |
+|---|---|---|
+| H1 H2 H3 H4 H5 H6 H7 H8 H10 H11 H13 H17 H21 H22 | 階段 3 已做 | 核實同現況一致（見 §8.3） |
+| H9 UnpricedNotice | 今次做 | 見上 |
+| H12 進度 | 今次做 | 全部跑完、冇錯、冇要人手處理 → 摺成「N / N 步完成 · 展開 ›」；有錯／有要人手先展開；手機（<lg）一律預設摺，標題列講「N 步有項目要人手處理」；技術明細收 `<details>` |
+| H14 分診 | 今次做 | 預設只顯示有未答；摺埋 N 張＋「顯示全部 ›」；轉交收入每張卡「⋯」 |
+| H15 ops-digest | 今次做 | Top 雞頭代號、基線指標收 `<details>` |
+| H16 audit-log | 今次做 | `audit-field-labels.ts` key→中文欄名（camel／snake 都識，冇對照照顯示）；只顯示有改嘅欄；原始 JSON 收 `<details>` |
+| H18 保安員 Drawer | 今次做 | tab 基本／證件／聯絡／長工／銀行（`Tabs` 元件）；各區塊（連權限遮罩）一律照舊 mount，只係 `hidden` 切換；長工 tab 雞頭唔出、銀行 tab 冇權唔出；Drawer 內 `btnPrimary` 改 `Button` |
+| H19 長工糧 | 今次做 | tab 本月糧（總額卡＋逐人表＋BOCHK 檔）／人手輸入／合約（含 Maxwell 導入）／平均工資與假期；唔改計糧，鎖月唯讀照舊 |
+| H20 登出提示 | 今次做 | 改 `title`；手機抽屜刪常駐字 |
+
+**P3-4.4 月結頁手機版面（<lg）**
+StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky 一行 CTA（「N 題要你睇／開始逐條答／鎖定」，避開 AI 浮動掣），自動改動卡留喺內容流（還原唔失）；上載區（更表＋名單齊）手機預設收起；進度手機預設摺；報告 KPI 2 欄（總成本橫跨 2 欄）；`users` 表手機變卡（同一 DOM、CSS 變 block）；其餘表格頁（audit-log、roles、longterm-payroll、monthly-close、ops-digest、guards/import、修復 tab）全部量度 375px `scrollWidth`＝375。MonthCloseTriageDialog <lg 全屏（見 P3-4.1）。
+
+**Before → after**
+| 指標 | before | after |
+|---|---|---|
+| 寫死 hex（`#rrggbb`，src＋css；含註解） | 455 | 65（`globals.css` token 定義約 40＋註解；程式內非註解 27，其中 18 係 broker／shift 資料調色盤檔） |
+| arbitrary 色 class `bg-[#…]` | 254 | 7（頭像靛色、近似色） |
+| Tailwind 原生色 | 319 | 0 |
+| `text-[Npx]` | 685（20 種） | 0（8 級 `text-zk-*`） |
+| 手寫 `<button` | 210 | 64（含 `Button.tsx`）；literal className 種類 33 → 14 |
+| `btnPrimary`／`btnSecondary` | 47 | 0 |
+| `<Notice` ／ `<Banner` | 24 ／ 61 | 0 ／ 91 |
+| `window.confirm`／`alert` | 18（含註解） | 1（`unsaved-guard`，要同步） |
+| 自寫 `<table>`／`<th>` 無 `tableCls` | 9／23 | 2（格仔表、markdown）／4 |
+| 斷點門檻（Tailwind＋JS） | `sm`／`md`／`lg`／`xl`＋JS 639／767／1024 | `sm`／`lg` ＋ `breakpoints.ts` 常數 |
+| 月結頁 375px 整頁高（假資料） | 5,793px | 4,018px；「④ 報告」標題喺 3 屏（2,400px）內（e2e 斷言） |
+| vitest | 213 過／1 skip，3,434 | 214 過／1 skip，3,446（新增 `p3-4-ui.test.ts` 12 條） |
+| Playwright | 192 passed｜5 skipped｜0 failed | **214 passed｜5 skipped｜0 failed**（新增 `p3-4-ui.spec.ts` 15 條、`month-close-ui` 加手機斷言） |
+| `tsc`／`eslint`（0 warning）／`rm -rf .next && next build` | 過 | 過（`/` First Load 116 kB；共用 103 kB 不變） |
+| `gate:locked-months` | 12/12 | 12/12 rc=0 |
+
+**刻意改動清單（視覺回歸，對照階段 3 截圖）**
+1. 色：`text-gray-*`／`border-gray-*` 等中性灰改 slate 系 token（略偏藍灰）；`#475569`→`text-secondary`（#334155，略深）；`#f97316`／`#ea580c` 橙點→`zk-warning`（#c2410c，略深）；`#bfdbfe`／`#a7f3d0` 邊→`primary-tint`／`success/30`；green 邊（300）→`zk-success/30`。
+2. 字號：半級向下合併（見上），表頭 11.5→11、備註 12.5→12、正文 13.5→13；`text-[15px]`→14。
+3. 按鈕：Drawer／表單主掣由近黑改藍（`Button primary`），次掣白底灰邊；「恢復」類原綠框掣改 secondary；列表行動作統一 `size="sm"`（padding 略不同）。
+4. 提示：`Notice` 全部改 `Banner compact`（外觀不變）；其餘錯誤框統一 `Banner`。
+5. 確認／結果：原生 confirm／alert 變頁內 `ConfirmDialog`／info 橫幅。
+6. 報表頁未定價提示收成一行＋「去處理 ›」（逐組清單只喺更表編輯器出）。
+7. 保安員 Drawer、長工糧頁變 tab；進度、上載（手機）、基線指標、Top 雞頭、audit JSON 收起。
+8. 分診預設只列未答；轉交收入「⋯」。
+9. 月結頁手機：右欄變底部 sticky CTA；上載／進度預設收起。平板（768–1023）全部跟手機版面。
+截圖（5 角色 × 桌面 1512×900／手機 375，首頁、月結頁、保安員頁〔Drawer 開〕、長工糧、更表上載、審批；seed 資料，唔入 repo）：`/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/perf/p3-4/shots/after/`；5 角色 6 頁×2 viewport 全部 `scrollWidth`＝viewport 闊。
+
+**偏離／風險（請規劃者決定）**
+1. 手寫 `<button` 冇減到 <10：剩 64 個，主要係 RosterEditor（格仔／鍵盤／選單）、月結頁 RightRail／LockSection／AI 側欄浮動掣、MonthCloseTriageDialog 大觸控掣，種類（literal className）14 種；已將一般按鈕全數改 `Button`，其餘屬格仔表／鍵盤／icon／選單，留待階段 5 隨 RosterEditor 拆分一齊收。
+2. hex 剩 27（程式內）：18 係 `broker-color.ts`／`shift-code-color.ts` 資料調色盤（靛／紫等唔係 token 色），其餘 manifest／themeColor／canvas。
+3. `<th>` 無 `tableCls` 剩 4（RosterEditor 格仔表表頭＋markdown 表）。
+4. 簡報「`<Button>` 全 repo 45 處」＝47 處 `btnPrimary`／`btnSecondary`；原近黑主掣改藍屬簡報要求。
+5. 鎖定人：`month_closes.locked_by` 係用戶 id，API 唔回名；顯示「鎖定人見操作紀錄」。
+6. `unsaved-guard` 仍用 `window.confirm`（同步攔截）。
+
+**未測**：production／真機觸控（手機 e2e 係 Chromium 模擬）；`ConfirmDialog` 鍵盤焦點陷阱未做（Esc／點遮罩可取消）；`audit-field-labels` 對照表只覆蓋常見欄位；tab 內 `required` 欄喺隱藏 tab 嘅原生驗證提示（目前 `required` 只有基本 tab 嘅姓名）。
