@@ -448,7 +448,7 @@ API 單獨 p50（3 次）：最輕 API 地板 ~360 ms（香港→新加坡 TLS�
 - `tsc --noEmit` 0；`npm run lint` 0；`rm -rf .next && npm run build` 過（`/` First Load 115 kB；共用 103 kB 不變）。
 - `npx vitest run`（隔離 PG 54385）：213 檔（212 過、1 skip），3,429 passed｜10 skipped（階段 2 為 3,414）。
 - Playwright 全部 spec（隔離 PG 54386、`next start` 3190、`AI_LLM=fake`；`db:reset` 後即跑）：**179 passed｜5 skipped（原有 test.skip）｜0 failed**。
-- `npm run gate:locked-months`：12/12 rc=0（兩次獨立跑，\`snapshot.json\` 逐字一樣；本階段冇碰任何報表／定價／結算計算，gate 只係保險）。
+- `npm run gate:locked-months`：12/12 rc=0（本分支兩次獨立跑）；兩次 `snapshot.json` 嘅 5,080 個數字葉 multiset 相等（逐 path 比對只差隨機 uuid 同 20 個同名盤排序錯位，同階段 1／2 紀錄一致）。本階段冇碰任何報表／定價／結算計算，gate 只係保險。
 - 五個角色（出廠矩陣）桌面 1512×700＋手機 375 導覽截圖（seed 假資料，唔入 repo）：`/private/tmp/claude-501/-Users-macbookpro-zoi-kan/41316f0d-3a34-4ae3-a8de-d2fb6db0b018/scratchpad/perf/p3-3/shots/`（`<角色>-desktop-1512x700.png`、`<角色>-mobile-375.png`）；實測連結數 老闆 17／主管 11／會計 11／雞頭 6／保安員 1，nav `scrollHeight`＝`clientHeight`＝594。
 
 **Before → after**
