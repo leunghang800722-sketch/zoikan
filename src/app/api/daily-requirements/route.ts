@@ -23,6 +23,9 @@ export async function GET(req: Request) {
     // P3-2.4（additive）：`work_date_from`／`work_date_to`——更表編輯器只攞本月，唔再攞該盤所有月份。
     const workDateFrom = url.searchParams.get("work_date_from");
     const workDateTo = url.searchParams.get("work_date_to");
+    for (const [name, v] of [["work_date_from", workDateFrom], ["work_date_to", workDateTo]] as const) {
+      if (v !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(new Date(v).getTime()))) throw BadRequest(`${name} 格式唔啱（YYYY-MM-DD）`);
+    }
     let where: Prisma.DailyRequirementWhereInput = {
       ...(siteId ? { siteId } : {}),
       ...(includeVoided ? {} : { voidedAt: null }),

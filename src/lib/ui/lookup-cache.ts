@@ -6,15 +6,27 @@ export const LOOKUP_TTL_MS = 60_000;
 
 const cache = new Map<string, { at: number; p: Promise<unknown> }>();
 
+// 驗收修正：cache 綁用戶。登出／登入係軟導航（同一個 JS module 實例），唔綁用戶嘅話內部用戶登出後
+// 60 s 內雞頭喺同一分頁登入會攞到上一個用戶嘅全表資料。`setLookupScope(userId)` 由 (app)/layout
+// 嘅 `<LookupScope>` 喺 render 時同步設定（早過所有子頁 effect）；scope 一變即清空；key 亦帶 scope 前綴。
+let scope = "";
+export function setLookupScope(next: string): void {
+  if (next !== scope) {
+    cache.clear();
+    scope = next;
+  }
+}
+
 export function cachedLookup<T>(key: string, load: () => Promise<T>, now: () => number = Date.now): Promise<T> {
-  const hit = cache.get(key);
+  const k = `${scope}|${key}`;
+  const hit = cache.get(k);
   if (hit && now() - hit.at < LOOKUP_TTL_MS) return hit.p as Promise<T>;
   const p = load().catch((e) => {
     // 失敗唔記，下次重試
-    if (cache.get(key)?.p === p) cache.delete(key);
+    if (cache.get(k)?.p === p) cache.delete(k);
     throw e;
   });
-  cache.set(key, { at: now(), p });
+  cache.set(k, { at: now(), p });
   return p;
 }
 

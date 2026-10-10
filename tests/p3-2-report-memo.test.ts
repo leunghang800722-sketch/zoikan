@@ -9,6 +9,8 @@ import { buildGrossMargin } from "@/lib/reports/gross-margin";
 import { buildPayrollTotals } from "@/lib/reports/payroll";
 import { buildLongtermSalaryAllocation } from "@/lib/reports/longterm-salary";
 import { buildReconciliation } from "@/lib/reports/reconciliation";
+import { prisma } from "@/lib/db";
+import { runOneClickMonthClose } from "@/lib/month-close/one-click";
 
 const M = new Date(Date.UTC(2026, 7, 1));
 
@@ -78,5 +80,25 @@ describe("P3-2.1 報表 request-scoped memo", () => {
       const [a, b] = await Promise.all([f(), f()]);
       expect([a, b, n]).toEqual([1, 1, 1]);
     });
+  });
+
+  it("背景 one-click run 唔會讀到發起 request 嘅 memo（毒值入 ambient memo，run 照樣成功且 report 用真數）", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    await prisma.monthClose.create({ data: { month: fx.unlockedMonth, lockedAt: new Date(), lockedBy: fx.userIds["老闆"], createdBy: "t" } });
+    const sept = new Date(Date.UTC(2026, 8, 1));
+    const run = await prisma.monthCloseRun.create({ data: { month: sept, status: "running", startedById: fx.userIds["老闆"], applyStartedAt: new Date() } });
+    await withReportContext(async () => {
+      // 模擬發起 request 嘅 ambient memo：同 key 放一個形狀錯嘅毒值（若 run 讀到，.mainRows 會 throw → run failed）
+      for (const m of [sept, fx.unlockedMonth]) {
+        await memoized(`close:${m.toISOString()}`, async () => ({ poison: true }));
+        await memoized(`margin:${m.toISOString()}:8`, async () => ({ poison: true }));
+        await memoized(`payroll:${m.toISOString()}`, async () => "poison");
+      }
+      await runOneClickMonthClose(run.id, sept, fx.userIds["老闆"], null);
+    });
+    const after = await prisma.monthCloseRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe("done");
+    expect(JSON.stringify(after.reportJson)).not.toContain("poison");
   });
 });

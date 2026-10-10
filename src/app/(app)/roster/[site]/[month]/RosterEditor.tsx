@@ -21,6 +21,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiGet, apiGetAll, apiPost, ApiClientError } from "@/lib/api-client";
 import { cachedLookup, invalidateLookups } from "@/lib/ui/lookup-cache";
+import { cachedRows } from "@/lib/ui/lookups";
 import { Notice } from "@/components/ui/Notice";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
@@ -698,11 +699,11 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             apiGet<SiteDto>(`/api/sites/${siteId}`),
             apiGetAll<ShiftTypeDto>("/api/shift-types", { site_id: siteId }),
             fetchRecords(),
-            cachedLookup("all:/api/guards?fields=lite", () => apiGetAll<GuardDto>("/api/guards", { fields: "lite" })),
+            cachedRows<GuardDto>("/api/guards?fields=lite"),
             apiGetAll<DailyRequirementDto>("/api/daily-requirements", { site_id: siteId, work_date_from: workDateFrom, work_date_to: workDateTo }),
             apiGetAll<QuotaDto>("/api/quotas", { site_id: siteId, month }),
             cachedLookup(`monthclose:${month}`, () => apiGetAll<MonthCloseDto>("/api/month-closes", { month })),
-            cachedLookup("all:/api/brokers", () => apiGetAll<BrokerDto>("/api/brokers", {})),
+            cachedRows<BrokerDto>("/api/brokers"),
           ]);
           if (cancelled) return;
           records = recs;

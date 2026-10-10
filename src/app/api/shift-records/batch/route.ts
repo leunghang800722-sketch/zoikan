@@ -453,7 +453,6 @@ export async function POST(req: Request) {
     const keyOfPlan = (p: Exclude<PlannedOp, { kind: "noop" }>) => `${p.cell.guard_id}|${p.cell.work_date.toISOString().slice(0, 10)}|${p.cell.shift_type_id}`;
     const activePlans = plans.filter((p): p is Exclude<PlannedOp, { kind: "noop" }> => p.kind !== "noop");
     const hasDuplicateCells = new Set(activePlans.map(keyOfPlan)).size !== activePlans.length;
-    const existingById = new Map(existing.map((r) => [r.id, r]));
     try {
       await prisma.$transaction(
         async (tx) => {
@@ -519,6 +518,13 @@ export async function POST(req: Request) {
           }
 
           // ---- 批量路徑 ----
+          // 驗收修正：before 喺 tx 內 `FOR UPDATE` 鎖住並重讀（唔用 tx 外較早讀嘅 `existing`），
+          // 並發改動下 audit before 先正確。（計價判斷仍用 tx 外嘅 plan，同逐格寫法一致。）
+          const lockIds = activePlans.flatMap((p) => (p.kind === "clear" ? [p.existingId] : p.existingId ? [p.existingId] : []));
+          if (lockIds.length > 0) {
+            await tx.$queryRaw`SELECT id FROM shift_records WHERE id = ANY(${lockIds}::text[]) ORDER BY id FOR UPDATE`;
+          }
+          const beforeById = new Map((lockIds.length ? await tx.shiftRecord.findMany({ where: { id: { in: lockIds } } }) : []).map((r) => [r.id, r]));
           const clearPlans = activePlans.filter((p): p is Extract<PlannedOp, { kind: "clear" }> => p.kind === "clear");
           const updatePlans = activePlans.filter((p): p is Extract<PlannedOp, { kind: "upsert" }> & { existingId: string } => p.kind === "upsert" && p.existingId !== null);
           const createPlans = activePlans.filter((p): p is Extract<PlannedOp, { kind: "upsert" }> => p.kind === "upsert" && p.existingId === null);
@@ -579,12 +585,12 @@ export async function POST(req: Request) {
           for (const plan of activePlans) {
             const key = keyOfPlan(plan);
             if (plan.kind === "clear") {
-              const before = existingById.get(plan.existingId)!;
+              const before = beforeById.get(plan.existingId)!;
               const after = afterById.get(plan.existingId)!;
               pendingAudits.push({ rowId: plan.existingId, action: "void", before, after: { ...after, void_reason: "batch:clear_cell" } });
               results.push({ key, id: plan.existingId, action: "cleared" });
             } else if (plan.existingId) {
-              const before = existingById.get(plan.existingId)!;
+              const before = beforeById.get(plan.existingId)!;
               const after = afterById.get(plan.existingId)!;
               pendingAudits.push({ rowId: plan.existingId, action: "update", before, after });
               autoCardUses.push({ recordId: plan.existingId, before: [toNum(before.clientRateSnapshot), toNum(before.guardWageSnapshot), toNum(before.brokerFeeSnapshot)], after: [toNum(after.clientRateSnapshot), toNum(after.guardWageSnapshot), toNum(after.brokerFeeSnapshot)], ...(plan.pricing?.source ?? {}) });

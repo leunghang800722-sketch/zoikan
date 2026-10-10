@@ -1,11 +1,12 @@
 // P3-2.4：輕量 guards（?fields=lite）、daily-requirements 日期範圍、前端 lookup cache。
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { prisma } from "@/lib/db";
 import { GET as guardsGet } from "@/app/api/guards/route";
 import { GET as dailyGet } from "@/app/api/daily-requirements/route";
-import { cachedLookup, invalidateLookups, isLookupWritePath, LOOKUP_TTL_MS } from "@/lib/ui/lookup-cache";
+import { cachedLookup, invalidateLookups, isLookupWritePath, setLookupScope, LOOKUP_TTL_MS } from "@/lib/ui/lookup-cache";
+import { cachedGetAll, cachedRows } from "@/lib/ui/lookups";
 
 const req = (url: string, cookie: string) => new Request(url, { headers: { cookie } });
 
@@ -105,5 +106,83 @@ describe("P3-2.4 前端 lookup cache", () => {
   it("相關資源寫入路徑會作廢；其他唔會", () => {
     for (const p of ["/api/guards", "/api/guards/abc", "/api/sites/x", "/api/brokers", "/api/shift-types", "/api/broker-site-assignments", "/api/month-closes/1/lock"]) expect(isLookupWritePath(p)).toBe(true);
     for (const p of ["/api/shift-records/batch", "/api/rate-cards", "/api/quotas", "/api/ai/chat"]) expect(isLookupWritePath(p)).toBe(false);
+  });
+});
+
+describe("驗收修正：lookup cache 形狀一致＋綁用戶", () => {
+  let calls: string[];
+  let owner = "boss";
+  beforeEach(() => {
+    invalidateLookups();
+    setLookupScope("u1");
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        const u = new URL(url, "http://t");
+        const rows = [{ id: `${owner}-${u.pathname}` }];
+        return new Response(JSON.stringify({ rows, total: 1, skip: 0, take: 500 }), { status: 200 });
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("先 lookups（cachedGetAll）後 editor（cachedRows）：同一 key，editor 攞到 array、冇多打 API", async () => {
+    const a = await cachedGetAll<{ id: string }>("/api/brokers");
+    expect(a.ok && Array.isArray(a.data.rows)).toBe(true);
+    const rows = await cachedRows<{ id: string }>("/api/brokers");
+    expect(Array.isArray(rows)).toBe(true);
+    expect(rows.map((r) => r.id)).toEqual(["boss-/api/brokers"]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("先 editor（cachedRows）後 lookups（cachedGetAll）：lookups 攞到 ApiResult 形狀（有 .ok／.data.rows）、冇多打 API", async () => {
+    const rows = await cachedRows<{ id: string }>("/api/guards?fields=lite");
+    expect(rows).toHaveLength(1);
+    const res = await cachedGetAll<{ id: string }>("/api/guards?fields=lite");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.rows.map((r) => r.id)).toEqual(rows.map((r) => r.id));
+    expect(calls).toHaveLength(1);
+  });
+
+  it("cachedRows 失敗拋 ApiClientError，且失敗唔記", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "forbidden", message: "冇權限" }), { status: 403 })));
+    await expect(cachedRows("/api/brokers")).rejects.toMatchObject({ status: 403 });
+    await expect(cachedRows("/api/brokers")).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("登出→登入另一用戶（scope 改變）後 cache miss，唔會攞到上一個用戶嘅資料", async () => {
+    owner = "boss";
+    const first = await cachedRows<{ id: string }>("/api/brokers");
+    expect(first[0]!.id).toContain("boss");
+    setLookupScope("u2"); // 另一用戶登入（LookupScope 於 layout render 時設定）
+    owner = "broker";
+    const second = await cachedRows<{ id: string }>("/api/brokers");
+    expect(second[0]!.id).toContain("broker");
+    expect(calls).toHaveLength(2);
+    setLookupScope("u2"); // 同一用戶唔清
+    await cachedRows("/api/brokers");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("invalidateLookups（登出／登入成功時 call）後 cache miss", async () => {
+    await cachedRows("/api/sites");
+    invalidateLookups();
+    await cachedRows("/api/sites");
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe("驗收修正：daily-requirements 日期格式驗證", () => {
+  it("亂填 work_date_from／to → 400（唔係 500）", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    for (const q of ["work_date_from=abc", "work_date_to=2026-13-45", "work_date_from=2026-8-1"]) {
+      const res = await dailyGet(req(`http://t/api/daily-requirements?site_id=${fx.site.id}&${q}`, cookie));
+      expect(res.status, q).toBe(400);
+    }
+    expect((await dailyGet(req(`http://t/api/daily-requirements?site_id=${fx.site.id}&work_date_from=2026-08-01`, cookie))).status).toBe(200);
   });
 });
