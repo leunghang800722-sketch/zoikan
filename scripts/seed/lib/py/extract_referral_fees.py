@@ -9,7 +9,7 @@ wrapper（新寫，唔改 P0 code）淨係攞 P0 已經驗證過嘅呢批 `amoun
 (broker_id, block/site) 加埋，dump 做 JSON 俾 TS seed 用嚟起
 `special_items`（kind=referral_fee）。
 
-PDPO：呢度冇任何安員/雞頭真名——`broker_id` 已經係代號（B01/B02/…），
+PDPO：呢度冇任何保安員/雞頭真名——`broker_id` 已經係代號（B01/B02/…），
 `block` 係盤層面嘅字面（同 sites.canonical_name 呢類非 PDPO 識別資料一致，
 唔係人名）。
 """
