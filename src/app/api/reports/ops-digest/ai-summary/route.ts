@@ -9,7 +9,8 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { ApiError } from "@/lib/api/errors";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
-import { parseMonthParam, monthStart } from "@/lib/reports/money";
+import { parseMonthParam } from "@/lib/reports/money";
+import { hkMonthStart } from "@/lib/dates";
 import { isAiConfigured } from "@/lib/ai/config";
 import { getLlmClient, LlmUnavailableError } from "@/lib/ai/llm";
 import { assertUnderDailyLimit } from "@/lib/ai-rate-limit";
@@ -24,7 +25,7 @@ export async function POST(req: Request) {
     const session = await requirePermission(req, "月結總表", "view");
     if (!isAiConfigured()) throw new ApiError(404, "ai_not_configured", "AI 未設定");
     const body = parseBody(BodySchema, await readJson(req));
-    const month = parseMonthParam(body.month ?? null) ?? addMonths(monthStart(new Date()), -1);
+    const month = parseMonthParam(body.month ?? null) ?? addMonths(hkMonthStart(), -1);
 
     const { used, limit } = await assertUnderDailyLimit(session.userId);
     if (used >= limit) throw new ApiError(429, "rate_limited", `今日已經用咗 ${used} 次 AI，上限 ${limit} 次，聽日再嚟啦。`);

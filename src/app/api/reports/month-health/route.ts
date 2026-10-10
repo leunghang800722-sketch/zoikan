@@ -5,7 +5,8 @@
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { parseMonthParam, monthStart } from "@/lib/reports/money";
+import { parseMonthParam } from "@/lib/reports/money";
+import { hkMonthStart } from "@/lib/dates";
 import { buildMonthHealth, redactMonthHealth } from "@/lib/ops/month-health";
 import { addMonths } from "@/lib/ops/digest";
 
@@ -13,7 +14,7 @@ export async function GET(req: Request) {
   return withApiError(async () => {
     const session = await requirePermission(req, "月結總表", "view");
     const url = new URL(req.url);
-    const month = parseMonthParam(url.searchParams.get("month")) ?? addMonths(monthStart(new Date()), -1);
+    const month = parseMonthParam(url.searchParams.get("month")) ?? addMonths(hkMonthStart(), -1);
     const [roster, pii, bank, health] = await Promise.all([
       hasPermission(session, "更表", "view"),
       hasPermission(session, "安員個人資料", "view"),
