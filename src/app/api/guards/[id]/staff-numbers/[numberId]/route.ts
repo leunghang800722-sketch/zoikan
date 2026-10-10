@@ -3,9 +3,10 @@
 // POST 一樣行 unique／prefix 檢查）。冇硬刪（設計明文「冇硬刪」）。
 // 將 former 改返 current 要檢查 partial unique（同一個 guard 同一個
 // scheme 唔可以有兩行 current）。
+import { guardModule, assertScopedGuard } from "@/lib/api/route-modules";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { scopeGuardWhere, isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
+import { isBrokerRole, isInternalRole } from "@/lib/broker-isolation";
 import { toGuardStaffNumberDTO } from "@/lib/api/dto";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
@@ -14,13 +15,7 @@ import { GuardStaffNumberUpdateSchema } from "@/lib/api/schemas";
 import { normalizeStaffNumber, syncLegacyStaffNoColumns, hkToday } from "@/lib/guards/staff-numbers";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Forbidden, Conflict, BadRequest } from "@/lib/api/errors";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { Module } from "@/lib/rbac/matrix";
 import type { GuardStaffNumber } from "@prisma/client";
-
-function guardModule(session: AuthedSession): Module {
-  return isBrokerRole(session) ? "自己安員" : "安員";
-}
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string; numberId: string }> }) {
   return withApiError(async () => {
@@ -31,9 +26,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // 註解）。
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以改員工編號");
     const { id, numberId } = await params;
-    const guardWhere = scopeGuardWhere(session, { id });
-    const guard = await prisma.guard.findFirst({ where: guardWhere, select: { id: true } });
-    if (!guard) throw NotFound();
+    await assertScopedGuard(session, id);
 
     const body = await readJson(req);
     const parsed = parseBody(GuardStaffNumberUpdateSchema, body);

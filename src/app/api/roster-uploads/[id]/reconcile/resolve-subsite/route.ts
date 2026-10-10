@@ -10,17 +10,14 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { RosterReconcileResolveSubSiteSchema } from "@/lib/api/schemas";
-import { Conflict, NotFound } from "@/lib/api/errors";
 import { bulkResolveAmbiguousSubSite } from "@/lib/roster-upload/service";
-import { prisma } from "@/lib/db";
+import { assertUploadReconcilable } from "@/lib/roster-upload/reconcile-guard";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
     const session = await requirePermission(req, "更表上載", "update");
     const { id } = await params;
-    const exists = await prisma.rosterUpload.findUnique({ where: { id }, select: { id: true, status: true } });
-    if (!exists) throw NotFound();
-    if (exists.status === "voided") throw Conflict("呢個上載已經作廢，唔可以對數");
+    await assertUploadReconcilable(id);
 
     const body = await readJson(req);
     const parsed = parseBody(RosterReconcileResolveSubSiteSchema, body);
