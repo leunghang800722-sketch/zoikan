@@ -6,7 +6,7 @@
 //   **唔存 body、header、IP、stack**。
 // - 寫入（`writeAppErrorLog`）fire-and-forget：內部全部 try/catch，永遠唔 throw、唔改原本 response；DB 唔通就靜靜放棄。
 // - 寫入時順手 prune 30 日前紀錄（Prisma deleteMany，唔用 raw SQL；同一 process 最多每 10 分鐘 prune 一次）。
-// - 讀取 `listRecentAppErrors()` 俾助手 tool 檔 import（tool 檔唔可以含 `prisma.`／`@/lib/db` 字面，跟 list_feedback 先例）。
+// - 讀取（`listRecentAppErrors()`）搬咗去 `src/lib/reports/app-errors.ts`（助手 tool 檔 import 嗰邊，結構守門 allowlist 已涵蓋 reports/）；呢個檔淨係寫入＋遮罩。
 import { prisma } from "./db";
 
 const MAX_MESSAGE_CHARS = 300;
@@ -76,37 +76,6 @@ export async function writeAppErrorLog(input: AppErrorLogInput): Promise<void> {
   } catch {
     // DB 唔通／表未建——靜靜放棄，絕不影響原本 response
   }
-}
-
-export interface AppErrorRow {
-  id: string;
-  at: string;
-  method: string | null;
-  route: string;
-  status: number;
-  error_code: string | null;
-  error_name: string | null;
-  message: string;
-}
-
-/** 助手 `recent_app_errors` 用：最近 N 條（上限 50），只有已遮罩欄位。 */
-export async function listRecentAppErrors(limit: number): Promise<AppErrorRow[]> {
-  const take = Math.min(Math.max(Math.trunc(limit) || 20, 1), 50);
-  const rows = await prisma.appErrorLog.findMany({
-    orderBy: { createdAt: "desc" },
-    take,
-    select: { id: true, createdAt: true, method: true, route: true, status: true, errorCode: true, errorName: true, messageMasked: true },
-  });
-  return rows.map((r) => ({
-    id: r.id,
-    at: r.createdAt.toISOString(),
-    method: r.method,
-    route: r.route,
-    status: r.status,
-    error_code: r.errorCode,
-    error_name: r.errorName,
-    message: r.messageMasked,
-  }));
 }
 
 /** 測試用：重置 prune 節流。 */

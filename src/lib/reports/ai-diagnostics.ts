@@ -13,9 +13,10 @@ import { buildMonthHealth } from "@/lib/ops/month-health";
 import { buildOpsDigest } from "@/lib/ops/digest";
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 import { brokerDisplayName } from "../ai/tools/common";
-import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import type { AiFieldVisibility } from "../ai/field-scrub";
+import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
+import { scrubUnknownShape, type AiFieldVisibility } from "../ai/field-scrub";
 
+const GUARD_MATCH_FIXED_TEXT = "保安員配對要核實（明細要去分診頁，由有權限同事處理）";
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 const ymd = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
 const cut = (s: unknown, n: number) => (typeof s === "string" ? s.slice(0, n) : null);
@@ -38,7 +39,7 @@ interface StepLike {
   needsHuman?: unknown;
 }
 
-export async function readOneClickStatus(month: Date) {
+export async function readOneClickStatus(month: Date, vis?: AiFieldVisibility) {
   const runs = await findOneClickRuns(month, 5);
   const run = runs[0];
   if (!run) return { month: month.toISOString().slice(0, 7), run: null, runs_in_month: 0 };
@@ -52,7 +53,7 @@ export async function readOneClickStatus(month: Date) {
     needs_human: Array.isArray(s.needsHuman) ? s.needsHuman.map((w) => cut(w, 400)) : [],
   }));
   const report = (run.reportJson ?? null) as { auto?: { summary?: unknown; undone?: unknown; review?: Array<{ kind?: unknown; text?: unknown; confidence?: unknown; questionId?: unknown }> }; totals?: unknown; unpriced?: unknown; lockPrecondition?: unknown } | null;
-  return {
+  const result = {
     month: run.month.toISOString().slice(0, 7),
     runs_in_month: runs.length,
     run: {
@@ -67,11 +68,19 @@ export async function readOneClickStatus(month: Date) {
       // auto.summary（含 postorder_dependency）：by design 冇 PII
       auto_summary: report?.auto?.summary ?? null,
       auto_undone: report?.auto?.undone ?? null,
-      auto_review: (report?.auto?.review ?? []).slice(0, 30).map((r) => ({ kind: r.kind ?? null, text: cut(r.text, 300), confidence: r.confidence ?? null, question_id: r.questionId ?? null })),
+      // guard_match 類 review 文字可能帶保安員名／工號：同 triage_summary 一樣出固定句，唔原樣傳
+      auto_review: (report?.auto?.review ?? []).slice(0, 30).map((r) => ({
+        kind: r.kind ?? null,
+        text: r.kind === "month_close_guard_match" ? GUARD_MATCH_FIXED_TEXT : cut(r.text, 300),
+        confidence: r.confidence ?? null,
+        question_id: r.questionId ?? null,
+      })),
       unpriced: report?.unpriced ?? null,
       lock_precondition: report?.lockPrecondition ?? null,
     },
   };
+  // steps[].numbers／auto_summary 等按查閱者權限遮收客價／出街價類欄位（同其他工具一致）
+  return vis ? scrubUnknownShape(result, vis) : result;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +90,7 @@ interface McEvidenceLike {
   kind?: string;
   summary?: string;
   confidence?: string;
+  candidates?: Array<{ id?: unknown }>;
   action?: {
     type?: string;
     siteId?: string;
@@ -109,7 +119,7 @@ export async function readTriageSummary(month: Date, actor: Pick<AuthedSession, 
         where: { sessionId: { in: sessions.map((s) => s.id) }, status: { not: "superseded" } },
         orderBy: [{ status: "asc" }, { sort: "asc" }, { id: "asc" }],
         take: 600,
-        select: { id: true, sessionId: true, kind: true, status: true, evidenceJson: true },
+        select: { id: true, sessionId: true, kind: true, status: true, evidenceJson: true, optionsJson: true },
       })
     : [];
 
@@ -165,6 +175,9 @@ export async function readTriageSummary(month: Date, actor: Pick<AuthedSession, 
       shift_type: g?.shiftTypeId ? (stCode.get(g.shiftTypeId) ?? null) : null,
       broker_display: g?.brokerId ? (brokerDisp.get(g.brokerId) ?? null) : null,
       summary,
+      // 只 id（唔含名／label）：triage_answer 卡嘅 option／candidate_id 一定要用呢度嘅 id
+      options: (Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ id?: unknown }>) : []).map((o) => o.id).filter((x): x is string => typeof x === "string" && x !== "skip"),
+      candidates: (ev.candidates ?? []).map((c) => c.id).filter((x): x is string => typeof x === "string").slice(0, 10),
     };
   });
   return {
@@ -188,6 +201,8 @@ const SITE_DETAIL_KEYS = ["site_name", "shift_type_code", "broker_display", "cat
 /** 只放行「盤×更種×雞頭」層面明細（SITE_LEVEL_DETAIL_CODES，且只留 SITE_DETAIL_KEYS 欄）；其餘 finding 只回數量，
  * 完全冇保安員層面明細（等同 `redactMonthHealth()` 全部剝走）。 */
 export async function readMonthHealth(month: Date, session: AuthedSession) {
+  // 同 /api/reports/month-health 一致：睇明細要「更表:view」；冇就唔俾睇（工具層明細本身係「盤×更種×雞頭」，亦要呢個權）
+  if (!(await hasPermission(session, "更表", "view"))) return { error: "permission_denied", message: "你冇權睇「更表」，月結體檢明細答唔到。" };
   const health = await buildMonthHealth(month, session);
   return {
     month: health.month,

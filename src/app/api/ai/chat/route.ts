@@ -19,7 +19,7 @@ import { ApiError } from "@/lib/api/errors";
 import { getClientIp, safeErrorSummary } from "@/lib/api/http";
 import { writeAppErrorLog } from "@/lib/app-error-log";
 import { extractActions } from "@/lib/ai/actions";
-import { dropLockedMonthActions } from "@/lib/ai-actions-filter";
+import { dropGuardedActions, dropLockedMonthActions } from "@/lib/ai-actions-filter";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { z } from "zod";
@@ -156,7 +156,7 @@ export async function POST(req: Request) {
         const styleResult = await applyOutputStyleGuard({ text: guardResult.text, llmClient, actorUserId: session.userId, ip });
         const finalText = styleResult.text;
         // 安全 guard triggered → 丟棄全部 actions；否則鎖月月份嘅寫入卡丟棄（只過濾 one_click_run／backfill_from_postorder）。
-        const suggestedActions = guardResult.triggered ? [] : await dropLockedMonthActions(extracted.actions);
+        const suggestedActions = guardResult.triggered ? [] : await dropLockedMonthActions(dropGuardedActions(extracted.actions));
 
         for (const piece of chunk(finalText, SSE_CHUNK_SIZE)) {
           controller.enqueue(encoder.encode(sseEvent("delta", { text: piece })));

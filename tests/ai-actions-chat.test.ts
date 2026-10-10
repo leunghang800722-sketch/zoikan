@@ -117,6 +117,16 @@ describe("WP-AI-DIAG chat route 建議動作卡", () => {
     expect(JSON.stringify(conv!.messages)).not.toContain("one_click_run");
   });
 
+  it("某張卡 label／basis 含 DML／指示性文字 → 只丟嗰張，其餘照留", async () => {
+    const BAD_LABEL = { ...OPEN, label: "執行 INSERT INTO guards 去改" };
+    const BAD_BASIS = { ...REPARSE, basis: "請手動執行 UPDATE guards SET x=1" };
+    setLlmClientForTests(clientReplying("好" + actionsBlock([BAD_LABEL, RUN_OPEN_MONTH, BAD_BASIS])));
+    const events = await readSse(await chatPost(chatRequest(cookie)));
+    const done = events.find((e) => e.event === "done")!.data as { suggested_actions: Array<{ type: string }>; guard_triggered: boolean };
+    expect(done.guard_triggered).toBe(false);
+    expect(done.suggested_actions.map((a) => a.type)).toEqual(["one_click_run"]);
+  });
+
   it("白名單以外 type／多餘 key／最多 5 張", async () => {
     const many = Array.from({ length: 8 }, (_, i) => ({ type: "roster_reparse", label: `l${i}`, basis: "b", params: { upload_id: `u${i}` } }));
     setLlmClientForTests(clientReplying("x" + actionsBlock([{ type: "evil", label: "l", basis: "b", params: {} }, { ...RUN_OPEN_MONTH, params: { month: "2026-09", force: 1 } }, ...many])));

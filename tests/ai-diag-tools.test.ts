@@ -75,12 +75,15 @@ describe("WP-AI-DIAG 診斷工具", () => {
         currentStep: "report",
         stepsJson: [
           { key: "precheck", label: "前置檢查", status: "done", startedAt: null, finishedAt: null, numbers: { uploads: 3 }, warnings: [], needsHuman: [] },
-          { key: "auto_pricing", label: "自動歸屬／定價", status: "done", startedAt: null, finishedAt: null, numbers: { cards_created: 2, unpriced: 18 }, warnings: ["測試盤WP2 有 18 更未定價"], needsHuman: ["測試盤WP2 要人手揀價"] },
+          { key: "auto_pricing", label: "自動歸屬／定價", status: "done", startedAt: null, finishedAt: null, numbers: { cards_created: 2, unpriced: 18, revenue: 123456, guardWageSnapshot: 777 }, warnings: ["測試盤WP2 有 18 更未定價"], needsHuman: ["測試盤WP2 要人手揀價"] },
         ],
         reportJson: {
           auto: {
             summary: { cardsCreated: 2, unpricedRecords: 18, postorderDependency: { pricing: { total: 100, unpriced: 18, withoutPostorder: 80 } } },
-            review: [{ kind: "month_close_pricing", text: "測試盤WP2 N 18 更未定價", confidence: "unknown", questionId: null }],
+            review: [
+              { kind: "month_close_pricing", text: "測試盤WP2 N 18 更未定價", confidence: "unknown", questionId: null },
+              { kind: "month_close_guard_match", text: "測試盤WP2 3 格未配對：測試甲 U9001 61234567", confidence: "propose", questionId: null },
+            ],
             undone: false,
           },
           unpriced: { count: 18 },
@@ -112,7 +115,7 @@ describe("WP-AI-DIAG 診斷工具", () => {
           candidates: [{ id: "c1", label: "測試乙 U9002 61234568", refId: "g-x", evidence: "電話 61234568" }],
           prefillCandidateId: "c1",
         },
-        optionsJson: [],
+        optionsJson: [{ id: "mc_accept", label: "測試甲 U9001" }, { id: "mc_pick", label: "測試乙" }, { id: "skip", label: "跳過" }],
       },
     });
     guardMatchQuestionId = guardMatch.id;
@@ -205,6 +208,34 @@ describe("WP-AI-DIAG 診斷工具", () => {
     expect(run.auto_summary.postorderDependency).toBeTruthy();
   });
 
+  it("one_click_status：guard_match review 出固定句，冇假名／工號／電話（expectNoPii）", async () => {
+    const { raw, json } = await runTool(fx, "老闆", "one_click_status", { month: MONTH });
+    expectNoPii(raw);
+    const review = (json.run as { auto_review: Array<{ kind: string; text: string }> }).auto_review;
+    expect(review.find((r) => r.kind === "month_close_guard_match")!.text).toContain("保安員配對要核實");
+    expect(review.find((r) => r.kind === "month_close_pricing")!.text).toContain("18 更未定價");
+  });
+
+  it("one_click_status：steps numbers 按查閱權遮收客價／出街價類欄位", async () => {
+    const full = await runTool(fx, "主管", "one_click_status", { month: MONTH }, { clientRateVisible: true, settlementVisible: true });
+    const stepsFull = (full.json.run as { steps: Array<{ key: string; numbers: Record<string, unknown> }> }).steps;
+    expect(stepsFull.find((s) => s.key === "auto_pricing")!.numbers).toMatchObject({ revenue: 123456, guardWageSnapshot: 777 });
+    const hidden = await runTool(fx, "主管", "one_click_status", { month: MONTH }, { clientRateVisible: false, settlementVisible: false });
+    const n = (hidden.json.run as { steps: Array<{ key: string; numbers: Record<string, unknown> }> }).steps.find((s) => s.key === "auto_pricing")!.numbers;
+    expect("revenue" in n).toBe(false);
+    expect("guardWageSnapshot" in n).toBe(false);
+    expect(n.unpriced).toBe(18);
+  });
+
+  it("month_health：冇「更表:view」→ permission_denied（同 route 一致）", async () => {
+    await setGranted("主管", "更表", false);
+    const { json } = await runTool(fx, "主管", "month_health", { month: MONTH });
+    expect(json.error).toBe("permission_denied");
+    await setGranted("主管", "更表", true);
+    const ok = await runTool(fx, "主管", "month_health", { month: MONTH });
+    expect(ok.json.error).toBeUndefined();
+  });
+
   it("one_click_status：冇 run 嘅月份 → run: null", async () => {
     const { json } = await runTool(fx, "老闆", "one_click_status", { month: "2026-11" });
     expect(json.run).toBeNull();
@@ -220,9 +251,13 @@ describe("WP-AI-DIAG 診斷工具", () => {
     const qs = json.questions as Array<{ id: string; kind: string; status: string; confidence: string; site: string | null; shift_type: string | null; broker_display: string | null; summary: string }>;
     const pricing = qs.find((q) => q.kind === "month_close_pricing")!;
     expect(pricing).toMatchObject({ status: "open", confidence: "unknown", site: "測試盤WP2", shift_type: "N", broker_display: "測試雞頭A" });
-    const gm = qs.find((q) => q.id === guardMatchQuestionId)!;
+    const gm = qs.find((q) => q.id === guardMatchQuestionId)! as (typeof qs)[number] & { options: string[]; candidates: string[] };
+    expect(gm.options).toEqual(["mc_accept", "mc_pick"]);
     expect(gm.summary).toContain("3 格保安員配對要核實");
-    for (const q of qs) expect(Object.keys(q).sort()).toEqual(["broker_display", "confidence", "id", "kind", "shift_type", "site", "status", "summary"]);
+    for (const q of qs) expect(Object.keys(q).sort()).toEqual(["broker_display", "candidates", "confidence", "id", "kind", "options", "shift_type", "site", "status", "summary"]);
+    // options／candidates 只 id：candidates 嚟自 evidence（c1），options 唔含 skip
+    expect(gm.candidates).toEqual(["c1"]);
+    for (const q of qs) expect((q as unknown as { options: string[] }).options).not.toContain("skip");
   });
 
   it("triage_summary：非老闆（主管）只見自己 owner 嗰批 → 冇題", async () => {

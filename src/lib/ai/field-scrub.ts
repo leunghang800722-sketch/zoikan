@@ -91,8 +91,10 @@ export function scrubRowsForResource<T extends Record<string, unknown>>(
 // （sql_select 本身冇 column provenance 分析，呢個屬於刻意權衡：規劃裁定
 // 話 tokenizer 要「簡單」，唔做完整 SQL parser）。
 // ---------------------------------------------------------------------------
-const ALL_CLIENT_RATE_FIELD_NAMES = new Set(Object.values(CLIENT_RATE_FIELDS).flat());
-const ALL_SETTLEMENT_FIELD_NAMES = new Set(Object.values(SETTLEMENT_FIELDS).flat());
+// WP-AI-DIAG：一鍵結算 steps[].numbers 係 camelCase key（例如 guardWageSnapshot），所以兩個金錢 blocklist 都帶 camelCase 變體
+// （只會多擋，唔會少擋；原有 snake_case 行為不變）。
+const ALL_CLIENT_RATE_FIELD_NAMES = namesWithCamelVariant(Object.values(CLIENT_RATE_FIELDS).flat());
+const ALL_SETTLEMENT_FIELD_NAMES = namesWithCamelVariant(Object.values(SETTLEMENT_FIELDS).flat());
 
 function normalizeKey(key: string): string {
   return key.toLowerCase();

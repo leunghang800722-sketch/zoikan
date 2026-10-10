@@ -38,7 +38,7 @@ export function createOneClickStatusTool(ctx: AiToolContext) {
     run: async ({ month }) => {
       const denied = await requireModuleOrDenied(ctx, "一鍵結算");
       if (denied) return deniedResult(denied);
-      return toolResultJson(await readOneClickStatus(monthFromYm(month)));
+      return toolResultJson(await readOneClickStatus(monthFromYm(month), ctx.fieldVisibility));
     },
   });
 }

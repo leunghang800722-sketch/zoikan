@@ -137,7 +137,7 @@ export function buildSystemPrompt(session: AuthedSession, context?: AiPageContex
     {"type":"…","label":"一句講會做乜（60 字內）","params":{…},"basis":"數字依據（200 字內，引用工具回傳嘅數字）"}
     type 只可以係以下六種，params 只准列出嘅欄位，唔准加其他欄位：
     - open_page：params {"href":"/month-close?month=YYYY-MM"}——只准內部頁面路徑，以 /month-close、/roster-uploads、/guards、/guard-fix、/sites、/brokers、/rate-cards、/reports、/triage 開頭；
-    - triage_answer：params {"question_id","option","candidate_id"(可選)}——id 一定要係工具回傳嘅真 id；
+    - triage_answer：params {"question_id","option","candidate_id"(可選)}——question_id、option、candidate_id 一定要用待答問題摘要工具回傳嘅 id（每題有 options／candidates 陣列），唔准自創，唔准用 skip；
     - site_set_default_broker：params {"site_id","broker_id"}；
     - roster_reparse：params {"upload_id"}；
     - one_click_run：params {"month":"YYYY-MM"}；

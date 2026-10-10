@@ -1,7 +1,8 @@
 // WP-AI-DIAG（§37.3）：`app_error_log`——遮罩 function、寫入、prune、「log 寫入失敗唔影響 response」、只存 pathname。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearAll, prisma } from "./lib/db";
-import { maskErrorMessage, pathnameOnly, writeAppErrorLog, listRecentAppErrors, resetAppErrorLogPruneForTests } from "@/lib/app-error-log";
+import { maskErrorMessage, pathnameOnly, writeAppErrorLog, resetAppErrorLogPruneForTests } from "@/lib/app-error-log";
+import { listRecentAppErrors } from "@/lib/reports/app-errors";
 import { handleApiError, withApiError } from "@/lib/api/http";
 import { ApiError } from "@/lib/api/errors";
 
@@ -92,5 +93,22 @@ describe("writeAppErrorLog / handleApiError", () => {
     const { prisma: appPrisma } = await import("@/lib/db");
     vi.spyOn(appPrisma.appErrorLog, "create").mockRejectedValue(new Error("db down"));
     await expect(writeAppErrorLog({ status: 500, message: "x", route: "/x" })).resolves.toBeUndefined();
+  });
+});
+
+// 鎖住對 Next 內部 `work-async-storage.external` 嘅依賴（app-error-log.ts 用佢攞 route pattern）。Next 升級令內部路徑改咗就喺度 fail，唔會靜靜變成 route="(unknown)"。
+describe("Next 內部依賴（work-async-storage.external）", () => {
+  it("可以 import，workAsyncStorage.getStore 存在", async () => {
+    const mod = await import("next/dist/server/app-render/work-async-storage.external");
+    expect(typeof mod.workAsyncStorage.getStore).toBe("function");
+  });
+  it("normalizeAppPath 由 app route 檔案路徑出 pattern", async () => {
+    const { normalizeAppPath } = await import("next/dist/shared/lib/router/utils/app-paths");
+    expect(normalizeAppPath("/api/sites/[id]/route")).toBe("/api/sites/[id]");
+  });
+  it("app-error-log.ts 原始碼仍然 import 呢個內部模組", async () => {
+    const fs = await import("node:fs");
+    const src = fs.readFileSync(new URL("../src/lib/app-error-log.ts", import.meta.url), "utf-8");
+    expect(src).toContain("next/dist/server/app-render/work-async-storage.external");
   });
 });

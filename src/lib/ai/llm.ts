@@ -107,7 +107,8 @@ export class AnthropicLlmClient implements LlmClient {
     try {
       const runner = this.client.beta.messages.toolRunner({
         model: this.model,
-        max_tokens: 4096,
+        // claude provider（Opus＋adaptive thinking，thinking 計入）要較大；AI Hub／DeepSeek 路徑維持 4096
+        max_tokens: this.providerName === "claude" ? 8000 : 4096,
         max_iterations: params.maxToolRounds,
         thinking: { type: "adaptive" },
         output_config: { effort: "medium" },

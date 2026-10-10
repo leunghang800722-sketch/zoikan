@@ -1,9 +1,9 @@
 // WP-AI-DIAG（§37.3 / 37.6）：`recent_app_errors`——讀應用層錯誤日誌（`app_error_log`，已遮罩，冇 body／header／IP／stack）。
-// 呢個檔案唔含 `prisma.`／`@/lib/db` 字面（structural guard）：reader 放 `src/lib/app-error-log.ts`（`listRecentAppErrors()`），
+// 呢個檔案唔含 `prisma.`／`@/lib/db` 字面（structural guard）：reader 放 `src/lib/reports/app-errors.ts`（`listRecentAppErrors()`），
 // 跟 `list_feedback` 先例。只准老闆同有「操作紀錄:view」（現有最接近嘅管理／診斷 module）嘅角色用。
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
-import { listRecentAppErrors } from "@/lib/app-error-log";
+import { listRecentAppErrors } from "@/lib/reports/app-errors";
 import type { AiToolContext } from "./common";
 import { requireModuleOrDenied, deniedResult, toolResultJson } from "./common";
 
