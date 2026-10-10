@@ -34,13 +34,13 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
         <span className="text-zk-sm text-zk-muted">{fmtMdHm(run.finished_at ?? run.started_at)} 嗰次結算</span>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <div className={`${card} px-[18px] py-4`}>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-testid="report-kpis">
+        <div className={`${card} px-3 py-3.5 lg:px-[18px] lg:py-4`}>
           <div className="text-zk-sm text-zk-muted">總收入</div>
           <div className="mt-1 break-all text-zk-2xl font-bold leading-tight text-zk-text">{fmtMoney(report.totals.revenue)}</div>
           <div className="mt-1.5 text-zk-xs text-zk-muted">{siteCount} 個盤 · {fmtMoney(shiftSum)} 更</div>
         </div>
-        <div className={`${card} px-[18px] py-4`}>
+        <div className={`${card} col-span-2 px-[18px] py-4 lg:col-span-1`}>
           <div className="text-zk-sm text-zk-muted">總成本{report.totals.cost_basis === "combined" ? "（合併）" : "（毛利表口徑）"}</div>
           <div className="mt-1 break-all text-zk-2xl font-bold leading-tight text-zk-text">{fmtMoney(report.totals.cost)}</div>
           {stack && (
@@ -58,7 +58,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
             </>
           )}
         </div>
-        <div className={`${card} px-[18px] py-4`}>
+        <div className={`${card} px-3 py-3.5 lg:px-[18px] lg:py-4`}>
           <div className="text-zk-sm text-zk-muted">毛利{report.totals.cost_basis === "combined" ? "（合併口徑）" : ""}</div>
           <div className="mt-1 flex flex-wrap items-baseline gap-2">
             <span className="break-all text-zk-2xl font-bold leading-tight text-zk-text">{fmtMoney(report.totals.gross_margin)}</span>

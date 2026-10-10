@@ -1,6 +1,6 @@
 "use client";
 // 1a ① 上載：三行 grid `200px 1fr auto`——狀態一句＋掣；原長篇 Postorder 說明收入「睇點樣匯出 CSV ›」。
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import type { UploadRow } from "@/components/month-close/derive";
@@ -48,12 +48,21 @@ export function UploadSection(props: {
   const post = rows.find((r) => r.key === "postorder")!;
   const nRoster = props.rosterFiles?.length ?? 0;
   const allHave = roster.have && staff.have;
+  // P3-4.4：手機（<lg）更表同名單都有就收起（要上載先展開），少佔一屏。
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const bodyCls = allHave && !mobileOpen ? "max-lg:hidden" : "";
   return (
     <section className="overflow-hidden rounded-[10px] border border-zk-border bg-white" data-testid="upload-section">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-zk-border-soft px-4 py-3">
         <h2 className="text-zk-md font-semibold text-zk-text">① 上載</h2>
         <span className={`ml-auto text-zk-sm ${allHave ? "text-zk-success" : "text-zk-muted"}`}>{allHave ? "更表同名單都有，可以結算" : "更表同 U Team 名單上載咗先可以結算"}</span>
+        {allHave && (
+          <Button variant="link" size="sm" className="lg:hidden" onClick={() => setMobileOpen((v) => !v)} aria-expanded={mobileOpen} data-testid="upload-toggle">
+            {mobileOpen ? "收埋 ‹" : "展開 ›"}
+          </Button>
+        )}
       </div>
+      <div className={bodyCls}>
       {props.jobRunning && <div className="border-b border-zk-border-soft px-4 py-2 text-zk-sm text-zk-warning">一鍵結算執行緊——完成之前唔可以再上載</div>}
 
       <Row row={roster} extra={nRoster > 0 ? <span className="ml-2 text-zk-primary">已揀 {nRoster} 檔，撳右邊上載</span> : null}>
@@ -107,6 +116,7 @@ export function UploadSection(props: {
           §20.5：系統本身已經係總表，Postorder 純粹俾 8、9 月過渡對照用——以後淨係長工崗位盤／介紹雞頭要以系統資料為準。請將 Roster 同 PostOrder 兩個分頁另存做 CSV 上載（Google Sheets：檔案 → 下載 → 逗號分隔值）：PostOrder.csv（可另加 longterm-pairs.csv 或 Roster.csv）。.xlsm／.xlsx 大過 1.5MB 會被拒絕（會令伺服器爆記憶體）。
         </div>
       </details>
+      </div>
     </section>
   );
 }

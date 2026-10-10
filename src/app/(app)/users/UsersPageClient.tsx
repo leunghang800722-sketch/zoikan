@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
+import { tableCls, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { fmt, fmtDateTime, uiLabel } from "@/lib/ui/format";
@@ -245,8 +245,8 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
       )}
 
       <div className={tableCls.wrap}>
-        <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
-          <thead>
+        <table className="w-full border-collapse text-zk-base max-sm:block sm:min-w-[826px]">
+          <thead className="max-sm:hidden">
             <tr>
               <th className={tableCls.th}>名</th>
               <th className={tableCls.th}>電話</th>
@@ -257,7 +257,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
               <th className={tableCls.thNum}>操作</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="max-sm:block">
             {loading && (
               <TableLoadingRow colSpan={7} />
             )}
@@ -271,19 +271,19 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
             {filteredRows.map((r) => {
               const role = roleOf(r.role_id);
               return (
-                <tr key={r.id} data-testid="user-row" className={tableCls.rowHover}>
-                  <td className={`${tableCls.td} font-medium`}>{r.name}</td>
-                  <td className={tableCls.td}>{fmt(r.tel)}</td>
-                  <td className={tableCls.td}>
+                <tr key={r.id} data-testid="user-row" className={`${tableCls.rowHover} max-sm:flex max-sm:flex-col max-sm:gap-0.5 max-sm:border-b max-sm:border-zk-border-soft max-sm:px-3.5 max-sm:py-3`}>
+                  <td className={`${tableCls.td} font-medium max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{r.name}</td>
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{fmt(r.tel)}</td>
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>
                     {role ? <RolePill roleName={role.name} baseRole={role.base_role} /> : <span className="text-zk-faint">—</span>}
                   </td>
-                  <td className={tableCls.td}>{brokerLabel(r.broker_id)}</td>
-                  <td className={`${tableCls.td} text-zk-muted`}>{r.last_login_at ? fmtDateTime(r.last_login_at) : "從未登入"}</td>
-                  <td className={tableCls.td} data-testid="user-status-pill">
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{brokerLabel(r.broker_id)}</td>
+                  <td className={`${tableCls.td} text-zk-muted max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{r.last_login_at ? fmtDateTime(r.last_login_at) : "從未登入"}</td>
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`} data-testid="user-status-pill">
                     {statusPill(r)}
                   </td>
-                  <td className={tableCls.tdNum}>
-                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <td className={`${tableCls.tdNum} max-sm:border-0 max-sm:px-0 max-sm:py-1 max-sm:text-left`}>
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 max-sm:justify-start">
                       <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯
                       </Button>
