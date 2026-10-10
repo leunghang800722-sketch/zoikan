@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, TableEmptyRow } from "@/components/ui/DataTable";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
@@ -180,11 +180,7 @@ export default function OpsDigestPage() {
                       </tr>
                     ))}
                   {digest.categories.every((c) => c.count === 0 && c.prev_count === 0) && (
-                    <tr>
-                      <td className={tableCls.td} colSpan={5}>
-                        呢兩個月冇任何修正記錄。
-                      </td>
-                    </tr>
+                    <TableEmptyRow colSpan={5}>呢兩個月冇任何修正記錄。</TableEmptyRow>
                   )}
                 </tbody>
               </table>
@@ -215,12 +211,12 @@ export default function OpsDigestPage() {
 
             <div className="rounded-lg border border-zk-border bg-white p-4">
               <div className="mb-2 text-sm font-semibold text-zk-text">基線指標</div>
-              <table className="w-full text-zk-sm">
+              <table className={tableCls.table}>
                 <thead>
                   <tr className="text-left text-zk-muted">
-                    <th className="py-1 font-medium">指標</th>
-                    <th className="py-1 text-right font-medium">本月</th>
-                    <th className="py-1 text-right font-medium">上月</th>
+                    <th className={tableCls.th}>指標</th>
+                    <th className={tableCls.th}>本月</th>
+                    <th className={tableCls.th}>上月</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -237,10 +233,10 @@ export default function OpsDigestPage() {
                     ["作廢上載", b.uploads.voided, p.uploads.voided],
                     ["下月 1 號到鎖月日數", b.days_month_end_to_lock, p.days_month_end_to_lock],
                   ].map(([label, cur, prev]) => (
-                    <tr key={String(label)} className="border-t border-zk-border">
-                      <td className="py-1">{label}</td>
-                      <td className="py-1 text-right">{fmtNum(cur as number | null)}</td>
-                      <td className="py-1 text-right">{fmtNum(prev as number | null)}</td>
+                    <tr key={String(label)}>
+                      <td className={tableCls.td}>{label}</td>
+                      <td className={tableCls.td}>{fmtNum(cur as number | null)}</td>
+                      <td className={tableCls.td}>{fmtNum(prev as number | null)}</td>
                     </tr>
                   ))}
                 </tbody>

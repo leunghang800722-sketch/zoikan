@@ -12,12 +12,13 @@ import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtDate, currentMonthStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 interface QuotaRow {
   id: string;
@@ -46,21 +47,15 @@ interface BrokerRow {
 const emptyForm = { month: currentMonthStr(), site_id: "", shift_type_id: "", broker_id: "", target_shifts: "" };
 
 export default function QuotasPage() {
-  const [rows, setRows] = useState<QuotaRow[]>([]);
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [siteFilter, setSiteFilter] = useState("");
   const [monthFilter, setMonthFilter, monthReady] = useMonthState();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<QuotaRow, typeof emptyForm>(emptyForm);
   const [formShiftTypes, setFormShiftTypes] = useState<ShiftTypeRow[]>([]);
 
   async function load() {
@@ -119,68 +114,42 @@ export default function QuotasPage() {
   }
 
   function openCreate() {
-    setEditingId(null);
-    setForm({ ...emptyForm, site_id: siteFilter, month: monthFilter || currentMonthStr() });
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer({ ...emptyForm, site_id: siteFilter, month: monthFilter || currentMonthStr() });
   }
 
   function openEdit(row: QuotaRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       month: row.month.slice(0, 7),
       site_id: row.site_id,
       shift_type_id: row.shift_type_id,
       broker_id: row.broker_id,
       target_shifts: String(row.target_shifts),
     });
-    setFormError(null);
-    setDrawerOpen(true);
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setFormError(null);
-    const res = editingId
-      ? await apiPatch(`/api/quotas/${editingId}`, { target_shifts: Number(form.target_shifts) })
-      : await apiPost("/api/quotas", {
-          month: form.month,
-          site_id: form.site_id,
-          shift_type_id: form.shift_type_id,
-          broker_id: form.broker_id,
-          target_shifts: Number(form.target_shifts),
-        });
-    setSaving(false);
-    if (!res.ok) {
-      setFormError(res.message);
-      return;
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+    await saveForm(
+      () =>
+        editingId
+          ? apiPatch(`/api/quotas/${editingId}`, { target_shifts: Number(form.target_shifts) })
+          : apiPost("/api/quotas", {
+              month: form.month,
+              site_id: form.site_id,
+              shift_type_id: form.shift_type_id,
+              broker_id: form.broker_id,
+              target_shifts: Number(form.target_shifts),
+            }),
+      load,
+    );
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/quotas/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已作廢");
-    await load();
+    await runAction(() => apiPost(`/api/quotas/${id}/void`, { reason }), "已作廢", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/quotas/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已解除作廢");
-    await load();
+    await runAction(() => apiPost(`/api/quotas/${id}/unvoid`), "已解除作廢", load);
   }
 
   const colCount = 6;
@@ -245,11 +214,7 @@ export default function QuotasPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {rows.map((r) => {
                   const st = shiftType(r.shift_type_id);

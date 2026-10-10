@@ -6,6 +6,7 @@ import { useState, type ReactNode } from "react";
 import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
 import { UNDO_NOTE, humanize, deriveAutoCategories, type AutoCatKey } from "@/components/month-close/derive";
+import { tableCls } from "@/components/ui/DataTable";
 
 export type { AutoReportDTO };
 const HEAD_ROWS = 6;
@@ -81,26 +82,26 @@ export function AutoSummaryCard({ auto, extraFooter }: { auto: AutoReportDTO; ex
                   <div className="rounded-lg border border-zk-border px-3 py-2.5 text-zk-sm text-zk-muted">呢類冇逐項紀錄（逐項最多記 80 項）。</div>
                 ) : (
                   <div className="overflow-x-auto rounded-lg border border-zk-border">
-                    <table className="w-full min-w-[560px] text-zk-sm" data-testid="auto-rows">
+                    <table className={tableCls.table} data-testid="auto-rows">
                       <thead>
                         <tr className="bg-zk-header text-left text-zk-xs font-semibold text-zk-muted">
-                          <th className="px-3 py-1.5">盤</th>
-                          {showPrice && <th className="px-2 py-1.5">更種</th>}
-                          {showBroker && <th className="px-2 py-1.5">雞頭</th>}
-                          <th className="px-2 py-1.5 text-right">更數</th>
-                          {showPrice && <th className="px-2 py-1.5">定咗嘅價</th>}
-                          <th className="px-2 py-1.5">依據</th>
+                          <th className={tableCls.th}>盤</th>
+                          {showPrice && <th className={tableCls.th}>更種</th>}
+                          {showBroker && <th className={tableCls.th}>雞頭</th>}
+                          <th className={tableCls.th}>更數</th>
+                          {showPrice && <th className={tableCls.th}>定咗嘅價</th>}
+                          <th className={tableCls.th}>依據</th>
                         </tr>
                       </thead>
                       <tbody>
                         {shown.map((r, i) => (
-                          <tr key={i} className="border-t border-zk-border-soft align-top">
-                            <td className="px-3 py-2 font-medium">{r.site || "—"}</td>
-                            {showPrice && <td className="px-2 py-2">{r.shiftType ? <span className="rounded bg-zk-primary-tint px-1.5 py-px text-zk-xs font-semibold text-zk-primary-deep">{r.shiftType}</span> : "—"}</td>}
-                            {showBroker && <td className="px-2 py-2">{r.broker || "—"}</td>}
-                            <td className="px-2 py-2 text-right">{r.n ?? "—"}</td>
-                            {showPrice && <td className="px-2 py-2">{humanize(r.price) || "—"}</td>}
-                            <td className="px-2 py-2">{r.basis ? <span className="inline-block rounded-[10px] bg-zk-surface px-2 py-0.5 text-zk-xs text-zk-text-secondary">{humanize(r.basis)}</span> : "—"}</td>
+                          <tr key={i}>
+                            <td className={tableCls.td}>{r.site || "—"}</td>
+                            {showPrice && <td className={tableCls.td}>{r.shiftType ? <span className="rounded bg-zk-primary-tint px-1.5 py-px text-zk-xs font-semibold text-zk-primary-deep">{r.shiftType}</span> : "—"}</td>}
+                            {showBroker && <td className={tableCls.td}>{r.broker || "—"}</td>}
+                            <td className={tableCls.td}>{r.n ?? "—"}</td>
+                            {showPrice && <td className={tableCls.td}>{humanize(r.price) || "—"}</td>}
+                            <td className={tableCls.td}>{r.basis ? <span className="inline-block rounded-[10px] bg-zk-surface px-2 py-0.5 text-zk-xs text-zk-text-secondary">{humanize(r.basis)}</span> : "—"}</td>
                           </tr>
                         ))}
                       </tbody>

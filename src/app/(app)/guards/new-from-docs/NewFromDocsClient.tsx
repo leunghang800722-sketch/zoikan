@@ -17,6 +17,7 @@ import type { FieldStatus } from "@/lib/guards/ocr/normalize";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
 import { kickerFor } from "@/lib/nav/schema";
 import Link from "next/link";
+import { tableCls } from "@/components/ui/DataTable";
 
 const DOC_LABEL: Record<OcrDocType, string> = { id_card: "身份證（必須）", address_proof: "住址證明（可選）", onboarding_form: "入職表（可選）" };
 const DOC_SHORT: Record<OcrDocType, string> = { id_card: "身份證", address_proof: "住址證明", onboarding_form: "入職表" };
@@ -550,15 +551,15 @@ export function NewFromDocsClient() {
             )}
           </div>
           <div className="overflow-x-auto rounded-lg border border-zk-border">
-            <table className="w-full text-zk-base">
+            <table className={tableCls.table}>
               <tbody>
                 {FIELD_ORDER.filter((k) => k !== "sex").map((k) => {
                   // 回應經 camelToSnake：欄位 key 係 name_zh／name_en／date_of_birth…
                   const c = row.fields[k === "dob" ? "date_of_birth" : k];
                   return (
-                    <tr key={k} className="border-t border-zk-border first:border-t-0">
-                      <td className="p-2 text-zk-faint">{FIELD_LABEL[k]}</td>
-                      <td className="p-2">{k === "phone" && c?.check === "differs" ? "現有有其他電話，會加入呢個號碼（冇「保安員個人資料」權限只補空）" : (CHECK_TEXT[c?.check ?? "missing"] ?? "（未能比較）")}</td>
+                    <tr key={k}>
+                      <td className={tableCls.td}>{FIELD_LABEL[k]}</td>
+                      <td className={tableCls.td}>{k === "phone" && c?.check === "differs" ? "現有有其他電話，會加入呢個號碼（冇「保安員個人資料」權限只補空）" : (CHECK_TEXT[c?.check ?? "missing"] ?? "（未能比較）")}</td>
                     </tr>
                   );
                 })}

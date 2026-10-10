@@ -22,7 +22,7 @@ import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmt, fmtDate, isExpired, isExpiringSoon, todayLocalStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { kickerFor } from "@/lib/nav/schema";
@@ -1800,11 +1800,7 @@ export function GuardsClient({
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {visibleRows.map((r) => {
                   // WP-PII（可接受但順手）：牌照／平安卡兩個到期日取較早

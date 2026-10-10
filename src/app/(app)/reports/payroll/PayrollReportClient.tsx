@@ -13,12 +13,13 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtMoney } from "@/lib/ui/format";
 import { BROKER_KIND_LABEL, brokerKindPillTone } from "@/lib/ui/broker-kind";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { UnpricedNotice } from "@/components/UnpricedNotice";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // P0（Opus 驗收重現）：`broker_id` 可以係 `null`——代表「未歸屬結算
@@ -164,44 +165,8 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
 
       <Banner kind="error" message={error} />
       <Banner kind="info" message={notice} data-testid="payroll-notice" />
-      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
-      {unpricedCount > 0 && (
-        <Banner compact kind="warning">
-          <p className="font-medium">呢個月有 {unpricedCount} 更未定價（冇對應價目卡），金額未計入呢份糧明細：</p>
-          <ul className="list-disc pl-5 mt-1">
-            {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
-                搶眼嘅 Notice，見下面）——留喺呢度會令人以為補張卡就得，
-                但真正要做嘅係指定雞頭。 */}
-            {unpricedGroups
-              .filter((g) => g.category !== "no_settlement")
-              .map((g) => (
-                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Banner>
-      )}
-      {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
-          唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
-          單位」行。就算未定價 count＝0 都要顯示（同 RosterEditor.tsx 一
-          致嘅獨立 error Notice）。 */}
-      {noSettlementCount > 0 && (
-        <Banner compact kind="error">
-          <p className="font-medium">
-            呢個月有 {noSettlementCount} 格冇結算單位（唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算單位」行）：
-          </p>
-          <ul className="list-disc pl-5 mt-1">
-            {unpricedGroups
-              .filter((g) => g.category === "no_settlement")
-              .map((g) => (
-                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Banner>
-      )}
+      {/* WP-PRICE §3：頁頂「N 更未定價」——P3-4.2 共用 <UnpricedNotice>（報表頁一行＋「去處理 ›」）。 */}
+      <UnpricedNotice variant="compact" month={month} unpricedCount={unpricedCount} noSettlementCount={noSettlementCount} groups={unpricedGroups} scope="糧明細" />
       <EmptyMonthNotice month={month} isEmpty={!loading && totals.length === 0} onJump={setMonth} />
 
       {/* 桌面表。 */}
@@ -220,11 +185,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
           </thead>
           <tbody>
             {loading && (
-              <tr>
-                <td className="px-3.5 py-4 text-sm text-zk-faint" colSpan={7}>
-                  載入緊…
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={7} />
             )}
             {!loading && totals.length === 0 && (
               <tr>

@@ -14,9 +14,10 @@ import { Banner } from "@/components/ui/Banner";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDate } from "@/lib/ui/format";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { UnpricedNotice } from "@/components/UnpricedNotice";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 // M4（Opus 驗收）：`grouped_days` 按 (日期, 盤, 更別, 出街價) 合併——一
@@ -182,19 +183,8 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
       )}
 
       <Banner kind="error" message={error} />
-      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
-      {(data?.unpriced_count ?? 0) > 0 && (
-        <Banner compact kind="warning">
-          <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定價（冇對應價目卡），金額未計入以上合計：</p>
-          <ul className="list-disc pl-5 mt-1">
-            {(data!.unpriced_groups ?? []).map((g) => (
-              <li key={`${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-              </li>
-            ))}
-          </ul>
-        </Banner>
-      )}
+      {/* WP-PRICE §3：頁頂「N 更未定價」——P3-4.2 共用 <UnpricedNotice>（報表頁一行＋「去處理 ›」）。 */}
+      <UnpricedNotice variant="compact" month={month} unpricedCount={(data?.unpriced_count ?? 0)} noSettlementCount={0} groups={(data?.unpriced_groups ?? [])} scope="以上合計" />
       {!forbiddenPreview && <EmptyMonthNotice month={month} isEmpty={!loading && (data?.grouped_days.length ?? 0) === 0} onJump={setMonth} />}
 
       {data && (
@@ -226,11 +216,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
             </thead>
             <tbody>
               {loading && (
-                <tr>
-                  <td colSpan={COLS} className="px-3.5 py-4 text-sm text-zk-faint">
-                    載入緊…
-                  </td>
-                </tr>
+                <TableLoadingRow colSpan={COLS} />
               )}
               {!loading && (data?.grouped_days.length ?? 0) === 0 && (
                 <tr>

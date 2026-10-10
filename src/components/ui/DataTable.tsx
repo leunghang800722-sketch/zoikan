@@ -52,3 +52,25 @@ export function EmptyState({ title, description, cta }: EmptyStateProps) {
     </div>
   );
 }
+
+/** P3-4.2：表格「載入緊…」統一列（純文字，唔做 skeleton）。 */
+export function TableLoadingRow({ colSpan, text = "載入緊…" }: { colSpan: number; text?: string }) {
+  return (
+    <tr>
+      <td className={tableCls.tdMuted} colSpan={colSpan}>
+        {text}
+      </td>
+    </tr>
+  );
+}
+
+/** P3-4.2：表格「冇資料」統一列。 */
+export function TableEmptyRow({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+  return (
+    <tr>
+      <td className={tableCls.tdMuted} colSpan={colSpan}>
+        {children}
+      </td>
+    </tr>
+  );
+}

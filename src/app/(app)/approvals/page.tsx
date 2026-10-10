@@ -12,7 +12,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtDate } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
@@ -213,11 +213,7 @@ export default function ApprovalsPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {rows.map((r) => {
                   const busy = busyIds.has(r.id);

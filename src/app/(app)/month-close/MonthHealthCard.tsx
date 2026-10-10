@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
 import { healthDupReviewCount, humanizeHealth, humanizeHealthCell, type ReviewGroup } from "@/components/month-close/derive";
+import { tableCls } from "@/components/ui/DataTable";
 
 interface FindingDTO {
   code: string;
@@ -138,11 +139,11 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
                 {f.detail_withheld && <div className="mt-1 text-zk-xs text-zk-faint">冇權限睇明細，淨係顯示數量。</div>}
                 {open === f.code && f.detail && (
                   <div className="mt-2 overflow-x-auto">
-                    <table className="min-w-full text-zk-xs">
+                    <table className={tableCls.table}>
                       <thead>
                         <tr>
                           {cols.map((c) => (
-                            <th key={c} className="px-2 py-1 text-left font-medium text-zk-muted">
+                            <th key={c} className={tableCls.th}>
                               {COLUMN_LABELS[c] ?? c}
                             </th>
                           ))}
@@ -150,9 +151,9 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
                       </thead>
                       <tbody>
                         {f.detail.map((row, i) => (
-                          <tr key={i} className="border-t border-zk-border">
+                          <tr key={i}>
                             {cols.map((c) => (
-                              <td key={c} className="px-2 py-1">
+                              <td key={c} className={tableCls.td}>
                                 {cell(row[c])}
                               </td>
                             ))}
