@@ -12,6 +12,7 @@ import { readJson } from "@/lib/api/query";
 import { BadRequest, Conflict } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { writeAudit } from "@/lib/audit";
+import { findOneClickRuns } from "@/lib/month-close/one-click-read";
 import { runOneClickMonthClose, ONE_CLICK_ADVISORY_LOCK_KEY, ONE_CLICK_STALE_MS, monthCloseRunStalled } from "@/lib/month-close/one-click";
 
 export async function POST(req: Request) {
@@ -55,11 +56,7 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const monthParam = url.searchParams.get("month");
     const month = monthParam ? parseMonthParam(monthParam) : null;
-    const runs = await prisma.monthCloseRun.findMany({
-      where: month ? { month } : undefined,
-      orderBy: { startedAt: "desc" },
-      take: 20,
-    });
+    const runs = await findOneClickRuns(month);
     return ok(
       brandSafeResponse({
         runs: runs.map((r) => ({

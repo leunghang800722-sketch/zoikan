@@ -140,6 +140,13 @@ zod`）定義，逐個 request 由 `buildAiTools({session, fieldVisibility})`
 | `shortfall` | `@/lib/reports/shortfall.ts` | `尚欠總覽` | 同上（`monthProgress` 入面） |
 | `recent_audit` | `ai.audit_log` | `操作紀錄` | `scrubUnknownShape`（before/after 通用欄位名 blocklist） |
 | `sql_select` | 任意 `ai.*` SELECT | 逐張表對應嗰個 module（見下「權限」一節） | `scrubUnknownShape`（best-effort，見已知限制） |
+| `one_click_status`（WP-AI-DIAG） | `findOneClickRuns()`（`src/lib/month-close/one-click-read.ts`，同 `GET /api/month-close/one-click` 共用） | `一鍵結算` | — |
+| `triage_summary`（WP-AI-DIAG） | `readTriageSummary()`（自己寫投影，**唔回 `questionViews()`**） | `導入分診`（非老闆只見自己 owner 嗰批） | 保安員配對題只出格數，候選／身份／summary 一律唔回 |
+| `month_health`（WP-AI-DIAG） | `buildMonthHealth()`（同 `/api/reports/month-health` 共用） | `月結總表` | 保安員層面明細全部唔出；僅「未定價／冇結算單位／OT 未定價」出「盤×更種×雞頭」明細 |
+| `ops_digest`（WP-AI-DIAG） | `buildOpsDigest()`（同 `/api/reports/ops-digest` 共用；唔經 `ai-summary`） | `月結總表` | 本身冇人名 |
+| `site_setup`（WP-AI-DIAG） | Prisma 讀（`src/lib/reports/ai-diagnostics.ts`） | `盤`；上載狀態另要 `更表上載`（冇就 `withheld`） | 價卡只講「有冇客價／出街價」，按 `fieldVisibility` 冇權就 `null` |
+| `pricing_explain`（WP-AI-DIAG） | `buildUnpricedSummary()`＋價卡＋一鍵自動定價紀錄 | `出街價` | 價卡金額經 `scrubRowsForResource("rate_cards")`。**另開而唔擴充 `explain_rate_card`**：後者輸入係價卡 id、解釋計法，呢個輸入係盤＋更種＋雞頭＋月、答點解未定價，互補 |
+| `recent_app_errors`（WP-AI-DIAG） | `listRecentAppErrors()`（`src/lib/app-error-log.ts`，讀 `app_error_log`，已遮罩） | `操作紀錄`（老闆＋被授權角色） | 表唔喺 `ai` schema、唔開 view；tool 檔只 import reader，冇 `prisma.`／`@/lib/db` 字面 |
 
 **field-group gate**（`src/lib/ai/field-scrub.ts`）直接重用
 `src/lib/api/field-groups.ts` 嘅 `CLIENT_RATE_FIELDS`/
@@ -296,7 +303,9 @@ message，見 `src/lib/ai-conversation.ts`）。每條問答另外寫一條
 
 | Env | 用途 |
 |---|---|
-| `AI_PROVIDER` | `anthropic`/`deepseek`/`fake`；唔填就自動揀（見上面「LLM 可注入」判斷次序） |
+| `AI_PROVIDER` | `claude`/`anthropic`/`deepseek`/`fake`；唔填就自動揀（WP-AI-DIAG 之後次序：`AI_LLM=fake` → 明文 `AI_PROVIDER` → 有 `CLAUDE_API_KEY` 就 `claude` → 有 `DEEPSEEK_API_KEY` 就 `deepseek` → 有 `AI_HUB_API_KEY` 就 `anthropic`） |
+| `CLAUDE_API_KEY` | WP-AI-DIAG：Anthropic 官方 API key（`claude` provider；x-api-key，直連 `https://api.anthropic.com`）。OCR（`GUARD_OCR_*`）同助手共用同一個 key |
+| `AI_CLAUDE_MODEL` | WP-AI-DIAG：`claude` provider 型號，預設 `claude-opus-5-5`；**唔讀 `AI_MODEL`**（正式站 `AI_MODEL` 可能係 DeepSeek 型號名） |
 | `DEEPSEEK_API_KEY` | DeepSeek API key（OpenAI 格式） |
 | `DEEPSEEK_BASE_URL` | DeepSeek base URL，預設 `https://api.deepseek.com` |
 | `AI_HUB_BASE_URL` | Zeabur AI Hub base URL（`anthropic` fallback provider 用） |
@@ -306,7 +315,7 @@ message，見 `src/lib/ai-conversation.ts`）。每條問答另外寫一條
 | `AI_DB_PASSWORD` | `zoikan_ai_ro` 密碼；冇就 `db:ensure-ai-role` 跳過並 warn |
 | `AI_DAILY_LIMIT` | 每人每日問答上限，預設 100 |
 
-冇任何 provider 配置好（冇 `DEEPSEEK_API_KEY`、冇 `AI_HUB_API_KEY`、亦
+冇任何 provider 配置好（冇 `CLAUDE_API_KEY`、冇 `DEEPSEEK_API_KEY`、冇 `AI_HUB_API_KEY`、亦
 冇 `AI_LLM=fake`）——`getLlmClient()` 會拋 `LlmUnavailableError`，route
 回 503（`{error:"ai_provider_unavailable"}`），唔會噴 stack。
 
@@ -628,3 +637,34 @@ session` 就 `429`；續用現有 draft（唔開新嘅）唔受呢個上限影�
   兩輪→整理→預覽→改一欄→送出→老闆登入見 badge 1→開清單→睇詳情→改狀態
   →badge 0；雞頭／主管冇「現場意見」入口＋直接打 `/feedback` 一律 403
   畫面。
+
+
+## WP-AI-DIAG（§37）：Claude 診斷＋建議動作卡
+
+**不變嘅鐵律**：助手**架構上零寫入工具**——模型工具清單只有唯讀工具（`tests/ai-diag-tools.test.ts` 斷言工具名全部喺已知唯讀清單、冇 create／update／delete 類）；`sql_select` 仍然淨係 SELECT `ai` schema（`zoikan_ai_ro`）；PII 投影層不變（Claude 同 DeepSeek 一樣唔見真名／工號／電話／身份證）。
+
+### Provider `claude`
+- `AI_PROVIDER=claude` 或有 `CLAUDE_API_KEY` 就自動揀（次序見上面 Env 表）。用現有 `AnthropicLlmClient`（SDK Tool Runner、system prompt `cache_control`、`thinking:{type:"adaptive"}`、`output_config:{effort:"medium"}`），但 auth 用 `apiKey`（x-api-key），`baseURL` 固定 `https://api.anthropic.com`、`maxRetries:1`、`logLevel:"off"`、`authToken:null`。型號 `AI_CLAUDE_MODEL`（預設 `claude-opus-5-5`）。
+- DeepSeek（`AI_PROVIDER=deepseek`）同 AI Hub 路徑行為不變（`DeepSeekLlmClient` 只係 return 多咗 `provider`／`model` 兩欄）。
+- `LlmChatResult` 加 `provider`／`model`（optional，additive）；chat audit `after` 同 SSE `done` 加 `provider`、`model`。
+- 啟動 log：`scripts/ai/assistant-startup-log.ts`（Dockerfile CMD，喺 `guard-ocr-selftest` 之前）印 `[ai-assistant] provider=<x> model=<y>`——淨係名稱，冇 key。
+- **已知部署前提**：正式站（Zeabur 香港節點）打 Anthropic 官方 API 會被地區封鎖（`403 forbidden`，見 P2 §36.7、§38）；搬新加坡之後先可以用 `claude` provider。真 Claude 呼叫本機冇 key，未測，由驗收／部署後驗。
+
+### 建議動作卡
+- 模型喺回覆**最後**附 ```` ```actions ```` fenced block（JSON 陣列）。Server（chat route）喺安全 guard **之前**先 `extractActions(text)`（`src/lib/ai/actions.ts`）剝走 block；剩低文字照舊行 `checkOutputGuardAndAudit()` → `applyOutputStyleGuard()`；安全 guard `triggered` 就**丟棄全部 actions**。
+- Zod 白名單：`open_page{href}`／`triage_answer{question_id,option,candidate_id?}`／`site_set_default_broker{site_id,broker_id}`／`roster_reparse{upload_id}`／`one_click_run{month}`／`backfill_from_postorder{month}`。type 以外丟棄；`params` `.strict()`（多餘 key＝成張卡丟棄）；id 限 `[A-Za-z0-9_-]{1,64}`（會砌入 API 路徑）；month 限 `YYYY-MM`；`label` ≤60、`basis` ≤200、最多 5 張。`open_page.href` 必須 `/` 開頭、唔含 `//`／`\`／空白／協議，正規化後 pathname 喺 `/month-close`、`/roster-uploads`、`/guards`、`/guard-fix`、`/sites`、`/brokers`、`/rate-cards`、`/reports`、`/triage` 前綴。
+- **鎖月過濾**：server 對 `one_click_run`／`backfill_from_postorder` 用現有 `isMonthLocked()`（`src/lib/ai-actions-filter.ts`）查，鎖咗（或查鎖失敗）就丟棄；其餘寫入 type 靠現有 API 本身嘅鎖月檢查。system prompt 亦明文禁止對鎖月建議寫入。
+- SSE `done` 加 `suggested_actions`；對話 history assistant turn 加可選 `actions`（`StoredChatMessage.actions?`，舊記錄冇照讀；讀出時再 `sanitizeActionCards()`）；chat audit `after.suggested_actions:[{type,label}]`（唔存 params、唔存對話全文）。
+- **唔做** §37.4 寫嘅 `after.ai_suggested=true`：要求「撳卡請求同人手操作一字不差」，加標記就唔再一字不差；建議紀錄改由 chat audit 嘅 `suggested_actions` 承擔。
+
+### 前端（`src/components/ai/ActionCards.tsx`）
+- 每個 assistant message 下面渲染卡（前端再用同一份 schema 擋一次）。`open_page`＝內部連結；寫入卡＝「會做乜」＋「依據」＋掣 → **5 秒撤銷條**（`src/components/ui/UndoBar.tsx`，沿用月結頁 `DEFERRED_UNDO_MS`）→ 5 秒後先經**現有** API 送出；5 秒內撤銷＝完全唔發請求；元件卸載（側欄收埋）＝取消倒數。
+- request 對照（`src/lib/ui/ai-action-requests.ts`，`tests/ai-action-requests.test.ts` 斷言字面相等＋掃人手 call site 原始碼）：`one_click_run`＝`POST /api/month-close/one-click {month}`；`backfill_from_postorder`＝`POST /api/rate-cards/backfill-from-postorder {month}`；`site_set_default_broker`＝`PATCH /api/sites/:id {default_settlement_broker_id}`；`roster_reparse`＝`POST /api/roster-uploads/:id/reparse`（冇 body）；`triage_answer`＝先 `POST …/questions/:id/preview {answer}` 顯示影響摘要，撳「確認」再 5 秒撤銷，再 `POST …/answer {answer, preview_hash}`。
+- 成功：卡標「已做」＋側欄本地加「已做：<label>」備註（純前端，唔 POST 對話）；失敗：顯示 API 回傳 message。
+- `AI_LLM=fake`：userMessage 含「診斷」就回帶 `open_page`＋`one_click_run`（固定假月份 2099-01）兩張卡嘅固定回覆。
+
+### `app_error_log`（應用層錯誤日誌）
+- public schema（**唔入 `ai` schema、唔開 view**），欄位 `id／created_at／method／route／status／error_code／error_name／message_masked／actor_user_id`。**唔存 body、header、IP、stack、query string**。
+- 寫入點：`handleApiError()`（`src/lib/api/http.ts`，非 `ApiError` 嘅未預期錯誤，status 500）＋ `/api/ai/chat` stream catch。`void writeAppErrorLog(...)` fire-and-forget、內部 try/catch、永遠唔改 response；寫入時順手 prune 30 日前（Prisma `deleteMany`，同一 process 最多每 10 分鐘一次）。
+- `route` 優先取 Next route pattern（`/api/sites/[id]`，連 id 都唔入）；`handleApiError` 冇 session，`actor_user_id` 留 null（`/api/ai/chat` 有 session 就填）。`method` 喺 `handleApiError` 攞唔到（唔改 route 簽名）→ null。
+- 遮罩（`maskErrorMessage()`）：email→`[email]`、`sk-` 開頭 token→`[redacted]`、連續 ≥6 位數字→`[num]`、≤300 字，輸入已經係 `safeErrorSummary()`。

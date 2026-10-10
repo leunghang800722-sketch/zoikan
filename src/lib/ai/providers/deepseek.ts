@@ -224,6 +224,6 @@ export class DeepSeekLlmClient implements LlmClient {
       throw mapDeepSeekError(err);
     }
 
-    return { text: finalText, toolsUsed: [...toolsUsed], inputTokens, outputTokens };
+    return { text: finalText, toolsUsed: [...toolsUsed], inputTokens, outputTokens, provider: "deepseek", model: this.model };
   }
 }

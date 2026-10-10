@@ -14,6 +14,7 @@ import { deriveAiContext, type AiPageContext } from "@/lib/ui/ai-context";
 import { streamAiChat, type AiChatMessage } from "@/lib/ui/ai-chat-client";
 import { streamFeedbackChat } from "@/lib/ui/feedback-chat-client";
 import { SimpleMarkdown } from "./SimpleMarkdown";
+import { ActionCards } from "./ActionCards";
 import { Notice } from "@/components/ui/Notice";
 
 // P2.5「現場反映」開會模式（老闆 2026-09-15 拍板方案 D）——側欄獨立模式：
@@ -101,6 +102,8 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  // WP-AI-DIAG：撳咗建議動作卡成功之後，側欄本地加嘅「已做：…」備註（純前端，唔 POST 對話）
+  const [actionNotes, setActionNotes] = useState<string[]>([]);
 
   // P2.5「現場反映」開會模式——狀態同普通問答模式分開擺（唔混用
   // messages/sending 等），兩套 UI 互斥顯示（`meetingMode` 決定顯示邊套）。
@@ -247,6 +250,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
     const res = await apiRequest("/api/ai/conversation", { method: "DELETE" });
     if (res.ok) {
       setMessages([]);
+      setActionNotes([]);
       setErrorMessage(null);
     }
     setConfirmingClear(false);
@@ -597,7 +601,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             )}
 
             {messages.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
+              <div key={i} className={m.role === "user" ? "flex justify-end" : "flex flex-col items-start"}>
                 <div
                   data-testid={m.role === "user" ? "ai-message-user" : "ai-message-assistant"}
                   className={
@@ -607,6 +611,17 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   }
                 >
                   {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : <span className="whitespace-pre-wrap">{m.content}</span>}
+                </div>
+                {m.role === "assistant" && m.actions && m.actions.length > 0 && (
+                  <ActionCards actions={m.actions} onDone={(label) => setActionNotes((prev) => [...prev, `已做：${label}`])} />
+                )}
+              </div>
+            ))}
+
+            {actionNotes.map((note, i) => (
+              <div key={`note-${i}`} className="flex justify-start">
+                <div data-testid="ai-action-note" className="max-w-[86%] rounded-xl bg-zk-surface px-3 py-[9px] text-[12.5px] text-zk-text-secondary">
+                  {note}
                 </div>
               </div>
             ))}
