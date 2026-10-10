@@ -143,10 +143,6 @@ export default function SitesPage() {
 
   useEffect(() => {
     load();
-    void (async () => {
-      const res = await apiGet<ApiListResult<BrokerLite>>("/api/brokers?take=500");
-      if (res.ok) setBrokers(res.data.rows.filter((b) => b.status === undefined || b.status === "active"));
-    })();
   }, []);
   // WP-RECONCILE-UI（§33.3 D）：`/sites?focus=<siteId>` 高亮＋捲到該盤（純 UI）。
   const focusSite = useFocusParam();
@@ -179,6 +175,13 @@ export default function SitesPage() {
     setFormError(null);
     setSuggestion(null);
     setDrawerOpen(true);
+    // 雞頭名單只喺開編輯抽屜先攞（列表頁 request 集合不變）。
+    if (brokers.length === 0) {
+      void (async () => {
+        const bres = await apiGet<ApiListResult<BrokerLite>>("/api/brokers?take=500");
+        if (bres.ok) setBrokers(bres.data.rows.filter((b) => b.status === undefined || b.status === "active"));
+      })();
+    }
     void (async () => {
       const res = await apiGet<DefaultBrokerSuggestion>(`/api/sites/${row.id}/default-broker-suggestion`);
       if (res.ok) setSuggestion(res.data);
@@ -330,7 +333,7 @@ export default function SitesPage() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
                         {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
-                        {r.default_settlement_broker_id && <Pill variant="neutral">預設雞頭 {brokers.find((b) => b.id === r.default_settlement_broker_id)?.code ?? "已設"}</Pill>}
+                        {r.default_settlement_broker_id && <Pill variant="neutral">已設預設雞頭</Pill>}
                       </div>
                     </td>
                     <td className={tableCls.td}>
@@ -378,7 +381,7 @@ export default function SitesPage() {
                   {billingModelPill(r.billing_model)}
                   {r.status === "active" ? <Pill variant="success">進行中</Pill> : <Pill variant="neutral">{r.status}</Pill>}
                   {r.guards_paid_by_client && <Pill variant="neutral">客戶直接出糧</Pill>}
-                  {r.default_settlement_broker_id && <Pill variant="neutral">預設雞頭 {brokers.find((b) => b.id === r.default_settlement_broker_id)?.code ?? "已設"}</Pill>}
+                  {r.default_settlement_broker_id && <Pill variant="neutral">已設預設雞頭</Pill>}
                   <span className="text-[11.5px] text-zk-muted">
                     {shiftTypesLoading ? "載入緊…" : (shiftTypesBySite[r.id] ?? []).map((s) => s.code).join(" · ") || "—"}
                   </span>
