@@ -10,6 +10,7 @@
 // - 每張卡 `label` ≤60 字、`basis` ≤200 字；最多 5 張。
 // - 模型輸出永遠唔會被自動執行：呢度只係「解析＋白名單」，執行要用戶喺畫面撳掣（現有 API、現有權限、5 秒撤銷）。
 import { z } from "zod";
+import { OPTION_IDS } from "../triage/types";
 
 export const MAX_ACTION_CARDS = 5;
 export const ACTION_LABEL_MAX = 60;
@@ -29,6 +30,8 @@ export const ALLOWED_PAGE_PREFIXES = [
 ] as const;
 
 const ID = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "id 格式唔啱");
+/** 現有分診選項 id（`OPTION_IDS`），唔包 `skip`（跳過唔做成建議卡）。 */
+const NON_SKIP_OPTION = z.string().refine((v) => (OPTION_IDS as readonly string[]).includes(v) && v !== "skip", "option 唔喺現有非 skip 選項");
 const MONTH = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "month 要 YYYY-MM");
 
 /** 回傳正規化後嘅內部 href，唔合格回 null。 */
@@ -63,7 +66,7 @@ export const actionCardSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("triage_answer"),
     ...base,
-    params: z.object({ question_id: ID, option: z.string().regex(/^[a-z0-9_]{1,40}$/), candidate_id: ID.optional() }).strict(),
+    params: z.object({ question_id: ID, option: NON_SKIP_OPTION, candidate_id: ID.optional() }).strict(),
   }),
   z.object({ type: z.literal("site_set_default_broker"), ...base, params: z.object({ site_id: ID, broker_id: ID }).strict() }),
   z.object({ type: z.literal("roster_reparse"), ...base, params: z.object({ upload_id: ID }).strict() }),

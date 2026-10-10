@@ -38,19 +38,19 @@ describe("卡 → request（字面對照）", () => {
   });
   it("open_page 同 triage_answer 唔經 requestForAction", () => {
     expect(requestForAction(card({ type: "open_page", ...base, params: { href: "/triage" } }))).toBeNull();
-    expect(requestForAction(card({ type: "triage_answer", ...base, params: { question_id: "q1", option: "confirm" } }))).toBeNull();
+    expect(requestForAction(card({ type: "triage_answer", ...base, params: { question_id: "q1", option: "mc_accept" } }))).toBeNull();
   });
   it("triage preview → answer（帶 preview_hash）", () => {
-    const c = card({ type: "triage_answer", ...base, params: { question_id: "q-1", option: "use_candidate", candidate_id: "c-1" } }) as Extract<ActionCard, { type: "triage_answer" }>;
-    expect(triageAnswerOf(c)).toEqual({ option: "use_candidate", candidate_id: "c-1" });
-    expect(triagePreviewRequest(c)).toEqual({ method: "POST", url: "/api/triage/questions/q-1/preview", body: { answer: { option: "use_candidate", candidate_id: "c-1" } } });
+    const c = card({ type: "triage_answer", ...base, params: { question_id: "q-1", option: "mc_pick", candidate_id: "c-1" } }) as Extract<ActionCard, { type: "triage_answer" }>;
+    expect(triageAnswerOf(c)).toEqual({ option: "mc_pick", candidate_id: "c-1" });
+    expect(triagePreviewRequest(c)).toEqual({ method: "POST", url: "/api/triage/questions/q-1/preview", body: { answer: { option: "mc_pick", candidate_id: "c-1" } } });
     expect(triageAnswerRequest(c, "h".repeat(64))).toEqual({
       method: "POST",
       url: "/api/triage/questions/q-1/answer",
-      body: { answer: { option: "use_candidate", candidate_id: "c-1" }, preview_hash: "h".repeat(64) },
+      body: { answer: { option: "mc_pick", candidate_id: "c-1" }, preview_hash: "h".repeat(64) },
     });
-    const noCand = card({ type: "triage_answer", ...base, params: { question_id: "q-2", option: "skip" } }) as Extract<ActionCard, { type: "triage_answer" }>;
-    expect(triageAnswerOf(noCand)).toEqual({ option: "skip" });
+    const noCand = card({ type: "triage_answer", ...base, params: { question_id: "q-2", option: "mc_ack" } }) as Extract<ActionCard, { type: "triage_answer" }>;
+    expect(triageAnswerOf(noCand)).toEqual({ option: "mc_ack" });
   });
   it("每種 type 都有「會做乜」一句", () => {
     for (const c of [
@@ -59,7 +59,7 @@ describe("卡 → request（字面對照）", () => {
       { type: "backfill_from_postorder", params: { month: "2026-09" } },
       { type: "site_set_default_broker", params: { site_id: "s", broker_id: "b" } },
       { type: "roster_reparse", params: { upload_id: "u" } },
-      { type: "triage_answer", params: { question_id: "q", option: "skip" } },
+      { type: "triage_answer", params: { question_id: "q", option: "mc_ack" } },
     ]) {
       expect(describeAction(card({ ...c, ...base })).length).toBeGreaterThan(5);
     }

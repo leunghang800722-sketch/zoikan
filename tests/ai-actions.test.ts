@@ -54,7 +54,7 @@ describe("extractActions", () => {
       { type: "backfill_from_postorder", label: "l", basis: "b", params: { month: "9月" } },
       { type: "roster_reparse", label: "l", basis: "b", params: { upload_id: "../../x" } },
       { type: "site_set_default_broker", label: "l", basis: "b", params: { site_id: "s1" } },
-      { type: "triage_answer", label: "l", basis: "b", params: { question_id: "a/b", option: "confirm" } },
+      { type: "triage_answer", label: "l", basis: "b", params: { question_id: "a/b", option: "mc_accept" } },
     ];
     expect(sanitizeActionCards(bad)).toEqual([]);
   });
@@ -74,12 +74,17 @@ describe("extractActions", () => {
     expect(sanitizeActionCards(cards)).toHaveLength(MAX_ACTION_CARDS);
   });
 
+  it("triage_answer option 唔准 skip／唔喺現有選項清單", () => {
+    const mk = (option: string) => ({ type: "triage_answer", label: "l", basis: "b", params: { question_id: "q-1", option } });
+    expect(sanitizeActionCards([mk("skip"), mk("not_an_option"), mk("mc_pick"), mk("link")]).length).toBe(2);
+  });
+
   it("triage_answer 合法形狀（candidate_id 可選）", () => {
     const r = extractActions(
       "x" +
         block([
-          { type: "triage_answer", label: "答第 1 題", basis: "b", params: { question_id: "q-1", option: "use_candidate", candidate_id: "c-1" } },
-          { type: "triage_answer", label: "答第 2 題", basis: "b", params: { question_id: "q-2", option: "skip" } },
+          { type: "triage_answer", label: "答第 1 題", basis: "b", params: { question_id: "q-1", option: "mc_pick", candidate_id: "c-1" } },
+          { type: "triage_answer", label: "答第 2 題", basis: "b", params: { question_id: "q-2", option: "mc_ack" } },
         ]),
     );
     expect(r.actions).toHaveLength(2);
