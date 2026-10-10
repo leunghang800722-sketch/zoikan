@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { gzipSync } from "node:zlib";
 import { ApiError } from "./errors";
 import { camelToSnakeDeep, type Dto } from "./serialize";
+import { writeAppErrorLog } from "../app-error-log";
 
 export function getClientIp(req: Request): string | null {
   const xff = req.headers.get("x-forwarded-for");
@@ -61,7 +62,15 @@ export function handleApiError(err: unknown): NextResponse {
   if (err instanceof ApiError) {
     return NextResponse.json({ error: err.code, message: err.message, ...(err.details ?? {}) }, { status: err.status });
   }
-  console.error("[api] 未預期錯誤", safeErrorSummary(err));
+  const summary = safeErrorSummary(err);
+  console.error("[api] 未預期錯誤", summary);
+  // WP-AI-DIAG：fire-and-forget 寫應用層錯誤日誌（遮罩、冇 body／header／IP／stack）；永遠唔影響下面嘅 response。
+  // `writeAppErrorLog` 內部全 try/catch；呢度再包一層防萬一同步拋錯。actorUserId 留 null（呢度冇 session，唔為咗攞 user id 改 route 簽名）。
+  try {
+    void writeAppErrorLog({ status: 500, errorCode: "internal_error", errorName: err instanceof Error ? err.constructor.name : typeof err, message: summary });
+  } catch {
+    // ignore
+  }
   return NextResponse.json({ error: "internal_error", message: "系統錯誤" }, { status: 500 });
 }
 

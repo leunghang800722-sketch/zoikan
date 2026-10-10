@@ -1555,6 +1555,23 @@ model AiConversation {
   @@map("ai_conversations")
 }
 
+// WP-AI-DIAG（§37）：應用層錯誤日誌——只存「未預期 5xx」嘅類別／遮罩訊息，供助手診斷（recent_app_errors）。
+// 唔存 body／header／IP／stack／query string；唔入 `ai` schema（助手經 tool 檔 import 專用 reader 讀）。保留 30 日（寫入時順手 prune）。
+model AppErrorLog {
+  id            String   @id @default(uuid())
+  createdAt     DateTime @default(now()) @map("created_at")
+  method        String?
+  route         String
+  status        Int
+  errorCode     String?  @map("error_code")
+  errorName     String?  @map("error_name")
+  messageMasked String   @map("message_masked")
+  actorUserId   String?  @map("actor_user_id")
+
+  @@index([createdAt])
+  @@map("app_error_log")
+}
+
 // ---------------------------------------------------------------------------
 // P2.5「現場反映」開會模式（老闆 2026-09-15 拍板，方案 D）——助手做訪談員
 // （src/lib/ai/feedback-prompt.ts），唔評可行性（見 feasibility-guard.ts），

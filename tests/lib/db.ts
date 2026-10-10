@@ -23,6 +23,7 @@ export async function clearAll() {
   // granted 值會俾測試改（例如 tests/wp2-roles-permissions-endpoint.
   // test.ts 開一格 off→on）——所以呢度每次都刪晒再照出廠矩陣重種一次，
   // 保證每個 test 開始都係出廠設定，唔會俾第啲 test file 嘅改動漏過嚟。
+  await prisma.appErrorLog.deleteMany({}); // WP-AI-DIAG：應用層錯誤日誌（無 FK）
   await prisma.monthCloseAutoChange.deleteMany({}); // WP-ONE-CLICK-AUTO：自動改動流水帳（FK 落 month_close_runs）
   await prisma.reconcileAllRun.deleteMany({}); // 唔好令前一個 test 檔留低嘅 running 對數 run 擋住下一個
   await prisma.monthCloseRun.deleteMany({});

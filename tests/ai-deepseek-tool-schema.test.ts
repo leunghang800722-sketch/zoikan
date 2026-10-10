@@ -33,14 +33,14 @@ const ctx: AiToolContext = {
   fieldVisibility: { clientRateVisible: true, settlementVisible: true, guardPiiVisible: true, guardBankVisible: true },
 };
 
-describe("WP-AI3：betaZodTool → OpenAI function tool 轉換（15 個工具，老闆 session）", () => {
+describe("WP-AI3：betaZodTool → OpenAI function tool 轉換（22 個工具，老闆 session）", () => {
   const tools = buildAiTools(ctx);
 
   // P2.5：`fakeSession.baseRole === "老闆"`，`buildAiTools()` 而家會多掛
   // 一個 `list_feedback`（14 個原有工具 + 1，見 src/lib/ai/tools/index.ts）
-  // ——同 docs/ai-assistant.md 工具表一致（15 = 14 舊 + list_feedback）。
-  it("`buildAiTools()` 老闆 session 出返 15 個工具（14 舊 + list_feedback）", () => {
-    expect(tools).toHaveLength(15);
+  // ——同 docs/ai-assistant.md 工具表一致（22 = 14 舊 + list_feedback + WP-AI-DIAG 7 個診斷工具）。
+  it("`buildAiTools()` 老闆 session 出返 22 個工具（14 舊 + list_feedback + 7 診斷）", () => {
+    expect(tools).toHaveLength(22);
   });
 
   it.each(tools.map((t) => [(t as unknown as { name: string }).name, t] as const))(
