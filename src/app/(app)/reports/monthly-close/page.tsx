@@ -394,7 +394,7 @@ export default function MonthlyCloseWorkbenchPage() {
             title={`${month} 未有月結記錄`}
             description="呢個月未生成過——撳「生成月結」建立月結總表＋五條自動對數規則。"
             cta={
-              <Button variant="dark" onClick={generate} disabled={loading}>
+              <Button variant="dark" onClick={generate} disabled={loading} data-testid="generate-month-close-empty">
                 {loading ? "生成緊…" : "生成月結"}
               </Button>
             }

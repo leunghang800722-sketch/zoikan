@@ -196,7 +196,7 @@ test("(e2) Opus 整合驗收 A1：冇 month_closes 行嘅月份——空狀態�
   await page.locator('input[type="month"]').fill("2026-12");
 
   await expect(page.getByText("2026-12 未有月結記錄")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole("button", { name: "Generate", exact: true })).toBeVisible();
+  await expect(page.getByTestId("generate-month-close-empty")).toBeVisible(); // P3-3.4：「Generate」改名「生成月結」
 
   const res = await page.request.get("/api/month-closes?month=2026-12");
   expect(res.ok()).toBe(true);
