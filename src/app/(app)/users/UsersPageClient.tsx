@@ -15,6 +15,7 @@
 // 頁首「角色」FilterChip（README §16）：users 本身已經全量載入
 // （`?take=500`），呢個 filter 淨係喺已經攞到手嘅列表客戶端篩，唔使
 // 加 API 參數。
+import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
 import { useEffect, useMemo, useState } from "react";
 import { apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
@@ -387,14 +388,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
           <Field label="允許登入 IP（allowed_ip）" hint="留空＝不限">
             <input className={inputCls} value={form.allowed_ip} onChange={(e) => setForm((f) => ({ ...f, allowed_ip: e.target.value }))} />
           </Field>
-          <div className="flex gap-2 pt-2">
-            <Button variant="primary" size="sm" type="submit" disabled={saving}>
-              {saving ? "儲存緊…" : "儲存"}
-            </Button>
-            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
-              取消
-            </Button>
-          </div>
+          <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>
       </Drawer>
     </div>

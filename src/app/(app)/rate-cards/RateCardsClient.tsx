@@ -6,6 +6,7 @@
 // component，攞 session）傳 `isBroker` 落嚟，跟 `my-receivable` 果頁
 // 同一個 pattern——雞頭 session 頁首 kicker 要顯示「我的」（跟
 // `src/lib/rbac/nav.ts` 導航分組），唔可以再寫死「主檔」。
+import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
@@ -701,14 +702,7 @@ export function RateCardsClient({
           <Field label="備註">
             <input className={inputCls} value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
           </Field>
-          <div className="flex gap-2 pt-2">
-            <Button variant="primary" size="sm" type="submit" disabled={saving}>
-              {saving ? "儲存緊…" : "儲存"}
-            </Button>
-            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
-              取消
-            </Button>
-          </div>
+          <DrawerFormFooter saving={saving} onCancel={() => setDrawerOpen(false)} />
         </form>
       </Drawer>
     </div>
