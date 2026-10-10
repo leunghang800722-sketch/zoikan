@@ -39,6 +39,8 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   const [facts, setFacts] = useState({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
   // null＝跟最新 run 報告；鎖／解鎖之後蓋過（run 報告係結算當時嘅快照）。
   const [lockedOverride, setLockedOverride] = useState<boolean | null>(null);
+  // P3-4.0：鎖定狀態以 month_closes 記錄為準（`GET /api/month-closes?month=`），唔依賴有冇一鍵結算 run（7、8 月係舊月結工作台鎖嘅）。
+  const [mcRecord, setMcRecord] = useState<{ id: string; locked_at: string | null } | null>(null);
   const [health, setHealth] = useState<{ critical: number; warn: number; info: number } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [unsentMsg, setUnsentMsg] = useState<string | null>(null);
@@ -61,6 +63,12 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     setRuns(list);
   }
 
+  async function loadMonthClose() {
+    const res = await apiGet<{ rows: Array<{ id: string; locked_at: string | null }> }>(`/api/month-closes?month=${month}`);
+    if (unmountedRef.current) return;
+    setMcRecord(res.ok ? (res.data.rows[0] ?? null) : null);
+  }
+
   // 上次對話框關閉／離開時有題送出失敗（記喺 sessionStorage）→ 提示重新答。
   useEffect(() => {
     reportUnsent();
@@ -71,7 +79,9 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     setFacts({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
     setLockedOverride(null);
     setHealth(null);
+    setMcRecord(null);
     loadRuns();
+    void loadMonthClose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month, monthReady]);
 
@@ -237,6 +247,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     else {
       setNotice(`${month} 已鎖定`);
       setLockedOverride(true);
+      void loadMonthClose();
       setNeedDiffReason(false);
       setDiffReason("");
     }
@@ -258,6 +269,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     else {
       setNotice(`${month} 已解鎖`);
       setLockedOverride(false);
+      void loadMonthClose();
       await loadRuns();
     }
   }
@@ -266,10 +278,13 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   const report = latestRun?.report ?? null;
   // Opus 驗收：job 行緊嗰陣唔俾再上載（會開新版本／改名單，job 讀到一半嘅資料）。
   const jobRunning = !!latestRun && latestRun.status === "running" && !latestRun.stalled;
-  const locked = lockedOverride ?? (report?.lock_precondition.current_month_already_locked === true || stepByKey(latestRun, "precheck")?.numbers.currentMonthLocked === true);
+  const runLocked = report?.lock_precondition.current_month_already_locked === true || stepByKey(latestRun, "precheck")?.numbers.currentMonthLocked === true;
+  // month_closes 有記錄就以記錄為準；冇記錄先睇 run 報告。
+  const locked = lockedOverride ?? (mcRecord ? !!mcRecord.locked_at : runLocked);
+  const lockedAt = mcRecord?.locked_at ?? (lockedOverride === true ? new Date().toISOString() : null);
 
   const uploads = useMemo(() => deriveUploads(latestRun, facts, report), [latestRun, facts, report]);
-  const stages = useMemo(() => deriveStages({ run: latestRun, report, uploads, locked }), [latestRun, report, uploads, locked]);
+  const stages = useMemo(() => deriveStages({ run: latestRun, report, uploads, locked, lockedAt }), [latestRun, report, uploads, locked, lockedAt]);
   const groups = useMemo(() => groupReview(report?.auto?.review), [report]);
   const sessionId = report?.auto?.triage_session_id ?? null;
   const openTriage = () => {
@@ -334,6 +349,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
               />
               <LockSection
                 report={report}
+                lockedAt={lockedAt}
                 month={month}
                 busy={busy}
                 locked={locked}
@@ -349,6 +365,25 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
                 onHealth={setHealth}
               />
             </>
+          )}
+          {!report && locked && (
+            <LockSection
+              report={null}
+              lockedAt={lockedAt}
+              month={month}
+              busy={busy}
+              locked={locked}
+              groups={groups}
+              onUnlock={unlockMonth}
+              canUnlock={canUnlock}
+              needDiffReason={false}
+              diffReason=""
+              onDiffReason={setDiffReason}
+              isBoss={isBoss}
+              onForceLock={() => undefined}
+              onOpenTriage={openTriage}
+              onHealth={setHealth}
+            />
           )}
           <HistorySection runs={runs} busy={busy} open={showHistory} onToggle={() => setShowHistory((v) => !v)} onRerun={rerun} />
         </div>

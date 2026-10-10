@@ -529,10 +529,12 @@ export default function MonthlyCloseWorkbenchPage() {
 
             {/* P3-3.4（老闆 3A）：鎖月只喺「月結 › 一鍵結算」頁做（鎖月前體檢、條件、鎖／解鎖掣都喺嗰度）。 */}
             <div className="flex flex-col gap-1.5" data-testid="lock-pointer">
-              <div className="text-zk-sm leading-relaxed text-zk-muted">{locked ? "已鎖定。要解鎖或者睇鎖月紀錄，去一鍵結算頁。" : "鎖月前體檢同鎖定掣喺一鍵結算頁。"}</div>
-              <Link href={`/month-close?month=${month}`} className="text-zk-base font-semibold text-zk-primary hover:underline" data-testid="goto-month-close">
-                去一鍵結算{locked ? "" : "鎖月"} ›
-              </Link>
+              <div className="text-zk-sm leading-relaxed text-zk-muted" data-testid="lock-pointer-text">
+                {locked ? `已鎖定（${new Date(result.month_close.locked_at!).toLocaleDateString("zh-HK")}）` : "未鎖定"} ·{" "}
+                <Link href={`/month-close?month=${month}`} className="text-zk-base font-semibold text-zk-primary hover:underline" data-testid="goto-month-close">
+                  {locked ? "去一鍵結算解鎖 ›" : "去一鍵結算鎖月 ›"}
+                </Link>
+              </div>
             </div>
           </div>
         </div>

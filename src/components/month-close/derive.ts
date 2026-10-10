@@ -135,8 +135,8 @@ export function runSeconds(run: RunDTO | null): number | null {
   return Number.isFinite(s) && s >= 0 ? Math.round(s) : null;
 }
 
-export function deriveStages(args: { run: RunDTO | null; report: ReportDTO | null; uploads: UploadRow[]; locked: boolean }): Stage[] {
-  const { run, report, uploads, locked } = args;
+export function deriveStages(args: { run: RunDTO | null; report: ReportDTO | null; uploads: UploadRow[]; locked: boolean; lockedAt?: string | null }): Stage[] {
+  const { run, report, uploads, locked, lockedAt } = args;
   const rosterRow = uploads.find((u) => u.key === "roster")!;
   const haveAny = uploads.some((u) => u.have);
   const upBits: string[] = [];
@@ -167,7 +167,7 @@ export function deriveStages(args: { run: RunDTO | null; report: ReportDTO | nul
   }
 
   let lock: Stage;
-  if (locked) lock = { key: "lock", name: "鎖定", state: "ok", sub: "已鎖定" };
+  if (locked) lock = { key: "lock", name: "鎖定", state: "ok", sub: lockedAt ? `已鎖定（${fmtMdHm(lockedAt).split(" ")[0]}）` : "已鎖定" };
   else if (!report) lock = { key: "lock", name: "鎖定", state: "todo", sub: "未到" };
   else {
     const reqs = lockRequirements(report, 0);
