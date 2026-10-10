@@ -219,7 +219,7 @@ export async function findCarryoverCard(siteId: string, shiftTypeId: string, mon
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 簽名保留 actorUserId／ip：呼叫方（runOneClickMonthClose）一律傳呢兩個參數，Phase 3 之後 step0 唔再寫卡／audit（見下面大註解），暫時用唔著，但保留簽名等日後 step0 加返其他需要 actor/ip 嘅動作唔使改晒 call site。
-export async function stepPrecheck(month: Date, actorUserId: string, ip: string | null): Promise<{ numbers: Record<string, unknown>; warnings: string[]; needsHuman: string[]; halt?: string }> {
+export async function stepPrecheck(month: Date, _actorUserId: string, _ip: string | null): Promise<{ numbers: Record<string, unknown>; warnings: string[]; needsHuman: string[]; halt?: string }> {
   const { start, end } = monthRange(month);
   const numbers: Record<string, unknown> = {};
   const warnings: string[] = [];

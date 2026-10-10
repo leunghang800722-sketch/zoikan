@@ -330,8 +330,8 @@ test("老闆：多檔隊列——並發 ≤2（跨批次）、取消未開始檔
     const input = page.getByTestId("roster-upload-file-input");
 
     // 第一批 3 個，即刻再嚟第二批 2 個（跨批次）。
-    await input.setInputFiles(rawNames.slice(0, 3).map((n, i) => ({ name: `acc-conc-${i + 1}.xlsx`, mimeType: xlsxMime, buffer: buffers[i]! })));
-    await input.setInputFiles(rawNames.slice(3).map((n, i) => ({ name: `acc-conc-${i + 4}.xlsx`, mimeType: xlsxMime, buffer: buffers[i + 3]! })));
+    await input.setInputFiles(rawNames.slice(0, 3).map((_n, i) => ({ name: `acc-conc-${i + 1}.xlsx`, mimeType: xlsxMime, buffer: buffers[i]! })));
+    await input.setInputFiles(rawNames.slice(3).map((_n, i) => ({ name: `acc-conc-${i + 4}.xlsx`, mimeType: xlsxMime, buffer: buffers[i + 3]! })));
 
     const queue = page.getByTestId("roster-upload-queue");
     // 取消最後一個（仲喺「等緊」）。
