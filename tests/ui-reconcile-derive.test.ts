@@ -6,6 +6,7 @@ import {
   classifyReason,
   findSimilar,
   humanizeReasonPart,
+  piiHidden,
   matchNeedsBossByPerson,
   matchNeedsBossForQuestion,
   personFromRow,
@@ -15,7 +16,7 @@ import {
   type NeedsBossItem,
 } from "@/components/reconcile/derive";
 
-const P = { name: "測試甲乙", staffNo: "U90001", tel: "91230001" };
+const P = { name: "甲測試", staffNo: "U90001", tel: "91230001" };
 const G = (over: Partial<GuardLite> & { id: string; name_zh: string }): GuardLite => ({ staff_no: null, tel: null, status: "active", ...over });
 
 describe("classifyReason／humanize", () => {
@@ -36,20 +37,20 @@ describe("classifyReason／humanize", () => {
   });
   it("安員未配對講明更表寫咗乜", () => {
     const [part] = classifyReason("安員未配對");
-    expect(humanizeReasonPart(part!, P)).toBe("更表寫「測試甲乙／U90001」，名冊搵唔到");
-    expect(humanizeReasonPart(part!, { name: "測試甲乙", staffNo: "", tel: "" })).toBe("更表寫「測試甲乙」，名冊搵唔到");
+    expect(humanizeReasonPart(part!, P)).toBe("更表寫「甲測試／U90001」，名冊搵唔到");
+    expect(humanizeReasonPart(part!, { name: "甲測試", staffNo: "", tel: "" })).toBe("更表寫「甲測試」，名冊搵唔到");
     expect(humanizeReasonPart(part!, null)).toContain("冇寫姓名／工號");
   });
 });
 
 describe("相似安員（四種規則，最多 3 個）", () => {
   const guards: GuardLite[] = [
-    G({ id: "g1", name_zh: "測試甲乙" }), // 同名
-    G({ id: "g2", name_zh: "李四五", staff_no: "U90001" }), // 同工號
-    G({ id: "g3", name_zh: "完全唔同", tel: "65550001" }), // 電話尾 4（0001）
-    G({ id: "g4", name_zh: "測試丙乙" }), // 同姓（測）＋一字（乙）
-    G({ id: "g5", name_zh: "王大明", staff_no: "U12345" }), // 無關
-    G({ id: "g6", name_zh: "測試丁戊" }), // 同姓但冇相同字（試？有「試」）——見下
+    G({ id: "g1", name_zh: "甲測試" }), // 同名
+    G({ id: "g2", name_zh: "丁測試", staff_no: "U90001" }), // 同工號
+    G({ id: "g3", name_zh: "丙電話", tel: "65550001" }), // 電話尾 4（0001）
+    G({ id: "g4", name_zh: "甲測丙" }), // 同姓（甲）＋一字（測）
+    G({ id: "g5", name_zh: "己測試", staff_no: "U90011" }), // 無關
+    G({ id: "g6", name_zh: "甲丁戊" }), // 同姓但冇相同字
   ];
   it("同名／同工號／電話尾 4／同姓一字各自命中", () => {
     const r = findSimilar(P, guards, 10);
@@ -70,13 +71,13 @@ describe("相似安員（四種規則，最多 3 個）", () => {
     expect(r[0]?.why).toEqual(["staff_no"]);
   });
   it("冇相似", () => {
-    expect(findSimilar({ name: "孤獨名", staffNo: "U00000", tel: "" }, guards)).toEqual([]);
+    expect(findSimilar({ name: "庚獨行", staffNo: "U90099", tel: "" }, guards)).toEqual([]);
   });
   it("同姓一字：只限中文名、姓要同、其餘至少一字同", () => {
-    expect(surnameCharMatch("黃天之", "黃天志")).toBe(true);
-    expect(surnameCharMatch("黃天之", "黃大文")).toBe(false);
-    expect(surnameCharMatch("黃天之", "陳天之")).toBe(false);
-    expect(surnameCharMatch("黃天之", "黃天之")).toBe(false);
+    expect(surnameCharMatch("甲測試丙", "甲測試丁")).toBe(true);
+    expect(surnameCharMatch("甲測試丙", "甲大文")).toBe(false);
+    expect(surnameCharMatch("甲測試丙", "陳測試丙")).toBe(false);
+    expect(surnameCharMatch("甲測試丙", "甲測試丙")).toBe(false);
     expect(surnameCharMatch("CHAN TAI", "CHAN TAM")).toBe(false);
   });
   it("tel4 只取尾 4 位數字", () => {
@@ -89,8 +90,8 @@ describe("連結", () => {
   it("每類目標", () => {
     expect(LINK.guardFix("2026-09-01")).toBe("/guard-fix?month=2026-09");
     expect(LINK.guards("U90001")).toBe("/guards?q=U90001");
-    expect(LINK.guards("測試甲乙")).toBe(`/guards?q=${encodeURIComponent("測試甲乙")}`);
-    expect(LINK.newFromDocs("測試甲乙", "U90001")).toBe(`/guards/new-from-docs?name=${encodeURIComponent("測試甲乙")}&staff_no=U90001`);
+    expect(LINK.guards("甲測試")).toBe(`/guards?q=${encodeURIComponent("甲測試")}`);
+    expect(LINK.newFromDocs("甲測試", "U90001")).toBe(`/guards/new-from-docs?name=${encodeURIComponent("甲測試")}&staff_no=U90001`);
     expect(LINK.newFromDocs("", "")).toBe("/guards/new-from-docs");
     expect(LINK.uploadFocus("2026-09", "up1")).toBe("/roster-uploads?month=2026-09&focus=up1");
     expect(LINK.sites("s1")).toBe("/sites?focus=s1");
@@ -102,12 +103,12 @@ describe("連結", () => {
 
 describe("needs_boss 對應", () => {
   const items: NeedsBossItem[] = [
-    { seq: "I001", cells: [{ site_label: "測試盤甲", cell_count: 3 }], total_cell_count: 3, reason: "名單同名多過一個", name_raw: "測試甲乙", staff_no_raw: "U90001" },
+    { seq: "I001", cells: [{ site_label: "測試盤甲", cell_count: 3 }], total_cell_count: 3, reason: "名單同名多過一個", name_raw: "甲測試", staff_no_raw: "U90001" },
     { seq: "I002", cells: [{ site_label: "測試盤乙", cell_count: 5 }], total_cell_count: 5, reason: "名單冇呢個人", name_raw: "測試丙", staff_no_raw: null },
   ];
   it("按姓名＋工號", () => {
-    expect(matchNeedsBossByPerson(personFromRow({ name_raw: " 測試甲乙 ", staff_no_raw: "u90001", tel_raw: null }), items)?.seq).toBe("I001");
-    expect(matchNeedsBossByPerson({ name: "測試甲乙", staffNo: "U00000", tel: "" }, items)).toBeNull();
+    expect(matchNeedsBossByPerson(personFromRow({ name_raw: " 甲測試 ", staff_no_raw: "u90001", tel_raw: null }), items)?.seq).toBe("I001");
+    expect(matchNeedsBossByPerson({ name: "甲測試", staffNo: "U90099", tel: "" }, items)).toBeNull();
   });
   it("題目：seq／姓名／盤名＋格數", () => {
     expect(matchNeedsBossForQuestion({ title: "安員配對要核實（測試盤乙，5 格）", summary: "x (I001)", identity_label: null }, items)?.seq).toBe("I001");
@@ -115,5 +116,18 @@ describe("needs_boss 對應", () => {
     expect(matchNeedsBossForQuestion({ title: "安員配對要核實（測試盤乙，5 格）", summary: "x", identity_label: null }, items)?.seq).toBe("I002");
     expect(matchNeedsBossForQuestion({ title: "安員配對要核實（測試盤乙、測試盤甲，99 格）", summary: "x", identity_label: null }, items)).toBeNull();
     expect(matchNeedsBossForQuestion({ title: "x", summary: "y", identity_label: null }, [])).toBeNull();
+  });
+});
+
+describe("冇權限睇姓名／工號", () => {
+  it("欄位被剷走先算 hidden（null 唔算）", () => {
+    expect(piiHidden({ id: "r", row_index: 1 })).toBe(true);
+    expect(piiHidden({ id: "r", name_raw: null, staff_no_raw: null })).toBe(false);
+    expect(piiHidden(null)).toBe(false);
+  });
+  it("原因人話唔講「冇寫」", () => {
+    const [part] = classifyReason("安員未配對");
+    expect(humanizeReasonPart(part!, null, true)).toContain("冇權限睇姓名／工號");
+    expect(humanizeReasonPart(part!, null, true)).not.toContain("冇寫");
   });
 });

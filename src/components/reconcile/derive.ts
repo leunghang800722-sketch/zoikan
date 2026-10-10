@@ -67,9 +67,12 @@ export function personKey(p: Person): string {
   return `${normName(p.name)}|${normStaffNo(p.staffNo)}`;
 }
 
+/** 冇「安員個人資料」權限：rows API 會成個欄位剷走（唔係 null）。 */
+export const piiHidden = (r: object | null | undefined): boolean => !!r && !Object.prototype.hasOwnProperty.call(r, "name_raw") && !Object.prototype.hasOwnProperty.call(r, "staff_no_raw");
+
 export const hasPerson = (p: Person): boolean => !!(normName(p.name) || normStaffNo(p.staffNo));
 
-/** 顯示用：「黃天之／U01335」；冇工號就淨係姓名。 */
+/** 顯示用：「測試甲／U90001」；冇工號就淨係姓名。 */
 export function personLabel(p: Person): string {
   const n = p.name.trim();
   const s = p.staffNo.trim();
@@ -181,8 +184,9 @@ export function classifyReason(reason: string | null | undefined): ReasonPart[] 
 }
 
 /** 人話：安員未配對講明更表寫咗啲乜；其餘跟後端原句（本身已經係廣東話）。 */
-export function humanizeReasonPart(part: ReasonPart, person: Person | null): string {
+export function humanizeReasonPart(part: ReasonPart, person: Person | null, piiHidden = false): string {
   if (part.kind === "guard") {
+    if (piiHidden) return "更表有一個保安員名冊搵唔到（冇權限睇姓名／工號）";
     if (person && hasPerson(person)) return `更表寫「${personLabel(person)}」，名冊搵唔到`;
     return "更表呢行冇寫姓名／工號，名冊搵唔到";
   }

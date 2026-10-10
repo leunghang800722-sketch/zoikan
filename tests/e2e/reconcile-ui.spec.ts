@@ -1,5 +1,5 @@
 // WP-RECONCILE-UI（§33）：對數頁未配對行顯示原始資料＋動作直達連結、deep link 落地、分診安員配對題。
-// 全部用 page.route 假 API（假名「測試甲乙」、假工號 U9xxxx、假電話），唔依賴 dev DB 數據，亦唔郁真資料。
+// 全部用 page.route 假 API（假名「甲測試」、假工號 U9xxxx、假電話），唔依賴 dev DB 數據，亦唔郁真資料。
 // 截圖：RECONCILE_UI_SHOTS=out/reconcile-ui 時存檔。
 // 執行：PW_PORT=3411 npx playwright test tests/e2e/reconcile-ui.spec.ts
 import { test, expect, type Page, type Route, type Request } from "@playwright/test";
@@ -43,30 +43,30 @@ function build() {
     items.push({ key: `row:${id}`, category: "unresolved", work_date: date, site_id: siteId, guard_id: null, shift_type_id: null, roster: null, system: null, unresolved_reason: reason });
   };
   // 啟航1331 式：同一人 9/1–9/15 連續 15 條
-  for (let d = 1; d <= 15; d++) add(`a${d}`, `2026-09-${String(d).padStart(2, "0")}`, "安員未配對", { name_raw: "測試甲乙", staff_no_raw: "U90001", tel_raw: TEL_A });
+  for (let d = 1; d <= 15; d++) add(`a${d}`, `2026-09-${String(d).padStart(2, "0")}`, "安員未配對", { name_raw: "甲測試", staff_no_raw: "U90001", tel_raw: TEL_A });
   // HKU Y 更 9/25 式：單條，guard-fix 有對應 needs_boss
-  add("b1", "2026-09-25", "安員未配對", { name_raw: "趙小明", staff_no_raw: "U90002", tel_raw: "98760002", broker_code_raw: "Y", time_raw: "1900-0700" });
+  add("b1", "2026-09-25", "安員未配對", { name_raw: "乙測試", staff_no_raw: "U90002", tel_raw: "98760002", broker_code_raw: "Y", time_raw: "1900-0700" });
   // 名冊完全冇相似
-  add("c1", "2026-09-26", "安員未配對", { name_raw: "孤獨人", staff_no_raw: "U90003" });
-  add("d1", "2026-09-27", "上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤", { name_raw: "測試甲乙", staff_no_raw: "U90001" }, null);
-  add("e1", "2026-09-28", "雞頭碼「ZZ」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析", { name_raw: "測試戊己", staff_no_raw: "U90005", broker_code_raw: "ZZ" });
-  add("f1", "2026-09-29", "更別未配對", { name_raw: "測試戊己", staff_no_raw: "U90005", raw_code: "XQ", time_raw: "0800-1600" });
-  add("g1", "2026-09-30", "更種已作廢，請重新解析上載或者一鍵結算補更種", { name_raw: "測試戊己", staff_no_raw: "U90005" });
-  add("h1", "2026-09-30", "子盤未定，歷史紀錄有多過一個候選，人手覆核並批量指定子盤（或者確認歸母盤）", { name_raw: "測試戊己", staff_no_raw: "U90005" });
-  add("i1", "2026-09-30", "子盤「測試A座」對唔到（或者未 reparse），請先喺「盤」管理掛好子盤再重新解析", { name_raw: "測試戊己", staff_no_raw: "U90005" });
+  add("c1", "2026-09-26", "安員未配對", { name_raw: "庚獨行", staff_no_raw: "U90003" });
+  add("d1", "2026-09-27", "上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤", { name_raw: "甲測試", staff_no_raw: "U90001" }, null);
+  add("e1", "2026-09-28", "雞頭碼「ZZ」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析", { name_raw: "戊測試", staff_no_raw: "U90005", broker_code_raw: "ZZ" });
+  add("f1", "2026-09-29", "更別未配對", { name_raw: "戊測試", staff_no_raw: "U90005", raw_code: "XQ", time_raw: "0800-1600" });
+  add("g1", "2026-09-30", "更種已作廢，請重新解析上載或者一鍵結算補更種", { name_raw: "戊測試", staff_no_raw: "U90005" });
+  add("h1", "2026-09-30", "子盤未定，歷史紀錄有多過一個候選，人手覆核並批量指定子盤（或者確認歸母盤）", { name_raw: "戊測試", staff_no_raw: "U90005" });
+  add("i1", "2026-09-30", "子盤「測試A座」對唔到（或者未 reparse），請先喺「盤」管理掛好子盤再重新解析", { name_raw: "戊測試", staff_no_raw: "U90005" });
   return { raws, items };
 }
 
 const GUARDS = [
-  { id: "g1", name_zh: "測試甲乙", staff_no: "U77777", tel: "65550009", status: "active", staff_numbers: [] }, // 同名
-  { id: "g2", name_zh: "李測試", staff_no: "U90001", tel: null, status: "active", staff_numbers: [{ number: "U90001", status: "current" }] }, // 同工號
-  { id: "g3", name_zh: "電話人", staff_no: "U55555", tel: "65550001", status: "active", staff_numbers: [] }, // 電話尾 4（0001）
-  { id: "g4", name_zh: "趙小華", staff_no: "U66666", tel: "60000000", status: "active", staff_numbers: [] }, // 同姓＋一字（趙小明）
-  { id: "g5", name_zh: "王大明", staff_no: "U12345", tel: "61111111", status: "active", staff_numbers: [] },
+  { id: "g1", name_zh: "甲測試", staff_no: "U90014", tel: "65550009", status: "active", staff_numbers: [] }, // 同名
+  { id: "g2", name_zh: "丁測試", staff_no: "U90001", tel: null, status: "active", staff_numbers: [{ number: "U90001", status: "current" }] }, // 同工號
+  { id: "g3", name_zh: "丙電話", staff_no: "U90012", tel: "65550001", status: "active", staff_numbers: [] }, // 電話尾 4（0001）
+  { id: "g4", name_zh: "乙測丙", staff_no: "U90013", tel: "60000000", status: "active", staff_numbers: [] }, // 同姓＋一字（乙測試）
+  { id: "g5", name_zh: "己測試", staff_no: "U90011", tel: "61111111", status: "active", staff_numbers: [] },
 ];
 
 const NEEDS_BOSS = [
-  { seq: "I001", cells: [{ site_label: "測試盤甲", cell_count: 1 }], total_cell_count: 1, reason: "U Team 名單同名多過一個", name_raw: "趙小明", staff_no_raw: "U90002", tel_raw: "98760002", candidates: [{ id: "g4", name_zh: "趙小華" }] },
+  { seq: "I001", cells: [{ site_label: "測試盤甲", cell_count: 1 }], total_cell_count: 1, reason: "U Team 名單同名多過一個", name_raw: "乙測試", staff_no_raw: "U90002", tel_raw: "98760002", candidates: [{ id: "g4", name_zh: "乙測丙" }] },
   { seq: "I002", cells: [{ site_label: "測試盤甲", cell_count: 4 }, { site_label: "測試盤乙", cell_count: 2 }], total_cell_count: 6, reason: "名單冇呢個人", name_raw: "測試庚辛", staff_no_raw: "U90009", tel_raw: null, candidates: [] },
 ];
 
@@ -77,7 +77,7 @@ interface State {
   reparsed: boolean;
 }
 
-async function mockApis(page: Page, opts: { needsBoss?: boolean } = {}) {
+async function mockApis(page: Page, opts: { needsBoss?: boolean; hidePii?: boolean } = {}) {
   const { raws, items } = build();
   const st: State = { writes: [], guardQueries: [], rowQueries: [], reparsed: false };
   await page.route(/\/api\//, async (route: Route, req: Request) => {
@@ -103,7 +103,13 @@ async function mockApis(page: Page, opts: { needsBoss?: boolean } = {}) {
     if (p === `/api/roster-uploads/${UP}`) {
       st.rowQueries.push(url.search);
       const gm = url.searchParams.get("guard_match");
-      const rows = raws.filter((r) => (gm ? r.guard_match === gm : true));
+      const rows = raws
+        .filter((r) => (gm ? r.guard_match === gm : true))
+        .map((r) => {
+          if (!opts.hidePii) return r;
+          const { name_raw: _n, staff_no_raw: _s, tel_raw: _t, ...rest } = r; // eslint-disable-line @typescript-eslint/no-unused-vars
+          return rest;
+        });
       return json(route, { upload: { id: UP }, rows: { rows, total: rows.length, skip: 0, take: 500 } });
     }
     if (p === "/api/month-closes") return json(route, { rows: [], total: 0, skip: 0, take: 50 });
@@ -146,7 +152,7 @@ test.describe("對數頁 1440", () => {
 
     // 15 條同一人 → 一行摘要（可摺）；其餘 8 條單獨一行
     const group = page.locator('[data-testid="reconcile-person-group"]:visible').first();
-    await expect(group.getByTestId("reconcile-group-title")).toHaveText("同一人：測試甲乙（U90001）共 15 更");
+    await expect(group.getByTestId("reconcile-group-title")).toHaveText("同一人：甲測試（U90001）共 15 更");
     await expect(group).toHaveAttribute("data-group-size", "15");
     await expect(page.getByTestId("reconcile-item-row")).toHaveCount(8);
     await group.getByTestId("reconcile-group-toggle").click();
@@ -158,35 +164,35 @@ test.describe("對數頁 1440", () => {
     await expect(group).toContainText("電話 ****0001");
     const sim = group.getByTestId("similar-guard");
     await expect(sim).toHaveCount(3);
-    await expect(sim.nth(0)).toContainText("李測試");
+    await expect(sim.nth(0)).toContainText("丁測試");
     await expect(sim.nth(0)).toContainText("工號相同");
-    await expect(sim.nth(1)).toContainText("測試甲乙");
+    await expect(sim.nth(1)).toContainText("甲測試");
     await expect(sim.nth(1)).toContainText("同名");
-    await expect(sim.nth(2)).toContainText("電話人");
+    await expect(sim.nth(2)).toContainText("丙電話");
     await expect(sim.nth(2)).toContainText("電話尾 4 位相同");
     expect(await sim.nth(0).locator("a").getAttribute("href")).toBe("/guards?q=U90001");
-    await expect(group.getByTestId("reconcile-reason")).toContainText("更表寫「測試甲乙／U90001」，名冊搵唔到");
+    await expect(group.getByTestId("reconcile-reason")).toContainText("更表寫「甲測試／U90001」，名冊搵唔到");
 
     // HKU 式單條：姓名／工號／原因人話／needs_boss 提示／連結
     const rowB = page.locator('[data-reconcile-key="row:b1"]');
-    await expect(rowB.getByTestId("reconcile-wrote-name")).toHaveText("趙小明／U90002");
+    await expect(rowB.getByTestId("reconcile-wrote-name")).toHaveText("乙測試／U90002");
     await expect(rowB.getByTestId("reconcile-wrote")).toContainText("電話 ****0002");
     await expect(rowB.getByTestId("reconcile-wrote")).toContainText("雞頭碼 Y");
     await expect(rowB.getByTestId("reconcile-wrote")).toContainText("1900-0700");
     await expect(rowB.getByTestId("reconcile-wrote")).toContainText("原始第 25 行");
-    await expect(rowB.getByTestId("reconcile-reason")).toContainText("更表寫「趙小明／U90002」，名冊搵唔到");
+    await expect(rowB.getByTestId("reconcile-reason")).toContainText("更表寫「乙測試／U90002」，名冊搵唔到");
     await expect(rowB.getByTestId("similar-guard")).toHaveCount(1);
     await expect(rowB.getByTestId("similar-guard")).toContainText("同姓＋一字相同");
     expect(await hrefOf(page, "link-guard-fix", rowB)).toBe("/guard-fix?month=2026-09");
     expect(await hrefOf(page, "link-find-guard", rowB)).toBe("/guards?q=U90002");
-    expect(await hrefOf(page, "link-new-from-docs", rowB)).toBe(`/guards/new-from-docs?name=${encodeURIComponent("趙小明")}&staff_no=U90002`);
+    expect(await hrefOf(page, "link-new-from-docs", rowB)).toBe(`/guards/new-from-docs?name=${encodeURIComponent("乙測試")}&staff_no=U90002`);
     await expect(rowB.getByTestId("reconcile-needs-boss")).toContainText("U Team 名單同名多過一個");
     expect(await rowB.getByTestId("reconcile-needs-boss").locator("a").getAttribute("href")).toBe("/triage");
 
     // 名冊冇相似（按需 ?q= 查：名＋工號各一次）
     const rowC = page.locator('[data-reconcile-key="row:c1"]');
     await expect(rowC.getByTestId("similar-none")).toHaveText("名冊冇相似，可能係新人或離職員工");
-    expect(st.guardQueries.sort()).toEqual(["U90003", "孤獨人"].sort());
+    expect(st.guardQueries.sort()).toEqual(["U90003", "庚獨行"].sort());
     await expect(rowC.getByTestId("reconcile-needs-boss")).toHaveCount(0);
 
     // 上載未指定盤
@@ -249,8 +255,25 @@ test.describe("對數頁 1440", () => {
     await mockApis(page, { needsBoss: false });
     await loginAs(page, "老闆");
     await page.goto(`/roster-uploads/${UP}/reconcile`);
-    await expect(page.locator('[data-reconcile-key="row:b1"]').getByTestId("reconcile-wrote-name")).toHaveText("趙小明／U90002");
+    await expect(page.locator('[data-reconcile-key="row:b1"]').getByTestId("reconcile-wrote-name")).toHaveText("乙測試／U90002");
     await expect(page.getByTestId("reconcile-needs-boss")).toHaveCount(0);
+  });
+});
+
+test.describe("冇個人資料權限（主管）", () => {
+  test.use({ viewport: { width: 1440, height: 1000 } });
+  test("顯示「冇權限睇姓名／工號」，唔出去安員配對修復連結，唔做相似提示", async ({ page }) => {
+    await mockApis(page, { needsBoss: false, hidePii: true });
+    await loginAs(page, "老闆");
+    await page.goto(`/roster-uploads/${UP}/reconcile`);
+    const rowB = page.locator('[data-reconcile-key="row:b1"]');
+    await expect(rowB.getByTestId("reconcile-wrote-name")).toHaveText("冇權限睇姓名／工號");
+    await expect(rowB.getByTestId("reconcile-reason")).toContainText("冇權限睇姓名／工號");
+    await expect(rowB.getByTestId("reconcile-reason")).not.toContainText("冇寫");
+    await expect(rowB.getByTestId("link-guard-fix")).toHaveCount(0);
+    await expect(rowB.getByTestId("similar-guard")).toHaveCount(0);
+    await expect(page.getByTestId("reconcile-person-group")).toHaveCount(0);
+    await expect(rowB.getByRole("button", { name: "例外", exact: true })).toBeVisible();
   });
 });
 
@@ -261,7 +284,7 @@ test.describe("對數頁 375", () => {
     await loginAs(page, "老闆");
     await page.goto(`/roster-uploads/${UP}/reconcile`);
     await expect(page.locator('[data-testid="reconcile-person-group"]:visible')).toBeVisible();
-    const cardB = page.getByTestId("reconcile-item-card").filter({ hasText: "趙小明／U90002" });
+    const cardB = page.getByTestId("reconcile-item-card").filter({ hasText: "乙測試／U90002" });
     await expect(cardB.getByTestId("reconcile-wrote")).toContainText("原始第 25 行");
     await expect(cardB.getByTestId("link-guard-fix")).toHaveAttribute("href", "/guard-fix?month=2026-09");
     await expect(cardB.getByTestId("reconcile-needs-boss")).toContainText("U Team 名單同名多過一個");
@@ -313,11 +336,11 @@ test.describe("deep link 落地", () => {
       if (r.method() !== "GET" && r.url().includes("/api/") && !r.url().includes("/api/auth/")) writes.push(`${r.method()} ${new URL(r.url()).pathname}`);
     });
     await loginAs(page, "老闆");
-    const res = await page.goto(`/guards/new-from-docs?name=${encodeURIComponent("測試甲乙")}&staff_no=U90001`);
+    const res = await page.goto(`/guards/new-from-docs?name=${encodeURIComponent("甲測試")}&staff_no=U90001`);
     test.skip(res?.status() === 404, "OCR 未配置（需要 DEEPSEEK_API_KEY 先開此頁），見報告");
-    await expect(page.getByTestId("ocr-prefill-hint")).toContainText("測試甲乙／U90001");
+    await expect(page.getByTestId("ocr-prefill-hint")).toContainText("甲測試／U90001");
     await page.getByTestId("ocr-manual").click();
-    await expect(page.getByLabel("中文姓名")).toHaveValue("測試甲乙");
+    await expect(page.getByLabel("中文姓名")).toHaveValue("甲測試");
     expect(writes).toEqual([]);
   });
 
@@ -358,7 +381,7 @@ async function mockTriage(page: Page) {
     json(route, {
       session: { id: "sess1", status: "open", counts: { open: 2, answered: 0, skipped: 0, total: 2 } },
       questions: [
-        guardQuestion("q1", "安員配對要核實（測試盤甲，1 格）", "測試盤甲 共 1 格嘅安員未配對：U Team 名單同名多過一個", "趙小明"),
+        guardQuestion("q1", "安員配對要核實（測試盤甲，1 格）", "測試盤甲 共 1 格嘅安員未配對：U Team 名單同名多過一個", "乙測試"),
         guardQuestion("q2", "安員配對要核實（測試盤甲、測試盤乙，6 格）", "測試盤甲、測試盤乙 共 6 格嘅安員未配對：名單冇呢個人 (I002)", null),
       ],
     }),
@@ -380,15 +403,15 @@ test.describe("分診對話框：安員配對題", () => {
     const dlg = page.getByTestId("mc-triage-dialog");
     await expect(dlg).toHaveAttribute("data-mode", "desktop");
     const info = dlg.getByTestId("mc-guard-info");
-    await expect(info.getByTestId("mc-guard-name")).toContainText("趙小明／U90002");
+    await expect(info.getByTestId("mc-guard-name")).toContainText("乙測試／U90002");
     await expect(info.getByTestId("mc-guard-name")).toContainText("I001");
     await expect(info.getByTestId("mc-guard-cells")).toContainText("共 1 格");
     await expect(info.getByTestId("mc-guard-cells")).toContainText("電話 ****0002");
     await expect(info.getByTestId("mc-guard-reason")).toHaveText("U Team 名單同名多過一個");
-    await expect(info.getByTestId("similar-guard")).toContainText("趙小華");
+    await expect(info.getByTestId("similar-guard")).toContainText("乙測丙");
     await expect(info.getByTestId("mc-link-guard-fix")).toHaveAttribute("href", "/guard-fix?month=2026-09");
     await expect(info.getByTestId("mc-link-find-guard")).toHaveAttribute("href", "/guards?q=U90002");
-    await expect(info.getByTestId("mc-link-new-from-docs")).toHaveAttribute("href", `/guards/new-from-docs?name=${encodeURIComponent("趙小明")}&staff_no=U90002`);
+    await expect(info.getByTestId("mc-link-new-from-docs")).toHaveAttribute("href", `/guards/new-from-docs?name=${encodeURIComponent("乙測試")}&staff_no=U90002`);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/triage-1440.png` });
     // 第二題：按 (I002) seq 對，多盤格數
     await dlg.getByTestId("mc-skip").click();
@@ -405,7 +428,7 @@ test.describe("分診對話框：安員配對題", () => {
     const dlg = page.getByTestId("mc-triage-dialog");
     await expect(dlg).toHaveAttribute("data-mode", "mobile");
     const info = dlg.getByTestId("mc-guard-info");
-    await expect(info.getByTestId("mc-guard-name")).toContainText("趙小明／U90002");
+    await expect(info.getByTestId("mc-guard-name")).toContainText("乙測試／U90002");
     await expect(info.getByTestId("mc-guard-reason")).toHaveText("U Team 名單同名多過一個");
     await expect(info.getByTestId("mc-link-guard-fix")).toBeVisible();
     await noHScroll(page);

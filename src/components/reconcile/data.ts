@@ -136,13 +136,14 @@ export function loadNeedsBoss(month: string | null): Promise<NeedsBossResult | n
   });
 }
 
-export function useNeedsBoss(month: string | null, enabled = true): NeedsBossResult | null {
-  const [res, setRes] = useState<NeedsBossResult | null>(null);
+/** null＝載入中；"denied"＝冇權限（guard-fix 403）或者失敗；否則結果。 */
+export function useNeedsBoss(month: string | null, enabled = true): NeedsBossResult | "denied" | null {
+  const [res, setRes] = useState<NeedsBossResult | "denied" | null>(null);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
     void loadNeedsBoss(month).then((r) => {
-      if (alive) setRes(r);
+      if (alive) setRes(r ?? "denied");
     });
     return () => {
       alive = false;
