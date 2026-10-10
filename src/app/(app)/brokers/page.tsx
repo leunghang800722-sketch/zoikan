@@ -109,7 +109,7 @@ export default function BrokersPage() {
   const [feeRateFormError, setFeeRateFormError] = useState<string | null>(null);
   const [feeRateSaving, setFeeRateSaving] = useState(false);
 
-  // README §09「人數」——全公司安員載一次前端數。
+  // README §09「人數」——全公司保安員載一次前端數。
   const [guardCountByBroker, setGuardCountByBroker] = useState<Record<string, number>>({});
   // M3：「掛邊啲盤」改用 broker_site_assignments（一次過攞晒，前端按
   // 月份 FilterChip 篩）。

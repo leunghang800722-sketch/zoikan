@@ -16,7 +16,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await getCurrentSession();
   if (!session) redirect("/login");
 
-  // WP-AI2：「助手」module 嘅 view 權（老闆/主管/會計✓，雞頭/安員硬性
+  // WP-AI2：「助手」module 嘅 view 權（老闆/主管/會計✓，雞頭/保安員硬性
   // 禁止，見 `src/lib/rbac/matrix.ts`）同左欄導航一齊用同一次
   // `getViewGrants()` fetch 判斷，唔使幫側欄 AI 助手 tab 多打一次
   // `/api/roles/:id/permissions`。冇 `助手:view` 就連 `<AiAssistantSidebar>`

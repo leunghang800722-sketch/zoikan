@@ -1,7 +1,7 @@
 // WP-ROSTER-UPLOAD Phase A（§15.3）：`GET /api/roster-uploads/:id`（rows
 // 分頁＋summary，`?guard_match=unmatched` 篩未配對）、`PATCH
 // /api/roster-uploads/:id`（人手指定 site_id——上載時盤名對唔到，之後
-// 由會計/主管/老闆補；指定咗之後即刻重新對照一次，等更別/安員配對用返
+// 由會計/主管/老闆補；指定咗之後即刻重新對照一次，等更別/保安員配對用返
 // 啱嘅盤範圍）。
 import { prisma } from "@/lib/db";
 import { nameOnlyCountsByUpload, NAME_ONLY_WARNING } from "@/lib/roster-upload/name-only";
@@ -75,7 +75,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const rowsListDto = mapListDTO({ rows, total, skip, take }, toRosterUploadRowDTO);
     const gatedRowsDto = await applyFieldGroupGateToList(session, "roster_upload_rows", rowsListDto);
     // 驗收 2026-09-23：Phase B-0「檔案工號 X 同系統工號 Y 唔一致」warning
-    // 將工號原文寫咗入 `warnings`——`staff_no_raw` 本身屬「安員個人資料」
+    // 將工號原文寫咗入 `warnings`——`staff_no_raw` 本身屬「保安員個人資料」
     // field gate（主管出廠係 O＝預設冇），唔遮嘅話冇權限嘅角色經 warnings
     // 一樣睇到工號。冇 view 權限就將兩個號碼換做「（已隱藏）」，保留其餘
     // 文字（`?warning_flag=` 篩選同 UI 顯示照用）。

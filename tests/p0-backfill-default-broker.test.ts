@@ -2,7 +2,7 @@
 // 20260920010000_p0_backfill_guard_default_broker/migration.sql`（連同
 // dev `db:seed` 嘅對等版本 `scripts/seed/lib/backfill-broker-p0.ts`
 // `backfillGuardDefaultBrokerBroaderP0()`）之前冇理會 `brokers.status`
-// ——已停用（`status='inactive'`）嘅結算單位一樣可以被揀嚟做某個安員
+// ——已停用（`status='inactive'`）嘅結算單位一樣可以被揀嚟做某個保安員
 // 新嘅 `default_broker_id`，令新月份 fallback 鏈靜靜幫佢揀一個而家已經
 // 唔再用嘅雞頭。而家兩邊都要求 `status='active'`（`internal_longterm`
 // fallback 同理）。
@@ -109,7 +109,7 @@ describe("應修 3：migration.sql（逐字重跑）——已停用嘅結算單�
       data: { code: "ZI1", name: "測試雞頭-inactive", kind: "broker", settlementType: "cash", status: "inactive", createdBy: "test:p0-backfill" },
     });
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員-應修3-A", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "test:p0-backfill" },
+      data: { nameZh: "測試保安員-應修3-A", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "test:p0-backfill" },
     });
     for (let i = 0; i < 3; i++) {
       await prisma.shiftRecord.create({
@@ -156,7 +156,7 @@ describe("應修 3：migration.sql（逐字重跑）——已停用嘅結算單�
       data: { code: "ZI2", name: "測試雞頭-inactive2", kind: "broker", settlementType: "cash", status: "inactive", createdBy: "test:p0-backfill" },
     });
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員-應修3-B", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "test:p0-backfill" },
+      data: { nameZh: "測試保安員-應修3-B", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "test:p0-backfill" },
     });
     await prisma.shiftRecord.create({
       data: {
@@ -185,7 +185,7 @@ describe("應修 3：migration.sql（逐字重跑）——已停用嘅結算單�
       data: { code: "ZL1", name: "測試內部長工-inactive", kind: "internal_longterm", settlementType: "salary", status: "inactive", createdBy: "test:p0-backfill" },
     });
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員-應修3-C", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "test:p0-backfill" },
+      data: { nameZh: "測試保安員-應修3-C", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "test:p0-backfill" },
     });
 
     await prisma.$transaction((tx) => runP0BackfillMigration(tx));
@@ -199,7 +199,7 @@ describe("應修 3：migration.sql（逐字重跑）——已停用嘅結算單�
       data: { code: "ZL2", name: "測試內部長工-active", kind: "internal_longterm", settlementType: "salary", status: "active", createdBy: "test:p0-backfill" },
     });
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員-應修3-D", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "test:p0-backfill" },
+      data: { nameZh: "測試保安員-應修3-D", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "test:p0-backfill" },
     });
 
     await prisma.$transaction((tx) => runP0BackfillMigration(tx));
@@ -223,7 +223,7 @@ describe("應修 3：backfillGuardDefaultBrokerBroaderP0()（dev db:seed 對等�
       data: { code: "ZI3", name: "測試雞頭-inactive3", kind: "broker", settlementType: "cash", status: "inactive", createdBy: "test:p0-backfill" },
     });
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員-應修3-E", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "test:p0-backfill" },
+      data: { nameZh: "測試保安員-應修3-E", employmentType: "cash_casual", defaultBrokerId: null, createdBy: "test:p0-backfill" },
     });
     for (let i = 0; i < 2; i++) {
       await prisma.shiftRecord.create({
@@ -267,7 +267,7 @@ describe("應修 3：backfillGuardDefaultBrokerBroaderP0()（dev db:seed 對等�
       data: { code: "ZL3", name: "測試內部長工-inactive3", kind: "internal_longterm", settlementType: "salary", status: "inactive", createdBy: "test:p0-backfill" },
     });
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員-應修3-F", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "test:p0-backfill" },
+      data: { nameZh: "測試保安員-應修3-F", employmentType: "longterm_autopay", defaultBrokerId: null, createdBy: "test:p0-backfill" },
     });
 
     const stats = await backfillGuardDefaultBrokerBroaderP0(prisma);

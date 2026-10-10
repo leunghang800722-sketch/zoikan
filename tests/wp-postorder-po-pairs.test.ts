@@ -62,7 +62,7 @@ describe("WP-POSTORDER-PO-PAIRS：derivePostorderLongtermPostsFromPostorderGrid(
     expect(cells).toEqual([{ siteLabelRaw: "測試盤", siteLabelFallbackRaw: "測試", guardNameRaw: "甲蟲蟲", cellCount: 20 }]);
   });
 
-  it("尾 token 唔係已知安員姓名 → 唔計（一般客戶行）", () => {
+  it("尾 token 唔係已知保安員姓名 → 唔計（一般客戶行）", () => {
     const csv = [POSTORDER_HEADER, postorderRow("某某有限公司", "測試", "#REF!", "10")].join("\n");
     const cells = derivePostorderLongtermPostsFromPostorderCsv(csv, knownNames);
     expect(cells).toEqual([]);
@@ -186,9 +186,9 @@ describe("WP-POSTORDER-PO-PAIRS：POST /api/guard-fix/postorder 淨係 postorder
     await clearAll();
     fx = await seedWp2Fixture();
     ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
-    // 加一個名字啱 trailingChineseName（2-4 個中文字）範圍嘅安員，等
+    // 加一個名字啱 trailingChineseName（2-4 個中文字）範圍嘅保安員，等
     // derivePostorderLongtermPostsFromPostorderCsv() 撞得中（wp2 fixture
-    // 自己嗰兩個「測試安員甲/乙」5 個字，尾 4 字撞唔中本名）。
+    // 自己嗰兩個「測試保安員甲/乙」5 個字，尾 4 字撞唔中本名）。
     await prisma.guard.create({
       data: { staffNo: "T-C01", nameZh: "甲蟲蟲", employmentType: "cash_casual", defaultBrokerId: fx.brokerA.id, tel: "6100099", createdBy: "test-fixture:wp-postorder-po-pairs" },
     });
@@ -231,7 +231,7 @@ describe("WP-POSTORDER-PO-PAIRS：POST /api/guard-fix/postorder 淨係 postorder
 // 真檔比對（skipIf）：`data/2026-09/postorder-csv/PostOrder.csv`（gitignored，
 // 冇呢個檔嘅環境自動 skip）——單靠呢份完整 PostOrder.csv（唔靠 Roster），
 // knownNames 由 `longterm-pairs.csv`（Roster 真值）嘅 guard_name 攞（同
-// dev DB 安員名效果一致，唔使起 DB）。目標：覆蓋 59/60 組（只差「OT」
+// dev DB 保安員名效果一致，唔使起 DB）。目標：覆蓋 59/60 組（只差「OT」
 // 呢個泛用代號嘅 1-2 格，同 docs/api.md A 段落講嘅 matchSite 剩低 2 格
 // OT 落差一致，向來留返人手覆核）。
 // ---------------------------------------------------------------------------

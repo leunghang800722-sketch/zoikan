@@ -1,5 +1,5 @@
 "use client";
-// WP-RECONCILE-UI（§33.3 B）：相似安員提示——純顯示＋連去 /guards?q=，唔配對、唔寫入。
+// WP-RECONCILE-UI（§33.3 B）：相似保安員提示——純顯示＋連去 /guards?q=，唔配對、唔寫入。
 import Link from "next/link";
 import { LINK, SIMILAR_WHY_LABEL, guardStatusLabel, guardSearchTerm, type Person } from "./derive";
 import { useSimilarGuards } from "./data";
@@ -11,7 +11,7 @@ export function SimilarGuards({ person, dir }: { person: Person; dir: { rows: Gu
   if (s.list.length === 0) return <div className="text-[11px] text-zk-muted" data-testid="similar-none">名冊冇相似，可能係新人或離職員工</div>;
   return (
     <div className="space-y-0.5" data-testid="similar-guards">
-      <div className="text-[11px] font-semibold text-zk-muted">名冊有相似安員（只係提示，唔會自動配對）</div>
+      <div className="text-[11px] font-semibold text-zk-muted">名冊有相似保安員（只係提示，唔會自動配對）</div>
       <ul className="space-y-0.5">
         {s.list.map(({ guard, why }) => {
           const no = guard.staff_no || guard.staff_numbers?.[0]?.number || "";

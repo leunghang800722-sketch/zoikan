@@ -22,9 +22,9 @@ function mkIndex(
 describe("matchGuard：match_basis 與電話層", () => {
   const idx = mkIndex(
     [
-      { id: "g1", nameZh: "測試安員甲", aliases: ["阿甲"] },
-      { id: "g2", nameZh: "測試安員乙" },
-      { id: "g3", nameZh: "測試安員丙" },
+      { id: "g1", nameZh: "測試保安員甲", aliases: ["阿甲"] },
+      { id: "g2", nameZh: "測試保安員乙" },
+      { id: "g3", nameZh: "測試保安員丙" },
     ],
     [
       { guardId: "g1", tel: "91234567" },
@@ -34,28 +34,28 @@ describe("matchGuard：match_basis 與電話層", () => {
   );
 
   it("工號優先：basis=staff_no", () => {
-    expect(matchGuard({ staffNoRaw: "U00001", nameRaw: "測試安員丙", telRaw: "91234567" }, idx)).toMatchObject({ guardId: "g3", matchBasis: "staff_no" });
+    expect(matchGuard({ staffNoRaw: "U00001", nameRaw: "測試保安員丙", telRaw: "91234567" }, idx)).toMatchObject({ guardId: "g3", matchBasis: "staff_no" });
   });
   it("電話唯一 + 姓名夾：basis=name_tel；別名夾：alias", () => {
-    expect(matchGuard({ staffNoRaw: null, nameRaw: "測試安員甲", telRaw: "9123 4567" }, idx)).toMatchObject({ guardId: "g1", guardMatch: "by_name_tel", matchBasis: "name_tel" });
+    expect(matchGuard({ staffNoRaw: null, nameRaw: "測試保安員甲", telRaw: "9123 4567" }, idx)).toMatchObject({ guardId: "g1", guardMatch: "by_name_tel", matchBasis: "name_tel" });
     expect(matchGuard({ staffNoRaw: null, nameRaw: "阿甲", telRaw: "91234567" }, idx)).toMatchObject({ guardId: "g1", matchBasis: "alias", matchedViaAlias: true });
   });
   it("電話唯一但姓名唔同：basis=tel，flag telMatchNameDiffers", () => {
     expect(matchGuard({ staffNoRaw: null, nameRaw: "寫錯咗嘅名", telRaw: "+852 91234567" }, idx)).toMatchObject({ guardId: "g1", matchBasis: "tel", telMatchNameDiffers: true });
   });
   it("電話對到 A、姓名唯一對到 B → ambiguous（telNameConflict），唔自動配", () => {
-    expect(matchGuard({ staffNoRaw: null, nameRaw: "測試安員乙", telRaw: "91234567" }, idx)).toMatchObject({ guardId: null, guardMatch: "ambiguous", telNameConflict: true });
+    expect(matchGuard({ staffNoRaw: null, nameRaw: "測試保安員乙", telRaw: "91234567" }, idx)).toMatchObject({ guardId: null, guardMatch: "ambiguous", telNameConflict: true });
   });
   it("淨姓名（無電話）：basis=name_only；別名淨配：alias", () => {
-    expect(matchGuard({ staffNoRaw: null, nameRaw: "測試安員乙", telRaw: null }, idx)).toMatchObject({ guardId: "g2", guardMatch: "by_name", matchBasis: "name_only" });
+    expect(matchGuard({ staffNoRaw: null, nameRaw: "測試保安員乙", telRaw: null }, idx)).toMatchObject({ guardId: "g2", guardMatch: "by_name", matchBasis: "name_only" });
     expect(matchGuard({ staffNoRaw: null, nameRaw: "阿甲", telRaw: null }, idx)).toMatchObject({ guardId: "g1", matchBasis: "alias" });
   });
   it("配唔到：basis=null", () => {
     expect(matchGuard({ staffNoRaw: null, nameRaw: "冇呢個人", telRaw: "50000000" }, idx)).toMatchObject({ guardId: null, guardMatch: "unmatched", matchBasis: null });
   });
   it("電話層冇改變原有結果：電話唔存在於 DB 時行為同冇電話層一樣", () => {
-    const withTel = matchGuard({ staffNoRaw: null, nameRaw: "測試安員乙", telRaw: "50000000" }, idx);
-    const without = matchGuard({ staffNoRaw: null, nameRaw: "測試安員乙", telRaw: "50000000" }, { ...idx, byTel: undefined });
+    const withTel = matchGuard({ staffNoRaw: null, nameRaw: "測試保安員乙", telRaw: "50000000" }, idx);
+    const without = matchGuard({ staffNoRaw: null, nameRaw: "測試保安員乙", telRaw: "50000000" }, { ...idx, byTel: undefined });
     expect(withTel.guardId).toBe(without.guardId);
     expect(withTel.guardMatch).toBe(without.guardMatch);
   });

@@ -84,14 +84,14 @@ export const SETTLEMENT_FIELDS = {
   roster_upload_rows: [],
 } as const;
 
-// WP-PII（老闆 2026-09-17 拍板）：保安員「安員個人資料」／「安員銀行
+// WP-PII（老闆 2026-09-17 拍板）：保安員「保安員個人資料」／「保安員銀行
 // 資料」field group——同 CLIENT_RATE_FIELDS/SETTLEMENT_FIELDS 一樣嘅
 // 「逐 resource key，其餘 resource 留空陣列」形狀（淨係 guards 有嘢），
 // 咁樣可以直接掛落 applyFieldGroupGate()／assertFieldGroupWritable() 同一
 // 個機制，唔使逐 route 另外寫一次「有冇呢個 module:view 就剝呢幾隻欄」
 // 嘅邏輯。牌照（sia_permit_no/type/expiry）、平安卡、入職/離職日期
-// 刻意唔喺呢兩個 field group——跟現有「安員」module（主管出廠已經
-// 有 安員:view/update，即老闆話嘅「主管睇部分」），唔需要額外 field-
+// 刻意唔喺呢兩個 field group——跟現有「保安員」module（主管出廠已經
+// 有 保安員:view/update，即老闆話嘅「主管睇部分」），唔需要額外 field-
 // level gate，直接留喺 GUARD_FIELDS 白名單（src/lib/api/dto/index.ts）。
 export const GUARD_PII_FIELDS = {
   shift_records: [],
@@ -105,20 +105,20 @@ export const GUARD_PII_FIELDS = {
   brokers: [],
   referral_fee_rates: [],
   // WP-MULTI：`guard_emergency_contacts`／`guard_addresses` 呢兩張表
-  // 本身成個 resource 就係 PII 性質（同「安員個人資料」module 一致敏感
+  // 本身成個 resource 就係 PII 性質（同「保安員個人資料」module 一致敏感
   // 度）——`AUDIT_FIELD_GROUP_RESOURCE_BY_TABLE` 讀出嗰陣用嘅係呢兩個
   // resource 自己嘅欄名（`name`/`tel`/`relationship`／`address`，唔係
   // `guards` resource 嗰個 `emergency_contact_name`/`emergency_contact_
   // tel`／`address`），所以呢度要獨立一份、唔可以借 `guards` 嗰份（借
-  // 咗會因為欄名對唔上而形同冇 gate）。`guard_phones` 跟「安員」
+  // 咗會因為欄名對唔上而形同冇 gate）。`guard_phones` 跟「保安員」
   // module（同 `tel` 喺 guards resource 一直唔喺 PII 組一致），留空。
   guard_phones: [],
   guard_emergency_contacts: ["name", "tel", "relationship", "note"],
   guard_addresses: ["address", "note"],
   // WP-ROSTER-UPLOAD Phase A（§15.3）：`roster_upload_rows` 嘅
   // `name_raw`／`tel_raw`／`staff_no_raw`——更表檔案逐行原文姓名／電話／
-  // 工號（可能未配對成功嘅人），同「安員個人資料」一致敏感度。冇
-  // 「安員個人資料:view」嘅內部角色（例如關咗呢格嘅主管）就算有「更表
+  // 工號（可能未配對成功嘅人），同「保安員個人資料」一致敏感度。冇
+  // 「保安員個人資料:view」嘅內部角色（例如關咗呢格嘅主管）就算有「更表
   // 上載:view」都見唔到呢三隻欄，`code_raw`／`work_date`／配對結果等
   // 唔屬於 PII 嘅欄唔受影響。`roster_uploads` 本身（月份/盤/檔名/版本）
   // 冇逐行 PII，留空。
@@ -283,10 +283,10 @@ export async function assertFieldGroupWritable(
   }
   const guardPiiFields = GUARD_PII_FIELDS[resource].filter((f) => f in body);
   if (guardPiiFields.length && !(await hasPermission(session, "安員個人資料", "update"))) {
-    throw Forbidden(`冇「安員個人資料」寫入權限，唔可以改 ${guardPiiFields.join("/")}`);
+    throw Forbidden(`冇「保安員個人資料」寫入權限，唔可以改 ${guardPiiFields.join("/")}`);
   }
   const guardBankFields = GUARD_BANK_FIELDS[resource].filter((f) => f in body);
   if (guardBankFields.length && !(await hasPermission(session, "安員銀行資料", "update"))) {
-    throw Forbidden(`冇「安員銀行資料」寫入權限，唔可以改 ${guardBankFields.join("/")}`);
+    throw Forbidden(`冇「保安員銀行資料」寫入權限，唔可以改 ${guardBankFields.join("/")}`);
   }
 }

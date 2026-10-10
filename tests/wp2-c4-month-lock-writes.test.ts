@@ -48,7 +48,7 @@ describe("WP2 C4：月鎖補漏——16 種寫入喺鎖定月全部 403", () => 
     fx = await seedWp2Fixture();
     ownerCookie = await sessionCookieForUser(fx.userIds["老闆"]);
 
-    const lockedGuard = await prisma.guard.create({ data: { nameZh: "測試鎖定月安員", employmentType: "cash_casual", createdBy: "test" } });
+    const lockedGuard = await prisma.guard.create({ data: { nameZh: "測試鎖定月保安員", employmentType: "cash_casual", createdBy: "test" } });
     const sr = await prisma.shiftRecord.create({
       data: {
         workDate: fx.lockedMonth,

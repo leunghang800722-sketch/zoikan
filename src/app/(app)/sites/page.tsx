@@ -430,7 +430,7 @@ export default function SitesPage() {
             />
           </Field>
           {editingId && (
-            <Field label="盤預設結算雞頭" hint="一鍵結算時，更表／Postorder／安員預設雞頭都推唔到嘅更，先歸呢個雞頭（再冇先睇近 3 個月歷史）。留空＝唔設。">
+            <Field label="盤預設結算雞頭" hint="一鍵結算時，更表／Postorder／保安員預設雞頭都推唔到嘅更，先歸呢個雞頭（再冇先睇近 3 個月歷史）。留空＝唔設。">
               <select
                 className={selectCls}
                 data-testid="site-default-broker"

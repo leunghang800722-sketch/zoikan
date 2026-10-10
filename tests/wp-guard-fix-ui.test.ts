@@ -1,9 +1,9 @@
-// WP-GUARD-FIX-UI：「未配對安員修復」做入系統——integration test。
+// WP-GUARD-FIX-UI：「未配對保安員修復」做入系統——integration test。
 // 鐵則：合成 fixture 自己起（exceljs U Team 名單、直接 prisma 寫
 // roster_upload_rows 模擬未配對格），名用「測試散工甲」、U 號
 // `U9xxx`、電話 `6xxxxxxx`（跟 tests/fixtures/wp2-fixture.ts 一致風格）。
 //
-// §1 RBAC：主管/會計/雞頭/安員 GET/POST 一律 403（`安員配對修復` 淨係
+// §1 RBAC：主管/會計/雞頭/保安員 GET/POST 一律 403（`保安員配對修復` 淨係
 //    老闆）
 // §2 上載 U Team 名單：解析摘要（唔存逐行 PII）、audit 一條
 // §3 計劃：`POST /api/guard-fix/plan` 建到一條 create action，同直接
@@ -11,7 +11,7 @@
 //    script 同 API 共用同一套邏輯（WP-GUARD-FIX-UI 鐵則）
 // §4 套用：apply 之後 guard 真係建咗、run 變 applied；同一個 run 再
 //    apply 一次 → 409
-// §5 needs_boss PII gate：冇「安員個人資料:view」見唔到姓名/候選姓名
+// §5 needs_boss PII gate：冇「保安員個人資料:view」見唔到姓名/候選姓名
 // §6 Opus 5.5 驗收：`applying` 卡死復原（未夠 15 分鐘 409、超過就可以
 //    重新套用，冪等唔重複建人）；另一個 run 套用緊 → 套用／計劃都 409
 import { describe, it, expect, beforeEach } from "vitest";
@@ -87,7 +87,7 @@ async function seedUnmatchedRosterRow(fx: Wp2Fixture, opts: { staffNoRaw: string
   return upload;
 }
 
-describe("WP-GUARD-FIX-UI：未配對安員修復頁面 API", () => {
+describe("WP-GUARD-FIX-UI：未配對保安員修復頁面 API", () => {
   let fx: Wp2Fixture;
   let ownerCookie: string;
   let supervisorCookie: string;
@@ -105,7 +105,7 @@ describe("WP-GUARD-FIX-UI：未配對安員修復頁面 API", () => {
     guardSelfCookie = await sessionCookieForUser(fx.userIds["安員"]);
   });
 
-  it("§1 主管/會計/雞頭/安員 GET+POST 一律 403（安員配對修復淨係老闆）", async () => {
+  it("§1 主管/會計/雞頭/保安員 GET+POST 一律 403（保安員配對修復淨係老闆）", async () => {
     for (const cookie of [supervisorCookie, accountantCookie, brokerCookie, guardSelfCookie]) {
       const listRes = await listStaffList(reqJson("http://test.local/api/guard-fix/staff-list", cookie));
       expect(listRes.status).toBe(403);
@@ -212,7 +212,7 @@ describe("WP-GUARD-FIX-UI：未配對安員修復頁面 API", () => {
     expect(runs.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("§5 needs_boss：冇「安員個人資料:view」嘅角色見唔到姓名/候選姓名", async () => {
+  it("§5 needs_boss：冇「保安員個人資料:view」嘅角色見唔到姓名/候選姓名", async () => {
     // 起兩個同名 guard，令呢個身份判斷唔到（ambiguous 走 needs_boss）。
     const dup1 = await prisma.guard.create({ data: { nameZh: "測試同名丙", employmentType: "cash_casual", status: "active", defaultBrokerId: fx.brokerA.id } });
     const dup2 = await prisma.guard.create({ data: { nameZh: "測試同名丙", employmentType: "cash_casual", status: "active", defaultBrokerId: fx.brokerA.id } });
@@ -226,9 +226,9 @@ describe("WP-GUARD-FIX-UI：未配對安員修復頁面 API", () => {
     const planRes = await buildPlan(reqJson("http://test.local/api/guard-fix/plan", ownerCookie, "POST", { month: "2026-08" }));
     const planBody = (await planRes.json()) as { run_id: string; needs_boss: Array<Record<string, unknown>> };
     expect(planBody.needs_boss.length).toBe(1);
-    expect(planBody.needs_boss[0]!.name_raw).toBe("測試同名丙"); // 老闆本身有「安員個人資料:view」
+    expect(planBody.needs_boss[0]!.name_raw).toBe("測試同名丙"); // 老闆本身有「保安員個人資料:view」
 
-    // 關閉老闆嘅「安員個人資料:view」，模擬「冇呢個 view 權」情況——
+    // 關閉老闆嘅「保安員個人資料:view」，模擬「冇呢個 view 權」情況——
     // 直接改 role_permissions（唔經 UI，測試 buildNeedsBossView() gate
     // 本身）。
     const ownerRole = await prisma.role.findFirstOrThrow({ where: { name: "老闆" } });

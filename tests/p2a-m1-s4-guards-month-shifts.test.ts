@@ -68,7 +68,7 @@ describe("P2-A M1：with_month_shifts 格式驗證", () => {
     expect(guardA && "month_shift_count" in guardA).toBe(false);
   });
 
-  it("S4：雞頭角色 GET 自己安員 with_month_shifts=2026-08 一樣見到 month_shift_count（白名單行正路，唔靠 gate 之後先加）", async () => {
+  it("S4：雞頭角色 GET 自己保安員 with_month_shifts=2026-08 一樣見到 month_shift_count（白名單行正路，唔靠 gate 之後先加）", async () => {
     const res = await guardsList(req("http://test.local/api/guards?with_month_shifts=2026-08", brokerACookie));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { rows: Array<{ id: string; month_shift_count?: number }> };

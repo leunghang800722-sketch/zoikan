@@ -54,7 +54,7 @@ export function ReasonText({ item, raw }: { item: UnresolvedItemLite; raw: RawRo
   );
 }
 
-/** 「更表寫咗」欄：姓名、工號、電話尾 4、雞頭碼、職級／時段、原始第 N 行＋相似安員。 */
+/** 「更表寫咗」欄：姓名、工號、電話尾 4、雞頭碼、職級／時段、原始第 N 行＋相似保安員。 */
 export function WroteCell({ raw, loading, item, dir }: { raw: RawRosterRow | null | undefined; loading: boolean; item: UnresolvedItemLite; dir: Dir }) {
   if (!raw) return <span className="text-[11px] text-zk-faint">{loading ? "載入緊…" : "—"}</span>;
   const person = personFromRow(raw);
@@ -92,7 +92,7 @@ export interface ActionCtx {
   uploadSiteId: string | null;
   month: string; // YYYY-MM
   needsBoss: NeedsBossItem[] | null;
-  /** false＝冇權限用安員配對修復（guard-fix 403）——唔出相關連結。 */
+  /** false＝冇權限用保安員配對修復（guard-fix 403）——唔出相關連結。 */
   canGuardFix: boolean;
   onReparse: () => void;
   reparsing: boolean;
@@ -113,14 +113,14 @@ export function ReasonLinks({ item, raw, ctx }: { item: UnresolvedItemLite; raw:
       if (ctx.canGuardFix) {
         links.push(
           <Link key="gf" href={LINK.guardFix(ctx.month)} className={linkCls} data-testid="link-guard-fix">
-            去安員配對修復 ›
+            去保安員配對修復 ›
           </Link>,
         );
       }
       if (hasPerson(person)) {
         links.push(
           <Link key="gs" href={LINK.guards(guardSearchTerm(person))} className={linkCls} data-testid="link-find-guard">
-            搵安員 ›
+            搵保安員 ›
           </Link>,
         );
       }

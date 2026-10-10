@@ -228,7 +228,7 @@ describe("WP-STAFF-FIELDS 第四輪覆核（結構性：只有最近一次包含
       await prisma.triageQuestion.deleteMany({});
       await prisma.triageSession.deleteMany({});
       await prisma.triagePersonApply.deleteMany({});
-      const g = await mkGuard({ nameZh: "不變量安員", staffNumbers: { create: [{ scheme: "U", number: `U9${String(seq).padStart(4, "0")}` }] } });
+      const g = await mkGuard({ nameZh: "不變量保安員", staffNumbers: { create: [{ scheme: "U", number: `U9${String(seq).padStart(4, "0")}` }] } });
       let latest: { v: string | null; variant: string } = { v: null, variant: "none" };
       for (let step = 0; step < 4; step++) {
         const variant = pick(["normal", "normal", "identity", "none"] as const);
@@ -236,7 +236,7 @@ describe("WP-STAFF-FIELDS 第四輪覆核（結構性：只有最近一次包含
         const hk = pick([H[1]!, H[2]!]);
         const p = person({ hkid: hk, nos: [{ n: `U9${String(seq).padStart(4, "0")}` }], ...(v ? { sia: { no: "K-200001-1-001", a: v, b: "2028-01-02", st: "review" as St } } : {}), reasons: variant === "identity" ? ["ext_identity_check"] : [] }) as unknown as Record<string, unknown>;
         p.hkid = { value: hk, status: "review" };
-        p.nameZh = L("不變量安員");
+        p.nameZh = L("不變量保安員");
         await applyPkg(owner, { ...pkg3([p as never]), generatedAt: `2026-12-${String(seq % 28 + 1).padStart(2, "0")}T0${step}:00:00.000Z-${seq}` });
         latest = { v, variant };
         // (b) 同一欄跨 session 最多一條 open

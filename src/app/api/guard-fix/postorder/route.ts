@@ -3,7 +3,7 @@
 // guard-fix/staff-list` 一致「即時存 bytes＋sha256→解析→存摘要」
 // pattern，唔另存逐行 PII——`buildGuardFixPlan()` 要用嗰陣先由 bytes
 // 重新解析）；`GET` 列現用（呢個月 status=parsed 最新一份）＋歷史。
-// `安員配對修復` module 老闆專用（同 staff-list 一致 gate）。
+// `保安員配對修復` module 老闆專用（同 staff-list 一致 gate）。
 //
 // WP-POSTORDER-CSV（老闆 2026-09-26 緊急）：正式站操作員（老闆帳號）用
 // 嘅工具處理唔到 binary（.xlsm／.xlsx），淨係可以喺 Google Drive 網頁用
@@ -29,7 +29,7 @@
 // 完整、冇截短嘅 `PostOrder.csv`。第四條路徑：multipart 淨係帶
 // `postorder_csv`（冇 `file`／`roster_csv`／`longterm_pairs_csv`）——
 // `missingSheets` 記低 `Roster`（tolerable，唔算上載失敗）。呢個 route
-// 本身唔推(盤,人)組合（要 DB 安員名，見 `src/lib/guard-fix/
+// 本身唔推(盤,人)組合（要 DB 保安員名，見 `src/lib/guard-fix/
 // postorder.ts` `derivePostorderLongtermPostsFromPostorderGrid()`）——
 // 淨係喺 `parseSummary` 加 `longterm_pairs_from_postorder`／
 // `longterm_cells_from_postorder` 俾操作員睇個提示；真正合併入計劃嘅
@@ -94,7 +94,7 @@ export async function GET(req: Request) {
   });
 }
 
-/** WP-POSTORDER-PO-PAIRS：上載嗰刻順手用 DB 安員名計「單靠 PostOrder
+/** WP-POSTORDER-PO-PAIRS：上載嗰刻順手用 DB 保安員名計「單靠 PostOrder
  * 推到幾多個 (盤,人) 組合」，俾操作員睇個提示（唔存人名，淨係數目）
  * ——真正合併入計劃嘅 `set_longterm_post` 喺 `buildGuardFixPlan()`
  * （`plan.ts`）先計，呢度純粹上載摘要用途。冇 `postorderCsvText` 就
@@ -289,7 +289,7 @@ export async function POST(req: Request) {
       // 2026-09-27 再緊急）：正式站操作員連 roster_csv／
       // longterm_pairs_csv 都傳唔到（同款上載瓶頸），但已經有完整嘅
       // `PostOrder.csv`。呢度淨係存 bytes；長工組合唔靠呢個 route 推
-      // （要 DB 安員名，摘要淨係做「PostOrder 推出組合」數目提示）——
+      // （要 DB 保安員名，摘要淨係做「PostOrder 推出組合」數目提示）——
       // 真正推＋合併 Roster/pairs 現有組合喺 `buildGuardFixPlan()`
       // （`plan.ts` `mergeLongtermPostCells()`）做，重新「計算修復
       // 計劃」嗰刻先計得埋。 ---

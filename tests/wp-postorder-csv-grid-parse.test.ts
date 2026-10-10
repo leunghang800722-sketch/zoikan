@@ -344,7 +344,7 @@ describe("WP-POSTORDER-ROBUST：真實 Google Sheets 匯出形狀（表頭飄行
 // msg-file/Postorder - Aug 2026.xlsm` 嘅表頭位置一致，`9+7k` 呢個舊有
 // 公式對呢個真樣本本身冇錯位）。跟老闆話嘅「1,295 格／56 組合」對唔上
 // ——查落去 `Roster.csv` 得 110 行（`msg-file` 嗰個 `.xlsm` 嘅 Roster
-// sheet 有 2,996 行），淨係含頭 11 個有「(8) 長工」標記嘅安員行（數碼港
+// sheet 有 2,996 行），淨係含頭 11 個有「(8) 長工」標記嘅保安員行（數碼港
 // ／CP5／數據中心／港大醫學院／港C1／港C／IFC／Weave 呢幾個盤嘅前半
 // 部分）；`PostOrder.csv`（815 行）就同 `.xlsm` 對應嘅 21 行／$60,520
 // 完全一致，冇縮水。即係話**呢份 `Roster.csv` 本身就唔係完整嘅 Roster

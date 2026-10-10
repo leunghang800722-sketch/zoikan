@@ -77,11 +77,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     // 衍生 flag，俾前端顯示「已清」提示——`migration_clear_internal_
     // referral`（見 20260929000000_wp_boss5_referral_broker_no_internal_
     // cash migration）淨係喺 `referral_broker_id` 曾經指住
-    // internal_cash（Y）嘅安員先寫，冇 PII，audit_log 本身就係
+    // internal_cash（Y）嘅保安員先寫，冇 PII，audit_log 本身就係
     // append-only 事實記錄。
     //
     // 驗收修正（Opus 5.5）：之前淨係睇「曾經有過呢粒 migration audit」
-    // 就當 true——如果之後有人手重新幫呢個安員揀返一個 referral_
+    // 就當 true——如果之後有人手重新幫呢個保安員揀返一個 referral_
     // broker_id（唔再係 null），前端仲會繼續顯示「已清」提示，同現況
     // 唔夾。而家加返「現值 referral_broker_id 係 null」呢個條件，先真係
     // 反映「而家仲係清咗嘅狀態」。
@@ -138,14 +138,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // 誤 403，見 src/lib/api/field-groups.ts dropUnchangedFieldGroupValues()
     // 大註解）。
     const effectiveBody = await dropUnchangedFieldGroupValues(session, "guards", parsed, before as unknown as Record<string, unknown>);
-    // WP-PII：body 帶「收客價/出街價/安員個人資料/安員銀行資料」任何一組
+    // WP-PII：body 帶「收客價/出街價/保安員個人資料/保安員銀行資料」任何一組
     // 欄位，冇對應 module 嘅 update 權限一律 403（唔准靜靜忽略）——同
     // rate-cards/sites 等 route 一致做法（見 src/lib/api/field-groups.ts）。
     await assertFieldGroupWritable(session, "guards", effectiveBody);
 
     // WP-STAFF-IMPORT B1：身份證存 canonical；同現值（canonical 後）一樣就當冇改
     // （舊髒值唔鎖死儲存）；改咗先驗 check digit（`allow_invalid_hkid` 俾護照號）＋
-    // 擋同另一個安員重複（409，唔回顯對方資料）。
+    // 擋同另一個保安員重複（409，唔回顯對方資料）。
     let hkidCanonical: string | undefined;
     const effRec = effectiveBody as Record<string, unknown>;
     if (typeof effRec.hkid === "string") {
@@ -272,7 +272,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const { guardAfter, legacyChanges, contactPatchResult } = await prisma.$transaction(async (tx) => {
       if (hkidCanonical) await assertHkidAvailable(tx, hkidCanonical, id);
       if (telLegacy) await assertTelAvailable(tx, telLegacy, id);
-      // 銀行戶口唔可以同另一位安員重複（同導入路徑同一個 acctTakenByOther：advisory lock＋編號＋戶口數字）；唔講係邊個
+      // 銀行戶口唔可以同另一位保安員重複（同導入路徑同一個 acctTakenByOther：advisory lock＋編號＋戶口數字）；唔講係邊個
       const bd = data as Record<string, unknown>;
       // 只改銀行編號都要查（戶口取新值，冇就用現有）
       if ("bankAccountNo" in bd || "bankCode" in bd) {

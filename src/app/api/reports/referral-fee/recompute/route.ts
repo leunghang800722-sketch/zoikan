@@ -8,7 +8,7 @@
 // 「月結總表:view」做入口 gate（呢個 module 冇 create/update/void 動作，
 // 全部 NA，「重新計算報表」呢種操作向來用 view 做閘），但任務書明文淨係
 // 「老闆／會計」——「月結總表:view」對主管係 O（可選，未必開），對
-// 雞頭/安員硬性 D，所以額外顯式擋主管（即使主管個別被開咗
+// 雞頭/保安員硬性 D，所以額外顯式擋主管（即使主管個別被開咗
 // 月結總表:view，都唔可以碰呢個會改 special_items 嘅寫入操作）。
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";

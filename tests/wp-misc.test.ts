@@ -1,7 +1,7 @@
 // WP-MISC（老闆 2026-09-20 拍板）——一個 migration 做晒兩個決定（A 佔位
 // 記錄標記老闆已取消，唔喺呢個 branch 出現）：
 //   A. QAS（基本保安訓練證書）日期——`qas_issue_date`（完成日期）／
-//      `qas_expiry_date`（到期日，如有），跟「安員」module，納入 90 日
+//      `qas_expiry_date`（到期日，如有），跟「保安員」module，納入 90 日
 //      內到期高亮。
 //   C. LINK（TKO Gateway 厚A/B/C）——`sites.guards_paid_by_client`：呢類
 //      盤嘅保安員由客戶直接出糧，我哋淨係收每月服務費，唔逐更計客價／

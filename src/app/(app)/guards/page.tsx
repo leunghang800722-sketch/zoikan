@@ -3,7 +3,7 @@
 // 跟 `src/lib/rbac/nav.ts` 導航分組）——同 `src/app/(app)/my-receivable/
 // page.tsx` 同一個 pattern。
 //
-// WP-PII（Opus 驗收必修 2）：加埋「出街價/安員個人資料/安員銀行資料」
+// WP-PII（Opus 驗收必修 2）：加埋「出街價/保安員個人資料/保安員銀行資料」
 // 三個 field-group 嘅 update 權限（`canUpdateSettlement`/`canUpdatePii`/
 // `canUpdateBank`）——同 `rate-cards/page.tsx` 嘅 `canReprice` 一致
 // pattern。GuardsClient 用呢三個（唔係 view-based 嘅 hasXField）決定

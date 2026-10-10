@@ -144,7 +144,7 @@ async function checkB() {
 
   // b2（Opus 驗收 A2 裁定 2026-09-12 改）：長工 autopay 行——毛利表
   // longtermSalaryAllocated 總額而家要等於 Σ*全部*本月有出更嘅
-  // longterm_autopay 安員月薪（唔再局限喺 mainRows 40 個盤——
+  // longterm_autopay 保安員月薪（唔再局限喺 mainRows 40 個盤——
   // buildGrossMargin() 而家列晒所有有 shift_records 嘅盤，見
   // gross-margin.ts 頂註解 2），同 (g3) 係同一條斷言，呢度用
   // `longtermSalaryTotalAllocatable`（buildLongtermSalaryAllocation()
@@ -153,7 +153,7 @@ async function checkB() {
   const totalAllocated = round2(margin.sites.reduce((a, s) => a + s.longtermSalaryAllocated, 0));
   const expectedTotal = margin.longtermSalaryTotalAllocatable;
   if (Math.abs(totalAllocated - expectedTotal) < 0.05) {
-    report("(b2) 長工 autopay 行——月薪分攤總額", "PASS", `分攤總額 ${totalAllocated} ≈ Σ全部本月有出更嘅 longterm_autopay 安員月薪 ${expectedTotal}（容差 0.05）`);
+    report("(b2) 長工 autopay 行——月薪分攤總額", "PASS", `分攤總額 ${totalAllocated} ≈ Σ全部本月有出更嘅 longterm_autopay 保安員月薪 ${expectedTotal}（容差 0.05）`);
   } else {
     report("(b2) 長工 autopay 行——月薪分攤總額", "FAIL", `分攤總額 ${totalAllocated} ≠ 預期 ${expectedTotal}`);
   }
@@ -560,7 +560,7 @@ async function checkF() {
 // (g)（Opus 驗收 M1/M2/A2 必修 2026-09-12）：毛利表 totals 內部一致性——
 // totals.cost/revenue 一定要等於逐盤 components 加總；referral 一定要
 // 全部嚟自 special_items(kind=referral_fee)（M2）；長工月薪分攤總額一定
-// 要等於 Σ本月有出更嘅 longterm_autopay 安員月薪（A2，容差 0.05）。
+// 要等於 Σ本月有出更嘅 longterm_autopay 保安員月薪（A2，容差 0.05）。
 async function checkG() {
   const { buildGrossMargin } = await import("@/lib/reports/gross-margin");
   const margin = await buildGrossMargin(DEFAULT_REPORT_MONTH);
@@ -598,7 +598,7 @@ async function checkG() {
   if (Math.abs(sumSalaryAlloc - margin.longtermSalaryTotalAllocatable) >= 0.05) {
     report("(g3) 長工月薪分攤總額＝Σmonthly_salary", "FAIL", `Σsite.longtermSalaryAllocated=${sumSalaryAlloc} ≠ Σmonthly_salary=${margin.longtermSalaryTotalAllocatable}`);
   } else {
-    report("(g3) 長工月薪分攤總額＝Σmonthly_salary", "PASS", `分攤總額 ${sumSalaryAlloc} ≈ Σ本月有出更嘅 longterm_autopay 安員月薪 ${margin.longtermSalaryTotalAllocatable}（容差 0.05）`);
+    report("(g3) 長工月薪分攤總額＝Σmonthly_salary", "PASS", `分攤總額 ${sumSalaryAlloc} ≈ Σ本月有出更嘅 longterm_autopay 保安員月薪 ${margin.longtermSalaryTotalAllocatable}（容差 0.05）`);
   }
 
   // g4（Opus 驗收 N1 必修）：非 referral_fee 嘅 special_items 成本一定要

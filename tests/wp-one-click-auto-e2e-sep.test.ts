@@ -77,7 +77,7 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
     const hoR = await mkSite("測試皓日", { cards: [{ broker: EW, client: 800, wage: 750 }] });
     const ev = await mkSite("測試Event盤", { cards: cardK, times: "0900-1600" });
 
-    // 安員
+    // 保安員
     const [a1, a2, a3, a4, a5, a6, a7, a8] = [await g(), await g(), await g(), await g(), await g(), await g(), await g(), await g()];
     const ext = await g({ employmentType: "external", name: "測試客戶人員" });
     const y1 = await g({ defaultBrokerId: EY.id });
@@ -118,7 +118,7 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
     await sepUpload(e8.site.canonicalName, [...kLines([a7], days(1, 30)), line(y2, days(1, 20), { broker: "EY" })]);
     await sepUpload(e9.site.canonicalName, [...kLines([a8], days(1, 30)), line(w1, days(1, 30), { broker: "EW" })]);
     await sepUpload(e10.site.canonicalName, kLines([a1], days(1, 30)));
-    // 皓日：新建安員、更表冇雞頭欄（上月同一更表姓名同工號有 EW）
+    // 皓日：新建保安員、更表冇雞頭欄（上月同一更表姓名同工號有 EW）
     await sepUpload(hoR.site.canonicalName, [line(hoNew, days(1, 8), { staffNo: "U9HO1", name: "測試皓日人（新建）" })]);
     // Event：更表冇雞頭欄，Postorder Roster 逐日有雞頭
     await sepUpload(ev.site.canonicalName, [line(evG, [3, 4], { time: "0900-1600" })]);
@@ -230,7 +230,7 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
     const e1recs = await prisma.shiftRecord.findMany({ where: { siteId: s.e1.site.id, status: { not: "cancelled" } }, include: { settlementBroker: true } });
     expect(e1recs.filter((r) => r.settlementBroker?.kind === "external").length).toBe(40);
 
-    // 3. 無結算雞頭：Event（Postorder 同日雞頭 EK）自動歸屬；皓日係新安員（冇同一 guard_id 歷史）→ 唔靠姓名跨安員回溯，入分診
+    // 3. 無結算雞頭：Event（Postorder 同日雞頭 EK）自動歸屬；皓日係新保安員（冇同一 guard_id 歷史）→ 唔靠姓名跨保安員回溯，入分診
     for (const r of await prisma.shiftRecord.findMany({ where: { siteId: s.ev.site.id } })) expect(r.settlementBrokerId).toBe(EK.id);
     for (const r of await prisma.shiftRecord.findMany({ where: { siteId: s.hoR.site.id } })) expect(r.settlementBrokerId).toBeNull();
     expect(auto.summary.recordsSettled).toBe(2);
@@ -252,7 +252,7 @@ describe("WP-ONE-CLICK-AUTO 端到端：2026-09 四類問題（合成重現）",
     expect(report.unpriced.gap).toBeDefined();
     expect(auto.summary.unpricedRecords).toBe(unpricedNow.count);
 
-    // 4b. 報告／分診題以外唔准出 PII：報告 JSON、steps、分診題 title／summary／候選文字，唔含任何安員姓名／電話／工號
+    // 4b. 報告／分診題以外唔准出 PII：報告 JSON、steps、分診題 title／summary／候選文字，唔含任何保安員姓名／電話／工號
     const guardRows = await prisma.guard.findMany({ select: { nameZh: true, staffNo: true, tel: true } });
     const reportText = JSON.stringify(done.reportJson) + JSON.stringify(done.stepsJson);
     const qrows = await prisma.triageQuestion.findMany({ where: { sessionId: auto.triageSessionId! } });

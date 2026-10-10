@@ -2,7 +2,7 @@
 // （建人／登記工號／加別名，一個 transaction）＋自動逐個 active 上載
 // `reparseRosterUpload()`＋自動計下一輪 plan。
 //
-// 設計取捨（§18.9）：apply 可能要幾分鐘（建 70+ 位安員＋逐盤 reparse）——
+// 設計取捨（§18.9）：apply 可能要幾分鐘（建 70+ 位保安員＋逐盤 reparse）——
 // 呢度即刻將 status 轉 `applying`（快，喺 response 返之前完成），然後用
 // Next `after()` 喺 response 送出之後先做重工夫，response 即刻 202 返；
 // 頁面 poll `GET /api/guard-fix/runs/:id` 直至 `applied`/`failed`。唔靠長

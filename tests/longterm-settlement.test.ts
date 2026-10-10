@@ -64,7 +64,7 @@ describe("resolveLongtermSettlement", () => {
       settlementBrokerId: "broker-k",
       operationalBrokerId: "broker-k",
       reason: "longterm_non_post_broker",
-      warning: "長工頂雞頭更：安員有登記崗位盤，但呢更唔喺崗位盤，跟更表雞頭碼幫雞頭頂散更",
+      warning: "長工頂雞頭更：保安員有登記崗位盤，但呢更唔喺崗位盤，跟更表雞頭碼幫雞頭頂散更",
     });
   });
 
@@ -136,7 +136,7 @@ describe("longterm-settlement DB helpers", () => {
     return prisma.site.create({ data: { canonicalName: name, clientName: "測試客戶", billingModel: "per_shift", parentSiteId, createdBy: "test:longterm-settlement" } });
   }
   async function makeGuard(employmentType: "cash_casual" | "longterm_autopay" = "longterm_autopay") {
-    return prisma.guard.create({ data: { nameZh: "測試安員", employmentType, createdBy: "test:longterm-settlement" } });
+    return prisma.guard.create({ data: { nameZh: "測試保安員", employmentType, createdBy: "test:longterm-settlement" } });
   }
 
   it("findInternalLongtermBrokerId：唔存在就 null；有就揀 active、code 最細嗰個", async () => {
@@ -382,7 +382,7 @@ describe("inferReferralBrokerFromRosters", () => {
     expect(r.warning).not.toBeNull();
   });
 
-  it("冇雞頭碼欄、冇 broker_site_assignments——跌返該盤其他安員 shift 行唯一雞頭", async () => {
+  it("冇雞頭碼欄、冇 broker_site_assignments——跌返該盤其他保安員 shift 行唯一雞頭", async () => {
     const site = await makeSite("測試盤E");
     const guard = await makeGuard();
     const otherGuard = await makeGuard();
@@ -398,7 +398,7 @@ describe("inferReferralBrokerFromRosters", () => {
     expect(r.warning).toBeNull();
   });
 
-  it("WP-BOSS5 §25.2：冇雞頭碼欄、冇 broker_site_assignments，跌返該盤其他安員 shift 行揀到 Y（internal_cash）——唔可以做介紹雞頭，唔設，有 warning", async () => {
+  it("WP-BOSS5 §25.2：冇雞頭碼欄、冇 broker_site_assignments，跌返該盤其他保安員 shift 行揀到 Y（internal_cash）——唔可以做介紹雞頭，唔設，有 warning", async () => {
     const site = await makeSite("測試盤E-Y");
     const guard = await makeGuard();
     const otherGuard = await makeGuard();

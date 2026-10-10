@@ -339,7 +339,7 @@ const DESK_COL_DAY = 34;
 // 1:1，見 P2-版面重設計計劃.md §2「手機更別鍵盤」判斷附近段落）。
 const MOBILE_COL_NAME = 118;
 const MOBILE_COL_DAY = 44;
-// 2026-09-12 老闆 feedback：更表唔顯示安員電話（聯絡資料只喺安員名冊，按 安員:view 權限）；Excel 匯出照原檔格式保留，`RowMeta.tel` 仍然保留但呢頁唔顯示。
+// 2026-09-12 老闆 feedback：更表唔顯示保安員電話（聯絡資料只喺保安員名冊，按 保安員:view 權限）；Excel 匯出照原檔格式保留，`RowMeta.tel` 仍然保留但呢頁唔顯示。
 
 // WP-R2 第 9 項：手機底部更別鍵盤實際高度（約），等表格捲動區留返
 // padding-bottom，撳近底部嘅格先唔會俾鍵盤遮住。
@@ -537,7 +537,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const [brokersById, setBrokersById] = useState<Map<string, BrokerDto>>(new Map());
 
   const [rows, setRows] = useState<RowMeta[]>([]);
-  const [extraRows, setExtraRows] = useState<RowMeta[]>([]); // 加安員／複製上月加嘅新行，未儲存前冇 baseline
+  const [extraRows, setExtraRows] = useState<RowMeta[]>([]); // 加保安員／複製上月加嘅新行，未儲存前冇 baseline
   const [baseline, setBaseline] = useState<Map<string, CellState>>(new Map());
   const [cells, setCells] = useState<Map<string, CellState>>(new Map());
   // 2026-09-12 老闆 feedback：雞頭篩選＋人數/更數統計條——保留原始
@@ -615,7 +615,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const dragSourceRef = useRef<{ r: number; d: number; code: string | null } | null>(null);
   const dragCurrentRef = useRef<{ r: number; d: number } | null>(null);
 
-  // 加安員 modal
+  // 加保安員 modal
   // B1-5（WP-ATTRIB）：逐行結算單位覆寫——用戶喺「雞頭」欄改咗某一行嘅
   // 結算單位（未儲存前純前端狀態，key＝row.key），儲存嗰陣（仲有畀新格
   // 用嘅 fallback，見 handleSave 嘅 diffCells 建構）同「複製上月」review
@@ -624,8 +624,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const [showAddGuard, setShowAddGuard] = useState(false);
   const [addGuardId, setAddGuardId] = useState("");
   const [addShiftTypeId, setAddShiftTypeId] = useState("");
-  // B1-5（WP-ATTRIB）：加安員嗰陣可以揀結算單位——空字串代表「跟返揀咗
-  // 嗰個安員嘅 default_broker_id」（見 handleAddGuardRow）。
+  // B1-5（WP-ATTRIB）：加保安員嗰陣可以揀結算單位——空字串代表「跟返揀咗
+  // 嗰個保安員嘅 default_broker_id」（見 handleAddGuardRow）。
   const [addBrokerId, setAddBrokerId] = useState("");
 
   // 整行填
@@ -641,7 +641,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   // allRows＝呢個盤呢個月全部行（已儲存+未儲存新加嘅），唔受雞頭篩選
-  // 影響——儲存 diff／複製上月／加安員去重都要睇成個集合，先唔會漏
+  // 影響——儲存 diff／複製上月／加保安員去重都要睇成個集合，先唔會漏
   // 咗篩選緊冇顯示嗰啲行嘅改動。
   const allRows = useMemo(() => [...rows, ...extraRows], [rows, extraRows]);
   // visibleRows＝畫面實際渲染／鍵盤導覽嗰個集合——揀咗雞頭篩選就淨係
@@ -1245,7 +1245,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     }
   }, [monthLocked, month, siteId, allRows, cells, days, shiftTypesById, guardsById]);
 
-  // ---- 加安員：純前端加一行空行，未填格儲存之前唔會出現喺下次 reload ----
+  // ---- 加保安員：純前端加一行空行，未填格儲存之前唔會出現喺下次 reload ----
   const guardOptions = useMemo(() => [...guardsById.values()].sort((a, b) => a.name_zh.localeCompare(b.name_zh)), [guardsById]);
   // B1-5（WP-ATTRIB）：結算單位選項——任務書寫「該盤 broker_site_
   // assignments 嘅雞頭＋公司兵＋長工單位」，呢度用返本身已經攞晒嘅
@@ -1325,7 +1325,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       }
       // P0（Opus 驗收重現）：之前呢度冇送 settlement_broker_id，令新建
       // 記錄（「複製上月」／新增格）完全冚做 guard.default_broker_id
-      // fallback——93 個長工/公司兵安員嗰個欄係 NULL，條記錄就喺糧明細
+      // fallback——93 個長工/公司兵保安員嗰個欄係 NULL，條記錄就喺糧明細
       // 消失。`row.brokerId`（RowMeta，見 buildRowsAndCells／
       // handleCopyPrevMonth／handleAddGuardRow）已經帶咗「複製嘅來源
       // 記錄值」或者「呢行現有嘅結算單位」——送埋出去等 batch route 唔使
@@ -2704,13 +2704,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 ))}
               </select>
             </label>
-            {/* B1-5（WP-ATTRIB）：結算單位——預設跟揀咗嗰個安員嘅
+            {/* B1-5（WP-ATTRIB）：結算單位——預設跟揀咗嗰個保安員嘅
                 default_broker_id（顯示喺 placeholder），可以人手改。
                 驗收修正（Opus 5.5）：雞頭 session 唔顯示（自己永遠係自己，
                 後端亦強制）。 */}
             {!isBrokerSession && (
             <label className="block text-xs text-gray-600">
-              結算單位（唔揀就跟安員預設）
+              結算單位（唔揀就跟保安員預設）
               <select
                 aria-label="加保安員行:結算單位"
                 data-testid="add-guard-select-broker"
@@ -2718,7 +2718,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 value={addBrokerId}
                 onChange={(e) => setAddBrokerId(e.target.value)}
               >
-                <option value="">（跟安員預設：{addGuardId ? (guardsById.get(addGuardId)?.default_broker_id ? brokersById.get(guardsById.get(addGuardId)!.default_broker_id!)?.code : "冇預設") : "—"}）</option>
+                <option value="">（跟保安員預設：{addGuardId ? (guardsById.get(addGuardId)?.default_broker_id ? brokersById.get(guardsById.get(addGuardId)!.default_broker_id!)?.code : "冇預設") : "—"}）</option>
                 {brokerSelectOptions.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.code} · {b.name}

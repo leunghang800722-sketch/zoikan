@@ -1,8 +1,8 @@
 // WP-ROSTER-UPLOAD Phase B-1（B1-2）：`GET /api/roster-uploads/:id/reconcile`
 // ——對數分類結果（分頁、`?category=` 篩單一分類）＋summary 各類數目。
 // 「更表上載」module 嘅 `view`（同 `GET /api/roster-uploads/:id` 一致）
-// ——雞頭／安員喺 rbac/matrix.ts 已經硬性 deny 呢個 module，唔使呢度再
-// 加隔離邏輯（規則：對數 API 一律 403 俾雞頭/安員，對數係會計/主管/
+// ——雞頭／保安員喺 rbac/matrix.ts 已經硬性 deny 呢個 module，唔使呢度再
+// 加隔離邏輯（規則：對數 API 一律 403 俾雞頭/保安員，對數係會計/主管/
 // 老闆）。
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";

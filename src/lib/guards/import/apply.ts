@@ -48,7 +48,7 @@ const IMPORT_ADVISORY_LOCK_KEY = 7261003;
 const IMPORT_TX_TIMEOUT_MS = 120_000;
 
 // ---------------------------------------------------------------------------
-// 載入現有安員（對齊用）
+// 載入現有保安員（對齊用）
 // ---------------------------------------------------------------------------
 interface GuardSnap {
   id: string;
@@ -219,7 +219,7 @@ function evaluate(p: PackagePerson, ctx: DbCtx, groupReasons: readonly string[],
   let guardId = d.guardId;
   let basis = d.basis;
   let reasons = [...d.reasons];
-  // WP-AI-OPS §28.4：人手（對話式分診）揀咗「連去呢個現有安員」／「新開一個」。只喺冇包內群組衝突時生效；
+  // WP-AI-OPS §28.4：人手（對話式分診）揀咗「連去呢個現有保安員」／「新開一個」。只喺冇包內群組衝突時生效；
   // 仍然要過唯一性（hkid 屬另一人／身份證互相矛盾 → 唔 link／唔 create），之後行同一條 create／link 寫入路徑。
   if (forced && groupReasons.length === 0) {
     const hk = p.hkid.status === "confirmed" ? hkidCanon : null;
@@ -368,19 +368,19 @@ export interface PreviewRow {
   address_source: string;
   current_name_zh: string | null;
   current_name_en: string | null;
-  /** 讀者冇「安員個人資料:view」而現有姓名同導入包唔同：唔回名，只回旗 */
+  /** 讀者冇「保安員個人資料:view」而現有姓名同導入包唔同：唔回名，只回旗 */
   current_name_hidden?: boolean;
   name_review_pending: boolean;
   fields: Record<PersonField, { status: string; check: FieldCheck }>;
   staff_numbers: number;
   /** WP-STAFF-FIELDS：v3 新欄（冇新欄就唔出） */
   ext?: { key: string; status: string; check: string; held?: string }[];
-  /** 銀行戶口遮罩（尾 4 位）；冇「安員銀行資料:view」嘅讀者 projection 會改成 { present: true } */
+  /** 銀行戶口遮罩（尾 4 位）；冇「保安員銀行資料:view」嘅讀者 projection 會改成 { present: true } */
   bank_masked?: { present: true; code?: string | null; name?: string | null; account_masked?: string | null } | null;
 }
 
 export interface PreviewResult {
-  /** 冇「安員個人資料:view」：依賴「新值 vs 現值」比較嘅彙總計數已隱藏（見 project.ts） */
+  /** 冇「保安員個人資料:view」：依賴「新值 vs 現值」比較嘅彙總計數已隱藏（見 project.ts） */
   counts_hidden?: boolean;
   package_hash: string;
   package: { version: number; generated_at: string; persons: number; unassigned_bank_accounts?: number };
@@ -580,7 +580,7 @@ export interface ApplyResult {
   results: PersonResult[];
 }
 
-/** 人手強制對齊（對話式分診）：link＝連去指定現有安員；create＝新開一個。 */
+/** 人手強制對齊（對話式分診）：link＝連去指定現有保安員；create＝新開一個。 */
 export type ForcedMatch = { mode: "link"; guardId: string } | { mode: "create" };
 
 /** 寫入時每筆 audit 嘅摘要（分診「預覽＝實際寫入」比對用；唔含 id／時間）。 */
@@ -599,17 +599,17 @@ export interface ApplyOptions {
   forced?: Readonly<Record<string, ForcedMatch>>;
   /** 收集每筆寫入（唔影響寫入本身） */
   collect?: WriteChange[];
-  /** true＝操作人冇「安員個人資料:view」：電話只准補空（安員已有電話就唔加），令寫入結果唔再反映「估啱電話」 */
+  /** true＝操作人冇「保安員個人資料:view」：電話只准補空（保安員已有電話就唔加），令寫入結果唔再反映「估啱電話」 */
   fillOnlyPii?: boolean;
   /** 寫 guards audit 時落 `after.import_via` 硬標記（預設 guard_import；分診傳 triage） */
   via?: "guard_import" | "triage" | "single_ocr";
-  /** false＝操作人冇「安員:update」：唔准經導入覆蓋現有安員姓名（會 403）。undefined 當 true。 */
+  /** false＝操作人冇「保安員:update」：唔准經導入覆蓋現有保安員姓名（會 403）。undefined 當 true。 */
   canEditGuard?: boolean;
-  /** false＝操作人冇「安員個人資料:update」：唔准覆蓋現有唔同嘅出生日期／地址（會 403）。undefined 當 true（內部呼叫）。 */
+  /** false＝操作人冇「保安員個人資料:update」：唔准覆蓋現有唔同嘅出生日期／地址（會 403）。undefined 當 true（內部呼叫）。 */
   canOverwritePii?: boolean;
   /** 單人套用：結果係 name_not_confirmed（未寫任何嘢）就自動加「照建但標待核對」再行一次——分診答案已經由人手確認咗其他嘢，姓名仍然標待核對 */
   autoKeepPendingName?: boolean;
-  /** false＝操作人冇「安員銀行資料:update」：銀行欄一律唔寫（outcome not_written）。undefined 當 true（內部呼叫）。 */
+  /** false＝操作人冇「保安員銀行資料:update」：銀行欄一律唔寫（outcome not_written）。undefined 當 true（內部呼叫）。 */
   canEditBank?: boolean;
   /** 內部：呢個人有 hold 被人手 decision 繞過 → guards audit 加 hold_override:true（冇值） */
   holdOverride?: boolean;

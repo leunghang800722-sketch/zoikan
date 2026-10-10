@@ -1,4 +1,4 @@
-// WP-STAFF-IMPORT B3 / §26.2.4：導入人 ↔ 本系統安員對齊決策（純函數；伺服器對自己個 DB 做）。
+// WP-STAFF-IMPORT B3 / §26.2.4：導入人 ↔ 本系統保安員對齊決策（純函數；伺服器對自己個 DB 做）。
 // 次序：hkid → 工號（任何 scheme）→ 電話 → （姓名相同且唯一＋輔助判斷 a–e：見 decideNameOnly）。
 // 結果 link／create／conflict／needs_review，理由碼同 Stage A `04-match-plan.ts` 一致
 // （script 改 import 呢份，唔再有第二套）。

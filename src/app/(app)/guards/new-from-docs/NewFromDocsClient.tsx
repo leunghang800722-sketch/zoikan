@@ -553,7 +553,7 @@ export function NewFromDocsClient() {
                   return (
                     <tr key={k} className="border-t border-zk-border first:border-t-0">
                       <td className="p-2 text-zk-faint">{FIELD_LABEL[k]}</td>
-                      <td className="p-2">{k === "phone" && c?.check === "differs" ? "現有有其他電話，會加入呢個號碼（冇「安員個人資料」權限只補空）" : (CHECK_TEXT[c?.check ?? "missing"] ?? "（未能比較）")}</td>
+                      <td className="p-2">{k === "phone" && c?.check === "differs" ? "現有有其他電話，會加入呢個號碼（冇「保安員個人資料」權限只補空）" : (CHECK_TEXT[c?.check ?? "missing"] ?? "（未能比較）")}</td>
                     </tr>
                   );
                 })}

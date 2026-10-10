@@ -218,10 +218,10 @@ function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: stri
  * 呢兩個舊欄，唔使改。
  *
  * B（老闆 2026-09-19 拍板業務規則 (4)：離職後編號取消，永遠唔復用）：
- * 原本「冇 current 就寫 null」嘅做法，喺安員離職（U 號轉 former／已取消）
- * 之後就會將 `guards.staff_no` 抹走——但呢個安員舊月份嘅更表／匯出／
+ * 原本「冇 current 就寫 null」嘅做法，喺保安員離職（U 號轉 former／已取消）
+ * 之後就會將 `guards.staff_no` 抹走——但呢個保安員舊月份嘅更表／匯出／
  * `gate:export` 對數仍然要顯示返嗰個（已取消嘅）U 號先做到「歷史文件
- * 完整」（業務規則 (2)：更表／匯出一律顯示 U 號；一個已離職安員嘅舊
+ * 完整」（業務規則 (2)：更表／匯出一律顯示 U 號；一個已離職保安員嘅舊
  * 更表當然仲係要顯示佢嗰陣用緊嘅 U 號，唔可以因為而家取消咗就變空白）。
  * 改做：冇 current 就 fallback 用「最近取消」嗰一行（`pickRepresentativeStaffNumberRow()`），
  * 淨係完全冇任何行（連 former 都冇）先真係 null。 */
@@ -239,7 +239,7 @@ function pickRepresentativeStaffNumberRow(rows: GuardStaffNumber[], scheme: stri
 // 化）legacy 欄值原封不動留喺自己嗰行（migration 刻意唔郁 guards 表本身，
 // 見 migration.sql），如果嗰個原始值本身已經係正規化形式（同贏咗嗰個
 // guard 而家喺新表嘅現用號啱啱好撞正），呢度就會撞號。原本冇攔截，直上
-// route 變 500；而家轉做 409，並且指出「呢個號碼仲留喺另一個安員嘅舊工
+// route 變 500；而家轉做 409，並且指出「呢個號碼仲留喺另一個保安員嘅舊工
 // 號欄（資料遷移時跳過咗）」，`guard_id` 淨係內部角色
 // （`revealConflictGuardId=true`）先見到，同 M2b
 // （`upsertCurrentStaffNumber()`）一致口徑。
@@ -280,10 +280,10 @@ export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: {
 
   // 必修 5（Opus 驗收第三輪）：補一句點處理——單講「請先處理嗰邊」冇講
   // 清楚實際要點做，用戶（老闆/主管）未必知道「處理」係指去邊度做乜。
-  const conflictHint = "，請去嗰位安員嘅「員工編號」區加返正確號碼，舊工號欄就會更新";
-  const conflictMessage = (value: string) => `呢個號碼（${value}）仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊${conflictHint}`;
+  const conflictHint = "，請去嗰位保安員嘅「員工編號」區加返正確號碼，舊工號欄就會更新";
+  const conflictMessage = (value: string) => `呢個號碼（${value}）仲留喺另一個保安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊${conflictHint}`;
   // Opus 覆核 S1：如果要寫入嘅只係「已取消號」嘅歷史顯示值（fallback），
-  // 撞到另一個安員嘅舊工號欄就唔好阻住個操作（否則呢類人永遠取消唔到個
+  // 撞到另一個保安員嘅舊工號欄就唔好阻住個操作（否則呢類人永遠取消唔到個
   // 號）——跳過呢欄、保留原值就算；真現用號撞先至 409。
   if (typeof data.staffNo === "string" && uRepresentative?.status === "former") {
     const holder = await tx.guard.findFirst({ where: { staffNo: data.staffNo, NOT: { id: guardId } }, select: { id: true } });
@@ -310,7 +310,7 @@ export async function syncLegacyStaffNoColumns(tx: Tx, guardId: string, opts?: {
     await tx.guard.update({ where: { id: guardId }, data });
   } catch (err) {
     if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
-      throw Conflict(`呢個號碼仲留喺另一個安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊${conflictHint}`);
+      throw Conflict(`呢個號碼仲留喺另一個保安員嘅舊工號欄（資料遷移時跳過咗），請先處理嗰邊${conflictHint}`);
     }
     throw err;
   }
@@ -419,8 +419,8 @@ export function assertNoLegacySiaPermitWrite(body: unknown): void {
 // M2a（Opus 驗收修復）：雞頭經 `POST /api/guards`／`PATCH /api/guards/:id`
 // 帶 `staff_no`／`staff_no_mw`（舊寫法，會觸發 `applyLegacyStaffNoPatch()`
 // 起／改新表行）一律 403——同兩條新 `.../staff-numbers*` route 一樣**硬性
-// 擋**，唔靠矩陣「自己安員:update」出廠 off 個 cell（老闆理論上可以開
-// 呢個 cell 俾雞頭改自己安員嘅普通欄，開咗唔應該連帶解鎖雞頭寫工號——
+// 擋**，唔靠矩陣「自己保安員:update」出廠 off 個 cell（老闆理論上可以開
+// 呢個 cell 俾雞頭改自己保安員嘅普通欄，開咗唔應該連帶解鎖雞頭寫工號——
 // 「雞頭唔可以寫工號」係呢個資源絕對規則，唔係可開關嘅權限）。要喺
 // `parseBody()` 之前用 raw body 檢查（key 存在就算，唔理值係咪 truthy/
 // 空字串——同 `assertNoLegacySiaPermitWrite()` 一致做法）。

@@ -175,7 +175,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員", action: "update" } }, data: { granted: true } });
       const sid = r.body.triage.session_id as string;
       await post(reassignRoute as never, `/api/triage/sessions/${sid}/reassign`, owner, { owner_user_id: fx.userIds["會計"] }, sid);
-      // 之後另一個同名安員出現（唔好令目標變）
+      // 之後另一個同名保安員出現（唔好令目標變）
       await mkGuard({ nameZh: "測試員甲", staffNumbers: { create: [{ scheme: "MP", number: "MP77002" }] } });
       const q = (await qs("ext_identity_check"))[0]!;
       const { res } = await confirm(accountant, q.id, { option: "confirm_ext_identity" });
@@ -186,7 +186,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
     });
   });
 
-  describe("M1：同一個戶口唔可以屬於兩個安員", () => {
+  describe("M1：同一個戶口唔可以屬於兩個保安員", () => {
     it("自動路徑：戶口已屬另一位 → conflict、出 bank_review、唔寫；冇 bank view 嘅回應唔露原因", async () => {
       await mkGuard({ nameZh: "測試員Z", bankCode: "004", bankName: "匯豐銀行", bankAccountNo: ACCT, bankPayeeName: PAYEE });
       await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
@@ -203,7 +203,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       const x = await mkGuard({ nameZh: "測試員X", nameEn: "ONE TEST PAYEE", employmentType: "longterm_autopay" });
       await applyPkg(owner, pkg3([], [{ key: "pe:004:5678", bankCode: "004", accountNo: ACCT, payeeName: "TEST ONE PAYEE" }]));
       const q = (await qs("bank_identity_unknown"))[0]!;
-      // 開咗題之後，戶口被另一位安員用咗
+      // 開咗題之後，戶口被另一位保安員用咗
       await mkGuard({ nameZh: "測試員Z", bankCode: "004", bankName: "匯豐銀行", bankAccountNo: ACCT, bankPayeeName: PAYEE });
       const ans = { option: "assign_bank", guard_id: x.id };
       const pv = await (await qPreview(owner, q.id, ans)).json();
@@ -255,7 +255,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
   });
 
   describe("M3：差分", () => {
-    it("(a) 冇 PII view：decisions.ext emergency replace 估中 vs 估錯同一結果（要個人資料 view＋安員 update 先可繞過閘，一律 403）", async () => {
+    it("(a) 冇 PII view：decisions.ext emergency replace 估中 vs 估錯同一結果（要個人資料 view＋保安員 update 先可繞過閘，一律 403）", async () => {
       const g = await mkGuard({ hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z") });
       await prisma.guardEmergencyContact.create({ data: { guardId: g.id, name: "測試聯絡人甲", tel: "91000011", createdBy: "t" } as never });
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員個人資料", action: { in: ["view", "update"] } } }, data: { granted: false } });
@@ -489,7 +489,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       expect(JSON.stringify(up)).not.toContain("K-200001-1-001".toLowerCase());
     });
 
-    it("答 ext_identity_check 要「安員個人資料:view」＋「安員:update」：冇就 restricted／403", async () => {
+    it("答 ext_identity_check 要「保安員個人資料:view」＋「保安員:update」：冇就 restricted／403", async () => {
       await mkGuard({ nameZh: "測試員其他", staffNumbers: { create: [{ scheme: "U", number: "U77001" }] } });
       const r = await applyPkg(owner, pkg3([typedPerson({ nos: [{ n: "U77001" }], sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" } }, H[2]!)]));
       const sid = r.body.triage.session_id as string;
@@ -501,7 +501,7 @@ describe("WP-STAFF-FIELDS 第二階段：Opus 驗收修正（B1／M1–M7／Mino
       expect((await qPreview(accountant, q.id, { option: "confirm_ext_identity" })).status).toBe(403);
     });
 
-    it("PATCH /api/guards/:id 改銀行戶口撞咗另一位安員 → 409（唔講係邊個）", async () => {
+    it("PATCH /api/guards/:id 改銀行戶口撞咗另一位保安員 → 409（唔講係邊個）", async () => {
       await mkGuard({ nameZh: "測試員Z", bankCode: "004", bankAccountNo: ACCT, bankPayeeName: PAYEE });
       const y = await mkGuard({ nameZh: "測試員Y" });
       const { PATCH } = await import("@/app/api/guards/[id]/route");

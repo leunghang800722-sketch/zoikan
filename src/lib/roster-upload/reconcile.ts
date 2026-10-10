@@ -158,7 +158,7 @@ export interface ReconcileInput {
 
 /** 幫一組 id 揀「出現次數最多」嗰個（tie 揀先出現嗰個，`Map` 保留插入
  * 次序）——純粹輔助函數，唔係「估」，係喺已知嘅具體訊號（同一行、或者
- * 同一個安員喺呢張上載入面其他日子）入面揀最常見嗰個。 */
+ * 同一個保安員喺呢張上載入面其他日子）入面揀最常見嗰個。 */
 function majorityOf(values: readonly string[]): string | null {
   if (values.length === 0) return null;
   const counts = new Map<string, number>();
@@ -188,7 +188,7 @@ interface LeaveShiftTypeCandidate {
  *   1.「該行 Time 對到嘅更種」——呢行本身 `time_raw` 正規化之後同呢個
  *      （子）盤某個 shift_type 嘅 `timeSlot` 啱好夾中一個（唔止一個就
  *      唔用，避免估錯）。
- *   2.「同一行（rowIndex）其他日子」——更表入面「一行」＝一個安員一個
+ *   2.「同一行（rowIndex）其他日子」——更表入面「一行」＝一個保安員一個
  *      更別嘅一整行日子（`row_index` 相同），leave 格同正更格通常同一
  *      physical row，用嗰行入面其他 `shift`/`ot` 格配到嘅 shift_type_id
  *      多數票。
@@ -369,7 +369,7 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
     // 驗收修正（Opus 5.5，規則 8）：有雞頭碼但對唔到 brokers——唔准用
     // fallback 靜靜補（fallback 淨係俾「冇雞頭碼欄」嘅盤用）。
     if (r.brokerCodeRaw && r.brokerCodeRaw.trim() && !r.settlementBrokerId) reasons.push(`雞頭碼「${r.brokerCodeRaw.trim()}」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析`);
-    if (!r.guardId) reasons.push("安員未配對");
+    if (!r.guardId) reasons.push("保安員未配對");
 
     let shiftTypeId: string | null = r.shiftTypeId;
     let shiftTypeInferred = false;
@@ -399,7 +399,7 @@ export async function loadReconcileInput(uploadId: string): Promise<ReconcileInp
     }
 
     // WP-LTSHIFT（§2）：長工結算單位第一層——喺規則 8 舊 fallback 鏈之前
-    // 行，只對 employment_type 開頭 longterm_ 嘅安員生效，覆寫（唔理更表
+    // 行，只對 employment_type 開頭 longterm_ 嘅保安員生效，覆寫（唔理更表
     // 雞頭碼欄本身有冇值，總表 8 月長工行雞頭碼一律填緊 K，唔可以照抄，
     // 見 longterm-settlement.ts 頂大註解）。
     let settlementBrokerId: string | null = null;

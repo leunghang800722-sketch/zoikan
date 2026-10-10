@@ -101,7 +101,7 @@ describe("gross-margin.ts：OT 公式 fallback 只對 2026-08 之前嘅月份生
       data: { siteId, code: "OT1", billingGroup: "per_shift", hours: 1, startTime: new Date("1970-01-01T06:00:00Z"), endTime: new Date("1970-01-01T07:00:00Z"), createdBy: "test" },
     });
     otShiftTypeId = otShiftType.id;
-    const guard = await prisma.guard.create({ data: { nameZh: "測試-OT安員", employmentType: "cash_casual", createdBy: "test" } });
+    const guard = await prisma.guard.create({ data: { nameZh: "測試-OT保安員", employmentType: "cash_casual", createdBy: "test" } });
     guardId = guard.id;
     const broker = await prisma.broker.create({ data: { code: "TESTY", name: "測試雞頭", kind: "broker", settlementType: "cash", createdBy: "test" } });
     brokerId = broker.id;
@@ -188,7 +188,7 @@ describe("WP-BOSS5 §25.1 端到端：多過 1 個鐘 OT 有卡——毛利表�
     const otShiftType = await prisma.shiftType.create({
       data: { siteId: site.id, code: "OT1", billingGroup: "per_shift", hours: 1, startTime: new Date("1970-01-01T06:00:00Z"), endTime: new Date("1970-01-01T07:00:00Z"), createdBy: "test" },
     });
-    const guard = await prisma.guard.create({ data: { nameZh: "測試-OT端到端安員", employmentType: "cash_casual", createdBy: "test" } });
+    const guard = await prisma.guard.create({ data: { nameZh: "測試-OT端到端保安員", employmentType: "cash_casual", createdBy: "test" } });
     const broker = await prisma.broker.create({ data: { code: "TESTOTE2E", name: "測試雞頭", kind: "broker", settlementType: "cash", createdBy: "test" } });
     // OT 更種卡：每小時价 client=84.85／guard=73（同 HKU座頭 1Hr OT 一致嘅
     // 數量級），呢條記錄做咗 2.5 個鐘 OT。

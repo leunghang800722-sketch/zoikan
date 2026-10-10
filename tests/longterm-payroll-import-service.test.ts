@@ -1,6 +1,6 @@
-// WP-LTPAY Phase 2：`importMaxwellContracts()` DB 整合測試——合成安員
-// （唔用真名/真工號/真月薪），驗證：①配對到嘅安員建新合約、補齊
-// hireDate/probationMonths；②已有人手合約嘅安員跳過（唔覆蓋）；③重複
+// WP-LTPAY Phase 2：`importMaxwellContracts()` DB 整合測試——合成保安員
+// （唔用真名/真工號/真月薪），驗證：①配對到嘅保安員建新合約、補齊
+// hireDate/probationMonths；②已有人手合約嘅保安員跳過（唔覆蓋）；③重複
 // 導入同一份名單（數值冇變）唔會重複建行；④對唔到嘅行喺 summary 列出。
 import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
@@ -36,7 +36,7 @@ describe("importMaxwellContracts", () => {
     actorUserId = user.id;
   });
 
-  it("配對到嘅安員建新合約，補齊 hireDate/probationMonths", async () => {
+  it("配對到嘅保安員建新合約，補齊 hireDate/probationMonths", async () => {
     const guard = await prisma.guard.create({ data: { nameZh: "測試長工甲", employmentType: "longterm_autopay", staffNoMw: "MG9101", createdBy: "test" } });
     const buf = await buildWorkbook([{ staffNo: "MG9101", name: "測試長工甲", basic: 15500, commencement: "2024-03-01", probation: "1" }]);
 
@@ -53,7 +53,7 @@ describe("importMaxwellContracts", () => {
     expect(contract.source).toBe("maxwell_import");
   });
 
-  it("已有人手合約（source=manual）嘅安員導入時跳過，唔覆蓋", async () => {
+  it("已有人手合約（source=manual）嘅保安員導入時跳過，唔覆蓋", async () => {
     const guard = await prisma.guard.create({ data: { nameZh: "測試長工乙", employmentType: "longterm_autopay", staffNoMw: "MG9102", createdBy: "test" } });
     await prisma.guardLongtermContract.create({
       data: { guardId: guard.id, monthlySalary: 99999, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: "test" },

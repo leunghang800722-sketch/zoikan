@@ -1,17 +1,17 @@
 // WP-ROSTER-UPLOAD Phase A（§15.3）：上載 API integration test。
-// 鐵則：合成 xlsx fixture 自己起（exceljs），名用「測試安員甲」、U 號
+// 鐵則：合成 xlsx fixture 自己起（exceljs），名用「測試保安員甲」、U 號
 // `U9xxxx`、電話 `6xxxxxxx`（跟 tests/fixtures/wp2-fixture.ts 現有假
 // 資料一致風格）。
 //
-// §1 權限：雞頭／安員 GET/POST 一律 403（硬性 deny，`更表上載` module）
-// §2 POST 上載成功：解析、盤／更別／雞頭／安員配對、寫 roster_uploads
+// §1 權限：雞頭／保安員 GET/POST 一律 403（硬性 deny，`更表上載` module）
+// §2 POST 上載成功：解析、盤／更別／雞頭／保安員配對、寫 roster_uploads
 //    （status=parsed）+ roster_upload_rows，audit 一條
 // §3 同盤同月重複上載：舊版 supersede，version 遞增
 // §4 GET list（?month=）：逐盤狀態
 // §5 GET detail：rows 分頁 + ?guard_match=unmatched 篩選
 // §6 PATCH site_id：人手指定盤之後自動重新配對（更別對到）
 // §7 POST reparse：唔使重新上載都可以重新配對
-// §8 field-group gate：冇「安員個人資料:view」見唔到 name_raw/tel_raw/
+// §8 field-group gate：冇「保安員個人資料:view」見唔到 name_raw/tel_raw/
 //    staff_no_raw
 // §9 解析失敗（壞檔）：status=parse_failed，parse_error 有原因
 import { describe, it, expect, beforeEach } from "vitest";
@@ -47,7 +47,7 @@ async function buildXlsx(opts: { siteName: string; brokerCode?: string; staffNo?
   ws.getCell("C6").value = "日更保安員";
   ws.getCell("D6").value = opts.staffNo ?? "T-A01";
   ws.getCell("E6").value = opts.tel ?? "6100001";
-  ws.getCell("F6").value = opts.name ?? "測試安員甲";
+  ws.getCell("F6").value = opts.name ?? "測試保安員甲";
   const codes = opts.codes ?? [[1, opts.shiftCode ?? "N"]];
   const colByDay: Record<number, string> = { 1: "G", 2: "H", 3: "I" };
   for (const [day, code] of codes) {
@@ -86,7 +86,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     guardSelfCookie = await sessionCookieForUser(fx.userIds["安員"]);
   });
 
-  it("§1 雞頭/安員 GET+POST 一律 403（硬性 deny）", async () => {
+  it("§1 雞頭/保安員 GET+POST 一律 403（硬性 deny）", async () => {
     const listRes = await listUploads(reqJson("http://test.local/api/roster-uploads?month=2026-08", brokerCookie));
     expect(listRes.status).toBe(403);
     const listRes2 = await listUploads(reqJson("http://test.local/api/roster-uploads?month=2026-08", guardSelfCookie));
@@ -97,7 +97,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(postRes.status).toBe(403);
   });
 
-  it("§2 老闆上載成功：解析、盤/更別/雞頭/安員配對全部啱，audit 一條", async () => {
+  it("§2 老闆上載成功：解析、盤/更別/雞頭/保安員配對全部啱，audit 一條", async () => {
     const buf = await buildXlsx({ siteName: fx.site.name });
     const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08"));
     expect(res.status).toBe(201);
@@ -156,7 +156,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
 
   it("§5 GET detail：rows 分頁 + ?guard_match=unmatched 篩選", async () => {
     const buf = await buildXlsx({ siteName: fx.site.name, codes: [[1, "N"]] });
-    // 第二行安員（配唔到）——用另一個 File 直接寫多一個未知安員格。
+    // 第二行保安員（配唔到）——用另一個 File 直接寫多一個未知保安員格。
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("2026");
     ws.getCell("A2").value = fx.site.name;
@@ -171,12 +171,12 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("A6").value = "TEST-BA";
     ws.getCell("D6").value = "T-A01";
     ws.getCell("E6").value = "6100001";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("G6").value = "N";
     ws.getCell("A7").value = "TEST-BA";
     ws.getCell("D7").value = "U99999";
     ws.getCell("E7").value = "69999999";
-    ws.getCell("F7").value = "測試安員未知";
+    ws.getCell("F7").value = "測試保安員未知";
     ws.getCell("G7").value = "N";
     const twoRowBuf = Buffer.from(await wb.xlsx.writeBuffer());
     void buf;
@@ -231,8 +231,8 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(reparsed.status).toBe("parsed");
   });
 
-  it("§8 field-group gate：冇「安員個人資料:view」見唔到 name_raw/tel_raw/staff_no_raw", async () => {
-    // 收窄「主管」出廠嘅「安員個人資料」view（本身出廠已經係 off，直接用返主管 session 就得）。
+  it("§8 field-group gate：冇「保安員個人資料:view」見唔到 name_raw/tel_raw/staff_no_raw", async () => {
+    // 收窄「主管」出廠嘅「保安員個人資料」view（本身出廠已經係 off，直接用返主管 session 就得）。
     const buf = await buildXlsx({ siteName: fx.site.name });
     const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08"));
     const body = (await res.json()) as { upload: { id: string } };
@@ -248,12 +248,12 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(row.staff_no_raw).toBeUndefined();
     expect(row.raw_code).toBe("N"); // 唔屬於 PII 嘅欄唔受影響
 
-    // 老闆出廠有「安員個人資料:view」，見到全部欄。
+    // 老闆出廠有「保安員個人資料:view」，見到全部欄。
     const ownerDetailRes = await getUpload(reqJson(`http://test.local/api/roster-uploads/${body.upload.id}`, ownerCookie), {
       params: Promise.resolve({ id: body.upload.id }),
     });
     const ownerDetail = (await ownerDetailRes.json()) as { rows: { rows: Array<Record<string, unknown>> } };
-    expect(ownerDetail.rows.rows[0]!.name_raw).toBe("測試安員甲");
+    expect(ownerDetail.rows.rows[0]!.name_raw).toBe("測試保安員甲");
   });
 
   it("§9 壞檔（完全冇 Date 表頭）→ status=parse_failed，parse_error 有原因", async () => {
@@ -388,7 +388,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("G4").value = "Date";
     ws.getCell("H4").value = aug(1);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", child1.canonicalName, "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", child1.canonicalName, "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("H6").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
@@ -415,7 +415,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("G4").value = "Date";
     ws.getCell("H4").value = aug(1);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", "呢個子盤名對唔到", "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", "呢個子盤名對唔到", "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("H6").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
@@ -469,9 +469,9 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("F4").value = "Date";
     ws.getCell("G4").value = aug(1);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Staff No.", "Tel", "Name"];
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("G6").value = "D";
-    ws.getRow(7).values = ["TEST-BA", "0900-2100", "Guard", "T-ZZZZ", "69999999", "測試安員未知"];
+    ws.getRow(7).values = ["TEST-BA", "0900-2100", "Guard", "T-ZZZZ", "69999999", "測試保安員未知"];
     ws.getCell("G7").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
@@ -488,7 +488,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
   });
 
   // ── 驗收 2026-09-23 補測 ──
-  it("§23 工號唔一致 warning：?warning_flag 篩選得到；冇「安員個人資料:view」（主管出廠）嘅 warning 工號要遮", async () => {
+  it("§23 工號唔一致 warning：?warning_flag 篩選得到；冇「保安員個人資料:view」（主管出廠）嘅 warning 工號要遮", async () => {
     const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "T-ZZZ99", name: fx.guardA.name, tel: "6100001", codes: [[1, "N"], [2, "N"]] });
     const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "mismatch-flag.xlsx"));
     const body = (await res.json()) as { upload: { id: string } };
@@ -589,7 +589,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("B6").value = "0700-1900";
     ws.getCell("D6").value = "T-A01";
     ws.getCell("E6").value = "6100001";
-    ws.getCell("F6").value = "測試安員甲";
+    ws.getCell("F6").value = "測試保安員甲";
     ws.getCell("G6").value = "N"; // standard layout（呢個 fixture 完全冇 sub_site 欄，同 HKU座頭一樣嘅結構）
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
     // fx.site 加一個子盤（parent_site_id 指返 fx.site）——HKU座頭嘅結構：
@@ -622,7 +622,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("H4").value = aug(1);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
     // Property Name（子盤）欄留空——citybus layout（有子盤欄），但呢一行冇寫。
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("H6").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
@@ -636,7 +636,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(JSON.stringify(rows[0]!.warnings)).toContain("未寫子盤，歸母盤");
   });
 
-  it("§28c WP-GUARD-FIX 第二輪：同一安員喺同一檔案另一（物理）行已經寫咗子盤，淨係一種 → 自動填＋warning「同檔其他行推斷」", async () => {
+  it("§28c WP-GUARD-FIX 第二輪：同一保安員喺同一檔案另一（物理）行已經寫咗子盤，淨係一種 → 自動填＋warning「同檔其他行推斷」", async () => {
     const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤4", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
     const child = await prisma.site.create({
       data: { canonicalName: "測試車廠子盤E", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
@@ -650,9 +650,9 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("I4").value = aug(2);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
     // 同一個人（T-A01）出現喺兩個唔同物理行：8/1 嗰行寫咗子盤，8/2 嗰行冇寫。
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", child.canonicalName, "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", child.canonicalName, "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("H6").value = "D";
-    ws.getRow(7).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(7).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("I7").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
@@ -667,7 +667,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(JSON.stringify(rows[1]!.warnings)).toContain("子盤由同檔其他行推斷");
   });
 
-  it("§28d WP-GUARD-FIX 第二輪：同檔冧唔到，但呢個安員最近 3 個月喺呢個盤底下淨係一個子盤出過更 → 自動填＋warning「歷史推斷」", async () => {
+  it("§28d WP-GUARD-FIX 第二輪：同檔冧唔到，但呢個保安員最近 3 個月喺呢個盤底下淨係一個子盤出過更 → 自動填＋warning「歷史推斷」", async () => {
     const parent = await prisma.site.create({ data: { canonicalName: "測試車廠母盤5", clientName: "測試客戶", billingModel: "per_shift", createdBy: "test-wp-roster-upload" } });
     const child = await prisma.site.create({
       data: { canonicalName: "測試車廠子盤F", clientName: "測試客戶", billingModel: "per_shift", parentSiteId: parent.id, createdBy: "test-wp-roster-upload" },
@@ -684,7 +684,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("G4").value = "Date";
     ws.getCell("H4").value = aug(1);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("H6").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
@@ -721,7 +721,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("G4").value = "Date";
     ws.getCell("H4").value = aug(1);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("H6").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
@@ -804,7 +804,7 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     ws.getCell("G4").value = "Date";
     ws.getCell("H4").value = aug(1);
     ws.getRow(5).values = ["Broker", "Time", "Rank", "Property Name", "Staff No.", "Tel", "Name"];
-    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試安員甲"];
+    ws.getRow(6).values = ["TEST-BA", "0700-1900", "Guard", null, "T-A01", "6100001", "測試保安員甲"];
     ws.getCell("H6").value = "D";
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
     const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", parent.id, "citybus-resolve-perm.xlsx"));
@@ -842,10 +842,10 @@ describe("WP-ROSTER-UPLOAD Phase A：上載 API", () => {
     expect(done.resolvedSiteManual).toBe(true);
   });
 
-  it("§29 B1-8 第 3 項：檔案工號命中真實安員，但姓名對唔上→唔准配（ambiguous），warning「屬另一人」", async () => {
-    // fx.guardA 真實 staff_no="T-A01"、name_zh="測試安員甲"——呢度故意
+  it("§29 B1-8 第 3 項：檔案工號命中真實保安員，但姓名對唔上→唔准配（ambiguous），warning「屬另一人」", async () => {
+    // fx.guardA 真實 staff_no="T-A01"、name_zh="測試保安員甲"——呢度故意
     // 帶正確工號但錯嘅姓名（似係打錯咗第二個人個工號），「唔准配」。
-    const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "T-A01", name: "測試安員己（唔存在）" });
+    const buf = await buildXlsx({ siteName: fx.site.name, staffNo: "T-A01", name: "測試保安員己（唔存在）" });
     const res = await createUpload(reqMultipart("http://test.local/api/roster-uploads", ownerCookie, buf, "2026-08", undefined, "staffno-belongs-to-other.xlsx"));
     expect(res.status).toBe(201);
     const body = (await res.json()) as { upload: { id: string } };

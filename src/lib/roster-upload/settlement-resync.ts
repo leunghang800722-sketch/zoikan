@@ -15,7 +15,7 @@
 // 一有更新（例如 guard-fix set_longterm_post 啱啱套用咗）就即刻全部
 // 生效。
 //
-// 淨係改長工格：非長工安員嘅 settlement 唔關 WP-LTSHIFT 事，舊 fallback
+// 淨係改長工格：非長工保安員嘅 settlement 唔關 WP-LTSHIFT 事，舊 fallback
 // 鏈（`resolveSettlementBrokerFallback`）唔喺呢度重跑，避免引入新嘅
 // 行為變動風險。
 import type { Prisma } from "@prisma/client";

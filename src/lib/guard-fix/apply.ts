@@ -2,7 +2,7 @@
 // 舊 `scripts/guard-fix/apply-guard-fix-plan.ts`（2026-09-28 已刪）同 `POST /api/guard-fix/
 // runs/:id/apply` 共用，唔准複製貼上一份新邏輯（WP-GUARD-FIX-UI 鐵則）。
 //
-// 建安員一定用同 opening 一樣路徑：`tx.guard.create` ＋
+// 建保安員一定用同 opening 一樣路徑：`tx.guard.create` ＋
 // `upsertCurrentStaffNumber` ＋ `syncLegacyStaffNoColumns` ＋
 // `createGuardPhone` ＋ `syncLegacyGuardContactColumns`。audit 精簡
 // `after`（唔帶姓名／電話——同 `apply-aug-plan.ts ensureGuard()` 一致
@@ -85,7 +85,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     );
 
     // -----------------------------------------------------------------
-    // 1. link——登記工號／加別名到現有安員。
+    // 1. link——登記工號／加別名到現有保安員。
     // -----------------------------------------------------------------
     for (const la of plan.actions.link) {
       const guard = await tx.guard.findUnique({ where: { id: la.guardId }, select: { id: true, nameAliases: true } });
@@ -97,7 +97,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       if (la.addStaffNumber) {
         const existing = await tx.guardStaffNumber.findUnique({ where: { number: la.addStaffNumber.number } });
         if (existing && existing.guardId !== la.guardId) {
-          diffs.link.skip.push(`${la.seq}（工號已經屬另一位安員，成項唔做，交老闆睇）`);
+          diffs.link.skip.push(`${la.seq}（工號已經屬另一位保安員，成項唔做，交老闆睇）`);
           continue;
         }
         needsStaffNo = !existing;
@@ -130,7 +130,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     }
 
     // -----------------------------------------------------------------
-    // 2. create／create_minimal——起新安員，路徑同 opening ensureGuard()。
+    // 2. create／create_minimal——起新保安員，路徑同 opening ensureGuard()。
     // -----------------------------------------------------------------
     async function ensureNewGuard(input: {
       seq: string;
@@ -146,7 +146,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     }): Promise<string | null> {
       const hkidCanon = canonicalHkid(input.hkid);
       if (hkidCanon && existingHkids.has(hkidCanon)) {
-        input.diff.skip.push(`${input.seq}（同身份證已有安員，唔再起，交老闆睇）`);
+        input.diff.skip.push(`${input.seq}（同身份證已有保安員，唔再起，交老闆睇）`);
         return null;
       }
       if (input.uNumber) {
@@ -260,7 +260,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
       if (newGuardId && cm.matchOverrideStaffNo) {
         const override = await tx.guardMatchOverride.upsert({
           where: { staffNo_nameRaw: { staffNo: cm.matchOverrideStaffNo, nameRaw: cm.nameZh.trim() } },
-          create: { staffNo: cm.matchOverrideStaffNo, nameRaw: cm.nameZh.trim(), guardId: newGuardId, reason: "工號衝突待核（guard-fix 保守預設：按更表姓名建獨立安員）", createdBy: SYSTEM_ACTOR },
+          create: { staffNo: cm.matchOverrideStaffNo, nameRaw: cm.nameZh.trim(), guardId: newGuardId, reason: "工號衝突待核（guard-fix 保守預設：按更表姓名建獨立保安員）", createdBy: SYSTEM_ACTOR },
           update: { guardId: newGuardId, voidedAt: null, voidedBy: null },
         });
         await writeAuditTx(tx, { actorUserId: null, tableName: "guard_match_overrides", rowId: override.id, action: "create", after: { id: override.id, guardId: newGuardId, reason: override.reason }, ip: null });
@@ -270,7 +270,7 @@ export async function applyGuardFixPlan(opts: ApplyGuardFixPlanOptions): Promise
     // -----------------------------------------------------------------
     // 3. set_longterm——`employment_type` 改做 longterm_autopay（同一個
     //    guardId 淨係喺套用嗰一刻先再查一次現況，避免同一個 run 入面
-    //    兩個 action 撞、或者呢個安員套用之間俾人手改咗）。
+    //    兩個 action 撞、或者呢個保安員套用之間俾人手改咗）。
     // -----------------------------------------------------------------
     for (const sa of plan.actions.setLongterm) {
       const guard = await tx.guard.findUnique({ where: { id: sa.guardId }, select: { id: true, employmentType: true } });

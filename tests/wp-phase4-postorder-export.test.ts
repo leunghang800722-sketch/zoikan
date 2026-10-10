@@ -1,8 +1,8 @@
 // §20.4 Phase 4（branch wp-phase4）：`buildPostorderWorkbook()` 單元／
 // integration 測試。
 //
-// 鐵則遵守：唔用真名／真工號／真電話／身份證——安員/雞頭/盤全部用合成
-// 測試代號（「測試安員A」呢類），測試月份揀一個同真實資料完全唔撞嘅
+// 鐵則遵守：唔用真名／真工號／真電話／身份證——保安員/雞頭/盤全部用合成
+// 測試代號（「測試保安員A」呢類），測試月份揀一個同真實資料完全唔撞嘅
 // 月份（2025-08，同 gross-margin-empty-month.test.ts 一致嘅慣例：
 // 2025-xx 月份業務未開始，冇任何真實 seed 資料會撞落嚟）。
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -100,18 +100,18 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
     brokerLongtermId = brokerLongterm.id;
 
     const guardCasual = await prisma.guard.create({
-      data: { nameZh: "測試安員甲", employmentType: "cash_casual", status: "active", createdBy: "test" },
+      data: { nameZh: "測試保安員甲", employmentType: "cash_casual", status: "active", createdBy: "test" },
     });
     guardCasualId = guardCasual.id;
 
     const guardLongterm = await prisma.guard.create({
-      data: { nameZh: "測試安員乙", employmentType: "longterm_autopay", monthlySalary: 15000, status: "active", createdBy: "test" },
+      data: { nameZh: "測試保安員乙", employmentType: "longterm_autopay", monthlySalary: 15000, status: "active", createdBy: "test" },
     });
     guardLongtermId = guardLongterm.id;
 
     // 名以「=」開頭嘅長工（鐵則：`=` 開頭字串要當文字，唔可以變公式）
     const guardEq = await prisma.guard.create({
-      data: { nameZh: "=1+1測試安員丙", employmentType: "longterm_autopay", monthlySalary: 9000, status: "active", createdBy: "test" },
+      data: { nameZh: "=1+1測試保安員丙", employmentType: "longterm_autopay", monthlySalary: 9000, status: "active", createdBy: "test" },
     });
     await prisma.shiftRecord.create({
       data: { workDate: new Date(Date.UTC(2025, 7, 7)), siteId, shiftTypeId, guardId: guardEq.id, settlementBrokerId: brokerLongtermId, recordType: "shift", status: "confirmed", clientRateSnapshot: null, guardWageSnapshot: 0, brokerFeeSnapshot: 0, createdBy: "test" },
@@ -243,7 +243,7 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
     expect(longtermRow![5]).toBe(8000);
   });
 
-  it("Roster：日期格＝盤簡稱（aliases 最短嗰個），長工日備註＝安員姓名", async () => {
+  it("Roster：日期格＝盤簡稱（aliases 最短嗰個），長工日備註＝保安員姓名", async () => {
     const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
     const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
     // 第 4 日（col = 6 頭 + (4-1)*7 + 1 = 27）應該係長工行嘅日期格
@@ -254,19 +254,19 @@ describe("buildPostorderWorkbook（合成小月份）", () => {
       const noteCell = row.getCell(6 + (4 - 1) * 7 + 3).value;
       if (dateCell === "戊") {
         found = true;
-        expect(noteCell).toBe("測試安員乙");
+        expect(noteCell).toBe("測試保安員乙");
       }
     }
     expect(found, "第 4 日盤簡稱格要搵到").toBe(true);
   });
 
-  it("Roster：「=」開頭嘅字串（安員名）照寫文字，唔變公式（鐵則）", async () => {
+  it("Roster：「=」開頭嘅字串（保安員名）照寫文字，唔變公式（鐵則）", async () => {
     const { workbook } = await buildPostorderWorkbook(TEST_MONTH);
     const ws = workbook.getWorksheet(POSTORDER_SHEET_NAMES.roster)!;
     let found = false;
     ws.eachRow((row) => {
       const c = row.getCell(6 + (7 - 1) * 7 + 3);
-      if (c.value === "=1+1測試安員丙") {
+      if (c.value === "=1+1測試保安員丙") {
         found = true;
         expect(c.type).toBe(ExcelJS.ValueType.String);
       }
@@ -365,7 +365,7 @@ describe("buildPostorderWorkbook：§25.7 OT 折入 Roster（合成小月份）"
     brokerId = broker.id;
 
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員丁", employmentType: "cash_casual", status: "active", createdBy: "test" },
+      data: { nameZh: "測試保安員丁", employmentType: "cash_casual", status: "active", createdBy: "test" },
     });
 
     // 正更（同一盤，唔同更種）：確保 OT 行同正更行分開兩行，唔會混埋。
@@ -457,7 +457,7 @@ describe("buildPostorderWorkbook：B07 長工 OT 行外判價唔攤薄正更行�
 
     // 月薪 26000，本月 26 個正更（月薪÷26＝1000，方便斷言）。
     const guard = await prisma.guard.create({
-      data: { nameZh: "測試安員戊", employmentType: "longterm_autopay", monthlySalary: 26000, status: "active", createdBy: "test" },
+      data: { nameZh: "測試保安員戊", employmentType: "longterm_autopay", monthlySalary: 26000, status: "active", createdBy: "test" },
     });
     guardId = guard.id;
 

@@ -80,7 +80,7 @@ describe("recomputeSettlement", () => {
     expect(after.operationalBrokerId).toBe(k.id);
   });
 
-  it("非長工安員嘅 shift_record 唔郁（唔關 WP-LTSHIFT 事）", async () => {
+  it("非長工保安員嘅 shift_record 唔郁（唔關 WP-LTSHIFT 事）", async () => {
     const k = await makeBroker("TEST-K3");
     const site = await makeSite("測試盤3");
     const guard = await makeGuard("cash_casual");

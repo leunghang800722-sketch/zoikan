@@ -119,7 +119,7 @@ describe("GET /api/diagnostics/month", () => {
   // 小時未定价（三個 snapshot 全 null）、一條未填 ot_hours（null）。
   it("老闆：ot 區塊逐 ot_hours 值分組，priced 判斷同 otHourlyPricingFrom 正確", async () => {
     const otShiftType = await prisma.shiftType.create({ data: { siteId: fx.site.id, code: "OT1", label: "1Hr OT", createdBy: "t" } });
-    const guard = await prisma.guard.create({ data: { nameZh: "測試OT安員", employmentType: "cash_casual", createdBy: "t" } });
+    const guard = await prisma.guard.create({ data: { nameZh: "測試OT保安員", employmentType: "cash_casual", createdBy: "t" } });
     await prisma.shiftRecord.createMany({
       data: [
         {

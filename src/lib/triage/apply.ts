@@ -86,18 +86,18 @@ async function assertNoNewer(db: Prisma.TransactionClient | typeof prisma, q: QR
   }
 }
 
-export const BANK_QUESTION_DENIED_MSG = "要有安員銀行資料權限嘅同事處理";
+export const BANK_QUESTION_DENIED_MSG = "要有保安員銀行資料權限嘅同事處理";
 function assertBankAllowed(q: QRow, caps: ViewerCaps): void {
-  // 身份確認會繞過自動寫入閘：要「安員個人資料:view」＋「安員:update」
-  if (q.kind === "ext_identity_check" && !(caps.pii && caps.guardUpdate)) throw Forbidden("要有安員個人資料查看＋安員修改權限嘅同事處理");
+  // 身份確認會繞過自動寫入閘：要「保安員個人資料:view」＋「保安員:update」
+  if (q.kind === "ext_identity_check" && !(caps.pii && caps.guardUpdate)) throw Forbidden("要有保安員個人資料查看＋保安員修改權限嘅同事處理");
   if ((BANK_KINDS as readonly string[]).includes(q.kind) && !caps.bankUpdate) throw Forbidden(BANK_QUESTION_DENIED_MSG);
 }
 
-/** 銀行答案規則（喺 resolve 同評估之前檢查，結果唔准取決於現有戶口）：冇「安員銀行資料:view」睇唔到現有戶口 → 一律要明確揀「取代現有戶口」。 */
+/** 銀行答案規則（喺 resolve 同評估之前檢查，結果唔准取決於現有戶口）：冇「保安員銀行資料:view」睇唔到現有戶口 → 一律要明確揀「取代現有戶口」。 */
 function assertBankAnswerRules(q: QRow, answer: TriageAnswer, caps: ViewerCaps): void {
   const writesBank = answer.option === "assign_bank" || (answer.option === "apply_ext_fields" && answer.ext_fields?.bank === "use_import");
   if (writesBank && (BANK_KINDS as readonly string[]).includes(q.kind) && !caps.bankView && !answer.replace_existing) {
-    throw new ApiError(422, "unprocessable", "你冇「安員銀行資料」睇權，睇唔到現有戶口，要明確剔「取代現有戶口」先可以寫入");
+    throw new ApiError(422, "unprocessable", "你冇「保安員銀行資料」睇權，睇唔到現有戶口，要明確剔「取代現有戶口」先可以寫入");
   }
 }
 
@@ -125,16 +125,16 @@ async function identityMismatch(q: QRow, answer: TriageAnswer): Promise<string |
 }
 
 const BANK_GENERIC_PREVIEW_NOTE = "會嘗試寫入銀行資料；如果寫入唔到，確認時會提示";
-const BANK_GENERIC_FAIL = "寫入唔到，請搵有安員銀行資料查看權限嘅同事處理";
-const BANK_NOT_WRITTEN_NOTE = "呢個答案唔會寫入戶口：目標安員已有唔同戶口（要明確揀「取代現有戶口」，而且要有安員銀行資料修改權限），或者戶口已經係佢嘅";
+const BANK_GENERIC_FAIL = "寫入唔到，請搵有保安員銀行資料查看權限嘅同事處理";
+const BANK_NOT_WRITTEN_NOTE = "呢個答案唔會寫入戶口：目標保安員已有唔同戶口（要明確揀「取代現有戶口」，而且要有保安員銀行資料修改權限），或者戶口已經係佢嘅";
 
 function optsFor(r: ResolvedWrite, actor: AuthedSession, ip: string | null, caps: ViewerCaps): ApplyOptions {
-  // 冇「安員個人資料:update」：可以新建／補空欄／確認包內值，唔准覆蓋現有唔同嘅 PII（applyPerson 會 403）
+  // 冇「保安員個人資料:update」：可以新建／補空欄／確認包內值，唔准覆蓋現有唔同嘅 PII（applyPerson 會 403）
   return { actorUserId: actor.userId, ip, decisions: r.decisions, forced: r.forced, autoKeepPendingName: r.autoKeepPendingName, canOverwritePii: caps.piiUpdate, canEditGuard: caps.guardUpdate, canEditBank: caps.bankUpdate, fillOnlyPii: !caps.pii, via: "triage" };
 }
 
 /**
- * enter_hkid／use_package_hkid：輸入嘅身份證號如果已屬於一位「唔喺候選名單」嘅現有安員，
+ * enter_hkid／use_package_hkid：輸入嘅身份證號如果已屬於一位「唔喺候選名單」嘅現有保安員，
  * 只有姓名同導入包完全相同先准（預覽要警告），否則 422。回 true＝要警告。
  */
 async function checkHkidOwner(q: QRow, answer: TriageAnswer): Promise<boolean> {
@@ -146,7 +146,7 @@ async function checkHkidOwner(q: QRow, answer: TriageAnswer): Promise<boolean> {
   if (!owner || ev.candidate_guard_ids.includes(owner.id)) return false;
   const a = normZh(owner.nameZh);
   if (a && a === normZh(fieldValue(ev.person.nameZh))) return true;
-  throw new ApiError(422, "unprocessable", "身份證號已屬於另一位安員，請留返人手核對");
+  throw new ApiError(422, "unprocessable", "身份證號已屬於另一位保安員，請留返人手核對");
 }
 
 export interface PreviewOutput {
@@ -169,8 +169,8 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   }
   const out = await applyOnePerson(resolved.pkg, optsFor(resolved, actor, ip, caps), { kind: "dry" });
   const impact = buildImpact(out.result, out.changes, caps);
-  if (warnOwner) impact.notes.unshift("呢個身份證號已屬於現有安員（唔喺候選名單），而且姓名相同，會連去佢");
-  // N3：冇「安員銀行資料:view」→ 預覽一律同一個 generic 結果（can_confirm 唔視乎戶口是否已被用），寫唔到留到 commit 先擋
+  if (warnOwner) impact.notes.unshift("呢個身份證號已屬於現有保安員（唔喺候選名單），而且姓名相同，會連去佢");
+  // N3：冇「保安員銀行資料:view」→ 預覽一律同一個 generic 結果（can_confirm 唔視乎戶口是否已被用），寫唔到留到 commit 先擋
   const problem = caps.bankView ? bankProblem(answer, out.result) : null;
   if (!caps.bankView && (answer.option === "assign_bank" || (answer.option === "apply_ext_fields" && answer.ext_fields?.bank === "use_import"))) impact.notes.unshift(BANK_GENERIC_PREVIEW_NOTE);
   if (problem) {

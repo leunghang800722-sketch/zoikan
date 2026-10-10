@@ -50,12 +50,12 @@ export interface NewRateCardPlan {
   shiftType: { code: string; startTime: string; endTime: string } | null;
   brokerCode: string | null; // null＝通用（唔限雞頭）
   guardStaffNo: string | null; // 人專屬卡：用 U 號辨識（唔存姓名喺 plan 以外嘅任何地方）
-  // Opus 5.5 驗收（WP-UPLOAD-AUTOFIX 個案 2）：安員冇登記 U 號、要靠
+  // Opus 5.5 驗收（WP-UPLOAD-AUTOFIX 個案 2）：保安員冇登記 U 號、要靠
   // 姓名＋電話／姓名後備先對到（`matchGuard()`）嗰陣，直接記 guardId——
   // build 同 apply 一定係同一個 DB（見 §17.10.4「build 只跑一次」），id 穩
   // 定。`guardStaffNo` 同 `guardId` 最多一個有值。
   guardId?: string | null;
-  // 記低安員點樣對到（plan.json 覆核用，唔印名）：by_staff_no／by_name_tel／by_name。
+  // 記低保安員點樣對到（plan.json 覆核用，唔印名）：by_staff_no／by_name_tel／by_name。
   guardMatchMethod?: "by_staff_no" | "by_name_tel" | "by_name" | null;
   clientRate: number | null;
   guardWage: number | null;

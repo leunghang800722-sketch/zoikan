@@ -13,7 +13,7 @@ const L = (t: string, x: number, y: number, c = 0.9): OcrLine => ({ t, c, x, y, 
 const idLines = (extra: OcrLine[] = []): OcrLine[] => [
   L("香港永久性居民身份證", 0.5, 0.8),
   L("HONG KONG PERMANENT IDENTITY CARD", 0.45, 0.77),
-  L("測試安員", 0.45, 0.7),
+  L("測試保安員", 0.45, 0.7),
   L("CHAN, Tai", 0.45, 0.67),
   L("Man", 0.6, 0.67),
   L("Kit", 0.45, 0.64),
@@ -100,7 +100,7 @@ describe("必修 5＋6：英文名斷行順序接返；身份證分類；唔由�
     expect(classifyPage({ page: 1, lines: form }).kinds).not.toContain("id_card");
   });
   it("標題行 OCR 唔到，但有效 hkid 行＋日期＋性別行 → 都認係身份證", () => {
-    const lines = [L("測試安員", 0.3, 0.8), L("男M", 0.5, 0.74), L("01-02-1980", 0.45, 0.72), L("A123456（3）", 0.55, 0.69), L("雜", 0.1, 0.1), L("訊", 0.2, 0.1)];
+    const lines = [L("測試保安員", 0.3, 0.8), L("男M", 0.5, 0.74), L("01-02-1980", 0.45, 0.72), L("A123456（3）", 0.55, 0.69), L("雜", 0.1, 0.1), L("訊", 0.2, 0.1)];
     expect(classifyPage({ page: 4, lines }).kinds).toContain("id_card");
   });
   it("電話號碼唔會被首字母修補成 hkid（冇身份證 anchor／無括號）", () => {
@@ -159,7 +159,7 @@ describe("必修 7：電話跨檔解析", () => {
 const exOf = (o: Partial<DocExtract>): DocExtract =>
   ({
     docId: "d1", pageCount: 5, pages: [], hkid: { value: "A1234563", level: "high", conf: 0.9, page: 3, evidence: "x" }, hkidValid: true,
-    nameZh: { value: "測試安員", level: "medium", conf: 0.5, page: 3, evidence: "x" },
+    nameZh: { value: "測試保安員", level: "medium", conf: 0.5, page: 3, evidence: "x" },
     nameEn: { value: "CHAN Tai Man", level: "medium", conf: 0.5, page: 3, evidence: "x" },
     dob: { value: "1980-02-01", level: "medium", conf: 0.5, page: 3, evidence: "x" },
     sex: { value: "M", level: "medium", conf: 0.5, page: 3, evidence: "x" },
@@ -173,23 +173,23 @@ describe("逐欄 status（姓名／地址要視覺 clear＋佐證）", () => {
   const base = (nv: object | null, av: object | null, d: PersonDocIn = docIn(exOf({}))) =>
     resolvePerson({ key: "k", docs: [d], idDocId: "d1", addressDocId: "d1", nameVision: nv as never, addrVision: av as never });
   it("nameZh：視覺 clear 且＝檔名 → confirmed；唔同 → review 兩值都留", () => {
-    const ok = base({ docId: "d1", zh: "測試安員", en: "CHAN, TAI MAN", legible: "clear" }, null, docIn(exOf({}), { fileNameZh: "測試安員" }));
-    expect(ok.nameZh).toMatchObject({ status: "confirmed", value: "測試安員" });
+    const ok = base({ docId: "d1", zh: "測試保安員", en: "CHAN, TAI MAN", legible: "clear" }, null, docIn(exOf({}), { fileNameZh: "測試保安員" }));
+    expect(ok.nameZh).toMatchObject({ status: "confirmed", value: "測試保安員" });
     expect(ok.nameEn.status).toBe("confirmed");
-    const bad = base({ docId: "d1", zh: "測試安負", en: null, legible: "clear" }, null, docIn(exOf({}), { fileNameZh: "測試安員" }));
+    const bad = base({ docId: "d1", zh: "測試保安負", en: null, legible: "clear" }, null, docIn(exOf({}), { fileNameZh: "測試保安員" }));
     expect(bad.nameZh.status).toBe("review");
-    expect(bad.nameZh.candidates).toContain("測試安員");
+    expect(bad.nameZh.candidates).toContain("測試保安員");
   });
   it("nameZh 有 near-match 而冇第二讀 → 唔 confirmed", () => {
-    const d = docIn(exOf({}), { fileNameZh: "測試安貝" });
-    const r = base({ docId: "d1", zh: "測試安員", en: null, legible: "clear" }, null, d);
+    const d = docIn(exOf({}), { fileNameZh: "測試保安貝" });
+    const r = base({ docId: "d1", zh: "測試保安員", en: null, legible: "clear" }, null, d);
     expect(r.nameZh.status).toBe("review");
     expect(r.nameZh.reasons).toContain("name_differs_from_filename_or_list"); // A7：資訊性 reason（冇第二讀仍 review）
   });
   it("同人多檔中文名唔同 → review（唔准低信心蓋過高信心）", () => {
-    const d1 = docIn(exOf({}), { fileNameZh: "測試安員" });
-    const d2 = docIn(exOf({ docId: "d2", nameZh: { value: "測試安貝", level: "low", conf: 0.3, page: 3, evidence: "x" } }));
-    const r = resolvePerson({ key: "k", docs: [d1, d2], idDocId: "d1", addressDocId: "d1", nameVision: { docId: "d1", zh: "測試安員", en: null, legible: "clear" }, addrVision: null });
+    const d1 = docIn(exOf({}), { fileNameZh: "測試保安員" });
+    const d2 = docIn(exOf({ docId: "d2", nameZh: { value: "測試保安貝", level: "low", conf: 0.3, page: 3, evidence: "x" } }));
+    const r = resolvePerson({ key: "k", docs: [d1, d2], idDocId: "d1", addressDocId: "d1", nameVision: { docId: "d1", zh: "測試保安員", en: null, legible: "clear" }, addrVision: null });
     expect(r.nameZh.status).toBe("review");
     expect(r.nameZh.reasons).toContain("nameZh_differs_between_files");
   });
@@ -235,10 +235,10 @@ import { mergeGroup, type MergeDoc } from "../scripts/staff-import/lib/merge";
 describe("必修 2：多檔合併唔准靜靜蓋值", () => {
   const md = (o: Partial<MergeDoc["id"]>, id = "a"): MergeDoc => ({
     docId: id, staffNo: null, grade: "review", hkidConf: 0.5,
-    id: { hkid: "A1234563", nameZh: "測試安員", nameEn: "CHAN Tai Man", dob: null, sex: null, ...o }, address: null, phone: null,
+    id: { hkid: "A1234563", nameZh: "測試保安員", nameEn: "CHAN Tai Man", dob: null, sex: null, ...o }, address: null, phone: null,
   });
   it("中文名唔同 → nameZh_differs_between_files", () => {
-    expect(mergeGroup([md({}), md({ nameZh: "測試安貝" }, "b")]).reasons).toContain("nameZh_differs_between_files");
+    expect(mergeGroup([md({}), md({ nameZh: "測試保安貝" }, "b")]).reasons).toContain("nameZh_differs_between_files");
   });
   it("英文名段數唔同 → 標 differs，取較長嗰個", () => {
     const m = mergeGroup([md({ nameEn: "CHAN Tai" }), md({ nameEn: "CHAN Tai Man" }, "b")]);
@@ -302,7 +302,7 @@ describe("Stage A4：dob／sex 兩獨立讀數互證", () => {
     expect(nameEnMissingReason({ key: "k", docs: [d2], idDocId: "d1", addressDocId: null, nameVision: null, addrVision: null }, d2, { docId: "d1", zh: null, en: null, legible: "unsure" })).toBe("nameEn_missing_crop_unreadable");
   });
   it("出生日期裁圖：涵蓋標籤＋日期＋性別行，唔含 hkid 行", () => {
-    const lines = [L("香港永久性居民身份證", 0.5, 0.8), L("測試安員", 0.45, 0.7), L("CHAN, Tai Man", 0.45, 0.67), L("出生日期 Date of Birth", 0.55, 0.6), L("01-02-1980 男M", 0.55, 0.58), L("A123456（3）", 0.6, 0.45)];
+    const lines = [L("香港永久性居民身份證", 0.5, 0.8), L("測試保安員", 0.45, 0.7), L("CHAN, Tai Man", 0.45, 0.67), L("出生日期 Date of Birth", 0.55, 0.6), L("01-02-1980 男M", 0.55, 0.58), L("A123456（3）", 0.6, 0.45)];
     const { box, how } = locateDobBox(3, lines);
     expect(how).toBe("dob");
     expect(box.y0).toBeGreaterThan(0.5);
@@ -313,7 +313,7 @@ describe("Stage A4：dob／sex 兩獨立讀數互證", () => {
 });
 
 describe("Stage A4：寄俾本人嘅非『住址證明』頁補漏", () => {
-  const nameLines = (): OcrLine[] => [L("香港永久性居民身份證", 0.5, 0.8), L("HONG KONG PERMANENT IDENTITY CARD", 0.45, 0.77), L("測試安員", 0.45, 0.7), L("CHAN, Tai Man", 0.45, 0.67), L("出生日期 Date of Birth", 0.55, 0.6), L("01-02-1980 男M", 0.55, 0.58), L("A123456（3）", 0.6, 0.5)];
+  const nameLines = (): OcrLine[] => [L("香港永久性居民身份證", 0.5, 0.8), L("HONG KONG PERMANENT IDENTITY CARD", 0.45, 0.77), L("測試保安員", 0.45, 0.7), L("CHAN, Tai Man", 0.45, 0.67), L("出生日期 Date of Birth", 0.55, 0.6), L("01-02-1980 男M", 0.55, 0.58), L("A123456（3）", 0.6, 0.5)];
   const mail = (name: string, extra: string[] = []): OcrPage => ({
     page: 5,
     lines: [L("香港警務處 牌照課", 0.5, 0.95), L(name, 0.08, 0.9), L("FLAT 12, 3/F, SAMPLE HOUSE", 0.08, 0.885), L("DEMO ESTATE", 0.08, 0.87), L("KOWLOON", 0.08, 0.855), ...extra.map((t, i) => L(t, 0.5, 0.7 - i * 0.02))],

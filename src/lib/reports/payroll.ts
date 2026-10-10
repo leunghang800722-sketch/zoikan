@@ -73,7 +73,7 @@ export async function buildPayrollTotals(month: Date = DEFAULT_REPORT_MONTH): Pr
   // D 項（Opus 驗收重現）：settlement_broker_id IS NULL 嘅記錄——理論上
   // 而家 batch/route.ts＋單筆 POST 都有完整 fallback 鏈，唔應該再有新
   // 記錄跌落呢度；但（a）7 月鎖定咗嘅歷史記錄、（b）fallback 鏈全部級
-  // 都搵唔到（全新安員、乜歷史都冇、又唔係長工）嗰種邊緣情況，仍然
+  // 都搵唔到（全新保安員、乜歷史都冇、又唔係長工）嗰種邊緣情況，仍然
   // 可能出現。呢種記錄一律唔准再靜靜喺報表消失——逐 broker 查完之後，
   // 加多一次獨立查詢，一有就加一行「未歸屬結算單位」（金額計入 Total，
   // 等會計一眼見到有錢未歸邊個雞頭）。
@@ -154,7 +154,7 @@ export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_RE
     round2(totals.reduce((a, t) => a + t.amount, 0)),
   ]);
 
-  // 逐安員明細（每個 broker 一個 sheet），方便人手覆核
+  // 逐保安員明細（每個 broker 一個 sheet），方便人手覆核
   // 效能優化（老闆 2026-09-28 指令）：逐雞頭 findMany 改做一條攞齊成月記錄
   // 再喺記憶體按 settlementBrokerId 分組（where 一樣）。Opus 5.5 驗收：原本
   // 逐雞頭 query 冇 orderBy，行次序係 DB 自然次序，改一條大 query 之後次序

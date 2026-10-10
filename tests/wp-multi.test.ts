@@ -15,10 +15,10 @@
 // §6 離職／作廢保留：void guard 之後三張表＋員工編號全部原封不動
 // §7 audit_log：create／update／delete 三種 action 都留底
 // §8 audit_log 讀出嗰陣一樣要經 field-group gate（同 guards resource 一
-//    致模型）：主管有「操作紀錄:view」冇「安員個人資料:view」→ GET
+//    致模型）：主管有「操作紀錄:view」冇「保安員個人資料:view」→ GET
 //    /api/audit-log 見唔到 guard_addresses/guard_emergency_contacts 嘅
 //    address/name/tel/relationship（但 guard_phones 嘅 tel 唔受影響，
-//    跟「安員」module，一直畀睇）。
+//    跟「保安員」module，一直畀睇）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -216,7 +216,7 @@ describe("WP-MULTI", () => {
       expect(await prisma.guardEmergencyContact.count({ where: { guardId: fx.guardA.id } })).toBe(0);
     });
 
-    it("雞頭讀自己安員嘅電話：200，窄版 DTO（冇 note/source/created_by）", async () => {
+    it("雞頭讀自己保安員嘅電話：200，窄版 DTO（冇 note/source/created_by）", async () => {
       await phoneCreate(req(`http://test.local/api/guards/${fx.guardA.id}/phones`, ownerCookie, "POST", { tel: "69000020", note: "內部備註" }), {
         params: Promise.resolve({ id: fx.guardA.id }),
       });
@@ -230,7 +230,7 @@ describe("WP-MULTI", () => {
       expect(rows[0]!.tel).toBe("69000020");
     });
 
-    it("雞頭寫自己安員嘅電話（POST/PATCH/DELETE）一律 403（硬性）", async () => {
+    it("雞頭寫自己保安員嘅電話（POST/PATCH/DELETE）一律 403（硬性）", async () => {
       const r1 = await phoneCreate(req(`http://test.local/api/guards/${fx.guardA.id}/phones`, brokerACookie, "POST", { tel: "69000030" }), {
         params: Promise.resolve({ id: fx.guardA.id }),
       });
@@ -250,7 +250,7 @@ describe("WP-MULTI", () => {
       expect(r3.status).toBe(403);
     });
 
-    it("雞頭讀第二個雞頭嘅安員 → 404（scopeGuardWhere 隔離）", async () => {
+    it("雞頭讀第二個雞頭嘅保安員 → 404（scopeGuardWhere 隔離）", async () => {
       const res = await phonesList(req(`http://test.local/api/guards/${fx.guardB.id}/phones`, brokerACookie), { params: Promise.resolve({ id: fx.guardB.id }) });
       expect(res.status).toBe(404);
     });
@@ -258,7 +258,7 @@ describe("WP-MULTI", () => {
     it("POST /api/guards 帶初始 tel → 建立時已經起一行 primary 電話（唔係得 guards.tel 有值但新表 0 行）", async () => {
       const res = await guardCreate(
         req("http://test.local/api/guards", ownerCookie, "POST", {
-          name_zh: "測試新安員",
+          name_zh: "測試新保安員",
           tel: "69000099",
           employment_type: "cash_casual",
         }),
@@ -327,7 +327,7 @@ describe("WP-MULTI", () => {
       expect(await prisma.guardAddress.count({ where: { guardId: fx.guardA.id } })).toBe(0);
     });
 
-    it("雞頭讀／寫地址一律 403（「安員個人資料」module 對雞頭硬性拒）", async () => {
+    it("雞頭讀／寫地址一律 403（「保安員個人資料」module 對雞頭硬性拒）", async () => {
       const r1 = await addressesList(req(`http://test.local/api/guards/${fx.guardA.id}/addresses`, brokerACookie), { params: Promise.resolve({ id: fx.guardA.id }) });
       expect(r1.status).toBe(403);
       const r2 = await addressCreate(req(`http://test.local/api/guards/${fx.guardA.id}/addresses`, brokerACookie, "POST", { address: "測試地址" }), {
@@ -433,7 +433,7 @@ describe("WP-MULTI", () => {
       await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { tel: "69200010" }), {
         params: Promise.resolve({ id: fx.guardA.id }),
       });
-      const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { tel: "69200010", name_zh: "測試安員甲改名" }), {
+      const res = await guardUpdate(req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", { tel: "69200010", name_zh: "測試保安員甲改名" }), {
         params: Promise.resolve({ id: fx.guardA.id }),
       });
       expect(res.status).toBe(200);
@@ -470,7 +470,7 @@ describe("WP-MULTI", () => {
       expect(guard.tel).toBe("69200030"); // 冇被清走
     });
 
-    it("PATCH address／emergency_contact_name／tel（老闆有安員個人資料權限）——加返行，同步落 guards 舊欄", async () => {
+    it("PATCH address／emergency_contact_name／tel（老闆有保安員個人資料權限）——加返行，同步落 guards 舊欄", async () => {
       const res = await guardUpdate(
         req(`http://test.local/api/guards/${fx.guardA.id}`, ownerCookie, "PATCH", {
           address: "測試地址ABC",
@@ -646,7 +646,7 @@ describe("WP-MULTI", () => {
       await prisma.rolePermission.update({ where: { roleId_permissionId: { roleId, permissionId: permission.id } }, data: { granted: true } });
     }
 
-    it("主管有「操作紀錄:view」冇「安員個人資料:view」→ 地址／緊急聯絡人 audit 剝晒 address/name/tel/relationship，電話 audit 唔受影響", async () => {
+    it("主管有「操作紀錄:view」冇「保安員個人資料:view」→ 地址／緊急聯絡人 audit 剝晒 address/name/tel/relationship，電話 audit 唔受影響", async () => {
       await grantAuditLogView(fx.roleIds["主管"]);
       const supervisorCookie = await sessionCookieForUser(fx.userIds["主管"]);
 
@@ -670,7 +670,7 @@ describe("WP-MULTI", () => {
       // field-group 保護，見下面斷言）。
       expect(leaked).toEqual([]);
 
-      // guard_phones 嘅 tel 一直可見（跟「安員」module，唔係 PII 組）。
+      // guard_phones 嘅 tel 一直可見（跟「保安員」module，唔係 PII 組）。
       const rows = json.rows as Array<{ table_name: string; after?: Record<string, unknown> | null }>;
       const phoneRow = rows.find((r) => r.table_name === "guard_phones" && r.after?.tel === "69900002");
       expect(phoneRow).toBeDefined();

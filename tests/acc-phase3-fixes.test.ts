@@ -52,7 +52,7 @@ describe("§1 長工崗位盤期間檢查", () => {
     expect(reopen.status).toBe(409);
   });
 
-  it("雞頭連 GET 自己安員嘅崗位盤都 403（結構性見唔到）", async () => {
+  it("雞頭連 GET 自己保安員嘅崗位盤都 403（結構性見唔到）", async () => {
     const brokerCookie = await sessionCookieForUser(fx.userIds["雞頭"]);
     const res = await postsList(req(`http://test.local/api/guards/${fx.guardA.id}/longterm-posts`, brokerCookie), { params: Promise.resolve({ id: fx.guardA.id }) });
     expect(res.status).toBe(403);

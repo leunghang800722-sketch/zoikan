@@ -1385,7 +1385,7 @@ async function seedUsers(roleIds: Record<string, string>, brokerIdMap: Map<strin
     { tel: "90000003", name: "測試會計", password: "Passw0rd3", roleName: "會計" },
     { tel: "90000004", name: "測試雞頭A", password: "Broker0004", roleName: "雞頭", brokerCsvId: "B01" }, // 代號 K
     { tel: "90000005", name: "測試雞頭B", password: "Broker0005", roleName: "雞頭", brokerCsvId: "B02" }, // 代號 W
-    { tel: "90000006", name: "測試安員", password: "Guard00006", roleName: "安員" },
+    { tel: "90000006", name: "測試保安員", password: "Guard00006", roleName: "安員" },
   ];
   // D-P1-1（2026-09-12 老闆答）：真人帳號由 gitignored 嘅
   // data/mappings-private/users.json 讀（[{tel,name,role,broker_csv_id?}]），
@@ -1486,7 +1486,7 @@ async function main() {
   // P0：第二層更闊 backfill（逐字對照 prisma/migrations/
   // 20260920010000_p0_backfill_guard_default_broker/migration.sql）——
   // 淨係補上面 backfillDefaultBrokerId() 冇補到（internal_cash/
-  // internal_longterm/external/special 嗰批）嘅安員。
+  // internal_longterm/external/special 嗰批）嘅保安員。
   const broaderBackfillStats = await backfillGuardDefaultBrokerBroaderP0(prisma);
   stats.guardsDefaultBrokerBroaderBackfilledFromHistory = broaderBackfillStats.backfilledFromHistory;
   stats.guardsDefaultBrokerBroaderBackfilledLongtermFallback = broaderBackfillStats.backfilledLongtermFallback;
@@ -1520,7 +1520,7 @@ async function main() {
     console.log(`[seed] leave_code_raw 跳過: ${leaveCodeRawResult.skippedReason}`);
   }
 
-  // P1-WP3 Gate 1 階段 1（純加法）：逐個安員行嘅 raw 字面掛落
+  // P1-WP3 Gate 1 階段 1（純加法）：逐個保安員行嘅 raw 字面掛落
   // shift_records.provenance.raw_row。
   const rawRowResult = await enrichShiftRecordsWithRawRow(prisma);
   stats.rosterRawRowsWithData = rawRowResult.rowsWithData;

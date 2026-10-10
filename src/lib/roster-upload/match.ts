@@ -1,5 +1,5 @@
 // WP-ROSTER-UPLOAD Phase A（§15.3）：更表解析結果 → 現有主數據（盤／
-// 更別／安員／雞頭）嘅對照。呢個檔案入面嘅函數全部**同步、純函數**——
+// 更別／保安員／雞頭）嘅對照。呢個檔案入面嘅函數全部**同步、純函數**——
 // 對照用嘅候選名單（sites/brokers/shift_types/guards/guard_staff_
 // numbers/guard_phones）由 `service.ts` 一次過查晒 DB 預先攞好先傳入
 // 嚟，唔喺呢度逐行查 DB（一個上載可以有成千格記錄，逐行 await 查 DB
@@ -300,7 +300,7 @@ export function classifyRank(rankRaw: string | null | undefined): RankKind {
 
 /** 用 rank 分類喺 `candidates` 入面篩：IC 類淨係留 `billing_group=
  * monthly_ic` 或者 code 本身含「IC」（例如啟航1331「SIC」）嘅候選；保
- * 安員類淨係留 `per_shift` 嘅候選。冧唔到就可能剩返 0 個或者仲係多過一
+ * 保安員類淨係留 `per_shift` 嘅候選。冧唔到就可能剩返 0 個或者仲係多過一
  * 個——call site 照舊當 ambiguous，唔會亂揀。 */
 function narrowByRank(candidates: readonly ShiftTypeCandidate[], rankKind: RankKind): readonly ShiftTypeCandidate[] {
   if (rankKind === "ic") return candidates.filter((c) => c.billingGroup === "monthly_ic" || IC_TOKEN.test(c.code));
@@ -406,7 +406,7 @@ export interface GuardMatchResult {
    * 義）。 */
   staffNoMismatch: boolean;
   /** B1-8 第 3 項（B-0 驗收留低）：檔案工號本身命中咗系統入面一個真實
-   * 存在嘅安員，但呢行嘅姓名同嗰個安員唔夾（例如打錯工號撞正另一個人
+   * 存在嘅保安員，但呢行嘅姓名同嗰個保安員唔夾（例如打錯工號撞正另一個人
    * 個號、或者工號俾第二個人）——「唔准配」，`guardId` 留 `null`、
    * `guardMatch` 落 `ambiguous`（唔可以直接當呢個號一定係嗰個人）；呢
    * 個 flag 令 call site 加「工號屬另一人」warning。 */
@@ -416,8 +416,8 @@ export interface GuardMatchResult {
    * 「由別名配對」warning，等會計知呢個人個本名同更表寫嘅唔同。 */
   matchedViaAlias: boolean;
   /** 驗收（Opus 5.5，2026-09-26）：靠 `guard_match_overrides`（工號衝突
-   * 保守預設）配到——更表工號屬另一人、guard-fix 按更表姓名建咗獨立安員
-   * 並記低「呢個工號＋呢個姓名 → 嗰個安員」。`service.ts` 加「工號衝突
+   * 保守預設）配到——更表工號屬另一人、guard-fix 按更表姓名建咗獨立保安員
+   * 並記低「呢個工號＋呢個姓名 → 嗰個保安員」。`service.ts` 加「工號衝突
    * 待核」warning。optional：舊 call site／測試唔使改。 */
   matchedViaStaffNoConflictOverride?: boolean;
   /** WP-STAFF-IMPORT B2：配對依據；配唔到＝null。optional：舊 call site／測試唔使改。 */
@@ -466,7 +466,7 @@ export interface GuardMatchIndex {
    * 呢行嘅 `name_raw` 對一對，唔夾就「唔准配」。 */
   nameByGuardId: ReadonlyMap<string, string>;
   /** WP-GUARD-FIX（實測揭發）：guardId → `name_aliases`——B1-8 第 3 項嘅
-   * 「唔夾」比對唔可以淨係睇 `nameByGuardId`（本名）：一個安員嘅工號
+   * 「唔夾」比對唔可以淨係睇 `nameByGuardId`（本名）：一個保安員嘅工號
    * 喺呢行入面可能係啱嘅，但更表寫嘅係佢個別名（唔係本名），淨係比
    * 本名會誤判「工號屬另一人」。加呢個 map 之後，`matchGuard()` 嘅
    * B1-8 比對會本名／別名都試，有一個啱就唔算「唔夾」。 */
@@ -571,7 +571,7 @@ function overrideKey(staffNoNorm: string, name: string): string {
 /** WP-STAFF-IMPORT B2 配對次序：工號 → 電話（byTel，全表唯一，對到一個先用）→ 姓名＋電話 →
  * 淨姓名 → 花名（別名）；每格回 `matchBasis`。以下係 WP-GUARD-FIX 原有說明：
  *
- * 安員配對次序（WP-GUARD-FIX 老闆 2026-09-25 要求擴充）：
+ * 保安員配對次序（WP-GUARD-FIX 老闆 2026-09-25 要求擴充）：
  *   (1) staff_no_raw（正規化，含已取消號——`byStaffNumber` 索引唔分
  *       current/former，舊號都要搵到返個人）；
  *   (2) 姓名／別名＋電話（`guards.name_aliases`——更表寫嘅可能係花名／
@@ -586,7 +586,7 @@ function overrideKey(staffNoNorm: string, name: string): string {
  * 配到就係 true，`guard_match` 本身唔加新值（跟返「二揀一」慣例），
  * `service.ts` 用嚟加「由別名配對」warning。 */
 /** B1-8 第 3 項嘅「呢行姓名同工號嗰個人夾唔夾」比對——WP-GUARD-FIX 實測
- * 揭發：淨係比本名（`nameByGuardId`）唔夠，一個安員嘅工號登記啱，但更
+ * 揭發：淨係比本名（`nameByGuardId`）唔夠，一個保安員嘅工號登記啱，但更
  * 表寫嘅係佢個別名（`name_aliases`）——例如 `link` 個案：呢個人本身喺
  * DB 已經有正確嘅 U 號＋別名，但更表呢一行嘅 `name_raw` 用緊個別名，
  * 冇呢層會誤判「工號屬另一人」（`staffNoBelongsToOther`），令一個本身
@@ -631,7 +631,7 @@ function matchGuardInner(
       }
       const viaNumber = index.byStaffNumber.get(normalized);
       if (viaNumber) {
-        // B1-8 第 3 項：staff_no 命中真實存在嘅安員，但呢行姓名同嗰個
+        // B1-8 第 3 項：staff_no 命中真實存在嘅保安員，但呢行姓名同嗰個
         // 人唔夾（本名／別名都唔夾，見 `rowNameMatchesGuard()`）——
         // 「唔准配」，退返 ambiguous，唔會靜靜當呢個號一定係嗰個人
         // （`rowName` 冇值就冇得比對，維持舊行為信 staff_no）。

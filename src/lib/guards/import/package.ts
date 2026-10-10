@@ -158,7 +158,7 @@ export function unassignedBankOf(pkg: ImportPackage): UnassignedBankAccount[] {
   return pkg.unassignedBankAccounts ?? [];
 }
 
-/** 包內有任何銀行欄（person.bank 有值，或者 unassignedBankAccounts 非空）→ 要「安員銀行資料:update」。 */
+/** 包內有任何銀行欄（person.bank 有值，或者 unassignedBankAccounts 非空）→ 要「保安員銀行資料:update」。 */
 export function packageHasBank(pkg: ImportPackage): boolean {
   if (unassignedBankOf(pkg).length > 0) return true;
   return pkg.persons.some((p) => !!p.bank && Object.values(p.bank).some((l) => !!l.value?.trim()));

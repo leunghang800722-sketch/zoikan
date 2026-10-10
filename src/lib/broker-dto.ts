@@ -3,10 +3,10 @@
 // Date」嗰個 bug class（見 src/lib/api/serialize.ts 頂註解）。
 import { pickWhitelist, brandSafeResponse, type Dto } from "./api/serialize";
 
-// 安員（自己安員名冊，§6.2）：HR 基本資料，冇任何金錢/其他 broker 資料。
+// 保安員（自己保安員名冊，§6.2）：HR 基本資料，冇任何金錢/其他 broker 資料。
 // S4（Opus 驗收修復）：`monthShiftCount`（P2-A「本月更數」衍生欄，
 // `GET /api/guards?with_month_shifts=` 先會計出嚟）加入呢個白名單——
-// 冇金錢/敏感成分，雞頭見自己安員嘅本月更數一向准，同內部角色
+// 冇金錢/敏感成分，雞頭見自己保安員嘅本月更數一向准，同內部角色
 // GUARD_FIELDS 一致做法（見 src/lib/api/dto/index.ts 同一段註解）。
 // WP-STAFFNO：`staffNumbers`（additive，淨係 current）加落嚟——工號本身
 // 雞頭一直見到（`staffNo`/`staffNoMw` 舊欄本身已經喺呢個白名單），呢個
@@ -14,8 +14,8 @@ import { pickWhitelist, brandSafeResponse, type Dto } from "./api/serialize";
 // 刻意唔加——跟返現有做法（`siaPermitNo`／`siaPermitType` 一路都冇喺呢
 // 個白名單，雞頭淨係見到衍生嘅 `siaPermitExpiry`，唔見拆開嘅甲／乙）。
 // Fable5.1（4 個細修 2）：`siaPermitBLapsedByAge` 必修 4 嗰陣加落嚟話俾
-// 雞頭知「乙類已經因為年齡失效」，但依家私隱保守做法：雞頭本身冇「安員
-// 個人資料」view 權，見到呢粒 flag＝變相知道安員個人資料入面嘅出生
+// 雞頭知「乙類已經因為年齡失效」，但依家私隱保守做法：雞頭本身冇「保安員
+// 個人資料」view 權，見到呢粒 flag＝變相知道保安員個人資料入面嘅出生
 // 日期（或者至少知道佢滿咗70歲），呢個推斷本身已經係個人資料洩漏，
 // 唔應該畀雞頭嘅白名單——剔走。雞頭照舊淨係見到 `siaPermitExpiry` 呢個
 // 到期日係空（同「未填」睇落一樣，冇獨立警示），呢個係刻意嘅取捨（私
@@ -72,7 +72,7 @@ export const RATE_CARD_BROKER_FIELDS = [
   "createdAt",
 ] as const;
 
-// 更次記錄（雞頭睇自己安員嘅更）：guard_wage_snapshot/broker_fee_snapshot
+// 更次記錄（雞頭睇自己保安員嘅更）：guard_wage_snapshot/broker_fee_snapshot
 // 得，client_rate_snapshot/settlement_page/provenance/source 一律唔畀。
 export const SHIFT_RECORD_BROKER_FIELDS = [
   "id",
@@ -173,12 +173,12 @@ export const REFERRAL_FEE_RATE_BROKER_FIELDS = ["id", "brokerId", "siteId", "mon
 export const GUARD_STAFF_NUMBER_BROKER_FIELDS = ["id", "scheme", "number", "status", "validFrom", "validTo"] as const;
 
 // WP-MULTI（老闆 2026-09-19 拍板）：雞頭讀 `GET /api/guards/:id/phones`
-// （「自己安員」module，出廠有 view；POST/PATCH/DELETE 硬擋——「雞頭
-// 對自己安員只讀」，見 src/app/api/guards/[id]/phones/route.ts 頂註解）
+// （「自己保安員」module，出廠有 view；POST/PATCH/DELETE 硬擋——「雞頭
+// 對自己保安員只讀」，見 src/app/api/guards/[id]/phones/route.ts 頂註解）
 // 淨係要見到 `tel`／`label`／`is_primary`——`note`（可能有內部備註文
 // 字）／`source`（例如 "manual:legacy-patch(tel)"）／`created_by`（內部
 // 用戶 id）一律唔畀，同 GUARD_STAFF_NUMBER_BROKER_FIELDS 一致做法。
-// 緊急聯絡人／地址跟「安員個人資料」module——雞頭對呢個 module 出廠
+// 緊急聯絡人／地址跟「保安員個人資料」module——雞頭對呢個 module 出廠
 // `uniformRow(D)`（見 src/lib/rbac/matrix.ts），route 層 `requirePermission()`
 // 直接 403，冧本冧用唔到呢個白名單，唔需要獨立 broker DTO。
 export const GUARD_PHONE_BROKER_FIELDS = ["id", "tel", "label", "isPrimary"] as const;

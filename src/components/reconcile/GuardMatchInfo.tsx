@@ -1,6 +1,6 @@
 "use client";
-// WP-RECONCILE-UI（§33.3 E）：月結分診「安員配對」題下面嘅更表資料——姓名／工號／格數／reason
-// （由 guard-fix 最新 run 嘅 needs_boss 對）＋相似安員提示＋連結。純顯示，唔配對、唔寫入。
+// WP-RECONCILE-UI（§33.3 E）：月結分診「保安員配對」題下面嘅更表資料——姓名／工號／格數／reason
+// （由 guard-fix 最新 run 嘅 needs_boss 對）＋相似保安員提示＋連結。純顯示，唔配對、唔寫入。
 import Link from "next/link";
 import { LINK, guardSearchTerm, hasPerson, matchNeedsBossForQuestion, personLabel, telTail, type Person } from "./derive";
 import { useGuardDirectory, useNeedsBoss } from "./data";
@@ -38,18 +38,18 @@ export function GuardMatchInfo({ question, month, compact = false }: { question:
           {personLabel(person)}
         </div>
       ) : (
-        <div className="text-[11.5px] text-zk-faint">冇權限睇姓名／工號，或者搵唔到對應嘅安員配對修復資料。</div>
+        <div className="text-[11.5px] text-zk-faint">冇權限睇姓名／工號，或者搵唔到對應嘅保安員配對修復資料。</div>
       )}
       {person && hasPerson(person) && <SimilarGuards person={person} dir={dir} />}
       <div className="flex flex-wrap gap-1">
         {mon && canGuardFix && (
           <Link href={LINK.guardFix(mon)} className={linkCls} data-testid="mc-link-guard-fix">
-            去安員配對修復 ›
+            去保安員配對修復 ›
           </Link>
         )}
         {person && hasPerson(person) && (
           <Link href={LINK.guards(guardSearchTerm(person))} className={linkCls} data-testid="mc-link-find-guard">
-            搵安員 ›
+            搵保安員 ›
           </Link>
         )}
         {person && hasPerson(person) && (

@@ -17,7 +17,7 @@ describe("POST /api/guard-fix/broker-alias（驗收修正：雞頭稱呼對應�
     fx = await seedWp2Fixture();
   });
 
-  it("RBAC：主管/會計/雞頭/安員一律 403（同呢一頁其餘寫入 action 一致用「安員配對修復」）", async () => {
+  it("RBAC：主管/會計/雞頭/保安員一律 403（同呢一頁其餘寫入 action 一致用「保安員配對修復」）", async () => {
     for (const role of ["主管", "會計", "雞頭", "安員"] as const) {
       const cookie = await sessionCookieForUser(fx.userIds[role]);
       const res = await postBrokerAlias(reqJson(cookie, { label: "測試稱呼甲", broker_id: fx.brokerA.id }));

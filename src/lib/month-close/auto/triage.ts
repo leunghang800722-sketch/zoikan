@@ -137,7 +137,7 @@ export interface McQuestionView {
     needs_price_input: boolean;
     needs_broker_pick: boolean;
     broker_options: Array<{ id: string; code: string }>;
-    /** 安員配對題：更表身份（姓名）淨係有「安員個人資料:view」先顯示。 */
+    /** 保安員配對題：更表身份（姓名）淨係有「保安員個人資料:view」先顯示。 */
     identity_label: string | null;
     pii_visible: boolean;
   };
@@ -374,11 +374,11 @@ async function resolvePlan(q: QRowWithSession, answer: TriageAnswer): Promise<{ 
     }
     case "guard_match": {
       const guardId = cand?.refId ?? null;
-      if (!guardId) throw BadRequest("請揀一個候選安員");
+      if (!guardId) throw BadRequest("請揀一個候選保安員");
       const g = await prisma.guard.findUnique({ where: { id: guardId }, select: { id: true } });
-      if (!g) throw Conflict("候選安員已經唔存在");
-      impact.summary.push(`將呢個更表身份（${ev.action.siteLabel}，${ev.action.cellCount} 格）配對到所選安員：加更表用名做別名，登記（未被佔用嘅）工號，之後重新對數套用更次`);
-      impact.changes.push({ table: "guards", action: "update", label: "安員配對（別名／工號）", fields: [] });
+      if (!g) throw Conflict("候選保安員已經唔存在");
+      impact.summary.push(`將呢個更表身份（${ev.action.siteLabel}，${ev.action.cellCount} 格）配對到所選保安員：加更表用名做別名，登記（未被佔用嘅）工號，之後重新對數套用更次`);
+      impact.changes.push({ table: "guards", action: "update", label: "保安員配對（別名／工號）", fields: [] });
       return { plan: { type: "guard_match", guardId }, fingerprint: `guard:${guardId}`, impact };
     }
   }

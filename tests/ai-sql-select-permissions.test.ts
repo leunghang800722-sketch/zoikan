@@ -113,7 +113,7 @@ describe("規劃裁定：sql_select 逐 table 權限（跟返畫面 module）", 
     }
   });
 
-  it("多表 JOIN（ai.guards + ai.shift_records）：關咗「安員」之後，即使「更表」仲有都要拒絕", async () => {
+  it("多表 JOIN（ai.guards + ai.shift_records）：關咗「保安員」之後，即使「更表」仲有都要拒絕", async () => {
     await setGranted("主管", "安員", false);
     try {
       const result = await sqlSelectRunFor(

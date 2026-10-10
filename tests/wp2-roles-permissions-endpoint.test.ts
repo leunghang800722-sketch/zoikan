@@ -36,7 +36,7 @@ describe("WP2 角色權限管理 endpoint", () => {
     // C3：收客價連 view 都硬性禁止（硬性規則1第一層防線）
     const clientRateView = body.cells.find((c) => c.module === "收客價" && c.action === "view")!;
     expect(clientRateView.hard_denied).toBe(true);
-    // C3：安員:view 而家係 off（唔係 hard_denied），自己安員:view 先係 grant
+    // C3：保安員:view 而家係 off（唔係 hard_denied），自己保安員:view 先係 grant
     const guardView = body.cells.find((c) => c.module === "安員" && c.action === "view")!;
     expect(guardView.hard_denied).toBe(false);
     expect(guardView.granted).toBe(false);

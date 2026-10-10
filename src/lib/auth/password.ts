@@ -15,7 +15,7 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
 }
 
 // 強密碼要求：管理角色（老闆／主管／會計——即有機會掂到價目/糧務嘅角色）
-// 強制；雞頭／安員（P1 冇安員登入）用較寬鬆規則。
+// 強制；雞頭／保安員（P1 冇保安員登入）用較寬鬆規則。
 // 規則：≥8 字符、至少一個字母、至少一個數字（唔強制符號，遷就老闆/主管
 // 用手機打字嘅現實，但長度同「唔可以淨數字/淨字母」已經排走最弱嘅密碼）。
 export function isStrongPassword(plain: string): boolean {
