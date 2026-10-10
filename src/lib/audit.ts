@@ -2,6 +2,7 @@
 // 呢個表本身係 append-only（DB trigger 拒絕 UPDATE/DELETE/TRUNCATE，見
 // prisma/migrations/20260911070700_audit_log_append_only、
 // .../20260911100000_audit_log_no_truncate）——呢度淨係負責寫入。
+import { randomBytes } from "node:crypto";
 import { prisma } from "./db";
 import { Prisma } from "@prisma/client";
 import { AUDIT_DTO_BY_TABLE, AUDIT_ROW_MAPPED_ACTIONS, AUDIT_META_PASSTHROUGH_KEYS } from "./api/audit-dto";
@@ -159,10 +160,24 @@ export async function writeAuditTx(tx: Prisma.TransactionClient, input: WriteAud
   await tx.auditLog.create({ data: toAuditCreateData(input) });
 }
 
+/** P3-5.5：同批 audit 嘅 id——最前 8 hex 位係批內序號（升序），其餘隨機（跨批唔撞）。
+ * 同批共用同一個 `createdAt`，列表按 `createdAt desc, id asc` 排，所以 id 升序＝plan 次序（唔需要 migration 加 seq 欄）。 */
+export function orderedAuditIds(n: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = randomBytes(10).toString("hex"); // 20 hex
+    const idx = i.toString(16).padStart(8, "0");
+    out.push(`${idx}-${r.slice(0, 4)}-4${r.slice(4, 7)}-8${r.slice(7, 10)}-${r.slice(10, 20)}${r.slice(0, 2)}`);
+  }
+  return out;
+}
+
 /** P3-2.5：批量寫 audit——一條 `createMany`，同一批共用同一個 `createdAt`（DB `now()`；唔偽造未來時間，
- * 2,000 格都唔會寫到幾秒後）。同批內次序靠插入順序。內容經同一個
- * `toAuditCreateData()`，同 `writeAudit()` 逐條寫入完全一樣。傳 `tx` 就寫喺呼叫者嘅 transaction。 */
+ * 2,000 格都唔會寫到幾秒後）。同批內次序：id 按插入順序升序（`orderedAuditIds()`），audit-log 列表
+ * 嘅 `createdAt desc, id asc` 因此保持 plan 次序。內容經同一個 `toAuditCreateData()`，同 `writeAudit()`
+ * 逐條寫入完全一樣。傳 `tx` 就寫喺呼叫者嘅 transaction。 */
 export async function writeAuditMany(inputs: WriteAuditInput[], client: Pick<Prisma.TransactionClient, "auditLog"> = prisma): Promise<void> {
   if (inputs.length === 0) return;
-  await client.auditLog.createMany({ data: inputs.map((input) => toAuditCreateData(input)) });
+  const ids = orderedAuditIds(inputs.length);
+  await client.auditLog.createMany({ data: inputs.map((input, i) => ({ ...toAuditCreateData(input), id: ids[i] })) });
 }
