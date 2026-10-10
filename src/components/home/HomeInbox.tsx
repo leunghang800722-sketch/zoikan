@@ -104,11 +104,11 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
   let runCard: React.ReactNode = null;
   if (canMonthClose) {
     const label = `${month} 月結`;
-    if (run === undefined) runCard = <Card testId="inbox-month-close" label={label} value="…" href="/month-close" />;
-    else if (run === null) runCard = <Card testId="inbox-month-close" label={label} value="未開始" href="/month-close" />;
-    else if (run.status === "done") runCard = <Card testId="inbox-month-close" label={label} value="已完成" tone="ok" note={`${run.steps_done}/${run.steps_total} 步`} href="/month-close" />;
-    else if (run.status === "failed") runCard = <Card testId="inbox-month-close" label={label} value="失敗" tone="danger" note={`${run.steps_done}/${run.steps_total} 步`} href="/month-close" />;
-    else runCard = <Card testId="inbox-month-close" label={label} value="進行中" note={`${run.steps_done}/${run.steps_total} 步`} href="/month-close" />;
+    if (run === undefined) runCard = <Card testId="inbox-month-close" label={label} value="…" href={`/month-close?month=${month}`} />;
+    else if (run === null) runCard = <Card testId="inbox-month-close" label={label} value="未開始" href={`/month-close?month=${month}`} />;
+    else if (run.status === "done") runCard = <Card testId="inbox-month-close" label={label} value="已完成" tone="ok" note={`${run.steps_done}/${run.steps_total} 步`} href={`/month-close?month=${month}`} />;
+    else if (run.status === "failed") runCard = <Card testId="inbox-month-close" label={label} value="失敗" tone="danger" note={`${run.steps_done}/${run.steps_total} 步`} href={`/month-close?month=${month}`} />;
+    else runCard = <Card testId="inbox-month-close" label={label} value="進行中" note={`${run.steps_done}/${run.steps_total} 步`} href={`/month-close?month=${month}`} />;
   }
 
   return (

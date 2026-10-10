@@ -272,7 +272,7 @@ export default function GuardFixPanel({ month }: { month: string }) {
 
   useEffect(() => {
     void loadStaffList();
-    void loadPostorder(month);
+    // loadPostorder 由下面 [month] effect 負責（mount 時都會行一次）——P3-4：之前呢度重複打一次，同月 postorder 請求 ×2。
     void loadBrokers();
     void loadRuns().then((list) => {
       // 開頁（或者手機鎖機後重新整理）見到有 run 套用緊（未卡死）——即刻接住
