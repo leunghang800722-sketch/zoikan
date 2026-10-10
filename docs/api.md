@@ -758,7 +758,7 @@ referral_broker_id` 一直係 null，8 月長工介紹費計 0。
   再查一次 `guard.referralBrokerId`，已經有值（呢個 run 嘅
   `set_referral`、或者人手／舊 run 設過）就冪等跳過；audit 淨係
   `{id, referralBrokerId, source:"guard_fix_referral_inferred"}`，唔帶
-  姓名。`summarizePlan()`／`formatPlanSummaryMd()`／`POST /api/guard-
+  姓名。`summarizePlan()`／`POST /api/guard-
   fix/plan`／`runs/:id/apply` 嘅 audit `after`／頁面 `PlanSummary`
   （`src/app/(app)/guard-fix/page.tsx`，新摘要卡「定介紹雞頭（推算）」）
   全部加咗 `setReferralInferred`／`set_referral_inferred` 呢個新欄。
