@@ -219,6 +219,65 @@ test.describe("資料頁", () => {
   });
 });
 
+
+// 強制鎖定（老闆專用，鎖月條件未齊先出）——規劃者裁定補返；body 同舊 /reports/monthly-close 一致：{ force: true, override_reason }。
+function forceRun(month: string, locked: boolean) {
+  return {
+    id: "run-e2e-force", month, status: "done", started_at: "2026-10-10T05:33:00.000Z", finished_at: "2026-10-10T05:33:09.000Z", current_step: null, stalled: false,
+    steps_total: 10, steps_done: 10, totals: null, error_message: null,
+    steps: [{ key: "precheck", label: "前置檢查", status: "done", started_at: "2026-10-10T05:33:00.000Z", finished_at: "2026-10-10T05:33:01.000Z", numbers: { currentMonthLocked: locked }, warnings: [], needs_human: [] }],
+    report: {
+      month, totals: { revenue: 0, margin_revenue: 0, cost: 0, gross_margin: 0, cost_basis: "combined", legacy_cost: 0, legacy_margin: 0 },
+      payroll_by_broker: [], site_revenue: [], referral_fee: { total: 0, count: 0 },
+      unpriced: { count: 0, payout_count: 0, client_count: 0, no_settlement_count: 0, ot_unpriced_count: 0, gap: { records: 0, client_gap_estimate: 0, payout_gap_estimate: 0, no_reference_records: 0 } },
+      auto: null, postorder_compare: null, needs_human: [],
+      lock_precondition: { current_month_already_locked: locked, missing_upload_sites: [], unconfirmed_upload_sites: ["測試盤甲"], unpriced_count: 0, ready_to_lock: false },
+      longterm_payroll_note: "", longterm_payroll: null,
+      combined_cost_summary: { per_shift_cost_total: 0, referral_fee_total: 0, longterm_autopay_total: 0, combined_cost_total: 0, mpf_er_total: 0 },
+    },
+  };
+}
+async function mockForceRun(page: Page, month: string) {
+  await page.route("**/api/month-close/one-click?*", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runs: [forceRun(month, false)] }) }));
+  await page.route("**/api/month-close/one-click/run-e2e-force", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: forceRun(month, false) }) }));
+}
+
+test.describe("強制鎖定（/month-close LockSection）", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  const M = "2026-11";
+
+  test("老闆：條件未齊先出；原因必填；body { force, override_reason }；鎖完解返", async ({ page }) => {
+    await loginAs(page, "老闆");
+    expect([200, 201, 409]).toContain((await page.request.post(`/api/months/${M}/open`, { data: { roster_version_note: "e2e force" } })).status());
+    await mockForceRun(page, M);
+    await page.goto(`/month-close?month=${M}`);
+    await expect(page.getByTestId("force-lock-box")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("rail-lock-month")).toBeDisabled(); // 一般鎖定掣照舊停用
+    await expect(page.getByTestId("force-lock-reason")).toHaveCount(0);
+    await page.getByTestId("force-lock-check").check();
+    await expect(page.getByTestId("force-lock-month")).toBeDisabled(); // 原因必填
+    await page.getByTestId("force-lock-reason").fill("e2e 強制鎖定測試");
+    await expect(page.getByTestId("force-lock-month")).toBeEnabled();
+    const req = page.waitForRequest((r) => /\/api\/month-closes\/[^/]+\/lock$/.test(r.url()) && r.method() === "POST");
+    await page.getByTestId("force-lock-month").click();
+    expect((await req).postDataJSON()).toEqual({ force: true, override_reason: "e2e 強制鎖定測試" });
+    await expect(page.getByText(`${M} 已鎖定`).first()).toBeVisible({ timeout: 15_000 });
+    const closes = await (await page.request.get(`/api/month-closes?month=${M}`)).json();
+    expect(closes.rows[0].locked_at).toBeTruthy();
+    // 還原
+    const un = await page.request.post(`/api/month-closes/${closes.rows[0].id}/unlock`, { data: { reason: "e2e 還原" } });
+    expect(un.ok()).toBe(true);
+  });
+
+  test("主管見唔到強制鎖定", async ({ page }) => {
+    await loginAs(page, "主管");
+    await mockForceRun(page, M);
+    await page.goto(`/month-close?month=${M}`);
+    await expect(page.getByTestId("lock-section")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("force-lock-box")).toHaveCount(0);
+  });
+});
+
 test.afterAll(async () => {
   await prisma.$disconnect();
 });

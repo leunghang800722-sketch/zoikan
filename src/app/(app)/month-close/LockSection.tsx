@@ -8,8 +8,10 @@ import type { ReportDTO } from "@/components/month-close/types";
 import { lockRequirements, type ReviewGroup } from "@/components/month-close/derive";
 import { MonthHealthCard } from "./MonthHealthCard";
 
-export function LockSection({ report, month, busy, locked, groups, onUnlock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
+export function LockSection({ report, month, busy, locked, groups, onUnlock, isBoss, onForceLock, onOpenTriage, onHealth }: { report: ReportDTO; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; isBoss: boolean; onForceLock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
   const [unlockReason, setUnlockReason] = useState("");
+  const [forceOn, setForceOn] = useState(false);
+  const [forceReason, setForceReason] = useState("");
   const pricingQ = groups.find((g) => g.key === "pricing")?.count ?? 0;
   const reqs = lockRequirements(report, pricingQ);
   const lp = report.lock_precondition;
@@ -56,6 +58,29 @@ export function LockSection({ report, month, busy, locked, groups, onUnlock, onO
         </span>
         {locked && <Pill variant="warning">已鎖定</Pill>}
       </div>
+      {/* 強制鎖定：淨係老闆、鎖月條件（更表上載／對數）未齊先出；call 同一個 lock API（body { force: true, override_reason }），原因必填。 */}
+      {!locked && isBoss && (lp.missing_upload_sites.length > 0 || lp.unconfirmed_upload_sites.length > 0) && (
+        <div className="flex flex-col gap-2 border-t border-zk-border-soft px-4 py-3" data-testid="force-lock-box">
+          <label className="flex items-center gap-1.5 text-[12.5px] text-zk-text">
+            <input type="checkbox" checked={forceOn} onChange={(e) => setForceOn(e.target.checked)} data-testid="force-lock-check" />
+            強制鎖定（淨係老闆做得到，會記落操作紀錄）
+          </label>
+          {forceOn && (
+            <div className="flex flex-wrap items-center gap-2">
+              <input className={inputCls} placeholder="override 原因（必填）" value={forceReason} onChange={(e) => setForceReason(e.target.value)} data-testid="force-lock-reason" />
+              <button
+                type="button"
+                data-testid="force-lock-month"
+                onClick={() => onForceLock(forceReason.trim())}
+                disabled={busy || !forceReason.trim()}
+                className="whitespace-nowrap rounded-md border border-[#fecaca] bg-white px-4 py-2 text-[13px] font-semibold text-[#b91c1c] hover:bg-[#fef2f2] disabled:cursor-not-allowed disabled:opacity-[.45]"
+              >
+                強制鎖定 {month}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {locked && (
         <div className="flex flex-wrap items-center gap-2 border-t border-zk-border-soft px-4 py-3" data-testid="unlock-box">
           <span className="text-[12px] text-zk-muted">解鎖原因（必填，會寫入操作紀錄）</span>
