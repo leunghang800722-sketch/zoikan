@@ -322,6 +322,8 @@ async function auditVia(writer: ChangeWriter, db: Db, input: Parameters<ChangeWr
   else await writer.audit(input);
 }
 
+// P3-5.3：呢段「攞有效卡 → RateCardLite」同 `src/lib/pricing/resolve-rate.ts` 嘅 `fetchEffectiveRateCards()`（尾段 rows.map）刻意重複、
+// 唔合併——兩邊都屬定價核心，一邊改欄位／條件要人手同步另一邊（改前後都跑 `npm run gate:pricing`＋`gate:locked-months`）。
 async function fetchCardsVia(db: Db, siteId: string, start: Date, end: Date) {
   const rows = await db.rateCard.findMany({ where: { siteId, voidedAt: null, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] } });
   return rows.map((r) => ({
