@@ -6,14 +6,14 @@ import type { ReactNode } from "react";
 export type PillVariant = "success" | "neutral" | "warning" | "shift" | "monthly" | "broker" | "danger";
 
 const VARIANT_STYLE: Record<Exclude<PillVariant, "broker">, { bg: string; fg: string }> = {
-  success: { bg: "#ecfdf5", fg: "#047857" },
-  neutral: { bg: "#f1f5f9", fg: "#475569" },
-  warning: { bg: "#fff7ed", fg: "#c2410c" },
-  shift: { bg: "#dbeafe", fg: "#1e40af" },
+  success: { bg: "var(--zk-success-bg)", fg: "var(--zk-success-dark)" },
+  neutral: { bg: "var(--zk-surface)", fg: "var(--zk-text-secondary)" },
+  warning: { bg: "var(--zk-warning-bg)", fg: "var(--zk-warning)" },
+  shift: { bg: "var(--zk-primary-tint)", fg: "var(--zk-primary-deep)" },
   monthly: { bg: "#ede9fe", fg: "#5b21b6" },
   // WP-PII：牌照／平安卡已過期 pill 用——同表格 warnRow 底色 `#fef2f2`
   // 一致嘅紅色系（見 DataTable.tsx `tableCls.warnRow`）。
-  danger: { bg: "#fef2f2", fg: "#dc2626" },
+  danger: { bg: "var(--zk-danger-bg)", fg: "var(--zk-danger)" },
 };
 
 export interface PillProps {
@@ -25,7 +25,7 @@ export interface PillProps {
 }
 
 export function Pill({ variant, children, color, className }: PillProps) {
-  const style = variant === "broker" ? (color ?? { bg: "#f1f5f9", fg: "#475569" }) : VARIANT_STYLE[variant];
+  const style = variant === "broker" ? (color ?? { bg: "var(--zk-surface)", fg: "var(--zk-text-secondary)" }) : VARIANT_STYLE[variant];
   return (
     <span
       className={`inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap ${className ?? ""}`}

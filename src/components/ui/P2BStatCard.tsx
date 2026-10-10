@@ -22,7 +22,7 @@ const TONE_CLS: Record<NonNullable<P2BStatCardProps["tone"]>, string> = {
 
 export function P2BStatCard({ label, value, note, tone = "default", className }: P2BStatCardProps) {
   return (
-    <div className={`flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 md:px-[18px] md:py-4 ${className ?? ""}`}>
+    <div className={`flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 lg:px-[18px] lg:py-4 ${className ?? ""}`}>
       <div className="text-xs text-zk-muted">{label}</div>
       <div className={`mt-1 text-zk-xl leading-[1.15] font-bold ${TONE_CLS[tone]}`}>{value}</div>
       {note && <div className="mt-1.5 text-xs text-zk-muted">{note}</div>}

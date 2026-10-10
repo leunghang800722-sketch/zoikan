@@ -87,9 +87,9 @@ interface GrossMarginTotalsResult {
 const CLOSE_COLS = 6; // 工作地點/更數/營業額/成本/盈利/%
 
 function statusDot(status: ReconciliationRule["status"]): string {
-  if (status === "pass") return "#0f766e";
-  if (status === "diff") return "#dc2626";
-  return "#cbd5e1";
+  if (status === "pass") return "var(--zk-success)";
+  if (status === "diff") return "var(--zk-danger)";
+  return "var(--zk-faintest)";
 }
 
 // §13：差異小表三欄（kind 紅 600 110px／who 500／detail 灰）——用業務
@@ -151,7 +151,7 @@ function RuleCard({ rule }: { rule: ReconciliationRule }) {
           {rule.status === "pass" && <Pill variant="success">通過</Pill>}
           {rule.status === "not_enabled" && <Pill variant="neutral">未啟用</Pill>}
           {rule.status === "diff" && (
-            <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap" style={{ background: "#fee2e2", color: "#b91c1c" }}>
+            <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap" style={{ background: "var(--zk-danger-tint)", color: "var(--zk-danger-dark)" }}>
               {rule.diff_count} 項差異
             </span>
           )}
@@ -159,11 +159,11 @@ function RuleCard({ rule }: { rule: ReconciliationRule }) {
       </div>
       {rule.note && <div className="mt-1 pl-5 text-zk-xs text-zk-muted">{rule.note}</div>}
       {rule.status === "diff" && rule.details.length > 0 && (
-        <div className="mt-2 overflow-hidden rounded-md border" style={{ borderColor: "#fecaca" }}>
+        <div className="mt-2 overflow-hidden rounded-md border" style={{ borderColor: "var(--zk-danger-border)" }}>
           {shown.map((d, i) => {
             const { kind, who, detail } = ruleDetailRow(rule.key, d);
             return (
-              <div key={i} className="flex gap-2 border-b bg-white px-2.5 py-1.5 text-zk-xs last:border-b-0" style={{ borderColor: "#fef2f2" }}>
+              <div key={i} className="flex gap-2 border-b bg-white px-2.5 py-1.5 text-zk-xs last:border-b-0" style={{ borderColor: "var(--zk-danger-bg)" }}>
                 <span className="w-[110px] shrink-0 font-semibold text-zk-danger-dark">{kind}</span>
                 <span className="w-[100px] shrink-0 font-medium text-zk-text">{who}</span>
                 <span className="min-w-0 truncate text-zk-muted">{detail}</span>

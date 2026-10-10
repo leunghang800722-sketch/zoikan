@@ -27,7 +27,7 @@ export function LockSection({ report, month, busy, locked, groups, onUnlock, can
         <div className="flex flex-col gap-2 border-b border-zk-border-soft px-4 py-3.5">
           <div className="text-zk-xs font-semibold text-zk-muted">一定要做好先可以鎖</div>
           {reqs.map((r) => (
-            <div key={r.key} className="flex items-center gap-3 rounded-lg border border-zk-danger-border bg-[#fffafa] px-3 py-2.5" data-lock-req={r.key}>
+            <div key={r.key} className="flex items-center gap-3 rounded-lg border border-zk-danger-border bg-zk-danger-bg px-3 py-2.5" data-lock-req={r.key}>
               <span className="h-[18px] w-[18px] flex-none rounded-full border-[1.5px] border-zk-danger" />
               <div className="min-w-0 flex-1">
                 <div className="text-zk-base font-medium text-zk-text">{r.title}</div>

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
+import { MQ_BELOW_LG } from "@/lib/ui/breakpoints";
 import { apiGet, apiRequest, type ApiResult } from "@/lib/ui/api-client";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
@@ -58,10 +59,10 @@ interface Impact {
 
 
 function useIsMobile(): boolean {
-  const [m, setM] = useState(() => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 767px)").matches : false));
+  const [m, setM] = useState(() => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(MQ_BELOW_LG).matches : false));
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    const mq = window.matchMedia("(max-width: 767px)");
+    const mq = window.matchMedia(MQ_BELOW_LG);
     const on = () => setM(mq.matches);
     on();
     mq.addEventListener("change", on);
@@ -336,7 +337,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
   if (mobile) {
     const segs = (initial ?? []).map((x) => {
       const r = results[x.id];
-      const c = r === "ok" ? "#0f766e" : r === "skip" ? "#cbd5e1" : x.id === pendingId ? "#93c5fd" : x.id === q?.id ? "#2563eb" : "#e2e8f0";
+      const c = r === "ok" ? "var(--zk-success)" : r === "skip" ? "var(--zk-faintest)" : x.id === pendingId ? "var(--zk-primary-light)" : x.id === q?.id ? "var(--zk-primary)" : "var(--zk-border)";
       return { id: x.id, c };
     });
     const total = initial?.length ?? 0;
@@ -383,7 +384,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               {retryTag}
               <div className="flex gap-1.5">
                 <span className="rounded-[10px] bg-zk-surface px-2 py-[3px] text-zk-xs font-semibold text-zk-text-secondary">{kindChip(q.kind, q.kind_label)}</span>
-                <span className="rounded-[10px] px-2 py-[3px] text-zk-xs font-semibold" style={q.mc.confidence === "propose" ? { background: "#dbeafe", color: "#1e40af" } : { background: "#ffedd5", color: "#c2410c" }}>
+                <span className="rounded-[10px] px-2 py-[3px] text-zk-xs font-semibold" style={q.mc.confidence === "propose" ? { background: "var(--zk-primary-tint)", color: "var(--zk-primary-deep)" } : { background: "var(--zk-warning-tint)", color: "var(--zk-warning)" }}>
                   {q.mc.confidence === "propose" ? "有建議" : "要你揀"}
                 </span>
               </div>
@@ -396,7 +397,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               </div>
               <GuardMatchInfo question={q} month={month} compact />
               {canAccept ? (
-                <div className={`rounded-[14px] border-2 px-4 py-3.5 ${choseOther ? "border-zk-faintest bg-white opacity-60" : "border-zk-primary bg-[#f8fbff]"}`} data-testid="mc-suggest-card">
+                <div className={`rounded-[14px] border-2 px-4 py-3.5 ${choseOther ? "border-zk-faintest bg-white opacity-60" : "border-zk-primary bg-zk-primary-tint-soft"}`} data-testid="mc-suggest-card">
                   <div className="text-zk-sm font-semibold text-zk-primary-dark">系統建議</div>
                   <div className="mt-1 text-zk-xl font-bold">{humanize(q.mc.suggestion ?? (suggestCand ? `${suggestCand.label}${suggestCand.values_text ? ` ${suggestCand.values_text}` : ""}` : "按建議答案"))}</div>
                   {suggestCand?.evidence && <div className="mt-1.5 text-zk-sm text-zk-muted">依據：{humanize(suggestCand.evidence)}</div>}
@@ -454,7 +455,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               <button type="button" onClick={skip} disabled={tapLock} className="h-[54px] flex-1 disabled:opacity-40 rounded-xl border border-zk-faintest bg-white text-zk-md font-semibold text-zk-text-secondary" data-testid="mc-skip">
                 跳過，留返人手
               </button>
-              <button type="button" onClick={primary.run} disabled={primary.disabled || tapLock} data-testid={primary.testid} className="h-[54px] flex-1 rounded-xl text-zk-md font-semibold text-white disabled:opacity-40" style={{ background: primary.dark ? "#0f172a" : "#2563eb" }}>
+              <button type="button" onClick={primary.run} disabled={primary.disabled || tapLock} data-testid={primary.testid} className="h-[54px] flex-1 rounded-xl text-zk-md font-semibold text-white disabled:opacity-40" style={{ background: primary.dark ? "var(--zk-text)" : "var(--zk-primary)" }}>
                 {primary.label}
               </button>
             </div>

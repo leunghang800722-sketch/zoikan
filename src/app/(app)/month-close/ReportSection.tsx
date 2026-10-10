@@ -11,7 +11,7 @@ import { ReviewCard } from "./ReviewCard";
 import { PostorderDependencyLine } from "./PostorderDependencyLine";
 
 const card = "rounded-[10px] border border-zk-border bg-white";
-const STACK_COLOR = { shift: "#2563eb", referral: "#93c5fd", autopay: "#0f766e" } as const;
+const STACK_COLOR = { shift: "var(--zk-primary)", referral: "var(--zk-primary-light)", autopay: "var(--zk-success)" } as const;
 
 export function ReportSection({ run, report, busy, locked, groups, onOpenTriage }: { run: RunDTO; report: ReportDTO; busy: boolean; locked: boolean; groups: ReviewGroup[]; onOpenTriage: () => void }) {
   const [showAllSites, setShowAllSites] = useState(false);
@@ -34,7 +34,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
         <span className="text-zk-sm text-zk-muted">{fmtMdHm(run.finished_at ?? run.started_at)} 嗰次結算</span>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         <div className={`${card} px-[18px] py-4`}>
           <div className="text-zk-sm text-zk-muted">總收入</div>
           <div className="mt-1 break-all text-zk-2xl font-bold leading-tight text-zk-text">{fmtMoney(report.totals.revenue)}</div>
@@ -82,7 +82,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
 
       {report.unpriced.count > 0 && (
         <div className="flex items-center gap-2.5 rounded-lg border border-zk-warning-border bg-zk-warning-bg px-3.5 py-2.5 text-zk-sm text-zk-warning-dark" data-testid="unpriced-gap">
-          <span className="h-2 w-2 flex-none rounded-full bg-[#ea580c]" />
+          <span className="h-2 w-2 flex-none rounded-full bg-zk-warning" />
           <span>
             <b>{report.unpriced.count} 更未定價，未計入成本。</b>
             未定價更數唔當 0 成本：上面成本／毛利未包呢 {report.unpriced.count} 更（收客 {report.unpriced.client_count}／出街 {report.unpriced.payout_count}／冇結算單位 {report.unpriced.no_settlement_count}／OT {report.unpriced.ot_unpriced_count}）。
@@ -111,7 +111,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
       {report.auto && <AutoSummaryCard auto={report.auto} extraFooter={<PostorderDependencyLine auto={report.auto} month={report.month} />} />}
       {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} locked={locked} onOpenTriage={onOpenTriage} />}
 
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className={`${card} overflow-hidden`}>
           <div className="flex items-baseline justify-between px-4 py-3 text-zk-base font-semibold">
             <h3>逐雞頭應付</h3>
@@ -126,13 +126,13 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
           {report.payroll_by_broker.map((b) => {
             const unattributed = b.broker_code === "";
             return (
-              <div key={b.broker_code || "unattributed"} className="grid grid-cols-[minmax(0,1fr)_60px_100px] items-center border-b border-zk-border-soft px-4 py-2 text-zk-sm" style={{ background: unattributed ? "#fff7ed" : undefined }}>
-                <span className="min-w-0 font-medium" style={{ color: unattributed ? "#c2410c" : b.amount === 0 ? "#94a3b8" : undefined }}>
+              <div key={b.broker_code || "unattributed"} className="grid grid-cols-[minmax(0,1fr)_60px_100px] items-center border-b border-zk-border-soft px-4 py-2 text-zk-sm" style={{ background: unattributed ? "var(--zk-warning-bg)" : undefined }}>
+                <span className="min-w-0 font-medium" style={{ color: unattributed ? "var(--zk-warning)" : b.amount === 0 ? "var(--zk-faint)" : undefined }}>
                   {unattributed ? b.broker_name : `${b.broker_code}（${b.broker_name}）`}
                   {unattributed && settlementQ > 0 && <span className="ml-1.5 text-zk-xs font-normal">待答 {settlementQ} 題</span>}
                 </span>
                 <span className="text-right">{b.shifts}</span>
-                <span className="text-right" style={{ color: b.amount === 0 && !unattributed ? "#94a3b8" : undefined }}>{fmtMoney(b.amount)}</span>
+                <span className="text-right" style={{ color: b.amount === 0 && !unattributed ? "var(--zk-faint)" : undefined }}>{fmtMoney(b.amount)}</span>
               </div>
             );
           })}
@@ -155,7 +155,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
               <span className="flex min-w-0 items-center gap-2">
                 <span className="truncate font-medium">{r.site_name}</span>
                 <span className="hidden h-1 min-w-[20px] flex-1 overflow-hidden rounded-sm bg-zk-surface sm:block">
-                  <span className="block h-full bg-[#bfdbfe]" style={{ width: `${sr.max > 0 && typeof r.revenue === "number" ? Math.max(2, (r.revenue / sr.max) * 100) : 0}%` }} />
+                  <span className="block h-full bg-zk-primary-tint" style={{ width: `${sr.max > 0 && typeof r.revenue === "number" ? Math.max(2, (r.revenue / sr.max) * 100) : 0}%` }} />
                 </span>
               </span>
               <span className="text-right">{r.shifts}</span>

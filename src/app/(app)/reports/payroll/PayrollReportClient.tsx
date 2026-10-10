@@ -199,7 +199,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       <EmptyMonthNotice month={month} isEmpty={!loading && totals.length === 0} onJump={setMonth} />
 
       {/* 桌面表。 */}
-      <div className={`hidden md:block ${tableCls.wrap}`}>
+      <div className={`hidden lg:block ${tableCls.wrap}`}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
           <thead>
             <tr>
@@ -229,7 +229,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
             )}
             {!loading &&
               totals.map((t) => (
-                <tr key={t.broker_id ?? "unattributed"} className={tableCls.rowHover} style={t.broker_id === null ? { background: "#fef2f2" } : undefined}>
+                <tr key={t.broker_id ?? "unattributed"} className={tableCls.rowHover} style={t.broker_id === null ? { background: "var(--zk-danger-bg)" } : undefined}>
                   <td className={`${tableCls.td} font-medium`}>{t.broker_name}</td>
                   <td className={tableCls.td}>{t.broker_code}</td>
                   <td className={tableCls.td}>
@@ -260,7 +260,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
       </div>
 
       {/* 手機：每行變卡。 */}
-      <div className="flex flex-col gap-2 md:hidden">
+      <div className="flex flex-col gap-2 lg:hidden">
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
         ) : totals.length === 0 ? (
@@ -273,7 +273,7 @@ export function PayrollReportClient({ canReprice }: { canReprice: boolean }) {
               <div
                 key={t.broker_id ?? "unattributed"}
                 className="flex items-center justify-between gap-2.5 border-b border-zk-border-soft px-3.5 py-2.5 last:border-b-0"
-                style={t.broker_id === null ? { background: "#fef2f2" } : undefined}
+                style={t.broker_id === null ? { background: "var(--zk-danger-bg)" } : undefined}
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">

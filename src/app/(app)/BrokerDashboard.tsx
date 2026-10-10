@@ -105,23 +105,23 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
   if (error) return <Banner kind="error" message={error} />;
 
   // B3 驗收修正：手機版原本冇任何可見 <h1>（桌面 <h1> 由 PageHeader
-  // 出，成個 PageHeader 包喺 `hidden md:block` 度；手機淨係得一個
+  // 出，成個 PageHeader 包喺 `hidden lg:block` 度；手機淨係得一個
   // `<div>` 重複問候文字，等於手機頁面完全冇 heading）。改做「同一個
   // h1、兩邊都係 heading」：淨係一個 <h1> 元素，入面兩個 <span> 用
-  // `md:hidden`／`hidden md:inline` 互相排斥。
+  // `lg:hidden`／`hidden lg:inline` 互相排斥。
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-4">
+      <div className="flex flex-col gap-1 lg:flex-row lg:flex-wrap lg:items-end lg:justify-between lg:gap-4">
         <div>
-          <div className="text-xs text-zk-muted md:text-zk-sm">
-            <span className="md:hidden">{fmtMonthDayWeekday(todayLocalStr())} · 雞頭</span>
-            <span className="hidden md:inline">{`雞頭 · ${fmtYearMonthZh(month)}`}</span>
+          <div className="text-xs text-zk-muted lg:text-zk-sm">
+            <span className="lg:hidden">{fmtMonthDayWeekday(todayLocalStr())} · 雞頭</span>
+            <span className="hidden lg:inline">{`雞頭 · ${fmtYearMonthZh(month)}`}</span>
           </div>
-          <h1 className="mt-0.5 text-zk-xl font-bold text-zk-text md:text-zk-xl md:tracking-[-0.01em]">
-            <span className="md:hidden">
+          <h1 className="mt-0.5 text-zk-xl font-bold text-zk-text lg:text-zk-xl lg:tracking-[-0.01em]">
+            <span className="lg:hidden">
               {greetingWord()}，{userName}
             </span>
-            <span className="hidden md:inline">{`歡迎返嚟，${userName}`}</span>
+            <span className="hidden lg:inline">{`歡迎返嚟，${userName}`}</span>
           </h1>
         </div>
         <MonthChip month={month} onChange={setMonth} />
@@ -132,7 +132,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
       ) : data ? (
         <>
           {/* 桌面 4 KPI：README §25 `repeat(auto-fit,minmax(220px,1fr))`。 */}
-          <div className="hidden grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3 md:grid">
+          <div className="hidden grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3 lg:grid">
             <KpiCard
               label="本月已排更數"
               value={data.scheduled_shifts}
@@ -160,7 +160,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
           </div>
 
           {/* 手機 2×2 KPI（README §21 雞頭手機首頁）。 */}
-          <div className="grid grid-cols-2 gap-2.5 md:hidden">
+          <div className="grid grid-cols-2 gap-2.5 lg:hidden">
             <KpiCard label="本月已排" value={data.scheduled_shifts} href="/roster" note={`待審批 ${data.pending_approval_count}`} />
             <KpiCard label="本月應收" value={receivable ? fmtMoney(receivable.total) : "—"} href="/my-receivable" note={<span className="text-zk-primary">逐日明細 ›</span>} />
             <KpiCard
@@ -172,7 +172,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
           </div>
 
           {/* 「我有份嘅盤」——桌面表。 */}
-          <div className="hidden flex-col gap-2 md:flex">
+          <div className="hidden flex-col gap-2 lg:flex">
             <div className="text-sm font-semibold text-zk-text">我有份嘅盤</div>
             <div className={tableCls.wrap}>
               <table className={tableCls.table}>
@@ -223,7 +223,7 @@ export default function BrokerDashboard({ userName }: BrokerDashboardProps) {
           </div>
 
           {/* 手機：「我有份嘅盤」列表卡。 */}
-          <div className="flex flex-col gap-2 md:hidden">
+          <div className="flex flex-col gap-2 lg:hidden">
             <div className="text-zk-base font-semibold text-zk-text">我有份嘅盤</div>
             <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
               {data.sites.length === 0 ? (

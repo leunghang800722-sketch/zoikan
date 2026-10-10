@@ -70,7 +70,7 @@ function actionPill(action: string) {
   if (action === "lock_month" || action === "lock") return <Pill variant="warning">{action}</Pill>;
   if (action === "create") return <Pill variant="success">{action}</Pill>;
   return (
-    <Pill variant="broker" color={{ bg: "#f8fafc", fg: "#64748b" }}>
+    <Pill variant="broker" color={{ bg: "var(--zk-surface-2)", fg: "var(--zk-muted)" }}>
       {action}
     </Pill>
   );
@@ -253,7 +253,7 @@ export default function AuditLogPage() {
                 <td className={`${tableCls.td} whitespace-nowrap`} data-testid="audit-log-action-pill">
                   {actionPill(r.action)}
                 </td>
-                <td className={`${tableCls.td} whitespace-nowrap font-mono text-xs`} style={{ color: "#94a3b8" }}>
+                <td className={`${tableCls.td} whitespace-nowrap font-mono text-xs`} style={{ color: "var(--zk-faint)" }}>
                   {r.row_id.slice(0, 12)}
                 </td>
                 <td className={tableCls.tdNum}>

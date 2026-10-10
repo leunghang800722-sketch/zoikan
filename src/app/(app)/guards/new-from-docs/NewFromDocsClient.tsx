@@ -376,7 +376,7 @@ export function NewFromDocsClient() {
           <div className="rounded-lg border border-zk-warning-border bg-zk-warning-bg p-3 text-zk-base text-zk-warning-dark" data-testid="ocr-privacy-notice">
             圖片會傳送去 Claude（Anthropic，美國伺服器）同 DeepSeek（內地伺服器）做辨識，兩邊讀到一致先會預填；本系統唔會儲存圖片。圖片只留喺你部機嘅瀏覽器記憶體，儲存或者離開頁面就會清走。
           </div>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             {(Object.keys(DOC_LABEL) as OcrDocType[]).map((t) => {
               const s = slots[t];
               return (
@@ -419,9 +419,9 @@ export function NewFromDocsClient() {
       {step === "review" && (
         <div className="space-y-3" data-testid="ocr-step-review" data-sticky-page>
           {ocrInfo && <div className="text-zk-sm text-zk-muted">{ocrInfo}。請對住圖逐欄核對：「要核對」同「讀唔到」嘅欄要你確認或者改正先可以繼續。</div>}
-          <div className="flex flex-col gap-4 md:flex-row md:items-start">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
             {/* 證件圖：手機 375 闊 sticky 細圖（撳一下放大），桌面 sticky 大圖——對欄值唔使捲上捲落 */}
-            <div className="sticky top-0 z-20 space-y-2 bg-zk-bg pb-2 md:top-2 md:w-1/2 md:self-start" data-testid="ocr-image-pane">
+            <div className="sticky top-0 z-20 space-y-2 bg-zk-bg pb-2 lg:top-2 lg:w-1/2 lg:self-start" data-testid="ocr-image-pane">
               {uploaded.length > 0 ? (
                 <>
                   <div className="flex flex-wrap gap-1.5">
@@ -438,7 +438,7 @@ export function NewFromDocsClient() {
                       alt={`${DOC_SHORT[viewDoc]}原圖`}
                       onClick={() => setZoom((z) => !z)}
                       title="撳一下放大／縮細"
-                      className={`w-full cursor-zoom-in rounded border border-zk-border object-contain ${zoom ? "max-h-[75vh]" : "max-h-32"} md:max-h-[80vh]`}
+                      className={`w-full cursor-zoom-in rounded border border-zk-border object-contain ${zoom ? "max-h-[75vh]" : "max-h-32"} lg:max-h-[80vh]`}
                       data-testid="ocr-review-image"
                     />
                   )}
@@ -447,7 +447,7 @@ export function NewFromDocsClient() {
                 <div className="rounded-lg border border-zk-border p-3 text-zk-base text-zk-muted">全部自己輸入模式：冇上載圖片，請直接填寫。</div>
               )}
             </div>
-            <div className="space-y-3 md:w-1/2">
+            <div className="space-y-3 lg:w-1/2">
               {critPending && ocrInfo && (
                 <div className="rounded-lg border border-zk-warning-border bg-zk-warning-bg p-2.5 text-zk-base font-semibold text-zk-warning-dark" data-testid="ocr-critical-notice">
                   {CRITICAL_MSG}

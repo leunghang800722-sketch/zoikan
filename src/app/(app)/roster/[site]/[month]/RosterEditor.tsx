@@ -33,6 +33,7 @@ import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { confirmLeaveIfUnsaved, setUnsavedCount } from "@/lib/ui/unsaved-guard";
 import { rememberMonth } from "@/lib/ui/month-store";
+import { MQ_BELOW_SM } from "@/lib/ui/breakpoints";
 
 // ---------------------------------------------------------------------------
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
@@ -242,20 +243,20 @@ function dayMeta(y: number, m: number, day: number, today: { y: number; m: numbe
     weekday: WEEKDAY_LABELS[wd],
     isWeekend,
     isToday,
-    headerBg: isToday ? "#dbeafe" : isWeekend ? "#f1f5f9" : "#fafbfc",
-    weekdayColor: isToday ? "#2563eb" : "#94a3b8",
-    dayColor: isToday ? "#1d4ed8" : isWeekend ? "#64748b" : "#0f172a",
-    colBg: isToday ? "#eff6ff" : isWeekend ? "#f8fafc" : undefined,
+    headerBg: isToday ? "var(--zk-primary-tint)" : isWeekend ? "var(--zk-surface)" : "var(--zk-header)",
+    weekdayColor: isToday ? "var(--zk-primary)" : "var(--zk-faint)",
+    dayColor: isToday ? "var(--zk-primary-dark)" : isWeekend ? "var(--zk-muted)" : "var(--zk-text)",
+    colBg: isToday ? "var(--zk-primary-tint-soft)" : isWeekend ? "var(--zk-surface-2)" : undefined,
   };
 }
 
 // WP-R2：底部合計行「已排」數配色（README §04：≥所需 綠；<所需 但
 // ≥所需×0.55 中性；否則紅；冇所需設定＝中性）。
 function coverageColor(count: number, required: number): string {
-  if (!required || required <= 0) return "#334155";
-  if (count >= required) return "#0f766e";
-  if (count >= required * 0.55) return "#334155";
-  return "#dc2626";
+  if (!required || required <= 0) return "var(--zk-text-secondary)";
+  if (count >= required) return "var(--zk-success)";
+  if (count >= required * 0.55) return "var(--zk-text-secondary)";
+  return "var(--zk-danger)";
 }
 
 function workDateStr(year: number, monthNum: number, day: number): string {
@@ -415,7 +416,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
     onEditTextChange,
     onCommitEdit,
   } = props;
-  const tdBg = isError ? "#fecaca" : colBg;
+  const tdBg = isError ? "var(--zk-danger-border)" : colBg;
   // 三層可以同時出現、唔會互撞：選中＝outline（藍）；dirty＝inset ring
   // box-shadow（琥珀色 #f59e0b）；draft／請假＝chip 自己嘅 border（喺
   // chip span 層，唔喺呢度，draft 虛線藍／請假虛線橙）。
@@ -427,7 +428,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
   // 線 inset ring，唔會混淆），令「呢格未儲存」呢個狀態同「呢格揀緊」
   // 完全用唔同顏色，一眼分得出。
   const shadows: string[] = [];
-  if (isDirty) shadows.push("inset 0 0 0 2px #f59e0b");
+  if (isDirty) shadows.push("inset 0 0 0 2px var(--zk-amber)");
   if (inRange && !selected) shadows.push("inset 0 0 0 9999px rgba(37,99,235,.08)");
   return (
     <td
@@ -436,7 +437,7 @@ const DayCell = memo(function DayCell(props: DayCellProps) {
         width: dayColW,
         height: rowH,
         background: tdBg,
-        outline: selected ? "2px solid #2563eb" : undefined,
+        outline: selected ? "2px solid var(--zk-primary)" : undefined,
         outlineOffset: selected ? -2 : undefined,
         boxShadow: shadows.length > 0 ? shadows.join(", ") : undefined,
       }}
@@ -512,7 +513,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // 日期欄永遠被固定欄遮住，捲極都見唔到。compact（<640px）改用窄欄並收起工號／雞頭欄。
   const [compact, setCompact] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 639px)");
+    const mq = window.matchMedia(MQ_BELOW_SM);
     const apply = () => setCompact(mq.matches);
     apply();
     mq.addEventListener("change", apply);
@@ -1796,7 +1797,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     const keyBufferText = keyBuffer && keyBuffer.r === r && keyBuffer.d === d ? keyBuffer.text : undefined;
     const m = dayMetaList[d - 1];
 
-    const chip = invalid ? { bg: "#fee2e2", fg: "#b91c1c", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
+    const chip = invalid ? { bg: "var(--zk-danger-tint)", fg: "var(--zk-danger-dark)", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
     const title = c?.status ? `狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
 
     return (
@@ -1902,7 +1903,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               type="button"
               disabled={dirtyCount === 0}
               className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base disabled:cursor-not-allowed disabled:opacity-45"
-              style={{ color: "#94a3b8" }}
+              style={{ color: "var(--zk-faint)" }}
               onClick={handleRevert}
             >
               還原
@@ -2050,7 +2051,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                   data-testid="broker-stats-row"
                   data-broker-code={b.code}
                   className={`flex flex-col gap-1.5 rounded-lg border bg-white px-3.5 py-2.5 ${isBrokerSession ? "" : "cursor-pointer hover:bg-zk-header"}`}
-                  style={{ borderColor: isSelected ? bc.dot : "#e5e7eb" }}
+                  style={{ borderColor: isSelected ? bc.dot : "var(--zk-border)" }}
                   onClick={isBrokerSession ? undefined : () => setSelectedBrokerCode(isSelected ? null : b.code)}
                 >
                   <div className="flex items-center justify-between">
@@ -2065,7 +2066,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     <span className="text-zk-lg font-bold text-zk-text">{b.confirmed}</span>
                     <span className="text-zk-xs text-zk-muted">
                       已確認 · 待審批{" "}
-                      <span style={{ color: b.pending > 0 ? "#b45309" : "#64748b", fontWeight: b.pending > 0 ? 600 : 400 }}>{b.pending}</span>
+                      <span style={{ color: b.pending > 0 ? "var(--zk-warning-darker)" : "var(--zk-muted)", fontWeight: b.pending > 0 ? 600 : 400 }}>{b.pending}</span>
                     </span>
                   </div>
                   <div className="h-1 overflow-hidden rounded-full bg-zk-surface">
@@ -2125,7 +2126,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                   data-broker-code={b.code}
                   disabled={isBrokerSession}
                   className="flex shrink-0 items-center gap-1 rounded-[14px] border px-2 py-1 text-zk-xs text-zk-text-secondary"
-                  style={{ borderColor: isSelected ? bc.dot : "#e5e7eb" }}
+                  style={{ borderColor: isSelected ? bc.dot : "var(--zk-border)" }}
                   onClick={() => setSelectedBrokerCode(isSelected ? null : b.code)}
                 >
                   <span className="h-[7px] w-[7px] rounded-sm" style={{ background: bc.dot }} />
@@ -2183,24 +2184,24 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 const s = shiftCodeStyle(code);
                 return (
                   <span key={code} className="inline-flex items-center gap-1">
-                    <span className="h-3 w-3 rounded-[3px]" style={{ background: s.bg === "transparent" ? "#f1f5f9" : s.bg, border: s.border }} />
+                    <span className="h-3 w-3 rounded-[3px]" style={{ background: s.bg === "transparent" ? "var(--zk-surface)" : s.bg, border: s.border }} />
                     {code}
                   </span>
                 );
               })}
               <span className="inline-flex items-center gap-1">
-                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed #f59e0b" }} />
+                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed var(--zk-amber)" }} />
                 假
               </span>
               <span className="inline-flex items-center gap-1">
-                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed #2563eb" }} />
+                <span className="h-3 w-3 rounded-[3px]" style={{ border: "1px dashed var(--zk-primary)" }} />
                 待批
               </span>
               {/* P2 整合驗收應修①：加返「未儲存」圖例——同格仔嘅 dirty inset
                   ring 同一個顏色（琥珀色），等用戶睇圖例就知呢個顏色代表
                   「未儲存」，唔使靠估。 */}
               <span className="inline-flex items-center gap-1">
-                <span className="h-3 w-3 rounded-[3px]" style={{ boxShadow: "inset 0 0 0 2px #f59e0b" }} />
+                <span className="h-3 w-3 rounded-[3px]" style={{ boxShadow: "inset 0 0 0 2px var(--zk-amber)" }} />
                 未儲存
               </span>
             </span>
@@ -2322,7 +2323,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 {!compact && (
                   <th
                     className="sticky top-0 z-20 bg-zk-header text-left text-zk-xs font-semibold text-zk-muted"
-                    style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid #e5e7eb", borderBottom: "1px solid #e5e7eb", padding: "8px 0 8px 12px" }}
+                    style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid var(--zk-border)", borderBottom: "1px solid var(--zk-border)", padding: "8px 0 8px 12px" }}
                   >
                     更別
                   </th>
@@ -2334,8 +2335,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     width: nameColWidth,
                     minWidth: nameColWidth,
                     position: "sticky",
-                    borderRight: compact || !showBrokerCol ? "1px solid #e5e7eb" : undefined,
-                    borderBottom: "1px solid #e5e7eb",
+                    borderRight: compact || !showBrokerCol ? "1px solid var(--zk-border)" : undefined,
+                    borderBottom: "1px solid var(--zk-border)",
                     padding: compact ? "0 12px" : "8px 10px",
                     boxShadow: compact ? "2px 0 6px rgba(0,0,0,.04)" : undefined,
                   }}
@@ -2345,7 +2346,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 {showBrokerCol && (
                   <th
                     className="sticky top-0 z-20 bg-zk-header text-left text-zk-xs font-semibold text-zk-muted"
-                    style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, minWidth: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb", borderBottom: "1px solid #e5e7eb", padding: "8px 10px" }}
+                    style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, minWidth: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid var(--zk-border)", borderBottom: "1px solid var(--zk-border)", padding: "8px 10px" }}
                   >
                     雞頭
                   </th>
@@ -2356,7 +2357,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     <th
                       key={d}
                       className="sticky top-0 z-10 text-center font-normal"
-                      style={{ width: dayColW, background: m.headerBg, borderBottom: "1px solid #e5e7eb", padding: "5px 0" }}
+                      style={{ width: dayColW, background: m.headerBg, borderBottom: "1px solid var(--zk-border)", padding: "5px 0" }}
                       data-testid={`roster-day-header-${d}`}
                       data-today={m.isToday || undefined}
                       data-weekend={m.isWeekend || undefined}
@@ -2384,12 +2385,12 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     data-row-index={r}
                     data-row-key={row.key}
                     className="hover:bg-zk-header"
-                    style={{ height: rowH, borderBottom: "1px solid #f1f5f9" }}
+                    style={{ height: rowH, borderBottom: "1px solid var(--zk-surface)" }}
                   >
                     {!compact && (
                       <td
                         className="sticky z-10 bg-white text-center text-xs text-zk-muted"
-                        style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid #e5e7eb" }}
+                        style={{ left: leftOffsets.shiftType, width: DESK_COL_SHIFT_TYPE, minWidth: DESK_COL_SHIFT_TYPE, position: "sticky", borderRight: "1px solid var(--zk-border)" }}
                       >
                         <div className="flex flex-col items-center gap-0.5">
                           <span>{row.shiftTypeCode}</span>
@@ -2415,7 +2416,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                         minWidth: nameColWidth,
                         maxWidth: nameColWidth,
                         position: "sticky",
-                        borderRight: compact || !showBrokerCol ? "1px solid #e5e7eb" : undefined,
+                        borderRight: compact || !showBrokerCol ? "1px solid var(--zk-border)" : undefined,
                         boxShadow: compact ? "2px 0 6px rgba(0,0,0,.04)" : undefined,
                       }}
                     >
@@ -2448,7 +2449,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                       )}
                     </td>
                     {showBrokerCol && (
-                      <td className="sticky z-10 bg-white px-1.5" style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid #e5e7eb" }}>
+                      <td className="sticky z-10 bg-white px-1.5" style={{ left: leftOffsets.broker, width: DESK_COL_BROKER, position: "sticky", borderRight: "1px solid var(--zk-border)" }}>
                         {/* B1-5（WP-ATTRIB）：內部角色可以逐行改結算單位
                             （對新格生效——已存在嘅格唔受影響，見
                             handleSave 嘅 isExistingRecord 判斷）；鎖定月
@@ -2511,7 +2512,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
               <tr>
                 <td
                   className="sticky z-10 bg-zk-header text-zk-xs text-zk-muted"
-                  style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px" }}
+                  style={{ left: 0, position: "sticky", borderTop: "1px solid var(--zk-border)", padding: "7px 12px" }}
                   colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
                 >
                   {isBrokerSession ? "自己已排" : "每日已排 / 所需"}
@@ -2523,7 +2524,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                       <td
                         key={i}
                         className="text-center text-zk-xs font-semibold"
-                        style={{ borderTop: "1px solid #e5e7eb", padding: "7px 0", color: "#334155" }}
+                        style={{ borderTop: "1px solid var(--zk-border)", padding: "7px 0", color: "var(--zk-text-secondary)" }}
                         title={`自己已排 ${t}`}
                       >
                         {t}
@@ -2534,7 +2535,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                     <td
                       key={i}
                       className="text-center"
-                      style={{ borderTop: "1px solid #e5e7eb", padding: compact ? "5px 0" : "6px 0" }}
+                      style={{ borderTop: "1px solid var(--zk-border)", padding: compact ? "5px 0" : "6px 0" }}
                       title={`已排 ${t} / 所需 ${req}`}
                     >
                       <div className="text-zk-xs font-semibold" style={{ color: coverageColor(t, req) }}>
@@ -2549,13 +2550,13 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                 <tr data-testid="roster-selected-broker-total">
                   <td
                     className="sticky z-10 text-zk-xs font-medium"
-                    style={{ left: 0, position: "sticky", borderTop: "1px solid #e5e7eb", padding: "7px 12px", background: "#eff6ff", color: "#1e40af" }}
+                    style={{ left: 0, position: "sticky", borderTop: "1px solid var(--zk-border)", padding: "7px 12px", background: "var(--zk-primary-tint-soft)", color: "var(--zk-primary-deep)" }}
                     colSpan={compact ? 1 : 2 + (showBrokerCol ? 1 : 0)}
                   >
                     所選雞頭合計（{selectedBrokerCode}）
                   </td>
                   {selectedBrokerTotals.map((t, i) => (
-                    <td key={i} className="text-center text-zk-xs" style={{ borderTop: "1px solid #e5e7eb", background: "#eff6ff", color: "#1e40af" }}>
+                    <td key={i} className="text-center text-zk-xs" style={{ borderTop: "1px solid var(--zk-border)", background: "var(--zk-primary-tint-soft)", color: "var(--zk-primary-deep)" }}>
                       {t}
                     </td>
                   ))}
@@ -2593,9 +2594,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
                   type="button"
                   className="h-11 w-full rounded-lg text-zk-base font-semibold"
                   style={{
-                    background: s.bg === "transparent" ? "#fff" : s.bg,
-                    color: s.fg === "transparent" ? "#0f172a" : s.fg,
-                    border: "1px solid #e5e7eb",
+                    background: s.bg === "transparent" ? "var(--zk-card)" : s.bg,
+                    color: s.fg === "transparent" ? "var(--zk-text)" : s.fg,
+                    border: "1px solid var(--zk-border)",
                   }}
                   onClick={() => {
                     // 安全網：撳緊螢幕鍵盤嗰下，如果實體鍵盤仲有個 pending
@@ -2823,7 +2824,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
             // 糧明細完全消失，比「未定價」更嚴重）；有未定價格用警示色
             // （唔係「儲存成功」嗰隻深藍色）；B1-5：淨係「結算單位推算」
             // 優先序最低（用同一個警示色，唔算錯，淨係建議覆核）。
-            background: saveToastNoSettlement ? "#b91c1c" : saveToastUnpriced ? "#b45309" : saveToastSettlementInferred ? "#b45309" : "#0f172a",
+            background: saveToastNoSettlement ? "var(--zk-danger-dark)" : saveToastUnpriced ? "var(--zk-warning-darker)" : saveToastSettlementInferred ? "var(--zk-warning-darker)" : "var(--zk-text)",
             boxShadow: "0 6px 18px rgba(15,23,42,.3)",
           }}
         >

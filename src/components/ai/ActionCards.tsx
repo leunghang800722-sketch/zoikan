@@ -137,7 +137,7 @@ function ActionCardView({ card, onDone }: { card: ActionCard; onDone?: (label: s
 
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
         {phase.kind === "done" ? (
-          <span className="text-zk-sm font-semibold text-[#15803d]" data-testid="ai-action-done">
+          <span className="text-zk-sm font-semibold text-zk-success-dark" data-testid="ai-action-done">
             已做
           </span>
         ) : card.type === "triage_answer" ? (

@@ -112,7 +112,7 @@ export function MonthHealthCard({ month, groups = [], onLoaded, onOpenTriage }: 
           {list.map((f) => {
             const cols = f.detail && f.detail.length > 0 ? Object.keys(f.detail[0]!) : [];
             const dup = healthDupReviewCount(f.code, groups);
-            const dot = f.severity === "critical" ? "#dc2626" : f.severity === "warn" ? "#f97316" : "#94a3b8";
+            const dot = f.severity === "critical" ? "var(--zk-danger)" : f.severity === "warn" ? "var(--zk-warning)" : "var(--zk-faint)";
             return (
               <li key={f.code} className="border-b border-zk-border-soft px-3 py-2 last:border-b-0" data-health={f.code}>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zk-base">

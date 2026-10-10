@@ -88,7 +88,7 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
             />
             <div className="mt-0.5 flex gap-1" data-testid="change-password-strength" data-strength={strength}>
               {[0, 1, 2].map((i) => (
-                <span key={i} className="h-[3px] flex-1 rounded-sm" style={{ background: i < strength ? "#0f766e" : "#e5e7eb" }} />
+                <span key={i} className="h-[3px] flex-1 rounded-sm" style={{ background: i < strength ? "var(--zk-success)" : "var(--zk-border)" }} />
               ))}
             </div>
             <span className="text-zk-xs text-zk-muted">至少 8 位，建議加數字同英文</span>

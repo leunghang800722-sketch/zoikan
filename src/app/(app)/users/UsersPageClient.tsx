@@ -72,7 +72,7 @@ const emptyForm = {
 function RolePill({ roleName, baseRole }: { roleName: string; baseRole: string }) {
   const label = uiLabel(roleName);
   if (baseRole === "老闆") return <Pill variant="monthly">{label}</Pill>;
-  if (baseRole === "雞頭") return <Pill variant="broker" color={{ bg: "#ccfbf1", fg: "#0f766e" }}>{label}</Pill>;
+  if (baseRole === "雞頭") return <Pill variant="broker" color={{ bg: "var(--zk-success-tint)", fg: "var(--zk-success)" }}>{label}</Pill>;
   return <Pill variant="neutral">{label}</Pill>;
 }
 
@@ -363,7 +363,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                         <button
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                          className="rounded-[5px] border border-[#a7f3d0] px-[9px] py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
+                          className="rounded-[5px] border border-zk-success/30 px-[9px] py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
                         >
                           恢復
                         </button>

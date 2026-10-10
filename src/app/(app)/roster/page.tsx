@@ -53,7 +53,7 @@ function StatusPill({ row }: { row: OverviewRow }) {
   // variant 唔同色階，唔改現有 ui/Pill.tsx，呢度用同一個組件外形手砌）。
   if (row.shortfall !== null && row.shortfall > 0) {
     return (
-      <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap" style={{ background: "#fef2f2", color: "#dc2626" }}>
+      <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap" style={{ background: "var(--zk-danger-bg)", color: "var(--zk-danger)" }}>
         欠 {row.shortfall} 更
       </span>
     );
@@ -121,7 +121,7 @@ export default function RosterEntryPage() {
       <Banner kind="error" message={error} />
       <EmptyMonthNotice month={month} isEmpty={!overviewLoading && overview.length === 0} onJump={setMonth} />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(280px,380px)_1fr]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,380px)_1fr]">
         {/* 左卡：開啟更表。 */}
         <form onSubmit={onOpen} className="flex h-fit flex-col gap-3 rounded-[10px] border border-zk-border bg-white p-4">
           <div className="text-zk-base font-semibold text-zk-text">開啟更表</div>
