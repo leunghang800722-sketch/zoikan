@@ -418,3 +418,20 @@ API 單獨 p50（3 次）：最輕 API 地板 ~360 ms（香港→新加坡 TLS�
 7. `writeAuditMany` 唔再逐條 +1 ms，同批共用 DB `now()`；batch test 改為斷言同一 created_at＋rowId 集合。
 8. batch 批量路徑 tx 內先 `SELECT id … FOR UPDATE`（按 id 排序鎖）再 `findMany` 重讀 before，audit before 用 tx 內重讀值（計價判斷仍用 tx 外 plan，同逐格寫法一致）。
 驗證：vitest 208 檔／3414 passed；tsc 0；lint 0；`rm -rf .next` build 過；`gate:locked-months` 12/12，snapshot 5,080 個數字葉同修正前一樣。
+
+#### 8.2.1 驗收、部署、正式站 after（2026-10-11 凌晨）
+- Opus 5.5 第一輪**唔通過**（3 必修：lookups cache key 形狀撞（各頁 `ApiResult` vs 編輯器 `T[]`，60 秒內跨頁會 TypeError／下拉變空）；登出／登入軟導航唔清 cache，60 秒內雞頭同分頁登入會攞到上一用戶嘅全表（違反雞頭隔離）；§8.2 lite 數字量錯（`take=100`））；執行員補 8 項（`246c6ad`：`cachedRows` 統一形狀、cache 按 userId scope＋登出／登入清、數字改正 129,497 B raw／16.5 KB gz、`runOneClickMonthClose` 包 `withReportContext`、舊 `apiGetAll` skip、daily-requirements 日期驗證、`writeAuditMany` 同一 now()、batch tx 內 `FOR UPDATE` 重讀 before）；第二輪通過（0 必修）。驗收員自寫 test：memo 並發 A／B 互不影響、10 個並發各計一次、同 request 同 key 只計 1 次；跨用戶 scope 切換後 cache miss；batch 2,000 格 23／24 條 SQL。(ii)：one-click 包裝嘅守護 test 喺舊 code 都過（要改讀 `als.getStore()`）；同批 audit 次序唔再保證；兩批同時 create 同組新 key 次序相反會死鎖回 500（舊有）；`api-client.ts` 註解不準；§8.2 vitest 字眼（3,399＋15）。
+- merge main `82ea938`；部署 `6aca6162c0a5252069b82f55` RUNNING 16:07Z：56 migrations／No pending、助手 claude、OCR 自檢 ok、login 200。
+- **正式站 after（老闆 Chrome，同一 script）**：
+
+| 項目 | Before（基線） | 階段 1 後 | 階段 2 後 |
+|---|---|---|---|
+| CSS 每頁（gz） | 193 KB | 193 | **52 KB**（41＋10）；h1／semibold 計算字重 700／600 有分別 |
+| 首頁 API | shortfall 781、pending-summary 1,587 | 588／953 | `shortfall?include_margin=0` 同 `margin-progress` **並行**（暖載見下）、pending-summary 同前 |
+| 更表編輯器 | 11 API、guards 47 KB | 11 API、guards 47 KB | **10 API、guards lite 26 KB、全部 API 合共 37 KB** |
+| `/rate-cards`／`/approvals` guards | 47 KB（2.0–2.4 s） | 47 KB（0.83–0.87 s） | **lite 26 KB**（0.77–0.98 s，同其他請求並行） |
+| `/month-close` load | 683 | 1,512 | **978**；側欄對話唔再每頁載（0 次） |
+| `/guards` 頁 | guards 47 KB、DOM 17,934 | 47 KB | 47 KB（名冊本身要全欄）、DOM 19,332——階段 4／5 做虛擬化或分頁 render |
+
+- 未達／留意：字型 CSS 41 KB gz（目標 <40，差 1 KB；`next/font/local` 切片留待老闆要唔要）；更表編輯器冷載仍 10 個 API（暖載 7）；`/guards` 頁仍載全欄（名冊頁本身需要），DOM 節點數係階段 5 拆 GuardsClient 時做分頁／虛擬 render。
+- 行為改變（已話俾老闆知）：更表編輯器「每日已排／所需」只計本月（舊版將該盤所有月份按「幾號」加埋，係顯示 bug）；首頁毛利卡仍每次開即時重計（無 cache），換日唔重拉毛利。
