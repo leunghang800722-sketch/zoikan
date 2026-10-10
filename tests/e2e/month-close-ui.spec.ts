@@ -312,6 +312,12 @@ test.describe("月結頁 1e 手機", () => {
     await page.getByTestId("month-close-month-input").fill(MONTH);
     await expect(page.getByText("④ 報告")).toBeVisible();
     await noHScroll(page);
+    // P3-4.4：手機一頁唔超過 3 屏（3×800）就見到報告；右欄變底部 sticky CTA（fixed，貼底）。
+    const reportY = await page.getByText("④ 報告").evaluate((e) => e.getBoundingClientRect().top + window.scrollY);
+    expect(reportY).toBeLessThanOrEqual(3 * 800);
+    const rail = await page.getByTestId("rail-main").evaluate((e) => ({ pos: getComputedStyle(e).position, bottom: Math.round(window.innerHeight - e.getBoundingClientRect().bottom) }));
+    expect(rail.pos).toBe("fixed");
+    expect(rail.bottom).toBe(0);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/mock-375.png`, fullPage: true });
 
     await page.getByTestId("rail-open-triage").click();

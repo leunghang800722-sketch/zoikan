@@ -113,6 +113,8 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
     await page.goto("/guards");
     await openEditByName(page, guard.nameZh);
 
+    // P3-4.3：Drawer 分 tab（基本／證件／聯絡／長工／銀行），逐個 tab 填。
+    await page.getByTestId("guard-tab-docs").click();
     // 牌照與證件。WP-STAFFNO：「牌照類別」而家係衍生顯示值（唔再係
     // select，見 deriveSiaPermitExpiry()）——填甲類到期日先會令佢顯示
     // "A"。
@@ -120,6 +122,7 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
     await fieldControl(page, "甲類到期").locator("input").fill("2027-06-01");
 
     // 個人資料。
+    await page.getByTestId("guard-tab-basic").click();
     await fieldControl(page, "身份證號碼").locator("input").fill(TEST_HKID);
     await fieldControl(page, "出生日期").locator("input").fill("1990-05-01");
     await fieldControl(page, "地址").locator("input").fill("測試地址一段街 1 號");
@@ -127,12 +130,14 @@ test("(a) 老闆：填牌照／身份證／銀行資料 → 儲存 → 重開見
     await fieldControl(page, "緊急聯絡人電話").locator("input").fill("61009900");
 
     // Blacklist。
+    await page.getByTestId("guard-tab-docs").click();
     await fieldControl(page, "Check 結果").locator("select").selectOption("clear");
     await fieldControl(page, "Check 日期").locator("input").fill("2026-01-01");
 
     // 銀行——「銀行」係「戶口號碼」以外冇其他重疊 label，但要 anchor
     // 住，唔係就會撞中下面「戶口號碼」欄本身 label 冇含「銀行」呢個
     // 字，其實唔會撞，anchor 純粹保險。
+    await page.getByTestId("guard-tab-bank").click();
     await fieldControl(page, "銀行", true).locator("input").fill("測試銀行");
     await fieldControl(page, "戶口號碼").locator("input").fill("123-456789-001");
     await fieldControl(page, "收款人名").locator("input").fill(guard.nameZh);
@@ -211,6 +216,7 @@ test("(b) 主管：開同一人——見牌照分區，冇個人資料／銀行�
     await page.goto("/guards");
     await openEditByName(page, guard.nameZh);
 
+    await page.getByTestId("guard-tab-docs").click();
     await expect(page.getByRole("heading", { name: "牌照與證件" })).toBeVisible();
     await expect(fieldControl(page, "牌照號碼").locator("input")).toHaveValue("SIA-E2E-02");
 

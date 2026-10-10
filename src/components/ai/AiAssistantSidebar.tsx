@@ -483,7 +483,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             </h2>
             <div className="ml-auto flex shrink-0 items-center gap-1">
               {!meetingMode && (
-                <Button variant="ghost" size="sm"
+                <Button variant="ghost" size="sm" className="!px-1.5 !text-zk-xs"
                   type="button"
                   data-testid="ai-feedback-start"
                   onClick={handleStartMeeting}
@@ -495,7 +495,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 </Button>
               )}
               {!isMobile && !meetingMode && (
-                <Button variant="ghost" size="sm"
+                <Button variant="ghost" size="sm" className="!px-1.5 !text-zk-xs"
                   type="button"
                   onClick={toggleWidth}
                   aria-label={width >= WIDE_WIDTH ? "縮窄側欄" : "擴闊側欄"}
@@ -505,7 +505,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                 </Button>
               )}
               {!meetingMode && (
-                <Button variant="ghost" size="sm"
+                <Button variant="ghost" size="sm" className="!px-1.5 !text-zk-xs"
                   type="button"
                   data-testid="ai-clear-conversation"
                   onClick={() => setConfirmingClear(true)}
@@ -514,7 +514,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   清空
                 </Button>
               )}
-              <Button variant="ghost" size="sm"
+              <Button variant="ghost" size="sm" className="!px-1.5 !text-zk-xs"
                 type="button"
                 aria-label="關閉在勤助手"
                 onClick={() => setOpen(false)}

@@ -97,7 +97,8 @@ test("老闆：開頁→重算→逐人結算出現→加津貼→重算→Autop
   const autopayCardValue = page.locator("text=Autopay 合計").locator("xpath=following-sibling::div").first();
   const autopayCardBefore = await autopayCardValue.innerText();
 
-  // ③ 人手輸入區：加一項津貼
+  // ③ 人手輸入區（P3-4.3：長工糧頁分 tab）：加一項津貼
+  await page.getByTestId("ltpay-tab-inputs").click();
   await page.locator("select").first().selectOption({ index: 1 }); // 「請揀」之後嗰個就係我哋起嘅測試長工（呢個月淨係佢有合約）
   await page.locator("select").nth(1).selectOption("special_allowance");
   await page.locator('input[placeholder*="deduction"]').fill("500");
@@ -106,6 +107,7 @@ test("老闆：開頁→重算→逐人結算出現→加津貼→重算→Autop
   // violation），用 cell role 淨係揀列表表格嗰行。
   await expect(page.getByRole("cell", { name: "津貼（勤工獎）" })).toBeVisible({ timeout: 10_000 });
 
+  await page.getByTestId("ltpay-tab-pay").click();
   await page.getByRole("button", { name: "重算本月" }).click();
   // 「重算完成」呢句喺兩次重算之間文字可能一樣（都係嗰 1 人），單靠
   // getByText(...).toBeVisible() 唔可以保證真係等到*呢一次*嘅重算完成
@@ -148,6 +150,7 @@ test("主管／保安員：nav 見唔到「長工糧」，直接打 URL 見 403 
 test("老闆：Maxwell 導入（CSV）——在職／離職兩個 CSV 上載，通知顯示行數（對唔到嘅行列出，唔會亂配）", async ({ page }) => {
   await loginAs(page, "老闆");
   await page.goto("/reports/longterm-payroll");
+  await page.getByTestId("ltpay-tab-contracts").click(); // P3-4.3：Maxwell 導入喺「合約」tab
   const header = Array.from({ length: 30 }, (_, i) => (i === 2 ? "Staff No." : i === 4 ? "Name" : "")).join(",");
   const row = Array.from({ length: 30 }, (_, i) => (i === 2 ? `MG9${RAND.slice(0, 3)}` : i === 4 ? `測試對唔到-${RAND}` : i === 17 ? "1/3/2024" : i === 22 ? '"$15,000"' : "")).join(",");
   await page.getByTestId("maxwell-active-csv").setInputFiles({ name: "active.csv", mimeType: "text/csv", buffer: Buffer.from(`Maxwell\r\n${header}\r\n${row}\r\n`) });
