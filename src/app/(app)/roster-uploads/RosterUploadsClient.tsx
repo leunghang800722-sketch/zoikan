@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { Field, selectCls } from "@/components/ui/Field";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow, TableEmptyRow } from "@/components/ui/DataTable";
 import { fmtDate, fmtDateTime } from "@/lib/ui/format";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { classifyUploadResult, runQueueWithConcurrency, summarizeOutcomes, type RosterUploadPostData, type UploadOutcome } from "@/lib/roster-upload/upload-queue";
@@ -602,7 +602,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
             <MonthPicker label="月份" value={month} onChange={setMonth} />
             {tab === "upload" && (
               <>
-                <label className="flex items-center gap-1.5 text-[12.5px] text-zk-muted">
+                <label className="flex items-center gap-1.5 text-zk-sm text-zk-muted">
                   <input type="checkbox" checked={includeVoided} onChange={(e) => setIncludeVoided(e.target.checked)} />
                   顯示已作廢
                 </label>
@@ -629,7 +629,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
               role="tab"
               aria-selected={tab === key}
               data-testid={`roster-uploads-tab-${key}`}
-              className={`-mb-px border-b-2 px-3.5 py-2 text-[13.5px] ${tab === key ? "border-zk-primary font-semibold text-zk-primary-dark" : "border-transparent text-zk-text-secondary hover:text-zk-text"}`}
+              className={`-mb-px border-b-2 px-3.5 py-2 text-zk-base ${tab === key ? "border-zk-primary font-semibold text-zk-primary-dark" : "border-transparent text-zk-text-secondary hover:text-zk-text"}`}
             >
               {label}
             </Link>
@@ -643,22 +643,22 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
       <Banner kind="success" message={notice} />
 
       {reconcileAllRunning && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px] text-zk-text" data-testid="reconcile-all-running">
+        <div className="rounded-lg border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base text-zk-text" data-testid="reconcile-all-running">
           重新對數全月執行緊…（重算長工結算單位＋對數＋全部以更表為準套用，成月幾十個上載可能要幾分鐘）。可以留喺呢頁等，或者離開再返嚟——歷史會保留。
         </div>
       )}
 
       {reconcileAllResult?.result && (
-        <div className="rounded-lg border border-zk-border bg-white p-4 text-[12.5px]" data-testid="reconcile-all-result">
-          <div className="mb-1 text-[14px] font-semibold text-zk-text">重新對數全月結果（{reconcileAllResult.month.slice(0, 7)}）</div>
+        <div className="rounded-lg border border-zk-border bg-white p-4 text-zk-sm" data-testid="reconcile-all-result">
+          <div className="mb-1 text-zk-md font-semibold text-zk-text">重新對數全月結果（{reconcileAllResult.month.slice(0, 7)}）</div>
           <div className="mb-2 text-zk-text" data-testid="reconcile-all-summary">
             {reconcileAllResult.result.upload_count} 個上載，以更表為準改咗 {reconcileAllResult.result.totals.applied} 項
             {reconcileAllResult.result.totals.settlement_changed > 0 ? `（其中 ${reconcileAllResult.result.totals.settlement_changed} 格結算單位）` : ""}
             ，{reconcileAllResult.result.totals.unresolved_before > 0 ? `仲有 ${reconcileAllResult.result.totals.unresolved_before} 格保安員未配對。` : "冇未配對保安員。"}
-            {reconcileAllResult.result.totals.uploads_with_errors > 0 && <span className="text-red-700">　{reconcileAllResult.result.totals.uploads_with_errors} 個上載有錯誤。</span>}
+            {reconcileAllResult.result.totals.uploads_with_errors > 0 && <span className="text-zk-danger-dark">　{reconcileAllResult.result.totals.uploads_with_errors} 個上載有錯誤。</span>}
           </div>
           {(reconcileAllResult.result.warnings ?? []).map((w) => (
-            <div key={w} className="mb-2 rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-amber-800" data-testid="reconcile-all-warning">
+            <div key={w} className="mb-2 rounded border border-zk-warning-border bg-zk-warning-bg px-2.5 py-1.5 text-zk-warning-dark" data-testid="reconcile-all-warning">
               {w}
             </div>
           ))}
@@ -687,8 +687,8 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                         套用 {u.applied}・改結算 {u.settlement_changed}・未配對 {u.before.unresolved}
                       </span>
                     </div>
-                    {u.skipped_apply_reason && <div className="mt-0.5 text-amber-700">{u.skipped_apply_reason}</div>}
-                    {(u.errors ?? []).length > 0 && <div className="mt-0.5 break-words text-red-700">{u.errors.slice(0, 3).join("；")}</div>}
+                    {u.skipped_apply_reason && <div className="mt-0.5 text-zk-warning-darker">{u.skipped_apply_reason}</div>}
+                    {(u.errors ?? []).length > 0 && <div className="mt-0.5 break-words text-zk-danger-dark">{u.errors.slice(0, 3).join("；")}</div>}
                   </li>
                 ))}
             </ul>
@@ -720,11 +720,11 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
           onDrop={onDrop}
           onClick={() => fileInputRef.current?.click()}
           className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-8 text-center transition-colors ${
-            dragOver ? "border-[#2563eb] bg-blue-50" : "border-zk-border bg-zk-surface"
+            dragOver ? "border-zk-primary bg-zk-primary-tint-soft" : "border-zk-border bg-zk-surface"
           }`}
         >
-          <div className="text-[13.5px] font-medium text-zk-text">{queueSummary.inProgress > 0 ? "上載緊…" : "拖放更表 xlsx 到呢度（可以一次過拖多個），或者撳呢度揀檔"}</div>
-          <div className="text-[12px] text-zk-muted">可以一次過揀多個 xlsx 檔，單一檔最大 20MB</div>
+          <div className="text-zk-base font-medium text-zk-text">{queueSummary.inProgress > 0 ? "上載緊…" : "拖放更表 xlsx 到呢度（可以一次過拖多個），或者撳呢度揀檔"}</div>
+          <div className="text-zk-sm text-zk-muted">可以一次過揀多個 xlsx 檔，單一檔最大 20MB</div>
           <input
             ref={fileInputRef}
             type="file"
@@ -740,14 +740,14 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
         {queue.length > 0 && (
           <div className="mt-3 space-y-1.5" data-testid="roster-upload-queue">
             {queue.map((item) => (
-              <div key={item.localId} className="flex flex-wrap items-center gap-2 rounded-md border border-zk-border px-2.5 py-1.5 text-[12.5px]">
+              <div key={item.localId} className="flex flex-wrap items-center gap-2 rounded-md border border-zk-border px-2.5 py-1.5 text-zk-sm">
                 <span className="min-w-0 flex-1 truncate font-medium text-zk-text">{item.file.name}</span>
                 {item.status === "pending" && (
                   <>
                     <Pill variant="neutral">等緊</Pill>
-                    <button type="button" onClick={() => cancelQueueItem(item.localId)} className="rounded-[5px] border border-zk-border px-2 py-[2px] text-xs text-[#334155] hover:bg-zk-header">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => cancelQueueItem(item.localId)}>
                       取消
-                    </button>
+                    </Button>
                   </>
                 )}
                 {item.status === "uploading" && <Pill variant="warning">上載緊…</Pill>}
@@ -780,7 +780,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
               </div>
             ))}
             {queueDone && (
-              <div className="text-[12.5px] text-zk-muted" data-testid="roster-upload-queue-summary">
+              <div className="text-zk-sm text-zk-muted" data-testid="roster-upload-queue-summary">
                 總結：成功 {queueSummary.success}／失敗 {queueSummary.error + queueSummary.parseFailed}／要指定盤 {queueSummary.unresolved}
               </div>
             )}
@@ -810,18 +810,10 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {!loading && visibleEntries.length === 0 && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount} data-testid="roster-upload-nothing-to-do">
-                      冇需要處理嘅盤（上載更表之後，未對數／有未配對嘅盤會出現喺呢度）。
-                    </td>
-                  </tr>
+                  <TableEmptyRow colSpan={colCount}>冇需要處理嘅盤（上載更表之後，未對數／有未配對嘅盤會出現喺呢度）。</TableEmptyRow>
                 )}
                 {visibleEntries.map((entry) => {
                   const u = entry.upload;
@@ -829,23 +821,23 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                   return (
                     <tr
                       key={entry.site_id ?? `unresolved:${u?.id}`}
-                      className={`${tableCls.rowHover} ${u && u.id === focusId ? "bg-yellow-50 outline outline-2 -outline-offset-2 outline-zk-primary" : ""}`}
+                      className={`${tableCls.rowHover} ${u && u.id === focusId ? "bg-zk-warning-bg outline outline-2 -outline-offset-2 outline-zk-primary" : ""}`}
                       data-upload-id={u?.id}
                       data-focused={u && u.id === focusId ? "1" : undefined}
                     >
                       <td className={`${tableCls.td} font-medium`}>
                         {entry.site_name}
-                        {!entry.site_id && <span className="ml-1.5 text-[11px] text-orange-600">（盤名未配對）</span>}
+                        {!entry.site_id && <span className="ml-1.5 text-zk-xs text-zk-warning">（盤名未配對）</span>}
                       </td>
                       <td className={tableCls.td}>
                         <Pill variant={statusPillVariant(entry.upload_status)}>{STATUS_LABEL[entry.upload_status] ?? entry.upload_status}</Pill>
-                        {u?.status === "parse_failed" && u.parse_error && <div className="mt-1 text-[11px] text-red-600">{u.parse_error}</div>}
+                        {u?.status === "parse_failed" && u.parse_error && <div className="mt-1 text-zk-xs text-zk-danger">{u.parse_error}</div>}
                       </td>
                       <td className={tableCls.tdNum}>{u ? `v${u.version}` : "—"}</td>
                       <td className={tableCls.tdNum}>{summary ? summary.shift_count : "—"}</td>
                       <td className={tableCls.tdNum}>
                         {summary && summary.unmatched_guard_count > 0 ? (
-                          <span className="font-semibold text-orange-600">{summary.unmatched_guard_count}</span>
+                          <span className="font-semibold text-zk-warning">{summary.unmatched_guard_count}</span>
                         ) : summary ? (
                           "0"
                         ) : (
@@ -855,16 +847,16 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                       <td className={tableCls.td}>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {u && (
-                            <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                            <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                               睇詳情
-                            </button>
+                            </Button>
                           )}
                           {/* B1-3：對數頁入口——冇解到盤（entry.site_id 未定）就冧唔到
                               盤，先要 PATCH 指定盤先可以對數。 */}
                           {u && entry.site_id && (u.status === "parsed" || u.status === "confirmed") && (
                             <Link
                               href={`/roster-uploads/${u.id}/reconcile`}
-                              className="rounded-[5px] border border-zk-primary px-2.5 py-[3px] text-xs font-medium text-zk-primary hover:bg-blue-50"
+                              className="rounded-[5px] border border-zk-primary px-2.5 py-[3px] text-xs font-medium text-zk-primary hover:bg-zk-primary-tint-soft"
                             >
                               對數
                             </Link>
@@ -896,31 +888,31 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
 
           {/* 手機（&lt;640）：卡列表 */}
           <div className="space-y-2 sm:hidden">
-            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-[13px] text-zk-muted">載入緊…</div>}
+            {loading && <div className="rounded-lg border border-zk-border bg-white p-3 text-center text-zk-base text-zk-muted">載入緊…</div>}
             {visibleEntries.map((entry) => {
               const u = entry.upload;
               const summary = u?.parse_summary;
               return (
                 <div
                   key={entry.site_id ?? `unresolved:${u?.id}`}
-                  className={`rounded-lg border bg-white p-3 ${u && u.id === focusId ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`}
+                  className={`rounded-lg border bg-white p-3 ${u && u.id === focusId ? "border-zk-primary bg-zk-warning-bg ring-2 ring-zk-primary" : "border-zk-border"}`}
                   data-upload-id={u?.id}
                   data-focused={u && u.id === focusId ? "1" : undefined}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{entry.site_name}</span>
+                    <span className="text-zk-base font-medium text-zk-text">{entry.site_name}</span>
                     <Pill variant={statusPillVariant(entry.upload_status)}>{STATUS_LABEL[entry.upload_status] ?? entry.upload_status}</Pill>
                   </div>
-                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 text-zk-xs text-zk-muted">
                     {u ? `v${u.version} · ${summary ? `${summary.shift_count} 更 · 未配對 ${summary.unmatched_guard_count}` : ""}` : "未上載"}
-                    {!entry.site_id && <span className="ml-1.5 text-orange-600">（盤名未配對）</span>}
+                    {!entry.site_id && <span className="ml-1.5 text-zk-warning">（盤名未配對）</span>}
                   </div>
-                  {u?.status === "parse_failed" && u.parse_error && <div className="mt-1 text-[11px] text-red-600">{u.parse_error}</div>}
+                  {u?.status === "parse_failed" && u.parse_error && <div className="mt-1 text-zk-xs text-zk-danger">{u.parse_error}</div>}
                   {u && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                         睇詳情
-                      </button>
+                      </Button>
                       {entry.site_id && (u.status === "parsed" || u.status === "confirmed") && (
                         <Link href={`/roster-uploads/${u.id}/reconcile`} className="rounded-[5px] border border-zk-primary px-2.5 py-[3px] text-xs font-medium text-zk-primary">
                           對數
@@ -953,15 +945,15 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
 
           {/* P3-3.5：摺埋嘅盤（未上載／已完成）一行摘要＋「顯示全部」切換（記喺 sessionStorage）。 */}
           {!loading && (hiddenEntries.length > 0 || showAll) && (
-            <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-zk-muted" data-testid="roster-upload-hidden-summary">
+            <div className="flex flex-wrap items-center gap-2 text-zk-sm text-zk-muted" data-testid="roster-upload-hidden-summary">
               {!showAll && (
                 <span>
                   未上載 {hiddenNotUploaded} 盤{hiddenDone > 0 ? `、已完成 ${hiddenDone} 盤` : ""}，已摺埋
                 </span>
               )}
-              <button type="button" onClick={toggleShowAll} className="text-zk-primary hover:underline" data-testid="roster-upload-show-all">
+              <Button variant="link" size="sm" type="button" onClick={toggleShowAll} data-testid="roster-upload-show-all">
                 {showAll ? "只顯示有嘢要做嘅盤" : "顯示全部 ›"}
-              </button>
+              </Button>
             </div>
           )}
         </>
@@ -972,7 +964,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
           淨係得「睇詳情」（rows 仲留底，方便追查）。 */}
       {includeVoided && voidedEntries.length > 0 && (
         <div className="space-y-2">
-          <div className="text-[12.5px] font-medium text-zk-muted">已作廢記錄</div>
+          <div className="text-zk-sm font-medium text-zk-muted">已作廢記錄</div>
           <div className={`hidden sm:block ${tableCls.wrap} opacity-60`}>
             <table className={tableCls.table} style={{ minWidth: tableMinWidth(6) }}>
               <thead>
@@ -996,9 +988,9 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                       <td className={tableCls.td}>{u.void_reason ?? "—"}</td>
                       <td className={tableCls.tdMuted}>{fmtDateTime(u.voided_at)}</td>
                       <td className={tableCls.td}>
-                        <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                        <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                           睇詳情
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   );
@@ -1012,18 +1004,18 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
               return (
                 <div key={u.id} className="rounded-lg border border-zk-border bg-white p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13.5px] font-medium text-zk-text">{entry.site_name}</span>
+                    <span className="text-zk-base font-medium text-zk-text">{entry.site_name}</span>
                     <Pill variant="neutral">已作廢</Pill>
                   </div>
-                  <div className="mt-1 text-[11.5px] text-zk-muted">
+                  <div className="mt-1 text-zk-xs text-zk-muted">
                     {u.file_name} · v{u.version}
                   </div>
-                  <div className="mt-1 text-[11.5px] text-zk-muted">原因：{u.void_reason ?? "—"}</div>
-                  <div className="mt-1 text-[11.5px] text-zk-faint">{fmtDateTime(u.voided_at)}</div>
+                  <div className="mt-1 text-zk-xs text-zk-muted">原因：{u.void_reason ?? "—"}</div>
+                  <div className="mt-1 text-zk-xs text-zk-faint">{fmtDateTime(u.voided_at)}</div>
                   <div className="mt-2">
-                    <button type="button" onClick={() => openDetail(u.id)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => openDetail(u.id)}>
                       睇詳情
-                    </button>
+                    </Button>
                   </div>
                 </div>
               );
@@ -1037,14 +1029,14 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
         <div className="rounded-lg border border-zk-border bg-white p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <div className="text-[14px] font-semibold text-zk-text">
+              <div className="text-zk-md font-semibold text-zk-text">
                 {detail?.upload.file_name ?? "詳情"}
-                {detail && <span className="ml-2 text-[12px] text-zk-muted">v{detail.upload.version} · 上載於 {fmtDateTime(detail.upload.uploaded_at)}</span>}
-                {detail?.upload.status === "voided" && <span className="ml-2 text-[12px] text-red-600">已作廢：{detail.upload.void_reason}</span>}
+                {detail && <span className="ml-2 text-zk-sm text-zk-muted">v{detail.upload.version} · 上載於 {fmtDateTime(detail.upload.uploaded_at)}</span>}
+                {detail?.upload.status === "voided" && <span className="ml-2 text-zk-sm text-zk-danger">已作廢：{detail.upload.void_reason}</span>}
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-1.5 text-[12.5px] text-zk-muted">
+              <label className="flex items-center gap-1.5 text-zk-sm text-zk-muted">
                 篩選
                 <select
                   className="rounded-[5px] border border-zk-border px-1.5 py-[3px] text-xs"
@@ -1076,24 +1068,24 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
           </div>
 
           {detail && (detail.name_only_count ?? 0) > 0 && (
-            <div className="mb-3 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-[12px] text-orange-800" data-testid="roster-upload-name-only-warning">
+            <div className="mb-3 rounded-md border border-zk-warning-border bg-zk-warning-bg px-3 py-2 text-zk-sm text-zk-warning-dark" data-testid="roster-upload-name-only-warning">
               {detail.name_only_count} 格{detail.name_only_warning ?? "淨靠姓名配對，建議補工號或電話"}
             </div>
           )}
 
           {detail?.upload.parse_summary && detail.upload.parse_summary.warnings.length > 0 && (
-            <ul className="mb-3 list-disc space-y-0.5 rounded-md border border-orange-200 bg-orange-50 py-2 pl-6 pr-3 text-[12px] text-orange-800" data-testid="roster-upload-summary-warnings">
+            <ul className="mb-3 list-disc space-y-0.5 rounded-md border border-zk-warning-border bg-zk-warning-bg py-2 pl-6 pr-3 text-zk-sm text-zk-warning-dark" data-testid="roster-upload-summary-warnings">
               {detail.upload.parse_summary.warnings.map((w, i) => (
                 <li key={i}>{w}</li>
               ))}
             </ul>
           )}
 
-          {detailLoading && !detail && <div className="py-6 text-center text-[13px] text-zk-muted">載入緊…</div>}
+          {detailLoading && !detail && <div className="py-6 text-center text-zk-base text-zk-muted">載入緊…</div>}
 
           {detail && (
             <>
-            <div className="mb-1.5 text-[12px] text-zk-muted" data-testid="roster-upload-rows-count">
+            <div className="mb-1.5 text-zk-sm text-zk-muted" data-testid="roster-upload-rows-count">
               已載入 {detail.rows.rows.length}／共 {detail.rows.total} 格
             </div>
             <div className={`overflow-x-auto rounded-md border border-zk-border`}>
@@ -1111,11 +1103,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                 </thead>
                 <tbody>
                   {detail.rows.rows.length === 0 && (
-                    <tr>
-                      <td className={tableCls.tdMuted} colSpan={7}>
-                        冇符合條件嘅記錄
-                      </td>
-                    </tr>
+                    <TableEmptyRow colSpan={7}>冇符合條件嘅記錄</TableEmptyRow>
                   )}
                   {detail.rows.rows.map((r) => {
                     const style = shiftCodeStyle(r.raw_code, { isLeave: r.code_kind === "leave" });
@@ -1124,7 +1112,7 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                         <td className={tableCls.td}>{fmtDate(r.work_date)}</td>
                         <td className={tableCls.td}>
                           <span
-                            className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-[11px] font-semibold"
+                            className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold"
                             style={{ background: style.bg, color: style.fg, border: style.border }}
                           >
                             {r.raw_code}
@@ -1133,14 +1121,14 @@ export default function RosterUploadsClient({ canFix }: { canFix: boolean }) {
                         <td className={tableCls.td}>{r.code_kind}</td>
                         <td className={tableCls.td}>
                           <Pill variant={r.guard_match === "unmatched" || r.guard_match === "ambiguous" ? "warning" : "success"}>{GUARD_MATCH_LABEL[r.guard_match]}</Pill>
-                          {r.name_raw && <span className="ml-1.5 text-[11.5px] text-zk-muted">{r.name_raw}</span>}
+                          {r.name_raw && <span className="ml-1.5 text-zk-xs text-zk-muted">{r.name_raw}</span>}
                         </td>
                         <td className={tableCls.td}>{r.broker_code_raw ?? "—"}</td>
                         <td className={tableCls.td}>
                           {r.sub_site_name ?? "—"}
-                          {r.sub_site_name && !r.resolved_site_id && <span className="ml-1 text-[11px] text-orange-600">（子盤未配對）</span>}
+                          {r.sub_site_name && !r.resolved_site_id && <span className="ml-1 text-zk-xs text-zk-warning">（子盤未配對）</span>}
                         </td>
-                        <td className={`${tableCls.td} text-[11.5px] text-orange-700`}>{r.warnings && r.warnings.length ? r.warnings.join("；") : ""}</td>
+                        <td className={`${tableCls.td} text-zk-xs text-zk-warning`}>{r.warnings && r.warnings.length ? r.warnings.join("；") : ""}</td>
                       </tr>
                     );
                   })}

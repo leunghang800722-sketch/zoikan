@@ -53,7 +53,7 @@ function StatusPill({ row }: { row: OverviewRow }) {
   // variant 唔同色階，唔改現有 ui/Pill.tsx，呢度用同一個組件外形手砌）。
   if (row.shortfall !== null && row.shortfall > 0) {
     return (
-      <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap" style={{ background: "#fef2f2", color: "#dc2626" }}>
+      <span className="inline-flex items-center rounded-[10px] px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap" style={{ background: "var(--zk-danger-bg)", color: "var(--zk-danger)" }}>
         欠 {row.shortfall} 更
       </span>
     );
@@ -121,10 +121,10 @@ export default function RosterEntryPage() {
       <Banner kind="error" message={error} />
       <EmptyMonthNotice month={month} isEmpty={!overviewLoading && overview.length === 0} onJump={setMonth} />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(280px,380px)_1fr]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,380px)_1fr]">
         {/* 左卡：開啟更表。 */}
         <form onSubmit={onOpen} className="flex h-fit flex-col gap-3 rounded-[10px] border border-zk-border bg-white p-4">
-          <div className="text-[13.5px] font-semibold text-zk-text">開啟更表</div>
+          <div className="text-zk-base font-semibold text-zk-text">開啟更表</div>
           <label className="block space-y-1.5">
             <span className="block text-xs text-zk-muted">盤</span>
             <select className={inputCls} value={siteId} onChange={(e) => setSiteId(e.target.value)} disabled={loading} required>
@@ -148,7 +148,7 @@ export default function RosterEntryPage() {
 
         {/* 右邊：最近開過。 */}
         <div className="flex flex-col gap-2">
-          <div className="text-[13.5px] font-semibold text-zk-text">最近開過</div>
+          <div className="text-zk-base font-semibold text-zk-text">最近開過</div>
           <Banner kind="error" message={overviewError} />
           {overviewLoading ? (
             <div className="text-sm text-zk-faint">載入緊…</div>
@@ -166,8 +166,8 @@ export default function RosterEntryPage() {
                   className="flex items-center justify-between gap-3 rounded-lg border border-zk-border bg-white px-4 py-3 transition-colors hover:bg-zk-header focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-[13.5px] font-medium text-zk-text">{row.site_name}</div>
-                    <div className="mt-0.5 text-[11.5px] text-zk-muted">
+                    <div className="truncate text-zk-base font-medium text-zk-text">{row.site_name}</div>
+                    <div className="mt-0.5 text-zk-xs text-zk-muted">
                       {month} · {row.guard_count} 人 · {row.shift_count} 更
                     </div>
                   </div>
@@ -179,7 +179,7 @@ export default function RosterEntryPage() {
               ))}
             </div>
           )}
-          {!overviewLoading && overview.length > 0 && <div className="text-[11.5px] text-zk-faint">全部盤用左邊選單開。</div>}
+          {!overviewLoading && overview.length > 0 && <div className="text-zk-xs text-zk-faint">全部盤用左邊選單開。</div>}
         </div>
       </div>
     </div>

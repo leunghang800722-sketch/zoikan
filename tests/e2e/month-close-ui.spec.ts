@@ -312,6 +312,21 @@ test.describe("月結頁 1e 手機", () => {
     await page.getByTestId("month-close-month-input").fill(MONTH);
     await expect(page.getByText("④ 報告")).toBeVisible();
     await noHScroll(page);
+    // P3-4.4：手機一頁唔超過 3 屏（3×800）就見到報告；右欄變底部 sticky CTA（fixed，貼底）。
+    const reportY = await page.getByText("④ 報告").evaluate((e) => e.getBoundingClientRect().top + window.scrollY);
+    expect(reportY).toBeLessThanOrEqual(3 * 800);
+    const rail = await page.getByTestId("rail-main").evaluate((e) => ({ pos: getComputedStyle(e).position, bottom: Math.round(window.innerHeight - e.getBoundingClientRect().bottom) }));
+    expect(rail.pos).toBe("fixed");
+    expect(rail.bottom).toBe(0);
+    // KPI：營業額＋毛利同一行（成本卡 order-last）；金額唔斷行（單行高度）。
+    const kpi = await page.getByTestId("report-kpis").evaluate((root) => {
+      const by = (t: string) => Array.from(root.children).find((c) => (c.textContent ?? "").startsWith(t))!.getBoundingClientRect();
+      const cards = [by("總收入"), by("毛利"), by("總成本")];
+      const nums = Array.from(root.querySelectorAll<HTMLElement>(".whitespace-nowrap.font-bold")).map((n) => n.getBoundingClientRect().height);
+      return { sameRow: Math.abs(cards[0]!.top - cards[1]!.top) < 2 && cards[2]!.top > cards[0]!.top, numHeights: nums };
+    });
+    expect(kpi.sameRow).toBe(true);
+    for (const h of kpi.numHeights) expect(h).toBeLessThan(36);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/mock-375.png`, fullPage: true });
 
     await page.getByTestId("rail-open-triage").click();

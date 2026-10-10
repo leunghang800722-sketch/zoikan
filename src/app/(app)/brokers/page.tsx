@@ -14,11 +14,11 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow, TableEmptyRow } from "@/components/ui/DataTable";
 import { fmtMoney } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { BROKER_KIND_LABEL, brokerKindPillTone, type BrokerKindLiteral } from "@/lib/ui/broker-kind";
@@ -26,6 +26,7 @@ import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { buildBankInfo, readBankFields } from "@/lib/ui/broker-bank";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 // A2（Opus 整合驗收）：呢頁「種類」select 嘅選項同表格 pill 之前各自有
 // 一套標籤（select 出 raw kind 字面值；表格 `kindPill()` 自己砌一套
@@ -91,16 +92,10 @@ function kindPill(kind: string) {
 }
 
 export default function BrokersPage() {
-  const [rows, setRows] = useState<BrokerRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, setNotice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<BrokerRow, typeof emptyForm>(emptyForm);
 
   const [feeRatesBroker, setFeeRatesBroker] = useState<BrokerRow | null>(null);
   const [feeRates, setFeeRates] = useState<ReferralFeeRateRow[]>([]);
@@ -151,6 +146,7 @@ export default function BrokersPage() {
     apiGetAll<BrokerSiteAssignmentRow>("/api/broker-site-assignments").then((res) => {
       if (res.ok) setAssignments(res.data.rows);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // WP-RECONCILE-UI（§33.3 D）：`/brokers?focus=<雞頭碼>` 高亮＋捲到該雞頭（純 UI；碼未登記就冇得高亮）。
@@ -258,15 +254,11 @@ export default function BrokersPage() {
   }
 
   function openCreate() {
-    setEditingId(null);
-    setForm(emptyForm);
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer();
   }
 
   function openEdit(row: BrokerRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       code: row.code,
       name: row.name,
       kind: row.kind,
@@ -276,16 +268,12 @@ export default function BrokersPage() {
       requires_approval: row.requires_approval,
       aliases: (row.aliases ?? []).join(", "),
     });
-    setFormError(null);
-    setDrawerOpen(true);
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setFormError(null);
     // P3-3.6：銀行名／戶口號碼兩格存返同一個 bank_info JSON；舊 JSON 其他 key 保留。
     const bankInfo = buildBankInfo(editingId ? rows.find((r) => r.id === editingId)?.bank_info : undefined, form.bank_name, form.bank_account_no);
-    setSaving(true);
     const aliases = form.aliases
       .split(",")
       .map((s) => s.trim())
@@ -297,39 +285,18 @@ export default function BrokersPage() {
       requires_approval: form.requires_approval,
       aliases,
     };
-    const res = editingId
-      ? await apiPatch(`/api/brokers/${editingId}`, body)
-      : await apiPost("/api/brokers", { ...body, code: form.code, kind: form.kind });
-    setSaving(false);
-    if (!res.ok) {
-      setFormError(res.message);
-      return;
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+    await saveForm(
+      () => (editingId ? apiPatch(`/api/brokers/${editingId}`, body) : apiPost("/api/brokers", { ...body, code: form.code, kind: form.kind })),
+      load,
+    );
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/brokers/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已停用");
-    await load();
+    await runAction(() => apiPost(`/api/brokers/${id}/void`, { reason }), "已停用", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/brokers/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已恢復");
-    await load();
+    await runAction(() => apiPost(`/api/brokers/${id}/unvoid`), "已恢復", load);
   }
 
   // S2：加返「需要審批」欄（README 冇逐個列，但 base 有，丟咗會少
@@ -378,11 +345,7 @@ export default function BrokersPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={colCount}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={colCount} />
                 )}
                 {rows.map((r) => (
                   <tr key={r.id} className={`${tableCls.rowHover} ${isFocus(r) ? FOCUS_CLS : ""}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
@@ -399,24 +362,24 @@ export default function BrokersPage() {
                     <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}</td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                        <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                           編輯
-                        </button>
+                        </Button>
                         <button
                           type="button"
                           onClick={() => openFeeRatesFor(r)}
-                          className={`rounded-[5px] border px-2.5 py-[3px] text-xs hover:bg-zk-header ${feeRatesBroker?.id === r.id ? "border-[#0f172a] bg-[#0f172a] text-white hover:bg-[#1e293b]" : "border-zk-border text-[#334155]"}`}
+                          className={`rounded-[5px] border px-2.5 py-[3px] text-xs hover:bg-zk-header ${feeRatesBroker?.id === r.id ? "border-zk-dark bg-zk-dark text-white hover:bg-zk-dark-hover" : "border-zk-border text-zk-text-secondary"}`}
                         >
                           介紹費率
                         </button>
                         {r.status === "inactive" ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+
                           >
                             恢復
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                         )}
@@ -430,30 +393,30 @@ export default function BrokersPage() {
 
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
-              <div key={r.id} className={`rounded-lg border bg-white p-3 ${isFocus(r) ? "border-zk-primary bg-yellow-50 ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
+              <div key={r.id} className={`rounded-lg border bg-white p-3 ${isFocus(r) ? "border-zk-primary bg-zk-warning-bg ring-2 ring-zk-primary" : "border-zk-border"}`} data-focus-key={focusCode && isFocus(r) ? focusCode : r.id} data-focused={isFocus(r) ? "1" : undefined}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[13.5px] font-medium text-zk-text">
+                  <span className="text-zk-base font-medium text-zk-text">
                     {r.name} <span className="text-zk-faint">（{r.code}）</span>
                   </span>
-                  <span className="text-[13px] tabular-nums text-zk-text">{guardCountByBroker[r.id] ?? 0} 人</span>
+                  <span className="text-zk-base tabular-nums text-zk-text">{guardCountByBroker[r.id] ?? 0} 人</span>
                 </div>
-                <div className="mt-1 text-[11.5px] text-zk-muted">{sitesLabel(r.id)}</div>
+                <div className="mt-1 text-zk-xs text-zk-muted">{sitesLabel(r.id)}</div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {kindPill(r.kind)}
                   {r.requires_approval ? <Pill variant="warning">需要審批</Pill> : <Pill variant="neutral">唔使審批</Pill>}
                   {r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                     編輯
-                  </button>
-                  <button type="button" onClick={() => openFeeRatesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155]">
+                  </Button>
+                  <Button variant="secondary" size="sm" type="button" onClick={() => openFeeRatesFor(r)}>
                     介紹費率
-                  </button>
+                  </Button>
                   {r.status === "inactive" ? (
-                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                       恢復
-                    </button>
+                    </Button>
                   ) : (
                     <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                   )}
@@ -468,7 +431,7 @@ export default function BrokersPage() {
         <div className="space-y-2 rounded-lg border border-zk-border bg-white p-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-[13.5px] font-semibold text-zk-text">{feeRatesBroker.name}——介紹費率</h2>
+              <h2 className="text-zk-base font-semibold text-zk-text">{feeRatesBroker.name}——介紹費率</h2>
               <p className="text-xs text-zk-muted">site 留空＝呢個雞頭全盤預設費率；有 site 嘅行覆蓋預設。</p>
             </div>
             <div className="flex gap-2">
@@ -494,18 +457,10 @@ export default function BrokersPage() {
               </thead>
               <tbody>
                 {feeRatesLoading && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={5}>
-                      載入緊…
-                    </td>
-                  </tr>
+                  <TableLoadingRow colSpan={5} />
                 )}
                 {!feeRatesLoading && feeRates.length === 0 && (
-                  <tr>
-                    <td className={tableCls.tdMuted} colSpan={5}>
-                      暫時冇費率行
-                    </td>
-                  </tr>
+                  <TableEmptyRow colSpan={5}>暫時冇費率行</TableEmptyRow>
                 )}
                 {feeRates.map((r) => (
                   <tr key={r.id} className={`${tableCls.rowHover} ${r.voided_at ? "opacity-45" : ""}`}>
@@ -516,18 +471,18 @@ export default function BrokersPage() {
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {!r.voided_at && (
-                          <button type="button" onClick={() => openFeeRateEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-[#334155] hover:bg-zk-header">
+                          <Button variant="secondary" size="sm" type="button" onClick={() => openFeeRateEdit(r)}>
                             編輯
-                          </button>
+                          </Button>
                         )}
                         {r.voided_at ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onFeeRateUnvoid(r.id)}
-                            className="rounded-[5px] border border-green-300 px-2.5 py-[3px] text-xs text-green-700 hover:bg-green-50"
+
                           >
                             解除作廢
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton onConfirm={(reason) => onFeeRateVoid(r.id, reason)} />
                         )}
@@ -581,7 +536,7 @@ export default function BrokersPage() {
           <Field label="更別（逗號分隔）">
             <input className={inputCls} value={form.aliases} onChange={(e) => setForm((f) => ({ ...f, aliases: e.target.value }))} />
           </Field>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 text-sm text-zk-text-secondary">
             <input
               type="checkbox"
               checked={form.requires_approval}
@@ -590,12 +545,12 @@ export default function BrokersPage() {
             requires_approval（排更要主管審批先確認）
           </label>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>
@@ -643,12 +598,12 @@ export default function BrokersPage() {
             />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={feeRateSaving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={feeRateSaving}>
               {feeRateSaving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setFeeRateDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setFeeRateDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

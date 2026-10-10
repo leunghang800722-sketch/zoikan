@@ -10,14 +10,14 @@ import { fmtMdHm } from "@/components/month-close/derive";
 export function HistorySection({ runs, busy, open, onToggle, onRerun }: { runs: RunDTO[]; busy: boolean; open: boolean; onToggle: () => void; onRerun: (id: string) => void }) {
   return (
     <section data-testid="history-section">
-      <div className="px-0.5 text-[12.5px] text-zk-muted">
+      <div className="px-0.5 text-zk-sm text-zk-muted">
         {runs.length === 0 ? "呢個月未跑過一鍵結算" : `今個月一鍵結算跑咗 ${runs.length} 次，最近一次 ${fmtMdHm(runs[0]!.started_at)}`}
         {runs.length > 0 && (
           <>
             {" · "}
-            <button type="button" className="text-zk-primary hover:underline" onClick={onToggle} aria-expanded={open}>
+            <Button variant="link" size="sm" type="button" onClick={onToggle} aria-expanded={open}>
               {open ? "收埋過往紀錄 ›" : "睇過往紀錄 ›"}
-            </button>
+            </Button>
           </>
         )}
       </div>

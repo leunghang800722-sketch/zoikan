@@ -6,7 +6,7 @@ import { LINK, guardSearchTerm, hasPerson, matchNeedsBossForQuestion, personLabe
 import { useGuardDirectory, useNeedsBoss } from "./data";
 import { SimilarGuards } from "./GuardHints";
 
-const linkCls = "inline-block rounded-[5px] border border-zk-primary px-2 py-[3px] text-[11.5px] font-medium text-zk-primary hover:bg-blue-50";
+const linkCls = "inline-block rounded-[5px] border border-zk-primary px-2 py-[3px] text-zk-xs font-medium text-zk-primary hover:bg-zk-primary-tint-soft";
 
 export function GuardMatchInfo({ question, month, compact = false }: { question: { title: string; mc: { summary: string; identity_label: string | null; action_type: string } }; month: string | null; compact?: boolean }) {
   const isGuard = question.mc.action_type === "guard_match";
@@ -19,26 +19,26 @@ export function GuardMatchInfo({ question, month, compact = false }: { question:
   const mon = (nb && nbRes && nbRes !== "denied" && nbRes.month ? nbRes.month : month) ?? "";
   return (
     <div className={`space-y-1.5 rounded-lg border border-zk-border bg-zk-header ${compact ? "px-3 py-2.5" : "px-2.5 py-2"}`} data-testid="mc-guard-info">
-      <div className="text-[11.5px] font-semibold text-zk-muted">更表寫咗</div>
+      <div className="text-zk-xs font-semibold text-zk-muted">更表寫咗</div>
       {nb ? (
-        <div className="space-y-0.5 text-[12.5px]">
+        <div className="space-y-0.5 text-zk-sm">
           <div className="font-medium text-zk-text" data-testid="mc-guard-name">
             {person && hasPerson(person) ? personLabel(person) : "（冇權限睇姓名／工號）"}
-            <span className="ml-1.5 text-[11px] font-normal text-zk-faint">{nb.seq}</span>
+            <span className="ml-1.5 text-zk-xs font-normal text-zk-faint">{nb.seq}</span>
           </div>
-          <div className="text-[11.5px] text-zk-muted" data-testid="mc-guard-cells">
+          <div className="text-zk-xs text-zk-muted" data-testid="mc-guard-cells">
             {[telTail(nb.tel_raw), `共 ${nb.total_cell_count} 格`, nb.cells.map((c) => `${c.site_label} ${c.cell_count} 格`).join("、")].filter(Boolean).join("・")}
           </div>
-          <div className="text-[11.5px] text-red-600" data-testid="mc-guard-reason">
+          <div className="text-zk-xs text-zk-danger" data-testid="mc-guard-reason">
             {nb.reason}
           </div>
         </div>
       ) : person && hasPerson(person) ? (
-        <div className="text-[12.5px] font-medium text-zk-text" data-testid="mc-guard-name">
+        <div className="text-zk-sm font-medium text-zk-text" data-testid="mc-guard-name">
           {personLabel(person)}
         </div>
       ) : (
-        <div className="text-[11.5px] text-zk-faint">冇權限睇姓名／工號，或者搵唔到對應嘅保安員配對修復資料。</div>
+        <div className="text-zk-xs text-zk-faint">冇權限睇姓名／工號，或者搵唔到對應嘅保安員配對修復資料。</div>
       )}
       {person && hasPerson(person) && <SimilarGuards person={person} dir={dir} />}
       <div className="flex flex-wrap gap-1">

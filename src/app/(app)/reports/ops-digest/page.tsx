@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { tableCls, tableMinWidth } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, TableEmptyRow } from "@/components/ui/DataTable";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
@@ -48,7 +48,7 @@ interface DigestDTO {
 function delta(cur: number, prev: number) {
   const d = cur - prev;
   if (d === 0) return <span className="text-zk-faint">±0</span>;
-  return <span className={d > 0 ? "text-red-600" : "text-green-700"}>{d > 0 ? `+${d}` : d}</span>;
+  return <span className={d > 0 ? "text-zk-danger" : "text-zk-success-dark"}>{d > 0 ? `+${d}` : d}</span>;
 }
 
 function fmtNum(v: number | null) {
@@ -118,33 +118,33 @@ export default function OpsDigestPage() {
                 </Button>
               )}
             </div>
-            <div className="text-[11.5px] text-zk-faint" data-testid="ops-digest-window">
+            <div className="text-zk-xs text-zk-faint" data-testid="ops-digest-window">
               {digest.window
                 ? `時間類統計視窗：${digest.window.from.slice(0, 10)} 至 ${digest.window.to.slice(0, 10)}。視窗＝由該月第一次上載更表起，計到鎖月或者下個月開始上載為止。`
                 : "呢個月未有上載，按時間計嘅類別（價卡、配對、身份欄、批量導入）全部算 0。視窗＝由該月第一次上載更表起，計到鎖月或者下個月開始上載為止。"}
               更次修正按出更日期、特殊項按月份、對數決定按上載月份。
             </div>
             {aiText && (
-              <div className="mt-3 rounded border border-blue-200 bg-blue-50 p-3 text-[13px] leading-relaxed text-zk-text" data-testid="ops-digest-ai-text">
-                <div className="mb-1 text-[11.5px] text-zk-muted">AI 摘要（只根據上面嘅數字；請以表內數字為準）</div>
+              <div className="mt-3 rounded border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base leading-relaxed text-zk-text" data-testid="ops-digest-ai-text">
+                <div className="mb-1 text-zk-xs text-zk-muted">AI 摘要（只根據上面嘅數字；請以表內數字為準）</div>
                 {aiText}
               </div>
             )}
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               {digest.group_totals.map((g) => (
                 <div key={g.group} className="rounded border border-zk-border p-3">
-                  <div className="text-[11.5px] text-zk-muted">{g.label}</div>
+                  <div className="text-zk-xs text-zk-muted">{g.label}</div>
                   <div className="text-lg font-bold">{g.count}</div>
-                  <div className="text-[11px] text-zk-muted">上月 {g.prev_count}　{delta(g.count, g.prev_count)}</div>
+                  <div className="text-zk-xs text-zk-muted">上月 {g.prev_count}　{delta(g.count, g.prev_count)}</div>
                 </div>
               ))}
             </div>
           </section>
 
           {digest.repeats.length > 0 && (
-            <section className="rounded-lg border border-orange-200 bg-orange-50 p-4" data-testid="ops-digest-repeats">
-              <div className="text-sm font-semibold text-orange-800">連續出現嘅問題（值得從源頭改善）</div>
-              <ul className="mt-1 list-disc pl-5 text-[12.5px] text-orange-800">
+            <section className="rounded-lg border border-zk-warning-border bg-zk-warning-bg p-4" data-testid="ops-digest-repeats">
+              <div className="text-sm font-semibold text-zk-warning-dark">連續出現嘅問題（值得從源頭改善）</div>
+              <ul className="mt-1 list-disc pl-5 text-zk-sm text-zk-warning-dark">
                 {digest.repeats.map((r) => (
                   <li key={r.key}>
                     {r.label}：連續 {r.streak} 個月都有
@@ -180,11 +180,7 @@ export default function OpsDigestPage() {
                       </tr>
                     ))}
                   {digest.categories.every((c) => c.count === 0 && c.prev_count === 0) && (
-                    <tr>
-                      <td className={tableCls.td} colSpan={5}>
-                        呢兩個月冇任何修正記錄。
-                      </td>
-                    </tr>
+                    <TableEmptyRow colSpan={5}>呢兩個月冇任何修正記錄。</TableEmptyRow>
                   )}
                 </tbody>
               </table>
@@ -194,33 +190,35 @@ export default function OpsDigestPage() {
           <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className="rounded-lg border border-zk-border bg-white p-4">
               <div className="mb-2 text-sm font-semibold text-zk-text">修正量 Top {digest.top_sites.length || 5} 盤（共 {digest.correction_total} 項更次修正）</div>
-              <ol className="list-decimal pl-5 text-[13px]">
+              <ol className="list-decimal pl-5 text-zk-base">
                 {digest.top_sites.map((s) => (
                   <li key={s.site_name}>
                     {s.site_name}：{s.count}
                   </li>
                 ))}
               </ol>
-              {digest.top_sites.length === 0 && <div className="text-[12.5px] text-zk-muted">冇</div>}
-              <div className="mb-1 mt-3 text-sm font-semibold text-zk-text">Top 雞頭代號</div>
-              <ol className="list-decimal pl-5 text-[13px]">
-                {digest.top_brokers.map((s) => (
-                  <li key={s.broker_code}>
-                    {s.broker_code}：{s.count}
-                  </li>
-                ))}
-              </ol>
-              {digest.top_brokers.length === 0 && <div className="text-[12.5px] text-zk-muted">冇</div>}
+              {digest.top_sites.length === 0 && <div className="text-zk-sm text-zk-muted">冇</div>}
+              <details className="mt-3" data-testid="ops-top-brokers">
+                <summary className="cursor-pointer text-sm font-semibold text-zk-text">Top 雞頭代號</summary>
+                <ol className="mt-1 list-decimal pl-5 text-zk-base">
+                  {digest.top_brokers.map((s) => (
+                    <li key={s.broker_code}>
+                      {s.broker_code}：{s.count}
+                    </li>
+                  ))}
+                </ol>
+                {digest.top_brokers.length === 0 && <div className="text-zk-sm text-zk-muted">冇</div>}
+              </details>
             </div>
 
-            <div className="rounded-lg border border-zk-border bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-zk-text">基線指標</div>
-              <table className="w-full text-[12.5px]">
+            <details className="rounded-lg border border-zk-border bg-white p-4" data-testid="ops-baseline">
+              <summary className="cursor-pointer text-sm font-semibold text-zk-text">基線指標（ops 量度用，日常唔使睇）</summary>
+              <table className={`mt-2 ${tableCls.table}`}>
                 <thead>
                   <tr className="text-left text-zk-muted">
-                    <th className="py-1 font-medium">指標</th>
-                    <th className="py-1 text-right font-medium">本月</th>
-                    <th className="py-1 text-right font-medium">上月</th>
+                    <th className={tableCls.th}>指標</th>
+                    <th className={tableCls.th}>本月</th>
+                    <th className={tableCls.th}>上月</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -237,15 +235,15 @@ export default function OpsDigestPage() {
                     ["作廢上載", b.uploads.voided, p.uploads.voided],
                     ["下月 1 號到鎖月日數", b.days_month_end_to_lock, p.days_month_end_to_lock],
                   ].map(([label, cur, prev]) => (
-                    <tr key={String(label)} className="border-t border-zk-border">
-                      <td className="py-1">{label}</td>
-                      <td className="py-1 text-right">{fmtNum(cur as number | null)}</td>
-                      <td className="py-1 text-right">{fmtNum(prev as number | null)}</td>
+                    <tr key={String(label)}>
+                      <td className={tableCls.td}>{label}</td>
+                      <td className={tableCls.td}>{fmtNum(cur as number | null)}</td>
+                      <td className={tableCls.td}>{fmtNum(prev as number | null)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </details>
           </section>
         </>
       )}

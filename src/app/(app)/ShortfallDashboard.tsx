@@ -12,6 +12,7 @@ import { Banner } from "@/components/ui/Banner";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { tableCls, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateWeekday, fmtMonthDayWeekday, addDaysStr, todayLocalStr, greetingWord } from "@/lib/ui/format";
+import { iconBtn } from "@/components/ui/button-classes";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface SiteRow {
@@ -49,7 +50,7 @@ const MARGIN_SCALE_MAX = 20; // README：進度條 0%–20% 刻度
 // 但有人出勤，shortfall=負數，唔算尚欠，應該着綠，唔係因為 required=0
 // 就當「未達標」變紅）。
 function confirmedBarColor(s: SiteRow): string {
-  return s.shortfall > 0 ? "#dc2626" : "#0f766e";
+  return s.shortfall > 0 ? "var(--zk-danger)" : "var(--zk-success)";
 }
 function confirmedBarPct(s: SiteRow): number {
   if (s.required <= 0) return s.confirmed > 0 ? 100 : 0;
@@ -70,13 +71,13 @@ function writeDateToUrl(date: string): void {
 
 function DateChip({ date, onChange }: { date: string; onChange: (next: string) => void }) {
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[5px] text-[13px] text-[#334155]">
+    <div className="flex items-center gap-1.5 rounded-md border border-zk-border bg-white px-2.5 py-[5px] text-zk-base text-zk-text-secondary">
       <button
         type="button"
         aria-label="前一日"
         data-testid="shortfall-date-prev"
         onClick={() => onChange(addDaysStr(date, -1))}
-        className="px-0.5 text-zk-faint hover:text-zk-text"
+        className={iconBtn}
       >
         ‹
       </button>
@@ -86,7 +87,7 @@ function DateChip({ date, onChange }: { date: string; onChange: (next: string) =
         aria-label="後一日"
         data-testid="shortfall-date-next"
         onClick={() => onChange(addDaysStr(date, 1))}
-        className="px-0.5 text-zk-faint hover:text-zk-text"
+        className={iconBtn}
       >
         ›
       </button>
@@ -97,20 +98,20 @@ function DateChip({ date, onChange }: { date: string; onChange: (next: string) =
 function MarginProgressCard({ monthProgress, href }: { monthProgress: MarginProgress; href?: string }) {
   const pct = monthProgress.margin_pct == null ? 0 : Math.min(100, Math.max(0, (monthProgress.margin_pct / MARGIN_SCALE_MAX) * 100));
   const thresholdLeft = Math.min(100, Math.max(0, (monthProgress.threshold_pct / MARGIN_SCALE_MAX) * 100));
-  const cls = "flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 md:px-[18px] md:py-4 col-span-2";
+  const cls = "flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 lg:px-[18px] lg:py-4 col-span-2";
 
   const inner = (
     <>
       <div className="flex items-start justify-between gap-2">
         <div className="text-xs text-zk-muted">本月毛利進度（{monthProgress.month}）</div>
         {monthProgress.below_threshold_site_count > 0 && (
-          <div className="shrink-0 text-[11.5px] font-semibold text-[#dc2626]">
+          <div className="shrink-0 text-zk-xs font-semibold text-zk-danger">
             {monthProgress.below_threshold_site_count} 個盤毛利率低於 {monthProgress.threshold_pct}%
           </div>
         )}
       </div>
       <div className="mt-1 flex flex-wrap items-baseline gap-2.5">
-        <span data-testid="margin-pct-value" className="text-[28px] leading-[1.1] font-bold text-zk-text md:text-[30px]">
+        <span data-testid="margin-pct-value" className="text-zk-2xl leading-[1.1] font-bold text-zk-text lg:text-zk-2xl">
           {monthProgress.margin_pct == null ? "—" : `${monthProgress.margin_pct}%`}
         </span>
         {monthProgress.revenue !== undefined && (
@@ -121,11 +122,11 @@ function MarginProgressCard({ monthProgress, href }: { monthProgress: MarginProg
       </div>
       <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-zk-surface">
         <div className="absolute inset-y-0 left-0 bg-zk-primary" style={{ width: `${pct}%` }} />
-        <div className="absolute inset-y-0 w-0.5 bg-[#dc2626]" style={{ left: `${thresholdLeft}%` }} />
+        <div className="absolute inset-y-0 w-0.5 bg-zk-danger" style={{ left: `${thresholdLeft}%` }} />
       </div>
-      <div className="mt-1 flex justify-between text-[10.5px] text-zk-faint">
+      <div className="mt-1 flex justify-between text-zk-2xs text-zk-faint">
         <span>0%</span>
-        <span className="text-[#dc2626]">{monthProgress.threshold_pct}% 警戒線</span>
+        <span className="text-zk-danger">{monthProgress.threshold_pct}% 警戒線</span>
         <span>{MARGIN_SCALE_MAX}%</span>
       </div>
     </>
@@ -144,7 +145,7 @@ function MarginProgressCard({ monthProgress, href }: { monthProgress: MarginProg
 function MarginSlot({ progress, error }: { progress: MarginProgress | null; error: string | null }) {
   if (progress) return <MarginProgressCard monthProgress={progress} href="/reports/gross-margin" />;
   return (
-    <div data-testid="margin-progress-loading" className="col-span-2 flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 text-xs text-zk-muted md:px-[18px] md:py-4">
+    <div data-testid="margin-progress-loading" className="col-span-2 flex flex-col rounded-[10px] border border-zk-border bg-white px-3.5 py-3 text-xs text-zk-muted lg:px-[18px] lg:py-4">
       {error ? `本月毛利進度載入失敗：${error}` : "本月毛利進度計算中…"}
     </div>
   );
@@ -226,29 +227,29 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
   const kicker = `${roleLabel} · 今日尚欠情況一覽`;
   const title = `歡迎返嚟，${userName}`;
   // B3 驗收修正：手機版原本冇任何可見 <h1>（桌面 <h1> 由 PageHeader
-  // 出，但成個 PageHeader 包喺 `hidden md:block` 度，手機淨係得一個
+  // 出，但成個 PageHeader 包喺 `hidden lg:block` 度，手機淨係得一個
   // `<div>` 重複文字，等於手機頁面完全冇 heading）。改做「同一個 h1、
   // 兩邊都係 heading」：淨係一個 <h1> 元素，入面兩個 <span> 用
-  // `hidden`/`md:hidden` responsive class 互相排斥，唔再用兩個獨立
+  // `hidden`/`lg:hidden` responsive class 互相排斥，唔再用兩個獨立
   // block 各自 hidden 嗰種寫法。
   const mobileHeading = `${greetingWord()}，${userName}`;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-4">
+      <div className="flex flex-col gap-1 lg:flex-row lg:flex-wrap lg:items-end lg:justify-between lg:gap-4">
         <div>
-          <div className="text-xs text-zk-muted md:text-[12.5px]">
-            <span className="md:hidden">{`${fmtMonthDayWeekday(date)} · ${roleLabel}`}</span>
-            <span className="hidden md:inline">{kicker}</span>
+          <div className="text-xs text-zk-muted lg:text-zk-sm">
+            <span className="lg:hidden">{`${fmtMonthDayWeekday(date)} · ${roleLabel}`}</span>
+            <span className="hidden lg:inline">{kicker}</span>
           </div>
-          <h1 className="mt-0.5 text-[20px] font-bold text-zk-text md:text-[22px] md:tracking-[-0.01em]">
-            <span className="md:hidden">{mobileHeading}</span>
-            <span className="hidden md:inline">{title}</span>
+          <h1 className="mt-0.5 text-zk-xl font-bold text-zk-text lg:text-zk-xl lg:tracking-[-0.01em]">
+            <span className="lg:hidden">{mobileHeading}</span>
+            <span className="hidden lg:inline">{title}</span>
           </h1>
         </div>
         <div className="flex items-center gap-2">
           {/* 手機：問候語頁首唔使日期 chip（README §21 冇畫呢個掣）。 */}
-          <div className="hidden md:block">
+          <div className="hidden lg:block">
             <DateChip date={date} onChange={changeDate} />
           </div>
         </div>
@@ -261,7 +262,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
       ) : data ? (
         <>
           {/* 桌面 KPI grid：README `repeat(auto-fit,minmax(240px,1fr))` gap 12px。 */}
-          <div className="hidden grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3 md:grid">
+          <div className="hidden grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3 lg:grid">
             <KpiCard
               label="今日尚欠盤數"
               value={<span data-testid="shortfall-count-value">{shortfallSites.length}</span>}
@@ -271,7 +272,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
               {shortfallSites.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
                   {shortfallSites.slice(0, 6).map((s) => (
-                    <span key={s.site_id} className="rounded-[10px] bg-[#fef2f2] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap text-[#b91c1c]">
+                    <span key={s.site_id} className="rounded-[10px] bg-zk-danger-bg px-2 py-0.5 text-zk-xs font-semibold whitespace-nowrap text-zk-danger-dark">
                       {s.site_name} 欠 {s.shortfall}
                     </span>
                   ))}
@@ -282,7 +283,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
           </div>
 
           {/* 手機 KPI 2×2（尚欠／待審批；毛利跨 2 欄）。 */}
-          <div className="grid grid-cols-2 gap-2.5 md:hidden">
+          <div className="grid grid-cols-2 gap-2.5 lg:hidden">
             <KpiCard
               label="今日尚欠盤數"
               value={<span data-testid="shortfall-count-value">{shortfallSites.length}</span>}
@@ -293,7 +294,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
           </div>
 
           {/* 桌面表格。 */}
-          <div className="hidden flex-col gap-2 md:flex">
+          <div className="hidden flex-col gap-2 lg:flex">
             <div className="flex items-baseline justify-between">
               <h2 className="text-sm font-semibold text-zk-text">今日各盤出勤 vs 所需</h2>
               <span className="text-xs text-zk-muted">尚欠嘅盤排最前 · 撳行＝去更表</span>
@@ -347,7 +348,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
                           <span>{s.confirmed}</span>
                         </div>
                       </td>
-                      <td className={s.shortfall > 0 ? "border-b border-[#f1f5f9] px-3.5 py-2.5 text-right font-bold text-[#dc2626]" : `${tableCls.tdMuted} text-right`}>
+                      <td className={s.shortfall > 0 ? "border-b border-zk-border-soft px-3.5 py-2.5 text-right font-bold text-zk-danger" : `${tableCls.tdMuted} text-right`}>
                         {s.shortfall > 0 ? s.shortfall : "—"}
                       </td>
                     </tr>
@@ -358,9 +359,9 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
           </div>
 
           {/* 手機：「今日出勤 vs 所需」列表卡（README §21）。 */}
-          <div className="flex flex-col gap-2 md:hidden">
+          <div className="flex flex-col gap-2 lg:hidden">
             <div className="flex items-baseline justify-between">
-              <div className="text-[13.5px] font-semibold text-zk-text">今日出勤 vs 所需</div>
+              <div className="text-zk-base font-semibold text-zk-text">今日出勤 vs 所需</div>
             </div>
             <div className="overflow-hidden rounded-[10px] border border-zk-border bg-white">
               {data.today.length === 0 ? (
@@ -374,9 +375,9 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
                     key={s.site_id}
                     href={`/roster/${s.site_id}/${date.slice(0, 7)}`}
                     data-testid="shortfall-row-mobile"
-                    className="flex items-center gap-2.5 border-b border-[#f1f5f9] px-3.5 py-2.5 last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
+                    className="flex items-center gap-2.5 border-b border-zk-border-soft px-3.5 py-2.5 last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-zk-primary"
                   >
-                    <div className="min-w-0 flex-1 truncate text-[13px] text-zk-text">{s.site_name}</div>
+                    <div className="min-w-0 flex-1 truncate text-zk-base text-zk-text">{s.site_name}</div>
                     <div className="h-[5px] w-20 shrink-0 overflow-hidden rounded-full bg-zk-surface">
                       <div className="h-full" style={{ width: `${confirmedBarPct(s)}%`, background: confirmedBarColor(s) }} />
                     </div>
@@ -384,7 +385,7 @@ export default function ShortfallDashboard({ userName, roleLabel, showMargin = t
                       {s.confirmed}
                       <span className="text-zk-faint">/{s.required}</span>
                     </div>
-                    <div className={`w-6 shrink-0 text-right text-[12.5px] font-bold ${s.shortfall > 0 ? "text-[#dc2626]" : "text-zk-faintest"}`}>
+                    <div className={`w-6 shrink-0 text-right text-zk-sm font-bold ${s.shortfall > 0 ? "text-zk-danger" : "text-zk-faintest"}`}>
                       {s.shortfall > 0 ? s.shortfall : "—"}
                     </div>
                   </Link>

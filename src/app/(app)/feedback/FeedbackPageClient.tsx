@@ -3,6 +3,7 @@
 // `audit-log/page.tsx` 一樣版面模式：`PageHeader` kicker「系統」、filter
 // chip（狀態）、`tableCls` 列表；手機每行變卡（README 手機外殼模式）。
 import { useEffect, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { apiGet, type ApiListResult } from "@/lib/ui/api-client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
@@ -81,7 +82,7 @@ export function FeedbackPageClient() {
         }
       />
 
-      {error && <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
+      {error && <Banner kind="error">{error}</Banner>}
 
       {/* 桌面：表；手機：卡（README 手機外殼模式，唔靠 CSS 縮表）。 */}
       <div className={`${tableCls.wrap} hidden sm:block`} data-testid="feedback-table">
@@ -123,11 +124,11 @@ export function FeedbackPageClient() {
             className="flex flex-col gap-1.5 rounded-lg border border-zk-border bg-white px-3.5 py-3"
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-zk-muted">{fmtDateTime(r.created_at)}</span>
+              <span className="text-zk-xs text-zk-muted">{fmtDateTime(r.created_at)}</span>
               {statusPill(r.status)}
             </div>
-            <div className="text-[13.5px] font-semibold text-zk-text">{r.title}</div>
-            <div className="text-[11.5px] text-zk-muted">{r.role_name}</div>
+            <div className="text-zk-base font-semibold text-zk-text">{r.title}</div>
+            <div className="text-zk-xs text-zk-muted">{r.role_name}</div>
           </GuardedLink>
         ))}
         {!loading && rows.length === 0 && <EmptyState title="未有現場意見" description="主管／會計／老闆用側欄「開會反映」送出之後會出現喺呢度。" />}

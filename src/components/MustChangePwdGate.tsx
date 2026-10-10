@@ -13,7 +13,7 @@ export function MustChangePwdGate({ mustChange }: { mustChange: boolean }) {
     if (mustChange && pathname !== "/change-password") router.replace("/change-password");
   }, [mustChange, pathname, router]);
   if (mustChange && pathname !== "/change-password") {
-    return <div className="p-6 text-sm text-gray-600">首次登入，請先設定新密碼……</div>;
+    return <div className="p-6 text-sm text-zk-text-secondary">首次登入，請先設定新密碼……</div>;
   }
   return null;
 }

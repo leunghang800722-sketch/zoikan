@@ -2,6 +2,7 @@
 // P2.5「現場反映」開會模式——意見詳情（老闆）：完整摘要（markdown）、
 // 原對話節錄摺埋、狀態掣（已睇／已轉交／唔做）＋備註、「複製摘要」。
 import { useCallback, useEffect, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { apiGet, apiPatch } from "@/lib/ui/api-client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
@@ -79,7 +80,7 @@ export function FeedbackDetailClient({ id }: { id: string }) {
   }, [report]);
 
   if (loading) return <div className="text-sm text-zk-muted">載入緊…</div>;
-  if (error && !report) return <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>;
+  if (error && !report) return <Banner kind="error">{error}</Banner>;
   if (!report) return null;
 
   return (
@@ -94,24 +95,24 @@ export function FeedbackDetailClient({ id }: { id: string }) {
             <Button data-testid="feedback-copy-summary" onClick={handleCopy}>
               {copied ? "已複製" : "複製摘要"}
             </Button>
-            <GuardedLink href="/feedback" className="text-[13px] text-zk-primary">
+            <GuardedLink href="/feedback" className="text-zk-base text-zk-primary">
               ‹ 返回列表
             </GuardedLink>
           </>
         }
       />
 
-      {error && <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
+      {error && <Banner kind="error">{error}</Banner>}
 
       <div className="rounded-lg border border-zk-border bg-white px-5 py-4" data-testid="feedback-summary">
         <SimpleMarkdown text={report.summary_md} />
       </div>
 
       <details className="rounded-lg border border-zk-border bg-white px-5 py-3" data-testid="feedback-transcript">
-        <summary className="cursor-pointer text-[13px] font-semibold text-zk-text-secondary">原對話節錄（展開）</summary>
+        <summary className="cursor-pointer text-zk-base font-semibold text-zk-text-secondary">原對話節錄（展開）</summary>
         <div className="mt-3 space-y-2">
           {report.transcript_excerpt.map((m, i) => (
-            <div key={i} className="text-[12.5px]">
+            <div key={i} className="text-zk-sm">
               <span className="font-semibold text-zk-muted">{m.role === "user" ? "用戶" : "訪談員"}：</span>
               <span className="whitespace-pre-wrap text-zk-text-secondary">{m.content}</span>
             </div>
@@ -120,12 +121,12 @@ export function FeedbackDetailClient({ id }: { id: string }) {
       </details>
 
       <div className="flex flex-col gap-2 rounded-lg border border-zk-border bg-white px-5 py-4">
-        <div className="text-[12.5px] font-semibold text-zk-text-secondary">處理備註（俾老闆自己記低跟進情況）</div>
+        <div className="text-zk-sm font-semibold text-zk-text-secondary">處理備註（俾老闆自己記低跟進情況）</div>
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={2}
-          className="w-full resize-none rounded-md border border-zk-input-border px-2.5 py-2 text-[13px] focus:border-zk-primary focus:outline-none"
+          className="w-full resize-none rounded-md border border-zk-input-border px-2.5 py-2 text-zk-base focus:border-zk-primary focus:outline-none"
         />
         <div className="flex flex-wrap gap-2 pt-1">
           <Button data-testid="feedback-status-read" disabled={saving !== null} onClick={() => updateStatus("read")}>

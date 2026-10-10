@@ -50,6 +50,7 @@ test("A：QAS 完成日期／到期日——編輯抽屜填寫、儲存、90 日
     await page.goto("/guards");
     await openEditByName(page, guard.nameZh);
 
+    await page.getByTestId("guard-tab-docs").click();
     await expect(page.getByText("QAS 完成日期")).toBeVisible();
     await expect(page.getByText("QAS 到期日（如有）")).toBeVisible();
 

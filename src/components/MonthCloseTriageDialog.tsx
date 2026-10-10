@@ -5,8 +5,10 @@
 // 5 秒到／撳下一題／關閉／切 tab／unmount 先真正 call API（同原本 body 一樣）；失敗標返「未送出，請再試」。
 // 冇 PII：盤名、雞頭代號、更種代號、數目。
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
+import { MQ_BELOW_LG } from "@/lib/ui/breakpoints";
 import { apiGet, apiRequest, type ApiResult } from "@/lib/ui/api-client";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
@@ -58,10 +60,10 @@ interface Impact {
 
 
 function useIsMobile(): boolean {
-  const [m, setM] = useState(() => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 767px)").matches : false));
+  const [m, setM] = useState(() => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(MQ_BELOW_LG).matches : false));
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    const mq = window.matchMedia("(max-width: 767px)");
+    const mq = window.matchMedia(MQ_BELOW_LG);
     const on = () => setM(mq.matches);
     on();
     mq.addEventListener("change", on);
@@ -241,9 +243,9 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     <>
       {q.mc.candidates.length > 0 && (
         <fieldset className="space-y-1.5" disabled={false}>
-          <legend className="text-[12.5px] font-semibold">候選</legend>
+          <legend className="text-zk-sm font-semibold">候選</legend>
           {q.mc.candidates.map((c) => (
-            <label key={c.id} className="flex cursor-pointer items-start gap-2 rounded-md border border-zk-border p-2 text-[13px] has-[:checked]:border-zk-primary has-[:checked]:bg-blue-50">
+            <label key={c.id} className="flex cursor-pointer items-start gap-2 rounded-md border border-zk-border p-2 text-zk-base has-[:checked]:border-zk-primary has-[:checked]:bg-zk-primary-tint-soft">
               <input
                 type="radio"
                 name="mc-candidate"
@@ -256,14 +258,14 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               <span className="flex-1">
                 {humanize(c.label)}
                 {c.values_text ? <b className="ml-1">{c.values_text}</b> : null}
-                {c.evidence ? <span className="block text-[11.5px] text-zk-faint">{humanize(c.evidence)}</span> : null}
+                {c.evidence ? <span className="block text-zk-xs text-zk-faint">{humanize(c.evidence)}</span> : null}
               </span>
             </label>
           ))}
         </fieldset>
       )}
       {q.mc.needs_broker_pick && has("mc_pick") && (
-        <label className="block text-[12.5px]">
+        <label className="block text-zk-sm">
           <span className="mb-1 block text-zk-muted">或者揀其他結算雞頭</span>
           <select
             className="w-full rounded-[5px] border border-zk-border px-2 py-1.5"
@@ -284,10 +286,10 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
       )}
       {q.mc.needs_price_input && has("mc_price") && (
         <fieldset className="space-y-1.5 rounded border border-zk-border p-2">
-          <legend className="px-1 text-[12.5px] font-semibold">自己輸入價錢（元／更）</legend>
+          <legend className="px-1 text-zk-sm font-semibold">自己輸入價錢（元／更）</legend>
           <div className="grid grid-cols-3 gap-2">
             {([["client", "客價"], ["wage", "工資"], ["fee", "雞頭費"]] as const).map(([k, label]) => (
-              <label key={k} className="block text-[12px]">
+              <label key={k} className="block text-zk-sm">
                 <span className="text-zk-muted">{label}</span>
                 <input
                   inputMode="decimal"
@@ -323,20 +325,20 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
   const toast = view.pending && view.deadline ? <UndoToast item={view.pending} deadline={view.deadline} onUndo={undo} /> : null;
   const failedBanner =
     failedIds.length > 0 ? (
-      <div className="flex flex-col gap-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-[12.5px] text-red-700" data-testid="mc-failed-banner" role="alert">
+      <div className="flex flex-col gap-2 rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-sm text-zk-danger-dark" data-testid="mc-failed-banner" role="alert">
         <div>有 {failedIds.length} 題未送出，請再試：{failedIds.map((id) => shortHuman(failed[id]!.title)).join("、")}</div>
-        <button type="button" onClick={abandonUnsent} className="self-start rounded border border-red-300 bg-white px-2.5 py-1 text-red-700" data-testid="mc-abandon">
+        <Button variant="danger" size="sm" className="self-start" type="button" onClick={abandonUnsent} data-testid="mc-abandon">
           放棄未送出嘅 {failedIds.length} 題（留返待答問題）
-        </button>
+        </Button>
       </div>
     ) : null;
-  const retryTag = failedMsg ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-[12.5px] text-red-700" data-testid="mc-unsent">未送出，請再試（{humanize(failedMsg)}）</div> : null;
+  const retryTag = failedMsg ? <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-sm text-zk-danger-dark" data-testid="mc-unsent">未送出，請再試（{humanize(failedMsg)}）</div> : null;
 
   // ------------------------------------------------------------------ 手機 1e
   if (mobile) {
     const segs = (initial ?? []).map((x) => {
       const r = results[x.id];
-      const c = r === "ok" ? "#0f766e" : r === "skip" ? "#cbd5e1" : x.id === pendingId ? "#93c5fd" : x.id === q?.id ? "#2563eb" : "#e2e8f0";
+      const c = r === "ok" ? "var(--zk-success)" : r === "skip" ? "var(--zk-faintest)" : x.id === pendingId ? "var(--zk-primary-light)" : x.id === q?.id ? "var(--zk-primary)" : "var(--zk-border)";
       return { id: x.id, c };
     });
     const total = initial?.length ?? 0;
@@ -365,8 +367,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
             <button type="button" onClick={closeDialog} className="text-xl leading-none" aria-label="遲啲先答" data-testid="mc-later">
               ✕
             </button>
-            <span className="flex-1 text-[15px] font-bold">要你睇</span>
-            {total > 0 && !allClear && <span className="text-[13px] text-zk-muted" data-testid="mc-pos">{pos} / {total}</span>}
+            <span className="flex-1 text-zk-md font-bold">要你睇</span>
+            {total > 0 && !allClear && <span className="text-zk-base text-zk-muted" data-testid="mc-pos">{pos} / {total}</span>}
           </div>
           <div className="flex gap-0.5" data-testid="mc-segs">
             {segs.map((s) => (
@@ -376,39 +378,39 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
         </div>
         <div className="flex-1 overflow-y-auto px-5 pb-40 pt-5">
           {failedBanner}
-          {error && !failedMsg && <div className="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</div>}
-          {qs === null && <div className="text-[13px] text-zk-muted">載入緊…</div>}
+          {error && !failedMsg && <Banner kind="error" className="mb-3">{error}</Banner>}
+          {qs === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
           {q && (
             <div className="flex flex-col gap-4">
               {retryTag}
               <div className="flex gap-1.5">
-                <span className="rounded-[10px] bg-zk-surface px-2 py-[3px] text-[11.5px] font-semibold text-[#475569]">{kindChip(q.kind, q.kind_label)}</span>
-                <span className="rounded-[10px] px-2 py-[3px] text-[11.5px] font-semibold" style={q.mc.confidence === "propose" ? { background: "#dbeafe", color: "#1e40af" } : { background: "#ffedd5", color: "#c2410c" }}>
+                <span className="rounded-[10px] bg-zk-surface px-2 py-[3px] text-zk-xs font-semibold text-zk-text-secondary">{kindChip(q.kind, q.kind_label)}</span>
+                <span className="rounded-[10px] px-2 py-[3px] text-zk-xs font-semibold" style={q.mc.confidence === "propose" ? { background: "var(--zk-primary-tint)", color: "var(--zk-primary-deep)" } : { background: "var(--zk-warning-tint)", color: "var(--zk-warning)" }}>
                   {q.mc.confidence === "propose" ? "有建議" : "要你揀"}
                 </span>
               </div>
               <div>
-                <div className="text-[21px] font-bold leading-[1.35]">{humanize(q.title)}</div>
-                <div className="mt-1 text-[15px] text-[#334155]" data-testid="mc-summary">
+                <div className="text-zk-xl font-bold leading-[1.35]">{humanize(q.title)}</div>
+                <div className="mt-1 text-zk-md text-zk-text-secondary" data-testid="mc-summary">
                   {humanize(q.mc.summary)}
                 </div>
-                {q.mc.identity_label && <div className="mt-1 text-[12px] text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
+                {q.mc.identity_label && <div className="mt-1 text-zk-sm text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
               </div>
               <GuardMatchInfo question={q} month={month} compact />
               {canAccept ? (
-                <div className={`rounded-[14px] border-2 px-4 py-3.5 ${choseOther ? "border-[#cbd5e1] bg-white opacity-60" : "border-[#2563eb] bg-[#f8fbff]"}`} data-testid="mc-suggest-card">
-                  <div className="text-[12px] font-semibold text-[#1d4ed8]">系統建議</div>
-                  <div className="mt-1 text-[20px] font-bold">{humanize(q.mc.suggestion ?? (suggestCand ? `${suggestCand.label}${suggestCand.values_text ? ` ${suggestCand.values_text}` : ""}` : "按建議答案"))}</div>
-                  {suggestCand?.evidence && <div className="mt-1.5 text-[12px] text-zk-muted">依據：{humanize(suggestCand.evidence)}</div>}
+                <div className={`rounded-[14px] border-2 px-4 py-3.5 ${choseOther ? "border-zk-faintest bg-white opacity-60" : "border-zk-primary bg-zk-primary-tint-soft"}`} data-testid="mc-suggest-card">
+                  <div className="text-zk-sm font-semibold text-zk-primary-dark">系統建議</div>
+                  <div className="mt-1 text-zk-xl font-bold">{humanize(q.mc.suggestion ?? (suggestCand ? `${suggestCand.label}${suggestCand.values_text ? ` ${suggestCand.values_text}` : ""}` : "按建議答案"))}</div>
+                  {suggestCand?.evidence && <div className="mt-1.5 text-zk-sm text-zk-muted">依據：{humanize(suggestCand.evidence)}</div>}
                 </div>
               ) : (
-                <div className="rounded-[14px] border border-dashed border-[#cbd5e1] bg-zk-surface-2 px-4 py-3.5" data-testid="mc-nosuggest-card">
-                  <div className="text-[12px] font-semibold text-zk-muted">冇建議答案</div>
-                  <div className="mt-1 text-[13.5px] leading-normal text-[#334155]">系統唔肯自己決定，要你揀。</div>
+                <div className="rounded-[14px] border border-dashed border-zk-faintest bg-zk-surface-2 px-4 py-3.5" data-testid="mc-nosuggest-card">
+                  <div className="text-zk-sm font-semibold text-zk-muted">冇建議答案</div>
+                  <div className="mt-1 text-zk-base leading-normal text-zk-text-secondary">系統唔肯自己決定，要你揀。</div>
                 </div>
               )}
               {(canAccept || !ackOnly) && (
-                <button type="button" className="text-center text-[13.5px] text-zk-primary" onClick={toggleOther} data-testid="mc-other">
+                <button type="button" className="text-center text-zk-base text-zk-primary" onClick={toggleOther} data-testid="mc-other">
                   揀其他答案／自己輸入
                 </button>
               )}
@@ -433,14 +435,14 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
           )}
           {allClear && (
             <div className="flex min-h-[50vh] flex-col items-center justify-center gap-2.5 text-center">
-              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#ccfbf1] text-2xl font-bold text-[#0f766e]">✓</span>
-              <div className="text-[19px] font-bold" data-testid="mc-finish">{waiting ? "等緊最後一題送出" : `${handled} 題處理完`}</div>
-              <div className="text-[13.5px] text-zk-muted">
+              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-zk-success-tint text-2xl font-bold text-zk-success">✓</span>
+              <div className="text-zk-xl font-bold" data-testid="mc-finish">{waiting ? "等緊最後一題送出" : `${handled} 題處理完`}</div>
+              <div className="text-zk-base text-zk-muted">
                 {waiting ? "5 秒內仲可以撤銷。" : <>確認 {okN} · 跳過 {skipN}<br />跳過嘅留咗喺「待答問題」，有時間再答。</>}
               </div>
-              {!waiting && okN > 0 && <div className="max-w-[300px] text-[11.5px] leading-snug text-zk-faint">想還原系統自動做嘅改動？{UNDO_NOTE_SHORT}</div>}
+              {!waiting && okN > 0 && <div className="max-w-[300px] text-zk-xs leading-snug text-zk-faint">想還原系統自動做嘅改動？{UNDO_NOTE_SHORT}</div>}
               {!waiting && (
-                <button type="button" onClick={closeDialog} className="mt-2 h-[46px] rounded-[10px] border border-[#cbd5e1] bg-white px-6 text-sm" data-testid="mc-back">
+                <button type="button" onClick={closeDialog} className="mt-2 h-[46px] rounded-[10px] border border-zk-faintest bg-white px-6 text-sm" data-testid="mc-back">
                   返回
                 </button>
               )}
@@ -451,10 +453,10 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
           {toast}
           {q && primary && (
             <div className="flex gap-2.5">
-              <button type="button" onClick={skip} disabled={tapLock} className="h-[54px] flex-1 disabled:opacity-40 rounded-xl border border-[#cbd5e1] bg-white text-[15px] font-semibold text-[#334155]" data-testid="mc-skip">
+              <button type="button" onClick={skip} disabled={tapLock} className="h-[54px] flex-1 disabled:opacity-40 rounded-xl border border-zk-faintest bg-white text-zk-md font-semibold text-zk-text-secondary" data-testid="mc-skip">
                 跳過，留返人手
               </button>
-              <button type="button" onClick={primary.run} disabled={primary.disabled || tapLock} data-testid={primary.testid} className="h-[54px] flex-1 rounded-xl text-[15px] font-semibold text-white disabled:opacity-40" style={{ background: primary.dark ? "#0f172a" : "#2563eb" }}>
+              <button type="button" onClick={primary.run} disabled={primary.disabled || tapLock} data-testid={primary.testid} className="h-[54px] flex-1 rounded-xl text-zk-md font-semibold text-white disabled:opacity-40" style={{ background: primary.dark ? "var(--zk-text)" : "var(--zk-primary)" }}>
                 {primary.label}
               </button>
             </div>
@@ -471,28 +473,28 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
       <div className="relative z-10 flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-xl bg-white shadow-xl sm:max-w-xl sm:rounded-xl">
         <div className="flex items-center justify-between gap-2 border-b border-zk-border px-4 py-3">
           <div>
-            <div className="text-[15px] font-semibold">一鍵結算——要你睇</div>
-            {qs && <div className="text-[12px] text-zk-muted">仲有 {visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.inFlight.length > 0 ? ` · ${view.inFlight.length} 題送出中${view.pending ? "（可撤銷）" : ""}` : ""}</div>}
+            <div className="text-zk-md font-semibold">一鍵結算——要你睇</div>
+            {qs && <div className="text-zk-sm text-zk-muted">仲有 {visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.inFlight.length > 0 ? ` · ${view.inFlight.length} 題送出中${view.pending ? "（可撤銷）" : ""}` : ""}</div>}
           </div>
-          <button type="button" onClick={closeDialog} className="rounded px-2 py-1 text-[13px] text-zk-muted hover:bg-zk-header" data-testid="mc-later">
+          <Button variant="ghost" size="sm" type="button" onClick={closeDialog} data-testid="mc-later">
             遲啲先答
-          </button>
+          </Button>
         </div>
         <div className="space-y-3 overflow-y-auto px-4 py-3">
           {failedBanner}
-          {error && !failedMsg && <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</div>}
+          {error && !failedMsg && <Banner kind="error">{error}</Banner>}
           {done.length > 0 && (
-            <ul className="list-disc space-y-0.5 rounded border border-green-300 bg-green-50 px-5 py-2 text-[12px] text-green-800" data-testid="mc-done">
+            <ul className="list-disc space-y-0.5 rounded border border-zk-success/30 bg-zk-success-bg px-5 py-2 text-zk-sm text-zk-success-dark" data-testid="mc-done">
               {done.map((d, i) => (
                 <li key={i}>{d}</li>
               ))}
             </ul>
           )}
-          {qs === null && <div className="text-[13px] text-zk-muted">載入緊…</div>}
+          {qs === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
           {allClear && (
             <div className="space-y-2 py-6 text-center">
-              <div className="text-[15px] font-semibold" data-testid="mc-finish">{waiting ? "等緊最後一題送出（5 秒內可撤銷）" : `${handled} 題處理完`}</div>
-              {!waiting && <div className="text-[12.5px] text-zk-muted">確認 {okN} · 跳過 {skipN}　跳過嘅留咗喺「待答問題」。</div>}
+              <div className="text-zk-md font-semibold" data-testid="mc-finish">{waiting ? "等緊最後一題送出（5 秒內可撤銷）" : `${handled} 題處理完`}</div>
+              {!waiting && <div className="text-zk-sm text-zk-muted">確認 {okN} · 跳過 {skipN}　跳過嘅留咗喺「待答問題」。</div>}
               {!waiting && (
                 <Button variant="primary" onClick={closeDialog}>
                   完成
@@ -507,11 +509,11 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
                 <Pill variant="neutral">{kindChip(q.kind, q.kind_label)}</Pill>
                 <Pill variant={q.mc.confidence === "propose" ? "warning" : "danger"}>{q.mc.confidence === "propose" ? "有建議" : "要你揀"}</Pill>
               </div>
-              <div className="text-[14px] font-medium">{humanize(q.title)}</div>
-              <div className="text-[12.5px] text-zk-muted" data-testid="mc-summary">
+              <div className="text-zk-md font-medium">{humanize(q.title)}</div>
+              <div className="text-zk-sm text-zk-muted" data-testid="mc-summary">
                 {humanize(q.mc.summary)}
               </div>
-              {q.mc.identity_label && <div className="text-[12px] text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
+              {q.mc.identity_label && <div className="text-zk-sm text-zk-faint">更表身份：{humanize(q.mc.identity_label)}</div>}
               <GuardMatchInfo question={q} month={month} />
               {form}
             </>

@@ -22,8 +22,10 @@ import { RightRail } from "./RightRail";
 import { HistorySection } from "./HistorySection";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: boolean; canUnlock: boolean }) {
+  const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
   const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1));
   const [runs, setRuns] = useState<RunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +39,8 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   const [facts, setFacts] = useState({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
   // null＝跟最新 run 報告；鎖／解鎖之後蓋過（run 報告係結算當時嘅快照）。
   const [lockedOverride, setLockedOverride] = useState<boolean | null>(null);
+  // P3-4.0：鎖定狀態以 month_closes 記錄為準（`GET /api/month-closes?month=`），唔依賴有冇一鍵結算 run（7、8 月係舊月結工作台鎖嘅）。
+  const [mcRecord, setMcRecord] = useState<{ id: string; locked_at: string | null } | null>(null);
   const [health, setHealth] = useState<{ critical: number; warn: number; info: number } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [unsentMsg, setUnsentMsg] = useState<string | null>(null);
@@ -59,6 +63,18 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     setRuns(list);
   }
 
+  // 快速換月 race：response 回嚟時月份已經變咗就唔 set（用 ref 對返 request 月份）。
+  const monthRef = useRef(month);
+  useEffect(() => {
+    monthRef.current = month;
+  }, [month]);
+  async function loadMonthClose() {
+    const reqMonth = month;
+    const res = await apiGet<{ rows: Array<{ id: string; locked_at: string | null }> }>(`/api/month-closes?month=${reqMonth}`);
+    if (unmountedRef.current || monthRef.current !== reqMonth) return;
+    setMcRecord(res.ok ? (res.data.rows[0] ?? null) : null);
+  }
+
   // 上次對話框關閉／離開時有題送出失敗（記喺 sessionStorage）→ 提示重新答。
   useEffect(() => {
     reportUnsent();
@@ -69,7 +85,9 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     setFacts({ sessionRoster: 0, sessionStaffList: false, sessionPostorder: false });
     setLockedOverride(null);
     setHealth(null);
+    setMcRecord(null);
     loadRuns();
+    void loadMonthClose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month, monthReady]);
 
@@ -190,7 +208,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
 
   // WP-ONE-CLICK-AUTO §31.3 E：一撳還原呢個 run 所有 auto 改動。
   async function undoAuto(runId: string) {
-    if (!window.confirm(`還原呢次一鍵結算所有「自動」改動？\n\n${UNDO_NOTE}`)) return;
+    if (!(await askConfirm({ message: `還原呢次一鍵結算所有「自動」改動？\n\n${UNDO_NOTE}`, confirmLabel: "還原", tone: "danger" }))) return;
     setBusy(true);
     setError(null);
     const res = await apiPost<{ undone: Record<string, number>; skipped: Array<{ kind: string; reason: string }>; already_undone: boolean; still_using_voided_card_prices?: number }>(`/api/month-close/one-click/${runId}/undo-auto`);
@@ -235,6 +253,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     else {
       setNotice(`${month} 已鎖定`);
       setLockedOverride(true);
+      void loadMonthClose();
       setNeedDiffReason(false);
       setDiffReason("");
     }
@@ -256,6 +275,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     else {
       setNotice(`${month} 已解鎖`);
       setLockedOverride(false);
+      void loadMonthClose();
       await loadRuns();
     }
   }
@@ -264,10 +284,13 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   const report = latestRun?.report ?? null;
   // Opus 驗收：job 行緊嗰陣唔俾再上載（會開新版本／改名單，job 讀到一半嘅資料）。
   const jobRunning = !!latestRun && latestRun.status === "running" && !latestRun.stalled;
-  const locked = lockedOverride ?? (report?.lock_precondition.current_month_already_locked === true || stepByKey(latestRun, "precheck")?.numbers.currentMonthLocked === true);
+  const runLocked = report?.lock_precondition.current_month_already_locked === true || stepByKey(latestRun, "precheck")?.numbers.currentMonthLocked === true;
+  // month_closes 有記錄就以記錄為準；冇記錄先睇 run 報告。
+  const locked = lockedOverride ?? (mcRecord ? !!mcRecord.locked_at : runLocked);
+  const lockedAt = mcRecord?.locked_at ?? (lockedOverride === true ? new Date().toISOString() : null);
 
   const uploads = useMemo(() => deriveUploads(latestRun, facts, report), [latestRun, facts, report]);
-  const stages = useMemo(() => deriveStages({ run: latestRun, report, uploads, locked }), [latestRun, report, uploads, locked]);
+  const stages = useMemo(() => deriveStages({ run: latestRun, report, uploads, locked, lockedAt }), [latestRun, report, uploads, locked, lockedAt]);
   const groups = useMemo(() => groupReview(report?.auto?.review), [report]);
   const sessionId = report?.auto?.triage_session_id ?? null;
   const openTriage = () => {
@@ -275,7 +298,8 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   };
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4 max-lg:pb-20">
+      {confirmDialog}
       <PageHeader
         kicker={kickerFor("/month-close")}
         title="一鍵全月結算"
@@ -295,7 +319,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       <Banner kind="error" message={unsentMsg} />
-      {locked && <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-3 py-2 text-[12.5px] text-zk-warning-dark">{month} 已鎖定，成頁只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</div>}
+      {locked && <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-3 py-2 text-zk-sm text-zk-warning-dark">{month} 已鎖定，成頁只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</div>}
 
       <StageBar stages={stages} />
 
@@ -331,6 +355,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
               />
               <LockSection
                 report={report}
+                lockedAt={lockedAt}
                 month={month}
                 busy={busy}
                 locked={locked}
@@ -346,6 +371,25 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
                 onHealth={setHealth}
               />
             </>
+          )}
+          {!report && locked && (
+            <LockSection
+              report={null}
+              lockedAt={lockedAt}
+              month={month}
+              busy={busy}
+              locked={locked}
+              groups={groups}
+              onUnlock={unlockMonth}
+              canUnlock={canUnlock}
+              needDiffReason={false}
+              diffReason=""
+              onDiffReason={setDiffReason}
+              isBoss={isBoss}
+              onForceLock={() => undefined}
+              onOpenTriage={openTriage}
+              onHealth={setHealth}
+            />
           )}
           <HistorySection runs={runs} busy={busy} open={showHistory} onToggle={() => setShowHistory((v) => !v)} onRerun={rerun} />
         </div>

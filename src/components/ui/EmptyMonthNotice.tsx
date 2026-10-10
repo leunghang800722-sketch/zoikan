@@ -7,7 +7,7 @@
 // 就係 caller 嘅 `setMonth`）。
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 import { currentMonthStr } from "@/lib/ui/format";
 
 interface LatestMonthResult {
@@ -40,15 +40,15 @@ export function EmptyMonthNotice({ month, isEmpty, onJump }: { month: string; is
   if (!shouldCheck || !checked || !latestMonth || latestMonth === month) return null;
 
   return (
-    <Notice
-      variant="info"
+    <Banner compact
+      kind="info"
       action={
-        <button type="button" data-testid="empty-month-jump" onClick={() => onJump(latestMonth)} className="font-semibold text-[#1e40af] underline">
+        <button type="button" data-testid="empty-month-jump" onClick={() => onJump(latestMonth)} className="font-semibold text-zk-primary-deep underline">
           去 {latestMonth}
         </button>
       }
     >
       {month} 未有資料 · 最近有資料嘅月份係 {latestMonth}
-    </Notice>
+    </Banner>
   );
 }

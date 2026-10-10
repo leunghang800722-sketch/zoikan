@@ -85,7 +85,7 @@ export function MobileNav({
           <span className="h-0.5 w-5 bg-zk-text" />
           <span className="h-0.5 w-5 bg-zk-text" />
         </button>
-        <div className="min-w-0 flex-1 text-[15px] font-bold text-zk-text">在勤</div>
+        <div className="min-w-0 flex-1 text-zk-md font-bold text-zk-text">在勤</div>
         <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-[#e0e7ff] text-xs font-semibold text-[#3730a3]">
           {initials(userName)}
         </div>
@@ -110,15 +110,15 @@ export function MobileNav({
                 {initials(userName)}
               </div>
               <div>
-                <div className="text-[13.5px] font-semibold text-zk-text">{userName}</div>
-                <div className="text-[11px] text-zk-muted">{roleLabel}</div>
+                <div className="text-zk-base font-semibold text-zk-text">{userName}</div>
+                <div className="text-zk-xs text-zk-muted">{roleLabel}</div>
               </div>
             </div>
 
             <nav className="flex flex-1 flex-col overflow-y-auto">
               {groups.map((g) => (
                 <div key={g.title || "_top"} className="mb-3">
-                  {g.title && <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[.06em] text-zk-faint">{g.title}</div>}
+                  {g.title && <div className="px-2 pb-1.5 text-zk-2xs font-semibold tracking-[.06em] text-zk-faint">{g.title}</div>}
                   <div className="flex flex-col">
                     {g.links.map((l) => {
                       const active = isLinkActive(pathname, l.href, search);
@@ -129,13 +129,13 @@ export function MobileNav({
                           href={l.href}
                           data-testid={`mnav-${l.href.split("&month=")[0]}`}
                           onClick={() => setOpen(false)}
-                          className={`flex items-center justify-between rounded-md px-2 py-2.5 text-[14px] ${
+                          className={`flex items-center justify-between rounded-md px-2 py-2.5 text-zk-md ${
                             active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
                           }`}
                         >
                           {l.label}
                           {!!badge && (
-                            <span className="rounded-[9px] bg-[#fee2e2] px-1.5 py-px text-[10.5px] font-semibold text-[#b91c1c]">{badge}</span>
+                            <span className="rounded-[9px] bg-zk-danger-tint px-1.5 py-px text-zk-2xs font-semibold text-zk-danger-dark">{badge}</span>
                           )}
                         </GuardedLink>
                       );
@@ -146,11 +146,11 @@ export function MobileNav({
             </nav>
 
             <div className="flex flex-col gap-0.5 border-t border-zk-border pt-3">
-              <GuardedLink href="/change-password" onClick={() => setOpen(false)} className="rounded-md px-2 py-2.5 text-[14px] text-zk-primary">
+              <GuardedLink href="/change-password" onClick={() => setOpen(false)} className="rounded-md px-2 py-2.5 text-zk-md text-zk-primary">
                 改密碼
               </GuardedLink>
-              <LogoutButton className="rounded-md px-2 py-2.5 text-left text-[14px] text-zk-text-secondary" />
-              <div className="px-2 text-[11.5px] text-zk-faint">登出會同時登出所有裝置</div>
+              <LogoutButton className="rounded-md px-2 py-2.5 text-left text-zk-md text-zk-text-secondary" />
+              <div className="px-2 text-zk-xs text-zk-faint">登出會同時登出所有裝置</div>
             </div>
           </div>
         </>

@@ -18,14 +18,15 @@
 // 同一權限、只讀）提供，冇資料就唔會出現。
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, type ApiListResult, apiGetAll } from "@/lib/ui/api-client";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtDateTime, todayLocalStr, addDaysStr } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
+import { diffAuditFields } from "@/lib/ui/audit-field-labels";
 
 interface AuditLogRow {
   id: string;
@@ -70,9 +71,45 @@ function actionPill(action: string) {
   if (action === "lock_month" || action === "lock") return <Pill variant="warning">{action}</Pill>;
   if (action === "create") return <Pill variant="success">{action}</Pill>;
   return (
-    <Pill variant="broker" color={{ bg: "#f8fafc", fg: "#64748b" }}>
+    <Pill variant="broker" color={{ bg: "var(--zk-surface-2)", fg: "var(--zk-muted)" }}>
       {action}
     </Pill>
+  );
+}
+
+// P3-4.3（H16）：key→中文欄名，只顯示有改嘅欄；原始 JSON 收埋。
+function AuditDiff({ before, after }: { before: unknown; after: unknown }) {
+  const diff = diffAuditFields(before, after);
+  return (
+    <div className="mt-1 space-y-1" data-testid="audit-diff">
+      {diff.length === 0 ? (
+        <div className="text-zk-xs text-zk-muted">冇欄位改動（或只係建立／作廢紀錄）</div>
+      ) : (
+        <table className="w-full max-w-md text-zk-xs">
+          <thead>
+            <tr className="text-left text-zk-muted">
+              <th className="pr-2 font-medium">欄位</th>
+              <th className="pr-2 font-medium">之前</th>
+              <th className="font-medium">之後</th>
+            </tr>
+          </thead>
+          <tbody>
+            {diff.map((d) => (
+              <tr key={d.key} className="align-top">
+                <td className="pr-2 font-medium text-zk-text-secondary" title={d.key}>{d.label}</td>
+                <td className="pr-2 break-all text-zk-muted">{d.before}</td>
+                <td className="break-all text-zk-text">{d.after}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <details>
+        <summary className="cursor-pointer text-zk-2xs text-zk-faint">原始 JSON</summary>
+        <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">before: {JSON.stringify(before, null, 2)}</pre>
+        <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-zk-xs">after: {JSON.stringify(after, null, 2)}</pre>
+      </details>
+    </div>
   );
 }
 
@@ -212,7 +249,7 @@ export default function AuditLogPage() {
         }
       />
 
-      {error && <Notice variant="error">{error}</Notice>}
+      {error && <Banner compact kind="error">{error}</Banner>}
 
       <div className={tableCls.wrap}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(6) }}>
@@ -228,11 +265,7 @@ export default function AuditLogPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr>
-                <td className="px-3.5 py-4 text-zk-faint" colSpan={6}>
-                  載入緊…
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={6} />
             )}
             {!loading && rows.length === 0 && (
               <tr>
@@ -253,16 +286,13 @@ export default function AuditLogPage() {
                 <td className={`${tableCls.td} whitespace-nowrap`} data-testid="audit-log-action-pill">
                   {actionPill(r.action)}
                 </td>
-                <td className={`${tableCls.td} whitespace-nowrap font-mono text-xs`} style={{ color: "#94a3b8" }}>
+                <td className={`${tableCls.td} whitespace-nowrap font-mono text-xs`} style={{ color: "var(--zk-faint)" }}>
                   {r.row_id.slice(0, 12)}
                 </td>
                 <td className={tableCls.tdNum}>
                   <details className="text-left">
-                    <summary className="cursor-pointer text-xs text-zk-primary">展開 before/after</summary>
-                    <div className="mt-1 space-y-1">
-                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-[11px]">before: {JSON.stringify(r.before, null, 2)}</pre>
-                      <pre className="max-w-md overflow-x-auto rounded bg-zk-header p-2 text-[11px]">after: {JSON.stringify(r.after, null, 2)}</pre>
-                    </div>
+                    <summary className="cursor-pointer text-xs text-zk-primary">展開改動</summary>
+                    <AuditDiff before={r.before} after={r.after} />
                   </details>
                 </td>
               </tr>
@@ -271,7 +301,7 @@ export default function AuditLogPage() {
         </table>
       </div>
 
-      <div className="flex items-center justify-between text-[13px] text-zk-muted">
+      <div className="flex items-center justify-between text-zk-base text-zk-muted">
         <span>
           共 {total} 條，第 {Math.floor(skip / PAGE_SIZE) + 1} 頁
         </span>

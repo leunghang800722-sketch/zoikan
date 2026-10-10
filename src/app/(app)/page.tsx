@@ -93,13 +93,13 @@ export default async function DashboardPage() {
     return (
       <div className="flex flex-col gap-4">
         <PageHeader title={`你好，${session.name}`} />
-        <div data-testid="guard-landing" className="rounded-lg border border-zk-border bg-white px-5 py-6 text-[14px] leading-relaxed text-zk-text">
+        <div data-testid="guard-landing" className="rounded-lg border border-zk-border bg-white px-5 py-6 text-zk-md leading-relaxed text-zk-text">
           <p>你嘅帳號係保安員帳號，系統功能稍後開放。如要改密碼請按下面。</p>
-          <div className="mt-4 flex items-center gap-4 text-[13.5px]">
+          <div className="mt-4 flex items-center gap-4 text-zk-base">
             <Link href="/change-password" className="font-semibold text-zk-primary underline">
               改密碼
             </Link>
-            <LogoutButton className="p-0 text-[13.5px] font-semibold text-zk-text-secondary underline underline-offset-2 hover:text-zk-text" />
+            <LogoutButton className="p-0 text-zk-base font-semibold text-zk-text-secondary underline underline-offset-2 hover:text-zk-text" />
           </div>
         </div>
       </div>
@@ -119,7 +119,7 @@ export default async function DashboardPage() {
     <div className="flex flex-col gap-4">
       <PageHeader title={`歡迎返嚟，${session.name}`} subtitle={subtitle} />
       {links.length === 0 ? (
-        <div className="rounded-lg border border-zk-border bg-white px-4 py-6 text-center text-[13px] text-zk-muted">
+        <div className="rounded-lg border border-zk-border bg-white px-4 py-6 text-center text-zk-base text-zk-muted">
           你嘅角色暫時未開任何模組權限，請聯絡老闆開權限。
         </div>
       ) : (
@@ -131,8 +131,8 @@ export default async function DashboardPage() {
               className="flex items-center justify-between gap-2 rounded-lg border border-zk-border bg-white px-4 py-3 transition-colors hover:bg-zk-header focus-visible:outline focus-visible:outline-2 focus-visible:outline-zk-primary"
             >
               <div className="min-w-0">
-                <div className="truncate text-[13.5px] font-medium text-zk-text">{l.label}</div>
-                {LINK_DESCRIPTIONS[l.href] && <div className="mt-0.5 truncate text-[11.5px] text-[#64748b]">{LINK_DESCRIPTIONS[l.href]}</div>}
+                <div className="truncate text-zk-base font-medium text-zk-text">{l.label}</div>
+                {LINK_DESCRIPTIONS[l.href] && <div className="mt-0.5 truncate text-zk-xs text-zk-muted">{LINK_DESCRIPTIONS[l.href]}</div>}
               </div>
               <span className="shrink-0 text-zk-faint">›</span>
             </Link>

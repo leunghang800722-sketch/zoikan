@@ -11,7 +11,7 @@ import { ReviewCard } from "./ReviewCard";
 import { PostorderDependencyLine } from "./PostorderDependencyLine";
 
 const card = "rounded-[10px] border border-zk-border bg-white";
-const STACK_COLOR = { shift: "#2563eb", referral: "#93c5fd", autopay: "#0f766e" } as const;
+const STACK_COLOR = { shift: "var(--zk-primary)", referral: "var(--zk-primary-light)", autopay: "var(--zk-success)" } as const;
 
 export function ReportSection({ run, report, busy, locked, groups, onOpenTriage }: { run: RunDTO; report: ReportDTO; busy: boolean; locked: boolean; groups: ReviewGroup[]; onOpenTriage: () => void }) {
   const [showAllSites, setShowAllSites] = useState(false);
@@ -31,18 +31,18 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
     <div className="flex min-w-0 flex-col gap-4" data-testid="report-section">
       <div className="flex flex-wrap items-baseline gap-2.5 px-0.5 pt-1.5">
         <h2 className="text-base font-bold text-zk-text">④ 報告 · {report.month}</h2>
-        <span className="text-[12px] text-zk-muted">{fmtMdHm(run.finished_at ?? run.started_at)} 嗰次結算</span>
+        <span className="text-zk-sm text-zk-muted">{fmtMdHm(run.finished_at ?? run.started_at)} 嗰次結算</span>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div className={`${card} px-[18px] py-4`}>
-          <div className="text-[12px] text-zk-muted">總收入</div>
-          <div className="mt-1 break-all text-[28px] font-bold leading-tight text-zk-text">{fmtMoney(report.totals.revenue)}</div>
-          <div className="mt-1.5 text-[11.5px] text-zk-muted">{siteCount} 個盤 · {fmtMoney(shiftSum)} 更</div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-testid="report-kpis">
+        <div className={`${card} px-3 py-3.5 lg:px-[18px] lg:py-4`}>
+          <div className="text-zk-sm text-zk-muted">總收入</div>
+          <div className="mt-1 whitespace-nowrap text-zk-2xl font-bold leading-tight text-zk-text max-lg:text-zk-xl">{fmtMoney(report.totals.revenue)}</div>
+          <div className="mt-1.5 text-zk-xs text-zk-muted">{siteCount} 個盤 · {fmtMoney(shiftSum)} 更</div>
         </div>
-        <div className={`${card} px-[18px] py-4`}>
-          <div className="text-[12px] text-zk-muted">總成本{report.totals.cost_basis === "combined" ? "（合併）" : "（毛利表口徑）"}</div>
-          <div className="mt-1 break-all text-[28px] font-bold leading-tight text-zk-text">{fmtMoney(report.totals.cost)}</div>
+        <div className={`${card} col-span-2 px-[18px] py-4 max-lg:order-last lg:col-span-1`}>
+          <div className="text-zk-sm text-zk-muted">總成本{report.totals.cost_basis === "combined" ? "（合併）" : "（毛利表口徑）"}</div>
+          <div className="mt-1 whitespace-nowrap text-zk-2xl font-bold leading-tight text-zk-text max-lg:text-zk-xl">{fmtMoney(report.totals.cost)}</div>
           {stack && (
             <>
               <div className="mt-2.5 flex h-1.5 overflow-hidden rounded-[3px] bg-zk-surface" data-testid="cost-stack">
@@ -50,7 +50,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
                   <span key={p.key} style={{ width: `${p.pct}%`, background: STACK_COLOR[p.key] }} />
                 ))}
               </div>
-              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-zk-muted">
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-zk-xs text-zk-muted">
                 <span><span style={{ color: STACK_COLOR.shift }}>●</span> 更次 {fmtMoney(stack.parts[0]!.value)}</span>
                 <span><span style={{ color: STACK_COLOR.referral }}>●</span> 介紹費 {fmtMoney(stack.parts[1]!.value)}（{report.referral_fee.count} 項）</span>
                 <span><span style={{ color: STACK_COLOR.autopay }}>●</span> 長工 Autopay {fmtMoney(stack.parts[2]!.value)}</span>
@@ -58,13 +58,13 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
             </>
           )}
         </div>
-        <div className={`${card} px-[18px] py-4`}>
-          <div className="text-[12px] text-zk-muted">毛利{report.totals.cost_basis === "combined" ? "（合併口徑）" : ""}</div>
+        <div className={`${card} px-3 py-3.5 lg:px-[18px] lg:py-4`}>
+          <div className="text-zk-sm text-zk-muted">毛利{report.totals.cost_basis === "combined" ? "（合併口徑）" : ""}</div>
           <div className="mt-1 flex flex-wrap items-baseline gap-2">
-            <span className="break-all text-[28px] font-bold leading-tight text-zk-text">{fmtMoney(report.totals.gross_margin)}</span>
-            {pct !== null && <span className="text-[13px] font-semibold text-zk-success">{pct}%</span>}
+            <span className="whitespace-nowrap text-zk-2xl font-bold leading-tight text-zk-text max-lg:text-zk-xl">{fmtMoney(report.totals.gross_margin)}</span>
+            {pct !== null && <span className="text-zk-base font-semibold text-zk-success">{pct}%</span>}
           </div>
-          <details className="mt-1.5 text-[11.5px] text-zk-muted" data-testid="margin-why">
+          <details className="mt-1.5 text-zk-xs text-zk-muted" data-testid="margin-why">
             <summary className="cursor-pointer">
               同「毛利即時表」唔同係正常 <span className="text-zk-primary">點解？</span>
             </summary>
@@ -81,8 +81,8 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
       </div>
 
       {report.unpriced.count > 0 && (
-        <div className="flex items-center gap-2.5 rounded-lg border border-[#fed7aa] bg-[#fff7ed] px-3.5 py-2.5 text-[12.5px] text-[#9a3412]" data-testid="unpriced-gap">
-          <span className="h-2 w-2 flex-none rounded-full bg-[#ea580c]" />
+        <div className="flex items-center gap-2.5 rounded-lg border border-zk-warning-border bg-zk-warning-bg px-3.5 py-2.5 text-zk-sm text-zk-warning-dark" data-testid="unpriced-gap">
+          <span className="h-2 w-2 flex-none rounded-full bg-zk-warning" />
           <span>
             <b>{report.unpriced.count} 更未定價，未計入成本。</b>
             未定價更數唔當 0 成本：上面成本／毛利未包呢 {report.unpriced.count} 更（收客 {report.unpriced.client_count}／出街 {report.unpriced.payout_count}／冇結算單位 {report.unpriced.no_settlement_count}／OT {report.unpriced.ot_unpriced_count}）。
@@ -93,8 +93,8 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
         </div>
       )}
 
-      <div className={`${card} flex flex-wrap items-center gap-x-4 gap-y-1 px-3.5 py-2.5 text-[12.5px] text-zk-muted`}>
-        <span className="font-semibold text-[#334155]">長工糧</span>
+      <div className={`${card} flex flex-wrap items-center gap-x-4 gap-y-1 px-3.5 py-2.5 text-zk-sm text-zk-muted`}>
+        <span className="font-semibold text-zk-text-secondary">長工糧</span>
         {lt && lt.guard_count > 0 ? (
           <span>
             {lt.guard_count} 人 · Gross {fmtMoney(lt.gross_total)} · Autopay {fmtMoney(lt.autopay_total)} · MPF 僱員 {fmtMoney(lt.mpf_ee_total)} · MPF 僱主 {fmtMoney(lt.mpf_er_total)}
@@ -111,58 +111,59 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
       {report.auto && <AutoSummaryCard auto={report.auto} extraFooter={<PostorderDependencyLine auto={report.auto} month={report.month} />} />}
       {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} locked={locked} onOpenTriage={onOpenTriage} />}
 
+      {/* 斷點例外：兩張表並排要 ≥1280（xl），1024–1279 名欄會逐字斷行——§8.4「兩門檻＋ReportSection 內層例外」。 */}
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className={`${card} overflow-hidden`}>
-          <div className="flex items-baseline justify-between px-4 py-3 text-[13.5px] font-semibold">
+          <div className="flex items-baseline justify-between px-4 py-3 text-zk-base font-semibold">
             <h3>逐雞頭應付</h3>
-            <span className="text-[12px] font-normal text-zk-muted">合共 {fmtMoney(report.payroll_by_broker.reduce((a, b) => a + (typeof b.amount === "number" ? b.amount : 0), 0))}</span>
+            <span className="text-zk-sm font-normal text-zk-muted">合共 {fmtMoney(report.payroll_by_broker.reduce((a, b) => a + (typeof b.amount === "number" ? b.amount : 0), 0))}</span>
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_60px_100px] border-y border-zk-border bg-zk-header px-4 py-1.5 text-[11px] font-semibold text-zk-muted">
+          <div className="grid grid-cols-[minmax(0,1fr)_60px_100px] border-y border-zk-border bg-zk-header px-4 py-1.5 text-zk-xs font-semibold text-zk-muted">
             <span>雞頭</span>
             <span className="text-right">更數</span>
             <span className="text-right">應付</span>
           </div>
-          {report.payroll_by_broker.length === 0 && <div className="px-4 py-3 text-[12px] text-zk-faint">本月冇雞頭應付紀錄</div>}
+          {report.payroll_by_broker.length === 0 && <div className="px-4 py-3 text-zk-sm text-zk-faint">本月冇雞頭應付紀錄</div>}
           {report.payroll_by_broker.map((b) => {
             const unattributed = b.broker_code === "";
             return (
-              <div key={b.broker_code || "unattributed"} className="grid grid-cols-[minmax(0,1fr)_60px_100px] items-center border-b border-zk-border-soft px-4 py-2 text-[12.5px]" style={{ background: unattributed ? "#fff7ed" : undefined }}>
-                <span className="min-w-0 font-medium" style={{ color: unattributed ? "#c2410c" : b.amount === 0 ? "#94a3b8" : undefined }}>
+              <div key={b.broker_code || "unattributed"} className="grid grid-cols-[minmax(0,1fr)_60px_100px] items-center border-b border-zk-border-soft px-4 py-2 text-zk-sm" style={{ background: unattributed ? "var(--zk-warning-bg)" : undefined }}>
+                <span className="min-w-0 font-medium" style={{ color: unattributed ? "var(--zk-warning)" : b.amount === 0 ? "var(--zk-faint)" : undefined }}>
                   {unattributed ? b.broker_name : `${b.broker_code}（${b.broker_name}）`}
-                  {unattributed && settlementQ > 0 && <span className="ml-1.5 text-[11px] font-normal">待答 {settlementQ} 題</span>}
+                  {unattributed && settlementQ > 0 && <span className="ml-1.5 text-zk-xs font-normal">待答 {settlementQ} 題</span>}
                 </span>
                 <span className="text-right">{b.shifts}</span>
-                <span className="text-right" style={{ color: b.amount === 0 && !unattributed ? "#94a3b8" : undefined }}>{fmtMoney(b.amount)}</span>
+                <span className="text-right" style={{ color: b.amount === 0 && !unattributed ? "var(--zk-faint)" : undefined }}>{fmtMoney(b.amount)}</span>
               </div>
             );
           })}
-          {zeroBrokers.length > 0 && <div className="px-4 py-2 text-[11.5px] text-zk-muted">{zeroBrokers.map((b) => b.broker_code).join("、")} 應付 0（如係公司長工／公司兵，應付 0 係正常）。</div>}
+          {zeroBrokers.length > 0 && <div className="px-4 py-2 text-zk-xs text-zk-muted">{zeroBrokers.map((b) => b.broker_code).join("、")} 應付 0（如係公司長工／公司兵，應付 0 係正常）。</div>}
         </div>
 
         <div className={`${card} overflow-hidden`}>
-          <div className="flex items-baseline justify-between px-4 py-3 text-[13.5px] font-semibold">
+          <div className="flex items-baseline justify-between px-4 py-3 text-zk-base font-semibold">
             <h3>逐盤收入</h3>
-            <span className="text-[12px] font-normal text-zk-muted">按收入排 · {sr.shown.length + sr.rest.length} 個盤有更</span>
+            <span className="text-zk-sm font-normal text-zk-muted">按收入排 · {sr.shown.length + sr.rest.length} 個盤有更</span>
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_60px_100px] border-y border-zk-border bg-zk-header px-4 py-1.5 text-[11px] font-semibold text-zk-muted">
+          <div className="grid grid-cols-[minmax(0,1fr)_60px_100px] border-y border-zk-border bg-zk-header px-4 py-1.5 text-zk-xs font-semibold text-zk-muted">
             <span>盤</span>
             <span className="text-right">更數</span>
             <span className="text-right">收入</span>
           </div>
-          {sitesShown.length === 0 && <div className="px-4 py-3 text-[12px] text-zk-faint">本月冇有更嘅盤</div>}
+          {sitesShown.length === 0 && <div className="px-4 py-3 text-zk-sm text-zk-faint">本月冇有更嘅盤</div>}
           {sitesShown.map((r) => (
-            <div key={r.site_id} className="grid grid-cols-[minmax(0,1fr)_60px_100px] items-center border-b border-zk-border-soft px-4 py-2 text-[12.5px]">
+            <div key={r.site_id} className="grid grid-cols-[minmax(0,1fr)_60px_100px] items-center border-b border-zk-border-soft px-4 py-2 text-zk-sm">
               <span className="flex min-w-0 items-center gap-2">
                 <span className="truncate font-medium">{r.site_name}</span>
                 <span className="hidden h-1 min-w-[20px] flex-1 overflow-hidden rounded-sm bg-zk-surface sm:block">
-                  <span className="block h-full bg-[#bfdbfe]" style={{ width: `${sr.max > 0 && typeof r.revenue === "number" ? Math.max(2, (r.revenue / sr.max) * 100) : 0}%` }} />
+                  <span className="block h-full bg-zk-primary-tint" style={{ width: `${sr.max > 0 && typeof r.revenue === "number" ? Math.max(2, (r.revenue / sr.max) * 100) : 0}%` }} />
                 </span>
               </span>
               <span className="text-right">{r.shifts}</span>
               <span className="text-right">{fmtMoney(r.revenue)}</span>
             </div>
           ))}
-          <div className="flex flex-wrap justify-between gap-2 px-4 py-2 text-[12px]">
+          <div className="flex flex-wrap justify-between gap-2 px-4 py-2 text-zk-sm">
             {sr.rest.length > 0 ? (
               <button type="button" className="text-zk-primary" onClick={() => setShowAllSites((v) => !v)}>
                 {showAllSites ? "收埋 ›" : `顯示其餘 ${sr.rest.length} 個有更嘅盤 ›`}
@@ -176,14 +177,14 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
       </div>
 
       {report.postorder_compare && (
-        <div className={`${card} flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-[12.5px]`}>
+        <div className={`${card} flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-zk-sm`}>
           <span className="font-semibold">同 Postorder 總表對照</span>
-          <span className="text-[#334155]">
+          <span className="text-zk-text-secondary">
             介紹費：系統 {fmtMoney(report.postorder_compare.referral_system_total)} · 總表 {report.postorder_compare.referral_excel_total !== null ? fmtMoney(report.postorder_compare.referral_excel_total) : "（總表冇提供）"}
             {report.postorder_compare.referral_diff !== null && (
               <>
                 {" · "}
-                <b className="text-[#c2410c]">差 {fmtMoney(report.postorder_compare.referral_diff)}</b>
+                <b className="text-zk-warning">差 {fmtMoney(report.postorder_compare.referral_diff)}</b>
               </>
             )}
           </span>

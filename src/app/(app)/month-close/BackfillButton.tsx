@@ -32,10 +32,10 @@ export function BackfillButton({ month, havePostorder, locked }: { month: string
       <Button variant="secondary" onClick={run} disabled={busy || locked} data-testid="backfill-from-postorder">
         {busy ? "補齊緊……" : "由 Postorder 補齊價目卡"}
       </Button>
-      <span className="text-[11.5px] text-zk-faint">一次過將自動卡／Postorder 價變成正式價目卡建議，逐題確認先生效，下個月唔使再靠 Postorder。</span>
-      {msg?.kind === "err" && <span className="text-[12.5px] text-[#b91c1c]">{msg.text}</span>}
+      <span className="text-zk-xs text-zk-faint">一次過將自動卡／Postorder 價變成正式價目卡建議，逐題確認先生效，下個月唔使再靠 Postorder。</span>
+      {msg?.kind === "err" && <span className="text-zk-sm text-zk-danger-dark">{msg.text}</span>}
       {msg?.kind === "ok" && (
-        <span className="text-[12.5px] text-[#334155]" data-testid="backfill-result">
+        <span className="text-zk-sm text-zk-text-secondary" data-testid="backfill-result">
           {msg.created! > 0 ? `出咗 ${msg.created} 題，` : (msg.pending ?? 0) > 0 ? `冇新題（已有 ${msg.pending} 題待答或已處理），` : "冇需要補齊嘅價目卡，"}
           <Link href="/triage" className="text-zk-primary hover:underline">
             去待答問題 ›

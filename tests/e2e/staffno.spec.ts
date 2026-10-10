@@ -29,6 +29,8 @@ async function openEditByName(page: Page, name: string) {
   await row.getByRole("button", { name: "編輯" }).click();
   await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
   await detailResponse;
+  // P3-4.3：員工編號喺「證件」tab。
+  await page.getByTestId("guard-tab-docs").click();
   // 員工編號分區靠獨立 GET .../staff-numbers（openEdit() 尾段 await
   // loadStaffNumbers()），等埋呢個 response 先開始撳，唔係就「新增」
   // 表單撳落去嗰陣個 staffNumbers state 可能仲係舊值。
@@ -88,6 +90,7 @@ test("老闆：加 MP 號 → 列表見兩個 chips → 再加新 U 號 → 舊 
     // ---- 再加新 U 號（舊 U 應該自動轉 former） ----
     await row.getByRole("button", { name: "編輯" }).click();
     await expect(page.getByRole("heading", { name: "編輯保安員" })).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId("guard-tab-docs").click();
     await expect(page.getByRole("heading", { name: "員工編號" })).toBeVisible({ timeout: 10_000 });
 
     await fieldControl(page, "種類（scheme）").locator("select").selectOption("U");

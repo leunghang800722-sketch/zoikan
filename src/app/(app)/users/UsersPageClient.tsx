@@ -19,17 +19,17 @@ import { useEffect, useMemo, useState } from "react";
 import { apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
-import { Notice } from "@/components/ui/Notice";
 import { Drawer } from "@/components/ui/Drawer";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { fmt, fmtDateTime, uiLabel } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
+import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 interface UserRow {
   id: string;
@@ -72,7 +72,7 @@ const emptyForm = {
 function RolePill({ roleName, baseRole }: { roleName: string; baseRole: string }) {
   const label = uiLabel(roleName);
   if (baseRole === "老闆") return <Pill variant="monthly">{label}</Pill>;
-  if (baseRole === "雞頭") return <Pill variant="broker" color={{ bg: "#ccfbf1", fg: "#0f766e" }}>{label}</Pill>;
+  if (baseRole === "雞頭") return <Pill variant="broker" color={{ bg: "var(--zk-success-tint)", fg: "var(--zk-success)" }}>{label}</Pill>;
   return <Pill variant="neutral">{label}</Pill>;
 }
 
@@ -83,19 +83,13 @@ function statusPill(row: UserRow): React.ReactNode {
 }
 
 export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
-  const [rows, setRows] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [brokers, setBrokers] = useState<BrokerRow[]>([]);
   const [roleFilter, setRoleFilter] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const {
+    rows, setRows, loading, setLoading, error, setError, notice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, saving,
+    openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
+  } = useCrudPage<UserRow, typeof emptyForm>(emptyForm);
 
   // 「重設密碼」二次確認 ＋ 一次性顯示臨時密碼（見頂註解）。
   const [confirmResetId, setConfirmResetId] = useState<string | null>(null);
@@ -123,6 +117,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function roleOf(id: string): RoleRow | undefined {
@@ -139,15 +134,11 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
   }
 
   function openCreate() {
-    setEditingId(null);
-    setForm({ ...emptyForm, role_id: roles[0]?.id ?? "" });
-    setFormError(null);
-    setDrawerOpen(true);
+    openCreateDrawer({ ...emptyForm, role_id: roles[0]?.id ?? "" });
   }
 
   function openEdit(row: UserRow) {
-    setEditingId(row.id);
-    setForm({
+    openEditDrawer(row.id, {
       name: row.name,
       tel: row.tel,
       password: "",
@@ -158,31 +149,22 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
         row.payout_approval_limit !== undefined && row.payout_approval_limit !== null ? String(row.payout_approval_limit) : "",
       allowed_ip: row.allowed_ip ?? "",
     });
-    setFormError(null);
-    setDrawerOpen(true);
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setFormError(null);
-
-    if (editingId) {
-      const body: Record<string, unknown> = {
-        name: form.name,
-        role_id: form.role_id,
-        guard_id: form.guard_id || undefined,
-        broker_id: form.broker_id || undefined,
-        payout_approval_limit: form.payout_approval_limit ? Number(form.payout_approval_limit) : undefined,
-        allowed_ip: form.allowed_ip || undefined,
-      };
-      const res = await apiPatch(`/api/users/${editingId}`, body);
-      setSaving(false);
-      if (!res.ok) {
-        setFormError(res.message);
-        return;
+    await saveForm(() => {
+      if (editingId) {
+        const body: Record<string, unknown> = {
+          name: form.name,
+          role_id: form.role_id,
+          guard_id: form.guard_id || undefined,
+          broker_id: form.broker_id || undefined,
+          payout_approval_limit: form.payout_approval_limit ? Number(form.payout_approval_limit) : undefined,
+          allowed_ip: form.allowed_ip || undefined,
+        };
+        return apiPatch(`/api/users/${editingId}`, body);
       }
-    } else {
       const body: Record<string, unknown> = {
         name: form.name,
         tel: form.tel,
@@ -193,38 +175,16 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
         payout_approval_limit: form.payout_approval_limit ? Number(form.payout_approval_limit) : undefined,
         allowed_ip: form.allowed_ip || undefined,
       };
-      const res = await apiPost("/api/users", body);
-      setSaving(false);
-      if (!res.ok) {
-        setFormError(res.message);
-        return;
-      }
-    }
-    setDrawerOpen(false);
-    setNotice(editingId ? "已更新" : "已新增");
-    await load();
+      return apiPost("/api/users", body);
+    }, load);
   }
 
   async function onVoid(id: string, reason: string) {
-    setError(null);
-    const res = await apiPost(`/api/users/${id}/void`, { reason });
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已停用");
-    await load();
+    await runAction(() => apiPost(`/api/users/${id}/void`, { reason }), "已停用", load);
   }
 
   async function onUnvoid(id: string) {
-    setError(null);
-    const res = await apiPost(`/api/users/${id}/unvoid`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    setNotice("已恢復");
-    await load();
+    await runAction(() => apiPost(`/api/users/${id}/unvoid`), "已恢復", load);
   }
 
   async function onResetPassword(row: UserRow) {
@@ -266,27 +226,27 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
         }
       />
 
-      {error && <Notice variant="error">{error}</Notice>}
-      {notice && <Notice variant="info">{notice}</Notice>}
+      {error && <Banner compact kind="error">{error}</Banner>}
+      {notice && <Banner compact kind="info">{notice}</Banner>}
       {resetResult && (
         <div data-testid="user-reset-password-result">
-          <Notice
-            variant="info"
+          <Banner compact
+            kind="info"
             action={
-              <button type="button" onClick={() => setResetResult(null)} className="text-[12px] font-semibold text-zk-primary">
+              <Button variant="link" size="sm" type="button" onClick={() => setResetResult(null)}>
                 知道了
-              </button>
+              </Button>
             }
           >
             已重設「{resetResult.name}」嘅密碼，臨時密碼：<strong className="font-mono">{resetResult.password}</strong>
             ——請盡快通知佢，離開此頁後將唔會再顯示，佢下次登入會被要求即時設定新密碼。
-          </Notice>
+          </Banner>
         </div>
       )}
 
       <div className={tableCls.wrap}>
-        <table className={tableCls.table} style={{ minWidth: tableMinWidth(7) }}>
-          <thead>
+        <table className="w-full border-collapse text-zk-base max-sm:block sm:min-w-[826px]">
+          <thead className="max-sm:hidden">
             <tr>
               <th className={tableCls.th}>名</th>
               <th className={tableCls.th}>電話</th>
@@ -297,13 +257,9 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
               <th className={tableCls.thNum}>操作</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="max-sm:block">
             {loading && (
-              <tr>
-                <td className="px-3.5 py-4 text-zk-faint" colSpan={7}>
-                  載入緊…
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={7} />
             )}
             {!loading && filteredRows.length === 0 && (
               <tr>
@@ -315,58 +271,58 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
             {filteredRows.map((r) => {
               const role = roleOf(r.role_id);
               return (
-                <tr key={r.id} data-testid="user-row" className={tableCls.rowHover}>
-                  <td className={`${tableCls.td} font-medium`}>{r.name}</td>
-                  <td className={tableCls.td}>{fmt(r.tel)}</td>
-                  <td className={tableCls.td}>
+                <tr key={r.id} data-testid="user-row" className={`${tableCls.rowHover} max-sm:flex max-sm:flex-col max-sm:gap-0.5 max-sm:border-b max-sm:border-zk-border-soft max-sm:px-3.5 max-sm:py-3`}>
+                  <td className={`${tableCls.td} font-medium max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{r.name}</td>
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{fmt(r.tel)}</td>
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>
                     {role ? <RolePill roleName={role.name} baseRole={role.base_role} /> : <span className="text-zk-faint">—</span>}
                   </td>
-                  <td className={tableCls.td}>{brokerLabel(r.broker_id)}</td>
-                  <td className={`${tableCls.td} text-zk-muted`}>{r.last_login_at ? fmtDateTime(r.last_login_at) : "從未登入"}</td>
-                  <td className={tableCls.td} data-testid="user-status-pill">
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{brokerLabel(r.broker_id)}</td>
+                  <td className={`${tableCls.td} text-zk-muted max-sm:border-0 max-sm:px-0 max-sm:py-0.5`}>{r.last_login_at ? fmtDateTime(r.last_login_at) : "從未登入"}</td>
+                  <td className={`${tableCls.td} max-sm:border-0 max-sm:px-0 max-sm:py-0.5`} data-testid="user-status-pill">
                     {statusPill(r)}
                   </td>
-                  <td className={tableCls.tdNum}>
-                    <div className="flex flex-wrap items-center justify-end gap-1.5">
-                      <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-[9px] py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                  <td className={`${tableCls.tdNum} max-sm:border-0 max-sm:px-0 max-sm:py-1 max-sm:text-left`}>
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 max-sm:justify-start">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯
-                      </button>
+                      </Button>
                       {/* A2：自己嗰行唔顯示「重設密碼」——同 API 側 id === session.userId
                           擋一致，應該用改密碼頁改自己嘅密碼。 */}
                       {r.id !== currentUserId &&
                         (confirmResetId === r.id ? (
                           <span className="flex items-center gap-1">
-                            <button
+                            <Button variant="primary" size="sm"
                               type="button"
                               data-testid="user-reset-password-confirm"
                               disabled={resetting}
                               onClick={() => onResetPassword(r)}
-                              className="rounded-[5px] bg-zk-primary px-[9px] py-[3px] text-xs font-semibold text-white disabled:opacity-50"
+
                             >
                               {resetting ? "重設緊…" : "確定重設"}
-                            </button>
-                            <button type="button" onClick={() => setConfirmResetId(null)} className="rounded-[5px] px-[9px] py-[3px] text-xs text-zk-muted hover:bg-zk-header">
+                            </Button>
+                            <Button variant="ghost" size="sm" type="button" onClick={() => setConfirmResetId(null)}>
                               取消
-                            </button>
+                            </Button>
                           </span>
                         ) : (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             data-testid="user-reset-password-button"
                             onClick={() => setConfirmResetId(r.id)}
-                            className="rounded-[5px] border border-zk-border px-[9px] py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header"
+
                           >
                             重設密碼
-                          </button>
+                          </Button>
                         ))}
                       {r.status === "inactive" ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
                           onClick={() => onUnvoid(r.id)}
-                          className="rounded-[5px] border border-[#a7f3d0] px-[9px] py-[3px] text-xs text-[#047857] hover:bg-[#ecfdf5]"
+
                         >
                           恢復
-                        </button>
+                        </Button>
                       ) : (
                         <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                       )}
@@ -432,12 +388,12 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
             <input className={inputCls} value={form.allowed_ip} onChange={(e) => setForm((f) => ({ ...f, allowed_ip: e.target.value }))} />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

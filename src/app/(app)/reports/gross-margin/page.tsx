@@ -14,12 +14,12 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
-import { Notice } from "@/components/ui/Notice";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
-import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
+import { tableCls, tableMinWidth, EmptyState, TableLoadingRow } from "@/components/ui/DataTable";
 import { fmtMoney } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { UnpricedNotice } from "@/components/UnpricedNotice";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts 嘅 ok()/
 // camelToSnakeDeep()）——呢啲 interface 要同 wire format 一致，唔係
@@ -160,42 +160,8 @@ export default function GrossMarginPage() {
       />
 
       <Banner kind="error" message={error} />
-      {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
-      {(data?.unpriced_count ?? 0) > 0 && (
-        <Notice variant="warning">
-          <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定價（冇對應價目卡），金額未計入毛利表：</p>
-          <ul className="list-disc pl-5 mt-1">
-            {/* 應修 1：no_settlement 分類唔喺呢個清單顯示（有自己獨立、更
-                搶眼嘅 Notice，見下面）。 */}
-            {(data!.unpriced_groups ?? [])
-              .filter((g) => g.category !== "no_settlement")
-              .map((g) => (
-                <li key={`${g.category ?? "payout_unpriced"}|${g.site_id}|${g.shift_type_code}|${g.broker_code ?? "none"}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · 雞頭 {g.broker_display} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Notice>
-      )}
-      {/* 應修 1：冇結算單位（settlement_broker_id NULL）嘅格——呢批更
-          唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算
-          單位」行。就算未定價 count＝0 都要顯示。 */}
-      {(data?.no_settlement_count ?? 0) > 0 && (
-        <Notice variant="error">
-          <p className="font-medium">
-            呢個月有 {data!.no_settlement_count} 格冇結算單位（唔會計入任何雞頭／長工／公司兵嘅糧單，只會出現喺「未歸屬結算單位」行）：
-          </p>
-          <ul className="list-disc pl-5 mt-1">
-            {(data!.unpriced_groups ?? [])
-              .filter((g) => g.category === "no_settlement")
-              .map((g) => (
-                <li key={`no_settlement|${g.site_id}|${g.shift_type_code}`}>
-                  {g.site_name} · 更別 {g.shift_type_code} · {g.count} 更
-                </li>
-              ))}
-          </ul>
-        </Notice>
-      )}
+      {/* WP-PRICE §3：頁頂「N 更未定價」——P3-4.2 共用 <UnpricedNotice>（報表頁一行＋「去處理 ›」）。 */}
+      <UnpricedNotice variant="compact" month={month} unpricedCount={(data?.unpriced_count ?? 0)} noSettlementCount={(data?.no_settlement_count ?? 0)} groups={(data?.unpriced_groups ?? [])} scope="毛利表" />
       {/* A5：當月零資料先顯示，撳「去 YYYY-MM」即刻跳去最近有資料嘅月份。 */}
       <EmptyMonthNotice month={month} isEmpty={!loading && (data?.sites.length ?? 0) === 0} onJump={setMonth} />
 
@@ -208,7 +174,7 @@ export default function GrossMarginPage() {
       )}
 
       {/* 桌面表（撳行展開更別 breakdown；手機改用下面嘅卡列表）。 */}
-      <div className={`hidden md:block ${tableCls.wrap}`}>
+      <div className={`hidden lg:block ${tableCls.wrap}`}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
           <thead>
             <tr>
@@ -223,11 +189,7 @@ export default function GrossMarginPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr>
-                <td colSpan={COLS} className="px-3.5 py-4 text-sm text-zk-faint">
-                  載入緊…
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={COLS} />
             )}
             {!loading && visibleSites.length === 0 && (
               <tr>
@@ -258,14 +220,14 @@ export default function GrossMarginPage() {
                   <td className={tableCls.tdNum}>{fmtMoney(s.revenue)}</td>
                   <td className={tableCls.tdNum}>{fmtMoney(s.cost)}</td>
                   <td className={tableCls.tdNum}>{fmtMoney(s.profit)}</td>
-                  <td className={s.below_threshold ? "border-b border-[#f1f5f9] px-3.5 py-2.5 text-right font-bold text-[#dc2626]" : tableCls.tdNum}>
+                  <td className={s.below_threshold ? "border-b border-zk-border-soft px-3.5 py-2.5 text-right font-bold text-zk-danger" : tableCls.tdNum}>
                     {s.margin_pct == null ? "—" : `${s.margin_pct}%`}
                   </td>
                   <td className={tableCls.tdMuted}>{s.note ?? (s.is_monthly_fee ? "月費盤 · 更數越多毛利越低" : "")}</td>
                 </tr>
                 {expanded[s.site_id] &&
                   s.shift_types.map((st, i) => (
-                    <tr key={`${s.site_id}-${i}`} className="border-b border-[#f1f5f9] bg-zk-header/50 text-xs text-zk-muted">
+                    <tr key={`${s.site_id}-${i}`} className="border-b border-zk-border-soft bg-zk-header/50 text-xs text-zk-muted">
                       <td className="px-3.5 py-1.5 pl-9">
                         {st.code}
                         {st.label ? `（${st.label}）` : ""}
@@ -282,7 +244,7 @@ export default function GrossMarginPage() {
                     </tr>
                   ))}
                 {expanded[s.site_id] && ((s.referral_fee ?? 0) > 0 || (s.longterm_salary_allocated ?? 0) > 0) && (
-                  <tr className="border-b border-[#f1f5f9] bg-zk-header/50 text-xs text-zk-muted">
+                  <tr className="border-b border-zk-border-soft bg-zk-header/50 text-xs text-zk-muted">
                     <td className="px-3.5 py-1.5 pl-9">長工雞頭費 / 長工月薪分攤</td>
                     <td></td>
                     <td></td>
@@ -310,7 +272,7 @@ export default function GrossMarginPage() {
       </div>
 
       {/* 手機：每行變卡（簡化——冇更別 breakdown，撳卡直接去更表）。 */}
-      <div className="flex flex-col gap-2 md:hidden">
+      <div className="flex flex-col gap-2 lg:hidden">
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
         ) : visibleSites.length === 0 ? (
@@ -323,13 +285,13 @@ export default function GrossMarginPage() {
               key={s.site_id}
               href={`/roster/${s.site_id}/${month}`}
               data-testid="gross-margin-row-mobile"
-              className={`flex flex-col gap-1 rounded-[10px] border border-zk-border px-3.5 py-3 ${s.below_threshold ? "bg-[#fef2f2]" : "bg-white"}`}
+              className={`flex flex-col gap-1 rounded-[10px] border border-zk-border px-3.5 py-3 ${s.below_threshold ? "bg-zk-danger-bg" : "bg-white"}`}
             >
               <div className="flex items-center justify-between">
-                <div className="truncate text-[13.5px] font-medium text-zk-text">{s.site_name}</div>
-                <div className={`text-[13px] font-bold ${s.below_threshold ? "text-[#dc2626]" : "text-zk-text"}`}>{s.margin_pct == null ? "—" : `${s.margin_pct}%`}</div>
+                <div className="truncate text-zk-base font-medium text-zk-text">{s.site_name}</div>
+                <div className={`text-zk-base font-bold ${s.below_threshold ? "text-zk-danger" : "text-zk-text"}`}>{s.margin_pct == null ? "—" : `${s.margin_pct}%`}</div>
               </div>
-              <div className="text-[11.5px] text-zk-muted">
+              <div className="text-zk-xs text-zk-muted">
                 {s.shifts} 更 · 毛利 {fmtMoney(s.profit)} / 營業額 {fmtMoney(s.revenue)}
               </div>
             </Link>

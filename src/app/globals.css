@@ -28,22 +28,28 @@
   --zk-primary-deep: #1e40af;
   --zk-primary-tint: #dbeafe;
   --zk-primary-tint-soft: #eff6ff;
+  --zk-primary-light: #93c5fd;
 
   --zk-dark: #0f172a;
+  --zk-dark-hover: #1e293b;
 
   --zk-success: #0f766e;
   --zk-success-dark: #047857;
   --zk-success-bg: #ecfdf5;
+  --zk-success-tint: #ccfbf1;
 
   --zk-warning: #c2410c;
   --zk-warning-dark: #9a3412;
   --zk-warning-darker: #b45309;
   --zk-warning-bg: #fff7ed;
+  --zk-warning-tint: #ffedd5;
+  --zk-amber: #f59e0b;
   --zk-warning-border: #fed7aa;
 
   --zk-danger: #dc2626;
   --zk-danger-dark: #b91c1c;
   --zk-danger-bg: #fef2f2;
+  --zk-danger-tint: #fee2e2;
   --zk-danger-border: #fecaca;
 }
 
@@ -72,19 +78,37 @@
   --color-zk-primary-deep: var(--zk-primary-deep);
   --color-zk-primary-tint: var(--zk-primary-tint);
   --color-zk-primary-tint-soft: var(--zk-primary-tint-soft);
+  --color-zk-primary-light: var(--zk-primary-light);
   --color-zk-dark: var(--zk-dark);
+  --color-zk-dark-hover: var(--zk-dark-hover);
   --color-zk-success: var(--zk-success);
   --color-zk-success-dark: var(--zk-success-dark);
   --color-zk-success-bg: var(--zk-success-bg);
+  --color-zk-success-tint: var(--zk-success-tint);
   --color-zk-warning: var(--zk-warning);
   --color-zk-warning-dark: var(--zk-warning-dark);
   --color-zk-warning-darker: var(--zk-warning-darker);
   --color-zk-warning-bg: var(--zk-warning-bg);
+  --color-zk-warning-tint: var(--zk-warning-tint);
+  --color-zk-amber: var(--zk-amber);
   --color-zk-warning-border: var(--zk-warning-border);
   --color-zk-danger: var(--zk-danger);
   --color-zk-danger-dark: var(--zk-danger-dark);
   --color-zk-danger-bg: var(--zk-danger-bg);
+  --color-zk-danger-tint: var(--zk-danger-tint);
   --color-zk-danger-border: var(--zk-danger-border);
+
+  /* P3-4.1：type scale（取代 662 處 `text-[Npx]`）。只有 8 級：
+     2xs 10.5（RosterEditor 格仔表細字）／xs 11／sm 12／base 13／md 14／lg 16／xl 20／2xl 28（KPI 大數）。
+     Tailwind 內建 `text-xs`(12)／`text-sm`(14) 照用。 */
+  --text-zk-2xs: 10.5px;
+  --text-zk-xs: 11px;
+  --text-zk-sm: 12px;
+  --text-zk-base: 13px;
+  --text-zk-md: 14px;
+  --text-zk-lg: 16px;
+  --text-zk-xl: 20px;
+  --text-zk-2xl: 28px;
 }
 
 * {
@@ -121,7 +145,7 @@ body {
   button:focus-visible,
   a:focus-visible,
   [role="button"]:focus-visible {
-    outline: 2px solid #2563eb;
+    outline: 2px solid var(--zk-primary);
     outline-offset: 2px;
   }
 }
