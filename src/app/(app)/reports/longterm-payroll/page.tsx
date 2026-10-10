@@ -16,6 +16,9 @@ import { Pill } from "@/components/ui/Pill";
 import { EmptyState, tableCls, tableMinWidth } from "@/components/ui/DataTable";
 import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "@/lib/ui/api-client";
 import { fmtMoney, fmtDate, currentMonthStr, addMonthsStr } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 
 // ---------------------------------------------------------------------------
 // 型別（snake_case，同 API response 一致）
@@ -127,7 +130,7 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 };
 
 export default function LongtermPayrollPage() {
-  const [month, setMonth] = useState(() => addMonthsStr(currentMonthStr(), -1));
+  const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [payroll, setPayroll] = useState<PayrollMonthDTO | null>(null);
   const [inputs, setInputs] = useState<InputDTO[]>([]);
   const [contracts, setContracts] = useState<ContractDTO[]>([]);
@@ -162,8 +165,9 @@ export default function LongtermPayrollPage() {
   }, []);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     load(month);
-  }, [month, load]);
+  }, [month, load, monthReady]);
 
   async function recompute() {
     setRecomputing(true);
@@ -193,18 +197,12 @@ export default function LongtermPayrollPage() {
   return (
     <div className="flex flex-col gap-5 p-4 sm:p-6">
       <PageHeader
-        kicker="財務"
+        kicker={kickerFor("/reports/longterm-payroll")}
         title="長工糧"
         subtitle="長工月薪糧——合約管理、逐月計糧、人手輸入、平均工資／假期餘額、BOCHK autopay 檔"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" onClick={() => setMonth(addMonthsStr(month, -1))}>
-              ← 上月
-            </Button>
-            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className={`${inputCls} w-[150px]`} />
-            <Button variant="secondary" onClick={() => setMonth(addMonthsStr(month, 1))}>
-              下月 →
-            </Button>
+            <MonthPicker value={month} onChange={setMonth} />
             <Button variant="primary" onClick={recompute} disabled={recomputing || payroll?.locked}>
               {recomputing ? "重算緊…" : "重算本月"}
             </Button>
@@ -212,6 +210,7 @@ export default function LongtermPayrollPage() {
         }
       />
 
+      <EmptyMonthNotice month={month} isEmpty={!loading && !payroll?.run} onJump={setMonth} />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
       {payroll?.locked && <Banner kind="info" message={`${month} 已鎖定——人手輸入／合約編輯唯讀，重算掣已停用`} />}

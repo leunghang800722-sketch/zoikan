@@ -32,6 +32,7 @@ import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 // 提示條嗰啲）照舊用普通 `Link` 就夠。
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { confirmLeaveIfUnsaved, setUnsavedCount } from "@/lib/ui/unsaved-guard";
+import { rememberMonth } from "@/lib/ui/month-store";
 
 // ---------------------------------------------------------------------------
 // 型別（wire format，一律 snake_case，同 request/response body 一致——見
@@ -501,6 +502,10 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   const { year, monthNum } = parseMonthStr(month);
   const days = daysInMonth(year, monthNum);
   const dayList = useMemo(() => Array.from({ length: days }, (_, i) => i + 1), [days]);
+  // P3-3.2：月份來自路徑，記入 sessionStorage 等其他頁（月份選擇器）跟住呢個月。
+  useEffect(() => {
+    rememberMonth(month);
+  }, [month]);
 
   const [loading, setLoading] = useState(true);
   // 2026-09-13 緊急：手機闊度下左邊固定四欄（56+96+88+104=344px）闊過整個容器（~324px），
@@ -624,6 +629,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // 顯示借用選格 `sel` 本身——mouseenter 會不斷更新 `sel.b`，唔使額外
   // state）。
   const draggingRef = useRef(false);
+  // 最近一次 pointerdown 嘅輸入類型（mouse／touch／pen）：淨係滑鼠先容許 mouseenter 範圍拖選（見 onCellMouseEnter）。
+  const pointerTypeRef = useRef<string>("mouse");
   const dragSourceRef = useRef<{ r: number; d: number; code: string | null } | null>(null);
   const dragCurrentRef = useRef<{ r: number; d: number } | null>(null);
 
@@ -1128,11 +1135,18 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
     [monthLocked, editing, commitEdit, visibleRows, cells, compact],
   );
 
-  const onCellMouseEnter = useCallback((r: number, d: number) => {
-    if (!draggingRef.current) return;
-    dragCurrentRef.current = { r, d };
-    setSel((prev) => (prev ? { a: prev.a, b: { r, d } } : prev));
-  }, []);
+  const onCellMouseEnter = useCallback(
+    (r: number, d: number) => {
+      if (!draggingRef.current) return;
+      // P3-3.8：觸控（pointerType≠mouse）冇拖曳填充。彈出底部鍵盤令表格容器縮細、格仔移位，指標下面換咗另一格會觸發
+      // 合成 mouseenter，將單格選擇變範圍選擇（sel.a≠sel.b）→ 鍵盤即刻收埋（e2e wp-r2 (f)）。用 pointerType 判斷（唔用闊度），
+      // 所以窄窗口嘅桌面滑鼠用家仍然可以拖曳填充。
+      if (pointerTypeRef.current !== "mouse") return;
+      dragCurrentRef.current = { r, d };
+      setSel((prev) => (prev ? { a: prev.a, b: { r, d } } : prev));
+    },
+    [],
+  );
 
   useEffect(() => {
     function onUp() {
@@ -2153,8 +2167,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         <Notice
           variant="warning"
           action={
-            <Link href="/reports/monthly-close" className="text-[12px] underline" style={{ color: "inherit" }}>
-              去月結工作台
+            <Link href={`/month-close?month=${month}`} className="text-[12px] underline" style={{ color: "inherit" }}>
+              去一鍵結算
             </Link>
           }
         >
@@ -2289,6 +2303,9 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
       <div className="overflow-hidden rounded-lg border border-zk-border bg-white" style={{ opacity: monthLocked ? 0.8 : 1 }}>
         <div
           ref={containerRef}
+          onPointerDown={(e) => {
+            pointerTypeRef.current = e.pointerType;
+          }}
           tabIndex={0}
           onKeyDown={onKeyDown}
           className="outline-none overflow-auto select-none"

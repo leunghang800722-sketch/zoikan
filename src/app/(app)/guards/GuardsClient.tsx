@@ -23,12 +23,14 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmt, fmtDate, isExpired, isExpiringSoon, currentMonthStr, todayLocalStr } from "@/lib/ui/format";
+import { fmt, fmtDate, isExpired, isExpiringSoon, todayLocalStr } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
-import { kickerFor } from "@/lib/ui/nav-active";
+import { kickerFor } from "@/lib/nav/schema";
 // WP-BOSS5 §25.4：銀行編號「建議下拉」——純資料，冇 DB 依賴，client
 // component 用得。
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { MenuButton } from "@/components/ui/MenuButton";
 
 const EMPLOYMENT_TYPES = ["cash_casual", "longterm_autopay", "external", "casual_event"] as const;
 const BLACKLIST_RESULTS = ["clear", "flagged", "pending"] as const;
@@ -288,7 +290,7 @@ export function GuardsClient({
   // S3（Opus 驗收修復）：原本冇 setter，月份寫死；而家加返 setter＋月份
   // FilterChip，改月份要重新 fetch `with_month_shifts`（見下面 useEffect
   // dep）。
-  const [month, setMonth] = useState(currentMonthStr());
+  const [month, setMonth, monthReady] = useMonthState();
   // WP-PII：「牌照／平安卡 90 日內到期」FilterChip——`?expiring_within_days=90`
   // （API 早已經 OR 埋 safety_card_expiry，見 src/app/api/guards/route.ts；
   // 呢度改嘅淨係文案＋表格 pill 顯示，唔使改 API）。
@@ -516,10 +518,11 @@ export function GuardsClient({
   }, []);
 
   useEffect(() => {
+    if (!monthReady) return; // 月份仲未由 URL／sessionStorage 解出（hydration 後），等咗先 fetch（只 fetch 一次）
     const t = setTimeout(() => load(search), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, expiringOnly, identityFilter, search]);
+  }, [month, expiringOnly, identityFilter, search, monthReady]);
 
   function broker(id?: string | null): BrokerRow | undefined {
     if (!id) return undefined;
@@ -1722,9 +1725,7 @@ export function GuardsClient({
             <FilterChip label="搜尋" showCaret={false}>
               <input type="text" placeholder={searchHasHkid ? "姓名 / 工號 / 電話 / 身份證" : "姓名 / 工號 / 電話"} value={search} onChange={(e) => setSearch(e.target.value)} className="w-36" />
             </FilterChip>
-            <FilterChip label="本月更數月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="本月更數月份" value={month} onChange={setMonth} />
             {/* WP-PII：老闆決定「雞頭視角完全唔變」——呢個新 FilterChip
                 淨係內部角色顯示，雞頭個 toolbar 保持原樣。 */}
             {!isBroker && (
@@ -1742,19 +1743,23 @@ export function GuardsClient({
                 </select>
               </FilterChip>
             )}
-            {!isBroker && (
-              <a href="/guards/import" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">
-                證件資料導入
-              </a>
+            {/* P3-3.6：三個新增入口收成一個「新增 ▾」（手動／用證件／批量導入）；雞頭只有手動新增。 */}
+            {isBroker ? (
+              <Button variant="primary" onClick={openCreate}>
+                新增保安員
+              </Button>
+            ) : (
+              <MenuButton
+                label="新增"
+                variant="primary"
+                testId="guards-add-menu"
+                items={[
+                  { label: "手動新增", onSelect: openCreate, testId: "guards-add-manual" },
+                  ...(canOcr ? [{ label: "用證件新增", href: "/guards/new-from-docs", testId: "guards-new-from-docs" }] : []),
+                  { label: "批量導入", href: "/guards/import", testId: "guards-add-import" },
+                ]}
+              />
             )}
-            {!isBroker && canOcr && (
-              <a href="/guards/new-from-docs" data-testid="guards-new-from-docs" className="inline-flex items-center rounded-md border border-zk-border px-3 py-1.5 text-sm hover:bg-zk-hover">
-                用證件新增
-              </a>
-            )}
-            <Button variant="primary" onClick={openCreate}>
-              新增保安員
-            </Button>
           </>
         }
       />
@@ -1770,7 +1775,7 @@ export function GuardsClient({
         <div className={tableCls.wrap}>
           <EmptyState
             title={search ? "搵唔到符合嘅保安員" : "暫時冇保安員"}
-            description={search ? "試下改搜尋字眼（姓名／工號／電話）。" : "撳右上「新增保安員」開始建立名冊。"}
+            description={search ? "試下改搜尋字眼（姓名／工號／電話）。" : "撳右上「新增」開始建立名冊。"}
           />
         </div>
       ) : (

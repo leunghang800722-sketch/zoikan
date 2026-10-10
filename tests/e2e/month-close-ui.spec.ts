@@ -111,6 +111,8 @@ async function mockApis(page: Page, ids: string[] = ["q1", "q2", "q3"]) {
   } as Record<string, ReturnType<typeof question>>;
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   await page.route("**/api/month-close/one-click?*", (r) => json(r, { runs: [RUN] }));
+  // P3-1.6 之後列表係摘要版，最新一個 run 再拉單一 route 攞全份 steps／report——兩個都要 mock（P3-3.8 修舊失敗）。
+  await page.route("**/api/month-close/one-click/run1", (r) => json(r, { run: RUN }));
   await page.route("**/api/reports/month-health?*", (r) => json(r, HEALTH));
   await page.route("**/api/triage/sessions/sess1", (r) => json(r, { session: { id: "sess1", status: "open", counts: { open: 3, answered: 0, skipped: 0, total: 3 } }, questions: ids.map((i) => qs[i]!).map((q) => ({ ...q, status: state.status[q.id] })) }));
   await page.route("**/api/triage/questions/*/preview", (r) => {
@@ -183,7 +185,9 @@ test.describe("月結頁 1a 桌面", () => {
     await expect(page.getByTestId("month-health-card")).toContainText("30 格對唔到保安員");
     await expect(page.getByTestId("month-health-card")).toContainText("＝ 要你睇 2 題");
     await expect(page.getByTestId("month-health-card")).not.toContainText("unmatched");
-    await expect(page.getByTestId("lock-month")).toBeDisabled();
+    await expect(page.getByTestId("rail-lock-month")).toBeDisabled();
+    // P3-3.4：主欄冇重複掣（lock-month／open-triage／undo-auto 已刪，右欄係唯一 CTA 區）
+    for (const id of ["lock-month", "open-triage", "undo-auto"]) await expect(page.getByTestId(id)).toHaveCount(0);
     // 右欄
     await expect(page.getByTestId("rail-review-count")).toHaveText("3");
     // needs_human 每步直接顯示＋右欄入口
@@ -194,7 +198,7 @@ test.describe("月結頁 1a 桌面", () => {
     for (const w of ["有依據", "冇依據", "unmatched", "ambiguous", "name_only", "（external）", "（shift", "（parsed）"]) expect(bodyText).not.toContain(w);
     await expect(page.getByTestId("auto-review")).toContainText("冇參考");
     // 保留 testid
-    for (const id of ["month-close-month-input", "month-close-roster-file-input", "month-close-staff-list-file-input", "month-close-postorder-file-input", "auto-summary", "auto-counts", "auto-review", "undo-auto", "unpriced-gap", "open-triage", "month-health-card"]) {
+    for (const id of ["month-close-month-input", "month-close-roster-file-input", "month-close-staff-list-file-input", "month-close-postorder-file-input", "auto-summary", "auto-counts", "auto-review", "undo-auto-rail", "unpriced-gap", "rail-open-triage", "rail-lock-month", "month-health-card"]) {
       await expect(page.getByTestId(id)).toHaveCount(1);
     }
     await noHScroll(page);
@@ -206,7 +210,7 @@ test.describe("月結頁 1a 桌面", () => {
     await loginAs(page, "老闆");
     await page.goto(`/month-close`);
     await page.getByTestId("month-close-month-input").fill(MONTH);
-    await page.getByTestId("open-triage").click();
+    await page.getByTestId("rail-open-triage").click();
     await expect(page.getByTestId("mc-triage-dialog")).toHaveAttribute("data-mode", "desktop");
     await expect(page.getByTestId("mc-summary")).not.toContainText("冇依據");
     await page.getByTestId("mc-accept").click();
@@ -230,7 +234,7 @@ test.describe("月結頁 1a 桌面", () => {
     await loginAs(page, "老闆");
     await page.goto(`/month-close`);
     await page.getByTestId("month-close-month-input").fill(MONTH);
-    await page.getByTestId("open-triage").click();
+    await page.getByTestId("rail-open-triage").click();
     st.failNext = true;
     await page.getByTestId("mc-accept").click();
     await page.waitForTimeout(6500);
@@ -245,7 +249,7 @@ test.describe("月結頁 1a 桌面", () => {
     await loginAs(page, "老闆");
     await page.goto(`/month-close`);
     await page.getByTestId("month-close-month-input").fill(MONTH);
-    await page.getByTestId("open-triage").click();
+    await page.getByTestId("rail-open-triage").click();
     await expect(page.getByTestId("mc-pick")).toHaveCount(0); // 未揀任何候選：冇「用所揀候選」
     await page.getByLabel(/價卡 B/).check();
     await expect(page.getByTestId("mc-accept")).toHaveCount(0);
@@ -264,7 +268,7 @@ test.describe("月結頁 1a 桌面", () => {
     await loginAs(page, "老闆");
     await page.goto(`/month-close`);
     await page.getByTestId("month-close-month-input").fill(MONTH);
-    await page.getByTestId("open-triage").click();
+    await page.getByTestId("rail-open-triage").click();
     st.failNext = true;
     await page.getByTestId("mc-accept").click();
     await page.getByTestId("mc-later").dblclick();
@@ -283,7 +287,7 @@ test.describe("月結頁 1a 桌面", () => {
     await loginAs(page, "老闆");
     await page.goto(`/month-close`);
     await page.getByTestId("month-close-month-input").fill(MONTH);
-    await page.getByTestId("open-triage").click();
+    await page.getByTestId("rail-open-triage").click();
     st.failNext = true;
     await page.getByTestId("mc-accept").click();
     await page.getByTestId("mc-later").click();

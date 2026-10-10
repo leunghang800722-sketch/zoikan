@@ -16,13 +16,16 @@ import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
-import { fmtMoney, currentMonthStr } from "@/lib/ui/format";
+import { fmtMoney } from "@/lib/ui/format";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { BROKER_KIND_LABEL, brokerKindPillTone, type BrokerKindLiteral } from "@/lib/ui/broker-kind";
+import { kickerFor } from "@/lib/nav/schema";
+import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
+import { buildBankInfo, readBankFields } from "@/lib/ui/broker-bank";
+import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 
 // A2（Opus 整合驗收）：呢頁「種類」select 嘅選項同表格 pill 之前各自有
 // 一套標籤（select 出 raw kind 字面值；表格 `kindPill()` 自己砌一套
@@ -49,7 +52,8 @@ const emptyForm = {
   name: "",
   kind: BROKER_KINDS[0] as string,
   settlement_type: SETTLEMENT_TYPES[0] as string,
-  bank_info: "",
+  bank_name: "",
+  bank_account_no: "",
   requires_approval: false,
   aliases: "",
 };
@@ -115,7 +119,7 @@ export default function BrokersPage() {
   // M3：「掛邊啲盤」改用 broker_site_assignments（一次過攞晒，前端按
   // 月份 FilterChip 篩）。
   const [assignments, setAssignments] = useState<BrokerSiteAssignmentRow[]>([]);
-  const [month, setMonth] = useState(currentMonthStr());
+  const [month, setMonth] = useMonthState();
 
   async function load() {
     setLoading(true);
@@ -267,7 +271,8 @@ export default function BrokersPage() {
       name: row.name,
       kind: row.kind,
       settlement_type: row.settlement_type,
-      bank_info: row.bank_info ? JSON.stringify(row.bank_info, null, 2) : "",
+      bank_name: readBankFields(row.bank_info).bankName,
+      bank_account_no: readBankFields(row.bank_info).accountNo,
       requires_approval: row.requires_approval,
       aliases: (row.aliases ?? []).join(", "),
     });
@@ -278,15 +283,8 @@ export default function BrokersPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    let bankInfo: unknown = undefined;
-    if (form.bank_info.trim()) {
-      try {
-        bankInfo = JSON.parse(form.bank_info);
-      } catch {
-        setFormError("bank_info 唔係合法嘅 JSON");
-        return;
-      }
-    }
+    // P3-3.6：銀行名／戶口號碼兩格存返同一個 bank_info JSON；舊 JSON 其他 key 保留。
+    const bankInfo = buildBankInfo(editingId ? rows.find((r) => r.id === editingId)?.bank_info : undefined, form.bank_name, form.bank_account_no);
     setSaving(true);
     const aliases = form.aliases
       .split(",")
@@ -341,14 +339,12 @@ export default function BrokersPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        kicker="主檔"
+        kicker={kickerFor("/brokers")}
         title="雞頭"
         subtitle="每行「介紹費率」開返嗰個雞頭嘅逐盤逐月費率子表；「掛邊啲盤」按下面月份 FilterChip 嘅月睇。"
         actions={
           <>
-            <FilterChip label="月份">
-              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            </FilterChip>
+            <MonthPicker label="月份" value={month} onChange={setMonth} />
             <Button variant="primary" onClick={openCreate}>
               新增雞頭
             </Button>
@@ -356,6 +352,7 @@ export default function BrokersPage() {
         }
       />
 
+      <EmptyMonthNotice month={month} isEmpty={!loading && assignments.length === 0} onJump={setMonth} />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 
@@ -575,12 +572,11 @@ export default function BrokersPage() {
               ))}
             </select>
           </Field>
-          <Field label="銀行資料（bank_info，JSON）" hint='例如：{"bank_name":"...","account_no":"..."}'>
-            <textarea
-              className={`${inputCls} h-24 font-mono text-xs`}
-              value={form.bank_info}
-              onChange={(e) => setForm((f) => ({ ...f, bank_info: e.target.value }))}
-            />
+          <Field label="銀行名">
+            <input className={inputCls} value={form.bank_name} onChange={(e) => setForm((f) => ({ ...f, bank_name: e.target.value }))} autoComplete="off" data-testid="broker-bank-name" />
+          </Field>
+          <Field label="戶口號碼">
+            <input className={inputCls} value={form.bank_account_no} onChange={(e) => setForm((f) => ({ ...f, bank_account_no: e.target.value }))} autoComplete="off" inputMode="numeric" data-testid="broker-bank-account" />
           </Field>
           <Field label="更別（逗號分隔）">
             <input className={inputCls} value={form.aliases} onChange={(e) => setForm((f) => ({ ...f, aliases: e.target.value }))} />

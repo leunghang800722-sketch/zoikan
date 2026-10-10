@@ -115,8 +115,12 @@ test("(c) 雞頭A：本月應收冇預覽橫幅，直接見自己（呢頁本身
 
 test("(d) 毛利即時表：3 張 stat 卡＋至少一行紅底（低於門檻）", async ({ page }) => {
   await loginAs(page, "老闆");
-  await page.goto("/reports/gross-margin");
-  await page.locator('input[type="month"]').fill("2026-07");
+  // P3-3.8：用 ?month= 直接開 7 月（月份選擇器 mount 前讀網址，只 fetch 一次），唔再 fill 之後賭資料載入先後（其他月有行但冇紅底時會 race）。
+  // 等 7 月嗰條 response 先斷言。
+  const julyLoaded = page.waitForResponse((r) => r.url().includes("/api/reports/gross-margin") && r.url().includes("month=2026-07"));
+  await page.goto("/reports/gross-margin?month=2026-07");
+  await julyLoaded;
+  await expect(page.locator('input[type="month"]')).toHaveValue("2026-07");
 
   await expect(page.getByText("全公司毛利率", { exact: true })).toBeVisible({ timeout: 20_000 });
   // 應修③（Opus 驗收）：stat label 改咗做「低於 N% 嘅盤」／「額外盤（未
@@ -167,17 +171,20 @@ test("(e) 月結工作台：2026-07 已有 month_closes 行——入頁自動 Ge
   await page.goto("/reports/monthly-close");
   await page.locator('input[type="month"]').fill("2026-07");
 
-  await expect(page.getByRole("heading", { name: "月結工作台" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Generate/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "月結總表" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /生成月結/ })).toBeVisible();
+  await expect(page.getByTestId("report-tabs")).toBeVisible();
+  await page.getByTestId("more-menu").click();
   await expect(page.locator('a:has-text("匯出 Excel")')).toBeVisible();
+  await page.keyboard.press("Escape");
   // A1（Opus 整合驗收）：2026-07 已經有 month_closes 行（鎖定咗）——入頁
   // 應該自動行一次 Generate，直接見到規則卡／總表／狀態卡，唔使自己
   // 撳「Generate」（呢個 test 全程冇撳過任何掣，`generate()` 淨係 no-op
   // upsert，唔會觸發 lock/unlock）。
-  await expect(page.getByText("§6.3 五條自動對數規則")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole("heading", { name: "月結總表" })).toBeVisible();
+  await expect(page.getByTestId("recon-rules-title")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "逐盤月結" })).toBeVisible();
   await expect(page.getByText("2026-07 狀態")).toBeVisible();
-  await expect(page.getByText("已鎖定")).toBeVisible();
+  await expect(page.getByText("已鎖定", { exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: `${SCREENSHOT_DIR}/13-monthly-close-1440.png`, fullPage: true });
@@ -189,7 +196,7 @@ test("(e2) Opus 整合驗收 A1：冇 month_closes 行嘅月份——空狀態�
   await page.locator('input[type="month"]').fill("2026-12");
 
   await expect(page.getByText("2026-12 未有月結記錄")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole("button", { name: "Generate", exact: true })).toBeVisible();
+  await expect(page.getByTestId("generate-month-close-empty")).toBeVisible(); // P3-3.4：「Generate」改名「生成月結」
 
   const res = await page.request.get("/api/month-closes?month=2026-12");
   expect(res.ok()).toBe(true);

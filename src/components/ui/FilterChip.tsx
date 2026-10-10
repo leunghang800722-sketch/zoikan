@@ -1,6 +1,6 @@
 // WP-R1 共用元件：頁首 filter chip（README「頁首模式」）——白底、灰
 // 邊、圓角 6px；標籤淡灰＋值深灰＋尾「▾」。包住一個 `<select>` 或
-// `<input type="month">` 等原生控件，自己重設 border/outline 混入 chip。
+// 原生月份控件，自己重設 border/outline 混入 chip。
 import type { ReactNode } from "react";
 
 export interface FilterChipProps {

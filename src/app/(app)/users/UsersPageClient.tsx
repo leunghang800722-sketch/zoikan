@@ -29,6 +29,7 @@ import { tableCls, tableMinWidth, EmptyState } from "@/components/ui/DataTable";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
 import { fmt, fmtDateTime, uiLabel } from "@/lib/ui/format";
+import { kickerFor } from "@/lib/nav/schema";
 
 interface UserRow {
   id: string;
@@ -243,7 +244,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="系統"
+        kicker={kickerFor("/users")}
         title="用戶管理"
         subtitle="帳號列表；重設密碼會強制對方下次登入改密碼。"
         actions={

@@ -454,7 +454,8 @@ test.describe("手機（375×812）", () => {
     const lastRowIndex = rowCount - 1;
     const cell = page.getByTestId(`roster-cell-${lastRowIndex}-28`);
     await cell.scrollIntoViewIfNeeded();
-    await cell.click();
+    // 手機用觸控 tap（pointerType=touch）；滑鼠 click 喺窄窗口仍然係滑鼠拖選語意（見 RosterEditor onCellMouseEnter）。
+    await cell.tap();
 
     const keypad = page.getByTestId("roster-mobile-keypad");
     await expect(keypad).toBeVisible({ timeout: 10_000 });
@@ -505,7 +506,18 @@ test.describe("手機（375×812）", () => {
     await expect(page.getByTestId("roster-row").first()).toBeVisible({ timeout: 20_000 });
 
     // Escape 取消：打「A」（AL 嘅字首，仲有更長候選，會等）→ Escape → 格仍然空。
-    const escCell = page.getByTestId("roster-cell-0-27");
+    // P3-3.8：唔再假設第 0 行 27／29 日一定係空（數據／排序變動後 27 日可能已有 RD）——搵第一行兩格都空嘅。
+    const r = await page.evaluate(() => {
+      const n = document.querySelectorAll('[data-testid="roster-row"]').length;
+      for (let i = 0; i < n; i++) {
+        const a = document.querySelector(`[data-testid="roster-cell-${i}-27"]`);
+        const b = document.querySelector(`[data-testid="roster-cell-${i}-29"]`);
+        if (a && b && (a.textContent ?? "").trim() === "" && (b.textContent ?? "").trim() === "") return i;
+      }
+      return -1;
+    });
+    expect(r).toBeGreaterThanOrEqual(0);
+    const escCell = page.getByTestId(`roster-cell-${r}-27`);
     await escCell.click();
     await page.keyboard.press("a");
     await expect(page.getByTestId("roster-cell-key-buffer")).toHaveText("A");
@@ -514,7 +526,7 @@ test.describe("手機（375×812）", () => {
     await expect(escCell).toHaveText("");
 
     // Timeout 自動寫入：打「A」（AL 字首）之後唔再打，等夠 500ms → 自動寫入「A」。
-    const timeoutCell = page.getByTestId("roster-cell-0-29");
+    const timeoutCell = page.getByTestId(`roster-cell-${r}-29`);
     await timeoutCell.click();
     await page.keyboard.press("a");
     await expect(page.getByTestId("roster-cell-key-buffer")).toHaveText("A");

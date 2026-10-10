@@ -75,6 +75,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.25",
     "exceljs": "^4.4.0",
+    "jsdom": "^26.1.0",
     "prisma": "^6.9.0",
     "tailwindcss": "^4",
     "tsx": "^4.19.2",

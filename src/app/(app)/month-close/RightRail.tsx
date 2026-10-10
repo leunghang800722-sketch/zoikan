@@ -5,7 +5,7 @@ import { UNDO_NOTE_SHORT, deriveAutoCategories, lockRequirements, reviewTotals }
 
 const card = "rounded-[10px] border border-zk-border bg-white";
 
-export function RightRail({ report, month, busy, locked, health, needsHuman, onOpenTriage, onLock, onUndo }: { needsHuman: number; report: ReportDTO; month: string; busy: boolean; locked: boolean; health: { critical: number; warn: number; info: number } | null; onOpenTriage: () => void; onLock: () => void; onUndo: () => void }) {
+export function RightRail({ needDiffReason, diffReason, onDiffReason, report, month, busy, locked, health, needsHuman, onOpenTriage, onLock, onUndo }: { needDiffReason: boolean; diffReason: string; onDiffReason: (v: string) => void; needsHuman: number; report: ReportDTO; month: string; busy: boolean; locked: boolean; health: { critical: number; warn: number; info: number } | null; onOpenTriage: () => void; onLock: () => void; onUndo: () => void }) {
   const auto = report.auto;
   const t = reviewTotals(auto?.review);
   const cats = auto ? deriveAutoCategories(auto) : null;
@@ -55,7 +55,10 @@ export function RightRail({ report, month, busy, locked, health, needsHuman, onO
             <div className="text-center text-[12px] font-semibold text-zk-warning">已鎖定</div>
           ) : (
             <>
-              <button type="button" onClick={onLock} disabled={busy || !ready} data-testid="rail-lock-month" className="rounded-[7px] bg-[#0f172a] py-[9px] text-[13px] font-semibold text-white disabled:cursor-not-allowed" style={{ opacity: ready ? 1 : 0.35 }}>
+              {needDiffReason && (
+                <input className="rounded-[7px] border border-[#d1d5db] px-2.5 py-2 text-[12.5px]" placeholder="§6.3 紅色差異：override 原因（必填）" value={diffReason} onChange={(e) => onDiffReason(e.target.value)} data-testid="rail-diff-reason" />
+              )}
+              <button type="button" onClick={onLock} disabled={busy || !ready || (needDiffReason && !diffReason.trim())} data-testid="rail-lock-month" className="rounded-[7px] bg-[#0f172a] py-[9px] text-[13px] font-semibold text-white disabled:cursor-not-allowed" style={{ opacity: ready ? 1 : 0.35 }}>
                 鎖定 {month}
               </button>
               <div className="text-center text-[11px] text-zk-faint">{ready ? "條件齊，可以鎖" : reqs.length > 0 ? "對數同定價做好就可以鎖" : "未可以鎖"}</div>

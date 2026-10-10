@@ -15,6 +15,8 @@ import { normalizeField } from "@/lib/guards/ocr/normalize";
 import { CRITICAL_MSG, FIELD_LABEL, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
 import type { FieldStatus } from "@/lib/guards/ocr/normalize";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
+import { kickerFor } from "@/lib/nav/schema";
+import Link from "next/link";
 
 const DOC_LABEL: Record<OcrDocType, string> = { id_card: "身份證（必須）", address_proof: "住址證明（可選）", onboarding_form: "入職表（可選）" };
 const DOC_SHORT: Record<OcrDocType, string> = { id_card: "身份證", address_proof: "住址證明", onboarding_form: "入職表" };
@@ -355,7 +357,10 @@ export function NewFromDocsClient() {
 
   return (
     <div className="space-y-4">
-      <PageHeader kicker="主檔" title="用證件新增保安員" subtitle="上載證件，由 AI 辨識自動填表；逐欄核對後先會寫入。" />
+      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-[13px] text-zk-primary hover:underline">
+        ‹ 返回保安員
+      </Link>
+      <PageHeader kicker={kickerFor("/guards/new-from-docs")} title="用證件新增保安員" subtitle="上載證件，由 AI 辨識自動填表；逐欄核對後先會寫入。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
 

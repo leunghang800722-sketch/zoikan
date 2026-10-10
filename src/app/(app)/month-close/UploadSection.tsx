@@ -95,6 +95,10 @@ export function UploadSection(props: {
         )}
       </Row>
 
+      <div className="border-b border-zk-border-soft px-4 py-2 text-[11.5px] text-zk-muted" data-testid="upload-section-hint">
+        亦可以喺「對數 › 更表上載」逐盤上載同對數。
+      </div>
+
       <details className="bg-zk-header px-4 py-2.5 text-[11.5px] text-zk-muted">
         <summary className="cursor-pointer">
           Postorder 只係 8、9 月過渡對照用。正式站讀唔到 .xlsm？<span className="text-zk-primary">睇點樣匯出 CSV ›</span>

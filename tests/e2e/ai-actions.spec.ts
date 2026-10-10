@@ -81,6 +81,12 @@ test("(d) 唔撤銷 → 5 秒後先發請求，body 同月結頁人手操作一�
   page.on("request", (r) => {
     if (r.method() !== "GET" && r.url().includes("/api/month-close/one-click")) bodies.push({ method: r.method(), url: new URL(r.url()).pathname, body: r.postData() });
   });
+  // P3-3.8：真 POST 會對假月份 2099-01 起一個真 one-click run（連帶計出 2099-01 長工糧 run），
+  // 之後 longterm-payroll.spec 重算 2026-08 就會被「後面月份已計過」擋住。呢個 test 淨係關心請求 body／UI，
+  // 所以 fulfill 假回應，唔寫 DB。
+  await page.route("**/api/month-close/one-click", (r) =>
+    r.request().method() === "POST" ? r.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ run_id: "e2e-fake-run", status: "running" }) }) : r.fallback(),
+  );
   await askDiagnosis(page);
   const write = page.locator('[data-action-type="one_click_run"]').last();
   const t0 = Date.now();
