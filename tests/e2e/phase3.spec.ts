@@ -1,7 +1,7 @@
 // WP-PHASE3（老闆 2026-09-27，§20.4 Phase 3）Playwright e2e——老闆抽屜
 // 設長工崗位盤＋價目卡「複製上月卡到本月」，喺真實 dev DB／真實 UI 路徑
 // 驗證（同 staffno.spec.ts／pricing.spec.ts 一樣嘅 pattern：`mode:
-// "serial"`，用獨立測試盤／測試安員，跑完清走）。
+// "serial"`，用獨立測試盤／測試保安員，跑完清走）。
 //
 // 執行前提：`PW_PORT=3000 npx playwright test tests/e2e/phase3.spec.ts`，
 // dev DB 要已經 `npm run db:seed`。鐵則：合成假資料，冇真名/工號/電話。
@@ -11,7 +11,7 @@ import { prisma } from "./db-helpers";
 
 test.describe.configure({ mode: "serial" });
 
-const GUARD_NAME = "測試安員E2E長工Phase3";
+const GUARD_NAME = "測試保安員E2E長工Phase3";
 const SITE_NAME = "測試盤E2E長工Phase3";
 const COPY_SITE_NAME = "測試盤E2E複製上月卡Phase3";
 
@@ -119,7 +119,7 @@ test("(b) 價目卡「複製上月卡到本月」：預覽 confirm → 新卡 no
   expect(newCard?.note).toContain("由上月複製");
 });
 
-test("(c) 雞頭登入：安員抽屜見唔到「長工」分區（結構性隔離）", async ({ page }) => {
+test("(c) 雞頭登入：保安員抽屜見唔到「長工」分區（結構性隔離）", async ({ page }) => {
   await loginAs(page, "雞頭A");
   await page.goto("/guards");
   const main = page.locator("main");
@@ -128,7 +128,7 @@ test("(c) 雞頭登入：安員抽屜見唔到「長工」分區（結構性隔�
   if (await anyRow.count()) {
     const editBtn = anyRow.getByRole("button", { name: "編輯" });
     if (await editBtn.count()) {
-      // 雞頭版本可能冇「編輯」掣（自己安員 update 出廠 off）——有就撳
+      // 雞頭版本可能冇「編輯」掣（自己保安員 update 出廠 off）——有就撳
       // 埋佢，冇就直接跳過（下面斷言唔靠一定開到抽屜，結構性隔離主要
       // 喺 GET response 冇 key，見 tests/wp-phase3.test.ts §2 已經
       // integration test 驗證過）。

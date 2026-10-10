@@ -51,6 +51,6 @@ export function otHoursFromCode(rawCode: string): number | null {
 }
 
 // 統計行標籤（tools/importer/mappings/stat_row_labels.csv）——Phase A
-// 唔重推 WP1 嘅逐日對數邏輯，淨係要識別呢啲行**唔係**安員行，解析嗰陣
+// 唔重推 WP1 嘅逐日對數邏輯，淨係要識別呢啲行**唔係**保安員行，解析嗰陣
 // 整行跳過（唔生成 roster_upload_rows）。
 export const STAT_ROW_LABELS: ReadonlySet<string> = new Set(["Total", "所需人手", "尚欠", "早加夜"]);

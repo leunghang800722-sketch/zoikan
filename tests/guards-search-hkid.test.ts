@@ -1,4 +1,4 @@
-// 主檔搜尋支援身份證號：GET /api/guards?q=——淨 session 有「安員個人資料:view」先用 q 配 hkid。合成資料。
+// 主檔搜尋支援身份證號：GET /api/guards?q=——淨 session 有「保安員個人資料:view」先用 q 配 hkid。合成資料。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
@@ -59,7 +59,7 @@ describe("GET /api/guards?q= 身份證號", () => {
   it("header 路徑（x-guard-search，encodeURIComponent）：有權限搵到、帶括號／全形都得；header 優先過 ?q=；壞編碼 400；冇權限／雞頭搵唔到", async () => {
     expect((await searchHeader(owner, "A123456(3)")).rows.map((x) => x.id)).toContain(fx.guardA.id);
     expect((await searchHeader(owner, "ａ１２３４５６（３）")).rows.map((x) => x.id)).toContain(fx.guardA.id);
-    expect((await searchHeader(owner, "測試安員甲")).rows.map((x) => x.id)).toEqual([fx.guardA.id]);
+    expect((await searchHeader(owner, "測試保安員甲")).rows.map((x) => x.id)).toEqual([fx.guardA.id]);
     const both = await guardsList(new Request("http://t/api/guards?q=zzzz", { headers: { cookie: owner, "x-guard-search": encodeURIComponent(HKID) } }));
     expect((await both.json()).rows.map((x: { id: string }) => x.id)).toContain(fx.guardA.id);
     const bad = await guardsList(new Request("http://t/api/guards", { headers: { cookie: owner, "x-guard-search": "%E0%A4%A" } }));
@@ -74,7 +74,7 @@ describe("GET /api/guards?q= 身份證號", () => {
     expect((await search(owner, "345")).rows.map((x) => x.id)).not.toContain(fx.guardA.id);
   });
 
-  it("主管關咗「安員個人資料」搵唔到；開返就搵到", async () => {
+  it("主管關咗「保安員個人資料」搵唔到；開返就搵到", async () => {
     await setSupervisorPii(false);
     expect((await search(supervisor, HKID)).rows.length).toBe(0);
     expect((await search(supervisor, "A1234")).rows.length).toBe(0);
@@ -88,7 +88,7 @@ describe("GET /api/guards?q= 身份證號", () => {
 
   it("冇權限用戶現有搜尋（姓名／電話）結果不變", async () => {
     await setSupervisorPii(false);
-    expect((await search(supervisor, "測試安員甲")).rows.map((x) => x.id)).toEqual([fx.guardA.id]);
+    expect((await search(supervisor, "測試保安員甲")).rows.map((x) => x.id)).toEqual([fx.guardA.id]);
   });
 
   it("搜尋字串唔入 audit／console", async () => {

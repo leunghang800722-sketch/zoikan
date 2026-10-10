@@ -5,8 +5,8 @@
 // {code, severity, count, message, fixLink, requires, detail}。
 //
 // 明細（detail）可以有姓名／工號——所以呢個 lib 回完整明細，由 route 經
-// `redactMonthHealth()` 按讀者權限剝走（要「更表」view；缺身份證要「安員個人資料」
-// view；缺銀行編號要「安員銀行資料」view；冇權限只回數量）。hkid／電話號碼本身
+// `redactMonthHealth()` 按讀者權限剝走（要「更表」view；缺身份證要「保安員個人資料」
+// view；缺銀行編號要「保安員銀行資料」view；冇權限只回數量）。hkid／電話號碼本身
 // 一律唔會出現喺任何明細入面——缺資料類只講「缺邊樣」，唔回值。
 import { prisma } from "@/lib/db";
 import { n, round2, monthRange, monthStart as toMonthStart } from "@/lib/reports/money";
@@ -231,8 +231,8 @@ export async function buildMonthHealth(month: Date, session: AuthedSession): Pro
   const nameOnly = cellsBy((g) => g.matchBasis === "name_only" && g.guardMatch !== "unmatched" && g.guardMatch !== "ambiguous");
   const ambiguous = cellsBy((g) => g.guardMatch === "ambiguous");
   const unmatched = cellsBy((g) => g.guardMatch === "unmatched");
-  push(finding({ code: "ambiguous_cells", severity: "critical", count: sumCells(ambiguous), message: `${sumCells(ambiguous)} 格安員配對有多個候選（ambiguous）`, fixLink: "/roster-uploads", requires: [ROSTER_VIEW], detail: ambiguous }));
-  push(finding({ code: "unmatched_cells", severity: "critical", count: sumCells(unmatched), message: `${sumCells(unmatched)} 格安員配對唔到（unmatched）`, fixLink: "/guard-fix", requires: [ROSTER_VIEW], detail: unmatched }));
+  push(finding({ code: "ambiguous_cells", severity: "critical", count: sumCells(ambiguous), message: `${sumCells(ambiguous)} 格保安員配對有多個候選（ambiguous）`, fixLink: "/roster-uploads", requires: [ROSTER_VIEW], detail: ambiguous }));
+  push(finding({ code: "unmatched_cells", severity: "critical", count: sumCells(unmatched), message: `${sumCells(unmatched)} 格保安員配對唔到（unmatched）`, fixLink: "/guard-fix", requires: [ROSTER_VIEW], detail: unmatched }));
   push(finding({ code: "name_only_cells", severity: "warn", count: sumCells(nameOnly), message: `${sumCells(nameOnly)} 格淨靠姓名配對（建議補工號或電話）`, fixLink: "/roster-uploads", requires: [ROSTER_VIEW], detail: nameOnly }));
 
   // --- 7. 許可證過期仍出更 ---------------------------------------------------------------
@@ -323,8 +323,8 @@ export async function buildMonthHealth(month: Date, session: AuthedSession): Pro
   const noHkid = gapRows((g) => !g.hkid);
   const noTel = gapRows((g) => !g.tel);
   const noBank = gapRows((g) => g.employmentType === "longterm_autopay" && !g.bankCode);
-  push(finding({ code: "gap_hkid", severity: "info", count: noHkid.length, message: `${noHkid.length} 位本月有出更／有糧嘅安員缺身份證號碼`, fixLink: "/guards", requires: [ROSTER_VIEW, PII_VIEW], detail: noHkid }));
-  push(finding({ code: "gap_tel", severity: "info", count: noTel.length, message: `${noTel.length} 位本月有出更／有糧嘅安員缺電話`, fixLink: "/guards", requires: [ROSTER_VIEW], detail: noTel }));
+  push(finding({ code: "gap_hkid", severity: "info", count: noHkid.length, message: `${noHkid.length} 位本月有出更／有糧嘅保安員缺身份證號碼`, fixLink: "/guards", requires: [ROSTER_VIEW, PII_VIEW], detail: noHkid }));
+  push(finding({ code: "gap_tel", severity: "info", count: noTel.length, message: `${noTel.length} 位本月有出更／有糧嘅保安員缺電話`, fixLink: "/guards", requires: [ROSTER_VIEW], detail: noTel }));
   push(finding({ code: "gap_bank_code", severity: "warn", count: noBank.length, message: `${noBank.length} 位長工缺銀行編號（出 autopay 檔會缺）`, fixLink: "/reports/longterm-payroll", requires: [ROSTER_VIEW, BANK_VIEW], detail: noBank }));
 
   const rank: Record<HealthSeverity, number> = { critical: 0, warn: 1, info: 2 };

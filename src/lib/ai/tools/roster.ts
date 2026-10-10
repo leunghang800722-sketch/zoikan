@@ -11,7 +11,7 @@ export function createRosterTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "roster",
     description:
-      "攞一個盤喺某個月嘅更表——逐個安員逐日嘅更別代號/請假代號。用戶問「呢個人幾時返工」「呢個盤呢個月邊日邊個更」用呢個。可選 broker 篩選淨係睇某個雞頭嘅人。要「更表:view」。",
+      "攞一個盤喺某個月嘅更表——逐個保安員逐日嘅更別代號/請假代號。用戶問「呢個人幾時返工」「呢個盤呢個月邊日邊個更」用呢個。可選 broker 篩選淨係睇某個雞頭嘅人。要「更表:view」。",
     inputSchema: z
       .object({
         site: z.string().describe("盤名稱（canonical_name 或 alias 嘅一部分）"),

@@ -81,7 +81,7 @@ describe("preview 預載更表佐證（未作廢上載）", () => {
     ({
       key: personKeyForHkid(H1),
       hkid: { value: H1, status: "confirmed" },
-      nameZh: { value: "測試安員甲", status: "confirmed" },
+      nameZh: { value: "測試保安員甲", status: "confirmed" },
       nameEn: { value: null, status: "missing" },
       dateOfBirth: { value: null, status: "missing" },
       sex: { value: null, status: "missing" },
@@ -119,7 +119,7 @@ describe("preview 預載更表佐證（未作廢上載）", () => {
     await row(ok.id, "by_name_tel", "name_tel");
     const r = await preview();
     expect(r).toMatchObject({ action: "link", basis: ["name_roster_evidence"] });
-    expect(r.current_name_zh).toBe("測試安員甲");
+    expect(r.current_name_zh).toBe("測試保安員甲");
   });
   it("G 有另一 hkid → create 路徑，reason same_name_different_hkid", async () => {
     await prisma.guard.update({ where: { id: fx.guardA.id }, data: { hkid: H2 } });

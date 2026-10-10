@@ -30,8 +30,8 @@ import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import type { Module } from "@/lib/rbac/matrix";
 import type { Prisma, Guard } from "@prisma/client";
 
-// C3：雞頭睇/管自己安員用「自己安員」module（§6.2「自己安員名冊管理」），
-// 內部角色（老闆/主管/會計）睇全公司安員用「安員」module——同一個
+// C3：雞頭睇/管自己保安員用「自己保安員」module（§6.2「自己保安員名冊管理」），
+// 內部角色（老闆/主管/會計）睇全公司保安員用「保安員」module——同一個
 // route，依 session 嘅 base_role 動態揀 module（見
 // src/lib/rbac/requirePermission.ts 嘅 ModuleSelector）。
 function guardModule(session: AuthedSession): Module {
@@ -43,7 +43,7 @@ function guardModule(session: AuthedSession): Module {
 // 計法：嗰個月 `record_type=shift` 且非 cancelled 嘅 shift_records 逐
 // guard 分組計數（同 shift-records route 預設 `status: { not: "cancelled" }`
 // 口徑一致）。全部經 `rows`（已經由 `scopeGuardWhere()` 做咗雞頭隔離）
-// 揀出嚟嘅 guardId 先計，唔會漏隔離揭露第二個雞頭嘅安員。
+// 揀出嚟嘅 guardId 先計，唔會漏隔離揭露第二個雞頭嘅保安員。
 //
 // M1（Opus 驗收修復）：舊版 regex `^\d{4}-\d{2}$` 會接受「2026-13」
 // 「2026-00」呢類結構啱但月份唔存在嘅字串——之後 `new Date("2026-13-01T…")`
@@ -143,7 +143,7 @@ export async function GET(req: Request) {
         prisma.guardPhone.findMany({ where: { tel: { contains: qParam } }, select: { guardId: true } }),
       ]);
       formerHitGuardIds = numberMatches.formerHitGuardIds;
-      // 身份證號搜尋：淨係內部角色且有「安員個人資料:view」（同 hkid 欄位顯示一致；雞頭硬性 deny）先用 q 配 hkid；
+      // 身份證號搜尋：淨係內部角色且有「保安員個人資料:view」（同 hkid 欄位顯示一致；雞頭硬性 deny）先用 q 配 hkid；
       // 冇權限完全唔配，搜尋結果同以前一樣，唔可以用嚟探測某個身份證號存唔存在。q 唔寫入 audit／log。
       const hkidQ = hkidSearchKey(qParam);
       const hkidSearch = hkidQ && !isBrokerRole(session) && (await hasPermission(session, "安員個人資料", "view")) ? hkidQ : null;
@@ -161,7 +161,7 @@ export async function GET(req: Request) {
       };
     }
     // WP-STAFF-IMPORT B1：`?identity=missing_hkid|missing_tel|missing_any`——
-    // 篩「缺身份證／缺電話」嘅安員（電話＝guards.tel 同步值或任何 guard_phones 行）。
+    // 篩「缺身份證／缺電話」嘅保安員（電話＝guards.tel 同步值或任何 guard_phones 行）。
     const identityParam = url.searchParams.get("identity");
     if (identityParam !== null) {
       const noHkid: Prisma.GuardWhereInput = { OR: [{ hkid: null }, { hkid: "" }] };
@@ -262,7 +262,7 @@ export async function GET(req: Request) {
     // omit()）——詳情 GET /api/guards/[id] 先用 toGuardFullDTO() 全欄。
     const dto = mapListDTO({ rows: rowsWithCount, total, skip, take }, toGuardListDTO);
     const gated = await applyFieldGroupGateToList(session, "guards", dto);
-    // WP-PII：列表身份證一律遮罩（老闆/會計有「安員個人資料:view」都係
+    // WP-PII：列表身份證一律遮罩（老闆/會計有「保安員個人資料:view」都係
     // 遮）——詳情/編輯（GET /api/guards/[id]、PATCH 之後 response）先畀
     // 睇全號，見 src/app/api/guards/[id]/route.ts。
     const masked = brandSafeResponse({ ...gated, rows: maskHkidForList(gated.rows) });
@@ -304,7 +304,7 @@ export async function POST(req: Request) {
       hkidCanon = prepareHkidForWrite(hkidRaw, { allowInvalid: allowInvalidHkid });
     }
     const data = snakeToCamelShallow(rest) as Prisma.GuardUncheckedCreateInput;
-    // 雞頭建安員：強制掛喺自己個 broker 底下（唔准幫其他雞頭/自己揀第二個 broker）
+    // 雞頭建保安員：強制掛喺自己個 broker 底下（唔准幫其他雞頭/自己揀第二個 broker）
     if (isBrokerRole(session)) data.defaultBrokerId = session.brokerId;
 
     // 必修 1（Opus 驗收第三輪，「POST 同理檢查」）：`GuardCreateSchema`

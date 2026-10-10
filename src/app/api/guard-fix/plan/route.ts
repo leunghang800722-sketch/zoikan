@@ -3,7 +3,7 @@
 // 舊 `scripts/guard-fix/build-guard-fix-plan.ts`（script 已於 2026-09-28 效能優化刪除，功能由一鍵結算 stepGuardFix／正式站 API 取代） 一模一樣邏輯，見
 // `src/lib/guard-fix/plan.ts`），存一行 `guard_fix_runs`（status=
 // planned）。回 summary（冇 PII）＋ needs_boss 逐條（PII 受
-// 「安員個人資料:view」gate，見 `src/lib/guard-fix/view.ts`）。
+// 「保安員個人資料:view」gate，見 `src/lib/guard-fix/view.ts`）。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { brandSafeResponse } from "@/lib/api/serialize";

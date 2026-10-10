@@ -1,6 +1,6 @@
 // WP-LTPAY §21 任務 5b：`GET/POST /api/longterm/contracts`——長工薪金合約
 // 人手管理（列表／新增）。Maxwell 導入用另一個 endpoint（`POST
-// /api/longterm/contracts/import`，已交付）。module「長工糧」（同「安員
+// /api/longterm/contracts/import`，已交付）。module「長工糧」（同「保安員
 // 銀行資料」一致粒度）。合約生效區間覆蓋嘅月份鎖咗就唔准寫（同
 // `rate_cards` 一致 pattern，`assertMonthRangeNotLocked()`）。
 import { prisma } from "@/lib/db";

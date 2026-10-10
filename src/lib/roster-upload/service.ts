@@ -99,7 +99,7 @@ export interface RosterUploadParseSummary {
   // 有子盤欄（citybus，或者呢個上載本身 parse 到 sub_site_names）而且
   // 嗰行冇寫」先算，加返三層推斷（見 `matchRowsAndSummarize()` 大註解）：
   subSiteInferredFromFileCount: number; // 同檔其他行嘅子盤淨係一種，自動填
-  subSiteInferredFromHistoryCount: number; // 最近 3 個月嗰個安員喺呢個盤嘅子盤出更紀錄淨係一個，自動填
+  subSiteInferredFromHistoryCount: number; // 最近 3 個月嗰個保安員喺呢個盤嘅子盤出更紀錄淨係一個，自動填
   subSiteNeedsHumanCount: number; // 歷史候選多過一個，留 null 交人手（對數頁 unresolved）
   warnings: string[];
 }
@@ -175,7 +175,7 @@ async function matchRowsAndSummarize(
   //      呢行冇寫，先算「漏寫」；冇子盤欄嘅檔案格式（好似 HKU座頭）淨
   //      係靜靜歸母盤，唔出 warning（回復 B-0 §15.5 原語意）。
   //   2. 歷史推斷（淨係喺 (1) 判斷「真係漏寫」嘅情況先做）：
-  //      (a) 同一個上載、同一個安員嘅**其他（物理）行**（同一個人喺一
+  //      (a) 同一個上載、同一個保安員嘅**其他（物理）行**（同一個人喺一
   //          個檔案入面可能出現喺唔止一個 Excel 行——例如唔同 block/
   //          唔同星期各自一行；一個物理行本身逐日展開嘅 `ParsedCellRow`
   //          全部共用同一個 `rowIndex`、亦即成粒 subSiteName 一定一致，
@@ -184,7 +184,7 @@ async function matchRowsAndSummarize(
   //          唔可能出現多過一種 subSiteName，用 `rowIndex` 分組會令呢
   //          層推斷變死code）——身份嘅其他物理行已經寫咗子盤，而且淨係
   //          一種 → 自動填（「同檔其他行推斷」）。
-  //      (b) 同檔搵唔到就查嗰個安員最近 3 個月喺呢個母盤子盤嘅
+  //      (b) 同檔搵唔到就查嗰個保安員最近 3 個月喺呢個母盤子盤嘅
   //          `shift_records`（`status != cancelled`）——淨係一個子盤
   //          出過更 → 自動填（「歷史推斷」）；零個 → 跌返 (1) 嘅「未寫
   //          子盤，歸母盤」warning；多過一個 → 留 `resolved_site_id=
@@ -334,7 +334,7 @@ async function matchRowsAndSummarize(
       } else if (historyInferredByIdentity.has(identityKey)) {
         effectiveSiteId = historyInferredByIdentity.get(identityKey)!;
         subSiteInferredFromHistoryCount += 1;
-        warnings.push("子盤由歷史推斷（最近 3 個月呢個安員喺呢個盤底下子盤有出更紀錄）");
+        warnings.push("子盤由歷史推斷（最近 3 個月呢個保安員喺呢個盤底下子盤有出更紀錄）");
       } else if (historyCandidateNamesByIdentity.has(identityKey)) {
         // 多過一個候選——留 null，唔准估，交對數頁人手揀（呢種 null 同
         // 「舊上載未 reparse」嘅 null 點分辨見 reconcile.ts）。
@@ -360,8 +360,8 @@ async function matchRowsAndSummarize(
       outOfMonthCount += 1;
       warnings.push(`格仔日期 ${r.workDate} 唔係上載月份（${monthPrefix.slice(0, 7)}），人手覆核`);
     }
-    if (guardResult.guardMatch === "unmatched") warnings.push("安員配對唔到（staff_no/姓名/電話都對唔上現有安員名冊）");
-    if (guardResult.guardMatch === "ambiguous") warnings.push("安員配對到多過一個候選，人手覆核");
+    if (guardResult.guardMatch === "unmatched") warnings.push("保安員配對唔到（staff_no/姓名/電話都對唔上現有保安員名冊）");
+    if (guardResult.guardMatch === "ambiguous") warnings.push("保安員配對到多過一個候選，人手覆核");
     // Phase B-0 第 4 項：(a)(b) 兩類細分警告——「二揀一」揀咗淨係加
     // warnings 唔改 `guard_match` enum（見 match.ts GuardMatchResult 頂
     // 註解解釋點解）。兩個 flag 唔互斥都可以同時出現（例如檔案工號完全
@@ -389,16 +389,16 @@ async function matchRowsAndSummarize(
     // 配到——留痕俾會計知呢個人個本名同更表寫嘅唔同，唔係純粹信賴巧合。
     if (guardResult.matchedViaStaffNoConflictOverride) {
       staffNoMismatchCount += 1;
-      warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人：已按安員配對修復保守預設配對到按更表姓名建立嘅獨立安員（工號衝突待核）`);
+      warnings.push(`檔案工號 ${r.staffNoRaw} 屬另一人：已按保安員配對修復保守預設配對到按更表姓名建立嘅獨立保安員（工號衝突待核）`);
     }
     if (guardResult.telNameConflict) {
-      warnings.push("電話對到一位安員、但更表姓名對到另一位，唔會自動配對，人手覆核");
+      warnings.push("電話對到一位保安員、但更表姓名對到另一位，唔會自動配對，人手覆核");
     }
     if (guardResult.telMatchNameDiffers) {
       warnings.push("靠電話配對（更表姓名同系統本名／別名唔同），人手覆核");
     }
     if (guardResult.matchedViaAlias) {
-      warnings.push("由別名配對（更表姓名同系統本名唔同，見安員資料「更表用名」）");
+      warnings.push("由別名配對（更表姓名同系統本名唔同，見保安員資料「更表用名」）");
     }
     if (shiftTypeMatch.matchedViaRank) rankNarrowedCount += 1;
     if (shiftTypeMatch.ambiguous) {

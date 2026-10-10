@@ -1,5 +1,5 @@
 // WP-LTSHIFT（老闆 2026-09-26 §3）：`POST /api/reports/referral-fee/recompute`
-// route-level 測試——權限（老闆／會計先得，主管/雞頭/安員擋）、7 月拒絕、
+// route-level 測試——權限（老闆／會計先得，主管/雞頭/保安員擋）、7 月拒絕、
 // 快樂路徑金額。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
@@ -38,7 +38,7 @@ describe("POST /api/reports/referral-fee/recompute", () => {
     expect(res.status).toBe(200);
   });
 
-  it("主管／雞頭／安員：403", async () => {
+  it("主管／雞頭／保安員：403", async () => {
     for (const role of ["主管", "雞頭", "安員"] as const) {
       const cookie = await sessionCookieForUser(fx.userIds[role]);
       const res = await recomputeRoute(req(cookie, { month: "2026-08" }));

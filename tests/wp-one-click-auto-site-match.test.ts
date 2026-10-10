@@ -134,7 +134,7 @@ describe("external 別名（rank／姓名）", () => {
   });
   it("唔係外人：測試外判甲／普通 rank 唔中", () => {
     expect(matchExternalAlias("測試外判甲", ext)).toBeNull();
-    expect(externalBrokerForRow({ rankRaw: "日更保安員", nameRaw: "測試安員甲" }, ext)).toBeNull();
+    expect(externalBrokerForRow({ rankRaw: "日更保安員", nameRaw: "測試保安員甲" }, ext)).toBeNull();
     expect(externalBrokerForRow({ rankRaw: "Wilson Guard" }, [])).toBeNull();
   });
 });

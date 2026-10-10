@@ -1,4 +1,4 @@
-// WP-RECONCILE-UI（§33）：對數頁／分診共用純函數——原因分類＋人話、相似安員四種規則、連結、needs_boss 對應。
+// WP-RECONCILE-UI（§33）：對數頁／分診共用純函數——原因分類＋人話、相似保安員四種規則、連結、needs_boss 對應。
 // 全部假名（測試甲…）／假工號（U9xxxx）／假電話。
 import { describe, expect, it } from "vitest";
 import {
@@ -21,7 +21,7 @@ const G = (over: Partial<GuardLite> & { id: string; name_zh: string }): GuardLit
 
 describe("classifyReason／humanize", () => {
   it("逐句分類（「；」接埋嘅多句）", () => {
-    const parts = classifyReason("上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤；雞頭碼「ZZ」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析；安員未配對");
+    const parts = classifyReason("上載未指定盤（site_id 未定），請先喺更表上載列表頁指定盤；雞頭碼「ZZ」對唔到任何雞頭，請先喺雞頭管理加碼／別名再重新解析；保安員未配對");
     expect(parts.map((p) => p.kind)).toEqual(["no_site", "broker_code", "guard"]);
     expect(parts[1]!.value).toBe("ZZ");
   });
@@ -35,15 +35,15 @@ describe("classifyReason／humanize", () => {
     expect(kinds("格仔日期 2026-10-01 唔係上載月份（2026-09），唔可以寫入")).toBe("out_of_month");
     expect(kinds("更表入面同一人同日同盤同更別出現多過一次（重複行），淨係第一行參與對數，人手覆核")).toBe("duplicate");
   });
-  it("安員未配對講明更表寫咗乜", () => {
-    const [part] = classifyReason("安員未配對");
+  it("保安員未配對講明更表寫咗乜", () => {
+    const [part] = classifyReason("保安員未配對");
     expect(humanizeReasonPart(part!, P)).toBe("更表寫「甲測試／U90001」，測試甲到");
     expect(humanizeReasonPart(part!, { name: "甲測試", staffNo: "", tel: "" })).toBe("更表寫「甲測試」，測試甲到");
     expect(humanizeReasonPart(part!, null)).toContain("冇寫姓名／工號");
   });
 });
 
-describe("相似安員（四種規則，最多 3 個）", () => {
+describe("相似保安員（四種規則，最多 3 個）", () => {
   const guards: GuardLite[] = [
     G({ id: "g1", name_zh: "甲測試" }), // 同名
     G({ id: "g2", name_zh: "丁測試", staff_no: "U90001" }), // 同工號
@@ -111,10 +111,10 @@ describe("needs_boss 對應", () => {
     expect(matchNeedsBossByPerson({ name: "甲測試", staffNo: "U90099", tel: "" }, items)).toBeNull();
   });
   it("題目：seq／姓名／盤名＋格數", () => {
-    expect(matchNeedsBossForQuestion({ title: "安員配對要核實（測試盤乙，5 格）", summary: "x (I001)", identity_label: null }, items)?.seq).toBe("I001");
-    expect(matchNeedsBossForQuestion({ title: "安員配對要核實（測試盤乙，5 格）", summary: "x", identity_label: "測試丙" }, items)?.seq).toBe("I002");
-    expect(matchNeedsBossForQuestion({ title: "安員配對要核實（測試盤乙，5 格）", summary: "x", identity_label: null }, items)?.seq).toBe("I002");
-    expect(matchNeedsBossForQuestion({ title: "安員配對要核實（測試盤乙、測試盤甲，99 格）", summary: "x", identity_label: null }, items)).toBeNull();
+    expect(matchNeedsBossForQuestion({ title: "保安員配對要核實（測試盤乙，5 格）", summary: "x (I001)", identity_label: null }, items)?.seq).toBe("I001");
+    expect(matchNeedsBossForQuestion({ title: "保安員配對要核實（測試盤乙，5 格）", summary: "x", identity_label: "測試丙" }, items)?.seq).toBe("I002");
+    expect(matchNeedsBossForQuestion({ title: "保安員配對要核實（測試盤乙，5 格）", summary: "x", identity_label: null }, items)?.seq).toBe("I002");
+    expect(matchNeedsBossForQuestion({ title: "保安員配對要核實（測試盤乙、測試盤甲，99 格）", summary: "x", identity_label: null }, items)).toBeNull();
     expect(matchNeedsBossForQuestion({ title: "x", summary: "y", identity_label: null }, [])).toBeNull();
   });
 });
@@ -126,7 +126,7 @@ describe("冇權限睇姓名／工號", () => {
     expect(piiHidden(null)).toBe(false);
   });
   it("原因人話唔講「冇寫」", () => {
-    const [part] = classifyReason("安員未配對");
+    const [part] = classifyReason("保安員未配對");
     expect(humanizeReasonPart(part!, null, true)).toContain("冇權限睇姓名／工號");
     expect(humanizeReasonPart(part!, null, true)).not.toContain("冇寫");
   });

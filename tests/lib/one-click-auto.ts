@@ -1,4 +1,4 @@
-// WP-ONE-CLICK-AUTO 測試共用 helper——合成資料（盤名／安員名全部「測試」開頭，工號 U9xxxx，電話 6xxxxxxx），
+// WP-ONE-CLICK-AUTO 測試共用 helper——合成資料（盤名／保安員名全部「測試」開頭，工號 U9xxxx，電話 6xxxxxxx），
 // 唔讀 data/，唔用真名。
 import ExcelJS from "exceljs";
 import type { BrokerKind, EmploymentType } from "@prisma/client";
@@ -30,7 +30,7 @@ export async function mkGuard(opts: { name?: string; employmentType?: Employment
   const n = String(guardSeq).padStart(4, "0");
   return prisma.guard.create({
     data: {
-      nameZh: opts.name ?? `測試安員${n}`,
+      nameZh: opts.name ?? `測試保安員${n}`,
       staffNo: opts.staffNo ?? `U9${n}`,
       tel: opts.tel ?? `6${String(guardSeq).padStart(7, "0")}`,
       employmentType: opts.employmentType ?? "cash_casual",
@@ -51,7 +51,7 @@ export interface RosterLine {
   codes: Record<number, string>;
 }
 
-/** 合成 standard layout 更表（A2 盤名、row4 日期、row5 表頭、row6 起逐個安員）。 */
+/** 合成 standard layout 更表（A2 盤名、row4 日期、row5 表頭、row6 起逐個保安員）。 */
 export async function buildRosterXlsx(siteRaw: string, month: Date, lines: RosterLine[], opts: { dayCount?: number } = {}): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("2026");

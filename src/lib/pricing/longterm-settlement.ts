@@ -7,19 +7,19 @@
 //
 // 呢個 module 加喺 `resolveSettlementBrokerFallback()`（規則 8：冇雞頭碼
 // 欄先用嘅 fallback 鏈）**之前**嘅新第一層——只對 `employment_type` 開頭
-// `longterm_` 嘅安員生效，唔理雞頭碼欄有冇值都會覆寫（總表 8 月長工行
+// `longterm_` 嘅保安員生效，唔理雞頭碼欄有冇值都會覆寫（總表 8 月長工行
 // 雞頭碼一律填緊 K，唔可以照抄）：
 //
 //   1. 簽證形式長工（`guard.visaSponsoredByBrokerId` 有值）→ 永遠當
 //      該雞頭散更（settlement=operational=該雞頭），唔理崗位盤。
 //   2. 有生效中崗位盤（含母盤摺埋），呢更所在盤喺入面 → 結算單位=B07，
 //      operational_broker_id=更表雞頭碼嗰個雞頭（總表成本桶照舊）。
-//   3. 冇任何生效中崗位盤（呢個安員完全未有崗位記錄）→ 用該月更表行
+//   3. 冇任何生效中崗位盤（呢個保安員完全未有崗位記錄）→ 用該月更表行
 //      占比保守推算（`inferGuardMonthlyTopSite()`）：
 //        - 佔比 ≥50% 嘅盤 → 當作崗位盤（source=inferred），行為同 2。
 //        - 推算唔到（分散多盤 /冇資料）→ 保守：全部當長工更（B07），
 //          唔畀雞頭錢。
-//   4. 有崗位盤但呢更所在盤唔喺入面（安員有崗位、去咗第二個盤頂更）→
+//   4. 有崗位盤但呢更所在盤唔喺入面（保安員有崗位、去咗第二個盤頂更）→
 //      跟更表雞頭碼幫雞頭頂散更，warning「長工頂雞頭更」。
 //
 // 呢一層淨係**決定**（純函數 `resolveLongtermSettlement()` + 兩個 DB
@@ -44,7 +44,7 @@ export interface LongtermSettlementResult {
   operationalBrokerId: string | null;
   reason: LongtermSettlementReason;
   warning: string | null;
-  /** reason=longterm_inferred_post 先有值——呢個安員本次推算出嚟嘅崗位
+  /** reason=longterm_inferred_post 先有值——呢個保安員本次推算出嚟嘅崗位
    * 盤，caller（reconcile-apply）套用 apply_roster 嗰陣要順便
    * upsert 一行 `guard_longterm_posts`（source=inferred）。 */
   inferredPostSiteId?: string;
@@ -61,11 +61,11 @@ export interface ResolveLongtermSettlementInput {
   /** 更表本行雞頭碼解析出嚟嘅 broker（呢張上載有雞頭碼欄先有值；冇
    * 雞頭碼欄嘅盤呢度傳 null，由舊 fallback 鏈（規則 8）補）。 */
   rosterBrokerId: string | null;
-  /** 呢個安員生效中嘅崗位盤 id 集合（母盤已經摺埋——即係話一個安員如果
+  /** 呢個保安員生效中嘅崗位盤 id 集合（母盤已經摺埋——即係話一個保安員如果
    * 崗位登記喺母盤，呢個 set 入面母盤同全部子盤都應該有）。空集合＝
    * 完全冇崗位記錄，要行推算。 */
   activePostSiteIds: Set<string>;
-  /** 呢個安員本月各（已摺母盤）盤嘅更表行占比推算結果——`activePostSiteIds`
+  /** 呢個保安員本月各（已摺母盤）盤嘅更表行占比推算結果——`activePostSiteIds`
    * 空集合先會用到。 */
   monthlyTopSite: { siteId: string; ratio: number } | null;
   /** 驗收（Opus 5.5，2026-09-26）：呢個月已經上載咗 Postorder 總表（權威
@@ -157,7 +157,7 @@ export function resolveLongtermSettlement(input: ResolveLongtermSettlementInput)
     settlementBrokerId: input.rosterBrokerId,
     operationalBrokerId: input.rosterBrokerId,
     reason: "longterm_non_post_broker",
-    warning: input.rosterBrokerId ? "長工頂雞頭更：安員有登記崗位盤，但呢更唔喺崗位盤，跟更表雞頭碼幫雞頭頂散更" : null,
+    warning: input.rosterBrokerId ? "長工頂雞頭更：保安員有登記崗位盤，但呢更唔喺崗位盤，跟更表雞頭碼幫雞頭頂散更" : null,
   };
 }
 
@@ -176,7 +176,7 @@ export async function findInternalLongtermBrokerId(client: PrismaLike = prisma):
 }
 
 /**
- * 攞一批安員生效中嘅崗位盤（`effectiveFrom<=asOf`、`effectiveTo` null 或
+ * 攞一批保安員生效中嘅崗位盤（`effectiveFrom<=asOf`、`effectiveTo` null 或
  * `>=asOf`、`voidedAt` null），摺埋母盤——回 guardId -> Set(siteId)
  * （子盤登記嘅唔會自動加母盤，母盤登記嘅唔會自動加子盤，摺埋嘅工作由
  * `resolveLongtermSettlement()` 呼叫方傳 `parentSiteId` 自己夾）。
@@ -200,7 +200,7 @@ export async function loadActiveLongtermPosts(
       // （guard-fix `set_longterm_post` 由總表「(8) 長工」格寫、或者老闆人手
       // 加）——`inferred`（冇總表嗰陣嘅占比推算）同 `july_backfill`（7 月
       // 反推，正式站 migration 先有）都唔可以蓋過總表：dev 模擬「舊版先套用、
-      // 後部署」實測，一位 7 月喺啟航1331 做長工、8 月總表冇佢長工格嘅安員，
+      // 後部署」實測，一位 7 月喺啟航1331 做長工、8 月總表冇佢長工格嘅保安員，
       // 因為 july_backfill 崗位令 13 格錯歸 B07（少畀 K 11,440）。
       ...(opts.excludeInferred ? { source: "manual" as const } : {}),
     },
@@ -220,7 +220,7 @@ export async function loadActiveLongtermPosts(
 }
 
 /** 驗收（Opus 5.5）：呢個月嘅 Postorder 總表係咪已經「生效」——最新一份
- * 已解析嘅 Postorder 上載，而且已經有一個引用佢嘅安員配對修復計劃**套用
+ * 已解析嘅 Postorder 上載，而且已經有一個引用佢嘅保安員配對修復計劃**套用
  * 咗**（`guard_fix_runs.status='applied'`，即係 `set_longterm_post` 等
  * 已經落 DB）。生效先以總表為準（見 `ResolveLongtermSettlementInput.
  * postorderAuthoritative`）；淨係上載咗未套用就唔當權威——否則長工崗位
@@ -234,9 +234,9 @@ export async function hasParsedPostorderForMonth(month: Date, client: PrismaLike
 }
 
 /**
- * 保守預設嘅「本月占比」推算——攞呢批安員喺呢個月**全部**已上載更表行
+ * 保守預設嘅「本月占比」推算——攞呢批保安員喺呢個月**全部**已上載更表行
  * （唔止單一張上載，因為長工可能同月喺唔同盤嘅上載都有出現），逐行摺埋
- * 母盤，計每個安員邊個（已摺母盤嘅）盤占佢當月總行數最高比例。
+ * 母盤，計每個保安員邊個（已摺母盤嘅）盤占佢當月總行數最高比例。
  *
  * 只計 `code_kind in (shift, ot)`（leave 唔算「喺邊度返工」，唔計入占比
  * 分母／分子——同 reconcile.ts 對數本身淨計 shift/ot/leave 三類唔同，
@@ -322,7 +322,7 @@ export async function inferGuardMonthlyTopSite(guardIds: string[], month: Date, 
 //      就用佢；多個就用出現最多嗰個，佔比要 ≥70%（否則分散多個雞頭，
 //      計唔到邊個先係「供應」嗰個，唔設＋warning）。
 //   2. 完全冇雞頭碼欄（成盤逐行都冇）——跌返 (a) 該盤該月
-//      `broker_site_assignments` 唯一一個雞頭；(b) 該盤（任何安員）當月
+//      `broker_site_assignments` 唯一一個雞頭；(b) 該盤（任何保安員）當月
 //      其他 shift 行嘅雞頭碼唯一一個。
 //   3. 都冇——唔設（`referralBrokerId` 保持 null），warning 話原因，交
 //      人手覆核。
@@ -453,7 +453,7 @@ export async function inferReferralBrokerFromRosters(guardId: string, month: Dat
   }
 
   // 冇雞頭碼欄（成盤逐行都冇）——跌返 broker_site_assignments，再跌返
-  // 該盤（任何安員）其他 shift 行唯一雞頭。
+  // 該盤（任何保安員）其他 shift 行唯一雞頭。
   const postSiteIdList = [...postSiteIds];
   const assignments = await client.brokerSiteAssignment.findMany({
     where: { siteId: { in: postSiteIdList }, month: monthStart },
@@ -478,12 +478,12 @@ export async function inferReferralBrokerFromRosters(guardId: string, month: Dat
     if (await isDisallowedReferralBrokerKind(otherBrokerId, client)) {
       return { brokerId: null, reason: REFERRAL_INTERNAL_BLOCKED_REASON, warning: REFERRAL_INTERNAL_BLOCKED_WARNING };
     }
-    return { brokerId: otherBrokerId, reason: "崗位盤冇雞頭碼欄，用該盤其他安員 shift 行唯一雞頭", warning: null };
+    return { brokerId: otherBrokerId, reason: "崗位盤冇雞頭碼欄，用該盤其他保安員 shift 行唯一雞頭", warning: null };
   }
 
   return {
     brokerId: null,
-    reason: "崗位盤冇雞頭碼欄，broker_site_assignments／其他安員行都對唔到唯一雞頭",
+    reason: "崗位盤冇雞頭碼欄，broker_site_assignments／其他保安員行都對唔到唯一雞頭",
     warning: "呢個長工計唔到介紹雞頭（冇雞頭碼欄、broker_site_assignments／其他行都對唔到唯一雞頭），請人手覆核",
   };
 }

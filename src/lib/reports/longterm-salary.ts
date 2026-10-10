@@ -13,12 +13,12 @@ import { n, round2, monthRange } from "./money";
 
 export interface LongtermSalaryAllocationResult {
   bySite: Map<string, number>;
-  /** Σ全部有出更嘅 longterm_autopay 安員月薪（唔理呢個人本月出更嘅盤
+  /** Σ全部有出更嘅 longterm_autopay 保安員月薪（唔理呢個人本月出更嘅盤
    * 使唔使全部都喺調用方嘅 site 範圍入面）——用嚟做「分攤總額 = Σ
    * monthly_salary」嘅 gate 斷言基準（Opus 驗收 A2）。 */
   totalAllocatable: number;
   /** employment_type=longterm_autopay 但本月有出更、monthly_salary 缺數
-   * 嘅安員——`{ guardRef, siteIds }`（guardRef 用 staff_no 或 id，PDPO：
+   * 嘅保安員——`{ guardRef, siteIds }`（guardRef 用 staff_no 或 id，PDPO：
    * 唔用真名）。 */
   missingSalary: Array<{ guardRef: string; siteIds: string[] }>;
 }

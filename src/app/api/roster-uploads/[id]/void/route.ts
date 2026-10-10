@@ -3,7 +3,7 @@
 // 會一路留喺清單／會計首頁「待處理」／月結鎖定前置檢查。人手作廢（唔
 // hard delete，`voidRosterUpload()` 淨係轉 `status='voided'`，file_bytes／
 // rows／reconcile_decisions 全部留底）。權限「更表上載」`void`（老闆／
-// 主管／會計 G，雞頭／安員硬性 deny）。
+// 主管／會計 G，雞頭／保安員硬性 deny）。
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { toRosterUploadDTO } from "@/lib/api/dto";
 import { brandSafeResponse } from "@/lib/api/serialize";

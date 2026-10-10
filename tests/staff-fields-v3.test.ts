@@ -165,7 +165,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
 
   // -------------------------------------------------------------------------
   describe("寫入：新建／補空欄／衝突", () => {
-    it("新建安員：新欄全部 confirmed 寫入；牌照衍生欄同 PATCH 邏輯一致；緊急聯絡人入子表並同步 legacy；逐工號入職日期", async () => {
+    it("新建保安員：新欄全部 confirmed 寫入；牌照衍生欄同 PATCH 邏輯一致；緊急聯絡人入子表並同步 legacy；逐工號入職日期", async () => {
       const p = person({
         nos: [{ n: "U90001", hire: "2021-02-03" }],
         sia: { no: "K-200001-1-001", a: "2027-03-04", b: "2028-01-02" },
@@ -270,7 +270,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect((await qAnswer(owner, q.id, ans, pv.preview_hash)).status).toBe(409);
     });
 
-    it("覆蓋權：用導入值覆蓋現有非空值要「安員:update」；會計冇 → 403 唔寫；補空欄得", async () => {
+    it("覆蓋權：用導入值覆蓋現有非空值要「保安員:update」；會計冇 → 403 唔寫；補空欄得", async () => {
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員", action: "update" } }, data: { granted: false } });
       const g0 = await prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", hkid: H[0]!, safetyCardNo: "OLD0001", createdBy: "t" } });
       await applyPkg(accountant, pkg3([person({ safety: { no: "NEW9999", expiry: "2027-06-07" } })]));
@@ -340,7 +340,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect(await prisma.guardEmergencyContact.count({ where: { guardId: g0.id } })).toBe(4);
     });
 
-    it("冇「安員個人資料:view」：已有聯絡人就唔自動加（結果同 same 睇落一樣）", async () => {
+    it("冇「保安員個人資料:view」：已有聯絡人就唔自動加（結果同 same 睇落一樣）", async () => {
       const g0 = await prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", hkid: H[0]!, createdBy: "t" } });
       await prisma.guardEmergencyContact.create({ data: { guardId: g0.id, name: "測試聯絡人甲", tel: "91000011", sortOrder: 0 } });
       await prisma.rolePermission.updateMany({ where: { role: { name: "會計" }, permission: { module: "安員個人資料", action: "view" } }, data: { granted: false } });
@@ -401,7 +401,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
 
   // -------------------------------------------------------------------------
   describe("銀行：權限、projection、分診", () => {
-    it("包內有銀行欄：冇「安員銀行資料:update」（主管）preview／apply 403 並講明；冇銀行欄的包主管照常；唔寫任何嘢", async () => {
+    it("包內有銀行欄：冇「保安員銀行資料:update」（主管）preview／apply 403 並講明；冇銀行欄的包主管照常；唔寫任何嘢", async () => {
       const withBank = pkg3([person({ bank: {} })]);
       const a = await previewPkg(supervisor, withBank);
       expect(a.status).toBe(403);
@@ -451,7 +451,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect((await prisma.guard.findUniqueOrThrow({ where: { id: g1.id } })).bankAccountNo).toBe("000011112222");
     });
 
-    it("冇「安員銀行資料:view」（update 保留）：preview／apply 估啱 vs 估錯現有戶口，整個回應深比較相同；有 view 嘅會計睇到分別", async () => {
+    it("冇「保安員銀行資料:view」（update 保留）：preview／apply 估啱 vs 估錯現有戶口，整個回應深比較相同；有 view 嘅會計睇到分別", async () => {
       const g0 = await prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", hkid: H[0]!, dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), bankCode: "004", bankName: "匯豐銀行", bankAccountNo: ACCT, bankPayeeName: PAYEE, createdBy: "t" } });
       void g0;
       const right = pkg3([person({ bank: { acct: ACCT } })]);
@@ -501,7 +501,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect(s((await previewPkg(accountant, one)).body)).toEqual(s((await previewPkg(accountant, two)).body));
     });
 
-    it("bank_review 內容：冇「安員銀行資料:update」嘅擁有人見到題目數但內容寫「要有安員銀行資料權限嘅同事處理」，且唔可以預覽／作答", async () => {
+    it("bank_review 內容：冇「保安員銀行資料:update」嘅擁有人見到題目數但內容寫「要有保安員銀行資料權限嘅同事處理」，且唔可以預覽／作答", async () => {
       await prisma.guard.create({ data: { nameZh: "測試員甲", employmentType: "cash_casual", hkid: H[0]!, bankCode: "024", bankAccountNo: ACCT2, bankPayeeName: PAYEE, createdBy: "t" } });
       const r = await applyPkg(owner, pkg3([person({ bank: {} })]));
       const sid = r.body.triage.session_id as string;
@@ -512,7 +512,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       const sess = await (await get(sessionRoute as never, `/api/triage/sessions/${sid}`, supervisor, sid)).json();
       const q = sess.questions[0];
       expect(q.restricted).toBe(true);
-      expect(q.title).toContain("要有安員銀行資料權限嘅同事處理");
+      expect(q.title).toContain("要有保安員銀行資料權限嘅同事處理");
       expect(q.options).toEqual([]);
       expect(JSON.stringify(sess)).not.toContain(ACCT);
       expect(JSON.stringify(sess)).not.toContain(PAYEE);
@@ -556,7 +556,7 @@ describe("WP-STAFF-FIELDS 第二階段：導入包 v3", () => {
       expect(res.status).toBe(200);
       const g = await prisma.guard.findUniqueOrThrow({ where: { id: cand.id } });
       expect([g.bankCode, g.bankAccountNo, g.bankPayeeName, g.bankName]).toEqual(["004", ACCT, "TEST ONE PAYEE", "匯豐銀行"]);
-      // 已答：再上載唔再出（戶口已屬某安員）
+      // 已答：再上載唔再出（戶口已屬某保安員）
       const third = await applyPkg(owner, pkg);
       expect(third.body.triage.new_questions).toBe(0);
       // 搜尋其他保安員：另一條（用新 key）

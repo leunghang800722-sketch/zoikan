@@ -1,13 +1,13 @@
-// WP-ONE-CLICK-AUTO（§31.3 D 尾段）：安員配對修復「要老闆核實」（needs_boss）自動化。
+// WP-ONE-CLICK-AUTO（§31.3 D 尾段）：保安員配對修復「要老闆核實」（needs_boss）自動化。
 //
-//   auto     單一候選安員，而且**同時**：
-//            (1) 有硬鍵——更表有工號（上月嗰啲格工號都要一樣），或者電話等於候選安員電話而且姓名完全一致；
+//   auto     單一候選保安員，而且**同時**：
+//            (1) 有硬鍵——更表有工號（上月嗰啲格工號都要一樣），或者電話等於候選保安員電話而且姓名完全一致；
 //            (2) 上月同盤、同一更表姓名（有工號就同工號）嘅格 ≥3 格，全部已配對到同一個 guard_id；
 //            (3) plan 冇判「工號衝突」（`code=staff_no_conflict`，結構化碼，唔靠字串）。
 //            淨姓名（冇工號／電話硬鍵）永遠唔 auto。
 //   propose  單一候選但冇硬證據／工號衝突 → 分診題預填候選（唔計 auto）。
 //   unknown  冇候選／多個候選 → 分診題冇預填（列候選）。
-// 「配對」嘅做法同 guard-fix link 一致：加更表姓名做安員別名、加（未被佔用嘅）工號——之後 reparse 先會配到。
+// 「配對」嘅做法同 guard-fix link 一致：加更表姓名做保安員別名、加（未被佔用嘅）工號——之後 reparse 先會配到。
 // 加唔到任何登記（已存在／被佔用）唔計 auto，出分診題。每個動作 journal（undo 時移除）＋audit 帶 run id。
 import { prisma } from "@/lib/db";
 import { normalizeTelHk } from "@/lib/guards/identity";
@@ -59,7 +59,7 @@ async function telHardKey(id: NeedsBossIdentity, candidateId: string): Promise<b
   return names.has(nameKey(id.nameRaw));
 }
 
-/** 將更表身份配落指定安員：加別名＋（無衝突時）加工號。回傳實際寫咗乜。 */
+/** 將更表身份配落指定保安員：加別名＋（無衝突時）加工號。回傳實際寫咗乜。 */
 export async function linkIdentityToGuard(writer: ChangeWriter, identity: { staffNoRaw: string | null; nameRaw: string }, guardId: string): Promise<{ aliasAdded: boolean; staffNoAdded: boolean }> {
   const guard = await prisma.guard.findUnique({ where: { id: guardId }, select: { id: true, nameZh: true, nameAliases: true } });
   if (!guard) return { aliasAdded: false, staffNoAdded: false };
@@ -90,11 +90,11 @@ export async function linkIdentityToGuard(writer: ChangeWriter, identity: { staf
   });
   if (aliasAdded) {
     await writer.audit({ tableName: "guards", rowId: guardId, action: "update", after: { id: guardId } });
-    await writer.journal({ kind: "guard_alias_added", refTable: "guards", refId: guardId, summary: "安員配對：加更表用名做別名", detail: { guardId, alias } });
+    await writer.journal({ kind: "guard_alias_added", refTable: "guards", refId: guardId, summary: "保安員配對：加更表用名做別名", detail: { guardId, alias } });
   }
   if (staffNoAdded && staffId) {
     await writer.audit({ tableName: "guard_staff_numbers", rowId: staffId, action: "create", after: { id: staffId } });
-    await writer.journal({ kind: "guard_staffno_added", refTable: "guard_staff_numbers", refId: staffId, summary: "安員配對：登記更表工號", detail: { staffNumberId: staffId, guardId, number: staffNumber } });
+    await writer.journal({ kind: "guard_staffno_added", refTable: "guard_staff_numbers", refId: staffId, summary: "保安員配對：登記更表工號", detail: { staffNumberId: staffId, guardId, number: staffNumber } });
   }
   return { aliasAdded, staffNoAdded };
 }
@@ -119,7 +119,7 @@ export async function autoResolveNeedsBoss(ctx: AutoCollector, month: Date, item
       const hasStaffNo = !!it.staffNoRaw;
       const prev = await previousMonthPaired(month, it, only);
       const telKey = await telHardKey(it, only);
-      if (prev.ok && (hasStaffNo || telKey)) evidence = `上月同盤同一更表${hasStaffNo ? "工號" : "電話＋姓名"}已配對到呢位安員（${prev.rows} 格）`;
+      if (prev.ok && (hasStaffNo || telKey)) evidence = `上月同盤同一更表${hasStaffNo ? "工號" : "電話＋姓名"}已配對到呢位保安員（${prev.rows} 格）`;
     }
     if (only && evidence) {
       const res = await linkIdentityToGuard(ctx, it, only);
@@ -127,27 +127,27 @@ export async function autoResolveNeedsBoss(ctx: AutoCollector, month: Date, item
         out.autoLinked++;
         out.cellsLinked += it.cellCount;
         ctx.summary.guardMatchesAuto++;
-        ctx.line("guard_match", `安員配對 ${it.seq}（${it.siteLabels.join("、")}，${it.cellCount} 格）自動配對：${evidence}`);
+        ctx.line("guard_match", `保安員配對 ${it.seq}（${it.siteLabels.join("、")}，${it.cellCount} 格）自動配對：${evidence}`);
         continue;
       }
       // 加唔到任何登記（別名／工號都已經存在或者被佔用）＝reparse 後都未必配到 → 唔計 auto，出分診題。
     }
     out.remaining++;
     out.remainingItems.push(it);
-    const cands: McCandidate[] = it.candidateGuardIds.slice(0, 3).map((id, i) => ({ id: `g${i}`, label: `候選安員 ${i + 1}`, refId: id, evidence: only ? "只有一個候選，但冇硬證據（淨姓名／弱證據）" : "多個候選" }));
+    const cands: McCandidate[] = it.candidateGuardIds.slice(0, 3).map((id, i) => ({ id: `g${i}`, label: `候選保安員 ${i + 1}`, refId: id, evidence: only ? "只有一個候選，但冇硬證據（淨姓名／弱證據）" : "多個候選" }));
     ctx.addQuestion({
       kind: "month_close_guard_match",
       groupKey: `guard_match:${it.seq}:${nameKey(it.nameRaw)}`,
       sort: 55,
-      title: `安員配對要核實（${it.siteLabels.join("、")}，${it.cellCount} 格）`,
+      title: `保安員配對要核實（${it.siteLabels.join("、")}，${it.cellCount} 格）`,
       evidence: {
         v: 1,
         mc: true,
         runId: ctx.runId ?? "",
         month: month.toISOString().slice(0, 10),
         kind: "month_close_guard_match",
-        summary: `${it.siteLabels.join("、")} 共 ${it.cellCount} 格嘅安員未配對：${it.reason}`,
-        suggestion: only ? "配對到唯一候選安員" : null,
+        summary: `${it.siteLabels.join("、")} 共 ${it.cellCount} 格嘅保安員未配對：${it.reason}`,
+        suggestion: only ? "配對到唯一候選保安員" : null,
         confidence: only ? "propose" : "unknown",
         action: { type: "guard_match", identity: { staffNoNorm: it.staffNoRaw ? normalizeStaffNumber(it.staffNoRaw) : null, nameRaw: it.nameRaw.trim(), telRaw: it.telRaw }, siteLabel: it.siteLabels.join("、"), cellCount: it.cellCount },
         candidates: cands,

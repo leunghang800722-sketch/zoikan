@@ -6,7 +6,7 @@
 // `brokers.aliases`（冪等、audit）。`sync-broker-aliases.ts` 已於 2026-09-28 刪除（原本留低做
 // dev 便利（一次過同步私隱 CSV 嘅稱呼），唔再係正式站流程一部分。
 //
-// 權限：同呢一頁其餘寫入 action 一致用「安員配對修復」（老闆專用 gate，
+// 權限：同呢一頁其餘寫入 action 一致用「保安員配對修復」（老闆專用 gate，
 // 見 page.tsx 檔頭註解）；讀雞頭清單（前端揀「系統雞頭」下拉）用現有
 // `GET /api/brokers`，本身已經係「雞頭」module view gate——兩層都行過。
 //

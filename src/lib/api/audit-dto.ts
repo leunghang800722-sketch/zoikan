@@ -88,7 +88,7 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   // WHERE 子句直接排除，見
   // prisma/migrations/20260923000000_wp_roster_upload_a），呢度嘅 DTO
   // mapping 純粹俾內部 `/audit-log` 頁用（仲要經 `applyFieldGroupGate()`
-  // 嘅「安員個人資料」field group 再剝一次，見 field-groups.ts）。
+  // 嘅「保安員個人資料」field group 再剝一次，見 field-groups.ts）。
   roster_uploads: (r) => toRosterUploadDTO(r),
   roster_upload_rows: (r) => toRosterUploadRowDTO(r),
 };

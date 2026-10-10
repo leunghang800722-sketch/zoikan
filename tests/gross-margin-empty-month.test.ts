@@ -233,7 +233,7 @@ describe("M2：更別級／site 級 special、admin_fee 卡——零活動月份
         siteId,
         shiftTypeId,
         guardId: (
-          await prisma.guard.create({ data: { nameZh: "測試安員", employmentType: "cash_casual", createdBy: "test" } })
+          await prisma.guard.create({ data: { nameZh: "測試保安員", employmentType: "cash_casual", createdBy: "test" } })
         ).id,
         workDate: new Date(Date.UTC(2026, 7, 3)),
         recordType: "shift",

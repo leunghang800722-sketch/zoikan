@@ -1,6 +1,6 @@
 // WP-PRICE（老闆 2026-09-16 拍板）：`POST /api/shift-records/reprice`——
 // 重新計价（例如價目卡補咗／改咗之後，令舊有 snapshot 追返卡）。權限
-// 「出街價:update」（老闆出廠有，主管/會計可以由老闆開；雞頭/安員硬性
+// 「出街價:update」（老闆出廠有，主管/會計可以由老闆開；雞頭/保安員硬性
 // deny，見 rbac/matrix.ts，呢度唔改矩陣，淨係用返現有 module）。
 //
 // 月份已鎖定 → 409（唔用共用嘅 `Locked()`——嗰個係 403，呢個 endpoint

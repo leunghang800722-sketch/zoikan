@@ -7,7 +7,7 @@
 //   step0 前置檢查（新——冇現成 lib，見底下 `stepPrecheck()` 嘅價卡沿用邏輯）
 //   step1 解析健康（複用 roster_uploads.parse_summary，新增格數差警告／
 //         自動建盤）
-//   step2 安員修復——`buildGuardFixPlan()`／`applyGuardFixPlan()`／
+//   step2 保安員修復——`buildGuardFixPlan()`／`applyGuardFixPlan()`／
 //         `reparseAllActiveUploads()`（`src/lib/guard-fix/*`）
 //   step3 長工結算——`recomputeSettlement()`（`src/lib/roster-upload/
 //         settlement-resync.ts`）
@@ -64,7 +64,7 @@ import { buildAutoReport } from "./auto/report";
 
 export const ONE_CLICK_ADVISORY_LOCK_KEY = 7_710_270_927; // 自己一個 key，唔同 guard-fix(...925)／reconcile-all(...926)
 export const ONE_CLICK_STALE_MS = 15 * 60 * 1000;
-/** 安員修復最多循環幾輪（dev 8 月實測第 3 輪仲有 3 個動作、第 4 輪先 0）。 */
+/** 保安員修復最多循環幾輪（dev 8 月實測第 3 輪仲有 3 個動作、第 4 輪先 0）。 */
 const GUARD_FIX_MAX_ROUNDS = 5;
 
 export function monthCloseRunStalled(run: { status: string; applyStartedAt: Date | null }, now = new Date()): boolean {
@@ -225,7 +225,7 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   const warnings: string[] = [];
   const needsHuman: string[] = [];
 
-  // (0) 本月已鎖——一鍵結算會寫卡／建盤／改安員／套用對數，鎖咗嘅月一律
+  // (0) 本月已鎖——一鍵結算會寫卡／建盤／改保安員／套用對數，鎖咗嘅月一律
   // 唔郁（Opus 驗收：原版淨係靠 step4 `assertMonthNotLocked()` 擋，但
   // step0–3 已經寫咗卡／建咗盤先至爆）。
   const thisClose = await prisma.monthClose.findUnique({ where: { month: start } });
@@ -425,7 +425,7 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   let noPostCount = 0;
   // WP-PHASE3（item 2）：`longtermGuardsWithoutPostIds`——結構化 guardId
   // 清單（唔帶姓名，同 report_json 一直嘅「唔放 PII」慣例一致），俾前端
-  // 「一鍵結算」報告頁每項砌一個連結去安員抽屜「長工」區撳「設崗位」（例
+  // 「一鍵結算」報告頁每項砌一個連結去保安員抽屜「長工」區撳「設崗位」（例
   // 如 `/guards?open=<id>`），唔使人手逐個喺名冊搵。上限 50 個（報告 JSON
   // 唔應該無上限咁大）。
   let longtermGuardsWithoutPostIds: string[] = [];
@@ -442,7 +442,7 @@ export async function stepPrecheck(month: Date, actorUserId: string, ip: string 
   numbers.longtermGuardsThisMonth = longtermGuardIds.length;
   numbers.longtermGuardsWithoutPost = noPostCount;
   numbers.longtermGuardsWithoutPostIds = longtermGuardsWithoutPostIds;
-  if (noPostCount > 0) warnings.push(`${noPostCount} 位長工本月有上載行但（執行前）未設生效崗位——之後「安員修復」會先由 Postorder 補崗位，仲係冇先由「長工結算」用 ≥50% 更表占比推算；報告下面有連結可以逐個去安員抽屜「長工」區撳「設崗位」`);
+  if (noPostCount > 0) warnings.push(`${noPostCount} 位長工本月有上載行但（執行前）未設生效崗位——之後「保安員修復」會先由 Postorder 補崗位，仲係冇先由「長工結算」用 ≥50% 更表占比推算；報告下面有連結可以逐個去保安員抽屜「長工」區撳「設崗位」`);
 
   return { numbers, warnings, needsHuman };
 }
@@ -578,7 +578,7 @@ export async function stepParseHealth(month: Date, actorUserId: string, auto?: A
 }
 
 // ---------------------------------------------------------------------------
-// step2 安員修復——循環最多 3 輪直至冇新（可套用嘅）動作
+// step2 保安員修復——循環最多 3 輪直至冇新（可套用嘅）動作
 // ---------------------------------------------------------------------------
 async function loadPostorderForPlan(postorderUpload: Awaited<ReturnType<typeof prisma.postorderUpload.findFirst>>) {
   return postorderUpload ? { uploadId: postorderUpload.id, fileName: postorderUpload.fileName, ...(await parsePostorderUploadRow(postorderUpload)) } : undefined;
@@ -591,7 +591,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
 
   const staffList = await prisma.staffListUpload.findFirst({ where: { status: "parsed" }, orderBy: { uploadedAt: "desc" } });
   if (!staffList) {
-    warnings.push("未上載 U Team 名單，安員修復略過——未配對安員會留低喺對數頁人手處理");
+    warnings.push("未上載 U Team 名單，保安員修復略過——未配對保安員會留低喺對數頁人手處理");
     return { numbers: { rounds: [] }, warnings, needsHuman };
   }
   const uTeamRows = await parseUTeamWorkbookBuffer(Buffer.from(staffList.fileBytes));
@@ -612,15 +612,15 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
       postorder = await loadPostorderForPlan(postorderUpload);
     } catch (e) {
       // 已存嘅超大 xlsm（上載保險加入前）唔載入，淨靠歷史行（Postorder 係可選來源）。
-      warnings.push(`本月 Postorder 唔載入（${safeErrorSummary(e)}），安員修復／定價／歸屬靠歷史`);
+      warnings.push(`本月 Postorder 唔載入（${safeErrorSummary(e)}），保安員修復／定價／歸屬靠歷史`);
     }
 
     let plan;
     try {
       plan = await buildGuardFixPlan({ prisma, month: start, uTeamRows, postorder });
     } catch (e) {
-      // 冇 active 上載（NoActiveUploadsError）等——安員修復對呢個月冇嘢做。
-      warnings.push(`安員修復計劃計算唔到（${safeErrorSummary(e)}），略過`);
+      // 冇 active 上載（NoActiveUploadsError）等——保安員修復對呢個月冇嘢做。
+      warnings.push(`保安員修復計劃計算唔到（${safeErrorSummary(e)}），略過`);
       break;
     }
     const summary = summarizePlan(plan);
@@ -647,7 +647,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
       break;
     }
 
-    // Opus 驗收：同「安員配對修復」頁共用同一套「套用緊」判斷——喺
+    // Opus 驗收：同「保安員配對修復」頁共用同一套「套用緊」判斷——喺
     // GUARD_FIX 鎖入面檢查冇第二個未卡死 run 套用緊，然後直接建一個
     // `applying` 狀態嘅 run（頁面「計算計劃」／「套用」見到會 409 等佢），
     // 唔再以 `planned` 狀態偷偷套用（原版頁面完全睇唔到呢個 job 套用緊）。
@@ -656,7 +656,7 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
       run = await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${GUARD_FIX_ADVISORY_LOCK_KEY})`);
         const busy = await tx.guardFixRun.findFirst({ where: { status: "applying", applyStartedAt: { gt: new Date(Date.now() - APPLY_STALE_MS) } }, select: { id: true } });
-        if (busy) throw new Error("「安員配對修復」頁有另一個修復計劃套用緊");
+        if (busy) throw new Error("「保安員配對修復」頁有另一個修復計劃套用緊");
         return tx.guardFixRun.create({
           data: {
             month: start,
@@ -671,9 +671,9 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
         });
       });
     } catch (e) {
-      // 人手套用緊——呢一步唔可以靜靜略過（未配對安員會令糧數錯），成個
+      // 人手套用緊——呢一步唔可以靜靜略過（未配對保安員會令糧數錯），成個
       // run 標 failed，等佢完成再「重新執行」。
-      throw new Error(`安員修復第 ${round} 輪開始唔到：${safeErrorSummary(e)}——等「安員配對修復」頁嗰個套用完成，再撳「重新執行」`);
+      throw new Error(`保安員修復第 ${round} 輪開始唔到：${safeErrorSummary(e)}——等「保安員配對修復」頁嗰個套用完成，再撳「重新執行」`);
     }
     try {
       const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 20 * 60 * 1000, month: start });
@@ -681,13 +681,13 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
       await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "applied", appliedAt: new Date(), resultJson: { diffs, reparse } as unknown as Prisma.InputJsonValue } });
     } catch (e) {
       await prisma.guardFixRun.update({ where: { id: run.id }, data: { status: "failed", resultJson: { error: safeErrorSummary(e) } as unknown as Prisma.InputJsonValue } });
-      // 套用失敗唔可以當 warning 繼續行落去計糧（未配對安員會令數錯）——
+      // 套用失敗唔可以當 warning 繼續行落去計糧（未配對保安員會令數錯）——
       // 成個 run 標 failed，重新執行安全（guard-fix apply 冪等）。
-      throw new Error(`安員修復第 ${round} 輪套用失敗：${safeErrorSummary(e)}`);
+      throw new Error(`保安員修復第 ${round} 輪套用失敗：${safeErrorSummary(e)}`);
     }
   }
   if (!converged && rounds.length === GUARD_FIX_MAX_ROUNDS) {
-    needsHuman.push(`安員修復跑咗 ${GUARD_FIX_MAX_ROUNDS} 輪仲有新動作未收斂——再撳一次「一鍵結算」會接住做`);
+    needsHuman.push(`保安員修復跑咗 ${GUARD_FIX_MAX_ROUNDS} 輪仲有新動作未收斂——再撳一次「一鍵結算」會接住做`);
   }
 
   // WP-ONE-CLICK-AUTO §31.3 D：needs_boss「要老闆核實」——有硬鍵（電話＋姓名）或者上月同盤同人已配對
@@ -705,9 +705,9 @@ export async function stepGuardFix(month: Date, actorUserId: string, auto?: Auto
       await reparseAllActiveUploads(prisma, start, { txTimeoutMs: 10 * 60 * 1000 });
     }
     if (res.remaining > 0) {
-      const autoNote = auto ? "（已入分診，預填建議答案，一撳確認）" : "——要老闆喺「安員配對修復」頁睇 needs_boss 逐條核實";
+      const autoNote = auto ? "（已入分診，預填建議答案，一撳確認）" : "——要老闆喺「保安員配對修復」頁睇 needs_boss 逐條核實";
       for (const item of res.remainingItems) {
-        needsHuman.push(`未配對安員（${item.seq}）：${item.siteLabels.join("、")}，共 ${item.cellCount} 格${autoNote}`);
+        needsHuman.push(`未配對保安員（${item.seq}）：${item.siteLabels.join("、")}，共 ${item.cellCount} 格${autoNote}`);
       }
     }
   }

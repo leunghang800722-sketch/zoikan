@@ -62,12 +62,12 @@ describe("hkid", () => {
 
 describe("doc-index", () => {
   it("檔名解析（合成）", () => {
-    const m = parseDocFileName("U99999 測試安員甲 (試用).pdf");
+    const m = parseDocFileName("U99999 測試保安員甲 (試用).pdf");
     expect(m.staffNo).toBe("U99999");
-    expect(m.fileName).toBe("測試安員甲");
+    expect(m.fileName).toBe("測試保安員甲");
     expect(m.tag).toBe("試用");
     expect(m.conforming).toBe(true);
-    expect(parseDocFileName("MP1234 測試安員乙.pdf").tag).toBeNull();
+    expect(parseDocFileName("MP1234 測試保安員乙.pdf").tag).toBeNull();
     const bad = parseDocFileName("掃描檔1.pdf");
     expect(bad.conforming).toBe(false);
     expect(bad.staffNo).toBeNull();
@@ -82,7 +82,7 @@ describe("doc-index", () => {
 const idCardLines = (): OcrLine[] => [
   L("香港永久性居民身份證", 0.5, 0.8),
   L("HONG KONG PERMANENT IDENTITY CARD", 0.45, 0.77),
-  L("測試安員", 0.45, 0.7),
+  L("測試保安員", 0.45, 0.7),
   L("CHAN, Tai", 0.45, 0.67),
   L("Man", 0.6, 0.67),
   L("出生日期 Date of Birth", 0.55, 0.62),
@@ -130,7 +130,7 @@ describe("身份證頁抽取", () => {
     const r = extractIdCard(3, idCardLines());
     expect(r.hkid?.value).toBe("A1234563");
     expect(r.hkidValid).toBe(true);
-    expect(r.nameZh?.value).toBe("測試安員");
+    expect(r.nameZh?.value).toBe("測試保安員");
     expect(r.nameEn?.value).toBe("CHAN Tai Man");
     expect(r.dob?.value).toBe("1980-02-01"); // 唔會攞簽發日期
     expect(r.sex?.value).toBe("M");
@@ -145,7 +145,7 @@ describe("身份證頁抽取", () => {
   it("拼貼頁：只攞身份證區域，唔攞旁邊另一張證件嘅名", () => {
     const other = [L("其他證件", 0.02, 0.8), L("路人甲乙", 0.02, 0.7), L("B765432（1）", 0.02, 0.5)];
     const r = extractIdCard(3, [...other, ...idCardLines()]);
-    expect(r.nameZh?.value).toBe("測試安員");
+    expect(r.nameZh?.value).toBe("測試保安員");
     expect(r.hkid?.value).toBe("A1234563");
   });
   it("parseDates 只收 4 位年同合法日期", () => {
@@ -185,7 +185,7 @@ describe("住址證明抽取", () => {
     expect(findAddressBlock(lines)).toBeNull();
   });
   it("中文地址要有數字＋號／室／樓", () => {
-    const lines = [L("測試安員", 0.1, 0.9), L("新界屯門", 0.1, 0.885), L("測試邨", 0.1, 0.87), L("測試樓10樓1001室", 0.1, 0.855)];
+    const lines = [L("測試保安員", 0.1, 0.9), L("新界屯門", 0.1, 0.885), L("測試邨", 0.1, 0.87), L("測試樓10樓1001室", 0.1, 0.855)];
     const a = extractAddress(1, lines);
     expect(a.address?.value).toContain("1001室");
   });
@@ -193,7 +193,7 @@ describe("住址證明抽取", () => {
     expect(recipientMatches("MR TAI MAN CHAN", "CHAN Tai Man")).toBe(true);
     expect(recipientMatches("CHAN TAI", "CHAN Tai Man")).toBe(true);
     expect(recipientMatches("LEE SIU MING", "CHAN Tai Man")).toBe(false);
-    expect(recipientMatches("測試安員先生", null, "測試安員")).toBe(true);
+    expect(recipientMatches("測試保安員先生", null, "測試保安員")).toBe(true);
     expect(recipientMatches(null, "CHAN Tai Man")).toBeNull();
   });
 });
@@ -219,8 +219,8 @@ describe("申請表抽取", () => {
     expect(f.phone?.note).toBe("home_field");
   });
   it("申請表嘅 hkid／中文名／英文名互證欄", () => {
-    const f = extractForm(1, form([["中文姓名：測試安員 English Name :CHAN TAI MAN", 0.13, 0.69], ["香港身份證號碼：A123456（3）", 0.13, 0.67]]));
-    expect(f.nameZh?.value).toBe("測試安員");
+    const f = extractForm(1, form([["中文姓名：測試保安員 English Name :CHAN TAI MAN", 0.13, 0.69], ["香港身份證號碼：A123456（3）", 0.13, 0.67]]));
+    expect(f.nameZh?.value).toBe("測試保安員");
     expect(f.nameEn?.value).toBe("CHAN TAI MAN");
     expect(f.hkid?.value).toBe("A1234563");
   });
@@ -264,9 +264,9 @@ describe("aggregateDoc（逐人）", () => {
 
 describe("比對正規化", () => {
   it("中文名", () => {
-    expect(cmpZh("測試 安員", "測試安員").r).toBe("match");
-    expect(cmpZh("測試安員", "測試安負")).toEqual({ r: "mismatch", near: true });
-    expect(cmpZh("測試安員", "路人甲乙丙").near).toBe(false);
+    expect(cmpZh("測試 保安員", "測試保安員").r).toBe("match");
+    expect(cmpZh("測試保安員", "測試安負")).toEqual({ r: "mismatch", near: true });
+    expect(cmpZh("測試保安員", "路人甲乙丙").near).toBe(false);
     expect(cmpZh(null, "測試").r).toBe("no_reference");
   });
   it("英文名：順序無關、子集容許（至少 2 token）", () => {
@@ -313,14 +313,14 @@ describe("交叉核對評級", () => {
   };
   const idx = (u: RefRow[]) => ({ utem: buildIndex(u), maxwell: buildIndex([]), db: buildIndex([]) });
   it("兩欄以上互證且冇 mismatch → auto_ok", () => {
-    const u = ref("utem", { hkid: "A1234563", nameZh: "測試安員", dob: "1980-02-01", tels: ["91234567"], addresses: ["ROOM 1001 10/F SAMPLE HOUSE DEMO ESTATE TUEN MUN"] });
-    const c = crosscheck(doc(), "U99999", "測試安員", idx([u]), { vision: [{ docId: "abc", page: 1, digits: "91234567", legible: "clear" }], hasCrop: true });
+    const u = ref("utem", { hkid: "A1234563", nameZh: "測試保安員", dob: "1980-02-01", tels: ["91234567"], addresses: ["ROOM 1001 10/F SAMPLE HOUSE DEMO ESTATE TUEN MUN"] });
+    const c = crosscheck(doc(), "U99999", "測試保安員", idx([u]), { vision: [{ docId: "abc", page: 1, digits: "91234567", legible: "clear" }], hasCrop: true });
     expect(c.status.phone).toBe("match");
     expect(c.phoneFinal.status).toBe("confirmed");
     expect(c.grade).toBe("auto_ok");
   });
   it("hkid 同名單唔同 → fail", () => {
-    const u = ref("utem", { hkid: "B7654321", nameZh: "測試安員" });
+    const u = ref("utem", { hkid: "B7654321", nameZh: "測試保安員" });
     const c = crosscheck(doc(), "U99999", null, idx([u]));
     expect(c.status.hkid).toBe("mismatch");
     expect(c.grade).toBe("fail");
@@ -336,8 +336,8 @@ describe("交叉核對評級", () => {
   it("缺電話 → review", () => {
     const d = doc();
     d.phone = null;
-    const u = ref("utem", { hkid: "A1234563", nameZh: "測試安員", dob: "1980-02-01" });
-    const c = crosscheck(d, "U99999", "測試安員", idx([u]));
+    const u = ref("utem", { hkid: "A1234563", nameZh: "測試保安員", dob: "1980-02-01" });
+    const c = crosscheck(d, "U99999", "測試保安員", idx([u]));
     expect(c.grade).toBe("review");
     expect(c.reasons).toContain("phone_unresolved");
   });
@@ -345,8 +345,8 @@ describe("交叉核對評級", () => {
 
 describe("對齊計劃（§26.2.4）", () => {
   const guards: DbGuard[] = [
-    { id: "g1", nameZh: "測試安員", hkid: "A1234563", tels: ["91234567"], staffNos: ["U99999"] },
-    { id: "g2", nameZh: "測試安員乙", hkid: null, tels: ["92345678"], staffNos: ["U88888"] },
+    { id: "g1", nameZh: "測試保安員", hkid: "A1234563", tels: ["91234567"], staffNos: ["U99999"] },
+    { id: "g2", nameZh: "測試保安員乙", hkid: null, tels: ["92345678"], staffNos: ["U88888"] },
     { id: "g3", nameZh: "同名人", hkid: null, tels: [], staffNos: ["MG1"] },
   ];
   const db = buildDbIndex(guards);
@@ -378,7 +378,7 @@ describe("對齊計劃（§26.2.4）", () => {
   });
   it("電話撞另一人 → conflict；電話＋姓名相同 → link；淨電話 → needs_review", () => {
     expect(run(input({ hkid: "C1234560", phone: "91234567", staffNos: ["U88888"] })).action).toBe("conflict");
-    const same = run(input({ hkid: "C1234560", phone: "92345678", nameZh: "測試安員乙" }));
+    const same = run(input({ hkid: "C1234560", phone: "92345678", nameZh: "測試保安員乙" }));
     expect(same.action).toBe("link");
     expect(same.basis).toEqual(["tel", "name"]);
     expect(run(input({ hkid: "C1234560", phone: "92345678", nameZh: "別名" })).action).toBe("needs_review");
@@ -402,7 +402,7 @@ describe("對齊計劃（§26.2.4）", () => {
     expect(plan[0].action).toBe("create");
   });
   it("同 hkid 但中文名差異大 → conflict；工號掛喺唔同 hkid → 兩邊 conflict；電話撞另一人 → conflict", () => {
-    const a = input({ docId: "a", hkid: "C1234560", nameZh: "測試安員甲" });
+    const a = input({ docId: "a", hkid: "C1234560", nameZh: "測試保安員甲" });
     const b = input({ docId: "b", hkid: "C1234560", nameZh: "完全唔同" });
     expect(planAll([a, b], db)[0].reasons).toContain("group_name_differs");
     const c = input({ docId: "c", hkid: "D1234560", staffNos: ["U3"], phone: "93456789" });

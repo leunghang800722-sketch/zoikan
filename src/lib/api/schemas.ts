@@ -54,7 +54,7 @@ const nullableDateOnly = z.union([z.null(), z.coerce.date()]).optional();
 // `null`，用戶打空咗個備註送 `null` 想清返，會俾 `.strict()` 400（唔係
 // 「未知欄位」，係值型別唔啱）。淨係 `guard_staff_numbers.note` 呢種
 // DB nullable 嘅文字欄用呢個，唔係成個檔案通改（例如 `sia_permit_no`
-// 呢類跟現有「安員」module 嘅欄暫時唔喺呢輪修復範圍）。
+// 呢類跟現有「保安員」module 嘅欄暫時唔喺呢輪修復範圍）。
 const nullableString = z.union([z.null(), z.string()]).optional();
 const money = z.union([z.number(), z.string()]).optional();
 
@@ -224,7 +224,7 @@ export const GuardCreateSchema = z
     employment_type: enumOf(EmploymentType),
     monthly_salary: money,
     polo_size: z.string().optional(),
-    // WP-STAFF-IMPORT B1：新增時可帶身份證（需「安員個人資料」update 權限，route 層驗）。
+    // WP-STAFF-IMPORT B1：新增時可帶身份證（需「保安員個人資料」update 權限，route 層驗）。
     hkid,
     allow_invalid_hkid: allowInvalidHkid,
   })
@@ -280,7 +280,7 @@ export const GuardUpdateSchema = z
     safety_card_expiry: nullableDateOnly,
     // WP-MISC（老闆 2026-09-20 拍板）：QAS（基本保安訓練證書）——
     // `qas_issue_date`＝完成日期、`qas_expiry_date`＝到期日（如有），
-    // 跟「安員」module（同 safety_card_expiry 一致層級），`null`＝清空。
+    // 跟「保安員」module（同 safety_card_expiry 一致層級），`null`＝清空。
     qas_issue_date: nullableDateOnly,
     qas_expiry_date: nullableDateOnly,
     hire_date: nullableDateOnly,
@@ -308,8 +308,8 @@ export const GuardUpdateSchema = z
     // 欄喺 WP-LTSHIFT（§19）已經加落 schema.prisma（`guards.referral_
     // broker_id`／`visa_sponsored_by_broker_id`，之前淨係俾
     // `inferReferralBrokerFromRosters()`／guard-fix 內部寫，冇經呢個
-    // PATCH schema／field-groups 白名單出街），而家安員抽屜「長工」區
-    // 要俾老闆／主管人手設／改／清空——跟「安員」module（同 employment_
+    // PATCH schema／field-groups 白名單出街），而家保安員抽屜「長工」區
+    // 要俾老闆／主管人手設／改／清空——跟「保安員」module（同 employment_
     // type 一致層級，唔係 PII/收客價/出街價 field group）。`null`＝清空
     // （例如推算錯咗想清返、或者長工唔再由雞頭供應）。
     referral_broker_id: z.union([z.null(), uuid]).optional(),
@@ -318,9 +318,9 @@ export const GuardUpdateSchema = z
   .strict();
 
 // ---------------------------------------------------------------------------
-// WP-PHASE3（§20.4 Phase 3 item 1）：`guard_longterm_posts`——安員抽屜
+// WP-PHASE3（§20.4 Phase 3 item 1）：`guard_longterm_posts`——保安員抽屜
 // 「長工」區嘅崗位盤 CRUD。跟 `GuardStaffNumberCreateSchema` 一致手法：
-// 淨係內部角色（module「安員」）先可以寫，雞頭連自己安員都唔可以改（見
+// 淨係內部角色（module「保安員」）先可以寫，雞頭連自己保安員都唔可以改（見
 // route.ts 硬性擋雞頭）。「終止」＝PATCH `effective_to`（唔硬刪，同
 // staff_numbers／rate_cards 一致「冇硬刪」精神）。
 export const GuardLongtermPostCreateSchema = z

@@ -51,7 +51,7 @@ export interface ReconcileAllPerUploadResult {
 
 export interface ReconcileAllResult {
   month: string;
-  /** 驗收（Opus 5.5）：非阻擋性提示（例如 Postorder 上載咗但未套用安員配對修復）。 */
+  /** 驗收（Opus 5.5）：非阻擋性提示（例如 Postorder 上載咗但未套用保安員配對修復）。 */
   warnings: string[];
   uploadCount: number;
   /** 驗收修正（任務 3）：開頭自動 reprice 嘅結果（淨係補 null／修 B07
@@ -77,12 +77,12 @@ export async function runReconcileAllForMonth(month: Date, actorUserId: string, 
   // 早期檢查，唔使逐張上載先撞到先知。
   await assertMonthNotLocked({ workDate: monthStartDate, actorUserId, tableName: "roster_uploads", rowId: "reconcile-all", ip });
 
-  // 驗收（Opus 5.5）：Postorder 上載咗但未套用引用佢嘅安員配對修復計劃——
+  // 驗收（Opus 5.5）：Postorder 上載咗但未套用引用佢嘅保安員配對修復計劃——
   // 長工崗位盤未跟總表更新（仍然用舊崗位／占比推算），提示先套用再重跑。
   const warnings: string[] = [];
   const latestPostorder = await prisma.postorderUpload.findFirst({ where: { month: monthStartDate, status: "parsed" }, orderBy: { uploadedAt: "desc" }, select: { id: true } });
   if (latestPostorder && !(await hasParsedPostorderForMonth(monthStartDate))) {
-    warnings.push("本月最新 Postorder 已上載但未套用安員配對修復計劃——長工崗位未跟總表更新（暫時沿用舊崗位／占比推算）；請先喺「安員配對修復」計劃＋套用，再重新對數全月");
+    warnings.push("本月最新 Postorder 已上載但未套用保安員配對修復計劃——長工崗位未跟總表更新（暫時沿用舊崗位／占比推算）；請先喺「保安員配對修復」計劃＋套用，再重新對數全月");
   }
 
   const uploads = await prisma.rosterUpload.findMany({

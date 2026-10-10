@@ -3,7 +3,7 @@
 // 經 `pickWhitelist()`/`brandSafeResponse()` 先攞得到，內部角色都唔准
 // raw Prisma row 直接出街，見 `tests/dto-brand-guard.test.ts`）。獨立
 // 開一個檔（唔加落中央 `dto/index.ts`）——呢批 resource 全部歸「長工糧」
-// module 一致粒度嘅硬性 gate（老闆／會計先入到 route，主管/雞頭/安員
+// module 一致粒度嘅硬性 gate（老闆／會計先入到 route，主管/雞頭/保安員
 // 連 `requirePermission()` 都過唔到），唔需要中央檔嗰種逐 field-group
 // 再細分嘅機制。
 import { pickWhitelist, brandSafeResponse, type Dto } from "@/lib/api/serialize";
@@ -36,7 +36,7 @@ const LINE_FIELDS = [
   "createdAt", "updatedAt",
 ] as const;
 
-// 逐人明細畀頁面顯示要 join 埋安員姓名／工號（S4 pattern：衍生欄喺
+// 逐人明細畀頁面顯示要 join 埋保安員姓名／工號（S4 pattern：衍生欄喺
 // DTO 之前 merge 落 row，再喺呢度嘅白名單明文列出，PDPO：淨係
 // nameZh／staffNo，唔夾帶其他 guard PII）；`prevGross`/`prevAutopay`/
 // `grossDelta`/`autopayDelta`＝「同上月比較」欄（見 route.ts）。

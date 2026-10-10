@@ -1,13 +1,13 @@
 // P1-WP3 Gate 1 階段 1（規劃裁定，2026-09-12：分階段、純加法，唔改任何
 // 現有欄／邏輯，每階段跑 gate 交真數）——「raw 字面」：對 21 份原檔
-// （`data/2026-07/*.xlsx`）逐個安員行（由 `tools/importer/out/wp1/
+// （`data/2026-07/*.xlsx`）逐個保安員行（由 `tools/importer/out/wp1/
 // rows.csv` 嘅 file/row 定位——同 `scripts/seed/lib/roster-layout.ts`
 // 用緊嗰個 CSV 一致嘅定位方式），將成行非空 cell 嘅原始字面（col→值；
 // formula 格存 `{formula,result}`，見 `cell-literal.ts`）寫入呢一行
-// 對應嘅**每一條** shift_records 嘅 `provenance.raw_row`（同一安員行
+// 對應嘅**每一條** shift_records 嘅 `provenance.raw_row`（同一保安員行
 // 嘅所有 records 存同一份——揀簡單嗰個，唔起獨立 row-level 索引表）。
 //
-// `src/lib/roster-export.ts` render 安員行時，如果搵到 `raw_row` 就逐格
+// `src/lib/roster-export.ts` render 保安員行時，如果搵到 `raw_row` 就逐格
 // 用 raw literal（新增一個分支）；冇 `raw_row`（新月份，或者呢一行成個
 // 7 月都冇任何一日有值、冇對應 shift_record 可以掛——呢種情況由
 // `roster-layout.ts` 嘅 `guard_rows.rawRows` 頂上，見嗰個檔案）就跌返

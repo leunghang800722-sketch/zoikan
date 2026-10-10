@@ -1,4 +1,4 @@
-// WP-AI-OPS §28.4：`GET /api/triage/sessions/:id[?status=open]`——session＋逐題（證據按「安員個人資料」欄位權限遮罩）。
+// WP-AI-OPS §28.4：`GET /api/triage/sessions/:id[?status=open]`——session＋逐題（證據按「保安員個人資料」欄位權限遮罩）。
 // 非老闆攞人哋嘅 session id → 403。
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -29,7 +29,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       c.total += g._count._all;
     }
     const caps = await viewerCaps(actor);
-    // WP-ONE-CLICK-AUTO：month_close 分診題（一鍵結算自我修復）用自己嘅 DTO，唔經安員導入證據遮罩。
+    // WP-ONE-CLICK-AUTO：month_close 分診題（一鍵結算自我修復）用自己嘅 DTO，唔經保安員導入證據遮罩。
     const questions = session.sourceType === "month_close" || session.sourceType === "postorder_backfill" ? await mcQuestionViews(rows, { pii: caps.pii }) : await questionViews(rows, caps);
     return ok(
       brandSafeResponse({

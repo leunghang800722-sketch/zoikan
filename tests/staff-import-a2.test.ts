@@ -13,7 +13,7 @@ const L = (t: string, x: number, y: number, c = 0.9): OcrLine => ({ t, c, x, y, 
 const card = (): OcrLine[] => [
   L("香港永久性居民身份證", 0.5, 0.8),
   L("HONG KONG PERMANENT IDENTITY CARD", 0.45, 0.77),
-  L("測試安員", 0.45, 0.7),
+  L("測試保安員", 0.45, 0.7),
   L("CHAN, Tai Man", 0.45, 0.67),
   L("出生日期 Date of Birth", 0.55, 0.62),
   L("01-02-1980 男M", 0.55, 0.6),
@@ -79,17 +79,17 @@ describe("電話最終值", () => {
 });
 
 describe("crosscheck 電話規則", () => {
-  const ref: RefRow = { src: "utem", ref: "utem:1", staffNos: ["U99999"], hkid: null, nameZh: "測試安員", nameEn: null, dob: "1980-02-01", tels: ["92345678"], addresses: [] };
+  const ref: RefRow = { src: "utem", ref: "utem:1", staffNos: ["U99999"], hkid: null, nameZh: "測試保安員", nameEn: null, dob: "1980-02-01", tels: ["92345678"], addresses: [] };
   const idx = { utem: buildIndex([ref]), maxwell: buildIndex([]), db: buildIndex([]) };
   const doc = () => aggregateDoc("a", [{ page: 3, lines: card() }]);
   it("視覺 clear 同名單唔同 → phone_differs_from_list，唔係 auto_ok", () => {
-    const c = crosscheck(doc(), "U99999", "測試安員", idx, { vision: [{ docId: "a", page: 1, digits: "91234567", legible: "clear" }], hasCrop: true });
+    const c = crosscheck(doc(), "U99999", "測試保安員", idx, { vision: [{ docId: "a", page: 1, digits: "91234567", legible: "clear" }], hasCrop: true });
     expect(c.phoneFinal.status).toBe("differs");
     expect(c.reasons).toContain("phone_differs_from_list");
     expect(c.grade).not.toBe("auto_ok");
   });
   it("視覺 unsure → phone_unresolved", () => {
-    const c = crosscheck(doc(), "U99999", "測試安員", idx, { vision: [{ docId: "a", page: 1, digits: null, legible: "unsure" }], hasCrop: true });
+    const c = crosscheck(doc(), "U99999", "測試保安員", idx, { vision: [{ docId: "a", page: 1, digits: null, legible: "unsure" }], hasCrop: true });
     expect(c.reasons).toEqual(expect.arrayContaining(["phone_unresolved", "phone_unresolved_unsure"]));
     expect(c.present.phone).toBe(false);
   });
@@ -107,12 +107,12 @@ describe("單據日期", () => {
 describe("同人多檔合併", () => {
   const base = (o: Partial<MergeDoc>): MergeDoc => ({
     docId: "d", staffNo: null, grade: "review", hkidConf: 0.5,
-    id: { hkid: "A1234563", nameZh: "測試安員", nameEn: null, dob: null, sex: null },
+    id: { hkid: "A1234563", nameZh: "測試保安員", nameEn: null, dob: null, sex: null },
     address: null, phone: null, ...o,
   });
   it("身份證取評級較好嗰份，缺嘅欄由另一份補；MP＋U 工號全保留", () => {
-    const a = base({ docId: "a", staffNo: "MP1", grade: "review", id: { hkid: "A1234563", nameZh: "測試安員", nameEn: null, dob: "1980-02-01", sex: null } });
-    const b = base({ docId: "b", staffNo: "U1", grade: "auto_ok", id: { hkid: "A1234563", nameZh: "測試安員", nameEn: "CHAN Tai Man", dob: null, sex: null } });
+    const a = base({ docId: "a", staffNo: "MP1", grade: "review", id: { hkid: "A1234563", nameZh: "測試保安員", nameEn: null, dob: "1980-02-01", sex: null } });
+    const b = base({ docId: "b", staffNo: "U1", grade: "auto_ok", id: { hkid: "A1234563", nameZh: "測試保安員", nameEn: "CHAN Tai Man", dob: null, sex: null } });
     const m = mergeGroup([a, b]);
     expect(m.idDocId).toBe("b");
     expect(m.nameEn).toBe("CHAN Tai Man");

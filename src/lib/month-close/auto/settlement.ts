@@ -3,10 +3,10 @@
 // 對全月對數套用之後仍然冇結算雞頭（settlement_broker_id=null，`no_settlement`）嘅更，按次序推斷：
 //   (1) 更表雞頭欄——reconcile 已經做咗（呢度冇值先到呢度）；
 //   (2) Postorder 同崗位同日嘅雞頭（Roster 分頁逐日「雞頭名」，值唯一先用）；
-//   (3) 長工崗位／合約（B07）——安員係長工類（或 external 類、而且只得一個 external 雞頭）；
-//   (4) 安員預設雞頭；
+//   (3) 長工崗位／合約（B07）——保安員係長工類（或 external 類、而且只得一個 external 雞頭）；
+//   (4) 保安員預設雞頭；
 //   (4b) 盤預設雞頭（WP-POSTORDER-FREE §34 B：sites.default_settlement_broker_id，reason「盤預設雞頭」）；
-//   (5) 該安員（只准同一個 guard_id，唔靠姓名）近 3 個月喺同盤嘅結算雞頭，多數決而且唯一；
+//   (5) 該保安員（只准同一個 guard_id，唔靠姓名）近 3 個月喺同盤嘅結算雞頭，多數決而且唯一；
 //   (6) 全部冇 → 分診題 `month_close_settlement`，預填最可能候選（同盤本月最常見嘅雞頭，唯一先預填）。
 // 客戶自己人（external）：解析時 rank／姓名命中 external 別名已歸 external（service.ts），永遠分開計。
 import { prisma } from "@/lib/db";
@@ -25,7 +25,7 @@ export const SETTLEMENT_REASON = {
   postorder: "Postorder 同崗位同日嘅雞頭",
   longterm: "長工（結算單位 B07）",
   external: "客戶自己人（external）",
-  guardDefault: "安員預設雞頭",
+  guardDefault: "保安員預設雞頭",
   siteDefault: "盤預設雞頭",
   history: "近 3 個月同盤嘅結算雞頭（多數決）",
 } as const;
@@ -110,7 +110,7 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
   }
   const prevStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 3, 1));
 
-  // 歷史回溯只准同一個 guard_id（唔准靠更表姓名／工號跨安員）。
+  // 歷史回溯只准同一個 guard_id（唔准靠更表姓名／工號跨保安員）。
   const historyCache = new Map<string, Promise<string | null>>();
   const historyBroker = (guardId: string, siteId: string): Promise<string | null> => {
     const key = `${guardId}|${siteId}`;
@@ -161,9 +161,9 @@ export async function runAutoSettlement(ctx: AutoCollector, month: Date): Promis
       if (guard.employmentType.startsWith("longterm_") && longtermBrokerId) found = { id: longtermBrokerId, reason: SETTLEMENT_REASON.longterm };
       else if (guard.employmentType === "external" && externalBrokers.length === 1) found = { id: externalBrokers[0]!.id, reason: SETTLEMENT_REASON.external };
     }
-    // (4) 安員預設雞頭
+    // (4) 保安員預設雞頭
     if (!found && guard?.defaultBrokerId && brokerIdSet.has(guard.defaultBrokerId)) found = { id: guard.defaultBrokerId, reason: SETTLEMENT_REASON.guardDefault };
-    // (4b) 盤預設雞頭（§34 B）：安員預設雞頭之後、近 3 個月歷史之前
+    // (4b) 盤預設雞頭（§34 B）：保安員預設雞頭之後、近 3 個月歷史之前
     if (!found) {
       const sd = siteById.get(r.siteId)?.defaultSettlementBrokerId ?? null;
       if (sd && brokerIdSet.has(sd) && activeBrokerIds.has(sd)) found = { id: sd, reason: SETTLEMENT_REASON.siteDefault };

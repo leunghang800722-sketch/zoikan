@@ -208,7 +208,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
       setRawLoading(true);
       const need = new Set(missing);
       const found = new Map<string, RawRosterRow>();
-      // 先攞 guard_match=unmatched（安員未配對），仲有冇攞到嘅（雞頭碼／更別／盤…）先逐頁掃全部行。
+      // 先攞 guard_match=unmatched（保安員未配對），仲有冇攞到嘅（雞頭碼／更別／盤…）先逐頁掃全部行。
       const scan = async (guardMatch?: string) => {
         for (let skip = 0; found.size < need.size; skip += 500) {
           const params = new URLSearchParams({ take: "500", skip: String(skip) });

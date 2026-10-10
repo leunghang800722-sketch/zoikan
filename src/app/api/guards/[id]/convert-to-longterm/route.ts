@@ -4,9 +4,9 @@
 // （可選）合約起始月薪（`guard_longterm_contracts`）。
 //
 // RBAC 拆兩層（唔可以合併成一個 module，兩張表原本屬於唔同 module）：
-// - employment_type／崗位盤／介紹雞頭——「安員」module（老闆／主管出廠
-//   ✓，跟安員抽屜「長工」區一致粒度，見 GuardsClient.tsx）。
-// - 合約月薪——「長工糧」module（同「安員銀行資料」一致粒度，主管硬性
+// - employment_type／崗位盤／介紹雞頭——「保安員」module（老闆／主管出廠
+//   ✓，跟保安員抽屜「長工」區一致粒度，見 GuardsClient.tsx）。
+// - 合約月薪——「長工糧」module（同「保安員銀行資料」一致粒度，主管硬性
 //   拒）。冇呢個權限嘅 session（例如主管）送咗 `monthly_salary` 都唔會
 //   靜靜掉走唔講——回應 `contract:null`＋`warning` 講明原因，等前端提示
 //   「請老闆／會計去長工糧頁補合約」，唔扮做完。
@@ -28,9 +28,9 @@ import type { Guard, GuardLongtermPost, GuardLongtermContract } from "@prisma/cl
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
-    // 「轉長工」淨係內部角色（老闆／主管），跟安員抽屜「長工」區一致——
-    // 唔用 isBrokerRole() 揀「自己安員」module，雞頭一律硬性拒絕（呢個
-    // 動作會改 employment_type／建崗位盤，唔係雞頭自己安員名冊管理嘅
+    // 「轉長工」淨係內部角色（老闆／主管），跟保安員抽屜「長工」區一致——
+    // 唔用 isBrokerRole() 揀「自己保安員」module，雞頭一律硬性拒絕（呢個
+    // 動作會改 employment_type／建崗位盤，唔係雞頭自己保安員名冊管理嘅
     // 範圍）。
     const session = await requirePermission(req, "安員", "update");
     if (isBrokerRole(session)) throw Forbidden("雞頭唔可以轉長工");
@@ -109,7 +109,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             })
           : null;
         if (existingContract) {
-          contractSkippedReason = "呢個安員喺呢個生效日已經有長工合約，冇再建——要改月薪請去長工糧頁";
+          contractSkippedReason = "呢個保安員喺呢個生效日已經有長工合約，冇再建——要改月薪請去長工糧頁";
         } else if (canWriteContract) {
           contract = await tx.guardLongtermContract.create({
             data: {

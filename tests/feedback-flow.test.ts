@@ -1,5 +1,5 @@
 // P2.5「現場反映」開會模式——session／summarize／submit／reports API
-// 整合測試：權限（雞頭/安員 403；老闆/主管/會計 200）、長度校驗、每日
+// 整合測試：權限（雞頭/保安員 403；老闆/主管/會計 200）、長度校驗、每日
 // 3 份上限、reports 讀取權限（作者本人睇自己、老闆全睇、主管睇他人
 // 403）、unread-count（老闆）。
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
@@ -64,7 +64,7 @@ describe("P2.5：/api/feedback/** 權限＋流程", () => {
     setLlmClientForTests(undefined);
   });
 
-  it("雞頭／安員 → POST /api/feedback/session 403（硬性，同 助手 module 一致）", async () => {
+  it("雞頭／保安員 → POST /api/feedback/session 403（硬性，同 助手 module 一致）", async () => {
     const brokerCookie = await sessionCookieForUser(fx.userIds["雞頭"]);
     const guardCookie = await sessionCookieForUser(fx.userIds["安員"]);
     const resBroker = await sessionOpenPost(req("/api/feedback/session", brokerCookie, {}));
@@ -160,7 +160,7 @@ describe("P2.5：/api/feedback/** 權限＋流程", () => {
     expect(overLimitRes.status).toBe(429);
   });
 
-  it("雞頭／安員 → submit 403", async () => {
+  it("雞頭／保安員 → submit 403", async () => {
     for (const role of ["雞頭", "安員"] as const) {
       const cookie = await sessionCookieForUser(fx.userIds[role]);
       const res = await sessionSubmitPost(req("/api/feedback/session/submit", cookie, { session_id: "whatever", fields: SAMPLE_FIELDS }));

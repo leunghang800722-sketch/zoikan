@@ -19,7 +19,7 @@ export interface ToolDenied {
   message: string;
 }
 
-/** 工具層第二重擋雞頭（route 層 `助手` module 已經硬性 deny 雞頭/安員，
+/** 工具層第二重擋雞頭（route 層 `助手` module 已經硬性 deny 雞頭/保安員，
  * 呢度純粹 defense-in-depth——即使將來邊度改壞咗令雞頭 session 都撞得到
  * 呢個工具，都唔會漏任何數據出去）。 */
 export function denyIfBroker(ctx: AiToolContext): ToolDenied | null {
@@ -67,7 +67,7 @@ export function deniedResult(d: ToolDenied): string {
 //    一樣嘅佔位符（例如 B07 嘅 name 都係 "B07"），所以用 kind 揀一個
 //    業務用語（「公司長工」／「公司兵」）代替；真係有真名（`name` 唔等
 //    於 `code`）嘅雞頭（例如外判判頭）就用返個真名——呢個系統一路都
-//    准雞頭/安員嘅名（唔係電話/銀行資料/密碼/OTP）流去 AI 助手，見
+//    准雞頭/保安員嘅名（唔係電話/銀行資料/密碼/OTP）流去 AI 助手，見
 //    `docs/ai-assistant.md`/`system-prompt.ts` 鐵律 7。
 //
 // 2. 雞頭費未拆判斷——真數據查證：部分盤（例如啟航1331）啲卡源頭係

@@ -114,7 +114,7 @@ async function main() {
   }
 
   // 揀一張「逐人卡」（`guard_id` 唔係 null = 人專屬價，唔係通用價）帶入
-  // 第 3 條問題——原指示揀某個具名安員嘅卡，呢度改做「揀現存第一張逐人
+  // 第 3 條問題——原指示揀某個具名保安員嘅卡，呢度改做「揀現存第一張逐人
   // 卡」（唔靠估邊個人名一定喺呢個開發庫度存在，亦避免呢個 script 硬
   // 編碼任何真名）。
   const rateCard = await prisma.rateCard.findFirst({

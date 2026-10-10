@@ -13,7 +13,7 @@ const fmtN = (n: number) => n.toLocaleString("zh-HK", { maximumFractionDigits: 2
 // ---------------------------------------------------------------------------
 export const REVIEW_GROUP_DEFS = [
   { key: "pricing", name: "定價", kinds: ["month_close_pricing"] },
-  { key: "guard", name: "安員配對", kinds: ["month_close_guard_match"] },
+  { key: "guard", name: "保安員配對", kinds: ["month_close_guard_match"] },
   { key: "settlement", name: "結算雞頭", kinds: ["month_close_settlement"] },
   { key: "variance", name: "更數差異", kinds: ["month_close_shift_variance"] },
   { key: "site", name: "盤名／新盤", kinds: ["month_close_site_alias", "month_close_site_new"] },
@@ -31,7 +31,7 @@ export interface ReviewGroup {
   more: number;
 }
 
-/** 4 欄（定價／安員配對／結算雞頭／更數差異）固定出；「盤名／新盤」有題先出。0 題嘅欄照出（顯示 0）。 */
+/** 4 欄（定價／保安員配對／結算雞頭／更數差異）固定出；「盤名／新盤」有題先出。0 題嘅欄照出（顯示 0）。 */
 export function groupReview(review: AutoReportDTO["review"] | undefined | null): ReviewGroup[] {
   const list = review ?? [];
   const out: ReviewGroup[] = [];
@@ -210,8 +210,8 @@ export function stepSummary(step: StepDTO): string {
       const remaining = num(n.remainingNeedsBoss) ?? 0;
       const linkedCells = num(n.autoLinkedCells) ?? 0;
       const parts: string[] = [];
-      if (linkedCells > 0) parts.push(`自動配咗 ${fmtN(linkedCells)} 格安員`);
-      parts.push(remaining > 0 ? `${remaining} 組對唔到安員，系統唔敢自己決定` : "冇對唔到安員嘅格");
+      if (linkedCells > 0) parts.push(`自動配咗 ${fmtN(linkedCells)} 格保安員`);
+      parts.push(remaining > 0 ? `${remaining} 組對唔到保安員，系統唔敢自己決定` : "冇對唔到保安員嘅格");
       return parts.join("；");
     }
     case "longterm_settlement": {
@@ -333,7 +333,7 @@ const SHIFT_TYPE_RE = /「(.+?)」自動建 (\d+) 個更種/;
 const VARIANCE_RE = /^更數差異已解釋：「(.+?)」([\s\S]*)$/;
 const SITE_NEW_RE = /^新盤「(.+?)」([\s\S]*)$/;
 const SITE_ALIAS_RE = /^更表盤名「(.+?)」自動對上盤「(.+?)」([\s\S]*)$/;
-const GUARD_RE = /^安員配對 [^（]*（([\s\S]*?)，(\d+) 格）自動配對：([\s\S]*)$/;
+const GUARD_RE = /^保?保安員配對 [^（]*（([\s\S]*?)，(\d+) 格）自動配對：([\s\S]*)$/;
 
 const blankRow = (): AutoRow => ({ site: "", shiftType: "", broker: "", n: null, price: "", basis: "" });
 
@@ -391,7 +391,7 @@ export function deriveAutoCategories(auto: AutoReportDTO): { cats: AutoCategory[
     { key: "variance", name: "解釋更數差異", n: s.variances_explained, unit: "個盤", sub: "更數同上月差好遠，但搵到原因", rows: rowsVariance },
     { key: "sites_aliased", name: "自動對盤", n: s.sites_aliased, unit: "個", sub: "更表盤名對上現有盤", rows: rowsAlias },
     { key: "sites_created", name: "自動建新盤", n: s.sites_created, unit: "個", sub: "更表有、系統未有嘅盤", rows: rowsNew },
-    { key: "guard_auto", name: "自動安員配對", n: s.guard_matches_auto, unit: "組", sub: "有建議先自動配", rows: rowsGuard },
+    { key: "guard_auto", name: "自動保安員配對", n: s.guard_matches_auto, unit: "組", sub: "有建議先自動配", rows: rowsGuard },
     { key: "other", name: "其他", n: rowsOther.length, unit: "項", sub: "未分類，睇原文", rows: rowsOther },
   ];
   return { cats: all.filter((c) => c.n > 0), zero: all.filter((c) => c.n === 0 && c.key !== "other").map((c) => `${c.name} 0`), total: all.reduce((a, c) => a + c.n, 0) };
@@ -439,10 +439,10 @@ export function humanizeHealth(message: string): string {
     .replace(/（ambiguous）/g, "")
     .replace(/（unmatched）/g, "")
     .replace(/（name_only）/g, "")
-    .replace(/安員配對有多個候選/g, "安員有多個可能")
-    .replace(/安員配對唔到/g, "對唔到安員")
+    .replace(/保?保安員配對有多個候選/g, "保安員有多個可能")
+    .replace(/保?保安員配對唔到/g, "對唔到保安員")
     .replace(/\bambiguous\b/g, "有多個可能")
-    .replace(/\bunmatched\b/g, "對唔到安員")
+    .replace(/\bunmatched\b/g, "對唔到保安員")
     .replace(/\bname_only\b/g, "淨靠姓名配對")
     .replace(/\s+/g, " ")
     .trim();
@@ -452,7 +452,7 @@ export function humanizeHealthCell(v: string): string {
   if (v === "shift") return "更";
   if (v === "leave") return "假";
   if (v === "ot") return "OT";
-  if (v === "unmatched") return "對唔到安員";
+  if (v === "unmatched") return "對唔到保安員";
   if (v === "ambiguous") return "有多個可能";
   if (v === "name_only") return "淨靠姓名配對";
   return v;
@@ -504,7 +504,7 @@ export function splitSiteRevenue(rows: ReportDTO["site_revenue"]): { shown: Repo
 }
 
 /** 「還原所有自動改動」說明（老闆 2026-10-09 指定；桌面右欄／摘要頭／確認對話框／手機完成頁共用）。 */
-export const UNDO_NOTE = "只還原系統自動做嘅改動（自動建嘅更種、價卡、補價、歸屬、別名；安員自動登記嘅別名／工號都會還原）。自動建嘅盤唔會刪。你喺「要你睇」一撳確認咗嘅答案唔會還原；仲未答嘅題會作廢，下次重跑會重新出。已經人手改過價嘅更唔會郁。";
+export const UNDO_NOTE = "只還原系統自動做嘅改動（自動建嘅更種、價卡、補價、歸屬、別名；保安員自動登記嘅別名／工號都會還原）。自動建嘅盤唔會刪。你喺「要你睇」一撳確認咗嘅答案唔會還原；仲未答嘅題會作廢，下次重跑會重新出。已經人手改過價嘅更唔會郁。";
 export const UNDO_NOTE_SHORT = "只還原系統自動做嘅改動；你一撳確認咗嘅答案唔會還原，未答嘅題會作廢，人手改過價嘅更唔會郁。";
 
 /** 顯示 API 文字前嘅禁用詞替換（集中處理；API 文字唔改）。 */
@@ -521,7 +521,7 @@ function humanizePlain(t: string): string {
     .replace(/（parsed）/g, "（已解析，未對數）")
     .replace(/冇依據/g, "冇參考")
     .replace(/有依據/g, "有建議")
-    .replace(/(?<![A-Za-z_])unmatched(?![A-Za-z_])/gi, "對唔到安員")
+    .replace(/(?<![A-Za-z_])unmatched(?![A-Za-z_])/gi, "對唔到保安員")
     .replace(/(?<![A-Za-z_])ambiguous(?![A-Za-z_])/gi, "有多個可能")
     .replace(/(?<![A-Za-z_])name_only(?![A-Za-z_])/gi, "淨靠姓名配對")
     .replace(/(?<![A-Za-z_])shift(?![A-Za-z_])/gi, "更")
@@ -542,7 +542,7 @@ export function kindChip(kind: string, fallbackLabel: string): string {
     case "month_close_pricing":
       return "定價";
     case "month_close_guard_match":
-      return "安員配對";
+      return "保安員配對";
     case "month_close_settlement":
       return "結算雞頭";
     case "month_close_shift_variance":

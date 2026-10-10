@@ -90,7 +90,7 @@ export interface RosterExportSiteLike {
  * schema/migration，會拖累其他兩個平行進行嘅 agent）——改用簡單、確定性
  * 嘅判斷：canonicalName 或 aliases 含「數碼港」→digital_port；含「城巴」
  * →citybus；其他→standard。呢幾個字係盤/客戶嘅地區性描述名（P1-執行
- * 計劃.md 本身都成日提到「數碼港 CP1-4」「城巴 8 廠」），唔係安員/雞頭
+ * 計劃.md 本身都成日提到「數碼港 CP1-4」「城巴 8 廠」），唔係保安員/雞頭
  * 個人姓名，唔違反 PDPO。
  */
 export function detectLayout(site: RosterExportSiteLike): RosterLayout {
@@ -315,7 +315,7 @@ async function buildTemplatedRosterWorkbook(
   // shift_type.id（唔係 code 字面）——見 scripts/seed/lib/roster-layout.ts
   // 頂註解：`(site_id, code, start_time)` 先係 unique，同一個 site 入面
   // 兩個唔同 shift_type 可以有一樣嘅 code（例：啟航1331 早/夜兩個
-  // Zone IC 都叫 "IC"），用 code 字串揀 section 會撈埋唔啱嘅安員（呢個
+  // Zone IC 都叫 "IC"），用 code 字串揀 section 會撈埋唔啱嘅保安員（呢個
   // 陣列本身留低做冇 provenance 嘅 fallback membership，見
   // `guardsForCodes()`）。
 
@@ -331,7 +331,7 @@ async function buildTemplatedRosterWorkbook(
       // `shift-records/batch`）建嘅記錄根本冇設 `source`（一律 NULL），
       // 實測：呢個 query 令*任何* UI 新建嘅記錄（新月份最明顯）完全消
       // 失喺更表匯出——`guardsForCodes()`/`guardsByRowRange()` 收到嘅
-      // `allRecords` 永遠得返 7 月 seed 入嚟嗰批，新月份自然「零安員
+      // `allRecords` 永遠得返 7 月 seed 入嚟嗰批，新月份自然「零保安員
       // 行」。改用 `OR:[{source:null},{source:{not:"payroll_only"}}]`
       // 先至令 NULL 同「唔係 payroll_only」都算通過。
       OR: [{ source: null }, { source: { not: "payroll_only" } }],
@@ -366,7 +366,7 @@ async function buildTemplatedRosterWorkbook(
   // roster-layout.ts）淨係喺 seed 嗰陣由 2026-07 原檔captured，唔係跟
   // 住匯出月份變——一定要確認「而家匯出緊嘅的確係原檔嗰個月」先可以用
   // （唔係就會將 7 月嘅 raw 字面錯誤咁貼落 8 月新開嘅（本身應該係空白
-  // 等緊填）安員行）。用「呢個 site 呢個月有冇*任何*一條 shift_record
+  // 等緊填）保安員行）。用「呢個 site 呢個月有冇*任何*一條 shift_record
   // 帶住 provenance.cell」做判斷——原檔 seed 入嚟嘅記錄先會有，UI 手動
   // 開嘅新月份記錄唔會有（唔靠寫死月份數字）。
   // Gate 2（`--derived`）：`opts.derivedOnly` 一律當「冇 raw 可用」，
@@ -377,9 +377,9 @@ async function buildTemplatedRosterWorkbook(
   // `row.rawRow` 全部係「成行／成格原始字面」，唔理邊個 broker，一律
   // 停用（唔淨係 banner/header/total_group，guard_rows 嘅逐行 raw
   // fallback 一樣停用——見下面 `byRow || (isSourceMonth && !opts.
-  // brokerId)`／`rawOnly` 兩處）。雞頭版安員行只可以由已經用
+  // brokerId)`／`rawOnly` 兩處）。雞頭版保安員行只可以由已經用
   // `settlementBrokerId`/`operationalBrokerId` scope 過嘅
-  // `allRecords` 砌，其他 broker 嘅安員行一律留空。
+  // `allRecords` 砌，其他 broker 嘅保安員行一律留空。
   const hasAnyProvenanceRows = !opts.derivedOnly && !opts.brokerId && isSourceMonth;
 
   type RowAgg = {
@@ -798,7 +798,7 @@ async function buildTemplatedRosterWorkbook(
         //
         // Gate 1 階段 1（純加法）：`guardsByRowRange` 淨係喺*成個 section
         // 嘅 row 範圍入面完全冇任何 provenance*先至返 null——一個單行
-        // section（好似「成月零更嘅安員」嗰種）好易撞正呢個情況（section
+        // section（好似「成月零更嘅保安員」嗰種）好易撞正呢個情況（section
         // 得一行、嗰行本身冇 shift_record），但呢個 site×月成體嚟講其實
         // 係原檔月（`hasAnyProvenanceRows`），先至用得 section.rawRows
         // 頂上（唔可以用喺新月份，會將 7 月嘅字面錯誤貼落 8 月新行）。
@@ -807,7 +807,7 @@ async function buildTemplatedRosterWorkbook(
         // （唔理 `opts.derivedOnly`），唔用 `hasAnyProvenanceRows`——
         // `hasAnyProvenanceRows` 喺 `--derived` 一律強制 false（保護
         // banner/header/total_group 唔用 raw 字面，呢個唔改），但「成個
-        // section 淨係得 external／零更安員（`byRow` 成個範圍都搵唔到
+        // section 淨係得 external／零更保安員（`byRow` 成個範圍都搵唔到
         // 任何記錄，例如客戶自己嘅人成月都冇入 `allRecords`）」嘅
         // section 就算喺 `--derived` 都要入呢個分支——原因：呢類行喺
         // *任何* DB query 都攞唔到嘢（唔係「識推導但揀咗唔用」），
@@ -817,7 +817,7 @@ async function buildTemplatedRosterWorkbook(
         // 用 7 月字面）。Opus 對抗式驗收 B1（必修）：`!opts.brokerId`——
         // 雞頭版一律唔行呢個 raw fallback（`byRow` 本身已經係
         // broker-scoped，如果呢個 section 成個 range 對呢個 broker嚟講
-        // 一條記錄都冇，即係呢個 section 淨係得其他 broker 嘅安員，成個
+        // 一條記錄都冇，即係呢個 section 淨係得其他 broker 嘅保安員，成個
         // section 應該原封不動留空，唔可以再跌落 `section.rawRows`
         // 攞返其他 broker 嘅真名/電話）。
         if (byRow || (isSourceMonth && !opts.brokerId)) {
@@ -835,7 +835,7 @@ async function buildTemplatedRosterWorkbook(
             // 呢一行冇任何 shift_record 落入 `allRecords`（`allRecords`
             // 嘅 query 故意剝走 `isExternal:true`／`source='payroll_
             // only'`——呢兩類人業務上唔應該計落更表統計，但佢哋物理上
-            // 仍然存在原檔嘅方格入面：成月零更嘅安員、純特殊項調整、
+            // 仍然存在原檔嘅方格入面：成月零更嘅保安員、純特殊項調整、
             // 或者客戶自己嘅人（external）。呢種情況冇對應 record 可以
             // 用 DB 推導呢一行嘅內容（連 `record_type='shift'` 呢類
             // 基本歸類都冇），淨係搵 `section.rawRows`（原檔逐格字面，
@@ -845,12 +845,12 @@ async function buildTemplatedRosterWorkbook(
             // writeGuardRow(undefined)（純空行，佢入面會再補返自己嘅
             // 主總計欄，如果原檔呢個位真係有——但雞頭版連呢個都唔補，
             // 見 writeGuardRow 入面 `!opts.brokerId` 個 check）。實測：
-            // 數碼港 CP1-4 有大批 external 安員行淨係靠呢個 fallback
+            // 數碼港 CP1-4 有大批 external 保安員行淨係靠呢個 fallback
             // 先重現得返（曾經錯誤咁淨係喺 `hasAnyProvenanceRows` 先俾
             // 用，令呢批 external 行喺 `--derived` 完全變空 316 格逐日
             // 格 regression，已經 revert）。B1：雞頭版（`opts.brokerId`）
             // 一律唔用 `section.rawRows`——呢一行可能係*其他 broker*
-            // 嘅安員，raw 字面會洩漏真名/電話/工號。
+            // 嘅保安員，raw 字面會洩漏真名/電話/工號。
             const rawOnly = opts.brokerId ? undefined : section.rawRows?.[String(row)];
             if (rawOnly) {
               blockCount++;
@@ -1032,7 +1032,7 @@ async function buildGenericRosterWorkbook(
     }
     ws.addRow(fieldRow);
 
-    // ---- 逐個安員一行 ----
+    // ---- 逐個保安員一行 ----
     const sortedGuards = [...rows.entries()].sort(
       ([, a], [, b]) => (a.staffNo || "").localeCompare(b.staffNo || "") || a.nameZh.localeCompare(b.nameZh),
     );

@@ -1,5 +1,5 @@
 // WP-LTPAY Phase 2 §21 任務 3a：`buildLongtermPayrollInputs()` /
-// `recomputeLongtermPayroll()` DB 整合測試——合成安員／盤／雞頭（唔用
+// `recomputeLongtermPayroll()` DB 整合測試——合成保安員／盤／雞頭（唔用
 // 真名/真工號/真電話/真月薪），覆蓋任務書 3e 要求嘅場景：正常在職、
 // 月中轉約、離職結算、病假 4 日有紙 vs 3 日、MPF 三種免供、年假試用期
 // 邊界。
@@ -35,7 +35,7 @@ async function makeLeave(guardId: string, site: { id: string }, st: { id: string
 }
 
 describe("buildLongtermPayrollInputs：正常長工全月在職", () => {
-  it("冇合約嘅安員唔出現喺結果度；有合約嘅全月 Net Basic = 月薪，workDays 計返工日、唔計 RD", async () => {
+  it("冇合約嘅保安員唔出現喺結果度；有合約嘅全月 Net Basic = 月薪，workDays 計返工日、唔計 RD", async () => {
     const { site, st, b07, actorUserId } = await makeFixtureBase();
     const guard = await prisma.guard.create({ data: { nameZh: "測試長工-正常", employmentType: "longterm_autopay", hireDate: new Date("2020-01-01"), createdBy: "test" } });
     await prisma.guardLongtermContract.create({ data: { guardId: guard.id, monthlySalary: 15500, effectiveFrom: new Date("2020-01-01"), effectiveTo: null, annualLeaveDays: 7, source: "manual", createdBy: actorUserId } });

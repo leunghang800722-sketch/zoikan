@@ -197,7 +197,7 @@ function readP0RosterDayTotals(ws: ExcelJS.Worksheet, otTimeSlots: Set<string>):
 // 解釋嘅落差。
 const KNOWN_ROSTER_RESIDUALS: Record<string, string> = {
   淺水灣道11號蔚峰園: "P0-執行計劃§4 已知尾數（更表88 vs R2 90 呢類殘差嘅同一口徑），唔係 WP1 seed/報表邏輯問題。",
-  HKU座頭: "OT1(0615-0715) 格已經喺逐日人手統計剔除（兩邊口徑一致），剩低嘅殘差源自 payroll-pages.csv 都有記載嘅『某安員 OT1 小時日期為估計值』呢類原始資料日期不確定性（PDPO：唔喺呢度寫真名，詳見該 CSV 本身），唔係新落差。",
+  HKU座頭: "OT1(0615-0715) 格已經喺逐日人手統計剔除（兩邊口徑一致），剩低嘅殘差源自 payroll-pages.csv 都有記載嘅『某保安員 OT1 小時日期為估計值』呢類原始資料日期不確定性（PDPO：唔喺呢度寫真名，詳見該 CSV 本身），唔係新落差。",
 };
 
 function pushRosterDayCompare(key: string, dbDays: number[], p0Days: number[], extraNote: string) {

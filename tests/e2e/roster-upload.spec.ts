@@ -3,7 +3,7 @@
 //
 // 執行前提：`PW_PORT=3000 npx playwright test tests/e2e/roster-upload.spec.ts`，
 // dev DB 要已經 `npm run db:seed`。鐵則：呢個檔案本身唔可以有真名／
-// 工號／電話字面——盤名（業務名，唔係個人資料）同真實安員資料一律用
+// 工號／電話字面——盤名（業務名，唔係個人資料）同真實保安員資料一律用
 // `findSiteIdByName()`／`prisma` 喺 runtime 查，唔寫死落 source。
 import { test, expect } from "@playwright/test";
 import ExcelJS from "exceljs";
@@ -49,7 +49,7 @@ test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
-test("老闆上載合成更表 xlsx → 見盤狀態＋rows，安員配對到現有工號", async ({ page }) => {
+test("老闆上載合成更表 xlsx → 見盤狀態＋rows，保安員配對到現有工號", async ({ page }) => {
   const siteId = await findSiteIdByName("殷樺花園");
   const guard = await findGuardWithUNumber();
   const buffer = await buildSyntheticRosterXlsx("殷樺花園", guard.staffNo, guard.nameZh, guard.tel ?? "6100000");
@@ -73,7 +73,7 @@ test("老闆上載合成更表 xlsx → 見盤狀態＋rows，安員配對到現
     await expect(row.getByText("已上載")).toBeVisible();
     await expect(row.getByText("v1")).toBeVisible();
 
-    // 撳「睇詳情」→ rows 表見到今次上載嘅兩格（N/N），安員配對到工號。
+    // 撳「睇詳情」→ rows 表見到今次上載嘅兩格（N/N），保安員配對到工號。
     await row.getByRole("button", { name: "睇詳情" }).click();
     await expect(page.getByText("工號配對").first()).toBeVisible({ timeout: 15_000 });
     const dataRows = page.locator("table tbody tr", { hasText: "工號配對" });

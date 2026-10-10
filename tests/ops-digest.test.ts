@@ -16,7 +16,7 @@ import type { AuthedSession } from "@/lib/rbac/requirePermission";
 
 const d = (s: string) => new Date(`${s}T00:00:00.000Z`);
 const FAKE_HKID = "Z999999(9)";
-const FAKE_NAME = "測試安員甲";
+const FAKE_NAME = "測試保安員甲";
 const FAKE_TEL = "6100001";
 
 /** 本機 shell／dotenv 可能帶 AI key——測試要自己控制「有冇設定 AI」，唔靠環境。 */
@@ -209,7 +209,7 @@ describe("buildOpsDigest（DB）", () => {
     expect(digest.correctionTotal).toBe(3 + 1 + 1 + 2);
   });
 
-  it("安員身份欄、批量導入、鎖月", () => {
+  it("保安員身份欄、批量導入、鎖月", () => {
     expect(count("identity_hkid").count).toBe(2);
     expect(count("identity_name").count).toBe(0);
     expect(count("import_apply_runs").count).toBe(1);
@@ -255,7 +255,7 @@ describe("buildOpsDigest（DB）", () => {
   });
 
   describe("GET /api/reports/ops-digest", () => {
-    it("老闆／會計 200（snake_case，冇 PII）；主管（預設關）／雞頭／安員 403", async () => {
+    it("老闆／會計 200（snake_case，冇 PII）；主管（預設關）／雞頭／保安員 403", async () => {
       const url = "http://test.local/api/reports/ops-digest?month=2019-03";
       const bossRes = await digestRoute(req(url, await sessionCookieForUser(fx.userIds["老闆"])));
       expect(bossRes.status).toBe(200);
@@ -350,7 +350,7 @@ describe("結算視窗唔重疊／冇上載＝冇視窗／分類準確度", () =
     expect(dg.correctionTotal).toBe(1);
   });
 
-  it("經導入／分診寫嘅 hkid／出生日期只計批量導入，唔計安員身份欄；同一人手改照計", async () => {
+  it("經導入／分診寫嘅 hkid／出生日期只計批量導入，唔計保安員身份欄；同一人手改照計", async () => {
     const m = "2017-12";
     await mkUpload(d(`${m}-01`), d("2018-01-02"));
     const g = { id: "gx", hkid: null, date_of_birth: null };
@@ -412,7 +412,7 @@ describe("AI 摘要（mock provider，唔打外部 API）", () => {
     setAi(true);
     setLlmClientForTests(mockClient);
     const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
-    const g = await prisma.guard.create({ data: { staffNo: "T-AI1", nameZh: "測試安員AI", tel: "6100999", hkid: "Z888888(8)", employmentType: "cash_casual", createdBy: "t" } });
+    const g = await prisma.guard.create({ data: { staffNo: "T-AI1", nameZh: "測試保安員AI", tel: "6100999", hkid: "Z888888(8)", employmentType: "cash_casual", createdBy: "t" } });
     await audit("guards", "update", d("2018-04-03"), { id: g.id, hkid: null }, { id: g.id, hkid: "Z888888(8)" });
     expect(((await (await digestRoute(req("http://test.local/api/reports/ops-digest?month=2018-03", cookie))).json()) as { ai_available: boolean }).ai_available).toBe(true);
 
@@ -425,7 +425,7 @@ describe("AI 摘要（mock provider，唔打外部 API）", () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]!.tools).toEqual([]);
     expect(captured[0]!.systemPrompt).toContain("唔准自己編數字");
-    for (const secret of ["測試安員AI", "T-AI1", "6100999", "Z888888(8)"]) expect(captured[0]!.userMessage).not.toContain(secret);
+    for (const secret of ["測試保安員AI", "T-AI1", "6100999", "Z888888(8)"]) expect(captured[0]!.userMessage).not.toContain(secret);
     expect(captured[0]!.userMessage).toContain('"prev_month":"2018-02"');
     expect(await prisma.auditLog.count({ where: { tableName: "ai_chat", actorUserId: fx.userIds["老闆"] } })).toBe(before + 1);
   });

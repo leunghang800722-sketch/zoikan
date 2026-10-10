@@ -1,7 +1,7 @@
 // Q10「雙重支付」：長工（employment_type=longterm_autopay，有 autopay 月薪）
 // 但當更嘅 settlement_broker_id 屬於一個真.正嘅現金雞頭桶（kind=broker 或
 // internal_cash，唔係 internal_longterm 自己嗰個 autopay 桶）——即係嗰更
-// 雞頭照收現金，安員同時又出咗月薪，兩筆錢都係真實支出（老闆已確認，
+// 雞頭照收現金，保安員同時又出咗月薪，兩筆錢都係真實支出（老闆已確認，
 // P0-執行計劃§8 Q10）。規劃 session 第三輪 item 1(b)：唔係
 // operational_broker_id≠settlement_broker_id（呢個喺依家嘅 settlement_unit
 // 已經跟總表雞頭桶嘅現狀下＝0，係正常，唔係漏咗），而係呢個

@@ -18,7 +18,7 @@ export function createRateCardsTool(ctx: AiToolContext) {
       .object({
         site: z.string().optional().describe("盤名稱關鍵字"),
         broker_code: z.string().optional().describe("雞頭代號"),
-        guard_name: z.string().optional().describe("安員姓名關鍵字"),
+        guard_name: z.string().optional().describe("保安員姓名關鍵字"),
       })
       .strict(),
     run: async ({ site, broker_code, guard_name }) => {

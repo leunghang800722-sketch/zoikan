@@ -10,7 +10,7 @@
 // 雞頭權限：就算老闆開咗佢 更表匯出:export，都要做返 broker isolation
 // 三重防線（src/lib/broker-isolation.ts 檔案頂註解）——
 //   (a) assertSiteAssignedToBroker：呢個盤呢個月自己有份先准匯出
-//   (b) 匯出內容淨係包自己安員嗰幾行——buildRosterWorkbookForSite()
+//   (b) 匯出內容淨係包自己保安員嗰幾行——buildRosterWorkbookForSite()
 //       嘅 opts.brokerId 喺 query 層做呢個 scope（同
 //       scopeShiftRecordWhere 一致嘅 OR 條件）
 //   (c) 呢個 export 本身冇金錢欄（純代號/日期），唔使煩 field-group gate
@@ -50,7 +50,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       await assertSiteAssignedToBroker(id, brokerId, month);
     }
 
-    // (b) 雞頭：opts.brokerId 令匯出內容淨係包自己安員嗰幾行。
+    // (b) 雞頭：opts.brokerId 令匯出內容淨係包自己保安員嗰幾行。
     const { workbook, siteName } = await buildRosterWorkbookForSite(id, month, { brokerId });
 
     const buffer = await workbook.xlsx.writeBuffer();

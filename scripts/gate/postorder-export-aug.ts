@@ -250,7 +250,7 @@ async function main() {
   // referral_postorder.json 每一「row」對應 Postorder 總表「長工雞頭費」
   // 表入面一個 formula 格，可以覆蓋 1 個或多個 site_id（同一雞頭、同一盤
   // 組合先合埋一行，例：啟航1331(S017) 逐雞頭有 5-7 行，係逐更表檔／
-  // 逐批分開寫嘅同一 (broker,site) 費率行）。冇安員身份可以做 join key
+  // 逐批分開寫嘅同一 (broker,site) 費率行）。冇保安員身份可以做 join key
   // （PDPO：呢個 oracle JSON 冇工號/姓名），最幼嘅一致比對粒度就係
   // (broker, site_ids 組合) 複合鍵——同 key 嘅多行加埋先比。
   console.log("");

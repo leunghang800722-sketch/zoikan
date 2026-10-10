@@ -1,8 +1,8 @@
 // WP-LTPAY §21 任務 5b：`GET/POST /api/longterm/inputs`——會計每月人手
 // 輸入項（津貼／扣款／制服／病假段＋醫生紙 flag／無薪假段／年假段／
 // 離職結算 override／轉約備註），`src/lib/longterm-payroll/aggregate.ts`
-// `buildLongtermPayrollInputs()` 讀呢張表。module「長工糧」（同「安員
-// 銀行資料」一致粒度——老闆／會計先有，主管／雞頭／安員硬性拒）。
+// `buildLongtermPayrollInputs()` 讀呢張表。module「長工糧」（同「保安員
+// 銀行資料」一致粒度——老闆／會計先有，主管／雞頭／保安員硬性拒）。
 // 月鎖後唯讀：create 用 `assertMonthNotLocked()`（同 `special-items`
 // route 一致 pattern）。
 import { prisma } from "@/lib/db";

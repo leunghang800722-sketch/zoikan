@@ -64,7 +64,7 @@ describe("WP-ROSTER-UPLOAD Phase B-1：reconcileRosterUpload() 對數分類", ()
     expect(items[0]!.category).toBe("match");
   });
 
-  it("roster_only case 1：更表有、系統完全冇呢個安員呢日記錉", () => {
+  it("roster_only case 1：更表有、系統完全冇呢個保安員呢日記錉", () => {
     const r = roster({ rowId: "row-2", workDate: "2026-09-03", siteId: "site-x", guardId: "guard-b", shiftTypeId: "st-day" });
     const items = reconcileRosterUpload({ rosterEntries: [r], unresolvedEntries: [], systemEntries: [] });
     expect(items[0]!.category).toBe("roster_only");
@@ -162,7 +162,7 @@ describe("WP-ROSTER-UPLOAD Phase B-1：reconcileRosterUpload() 對數分類", ()
   });
 
   it("同人同日兩更（唔同 shift_type_id）——兩邊都夾中，唔會誤判做 shift_type_diff", () => {
-    // 一個安員同一日喺兩個唔同更別都有記錉（例如正更+另一行救更），逐更
+    // 一個保安員同一日喺兩個唔同更別都有記錉（例如正更+另一行救更），逐更
     // 配對鍵含 shift_type_id，兩條應該分別各自 match，唔會因為「同人同
     // 日」就被第三輪 shift_type_diff 分組邏輯屈埋一齊。
     const r1 = roster({ rowId: "row-multi1", workDate: "2026-09-15", siteId: "site-x", guardId: "guard-a", shiftTypeId: "st-day" });
@@ -188,8 +188,8 @@ describe("WP-ROSTER-UPLOAD Phase B-1：reconcileRosterUpload() 對數分類", ()
     expect(bySite.get("site-sub-2")).toBe("roster_only");
   });
 
-  it("unresolved case 1：安員未配對（guard_id null）", () => {
-    const u: ReconcileUnresolvedEntry = { rowId: "row-u1", workDate: "2026-09-17", siteId: "site-x", guardId: null, shiftTypeId: "st-day", codeKind: "shift", rawCode: "N", reason: "安員未配對" };
+  it("unresolved case 1：保安員未配對（guard_id null）", () => {
+    const u: ReconcileUnresolvedEntry = { rowId: "row-u1", workDate: "2026-09-17", siteId: "site-x", guardId: null, shiftTypeId: "st-day", codeKind: "shift", rawCode: "N", reason: "保安員未配對" };
     const items = reconcileRosterUpload({ rosterEntries: [], unresolvedEntries: [u], systemEntries: [] });
     expect(items[0]!.category).toBe("unresolved");
     expect(items[0]!.key).toBe(buildUnresolvedKey("row-u1"));

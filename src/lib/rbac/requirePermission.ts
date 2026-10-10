@@ -8,13 +8,14 @@ import { prisma } from "../db";
 import { writeAudit } from "../audit";
 import { Forbidden, Unauthorized } from "../api/errors";
 import { getClientIp } from "../api/http";
+import { moduleLabel, roleDisplay } from "./labels";
 import { isHardDenied, type Action, type Module, type RoleName, ROLE_NAMES } from "./matrix";
 
 export interface AuthedSession extends SessionData {
   baseRole: RoleName; // requireSession() 已經驗證過，呢度收窄返 TS type
 }
 
-/** module 可以係固定值，或者根據已驗證嘅 session 動態決定（例如「安員」
+/** module 可以係固定值，或者根據已驗證嘅 session 動態決定（例如「保安員」
  * module 雞頭/內部角色要用唔同 module——見 src/app/api/guards/route.ts）。 */
 export type ModuleSelector = Module | ((session: AuthedSession) => Module);
 
@@ -60,7 +61,7 @@ export async function requirePermission(req: Request, moduleSelector: ModuleSele
 
   if (isHardDenied(session.baseRole, mod, action)) {
     await denyAndAudit(session, mod, action, ip, "hard_deny");
-    throw Forbidden(`角色「${session.roleName}」（base_role=${session.baseRole}）硬性禁止 ${mod}:${action}`);
+    throw Forbidden(`角色「${roleDisplay(session.roleName)}」（base_role=${roleDisplay(session.baseRole)}）硬性禁止 ${moduleLabel(mod)}:${action}`);
   }
 
   const granted = await prisma.rolePermission.findFirst({
@@ -74,7 +75,7 @@ export async function requirePermission(req: Request, moduleSelector: ModuleSele
 
   if (!granted) {
     await denyAndAudit(session, mod, action, ip, "not_granted");
-    throw Forbidden(`角色「${session.roleName}」未獲授權 ${mod}:${action}`);
+    throw Forbidden(`角色「${roleDisplay(session.roleName)}」未獲授權 ${moduleLabel(mod)}:${action}`);
   }
 
   return session;

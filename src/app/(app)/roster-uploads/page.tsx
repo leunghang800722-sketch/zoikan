@@ -1,7 +1,7 @@
 "use client";
 // WP-ROSTER-UPLOAD Phase A（§15.3）：更表上載頁（排更區）——老闆／主管／
-// 會計每月逐盤上載更表檔案（xlsx），即時解析＋對照（盤／更別／安員／
-// 雞頭），**唔寫入 shift_records**（對數＋寫入係 Phase B）。雞頭／安員
+// 會計每月逐盤上載更表檔案（xlsx），即時解析＋對照（盤／更別／保安員／
+// 雞頭），**唔寫入 shift_records**（對數＋寫入係 Phase B）。雞頭／保安員
 // 呢個 module 硬性 deny，連呢頁都入唔到（API 一律 403，見 matrix.ts）。
 //
 // WP-UPLOAD-VOID（老闆 2026-09-25 要求）：
@@ -986,7 +986,7 @@ export default function RosterUploadsPage() {
                     <th className={tableCls.th}>日期</th>
                     <th className={tableCls.th}>代號</th>
                     <th className={tableCls.th}>更種</th>
-                    <th className={tableCls.th}>安員配對</th>
+                    <th className={tableCls.th}>保安員配對</th>
                     <th className={tableCls.th}>雞頭碼</th>
                     <th className={tableCls.th}>子盤</th>
                     <th className={tableCls.th}>警告</th>

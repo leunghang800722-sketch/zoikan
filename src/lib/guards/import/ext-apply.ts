@@ -34,15 +34,15 @@ import {
 type Tx = Prisma.TransactionClient;
 
 export interface ExtCaps {
-  /** false＝冇「安員:update」：唔准覆蓋現有牌照／平安咭／QAS／入職日期（undefined 當 true） */
+  /** false＝冇「保安員:update」：唔准覆蓋現有牌照／平安咭／QAS／入職日期（undefined 當 true） */
   canEditGuard?: boolean;
-  /** false＝冇「安員個人資料:update」：唔准喺已有聯絡人嘅安員加聯絡人 */
+  /** false＝冇「保安員個人資料:update」：唔准喺已有聯絡人嘅保安員加聯絡人 */
   canOverwritePii?: boolean;
-  /** true＝冇「安員個人資料:view」：已有聯絡人嘅安員唔自動加（令寫入結果唔反映「估啱聯絡人」） */
+  /** true＝冇「保安員個人資料:view」：已有聯絡人嘅保安員唔自動加（令寫入結果唔反映「估啱聯絡人」） */
   fillOnlyPii?: boolean;
   /** true＝批量導入 decisions（唔係分診題）：長工人層面入職日期只准 skip */
   batch?: boolean;
-  /** false＝冇「安員銀行資料:update」：銀行欄一律唔寫（outcome not_written）；要覆蓋現有戶口會 403 */
+  /** false＝冇「保安員銀行資料:update」：銀行欄一律唔寫（outcome not_written）；要覆蓋現有戶口會 403 */
   canEditBank?: boolean;
 }
 export type AuditFn = (input: { tableName: string; rowId: string; action: "create" | "update"; before?: unknown; after?: unknown }, holdOverride?: boolean) => Promise<void>;
@@ -63,8 +63,8 @@ export interface ExtColumnPlan {
 }
 
 /**
- * 同一個戶口（銀行編號＋戶口數字）唔可以屬於兩個安員：喺 transaction 內先鎖戶口 key（advisory lock），
- * 再查有冇其他安員已用。所有寫銀行嘅路徑（自動、bank_review、assign_bank、ext_identity_check、decisions）都經 applyPerson → 呢度。
+ * 同一個戶口（銀行編號＋戶口數字）唔可以屬於兩個保安員：喺 transaction 內先鎖戶口 key（advisory lock），
+ * 再查有冇其他保安員已用。所有寫銀行嘅路徑（自動、bank_review、assign_bank、ext_identity_check、decisions）都經 applyPerson → 呢度。
  */
 export async function acctTakenByOther(tx: Tx, guardId: string | null, code: string | null, acct: string): Promise<boolean> {
   const d = digits(acct);
@@ -226,7 +226,7 @@ export async function applyExtRelations(
       }
       overrides += 1;
     }
-    // 覆蓋權：已有聯絡人嘅安員再加一位＝加 PII，deny 與否喺比較「之前」決定（只睇現有聯絡人係咪非空）
+    // 覆蓋權：已有聯絡人嘅保安員再加一位＝加 PII，deny 與否喺比較「之前」決定（只睇現有聯絡人係咪非空）
     if (useFull && existing.length > 0 && caps.canOverwritePii === false) deny(PII_OVERWRITE_DENIED_MSG);
     const wName = useFull ? c.full.name : c.name;
     const wTel = useFull ? c.full.tel : c.tel;

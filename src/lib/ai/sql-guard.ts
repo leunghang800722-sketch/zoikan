@@ -145,7 +145,7 @@ export function validateSqlSelect(rawQuery: string): SqlGuardResult {
 // 規劃裁定：`sql_select` 要跟返每張 `ai.*` view 對應嗰個畫面 module 嘅
 // view 權——「你冇權見嘅報表，助手都唔答」。呢個表逐一列晒全部 13 個
 // `ai.*` view 對應邊個 module（同其他工具/現有 REST API 用緊嗰個
-// module 一致，例如 `guard_lookup`→安員、`rate_cards`→出街價）。
+// module 一致，例如 `guard_lookup`→保安員、`rate_cards`→出街價）。
 // ---------------------------------------------------------------------------
 export const TABLE_MODULE_MAP: Record<string, Module> = {
   sites: "盤",

@@ -90,5 +90,5 @@ export function applySummaryText(r: ApplySummaryInput): string {
   if ((r.staff_numbers_added ?? 0) > 0) add("工號");
   if (r.guards_created > 0) return labels.length ? `已新增保安員：${labels.join("、")}` : "已新增保安員";
   if (labels.length) return `補咗：${labels.join("、")}`;
-  return r.counts_hidden ? "已提交（寫入結果要有安員個人資料權限先睇到）" : "未有寫入任何資料（現有紀錄已齊，或者要人手處理）";
+  return r.counts_hidden ? "已提交（寫入結果要有保安員個人資料權限先睇到）" : "未有寫入任何資料（現有紀錄已齊，或者要人手處理）";
 }

@@ -32,19 +32,19 @@ export async function seedFakeFixture() {
   });
 
   const casualGuard = await prisma.guard.create({
-    data: { staffNo: "T00001", nameZh: "測試安員甲", employmentType: "cash_casual", createdBy: "test-fixture" },
+    data: { staffNo: "T00001", nameZh: "測試保安員甲", employmentType: "cash_casual", createdBy: "test-fixture" },
   });
   const longtermGuard = await prisma.guard.create({
     data: {
       staffNo: "T00002",
-      nameZh: "測試安員乙",
+      nameZh: "測試保安員乙",
       employmentType: "longterm_autopay",
       monthlySalary: 18000,
       createdBy: "test-fixture",
     },
   });
 
-  // 普通現金安員一個更：settlement=operational=brokerA
+  // 普通現金保安員一個更：settlement=operational=brokerA
   await prisma.shiftRecord.create({
     data: {
       workDate: new Date(Date.UTC(2026, 6, 1)),

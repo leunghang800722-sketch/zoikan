@@ -105,7 +105,7 @@ function optionsFor(kind: QuestionKind, p: PackagePerson, candidateIds: string[]
     case "name_only_candidate":
     case "other_review":
       opts.push(...linkOptions(candidateIds));
-      if (hkidConfirmedValid(p)) opts.push({ id: "create_new", label: "唔係同一個人，新開一個安員" });
+      if (hkidConfirmedValid(p)) opts.push({ id: "create_new", label: "唔係同一個人，新開一個保安員" });
       break;
     case "group_name_differs":
       if (hasName) opts.push({ id: "use_package_name", label: "用導入包嘅姓名（我已核對）" });
@@ -131,11 +131,11 @@ function optionsFor(kind: QuestionKind, p: PackagePerson, candidateIds: string[]
 }
 
 export interface DraftOptions {
-  /** 作答／上載者冇「安員個人資料:view」：緊急聯絡人嘅出題唔准取決於「同現有聯絡人係咪一樣」（否則題目數變 oracle） */
+  /** 作答／上載者冇「保安員個人資料:view」：緊急聯絡人嘅出題唔准取決於「同現有聯絡人係咪一樣」（否則題目數變 oracle） */
   viewPii?: boolean;
-  /** 冇「安員銀行資料:view」：銀行題同上（有銀行資料就一律出題，唔睇同現有戶口比較） */
+  /** 冇「保安員銀行資料:view」：銀行題同上（有銀行資料就一律出題，唔睇同現有戶口比較） */
   viewBank?: boolean;
-  /** 現有安員（bank_identity_unknown 揾英文名 token 相同嘅候選、以及剔走已經有呢個戶口嘅） */
+  /** 現有保安員（bank_identity_unknown 揾英文名 token 相同嘅候選、以及剔走已經有呢個戶口嘅） */
   guards?: ReadonlyMap<string, { id: string; nameEn: string | null; ext: { bank: { accountNo: string | null } } }>;
   /** 啱啱 apply 寫入咗嘅 ext 欄（包內 person key → ext key）：apply 後再評估變 same，唔應該（尤其冇 view 嘅 uniform 規則下）即時出假衝突題 */
   written?: ReadonlyMap<string, ReadonlySet<string>>;
@@ -210,7 +210,7 @@ function extDrafts(e: Evaluation, order: number, opts: DraftOptions): QuestionDr
   return out;
 }
 
-/** Payroll Editor 有戶口但對唔到人 → 逐條一題（候選＝英文名 token 完全相同嘅現有安員，最多 5 個）。 */
+/** Payroll Editor 有戶口但對唔到人 → 逐條一題（候選＝英文名 token 完全相同嘅現有保安員，最多 5 個）。 */
 function unassignedBankDrafts(pkg: ImportPackage, opts: DraftOptions): QuestionDraft[] {
   const list = unassignedBankOf(pkg);
   if (list.length === 0) return [];
@@ -223,7 +223,7 @@ function unassignedBankDrafts(pkg: ImportPackage, opts: DraftOptions): QuestionD
     const ref = bankAccountRef(u.bankCode, u.accountNo);
     if (seen.has(ref)) return;
     seen.add(ref);
-    // 已經有安員用緊呢個戶口（已答／已由包內人帶入）→ 唔再問；冇銀行 view 嘅作答者唔准因此改變出唔出題（交俾跨 session 去重）
+    // 已經有保安員用緊呢個戶口（已答／已由包內人帶入）→ 唔再問；冇銀行 view 嘅作答者唔准因此改變出唔出題（交俾跨 session 去重）
     if (inPersons.has(u.accountNo) || (opts.viewBank !== false && haveAcct.has(digits(u.accountNo)))) return;
     const cands = guards.filter((g) => sameEnglishTokens(u.payeeName, g.nameEn)).slice(0, MAX_CANDIDATES).map((g) => g.id);
     const synthetic: PackagePerson = {
@@ -308,7 +308,7 @@ export function draftGuardImportQuestions(pkg: ImportPackage, evals: readonly Ev
       kind,
       groupKey: sk,
       personKey: sk,
-      targetGuardId: e.action === "link" ? e.guardId : null, // 所有 link 到現有安員嘅情況都記目標 guard（包括 v2 類題）
+      targetGuardId: e.action === "link" ? e.guardId : null, // 所有 link 到現有保安員嘅情況都記目標 guard（包括 v2 類題）
       sort: KIND_ORDER.indexOf(kind) * 100000 + (order.get(p.key) ?? 0),
       title: KIND_LABEL[kind],
       evidence,

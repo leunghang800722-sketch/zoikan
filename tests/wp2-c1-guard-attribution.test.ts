@@ -55,7 +55,7 @@ describe("WP2 C1：憑空開更＋guard嫁接防線", () => {
     expect(res.status).toBe(404);
   });
 
-  it("雞頭A 喺自己冇份嘅盤（冇 broker_site_assignments）用自己安員開更 → 403", async () => {
+  it("雞頭A 喺自己冇份嘅盤（冇 broker_site_assignments）用自己保安員開更 → 403", async () => {
     const res = await shiftRecordCreate(
       req("http://test.local/api/shift-records", brokerACookie, "POST", {
         work_date: "2026-08-10",
@@ -70,7 +70,7 @@ describe("WP2 C1：憑空開更＋guard嫁接防線", () => {
     expect(count).toBe(0);
   });
 
-  it("雞頭A 用自己安員、自己有份嘅盤開更 → 201 成功（對照組，確認前兩個 test 唔係全部都拒）", async () => {
+  it("雞頭A 用自己保安員、自己有份嘅盤開更 → 201 成功（對照組，確認前兩個 test 唔係全部都拒）", async () => {
     const res = await shiftRecordCreate(
       req("http://test.local/api/shift-records", brokerACookie, "POST", {
         work_date: "2026-08-11",
@@ -83,7 +83,7 @@ describe("WP2 C1：憑空開更＋guard嫁接防線", () => {
     expect(res.status).toBe(201);
   });
 
-  it("S1：雞頭幫自己安員夾帶價錢欄（client_rate_snapshot）——strict schema 400 拒絕，唔係靜靜剝走", async () => {
+  it("S1：雞頭幫自己保安員夾帶價錢欄（client_rate_snapshot）——strict schema 400 拒絕，唔係靜靜剝走", async () => {
     const res = await shiftRecordCreate(
       req("http://test.local/api/shift-records", brokerACookie, "POST", {
         work_date: "2026-08-12",

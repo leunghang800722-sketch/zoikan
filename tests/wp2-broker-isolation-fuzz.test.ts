@@ -1,6 +1,6 @@
 // P1-WP2 §D 雞頭隔離 fuzz：用雞頭 A token 打晒全部佢有權限嘅 endpoint
 // （list/get），遞歸斷言回應 JSON 唔含 client_rate/gross/margin/profit，
-// 亦唔含 brokerB 嘅任何記錄（id/名/佢嘅安員）；再用雞頭 B 對照做埋一次。
+// 亦唔含 brokerB 嘅任何記錄（id/名/佢嘅保安員）；再用雞頭 B 對照做埋一次。
 // 硬性規則1（設計文件§5.1）：雞頭角色回應永遠冇 client_rate、毛利、其他
 // broker 資料。
 import { describe, it, expect, beforeAll } from "vitest";
@@ -90,7 +90,7 @@ describe("WP2 雞頭隔離 fuzz", () => {
       const serialized = JSON.stringify(json);
       expect(serialized.includes(fx.brokerB.id), `${ep.name} 唔應該含 brokerB id`).toBe(false);
       expect(serialized.includes(fx.brokerB.name), `${ep.name} 唔應該含 brokerB 名`).toBe(false);
-      expect(serialized.includes(fx.guardB.id), `${ep.name} 唔應該含 brokerB 嘅安員`).toBe(false);
+      expect(serialized.includes(fx.guardB.id), `${ep.name} 唔應該含 brokerB 嘅保安員`).toBe(false);
       assertionCount += 3;
     }
   });

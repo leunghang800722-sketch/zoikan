@@ -2,7 +2,7 @@
 //
 // `buildOpsDigest(month)`——純讀、批量查詢（每個月固定條數 query，冇逐盤／
 // 逐人 N+1），唔改任何現有報表數字。統計「呢個月結算要人手／系統修正咗乜」：
-// guard-fix、對數決定、配對規則、價卡、更次修正、安員身份欄、批量導入、特殊項、
+// guard-fix、對數決定、配對規則、價卡、更次修正、保安員身份欄、批量導入、特殊項、
 // 鎖月；加基線指標（一鍵結算次數／耗時、name_only／unmatched／ambiguous
 // 格數、未定價、上載檔數、月尾到鎖月日數）同「連續出現」嘅重複類別。
 //
@@ -30,20 +30,20 @@ import { DIGEST_REPEAT_MIN_STREAK, DIGEST_TOP_N } from "./thresholds";
 export type DigestGroupKey = "guard_fix" | "reconcile" | "match" | "pricing" | "shifts" | "identity" | "import" | "special" | "lock";
 
 export const DIGEST_GROUP_LABELS: Record<DigestGroupKey, string> = {
-  guard_fix: "安員修復",
+  guard_fix: "保安員修復",
   reconcile: "對數決定",
   match: "配對規則",
   pricing: "價卡",
   shifts: "更次修正",
-  identity: "安員身份欄",
+  identity: "保安員身份欄",
   import: "批量導入",
   special: "特殊項",
   lock: "鎖月",
 };
 
 export const DIGEST_CATEGORIES: ReadonlyArray<{ key: string; group: DigestGroupKey; label: string }> = [
-  { key: "guard_fix_link", group: "guard_fix", label: "連結到現有安員（link）" },
-  { key: "guard_fix_create", group: "guard_fix", label: "新建安員（create）" },
+  { key: "guard_fix_link", group: "guard_fix", label: "連結到現有保安員（link）" },
+  { key: "guard_fix_create", group: "guard_fix", label: "新建保安員（create）" },
   { key: "guard_fix_create_minimal", group: "guard_fix", label: "最簡新建（待 HR 補資料）" },
   { key: "guard_fix_skipped", group: "guard_fix", label: "跳過項（衝突／已處理）" },
   { key: "reconcile_keep_system", group: "reconcile", label: "對數：保留系統" },
@@ -67,8 +67,8 @@ export const DIGEST_CATEGORIES: ReadonlyArray<{ key: string; group: DigestGroupK
   { key: "identity_name", group: "identity", label: "姓名修改" },
   { key: "identity_tel", group: "identity", label: "電話修改" },
   { key: "import_apply_runs", group: "import", label: "批量導入套用次數" },
-  { key: "import_guards_created", group: "import", label: "導入新建安員" },
-  { key: "import_guards_updated", group: "import", label: "導入更新安員" },
+  { key: "import_guards_created", group: "import", label: "導入新建保安員" },
+  { key: "import_guards_updated", group: "import", label: "導入更新保安員" },
   { key: "import_field_conflicts", group: "import", label: "導入欄位衝突" },
   { key: "import_review_decisions", group: "import", label: "導入覆核決定" },
   { key: "special_item_create", group: "special", label: "特殊項：新增" },

@@ -159,7 +159,7 @@ describe("guards API：身份證／電話唯一", () => {
     expect(detail.identity_status).toBe("missing_hkid");
   });
 
-  it("主管冇「安員個人資料」權限：POST 帶 hkid → 403", async () => {
+  it("主管冇「保安員個人資料」權限：POST 帶 hkid → 403", async () => {
     const res = await createGuard(req("http://t/api/guards", supervisor, "POST", { name_zh: "識別測試員甲", employment_type: "cash_casual", hkid: "A123456(3)" }));
     expect(res.status).toBe(403);
   });

@@ -52,7 +52,7 @@ export interface SessionSummary {
 /** 「補充資料」層（field_review／ext_field_conflict／ext_field_review）：唔急，排喺要人手／衝突／銀行之後，badge 唔計。 */
 export const isSupplementary = (kind: string): boolean => (SUPPLEMENTARY_KINDS as readonly string[]).includes(kind);
 
-/** 呢個讀者答唔到（restricted）嘅題目類別：銀行題要銀行 update 權；身份確認要個人資料 view＋安員 update。唔計入佢嘅待答數。 */
+/** 呢個讀者答唔到（restricted）嘅題目類別：銀行題要銀行 update 權；身份確認要個人資料 view＋保安員 update。唔計入佢嘅待答數。 */
 export async function restrictedKindsFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<string[]> {
   const a = actor as AuthedSession;
   const [bankU, pii, guardU] = await Promise.all([hasPermission(a, "安員銀行資料", "update"), hasPermission(a, "安員個人資料", "view"), hasPermission(a, "安員", "update")]);
@@ -173,7 +173,7 @@ export function fullSignature(kind: string, ev: QuestionEvidence): string {
  *  D. 唔再問：同一條未 superseded 嘅 answered／skipped 題（任何 session）「強身份相同＋kind 相同＋完整簽名相同」；
  *  E. 作答時（預覽＋commit，同一把 lock）見 apply.ts assertNoNewer；
  *  G. SESSION_SECRET 指紋唔同嘅舊 session open 題一律作廢（包括自己 session）。
- * 冇題目就唔開 session（但記錄同作廢照做）。呢度**唔會**寫任何安員資料（淨係讀＋寫 triage 表）。
+ * 冇題目就唔開 session（但記錄同作廢照做）。呢度**唔會**寫任何保安員資料（淨係讀＋寫 triage 表）。
  */
 export async function createGuardImportTriage(input: { pkg: ImportPackage; packageHash: string; actor: AuthedSession; ip: string | null; personKeys?: readonly string[]; results?: readonly { key: string; ext?: { key: string; outcome: string }[] }[]; /** false＝只記錄＋作廢，唔開新題（上載者冇「導入分診:view」） */ openQuestions?: boolean }): Promise<CreateTriageResult | OwnedByOtherResult | null> {
   const only = input.personKeys ? new Set(input.personKeys) : null;

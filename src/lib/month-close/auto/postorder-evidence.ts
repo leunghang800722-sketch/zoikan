@@ -37,7 +37,7 @@ export interface PostorderPriceRow {
   clientLabel: string;
   /** col A 去咗尾 token 之後（盤名部分）。 */
   labelHead: string;
-  /** col A 最尾一個以空白分隔嘅 token（可能係雞頭、安員姓名、區域代號…），冇就 null。 */
+  /** col A 最尾一個以空白分隔嘅 token（可能係雞頭、保安員姓名、區域代號…），冇就 null。 */
   trailingToken: string | null;
   propertyShort: string | null;
   shiftLabel: PostorderShiftLabel | null;

@@ -1,15 +1,15 @@
 // P1-執行計劃.md §4 WP4 item 2／P2-WP-R3：首頁改做尚欠 Dashboard（README
 // §02＝§15「尚欠總覽」；§25 雞頭首頁；§21 手機）。「尚欠總覽」module 對
-// 雞頭/安員係硬性 ✗（matrix.ts），呢兩個角色唔會打一個一定 403 嘅
+// 雞頭/保安員係硬性 ✗（matrix.ts），呢兩個角色唔會打一個一定 403 嘅
 // API——雞頭有自己專用嘅 `BrokerDashboard`（`GET /api/dashboard/broker`
-// ＋ `GET /api/reports/my-receivable`）；安員／自訂角色見返快速連結卡。
+// ＋ `GET /api/reports/my-receivable`）；保安員／自訂角色見返快速連結卡。
 //
 // B11 驗收修正：呢個 fallback 分支原本用一個寫死嘅 `CARDS`（更表／配額／
 // 本月應收／保安員）＋大數 `KpiCard` 樣式——寫死嘅連結完全冇考慮呢個
-// session 實際有冇權限（例如出廠「安員」角色呢 4 個 module 全部硬性
+// session 實際有冇權限（例如出廠「保安員」角色呢 4 個 module 全部硬性
 // 禁止，寫死版會出 4 張撳落去實際上一定 403 嘅卡）。改用同
 // `(app)/layout.tsx` 側欄一致嘅 `getNavLinks(session, grants)`
-// 過濾出嚟嘅連結（唯一嘅權限真相來源），並換做 README §「安員／其他
+// 過濾出嚟嘅連結（唯一嘅權限真相來源），並換做 README §「保安員／其他
 // 角色首頁快速連結」寫嘅細卡樣式（標題 500/13.5px＋副行 11.5px
 // `#64748b`＋「›」，白卡圓角 8px padding 12px 16px），唔再用
 // `KpiCard`（嗰個係大數樣式，唔啱呢種純導航連結）。
@@ -41,7 +41,7 @@ const LINK_DESCRIPTIONS: Record<string, string> = {
   "/users": "用戶帳號管理",
   "/roles": "角色權限矩陣",
   "/audit-log": "操作紀錄（唯讀）",
-  "/guards/import": "上載導入包，補安員證件資料",
+  "/guards/import": "上載導入包，補保安員證件資料",
   "/triage": "導入後要人手決定嘅項目",
   "/reports/ops-digest": "每月修正類別、重複出現嘅問題",
 };
@@ -66,12 +66,12 @@ export default async function DashboardPage() {
     return <BrokerDashboard userName={session.name} />;
   }
 
-  // 安員／其他自訂角色：快速連結卡——只顯示 `getNavLinks()` 判過權限嘅
+  // 保安員／其他自訂角色：快速連結卡——只顯示 `getNavLinks()` 判過權限嘅
   // 連結（排走「/」首頁本身，因為就係呢一頁）。
   const grants = await getViewGrants(session);
   const links = (await getNavLinks(session, grants)).filter((l) => l.href !== "/");
 
-  // P2-C §4：零連結時（例如出廠「安員」角色全部 module 都硬性禁止）副題
+  // P2-C §4：零連結時（例如出廠「保安員」角色全部 module 都硬性禁止）副題
   // 唔再寫「快速連結見下面」——下面根本冇連結，嗰句字面上係錯嘅。
   const subtitle = links.length === 0 ? "你嘅角色暫時未開任何模組權限" : `${session.roleName}——快速連結見下面。`;
 

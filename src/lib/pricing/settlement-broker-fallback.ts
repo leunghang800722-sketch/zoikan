@@ -1,7 +1,7 @@
 // P0（Opus 驗收重現）：新月份更表記錄冇咗結算單位（`settlement_broker_id`
 // NULL）→ `buildPayrollTotals()`（src/lib/reports/payroll.ts）逐 broker
 // 查，冇雞頭嘅記錄喺糧明細**完全消失**（唔止「未定价」，係整條記錄喺
-// 報表憑空唔見咗）。根源：93/265 個安員 `guards.default_broker_id` 係
+// 報表憑空唔見咗）。根源：93/265 個保安員 `guards.default_broker_id` 係
 // NULL（長工／公司兵），「複製上月」／新增格嘅 payload 又冇帶
 // `settlement_broker_id`，令 batch/route.ts、單筆 POST 兩個 fallback 鏈
 // 都跌到 `guard.default_broker_id ?? null`。
@@ -10,9 +10,9 @@
 // `POST /api/shift-records` 兩個新建/更新路徑一齊用，唔准各執一詞：
 //   1. payload 傳咗嘅值（呢個 helper 唔負責——caller 自己 `??` 先）
 //   2. 現存記錄嘅值（呢個 helper 都唔負責——caller 自己 `??` 先）
-//   3. 同一安員、同一盤，最近一條（任何月份）非作廢記錄嘅
+//   3. 同一保安員、同一盤，最近一條（任何月份）非作廢記錄嘅
 //      settlement_broker_id
-//   4. 同一安員，任何盤，最近一條非作廢記錄嘅 settlement_broker_id
+//   4. 同一保安員，任何盤，最近一條非作廢記錄嘅 settlement_broker_id
 //   5. guard.default_broker_id
 //   6. employment_type 屬長工（`longterm_*`）→ kind=internal_longterm
 //      嗰個 broker（唔寫死 id／code——DB 入面代號可能變，`seed`／未來
@@ -49,7 +49,7 @@ export async function resolveSettlementBrokerFallback(
   input: SettlementBrokerFallbackInput,
   client: PrismaLike = prisma,
 ): Promise<string | null> {
-  // 3：同一安員、同一盤，最近一條（任何月份）非作廢記錄。
+  // 3：同一保安員、同一盤，最近一條（任何月份）非作廢記錄。
   const sameSiteRecent = await client.shiftRecord.findFirst({
     where: {
       guardId: input.guardId,
@@ -62,7 +62,7 @@ export async function resolveSettlementBrokerFallback(
   });
   if (sameSiteRecent?.settlementBrokerId) return sameSiteRecent.settlementBrokerId;
 
-  // 4：同一安員，任何盤，最近一條非作廢記錄。
+  // 4：同一保安員，任何盤，最近一條非作廢記錄。
   const anySiteRecent = await client.shiftRecord.findFirst({
     where: {
       guardId: input.guardId,
@@ -95,7 +95,7 @@ export async function resolveSettlementBrokerFallback(
 /**
  * 一次過幫一批 guardId 預先算好 fallback（避免逐格 await 一個一個查，
  * batch/route.ts 一次過起晒 plans 之後會有多格同一個 guard）。Memoize
- * 用 `${guardId}|${siteId}` 做 key——同一安員唔同盤嘅 fallback（第 3
+ * 用 `${guardId}|${siteId}` 做 key——同一保安員唔同盤嘅 fallback（第 3
  * 級）唔同，唔可以共用。
  */
 export function createSettlementBrokerFallbackResolver(client: PrismaLike = prisma) {
