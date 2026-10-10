@@ -77,6 +77,8 @@ type FormState = Record<OcrFieldKey, FormField>;
 
 const emptySlot = (): Slot => ({ file: null, pdf: null, page: 1, prepared: null, busy: false, error: null });
 const blankField = (): FormField => ({ value: "", ocrStatus: "missing", ocrValue: "", candidates: [], ack: false, edited: false });
+// 更表寫咗嘅姓名預填：當作用戶自己輸入（edited），仍要逐欄核對確認先可以繼續。
+const prefilledNameField = (name: string): FormField => ({ ...blankField(), value: name, edited: true, ack: ackAfterEdit("name_zh", "missing", name) });
 const blankForm = (): FormState => Object.fromEntries(FIELD_ORDER.map((f) => [f, blankField()])) as FormState;
 
 interface Row {
@@ -137,6 +139,13 @@ export function NewFromDocsClient() {
   const [pkgState, setPkgState] = useState<{ pkg: unknown; decisions: Record<string, unknown> } | null>(null);
   const [applyRes, setApplyRes] = useState<ApplyRes | null>(null);
   const [triageSession, setTriageSession] = useState<string | null>(null);
+  // WP-RECONCILE-UI（§33.3 D）：deep link `?name=&staff_no=`——只預填「全部自己輸入」／辨識讀唔到嘅中文姓名，
+  // 並顯示更表寫咗嘅工號作參考；唔觸發辨識，仍要上載證件、逐欄核對先寫入。
+  const [prefill, setPrefill] = useState<{ name: string; staffNo: string }>({ name: "", staffNo: "" });
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    setPrefill({ name: (sp.get("name") ?? "").trim().slice(0, 40), staffNo: (sp.get("staff_no") ?? "").trim().slice(0, 40) });
+  }, []);
   const urlsRef = useRef<string[]>([]);
   const pdfsRef = useRef<PdfHandle[]>([]);
 
@@ -220,6 +229,7 @@ export function NewFromDocsClient() {
       put("address", byType.get("onboarding_form"));
       setAddrFrom("onboarding_form");
     }
+    if (prefill.name && !next.name_zh.value.trim()) next.name_zh = prefilledNameField(prefill.name);
     setForm(next);
     const u = res.data.usage;
     setOcrInfo(`辨識完成（${Math.round(res.data.ms / 100) / 10} 秒，${u.calls} 次讀取）`);
@@ -228,7 +238,9 @@ export function NewFromDocsClient() {
   }
 
   function manualAll() {
-    setForm(blankForm());
+    const f = blankForm();
+    if (prefill.name) f.name_zh = prefilledNameField(prefill.name);
+    setForm(f);
     setAddrFrom("address_proof");
     setOcrInfo(null);
     setStep("review");
@@ -351,6 +363,11 @@ export function NewFromDocsClient() {
 
       {step === "upload" && (
         <div className="space-y-4" data-testid="ocr-step-upload">
+          {(prefill.name || prefill.staffNo) && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[13px] text-blue-900" data-testid="ocr-prefill-hint">
+              由更表對數帶過嚟：更表寫「{prefill.name || "—"}／{prefill.staffNo || "—"}」。呢兩項只作參考／預填，仍要上載證件（或「全部自己輸入」）逐欄核對先會寫入。
+            </div>
+          )}
           <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-[13px] text-orange-800" data-testid="ocr-privacy-notice">
             圖片會傳送去 DeepSeek（內地伺服器）做辨識，本系統唔會儲存圖片。圖片只留喺你部機嘅瀏覽器記憶體，儲存或者離開頁面就會清走。
           </div>

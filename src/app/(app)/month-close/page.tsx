@@ -301,6 +301,7 @@ export default function MonthCloseOneClickPage() {
       {triageOpen && (
         <MonthCloseTriageDialog
           sessionId={triageOpen}
+          month={month}
           onClose={() => {
             setTriageOpen(null);
             reportUnsent(); // 仲有未送出嘅題先提示；全部送出就清走
