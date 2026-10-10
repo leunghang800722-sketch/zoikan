@@ -176,19 +176,19 @@ describe("逐欄 status（姓名／地址要視覺 clear＋佐證）", () => {
     const ok = base({ docId: "d1", zh: "測試保安員", en: "CHAN, TAI MAN", legible: "clear" }, null, docIn(exOf({}), { fileNameZh: "測試保安員" }));
     expect(ok.nameZh).toMatchObject({ status: "confirmed", value: "測試保安員" });
     expect(ok.nameEn.status).toBe("confirmed");
-    const bad = base({ docId: "d1", zh: "測試安負", en: null, legible: "clear" }, null, docIn(exOf({}), { fileNameZh: "測試保安員" }));
+    const bad = base({ docId: "d1", zh: "測試保安負", en: null, legible: "clear" }, null, docIn(exOf({}), { fileNameZh: "測試保安員" }));
     expect(bad.nameZh.status).toBe("review");
     expect(bad.nameZh.candidates).toContain("測試保安員");
   });
   it("nameZh 有 near-match 而冇第二讀 → 唔 confirmed", () => {
-    const d = docIn(exOf({}), { fileNameZh: "測試安貝" });
+    const d = docIn(exOf({}), { fileNameZh: "測試保安貝" });
     const r = base({ docId: "d1", zh: "測試保安員", en: null, legible: "clear" }, null, d);
     expect(r.nameZh.status).toBe("review");
     expect(r.nameZh.reasons).toContain("name_differs_from_filename_or_list"); // A7：資訊性 reason（冇第二讀仍 review）
   });
   it("同人多檔中文名唔同 → review（唔准低信心蓋過高信心）", () => {
     const d1 = docIn(exOf({}), { fileNameZh: "測試保安員" });
-    const d2 = docIn(exOf({ docId: "d2", nameZh: { value: "測試安貝", level: "low", conf: 0.3, page: 3, evidence: "x" } }));
+    const d2 = docIn(exOf({ docId: "d2", nameZh: { value: "測試保安貝", level: "low", conf: 0.3, page: 3, evidence: "x" } }));
     const r = resolvePerson({ key: "k", docs: [d1, d2], idDocId: "d1", addressDocId: "d1", nameVision: { docId: "d1", zh: "測試保安員", en: null, legible: "clear" }, addrVision: null });
     expect(r.nameZh.status).toBe("review");
     expect(r.nameZh.reasons).toContain("nameZh_differs_between_files");
@@ -238,7 +238,7 @@ describe("必修 2：多檔合併唔准靜靜蓋值", () => {
     id: { hkid: "A1234563", nameZh: "測試保安員", nameEn: "CHAN Tai Man", dob: null, sex: null, ...o }, address: null, phone: null,
   });
   it("中文名唔同 → nameZh_differs_between_files", () => {
-    expect(mergeGroup([md({}), md({ nameZh: "測試安貝" }, "b")]).reasons).toContain("nameZh_differs_between_files");
+    expect(mergeGroup([md({}), md({ nameZh: "測試保安貝" }, "b")]).reasons).toContain("nameZh_differs_between_files");
   });
   it("英文名段數唔同 → 標 differs，取較長嗰個", () => {
     const m = mergeGroup([md({ nameEn: "CHAN Tai" }), md({ nameEn: "CHAN Tai Man" }, "b")]);
