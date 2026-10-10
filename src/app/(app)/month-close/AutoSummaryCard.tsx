@@ -59,7 +59,7 @@ export function AutoSummaryCard({ auto, extraFooter }: { auto: AutoReportDTO; ex
                       setAll(false);
                     }}
                     className="border-r border-zk-border-soft px-3.5 py-3 text-left"
-                    style={{ background: on ? "#f0f7ff" : "#fff", boxShadow: on ? "inset 0 -2px 0 #2563eb" : "none" }}
+                    style={{ background: on ? "var(--zk-primary-tint-soft)" : "var(--zk-card)", boxShadow: on ? "inset 0 -2px 0 var(--zk-primary)" : "none" }}
                   >
                     <div className="text-zk-xs text-zk-muted">{c.name}</div>
                     <div className="mt-0.5 flex items-baseline gap-1">

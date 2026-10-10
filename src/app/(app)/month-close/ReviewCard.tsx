@@ -12,7 +12,7 @@ export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto:
   const canAnswer = !!auto.triage_session_id && t.total > 0;
   return (
     <div className="overflow-hidden rounded-[10px] border border-zk-warning-border bg-white" data-testid="auto-review">
-      <div className="flex flex-wrap items-center gap-3 border-b border-[#fde4c4] bg-[#fffbf5] px-4 py-3.5">
+      <div className="flex flex-wrap items-center gap-3 border-b border-zk-warning-border bg-zk-warning-bg px-4 py-3.5">
         <span className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-zk-warning-tint text-zk-base font-bold text-zk-warning">?</span>
         <div className="min-w-0">
           <div className="text-zk-md font-semibold text-zk-text">{t.total === 0 ? "要你睇：冇" : `要你睇：仲有 ${t.total} 題`}</div>

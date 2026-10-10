@@ -731,7 +731,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
       {locked && <Banner kind="info" message={`${data?.upload.month.slice(0, 7)} 已鎖定——呢頁唯讀，唔可以套用決定。`} />}
 
       {summary && (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-7">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
           {CATEGORY_ORDER.map((c) => (
             <button
               key={c}
@@ -795,7 +795,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
         </div>
       )}
 
-      <div className={`hidden md:block ${tableCls.wrap}`}>
+      <div className={`hidden lg:block ${tableCls.wrap}`}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(tableCols) }}>
           <thead>
             <tr>
@@ -843,7 +843,7 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
       )}
 
       {/* 手機：卡列表（README 慣例——七欄表格喺窄屏幕唔用得）。 */}
-      <div className="space-y-2 md:hidden">
+      <div className="space-y-2 lg:hidden">
         {rows.length === 0 && <EmptyState title={loading ? "載入緊…" : "冇符合條件嘅項目"} />}
         {units.map((u) =>
           u.kind === "row" ? (

@@ -14,10 +14,10 @@ export function RightRail({ needDiffReason, diffReason, onDiffReason, report, mo
   const ready = report.lock_precondition.ready_to_lock && !locked;
   const reqs = lockRequirements(report, 0);
   const rows: Array<{ c: string; t: string; v: string | number; href?: string }> = [
-    { c: unpriced > 0 ? "#f97316" : "#0f766e", t: "更未定價", v: unpriced },
-    { c: unconfirmed > 0 ? "#dc2626" : "#0f766e", t: "個盤未對數確認", v: unconfirmed },
-    { c: health && health.critical > 0 ? "#dc2626" : "#0f766e", t: "體檢嚴重項", v: health ? health.critical : "—" },
-    ...(needsHuman > 0 ? [{ c: "#dc2626", t: "項要人手處理（睇 ③ 進度）", v: needsHuman, href: "#progress-section" }] : []),
+    { c: unpriced > 0 ? "var(--zk-warning)" : "var(--zk-success)", t: "更未定價", v: unpriced },
+    { c: unconfirmed > 0 ? "var(--zk-danger)" : "var(--zk-success)", t: "個盤未對數確認", v: unconfirmed },
+    { c: health && health.critical > 0 ? "var(--zk-danger)" : "var(--zk-success)", t: "體檢嚴重項", v: health ? health.critical : "—" },
+    ...(needsHuman > 0 ? [{ c: "var(--zk-danger)", t: "項要人手處理（睇 ③ 進度）", v: needsHuman, href: "#progress-section" }] : []),
   ];
   return (
     <aside className="flex flex-col gap-3" data-testid="right-rail" aria-label="本月仲差咩">
@@ -25,7 +25,7 @@ export function RightRail({ needDiffReason, diffReason, onDiffReason, report, mo
         <div className="border-b border-zk-border-soft px-3.5 py-3 text-zk-base font-semibold">本月仲差咩</div>
         <div className="flex flex-col gap-1.5 border-b border-zk-border-soft p-3.5">
           <div className="flex items-baseline gap-2">
-            <span className="text-zk-2xl font-bold leading-none" style={{ color: t.total > 0 ? "#c2410c" : "#0f766e" }} data-testid="rail-review-count">
+            <span className="text-zk-2xl font-bold leading-none" style={{ color: t.total > 0 ? "var(--zk-warning)" : "var(--zk-success)" }} data-testid="rail-review-count">
               {t.total}
             </span>
             <span className="text-zk-base font-medium">題要你睇</span>

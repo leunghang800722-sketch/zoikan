@@ -9,7 +9,7 @@ const pickCls = "inline-flex cursor-pointer items-center rounded-md border borde
 
 function Row({ row, children, extra }: { row: UploadRow; children: ReactNode; extra?: ReactNode }) {
   return (
-    <div className="grid grid-cols-1 items-center gap-x-4 gap-y-2 border-b border-zk-border-soft px-4 py-3 md:grid-cols-[200px_minmax(0,1fr)_auto]" data-upload={row.key}>
+    <div className="grid grid-cols-1 items-center gap-x-4 gap-y-2 border-b border-zk-border-soft px-4 py-3 lg:grid-cols-[200px_minmax(0,1fr)_auto]" data-upload={row.key}>
       <div>
         <div className="text-zk-base font-medium text-zk-text">{row.name}</div>
         <div className="text-zk-xs text-zk-faint">{row.hint}</div>

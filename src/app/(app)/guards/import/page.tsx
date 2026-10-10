@@ -255,7 +255,7 @@ export default function GuardImportPage() {
 
       {preview && (
         <>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4" data-testid="import-person-stats">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4" data-testid="import-person-stats">
             {(["link", "create", "conflict", "needs_review"] as const).map((a) => (
               <div key={a} className="rounded-lg border border-zk-border p-3">
                 <div className="text-zk-sm text-zk-faint">{ACTION_LABEL[a]}</div>
@@ -403,7 +403,7 @@ export default function GuardImportPage() {
                   const extracted = (person?.[PKG_KEY[f]!] as PkgField | undefined)?.value ?? "";
                   const current = f === "name_zh" ? r.current_name_zh : f === "name_en" ? r.current_name_en : null;
                   return (
-                    <div key={f} className="grid grid-cols-1 items-center gap-2 md:grid-cols-[90px_1fr_auto]">
+                    <div key={f} className="grid grid-cols-1 items-center gap-2 lg:grid-cols-[90px_1fr_auto]">
                       <div className="text-zk-faint">
                         {FIELD_LABEL[f]} <span className="text-zk-xs">（{CHECK_LABEL[r.fields[f]?.check ?? ""] ?? ""}）</span>
                       </div>

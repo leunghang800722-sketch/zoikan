@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiGet, apiPost, apiRequest } from "@/lib/ui/api-client";
+import { LG_PX } from "@/lib/ui/breakpoints";
 import { deriveAiContext, type AiPageContext } from "@/lib/ui/ai-context";
 import { streamAiChat, type AiChatMessage } from "@/lib/ui/ai-chat-client";
 import { streamFeedbackChat } from "@/lib/ui/feedback-chat-client";
@@ -80,7 +81,7 @@ const WIDE_WIDTH = 560;
 // `DesktopNav.tsx`），呢度判斷手機／桌面版（直向 tab vs FAB、side panel
 // vs 全螢幕）都要跟——否則 768–1023px 呢段會出現「外殼已經係手機版
 // （漢堡＋抽屜），但助手仲以為自己係桌面版」嘅唔一致。
-const MOBILE_BREAKPOINT_PX = 1024;
+const MOBILE_BREAKPOINT_PX = LG_PX;
 
 // P2-C：建議 chips 文案跟返 README §19／24 嘅示例（「今日邊個盤未夠
 // 人」「7 月毛利率最低 5 個盤」），第三句 README 原文寫「B07 本月幾多

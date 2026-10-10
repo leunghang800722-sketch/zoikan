@@ -208,7 +208,7 @@ export default function GrossMarginPage() {
       )}
 
       {/* 桌面表（撳行展開更別 breakdown；手機改用下面嘅卡列表）。 */}
-      <div className={`hidden md:block ${tableCls.wrap}`}>
+      <div className={`hidden lg:block ${tableCls.wrap}`}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
           <thead>
             <tr>
@@ -310,7 +310,7 @@ export default function GrossMarginPage() {
       </div>
 
       {/* 手機：每行變卡（簡化——冇更別 breakdown，撳卡直接去更表）。 */}
-      <div className="flex flex-col gap-2 md:hidden">
+      <div className="flex flex-col gap-2 lg:hidden">
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
         ) : visibleSites.length === 0 ? (

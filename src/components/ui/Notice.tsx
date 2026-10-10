@@ -6,9 +6,9 @@ import type { ReactNode } from "react";
 export type NoticeVariant = "warning" | "info" | "error";
 
 const VARIANT_STYLE: Record<NoticeVariant, { bg: string; border: string; fg: string; dot: string }> = {
-  warning: { bg: "#fff7ed", border: "#fed7aa", fg: "#9a3412", dot: "#ea580c" },
-  info: { bg: "#eff6ff", border: "#bfdbfe", fg: "#1e40af", dot: "#2563eb" },
-  error: { bg: "#fef2f2", border: "#fecaca", fg: "#b91c1c", dot: "#dc2626" },
+  warning: { bg: "var(--zk-warning-bg)", border: "var(--zk-warning-border)", fg: "var(--zk-warning-dark)", dot: "var(--zk-warning)" },
+  info: { bg: "var(--zk-primary-tint-soft)", border: "var(--zk-primary-tint)", fg: "var(--zk-primary-deep)", dot: "var(--zk-primary)" },
+  error: { bg: "var(--zk-danger-bg)", border: "var(--zk-danger-border)", fg: "var(--zk-danger-dark)", dot: "var(--zk-danger)" },
 };
 
 export interface NoticeProps {

@@ -206,13 +206,13 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
             label="待審批"
             tone={data.pending_count > 0 ? "warning" : "default"}
             value={<span>{data.pending_count} 更</span>}
-            note={data.pending_count > 0 ? <span style={{ color: "#c2410c" }}>{fmtMoney(data.pending_amount)}</span> : undefined}
+            note={data.pending_count > 0 ? <span style={{ color: "var(--zk-warning)" }}>{fmtMoney(data.pending_amount)}</span> : undefined}
           />
         </div>
       )}
 
       {/* 桌面表。 */}
-      <div className="hidden md:block">
+      <div className="hidden lg:block">
         <div className={tableCls.wrap}>
           <table className={tableCls.table} style={{ minWidth: tableMinWidth(COLS) }}>
             <thead>
@@ -268,7 +268,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
       </div>
 
       {/* 手機：每行變卡。 */}
-      <div className="flex flex-col gap-2 md:hidden">
+      <div className="flex flex-col gap-2 lg:hidden">
         {loading ? (
           <div className="text-sm text-zk-faint">載入緊…</div>
         ) : (data?.grouped_days.length ?? 0) === 0 ? (
