@@ -675,6 +675,12 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 ---
 
+#### 8.5.1 驗收、部署、正式站核對（2026-10-11 朝早，P3 完結）
+- Opus 5.5 驗收：有條件通過（1 必修＝`package-lock.json` 係離線手改，28 個套件 `dev` 旗唔啱（esbuild 平台 binary、fsevents、typescript）——正式站 `npm ci --include=dev` 唔會爆，但 `--omit=dev` 會缺 tsx 用嘅 binary）；規劃者喺 worktree 用 `npm install --package-lock-only` 重生成、`npm ci --include=dev` 驗證，並清走 knip 留低嘅 10 行 `;`、過時註解、文件數字（`c4928ec`）。驗收員自跑：真 `npm ci` 577 套件 9 秒；vitest 3,470 過；tsc 0；lint 0 warning；build 過；**Playwright 220／5／0（production server）**；拆檔逐行對照（RosterEditor 1,474 獨特行只 66 行係 export／type／deps 變化；GuardsClient 33 行）、testid 集合不變、PII gate 區塊 diff 0；chat golden 用舊碼重錄 16/16 相同＋驗收員自加 11 場景逐 byte 相同；變異測試證明 one-click `withReportContext` 守護 test 有效；`TZ=America/Los_Angeles` 下 one-click 列表 test 過。(ii) 已處理：`;` 行、`findCarryoverCard` 註解、README `db:reset` 描述、檔數 16／15；未處理：換月唔重置分頁（影響細）。
+- merge main `5d19264`；部署 `6acac3f2fb15905b77d552ac` RUNNING 23:08Z：56 migrations／No pending、助手 claude、OCR 自檢 ok、login 200、啟動冇缺模組。
+- **正式站核對（老闆 Chrome）**：`/guards` 首屏 100 行、「顯示 100 / 540 位」、DOM **3,707**（基線 17,934）、撳「載入更多」→ 200 行／7,309；更表編輯器載入正常（grid、10 API、0 console error）；AI 助手問「9 月有幾多題未答」→ 答 18 題（分類正確）、4 張卡、無殘留 block。現場反映 chat 同更表儲存＋撤銷冇喺正式站實測（避免寫入），靠 golden test／e2e。
+- 收尾：五個 feature branch（p3-phase0…5）已 push 做備份；worktree 全部清走；本機 `data/ops/backup-*.sql.gz` 2026-10-17 後刪；舊香港 Zeabur 專案 2026-10-17 後由老闆刪。
+
 ## 9. 總結 before／after 總表（階段 0–5，P3 完結）
 
 §4 每項目標逐項對照。「量法」同各階段紀錄一致：本機＝合成數據（540 保安員、60 盤、9,408 更、20k audit）；正式站＝老闆 Chrome、香港→新加坡、單次。
