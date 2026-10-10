@@ -11,7 +11,6 @@ import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
-import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { P2BStatCard } from "@/components/ui/P2BStatCard";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
@@ -156,11 +155,11 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
 
       {/* 冇「出街價」權限嘅內部角色——顯示專門嘅 warning Notice，唔顯示
           雞頭 select（揀咗都係照 403）。老闆 2026-09-15 拍板主管可以預覽。 */}
-      {!isBroker && forbiddenPreview && <Notice variant="warning">你嘅角色暫時唔可以預覽雞頭應收——需要「出街價」權限，請聯絡老闆開放。</Notice>}
+      {!isBroker && forbiddenPreview && <Banner compact kind="warning">你嘅角色暫時唔可以預覽雞頭應收——需要「出街價」權限，請聯絡老闆開放。</Banner>}
 
       {!isBroker && !forbiddenPreview && (
-        <Notice
-          variant="info"
+        <Banner compact
+          kind="info"
           action={
             brokers.length > 0 && (
               <select
@@ -179,13 +178,13 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
           }
         >
           呢頁淨係俾雞頭角色用 — 你而家以{roleLabel}身份預覽{previewLabel ? ` ${previewLabel} ` : "（未揀雞頭）"}嘅數。
-        </Notice>
+        </Banner>
       )}
 
       <Banner kind="error" message={error} />
       {/* WP-PRICE §3：頁頂「N 更未定價，金額未計入」——逐組列表。 */}
       {(data?.unpriced_count ?? 0) > 0 && (
-        <Notice variant="warning">
+        <Banner compact kind="warning">
           <p className="font-medium">呢個月有 {data!.unpriced_count} 更未定價（冇對應價目卡），金額未計入以上合計：</p>
           <ul className="list-disc pl-5 mt-1">
             {(data!.unpriced_groups ?? []).map((g) => (
@@ -194,7 +193,7 @@ export function MyReceivableClient({ isBroker, roleLabel }: { isBroker: boolean;
               </li>
             ))}
           </ul>
-        </Notice>
+        </Banner>
       )}
       {!forbiddenPreview && <EmptyMonthNotice month={month} isEmpty={!loading && (data?.grouped_days.length ?? 0) === 0} onJump={setMonth} />}
 

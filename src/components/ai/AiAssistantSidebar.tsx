@@ -16,8 +16,9 @@ import { streamAiChat, type AiChatMessage } from "@/lib/ui/ai-chat-client";
 import { streamFeedbackChat } from "@/lib/ui/feedback-chat-client";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { ActionCards } from "./ActionCards";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 
+import { Button } from "@/components/ui/Button";
 // P2.5「現場反映」開會模式（老闆 2026-09-15 拍板方案 D）——側欄獨立模式：
 // 助手做訪談員，唔評可行性，討論存 `feedback_sessions`；撳「整理並送出」
 // 攞返伺服器生成嘅範本預覽，用戶確認/編輯之後先由伺服器寫入
@@ -482,45 +483,45 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             </h2>
             <div className="ml-auto flex shrink-0 items-center gap-1">
               {!meetingMode && (
-                <button
+                <Button variant="ghost" size="sm"
                   type="button"
                   data-testid="ai-feedback-start"
                   onClick={handleStartMeeting}
                   disabled={meetingStarting}
                   title="開會反映——同助手講清楚想反映嘅現場問題／改動訴求"
-                  className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface disabled:opacity-50"
+                 
                 >
                   {meetingStarting ? "開緊…" : "開會反映"}
-                </button>
+                </Button>
               )}
               {!isMobile && !meetingMode && (
-                <button
+                <Button variant="ghost" size="sm"
                   type="button"
                   onClick={toggleWidth}
                   aria-label={width >= WIDE_WIDTH ? "縮窄側欄" : "擴闊側欄"}
-                  className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface"
+                 
                 >
                   {width >= WIDE_WIDTH ? "窄" : "闊"}
-                </button>
+                </Button>
               )}
               {!meetingMode && (
-                <button
+                <Button variant="ghost" size="sm"
                   type="button"
                   data-testid="ai-clear-conversation"
                   onClick={() => setConfirmingClear(true)}
-                  className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface"
+                 
                 >
                   清空
-                </button>
+                </Button>
               )}
-              <button
+              <Button variant="ghost" size="sm"
                 type="button"
                 aria-label="關閉在勤助手"
                 onClick={() => setOpen(false)}
-                className="rounded px-1.5 py-1 text-zk-xs text-zk-muted hover:bg-zk-surface"
+               
               >
                 關閉
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -528,19 +529,19 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             <div className="flex items-center justify-between gap-2 border-b border-zk-warning-border bg-zk-warning-bg px-4 py-2 text-xs text-zk-warning-dark">
               <span>確定清空成個對話記錄？呢個動作唔可以復原。</span>
               <div className="flex shrink-0 gap-2">
-                <button type="button" data-testid="ai-clear-confirm" onClick={handleClear} className="rounded bg-zk-warning-darker px-2 py-1 text-white">
+                <Button variant="primary" size="sm" type="button" data-testid="ai-clear-confirm" onClick={handleClear}>
                   確定清空
-                </button>
-                <button type="button" onClick={() => setConfirmingClear(false)} className="rounded border border-zk-warning-border px-2 py-1 text-zk-warning-dark">
+                </Button>
+                <Button variant="secondary" size="sm" type="button" onClick={() => setConfirmingClear(false)}>
                   取消
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {meetingMode && (
             <div data-testid="ai-feedback-mode" className="px-4 pt-3">
-              <Notice variant="info">開會模式——講清楚你想改乜同點解，助手會問清楚再幫你整理；唔好打電話／銀行資料。</Notice>
+              <Banner compact kind="info">開會模式——講清楚你想改乜同點解，助手會問清楚再幫你整理；唔好打電話／銀行資料。</Banner>
             </div>
           )}
 
@@ -568,27 +569,27 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   <div className="rounded-md border border-zk-border bg-zk-surface px-3 py-2 text-zk-sm text-zk-muted">{preview.footer}</div>
                 </div>
                 {meetingError && (
-                  <div data-testid="ai-error" className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">
+                  <Banner kind="error" data-testid="ai-error" className="text-xs">
                     {meetingError}
-                  </div>
+                  </Banner>
                 )}
                 <div className="flex gap-2 pt-1">
-                  <button
+                  <Button variant="primary" size="md" className="flex-1"
                     type="button"
                     data-testid="ai-feedback-submit"
                     onClick={handleConfirmSubmit}
                     disabled={submitting}
-                    className="flex-1 rounded-md bg-zk-primary px-3 py-2 text-zk-base font-semibold text-white disabled:opacity-50"
+                   
                   >
                     {submitting ? "送出緊…" : "確認送出"}
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="secondary" size="md"
                     type="button"
                     onClick={() => setPreview(null)}
-                    className="rounded-md border border-zk-border px-3 py-2 text-zk-base text-zk-text-secondary hover:bg-zk-surface"
+                   
                   >
                     返回對話
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -619,9 +620,9 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   </div>
                 )}
                 {meetingError && (
-                  <div data-testid="ai-error" className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">
+                  <Banner kind="error" data-testid="ai-error" className="text-xs">
                     {meetingError}
-                  </div>
+                  </Banner>
                 )}
               </div>
             )
@@ -685,9 +686,9 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
             )}
 
             {errorMessage && (
-              <div data-testid="ai-error" className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">
+              <Banner kind="error" data-testid="ai-error" className="text-xs">
                 {errorMessage}
-              </div>
+              </Banner>
             )}
           </div>
           )}
@@ -737,23 +738,23 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
                   </button>
                 </form>
                 <div className="flex gap-2 border-t border-zk-border px-3 py-2.5">
-                  <button
+                  <Button variant="dark" size="md" className="flex-1"
                     type="button"
                     data-testid="ai-feedback-summarize"
                     onClick={handleSummarize}
                     disabled={meetingTurnCount < 2 || summarizing || meetingSending}
-                    className="flex-1 rounded-md bg-zk-dark px-3 py-2 text-zk-base font-semibold text-white disabled:opacity-40"
+                   
                   >
                     {summarizing ? "整理緊…" : "整理並送出"}
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="secondary" size="md"
                     type="button"
                     data-testid="ai-feedback-cancel"
                     onClick={handleCancelMeeting}
-                    className="rounded-md border border-zk-border px-3 py-2 text-zk-base text-zk-text-secondary hover:bg-zk-surface"
+                   
                   >
                     取消開會
-                  </button>
+                  </Button>
                 </div>
               </div>
             )

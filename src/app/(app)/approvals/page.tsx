@@ -267,43 +267,43 @@ export default function ApprovalsPage() {
                               placeholder="退回原因"
                               className="w-36 rounded border border-zk-input-border px-2 py-1 text-xs"
                             />
-                            <button
+                            <Button variant="dangerSolid" size="sm"
                               type="button"
                               disabled={busy || !rejectReason.trim()}
                               onClick={() => reject(r.id, rejectReason.trim())}
-                              className="rounded-[5px] bg-zk-danger px-2.5 py-[3px] text-xs text-white disabled:opacity-50"
+                             
                             >
                               確認退回
-                            </button>
-                            <button
+                            </Button>
+                            <Button variant="ghost" size="sm"
                               type="button"
                               onClick={() => {
                                 setRejectingId(null);
                                 setRejectReason("");
                               }}
-                              className="rounded px-2 py-1 text-xs text-zk-muted hover:bg-zk-header"
+                             
                             >
                               取消
-                            </button>
+                            </Button>
                           </div>
                         ) : (
                           <div className="flex gap-1.5">
-                            <button
+                            <Button variant="danger" size="sm"
                               type="button"
                               disabled={busy}
                               onClick={() => setRejectingId(r.id)}
-                              className="rounded-[5px] border border-zk-danger-border px-2.5 py-[3px] text-xs text-zk-danger-dark hover:bg-zk-danger-bg disabled:opacity-50"
+                             
                             >
                               退回
-                            </button>
-                            <button
+                            </Button>
+                            <Button variant="primary" size="sm"
                               type="button"
                               disabled={busy}
                               onClick={() => approve(r.id)}
-                              className="rounded-[5px] bg-zk-primary px-2.5 py-[3px] text-xs text-white hover:bg-zk-primary-dark disabled:opacity-50"
+                             
                             >
                               批准
-                            </button>
+                            </Button>
                           </div>
                         )}
                       </td>
@@ -360,33 +360,33 @@ export default function ApprovalsPage() {
                         placeholder="退回原因"
                         className="w-full rounded border border-zk-input-border px-2 py-1 text-xs"
                       />
-                      <button
+                      <Button variant="dangerSolid" size="sm" className="shrink-0"
                         type="button"
                         disabled={busy || !rejectReason.trim()}
                         onClick={() => reject(r.id, rejectReason.trim())}
-                        className="shrink-0 rounded-[5px] bg-zk-danger px-2.5 py-[5px] text-xs text-white disabled:opacity-50"
+                       
                       >
                         確認退回
-                      </button>
+                      </Button>
                     </div>
                   ) : (
                     <div className="mt-2 flex gap-1.5">
-                      <button
+                      <Button variant="danger" size="sm"
                         type="button"
                         disabled={busy}
                         onClick={() => setRejectingId(r.id)}
-                        className="rounded-[5px] border border-zk-danger-border px-2.5 py-[5px] text-xs text-zk-danger-dark disabled:opacity-50"
+                       
                       >
                         退回
-                      </button>
-                      <button
+                      </Button>
+                      <Button variant="primary" size="sm"
                         type="button"
                         disabled={busy}
                         onClick={() => approve(r.id)}
-                        className="rounded-[5px] bg-zk-primary px-2.5 py-[5px] text-xs text-white disabled:opacity-50"
+                       
                       >
                         批准
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>

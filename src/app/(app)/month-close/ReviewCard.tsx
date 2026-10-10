@@ -7,6 +7,7 @@ import { Pill } from "@/components/ui/Pill";
 import type { AutoReportDTO } from "@/components/month-close/types";
 import { humanize, reviewTotals, type ReviewGroup } from "@/components/month-close/derive";
 
+import { Button } from "@/components/ui/Button";
 export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto: AutoReportDTO; groups: ReviewGroup[]; busy: boolean; locked: boolean; onOpenTriage: () => void }) {
   const t = reviewTotals(auto.review);
   const canAnswer = !!auto.triage_session_id && t.total > 0;
@@ -45,9 +46,9 @@ export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto:
               ))}
               {g.more > 0 &&
                 (canAnswer ? (
-                  <button type="button" className="text-left text-zk-xs text-zk-primary disabled:opacity-[.45]" onClick={onOpenTriage} disabled={busy || locked}>
+                  <Button variant="link" size="sm" type="button" onClick={onOpenTriage} disabled={busy || locked}>
                     再多 {g.more} 題 ›
-                  </button>
+                  </Button>
                 ) : (
                   <div className="text-zk-xs text-zk-primary">再多 {g.more} 題</div>
                 ))}

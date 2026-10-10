@@ -12,6 +12,7 @@ import { Banner } from "@/components/ui/Banner";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { tableCls, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtDateWeekday, fmtMonthDayWeekday, addDaysStr, todayLocalStr, greetingWord } from "@/lib/ui/format";
+import { iconBtn } from "@/components/ui/button-classes";
 
 // API response 一律 snake_case（見 src/lib/api/http.ts）。
 interface SiteRow {
@@ -76,7 +77,7 @@ function DateChip({ date, onChange }: { date: string; onChange: (next: string) =
         aria-label="前一日"
         data-testid="shortfall-date-prev"
         onClick={() => onChange(addDaysStr(date, -1))}
-        className="px-0.5 text-zk-faint hover:text-zk-text"
+        className={iconBtn}
       >
         ‹
       </button>
@@ -86,7 +87,7 @@ function DateChip({ date, onChange }: { date: string; onChange: (next: string) =
         aria-label="後一日"
         data-testid="shortfall-date-next"
         onClick={() => onChange(addDaysStr(date, 1))}
-        className="px-0.5 text-zk-faint hover:text-zk-text"
+        className={iconBtn}
       >
         ›
       </button>

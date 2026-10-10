@@ -4,10 +4,12 @@
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { apiGet, apiPost, apiRequest, type ApiListResult } from "@/lib/ui/api-client";
+import { choiceBtn } from "@/components/ui/button-classes";
 
 interface Field {
   value: string | null;
@@ -161,9 +163,9 @@ function BankLine({ b }: { b: NonNullable<ExtView["bank"]> }) {
       </span>
       <Pill variant={b.status === "confirmed" ? "success" : "warning"}>{STATUS_LABEL[b.status] ?? b.status}</Pill>
       {b.account_full && (
-        <button type="button" className="rounded border border-zk-border px-1.5 py-0.5 text-zk-xs" onClick={() => setFull((v) => !v)} data-testid="bank-show-full">
+        <Button variant="secondary" size="sm" type="button" onClick={() => setFull((v) => !v)} data-testid="bank-show-full">
           {full ? "隱藏全號" : "顯示全號"}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -314,7 +316,7 @@ function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | nu
     <span className="mt-1.5 block space-y-1" data-testid="guard-search">
       <input className="w-full rounded-[5px] border border-zk-border px-2 py-1.5" placeholder="輸入姓名／工號／電話搜尋" value={term} aria-label="搜尋保安員" onChange={(e) => { setTerm(e.target.value); setPicked(null); onPick(null); }} />
       {rows.map((r) => (
-        <button key={r.id} type="button" className={`block w-full rounded border px-2 py-1 text-left text-zk-sm ${picked === r.id ? "border-zk-primary bg-zk-primary-tint" : "border-zk-border"}`} onClick={() => { setPicked(r.id); onPick({ id: r.id, name: r.name_zh }); }}>
+        <button key={r.id} type="button" className={choiceBtn(picked === r.id, "block w-full text-left")} onClick={() => { setPicked(r.id); onPick({ id: r.id, name: r.name_zh }); }}>
           {r.name_zh}
           {r.name_en ? <span className="ml-1 text-zk-faint">{r.name_en}</span> : null}
           {r.staff_numbers?.length ? <span className="ml-1 text-zk-faint">{r.staff_numbers.map((n) => n.number).join("、")}</span> : null}
@@ -480,13 +482,13 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
             )}
             {!q && liveTotals && liveTotals.imp + liveTotals.sup > 0 && <div className="text-zk-sm text-zk-muted">重要 {liveTotals.imp} 題，補充資料 {liveTotals.sup} 題</div>}
           </div>
-          <button type="button" onClick={onClose} className="rounded px-2 py-1 text-zk-base text-zk-muted hover:bg-zk-header" data-testid="triage-later">
+          <Button variant="ghost" size="sm" type="button" onClick={onClose} data-testid="triage-later">
             遲啲先答
-          </button>
+          </Button>
         </div>
 
         <div className="space-y-3 overflow-y-auto px-4 py-3">
-          {error && <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-base text-zk-danger-dark">{error}</div>}
+          {error && <Banner kind="error">{error}</Banner>}
           {queue === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
           {gate && (
             <div className="space-y-2 py-6 text-center" data-testid="triage-gate">
@@ -606,7 +608,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                       <button
                                         key={c}
                                         type="button"
-                                        className={`rounded border px-2 py-1 text-zk-sm ${extChoices[rf.key] === c ? "border-zk-primary bg-zk-primary-tint font-semibold" : "border-zk-border"}`}
+                                        className={choiceBtn(extChoices[rf.key] === c)}
                                         onClick={() => { setExtChoices((m) => ({ ...m, [rf.key]: c })); setImpact(null); setHash(null); }}
                                       >
                                         {EXT_CHOICE_LABEL[c]}
@@ -635,7 +637,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                           key={a}
                                           type="button"
                                           disabled={a === "replace" && replaceDenied(rf.field, rf.check)}
-                                          className={`rounded border px-2 py-1 text-zk-sm ${cur?.action === a ? "border-zk-primary bg-zk-primary-tint font-semibold" : "border-zk-border"} disabled:cursor-not-allowed disabled:opacity-40`}
+                                          className={choiceBtn(cur?.action === a, "disabled:cursor-not-allowed disabled:opacity-40")}
                                           onClick={() => {
                                             setFields((f) => ({ ...f, [rf.field]: { action: a, value: f[rf.field]?.value ?? undefined } }));
                                             setImpact(null);

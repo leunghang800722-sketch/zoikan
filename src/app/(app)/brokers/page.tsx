@@ -14,7 +14,7 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
@@ -399,9 +399,9 @@ export default function BrokersPage() {
                     <td className={tableCls.td}>{r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}</td>
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                        <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                           編輯
-                        </button>
+                        </Button>
                         <button
                           type="button"
                           onClick={() => openFeeRatesFor(r)}
@@ -410,13 +410,13 @@ export default function BrokersPage() {
                           介紹費率
                         </button>
                         {r.status === "inactive" ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
+                           
                           >
                             恢復
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                         )}
@@ -444,16 +444,16 @@ export default function BrokersPage() {
                   {r.status === "active" ? <Pill variant="success">正常</Pill> : <Pill variant="neutral">已停用</Pill>}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button type="button" onClick={() => openEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
+                  <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                     編輯
-                  </button>
-                  <button type="button" onClick={() => openFeeRatesFor(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary">
+                  </Button>
+                  <Button variant="secondary" size="sm" type="button" onClick={() => openFeeRatesFor(r)}>
                     介紹費率
-                  </button>
+                  </Button>
                   {r.status === "inactive" ? (
-                    <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                       恢復
-                    </button>
+                    </Button>
                   ) : (
                     <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                   )}
@@ -516,18 +516,18 @@ export default function BrokersPage() {
                     <td className={tableCls.td}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {!r.voided_at && (
-                          <button type="button" onClick={() => openFeeRateEdit(r)} className="rounded-[5px] border border-zk-border px-2.5 py-[3px] text-xs text-zk-text-secondary hover:bg-zk-header">
+                          <Button variant="secondary" size="sm" type="button" onClick={() => openFeeRateEdit(r)}>
                             編輯
-                          </button>
+                          </Button>
                         )}
                         {r.voided_at ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onFeeRateUnvoid(r.id)}
-                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
+                           
                           >
                             解除作廢
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton onConfirm={(reason) => onFeeRateVoid(r.id, reason)} />
                         )}
@@ -590,12 +590,12 @@ export default function BrokersPage() {
             requires_approval（排更要主管審批先確認）
           </label>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>
@@ -643,12 +643,12 @@ export default function BrokersPage() {
             />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={feeRateSaving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={feeRateSaving}>
               {feeRateSaving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setFeeRateDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setFeeRateDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

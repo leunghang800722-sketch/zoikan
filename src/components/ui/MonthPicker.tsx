@@ -12,6 +12,7 @@ const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayout
 import { addMonthsStr, currentMonthStr } from "@/lib/ui/format";
 import { isValidMonth, readInitialMonth, rememberMonth } from "@/lib/ui/month-store";
 
+import { iconBtn } from "@/components/ui/button-classes";
 /** 頁面用嘅 state hook：回 `[month, setMonth, ready]`。`defaultMonth` 係冇 URL／sessionStorage 時用（預設本月）。
  * hydration 一致性：初始值一律 fallback（同 SSR 一樣，唔會 #418）；`useLayoutEffect`（paint 前、passive effects 前）
  * 解出 URL → sessionStorage → fallback 嘅真正月份後先 `ready=true`。頁面嘅 fetch effect 要 `if (!ready) return` 並以 `ready` 做 dep，
@@ -58,7 +59,7 @@ export function MonthPicker({ value, onChange, label, testId, ariaLabel = "月�
   return (
     <div className={`inline-flex items-center gap-1 rounded-md border border-zk-border bg-white px-2 py-[3px] text-zk-base text-zk-text-secondary ${className ?? ""}`} data-month-picker="">
       {label && <span className="text-xs text-zk-faint">{label}</span>}
-      <button type="button" aria-label="上一個月" className="px-1 text-zk-faint hover:text-zk-text" onClick={() => onChange(addMonthsStr(base, -1))}>
+      <button type="button" aria-label="上一個月" className={iconBtn} onClick={() => onChange(addMonthsStr(base, -1))}>
         ‹
       </button>
       <input
@@ -74,7 +75,7 @@ export function MonthPicker({ value, onChange, label, testId, ariaLabel = "月�
         }}
         className="w-[150px] border-0 bg-transparent p-0 py-0.5 text-zk-base text-zk-text-secondary outline-none"
       />
-      <button type="button" aria-label="下一個月" className="px-1 text-zk-faint hover:text-zk-text" onClick={() => onChange(addMonthsStr(base, 1))}>
+      <button type="button" aria-label="下一個月" className={iconBtn} onClick={() => onChange(addMonthsStr(base, 1))}>
         ›
       </button>
     </div>

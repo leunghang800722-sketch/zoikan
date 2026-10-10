@@ -3,6 +3,7 @@
 // `audit-log/page.tsx` 一樣版面模式：`PageHeader` kicker「系統」、filter
 // chip（狀態）、`tableCls` 列表；手機每行變卡（README 手機外殼模式）。
 import { useEffect, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { apiGet, type ApiListResult } from "@/lib/ui/api-client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
@@ -81,7 +82,7 @@ export function FeedbackPageClient() {
         }
       />
 
-      {error && <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-xs text-zk-danger-dark">{error}</div>}
+      {error && <Banner kind="error">{error}</Banner>}
 
       {/* 桌面：表；手機：卡（README 手機外殼模式，唔靠 CSS 縮表）。 */}
       <div className={`${tableCls.wrap} hidden sm:block`} data-testid="feedback-table">

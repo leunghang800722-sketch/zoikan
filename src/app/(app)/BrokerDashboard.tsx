@@ -17,6 +17,7 @@ import { KpiCard } from "@/components/ui/KpiCard";
 import { tableCls, EmptyState } from "@/components/ui/DataTable";
 import { fmtMoney, fmtYearMonthZh, fmtMonthDayWeekday, greetingWord, todayLocalStr, addMonthsStr } from "@/lib/ui/format";
 import { useMonthState } from "@/components/ui/MonthPicker";
+import { iconBtn } from "@/components/ui/button-classes";
 
 interface BrokerSiteRow {
   site_id: string;
@@ -46,7 +47,7 @@ function MonthChip({ month, onChange }: { month: string; onChange: (next: string
         aria-label="上個月"
         data-testid="broker-month-prev"
         onClick={() => onChange(addMonthsStr(month, -1))}
-        className="px-0.5 text-zk-faint hover:text-zk-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-zk-primary"
+        className={iconBtn}
       >
         ‹
       </button>
@@ -56,7 +57,7 @@ function MonthChip({ month, onChange }: { month: string; onChange: (next: string
         aria-label="下個月"
         data-testid="broker-month-next"
         onClick={() => onChange(addMonthsStr(month, 1))}
-        className="px-0.5 text-zk-faint hover:text-zk-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-zk-primary"
+        className={iconBtn}
       >
         ›
       </button>

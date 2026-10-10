@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "@/components/ui/Button";
 import { invalidateLookups } from "@/lib/ui/lookup-cache";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -32,13 +33,8 @@ export function LogoutButton({ className }: { className?: string } = {}) {
   }
 
   return (
-    <button
-      type="button"
-      onClick={onLogout}
-      disabled={loading}
-      className={className ?? "w-full rounded border border-zk-input-border px-3 py-1.5 text-sm text-zk-text-secondary hover:bg-zk-surface disabled:opacity-50"}
-    >
+    <Button variant="secondary" size="sm" onClick={onLogout} disabled={loading} className={className ?? "w-full"}>
       {loading ? "登出中…" : "登出"}
-    </button>
+    </Button>
   );
 }

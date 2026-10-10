@@ -15,9 +15,9 @@ export function HistorySection({ runs, busy, open, onToggle, onRerun }: { runs: 
         {runs.length > 0 && (
           <>
             {" · "}
-            <button type="button" className="text-zk-primary hover:underline" onClick={onToggle} aria-expanded={open}>
+            <Button variant="link" size="sm" type="button" onClick={onToggle} aria-expanded={open}>
               {open ? "收埋過往紀錄 ›" : "睇過往紀錄 ›"}
-            </button>
+            </Button>
           </>
         )}
       </div>

@@ -12,7 +12,7 @@ import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
 import { Drawer } from "@/components/ui/Drawer";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
-import { Field, inputCls, selectCls, btnPrimary, btnSecondary } from "@/components/ui/Field";
+import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Button } from "@/components/ui/Button";
@@ -24,6 +24,7 @@ import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
 import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker } from "@/components/ui/MonthPicker";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 const PAGE_SIZE = 50;
 
@@ -102,6 +103,7 @@ export function RateCardsClient({
   canReprice?: boolean;
   canCopyLastMonth?: boolean;
 }) {
+  const { confirm: askConfirm, dialog: confirmDialog } = useConfirm();
   const [rows, setRows] = useState<RateCardRow[]>([]);
   const [total, setTotal] = useState(0);
   const [skip, setSkip] = useState(0);
@@ -201,7 +203,7 @@ export function RateCardsClient({
       .map((c) => `${c.site_name} ${c.shift_type_code}（${c.broker_label}）收客 ${c.client_rate ?? "—"}／工資 ${c.guard_wage ?? "—"}`)
       .join("\n");
     const more = preview.data.count > 20 ? `\n…仲有 ${preview.data.count - 20} 張` : "";
-    const proceed = window.confirm(`複製上月卡到本月 ${month}：搵到 ${preview.data.count} 張卡可以複製\n${lines}${more}\n\n確定要建立呢 ${preview.data.count} 張新卡？`);
+    const proceed = await askConfirm({ message: `複製上月卡到本月 ${month}：搵到 ${preview.data.count} 張卡可以複製\n${lines}${more}\n\n確定要建立呢 ${preview.data.count} 張新卡？`, confirmLabel: "建立" });
     if (!proceed) {
       setCopyingLastMonth(false);
       return;
@@ -240,9 +242,10 @@ export function RateCardsClient({
       return;
     }
     const keptNote = preview.data.kept_unresolved > 0 ? `（其中 ${preview.data.kept_unresolved} 更搵唔到對應卡，保留原有 snapshot）` : "";
-    const proceed = window.confirm(
-      `重新計價預覽 ${month}（${scopeLabel}）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
-    );
+    const proceed = await askConfirm({
+      message: `重新計價預覽 ${month}（${scopeLabel}）：${preview.data.changed} 更會改變，${preview.data.unchanged} 更不變${keptNote}，仲有 ${preview.data.unpriced} 更未定價。確定要寫入？`,
+      confirmLabel: "寫入",
+    });
     if (!proceed) {
       setRepricing(false);
       return;
@@ -409,6 +412,7 @@ export function RateCardsClient({
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <PageHeader
         kicker={kickerFor("/rate-cards", isBroker)}
         title="價目"
@@ -532,13 +536,13 @@ export function RateCardsClient({
                       </td>
                       <td className={tableCls.td}>
                         {r.voided_at ? (
-                          <button
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => onUnvoid(r.id)}
-                            className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark hover:bg-zk-success-bg"
+                           
                           >
                             解除作廢
-                          </button>
+                          </Button>
                         ) : (
                           <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                         )}
@@ -568,9 +572,9 @@ export function RateCardsClient({
                   </div>
                   <div className="mt-2">
                     {r.voided_at ? (
-                      <button type="button" onClick={() => onUnvoid(r.id)} className="rounded-[5px] border border-zk-success/30 px-2.5 py-[3px] text-xs text-zk-success-dark">
+                      <Button variant="secondary" size="sm" type="button" onClick={() => onUnvoid(r.id)}>
                         解除作廢
-                      </button>
+                      </Button>
                     ) : (
                       <ConfirmVoidButton onConfirm={(reason) => onVoid(r.id, reason)} />
                     )}
@@ -727,12 +731,12 @@ export function RateCardsClient({
             <input className={inputCls} value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
           </Field>
           <div className="flex gap-2 pt-2">
-            <button type="submit" disabled={saving} className={btnPrimary}>
+            <Button variant="primary" size="sm" type="submit" disabled={saving}>
               {saving ? "儲存緊…" : "儲存"}
-            </button>
-            <button type="button" onClick={() => setDrawerOpen(false)} className={btnSecondary}>
+            </Button>
+            <Button variant="secondary" size="sm" type="button" onClick={() => setDrawerOpen(false)}>
               取消
-            </button>
+            </Button>
           </div>
         </form>
       </Drawer>

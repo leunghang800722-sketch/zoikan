@@ -5,6 +5,7 @@
 // 5 秒到／撳下一題／關閉／切 tab／unmount 先真正 call API（同原本 body 一樣）；失敗標返「未送出，請再試」。
 // 冇 PII：盤名、雞頭代號、更種代號、數目。
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { MQ_BELOW_LG } from "@/lib/ui/breakpoints";
@@ -326,9 +327,9 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     failedIds.length > 0 ? (
       <div className="flex flex-col gap-2 rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-sm text-zk-danger-dark" data-testid="mc-failed-banner" role="alert">
         <div>有 {failedIds.length} 題未送出，請再試：{failedIds.map((id) => shortHuman(failed[id]!.title)).join("、")}</div>
-        <button type="button" onClick={abandonUnsent} className="self-start rounded border border-zk-danger-border bg-white px-2.5 py-1 text-zk-danger-dark" data-testid="mc-abandon">
+        <Button variant="danger" size="sm" className="self-start" type="button" onClick={abandonUnsent} data-testid="mc-abandon">
           放棄未送出嘅 {failedIds.length} 題（留返待答問題）
-        </button>
+        </Button>
       </div>
     ) : null;
   const retryTag = failedMsg ? <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-sm text-zk-danger-dark" data-testid="mc-unsent">未送出，請再試（{humanize(failedMsg)}）</div> : null;
@@ -377,7 +378,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
         </div>
         <div className="flex-1 overflow-y-auto px-5 pb-40 pt-5">
           {failedBanner}
-          {error && !failedMsg && <div className="mb-3 rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-base text-zk-danger-dark">{error}</div>}
+          {error && !failedMsg && <Banner kind="error" className="mb-3">{error}</Banner>}
           {qs === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
           {q && (
             <div className="flex flex-col gap-4">
@@ -475,13 +476,13 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
             <div className="text-zk-md font-semibold">一鍵結算——要你睇</div>
             {qs && <div className="text-zk-sm text-zk-muted">仲有 {visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.inFlight.length > 0 ? ` · ${view.inFlight.length} 題送出中${view.pending ? "（可撤銷）" : ""}` : ""}</div>}
           </div>
-          <button type="button" onClick={closeDialog} className="rounded px-2 py-1 text-zk-base text-zk-muted hover:bg-zk-header" data-testid="mc-later">
+          <Button variant="ghost" size="sm" type="button" onClick={closeDialog} data-testid="mc-later">
             遲啲先答
-          </button>
+          </Button>
         </div>
         <div className="space-y-3 overflow-y-auto px-4 py-3">
           {failedBanner}
-          {error && !failedMsg && <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-base text-zk-danger-dark">{error}</div>}
+          {error && !failedMsg && <Banner kind="error">{error}</Banner>}
           {done.length > 0 && (
             <ul className="list-disc space-y-0.5 rounded border border-zk-success/30 bg-zk-success-bg px-5 py-2 text-zk-sm text-zk-success-dark" data-testid="mc-done">
               {done.map((d, i) => (

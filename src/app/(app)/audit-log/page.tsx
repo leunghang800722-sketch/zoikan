@@ -18,7 +18,7 @@
 // 同一權限、只讀）提供，冇資料就唔會出現。
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, type ApiListResult, apiGetAll } from "@/lib/ui/api-client";
-import { Notice } from "@/components/ui/Notice";
+import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -212,7 +212,7 @@ export default function AuditLogPage() {
         }
       />
 
-      {error && <Notice variant="error">{error}</Notice>}
+      {error && <Banner compact kind="error">{error}</Banner>}
 
       <div className={tableCls.wrap}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(6) }}>

@@ -495,9 +495,9 @@ export function NewFromDocsClient() {
                       <div className="flex flex-wrap items-center gap-1.5 text-zk-sm">
                         <span className="text-zk-faint">兩次辨識：</span>
                         {f.candidates.map((c) => (
-                          <button key={c} type="button" className="rounded border border-zk-border px-1.5 py-0.5 hover:bg-zk-hover" onClick={() => setField(k, c)}>
+                          <Button variant="secondary" size="sm" key={c} type="button" onClick={() => setField(k, c)}>
                             {c}
-                          </button>
+                          </Button>
                         ))}
                       </div>
                     )}
