@@ -427,7 +427,7 @@ API 單獨 p50（3 次）：最輕 API 地板 ~360 ms（香港→新加坡 TLS�
 | 項目 | Before（基線） | 階段 1 後 | 階段 2 後 |
 |---|---|---|---|
 | CSS 每頁（gz） | 193 KB | 193 | **52 KB**（41＋10）；h1／semibold 計算字重 700／600 有分別 |
-| 首頁 API | shortfall 781、pending-summary 1,587 | 588／953 | `shortfall?include_margin=0` 同 `margin-progress` **並行**（暖載見下）、pending-summary 同前 |
+| 首頁 API | shortfall 781、pending-summary 1,587 | 588／953 | 暖載：`shortfall?include_margin=0` **435 ms** 同 `margin-progress` 760 ms **並行**（日級表先出）、pending-summary 977；首頁 load 557 ms（基線冷載 2,128） |
 | 更表編輯器 | 11 API、guards 47 KB | 11 API、guards 47 KB | **10 API、guards lite 26 KB、全部 API 合共 37 KB** |
 | `/rate-cards`／`/approvals` guards | 47 KB（2.0–2.4 s） | 47 KB（0.83–0.87 s） | **lite 26 KB**（0.77–0.98 s，同其他請求並行） |
 | `/month-close` load | 683 | 1,512 | **978**；側欄對話唔再每頁載（0 次） |
