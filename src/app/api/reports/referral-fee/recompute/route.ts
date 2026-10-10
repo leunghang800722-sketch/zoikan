@@ -18,6 +18,7 @@ import { BadRequest, Forbidden } from "@/lib/api/errors";
 import { parseMonthParam } from "@/lib/reports/money";
 import { recomputeReferralFees } from "@/lib/reports/referral-fee";
 import { prisma } from "@/lib/db";
+import { assertMonthNotLocked } from "@/lib/month-lock";
 
 export async function POST(req: Request) {
   return withApiError(async () => {
@@ -28,6 +29,9 @@ export async function POST(req: Request) {
     const body = (await readJson(req)) as { month?: unknown };
     const month = typeof body.month === "string" ? parseMonthParam(body.month) : null;
     if (!month) throw BadRequest("請傳 month（YYYY-MM 或 YYYY-MM-01）");
+
+    // P3-0.1（B-1）：鎖咗嘅月唔准重算（void 舊行＋建新行＋同步費率都係寫入）。
+    await assertMonthNotLocked({ workDate: month, actorUserId: session.userId, tableName: "special_items", rowId: `referral-fee-recompute:${month.toISOString().slice(0, 7)}`, ip: getClientIp(req) });
 
     const result = await recomputeReferralFees(month, session.userId, getClientIp(req));
 

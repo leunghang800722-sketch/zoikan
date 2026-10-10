@@ -22,7 +22,7 @@ import { prisma } from "@/lib/db";
 import { monthStart as toMonthStart } from "@/lib/month-lock";
 import { n, round2 } from "./money";
 import { writeAuditTx } from "@/lib/audit";
-import { BadRequest } from "@/lib/api/errors";
+import { BadRequest, Locked } from "@/lib/api/errors";
 import { parsePostorderUploadRow, type PostorderReferralRow } from "@/lib/guard-fix/postorder";
 import { matchBroker, matchSite, type BrokerCandidate, type SiteCandidate } from "@/lib/roster-upload/match";
 
@@ -323,11 +323,17 @@ export async function recomputeReferralFees(month: Date, actorUserId: string, ip
   if (monthStartDate < new Date(REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH)) {
     throw BadRequest(`${REFERRAL_FEE_AUTOCOMPUTE_MIN_MONTH.slice(0, 7)} 之前嘅月份已經人手入咗長工介紹費，唔可以用自動公式重算`);
   }
+  // P3-0.1（B-1）：防繞過——route 以外嘅 caller 都唔准重算已鎖月份（費率同步都係寫入，所以喺 sync 之前先擋）。
+  const lockedBefore = await prisma.monthClose.findUnique({ where: { month: monthStartDate }, select: { lockedAt: true } });
+  if (lockedBefore?.lockedAt) throw Locked(`${monthStartDate.toISOString().slice(0, 7)} 已鎖定，唔可以重算介紹費`);
   const rateSync = await syncReferralRatesFromPostorder(monthStartDate, actorUserId, ip);
   const result = await computeReferralFeesForMonth(monthStartDate);
   const createdByTag = `referral-fee-recompute:${actorUserId}`;
 
   const { voidedCount, createdCount } = await prisma.$transaction(async (tx) => {
+    // tx 開頭再查一次（sync／compute 期間可能有人鎖月）。
+    const lockedInTx = await tx.monthClose.findUnique({ where: { month: monthStartDate }, select: { lockedAt: true } });
+    if (lockedInTx?.lockedAt) throw Locked(`${monthStartDate.toISOString().slice(0, 7)} 已鎖定，唔可以重算介紹費`);
     const priorAutoItems = await tx.specialItem.findMany({
       where: { month: monthStartDate, kind: "referral_fee", voidedAt: null, createdBy: { startsWith: "referral-fee-recompute:" } },
       select: { id: true },
