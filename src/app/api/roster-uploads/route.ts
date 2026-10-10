@@ -21,7 +21,6 @@ import { monthStart } from "@/lib/month-lock";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { processRosterUpload } from "@/lib/roster-upload/service";
-import type { RosterUpload } from "@prisma/client";
 import { ROSTER_UPLOAD_META_SELECT, type RosterUploadMeta } from "@/lib/roster-upload/meta-select";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB——更表 xlsx 正常幾百 KB，呢個上限純粹防呆
