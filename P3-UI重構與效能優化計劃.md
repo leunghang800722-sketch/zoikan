@@ -620,7 +620,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - 全部 `data-testid` 不變；DOM 結構同拆前一樣（子元件用 Fragment）。載入完成後要重置嘅 UI 狀態（警告／錯誤／選格）由容器經 `onLoadedRef` 注入，呼叫位置同拆前一致。
 - 簡報原定 `useCellSelection`／`RosterGrid`／`RosterToolbar` 等名稱照用；`RosterToolbar` 實際拆成 `RosterHeader`＋`RosterBrokerStats`＋`RosterNotices` 三個（每個 <300 行）。
 
-**P3-5.2 拆 GuardsClient（2,638 行）→ `guards/` 17 檔，最大 445 行；名冊分頁 render**
+**P3-5.2 拆 GuardsClient（2,638 行）→ `guards/` 15 檔，最大 445 行；名冊分頁 render**
 - `GuardsClient.tsx`（容器 272）｜`GuardsTable.tsx`（桌面表＋手機卡＋分頁）｜`GuardsFilters.tsx`｜`GuardDrawer.tsx`（Drawer 殼＋tab 組合）｜`drawer/BasicTab|DocsTab|ContactsTab|LongtermTab|BankTab.tsx`｜`useGuardForm.ts`（表單／開關／儲存）＋三個子資源 hook `useGuardStaffNumbers`／`useGuardContacts`／`useGuardLongterm`｜`guards-types.ts`｜`guards-utils.ts`。
 - Drawer 各區塊 **DOM 次序同拆前完全一致**（e2e 有靠 `.first()` 揀欄，tab 只係分檔唔改次序）；PII／銀行／出街價 field-group 嘅「送唔送」判斷（`canUpdate*`、`detailAvailable`）原封搬過去。
 - **`/guards` 分頁 render**：一次最多 render 100 行（桌面表＋手機卡同一個 slice），底部「顯示 100 / N 位」＋「載入更多（還有 N 位）」；搜尋／篩選照舊 server 做（`GET /api/guards?q=`，API 不變），搜尋／篩選改變先由頭開始（儲存後 reload 唔會跳返頂）。本機 seed 266 人：DOM 節點 9,553 → **3,710**（每行 ~35 節點；540 人 ≈19.2k → 3.7k）。新增 e2e `p3-5-guards-page.spec.ts`。
@@ -632,7 +632,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **唔合併**（定價核心）：`month-close/auto/pricing.ts` `fetchCardsVia` ↔ `pricing/resolve-rate.ts` `fetchEffectiveRateCards`——只加互相指向註解。
 
 **P3-5.4 死碼**
-- `npx knip --fix`（exports,types）＋級聯清理：src 多餘 `export` 191 → 0、多餘 type export 105 → 0（約 40 個同檔未用嘅宣告連帶刪走：`pickFields`／`coerceDateFields`／`formatPlanSummaryMd`／`loadUTeamList`／`clearReconcileDataCache`／`findCarryoverCard`／`useLookups`／`FieldError`／`touchBtn` 等；附錄 a §2.5 十三個「疑似死函數」：5 個確認無人用已刪，其餘同檔仍有用只取消 export）；`QUESTION_KINDS`／`MC_KINDS`／`PERSON_FIELDS` 等只作型別用嘅常數改成 union type。`Duplicate exports` 3 → 0（`selectCls` 不再 alias `inputCls`；`project.ts` 兩組 alias 隨 export 清理消失）。新增 `knip.json`：`scripts/**`、`tests/**` 當 entry（CLI／測試入口，原本被當「unused files」同「unused exports」），所以 `npx knip` 現時 0 項；**唔用 config**（`knip --no-config`）src 範圍亦係 0，剩 scripts 範圍 52 exports／27 types／25 files（一次性 CLI 腳本之間互相 import）。
+- `npx knip --fix`（exports,types）＋級聯清理：src 多餘 `export` 191 → 0、多餘 type export 105 → 0（約 40 個同檔未用嘅宣告連帶刪走：`pickFields`／`coerceDateFields`／`formatPlanSummaryMd`／`loadUTeamList`／`clearReconcileDataCache`／`findCarryoverCard`／`useLookups`／`FieldError`／`touchBtn` 等；附錄 a §2.5 十三個「疑似死函數」：5 個確認無人用已刪，其餘同檔仍有用只取消 export）；`QUESTION_KINDS`／`MC_KINDS`／`PERSON_FIELDS` 等只作型別用嘅常數改成 union type。`Duplicate exports` 3 → 0（`selectCls` 不再 alias `inputCls`；`project.ts` 兩組 alias 隨 export 清理消失）。新增 `knip.json`：`scripts/**`、`tests/**` 當 entry（CLI／測試入口，原本被當「unused files」同「unused exports」），所以 `npx knip` 現時 0 項；**唔用 config**（`knip（唔用 knip.json）`）src 範圍亦係 0，剩 scripts 範圍 52 exports／27 types／25 files（一次性 CLI 腳本之間互相 import）。
 - 依賴宣告：`@prisma/client`、`prisma`、`tsx`、`exceljs`、`csv-parse`、`dotenv` 由 devDependencies 搬入 dependencies（production code 或 Dockerfile 啟動腳本實際用緊；`package-lock.json` 同步，`npm ci --dry-run` 過；Dockerfile `--include=dev` 不變）。
 - `scripts/one-off/p3-4-tokens*.mjs` 歸檔去 `scripts/archive/one-off/`；`README.md` 改寫成真正 README（一句描述、技術棧、本機起法、測試、目錄、部署）；`docs/api.md` 去 `formatPlanSummaryMd` 提及。§8.4 提到嘅 `FieldError`／`touchBtn` 一直冇人用，今次刪走。
 
@@ -646,8 +646,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 | 指標 | before | after |
 |---|---|---|
 | src 檔數／行數 | 463／76,590 | 498／77,762（拆檔加咗 import／props 樣板，去重＋刪死碼抵銷大部分） |
-| `RosterEditor` 最大檔 | 2,807 行（單檔） | 564 行（`editor/` 18 檔） |
-| `GuardsClient` 最大檔 | 2,638 行（單檔） | 445 行（`guards/` 17 檔） |
+| `RosterEditor` 最大檔 | 2,807 行（單檔） | 564 行（`editor/` 16 檔） |
+| `GuardsClient` 最大檔 | 2,638 行（單檔） | 445 行（`guards/` 15 檔） |
 | src 其餘超過 600 行嘅檔 | 25（另 2 個巨型檔） | 25（唔屬今次範圍：`roster-export.ts` 1,178、`RosterUploadsClient.tsx` 1,158 …） |
 | knip 多餘 export／type／重複 export | 245／105／3（src 191／105） | **0／0／0**（`knip.json`；無 config 時 src 亦 0） |
 | jscpd（src，min-tokens 60） | 2.62%（194 組，2,005 行） | **1.99%**（161 組，1,543 行） |
@@ -698,7 +698,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 | 指標 | Before | 目標 | After | 達標？ |
 |---|---|---|---|---|
-| `RosterEditor`／`GuardsClient` 最大檔行數 | 2,807／2,638 | ≤600 | **564／445**（各 18／17 檔） | ✓ |
+| `RosterEditor`／`GuardsClient` 最大檔行數 | 2,807／2,638 | ≤600 | **564／445**（各 18／15 檔） | ✓ |
 | knip 多餘 export／type | 245／105（src 191／105） | <20 | **0／0** | ✓ |
 | jscpd 重複碼 | 2.62%（2,005 行） | <2.0% | **1.99%**（1,543 行） | ✓（邊緣） |
 | `/guards` DOM 節點（540 人推算） | ~19.2k（量得 266 人 9,553） | <5,000 | **~3.7k**（量得 3,710） | ✓ |

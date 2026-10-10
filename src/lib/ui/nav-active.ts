@@ -2,7 +2,6 @@
 // 共用嘅 active 判斷（單一 source of truth）。
 // P3-3.1：連結 href 可帶 query（例：`/roster-uploads?tab=fix`），`search` 係當前
 // URL 嘅 query；頁首 kicker 搬去 `@/lib/nav/schema` 派生，呢度只 re-export。
-;
 
 export function isLinkActive(pathname: string, href: string, search?: URLSearchParams | null): boolean {
   const [path, query] = href.split("?");

@@ -642,7 +642,6 @@ function wantField(p: PackagePerson, f: PersonField, dec: PersonDecisions | unde
   return null;
 }
 
-;
 function assertMayOverwritePii(opts: ApplyOptions): void {
   if (opts.canOverwritePii === false) throw new ApiError(403, "forbidden", PII_OVERWRITE_DENIED_MSG);
 }

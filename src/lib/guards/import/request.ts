@@ -79,7 +79,6 @@ export function mapDecisions(raw: z.infer<typeof applyBodySchema>["decisions"]):
 // ---------------------------------------------------------------------------
 // WP-AI-OPS 驗收修正（Major-1）：「保安員個人資料」權限
 // ---------------------------------------------------------------------------
-;
 
 export function assertPackageSize(session: Pick<AuthedSession, "baseRole">, pkg: ImportPackage): void {
   if (session.baseRole !== "老闆" && pkg.persons.length > NON_BOSS_MAX_PERSONS) {

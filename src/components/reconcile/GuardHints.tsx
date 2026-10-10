@@ -32,4 +32,3 @@ export function SimilarGuards({ person, dir }: { person: Person; dir: { rows: Gu
   );
 }
 
-;

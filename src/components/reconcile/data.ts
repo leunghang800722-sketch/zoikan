@@ -94,7 +94,6 @@ export function useSimilarGuards(person: Person | null, dir: { rows: GuardLite[]
   return { status: "loading", list: [] };
 }
 
-;
 
 // ---------------------------------------------------------------------------
 // guard-fix 最新 run 嘅 needs_boss
