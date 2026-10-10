@@ -26,7 +26,7 @@ export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto:
         </div>
       </div>
       {t.total > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
           {groups.map((g) => (
             <div key={g.key} className="flex min-w-0 flex-col gap-2 border-b border-r border-zk-border-soft px-4 py-3" data-review-group={g.key}>
               <div className="flex items-baseline gap-1.5">
