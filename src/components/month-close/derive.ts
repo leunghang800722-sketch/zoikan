@@ -333,7 +333,7 @@ const SHIFT_TYPE_RE = /「(.+?)」自動建 (\d+) 個更種/;
 const VARIANCE_RE = /^更數差異已解釋：「(.+?)」([\s\S]*)$/;
 const SITE_NEW_RE = /^新盤「(.+?)」([\s\S]*)$/;
 const SITE_ALIAS_RE = /^更表盤名「(.+?)」自動對上盤「(.+?)」([\s\S]*)$/;
-const GUARD_RE = /^保?保安員配對 [^（]*（([\s\S]*?)，(\d+) 格）自動配對：([\s\S]*)$/;
+const GUARD_RE = /^保?安員配對 [^（]*（([\s\S]*?)，(\d+) 格）自動配對：([\s\S]*)$/;
 
 const blankRow = (): AutoRow => ({ site: "", shiftType: "", broker: "", n: null, price: "", basis: "" });
 
@@ -439,8 +439,8 @@ export function humanizeHealth(message: string): string {
     .replace(/（ambiguous）/g, "")
     .replace(/（unmatched）/g, "")
     .replace(/（name_only）/g, "")
-    .replace(/保?保安員配對有多個候選/g, "保安員有多個可能")
-    .replace(/保?保安員配對唔到/g, "對唔到保安員")
+    .replace(/保?安員配對有多個候選/g, "保安員有多個可能")
+    .replace(/保?安員配對唔到/g, "對唔到保安員")
     .replace(/\bambiguous\b/g, "有多個可能")
     .replace(/\bunmatched\b/g, "對唔到保安員")
     .replace(/\bname_only\b/g, "淨靠姓名配對")
