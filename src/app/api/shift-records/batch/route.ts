@@ -167,6 +167,15 @@ export async function POST(req: Request) {
     // P0：memoize（同一 guard 喺呢批 cells 入面可能出現好多次，唔逐格
     // 都打 DB）——見 settlement-broker-fallback.ts。
     const resolveSettlementBrokerFallback = createSettlementBrokerFallbackResolver(prisma);
+    // P3-2.5：內部角色逐格 fallback 會逐個 guard 查 2–3 條——先一次過批量預填（雞頭 session 唔行 fallback）。
+    if (!broker) {
+      await resolveSettlementBrokerFallback.prefetch(
+        guardIds.map((gId) => {
+          const g = guardById.get(gId)!;
+          return { guardId: gId, siteId: parsed.site_id, employmentType: g.employmentType, defaultBrokerId: g.defaultBrokerId };
+        }),
+      );
+    }
     const plans: PlannedOp[] = [];
     for (const c of cells) {
       const st = shiftTypeById.get(c.shift_type_id)!;

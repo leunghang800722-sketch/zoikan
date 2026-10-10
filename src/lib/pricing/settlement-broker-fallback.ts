@@ -24,7 +24,7 @@
 // fallback 鏈先會用到——雞頭 session 寫入時 settlement_broker_id 一律
 // 由 server 強制等於自己 broker_id（batch/route.ts／單筆 POST 嘅
 // isBrokerRole 分支），完全唔會行到呢個 helper，唔會被打破。
-import type { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
 // 容許傳 `tx`（transaction client）或者外層 `prisma`——同呢個 repo 其他
@@ -93,14 +93,36 @@ export async function resolveSettlementBrokerFallback(
 }
 
 /**
+ * P3-2.5：批量版第 3／4 級——每個 guard 最近一條非作廢、有結算單位嘅記錄（`DISTINCT ON`，一條 SQL）。
+ * `siteId` 有值＝只睇該盤（第 3 級），冇＝任何盤（第 4 級）。排序同單個版一樣（work_date 新→舊）。
+ */
+async function recentSettlementBrokerByGuard(client: PrismaLike, guardIds: string[], siteId: string | null): Promise<Map<string, string>> {
+  if (guardIds.length === 0) return new Map();
+  const rows = await client.$queryRaw<Array<{ guard_id: string; settlement_broker_id: string }>>(
+    Prisma.sql`SELECT DISTINCT ON (guard_id) guard_id, settlement_broker_id
+      FROM shift_records
+      WHERE guard_id = ANY(${guardIds}::text[])
+        ${siteId ? Prisma.sql`AND site_id = ${siteId}` : Prisma.empty}
+        AND status <> 'cancelled'::"ShiftRecordStatus"
+        AND settlement_broker_id IS NOT NULL
+      ORDER BY guard_id, work_date DESC`,
+  );
+  return new Map(rows.map((r) => [r.guard_id, r.settlement_broker_id]));
+}
+
+/**
  * 一次過幫一批 guardId 預先算好 fallback（避免逐格 await 一個一個查，
  * batch/route.ts 一次過起晒 plans 之後會有多格同一個 guard）。Memoize
  * 用 `${guardId}|${siteId}` 做 key——同一保安員唔同盤嘅 fallback（第 3
  * 級）唔同，唔可以共用。
+ *
+ * P3-2.5：`prefetch(inputs)` 一次過（兩條 `DISTINCT ON` SQL＋最多一條長工桶查詢）預先填好
+ * 一批 guard 嘅結果，取代每個 guard 2–3 條查詢；結果同單個 `resolveSettlementBrokerFallback()`
+ * 逐級判斷一致（tests/p3-2-batch-write.test.ts 對比）。未 prefetch 嘅 key 照舊逐個查。
  */
 export function createSettlementBrokerFallbackResolver(client: PrismaLike = prisma) {
   const cache = new Map<string, Promise<string | null>>();
-  return async function resolve(input: SettlementBrokerFallbackInput): Promise<string | null> {
+  async function resolve(input: SettlementBrokerFallbackInput): Promise<string | null> {
     const key = `${input.guardId}|${input.siteId}`;
     let pending = cache.get(key);
     if (!pending) {
@@ -108,5 +130,33 @@ export function createSettlementBrokerFallbackResolver(client: PrismaLike = pris
       cache.set(key, pending);
     }
     return pending;
+  }
+  resolve.prefetch = async function prefetch(inputs: SettlementBrokerFallbackInput[]): Promise<void> {
+    const todo = new Map<string, SettlementBrokerFallbackInput>();
+    for (const i of inputs) {
+      const key = `${i.guardId}|${i.siteId}`;
+      if (!cache.has(key) && !todo.has(key)) todo.set(key, i);
+    }
+    if (todo.size === 0) return;
+    // 同一批一般同一個盤；唔同盤就按盤分組各查一次。
+    const bySite = new Map<string, SettlementBrokerFallbackInput[]>();
+    for (const i of todo.values()) (bySite.get(i.siteId) ?? bySite.set(i.siteId, []).get(i.siteId)!).push(i);
+    const allGuardIds = [...new Set([...todo.values()].map((i) => i.guardId))];
+    const anySite = await recentSettlementBrokerByGuard(client, allGuardIds, null);
+    let longtermBrokerId: string | null | undefined;
+    for (const [siteId, list] of bySite) {
+      const sameSite = await recentSettlementBrokerByGuard(client, [...new Set(list.map((i) => i.guardId))], siteId);
+      for (const i of list) {
+        let result: string | null = sameSite.get(i.guardId) ?? anySite.get(i.guardId) ?? i.defaultBrokerId ?? null;
+        if (!result && i.employmentType.startsWith("longterm_")) {
+          if (longtermBrokerId === undefined) {
+            longtermBrokerId = (await client.broker.findFirst({ where: { kind: "internal_longterm" }, orderBy: { code: "asc" }, select: { id: true } }))?.id ?? null;
+          }
+          result = longtermBrokerId;
+        }
+        cache.set(`${i.guardId}|${i.siteId}`, Promise.resolve(result));
+      }
+    }
   };
+  return resolve;
 }
