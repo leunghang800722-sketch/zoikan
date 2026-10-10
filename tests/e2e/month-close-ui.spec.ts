@@ -111,6 +111,8 @@ async function mockApis(page: Page, ids: string[] = ["q1", "q2", "q3"]) {
   } as Record<string, ReturnType<typeof question>>;
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   await page.route("**/api/month-close/one-click?*", (r) => json(r, { runs: [RUN] }));
+  // P3-1.6 之後列表係摘要版，最新一個 run 再拉單一 route 攞全份 steps／report——兩個都要 mock（P3-3.8 修舊失敗）。
+  await page.route("**/api/month-close/one-click/run1", (r) => json(r, { run: RUN }));
   await page.route("**/api/reports/month-health?*", (r) => json(r, HEALTH));
   await page.route("**/api/triage/sessions/sess1", (r) => json(r, { session: { id: "sess1", status: "open", counts: { open: 3, answered: 0, skipped: 0, total: 3 } }, questions: ids.map((i) => qs[i]!).map((q) => ({ ...q, status: state.status[q.id] })) }));
   await page.route("**/api/triage/questions/*/preview", (r) => {

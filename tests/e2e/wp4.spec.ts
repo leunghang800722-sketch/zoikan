@@ -68,7 +68,7 @@ test("(b) 老闆：開新月份 → 月結總表生成 → 睇對數結果（冇
   expect([200, 201, 409]).toContain(openRes.status()); // 409 = 已經開過（重跑）
 
   await page.goto(`/reports/monthly-close?month=${LOCK_TEST_MONTH}`);
-  await page.getByRole("button", { name: "生成月結" }).click();
+  await page.getByTestId("generate-month-close").click();
 
   await expect(page.getByTestId("recon-rules-title")).toHaveText("五條自動對數規則", { timeout: 20_000 });
   await expect(page.getByText(/現金糧批次總額/).first()).toBeVisible();

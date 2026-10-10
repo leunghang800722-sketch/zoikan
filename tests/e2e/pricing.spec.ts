@@ -253,7 +253,10 @@ test("(c) 老闆撳「重新計價」（2026-08）→ dry-run 預覽 dialog（�
       await expect(async () => {
         expect(dialogMessages.some((m) => m.includes("預覽"))).toBe(true);
       }).toPass({ timeout: 15_000 });
-      expect(dialogMessages.some((m) => /會改變/.test(m))).toBe(true); // 證明真係經咗 dry-run 摘要（帶 changed 數），唔係舊版單一 confirm
+      // P3-3.8：dry-run 摘要有兩種現行文案——有更次會變（confirm：「N 更嘅收客價／出街價會改變」）、
+      // 冇更次會變（alert：「…嘅收客價／出街價會變（同現有 snapshot 一致）…冇嘢寫入」）。兩種都證明經咗 dry-run
+      // 預覽（唔係舊版單一 confirm），視乎當時 DB 有冇定價過嘅更次。
+      expect(dialogMessages.some((m) => /重新計價預覽/.test(m) && /會改變|會變/.test(m))).toBe(true);
       expect(dialogMessages.some((m) => m.includes("完成"))).toBe(false); // dismiss 咗 confirm，唔應該再有「完成」dialog
       await expect(page.getByText(/重新計價失敗/)).toHaveCount(0);
 

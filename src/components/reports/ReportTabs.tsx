@@ -4,14 +4,7 @@
 import { usePathname, useSearchParams } from "next/navigation";
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { isValidMonth } from "@/lib/ui/month-store";
-
-export const REPORT_TABS = [
-  { href: "/reports/monthly-close", label: "月結總表", module: "月結總表" },
-  { href: "/reports/gross-margin", label: "毛利", module: "毛利即時表" },
-  { href: "/reports/payroll", label: "糧明細", module: "糧明細" },
-  { href: "/reports/longterm-payroll", label: "長工糧", module: "長工糧" },
-  { href: "/reports/ops-digest", label: "修正摘要", module: "月結總表" },
-] as const;
+import { REPORT_TABS } from "@/lib/nav/report-tabs";
 
 export function ReportTabs({ visible }: { visible: string[] }) {
   const pathname = usePathname();

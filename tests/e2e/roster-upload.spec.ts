@@ -192,7 +192,9 @@ test("老闆：上載去錯月份 → 作廢 → 正確月份再上載同名檔�
     await row.getByRole("button", { name: "確認作廢" }).click();
     expect((await voidResponse).status()).toBe(200);
 
-    // 作廢之後：9 月呢個盤變返「未上載」（唔會再顯示「已上載」）。
+    // 作廢之後：9 月呢個盤變返「未上載」（唔會再顯示「已上載」）。P3-3.5：未上載嘅盤預設摺埋，撳「顯示全部」先見到呢行。
+    await expect(page.getByTestId("roster-upload-hidden-summary")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("roster-upload-show-all").click();
     await expect(row.getByText("未上載")).toBeVisible({ timeout: 15_000 });
 
     // 「顯示已作廢」開關開返嚟——見到灰色行（版本、原因）。

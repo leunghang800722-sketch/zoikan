@@ -255,13 +255,16 @@ test("驗收（Opus 5.5）：會計手機 375px 對數頁冇橫向捲、推算�
     expect(overflow).toBeLessThanOrEqual(0);
 
     await page.goto("/");
-    await expect(page.getByText("更表對數待處理").locator("visible=true").first()).toBeVisible({ timeout: 15_000 });
+    // P3-3.3：「更表對數待處理」卡併入首頁待辦收件箱（「更表未對數」，單位：盤）
+    await expect(page.getByTestId("inbox-unreconciled")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("inbox-unreconciled")).toContainText("盤", { timeout: 15_000 });
 
     await page.context().clearCookies();
     await loginAs(page, "雞頭A");
     await page.goto("/");
     await page.waitForLoadState("networkidle");
-    await expect(page.getByText("更表對數待處理")).toHaveCount(0);
+    await expect(page.getByTestId("home-inbox")).toHaveCount(0);
+    await expect(page.getByText("更表未對數")).toHaveCount(0);
   } finally {
     await cleanupUploads(siteId);
   }

@@ -180,7 +180,7 @@ test("(e) 月結工作台：2026-07 已有 month_closes 行——入頁自動 Ge
   await expect(page.getByTestId("recon-rules-title")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("heading", { name: "逐盤月結" })).toBeVisible();
   await expect(page.getByText("2026-07 狀態")).toBeVisible();
-  await expect(page.getByText("已鎖定")).toBeVisible();
+  await expect(page.getByText("已鎖定", { exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: `${SCREENSHOT_DIR}/13-monthly-close-1440.png`, fullPage: true });

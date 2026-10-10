@@ -2,7 +2,8 @@
 // 顯示與否按 grants（同導覽一致：`getViewGrants`）；各頁內容、路徑、API 不變。
 import { getCurrentSession } from "@/lib/auth/current-session";
 import { getViewGrants } from "@/lib/rbac/nav";
-import { REPORT_TABS, ReportTabs } from "@/components/reports/ReportTabs";
+import { ReportTabs } from "@/components/reports/ReportTabs";
+import { REPORT_TABS } from "@/lib/nav/report-tabs";
 
 export default async function ReportsLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
