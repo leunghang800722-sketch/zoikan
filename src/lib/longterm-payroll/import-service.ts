@@ -11,6 +11,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
+import { assertMonthRangeNotLockedTx } from "@/lib/month-lock";
 import { parseMaxwellWorkbook, parseMaxwellCsv, matchMaxwellRows, type MaxwellStaffRow, type GuardCandidate, type ParsedMaxwellWorkbook, type MaxwellCsvFile } from "./maxwell-import";
 
 export interface MaxwellImportSummary {
@@ -136,8 +137,21 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
         });
       if (unchanged) return;
 
+      // P6.1c（H3）：作廢舊合約／新建合約之前，舊段同新段嘅生效區間內任何一個月
+      // 已鎖定就 403（同人手 POST／PATCH 合約一樣嘅 assertMonthRangeNotLocked）。
+      // 唔改就唔查（上面 unchanged 已 return）。被拒嗰行之前已 commit 嘅行保留
+      // （每行獨立 tx，重跑導入係冪等）。
       for (const e of existingAuto) {
-        await tx.guardLongtermContract.update({ where: { id: e.id }, data: { voidedAt: new Date(), voidedBy: actorUserId } });
+        await assertMonthRangeNotLockedTx(tx, { effectiveFrom: e.effectiveFrom, effectiveTo: e.effectiveTo, actorUserId, tableName: "guard_longterm_contracts", rowId: e.id, ip });
+      }
+      for (const seg of segments) {
+        await assertMonthRangeNotLockedTx(tx, { effectiveFrom: seg.effectiveFrom, effectiveTo: seg.effectiveTo, actorUserId, tableName: "guard_longterm_contracts", rowId: `new:${guard.id}`, ip });
+      }
+
+      for (const e of existingAuto) {
+        const voidedAfter = await tx.guardLongtermContract.update({ where: { id: e.id }, data: { voidedAt: new Date(), voidedBy: actorUserId } });
+        // P6.1c（H3）：作廢要寫 audit（同人手 void 同 shape：action=void、before／after）。
+        await writeAuditTx(tx, { actorUserId, tableName: "guard_longterm_contracts", rowId: e.id, action: "void", before: e, after: voidedAfter, ip });
       }
       for (const seg of segments) {
         const created = await tx.guardLongtermContract.create({
