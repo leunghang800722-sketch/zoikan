@@ -927,7 +927,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 ### 14.1 落實紀錄
 
-**定義（沿用現有認定）**：「頂位更」＝長工喺**唔係自己固定崗位盤**嘅更。固定崗位盤＝`guard_longterm_posts`（當日生效、未作廢；母盤登記冚子盤，同 `resolveLongtermSettlement` 一致）。排除：簽證形式長工（永遠當雞頭散更）；當日冇任何崗位盤嘅長工（認定唔到自己崗位，只計數 `no_post_shifts`）。職級＝更表行 Rank 欄 `classifyRank`（含 IC／SIC＝`IC`，其他＝`兵`；搵唔到更表行就跟更別 `billing_group=monthly_ic`／code 含 IC）。
+**定義（同 aggregate 口徑一致，見 §14.2）**：「頂位更」＝非簽證長工、`recordType=shift`、`settlement_broker_id` 有值且 ≠ B07（`findInternalLongtermBrokerId()`）；B07 或 null＝自己崗位。共用 `shift-classify.ts` `classifyLongtermShift`（aggregate 同 cover-shifts 都 call）。職級＝更表行 Rank 欄 `classifyRank`（含 IC／SIC＝`IC`，其他＝`兵`；搵唔到更表行就跟更別 `billing_group=monthly_ic`／code 含 IC）。
 
 **P10.1 價目表**
 - Migration `20261014000000_p10_cover_shift_rates`（只新增、冪等）：`cover_shift_rates(id, site_id, grade, amount, effective_from, effective_to?, source manual|inferred, evidence?, created_*, voided_*)`，唯一 `(site_id, grade, effective_from)`。生效價＝`effective_from<=日期` 且 `effective_to` 空或 `>=日期`、未作廢、取 `effective_from` 最大者；盤搵唔到就試母盤。
@@ -953,8 +953,15 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 **正式站推斷步驟（俾規劃者用老闆 Chrome 唯讀執行）**
 1. 老闆登入正式站，開 `/settings/cover-rates/infer`（頁面同 API 都係純唯讀，唔會寫任何嘢；**唔好撳「採用」**）。
 2. 月份欄填 `2026-07,2026-08,2026-09`，撳「推斷（唯讀）」。或者喺同一個登入 session 嘅 Chrome console 用 GET：`fetch("/api/longterm/cover-rates/infer?months=2026-07,2026-08,2026-09").then(r=>r.json())`（回應冇姓名；只讀取，記低 `suggestions`／`unresolved`／`backtest.summary`／`stats`）。
-3. 先睇頂部統計：頂位更數、頂位人手輸入條數、冇固定崗位盤嘅長工更數（認定唔到頂位，未計入）、**`untagged_other_allowance_guard_months`**（有頂位更但只有冇寫「頂位」嘅其他津貼嘅人月——愈大代表歷史備註寫法唔一致、漏判愈多，建議價唔可靠）。
+3. 先睇頂部統計：頂位更數、頂位人手輸入條數、**`untagged_other_allowance_guard_months`**（有頂位更但只有冇寫「頂位」嘅其他津貼嘅人月——愈大代表歷史備註寫法唔一致、漏判愈多，建議價唔可靠）。
 4. 建議表：`consistent`＝可以採用；`mixed`（多個價）要老闆揀邊個；`single_sample` 只得 1 更證據，要老闆確認。逐行抄低 盤／職級／建議金額／狀態／次數。
 5. 「推斷唔到」三個清單要老闆逐項補：(a) 有頂位更冇輸入、(b) 有輸入但配唔到頂位更或混賣假、(c) 同月頂多個盤但輸入得一個總數。
 6. 回測：總吻合率、有差額人月數、最大差額、有更未有價人月。吻合率低或最大差額大＝建議價或頂位更認定（崗位盤登記）有問題，先查 `guard_longterm_posts` 同備註寫法，唔好採用。
 7. 老闆決定採用先由**老闆親手**撳「採用已剔選嘅行」（生效日揀未鎖月份，預設本月 1 號；7／8 月已鎖唔可以做生效日），然後去 `/settings/cover-rates` 檢查／微調。採用後每晚 21:30 job 就按價目表出頂位草稿（會計確認先計糧）；未設價嘅盤／職級會通知「N 個盤／職級未有頂位價，去設定 ›」。
+
+### 14.2 驗收後修正（Opus 5.5 唔通過 → 3 必修＋一併項，Sonnet 5.5，同 branch）
+- **M1 頂位更認定同 aggregate 分叉**：原本自己重查 `guard_longterm_posts`（只摺母盤，漏構造盤 `activityProxySiteId` 摺疊同 Postorder 權威月只認 manual），8 月實測多認 13 更（全部係 CP5 構造盤嘅自己崗位更）。改為抽 `classifyLongtermShift`（B07→own、有值非 B07→cover、null→保守當自己崗位）俾 aggregate 同 `cover-shifts.ts` 共用；頂位更＝非簽證、`recordType=shift`、settlement 有值且 ≠ B07。崗位判斷已喺對數時寫入 settlement，唔再自己查崗位；移除 `no_post_shifts`。test：fixture 頂位更 settlement 改外判雞頭；構造盤／proxy 盤自己更（B07）同 null settlement 都唔算頂位。
+- **M2 note 日期當更數**：note 更數只認「N更」／「N次」（唔再認「日」，「8月15日」唔當 15 更）；note 更數同實際頂位更數唔一致 → 列 `unresolved.ambiguous`，唔照用。test：1 更 200 元＋note 含日期 → 每更 200；唔一致 → ambiguous。
+- **M3 缺價通知 dedupe**：hash 只用缺價組合（盤＋職級）集合，唔含更數；之後更數增加唔再推，組合增加先再推（`docs/ops.md` 一致）。test 覆蓋。
+- **一併**：PATCH 改額文件寫明「改額＝更正；改價請新增一行」；頂位草稿確認後更表再加更只記 `skipped_confirmed`（文件註明）；`schema.prisma` 過時註解（`SELL_LEAVE_RATE_TABLE`）改正。
+- **待老闆確認（雙重支付）**：aggregate 口徑嘅頂位更＝長工幫雞頭頂散更，嗰啲更已經由雞頭現金結算（`aggregate.ts` 「幫雞頭頂散更 N 更：已由雞頭現金結算」）。再出頂位津貼會唔會同雞頭結算雙重支付，由回測吻合率（會計過往有冇另外畀頂位津貼）同老闆決定；推斷頁頂部已加提示；未決定前**唔好採用價目表**。

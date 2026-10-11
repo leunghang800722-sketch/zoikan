@@ -77,10 +77,20 @@ describe("inferCoverRates 純函數", () => {
     expect(r.unresolved.no_shift.map((x) => x.reason).sort()).toEqual(["no_cover_shift", "sell_leave_mixed"]);
   });
 
+  it("note 含日期（8月15日）唔當更數：1 更 200 → 每更 200、consistent；note 更數同實際唔一致→ambiguous 唔照用", () => {
+    const one = inferCoverRates({ months: ["2026-08"], shifts: sh("g1", "2026-08", "sB", "兵", 1), inputs: [inp("1", "g1", "2026-08", 200, "頂位 盤B 8月15日")], siteNames });
+    expect(one.suggestions[0]).toMatchObject({ status: "single_sample", suggested_amount: 200, total_shifts: 1 });
+    const two = inferCoverRates({ months: ["2026-08", "2026-09"], shifts: [...sh("g1", "2026-08", "sB", "兵", 1), ...sh("g2", "2026-09", "sB", "兵", 2)], inputs: [inp("1", "g1", "2026-08", 200, "頂位 盤B 8月15日"), inp("2", "g2", "2026-09", 400, "頂位 盤B")], siteNames });
+    expect(two.suggestions[0]).toMatchObject({ status: "consistent", suggested_amount: 200, total_shifts: 3 });
+    const bad = inferCoverRates({ months: ["2026-08"], shifts: sh("g1", "2026-08", "sB", "兵", 2), inputs: [inp("1", "g1", "2026-08", 600, "頂位 盤B 3更")], siteNames });
+    expect(bad.suggestions).toHaveLength(0);
+    expect(bad.unresolved.ambiguous).toHaveLength(1);
+  });
+
   it("note 寫明盤名＋更數：多盤都分得到", () => {
     const r = inferCoverRates({
       months: ["2026-08"],
-      shifts: [...sh("g1", "2026-08", "sB", "兵", 2), ...sh("g1", "2026-08", "sC", "兵", 1)],
+      shifts: [...sh("g1", "2026-08", "sB", "兵", 3), ...sh("g1", "2026-08", "sC", "兵", 1)],
       inputs: [inp("1", "g1", "2026-08", 300, "頂位 盤B 3更"), inp("2", "g1", "2026-08", 150, "頂位 盤C")],
       siteNames,
     });
@@ -110,23 +120,23 @@ describe("inferCoverRates 純函數", () => {
 });
 
 describe("loadCoverShifts／runCoverInference（DB，合成 fixture）", () => {
-  it("固定崗位唔算頂位；母盤崗位冚子盤；簽證／冇崗位長工排除；IC 跟更別", async () => {
+  it("同 aggregate 口徑一致：B07／null settlement＝自己崗位（含構造盤 proxy 盤更）；外判雞頭 settlement＝頂位；簽證長工排除；IC 跟更別", async () => {
     const b = await p10Base();
     const g = await mkLongterm(b, "測試甲");
-    await shiftAt(b, g.id, "A", D(8, 1)); // 自己崗位
-    await shiftAt(b, g.id, "AChild", D(8, 2)); // 母盤崗位冚子盤
+    await shiftAt(b, g.id, "A", D(8, 1), { own: true }); // 自己崗位
+    await shiftAt(b, g.id, "AChild", D(8, 2), { own: true }); // 子盤崗位
+    // 構造盤 proxy：崗位登記喺構造盤，實際喺 proxy 盤（E）記更——對數時 settlement＝B07，唔算頂位
+    await shiftAt(b, g.id, "E", D(8, 7), { own: true });
+    await prisma.shiftRecord.create({ data: { workDate: D(8, 8), siteId: b.sites.E.id, shiftTypeId: b.st.E, guardId: g.id, settlementBrokerId: null, recordType: "shift", createdBy: "test" } }); // null＝保守當自己崗位
     await shiftAt(b, g.id, "B", D(8, 3)); // 頂位 兵
     await shiftAt(b, g.id, "C", D(8, 4), { ic: true }); // 頂位 IC
     const visa = await mkLongterm(b, "測試簽證", { visa: true });
     await shiftAt(b, visa.id, "B", D(8, 3));
-    const nopost = await mkLongterm(b, "測試冇崗位", { post: null });
-    await shiftAt(b, nopost.id, "B", D(8, 3));
     const load = await loadCoverShifts([AUG_MONTH]);
     expect(load.shifts.map((s) => [s.date, s.siteId === b.sites.B.id ? "B" : "C", s.grade]).sort()).toEqual([
       ["2026-08-03", "B", "兵"],
       ["2026-08-04", "C", "IC"],
     ]);
-    expect(load.noPostShifts).toBe(1);
   });
 
   async function scenario() {
@@ -189,7 +199,7 @@ describe("loadCoverShifts／runCoverInference（DB，合成 fixture）", () => {
     expect(r.unresolved.no_shift.map((x) => [x.reason, x.guard_id]).sort()).toEqual([["no_cover_shift", g.g9.id], ["sell_leave_mixed", g.g8.id]].sort());
     expect(r.unresolved.ambiguous).toHaveLength(1);
     expect(r.unresolved.ambiguous[0]).toMatchObject({ guard_id: g.g7.id, total_amount: 600 });
-    expect(r.stats).toMatchObject({ cover_shifts: 13, tagged_inputs: 8, untagged_other_allowance_guard_months: 1, no_post_shifts: 0 });
+    expect(r.stats).toMatchObject({ cover_shifts: 13, tagged_inputs: 8, untagged_other_allowance_guard_months: 1 });
     // 回測：g1 400✓ g2 200✓ g3 300✓ g4 500✗(IC 250×2=500 ✓) g5 九月 IC 一更 250 vs 300 → +50
     const bt = r.backtest.summary;
     const row = (id: string) => r.backtest.rows.find((x) => x.guard_id === id)!;

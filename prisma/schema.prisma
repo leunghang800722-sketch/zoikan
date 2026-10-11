@@ -1722,7 +1722,7 @@ model GuardLongtermContract {
   postSite   Site?   @relation(fields: [postSiteId], references: [id])
 
   restDayPaid Boolean  @default(true) @map("rest_day_paid") // Maxwell 名單 Rest Day Yes/No
-  restDayRate Decimal? @map("rest_day_rate") @db.Decimal(10, 2) // 賣假／頂位價表單價（每日 600–750，逐盤逐職級寫死值，見 compute.ts SELL_LEAVE_RATE_TABLE）
+  restDayRate Decimal? @map("rest_day_rate") @db.Decimal(10, 2) // 賣假／頂位價表單價（每日 600–750）；頂位價目表而家喺 cover_shift_rates（P10）
   shiftHours  Decimal? @map("shift_hours") @db.Decimal(5, 2) // 每更時數，計 OT 時薪（working_hour，一般 12）
 
   probationMonths Int?    @map("probation_months") // 1／3／null＝冇試用期，跟 Maxwell Probation Period (Months)

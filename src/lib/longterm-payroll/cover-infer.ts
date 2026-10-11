@@ -73,7 +73,7 @@ export interface InferResult {
     rows: BacktestRow[];
     summary: { guard_months: number; matched: number; match_rate: number | null; diff_nonzero: number; max_abs_diff: number; unpriced_guard_months: number; by_month: { month: string; guard_months: number; matched: number; diff_nonzero: number; max_abs_diff: number }[] };
   };
-  stats: { cover_shifts: number; tagged_inputs: number; no_post_shifts: number; untagged_other_allowance_guard_months: number };
+  stats: { cover_shifts: number; tagged_inputs: number; untagged_other_allowance_guard_months: number };
 }
 
 export function isCoverNote(note: string | null | undefined): boolean {
@@ -94,7 +94,7 @@ const keyOf = (siteId: string, grade: string) => `${siteId}|${grade}`;
 
 function noteCount(note: string | null): number | null {
   if (!note) return null;
-  const m = /(\d+)\s*(?:更|次|日)/.exec(note);
+  const m = /(\d+)\s*(?:更|次)/.exec(note);
   if (!m) return null;
   const v = Number(m[1]);
   return v > 0 ? v : null;
@@ -105,7 +105,6 @@ export interface InferInput {
   shifts: CoverShift[];
   inputs: TaggedInput[];
   siteNames: Map<string, string>;
-  noPostShifts?: number;
   untaggedOtherAllowanceGuardMonths?: number;
 }
 
@@ -167,7 +166,14 @@ export function inferCoverRates(inp: InferInput): InferResult {
         const atSite = [...counts.values()].filter((c) => c.siteId === hit[0]);
         if (atSite.length === 1) {
           const c = atSite[0]!;
-          const nn = noteCount(i.note) ?? c.n;
+          const nc = noteCount(i.note);
+          if (nc !== null && nc !== c.n) {
+            // note 寫嘅更數同實際頂位更數唔一致：唔照用，列入分唔到
+            ambiguous.push({ guard_id: guardId, month, total_amount: round2(i.amount), keys: [{ site_id: c.siteId, site_name: siteName(c.siteId), grade: c.grade, shifts: c.n }] });
+            counts.delete(keyOf(c.siteId, c.grade));
+            continue;
+          }
+          const nn = c.n;
           addObs(c.siteId, c.grade, { amount: round2(i.amount / nn), shifts: nn, guardId, month });
           counts.delete(keyOf(c.siteId, c.grade));
           continue;
@@ -279,6 +285,6 @@ export function inferCoverRates(inp: InferInput): InferResult {
         by_month: byMonth,
       },
     },
-    stats: { cover_shifts: inp.shifts.length, tagged_inputs: inp.inputs.length, no_post_shifts: inp.noPostShifts ?? 0, untagged_other_allowance_guard_months: inp.untaggedOtherAllowanceGuardMonths ?? 0 },
+    stats: { cover_shifts: inp.shifts.length, tagged_inputs: inp.inputs.length, untagged_other_allowance_guard_months: inp.untaggedOtherAllowanceGuardMonths ?? 0 },
   };
 }
