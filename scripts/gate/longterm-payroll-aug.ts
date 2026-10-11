@@ -369,6 +369,16 @@ async function main() {
     }
 
     console.log(`\n[${GATE_TAG}] 逐人比對：${compared}/${fixture.length} 人有對到 line；${diffs.length} 個欄位差異（容差 ${TOL}）`);
+    // P11.2：`--out <json>`——逐人明細存檔（工號＋欄位＋金額，冇人名／戶口），供規劃者睇「邊啲人啱、邊啲唔啱」。
+    const outIdx = process.argv.indexOf("--out");
+    if (outIdx >= 0 && process.argv[outIdx + 1]) {
+      const outPath = path.resolve(process.argv[outIdx + 1]);
+      const diffStaff = new Set(diffs.filter((d) => d.field !== "workDays").map((d) => d.staffNo));
+      const people = fixture.map((r) => ({ staffNo: r.staffNo, hasLine: lineByStaffNo.has(r.staffNo), moneyOk: lineByStaffNo.has(r.staffNo) && !diffStaff.has(r.staffNo) }));
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, JSON.stringify({ tol: TOL, compared, total: fixture.length, diffs, people }, null, 2));
+      console.log(`[${GATE_TAG}] 逐人明細已寫入 ${process.argv[outIdx + 1]}`);
+    }
     // 總額對 8 月定稿（oracle 全部人，含簽證形式長工）——Opus 5.5 驗收加。
     const sum = (f: (r: LtpayAugFixtureRow) => number) => round2(fixture.reduce((a, r) => a + f(r), 0));
     const oracleTotals = { gross: sum((r) => r.oracle.gross), autopay: sum((r) => r.oracle.autopay), mpfEe: sum((r) => r.oracle.mpfEe), mpfEr: sum((r) => r.oracle.mpfEr) };
