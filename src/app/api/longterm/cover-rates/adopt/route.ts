@@ -38,7 +38,7 @@ export async function POST(req: Request) {
           amount: it.amount,
           effectiveFrom: body.effective_from,
           source: "inferred",
-          evidence: { months: inferred.months, status: s.status, amounts: s.amounts, total_shifts: s.total_shifts, guard_count: s.guard_count },
+          evidence: { months: inferred.months, status: s.status, amounts: s.amounts.map((a) => ({ ...a })), total_shifts: s.total_shifts, guard_count: s.guard_count },
           actorUserId: session.userId,
           ip: getClientIp(req),
         });
