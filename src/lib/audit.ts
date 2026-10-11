@@ -134,7 +134,13 @@ function toAuditSafeValue(tableName: string, action: AuditAction, value: unknown
     }
     return { ...dto, ...meta };
   }
-  return "id" in row ? { id: row.id } : undefined;
+  // P8.1：未登記 DTO 嘅表仍保留 meta 白名單 key（by_job 等非 PII）
+  if (!("id" in row)) return undefined;
+  const meta: Record<string, unknown> = {};
+  for (const k of AUDIT_META_PASSTHROUGH_KEYS) {
+    if (k in row) meta[k] = row[k];
+  }
+  return { id: row.id, ...meta };
 }
 
 function toAuditCreateData(input: WriteAuditInput): Prisma.AuditLogUncheckedCreateInput {
