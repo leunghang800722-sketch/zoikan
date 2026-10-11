@@ -29,6 +29,12 @@ describe("back-nav", () => {
     expect(readStack().length).toBeLessThanOrEqual(50);
   });
 
+  it("stack 淨存 pathname（呼叫方唔傳 query）；trackPath 輸入帶 ? 都會剝走", () => {
+    trackPath("/guards?q=sensitive");
+    trackPath("/guards/new-from-docs?name=x&staff_no=y");
+    expect(readStack().every((x) => !x.includes("?"))).toBe(true);
+  });
+
   it("goBack：有上一頁 → router.back；冇 → push 父路徑（或指定 fallback）", () => {
     const router = { back: vi.fn(), push: vi.fn() };
     trackPath("/month-close/files");

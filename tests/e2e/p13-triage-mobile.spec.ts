@@ -135,7 +135,48 @@ test.describe("P13 要你睇手機流程", () => {
     // 由頭開始：連跳過咗嘅一齊攞，由第 1 題
     await page.getByTestId("triage-restart").click();
     await expect(dlg).toContainText("TEST PERSON 1待核對");
-    await expect(page.getByTestId("triage-progress")).toContainText("第 1 題／共 122 題");
+    await expect(page.getByTestId("triage-progress")).toContainText(/第 1 題／共約\s?\d+ 題/);
+  });
+
+  test("重新整理後覆蓋層：UI 關得到／系統返回關得到，同一頁、唔多退一格", async ({ page }) => {
+    await cleanup();
+    await seedGuardImport();
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    await page.goto("/triage");
+    const openIt = async () => page.getByTestId("triage-session-card").filter({ hasText: "重要 122 題" }).getByRole("button", { name: "繼續答" }).click();
+    // (1) 開 → reload → 再開 → UI「返回列表」連撳兩次都關到
+    await openIt();
+    await expect(page.getByTestId("triage-dialog")).toBeVisible();
+    await page.reload();
+    await openIt();
+    await expect(page.getByTestId("triage-dialog")).toBeVisible();
+    await page.getByTestId("triage-later").click();
+    await expect(page.getByTestId("triage-dialog")).toHaveCount(0);
+    await expect(page).toHaveURL(/\/triage$/);
+    // (2) 再開 → 系統返回關到
+    await openIt();
+    await expect(page.getByTestId("triage-dialog")).toBeVisible();
+    await page.goBack();
+    await expect(page.getByTestId("triage-dialog")).toHaveCount(0);
+    await expect(page).toHaveURL(/\/triage$/);
+    // (3) 手機抽屜：開 → reload → 再開 → 撳背景關到；再開 → Esc 關到
+    await page.getByTestId("mobile-nav-hamburger").click();
+    await expect(page.getByTestId("mobile-nav-drawer")).toBeVisible();
+    await page.reload();
+    await page.getByTestId("mobile-nav-hamburger").click();
+    await expect(page.getByTestId("mobile-nav-drawer")).toBeVisible();
+    await page.getByTestId("mobile-nav-overlay").click({ position: { x: 360, y: 400 } });
+    await expect(page.getByTestId("mobile-nav-drawer")).toHaveCount(0);
+    await page.getByTestId("mobile-nav-hamburger").click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("mobile-nav-drawer")).toHaveCount(0);
+    await expect(page).toHaveURL(/\/triage$/);
+    // (4) 系統返回關抽屜（reload 後）
+    await page.getByTestId("mobile-nav-hamburger").click();
+    await page.goBack();
+    await expect(page.getByTestId("mobile-nav-drawer")).toHaveCount(0);
+    await expect(page).toHaveURL(/\/triage$/);
   });
 
   test("history：對話框／Drawer／手機抽屜入 history，返回只關覆蓋層", async ({ page }) => {

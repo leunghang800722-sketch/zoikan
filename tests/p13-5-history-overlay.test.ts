@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // P13.5：useHistoryOverlay——開覆蓋層 push 一格 history；返回（popstate）關覆蓋層；UI 關閉 history.back；嵌套後開先關。
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useHistoryOverlay } from "@/lib/ui/use-history-overlay";
@@ -62,16 +62,29 @@ describe("useHistoryOverlay", () => {
   });
 
   it("連撳兩次 close（dblclick）只 back 一格", async () => {
+    const back = vi.spyOn(window.history, "back");
     await act(async () => api!.openA());
-    const before = location.pathname;
-    window.history.pushState({}, "", "/before-overlay-check"); // 唔係 overlay entry：先確認 back 次數用
-    window.history.back();
-    await tick();
-    expect(before).toBe("/p");
     await act(async () => {
       api!.closeA();
       api!.closeA();
     });
+    await tick();
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(api!.a).toBe(false);
+    back.mockRestore();
+  });
+
+  it("重新整理後舊 entry（同 key）：再開 → UI 關得到；再開 → 系統返回關得到", async () => {
+    // 模擬重新整理前留低嘅舊 entry（同 key，depth 1，nonce 已冇人認）
+    window.history.pushState({ zkOverlay: "A", zkNonce: "stale", zkDepth: 1 }, "", "/p");
+    await act(async () => api!.openA());
+    await act(async () => api!.closeA());
+    await tick();
+    await tick();
+    expect(api!.a).toBe(false);
+    await act(async () => api!.openA());
+    await act(async () => window.history.back());
+    await tick();
     await tick();
     expect(api!.a).toBe(false);
     expect(location.pathname).toBe("/p");
