@@ -55,11 +55,11 @@ function datesOfRange(from: string, to: string | null): string[] {
 }
 
 /** M1：同 guard／月、未作廢、已確認、kind=leave 且日期段重疊嘅輸入（確認草稿／新增病假段前檢查，防重複扣款）。 */
-export async function findConfirmedLeaveOverlap(guardId: string, month: Date, from: string | null, to: string | null, excludeId?: string): Promise<string | null> {
+export async function findConfirmedLeaveOverlap(guardId: string, month: Date, from: string | null, to: string | null, excludeId?: string, db: Pick<Prisma.TransactionClient, "longtermPayrollInput"> = prisma): Promise<string | null> {
   if (!from) return null;
   const a = from;
   const b = to ?? from;
-  const rows = await prisma.longtermPayrollInput.findMany({ where: { guardId, month, kind: "leave", status: "confirmed", voidedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) }, select: { id: true, dateFrom: true, dateTo: true } });
+  const rows = await db.longtermPayrollInput.findMany({ where: { guardId, month, kind: "leave", status: "confirmed", voidedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) }, select: { id: true, dateFrom: true, dateTo: true } });
   const hit = rows.find((r) => r.dateFrom && r.dateFrom <= b && (r.dateTo ?? r.dateFrom) >= a);
   return hit?.id ?? null;
 }
