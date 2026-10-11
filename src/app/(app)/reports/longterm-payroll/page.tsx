@@ -620,7 +620,7 @@ function ContractsSection({
   async function uploadMaxwell(fd: FormData) {
     setUploading(true);
     const res = await apiUpload<{
-      summary: { total_rows: number; contracts_created: number; contracts_updated: number; unmatched: unknown[]; skipped_manual_contract: unknown[]; warnings: string[] };
+      summary: { total_rows: number; contracts_created: number; contracts_updated: number; unmatched: unknown[]; skipped_manual_contract: unknown[]; skipped_locked_rows?: number; warnings: string[] };
     }>("/api/longterm/contracts/import", fd);
     setUploading(false);
     if (res.ok) {
@@ -629,6 +629,7 @@ function ContractsSection({
         `Maxwell 導入完成：${sm.total_rows} 行，建 ${sm.contracts_created}／更新 ${sm.contracts_updated}` +
           `${sm.unmatched.length ? `，${sm.unmatched.length} 行對唔到保安員（要人手配對）` : ""}` +
           `${sm.skipped_manual_contract.length ? `，${sm.skipped_manual_contract.length} 人已有人手合約冇覆蓋` : ""}` +
+          `${sm.skipped_locked_rows ? `，${sm.skipped_locked_rows} 行因鎖月跳過` : ""}` +
           `${sm.warnings.length ? `。注意：${sm.warnings.join("；")}` : ""}`,
       );
       onChanged();

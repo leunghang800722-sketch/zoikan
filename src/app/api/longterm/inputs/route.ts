@@ -17,7 +17,8 @@ import { snakeToCamelShallow } from "@/lib/api/case";
 import { LongtermInputCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { parseMonthParam } from "@/lib/reports/money";
-import { BadRequest } from "@/lib/api/errors";
+import { ApiError, BadRequest } from "@/lib/api/errors";
+import { findConfirmedLeaveOverlap, OVERLAP_MSG } from "@/lib/longterm-payroll/drafts";
 import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request) {
@@ -53,6 +54,7 @@ export async function POST(req: Request) {
     const parsed = parseBody(LongtermInputCreateSchema, body);
     if (parsed.kind === "leave" && !parsed.date_from) throw BadRequest("kind=leave 要帶 date_from（病假／無薪假段開始日）");
     await assertMonthNotLocked({ workDate: parsed.month, actorUserId: session.userId, tableName: "longterm_payroll_inputs", rowId: "new", ip: getClientIp(req) });
+    if (parsed.kind === "leave" && (await findConfirmedLeaveOverlap(parsed.guard_id, new Date(parsed.month), parsed.date_from ?? null, parsed.date_to ?? null))) throw new ApiError(409, "overlaps_confirmed_leave", OVERLAP_MSG);
     const data = snakeToCamelShallow(parsed) as Prisma.LongtermPayrollInputUncheckedCreateInput;
     const created = await prisma.longtermPayrollInput.create({ data: { ...data, createdBy: session.userId } });
     await writeAudit({ actorUserId: session.userId, tableName: "longterm_payroll_inputs", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });

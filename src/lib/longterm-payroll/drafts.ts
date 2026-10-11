@@ -54,6 +54,18 @@ function datesOfRange(from: string, to: string | null): string[] {
   return out;
 }
 
+/** M1：同 guard／月、未作廢、已確認、kind=leave 且日期段重疊嘅輸入（確認草稿／新增病假段前檢查，防重複扣款）。 */
+export async function findConfirmedLeaveOverlap(guardId: string, month: Date, from: string | null, to: string | null, excludeId?: string): Promise<string | null> {
+  if (!from) return null;
+  const a = from;
+  const b = to ?? from;
+  const rows = await prisma.longtermPayrollInput.findMany({ where: { guardId, month, kind: "leave", status: "confirmed", voidedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) }, select: { id: true, dateFrom: true, dateTo: true } });
+  const hit = rows.find((r) => r.dateFrom && r.dateFrom <= b && (r.dateTo ?? r.dateFrom) >= a);
+  return hit?.id ?? null;
+}
+
+export const OVERLAP_MSG = "同已確認病假段重疊";
+
 export interface DraftMonthResult {
   month: string;
   locked: boolean;
@@ -111,7 +123,7 @@ export async function generateLongtermInputDrafts(month: Date, actorUserId: stri
     for (const c of confirmed) {
       if (c.draftSource !== DRAFT_SOURCE_SL || !c.dateFrom) continue;
       const ev = evidenceOf(c.draftEvidence);
-      if (!ev) continue;
+      if (!ev || ev.edited) continue; // 會計改過日期再確認嘅，唔再同更表原始日期比對
       const nowDates = datesOfRange(c.dateFrom, c.dateTo).filter((d) => rosterSl.has(d));
       if (nowDates.join(",") !== ev.dates.join(",")) res.mismatches++;
     }

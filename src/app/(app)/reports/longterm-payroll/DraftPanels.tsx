@@ -240,7 +240,7 @@ export function BonusEligiblePanel({ month, refreshKey }: { month: string; refre
         <div className="text-sm font-semibold text-zk-text">勤工獎合資格清單（{rows.length} 人，未填 {open.length} 人）</div>
         <Pill variant="neutral">只列名，唔填金額</Pill>
       </div>
-      <p className="text-zk-sm text-zk-muted">規則：該月更表冇 SL、NL／NPL。系統冇遲到紀錄，遲到要會計自己核對。金額請用下面「新增」揀「津貼」人手填。</p>
+      <p className="text-zk-sm text-zk-muted">規則：該月更表冇 SL、NL／NPL。系統冇遲到紀錄，遲到要會計自己核對。中途入職／離職未排除，請自行判斷。金額請用下面「新增」揀「津貼」人手填。</p>
       {rows.length === 0 ? (
         <div className="text-zk-sm text-zk-muted">呢個月冇合資格人選</div>
       ) : (

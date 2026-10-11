@@ -17,7 +17,8 @@ import { ensureSystemUser } from "@/lib/system-user";
 import { withAuditJob } from "@/lib/audit-job-context";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { getJobReaderSession } from "./session";
-import { runLongtermInputDrafts } from "./longterm-input-drafts";
+import { runLongtermInputDrafts, LONGTERM_INPUT_DRAFTS_KEY } from "./longterm-input-drafts";
+import { withJobLock } from "@/lib/scheduler/lock";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
 export const AUTO_ONE_CLICK_KEY = "auto_one_click";
@@ -50,7 +51,7 @@ async function runAutoOneClickInner(now: Date): Promise<JobResult> {
   // 有至少一個 parsed 上載嘅月份
   const parsedMonths = await prisma.rosterUpload.findMany({ where: { status: "parsed" }, distinct: ["month"], select: { month: true }, orderBy: { month: "asc" } });
   const skipped: Record<string, SkipReason> = {};
-  const triggered: Record<string, { run_id: string; status: string }> = {};
+  const triggered: Record<string, { run_id: string; status: string; drafts?: string }> = {};
   const state = await readJobState(AUTO_ONE_CLICK_KEY);
   const firstRun = state.last_trigger_upload_at === undefined;
   const triggerState: Record<string, string> = { ...((state.last_trigger_upload_at as Record<string, string> | undefined) ?? {}) };
@@ -131,7 +132,9 @@ async function runAutoOneClickInner(now: Date): Promise<JobResult> {
       });
       // P9.1：更表剛結算完，順手更新該月長工糧草稿（失敗唔影響一鍵結算結果）
       try {
-        await runLongtermInputDrafts(now, [month]);
+        // 同排程 job 共用 lock：另一邊跑緊就跳過（排程每日仍會補）
+        const lk = await withJobLock(LONGTERM_INPUT_DRAFTS_KEY, () => runLongtermInputDrafts(now, [month]));
+        if (!lk.acquired) triggered[m] = { ...triggered[m]!, drafts: "skipped_locked" } as (typeof triggered)[string];
       } catch (e) {
         console.error("[auto-one-click] longterm drafts failed", e instanceof Error ? e.message : e);
       }

@@ -61,12 +61,17 @@ test("草稿列表標「草稿」＋勤工獎合資格清單；單條確認；�
   expect(await prisma.longtermPayrollInput.count({ where: { guardId, status: "confirmed" } })).toBe(1);
 
   // 全部確認 → 撤銷（零請求）
+  const writes: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() !== "GET" && r.url().includes("/api/")) writes.push(`${r.method()} ${r.url()}`);
+  });
   await page.getByTestId("ltpay-drafts-confirm-all").click();
   await expect(page.getByTestId("ltpay-drafts-undo-bar")).toBeVisible();
   await page.getByTestId("ltpay-drafts-undo-bar").getByTestId("undo-bar-undo").click();
   await expect(page.getByTestId("ltpay-drafts-undo-bar")).toHaveCount(0);
   await page.waitForTimeout(5500);
   expect(await prisma.longtermPayrollInput.count({ where: { guardId, status: "draft" } })).toBe(2);
+  expect(writes).toHaveLength(0); // 撤銷＝零非 GET 請求
 
   // 再全部確認，等 5 秒送出
   await page.getByTestId("ltpay-drafts-confirm-all").click();
