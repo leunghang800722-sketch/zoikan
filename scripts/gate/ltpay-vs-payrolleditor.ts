@@ -1,4 +1,4 @@
-// P11.2（dev-only，唔入正式站）：`tsx scripts/gate/ltpay-vs-payrolleditor.ts <payrolleditor.xls> --month YYYY-MM [--db-url <url>] [--out <json>] [--sheet <name>]`
+// P11.2（dev-only，唔入正式站）：`tsx scripts/gate/ltpay-vs-payrolleditor.ts <payrolleditor.xls> --month YYYY-MM [--out <json>] [--sheet <name>]`
 // 系統該月長工糧 run 嘅逐人 autopay vs BOCHK Payroll Editor 檔。console 只印數字（唔印人名／戶口／工號）；
 // 逐人明細（工號＋金額）寫去 --out（建議放 data/，由規劃者本機睇）。
 import fs from "node:fs";
@@ -14,12 +14,10 @@ async function main() {
   const file = process.argv.slice(2).find((a, i, all) => !a.startsWith("--") && !(i > 0 && all[i - 1].startsWith("--")));
   const month = arg("--month");
   if (!file || !month || !/^\d{4}-\d{2}$/.test(month)) {
-    console.error("用法：tsx scripts/gate/ltpay-vs-payrolleditor.ts <payrolleditor.xls> --month YYYY-MM [--db-url <url>] [--out <json>] [--sheet <name>]");
+    console.error("用法：tsx scripts/gate/ltpay-vs-payrolleditor.ts <payrolleditor.xls> --month YYYY-MM [--out <json>] [--sheet <name>]");
     process.exitCode = 2;
     return;
   }
-  const dbUrl = arg("--db-url");
-  if (dbUrl) process.env.DATABASE_URL = dbUrl;
   const { PrismaClient } = await import("@prisma/client");
   const prisma = new PrismaClient();
   try {

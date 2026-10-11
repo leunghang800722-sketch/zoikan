@@ -350,6 +350,7 @@ async function main() {
     type DiffRow = { staffNo: string; field: string; oracle: number; system: number; diff: number };
     const diffs: DiffRow[] = [];
     let compared = 0;
+    const perPerson = new Map<string, Array<{ field: string; oracle: number; system: number; diff: number }>>();
     for (const row of fixture) {
       const line = lineByStaffNo.get(row.staffNo);
       if (!line) continue;
@@ -362,6 +363,7 @@ async function main() {
         ["autopay", row.oracle.autopay, Number(line.autopay)],
         ["workDays", row.oracle.workDays, Number(line.workDays)],
       ];
+      perPerson.set(row.staffNo, checks.map(([field, oracle, system]) => ({ field, oracle, system, diff: round2(system - oracle) })));
       for (const [field, oracle, system] of checks) {
         const diff = round2(system - oracle);
         if (Math.abs(diff) > TOL) diffs.push({ staffNo: row.staffNo, field, oracle, system, diff });
@@ -374,7 +376,7 @@ async function main() {
     if (outIdx >= 0 && process.argv[outIdx + 1]) {
       const outPath = path.resolve(process.argv[outIdx + 1]);
       const diffStaff = new Set(diffs.filter((d) => d.field !== "workDays").map((d) => d.staffNo));
-      const people = fixture.map((r) => ({ staffNo: r.staffNo, hasLine: lineByStaffNo.has(r.staffNo), moneyOk: lineByStaffNo.has(r.staffNo) && !diffStaff.has(r.staffNo) }));
+      const people = fixture.map((r) => ({ staffNo: r.staffNo, hasLine: lineByStaffNo.has(r.staffNo), moneyOk: lineByStaffNo.has(r.staffNo) && !diffStaff.has(r.staffNo), fields: perPerson.get(r.staffNo) ?? [] }));
       fs.mkdirSync(path.dirname(outPath), { recursive: true });
       fs.writeFileSync(outPath, JSON.stringify({ tol: TOL, compared, total: fixture.length, diffs, people }, null, 2));
       console.log(`[${GATE_TAG}] 逐人明細已寫入 ${process.argv[outIdx + 1]}`);

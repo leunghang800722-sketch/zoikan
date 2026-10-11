@@ -32,6 +32,8 @@ export interface MaxwellImportSummary {
   skippedLocked: number;
   /** 名單月薪同 `guards.monthlySalary` 現值唔同嘅人數（導入唔改 `monthlySalary`，只提示人手核）。 */
   salaryMismatch: number;
+  /** `first_unlocked` 下，離職名單而離職日空／早過起始日 → 唔建合約嘅人數。 */
+  skippedLeftBeforeStart: number;
   startMode: ContractStartMode;
   /** `first_unlocked` 時合約起始日（第一個未鎖月 1 號，YYYY-MM-DD）；`original` 或冇鎖月則 null。 */
   contractStartFrom: string | null;
@@ -130,6 +132,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     created: 0,
     skippedLocked: 0,
     salaryMismatch: 0,
+    skippedLeftBeforeStart: 0,
     startMode,
     contractStartFrom: clipStart ? clipStart.toISOString().slice(0, 10) : null,
   };
@@ -186,7 +189,19 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
 
       const originalSegments = buildSegmentsFromRow(row);
       // P11.1：first_unlocked＝由第一個未鎖月 1 號起生效（原入職日喺 note 留痕），避開鎖月。
-      const segments = clipStart ? clipSegmentsFrom(originalSegments, clipStart) : originalSegments;
+      let segments = clipStart ? clipSegmentsFrom(originalSegments, clipStart) : originalSegments;
+      // M1：first_unlocked 下離職名單嘅人——離職日空或早過起始日 → 唔建合約；否則最後一段 effectiveTo＝離職日。
+      if (clipStart && row.status === "left" && segments.length) {
+        const lastDay = isoToDate(row.lastDay);
+        if (!lastDay || lastDay.getTime() < clipStart.getTime()) {
+          summary.skippedLeftBeforeStart += 1;
+          summary.warnings.push(`${row.name ?? row.staffNo ?? "（未知）"}：離職名單，${lastDay ? `離職日早過合約起始日 ${clipStart.toISOString().slice(0, 10)}` : "冇離職日，無法判斷合約結束日"}，唔建合約`);
+          return;
+        }
+        segments = segments
+          .filter((seg) => seg.effectiveFrom.getTime() <= lastDay.getTime())
+          .map((seg) => (!seg.effectiveTo || seg.effectiveTo.getTime() > lastDay.getTime() ? { ...seg, effectiveTo: lastDay } : seg));
+      }
       if (!segments.length) {
         summary.warnings.push(`${row.name ?? row.staffNo ?? "（未知）"}：Maxwell 行冇 Commencement Date 或 Basic Salary，跳過合約建立`);
         return;
@@ -243,7 +258,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
             annualLeaveDays: row.annualLeave ?? 7,
             mpfExemptReason: "auto",
             source: "maxwell_import",
-            note: `Maxwell 導入（${row.status === "active" ? "在職名單" : "離職名單"} row ${row.sheetRow}）${clipStart ? `；由第一個未鎖月 ${clipStart.toISOString().slice(0, 10)} 起生效，原入職日 ${row.commencement ?? "?"}` : ""}`,
+            note: `Maxwell 導入（${row.status === "active" ? "在職名單" : "離職名單"} row ${row.sheetRow}）${clipStart ? `；由第一個未鎖月 ${clipStart.toISOString().slice(0, 10)} 起生效${row.commencement && row.commencement < clipStart.toISOString().slice(0, 10) ? `，原入職日 ${row.commencement}` : ""}` : ""}`,
             createdBy: actorUserId,
           },
         });

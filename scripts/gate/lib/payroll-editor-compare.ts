@@ -50,7 +50,14 @@ export function staffNoFromReference(ref: string): string | null {
 
 /** 解析 Payroll Editor xls／xlsx。冇表頭 → 退而用 BOCHK 明細固定欄位次序（4 賬戶／5 名稱／6 金額／7 備考號）。 */
 export function parsePayrollEditorXls(buffer: Buffer, sheetHint?: string): ParsedPayrollEditor {
-  const wb = XLSX.read(buffer, { type: "buffer" });
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buffer, { type: "buffer" });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/password/i.test(msg)) throw new Error("呢個 xls 有密碼保護，打唔開：先解密（見 docs/ops.md「長工糧核對工具」），或用 Excel 另存做無密碼嘅 .xls／.xlsx");
+    throw new Error(`讀唔到 Payroll Editor 檔：${msg}`);
+  }
   const sheetName = sheetHint && wb.SheetNames.includes(sheetHint) ? sheetHint : (wb.SheetNames.find((n) => /payroll\s*editor|明細/i.test(n)) ?? wb.SheetNames[0]);
   if (!sheetName) throw new Error("xls 冇任何分頁");
   const grid = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], { header: 1, raw: true, defval: null, blankrows: false });
@@ -71,6 +78,7 @@ export function parsePayrollEditorXls(buffer: Buffer, sheetHint?: string): Parse
     }
   }
 
+  if (headerIdx < 0) throw new Error(`分頁「${sheetName}」搵唔到表頭行（需要「員工賬戶號碼」同「金額」欄），唔猜欄位——請確認檔案格式或用 --sheet 指定分頁`);
   const rows: PayrollEditorRow[] = [];
   const badAmountRows: number[] = [];
   for (let i = headerIdx + 1; i < grid.length; i++) {
@@ -92,6 +100,7 @@ export function parsePayrollEditorXls(buffer: Buffer, sheetHint?: string): Parse
       staffNo: cols.ref >= 0 ? staffNoFromReference(cellText(r[cols.ref])) : null,
     });
   }
+  if (rows.length === 0) throw new Error(`分頁「${sheetName}」表頭之後冇讀到任何明細行`);
   return { sheetName, rows, badAmountRows };
 }
 
@@ -144,6 +153,8 @@ export interface CompareResult {
     differing: PersonDiff[];
     equal: PersonDiff[];
     onlyInPayrollEditor: Array<{ rowNo: number; staffNo: string | null; amount: number }>;
+    /** 同一個系統人出現多次嘅後續行（唔計入 onlyInPayrollEditor） */
+    duplicates: Array<{ rowNo: number; staffNo: string; amount: number }>;
     onlyInSystem: Array<{ staffNo: string; autopay: number }>;
   };
 }
@@ -160,6 +171,7 @@ export function comparePayrollEditor(parsed: ParsedPayrollEditor, system: System
   const equal: PersonDiff[] = [];
   const differing: PersonDiff[] = [];
   const onlyPe: CompareResult["details"]["onlyInPayrollEditor"] = [];
+  const duplicates: Array<{ rowNo: number; staffNo: string; amount: number }> = [];
   let dup = 0;
 
   for (const p of parsed.rows) {
@@ -179,7 +191,7 @@ export function comparePayrollEditor(parsed: ParsedPayrollEditor, system: System
     }
     if (used.has(sys.staffNo)) {
       dup += 1;
-      onlyPe.push({ rowNo: p.rowNo, staffNo: p.staffNo, amount: p.amount });
+      duplicates.push({ rowNo: p.rowNo, staffNo: sys.staffNo, amount: p.amount });
       continue;
     }
     used.add(sys.staffNo);
@@ -211,6 +223,6 @@ export function comparePayrollEditor(parsed: ParsedPayrollEditor, system: System
       badAmountRows: parsed.badAmountRows.length,
       totals: { payrollEditor: peTotal, system: sysTotal, diff: r2(peTotal - sysTotal) },
     },
-    details: { differing, equal, onlyInPayrollEditor: onlyPe, onlyInSystem: onlySys },
+    details: { differing, equal, onlyInPayrollEditor: onlyPe, duplicates, onlyInSystem: onlySys },
   };
 }
