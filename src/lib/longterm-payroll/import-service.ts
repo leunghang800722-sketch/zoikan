@@ -45,7 +45,7 @@ export interface MaxwellImportOptions {
 }
 
 /** 第一個未鎖月＝最後一個已鎖月嘅下一個月（`month_closes.locked_at` 非空）；冇任何鎖月 → null。 */
-export async function firstUnlockedMonthStart(): Promise<Date | null> {
+async function firstUnlockedMonthStart(): Promise<Date | null> {
   const last = await prisma.monthClose.findFirst({ where: { lockedAt: { not: null } }, orderBy: { month: "desc" }, select: { month: true } });
   if (!last) return null;
   return new Date(Date.UTC(last.month.getUTCFullYear(), last.month.getUTCMonth() + 1, 1));
