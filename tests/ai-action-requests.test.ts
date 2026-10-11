@@ -81,7 +81,7 @@ describe("人手操作 call site 仍然同卡一致（原始碼掃描）", () =>
     expect(src("src/app/(app)/sites/page.tsx")).toContain("apiPatch(`/api/sites/${editingId}`, { default_settlement_broker_id: suggestion.suggestion.broker_id })");
   });
   it("批量接受掣：apiPost(\"/api/triage/questions/batch-accept\", { question_ids })（P8.2）", () => {
-    expect(src("src/components/BatchAcceptButton.tsx")).toContain('apiPost<BatchRes>("/api/triage/questions/batch-accept", { question_ids: pendingIds.current })');
+    expect(src("src/components/BatchAcceptButton.tsx")).toContain('apiPost<BatchRes>("/api/triage/questions/batch-accept", { question_ids: pendingIds.current.slice(i, i + CHUNK) })');
   });
   it("更表上載「重新解析」：apiPost(`/api/roster-uploads/${uploadId}/reparse`)（冇 body）", () => {
     expect(src("src/app/(app)/roster-uploads/RosterUploadsClient.tsx")).toContain("apiPost(`/api/roster-uploads/${uploadId}/reparse`)");

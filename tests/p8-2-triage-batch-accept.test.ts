@@ -160,7 +160,7 @@ describe("P8.2 triage batch-accept", () => {
     expect(((await pl.json()) as { items: unknown[] }).items).toEqual([]);
   });
 
-  it("權限：雞頭 403；非擁有人會計逐題 error；上限 200；body 格式", async () => {
+  it("權限：雞頭 403；非擁有人會計逐題 error；上限 50；body 格式", async () => {
     await scenario("測試批A", { propose: true });
     const sid = await openSession();
     const qa = await qidOf(sid, "測試批A");
@@ -171,7 +171,7 @@ describe("P8.2 triage batch-accept", () => {
     const r = (await (await batch(ac, [qa])).json()) as { results: { status: string; reason: string }[] };
     expect(r.results[0]).toMatchObject({ status: "error", reason: "呢條問題唔係你上載嗰批" });
     const bc = await sessionCookieForUser(boss());
-    expect((await batch(bc, Array.from({ length: 201 }, (_, i) => `id${i}`))).status).toBe(400);
+    expect((await batch(bc, Array.from({ length: 51 }, (_, i) => `id${i}`))).status).toBe(400);
     expect((await batch(bc, [])).status).toBe(400);
     expect((await batchRoute(req("http://x/api/triage/questions/batch-accept", bc, "POST", { question_ids: ["x"], extra: 1 }))).status).toBe(400);
   });

@@ -49,7 +49,7 @@ test.describe("P8 自動化第二批", () => {
     await cleanupBatch();
     const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
     const session = await prisma.triageSession.create({ data: { sourceType: "month_close", sourceRef: SESSION_REF, ownerUserId: boss.id, createdBy: boss.id } });
-    const mk = (n: number, withSuggestion: boolean) =>
+    const mk = (n: number, withSuggestion: boolean, confidence: "propose" | "unknown" = "propose") =>
       prisma.triageQuestion.create({
         data: {
           sessionId: session.id,
@@ -57,13 +57,14 @@ test.describe("P8 自動化第二批", () => {
           groupKey: `e2e-${n}`,
           sort: n,
           title: `測試批量盤${n}`,
-          evidenceJson: (withSuggestion ? mcEvidence(`測試批量盤${n}`) : { ...mcEvidence(`測試批量盤${n}`), suggestion: null, confidence: "unknown", prefillCandidateId: null }) as never,
+          evidenceJson: (withSuggestion ? { ...mcEvidence(`測試批量盤${n}`), confidence } : { ...mcEvidence(`測試批量盤${n}`), suggestion: null, confidence: "unknown", prefillCandidateId: null }) as never,
           optionsJson: (withSuggestion ? [{ id: "mc_accept", label: "一撳確認" }, { id: "skip", label: "跳過" }] : [{ id: "skip", label: "跳過" }]) as never,
         },
       });
     const q1 = await mk(1, true);
     const q2 = await mk(2, true);
-    await mk(3, false); // 冇建議：唔列入
+    const q3 = await mk(3, true, "unknown"); // 有預填但把握低：列出，但預設唔剔
+    await mk(4, false); // 冇建議：唔列入
 
     const posts: string[] = [];
     await page.route("**/api/triage/questions/batch-accept", async (route) => {
@@ -77,13 +78,15 @@ test.describe("P8 自動化第二批", () => {
     await page.goto("/triage");
     const open = page.getByTestId("batch-accept-open");
     await expect(open).toBeVisible();
-    await expect(open).toContainText("批量接受建議（2 題）");
+    await expect(open).toContainText("批量接受建議（3 題）");
     await open.click();
     const dialog = page.getByTestId("batch-accept-dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByTestId("batch-accept-item")).toHaveCount(2);
+    await expect(dialog.getByTestId("batch-accept-item")).toHaveCount(3);
     await expect(dialog).toContainText("測試批量盤1");
-    await expect(dialog).not.toContainText("測試批量盤3");
+    await expect(dialog).not.toContainText("測試批量盤4");
+    await expect(page.getByRole("checkbox", { name: "接受 測試批量盤3" })).not.toBeChecked(); // 把握低預設唔剔
+    await expect(dialog.getByTestId("batch-accept-confirm")).toContainText("確認接受 2 題");
     await expect(dialog).toContainText("送出之後唔可以一鍵撤銷");
 
     // 1) 撤銷：零請求
@@ -105,6 +108,7 @@ test.describe("P8 自動化第二批", () => {
     expect(JSON.parse(posts[0]!)).toEqual({ question_ids: [q1.id] });
     await expect(page.getByTestId("batch-accept-summary")).toHaveText("已答 1、跳過 0、失敗 0");
     void q2;
+    void q3;
   });
 
   test("已生成檔案頁：列表、autopay 下載先確認、權限（雞頭見唔到）", async ({ page }) => {

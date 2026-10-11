@@ -965,19 +965,20 @@ async function stepPostorderCompare(month: Date, referralSystemTotal: number) {
 // ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
-export function runOneClickMonthClose(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
+export function runOneClickMonthClose(runId: string, month: Date, actorUserId: string, ip: string | null, opts?: { triageOwnerUserId?: string }): Promise<void> {
   // 驗收修正：背景 run（`after()`）會繼承發起 request 嘅 AsyncLocalStorage——包一層全新報表 memo context，
   // 唔會讀到發起 request 較早時間點計出嚟嘅結果。
-  return withReportContext(() => runOneClickMonthCloseInner(runId, month, actorUserId, ip));
+  return withReportContext(() => runOneClickMonthCloseInner(runId, month, actorUserId, ip, opts));
 }
 
-async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserId: string, ip: string | null): Promise<void> {
+async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserId: string, ip: string | null, opts?: { triageOwnerUserId?: string }): Promise<void> {
   const monthStartDate = toMonthStart(month);
   // 每次（重新）執行都由全新 steps 開始——唔好保留上一次失敗／停低嘅
   // 狀態（Opus 驗收：原版重新執行停低時，舊 run 嘅 done/skipped 會殘留）。
   const runner = new StepRunner(runId);
   // WP-ONE-CLICK-AUTO：呢個 run 嘅自動處理收集器（journal／audit／report／分診題草稿）。
   const auto = new AutoCollector(runId, monthStartDate, actorUserId, ip);
+  if (opts?.triageOwnerUserId) auto.triageOwnerUserId = opts.triageOwnerUserId;
 
   try {
     let halt: string | undefined;

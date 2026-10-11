@@ -4,6 +4,7 @@
 //
 // 鐵律：每個 function 嘅回傳**自己寫投影**——只有數字、id、盤名、更種代號、雞頭顯示名（`brokerDisplayName()`），
 // **冇保安員姓名／工號／電話／身份證**。唔直接回傳 `questionViews()` 之類帶候選人資料嘅物件。
+import { getSystemUserId } from "@/lib/system-user";
 import { prisma } from "@/lib/db";
 import { monthRange, monthStart as toMonthStart } from "./money";
 import { findOneClickRuns } from "@/lib/month-close/one-click-read";
@@ -111,7 +112,7 @@ export async function readTriageSummary(month: Date, actor: Pick<AuthedSession, 
   const sessions = await prisma.triageSession.findMany({
     where: {
       OR: [{ sourceType: "month_close", sourceRef: { in: runs.map((r) => r.id) } }, { sourceType: "postorder_backfill", sourceRef: ym }],
-      ...(boss ? {} : { ownerUserId: actor.userId }),
+      ...(boss ? {} : { ownerUserId: { in: [actor.userId, (await getSystemUserId()) ?? actor.userId] } }),
     },
     select: { id: true, sourceType: true },
   });

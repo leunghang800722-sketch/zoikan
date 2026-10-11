@@ -7,6 +7,7 @@ import { ensureJobRows } from "@/lib/scheduler/runner";
 import { buildOpsDigest } from "@/lib/ops/digest";
 import { getJobReaderSession } from "@/lib/jobs/session";
 import { setLlmClientForTests, type LlmClient } from "@/lib/ai/llm";
+import { ensureSystemUser } from "@/lib/system-user";
 import { assertNoPii } from "@/lib/notify/create";
 
 const AUG = new Date(Date.UTC(2026, 7, 1));
@@ -70,7 +71,7 @@ describe("P8.5 lock_ops_digest", () => {
     expect(() => assertNoPii(n.title, n.body)).not.toThrow();
     const audits = await prisma.auditLog.findMany({ where: { tableName: "ai_chat", rowId: "lock_ops_digest" } });
     const a = audits.find((x) => (x.after as { month?: string }).month === "2026-08")!;
-    expect(a.actorUserId).toBeNull();
+    expect(a.actorUserId).toBe(await ensureSystemUser());
     expect(a.after).toMatchObject({ source: "ops_digest", by_job: "lock_ops_digest", month: "2026-08", input_tokens: 11, output_tokens: 7 });
   });
 

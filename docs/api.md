@@ -2521,9 +2521,9 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 | Method／路徑 | 說明 |
 |---|---|
 | `GET /api/triage/questions/batch-accept/preview?session_id=\|month=YYYY-MM` | 權限 `導入分診:view`（要同時有「一鍵結算:create」先有嘢列，否則 `items:[]`）。`{ items:[{id,session_id,kind,kind_label,title,month,summary,suggestion,confidence,count,identity_label}], total }`：只列 `month_close`／`postorder_backfill` session 內 **open、有系統預填建議答案（`mc_accept`）、月份未鎖** 嘅題；非老闆只見自己嗰批。`identity_label`（保安員配對題嘅更表身份）淨係有「保安員個人資料:view」先有值，其餘口徑同 `mcQuestionViews` |
-| `POST /api/triage/questions/batch-accept` | body `{ question_ids: string[] }`（1–200，`.strict()`；否則 400）。權限同單題 answer：`導入分診:update`＋「一鍵結算:create」＋只可答自己嗰批（老闆全部）。逐題 `previewMcAnswer` → `submitMcAnswer`（同一條寫入路徑、同鎖月檢查，audit `triage_answer` 同單題一樣，`after` 多 `batch_id`）。回 `{ batch_id, results:[{id,status:"answered"\|"skipped"\|"error",reason}], counts:{answered,skipped,error} }`。`skipped`：`no_suggestion`（含保安員導入題——冇系統建議答案概念）、`already_answered`、`not_open`、`cannot_confirm`；`error`：該題丟錯（reason 係 lib 嘅中文句，唔含 PII），**一題失敗唔影響其餘**。**任何一題屬已鎖月份 → 整批 403 `month_locked`**，唔寫任何嘢 |
+| `POST /api/triage/questions/batch-accept` | body `{ question_ids: string[] }`（1–50，逐題串行所以每個 request 上限 50，UI 自動分批；`.strict()`；否則 400）。權限同單題 answer：`導入分診:update`＋「一鍵結算:create」＋只可答自己嗰批（老闆全部）。逐題 `previewMcAnswer` → `submitMcAnswer`（同一條寫入路徑、同鎖月檢查，audit `triage_answer` 同單題一樣，`after` 多 `batch_id`）。回 `{ batch_id, results:[{id,status:"answered"\|"skipped"\|"error",reason}], counts:{answered,skipped,error} }`。`skipped`：`no_suggestion`（含保安員導入題——冇系統建議答案概念）、`already_answered`、`not_open`、`cannot_confirm`；`error`：該題丟錯（reason 係 lib 嘅中文句，唔含 PII），**一題失敗唔影響其餘**。**任何一題屬已鎖月份 → 整批 403 `month_locked`**，唔寫任何嘢 |
 
-AI 助手白名單多 `triage_accept_batch{question_ids[]}` 動作卡（`src/lib/ai/actions.ts`），撳卡＝同一條 API＋5 秒撤銷；`triage_summary` 工具每題多 `has_suggestion`（`confidence` 原本已有）。
+AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡（`src/lib/ai/actions.ts`），撳卡＝同一條 API＋5 秒撤銷；`triage_summary` 工具每題多 `has_suggestion`（`confidence` 原本已有）。
 
 ### 鎖月後自動生成嘅檔（P8.3）
 | Method／路徑 | 說明 |

@@ -138,7 +138,7 @@ export function buildSystemPrompt(session: AuthedSession, context?: AiPageContex
     type 只可以係以下七種，params 只准列出嘅欄位，唔准加其他欄位：
     - open_page：params {"href":"/month-close?month=YYYY-MM"}——只准內部頁面路徑，以 /month-close、/roster-uploads、/guards、/guard-fix、/sites、/brokers、/rate-cards、/reports、/triage 開頭；
     - triage_answer：params {"question_id","option","candidate_id"(可選)}——question_id、option、candidate_id 一定要用待答問題摘要工具回傳嘅 id（每題有 options／candidates 陣列），唔准自創，唔准用 skip；
-    - triage_accept_batch：params {"question_ids":[…]}——一次接受多題「有建議」嘅系統建議答案；question_ids 一定要用待答問題摘要工具回傳、而且 has_suggestion 為 true、confidence 為 propose 嘅題 id（最多 200 條）；有 3 題或以上高把握（propose）題先建議用批量，唔夠就用 triage_answer；
+    - triage_accept_batch：params {"question_ids":[…]}——一次接受多題「有建議」嘅系統建議答案；question_ids 一定要用待答問題摘要工具回傳、而且 has_suggestion 為 true、confidence 為 propose 嘅題 id（最多 50 條）；有 3 題或以上高把握（propose）題先建議用批量，唔夠就用 triage_answer；
     - site_set_default_broker：params {"site_id","broker_id"}；
     - roster_reparse：params {"upload_id"}；
     - one_click_run：params {"month":"YYYY-MM"}；

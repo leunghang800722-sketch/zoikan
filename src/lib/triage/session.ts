@@ -1,6 +1,7 @@
 // WP-AI-OPS §28.4：分診 session 建立／列出／權限／轉交。
 // 擁有人＝上載者（owner_user_id）。老闆睇全部、可轉交；其他人（會計／主管）只睇／答自己嗰批——
 // API 層強制（呢度），唔係淨係前端收埋。
+import { getSystemUserId } from "@/lib/system-user";
 import { cache } from "react";
 import type { TriageQuestion, TriageSession } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -23,17 +24,23 @@ export const isBoss = (s: Pick<AuthedSession, "baseRole">): boolean => s.baseRol
 /** 可以做擁有人（接收轉交）嘅角色：同「導入分診」module 一致。 */
 export const TRIAGE_OWNER_ROLES = ["老闆", "會計", "主管"] as const;
 
+/** P8 M1：系統帳號擁有嘅 session（自動 run 揾唔到合資格上載者）——任何人（有權答嘅）都可以處理，唔限擁有人。 */
+export async function canAccessOwnedBy(actor: Pick<AuthedSession, "baseRole" | "userId">, ownerUserId: string): Promise<boolean> {
+  if (isBoss(actor) || ownerUserId === actor.userId) return true;
+  return ownerUserId === (await getSystemUserId());
+}
+
 export async function getSessionFor(actor: AuthedSession, id: string): Promise<TriageSession> {
   const s = await prisma.triageSession.findUnique({ where: { id } });
   if (!s) throw NotFound("搵唔到呢批分診");
-  if (!isBoss(actor) && s.ownerUserId !== actor.userId) throw Forbidden("呢批分診唔係你上載嘅");
+  if (!(await canAccessOwnedBy(actor, s.ownerUserId))) throw Forbidden("呢批分診唔係你上載嘅");
   return s;
 }
 
 export async function getQuestionFor(actor: AuthedSession, id: string): Promise<TriageQuestion & { session: TriageSession }> {
   const q = await prisma.triageQuestion.findUnique({ where: { id }, include: { session: true } });
   if (!q) throw NotFound("搵唔到呢條問題");
-  if (!isBoss(actor) && q.session.ownerUserId !== actor.userId) throw Forbidden("呢條問題唔係你上載嗰批");
+  if (!(await canAccessOwnedBy(actor, q.session.ownerUserId))) throw Forbidden("呢條問題唔係你上載嗰批");
   return q;
 }
 
@@ -61,7 +68,8 @@ export async function restrictedKindsFor(actor: Pick<AuthedSession, "baseRole" |
 }
 
 export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolean }): Promise<SessionSummary[]> {
-  const where = isBoss(actor) && !opts.mine ? {} : { ownerUserId: actor.userId };
+  const sysId = isBoss(actor) ? null : await getSystemUserId();
+  const where = isBoss(actor) && !opts.mine ? {} : { ownerUserId: sysId ? { in: [actor.userId, sysId] } : actor.userId };
   const sessions = await prisma.triageSession.findMany({ where, orderBy: { createdAt: "desc" }, take: 200, include: { owner: { select: { name: true } } } });
   if (sessions.length === 0) return [];
   const restricted = new Set(await restrictedKindsFor(actor));
@@ -87,7 +95,8 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
 // P3-1.2：`cache()`——layout 同首頁 TriageHomeNotice 同一個 render 內共用（按 actor 物件識別）。
 export const countOpenFor = cache(async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<number> {
   const restricted = await restrictedKindsFor(actor);
-  return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS, ...restricted] }, session: isBoss(actor) ? {} : { ownerUserId: actor.userId } } });
+  const sysId = isBoss(actor) ? null : await getSystemUserId();
+  return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS, ...restricted] }, session: isBoss(actor) ? {} : { ownerUserId: sysId ? { in: [actor.userId, sysId] } : actor.userId } } });
 });
 
 /** 所有未答都答晒（冇 open）就收尾；有新 open 就重開。 */

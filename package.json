@@ -14,6 +14,7 @@
     "db:seed": "tsx scripts/seed/index.ts",
     "db:reset": "tsx scripts/db/reset.ts && tsx scripts/db/ensure-ai-role.ts",
     "db:ensure-ai-role": "tsx scripts/db/ensure-ai-role.ts",
+    "db:ensure-system-user": "tsx scripts/db/ensure-system-user.ts",
     "db:ensure-identity-indexes": "tsx scripts/db/ensure-identity-indexes.ts",
     "db:sync-permissions": "tsx scripts/db/sync-permissions.ts",
     "db:recompute-permit-derived": "tsx scripts/db/recompute-permit-derived.ts",

@@ -148,14 +148,26 @@ describe("P8.3 after_lock_exports", () => {
     const bl = (await (await listFiles(req("http://x/api/files?month=2026-08", boss))).json()) as { files: { kind: string; needs_confirm: boolean }[] };
     expect(bl.files.map((f) => f.kind).sort()).toEqual(["longterm_autopay", "monthly_close", "payroll_detail", "postorder"]);
     expect(bl.files.find((f) => f.kind === "longterm_autopay")!.needs_confirm).toBe(true);
-    // 會計／主管：只見有 export 權限嘅 kind（可以少過 4；全部冇權就 403）
-    for (const role of ["會計", "主管"] as const) {
-      const c = await sessionCookieForUser(fx.userIds[role]);
+    // 逐 kind 對權限矩陣：每個角色清單 kind＝有該 module `export` 權限嘅 kind；有權下載 200，冇權 403
+    const { hasPermission } = await import("@/lib/rbac/requirePermission");
+    const { FILE_KINDS, FILE_KIND_META } = await import("@/lib/files/generated");
+    for (const role of Object.keys(fx.userIds) as (keyof typeof fx.userIds)[]) {
+      const u = await prisma.user.findUniqueOrThrow({ where: { id: fx.userIds[role] }, include: { role: true } });
+      const sess = { userId: u.id, tel: u.tel, name: u.name, roleId: u.roleId, roleName: u.role.name, baseRole: u.role.baseRole, brokerId: null, guardId: null, payoutApprovalLimit: null, tokenVersion: u.tokenVersion, loggedInAt: "" } as never;
+      const expected: string[] = [];
+      for (const k of FILE_KINDS) if (await hasPermission(sess, FILE_KIND_META[k].module, "export")) expected.push(k);
+      const c = await sessionCookieForUser(u.id);
       const res = await listFiles(req("http://x/api/files?month=2026-08", c));
-      if (res.status === 403) continue;
-      const kinds = ((await res.json()) as { files: { kind: string }[] }).files.map((f) => f.kind);
-      expect(kinds.length).toBeGreaterThan(0);
-      expect(kinds.length).toBeLessThanOrEqual(4);
+      if (expected.length === 0) {
+        expect(res.status, `${role} list`).toBe(403);
+        continue;
+      }
+      expect(((await res.json()) as { files: { kind: string }[] }).files.map((f) => f.kind).sort(), `${role} list`).toEqual([...expected].sort());
+      for (const k of FILE_KINDS) {
+        const f = await prisma.generatedFile.findFirstOrThrow({ where: { month: AUG, kind: k, current: true }, select: { id: true } });
+        const dl = await getFile(req(`http://x/api/files/${f.id}?confirm_locked=1`, c), { params: Promise.resolve({ id: f.id }) });
+        expect(dl.status, `${role} ${k}`).toBe(expected.includes(k) ? 200 : 403);
+      }
     }
     expect((await getFile(req("http://x/api/files/nope", boss), { params: Promise.resolve({ id: "nope" }) })).status).toBe(404);
   });

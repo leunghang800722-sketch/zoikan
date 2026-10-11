@@ -93,13 +93,13 @@ describe("extractActions", () => {
 
 describe("triage_accept_batch（P8.2）", () => {
   const mk = (ids: unknown) => ({ type: "triage_accept_batch", label: "批量接受 3 題", basis: "3 題 propose", params: { question_ids: ids } });
-  it("合法：1–200 個 id", () => {
+  it("合法：1–50 個 id", () => {
     expect(sanitizeActionCards([mk(["q-1", "q-2"])])).toHaveLength(1);
-    expect(sanitizeActionCards([mk(Array.from({ length: 200 }, (_, i) => `q${i}`))])).toHaveLength(1);
+    expect(sanitizeActionCards([mk(Array.from({ length: 50 }, (_, i) => `q${i}`))])).toHaveLength(1);
   });
-  it("空陣列／201 個／id 含 / ／多餘 key → 丟棄", () => {
+  it("空陣列／51 個／id 含 / ／多餘 key → 丟棄", () => {
     expect(sanitizeActionCards([mk([])])).toHaveLength(0);
-    expect(sanitizeActionCards([mk(Array.from({ length: 201 }, (_, i) => `q${i}`))])).toHaveLength(0);
+    expect(sanitizeActionCards([mk(Array.from({ length: 51 }, (_, i) => `q${i}`))])).toHaveLength(0);
     expect(sanitizeActionCards([mk(["a/b"])])).toHaveLength(0);
     expect(sanitizeActionCards([{ ...mk(["q1"]), params: { question_ids: ["q1"], month: "2026-09" } }])).toHaveLength(0);
   });

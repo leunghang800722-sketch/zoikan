@@ -30,11 +30,11 @@ export function numericDigestText(digest: OpsDigest): string {
   return `${digest.month} 每月修正摘要：${groups.length ? groups.join("、") : "本月冇記錄到修正"}。${base.join("；")}。`;
 }
 
-async function maybeAiSummary(digest: OpsDigest): Promise<string | null> {
+async function maybeAiSummary(digest: OpsDigest, actorUserId: string): Promise<string | null> {
   if (!isAiConfigured()) return null;
   try {
     const r = await generateDigestSummary(digest, getLlmClient());
-    await writeAudit({ actorUserId: null, tableName: "ai_chat", rowId: LOCK_OPS_DIGEST_KEY, action: "ai_chat", after: { source: "ops_digest", by_job: LOCK_OPS_DIGEST_KEY, month: digest.month, input_tokens: r.inputTokens, output_tokens: r.outputTokens, guard_triggered: r.guardTriggered }, ip: null });
+    await writeAudit({ actorUserId, tableName: "ai_chat", rowId: LOCK_OPS_DIGEST_KEY, action: "ai_chat", after: { source: "ops_digest", by_job: LOCK_OPS_DIGEST_KEY, month: digest.month, input_tokens: r.inputTokens, output_tokens: r.outputTokens, guard_triggered: r.guardTriggered }, ip: null });
     if (r.guardTriggered || !r.text.trim()) return null;
     return r.text.trim().slice(0, 1200); // 通知內文有上限（真 provider 最多 8 句；防異常長輸出）
   } catch (e) {
@@ -57,7 +57,7 @@ export async function runLockOpsDigest(now: Date): Promise<JobResult> {
     if (fresh?.lockedAt && c.lockedAt) {
       const digest = await buildOpsDigest(c.month, session, now);
       const numeric = numericDigestText(digest);
-      const ai = await maybeAiSummary(digest);
+      const ai = await maybeAiSummary(digest, session.userId);
       const make = (text: string) => ({
         kind: "ops_digest_ready",
         title: `${label} 每月修正摘要`,
