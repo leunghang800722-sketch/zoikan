@@ -28,6 +28,9 @@ describe("WP-ONE-CLICK-AUTO：migration 規矩", () => {
     try {
       await client.query(sql);
       await client.query(sql);
+      // P6.4：重跑舊 migration 會把 ai.audit_log 退回舊（黑名單）定義——跟住補跑後來嘅
+      // 白名單 migration，令共用測試庫回到正式定義，唔污染同一 run 入面其他測試。
+      await client.query(fs.readFileSync(path.resolve(process.cwd(), "prisma/migrations/20261011120000_p6_ai_audit_log_whitelist/migration.sql"), "utf8"));
     } finally {
       await client.end();
     }

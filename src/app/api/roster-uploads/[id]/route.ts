@@ -16,6 +16,7 @@ import { parseBody } from "@/lib/api/validate";
 import { RosterUploadPatchSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, BadRequest, Conflict } from "@/lib/api/errors";
+import { assertMonthNotLocked } from "@/lib/month-lock";
 import { assignRosterUploadSite, reparseRosterUpload } from "@/lib/roster-upload/service";
 import type { Prisma } from "@prisma/client";
 import { ROSTER_UPLOAD_META_SELECT } from "@/lib/roster-upload/meta-select";
@@ -102,6 +103,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // 一致：作廢咗就係終態，要更正就重新上載）。
     if (before.status === "voided") throw Conflict("呢個上載已經作廢，唔可以再指定盤");
 
+    // P6.1b（H2）：改盤會 supersede 其他版本＋刪重建 rows，已鎖月份 403
+    // （同 reparse route 一致；lib 層 assignRosterUploadSite 亦再查一次）。
+    await assertMonthNotLocked({ workDate: before.month, actorUserId: session.userId, tableName: "roster_uploads", rowId: id, ip: getClientIp(req) });
+
     const body = await readJson(req);
     const parsed = parseBody(RosterUploadPatchSchema, body);
 
@@ -112,7 +117,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     // 驗收 2026-09-23：改盤要同時處理版本序列（目標盤呢個月已經有 active
     // 上載嘅話，唔可以變兩個 active v1）——見 assignRosterUploadSite()。
-    const { supersededIds } = await assignRosterUploadSite(id, parsed.site_id);
+    const { supersededIds } = await assignRosterUploadSite(id, parsed.site_id, { userId: session.userId, ip: getClientIp(req) });
     // 重新對照一次（更別配對要跟返新盤嘅 shift_types 範圍）——`reparseRosterUpload`
     // 用返原檔 bytes，唔使用戶重新上載。壞檔（parse_failed）冇 rows 可以重配，
     // 但 site_id 本身已經update咗，`reparseRosterUpload` 一樣會行（照樣搵唔到 Date 表頭）。

@@ -2430,3 +2430,55 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - `report.auto.summary.postorder_dependency`（一鍵結算 run 的 `report`）：`pricing{total,unpriced,by_step{"1".."5",existing},without_postorder}`、`settlement{total,by_reason{roster,postorder,longterm,external,guard_default,site_default,history,other,unresolved},without_postorder}`。統計口徑見 P2 §34.4。
 - settlement 推斷次序：更表 → Postorder 同崗位同日 → 長工／external → 保安員預設雞頭 → **盤預設雞頭（reason「盤預設雞頭」）** → 近 3 個月同盤歷史 → 分診。
 
+
+## 階段 6 安全補漏（P6，2026-10-11 老闆批准）：行為改變清單
+
+呢一節列出「以前會成功（或回另一個 status），而家唔同」嘅 request——全部係刻意嘅安全修正，唔係 regression。回應 shape 冇變（additive 原則不變），只係 status／error code 變。
+
+### 已鎖月份（`month_closes.locked_at` 非空）一律 403 `month_locked`（DB 零改動，audit 記 `permission_denied`）
+
+| Request | 以前 | 而家 |
+|---|---|---|
+| `POST /api/roster-uploads`（月份已鎖） | 201，舊 confirmed／active 版本被改 `superseded`，寫新 rows | 403 `month_locked` |
+| `PATCH /api/roster-uploads/:id`（upload.month 已鎖，改 `site_id`） | 200，supersede 其他版本＋刪重建 rows | 403 `month_locked`（lib `assignRosterUploadSite()` 內亦再查） |
+| `POST /api/longterm/contracts/import`（Maxwell 導入，作廢舊／新建合約嘅生效區間內有已鎖月） | 200，回溯改長工合約 | 403 `month_locked`（唔改動嘅行唔查；被拒嗰行之前已 commit 嘅行保留，重跑冪等）；作廢舊合約亦寫 audit（`action=void`） |
+| `POST /api/broker-site-assignments`、`DELETE /api/broker-site-assignments/:id`（掛盤月份已鎖） | 201／200 | 403 `month_locked` |
+| `POST /api/guard-fix/runs/:id/apply`（`run.month` 已鎖）；lib `reparseAllActiveUploads()` | 202／200，整月未確認上載被重新解析 | 403 `month_locked` |
+
+### TOCTOU（H6）：寫入 transaction 開頭用 `SELECT … FROM month_closes … FOR SHARE` 再查一次
+
+- `POST /api/shift-records/batch`、對數套用（`reconcile-apply`）、`POST /api/shift-records/reprice`（每個 500 條批次 tx）、`POST /api/months/:month/open`：route 層檢查之後、tx 開始前月份被鎖 → tx 內擋住（403 `month_locked`；reprice 沿用原本 409）。
+- `POST /api/month-closes/:id/lock`：tx 內 `FOR UPDATE` 攞 row，`updateMany({ id, lockedAt: null })` 判 count。兩個並發鎖月請求只有一個 200，另一個 409「呢個月已經鎖定咗」；鎖月會等仍在跑嘅長寫入 tx commit 先完成。
+
+### 登入（H8）：`POST /api/auth/login`
+
+| 情況 | 以前 | 而家 |
+|---|---|---|
+| 帳號鎖定中（連續 5 次錯） | 423 `account_locked`（訊息帶解鎖時間） | **401 `invalid_credentials`「電話或密碼錯誤」**（鎖定狀態只記 audit `login_locked`） |
+| 第 5 次錯密碼觸發鎖定嗰一下 | 423 | 401（同上） |
+| 未註冊電話／停用帳號／密碼錯 | 401（同一訊息） | 401（不變；回應時間亦對齊，未註冊同鎖定中都會跑一次 bcrypt） |
+| 失敗計數 | 讀→加 1→寫（並發可繞過） | 原子 `increment` 預留序號；並發 20 個錯密碼請求最多 5 個被驗，其餘直接 401；成功登入／鎖定過期／管理員重設密碼先清零 |
+| 同一 IP 短時間大量失敗 | 無限制 | 每 IP token bucket（容量 10、每分鐘補 10；只有失敗先扣）用晒 → **429 `too_many_requests`＋`Retry-After`**；全局另有 1000 次失敗／分鐘上限（成功登入唔扣）。冇 IP（本機直連）跳過每 IP 限速 |
+
+限制：限速狀態喺 process 記憶體（多 instance 各自計、重啟清零）；IP 取自 `X-Forwarded-For` 最右一段（平台 proxy 加嗰段）。`POST /api/month-closes/:id/lock` 等唔到長寫入 tx 釋放（預設 10 秒）→ 409 `lock_busy`。
+
+### AI 助手（H7／H9）
+
+- `sql_select`：改用真 SQL parser。以前 `SELECT cost AS x FROM ai.special_items`、逗號 join、子查詢、`SELECT *` 掂到冇權睇嘅欄位會成功（輸出欄名遮罩可被繞過）；而家引用咗 session 冇權睇嘅遮罩欄（收客價／出街價／保安員個人資料／銀行）、或 `SELECT *`／整行引用掂到有遮罩欄嘅表 → tool 結果 `permission_denied`（整條拒絕）。`audit_log.before／after` 當含全部四組。parse 失敗（parser 唔識嘅寫法，例如 `WITH RECURSIVE`、`LIMIT ALL`）一律拒絕。詳見 `docs/ai-assistant.md`「已知限制」。
+- `ai.audit_log` view 改白名單（12 張業務表）；`ai_chat`／`guard_staff_numbers`／`guard_ocr`／`guard_import`／users／roles 等及日後新表預設唔入。`ai_chat` audit `after` 唔再存 `question` 原文，改存 `question_length`＋`question_sha256_16`。
+
+### H10：`must_change_pwd=true` 嘅 session
+
+只准 `POST /api/auth/change-password`、`/api/auth/logout`、`/api/auth/refresh`；其餘 API（以前用臨時密碼照 call 得）→ **403 `must_change_pwd`**。
+
+### CSRF defense-in-depth（`src/middleware.ts`，對所有 `/api/*`）
+
+非 GET／HEAD／OPTIONS：有 `Sec-Fetch-Site` 時只准 `same-origin`／`none`（`same-site`、`cross-site` → **403 `csrf_blocked`**）；冇 `Sec-Fetch-Site` 但有 `Origin` 時，Origin host 要等於 `Host`／`X-Forwarded-Host`；兩個 header 都冇（curl、server-to-server、腳本、Playwright request API 等非瀏覽器 client）照放行。
+
+### Response headers
+
+全站加 `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: same-origin`（CSP 唔做）。
+
+### Client IP（`getClientIp`，登入限速／audit 用）
+
+優先 `x-real-ip`；否則 `X-Forwarded-For` 由右數第 `TRUSTED_PROXY_HOPS` 段（預設 1＝最右段；無效值當 1）；都冇則 `null`。**部署後要核實 audit 記錄嘅 `ip` 係真公網 IP**，唔係（例如見到內部 proxy IP）就將 Zeabur env 設 `TRUSTED_PROXY_HOPS=2`。

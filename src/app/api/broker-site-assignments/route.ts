@@ -10,7 +10,7 @@ import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { paginationParams, readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { BrokerSiteAssignmentCreateSchema } from "@/lib/api/schemas";
-import { monthStart } from "@/lib/month-lock";
+import { monthStart, assertMonthNotLocked } from "@/lib/month-lock";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest, Conflict } from "@/lib/api/errors";
 import type { Prisma } from "@prisma/client";
@@ -46,6 +46,9 @@ export async function POST(req: Request) {
     if (Number.isNaN(parsedMonth.getTime())) throw BadRequest("month 格式唔啱（YYYY-MM-DD 或 YYYY-MM）");
     const month = monthStart(parsedMonth);
     if (isBrokerRole(session)) throw BadRequest("雞頭唔可以自己開 broker_site_assignments"); // 防禦：就算 hard-deny 有漏，呢度再擋一次
+
+    // P6.1d（H4）：掛盤係跟月份走嘅資料，已鎖月份 403（同配額 route 一致）。
+    await assertMonthNotLocked({ workDate: month, actorUserId: session.userId, tableName: "broker_site_assignments", rowId: "new", ip: getClientIp(req) });
 
     try {
       const created = await prisma.brokerSiteAssignment.create({

@@ -13,6 +13,7 @@ import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns } from "@/lib/guards
 import { telLookupVariants } from "@/lib/guards/identity";
 import { createGuardPhone, syncLegacyGuardContactColumns } from "@/lib/guards/contacts";
 import { reparseRosterUpload } from "@/lib/roster-upload/service";
+import { assertMonthNotLocked } from "@/lib/month-lock";
 import { canonicalHkid } from "@/lib/guard-fix/sources";
 import type { GuardFixPlan } from "@/lib/guard-fix/types";
 
@@ -415,7 +416,14 @@ export interface ReparseAllResult {
  * `reparseRosterUpload()`——`confirmed`（已寫入 shift_records）唔
  * reparse（reparse 換晒 row id，對數決定 `row:<id>` 對唔返）。順序而
  * 唔並行，同一個 DB connection pool。 */
-export async function reparseAllActiveUploads(prisma: PrismaClient, month: Date, opts: { txTimeoutMs?: number } = {}): Promise<ReparseAllResult> {
+export async function reparseAllActiveUploads(
+  prisma: PrismaClient,
+  month: Date,
+  opts: { txTimeoutMs?: number; actorUserId?: string | null; ip?: string | null } = {},
+): Promise<ReparseAllResult> {
+  // P6.1e（H5）：整月重新解析會刪重建 roster_upload_rows，已鎖月份拒絕（lib 層
+  // defense-in-depth；一鍵結算／guard-fix apply route 各自亦有 pre-check）。
+  await assertMonthNotLocked({ workDate: month, actorUserId: opts.actorUserId ?? null, tableName: "roster_uploads", rowId: `month:${month.toISOString().slice(0, 7)}`, ip: opts.ip ?? null });
   const confirmedUploads = await prisma.rosterUpload.findMany({ where: { month, status: "confirmed" }, select: { id: true } });
   const uploads = await prisma.rosterUpload.findMany({
     where: { month, status: { notIn: ["superseded", "voided", "confirmed"] } },

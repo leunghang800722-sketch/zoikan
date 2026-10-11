@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { aiQuery } from "../db";
-import { validateSqlSelect, extractReferencedTables, modulesForTables } from "../sql-guard";
+import { validateSqlSelect, modulesForTables, deniedMaskedHits } from "../sql-guard";
 import { scrubUnknownShape } from "../field-scrub";
 import type { AiToolContext } from "./common";
 import { denyIfBroker, deniedResult, requireModuleOrDenied, toolResultJson } from "./common";
@@ -25,7 +25,7 @@ export function createSqlSelectTool(ctx: AiToolContext) {
         return toolResultJson({ error: "invalid_query", message: validated.reason });
       }
 
-      const { tables, unknown } = extractReferencedTables(validated.sql);
+      const { tables, unknown } = validated.analysis;
       if (unknown.length > 0) {
         return toolResultJson({
           error: "unknown_table",
@@ -37,12 +37,21 @@ export function createSqlSelectTool(ctx: AiToolContext) {
         if (moduleDenied) return deniedResult(moduleDenied);
       }
 
+      // P6.2（H7）：parser 抽出全部被引用嘅欄位（唔係輸出欄名；`AS` 改名無效）。
+      // 引用咗 session 冇權睇嘅遮罩欄（收客價／出街價／保安員個人資料／銀行）、
+      // 或者 `SELECT *` 掂到有遮罩欄嘅表 → 整條拒絕（唔係遮罩輸出）。
+      const maskedDenied = deniedMaskedHits(validated.analysis, ctx.fieldVisibility);
+      if (maskedDenied.length > 0) {
+        const what = [...new Set(maskedDenied.map((h) => h.what))].slice(0, 8).join("、");
+        return toolResultJson({
+          error: "permission_denied",
+          message: `呢條查詢引用咗你冇權睇嘅欄位（${what}）。請明確列出你有權睇嘅欄位，唔好用 SELECT * 或者整行引用。`,
+        });
+      }
+
       try {
         const result = await aiQuery(validated.sql);
-        // 已知限制（見 docs/ai-assistant.md）：呢個 scrub 淨係識欄位*名*，
-        // 一個用假 alias 嘅查詢（例如 `SELECT cost AS revenue FROM ...`）
-        // 可以繞過——tokenizer 本身刻意簡單，唔做完整 SQL parse/column
-        // provenance 分析。
+        // 第二重防線（P6.2 之後係 defense-in-depth）：輸出欄名 scrub。
         const rows = scrubUnknownShape(result.rows, ctx.fieldVisibility);
         return toolResultJson({ columns: result.fields.map((f) => f.name), row_count: rows.length, rows, executed_sql: validated.sql });
       } catch (err) {

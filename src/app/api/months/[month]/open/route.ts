@@ -18,7 +18,7 @@
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { isBrokerRole } from "@/lib/broker-isolation";
-import { assertMonthNotLocked, monthStart } from "@/lib/month-lock";
+import { assertMonthNotLocked, assertMonthNotLockedTx, monthStart } from "@/lib/month-lock";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
@@ -61,6 +61,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ month: 
     const pendingAudits: PendingAudit[] = [];
 
     const { assignmentsCreated, quotasCreated, drCreated, drSkippedOutOfRange, sourceHadAnything } = await prisma.$transaction(async (tx) => {
+      // P6.1f（H6）：tx 開頭 FOR SHARE 再查鎖月（route 層檢查喺 tx 外面）。
+      await assertMonthNotLockedTx(tx, { workDate: targetMonth, actorUserId: session.userId, tableName: "months", rowId: monthParam, ip: getClientIp(req) });
       // P3-2.9（附錄 b A-15）：每張表「一次 findMany 攞 target 已存在 key → createManyAndReturn
       // （skipDuplicates 防並發）→ 用返回嘅行寫 audit」，取代逐行 findUnique＋create。
       const copiedFrom = sourceMonth.toISOString().slice(0, 7);

@@ -27,6 +27,7 @@ import { Prisma } from "@prisma/client";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { ok, withApiError, getClientIp, safeErrorSummary } from "@/lib/api/http";
+import { assertMonthNotLocked } from "@/lib/month-lock";
 import { writeAudit } from "@/lib/audit";
 import { NotFound, Conflict } from "@/lib/api/errors";
 import { applyGuardFixPlan, reparseAllActiveUploads, GUARD_FIX_ADVISORY_LOCK_KEY } from "@/lib/guard-fix/apply";
@@ -47,7 +48,7 @@ async function performApply(runId: string, actorUserId: string): Promise<void> {
   const plan = run.planJson as unknown as GuardFixPlan;
   try {
     const diffs = await applyGuardFixPlan({ prisma, plan, planOnly: false, txTimeoutMs: 1_800_000, month: run.month });
-    const reparse = await reparseAllActiveUploads(prisma, run.month, { txTimeoutMs: 600_000 });
+    const reparse = await reparseAllActiveUploads(prisma, run.month, { txTimeoutMs: 600_000, actorUserId });
     const resultJson = { diffs, reparse } as unknown as Prisma.InputJsonValue;
 
     await prisma.guardFixRun.update({ where: { id: runId }, data: { status: "applied", appliedAt: new Date(), resultJson } });
@@ -117,8 +118,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   return withApiError(async () => {
     const session = await requirePermission(req, "安員配對修復", "update");
     const { id } = await params;
-    const run = await prisma.guardFixRun.findUnique({ where: { id }, select: { id: true, status: true, applyStartedAt: true } });
+    const run = await prisma.guardFixRun.findUnique({ where: { id }, select: { id: true, status: true, applyStartedAt: true, month: true } });
     if (!run) throw NotFound();
+    // P6.1e（H5）：run.month 已鎖定 → 403（apply 會改保安員資料＋整月重新解析上載）。
+    await assertMonthNotLocked({ workDate: run.month, actorUserId: session.userId, tableName: "guard_fix_runs", rowId: id, ip: getClientIp(req) });
     if (!applyAllowed(run)) {
       throw Conflict(
         run.status === "applying" ? "呢個 run 套用緊（未夠 15 分鐘），唔好重複撳——等佢完成" : `呢個 run 而家係 ${run.status}，唔可以再套用（要再修就重新計算修復計劃）`,
