@@ -17,6 +17,7 @@
 //   useGuardForm.ts    表單／開關／儲存（+ useGuardStaffNumbers／useGuardContacts／useGuardLongterm）
 //   guards-types.ts／guards-utils.ts
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { apiRequest, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
@@ -80,7 +81,9 @@ export function GuardsClient({
   // WP-PII：「牌照／平安卡 90 日內到期」FilterChip——`?expiring_within_days=90`
   // （API 早已經 OR 埋 safety_card_expiry，見 src/app/api/guards/route.ts；
   // 呢度改嘅淨係文案＋表格 pill 顯示，唔使改 API）。
-  const [expiringOnly, setExpiringOnly] = useState(false);
+  // P8.4：`/guards?expiring=30`（證件到期週報通知連結）預設揀「30 日內到期」；90 同舊行為一樣。
+  const initialExpiring = useSearchParams().get("expiring");
+  const [expiringDays, setExpiringDays] = useState<0 | 30 | 90>(initialExpiring === "30" ? 30 : initialExpiring === "90" ? 90 : 0);
   // WP-STAFF-IMPORT B1：識別狀態篩選（缺身份證／缺電話）。
   const [identityFilter, setIdentityFilter] = useState<IdentityFilter>("");
   // WP-PHASE3（§20.4 Phase 3 item 1）：保安員抽屜「長工」區——崗位盤（`GET/
@@ -119,7 +122,7 @@ export function GuardsClient({
     loadAbortRef.current = ctrl;
     setLoading(true);
     setError(null);
-    const expiringParam = expiringOnly ? "&expiring_within_days=90" : "";
+    const expiringParam = expiringDays ? `&expiring_within_days=${expiringDays}` : "";
     // 搜尋字可能係身份證號：唔放 URL（避免落 access log／瀏覽器歷史），改用 request header（encodeURIComponent）
     const qHeaders = q.trim() ? { "x-guard-search": encodeURIComponent(q.trim()) } : undefined;
     const identityParam = identityFilter ? `&identity=${identityFilter}` : "";
@@ -196,7 +199,7 @@ export function GuardsClient({
     const t = setTimeout(() => load(search), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, expiringOnly, identityFilter, search, monthReady]);
+  }, [month, expiringDays, identityFilter, search, monthReady]);
 
   async function onVoid(id: string, reason: string) {
     setError(null);
@@ -231,8 +234,8 @@ export function GuardsClient({
         searchHasHkid={searchHasHkid}
         month={month}
         setMonth={setMonth}
-        expiringOnly={expiringOnly}
-        setExpiringOnly={setExpiringOnly}
+        expiringDays={expiringDays}
+        setExpiringDays={setExpiringDays}
         identityFilter={identityFilter}
         setIdentityFilter={setIdentityFilter}
         openCreate={g.openCreate}
@@ -249,7 +252,7 @@ export function GuardsClient({
         rows={rows}
         loading={loading}
         search={search}
-        resetKey={[search, expiringOnly, identityFilter].join("|")}
+        resetKey={[search, expiringDays, identityFilter].join("|")}
         brokers={brokers}
         onEdit={g.openEdit}
         onVoid={onVoid}
