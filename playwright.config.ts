@@ -32,7 +32,8 @@ export default defineConfig({
     // AI Hub 人手試），Playwright 會沿用嗰個現有 server——AI 相關場景會
     // 打真 AI Hub（有 key 先works），呢個係已知限制，需要嘅話重啟一個
     // 由呢度帶住 `AI_LLM=fake` 起嘅 server。
-    env: { ...process.env, AI_LLM: "fake" },
+    // P7：e2e 唔開排程器（避免 25 號 09:00 等時間點令測試資料被自動改動）。
+    env: { ...process.env, AI_LLM: "fake", SCHEDULER_ENABLED: "0" },
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

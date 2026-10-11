@@ -5,7 +5,7 @@ import { SUPPLEMENTARY_KINDS } from "@/lib/triage/types";
 import { createNotification } from "@/lib/notify/create";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
-export const TRIAGE_REMINDER_KEY = "triage_reminder";
+const TRIAGE_REMINDER_KEY = "triage_reminder";
 const STALE_DAYS = 2;
 
 export async function runTriageReminder(now: Date): Promise<JobResult> {

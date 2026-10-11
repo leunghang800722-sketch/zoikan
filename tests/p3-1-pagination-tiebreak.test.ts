@@ -79,7 +79,7 @@ describe("P3-1.8 分頁 orderBy 加 id tie-breaker", () => {
 describe("P3-1.7 大 interactive transaction 有 timeout", () => {
   it.each([
     ["app/api/shift-records/batch/route.ts"],
-    ["app/api/months/[month]/open/route.ts"],
+    ["lib/months/open-month.ts"], // P7.2：開月核心由 route 抽去 lib（route 只剩權限＋response）
     ["lib/roster-upload/service.ts"],
   ])("%s 含 timeout: 60_000", (rel) => {
     expect(fs.readFileSync(path.join(root, rel), "utf8")).toContain("timeout: 60_000, maxWait: 10_000");

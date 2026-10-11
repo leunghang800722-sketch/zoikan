@@ -94,6 +94,8 @@ interface CopyLastMonthCandidate {
   broker_label: string;
   client_rate: string | null;
   guard_wage: string | null;
+  /** P7.2：same｜new｜rate_changed｜changed_in_month（非 same＝排程唔會自動複製、要人核對） */
+  change_class?: string;
 }
 
 export function RateCardsClient({
@@ -119,9 +121,15 @@ export function RateCardsClient({
   // query param）；預設空字串＝全部，唔篩。
   const [effectiveMonthFilter, setEffectiveMonthFilter] = useState("");
   // P3-4：「去處理 ›」帶 `?month=` 入嚟就當初始生效月（mount 後讀，避免 hydration mismatch；仍然係本地 state，唔帶＝空＝全部）。
+  // P7.2：`?pending=1`（月頭自動開新月通知／首頁「價卡待確認」卡帶入）＝自動打開「複製上月卡」預覽，等老闆確認。
+  const [pendingParam, setPendingParam] = useState(false);
   useEffect(() => {
-    const m = new URLSearchParams(window.location.search).get("month");
-    if (m && /^\d{4}-\d{2}$/.test(m)) setEffectiveMonthFilter(m);
+    const sp = new URLSearchParams(window.location.search);
+    const m = sp.get("month");
+    if (m && /^\d{4}-\d{2}$/.test(m)) {
+      setEffectiveMonthFilter(m);
+      if (sp.get("pending") === "1") setPendingParam(true);
+    }
   }, []);
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [shiftTypes, setShiftTypes] = useState<ShiftTypeRow[]>([]);
@@ -202,7 +210,7 @@ export function RateCardsClient({
     }
     const lines = preview.data.candidates
       .slice(0, 20)
-      .map((c) => `${c.site_name} ${c.shift_type_code}（${c.broker_label}）收客 ${c.client_rate ?? "—"}／工資 ${c.guard_wage ?? "—"}`)
+      .map((c) => `${c.site_name} ${c.shift_type_code}（${c.broker_label}）收客 ${c.client_rate ?? "—"}／工資 ${c.guard_wage ?? "—"}${c.change_class && c.change_class !== "same" ? "　★價錢有變／新組合，請核對" : ""}`)
       .join("\n");
     const more = preview.data.count > 20 ? `\n…仲有 ${preview.data.count - 20} 張` : "";
     const proceed = await askConfirm({ message: `複製上月卡到本月 ${month}：搵到 ${preview.data.count} 張卡可以複製\n${lines}${more}\n\n確定要建立呢 ${preview.data.count} 張新卡？`, confirmLabel: "建立" });
@@ -219,6 +227,14 @@ export function RateCardsClient({
     setNotice(`複製上月卡完成：已建立 ${res.data.created_count} 張新卡（note「由上月複製」，覆核價錢有變要去改）。`);
     await load();
   }
+
+  // P7.2：`?pending=1` 帶入＝載入後自動打開預覽（只一次）。
+  useEffect(() => {
+    if (!pendingParam || isBroker || !canCopyLastMonth || !effectiveMonthFilter) return;
+    setPendingParam(false);
+    void handleCopyLastMonth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingParam, isBroker, canCopyLastMonth, effectiveMonthFilter]);
 
   // WP-PRICE §M3（老闆 2026-09-16 拍板）：「重新計價」——用「生效月」
   // 篩選器揀嘅月份（冇揀就用返家陣個月）。改為 dry-run 預覽→confirm→

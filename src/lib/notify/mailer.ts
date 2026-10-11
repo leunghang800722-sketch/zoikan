@@ -31,7 +31,7 @@ export function appBaseUrl(): string {
   return (process.env.APP_BASE_URL?.trim() || DEFAULT_APP_BASE_URL).replace(/\/+$/, "");
 }
 
-export function notifyFrom(): string {
+function notifyFrom(): string {
   return process.env.NOTIFY_FROM?.trim() || DEFAULT_FROM;
 }
 

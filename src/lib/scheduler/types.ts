@@ -1,5 +1,5 @@
 // P7.1：排程 job 定義。job 本身只准經現有 lib 寫入（含鎖月檢查），唔直接寫 SQL。
-export interface JobContext {
+interface JobContext {
   jobKey: string;
   trigger: "schedule" | "manual";
   now: Date;
