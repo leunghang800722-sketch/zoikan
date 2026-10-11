@@ -90,6 +90,16 @@ describe("P13.1 triage session 分頁", () => {
     expect(sup.questions.every((q: { kind: string }) => q.kind === "field_review")).toBe(true);
   });
 
+  it("status=open,skipped：連跳過咗嘅一齊攞（P13.3 由頭開始）；status=open 唔包", async () => {
+    const first = await (await get(sid, "?status=open&take=2", cookie)).json();
+    await prisma.triageQuestion.update({ where: { id: first.questions[0].id }, data: { status: "skipped" } });
+    const open = await (await get(sid, "?status=open&take=50", cookie)).json();
+    expect(open.questions.map((q: { id: string }) => q.id)).not.toContain(first.questions[0].id);
+    const both = await (await get(sid, "?status=open,skipped&take=50", cookie)).json();
+    expect(both.questions.map((q: { id: string }) => q.id)).toContain(first.questions[0].id);
+    expect(both.questions).toHaveLength(40);
+  });
+
   it("答咗嘅題 cursor 仍然有效（cursor 題狀態變咗都續得）", async () => {
     const first = await (await get(sid, "?status=open&take=3", cookie)).json();
     const last = first.questions[2].id as string;
