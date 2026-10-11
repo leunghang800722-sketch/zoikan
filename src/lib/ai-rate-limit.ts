@@ -46,8 +46,40 @@ export async function countTodayAiChats(userId: string): Promise<number> {
   });
 }
 
+/**
+ * P9.2：原子檢查＋預留。每用戶一條 `pg_advisory_xact_lock(hashtext('ai-daily:'+userId))` 內：
+ * base = max(ai_daily_usage 計數, 今日 audit_log AI 次數)；base < limit 先把計數 +1（預留呢一次），
+ * 回傳 `used`＝預留前嘅 base（caller 照舊 `used >= limit` 就 429）。
+ * 並發 N 個請求喺 base=limit-k 時只有 k 個會見到 used<limit。
+ * 計數喺檢查時就 +1（唔係等 audit 寫入），所以 caller 若喺叫 LLM 之前失敗要 `releaseDailySlot()` 退還。
+ */
 export async function assertUnderDailyLimit(userId: string): Promise<{ used: number; limit: number }> {
   const limit = getAiDailyLimit();
-  const used = await countTodayAiChats(userId);
+  const now = new Date();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const used = await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"ai-daily:" + userId}))`;
+      const [row, audited] = await Promise.all([
+        tx.aiDailyUsage.findUnique({ where: { userId_day: { userId, day: dayStart } } }),
+        tx.auditLog.count({ where: { actorUserId: userId, createdAt: { gte: dayStart }, OR: AI_QUOTA_ACTIONS.map((a) => ({ tableName: a.tableName, action: a.action })) } }),
+      ]);
+      const base = Math.max(row?.used ?? 0, audited);
+      const next = base < limit ? base + 1 : base;
+      await tx.aiDailyUsage.upsert({ where: { userId_day: { userId, day: dayStart } }, create: { userId, day: dayStart, used: next }, update: { used: next } });
+      return base;
+    },
+    { maxWait: 15000, timeout: 15000 },
+  );
   return { used, limit };
+}
+
+/** 退還一次預留（caller 喺叫 LLM 之前就失敗，例如 provider 未設定）。 */
+export async function releaseDailySlot(userId: string): Promise<void> {
+  const now = new Date();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"ai-daily:" + userId}))`;
+    await tx.aiDailyUsage.updateMany({ where: { userId, day: dayStart, used: { gt: 0 } }, data: { used: { decrement: 1 } } });
+  });
 }
