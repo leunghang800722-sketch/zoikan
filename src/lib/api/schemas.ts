@@ -993,3 +993,49 @@ export const JobUpdateSchema = z
     schedule: z.string().trim().min(1).max(100).optional(),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// P10.1／P10.2：頂位津貼價目表
+// ---------------------------------------------------------------------------
+const coverGrade = z.enum(["IC", "兵"]);
+const coverAmount = z.number().positive().max(100000);
+
+export const CoverRateCreateSchema = z
+  .object({
+    site_id: uuid,
+    grade: coverGrade,
+    amount: coverAmount,
+    effective_from: ymd,
+    effective_to: nullableYmd,
+  })
+  .strict();
+
+export const CoverRateUpdateSchema = z
+  .object({
+    amount: coverAmount.optional(),
+    /** true＝作廢（軟刪）。 */
+    void: z.literal(true).optional(),
+  })
+  .strict();
+
+export const CoverRateAdoptSchema = z
+  .object({
+    /** 推斷用嘅月份（逗號分隔 YYYY-MM），後端重跑推斷核對每行。 */
+    months: z.string().min(7).max(80),
+    /** 價目表生效日（必須係未鎖月份）。 */
+    effective_from: ymd,
+    items: z
+      .array(
+        z
+          .object({
+            site_id: uuid,
+            grade: coverGrade,
+            amount: coverAmount,
+            status: z.enum(["consistent", "mixed", "single_sample"]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(200),
+  })
+  .strict();

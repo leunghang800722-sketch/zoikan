@@ -756,6 +756,7 @@ model Site {
   // WP-LTPAY：長工合約 `postSiteId`（可 null）反向關聯。
   longtermContracts        GuardLongtermContract[]
 
+  coverShiftRates CoverShiftRate[]
   @@map("sites")
 }
 
@@ -1993,4 +1994,30 @@ model AiDailyUsage {
 
   @@id([userId, day])
   @@map("ai_daily_usage")
+}
+
+// ---------------------------------------------------------------------------
+// P10.1：頂位津貼價目表（逐盤逐職級，老闆揀 B）。只影響「頂位草稿」金額（草稿未確認唔計糧）。
+// grade＝"IC"／"兵"（更表 Rank 欄 classifyRank 分類）。生效價＝effectiveFrom<=日期 且（effectiveTo 空或>=日期）、未作廢、effectiveFrom 最大者；
+// 改價＝新增一行（新 effectiveFrom），唔覆寫舊價。source＝inferred（由歷史反推採用）／manual。
+// 注意：(site_id, grade, effective_from) 唯一；作廢後再加同日同盤同職級會復用該行（見 cover-rates 服務層）。
+// ---------------------------------------------------------------------------
+model CoverShiftRate {
+  id            String    @id @default(uuid())
+  siteId        String    @map("site_id")
+  site          Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  grade         String
+  amount        Decimal   @db.Decimal(10, 2)
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  source        String    @default("manual")
+  evidence      Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  createdBy     String?   @map("created_by")
+  voidedAt      DateTime? @map("voided_at")
+  voidedBy      String?   @map("voided_by")
+
+  @@unique([siteId, grade, effectiveFrom])
+  @@index([siteId, grade])
+  @@map("cover_shift_rates")
 }
