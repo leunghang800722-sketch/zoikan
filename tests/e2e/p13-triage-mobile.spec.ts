@@ -179,6 +179,39 @@ test.describe("P13 要你睇手機流程", () => {
     await expect(page).toHaveURL(/\/triage$/);
   });
 
+  test("返回慢（popstate 遲到 700ms）：返回列表只退一格；重新整理後唔開 overlay 直接導航，back 一次就返到原頁", async ({ page }) => {
+    await cleanup();
+    await seedGuardImport();
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    await page.goto("/triage");
+    await page.evaluate(() => {
+      const w = window as unknown as { __backCalls: number };
+      w.__backCalls = 0;
+      const orig = History.prototype.back;
+      History.prototype.back = function () {
+        w.__backCalls++;
+        setTimeout(() => orig.call(this), 700);
+      };
+    });
+    await page.getByTestId("triage-session-card").filter({ hasText: "重要 122 題" }).getByRole("button", { name: "繼續答" }).click();
+    await page.getByTestId("triage-later").click();
+    await expect(page.getByTestId("triage-dialog")).toHaveCount(0, { timeout: 5000 });
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => (window as unknown as { __backCalls: number }).__backCalls)).toBe(1);
+    await expect(page).toHaveURL(/\/triage$/);
+    // g：開 overlay → reload → 唔開 → Link 去另一頁 → back 一次返原頁
+    await page.reload();
+    await page.getByTestId("triage-session-card").filter({ hasText: "重要 122 題" }).getByRole("button", { name: "繼續答" }).click();
+    await expect(page.getByTestId("triage-dialog")).toBeVisible();
+    await page.reload(); // 舊 entry 仲喺 history，頁面冇 overlay
+    await page.getByTestId("mobile-nav-hamburger").click();
+    await page.getByTestId("mnav-/guards").click();
+    await expect(page).toHaveURL(/\/guards/);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/triage$/);
+  });
+
   test("history：對話框／Drawer／手機抽屜入 history，返回只關覆蓋層", async ({ page }) => {
     await cleanup();
     await seedGuardImport();

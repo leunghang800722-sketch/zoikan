@@ -34,6 +34,7 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
   const closing = useRef(false); // 已經發出 history.back()，等 popstate（防 dblclick 返兩格）
   const nonceRef = useRef<string | null>(null);
   const poppedRef = useRef(false);
+  const depthRef = useRef(1);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -42,6 +43,7 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
     const nonce = newNonce();
     nonceRef.current = nonce;
     const depth = active.size + 1;
+    depthRef.current = depth;
     active.add(nonce);
     window.history.pushState({ zkOverlay: key, zkNonce: nonce, zkDepth: depth }, "", window.location.href);
     poppedRef.current = false;
@@ -77,6 +79,8 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
       timerRef.current = setTimeout(() => {
         if (closing.current) {
           closing.current = false;
+          // 先標記「已經彈出」：遲到嘅 popstate 只係返到 base entry，cleanup 唔再 back 多一格
+          poppedRef.current = true;
           onCloseRef.current();
         }
       }, 400);
@@ -87,7 +91,7 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
     const nonce = nonceRef.current;
     if (!enabled || !nonce || !poppedRef.current) return;
     poppedRef.current = false;
-    window.history.pushState({ zkOverlay: key, zkNonce: nonce, zkDepth: 1 }, "", window.location.href);
+    window.history.pushState({ zkOverlay: key, zkNonce: nonce, zkDepth: depthRef.current }, "", window.location.href);
   }, [enabled, key]);
   const closeForNavigation = useCallback(() => {
     skipBack.current = true;
@@ -95,3 +99,6 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
   }, []);
   return { close, closeForNavigation, restore };
 }
+
+// 模組載入就裝（MobileNav 喺每頁 layout 都有 import）：重新整理後舊 entry 即使冇再開 overlay 都會被跳過
+installGlobal();
