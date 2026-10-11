@@ -13,7 +13,7 @@ import { PostorderDependencyLine } from "./PostorderDependencyLine";
 const card = "rounded-[10px] border border-zk-border bg-white";
 const STACK_COLOR = { shift: "var(--zk-primary)", referral: "var(--zk-primary-light)", autopay: "var(--zk-success)" } as const;
 
-export function ReportSection({ run, report, busy, locked, groups, onOpenTriage }: { run: RunDTO; report: ReportDTO; busy: boolean; locked: boolean; groups: ReviewGroup[]; onOpenTriage: () => void }) {
+export function ReportSection({ run, report, busy, locked, groups, onOpenTriage, onChanged }: { run: RunDTO; report: ReportDTO; busy: boolean; locked: boolean; groups: ReviewGroup[]; onOpenTriage: () => void; onChanged?: () => void }) {
   const [showAllSites, setShowAllSites] = useState(false);
   const stack = deriveCostStack(report.combined_cost_summary);
   const pct = marginPct(report.totals);
@@ -109,7 +109,7 @@ export function ReportSection({ run, report, busy, locked, groups, onOpenTriage 
       </div>
 
       {report.auto && <AutoSummaryCard auto={report.auto} extraFooter={<PostorderDependencyLine auto={report.auto} month={report.month} />} />}
-      {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} locked={locked} onOpenTriage={onOpenTriage} />}
+      {report.auto && <ReviewCard auto={report.auto} groups={groups} busy={busy} locked={locked} onOpenTriage={onOpenTriage} onChanged={onChanged} />}
 
       {/* 斷點例外：兩張表並排要 ≥1280（xl），1024–1279 名欄會逐字斷行——§8.4「兩門檻＋ReportSection 內層例外」。 */}
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">

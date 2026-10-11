@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/DataTable";
 import { TriageDialog } from "@/components/TriageDialog";
+import { BatchAcceptButton } from "@/components/BatchAcceptButton";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { kickerFor } from "@/lib/nav/schema";
@@ -115,6 +116,7 @@ export default function TriagePage() {
               <Button variant="primary" disabled={s.counts.open === 0} onClick={() => setOpenId(s.id)}>
                 {s.counts.open > 0 ? "繼續答" : "冇未答"}
               </Button>
+              {isMcSource(s.source_type) && s.counts.open > 0 && !s.superseded_all && <BatchAcceptButton sessionId={s.id} onDone={() => { router.refresh(); void load(); }} />}
               {isBossView && (
                 <Button variant="ghost" size="sm" aria-label="更多" onClick={() => setMoreOpen((v) => (v === s.id ? null : s.id))} data-testid="triage-more">
                   ⋯

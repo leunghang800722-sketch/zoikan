@@ -8,7 +8,8 @@ import type { AutoReportDTO } from "@/components/month-close/types";
 import { humanize, reviewTotals, type ReviewGroup } from "@/components/month-close/derive";
 
 import { Button } from "@/components/ui/Button";
-export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto: AutoReportDTO; groups: ReviewGroup[]; busy: boolean; locked: boolean; onOpenTriage: () => void }) {
+import { BatchAcceptButton } from "@/components/BatchAcceptButton";
+export function ReviewCard({ auto, groups, busy, locked, onOpenTriage, onChanged }: { auto: AutoReportDTO; groups: ReviewGroup[]; busy: boolean; locked: boolean; onOpenTriage: () => void; onChanged?: () => void }) {
   const t = reviewTotals(auto.review);
   const canAnswer = !!auto.triage_session_id && t.total > 0;
   return (
@@ -20,6 +21,7 @@ export function ReviewCard({ auto, groups, busy, locked, onOpenTriage }: { auto:
           <div className="text-zk-sm text-zk-muted">{t.total === 0 ? "冇要你睇嘅項目——系統全部有建議、已自動處理。" : `系統唔肯自己決定嘅嘢。${t.propose} 題有建議答案，${t.unknown} 題要你自己揀；唔答都得，跳過就留返人手處理。`}</div>
         </div>
         <div className="ml-auto flex items-center gap-3">
+          {auto.triage_session_id && !locked && <BatchAcceptButton sessionId={auto.triage_session_id} disabled={busy} onDone={onChanged} />}
           <Link href="/triage" className="text-zk-sm text-zk-muted underline">
             去分診頁
           </Link>

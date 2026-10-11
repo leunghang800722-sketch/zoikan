@@ -254,7 +254,8 @@ describe("WP-AI-DIAG 診斷工具", () => {
     const gm = qs.find((q) => q.id === guardMatchQuestionId)! as (typeof qs)[number] & { options: string[]; candidates: string[] };
     expect(gm.options).toEqual(["mc_accept", "mc_pick"]);
     expect(gm.summary).toContain("3 格保安員配對要核實");
-    for (const q of qs) expect(Object.keys(q).sort()).toEqual(["broker_display", "candidates", "confidence", "id", "kind", "options", "shift_type", "site", "status", "summary"]);
+    expect(pricing).toMatchObject({ has_suggestion: false }); // unknown＝冇預填建議（P8.2）
+    for (const q of qs) expect(Object.keys(q).sort()).toEqual(["broker_display", "candidates", "confidence", "has_suggestion", "id", "kind", "options", "shift_type", "site", "status", "summary"]);
     // options／candidates 只 id：candidates 嚟自 evidence（c1），options 唔含 skip
     expect(gm.candidates).toEqual(["c1"]);
     for (const q of qs) expect((q as unknown as { options: string[] }).options).not.toContain("skip");
