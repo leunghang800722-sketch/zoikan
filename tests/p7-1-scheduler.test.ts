@@ -33,7 +33,7 @@ describe("P7.1 scheduler", () => {
   });
 
   it("registry 全部 job 都有合法預設 cron", () => {
-    expect(JOBS.map((j) => j.key).sort()).toEqual(["after_lock_exports", "auto_one_click", "nightly_month_health", "open_next_month", "permit_expiry_weekly", "triage_reminder"]);
+    expect(JOBS.map((j) => j.key).sort()).toEqual(["after_lock_exports", "auto_one_click", "lock_ops_digest", "nightly_month_health", "open_next_month", "permit_expiry_weekly", "triage_reminder"]);
     for (const j of JOBS) expect(isValidCron(j.defaultSchedule)).toBe(true);
   });
 
