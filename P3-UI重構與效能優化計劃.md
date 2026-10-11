@@ -761,3 +761,43 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - merge main `e8fd541`；部署 `6acafb0bfb15905b77d55831` RUNNING 03:03Z：`Applying migration 20261011120000_p6_ai_audit_log_whitelist … applied`、助手 claude、OCR 自檢 ok。
 - **正式站核對**：`curl -sI /login` 見 `x-frame-options: DENY`、`x-content-type-options: nosniff`、`referrer-policy: same-origin`；用唔存在電話錯密碼 1 次 → 401「電話或密碼錯誤」；**硬性條件通過**：該次 `login_failed` audit 記錄嘅 ip ＝ 規劃者公網 IP（Zeabur 下 XFF 最右段／x-real-ip 係真 client，`TRUSTED_PROXY_HOPS` 保持預設 1，唔使改 env）；更表上載頁載入 0 個 4xx；助手一問一答 200、冇 `csrf_blocked`；runtime log 0 個 csrf_blocked／lock_busy／internal_error。
 - 留待下一階段：Maxwell 導入遇已鎖月改逐行跳過；reprice 409 vs 403 統一；`month_closes` 無 row 月份嘅細窗口；NATURAL JOIN 靠 parse 失敗拒絕（升級 parser 要補）。
+
+## 11. 階段 7 自動化第一批（2026-10-11 老闆批准）：排程＋email 通知基建＋月頭自動開新月
+
+來源：`docs/audit-2026-10/second-opinion-automation-ai.md` §三 J1／J2／J3／J7／J9、§四、§五 T1／T3／T4／T7。原則（老闆）：**每個月重複嘅嘢，系統做，唔好要人手每月重複。** 執行：Sonnet 5.5（`claude-sonnet-5-5`），branch `p7-automation-1`（from main `d212d4b`，含階段 6 merge `e8fd541`），**唔 merge**，等 Opus 5.5 驗收。API 清單見 `docs/api.md`「階段 7」，運維見新檔 `docs/ops.md`。
+
+### 11.1 落實紀錄（Sonnet 5.5，2026-10-11，branch p7-automation-1）
+
+| 項 | 內容 | 重點 |
+|---|---|---|
+| P7.1 基建 | migration `20261011150000_p7_notifications_scheduler`（只新增）：`app_notifications`（kind／title／body／href／audience jsonb／read_by jsonb／email_sent_at／dedupe_key unique）、`scheduled_jobs`、`job_runs`、`users.notify_email`＋`notify_prefs` | 通知 body 只有盤名／數字／id／月份（`assertNoPii` 拒 HKID／電郵／8 位電話型）；唔入 `ai` schema（`ai.users` view 本身冇呢兩欄，有 test 鎖死）；audit 只記 `notify_email_update`（唔存電郵） |
+| P7.1 mailer | `src/lib/notify/mailer.ts`：`nodemailer@10.1.0`（釘版本，`package-lock.json` 由 npm 生成，純新增）經 `SMTP_URL` 寄；冇設 → 只寫站內通知並 log `[notify] email disabled`；`NOTIFY_FROM`、`APP_BASE_URL`（預設 `https://zoikan.zeabur.app`） | 寄失敗只 log 錯誤類別（唔 log 地址／連線字串），唔影響通知建立；`notify_prefs` 逐類控制電郵 |
+| P7.1 排程器 | `src/instrumentation.ts`→`instrumentation-node.ts`（Node runtime 先 import，edge bundle 唔引入 `pg`）→`startScheduler()` 每分鐘 tick；5 欄 cron 按香港時間（`hkParts`）；到期 job 攞專用 PG 連線 session-level advisory lock（`pg_try_advisory_lock(hashtextextended('zoikan:job:<key>',0))`）→ `UPDATE … next_run_at<=now` 認領 → 跑 → 寫 `job_runs`／`scheduled_jobs.last_*`；失敗通知老闆（`job_failed`） | `SCHEDULER_ENABLED`：冇設＝production 開、dev／test 關（與簡報「預設 1」差別：dev 唔自動跑，免得本機庫 25 號被改）；Playwright 固定 `0`。`next start`（production build）實測啟動、3 個 job 設定行寫入 |
+| P7.1 API／UI | `GET /api/notifications`、`POST /api/notifications/:id/read`、`/read-all`；`GET／PATCH /api/users/:id/notify`；`GET /api/admin/jobs`、`PATCH /api/admin/jobs/:key`、`POST /api/admin/jobs/:key/run-now`（老闆專用，`baseRole` 判斷，**冇新 RBAC module**）；首頁「通知」區（未讀 N、最新 5 條）、側欄「首頁」未讀 badge、`/notifications`、`/settings/jobs`（開關／改 cron／立即跑／最近紀錄）、用戶頁同改密碼頁「通知電郵」 | 側欄多一條「自動排程」（老闆 18 條，`DesktopNav` 組間距 `mb-2→mb-1.5` 令 1512×700 仍唔使捲） |
+| P7.2 自動開新月 | job `open_next_month`（每月 25 日 09:00 HKT）：`openMonth()` 由 route 抽成 `src/lib/months/open-month.ts`（route 同 job 共用，tx 內 `FOR SHARE` 鎖月檢查保留）；價卡用 `findCopyLastMonthCandidates`＋新 `classifyCopyCandidates`（`same`／`new`／`rate_changed`／`changed_in_month`），只 `same` 經 `applyCopyLastMonthCards` 自動寫（`created_by=job:open_next_month`、audit actor null＋`after.by_job`；lib 內加鎖月檢查）；其餘通知「N 張價卡要你確認」＋首頁「價卡待確認」卡（`GET /api/rate-cards/copy-last-month?month=`）→ `/rate-cards?month=…&pending=1` 自動開預覽（preview 每行標「★價錢有變／新組合」）；已鎖月跳過並通知；同月通知 dedupe | `/sites` 加「開新月」手動掣（call 同一 API） |
+| P7.3 唯讀 job | `nightly_month_health`（21:00）：本月＋未鎖上月 `buildMonthHealth`，新紅項先通知（dedupe＝紅項 hash，body 只有代號×數量），全綠＋一鍵結算 run done→「可以鎖月」；`triage_reminder`（09:00）：負責人有 >2 日未答重要題→通知（每人每日一條） | 兩個 job 只寫通知／job_runs，唔寫業務表（test 驗證） |
+
+**老闆要喺 Zeabur 加嘅 env（都唔加亦可運作，只係冇 email）**
+
+| 變數 | 說明 |
+|---|---|
+| `SMTP_URL` | `smtps://用戶:密碼@主機:465`。冇設＝email 關閉，只有站內通知 |
+| `NOTIFY_FROM` | 寄件人，例 `在勤 <notify@你的網域>` |
+| `APP_BASE_URL` | email 連結根網址，預設 `https://zoikan.zeabur.app`（唔改亦得） |
+
+部署後：每個要收 email 嘅同事喺「改密碼」頁（或老闆喺「用戶」頁）填通知電郵；老闆到「設定 › 自動排程」撳「立即跑」試三個 job。`SCHEDULER_ENABLED` 唔使加（production 預設開）；緊急剎車見 `docs/ops.md` §5。
+
+**驗證**
+- 新增 vitest：`tests/p7-1-cron`（6）、`p7-1-scheduler`（10：tick 冪等、並發 tick 只跑一次、advisory lock 令第二個 run-now `skipped_locked`、認領、停用、失敗通知、stale 掃除、開關解析）、`p7-1-notify`（8：dedupe、PII guard、mailer 關閉唔拋錯、收件人過濾、audience 隔離＋已讀、電郵設定權限／audit 唔存電郵、`ai.users` 無電郵欄）、`p7-2-open-next-month`（7：分類四類、價錢冇變先自動寫、冪等第二次 0 新增、已鎖月跳過、通知 dedupe、排程 tick＋run-now、通知無 PII）、`p7-3-nightly-health`（4）、`p7-3-triage-reminder`（2）；既有 test 同步：`rbac-nav-groups`（老闆 18 條）、`p3-1-pagination-tiebreak`（開月 `timeout: 60_000` 檢查改指 lib）。
+- `npx vitest run`（隔離 PG 54373）：**233 檔全過，3,584 passed／0 failed**（階段 6 為 226 檔／3,541）。`tsc --noEmit` 0；`--noUnusedLocals --noUnusedParameters` 0；`npm run lint` 0 warning；`npm run build` 過（`rm -rf .next` 後；`ƒ Middleware` 照有、新頁 `/notifications`、`/settings/jobs`）；knip 0。
+- `npm run gate:locked-months`（隔離 dev PG 54375）：**12/12 rc=0**；snapshot 5,080 數字葉，同階段 6 基線 snapshot 數值 multiset 逐個相同。
+- Playwright 全部 spec（隔離 PG 54375、`next start` 3180、`SCHEDULER_ENABLED=0`、`AI_LLM=fake`；gate 後 `db:reset`＋`db:seed` 重 seed 再跑）：**225 passed｜5 skipped（原有 `test.skip`）｜0 failed**。新增 `tests/e2e/p7-automation.spec.ts` 5 條（通知區／badge／已讀／全部頁、角色隔離、自動排程頁開關＋改 cron＋立即跑、開新月掣、通知電郵）；`p3-3-nav` 兩條 17→18；`p2c` 角色矩陣 checkbox 樣式斷言改 `toHaveCSS`（原一次性 `evaluate` 間歇撞到 re-render，回空字串；同一 build 連跑 3 次先後有過有失敗，與 P7 無關，已加固）。
+- 本機用 `run-now` 試跑三個 job（seed 假資料）：`open_next_month` 200 ok（2026-11 已開好，seed 無 2026-10 結構故全 0）、`nightly_month_health` 200 ok（2026-09／10 紅項 0）、`triage_reminder` 200 ok（假 3 題逾期→會計 1 條通知）；首頁通知區、`/notifications`、`/settings/jobs` 截圖正常。
+- `package-lock.json`：只由 `npm install --save-exact nodemailer`＋`--save-dev --save-exact @types/nodemailer` 生成，diff 純新增（無刪除行）。
+
+**已知限制／交驗收者留意**
+1. `open_next_month` 只自動複製「`effective_to`＝上月最後一日」嘅價卡（沿用 `findCopyLastMonthCandidates` 既有口徑）；`same` 判斷以收客價／出糧價／雞頭費／支付價四個價相等＋上月內冇新卡生效為準，上上月冇卡一律當 `new`（待確認）。
+2. `nightly_month_health` 以「最早建立嘅啟用老闆」做讀者 session（只在記憶體）；無啟用老闆則 job 失敗並通知。
+3. 通知 `audience` 以 base_role 或 user id 比對；自訂角色用 base_role。`notify_prefs` 只控制電郵。
+4. 排程停機錯過嘅執行，重啟後第一個 tick 補跑一次（job 全部冪等）；多 instance 靠 advisory lock＋認領防重跑，未做跨 instance 時鐘校正。
+5. 未做（留下一階段）：J3 上載後自動跑一鍵結算、J4 證件到期、J7 摘要推送、J5／J6／J8、T2 批量接受建議；`SCHEDULER_ENABLED` 預設與簡報字面不同（見上）。

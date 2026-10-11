@@ -45,7 +45,7 @@ export function DesktopNav({
 
       <nav className="flex flex-1 flex-col overflow-y-auto">
         {groups.map((g) => (
-          <div key={g.title || "_top"} className="mb-2">
+          <div key={g.title || "_top"} className="mb-1.5">
             {g.title && <div className="px-2 pb-0.5 text-zk-2xs font-semibold leading-[14px] tracking-[.06em] text-zk-faint">{g.title}</div>}
             <div className="flex flex-col">
               {g.links.map((l) => {
