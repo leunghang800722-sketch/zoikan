@@ -2538,3 +2538,15 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 - audit：`audit_log.after` 嘅 `by_job` 現在對**所有**表保留（之前只喺有 DTO mapper 嘅表保留；未登記表只存 `{id}`＋白名單 meta key）。
 - 通知 `kind` 新增：`one_click_auto`、`month_files_ready`、`permit_expiry_weekly`、`ops_digest_ready`。
 - 排程 job 新增（`GET /api/admin/jobs`）：`auto_one_click`、`after_lock_exports`、`permit_expiry_weekly`、`lock_ops_digest`。
+
+
+## P9（階段 9）：長工糧人手輸入草稿＋三個細補（全部 additive）
+
+- `longterm_payroll_inputs` 新欄（DTO 同步 additive）：`status`（`draft`｜`confirmed`，舊資料／人手新增預設 `confirmed`）、`draft_source`（例 `roster_leave:SL`）、`draft_evidence`（`{dates, roster_upload_ids, edited?}`，唔含姓名）、`confirmed_at`／`confirmed_by`。**計糧只讀 `confirmed`**（`buildLongtermPayrollInputs`）；草稿未確認對 Gross 零影響。
+- `GET /api/longterm/inputs?status=draft|confirmed`（冇帶＝全部；其他值 400）。
+- `PATCH /api/longterm/inputs/:id` body 加 `status:"confirmed"`（只准 draft→confirmed；`"draft"` 400）。同一個 PATCH 改草稿內容（日期／醫生紙等）會標 `draft_evidence.edited=true`，排程之後唔再覆蓋。權限 `長工糧:update`，鎖月 403。
+- `POST /api/longterm/inputs/confirm-batch` body `{ids:[…]}`（1–50，多於 50 → 400）→ `{results:[{id,status:"confirmed"|"skipped",reason}], counts}`。任何一條屬已鎖月份 → 整批 403；非草稿／已作廢 → 該條 skipped。權限 `長工糧:update`。
+- `GET /api/longterm/attendance-bonus-eligible?month=YYYY-MM-01` → `{month, eligible:[{guard_id,guard_name,guard_staff_no,already_filled}], late_checked:false}`（`長工糧:view`；更表冇 SL／NL／NPL；系統冇遲到紀錄故 `late_checked=false`；**唔建 input、唔填金額**）。
+- AI 每日額度（`src/lib/ai-rate-limit.ts`）改原子：每用戶 `pg_advisory_xact_lock(hashtext('ai-daily:'+userId))` 內取 `max(ai_daily_usage 計數, 今日 audit 次數)`，未到上限先 +1；並發 N 個請求只放行到上限。表 `ai_daily_usage(user_id, day, used)`。叫 LLM 之前失敗（503）會 `releaseDailySlot()` 退還。API 形狀不變（仍 429 `rate_limited`）。
+- `POST /api/users`：`tel` 等於系統排程帳號保留電話 → 403 `system_account`。
+- Maxwell 導入（`POST /api/longterm/contracts/import`）：合約生效區間覆蓋已鎖月份嘅行改為逐行跳過（該行回滾、寫 `permission_denied` audit、`warnings` 加一句），其餘照導入；summary 加 `skippedLockedRows`（additive）。

@@ -292,7 +292,7 @@ message，見 `src/lib/ai-conversation.ts`）。每條問答另外寫一條
 
 ## 每日上限
 
-`AI_DAILY_LIMIT`（預設 100，`src/lib/ai-rate-limit.ts`）——讀
+`AI_DAILY_LIMIT`（預設 100，`src/lib/ai-rate-limit.ts`；P9.2 起檢查＋預留係原子，見 docs/api.md P9）——讀
 `audit_log`（`table_name=ai_chat, action=ai_chat`）計今日（**UTC 曆日**
 ——規劃裁定，唔額外引入時區依賴，同其他報表用嘅 UTC 月份邊界一致）
 已經問咗幾多次，超過就 429（`{error:"rate_limited"}`）。
