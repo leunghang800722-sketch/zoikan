@@ -20,6 +20,7 @@ import { writeAppErrorLog } from "@/lib/app-error-log";
 import { extractActions } from "@/lib/ai/actions";
 import { dropGuardedActions, dropLockedMonthActions } from "@/lib/ai-actions-filter";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { getConversation, appendConversationTurn } from "@/lib/ai-conversation";
 import { buildSystemPrompt } from "@/lib/ai/system-prompt";
 import { checkOutputGuardAndAudit } from "@/lib/ai/output-guard";
@@ -73,7 +74,10 @@ export async function POST(req: Request) {
           rowId: session.userId,
           action: "ai_chat",
           after: {
-            question: parsed.message,
+            // P6.4（H9）：audit 唔存問題原文（可能含人名／電話／工號）——淨係存長度同 SHA-256 前 16 位
+            // （同一條問題可對得返，但還原唔到內容）。
+            question_length: parsed.message.length,
+            question_sha256_16: createHash("sha256").update(parsed.message).digest("hex").slice(0, 16),
             tools_used: result.toolsUsed,
             input_tokens: result.inputTokens,
             output_tokens: result.outputTokens,
