@@ -920,3 +920,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **(ii)-5** e2e 撤銷步驟用 `page.on("request")` 斷言非 GET 請求為 0。
 - **(ii)-6** Maxwell 導入通知顯示「N 行因鎖月跳過」。
 - 驗證：vitest 241 檔、**3,661 passed｜0 failed**；tsc 0、lint 0 warning、knip 0、build 過；`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72 不變）；`longterm-drafts`＋`longterm-payroll` e2e 5/5。
+
+### 13.3 驗收、部署、正式站核對（2026-10-11 傍晚）
+- Opus 5.5 兩輪：第一輪 1 必修（確認草稿冇檢查同已確認病假段重疊——實測 Gross 13000→10500 重複扣）；執行員補 `findConfirmedLeaveOverlap`（PATCH 409 `overlaps_confirmed_leave`、batch skipped、人手新增重疊 409）＋job lock＋edited 唔比對＋勤工獎只通知上月＋e2e 非 GET 斷言＋Maxwell 數字；第二輪通過（部分重疊擋、唔重疊照確認）。驗收員兩輪都自跑 `gate:ltpay-aug` 56/56（Gross 917,875.19／Autopay 882,146.72／MPF 35,728.47／35,966.15）；vitest 3,661 過；Playwright 231／5／0。偏離裁定：AL／NL／NPL／SH 唔出草稿——接受（aggregate 已全自動，會計唔使開 input）；SL 確認但醫生紙未核＝當無薪扣、同冇 input 一樣（唔會當有薪病假）。
+- merge main `80f66ba`；部署 `6acb65a4c0a5252069b84a92` RUNNING 10:39Z：migration `20261013000000_p9_longterm_input_drafts` applied、系統帳號就緒、scheduler started。
+- **正式站核對（老闆 Chrome 唯讀）**：8 個 job，`longterm_input_drafts` 下次今晚 21:30；手動試跑 → `skipped`（9 月／10 月 created 0——現有更表冇長工 SL 日）；10 月草稿 0、8 月（已鎖）草稿 0；長工糧頁「人手輸入」tab 見勤工獎合資格面板＋「中途入職／離職未排除」提示；草稿面板只喺有草稿時顯示；10 月長工糧 API 回應 run-now 前後一樣；冇新通知（本月唔推勤工獎）。**冇確認／刪除任何嘢。**
