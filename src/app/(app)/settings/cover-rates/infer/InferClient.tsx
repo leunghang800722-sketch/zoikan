@@ -33,7 +33,7 @@ interface Result {
     rows: { month: string; guard_id: string; expected: number; actual: number; diff: number; unpriced_shifts: number; has_mixed_input: boolean }[];
     summary: { guard_months: number; matched: number; match_rate: number | null; diff_nonzero: number; max_abs_diff: number; unpriced_guard_months: number; by_month: { month: string; guard_months: number; matched: number; diff_nonzero: number; max_abs_diff: number }[] };
   };
-  stats: { cover_shifts: number; tagged_inputs: number; no_post_shifts: number; untagged_other_allowance_guard_months: number };
+  stats: { cover_shifts: number; tagged_inputs: number; untagged_other_allowance_guard_months: number };
 }
 
 const STATUS_LABEL = { consistent: "一致", mixed: "多個價（要揀）", single_sample: "只得 1 次" } as const;
@@ -99,8 +99,9 @@ export function InferClient() {
       <Banner kind="success" message={notice} />
       {result && (
         <>
+          <Banner kind="warning" data-testid="cover-infer-warning">注意：頂位更＝長工幫雞頭頂散更，呢啲更喺長工糧已經由雞頭現金結算（唔當長工返工日）。再出頂位津貼會唔會雙重支付，要老闆決定；可以睇下面回測吻合率（會計過往有冇另外畀）再決定採用。</Banner>
           <Banner kind="info" data-testid="cover-infer-stats">
-            頂位更 {result.stats.cover_shifts} 更；頂位津貼人手輸入 {result.stats.tagged_inputs} 條（備註含「頂位」先認得到）；冇固定崗位盤嘅長工更 {result.stats.no_post_shifts} 更（無法認定頂位，未計入）；有頂位更但只有未標「頂位」嘅其他津貼嘅人月 {result.stats.untagged_other_allowance_guard_months} 個（漏判風險，回測當 0）。
+            頂位更 {result.stats.cover_shifts} 更；頂位津貼人手輸入 {result.stats.tagged_inputs} 條（備註含「頂位」先認得到）；有頂位更但只有未標「頂位」嘅其他津貼嘅人月 {result.stats.untagged_other_allowance_guard_months} 個（漏判風險，回測當 0）。
           </Banner>
           <section className="flex flex-col gap-2" data-testid="cover-infer-suggestions">
             <div className="text-sm font-semibold text-zk-text">建議價目表</div>

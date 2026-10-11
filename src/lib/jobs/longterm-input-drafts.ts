@@ -39,7 +39,7 @@ async function processMonth(month: Date, actorUserId: string, today: string, not
       body: `${cover.unpriced.length} 個盤／職級未有頂位價，去設定 ›`,
       href: "/settings/cover-rates",
       audience: ["老闆", "會計"],
-      dedupeKey: `cover_rates_missing:${draft.month}:${createHash("sha1").update(cover.unpriced.map((u) => `${u.site_id}.${u.grade}.${u.shifts}`).join(",")).digest("hex").slice(0, 12)}`,
+      dedupeKey: `cover_rates_missing:${draft.month}:${createHash("sha1").update(cover.unpriced.map((u) => `${u.site_id}.${u.grade}`).join(",")).digest("hex").slice(0, 12)}`,
     });
   }
   const m = draft.month;

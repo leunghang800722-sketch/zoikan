@@ -38,5 +38,5 @@ export async function runCoverInference(months: Date[]): Promise<InferResult> {
   }
   // 輸入有但該長工當月冇頂位更嘅盤名：siteNames 仍要供 note 配對，用頂過嘅盤名
   const siteNames = new Map([...load.sites.entries()].map(([id, s]) => [id, s.name]));
-  return inferCoverRates({ months: monthLabels, shifts: load.shifts, inputs: tagged, siteNames, noPostShifts: load.noPostShifts, untaggedOtherAllowanceGuardMonths: untaggedGm.size });
+  return inferCoverRates({ months: monthLabels, shifts: load.shifts, inputs: tagged, siteNames, untaggedOtherAllowanceGuardMonths: untaggedGm.size });
 }

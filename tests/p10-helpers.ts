@@ -10,6 +10,8 @@ export interface P10Base {
   fx: Wp2Fixture;
   actorUserId: string;
   b07: { id: string };
+  /** 外判雞頭（頂位更嘅 settlement）。 */
+  ext: { id: string };
   /** 盤 A（長工固定崗位）、B／C／E（頂位盤）、AChild（A 嘅子盤）。 */
   sites: Record<"A" | "B" | "C" | "E" | "AChild", { id: string; name: string }>;
   st: Record<"A" | "B" | "C" | "E" | "AChild" | "CIC", string>;
@@ -30,7 +32,8 @@ export async function p10Base(): Promise<P10Base> {
   for (const k of ["A", "B", "C", "E", "AChild"] as const) st[k] = (await prisma.shiftType.create({ data: { siteId: sites[k].id, code: "N", hours: 12, createdBy: "test" } })).id;
   st.CIC = (await prisma.shiftType.create({ data: { siteId: sites.C.id, code: "SIC", hours: 12, billingGroup: "monthly_ic", createdBy: "test" } })).id;
   const b07 = await prisma.broker.create({ data: { code: `T-B07-${rnd}`, name: "測試內部長工桶", kind: "internal_longterm", settlementType: "salary", createdBy: "test" } });
-  return { fx, actorUserId: fx.userIds["老闆"], b07, sites, st };
+  const ext = await prisma.broker.create({ data: { code: `T-EXT-${rnd}`, name: "測試外判雞頭", kind: "external", settlementType: "cash", createdBy: "test" } });
+  return { fx, actorUserId: fx.userIds["老闆"], b07, ext, sites, st };
 }
 
 export async function mkLongterm(b: P10Base, name: string, opts: { post?: "A" | null; visa?: boolean } = {}) {
@@ -42,9 +45,10 @@ export async function mkLongterm(b: P10Base, name: string, opts: { post?: "A" | 
 }
 
 /** 喺某盤做一更（recordType=shift）。`ic`＝用該盤 IC 更別（只有盤 C 有）。 */
-export async function shiftAt(b: P10Base, guardId: string, site: keyof P10Base["sites"], date: Date, opts: { ic?: boolean } = {}) {
+/** 頂位更（settlement＝外判雞頭，aggregate 口徑）；自己崗位更用 `ownAt`（settlement＝B07）。 */
+export async function shiftAt(b: P10Base, guardId: string, site: keyof P10Base["sites"], date: Date, opts: { ic?: boolean; own?: boolean } = {}) {
   const stId = opts.ic && site === "C" ? b.st.CIC : b.st[site];
-  return prisma.shiftRecord.create({ data: { workDate: date, siteId: b.sites[site].id, shiftTypeId: stId, guardId, settlementBrokerId: b.b07.id, operationalBrokerId: b.b07.id, recordType: "shift", createdBy: "test" } });
+  return prisma.shiftRecord.create({ data: { workDate: date, siteId: b.sites[site].id, shiftTypeId: stId, guardId, settlementBrokerId: opts.own ? b.b07.id : b.ext.id, operationalBrokerId: opts.own ? b.b07.id : b.ext.id, recordType: "shift", createdBy: "test" } });
 }
 
 export async function coverInput(b: P10Base, guardId: string, month: Date, amount: number, note: string, status: "confirmed" | "draft" = "confirmed") {

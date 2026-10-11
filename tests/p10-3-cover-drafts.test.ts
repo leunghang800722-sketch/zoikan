@@ -28,7 +28,7 @@ describe("generateCoverDrafts", () => {
     await rate(b, "B", "兵", 200);
     await rate(b, "C", "IC", 250);
     const g = await mkLongterm(b, "測試長工甲");
-    await shiftAt(b, g.id, "A", D(8, 1));
+    await shiftAt(b, g.id, "A", D(8, 1), { own: true });
     await shiftAt(b, g.id, "B", D(8, 3));
     await shiftAt(b, g.id, "B", D(8, 4));
     await shiftAt(b, g.id, "C", D(8, 5), { ic: true });
@@ -157,13 +157,12 @@ describe("generateCoverDrafts", () => {
     expect(await drafts(g3.id)).toHaveLength(0);
   });
 
-  it("鎖月唔生成；簽證／冇崗位長工唔生成", async () => {
+  it("鎖月唔生成；簽證長工唔生成", async () => {
     const b = await p10Base();
     await rate(b, "B", "兵", 200);
     const g = await mkLongterm(b, "測試長工壬");
     const visa = await mkLongterm(b, "測試簽證", { visa: true });
-    const nopost = await mkLongterm(b, "測試冇崗位", { post: null });
-    for (const x of [g, visa, nopost]) await shiftAt(b, x.id, "B", D(8, 3));
+    for (const x of [g, visa]) await shiftAt(b, x.id, "B", D(8, 3));
     await prisma.monthClose.create({ data: { month: AUG_MONTH, lockedAt: new Date(), lockedBy: b.actorUserId } });
     const r = await generateCoverDrafts(AUG_MONTH, b.actorUserId);
     expect(r.locked).toBe(true);
@@ -172,7 +171,6 @@ describe("generateCoverDrafts", () => {
     const r2 = await generateCoverDrafts(AUG_MONTH, b.actorUserId);
     expect(r2.created).toBe(1);
     expect(await drafts(visa.id)).toHaveLength(0);
-    expect(await drafts(nopost.id)).toHaveLength(0);
   });
 });
 
@@ -206,6 +204,15 @@ describe("job 整合", () => {
     const r2 = await runLongtermInputDrafts(NOW, [AUG_MONTH]);
     expect(r2.status).toBe("skipped");
     expect(await prisma.appNotification.count()).toBe(n0);
+    // M3：缺價組合集合不變、只係更數增加（第二日）→ 唔再推缺價通知
+    await shiftAt(b, g.id, "C", D(8, 20));
+    await shiftAt(b, g.id, "E", D(8, 21));
+    await runLongtermInputDrafts(new Date("2026-09-06T13:30:00.000Z"), [AUG_MONTH]);
+    expect(await prisma.appNotification.count({ where: { kind: "cover_rates_missing" } })).toBe(1);
+    // 缺價組合增加（新盤 B 嘅 IC 無價）先再推
+    await shiftAt(b, g.id, "C", D(8, 22), { ic: true });
+    await runLongtermInputDrafts(new Date("2026-09-07T13:30:00.000Z"), [AUG_MONTH]);
+    expect(await prisma.appNotification.count({ where: { kind: "cover_rates_missing" } })).toBe(2);
     const sum = r.summary as { months: Record<string, { cover: { created: number; unpriced: unknown[] } }> };
     expect(sum.months["2026-08"]!.cover.created).toBe(1);
     expect(sum.months["2026-08"]!.cover.unpriced).toHaveLength(2);
