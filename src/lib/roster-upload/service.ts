@@ -21,7 +21,7 @@
 import crypto from "node:crypto";
 import { Prisma, type RosterUpload, type PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { monthStart, assertMonthNotLocked } from "@/lib/month-lock";
+import { monthStart, assertMonthNotLocked, assertMonthNotLockedTx } from "@/lib/month-lock";
 import { BadRequest, Conflict } from "@/lib/api/errors";
 import { writeAuditTx } from "@/lib/audit";
 import { parseRosterWorkbook, type ParseResult, type ParsedCellRow } from "./parse";
@@ -51,6 +51,8 @@ export interface ProcessRosterUploadInput {
   month: Date; // 月入面任何一日都得，會 normalize 做月初
   siteIdHint?: string | null; // 上載時老闆/主管/會計可以直接揀盤
   uploaderUserId: string;
+  /** P6.1a：鎖月 403 嘅 audit 用（route 傳 client IP；script 可唔傳）。 */
+  ip?: string | null;
 }
 
 export interface ProcessRosterUploadResult {
@@ -521,6 +523,9 @@ export async function processRosterUpload(input: ProcessRosterUploadInput): Prom
 
   return prisma.$transaction(async (tx) => {
     await lockVersionGroup(tx, resolvedSiteId, siteNameRaw, month);
+    // P6.1a（H1）：已鎖月份唔准開新版本（會令舊 confirmed／active 版本被改
+    // superseded）。advisory lock 之後、任何寫入之前，tx 內 FOR SHARE 查。
+    await assertMonthNotLockedTx(tx, { workDate: month, actorUserId: input.uploaderUserId, tableName: "roster_uploads", rowId: `new:${month.toISOString().slice(0, 7)}`, ip: input.ip ?? null });
 
     // Phase B-0 第 5(b) 項（老闆 2026-09-23 追加答）：更新檔嘅檔名一定要
     // 同呢個盤同月「任何現有版本」（active 或 superseded）唔同——同名一
@@ -723,10 +728,16 @@ export async function bulkResolveAmbiguousSubSite(params: {
  * 而家喺 advisory lock 入面：呢個上載攞目標組別 max(version)+1；目標組別
  * 入面「上載時間最新」嗰個保持 active，其餘轉 superseded（唔會因為人手
  * 指定一個舊檔而蓋咗較新嘅上載）。返回被轉 superseded 嘅 id。 */
-export async function assignRosterUploadSite(uploadId: string, siteId: string | null): Promise<{ supersededIds: string[] }> {
+export async function assignRosterUploadSite(
+  uploadId: string,
+  siteId: string | null,
+  actor: { userId: string | null; ip: string | null } = { userId: null, ip: null },
+): Promise<{ supersededIds: string[] }> {
   return prisma.$transaction(async (tx) => {
     const upload = await tx.rosterUpload.findUniqueOrThrow({ where: { id: uploadId }, select: ROSTER_UPLOAD_META_SELECT });
     await lockVersionGroup(tx, siteId, upload.siteNameRaw, upload.month);
+    // P6.1b（H2）：改盤會改版本序列（supersede 其他版本），已鎖月份一律拒（lib 層，防其他 caller）。
+    await assertMonthNotLockedTx(tx, { workDate: upload.month, actorUserId: actor.userId, tableName: "roster_uploads", rowId: uploadId, ip: actor.ip });
     if (upload.siteId === siteId) return { supersededIds: [] };
 
     // B1-8 第 1 項（B-0 驗收留低）：呢個上載轉咗去嘅目標（盤,月）組別如
