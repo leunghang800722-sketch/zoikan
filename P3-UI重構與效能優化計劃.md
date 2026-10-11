@@ -910,4 +910,13 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 **驗證**：vitest（隔離 PG 54359）241 檔全 passed，**3,657 passed｜0 failed**（階段 8 為 3,632；新增 p9-1 11 條＋p9-2 4 條，既有 p6-1c／p7-1 test 同步；worktree 接上 data／venv 後原 skip 嘅 test 亦跑）；`gate:locked-months`（隔離 dev PG 54389）**12/12 rc=0**，`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15 不變），snapshot 5,080 數字葉 multiset 同階段 4 基線逐個相同；tsc 0；lint 0 warning；knip 0；build 過；Playwright（隔離 PG 54389、`next start` 3170、`SCHEDULER_ENABLED=0`、`AI_LLM=fake`）**232 passed｜4 skipped｜0 failed**（首次全跑 231／1 failed＝新 e2e spec 自己斷言用錯 id，修正後該 spec 同 longterm-payroll spec 重跑通過）；本機 `run-now` 試跑 `longterm_input_drafts`（seed 假資料：3 條草稿、勤工獎合資格 1 人）截圖核對。
 
-**已知限制**：(1) 勤工獎唔核遲到（系統冇遲到欄）；合資格清單亦未排除「當月中途入職／離職」嘅人，由會計判斷；(2) AL／NL／SH 不出草稿（已自動計）；(3) SL 連續段只合併日曆連續日（中間隔 RD 會分兩段）；(4) 月份鎖咗之後草稿唔再生成亦唔可確認；(5) AI 每日額度「預留」喺 LLM 呼叫前，呼叫中途失敗（非 503）唔退還（保守，寧少勿多）。
+**已知限制**：(1) 勤工獎唔核遲到（系統冇遲到欄）；合資格清單只計 active 保安員（inactive 已排除），但未排除「當月中途入職／離職」嘅人（面板已寫明，由會計判斷）；(2) AL／NL／SH 不出草稿（已自動計）；(3) SL 連續段只合併日曆連續日（中間隔 RD 會分兩段）；(4) 月份鎖咗之後草稿唔再生成亦唔可確認；(5) AI 每日額度「預留」喺 LLM 呼叫前，呼叫中途失敗（非 503）唔退還（保守，寧少勿多）。
+
+### 13.2 驗收後修正（Opus 5.5 唔通過 → 1 必修＋一併項，Sonnet 5.5，同 branch）
+- **M1 重疊確認會重複扣錢**：新 `findConfirmedLeaveOverlap`（同 guard／月、未作廢、`confirmed`、`kind=leave`、日期段重疊）。`PATCH inputs/:id`（用改完後日期）確認草稿重疊 → 409 `overlaps_confirmed_leave`；`confirm-batch` 該條 `skipped`（reason「同已確認病假段重疊」）；人手 `POST inputs` 新增 `kind=leave` 重疊亦 409。test：人手 10–14＋草稿 10–14 → PATCH 409、batch skipped 1、Gross 不變、改走日期後可確認、人手新增重疊 409。
+- **(ii)-2** `auto_one_click` 觸發草稿改用 `withJobLock(longterm_input_drafts)`，攞唔到就跳過並喺 summary 記 `drafts:"skipped_locked"`（test）。
+- **(ii)-3** 誤報：改過（`edited`）嘅已確認輸入唔再同更表原始日期比對；PATCH 改草稿日期時同步更新 `draft_evidence.dates`（test：縮短段後 `mismatches=0`）。
+- **(ii)-4** 勤工獎通知只發上月；面板加「中途入職／離職未排除，請自行判斷」；§13.1 限制已改正（test：本月唔推、上月推）。
+- **(ii)-5** e2e 撤銷步驟用 `page.on("request")` 斷言非 GET 請求為 0。
+- **(ii)-6** Maxwell 導入通知顯示「N 行因鎖月跳過」。
+- 驗證：vitest 241 檔、**3,661 passed｜0 failed**；tsc 0、lint 0 warning、knip 0、build 過；`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72 不變）；`longterm-drafts`＋`longterm-payroll` e2e 5/5。

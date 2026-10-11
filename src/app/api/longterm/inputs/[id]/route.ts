@@ -12,7 +12,8 @@ import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { LongtermInputUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { NotFound, Conflict } from "@/lib/api/errors";
+import { NotFound, Conflict, ApiError } from "@/lib/api/errors";
+import { findConfirmedLeaveOverlap, OVERLAP_MSG } from "@/lib/longterm-payroll/drafts";
 import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -40,9 +41,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       // P9.1：改過草稿內容＝「已人手編輯」，排程唔會再覆蓋；status=confirmed 先計糧
       if (Object.keys(rest).length > 0) {
         const ev = before.draftEvidence && typeof before.draftEvidence === "object" && !Array.isArray(before.draftEvidence) ? (before.draftEvidence as Record<string, unknown>) : {};
-        data.draftEvidence = { ...ev, edited: true } as Prisma.InputJsonValue;
+        const nf = rest.date_from !== undefined ? (rest.date_from as string | null) : before.dateFrom;
+        const nt = rest.date_to !== undefined ? (rest.date_to as string | null) : before.dateTo;
+        data.draftEvidence = { ...ev, edited: true, ...(nf ? { dates: [nf, ...(nt && nt !== nf ? [nt] : [])] } : {}) } as Prisma.InputJsonValue;
       }
       if (wantStatus === "confirmed") {
+        const kindAfter = (rest.kind as string | undefined) ?? before.kind;
+        if (kindAfter === "leave") {
+          const from = rest.date_from !== undefined ? (rest.date_from as string | null) : before.dateFrom;
+          const to = rest.date_to !== undefined ? (rest.date_to as string | null) : before.dateTo;
+          if (await findConfirmedLeaveOverlap(before.guardId, before.month, from, to, id)) throw new ApiError(409, "overlaps_confirmed_leave", OVERLAP_MSG);
+        }
         data.status = "confirmed";
         data.confirmedAt = new Date();
         data.confirmedBy = session.userId;

@@ -1,5 +1,5 @@
 // P9.1：長工糧人手輸入草稿（每日 21:30 香港；更表上載自動一鍵結算完成後亦觸發一次）。
-// 本月＋上月（未鎖）：由更表 SL 日子生成病假段草稿（唔帶金額、未確認唔計糧）；另計勤工獎合資格清單（唔建 input、唔填金額）。
+// 本月＋上月（未鎖）：由更表 SL 日子生成病假段草稿（唔帶金額、未確認唔計糧）；另計勤工獎合資格清單（唔建 input、唔填金額；通知只發上月）。
 // 老闆規則：唔准自動加任何金額。通知 body 只有月份／數字；姓名只喺長工糧頁內顯示。
 import { hkDateStr, hkMonthStart } from "@/lib/dates";
 import { createNotification } from "@/lib/notify/create";
@@ -15,7 +15,7 @@ function monthsToProcess(now: Date): Date[] {
   return [new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() - 1, 1)), cur];
 }
 
-async function processMonth(month: Date, actorUserId: string, today: string): Promise<{ draft: DraftMonthResult; bonus: number | null }> {
+async function processMonth(month: Date, actorUserId: string, today: string, notifyBonus: boolean): Promise<{ draft: DraftMonthResult; bonus: number | null }> {
   const draft = await generateLongtermInputDrafts(month, actorUserId);
   if (draft.locked) return { draft, bonus: null };
   const m = draft.month;
@@ -41,7 +41,8 @@ async function processMonth(month: Date, actorUserId: string, today: string): Pr
   }
   const bonus = await listAttendanceBonusEligible(month);
   const open = bonus.eligible.filter((e) => !e.already_filled).length;
-  if (open > 0) {
+  // 勤工獎只喺「上月」（即將出糧嗰個月）通知；本月未完，唔推
+  if (open > 0 && notifyBonus) {
     await createNotification({
       kind: "longterm_bonus_eligible",
       title: `${m} 勤工獎合資格 ${open} 人`,
@@ -61,9 +62,10 @@ export async function runLongtermInputDrafts(now: Date, onlyMonths?: Date[]): Pr
     async () => {
       const today = hkDateStr(now);
       const out: Record<string, unknown> = {};
+      const prevMonth = monthsToProcess(now)[0]!;
       let touched = 0;
       for (const month of onlyMonths ?? monthsToProcess(now)) {
-        const r = await processMonth(month, sysId, today);
+        const r = await processMonth(month, sysId, today, month.getTime() === prevMonth.getTime());
         out[r.draft.month] = { ...r.draft, bonus_eligible: r.bonus };
         touched += r.draft.created + r.draft.updated + r.draft.voided;
       }

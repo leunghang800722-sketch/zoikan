@@ -9,6 +9,7 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { LongtermInputConfirmBatchSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
+import { findConfirmedLeaveOverlap, OVERLAP_MSG } from "@/lib/longterm-payroll/drafts";
 
 export async function POST(req: Request) {
   return withApiError(async () => {
@@ -29,6 +30,10 @@ export async function POST(req: Request) {
       }
       if (before.voidedAt || before.status !== "draft") {
         results.push({ id, status: "skipped", reason: before.voidedAt ? "已作廢" : "已確認" });
+        continue;
+      }
+      if (before.kind === "leave" && (await findConfirmedLeaveOverlap(before.guardId, before.month, before.dateFrom, before.dateTo, id))) {
+        results.push({ id, status: "skipped", reason: OVERLAP_MSG });
         continue;
       }
       const after = await prisma.longtermPayrollInput.update({ where: { id }, data: { status: "confirmed", confirmedAt: new Date(), confirmedBy: session.userId } });

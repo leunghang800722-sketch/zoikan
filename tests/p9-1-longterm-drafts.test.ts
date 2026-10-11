@@ -7,6 +7,10 @@ import { buildLongtermPayrollInputs } from "@/lib/longterm-payroll/aggregate";
 import { generateLongtermInputDrafts, listAttendanceBonusEligible, groupConsecutive } from "@/lib/longterm-payroll/drafts";
 import { runLongtermInputDrafts, longtermInputDraftsJob, LONGTERM_INPUT_DRAFTS_KEY } from "@/lib/jobs/longterm-input-drafts";
 import { JOBS } from "@/lib/jobs/registry";
+import { withJobLock } from "@/lib/scheduler/lock";
+import { runAutoOneClick, autoOneClickJob, AUTO_ONE_CLICK_KEY } from "@/lib/jobs/auto-one-click";
+import { ensureJobRows } from "@/lib/scheduler/runner";
+import { mergeJobState } from "@/lib/scheduler/state";
 import { ensureSystemUser } from "@/lib/system-user";
 import { assertNoPii } from "@/lib/notify/create";
 import { GET as listInputs } from "@/app/api/longterm/inputs/route";
@@ -307,5 +311,74 @@ describe("P9.1 API", () => {
     expect(ok.late_checked).toBe(false);
     expect((await bonusRoute(req("http://t/x?month=2026-08-01", broker))).status).toBe(403);
     expect((await bonusRoute(req("http://t/x", acct))).status).toBe(400);
+  });
+});
+
+describe("P9 驗收修正 M1：確認草稿唔可以同已確認病假段重疊", () => {
+  it("PATCH 409、batch skipped、人手新增重疊 409；Gross 不變；改走日期後可確認", async () => {
+    const b = await base();
+    const owner = await sessionCookieForUser(b.fx.userIds["老闆"]);
+    const g = await mkGuard(b, "測試甲");
+    await work(b, g.id, [1, 2, 3, 4, 5, 6, 7, 8]);
+    await leave(b, g.id, [10, 11, 12, 13, 14], "SL");
+    await generateLongtermInputDrafts(AUG_MONTH, b.actorUserId);
+    const [d] = await drafts(g.id);
+    await prisma.longtermPayrollInput.create({ data: { month: AUG_MONTH, guardId: g.id, kind: "leave", dateFrom: "2026-08-10", dateTo: "2026-08-14", doctorNoteVerified: false, createdBy: b.actorUserId } });
+    const gross = (await buildLongtermPayrollInputs(AUG_MONTH)).lines[0]!.gross;
+    const p = await patchInput(req("http://t/x", owner, "PATCH", { status: "confirmed" }), { params: Promise.resolve({ id: d!.id }) });
+    expect(p.status).toBe(409);
+    expect((await p.json()).error).toBe("overlaps_confirmed_leave");
+    const bt = await (await confirmBatch(req("http://t/x", owner, "POST", { ids: [d!.id] }))).json();
+    expect(bt.counts).toEqual({ confirmed: 0, skipped: 1 });
+    expect(bt.results[0].reason).toBe("同已確認病假段重疊");
+    expect((await buildLongtermPayrollInputs(AUG_MONTH)).lines[0]!.gross).toBe(gross);
+    const { POST: createInput } = await import("@/app/api/longterm/inputs/route");
+    const c = await createInput(req("http://t/x", owner, "POST", { month: "2026-08-01", guard_id: g.id, kind: "leave", date_from: "2026-08-12", date_to: "2026-08-12" }));
+    expect(c.status).toBe(409);
+    // 改走日期（唔重疊）再確認 → 成功
+    const ok = await patchInput(req("http://t/x", owner, "PATCH", { date_from: "2026-08-20", date_to: "2026-08-20", status: "confirmed" }), { params: Promise.resolve({ id: d!.id }) });
+    expect(ok.status).toBe(200);
+  });
+});
+
+describe("P9 驗收修正：edited 唔誤報、勤工獎通知只發上月", () => {
+  it("改短日期再確認 → 更表比對 mismatches=0", async () => {
+    const b = await base();
+    const owner = await sessionCookieForUser(b.fx.userIds["老闆"]);
+    const g = await mkGuard(b, "測試乙");
+    await leave(b, g.id, [3, 4, 5], "SL");
+    await generateLongtermInputDrafts(AUG_MONTH, b.actorUserId);
+    const [d] = await drafts(g.id);
+    const r = await patchInput(req("http://t/x", owner, "PATCH", { date_from: "2026-08-03", date_to: "2026-08-04", status: "confirmed" }), { params: Promise.resolve({ id: d!.id }) });
+    expect(r.status).toBe(200);
+    const res = await generateLongtermInputDrafts(AUG_MONTH, b.actorUserId);
+    expect(res.mismatches).toBe(0);
+  });
+
+  it("本月唔推勤工獎通知，上月先推", async () => {
+    const b = await base();
+    await mkGuard(b, "測試丙");
+    const SEP = new Date(Date.UTC(2026, 8, 1));
+    await runLongtermInputDrafts(NOW, [SEP]); // NOW＝2026-09-05（HK）→ 本月＝9 月
+    expect(await prisma.appNotification.count({ where: { kind: "longterm_bonus_eligible" } })).toBe(0);
+    await runLongtermInputDrafts(NOW, [AUG_MONTH]);
+    expect(await prisma.appNotification.count({ where: { kind: "longterm_bonus_eligible" } })).toBe(1);
+  });
+});
+
+describe("P9 驗收修正：auto_one_click 觸發草稿要攞 job lock", () => {
+  it("lock 俾排程 job 持住 → 跳過草稿（summary 記 skipped_locked），一鍵結算照跑", async () => {
+    const b = await base();
+    const NOW2 = new Date();
+    await ensureJobRows([autoOneClickJob], NOW2);
+    await mergeJobState(AUTO_ONE_CLICK_KEY, { last_trigger_upload_at: {} });
+    const DEC = new Date(Date.UTC(2026, 11, 1));
+    const bytes = Buffer.from("fake");
+    await prisma.rosterUpload.create({ data: { month: DEC, siteNameRaw: "A1", uploaderUserId: b.actorUserId, fileName: "A1.xlsx", fileSha256: "0".repeat(64), fileBytes: new Uint8Array(bytes), fileSize: bytes.length, status: "parsed", uploadedAt: new Date(NOW2.getTime() - 15 * 60_000) } });
+    const held = await withJobLock(LONGTERM_INPUT_DRAFTS_KEY, async () => runAutoOneClick(NOW2));
+    expect(held.acquired).toBe(true);
+    const sum = (held as unknown as { value: { summary: { triggered: Record<string, { status: string; drafts?: string }> } } }).value.summary;
+    expect(sum.triggered["2026-12"]!.status).toBe("done");
+    expect(sum.triggered["2026-12"]!.drafts).toBe("skipped_locked");
   });
 });
