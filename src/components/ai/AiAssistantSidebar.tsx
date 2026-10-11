@@ -8,6 +8,7 @@
 // POST /api/ai/chat SSE），對話記錄經 `GET`/`DELETE /api/ai/conversation`
 // （`api-client.ts`）。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useHistoryOverlay } from "@/lib/ui/use-history-overlay";
 import { createPortal } from "react-dom";
 import { apiGet, apiPost, apiRequest } from "@/lib/ui/api-client";
 import { LG_PX } from "@/lib/ui/breakpoints";
@@ -248,15 +249,18 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
     }
   }, [mounted, messages, userName]);
 
+  // P13.5：手機（< lg）全屏側欄入 history，返回只關側欄；桌面側欄照舊唔入 history。
+  const { close: closePanel } = useHistoryOverlay(open, () => setOpen(false), "ai-panel", isMobile);
+
   // Esc 關閉。
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") closePanel();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [open, closePanel]);
 
   useEffect(() => {
     if (open) {
@@ -517,7 +521,7 @@ export function AiAssistantSidebar({ userName }: { userName: string }) {
               <Button variant="ghost" size="sm" className="!px-1.5 !text-zk-xs"
                 type="button"
                 aria-label="關閉在勤助手"
-                onClick={() => setOpen(false)}
+                onClick={closePanel}
 
               >
                 關閉
