@@ -11,6 +11,7 @@ import { Pill } from "@/components/ui/Pill";
 import { MQ_BELOW_LG } from "@/lib/ui/breakpoints";
 import { apiRequest, type ApiResult } from "@/lib/ui/api-client";
 import { useTriagePager } from "@/lib/ui/use-triage-pager";
+import { useHistoryOverlay } from "@/lib/ui/use-history-overlay";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
 import { UNDO_NOTE_SHORT, humanize, kindChip, shortHuman } from "@/components/month-close/derive";
@@ -72,9 +73,18 @@ function useIsMobile(): boolean {
 export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = null }: { sessionId: string; onClose: () => void; onChanged?: () => void; month?: string | null }) {
   const mobile = useIsMobile();
   // P13.1：分頁載入（頭 5 題即刻顯示，快到尾背景 prefetch）；每次送出後重載第一頁（server 可能順手作廢咗其他題）
-  const pager = useTriagePager<McQuestion>(sessionId);
+  const [pagerStatus, setPagerStatus] = useState("open"); // P13.3 由頭開始＝連跳過咗嘅一齊攞
+  const pager = useTriagePager<McQuestion>(sessionId, { status: pagerStatus });
   const qs = pager.items;
   const [total0, setTotal0] = useState<number | null>(null);
+  // P13.2：回看（viewId＝正在睇邊一題）；P13.3：記住位置；重新答跳過咗嘅題（reopened）
+  const [viewId, setViewId] = useState<string | null>(null);
+  const labels = useRef<Record<string, string>>({});
+  const [reopened, setReopened] = useState<McQuestion[]>([]);
+  const [resume, setResume] = useState<{ n: number } | null>(null);
+  const baseOffset = useRef<number | null>(null);
+  const resumeChecked = useRef(false);
+  const posKey = `zk-triage-pos-${sessionId}`;
   const seen = useRef<McQuestion[]>([]); // 本次對話框見過嘅題（按載入次序，唔因重載而消失）
   const [error, setError] = useState<string | null>(null);
   const [failed, setFailed] = useState<Record<string, { title: string; msg: string }>>({});
@@ -95,8 +105,9 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     void reload();
   }, [reload]);
   useEffect(() => {
-    if (counts && total0 === null) setTotal0(counts.open);
-  }, [counts, total0]);
+    if (counts && total0 === null) setTotal0(counts.open + (pagerStatus === "open" ? 0 : counts.skipped));
+    if (counts && baseOffset.current === null) baseOffset.current = pagerStatus === "open" ? counts.answered + counts.skipped : 0;
+  }, [counts, total0, pagerStatus]);
   useEffect(() => {
     if (!qs) return;
     for (const x of qs) if (!seen.current.some((y) => y.id === x.id)) seen.current.push(x);
@@ -170,7 +181,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
   }, [sender]);
 
   const pendingId = view.pending?.id ?? null;
-  const visible = (qs ?? []).filter((x) => !view.inFlight.includes(x.id) && !results[x.id]);
+  const visible = [...reopened, ...(qs ?? []).filter((x) => !reopened.some((y) => y.id === x.id))].filter((x) => !view.inFlight.includes(x.id) && !results[x.id]);
   const q = visible[0] ?? null;
   useEffect(() => {
     if (pager.hasMore && !pager.loadingMore && visible.length <= 2) void loadMore(); // 去到每頁第 3 題就背景攞下一頁
@@ -186,7 +197,29 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     return () => clearTimeout(t);
   }, [q?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function closeDialog() {
+  const { close: closeDialog } = useHistoryOverlay(true, () => void finishClose(), `mc-triage-${sessionId}`); // P13.5：返回＝關對話框
+  const liveId = q?.id ?? null;
+  useEffect(() => {
+    if (!liveId || baseOffset.current === null) return;
+    const n = baseOffset.current + okN + skipN + 1;
+    if (!resumeChecked.current) {
+      resumeChecked.current = true;
+      try {
+        const raw = window.sessionStorage.getItem(posKey);
+        const st = raw ? (JSON.parse(raw) as { id?: string; n?: number }) : null;
+        if (st && st.id === liveId && typeof st.n === "number" && st.n > 1) setResume({ n: st.n });
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      window.sessionStorage.setItem(posKey, JSON.stringify({ id: liveId, n }));
+    } catch {
+      /* ignore */
+    }
+  }, [liveId, okN, skipN, posKey, counts]);
+
+  async function finishClose() {
     await sender.flush();
     // 送出失敗（含 5 秒 timer 自動送出失敗）：一律唔關對話框（✕／遲啲先答／撳遮罩都一樣），
     // 失敗 banner 有明確掣「放棄未送出嘅 N 題」先放棄（失敗題已記 sessionStorage，頁面會提示重新答）。
@@ -206,6 +239,36 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     await sender.flush();
     onClose();
   }
+  function restartFromBeginning() {
+    try {
+      window.sessionStorage.removeItem(posKey);
+    } catch {
+      /* ignore */
+    }
+    setResume(null);
+    setViewId(null);
+    setReopened([]);
+    setResults({});
+    setOkN(0);
+    setSkipN(0);
+    setDone([]);
+    seen.current = [];
+    baseOffset.current = 0;
+    setTotal0(null);
+    setPagerStatus("open,skipped");
+  }
+  function reanswer(id: string) {
+    const item = seen.current.find((x) => x.id === id);
+    if (!item) return;
+    setReopened((l) => (l.some((x) => x.id === id) ? l : [...l, item]));
+    setResults((r) => {
+      const n = { ...r };
+      delete n[id];
+      return n;
+    });
+    setSkipN((n) => Math.max(0, n - 1));
+    setViewId(null);
+  }
 
   function schedule(kind: "confirm" | "skip", answer: Record<string, unknown>, doneLabel: string) {
     if (!q) return;
@@ -217,6 +280,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     });
     clearUnsent(q.id); // 重試中；再失敗會重新記低
     drafts.current[q.id] = { candidate, broker, price };
+    labels.current[q.id] = kind === "skip" ? "跳過，留返人手" : doneLabel;
+    setResume(null);
     void sender.schedule({ id: q.id, kind, answer, doneLabel, title: q.title });
   }
   const skip = () => schedule("skip", { option: "skip" }, "跳過");
@@ -337,6 +402,55 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     ) : null;
   const retryTag = failedMsg ? <div className="rounded border border-zk-danger-border bg-zk-danger-bg px-3 py-2 text-zk-sm text-zk-danger-dark" data-testid="mc-unsent">未送出，請再試（{humanize(failedMsg)}）</div> : null;
 
+  // P13.2 回看已處理嘅題（唔可以改；跳過嘅可以重新答）
+  const handledQs = seen.current.filter((x) => results[x.id] || view.inFlight.includes(x.id));
+  const viewQ = viewId ? (seen.current.find((x) => x.id === viewId) ?? null) : null;
+  const viewIdx = viewQ ? handledQs.findIndex((x) => x.id === viewQ.id) : -1;
+  const prevTarget = viewQ ? (viewIdx > 0 ? handledQs[viewIdx - 1] : null) : (handledQs[handledQs.length - 1] ?? null);
+  const nextTarget = viewQ ? (viewIdx >= 0 && viewIdx + 1 < handledQs.length ? handledQs[viewIdx + 1]! : null) : null;
+  const viewState = viewQ ? (results[viewQ.id] === "skip" ? "skip" : view.inFlight.includes(viewQ.id) ? "sending" : "ok") : null;
+  const navRow =
+    handledQs.length > 0 || viewQ ? (
+      <div className="flex items-center justify-between gap-2" data-testid="mc-nav">
+        <Button variant="secondary" size="sm" type="button" disabled={!prevTarget} onClick={() => prevTarget && setViewId(prevTarget.id)} data-testid="mc-prev">
+          ‹ 上一題
+        </Button>
+        {viewQ && (
+          <Button variant="secondary" size="sm" type="button" onClick={() => setViewId(nextTarget ? nextTarget.id : null)} data-testid="mc-next">
+            下一題 ›
+          </Button>
+        )}
+      </div>
+    ) : null;
+  const viewPanel = viewQ ? (
+    <div className="flex flex-col gap-3" data-testid="mc-readonly">
+      <div className="flex flex-wrap items-center gap-2">
+        <Pill variant="neutral">{kindChip(viewQ.kind, viewQ.kind_label)}</Pill>
+        <Pill variant={viewState === "skip" ? "warning" : "success"}>{viewState === "skip" ? "已跳過" : viewState === "sending" ? "送出中（可撤銷）" : "已送出"}</Pill>
+      </div>
+      <div className="text-zk-md font-medium">{humanize(viewQ.title)}</div>
+      <div className="text-zk-sm text-zk-muted">{humanize(viewQ.mc.summary)}</div>
+      <div className="rounded-lg border border-zk-border bg-zk-surface-2 p-3 text-zk-base">
+        你選咗：<b>{humanize(labels.current[viewQ.id] ?? "")}</b>
+        {viewState !== "skip" && <div className="mt-1 text-zk-xs text-zk-muted">已經處理，唔可以喺度改。</div>}
+      </div>
+      {viewState === "skip" && (
+        <Button variant="primary" onClick={() => reanswer(viewQ.id)} data-testid="mc-reanswer">
+          重新答呢題
+        </Button>
+      )}
+    </div>
+  ) : null;
+  const resumeBanner =
+    resume && !viewQ && q ? (
+      <div className="text-zk-xs text-zk-faint" data-testid="mc-resume">
+        由第 {resume.n} 題繼續 ·{" "}
+        <button type="button" className="underline" onClick={restartFromBeginning} data-testid="mc-restart">
+          由頭開始
+        </button>
+      </div>
+    ) : null;
+
   // ------------------------------------------------------------------ 手機 1e
   if (mobile) {
     const total = total0 ?? 0;
@@ -370,12 +484,13 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
       <div className="fixed inset-0 z-50 flex flex-col bg-white" role="dialog" aria-modal="true" data-testid="mc-triage-dialog" data-mode="mobile">
         <div className="flex flex-col gap-2.5 border-b border-zk-border-soft px-4 py-3">
           <div className="flex items-center gap-2.5">
-            <button type="button" onClick={closeDialog} className="text-xl leading-none" aria-label="遲啲先答" data-testid="mc-later">
-              ✕
+            <button type="button" onClick={closeDialog} className="text-zk-base font-semibold text-zk-primary" aria-label="返回列表" data-testid="mc-later">
+              ‹ 返回列表
             </button>
             <span className="flex-1 text-zk-md font-bold">要你睇</span>
             {total > 0 && !allClear && <span className="text-zk-base text-zk-muted" data-testid="mc-pos">{pos} / {total}</span>}
           </div>
+          {resumeBanner}
           <div className="flex gap-0.5" data-testid="mc-segs">
             {segs.map((s) => (
               <span key={s.id} className="h-1 flex-1 rounded-sm" style={{ background: s.c }} />
@@ -386,7 +501,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
           {failedBanner}
           {error && !failedMsg && <Banner kind="error" className="mb-3">{error}</Banner>}
           {loadingQs && <div className="text-zk-base text-zk-muted" data-testid="mc-loading">載入緊…</div>}
-          {q && (
+          {viewPanel}
+          {q && !viewQ && (
             <div className="flex flex-col gap-4">
               {retryTag}
               <div className="flex gap-1.5">
@@ -439,7 +555,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               )}
             </div>
           )}
-          {allClear && (
+          {allClear && !viewQ && (
             <div className="flex min-h-[50vh] flex-col items-center justify-center gap-2.5 text-center">
               <span className="flex h-14 w-14 items-center justify-center rounded-full bg-zk-success-tint text-2xl font-bold text-zk-success">✓</span>
               <div className="text-zk-xl font-bold" data-testid="mc-finish">{waiting ? "等緊最後一題送出" : `${handled} 題處理完`}</div>
@@ -454,10 +570,11 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               )}
             </div>
           )}
+          {navRow && <div className="mt-4 border-t border-zk-border-soft pt-3">{navRow}</div>}
         </div>
         <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 border-t border-zk-border bg-white px-4 pb-5 pt-3">
           {toast}
-          {q && primary && (
+          {q && !viewQ && primary && (
             <div className="flex gap-2.5">
               <button type="button" onClick={skip} disabled={tapLock} className="h-[54px] flex-1 disabled:opacity-40 rounded-xl border border-zk-faintest bg-white text-zk-md font-semibold text-zk-text-secondary" data-testid="mc-skip">
                 跳過，留返人手
@@ -478,13 +595,14 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
       <div className="absolute inset-0 bg-black/40" onClick={closeDialog} />
       <div className="relative z-10 flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-xl bg-white shadow-xl sm:max-w-xl sm:rounded-xl">
         <div className="flex items-center justify-between gap-2 border-b border-zk-border px-4 py-3">
-          <div>
+          <Button variant="secondary" size="sm" type="button" onClick={closeDialog} data-testid="mc-later" aria-label="返回列表">
+            ‹ 返回列表
+          </Button>
+          <div className="min-w-0 flex-1">
             <div className="text-zk-md font-semibold">一鍵結算——要你睇</div>
             {qs && <div className="text-zk-sm text-zk-muted">仲有 {pager.hasMore ? Math.max(visible.length, (total0 ?? 0) - okN - skipN - view.inFlight.length) : visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.inFlight.length > 0 ? ` · ${view.inFlight.length} 題送出中${view.pending ? "（可撤銷）" : ""}` : ""}</div>}
+            {resumeBanner}
           </div>
-          <Button variant="ghost" size="sm" type="button" onClick={closeDialog} data-testid="mc-later">
-            遲啲先答
-          </Button>
         </div>
         <div className="space-y-3 overflow-y-auto px-4 py-3">
           {failedBanner}
@@ -497,7 +615,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
             </ul>
           )}
           {loadingQs && <div className="text-zk-base text-zk-muted" data-testid="mc-loading">載入緊…</div>}
-          {allClear && (
+          {allClear && !viewQ && (
             <div className="space-y-2 py-6 text-center">
               <div className="text-zk-md font-semibold" data-testid="mc-finish">{waiting ? "等緊最後一題送出（5 秒內可撤銷）" : `${handled} 題處理完`}</div>
               {!waiting && <div className="text-zk-sm text-zk-muted">確認 {okN} · 跳過 {skipN}　跳過嘅留咗喺「待答問題」。</div>}
@@ -508,7 +626,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               )}
             </div>
           )}
-          {q && (
+          {viewPanel}
+          {q && !viewQ && (
             <>
               {retryTag}
               <div className="flex flex-wrap items-center gap-2">
@@ -524,11 +643,12 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               {form}
             </>
           )}
+          {navRow}
         </div>
-        {(q || toast) && (
+        {((q && !viewQ) || toast) && (
           <div className="flex flex-col gap-2 border-t border-zk-border px-4 py-3">
             {toast}
-            {q && (
+            {q && !viewQ && (
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Button onClick={skip} data-testid="mc-skip">
                   跳過，留返人手
