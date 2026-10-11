@@ -24,7 +24,7 @@
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeShiftRecordWhere } from "@/lib/broker-isolation";
-import { isMonthLocked, monthStart } from "@/lib/month-lock";
+import { isMonthLocked, isMonthLockedTx, monthStart } from "@/lib/month-lock";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
@@ -274,6 +274,8 @@ export async function POST(req: Request) {
         return { recordId: u.id, before: [numOrNull(r.clientRateSnapshot), numOrNull(r.guardWageSnapshot), numOrNull(r.brokerFeeSnapshot)], after: [u.clientRate, u.guardWage, u.brokerFee], ...(sourcesById.get(u.id) ?? {}) };
       });
       await prisma.$transaction(async (tx) => {
+        // P6.1f（H6）：每個 500 條批次 tx 開頭 FOR SHARE 再查鎖月（同 pre-check 同樣回 409）。
+        if (await isMonthLockedTx(tx, month)) throw Conflict(`${parsed.month} 已鎖定，唔可以重新計價`);
         for (const u of batch) await tx.shiftRecord.update({ where: { id: u.id }, data: { clientRateSnapshot: u.clientRate, guardWageSnapshot: u.guardWage, brokerFeeSnapshot: u.brokerFee } });
         await journalAutoCardUses(uses, tx);
       }, { timeout: 120_000, maxWait: 10_000 });

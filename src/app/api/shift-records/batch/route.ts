@@ -35,7 +35,7 @@ import {
   assertSiteAssignedToBroker,
   assertSettlementBrokerIdsValid,
 } from "@/lib/broker-isolation";
-import { assertMonthNotLocked, monthStart } from "@/lib/month-lock";
+import { assertMonthNotLocked, assertMonthNotLockedTx, monthStart } from "@/lib/month-lock";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
@@ -491,6 +491,9 @@ export async function POST(req: Request) {
     try {
       await prisma.$transaction(
         async (tx) => {
+          // P6.1f（H6）：tx 開頭 FOR SHARE 再查鎖月——route 層嗰次檢查喺 tx 外面，
+          // 驗證／配價期間鎖咗月嘅話呢度擋住（鎖月 route 用 FOR UPDATE 會等呢個 tx）。
+          await assertMonthNotLockedTx(tx, { workDate: month, actorUserId: session.userId, tableName: "shift_records", rowId: "batch", ip });
           if (hasDuplicateCells) {
             for (const plan of plans) {
               const key = `${plan.cell.guard_id}|${plan.cell.work_date.toISOString().slice(0, 10)}|${plan.cell.shift_type_id}`;

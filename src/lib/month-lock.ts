@@ -4,7 +4,7 @@ import { prisma } from "./db";
 import { writeAudit } from "./audit";
 import { Locked, BadRequest } from "./api/errors";
 import { hkMonthStart } from "./dates";
-import type { MonthClose } from "@prisma/client";
+import type { MonthClose, Prisma } from "@prisma/client";
 
 export function monthStart(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
@@ -38,6 +38,43 @@ export async function assertMonthNotLocked(params: {
     ip: params.ip,
   });
   throw Locked(`${monthStart(params.workDate).toISOString().slice(0, 7)} 已鎖定，唔可以寫入`);
+}
+
+// ---------------------------------------------------------------------------
+// P6.1f（H6 TOCTOU）：tx 內版本。route 層喺 transaction 外面做嘅
+// `assertMonthNotLocked` 有時間窗——長 tx（對數套用 120 秒等）期間鎖咗月，
+// 寫入照樣 commit。tx 開頭用 `assertMonthNotLockedTx(tx, …)`：
+// `SELECT … FROM month_closes … FOR SHARE` 攞 row 共享鎖，令鎖月 route
+// 嘅 `FOR UPDATE` 要等呢個 tx commit 先過得（鎖月之前已 commit 嘅寫入
+// 照算「鎖月前」；鎖月 commit 之後先開嘅 tx 一定睇到 locked_at）。
+// audit 用全局 prisma（獨立連線）寫，tx 回滾都唔會連累 permission_denied 紀錄。
+// ---------------------------------------------------------------------------
+type Tx = Prisma.TransactionClient;
+
+function monthIso(month: Date): string {
+  return monthStart(month).toISOString().slice(0, 10);
+}
+
+export async function isMonthLockedTx(tx: Tx, month: Date): Promise<boolean> {
+  const rows = await tx.$queryRaw<Array<{ locked_at: Date | null }>>`
+    SELECT locked_at FROM month_closes WHERE month = ${monthIso(month)}::date FOR SHARE`;
+  return !!rows[0]?.locked_at;
+}
+
+export async function assertMonthNotLockedTx(
+  tx: Tx,
+  params: { workDate: Date; actorUserId: string | null; tableName: string; rowId: string; ip: string | null },
+): Promise<void> {
+  if (!(await isMonthLockedTx(tx, params.workDate))) return;
+  await writeAudit({
+    actorUserId: params.actorUserId,
+    tableName: params.tableName,
+    rowId: params.rowId,
+    action: "permission_denied",
+    after: { reason: "month_locked", month: monthIso(params.workDate) },
+    ip: params.ip,
+  });
+  throw Locked(`${monthIso(params.workDate).slice(0, 7)} 已鎖定，唔可以寫入`);
 }
 
 // P1-WP4：`POST /api/month-closes/:month/generate` 嘅 URL 形狀用月份
@@ -104,6 +141,31 @@ export async function assertMonthRangeNotLocked(params: {
   for (const m of months) {
     const locked = await isMonthLocked(m);
     if (!locked) continue;
+    await writeAudit({
+      actorUserId: params.actorUserId,
+      tableName: params.tableName,
+      rowId: params.rowId,
+      action: "permission_denied",
+      after: {
+        reason: "month_locked",
+        month: m.toISOString().slice(0, 10),
+        effective_from: monthStart(params.effectiveFrom).toISOString().slice(0, 10),
+        effective_to: params.effectiveTo ? monthStart(params.effectiveTo).toISOString().slice(0, 10) : null,
+      },
+      ip: params.ip,
+    });
+    throw Locked(`生效區間覆蓋咗已鎖定嘅 ${m.toISOString().slice(0, 7)}，唔可以寫入`);
+  }
+}
+
+/** P6.1c：`assertMonthRangeNotLocked` 嘅 tx 內版本（FOR SHARE，audit 走獨立連線）。 */
+export async function assertMonthRangeNotLockedTx(
+  tx: Tx,
+  params: { effectiveFrom: Date; effectiveTo: Date | null; actorUserId: string | null; tableName: string; rowId: string; ip: string | null },
+): Promise<void> {
+  const to = params.effectiveTo ?? addMonths(hkMonthStart(), 1);
+  for (const m of enumerateMonths(params.effectiveFrom, to)) {
+    if (!(await isMonthLockedTx(tx, m))) continue;
     await writeAudit({
       actorUserId: params.actorUserId,
       tableName: params.tableName,

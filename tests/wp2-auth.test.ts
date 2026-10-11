@@ -56,7 +56,7 @@ describe("WP2 認證", () => {
     expect(res.headers.get("set-cookie")).toBeNull();
   });
 
-  it("連續 5 次密碼錯會鎖定帳號 15 分鐘（423），鎖定期內即使密碼啱都拒", async () => {
+  it("連續 5 次密碼錯會鎖定帳號 15 分鐘（P6.3：對外一律 401 同一訊息，唔再 423），鎖定期內即使密碼啱都拒", async () => {
     for (let i = 0; i < 5; i++) {
       await loginPOST(loginRequest(ownerTel, "wrong-password"));
     }
@@ -64,7 +64,8 @@ describe("WP2 認證", () => {
     expect(user.lockedUntil).toBeTruthy();
 
     const res = await loginPOST(loginRequest(ownerTel, TEST_PASSWORD));
-    expect(res.status).toBe(423);
+    expect(res.status).toBe(401);
+    expect((await res.json()).message).toBe("電話或密碼錯誤");
 
     const lockedAudit = await prisma.auditLog.findFirst({ where: { action: "login_locked", actorUserId: fx.userIds["老闆"] } });
     expect(lockedAudit).toBeTruthy();

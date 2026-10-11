@@ -122,9 +122,18 @@ describe("WP-PII：AI 助手 recent_audit／sql_select 讀 guards audit row—�
     expect(findKeysDeep(result, PII_BANK_KEYS)).toEqual([]);
   });
 
-  it("主管：sql_select ai.audit_log（table_name='guards'）零命中 hkid/bank key", async () => {
+  it("主管：sql_select 引用 ai.audit_log.before／after（任意 resource 嘅 DTO JSON，可含收客價／出街價）→ P6.2 起整條拒絕", async () => {
     const result = await toolRun(fx, "主管", "sql_select", {
       query: "SELECT id, table_name, action, before, after FROM ai.audit_log WHERE table_name = 'guards' ORDER BY created_at DESC",
+    });
+    expect(result.error).toBe("permission_denied");
+    expect(result.rows).toBeUndefined();
+    expect(findKeysDeep(result, PII_BANK_KEYS)).toEqual([]);
+  });
+
+  it("主管：sql_select ai.audit_log 唔引用 before／after 嘅欄位照常放行，零命中 hkid/bank key", async () => {
+    const result = await toolRun(fx, "主管", "sql_select", {
+      query: "SELECT id, table_name, action FROM ai.audit_log WHERE table_name = 'guards' ORDER BY created_at DESC",
     });
     expect(result.error).toBeUndefined();
     expect((result.rows as unknown[]).length).toBeGreaterThan(0);
