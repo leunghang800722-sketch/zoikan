@@ -326,20 +326,24 @@ message，見 `src/lib/ai-conversation.ts`）。每條問答另外寫一條
    串流嘅體驗；guard 觸發之後亦都**唔會** abort 緊行嘅 model
    generation（冇加 AbortController），只會停止將內容送俾用戶——日後
    要慳 token 可以加。
-2. **`sql_select` 嘅欄位名 scrub 係 best-effort**——`scrubUnknownShape`
-   淨係識欄位*名*，一個用假 alias 嘅查詢（例如
-   `SELECT cost AS revenue FROM ai.special_items`）理論上可以繞過收客價
-   gate（tokenizer 本身刻意簡單，冇做完整 SQL parse/column
-   provenance 分析——呢個係規劃裁定「tokenizer 要簡單」嘅刻意權衡）。
-3. **`sql_select` tokenizer 嘅 `LIMIT` 偵測淨係揀最後一個出現位置**——
-   一個帶 subquery 嘅查詢，subquery 自己嘅 `LIMIT` 有機會被誤判做
-   outer LIMIT。
-4. **`sql_select` 嘅 table 抽取淨係識 `FROM`/`JOIN` 後面第一個識別符**
-   ——同 tokenizer 一樣刻意簡單，唔識別 subquery 巢狀入面奇怪嘅寫法
-   （例如 `FROM (SELECT ... ) x, ai.sites y` 呢種逗號分隔嘅舊式 join
-   語法，`x`／`y` 呢類 alias 唔會誤判做表名，因為 regex 要求緊接
-   `FROM`/`JOIN` 之後）；`UPDATE`/`DELETE` 嗰種語法冧唔到 `FROM`/`JOIN`
-   都已經俾 `validateSqlSelect()` 擋咗，唔會走到呢一步。
+2. **`sql_select` 用真 SQL parser 把關（P6.2，2026-10-11）**——`src/lib/ai/sql-guard.ts`
+   用 `pgsql-ast-parser`（純 JS，釘版本）抽**全部** relation（逗號 join、`JOIN … ON`、
+   子查詢、CTE、`UNION`）同**全部被引用嘅欄位**（SELECT list、WHERE、JOIN ON／USING、
+   GROUP BY、ORDER BY、函數參數、子查詢）；`AS` 改名無效。引用咗 session 冇權睇嘅遮罩欄
+   （收客價／出街價／保安員個人資料／銀行）→ **整條拒絕**（`permission_denied`，唔係遮罩輸出）；
+   `SELECT *`／`t.*`／整行引用（`to_jsonb(g)`）只喺該表冇任何 session 睇唔到嘅遮罩欄先放行；
+   `audit_log.before／after`（任意 resource 嘅 DTO JSON）當掂到全部四組。parse 失敗一律拒絕
+   （唔退回 regex）；執行嘅係剝走注釋之後嘅 SQL。輸出 `scrubUnknownShape` 保留做第二重防線。
+   **殘餘限制**：(a) parser 唔識嘅合法 PG 語法（例如 `WITH RECURSIVE`、`a IS NOT DISTINCT FROM b`、
+   `LIMIT ALL`、`(a).b`、`tablesample`）會被當解析失敗拒絕，LLM 要改寫簡單啲；(b) 欄位按**所屬表**
+   判斷，無 qualifier 嘅欄位名會同 scope 內全部真表比對（保守，可能誤殺同名欄）；(c) 函數冇
+   allowlist，只封鎖 `query_to_xml` 等執行字串 SQL、`set_config`、`dblink`、`lo_*`、`pg_*`、
+   schema-qualified 函數；(d) `shift_records.provenance`／`sites.roster_layout` 呢類 JSON 欄按
+   欄名處理（`provenance` 屬出街價組）。
+3. **`sql_select` 嘅 `LIMIT`**：plain select（或 `WITH` 嘅主 select）直接加／收緊到 200；
+   `UNION`、或者 `LIMIT` 唔係整數常數，就包一層 `SELECT * FROM (…) LIMIT 200`。
+4. （P6.2 已解決）舊版 `FROM`／`JOIN` regex 只識第一個識別符、逗號 join 可繞過模組權限——
+   而家由 parser 抽晒全部 relation。
 5. **每日上限用 UTC 曆日**（唔係香港時區凌晨重置）——規劃裁定，見上面
    「每日上限」一節。
 6. **AI Hub 唔通嗰陣冇 retry/backoff**——單次 503，前端自己決定要唔要
