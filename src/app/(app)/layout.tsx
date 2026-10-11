@@ -8,6 +8,7 @@ import { SessionRefresh } from "@/components/SessionRefresh";
 import { ChunkErrorReload } from "@/components/ChunkErrorReload";
 import { AiAssistantSidebar } from "@/components/ai/AiAssistantSidebar";
 import { MobileNav } from "@/components/MobileNav";
+import { NavHistoryTracker } from "@/components/NavHistoryTracker";
 import { DesktopNav } from "@/components/DesktopNav";
 import { isAiConfigured } from "@/lib/ai/config";
 import { getPendingCounts } from "@/lib/rbac/pending-counts";
@@ -74,6 +75,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       {/* 手機版（< lg，README「<1024 建議左欄收起變抽屜」）：漢堡抽屜，
           見 MobileNav 內部註解。桌面版（lg 以上）呢個 component render
           一個 `lg:hidden` 空殼，唔影響下面固定 `<aside>`。 */}
+      <NavHistoryTracker />
       <MobileNav groups={groups} userName={session.name} roleLabel={roleLabel} badges={badges} />
 
       <DesktopNav groups={groups} userName={session.name} roleLabel={roleLabel} badges={badges} />

@@ -21,7 +21,8 @@
 // 淨係管抽屜開關嘅 client state。
 import { useEffect, useState } from "react";
 import { useHistoryOverlay } from "@/lib/ui/use-history-overlay";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { goBack } from "@/lib/ui/back-nav";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isLinkActive } from "@/lib/ui/nav-active";
 import type { NavGroup } from "@/lib/rbac/nav";
@@ -53,6 +54,7 @@ export function MobileNav({
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
   const search = useSearchParams();
 
   const { close: closeNav, closeForNavigation } = useHistoryOverlay(open, () => setOpen(false), "mobile-nav");
@@ -77,6 +79,11 @@ export function MobileNav({
   return (
     <div className="lg:hidden">
       <header className="flex items-center gap-3 border-b border-zk-border bg-white px-4 pt-2.5 pb-3">
+        {pathname !== "/" && (
+          <button type="button" data-testid="mobile-nav-back" aria-label="返回上一頁" onClick={() => goBack(router, pathname ?? "/")} className="-ml-1 shrink-0 px-1.5 text-2xl leading-none text-zk-text">
+            ‹
+          </button>
+        )}
         <button
           type="button"
           data-testid="mobile-nav-hamburger"

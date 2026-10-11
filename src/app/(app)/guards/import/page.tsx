@@ -5,6 +5,7 @@
 //   review 欄逐欄「確認／改正後確認／略過」。
 // 導入包只留喺瀏覽器記憶體，每次請求重新帶上去；伺服器唔存檔。回應內 hkid／電話／地址已遮罩，
 // 要核對嘅抽取值（姓名／地址）來自你自己揀嗰個本機檔。
+import { BackLink } from "@/components/ui/BackLink";
 import { useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
@@ -14,7 +15,6 @@ import { EmptyState, tableCls } from "@/components/ui/DataTable";
 import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 import { kickerFor } from "@/lib/nav/schema";
-import Link from "next/link";
 
 type Status = "confirmed" | "review" | "missing";
 interface PkgField {
@@ -230,9 +230,9 @@ export default function GuardImportPage() {
 
   return (
     <div className="space-y-4">
-      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-zk-base text-zk-primary hover:underline">
+      <BackLink href="/guards" data-testid="back-to-guards" className="block w-fit text-zk-base text-zk-primary hover:underline">
         ‹ 返回保安員
-      </Link>
+      </BackLink>
       <PageHeader kicker={kickerFor("/guards/import")} title="保安員證件資料導入" subtitle="上載本機產生嘅導入包 → 預覽 → 套用自動項 → 覆核待確認欄。導入包唔會存入系統。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
