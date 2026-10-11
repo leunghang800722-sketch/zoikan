@@ -130,6 +130,7 @@ export async function POST(req: Request) {
       month: new Date(parsedFields.month),
       siteIdHint: parsedFields.site_id ?? null,
       uploaderUserId: session.userId,
+      ip: getClientIp(req),
     });
 
     await writeAudit({
