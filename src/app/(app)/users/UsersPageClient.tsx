@@ -31,6 +31,7 @@ import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { fmt, fmtDateTime, uiLabel } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
 import { useCrudPage } from "@/lib/ui/use-crud-page";
+import { NotifySettings } from "@/components/NotifySettings";
 
 interface UserRow {
   id: string;
@@ -91,6 +92,9 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
     rows, setRows, loading, setLoading, error, setError, notice, drawerOpen, setDrawerOpen, editingId, form, setForm, formError, saving,
     openCreate: openCreateDrawer, openEdit: openEditDrawer, saveForm, runAction,
   } = useCrudPage<UserRow, typeof emptyForm>(emptyForm);
+
+  // P7.1：老闆改任何用戶嘅通知電郵（抽屜）。
+  const [notifyUser, setNotifyUser] = useState<{ id: string; name: string } | null>(null);
 
   // 「重設密碼」二次確認 ＋ 一次性顯示臨時密碼（見頂註解）。
   const [confirmResetId, setConfirmResetId] = useState<string | null>(null);
@@ -288,6 +292,9 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                       <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯
                       </Button>
+                      <Button variant="secondary" size="sm" type="button" data-testid="user-notify-button" onClick={() => setNotifyUser({ id: r.id, name: r.name })}>
+                        通知電郵
+                      </Button>
                       {/* A2：自己嗰行唔顯示「重設密碼」——同 API 側 id === session.userId
                           擋一致，應該用改密碼頁改自己嘅密碼。 */}
                       {r.id !== currentUserId &&
@@ -335,6 +342,10 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
           </tbody>
         </table>
       </div>
+
+      <Drawer open={notifyUser !== null} title={`通知電郵：${notifyUser?.name ?? ""}`} onClose={() => setNotifyUser(null)}>
+        {notifyUser && <NotifySettings key={notifyUser.id} userId={notifyUser.id} />}
+      </Drawer>
 
       <Drawer open={drawerOpen} title={editingId ? "編輯用戶" : "新增用戶"} onClose={() => setDrawerOpen(false)}>
         <form onSubmit={onSubmit} className="space-y-3">

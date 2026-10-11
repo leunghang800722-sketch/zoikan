@@ -129,6 +129,8 @@ export const AUDIT_META_PASSTHROUGH_KEYS = [
   "void_reason",
   "unlock_reason",
   "copied_from",
+  // P7.2：排程 job 代做嘅寫入（值＝job key，例 open_next_month；非 PII）
+  "by_job",
   "reject_reason",
   "override_reason",
   "reconciliation_summary",
