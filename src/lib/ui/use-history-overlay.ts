@@ -29,6 +29,7 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const skipBack = useRef(false);
+  const closing = useRef(false); // 已經發出 history.back()，等 popstate（防 dblclick 返兩格）
 
   useEffect(() => {
     if (!open || !enabled || typeof window === "undefined") return;
@@ -38,10 +39,12 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
     window.history.pushState({ zkOverlay: key, zkDepth: depth }, "", window.location.href);
     let popped = false;
     skipBack.current = false;
+    closing.current = false;
     const onPop = () => {
       const s = stateOf();
       if ((s.zkDepth ?? 0) < depth && !popped) {
         popped = true;
+        closing.current = false;
         onCloseRef.current();
       }
     };
@@ -55,8 +58,11 @@ export function useHistoryOverlay(open: boolean, onClose: () => void, key: strin
   }, [open, enabled, key]);
 
   const close = useCallback(() => {
-    if (enabled && stateOf().zkOverlay === key) window.history.back();
-    else onCloseRef.current();
+    if (closing.current) return;
+    if (enabled && stateOf().zkOverlay === key) {
+      closing.current = true;
+      window.history.back();
+    } else onCloseRef.current();
   }, [enabled, key]);
   const closeForNavigation = useCallback(() => {
     skipBack.current = true;
