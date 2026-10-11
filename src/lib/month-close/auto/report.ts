@@ -31,7 +31,7 @@ export async function buildAutoReport(ctx: AutoCollector, month: Date, runId: st
   ctx.summary.counts = await computeShiftCounts(month);
   // WP-POSTORDER-FREE（§34 C）：冇 Postorder 都計到嘅比例（additive）。
   ctx.summary.postorderDependency = await computePostorderDependency(month, ctx.summary);
-  const triage = await upsertMonthCloseTriage(runId, ctx.actorUserId, ctx.questions, ctx.ip, month.toISOString().slice(0, 10));
+  const triage = await upsertMonthCloseTriage(runId, ctx.triageOwnerUserId ?? ctx.actorUserId, ctx.questions, ctx.ip, month.toISOString().slice(0, 10), ctx.actorUserId);
   let ids = new Map<string, string>();
   if (triage.sessionId) {
     const qs = await prisma.triageQuestion.findMany({ where: { sessionId: triage.sessionId, status: "open" }, select: { id: true, groupKey: true } });

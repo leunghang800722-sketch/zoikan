@@ -9,6 +9,8 @@ import { UndoBar } from "@/components/ui/UndoBar";
 import { DEFERRED_UNDO_MS } from "@/components/month-close/deferred";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 
+const CHUNK = 50;
+
 interface Item {
   id: string;
   kind_label: string;
@@ -62,16 +64,24 @@ export function BatchAcceptButton({ sessionId, month, disabled, onDone }: { sess
     timer.current = null;
     setDeadline(null);
     setSending(true);
-    const res = await apiPost<BatchRes>("/api/triage/questions/batch-accept", { question_ids: pendingIds.current });
-    setSending(false);
-    if (!res.ok) {
-      setSummary(null);
-      setErrors([res.message]);
-      return;
+    // 每個 request 最多 CHUNK 題（API 上限 50，逐題串行）；自動分批，彙總結果。任何一批整批失敗（例如已鎖月 403）就停低並顯示原因。
+    const total = { answered: 0, skipped: 0, error: 0 };
+    const reasons: string[] = [];
+    for (let i = 0; i < pendingIds.current.length; i += CHUNK) {
+      const res = await apiPost<BatchRes>("/api/triage/questions/batch-accept", { question_ids: pendingIds.current.slice(i, i + CHUNK) });
+      if (!res.ok) {
+        reasons.push(res.message);
+        total.error += pendingIds.current.length - i;
+        break;
+      }
+      total.answered += res.data.counts.answered;
+      total.skipped += res.data.counts.skipped;
+      total.error += res.data.counts.error;
+      for (const r of res.data.results) if (r.status === "error" && r.reason) reasons.push(r.reason);
     }
-    const c = res.data.counts;
-    setSummary(`已答 ${c.answered}、跳過 ${c.skipped}、失敗 ${c.error}`);
-    setErrors([...new Set(res.data.results.filter((r) => r.status === "error" && r.reason).map((r) => r.reason as string))].slice(0, 5));
+    setSending(false);
+    setSummary(`已答 ${total.answered}、跳過 ${total.skipped}、失敗 ${total.error}`);
+    setErrors([...new Set(reasons)].slice(0, 5));
     await load();
     onDone?.();
   }, [load, onDone]);
@@ -103,7 +113,7 @@ export function BatchAcceptButton({ sessionId, month, disabled, onDone }: { sess
           type="button"
           disabled={disabled}
           onClick={() => {
-            setPicked(new Set((items ?? []).map((i) => i.id)));
+            setPicked(new Set((items ?? []).filter((i) => i.confidence === "propose").map((i) => i.id))); // 把握低（unknown）嘅題預設唔剔
             setOpen(true);
           }}
           data-testid="batch-accept-open"
@@ -132,8 +142,8 @@ export function BatchAcceptButton({ sessionId, month, disabled, onDone }: { sess
               以下 {n} 題系統有預填建議答案。取消剔嘅題唔會處理。每題都會同單題「一撳確認」一樣先預覽再寫入；已鎖月份會整批拒絕。確認後有 5 秒可以撤銷，送出之後唔可以一鍵撤銷。
             </p>
             <div className="mb-2 flex items-center gap-3 text-zk-sm">
-              <Button variant="link" size="sm" type="button" onClick={() => setPicked(new Set((items ?? []).map((i) => i.id)))}>
-                全選
+              <Button variant="link" size="sm" type="button" onClick={() => setPicked(new Set((items ?? []).filter((i) => i.confidence === "propose").map((i) => i.id)))}>
+                全選有建議
               </Button>
               <Button variant="link" size="sm" type="button" onClick={() => setPicked(new Set())}>
                 全不選

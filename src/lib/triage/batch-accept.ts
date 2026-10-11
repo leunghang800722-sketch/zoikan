@@ -12,10 +12,11 @@ import { mcQuestionViews, previewMcAnswer, submitMcAnswer } from "@/lib/month-cl
 import type { McEvidence } from "@/lib/month-close/auto/types";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { z } from "zod";
-import { isBoss, listSessionsFor } from "./session";
+import { canAccessOwnedBy, listSessionsFor } from "./session";
 import type { QuestionOption } from "./types";
 
-const BATCH_ACCEPT_MAX = 200;
+/** 每個 request 最多幾題（逐題串行，過多會逾時）；UI 自動分批。 */
+const BATCH_ACCEPT_MAX = 50;
 export const batchAcceptBodySchema = z.object({ question_ids: z.array(z.string().min(1).max(64)).min(1).max(BATCH_ACCEPT_MAX) }).strict();
 
 const MC_SOURCES = ["month_close", "postorder_backfill"] as const;
@@ -61,7 +62,7 @@ export async function listBatchAcceptable(actor: AuthedSession, scope: { session
   if (scope.sessionId) {
     const s = await prisma.triageSession.findUnique({ where: { id: scope.sessionId } });
     if (!s) throw new ApiError(404, "not_found", "搵唔到");
-    if (!isBoss(actor) && s.ownerUserId !== actor.userId) throw new ApiError(403, "forbidden", "呢批分診唔係你上載嘅");
+    if (!(await canAccessOwnedBy(actor, s.ownerUserId))) throw new ApiError(403, "forbidden", "呢批分診唔係你上載嘅");
     sessionIds = (MC_SOURCES as readonly string[]).includes(s.sourceType) ? [s.id] : [];
   } else {
     const list = await listSessionsFor(actor, { mine: false });
@@ -119,7 +120,7 @@ export async function runBatchAccept(actor: AuthedSession, questionIds: string[]
       results.push({ id, status: "error", reason: "搵唔到呢條問題" });
       continue;
     }
-    if (!isBoss(actor) && q.session.ownerUserId !== actor.userId) {
+    if (!(await canAccessOwnedBy(actor, q.session.ownerUserId))) {
       results.push({ id, status: "error", reason: "呢條問題唔係你上載嗰批" });
       continue;
     }
