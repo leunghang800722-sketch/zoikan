@@ -9,14 +9,13 @@ test.describe.configure({ mode: "serial" });
 const AUG = new Date(Date.UTC(2026, 7, 1));
 const RAND = Math.random().toString(36).slice(2, 8);
 let guardId: string;
-const draftIds: string[] = [];
 
 test.beforeAll(async () => {
   const guard = await prisma.guard.create({ data: { nameZh: `測試長工-draft-${RAND}`, employmentType: "longterm_autopay", hireDate: new Date("2020-01-01"), createdBy: "test-e2e" } });
   guardId = guard.id;
   await prisma.guardLongtermContract.create({ data: { guardId, monthlySalary: 15000, effectiveFrom: new Date("2020-01-01"), effectiveTo: null, annualLeaveDays: 7, source: "manual", createdBy: "test-e2e" } });
   for (const [from, to] of [["2026-08-03", "2026-08-05"], ["2026-08-10", "2026-08-10"], ["2026-08-20", "2026-08-21"]]) {
-    const row = await prisma.longtermPayrollInput.create({
+    await prisma.longtermPayrollInput.create({
       data: {
         month: AUG,
         guardId,
@@ -31,7 +30,6 @@ test.beforeAll(async () => {
         createdBy: "test-e2e",
       },
     });
-    draftIds.push(row.id);
   }
 });
 
@@ -54,13 +52,13 @@ test("草稿列表標「草稿」＋勤工獎合資格清單；單條確認；�
   await expect(mine.first()).toContainText("草稿");
   await expect(mine.first()).toContainText("更表 SL");
 
-  // 勤工獎合資格清單：本測試長工 3 日 SL 但更表記錄不在 shift_records（草稿由 DB 直插），所以應列為合資格（只列名）
+  // 勤工獎合資格清單（只列名）
   await expect(page.getByTestId("ltpay-bonus-eligible")).toContainText("只列名，唔填金額");
 
   // 單條確認
   await mine.first().getByTestId("ltpay-draft-confirm").click();
   await expect(mine).toHaveCount(2, { timeout: 10_000 });
-  expect((await prisma.longtermPayrollInput.findUniqueOrThrow({ where: { id: draftIds[0]! } })).status).toBe("confirmed");
+  expect(await prisma.longtermPayrollInput.count({ where: { guardId, status: "confirmed" } })).toBe(1);
 
   // 全部確認 → 撤銷（零請求）
   await page.getByTestId("ltpay-drafts-confirm-all").click();
