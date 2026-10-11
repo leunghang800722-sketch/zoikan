@@ -8,12 +8,24 @@ import { createNotification } from "@/lib/notify/create";
 import type { JobDef, JobResult } from "./types";
 
 export type RunOutcome =
-  | { outcome: "ran"; runId: string; status: "ok" | "error" | "skipped"; summary: Record<string, unknown> | null; error?: string }
+  | { outcome: "ran"; runId: string; status: "ok" | "error" | "skipped" | "timeout"; summary: Record<string, unknown> | null; error?: string }
   | { outcome: "skipped_locked" }
   | { outcome: "not_due" }
   | { outcome: "unknown_job" };
 
 const MAX_ERROR_LEN = 500;
+const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+const RETRY_DELAY_MS = 60 * 60 * 1000;
+/** 排程 job 失敗／超時後最多重試次數（每次相隔 1 小時），之後等下個排程。 */
+const MAX_RETRIES = 3;
+
+class JobTimeoutError extends Error {}
+
+/** JOB_TIMEOUT_MS（毫秒；預設 10 分鐘）。注意：Promise.race 只係令排程唔再等；底層 job 無法強制中止。 */
+function jobTimeoutMs(): number {
+  const n = Number(process.env.JOB_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_JOB_TIMEOUT_MS;
+}
 
 function errMessage(e: unknown): string {
   // 只存 message 前 500 字（job 內部錯誤訊息不含 PII：lib 層一向唔將姓名放入 Error）
@@ -52,19 +64,44 @@ export async function runJob(def: JobDef | undefined, opts: { trigger: "schedule
     const run = await prisma.jobRun.create({ data: { jobKey: def.key, trigger: opts.trigger, status: "running", startedAt: new Date() } });
     let result: JobResult | null = null;
     let error: string | undefined;
+    let timedOut = false;
+    let timer: NodeJS.Timeout | undefined;
     try {
-      result = await def.run({ jobKey: def.key, trigger: opts.trigger, now });
+      const ms = jobTimeoutMs();
+      result = await Promise.race([
+        def.run({ jobKey: def.key, trigger: opts.trigger, now }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new JobTimeoutError(`超過最長執行時間 ${ms} ms`)), ms);
+          timer.unref?.();
+        }),
+      ]);
     } catch (e) {
+      timedOut = e instanceof JobTimeoutError;
       error = errMessage(e);
       console.error(`[scheduler] job ${def.key} 失敗:`, e instanceof Error ? e.name : "error");
     }
-    const status: "ok" | "error" | "skipped" = error ? "error" : (result?.status ?? "ok");
+    if (timer) clearTimeout(timer);
+    const status: "ok" | "error" | "skipped" | "timeout" = timedOut ? "timeout" : error ? "error" : (result?.status ?? "ok");
     const summary = (error ? { error } : (result?.summary ?? {})) as Prisma.InputJsonValue;
     await prisma.jobRun.update({ where: { id: run.id }, data: { status, finishedAt: new Date(), summary } });
     await prisma.scheduledJob.updateMany({ where: { jobKey: def.key }, data: { lastRunAt: new Date(), lastStatus: status, lastError: error ?? null } });
+    if (error && opts.trigger === "schedule") {
+      // 失敗／超時：1 小時後重試（連續失敗未超過 MAX_RETRIES 次；唔遲過原本下次排程時間）
+      const recent = await prisma.jobRun.findMany({ where: { jobKey: def.key, trigger: "schedule", status: { not: "running" } }, orderBy: { startedAt: "desc" }, take: MAX_RETRIES + 1, select: { status: true } });
+      let streak = 0;
+      for (const x of recent) {
+        if (x.status === "error" || x.status === "timeout") streak++;
+        else break;
+      }
+      if (streak <= MAX_RETRIES) {
+        const cur = await prisma.scheduledJob.findUnique({ where: { jobKey: def.key } });
+        const retryAt = new Date(now.getTime() + RETRY_DELAY_MS);
+        if (cur && cur.enabled && (!cur.nextRunAt || retryAt < cur.nextRunAt)) await prisma.scheduledJob.update({ where: { id: cur.id }, data: { nextRunAt: retryAt } });
+      }
+    }
     if (error) {
       // 失敗通知老闆（title／body 只有 job key 同 run id，唔含錯誤全文）
-      await createNotification({ kind: "job_failed", title: "自動排程出錯", body: `排程「${def.label}」（${def.key}）執行失敗，詳情喺「自動排程」頁（run ${run.id}）。`, href: "/settings/jobs", audience: ["老闆"], dedupeKey: `job_failed:${run.id}` }).catch(() => undefined);
+      await createNotification({ kind: "job_failed", title: timedOut ? "自動排程超時" : "自動排程出錯", body: `排程「${def.label}」（${def.key}）${timedOut ? "執行超時" : "執行失敗"}，詳情喺「自動排程」頁（run ${run.id}）。`, href: "/settings/jobs", audience: ["老闆"], dedupeKey: `job_failed:${run.id}` }).catch(() => undefined);
     }
     return { outcome: "ran", runId: run.id, status, summary: summary as Record<string, unknown>, ...(error ? { error } : {}) };
   });

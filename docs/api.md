@@ -2508,7 +2508,7 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 | `POST /api/admin/jobs/:key/run-now` | 手動立即跑一次（同排程共用 PG advisory lock；撞正跑緊回 409）；唔改 `next_run_at`；寫 audit `job_run_now`。回 `{ key, run_id, status, summary, error }` |
 
 ### 價卡、開新月
-- `POST /api/rate-cards/copy-last-month`（dry_run）每個 `candidates[]` 多 `change_class`：`same`（價錢同上月一樣，排程會自動複製）｜`new`｜`rate_changed`｜`changed_in_month`（後三者排程唔寫，要人確認）。
-- `GET /api/rate-cards/copy-last-month?month=YYYY-MM`（`出街價:view`）：只回 `{ month, count }`（仲有幾多張候選未複製）；首頁「價卡待確認」卡用。
+- `POST /api/rate-cards/copy-last-month`（dry_run）每個 `candidates[]` 多 `change_class`：`same`（價錢同上月一樣，排程會自動複製）｜`new`｜`rate_changed`｜`changed_in_month`｜`auto_source`（上月來源卡係一鍵自動定價卡 `source=auto:*`，未經人確認；後四者排程唔寫，要人確認）。人手「複製上月卡」路徑不變（預覽有標示）。
+- `GET /api/rate-cards/copy-last-month?month=YYYY-MM`（`出街價:view`）：只回 `{ month, count, auto_copy, needs_confirm }`（仲有幾多張候選未複製；`auto_copy`＝25 號排程會自動複製嘅 `same` 張數）；首頁「價卡待確認」卡用。**雞頭 403**。
 - `POST /api/months/:month/open` 行為不變（核心抽成 `src/lib/months/open-month.ts`，與排程 job 共用）；`/sites` 頁新增「開新月」掣呼叫佢。
 - audit：排程 job 代寫嘅 row，`audit_log.actor_user_id` 為 null，`after.by_job`＝job key；`created_by`＝`job:<key>`。

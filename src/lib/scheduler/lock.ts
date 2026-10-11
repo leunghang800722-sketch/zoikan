@@ -7,7 +7,8 @@ function connectionString(): string {
   if (!raw) throw new Error("DATABASE_URL 未設定");
   try {
     const u = new URL(raw);
-    u.search = ""; // 去掉 ?schema=… 等 Prisma 專用參數
+    // 只去掉 Prisma 專用參數；保留 sslmode 等 pg 認識嘅 query 參數
+    for (const k of ["schema", "connection_limit", "pool_timeout", "pgbouncer", "socket_timeout", "statement_cache_size"]) u.searchParams.delete(k);
     return u.toString();
   } catch {
     return raw;

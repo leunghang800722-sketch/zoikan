@@ -94,7 +94,7 @@ interface CopyLastMonthCandidate {
   broker_label: string;
   client_rate: string | null;
   guard_wage: string | null;
-  /** P7.2：same｜new｜rate_changed｜changed_in_month（非 same＝排程唔會自動複製、要人核對） */
+  /** P7.2：same｜new｜rate_changed｜changed_in_month｜auto_source（非 same＝排程唔會自動複製、要人核對） */
   change_class?: string;
 }
 
@@ -210,7 +210,7 @@ export function RateCardsClient({
     }
     const lines = preview.data.candidates
       .slice(0, 20)
-      .map((c) => `${c.site_name} ${c.shift_type_code}（${c.broker_label}）收客 ${c.client_rate ?? "—"}／工資 ${c.guard_wage ?? "—"}${c.change_class && c.change_class !== "same" ? "　★價錢有變／新組合，請核對" : ""}`)
+      .map((c) => `${c.site_name} ${c.shift_type_code}（${c.broker_label}）收客 ${c.client_rate ?? "—"}／工資 ${c.guard_wage ?? "—"}${c.change_class === "auto_source" ? "　★上月係自動定價卡，請核對" : c.change_class && c.change_class !== "same" ? "　★價錢有變／新組合，請核對" : ""}`)
       .join("\n");
     const more = preview.data.count > 20 ? `\n…仲有 ${preview.data.count - 20} 張` : "";
     const proceed = await askConfirm({ message: `複製上月卡到本月 ${month}：搵到 ${preview.data.count} 張卡可以複製\n${lines}${more}\n\n確定要建立呢 ${preview.data.count} 張新卡？`, confirmLabel: "建立" });

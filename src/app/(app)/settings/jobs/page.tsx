@@ -31,7 +31,7 @@ interface JobRow {
   recent_runs: RunRow[];
 }
 
-const STATUS_LABEL: Record<string, string> = { ok: "成功", error: "失敗", skipped: "跳過", running: "跑緊" };
+const STATUS_LABEL: Record<string, string> = { ok: "成功", error: "失敗", skipped: "跳過", running: "跑緊", timeout: "超時" };
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobRow[] | null>(null);
@@ -103,7 +103,7 @@ export default function JobsPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-zk-md font-semibold text-zk-text">{j.label}</h2>
                 <Pill variant={j.enabled ? "success" : "neutral"}>{j.enabled ? "啟用中" : "已停用"}</Pill>
-                {j.last_status && <Pill variant={j.last_status === "error" ? "danger" : "neutral"}>上次：{STATUS_LABEL[j.last_status] ?? j.last_status}</Pill>}
+                {j.last_status && <Pill variant={j.last_status === "error" || j.last_status === "timeout" ? "danger" : "neutral"}>上次：{STATUS_LABEL[j.last_status] ?? j.last_status}</Pill>}
                 <div className="ml-auto flex items-center gap-2">
                   <Button variant="secondary" size="sm" disabled={busy === j.key} onClick={() => runNow(j)} data-testid={`job-${j.key}-run-now`}>
                     {busy === j.key ? "處理緊…" : "立即跑"}

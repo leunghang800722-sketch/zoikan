@@ -188,7 +188,8 @@ export async function applyCopyLastMonthCards(
 //   rate_changed      上月卡同上上月卡價錢唔同
 //   changed_in_month  上月內有新卡生效（月中改價）
 // ---------------------------------------------------------------------------
-type CopyClass = "same" | "new" | "rate_changed" | "changed_in_month";
+//   auto_source       上月來源卡係一鍵自動定價卡（source 以 auto: 開頭，未經人確認）——排程唔自動複製（auto 卡只可 propose）
+type CopyClass = "same" | "new" | "rate_changed" | "changed_in_month" | "auto_source";
 
 export interface ClassifiedCandidate {
   candidate: CopyLastMonthCandidate;
@@ -223,6 +224,7 @@ export async function classifyCopyCandidates(month: string, candidates: CopyLast
   return candidates.map((candidate) => {
     const src = sourceById.get(candidate.sourceCardId);
     if (!src) return { candidate, cls: "new" as const };
+    if (src.source?.startsWith("auto:")) return { candidate, cls: "auto_source" as const };
     const cards = byKey.get(keyOf(src)) ?? [];
     // 上月內（prevStart 之後）新生效嘅卡（含來源卡自己）＝月中改價
     if (cards.some((c) => c.effectiveFrom.getTime() > prevStart.getTime() && c.effectiveFrom.getTime() <= prevEnd.getTime())) return { candidate, cls: "changed_in_month" as const };

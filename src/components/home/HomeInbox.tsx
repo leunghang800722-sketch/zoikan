@@ -110,7 +110,7 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
   }, [canGuardFix]);
 
   // P7.2：價卡待確認（本月／下月仲有幾多張「複製上月卡」候選）。只喺月尾至月初窗口查。
-  const [pendingCards, setPendingCards] = useState<{ month: string; count: number } | null>(null);
+  const [pendingCards, setPendingCards] = useState<{ month: string; count: number; autoCopy: number } | null>(null);
   useEffect(() => {
     if (!canRateCards) return;
     const w = hkMonthWindow();
@@ -119,10 +119,11 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
     let cancelled = false;
     (async () => {
       for (const m of months) {
-        const res = await apiGet<{ month: string; count: number }>(`/api/rate-cards/copy-last-month?month=${m}`);
+        const res = await apiGet<{ month: string; count: number; auto_copy: number; needs_confirm: number }>(`/api/rate-cards/copy-last-month?month=${m}`);
         if (cancelled) return;
-        if (res.ok && res.data.count > 0) {
-          setPendingCards({ month: m, count: res.data.count });
+        // 只計要人確認嗰啲（25 號前未自動複製嘅 same 唔計入）
+        if (res.ok && res.data.needs_confirm > 0) {
+          setPendingCards({ month: m, count: res.data.needs_confirm, autoCopy: res.data.auto_copy });
           return;
         }
       }
@@ -164,7 +165,7 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
           />
         )}
         {runCard}
-        {pendingCards && <Card testId="inbox-pending-cards" label={`${pendingCards.month} 價卡待確認`} value={pendingCards.count} unit="張" tone="danger" note="價錢有變或新組合，未自動複製" href={`/rate-cards?month=${pendingCards.month}&pending=1`} />}
+        {pendingCards && <Card testId="inbox-pending-cards" label={`${pendingCards.month} 價卡待確認`} value={pendingCards.count} unit="張" tone="danger" note={pendingCards.autoCopy > 0 ? `要你確認（25 號自動複製其餘 ${pendingCards.autoCopy} 張）` : "價錢有變或新組合，未自動複製"} href={`/rate-cards?month=${pendingCards.month}&pending=1`} />}
         {canGuardFix && needsBoss !== null && <Card testId="inbox-needs-boss" label="要老闆決定" value={needsBoss} unit="項" tone={needsBoss > 0 ? "danger" : undefined} href={`/roster-uploads?tab=fix&month=${prevMonth}`} />}
       </div>
     </section>
