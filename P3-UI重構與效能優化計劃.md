@@ -970,3 +970,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **M3 缺價通知 dedupe**：hash 只用缺價組合（盤＋職級）集合，唔含更數；之後更數增加唔再推，組合增加先再推（`docs/ops.md` 一致）。test 覆蓋。
 - **一併**：PATCH 改額文件寫明「改額＝更正；改價請新增一行」；頂位草稿確認後更表再加更只記 `skipped_confirmed`（文件註明）；`schema.prisma` 過時註解（`SELL_LEAVE_RATE_TABLE`）改正。
 - **待老闆確認（雙重支付）**：aggregate 口徑嘅頂位更＝長工幫雞頭頂散更，嗰啲更已經由雞頭現金結算（`aggregate.ts` 「幫雞頭頂散更 N 更：已由雞頭現金結算」）。再出頂位津貼會唔會同雞頭結算雙重支付，由回測吻合率（會計過往有冇另外畀頂位津貼）同老闆決定；推斷頁頂部已加提示；未決定前**唔好採用價目表**。
+
+### 14.3 驗收、部署、正式站推斷結果（2026-10-11 晚）
+- Opus 5.5 兩輪：第一輪 3 必修（頂位更認定同 `aggregate.ts` 唔一致——8 月測試資料 19 vs 6 更，多出嘅係 CP5 構造盤自己崗位更；note「8月15日」被當 15 更；缺價通知 hash 含更數會日日推）；修正：共用 `classifyLongtermShift`（aggregate 同 cover-shifts 都用）、note 只認「N更／N次」、hash 只用 (盤,職級) 集合；第二輪通過——驗收員用舊／新 HEAD 各跑一次 `gate:locked-months` 比 snapshot，7／8 月每個數字一樣（7 月營業額 3,130,432.72／成本 2,715,419.99；8 月 3,236,901.04／2,713,658.02），`gate:ltpay-aug` 56/56。
+- merge main `abf1390`；部署 `6acb77eeda7cf920c2638d69` RUNNING 11:56Z：migration `20261014000000_p10_cover_shift_rates` applied、scheduler started。
+- **正式站推斷（老闆 Chrome 唯讀，`/settings/cover-rates/infer?months=2026-07,2026-08,2026-09`，冇撳採用）**：`cover_shifts=0`、`tagged_inputs=0`、`untagged_other_allowance_guard_months=0`，建議表 0 行，推斷唔到清單 0，回測 0 人月。原因（同一 session 唯讀核實）：正式站 **長工合約 0 份、7／8／9 月長工糧 0 次 run（頁面顯示「未計過長工糧」）、人手輸入 0 條**——長工糧模組喺正式站從未用過，歷史頂位津貼紀錄只存在於系統外（Payroll Editor／Excel／Drive）。本機 gate 嘅 8 月 fixture 有 6 更頂位係因為 fixture 由 `data/` 開盤資料砌出，正式站 shift_records 未有長工 settlement 標記。
+- 結論：階段 10 功能已就緒（價目表、推斷、回測、草稿），但**反推要等歷史資料入系統**。選項交老闆（見報告）：(A) 將 7／8／9 月 Payroll Editor／長工糧表（Maxwell 名單＋人手津貼）導入系統（Maxwell 導入已有；人手輸入要逐月導入或批量導入功能），再跑推斷；(B) 由老闆／會計直接提供舊價目表（盤×職級×金額）人手輸入；(C) 由本機 `data/` 內舊檔離線反推（只出盤×職級×金額彙總，唔出人名）——視乎 `data/` 有冇相關檔。
