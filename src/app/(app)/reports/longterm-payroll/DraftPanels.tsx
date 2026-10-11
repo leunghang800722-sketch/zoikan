@@ -17,22 +17,25 @@ export interface DraftInputDTO {
   guard_name: string;
   guard_staff_no: string | null;
   kind: string;
+  amount?: number | null;
   date_from: string | null;
   date_to: string | null;
   doctor_note_verified: boolean | null;
   note: string | null;
   draft_source: string | null;
-  draft_evidence: { dates?: string[]; edited?: boolean } | null;
+  draft_evidence: { dates?: string[]; edited?: boolean; shifts?: number } | null;
 }
 
 const CHUNK = 50;
-const SOURCE_LABEL: Record<string, string> = { "roster_leave:SL": "更表 SL" };
+const SOURCE_LABEL: Record<string, string> = { "roster_leave:SL": "更表 SL", "cover:rates": "頂位價目表" };
+const isCover = (d: DraftInputDTO): boolean => d.draft_source === "cover:rates";
 
 export function DraftInputsPanel({ drafts, locked, onChanged, onError }: { drafts: DraftInputDTO[]; locked: boolean; onChanged: () => void; onError: (m: string) => void }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [doctor, setDoctor] = useState(false);
+  const [amt, setAmt] = useState("");
   const [deadline, setDeadline] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
@@ -52,7 +55,10 @@ export function DraftInputsPanel({ drafts, locked, onChanged, onError }: { draft
     else onError(res.message);
   }
   async function editAndConfirm(id: string) {
-    const res = await apiPatch(`/api/longterm/inputs/${id}`, { date_from: from || null, date_to: to || null, doctor_note_verified: doctor, status: "confirmed" });
+    const d = drafts.find((x) => x.id === id);
+    const body = d && isCover(d) ? { amount: Number(amt), status: "confirmed" } : { date_from: from || null, date_to: to || null, doctor_note_verified: doctor, status: "confirmed" };
+    if (d && isCover(d) && !(Number(amt) > 0)) return onError("金額要大過 0");
+    const res = await apiPatch(`/api/longterm/inputs/${id}`, body);
     if (res.ok) {
       setEditingId(null);
       onChanged();
@@ -109,7 +115,7 @@ export function DraftInputsPanel({ drafts, locked, onChanged, onError }: { draft
           </Button>
         )}
       </div>
-      <Banner kind="info">呢啲係由更表自動生成嘅草稿，唔帶任何金額；病假段醫生紙預設「未核」。確認後先計入長工糧，確認前對 Gross 完全冇影響。</Banner>
+      <Banner kind="info">呢啲係由更表自動生成嘅草稿：病假段唔帶金額、醫生紙預設「未核」；頂位津貼按「設定 › 頂位價目表」逐更價計出金額。確認後先計入長工糧，確認前對 Gross 完全冇影響。</Banner>
       {deadline !== null && <UndoBar message={`即將確認 ${pending.current.length} 條草稿`} deadline={deadline} onUndo={undo} testId="ltpay-drafts-undo-bar" />}
       {sending && <div className="text-zk-sm text-zk-muted">批量確認中…</div>}
       {summary && (
@@ -143,7 +149,13 @@ export function DraftInputsPanel({ drafts, locked, onChanged, onError }: { draft
                     {d.draft_evidence?.edited ? "（已改）" : ""}
                   </td>
                   <td className={tableCls.td}>
-                    {editingId === d.id ? (
+                    {isCover(d) ? (
+                      editingId === d.id ? (
+                        <input type="number" min="0" step="0.01" className={inputCls} value={amt} onChange={(e) => setAmt(e.target.value)} aria-label="頂位津貼金額" data-testid="ltpay-draft-amount-input" />
+                      ) : (
+                        <span data-testid="ltpay-draft-cover-amount">頂位津貼 ${d.amount ?? 0}（{d.draft_evidence?.shifts ?? 0} 更）</span>
+                      )
+                    ) : editingId === d.id ? (
                       <span className="flex flex-wrap items-center gap-1">
                         <input type="date" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} aria-label="開始日" />
                         <input type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} aria-label="結束日" />
@@ -155,7 +167,9 @@ export function DraftInputsPanel({ drafts, locked, onChanged, onError }: { draft
                     )}
                   </td>
                   <td className={tableCls.td}>
-                    {editingId === d.id ? (
+                    {isCover(d) ? (
+                      "—"
+                    ) : editingId === d.id ? (
                       <label className="flex items-center gap-1 text-zk-sm">
                         <input type="checkbox" checked={doctor} onChange={(e) => setDoctor(e.target.checked)} />
                         已核實
@@ -191,6 +205,7 @@ export function DraftInputsPanel({ drafts, locked, onChanged, onError }: { draft
                                 setFrom(d.date_from ?? "");
                                 setTo(d.date_to ?? "");
                                 setDoctor(!!d.doctor_note_verified);
+                                setAmt(String(d.amount ?? ""));
                               }}
                               data-testid="ltpay-draft-edit"
                             >

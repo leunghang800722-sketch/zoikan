@@ -105,6 +105,7 @@ async function clearAll() {
   // WP-LTSHIFT：guard_longterm_posts 對 guard／site 都係 FK RESTRICT，
   // 要喺兩張表刪之前先清（同 guard_staff_numbers 一致做法）。
   await prisma.guardLongtermPost.deleteMany({});
+  await prisma.coverShiftRate.deleteMany({}); // P10.1
   // WP-LTPAY §21 任務 4e 驗證期間發現（同 guard_staff_numbers／
   // guard_longterm_contracts 一模一樣嘅落差）：`guard_match_overrides`
   // （驗收 Opus 5.5，2026-09-26 加，migration

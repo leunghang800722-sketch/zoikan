@@ -756,6 +756,7 @@ model Site {
   // WP-LTPAY：長工合約 `postSiteId`（可 null）反向關聯。
   longtermContracts        GuardLongtermContract[]
 
+  coverShiftRates CoverShiftRate[]
   @@map("sites")
 }
 
@@ -1721,7 +1722,7 @@ model GuardLongtermContract {
   postSite   Site?   @relation(fields: [postSiteId], references: [id])
 
   restDayPaid Boolean  @default(true) @map("rest_day_paid") // Maxwell 名單 Rest Day Yes/No
-  restDayRate Decimal? @map("rest_day_rate") @db.Decimal(10, 2) // 賣假／頂位價表單價（每日 600–750，逐盤逐職級寫死值，見 compute.ts SELL_LEAVE_RATE_TABLE）
+  restDayRate Decimal? @map("rest_day_rate") @db.Decimal(10, 2) // 賣假／頂位價表單價（每日 600–750）；頂位價目表而家喺 cover_shift_rates（P10）
   shiftHours  Decimal? @map("shift_hours") @db.Decimal(5, 2) // 每更時數，計 OT 時薪（working_hour，一般 12）
 
   probationMonths Int?    @map("probation_months") // 1／3／null＝冇試用期，跟 Maxwell Probation Period (Months)
@@ -1993,4 +1994,30 @@ model AiDailyUsage {
 
   @@id([userId, day])
   @@map("ai_daily_usage")
+}
+
+// ---------------------------------------------------------------------------
+// P10.1：頂位津貼價目表（逐盤逐職級，老闆揀 B）。只影響「頂位草稿」金額（草稿未確認唔計糧）。
+// grade＝"IC"／"兵"（更表 Rank 欄 classifyRank 分類）。生效價＝effectiveFrom<=日期 且（effectiveTo 空或>=日期）、未作廢、effectiveFrom 最大者；
+// 改價＝新增一行（新 effectiveFrom），唔覆寫舊價。source＝inferred（由歷史反推採用）／manual。
+// 注意：(site_id, grade, effective_from) 唯一；作廢後再加同日同盤同職級會復用該行（見 cover-rates 服務層）。
+// ---------------------------------------------------------------------------
+model CoverShiftRate {
+  id            String    @id @default(uuid())
+  siteId        String    @map("site_id")
+  site          Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  grade         String
+  amount        Decimal   @db.Decimal(10, 2)
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  source        String    @default("manual")
+  evidence      Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  createdBy     String?   @map("created_by")
+  voidedAt      DateTime? @map("voided_at")
+  voidedBy      String?   @map("voided_by")
+
+  @@unique([siteId, grade, effectiveFrom])
+  @@index([siteId, grade])
+  @@map("cover_shift_rates")
 }
