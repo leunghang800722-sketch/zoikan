@@ -1029,3 +1029,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - Opus 5.5 三輪：第一輪 M1（`.venv` symlink 入 git）、M2（重新整理後覆蓋層關唔到——key 撞舊 entry，改 nonce＋depth）、M3（nav 堆疊存 query string，改只存 pathname）；第二輪 M4（400ms 保險同遲到 popstate 雙退格，timer 分支先標 popped）＋(ii) g（全域舊 entry 跳過改模組載入就裝）／h（restore depth）；第三輪通過（0/300/700/1500ms 延遲全部 1 次 back）。留 (ii) i（重新整理後第一下「‹」無可見變化）、j（flush 失敗同保險同時發生多一輪開關，無資料遺失）。
 - merge `ddbefdf`（只 P3 doc 衝突，兩節並存）；部署 `6acbd564` RUNNING；啟動 log：62 migrations／No pending、系統帳號就緒、provider=claude model=claude-opus-5-5、scheduler started、Ready 1089ms。
 - 正式站（老闆帳號、唯讀，桌面 Wi-Fi）：導入 session（350 題）首屏 `?status=open&take=5&tier=important` **6,855 B／387 ms**（改前 680 KB／1.3 s）；月結 session 5,564 B／420 ms；開對話框 history +1 並帶 `zkOverlay/zkNonce/zkDepth`；`history.back()` 只關對話框、仍喺 `/triage`（改前跳出去 `/`）；「‹ 返回列表」關閉後 history 唔多退；手機頂欄「‹」（aria「返回上一頁」）喺 DOM。
+
+### 15.4 8 月真實 Payroll Editor 逐人核對（本機，2026-10-12）
+- 來源：解密後 `(Maxwell) PayrollEditor (2026.08).xls`（79 行、總額 958,967.58）vs gate DB 2026-08 run（56 人）。工具 `ltpay-vs-payrolleditor.ts` 配對 0：備考號欄 79 行全空（冇工號）、隔離 DB 冇戶口。改由規劃者本機用 Maxwell 名單嘅英文名做橋（逐人明細 `data/2026-10/ltpay-aug-by-name.json`，唔入 git）。
+- 結果：配對 51/56；**46 人完全吻合（±0.01）**；5 人有差（系統－銀行：−3,444.18、−2,375.00、−582.25、+16.17、+14.45，淨 −6,370.82）；系統有、銀行冇 5 人（全部 8 月內或 9/1 離職，7／8／9 月 autopay 檔都冇）；銀行有、系統冇 28 行（唔喺 Maxwell 前線名單、全部整數金額、合共 101,950，7 月有 15 個、9 月有 18 個同名）。
+- 根因（逐個）：(1) −2,375＝銀行照舊薪 19,000 出糧，Maxwell 名單寫 8/1 起改 16,500（系統跟名單）；(2) −582.25＝同盤另一人同樣減薪（8/5 生效，兩邊口徑一致）但無薪假日數系統 3 日、銀行 2 日，差 1 日；(3) −3,444.18＝10 日短期病假（全部有醫生紙、冇一段 ≥4 日）＋1 日無薪假，系統按《僱傭條例》唔出病假津貼，銀行出咗 3,444.18（唔等於全數 4/5＝6,451.61，公式未知）；(4)(5) +16.17／+14.45＝兩個 8/31 離職者嘅年假折現天數算法細微差別（日數基準），系統略高。
+- 待老闆判斷：減薪生效日以邊個為準；短期病假公司實際點計；離職者係咪唔經 autopay 出糧；28 行非前線人員係乜（唔屬長工模組）。
