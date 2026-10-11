@@ -920,3 +920,41 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **(ii)-5** e2e 撤銷步驟用 `page.on("request")` 斷言非 GET 請求為 0。
 - **(ii)-6** Maxwell 導入通知顯示「N 行因鎖月跳過」。
 - 驗證：vitest 241 檔、**3,661 passed｜0 failed**；tsc 0、lint 0 warning、knip 0、build 過；`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72 不變）；`longterm-drafts`＋`longterm-payroll` e2e 5/5。
+
+## 14. 階段 10 頂位津貼價目表＋由歷史反推＋頂位草稿（2026-10-11 老闆揀 B：逐盤逐職級）
+
+**決定**：頂位津貼價目表逐盤逐職級（IC／兵）。價目表只用嚟計「頂位草稿」金額，**草稿未確認唔計糧**，會計確認先加入 Gross；7／8 月已鎖，任何路徑唔改已鎖月數字。正式站歷史資料本機讀唔到，所以反推做成 app 內**純唯讀**頁面／API（老闆專用），本機只用合成 fixture 驗證算法。執行：Sonnet 5.5（`claude-sonnet-5-5`），branch `p10-cover-rates`（from main `80f66ba`），只 push 唔 merge。
+
+### 14.1 落實紀錄
+
+**定義（沿用現有認定）**：「頂位更」＝長工喺**唔係自己固定崗位盤**嘅更。固定崗位盤＝`guard_longterm_posts`（當日生效、未作廢；母盤登記冚子盤，同 `resolveLongtermSettlement` 一致）。排除：簽證形式長工（永遠當雞頭散更）；當日冇任何崗位盤嘅長工（認定唔到自己崗位，只計數 `no_post_shifts`）。職級＝更表行 Rank 欄 `classifyRank`（含 IC／SIC＝`IC`，其他＝`兵`；搵唔到更表行就跟更別 `billing_group=monthly_ic`／code 含 IC）。
+
+**P10.1 價目表**
+- Migration `20261014000000_p10_cover_shift_rates`（只新增、冪等）：`cover_shift_rates(id, site_id, grade, amount, effective_from, effective_to?, source manual|inferred, evidence?, created_*, voided_*)`，唯一 `(site_id, grade, effective_from)`。生效價＝`effective_from<=日期` 且 `effective_to` 空或 `>=日期`、未作廢、取 `effective_from` 最大者；盤搵唔到就試母盤。
+- API：`GET/POST /api/longterm/cover-rates`、`PATCH /api/longterm/cover-rates/:id`（改額／`void:true`）。老闆＋會計 view，**寫入老闆專用**（`baseRole` 核對）。改價＝新增一行新生效日（舊價保留）。鎖月：生效區間覆蓋已鎖月份唔准新增／改額／作廢（`assertMonthRangeNotLocked`；另補一個遠期生效日撞鎖月嘅缺口——開放式價原本只查到「下個月」，現加查生效日本身所屬月份）。作廢後同日同盤同職級再加＝復用該行。
+- 頁 `/settings/cover-rates`（老闆＋會計；會計唯讀）。audit：`cover_shift_rates` 登記 audit DTO（否則只存 `{id}`）。
+
+**P10.2 由歷史反推＋回測（純唯讀）**
+- `GET /api/longterm/cover-rates/infer?months=2026-07,2026-08,2026-09`（老闆專用；零寫入，test 證明價目表／輸入／shift／audit 行數不變；回應冇姓名，只有盤／職級／金額／次數／人數／`guard_id`）。
+- 配對規則：同一長工同一月，「頂位人手輸入」總額 ÷ 該月頂位更數＝每更金額；`note` 寫明盤名／「N 更」就優先用。**頂位人手輸入判斷**：`kind=other_allowance`、已確認、未作廢、`note` 含「頂位」；同時含「賣假」＝混入項（唔參與配對）。**漏判風險**：冇「頂位」字樣嘅其他津貼認唔到——有頂位更嘅人月若存在此類輸入，計入 `stats.untagged_other_allowance_guard_months`（回測當實際＝0）。
+- 按 (盤,職級) 彙總：每更金額清單（金額×更數×人數）、月份。建議值＝眾數；`consistent`（全部一樣）／`mixed`（多個價，`needs_choice`，平手時建議值 `null`）／`single_sample`（總共 1 更證據）。
+- 推斷唔到：(a) 有頂位更冇對應輸入；(b) 有頂位輸入但配對唔到頂位更（`no_cover_shift`）或混賣假（`sell_leave_mixed`）；(c) 同月頂多個盤／職級而輸入得一個總數（`ambiguous`）。
+- 回測：用建議價逐人逐月重算「應有頂位津貼」對實際輸入：吻合率（diff＝0 且全部更有價）、有差額人月數、最大差額、有更未有價人月、逐月分項；逐行 `guard_id`（頁面只顯示 id 前 8 位，唔出姓名）。
+- 頁 `/settings/cover-rates/infer`（老闆專用）：揀月份→建議表（`consistent` 預剔；`mixed` 要揀歷史金額；`single_sample` 自己剔）→推斷唔到清單→回測→「採用已剔選嘅行」。`POST /api/longterm/cover-rates/adopt` 後端重跑推斷核對（狀態要一致、金額要係歷史出現過嘅金額，否則 422），**只有呢步寫價目表**（`source=inferred`、audit 記證據；生效日要係未鎖月份，頁面預設本月 1 號；同日已有價跳過）。**同簡報嘅差異**：簡報寫「`effective_from`＝揀定月份」，但推斷月份（7／8 月）已鎖，直接用會被鎖月擋，所以改為獨立揀「價目表生效日」（預設本月 1 號）。
+
+**P10.3 頂位草稿**
+- `generateCoverDrafts`（`src/lib/longterm-payroll/cover-drafts.ts`），掛喺現有 job `longterm_input_drafts`（每日 21:30＋一鍵結算後；本月＋上月未鎖）：每位長工每月一條 `other_allowance` 草稿（`draft_source=cover:rates`），金額＝逐更價（當日生效價）之和，`draft_evidence={lines:[{date,site_id,grade,rate_id,amount}], shifts}`（冇姓名）。無價嘅 (盤,職級) 唔生成，job 通知老闆＋會計「N 個盤／職級未有頂位價，去設定 ›」（`cover_rates_missing`，同一缺價組合集合只推一次，無 PII）。有新增／更新時通知會計「頂位津貼草稿待確認」。
+- 規則：同月已有已確認頂位津貼（`note` 含「頂位」或來源 `cover:rates`）→ 唔出草稿（防重複）；更表／價目表變→更新未確認、未編輯嘅草稿；更表冇咗頂位更→系統作廢該草稿；會計改過金額（`edited`）嘅唔覆蓋；會計刪走嘅同一組證據唔再出；鎖月唔生成。長工糧頁草稿面板標「頂位價目表」、顯示金額／更數，確認可改金額（經既有 `PATCH inputs/:id`）。**草稿對 Gross 零影響**（test：生成前後 Gross 相同；確認後 `otherAllowance` 加該金額）。
+
+**行為改變**：(1) 多 `/settings/cover-rates`、`/settings/cover-rates/infer` 兩頁（無新 RBAC module，沿用「長工糧」＋老闆 `baseRole` 核對；導覽冇加條目，入口喺長工糧頁頂「頂位價目表 ›」同通知）；(2) job `longterm_input_drafts` 對有價嘅頂位更出草稿（價目表未設定前行為不變）；(3) 計糧路徑不變（只讀 confirmed，價目表唔入 aggregate）。
+
+**驗證**：vitest（隔離 PG 54358）244 檔，**3,684 passed｜0 failed**（階段 9 為 3,661；新增 p10-1 4 條＋p10-2 11 條＋p10-3 8 條）；tsc 0；lint 0 warning；knip 0；`rm -rf .next` 後 build 過；`gate:locked-months`（隔離 dev PG 54368）**12/12 rc=0**，`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15 不變）；Playwright 結果見下。注意：`tests/seed-regen-gate.test.ts` 會對 `.env` 嘅 `DATABASE_URL` 重 seed——worktree `.env` 必須先指向隔離庫（今次一度未改，令本機主庫 `zoikan`（54329）被 seed 清到一半，要 `npm run db:reset` 還原，見回報）。
+
+**正式站推斷步驟（俾規劃者用老闆 Chrome 唯讀執行）**
+1. 老闆登入正式站，開 `/settings/cover-rates/infer`（頁面同 API 都係純唯讀，唔會寫任何嘢；**唔好撳「採用」**）。
+2. 月份欄填 `2026-07,2026-08,2026-09`，撳「推斷（唯讀）」。或者喺同一個登入 session 嘅 Chrome console 用 GET：`fetch("/api/longterm/cover-rates/infer?months=2026-07,2026-08,2026-09").then(r=>r.json())`（回應冇姓名；只讀取，記低 `suggestions`／`unresolved`／`backtest.summary`／`stats`）。
+3. 先睇頂部統計：頂位更數、頂位人手輸入條數、冇固定崗位盤嘅長工更數（認定唔到頂位，未計入）、**`untagged_other_allowance_guard_months`**（有頂位更但只有冇寫「頂位」嘅其他津貼嘅人月——愈大代表歷史備註寫法唔一致、漏判愈多，建議價唔可靠）。
+4. 建議表：`consistent`＝可以採用；`mixed`（多個價）要老闆揀邊個；`single_sample` 只得 1 更證據，要老闆確認。逐行抄低 盤／職級／建議金額／狀態／次數。
+5. 「推斷唔到」三個清單要老闆逐項補：(a) 有頂位更冇輸入、(b) 有輸入但配唔到頂位更或混賣假、(c) 同月頂多個盤但輸入得一個總數。
+6. 回測：總吻合率、有差額人月數、最大差額、有更未有價人月。吻合率低或最大差額大＝建議價或頂位更認定（崗位盤登記）有問題，先查 `guard_longterm_posts` 同備註寫法，唔好採用。
+7. 老闆決定採用先由**老闆親手**撳「採用已剔選嘅行」（生效日揀未鎖月份，預設本月 1 號；7／8 月已鎖唔可以做生效日），然後去 `/settings/cover-rates` 檢查／微調。採用後每晚 21:30 job 就按價目表出頂位草稿（會計確認先計糧）；未設價嘅盤／職級會通知「N 個盤／職級未有頂位價，去設定 ›」。
