@@ -1,9 +1,10 @@
 // P7.2：月頭自動開新月——冪等、價錢有變／新組合唔自動寫、鎖月跳過、通知 dedupe、audit by_job。
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
-import { seedWp2Fixture, type Wp2Fixture } from "./fixtures/wp2-fixture";
+import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { openNextMonthJob, runOpenNextMonth } from "@/lib/jobs/open-next-month";
 import { classifyCopyCandidates, findCopyLastMonthCandidates } from "@/lib/pricing/copy-last-month-cards";
+import { GET as pendingGet } from "@/app/api/rate-cards/copy-last-month/route";
 import { ensureJobRows, runJob, tick } from "@/lib/scheduler/runner";
 
 const d = (y: number, m: number, day: number) => new Date(Date.UTC(y, m - 1, day));
@@ -124,5 +125,26 @@ describe("P7.2 open_next_month", () => {
     await runOpenNextMonth(TARGET);
     const all = JSON.stringify(await prisma.appNotification.findMany());
     expect(all).not.toContain("P7測試盤");
+  });
+
+  it("來源卡係一鍵自動定價卡（source=auto:*）而價錢同上上月一樣 → auto_source，唔自動寫、入待確認", async () => {
+    // X：跨上上月嘅同價卡，本來係 same；改成 auto 來源
+    await prisma.rateCard.updateMany({ where: { siteId, shiftTypeId: sts.X! }, data: { source: "auto:postorder" } });
+    const cls = await classifyCopyCandidates("2026-10", await findCopyLastMonthCandidates("2026-10", siteId));
+    expect(Object.fromEntries(cls.map((c) => [c.candidate.shiftTypeCode, c.cls])).X).toBe("auto_source");
+    const r = await runOpenNextMonth(TARGET);
+    expect(r.summary).toMatchObject({ cards_auto_copied: 1, cards_pending: 4 }); // 只剩 N
+    const oct = await prisma.rateCard.findMany({ where: { siteId, effectiveFrom: TARGET } });
+    expect(oct.map((c) => c.shiftTypeId)).toEqual([sts.N]);
+  });
+
+  it("GET 待確認數：雞頭 403；會計 200（count／auto_copy／needs_confirm）", async () => {
+    const mk = (cookie: string) => new Request("http://t/api/rate-cards/copy-last-month?month=2026-10", { headers: { cookie } });
+    const broker = await sessionCookieForUser(fx.userIds["雞頭"]);
+    expect((await pendingGet(mk(broker))).status).toBe(403);
+    const acc = await sessionCookieForUser(fx.userIds["會計"]);
+    const res = await pendingGet(mk(acc));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ month: "2026-10", count: 5, auto_copy: 2, needs_confirm: 3 });
   });
 });

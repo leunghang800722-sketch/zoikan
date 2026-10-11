@@ -801,3 +801,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 3. 通知 `audience` 以 base_role 或 user id 比對；自訂角色用 base_role。`notify_prefs` 只控制電郵。
 4. 排程停機錯過嘅執行，重啟後第一個 tick 補跑一次（job 全部冪等）；多 instance 靠 advisory lock＋認領防重跑，未做跨 instance 時鐘校正。
 5. 未做（留下一階段）：J3 上載後自動跑一鍵結算、J4 證件到期、J7 摘要推送、J5／J6／J8、T2 批量接受建議；`SCHEDULER_ENABLED` 預設與簡報字面不同（見上）。
+
+### 11.2 驗收後修正（Opus 5.5 有條件通過，Sonnet 5.5，同 branch）
+- **必修 1**：`classifyCopyCandidates` 新 class `auto_source`——上月來源卡 `source` 以 `auto:` 開頭（一鍵自動定價、未經人確認）即使價錢同上上月一樣，排程都唔自動複製（auto 卡只可 propose，亦保住 `resolve-rate` 嘅「auto 卡唔准跨雞頭」），計入「要你確認」；預覽標「上月係自動定價卡」。**人手「複製上月卡」路徑不變**（階段 7 之前已會將 auto 卡轉 `copy_last_month`，預覽有標示）。
+- **必修 2**：`GET /api/rate-cards/copy-last-month` 雞頭 403（`isBrokerRole`）；另 additive 回 `auto_copy`／`needs_confirm`。
+- 一併做：(3) 單個 job 最長執行 `JOB_TIMEOUT_MS`（預設 10 分鐘，`Promise.race`；逾時 `status=timeout`、通知老闆、lock／`busy` 釋放、tick 繼續）；(4) 首頁「價卡待確認」卡只計 `needs_confirm`，note「要你確認（25 號自動複製其餘 M 張）」；(5) 排程失敗／逾時 1 小時後重試（唔遲過下次排程），連續最多重試 3 次，手動跑唔重排；(6) advisory lock 連線字串只剝 Prisma 專用參數（`schema`／`connection_limit`／`pool_timeout`／`pgbouncer` 等），保留 `sslmode`。
+- test：`p7-1-scheduler` 加重試／超時／連線字串 3＋1 條、`p7-2` 加 auto_source、雞頭 403／會計 200 共 2 條。

@@ -14,7 +14,8 @@ import { applyFieldGroupGateToList } from "@/lib/api/field-groups";
 import { writeAudit } from "@/lib/audit";
 import { Conflict } from "@/lib/api/errors";
 import { findCopyLastMonthCandidates, applyCopyLastMonthCards, classifyCopyCandidates } from "@/lib/pricing/copy-last-month-cards";
-import { BadRequest } from "@/lib/api/errors";
+import { BadRequest, Forbidden } from "@/lib/api/errors";
+import { isBrokerRole } from "@/lib/broker-isolation";
 
 export async function POST(req: Request) {
   return withApiError(async () => {
@@ -53,13 +54,17 @@ export async function POST(req: Request) {
 }
 
 // P7.2：`GET /api/rate-cards/copy-last-month?month=YYYY-MM`——只回「仲有幾多張候選未複製」數量
-// （首頁「價卡待確認」卡用；唔回價錢）。權限：出街價 view。
+// （首頁「價卡待確認」卡用；唔回價錢）。權限：出街價 view，雞頭 403。
 export async function GET(req: Request) {
   return withApiError(async () => {
-    await requirePermission(req, "出街價", "view");
+    const session = await requirePermission(req, "出街價", "view");
+    if (isBrokerRole(session)) throw Forbidden("雞頭唔可以睇全公司價卡待確認數");
     const month = new URL(req.url).searchParams.get("month") ?? "";
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw BadRequest("month 要係 YYYY-MM");
     const candidates = await findCopyLastMonthCandidates(month, null);
-    return ok(brandSafeResponse({ month, count: candidates.length }));
+    // additive：auto_copy＝排程 25 號會自動複製（change_class=same）嘅張數；needs_confirm＝其餘要人確認。
+    const classified = await classifyCopyCandidates(month, candidates);
+    const autoCopy = classified.filter((c) => c.cls === "same").length;
+    return ok(brandSafeResponse({ month, count: candidates.length, auto_copy: autoCopy, needs_confirm: candidates.length - autoCopy }));
   });
 }
