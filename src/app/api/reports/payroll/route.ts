@@ -2,15 +2,12 @@
 // src/lib/reports/payroll.ts 出 API＋xlsx（同 `npm run report:regen` 同
 //一份 code）。逐雞頭結算單位一行；`?export=1` 匯出 xlsx（含逐保安員明細
 // sheet）。
-import fs from "node:fs";
 import { NextResponse } from "next/server";
-import os from "node:os";
-import path from "node:path";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel } from "@/lib/reports/money";
-import { buildPayrollTotals, buildPayrollSourceSummary, writePayrollXlsx, DEFAULT_REPORT_MONTH } from "@/lib/reports/payroll";
+import { buildPayrollTotals, buildPayrollSourceSummary, writePayrollBuffer, DEFAULT_REPORT_MONTH } from "@/lib/reports/payroll";
 // WP-PRICE §3：頁頂「N 更未定價，金額未計入」Notice 要用嘅 additive 欄。
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
 
@@ -23,10 +20,7 @@ export async function GET(req: Request) {
 
     if (isExport) {
       await requirePermission(req, "糧明細", "export");
-      const tmpPath = path.join(os.tmpdir(), `payroll-${Date.now()}.xlsx`);
-      await writePayrollXlsx(tmpPath, month);
-      const buf = fs.readFileSync(tmpPath);
-      fs.unlinkSync(tmpPath);
+      const buf = await writePayrollBuffer(month); // P8.3：直接 Buffer，唔落 tmp 檔（內容同 writePayrollXlsx 一樣）
       return new NextResponse(new Uint8Array(buf), {
         status: 200,
         headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="payroll.xlsx"` },
