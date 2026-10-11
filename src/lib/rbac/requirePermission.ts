@@ -6,7 +6,7 @@ import type { SessionData } from "../auth/session";
 import { getSessionFromRequest } from "../auth/session";
 import { prisma } from "../db";
 import { writeAudit } from "../audit";
-import { Forbidden, Unauthorized } from "../api/errors";
+import { ApiError, Forbidden, Unauthorized } from "../api/errors";
 import { getClientIp } from "../api/http";
 import { moduleLabel, roleDisplay } from "./labels";
 import { isHardDenied, type Action, type Module, type RoleName, ROLE_NAMES } from "./matrix";
@@ -29,6 +29,12 @@ function isKnownRole(name: string): name is RoleName {
  * （401）。呢度加咗一次 DB 查詢核對 token_version + 用戶現時狀態——
  * 「每請求核 version」嘅實現位置。
  */
+// P6.4（H10）：`must_change_pwd=true`（初始／管理員重設密碼）嘅 session 只准 call
+// 呢幾個 endpoint；其餘 API 一律 403 `must_change_pwd`（之前只係頁面層 MustChangePwdGate
+// 強制，用臨時密碼可以直接 call API）。logout／refresh 本身唔經 requireSession，
+// 列喺度純粹係白名單完整。
+const MUST_CHANGE_PWD_ALLOWED_PATHS: ReadonlySet<string> = new Set(["/api/auth/change-password", "/api/auth/logout", "/api/auth/refresh"]);
+
 export async function requireSession(req: Request): Promise<AuthedSession> {
   const session = await getSessionFromRequest(req);
   if (!session) throw Unauthorized();
@@ -36,10 +42,16 @@ export async function requireSession(req: Request): Promise<AuthedSession> {
 
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
-    select: { tokenVersion: true, status: true },
+    select: { tokenVersion: true, status: true, mustChangePwd: true },
   });
   if (!user || user.status !== "active" || user.tokenVersion !== session.tokenVersion) {
     throw Unauthorized(); // session 已被作廢（logout/改密碼/改角色/改broker/void）或用戶已停用
+  }
+  if (user.mustChangePwd) {
+    const pathname = new URL(req.url).pathname.replace(/\/+$/, "");
+    if (!MUST_CHANGE_PWD_ALLOWED_PATHS.has(pathname)) {
+      throw new ApiError(403, "must_change_pwd", "首次登入或重設密碼後，要先改密碼先可以繼續使用");
+    }
   }
 
   return session as AuthedSession;
