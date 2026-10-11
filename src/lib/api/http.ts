@@ -6,14 +6,20 @@ import { camelToSnakeDeep, type Dto } from "./serialize";
 import { writeAppErrorLog } from "../app-error-log";
 
 export function getClientIp(req: Request): string | null {
+  // 1) x-real-ip（Zeabur／nginx 類 ingress 常見，由 proxy 設定）優先。
+  const real = req.headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  // 2) X-Forwarded-For：左段由 client 自填可偽造，所以由右數第 TRUSTED_PROXY_HOPS 段
+  //    （預設 1＝最右段＝平台 proxy 加嗰段；多一層 proxy 就設 2）。無效值當 1。
   const xff = req.headers.get("x-forwarded-for");
-  // 驗收修正：取最右一段（平台 proxy 加嗰段）——左段由 client 自填，可偽造。
   if (xff) {
     const parts = xff.split(",").map((x) => x.trim()).filter(Boolean);
-    if (parts.length) return parts[parts.length - 1]!;
+    if (parts.length) {
+      const raw = Number(process.env.TRUSTED_PROXY_HOPS);
+      const hops = Number.isInteger(raw) && raw >= 1 ? raw : 1;
+      return parts[Math.max(0, parts.length - hops)]!;
+    }
   }
-  const real = req.headers.get("x-real-ip");
-  if (real) return real;
   return null;
 }
 
