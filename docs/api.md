@@ -2550,3 +2550,23 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 - AI 每日額度（`src/lib/ai-rate-limit.ts`）改原子：每用戶 `pg_advisory_xact_lock(hashtext('ai-daily:'+userId))` 內取 `max(ai_daily_usage 計數, 今日 audit 次數)`，未到上限先 +1；並發 N 個請求只放行到上限。表 `ai_daily_usage(user_id, day, used)`。叫 LLM 之前失敗（503）會 `releaseDailySlot()` 退還。API 形狀不變（仍 429 `rate_limited`）。
 - `POST /api/users`：`tel` 等於系統排程帳號保留電話 → 403 `system_account`。
 - Maxwell 導入（`POST /api/longterm/contracts/import`）：合約生效區間覆蓋已鎖月份嘅行改為逐行跳過（該行回滾、寫 `permission_denied` audit、`warnings` 加一句），其餘照導入；summary 加 `skippedLockedRows`（additive）。
+
+## P10（階段 10）：頂位津貼價目表＋由歷史反推＋頂位草稿（全部 additive）
+
+**權限**：全部歸 `長工糧` module。價目表 `GET`＝老闆＋會計；任何寫入（新增／改額／作廢／採用）＝老闆專用（`baseRole` 硬性核對，會計 403）；推斷 API＝老闆專用。回應冇姓名／工號。
+
+- 新表 `cover_shift_rates`（migration `20261014000000_p10_cover_shift_rates`，只新增、冪等）：`id, site_id, grade("IC"|"兵"), amount, effective_from, effective_to?, source("manual"|"inferred"), evidence?, created_*, voided_*`；唯一 `(site_id, grade, effective_from)`。生效價＝`effective_from<=日期` 且（`effective_to` 空或 `>=日期`）、未作廢、`effective_from` 最大者（盤搵唔到價就試母盤）。
+- `GET /api/longterm/cover-rates[?include_voided=1]` → `{rows:[{id,site_id,site_name,grade,amount,effective_from,effective_to,source,evidence,created_at,created_by,voided_at,voided_by}]}`。
+- `POST /api/longterm/cover-rates` body `{site_id, grade, amount>0, effective_from, effective_to?}` → 201。同盤同職級同生效日已有未作廢價 → 409；作廢過嘅同日同盤同職級會復用該行。生效區間覆蓋已鎖月份 → 403 `month_locked`（開放式價另外檢查生效日本身所屬月份，遠期生效日撞鎖月亦擋）。**改價＝新增一行新生效日，舊價保留。**
+- `PATCH /api/longterm/cover-rates/:id` body `{amount}` 或 `{void:true}`；已作廢 409；區間覆蓋已鎖月份 403；空 body 400。
+- `GET /api/longterm/cover-rates/infer?months=2026-07,2026-08,2026-09`（最多 6 個月）→ **純唯讀**（test 證明價目表／輸入／shift／audit 行數不變）：
+  - `suggestions[]`：`{site_id, site_name, grade, status:"consistent"|"mixed"|"single_sample", suggested_amount|null, needs_choice, amounts:[{amount,shifts,guard_count}], total_shifts, guard_count, months}`。`mixed` 建議值＝眾數（平手 `null`），`needs_choice=true`；總共只有 1 更證據＝`single_sample`。
+  - `unresolved.no_input[]`（有頂位更冇對應輸入的盤／職級）、`unresolved.no_shift[]`（`reason: no_cover_shift|sell_leave_mixed`，只有 guard_id／月／金額）、`unresolved.ambiguous[]`（同月頂多個盤／職級而輸入得一個總數）。
+  - `backtest.rows[]`（`month, guard_id, expected, actual, diff, unpriced_shifts, has_mixed_input`）＋`backtest.summary`（`guard_months, matched, match_rate, diff_nonzero, max_abs_diff, unpriced_guard_months, by_month[]`）。
+  - `stats`：`cover_shifts, tagged_inputs, no_post_shifts, untagged_other_allowance_guard_months`（漏判風險計數）。
+  - 頂位更認定：長工喺**唔係自己固定崗位盤**（`guard_longterm_posts` 當日生效；母盤冚子盤）嘅更；簽證形式長工、當日冇任何崗位盤嘅長工排除（後者只計入 `no_post_shifts`）。職級＝更表行 Rank 欄（`classifyRank`：含 IC／SIC＝`IC`，其他＝`兵`），搵唔到行就跟更別（`billing_group=monthly_ic` 或 code 含 IC）。
+  - 頂位人手輸入判斷：`kind=other_allowance`、已確認、未作廢、`note` 含「頂位」；同時含「賣假」＝混入項，唔參與配對（列 `sell_leave_mixed`）。冇「頂位」字樣嘅其他津貼認唔到（計入 `untagged_other_allowance_guard_months`）。note 寫明盤名／「N 更」就優先用。
+- `POST /api/longterm/cover-rates/adopt` body `{months, effective_from, items:[{site_id,grade,amount,status}]}` → `{created, skipped:[{site_id,grade,reason}]}`（201）。**整條推斷鏈入面唯一寫價目表嘅一步**：後端重跑推斷核對每行（`status` 要同現時一致否則 422 `status_changed`；金額要係歷史出現過嘅金額，`consistent` 要等於建議值，否則 422 `amount_not_observed`）；`effective_from` 覆蓋已鎖月份 403；同 (盤,職級,生效日) 已有價跳過。每行 `source=inferred`、audit 記證據摘要。
+- 草稿：`longterm_payroll_inputs` 新增 `draft_source="cover:rates"`（`kind=other_allowance`、`amount`＝逐更價之和、`draft_evidence={lines:[{date,site_id,grade,rate_id,amount}], shifts}`、`note` 含「頂位津貼（草稿）」）。確認走既有 `PATCH /api/longterm/inputs/:id`／`confirm-batch`（會計改金額亦經同一個 PATCH，標 `edited`）。
+- 通知 `kind` 新增：`cover_rates_missing`（`N 個盤／職級未有頂位價，去設定 ›`，老闆＋會計，連結 `/settings/cover-rates`）；頂位草稿待確認沿用 `longterm_drafts`。
+- 頁面：`/settings/cover-rates`（老闆＋會計；會計唯讀）、`/settings/cover-rates/infer`（老闆專用）；長工糧頁頂部有「頂位價目表 ›」連結。
