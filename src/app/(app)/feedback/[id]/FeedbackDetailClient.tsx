@@ -1,13 +1,13 @@
 "use client";
 // P2.5「現場反映」開會模式——意見詳情（老闆）：完整摘要（markdown）、
 // 原對話節錄摺埋、狀態掣（已睇／已轉交／唔做）＋備註、「複製摘要」。
+import { BackLink } from "@/components/ui/BackLink";
 import { useCallback, useEffect, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
 import { apiGet, apiPatch } from "@/lib/ui/api-client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pill } from "@/components/ui/Pill";
 import { Button } from "@/components/ui/Button";
-import { GuardedLink } from "@/components/ui/GuardedLink";
 import { SimpleMarkdown } from "@/components/ai/SimpleMarkdown";
 import { fmtDateTime } from "@/lib/ui/format";
 import { kickerFor } from "@/lib/nav/schema";
@@ -95,9 +95,9 @@ export function FeedbackDetailClient({ id }: { id: string }) {
             <Button data-testid="feedback-copy-summary" onClick={handleCopy}>
               {copied ? "已複製" : "複製摘要"}
             </Button>
-            <GuardedLink href="/feedback" className="text-zk-base text-zk-primary">
+            <BackLink href="/feedback" className="text-zk-base text-zk-primary">
               ‹ 返回列表
-            </GuardedLink>
+            </BackLink>
           </>
         }
       />
