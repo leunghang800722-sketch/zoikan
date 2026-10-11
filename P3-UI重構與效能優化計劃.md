@@ -717,3 +717,40 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 **未達標項目（交規劃者／老闆決定）**：#3 正式站 pending-summary（RTT 主導，需要 CDN／同區部署先有改善）、#5 更表編輯器冷載 API 數、#7 月結入頁 `buildMonthlyClose`（跨 request 共用違反鐵則 6）、#8 字型 CSS ~52 KB、#13 按鈕種類 14。
 **小結**：17 項 §4 目標入面，完全達標 12 項（#1、2、4、6、9–12、14–17）；部分 2 項（#5、#7）；未達 3 項（#3 正式站、#8、#13）。冇任何計算改動；7／8 月鎖月數字經 `gate:locked-months` 12/12 逐階段核對。
+
+## 10. 階段 6 安全補漏（2026-10-11 老闆批准）
+
+來源：`docs/audit-2026-10/second-opinion-automation-ai.md` §六 H1–H10（Opus 5.5 獨立第二意見）。範圍：5 個鎖月漏洞＋鎖月 TOCTOU（H1–H6）、助手 SQL guard 真 parser（H7）、登入保護（H8）、H9／H10＋CSRF defense-in-depth＋低成本 response headers。執行：Sonnet 5.5（`claude-sonnet-5-5`），branch `p6-security`（from main `3732d74`），**唔 merge**，等 Opus 5.5 驗收。API 行為改變清單見 `docs/api.md`「階段 6 安全補漏」。
+
+### 10.1 落實紀錄（Sonnet 5.5，2026-10-11，branch p6-security）
+
+逐項 commit：
+
+| 項 | 內容 | 重點 |
+|---|---|---|
+| P6.1a／b（H1／H2） | `processRosterUpload()` 喺 advisory lock 之後、任何寫入之前 `assertMonthNotLockedTx`；`PATCH /api/roster-uploads/:id` route 開頭查 `upload.month` 鎖月，`assignRosterUploadSite()` lib 內亦再查 | 同時新增 `month-lock.ts` 嘅 `assertMonthNotLockedTx`／`isMonthLockedTx`（tx 內 `FOR SHARE`，audit 走獨立連線，tx 回滾都留 `permission_denied` 紀錄） |
+| P6.1c（H3） | Maxwell 導入：作廢舊合約＋新建合約前，舊段同新段生效區間 `assertMonthRangeNotLockedTx`；作廢舊合約寫 `void` audit（同人手 void 同 shape） | 「冇改動」嘅行（unchanged）唔查；每行獨立 tx，被拒行之前已 commit 嘅行保留，重跑冪等 |
+| P6.1d（H4） | `POST /api/broker-site-assignments`、`DELETE …/:id` 按掛盤月份 `assertMonthNotLocked` | `[id]` 只有 DELETE（冇 PATCH） |
+| P6.1e（H5） | `reparseAllActiveUploads()` 入口查鎖月；`POST /api/guard-fix/runs/:id/apply` route 於認領前查 `run.month` | 一鍵結算本身已有月鎖檢查，lib 層係 defense-in-depth |
+| P6.1f（H6） | `shift-records/batch`、`reconcile-apply`、`reprice`（每個 500 條批次 tx）、`months/[month]/open` 嘅 tx 開頭 `FOR SHARE` 再查；`month-closes/[id]/lock` 改 tx 內 `FOR UPDATE`＋`updateMany({ id, lockedAt:null })` 判 count（0 → 409） | 並發測試：寫入 tx 持 `FOR SHARE` 時鎖月會等；鎖月 commit 後先開查嘅 tx 被擋；兩個並發鎖月只一個 200、另一個 409 |
+| P6.2（H7） | `src/lib/ai/sql-guard.ts` 改用 `pgsql-ast-parser@12.0.2`（`dependencies`，釘版本；`package-lock.json` 由 `npm install` 生成，diff 只有新增） | 抽全部 relation（逗號 join、JOIN ON、子查詢、CTE、UNION）＋全部被引用欄位（含 `AS` 改名、函數參數、USING、ORDER BY）；按所屬表判斷遮罩欄（同 `FIELDS[table]` 同一份清單，唔會誤殺 `brokers.name`）；`*`／`t.*`／整行引用有遮罩欄嘅表拒絕；`audit_log.before／after` 當含四組；注釋先剝走（parse 同執行同一份文字）；LIMIT 用 AST＋`_location` 收緊，UNION 包一層；禁 `query_to_xml`／`set_config`／`dblink`／`lo_*`／schema-qualified 函數；parse 失敗一律拒絕。`docs/ai-assistant.md`「已知限制」已更新 |
+| P6.3（H8） | `login`：`failedAttempts` 改 `increment` 預留序號（序號 > 5 唔驗密碼）、鎖定用條件式 `updateMany`；新 `src/lib/auth/login-rate-limit.ts`（每 IP token bucket：容量 10、每分鐘補 10、只扣失敗；全局 300／分鐘；冇 IP 跳過每 IP）；未註冊／密碼錯／鎖定中對外一律 401「電話或密碼錯誤」（鎖定只記 audit），未註冊同鎖定中亦跑 dummy bcrypt 對齊回應時間 | 鎖定期間 `failed_attempts` 保持 ≥ 5，鎖定過期／成功登入／重設密碼先清零（否則並發 straggler 會重新攞到序號）。`tests/wp2-auth.test.ts` 嘅 423 斷言同步改 401 |
+| P6.4 H9 | migration `20261011120000_p6_ai_audit_log_whitelist`：`ai.audit_log` 加 `table_name IN (12 張業務表)` 白名單，舊 `NOT IN` 排除清單逐字保留；`/api/ai/chat` audit 唔存 `question` 原文，改存 `question_length`＋`question_sha256_16`（feedback chat 本身一直唔存原文） | `tests/wp-pii-ai-audit-log-scrub.test.ts` 更新（主管 `sql_select` 引用 `before／after` 現在拒絕）；`tests/wp-one-click-auto-isolation.test.ts` 重跑舊 migration 後補跑白名單 migration（避免污染同 run 其他測試） |
+| P6.4 H10 | `requireSession()`：`mustChangePwd=true` 只准 `/api/auth/change-password`、`logout`、`refresh`，其餘 403 `must_change_pwd` | 同一條 DB 查詢多 select 一欄，冇額外 round trip |
+| P6.4 CSRF／headers | `src/middleware.ts`（matcher `/api/:path*`）＋純函數 `src/lib/api/csrf.ts`：非 GET 嘅 `Sec-Fetch-Site`（只准 `same-origin`／`none`）／`Origin`（host 要等於 `Host`／`X-Forwarded-Host`）；兩個 header 都冇嘅非瀏覽器 client 照放行；`next.config.ts` 加 `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: same-origin` | 用 middleware 而唔放 `withApiError`：`withApiError(fn)` 冇 `req`，而且有 7 條 route（login、chat 等）唔經佢；middleware 一次涵蓋全部 `/api/*` |
+
+**驗證**
+
+- 新增 test：10 檔、60 條（`tests/p6-1ab-…`、`p6-1c-…`、`p6-1d-…`、`p6-1e-…`、`p6-1f-…`、`p6-2-…`、`p6-3-…`、`p6-4-h9-…`、`p6-4-h10-…`、`p6-4-csrf-headers`）：5 個鎖月漏洞各有「鎖咗月 → 403 `month_locked`＋DB 零改動；未鎖 → 行為不變」；SQL guard 繞過類 test 20 條（逗號 join、`AS` 改名、子查詢、CTE、`*`／`t.*`／整行引用、UNION、函數包欄、相關子查詢、注釋混淆、`audit_log` JSON、`query_to_xml`、parse 失敗、LIMIT）＋4 條 `sql_select` 工具端到端；login 並發 20 個錯密碼請求最多 5 個被驗、全部 401，IP 限速 429＋`Retry-After`，三種失敗 status／body 完全一致。
+- `npx vitest run`（隔離 PG 54374）：**226 檔全過，3,541 passed**（階段 5 為 215 檔／3,470）。`tsc --noEmit` 0；`tsc --noUnusedLocals --noUnusedParameters` 0；`npm run lint` 0 warning；`npm run build` 過（`rm -rf .next` 後；多咗 `ƒ Middleware 34.2 kB`）；knip 0。
+- `npm run gate:locked-months`（隔離 dev PG 54375）：**12/12 rc=0**；snapshot 5,080 數字葉，同舊基線 snapshot 嘅全部數值 multiset 逐個相同（只有 uuid 排序次序差異）。
+- Playwright 全部 spec（隔離 PG 54375、`next start` 3181、`AI_LLM=fake`；gate 後 `db:reset`＋`db:seed` 重 seed 再跑）：**221 passed｜4 skipped（原有 `test.skip`）｜0 failed**；e2e 固定帳號冇改，login e2e 照過。
+- `package-lock.json`：只由 `npm install --save-exact pgsql-ast-parser` 生成，diff 純新增（+79 行，冇 dev 旗改動）。
+
+**已知限制／交驗收者留意**
+
+1. 限速狀態喺 process 記憶體：多 instance 各自計、重啟清零；IP 取自 `X-Forwarded-For` 第一段，要平台 proxy 可信先可靠（H8 原文「XFF 照信」未處理）。
+2. `sql_select` 對 parser 唔識嘅合法寫法（例如 `WITH RECURSIVE`、`LIMIT ALL`、`IS NOT DISTINCT FROM`）一律拒絕；`SELECT *` 掂到有遮罩欄嘅表（例如 `ai.shift_records`）而家對冇收客價／出街價權限嘅角色拒絕（以前係靜靜剝欄）——助手要明確列欄。
+3. Maxwell 導入遇到鎖月區間會整個請求 403（唔係逐行跳過）；已 commit 嘅前面行保留。
+4. `reprice` 逐批 tx：中途鎖月令後面批次 409，前面批次已 commit（原有分批語意，冇新增）。
+5. 未做：CSP；容器 root 用戶；`XFF` 偽造防護（需要部署層配合）。
