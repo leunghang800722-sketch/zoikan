@@ -2478,3 +2478,7 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 ### Response headers
 
 全站加 `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: same-origin`（CSP 唔做）。
+
+### Client IP（`getClientIp`，登入限速／audit 用）
+
+優先 `x-real-ip`；否則 `X-Forwarded-For` 由右數第 `TRUSTED_PROXY_HOPS` 段（預設 1＝最右段；無效值當 1）；都冇則 `null`。**部署後要核實 audit 記錄嘅 `ip` 係真公網 IP**，唔係（例如見到內部 proxy IP）就將 Zeabur env 設 `TRUSTED_PROXY_HOPS=2`。
