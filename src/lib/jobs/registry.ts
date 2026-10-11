@@ -3,8 +3,9 @@ import type { JobDef } from "@/lib/scheduler/types";
 import { openNextMonthJob } from "./open-next-month";
 import { nightlyMonthHealthJob } from "./nightly-month-health";
 import { triageReminderJob } from "./triage-reminder";
+import { autoOneClickJob } from "./auto-one-click";
 
-export const JOBS: JobDef[] = [openNextMonthJob, nightlyMonthHealthJob, triageReminderJob];
+export const JOBS: JobDef[] = [openNextMonthJob, nightlyMonthHealthJob, triageReminderJob, autoOneClickJob];
 
 export function findJob(key: string): JobDef | undefined {
   return JOBS.find((j) => j.key === key);

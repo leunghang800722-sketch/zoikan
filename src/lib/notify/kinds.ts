@@ -5,6 +5,7 @@ export const NOTIFY_KINDS = [
   { kind: "month_health_red", label: "體檢有新紅項" },
   { kind: "month_ready_to_lock", label: "可以鎖月" },
   { kind: "triage_reminder", label: "待答題催辦" },
+  { kind: "one_click_auto", label: "自動一鍵結算結果" },
   { kind: "job_failed", label: "排程出錯" },
 ] as const;
 
