@@ -147,4 +147,20 @@ describe("P7.2 open_next_month", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ month: "2026-10", count: 5, auto_copy: 2, needs_confirm: 3 });
   });
+
+  it("並發 apply 同一目標月：每組合最終只 1 張（tx 內 advisory lock＋重查）", async () => {
+    const { applyCopyLastMonthCards } = await import("@/lib/pricing/copy-last-month-cards");
+    const results = await Promise.all(Array.from({ length: 6 }, () => applyCopyLastMonthCards("2026-10", siteId, fx.userIds["老闆"], null)));
+    expect(results.reduce((n, r) => n + r.created.length, 0)).toBe(5);
+    const oct = await prisma.rateCard.findMany({ where: { siteId, effectiveFrom: TARGET } });
+    expect(oct).toHaveLength(5);
+    expect(new Set(oct.map((c) => c.shiftTypeId)).size).toBe(5);
+  });
+
+  it("並發跑 open_next_month job 邏輯：價卡冇重複", async () => {
+    await Promise.all(Array.from({ length: 6 }, () => runOpenNextMonth(TARGET)));
+    const oct = await prisma.rateCard.findMany({ where: { siteId, effectiveFrom: TARGET } });
+    expect(oct).toHaveLength(2); // N、X（同價）
+    expect(new Set(oct.map((c) => c.shiftTypeId)).size).toBe(2);
+  });
 });

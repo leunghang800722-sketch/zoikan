@@ -3,7 +3,7 @@
 import { requireSession } from "@/lib/rbac/requirePermission";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
-import { Conflict, NotFound } from "@/lib/api/errors";
+import { ApiError, NotFound } from "@/lib/api/errors";
 import { writeAudit } from "@/lib/audit";
 import { findJob } from "@/lib/jobs/registry";
 import { ensureJobRows, runJob } from "@/lib/scheduler/runner";
@@ -18,7 +18,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ key: st
     if (!def) throw NotFound("搵唔到呢個排程");
     await ensureJobRows([def]);
     const r = await runJob(def, { trigger: "manual" });
-    if (r.outcome === "skipped_locked") throw Conflict("呢個排程而家跑緊，等佢跑完再試");
+    if (r.outcome === "skipped_locked") throw new ApiError(409, "job_running", "呢個排程而家跑緊（或上次逾時嘅仲未完），等佢跑完再試");
     if (r.outcome !== "ran") throw NotFound("搵唔到呢個排程");
     await writeAudit({ actorUserId: session.userId, tableName: "scheduled_jobs", rowId: key, action: "job_run_now", after: { run_id: r.runId, status: r.status }, ip: getClientIp(req) });
     return ok(brandSafeResponse({ key, run_id: r.runId, status: r.status, summary: r.summary, error: r.error ?? null }));

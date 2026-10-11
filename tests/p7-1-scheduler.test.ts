@@ -186,12 +186,19 @@ describe("P7.1 scheduler", () => {
     expect((await prisma.scheduledJob.findUniqueOrThrow({ where: { jobKey: "t_retry_ok" } })).nextRunAt).toEqual(before);
   });
 
-  it("超時：JOB_TIMEOUT_MS 到就記 timeout、通知老闆、lock 釋放、tick 繼續跑其他 job", async () => {
+  it("超時：記 timeout、通知老闆、tick 繼續；底層 job 未完前 lock 仍持有（run-now／重試 skipped_locked），完成後先可再跑", async () => {
     const prev = process.env.JOB_TIMEOUT_MS;
     process.env.JOB_TIMEOUT_MS = "200";
     try {
       let otherRan = 0;
-      const slow = def("t_slow", () => new Promise(() => undefined));
+      let slowCalls = 0;
+      let finish!: () => void;
+      const gate = new Promise<void>((r) => (finish = r));
+      const slow = def("t_slow", async () => {
+        slowCalls++;
+        await gate;
+        return { summary: {} };
+      });
       const other = def("t_other", async () => {
         otherRan++;
         return { summary: {} };
@@ -201,14 +208,19 @@ describe("P7.1 scheduler", () => {
       expect(await tick([slow, other], hk("2026-10-11T09:00:05"))).toBe(2);
       expect(Date.now() - t0).toBeLessThan(3000);
       expect(otherRan).toBe(1);
-      const row = await prisma.scheduledJob.findUniqueOrThrow({ where: { jobKey: "t_slow" } });
-      expect(row.lastStatus).toBe("timeout");
+      expect((await prisma.scheduledJob.findUniqueOrThrow({ where: { jobKey: "t_slow" } })).lastStatus).toBe("timeout");
       expect((await prisma.jobRun.findFirstOrThrow({ where: { jobKey: "t_slow" } })).status).toBe("timeout");
-      const n = await prisma.appNotification.findFirstOrThrow({ where: { kind: "job_failed" } });
-      expect(n.title).toBe("自動排程超時");
-      // lock 已釋放
+      expect((await prisma.appNotification.findFirstOrThrow({ where: { kind: "job_failed" } })).title).toBe("自動排程超時");
+      // 底層 job 仍跑緊：lock 未釋放
+      expect((await runJob(slow, { trigger: "manual" })).outcome).toBe("skipped_locked");
+      expect((await withJobLock("t_slow", async () => 1)).acquired).toBe(false);
+      expect(slowCalls).toBe(1);
+      // 其他 job 唔受影響
       expect((await runJob(other, { trigger: "manual" })).outcome).toBe("ran");
-      expect((await withJobLock("t_slow", async () => 1)).acquired).toBe(true);
+      finish();
+      await expect.poll(async () => (await withJobLock("t_slow", async () => 1)).acquired, { timeout: 3000 }).toBe(true);
+      expect((await runJob(slow, { trigger: "manual" })).outcome).toBe("ran");
+      expect(slowCalls).toBe(2);
     } finally {
       if (prev === undefined) delete process.env.JOB_TIMEOUT_MS;
       else process.env.JOB_TIMEOUT_MS = prev;
