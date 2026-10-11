@@ -8,6 +8,7 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { apiGet, apiPost, apiUpload } from "@/lib/ui/api-client";
 import { currentMonthStr, addMonthsStr } from "@/lib/ui/format";
+import Link from "next/link";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
 import { runFromSummary, type RunDTO, type RunSummaryDTO } from "@/components/month-close/types";
 import { UNDO_NOTE, shortHuman, needsHumanCount, deriveStages, deriveUploads, groupReview, stepByKey } from "@/components/month-close/derive";
@@ -306,6 +307,12 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
         actions={
           <>
             <MonthPicker value={month} onChange={setMonth} testId="month-close-month-input" />
+            {/* P8.3：鎖月後自動生成嘅檔案（糧明細／月結總表／Postorder／autopay） */}
+            {locked && (
+              <Link href={`/month-close/files?month=${month}`} data-testid="month-close-files-link">
+                <Button variant="secondary">已生成檔案</Button>
+              </Link>
+            )}
             {/* §20.4 Phase 4：系統輸出 Postorder 格式總表 Excel——月結鎖定後仍然可以下載。同頁下載（Content-Disposition: attachment）。 */}
             {report && (
               <a href={`/api/reports/postorder/${report.month}`}>

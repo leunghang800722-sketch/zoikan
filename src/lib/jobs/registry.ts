@@ -4,8 +4,9 @@ import { openNextMonthJob } from "./open-next-month";
 import { nightlyMonthHealthJob } from "./nightly-month-health";
 import { triageReminderJob } from "./triage-reminder";
 import { autoOneClickJob } from "./auto-one-click";
+import { afterLockExportsJob } from "./after-lock-exports";
 
-export const JOBS: JobDef[] = [openNextMonthJob, nightlyMonthHealthJob, triageReminderJob, autoOneClickJob];
+export const JOBS: JobDef[] = [openNextMonthJob, nightlyMonthHealthJob, triageReminderJob, autoOneClickJob, afterLockExportsJob];
 
 export function findJob(key: string): JobDef | undefined {
   return JOBS.find((j) => j.key === key);

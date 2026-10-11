@@ -6,6 +6,7 @@ export const NOTIFY_KINDS = [
   { kind: "month_ready_to_lock", label: "可以鎖月" },
   { kind: "triage_reminder", label: "待答題催辦" },
   { kind: "one_click_auto", label: "自動一鍵結算結果" },
+  { kind: "month_files_ready", label: "鎖月後檔案已備妥" },
   { kind: "job_failed", label: "排程出錯" },
 ] as const;
 

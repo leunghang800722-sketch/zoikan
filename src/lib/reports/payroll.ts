@@ -141,7 +141,8 @@ export async function buildPayrollSourceSummary(month: Date = DEFAULT_REPORT_MON
   return { rosterUploadCount, otherSourceCount, unlabeledCount, bySource };
 }
 
-export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_REPORT_MONTH) {
+/** P8.3：砌好 workbook（writePayrollXlsx／writePayrollBuffer 共用同一份）。 */
+async function buildPayrollWorkbook(month: Date): Promise<{ wb: ExcelJS.Workbook; totals: Awaited<ReturnType<typeof buildPayrollTotals>> }> {
   const { start, end } = monthRange(month);
   const totals = await buildPayrollTotals(month);
   const wb = new ExcelJS.Workbook();
@@ -223,6 +224,17 @@ export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_RE
   detailSheet.addRow(["日期", "結算單位代號", "Staff No.", "姓名", "來源"]);
   for (const row of sourceDetailRows) detailSheet.addRow([row.date, row.brokerCode, row.guardStaffNo, row.guardName, row.source]);
 
+  return { wb, totals };
+}
+
+export async function writePayrollXlsx(outPath: string, month: Date = DEFAULT_REPORT_MONTH) {
+  const { wb, totals } = await buildPayrollWorkbook(month);
   await wb.xlsx.writeFile(outPath);
   return totals;
+}
+
+/** P8.3：同 writePayrollXlsx 同一份內容，直接出 Buffer（唔落 tmp 檔）。 */
+export async function writePayrollBuffer(month: Date = DEFAULT_REPORT_MONTH): Promise<Buffer> {
+  const { wb } = await buildPayrollWorkbook(month);
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }
