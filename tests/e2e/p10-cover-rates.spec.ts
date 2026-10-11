@@ -17,7 +17,8 @@ const shiftTypeIds: string[] = [];
 const guardIds: string[] = [];
 
 test.beforeAll(async () => {
-  const b07 = await prisma.broker.findFirstOrThrow({ where: { kind: "internal_longterm", status: "active" } });
+  // 頂位更＝settlement 係外判雞頭（aggregate 口徑：非 B07 且有值）
+  const b07 = await prisma.broker.findFirstOrThrow({ where: { kind: { not: "internal_longterm" }, status: "active" } });
   const home = await prisma.site.create({ data: { canonicalName: HOME, clientName: "測試客戶-e2e", billingModel: "per_shift", createdBy: "test-e2e" } });
   const cover = await prisma.site.create({ data: { canonicalName: COVER, clientName: "測試客戶-e2e", billingModel: "per_shift", createdBy: "test-e2e" } });
   homeId = home.id;
