@@ -59,9 +59,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       throw BadRequest("對數規則（§6.3）出現紅色差異，鎖定要帶 override_reason 先做得到——見 reconciliation 欄邊條規則 status=diff");
     }
 
-    const after = await prisma.monthClose.update({
-      where: { id },
-      data: { lockedAt: new Date(), lockedBy: session.userId, rosterVersionNote: note ?? before.rosterVersionNote },
+    // P6.1f（H6）：tx 內 `SELECT … FOR UPDATE` 攞 row 排他鎖——寫入 tx 開頭用
+    // `FOR SHARE` 查鎖月（assertMonthNotLockedTx），所以仍在跑嘅長寫入 tx 會令
+    // 呢度等佢 commit，鎖月之後先開嘅寫入 tx 一定睇到 locked_at。update 加
+    // `lockedAt: null` 條件並判 count（兩個並發鎖月請求只有一個成功，另一個 409）。
+    const after = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM month_closes WHERE id = ${id} FOR UPDATE`;
+      const res = await tx.monthClose.updateMany({
+        where: { id, lockedAt: null },
+        data: { lockedAt: new Date(), lockedBy: session.userId, rosterVersionNote: note ?? before.rosterVersionNote },
+      });
+      if (res.count === 0) throw Conflict("呢個月已經鎖定咗");
+      return tx.monthClose.findUniqueOrThrow({ where: { id } });
     });
     await writeAudit({
       actorUserId: session.userId,
