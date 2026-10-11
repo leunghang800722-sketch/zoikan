@@ -19,7 +19,7 @@
 // `roster_reconcile_decisions` upsert 一行留痕（邊個、幾時、原因）。
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { assertMonthNotLocked, monthStart as toMonthStart } from "@/lib/month-lock";
+import { assertMonthNotLocked, assertMonthNotLockedTx, monthStart as toMonthStart } from "@/lib/month-lock";
 import { writeAudit } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { resolveShiftPricing, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
@@ -336,6 +336,8 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
 
   await prisma.$transaction(
     async (tx) => {
+      // P6.1f（H6）：長 tx（可達 120 秒）開頭 FOR SHARE 再查一次鎖月。
+      await assertMonthNotLockedTx(tx, { workDate: month, actorUserId: params.actorUserId, tableName: "roster_uploads", rowId: params.uploadId, ip: params.ip });
       // 正更/leave/system_only(cancel)/settlement_diff 先寫，OT 後寫（等
       // parent_shift_id 搵得到啱先寫低嘅正更）。
       for (const plan of [...shiftPlans, ...otPlans]) {
