@@ -976,3 +976,15 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - merge main `abf1390`；部署 `6acb77eeda7cf920c2638d69` RUNNING 11:56Z：migration `20261014000000_p10_cover_shift_rates` applied、scheduler started。
 - **正式站推斷（老闆 Chrome 唯讀，`/settings/cover-rates/infer?months=2026-07,2026-08,2026-09`，冇撳採用）**：`cover_shifts=0`、`tagged_inputs=0`、`untagged_other_allowance_guard_months=0`，建議表 0 行，推斷唔到清單 0，回測 0 人月。原因（同一 session 唯讀核實）：正式站 **長工合約 0 份、7／8／9 月長工糧 0 次 run（頁面顯示「未計過長工糧」）、人手輸入 0 條**——長工糧模組喺正式站從未用過，歷史頂位津貼紀錄只存在於系統外（Payroll Editor／Excel／Drive）。本機 gate 嘅 8 月 fixture 有 6 更頂位係因為 fixture 由 `data/` 開盤資料砌出，正式站 shift_records 未有長工 settlement 標記。
 - 結論：階段 10 功能已就緒（價目表、推斷、回測、草稿），但**反推要等歷史資料入系統**。選項交老闆（見報告）：(A) 將 7／8／9 月 Payroll Editor／長工糧表（Maxwell 名單＋人手津貼）導入系統（Maxwell 導入已有；人手輸入要逐月導入或批量導入功能），再跑推斷；(B) 由老闆／會計直接提供舊價目表（盤×職級×金額）人手輸入；(C) 由本機 `data/` 內舊檔離線反推（只出盤×職級×金額彙總，唔出人名）——視乎 `data/` 有冇相關檔。
+
+## 15. 階段 11 長工資料導入準備＋系統 vs Payroll Editor 逐人核對
+
+### 15.1 落實紀錄（Sonnet 5.5，branch `p11-ltpay-import`，未 merge）
+
+- **P11.1** Maxwell 導入加 `contract_start_mode`（`original` 預設不變／`first_unlocked`＝由最後一個已鎖月嘅下一個月 1 號起生效，原入職日留 note）。唔改 `guards.monthlySalary`（毛利表長工分攤讀佢，已鎖 8 月成本不變）；名單月薪同系統現值唔同只計入 `salary_mismatch`。route＋UI 下拉＋`tests/p11-1-import-start-mode.test.ts`（5 條：original 同階段 9 一致、first_unlocked 全建／鎖月零改動／monthlySalary 零改動／冪等／冇鎖月／route 400）。
+- **P11.2** `scripts/gate/ltpay-vs-payrolleditor.ts`＋`scripts/gate/lib/payroll-editor-compare.ts`（dev-only；`xlsx@0.18.5` devDependency 釘版本，lock 由 npm 生成）；`gate:ltpay-aug` 加 `--out`。`tests/p11-2-payroll-editor-compare.test.ts`（3 條，含 CLI 唔印 PII）。
+
+### 15.2 驗收後修正（Opus 5.5 唔通過 → 1 必修＋一併項，Sonnet 5.5，同 branch）
+
+- **M1** `first_unlocked` 處理離職名單：離職日空或早過起始日 → 唔建合約（`skipped_left_before_start` 計數＋warning）；離職日 ≥ 起始日 → 末段 `effectiveTo`＝離職日（之後起生效嘅段丟棄）。xlsx／CSV（`left_csv`）兩路各有 test，離職人唔出糧。
+- 一併：密碼保護 xls 中文提示＋ops.md 解法；冇表頭／冇明細行 throw；重複 key 唔再計入 only-in-PE（另列 `details.duplicates`）；移除 `--db-url`（只用 `DATABASE_URL`）；合約 note 淨係入職日早過起始日先寫「原入職日」；`gate:ltpay-aug --out` 嘅 `people[].fields` 加逐欄 oracle／system／diff；P11.2 test 補重複 key／金額讀唔到／密碼保護／無表頭。
