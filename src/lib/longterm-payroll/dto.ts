@@ -60,3 +60,6 @@ export const toGuardLeaveBalanceDTO = <T extends Record<string, unknown>>(row: T
 export const toGuardLeaveBalanceWithGuardDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LEAVE_BALANCE_WITH_GUARD_FIELDS);
 export const toLongtermRunDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, RUN_FIELDS);
 export const toLongtermLineWithGuardDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, LINE_WITH_GUARD_FIELDS);
+
+const COVER_RATE_FIELDS = ["id", "siteId", "grade", "amount", "effectiveFrom", "effectiveTo", "source", "evidence", "createdAt", "createdBy", "voidedAt", "voidedBy"] as const;
+export const toCoverRateDTO = <T extends Record<string, unknown>>(row: T): Dto => pickWhitelist(row, [...COVER_RATE_FIELDS, "siteName"] as const);
