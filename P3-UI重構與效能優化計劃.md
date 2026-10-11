@@ -948,7 +948,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 **行為改變**：(1) 多 `/settings/cover-rates`、`/settings/cover-rates/infer` 兩頁（無新 RBAC module，沿用「長工糧」＋老闆 `baseRole` 核對；導覽冇加條目，入口喺長工糧頁頂「頂位價目表 ›」同通知）；(2) job `longterm_input_drafts` 對有價嘅頂位更出草稿（價目表未設定前行為不變）；(3) 計糧路徑不變（只讀 confirmed，價目表唔入 aggregate）。
 
-**驗證**：vitest（隔離 PG 54358）244 檔，**3,684 passed｜0 failed**（階段 9 為 3,661；新增 p10-1 4 條＋p10-2 11 條＋p10-3 8 條）；tsc 0；lint 0 warning；knip 0；`rm -rf .next` 後 build 過；`gate:locked-months`（隔離 dev PG 54368）**12/12 rc=0**，`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15 不變）；Playwright 結果見下。注意：`tests/seed-regen-gate.test.ts` 會對 `.env` 嘅 `DATABASE_URL` 重 seed——worktree `.env` 必須先指向隔離庫（今次一度未改，令本機主庫 `zoikan`（54329）被 seed 清到一半，要 `npm run db:reset` 還原，見回報）。
+**驗證**：vitest（隔離 PG 54358）244 檔，**3,684 passed｜0 failed**（階段 9 為 3,661；新增 p10-1 4 條＋p10-2 11 條＋p10-3 8 條）；tsc 0；lint 0 warning；knip 0；`rm -rf .next` 後 build 過；`gate:locked-months`（隔離 dev PG 54368）**12/12 rc=0**，`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15 不變）；Playwright 全套（隔離 PG 54368、`next start` 3169、`SCHEDULER_ENABLED=0`，含新增 `p10-cover-rates.spec.ts` 3 條）**235 passed｜4 skipped｜0 failed**；本機 fixture 跑一次 infer 頁截圖（e2e 內截）：建議表 1 行「一致」200、3 更／2 人、回測吻合 2/2、推斷零寫入。注意：`tests/seed-regen-gate.test.ts` 會對 `.env` 嘅 `DATABASE_URL` 重 seed——worktree `.env` 必須先指向隔離庫（今次一度未改，令本機主庫 `zoikan`（54329）被 seed 清到一半，要 `npm run db:reset` 還原，見回報）。
 
 **正式站推斷步驟（俾規劃者用老闆 Chrome 唯讀執行）**
 1. 老闆登入正式站，開 `/settings/cover-rates/infer`（頁面同 API 都係純唯讀，唔會寫任何嘢；**唔好撳「採用」**）。
