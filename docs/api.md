@@ -2511,7 +2511,7 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - `POST /api/rate-cards/copy-last-month`（dry_run）每個 `candidates[]` 多 `change_class`：`same`（價錢同上月一樣，排程會自動複製）｜`new`｜`rate_changed`｜`changed_in_month`｜`auto_source`（上月來源卡係一鍵自動定價卡 `source=auto:*`，未經人確認；後四者排程唔寫，要人確認）。人手「複製上月卡」路徑不變（預覽有標示）。
 - `GET /api/rate-cards/copy-last-month?month=YYYY-MM`（`出街價:view`）：只回 `{ month, count, auto_copy, needs_confirm }`（仲有幾多張候選未複製；`auto_copy`＝25 號排程會自動複製嘅 `same` 張數）；首頁「價卡待確認」卡用。**雞頭 403**。
 - `POST /api/months/:month/open` 行為不變（核心抽成 `src/lib/months/open-month.ts`，與排程 job 共用）；`/sites` 頁新增「開新月」掣呼叫佢。
-- audit：排程 job 代寫嘅 row，`audit_log.actor_user_id` 為 null，`after.by_job`＝job key；`created_by`＝`job:<key>`。
+- audit：排程 job 代寫嘅 row，`after.by_job`＝job key；`audit_log.actor_user_id`：P8 起經 runner 跑嘅 job 一律補**排程系統帳號**（`tel=00000000`「系統排程」，inactive；階段 7 當時為 null）；直接 call lib（無 runner）仍可能係 null；`created_by`＝`job:<key>`。系統帳號唔可登入（`POST /api/auth/login` 對該 tel 一律 401），亦唔可經 `users/:id` PATCH／void／unvoid／reset-password／notify 修改（403 `system_account`）。
 
 ## 階段 8 自動化第二批（P8，2026-10-11 老闆批准）
 

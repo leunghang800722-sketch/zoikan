@@ -25,9 +25,15 @@ export const isBoss = (s: Pick<AuthedSession, "baseRole">): boolean => s.baseRol
 export const TRIAGE_OWNER_ROLES = ["老闆", "會計", "主管"] as const;
 
 /** P8 M1：系統帳號擁有嘅 session（自動 run 揾唔到合資格上載者）——任何人（有權答嘅）都可以處理，唔限擁有人。 */
-export async function canAccessOwnedBy(actor: Pick<AuthedSession, "baseRole" | "userId">, ownerUserId: string): Promise<boolean> {
+export async function canAccessOwnedBy(actor: AuthedSession, ownerUserId: string): Promise<boolean> {
   if (isBoss(actor) || ownerUserId === actor.userId) return true;
-  return ownerUserId === (await getSystemUserId());
+  return ownerUserId === (await getSystemUserId()) && (await hasPermission(actor, "一鍵結算", "create"));
+}
+
+/** 非老闆可見嘅 owner 範圍：自己，加（有「一鍵結算:create」時）系統帳號擁有嘅 session。 */
+export async function visibleOwnerIds(actor: AuthedSession): Promise<string[]> {
+  const sysId = await getSystemUserId();
+  return sysId && (await hasPermission(actor, "一鍵結算", "create")) ? [actor.userId, sysId] : [actor.userId];
 }
 
 export async function getSessionFor(actor: AuthedSession, id: string): Promise<TriageSession> {
@@ -68,8 +74,7 @@ export async function restrictedKindsFor(actor: Pick<AuthedSession, "baseRole" |
 }
 
 export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolean }): Promise<SessionSummary[]> {
-  const sysId = isBoss(actor) ? null : await getSystemUserId();
-  const where = isBoss(actor) && !opts.mine ? {} : { ownerUserId: sysId ? { in: [actor.userId, sysId] } : actor.userId };
+  const where = isBoss(actor) && !opts.mine ? {} : { ownerUserId: { in: await visibleOwnerIds(actor) } };
   const sessions = await prisma.triageSession.findMany({ where, orderBy: { createdAt: "desc" }, take: 200, include: { owner: { select: { name: true } } } });
   if (sessions.length === 0) return [];
   const restricted = new Set(await restrictedKindsFor(actor));
@@ -95,8 +100,8 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
 // P3-1.2：`cache()`——layout 同首頁 TriageHomeNotice 同一個 render 內共用（按 actor 物件識別）。
 export const countOpenFor = cache(async function countOpenFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<number> {
   const restricted = await restrictedKindsFor(actor);
-  const sysId = isBoss(actor) ? null : await getSystemUserId();
-  return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS, ...restricted] }, session: isBoss(actor) ? {} : { ownerUserId: sysId ? { in: [actor.userId, sysId] } : actor.userId } } });
+  const owners = isBoss(actor) ? null : await visibleOwnerIds(actor as AuthedSession);
+  return prisma.triageQuestion.count({ where: { status: "open", kind: { notIn: [...SUPPLEMENTARY_KINDS, ...restricted] }, session: owners ? { ownerUserId: { in: owners } } : {} } });
 });
 
 /** 所有未答都答晒（冇 open）就收尾；有新 open 就重開。 */

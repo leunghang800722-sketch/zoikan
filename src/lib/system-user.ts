@@ -4,8 +4,10 @@
 //    password_hash 係永遠 match 唔到嘅非 bcrypt 字串、role＝老闆（job 內部寫入經 lib 權限檢查時有老闆權限）。
 //  - id 唔 hardcode：startup（scripts/db/ensure-system-user.ts）或 job 首次用嗰陣冪等建立。
 import { prisma } from "@/lib/db";
+import { ApiError } from "@/lib/api/errors";
 
-export const SYSTEM_USER_TEL = "00000000";
+import { SYSTEM_USER_TEL } from "@/lib/system-user-const";
+export { SYSTEM_USER_TEL };
 export const SYSTEM_USER_NAME = "系統排程";
 const NEVER_MATCH_HASH = "!system-account-no-login";
 
@@ -33,4 +35,10 @@ async function findBossRole() {
 /** 只查唔建（權限判斷用）；未建立回 null。 */
 export async function getSystemUserId(): Promise<string | null> {
   return (await prisma.user.findUnique({ where: { tel: SYSTEM_USER_TEL }, select: { id: true } }))?.id ?? null;
+}
+
+/** M3：系統帳號唔可以經 users 管理 API 被改／恢復／重設密碼／作廢／改通知電郵（伺服器端擋）。 */
+export async function assertNotSystemAccount(userId: string): Promise<void> {
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { tel: true } });
+  if (u?.tel === SYSTEM_USER_TEL) throw new ApiError(403, "system_account", "系統排程帳號唔可以經用戶管理修改");
 }
