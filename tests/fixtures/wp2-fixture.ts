@@ -52,6 +52,8 @@ async function resetAuthState(): Promise<void> {
         lastLoginIp: null,
         mustChangePwd: false,
         brokerId: null,
+        notifyEmail: null, // P7.1
+        notifyPrefs: {},
       },
     });
   }
