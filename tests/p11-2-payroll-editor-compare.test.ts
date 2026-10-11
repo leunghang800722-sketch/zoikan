@@ -66,6 +66,30 @@ describe("P11.2：Payroll Editor 核對", () => {
     expect(r.summary.maxAbsDiff).toBe(1000);
   });
 
+  it("重複 key 唔計入 onlyInPayrollEditor；金額讀唔到計入 badAmountRows；無明細／無表頭 throw；密碼保護中文提示", async () => {
+    const buf = buildXls([
+      [1, "012", "BBAN", "111222333", "A", 15000.5, "LT202609-T9001", ""],
+      [2, "012", "BBAN", "111222333", "A", 15000.5, "LT202609-T9001", ""], // 重複
+      [3, "012", "BBAN", "444555666", "B", "n/a", "LT202609-T9002", ""], // 金額讀唔到
+    ]);
+    const parsed = parsePayrollEditorXls(buf);
+    expect(parsed.badAmountRows).toHaveLength(1);
+    const r = comparePayrollEditor(parsed, await loadSystemLines(prisma, MONTH));
+    expect(r.summary.duplicatePayrollEditorKeys).toBe(1);
+    expect(r.summary.onlyInPayrollEditor).toBe(0);
+    expect(r.details.duplicates).toHaveLength(1);
+    expect(r.summary.badAmountRows).toBe(1);
+
+    expect(() => parsePayrollEditorXls(buildXls([]))).toThrow(/冇讀到任何明細行/);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["a", "b"], [1, 2]]), "S");
+    expect(() => parsePayrollEditorXls(Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "biff8" })))).toThrow(/搵唔到表頭/);
+    // 密碼保護：SheetJS 對帶 /encryption 流嘅 CFB 拋 "File is password-protected"
+    const cfb = XLSX.CFB.utils.cfb_new();
+    XLSX.CFB.utils.cfb_add(cfb, "/encryption", Buffer.alloc(8));
+    expect(() => parsePayrollEditorXls(Buffer.from(XLSX.CFB.write(cfb, { type: "buffer" }) as Uint8Array))).toThrow(/有密碼保護/);
+  });
+
   it("CLI：console 同 --out 檔唔含人名／戶口", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "p11-"));
     const xls = path.join(dir, "pe.xls");

@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import ExcelJS from "exceljs";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser } from "./fixtures/wp2-fixture";
-import { importMaxwellContracts, clipSegmentsFrom } from "@/lib/longterm-payroll/import-service";
+import { importMaxwellContracts, importMaxwellContractsCsv, clipSegmentsFrom } from "@/lib/longterm-payroll/import-service";
+import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
 import { POST as importContracts } from "@/app/api/longterm/contracts/import/route";
 
 type R = { staffNo: string; name: string; basic: number; commencement: string; newBasic?: number; newBasicEff?: string };
@@ -109,6 +110,70 @@ describe("P11.1：Maxwell 導入合約起始模式", () => {
     expect(none.contractsCreated).toBe(5); // 甲乙丁各 1 + 丙兩段
     const a = await prisma.guardLongtermContract.findFirstOrThrow({ where: { guard: { staffNoMw: "MG9301" } } });
     expect(a.effectiveFrom.toISOString().slice(0, 10)).toBe("2024-03-01");
+  });
+
+  // ---- M1：離職名單 ----
+  async function buildLeftWorkbook(left: Array<{ staffNo: string; name: string; lastDay: string | null }>) {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("在職名單");
+    const ws = wb.addWorksheet("離職名單");
+    ws.getCell(2, 3).value = "Staff No.";
+    ws.getCell(2, 5).value = "Name";
+    ws.getCell(2, 30).value = "Last Day";
+    left.forEach((r, i) => {
+      const row = 3 + i;
+      ws.getCell(row, 3).value = r.staffNo;
+      ws.getCell(row, 5).value = r.name;
+      ws.getCell(row, 18).value = new Date("2024-03-01");
+      ws.getCell(row, 20).value = "1";
+      ws.getCell(row, 23).value = 15000;
+      if (r.lastDay) ws.getCell(row, 30).value = new Date(r.lastDay);
+    });
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+  const LEFT = [
+    { staffNo: "MG9401", name: "離職甲", lastDay: "2026-08-15" }, // 早過起始日
+    { staffNo: "MG9402", name: "離職乙", lastDay: null }, // 冇離職日
+    { staffNo: "MG9403", name: "離職丙", lastDay: "2026-09-20" }, // 起始日之後
+  ];
+
+  it("M1 first_unlocked + xlsx 離職名單：離職日空／早過起始日 → 唔建合約；之後 → effectiveTo＝離職日；唔出糧", async () => {
+    for (const l of LEFT) await mkGuard(l.staffNo, l.name);
+    const s = await importMaxwellContracts(await buildLeftWorkbook(LEFT), actorUserId, null, { contractStartMode: "first_unlocked" });
+    expect(s.skippedLeftBeforeStart).toBe(2);
+    expect(s.contractsCreated).toBe(1);
+    expect(s.warnings.filter((w) => w.includes("唔建合約"))).toHaveLength(2);
+    expect(await prisma.guardLongtermContract.count({ where: { guard: { staffNoMw: { in: ["MG9401", "MG9402"] } } } })).toBe(0);
+    const c = await prisma.guardLongtermContract.findFirstOrThrow({ where: { guard: { staffNoMw: "MG9403" } } });
+    expect(c.effectiveFrom.toISOString().slice(0, 10)).toBe("2026-09-01");
+    expect(c.effectiveTo?.toISOString().slice(0, 10)).toBe("2026-09-20");
+    expect(c.note).toContain("原入職日 2024-03-01");
+    const run = await recomputeLongtermPayroll(d("2026-09-01"), actorUserId, null);
+    const lines = await prisma.longtermPayrollLine.findMany({ where: { runId: run.runId }, include: { guard: true } });
+    expect(lines.some((l) => ["MG9401", "MG9402"].includes(l.guard.staffNoMw ?? ""))).toBe(false);
+  });
+
+  it("M1 first_unlocked + CSV（left_csv）同樣處理", async () => {
+    for (const l of LEFT) await mkGuard(l.staffNo, l.name);
+    const header = Array.from({ length: 30 }, (_, i) => (i === 2 ? "Staff No." : i === 4 ? "Name" : i === 29 ? "Last Day" : "")).join(",");
+    const line = (l: (typeof LEFT)[number]) => {
+      const cells = Array.from({ length: 30 }, () => "");
+      cells[2] = l.staffNo;
+      cells[4] = l.name;
+      cells[17] = "2024-03-01";
+      cells[19] = "1";
+      cells[22] = "15000";
+      cells[29] = l.lastDay ?? "";
+      return cells.join(",");
+    };
+    const text = `Maxwell\r\n${header}\r\n${LEFT.map(line).join("\r\n")}`;
+    const s = await importMaxwellContractsCsv([{ status: "left", text }], actorUserId, null, { contractStartMode: "first_unlocked" });
+    expect(s.skippedLeftBeforeStart).toBe(2);
+    expect(s.contractsCreated).toBe(1);
+    const c = await prisma.guardLongtermContract.findFirstOrThrow({ where: { guard: { staffNoMw: "MG9403" } } });
+    expect(c.effectiveTo?.toISOString().slice(0, 10)).toBe("2026-09-20");
+    // 入職日晚過起始日嘅 note 唔寫「原入職日」
+    expect(await prisma.guardLongtermContract.count({ where: { guard: { staffNoMw: { in: ["MG9401", "MG9402"] } } } })).toBe(0);
   });
 
   it("clipSegmentsFrom 純函數", () => {
