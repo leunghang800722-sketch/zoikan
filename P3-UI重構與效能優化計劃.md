@@ -812,3 +812,10 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **必修 1**：逾時唔再釋放 advisory lock——`withJobLock(key, fn(hold))`，逾時時 `hold(底層 promise)`，lock 持有到底層 job settle 先釋放；期間 run-now → 409 `job_running`、排程重試 `skipped_locked`；原 job 完成後先可再跑。`docs/ops.md` §5b 同步。
 - **必修 2**：`applyCopyLastMonthCards` 寫入 tx 內先 `pg_advisory_xact_lock(hashtext('rate_cards:<月>'))`，攞到後先揾候選並喺 tx 內重查目標月已存在組合（跳過）；唔加 unique、唔改 schema。
 - test：`p7-1-scheduler` 逾時案改為「lock 持有至底層完成」；`p7-2` 加並發 apply（6 路只 5 張）、並發 job（價卡無重複）。
+
+### 11.4 驗收、部署、正式站核對（2026-10-11 中午）
+- Opus 5.5 三輪：第一輪 2 必修（auto 來源價卡被自動複製兼「洗白」；雞頭可讀全公司待確認價卡數）；第二輪 1 必修（規劃者要求加嘅逾時會提早放 advisory lock，30 次並發 29 次寫出重複價卡）；第三輪通過：逾時唔放 lock（原 job settle 先放，期間 run-now 409、重試 `skipped_locked`）、價卡寫入 tx `pg_advisory_xact_lock('rate_cards:<月>')`＋tx 內重查（30 次並發 0 重複）、失敗 1 小時重試 ≤3、`sslmode` 保留。驗收員自跑 vitest 3,592 過、Playwright 225／5／0。
+- merge main `68826c8`；部署 `6acb12e3da7cf920c2637c53` RUNNING 04:45Z：`Applying migration 20261011150000_p7_notifications_scheduler … applied`、`[scheduler] started`。
+- **正式站核對（老闆 Chrome）**：`/settings/jobs` 3 個 job：`open_next_month` 下次 2026-10-25 09:00 HKT、`nightly_month_health` 今晚 21:00、`triage_reminder` 明早 09:00；手動試跑兩個唯讀 job 都 200 ok——體檢：2026-10 warn 1、2026-09 新紅項 7（已出通知「2026-09 體檢有 7 項新紅項」）；待答提醒：122 題超過 2 日、通知 1 位負責人。首頁「通知」區＋側欄未讀 badge 2。**冇試跑 `open_next_month`**（會寫 11 月資料，25 號自動跑或老闆批先）。
+- **老闆要喺 Zeabur 加（email 先會寄；唔加照樣有站內通知）**：`SMTP_URL`（格式 `smtps://使用者:密碼@smtp主機:465`，例如 Gmail 要用應用程式密碼）、`NOTIFY_FROM`（寄件人地址）、`APP_BASE_URL`（`https://zoikan.zeabur.app`）。加完 Zeabur 會自動重啟，log 由 `[notify] email disabled` 變成寄出；之後每個用戶喺「改密碼」頁填自己嘅通知電郵，老闆亦可喺用戶頁代填。
+- (ii) 留下階段：連續失敗計數跨排程累計；25 號後 job 失敗時首頁卡文案過期；apply 候選查詢佔一條額外連線。
