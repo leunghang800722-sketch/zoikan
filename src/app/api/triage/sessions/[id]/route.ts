@@ -3,6 +3,8 @@
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { getSessionFor, isSupplementary, restrictedKindsFor } from "@/lib/triage/session";
+import { SUPPLEMENTARY_KINDS } from "@/lib/triage/types";
+import { BadRequest } from "@/lib/api/errors";
 import { questionViews, viewerCaps } from "@/lib/triage/view";
 import { mcQuestionViews } from "@/lib/month-close/auto/triage";
 import { ok, withApiError } from "@/lib/api/http";
@@ -14,7 +16,29 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const { id } = await params;
     const session = await getSessionFor(actor, id);
     const onlyOpen = new URL(req.url).searchParams.get("status") === "open";
-    const rows = await prisma.triageQuestion.findMany({ where: { sessionId: session.id, ...(onlyOpen ? { status: "open" } : {}) }, orderBy: [{ sort: "asc" }, { id: "asc" }] });
+    // P13.1 分頁（additive）：`take`（0..50，0＝淨攞 counts）＋`cursor`（上一頁最後一題 id）＋`tier`（important｜supplementary）。
+    // 冇 `take` ＝舊行為（成個 session 一次過，回應冇 next_cursor）。
+    const sp = new URL(req.url).searchParams;
+    const takeRaw = sp.get("take");
+    let take: number | null = null;
+    if (takeRaw !== null) {
+      if (!/^\d{1,4}$/.test(takeRaw)) throw BadRequest("take 要係 0 至 50 嘅整數");
+      take = Math.min(Number(takeRaw), 50);
+    }
+    const tier = sp.get("tier");
+    if (tier !== null && tier !== "important" && tier !== "supplementary") throw BadRequest("tier 只可以係 important 或 supplementary");
+    const cursorId = sp.get("cursor");
+    let cursorWhere: object = {};
+    if (cursorId) {
+      const cur = await prisma.triageQuestion.findFirst({ where: { id: cursorId, sessionId: session.id }, select: { sort: true, id: true } });
+      if (!cur) throw BadRequest("cursor 無效");
+      cursorWhere = { OR: [{ sort: { gt: cur.sort } }, { sort: cur.sort, id: { gt: cur.id } }] };
+    }
+    const supp = [...SUPPLEMENTARY_KINDS];
+    const where = { sessionId: session.id, ...(onlyOpen ? { status: "open" } : {}), ...(tier === "supplementary" ? { kind: { in: supp } } : tier === "important" ? { kind: { notIn: supp } } : {}), ...cursorWhere };
+    const fetched = take === 0 ? [] : await prisma.triageQuestion.findMany({ where, orderBy: [{ sort: "asc" }, { id: "asc" }], ...(take !== null ? { take: take + 1 } : {}) });
+    const hasMore = take !== null && take > 0 && fetched.length > take;
+    const rows = hasMore ? fetched.slice(0, take!) : fetched;
     const counts = await prisma.triageQuestion.groupBy({ by: ["status", "kind"], where: { sessionId: session.id }, _count: { _all: true } });
     const restricted = new Set(await restrictedKindsFor(actor));
     const c = { open: 0, answered: 0, skipped: 0, superseded: 0, total: 0, important_open: 0, supplementary_open: 0, restricted_open: 0 };
@@ -35,6 +59,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       brandSafeResponse({
         session: { id: session.id, source_type: session.sourceType, owner_user_id: session.ownerUserId, status: session.status, created_at: session.createdAt, completed_at: session.completedAt, counts: c },
         questions: questions.map((q) => ({ ...q })),
+        ...(take !== null ? { next_cursor: hasMore ? rows[rows.length - 1]!.id : null } : {}),
       }),
     );
   });
