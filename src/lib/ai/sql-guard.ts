@@ -45,7 +45,7 @@ const BLOCKED_KEYWORDS = [
 
 export const SQL_MAX_LIMIT = 200;
 
-export type MaskGroup = "clientRate" | "settlement" | "guardPii" | "guardBank";
+type MaskGroup = "clientRate" | "settlement" | "guardPii" | "guardBank";
 
 export interface MaskedHit {
   group: MaskGroup;
@@ -488,13 +488,6 @@ function applyLimit(sql: string, stmt: Statement): string {
   const loc = limitExpr._location as { start: number; end: number } | undefined;
   if (!loc) return wrap();
   return `${sql.slice(0, loc.start)}${SQL_MAX_LIMIT}${sql.slice(loc.end)}`;
-}
-
-/** 向後相容：抽表名（validate 唔過 → 空）。 */
-export function extractReferencedTables(sql: string): { tables: string[]; unknown: string[] } {
-  const r = validateSqlSelect(sql);
-  if (!r.ok) return { tables: [], unknown: [] };
-  return { tables: r.analysis.tables, unknown: r.analysis.unknown };
 }
 
 /** 由抽出嚟嘅 table 名，攞返呢條查詢需要邊幾個 module 嘅 view 權（去重）。 */
