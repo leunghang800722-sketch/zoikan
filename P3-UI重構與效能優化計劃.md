@@ -755,3 +755,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 3. Maxwell 導入遇到已鎖月區間會整份 403（唔係逐行跳過）；已 commit 嘅前面行保留；下一階段改逐行跳過。
 4. `reprice` 逐批 tx：中途鎖月令後面批次 409，前面批次已 commit（原有分批語意，冇新增）。
 5. 未做：CSP；容器 root 用戶；`XFF` 偽造防護（需要部署層配合）。
+
+### 10.2 驗收、部署、正式站核對（2026-10-11 上午）
+- Opus 5.5 第一輪有條件通過（1 必修：鎖月 route 用 Prisma 預設 5 秒 tx timeout，寫入 tx 揸住 `FOR SHARE` >5 秒時鎖月回 500）；執行員補：`SET LOCAL lock_timeout`（預設 10 秒，`MONTH_LOCK_TIMEOUT_MS` 可調）＋tx timeout／maxWait、`55P03`／`P2028` → 409 `lock_busy`；`getClientIp` 取 XFF 最右段＋全局限速只扣失敗 1000／分鐘；再補 `x-real-ip` 優先＋`TRUSTED_PROXY_HOPS`（`a5e19fa`，規劃者自審 diff）。第二輪通過：writer 7 秒 → 鎖月等到後 200、12 秒 → 409；32 條 SQL 繞過全擋；20 並發錯密碼只驗 5 次；偽造 XFF 左段仍被限速、偽造 60 IP 唔影響正常登入；CSRF 14 種組合正確；全套 vitest 3,532 過、Playwright 220／5／0。驗收員披露：第一輪曾用 worktree `.env`（指向本機 dev DB，非正式站）跑 11 條 e2e 冇設 fake LLM，即時停止；只影響本機 dev DB 同可能少量 DeepSeek 呼叫。
+- merge main `e8fd541`；部署 `6acafb0bfb15905b77d55831` RUNNING 03:03Z：`Applying migration 20261011120000_p6_ai_audit_log_whitelist … applied`、助手 claude、OCR 自檢 ok。
+- **正式站核對**：`curl -sI /login` 見 `x-frame-options: DENY`、`x-content-type-options: nosniff`、`referrer-policy: same-origin`；用唔存在電話錯密碼 1 次 → 401「電話或密碼錯誤」；**硬性條件通過**：該次 `login_failed` audit 記錄嘅 ip ＝ 規劃者公網 IP（Zeabur 下 XFF 最右段／x-real-ip 係真 client，`TRUSTED_PROXY_HOPS` 保持預設 1，唔使改 env）；更表上載頁載入 0 個 4xx；助手一問一答 200、冇 `csrf_blocked`；runtime log 0 個 csrf_blocked／lock_busy／internal_error。
+- 留待下一階段：Maxwell 導入遇已鎖月改逐行跳過；reprice 409 vs 403 統一；`month_closes` 無 row 月份嘅細窗口；NATURAL JOIN 靠 parse 失敗拒絕（升級 parser 要補）。
