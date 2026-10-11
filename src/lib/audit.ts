@@ -93,7 +93,10 @@ export type AuditAction =
   // WP-AI-OPS §28.4：導入後對話式分診——開 session／作答（含跳過）／老闆轉交。after 淨係 id＋類別＋計數（冇姓名／身份證等 PII）。
   | "triage_session_create"
   | "triage_answer"
-  | "triage_reassign";
+  | "triage_reassign"
+  // P7.1：老闆手動立即跑排程 job（after 淨係 run id＋狀態）；用戶改通知電郵（after 淨係 { changed: true }，唔存電郵）。
+  | "job_run_now"
+  | "notify_email_update";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

@@ -968,3 +968,23 @@ export const GuardLeaveBalanceUpdateSchema = z
     sl_taken: money,
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// P7.1：通知設定／排程 job 設定
+// ---------------------------------------------------------------------------
+export const NotifySettingsSchema = z
+  .object({
+    /** null＝清除電郵；字串＝新電郵（trim 後驗證格式）。 */
+    notify_email: z.union([z.string().trim().email().max(254), z.null()]).optional(),
+    /** 每類通知 email 開關（key＝通知類別；冇該 key＝開）。 */
+    notify_prefs: z.record(z.string().max(40), z.boolean()).optional(),
+  })
+  .strict();
+
+export const JobUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    /** 5 欄 cron（香港時間）。 */
+    schedule: z.string().trim().min(1).max(100).optional(),
+  })
+  .strict();
