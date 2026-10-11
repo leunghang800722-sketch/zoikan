@@ -10,5 +10,7 @@ import { ChangePasswordForm } from "./ChangePasswordForm";
 export default async function ChangePasswordPage() {
   const session = await getCurrentSession();
   if (!session) redirect("/login");
-  return <ChangePasswordForm mustChangePwd={session.mustChangePwd} />;
+  // P7.1：內部角色（老闆／主管／會計）可以設通知電郵；首次強制改密碼期間 API 擋住其他 endpoint，所以暫時唔顯示。
+  const internal = session.baseRole === "老闆" || session.baseRole === "主管" || session.baseRole === "會計";
+  return <ChangePasswordForm mustChangePwd={session.mustChangePwd} notifyUserId={internal && !session.mustChangePwd ? session.userId : undefined} />;
 }

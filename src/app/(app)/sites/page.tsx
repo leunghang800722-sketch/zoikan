@@ -16,6 +16,7 @@ import { tableCls, tableMinWidth, EmptyState, TableLoadingRow, TableEmptyRow } f
 import { fmt, fmtMoney } from "@/lib/ui/format";
 import { BILLING_MODELS } from "@/lib/ui/billing-model";
 import { kickerFor } from "@/lib/nav/schema";
+import { OpenMonthButton } from "@/components/OpenMonthButton";
 import { useCrudPage } from "@/lib/ui/use-crud-page";
 
 const PRORATA_BASIS = ["div_31", "div_month_days"] as const;
@@ -94,6 +95,7 @@ function billingModelPill(model: string) {
 }
 
 export default function SitesPage() {
+  const [openMonthNotice, setOpenMonthNotice] = useState<string | null>(null);
   const [shiftTypesBySite, setShiftTypesBySite] = useState<Record<string, ShiftTypeRow[]>>({});
   // S1（Opus 驗收）：「更別」欄未讀到之前顯示「載入緊…」，唔好當佢真係
   // 冇更別（「—」）——落面 load() 一次過攞晒 shift-types 先會清呢個 flag。
@@ -248,11 +250,15 @@ export default function SitesPage() {
         title="盤"
         subtitle="盤管理——每個盤可以有多個更別（子表）。"
         actions={
-          <Button variant="primary" onClick={openCreate}>
-            新增盤
-          </Button>
+          <>
+            <OpenMonthButton onDone={(m) => setOpenMonthNotice(m)} />
+            <Button variant="primary" onClick={openCreate}>
+              新增盤
+            </Button>
+          </>
         }
       />
+      <Banner kind="success" message={openMonthNotice} />
 
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />

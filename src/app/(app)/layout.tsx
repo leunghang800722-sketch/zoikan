@@ -12,6 +12,7 @@ import { DesktopNav } from "@/components/DesktopNav";
 import { isAiConfigured } from "@/lib/ai/config";
 import { getPendingCounts } from "@/lib/rbac/pending-counts";
 import { countOpenFor } from "@/lib/triage/session";
+import { countUnreadNotifications } from "@/lib/notify/queries";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
@@ -41,16 +42,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // P3-1.2：兩個 badge count（審批、現場意見）合成一條查詢，連同待答問題 count 並行；
   // 老闆 layout 總共：users(1) + 權限 Set(1) + 兩個 count(1) + 待答 count(1) = 4 條，0 HTTP。
   const showFeedback = grants["助手"] && session.baseRole === "老闆";
-  const [pendingCounts, triageOpen] = await Promise.all([
+  const [pendingCounts, triageOpen, unreadNotifications] = await Promise.all([
     getPendingCounts(!!grants["審批"], showFeedback),
     // WP-AI-OPS §28.4：「待答問題」badge＝自己上載嗰批未答數（老闆＝全部）。
     grants["導入分診"] ? countOpenFor(session) : Promise.resolve(0),
+    // P7.1：「首頁」badge＝本人未讀通知數
+    countUnreadNotifications(session.userId, session.baseRole),
   ]);
   // WP-R1：「審批隊列」右側紅 badge＝待審批更次總數（口徑同 `/approvals` 頁一致，唔篩月份）。
   const approvalsPending = pendingCounts.approvals;
   // P2.5「現場反映」開會模式——「現場意見」badge＝status=new 嘅報告數（淨係老闆）。
   const unreadFeedback = pendingCounts.feedback;
   const badges: Record<string, number> = {
+    ...(unreadNotifications > 0 ? { "/": unreadNotifications } : {}),
     ...(triageOpen > 0 ? { "/triage": triageOpen } : {}),
     ...(approvalsPending > 0 ? { "/approvals": approvalsPending } : {}),
     ...(unreadFeedback > 0 ? { "/feedback": unreadFeedback } : {}),

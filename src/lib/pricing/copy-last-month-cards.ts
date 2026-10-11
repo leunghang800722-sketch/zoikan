@@ -27,6 +27,8 @@
 // 判斷唔會誤複製本來已經跨月有效、唔需要複製嘅卡。
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
+import { isMonthLocked } from "@/lib/month-lock";
+import { Locked } from "@/lib/api/errors";
 import type { RateCard } from "@prisma/client";
 
 export type CopyLastMonthCandidate = {
@@ -122,6 +124,13 @@ export async function findCopyLastMonthCandidates(month: string, siteId?: string
   }));
 }
 
+export interface ApplyCopyOptions {
+  /** 只複製呢啲來源卡（P7.2：價錢同上月一樣嗰批）；冇傳＝全部候選。 */
+  onlySourceCardIds?: ReadonlySet<string>;
+  /** 排程 job key：created_by＝`job:<key>`、audit actor＝null、audit.after 帶 by_job。 */
+  byJob?: string;
+}
+
 /** 真正建卡——每個候選一張新卡，`effective_from`=本月 1 日，note「由上月
  * 複製」，audit。冪等：`findCopyLastMonthCandidates()` 已經排除咗「已有
  * 本月卡」，連撳兩次第二次候選一定 0，唔會重複建。 */
@@ -130,37 +139,115 @@ export async function applyCopyLastMonthCards(
   siteId: string | null,
   actorUserId: string,
   ip: string | null,
+  opts: ApplyCopyOptions = {},
 ): Promise<{ created: RateCard[]; candidateCount: number }> {
-  const candidates = await findCopyLastMonthCandidates(month, siteId);
-  if (candidates.length === 0) return { created: [], candidateCount: 0 };
+  // P7.2：lib 層鎖月檢查（route 本身已先查；排程 job 經呢度寫，必須有）。
+  if (await isMonthLocked(monthStart(month))) throw Locked(`${month} 已鎖定，唔可以複製價卡`);
   const start = monthStart(month);
-  const sourceCards = await prisma.rateCard.findMany({ where: { id: { in: candidates.map((c) => c.sourceCardId) } } });
-  const sourceById = new Map(sourceCards.map((c) => [c.id, c]));
+  const createdBy = opts.byJob ? `job:${opts.byJob}` : actorUserId;
+  const auditActor = opts.byJob ? null : actorUserId;
 
-  const created: RateCard[] = [];
-  for (const cand of candidates) {
-    const src = sourceById.get(cand.sourceCardId);
-    if (!src) continue;
-    const row = await prisma.rateCard.create({
-      data: {
-        siteId: src.siteId,
-        shiftTypeId: src.shiftTypeId,
-        brokerId: src.brokerId,
-        guardId: null,
-        clientRate: src.clientRate,
-        guardWage: src.guardWage,
-        brokerFee: src.brokerFee,
-        payoutRate: src.payoutRate,
-        billingModel: src.billingModel,
-        effectiveFrom: start,
-        effectiveTo: null,
-        source: "copy_last_month",
-        note: `由上月複製（沿用 ${src.effectiveFrom.toISOString().slice(0, 10)}～${src.effectiveTo?.toISOString().slice(0, 10) ?? ""} 生效卡）`,
-        createdBy: actorUserId,
-      },
-    });
-    await writeAudit({ actorUserId, tableName: "rate_cards", rowId: row.id, action: "create", after: row, ip });
-    created.push(row);
+  // P7 驗收：寫入 tx 內先攞「目標月」advisory xact lock，令並發 apply 串行；攞到 lock 後先（用已 commit 嘅最新狀態）
+  // 揾候選並喺 tx 內重查目標月已存在嘅 (盤, 更種, 雞頭, effective_from) 組合，已存在就跳過。
+  // 唔加 unique 約束（舊數據可能有重複，migration 唔准 abort）。
+  const { created, candidateCount } = await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`rate_cards:${month}`}))`;
+      const all = await findCopyLastMonthCandidates(month, siteId);
+      const candidates = opts.onlySourceCardIds ? all.filter((c) => opts.onlySourceCardIds!.has(c.sourceCardId)) : all;
+      if (candidates.length === 0) return { created: [] as RateCard[], candidateCount: 0 };
+      const sourceCards = await tx.rateCard.findMany({ where: { id: { in: candidates.map((c) => c.sourceCardId) } } });
+      const sourceById = new Map(sourceCards.map((c) => [c.id, c]));
+      const existing = await tx.rateCard.findMany({ where: { siteId: { in: [...new Set(candidates.map((c) => c.siteId))] }, effectiveFrom: start, voidedAt: null, guardId: null }, select: { siteId: true, shiftTypeId: true, brokerId: true } });
+      const seen = new Set(existing.map((c) => `${c.siteId}|${c.shiftTypeId ?? ""}|${c.brokerId ?? ""}`));
+      const rows: RateCard[] = [];
+      for (const cand of candidates) {
+        const src = sourceById.get(cand.sourceCardId);
+        if (!src) continue;
+        const key = `${src.siteId}|${src.shiftTypeId ?? ""}|${src.brokerId ?? ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(
+          await tx.rateCard.create({
+            data: {
+              siteId: src.siteId,
+              shiftTypeId: src.shiftTypeId,
+              brokerId: src.brokerId,
+              guardId: null,
+              clientRate: src.clientRate,
+              guardWage: src.guardWage,
+              brokerFee: src.brokerFee,
+              payoutRate: src.payoutRate,
+              billingModel: src.billingModel,
+              effectiveFrom: start,
+              effectiveTo: null,
+              source: "copy_last_month",
+              note: `由上月複製（沿用 ${src.effectiveFrom.toISOString().slice(0, 10)}～${src.effectiveTo?.toISOString().slice(0, 10) ?? ""} 生效卡）`,
+              createdBy,
+            },
+          }),
+        );
+      }
+      return { created: rows, candidateCount: candidates.length };
+    },
+    { timeout: 60_000, maxWait: 30_000 },
+  );
+  for (const row of created) await writeAudit({ actorUserId: auditActor, tableName: "rate_cards", rowId: row.id, action: "create", after: opts.byJob ? { ...row, by_job: opts.byJob } : row, ip });
+  return { created, candidateCount };
+}
+
+// ---------------------------------------------------------------------------
+// P7.2：自動複製分類。只有「價錢同上月一樣」嘅候選先可以由排程自動寫；其餘變成「待確認」，
+// 由人用現有預覽／確認流程處理。
+//   same              上月卡同上上月（月底仍生效嗰張）四個價（收客價／出糧價／雞頭費／支付價）一致，且上月內冇改過
+//   new               上上月冇生效卡（新盤／新更種／新雞頭組合）
+//   rate_changed      上月卡同上上月卡價錢唔同
+//   changed_in_month  上月內有新卡生效（月中改價）
+// ---------------------------------------------------------------------------
+//   auto_source       上月來源卡係一鍵自動定價卡（source 以 auto: 開頭，未經人確認）——排程唔自動複製（auto 卡只可 propose）
+type CopyClass = "same" | "new" | "rate_changed" | "changed_in_month" | "auto_source";
+
+export interface ClassifiedCandidate {
+  candidate: CopyLastMonthCandidate;
+  cls: CopyClass;
+}
+
+function sameMoney(a: { equals(o: unknown): boolean } | null, b: { equals(o: unknown): boolean } | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.equals(b);
+}
+
+export async function classifyCopyCandidates(month: string, candidates: CopyLastMonthCandidate[]): Promise<ClassifiedCandidate[]> {
+  if (candidates.length === 0) return [];
+  const start = monthStart(month);
+  const prevStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 1, 1));
+  const prevEnd = prevMonthEnd(month);
+  const ppEnd = new Date(prevStart.getTime() - 86400000); // 上上月最後一日
+  const sources = await prisma.rateCard.findMany({ where: { id: { in: candidates.map((c) => c.sourceCardId) } } });
+  const sourceById = new Map(sources.map((c) => [c.id, c]));
+  const siteIds = [...new Set(candidates.map((c) => c.siteId))];
+  const pool = await prisma.rateCard.findMany({
+    where: { siteId: { in: siteIds }, voidedAt: null, guardId: null, shiftTypeId: { not: null }, OR: [{ billingModel: null }, { billingModel: "per_shift" }], effectiveFrom: { lte: prevEnd } },
+  });
+  const keyOf = (c: { siteId: string; shiftTypeId: string | null; brokerId: string | null }) => `${c.siteId}|${c.shiftTypeId ?? ""}|${c.brokerId ?? ""}`;
+  const byKey = new Map<string, typeof pool>();
+  for (const c of pool) {
+    const k = keyOf(c);
+    const arr = byKey.get(k);
+    if (arr) arr.push(c);
+    else byKey.set(k, [c]);
   }
-  return { created, candidateCount: candidates.length };
+  return candidates.map((candidate) => {
+    const src = sourceById.get(candidate.sourceCardId);
+    if (!src) return { candidate, cls: "new" as const };
+    if (src.source?.startsWith("auto:")) return { candidate, cls: "auto_source" as const };
+    const cards = byKey.get(keyOf(src)) ?? [];
+    // 上月內（prevStart 之後）新生效嘅卡（含來源卡自己）＝月中改價
+    if (cards.some((c) => c.effectiveFrom.getTime() > prevStart.getTime() && c.effectiveFrom.getTime() <= prevEnd.getTime())) return { candidate, cls: "changed_in_month" as const };
+    // 上上月最後一日仍生效嘅卡（來源卡自己跨月生效亦算）
+    const before = cards.filter((c) => c.effectiveFrom.getTime() <= ppEnd.getTime() && (c.effectiveTo === null || c.effectiveTo.getTime() >= ppEnd.getTime()));
+    if (before.length === 0) return { candidate, cls: "new" as const };
+    const same = before.every((t) => sameMoney(t.clientRate, src.clientRate) && sameMoney(t.guardWage, src.guardWage) && sameMoney(t.brokerFee, src.brokerFee) && sameMoney(t.payoutRate, src.payoutRate));
+    return { candidate, cls: same ? ("same" as const) : ("rate_changed" as const) };
+  });
 }

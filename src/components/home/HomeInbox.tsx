@@ -19,6 +19,18 @@ export interface HomeInboxProps {
   canMonthClose: boolean;
   /** 老闆專用：保安員配對修復 view。 */
   canGuardFix: boolean;
+  /** P7.2：「出街價」view——有就查「價卡待確認」（月頭自動開新月之後仲未複製嘅卡）。 */
+  canRateCards?: boolean;
+}
+
+/** P7.2：香港日曆「今日幾號」同「本月／下月」（YYYY-MM）。月頭自動開新月喺 25 號跑，所以 20 號至月初 5 號先查。 */
+function hkMonthWindow(): { day: number; cur: string; next: string } {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Hong_Kong", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  const y = get("year");
+  const m = get("month");
+  const fmt = (yy: number, mm: number) => `${yy}-${String(mm).padStart(2, "0")}`;
+  return { day: get("day"), cur: fmt(y, m), next: m === 12 ? fmt(y + 1, 1) : fmt(y, m + 1) };
 }
 
 interface PendingSummary {
@@ -47,7 +59,7 @@ function Card({ testId, label, value, unit, note, href, tone }: { testId: string
   );
 }
 
-export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, canGuardFix }: HomeInboxProps) {
+export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, canGuardFix, canRateCards = false }: HomeInboxProps) {
   // 月結進度睇緊邊個月：同全站月份選擇器共用（URL → sessionStorage → 上個月，同一鍵結算頁預設一致）。
   const [month, , monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1));
   const prevMonth = addMonthsStr(currentMonthStr(), -1);
@@ -97,9 +109,33 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
     };
   }, [canGuardFix]);
 
+  // P7.2：價卡待確認（本月／下月仲有幾多張「複製上月卡」候選）。只喺月尾至月初窗口查。
+  const [pendingCards, setPendingCards] = useState<{ month: string; count: number; autoCopy: number } | null>(null);
+  useEffect(() => {
+    if (!canRateCards) return;
+    const w = hkMonthWindow();
+    if (w.day < 20 && w.day > 5) return;
+    const months = w.day >= 20 ? [w.next] : [w.cur];
+    let cancelled = false;
+    (async () => {
+      for (const m of months) {
+        const res = await apiGet<{ month: string; count: number; auto_copy: number; needs_confirm: number }>(`/api/rate-cards/copy-last-month?month=${m}`);
+        if (cancelled) return;
+        // 只計要人確認嗰啲（25 號前未自動複製嘅 same 唔計入）
+        if (res.ok && res.data.needs_confirm > 0) {
+          setPendingCards({ month: m, count: res.data.needs_confirm, autoCopy: res.data.auto_copy });
+          return;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canRateCards]);
+
   const showApprovals = approvals !== null;
   const showTriage = triage !== null;
-  if (!showApprovals && !showTriage && !canRosterUploads && !canMonthClose && !(canGuardFix && needsBoss !== null)) return null;
+  if (!showApprovals && !showTriage && !canRosterUploads && !canMonthClose && !(canGuardFix && needsBoss !== null) && !pendingCards) return null;
 
   let runCard: React.ReactNode = null;
   if (canMonthClose) {
@@ -129,6 +165,7 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
           />
         )}
         {runCard}
+        {pendingCards && <Card testId="inbox-pending-cards" label={`${pendingCards.month} 價卡待確認`} value={pendingCards.count} unit="張" tone="danger" note={pendingCards.autoCopy > 0 ? `要你確認（25 號自動複製其餘 ${pendingCards.autoCopy} 張）` : "價錢有變或新組合，未自動複製"} href={`/rate-cards?month=${pendingCards.month}&pending=1`} />}
         {canGuardFix && needsBoss !== null && <Card testId="inbox-needs-boss" label="要老闆決定" value={needsBoss} unit="項" tone={needsBoss > 0 ? "danger" : undefined} href={`/roster-uploads?tab=fix&month=${prevMonth}`} />}
       </div>
     </section>

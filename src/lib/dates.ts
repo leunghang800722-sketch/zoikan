@@ -10,3 +10,35 @@ export function hkMonthStart(now: Date = new Date()): Date {
   const month = Number(parts.find((p) => p.type === "month")?.value);
   return new Date(Date.UTC(year, month - 1, 1));
 }
+
+// P7.1：香港時間分量（排程「每日 HH:mm」一律按香港時間）。香港 1979 年起冇夏令時，
+// 固定 UTC+8，所以直接位移 8 小時再讀 UTC 欄位（唔使每次 Intl 格式化）。
+export const HK_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+export interface HkParts {
+  year: number;
+  /** 1–12 */
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  /** 0＝星期日 … 6＝星期六 */
+  dow: number;
+}
+
+export function hkParts(date: Date = new Date()): HkParts {
+  const d = new Date(date.getTime() + HK_OFFSET_MS);
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: d.getUTCHours(), minute: d.getUTCMinutes(), dow: d.getUTCDay() };
+}
+
+/** 香港日曆嘅「YYYY-MM-DD」。 */
+export function hkDateStr(date: Date = new Date()): string {
+  const p = hkParts(date);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+/** 香港日曆「下個月」第一日（UTC 0 時 Date，DB 月份欄口徑）。 */
+export function hkNextMonthStart(now: Date = new Date()): Date {
+  const cur = hkMonthStart(now);
+  return new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 1, 1));
+}

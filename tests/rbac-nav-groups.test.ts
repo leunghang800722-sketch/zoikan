@@ -26,9 +26,9 @@ async function navFor(role: RoleName) {
 const sig = (groups: ReturnType<typeof groupNavLinks>) => groups.map((g) => `${g.title}:${g.links.map((l) => l.href.replace(/&month=\d{4}-\d{2}$/, "")).join(",")}`);
 
 describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
-  it("老闆：17 條、6 組（首頁／排更／對數／月結／資料／設定），次序同組內次序固定", async () => {
+  it("老闆：18 條、6 組（首頁／排更／對數／月結／資料／設定），次序同組內次序固定", async () => {
     const { links, groups } = await navFor("老闆");
-    expect(links).toHaveLength(17);
+    expect(links).toHaveLength(18);
     expect(groups.map((g) => g.title)).toEqual(["", "排更", "對數", "月結", "資料", "設定"]);
     expect(sig(groups)).toEqual([
       ":/",
@@ -36,7 +36,7 @@ describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
       "對數:/roster-uploads,/roster-uploads?tab=fix",
       "月結:/month-close,/triage,/reports/monthly-close",
       "資料:/sites,/guards,/brokers,/rate-cards",
-      "設定:/users,/roles,/audit-log,/feedback",
+      "設定:/users,/roles,/audit-log,/feedback,/settings/jobs",
     ]);
     expect(groups[3]!.links.map((l) => l.label)).toEqual(["一鍵結算", "待答問題", "報表"]);
   });
@@ -129,6 +129,8 @@ describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
     expect(kickerFor("/guards", true)).toBe("我的");
     expect(kickerFor("/rate-cards", true)).toBe("我的");
     expect(kickerFor("/roles")).toBe("設定");
+    expect(kickerFor("/settings/jobs")).toBe("設定");
+    expect(kickerFor("/notifications")).toBe("帳號");
     expect(kickerFor("/nope")).toBe("");
   });
 
