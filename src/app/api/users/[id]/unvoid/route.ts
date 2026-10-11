@@ -1,3 +1,4 @@
+import { assertNotSystemAccount } from "@/lib/system-user";
 import { toUserDTO } from "@/lib/api/dto";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -8,6 +9,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   return withApiError(async () => {
     const session = await requirePermission(req, "用戶管理", "void");
     const { id } = await params;
+    await assertNotSystemAccount(id);
     const before = await prisma.user.findUniqueOrThrow({ where: { id } });
     const after = await prisma.user.update({ where: { id }, data: { status: "active" } });
     const dto = toUserDTO(after, true);

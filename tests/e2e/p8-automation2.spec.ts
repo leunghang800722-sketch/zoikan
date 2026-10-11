@@ -182,4 +182,22 @@ test.describe("P8 自動化第二批", () => {
     await expect(page.getByText(/證件到期週報：試跑/)).toBeVisible();
     await expect.poll(() => prisma.jobRun.count({ where: { jobKey: "permit_expiry_weekly", trigger: "manual" } })).toBeGreaterThan(0);
   });
+
+  test("用戶頁：系統排程帳號（inactive）預設唔列；就算列出亦冇編輯／恢復／重設掣", async ({ page }) => {
+    const role = await prisma.role.findFirstOrThrow({ where: { baseRole: "老闆" } });
+    await prisma.user.upsert({ where: { tel: "00000000" }, create: { name: "系統排程", tel: "00000000", passwordHash: "!system-account-no-login", roleId: role.id, status: "inactive" }, update: {} });
+    await loginAs(page, "老闆");
+    await page.goto("/users");
+    await expect(page.getByTestId("user-row").first()).toBeVisible();
+    const row = page.getByTestId("user-row").filter({ hasText: "系統排程" });
+    // /api/users 預設只列 active，系統帳號唔出現；若將來列出，只可有「系統」標記、冇任何掣
+    if ((await row.count()) > 0) {
+      await expect(row.getByTestId("user-system-badge")).toBeVisible();
+      await expect(row.getByRole("button")).toHaveCount(0);
+    }
+    expect((await page.request.get("/api/users?include_inactive=1")).status()).toBe(200);
+    const sys = await prisma.user.findFirstOrThrow({ where: { tel: "00000000" } });
+    expect((await page.request.post(`/api/users/${sys.id}/unvoid`)).status()).toBe(403);
+    expect((await page.request.post(`/api/users/${sys.id}/reset-password`)).status()).toBe(403);
+  });
 });

@@ -3,6 +3,7 @@
 // P1-執行計劃.md §4 WP2「電話＋密碼登入…failed_attempts 鎖定」）。P6.3：計數改原子、
 // 加按 IP 限速、鎖定／未註冊／密碼錯對外統一 401（見下）。
 // 登入 IP 記入 audit_log（設計文件§5.1「登入管制…配合audit_log」）。
+import { SYSTEM_USER_TEL } from "@/lib/system-user-const";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { setSessionCookie } from "@/lib/auth/session";
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
 
     const user = await prisma.user.findUnique({ where: { tel }, include: { role: true } });
 
-    if (!user || user.status !== "active") {
+    if (!user || user.status !== "active" || user.tel === SYSTEM_USER_TEL) {
       await verifyPassword(password, await dummyPasswordHash());
       recordLoginFailure(ip);
       await writeAudit({

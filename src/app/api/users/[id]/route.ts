@@ -1,3 +1,4 @@
+import { assertNotSystemAccount } from "@/lib/system-user";
 import { prisma } from "@/lib/db";
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { toUserDTO } from "@/lib/api/dto";
@@ -26,6 +27,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   return withApiError(async () => {
     const session = await requirePermission(req, "用戶管理", "update");
     const { id } = await params;
+    await assertNotSystemAccount(id);
     const before = await prisma.user.findUniqueOrThrow({ where: { id } });
     const body = await readJson(req);
     const parsed = parseBody(UserUpdateSchema, body);

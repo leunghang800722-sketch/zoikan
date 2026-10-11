@@ -9,6 +9,14 @@ import { writeAudit } from "@/lib/audit";
 import { AutoCollector } from "@/lib/month-close/auto/context";
 import { runAutoPricing } from "@/lib/month-close/auto/pricing";
 import { buildAutoReport } from "@/lib/month-close/auto/report";
+import bcrypt from "bcryptjs";
+import { countOpenFor } from "@/lib/triage/session";
+import { runTriageReminder } from "@/lib/jobs/triage-reminder";
+import { POST as unvoidRoute } from "@/app/api/users/[id]/unvoid/route";
+import { POST as voidRoute } from "@/app/api/users/[id]/void/route";
+import { POST as resetRoute } from "@/app/api/users/[id]/reset-password/route";
+import { PATCH as patchUserRoute } from "@/app/api/users/[id]/route";
+import { GET as notifyGet, PATCH as notifyPatch } from "@/app/api/users/[id]/notify/route";
 import { POST as loginRoute } from "@/app/api/auth/login/route";
 import { GET as getSession } from "@/app/api/triage/sessions/[id]/route";
 import { GET as listSessions } from "@/app/api/triage/sessions/route";
@@ -110,5 +118,66 @@ describe("P8 M1 系統帳號", () => {
     await writeAudit({ actorUserId: null, tableName: "month_close_runs", rowId: id, action: "create", after: { id, by_job: "j", auto_source: "a", batch_id: "b", import_via: "x", copied_from: "c", unlock_reason: "u", other: 1 } });
     const a = await prisma.auditLog.findFirstOrThrow({ where: { rowId: id } });
     expect(a.after).toEqual({ id, by_job: "j", auto_source: "a", batch_id: "b" });
+  });
+
+  it("M3：users 管理 route 對系統帳號一律 403 system_account（unvoid／reset-password／PATCH／void／notify）", async () => {
+    const sysId = await ensureSystemUser();
+    const boss = await sessionCookieForUser(fx.userIds["老闆"]);
+    const p = { params: Promise.resolve({ id: sysId }) };
+    const calls: [string, Response][] = [
+      ["unvoid", await unvoidRoute(req("http://x/u", boss, "POST"), p)],
+      ["reset-password", await resetRoute(req("http://x/r", boss, "POST"), { params: Promise.resolve({ id: sysId }) })],
+      ["PATCH", await patchUserRoute(req("http://x/p", boss, "PATCH", { name: "x" }), { params: Promise.resolve({ id: sysId }) })],
+      ["void", await voidRoute(req("http://x/v", boss, "POST", { reason: "x" }), { params: Promise.resolve({ id: sysId }) })],
+      ["notify GET", await notifyGet(req("http://x/n", boss), { params: Promise.resolve({ id: sysId }) })],
+      ["notify PATCH", await notifyPatch(req("http://x/n", boss, "PATCH", { notify_email: "a@b.test" }), { params: Promise.resolve({ id: sysId }) })],
+    ];
+    for (const [name, res] of calls) {
+      expect(res.status, name).toBe(403);
+      expect(((await res.json()) as { error: string }).error, name).toBe("system_account");
+    }
+    const u = await prisma.user.findUniqueOrThrow({ where: { id: sysId } });
+    expect(u.status).toBe("inactive");
+    expect(u.passwordHash).toBe("!system-account-no-login");
+    // 一般用戶唔受影響
+    expect((await unvoidRoute(req("http://x/u", boss, "POST"), { params: Promise.resolve({ id: fx.userIds["會計"] }) })).status).toBe(200);
+  });
+
+  it("M3：即使被改成 active＋有正確 bcrypt 密碼，系統帳號登入都係 401", async () => {
+    const sysId = await ensureSystemUser();
+    await prisma.user.update({ where: { id: sysId }, data: { status: "active", passwordHash: await bcrypt.hash("Sys-Pass-123", 4) } });
+    try {
+      const res = await loginRoute(new Request("http://x/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tel: SYSTEM_USER_TEL, password: "Sys-Pass-123" }) }));
+      expect(res.status).toBe(401);
+      expect(res.headers.get("set-cookie") ?? "").not.toContain("session");
+    } finally {
+      await ensureSystemUser();
+    }
+  });
+
+  it("系統擁有嘅 session 只俾有「一鍵結算:create」嘅人睇／答；主管 badge／列表唔計", async () => {
+    const { sessionId } = await systemOwnedSession();
+    const mgrCookie = await sessionCookieForUser(fx.userIds["主管"]);
+    expect((await getSession(req("http://x/s", mgrCookie), { params: Promise.resolve({ id: sessionId }) })).status).toBe(403);
+    const list = (await (await listSessions(req("http://x/api/triage/sessions", mgrCookie))).json()) as { sessions: { id: string }[]; open_total: number };
+    expect(list.sessions.map((x) => x.id)).not.toContain(sessionId);
+    expect(list.open_total).toBe(0);
+    const mgr = await prisma.user.findUniqueOrThrow({ where: { id: fx.userIds["主管"] }, include: { role: true } });
+    expect(await countOpenFor({ userId: mgr.id, roleId: mgr.roleId, baseRole: mgr.role.baseRole as never })).toBe(0);
+    const acc = await prisma.user.findUniqueOrThrow({ where: { id: fx.userIds["會計"] }, include: { role: true } });
+    expect(await countOpenFor({ userId: acc.id, roleId: acc.roleId, baseRole: acc.role.baseRole as never })).toBeGreaterThan(0);
+  });
+
+  it("triage_reminder：系統帳號擁有嘅過期題通知老闆＋會計（唔係系統帳號）", async () => {
+    const sysId = await ensureSystemUser();
+    const now = new Date("2026-10-11T01:00:00Z");
+    const sess = await prisma.triageSession.create({ data: { sourceType: "month_close", sourceRef: "p8-m3-rem", ownerUserId: sysId, createdBy: sysId } });
+    await prisma.triageQuestion.create({ data: { sessionId: sess.id, kind: "month_close_pricing", groupKey: "g1", title: "t", status: "open", createdAt: new Date(now.getTime() - 5 * 86400000) } });
+    const r = await runTriageReminder(now);
+    expect(r.summary).toMatchObject({ owners_notified: 1, stale_questions: 1 });
+    const ns = await prisma.appNotification.findMany({ where: { kind: "triage_reminder" } });
+    expect(ns).toHaveLength(1);
+    expect(ns[0]!.audience).toEqual(["老闆", "會計"]);
+    expect(ns[0]!.dedupeKey).toBe("triage_reminder:system:2026-10-11");
   });
 });

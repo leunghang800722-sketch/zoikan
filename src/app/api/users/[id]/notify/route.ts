@@ -1,5 +1,6 @@
 // P7.1：`GET/PATCH /api/users/:id/notify`——通知電郵＋每類通知 email 開關。
 // 本人改自己；老闆改所有人。電郵屬聯絡資料：唔入 ai schema／AI 工具輸出，audit 只記「已改」（唔存電郵值）。
+import { assertNotSystemAccount } from "@/lib/system-user";
 import { prisma } from "@/lib/db";
 import { requireSession, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -24,6 +25,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   return withApiError(async () => {
     const session = await requireSession(req);
     const { id } = await params;
+    await assertNotSystemAccount(id);
     assertSelfOrBoss(session, id);
     const u = await prisma.user.findUnique({ where: { id }, select: { notifyEmail: true, notifyPrefs: true } });
     if (!u) throw NotFound();
@@ -35,6 +37,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   return withApiError(async () => {
     const session = await requireSession(req);
     const { id } = await params;
+    await assertNotSystemAccount(id);
     assertSelfOrBoss(session, id);
     const input = parseBody(NotifySettingsSchema, await readJson(req));
     const before = await prisma.user.findUnique({ where: { id }, select: { notifyEmail: true, notifyPrefs: true } });

@@ -2,6 +2,7 @@
 import { prisma } from "@/lib/db";
 import { hkDateStr } from "@/lib/dates";
 import { SUPPLEMENTARY_KINDS } from "@/lib/triage/types";
+import { getSystemUserId } from "@/lib/system-user";
 import { createNotification } from "@/lib/notify/create";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
@@ -29,6 +30,7 @@ export async function runTriageReminder(now: Date): Promise<JobResult> {
     perOwner.set(owner, cur);
   }
   const today = hkDateStr(now);
+  const sysId = await getSystemUserId();
   let notified = 0;
   let total = 0;
   for (const [owner, v] of perOwner) {
@@ -39,8 +41,9 @@ export async function runTriageReminder(now: Date): Promise<JobResult> {
       title: `${v.n} 題待答超過 ${STALE_DAYS} 日`,
       body: `你有 ${v.n} 題導入分診題超過 ${STALE_DAYS} 日未答（最舊 ${days} 日），請到「待答問題」處理。`,
       href: "/triage",
-      audience: [owner],
-      dedupeKey: `triage_reminder:${owner}:${today}`,
+      // 系統帳號（inactive，收唔到通知）擁有嘅題 → 通知老闆＋會計（有「一鍵結算:create」嘅角色）
+      audience: owner === sysId ? ["老闆", "會計"] : [owner],
+      dedupeKey: owner === sysId ? `triage_reminder:system:${today}` : `triage_reminder:${owner}:${today}`,
     });
     if (r.created) notified++;
   }
