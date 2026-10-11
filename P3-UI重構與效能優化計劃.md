@@ -976,3 +976,30 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - merge main `abf1390`；部署 `6acb77eeda7cf920c2638d69` RUNNING 11:56Z：migration `20261014000000_p10_cover_shift_rates` applied、scheduler started。
 - **正式站推斷（老闆 Chrome 唯讀，`/settings/cover-rates/infer?months=2026-07,2026-08,2026-09`，冇撳採用）**：`cover_shifts=0`、`tagged_inputs=0`、`untagged_other_allowance_guard_months=0`，建議表 0 行，推斷唔到清單 0，回測 0 人月。原因（同一 session 唯讀核實）：正式站 **長工合約 0 份、7／8／9 月長工糧 0 次 run（頁面顯示「未計過長工糧」）、人手輸入 0 條**——長工糧模組喺正式站從未用過，歷史頂位津貼紀錄只存在於系統外（Payroll Editor／Excel／Drive）。本機 gate 嘅 8 月 fixture 有 6 更頂位係因為 fixture 由 `data/` 開盤資料砌出，正式站 shift_records 未有長工 settlement 標記。
 - 結論：階段 10 功能已就緒（價目表、推斷、回測、草稿），但**反推要等歷史資料入系統**。選項交老闆（見報告）：(A) 將 7／8／9 月 Payroll Editor／長工糧表（Maxwell 名單＋人手津貼）導入系統（Maxwell 導入已有；人手輸入要逐月導入或批量導入功能），再跑推斷；(B) 由老闆／會計直接提供舊價目表（盤×職級×金額）人手輸入；(C) 由本機 `data/` 內舊檔離線反推（只出盤×職級×金額彙總，唔出人名）——視乎 `data/` 有冇相關檔。
+
+## 17. 階段 13 hotfix（2026-10-12 老闆報）：「要你睇」手機載入慢＋全站冇得返
+
+### 17.1 根因、修法、before/after
+**問題一：載入慢**（正式站老闆帳號實測）：`GET /api/triage/sessions/:id?status=open` 對「保安員證件資料導入」session（350 題未答：重要 122、補充 228）回 **680 KB、桌面 Wi-Fi 1.3 秒**；`TriageDialog` 要成份 JSON 到齊先 render 第一題，手機流動數據下載＋parse＋render 350 題 view 物件＝老闆見到嘅「3 分鐘載入緊」。月結 session 只 22 KB 所以唔慢。
+
+**問題二：冇返回**：(a) 兩個對話框只有細「遲啲先答」／「×」，冇「上一題」、冇清楚「返回列表」；(b) 老闆 2026-09-15 要求「加到主畫面」（`manifest.display: "standalone"`＋`appleWebApp.capable`）→ 由主畫面開冇任何瀏覽器 chrome（冇返回掣、冇網址列，iPhone 連邊緣滑返手勢都冇，Android 得系統返回）；頁對頁導航本身正常（全站 `GuardedLink`／`Link`），但 **10 個覆蓋層（6 個 Drawer 用家、`TriageDialog`、`MonthCloseTriageDialog`、`BatchAcceptButton`、`MobileNav` 抽屜）＋AI 助手側欄全部唔入 history**：正式站實測開「繼續答」對話框後 `history.back()` 直接跳出去 `/`，對話框冇咗；(c) 全站冇統一「返回」UI。
+
+| 項目 | 修法 |
+|---|---|
+| P13.1 分頁 | `GET /api/triage/sessions/:id` 加 additive `take`（0–50）＋`cursor`＋`tier`＋`status=open,skipped`；回應加 `next_cursor`；`counts` 照舊整個 session；DTO 只對該頁行計；**冇 `take` 行為一字不變**。兩個對話框用 `useTriagePager`：首屏 5 題，剩 ≤3 題背景 prefetch；counts 取自 session |
+| P13.5 覆蓋層入 history | `useHistoryOverlay(open,onClose,key,enabled)`：開＝`pushState`（同 URL，帶 depth），返回（popstate）只關覆蓋層；UI 關閉 `history.back()`；嵌套後開先關；導航離開留低舊 entry 由全域 popstate 跳過；連撳兩次 close 只返一格。套用 Drawer（一處改 6 個用家）、兩個分診對話框、批量接受、MobileNav 抽屜、AI 側欄（只 `< lg`）。唔改 `manifest.display`、唔改 month-store `replaceState` |
+| P13.2 返回 | 兩個對話框頂部左「‹ 返回列表」（取代「遲啲先答」／×，＝關對話框）；底部「‹ 上一題／下一題 ›」回看本次處理過嘅題：已答只讀（「你答咗…已送出」，改答案留下一輪）、跳過嘅可重新答 |
+| P13.3 記位置 | `sessionStorage` `zk-triage-pos-<session>`；重開顯示「由第 N 題繼續」＋「由頭開始」（連跳過咗嘅一齊攞）；關對話框唔再 `router.refresh()`（只重 fetch 列表 counts；左欄 badge debounce 2 秒） |
+| P13.4 列表卡 | 「重要 N 題」做主數字，「補充 N 題」細字；「繼續答」直接開重要題 |
+| P13.6 全站返回 | 手機頂欄（`< lg`，首頁除外）「‹」；`NavHistoryTracker` 記 sessionStorage 頁面 stack（≤50）；`goBack`：有上一頁 `router.back()`，否則父路徑（`/month-close/files`→`/month-close`），再否則 `/`；6 個頁內「‹ 返回…」改 `BackLink`（同一 `goBack`） |
+
+**Before / after（合成 350 題 session，重要 122／補充 228；Playwright Chromium 375px、CDP 模擬 Fast 3G＝1.6 Mbps／RTT 150 ms）**
+| | before（無 `take`） | after（`take=5`） |
+|---|---|---|
+| 首屏請求大細 | **565,757 bytes** | **9,449 bytes**（<40 KB） |
+| 該請求 3G 時間 | 3,291 ms | — |
+| 撳「繼續答」→ 第一題出現 | ≥3,291 ms（要等成份 JSON） | **約 330 ms**（<1 秒） |
+| 首屏題數 | 350 | 5 |
+| 開對話框後 `history.back()` | 跳出去上一頁（`/`） | 只關對話框，仍喺 `/triage` |
+
+**驗證**：vitest（隔離 PG 54347）247 檔，**3,693 passed｜10 skipped｜0 failed**（新增 p13-1 分頁 10 條、p13-5 history hook 6 條、p13-6 back-nav 3 條）；tsc 0；lint 0 warning；knip 0；`rm -rf .next` 後 build 過；Playwright 全套（隔離 PG 54348、`next start` 3162、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`）見回報；新增 `tests/e2e/p13-triage-mobile.spec.ts` 5 條（350 題 3G 量度、上一題／返回列表／記位置／prefetch、history 返回、月結對話框分頁、手機頂欄「‹」）。既有 `month-close-ui`／`reconcile-ui` 兩個 spec 嘅 `page.route` mock 要接受 query string（`sess1*`），斷言不變。gate：本 hotfix 觸及 triage UI／API，唔觸及計算，見回報。

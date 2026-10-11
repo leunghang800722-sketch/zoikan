@@ -61,6 +61,22 @@ describe("useHistoryOverlay", () => {
     expect(api!.a).toBe(false);
   });
 
+  it("連撳兩次 close（dblclick）只 back 一格", async () => {
+    await act(async () => api!.openA());
+    const before = location.pathname;
+    window.history.pushState({}, "", "/before-overlay-check"); // 唔係 overlay entry：先確認 back 次數用
+    window.history.back();
+    await tick();
+    expect(before).toBe("/p");
+    await act(async () => {
+      api!.closeA();
+      api!.closeA();
+    });
+    await tick();
+    expect(api!.a).toBe(false);
+    expect(location.pathname).toBe("/p");
+  });
+
   it("程式直接關（setOpen false 而 entry 仲喺頂）→ 自動清走 entry", async () => {
     await act(async () => api!.openA());
     await act(async () => api!.navClose()); // closeForNavigation：留低 entry，由 global 跳過
