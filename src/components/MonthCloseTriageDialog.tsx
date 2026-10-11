@@ -4,12 +4,13 @@
 // 兩種版面共用同一套 preview／answer API，並且共用「延遲送出」：撳確認／跳過後 5 秒內可撤銷，
 // 5 秒到／撳下一題／關閉／切 tab／unmount 先真正 call API（同原本 body 一樣）；失敗標返「未送出，請再試」。
 // 冇 PII：盤名、雞頭代號、更種代號、數目。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { MQ_BELOW_LG } from "@/lib/ui/breakpoints";
-import { apiGet, apiRequest, type ApiResult } from "@/lib/ui/api-client";
+import { apiRequest, type ApiResult } from "@/lib/ui/api-client";
+import { useTriagePager } from "@/lib/ui/use-triage-pager";
 import { DeferredSender, type DeferredView } from "@/components/month-close/deferred";
 import { UndoToast } from "@/components/month-close/UndoToast";
 import { UNDO_NOTE_SHORT, humanize, kindChip, shortHuman } from "@/components/month-close/derive";
@@ -48,10 +49,6 @@ interface McQuestion {
     identity_label: string | null;
   };
 }
-interface SessionRes {
-  session: { id: string; status: string; counts: { open: number; answered: number; skipped: number; total: number } };
-  questions: McQuestion[];
-}
 interface Impact {
   can_confirm: boolean;
   summary: string[];
@@ -74,8 +71,11 @@ function useIsMobile(): boolean {
 
 export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = null }: { sessionId: string; onClose: () => void; onChanged?: () => void; month?: string | null }) {
   const mobile = useIsMobile();
-  const [qs, setQs] = useState<McQuestion[] | null>(null);
-  const [initial, setInitial] = useState<McQuestion[] | null>(null);
+  // P13.1：分頁載入（頭 5 題即刻顯示，快到尾背景 prefetch）；每次送出後重載第一頁（server 可能順手作廢咗其他題）
+  const pager = useTriagePager<McQuestion>(sessionId);
+  const qs = pager.items;
+  const [total0, setTotal0] = useState<number | null>(null);
+  const seen = useRef<McQuestion[]>([]); // 本次對話框見過嘅題（按載入次序，唔因重載而消失）
   const [error, setError] = useState<string | null>(null);
   const [failed, setFailed] = useState<Record<string, { title: string; msg: string }>>({});
   const [done, setDone] = useState<string[]>([]);
@@ -90,24 +90,23 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
   const [expanded, setExpanded] = useState(false);
   const [tapLock, setTapLock] = useState(false);
 
-  const load = useCallback(async () => {
-    const res = await apiGet<SessionRes>(`/api/triage/sessions/${sessionId}`);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    const open = res.data.questions.filter((q) => q.status === "open");
-    setQs(open);
-    pruneUnsent(open.map((x) => x.id));
-    setInitial((prev) => prev ?? open);
-  }, [sessionId]);
+  const { reload, loadMore, counts } = pager;
   useEffect(() => {
-    void load();
-  }, [load]);
+    void reload();
+  }, [reload]);
+  useEffect(() => {
+    if (counts && total0 === null) setTotal0(counts.open);
+  }, [counts, total0]);
+  useEffect(() => {
+    if (!qs) return;
+    for (const x of qs) if (!seen.current.some((y) => y.id === x.id)) seen.current.push(x);
+    // 全部頁都到齊先知邊啲仲 open（唔准因為淨係第一頁就清走其他題嘅未送出記錄）
+    if (!pager.hasMore) pruneUnsent(qs.map((x) => x.id));
+  }, [qs, pager.hasMore]);
 
   // 延遲送出：callbacks 經 ref 讀最新值，sender 只建一次。
-  const cbRef = useRef({ onChanged, load });
-  cbRef.current = { onChanged, load };
+  const cbRef = useRef({ onChanged, reload });
+  cbRef.current = { onChanged, reload };
   const senderRef = useRef<DeferredSender | null>(null);
   if (senderRef.current === null) {
     senderRef.current = new DeferredSender({
@@ -139,7 +138,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
         }
         // 跳過唔改報告數字，唔使再 reload 報告（淨係 reload 分診 session）。
         if (item.kind !== "skip") cbRef.current.onChanged?.();
-        void cbRef.current.load();
+        void cbRef.current.reload();
       },
       onFailed: (item, message) => {
         setFailed((f) => ({ ...f, [item.id]: { title: item.title, msg: message } }));
@@ -173,6 +172,9 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
   const pendingId = view.pending?.id ?? null;
   const visible = (qs ?? []).filter((x) => !view.inFlight.includes(x.id) && !results[x.id]);
   const q = visible[0] ?? null;
+  useEffect(() => {
+    if (pager.hasMore && !pager.loadingMore && visible.length <= 2) void loadMore(); // 去到每頁第 3 題就背景攞下一頁
+  }, [pager.hasMore, pager.loadingMore, visible.length, loadMore]);
   useEffect(() => {
     const d = q ? drafts.current[q.id] : undefined;
     setCandidate(d?.candidate ?? "");
@@ -235,7 +237,8 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
   const failedMsg = q ? failed[q.id]?.msg : undefined;
   const failedIds = Object.keys(failed);
   const handled = okN + skipN;
-  const allClear = qs !== null && !q;
+  const loadingQs = qs === null || (!q && (pager.hasMore || pager.loadingMore));
+  const allClear = !loadingQs && !q;
   const waiting = allClear && (view.pending !== null || view.sending);
 
   // 共用答案表單（候選／雞頭／自己輸入價錢）
@@ -336,12 +339,15 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
 
   // ------------------------------------------------------------------ 手機 1e
   if (mobile) {
-    const segs = (initial ?? []).map((x) => {
+    const total = total0 ?? 0;
+    // 超過 60 題唔畫分段條（淨係文字 N / M）；未載入嘅題用預設色
+    const segIds = total > 60 ? [] : Array.from({ length: total }, (_, i) => seen.current[i]?.id ?? `pending-${i}`);
+    const segs = segIds.map((id) => {
+      const x = { id };
       const r = results[x.id];
       const c = r === "ok" ? "var(--zk-success)" : r === "skip" ? "var(--zk-faintest)" : x.id === pendingId ? "var(--zk-primary-light)" : x.id === q?.id ? "var(--zk-primary)" : "var(--zk-border)";
       return { id: x.id, c };
     });
-    const total = initial?.length ?? 0;
     const pos = Math.min(total, handled + (view.pending ? 1 : 0) + (q ? 1 : 0));
     const suggestCand = q?.mc.candidates.find((c) => c.id === q.mc.prefill_candidate_id) ?? null;
     const canAccept = !!q && has("mc_accept") && !!q.mc.prefill_candidate_id;
@@ -379,7 +385,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
         <div className="flex-1 overflow-y-auto px-5 pb-40 pt-5">
           {failedBanner}
           {error && !failedMsg && <Banner kind="error" className="mb-3">{error}</Banner>}
-          {qs === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
+          {loadingQs && <div className="text-zk-base text-zk-muted" data-testid="mc-loading">載入緊…</div>}
           {q && (
             <div className="flex flex-col gap-4">
               {retryTag}
@@ -474,7 +480,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
         <div className="flex items-center justify-between gap-2 border-b border-zk-border px-4 py-3">
           <div>
             <div className="text-zk-md font-semibold">一鍵結算——要你睇</div>
-            {qs && <div className="text-zk-sm text-zk-muted">仲有 {visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.inFlight.length > 0 ? ` · ${view.inFlight.length} 題送出中${view.pending ? "（可撤銷）" : ""}` : ""}</div>}
+            {qs && <div className="text-zk-sm text-zk-muted">仲有 {pager.hasMore ? Math.max(visible.length, (total0 ?? 0) - okN - skipN - view.inFlight.length) : visible.length} 題（每題一句原因，預填建議答案，一撳確認）{view.inFlight.length > 0 ? ` · ${view.inFlight.length} 題送出中${view.pending ? "（可撤銷）" : ""}` : ""}</div>}
           </div>
           <Button variant="ghost" size="sm" type="button" onClick={closeDialog} data-testid="mc-later">
             遲啲先答
@@ -490,7 +496,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
               ))}
             </ul>
           )}
-          {qs === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
+          {loadingQs && <div className="text-zk-base text-zk-muted" data-testid="mc-loading">載入緊…</div>}
           {allClear && (
             <div className="space-y-2 py-6 text-center">
               <div className="text-zk-md font-semibold" data-testid="mc-finish">{waiting ? "等緊最後一題送出（5 秒內可撤銷）" : `${handled} 題處理完`}</div>

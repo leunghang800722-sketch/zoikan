@@ -3,12 +3,13 @@
 // 一條一條問：證據卡 → 揀選項（系統列舉，唔收自由指令）→「預覽影響」→「確認寫入」；
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
-import { apiGet, apiPost, apiRequest, type ApiListResult } from "@/lib/ui/api-client";
+import { apiPost, apiRequest, type ApiListResult } from "@/lib/ui/api-client";
+import { useTriagePager } from "@/lib/ui/use-triage-pager";
 import { choiceBtn } from "@/components/ui/button-classes";
 
 interface Field {
@@ -76,11 +77,6 @@ interface Impact {
   field_outcomes: { field: string; label: string; outcome: string }[];
   notes: string[];
 }
-interface SessionRes {
-  session: { id: string; status: string; counts: { open: number; answered: number; skipped: number; total: number } };
-  questions: Question[];
-}
-
 const SUPP_KINDS = ["field_review", "ext_field_conflict", "ext_field_review"];
 const isSupp = (k: string) => SUPP_KINDS.includes(k);
 
@@ -328,7 +324,10 @@ function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | nu
 }
 
 export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: string; onClose: () => void; onChanged?: () => void }) {
-  const [queue, setQueue] = useState<Question[] | null>(null);
+  // P13.1：分頁載入——頭 5 題即刻顯示，快到尾背景 prefetch；counts 係整個 session 嘅數
+  const impP = useTriagePager<Question>(sessionId, { tier: "important" });
+  const supP = useTriagePager<Question>(sessionId, { tier: "supplementary" });
+  const [since, setSince] = useState({ imp: 0, sup: 0 }); // 自上次攞 counts 之後答咗／跳過幾多
   const router = useRouter();
   const [done, setDone] = useState({ imp: 0, sup: 0 });
   const [suppStarted, setSuppStarted] = useState(false);
@@ -344,24 +343,35 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const res = await apiGet<SessionRes>(`/api/triage/sessions/${sessionId}?status=open`);
-    if (!res.ok) {
-      setError(res.message);
-      setQueue([]);
-      return;
-    }
-    setQueue(res.data.questions);
-  }, [sessionId]);
+  const { reload: reloadImp, loadMore: loadMoreImp } = impP;
+  const { reload: reloadSup, loadMore: loadMoreSup } = supP;
   useEffect(() => {
-    void load();
-  }, [load]);
+    void reloadImp();
+  }, [reloadImp]);
 
   // 重要（要人手／衝突）先問，補充資料（field_review）後問；答完重要嗰批先問要唔要繼續
-  const imp = useMemo(() => (queue ?? []).filter((x) => !isSupp(x.kind)), [queue]);
-  const sup = useMemo(() => (queue ?? []).filter((x) => isSupp(x.kind)), [queue]);
+  const imp = useMemo(() => impP.items ?? [], [impP.items]);
+  const sup = useMemo(() => (suppStarted ? (supP.items ?? []) : []), [supP.items, suppStarted]);
+  const cnt = impP.counts;
+  const impRemaining = cnt ? Math.max(0, cnt.important_open + cnt.restricted_open - since.imp) : 0;
+  const supRemaining = cnt ? Math.max(0, cnt.supplementary_open - since.sup) : 0;
   const q = imp[0] ?? (suppStarted ? (sup[0] ?? null) : null);
-  const gate = queue !== null && !q && sup.length > 0 && !suppStarted;
+  // 第一頁未到，或者空咗但仲有下一頁（prefetch 未到）＝仍然載入緊
+  const loading = impP.items === null || (!imp[0] && (impP.hasMore || impP.loadingMore)) || (suppStarted && !imp[0] && (supP.items === null || (!supP.items[0] && (supP.hasMore || supP.loadingMore))));
+  const queueReady = !loading;
+  const gate = queueReady && !q && supRemaining > 0 && !suppStarted;
+  // prefetch：剩返 ≤2 題（即係去到每頁第 3 題）就背景攞下一頁
+  useEffect(() => {
+    if (impP.hasMore && !impP.loadingMore && imp.length <= 2) void loadMoreImp();
+  }, [impP.hasMore, impP.loadingMore, imp.length, loadMoreImp]);
+  useEffect(() => {
+    if (suppStarted && supP.hasMore && !supP.loadingMore && sup.length <= 2) void loadMoreSup();
+  }, [suppStarted, supP.hasMore, supP.loadingMore, sup.length, loadMoreSup]);
+  // 補充資料第一頁：重要題剩尾幾題（或者撳「繼續做補充資料」）就預先攞，gate 撳落去即刻有題
+  const supNeeded = supRemaining > 0 && supP.items === null && (suppStarted || (!impP.hasMore && imp.length <= 2 && impP.items !== null));
+  useEffect(() => {
+    if (supNeeded) void reloadSup();
+  }, [supNeeded, reloadSup]);
   const reset = () => {
     setChoice("");
     setText("");
@@ -414,10 +424,15 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     const tier = isSupp(q.kind) ? "sup" : "imp";
     onChanged?.();
     router.refresh(); // 左欄 badge 即時更新
-    setQueue((cur) => (cur ? cur.filter((x) => x.id !== q.id) : cur));
+    (tier === "sup" ? supP : impP).drop(q.id);
     setDone((d) => ({ ...d, [tier]: d[tier] + 1 }));
+    setSince((d) => ({ ...d, [tier]: d[tier] + 1 }));
     // 身份確認之後可能即時補開跟進題（長工入職日期／銀行／衝突）：重新載入題目清單，同一個對話框即時見到
-    if (q.kind === "ext_identity_check") await load();
+    if (q.kind === "ext_identity_check") {
+      await reloadImp();
+      if (supP.items !== null) await reloadSup();
+      setSince({ imp: 0, sup: 0 });
+    }
   }
 
   async function onConfirm() {
@@ -463,7 +478,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy;
   const suppNow = !!q && isSupp(q.kind);
   // 總數＝已答＋仍然未答（身份題答完補開跟進題後都計到）
-  const liveTotals = queue === null ? null : { imp: done.imp + imp.length, sup: done.sup + sup.length };
+  const liveTotals = !queueReady || !cnt ? null : { imp: done.imp + impRemaining, sup: done.sup + supRemaining };
   const progressTotal = liveTotals ? (suppNow ? liveTotals.sup : liveTotals.imp) : 0;
   const progressDone = suppNow ? done.sup : done.imp;
 
@@ -488,12 +503,12 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
         </div>
 
         <div className="space-y-3 overflow-y-auto px-4 py-3">
-          {error && <Banner kind="error">{error}</Banner>}
-          {queue === null && <div className="text-zk-base text-zk-muted">載入緊…</div>}
+          {(error ?? impP.error ?? supP.error) && <Banner kind="error">{error ?? impP.error ?? supP.error}</Banner>}
+          {loading && <div className="text-zk-base text-zk-muted" data-testid="triage-loading">載入緊…</div>}
           {gate && (
             <div className="space-y-2 py-6 text-center" data-testid="triage-gate">
               <div className="text-zk-md font-semibold">{liveTotals && liveTotals.imp > 0 ? "重要嘅問題答完喇" : "冇重要嘅問題"}</div>
-              <div className="text-zk-base text-zk-muted">仲有 {sup.length} 題補充資料（逐欄核對英文名、出生日期、電話、地址），唔急，可以遲啲先做。</div>
+              <div className="text-zk-base text-zk-muted">仲有 {supRemaining} 題補充資料（逐欄核對英文名、出生日期、電話、地址），唔急，可以遲啲先做。</div>
               <div className="flex justify-center gap-2">
                 <Button variant="primary" onClick={() => setSuppStarted(true)} data-testid="triage-continue-supp">
                   繼續做補充資料
@@ -502,7 +517,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               </div>
             </div>
           )}
-          {queue !== null && !q && !gate && (
+          {queueReady && !q && !gate && (
             <div className="space-y-2 py-6 text-center">
               <div className="text-zk-md font-semibold">全部處理完</div>
               <div className="text-zk-base text-zk-muted">本批共答咗 {done.imp + done.sup} 條。跳過嘅會留喺「待答問題」，隨時可以再答。</div>

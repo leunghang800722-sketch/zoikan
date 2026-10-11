@@ -15,7 +15,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const actor = await requirePermission(req, "導入分診", "view");
     const { id } = await params;
     const session = await getSessionFor(actor, id);
-    const onlyOpen = new URL(req.url).searchParams.get("status") === "open";
+    const statusParam = new URL(req.url).searchParams.get("status");
+    const onlyOpen = statusParam === "open";
+    const openOrSkipped = statusParam === "open,skipped"; // P13.3「由頭開始」：連跳過咗嘅一齊攞，可以重新答
     // P13.1 分頁（additive）：`take`（0..50，0＝淨攞 counts）＋`cursor`（上一頁最後一題 id）＋`tier`（important｜supplementary）。
     // 冇 `take` ＝舊行為（成個 session 一次過，回應冇 next_cursor）。
     const sp = new URL(req.url).searchParams;
@@ -35,7 +37,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       cursorWhere = { OR: [{ sort: { gt: cur.sort } }, { sort: cur.sort, id: { gt: cur.id } }] };
     }
     const supp = [...SUPPLEMENTARY_KINDS];
-    const where = { sessionId: session.id, ...(onlyOpen ? { status: "open" } : {}), ...(tier === "supplementary" ? { kind: { in: supp } } : tier === "important" ? { kind: { notIn: supp } } : {}), ...cursorWhere };
+    const where = { sessionId: session.id, ...(onlyOpen ? { status: "open" } : openOrSkipped ? { status: { in: ["open", "skipped"] } } : {}), ...(tier === "supplementary" ? { kind: { in: supp } } : tier === "important" ? { kind: { notIn: supp } } : {}), ...cursorWhere };
     const fetched = take === 0 ? [] : await prisma.triageQuestion.findMany({ where, orderBy: [{ sort: "asc" }, { id: "asc" }], ...(take !== null ? { take: take + 1 } : {}) });
     const hasMore = take !== null && take > 0 && fetched.length > take;
     const rows = hasMore ? fetched.slice(0, take!) : fetched;
