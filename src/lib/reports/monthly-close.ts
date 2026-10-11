@@ -494,7 +494,8 @@ export function buildCombinedCostSummaryPure(
   };
 }
 
-export async function writeMonthlyCloseXlsx(outPath: string, month: Date = DEFAULT_REPORT_MONTH) {
+/** P8.3：砌好 workbook（writeMonthlyCloseXlsx／writeMonthlyCloseBuffer 共用同一份）。 */
+async function buildMonthlyCloseWorkbook(month: Date): Promise<{ wb: ExcelJS.Workbook; mainRows: MonthlyCloseSiteRow[]; outsideRows: MonthlyCloseSiteRow[] }> {
   const { mainRows, outsideRows } = await buildMonthlyClose(month);
   const wb = new ExcelJS.Workbook();
 
@@ -571,6 +572,17 @@ export async function writeMonthlyCloseXlsx(outPath: string, month: Date = DEFAU
   noteWs.addRow(["呢份月結總表嘅「長工月薪分攤」／「完整成本」／「完整盈利」呢幾欄，scope 淨係 mainRows/月結以外（P0 對數基準嘅盤）。"]);
   noteWs.addRow(["毛利即時表（GET /api/reports/gross-margin）嘅長工月薪分攤覆蓋全部本月有 shift_records 嘅盤（唔止呢份月結表嘅盤），兩份報表嘅分攤總額可能唔一致，屬設計預期。"]);
 
+  return { wb, mainRows, outsideRows };
+}
+
+export async function writeMonthlyCloseXlsx(outPath: string, month: Date = DEFAULT_REPORT_MONTH) {
+  const { wb, mainRows, outsideRows } = await buildMonthlyCloseWorkbook(month);
   await wb.xlsx.writeFile(outPath);
   return { mainRows, outsideRows };
+}
+
+/** P8.3：同 writeMonthlyCloseXlsx 同一份內容，直接出 Buffer（唔落 tmp 檔）。 */
+export async function writeMonthlyCloseBuffer(month: Date = DEFAULT_REPORT_MONTH): Promise<Buffer> {
+  const { wb } = await buildMonthlyCloseWorkbook(month);
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }

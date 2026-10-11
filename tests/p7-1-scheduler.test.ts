@@ -4,6 +4,7 @@ import { prisma, clearAll } from "./lib/db";
 import { tick, runJob, ensureJobRows, sweepStaleRuns } from "@/lib/scheduler/runner";
 import { withJobLock } from "@/lib/scheduler/lock";
 import { isSchedulerEnabled } from "@/lib/scheduler/start";
+import { isValidCron } from "@/lib/scheduler/cron";
 import type { JobDef } from "@/lib/scheduler/types";
 import { JOBS } from "@/lib/jobs/registry";
 
@@ -31,8 +32,9 @@ describe("P7.1 scheduler", () => {
     expect(row.enabled).toBe(false);
   });
 
-  it("registry 三個 job 都有合法預設 cron", () => {
-    expect(JOBS.map((j) => j.key).sort()).toEqual(["nightly_month_health", "open_next_month", "triage_reminder"]);
+  it("registry 全部 job 都有合法預設 cron", () => {
+    expect(JOBS.map((j) => j.key).sort()).toEqual(["after_lock_exports", "auto_one_click", "lock_ops_digest", "nightly_month_health", "open_next_month", "permit_expiry_weekly", "triage_reminder"]);
+    for (const j of JOBS) expect(isValidCron(j.defaultSchedule)).toBe(true);
   });
 
   it("tick：到期跑一次；同一時間再 tick 冪等（跑 0 次）；之後下次時間再跑", async () => {

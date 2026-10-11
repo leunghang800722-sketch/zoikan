@@ -49,7 +49,7 @@ export function createTriageSummaryTool(ctx: AiToolContext) {
   return betaZodTool({
     name: "triage_summary",
     description:
-      "某個月嘅待答問題（分診題）摘要：按類別／把握程度／狀態計數，加逐題 id、類別、狀態、盤、更種、雞頭顯示名同一句原因。唔包含任何保安員資料（保安員配對題只講格數）。用嚟答「呢個月仲有咩題未答／邊類題最多」。要「導入分診:view」。",
+      "某個月嘅待答問題（分診題）摘要：按類別／把握程度／狀態計數，加逐題 id、類別、狀態、把握程度、有冇系統建議答案（has_suggestion）、盤、更種、雞頭顯示名同一句原因。唔包含任何保安員資料（保安員配對題只講格數）。用嚟答「呢個月仲有咩題未答／邊類題最多」。要「導入分診:view」。",
     inputSchema: z.object({ month: monthParam }).strict(),
     run: async ({ month }) => {
       const denied = await requireModuleOrDenied(ctx, "導入分診");

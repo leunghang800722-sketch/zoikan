@@ -59,7 +59,7 @@ export function optionsFor(d: McQuestionDraft): QuestionOption[] {
 }
 
 /** 開（或者刷新）呢個 run 嘅分診 session。重新執行同一個 run：已答／已跳過嘅題保留，open 題刷新，唔再出現嘅 open 題作廢。 */
-export async function upsertMonthCloseTriage(runId: string, ownerUserId: string, drafts: readonly McQuestionDraft[], ip: string | null, monthIso: string): Promise<{ sessionId: string | null; created: number; total: number }> {
+export async function upsertMonthCloseTriage(runId: string, ownerUserId: string, drafts: readonly McQuestionDraft[], ip: string | null, monthIso: string, auditActorUserId: string = ownerUserId): Promise<{ sessionId: string | null; created: number; total: number }> {
   // 新 run：同月份其他 run 嘅 open month_close_* 題一律作廢（跟 §28：以最新一次運行嘅題為準）。
   {
     const month = monthIso;
@@ -76,7 +76,7 @@ export async function upsertMonthCloseTriage(runId: string, ownerUserId: string,
   const session =
     existing ??
     (await prisma.triageSession.create({
-      data: { sourceType: "month_close", sourceRef: runId, ownerUserId, createdBy: ownerUserId, statsJson: {} },
+      data: { sourceType: "month_close", sourceRef: runId, ownerUserId, createdBy: auditActorUserId, statsJson: {} },
     }));
   let created = 0;
   const keep = new Set(drafts.map((d) => d.groupKey));
@@ -106,7 +106,7 @@ export async function upsertMonthCloseTriage(runId: string, ownerUserId: string,
   await refreshSessionStatus(session.id);
   if (!existing) {
     await prisma.$transaction(async (tx) => {
-      await writeAuditTx(tx, { actorUserId: ownerUserId, tableName: "triage_sessions", rowId: session.id, action: "triage_session_create", after: { source_type: "month_close", owner_user_id: ownerUserId, new_questions: created, total_questions: total, by_kind: byKind, run_id: runId }, ip });
+      await writeAuditTx(tx, { actorUserId: auditActorUserId, tableName: "triage_sessions", rowId: session.id, action: "triage_session_create", after: { source_type: "month_close", owner_user_id: ownerUserId, new_questions: created, total_questions: total, by_kind: byKind, run_id: runId }, ip });
     });
   }
   return { sessionId: session.id, created, total };
@@ -416,7 +416,7 @@ export interface McAnswerOutput {
   note: string | null;
 }
 
-export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, rawAnswer: unknown, previewHash: string | undefined, ip: string | null): Promise<McAnswerOutput> {
+export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, rawAnswer: unknown, previewHash: string | undefined, ip: string | null, meta?: { batchId?: string }): Promise<McAnswerOutput> {
   await assertCanAnswer(actor, q);
   const answer = parseAnswer(rawAnswer);
   const ev = q.evidenceJson as unknown as McEvidence;
@@ -427,7 +427,7 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
     await prisma.$transaction(async (tx) => {
       const n = await tx.triageQuestion.updateMany({ where: { id: q.id, status: { in: ["open", "skipped"] } }, data: { status: "skipped", answerJson: { option: "skip" }, answeredBy: actor.userId, answeredAt: now } });
       if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
-      await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: "skip", writes: false }, ip });
+      await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: "skip", writes: false, ...(meta?.batchId ? { batch_id: meta.batchId } : {}) }, ip });
     });
     const session_status = await refreshSessionStatus(q.sessionId);
     return { status: "skipped", impact: null, session_status, open_remaining: await prisma.triageQuestion.count({ where: { sessionId: q.sessionId, status: "open" } }), result: {}, note: null };
@@ -560,7 +560,7 @@ export async function submitMcAnswer(actor: AuthedSession, q: QRowWithSession, r
       data: { status: "answered", answerJson: JSON.parse(JSON.stringify(answer)), answeredBy: actor.userId, answeredAt: now, impactJson: JSON.parse(JSON.stringify(impact)), applyResultJson: JSON.parse(JSON.stringify(result)) },
     });
     if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
-    await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, run_id: ev.runId, auto_source: `triage:${q.id}`, ...result }, ip });
+    await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, run_id: ev.runId, auto_source: `triage:${q.id}`, ...result, ...(meta?.batchId ? { batch_id: meta.batchId } : {}) }, ip });
   });
   const session_status = await refreshSessionStatus(q.sessionId);
   // 補齊價目卡嘅逐更 journal 只存 DB（apply_result_json），唔經 API 回傳。

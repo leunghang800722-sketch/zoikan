@@ -15,6 +15,7 @@
 // A2（Opus 驗收）：唔准對自己重設——應該用改密碼頁（見
 // src/app/api/auth/change-password/route.ts），否則管理員撳一下自己
 // 就即刻俾自己嘅 session token_version bump 走，變相自己鎖自己出。
+import { assertNotSystemAccount } from "@/lib/system-user";
 import { randomBytes } from "crypto";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
@@ -59,6 +60,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   return withApiError(async () => {
     const session = await requirePermission(req, "用戶管理", "update");
     const { id } = await params;
+    await assertNotSystemAccount(id);
     if (id === session.userId) throw BadRequest("請用改密碼頁改自己嘅密碼");
     const before = await prisma.user.findUnique({ where: { id } });
     if (!before) throw NotFound();

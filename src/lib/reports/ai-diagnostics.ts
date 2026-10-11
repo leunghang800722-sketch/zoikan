@@ -4,6 +4,7 @@
 //
 // 鐵律：每個 function 嘅回傳**自己寫投影**——只有數字、id、盤名、更種代號、雞頭顯示名（`brokerDisplayName()`），
 // **冇保安員姓名／工號／電話／身份證**。唔直接回傳 `questionViews()` 之類帶候選人資料嘅物件。
+import { visibleOwnerIds } from "@/lib/triage/session";
 import { prisma } from "@/lib/db";
 import { monthRange, monthStart as toMonthStart } from "./money";
 import { findOneClickRuns } from "@/lib/month-close/one-click-read";
@@ -90,6 +91,7 @@ interface McEvidenceLike {
   kind?: string;
   summary?: string;
   confidence?: string;
+  prefillCandidateId?: string | null;
   candidates?: Array<{ id?: unknown }>;
   action?: {
     type?: string;
@@ -110,7 +112,7 @@ export async function readTriageSummary(month: Date, actor: Pick<AuthedSession, 
   const sessions = await prisma.triageSession.findMany({
     where: {
       OR: [{ sourceType: "month_close", sourceRef: { in: runs.map((r) => r.id) } }, { sourceType: "postorder_backfill", sourceRef: ym }],
-      ...(boss ? {} : { ownerUserId: actor.userId }),
+      ...(boss ? {} : { ownerUserId: { in: await visibleOwnerIds(actor as AuthedSession) } }),
     },
     select: { id: true, sourceType: true },
   });
@@ -174,6 +176,8 @@ export async function readTriageSummary(month: Date, actor: Pick<AuthedSession, 
       site: siteId ? (siteName.get(siteId) ?? null) : (a?.siteNameRaw ?? a?.siteLabel ?? null),
       shift_type: g?.shiftTypeId ? (stCode.get(g.shiftTypeId) ?? null) : null,
       broker_display: g?.brokerId ? (brokerDisp.get(g.brokerId) ?? null) : null,
+      // P8.2：有系統預填建議答案（可批量接受）；confidence 已喺上面
+      has_suggestion: !!ev.prefillCandidateId && (Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ id?: unknown }>) : []).some((o) => o.id === "mc_accept"),
       summary,
       // 只 id（唔含名／label）：triage_answer 卡嘅 option／candidate_id 一定要用呢度嘅 id
       options: (Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ id?: unknown }>) : []).map((o) => o.id).filter((x): x is string => typeof x === "string" && x !== "skip"),

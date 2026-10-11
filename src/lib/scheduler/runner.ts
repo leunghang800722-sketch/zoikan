@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { nextRun, isValidCron } from "./cron";
 import { withJobLock } from "./lock";
+import { ensureSystemUser } from "@/lib/system-user";
+import { withAuditJob } from "@/lib/audit-job-context";
 import { createNotification } from "@/lib/notify/create";
 import type { JobDef, JobResult } from "./types";
 
@@ -69,7 +71,8 @@ export async function runJob(def: JobDef | undefined, opts: { trigger: "schedule
     let pendingJob: Promise<unknown> | undefined;
     try {
       const ms = jobTimeoutMs();
-      const jobP = def.run({ jobKey: def.key, trigger: opts.trigger, now });
+      const sysActor = await ensureSystemUser(); // 排程期間 actor 為 null 嘅 audit 補系統帳號，並帶 by_job
+      const jobP = withAuditJob(def.key, () => def.run({ jobKey: def.key, trigger: opts.trigger, now }), sysActor);
       pendingJob = jobP;
       result = await Promise.race([
         jobP,

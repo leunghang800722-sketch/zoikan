@@ -12,9 +12,9 @@ describe("buildSystemPrompt() 診斷＋建議動作", () => {
   it("要求診斷時先用診斷工具", () => {
     expect(p).toContain("先用診斷工具查");
   });
-  it("講明 actions 區塊格式同六種 type、最多 5 張", () => {
+  it("講明 actions 區塊格式同七種 type、最多 5 張", () => {
     expect(p).toContain("```actions");
-    for (const t of ["open_page", "triage_answer", "site_set_default_broker", "roster_reparse", "one_click_run", "backfill_from_postorder"]) expect(p).toContain(t);
+    for (const t of ["open_page", "triage_answer", "triage_accept_batch", "site_set_default_broker", "roster_reparse", "one_click_run", "backfill_from_postorder"]) expect(p).toContain(t);
     expect(p).toContain("最多 5 張");
   });
   it("鎖月月份唔准建議寫入動作", () => {

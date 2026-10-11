@@ -4,6 +4,7 @@
 // .../20260911100000_audit_log_no_truncate）——呢度淨係負責寫入。
 import { randomBytes } from "node:crypto";
 import { prisma } from "./db";
+import { currentAuditJob, currentAuditJobActor } from "./audit-job-context";
 import { Prisma } from "@prisma/client";
 import { AUDIT_DTO_BY_TABLE, AUDIT_ROW_MAPPED_ACTIONS, AUDIT_META_PASSTHROUGH_KEYS } from "./api/audit-dto";
 
@@ -134,17 +135,40 @@ function toAuditSafeValue(tableName: string, action: AuditAction, value: unknown
     }
     return { ...dto, ...meta };
   }
-  return "id" in row ? { id: row.id } : undefined;
+  // P8.1／驗收 M1：未登記 DTO 嘅表只保留最窄白名單 key（非 PII 標記）
+  if (!("id" in row)) return undefined;
+  const meta: Record<string, unknown> = {};
+  for (const k of UNMAPPED_META_KEYS) {
+    if (k in row) meta[k] = row[k];
+  }
+  return { id: row.id, ...meta };
+}
+
+function withJobMarkerSafe(input: WriteAuditInput): unknown {
+  // by_job 喺 DTO mapping 之後先加（mapper 會剝走未知 key；by_job 係白名單 meta）
+  const safe = toAuditSafeValue(input.tableName, input.action, input.after);
+  return withJobMarker(safe);
+}
+
+const UNMAPPED_META_KEYS = ["by_job", "auto_source", "batch_id"] as const;
+
+/** 排程 job 執行期間（withAuditJob）：after 一律帶 by_job（after 係物件就合併，冇／非物件就當 { by_job }）。 */
+function withJobMarker(after: unknown): unknown {
+  const job = currentAuditJob();
+  if (!job) return after;
+  if (after === undefined || after === null) return { by_job: job };
+  if (Array.isArray(after) || typeof after !== "object") return after;
+  return { ...(after as Record<string, unknown>), by_job: job };
 }
 
 function toAuditCreateData(input: WriteAuditInput): Prisma.AuditLogUncheckedCreateInput {
   return {
-    actorUserId: input.actorUserId,
+    actorUserId: input.actorUserId ?? currentAuditJobActor() ?? null,
     tableName: input.tableName,
     rowId: input.rowId,
     action: input.action,
     before: toJson(toAuditSafeValue(input.tableName, input.action, input.before)) ?? Prisma.JsonNull,
-    after: toJson(toAuditSafeValue(input.tableName, input.action, input.after)) ?? Prisma.JsonNull,
+    after: toJson(withJobMarkerSafe(input)) ?? Prisma.JsonNull,
     ip: input.ip ?? null,
   };
 }

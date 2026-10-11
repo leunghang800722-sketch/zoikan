@@ -15,6 +15,7 @@
 // 頁首「角色」FilterChip（README §16）：users 本身已經全量載入
 // （`?take=500`），呢個 filter 淨係喺已經攞到手嘅列表客戶端篩，唔使
 // 加 API 參數。
+import { SYSTEM_USER_TEL } from "@/lib/system-user-const";
 import { DrawerFormFooter } from "@/components/ui/DrawerFormFooter";
 import { useEffect, useMemo, useState } from "react";
 import { apiPatch, apiPost, apiGetAll } from "@/lib/ui/api-client";
@@ -288,6 +289,11 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                     {statusPill(r)}
                   </td>
                   <td className={`${tableCls.tdNum} max-sm:border-0 max-sm:px-0 max-sm:py-1 max-sm:text-left`}>
+                    {r.tel === SYSTEM_USER_TEL ? (
+                      <span data-testid="user-system-badge" className="text-zk-sm text-zk-muted">
+                        <Pill variant="neutral">系統</Pill> 排程用，唔可登入、唔可修改
+                      </span>
+                    ) : (
                     <div className="flex flex-wrap items-center justify-end gap-1.5 max-sm:justify-start">
                       <Button variant="secondary" size="sm" type="button" onClick={() => openEdit(r)}>
                         編輯
@@ -335,6 +341,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                         <ConfirmVoidButton label="停用" confirmLabel="確認停用" onConfirm={(reason) => onVoid(r.id, reason)} />
                       )}
                     </div>
+                    )}
                   </td>
                 </tr>
               );
