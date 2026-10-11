@@ -66,7 +66,9 @@ test.describe("P2-C 系統頁", () => {
 
     // 揀「老闆」（README 矩陣示例——「自己保安員」全禁），保證見到至少
     // 一格硬性禁止。
+    const permsResponse = page.waitForResponse((r) => /\/api\/roles\/[^/]+\/permissions/.test(r.url()) && r.status() === 200);
     await page.getByTestId("role-list-item").filter({ hasText: "老闆" }).first().click();
+    await permsResponse;
 
     const checkboxes = page.getByTestId("role-matrix-checkbox");
     await expect(checkboxes.first()).toBeVisible({ timeout: 15_000 });

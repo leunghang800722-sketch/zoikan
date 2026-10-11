@@ -2458,9 +2458,9 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 | 第 5 次錯密碼觸發鎖定嗰一下 | 423 | 401（同上） |
 | 未註冊電話／停用帳號／密碼錯 | 401（同一訊息） | 401（不變；回應時間亦對齊，未註冊同鎖定中都會跑一次 bcrypt） |
 | 失敗計數 | 讀→加 1→寫（並發可繞過） | 原子 `increment` 預留序號；並發 20 個錯密碼請求最多 5 個被驗，其餘直接 401；成功登入／鎖定過期／管理員重設密碼先清零 |
-| 同一 IP 短時間大量失敗 | 無限制 | 每 IP token bucket（容量 10、每分鐘補 10；只有失敗先扣）用晒 → **429 `too_many_requests`＋`Retry-After`**；全局另有 300 次／分鐘請求上限。冇 IP（本機直連）跳過每 IP 限速 |
+| 同一 IP 短時間大量失敗 | 無限制 | 每 IP token bucket（容量 10、每分鐘補 10；只有失敗先扣）用晒 → **429 `too_many_requests`＋`Retry-After`**；全局另有 1000 次失敗／分鐘上限（成功登入唔扣）。冇 IP（本機直連）跳過每 IP 限速 |
 
-限制：限速狀態喺 process 記憶體（多 instance 各自計、重啟清零）；IP 取自 `X-Forwarded-For` 第一段（需要可信 proxy）。
+限制：限速狀態喺 process 記憶體（多 instance 各自計、重啟清零）；IP 取自 `X-Forwarded-For` 最右一段（平台 proxy 加嗰段）。`POST /api/month-closes/:id/lock` 等唔到長寫入 tx 釋放（預設 10 秒）→ 409 `lock_busy`。
 
 ### AI 助手（H7／H9）
 

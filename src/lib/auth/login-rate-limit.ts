@@ -2,12 +2,12 @@
 //   - 每個 IP：容量 10、每分鐘補 10 個 token；只有「失敗」嘅登入先扣 token
 //     （成功登入唔扣，免得同一 IP 後面好多同事／e2e 連續登入被誤擋）。token
 //     用晒（<1）之後嗰個 IP 嘅登入請求一律 429＋Retry-After，唔會再驗密碼。
-//   - 全局：容量 300、每分鐘補 300 個 token，每個登入請求（唔論成敗）扣 1，
-//     防止分散 IP 嘅 bcrypt 耗 CPU。
+//   - 全局：容量 1000、每分鐘補 1000 個 token，同樣只有「失敗」先扣（成功登入唔扣，
+//     偽造多個 IP 都唔會令正常登入 429）；防止分散 IP 嘅 bcrypt 暴力耗 CPU。
 //   - 冇 IP（getClientIp 回 null——本機直連／測試）→ 跳過每 IP 限速，淨係
 //     計全局；帳號層面嘅鎖定（原子計數，見 login route）照樣有效。
 // 限制（寫明）：(1) 狀態喺 process 記憶體，多 instance／重啟會各自計、重啟清零；
-// 要跨 instance 要搬去 DB／Redis。(2) IP 取自 X-Forwarded-For 第一段
+// 要跨 instance 要搬去 DB／Redis。(2) IP 取自 X-Forwarded-For 最右一段
 // （getClientIp，同 audit 一致）——未有可信 proxy 嘅環境可被偽造；部署喺
 // Zeabur 由平台 proxy 加 header 嘅情況下先可靠。
 interface Bucket {
@@ -17,8 +17,8 @@ interface Bucket {
 
 const IP_CAPACITY = 10;
 const IP_REFILL_PER_MS = 10 / 60_000;
-const GLOBAL_CAPACITY = 300;
-const GLOBAL_REFILL_PER_MS = 300 / 60_000;
+const GLOBAL_CAPACITY = 1000;
+const GLOBAL_REFILL_PER_MS = 1000 / 60_000;
 const MAX_TRACKED_IPS = 10_000;
 
 const ipBuckets = new Map<string, Bucket>();
@@ -59,12 +59,13 @@ export function checkLoginAllowed(ip: string | null, now = Date.now()): LoginGat
     refill(b, IP_CAPACITY, IP_REFILL_PER_MS, now);
     if (b.tokens < 1) return { ok: false, retryAfterSeconds: Math.ceil((1 - b.tokens) / IP_REFILL_PER_MS / 1000) };
   }
-  globalBucket.tokens -= 1;
   return { ok: true };
 }
 
 /** 登入失敗（密碼錯／未註冊／鎖定中）時 call：扣呢個 IP 一個 token。 */
 export function recordLoginFailure(ip: string | null, now = Date.now()): void {
+  refill(globalBucket, GLOBAL_CAPACITY, GLOBAL_REFILL_PER_MS, now);
+  globalBucket.tokens = Math.max(0, globalBucket.tokens - 1);
   if (!ip) return;
   const b = ipBucket(ip, now);
   refill(b, IP_CAPACITY, IP_REFILL_PER_MS, now);
