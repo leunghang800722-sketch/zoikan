@@ -12,6 +12,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { assertMonthRangeNotLockedTx } from "@/lib/month-lock";
+import { ApiError } from "@/lib/api/errors";
 import { parseMaxwellWorkbook, parseMaxwellCsv, matchMaxwellRows, type MaxwellStaffRow, type GuardCandidate, type ParsedMaxwellWorkbook, type MaxwellCsvFile } from "./maxwell-import";
 
 export interface MaxwellImportSummary {
@@ -22,6 +23,8 @@ export interface MaxwellImportSummary {
   contractsCreated: number;
   contractsUpdated: number;
   skippedManualContract: Array<{ guardId: string; name: string | null }>;
+  /** P9.2：合約生效區間覆蓋已鎖月份 → 逐行跳過（其餘照導入）。 */
+  skippedLockedRows: number;
   guardFieldsFilled: number;
   warnings: string[];
 }
@@ -85,6 +88,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     contractsCreated: 0,
     contractsUpdated: 0,
     skippedManualContract: [],
+    skippedLockedRows: 0,
     guardFieldsFilled: 0,
     warnings: [...warnings],
   };
@@ -92,7 +96,24 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
   for (const m of matches) {
     if (!m.guardId) continue;
     const row = m.row;
+    // P9.2：遇已鎖月份只跳過呢一行（該行 tx 回滾；permission_denied audit 已獨立寫入），其餘照導入
+    const filledBefore = summary.guardFieldsFilled;
+    try {
+      await importOneRow(m, row);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "month_locked") {
+        summary.guardFieldsFilled = filledBefore; // 該行 tx 已回滾
+        summary.skippedLockedRows += 1;
+        summary.warnings.push(`${row.name ?? row.staffNo ?? "（未知）"}：合約生效區間覆蓋已鎖月份，呢行跳過（${e.message}）`);
+        continue;
+      }
+      throw e;
+    }
+  }
 
+  return summary;
+
+  async function importOneRow(m: (typeof matches)[number], row: MaxwellStaffRow): Promise<void> {
     await prisma.$transaction(async (tx) => {
       const guard = await tx.guard.findUnique({ where: { id: m.guardId! } });
       if (!guard) return;
@@ -187,6 +208,4 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
       if (existingAuto.length) summary.contractsUpdated += 1;
     });
   }
-
-  return summary;
 }

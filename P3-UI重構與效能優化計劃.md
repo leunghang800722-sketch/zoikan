@@ -873,3 +873,50 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - merge main `3ff5466`；部署 `6acb464fc0a5252069b8453c` RUNNING 08:24Z：2 個 migration applied、`[db:ensure-system-user] 系統排程帳號就緒（inactive，唔可登入）`、`[scheduler] started`。
 - **正式站首個 tick（08:30Z）**：`auto_one_click` → `skipped`（baseline，冇新 run）；`after_lock_exports` → ok：7 月、8 月（31 日內鎖）各生成 3 份檔（月結總表 14 KB、糧明細 93 KB、Postorder 50 KB；autopay 冇——該兩月冇長工糧 run）；`lock_ops_digest` → ok：7、8 月摘要已推送。4 條 `[notify] email disabled`（SMTP 未設）。
 - 老闆 Chrome 核對：`/settings/jobs` 7 個 job（`open_next_month` 10-25 09:00、`nightly_month_health` 21:00、`triage_reminder`／`permit_expiry_weekly` 明早 09:00、三個 5 分鐘 job）；手動試跑 `permit_expiry_weekly`（唯讀）→ ok：牌照 30 日內到期 3 人、平安卡 2 人、QAS 0、已過期仍排更 0；系統帳號 API 顯示 inactive；未讀通知 7 條（證件週報、7／8 月摘要、7／8 月檔已備妥、待答提醒、9 月體檢紅項）。**冇試跑** `auto_one_click`／`after_lock_exports`／`lock_ops_digest`（已由排程自然跑過）。
+
+## 13. 階段 9 長工糧草稿（2026-10-11 老闆決定）：病假草稿＋勤工獎合資格清單＋三個細補
+
+**老闆規則（寫死）**：**唔准自動加任何金額**。系統只出「草稿」同「合資格清單」，會計確認之前唔計糧；賣假、固定扣款／加項、頂位金額全部維持人手（頂位金額規則等老闆另答）。範圍只有：病假（SL）草稿、年假／無薪假（先核清楚 aggregate 已自動計定未）、勤工獎合資格清單；另加三個細補（AI 每日額度原子、`POST /api/users` 擋系統帳號電話、Maxwell 導入遇鎖月逐行跳過）。執行：Sonnet 5.5（`claude-sonnet-5-5`），branch `p9-longterm-drafts`（from main `6a56d4f`），只 push 唔 merge。
+
+### 13.1 落實紀錄
+
+**先搞清楚 aggregate 而家點計（對照表）**
+
+| 項目 | 而家點計 | 草稿做乜 |
+|---|---|---|
+| NL／NPL 無薪假 | 更表 leave 代號自動讀入，逐日按日薪扣（日薪制唔另扣）；唔使人手輸入 | **唔生成**（已自動計） |
+| AL 年假 | 更表 AL 日數自動累積（寫回 `alTaken`）；在職唔扣唔補；離職自動結算（`alLeaverPayout`）；`leaver_settlement` input 只係覆蓋金額（會計用終止合約計算表核實先用） | **唔生成**（已自動計；離職覆蓋金額屬人手金額，唔草稿） |
+| SH 法定假 | 更表 SH 日子自動按合約 `statutoryHolidayPaidFrom` 計 | 唔生成 |
+| **SL 病假** | 更表 SL 日子自動讀入，但 4/5 判定要會計開 `kind=leave` 病假段＋核醫生紙；冇對應輸入就當無薪假扣（`uncoveredSl`） | **生成病假段草稿**：連續日期合成一段（`date_from`／`date_to`）、金額空、醫生紙＝「未核」、`draft_source=roster_leave:SL`、`draft_evidence={dates, roster_upload_ids}`（無姓名）。確認（醫生紙仍未核）＝金額同冇輸入一樣；會計逐條核實醫生紙先改變 4/5 |
+| 勤工獎 | 全人手：`special_allowance` 輸入＋金額 | **唔建 input、唔填金額**；只出「合資格清單」（更表該月冇 SL／NL／NPL；系統冇遲到紀錄，所以遲到未能核對，頁面同通知都寫明）＋通知「N 人合資格」 |
+| 賣假／頂位（`other_allowance`）、制服、扣款、津貼 | 全人手金額 | 不變（人手） |
+
+**P9.1 草稿**
+- Migration `20261013000000_p9_longterm_input_drafts`（只新增、冪等）：enum `LongtermInputStatus`、`longterm_payroll_inputs` 加 `status`（預設 `confirmed`，舊資料不變）、`draft_source`、`draft_evidence`、`confirmed_at`／`confirmed_by`、索引 `(month,status)`。
+- `aggregate.ts` 讀 inputs 加 `status:"confirmed"` 過濾——草稿對 Gross 零影響（test 證明 Gross／4/5／notes 全部不變）。
+- `src/lib/longterm-payroll/drafts.ts`：`generateLongtermInputDrafts`（冪等；dedupe＝同人同月同日期集合；更表改咗→更新未確認草稿、已確認嘅唔郁但計入 `mismatches`；會計刪走嘅草稿唔再生成；會計改過（`edited`）嘅草稿唔覆蓋；已被確認輸入覆蓋咗嘅日子唔再出草稿；鎖月唔生成）、`listAttendanceBonusEligible`。
+- Job `longterm_input_drafts`（每日 21:30，本月＋上月；`auto_one_click` 完成後亦對該月跑一次，失敗唔影響結算）：actor＝排程系統帳號、audit 帶 `by_job`；通知會計「N 條草稿待確認」「更表同已確認輸入唔同」「勤工獎合資格 N 人」（body 只有月份／數字，經 `assertNoPii`）。
+- API（additive）：`GET /api/longterm/inputs?status=`、`PATCH …/:id` 加 `status:"confirmed"`、`POST …/confirm-batch`（≤50、鎖月整批 403）、`GET /api/longterm/attendance-bonus-eligible`。權限同現有 inputs（長工糧）。
+- UI（長工糧頁「人手輸入」tab）：頂部「草稿」面板（標「草稿」、來源、日期、醫生紙；確認／改咗再確認／刪除；「全部確認」5 秒撤銷、自動分批 50）＋「勤工獎合資格清單」面板（只列名）。
+
+**P9.2 三個細補**
+- `ai-rate-limit.ts`：`assertUnderDailyLimit` 改原子（`pg_advisory_xact_lock(hashtext('ai-daily:'+userId))`＋新表 `ai_daily_usage`；取 `max(計數, audit 次數)` 再預留 +1）；並發 20 個、已用 90／上限 100 → 只放行 10 個。叫 LLM 前失敗（503／解析失敗）退還一次。
+- `POST /api/users`：`tel === SYSTEM_USER_TEL` → 403 `system_account`（系統帳號建咗未都擋）。
+- Maxwell 導入：遇已鎖月份只跳過該行（summary `skippedLockedRows`＋warnings），其餘照導入（既有 p6-1c test 由「整個 reject」改為「逐行跳過」）。
+
+**行為改變**：(1) 長工糧「人手輸入」tab 多草稿面板同合資格清單；(2) 每日 21:30 多一個 job（`/settings/jobs` 可關）；(3) AI 每日額度檢查喺叫 LLM 前已預留一次；(4) Maxwell 導入遇鎖月唔再整個失敗；(5) 其餘計糧路徑不變（confirmed 照計）。
+
+**每月慳幾多步（估算，非實測）**：以每月約 8 段更表 SL 計，原本每段「揀人→揀種類→填日期→勾醫生紙→新增」≈5 個動作＝約 40 個動作；而家＝開頁＋「全部確認」＋逐段核實醫生紙（只對真係有紙嗰啲，≈2–3 個動作／段）。勤工獎由「逐人對更表有冇 SL／NL」變成「睇清單、填金額」。
+
+**驗證**：vitest（隔離 PG 54359）241 檔全 passed，**3,657 passed｜0 failed**（階段 8 為 3,632；新增 p9-1 11 條＋p9-2 4 條，既有 p6-1c／p7-1 test 同步；worktree 接上 data／venv 後原 skip 嘅 test 亦跑）；`gate:locked-months`（隔離 dev PG 54389）**12/12 rc=0**，`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15 不變），snapshot 5,080 數字葉 multiset 同階段 4 基線逐個相同；tsc 0；lint 0 warning；knip 0；build 過；Playwright（隔離 PG 54389、`next start` 3170、`SCHEDULER_ENABLED=0`、`AI_LLM=fake`）**232 passed｜4 skipped｜0 failed**（首次全跑 231／1 failed＝新 e2e spec 自己斷言用錯 id，修正後該 spec 同 longterm-payroll spec 重跑通過）；本機 `run-now` 試跑 `longterm_input_drafts`（seed 假資料：3 條草稿、勤工獎合資格 1 人）截圖核對。
+
+**已知限制**：(1) 勤工獎唔核遲到（系統冇遲到欄）；合資格清單只計 active 保安員（inactive 已排除），但未排除「當月中途入職／離職」嘅人（面板已寫明，由會計判斷）；(2) AL／NL／SH 不出草稿（已自動計）；(3) SL 連續段只合併日曆連續日（中間隔 RD 會分兩段）；(4) 月份鎖咗之後草稿唔再生成亦唔可確認；(5) AI 每日額度「預留」喺 LLM 呼叫前，呼叫中途失敗（非 503）唔退還（保守，寧少勿多）。
+
+### 13.2 驗收後修正（Opus 5.5 唔通過 → 1 必修＋一併項，Sonnet 5.5，同 branch）
+- **M1 重疊確認會重複扣錢**：新 `findConfirmedLeaveOverlap`（同 guard／月、未作廢、`confirmed`、`kind=leave`、日期段重疊）。`PATCH inputs/:id`（用改完後日期）確認草稿重疊 → 409 `overlaps_confirmed_leave`；`confirm-batch` 該條 `skipped`（reason「同已確認病假段重疊」）；人手 `POST inputs` 新增 `kind=leave` 重疊亦 409。test：人手 10–14＋草稿 10–14 → PATCH 409、batch skipped 1、Gross 不變、改走日期後可確認、人手新增重疊 409。
+- **(ii)-2** `auto_one_click` 觸發草稿改用 `withJobLock(longterm_input_drafts)`，攞唔到就跳過並喺 summary 記 `drafts:"skipped_locked"`（test）。
+- **(ii)-3** 誤報：改過（`edited`）嘅已確認輸入唔再同更表原始日期比對；PATCH 改草稿日期時同步更新 `draft_evidence.dates`（test：縮短段後 `mismatches=0`）。
+- **(ii)-4** 勤工獎通知只發上月；面板加「中途入職／離職未排除，請自行判斷」；§13.1 限制已改正（test：本月唔推、上月推）。
+- **(ii)-5** e2e 撤銷步驟用 `page.on("request")` 斷言非 GET 請求為 0。
+- **(ii)-6** Maxwell 導入通知顯示「N 行因鎖月跳過」。
+- 驗證：vitest 241 檔、**3,661 passed｜0 failed**；tsc 0、lint 0 warning、knip 0、build 過；`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72 不變）；`longterm-drafts`＋`longterm-payroll` e2e 5/5。

@@ -256,7 +256,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     shiftsByGuard.set(r.guardId, arr);
   }
 
-  const inputs = await client.longtermPayrollInput.findMany({ where: { month: start, guardId: { in: guardIds }, voidedAt: null } });
+  const inputs = await client.longtermPayrollInput.findMany({ where: { month: start, guardId: { in: guardIds }, voidedAt: null, status: "confirmed" } }); // P9.1：草稿未確認唔計糧
   const inputsByGuard = new Map<string, typeof inputs>();
   for (const i of inputs) {
     const arr = inputsByGuard.get(i.guardId) ?? [];

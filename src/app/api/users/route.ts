@@ -7,7 +7,8 @@ import { paginationParams, readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { UserCreateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
-import { BadRequest, Conflict } from "@/lib/api/errors";
+import { ApiError, BadRequest, Conflict } from "@/lib/api/errors";
+import { SYSTEM_USER_TEL } from "@/lib/system-user";
 import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request) {
@@ -51,6 +52,8 @@ export async function POST(req: Request) {
       if (!broker || broker.kind !== "broker") throw BadRequest("broker_id 一定要指向 kind='broker' 嘅雞頭");
     }
 
+    // P9.2：保留電話屬排程系統帳號，唔准經用戶管理建立（唔論系統帳號建咗未）
+    if (input.tel === SYSTEM_USER_TEL) throw new ApiError(403, "system_account", "呢個電話係系統排程帳號專用，唔可以建立用戶");
     const existing = await prisma.user.findUnique({ where: { tel: input.tel } });
     if (existing) throw Conflict("呢個電話已經有帳號");
 
