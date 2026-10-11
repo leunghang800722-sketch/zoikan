@@ -39,6 +39,7 @@ import {
   toRosterUploadDTO,
   toRosterUploadRowDTO,
 } from "./dto";
+import { toCoverRateDTO } from "../longterm-payroll/dto";
 import type { Dto } from "./serialize";
 import type { AuditAction } from "../audit";
 
@@ -91,6 +92,8 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   // 嘅「保安員個人資料」field group 再剝一次，見 field-groups.ts）。
   roster_uploads: (r) => toRosterUploadDTO(r),
   roster_upload_rows: (r) => toRosterUploadRowDTO(r),
+  // P10.1：頂位津貼價目表（無 PII；evidence 只有盤 id／金額／次數／人數）。
+  cover_shift_rates: (r) => toCoverRateDTO(r),
 };
 
 /** 呢啲 action 代表「呢個值本身係一個完整資源 row」——先會行 DTO

@@ -17,14 +17,14 @@ export interface TaggedInput {
   note: string | null;
 }
 
-export type InferStatus = "consistent" | "mixed" | "single_sample";
+type InferStatus = "consistent" | "mixed" | "single_sample";
 
-export interface SuggestionAmount {
+interface SuggestionAmount {
   amount: number;
   shifts: number;
   guard_count: number;
 }
-export interface Suggestion {
+interface Suggestion {
   site_id: string;
   site_name: string;
   grade: string;
@@ -36,7 +36,7 @@ export interface Suggestion {
   guard_count: number;
   months: string[];
 }
-export interface UnresolvedNoInput {
+interface UnresolvedNoInput {
   site_id: string;
   site_name: string;
   grade: string;
@@ -44,19 +44,19 @@ export interface UnresolvedNoInput {
   guard_count: number;
   months: string[];
 }
-export interface UnresolvedNoShift {
+interface UnresolvedNoShift {
   reason: "no_cover_shift" | "sell_leave_mixed";
   guard_id: string;
   month: string;
   amount: number;
 }
-export interface UnresolvedAmbiguous {
+interface UnresolvedAmbiguous {
   guard_id: string;
   month: string;
   total_amount: number;
   keys: { site_id: string; site_name: string; grade: string; shifts: number }[];
 }
-export interface BacktestRow {
+interface BacktestRow {
   month: string;
   guard_id: string;
   expected: number;
@@ -79,7 +79,7 @@ export interface InferResult {
 export function isCoverNote(note: string | null | undefined): boolean {
   return !!note && note.includes("頂位");
 }
-export function isSellLeaveMixed(note: string | null | undefined): boolean {
+function isSellLeaveMixed(note: string | null | undefined): boolean {
   return !!note && note.includes("賣假");
 }
 

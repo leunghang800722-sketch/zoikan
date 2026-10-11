@@ -4,12 +4,7 @@ import { prisma } from "@/lib/db";
 import { n } from "@/lib/reports/money";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
-export const COVER_GRADES = ["IC", "兵"] as const;
-export type CoverGrade = (typeof COVER_GRADES)[number];
-
-export function isCoverGrade(v: unknown): v is CoverGrade {
-  return typeof v === "string" && (COVER_GRADES as readonly string[]).includes(v);
-}
+export type CoverGrade = "IC" | "兵";
 
 export interface RateRow {
   id: string;
