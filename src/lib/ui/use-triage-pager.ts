@@ -5,9 +5,9 @@
 import { useCallback, useRef, useState } from "react";
 import { apiGet } from "@/lib/ui/api-client";
 
-export const TRIAGE_PAGE_SIZE = 5;
+const TRIAGE_PAGE_SIZE = 5;
 
-export interface TriageCounts {
+interface TriageCounts {
   open: number;
   answered: number;
   skipped: number;

@@ -184,7 +184,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
   const visible = [...reopened, ...(qs ?? []).filter((x) => !reopened.some((y) => y.id === x.id))].filter((x) => !view.inFlight.includes(x.id) && !results[x.id]);
   const q = visible[0] ?? null;
   useEffect(() => {
-    if (pager.hasMore && !pager.loadingMore && visible.length <= 2) void loadMore(); // 去到每頁第 3 題就背景攞下一頁
+    if (pager.hasMore && !pager.loadingMore && visible.length <= 3) void loadMore(); // 去到每頁第 3 題就背景攞下一頁
   }, [pager.hasMore, pager.loadingMore, visible.length, loadMore]);
   useEffect(() => {
     const d = q ? drafts.current[q.id] : undefined;

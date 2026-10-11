@@ -378,12 +378,12 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const loading = impP.items === null || (!imp[0] && (impP.hasMore || impP.loadingMore)) || (suppStarted && !imp[0] && (supP.items === null || (!supP.items[0] && (supP.hasMore || supP.loadingMore))));
   const queueReady = !loading;
   const gate = queueReady && !liveQ && !viewing && supRemaining > 0 && !suppStarted;
-  // prefetch：剩返 ≤2 題（即係去到每頁第 3 題）就背景攞下一頁
+  // prefetch：剩返 ≤3 題（即係去到每頁第 3 題）就背景攞下一頁
   useEffect(() => {
-    if (impP.hasMore && !impP.loadingMore && imp.length <= 2) void loadMoreImp();
+    if (impP.hasMore && !impP.loadingMore && imp.length <= 3) void loadMoreImp();
   }, [impP.hasMore, impP.loadingMore, imp.length, loadMoreImp]);
   useEffect(() => {
-    if (suppStarted && supP.hasMore && !supP.loadingMore && sup.length <= 2) void loadMoreSup();
+    if (suppStarted && supP.hasMore && !supP.loadingMore && sup.length <= 3) void loadMoreSup();
   }, [suppStarted, supP.hasMore, supP.loadingMore, sup.length, loadMoreSup]);
   // 補充資料第一頁：重要題剩尾幾題（或者撳「繼續做補充資料」）就預先攞，gate 撳落去即刻有題
   // P13.3 記住位置：每個 session 嘅當前題 id＋第 N 題存 sessionStorage；重開由上次位置繼續
