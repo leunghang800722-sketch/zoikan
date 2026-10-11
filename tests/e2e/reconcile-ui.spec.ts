@@ -377,7 +377,7 @@ async function mockTriage(page: Page) {
   await page.route(/\/api\/triage\/sessions(\?|$)/, (route) =>
     json(route, { sessions: [{ id: "sess1", source_type: "month_close", owner_user_id: "u1", owner_name: "老闆", status: "open", created_at: "2026-10-02T00:00:00Z", completed_at: null, counts: { open: 2, answered: 0, skipped: 0, total: 2, important_open: 2, supplementary_open: 0 } }], open_total: 2, eligible_owners: [] }),
   );
-  await page.route(/\/api\/triage\/sessions\/sess1$/, (route) =>
+  await page.route(/\/api\/triage\/sessions\/sess1(\?|$)/, (route) =>
     json(route, {
       session: { id: "sess1", status: "open", counts: { open: 2, answered: 0, skipped: 0, total: 2 } },
       questions: [

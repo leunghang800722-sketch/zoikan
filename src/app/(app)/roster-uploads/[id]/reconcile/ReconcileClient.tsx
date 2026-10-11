@@ -7,8 +7,8 @@
 // 型別（wire format，一律 snake_case，同 request/response body 一致——
 // 見 docs/api.md「欄位命名」／src/lib/api/http.ts `ok()` 嘅
 // `camelToSnakeDeep()`）。
+import { BackLink } from "@/components/ui/BackLink";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { apiGet, apiPost, type ApiListResult } from "@/lib/ui/api-client";
 import { cachedGetAll } from "@/lib/ui/lookups";
 import { Banner } from "@/components/ui/Banner";
@@ -721,9 +721,9 @@ export default function ReconcileClient({ uploadId }: { uploadId: string }) {
         title="更表對數"
         subtitle="更表 vs 系統內已報更——以更表為準／保留系統／例外，決定套用後直接寫入 shift_records。"
         actions={
-          <Link href="/roster-uploads" className="text-zk-base text-zk-primary">
+          <BackLink href="/roster-uploads" className="text-zk-base text-zk-primary">
             ‹ 返回更表上載
-          </Link>
+          </BackLink>
         }
       />
 

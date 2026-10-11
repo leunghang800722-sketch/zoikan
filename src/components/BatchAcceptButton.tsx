@@ -3,6 +3,7 @@
 // 5 秒撤銷條（UndoBar，前端延遲送出；撤銷＝零請求）→ POST /api/triage/questions/batch-accept → 結果摘要。
 // 送出之後嘅撤銷同人手單題答一樣：冇（要逐題用「撤銷補齊」等現有還原功能）。
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useHistoryOverlay } from "@/lib/ui/use-history-overlay";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { UndoBar } from "@/components/ui/UndoBar";
@@ -102,6 +103,7 @@ export function BatchAcceptButton({ sessionId, month, disabled, onDone }: { sess
     setDeadline(null);
   };
 
+  const { close: closeDialog } = useHistoryOverlay(open, () => setOpen(false), "batch-accept");
   const n = items?.length ?? 0;
   if (n === 0 && !summary && errors.length === 0 && deadline === null && !sending) return null;
   return (
@@ -135,7 +137,7 @@ export function BatchAcceptButton({ sessionId, month, disabled, onDone }: { sess
       ))}
       {open && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" data-testid="batch-accept-dialog">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <div className="absolute inset-0 bg-black/40" onClick={closeDialog} />
           <div className="relative flex max-h-[85vh] w-full max-w-[640px] flex-col rounded-xl border border-zk-border bg-white p-5 shadow-xl">
             <h2 className="mb-1 text-zk-lg font-semibold text-zk-text">批量接受系統建議</h2>
             <p className="mb-3 text-zk-sm text-zk-muted">
@@ -182,7 +184,7 @@ export function BatchAcceptButton({ sessionId, month, disabled, onDone }: { sess
               ))}
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setOpen(false)} data-testid="batch-accept-cancel">
+              <Button variant="secondary" onClick={closeDialog} data-testid="batch-accept-cancel">
                 取消
               </Button>
               <Button variant="primary" disabled={picked.size === 0} onClick={confirm} data-testid="batch-accept-confirm">

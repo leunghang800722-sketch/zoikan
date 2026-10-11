@@ -3,6 +3,7 @@
 //   ① 上載身份證（必須）／住址證明／入職表（圖片或 PDF，瀏覽器轉圖縮細）→ ② 辨識（每份兩次獨立讀）
 //   → ③ 並排核對（圖＋表單，逐欄 已確認／要核對／讀唔到）→ ④ 預覽（新建定連去現有保安員、會寫邊啲欄）→ ⑤ 確認套用。
 // 圖片只留喺瀏覽器記憶體；儲存／離開頁面即 revoke。寫入全部行現有 /api/guards/import/preview → apply（source=single_ocr）。
+import { BackLink } from "@/components/ui/BackLink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
@@ -16,7 +17,6 @@ import { CRITICAL_MSG, FIELD_LABEL, REQUIRED_FIELDS, ackAfterEdit, criticalPendi
 import type { FieldStatus } from "@/lib/guards/ocr/normalize";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
 import { kickerFor } from "@/lib/nav/schema";
-import Link from "next/link";
 import { tableCls } from "@/components/ui/DataTable";
 
 const DOC_LABEL: Record<OcrDocType, string> = { id_card: "身份證（必須）", address_proof: "住址證明（可選）", onboarding_form: "入職表（可選）" };
@@ -358,9 +358,9 @@ export function NewFromDocsClient() {
 
   return (
     <div className="space-y-4">
-      <Link href="/guards" data-testid="back-to-guards" className="block w-fit text-zk-base text-zk-primary hover:underline">
+      <BackLink href="/guards" data-testid="back-to-guards" className="block w-fit text-zk-base text-zk-primary hover:underline">
         ‹ 返回保安員
-      </Link>
+      </BackLink>
       <PageHeader kicker={kickerFor("/guards/new-from-docs")} title="用證件新增保安員" subtitle="上載證件，由 AI 辨識自動填表；逐欄核對後先會寫入。" />
       <Banner kind="error" message={error} />
       <Banner kind="success" message={notice} />
