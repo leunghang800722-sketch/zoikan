@@ -157,3 +157,28 @@ export async function assertMonthRangeNotLocked(params: {
     throw Locked(`生效區間覆蓋咗已鎖定嘅 ${m.toISOString().slice(0, 7)}，唔可以寫入`);
   }
 }
+
+/** P6.1c：`assertMonthRangeNotLocked` 嘅 tx 內版本（FOR SHARE，audit 走獨立連線）。 */
+export async function assertMonthRangeNotLockedTx(
+  tx: Tx,
+  params: { effectiveFrom: Date; effectiveTo: Date | null; actorUserId: string | null; tableName: string; rowId: string; ip: string | null },
+): Promise<void> {
+  const to = params.effectiveTo ?? addMonths(hkMonthStart(), 1);
+  for (const m of enumerateMonths(params.effectiveFrom, to)) {
+    if (!(await isMonthLockedTx(tx, m))) continue;
+    await writeAudit({
+      actorUserId: params.actorUserId,
+      tableName: params.tableName,
+      rowId: params.rowId,
+      action: "permission_denied",
+      after: {
+        reason: "month_locked",
+        month: m.toISOString().slice(0, 10),
+        effective_from: monthStart(params.effectiveFrom).toISOString().slice(0, 10),
+        effective_to: params.effectiveTo ? monthStart(params.effectiveTo).toISOString().slice(0, 10) : null,
+      },
+      ip: params.ip,
+    });
+    throw Locked(`生效區間覆蓋咗已鎖定嘅 ${m.toISOString().slice(0, 7)}，唔可以寫入`);
+  }
+}
