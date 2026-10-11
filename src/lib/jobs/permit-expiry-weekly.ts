@@ -9,8 +9,8 @@ import { canOverrideDerivedSiaPermit, deriveSiaPermitExpiry } from "@/lib/guards
 import { createNotification } from "@/lib/notify/create";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
-export const PERMIT_EXPIRY_WEEKLY_KEY = "permit_expiry_weekly";
-export const PERMIT_EXPIRY_WINDOW_DAYS = 30;
+const PERMIT_EXPIRY_WEEKLY_KEY = "permit_expiry_weekly";
+const PERMIT_EXPIRY_WINDOW_DAYS = 30;
 
 const KINDS = [
   { key: "licence", label: "牌照" },

@@ -819,3 +819,42 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **正式站核對（老闆 Chrome）**：`/settings/jobs` 3 個 job：`open_next_month` 下次 2026-10-25 09:00 HKT、`nightly_month_health` 今晚 21:00、`triage_reminder` 明早 09:00；手動試跑兩個唯讀 job 都 200 ok——體檢：2026-10 warn 1、2026-09 新紅項 7（已出通知「2026-09 體檢有 7 項新紅項」）；待答提醒：122 題超過 2 日、通知 1 位負責人。首頁「通知」區＋側欄未讀 badge 2。**冇試跑 `open_next_month`**（會寫 11 月資料，25 號自動跑或老闆批先）。
 - **老闆要喺 Zeabur 加（email 先會寄；唔加照樣有站內通知）**：`SMTP_URL`（格式 `smtps://使用者:密碼@smtp主機:465`，例如 Gmail 要用應用程式密碼）、`NOTIFY_FROM`（寄件人地址）、`APP_BASE_URL`（`https://zoikan.zeabur.app`）。加完 Zeabur 會自動重啟，log 由 `[notify] email disabled` 變成寄出；之後每個用戶喺「改密碼」頁填自己嘅通知電郵，老闆亦可喺用戶頁代填。
 - (ii) 留下階段：連續失敗計數跨排程累計；25 號後 job 失敗時首頁卡文案過期；apply 候選查詢佔一條額外連線。
+
+## 12. 階段 8 自動化第二批（2026-10-11 老闆批准）：上載完自動結算、批量接受建議、鎖月後自動出檔、證件到期週報、每月修正摘要推送
+
+來源：`docs/audit-2026-10/second-opinion-automation-ai.md` §二 S1、§三 J3／J4／J7、§五 T2／T5（審查 Top 10 之 J3／T2／T5／J4／J7）。原則延續階段 7：**每月重複嘅嘢系統做；涉及錢嘅簽收（鎖月、autopay 入銀行）留人。** 執行：Sonnet 5.5（`claude-sonnet-5-5`），branch `p8-automation-2`（from main `4e365e8`，含階段 7 merge `68826c8`），**唔 merge**，等 Opus 5.5 驗收。API 見 `docs/api.md`「階段 8」，運維（4 個新 job、state、唔自動跑嘅情況）見 `docs/ops.md` §2／2b／2c／2d。所有寫入經現有 lib＋鎖月檢查；job 用階段 7 框架（advisory lock、逾時唔放 lock、失敗重試、`by_job`）。
+
+### 12.1 落實紀錄（Sonnet 5.5，2026-10-11，branch p8-automation-2）
+
+| 項 | commit | 內容 | 重點／行為改變 |
+|---|---|---|---|
+| P8.1 J3 上載完自動一鍵結算 | `P8.1` | migration `20261012000000_p8_scheduled_job_state`（`scheduled_jobs.state jsonb`，只新增）；`src/lib/scheduler/state.ts`；job `auto_one_click`（每 5 分鐘）：未鎖月份有 `parsed` 上載、最新有效上載（`uploaded`／`parsed`／`confirmed`）靜置 ≥10 分鐘、新過該月最後一次 run 的 `started_at`、同批上載未觸發過（`state.last_trigger_upload_at[月份]`）、冇 run 跑緊（同 `POST /api/month-close/one-click` 同一條全域 advisory xact lock＋busy 檢查）→ call 同一個 `runOneClickMonthClose`；完成通知老闆＋會計「N 題要你答、未定價 N 更」＋連結，失敗／halt 通知原因一句 | 新通知 kind `one_click_auto`。**偏離簡報字面**：簡報寫 actor null——但 `month_close_runs.started_by`、價卡 `created_by`、分診 session 擁有人係 FK／必須有人，所以自動 run 用「最早建立嘅啟用老闆」做 actor；run 建立嗰條 audit 係 actor null＋`after.by_job=auto_one_click`（`writeAudit` 嘅 meta 白名單 `by_job` 由「只喺有 DTO mapper 嘅表保留」改為所有表保留）。**唔自動鎖月**。失敗唔會每 5 分鐘無限重跑（state 已記）。test `p8-1-auto-one-click` 10 條（觸發條件逐個、同批只跑一次、人手 run 跑緊／全域 busy／已鎖／10 分鐘內新檔／uploaded 未處理完／voided 全部跳過、precheck halt 失敗通知、通知 regex＋`assertNoPii`、audit by_job） |
+| P8.2 T2 待答題批量接受建議 | `P8.2` | `POST /api/triage/questions/batch-accept`（≤200，逐題 `previewMcAnswer`→`submitMcAnswer`，audit 同單題一樣＋`after.batch_id`；一題失敗唔影響其餘；任一題已鎖月 → 整批 403）、`GET …/batch-accept/preview?session_id=\|month=`（可批量接受清單，用 `mcQuestionViews` 投影）、`BatchAcceptButton`（對話框可逐題取消剔 → 確認 → 5 秒 `UndoBar`，撤銷零請求 → 送出 → 「已答 N、跳過 N、失敗 N」），掛喺 `/triage` 每張一鍵結算 session 卡同 `/month-close` ReviewCard；AI 助手白名單 `triage_accept_batch{question_ids[]}`（撳卡＝同一條 API＋5 秒撤銷）、`triage_summary` 每題 `has_suggestion`、system prompt 加「3 題或以上高把握（propose）先建議批量」 | **範圍說明**：「系統建議答案」只存在於一鍵結算／補齊價目卡嘅 `month_close_*` 題（`prefillCandidateId`＋`mc_accept`），所以走 `previewMcAnswer`／`submitMcAnswer`（簡報寫嘅 `previewAnswer`／`submitAnswer` 係保安員導入題路徑，冇「建議答案」→ 一律 `skipped: no_suggestion`）。送出後嘅撤銷同單題一樣：冇一鍵撤銷（補齊價目卡題仍可逐題「撤銷補齊」）。test `p8-2-triage-batch-accept` 6 條（批量 vs 逐題人手答：價卡／snapshot／audit 逐欄相同、冇建議跳過、一題失敗唔影響其餘、鎖月 403 整批唔寫、雞頭 403／非擁有人 error／上限 200／body strict、preview 兩種 scope）＋`ai-actions`／`ai-action-requests`／`ai-system-prompt-diag`／`ai-diag-tools` 同步 |
+| P8.3 T5 鎖月後自動出齊檔 | `P8.3` | migration `20261012010000_p8_generated_files`（`generated_files`：month／kind／filename／content bytea／size／sha256／generated_at／generated_by／source_locked_at／current，partial unique index 保證同月同 kind 一份 current）；`writePayrollBuffer`／`writeMonthlyCloseBuffer`（同 `write…Xlsx` 共用 workbook builder；`GET /api/reports/payroll\|monthly-close?export=1` 改用 buffer，輸出不變）；job `after_lock_exports`（每 5 分鐘，`state.last_processed_lock_at`）生成 4 份（糧明細／月結總表／Postorder／BOCHK autopay，該月未計長工糧就跳過並寫明）、重新鎖月取代 current（舊版保留 1 份）、失敗 job 拋錯（state 唔前進，框架 1 小時重試）；`GET /api/files?month=`、`GET /api/files/:id`；頁面 `/month-close/files`（月結頁已鎖時有「已生成檔案」掣）；通知 `month_files_ready` | 權限＝原匯出 route 嘅 module `export`（糧明細／月結總表／長工糧），雞頭 403。**autopay 下載沿用原 route 嘅 `confirm_locked=1` 防重複出糧閘**（頁面彈確認；直接打 URL 無參數 400＋`export_download_blocked` audit）。首次跑只處理最近 31 日內鎖嘅月份。test `p8-3-after-lock-exports` 7 條（4 份生成＋未計長工糧月份跳過、與人手匯出 route **逐 xlsx part 相同**（`docProps/core.xml` 生成時間除外）、重複跑唔重複、重鎖取代保留 1 份舊版、某份失敗 state 唔前進／修好補齊、雞頭／安員 403、下載 Content-Disposition＋audit＋autopay 確認閘）。既有 `wp-phase4-postorder-export-route` 改用「之前已有幾多條 audit」做基線（audit_log append-only，唔會被其他檔清走） |
+| P8.4 J4 證件到期週報 | `P8.4` | job `permit_expiry_weekly`（逢星期一 09:00 HKT）：牌照（同 `/api/guards` 一樣現算：乙類滿 70 歲失效）／平安卡／QAS 三種「30 日內到期 N 人」同「已過期但本月／下月仍有排更 M 人」（只計 active、取消更唔計），通知主管＋老闆（body 只有數字），全部 0 唔通知，同週一條；`/guards?expiring=30`（additive query）＋第二個篩選 chip「30 日內到期」（90 日 chip 不變，e2e 舊斷言不變） | 通知 kind `permit_expiry_weekly`。test `p8-4-permit-expiry-weekly` 4 條（假 guard 十種情況計數、body 精確文字＋PII 掃描、dedupe 每週一條／下週再出、全 0 skipped、cron 下次時間） |
+| P8.5 J7 每月修正摘要推送 | `P8.5` | job `lock_ops_digest`（每 5 分鐘，鎖月後；state 同 P8.3）：`buildOpsDigest`→數字摘要（必有，全由 digest 數字砌）＋可選 AI 摘要（現有 `generateDigestSummary`／`getLlmClient`，經輸出 guard；AI 用量寫一行 `ai_chat` audit，actor null＋`by_job`）；AI 失敗／guard 觸發／文字被 `assertNoPii` 拒絕就退回只推數字；通知老闆，同月只一次（dedupe），連結 `/reports/ops-digest?month=` | 通知 kind `ops_digest_ready`。test `p8-5-lock-ops-digest` 6 條（冇 AI 設定仍推數字、有 AI 附摘要＋audit、AI 失敗、含電話／電郵退回數字、guard 觸發丟棄、同月一次／未鎖唔推） |
+
+**每月慳幾多步（估算，一個典型月份；before＝人手操作次數，after＝仍需人手）**
+
+| 項 | before | after |
+|---|---|---|
+| J3 上載完一鍵結算 | 上載完要記得返月結頁、揀月份、撳「一鍵結算」、輪詢等完（≥3 個動作＋等待，每次重傳再重複 3 次） | 0（10 分鐘後自動跑；收通知後去答題） |
+| T2 待答題 | 每題「預覽→確認→等 5 秒撤銷」≈2 次點擊×N 題（N≈20 有建議題＝約 40 點擊＋100 秒等待） | 1 個對話框＋1 次確認（2 次點擊，可逐題取消剔） |
+| T5 鎖月後出檔 | 4 份各開一頁／揀月份／撳匯出（≈12 個動作），autopay 要記得再確認 | 收通知後開 1 頁、按需要撳 4 次下載（autopay 仍要人覆核）；生成 0 動作 |
+| J4 證件到期 | 每週開保安員頁、剔「90 日內到期」睇（≈3 個動作×4 週＝12） | 0（逢星期一通知，一撳入篩選好嘅頁） |
+| J7 修正摘要 | 開 ops-digest 頁、揀月份、撳 AI 摘要（≈3 個動作） | 0（鎖月後通知；AI 摘要隨附） |
+| 合計 | ≈70 個動作／月（T2 佔大半） | ≈10 個動作／月（全部係「睇通知／簽收／答真正要判斷嘅題」） |
+
+**驗證**
+- vitest（隔離 PG 54363）：**238 檔（237 passed｜1 skipped），3,619 passed｜10 skipped｜0 failed**（階段 7 為 3,592；新增 p8-1／2／3／4／5 共 33 條＋既有 test 同步）；`tsc --noEmit` 0；`npm run lint` 0 warning；knip 0；`npm run build` 過（`rm -rf .next`）。
+- `npm run gate:locked-months`（隔離 dev PG 54364）：**12/12 rc=0**；snapshot 5,080 數字葉，multiset 同階段 4（p3-4）基線 snapshot（階段 6／7 驗收已證實同佢相同）逐個相同。
+- Playwright 全部 spec（隔離 PG 54364、`next start` 3174、`SCHEDULER_ENABLED=0`、`AI_LLM=fake`；gate 後 `db:reset`＋`db:seed` 重 seed 再跑）：**229 passed｜5 skipped（原有 `test.skip`）｜0 failed**（第一次跑撞出 2 條：「新增 ▾」選單被側欄遮住——因我加咗第二個篩選 chip 令工具列多一行，已改成同一個 chip 按 `?expiring=30` 變 30 日；(k)「首頁」連結名帶未讀 badge——因 run-now 試跑留低通知，已喺 spec afterAll 清走）。新增 `tests/e2e/p8-automation2.spec.ts` 4 條（批量接受對話框：列清單／取消剔／5 秒撤銷零請求／確認 body／結果摘要；已生成檔案頁：列表／糧明細直接下載／autopay 彈確認先下載／直接 URL 400／雞頭 403；`/guards?expiring=30` 預設篩選；自動排程頁新 job＋證件到期週報立即試跑）。
+- 本機 `run-now` 試跑 4 個 job（seed 假資料）：`auto_one_click` 跳過（seed 無未鎖月份上載）、`after_lock_exports` 成功（2026-07 出 3 份：糧明細 99 KB／月結總表 14 KB／Postorder 56 KB，未計長工糧故冇 autopay）、`permit_expiry_weekly` 跳過（seed 無 30 日內到期）、`lock_ops_digest` 成功（2026-07 數字摘要；fake AI 附摘要）；通知頁／自動排程頁／已生成檔案頁截圖：`/private/tmp/claude-501/p8-shots/{notifications,jobs,files}.png`。
+
+**已知限制／交驗收者留意**
+1. `auto_one_click` 用老闆帳號做 actor（見上），AutoCollector 等內部 audit 嘅 actor 係該老闆、冇 `by_job`；run 建立嗰條有。無啟用老闆 → job 失敗並通知。
+2. `after_lock_exports`／`lock_ops_digest` 首次部署只處理最近 31 日內鎖嘅月份；歷史月份（7／8 月）冇自動出檔（可日後加「重新生成」掣）。重新鎖月會重新出檔；摘要推送同月只一次。
+3. `generated_files.content` 存 bytea（糧明細檔含保安員姓名／工號，與手動匯出同敏感度，靠同一 `export` 權限＋audit 保護；**唔入 `ai` schema**）。每月 4 份×（current＋1 舊版）約數 MB，無需另外清理。
+4. T2 只涵蓋有系統預填建議嘅 `month_close_*` 題；保安員導入題（身份／銀行）冇建議答案，批量接受一律跳過。
+5. J7 AI 摘要 provider／每日額度：沿用現有設定（`isAiConfigured`），但 job 呼叫唔計入任何用戶嘅每日額度（audit actor null）；每月最多一次。
+6. 未做（留下階段）：J5／J6／J8、歷史月份補出檔、批量接受之後嘅「一鍵撤銷」。
