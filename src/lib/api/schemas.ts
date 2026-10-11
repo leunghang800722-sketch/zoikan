@@ -947,8 +947,13 @@ export const LongtermInputUpdateSchema = z
     date_to: nullableYmd,
     doctor_note_verified: z.boolean().optional(),
     note: nullableString,
+    /** P9.1：只准 draft → confirmed（確認草稿）；唔准轉返 draft。 */
+    status: z.literal("confirmed").optional(),
   })
   .strict();
+
+/** P9.1：批量確認長工糧草稿（≤50）。 */
+export const LongtermInputConfirmBatchSchema = z.object({ ids: z.array(uuid).min(1).max(50) }).strict();
 
 export const GuardAvgWageUpsertSchema = z
   .object({

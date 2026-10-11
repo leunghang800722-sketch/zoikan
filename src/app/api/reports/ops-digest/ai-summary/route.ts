@@ -13,7 +13,7 @@ import { parseMonthParam } from "@/lib/reports/money";
 import { hkMonthStart } from "@/lib/dates";
 import { isAiConfigured } from "@/lib/ai/config";
 import { getLlmClient, LlmUnavailableError } from "@/lib/ai/llm";
-import { assertUnderDailyLimit } from "@/lib/ai-rate-limit";
+import { assertUnderDailyLimit, releaseDailySlot } from "@/lib/ai-rate-limit";
 import { writeAudit } from "@/lib/audit";
 import { buildOpsDigest, addMonths } from "@/lib/ops/digest";
 import { generateDigestSummary } from "@/lib/ops/ai-summary";
@@ -34,7 +34,10 @@ export async function POST(req: Request) {
     try {
       client = getLlmClient();
     } catch (err) {
-      if (err instanceof LlmUnavailableError) throw new ApiError(503, "ai_provider_unavailable", err.message);
+      if (err instanceof LlmUnavailableError) {
+        await releaseDailySlot(session.userId);
+        throw new ApiError(503, "ai_provider_unavailable", err.message);
+      }
       throw err;
     }
 
@@ -43,7 +46,10 @@ export async function POST(req: Request) {
     try {
       result = await generateDigestSummary(digest, client);
     } catch (err) {
-      if (err instanceof LlmUnavailableError) throw new ApiError(503, "ai_provider_unavailable", err.message);
+      if (err instanceof LlmUnavailableError) {
+        await releaseDailySlot(session.userId);
+        throw new ApiError(503, "ai_provider_unavailable", err.message);
+      }
       throw err;
     }
     // 令呢次計入共用每日額度（`AI_QUOTA_ACTIONS` 睇 ai_chat／ai_chat）；after 淨係 meta，冇 digest 內容。

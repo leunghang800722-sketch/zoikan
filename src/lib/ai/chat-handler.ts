@@ -15,7 +15,7 @@ import { getClientIp } from "@/lib/api/http";
 import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { writeAudit, type AuditAction } from "@/lib/audit";
-import { assertUnderDailyLimit } from "@/lib/ai-rate-limit";
+import { assertUnderDailyLimit, releaseDailySlot } from "@/lib/ai-rate-limit";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { computeFieldVisibility } from "@/lib/ai/field-scrub";
 import { buildAiTools } from "@/lib/ai/tools";
@@ -111,13 +111,17 @@ export async function handleChatRequest<Parsed, Prep = undefined>(req: Request, 
   try {
     parsed = parseBody(cfg.bodySchema, bodyRaw);
   } catch (err) {
+    await releaseDailySlot(session.userId);
     return apiErrorResponse(err);
   }
 
   let prep = undefined as Prep;
   if (cfg.prepare) {
     const prepared = await cfg.prepare({ session, parsed });
-    if ("response" in prepared) return prepared.response;
+    if ("response" in prepared) {
+      await releaseDailySlot(session.userId);
+      return prepared.response;
+    }
     prep = prepared.prep;
   }
 
@@ -126,6 +130,7 @@ export async function handleChatRequest<Parsed, Prep = undefined>(req: Request, 
     llmClient = getLlmClient();
   } catch (err) {
     if (err instanceof LlmUnavailableError) {
+      await releaseDailySlot(session.userId);
       return jsonResponse(503, { error: "ai_provider_unavailable", message: err.message });
     }
     throw err;

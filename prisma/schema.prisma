@@ -1683,6 +1683,11 @@ enum LongtermPayrollRunStatus {
   void
 }
 
+enum LongtermInputStatus {
+  draft
+  confirmed
+}
+
 enum LongtermPayrollInputKind {
   special_allowance // 津貼（例如勤工獎）
   other_allowance // 其他津貼（例如頂位津貼、賣假）
@@ -1889,12 +1894,21 @@ model LongtermPayrollInput {
 
   note String?
 
+  // P9.1：草稿。status=draft 嘅輸入項（由更表自動生成）**唔計糧**——aggregate 只讀 confirmed；舊資料／人手新增預設 confirmed。
+  // draftSource 例 `roster_leave:SL`；draftEvidence＝{ dates:[…], roster_upload_ids:[…] }（唔含姓名）。
+  status        LongtermInputStatus @default(confirmed)
+  draftSource   String?             @map("draft_source")
+  draftEvidence Json?               @map("draft_evidence")
+  confirmedAt   DateTime?           @map("confirmed_at")
+  confirmedBy   String?             @map("confirmed_by")
+
   createdAt DateTime  @default(now()) @map("created_at")
   createdBy String?   @map("created_by")
   voidedAt  DateTime? @map("voided_at")
   voidedBy  String?   @map("voided_by")
 
   @@index([month, guardId])
+  @@index([month, status])
   @@map("longterm_payroll_inputs")
 }
 
@@ -1968,4 +1982,15 @@ model GeneratedFile {
 
   @@index([month, kind, generatedAt(sort: Desc)])
   @@map("generated_files")
+}
+
+// P9.2：AI 每日額度原子計數（每用戶每個 UTC 曆日一行）。assertUnderDailyLimit 喺 pg_advisory_xact_lock 內
+// 取 max(計數, audit_log 今日 AI 次數)，未到上限先 +1，令並發請求唔會同時越過上限。
+model AiDailyUsage {
+  userId String   @map("user_id")
+  day    DateTime @db.Date
+  used   Int      @default(0)
+
+  @@id([userId, day])
+  @@map("ai_daily_usage")
 }

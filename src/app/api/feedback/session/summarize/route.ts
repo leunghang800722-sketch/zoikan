@@ -17,7 +17,7 @@ import { parseBody } from "@/lib/api/validate";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { z } from "zod";
 import { writeAudit } from "@/lib/audit";
-import { assertUnderDailyLimit } from "@/lib/ai-rate-limit";
+import { assertUnderDailyLimit, releaseDailySlot } from "@/lib/ai-rate-limit";
 import { getSessionForUser, messagesOf, turnCountOf, type StoredFeedbackMessage } from "@/lib/feedback/session";
 import { buildFeedbackSummarizePrompt } from "@/lib/ai/feedback-prompt";
 import { checkOutputGuardAndAudit } from "@/lib/ai/output-guard";
@@ -77,7 +77,10 @@ export async function POST(req: Request) {
     try {
       llmClient = getLlmClient();
     } catch (err) {
-      if (err instanceof LlmUnavailableError) throw new ApiError(503, "ai_provider_unavailable", err.message);
+      if (err instanceof LlmUnavailableError) {
+        await releaseDailySlot(session.userId);
+        throw new ApiError(503, "ai_provider_unavailable", err.message);
+      }
       throw err;
     }
 
