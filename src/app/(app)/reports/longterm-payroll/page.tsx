@@ -20,6 +20,7 @@ import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { Tabs } from "@/components/ui/Tabs";
+import { DraftInputsPanel, BonusEligiblePanel, type DraftInputDTO } from "./DraftPanels";
 
 // ---------------------------------------------------------------------------
 // 型別（snake_case，同 API response 一致）
@@ -75,6 +76,9 @@ interface InputDTO {
   doctor_note_verified: boolean | null;
   note: string | null;
   voided_at: string | null;
+  status?: "draft" | "confirmed";
+  draft_source?: string | null;
+  draft_evidence?: { dates?: string[]; edited?: boolean } | null;
 }
 
 interface ContractDTO {
@@ -341,7 +345,9 @@ export default function LongtermPayrollPage() {
 
       {/* ③ 人手輸入區 */}
       <div className={tabCls("inputs")} data-testid="ltpay-panel-inputs">
-      <InputsSection month={month} inputs={inputs} guardOptions={guardOptions} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
+      <DraftInputsPanel drafts={inputs.filter((i) => i.status === "draft" && !i.voided_at) as unknown as DraftInputDTO[]} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
+      <BonusEligiblePanel month={month} refreshKey={inputs.length} />
+      <InputsSection month={month} inputs={inputs.filter((i) => i.status !== "draft")} guardOptions={guardOptions} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
       </div>
 
       {/* ④ 合約管理 */}

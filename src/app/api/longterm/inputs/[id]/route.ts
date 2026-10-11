@@ -34,7 +34,20 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     await assertMonthNotLocked({ workDate: before.month, actorUserId: session.userId, tableName: "longterm_payroll_inputs", rowId: id, ip: getClientIp(req) });
     const body = await readJson(req);
     const parsed = parseBody(LongtermInputUpdateSchema, body);
-    const data = snakeToCamelShallow(parsed) as Prisma.LongtermPayrollInputUncheckedUpdateInput;
+    const { status: wantStatus, ...rest } = parsed as typeof parsed & { status?: "confirmed" };
+    const data = snakeToCamelShallow(rest) as Prisma.LongtermPayrollInputUncheckedUpdateInput;
+    if (before.status === "draft") {
+      // P9.1：改過草稿內容＝「已人手編輯」，排程唔會再覆蓋；status=confirmed 先計糧
+      if (Object.keys(rest).length > 0) {
+        const ev = before.draftEvidence && typeof before.draftEvidence === "object" && !Array.isArray(before.draftEvidence) ? (before.draftEvidence as Record<string, unknown>) : {};
+        data.draftEvidence = { ...ev, edited: true } as Prisma.InputJsonValue;
+      }
+      if (wantStatus === "confirmed") {
+        data.status = "confirmed";
+        data.confirmedAt = new Date();
+        data.confirmedBy = session.userId;
+      }
+    }
     const after = await prisma.longtermPayrollInput.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "longterm_payroll_inputs", rowId: id, action: "update", before, after, ip: getClientIp(req) });
     return ok(toLongtermInputDTO(after));

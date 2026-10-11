@@ -17,6 +17,7 @@ import { ensureSystemUser } from "@/lib/system-user";
 import { withAuditJob } from "@/lib/audit-job-context";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { getJobReaderSession } from "./session";
+import { runLongtermInputDrafts } from "./longterm-input-drafts";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
 export const AUTO_ONE_CLICK_KEY = "auto_one_click";
@@ -128,6 +129,12 @@ async function runAutoOneClickInner(now: Date): Promise<JobResult> {
         audience: ["老闆", "會計"],
         dedupeKey: `one_click_auto:${runId}`,
       });
+      // P9.1：更表剛結算完，順手更新該月長工糧草稿（失敗唔影響一鍵結算結果）
+      try {
+        await runLongtermInputDrafts(now, [month]);
+      } catch (e) {
+        console.error("[auto-one-click] longterm drafts failed", e instanceof Error ? e.message : e);
+      }
     } else {
       const reason = (run?.errorMessage ?? "未知原因").replace(/\s+/g, " ").slice(0, 120);
       await createNotification({

@@ -18,6 +18,7 @@ const CONTRACT_FIELDS = [
 const INPUT_FIELDS = [
   "id", "month", "guardId", "kind", "amount", "dateFrom", "dateTo", "doctorNoteVerified", "note",
   "createdAt", "createdBy", "voidedAt", "voidedBy",
+  "status", "draftSource", "draftEvidence", "confirmedAt", "confirmedBy",
 ] as const;
 
 const AVG_WAGE_FIELDS = ["id", "guardId", "month", "avgDailyWage", "source", "createdAt", "createdBy", "voidedAt"] as const;
