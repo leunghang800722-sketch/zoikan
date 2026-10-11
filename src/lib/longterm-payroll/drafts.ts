@@ -12,14 +12,14 @@ import { getSystemUserId } from "@/lib/system-user";
 import { toUtcDate } from "./compute";
 import type { Prisma } from "@prisma/client";
 
-export const DRAFT_SOURCE_SL = "roster_leave:SL";
+const DRAFT_SOURCE_SL = "roster_leave:SL";
 const DAY = 86400000;
 
 function iso(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-export interface DraftEvidence {
+interface DraftEvidence {
   dates: string[];
   roster_upload_ids: string[];
   edited?: boolean;
