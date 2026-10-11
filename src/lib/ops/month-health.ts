@@ -327,6 +327,17 @@ export async function buildMonthHealth(month: Date, session: AuthedSession): Pro
   push(finding({ code: "gap_tel", severity: "info", count: noTel.length, message: `${noTel.length} 位本月有出更／有糧嘅保安員缺電話`, fixLink: "/guards", requires: [ROSTER_VIEW], detail: noTel }));
   push(finding({ code: "gap_bank_code", severity: "warn", count: noBank.length, message: `${noBank.length} 位長工缺銀行編號（出 autopay 檔會缺）`, fixLink: "/reports/longterm-payroll", requires: [ROSTER_VIEW, BANK_VIEW], detail: noBank }));
 
+  // P14.3：本月銀行對數（資訊，唔擋鎖月）——有長工糧 run 先出：未上載 → 提示上載；已上載 → 未解釋差異數。
+  if (ltLines.length > 0) {
+    const rec = await prisma.longtermBankReconciliation.findFirst({ where: { month: m0 }, orderBy: { uploadedAt: "desc" }, select: { id: true } });
+    if (!rec) {
+      push(finding({ code: "bank_reconcile", severity: "info", count: 1, message: "本月銀行對數：未上載（長工糧頁 › 銀行對數）", fixLink: `/reports/longterm-payroll?${monthQ}`, requires: [] }));
+    } else {
+      const unresolved = await prisma.longtermBankReconciliationRow.count({ where: { reconciliationId: rec.id, status: { not: "equal" }, reasonCode: null } });
+      push(finding({ code: "bank_reconcile", severity: "info", count: unresolved, message: `本月銀行對數：${unresolved} 項未解釋`, fixLink: `/reports/longterm-payroll?${monthQ}`, requires: [] }));
+    }
+  }
+
   const rank: Record<HealthSeverity, number> = { critical: 0, warn: 1, info: 2 };
   out.sort((a, b) => rank[a.severity] - rank[b.severity] || b.count - a.count);
   const summary = {
