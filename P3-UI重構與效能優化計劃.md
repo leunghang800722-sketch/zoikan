@@ -988,3 +988,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 - **M1** `first_unlocked` 處理離職名單：離職日空或早過起始日 → 唔建合約（`skipped_left_before_start` 計數＋warning）；離職日 ≥ 起始日 → 末段 `effectiveTo`＝離職日（之後起生效嘅段丟棄）。xlsx／CSV（`left_csv`）兩路各有 test，離職人唔出糧。
 - 一併：密碼保護 xls 中文提示＋ops.md 解法；冇表頭／冇明細行 throw；重複 key 唔再計入 only-in-PE（另列 `details.duplicates`）；移除 `--db-url`（只用 `DATABASE_URL`）；合約 note 淨係入職日早過起始日先寫「原入職日」；`gate:ltpay-aug --out` 嘅 `people[].fields` 加逐欄 oracle／system／diff；P11.2 test 補重複 key／金額讀唔到／密碼保護／無表頭。
+
+### 15.3 部署同正式站核對（2026-10-12）
+- Opus 5.5 第二輪（delta `dd5a8ff..55a9ecc`）通過，冇必修；M1（離職名單 lastDay）用獨立 fixture 重跑確認；計算路徑無改動，gate 沿用第一輪結果。
+- merge `1a7bfa7`（`--no-ff`，零衝突）；Zeabur 部署 `6acbb5e3`，RUNNING；啟動 log：62 migrations／No pending、`[db:ensure-system-user]` 就緒、`[ai-assistant] provider=claude model=claude-opus-5-5`、`[scheduler] started`、Ready 940ms。
+- 正式站（老闆帳號、唯讀）：`/reports/longterm-payroll` 「合約」tab 見到「合約起始」下拉，兩個選項，預設「照名單入職日（覆蓋鎖月嘅行跳過）」；**未導入任何資料**（等老闆決定 7／8 月鎖月 vs 本機核對）。
+- Opus (ii) 留待：`docs/ops.md:89` 字眼同 `payroll-editor-compare.ts` 預設欄位殘留；真檔表頭 regex 可能要放寬（規劃者本機跑真檔時處理）。
