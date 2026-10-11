@@ -588,6 +588,7 @@ function ContractsSection({
   const [editSalary, setEditSalary] = useState("");
   const [editEffectiveTo, setEditEffectiveTo] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [startMode, setStartMode] = useState<"original" | "first_unlocked">("original");
 
   const visible = showHistory ? contracts : contracts.filter((c) => !c.voided_at && (!c.effective_to || c.effective_to >= new Date().toISOString().slice(0, 10)));
 
@@ -621,8 +622,9 @@ function ContractsSection({
   // 讀 camelCase，通知會顯示「undefined 行」）。
   async function uploadMaxwell(fd: FormData) {
     setUploading(true);
+    fd.append("contract_start_mode", startMode);
     const res = await apiUpload<{
-      summary: { total_rows: number; contracts_created: number; contracts_updated: number; unmatched: unknown[]; skipped_manual_contract: unknown[]; skipped_locked_rows?: number; warnings: string[] };
+      summary: { total_rows: number; contracts_created: number; contracts_updated: number; unmatched: unknown[]; skipped_manual_contract: unknown[]; skipped_locked_rows?: number; salary_mismatch?: number; warnings: string[] };
     }>("/api/longterm/contracts/import", fd);
     setUploading(false);
     if (res.ok) {
@@ -632,6 +634,7 @@ function ContractsSection({
           `${sm.unmatched.length ? `，${sm.unmatched.length} 行對唔到保安員（要人手配對）` : ""}` +
           `${sm.skipped_manual_contract.length ? `，${sm.skipped_manual_contract.length} 人已有人手合約冇覆蓋` : ""}` +
           `${sm.skipped_locked_rows ? `，${sm.skipped_locked_rows} 行因鎖月跳過` : ""}` +
+          `${sm.salary_mismatch ? `，${sm.salary_mismatch} 人名單月薪同系統現值唔同（未改，請人手核）` : ""}` +
           `${sm.warnings.length ? `。注意：${sm.warnings.join("；")}` : ""}`,
       );
       onChanged();
@@ -660,6 +663,13 @@ function ContractsSection({
           <label className="flex items-center gap-1 text-zk-sm text-zk-muted">
             <input type="checkbox" checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} />
             顯示歷史／已作廢
+          </label>
+          <label className="flex items-center gap-1 text-zk-sm text-zk-muted">
+            合約起始
+            <select data-testid="maxwell-start-mode" value={startMode} onChange={(e) => setStartMode(e.target.value as "original" | "first_unlocked")} className="rounded-md border border-zk-input-border bg-white px-2 py-1 text-zk-sm text-zk-text">
+              <option value="original">照名單入職日（覆蓋鎖月嘅行跳過）</option>
+              <option value="first_unlocked">由第一個未鎖月起生效</option>
+            </select>
           </label>
           <label className="cursor-pointer">
             <span className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary hover:bg-zk-header">
