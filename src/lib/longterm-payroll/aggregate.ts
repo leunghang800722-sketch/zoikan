@@ -64,6 +64,7 @@ import { writeAuditTx } from "@/lib/audit";
 import { Conflict } from "@/lib/api/errors";
 import { monthRange, monthStart as toMonthStart, monthLabel, n, round2 } from "@/lib/reports/money";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
+import { classifyLongtermShift } from "./shift-classify";
 import { HK_STATUTORY_HOLIDAYS_2026 } from "./hk-holidays";
 import {
   type ContractSegment,
@@ -361,9 +362,10 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     for (const r of srs) {
       const dISO = iso(r.workDate);
       if (r.recordType === "shift") {
-        if (internalLongtermBrokerId && r.settlementBrokerId === internalLongtermBrokerId) {
+        const kind = classifyLongtermShift(r.settlementBrokerId, internalLongtermBrokerId);
+        if (kind === "own") {
           ownPostDates.add(dISO);
-        } else if (r.settlementBrokerId) {
+        } else if (kind === "cover") {
           rescueCount += 1; // §14 規則 2：幫雞頭頂散更，唔當長工返工日
         } else {
           ownPostDates.add(dISO);

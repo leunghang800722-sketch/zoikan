@@ -84,6 +84,8 @@ const EXTRA_KICKERS: Record<string, string> = {
   "/reports/ops-digest": "月結 › 報表",
   "/roster-uploads/reconcile": "對數",
   "/feedback/detail": "設定",
+  "/settings/cover-rates": "設定",
+  "/settings/cover-rates/infer": "設定",
   "/change-password": "帳號",
   "/notifications": "帳號",
 };
