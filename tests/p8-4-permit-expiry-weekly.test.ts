@@ -83,6 +83,6 @@ describe("P8.4 permit_expiry_weekly", () => {
 
   it("預設排程＝逢星期一 09:00 HKT", () => {
     expect(permitExpiryWeeklyJob.defaultSchedule).toBe("0 9 * * 1");
-    expect(nextRun(permitExpiryWeeklyJob.defaultSchedule, new Date("2026-10-12T01:00:01Z")).toISOString()).toBe("2026-10-19T01:00:00.000Z");
+    expect(nextRun(permitExpiryWeeklyJob.defaultSchedule, new Date("2026-10-12T01:00:01Z"))!.toISOString()).toBe("2026-10-19T01:00:00.000Z");
   });
 });
