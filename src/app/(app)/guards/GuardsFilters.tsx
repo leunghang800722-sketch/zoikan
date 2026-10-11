@@ -19,8 +19,8 @@ export function GuardsFilters({
   searchHasHkid,
   month,
   setMonth,
-  expiringOnly,
-  setExpiringOnly,
+  expiringDays,
+  setExpiringDays,
   identityFilter,
   setIdentityFilter,
   openCreate,
@@ -32,8 +32,8 @@ export function GuardsFilters({
   searchHasHkid: boolean;
   month: string;
   setMonth: (v: string) => void;
-  expiringOnly: boolean;
-  setExpiringOnly: (v: boolean) => void;
+  expiringDays: 0 | 30 | 90;
+  setExpiringDays: (v: 0 | 30 | 90) => void;
   identityFilter: IdentityFilter;
   setIdentityFilter: (v: IdentityFilter) => void;
   openCreate: () => void;
@@ -53,7 +53,13 @@ export function GuardsFilters({
                 淨係內部角色顯示，雞頭個 toolbar 保持原樣。 */}
             {!isBroker && (
               <FilterChip label="牌照／平安卡／QAS 90 日內到期" showCaret={false}>
-                <input type="checkbox" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
+                <input type="checkbox" checked={expiringDays === 90} onChange={(e) => setExpiringDays(e.target.checked ? 90 : 0)} />
+              </FilterChip>
+            )}
+            {/* P8.4：30 日內到期（證件到期週報通知連結 /guards?expiring=30） */}
+            {!isBroker && (
+              <FilterChip label="牌照／平安卡／QAS 30 日內到期" showCaret={false}>
+                <input type="checkbox" checked={expiringDays === 30} onChange={(e) => setExpiringDays(e.target.checked ? 30 : 0)} data-testid="guards-expiring-30" />
               </FilterChip>
             )}
             {!isBroker && (
