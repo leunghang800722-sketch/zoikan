@@ -23,6 +23,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { getNavLinks, getViewGrants } from "@/lib/rbac/nav";
 import { shortfallCardVisibility } from "@/lib/ui/shortfall-cards";
 import { HomeInbox } from "@/components/home/HomeInbox";
+import { HomeNotifications } from "@/components/home/HomeNotifications";
 import { getPendingCounts } from "@/lib/rbac/pending-counts";
 import { countOpenFor } from "@/lib/triage/session";
 
@@ -71,13 +72,17 @@ export default async function DashboardPage() {
         <ShortfallDashboard
           userName={session.name} roleLabel={session.roleName} showMargin={cards.showMargin}
           afterHeader={
+        <>
         <HomeInbox
           approvals={cards.showApprovals ? pendingCounts.approvals : null}
           triage={grants["導入分診"] ? triageOpen : null}
           canRosterUploads={!!grants["更表上載"]}
           canMonthClose={!!grants["一鍵結算"]}
           canGuardFix={!!grants["安員配對修復"]}
+          canRateCards={!!grants["出街價"]}
         />
+        <HomeNotifications />
+        </>
           }
         />
       </div>

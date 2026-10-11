@@ -11,6 +11,7 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Field, inputCls } from "@/components/ui/Field";
+import { NotifySettings } from "@/components/NotifySettings";
 
 // README「至少 8 位，建議加數字同英文」——3 段強度條，純顯示層提示，
 // 唔係伺服器驗證（伺服器仍然用 `isStrongPassword()`/`requiresStrongPassword()`
@@ -24,7 +25,7 @@ function passwordStrength(pw: string): 0 | 1 | 2 | 3 {
   return score as 0 | 1 | 2 | 3;
 }
 
-export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }) {
+export function ChangePasswordForm({ mustChangePwd, notifyUserId }: { mustChangePwd: boolean; /** 有值＝顯示「通知電郵」設定（內部角色、非首次改密碼）。 */ notifyUserId?: string }) {
   const router = useRouter();
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -115,6 +116,12 @@ export function ChangePasswordForm({ mustChangePwd }: { mustChangePwd: boolean }
           </div>
         </form>
       </div>
+      {notifyUserId && (
+        <div className="flex w-full max-w-[420px] flex-col gap-3 rounded-[10px] border border-zk-border bg-white p-[22px]">
+          <h2 className="text-zk-md font-semibold text-zk-text">通知電郵</h2>
+          <NotifySettings userId={notifyUserId} />
+        </div>
+      )}
     </div>
   );
 }

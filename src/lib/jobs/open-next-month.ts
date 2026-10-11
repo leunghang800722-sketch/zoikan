@@ -12,7 +12,7 @@ import { createNotification } from "@/lib/notify/create";
 import { ApiError } from "@/lib/api/errors";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
-export const OPEN_NEXT_MONTH_KEY = "open_next_month";
+const OPEN_NEXT_MONTH_KEY = "open_next_month";
 
 export async function runOpenNextMonth(target: Date): Promise<JobResult> {
   const label = target.toISOString().slice(0, 7);

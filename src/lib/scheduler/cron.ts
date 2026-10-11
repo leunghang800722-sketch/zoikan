@@ -1,7 +1,7 @@
 // P7.1：5 欄 cron（分 時 日 月 星期）解析＋下次執行時間，全部按香港時間。
 // 支援：`*`、`n`、`a-b`、`a,b,c`、`*/n`、`a-b/n`。星期 0 或 7＝星期日。
 // 日同星期兩欄都有限制時按標準 cron 語意（任一個符合即可）。
-import { HK_OFFSET_MS, hkParts } from "@/lib/dates";
+import { HK_OFFSET_MS } from "@/lib/dates";
 
 interface Field {
   any: boolean;
@@ -94,9 +94,4 @@ export function nextRun(expr: string, after: Date): Date | null {
     }
   }
   return null;
-}
-
-export function describeHk(date: Date): string {
-  const p = hkParts(date);
-  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")} ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
 }

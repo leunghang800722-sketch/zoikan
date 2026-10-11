@@ -8,8 +8,6 @@ export const NOTIFY_KINDS = [
   { kind: "job_failed", label: "排程出錯" },
 ] as const;
 
-export type NotifyKind = (typeof NOTIFY_KINDS)[number]["kind"];
-
 export const NOTIFY_KIND_SET: ReadonlySet<string> = new Set(NOTIFY_KINDS.map((k) => k.kind));
 
 export function kindLabel(kind: string): string {

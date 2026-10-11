@@ -13,7 +13,8 @@ import { toRateCardFullDTO, mapListDTO } from "@/lib/api/dto";
 import { applyFieldGroupGateToList } from "@/lib/api/field-groups";
 import { writeAudit } from "@/lib/audit";
 import { Conflict } from "@/lib/api/errors";
-import { findCopyLastMonthCandidates, applyCopyLastMonthCards } from "@/lib/pricing/copy-last-month-cards";
+import { findCopyLastMonthCandidates, applyCopyLastMonthCards, classifyCopyCandidates } from "@/lib/pricing/copy-last-month-cards";
+import { BadRequest } from "@/lib/api/errors";
 
 export async function POST(req: Request) {
   return withApiError(async () => {
@@ -28,7 +29,11 @@ export async function POST(req: Request) {
     }
 
     if (dryRun) {
-      const candidates = await findCopyLastMonthCandidates(parsed.month, parsed.site_id ?? null);
+      const found = await findCopyLastMonthCandidates(parsed.month, parsed.site_id ?? null);
+      // P7.2（additive）：每個候選加 change_class（same｜new｜rate_changed｜changed_in_month）——
+      // 非 same 嘅係排程唔會自動複製、要人確認嘅卡。
+      const classified = await classifyCopyCandidates(parsed.month, found);
+      const candidates = classified.map((c) => ({ ...c.candidate, change_class: c.cls }));
       return ok(brandSafeResponse({ dry_run: true, count: candidates.length, candidates }));
     }
 
@@ -44,5 +49,17 @@ export async function POST(req: Request) {
 
     const dto = mapListDTO({ rows: created, total: created.length, skip: 0, take: created.length }, toRateCardFullDTO);
     return ok(brandSafeResponse({ dry_run: false, candidate_count: candidateCount, created_count: created.length, rows: (await applyFieldGroupGateToList(session, "rate_cards", dto)).rows }));
+  });
+}
+
+// P7.2：`GET /api/rate-cards/copy-last-month?month=YYYY-MM`——只回「仲有幾多張候選未複製」數量
+// （首頁「價卡待確認」卡用；唔回價錢）。權限：出街價 view。
+export async function GET(req: Request) {
+  return withApiError(async () => {
+    await requirePermission(req, "出街價", "view");
+    const month = new URL(req.url).searchParams.get("month") ?? "";
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw BadRequest("month 要係 YYYY-MM");
+    const candidates = await findCopyLastMonthCandidates(month, null);
+    return ok(brandSafeResponse({ month, count: candidates.length }));
   });
 }

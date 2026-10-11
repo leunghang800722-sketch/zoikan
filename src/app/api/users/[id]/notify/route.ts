@@ -27,7 +27,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     assertSelfOrBoss(session, id);
     const u = await prisma.user.findUnique({ where: { id }, select: { notifyEmail: true, notifyPrefs: true } });
     if (!u) throw NotFound();
-    return ok(brandSafeResponse(dto(u)));
+    return ok(brandSafeResponse({ ...dto(u) }));
   });
 }
 
@@ -47,6 +47,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     }
     const after = await prisma.user.update({ where: { id }, data, select: { notifyEmail: true, notifyPrefs: true } });
     await writeAudit({ actorUserId: session.userId, tableName: "users", rowId: id, action: "notify_email_update", after: { changed: true, email_set: !!after.notifyEmail }, ip: getClientIp(req) });
-    return ok(brandSafeResponse(dto(after)));
+    return ok(brandSafeResponse({ ...dto(after) }));
   });
 }

@@ -10,7 +10,7 @@ export interface CreateNotificationInput {
   body: string;
   /** 站內路徑（以 / 開頭）。 */
   href?: string | null;
-  /** base_role 名（老闆／主管／會計／雞頭／安員）或 user id。 */
+  /** base_role 名（老闆／主管／會計／雞頭等）或 user id。 */
   audience: string[];
   dedupeKey: string;
 }
@@ -47,7 +47,7 @@ export async function createNotification(input: CreateNotificationInput): Promis
 }
 
 /** 揾收件人（audience 內啟用中、有 notify_email、冇關呢類）並逐個寄。永不拋錯。 */
-export async function emailNotification(n: AppNotification): Promise<number> {
+async function emailNotification(n: AppNotification): Promise<number> {
   try {
     if (!isEmailEnabled()) {
       console.log("[notify] email disabled");

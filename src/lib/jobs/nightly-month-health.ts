@@ -10,7 +10,7 @@ import { createNotification } from "@/lib/notify/create";
 import { getJobReaderSession } from "./session";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
-export const NIGHTLY_MONTH_HEALTH_KEY = "nightly_month_health";
+const NIGHTLY_MONTH_HEALTH_KEY = "nightly_month_health";
 
 type MonthState = { red: string[] };
 

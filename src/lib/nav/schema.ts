@@ -15,7 +15,7 @@ import type { Module } from "@/lib/rbac/matrix";
 const INTERNAL_GROUPS = ["", "排更", "對數", "月結", "資料", "設定"] as const;
 const BROKER_GROUPS = ["", "排更", "我的"] as const;
 
-export type BadgeKey = "approvals" | "triage" | "feedback";
+export type BadgeKey = "approvals" | "triage" | "feedback" | "notifications";
 
 export interface NavSchemaEntry {
   href: string;
@@ -34,7 +34,8 @@ export interface NavSchemaEntry {
 }
 
 export const INTERNAL_NAV: NavSchemaEntry[] = [
-  { href: "/", label: "首頁", group: "", kicker: "", module: "always" },
+  // P7.1：「首頁」badge＝未讀通知數
+  { href: "/", label: "首頁", group: "", kicker: "", module: "always", badge: "notifications" },
   { href: "/roster", label: "更表", group: "排更", kicker: "排更", module: "更表" },
   { href: "/quotas", label: "配額", group: "排更", kicker: "排更", module: "配額" },
   { href: "/approvals", label: "審批", group: "排更", kicker: "排更", module: "審批", badge: "approvals" },
@@ -59,10 +60,12 @@ export const INTERNAL_NAV: NavSchemaEntry[] = [
   { href: "/audit-log", label: "操作紀錄", group: "設定", kicker: "設定", module: "操作紀錄" },
   // 現場意見：「助手」module（雞頭／保安員硬性冇）＋淨係老闆（同 `src/app/api/feedback/**` 嘅 assertBoss 一致）。
   { href: "/feedback", label: "現場意見", group: "設定", kicker: "設定", module: "助手", onlyBaseRole: "老闆", badge: "feedback" },
+  // P7.1：排程 job（開關／時間表／立即跑）——老闆專用，無新 RBAC module（API 同頁面用 baseRole 判斷）。
+  { href: "/settings/jobs", label: "自動排程", group: "設定", kicker: "設定", module: "always", onlyBaseRole: "老闆" },
 ];
 
 export const BROKER_NAV: NavSchemaEntry[] = [
-  { href: "/", label: "首頁", group: "", kicker: "", module: "always" },
+  { href: "/", label: "首頁", group: "", kicker: "", module: "always", badge: "notifications" },
   { href: "/roster", label: "更表", group: "排更", kicker: "排更", module: "更表" },
   { href: "/quotas", label: "配額", group: "排更", kicker: "排更", module: "配額" },
   { href: "/my-receivable", label: "本月應收", group: "我的", kicker: "我的", module: "出街價" },
@@ -81,6 +84,7 @@ const EXTRA_KICKERS: Record<string, string> = {
   "/roster-uploads/reconcile": "對數",
   "/feedback/detail": "設定",
   "/change-password": "帳號",
+  "/notifications": "帳號",
 };
 
 /** 內部角色「導覽拎走」嘅 href：保持可用（redirect 或照 render），唔出現喺導覽。 */

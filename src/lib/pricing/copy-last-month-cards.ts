@@ -188,7 +188,7 @@ export async function applyCopyLastMonthCards(
 //   rate_changed      上月卡同上上月卡價錢唔同
 //   changed_in_month  上月內有新卡生效（月中改價）
 // ---------------------------------------------------------------------------
-export type CopyClass = "same" | "new" | "rate_changed" | "changed_in_month";
+type CopyClass = "same" | "new" | "rate_changed" | "changed_in_month";
 
 export interface ClassifiedCandidate {
   candidate: CopyLastMonthCandidate;

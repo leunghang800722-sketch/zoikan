@@ -2482,3 +2482,33 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 ### Client IP（`getClientIp`，登入限速／audit 用）
 
 優先 `x-real-ip`；否則 `X-Forwarded-For` 由右數第 `TRUSTED_PROXY_HOPS` 段（預設 1＝最右段；無效值當 1）；都冇則 `null`。**部署後要核實 audit 記錄嘅 `ip` 係真公網 IP**，唔係（例如見到內部 proxy IP）就將 Zeabur env 設 `TRUSTED_PROXY_HOPS=2`。
+
+## 階段 7 自動化第一批（P7，2026-10-11 老闆批准）：排程＋email 通知＋自動開新月
+
+全部 additive（舊 endpoint 行為不變）。新 endpoint 的 JSON key 一律 snake_case。運作、env、試跑、停用見 `docs/ops.md`。
+
+### 通知（任何已登入角色；只睇到 audience 包含自己 base_role 名或 user id 的通知）
+| Method／路徑 | 說明 |
+|---|---|
+| `GET /api/notifications?unread=1&take=&skip=` | `{ rows:[{id,created_at,kind,title,body,href,read}], total, unread, skip, take }`；`unread=1` 只回未讀（`total` 亦變成未讀數） |
+| `POST /api/notifications/:id/read` | 標記本人已讀，冪等；唔喺本人 audience → 404 |
+| `POST /api/notifications/read-all` | 本人全部已讀，回 `{ updated }` |
+
+通知 `title`／`body` 只含盤名／數字／id／月份，唔含 PII（`createNotification` 有 HKID／電郵／8 位電話型字串拒絕）。`kind`：`month_opened`、`rate_cards_pending`、`month_health_red`、`month_ready_to_lock`、`triage_reminder`、`job_failed`。
+
+### 通知電郵（聯絡資料）
+- `GET／PATCH /api/users/:id/notify`：本人或老闆（其他人 403）。body `{ notify_email: string|null, notify_prefs: { [kind]: boolean } }`（`.strict()`；未知 kind 400；email 格式驗證、存小寫）。
+- `notify_email` 唔入 `ai` schema（`ai.users` view 本身冇呢欄）、唔入 AI 工具輸出、`toUserDTO` 唔回；audit 只記 `notify_email_update`（`{changed:true,email_set}`，唔存電郵值）。`notify_prefs` 只控制**電郵**（站內通知照常有）。
+
+### 排程（老闆專用，`baseRole==="老闆"`，無新 RBAC module）
+| Method／路徑 | 說明 |
+|---|---|
+| `GET /api/admin/jobs` | `{ jobs:[{key,label,description,default_schedule,schedule,enabled,next_run_at,last_run_at,last_status,last_error,recent_runs[5]}] }` |
+| `PATCH /api/admin/jobs/:key` | `{ enabled?, schedule? }`；`schedule`＝5 欄 cron（香港時間），非法 400；寫 audit `update`（`scheduled_jobs`） |
+| `POST /api/admin/jobs/:key/run-now` | 手動立即跑一次（同排程共用 PG advisory lock；撞正跑緊回 409）；唔改 `next_run_at`；寫 audit `job_run_now`。回 `{ key, run_id, status, summary, error }` |
+
+### 價卡、開新月
+- `POST /api/rate-cards/copy-last-month`（dry_run）每個 `candidates[]` 多 `change_class`：`same`（價錢同上月一樣，排程會自動複製）｜`new`｜`rate_changed`｜`changed_in_month`（後三者排程唔寫，要人確認）。
+- `GET /api/rate-cards/copy-last-month?month=YYYY-MM`（`出街價:view`）：只回 `{ month, count }`（仲有幾多張候選未複製）；首頁「價卡待確認」卡用。
+- `POST /api/months/:month/open` 行為不變（核心抽成 `src/lib/months/open-month.ts`，與排程 job 共用）；`/sites` 頁新增「開新月」掣呼叫佢。
+- audit：排程 job 代寫嘅 row，`audit_log.actor_user_id` 為 null，`after.by_job`＝job key；`created_by`＝`job:<key>`。
