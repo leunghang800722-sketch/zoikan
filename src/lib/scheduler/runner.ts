@@ -53,7 +53,7 @@ export async function sweepStaleRuns(now: Date = new Date()): Promise<number> {
 export async function runJob(def: JobDef | undefined, opts: { trigger: "schedule" | "manual"; now?: Date }): Promise<RunOutcome> {
   if (!def) return { outcome: "unknown_job" };
   const now = opts.now ?? new Date();
-  const locked = await withJobLock(def.key, async (): Promise<RunOutcome> => {
+  const locked = await withJobLock(def.key, async (hold): Promise<RunOutcome> => {
     const row = await prisma.scheduledJob.findUnique({ where: { jobKey: def.key } });
     if (opts.trigger === "schedule") {
       // 認領：到期先 claim，同時推進 next_run_at（另一 instance 剛跑完就 count=0）
@@ -66,10 +66,13 @@ export async function runJob(def: JobDef | undefined, opts: { trigger: "schedule
     let error: string | undefined;
     let timedOut = false;
     let timer: NodeJS.Timeout | undefined;
+    let pendingJob: Promise<unknown> | undefined;
     try {
       const ms = jobTimeoutMs();
+      const jobP = def.run({ jobKey: def.key, trigger: opts.trigger, now });
+      pendingJob = jobP;
       result = await Promise.race([
-        def.run({ jobKey: def.key, trigger: opts.trigger, now }),
+        jobP,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new JobTimeoutError(`超過最長執行時間 ${ms} ms`)), ms);
           timer.unref?.();
@@ -77,6 +80,7 @@ export async function runJob(def: JobDef | undefined, opts: { trigger: "schedule
       ]);
     } catch (e) {
       timedOut = e instanceof JobTimeoutError;
+      if (timedOut) hold(pendingJob!); // 底層 job 未完：lock 持有到佢 settle 先釋放（防重複並發跑）
       error = errMessage(e);
       console.error(`[scheduler] job ${def.key} 失敗:`, e instanceof Error ? e.name : "error");
     }

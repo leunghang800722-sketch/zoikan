@@ -143,41 +143,57 @@ export async function applyCopyLastMonthCards(
 ): Promise<{ created: RateCard[]; candidateCount: number }> {
   // P7.2：lib 層鎖月檢查（route 本身已先查；排程 job 經呢度寫，必須有）。
   if (await isMonthLocked(monthStart(month))) throw Locked(`${month} 已鎖定，唔可以複製價卡`);
-  const all = await findCopyLastMonthCandidates(month, siteId);
-  const candidates = opts.onlySourceCardIds ? all.filter((c) => opts.onlySourceCardIds!.has(c.sourceCardId)) : all;
-  if (candidates.length === 0) return { created: [], candidateCount: 0 };
   const start = monthStart(month);
-  const sourceCards = await prisma.rateCard.findMany({ where: { id: { in: candidates.map((c) => c.sourceCardId) } } });
-  const sourceById = new Map(sourceCards.map((c) => [c.id, c]));
   const createdBy = opts.byJob ? `job:${opts.byJob}` : actorUserId;
   const auditActor = opts.byJob ? null : actorUserId;
 
-  const created: RateCard[] = [];
-  for (const cand of candidates) {
-    const src = sourceById.get(cand.sourceCardId);
-    if (!src) continue;
-    const row = await prisma.rateCard.create({
-      data: {
-        siteId: src.siteId,
-        shiftTypeId: src.shiftTypeId,
-        brokerId: src.brokerId,
-        guardId: null,
-        clientRate: src.clientRate,
-        guardWage: src.guardWage,
-        brokerFee: src.brokerFee,
-        payoutRate: src.payoutRate,
-        billingModel: src.billingModel,
-        effectiveFrom: start,
-        effectiveTo: null,
-        source: "copy_last_month",
-        note: `由上月複製（沿用 ${src.effectiveFrom.toISOString().slice(0, 10)}～${src.effectiveTo?.toISOString().slice(0, 10) ?? ""} 生效卡）`,
-        createdBy,
-      },
-    });
-    await writeAudit({ actorUserId: auditActor, tableName: "rate_cards", rowId: row.id, action: "create", after: opts.byJob ? { ...row, by_job: opts.byJob } : row, ip });
-    created.push(row);
-  }
-  return { created, candidateCount: candidates.length };
+  // P7 驗收：寫入 tx 內先攞「目標月」advisory xact lock，令並發 apply 串行；攞到 lock 後先（用已 commit 嘅最新狀態）
+  // 揾候選並喺 tx 內重查目標月已存在嘅 (盤, 更種, 雞頭, effective_from) 組合，已存在就跳過。
+  // 唔加 unique 約束（舊數據可能有重複，migration 唔准 abort）。
+  const { created, candidateCount } = await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`rate_cards:${month}`}))`;
+      const all = await findCopyLastMonthCandidates(month, siteId);
+      const candidates = opts.onlySourceCardIds ? all.filter((c) => opts.onlySourceCardIds!.has(c.sourceCardId)) : all;
+      if (candidates.length === 0) return { created: [] as RateCard[], candidateCount: 0 };
+      const sourceCards = await tx.rateCard.findMany({ where: { id: { in: candidates.map((c) => c.sourceCardId) } } });
+      const sourceById = new Map(sourceCards.map((c) => [c.id, c]));
+      const existing = await tx.rateCard.findMany({ where: { siteId: { in: [...new Set(candidates.map((c) => c.siteId))] }, effectiveFrom: start, voidedAt: null, guardId: null }, select: { siteId: true, shiftTypeId: true, brokerId: true } });
+      const seen = new Set(existing.map((c) => `${c.siteId}|${c.shiftTypeId ?? ""}|${c.brokerId ?? ""}`));
+      const rows: RateCard[] = [];
+      for (const cand of candidates) {
+        const src = sourceById.get(cand.sourceCardId);
+        if (!src) continue;
+        const key = `${src.siteId}|${src.shiftTypeId ?? ""}|${src.brokerId ?? ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(
+          await tx.rateCard.create({
+            data: {
+              siteId: src.siteId,
+              shiftTypeId: src.shiftTypeId,
+              brokerId: src.brokerId,
+              guardId: null,
+              clientRate: src.clientRate,
+              guardWage: src.guardWage,
+              brokerFee: src.brokerFee,
+              payoutRate: src.payoutRate,
+              billingModel: src.billingModel,
+              effectiveFrom: start,
+              effectiveTo: null,
+              source: "copy_last_month",
+              note: `由上月複製（沿用 ${src.effectiveFrom.toISOString().slice(0, 10)}～${src.effectiveTo?.toISOString().slice(0, 10) ?? ""} 生效卡）`,
+              createdBy,
+            },
+          }),
+        );
+      }
+      return { created: rows, candidateCount: candidates.length };
+    },
+    { timeout: 60_000, maxWait: 30_000 },
+  );
+  for (const row of created) await writeAudit({ actorUserId: auditActor, tableName: "rate_cards", rowId: row.id, action: "create", after: opts.byJob ? { ...row, by_job: opts.byJob } : row, ip });
+  return { created, candidateCount };
 }
 
 // ---------------------------------------------------------------------------

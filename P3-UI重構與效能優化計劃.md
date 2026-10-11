@@ -807,3 +807,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **必修 2**：`GET /api/rate-cards/copy-last-month` 雞頭 403（`isBrokerRole`）；另 additive 回 `auto_copy`／`needs_confirm`。
 - 一併做：(3) 單個 job 最長執行 `JOB_TIMEOUT_MS`（預設 10 分鐘，`Promise.race`；逾時 `status=timeout`、通知老闆、lock／`busy` 釋放、tick 繼續）；(4) 首頁「價卡待確認」卡只計 `needs_confirm`，note「要你確認（25 號自動複製其餘 M 張）」；(5) 排程失敗／逾時 1 小時後重試（唔遲過下次排程），連續最多重試 3 次，手動跑唔重排；(6) advisory lock 連線字串只剝 Prisma 專用參數（`schema`／`connection_limit`／`pool_timeout`／`pgbouncer` 等），保留 `sslmode`。
 - test：`p7-1-scheduler` 加重試／超時／連線字串 3＋1 條、`p7-2` 加 auto_source、雞頭 403／會計 200 共 2 條。
+
+### 11.3 驗收第二輪修正（Sonnet 5.5）
+- **必修 1**：逾時唔再釋放 advisory lock——`withJobLock(key, fn(hold))`，逾時時 `hold(底層 promise)`，lock 持有到底層 job settle 先釋放；期間 run-now → 409 `job_running`、排程重試 `skipped_locked`；原 job 完成後先可再跑。`docs/ops.md` §5b 同步。
+- **必修 2**：`applyCopyLastMonthCards` 寫入 tx 內先 `pg_advisory_xact_lock(hashtext('rate_cards:<月>'))`，攞到後先揾候選並喺 tx 內重查目標月已存在組合（跳過）；唔加 unique、唔改 schema。
+- test：`p7-1-scheduler` 逾時案改為「lock 持有至底層完成」；`p7-2` 加並發 apply（6 路只 5 張）、並發 job（價卡無重複）。
