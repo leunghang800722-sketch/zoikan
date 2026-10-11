@@ -352,6 +352,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
                 locked={locked}
                 groups={groups}
                 onOpenTriage={openTriage}
+                onChanged={() => void loadRuns()}
               />
               <LockSection
                 report={report}

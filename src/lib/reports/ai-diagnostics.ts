@@ -90,6 +90,7 @@ interface McEvidenceLike {
   kind?: string;
   summary?: string;
   confidence?: string;
+  prefillCandidateId?: string | null;
   candidates?: Array<{ id?: unknown }>;
   action?: {
     type?: string;
@@ -174,6 +175,8 @@ export async function readTriageSummary(month: Date, actor: Pick<AuthedSession, 
       site: siteId ? (siteName.get(siteId) ?? null) : (a?.siteNameRaw ?? a?.siteLabel ?? null),
       shift_type: g?.shiftTypeId ? (stCode.get(g.shiftTypeId) ?? null) : null,
       broker_display: g?.brokerId ? (brokerDisp.get(g.brokerId) ?? null) : null,
+      // P8.2：有系統預填建議答案（可批量接受）；confidence 已喺上面
+      has_suggestion: !!ev.prefillCandidateId && (Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ id?: unknown }>) : []).some((o) => o.id === "mc_accept"),
       summary,
       // 只 id（唔含名／label）：triage_answer 卡嘅 option／candidate_id 一定要用呢度嘅 id
       options: (Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ id?: unknown }>) : []).map((o) => o.id).filter((x): x is string => typeof x === "string" && x !== "skip"),

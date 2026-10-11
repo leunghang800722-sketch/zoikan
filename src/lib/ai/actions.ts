@@ -68,6 +68,8 @@ const actionCardSchema = z.discriminatedUnion("type", [
     ...base,
     params: z.object({ question_id: ID, option: NON_SKIP_OPTION, candidate_id: ID.optional() }).strict(),
   }),
+  // P8.2：批量接受系統建議（只可接受「有建議」嘅 month_close_* 題；API 逐題預覽→確認，已鎖月 403）
+  z.object({ type: z.literal("triage_accept_batch"), ...base, params: z.object({ question_ids: z.array(ID).min(1).max(200) }).strict() }),
   z.object({ type: z.literal("site_set_default_broker"), ...base, params: z.object({ site_id: ID, broker_id: ID }).strict() }),
   z.object({ type: z.literal("roster_reparse"), ...base, params: z.object({ upload_id: ID }).strict() }),
   z.object({ type: z.literal("one_click_run"), ...base, params: z.object({ month: MONTH }).strict() }),
