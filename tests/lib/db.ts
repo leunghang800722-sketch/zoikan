@@ -103,6 +103,7 @@ export async function clearAll() {
   await prisma.guardLeaveBalance.deleteMany({});
   await prisma.guardAvgWage.deleteMany({}); // §21 任務 4b(b)：新表，guard_id FK RESTRICT，一樣要喺 guard.deleteMany() 之前清（同上面四張表一致做法）
   await prisma.guardLongtermContract.deleteMany({});
+  await prisma.coverShiftRate.deleteMany({}); // P10.1：FK RESTRICT 落 site，要喺 site 刪之前先清
   await prisma.guard.updateMany({ data: { defaultBrokerId: null, referralBrokerId: null, visaSponsoredByBrokerId: null } });
   await prisma.guard.deleteMany({});
   await prisma.shiftType.deleteMany({});
