@@ -27,6 +27,40 @@ export interface MaxwellImportSummary {
   skippedLockedRows: number;
   guardFieldsFilled: number;
   warnings: string[];
+  /** P11.1：additive 欄位（`created`＝`contractsCreated`、`skippedLocked`＝`skippedLockedRows` 嘅別名，方便核對）。 */
+  created: number;
+  skippedLocked: number;
+  /** 名單月薪同 `guards.monthlySalary` 現值唔同嘅人數（導入唔改 `monthlySalary`，只提示人手核）。 */
+  salaryMismatch: number;
+  startMode: ContractStartMode;
+  /** `first_unlocked` 時合約起始日（第一個未鎖月 1 號，YYYY-MM-DD）；`original` 或冇鎖月則 null。 */
+  contractStartFrom: string | null;
+}
+
+/** P11.1：合約起始日模式。`original`＝照名單入職日（覆蓋鎖月嘅行跳過）；`first_unlocked`＝由第一個未鎖月 1 號起生效。 */
+export type ContractStartMode = "original" | "first_unlocked";
+export const CONTRACT_START_MODES: readonly ContractStartMode[] = ["original", "first_unlocked"];
+export interface MaxwellImportOptions {
+  contractStartMode?: ContractStartMode;
+}
+
+/** 第一個未鎖月＝最後一個已鎖月嘅下一個月（`month_closes.locked_at` 非空）；冇任何鎖月 → null。 */
+export async function firstUnlockedMonthStart(): Promise<Date | null> {
+  const last = await prisma.monthClose.findFirst({ where: { lockedAt: { not: null } }, orderBy: { month: "desc" }, select: { month: true } });
+  if (!last) return null;
+  return new Date(Date.UTC(last.month.getUTCFullYear(), last.month.getUTCMonth() + 1, 1));
+}
+
+type Segment = { monthlySalary: number; effectiveFrom: Date; effectiveTo: Date | null };
+
+/** P11.1：將合約段夾到 `start` 之後——完全喺 start 之前嘅段丟棄，跨 start 嘅段 effectiveFrom 改為 start。 */
+export function clipSegmentsFrom(segments: Segment[], start: Date): Segment[] {
+  const out: Segment[] = [];
+  for (const seg of segments) {
+    if (seg.effectiveTo && seg.effectiveTo.getTime() < start.getTime()) continue;
+    out.push(seg.effectiveFrom.getTime() < start.getTime() ? { ...seg, effectiveFrom: start } : seg);
+  }
+  return out;
 }
 
 function isoToDate(iso: string | null): Date | null {
@@ -60,17 +94,19 @@ function buildSegmentsFromRow(row: MaxwellStaffRow): Array<{ monthlySalary: numb
   return [{ monthlySalary: row.basic, effectiveFrom: commencement, effectiveTo: null }];
 }
 
-export async function importMaxwellContracts(fileBuffer: Buffer, actorUserId: string, ip: string | null): Promise<MaxwellImportSummary> {
-  return importMaxwellParsed(await parseMaxwellWorkbook(fileBuffer), actorUserId, ip);
+export async function importMaxwellContracts(fileBuffer: Buffer, actorUserId: string, ip: string | null, opts: MaxwellImportOptions = {}): Promise<MaxwellImportSummary> {
+  return importMaxwellParsed(await parseMaxwellWorkbook(fileBuffer), actorUserId, ip, opts);
 }
 
 /** CSV 路徑（正式站操作員淨係可以傳 CSV）——在職／離職兩個分頁各自匯出。 */
-export async function importMaxwellContractsCsv(files: MaxwellCsvFile[], actorUserId: string, ip: string | null): Promise<MaxwellImportSummary> {
-  return importMaxwellParsed(parseMaxwellCsv(files), actorUserId, ip);
+export async function importMaxwellContractsCsv(files: MaxwellCsvFile[], actorUserId: string, ip: string | null, opts: MaxwellImportOptions = {}): Promise<MaxwellImportSummary> {
+  return importMaxwellParsed(parseMaxwellCsv(files), actorUserId, ip, opts);
 }
 
-async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: string, ip: string | null): Promise<MaxwellImportSummary> {
+async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: string, ip: string | null, opts: MaxwellImportOptions = {}): Promise<MaxwellImportSummary> {
   const { rows, warnings } = parsed;
+  const startMode: ContractStartMode = opts.contractStartMode ?? "original";
+  const clipStart = startMode === "first_unlocked" ? await firstUnlockedMonthStart() : null;
 
   const candidates = await prisma.guard.findMany({
     select: { id: true, nameZh: true, staffNoMw: true, staffNo: true },
@@ -91,6 +127,11 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     skippedLockedRows: 0,
     guardFieldsFilled: 0,
     warnings: [...warnings],
+    created: 0,
+    skippedLocked: 0,
+    salaryMismatch: 0,
+    startMode,
+    contractStartFrom: clipStart ? clipStart.toISOString().slice(0, 10) : null,
   };
 
   for (const m of matches) {
@@ -98,11 +139,13 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     const row = m.row;
     // P9.2：遇已鎖月份只跳過呢一行（該行 tx 回滾；permission_denied audit 已獨立寫入），其餘照導入
     const filledBefore = summary.guardFieldsFilled;
+    const mismatchBefore = summary.salaryMismatch;
     try {
       await importOneRow(m, row);
     } catch (e) {
       if (e instanceof ApiError && e.code === "month_locked") {
         summary.guardFieldsFilled = filledBefore; // 該行 tx 已回滾
+        summary.salaryMismatch = mismatchBefore;
         summary.skippedLockedRows += 1;
         summary.warnings.push(`${row.name ?? row.staffNo ?? "（未知）"}：合約生效區間覆蓋已鎖月份，呢行跳過（${e.message}）`);
         continue;
@@ -111,6 +154,9 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     }
   }
 
+  summary.created = summary.contractsCreated;
+  summary.skippedLocked = summary.skippedLockedRows;
+  if (startMode === "first_unlocked" && summary.salaryMismatch) summary.warnings.push(`${summary.salaryMismatch} 人名單月薪同系統現值（guards.monthlySalary）唔同（未改，請人手核）`);
   return summary;
 
   async function importOneRow(m: (typeof matches)[number], row: MaxwellStaffRow): Promise<void> {
@@ -138,11 +184,17 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
         return;
       }
 
-      const segments = buildSegmentsFromRow(row);
+      const originalSegments = buildSegmentsFromRow(row);
+      // P11.1：first_unlocked＝由第一個未鎖月 1 號起生效（原入職日喺 note 留痕），避開鎖月。
+      const segments = clipStart ? clipSegmentsFrom(originalSegments, clipStart) : originalSegments;
       if (!segments.length) {
         summary.warnings.push(`${row.name ?? row.staffNo ?? "（未知）"}：Maxwell 行冇 Commencement Date 或 Basic Salary，跳過合約建立`);
         return;
       }
+
+      // P11.1：名單現行月薪（最後一段）同 guards.monthlySalary 唔同 → 只計數提示，唔寫（毛利表長工分攤讀 guards.monthlySalary）。
+      const currentSalary = segments[segments.length - 1].monthlySalary;
+      if (guard.monthlySalary != null && Number(guard.monthlySalary) !== currentSalary) summary.salaryMismatch += 1;
 
       // 現有 maxwell_import 合約同呢次算出嚟嘅「應有」合約唔同 → 全部
       // void 舊嘅（source=maxwell_import 先會，唔會 void 人手行），
@@ -191,7 +243,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
             annualLeaveDays: row.annualLeave ?? 7,
             mpfExemptReason: "auto",
             source: "maxwell_import",
-            note: `Maxwell 導入（${row.status === "active" ? "在職名單" : "離職名單"} row ${row.sheetRow}）`,
+            note: `Maxwell 導入（${row.status === "active" ? "在職名單" : "離職名單"} row ${row.sheetRow}）${clipStart ? `；由第一個未鎖月 ${clipStart.toISOString().slice(0, 10)} 起生效，原入職日 ${row.commencement ?? "?"}` : ""}`,
             createdBy: actorUserId,
           },
         });
