@@ -1930,6 +1930,8 @@ model ScheduledJob {
   lastRunAt  DateTime? @map("last_run_at")
   lastStatus String?   @map("last_status")
   lastError  String?   @map("last_error")
+  // P8.1：job 自己嘅狀態（只准 id／月份／時間戳，唔准 PII）
+  state      Json      @default("{}")
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
@@ -1947,4 +1949,23 @@ model JobRun {
 
   @@index([jobKey, startedAt(sort: Desc)])
   @@map("job_runs")
+}
+
+// P8.3：鎖月後自動生成嘅匯出檔（糧明細／月結總表／Postorder／BOCHK autopay）。content 係 xlsx bytes。
+// 同月同 kind 只得一份 current=true（partial unique index，見 migration）；舊版保留 1 份。
+model GeneratedFile {
+  id             String    @id @default(uuid())
+  month          DateTime  @db.Date
+  kind           String // payroll_detail｜monthly_close｜postorder｜longterm_autopay
+  filename       String
+  content        Bytes
+  size           Int
+  sha256         String
+  generatedAt    DateTime  @default(now()) @map("generated_at")
+  generatedBy    String    @map("generated_by") // job:after_lock_exports
+  sourceLockedAt DateTime? @map("source_locked_at")
+  current        Boolean   @default(true)
+
+  @@index([month, kind, generatedAt(sort: Desc)])
+  @@map("generated_files")
 }

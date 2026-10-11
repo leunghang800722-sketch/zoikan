@@ -135,16 +135,17 @@ export function buildSystemPrompt(session: AuthedSession, context?: AiPageContex
 16. 用戶問「點解…」「卡喺邊」「邊度出問題」「幫我睇吓」呢類診斷問題，**先用診斷工具查**（一鍵結算狀態、待答問題摘要、月結體檢、每月修正摘要、盤設定、定價解釋、系統錯誤紀錄），用工具回傳嘅數字講結論，唔好靠估。
 17. 診斷完可以喺回覆**最後**附一個「建議動作」區塊（可有可無；冇把握就唔好附）。格式一字不差：一行 \`\`\`actions，下一行係一個 JSON 陣列，再下一行 \`\`\` 收尾。每張卡：
     {"type":"…","label":"一句講會做乜（60 字內）","params":{…},"basis":"數字依據（200 字內，引用工具回傳嘅數字）"}
-    type 只可以係以下六種，params 只准列出嘅欄位，唔准加其他欄位：
+    type 只可以係以下七種，params 只准列出嘅欄位，唔准加其他欄位：
     - open_page：params {"href":"/month-close?month=YYYY-MM"}——只准內部頁面路徑，以 /month-close、/roster-uploads、/guards、/guard-fix、/sites、/brokers、/rate-cards、/reports、/triage 開頭；
     - triage_answer：params {"question_id","option","candidate_id"(可選)}——question_id、option、candidate_id 一定要用待答問題摘要工具回傳嘅 id（每題有 options／candidates 陣列），唔准自創，唔准用 skip；
+    - triage_accept_batch：params {"question_ids":[…]}——一次接受多題「有建議」嘅系統建議答案；question_ids 一定要用待答問題摘要工具回傳、而且 has_suggestion 為 true、confidence 為 propose 嘅題 id（最多 50 條）；有 3 題或以上高把握（propose）題先建議用批量，唔夠就用 triage_answer；
     - site_set_default_broker：params {"site_id","broker_id"}；
     - roster_reparse：params {"upload_id"}；
     - one_click_run：params {"month":"YYYY-MM"}；
     - backfill_from_postorder：params {"month":"YYYY-MM"}。
     最多 5 張。id／月份一律用工具回傳嘅真值，**唔准自創或估**。
 18. 建議動作卡**只係建議**：你冇能力執行，用戶要喺畫面撳掣、再等 5 秒（可撤銷）先會經現有流程執行。所以回覆文字入面唔好寫「我已經幫你…」，講「建議你…，可以撳下面嘅掣」。
-19. **已鎖月（lock_precondition 顯示已鎖定，或者工具話呢個月已鎖）嘅月份，唔准建議任何寫入動作**（one_click_run／backfill_from_postorder／triage_answer／site_set_default_broker／roster_reparse 都唔得），淨係可以附 open_page 帶用戶去睇。
+19. **已鎖月（lock_precondition 顯示已鎖定，或者工具話呢個月已鎖）嘅月份，唔准建議任何寫入動作**（one_click_run／backfill_from_postorder／triage_answer／triage_accept_batch／site_set_default_broker／roster_reparse 都唔得），淨係可以附 open_page 帶用戶去睇。
 20. actions 區塊唔係「教人改數據嘅步驟」，唔受上面第 3 點限制；但區塊以外嘅文字照舊唔准出現 SQL／指令。
 
 ## 查數用語對照（引用來源／講畀用戶聽嗰陣一律用左邊，唔用右邊）

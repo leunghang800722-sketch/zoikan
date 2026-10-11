@@ -36,6 +36,9 @@ describe("卡 → request（字面對照）", () => {
     expect(spec).toEqual({ method: "POST", url: "/api/roster-uploads/up-1/reparse" });
     expect("body" in spec).toBe(false);
   });
+  it("triage_accept_batch → POST /api/triage/questions/batch-accept { question_ids }（P8.2）", () => {
+    expect(requestForAction(card({ type: "triage_accept_batch", ...base, params: { question_ids: ["q-1", "q-2"] } }))).toEqual({ method: "POST", url: "/api/triage/questions/batch-accept", body: { question_ids: ["q-1", "q-2"] } });
+  });
   it("open_page 同 triage_answer 唔經 requestForAction", () => {
     expect(requestForAction(card({ type: "open_page", ...base, params: { href: "/triage" } }))).toBeNull();
     expect(requestForAction(card({ type: "triage_answer", ...base, params: { question_id: "q1", option: "mc_accept" } }))).toBeNull();
@@ -60,6 +63,7 @@ describe("卡 → request（字面對照）", () => {
       { type: "site_set_default_broker", params: { site_id: "s", broker_id: "b" } },
       { type: "roster_reparse", params: { upload_id: "u" } },
       { type: "triage_answer", params: { question_id: "q", option: "mc_ack" } },
+      { type: "triage_accept_batch", params: { question_ids: ["q1", "q2", "q3"] } },
     ]) {
       expect(describeAction(card({ ...c, ...base })).length).toBeGreaterThan(5);
     }
@@ -75,6 +79,9 @@ describe("人手操作 call site 仍然同卡一致（原始碼掃描）", () =>
   });
   it("盤管理「採用預設雞頭」：apiPatch(`/api/sites/${editingId}`, { default_settlement_broker_id })", () => {
     expect(src("src/app/(app)/sites/page.tsx")).toContain("apiPatch(`/api/sites/${editingId}`, { default_settlement_broker_id: suggestion.suggestion.broker_id })");
+  });
+  it("批量接受掣：apiPost(\"/api/triage/questions/batch-accept\", { question_ids })（P8.2）", () => {
+    expect(src("src/components/BatchAcceptButton.tsx")).toContain('apiPost<BatchRes>("/api/triage/questions/batch-accept", { question_ids: pendingIds.current.slice(i, i + CHUNK) })');
   });
   it("更表上載「重新解析」：apiPost(`/api/roster-uploads/${uploadId}/reparse`)（冇 body）", () => {
     expect(src("src/app/(app)/roster-uploads/RosterUploadsClient.tsx")).toContain("apiPost(`/api/roster-uploads/${uploadId}/reparse`)");

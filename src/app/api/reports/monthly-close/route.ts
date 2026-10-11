@@ -4,15 +4,12 @@
 // code）。`?export=1` 匯出 xlsx。五條自動對數規則見
 // `POST /api/month-closes/:id/generate`（月結工作台用嗰個接口一次過攞
 // 埋 reconciliation）。
-import fs from "node:fs";
 import { NextResponse } from "next/server";
-import os from "node:os";
-import path from "node:path";
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { parseMonthParam, monthLabel, monthStart } from "@/lib/reports/money";
-import { buildMonthlyClose, writeMonthlyCloseXlsx, DEFAULT_REPORT_MONTH, type MonthlyCloseSiteRow } from "@/lib/reports/monthly-close";
+import { buildMonthlyClose, writeMonthlyCloseBuffer, DEFAULT_REPORT_MONTH, type MonthlyCloseSiteRow } from "@/lib/reports/monthly-close";
 import { prisma } from "@/lib/db";
 // WP-PRICE §3：頁頂「N 更未定價，金額未計入」Notice 要用嘅 additive 欄。
 import { buildUnpricedSummary } from "@/lib/pricing/unpriced";
@@ -37,10 +34,7 @@ export async function GET(req: Request) {
 
     if (isExport) {
       await requirePermission(req, "月結總表", "export");
-      const tmpPath = path.join(os.tmpdir(), `monthly-close-${Date.now()}.xlsx`);
-      await writeMonthlyCloseXlsx(tmpPath, month);
-      const buf = fs.readFileSync(tmpPath);
-      fs.unlinkSync(tmpPath);
+      const buf = await writeMonthlyCloseBuffer(month); // P8.3：直接 Buffer，唔落 tmp 檔（內容同 writeMonthlyCloseXlsx 一樣）
       return new NextResponse(new Uint8Array(buf), {
         status: 200,
         headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="monthly-close.xlsx"` },

@@ -66,6 +66,8 @@ export class AutoCollector implements ChangeWriter {
   readonly warnings: string[] = [];
   /** 呢個 run 自動建嘅新盤（site_new 分診用）。 */
   readonly newSiteIds = new Set<string>();
+  /** P8 M1：分診 session 擁有人（自動 run＝該月最新上載者／系統帳號）；冇設＝actorUserId（人手撳一鍵嗰個人）。 */
+  triageOwnerUserId?: string;
   private postorderP: Promise<PostorderEvidence | null> | null = null;
   private brokersP: Promise<BrokerLite[]> | null = null;
 

@@ -77,6 +77,7 @@ export const BROKER_NAV: NavSchemaEntry[] = [
 const EXTRA_KICKERS: Record<string, string> = {
   "/guards/import": "資料",
   "/guards/new-from-docs": "資料",
+  "/month-close/files": "月結",
   "/reports/gross-margin": "月結 › 報表",
   "/reports/payroll": "月結 › 報表",
   "/reports/longterm-payroll": "月結 › 報表",
