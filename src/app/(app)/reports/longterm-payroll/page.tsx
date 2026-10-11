@@ -7,6 +7,7 @@
 // 月鎖後唯讀）；④ 合約管理（列表/編輯/Maxwell 導入）；⑤ 平均工資／
 // 假期餘額（逐人顯示、可人手改）；⑥ BOCHK autopay 檔下載。手機 375px
 // 用得；hint 唔寫「編號」（跟鐵則）。
+import Link from "next/link";
 import { Fragment, useEffect, useState, useCallback } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
@@ -210,6 +211,7 @@ export default function LongtermPayrollPage() {
         subtitle="長工月薪糧——合約管理、逐月計糧、人手輸入、平均工資／假期餘額、BOCHK autopay 檔"
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Link href="/settings/cover-rates" className="text-zk-sm text-zk-primary underline" data-testid="ltpay-to-cover-rates">頂位價目表 ›</Link>
             <MonthPicker value={month} onChange={setMonth} />
             <Button variant="primary" onClick={recompute} disabled={recomputing || payroll?.locked}>
               {recomputing ? "重算緊…" : "重算本月"}
