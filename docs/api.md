@@ -1585,6 +1585,15 @@ PER_MONTH`）同樣已經老闆確認鎖死，唔准手多改。
   「長工糧」`create`。回 `{summary: {totalRows, matchedByStaffNo,
   matchedByName, unmatched[], contractsCreated, contractsUpdated,
   skippedManualContract[], guardFieldsFilled, warnings[]}}`。
+  **P11.1（additive）**：可選 multipart 欄位 `contract_start_mode`
+  （`original` 預設＝照舊，覆蓋已鎖月嘅行跳過；`first_unlocked`＝合約
+  `effective_from` 設為「第一個未鎖月」（最後一個已鎖月嘅下一個月）1 號，
+  原入職日寫入合約 `note`，唔跳過；舊薪段完全喺起始日前會丟棄；冇任何鎖月
+  則保持原入職日；非法值 400）。`summary` 加 `created`（＝`contracts_created`）、
+  `skipped_locked`（＝`skipped_locked_rows`）、`salary_mismatch`（名單現行
+  月薪同 `guards.monthly_salary` 唔同嘅人數，**導入絕不改 `monthly_salary`**，
+  `first_unlocked` 時另加一條 warning）、`start_mode`、`contract_start_from`。
+  UI：長工糧頁合約 tab「合約起始」下拉。
 
 測試：`tests/longterm-payroll-maxwell-import.test.ts`（9 條 parser／
 match 純函數）、`tests/longterm-payroll-import-service.test.ts`（5 條
