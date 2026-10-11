@@ -25,6 +25,7 @@ export async function clearAll() {
   // 保證每個 test 開始都係出廠設定，唔會俾第啲 test file 嘅改動漏過嚟。
   await prisma.appNotification.deleteMany({}); // P7.1：通知（無 FK）
   await prisma.jobRun.deleteMany({}); // P7.1：排程紀錄（無 FK）
+  await prisma.aiDailyUsage.deleteMany({}); // P9.2：AI 每日額度計數（無 FK）
   await prisma.generatedFile.deleteMany({}); // P8.3：鎖月後生成嘅檔（無 FK）
   await prisma.scheduledJob.deleteMany({});
   await prisma.appErrorLog.deleteMany({}); // WP-AI-DIAG：應用層錯誤日誌（無 FK）
