@@ -27,9 +27,12 @@ export async function GET(req: Request) {
     const month = parseMonthParam(url.searchParams.get("month"));
     const guardId = url.searchParams.get("guard_id");
     const includeVoided = url.searchParams.get("include_voided") === "1";
+    const statusParam = url.searchParams.get("status"); // P9.1：draft／confirmed；冇帶＝全部
+    if (statusParam !== null && statusParam !== "draft" && statusParam !== "confirmed") throw BadRequest("status 只可以係 draft 或 confirmed");
     const where: Prisma.LongtermPayrollInputWhereInput = {
       ...(month ? { month } : {}),
       ...(guardId ? { guardId } : {}),
+      ...(statusParam ? { status: statusParam } : {}),
       ...(includeVoided ? {} : { voidedAt: null }),
     };
     const rows = await prisma.longtermPayrollInput.findMany({
