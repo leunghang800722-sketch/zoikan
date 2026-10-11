@@ -42,11 +42,13 @@ describe("P6.1c：Maxwell 導入鎖月", () => {
     return { guard, c };
   }
 
-  it("生效區間蓋過已鎖月（2026-06）：薪酬有變 → 403 month_locked，舊合約冇 void、冇新合約", async () => {
+  it("生效區間蓋過已鎖月（2026-06）：薪酬有變 → P9.2 逐行跳過（summary 計數），舊合約冇 void、冇新合約", async () => {
     const { guard, c } = await seedAutoContract("MG9201", "測試長工甲", "2024-01-01", 15000);
     const buf = await buildWorkbook([{ staffNo: "MG9201", name: "測試長工甲", basic: 16000, commencement: "2024-01-01" }]);
     const deniedBefore = await prisma.auditLog.count({ where: { tableName: "guard_longterm_contracts", action: "permission_denied" } });
-    await expect(importMaxwellContracts(buf, actorUserId, null)).rejects.toMatchObject({ code: "month_locked" });
+    const summary = await importMaxwellContracts(buf, actorUserId, null);
+    expect(summary.skippedLockedRows).toBe(1);
+    expect(summary.contractsCreated).toBe(0);
     const all = await prisma.guardLongtermContract.findMany({ where: { guardId: guard.id } });
     expect(all).toHaveLength(1);
     expect(all[0].id).toBe(c.id);
