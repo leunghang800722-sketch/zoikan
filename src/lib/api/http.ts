@@ -7,7 +7,11 @@ import { writeAppErrorLog } from "../app-error-log";
 
 export function getClientIp(req: Request): string | null {
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
+  // 驗收修正：取最右一段（平台 proxy 加嗰段）——左段由 client 自填，可偽造。
+  if (xff) {
+    const parts = xff.split(",").map((x) => x.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1]!;
+  }
   const real = req.headers.get("x-real-ip");
   if (real) return real;
   return null;

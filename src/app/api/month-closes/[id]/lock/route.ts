@@ -17,7 +17,7 @@ import { readJson } from "@/lib/api/query";
 import { toMonthCloseDTO } from "@/lib/api/dto";
 import { applyFieldGroupGate } from "@/lib/api/field-groups";
 import { writeAudit } from "@/lib/audit";
-import { Conflict, BadRequest, Forbidden } from "@/lib/api/errors";
+import { Conflict, BadRequest, Forbidden, ApiError } from "@/lib/api/errors";
 import { buildReconciliation } from "@/lib/reports/reconciliation";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { checkRosterUploadCoverage } from "@/lib/roster-upload/lock-precondition";
@@ -63,15 +63,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     // `FOR SHARE` 查鎖月（assertMonthNotLockedTx），所以仍在跑嘅長寫入 tx 會令
     // 呢度等佢 commit，鎖月之後先開嘅寫入 tx 一定睇到 locked_at。update 加
     // `lockedAt: null` 條件並判 count（兩個並發鎖月請求只有一個成功，另一個 409）。
-    const after = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM month_closes WHERE id = ${id} FOR UPDATE`;
-      const res = await tx.monthClose.updateMany({
-        where: { id, lockedAt: null },
-        data: { lockedAt: new Date(), lockedBy: session.userId, rosterVersionNote: note ?? before.rosterVersionNote },
-      });
-      if (res.count === 0) throw Conflict("呢個月已經鎖定咗");
-      return tx.monthClose.findUniqueOrThrow({ where: { id } });
-    });
+    // 驗收修正：等長寫入 tx（reconcile-apply 可達 120 秒）期間唔好撞 Prisma 預設 5 秒 tx
+    // timeout 變 500——tx 開頭 `SET LOCAL lock_timeout`（預設 10 秒，env MONTH_LOCK_TIMEOUT_MS 可調），
+    // tx timeout 15 秒；等唔到（PG 55P03／Prisma P2028）→ 409 `lock_busy`。
+    const lockWaitMs = Number(process.env.MONTH_LOCK_TIMEOUT_MS) > 0 ? Math.floor(Number(process.env.MONTH_LOCK_TIMEOUT_MS)) : 10_000;
+    let after;
+    try {
+      after = await lockMonthTx(id, lockWaitMs, session.userId, note ?? before.rosterVersionNote);
+    } catch (err) {
+      const e = err as { code?: string; message?: string; meta?: { code?: string } };
+      if (e?.code === "P2028" || e?.meta?.code === "55P03" || e?.code === "55P03" || /55P03|lock timeout/i.test(e?.message ?? "")) {
+        throw new ApiError(409, "lock_busy", "有寫入進行中，請稍後再鎖");
+      }
+      throw err;
+    }
+
     await writeAudit({
       actorUserId: session.userId,
       tableName: "month_closes",
@@ -89,4 +95,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
     return ok(brandSafeResponse({ month_close: await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(after)), reconciliation, roster_upload_coverage: coverage }));
   });
+}
+
+async function lockMonthTx(id: string, lockWaitMs: number, userId: string, rosterVersionNote: string | null) {
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '${lockWaitMs}ms'`);
+      await tx.$queryRaw`SELECT id FROM month_closes WHERE id = ${id} FOR UPDATE`;
+      const res = await tx.monthClose.updateMany({
+        where: { id, lockedAt: null },
+        data: { lockedAt: new Date(), lockedBy: userId, rosterVersionNote },
+      });
+      if (res.count === 0) throw Conflict("呢個月已經鎖定咗");
+      return tx.monthClose.findUniqueOrThrow({ where: { id } });
+    },
+    { timeout: lockWaitMs + 5_000, maxWait: 5_000 },
+  );
 }

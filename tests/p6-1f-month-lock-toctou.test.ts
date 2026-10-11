@@ -81,3 +81,32 @@ describe("P6.1f：鎖月 TOCTOU", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe("P6.1f 驗收修正：鎖月等唔到長寫入 tx → 409 lock_busy", () => {
+  it("writer 揸 FOR SHARE 超過 lock_timeout → 409 lock_busy、locked_at 仍 null；釋放後再鎖 → 200", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const cookie = await sessionCookieForUser(fx.userIds["老闆"]);
+    const mcId = (await prisma.monthClose.create({ data: { month: fx.unlockedMonth, createdBy: "test" } })).id;
+    process.env.MONTH_LOCK_TIMEOUT_MS = "1500";
+    try {
+      const started = deferred();
+      const release = deferred();
+      const writer = prisma.$transaction(async (tx) => {
+        await assertMonthNotLockedTx(tx, { workDate: fx.unlockedMonth, actorUserId: null, tableName: "t", rowId: "x", ip: null });
+        started.resolve();
+        await release.promise;
+      }, { timeout: 30_000 });
+      await started.promise;
+      const busy = await lockReq(cookie, mcId);
+      expect(busy.status).toBe(409);
+      expect((await busy.json()).error).toBe("lock_busy");
+      expect((await prisma.monthClose.findUniqueOrThrow({ where: { id: mcId } })).lockedAt).toBeNull();
+      release.resolve();
+      await writer;
+      expect((await lockReq(cookie, mcId)).status).toBe(200);
+    } finally {
+      delete process.env.MONTH_LOCK_TIMEOUT_MS;
+    }
+  });
+});

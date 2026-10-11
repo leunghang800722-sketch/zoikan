@@ -91,8 +91,26 @@ describe("P6.3：登入保護", () => {
     expect(checkLoginAllowed("1.1.1.1", t0).ok).toBe(false);
     expect(checkLoginAllowed("1.1.1.1", t0 + 6_100).ok).toBe(true); // 每分鐘 10 個 → 6 秒補 1 個
     resetLoginRateLimit();
-    let denied = 0;
-    for (let i = 0; i < 400; i++) if (!checkLoginAllowed(null, t0).ok) denied++;
-    expect(denied).toBeGreaterThan(0);
+    for (let i = 0; i < 1000; i++) expect(checkLoginAllowed(null, t0).ok).toBe(true); // 只檢查唔扣
+    for (let i = 0; i < 1000; i++) recordLoginFailure(null, t0); // 全局只扣失敗
+    expect(checkLoginAllowed(null, t0).ok).toBe(false);
+  });
+
+  it("輪換 X-Forwarded-For 左段偽造 12 次失敗：getClientIp 取最右段，仍然被每 IP 限速 429", async () => {
+    for (let i = 0; i < 10; i++) {
+      const r = await loginPOST(loginReq(`9100000${i}`, "whatever-pw1", `10.9.9.${i}, 203.0.113.50`));
+      expect(r.status).toBe(401);
+    }
+    for (let i = 10; i < 12; i++) {
+      const r = await loginPOST(loginReq(`9100000${i}`, "whatever-pw1", `10.9.9.${i}, 203.0.113.50`));
+      expect(r.status).toBe(429);
+    }
+  });
+
+  it("偽造多個 IP 嘅成功登入唔扣全局 bucket（正常登入唔會 429）", async () => {
+    for (let i = 0; i < 40; i++) {
+      const r = await loginPOST(loginReq(ownerTel, TEST_USER_PASSWORD, `1.2.3.${i}, 198.51.100.77`));
+      expect(r.status).toBe(200);
+    }
   });
 });

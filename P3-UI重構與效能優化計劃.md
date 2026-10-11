@@ -742,15 +742,16 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 **驗證**
 
 - 新增 test：10 檔、60 條（`tests/p6-1ab-…`、`p6-1c-…`、`p6-1d-…`、`p6-1e-…`、`p6-1f-…`、`p6-2-…`、`p6-3-…`、`p6-4-h9-…`、`p6-4-h10-…`、`p6-4-csrf-headers`）：5 個鎖月漏洞各有「鎖咗月 → 403 `month_locked`＋DB 零改動；未鎖 → 行為不變」；SQL guard 繞過類 test 20 條（逗號 join、`AS` 改名、子查詢、CTE、`*`／`t.*`／整行引用、UNION、函數包欄、相關子查詢、注釋混淆、`audit_log` JSON、`query_to_xml`、parse 失敗、LIMIT）＋4 條 `sql_select` 工具端到端；login 並發 20 個錯密碼請求最多 5 個被驗、全部 401，IP 限速 429＋`Retry-After`，三種失敗 status／body 完全一致。
-- `npx vitest run`（隔離 PG 54374）：**226 檔全過，3,541 passed**（階段 5 為 215 檔／3,470）。`tsc --noEmit` 0；`tsc --noUnusedLocals --noUnusedParameters` 0；`npm run lint` 0 warning；`npm run build` 過（`rm -rf .next` 後；多咗 `ƒ Middleware 34.2 kB`）；knip 0。
+- `npx vitest run`（隔離 PG 54374）：**226 檔全過，3,526 passed／15 skipped（共 3,541）**（階段 5 為 215 檔／3,470）。`tsc --noEmit` 0；`tsc --noUnusedLocals --noUnusedParameters` 0；`npm run lint` 0 warning；`npm run build` 過（`rm -rf .next` 後；多咗 `ƒ Middleware 34.2 kB`）；knip 0。
 - `npm run gate:locked-months`（隔離 dev PG 54375）：**12/12 rc=0**；snapshot 5,080 數字葉，同舊基線 snapshot 嘅全部數值 multiset 逐個相同（只有 uuid 排序次序差異）。
 - Playwright 全部 spec（隔離 PG 54375、`next start` 3181、`AI_LLM=fake`；gate 後 `db:reset`＋`db:seed` 重 seed 再跑）：**221 passed｜4 skipped（原有 `test.skip`）｜0 failed**；e2e 固定帳號冇改，login e2e 照過。
 - `package-lock.json`：只由 `npm install --save-exact pgsql-ast-parser` 生成，diff 純新增（+79 行，冇 dev 旗改動）。
 
 **已知限制／交驗收者留意**
 
-1. 限速狀態喺 process 記憶體：多 instance 各自計、重啟清零；IP 取自 `X-Forwarded-For` 第一段，要平台 proxy 可信先可靠（H8 原文「XFF 照信」未處理）。
+1. 限速狀態喺 process 記憶體：多 instance 各自計、重啟清零。`getClientIp` 改取 `X-Forwarded-For` **最右一段**（平台 proxy 加嗰段，偽造左段無效），依賴部署平台 proxy 一定會加 XFF；全局 bucket 只扣失敗、上限 1000／分鐘，每 IP 10 次失敗／分鐘。
+   鎖月 route 等長寫入 tx：`lock_timeout` 預設 10 秒（env `MONTH_LOCK_TIMEOUT_MS`），逾時回 409 `lock_busy`。
 2. `sql_select` 對 parser 唔識嘅合法寫法（例如 `WITH RECURSIVE`、`LIMIT ALL`、`IS NOT DISTINCT FROM`）一律拒絕；`SELECT *` 掂到有遮罩欄嘅表（例如 `ai.shift_records`）而家對冇收客價／出街價權限嘅角色拒絕（以前係靜靜剝欄）——助手要明確列欄。
-3. Maxwell 導入遇到鎖月區間會整個請求 403（唔係逐行跳過）；已 commit 嘅前面行保留。
+3. Maxwell 導入遇到已鎖月區間會整份 403（唔係逐行跳過）；已 commit 嘅前面行保留；下一階段改逐行跳過。
 4. `reprice` 逐批 tx：中途鎖月令後面批次 409，前面批次已 commit（原有分批語意，冇新增）。
 5. 未做：CSP；容器 root 用戶；`XFF` 偽造防護（需要部署層配合）。
