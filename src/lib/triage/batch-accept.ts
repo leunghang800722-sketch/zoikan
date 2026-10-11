@@ -15,14 +15,14 @@ import { z } from "zod";
 import { isBoss, listSessionsFor } from "./session";
 import type { QuestionOption } from "./types";
 
-export const BATCH_ACCEPT_MAX = 200;
+const BATCH_ACCEPT_MAX = 200;
 export const batchAcceptBodySchema = z.object({ question_ids: z.array(z.string().min(1).max(64)).min(1).max(BATCH_ACCEPT_MAX) }).strict();
 
 const MC_SOURCES = ["month_close", "postorder_backfill"] as const;
 const ACCEPT_ANSWER = { option: "mc_accept" } as const;
 
-export type BatchItemStatus = "answered" | "skipped" | "error";
-export interface BatchItemResult {
+type BatchItemStatus = "answered" | "skipped" | "error";
+interface BatchItemResult {
   id: string;
   status: BatchItemStatus;
   reason: string | null;

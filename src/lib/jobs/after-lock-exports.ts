@@ -10,7 +10,7 @@ import { mergeJobState, readJobState } from "@/lib/scheduler/state";
 import { AFTER_LOCK_EXPORTS_BY, FILE_KINDS, FILE_KIND_META, buildFile, saveGeneratedFile, type FileKind } from "@/lib/files/generated";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
-export const AFTER_LOCK_EXPORTS_KEY = "after_lock_exports";
+const AFTER_LOCK_EXPORTS_KEY = "after_lock_exports";
 const FIRST_RUN_WINDOW_MS = 31 * 86400000;
 
 type KindOutcome = "ok" | "skipped_no_longterm_payroll" | "error";

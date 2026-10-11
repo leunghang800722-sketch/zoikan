@@ -16,7 +16,7 @@ import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
 export const AUTO_ONE_CLICK_KEY = "auto_one_click";
 /** 最新上載要靜置幾耐先自動跑（等齊所有檔）。 */
-export const UPLOAD_SETTLE_MS = 10 * 60 * 1000;
+const UPLOAD_SETTLE_MS = 10 * 60 * 1000;
 
 type SkipReason = "locked" | "settling" | "no_new_upload" | "already_triggered" | "run_in_progress" | "busy";
 

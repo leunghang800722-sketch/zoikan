@@ -2512,3 +2512,29 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
 - `GET /api/rate-cards/copy-last-month?month=YYYY-MM`（`出街價:view`）：只回 `{ month, count, auto_copy, needs_confirm }`（仲有幾多張候選未複製；`auto_copy`＝25 號排程會自動複製嘅 `same` 張數）；首頁「價卡待確認」卡用。**雞頭 403**。
 - `POST /api/months/:month/open` 行為不變（核心抽成 `src/lib/months/open-month.ts`，與排程 job 共用）；`/sites` 頁新增「開新月」掣呼叫佢。
 - audit：排程 job 代寫嘅 row，`audit_log.actor_user_id` 為 null，`after.by_job`＝job key；`created_by`＝`job:<key>`。
+
+## 階段 8 自動化第二批（P8，2026-10-11 老闆批准）
+
+全部 additive。新 endpoint 的 JSON key 一律 snake_case。排程 job 運作見 `docs/ops.md`。
+
+### 待答題批量接受建議（P8.2）
+| Method／路徑 | 說明 |
+|---|---|
+| `GET /api/triage/questions/batch-accept/preview?session_id=\|month=YYYY-MM` | 權限 `導入分診:view`（要同時有「一鍵結算:create」先有嘢列，否則 `items:[]`）。`{ items:[{id,session_id,kind,kind_label,title,month,summary,suggestion,confidence,count,identity_label}], total }`：只列 `month_close`／`postorder_backfill` session 內 **open、有系統預填建議答案（`mc_accept`）、月份未鎖** 嘅題；非老闆只見自己嗰批。`identity_label`（保安員配對題嘅更表身份）淨係有「保安員個人資料:view」先有值，其餘口徑同 `mcQuestionViews` |
+| `POST /api/triage/questions/batch-accept` | body `{ question_ids: string[] }`（1–200，`.strict()`；否則 400）。權限同單題 answer：`導入分診:update`＋「一鍵結算:create」＋只可答自己嗰批（老闆全部）。逐題 `previewMcAnswer` → `submitMcAnswer`（同一條寫入路徑、同鎖月檢查，audit `triage_answer` 同單題一樣，`after` 多 `batch_id`）。回 `{ batch_id, results:[{id,status:"answered"\|"skipped"\|"error",reason}], counts:{answered,skipped,error} }`。`skipped`：`no_suggestion`（含保安員導入題——冇系統建議答案概念）、`already_answered`、`not_open`、`cannot_confirm`；`error`：該題丟錯（reason 係 lib 嘅中文句，唔含 PII），**一題失敗唔影響其餘**。**任何一題屬已鎖月份 → 整批 403 `month_locked`**，唔寫任何嘢 |
+
+AI 助手白名單多 `triage_accept_batch{question_ids[]}` 動作卡（`src/lib/ai/actions.ts`），撳卡＝同一條 API＋5 秒撤銷；`triage_summary` 工具每題多 `has_suggestion`（`confidence` 原本已有）。
+
+### 鎖月後自動生成嘅檔（P8.3）
+| Method／路徑 | 說明 |
+|---|---|
+| `GET /api/files?month=YYYY-MM` | `{ files:[{id,month,kind,kind_label,filename,size,sha256,generated_at,generated_by,source_locked_at,current,needs_confirm}] }`，最多 200 行，**唔含 content**。`kind`：`payroll_detail`（糧明細:export）｜`monthly_close`（月結總表:export）｜`postorder`（月結總表:export）｜`longterm_autopay`（長工糧:export）；只列有權嘅 kind，一個都冇權（雞頭／保安員）→ 403 |
+| `GET /api/files/:id` | 下載（`Content-Disposition: attachment`，`X-File-Sha256`）。權限按 kind（同原匯出 route）；冇權 403（唔存在 id 對冇任何 export 權嘅人一樣 403）；唔存在 404。`longterm_autopay` 要 `?confirm_locked=1`，否則 400＋`export_download_blocked` audit。成功寫 `export_download` audit（`generated_files`，after 只有月份／kind／size） |
+
+內容由現有匯出 lib 生成（新增 `writePayrollBuffer`／`writeMonthlyCloseBuffer`，同 `write…Xlsx` 共用同一份 workbook builder；`GET /api/reports/payroll?export=1`、`/monthly-close?export=1` 改用 buffer，輸出不變）。
+
+### 其他
+- `GET /api/guards?expiring_within_days=30` 早已支援任意非負整數；頁面 `/guards?expiring=30`（additive query）預設揀「30 日內到期」（P8.4）。
+- audit：`audit_log.after` 嘅 `by_job` 現在對**所有**表保留（之前只喺有 DTO mapper 嘅表保留；未登記表只存 `{id}`＋白名單 meta key）。
+- 通知 `kind` 新增：`one_click_auto`、`month_files_ready`、`permit_expiry_weekly`、`ops_digest_ready`。
+- 排程 job 新增（`GET /api/admin/jobs`）：`auto_one_click`、`after_lock_exports`、`permit_expiry_weekly`、`lock_ops_digest`。

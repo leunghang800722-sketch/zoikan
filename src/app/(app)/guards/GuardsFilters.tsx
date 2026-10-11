@@ -51,15 +51,10 @@ export function GuardsFilters({
             <MonthPicker label="本月更數月份" value={month} onChange={setMonth} />
             {/* WP-PII：老闆決定「雞頭視角完全唔變」——呢個新 FilterChip
                 淨係內部角色顯示，雞頭個 toolbar 保持原樣。 */}
+            {/* P8.4：同一個 chip——平時係「90 日內到期」（舊行為不變）；經證件到期週報連結 /guards?expiring=30 入嚟就顯示「30 日內到期」（已剔）。唔加第二個 chip，免得工具列多一行令「新增 ▾」選單跌去側欄底。 */}
             {!isBroker && (
-              <FilterChip label="牌照／平安卡／QAS 90 日內到期" showCaret={false}>
-                <input type="checkbox" checked={expiringDays === 90} onChange={(e) => setExpiringDays(e.target.checked ? 90 : 0)} />
-              </FilterChip>
-            )}
-            {/* P8.4：30 日內到期（證件到期週報通知連結 /guards?expiring=30） */}
-            {!isBroker && (
-              <FilterChip label="牌照／平安卡／QAS 30 日內到期" showCaret={false}>
-                <input type="checkbox" checked={expiringDays === 30} onChange={(e) => setExpiringDays(e.target.checked ? 30 : 0)} data-testid="guards-expiring-30" />
+              <FilterChip label={`牌照／平安卡／QAS ${expiringDays === 30 ? 30 : 90} 日內到期`} showCaret={false}>
+                <input type="checkbox" checked={expiringDays !== 0} onChange={(e) => setExpiringDays(e.target.checked ? 90 : 0)} data-testid="guards-expiring-toggle" />
               </FilterChip>
             )}
             {!isBroker && (

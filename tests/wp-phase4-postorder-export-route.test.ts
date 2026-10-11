@@ -38,6 +38,8 @@ describe("GET /api/reports/postorder/:month", () => {
   });
 
   it("老闆／會計 200，回一個有四個 sheet 嘅 xlsx，寫 audit_log", async () => {
+    // audit_log append-only、跨檔唔清：用「之前已有幾多條」做基線（其他 test 檔，例如 P8.3 自動出檔，亦會經 postorder route 寫 export_download）
+    const auditsBefore = await prisma.auditLog.count({ where: { action: "export_download", tableName: "shift_records" } });
     for (const cookie of [ownerCookie, accountantCookie]) {
       const res = await getPostorderExport(req("http://test.local/api/reports/postorder/2026-08", cookie), params("2026-08"));
       expect(res.status).toBe(200);
@@ -49,7 +51,8 @@ describe("GET /api/reports/postorder/:month", () => {
       expect(wb.worksheets.map((w) => w.name)).toEqual(["Roster", "PostOrder", "Summary", "口徑說明"]);
     }
 
-    const audits = await prisma.auditLog.findMany({ where: { action: "export_download", tableName: "shift_records" } });
+    const allAudits = await prisma.auditLog.findMany({ where: { action: "export_download", tableName: "shift_records" }, orderBy: { createdAt: "asc" } });
+    const audits = allAudits.slice(auditsBefore);
     expect(audits.length).toBe(2);
     for (const a of audits) {
       const after = a.after as { month?: string };

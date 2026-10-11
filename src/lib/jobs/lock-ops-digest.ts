@@ -14,7 +14,7 @@ import { mergeJobState, readJobState } from "@/lib/scheduler/state";
 import { getJobReaderSession } from "./session";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
-export const LOCK_OPS_DIGEST_KEY = "lock_ops_digest";
+const LOCK_OPS_DIGEST_KEY = "lock_ops_digest";
 const FIRST_RUN_WINDOW_MS = 31 * 86400000;
 
 /** 數字摘要：全部由 digest 內數字砌（唔經 AI、唔含人名）。 */
@@ -36,7 +36,7 @@ async function maybeAiSummary(digest: OpsDigest): Promise<string | null> {
     const r = await generateDigestSummary(digest, getLlmClient());
     await writeAudit({ actorUserId: null, tableName: "ai_chat", rowId: LOCK_OPS_DIGEST_KEY, action: "ai_chat", after: { source: "ops_digest", by_job: LOCK_OPS_DIGEST_KEY, month: digest.month, input_tokens: r.inputTokens, output_tokens: r.outputTokens, guard_triggered: r.guardTriggered }, ip: null });
     if (r.guardTriggered || !r.text.trim()) return null;
-    return r.text.trim();
+    return r.text.trim().slice(0, 1200); // 通知內文有上限（真 provider 最多 8 句；防異常長輸出）
   } catch (e) {
     console.error("[lock_ops_digest] AI 摘要失敗（只推數字摘要）:", e instanceof Error ? e.name : "error");
     return null;
