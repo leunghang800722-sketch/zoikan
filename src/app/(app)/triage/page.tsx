@@ -1,6 +1,6 @@
 "use client";
 // WP-AI-OPS §28.4：待答問題——列出導入分診 session（老闆見全部＋可轉交；其他人見自己上載嗰批），可繼續答。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
@@ -45,6 +45,13 @@ export default function TriagePage() {
   // P3-4.3（H14）：預設只顯示「有未答」嘅 session；已處理晒／被取代嘅摺埋，「顯示全部」先出。轉交收入每張卡嘅「⋯」。
   const [showAll, setShowAll] = useState(false);
   const [moreOpen, setMoreOpen] = useState<string | null>(null);
+  // 左欄 badge：答題後 debounce 2 秒先 refresh layout（唔再每次關對話框就整頁重載）
+  const badgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshBadge = useCallback(() => {
+    if (badgeTimer.current) clearTimeout(badgeTimer.current);
+    badgeTimer.current = setTimeout(() => router.refresh(), 2000);
+  }, [router]);
+  useEffect(() => () => { if (badgeTimer.current) clearTimeout(badgeTimer.current); }, []);
 
   const load = useCallback(async () => {
     const res = await apiGet<ListRes>(`/api/triage/sessions${mineOnly ? "?mine=1" : ""}`);
@@ -104,8 +111,10 @@ export default function TriagePage() {
           <div key={s.id} className="space-y-2 rounded-lg border border-zk-border p-3 text-zk-base" data-testid="triage-session-card">
             <div className="flex flex-wrap items-center gap-2">
               <b>{SOURCE_LABEL[s.source_type] ?? s.source_type}</b>
-              <Pill variant={s.status === "done" ? "success" : "warning"}>{s.superseded_all ? "已被較新嘅導入取代" : s.counts.open === 0 ? "已處理晒" : `重要 ${s.counts.important_open}`}</Pill>
-              {s.counts.supplementary_open > 0 && <Pill variant="neutral">補充資料 {s.counts.supplementary_open}</Pill>}
+              <span data-testid="triage-card-important">
+                <Pill variant={s.status === "done" ? "success" : "warning"}>{s.superseded_all ? "已被較新嘅導入取代" : s.counts.open === 0 ? "已處理晒" : s.counts.important_open > 0 ? `重要 ${s.counts.important_open} 題` : "冇重要嘅題"}</Pill>
+              </span>
+              {s.counts.supplementary_open > 0 && <span className="text-zk-xs text-zk-faint" data-testid="triage-card-supp">補充 {s.counts.supplementary_open} 題</span>}
               <span className="text-zk-faint">
                 共 {s.counts.total} 條 · 已答 {s.counts.answered} · 跳過 {s.counts.skipped}{(s.counts.superseded ?? 0) > 0 ? ` · ${s.counts.superseded} 條已被較新嘅導入取代` : ""}
               </span>
@@ -153,10 +162,12 @@ export default function TriagePage() {
           sessionId={openId}
           onClose={() => {
             setOpenId(null);
-            router.refresh();
-            void load();
+            void load(); // P13.3：只重新攞列表 counts，唔整頁重載
           }}
-          onChanged={() => void load()}
+          onChanged={() => {
+            void load();
+            refreshBadge();
+          }}
         />
       )}
       {openId && !isMcSource(data?.sessions.find((s) => s.id === openId)?.source_type) && (
@@ -164,10 +175,12 @@ export default function TriagePage() {
           sessionId={openId}
           onClose={() => {
             setOpenId(null);
-            router.refresh();
-            void load();
+            void load(); // P13.3：只重新攞列表 counts，唔整頁重載
           }}
-          onChanged={() => void load()}
+          onChanged={() => {
+            void load();
+            refreshBadge();
+          }}
         />
       )}
     </div>

@@ -2,6 +2,7 @@
 // P3-5.1：由 RosterEditor.tsx 原樣搬出，行為零改變。
 "use client";
 
+import { BackLink } from "@/components/ui/BackLink";
 import { useEffect, useState } from "react";
 import { GuardedLink } from "@/components/ui/GuardedLink";
 import { Button } from "@/components/ui/Button";
@@ -157,9 +158,9 @@ export function RosterHeader({
       {compact && (
         <div data-testid="roster-mobile-header" className="-mx-4 -mt-3.5 flex items-center justify-between gap-3 border-b border-zk-border bg-white px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <GuardedLink href="/roster" aria-label="返回更表索引" className="text-xl text-zk-text">
+            <BackLink href="/roster" aria-label="返回更表索引" className="text-xl text-zk-text">
               ‹
-            </GuardedLink>
+            </BackLink>
             <div className="min-w-0">
               <div className="truncate text-zk-lg font-bold text-zk-text">{siteName || "更表編輯器"}</div>
               <div className="text-zk-xs text-zk-muted">

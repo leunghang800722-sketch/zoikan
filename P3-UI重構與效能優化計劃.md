@@ -994,3 +994,33 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - merge `1a7bfa7`（`--no-ff`，零衝突）；Zeabur 部署 `6acbb5e3`，RUNNING；啟動 log：62 migrations／No pending、`[db:ensure-system-user]` 就緒、`[ai-assistant] provider=claude model=claude-opus-5-5`、`[scheduler] started`、Ready 940ms。
 - 正式站（老闆帳號、唯讀）：`/reports/longterm-payroll` 「合約」tab 見到「合約起始」下拉，兩個選項，預設「照名單入職日（覆蓋鎖月嘅行跳過）」；**未導入任何資料**（等老闆決定 7／8 月鎖月 vs 本機核對）。
 - Opus (ii) 留待：`docs/ops.md:89` 字眼同 `payroll-editor-compare.ts` 預設欄位殘留；真檔表頭 regex 可能要放寬（規劃者本機跑真檔時處理）。
+## 17. 階段 13 hotfix（2026-10-12 老闆報）：「要你睇」手機載入慢＋全站冇得返
+
+### 17.1 根因、修法、before/after
+**問題一：載入慢**（正式站老闆帳號實測）：`GET /api/triage/sessions/:id?status=open` 對「保安員證件資料導入」session（350 題未答：重要 122、補充 228）回 **680 KB、桌面 Wi-Fi 1.3 秒**；`TriageDialog` 要成份 JSON 到齊先 render 第一題，手機流動數據下載＋parse＋render 350 題 view 物件＝老闆見到嘅「3 分鐘載入緊」。月結 session 只 22 KB 所以唔慢。
+
+**問題二：冇返回**：(a) 兩個對話框只有細「遲啲先答」／「×」，冇「上一題」、冇清楚「返回列表」；(b) 老闆 2026-09-15 要求「加到主畫面」（`manifest.display: "standalone"`＋`appleWebApp.capable`）→ 由主畫面開冇任何瀏覽器 chrome（冇返回掣、冇網址列，iPhone 連邊緣滑返手勢都冇，Android 得系統返回）；頁對頁導航本身正常（全站 `GuardedLink`／`Link`），但 **10 個覆蓋層（6 個 Drawer 用家、`TriageDialog`、`MonthCloseTriageDialog`、`BatchAcceptButton`、`MobileNav` 抽屜）＋AI 助手側欄全部唔入 history**：正式站實測開「繼續答」對話框後 `history.back()` 直接跳出去 `/`，對話框冇咗；(c) 全站冇統一「返回」UI。
+
+| 項目 | 修法 |
+|---|---|
+| P13.1 分頁 | `GET /api/triage/sessions/:id` 加 additive `take`（0–50）＋`cursor`＋`tier`＋`status=open,skipped`；回應加 `next_cursor`；`counts` 照舊整個 session；DTO 只對該頁行計；**冇 `take` 行為一字不變**。兩個對話框用 `useTriagePager`：首屏 5 題，剩 ≤3 題背景 prefetch；counts 取自 session |
+| P13.5 覆蓋層入 history | `useHistoryOverlay(open,onClose,key,enabled)`：開＝`pushState`（同 URL，帶 depth），返回（popstate）只關覆蓋層；UI 關閉 `history.back()`；嵌套後開先關；導航離開留低舊 entry 由全域 popstate 跳過；連撳兩次 close 只返一格。套用 Drawer（一處改 6 個用家）、兩個分診對話框、批量接受、MobileNav 抽屜、AI 側欄（只 `< lg`）。唔改 `manifest.display`、唔改 month-store `replaceState` |
+| P13.2 返回 | 兩個對話框頂部左「‹ 返回列表」（取代「遲啲先答」／×，＝關對話框）；底部「‹ 上一題／下一題 ›」回看本次處理過嘅題：已答只讀（「你答咗…已送出」，改答案留下一輪）、跳過嘅可重新答 |
+| P13.3 記位置 | `sessionStorage` `zk-triage-pos-<session>`；重開顯示「由第 N 題繼續」＋「由頭開始」（連跳過咗嘅一齊攞）；關對話框唔再 `router.refresh()`（只重 fetch 列表 counts；左欄 badge debounce 2 秒） |
+| P13.4 列表卡 | 「重要 N 題」做主數字，「補充 N 題」細字；「繼續答」直接開重要題 |
+| P13.6 全站返回 | 手機頂欄（`< lg`，首頁除外）「‹」；`NavHistoryTracker` 記 sessionStorage 頁面 stack（≤50）；`goBack`：有上一頁 `router.back()`，否則父路徑（`/month-close/files`→`/month-close`），再否則 `/`；5 個頁內「‹ 返回…」改 `BackLink`（同一 `goBack`；`/month-close/files` 保留 `Link` 因為要帶 `?month`） |
+
+**Before / after（合成 350 題 session，重要 122／補充 228；Playwright Chromium 375px、CDP 模擬 Fast 3G＝1.6 Mbps／RTT 150 ms）**
+| | before（無 `take`） | after（`take=5`） |
+|---|---|---|
+| 首屏請求大細 | **565,757 bytes** | **9,449 bytes**（<40 KB） |
+| 該請求 3G 時間 | 3,291 ms | — |
+| 撳「繼續答」→ 第一題出現 | ≥3,291 ms（要等成份 JSON） | **約 330 ms**（<1 秒） |
+| 首屏題數 | 350 | 5 |
+| 開對話框後 `history.back()` | 跳出去上一頁（`/`） | 只關對話框，仍喺 `/triage` |
+
+**驗證**：vitest（隔離 PG 54347）247 檔，**3,696 passed｜10 skipped｜0 failed**（新增 p13-1 分頁 10 條、p13-5 history hook 7 條、p13-6 back-nav 4 條）；tsc 0；lint 0 warning；knip 0；`rm -rf .next` 後 build 過；Playwright 全套（隔離 PG 54348、`next start` 3162、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，每次跑前 `db:reset`＋`db:seed`）**241 passed｜5 skipped｜0 failed**（新增 `tests/e2e/p13-triage-mobile.spec.ts` 7 條：350 題 3G 量度、上一題／返回列表／記位置／prefetch、重新整理後覆蓋層 UI／系統返回都關得到、history 返回、月結對話框分頁、手機頂欄「‹」）；`gate:locked-months` **12/12 rc=0**，`gate:ltpay-aug` **56/56**（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15 不變）。量度（本機 Playwright）：before 565,757 B／約 3.2–3.3 秒（Fast 3G）；after 首屏 9,449 B（take=5）、第一題 330–340 ms。既有 `month-close-ui`／`reconcile-ui` 兩個 spec 嘅 `page.route` mock 要接受 query string（`sess1*`），斷言不變。
+
+**驗收修正（Opus 5.5 第一輪 3 必修）**：M1 `.venv` symlink 誤入 git（已 `git rm --cached`，`ls-files -s | grep ^120000` 為空）；M2 重新整理後覆蓋層卡死（舊 entry 同 key、depth 相同令 `closing` 永遠 true）→ 每次開生成 nonce 寫入 state，比較用 nonce＋depth，舊 entry 一律當「唔係我嘅」，另加 400ms 保險；月結對話框 flush 失敗時 `restore()` 補返 entry；M3 `NavHistoryTracker`／`trackPath` 只存 pathname（query 可能帶姓名／員工編號）。一併：timer unmount 清理、重載後「共約 M 題」、重複 close 測試改為斷言 `history.back` 只呼叫一次。
+
+**驗收修正 2（Opus 5.5 第二輪 M4＋g＋h）**：M4 `close()` 嘅 400ms 保險 timer 先 fire 時，`onClose` 令 overlay unmount，cleanup 見 entry 仲喺頂又 `history.back()` 一次，popstate 遲到（慢機）變雙退格飛出頁面；修：timer 分支喺 `onClose` 前先設 `poppedRef=true`，遲到嘅 popstate 只返到 base entry。g 全域跳過舊 entry 嘅 popstate listener 改為模組載入即裝（MobileNav 每頁 layout 都 import），重新整理後唔再開 overlay 直接導航，back 一次就返到原頁。h `restore()` 改用開啟時記低嘅 depth。新增 Playwright：patch `History.prototype.back` 延遲 700ms，撳「返回列表」`back` 只叫一次、仍喺 `/triage`；開 overlay→reload→唔開→Link 去 `/guards`→back 一次返 `/triage`。最終：vitest 3,696／10 skip／0 fail；Playwright 241／5／0；gate 12/12；ltpay-aug 56/56。

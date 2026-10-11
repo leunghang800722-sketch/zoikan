@@ -20,7 +20,9 @@
 // 顯示文字／badge 數字呢啲數據由嗰邊 fetch 好再傳落嚟，呢個 component
 // 淨係管抽屜開關嘅 client state。
 import { useEffect, useState } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { useHistoryOverlay } from "@/lib/ui/use-history-overlay";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { goBack } from "@/lib/ui/back-nav";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isLinkActive } from "@/lib/ui/nav-active";
 import type { NavGroup } from "@/lib/rbac/nav";
@@ -52,7 +54,10 @@ export function MobileNav({
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
   const search = useSearchParams();
+
+  const { close: closeNav, closeForNavigation } = useHistoryOverlay(open, () => setOpen(false), "mobile-nav");
 
   // 撳連結跳轉之後（pathname 變咗）自動關抽屜。
   useEffect(() => {
@@ -63,17 +68,22 @@ export function MobileNav({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") closeNav();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [open, closeNav]);
 
   if (ROSTER_EDITOR_PATH.test(pathname ?? "")) return null;
 
   return (
     <div className="lg:hidden">
       <header className="flex items-center gap-3 border-b border-zk-border bg-white px-4 pt-2.5 pb-3">
+        {pathname !== "/" && (
+          <button type="button" data-testid="mobile-nav-back" aria-label="返回上一頁" onClick={() => goBack(router, pathname ?? "/")} className="-ml-1 shrink-0 px-1.5 text-2xl leading-none text-zk-text">
+            ‹
+          </button>
+        )}
         <button
           type="button"
           data-testid="mobile-nav-hamburger"
@@ -96,7 +106,7 @@ export function MobileNav({
           <div
             data-testid="mobile-nav-overlay"
             aria-hidden="true"
-            onClick={() => setOpen(false)}
+            onClick={closeNav}
             className="fixed inset-0 z-40 bg-[rgba(15,23,42,.45)]"
           />
           <div
@@ -128,7 +138,7 @@ export function MobileNav({
                           key={l.href}
                           href={l.href}
                           data-testid={`mnav-${l.href.split("&month=")[0]}`}
-                          onClick={() => setOpen(false)}
+                          onClick={closeForNavigation}
                           className={`flex items-center justify-between rounded-md px-2 py-2.5 text-zk-md ${
                             active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
                           }`}
@@ -146,7 +156,7 @@ export function MobileNav({
             </nav>
 
             <div className="flex flex-col gap-0.5 border-t border-zk-border pt-3">
-              <GuardedLink href="/change-password" onClick={() => setOpen(false)} className="rounded-md px-2 py-2.5 text-zk-md text-zk-primary">
+              <GuardedLink href="/change-password" onClick={closeForNavigation} className="rounded-md px-2 py-2.5 text-zk-md text-zk-primary">
                 改密碼
               </GuardedLink>
               <LogoutButton className="rounded-md px-2 py-2.5 text-left text-zk-md text-zk-text-secondary" />
