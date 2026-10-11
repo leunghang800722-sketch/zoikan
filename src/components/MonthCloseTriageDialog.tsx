@@ -197,7 +197,7 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     return () => clearTimeout(t);
   }, [q?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { close: closeDialog } = useHistoryOverlay(true, () => void finishClose(), `mc-triage-${sessionId}`); // P13.5：返回＝關對話框
+  const { close: closeDialog, restore: restoreEntry } = useHistoryOverlay(true, () => void finishClose(), `mc-triage-${sessionId}`); // P13.5：返回＝關對話框
   const liveId = q?.id ?? null;
   useEffect(() => {
     if (!liveId || baseOffset.current === null) return;
@@ -223,7 +223,10 @@ export function MonthCloseTriageDialog({ sessionId, onClose, onChanged, month = 
     await sender.flush();
     // 送出失敗（含 5 秒 timer 自動送出失敗）：一律唔關對話框（✕／遲啲先答／撳遮罩都一樣），
     // 失敗 banner 有明確掣「放棄未送出嘅 N 題」先放棄（失敗題已記 sessionStorage，頁面會提示重新答）。
-    if (sender.failedCount() > 0) return;
+    if (sender.failedCount() > 0) {
+      restoreEntry(); // 返回已用咗 history entry：補返一條，之後返回／關閉照常
+      return;
+    }
     onClose();
   }
   // 收起「揀其他答案」＝放棄所揀嘅其他答案（候選／雞頭／價錢），主掣變返「確認建議」；想保留就唔好收起。

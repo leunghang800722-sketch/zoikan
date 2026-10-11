@@ -991,7 +991,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 | P13.2 返回 | 兩個對話框頂部左「‹ 返回列表」（取代「遲啲先答」／×，＝關對話框）；底部「‹ 上一題／下一題 ›」回看本次處理過嘅題：已答只讀（「你答咗…已送出」，改答案留下一輪）、跳過嘅可重新答 |
 | P13.3 記位置 | `sessionStorage` `zk-triage-pos-<session>`；重開顯示「由第 N 題繼續」＋「由頭開始」（連跳過咗嘅一齊攞）；關對話框唔再 `router.refresh()`（只重 fetch 列表 counts；左欄 badge debounce 2 秒） |
 | P13.4 列表卡 | 「重要 N 題」做主數字，「補充 N 題」細字；「繼續答」直接開重要題 |
-| P13.6 全站返回 | 手機頂欄（`< lg`，首頁除外）「‹」；`NavHistoryTracker` 記 sessionStorage 頁面 stack（≤50）；`goBack`：有上一頁 `router.back()`，否則父路徑（`/month-close/files`→`/month-close`），再否則 `/`；6 個頁內「‹ 返回…」改 `BackLink`（同一 `goBack`） |
+| P13.6 全站返回 | 手機頂欄（`< lg`，首頁除外）「‹」；`NavHistoryTracker` 記 sessionStorage 頁面 stack（≤50）；`goBack`：有上一頁 `router.back()`，否則父路徑（`/month-close/files`→`/month-close`），再否則 `/`；5 個頁內「‹ 返回…」改 `BackLink`（同一 `goBack`；`/month-close/files` 保留 `Link` 因為要帶 `?month`） |
 
 **Before / after（合成 350 題 session，重要 122／補充 228；Playwright Chromium 375px、CDP 模擬 Fast 3G＝1.6 Mbps／RTT 150 ms）**
 | | before（無 `take`） | after（`take=5`） |

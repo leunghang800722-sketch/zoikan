@@ -22,7 +22,8 @@ function writeStack(a: string[]) {
 }
 
 /** 頁面變咗（pathname＋search）：返去上上一頁＝pop；否則 push（同一頁唔重複）。 */
-export function trackPath(path: string): void {
+export function trackPath(rawPath: string): void {
+  const path = rawPath.split("?")[0]!; // 防禦：query 可能帶姓名／員工編號，絕不寫入 storage
   const s = readStack();
   if (s.length >= 2 && s[s.length - 2] === path) s.pop();
   else if (s[s.length - 1] !== path) s.push(path);

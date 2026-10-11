@@ -5,7 +5,6 @@
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { apiPost, apiRequest, type ApiListResult } from "@/lib/ui/api-client";
@@ -338,9 +337,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const baseOffset = useRef<number | null>(null);
   const lastKind = useRef<"answered" | "skipped">("answered");
   const lastLabel = useRef("");
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [since, setSince] = useState({ imp: 0, sup: 0 }); // 自上次攞 counts 之後答咗／跳過幾多
-  const router = useRouter();
   const [done, setDone] = useState({ imp: 0, sup: 0 });
   const [suppStarted, setSuppStarted] = useState(false);
   const [choice, setChoice] = useState<string>("");
@@ -489,9 +486,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     if (!q) return;
     const tier = isSupp(q.kind) ? "sup" : "imp";
     onChanged?.();
-    // 左欄 badge：debounce 2 秒先 refresh，唔好每答一題就重載 layout
-    if (refreshTimer.current) clearTimeout(refreshTimer.current);
-    refreshTimer.current = setTimeout(() => router.refresh(), 2000);
+    // 左欄 badge 由 page 嘅 onChanged（debounce）負責
     setResume(null);
     if (viewing) {
       // 重新答咗一條之前跳過嘅題：只更新回看紀錄，唔影響計數
@@ -580,7 +575,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
             )}
             {!viewing && q && (
               <div className="text-zk-sm text-zk-muted" data-testid="triage-progress">
-                {suppNow ? "補充資料 " : ""}第 {Math.min(progressDone + 1, progressTotal)} 題／共 {progressTotal} 題
+                {suppNow ? "補充資料 " : ""}第 {Math.min(progressDone + 1, progressTotal)} 題／共{restarted ? "約" : " "}{progressTotal} 題
                 {!suppNow && liveTotals && liveTotals.sup > 0 ? `（另有 ${liveTotals.sup} 題補充資料可以遲啲先做）` : ""}
               </div>
             )}

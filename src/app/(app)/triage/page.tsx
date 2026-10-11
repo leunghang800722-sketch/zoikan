@@ -51,6 +51,7 @@ export default function TriagePage() {
     if (badgeTimer.current) clearTimeout(badgeTimer.current);
     badgeTimer.current = setTimeout(() => router.refresh(), 2000);
   }, [router]);
+  useEffect(() => () => { if (badgeTimer.current) clearTimeout(badgeTimer.current); }, []);
 
   const load = useCallback(async () => {
     const res = await apiGet<ListRes>(`/api/triage/sessions${mineOnly ? "?mine=1" : ""}`);
@@ -176,7 +177,10 @@ export default function TriagePage() {
             setOpenId(null);
             void load(); // P13.3：只重新攞列表 counts，唔整頁重載
           }}
-          onChanged={() => void load()}
+          onChanged={() => {
+            void load();
+            refreshBadge();
+          }}
         />
       )}
     </div>
