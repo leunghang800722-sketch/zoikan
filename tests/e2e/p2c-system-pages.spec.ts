@@ -74,15 +74,11 @@ test.describe("P2-C 系統頁", () => {
     await expect(checkboxes.first()).toBeVisible({ timeout: 15_000 });
 
     // 18px 圓角 5px 樣式：抽第一個 checkbox 核對實際 computed style。
+    // P7：改用會自動重試嘅 toHaveCSS（矩陣載入後會 re-render，一次性 evaluate 有機會撞到已卸載嘅節點，回空字串而間歇失敗）。
     const box = checkboxes.first();
-    const size = await box.evaluate((el) => ({
-      w: getComputedStyle(el).width,
-      h: getComputedStyle(el).height,
-      radius: getComputedStyle(el).borderRadius,
-    }));
-    expect(size.w).toBe("18px");
-    expect(size.h).toBe("18px");
-    expect(size.radius).toBe("5px");
+    await expect(box).toHaveCSS("width", "18px");
+    await expect(box).toHaveCSS("height", "18px");
+    await expect(box).toHaveCSS("border-radius", "5px");
 
     // 硬性禁止格：整格底 #f8fafc。
     const hardDenied = page.locator('[data-testid="role-matrix-checkbox"][data-hard-denied="1"]').first();

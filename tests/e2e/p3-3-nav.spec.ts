@@ -16,10 +16,10 @@ const navLinks = (page: Page) => page.locator('aside [data-testid^="nav-/"]');
 test.describe("導覽列（桌面 1512×700）", () => {
   test.use({ viewport: { width: 1512, height: 700 } });
 
-  test("老闆：17 條、6 組、唔使捲（nav scrollHeight ≤ clientHeight）", async ({ page }) => {
+  test("老闆：18 條、6 組、唔使捲（nav scrollHeight ≤ clientHeight）", async ({ page }) => {
     await loginAs(page, "老闆");
     await page.goto("/");
-    await expect(navLinks(page)).toHaveCount(17);
+    await expect(navLinks(page)).toHaveCount(18);
     // 組標題：排更／對數／月結／資料／設定（首頁冇標題）
     const aside = page.locator("aside");
     for (const t of ["排更", "對數", "月結", "資料", "設定"]) await expect(aside.getByText(t, { exact: true })).toBeVisible();
@@ -66,12 +66,12 @@ test.describe("導覽列（桌面 1512×700）", () => {
 
 test.describe("手機導覽（375）", () => {
   test.use({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
-  test("老闆：抽屜 17 條連結＋組標題", async ({ page }) => {
+  test("老闆：抽屜 18 條連結＋組標題", async ({ page }) => {
     await loginAs(page, "老闆");
     await page.goto("/");
     await page.getByTestId("mobile-nav-hamburger").click();
     const drawer = page.getByTestId("mobile-nav-drawer");
-    await expect(drawer.locator('[data-testid^="mnav-/"]')).toHaveCount(17);
+    await expect(drawer.locator('[data-testid^="mnav-/"]')).toHaveCount(18);
     await shot(page, "nav-boss-mobile-375.png");
   });
 });
