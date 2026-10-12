@@ -11,8 +11,8 @@ import { normalizeEnName } from "./name-norm";
 import { BadRequest } from "@/lib/api/errors";
 import type { Prisma, LongtermPayrollInputKind } from "@prisma/client";
 
-export const BULK_SOURCE = "bulk_import";
-export const BULK_MAX_ROWS = 500;
+const BULK_SOURCE = "bulk_import";
+const BULK_MAX_ROWS = 500;
 
 export interface BulkInputRow {
   staff_no?: string;
@@ -53,7 +53,7 @@ function add(m: Map<string, Set<string>>, k: string, id: string) {
   m.set(k, s);
 }
 
-export async function buildGuardIndex(): Promise<GuardIdx> {
+async function buildGuardIndex(): Promise<GuardIdx> {
   const guards = await prisma.guard.findMany({ select: { id: true, nameZh: true, nameEn: true, staffNo: true, staffNoMw: true, staffNumbers: { select: { number: true } } } });
   const idx: GuardIdx = { byNumber: new Map(), byEn: new Map(), byZh: new Map() };
   for (const g of guards) {
@@ -66,7 +66,7 @@ export async function buildGuardIndex(): Promise<GuardIdx> {
 
 type Match = { guardId: string } | { reason: "no_identifier" | "no_match" | "ambiguous" };
 
-export function matchBulkRow(row: BulkInputRow, idx: GuardIdx): Match {
+function matchBulkRow(row: BulkInputRow, idx: GuardIdx): Match {
   const tries: Array<[Map<string, Set<string>>, string]> = [];
   if (row.staff_no?.trim()) tries.push([idx.byNumber, normalizeStaffNumber(row.staff_no)]);
   if (row.staff_no_mw?.trim()) tries.push([idx.byNumber, normalizeStaffNumber(row.staff_no_mw)]);

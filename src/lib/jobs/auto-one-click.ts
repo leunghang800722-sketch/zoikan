@@ -25,7 +25,7 @@ export const AUTO_ONE_CLICK_KEY = "auto_one_click";
 /** 最新上載要靜置幾耐先自動跑（等齊所有檔）。 */
 const UPLOAD_SETTLE_MS = 10 * 60 * 1000;
 
-type SkipReason = "locked" | "settling" | "no_new_upload" | "already_triggered" | "run_in_progress" | "busy";
+type SkipReason = "locked" | "reopened_no_new_upload" | "settling" | "no_new_upload" | "already_triggered" | "run_in_progress" | "busy";
 
 function label(month: Date): string {
   return month.toISOString().slice(0, 7);
@@ -86,6 +86,16 @@ async function runAutoOneClickInner(now: Date): Promise<JobResult> {
     if (lastRun && latestAt <= lastRun.startedAt) {
       skipped[m] = "no_new_upload";
       continue;
+    }
+    // P14.4：解鎖舊月份做銀行對數期間——月份曾被解鎖（audit unlock_month），而最新上載唔新過解鎖時間 → 唔自動重跑
+    // （避免冇新上載就對已核對嘅舊月份重跑一鍵結算、沖走人手修正）。解鎖後有新上載先照舊觸發。
+    const mc = await prisma.monthClose.findUnique({ where: { month }, select: { id: true } });
+    if (mc) {
+      const unlock = await prisma.auditLog.findFirst({ where: { tableName: "month_closes", rowId: mc.id, action: "unlock_month" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+      if (unlock && latestAt <= unlock.createdAt) {
+        skipped[m] = "reopened_no_new_upload";
+        continue;
+      }
     }
     const prevTrigger = triggerState[m];
     if (prevTrigger && new Date(prevTrigger).getTime() >= latestAt.getTime()) {

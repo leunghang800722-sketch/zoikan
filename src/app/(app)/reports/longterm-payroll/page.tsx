@@ -21,6 +21,8 @@ import { kickerFor } from "@/lib/nav/schema";
 import { MonthPicker, useMonthState } from "@/components/ui/MonthPicker";
 import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { Tabs } from "@/components/ui/Tabs";
+import { BulkInputsPanel } from "./BulkInputsPanel";
+import { BankReconcilePanel } from "./BankReconcilePanel";
 import { DraftInputsPanel, BonusEligiblePanel, type DraftInputDTO } from "./DraftPanels";
 
 // ---------------------------------------------------------------------------
@@ -137,7 +139,7 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 
 export default function LongtermPayrollPage() {
   // P3-4.3（H19）：7 區直排 → 4 個 tab（本月糧／人手輸入／合約／平均工資與假期）；只分組顯示，唔改計糧，鎖月唯讀照舊。
-  const [tab, setTab] = useState<"pay" | "inputs" | "contracts" | "avg">("pay");
+  const [tab, setTab] = useState<"pay" | "inputs" | "contracts" | "avg" | "recon">("pay");
   const tabCls = (t: string) => (tab === t ? "flex flex-col gap-4" : "hidden");
   const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [payroll, setPayroll] = useState<PayrollMonthDTO | null>(null);
@@ -236,6 +238,7 @@ export default function LongtermPayrollPage() {
           { key: "inputs", label: "人手輸入", testId: "ltpay-tab-inputs" },
           { key: "contracts", label: "合約", testId: "ltpay-tab-contracts" },
           { key: "avg", label: "平均工資與假期", testId: "ltpay-tab-avg" },
+          { key: "recon", label: "銀行對數", testId: "ltpay-tab-recon" },
         ]}
       />
 
@@ -347,6 +350,7 @@ export default function LongtermPayrollPage() {
 
       {/* ③ 人手輸入區 */}
       <div className={tabCls("inputs")} data-testid="ltpay-panel-inputs">
+      <BulkInputsPanel month={month} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} onNotice={setNotice} />
       <DraftInputsPanel drafts={inputs.filter((i) => i.status === "draft" && !i.voided_at) as unknown as DraftInputDTO[]} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
       <BonusEligiblePanel month={month} refreshKey={inputs.length} />
       <InputsSection month={month} inputs={inputs.filter((i) => i.status !== "draft")} guardOptions={guardOptions} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
@@ -360,6 +364,10 @@ export default function LongtermPayrollPage() {
       {/* ⑤ 平均工資／假期餘額 */}
       <div className={tabCls("avg")} data-testid="ltpay-panel-avg">
       <AvgWageLeaveBalanceSection month={month} guardOptions={guardOptions} locked={!!payroll?.locked} avgWages={avgWages} leaveBalances={leaveBalances} onChanged={() => load(month)} onError={setError} />
+      </div>
+
+      <div className={tabCls("recon")} data-testid="ltpay-panel-recon">
+      <BankReconcilePanel month={month} hasRun={!!payroll?.run} onError={setError} onNotice={setNotice} />
       </div>
 
       <div className={tabCls("pay")} data-testid="ltpay-panel-pay-bochk">

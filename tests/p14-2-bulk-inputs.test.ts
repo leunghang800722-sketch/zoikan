@@ -17,7 +17,6 @@ describe("P14.2 bulk inputs", () => {
   let accountant: string;
   let supervisor: string;
   let a: { id: string };
-  let b: { id: string };
   let month: string;
 
   beforeEach(async () => {
@@ -28,7 +27,7 @@ describe("P14.2 bulk inputs", () => {
     supervisor = await sessionCookieForUser(fx.userIds["主管"]);
     month = fx.unlockedMonth.toISOString().slice(0, 10);
     a = await prisma.guard.create({ data: { nameZh: "測試甲", nameEn: "Test Alpha", staffNoMw: "MG9601", employmentType: "longterm_autopay", createdBy: "test" } });
-    b = await prisma.guard.create({ data: { nameZh: "測試乙", nameEn: "Test  Bravo", staffNo: "U9602", employmentType: "longterm_autopay", createdBy: "test" } });
+    await prisma.guard.create({ data: { nameZh: "測試乙", nameEn: "Test  Bravo", staffNo: "U9602", employmentType: "longterm_autopay", createdBy: "test" } });
   });
 
   const rows = () => [
@@ -54,7 +53,7 @@ describe("P14.2 bulk inputs", () => {
     const inputs = await prisma.longtermPayrollInput.findMany({ where: { draftSource: "bulk_import" } });
     expect(inputs).toHaveLength(3);
     expect(inputs.every((i) => i.status === "confirmed" && i.confirmedBy === fx.userIds["老闆"])).toBe(true);
-    const audits = await prisma.auditLog.count({ where: { tableName: "longterm_payroll_inputs", action: "create" } });
+    const audits = await prisma.auditLog.count({ where: { tableName: "longterm_payroll_inputs", action: "create", rowId: { in: inputs.map((i) => i.id) } } });
     expect(audits).toBe(3);
   });
 
