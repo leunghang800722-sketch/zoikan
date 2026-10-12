@@ -14,9 +14,9 @@ import { monthLabel, n, round2 } from "@/lib/reports/money";
 import { buildLongtermPayrollInputs } from "./aggregate";
 import { assertMonthNotLockedTx, monthStart } from "@/lib/month-lock";
 
-export const COMPUTED_AVG_SOURCE_PREFIXES = ["computed", "auto:", "自動計:"] as const;
+const COMPUTED_AVG_SOURCE_PREFIXES = ["computed", "auto:", "自動計:"] as const;
 
-export type RollbackMethod = "none" | "snapshot" | "exact_rebuild" | "approx_rebuild";
+type RollbackMethod = "none" | "snapshot" | "exact_rebuild" | "approx_rebuild";
 
 export interface VoidMonthResult {
   month: string;
