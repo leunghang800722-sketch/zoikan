@@ -35,7 +35,10 @@ export function parseCsvText(text: string): string[][] {
   return out;
 }
 
-export function parseBulkText(name: string, text: string): { rows: Record<string, unknown>[]; error: string | null } {
+/** P15.2：平均工資批量用 `{ keys: AVG_WAGE_KEYS, required: "avg_daily_wage", numeric: ["avg_daily_wage"] }`。 */
+export const AVG_WAGE_BULK_OPTS = { keys: ["staff_no", "staff_no_mw", "name_en", "name_zh", "avg_daily_wage", "note"], required: "avg_daily_wage", numeric: ["avg_daily_wage"] } as const;
+
+export function parseBulkText(name: string, text: string, opts: { keys: readonly string[]; required: string; numeric: readonly string[] } = { keys: KEYS, required: "kind", numeric: ["amount"] }): { rows: Record<string, unknown>[]; error: string | null } {
   try {
     if (/\.json$/i.test(name) || text.trimStart().startsWith("[") || text.trimStart().startsWith("{")) {
       const j = JSON.parse(text) as unknown;
@@ -46,14 +49,14 @@ export function parseBulkText(name: string, text: string): { rows: Record<string
     const grid = parseCsvText(text);
     if (grid.length < 2) return { rows: [], error: "CSV 要有表頭行同至少一行資料" };
     const head = grid[0]!.map((h) => h.trim().toLowerCase());
-    if (!head.includes("kind")) return { rows: [], error: "CSV 表頭要有 kind 欄" };
+    if (!head.includes(opts.required)) return { rows: [], error: `CSV 表頭要有 ${opts.required} 欄` };
     const rows = grid.slice(1).map((r) => {
       const o: Record<string, unknown> = {};
       head.forEach((h, i) => {
-        if (!(KEYS as readonly string[]).includes(h)) return;
+        if (!opts.keys.includes(h)) return;
         const v = (r[i] ?? "").trim();
         if (v === "") return;
-        if (h === "amount") o[h] = Number.isFinite(Number(v)) ? Number(v) : v;
+        if (opts.numeric.includes(h)) o[h] = Number.isFinite(Number(v)) ? Number(v) : v;
         else if (h === "doctor_note_verified") o[h] = /^(1|true|yes|y|是)$/i.test(v);
         else o[h] = v;
       });

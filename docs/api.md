@@ -2608,3 +2608,29 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 
 ### P14.4 解鎖期安全
 - `auto_one_click` 新增安全條件：月份曾被解鎖（`audit_log` `month_closes`／`unlock_month`），而該月最新有效上載唔新過最後一次解鎖時間 → skip（summary `reopened_no_new_upload`），唔會對冇新上載嘅舊月份重跑。解鎖後有新上載先照舊觸發。其餘 job 行為見 `docs/ops.md`「解鎖舊月份做對數嘅標準流程」。
+
+### P15.1 作廢本月長工糧計算（倒序重算）
+- `POST /api/longterm/payroll/:month/void`（`長工糧:update` 且**只限老闆**，會計 403）body `{ reason }`（必填、≤500 字，空白 400）→ 200 `{ month, voided_runs, balances_restored, balances_deleted, legacy_rebuilt, avg_wages_cleared, restored_as_of_month }`（唔含姓名）。
+  - 只准作廢**最近一個已計月份**：後面月份仍有有效 run 或 `guard_leave_balances.as_of_month` 更後 → 409（提示先作廢後月）；該月冇有效 run → 404；月鎖 → 403。
+  - 作廢該月所有有效 run（`status=void`、`voided_at/by`），同時**回滾假期結餘**：新表 `guard_leave_balance_history`（migration `20261016000000_p15_leave_balance_history`，只新增、冪等）喺每次 `recomputeLongtermPayroll` 寫回前影低 (guard, year, month) 第一次嘅舊狀態（`existed=false` → 回滾時刪除該結餘行）；作廢時原樣還原再刪該月快照。P15 前計過、冇快照嘅月份（legacy）：`taken` 還原做該行 `*_opening`，`as_of_month` 回到上一個有效 run 嘅月份（同年先重建；跨年或冇上一個月 → `null`），上月 opening ＝ 上月尾累積 − 上月新增（以 0 起算 dry-run 重建，近似），`legacy_rebuilt` 列出數量，要覆核。**例外（精確）**：系統首次計算（冇更早有效 run）而該行只係計糧寫出嘅空殼（opening 全 0、`al_entitled`／`al_carry` 為 0）→ 直接刪除，等於從未計過；有預存結餘（opening／entitled／carry 有值）→ `taken` 回到 opening、`as_of_month=null`、其餘不變（test：首次計算作廢後與未計過一致，重算與首次一致）。
+  - 同時刪除該月 `guard_avg_wages` 入面 source 以 `computed` 開頭或含「自動計」嘅行；人手／批量導入嘅保留。
+  - audit `action=void_longterm_payroll_month`（table `longterm_payroll_runs`，after 帶 reason／計數）。
+- `recomputeLongtermPayroll` 行為不變（仍擋「後月已計」）；唯一差別係寫回結餘前多影一張快照。
+- UI：長工糧頁「本月糧」tab 有 run 且未鎖時顯示「作廢本月計算（老闆）」（`ConfirmVoidButton`，要填原因），成功後 reload。
+
+### P15.2 平均工資批量導入
+- `POST /api/longterm/avg-wages/bulk[?dry_run=1]`（`長工糧:create`，老闆／會計）body `{ month, rows:[{ staff_no | staff_no_mw | name_en | name_zh, avg_daily_wage, note? }] }`（1–500 行，`.strict()`）。配對次序同 P14.2（工號 → MW 工號 → 英文名 normalize → 中文名；多於一人 `ambiguous`）。
+  - 寫入 `guard_avg_wages`（`guard_id+month` unique upsert，`source = "人手批量導入"[：note]`）；**冪等**：同人同月同金額同 source → `skipped_unchanged`；金額唔同 → `updated`；檔內同人重複：同值略過、異值列 `invalid`；金額須 >0 且 ≤100000。
+  - 回 `{ dry_run, total, matched, created, updated, skipped_unchanged, unmatched:[{row,reason,staff_no?}], invalid:[{row,reason}] }`（唔含姓名）；`dry_run` 唔寫。月鎖 → 403（整批唔寫，單一 transaction）。audit `action=bulk_avg_wages`（逐行，after 唔含姓名／金額）。
+- 現有 `POST /api/longterm/avg-wages`（單筆 upsert）不變。UI：「平均工資與假期」tab 頂部批量導入面板（JSON／CSV：`staff_no`／`staff_no_mw`／`name_en`／`avg_daily_wage`／`note`；預覽只顯示行號／工號）。
+
+### P15.3 新增合約
+- `GET /api/longterm/guard-search?q=`（`長工糧:view`）→ `{ rows:[{ guard_id, name, staff_no }] }`（≤20；搜中英文名、任何現有／舊工號；唔含證件／電話／銀行）。
+- 新增合約用現有 `POST /api/longterm/contracts`（`LongtermContractCreateSchema`，不變）。日薪制：`pay_basis=daily`，`daily_rate`＝每更價，`monthly_salary` 填同一數（DB 要有值，日薪制下無月薪意義）。已鎖月份 → 403（`assertMonthRangeNotLocked`）。
+- UI：長工糧頁「合約」tab「新增合約」掣＋表單（搜尋揀保安員顯示姓名＋工號、生效日、結束日可空、月薪制／日薪制、每更時數、試用期、年假日數、法定假期由、例假有薪、MPF 免供原因、備註）。
+
+### P15 驗收修正（Opus 5.5）
+- **M1 合約日期重疊**：`POST /api/longterm/contracts` 遇到同人未作廢、日期重疊嘅合約 → 409 `contract_overlap`（body 另有 `overlapping:[{id,effective_from,effective_to}]`、`can_close_previous`）。body 可帶 `close_previous:true`：同一 transaction 內將重疊嘅上一段 `effective_to` 設為新段 `effective_from` 前一日（每段寫 audit `update`，`after.reason=close_previous`）；被自動結束嘅舊合約之間本身若已互相重疊，回應 additive 欄 `overlap_note` 提示未處理；只適用於重疊合約全部較新段早開始、而新段結束日唔短過佢哋，否則仍 409（`can_close_previous:false`）。`PATCH /api/longterm/contracts/:id`（檢查同更新喺同一 transaction，鎖 guard 行，同 POST 一致）改 `effective_from`／`effective_to` 或取消作廢時同樣檢查（409，唔支援 close_previous）；只改薪酬等欄或作廢唔檢查。表單預設勾「自動結束上一段合約」並顯示重疊嘅現有合約日期。
+- **作廢 API**：`GET /api/longterm/payroll/:month/void`（`長工糧:view`）唯讀前置檢查 → `{ month, has_run, earlier_valid_runs:[YYYY-MM], later_blockers:[YYYY-MM], rollback_method: none|snapshot|exact_rebuild|approx_rebuild, needs_confirm_approx, affected_guards }`。`POST` body 加 `confirm_approx?:boolean`：`approx_rebuild`（冇快照而且有同年更早有效 run）未帶 `true` → 409 `approx_rollback_requires_confirm`（唔作廢）。回應加 `kept_manual_rows`、`rollback_method`。`existed=false` 快照回滾時：該結餘行而家有非 0 人手 `al_entitled`／`al_carry` → 唔刪行，`al_taken`／`sl_taken` 回到該行 `*_opening`（＝計算前讀到嘅累積，跨年時即上年結轉）、`as_of_month` 清空，計入 `kept_manual_rows`；opening 非 0 唔算人手（同年 existed=false 嘅 opening 只可能係上年結轉），冇人手值就刪行。（N1：曾誤將 taken 設 0 令上年結轉冇咗，已修；test：2026-12→2027-01→作廢→重算同首次一致。）audit `before={month,run_ids,guards_affected}`、`after` 帶 reason／rollback_method／restored／deleted／kept／legacy／avg_wages_cleared。
+- `GET /api/longterm/payroll/:month` additive 欄 `can_void`（老闆 true）；UI 作廢掣只對老闆顯示。
+- **平均工資 source 前綴**：批量導入 source 固定 `manual:批量導入[：note]`；作廢只清 source 以 `computed`／`auto:`／`自動計:` 開頭嘅行（唔再用 contains）。

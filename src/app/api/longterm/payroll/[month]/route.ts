@@ -20,7 +20,8 @@ function prevMonth(month: Date): Date {
 
 export async function GET(req: Request, { params }: { params: Promise<{ month: string }> }) {
   return withApiError(async () => {
-    await requirePermission(req, "長工糧", "view");
+    const session = await requirePermission(req, "長工糧", "view");
+    const canVoid = session.baseRole === "老闆"; // P15 驗收 (ii)a：UI 只對老闆顯示作廢掣
     const { month: monthParam } = await params;
     const month = parseMonthParam(monthParam);
     if (!month) throw BadRequest(`唔啱嘅月份格式：${monthParam}（要 YYYY-MM）`);
@@ -32,7 +33,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
     ]);
 
     if (!run) {
-      return ok(brandSafeResponse({ month: monthLabel(month), locked, run: null, lines: [], totals: null }));
+      return ok(brandSafeResponse({ month: monthLabel(month), locked, can_void: canVoid, run: null, lines: [], totals: null }));
     }
 
     const [lines, prevLines] = await Promise.all([
@@ -58,6 +59,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
       brandSafeResponse({
         month: monthLabel(month),
         locked,
+        can_void: canVoid,
         run: toLongtermRunDTO(run),
         lines: linesDto,
         totals: run.totalsJson,

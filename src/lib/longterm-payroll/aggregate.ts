@@ -209,7 +209,7 @@ function computeShDeduction(shDates: string[], segments: ContractSegment[], mont
  * 純讀取＋計算——冇任何 DB 寫入，方便測試／預覽（頁面「重算前預覽」
  * 都可以直接用呢個）。實際持久化由 `recomputeLongtermPayroll()` 做。
  */
-export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike = prisma): Promise<BuildLongtermPayrollResult> {
+export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike = prisma, opts: { zeroOpening?: boolean } = {}): Promise<BuildLongtermPayrollResult> {
   const { start, end } = monthRange(month);
   const monthDaysCount = daysInMonth(start.getUTCFullYear(), start.getUTCMonth() + 1);
   const warnings: string[] = [];
@@ -281,7 +281,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
   // 用已經計咗一次「呢個月」嘅 `alTaken`／`slTaken`，否則會愈計愈多。
   function openingLeaveTaken(guardId: string): { al: number; sl: number } {
     const b = balanceByGuard.get(guardId);
-    if (!b) return { al: 0, sl: 0 };
+    if (!b || opts.zeroOpening) return { al: 0, sl: 0 }; // zeroOpening（P15.1 legacy 回滾專用）：以 0 起算攞「呢個月新增」日數
     if (b.year === start.getUTCFullYear() && b.asOfMonth && b.asOfMonth.getTime() === start.getTime()) {
       return { al: n(b.alTakenOpening), sl: n(b.slTakenOpening) };
     }
@@ -699,6 +699,21 @@ export async function recomputeLongtermPayroll(month: Date, actorUserId: string,
       // 「guard_leave_balances 寫回」呢組測試。年份跟 `monthStartDate`
       // 嘅日曆年（同 `guard_leave_balances.year` unique key 一致）。
       const balanceYear = monthStartDate.getUTCFullYear();
+      // P15.1：寫回前先快照（每個 guard／year／month 只留第一次——同月重算唔覆蓋），作廢該月時回滾用。
+      const priorRows = await tx.guardLeaveBalance.findMany({ where: { year: balanceYear, guardId: { in: built.lines.map((l) => l.guardId) } } });
+      const priorByGuard = new Map(priorRows.map((r) => [r.guardId, r]));
+      for (const line of built.lines) {
+        const prior = priorByGuard.get(line.guardId);
+        // 已經係本月狀態（legacy：P15 前計過、冇快照）→ 唔好影一個「已含本月」嘅快照，留俾 void 走 legacy 重建
+        if (prior?.asOfMonth && prior.asOfMonth.getTime() === monthStartDate.getTime()) continue;
+        await tx.guardLeaveBalanceHistory.upsert({
+          where: { guardId_year_month: { guardId: line.guardId, year: balanceYear, month: monthStartDate } },
+          create: prior
+            ? { guardId: line.guardId, year: balanceYear, month: monthStartDate, existed: true, alTaken: prior.alTaken, slTaken: prior.slTaken, slAccrued: prior.slAccrued, asOfMonth: prior.asOfMonth, alTakenOpening: prior.alTakenOpening, slTakenOpening: prior.slTakenOpening }
+            : { guardId: line.guardId, year: balanceYear, month: monthStartDate, existed: false },
+          update: {},
+        });
+      }
       for (const line of built.lines) {
         const wb = line.leaveBalanceWriteback;
         await tx.guardLeaveBalance.upsert({

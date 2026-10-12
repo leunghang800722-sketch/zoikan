@@ -1784,6 +1784,27 @@ model GuardLeaveBalance {
   @@map("guard_leave_balances")
 }
 
+// P15.1：假期結餘寫回前嘅快照（作廢某月計算時回滾用）。每個 (guard, year, month) 只保留該月第一次寫回前嘅狀態；
+// `existed=false` 代表寫回前冇結餘記錄（回滾＝刪除）。作廢成功後該月快照刪除。
+model GuardLeaveBalanceHistory {
+  id             String    @id @default(uuid())
+  guardId        String    @map("guard_id")
+  year           Int
+  month          DateTime  @db.Date // 觸發快照嘅結算月份（寫回前嘅狀態）
+  existed        Boolean   @default(true)
+  alTaken        Decimal   @default(0) @map("al_taken") @db.Decimal(6, 2)
+  slTaken        Decimal   @default(0) @map("sl_taken") @db.Decimal(6, 2)
+  slAccrued      Decimal   @default(0) @map("sl_accrued") @db.Decimal(6, 2)
+  asOfMonth      DateTime? @map("as_of_month") @db.Date
+  alTakenOpening Decimal   @default(0) @map("al_taken_opening") @db.Decimal(6, 2)
+  slTakenOpening Decimal   @default(0) @map("sl_taken_opening") @db.Decimal(6, 2)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@unique([guardId, year, month])
+  @@index([month])
+  @@map("guard_leave_balance_history")
+}
+
 // WP-LTPAY §21 任務 4b(b)：平均工資（過去 12 個月平均日薪，SL 4/5／AL
 // 離職結算派彩用；未搬入系統前 compute.ts／aggregate.ts fallback 用
 // 「日薪＝月薪/當月曆日數」，見 `aggregate.ts` 檔頭「刻意冇做」第 4
