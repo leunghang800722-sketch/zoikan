@@ -306,3 +306,36 @@ describe("P15.1 legacy：系統首次計算（冇快照）作廢後同從未計�
     expect(await snap()).toEqual(first);
   });
 });
+
+describe("P15 驗收 N1：跨年作廢唔可以清走上年結轉", () => {
+  it("2026-12 → 2027-01 → 作廢 → 重算 同首次計一模一樣；有人手 carry 時 taken 回 opening（唔係 0）", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    const actor = fx.userIds["老闆"];
+    const site = await prisma.site.create({ data: { canonicalName: `P15N-${Math.random().toString(36).slice(2, 7)}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
+    const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "test" } });
+    const g = await prisma.guard.create({ data: { nameZh: "測試N1", employmentType: "longterm_autopay", hireDate: new Date("2024-01-01"), createdBy: "test" } });
+    await prisma.guardLongtermContract.create({ data: { guardId: g.id, monthlySalary: 15500, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: actor } });
+    await prisma.guardLeaveBalance.create({ data: { guardId: g.id, year: 2026, alTaken: 5, slTaken: 2, asOfMonth: new Date(Date.UTC(2026, 11, 1)), alTakenOpening: 5, slTakenOpening: 2 } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date(Date.UTC(2027, 0, 10)), siteId: site.id, shiftTypeId: st.id, guardId: g.id, recordType: "leave", leaveCode: "AL", createdBy: "test" } });
+    const jan = new Date(Date.UTC(2027, 0, 1));
+    const bal = async () => (await prisma.guardLeaveBalance.findMany({ orderBy: { year: "asc" } })).map((r) => ({ y: r.year, al: Number(r.alTaken), sl: Number(r.slTaken), alo: Number(r.alTakenOpening), slo: Number(r.slTakenOpening), as: r.asOfMonth?.toISOString() ?? null }));
+    await recomputeLongtermPayroll(jan, actor);
+    const first = await bal();
+    expect(first.find((r) => r.y === 2027)).toMatchObject({ al: 6, sl: 2, alo: 5, slo: 2 });
+    const j = await (await voidCall("2027-01", owner)).json();
+    expect(j).toMatchObject({ balances_deleted: 1, kept_manual_rows: 0 });
+    expect((await bal()).map((r) => r.y)).toEqual([2026]);
+    await recomputeLongtermPayroll(jan, actor);
+    expect(await bal()).toEqual(first);
+    // 有人手 carry → 保留行，taken 回 opening（5／2），重算後 al／sl 仍然係 6／2
+    await prisma.guardLeaveBalance.update({ where: { guardId_year: { guardId: g.id, year: 2027 } }, data: { alCarry: 3 } });
+    const k = await (await voidCall("2027-01", owner)).json();
+    expect(k).toMatchObject({ balances_deleted: 0, kept_manual_rows: 1 });
+    const kept = (await bal()).find((r) => r.y === 2027)!;
+    expect(kept).toMatchObject({ al: 5, sl: 2, as: null });
+    await recomputeLongtermPayroll(jan, actor);
+    expect((await bal()).find((r) => r.y === 2027)).toMatchObject({ al: 6, sl: 2, alo: 5, slo: 2 });
+  });
+});

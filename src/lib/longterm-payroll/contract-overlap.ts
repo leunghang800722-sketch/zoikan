@@ -1,6 +1,5 @@
 // P15 驗收 M1：同一保安員嘅生效合約日期唔准靜靜重疊（重疊會令加薪靜靜失效，計糧仍用舊合約）。
-// `findOverlappingContracts` 只睇未作廢合約；區間以 [effectiveFrom, effectiveTo(null＝無限)] 計。
-import { prisma } from "@/lib/db";
+// 重疊檢查喺 route 內（transaction＋FOR UPDATE guard）做；區間以 [effectiveFrom, effectiveTo(null＝無限)] 計，只睇未作廢合約。
 import { ApiError } from "@/lib/api/errors";
 
 const DAY = 86_400_000;
@@ -10,20 +9,6 @@ export interface ContractLike {
   id: string;
   effectiveFrom: Date;
   effectiveTo: Date | null;
-}
-
-export async function findOverlappingContracts(guardId: string, from: Date, to: Date | null, excludeId?: string): Promise<ContractLike[]> {
-  return prisma.guardLongtermContract.findMany({
-    where: {
-      guardId,
-      voidedAt: null,
-      ...(excludeId ? { id: { not: excludeId } } : {}),
-      effectiveFrom: to ? { lte: to } : undefined,
-      OR: [{ effectiveTo: null }, { effectiveTo: { gte: from } }],
-    },
-    select: { id: true, effectiveFrom: true, effectiveTo: true },
-    orderBy: { effectiveFrom: "asc" },
-  });
 }
 
 export function overlapError(rows: ContractLike[], canClose: boolean): ApiError {

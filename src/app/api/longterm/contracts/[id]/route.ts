@@ -12,7 +12,7 @@ import { snakeToCamelShallow } from "@/lib/api/case";
 import { LongtermContractUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound } from "@/lib/api/errors";
-import { findOverlappingContracts, overlapError } from "@/lib/longterm-payroll/contract-overlap";
+import { overlapError } from "@/lib/longterm-payroll/contract-overlap";
 import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -42,11 +42,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       rowId: id,
       ip: getClientIp(req),
     });
-    // P15 驗收 M1：改日期／取消作廢後唔准同同人其他生效合約重疊（淨改薪酬等欄、或者作廢，唔檢查）
-    if (voided !== true && (rest.effective_from !== undefined || rest.effective_to !== undefined || voided === false)) {
-      const overlaps = await findOverlappingContracts(before.guardId, effectiveFrom as Date, (effectiveTo as Date | null) ?? null, id);
-      if (overlaps.length > 0) throw overlapError(overlaps, false);
-    }
     const data = snakeToCamelShallow(rest) as Prisma.GuardLongtermContractUncheckedUpdateInput;
     if (voided === true) {
       data.voidedAt = new Date();
@@ -55,7 +50,20 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       data.voidedAt = null;
       data.voidedBy = null;
     }
-    const after = await prisma.guardLongtermContract.update({ where: { id }, data });
+    // P15 驗收 M1：改日期／取消作廢後唔准同同人其他生效合約重疊（淨改薪酬等欄、或者作廢，唔檢查）。
+    // 檢查同更新喺同一 transaction，並鎖住 guard 行（同 POST 一致，防並發）。
+    const after = await prisma.$transaction(async (tx) => {
+      if (voided !== true && (rest.effective_from !== undefined || rest.effective_to !== undefined || voided === false)) {
+        await tx.$queryRaw`SELECT id FROM guards WHERE id = ${before.guardId} FOR UPDATE`;
+        const overlaps = await tx.guardLongtermContract.findMany({
+          where: { guardId: before.guardId, voidedAt: null, id: { not: id }, ...(effectiveTo ? { effectiveFrom: { lte: effectiveTo as Date } } : {}), OR: [{ effectiveTo: null }, { effectiveTo: { gte: effectiveFrom as Date } }] },
+          select: { id: true, effectiveFrom: true, effectiveTo: true },
+          orderBy: { effectiveFrom: "asc" },
+        });
+        if (overlaps.length > 0) throw overlapError(overlaps, false);
+      }
+      return tx.guardLongtermContract.update({ where: { id }, data });
+    });
     await writeAudit({ actorUserId: session.userId, tableName: "guard_longterm_contracts", rowId: id, action: voided !== undefined ? "void" : "update", before, after, ip: getClientIp(req) });
     return ok(toLongtermContractDTO(after));
   });
