@@ -97,7 +97,10 @@ export type AuditAction =
   | "triage_reassign"
   // P7.1：老闆手動立即跑排程 job（after 淨係 run id＋狀態）；用戶改通知電郵（after 淨係 { changed: true }，唔存電郵）。
   | "job_run_now"
-  | "notify_email_update";
+  | "notify_email_update"
+  // P14：批量導入確認既有草稿；老闆即時生成草稿（after 淨係月份＋counts）。
+  | "confirm"
+  | "trigger_drafts_generate";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

@@ -460,6 +460,7 @@ model Guard {
   avgWages              GuardAvgWage[]
   longtermPayrollInputs LongtermPayrollInput[]
   longtermPayrollLines  LongtermPayrollLine[]
+  bankReconciliationRows LongtermBankReconciliationRow[]
 
   @@map("guards")
 }
@@ -1824,7 +1825,8 @@ model LongtermPayrollRun {
   voidedAt    DateTime? @map("voided_at")
   voidedBy    String?   @map("voided_by")
 
-  lines LongtermPayrollLine[]
+  lines               LongtermPayrollLine[]
+  bankReconciliations LongtermBankReconciliation[]
 
   @@index([month])
   @@map("longterm_payroll_runs")
@@ -1875,6 +1877,48 @@ model LongtermPayrollLine {
   @@unique([runId, guardId])
   @@index([guardId])
   @@map("longterm_payroll_lines")
+}
+
+// P14.3：銀行 Payroll Editor 對數。一次上載一行 reconciliation＋逐行 rows（銀行名只存 sha256）。
+model LongtermBankReconciliation {
+  id          String             @id @default(uuid())
+  month       DateTime           @db.Date
+  runId       String             @map("run_id")
+  run         LongtermPayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  fileName    String             @map("file_name")
+  fileSha256  String             @map("file_sha256")
+  uploadedBy  String?            @map("uploaded_by")
+  uploadedAt  DateTime           @default(now()) @map("uploaded_at")
+  summaryJson Json?              @map("summary_json")
+
+  rows LongtermBankReconciliationRow[]
+
+  @@index([month, uploadedAt])
+  @@map("longterm_bank_reconciliations")
+}
+
+model LongtermBankReconciliationRow {
+  id               String                     @id @default(uuid())
+  reconciliationId String                     @map("reconciliation_id")
+  reconciliation   LongtermBankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  guardId          String?                    @map("guard_id")
+  guard            Guard?                     @relation(fields: [guardId], references: [id], onDelete: SetNull)
+  bankRowNo        Int                        @map("bank_row_no")
+  bankNameNormHash String?                    @map("bank_name_norm_hash")
+  bankAmount       Decimal?                   @map("bank_amount") @db.Decimal(12, 2)
+  systemLineId     String?                    @map("system_line_id")
+  systemAutopay    Decimal?                   @map("system_autopay") @db.Decimal(12, 2)
+  diff             Decimal?                   @db.Decimal(12, 2)
+  matchBy          String                     @map("match_by") // remark／account／name_en／none
+  status           String // equal／diff／bank_only／system_only
+  reasonCode       String?                    @map("reason_code")
+  reasonNote       String?                    @map("reason_note")
+  resolvedBy       String?                    @map("resolved_by")
+  resolvedAt       DateTime?                  @map("resolved_at")
+
+  @@index([reconciliationId])
+  @@index([guardId])
+  @@map("longterm_bank_reconciliation_rows")
 }
 
 // longterm_payroll_inputs：會計每月人手輸入項（試算「18 個人手輸入項」
