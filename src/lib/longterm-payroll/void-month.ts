@@ -1,6 +1,6 @@
 // P15.1：作廢長工糧某月計算（倒序重算）。只准作廢「最近一個已計月份」；同時將假期結餘回滾到計呢個月之前嘅狀態：
 //  - 有快照（`guard_leave_balance_history`，P15 起每次寫回前影低）→ 原樣還原（existed=false → 刪除結餘記錄；
-//    但該行而家有人手 al_entitled／al_carry／opening 非 0 → 唔刪，只將 taken 回 0、as_of_month 清空，計入 kept_manual_rows）。
+//    但該行而家有人手 al_entitled／al_carry 非 0 → 唔刪，taken 回到 opening（上年結轉）、as_of_month 清空，計入 kept_manual_rows；opening 非 0 唔算人手）。
 //  - 冇快照（P15 前計過嘅月份，legacy）→ taken＝該行 `*_opening`（即上月尾累積）。
 //      · 冇更早有效 run：空殼行（opening／entitled／carry 全 0）刪除；其餘 taken 回 opening、as_of_month＝null（精確）。
 //      · 有更早有效 run 而且同年：as_of_month 回到上一個有效 run 月份，上月 opening ＝ 上月尾累積 − 上月新增
@@ -137,9 +137,10 @@ export async function voidLongtermPayrollMonth(monthIn: Date, actorUserId: strin
         const cur = await tx.guardLeaveBalance.findUnique({ where: { guardId_year: { guardId: s.guardId, year: s.year } } });
         if (!s.existed) {
           if (!cur) continue;
-          if (!isEmptyShell(cur as unknown as BalRow)) {
-            // 計糧之後有人手 entitled／carry／opening → 唔刪行，只將 taken 回 0
-            await tx.guardLeaveBalance.update({ where: { id: cur.id }, data: { alTaken: 0, slTaken: 0, asOfMonth: null } });
+          // 同年 existed=false ＝ 計算前冇本年行；opening 非 0 只可能係上年結轉（唔係人手），所以只睇人手 entitled／carry。
+          if (n(cur.alEntitled) !== 0 || n(cur.alCarry) !== 0) {
+            // 有人手 entitled／carry → 唔刪行；taken 回到 opening（＝計算前讀到嘅上年累積），唔係 0（否則上年結轉會冇咗）
+            await tx.guardLeaveBalance.update({ where: { id: cur.id }, data: { alTaken: cur.alTakenOpening, slTaken: cur.slTakenOpening, asOfMonth: null } });
             kept += 1;
           } else {
             await tx.guardLeaveBalance.delete({ where: { id: cur.id } });
