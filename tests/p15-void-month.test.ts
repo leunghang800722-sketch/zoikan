@@ -229,3 +229,38 @@ describe("P15.3 新增合約／揀保安員", () => {
     expect((await mk(accountant, { pay_basis: "monthly", monthly_salary: 1, effective_from: fx.lockedMonth.toISOString().slice(0, 10) })).status).toBe(403);
   });
 });
+
+describe("P15.1 legacy：系統首次計算（冇快照）作廢後同從未計過一模一樣", () => {
+  it("只計 8 月（冇快照）→ 作廢 → 結餘表同未計過一樣（空）；有 opening 嘅預存結餘 → taken 回到 opening；重算 8 月結果同首次一致", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    const actor = fx.userIds["老闆"];
+    const site = await prisma.site.create({ data: { canonicalName: `P15L-${Math.random().toString(36).slice(2, 7)}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
+    const st = await prisma.shiftType.create({ data: { siteId: site.id, code: "N", hours: 12, createdBy: "test" } });
+    const mk = async (name: string) => {
+      const g = await prisma.guard.create({ data: { nameZh: name, employmentType: "longterm_autopay", hireDate: new Date("2024-01-01"), createdBy: "test" } });
+      await prisma.guardLongtermContract.create({ data: { guardId: g.id, monthlySalary: 15500, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: actor } });
+      return g.id;
+    };
+    const a = await mk("測試L甲");
+    const b = await mk("測試L乙");
+    for (const d of [10, 11]) await prisma.shiftRecord.create({ data: { workDate: D(8, d), siteId: site.id, shiftTypeId: st.id, guardId: a, recordType: "leave", leaveCode: "AL", createdBy: "test" } });
+    // 乙有預存結餘（先前人手／匯入，asOfMonth=null）
+    await prisma.guardLeaveBalance.create({ data: { guardId: b, year: 2026, alTaken: 3, slTaken: 2, alEntitled: 7, alCarry: 1 } });
+    const snap = async () => (await prisma.guardLeaveBalance.findMany({ orderBy: { guardId: "asc" } })).map((r) => ({ g: r.guardId, al: Number(r.alTaken), sl: Number(r.slTaken), ent: Number(r.alEntitled), carry: Number(r.alCarry), as: r.asOfMonth?.toISOString() ?? null, alo: Number(r.alTakenOpening), slo: Number(r.slTakenOpening) }));
+    const before = await snap();
+    await recomputeLongtermPayroll(M(8), actor);
+    const first = await snap();
+    await prisma.guardLeaveBalanceHistory.deleteMany({}); // 模擬 P15 前
+    const j = await (await voidCall("2026-08", owner)).json();
+    expect(j).toMatchObject({ voided_runs: 1, balances_deleted: 1, balances_restored: 1, restored_as_of_month: null });
+    const after = await snap();
+    // 甲（計糧先生成）→ 行消失；乙 → taken 回到 opening（3／2），entitled／carry 不變
+    expect(after.map((r) => r.g)).toEqual([b]);
+    expect(after[0]).toMatchObject({ al: 3, sl: 2, ent: 7, carry: 1, as: null, alo: 3, slo: 2 });
+    expect(before.find((r) => r.g === b)).toMatchObject({ al: 3, sl: 2, ent: 7, carry: 1 });
+    await recomputeLongtermPayroll(M(8), actor);
+    expect(await snap()).toEqual(first);
+  });
+});

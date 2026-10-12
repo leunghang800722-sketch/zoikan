@@ -2612,7 +2612,7 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 ### P15.1 作廢本月長工糧計算（倒序重算）
 - `POST /api/longterm/payroll/:month/void`（`長工糧:update` 且**只限老闆**，會計 403）body `{ reason }`（必填、≤500 字，空白 400）→ 200 `{ month, voided_runs, balances_restored, balances_deleted, legacy_rebuilt, avg_wages_cleared, restored_as_of_month }`（唔含姓名）。
   - 只准作廢**最近一個已計月份**：後面月份仍有有效 run 或 `guard_leave_balances.as_of_month` 更後 → 409（提示先作廢後月）；該月冇有效 run → 404；月鎖 → 403。
-  - 作廢該月所有有效 run（`status=void`、`voided_at/by`），同時**回滾假期結餘**：新表 `guard_leave_balance_history`（migration `20261016000000_p15_leave_balance_history`，只新增、冪等）喺每次 `recomputeLongtermPayroll` 寫回前影低 (guard, year, month) 第一次嘅舊狀態（`existed=false` → 回滾時刪除該結餘行）；作廢時原樣還原再刪該月快照。P15 前計過、冇快照嘅月份（legacy）：`taken` 還原做該行 `*_opening`，`as_of_month` 回到上一個有效 run 嘅月份（同年先重建；跨年或冇上一個月 → `null`），上月 opening ＝ 上月尾累積 − 上月新增（以 0 起算 dry-run 重建，近似），`legacy_rebuilt` 列出數量，要覆核。
+  - 作廢該月所有有效 run（`status=void`、`voided_at/by`），同時**回滾假期結餘**：新表 `guard_leave_balance_history`（migration `20261016000000_p15_leave_balance_history`，只新增、冪等）喺每次 `recomputeLongtermPayroll` 寫回前影低 (guard, year, month) 第一次嘅舊狀態（`existed=false` → 回滾時刪除該結餘行）；作廢時原樣還原再刪該月快照。P15 前計過、冇快照嘅月份（legacy）：`taken` 還原做該行 `*_opening`，`as_of_month` 回到上一個有效 run 嘅月份（同年先重建；跨年或冇上一個月 → `null`），上月 opening ＝ 上月尾累積 − 上月新增（以 0 起算 dry-run 重建，近似），`legacy_rebuilt` 列出數量，要覆核。**例外（精確）**：系統首次計算（冇更早有效 run）而該行只係計糧寫出嘅空殼（opening 全 0、`al_entitled`／`al_carry` 為 0）→ 直接刪除，等於從未計過；有預存結餘（opening／entitled／carry 有值）→ `taken` 回到 opening、`as_of_month=null`、其餘不變（test：首次計算作廢後與未計過一致，重算與首次一致）。
   - 同時刪除該月 `guard_avg_wages` 入面 source 以 `computed` 開頭或含「自動計」嘅行；人手／批量導入嘅保留。
   - audit `action=void_longterm_payroll_month`（table `longterm_payroll_runs`，after 帶 reason／計數）。
 - `recomputeLongtermPayroll` 行為不變（仍擋「後月已計」）；唯一差別係寫回結餘前多影一張快照。
