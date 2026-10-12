@@ -207,7 +207,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
             await syncLegacyStaffNoColumns(tx, guard.id);
             summary.filled_staff_no_mw += 1;
           } else if (taken) {
-            summary.warnings.push(`${row.name ?? "（未知）"}：Maxwell 工號 ${mwRaw} 已經掛喺另一個保安員，唔補工號`);
+            summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：Maxwell 工號 ${mwRaw} 已經掛喺另一個保安員，唔補工號`);
           }
         }
       }

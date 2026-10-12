@@ -33,6 +33,8 @@ export type BulkInputResult = {
   matched: number;
   created: number;
   skipped_duplicate: number;
+  /** 撞到同人同段嘅 draft → 直接確認（唔新增重複行）嘅數量。 */
+  confirmed_existing_draft: number;
   unmatched: Array<{ row: number; reason: "no_identifier" | "no_match" | "ambiguous"; staff_no?: string }>;
   overlaps: Array<{ row: number; reason: string }>;
   invalid: Array<{ row: number; reason: string }>;
@@ -83,6 +85,15 @@ function matchBulkRow(row: BulkInputRow, idx: GuardIdx): Match {
   return { reason: ambiguous ? "ambiguous" : "no_match" };
 }
 
+/** date_from ≤ date_to，而且兩個日期都喺該月內（跨月段唔收，要拆做每月一段）。 */
+export function checkDates(month: Date, from: string | null | undefined, to: string | null | undefined): string | null {
+  const ym = month.toISOString().slice(0, 7);
+  if (from && to && from > to) return "date_from 遲過 date_to";
+  if (from && from.slice(0, 7) !== ym) return "date_from 唔喺該月內";
+  if (to && to.slice(0, 7) !== ym) return "date_to 唔喺該月內（跨月請拆做每月一段）";
+  return null;
+}
+
 function amountKey(a: unknown): string {
   if (a === null || a === undefined || a === "") return "null";
   return Number(a).toFixed(2);
@@ -103,12 +114,15 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
   const dryRun = !!params.dryRun;
   if (rows.length > BULK_MAX_ROWS) throw BadRequest(`一次最多 ${BULK_MAX_ROWS} 行`);
   const idx = await buildGuardIndex();
-  const result: BulkInputResult = { dry_run: dryRun, total: rows.length, matched: 0, created: 0, skipped_duplicate: 0, unmatched: [], overlaps: [], invalid: [] };
+  const result: BulkInputResult = { dry_run: dryRun, total: rows.length, matched: 0, created: 0, skipped_duplicate: 0, confirmed_existing_draft: 0, unmatched: [], overlaps: [], invalid: [] };
 
   const work = async (db: Prisma.TransactionClient | null) => {
     const client = db ?? prisma;
-    const existing = await client.longtermPayrollInput.findMany({ where: { month, voidedAt: null }, select: { guardId: true, kind: true, dateFrom: true, dateTo: true, amount: true } });
-    const seen = new Set(existing.map((e) => dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount))));
+    const existing = await client.longtermPayrollInput.findMany({ where: { month, voidedAt: null }, select: { id: true, guardId: true, kind: true, dateFrom: true, dateTo: true, amount: true, status: true, note: true } });
+    // 重複只比 confirmed；draft 唔計（aggregate 只計 confirmed）——撞到同人同段嘅 draft 就直接確認佢
+    const draftByKey = new Map<string, (typeof existing)[number]>();
+    for (const e of existing) if (e.status === "draft") draftByKey.set(dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount)), e);
+    const seen = new Set(existing.filter((e) => e.status === "confirmed").map((e) => dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount))));
     const pendingLeave: Array<{ guardId: string; from: string; to: string }> = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
@@ -134,20 +148,40 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
         result.invalid.push({ row: n, reason: "kind=leave 要帶 date_from" });
         continue;
       }
+      const dateErr = checkDates(month, from, to);
+      if (dateErr) {
+        result.invalid.push({ row: n, reason: dateErr });
+        continue;
+      }
       const key = dupKey(m.guardId, row.kind, from, to, amount);
       if (seen.has(key)) {
         result.skipped_duplicate += 1;
         continue;
       }
+      const draft = draftByKey.get(key);
       if (row.kind === "leave") {
         const b = to ?? from!;
-        const dbHit = await findConfirmedLeaveOverlap(m.guardId, month, from, to, undefined, client);
+        const dbHit = await findConfirmedLeaveOverlap(m.guardId, month, from, to, draft?.id, client);
         const memHit = pendingLeave.some((p) => p.guardId === m.guardId && p.from <= b && p.to >= from!);
         if (dbHit || memHit) {
           result.overlaps.push({ row: n, reason: OVERLAP_MSG });
           continue;
         }
         pendingLeave.push({ guardId: m.guardId, from: from!, to: b });
+      }
+      if (draft) {
+        // 同人同段嘅草稿未確認就唔入糧——直接確認佢，唔新增重複行
+        draftByKey.delete(key);
+        seen.add(key);
+        result.confirmed_existing_draft += 1;
+        if (!dryRun && db) {
+          const after = await db.longtermPayrollInput.update({
+            where: { id: draft.id },
+            data: { status: "confirmed", confirmedAt: new Date(), confirmedBy: actorUserId, note: `${draft.note ?? ""}${draft.note ? "；" : ""}批量導入確認`, ...(row.doctor_note_verified !== undefined ? { doctorNoteVerified: row.doctor_note_verified } : {}) },
+          });
+          await writeAuditTx(db, { actorUserId, tableName: "longterm_payroll_inputs", rowId: draft.id, action: "confirm", before: { status: "draft" }, after: { status: after.status, source: BULK_SOURCE }, ip });
+        }
+        continue;
       }
       seen.add(key);
       result.created += 1;
