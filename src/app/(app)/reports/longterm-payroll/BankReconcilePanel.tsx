@@ -9,6 +9,7 @@ import { inputCls, selectCls } from "@/components/ui/Field";
 import { tableCls, tableMinWidth, TableEmptyRow } from "@/components/ui/DataTable";
 import { apiGet, apiPatch, apiUpload } from "@/lib/ui/api-client";
 import { fmtMoney } from "@/lib/ui/format";
+import { ATTENDANCE_CONFLICT_PREFIX } from "@/lib/longterm-payroll/attendance-conflict";
 import { REASON_CODES, REASON_LABEL } from "@/lib/longterm-payroll/reconcile-reasons";
 
 interface Components {
@@ -57,6 +58,8 @@ interface Summary {
   system_only: number;
   bad_amount_rows: number;
   ambiguous_name?: number;
+  header_rows_skipped?: number;
+  attendance_conflicts?: number;
   system_zero_skipped: number;
   totals: { bank: number; system: number; matched_bank: number; matched_system: number };
   unresolved: number;
@@ -153,6 +156,8 @@ export function BankReconcilePanel({ month, hasRun, active, onError, onNotice }:
             檔案：{data?.reconciliation?.file_name}
             {s.bad_amount_rows > 0 ? `；${s.bad_amount_rows} 行金額無法解析（已列入只喺銀行）` : ""}
             {(s.ambiguous_name ?? 0) > 0 ? `；${s.ambiguous_name} 行同名多人／多行，無法自動配對（需人手核）` : ""}
+            {(s.header_rows_skipped ?? 0) > 0 ? `；已跳過 ${s.header_rows_skipped} 行重複表頭` : ""}
+            {(s.attendance_conflicts ?? 0) > 0 ? `；${s.attendance_conflicts} 人同日有多來源更表紀錄衝突（展開「組成」睇 ⚠ 提示）` : ""}
             {s.system_zero_skipped > 0 ? `；${s.system_zero_skipped} 人系統 Autopay 為 0 而銀行冇出，唔當差異` : ""}
           </div>
         </div>
@@ -231,7 +236,20 @@ export function BankReconcilePanel({ month, hasRun, active, onError, onNotice }:
                               </span>
                             ))}
                           </div>
-                          {r.components.notes.length > 0 && <div className="mt-1 text-zk-sm text-zk-muted">{r.components.notes.join("；")}</div>}
+                          {(() => {
+                            const conflicts = r.components.notes.filter((x) => x.startsWith(ATTENDANCE_CONFLICT_PREFIX));
+                            const others = r.components.notes.filter((x) => !x.startsWith(ATTENDANCE_CONFLICT_PREFIX));
+                            return (
+                              <>
+                                {conflicts.map((x) => (
+                                  <div key={x} className="mt-1 text-zk-sm text-zk-danger" data-testid="ltpay-recon-conflict-note">
+                                    {x}
+                                  </div>
+                                ))}
+                                {others.length > 0 && <div className="mt-1 text-zk-sm text-zk-muted">{others.join("；")}</div>}
+                              </>
+                            );
+                          })()}
                         </td>
                       </tr>
                     )}

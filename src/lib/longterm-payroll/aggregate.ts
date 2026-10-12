@@ -58,6 +58,7 @@
 //   4. 「平均工資」表未搬入系統（7 月試算用嘅係計糧表 col M 快照）——
 //      AL 離職結算／SL 4/5 一律 fallback 用「日薪＝月薪÷當月曆日數」
 //      （同 `compute.ts` JSDoc 一致嘅 fallback 口徑），會喺 notes 標明。
+import { ATTENDANCE_CONFLICT_PREFIX } from "./attendance-conflict";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
@@ -162,6 +163,35 @@ function emptyTotals(): LongtermPayrollTotals {
 const UNPAID_LEAVE_CODES = new Set(["NL", "NPL"]);
 const REST_DAY_CODES = new Set(["RD", "OFF"]);
 
+
+/**
+ * P16b.3：同一人同一日有 ≥2 個來源（shift_records.source，例如 roster_upload／master_roster／payroll_only）
+ * 而且各來源嘅「出勤代號」（班＝shift、假＝leaveCode；OT 唔計入比較）唔一致 → 回傳提示 note。
+ * 只提示，唔影響 aggregate 揀邊條紀錄（計算公式不變）。
+ */
+export function attendanceConflictNote(srs: Array<{ workDate: Date; recordType: string; leaveCode: string | null; source: string | null }>): string | null {
+  const byDate = new Map<string, Map<string, Set<string>>>();
+  for (const r of srs) {
+    const code = r.recordType === "shift" ? "班" : r.recordType === "leave" && r.leaveCode ? r.leaveCode : null;
+    if (!code) continue;
+    const d = r.workDate.toISOString().slice(5, 10);
+    const bySrc = byDate.get(d) ?? new Map<string, Set<string>>();
+    const set = bySrc.get(r.source ?? "（無來源）") ?? new Set<string>();
+    set.add(code);
+    bySrc.set(r.source ?? "（無來源）", set);
+    byDate.set(d, bySrc);
+  }
+  const parts: string[] = [];
+  for (const d of [...byDate.keys()].sort()) {
+    const bySrc = byDate.get(d)!;
+    if (bySrc.size < 2) continue;
+    const sigs = [...bySrc.entries()].map(([src, set]) => [src, [...set].sort().join("＋")] as const).sort((a, b) => a[0].localeCompare(b[0]));
+    if (new Set(sigs.map((x) => x[1])).size < 2) continue;
+    parts.push(`${d}（${sigs.map(([src, sig]) => `${src} 代號 ${sig}`).join(" / ")}）`);
+  }
+  return parts.length ? `${ATTENDANCE_CONFLICT_PREFIX}${parts.join("、")}——系統按現行規則揀其中一條計，要人手核更表` : null;
+}
+
 /** 由一段（可能有多段合約重疊呢個月）嘅合約，計返 (a) 當月「合約覆蓋」
  * 嘅最早／最遲日期（clip 落月頭/月尾之前）。 */
 function contractCoverage(segments: ContractSegment[], monthStartD: Date, monthEndD: Date): { start: Date; end: Date } {
@@ -248,7 +278,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
 
   const shiftRecords = await client.shiftRecord.findMany({
     where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
-    select: { guardId: true, workDate: true, recordType: true, leaveCode: true, otHours: true, settlementBrokerId: true },
+    select: { guardId: true, workDate: true, recordType: true, leaveCode: true, otHours: true, settlementBrokerId: true, source: true },
   });
   const shiftsByGuard = new Map<string, typeof shiftRecords>();
   for (const r of shiftRecords) {
@@ -385,6 +415,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     if (isVisa) {
       notes.push(`★ 簽證形式長工（§14 規則 12）：人工照計、照 autopay＋MPF；呢筆（Autopay＋MPF 僱主）每月喺贊助雞頭結算扣返公司（系統外現金扣減）${rescueCount ? `；佢喺雞頭盤嘅 ${rescueCount} 更由雞頭自己對數出糧，唔當長工返工日` : ""}`);
     } else if (rescueCount > 0) notes.push(`幫雞頭頂散更 ${rescueCount} 更：已由雞頭現金結算，唔當長工返工日、唔喺呢層扣/計錢`);
+    const conflictNote = attendanceConflictNote(srs);
+    if (conflictNote) notes.push(conflictNote);
     const workDays = ownPostDates.size;
 
     // §21 任務 4b(a)：日薪制長工特判——揀返 employEnd 嗰日所屬合約段，

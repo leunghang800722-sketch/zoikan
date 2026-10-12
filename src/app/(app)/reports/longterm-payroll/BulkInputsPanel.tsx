@@ -15,6 +15,7 @@ interface Preview {
   unmatched: { row: number; reason: string; staff_no?: string }[];
   overlaps: { row: number; reason: string }[];
   invalid: { row: number; reason: string }[];
+  separate_by_note?: { row: number; reason: string }[];
 }
 const REASON_LABEL: Record<string, string> = { no_match: "配唔到", ambiguous: "多過一人", no_identifier: "冇工號／英文名" };
 
@@ -48,7 +49,7 @@ export function BulkInputsPanel({ month, locked, onChanged, onError, onNotice }:
     const res = await apiPost<Preview>(`/api/longterm/inputs/bulk`, { month: `${month}-01`, rows });
     setBusy(false);
     if (!res.ok) return onError(res.message);
-    onNotice(`批量導入完成：新增 ${res.data.created}、確認現有草稿 ${res.data.confirmed_existing_draft}、重複略過 ${res.data.skipped_duplicate}、配唔到 ${res.data.unmatched.length}、重疊 ${res.data.overlaps.length}`);
+    onNotice(`批量導入完成：新增 ${res.data.created}、確認現有草稿 ${res.data.confirmed_existing_draft}、重複略過 ${res.data.skipped_duplicate}、同金額唔同備註已分開新增 ${res.data.separate_by_note?.length ?? 0}、配唔到 ${res.data.unmatched.length}、重疊 ${res.data.overlaps.length}`);
     setRows(null);
     setPreview(null);
     setFileName("");
@@ -93,6 +94,7 @@ export function BulkInputsPanel({ month, locked, onChanged, onError, onNotice }:
             </div>
           )}
           {preview.overlaps.length > 0 && <div className="text-zk-danger">病假段重疊已確認段 {preview.overlaps.length} 行：{preview.overlaps.slice(0, 30).map((o) => `第 ${o.row} 行`).join("、")}（唔會寫入）</div>}
+          {(preview.separate_by_note?.length ?? 0) > 0 && <div className="text-zk-muted" data-testid="bulk-separate-by-note">同金額、唔同備註，已分開新增 {preview.separate_by_note!.length} 行：{preview.separate_by_note!.slice(0, 30).map((o) => `第 ${o.row} 行`).join("、")}</div>}
           {preview.invalid.length > 0 && <div className="text-zk-danger">資料有問題 {preview.invalid.length} 行：{preview.invalid.slice(0, 30).map((o) => `第 ${o.row} 行（${o.reason}）`).join("、")}</div>}
           <div>
             <Button variant="primary" onClick={confirm} disabled={busy || preview.created + preview.confirmed_existing_draft === 0} data-testid="ltpay-bulk-confirm">

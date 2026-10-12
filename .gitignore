@@ -39,6 +39,7 @@ P0-執行計劃.md
 P1-執行計劃.md
 /archive/
 # 所有生成輸出
+/out
 out/
 
 # P1-WP3：Playwright e2e 輸出（截圖／trace／report，可能含真實 7 月

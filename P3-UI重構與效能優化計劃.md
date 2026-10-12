@@ -1086,3 +1086,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - merge `0d63d10`（P3 doc 衝突兩節並存）；部署 `6acc7fb8`。正式站重導入 Maxwell：76 份生效合約 → 法定假期 after_3_months 45／immediate 31。作廢 8 月（快照精確還原 57 人）→ 重算 7 月（54 行，autopay 883,955.93 → 888,933.87）→ 重算 8 月（57 行，不變）。
 - 7 月對數：配對 51／**吻合 17 → 40**／差 11／系統有銀行冇 3／銀行有系統冇 20。8 月不變（45／50）。
 - 7 月剩餘 11 個差額逐人追查（更表 vs 辦公室糧單備註）：7 人係**更表同辦公室出勤紀錄唔同**（例：更表 7/30–31 返工，辦公室扣無薪假；更表 7/16 SL、7/21 AL，辦公室當 NPL／NPSL；更表 7/26 RD，辦公室當病假第 6 日；更表 7/23 RD，辦公室當病假第 1 日）；1 人 OT＋補假日同額 650 被批量導入當重複（已人手補一項；工具改進：重複判斷要計 note）；1 人（月薪 25,000）7 月所有更歸咗雞頭結算，長工糧當全部係頂位更（wd 0）；1 人法定假替假（7/3）冇扣（待查紀錄歸屬）；3 人 ±7 元以內（平均工資四捨五入）。
+
+## 21 階段 16b（2026-10-12）：對數工具細修
+- **P16b.1** 批量輸入重複判斷加入 note（`bulk-inputs.ts`）：同金額唔同 note 分開新增；回應 `separate_by_note`。由草稿確認嘅行保持原冪等。
+- **P16b.2** 銀行檔第二表頭行跳過（`bank-reconcile.ts`）：不入 rows、不計 `bad_amount_rows`；summary `header_rows_skipped`。
+- **P16b.3** 同日多來源更表紀錄衝突提示（`aggregate.ts` `attendanceConflictNote()`）：只加 notes，不改計算；summary `attendance_conflicts`；銀行對數 tab 展開以紅字顯示；`docs/ops.md` 加根因一節。
+- 測試：`tests/p16b-recon-tweaks.test.ts`（6 條）。驗收修正（Opus 5.5）：M1 系統草稿已確認行唔計 note 判重；第二表頭行只認表頭字眼；`.gitignore` `/out`；衝突前綴抽去 `attendance-conflict.ts`（client bundle 唔拉 aggregate）。
