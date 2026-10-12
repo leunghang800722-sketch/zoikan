@@ -32,7 +32,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       where: { id },
       data: code
         ? { reasonCode: code, reasonNote: body.reason_note ?? null, resolvedBy: session.userId, resolvedAt: new Date() }
-        : { reasonCode: null, reasonNote: body.reason_note ?? null, resolvedBy: null, resolvedAt: null },
+        : { reasonCode: null, ...(body.reason_note !== undefined ? { reasonNote: body.reason_note } : {}), resolvedBy: null, resolvedAt: null },
     });
     await writeAudit({ actorUserId: session.userId, tableName: "longterm_bank_reconciliations", rowId: id, action: "update", before: { reason_code: before.reasonCode }, after: { reason_code: after.reasonCode }, ip: getClientIp(req) });
     const all = await prisma.longtermBankReconciliationRow.findMany({ where: { reconciliationId: after.reconciliationId }, select: { status: true, reasonCode: true } });
