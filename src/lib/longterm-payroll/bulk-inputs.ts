@@ -38,6 +38,8 @@ export type BulkInputResult = {
   unmatched: Array<{ row: number; reason: "no_identifier" | "no_match" | "ambiguous"; staff_no?: string }>;
   overlaps: Array<{ row: number; reason: string }>;
   invalid: Array<{ row: number; reason: string }>;
+  /** P16b.1：同人／種類／日期／金額一樣但 note 唔同 → 當不同項目分開新增（預覽列明）。 */
+  separate_by_note: Array<{ row: number; reason: string }>;
 };
 
 const MONEY_KINDS = new Set<string>(["special_allowance", "other_allowance", "uniform", "deduction"]);
@@ -99,6 +101,11 @@ function amountKey(a: unknown): string {
   return Number(a).toFixed(2);
 }
 
+/** note 比較用：去「[批量導入]」前綴、空白 normalize。 */
+function noteKey(n: string | null | undefined): string {
+  return (n ?? "").replace(/^\s*\[批量導入\]\s*/, "").replace(/\s+/g, " ").trim();
+}
+
 function dupKey(guardId: string, kind: string, from: string | null, to: string | null, amount: unknown): string {
   return `${guardId}|${kind}|${from ?? ""}|${to ?? ""}|${amountKey(amount)}`;
 }
@@ -114,7 +121,7 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
   const dryRun = !!params.dryRun;
   if (rows.length > BULK_MAX_ROWS) throw BadRequest(`一次最多 ${BULK_MAX_ROWS} 行`);
   const idx = await buildGuardIndex();
-  const result: BulkInputResult = { dry_run: dryRun, total: rows.length, matched: 0, created: 0, skipped_duplicate: 0, confirmed_existing_draft: 0, unmatched: [], overlaps: [], invalid: [] };
+  const result: BulkInputResult = { dry_run: dryRun, total: rows.length, matched: 0, created: 0, skipped_duplicate: 0, confirmed_existing_draft: 0, unmatched: [], overlaps: [], invalid: [], separate_by_note: [] };
 
   const work = async (db: Prisma.TransactionClient | null) => {
     const client = db ?? prisma;
@@ -122,7 +129,12 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
     // 重複只比 confirmed；draft 唔計（aggregate 只計 confirmed）——撞到同人同段嘅 draft 就直接確認佢
     const draftByKey = new Map<string, (typeof existing)[number]>();
     for (const e of existing) if (e.status === "draft") draftByKey.set(dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount)), e);
-    const seen = new Set(existing.filter((e) => e.status === "confirmed").map((e) => dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount))));
+    // P16b.1：confirmed 重複 key 加 note（同金額唔同 note ＝ 不同項目，例如 OT 650 同補假日工資 650）
+    const baseOf = (e: (typeof existing)[number]) => dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount));
+    const seen = new Set(existing.filter((e) => e.status === "confirmed").map((e) => `${baseOf(e)}|${noteKey(e.note)}`));
+    // 由草稿確認嘅行，note 係系統草稿原文＋「批量導入確認」，唔代表人手 note → 同 base 一律當重複（保持原冪等）
+    const confirmedFromDraft = new Set(existing.filter((e) => e.status === "confirmed" && (e.note ?? "").endsWith("批量導入確認")).map(baseOf));
+    const seenBase = new Set(existing.filter((e) => e.status === "confirmed").map(baseOf));
     const pendingLeave: Array<{ guardId: string; from: string; to: string }> = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
@@ -154,7 +166,8 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
         continue;
       }
       const key = dupKey(m.guardId, row.kind, from, to, amount);
-      if (seen.has(key)) {
+      const fullKey = `${key}|${noteKey(row.note)}`;
+      if (seen.has(fullKey) || confirmedFromDraft.has(key)) {
         result.skipped_duplicate += 1;
         continue;
       }
@@ -172,7 +185,9 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
       if (draft) {
         // 同人同段嘅草稿未確認就唔入糧——直接確認佢，唔新增重複行
         draftByKey.delete(key);
-        seen.add(key);
+        seen.add(fullKey);
+        seenBase.add(key);
+        confirmedFromDraft.add(key);
         result.confirmed_existing_draft += 1;
         if (!dryRun && db) {
           const after = await db.longtermPayrollInput.update({
@@ -183,7 +198,9 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
         }
         continue;
       }
-      seen.add(key);
+      if (seenBase.has(key)) result.separate_by_note.push({ row: n, reason: "同金額但 note 唔同 → 會分開新增（唔當重複）" });
+      seen.add(fullKey);
+      seenBase.add(key);
       result.created += 1;
       if (dryRun || !db) continue;
       const created = await db.longtermPayrollInput.create({

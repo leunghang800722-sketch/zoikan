@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { BadRequest } from "@/lib/api/errors";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { hashNormalizedName, normalizeEnName } from "./name-norm";
+import { ATTENDANCE_CONFLICT_PREFIX } from "./aggregate";
 import type { Prisma } from "@prisma/client";
 
 const RECONCILE_TOLERANCE = 0.01;
@@ -27,6 +28,8 @@ export interface ParsedBankFile {
   sheetName: string;
   headerRow: number; // 1-based
   rows: BankRow[];
+  /** P16b.2：表頭行之後再出現嘅表頭字眼行（例如英文第二表頭）數量——已跳過，唔入 rows。 */
+  headerRowsSkipped: number;
 }
 
 const RE_ACCOUNT = /(賬|帳)戶號碼|a\/c\s*(no\.?|number)?\s*\*?\s*$/i;
@@ -36,6 +39,22 @@ const RE_REMARK_NO = /備考|reference/i;
 
 function cellText(v: unknown): string {
   return v == null ? "" : String(v).trim();
+}
+
+const RE_HDR_NAME = /(account|employee|payee|beneficiary)\s*name|^name$|(賬|帳)戶名稱|員工(賬|帳)戶|員工姓名/i;
+const RE_HDR_AMOUNT = /amount|金額|\((hkd|cny|rmb)/i;
+const RE_HDR_ACCT = /account\s*(no|number)|a\/c\s*(no|number)|(賬|帳)戶號碼/i;
+
+/** P16b.2：重複表頭行＝姓名／金額／戶口欄係表頭字眼，或者整行冇任何數字而金額又唔係數字。 */
+function isSecondHeaderRow(r: unknown[], cols: { name: number; amount: number; account: number }): boolean {
+  const name = cellText(r[cols.name]);
+  const amountRaw = r[cols.amount];
+  const amountText = typeof amountRaw === "number" ? "" : cellText(amountRaw);
+  const acct = cols.account >= 0 ? cellText(r[cols.account]) : "";
+  if (name && RE_HDR_NAME.test(name)) return true;
+  if (amountText && RE_HDR_AMOUNT.test(amountText)) return true;
+  if (acct && RE_HDR_ACCT.test(acct)) return true;
+  return parseAmount(amountRaw) === null && !r.some((c) => /\d/.test(cellText(c)));
 }
 
 function parseAmount(v: unknown): number | null {
@@ -93,6 +112,7 @@ export function parseBankPayrollEditor(buffer: Buffer): ParsedBankFile {
     }
     if (headerIdx < 0) continue;
     const rows: BankRow[] = [];
+    let headerRowsSkipped = 0;
     for (let i = headerIdx + 1; i < full.length; i++) {
       const r = full[i] ?? [];
       const name = cellText(r[cols.name]);
@@ -100,11 +120,15 @@ export function parseBankPayrollEditor(buffer: Buffer): ParsedBankFile {
       const remark = cols.remark >= 0 ? cellText(r[cols.remark]) : "";
       const amountRaw = r[cols.amount];
       if (!name && !account && !remark) continue; // 空行／合計行（無任何識別）
+      if (isSecondHeaderRow(r, cols)) {
+        headerRowsSkipped += 1;
+        continue;
+      }
       rows.push({ rowNo: i + rowOffset + 1, account: account.replace(/\D/g, ""), nameNorm: normalizeEnName(name), amount: parseAmount(amountRaw), remark });
     }
     if (rows.length > MAX_DETAIL_ROWS) throw BadRequest(`明細行太多（${rows.length} 行，上限 ${MAX_DETAIL_ROWS}）——請確認係 BOCHK Payroll Editor 檔`);
     if (rows.length === 0) throw BadRequest(`分頁「${sheetName}」表頭之後冇讀到任何明細行`);
-    return { sheetName, headerRow: headerIdx + rowOffset + 1, rows };
+    return { sheetName, headerRow: headerIdx + rowOffset + 1, rows, headerRowsSkipped };
   }
   throw BadRequest("搵唔到 Payroll Editor 表頭行（需要「員工賬戶名稱」同「金額」欄）——請確認係 BOCHK Payroll Editor 檔");
 }
@@ -145,6 +169,10 @@ export interface ReconSummary {
   match_by: { remark: number; account: number; name_en: number };
   totals: { bank: number; system: number; matched_bank: number; matched_system: number };
   unresolved: number;
+  /** P16b.2：跳過嘅第二表頭行數（舊紀錄冇此欄）。 */
+  header_rows_skipped?: number;
+  /** P16b.3：本月長工糧 line 有「同日多來源紀錄衝突」提示嘅人數（舊紀錄冇此欄）。 */
+  attendance_conflicts?: number;
 }
 
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -283,17 +311,19 @@ export async function findActiveRun(month: Date) {
   return prisma.longtermPayrollRun.findFirst({ where: { month, voidedAt: null, status: { not: "void" } }, orderBy: { createdAt: "desc" } });
 }
 
-async function loadSystemLines(runId: string): Promise<SystemLineInfo[]> {
+async function loadSystemLines(runId: string): Promise<{ lines: SystemLineInfo[]; attendanceConflicts: number }> {
   const lines = await prisma.longtermPayrollLine.findMany({
     where: { runId },
     select: {
       id: true,
       guardId: true,
       autopay: true,
+      notesJson: true,
       guard: { select: { staffNo: true, staffNoMw: true, bankAccountNo: true, nameEn: true, bankPayeeName: true, staffNumbers: { select: { number: true } } } },
     },
   });
-  return lines.map((l) => ({
+  const attendanceConflicts = lines.filter((l) => Array.isArray(l.notesJson) && l.notesJson.some((x) => typeof x === "string" && x.startsWith(ATTENDANCE_CONFLICT_PREFIX))).length;
+  const mapped = lines.map((l) => ({
     lineId: l.id,
     guardId: l.guardId,
     autopay: Number(l.autopay),
@@ -301,6 +331,7 @@ async function loadSystemLines(runId: string): Promise<SystemLineInfo[]> {
     account: (l.guard.bankAccountNo ?? "").replace(/\D/g, ""),
     enNames: [...new Set([normalizeEnName(l.guard.nameEn), normalizeEnName(l.guard.bankPayeeName)].filter(Boolean))],
   }));
+  return { lines: mapped, attendanceConflicts };
 }
 
 export function unresolvedCount(rows: Array<{ status: string; reasonCode: string | null }>): number {
@@ -318,7 +349,7 @@ export async function runBankReconciliation(params: { month: Date; fileName: str
   const run = await findActiveRun(month);
   if (!run) throw BadRequest("呢個月未計過長工糧（冇有效 run），請先「重算本月」再對數");
   const parsed = parseBankPayrollEditor(buffer);
-  const system = await loadSystemLines(run.id);
+  const { lines: system, attendanceConflicts } = await loadSystemLines(run.id);
   const { rows, summary: base } = compareBankToSystem(parsed.rows, system, month.toISOString().slice(0, 7));
 
   // 重新上載：同一個人、差額相同嘅舊「原因」自動帶過嚟（差額變咗就唔帶，要重新判斷）
@@ -356,7 +387,7 @@ export async function runBankReconciliation(params: { month: Date; fileName: str
       });
       for (let i = 0; i < data.length; i += 500) await tx.longtermBankReconciliationRow.createMany({ data: data.slice(i, i + 500) });
       const withReason = data.map((d) => ({ status: d.status, reasonCode: d.reasonCode ?? null }));
-      const summary: ReconSummary = { ...base, unresolved: unresolvedCount(withReason) };
+      const summary: ReconSummary = { ...base, unresolved: unresolvedCount(withReason), header_rows_skipped: parsed.headerRowsSkipped, attendance_conflicts: attendanceConflicts };
       await tx.longtermBankReconciliation.update({ where: { id: rec.id }, data: { summaryJson: summary as unknown as Prisma.InputJsonValue } });
       return { id: rec.id, summary };
     },
