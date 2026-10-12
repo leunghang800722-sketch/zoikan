@@ -110,11 +110,11 @@ test.describe("P3-4.3 面板清理", () => {
     await expect(page.getByTestId("guard-tab-bank")).toHaveAttribute("aria-selected", "false");
   });
 
-  test("長工糧頁：4 個 tab", async ({ page }) => {
+  test("長工糧頁：5 個 tab（P14 加「銀行對數」）", async ({ page }) => {
     await loginAs(page, "老闆");
     await page.goto("/reports/longterm-payroll");
     const tabs = page.getByTestId("ltpay-tabs").getByRole("tab");
-    await expect(tabs).toHaveCount(4);
+    await expect(tabs).toHaveCount(5);
     await expect(page.getByTestId("ltpay-panel-pay")).toBeVisible();
     await expect(page.getByTestId("ltpay-panel-contracts")).toBeHidden();
     await page.getByTestId("ltpay-tab-contracts").click();

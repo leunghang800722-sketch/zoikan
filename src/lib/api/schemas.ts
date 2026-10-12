@@ -939,6 +939,32 @@ export const LongtermInputCreateSchema = z
   })
   .strict();
 
+/** P14.2：批量導入人手輸入（≤500 行）；每行用 staff_no／staff_no_mw／name_en（／name_zh）其一配保安員。 */
+export const LongtermInputBulkSchema = z
+  .object({
+    month: dateOnly,
+    rows: z
+      .array(
+        z
+          .object({
+            staff_no: z.string().max(40).optional(),
+            staff_no_mw: z.string().max(40).optional(),
+            name_en: z.string().max(120).optional(),
+            name_zh: z.string().max(60).optional(),
+            kind: enumOf(LongtermPayrollInputKind),
+            amount: z.union([z.number(), z.string()]).nullable().optional(),
+            date_from: nullableYmd,
+            date_to: nullableYmd,
+            doctor_note_verified: z.boolean().optional(),
+            note: z.string().max(500).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(500),
+  })
+  .strict();
+
 export const LongtermInputUpdateSchema = z
   .object({
     kind: enumOf(LongtermPayrollInputKind).optional(),

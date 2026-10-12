@@ -13,6 +13,7 @@ import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { assertMonthRangeNotLockedTx } from "@/lib/month-lock";
 import { ApiError } from "@/lib/api/errors";
+import { upsertCurrentStaffNumber, syncLegacyStaffNoColumns, schemeFromNumber, normalizeStaffNumber, STAFF_NUMBER_NUMBER_RE } from "@/lib/guards/staff-numbers";
 import { parseMaxwellWorkbook, parseMaxwellCsv, matchMaxwellRows, type MaxwellStaffRow, type GuardCandidate, type ParsedMaxwellWorkbook, type MaxwellCsvFile } from "./maxwell-import";
 
 export interface MaxwellImportSummary {
@@ -26,6 +27,10 @@ export interface MaxwellImportSummary {
   /** P9.2：合約生效區間覆蓋已鎖月份 → 逐行跳過（其餘照導入）。 */
   skippedLockedRows: number;
   guardFieldsFilled: number;
+  /** P14.1：補咗 `guards.nameEn`（Maxwell 英文名，只補空）嘅人數。 */
+  filled_name_en: number;
+  /** P14.1：補咗 MG／MW 工號（`guard_staff_numbers`＋同步 `staffNoMw`，只補空）嘅人數。 */
+  filled_staff_no_mw: number;
   warnings: string[];
   /** P11.1：additive 欄位（`created`＝`contractsCreated`、`skippedLocked`＝`skippedLockedRows` 嘅別名，方便核對）。 */
   created: number;
@@ -128,6 +133,8 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     skippedManualContract: [],
     skippedLockedRows: 0,
     guardFieldsFilled: 0,
+    filled_name_en: 0,
+    filled_staff_no_mw: 0,
     warnings: [...warnings],
     created: 0,
     skippedLocked: 0,
@@ -143,12 +150,16 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     // P9.2：遇已鎖月份只跳過呢一行（該行 tx 回滾；permission_denied audit 已獨立寫入），其餘照導入
     const filledBefore = summary.guardFieldsFilled;
     const mismatchBefore = summary.salaryMismatch;
+    const nameEnBefore = summary.filled_name_en;
+    const staffNoMwBefore = summary.filled_staff_no_mw;
     try {
       await importOneRow(m, row);
     } catch (e) {
       if (e instanceof ApiError && e.code === "month_locked") {
         summary.guardFieldsFilled = filledBefore; // 該行 tx 已回滾
         summary.salaryMismatch = mismatchBefore;
+        summary.filled_name_en = nameEnBefore;
+        summary.filled_staff_no_mw = staffNoMwBefore;
         summary.skippedLockedRows += 1;
         summary.warnings.push(`${row.name ?? row.staffNo ?? "（未知）"}：合約生效區間覆蓋已鎖月份，呢行跳過（${e.message}）`);
         continue;
@@ -173,9 +184,32 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
       if (!guard.dateOfBirth && row.dob) fillData.dateOfBirth = isoToDate(row.dob);
       if (guard.probationMonths == null && row.probationMonths != null) fillData.probationMonths = row.probationMonths;
       if (!guard.leaveDate && row.status === "left" && row.lastDay) fillData.leaveDate = isoToDate(row.lastDay);
+      // P14.1：補英文名（銀行 Payroll Editor 對數主鍵）——只補空、永不覆蓋；永不改 monthlySalary。
+      const nameEn = row.nameEn?.trim();
+      if (!guard.nameEn && nameEn) {
+        fillData.nameEn = nameEn;
+        summary.filled_name_en += 1;
+      }
       if (Object.keys(fillData).length) {
         await tx.guard.update({ where: { id: guard.id }, data: fillData });
         summary.guardFieldsFilled += 1;
+      }
+      // P14.1：補 MG／MW 工號——照現有 staff_numbers 機制（upsertCurrentStaffNumber＋syncLegacyStaffNoColumns）；
+      // 只喺 `staffNoMw` 空而且冇任何 MG／MW 行時補；撞號（另一人用緊）→ 只加警告，唔影響其餘導入。
+      const mwRaw = row.staffNo ? normalizeStaffNumber(row.staffNo) : "";
+      if (!guard.staffNoMw && mwRaw && STAFF_NUMBER_NUMBER_RE.test(mwRaw)) {
+        const scheme = schemeFromNumber(mwRaw);
+        if (scheme === "MG" || scheme === "MW") {
+          const existingMw = await tx.guardStaffNumber.count({ where: { guardId: guard.id, scheme: { in: ["MG", "MW"] } } });
+          const taken = await tx.guardStaffNumber.findUnique({ where: { number: mwRaw }, select: { id: true } });
+          if (existingMw === 0 && !taken) {
+            await upsertCurrentStaffNumber(tx, { guardId: guard.id, scheme, number: mwRaw, source: "import:maxwell", createdBy: actorUserId });
+            await syncLegacyStaffNoColumns(tx, guard.id);
+            summary.filled_staff_no_mw += 1;
+          } else if (taken) {
+            summary.warnings.push(`保安員 ${guard.id.slice(0, 8)}：Maxwell 工號 ${mwRaw} 已經掛喺另一個保安員，唔補工號`);
+          }
+        }
       }
 
       const openContract = await tx.guardLongtermContract.findFirst({
