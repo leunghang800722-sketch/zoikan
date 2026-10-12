@@ -9,7 +9,7 @@ import { prisma } from "@/lib/db";
 import { BadRequest } from "@/lib/api/errors";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { hashNormalizedName, normalizeEnName } from "./name-norm";
-import { ATTENDANCE_CONFLICT_PREFIX } from "./aggregate";
+import { ATTENDANCE_CONFLICT_PREFIX } from "./attendance-conflict";
 import type { Prisma } from "@prisma/client";
 
 const RECONCILE_TOLERANCE = 0.01;
@@ -45,7 +45,7 @@ const RE_HDR_NAME = /(account|employee|payee|beneficiary)\s*name|^name$|(賬|帳
 const RE_HDR_AMOUNT = /amount|金額|\((hkd|cny|rmb)/i;
 const RE_HDR_ACCT = /account\s*(no|number)|a\/c\s*(no|number)|(賬|帳)戶號碼/i;
 
-/** P16b.2：重複表頭行＝姓名／金額／戶口欄係表頭字眼，或者整行冇任何數字而金額又唔係數字。 */
+/** P16b.2：重複表頭行＝姓名／金額／戶口欄係表頭字眼（冇金額但有正常姓名嘅行唔當表頭，留做 bad_amount_rows）。 */
 function isSecondHeaderRow(r: unknown[], cols: { name: number; amount: number; account: number }): boolean {
   const name = cellText(r[cols.name]);
   const amountRaw = r[cols.amount];
@@ -54,7 +54,7 @@ function isSecondHeaderRow(r: unknown[], cols: { name: number; amount: number; a
   if (name && RE_HDR_NAME.test(name)) return true;
   if (amountText && RE_HDR_AMOUNT.test(amountText)) return true;
   if (acct && RE_HDR_ACCT.test(acct)) return true;
-  return parseAmount(amountRaw) === null && !r.some((c) => /\d/.test(cellText(c)));
+  return false;
 }
 
 function parseAmount(v: unknown): number | null {

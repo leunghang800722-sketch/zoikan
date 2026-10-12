@@ -5,7 +5,8 @@ import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { POST as bulk } from "@/app/api/longterm/inputs/bulk/route";
 import { parseBankPayrollEditor, compareBankToSystem } from "@/lib/longterm-payroll/bank-reconcile";
-import { buildLongtermPayrollInputs, attendanceConflictNote, ATTENDANCE_CONFLICT_PREFIX } from "@/lib/longterm-payroll/aggregate";
+import { buildLongtermPayrollInputs, attendanceConflictNote } from "@/lib/longterm-payroll/aggregate";
+import { ATTENDANCE_CONFLICT_PREFIX } from "@/lib/longterm-payroll/attendance-conflict";
 
 function req(url: string, cookie: string, body?: unknown) {
   return new Request(url, { method: "POST", headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
@@ -40,6 +41,20 @@ describe("P16b.1 批量輸入：note 計入重複 key", () => {
   });
 });
 
+describe("P16b.1 系統草稿確認後批量同金額唔同 note → 仍當重複", () => {
+  it("cover:* 草稿已確認＋批量同金額唔同 note → skipped、唔新增", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    const month = fx.unlockedMonth.toISOString().slice(0, 10);
+    const g = await prisma.guard.create({ data: { nameZh: "測試甲", nameEn: "Test Alpha", staffNoMw: "MG9601", employmentType: "longterm_autopay", createdBy: "test" } });
+    await prisma.longtermPayrollInput.create({ data: { month: fx.unlockedMonth, guardId: g.id, kind: "special_allowance", amount: 300, note: "頂位津貼（系統草稿原文）", status: "confirmed", draftSource: "cover:K", confirmedAt: new Date(), confirmedBy: fx.userIds["老闆"], createdBy: "test" } });
+    const j = await (await bulk(req("http://t/api/longterm/inputs/bulk", owner, { month, rows: [{ staff_no_mw: "MG9601", kind: "special_allowance", amount: 300, note: "另一個寫法" }] }))).json();
+    expect(j).toMatchObject({ created: 0, skipped_duplicate: 1 });
+    expect(await prisma.longtermPayrollInput.count()).toBe(1);
+  });
+});
+
 describe("P16b.2 銀行檔第二表頭行", () => {
   const HEADER = ["編號", "員工賬戶銀行編號", "員工賬戶類型*", "員工賬戶號碼 *", "員工賬戶名稱", "金額 (HKD/…)", "備考號", "備註"];
   it("兩個表頭行（中文第 11 行＋英文第 16 行）→ 第二個跳過、header_rows_skipped=1、唔入 rows", () => {
@@ -59,17 +74,18 @@ describe("P16b.2 銀行檔第二表頭行", () => {
     const { summary } = compareBankToSystem(p.rows, [], "2026-08");
     expect(summary.bad_amount_rows).toBe(1);
   });
-  it("整行冇數字而金額唔係數字（無字眼表頭）亦跳過", () => {
+  it("冇金額但有正常姓名嘅行唔當表頭，留做 bad_amount_rows", () => {
     const aoa: unknown[][] = [];
     while (aoa.length < 10) aoa.push([]);
     aoa.push(HEADER);
-    aoa.push(["x", "y", "z", "p", "Some Title", "q", "", ""]);
+    aoa.push(["x", "y", "z", "p", "Some Person", "", "", ""]);
     aoa.push([1, "012", "BBAN", "111222", "TEST ALPHA", 100, "", ""]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Payroll Editor");
     const p = parseBankPayrollEditor(Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" })));
-    expect(p.headerRowsSkipped).toBe(1);
-    expect(p.rows).toHaveLength(1);
+    expect(p.headerRowsSkipped).toBe(0);
+    expect(p.rows).toHaveLength(2);
+    expect(compareBankToSystem(p.rows, [], "2026-08").summary.bad_amount_rows).toBe(1);
   });
 });
 

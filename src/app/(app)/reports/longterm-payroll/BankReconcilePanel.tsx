@@ -9,6 +9,7 @@ import { inputCls, selectCls } from "@/components/ui/Field";
 import { tableCls, tableMinWidth, TableEmptyRow } from "@/components/ui/DataTable";
 import { apiGet, apiPatch, apiUpload } from "@/lib/ui/api-client";
 import { fmtMoney } from "@/lib/ui/format";
+import { ATTENDANCE_CONFLICT_PREFIX } from "@/lib/longterm-payroll/attendance-conflict";
 import { REASON_CODES, REASON_LABEL } from "@/lib/longterm-payroll/reconcile-reasons";
 
 interface Components {
@@ -235,12 +236,20 @@ export function BankReconcilePanel({ month, hasRun, active, onError, onNotice }:
                               </span>
                             ))}
                           </div>
-                          {r.components.notes.filter((x) => x.startsWith("⚠ 同日多來源紀錄衝突")).map((x) => (
-                            <div key={x} className="mt-1 text-zk-sm text-zk-danger" data-testid="ltpay-recon-conflict-note">
-                              {x}
-                            </div>
-                          ))}
-                          {r.components.notes.filter((x) => !x.startsWith("⚠ 同日多來源紀錄衝突")).length > 0 && <div className="mt-1 text-zk-sm text-zk-muted">{r.components.notes.filter((x) => !x.startsWith("⚠ 同日多來源紀錄衝突")).join("；")}</div>}
+                          {(() => {
+                            const conflicts = r.components.notes.filter((x) => x.startsWith(ATTENDANCE_CONFLICT_PREFIX));
+                            const others = r.components.notes.filter((x) => !x.startsWith(ATTENDANCE_CONFLICT_PREFIX));
+                            return (
+                              <>
+                                {conflicts.map((x) => (
+                                  <div key={x} className="mt-1 text-zk-sm text-zk-danger" data-testid="ltpay-recon-conflict-note">
+                                    {x}
+                                  </div>
+                                ))}
+                                {others.length > 0 && <div className="mt-1 text-zk-sm text-zk-muted">{others.join("；")}</div>}
+                              </>
+                            );
+                          })()}
                         </td>
                       </tr>
                     )}
