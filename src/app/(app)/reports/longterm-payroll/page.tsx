@@ -23,6 +23,9 @@ import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { Tabs } from "@/components/ui/Tabs";
 import { BulkInputsPanel } from "./BulkInputsPanel";
 import { BankReconcilePanel } from "./BankReconcilePanel";
+import { ContractCreateForm } from "./ContractCreateForm";
+import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
+import { VoidMonthPanel } from "./VoidMonthPanel";
 import { DraftInputsPanel, BonusEligiblePanel, type DraftInputDTO } from "./DraftPanels";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +61,7 @@ interface LineDTO {
 }
 
 interface PayrollMonthDTO {
+  can_void?: boolean;
   month: string;
   locked: boolean;
   run: { id: string; status: string; created_at: string } | null;
@@ -268,6 +272,12 @@ export default function LongtermPayrollPage() {
           </div>
         </section>
       )}
+      {payroll?.run && !payroll.locked && payroll.can_void && (
+        <section className="flex flex-wrap items-center gap-2 rounded-lg border border-zk-border bg-white p-3" data-testid="ltpay-void-section">
+          <span className="text-zk-sm text-zk-muted">要倒序重算（例如先重算較早嘅月份）：只可作廢最近一個已計月份，假期結餘會一齊回滾。</span>
+          <VoidMonthPanel month={month} onDone={() => load(month)} onError={setError} onNotice={setNotice} />
+        </section>
+      )}
       {!payroll?.run && !loading && (
         <EmptyState title={`${month} 未計過長工糧`} description="撳右上角「重算本月」開始計算——會由更表／人手輸入項／合約自動砌出逐人結算行。" />
       )}
@@ -363,6 +373,7 @@ export default function LongtermPayrollPage() {
 
       {/* ⑤ 平均工資／假期餘額 */}
       <div className={tabCls("avg")} data-testid="ltpay-panel-avg">
+      <BulkAvgWagesPanel month={month} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} onNotice={setNotice} />
       <AvgWageLeaveBalanceSection month={month} guardOptions={guardOptions} locked={!!payroll?.locked} avgWages={avgWages} leaveBalances={leaveBalances} onChanged={() => load(month)} onError={setError} />
       </div>
 
@@ -667,6 +678,7 @@ function ContractsSection({
     <section className="flex flex-col gap-3 rounded-lg border border-zk-border bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-semibold text-zk-text">合約管理</div>
+        <ContractCreateForm onCreated={onChanged} onError={onError} onNotice={onNotice} />
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1 text-zk-sm text-zk-muted">
             <input type="checkbox" checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} />

@@ -1052,3 +1052,15 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 ### 18.2 驗收、合併（2026-10-12）
 - Opus 5.5 兩輪：第一輪 M1（同名配對淘汰法錯配、行序相關）、M2（批量導入將 draft 當已存在）、M3（解析無行數上限，16KB 惡意檔拖死 server >9 分鐘）＋(ii) a–h；第二輪全部通過（確認咗嘅病假段 recompute 真係入糧：sl45 0→1,548.39；舊 code 對同一惡意檔 >120 秒，新 code 6ms）。
 - merge（`--no-ff`，零衝突）；部署見 §18.3。
+
+## 19. 階段 15（2026-10-12）：長工糧「作廢本月計算」（可倒序重算）＋平均工資批量導入＋新增合約
+
+### 19.1 內容、驗證（執行員 Sonnet 5.5，worktree `p15-ltpay-void-avgwage`，未 merge）
+- **P15.1 作廢本月計算**：`voidLongtermPayrollMonth()`（`src/lib/longterm-payroll/void-month.ts`）＋`POST /api/longterm/payroll/[month]/void`（老闆、`reason` 必填；後月有效 → 409、無可作廢 404、鎖月 403）。結餘係「每人每年單一累積記錄」，故新表 `guard_leave_balance_history`（migration `20261016000000`，只新增）喺每次計糧寫回前影低舊狀態，作廢時原樣還原（`existed=false` 刪行）；P15 前計過嘅月份（冇快照，正式站 8 月屬此類）走 legacy 重建（`taken`＝`*_opening`，上月 opening＝上月尾累積減上月新增，後者以 0 起算 dry-run `buildLongtermPayrollInputs(prev, …, { zeroOpening:true })` 取得），回應 `legacy_rebuilt` 提示覆核。同時清走該月 computed／自動計平均工資；audit `void_longterm_payroll_month`。UI：「本月糧」tab「作廢本月計算（老闆）」＋原因。
+- **P15.2 平均工資批量導入**：`POST /api/longterm/avg-wages/bulk`（≤500、配對同 P14.2、`source` 人手批量導入、冪等、`dry_run`、鎖月 403）＋「平均工資與假期」tab 批量面板（預覽只顯示行號／工號）。
+- **P15.3 新增合約**：「合約」tab「新增合約」表單（月薪制／日薪制；日薪制 `monthly_salary` 填同每更價）；新增 additive `GET /api/longterm/guard-search`（只回 id／姓名／工號）供揀保安員；`POST /api/longterm/contracts` 不變。
+- **驗證**：vitest `tests/p15-void-month.test.ts`（7→8→void 8→重算 8 結餘同 lines 完全一致；8→void→7→8 等於順序 7→8；legacy 無快照路徑同樣一致；409／403／404／400／會計 403；computed 平均工資清走；avg bulk 配對／冪等／dry_run／權限／鎖月／上限；guard-search 與月薪＋日薪建合約）；Playwright `tests/e2e/p15-void-avg-contract.spec.ts`（3 條）。數字見提交紀錄／回報。
+- **執行員對簡報冇講清楚處嘅保守處理**：(1) 結餘快照只影「第一次」（同月重算唔覆蓋）；若該行已是本月狀態而冇快照（legacy）就唔影，留俾 void 走 legacy 重建；(2) legacy 重建對 SL 假設上月有足夠結餘（0 起算 dry-run），近似，需覆核；(3) 作廢限老闆（`baseRole`），權限 module 仍用「長工糧:update」；(4) 簡報 `source=manual` 於 avg bulk 解讀為「人手批量導入」字串，不會被作廢清走；(5) 新增 audit action 為 TS 聯合型別（`audit_log.action` 係 text，無 migration）。
+- **驗收修正（Opus 5.5）**：M1 合約日期重疊 409 `contract_overlap`＋`close_previous`（POST／PATCH，表單預設勾自動結束上一段）；(ii) a 作廢掣非老闆唔顯示（`can_void`）、b 作廢只清 `computed`／`auto:`／`自動計:` 前綴 avg wage（bulk 固定 `manual:`）、c 作廢前置檢查 GET（`earlier_valid_runs`／`rollback_method`）＋近似重建要 `confirm_approx`、d audit 列齊 run id／受影響 guard 數／計數、e `existed=false` 快照遇人手 entitled／carry 唔刪行（`kept_manual_rows`）。
+- **驗收修正 2（Opus 5.5 第二輪）**：N1 跨年 `existed=false` 快照回滾保留行時 taken 回 opening（唔係 0），opening 非 0 唔當人手（上年結轉）；新 test 跨年 2026-12→2027-01→作廢→重算同首次一致。PATCH 合約重疊檢查搬入 transaction＋`FOR UPDATE`；`close_previous` 舊合約之間已重疊時回應 `overlap_note`（用 `overlap_note` 因 DTO 已有合約 `note` 欄）。
+

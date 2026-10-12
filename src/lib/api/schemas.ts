@@ -901,6 +901,8 @@ export const LongtermContractCreateSchema = z
     statutory_holiday_paid_from: z.enum(["immediate", "after_3_months"]).optional(),
     mpf_exempt_reason: enumOf(LongtermMpfExemptReason).optional(),
     note: z.string().optional(),
+    /** P15 驗收 M1：同人有重疊嘅生效合約時，true＝自動將上一段 effective_to 設為新段生效日前一日；預設 409 contract_overlap。 */
+    close_previous: z.boolean().optional(),
   })
   .strict();
 
@@ -987,6 +989,31 @@ export const GuardAvgWageUpsertSchema = z
     month: dateOnly,
     avg_daily_wage: money,
     source: z.string().min(1).max(200),
+  })
+  .strict();
+
+/** P15.1：作廢長工糧某月計算（原因必填）。 */
+export const LongtermPayrollVoidSchema = z.object({ reason: z.string().trim().min(1, "作廢原因必填").max(500), confirm_approx: z.boolean().optional() }).strict();
+
+/** P15.2：批量導入平均工資（≤500 行）；配對方式同 P14.2 人手輸入批量一致。 */
+export const GuardAvgWageBulkSchema = z
+  .object({
+    month: dateOnly,
+    rows: z
+      .array(
+        z
+          .object({
+            staff_no: z.string().max(40).optional(),
+            staff_no_mw: z.string().max(40).optional(),
+            name_en: z.string().max(120).optional(),
+            name_zh: z.string().max(60).optional(),
+            avg_daily_wage: z.union([z.number(), z.string()]),
+            note: z.string().max(200).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(500),
   })
   .strict();
 
