@@ -125,15 +125,15 @@ export async function bulkImportInputs(params: { month: Date; rows: BulkInputRow
 
   const work = async (db: Prisma.TransactionClient | null) => {
     const client = db ?? prisma;
-    const existing = await client.longtermPayrollInput.findMany({ where: { month, voidedAt: null }, select: { id: true, guardId: true, kind: true, dateFrom: true, dateTo: true, amount: true, status: true, note: true } });
+    const existing = await client.longtermPayrollInput.findMany({ where: { month, voidedAt: null }, select: { id: true, guardId: true, kind: true, dateFrom: true, dateTo: true, amount: true, status: true, note: true, draftSource: true } });
     // 重複只比 confirmed；draft 唔計（aggregate 只計 confirmed）——撞到同人同段嘅 draft 就直接確認佢
     const draftByKey = new Map<string, (typeof existing)[number]>();
     for (const e of existing) if (e.status === "draft") draftByKey.set(dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount)), e);
     // P16b.1：confirmed 重複 key 加 note（同金額唔同 note ＝ 不同項目，例如 OT 650 同補假日工資 650）
     const baseOf = (e: (typeof existing)[number]) => dupKey(e.guardId, e.kind, e.dateFrom, e.dateTo, e.amount === null ? null : Number(e.amount));
     const seen = new Set(existing.filter((e) => e.status === "confirmed").map((e) => `${baseOf(e)}|${noteKey(e.note)}`));
-    // 由草稿確認嘅行，note 係系統草稿原文＋「批量導入確認」，唔代表人手 note → 同 base 一律當重複（保持原冪等）
-    const confirmedFromDraft = new Set(existing.filter((e) => e.status === "confirmed" && (e.note ?? "").endsWith("批量導入確認")).map(baseOf));
+    // 系統草稿（draftSource cover:*／roster_leave:* 等，非 bulk_import）確認嘅行，note 係系統原文（可能加「批量導入確認」），唔代表人手 note → 同 base 一律當重複（保持原冪等）
+    const confirmedFromDraft = new Set(existing.filter((e) => e.status === "confirmed" && ((e.draftSource !== null && e.draftSource !== BULK_SOURCE) || (e.note ?? "").endsWith("批量導入確認"))).map(baseOf));
     const seenBase = new Set(existing.filter((e) => e.status === "confirmed").map(baseOf));
     const pendingLeave: Array<{ guardId: string; from: string; to: string }> = [];
     for (let i = 0; i < rows.length; i++) {

@@ -58,6 +58,7 @@
 //   4. 「平均工資」表未搬入系統（7 月試算用嘅係計糧表 col M 快照）——
 //      AL 離職結算／SL 4/5 一律 fallback 用「日薪＝月薪÷當月曆日數」
 //      （同 `compute.ts` JSDoc 一致嘅 fallback 口徑），會喺 notes 標明。
+import { ATTENDANCE_CONFLICT_PREFIX } from "./attendance-conflict";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
@@ -163,7 +164,6 @@ const UNPAID_LEAVE_CODES = new Set(["NL", "NPL"]);
 const REST_DAY_CODES = new Set(["RD", "OFF"]);
 
 /** 對數工具 note 前綴（P16b.3）：bank-reconcile 用呢個前綴數「有同日多來源衝突」嘅人。 */
-export const ATTENDANCE_CONFLICT_PREFIX = "⚠ 同日多來源紀錄衝突：";
 
 /**
  * P16b.3：同一人同一日有 ≥2 個來源（shift_records.source，例如 roster_upload／master_roster／payroll_only）
