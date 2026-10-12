@@ -100,6 +100,7 @@ export async function clearAll() {
   await prisma.longtermPayrollLine.deleteMany({});
   await prisma.longtermPayrollRun.deleteMany({});
   await prisma.longtermPayrollInput.deleteMany({});
+  await prisma.guardLeaveBalanceHistory.deleteMany({}); // P15.1：結餘快照（無 FK）
   await prisma.guardLeaveBalance.deleteMany({});
   await prisma.guardAvgWage.deleteMany({}); // §21 任務 4b(b)：新表，guard_id FK RESTRICT，一樣要喺 guard.deleteMany() 之前清（同上面四張表一致做法）
   await prisma.guardLongtermContract.deleteMany({});

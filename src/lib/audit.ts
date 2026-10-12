@@ -100,7 +100,9 @@ export type AuditAction =
   | "notify_email_update"
   // P14：批量導入確認既有草稿；老闆即時生成草稿（after 淨係月份＋counts）。
   | "confirm"
-  | "trigger_drafts_generate";
+  | "trigger_drafts_generate"
+  | "void_longterm_payroll_month"
+  | "bulk_avg_wages";
 
 export interface WriteAuditInput {
   actorUserId: string | null;

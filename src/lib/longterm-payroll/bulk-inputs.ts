@@ -42,7 +42,7 @@ export type BulkInputResult = {
 
 const MONEY_KINDS = new Set<string>(["special_allowance", "other_allowance", "uniform", "deduction"]);
 
-interface GuardIdx {
+export interface GuardIdx {
   byNumber: Map<string, Set<string>>;
   byEn: Map<string, Set<string>>;
   byZh: Map<string, Set<string>>;
@@ -55,7 +55,7 @@ function add(m: Map<string, Set<string>>, k: string, id: string) {
   m.set(k, s);
 }
 
-async function buildGuardIndex(): Promise<GuardIdx> {
+export async function buildGuardIndex(): Promise<GuardIdx> {
   const guards = await prisma.guard.findMany({ select: { id: true, nameZh: true, nameEn: true, staffNo: true, staffNoMw: true, staffNumbers: { select: { number: true } } } });
   const idx: GuardIdx = { byNumber: new Map(), byEn: new Map(), byZh: new Map() };
   for (const g of guards) {
@@ -66,9 +66,9 @@ async function buildGuardIndex(): Promise<GuardIdx> {
   return idx;
 }
 
-type Match = { guardId: string } | { reason: "no_identifier" | "no_match" | "ambiguous" };
+export type Match = { guardId: string } | { reason: "no_identifier" | "no_match" | "ambiguous" };
 
-function matchBulkRow(row: BulkInputRow, idx: GuardIdx): Match {
+export function matchBulkRow(row: Pick<BulkInputRow, "staff_no" | "staff_no_mw" | "name_en" | "name_zh">, idx: GuardIdx): Match {
   const tries: Array<[Map<string, Set<string>>, string]> = [];
   if (row.staff_no?.trim()) tries.push([idx.byNumber, normalizeStaffNumber(row.staff_no)]);
   if (row.staff_no_mw?.trim()) tries.push([idx.byNumber, normalizeStaffNumber(row.staff_no_mw)]);
