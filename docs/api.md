@@ -2623,3 +2623,8 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
   - 寫入 `guard_avg_wages`（`guard_id+month` unique upsert，`source = "人手批量導入"[：note]`）；**冪等**：同人同月同金額同 source → `skipped_unchanged`；金額唔同 → `updated`；檔內同人重複：同值略過、異值列 `invalid`；金額須 >0 且 ≤100000。
   - 回 `{ dry_run, total, matched, created, updated, skipped_unchanged, unmatched:[{row,reason,staff_no?}], invalid:[{row,reason}] }`（唔含姓名）；`dry_run` 唔寫。月鎖 → 403（整批唔寫，單一 transaction）。audit `action=bulk_avg_wages`（逐行，after 唔含姓名／金額）。
 - 現有 `POST /api/longterm/avg-wages`（單筆 upsert）不變。UI：「平均工資與假期」tab 頂部批量導入面板（JSON／CSV：`staff_no`／`staff_no_mw`／`name_en`／`avg_daily_wage`／`note`；預覽只顯示行號／工號）。
+
+### P15.3 新增合約
+- `GET /api/longterm/guard-search?q=`（`長工糧:view`）→ `{ rows:[{ guard_id, name, staff_no }] }`（≤20；搜中英文名、任何現有／舊工號；唔含證件／電話／銀行）。
+- 新增合約用現有 `POST /api/longterm/contracts`（`LongtermContractCreateSchema`，不變）。日薪制：`pay_basis=daily`，`daily_rate`＝每更價，`monthly_salary` 填同一數（DB 要有值，日薪制下無月薪意義）。已鎖月份 → 403（`assertMonthRangeNotLocked`）。
+- UI：長工糧頁「合約」tab「新增合約」掣＋表單（搜尋揀保安員顯示姓名＋工號、生效日、結束日可空、月薪制／日薪制、每更時數、試用期、年假日數、法定假期由、例假有薪、MPF 免供原因、備註）。

@@ -201,3 +201,31 @@ describe("P15.2 平均工資批量導入", () => {
     expect((await call(owner, { month, rows: many })).status).toBe(400);
   });
 });
+
+describe("P15.3 新增合約／揀保安員", () => {
+  it("guard-search 只回 id／姓名／工號；月薪制＋日薪制合約可建；鎖月 403；主管 403", async () => {
+    await clearAll();
+    const fx = await seedWp2Fixture();
+    const owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    const accountant = await sessionCookieForUser(fx.userIds["會計"]);
+    const supervisor = await sessionCookieForUser(fx.userIds["主管"]);
+    const g = await prisma.guard.create({ data: { nameZh: "測試P15搜", nameEn: "P15 Searchable", staffNoMw: "MG9801", tel: "91234567", employmentType: "longterm_autopay", createdBy: "test" } });
+    const { GET: search } = await import("@/app/api/longterm/guard-search/route");
+    const { POST: createContract } = await import("@/app/api/longterm/contracts/route");
+    const sr = await search(new Request("http://t/api/longterm/guard-search?q=mg98", { headers: { cookie: accountant } }));
+    expect(sr.status).toBe(200);
+    const sj = await sr.json();
+    expect(sj.rows).toEqual([{ guard_id: g.id, name: "測試P15搜", staff_no: "MG9801" }]);
+    expect(JSON.stringify(sj)).not.toMatch(/91234567/);
+    expect((await search(new Request("http://t/api/longterm/guard-search?q=mg98", { headers: { cookie: supervisor } }))).status).toBe(403);
+
+    const mk = (cookie: string, extra: Record<string, unknown>) =>
+      createContract(req("http://t/api/longterm/contracts", cookie, { guard_id: g.id, effective_from: "2026-12-01", effective_to: null, shift_hours: 12, annual_leave_days: 7, statutory_holiday_paid_from: "immediate", rest_day_paid: true, mpf_exempt_reason: "auto", ...extra }));
+    expect((await mk(accountant, { pay_basis: "monthly", monthly_salary: 15500 })).status).toBe(201);
+    expect((await mk(owner, { pay_basis: "daily", monthly_salary: 650, daily_rate: 650, effective_from: "2027-01-01" })).status).toBe(201);
+    const rows = await prisma.guardLongtermContract.findMany({ where: { guardId: g.id }, orderBy: { effectiveFrom: "asc" } });
+    expect(rows.map((r) => r.payBasis)).toEqual(["monthly", "daily"]);
+    expect(Number(rows[1]!.dailyRate)).toBe(650);
+    expect((await mk(accountant, { pay_basis: "monthly", monthly_salary: 1, effective_from: fx.lockedMonth.toISOString().slice(0, 10) })).status).toBe(403);
+  });
+});

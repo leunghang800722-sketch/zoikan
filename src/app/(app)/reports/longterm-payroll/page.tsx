@@ -23,6 +23,7 @@ import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { Tabs } from "@/components/ui/Tabs";
 import { BulkInputsPanel } from "./BulkInputsPanel";
 import { BankReconcilePanel } from "./BankReconcilePanel";
+import { ContractCreateForm } from "./ContractCreateForm";
 import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
 import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
 import { DraftInputsPanel, BonusEligiblePanel, type DraftInputDTO } from "./DraftPanels";
@@ -690,6 +691,7 @@ function ContractsSection({
     <section className="flex flex-col gap-3 rounded-lg border border-zk-border bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-semibold text-zk-text">合約管理</div>
+        <ContractCreateForm onCreated={onChanged} onError={onError} onNotice={onNotice} />
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1 text-zk-sm text-zk-muted">
             <input type="checkbox" checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} />
