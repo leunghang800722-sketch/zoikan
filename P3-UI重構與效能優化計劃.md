@@ -1064,3 +1064,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **驗收修正（Opus 5.5）**：M1 合約日期重疊 409 `contract_overlap`＋`close_previous`（POST／PATCH，表單預設勾自動結束上一段）；(ii) a 作廢掣非老闆唔顯示（`can_void`）、b 作廢只清 `computed`／`auto:`／`自動計:` 前綴 avg wage（bulk 固定 `manual:`）、c 作廢前置檢查 GET（`earlier_valid_runs`／`rollback_method`）＋近似重建要 `confirm_approx`、d audit 列齊 run id／受影響 guard 數／計數、e `existed=false` 快照遇人手 entitled／carry 唔刪行（`kept_manual_rows`）。
 - **驗收修正 2（Opus 5.5 第二輪）**：N1 跨年 `existed=false` 快照回滾保留行時 taken 回 opening（唔係 0），opening 非 0 唔當人手（上年結轉）；新 test 跨年 2026-12→2027-01→作廢→重算同首次一致。PATCH 合約重疊檢查搬入 transaction＋`FOR UPDATE`；`close_previous` 舊合約之間已重疊時回應 `overlap_note`（用 `overlap_note` 因 DTO 已有合約 `note` 欄）。
 
+
+### 19.2 驗收、合併、部署（2026-10-12）
+- Opus 5.5 三輪：第一輪 M1（重疊合約靜靜建立）＋(ii) a–e；第二輪 M1 過但 (ii)e 修法引入 N1（跨年作廢清走上年結轉已放日數，regression）；第三輪通過（跨年刪行／保留行兩變體、legacy 無快照跨年都精確、PATCH 並發 [200,409]）。留 (ii)：舊合約之間本身重疊 `close_previous` 唔處理，只以 `overlap_note` 提示。
+- e2e 注意：Playwright 全套要用 `next build`＋`next start`；`next dev` 模式下開對話框 spec 會 timeout（main 一樣），唔係代碼問題。
+- merge（`--no-ff`，零衝突）；部署見下。
