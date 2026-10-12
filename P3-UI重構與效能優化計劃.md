@@ -1069,3 +1069,10 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - Opus 5.5 三輪：第一輪 M1（重疊合約靜靜建立）＋(ii) a–e；第二輪 M1 過但 (ii)e 修法引入 N1（跨年作廢清走上年結轉已放日數，regression）；第三輪通過（跨年刪行／保留行兩變體、legacy 無快照跨年都精確、PATCH 並發 [200,409]）。留 (ii)：舊合約之間本身重疊 `close_previous` 唔處理，只以 `overlap_note` 提示。
 - e2e 注意：Playwright 全套要用 `next build`＋`next start`；`next dev` 模式下開對話框 spec 會 timeout（main 一樣），唔係代碼問題。
 - merge（`--no-ff`，零衝突）；部署見下。
+
+## 20. 階段 16a（2026-10-12）：Maxwell 導入——法定假期有薪起點映射修正＋重導入更新既有合約
+
+- **根因**：Maxwell 名單「法定假期」欄只有「即時享有薪SH」（30 人）同空白（99 人）；`import-service.ts` 舊映射把空白當 immediate → 7 月 1 日法定假全部有薪，系統冇扣 NPSH（辦公室糧單有 18 人扣，合共 −10,490.31）。
+- **修法**：`mapStatutoryHolidayPaidFrom()`：含「即時」／immediate → immediate；空白或其他 → after_3_months。重導入更新既有 `source=maxwell_import` 合約非薪酬欄（值唔同先更新，寫 audit，summary `contracts_fields_updated`）；薪酬段邏輯、manual 合約、鎖月行為不變。不改計算公式。
+- **驗證**：新 `tests/p16a-import-sh-mapping.test.ts`（映射兩值＋空白；重導入更新＋audit＋manual 唔掂＋冪等；7 月 SH 入職未滿 3 個月 import→aggregate 扣 NPSH／「即時」唔扣）。
+
