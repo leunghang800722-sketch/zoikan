@@ -46,13 +46,18 @@ function parseAmount(v: unknown): number | null {
   return Number.isFinite(x) ? x : null;
 }
 
+/** 讀檔上限：宣告範圍可以好大（16KB 檔宣告 A1:XFD1048576 會令同步解析拖死 server），所以讀入就限行、之後再夾欄。 */
+const AMBIGUOUS_NOTE = "ambiguous_name：同名多人／多行，無法自動配對";
+const MAX_SHEET_ROWS = 5100;
+const MAX_SHEET_COLS = 60;
+const MAX_DETAIL_ROWS = 5000;
 const PASSWORD_MSG = "呢個檔案有密碼保護，打唔開——請先用 Excel 另存冇密碼版本，再上載";
 
 /** 解析 Payroll Editor xls／xlsx（Buffer）。表頭行自動搵（頭 60 行內，同時有「員工賬戶名稱」同「金額」）。 */
 export function parseBankPayrollEditor(buffer: Buffer): ParsedBankFile {
   let wb: XLSX.WorkBook;
   try {
-    wb = XLSX.read(buffer, { type: "buffer" });
+    wb = XLSX.read(buffer, { type: "buffer", sheetRows: MAX_SHEET_ROWS });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (/password|encrypt/i.test(msg)) throw BadRequest(PASSWORD_MSG);
@@ -60,8 +65,15 @@ export function parseBankPayrollEditor(buffer: Buffer): ParsedBankFile {
   }
   const names = [...wb.SheetNames].sort((a, b) => Number(/payroll\s*editor/i.test(b)) - Number(/payroll\s*editor/i.test(a)));
   for (const sheetName of names) {
-    // blankrows:true 保留空行，令陣列 index＋1＝Excel 行號
-    const full = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName]!, { header: 1, raw: true, defval: null, blankrows: true });
+    const ws = wb.Sheets[sheetName]!;
+    // 夾範圍（行已由 sheetRows 限；欄夾到 60），避免巨大宣告範圍令 sheet_to_json 空轉
+    const range = XLSX.utils.decode_range(ws["!ref"] ?? "A1");
+    if (range.e.r - range.s.r + 1 > MAX_SHEET_ROWS) range.e.r = range.s.r + MAX_SHEET_ROWS - 1;
+    if (range.e.c - range.s.c + 1 > MAX_SHEET_COLS) range.e.c = range.s.c + MAX_SHEET_COLS - 1;
+    ws["!ref"] = XLSX.utils.encode_range(range);
+    const rowOffset = range.s.r; // 陣列 index 0 對應 Excel 第 (s.r+1) 行
+    // blankrows:true 保留空行，令陣列 index＋rowOffset＋1＝Excel 行號
+    const full = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: true, defval: null, blankrows: true });
     let headerIdx = -1;
     let cols = { account: -1, name: -1, amount: -1, remark: -1 };
     for (let i = 0; i < Math.min(full.length, 60); i++) {
@@ -88,10 +100,11 @@ export function parseBankPayrollEditor(buffer: Buffer): ParsedBankFile {
       const remark = cols.remark >= 0 ? cellText(r[cols.remark]) : "";
       const amountRaw = r[cols.amount];
       if (!name && !account && !remark) continue; // 空行／合計行（無任何識別）
-      rows.push({ rowNo: i + 1, account: account.replace(/\D/g, ""), nameNorm: normalizeEnName(name), amount: parseAmount(amountRaw), remark });
+      rows.push({ rowNo: i + rowOffset + 1, account: account.replace(/\D/g, ""), nameNorm: normalizeEnName(name), amount: parseAmount(amountRaw), remark });
     }
+    if (rows.length > MAX_DETAIL_ROWS) throw BadRequest(`明細行太多（${rows.length} 行，上限 ${MAX_DETAIL_ROWS}）——請確認係 BOCHK Payroll Editor 檔`);
     if (rows.length === 0) throw BadRequest(`分頁「${sheetName}」表頭之後冇讀到任何明細行`);
-    return { sheetName, headerRow: headerIdx + 1, rows };
+    return { sheetName, headerRow: headerIdx + rowOffset + 1, rows };
   }
   throw BadRequest("搵唔到 Payroll Editor 表頭行（需要「員工賬戶名稱」同「金額」欄）——請確認係 BOCHK Payroll Editor 檔");
 }
@@ -127,6 +140,7 @@ export interface ReconSummary {
   bank_only: number;
   system_only: number;
   bad_amount_rows: number;
+  ambiguous_name: number;
   system_zero_skipped: number;
   match_by: { remark: number; account: number; name_en: number };
   totals: { bank: number; system: number; matched_bank: number; matched_system: number };
@@ -175,15 +189,36 @@ export function compareBankToSystem(bank: BankRow[], system: SystemLineInfo[], m
       assign.set(b.rowNo, { line: c[0]!, by: "account" });
     }
   }
-  // 輪 3：英文名（撞名就用金額縮窄，仍然唔唯一就唔配）
+  // 輪 3：英文名。同名（銀行側或系統側任何一邊多過一行）→ 只接受「金額唯一對唯一」（±0.01 恰好一對一）嘅配對，
+  // 其餘全部唔配（標 ambiguous_name）；唔用淘汰法，結果同行序無關。
+  const ambiguousBank = new Set<number>();
+  const ambiguousSys = new Set<string>();
+  const bankByName = new Map<string, BankRow[]>();
   for (const b of valid) {
     if (assign.has(b.rowNo) || !b.nameNorm) continue;
-    let c = (byName.get(b.nameNorm) ?? []).filter((l) => !used.has(l.lineId));
-    if (c.length > 1) c = c.filter((l) => Math.abs(l.autopay - b.amount!) <= RECONCILE_TOLERANCE);
-    if (c.length === 1) {
-      used.add(c[0]!.lineId);
-      assign.set(b.rowNo, { line: c[0]!, by: "name_en" });
+    bankByName.set(b.nameNorm, [...(bankByName.get(b.nameNorm) ?? []), b]);
+  }
+  for (const key of [...bankByName.keys()].sort()) {
+    const bs = bankByName.get(key)!;
+    const ss = (byName.get(key) ?? []).filter((l) => !used.has(l.lineId));
+    if (ss.length === 0) continue;
+    if (bs.length === 1 && ss.length === 1) {
+      used.add(ss[0]!.lineId);
+      assign.set(bs[0]!.rowNo, { line: ss[0]!, by: "name_en" });
+      continue;
     }
+    const near = (b: BankRow, l: SystemLineInfo) => Math.abs(l.autopay - b.amount!) <= RECONCILE_TOLERANCE;
+    const accepted: Array<[BankRow, SystemLineInfo]> = [];
+    for (const b of bs) {
+      const cand = ss.filter((l) => near(b, l));
+      if (cand.length === 1 && bs.filter((o) => near(o, cand[0]!)).length === 1) accepted.push([b, cand[0]!]);
+    }
+    for (const [b, l] of accepted) {
+      used.add(l.lineId);
+      assign.set(b.rowNo, { line: l, by: "name_en" });
+    }
+    for (const b of bs) if (!assign.has(b.rowNo)) ambiguousBank.add(b.rowNo);
+    for (const l of ss) if (!used.has(l.lineId)) ambiguousSys.add(l.lineId);
   }
 
   const rows: ReconRowOut[] = [];
@@ -204,7 +239,7 @@ export function compareBankToSystem(bank: BankRow[], system: SystemLineInfo[], m
         diff: b.amount === null ? null : r2(b.amount),
         matchBy: "none",
         status: "bank_only",
-        note: b.amount === null ? "金額無法解析" : undefined,
+        note: b.amount === null ? "金額無法解析" : ambiguousBank.has(b.rowNo) ? AMBIGUOUS_NOTE : undefined,
       });
     }
   }
@@ -215,7 +250,7 @@ export function compareBankToSystem(bank: BankRow[], system: SystemLineInfo[], m
       zeroSkipped += 1; // 系統 autopay 為 0 而銀行冇出糧——一致，唔列為差異
       continue;
     }
-    rows.push({ guardId: l.guardId, bankRowNo: 0, bankNameHash: null, bankAmount: null, systemLineId: l.lineId, systemAutopay: r2(l.autopay), diff: r2(-l.autopay), matchBy: "none", status: "system_only" });
+    rows.push({ guardId: l.guardId, bankRowNo: 0, bankNameHash: null, bankAmount: null, systemLineId: l.lineId, systemAutopay: r2(l.autopay), diff: r2(-l.autopay), matchBy: "none", status: "system_only", note: ambiguousSys.has(l.lineId) ? AMBIGUOUS_NOTE : undefined });
   }
 
   const diffRows = rows.filter((r) => r.status === "diff");
@@ -230,6 +265,7 @@ export function compareBankToSystem(bank: BankRow[], system: SystemLineInfo[], m
     bank_only: rows.filter((r) => r.status === "bank_only").length,
     system_only: rows.filter((r) => r.status === "system_only").length,
     bad_amount_rows: bank.filter((b) => b.amount === null).length,
+    ambiguous_name: rows.filter((r) => r.note === AMBIGUOUS_NOTE).length,
     system_zero_skipped: zeroSkipped,
     match_by: { remark: matchedRows.filter((r) => r.matchBy === "remark").length, account: matchedRows.filter((r) => r.matchBy === "account").length, name_en: matchedRows.filter((r) => r.matchBy === "name_en").length },
     totals: {
