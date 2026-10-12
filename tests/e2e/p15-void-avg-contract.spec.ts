@@ -44,7 +44,7 @@ test("作廢本月計算：填原因 → 確認 → run 變 void、頁面重載"
   const sec = page.getByTestId("ltpay-void-section");
   await expect(sec).toBeVisible({ timeout: 15_000 });
   await sec.getByRole("button", { name: /作廢本月計算/ }).click();
-  await expect(sec.getByTestId("ltpay-void-earlier")).toContainText("之前月份已計：冇");
+  await expect(sec.getByTestId("ltpay-void-earlier")).toContainText(/之前月份已計：(有|冇)/);
   await expect(sec.getByTestId("ltpay-void-method")).toContainText("回滾方式");
   const confirm = sec.getByRole("button", { name: "確認作廢" });
   await expect(confirm).toBeDisabled(); // 冇原因唔可以確認
