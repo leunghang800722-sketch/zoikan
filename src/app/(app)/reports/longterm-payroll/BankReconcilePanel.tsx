@@ -56,6 +56,7 @@ interface Summary {
   bank_only: number;
   system_only: number;
   bad_amount_rows: number;
+  ambiguous_name?: number;
   system_zero_skipped: number;
   totals: { bank: number; system: number; matched_bank: number; matched_system: number };
   unresolved: number;
@@ -83,7 +84,7 @@ const COMP_LABEL: Array<[keyof Components, string]> = [
   ["autopay", "Autopay"],
 ];
 
-export function BankReconcilePanel({ month, hasRun, onError, onNotice }: { month: string; hasRun: boolean; onError: (m: string) => void; onNotice: (m: string) => void }) {
+export function BankReconcilePanel({ month, hasRun, active, onError, onNotice }: { month: string; hasRun: boolean; active: boolean; onError: (m: string) => void; onNotice: (m: string) => void }) {
   const [data, setData] = useState<Result | null>(null);
   const [onlyDiff, setOnlyDiff] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -96,8 +97,8 @@ export function BankReconcilePanel({ month, hasRun, onError, onNotice }: { month
   }, [month, onError]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (active) void load(); // tab 隱藏時唔 GET
+  }, [load, active]);
 
   async function onFile(f: File | null) {
     if (!f) return;
@@ -151,6 +152,7 @@ export function BankReconcilePanel({ month, hasRun, onError, onNotice }: { month
           <div className="text-zk-sm text-zk-muted">
             檔案：{data?.reconciliation?.file_name}
             {s.bad_amount_rows > 0 ? `；${s.bad_amount_rows} 行金額無法解析（已列入只喺銀行）` : ""}
+            {(s.ambiguous_name ?? 0) > 0 ? `；${s.ambiguous_name} 行同名多人／多行，無法自動配對（需人手核）` : ""}
             {s.system_zero_skipped > 0 ? `；${s.system_zero_skipped} 人系統 Autopay 為 0 而銀行冇出，唔當差異` : ""}
           </div>
         </div>
@@ -212,7 +214,7 @@ export function BankReconcilePanel({ month, hasRun, onError, onNotice }: { month
                                 </option>
                               ))}
                             </select>
-                            <input className={inputCls} defaultValue={r.reason_note ?? ""} placeholder="備注" aria-label="原因備注" onBlur={(e) => { if (r.reason_code && e.target.value !== (r.reason_note ?? "")) void setReason(r, r.reason_code, e.target.value); }} />
+                            <input className={inputCls} defaultValue={r.reason_note ?? ""} placeholder="備注" aria-label="原因備注" onBlur={(e) => { if (e.target.value !== (r.reason_note ?? "")) void setReason(r, r.reason_code ?? "", e.target.value); }} />
                           </span>
                         )}
                       </td>

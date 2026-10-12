@@ -9,6 +9,7 @@ import { normalizeEnName } from "@/lib/longterm-payroll/name-norm";
 import { POST as upload, GET as getResult } from "@/app/api/longterm/payroll/[month]/reconcile/route";
 import { PATCH as patchRow } from "@/app/api/longterm/reconcile-rows/[id]/route";
 import { buildMonthHealth } from "@/lib/ops/month-health";
+import JSZip from "jszip";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -91,6 +92,75 @@ describe("P14.3 純函數：解析＋配對", () => {
     expect(summary).toMatchObject({ bank_rows: 9, system_lines: 8, matched: 5, equal: 3, bank_only: 4, system_only: 2, bad_amount_rows: 1, system_zero_skipped: 1 });
     expect(summary.diff).toEqual({ total: 2, le1: 1, le100: 0, gt100: 1 });
     expect(summary.match_by).toEqual({ remark: 1, account: 1, name_en: 3 });
+  });
+});
+
+describe("P14 驗收修正：M1 同名配對、M3 巨大範圍、真實行號", () => {
+  const nm = (n: number, amount: number, name = "SAME") => bank(n, amount, { nameNorm: name });
+  const run = (rows: BankRow[], system: SystemLineInfo[]) => compareBankToSystem(rows, system, "2026-08");
+  const pairing = (r: ReturnType<typeof run>) => r.rows.map((x) => `${x.bankRowNo}:${x.guardId ?? "-"}:${x.status}:${x.note ? "amb" : ""}`).sort();
+
+  it("M1 場景 1：系統兩人同名（1000／1500），銀行兩行同名（1000／1600）——行序對調結果一致，1600 唔錯配", () => {
+    const system = [sys("A", 1000, { enNames: ["SAME"] }), sys("B", 1500, { enNames: ["SAME"] })];
+    const r1 = run([nm(12, 1600), nm(13, 1000)], system);
+    const r2 = run([nm(12, 1000), nm(13, 1600)], system);
+    for (const r of [r1, r2]) {
+      expect(r.rows.filter((x) => x.guardId === "g-A")).toHaveLength(1);
+      expect(r.rows.find((x) => x.guardId === "g-A")).toMatchObject({ status: "equal", bankAmount: 1000 });
+      expect(r.rows.find((x) => x.bankAmount === 1600)).toMatchObject({ status: "bank_only" });
+      expect(r.rows.find((x) => x.systemLineId === "B")).toMatchObject({ status: "system_only" });
+      expect(r.summary.ambiguous_name).toBe(2);
+    }
+    expect(pairing(r1).map((x) => x.replace(/^\d+:/, "")).sort()).toEqual(pairing(r2).map((x) => x.replace(/^\d+:/, "")).sort());
+  });
+
+  it("M1 場景 2／3：系統一人、銀行兩行同名——8000 唔搶；全部唔 match 金額就全 unmatched；行序無關", () => {
+    const system = [sys("A", 1000, { enNames: ["SAME"] })];
+    for (const rows of [[nm(12, 8000), nm(13, 1000)], [nm(12, 1000), nm(13, 8000)]]) {
+      const r = run(rows, system);
+      expect(r.rows.find((x) => x.bankAmount === 1000)).toMatchObject({ status: "equal", guardId: "g-A" });
+      expect(r.rows.find((x) => x.bankAmount === 8000)).toMatchObject({ status: "bank_only", guardId: null });
+    }
+    const none = run([nm(12, 8000), nm(13, 7000)], system);
+    expect(none.rows.map((x) => x.status).sort()).toEqual(["bank_only", "bank_only", "system_only"]);
+    expect(none.summary.ambiguous_name).toBe(3);
+    // 兩邊各一行（唯一對唯一）仍照配，唔論金額
+    expect(run([nm(12, 8000)], system).rows[0]).toMatchObject({ status: "diff", matchBy: "name_en" });
+  });
+
+  it("M3：16KB xlsx 宣告 A1:XFD1048576 → 1 秒內回 400／唔拖死；真實行號（範圍起點非 A1）", async () => {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["x"]]), "Payroll Editor");
+    const zip = await JSZip.loadAsync(Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" })));
+    const f = zip.file("xl/worksheets/sheet1.xml")!;
+    const xml = (await f.async("string")).replace(/<dimension ref="[^"]*"\/>/, '<dimension ref="A1:XFD1048576"/>');
+    expect(xml).toContain("XFD1048576");
+    zip.file("xl/worksheets/sheet1.xml", xml);
+    const huge = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+    const t0 = Date.now();
+    expect(() => parseBankPayrollEditor(huge)).toThrow(/搵唔到 Payroll Editor 表頭/);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+
+  it("M3：明細行 >5,000 → 400 中文提示", () => {
+    const rows: Array<[string, string, number, string]> = Array.from({ length: 5001 }, (_, i) => [String(i), `N${i}`, 1, ""]);
+    const wb = XLSX.utils.book_new();
+    const aoa: unknown[][] = [];
+    while (aoa.length < 10) aoa.push([]);
+    aoa.push(HEADER);
+    rows.forEach((r, i) => aoa.push([i, "012", "BBAN", r[0], r[1], r[2], r[3], ""]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Payroll Editor");
+    expect(() => parseBankPayrollEditor(Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" })))).toThrow(/明細行太多|搵唔到/);
+  });
+
+  it("(ii)a：範圍唔由 A1 起（前面空行被裁）——bank_row_no 仍係真實 Excel 行號", () => {
+    const wb = XLSX.utils.book_new();
+    const w2 = XLSX.utils.aoa_to_sheet([]);
+    XLSX.utils.sheet_add_aoa(w2, [HEADER, [1, "012", "BBAN", "9", "N A", 5, "", ""]], { origin: "A20" });
+    XLSX.utils.book_append_sheet(wb, w2, "Payroll Editor");
+    const p = parseBankPayrollEditor(Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" })));
+    expect(p.headerRow).toBe(20);
+    expect(p.rows[0]!.rowNo).toBe(21);
   });
 });
 
@@ -185,6 +255,11 @@ describe("P14.3 route：上載／GET／PATCH／CSV", () => {
     expect(onEqual.status).toBe(400);
     expect((await (await get(owner)).json()).summary.unresolved).toBe(3);
 
+    // 只填備注、未揀原因 → 備注照存（原因 null）；之後取消原因唔洗走備注
+    const noteOnly = await patchRow(new Request("http://t/x", { method: "PATCH", headers: { cookie: owner, "content-type": "application/json" }, body: JSON.stringify({ reason_code: null, reason_note: "只有備注" }) }), { params: Promise.resolve({ id: g.rows[1].id }) });
+    expect(noteOnly.status).toBe(200);
+    const stored = await prisma.longtermBankReconciliationRow.findUniqueOrThrow({ where: { id: g.rows[1].id } });
+    expect(stored).toMatchObject({ reasonCode: null, reasonNote: "只有備注" });
     // CSV：只差異行、冇姓名
     const csv = await (await get(owner, "?format=csv")).text();
     expect(csv.split("\r\n").length).toBe(1 + 4);
@@ -208,6 +283,8 @@ describe("P14.3 route：上載／GET／PATCH／CSV", () => {
     await prisma.longtermPayrollRun.updateMany({ data: { status: "void", voidedAt: new Date() } });
     await prisma.longtermPayrollRun.create({ data: { month, status: "draft", createdBy: "test" } });
     expect((await (await get(owner)).json()).reconciliation.stale).toBe(true);
+    const health2 = await buildMonthHealth(month, { userId: fx.userIds["老闆"], baseRole: "老闆" } as never);
+    expect(health2.findings.find((f) => f.code === "bank_reconcile")!.message).toContain("已過時");
   });
 
   it("未上載過 GET → reconciliation:null；migration 冇 gen_random_uuid／RAISE；SheetJS 只喺 server 檔", async () => {

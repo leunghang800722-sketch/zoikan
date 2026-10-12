@@ -328,9 +328,16 @@ export async function buildMonthHealth(month: Date, session: AuthedSession): Pro
   push(finding({ code: "gap_bank_code", severity: "warn", count: noBank.length, message: `${noBank.length} 位長工缺銀行編號（出 autopay 檔會缺）`, fixLink: "/reports/longterm-payroll", requires: [ROSTER_VIEW, BANK_VIEW], detail: noBank }));
 
   // P14.3：本月銀行對數（資訊，唔擋鎖月）——有長工糧 run 先出：未上載 → 提示上載；已上載 → 未解釋差異數。
-  if (ltLines.length > 0) {
-    const rec = await prisma.longtermBankReconciliation.findFirst({ where: { month: m0 }, orderBy: { uploadedAt: "desc" }, select: { id: true } });
-    if (!rec) {
+  {
+    const [rec, activeRun] = await Promise.all([
+      prisma.longtermBankReconciliation.findFirst({ where: { month: m0 }, orderBy: { uploadedAt: "desc" }, select: { id: true, runId: true } }),
+      prisma.longtermPayrollRun.findFirst({ where: { month: m0, voidedAt: null, status: { not: "void" } }, orderBy: { createdAt: "desc" }, select: { id: true } }),
+    ]);
+    if (!rec && ltLines.length === 0) {
+      // 本月冇長工糧 run，無需對數
+    } else if (rec && activeRun && rec.runId !== activeRun.id) {
+      push(finding({ code: "bank_reconcile", severity: "info", count: 1, message: "本月銀行對數已過時（上載後本月糧已重算），請重新上載銀行檔", fixLink: `/reports/longterm-payroll?${monthQ}`, requires: [] }));
+    } else if (!rec) {
       push(finding({ code: "bank_reconcile", severity: "info", count: 1, message: "本月銀行對數：未上載（長工糧頁 › 銀行對數）", fixLink: `/reports/longterm-payroll?${monthQ}`, requires: [] }));
     } else {
       const unresolved = await prisma.longtermBankReconciliationRow.count({ where: { reconciliationId: rec.id, status: { not: "equal" }, reasonCode: null } });

@@ -11,6 +11,7 @@ interface Preview {
   matched: number;
   created: number;
   skipped_duplicate: number;
+  confirmed_existing_draft: number;
   unmatched: { row: number; reason: string; staff_no?: string }[];
   overlaps: { row: number; reason: string }[];
   invalid: { row: number; reason: string }[];
@@ -47,7 +48,7 @@ export function BulkInputsPanel({ month, locked, onChanged, onError, onNotice }:
     const res = await apiPost<Preview>(`/api/longterm/inputs/bulk`, { month: `${month}-01`, rows });
     setBusy(false);
     if (!res.ok) return onError(res.message);
-    onNotice(`批量導入完成：新增 ${res.data.created}、重複略過 ${res.data.skipped_duplicate}、配唔到 ${res.data.unmatched.length}、重疊 ${res.data.overlaps.length}`);
+    onNotice(`批量導入完成：新增 ${res.data.created}、確認現有草稿 ${res.data.confirmed_existing_draft}、重複略過 ${res.data.skipped_duplicate}、配唔到 ${res.data.unmatched.length}、重疊 ${res.data.overlaps.length}`);
     setRows(null);
     setPreview(null);
     setFileName("");
@@ -83,7 +84,7 @@ export function BulkInputsPanel({ month, locked, onChanged, onError, onNotice }:
       {preview && (
         <div className="flex flex-col gap-2 rounded border border-zk-border-soft p-3 text-zk-sm" data-testid="ltpay-bulk-preview">
           <div>
-            {fileName}：共 {preview.total} 行，配到 {preview.matched} 行；預計新增 {preview.created}、重複略過 {preview.skipped_duplicate}。
+            {fileName}：共 {preview.total} 行，配到 {preview.matched} 行；預計新增 {preview.created}、重複略過 {preview.skipped_duplicate}、確認現有草稿 {preview.confirmed_existing_draft}。
           </div>
           {preview.unmatched.length > 0 && (
             <div className="text-zk-danger">
@@ -94,8 +95,8 @@ export function BulkInputsPanel({ month, locked, onChanged, onError, onNotice }:
           {preview.overlaps.length > 0 && <div className="text-zk-danger">病假段重疊已確認段 {preview.overlaps.length} 行：{preview.overlaps.slice(0, 30).map((o) => `第 ${o.row} 行`).join("、")}（唔會寫入）</div>}
           {preview.invalid.length > 0 && <div className="text-zk-danger">資料有問題 {preview.invalid.length} 行：{preview.invalid.slice(0, 30).map((o) => `第 ${o.row} 行（${o.reason}）`).join("、")}</div>}
           <div>
-            <Button variant="primary" onClick={confirm} disabled={busy || preview.created === 0} data-testid="ltpay-bulk-confirm">
-              確認寫入 {preview.created} 行
+            <Button variant="primary" onClick={confirm} disabled={busy || preview.created + preview.confirmed_existing_draft === 0} data-testid="ltpay-bulk-confirm">
+              確認寫入 {preview.created + preview.confirmed_existing_draft} 行
             </Button>
           </div>
         </div>

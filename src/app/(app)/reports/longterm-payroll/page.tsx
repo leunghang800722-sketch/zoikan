@@ -367,7 +367,7 @@ export default function LongtermPayrollPage() {
       </div>
 
       <div className={tabCls("recon")} data-testid="ltpay-panel-recon">
-      <BankReconcilePanel month={month} hasRun={!!payroll?.run} onError={setError} onNotice={setNotice} />
+      <BankReconcilePanel month={month} active={tab === "recon"} hasRun={!!payroll?.run} onError={setError} onNotice={setNotice} />
       </div>
 
       <div className={tabCls("pay")} data-testid="ltpay-panel-pay-bochk">
