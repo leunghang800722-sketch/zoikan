@@ -51,7 +51,7 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
   async function pick(h: GuardHit) {
     setGuard(h);
     const r = await apiGet<{ rows: ContractRow[] }>(`/api/longterm/contracts?guard_id=${h.guard_id}`);
-    setExisting(r.ok ? r.data.rows.filter((c) => !c.voided_at) : []);
+    setExisting(r.ok ? r.data.rows.filter((c) => !c.voided_at).map((c) => ({ ...c, effective_from: c.effective_from.slice(0, 10), effective_to: c.effective_to ? c.effective_to.slice(0, 10) : null })) : []);
   }
   // 同新段日期重疊嘅現有合約（YYYY-MM-DD 字串可直接比較）
   const overlaps = from ? existing.filter((c) => (!to || c.effective_from <= to) && (!c.effective_to || c.effective_to >= from)) : [];
