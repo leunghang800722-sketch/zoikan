@@ -1081,3 +1081,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **修法**：`mapStatutoryHolidayPaidFrom()`：含「即時」／immediate → immediate；空白或其他 → after_3_months。重導入更新既有 `source=maxwell_import` 合約非薪酬欄（值唔同先更新，寫 audit，summary `contracts_fields_updated`）；薪酬段邏輯、manual 合約、鎖月行為不變。不改計算公式。
 - **驗證**：新 `tests/p16a-import-sh-mapping.test.ts`（映射兩值＋空白；重導入更新＋audit＋manual 唔掂＋冪等；7 月 SH 入職未滿 3 個月 import→aggregate 扣 NPSH／「即時」唔扣）。
 
+
+### 20.2 部署同正式站重算（2026-10-12）
+- merge `0d63d10`（P3 doc 衝突兩節並存）；部署 `6acc7fb8`。正式站重導入 Maxwell：76 份生效合約 → 法定假期 after_3_months 45／immediate 31。作廢 8 月（快照精確還原 57 人）→ 重算 7 月（54 行，autopay 883,955.93 → 888,933.87）→ 重算 8 月（57 行，不變）。
+- 7 月對數：配對 51／**吻合 17 → 40**／差 11／系統有銀行冇 3／銀行有系統冇 20。8 月不變（45／50）。
