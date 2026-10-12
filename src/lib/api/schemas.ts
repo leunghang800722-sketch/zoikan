@@ -990,6 +990,31 @@ export const GuardAvgWageUpsertSchema = z
   })
   .strict();
 
+/** P15.1：作廢長工糧某月計算（原因必填）。 */
+export const LongtermPayrollVoidSchema = z.object({ reason: z.string().trim().min(1, "作廢原因必填").max(500) }).strict();
+
+/** P15.2：批量導入平均工資（≤500 行）；配對方式同 P14.2 人手輸入批量一致。 */
+export const GuardAvgWageBulkSchema = z
+  .object({
+    month: dateOnly,
+    rows: z
+      .array(
+        z
+          .object({
+            staff_no: z.string().max(40).optional(),
+            staff_no_mw: z.string().max(40).optional(),
+            name_en: z.string().max(120).optional(),
+            name_zh: z.string().max(60).optional(),
+            avg_daily_wage: z.union([z.number(), z.string()]),
+            note: z.string().max(200).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(500),
+  })
+  .strict();
+
 export const GuardLeaveBalanceUpdateSchema = z
   .object({
     al_entitled: money,
