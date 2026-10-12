@@ -12,6 +12,7 @@ import { generateCoverDrafts } from "@/lib/longterm-payroll/cover-drafts";
 import { withJobLock } from "@/lib/scheduler/lock";
 import { withAuditJob } from "@/lib/audit-job-context";
 import { ensureSystemUser } from "@/lib/system-user";
+import { writeAudit } from "@/lib/audit";
 import { LONGTERM_INPUT_DRAFTS_KEY } from "@/lib/jobs/longterm-input-drafts";
 
 export async function POST(req: Request) {
@@ -35,6 +36,8 @@ export async function POST(req: Request) {
       ),
     );
     if (!out.acquired) throw new ApiError(409, "drafts_busy", "草稿生成緊（排程或另一個請求），請稍後再試");
+    // 以 session 用戶做 actor 嘅 audit（誰撳咗生成）；草稿本身由系統帳號寫
+    await writeAudit({ actorUserId: session.userId, tableName: "longterm_payroll_inputs", rowId: `drafts-generate:${monthLabel(month)}`, action: "trigger_drafts_generate", after: { month: monthLabel(month), draft: out.value.draft, cover: out.value.cover }, ip: getClientIp(req) });
     return ok(brandSafeResponse({ month: monthLabel(month), draft: out.value.draft, cover: out.value.cover }));
   });
 }

@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { POST as bulk } from "@/app/api/longterm/inputs/bulk/route";
+import { POST as createInput } from "@/app/api/longterm/inputs/route";
 import { POST as generate } from "@/app/api/longterm/inputs/drafts/generate/route";
 import { withJobLock } from "@/lib/scheduler/lock";
 import { LONGTERM_INPUT_DRAFTS_KEY } from "@/lib/jobs/longterm-input-drafts";
@@ -106,6 +107,37 @@ describe("P14.2 bulk inputs", () => {
     expect(await prisma.longtermPayrollInput.count()).toBe(0);
   });
 
+  it("M2：同人同段已有 draft → 直接確認（唔新增重複行）、計入 confirmed_existing_draft、audit confirm；重做變 skipped_duplicate；dry_run 只預覽", async () => {
+    const ym = month.slice(0, 7);
+    const draft = await prisma.longtermPayrollInput.create({ data: { month: fx.unlockedMonth, guardId: a.id, kind: "leave", dateFrom: `${ym}-05`, dateTo: `${ym}-06`, status: "draft", draftSource: "roster_leave:SL", note: "草稿", createdBy: "t" } });
+    const body = { month, rows: [{ staff_no_mw: "MG9601", kind: "leave", date_from: `${ym}-05`, date_to: `${ym}-06`, doctor_note_verified: true }] };
+    const dry = await (await bulk(req("http://t/api/longterm/inputs/bulk?dry_run=1", owner, body))).json();
+    expect(dry).toMatchObject({ confirmed_existing_draft: 1, created: 0, skipped_duplicate: 0 });
+    expect((await prisma.longtermPayrollInput.findUniqueOrThrow({ where: { id: draft.id } })).status).toBe("draft");
+    const j = await (await bulk(req("http://t/api/longterm/inputs/bulk", owner, body))).json();
+    expect(j).toMatchObject({ confirmed_existing_draft: 1, created: 0, skipped_duplicate: 0 });
+    const after = await prisma.longtermPayrollInput.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(after).toMatchObject({ status: "confirmed", confirmedBy: fx.userIds["老闆"], doctorNoteVerified: true });
+    expect(after.note).toContain("批量導入確認");
+    expect(await prisma.longtermPayrollInput.count()).toBe(1);
+    expect(await prisma.auditLog.count({ where: { tableName: "longterm_payroll_inputs", action: "confirm", rowId: draft.id } })).toBe(1);
+    const again = await (await bulk(req("http://t/api/longterm/inputs/bulk", owner, body))).json();
+    expect(again).toMatchObject({ confirmed_existing_draft: 0, skipped_duplicate: 1 });
+  });
+
+  it("(ii)b：date_from > date_to、跨月段 → 批量 invalid、單筆 400", async () => {
+    const ym = month.slice(0, 7);
+    const j = await (await bulk(req("http://t/api/longterm/inputs/bulk", owner, { month, rows: [
+      { staff_no_mw: "MG9601", kind: "leave", date_from: `${ym}-10`, date_to: `${ym}-09` },
+      { staff_no_mw: "MG9601", kind: "leave", date_from: `${ym}-28`, date_to: "2099-01-02" },
+      { staff_no_mw: "MG9601", kind: "leave", date_from: "2020-01-05" },
+    ] }))).json();
+    expect(j.invalid).toHaveLength(3);
+    expect(j.created).toBe(0);
+    const single = await createInput(req("http://t/api/longterm/inputs", owner, { month, guard_id: a.id, kind: "leave", date_from: `${ym}-10`, date_to: `${ym}-09` }));
+    expect(single.status).toBe(400);
+  });
+
   it("撞名（兩個 guard 同英文名）→ ambiguous，唔估", async () => {
     await prisma.guard.create({ data: { nameZh: "測試丙", nameEn: "Test Alpha", employmentType: "longterm_autopay", createdBy: "test" } });
     const j = await (await bulk(req("http://t/api/longterm/inputs/bulk", owner, { month, rows: [{ name_en: "TEST ALPHA", kind: "uniform", amount: 1 }] }))).json();
@@ -123,6 +155,8 @@ describe("P14.2 bulk inputs", () => {
     const j = await ok.json();
     expect(j.draft).toMatchObject({ locked: false, created: 0 });
     expect(j.month).toBe(month.slice(0, 7));
+    const au = await prisma.auditLog.findFirst({ where: { action: "trigger_drafts_generate" } });
+    expect(au?.actorUserId).toBe(fx.userIds["老闆"]);
     // 並發：另一方持有 lock → 409
     let status = 0;
     await withJobLock(LONGTERM_INPUT_DRAFTS_KEY, async () => {
