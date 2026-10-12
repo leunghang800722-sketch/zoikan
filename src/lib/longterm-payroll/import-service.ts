@@ -31,6 +31,8 @@ export interface MaxwellImportSummary {
   filled_name_en: number;
   /** P14.1：補咗 MG／MW 工號（`guard_staff_numbers`＋同步 `staffNoMw`，只補空）嘅人數。 */
   filled_staff_no_mw: number;
+  /** P16a：重導入時更新咗非薪酬欄（法定假期有薪起點／休息日／試用期／年假／更時）嘅既有 maxwell_import 合約數。 */
+  contracts_fields_updated: number;
   warnings: string[];
   /** P11.1：additive 欄位（`created`＝`contractsCreated`、`skippedLocked`＝`skippedLockedRows` 嘅別名，方便核對）。 */
   created: number;
@@ -49,6 +51,27 @@ export type ContractStartMode = "original" | "first_unlocked";
 export const CONTRACT_START_MODES: readonly ContractStartMode[] = ["original", "first_unlocked"];
 export interface MaxwellImportOptions {
   contractStartMode?: ContractStartMode;
+}
+
+/**
+ * P16a：Maxwell「法定假期」欄只有兩種值——「即時享有薪SH」同空白。
+ * 含「即時」／immediate → immediate（一入職就有薪法定假）；
+ * 空白或其他 → after_3_months（按《僱傭條例》做滿 3 個月先有薪法定假）。
+ * 舊版把空白當 immediate，令 7 月 1 日法定假冇扣 NPSH。
+ */
+export function mapStatutoryHolidayPaidFrom(statHoliday: string | null | undefined): "immediate" | "after_3_months" {
+  return /即時|immediate/i.test(statHoliday ?? "") ? "immediate" : "after_3_months";
+}
+
+/** 導入由名單行推出嚟嘅非薪酬欄（新建同重導入更新共用）。 */
+function nonPayFields(row: MaxwellStaffRow) {
+  return {
+    statutoryHolidayPaidFrom: mapStatutoryHolidayPaidFrom(row.statHoliday),
+    restDayPaid: (row.restDay ?? "").toLowerCase() !== "no",
+    shiftHours: row.workingHour ?? undefined,
+    probationMonths: row.probationMonths,
+    annualLeaveDays: row.annualLeave ?? 7,
+  };
 }
 
 /** 第一個未鎖月＝最後一個已鎖月嘅下一個月（`month_closes.locked_at` 非空）；冇任何鎖月 → null。 */
@@ -130,6 +153,7 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
     unmatched: matches.filter((m) => m.status === "unmatched").map((m) => ({ staffNo: m.row.staffNo, name: m.row.name, status: m.row.status })),
     contractsCreated: 0,
     contractsUpdated: 0,
+    contracts_fields_updated: 0,
     skippedManualContract: [],
     skippedLockedRows: 0,
     guardFieldsFilled: 0,
@@ -257,7 +281,27 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
           const s = segments[i];
           return Number(e.monthlySalary) === s.monthlySalary && e.effectiveFrom.getTime() === s.effectiveFrom.getTime() && (e.effectiveTo?.getTime() ?? null) === (s.effectiveTo?.getTime() ?? null) && e.payBasis === (s.monthlySalary < DAILY_RATE_THRESHOLD ? "daily" : "monthly");
         });
-      if (unchanged) return;
+      if (unchanged) {
+        // P16a：薪酬段冇變，但非薪酬欄（法定假期有薪起點等）可能唔同——只更新 source=maxwell_import 嗰啲
+        // （人手 manual 合約上面已 return）；鎖月照舊（覆蓋已鎖月先 403／跳過）。薪酬段邏輯不變。
+        const want = nonPayFields(row);
+        let touched = false;
+        for (const e of existingAuto) {
+          const diff: Prisma.GuardLongtermContractUpdateInput = {};
+          if (e.statutoryHolidayPaidFrom !== want.statutoryHolidayPaidFrom) diff.statutoryHolidayPaidFrom = want.statutoryHolidayPaidFrom;
+          if (e.restDayPaid !== want.restDayPaid) diff.restDayPaid = want.restDayPaid;
+          if (want.shiftHours !== undefined && Number(e.shiftHours) !== Number(want.shiftHours)) diff.shiftHours = want.shiftHours;
+          if (e.probationMonths !== want.probationMonths) diff.probationMonths = want.probationMonths;
+          if (Number(e.annualLeaveDays) !== Number(want.annualLeaveDays)) diff.annualLeaveDays = want.annualLeaveDays;
+          if (!Object.keys(diff).length) continue;
+          await assertMonthRangeNotLockedTx(tx, { effectiveFrom: e.effectiveFrom, effectiveTo: e.effectiveTo, actorUserId, tableName: "guard_longterm_contracts", rowId: e.id, ip });
+          const after = await tx.guardLongtermContract.update({ where: { id: e.id }, data: diff });
+          await writeAuditTx(tx, { actorUserId, tableName: "guard_longterm_contracts", rowId: e.id, action: "update", before: e, after, ip });
+          touched = true;
+        }
+        if (touched) summary.contracts_fields_updated += 1;
+        return;
+      }
 
       // P6.1c（H3）：作廢舊合約／新建合約之前，舊段同新段嘅生效區間內任何一個月
       // 已鎖定就 403（同人手 POST／PATCH 合約一樣嘅 assertMonthRangeNotLocked）。
@@ -283,13 +327,9 @@ async function importMaxwellParsed(parsed: ParsedMaxwellWorkbook, actorUserId: s
             // 日薪制：monthlySalary 保留 Maxwell 原數（即每更價），計糧用 dailyRate。
             payBasis: seg.monthlySalary < DAILY_RATE_THRESHOLD ? "daily" : "monthly",
             dailyRate: seg.monthlySalary < DAILY_RATE_THRESHOLD ? seg.monthlySalary : undefined,
-            statutoryHolidayPaidFrom: /3\s*month|3\s*個月|滿\s*3/i.test(row.statHoliday ?? "") ? "after_3_months" : "immediate",
+            ...nonPayFields(row),
             effectiveFrom: seg.effectiveFrom,
             effectiveTo: seg.effectiveTo,
-            restDayPaid: (row.restDay ?? "").toLowerCase() !== "no",
-            shiftHours: row.workingHour ?? undefined,
-            probationMonths: row.probationMonths,
-            annualLeaveDays: row.annualLeave ?? 7,
             mpfExemptReason: "auto",
             source: "maxwell_import",
             note: `Maxwell 導入（${row.status === "active" ? "在職名單" : "離職名單"} row ${row.sheetRow}）${clipStart ? `；由第一個未鎖月 ${clipStart.toISOString().slice(0, 10)} 起生效${row.commencement && row.commencement < clipStart.toISOString().slice(0, 10) ? `，原入職日 ${row.commencement}` : ""}` : ""}`,

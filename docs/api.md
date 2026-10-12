@@ -2588,6 +2588,10 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 ### P14.1 Maxwell 導入補欄
 - `POST /api/longterm/contracts/import` 的 `summary` 加 `filled_name_en`、`filled_staff_no_mw`（人數）。連結到既有 guard（工號 → 中文名；配唔到仍列 `unmatched`，**唔建新 guard**）時：`guards.nameEn` 空就補 Maxwell 英文名；`guards.staffNoMw` 空且冇任何 MG／MW 行就經 `guard_staff_numbers`（`upsertCurrentStaffNumber`＋`syncLegacyStaffNoColumns`，`source=import:maxwell`）補 MG／MW 工號。**永不覆蓋非空值、永不改 `monthlySalary`**；工號已掛喺另一人 → 只加 `warnings`，其餘照導入。正式站 `staffNoMw` 全空時主要靠中文名（唯一先算配到，撞名列 `unmatched`），補完工號後下次改靠工號。
 
+### P16a Maxwell 導入：法定假期有薪起點映射＋重導入更新既有合約
+- `POST /api/longterm/contracts/import` 的「法定假期」欄映射改為：含「即時」／immediate → `immediate`；**空白或其他 → `after_3_months`**（按《僱傭條例》做滿 3 個月先有薪法定假）。舊版把空白當 immediate，令 7 月 1 日法定假冇扣 NPSH。
+- 重導入時，既有 `source=maxwell_import` 合約若非薪酬欄（`statutoryHolidayPaidFrom`、`restDayPaid`、`shiftHours`、`probationMonths`、`annualLeaveDays`）同名單唔同，就原地更新並寫 `update` audit；`summary` additive 加 `contracts_fields_updated`（更新咗嘅人數）。薪酬段（月薪／生效區間）邏輯不變（有變仍照舊 void＋新建）；人手建（`source=manual`）合約唔掂；覆蓋已鎖月份嘅行照舊跳過（已解鎖先更新）。
+
 ### P14.2 人手輸入批量導入＋按月生成草稿
 - `POST /api/longterm/inputs/bulk[?dry_run=1]`（`長工糧:create`）body `{ month, rows:[{ staff_no | staff_no_mw | name_en | name_zh, kind, amount?, date_from?, date_to?, doctor_note_verified?, note? }] }`，`rows` 1–500（501 → 400）。逐行配 guard：`staff_no`／`staff_no_mw`（比對 `guards.staffNo`／`staffNoMw`／全部 `guard_staff_numbers`，normalize 大寫去空白）→ `name_en`（normalize：大寫、去非字母數字）→ `name_zh`；同一鍵多過一人＝`ambiguous`（唔估）。回應 `{ dry_run, total, matched, created, skipped_duplicate, unmatched:[{row,reason:"no_match"|"ambiguous"|"no_identifier",staff_no?}], overlaps:[{row,reason}], invalid:[{row,reason}] }`（`row` 為 1-based 行號；**唔回姓名**）。
   - **冪等**：同 `(month, guard, kind, date_from, date_to, amount)` 已存在、**已確認**且未作廢 → `skipped_duplicate`（批內重複亦然；已作廢嘅唔算）。撞到同人同段嘅 **draft**（例如 `roster_leave:SL`）→ 直接確認該 draft（`confirmed_at/by`＝操作者，note 加「批量導入確認」，audit `confirm`）並計入回應 `confirmed_existing_draft`，唔新增重複行（draft 唔計糧，所以唔可當已存在）。
