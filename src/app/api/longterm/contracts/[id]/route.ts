@@ -12,6 +12,7 @@ import { snakeToCamelShallow } from "@/lib/api/case";
 import { LongtermContractUpdateSchema } from "@/lib/api/schemas";
 import { writeAudit } from "@/lib/audit";
 import { NotFound } from "@/lib/api/errors";
+import { findOverlappingContracts, overlapError } from "@/lib/longterm-payroll/contract-overlap";
 import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -41,6 +42,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       rowId: id,
       ip: getClientIp(req),
     });
+    // P15 驗收 M1：改日期／取消作廢後唔准同同人其他生效合約重疊（淨改薪酬等欄、或者作廢，唔檢查）
+    if (voided !== true && (rest.effective_from !== undefined || rest.effective_to !== undefined || voided === false)) {
+      const overlaps = await findOverlappingContracts(before.guardId, effectiveFrom as Date, (effectiveTo as Date | null) ?? null, id);
+      if (overlaps.length > 0) throw overlapError(overlaps, false);
+    }
     const data = snakeToCamelShallow(rest) as Prisma.GuardLongtermContractUncheckedUpdateInput;
     if (voided === true) {
       data.voidedAt = new Date();

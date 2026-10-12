@@ -13,7 +13,8 @@ import { readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { LongtermContractCreateSchema } from "@/lib/api/schemas";
-import { writeAudit } from "@/lib/audit";
+import { writeAuditTx } from "@/lib/audit";
+import { overlapError, canAutoClose, dayBefore } from "@/lib/longterm-payroll/contract-overlap";
 import type { Prisma } from "@prisma/client";
 
 export async function GET(req: Request) {
@@ -52,9 +53,31 @@ export async function POST(req: Request) {
       rowId: "new",
       ip: getClientIp(req),
     });
-    const data = snakeToCamelShallow(parsed) as Prisma.GuardLongtermContractUncheckedCreateInput;
-    const created = await prisma.guardLongtermContract.create({ data: { ...data, source: "manual", createdBy: session.userId } });
-    await writeAudit({ actorUserId: session.userId, tableName: "guard_longterm_contracts", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
+    const { close_previous: closePrevious, ...createBody } = parsed;
+    const data = snakeToCamelShallow(createBody) as Prisma.GuardLongtermContractUncheckedCreateInput;
+    const from = parsed.effective_from as Date;
+    const to = (parsed.effective_to as Date | null | undefined) ?? null;
+    const ip = getClientIp(req);
+    const created = await prisma.$transaction(async (tx) => {
+      // 重疊檢查喺 tx 內做（同 guard 序列化：鎖住 guard 行，防止並發雙建）
+      await tx.$queryRaw`SELECT id FROM guards WHERE id = ${parsed.guard_id} FOR UPDATE`;
+      const overlaps = await tx.guardLongtermContract.findMany({
+        where: { guardId: parsed.guard_id, voidedAt: null, ...(to ? { effectiveFrom: { lte: to } } : {}), OR: [{ effectiveTo: null }, { effectiveTo: { gte: from } }] },
+        select: { id: true, effectiveFrom: true, effectiveTo: true },
+        orderBy: { effectiveFrom: "asc" },
+      });
+      if (overlaps.length > 0) {
+        const can = canAutoClose(overlaps, from, to);
+        if (!closePrevious || !can) throw overlapError(overlaps, can);
+        for (const o of overlaps) {
+          const closed = await tx.guardLongtermContract.update({ where: { id: o.id }, data: { effectiveTo: dayBefore(from) } });
+          await writeAuditTx(tx, { actorUserId: session.userId, tableName: "guard_longterm_contracts", rowId: o.id, action: "update", before: o, after: { effective_to: closed.effectiveTo, reason: "close_previous" }, ip });
+        }
+      }
+      const row = await tx.guardLongtermContract.create({ data: { ...data, source: "manual", createdBy: session.userId } });
+      await writeAuditTx(tx, { actorUserId: session.userId, tableName: "guard_longterm_contracts", rowId: row.id, action: "create", after: row, ip });
+      return row;
+    });
     return ok(toLongtermContractDTO(created), 201);
   });
 }

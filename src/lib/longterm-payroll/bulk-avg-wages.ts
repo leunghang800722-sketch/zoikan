@@ -1,5 +1,5 @@
 // P15.2：平均工資批量導入（≤500 行）。配對次序同 P14.2 一樣（staff_no → staff_no_mw → name_en → name_zh）；
-// source=manual（`人手批量導入`＋可選備註）；冪等（同 guard／month 同金額已存在 → skipped_unchanged；金額唔同 → 更新 updated）；
+// source 固定前綴 `manual:`（`manual:批量導入`＋可選備註）；冪等（同 guard／month 同金額已存在 → skipped_unchanged；金額唔同 → 更新 updated）；
 // 檔內同人重複：同值略過、異值列 invalid。月份必須未鎖。回應同 audit 唔含姓名。
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
@@ -66,7 +66,7 @@ export async function bulkImportAvgWages(params: { month: Date; rows: BulkAvgWag
       }
       seenInFile.set(m.guardId, val);
       const cur = byGuard.get(m.guardId);
-      const source = row.note ? `人手批量導入：${row.note}` : "人手批量導入";
+      const source = row.note ? `manual:批量導入：${row.note}` : "manual:批量導入";
       if (cur && cur.voidedAt === null && Number(cur.avgDailyWage) === val && cur.source === source) {
         result.skipped_unchanged += 1;
         continue;

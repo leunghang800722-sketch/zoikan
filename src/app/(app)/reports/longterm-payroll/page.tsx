@@ -25,7 +25,7 @@ import { BulkInputsPanel } from "./BulkInputsPanel";
 import { BankReconcilePanel } from "./BankReconcilePanel";
 import { ContractCreateForm } from "./ContractCreateForm";
 import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
-import { ConfirmVoidButton } from "@/components/ui/ConfirmVoidButton";
+import { VoidMonthPanel } from "./VoidMonthPanel";
 import { DraftInputsPanel, BonusEligiblePanel, type DraftInputDTO } from "./DraftPanels";
 
 // ---------------------------------------------------------------------------
@@ -61,6 +61,7 @@ interface LineDTO {
 }
 
 interface PayrollMonthDTO {
+  can_void?: boolean;
   month: string;
   locked: boolean;
   run: { id: string; status: string; created_at: string } | null;
@@ -197,18 +198,6 @@ export default function LongtermPayrollPage() {
     setRecomputing(false);
   }
 
-  async function voidMonth(reason: string) {
-    setError(null);
-    setNotice(null);
-    const res = await apiPost<{ voided_runs: number; balances_restored: number; legacy_rebuilt: number; avg_wages_cleared: number }>(`/api/longterm/payroll/${month}/void`, { reason });
-    if (res.ok) {
-      setNotice(`已作廢 ${month} 長工糧計算（回滾假期結餘 ${res.data.balances_restored} 人${res.data.legacy_rebuilt ? `，其中 ${res.data.legacy_rebuilt} 人係舊資料重建，請覆核` : ""}，清走自動計平均工資 ${res.data.avg_wages_cleared} 行）`);
-      await load(month);
-    } else {
-      setError(res.message);
-    }
-  }
-
   async function loadAutopayPreview() {
     const res = await apiGet<{ row_count: number; total_amount: number; missing: { staff_no: string; reason: string }[]; format_verified: boolean; format_source: string; locked_month_warning?: string | null }>(
       `/api/longterm/payroll/${month}/autopay?preview=1`,
@@ -283,12 +272,10 @@ export default function LongtermPayrollPage() {
           </div>
         </section>
       )}
-      {payroll?.run && !payroll.locked && (
+      {payroll?.run && !payroll.locked && payroll.can_void && (
         <section className="flex flex-wrap items-center gap-2 rounded-lg border border-zk-border bg-white p-3" data-testid="ltpay-void-section">
           <span className="text-zk-sm text-zk-muted">要倒序重算（例如先重算較早嘅月份）：只可作廢最近一個已計月份，假期結餘會一齊回滾。</span>
-          <span data-testid="ltpay-void-month">
-            <ConfirmVoidButton label="作廢本月計算（老闆）" confirmLabel="確認作廢" onConfirm={voidMonth} />
-          </span>
+          <VoidMonthPanel month={month} onDone={() => load(month)} onError={setError} onNotice={setNotice} />
         </section>
       )}
       {!payroll?.run && !loading && (
