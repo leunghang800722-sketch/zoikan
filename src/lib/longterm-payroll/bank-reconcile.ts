@@ -11,10 +11,9 @@ import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { hashNormalizedName, normalizeEnName } from "./name-norm";
 import type { Prisma } from "@prisma/client";
 
-export const RECONCILE_TOLERANCE = 0.01;
-export { REASON_CODES, type ReasonCode } from "./reconcile-reasons";
-export type ReconStatus = "equal" | "diff" | "bank_only" | "system_only";
-export type MatchBy = "remark" | "account" | "name_en" | "none";
+const RECONCILE_TOLERANCE = 0.01;
+type ReconStatus = "equal" | "diff" | "bank_only" | "system_only";
+type MatchBy = "remark" | "account" | "name_en" | "none";
 
 export interface BankRow {
   rowNo: number;
@@ -47,7 +46,7 @@ function parseAmount(v: unknown): number | null {
   return Number.isFinite(x) ? x : null;
 }
 
-export const PASSWORD_MSG = "呢個檔案有密碼保護，打唔開——請先用 Excel 另存冇密碼版本，再上載";
+const PASSWORD_MSG = "呢個檔案有密碼保護，打唔開——請先用 Excel 另存冇密碼版本，再上載";
 
 /** 解析 Payroll Editor xls／xlsx（Buffer）。表頭行自動搵（頭 60 行內，同時有「員工賬戶名稱」同「金額」）。 */
 export function parseBankPayrollEditor(buffer: Buffer): ParsedBankFile {
@@ -248,7 +247,7 @@ export async function findActiveRun(month: Date) {
   return prisma.longtermPayrollRun.findFirst({ where: { month, voidedAt: null, status: { not: "void" } }, orderBy: { createdAt: "desc" } });
 }
 
-export async function loadSystemLines(runId: string): Promise<SystemLineInfo[]> {
+async function loadSystemLines(runId: string): Promise<SystemLineInfo[]> {
   const lines = await prisma.longtermPayrollLine.findMany({
     where: { runId },
     select: {

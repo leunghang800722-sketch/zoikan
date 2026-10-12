@@ -15,6 +15,6 @@ export async function POST(req: Request) {
     const dryRun = new URL(req.url).searchParams.get("dry_run") === "1";
     const parsed = parseBody(LongtermInputBulkSchema, await readJson(req));
     const result = await bulkImportInputs({ month: monthStart(parsed.month), rows: parsed.rows as BulkInputRow[], actorUserId: session.userId, ip: getClientIp(req), dryRun });
-    return ok(brandSafeResponse(result), dryRun ? 200 : 201);
+    return ok(brandSafeResponse({ ...result }), dryRun ? 200 : 201);
   });
 }
