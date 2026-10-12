@@ -1092,3 +1092,6 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **P16b.2** 銀行檔第二表頭行跳過（`bank-reconcile.ts`）：不入 rows、不計 `bad_amount_rows`；summary `header_rows_skipped`。
 - **P16b.3** 同日多來源更表紀錄衝突提示（`aggregate.ts` `attendanceConflictNote()`）：只加 notes，不改計算；summary `attendance_conflicts`；銀行對數 tab 展開以紅字顯示；`docs/ops.md` 加根因一節。
 - 測試：`tests/p16b-recon-tweaks.test.ts`（6 條）。驗收修正（Opus 5.5）：M1 系統草稿已確認行唔計 note 判重；第二表頭行只認表頭字眼；`.gitignore` `/out`；衝突前綴抽去 `attendance-conflict.ts`（client bundle 唔拉 aggregate）。
+
+### 21.2 驗收、合併、部署（2026-10-12）
+- Opus 5.5 兩輪：第一輪 M1（系統草稿經 UI 確認後被批量當唔同 note 新增→雙重支付）＋(ii) a–e；第二輪代碼通過，剩文件字眼（規劃者自行修正）。squash merge `c0f1baf`（歷史曾含 out symlink，故 squash）；部署 `6acc9c5c` RUNNING。
