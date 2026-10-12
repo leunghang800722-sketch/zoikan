@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
-import { POST as voidRoute } from "@/app/api/longterm/payroll/[month]/void/route";
+import { POST as voidRoute, GET as voidGetRoute } from "@/app/api/longterm/payroll/[month]/void/route";
 import { POST as avgBulk } from "@/app/api/longterm/avg-wages/bulk/route";
 
 const M = (mo: number) => new Date(Date.UTC(2026, mo - 1, 1));
@@ -11,6 +11,8 @@ const D = (mo: number, d: number) => new Date(Date.UTC(2026, mo - 1, d));
 function req(url: string, cookie: string, body?: unknown) {
   return new Request(url, { method: "POST", headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
 }
+const voidGet = (month: string, cookie: string) =>
+  voidGetRoute(new Request(`http://t/api/longterm/payroll/${month}/void`, { headers: { cookie } }), { params: Promise.resolve({ month }) });
 const voidCall = (month: string, cookie: string, body: unknown = { reason: "測試倒序重算" }) =>
   voidRoute(req(`http://t/api/longterm/payroll/${month}/void`, cookie, body), { params: Promise.resolve({ month }) });
 
@@ -103,8 +105,15 @@ describe("P15.1 作廢本月計算", () => {
     await recomputeLongtermPayroll(M(8), actor);
     const s8 = await state(8);
     await prisma.guardLeaveBalanceHistory.deleteMany({}); // 模擬 P15 前
-    const j = await (await voidCall("2026-08", owner)).json();
-    expect(j.legacy_rebuilt).toBe(2);
+    // 唯讀前置檢查：之前月份已計、冇快照 → 近似重建，要額外確認
+    const pv = await (await voidGet("2026-08", owner)).json();
+    expect(pv).toMatchObject({ has_run: true, earlier_valid_runs: ["2026-07"], later_blockers: [], rollback_method: "approx_rebuild", needs_confirm_approx: true, affected_guards: 2 });
+    const refused = await voidCall("2026-08", owner);
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toBe("approx_rollback_requires_confirm");
+    expect((await prisma.longtermPayrollRun.count({ where: { month: M(8), status: { not: "void" } } }))).toBe(1); // 未確認 → 冇作廢
+    const j = await (await voidCall("2026-08", owner, { reason: "測試倒序重算", confirm_approx: true })).json();
+    expect(j).toMatchObject({ legacy_rebuilt: 2, rollback_method: "approx_rebuild" });
     const after = await state(7);
     expect(after.bal).toEqual(s7.bal);
     await recomputeLongtermPayroll(M(7), actor);
@@ -136,13 +145,46 @@ describe("P15.1 作廢本月計算", () => {
     expect((await voidCall("2026-08", owner)).status).toBe(404);
   });
 
-  it("平均工資：source=computed 清走，manual 保留", async () => {
+  it("平均工資：只清 computed／auto:／自動計: 前綴；note 含「自動計」嘅人手行保留", async () => {
     await recomputeLongtermPayroll(M(8), actor);
-    await prisma.guardAvgWage.create({ data: { guardId: g1, month: M(8), avgDailyWage: 600, source: "computed", createdBy: actor } });
-    await prisma.guardAvgWage.create({ data: { guardId: g2, month: M(8), avgDailyWage: 610, source: "人手批量導入", createdBy: actor } });
+    await prisma.guardAvgWage.create({ data: { guardId: g1, month: M(8), avgDailyWage: 600, source: "auto:12個月平均", createdBy: actor } });
+    await prisma.guardAvgWage.create({ data: { guardId: g2, month: M(8), avgDailyWage: 610, source: "manual:批量導入：由自動計表複製", createdBy: actor } });
     const j = await (await voidCall("2026-08", owner)).json();
     expect(j.avg_wages_cleared).toBe(1);
-    expect(await prisma.guardAvgWage.count()).toBe(1);
+    const left = await prisma.guardAvgWage.findMany();
+    expect(left).toHaveLength(1);
+    expect(left[0]!.source).toContain("自動計");
+  });
+
+  it("唯讀前置檢查＋can_void＋audit before/after 欄位", async () => {
+    await recomputeLongtermPayroll(M(7), actor);
+    await recomputeLongtermPayroll(M(8), actor);
+    const p7 = await (await voidGet("2026-07", owner)).json();
+    expect(p7.later_blockers).toEqual(["2026-08"]);
+    const p8 = await (await voidGet("2026-08", accountant)).json(); // 會計都可以睇前置檢查
+    expect(p8).toMatchObject({ earlier_valid_runs: ["2026-07"], rollback_method: "snapshot", needs_confirm_approx: false });
+    const { GET: payrollGet } = await import("@/app/api/longterm/payroll/[month]/route");
+    const getAs = async (c: string) => (await (await payrollGet(new Request("http://t/api/longterm/payroll/2026-08", { headers: { cookie: c } }), { params: Promise.resolve({ month: "2026-08" }) })).json()).can_void;
+    expect(await getAs(owner)).toBe(true);
+    expect(await getAs(accountant)).toBe(false);
+    const runIds = (await prisma.longtermPayrollRun.findMany({ where: { month: M(8), status: { not: "void" } } })).map((r) => r.id);
+    await voidCall("2026-08", owner);
+    const au = await prisma.auditLog.findFirstOrThrow({ where: { action: "void_longterm_payroll_month", rowId: runIds[0] } });
+    expect(au.before).toMatchObject({ month: "2026-08", run_ids: runIds, guards_affected: 2 });
+    expect(au.after).toMatchObject({ rollback_method: "snapshot", balances_restored: 2, balances_deleted: 0, kept_manual_rows: 0, avg_wages_cleared: 0 });
+  });
+
+  it("existed=false 快照：行而家有人手 al_entitled／carry → 唔刪行，taken 回 0，kept_manual_rows 計數", async () => {
+    await recomputeLongtermPayroll(M(8), actor); // 之前冇任何結餘行 → 兩個 existed=false 快照
+    await prisma.guardLeaveBalance.update({ where: { guardId_year: { guardId: g1, year: 2026 } }, data: { alEntitled: 7, alCarry: 2 } });
+    const j = await (await voidCall("2026-08", owner)).json();
+    expect(j).toMatchObject({ kept_manual_rows: 1, balances_deleted: 1 });
+    const rows = await prisma.guardLeaveBalance.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ guardId: g1, asOfMonth: null });
+    expect(Number(rows[0]!.alTaken)).toBe(0);
+    expect(Number(rows[0]!.alEntitled)).toBe(7);
+    expect(Number(rows[0]!.alCarry)).toBe(2);
   });
 });
 
@@ -185,7 +227,7 @@ describe("P15.2 平均工資批量導入", () => {
     expect(JSON.stringify(j)).not.toMatch(/測試|Alpha|Bravo|NOBODY/);
     const w = await prisma.guardAvgWage.findFirstOrThrow({ where: { guardId: a } });
     expect(Number(w.avgDailyWage)).toBe(612.5);
-    expect(w.source).toBe("人手批量導入");
+    expect(w.source).toBe("manual:批量導入");
     const again = await (await call(owner, { month, rows: rows() })).json();
     expect(again).toMatchObject({ created: 0, updated: 0, skipped_unchanged: 2 });
     const changed = await (await call(owner, { month, rows: [{ staff_no_mw: "MG9701", avg_daily_wage: 650 }] })).json();
@@ -222,7 +264,7 @@ describe("P15.3 新增合約／揀保安員", () => {
     const mk = (cookie: string, extra: Record<string, unknown>) =>
       createContract(req("http://t/api/longterm/contracts", cookie, { guard_id: g.id, effective_from: "2026-12-01", effective_to: null, shift_hours: 12, annual_leave_days: 7, statutory_holiday_paid_from: "immediate", rest_day_paid: true, mpf_exempt_reason: "auto", ...extra }));
     expect((await mk(accountant, { pay_basis: "monthly", monthly_salary: 15500 })).status).toBe(201);
-    expect((await mk(owner, { pay_basis: "daily", monthly_salary: 650, daily_rate: 650, effective_from: "2027-01-01" })).status).toBe(201);
+    expect((await mk(owner, { pay_basis: "daily", monthly_salary: 650, daily_rate: 650, effective_from: "2027-01-01", close_previous: true })).status).toBe(201);
     const rows = await prisma.guardLongtermContract.findMany({ where: { guardId: g.id }, orderBy: { effectiveFrom: "asc" } });
     expect(rows.map((r) => r.payBasis)).toEqual(["monthly", "daily"]);
     expect(Number(rows[1]!.dailyRate)).toBe(650);

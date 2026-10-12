@@ -29,6 +29,14 @@ test.afterAll(async () => {
   await prisma.guard.deleteMany({ where: { id: { in: [gid, gid2] } } });
 });
 
+test("作廢掣：會計睇唔到", async ({ page }) => {
+  await loginAs(page, "會計");
+  await page.goto("/reports/longterm-payroll");
+  await page.locator('input[type="month"]').fill("2026-12");
+  await expect(page.getByText("逐人結算")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("ltpay-void-section")).toHaveCount(0);
+});
+
 test("作廢本月計算：填原因 → 確認 → run 變 void、頁面重載", async ({ page }) => {
   await loginAs(page, "老闆");
   await page.goto("/reports/longterm-payroll");
@@ -36,6 +44,8 @@ test("作廢本月計算：填原因 → 確認 → run 變 void、頁面重載"
   const sec = page.getByTestId("ltpay-void-section");
   await expect(sec).toBeVisible({ timeout: 15_000 });
   await sec.getByRole("button", { name: /作廢本月計算/ }).click();
+  await expect(sec.getByTestId("ltpay-void-earlier")).toContainText("之前月份已計：冇");
+  await expect(sec.getByTestId("ltpay-void-method")).toContainText("回滾方式");
   const confirm = sec.getByRole("button", { name: "確認作廢" });
   await expect(confirm).toBeDisabled(); // 冇原因唔可以確認
   await sec.getByPlaceholder("填原因先可以確認").fill("e2e 倒序重算");
@@ -59,7 +69,7 @@ test("平均工資批量導入：上載 CSV → 預覽（工號、唔顯示姓�
   await expect(prev).toContainText("MG9999ZZ");
   await expect(prev).not.toContainText("測試p15");
   await page.getByTestId("ltpay-avgbulk-confirm").click();
-  await expect.poll(() => prisma.guardAvgWage.count({ where: { guardId: { in: [gid, gid2] }, month: DEC, source: { startsWith: "人手批量導入" } } }), { timeout: 15_000 }).toBe(2);
+  await expect.poll(() => prisma.guardAvgWage.count({ where: { guardId: { in: [gid, gid2] }, month: DEC, source: { startsWith: "manual:" } } }), { timeout: 15_000 }).toBe(2);
   await page.getByTestId("ltpay-avgbulk-file").setInputFiles({ name: "avg.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
   await expect(page.getByTestId("ltpay-avgbulk-preview")).toContainText("無變化 2", { timeout: 15_000 });
   await expect(page.getByTestId("ltpay-avgbulk-confirm")).toBeDisabled();
@@ -91,4 +101,28 @@ test("新增合約：月薪制＋日薪制各一", async ({ page }) => {
   expect(d.payBasis).toBe("daily");
   expect(Number(d.dailyRate)).toBe(650);
   expect(Number(d.monthlySalary)).toBe(650);
+});
+
+test("新增合約撞日期：唔勾自動結束 → 409 提示；勾選 → 上一段結束日改為前一日", async ({ page }) => {
+  await loginAs(page, "會計");
+  await page.goto("/reports/longterm-payroll");
+  await page.getByTestId("ltpay-tab-contracts").click();
+  await page.getByTestId("ltpay-contract-new").click();
+  await page.getByTestId("ltpay-cf-search").fill(`測試p15甲${RAND}`);
+  await page.getByTestId("ltpay-cf-hit").first().click();
+  await page.getByTestId("ltpay-cf-from").fill("2027-02-01");
+  await page.getByTestId("ltpay-cf-salary").fill("16000");
+  const ov = page.getByTestId("ltpay-cf-overlap");
+  await expect(ov).toContainText("2026-12-01～無結束日");
+  const closeBox = page.getByTestId("ltpay-cf-closeprev");
+  await expect(closeBox).toBeChecked();
+  await closeBox.uncheck();
+  await page.getByTestId("ltpay-cf-submit").click();
+  await expect(page.getByText(/重疊嘅生效合約/).first()).toBeVisible({ timeout: 15_000 });
+  expect(await prisma.guardLongtermContract.count({ where: { guardId: gid } })).toBe(1);
+  await closeBox.check();
+  await page.getByTestId("ltpay-cf-submit").click();
+  await expect(page.getByTestId("ltpay-contract-form")).toHaveCount(0, { timeout: 15_000 });
+  const rows = await prisma.guardLongtermContract.findMany({ where: { guardId: gid }, orderBy: { effectiveFrom: "asc" } });
+  expect(rows.map((r) => r.effectiveTo?.toISOString().slice(0, 10) ?? null)).toEqual(["2027-01-31", null]);
 });

@@ -1,44 +1,113 @@
 // P15.1：作廢長工糧某月計算（倒序重算）。只准作廢「最近一個已計月份」；同時將假期結餘回滾到計呢個月之前嘅狀態：
-//  - 有快照（`guard_leave_balance_history`，P15 起每次寫回前影低）→ 原樣還原（existed=false → 刪除結餘記錄）。
-//  - 冇快照（P15 前計過嘅月份，legacy）→ taken＝該行 `*_opening`（即上月尾累積）；asOfMonth 回到上一個仍有效 run 嘅月份，
-//    當月 opening 以「上月尾累積 − 上月新增（以 0 起算 dry-run 重建上月攞到嘅日數）」重建。同年先重建；跨年或冇上一個月 → asOfMonth＝null。
-//    legacy 重建係近似（上月更表／輸入若之後有改會有偏差），回應 `legacy_rebuilt` 列出數量，ops.md 叫人覆核。
-// 同時清走該月 source 係自動計（computed／自動計）嘅平均工資；人手（manual）保留。
+//  - 有快照（`guard_leave_balance_history`，P15 起每次寫回前影低）→ 原樣還原（existed=false → 刪除結餘記錄；
+//    但該行而家有人手 al_entitled／al_carry／opening 非 0 → 唔刪，只將 taken 回 0、as_of_month 清空，計入 kept_manual_rows）。
+//  - 冇快照（P15 前計過嘅月份，legacy）→ taken＝該行 `*_opening`（即上月尾累積）。
+//      · 冇更早有效 run：空殼行（opening／entitled／carry 全 0）刪除；其餘 taken 回 opening、as_of_month＝null（精確）。
+//      · 有更早有效 run 而且同年：as_of_month 回到上一個有效 run 月份，上月 opening ＝ 上月尾累積 − 上月新增
+//        （以 0 起算 dry-run 重建上月攞到嘅日數）——近似（`approx_rebuild`），要用戶額外確認（confirm_approx）。
+//      · 有更早 run 但跨年：taken 回 opening、as_of_month＝null（精確）。
+// 同時清走該月 source 以 computed／auto:／自動計: 開頭嘅平均工資（只認前綴）；人手（manual:…）保留。
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
-import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
+import { BadRequest, Conflict, NotFound, ApiError } from "@/lib/api/errors";
 import { monthLabel, n, round2 } from "@/lib/reports/money";
 import { buildLongtermPayrollInputs } from "./aggregate";
 import { assertMonthNotLockedTx, monthStart } from "@/lib/month-lock";
+
+export const COMPUTED_AVG_SOURCE_PREFIXES = ["computed", "auto:", "自動計:"] as const;
+
+export type RollbackMethod = "none" | "snapshot" | "exact_rebuild" | "approx_rebuild";
 
 export interface VoidMonthResult {
   month: string;
   voided_runs: number;
   balances_restored: number;
   balances_deleted: number;
+  kept_manual_rows: number;
   legacy_rebuilt: number;
   avg_wages_cleared: number;
   restored_as_of_month: string | null;
+  rollback_method: RollbackMethod;
 }
 
-export async function voidLongtermPayrollMonth(monthIn: Date, actorUserId: string, reason: string, ip: string | null = null): Promise<VoidMonthResult> {
+export interface VoidPreview {
+  month: string;
+  has_run: boolean;
+  /** 該月之前仲有效嘅 run 月份（YYYY-MM，升序） */
+  earlier_valid_runs: string[];
+  /** 後面仲有效嘅月份（有就唔可以作廢） */
+  later_blockers: string[];
+  rollback_method: RollbackMethod;
+  needs_confirm_approx: boolean;
+  affected_guards: number;
+}
+
+type BalRow = { id: string; guardId: string; year: number; alTakenOpening: unknown; slTakenOpening: unknown; alEntitled: unknown; alCarry: unknown; slAccrued: unknown };
+
+function isEmptyShell(r: BalRow) {
+  return n(r.alTakenOpening as never) === 0 && n(r.slTakenOpening as never) === 0 && n(r.alEntitled as never) === 0 && n(r.alCarry as never) === 0;
+}
+
+function classify(rows: BalRow[], snappedKeys: Set<string>, prevMonth: Date | null): { method: RollbackMethod; legacy: number; approx: number } {
+  let legacy = 0;
+  let approx = 0;
+  for (const r of rows) {
+    if (snappedKeys.has(`${r.guardId}|${r.year}`)) continue;
+    legacy += 1;
+    if (prevMonth && prevMonth.getUTCFullYear() === r.year) approx += 1;
+  }
+  const method: RollbackMethod = approx > 0 ? "approx_rebuild" : legacy > 0 ? "exact_rebuild" : rows.length > 0 || snappedKeys.size > 0 ? "snapshot" : "none";
+  return { method, legacy, approx };
+}
+
+async function loadContext(month: Date) {
+  const [runs, earlier, later, laterBal, snaps, rows] = await Promise.all([
+    prisma.longtermPayrollRun.findMany({ where: { month, voidedAt: null, status: { not: "void" } }, select: { id: true } }),
+    prisma.longtermPayrollRun.findMany({ where: { month: { lt: month }, voidedAt: null, status: { not: "void" } }, select: { month: true }, distinct: ["month"], orderBy: { month: "asc" } }),
+    prisma.longtermPayrollRun.findMany({ where: { month: { gt: month }, voidedAt: null, status: { not: "void" } }, select: { month: true }, distinct: ["month"], orderBy: { month: "asc" } }),
+    prisma.guardLeaveBalance.findFirst({ where: { asOfMonth: { gt: month } }, select: { asOfMonth: true } }),
+    prisma.guardLeaveBalanceHistory.findMany({ where: { month }, select: { guardId: true, year: true } }),
+    prisma.guardLeaveBalance.findMany({ where: { asOfMonth: month }, select: { id: true, guardId: true, year: true, alTakenOpening: true, slTakenOpening: true, alEntitled: true, alCarry: true, slAccrued: true } }),
+  ]);
+  const prevMonth = earlier.length ? earlier[earlier.length - 1]!.month : null;
+  return { runs, earlier, later, laterBal, snaps, rows, prevMonth };
+}
+
+/** 唯讀前置檢查（UI 作廢對話框用）。 */
+export async function previewVoidLongtermPayrollMonth(monthIn: Date): Promise<VoidPreview> {
+  const month = monthStart(monthIn);
+  const c = await loadContext(month);
+  const laterList = [...c.later.map((l) => monthLabel(l.month)), ...(c.laterBal?.asOfMonth ? [monthLabel(c.laterBal.asOfMonth)] : [])];
+  const snappedKeys = new Set(c.snaps.map((s) => `${s.guardId}|${s.year}`));
+  const cls = classify(c.rows as BalRow[], snappedKeys, c.prevMonth);
+  const affected = new Set([...c.rows.map((r) => r.guardId), ...c.snaps.map((s) => s.guardId)]).size;
+  return {
+    month: monthLabel(month),
+    has_run: c.runs.length > 0,
+    earlier_valid_runs: c.earlier.map((e) => monthLabel(e.month)),
+    later_blockers: [...new Set(laterList)],
+    rollback_method: cls.method,
+    needs_confirm_approx: cls.approx > 0,
+    affected_guards: affected,
+  };
+}
+
+export async function voidLongtermPayrollMonth(monthIn: Date, actorUserId: string, reason: string, ip: string | null = null, opts: { confirmApprox?: boolean } = {}): Promise<VoidMonthResult> {
   const month = monthStart(monthIn);
   const why = reason.trim();
   if (!why) throw BadRequest("作廢原因必填");
 
-  const prevRun = await prisma.longtermPayrollRun.findFirst({ where: { month: { lt: month }, voidedAt: null, status: { not: "void" } }, orderBy: { month: "desc" }, select: { month: true } });
-  const prevMonth = prevRun?.month ?? null;
-  // legacy 重建要用上月「新增」日數：只喺有冇快照嘅 asOfMonth=month 行先需要（tx 外純讀取 build）
+  const pre = await loadContext(month);
+  const prevMonth = pre.prevMonth;
+  const preCls = classify(pre.rows as BalRow[], new Set(pre.snaps.map((s) => `${s.guardId}|${s.year}`)), prevMonth);
+  if (preCls.approx > 0 && !opts.confirmApprox) {
+    throw new ApiError(409, "approx_rollback_requires_confirm", `有 ${preCls.approx} 人嘅假期結餘冇快照（P15 前計過），回滾要近似重建上月起算數。請確認後帶 confirm_approx:true 再作廢，作廢後請抽查 AL／SL 已放日數`, { rollback_method: "approx_rebuild", approx_guards: preCls.approx });
+  }
+  // legacy 近似重建要用上月「新增」日數（tx 外純讀取 build）
   const delta = new Map<string, { al: number; sl: number; acc: number }>();
-  if (prevMonth) {
-    const legacyRows = await prisma.guardLeaveBalance.findMany({ where: { asOfMonth: month, year: prevMonth.getUTCFullYear() }, select: { guardId: true, year: true } });
-    if (legacyRows.length > 0) {
-      const snapped = new Set((await prisma.guardLeaveBalanceHistory.findMany({ where: { month }, select: { guardId: true, year: true } })).map((s) => `${s.guardId}|${s.year}`));
-      if (legacyRows.some((r) => !snapped.has(`${r.guardId}|${r.year}`))) {
-        const b = await buildLongtermPayrollInputs(prevMonth, prisma, { zeroOpening: true });
-        for (const l of b.lines) delta.set(l.guardId, { al: l.leaveBalanceWriteback.alTakenCumulative, sl: l.leaveBalanceWriteback.slTakenCumulative, acc: l.leaveBalanceWriteback.slAccruedAtMonthEnd });
-      }
-    }
+  if (preCls.approx > 0 && prevMonth) {
+    const b = await buildLongtermPayrollInputs(prevMonth, prisma, { zeroOpening: true });
+    for (const l of b.lines) delta.set(l.guardId, { al: l.leaveBalanceWriteback.alTakenCumulative, sl: l.leaveBalanceWriteback.slTakenCumulative, acc: l.leaveBalanceWriteback.slAccruedAtMonthEnd });
   }
 
   return prisma.$transaction(
@@ -56,14 +125,26 @@ export async function voidLongtermPayrollMonth(monthIn: Date, actorUserId: strin
       const snaps = await tx.guardLeaveBalanceHistory.findMany({ where: { month } });
       const key = (g: string, y: number) => `${g}|${y}`;
       const rows = await tx.guardLeaveBalance.findMany({ where: { asOfMonth: month } });
+      const guardsAffected = new Set<string>();
       let restored = 0;
       let deleted = 0;
+      let kept = 0;
       let legacy = 0;
       const done = new Set<string>();
       for (const s of snaps) {
         done.add(key(s.guardId, s.year));
+        guardsAffected.add(s.guardId);
+        const cur = await tx.guardLeaveBalance.findUnique({ where: { guardId_year: { guardId: s.guardId, year: s.year } } });
         if (!s.existed) {
-          deleted += (await tx.guardLeaveBalance.deleteMany({ where: { guardId: s.guardId, year: s.year } })).count;
+          if (!cur) continue;
+          if (!isEmptyShell(cur as unknown as BalRow)) {
+            // 計糧之後有人手 entitled／carry／opening → 唔刪行，只將 taken 回 0
+            await tx.guardLeaveBalance.update({ where: { id: cur.id }, data: { alTaken: 0, slTaken: 0, asOfMonth: null } });
+            kept += 1;
+          } else {
+            await tx.guardLeaveBalance.delete({ where: { id: cur.id } });
+            deleted += 1;
+          }
         } else {
           await tx.guardLeaveBalance.updateMany({
             where: { guardId: s.guardId, year: s.year },
@@ -74,11 +155,12 @@ export async function voidLongtermPayrollMonth(monthIn: Date, actorUserId: strin
       }
       for (const r of rows) {
         if (done.has(key(r.guardId, r.year))) continue;
-        // 系統首次計算（冇更早有效 run）而且個行只係計糧寫出嚟嘅空殼（opening 全 0、冇人手 entitled／carry）→ 計糧之前呢行根本唔存在，精確做法係刪除
-        if (!prevMonth && n(r.alTakenOpening) === 0 && n(r.slTakenOpening) === 0 && n(r.alEntitled) === 0 && n(r.alCarry) === 0) {
+        guardsAffected.add(r.guardId);
+        legacy += 1;
+        // 系統首次計算（冇更早有效 run）而個行只係計糧寫出嚟嘅空殼 → 計糧之前呢行根本唔存在，精確做法係刪除
+        if (!prevMonth && isEmptyShell(r as unknown as BalRow)) {
           await tx.guardLeaveBalance.delete({ where: { id: r.id } });
           deleted += 1;
-          legacy += 1;
           continue;
         }
         const alEnd = n(r.alTakenOpening);
@@ -90,22 +172,22 @@ export async function voidLongtermPayrollMonth(monthIn: Date, actorUserId: strin
           : { alTaken: alEnd, slTaken: slEnd, asOfMonth: null, alTakenOpening: alEnd, slTakenOpening: slEnd };
         await tx.guardLeaveBalance.update({ where: { id: r.id }, data });
         restored += 1;
-        legacy += 1;
       }
       await tx.guardLeaveBalanceHistory.deleteMany({ where: { month } });
 
-      const cleared = (await tx.guardAvgWage.deleteMany({ where: { month, OR: [{ source: { startsWith: "computed" } }, { source: { contains: "自動計" } }] } })).count;
+      const cleared = (await tx.guardAvgWage.deleteMany({ where: { month, OR: COMPUTED_AVG_SOURCE_PREFIXES.map((p) => ({ source: { startsWith: p } })) } })).count;
 
+      const method: RollbackMethod = preCls.approx > 0 ? "approx_rebuild" : legacy > 0 ? "exact_rebuild" : snaps.length > 0 || rows.length > 0 ? "snapshot" : "none";
       await writeAuditTx(tx, {
         actorUserId,
         tableName: "longterm_payroll_runs",
         rowId: runs[0]!.id,
         action: "void_longterm_payroll_month",
-        before: { month: monthLabel(month), runs: runs.length },
-        after: { reason: why.slice(0, 500), balances_restored: restored, balances_deleted: deleted, legacy_rebuilt: legacy, avg_wages_cleared: cleared },
+        before: { month: monthLabel(month), run_ids: runs.map((r) => r.id), guards_affected: guardsAffected.size },
+        after: { reason: why.slice(0, 500), rollback_method: method, balances_restored: restored, balances_deleted: deleted, kept_manual_rows: kept, legacy_rebuilt: legacy, avg_wages_cleared: cleared, confirm_approx: !!opts.confirmApprox },
         ip,
       });
-      return { month: monthLabel(month), voided_runs: runs.length, balances_restored: restored, balances_deleted: deleted, legacy_rebuilt: legacy, avg_wages_cleared: cleared, restored_as_of_month: prevMonth ? monthLabel(prevMonth) : null };
+      return { month: monthLabel(month), voided_runs: runs.length, balances_restored: restored, balances_deleted: deleted, kept_manual_rows: kept, legacy_rebuilt: legacy, avg_wages_cleared: cleared, restored_as_of_month: prevMonth ? monthLabel(prevMonth) : null, rollback_method: method };
     },
     { timeout: 120_000, maxWait: 10_000 },
   );

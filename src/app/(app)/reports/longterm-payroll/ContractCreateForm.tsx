@@ -5,6 +5,14 @@ import { Button } from "@/components/ui/Button";
 import { Field, inputCls, selectCls } from "@/components/ui/Field";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 
+interface ContractRow {
+  id: string;
+  guard_id: string;
+  effective_from: string;
+  effective_to: string | null;
+  voided_at: string | null;
+}
+
 interface GuardHit {
   guard_id: string;
   name: string;
@@ -29,6 +37,8 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
   const [mpf, setMpf] = useState<"auto" | "none" | "over65" | "under60days">("auto");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [existing, setExisting] = useState<ContractRow[]>([]);
+  const [closePrev, setClosePrev] = useState(true);
 
   async function search(v: string) {
     setQ(v);
@@ -37,6 +47,14 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
     const r = await apiGet<{ rows: GuardHit[] }>(`/api/longterm/guard-search?q=${encodeURIComponent(v.trim())}`);
     if (r.ok) setHits(r.data.rows);
   }
+
+  async function pick(h: GuardHit) {
+    setGuard(h);
+    const r = await apiGet<{ rows: ContractRow[] }>(`/api/longterm/contracts?guard_id=${h.guard_id}`);
+    setExisting(r.ok ? r.data.rows.filter((c) => !c.voided_at) : []);
+  }
+  // 同新段日期重疊嘅現有合約（YYYY-MM-DD 字串可直接比較）
+  const overlaps = from ? existing.filter((c) => (!to || c.effective_from <= to) && (!c.effective_to || c.effective_to >= from)) : [];
 
   async function submit() {
     if (!guard) return onError("要先搜尋並揀保安員");
@@ -58,6 +76,7 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
       mpf_exempt_reason: mpf,
       ...(probation ? { probation_months: Number(probation) } : {}),
       ...(note.trim() ? { note: note.trim() } : {}),
+      ...(overlaps.length > 0 && closePrev ? { close_previous: true } : {}),
     };
     setBusy(true);
     const res = await apiPost(`/api/longterm/contracts`, body);
@@ -68,6 +87,7 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
     setQ("");
     setHits([]);
     setGuard(null);
+    setExisting([]);
     setFrom("");
     setTo("");
     setSalary("");
@@ -99,7 +119,7 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
           <ul className="max-h-40 overflow-auto rounded border border-zk-border-soft text-zk-sm" data-testid="ltpay-cf-hits">
             {hits.map((h) => (
               <li key={h.guard_id}>
-                <button type="button" className="w-full px-2 py-1 text-left hover:bg-zk-header" onClick={() => setGuard(h)} data-testid="ltpay-cf-hit">
+                <button type="button" className="w-full px-2 py-1 text-left hover:bg-zk-header" onClick={() => void pick(h)} data-testid="ltpay-cf-hit">
                   {h.name}
                   {h.staff_no ? `（${h.staff_no}）` : ""}
                 </button>
@@ -161,6 +181,17 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
           <input type="checkbox" checked={restPaid} onChange={(e) => setRestPaid(e.target.checked)} /> 例假有薪
         </label>
       </div>
+      {overlaps.length > 0 && (
+        <div className="flex flex-col gap-1 rounded border border-zk-border-soft p-2 text-zk-sm" data-testid="ltpay-cf-overlap">
+          <div>
+            呢位保安員已有重疊嘅生效合約：{overlaps.map((c) => `${c.effective_from}～${c.effective_to ?? "無結束日"}`).join("；")}
+          </div>
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={closePrev} onChange={(e) => setClosePrev(e.target.checked)} data-testid="ltpay-cf-closeprev" />
+            自動結束上一段合約（上一段結束日改為新段生效日前一日）
+          </label>
+        </div>
+      )}
       <Field label="備註">
         <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} />
       </Field>
