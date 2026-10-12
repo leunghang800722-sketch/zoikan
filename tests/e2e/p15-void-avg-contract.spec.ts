@@ -1,4 +1,4 @@
-// P15：長工糧頁——「作廢本月計算」掣流程、平均工資批量導入面板。合成資料，afterAll 清走。
+// P15：長工糧頁——「作廢本月計算」掣流程、平均工資批量導入面板、新增合約（月薪制＋日薪制）。合成資料，afterAll 清走。
 import { test, expect } from "@playwright/test";
 import { loginAs } from "./helpers";
 import { prisma } from "./db-helpers";
@@ -63,4 +63,32 @@ test("平均工資批量導入：上載 CSV → 預覽（工號、唔顯示姓�
   await page.getByTestId("ltpay-avgbulk-file").setInputFiles({ name: "avg.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
   await expect(page.getByTestId("ltpay-avgbulk-preview")).toContainText("無變化 2", { timeout: 15_000 });
   await expect(page.getByTestId("ltpay-avgbulk-confirm")).toBeDisabled();
+});
+
+test("新增合約：月薪制＋日薪制各一", async ({ page }) => {
+  await loginAs(page, "會計");
+  await page.goto("/reports/longterm-payroll");
+  await page.getByTestId("ltpay-tab-contracts").click();
+
+  async function create(guardNameKey: string, basis: "monthly" | "daily", amount: string) {
+    await page.getByTestId("ltpay-contract-new").click();
+    await page.getByTestId("ltpay-cf-search").fill(guardNameKey);
+    await page.getByTestId("ltpay-cf-hit").first().click();
+    await expect(page.getByTestId("ltpay-cf-picked")).toContainText(guardNameKey.slice(0, 4));
+    await page.getByTestId("ltpay-cf-from").fill("2026-12-01");
+    await page.getByTestId("ltpay-cf-basis").selectOption(basis);
+    await page.getByTestId(basis === "monthly" ? "ltpay-cf-salary" : "ltpay-cf-daily").fill(amount);
+    await page.getByTestId("ltpay-cf-submit").click();
+    await expect(page.getByTestId("ltpay-contract-form")).toHaveCount(0, { timeout: 15_000 });
+  }
+  await create(`測試p15甲${RAND}`, "monthly", "15500");
+  await create(`測試p15乙${RAND}`, "daily", "650");
+
+  const m = await prisma.guardLongtermContract.findFirstOrThrow({ where: { guardId: gid } });
+  expect(m).toMatchObject({ payBasis: "monthly", source: "manual" });
+  expect(Number(m.monthlySalary)).toBe(15500);
+  const d = await prisma.guardLongtermContract.findFirstOrThrow({ where: { guardId: gid2 } });
+  expect(d.payBasis).toBe("daily");
+  expect(Number(d.dailyRate)).toBe(650);
+  expect(Number(d.monthlySalary)).toBe(650);
 });
