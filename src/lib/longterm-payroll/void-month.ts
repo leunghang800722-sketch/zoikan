@@ -74,6 +74,13 @@ export async function voidLongtermPayrollMonth(monthIn: Date, actorUserId: strin
       }
       for (const r of rows) {
         if (done.has(key(r.guardId, r.year))) continue;
+        // 系統首次計算（冇更早有效 run）而且個行只係計糧寫出嚟嘅空殼（opening 全 0、冇人手 entitled／carry）→ 計糧之前呢行根本唔存在，精確做法係刪除
+        if (!prevMonth && n(r.alTakenOpening) === 0 && n(r.slTakenOpening) === 0 && n(r.alEntitled) === 0 && n(r.alCarry) === 0) {
+          await tx.guardLeaveBalance.delete({ where: { id: r.id } });
+          deleted += 1;
+          legacy += 1;
+          continue;
+        }
         const alEnd = n(r.alTakenOpening);
         const slEnd = n(r.slTakenOpening);
         const samePrev = prevMonth && prevMonth.getUTCFullYear() === r.year ? prevMonth : null;
