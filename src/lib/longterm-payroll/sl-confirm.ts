@@ -10,7 +10,7 @@ import { writeAudit } from "@/lib/audit";
 import { isMonthLocked } from "@/lib/month-lock";
 import { monthRange, round2 } from "@/lib/reports/money";
 import { createNotification } from "@/lib/notify/create";
-import { SL_MIN_CONSECUTIVE, diffDaysInclusive, sl45Payment, slAccrued, toUtcDate } from "./compute";
+import { SL_MIN_CONSECUTIVE, diffDaysInclusive, sl45Payment, slAccrued, slSegmentVerdict, toUtcDate } from "./compute";
 import { findConfirmedLeaveOverlap, OVERLAP_MSG } from "./drafts";
 import type { Prisma } from "@prisma/client";
 
@@ -131,9 +131,10 @@ export async function listSlPending(month: Date): Promise<SlPendingResult> {
     const avg = avgByGuard.get(d.guardId) ?? null;
     let expected: number | null;
     let note: string;
-    if (!within) {
+    const verdict = slSegmentVerdict(rosterDays, span, balance, true);
+    if (!verdict.qualifies) {
       expected = 0;
-      note = `結餘得 ${balance} 日 < ${rosterDays} 日——就算確認醫生紙都唔出津貼（結餘限制）`;
+      note = `確認醫生紙後仍唔出津貼：${verdict.reason}`;
     } else if (avg == null) {
       expected = null;
       note = "未有平均工資記錄——確認後按日薪 fallback，撳「重算本月」先見金額";
@@ -142,7 +143,7 @@ export async function listSlPending(month: Date): Promise<SlPendingResult> {
       note = `平均工資 ${avg} × 0.8 × ${rosterDays} 日（預計；以重算結果為準）`;
     }
     // 假設呢段確認，下一段食咗佢嘅結餘（預計用）
-    if (within) usedByGuard.set(d.guardId, used + rosterDays);
+    if (verdict.qualifies) usedByGuard.set(d.guardId, used + rosterDays);
     segments.push({
       id: d.id,
       guard_id: d.guardId,

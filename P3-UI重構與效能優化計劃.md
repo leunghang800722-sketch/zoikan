@@ -1101,3 +1101,11 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **8 月**：配對 51／**吻合 46**／差 5（同前，等老闆）／系統有銀行冇 5（全部月內離職者）／銀行有系統冇 28（非前線）；表頭行已跳過。
 - **7 月**：配對 51／**吻合 41**／差 10（7 個更表 vs 辦公室出勤衝突＋3 個 ±7 元四捨五入）／系統有銀行冇 2／銀行有系統冇 19。
 - 待查 (ii)：`attendance_conflicts` 回 0，但 7 月實證有同日多來源代號衝突——aggregate 讀紀錄嘅篩選可能已先去重，P16b.3 嘅偵測要對住 aggregate 實際讀到嘅集合之前做。
+
+
+## 22 階段 17（2026-10-14）：病假人手確認彈出＋合約表單修正＋每週一日例假
+- **P17.2** 更表有 SL → 一定要人手確認醫生紙先出津貼（老闆規則），未確認當無薪（草稿機制保留）。主動彈出：通知 `sl_drafts_pending`、首頁收件箱卡、一鍵結算 needs_human（「長工結算」步）、鎖月擋（409 `sl_drafts_pending`，老闆帶原因可「全部當無薪」覆蓋，audit）。長工糧頁人手輸入 tab 新「病假要你確認醫生紙」面板：逐段顯示日期／連續日數／夠唔夠 4 日／結餘／預計津貼，掣「有醫生紙，確認」「冇醫生紙，當無薪」；病假冇「全部確認」。新 `src/lib/longterm-payroll/sl-confirm.ts`。
+- **P17.1** `slSegmentVerdict` 加 `confirmedShortPaid` 參數＋常數 `SL_CONFIRMED_SHORT_PAID`，**預設 false**。**簡報前提不成立**：簡報話 gate 8 月 fixture 病假段全部 ≥4 日連續、結果不變；實測開咗 P17.1 後 `gate:ltpay-aug` 由 56/56 變 25 項欄位差異（MG0064／MG0046／MG0056／MG0057／MG0008／MG0053 六人，Gross +9,884.41；MG0008 單人 +6,594.31）。老闆總表 oracle（定稿）同銀行 8 月實證矛盾，故預設保持現行行為，等決定後改常數一行。
+- **P17.4** 長工糧「合約」tab：編輯表單日期欄收到 ISO 日期時間（`2026-12-31T00:00:00.000Z`）顯示空白，清唔到結束日 → 現截成 YYYY-MM-DD，清空送 `effective_to: null`；合約新增／編輯／作廢嘅 4xx 錯誤喺表單位置 Banner 顯示（409 `contract_overlap` 列出重疊日期＋「要先結束或作廢另一段」），表單唔關。`src/lib/longterm-payroll/contract-form.ts`。
+- **P17.5** 同日 RD／NPL 衝突按每週一日例假（`resolveRdNplConflicts`）。`gate:ltpay-aug`（P17.1 關閉）：56 人，Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／MPF ER 35,996.80，對 oracle 舊數只 MG0027 一人差（gross +612.90、autopay +582.25、MPF EE／ER 各 +30.65），其餘 55 人 0 差異（MG0053 workDays INFO 照舊），與規劃者預期一致。
+- 測試：vitest `p17-sl-confirm`（7）、`p17-4-contract-form`（6）、compute／aggregate 增補；Playwright `p17-sl-confirm`（2）、`p17-4-contract-edit`（2）、`longterm-drafts` 改用頂位草稿。

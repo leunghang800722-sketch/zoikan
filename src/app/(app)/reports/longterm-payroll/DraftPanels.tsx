@@ -330,7 +330,7 @@ export function SlConfirmPanel({ month, locked, refreshKey, focus, onChanged, on
         <div className="text-sm font-semibold text-zk-text">病假要你確認醫生紙（{segments.length} 段）</div>
         <Pill variant="warning">未確認唔出津貼，一律當無薪</Pill>
       </div>
-      <Banner kind="info">更表有 SL 嘅日子，要你逐段確認有冇香港註冊醫生病假紙先會出 4/5 津貼；系統唔會自動幫你決定。已確認嘅段，連續未夠 4 日都照出（公司做法），但仍受病假結餘限制。</Banner>
+      <Banner kind="info">更表有 SL 嘅日子，要你逐段確認有冇香港註冊醫生病假紙先會出 4/5 津貼；系統唔會自動幫你決定。確認後按累積病假結餘出 4/5；連續未夠 4 日嘅段出唔出，以「確認後預計津貼」欄為準。</Banner>
       <div className={tableCls.wrap}>
         <table className={tableCls.table} style={{ minWidth: tableMinWidth(5) }}>
           <thead>
@@ -355,7 +355,7 @@ export function SlConfirmPanel({ month, locked, refreshKey, focus, onChanged, on
                 </td>
                 <td className={tableCls.td}>
                   <span data-testid="ltpay-sl-span">連續 {d.span_days} 日</span>{" "}
-                  {d.meets_consecutive ? <Pill variant="neutral">夠 4 日</Pill> : <Pill variant="warning">未夠 4 日（公司做法照出）</Pill>}
+                  {d.meets_consecutive ? <Pill variant="neutral">夠 4 日</Pill> : <Pill variant="warning">未夠 4 日</Pill>}
                   <div className="text-zk-xs text-zk-muted">結餘 {d.balance} 日{d.within_balance ? "" : "（唔夠）"}</div>
                 </td>
                 <td className={tableCls.td}>
