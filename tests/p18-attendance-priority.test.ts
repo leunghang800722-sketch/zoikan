@@ -10,6 +10,8 @@ import { POST as fixPost } from "@/app/api/longterm/attendance-fix/route";
 import { POST as shiftPost } from "@/app/api/shift-records/route";
 import { generateLongtermInputDrafts } from "@/lib/longterm-payroll/drafts";
 import { listSlPending } from "@/lib/longterm-payroll/sl-confirm";
+import { listAttendanceBonusEligible } from "@/lib/longterm-payroll/drafts";
+import { loadCoverShifts } from "@/lib/longterm-payroll/cover-shifts";
 import { ensureSystemUser } from "@/lib/system-user";
 
 const d = (day: number) => new Date(Date.UTC(2026, 7, day));
@@ -236,5 +238,58 @@ describe("P18 aggregate／面板 API", () => {
     const p = await PATCH(new Request("http://t/x", { method: "PATCH", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ record_type: "leave", leave_code: "AL" }) }), { params: Promise.resolve({ id: other.id }) });
     expect(p.status).toBe(200);
     expect((await prisma.shiftRecord.findUniqueOrThrow({ where: { id: other.id } })).source).toBe("manual");
+  });
+
+  it("M4：跨盤 leave 錯配——upload 班@盤A vs master SL@盤B 同日 → SL 忽略（草稿 0、npsl 0、workDays 不變）；反向（upload SL@B vs master 班@A）→ 生成草稿", async () => {
+    const sysId = await ensureSystemUser();
+    const site2 = await prisma.site.create({ data: { canonicalName: `測試盤二-${Math.random().toString(36).slice(2, 6)}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
+    const st2 = await prisma.shiftType.create({ data: { siteId: site2.id, code: "N", hours: 12, createdBy: "test" } });
+    for (let day = 1; day <= 10; day++) await mkRec(day, "roster_upload", { recordType: "shift" });
+    const base0 = await line();
+    await prisma.shiftRecord.create({ data: { workDate: d(3), siteId: site2.id, shiftTypeId: st2.id, guardId, recordType: "leave", leaveCode: "SL", source: "master_roster", createdBy: "test" } });
+    await prisma.shiftRecord.create({ data: { workDate: d(4), siteId: site2.id, shiftTypeId: st2.id, guardId, recordType: "leave", leaveCode: "NL", source: "master_roster", createdBy: "test" } });
+    const l = await line();
+    expect(l.workDays).toBe(base0.workDays);
+    expect(l.nplDays).toBe(base0.nplDays);
+    expect(l.gross).toBe(base0.gross);
+    await generateLongtermInputDrafts(MONTH, sysId);
+    expect(await prisma.longtermPayrollInput.count({ where: { guardId, draftSource: "roster_leave:SL" } })).toBe(0);
+    expect((await listSlPending(MONTH)).segment_count).toBe(0);
+    // 反向：最高來源（roster_upload）係盤B 嘅 SL，低來源 master 班@盤A → SL 保留
+    await prisma.shiftRecord.create({ data: { workDate: d(12), siteId: site2.id, shiftTypeId: st2.id, guardId, recordType: "leave", leaveCode: "SL", source: "roster_upload", createdBy: "test" } });
+    await mkRec(12, "master_roster", { recordType: "shift" });
+    await generateLongtermInputDrafts(MONTH, sysId);
+    expect(await prisma.longtermPayrollInput.count({ where: { guardId, draftSource: "roster_leave:SL", voidedAt: null } })).toBe(1);
+  });
+
+  it("M5：勤工獎資格跟來源優先次序——被忽略嘅低來源 SL 唔取消資格；最高來源 SL 先取消", async () => {
+    for (let day = 1; day <= 5; day++) await mkRec(day, "roster_upload", { recordType: "shift" });
+    await mkRec(3, "master_roster", { recordType: "leave", leaveCode: "SL", shiftTypeId: stD });
+    expect((await listAttendanceBonusEligible(MONTH)).eligible.some((e) => e.guard_id === guardId)).toBe(true);
+    await mkRec(7, "roster_upload", { recordType: "leave", leaveCode: "SL", shiftTypeId: stD });
+    expect((await listAttendanceBonusEligible(MONTH)).eligible.some((e) => e.guard_id === guardId)).toBe(false);
+  });
+
+  it("(ii)a：頂位津貼 cover-shifts 先跟優先次序——同盤兩來源都有頂位班只計 1 更；最高來源係 AL 時低來源頂位班唔計", async () => {
+    await mkRec(3, "roster_upload", { recordType: "shift", brokerId: otherBrokerId });
+    await mkRec(3, "master_roster", { recordType: "shift", brokerId: otherBrokerId, shiftTypeId: stD });
+    await mkRec(5, "roster_upload", { recordType: "leave", leaveCode: "AL", shiftTypeId: stD });
+    await mkRec(5, "master_roster", { recordType: "shift", brokerId: otherBrokerId });
+    const c = await loadCoverShifts([MONTH]);
+    expect(c.shifts.filter((x) => x.guardId === guardId).map((x) => x.date)).toEqual(["2026-08-03"]);
+  });
+
+  it("M6：attendance-fix 寫價 snapshot 時補 auto 價卡 journal；audit 有 via 標記", async () => {
+    const run = await prisma.monthCloseRun.create({ data: { month: MONTH, status: "running", startedById: fx.userIds["老闆"], applyStartedAt: new Date() } });
+    await prisma.rateCard.update({ where: { id: fx.rateCardGeneric.id }, data: { source: `auto:one-click:${run.id}` } });
+    await mkRec(6, "roster_upload", { recordType: "leave", leaveCode: "NL" });
+    const res = await fix(owner, [{ guard_id: guardId, work_date: "2026-08-06", site_id: fx.site.id, set_code: "SHIFT" }]);
+    expect(res.status).toBe(200);
+    const rec = await prisma.shiftRecord.findFirstOrThrow({ where: { guardId, workDate: d(6) } });
+    expect(rec.recordType).toBe("shift");
+    expect(rec.clientRateSnapshot).not.toBeNull();
+    expect(await prisma.monthCloseAutoChange.count({ where: { runId: run.id, kind: "price_snapshots" } })).toBeGreaterThan(0);
+    const au = await prisma.auditLog.findFirst({ where: { tableName: "shift_records", rowId: rec.id, action: "update" }, orderBy: { createdAt: "desc" } });
+    expect((au!.after as { via?: string }).via).toBe("longterm_attendance_fix");
   });
 });

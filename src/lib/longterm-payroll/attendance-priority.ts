@@ -1,7 +1,7 @@
 // P18.1：同一人同一日多來源更表紀錄 → 按來源優先次序揀（純函數，client／server 共用，唔 import 任何 server 模組）。
 // 優先：manual（人手編輯：更表編輯器／batch API／單條 shift-records API 寫 source="manual"）> roster_upload
 //   > master_roster（含 master_roster_only／master_roster_site 同級）> payroll_only（含 payroll 同級）> 其他／null。
-// 分組粒度：(日, 盤)——同一日唔同盤（自己崗位 B07＋頂位）兩邊各自揀最高來源，都保留。
+// 分組：shift 按（日, 盤）揀最高來源（自己崗位 B07＋頂位同日兩邊保留）；leave 逐日同全日所有盤紀錄比較，低級來源嘅 leave 一律忽略。
 // 只揀「出勤紀錄」（record_type=shift／leave）；OT 紀錄（record_type=ot）唔受來源優先影響，照舊全部計。
 // 同一最高來源同日多條（例如雙更）照舊全部計。只改紀錄挑選，唔掂任何金額公式。
 
@@ -46,13 +46,18 @@ export interface DayAdoption {
  * 回傳 picked（保持原有次序）同「有被忽略來源」嘅日子（key＝YYYY-MM-DD）。
  */
 export function pickBySourcePriority<T extends AttendanceLike>(srs: readonly T[]): { picked: T[]; adoptions: Map<string, DayAdoption> } {
-  const bestRank = new Map<string, number>();
+  // 規則（P18 驗收 M4）：
+  //  - shift：按（日, 盤）分組，同組（shift＋leave）取最高來源——自己崗位＋頂位同日兩邊保留；
+  //  - leave：逐日同全日所有紀錄（所有盤、shift 或 leave）比較，當日最高級來源有任何紀錄，低級來源嘅 leave 一律忽略。
+  const groupBest = new Map<string, number>();
+  const dayBest = new Map<string, number>();
   for (const r of srs) {
     if (r.recordType !== "shift" && r.recordType !== "leave") continue;
-    const k = dayKey(r);
     const rank = sourceRank(r.source);
-    const cur = bestRank.get(k);
-    if (cur === undefined || rank < cur) bestRank.set(k, rank);
+    const k = dayKey(r);
+    const d = r.workDate.toISOString().slice(0, 10);
+    if (rank < (groupBest.get(k) ?? Infinity)) groupBest.set(k, rank);
+    if (rank < (dayBest.get(d) ?? Infinity)) dayBest.set(d, rank);
   }
   const picked: T[] = [];
   const adoptedByDay = new Map<string, Set<string>>();
@@ -62,9 +67,9 @@ export function pickBySourcePriority<T extends AttendanceLike>(srs: readonly T[]
       picked.push(r);
       continue;
     }
-    const k = dayKey(r);
     const d = r.workDate.toISOString().slice(0, 10);
-    if (sourceRank(r.source) === bestRank.get(k)) {
+    const keep = sourceRank(r.source) === (r.recordType === "shift" ? groupBest.get(dayKey(r)) : dayBest.get(d));
+    if (keep) {
       picked.push(r);
       const set = adoptedByDay.get(d) ?? new Set<string>();
       set.add(sourceLabel(r.source));
