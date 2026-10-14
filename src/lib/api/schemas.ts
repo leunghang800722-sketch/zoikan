@@ -983,6 +983,29 @@ export const LongtermInputUpdateSchema = z
 /** P9.1：批量確認長工糧草稿（≤50）。 */
 export const LongtermInputConfirmBatchSchema = z.object({ ids: z.array(uuid).min(1).max(50) }).strict();
 
+/** P18 驗收 M2：`POST /api/longterm/attendance-fix`——出勤修正面板動作（權限＝長工糧:update）。 */
+export const LongtermAttendanceFixSchema = z
+  .object({
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "month 格式要係 YYYY-MM"),
+    actions: z
+      .array(
+        z
+          .object({
+            guard_id: uuid,
+            work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "work_date 格式要係 YYYY-MM-DD"),
+            site_id: uuid,
+            shift_type_id: uuid.optional(),
+            set_code: z.enum(["SHIFT", "RD", "OFF", "AL", "SL", "NL", "NPL", "SH"]).optional(),
+            settle_internal: z.literal(true).optional(),
+          })
+          .strict()
+          .refine((a) => a.set_code !== undefined || a.settle_internal === true, "要帶 set_code 或 settle_internal"),
+      )
+      .min(1)
+      .max(500),
+  })
+  .strict();
+
 export const GuardAvgWageUpsertSchema = z
   .object({
     guard_id: uuid,

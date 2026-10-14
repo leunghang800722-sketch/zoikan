@@ -1,12 +1,22 @@
 // P18.1：同一人同一日多來源更表紀錄 → 按來源優先次序揀（純函數，client／server 共用，唔 import 任何 server 模組）。
-// 優先：manual（人手編輯：更表編輯器／batch API 寫 source="manual"）> roster_upload > master_roster > payroll_only > 其他／null。
+// 優先：manual（人手編輯：更表編輯器／batch API／單條 shift-records API 寫 source="manual"）> roster_upload
+//   > master_roster（含 master_roster_only／master_roster_site 同級）> payroll_only（含 payroll 同級）> 其他／null。
+// 分組粒度：(日, 盤)——同一日唔同盤（自己崗位 B07＋頂位）兩邊各自揀最高來源，都保留。
 // 只揀「出勤紀錄」（record_type=shift／leave）；OT 紀錄（record_type=ot）唔受來源優先影響，照舊全部計。
 // 同一最高來源同日多條（例如雙更）照舊全部計。只改紀錄挑選，唔掂任何金額公式。
 
 export const MANUAL_SOURCE = "manual";
 const NO_SOURCE_LABEL = "（無來源）";
 
-const SOURCE_RANK: Record<string, number> = { [MANUAL_SOURCE]: 0, roster_upload: 1, master_roster: 2, payroll_only: 3 };
+const SOURCE_RANK: Record<string, number> = {
+  [MANUAL_SOURCE]: 0,
+  roster_upload: 1,
+  master_roster: 2,
+  master_roster_only: 2,
+  master_roster_site: 2,
+  payroll_only: 3,
+  payroll: 3,
+};
 const OTHER_RANK = 4;
 
 /** 數字愈細優先愈高；唔認得／null 一律同一級（最低）。 */
@@ -19,7 +29,10 @@ export function sourceLabel(source: string | null | undefined): string {
   return source ? source : NO_SOURCE_LABEL;
 }
 
-type AttendanceLike = { workDate: Date; recordType: string; source: string | null };
+type AttendanceLike = { workDate: Date; recordType: string; source: string | null; siteId?: string | null };
+
+/** 優先次序分組 key：日 + 盤（冇 siteId 當同一盤）。 */
+export const dayKey = (r: { workDate: Date; siteId?: string | null }): string => `${r.workDate.toISOString().slice(0, 10)}|${r.siteId ?? ""}`;
 
 export interface DayAdoption {
   /** 該日被採用嘅來源標籤（同級多個來源以「／」相連）。 */
@@ -36,10 +49,10 @@ export function pickBySourcePriority<T extends AttendanceLike>(srs: readonly T[]
   const bestRank = new Map<string, number>();
   for (const r of srs) {
     if (r.recordType !== "shift" && r.recordType !== "leave") continue;
-    const d = r.workDate.toISOString().slice(0, 10);
+    const k = dayKey(r);
     const rank = sourceRank(r.source);
-    const cur = bestRank.get(d);
-    if (cur === undefined || rank < cur) bestRank.set(d, rank);
+    const cur = bestRank.get(k);
+    if (cur === undefined || rank < cur) bestRank.set(k, rank);
   }
   const picked: T[] = [];
   const adoptedByDay = new Map<string, Set<string>>();
@@ -49,18 +62,20 @@ export function pickBySourcePriority<T extends AttendanceLike>(srs: readonly T[]
       picked.push(r);
       continue;
     }
+    const k = dayKey(r);
     const d = r.workDate.toISOString().slice(0, 10);
-    if (sourceRank(r.source) === bestRank.get(d)) {
+    if (sourceRank(r.source) === bestRank.get(k)) {
       picked.push(r);
-      const s = adoptedByDay.get(d) ?? new Set<string>();
-      s.add(sourceLabel(r.source));
-      adoptedByDay.set(d, s);
+      const set = adoptedByDay.get(d) ?? new Set<string>();
+      set.add(sourceLabel(r.source));
+      adoptedByDay.set(d, set);
     } else {
-      const s = ignoredByDay.get(d) ?? new Set<string>();
-      s.add(sourceLabel(r.source));
-      ignoredByDay.set(d, s);
+      const set = ignoredByDay.get(d) ?? new Set<string>();
+      set.add(sourceLabel(r.source));
+      ignoredByDay.set(d, set);
     }
   }
+  // adoptions 以日期（YYYY-MM-DD）做 key（只列有來源被忽略嘅日子；多盤時合併）
   const adoptions = new Map<string, DayAdoption>();
   for (const [d, ign] of ignoredByDay) {
     adoptions.set(d, { adopted: [...(adoptedByDay.get(d) ?? [])].sort().join("／"), ignored: [...ign].sort() });

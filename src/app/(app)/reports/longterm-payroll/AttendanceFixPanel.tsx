@@ -1,6 +1,6 @@
 "use client";
 // P18.2：「出勤修正」tab——① 同日多來源衝突日（顯示各來源代號、系統而家採用邊個、對糧嘅影響）；② 全部更歸雞頭嘅長工（可「歸公司兵」）。
-// 寫入一律經 POST /api/shift-records/batch（人手紀錄 source="manual"，來源優先次序會蓋過舊紀錄；原紀錄唔作廢，batch 寫 audit）。
+// 寫入一律經 POST /api/longterm/attendance-fix（長工糧:update；人手紀錄 source="manual"，來源優先次序會蓋過舊紀錄；原紀錄唔作廢，寫 audit）。
 // 做完要「重算本月」先反映；已鎖月份唯讀。姓名只喺本頁顯示，通知唔含。
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
@@ -40,14 +40,14 @@ export function AttendanceFixPanel({
   onError: (m: string) => void;
   onNotice: (m: string | null) => void;
 }) {
-  const [data, setData] = useState<AttendanceIssues | null>(null);
+  const [data, setData] = useState<(AttendanceIssues & { can_update?: boolean }) | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [needRecompute, setNeedRecompute] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await apiGet<AttendanceIssues>(`/api/longterm/attendance-issues?month=${month}-01`);
+    const res = await apiGet<AttendanceIssues & { can_update?: boolean }>(`/api/longterm/attendance-issues?month=${month}-01`);
     if (res.ok) setData(res.data);
     else onError(res.message);
     setLoading(false);
@@ -58,57 +58,49 @@ export function AttendanceFixPanel({
     if (active) void load();
   }, [active, load]);
 
-  async function write(key: string, siteId: string, cells: Array<Record<string, string>>, okMsg: string) {
+  async function fix(key: string, actions: Array<Record<string, unknown>>, okMsg: string): Promise<boolean> {
     setBusy(key);
-    const res = await apiPost(`/api/shift-records/batch`, { site_id: siteId, month, cells });
+    const res = await apiPost<{ updated: number; noop: boolean }>(`/api/longterm/attendance-fix`, { month, actions });
+    let done = false;
     if (res.ok) {
-      onNotice(okMsg);
-      setNeedRecompute(true);
+      if (res.data.noop) onNotice("冇改動（目標已經係呢個代號）");
+      else {
+        onNotice(okMsg);
+        setNeedRecompute(true);
+        done = true;
+      }
       await load();
     } else onError(res.message);
     setBusy(null);
+    return done;
   }
 
   function setCode(row: AttendanceConflictRow, code: string) {
-    return write(
-      `${row.guard_id}|${row.date}`,
-      row.target.site_id,
-      [{ guard_id: row.guard_id, shift_type_id: row.target.shift_type_id, work_date: row.date, code }],
-      `已寫入 ${row.date} 人手紀錄（代號 ${code}）——要「重算本月」先反映`,
+    return fix(
+      `${row.guard_id}|${row.date}|${row.target.site_id}`,
+      [{ guard_id: row.guard_id, work_date: row.date, site_id: row.target.site_id, shift_type_id: row.target.shift_type_id, set_code: code }],
+      `已寫入 ${row.date} 人手紀錄——要「重算本月」先反映`,
     );
   }
 
   async function toCompany(g: MisattributedGuardRow) {
-    if (!data?.internal_longterm_broker_id) return onError("揾唔到公司兵（B07）結算單位");
-    const b07 = data.internal_longterm_broker_id;
-    setBusy(`co|${g.guard_id}`);
-    const bySite = new Map<string, MisattributedGuardRow["cells"]>();
-    for (const c of g.cells) bySite.set(c.site_id, [...(bySite.get(c.site_id) ?? []), c]);
-    for (const [siteId, cells] of bySite) {
-      const res = await apiPost(`/api/shift-records/batch`, {
-        site_id: siteId,
-        month,
-        cells: cells.map((c) => ({ guard_id: g.guard_id, shift_type_id: c.shift_type_id, work_date: c.date, code: c.shift_type_code, settlement_broker_id: b07 })),
-      });
-      if (!res.ok) {
-        onError(res.message);
-        setBusy(null);
-        await load();
-        return;
-      }
+    const seen = new Set<string>();
+    const actions: Array<Record<string, unknown>> = [];
+    for (const c of g.cells) {
+      const k = `${c.site_id}|${c.date}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      actions.push({ guard_id: g.guard_id, work_date: c.date, site_id: c.site_id, settle_internal: true });
     }
-    onNotice(`已將 ${g.cells.length} 更歸公司兵——要「重算本月」先反映`);
-    setNeedRecompute(true);
-    await load();
-    setBusy(null);
+    await fix(`co|${g.guard_id}`, actions, `已將 ${actions.length} 日歸公司兵——要「重算本月」先反映`);
   }
 
-  const ro = locked || data?.locked;
+  const ro = locked || data?.locked || data?.can_update === false;
   return (
     <div className="flex flex-col gap-4" data-testid="attfix-panel">
       <div className="text-zk-sm text-zk-muted">
         同一人同一日有多個來源（人手 &gt; roster_upload &gt; master_roster &gt; payroll_only）嘅更表紀錄時，系統只採用最高來源。喺度可揀採用邊個代號（寫一條人手紀錄，原紀錄唔作廢）。
-        {ro ? "（本月已鎖定，唯讀）" : ""}
+        {locked || data?.locked ? "（本月已鎖定，唯讀）" : data?.can_update === false ? "（你冇「長工糧:更新」權限，唯讀）" : ""}
       </div>
       {needRecompute && (
         <div className="flex items-center gap-3 rounded-lg border border-zk-border bg-white p-3 text-zk-sm" data-testid="attfix-recompute-hint">
@@ -139,7 +131,7 @@ export function AttendanceFixPanel({
                 <TableEmptyRow colSpan={6}>{loading ? "載入緊…" : "呢個月冇同日多來源衝突"}</TableEmptyRow>
               ) : (
                 data.conflicts.map((r) => {
-                  const k = `${r.guard_id}|${r.date}`;
+                  const k = `${r.guard_id}|${r.date}|${r.target.site_id}`;
                   return (
                     <tr key={k} className={tableCls.rowHover} data-testid="attfix-conflict-row">
                       <td className={tableCls.td}>
@@ -159,7 +151,7 @@ export function AttendanceFixPanel({
                           {r.options
                             .filter((o) => o.code !== r.adopted_code)
                             .map((o) => (
-                              <Button key={o.code} variant="secondary" disabled={!!ro || busy === k} onClick={() => setCode(r, o.batch_code)} data-testid={`attfix-adopt-${o.code}`}>
+                              <Button key={o.code} variant="secondary" disabled={!!ro || busy === k} onClick={() => setCode(r, o.set_code)} data-testid={`attfix-adopt-${o.code}`}>
                                 採用：代號 {o.code}
                               </Button>
                             ))}
@@ -172,7 +164,7 @@ export function AttendanceFixPanel({
                             onChange={(e) => {
                               const v = e.target.value;
                               e.target.value = "";
-                              if (v) void setCode(r, v === "__work__" ? r.target.shift_type_code : v);
+                              if (v) void setCode(r, v === "__work__" ? "SHIFT" : v);
                             }}
                           >
                             <option value="">設為代號…</option>
