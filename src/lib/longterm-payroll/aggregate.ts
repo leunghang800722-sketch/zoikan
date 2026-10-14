@@ -210,6 +210,21 @@ function contractCoverage(segments: ContractSegment[], monthStartD: Date, monthE
   return { start, end };
 }
 
+/** P19a 修正：由 asOf 當日生效嘅合約段向前追溯，前一段 effectiveTo 同後一段 effectiveFrom 相差 ≤1 日先當連續；
+ * 有中斷（離職再入職）就由中斷後第一段起計。segs 須按 effectiveFrom 升序。 */
+export function continuousChainStart(segs: { effectiveFrom: Date; effectiveTo: Date | null }[], asOf: Date): Date | undefined {
+  let i = -1;
+  for (let k = 0; k < segs.length; k++) if (segs[k].effectiveFrom.getTime() <= asOf.getTime()) i = k;
+  if (i < 0) return undefined;
+  while (i > 0) {
+    const prev = segs[i - 1];
+    const gapDays = (segs[i].effectiveFrom.getTime() - (prev.effectiveTo ?? segs[i].effectiveFrom).getTime()) / 86400000;
+    if (prev.effectiveTo && gapDays > 1) break;
+    i--;
+  }
+  return segs[i].effectiveFrom;
+}
+
 /** 法定假日（SH）扣款——`statutoryHolidayPaidFrom==='after_3_months'`
  * 且截至嗰日未做滿 3 個月先扣（未經 oracle 個案驗證，見檔頭「刻意冇做」
  * 第 3 點）。 */
@@ -261,13 +276,21 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
   const guardIds = [...contractsByGuard.keys()];
   // §14 規則 9：年假年資「由長工合約入職日計、唔計轉長工前嘅散工段」——
   // `guards.hire_date` 可能係散工段開始日（Maxwell 導入淨係補空、唔覆蓋），
-  // 所以年假 entitlement 用呢個人**最早一段長工合約**嘅生效日（Opus 5.5
+  // 所以年假 entitlement 用呢個人**現行連續合約鏈第一段長工合約**嘅生效日（Opus 5.5
   // 驗收修正；原本用 hire_date，散工轉長工嘅人離職會多補年假）。
-  const firstContractByGuard = new Map<string, Date>();
+  // P19a 修正：年資起點＝「現行連續合約鏈」第一段 effectiveFrom（離職再入職＝中斷，由中斷後第一段起計）。
+  const allContractsByGuard = new Map<string, { effectiveFrom: Date; effectiveTo: Date | null }[]>();
   if (guardIds.length) {
-    const firsts = await client.guardLongtermContract.groupBy({ by: ["guardId"], where: { guardId: { in: guardIds }, voidedAt: null }, _min: { effectiveFrom: true } });
-    for (const f of firsts) if (f._min.effectiveFrom) firstContractByGuard.set(f.guardId, toUtcDate(f._min.effectiveFrom));
+    const all = await client.guardLongtermContract.findMany({ where: { guardId: { in: guardIds }, voidedAt: null }, select: { guardId: true, effectiveFrom: true, effectiveTo: true }, orderBy: { effectiveFrom: "asc" } });
+    for (const c of all) {
+      const arr = allContractsByGuard.get(c.guardId) ?? [];
+      arr.push({ effectiveFrom: toUtcDate(c.effectiveFrom), effectiveTo: c.effectiveTo ? toUtcDate(c.effectiveTo) : null });
+      allContractsByGuard.set(c.guardId, arr);
+    }
   }
+  const firstContractByGuard = {
+    get: (guardId: string, asOf: Date): Date | undefined => continuousChainStart(allContractsByGuard.get(guardId) ?? [], asOf),
+  };
   if (!guardIds.length) {
     return { month: start, daysInMonth: monthDaysCount, lines: [], totals: emptyTotals(), warnings };
   }
@@ -527,7 +550,14 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     // --------------------------------------------------------------- SH
     const shDates = [...(leaveDatesByCode.get("SH") ?? [])].sort();
     const shSeg = rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= end.getTime());
-    const shResult = computeShDeduction(shDates, segments, monthDaysCount, guard.hireDate ? toUtcDate(guard.hireDate) : null, shSeg?.statutoryHolidayPaidFrom ?? "immediate");
+    // P19a：年資起點＝現行連續合約鏈第一段未作廢長工合約生效日（散工段唔計），fallback guards.hire_date。
+    // MPF 僱員供款豁免（首月／60 日）同法定假 3 個月規則共用同一起點。
+    const hireDateIso = guard.hireDate ? toUtcDate(guard.hireDate) : null;
+    const contractStart = firstContractByGuard.get(guardId, end) ?? null;
+    const seniorityStart = contractStart ?? hireDateIso;
+    const seniorityNote = contractStart && hireDateIso && contractStart.getTime() > hireDateIso.getTime() ? `年資起點：長工合約 ${iso(contractStart)}（散工段唔計）` : null;
+    if (contractStart && hireDateIso && contractStart.getTime() < hireDateIso.getTime()) warnings.push(`${guard.nameZh}：長工合約生效日 ${iso(contractStart)} 早過入職日 ${iso(hireDateIso)}，年資起點照合約計，請核對入職日`);
+    const shResult = computeShDeduction(shDates, segments, monthDaysCount, seniorityStart, shSeg?.statutoryHolidayPaidFrom ?? "immediate");
     notes.push(...shResult.notes);
 
     // --------------------------------------------------------------- (b) 津貼／扣款
@@ -563,7 +593,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     const alTakenCumulative = round2(priorAl + alDatesThisMonth.length);
     let alPayment = 0;
     if (isLeaver) {
-      const serviceStart = firstContractByGuard.get(guardId) ?? (guard.hireDate ? toUtcDate(guard.hireDate) : employStart); // 規則 9：AL entitlement 由長工合約入職日計，唔計轉長工前散工段
+      const serviceStart = firstContractByGuard.get(guardId, employEnd) ?? (guard.hireDate ? toUtcDate(guard.hireDate) : employStart); // 規則 9：AL entitlement 由長工合約入職日計，唔計轉長工前散工段
       const entitleYearDays = n(rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= employEnd.getTime())?.annualLeaveDays ?? 7);
       const probationMonths = rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= employEnd.getTime())?.probationMonths ?? guard.probationMonths ?? null;
       const hireDateForProbation = serviceStart; // 試用期跟長工合約（Maxwell Commencement）起計
@@ -598,7 +628,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     const ageAtMonthEnd = dob ? (end.getTime() - dob.getTime()) / 86400000 / 365.25 : null;
     // §25.6：monthStart 傳 `start`（呢個月月首）畀 computeMpf() 判斷首月
     // 新規則（老闆 2026-09-28 追加決定 #3，只 monthStart>=2026-09-01 生效）。
-    const mpfResult = computeMpf(gross, { ageAtMonthEnd, hireDate: guard.hireDate ? toUtcDate(guard.hireDate) : null, monthEnd: end, monthStart: start });
+    const mpfResult = computeMpf(gross, { ageAtMonthEnd, hireDate: seniorityStart, monthEnd: end, monthStart: start });
+    if (seniorityNote) notes.push(seniorityNote);
     if (mpfResult.exemptReason) {
       const label =
         mpfResult.exemptReason === "over65"
