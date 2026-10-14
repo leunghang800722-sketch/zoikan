@@ -19,6 +19,8 @@ import {
   slCompletedMonths,
   slAccrued,
   slSegmentVerdict,
+  resolveRdNplConflicts,
+  SL_CONFIRMED_SHORT_PAID,
   sl45Payment,
   probationEndDate,
   hasPassedProbation,
@@ -245,22 +247,29 @@ describe("病假 4/5（§14 規則 9）", () => {
     expect(v.qualifies).toBe(true);
   });
 
-  it("P17.1：連續得 3 日 <4 但醫生紙已人手確認 → 照出 4/5（公司做法），說明文字註明未夠 4 日", () => {
+  it("P17.1：預設（SL_CONFIRMED_SHORT_PAID=false）連續得 3 日 <4 即使醫生紙已確認 → 仍當無薪（現行行為不變，gate 保持）", () => {
+    expect(SL_CONFIRMED_SHORT_PAID).toBe(false);
     const v = slSegmentVerdict(3, 3, 10, true);
+    expect(v.qualifies).toBe(false);
+    expect(v.reason).toMatch(/連續得 3 日/);
+  });
+
+  it("P17.1：confirmedShortPaid=true（老闆規則）→ 短段已人手確認照出 4/5，說明文字註明未夠 4 日", () => {
+    const v = slSegmentVerdict(3, 3, 10, true, true);
     expect(v.qualifies).toBe(true);
     expect(v.reason).toMatch(/連續得 3 日/);
     expect(v.reason).toMatch(/公司做法/);
   });
 
-  it("P17.1：連續得 3 日 <4 且醫生紙未確認 → 全部無薪（reason 兩樣都講）", () => {
-    const v = slSegmentVerdict(3, 3, 10, false);
+  it("P17.1：confirmedShortPaid=true 但醫生紙未確認 → 全部無薪（reason 兩樣都講）", () => {
+    const v = slSegmentVerdict(3, 3, 10, false, true);
     expect(v.qualifies).toBe(false);
     expect(v.reason).toMatch(/連續得 3 日/);
     expect(v.reason).toMatch(/醫生病假紙/);
   });
 
-  it("P17.1：短段已確認但結餘唔夠 → 仍然唔出（結餘限制保留）", () => {
-    const v = slSegmentVerdict(3, 3, 1, true);
+  it("P17.1：confirmedShortPaid=true 短段已確認但結餘唔夠 → 仍然唔出（結餘限制保留）", () => {
+    const v = slSegmentVerdict(3, 3, 1, true, true);
     expect(v.qualifies).toBe(false);
     expect(v.reason).toMatch(/結餘得 1 日/);
   });
@@ -371,5 +380,28 @@ describe("§21 任務 4b(a) 日薪制長工特判：computeNetBasicDaily", () =>
   });
   it("0 更 = 0", () => {
     expect(computeNetBasicDaily(600, 0)).toBe(0);
+  });
+});
+
+describe("P17.5 同日 RD／NPL 衝突：每週一日例假", () => {
+  it("(a) 8/2（週日）RD+NPL、同週（7/27–8/2，只計月內）冇其他 RD → 當 RD", () => {
+    expect(resolveRdNplConflicts(["2026-08-02"], ["2026-08-02"])).toEqual({ asRd: ["2026-08-02"], asNpl: [] });
+  });
+  it("(b) 8/4 RD+NPL（+RD）、同週 8/9 有明確 RD → 當 NPL", () => {
+    expect(resolveRdNplConflicts(["2026-08-04", "2026-08-09"], ["2026-08-04"])).toEqual({ asRd: [], asNpl: ["2026-08-04"] });
+  });
+  it("(c) 純 NPL 四日、冇 RD 標記 → 無衝突，唔補例假（呢個函數回空）", () => {
+    expect(resolveRdNplConflicts([], ["2026-08-27", "2026-08-28", "2026-08-29", "2026-08-30"])).toEqual({ asRd: [], asNpl: [] });
+  });
+  it("(d) 月初第一週跨月份：只計月內日子——7 月尾嘅 RD 唔入數，8/1 衝突仍當 RD；8/3 起新一週獨立判斷", () => {
+    // 8/1（週六）所屬週 7/27–8/2：月內資料淨係 8/1、8/2。8/2 係明確 RD → 8/1 衝突當 NPL
+    expect(resolveRdNplConflicts(["2026-08-01", "2026-08-02"], ["2026-08-01"])).toEqual({ asRd: [], asNpl: ["2026-08-01"] });
+    // 7 月嘅 RD 唔喺月內資料（caller 只傳月內日子）→ 8/1 當 RD
+    expect(resolveRdNplConflicts(["2026-08-01"], ["2026-08-01"])).toEqual({ asRd: ["2026-08-01"], asNpl: [] });
+    // 8/3（週一）屬下一週，同 8/2 唔同週
+    expect(resolveRdNplConflicts(["2026-08-02", "2026-08-03"], ["2026-08-03"])).toEqual({ asRd: ["2026-08-03"], asNpl: [] });
+  });
+  it("同一週多日衝突而冇明確 RD：只最早一日當 RD，其餘當 NPL（保守：每週一日）", () => {
+    expect(resolveRdNplConflicts(["2026-08-04", "2026-08-05"], ["2026-08-04", "2026-08-05"])).toEqual({ asRd: ["2026-08-04"], asNpl: ["2026-08-05"] });
   });
 });
