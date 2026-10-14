@@ -140,13 +140,28 @@ describe("buildLongtermPayrollInputs：病假 4/5（連續 ≥4 日 + 醫生紙 
     expect(line.sl45Amount).toBe(expectedPay);
   });
 
-  it("連續得 3 日——spanDays<4，唔 qualify，全部當無薪假扣日薪、冇津貼", async () => {
+  it("P17.1：連續得 3 日但醫生紙已人手確認——照出 4/5（公司做法），唔當無薪", async () => {
     const { site, st, actorUserId } = await makeFixtureBase();
     const guard = await prisma.guard.create({ data: { nameZh: "測試長工-病假3日", employmentType: "longterm_autopay", hireDate: new Date("2024-01-01"), createdBy: "test" } });
     await prisma.guardLongtermContract.create({ data: { guardId: guard.id, monthlySalary: 15500, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: actorUserId } });
     await prisma.guardLeaveBalance.create({ data: { guardId: guard.id, year: 2026, slAccrued: 0, slTaken: 0 } });
     for (const d of [5, 6, 7]) await makeLeave(guard.id, site, st, AUG(d), "SL");
     await prisma.longtermPayrollInput.create({ data: { month: AUG_MONTH, guardId: guard.id, kind: "leave", dateFrom: "2026-08-05", dateTo: "2026-08-07", doctorNoteVerified: true, createdBy: actorUserId } });
+
+    const result = await buildLongtermPayrollInputs(AUG_MONTH);
+    const line = result.lines[0];
+    expect(line.sl45Amount).toBeGreaterThan(0);
+    expect(line.npslDays).toBe(0);
+    expect(line.notes.join("\n")).toMatch(/公司做法/);
+  });
+
+  it("P17.1：連續得 3 日且醫生紙未確認——全部當無薪假扣日薪、冇津貼", async () => {
+    const { site, st, actorUserId } = await makeFixtureBase();
+    const guard = await prisma.guard.create({ data: { nameZh: "測試長工-病假3日未確認", employmentType: "longterm_autopay", hireDate: new Date("2024-01-01"), createdBy: "test" } });
+    await prisma.guardLongtermContract.create({ data: { guardId: guard.id, monthlySalary: 15500, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: actorUserId } });
+    await prisma.guardLeaveBalance.create({ data: { guardId: guard.id, year: 2026, slAccrued: 0, slTaken: 0 } });
+    for (const d of [5, 6, 7]) await makeLeave(guard.id, site, st, AUG(d), "SL");
+    await prisma.longtermPayrollInput.create({ data: { month: AUG_MONTH, guardId: guard.id, kind: "leave", dateFrom: "2026-08-05", dateTo: "2026-08-07", doctorNoteVerified: false, createdBy: actorUserId } });
 
     const result = await buildLongtermPayrollInputs(AUG_MONTH);
     const line = result.lines[0];

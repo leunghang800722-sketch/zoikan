@@ -9,14 +9,16 @@ import { lockRequirements, type ReviewGroup } from "@/components/month-close/der
 import { MonthHealthCard } from "./MonthHealthCard";
 
 import { Button } from "@/components/ui/Button";
-export function LockSection({ report, lockedAt, month, busy, locked, groups, onUnlock, canUnlock, needDiffReason, diffReason, onDiffReason, isBoss, onForceLock, onOpenTriage, onHealth }: { report: ReportDTO | null; lockedAt?: string | null; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; canUnlock: boolean; needDiffReason: boolean; diffReason: string; onDiffReason: (v: string) => void; isBoss: boolean; onForceLock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
+export function LockSection({ report, lockedAt, month, busy, locked, groups, onUnlock, canUnlock, needDiffReason, diffReason, onDiffReason, isBoss, onForceLock, onSlUnpaidLock, onOpenTriage, onHealth }: { report: ReportDTO | null; lockedAt?: string | null; month: string; busy: boolean; locked: boolean; groups: ReviewGroup[]; onUnlock: (reason: string) => void; canUnlock: boolean; needDiffReason: boolean; diffReason: string; onDiffReason: (v: string) => void; isBoss: boolean; onForceLock: (reason: string) => void; onSlUnpaidLock: (reason: string) => void; onOpenTriage: () => void; onHealth: (s: { critical: number; warn: number; info: number }) => void }) {
   const [unlockReason, setUnlockReason] = useState("");
   const [forceOn, setForceOn] = useState(false);
   const [forceReason, setForceReason] = useState("");
+  const [slOn, setSlOn] = useState(false);
+  const [slReason, setSlReason] = useState("");
   const pricingQ = groups.find((g) => g.key === "pricing")?.count ?? 0;
   // P3-4.0：鎖定狀態由 month_closes 記錄決定；舊流程鎖咗、冇一鍵結算 run 嘅月份 report 係 null（只出鎖定狀態＋解鎖）。
   const reqs = report ? lockRequirements(report, pricingQ) : [];
-  const lp = report?.lock_precondition ?? { ready_to_lock: false, missing_upload_sites: [], unconfirmed_upload_sites: [] };
+  const lp = report?.lock_precondition ?? { ready_to_lock: false, missing_upload_sites: [], unconfirmed_upload_sites: [], sl_drafts_pending: 0 };
   const ready = lp.ready_to_lock && !locked;
   const canTriage = !!report?.auto?.triage_session_id && pricingQ > 0 && !locked;
   return (
@@ -35,7 +37,11 @@ export function LockSection({ report, lockedAt, month, busy, locked, groups, onU
                 <div className="text-zk-base font-medium text-zk-text">{r.title}</div>
                 <div className="text-zk-xs text-zk-muted">{r.detail}</div>
               </div>
-              {r.action === "roster-uploads" ? (
+              {r.action === "longterm-sl" ? (
+                <Link href={`/reports/longterm-payroll?month=${month}&focus=sl-drafts`} className="whitespace-nowrap text-zk-sm text-zk-primary hover:underline" data-testid="lock-req-sl-link">
+                  {r.actionLabel}
+                </Link>
+              ) : r.action === "roster-uploads" ? (
                 <Link href={`/roster-uploads?month=${month}`} className="whitespace-nowrap text-zk-sm text-zk-primary hover:underline">
                   {r.actionLabel}
                 </Link>
@@ -91,6 +97,23 @@ export function LockSection({ report, lockedAt, month, busy, locked, groups, onU
 
               >
                 強制鎖定 {month}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+      {/* P17：未確認病假草稿擋鎖月；淨係老闆可以「全部當無薪」覆蓋（草稿保持未確認＝唔出津貼；原因必填，寫操作紀錄）。 */}
+      {!locked && isBoss && (lp.sl_drafts_pending ?? 0) > 0 && (
+        <div className="flex flex-col gap-2 border-t border-zk-border-soft px-4 py-3" data-testid="sl-unpaid-box">
+          <label className="flex items-center gap-1.5 text-zk-sm text-zk-text">
+            <input type="checkbox" checked={slOn} onChange={(e) => setSlOn(e.target.checked)} data-testid="sl-unpaid-check" />
+            全部未確認病假當無薪，照鎖（淨係老闆做得到，會記落操作紀錄）
+          </label>
+          {slOn && (
+            <div className="flex flex-wrap items-center gap-2">
+              <input className={inputCls} placeholder="覆蓋原因（必填）" value={slReason} onChange={(e) => setSlReason(e.target.value)} data-testid="sl-unpaid-reason" />
+              <Button variant="danger" size="md" className="whitespace-nowrap disabled:cursor-not-allowed" type="button" data-testid="sl-unpaid-lock-month" onClick={() => onSlUnpaidLock(slReason.trim())} disabled={busy || !slReason.trim()}>
+                全部當無薪並鎖定 {month}
               </Button>
             </div>
           )}

@@ -96,6 +96,8 @@ export interface MonthCloseReport {
     missingUploadSites: string[];
     unconfirmedUploadSites: string[];
     unpricedCount: number;
+    /** P17：未確認嘅更表 SL 病假草稿段數（>0 擋鎖月，老闆可「全部當無薪」覆蓋）。舊 run 冇。 */
+    slDraftsPending?: number;
     readyToLock: boolean;
   };
   // WP-LTPAY Phase 2 §21 任務 3d：長工月薪糧總數（`aggregate.ts`

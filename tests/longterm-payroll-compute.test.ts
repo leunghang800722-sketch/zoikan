@@ -245,10 +245,24 @@ describe("病假 4/5（§14 規則 9）", () => {
     expect(v.qualifies).toBe(true);
   });
 
-  it("連續得 3 日 <4 → 唔合資格，全部無薪", () => {
+  it("P17.1：連續得 3 日 <4 但醫生紙已人手確認 → 照出 4/5（公司做法），說明文字註明未夠 4 日", () => {
     const v = slSegmentVerdict(3, 3, 10, true);
+    expect(v.qualifies).toBe(true);
+    expect(v.reason).toMatch(/連續得 3 日/);
+    expect(v.reason).toMatch(/公司做法/);
+  });
+
+  it("P17.1：連續得 3 日 <4 且醫生紙未確認 → 全部無薪（reason 兩樣都講）", () => {
+    const v = slSegmentVerdict(3, 3, 10, false);
     expect(v.qualifies).toBe(false);
     expect(v.reason).toMatch(/連續得 3 日/);
+    expect(v.reason).toMatch(/醫生病假紙/);
+  });
+
+  it("P17.1：短段已確認但結餘唔夠 → 仍然唔出（結餘限制保留）", () => {
+    const v = slSegmentVerdict(3, 3, 1, true);
+    expect(v.qualifies).toBe(false);
+    expect(v.reason).toMatch(/結餘得 1 日/);
   });
 
   it("連續夠但結餘唔夠 → 唔合資格", () => {

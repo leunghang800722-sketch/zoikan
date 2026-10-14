@@ -225,9 +225,9 @@ describe("P9.1 job", () => {
     expect(r.status).toBe("ok");
     const ns = await prisma.appNotification.findMany({ orderBy: { createdAt: "asc" } });
     const kinds = ns.map((n) => n.kind).sort();
-    expect(kinds).toEqual(["longterm_bonus_eligible", "longterm_drafts"]);
+    expect(kinds).toEqual(["longterm_bonus_eligible", "longterm_drafts", "sl_drafts_pending"]); // P17：多一條病假待確認通知
     for (const n of ns) {
-      expect(n.audience).toEqual(["會計"]);
+      expect(n.audience).toEqual(n.kind === "sl_drafts_pending" ? ["老闆", "會計"] : ["會計"]);
       expect(() => assertNoPii(n.title, n.body)).not.toThrow();
       expect(n.title + n.body).not.toContain("測試");
     }
@@ -241,7 +241,7 @@ describe("P9.1 job", () => {
     // 再跑：冇改動 → skipped，通知唔重複
     const r2 = await runLongtermInputDrafts(NOW, [AUG_MONTH]);
     expect(r2.status).toBe("skipped");
-    expect(await prisma.appNotification.count()).toBe(2);
+    expect(await prisma.appNotification.count()).toBe(3);
     // 鎖月
     await prisma.monthClose.create({ data: { month: AUG_MONTH, lockedAt: new Date(), lockedBy: b.actorUserId } });
     const r3 = await runLongtermInputDrafts(NOW, [AUG_MONTH]);
