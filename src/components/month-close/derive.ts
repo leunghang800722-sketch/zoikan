@@ -401,10 +401,10 @@ export function deriveAutoCategories(auto: AutoReportDTO): { cats: AutoCategory[
 // ⑤ 鎖定前置
 // ---------------------------------------------------------------------------
 export interface LockReq {
-  key: "missing_upload" | "unconfirmed" | "unpriced";
+  key: "missing_upload" | "unconfirmed" | "unpriced" | "sl_drafts";
   title: string;
   detail: string;
-  action: "roster-uploads" | "triage";
+  action: "roster-uploads" | "triage" | "longterm-sl";
   actionLabel: string;
 }
 
@@ -418,6 +418,8 @@ export function lockRequirements(report: ReportDTO, pricingQuestions: number): L
   const out: LockReq[] = [];
   if (lp.missing_upload_sites.length > 0) out.push({ key: "missing_upload", title: `${lp.missing_upload_sites.length} 個盤未上載更表`, detail: nameList(lp.missing_upload_sites).replace(/（parsed）/g, "（已解析，未對數）"), action: "roster-uploads", actionLabel: "去更表上載 ›" });
   if (lp.unconfirmed_upload_sites.length > 0) out.push({ key: "unconfirmed", title: `${lp.unconfirmed_upload_sites.length} 個盤嘅更表未對數確認`, detail: nameList(lp.unconfirmed_upload_sites).replace(/（parsed）/g, "（已解析，未對數）"), action: "roster-uploads", actionLabel: "去更表上載 ›" });
+  const slPending = lp.sl_drafts_pending ?? 0;
+  if (slPending > 0) out.push({ key: "sl_drafts", title: `${slPending} 段病假未確認醫生紙`, detail: "未確認唔會出津貼；逐段確認或當無薪先可以鎖（老闆可「全部當無薪」覆蓋）", action: "longterm-sl", actionLabel: "去確認病假 ›" });
   const unpriced = lp.unpriced_count ?? 0;
   if (unpriced > 0) {
     out.push({

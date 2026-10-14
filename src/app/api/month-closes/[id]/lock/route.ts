@@ -21,6 +21,7 @@ import { Conflict, BadRequest, Forbidden, ApiError } from "@/lib/api/errors";
 import { buildReconciliation } from "@/lib/reports/reconciliation";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { checkRosterUploadCoverage } from "@/lib/roster-upload/lock-precondition";
+import { countSlPending } from "@/lib/longterm-payroll/sl-confirm";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
@@ -45,6 +46,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (forceRaw && session.baseRole !== "老闆") {
       throw Forbidden("force=true 淨係老闆先可以用");
     }
+    const slUnpaidRaw = body.sl_unpaid_override === true;
+    if (slUnpaidRaw && session.baseRole !== "老闆") throw Forbidden("sl_unpaid_override=true 淨係老闆先可以用");
     const coverage = await checkRosterUploadCoverage(before.month);
     if (!force && (coverage.missingUploadSites.length > 0 || coverage.unconfirmedUploadSites.length > 0)) {
       throw BadRequest(
@@ -53,6 +56,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         }`,
       );
     }
+
+    // P17（老闆 2026-10-14）：更表有病假 mark 就一定要人手確認醫生紙——仲有未確認嘅 SL 草稿唔准鎖月。
+    // 老闆可以帶 sl_unpaid_override=true＋sl_unpaid_reason（非空）覆蓋＝全部未確認段當無薪鎖（草稿保持未確認＝唔出津貼），寫 audit。
+    const slUnpaidReason = typeof body.sl_unpaid_reason === "string" && body.sl_unpaid_reason.trim() ? body.sl_unpaid_reason.trim() : null;
+    const slPending = await countSlPending(before.month);
+    if (slPending.segments > 0 && !slUnpaidRaw) {
+      throw new ApiError(409, "sl_drafts_pending", `仲有 ${slPending.segments} 段病假（${slPending.guards} 人）未確認醫生紙，唔可以鎖定——請到長工糧頁逐段確認或當無薪；老闆亦可以勾「全部當無薪」覆蓋`);
+    }
+    if (slPending.segments > 0 && !slUnpaidReason) throw BadRequest("全部當無薪覆蓋要帶 sl_unpaid_reason（原因必填）");
 
     const reconciliation = await buildReconciliation(before.month);
     if (reconciliation.hasDiff && !overrideReason) {
@@ -89,6 +101,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         override_reason: overrideReason,
         reconciliation_summary: reconciliation.rules.map((r) => ({ rule_no: r.ruleNo, status: r.status, diff_count: r.diffCount })),
         roster_upload_force: force,
+        sl_unpaid_override: slPending.segments > 0 ? { segments: slPending.segments, guards: slPending.guards, reason: slUnpaidReason } : undefined,
         roster_upload_coverage_issues: force ? { missing: coverage.missingUploadSites, unconfirmed: coverage.unconfirmedUploadSites } : undefined,
       },
       ip: getClientIp(req),

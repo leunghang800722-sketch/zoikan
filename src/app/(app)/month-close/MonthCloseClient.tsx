@@ -227,7 +227,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   // force 繞過更表上載／對數未齊；override_reason 係紅色差異嘅原因）。有差異但未填原因就唔打 lock，出原因輸入（LockSection＋右欄）。
   const [diffReason, setDiffReason] = useState("");
   const [needDiffReason, setNeedDiffReason] = useState(false);
-  async function lockMonth(force?: { reason: string }) {
+  async function lockMonth(force?: { reason: string }, slUnpaid?: { reason: string }) {
     setBusy(true);
     setError(null);
     const gen = await apiPost<{ month_close: { id: string }; reconciliation?: { has_diff?: boolean } }>(`/api/month-closes/${month}/generate`);
@@ -248,6 +248,10 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
     const body: Record<string, unknown> = {};
     if (force) body.force = true;
     if (reason) body.override_reason = reason;
+    if (slUnpaid) {
+      body.sl_unpaid_override = true;
+      body.sl_unpaid_reason = slUnpaid.reason;
+    }
     const res = await apiPost(`/api/month-closes/${gen.data.month_close.id}/lock`, body);
     setBusy(false);
     if (!res.ok) setError(res.message);
@@ -375,6 +379,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
                 onDiffReason={setDiffReason}
                 isBoss={isBoss}
                 onForceLock={(reason) => lockMonth({ reason })}
+                onSlUnpaidLock={(reason) => lockMonth(undefined, { reason })}
                 onOpenTriage={openTriage}
                 onHealth={setHealth}
               />
@@ -395,6 +400,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
               onDiffReason={setDiffReason}
               isBoss={isBoss}
               onForceLock={() => undefined}
+              onSlUnpaidLock={() => undefined}
               onOpenTriage={openTriage}
               onHealth={setHealth}
             />

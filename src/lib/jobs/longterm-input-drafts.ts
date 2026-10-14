@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { hkDateStr, hkMonthStart } from "@/lib/dates";
 import { createNotification } from "@/lib/notify/create";
 import { generateLongtermInputDrafts, listAttendanceBonusEligible, type DraftMonthResult } from "@/lib/longterm-payroll/drafts";
+import { notifySlDraftsPending } from "@/lib/longterm-payroll/sl-confirm";
 import { generateCoverDrafts, type CoverDraftResult } from "@/lib/longterm-payroll/cover-drafts";
 import { withAuditJob } from "@/lib/audit-job-context";
 import { ensureSystemUser } from "@/lib/system-user";
@@ -63,6 +64,8 @@ async function processMonth(month: Date, actorUserId: string, today: string, not
       dedupeKey: `longterm_drafts_mismatch:${m}:${draft.mismatches}:${today}`,
     });
   }
+  // P17（老闆 2026-10-14）：有未確認 SL 草稿就主動彈出（通知＋首頁收件箱＋一鍵結算報告＋鎖月擋）；dedupe＝月＋草稿 id 集合 hash。
+  await notifySlDraftsPending(month);
   const bonus = await listAttendanceBonusEligible(month);
   const open = bonus.eligible.filter((e) => !e.already_filled).length;
   // 勤工獎只喺「上月」（即將出糧嗰個月）通知；本月未完，唔推

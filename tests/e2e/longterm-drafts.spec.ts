@@ -14,19 +14,18 @@ test.beforeAll(async () => {
   const guard = await prisma.guard.create({ data: { nameZh: `測試長工-draft-${RAND}`, employmentType: "longterm_autopay", hireDate: new Date("2020-01-01"), createdBy: "test-e2e" } });
   guardId = guard.id;
   await prisma.guardLongtermContract.create({ data: { guardId, monthlySalary: 15000, effectiveFrom: new Date("2020-01-01"), effectiveTo: null, annualLeaveDays: 7, source: "manual", createdBy: "test-e2e" } });
-  for (const [from, to] of [["2026-08-03", "2026-08-05"], ["2026-08-10", "2026-08-10"], ["2026-08-20", "2026-08-21"]]) {
+  // P17：病假（SL）草稿改喺「病假要你確認醫生紙」面板逐段處理（見 p17-sl-confirm.spec.ts）；呢度用頂位津貼草稿測通用草稿面板。
+  for (const amount of [300, 450, 600]) {
     await prisma.longtermPayrollInput.create({
       data: {
         month: AUG,
         guardId,
-        kind: "leave",
-        dateFrom: from,
-        dateTo: to,
-        doctorNoteVerified: false,
-        note: "病假段（醫生紙待核）——由更表 SL 自動生成草稿",
+        kind: "other_allowance",
+        amount,
+        note: "頂位津貼草稿",
         status: "draft",
-        draftSource: "roster_leave:SL",
-        draftEvidence: { dates: [from], roster_upload_ids: [] },
+        draftSource: "cover:rates",
+        draftEvidence: { lines: [], shifts: 1 },
         createdBy: "test-e2e",
       },
     });
@@ -50,7 +49,7 @@ test("草稿列表標「草稿」＋勤工獎合資格清單；單條確認；�
   const mine = panel.locator('[data-testid="ltpay-draft-row"]', { hasText: `測試長工-draft-${RAND}` });
   await expect(mine).toHaveCount(3);
   await expect(mine.first()).toContainText("草稿");
-  await expect(mine.first()).toContainText("更表 SL");
+  await expect(mine.first()).toContainText("頂位價目表");
 
   // 勤工獎合資格清單（只列名）
   await expect(page.getByTestId("ltpay-bonus-eligible")).toContainText("只列名，唔填金額");

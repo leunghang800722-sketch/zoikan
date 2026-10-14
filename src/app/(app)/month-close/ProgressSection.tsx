@@ -1,6 +1,7 @@
 "use client";
 // 1a ③ 進度：10 行 grid `28px 128px 1fr auto 72px`，每步一句人話總結＋chip＋耗時；撳行展開技術明細（原 key=value）。
 import { useState } from "react";
+import Link from "next/link";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import type { RunDTO } from "@/components/month-close/types";
@@ -100,7 +101,14 @@ export function ProgressSection({ run, busy, locked, onRerun }: { run: RunDTO; b
               {s.needs_human.length > 0 && (
                 <ul className="mx-4 mb-2 list-disc pl-6 text-zk-xs text-zk-danger-dark lg:ml-14" data-testid="step-needs-human">
                   {s.needs_human.map((w, i) => (
-                    <li key={i}>{humanize(w)}</li>
+                    <li key={i}>
+                      {humanize(w)}
+                      {s.key === "longterm_settlement" && w.startsWith("病假") && (
+                        <Link href={`/reports/longterm-payroll?month=${run.month.slice(0, 7)}&focus=sl-drafts`} className="ml-2 whitespace-nowrap text-zk-primary hover:underline" data-testid="needs-human-sl-link">
+                          去確認病假 ›
+                        </Link>
+                      )}
+                    </li>
                   ))}
                 </ul>
               )}

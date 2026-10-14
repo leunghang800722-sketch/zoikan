@@ -80,6 +80,7 @@ import {
   computeMpf,
   slAccrued,
   slSegmentVerdict,
+  resolveRdNplConflicts,
   sl45Payment,
   alEntitlementProrata,
   alLeaverBalance,
@@ -439,6 +440,19 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     otAmount = round2(otAmount);
     if (otHours > 0) notes.push(`OT ${otHours} 小時 → ${otAmount.toFixed(2)}（逐日日薪/${wh}小時×時數，跟返嗰日所屬合約）`);
 
+    // P17.5：同日 RD／NPL 衝突按「每週一日例假」判定（見 compute.ts resolveRdNplConflicts）
+    {
+      const nlSet = leaveDatesByCode.get("NL");
+      const rdSet = leaveDatesByCode.get("RD");
+      if (nlSet && rdSet) {
+        const res = resolveRdNplConflicts(rdSet, nlSet);
+        for (const d of res.asRd) {
+          nlSet.delete(d);
+          notes.push(`${d} 同日 RD／NPL 衝突：按每週一日例假當 RD（唔扣）`);
+        }
+        for (const d of res.asNpl) notes.push(`${d} 同日 RD／NPL 衝突：該週已有明確 RD，按每週一日例假當 NPL（扣）`);
+      }
+    }
     const nplDates = [...(leaveDatesByCode.get("NL") ?? [])].sort();
     const isDailyBasis = segAtEmployEnd.payBasis === "daily" && segAtEmployEnd.dailyRate != null;
     let nplDeduct = 0;

@@ -60,7 +60,7 @@ export interface ReportDTO {
   postorder_compare: { uploaded: boolean; referral_excel_total: number | null; referral_system_total: number; referral_diff: number | null; note: string } | null;
   needs_human: string[];
   health?: { critical: number; warn: number; info: number } | null;
-  lock_precondition: { current_month_already_locked: boolean; missing_upload_sites: string[]; unconfirmed_upload_sites: string[]; unpriced_count?: number; ready_to_lock: boolean };
+  lock_precondition: { current_month_already_locked: boolean; missing_upload_sites: string[]; unconfirmed_upload_sites: string[]; unpriced_count?: number; sl_drafts_pending?: number; ready_to_lock: boolean };
   longterm_payroll_note: string;
   longterm_payroll?: { gross_total: number; autopay_total: number; mpf_ee_total: number; mpf_er_total: number; guard_count: number } | null;
   combined_cost_summary: {

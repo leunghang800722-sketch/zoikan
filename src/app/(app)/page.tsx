@@ -80,6 +80,7 @@ export default async function DashboardPage() {
           canMonthClose={!!grants["一鍵結算"]}
           canGuardFix={!!grants["安員配對修復"]}
           canRateCards={!!grants["出街價"]}
+          canLongterm={!!grants["長工糧"]}
         />
         <HomeNotifications />
         </>

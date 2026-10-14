@@ -3,7 +3,9 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Field, inputCls, selectCls } from "@/components/ui/Field";
+import { Banner } from "@/components/ui/Banner";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
+import { contractErrorMessage } from "@/lib/longterm-payroll/contract-form";
 
 interface ContractRow {
   id: string;
@@ -19,7 +21,7 @@ interface GuardHit {
   staff_no: string | null;
 }
 
-export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated: () => void; onError: (m: string) => void; onNotice: (m: string) => void }) {
+export function ContractCreateForm({ onCreated, onNotice }: { onCreated: () => void; onNotice: (m: string) => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<GuardHit[]>([]);
@@ -39,6 +41,11 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
   const [busy, setBusy] = useState(false);
   const [existing, setExisting] = useState<ContractRow[]>([]);
   const [closePrev, setClosePrev] = useState(true);
+  // P17.4：新增合約嘅驗證／4xx 錯誤喺表單入面顯示（唔再只去頁頂 Banner），表單唔關。
+  const [formError, setFormError] = useState<string | null>(null);
+  const fail = (m: string) => {
+    setFormError(m);
+  };
 
   async function search(v: string) {
     setQ(v);
@@ -57,10 +64,11 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
   const overlaps = from ? existing.filter((c) => (!to || c.effective_from <= to) && (!c.effective_to || c.effective_to >= from)) : [];
 
   async function submit() {
-    if (!guard) return onError("要先搜尋並揀保安員");
-    if (!from) return onError("要填生效日");
+    setFormError(null);
+    if (!guard) return fail("要先搜尋並揀保安員");
+    if (!from) return fail("要填生效日");
     const amount = basis === "daily" ? Number(dailyRate) : Number(salary);
-    if (!Number.isFinite(amount) || amount <= 0) return onError(basis === "daily" ? "日薪制要填每更價（大過 0）" : "月薪制要填月薪（大過 0）");
+    if (!Number.isFinite(amount) || amount <= 0) return fail(basis === "daily" ? "日薪制要填每更價（大過 0）" : "月薪制要填月薪（大過 0）");
     const body: Record<string, unknown> = {
       guard_id: guard.guard_id,
       effective_from: from,
@@ -81,7 +89,7 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
     setBusy(true);
     const res = await apiPost(`/api/longterm/contracts`, body);
     setBusy(false);
-    if (!res.ok) return onError(res.message);
+    if (!res.ok) return fail(contractErrorMessage(res));
     onNotice(`已新增${basis === "daily" ? "日薪制" : "月薪制"}合約（${guard.name}，${from} 起）`);
     setOpen(false);
     setQ("");
@@ -106,6 +114,7 @@ export function ContractCreateForm({ onCreated, onError, onNotice }: { onCreated
   return (
     <div className="flex w-full flex-col gap-3 rounded-lg border border-zk-border bg-white p-4" data-testid="ltpay-contract-form">
       <div className="text-sm font-semibold text-zk-text">新增合約</div>
+      <Banner kind="error" message={formError} data-testid="ltpay-cf-error" />
       <Field label="保安員（搜尋姓名或工號）">
         <input className={inputCls} value={q} onChange={(e) => void search(e.target.value)} placeholder="例：姓名、英文名、工號" data-testid="ltpay-cf-search" />
       </Field>
