@@ -304,7 +304,7 @@ async function main() {
         await prisma.longtermPayrollInput.create({ data: { month: AUG_MONTH, guardId: guard.id, kind: "other_allowance", amount: row.inputs.otherAllowanceCombined, note: `${GATE_TAG}：以薪代假(賣假)＋頂位津貼合計`, createdBy: actorUserId } });
       }
       for (const seg of row.inputs.slSegments) {
-        await prisma.longtermPayrollInput.create({ data: { month: AUG_MONTH, guardId: guard.id, kind: "leave", dateFrom: seg.dateFrom, dateTo: seg.dateTo, doctorNoteVerified: seg.doctorNoteVerified, note: `${GATE_TAG}：病假段（oracle 假設有醫生紙）`, createdBy: actorUserId } });
+        await prisma.longtermPayrollInput.create({ data: { month: AUG_MONTH, guardId: guard.id, kind: "leave", dateFrom: seg.dateFrom, dateTo: seg.dateTo, doctorNoteVerified: seg.doctorNoteVerified, note: `${GATE_TAG}：${seg.note ?? "病假段（oracle 假設有醫生紙）"}`, createdBy: actorUserId } });
       }
       if (row.inputs.leaverSettlement) {
         // amount=null＝唔 override，由引擎按比例自動計（Opus 5.5 驗收：唔再餵 oracle 輸出）。

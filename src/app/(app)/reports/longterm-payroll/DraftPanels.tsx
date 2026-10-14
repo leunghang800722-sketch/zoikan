@@ -115,7 +115,7 @@ export function DraftInputsPanel({ drafts, locked, onChanged, onError }: { draft
           </Button>
         )}
       </div>
-      <Banner kind="info">呢啲係由更表自動生成嘅草稿：病假段唔帶金額、醫生紙預設「未核」；頂位津貼按「設定 › 頂位價目表」逐更價計出金額。確認後先計入長工糧，確認前對 Gross 完全冇影響。</Banner>
+      <Banner kind="info">呢啲係由更表自動生成嘅草稿：頂位津貼按「設定 › 頂位價目表」逐更價計出金額。確認後先計入長工糧，確認前對 Gross 完全冇影響。</Banner>
       {deadline !== null && <UndoBar message={`即將確認 ${pending.current.length} 條草稿`} deadline={deadline} onUndo={undo} testId="ltpay-drafts-undo-bar" />}
       {sending && <div className="text-zk-sm text-zk-muted">批量確認中…</div>}
       {summary && (
@@ -269,6 +269,136 @@ export function BonusEligiblePanel({ month, refreshKey }: { month: string; refre
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+export interface SlPendingSegmentDTO {
+  id: string;
+  guard_name: string;
+  guard_staff_no: string | null;
+  date_from: string;
+  date_to: string;
+  roster_days: number;
+  span_days: number;
+  meets_consecutive: boolean;
+  balance: number;
+  within_balance: boolean;
+  expected_amount: number | null;
+  expected_note: string;
+}
+
+/** P17（老闆 2026-10-14）：病假「更表有 SL 就一定要人手確認醫生紙先出 4/5 津貼」。逐段決定，唔提供「全部確認」。 */
+export function SlConfirmPanel({ month, locked, refreshKey, focus, onChanged, onError, onNotice }: { month: string; locked: boolean; refreshKey: number; focus: boolean; onChanged: () => void; onError: (m: string) => void; onNotice: (m: string) => void }) {
+  const [segments, setSegments] = useState<SlPendingSegmentDTO[] | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [unpaidId, setUnpaidId] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const ref = useRef<HTMLElement | null>(null);
+  const scrolled = useRef(false);
+
+  const load = useCallback(async () => {
+    const r = await apiGet<{ segments: SlPendingSegmentDTO[] }>(`/api/longterm/inputs/sl-pending?month=${month}`);
+    setSegments(r.ok ? r.data.segments : null);
+  }, [month]);
+  useEffect(() => {
+    void load();
+  }, [load, refreshKey]);
+  useEffect(() => {
+    if (focus && segments && segments.length > 0 && !scrolled.current) {
+      scrolled.current = true;
+      ref.current?.scrollIntoView({ block: "start" });
+    }
+  }, [focus, segments]);
+
+  async function decide(id: string, decision: "confirm" | "unpaid") {
+    setBusyId(id);
+    const res = await apiPost(`/api/longterm/inputs/${id}/sl-decision`, decision === "unpaid" ? { decision, reason: reason.trim() || undefined } : { decision });
+    setBusyId(null);
+    if (!res.ok) return onError(res.message);
+    setUnpaidId(null);
+    setReason("");
+    onNotice(decision === "confirm" ? "已確認醫生紙——撳「重算本月」睇 4/5 津貼金額" : "已記低「冇醫生紙，當無薪」——撳「重算本月」睇扣款");
+    await load();
+    onChanged();
+  }
+
+  if (!segments || segments.length === 0) return null;
+  return (
+    <section ref={ref} id="sl-drafts" className={`flex flex-col gap-3 rounded-lg border bg-white p-4 ${focus ? "border-zk-danger" : "border-zk-border"}`} data-testid="ltpay-sl-panel">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-sm font-semibold text-zk-text">病假要你確認醫生紙（{segments.length} 段）</div>
+        <Pill variant="warning">未確認唔出津貼，一律當無薪</Pill>
+      </div>
+      <Banner kind="info">更表有 SL 嘅日子，要你逐段確認有冇香港註冊醫生病假紙先會出 4/5 津貼；系統唔會自動幫你決定。確認後按累積病假結餘出 4/5；連續未夠 4 日嘅段出唔出，以「確認後預計津貼」欄為準。</Banner>
+      <div className={tableCls.wrap}>
+        <table className={tableCls.table} style={{ minWidth: tableMinWidth(5) }}>
+          <thead>
+            <tr>
+              <th className={tableCls.th}>保安員</th>
+              <th className={tableCls.th}>日期段</th>
+              <th className={tableCls.th}>連續／結餘</th>
+              <th className={tableCls.th}>確認後預計津貼</th>
+              <th className={tableCls.th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {segments.map((d) => (
+              <tr key={d.id} className={tableCls.rowHover} data-testid="ltpay-sl-row">
+                <td className={tableCls.td}>
+                  {d.guard_name}
+                  {d.guard_staff_no ? `（${d.guard_staff_no}）` : ""}
+                </td>
+                <td className={tableCls.td}>
+                  {fmtDate(d.date_from)}
+                  {d.date_to !== d.date_from ? `–${fmtDate(d.date_to)}` : ""}（SL {d.roster_days} 日）
+                </td>
+                <td className={tableCls.td}>
+                  <span data-testid="ltpay-sl-span">連續 {d.span_days} 日</span>{" "}
+                  {d.meets_consecutive ? <Pill variant="neutral">夠 4 日</Pill> : <Pill variant="warning">未夠 4 日</Pill>}
+                  <div className="text-zk-xs text-zk-muted">結餘 {d.balance} 日{d.within_balance ? "" : "（唔夠）"}</div>
+                </td>
+                <td className={tableCls.td}>
+                  <span data-testid="ltpay-sl-expected">{d.expected_amount == null ? "—" : `$${d.expected_amount.toFixed(2)}`}</span>
+                  <div className="text-zk-xs text-zk-muted">{d.expected_note}</div>
+                </td>
+                <td className={tableCls.td}>
+                  {!locked &&
+                    (unpaidId === d.id ? (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <input className={inputCls} placeholder="原因（可留空＝冇醫生紙）" value={reason} onChange={(e) => setReason(e.target.value)} aria-label="當無薪原因" data-testid="ltpay-sl-unpaid-reason" />
+                        <Button variant="linkDanger" size="sm" disabled={busyId === d.id} onClick={() => decide(d.id, "unpaid")} data-testid="ltpay-sl-unpaid-go">
+                          確定當無薪
+                        </Button>
+                        <Button variant="link" size="sm" onClick={() => setUnpaidId(null)}>
+                          取消
+                        </Button>
+                      </span>
+                    ) : (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <Button variant="primary" size="sm" disabled={busyId === d.id} onClick={() => decide(d.id, "confirm")} data-testid="ltpay-sl-confirm">
+                          有醫生紙，確認
+                        </Button>
+                        <Button
+                          variant="linkDanger"
+                          size="sm"
+                          disabled={busyId === d.id}
+                          onClick={() => {
+                            setUnpaidId(d.id);
+                            setReason("");
+                          }}
+                          data-testid="ltpay-sl-unpaid"
+                        >
+                          冇醫生紙，當無薪
+                        </Button>
+                      </span>
+                    ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

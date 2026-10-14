@@ -141,7 +141,7 @@ export interface LtpayAugFixtureRow {
   inputs: {
     specialAllowance: number;
     otherAllowanceCombined: number; // 賣假(rest_day_pay)＋頂位/其他(other_allow) 合計，餵 aggregate.ts otherAllowance（restDayPayment 呢層恆為 0，見 aggregate.ts 檔頭）
-    slSegments: Array<{ dateFrom: string; dateTo: string; doctorNoteVerified: true }>;
+    slSegments: Array<{ dateFrom: string; dateTo: string; doctorNoteVerified: boolean; note?: string }>;
     leaverSettlement: { amount: number | null; dateFrom: string } | null;
   };
   avgWage: { value: number; source: string } | null;
@@ -224,7 +224,14 @@ function main() {
       inputs: {
         specialAllowance: row.special_allow || 0,
         otherAllowanceCombined: Math.round(((row.rest_day_pay || 0) + (row.other_allow || 0)) * 100) / 100,
-        slSegments: row.sl_segments.map((s) => ({ dateFrom: s.start, dateTo: s.end, doctorNoteVerified: true as const })),
+        // P17：確認醫生紙＝出津貼（SL_CONFIRMED_SHORT_PAID=true，唔理連續幾日）。底稿對所有 SL 段一律「假設有，要 HR 核實」，
+        // 但 oracle 實際只對連續 ≥4 日、而且該人 sl_pay > 0 嘅段出津貼（銀行 8 月對短段亦冇出）——所以只喺 oracle 真係出咗津貼嘅段標已核實，
+        // 其餘標未核實（當無薪），gate 先反映 oracle 真實。
+        slSegments: row.sl_segments.map((s) => {
+          const span = Math.round((Date.parse(`${s.end}T00:00:00Z`) - Date.parse(`${s.start}T00:00:00Z`)) / 86400000) + 1;
+          const paid = (row.sl_pay ?? 0) > 0 && span >= 4;
+          return paid ? { dateFrom: s.start, dateTo: s.end, doctorNoteVerified: true } : { dateFrom: s.start, dateTo: s.end, doctorNoteVerified: false, note: "底稿假設有醫生紙但 oracle 未出津貼→當未核實" };
+        }),
         // amount=null → 引擎自動計（唔抽 oracle 輸出）；dateFrom 淨係離職日（輸入）。
         leaverSettlement: row.is_leaver ? { amount: null, dateFrom: row.leave_date as string } : null,
       },

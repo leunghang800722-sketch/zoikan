@@ -35,7 +35,10 @@ export const MPF_FIRST_MONTH_RULE_FROM = "2026-09-01";
 export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH
 const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
 const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限
-const SL_MIN_CONSECUTIVE = 4; // BA.SL_MIN_CONSECUTIVE
+export const SL_MIN_CONSECUTIVE = 4; // BA.SL_MIN_CONSECUTIVE
+/** P17.1（老闆 2026-10-14 決定）：已人手確認醫生紙嘅「連續 <4 日」短病假段照出 4/5 津貼（確認咗就出，唔理連續幾日）。
+ * `gate:ltpay-aug` fixture builder 只對 oracle 真係出咗津貼嘅段標 doctorNoteVerified=true，所以 gate 同呢個規則一致。 */
+export const SL_CONFIRMED_SHORT_PAID = true;
 const SL_RATE = 0.8;
 
 // ---------------------------------------------------------------------------
@@ -260,16 +263,20 @@ export interface SlSegmentVerdict {
  * compute.ts 呢層淨係計純規則，醫生紙核實與否由人手輸入項
  * `doctorNoteVerified` 決定，冇資料一律當「未核實」＝唔合資格，穩陣
  * 方向）。 */
-export function slSegmentVerdict(segDays: number, spanDays: number, balance: number, doctorNoteVerified: boolean): SlSegmentVerdict {
+export function slSegmentVerdict(segDays: number, spanDays: number, balance: number, doctorNoteVerified: boolean, confirmedShortPaid: boolean = SL_CONFIRMED_SHORT_PAID): SlSegmentVerdict {
   const okConsecutive = spanDays >= SL_MIN_CONSECUTIVE;
   const okBalance = balance + 1e-9 >= segDays;
-  if (okConsecutive && okBalance && doctorNoteVerified) {
-    return { qualifies: true, reason: `連續 ${spanDays} 日 ≥ ${SL_MIN_CONSECUTIVE} 日、結餘 ${balance} 日 ≥ ${segDays} 日、有醫生紙 → 4/5 疾病津貼` };
+  // P17.1（老闆 2026-10-14 規則：醫生紙人手確認＝公司決定出津貼，銀行 8 月實證 10 日短病假全部有出）：
+  // confirmedShortPaid=true 時，已人手確認嘅段唔再以「連續 <4 日」擋；連續日數只影響說明文字；結餘仍然限制；未確認一律當無薪。
+  // 預設值見 SL_CONFIRMED_SHORT_PAID（true）。
+  if (okBalance && doctorNoteVerified && (okConsecutive || confirmedShortPaid)) {
+    const consecutiveNote = okConsecutive ? `連續 ${spanDays} 日 ≥ ${SL_MIN_CONSECUTIVE} 日` : `連續得 ${spanDays} 日 < ${SL_MIN_CONSECUTIVE} 日（按僱傭條例未夠連續 ${SL_MIN_CONSECUTIVE} 日；公司做法：已確認醫生紙照出）`;
+    return { qualifies: true, reason: `${consecutiveNote}、結餘 ${balance} 日 ≥ ${segDays} 日、有醫生紙（人手已確認） → 4/5 疾病津貼` };
   }
   const why: string[] = [];
   if (!okConsecutive) why.push(`連續得 ${spanDays} 日 < ${SL_MIN_CONSECUTIVE} 日`);
   if (!okBalance) why.push(`結餘得 ${balance} 日 < ${segDays} 日`);
-  if (!doctorNoteVerified) why.push("冇（或未核實）香港註冊醫生病假紙");
+  if (!doctorNoteVerified) why.push("冇（或未人手確認）香港註冊醫生病假紙");
   return { qualifies: false, reason: `${why.join("；")} → 呢段全部當無薪假（扣日薪，冇津貼）` };
 }
 
@@ -374,4 +381,41 @@ export function computeGross(c: GrossComponents): number {
 /** Autopay = Gross − MPF(僱員)。 */
 export function computeAutopay(gross: number, mpfEe: number): number {
   return round2(gross - mpfEe);
+}
+
+// ---------------------------------------------------------------------------
+// P17.5（老闆 2026-10-14）：每星期有 1 日例假。同一日同時有例假碼（RD／OFF）同無薪假碼（NL／NPL）嘅衝突：
+// 以該日所屬週（週一至週日，只計該月內嘅日子）判斷——冇其他明確 RD／OFF 日 → 當 RD（有薪例假，唔扣）；否則當 NPL（扣）。
+// 純 NPL（冇 RD 標記）照扣，唔自動補例假。保守假設：同一週有多日衝突而又冇明確 RD，只將最早嗰日當 RD（每週一日例假）。
+// ---------------------------------------------------------------------------
+export interface RdNplResolution {
+  /** 衝突日當 RD（唔扣）。 */
+  asRd: string[];
+  /** 衝突日當 NPL（扣）。 */
+  asNpl: string[];
+}
+
+function mondayKey(dISO: string): string {
+  const d = toUtcDate(dISO);
+  const dow = (d.getUTCDay() + 6) % 7; // 週一=0
+  return new Date(d.getTime() - dow * 86400000).toISOString().slice(0, 10);
+}
+
+export function resolveRdNplConflicts(rdDates: Iterable<string>, nplDates: Iterable<string>): RdNplResolution {
+  const rd = new Set(rdDates);
+  const npl = new Set(nplDates);
+  const conflicts = [...npl].filter((d) => rd.has(d)).sort();
+  const conflictSet = new Set(conflicts);
+  const restWeeks = new Set<string>();
+  for (const d of rd) if (!conflictSet.has(d)) restWeeks.add(mondayKey(d));
+  const out: RdNplResolution = { asRd: [], asNpl: [] };
+  for (const d of conflicts) {
+    const wk = mondayKey(d);
+    if (restWeeks.has(wk)) out.asNpl.push(d);
+    else {
+      out.asRd.push(d);
+      restWeeks.add(wk);
+    }
+  }
+  return out;
 }

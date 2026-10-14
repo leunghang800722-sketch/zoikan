@@ -52,6 +52,11 @@ import { computeReferralFeesForMonth, recomputeReferralFees, REFERRAL_FEE_AUTOCO
 import { recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
 import { findCopyLastMonthCandidates, type CopyLastMonthCandidate } from "@/lib/pricing/copy-last-month-cards";
 import { writeAudit } from "@/lib/audit";
+import { generateLongtermInputDrafts } from "@/lib/longterm-payroll/drafts";
+import { countSlPending, notifySlDraftsPending } from "@/lib/longterm-payroll/sl-confirm";
+import { withJobLock } from "@/lib/scheduler/lock";
+import { withAuditJob } from "@/lib/audit-job-context";
+import { ensureSystemUser } from "@/lib/system-user";
 import { buildMonthHealth, summarizeHealthForReport } from "@/lib/ops/month-health";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { STEP_KEYS, emptySteps, type StepKey, type StepRecord, type MonthCloseReport } from "./types";
@@ -709,7 +714,22 @@ export async function stepLongtermSettlement(month: Date, actorUserId: string) {
       warnings.push(`「${u.siteNameRaw}」重算結算單位失敗：${safeErrorSummary(e)}`);
     }
   }
-  return { numbers: { uploadsScanned: uploads.length, longtermRowsScanned: scanned, longtermRowsChanged: changed }, warnings };
+  // P17（老闆 2026-10-14）：更表有 SL → 一定要人手確認醫生紙先出津貼。順手更新 SL 草稿（失敗唔影響結算），
+  // 有未確認就彈通知＋喺「要你睇」（needs_human）列出；未確認一律當無薪。唔自動確認任何草稿。
+  const needsHuman: string[] = [];
+  let slSegments = 0;
+  try {
+    const sysId = await ensureSystemUser();
+    // 同排程 job／手動生成共用 lock（撞到就略過生成，只讀現有草稿）
+    await withJobLock("longterm_input_drafts", () => withAuditJob("longterm_input_drafts:one_click", () => generateLongtermInputDrafts(start, sysId), sysId));
+    await notifySlDraftsPending(start);
+  } catch (e) {
+    warnings.push(`病假草稿更新失敗（略過）：${safeErrorSummary(e)}`);
+  }
+  const sl = await countSlPending(start);
+  slSegments = sl.segments;
+  if (sl.segments > 0) needsHuman.push(`病假 ${sl.segments} 段未確認（${sl.guards} 人）——未確認唔會出津貼，一律當無薪；去長工糧頁 › 人手輸入逐段確認醫生紙`);
+  return { numbers: { uploadsScanned: uploads.length, longtermRowsScanned: scanned, longtermRowsChanged: changed, slDraftsPending: slSegments }, warnings, needsHuman };
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,6 +1032,8 @@ async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserI
       const coverage = await checkRosterUploadCoverage(monthStartDate);
       const currentClose = await prisma.monthClose.findUnique({ where: { month: monthStartDate } });
       const unpricedCount = (runner.get("pricing_check").numbers.count as number) ?? 0;
+      // P17：未確認 SL 草稿擋鎖月（老闆可覆蓋＝全部當無薪，見 lock route）
+      const slDraftsPending = (await countSlPending(monthStartDate)).segments;
       // WP-ONE-CLICK-AUTO §31.3 E：自動處理摘要＋要你睇（開／刷新分診 session，擁有人＝撳一鍵嗰個人）。
       const autoReport = await buildAutoReport(auto, monthStartDate, runId);
       const report: MonthCloseReport = {
@@ -1055,9 +1077,10 @@ async function runOneClickMonthCloseInner(runId: string, month: Date, actorUserI
           missingUploadSites: coverage.missingUploadSites.map((s) => s.siteName),
           unconfirmedUploadSites: coverage.unconfirmedUploadSites.map((s) => `${s.siteName}（${s.status}）`),
           unpricedCount: unpricedCount,
+          slDraftsPending,
           // Opus 驗收：§20.3 step8「前置條件全綠先亮」——除咗上載覆蓋，
           // 仲有未定價更（冇價就鎖會鎖死錯數）。
-          readyToLock: coverage.missingUploadSites.length === 0 && coverage.unconfirmedUploadSites.length === 0 && !currentClose?.lockedAt && unpricedCount === 0,
+          readyToLock: coverage.missingUploadSites.length === 0 && coverage.unconfirmedUploadSites.length === 0 && !currentClose?.lockedAt && unpricedCount === 0 && slDraftsPending === 0,
         },
         longtermPayroll: (compute.numbers.longtermPayroll as MonthCloseReport["longtermPayroll"]) ?? null,
         longtermPayrollNote: (compute.numbers.longtermPayrollNote as string) ?? "",
