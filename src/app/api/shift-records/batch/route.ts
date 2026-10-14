@@ -51,6 +51,7 @@ import { LeaveCode, type Prisma, type ShiftRecordStatus } from "@prisma/client";
 import { journalAutoCardUsesSafe, toNum, type AutoCardUse } from "@/lib/pricing/auto-card-journal";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards, isUnpricedShift, type ResolvedShiftPricing } from "@/lib/pricing/resolve-rate";
 import { n } from "@/lib/reports/money";
+import { MANUAL_SOURCE } from "@/lib/longterm-payroll/attendance-priority";
 // P0（Opus 驗收重現）：新建記錄冇 settlement_broker_id 就喺糧明細完全
 // 消失——見 settlement-broker-fallback.ts 頂註解嘅完整 fallback 鏈。
 import { createSettlementBrokerFallbackResolver } from "@/lib/pricing/settlement-broker-fallback";
@@ -84,6 +85,10 @@ type PlannedOp =
       // 度攞到，靠 resolveSettlementBrokerFallback() 推算——response 要
       // additive 標返俾前端，等 RosterEditor 儲存後 toast「推算」。
       settlementInferred: boolean;
+      // P18.1：人手編輯標記——新建，或現存記錄嘅 record_type／leave_code 被改，先寫 source="manual"
+      // （aggregate 按來源優先次序，人手 > roster_upload > master_roster > payroll_only）；
+      // 只改結算單位／狀態嘅唔蓋 source（唔改變來源優先結果）。undefined＝唔動 source。
+      manualSource: boolean;
     };
 
 type UpsertPlan = Extract<PlannedOp, { kind: "upsert" }>;
@@ -93,6 +98,7 @@ type UpsertPlan = Extract<PlannedOp, { kind: "upsert" }>;
 // 新記錄一律填 snapshot；更新時 settlement_broker 或者 record_type（shift↔leave）有變都會反映喺 plan.pricing。
 function upsertUpdateData(plan: UpsertPlan) {
   return {
+    ...(plan.manualSource ? { source: MANUAL_SOURCE } : {}),
     recordType: plan.recordType,
     leaveCode: plan.leaveCode as never,
     settlementBrokerId: plan.settlementBrokerId,
@@ -105,6 +111,7 @@ function upsertUpdateData(plan: UpsertPlan) {
 }
 function upsertCreateData(plan: UpsertPlan, siteId: string, createdBy: string) {
   return {
+    source: MANUAL_SOURCE,
     workDate: plan.cell.work_date,
     siteId,
     shiftTypeId: plan.cell.shift_type_id,
@@ -320,6 +327,7 @@ export async function POST(req: Request) {
         existingIsExternal: record?.isExternal ?? false,
         pricing: null,
         settlementInferred: settlementInferredFlag,
+        manualSource: !record || record.status === "cancelled" || record.recordType !== (isLeave ? "leave" : "shift") || (record.leaveCode ?? null) !== (isLeave ? code : null),
       });
     }
 
