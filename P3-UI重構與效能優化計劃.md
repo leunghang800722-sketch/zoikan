@@ -1129,3 +1129,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 ### 23.2 驗收、合併（2026-10-15）
 - Opus 5.5 四輪：第一輪 M1（SL 草稿未跟來源優先）、M2（會計冇權限）＋(ii)1–4、7；第二輪 M4（按盤分組引入跨盤 leave 錯配）、M5（勤工獎讀全部來源）、M6（attendance-fix 冇 journal auto 卡）＋(ii)a/b；規劃者補規則「最高來源當日只有 leave → 低來源 shift 一律唔計」；第三輪 M7（helper key 冇 guardId → 跨人污染，嚴重）、M8（跨盤衝突冇提示）；第四輪通過（三人 fixture 三處同 aggregate 一致）。留 (ii)：helper `guardId` 改 required；`ignored` 未接線；OT 跨來源唔去重；re-upload 蓋 manual。
 - merge（`--no-ff`，P3 doc 衝突兩節並存）；部署見 §23.3。
+
+### 23.3 部署同 7 月套用辦公室答覆（2026-10-15）
+- 部署 `6acf304c`。經 `POST /api/longterm/attendance-fix` 套用辦公室 7 條：案 2（7/30–31→SL）、案 3（7/21→SL）、案 5（7/3→SH）、案 6（7/23→SL、7/10→返工）、案 7（7/26→SL）、案 4（7/3 原本冇紀錄→新增 SH 假期紀錄）、案 1（歸公司兵：全月 CP5 更設 B07，21 號 NL、31 號 SL、其餘返工，CP5 IC 更維持頂位）。作廢 8 月（快照）→ 重算 7 月（53 行，autopay 866,587.48）→ 重算 8 月。
+- **7 月對數：配對 51／吻合 48／差 3（−1.05、−0.57、+7.09，年假折現／MPF 四捨五入）／系統有銀行冇 2（離職者唔經 autopay）／銀行有系統冇 19（寫字樓員工）。** 7 月已達「全部吻合或有合理解釋」。
+- 8 月：等 Dispatch 將 5 段短病假改「冇醫生紙」後重算；預期剩 2 項平均工資差額（等 1–6 月 Payroll Editor）。
