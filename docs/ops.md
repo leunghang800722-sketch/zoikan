@@ -140,3 +140,14 @@ Email 內容同站內通知 body 一樣：只有盤名／數字／id／月份，
 - 系統處理：aggregate 照現行規則計（唔因為衝突改公式），只喺長工糧 line 的 notes 加提示；對數 summary `attendance_conflicts` 係有此提示嘅人數。
 - 點跟進：逐個日期對辦公室出勤紀錄／糧單備註，決定邊個來源正確；去更表對數頁用正確來源套用（或作廢錯嘅紀錄），再「重算本月」→ 重新上載銀行檔。7 月實例：差額多數係辦公室出勤同更表唔同（返工 vs 無薪假、SL／AL vs NPL、RD vs 病假日）。
 - 同期對數工具細修：批量輸入重複判斷計 note（OT 650 同補假日工資 650 唔再被當重複）；銀行檔第二表頭行（英文表頭）自動跳過，summary `header_rows_skipped`。
+
+## 長工糧更表來源優先次序＋「出勤修正」面板（P18）
+- **來源優先表**（`shift_records.source`，`src/lib/longterm-payroll/attendance-priority.ts`）：`manual`（人手：更表編輯器／`POST /api/shift-records/batch` 寫入）＞ `roster_upload` ＞ `master_roster` ＞ `payroll_only` ＞ 其他／null（同一級）。aggregate 每人每日只取**最高優先來源**嘅出勤紀錄（record_type=shift／leave）；同一最高來源同日多條（例如雙更）照舊全部計；OT 紀錄（record_type=ot）唔受影響。只改紀錄挑選，唔改任何金額公式。
+- 「人手」點識別：批量儲存 API 原本**冇**寫 `source`（新建為 null、更新保留舊值），所以 P18 起 batch 新建一律寫 `source="manual"`，更新現存格只喺 record_type／leave_code 有改（或由 cancelled 復活）先改寫 `manual`；單純改結算單位（歸公司兵）／狀態唔蓋 source。對數套用（reconcile-apply）重寫紀錄會把 source 設返 `roster_upload`（明確以新上載為準）。單條 `POST/PATCH /api/shift-records` 唔寫 source（未改）。
+- 衝突 note 文案：「⚠ 同日多來源紀錄衝突：MM-DD（A 代號 x / B 代號 y；已採用：來源 Z）……」，銀行對數 tab 照舊展開紅字。
+- **「出勤修正」tab**（長工糧頁，老闆／會計，`長工糧:view`；寫入需要更表權限）：
+  1. 「同日多來源衝突」表：保安員、日期、各來源代號、系統而家採用邊個、對糧影響（返工／有薪／無薪／例假）。每行「採用：代號 X」（X＝其他來源已有代號）或「設為代號…」下拉（返工／SL／NPL／NL／RD／OFF／SH／AL）→ 經 batch API 就地改寫該日最高來源紀錄（保留其 site／shift_type）為人手紀錄，舊內容留喺 audit before，**唔作廢任何紀錄**；改完兩邊一致，衝突即時消失。
+  2. 「全部更歸雞頭嘅長工」表：本月所有正更結算單位都唔係 B07（internal_longterm）、非簽證形式長工 → 系統當頂位更（返工日 0、假期唔計）。「歸公司兵」＝按盤分組，用 batch API 將其全部正更 `settlement_broker_id` 設 B07（自動重新計價，source 不變）。
+  3. 任何寫入後出現「要重算本月先反映」＋重算掣；已鎖月份整頁唯讀（掣停用，batch 亦 403）。
+- 限制：目標紀錄係該日最高來源當中最近更新嗰條；若最高來源同日本身有兩條不同代號（同級衝突）面板只改其中一條。OT 唔喺面板處理。
+

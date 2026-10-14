@@ -23,6 +23,7 @@ import { EmptyMonthNotice } from "@/components/ui/EmptyMonthNotice";
 import { Tabs } from "@/components/ui/Tabs";
 import { BulkInputsPanel } from "./BulkInputsPanel";
 import { BankReconcilePanel } from "./BankReconcilePanel";
+import { AttendanceFixPanel } from "./AttendanceFixPanel";
 import { ContractCreateForm } from "./ContractCreateForm";
 import { contractErrorMessage, contractPatchBody, dateInputValue } from "@/lib/longterm-payroll/contract-form";
 import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
@@ -144,7 +145,7 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 
 export default function LongtermPayrollPage() {
   // P3-4.3（H19）：7 區直排 → 4 個 tab（本月糧／人手輸入／合約／平均工資與假期）；只分組顯示，唔改計糧，鎖月唯讀照舊。
-  const [tab, setTab] = useState<"pay" | "inputs" | "contracts" | "avg" | "recon">("pay");
+  const [tab, setTab] = useState<"pay" | "inputs" | "contracts" | "avg" | "recon" | "attfix">("pay");
   // P17：通知／首頁卡／一鍵結算報告連過嚟 `?focus=sl-drafts`＝直達「人手輸入」tab 嘅病假確認面板。
   const [focusSl, setFocusSl] = useState(false);
   useEffect(() => {
@@ -252,6 +253,7 @@ export default function LongtermPayrollPage() {
           { key: "contracts", label: "合約", testId: "ltpay-tab-contracts" },
           { key: "avg", label: "平均工資與假期", testId: "ltpay-tab-avg" },
           { key: "recon", label: "銀行對數", testId: "ltpay-tab-recon" },
+          { key: "attfix", label: "出勤修正", testId: "ltpay-tab-attfix" },
         ]}
       />
 
@@ -389,6 +391,10 @@ export default function LongtermPayrollPage() {
 
       <div className={tabCls("recon")} data-testid="ltpay-panel-recon">
       <BankReconcilePanel month={month} active={tab === "recon"} hasRun={!!payroll?.run} onError={setError} onNotice={setNotice} />
+      </div>
+
+      <div className={tabCls("attfix")} data-testid="ltpay-panel-attfix">
+      <AttendanceFixPanel month={month} active={tab === "attfix"} locked={!!payroll?.locked} recomputing={recomputing} onRecompute={recompute} onError={setError} onNotice={setNotice} />
       </div>
 
       <div className={tabCls("pay")} data-testid="ltpay-panel-pay-bochk">

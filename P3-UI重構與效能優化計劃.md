@@ -1112,3 +1112,11 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **P17.4** 長工糧「合約」tab：編輯表單日期欄收到 ISO 日期時間（`2026-12-31T00:00:00.000Z`）顯示空白，清唔到結束日 → 現截成 YYYY-MM-DD，清空送 `effective_to: null`；合約新增／編輯／作廢嘅 4xx 錯誤喺表單位置 Banner 顯示（409 `contract_overlap` 列出重疊日期＋「要先結束或作廢另一段」），表單唔關。`src/lib/longterm-payroll/contract-form.ts`。
 - **P17.5** 同日 RD／NPL 衝突按每週一日例假（`resolveRdNplConflicts`）。`gate:ltpay-aug`：56 人，Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／MPF ER 35,996.80，對 oracle 舊數只 第 1 人 一人差（gross +612.90、autopay +582.25、MPF EE／ER 各 +30.65），其餘 55 人 0 差異（第 2 人 workDays INFO 照舊），與規劃者預期一致。
 - 測試：vitest `p17-sl-confirm`（7）、`p17-4-contract-form`（6）、compute／aggregate 增補；Playwright `p17-sl-confirm`（2）、`p17-4-contract-edit`（2）、`longterm-drafts` 改用頂位草稿。
+
+## 23 階段 18（2026-10-14）：長工糧更表來源優先次序＋「出勤修正」面板
+- **根因**：aggregate 讀 `shift_records` 唔分來源，同人同日 `roster_upload`／`master_roster`／`payroll_only` 紀錄全 union（7/21 同入 NL、RD、AL；7/16 shift＋SL；7/3 SH＋shift），而且更表編輯器只改同 guard／date／shift_type 嗰條，蓋唔過其他來源舊紀錄；另一位長工所有更 settlement 係雞頭（唔係 B07），被當全部頂位更。
+- **P18.1**：新 `attendance-priority.ts`（`pickBySourcePriority`）：每人每日只取最高優先來源（`manual` > `roster_upload` > `master_roster` > `payroll_only` > 其他／null）嘅 shift／leave 紀錄；同來源同日多條全計；OT 不受影響；金額公式不變。`attendanceConflictNote` 文案加「已採用：來源 X」。發現 batch API 原本**冇寫 `source`**，故 batch 新建寫 `source="manual"`、更新現存格只喺代號類型改變先改寫 manual（改結算單位唔蓋）；對數套用仍寫 `roster_upload`。
+- **P18.2**：新 `GET /api/longterm/attendance-issues`（衝突日＋全歸雞頭長工）、長工糧頁新 tab「出勤修正」（`AttendanceFixPanel.tsx`）：採用代號／設為代號（batch 就地改最高來源紀錄為人手，舊內容留 audit）、歸公司兵（batch 設 B07，按 site 分批）、完成後「要重算本月先反映」＋重算掣、已鎖月唯讀。簽證形式長工唔列入「歸公司兵」。
+- **測試**：`tests/p18-attendance-priority.test.ts`（7 條）、`tests/e2e/p18-attendance-fix.spec.ts`（1 條）；`p16b-recon-tweaks` note 斷言同步。
+- **驗證**：見最終回報（vitest 隔離 PG 54405；e2e／gate 隔離 PG 54406、`next build`＋`next start` 3178）。本 branch 未含 P17，`gate:ltpay-aug` 為舊基準 56/56（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15）。
+
