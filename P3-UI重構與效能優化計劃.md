@@ -1142,3 +1142,4 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **根因**：兩位 9/1 轉長工（`guards.hire_date`＝散工入職日 7/29、8/11）9 月 MPF 僱員供款應 0（新僱傭首月豁免由長工合約起計）但系統用 hire_date 判斷已過 60 日而扣 5%；另一位 2025-03 散工入職、2026-09 轉長工：辦公室扣 9 月法定假（未滿 3 個月）同 MPF 0，系統用 hire_date 唔扣假又扣 MPF。
 - **改動**：`aggregate.ts` 新年資起點＝最早一段未作廢長工合約 `effectiveFrom`（`firstContractByGuard`），fallback `guards.hire_date`；MPF 僱員供款豁免（`computeMpf` 嘅 `hireDate`）同法定假 `after_3_months` 3 個月規則（`computeShDeduction`）都改用呢個起點；年假 entitlement 原本已經係。起點同 hire_date 唔同時 notes 加「年資起點：長工合約 YYYY-MM-DD（散工段唔計）」。其他公式、API、schema 不變。
 - **測試**：`tests/p19a-seniority-start.test.ts`（4 條：散工轉長工 MPF 0＋法定假扣、合約＝入職日不變、2025 散工轉長工、8 月不變）。`docs/ops.md` 加「年資起點」規則表。
+- **P19a 修正**（Opus 驗收 (ii)）：年資起點由「最早一段」改為「現行連續合約鏈第一段」（斷開＝離職再入職，由中斷後第一段計；前段 effectiveTo 同後段 effectiveFrom ≤1 日當連續），新 `continuousChainStart()`；年假 entitlement 同口徑。合約日早過 hire_date 加 warning；note 只喺合約日遲過 hire_date 出。測試補 (e)、E2、連續轉約、helper 單元。
