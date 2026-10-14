@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/db";
 import { isMonthLocked } from "@/lib/month-lock";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
-import { dayKey, sourceLabel, sourceRank } from "./attendance-priority";
+import { sourceLabel, sourceRank } from "./attendance-priority";
 
 export type AttendanceEffect = "work" | "paid" | "unpaid" | "rest";
 
@@ -110,7 +110,7 @@ export async function listAttendanceIssues(month: Date): Promise<AttendanceIssue
     const att = recs.filter((r) => r.recordType === "shift" || (r.recordType === "leave" && r.leaveCode));
     const byDate = new Map<string, typeof att>();
     for (const r of att) {
-      const d = dayKey(r); // (日, 盤) 分組
+      const d = iso(r.workDate); // M8：按日（跨盤）判定衝突
       const arr = byDate.get(d) ?? [];
       arr.push(r);
       byDate.set(d, arr);

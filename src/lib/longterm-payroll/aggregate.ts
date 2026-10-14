@@ -59,7 +59,7 @@
 //      AL 離職結算／SL 4/5 一律 fallback 用「日薪＝月薪÷當月曆日數」
 //      （同 `compute.ts` JSDoc 一致嘅 fallback 口徑），會喺 notes 標明。
 import { ATTENDANCE_CONFLICT_PREFIX } from "./attendance-conflict";
-import { dayKey, pickBySourcePriority } from "./attendance-priority";
+import { pickBySourcePriority } from "./attendance-priority";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
@@ -171,12 +171,12 @@ const REST_DAY_CODES = new Set(["RD", "OFF"]);
  * 而且各來源嘅「出勤代號」（班＝shift、假＝leaveCode；OT 唔計入比較）唔一致 → 回傳提示 note。
  * 只提示（P18.1 起 aggregate 按來源優先次序揀紀錄，note 加「已採用：來源 X」；計算公式不變）。
  */
-export function attendanceConflictNote(srs: Array<{ workDate: Date; recordType: string; leaveCode: string | null; source: string | null; siteId?: string | null }>): string | null {
+export function attendanceConflictNote(srs: Array<{ workDate: Date; recordType: string; leaveCode: string | null; source: string | null; siteId?: string | null; guardId?: string | null }>): string | null {
   const byDate = new Map<string, Map<string, Set<string>>>();
   for (const r of srs) {
     const code = r.recordType === "shift" ? "班" : r.recordType === "leave" && r.leaveCode ? r.leaveCode : null;
     if (!code) continue;
-    const d = dayKey(r);
+    const d = r.workDate.toISOString().slice(0, 10); // M8：衝突按日判定（跨盤），同 pickBySourcePriority 一致
     const bySrc = byDate.get(d) ?? new Map<string, Set<string>>();
     const set = bySrc.get(r.source ?? "（無來源）") ?? new Set<string>();
     set.add(code);
@@ -190,8 +190,8 @@ export function attendanceConflictNote(srs: Array<{ workDate: Date; recordType: 
     if (bySrc.size < 2) continue;
     const sigs = [...bySrc.entries()].map(([src, set]) => [src, [...set].sort().join("＋")] as const).sort((a, b) => a[0].localeCompare(b[0]));
     if (new Set(sigs.map((x) => x[1])).size < 2) continue;
-    const adopted = adoptions.get(d.split("|")[0]!)?.adopted;
-    parts.push(`${d.slice(5, 10)}（${sigs.map(([src, sig]) => `${src} 代號 ${sig}`).join(" / ")}${adopted ? `；已採用：來源 ${adopted}` : ""}）`);
+    const adopted = adoptions.get(`${srs[0]?.guardId ?? ""}|${d}`)?.adopted;
+    parts.push(`${d.slice(5)}（${sigs.map(([src, sig]) => `${src} 代號 ${sig}`).join(" / ")}${adopted ? `；已採用：來源 ${adopted}` : ""}）`);
   }
   return parts.length ? `${ATTENDANCE_CONFLICT_PREFIX}${parts.join("、")}——系統按來源優先次序（人手 > roster_upload > master_roster > payroll_only）揀最高來源計，要人手核更表` : null;
 }

@@ -34,8 +34,8 @@ describe("P18.1 來源優先次序（純函數）", () => {
     ];
     const { picked, adoptions } = pickBySourcePriority(rows);
     expect(picked).toEqual([rows[2], rows[3], rows[4], rows[5], rows[6]]);
-    expect(adoptions.get("2026-08-21")).toEqual({ adopted: "roster_upload", ignored: ["master_roster"] });
-    expect(adoptions.has("2026-08-22")).toBe(false);
+    expect(adoptions.get("|2026-08-21")).toEqual({ adopted: "roster_upload", ignored: ["master_roster"] });
+    expect(adoptions.has("|2026-08-22")).toBe(false);
     const n = attendanceConflictNote(rows.slice(0, 3))!;
     expect(n).toContain("已採用：來源 roster_upload");
   });
@@ -310,5 +310,33 @@ describe("P18 aggregate／面板 API", () => {
     expect(await prisma.monthCloseAutoChange.count({ where: { runId: run.id, kind: "price_snapshots" } })).toBeGreaterThan(0);
     const au = await prisma.auditLog.findFirst({ where: { tableName: "shift_records", rowId: rec.id, action: "update" }, orderBy: { createdAt: "desc" } });
     expect((au!.after as { via?: string }).via).toBe("longterm_attendance_fix");
+  });
+
+  it("M7：跨人唔污染——g1 當日 manual 班、g2 同日 roster_upload SL → g2 草稿 1、勤工獎唔合資格、aggregate 一致", async () => {
+    const sysId = await ensureSystemUser();
+    const g2 = await prisma.guard.create({ data: { nameZh: "測試長工-乙", employmentType: "longterm_autopay", hireDate: new Date("2020-01-01"), createdBy: "test" } });
+    await prisma.guardLongtermContract.create({ data: { guardId: g2.id, monthlySalary: 15500, effectiveFrom: new Date("2020-01-01"), effectiveTo: null, source: "manual", createdBy: fx.userIds["老闆"] } });
+    for (let day = 1; day <= 6; day++) await mkRec(day, "manual", { recordType: "shift" }); // g1 全部 manual 班
+    for (let day = 1; day <= 6; day++) await prisma.shiftRecord.create({ data: { workDate: d(day), siteId: fx.site.id, shiftTypeId: fx.shiftType.id, guardId: g2.id, recordType: day === 3 ? "leave" : "shift", leaveCode: day === 3 ? "SL" : null, settlementBrokerId: b07Id, operationalBrokerId: b07Id, source: "roster_upload", createdBy: "test" } });
+    await generateLongtermInputDrafts(MONTH, sysId);
+    expect(await prisma.longtermPayrollInput.count({ where: { guardId: g2.id, draftSource: "roster_leave:SL", voidedAt: null } })).toBe(1);
+    expect((await listSlPending(MONTH)).segment_count).toBe(1);
+    expect((await listAttendanceBonusEligible(MONTH)).eligible.some((e) => e.guard_id === g2.id)).toBe(false);
+    const l2 = (await buildLongtermPayrollInputs(MONTH)).lines.find((l) => l.guardId === g2.id)!;
+    expect(l2.workDays).toBe(5);
+  });
+
+  it("M8：跨盤 leave 衝突——面板有列、note 有「已採用」", async () => {
+    const site2 = await prisma.site.create({ data: { canonicalName: `測試盤二-${Math.random().toString(36).slice(2, 6)}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
+    const st2 = await prisma.shiftType.create({ data: { siteId: site2.id, code: "N", hours: 12, createdBy: "test" } });
+    for (let day = 1; day <= 5; day++) await mkRec(day, "roster_upload", { recordType: "shift" });
+    await prisma.shiftRecord.create({ data: { workDate: d(3), siteId: site2.id, shiftTypeId: st2.id, guardId, recordType: "leave", leaveCode: "SL", source: "master_roster", createdBy: "test" } });
+    const i = await issues();
+    expect(i.conflicts).toHaveLength(1);
+    expect(i.conflicts[0]).toMatchObject({ date: "2026-08-03", adopted_source: "roster_upload", adopted_code: "班" });
+    const l = await line();
+    const note = l.notes.find((x) => x.startsWith("⚠ 同日多來源紀錄衝突"));
+    expect(note).toContain("08-03");
+    expect(note).toContain("已採用：來源 roster_upload");
   });
 });
