@@ -11,6 +11,7 @@ import { isMonthLocked } from "@/lib/month-lock";
 import { monthRange, round2 } from "@/lib/reports/money";
 import { createNotification } from "@/lib/notify/create";
 import { SL_MIN_CONSECUTIVE, diffDaysInclusive, sl45Payment, slAccrued, slSegmentVerdict, toUtcDate } from "./compute";
+import { pickBySourcePriority } from "./attendance-priority";
 import { findConfirmedLeaveOverlap, OVERLAP_MSG } from "./drafts";
 import type { Prisma } from "@prisma/client";
 
@@ -81,10 +82,13 @@ export async function listSlPending(month: Date): Promise<SlPendingResult> {
 
   const guardIds = [...new Set(drafts.map((d) => d.guardId))];
   const [rosterSl, balances, avgWages, confirmed] = await Promise.all([
-    prisma.shiftRecord.findMany({
-      where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: "leave", leaveCode: "SL" },
-      select: { guardId: true, workDate: true },
-    }),
+    // P18 驗收 M1：先跟來源優先次序（連 shift 紀錄比較）再篩 SL，同 aggregate／草稿生成一致。
+    prisma.shiftRecord
+      .findMany({
+        where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+        select: { guardId: true, workDate: true, recordType: true, leaveCode: true, source: true, siteId: true },
+      })
+      .then((rows) => pickBySourcePriority(rows).picked.filter((r) => r.recordType === "leave" && r.leaveCode === "SL")),
     prisma.guardLeaveBalance.findMany({ where: { guardId: { in: guardIds }, year: { lte: start.getUTCFullYear() } }, orderBy: { year: "desc" } }),
     prisma.guardAvgWage.findMany({ where: { guardId: { in: guardIds }, month: start, voidedAt: null } }),
     prisma.longtermPayrollInput.findMany({ where: { month: start, guardId: { in: guardIds }, kind: "leave", status: "confirmed", voidedAt: null, doctorNoteVerified: true }, select: { guardId: true, dateFrom: true, dateTo: true } }),

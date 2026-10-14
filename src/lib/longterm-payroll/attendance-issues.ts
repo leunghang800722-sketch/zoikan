@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/db";
 import { isMonthLocked } from "@/lib/month-lock";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
-import { pickBySourcePriority, sourceLabel, sourceRank } from "./attendance-priority";
+import { dayKey, sourceLabel, sourceRank } from "./attendance-priority";
 
 export type AttendanceEffect = "work" | "paid" | "unpaid" | "rest";
 
@@ -36,7 +36,7 @@ export interface AttendanceConflictRow {
   /** 寫入目標：該日最高來源紀錄（最近更新者）嘅 site／shift_type／代號——「採用／設為」經 batch API 寫呢格。 */
   target: { site_id: string; shift_type_id: string; shift_type_code: string };
   /** 可「採用」嘅代號：各來源已有代號（當中「班」＝目標 shift_type 嘅更別代號）。 */
-  options: Array<{ code: string; source: string; batch_code: string; effect: AttendanceEffect; effect_label: string }>;
+  options: Array<{ code: string; source: string; set_code: string; effect: AttendanceEffect; effect_label: string }>;
 }
 export interface MisattributedGuardRow {
   guard_id: string;
@@ -110,14 +110,14 @@ export async function listAttendanceIssues(month: Date): Promise<AttendanceIssue
     const att = recs.filter((r) => r.recordType === "shift" || (r.recordType === "leave" && r.leaveCode));
     const byDate = new Map<string, typeof att>();
     for (const r of att) {
-      const d = iso(r.workDate);
+      const d = dayKey(r); // (日, 盤) 分組
       const arr = byDate.get(d) ?? [];
       arr.push(r);
       byDate.set(d, arr);
     }
-    const { adoptions } = pickBySourcePriority(att);
-    for (const d of [...byDate.keys()].sort()) {
-      const day = byDate.get(d)!;
+    for (const gk of [...byDate.keys()].sort()) {
+      const day = byDate.get(gk)!;
+      const d = iso(day[0]!.workDate);
       const codeOf = (r: (typeof day)[number]) => (r.recordType === "shift" ? "班" : r.leaveCode!);
       const bySrc = new Map<string, Set<string>>();
       for (const r of day) {
@@ -139,13 +139,13 @@ export async function listAttendanceIssues(month: Date): Promise<AttendanceIssue
         const code = codeOf(r);
         if (opts.some((o) => o.code === code)) continue;
         const e = effectOfCode(code);
-        opts.push({ code, source: sourceLabel(r.source), batch_code: code === "班" ? top.shiftType.code : code, effect: e.effect, effect_label: e.label });
+        opts.push({ code, source: sourceLabel(r.source), set_code: code === "班" ? "SHIFT" : code, effect: e.effect, effect_label: e.label });
       }
       conflicts.push({
         ...common,
         date: d,
         entries: sigs,
-        adopted_source: adoptions.get(d)?.adopted ?? sourceLabel(top.source),
+        adopted_source: [...new Set(day.filter((r) => sourceRank(r.source) === bestRank).map((r) => sourceLabel(r.source)))].sort().join("／"),
         adopted_code: adoptedCode,
         effect: eff.effect,
         effect_label: eff.label,

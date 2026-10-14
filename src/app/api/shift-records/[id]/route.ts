@@ -1,3 +1,4 @@
+import { MANUAL_SOURCE } from "@/lib/longterm-payroll/attendance-priority";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { scopeShiftRecordWhere, scrubForBrokerSession, isBrokerRole } from "@/lib/broker-isolation";
@@ -145,6 +146,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       }
     }
 
+    // P18：改 record_type／leave_code（出勤代號）寫 source=manual，令來源優先次序以人手改動為準（同 batch 一致）。
+    if ((parsed.record_type !== undefined && parsed.record_type !== before.recordType) || (parsed.leave_code !== undefined && parsed.leave_code !== before.leaveCode)) {
+      data.source = MANUAL_SOURCE;
+    }
     const after = await prisma.shiftRecord.update({ where: { id }, data });
     await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: id, action: "update", before, after, ip: getClientIp(req) });
     if (otPricingSource.clientCardId || otPricingSource.payoutCardId) {

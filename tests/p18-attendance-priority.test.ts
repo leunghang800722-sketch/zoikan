@@ -6,6 +6,11 @@ import { buildLongtermPayrollInputs, attendanceConflictNote } from "@/lib/longte
 import { pickBySourcePriority, sourceRank } from "@/lib/longterm-payroll/attendance-priority";
 import { POST as batchSave } from "@/app/api/shift-records/batch/route";
 import { GET as issuesGet } from "@/app/api/longterm/attendance-issues/route";
+import { POST as fixPost } from "@/app/api/longterm/attendance-fix/route";
+import { POST as shiftPost } from "@/app/api/shift-records/route";
+import { generateLongtermInputDrafts } from "@/lib/longterm-payroll/drafts";
+import { listSlPending } from "@/lib/longterm-payroll/sl-confirm";
+import { ensureSystemUser } from "@/lib/system-user";
 
 const d = (day: number) => new Date(Date.UTC(2026, 7, day));
 const MONTH = new Date(Date.UTC(2026, 7, 1));
@@ -13,6 +18,7 @@ const MONTH = new Date(Date.UTC(2026, 7, 1));
 describe("P18.1 來源優先次序（純函數）", () => {
   it("rank：manual < roster_upload < master_roster < payroll_only < 其他／null", () => {
     expect([sourceRank("manual"), sourceRank("roster_upload"), sourceRank("master_roster"), sourceRank("payroll_only"), sourceRank("xyz"), sourceRank(null)]).toEqual([0, 1, 2, 3, 4, 4]);
+    expect([sourceRank("master_roster_only"), sourceRank("master_roster_site"), sourceRank("payroll")]).toEqual([2, 2, 3]);
   });
   it("三來源衝突日只留最高來源；OT 不受影響；同來源雙更全留", () => {
     const rows = [
@@ -55,6 +61,8 @@ describe("P18 aggregate／面板 API", () => {
   }
   const line = async () => (await buildLongtermPayrollInputs(MONTH)).lines.find((l) => l.guardId === guardId)!;
   const batch = (body: unknown) => batchSave(new Request("http://t/api/shift-records/batch", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify(body) }));
+  const fix = (cookie: string, actions: unknown[], month = "2026-08") =>
+    fixPost(new Request("http://t/api/longterm/attendance-fix", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ month, actions }) }));
   const issues = async () => (await issuesGet(new Request("http://t/api/longterm/attendance-issues?month=2026-08-01", { headers: { cookie: owner } }))).json();
 
   beforeEach(async () => {
@@ -103,10 +111,12 @@ describe("P18 aggregate／面板 API", () => {
     expect(c.entries.map((e: { source: string; code: string }) => `${e.source}:${e.code}`)).toEqual(["roster_upload:班", "master_roster:NL"]);
     expect(c.effect).toBe("work");
     const nl = c.options.find((o: { code: string }) => o.code === "NL");
-    expect(nl).toMatchObject({ batch_code: "NL", effect: "unpaid" });
-    // 採用 NL：寫到最高來源紀錄所在格
-    const res = await batch({ site_id: c.target.site_id, month: "2026-08", cells: [{ guard_id: guardId, shift_type_id: c.target.shift_type_id, work_date: c.date, code: nl.batch_code }] });
+    expect(nl).toMatchObject({ set_code: "NL", effect: "unpaid" });
+    // 採用 NL：寫到最高來源紀錄所在格（會計亦得——長工糧:update）
+    const acct = await sessionCookieForUser(fx.userIds["會計"]);
+    const res = await fix(acct, [{ guard_id: guardId, work_date: c.date, site_id: c.target.site_id, shift_type_id: c.target.shift_type_id, set_code: nl.set_code }]);
     expect(res.status).toBe(200);
+    expect((await res.json()).noop).toBe(false);
     const rec = await prisma.shiftRecord.findFirstOrThrow({ where: { guardId, workDate: d(4), shiftTypeId: fx.shiftType.id } });
     expect(rec).toMatchObject({ source: "manual", recordType: "leave", leaveCode: "NL" });
     expect(await prisma.shiftRecord.count({ where: { guardId, workDate: d(4), status: { not: "cancelled" } } })).toBe(2); // 唔作廢任何紀錄（最高來源嗰條就地改成人手，舊內容留喺 audit before）
@@ -133,11 +143,8 @@ describe("P18 aggregate／面板 API", () => {
     expect(i1.misattributed[0]).toMatchObject({ guard_id: guardId, shift_days: 8 });
     expect(i1.internal_longterm_broker_id).toBe(b07Id);
     const m = i1.misattributed[0];
-    const res = await batch({
-      site_id: m.cells[0].site_id,
-      month: "2026-08",
-      cells: m.cells.map((c: { shift_type_id: string; shift_type_code: string; date: string }) => ({ guard_id: guardId, shift_type_id: c.shift_type_id, work_date: c.date, code: c.shift_type_code, settlement_broker_id: b07Id })),
-    });
+    const acct = await sessionCookieForUser(fx.userIds["會計"]);
+    const res = await fix(acct, m.cells.map((c: { site_id: string; date: string }) => ({ guard_id: guardId, work_date: c.date, site_id: c.site_id, settle_internal: true })));
     expect(res.status).toBe(200);
     expect((await line()).workDays).toBe(8);
     expect((await issues()).misattributed).toHaveLength(0);
@@ -154,5 +161,80 @@ describe("P18 aggregate／面板 API", () => {
     expect((await issuesGet(new Request("http://t/api/longterm/attendance-issues", { headers: { cookie: owner } }))).status).toBe(400);
     const lockedList = await (await issuesGet(new Request("http://t/api/longterm/attendance-issues?month=2026-06-01", { headers: { cookie: owner } }))).json();
     expect(lockedList.locked).toBe(true);
+  });
+
+  it("M1：SL 草稿跟來源優先次序——7/16 upload 班 vs master SL → aggregate 當返工、草稿唔生成、sl-pending 0；最高來源係 SL 先生成", async () => {
+    const sysId = await ensureSystemUser();
+    for (let day = 1; day <= 10; day++) await mkRec(day, "roster_upload", { recordType: "shift" });
+    await mkRec(5, "master_roster", { recordType: "leave", leaveCode: "SL", shiftTypeId: stD });
+    const gross0 = (await line()).gross;
+    await generateLongtermInputDrafts(MONTH, sysId);
+    expect(await prisma.longtermPayrollInput.count({ where: { guardId, kind: "leave", draftSource: "roster_leave:SL" } })).toBe(0);
+    expect((await listSlPending(MONTH)).segment_count).toBe(0);
+    expect((await line()).gross).toBe(gross0);
+    // 反過來：最高來源係 SL（roster_upload SL vs master 班）→ 生成草稿
+    await mkRec(12, "roster_upload", { recordType: "leave", leaveCode: "SL", shiftTypeId: stD });
+    await mkRec(12, "master_roster", { recordType: "shift" });
+    await generateLongtermInputDrafts(MONTH, sysId);
+    const dr = await prisma.longtermPayrollInput.findMany({ where: { guardId, draftSource: "roster_leave:SL", voidedAt: null } });
+    expect(dr).toHaveLength(1);
+    expect(dr[0]!.dateFrom).toBe("2026-08-12");
+  });
+
+  it("M2：權限——會計 200；主管／雞頭 403；已鎖月 403；can_update 旗；非長工 400", async () => {
+    await mkRec(4, "roster_upload", { recordType: "shift" });
+    await mkRec(4, "master_roster", { recordType: "leave", leaveCode: "NL", shiftTypeId: stD });
+    const act = [{ guard_id: guardId, work_date: "2026-08-04", site_id: fx.site.id, set_code: "NL" }];
+    expect((await fix(await sessionCookieForUser(fx.userIds["主管"]), act)).status).toBe(403);
+    expect((await fix(await sessionCookieForUser(fx.userIds["雞頭"]), act)).status).toBe(403);
+    const acct = await sessionCookieForUser(fx.userIds["會計"]);
+    const iss = await (await issuesGet(new Request("http://t/api/longterm/attendance-issues?month=2026-08-01", { headers: { cookie: acct } }))).json();
+    expect(iss.can_update).toBe(true);
+    expect((await fix(acct, [{ guard_id: fx.guardA.id, work_date: "2026-08-04", site_id: fx.site.id, set_code: "NL" }])).status).toBe(400); // 非長工
+    expect((await fix(acct, act, "2026-06")).status).toBe(403); // 已鎖月
+    expect((await fix(acct, act)).status).toBe(200);
+  });
+
+  it("ii.1：採用 X 而最高來源已係 X → noop:true 唔改；最高來源內有唔同代號嗰條會被揀去改", async () => {
+    await mkRec(4, "roster_upload", { recordType: "shift" });
+    await mkRec(4, "master_roster", { recordType: "leave", leaveCode: "NL", shiftTypeId: stD });
+    const act = (code: string) => [{ guard_id: guardId, work_date: "2026-08-04", site_id: fx.site.id, set_code: code }];
+    const r1 = await (await fix(owner, act("SHIFT"))).json();
+    expect(r1).toMatchObject({ noop: true, updated: 0 });
+    expect(await prisma.shiftRecord.count({ where: { guardId, source: "manual" } })).toBe(0);
+    // 最高來源同日兩條唔同代號（班＋RD）→ 採用 RD：改去代號唔同嗰條（班）
+    const st3 = (await prisma.shiftType.create({ data: { siteId: fx.site.id, code: "D3", hours: 12, createdBy: "test" } })).id;
+    await mkRec(4, "roster_upload", { recordType: "leave", leaveCode: "RD", shiftTypeId: st3 });
+    const r2 = await (await fix(owner, act("RD"))).json();
+    expect(r2).toMatchObject({ noop: false, updated: 1 });
+    expect((await prisma.shiftRecord.findFirstOrThrow({ where: { guardId, workDate: d(4), shiftTypeId: fx.shiftType.id } })).leaveCode).toBe("RD");
+  });
+
+  it("ii.3：按 (日, 盤) 分組——同日唔同盤各自揀最高來源，兩邊都保留", async () => {
+    const site2 = await prisma.site.create({ data: { canonicalName: `測試盤二-${Math.random().toString(36).slice(2, 6)}`, clientName: "測試客戶", billingModel: "per_shift", createdBy: "test" } });
+    const st2 = await prisma.shiftType.create({ data: { siteId: site2.id, code: "N", hours: 12, createdBy: "test" } });
+    for (let day = 1; day <= 5; day++) await mkRec(day, "roster_upload", { recordType: "shift" });
+    // 5 號盤二有頂位更（master_roster 班，低來源）——舊行為會被盤一 roster_upload 蓋走；新行為兩盤各自保留
+    await prisma.shiftRecord.create({ data: { workDate: d(8), siteId: site2.id, shiftTypeId: st2.id, guardId, recordType: "shift", settlementBrokerId: otherBrokerId, operationalBrokerId: otherBrokerId, source: "master_roster", createdBy: "test" } });
+    await mkRec(8, "roster_upload", { recordType: "shift" });
+    const l = await line();
+    expect(l.workDays).toBe(6); // 1-5 + 8（盤一）；盤二 8 號係頂位更唔計返工日，但冇被盤一蓋走
+    const picked = pickBySourcePriority([
+      { workDate: d(8), recordType: "shift", source: "roster_upload", siteId: "A" },
+      { workDate: d(8), recordType: "shift", source: "master_roster", siteId: "B" },
+    ]);
+    expect(picked.picked).toHaveLength(2);
+  });
+
+  it("ii.4：單條 POST /api/shift-records 新建寫 source=manual；PATCH 改代號寫 manual", async () => {
+    const res = await shiftPost(new Request("http://t/api/shift-records", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ work_date: "2026-08-09", site_id: fx.site.id, shift_type_id: fx.shiftType.id, guard_id: guardId, settlement_broker_id: b07Id, operational_broker_id: b07Id }) }));
+    expect(res.status).toBe(201);
+    const rec = await prisma.shiftRecord.findFirstOrThrow({ where: { guardId, workDate: d(9) } });
+    expect(rec.source).toBe("manual");
+    const { PATCH } = await import("@/app/api/shift-records/[id]/route");
+    const other = await mkRec(11, "roster_upload", { recordType: "shift" });
+    const p = await PATCH(new Request("http://t/x", { method: "PATCH", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ record_type: "leave", leave_code: "AL" }) }), { params: Promise.resolve({ id: other.id }) });
+    expect(p.status).toBe(200);
+    expect((await prisma.shiftRecord.findUniqueOrThrow({ where: { id: other.id } })).source).toBe("manual");
   });
 });

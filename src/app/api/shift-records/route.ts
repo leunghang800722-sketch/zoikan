@@ -1,3 +1,4 @@
+import { MANUAL_SOURCE } from "@/lib/longterm-payroll/attendance-priority";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import {
@@ -174,7 +175,7 @@ export async function POST(req: Request) {
       await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
       try {
-        const created = await prisma.shiftRecord.create({ data: { ...data, createdBy: session.userId } });
+        const created = await prisma.shiftRecord.create({ data: { ...data, source: data.source ?? MANUAL_SOURCE, createdBy: session.userId } }); // P18：單條新建寫 source=manual（同 batch 一致；caller 明確帶 source 先保留）
         await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
         await journalAutoCardUsesSafe([{ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...brokerPricingSource }]);
         return ok(scrubForBrokerSession(session, toBrokerShiftRecordDTO(created)), 201);
@@ -288,7 +289,7 @@ export async function POST(req: Request) {
     await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
     try {
-      const created = await prisma.shiftRecord.create({ data: { ...data, createdBy: session.userId } });
+      const created = await prisma.shiftRecord.create({ data: { ...data, source: data.source ?? MANUAL_SOURCE, createdBy: session.userId } }); // P18：單條新建寫 source=manual（同 batch 一致；caller 明確帶 source 先保留）
       await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
       await journalAutoCardUsesSafe([{ recordId: created.id, before: manualBefore, after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...internalSource }]);
       return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(created)), 201);
