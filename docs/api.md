@@ -2640,3 +2640,14 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 - **作廢 API**：`GET /api/longterm/payroll/:month/void`（`長工糧:view`）唯讀前置檢查 → `{ month, has_run, earlier_valid_runs:[YYYY-MM], later_blockers:[YYYY-MM], rollback_method: none|snapshot|exact_rebuild|approx_rebuild, needs_confirm_approx, affected_guards }`。`POST` body 加 `confirm_approx?:boolean`：`approx_rebuild`（冇快照而且有同年更早有效 run）未帶 `true` → 409 `approx_rollback_requires_confirm`（唔作廢）。回應加 `kept_manual_rows`、`rollback_method`。`existed=false` 快照回滾時：該結餘行而家有非 0 人手 `al_entitled`／`al_carry` → 唔刪行，`al_taken`／`sl_taken` 回到該行 `*_opening`（＝計算前讀到嘅累積，跨年時即上年結轉）、`as_of_month` 清空，計入 `kept_manual_rows`；opening 非 0 唔算人手（同年 existed=false 嘅 opening 只可能係上年結轉），冇人手值就刪行。（N1：曾誤將 taken 設 0 令上年結轉冇咗，已修；test：2026-12→2027-01→作廢→重算同首次一致。）audit `before={month,run_ids,guards_affected}`、`after` 帶 reason／rollback_method／restored／deleted／kept／legacy／avg_wages_cleared。
 - `GET /api/longterm/payroll/:month` additive 欄 `can_void`（老闆 true）；UI 作廢掣只對老闆顯示。
 - **平均工資 source 前綴**：批量導入 source 固定 `manual:批量導入[：note]`；作廢只清 source 以 `computed`／`auto:`／`自動計:` 開頭嘅行（唔再用 contains）。
+
+
+## P17（階段 17）：病假人手確認彈出＋合約表單修正＋每週一日例假（全部 additive）
+- `GET /api/longterm/inputs/sl-pending?month=YYYY-MM`（`長工糧:view`）：未確認 SL 草稿逐段 `{ month, locked, segments[{ id, guard_id, guard_name, guard_staff_no, date_from, date_to, roster_days, span_days, meets_consecutive, balance, within_balance, avg_daily_wage, expected_amount, expected_note }], segment_count, guard_count }`。
+- `POST /api/longterm/inputs/:id/sl-decision`（`長工糧:update`）：`{ decision: "confirm" | "unpaid", reason? }`。confirm＝醫生紙已核實＋轉 confirmed；unpaid＝作廢草稿並記 `draft_evidence.decline_reason`（同組日期唔再生成）。鎖月 403；已處理／唔係 SL 草稿 409 `not_sl_draft`；同已確認病假段重疊 409 `overlaps_confirmed_leave`。
+- `POST /api/month-closes/:id/lock` additive：仲有未確認 SL 草稿 → 409 `sl_drafts_pending`；body 可帶 `sl_unpaid_override: true`＋`sl_unpaid_reason`（非空）覆蓋（只老闆，否則 403；缺原因 400），audit `sl_unpaid_override`。
+- `POST /api/longterm/inputs/drafts/generate` 回應 additive `sl_pending`；一鍵結算 report `lock_precondition.sl_drafts_pending`（舊 run 冇）；一鍵結算「長工結算」步 numbers `slDraftsPending`＋needs_human。
+- 通知 kind `sl_drafts_pending`（`/settings` 通知開關多一項）。
+- P17.4（前端）：合約編輯清空結束日送 `effective_to: null`（API 本身一直接受，`LongtermContractUpdateSchema.effective_to` 為 `nullableDateOnly`）；4xx（含 409 `contract_overlap`）喺表單位置顯示。
+- P17.5：aggregate 同日 RD／NPL 衝突按每週一日例假判定（見 docs/ops.md），無 API 變更。
+- 計算：`slSegmentVerdict(..., confirmedShortPaid)` 新參數，預設 `SL_CONFIRMED_SHORT_PAID=false`（行為不變，見 docs/ops.md）。

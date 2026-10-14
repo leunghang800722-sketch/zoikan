@@ -83,13 +83,14 @@ test("彈出：通知＋首頁卡直達；面板逐段顯示；確認／當無�
   await expect(seg4).toContainText("夠 4 日");
   await expect(seg4.getByTestId("ltpay-sl-expected")).toHaveText("$1600.00");
   await expect(rows.filter({ hasText: "SL 1 日" })).toContainText("未夠 4 日");
+  await expect(rows.filter({ hasText: "SL 1 日" }).getByTestId("ltpay-sl-expected")).toHaveText("$0.00");
   // 冇「全部確認」一掣（病假）
   await expect(panel.getByText("全部確認")).toHaveCount(0);
 
   // 未確認＝無薪：津貼 0
   expect(await slAmount(page)).toBe(0);
 
-  // 逐段：4 日段確認、1 日段確認（短段照出）、2 日段當無薪
+  // 逐段：4 日段確認、1 日段確認（短段預設確認後仍唔出）、2 日段當無薪
   await seg4.getByTestId("ltpay-sl-confirm").click();
   await expect(rows).toHaveCount(2, { timeout: 10_000 });
   await rows.filter({ hasText: "SL 1 日" }).getByTestId("ltpay-sl-confirm").click();
@@ -102,8 +103,8 @@ test("彈出：通知＋首頁卡直達；面板逐段顯示；確認／當無�
   const voided = await prisma.longtermPayrollInput.findFirstOrThrow({ where: { guardId, voidedAt: { not: null } } });
   expect((voided.draftEvidence as { decline_reason: string }).decline_reason).toBe("員工冇交紙");
   expect(await prisma.longtermPayrollInput.count({ where: { guardId, status: "confirmed", doctorNoteVerified: true } })).toBe(2);
-  // 5 日 SL 已確認（4 + 1）× 500 × 0.8 = 2000
-  expect(await slAmount(page)).toBe(2000);
+  // 4 日段確認 × 500 × 0.8 = 1600；1 日短段預設唔出（SL_CONFIRMED_SHORT_PAID=false）
+  expect(await slAmount(page)).toBe(1600);
 
   // 重新生成：當無薪嗰段唔再出
   await page.request.post(`/api/longterm/inputs/drafts/generate?month=${M}`);

@@ -55,17 +55,17 @@ function req(url: string, cookie: string, method = "GET", body?: unknown) {
 const idp = (id: string) => ({ params: Promise.resolve({ id }) });
 
 describe("P17 確認後計算：未確認＝無薪；人手確認短段（<4 日）照出 4/5", () => {
-  it("3 日短病假：草稿（未確認）當無薪；確認後出 4/5、不再扣日薪", async () => {
+  it("4 日病假：草稿（未確認）當無薪；確認後出 4/5、不再扣日薪", async () => {
     const b = await base();
     const owner = await sessionCookieForUser(b.fx.userIds["老闆"]);
     const sysId = await ensureSystemUser();
     const g = await mkGuard(b, "測試甲");
     await work(b, g.id, [1, 2, 3, 4, 5, 6, 7, 8]);
-    await sl(b, g.id, [10, 11, 12]);
+    await sl(b, g.id, [10, 11, 12, 13]);
     await generateLongtermInputDrafts(AUG_MONTH, sysId);
     const unconfirmed = (await buildLongtermPayrollInputs(AUG_MONTH)).lines[0]!;
     expect(unconfirmed.sl45Amount).toBe(0);
-    expect(unconfirmed.npslDays).toBe(3);
+    expect(unconfirmed.npslDays).toBe(4);
     const [d] = await pendingDrafts(g.id);
     const res = await slDecision(req("http://t/x", owner, "POST", { decision: "confirm" }), idp(d!.id));
     expect(res.status).toBe(200);
@@ -88,7 +88,7 @@ describe("P17 sl-pending 清單／通知", () => {
     await prisma.guardAvgWage.create({ data: { guardId: g1.id, month: AUG_MONTH, avgDailyWage: 500, source: "test" } });
     await sl(b, g1.id, [3, 4, 5, 6]);
     await sl(b, g1.id, [12]);
-    await sl(b, g2.id, [20, 21]);
+    await sl(b, g2.id, [20, 21, 22, 23]);
     await generateLongtermInputDrafts(AUG_MONTH, sysId);
 
     const list = await listSlPending(AUG_MONTH);
@@ -97,7 +97,8 @@ describe("P17 sl-pending 清單／通知", () => {
     const seg4 = list.segments.find((s) => s.date_from === "2026-08-03")!;
     expect(seg4).toMatchObject({ roster_days: 4, span_days: 4, meets_consecutive: true, within_balance: true, expected_amount: 1600 });
     const seg1 = list.segments.find((s) => s.date_from === "2026-08-12")!;
-    expect(seg1).toMatchObject({ roster_days: 1, meets_consecutive: false, expected_amount: 400 });
+    expect(seg1).toMatchObject({ roster_days: 1, meets_consecutive: false, expected_amount: 0 }); // 預設短段確認後都唔出（SL_CONFIRMED_SHORT_PAID=false）
+    expect(seg1.expected_note).toContain("仍唔出津貼");
     const segNoAvg = list.segments.find((s) => s.guard_name === "測試乙")!;
     expect(segNoAvg.expected_amount).toBeNull();
 
