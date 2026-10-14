@@ -383,3 +383,40 @@ export function computeGross(c: GrossComponents): number {
 export function computeAutopay(gross: number, mpfEe: number): number {
   return round2(gross - mpfEe);
 }
+
+// ---------------------------------------------------------------------------
+// P17.5（老闆 2026-10-14）：每星期有 1 日例假。同一日同時有例假碼（RD／OFF）同無薪假碼（NL／NPL）嘅衝突：
+// 以該日所屬週（週一至週日，只計該月內嘅日子）判斷——冇其他明確 RD／OFF 日 → 當 RD（有薪例假，唔扣）；否則當 NPL（扣）。
+// 純 NPL（冇 RD 標記）照扣，唔自動補例假。保守假設：同一週有多日衝突而又冇明確 RD，只將最早嗰日當 RD（每週一日例假）。
+// ---------------------------------------------------------------------------
+export interface RdNplResolution {
+  /** 衝突日當 RD（唔扣）。 */
+  asRd: string[];
+  /** 衝突日當 NPL（扣）。 */
+  asNpl: string[];
+}
+
+function mondayKey(dISO: string): string {
+  const d = toUtcDate(dISO);
+  const dow = (d.getUTCDay() + 6) % 7; // 週一=0
+  return new Date(d.getTime() - dow * 86400000).toISOString().slice(0, 10);
+}
+
+export function resolveRdNplConflicts(rdDates: Iterable<string>, nplDates: Iterable<string>): RdNplResolution {
+  const rd = new Set(rdDates);
+  const npl = new Set(nplDates);
+  const conflicts = [...npl].filter((d) => rd.has(d)).sort();
+  const conflictSet = new Set(conflicts);
+  const restWeeks = new Set<string>();
+  for (const d of rd) if (!conflictSet.has(d)) restWeeks.add(mondayKey(d));
+  const out: RdNplResolution = { asRd: [], asNpl: [] };
+  for (const d of conflicts) {
+    const wk = mondayKey(d);
+    if (restWeeks.has(wk)) out.asNpl.push(d);
+    else {
+      out.asRd.push(d);
+      restWeeks.add(wk);
+    }
+  }
+  return out;
+}

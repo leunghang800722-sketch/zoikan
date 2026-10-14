@@ -140,7 +140,29 @@ describe("buildLongtermPayrollInputs：病假 4/5（連續 ≥4 日 + 醫生紙 
     expect(line.sl45Amount).toBe(expectedPay);
   });
 
-  it("P17.1：連續得 3 日但醫生紙已人手確認——照出 4/5（公司做法），唔當無薪", async () => {
+  it("P17.5：同日 RD／NPL 衝突按每週一日例假——8/2 當 RD 唔扣、8/4（同週 8/9 有 RD）當 NPL 扣、純 NPL 8/27–30 四日照扣", async () => {
+    const { site, st, actorUserId } = await makeFixtureBase();
+    const guard = await prisma.guard.create({ data: { nameZh: "測試長工-RDNPL", employmentType: "longterm_autopay", hireDate: new Date("2024-01-01"), createdBy: "test" } });
+    await prisma.guardLongtermContract.create({ data: { guardId: guard.id, monthlySalary: 15500, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: actorUserId } });
+    // 同日多來源紀錄（唯一索引限制同 shift_type 淨係一條）→ NPL 掛另一個更種
+    const st2 = await prisma.shiftType.create({ data: { siteId: site.id, code: "X2", hours: 12, createdBy: "test" } });
+    await makeLeave(guard.id, site, st, AUG(2), "RD");
+    await makeLeave(guard.id, site, st2, AUG(2), "NPL");
+    await makeLeave(guard.id, site, st, AUG(4), "RD");
+    await makeLeave(guard.id, site, st2, AUG(4), "NPL");
+    await makeLeave(guard.id, site, st, AUG(9), "RD");
+    for (const d of [27, 28, 29, 30]) await makeLeave(guard.id, site, st, AUG(d), "NPL");
+    const line = (await buildLongtermPayrollInputs(AUG_MONTH)).lines[0];
+    const perDay = 15500 / AUG_DAYS;
+    // 扣 8/4 + 8/27–30 = 5 日（唔扣 8/2）
+    expect(line.deduction).toBeCloseTo(-round2(perDay * 5), 1);
+    const notes = line.notes.join("\n");
+    expect(notes).toContain("2026-08-02 同日 RD／NPL 衝突：按每週一日例假當 RD");
+    expect(notes).toContain("2026-08-04 同日 RD／NPL 衝突");
+    expect(notes).toContain("當 NPL（扣）");
+  });
+
+  it("P17.1：連續得 3 日、醫生紙已人手確認——預設（SL_CONFIRMED_SHORT_PAID=false）仍當無薪（現行行為／gate 不變）", async () => {
     const { site, st, actorUserId } = await makeFixtureBase();
     const guard = await prisma.guard.create({ data: { nameZh: "測試長工-病假3日", employmentType: "longterm_autopay", hireDate: new Date("2024-01-01"), createdBy: "test" } });
     await prisma.guardLongtermContract.create({ data: { guardId: guard.id, monthlySalary: 15500, effectiveFrom: new Date("2024-01-01"), effectiveTo: null, source: "manual", createdBy: actorUserId } });
@@ -150,9 +172,8 @@ describe("buildLongtermPayrollInputs：病假 4/5（連續 ≥4 日 + 醫生紙 
 
     const result = await buildLongtermPayrollInputs(AUG_MONTH);
     const line = result.lines[0];
-    expect(line.sl45Amount).toBeGreaterThan(0);
-    expect(line.npslDays).toBe(0);
-    expect(line.notes.join("\n")).toMatch(/公司做法/);
+    expect(line.sl45Amount).toBe(0);
+    expect(line.npslDays).toBe(3);
   });
 
   it("P17.1：連續得 3 日且醫生紙未確認——全部當無薪假扣日薪、冇津貼", async () => {
