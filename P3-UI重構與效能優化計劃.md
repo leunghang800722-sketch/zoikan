@@ -1137,3 +1137,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 ### 23.4 8 月第五輪（2026-10-15）
 - Dispatch 經 PATCH 將 5 段短病假 `doctor_note_verified=false`（底稿假設、銀行冇出）。重算 8 月（56 行，autopay 891,546.75）。**配對 51／吻合 48／差 3**（全部係 12 個月平均日薪：短病假 10 日 −3,007.42、離職年假 −21.06／−17.31，等 1–6 月 Payroll Editor）／系統有銀行冇 5（離職者唔經 autopay，老闆確認）／銀行有系統冇 28（寫字樓）。8 月除平均工資資料外已全部吻合或有解釋。
+
+## 24 階段 19a（2026-10-14）：長工年資起點統一＝最早長工合約生效日
+- **根因**：兩位 9/1 轉長工（`guards.hire_date`＝散工入職日 7/29、8/11）9 月 MPF 僱員供款應 0（新僱傭首月豁免由長工合約起計）但系統用 hire_date 判斷已過 60 日而扣 5%；另一位 2025-03 散工入職、2026-09 轉長工：辦公室扣 9 月法定假（未滿 3 個月）同 MPF 0，系統用 hire_date 唔扣假又扣 MPF。
+- **改動**：`aggregate.ts` 新年資起點＝最早一段未作廢長工合約 `effectiveFrom`（`firstContractByGuard`），fallback `guards.hire_date`；MPF 僱員供款豁免（`computeMpf` 嘅 `hireDate`）同法定假 `after_3_months` 3 個月規則（`computeShDeduction`）都改用呢個起點；年假 entitlement 原本已經係。起點同 hire_date 唔同時 notes 加「年資起點：長工合約 YYYY-MM-DD（散工段唔計）」。其他公式、API、schema 不變。
+- **測試**：`tests/p19a-seniority-start.test.ts`（4 條：散工轉長工 MPF 0＋法定假扣、合約＝入職日不變、2025 散工轉長工、8 月不變）。`docs/ops.md` 加「年資起點」規則表。

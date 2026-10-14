@@ -527,7 +527,13 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     // --------------------------------------------------------------- SH
     const shDates = [...(leaveDatesByCode.get("SH") ?? [])].sort();
     const shSeg = rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= end.getTime());
-    const shResult = computeShDeduction(shDates, segments, monthDaysCount, guard.hireDate ? toUtcDate(guard.hireDate) : null, shSeg?.statutoryHolidayPaidFrom ?? "immediate");
+    // P19a：年資起點＝最早一段未作廢長工合約生效日（散工段唔計），fallback guards.hire_date。
+    // MPF 僱員供款豁免（首月／60 日）同法定假 3 個月規則共用同一起點。
+    const hireDateIso = guard.hireDate ? toUtcDate(guard.hireDate) : null;
+    const contractStart = firstContractByGuard.get(guardId) ?? null;
+    const seniorityStart = contractStart ?? hireDateIso;
+    const seniorityNote = contractStart ? `年資起點：長工合約 ${iso(contractStart)}（散工段唔計）` : null;
+    const shResult = computeShDeduction(shDates, segments, monthDaysCount, seniorityStart, shSeg?.statutoryHolidayPaidFrom ?? "immediate");
     notes.push(...shResult.notes);
 
     // --------------------------------------------------------------- (b) 津貼／扣款
@@ -598,7 +604,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     const ageAtMonthEnd = dob ? (end.getTime() - dob.getTime()) / 86400000 / 365.25 : null;
     // §25.6：monthStart 傳 `start`（呢個月月首）畀 computeMpf() 判斷首月
     // 新規則（老闆 2026-09-28 追加決定 #3，只 monthStart>=2026-09-01 生效）。
-    const mpfResult = computeMpf(gross, { ageAtMonthEnd, hireDate: guard.hireDate ? toUtcDate(guard.hireDate) : null, monthEnd: end, monthStart: start });
+    const mpfResult = computeMpf(gross, { ageAtMonthEnd, hireDate: seniorityStart, monthEnd: end, monthStart: start });
+    if (seniorityNote && contractStart && hireDateIso && contractStart.getTime() !== hireDateIso.getTime()) notes.push(seniorityNote);
     if (mpfResult.exemptReason) {
       const label =
         mpfResult.exemptReason === "over65"
