@@ -1119,4 +1119,5 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **P18.2**：新 `GET /api/longterm/attendance-issues`（衝突日＋全歸雞頭長工）、長工糧頁新 tab「出勤修正」（`AttendanceFixPanel.tsx`）：採用代號／設為代號（batch 就地改最高來源紀錄為人手，舊內容留 audit）、歸公司兵（batch 設 B07，按 site 分批）、完成後「要重算本月先反映」＋重算掣、已鎖月唯讀。簽證形式長工唔列入「歸公司兵」。
 - **測試**：`tests/p18-attendance-priority.test.ts`（7 條）、`tests/e2e/p18-attendance-fix.spec.ts`（1 條）；`p16b-recon-tweaks` note 斷言同步。
 - **驗證**：見最終回報（vitest 隔離 PG 54405；e2e／gate 隔離 PG 54406、`next build`＋`next start` 3178）。本 branch 未含 P17，`gate:ltpay-aug` 為舊基準 56/56（Gross 917,875.19／Autopay 882,146.72／MPF EE 35,728.47／ER 35,966.15）。
+- **補充（協調者 2026-10-14）**：(a) `countSlPending()` 對已鎖月份（含「全部當無薪」覆蓋鎖月）回 0 → `sl_drafts_pending` 通知、一鍵結算報告不再提示；首頁收件箱病假卡跳過 `sl-pending` 回 `locked:true` 嘅月份（長工糧頁面板仍可睇）。(b) `POST /api/longterm/inputs/confirm-batch` 遇 `draftSource=roster_leave:SL` 草稿 → 400（提示用 `sl-decision`；鎖月 403 優先）。已 rebase 到 main `6f85188`（含階段 17），所以 `gate:ltpay-aug` 為新基準。
 
