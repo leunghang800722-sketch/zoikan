@@ -48,6 +48,7 @@ export interface DayAdoption {
 export function pickBySourcePriority<T extends AttendanceLike>(srs: readonly T[]): { picked: T[]; adoptions: Map<string, DayAdoption> } {
   // 規則（P18 驗收 M4）：
   //  - shift：按（日, 盤）分組，同組（shift＋leave）取最高來源——自己崗位＋頂位同日兩邊保留；
+  //  - 最高級來源當日只有 leave（冇 shift）→ 該日所有低級來源嘅 shift（任何盤）一律忽略；
   //  - leave：逐日同全日所有紀錄（所有盤、shift 或 leave）比較，當日最高級來源有任何紀錄，低級來源嘅 leave 一律忽略。
   const groupBest = new Map<string, number>();
   const dayBest = new Map<string, number>();
@@ -59,6 +60,13 @@ export function pickBySourcePriority<T extends AttendanceLike>(srs: readonly T[]
     if (rank < (groupBest.get(k) ?? Infinity)) groupBest.set(k, rank);
     if (rank < (dayBest.get(d) ?? Infinity)) dayBest.set(d, rank);
   }
+  // 最高級來源當日有冇 shift；冇（只有 leave）→ 低級來源嘅 shift（任何盤）一律忽略
+  const dayBestHasShift = new Map<string, boolean>();
+  for (const r of srs) {
+    if (r.recordType !== "shift") continue;
+    const d = r.workDate.toISOString().slice(0, 10);
+    if (sourceRank(r.source) === dayBest.get(d)) dayBestHasShift.set(d, true);
+  }
   const picked: T[] = [];
   const adoptedByDay = new Map<string, Set<string>>();
   const ignoredByDay = new Map<string, Set<string>>();
@@ -68,7 +76,8 @@ export function pickBySourcePriority<T extends AttendanceLike>(srs: readonly T[]
       continue;
     }
     const d = r.workDate.toISOString().slice(0, 10);
-    const keep = sourceRank(r.source) === (r.recordType === "shift" ? groupBest.get(dayKey(r)) : dayBest.get(d));
+    const rank = sourceRank(r.source);
+    const keep = r.recordType === "shift" ? rank === dayBest.get(d) || (!!dayBestHasShift.get(d) && rank === groupBest.get(dayKey(r))) : rank === dayBest.get(d);
     if (keep) {
       picked.push(r);
       const set = adoptedByDay.get(d) ?? new Set<string>();

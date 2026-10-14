@@ -150,7 +150,7 @@ Email 內容同站內通知 body 一樣：只有盤名／數字／id／月份，
   | 2 | `master_roster`、`master_roster_only`、`master_roster_site` |
   | 3 | `payroll_only`、`payroll` |
   | 4 最低 | 其他／null |
-- aggregate、SL 草稿生成（`generateLongtermInputDrafts`）、病假待確認清單（`listSlPending`）、勤工獎資格（`listAttendanceBonusEligible`）、頂位津貼草稿（`loadCoverShifts`）都用同一個 helper `pickBySourcePriority`：**shift** 按（保安員, 日, 盤）分組取最高優先級（同日自己崗位 B07＋頂位兩邊保留）；**leave** 逐日同全日所有盤、所有紀錄（shift 或 leave）比較，當日最高級來源有任何紀錄，低級來源嘅 leave 一律忽略（所以跨盤「upload 班@盤A vs master SL@盤B」SL 唔計、唔生成草稿）。同一最高級同日多條（雙更）照舊全計；OT 紀錄（record_type=ot）唔受影響。只改紀錄挑選，唔改任何金額公式。
+- aggregate、SL 草稿生成（`generateLongtermInputDrafts`）、病假待確認清單（`listSlPending`）、勤工獎資格（`listAttendanceBonusEligible`）、頂位津貼草稿（`loadCoverShifts`）都用同一個 helper `pickBySourcePriority`：**shift** 按（保安員, 日, 盤）分組取最高優先級（同日自己崗位 B07＋頂位兩邊保留）；**leave** 逐日同全日所有盤、所有紀錄（shift 或 leave）比較，當日最高級來源有任何紀錄，低級來源嘅 leave 一律忽略；若最高級來源當日只有 leave（冇 shift），低級來源嘅 shift（任何盤）亦一律忽略（例：upload SL@盤B vs master 班@盤A → 病假，唔計返工）（所以跨盤「upload 班@盤A vs master SL@盤B」SL 唔計、唔生成草稿）。同一最高級同日多條（雙更）照舊全計；OT 紀錄（record_type=ot）唔受影響。只改紀錄挑選，唔改任何金額公式。
 - 「人手」點寫：`POST /api/shift-records/batch` 新建、單條 `POST /api/shift-records` 新建（caller 冇帶 source 時）、`PATCH /api/shift-records/:id` 改 record_type／leave_code、面板 `POST /api/longterm/attendance-fix`，都寫 `source="manual"`；batch 更新現存格只喺 record_type／leave_code 改變（或由 cancelled 復活）先寫。純改結算單位（歸公司兵）唔蓋 source。對數套用（reconcile-apply）重寫紀錄會把 source 設返 `roster_upload`（明確以新上載為準）。
 - 衝突 note 文案：「⚠ 同日多來源紀錄衝突：MM-DD（A 代號 x / B 代號 y；已採用：來源 Z）……」，銀行對數 tab 照舊展開紅字。
 - **「出勤修正」tab**（長工糧頁；讀 `長工糧:view`，寫 `長工糧:update`＝老闆／會計；主管／雞頭 403；無權限時掣停用）：

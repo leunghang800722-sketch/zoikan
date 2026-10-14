@@ -260,6 +260,25 @@ describe("P18 aggregate／面板 API", () => {
     await mkRec(12, "master_roster", { recordType: "shift" });
     await generateLongtermInputDrafts(MONTH, sysId);
     expect(await prisma.longtermPayrollInput.count({ where: { guardId, draftSource: "roster_leave:SL", voidedAt: null } })).toBe(1);
+    // 驗收修正 3：最高級來源當日只有 leave → 低級來源嘅 shift（任何盤）唔計——12 號 master 班@盤A 被忽略，workDays 唔計該日
+    const picked = pickBySourcePriority(await prisma.shiftRecord.findMany({ where: { guardId, workDate: d(12) } }));
+    expect(picked.picked.map((r) => r.recordType)).toEqual(["leave"]);
+    const wd = (await line()).workDays;
+    expect(wd).toBe(10); // 1–10 號 roster_upload 班；12 號 master 班唔計
+  });
+
+  it("驗收修正 3：最高級有 shift 時 shift 仍按（日, 盤）保留兩邊；頂位班被最高級 leave 蓋走唔計", async () => {
+    const r = [
+      { workDate: d(8), recordType: "shift", source: "roster_upload", siteId: "A" },
+      { workDate: d(8), recordType: "shift", source: "master_roster", siteId: "B" },
+      { workDate: d(8), recordType: "leave", source: "master_roster", siteId: "B" },
+    ];
+    expect(pickBySourcePriority(r).picked).toEqual([r[0], r[1]]); // 最高級有 shift@A → shift@B 按盤分組保留；低級 leave 被忽略
+    const only = pickBySourcePriority([
+      { workDate: d(9), recordType: "leave", source: "roster_upload", siteId: "A" },
+      { workDate: d(9), recordType: "shift", source: "master_roster", siteId: "B" },
+    ]);
+    expect(only.picked.map((x) => x.recordType)).toEqual(["leave"]);
   });
 
   it("M5：勤工獎資格跟來源優先次序——被忽略嘅低來源 SL 唔取消資格；最高來源 SL 先取消", async () => {
