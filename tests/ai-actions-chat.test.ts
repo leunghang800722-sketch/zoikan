@@ -69,7 +69,7 @@ describe("WP-AI-DIAG chat route 建議動作卡", () => {
   it("audit after：suggested_actions 只有 type／label（冇 params）、provider／model；對話全文唔另存", async () => {
     setLlmClientForTests(clientReplying("好" + actionsBlock([OPEN, RUN_OPEN_MONTH])));
     await readSse(await chatPost(chatRequest(cookie, "診斷 9 月")));
-    const audit = await prisma.auditLog.findFirst({ where: { tableName: "ai_chat" }, orderBy: { createdAt: "desc" } });
+    const audit = await prisma.auditLog.findFirst({ where: { tableName: "ai_chat", action: "ai_chat" }, orderBy: { createdAt: "desc" } });
     const after = audit!.after as Record<string, unknown>;
     expect(after.suggested_actions).toEqual([
       { type: "open_page", label: OPEN.label },
@@ -111,7 +111,9 @@ describe("WP-AI-DIAG chat route 建議動作卡", () => {
     expect(done.guard_triggered).toBe(true);
     expect(done.suggested_actions).toEqual([]);
     expect(done.text).not.toContain("INSERT");
-    const audit = await prisma.auditLog.findFirst({ where: { tableName: "ai_chat" }, orderBy: { createdAt: "desc" } });
+    // 偶發 fail 根因：guard 觸發時 `output-guard.ts` 另寫一條 tableName=ai_chat／action=ai_guard_triggered（after 只有 reason），
+    // 同聊天 audit（action=ai_chat）同表、createdAt 可能同毫秒，無 action 篩選就可能攞到前者。
+    const audit = await prisma.auditLog.findFirst({ where: { tableName: "ai_chat", action: "ai_chat" }, orderBy: { createdAt: "desc" } });
     expect((audit!.after as { suggested_actions: unknown[] }).suggested_actions).toEqual([]);
     const conv = await prisma.aiConversation.findUnique({ where: { userId: fx.userIds["老闆"] } });
     expect(JSON.stringify(conv!.messages)).not.toContain("one_click_run");

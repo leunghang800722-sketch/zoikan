@@ -97,8 +97,7 @@ describe("P17 sl-pending 清單／通知", () => {
     const seg4 = list.segments.find((s) => s.date_from === "2026-08-03")!;
     expect(seg4).toMatchObject({ roster_days: 4, span_days: 4, meets_consecutive: true, within_balance: true, expected_amount: 1600 });
     const seg1 = list.segments.find((s) => s.date_from === "2026-08-12")!;
-    expect(seg1).toMatchObject({ roster_days: 1, meets_consecutive: false, expected_amount: 0 }); // 預設短段確認後都唔出（SL_CONFIRMED_SHORT_PAID=false）
-    expect(seg1.expected_note).toContain("仍唔出津貼");
+    expect(seg1).toMatchObject({ roster_days: 1, meets_consecutive: false, expected_amount: 400 }); // 短段確認後照出（SL_CONFIRMED_SHORT_PAID=true）
     const segNoAvg = list.segments.find((s) => s.guard_name === "測試乙")!;
     expect(segNoAvg.expected_amount).toBeNull();
 

@@ -120,7 +120,7 @@ Email 內容同站內通知 body 一樣：只有盤名／數字／id／月份，
   3. 首頁收件箱卡「病假要確認醫生紙」（上月＋本月）。
 - 處理：長工糧頁人手輸入 tab「病假要你確認醫生紙」面板，每段顯示日期、連續日數、夠唔夠 4 日提示、結餘、確認後預計津貼金額；**逐段**撳「有醫生紙，確認」（醫生紙標已核實＋計糧）或「冇醫生紙，當無薪」（作廢草稿並記原因，同一組日期之後唔再生成）。**冇「全部確認」一掣**（`confirm-batch` API 仍保留，但唔用於病假）。確認後撳「重算本月」睇金額。
 - 鎖月覆蓋：只有老闆，鎖定區勾「全部未確認病假當無薪，照鎖」＋必填原因（`sl_unpaid_override` + `sl_unpaid_reason`），草稿保持未確認（＝唔出津貼），寫入鎖月 audit `sl_unpaid_override`。
-- **待老闆／規劃者決定（`SL_CONFIRMED_SHORT_PAID`，`compute.ts`）**：已確認醫生紙但連續未夠 4 日嘅短病假段出唔出？銀行 8 月實證有出，但 `gate:ltpay-aug` 老闆總表 oracle（定稿）嘅 6 位員工短病假段係當無薪。常數預設 `false`（現行行為，gate 不變）；改 `true` 即照老闆規則出，但 `gate:ltpay-aug` 會由 56/56 變 25 項欄位差異（6 人，Gross +9,884.41），要先更新 oracle。
+- **短病假（`SL_CONFIRMED_SHORT_PAID`，`compute.ts`，預設 `true`，老闆決定）**：已人手確認醫生紙嘅病假段，確認咗就出 4/5 津貼，唔理連續幾日（結餘仍然限制）。`gate:ltpay-aug` fixture builder（`scripts/gate/build-ltpay-aug-fixture.ts`）只對 oracle 真係出咗津貼（該人 `sl_pay>0` 且段連續 ≥4 日）嘅段標 `doctorNoteVerified=true`，其餘標未核實，因底稿「一律假設有醫生紙」同 oracle／銀行實況（短段冇出）不符。
 
 ### 每週一日例假（P17.5，老闆 2026-10-14）
 - 同一日同時有例假碼（RD／OFF）同無薪假碼（NL／NPL）：看該日所屬週（週一至週日，只計該月內日子），冇其他明確 RD／OFF 日 → 當 RD（有薪例假，唔扣）；否則當 NPL（扣）。同一週多日衝突而冇明確 RD：只最早一日當 RD（保守）。純 NPL（冇 RD 標記）照舊扣，唔自動補例假。逐人 notes 有「同日 RD／NPL 衝突：按每週一日例假當 RD／當 NPL」。實作 `compute.ts` `resolveRdNplConflicts()`。

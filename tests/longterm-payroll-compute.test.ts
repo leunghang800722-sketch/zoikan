@@ -247,9 +247,15 @@ describe("病假 4/5（§14 規則 9）", () => {
     expect(v.qualifies).toBe(true);
   });
 
-  it("P17.1：預設（SL_CONFIRMED_SHORT_PAID=false）連續得 3 日 <4 即使醫生紙已確認 → 仍當無薪（現行行為不變，gate 保持）", () => {
-    expect(SL_CONFIRMED_SHORT_PAID).toBe(false);
+  it("P17.1：預設（SL_CONFIRMED_SHORT_PAID=true）連續得 3 日 <4 但醫生紙已人手確認 → 照出", () => {
+    expect(SL_CONFIRMED_SHORT_PAID).toBe(true);
     const v = slSegmentVerdict(3, 3, 10, true);
+    expect(v.qualifies).toBe(true);
+    expect(v.reason).toMatch(/連續得 3 日/);
+  });
+
+  it("P17.1：confirmedShortPaid=false（舊規則）→ 短段即使確認都當無薪", () => {
+    const v = slSegmentVerdict(3, 3, 10, true, false);
     expect(v.qualifies).toBe(false);
     expect(v.reason).toMatch(/連續得 3 日/);
   });

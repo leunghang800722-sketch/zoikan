@@ -36,10 +36,9 @@ export const SL_ACCRUAL_PER_MONTH = 2; // BA.SL_ACCRUAL_PER_MONTH
 const SL_ACCRUAL_START_MONTHS = 1; // BA.SL_ACCRUAL_START_MONTHS——做滿 1 個月先開始儲
 const SL_ACCRUAL_CAP = 120; // BA.SL_ACCRUAL_CAP——《僱傭條例》上限
 export const SL_MIN_CONSECUTIVE = 4; // BA.SL_MIN_CONSECUTIVE
-/** P17.1：已人手確認醫生紙嘅「連續 <4 日」短病假段照出 4/5 津貼？**預設 false（現行行為不變）**。
- * 原因：gate:ltpay-aug 老闆總表 oracle（定稿）嘅 6 位員工短病假段（醫生紙假設有）係當無薪——開咗會令該 gate 由 56/56 變 25 項欄位差異
- * （Gross +9,884.41）；而銀行 8 月實證短病假有出。兩個老闆來源互相矛盾，等老闆／規劃者決定後改呢個常數（一行）。 */
-export const SL_CONFIRMED_SHORT_PAID = false;
+/** P17.1（老闆 2026-10-14 決定）：已人手確認醫生紙嘅「連續 <4 日」短病假段照出 4/5 津貼（確認咗就出，唔理連續幾日）。
+ * `gate:ltpay-aug` fixture builder 只對 oracle 真係出咗津貼嘅段標 doctorNoteVerified=true，所以 gate 同呢個規則一致。 */
+export const SL_CONFIRMED_SHORT_PAID = true;
 const SL_RATE = 0.8;
 
 // ---------------------------------------------------------------------------
@@ -269,7 +268,7 @@ export function slSegmentVerdict(segDays: number, spanDays: number, balance: num
   const okBalance = balance + 1e-9 >= segDays;
   // P17.1（老闆 2026-10-14 規則：醫生紙人手確認＝公司決定出津貼，銀行 8 月實證 10 日短病假全部有出）：
   // confirmedShortPaid=true 時，已人手確認嘅段唔再以「連續 <4 日」擋；連續日數只影響說明文字；結餘仍然限制；未確認一律當無薪。
-  // 預設 false（見 SL_CONFIRMED_SHORT_PAID 註解）。
+  // 預設值見 SL_CONFIRMED_SHORT_PAID（true）。
   if (okBalance && doctorNoteVerified && (okConsecutive || confirmedShortPaid)) {
     const consecutiveNote = okConsecutive ? `連續 ${spanDays} 日 ≥ ${SL_MIN_CONSECUTIVE} 日` : `連續得 ${spanDays} 日 < ${SL_MIN_CONSECUTIVE} 日（按僱傭條例未夠連續 ${SL_MIN_CONSECUTIVE} 日；公司做法：已確認醫生紙照出）`;
     return { qualifies: true, reason: `${consecutiveNote}、結餘 ${balance} 日 ≥ ${segDays} 日、有醫生紙（人手已確認） → 4/5 疾病津貼` };
