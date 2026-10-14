@@ -1112,3 +1112,6 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **P17.4** 長工糧「合約」tab：編輯表單日期欄收到 ISO 日期時間（`2026-12-31T00:00:00.000Z`）顯示空白，清唔到結束日 → 現截成 YYYY-MM-DD，清空送 `effective_to: null`；合約新增／編輯／作廢嘅 4xx 錯誤喺表單位置 Banner 顯示（409 `contract_overlap` 列出重疊日期＋「要先結束或作廢另一段」），表單唔關。`src/lib/longterm-payroll/contract-form.ts`。
 - **P17.5** 同日 RD／NPL 衝突按每週一日例假（`resolveRdNplConflicts`）。`gate:ltpay-aug`：56 人，Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／MPF ER 35,996.80，對 oracle 舊數只 第 1 人 一人差（gross +612.90、autopay +582.25、MPF EE／ER 各 +30.65），其餘 55 人 0 差異（第 2 人 workDays INFO 照舊），與規劃者預期一致。
 - 測試：vitest `p17-sl-confirm`（7）、`p17-4-contract-form`（6）、compute／aggregate 增補；Playwright `p17-sl-confirm`（2）、`p17-4-contract-edit`（2）、`longterm-drafts` 改用頂位草稿。
+
+### 22.2 部署同 8 月重算（2026-10-15）
+- merge `6f85188`（§22 員工編號改序號）；部署 `6acf0340`。重算 8 月：8/2 例假個案已吻合；但「已確認短病假照出 4/5」令 5 人（試算底稿一律假設有醫生紙、銀行實際冇出）新增差額，另 1 人（短病假銀行有出但平均工資唔同）差額由 +3,444 變 −3,007。配對 51／吻合 44／差 7。處理：按老闆規則，該 5 段由人手改為「冇醫生紙」（Dispatch 經 UI），之後重算。
