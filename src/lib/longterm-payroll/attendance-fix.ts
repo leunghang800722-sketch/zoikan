@@ -8,6 +8,7 @@ import { writeAuditMany } from "@/lib/audit";
 import { BadRequest, NotFound } from "@/lib/api/errors";
 import { assertMonthNotLocked, assertMonthNotLockedTx } from "@/lib/month-lock";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
+import { journalAutoCardUsesSafe, toNum, type AutoCardUse } from "@/lib/pricing/auto-card-journal";
 import { fetchEffectiveRateCards, resolveShiftPricingFromCards } from "@/lib/pricing/resolve-rate";
 import { MANUAL_SOURCE, sourceRank } from "./attendance-priority";
 
@@ -63,7 +64,7 @@ export async function applyAttendanceFix(params: { month: Date; actions: FixActi
   }
 
   // ---- 逐個動作計劃（未寫任何嘢）----
-  type Plan = { id: string; data: Prisma.ShiftRecordUncheckedUpdateInput; recordType: "shift" | "leave"; settlementBrokerId: string | null; reprice: boolean; before: (typeof records)[number] };
+  type Plan = { id: string; data: Prisma.ShiftRecordUncheckedUpdateInput; recordType: "shift" | "leave"; settlementBrokerId: string | null; reprice: boolean; pricingSource?: Record<string, unknown>; before: (typeof records)[number] };
   const plans = new Map<string, Plan>();
   const results: FixResult[] = [];
   for (const a of actions) {
@@ -135,6 +136,7 @@ export async function applyAttendanceFix(params: { month: Date; actions: FixActi
       isExternal: p.before.isExternal,
       recordType: p.recordType,
     });
+    p.pricingSource = pricing.source as Record<string, unknown>;
     p.data = { ...p.data, clientRateSnapshot: pricing.clientRate ?? null, guardWageSnapshot: pricing.guardWage ?? null, brokerFeeSnapshot: pricing.brokerFee ?? null };
   }
 
@@ -150,7 +152,16 @@ export async function applyAttendanceFix(params: { month: Date; actions: FixActi
       },
       { timeout: 60_000, maxWait: 10_000 },
     );
+    // `via` 標記經 AUDIT_META_PASSTHROUGH_KEYS 保留（shift_records audit 其餘欄位照 DTO mapping）
     await writeAuditMany([...plans.values()].map((p) => ({ actorUserId, tableName: "shift_records", rowId: p.id, action: "update" as const, before: p.before, after: { ...afters.get(p.id)!, via: "longterm_attendance_fix" }, ip })));
+    // N4 不變式：寫咗價錢 snapshot 就補 journal（best effort，令 undo 清得到）
+    const uses: AutoCardUse[] = [];
+    for (const p of plans.values()) {
+      if (!p.pricingSource) continue;
+      const a = afters.get(p.id)!;
+      uses.push({ recordId: p.id, before: [toNum(p.before.clientRateSnapshot), toNum(p.before.guardWageSnapshot), toNum(p.before.brokerFeeSnapshot)], after: [toNum(a.clientRateSnapshot), toNum(a.guardWageSnapshot), toNum(a.brokerFeeSnapshot)], ...p.pricingSource });
+    }
+    await journalAutoCardUsesSafe(uses);
   }
   const updated = results.filter((r) => r.action === "updated").length;
   return { results, updated, noop: updated === 0 };

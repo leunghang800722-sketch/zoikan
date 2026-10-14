@@ -1121,3 +1121,5 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **驗證**：見最終回報（vitest 隔離 PG 54405；e2e／gate 隔離 PG 54406、`next build`＋`next start` 3178）。已基於 main（含 P17），`gate:ltpay-aug` 為 55/56＋1 已知差異。
 - **補充（協調者 2026-10-14）**：(a) `countSlPending()` 對已鎖月份（含「全部當無薪」覆蓋鎖月）回 0 → `sl_drafts_pending` 通知、一鍵結算報告不再提示；首頁收件箱病假卡跳過 `sl-pending` 回 `locked:true` 嘅月份（長工糧頁面板仍可睇）。(b) `POST /api/longterm/inputs/confirm-batch` 遇 `draftSource=roster_leave:SL` 草稿 → 400（提示用 `sl-decision`；鎖月 403 優先）。已 rebase 到 main `6f85188`（含階段 17），所以 `gate:ltpay-aug` 為新基準。
 - **驗收修正（Opus 5.5）**：M1 SL 草稿生成／病假待確認清單先跟來源優先次序（連 shift 比較）；M2 面板改用專用 `POST /api/longterm/attendance-fix`（`長工糧:update`，會計可用；`attendance-issues` 回 `can_update` 停用掣）；採用 X 目標已係 X → 改揀代號唔同嗰條、仍無改動回 `noop:true`；來源層級加 `master_roster_only`／`master_roster_site`（＝master_roster）、`payroll`（＝payroll_only）；優先次序改按（保安員, 日, 盤）分組；單條 `POST/PATCH /api/shift-records` 寫 `source=manual`。其餘建議項目只作註明、不改。
+- **驗收修正 2**：M4 規則改為 shift 按（日, 盤）、leave 逐日跨盤比較（aggregate／SL 草稿／待確認清單／勤工獎／頂位津貼同一 helper）；M5 勤工獎資格先跟優先次序；M6 `attendance-fix` 補 auto 價卡 journal；(ii)a 頂位津貼先跟優先次序；(ii)b audit `via` 加入 `AUDIT_META_PASSTHROUGH_KEYS`。
+

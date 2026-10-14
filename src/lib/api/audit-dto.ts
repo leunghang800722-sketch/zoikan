@@ -134,6 +134,8 @@ export const AUDIT_META_PASSTHROUGH_KEYS = [
   "copied_from",
   // P7.2：排程 job 代做嘅寫入（值＝job key，例 open_next_month；非 PII）
   "by_job",
+  // P18 驗收：長工糧「出勤修正」面板寫入嘅標記（值＝"longterm_attendance_fix"；非 PII）
+  "via",
   "reject_reason",
   "override_reason",
   "reconciliation_summary",

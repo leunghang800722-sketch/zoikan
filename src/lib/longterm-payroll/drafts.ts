@@ -225,10 +225,13 @@ export async function listAttendanceBonusEligible(month: Date): Promise<{ month:
   const base = { month: iso(start).slice(0, 7), late_checked: false as const };
   if (guardIds.length === 0) return { ...base, eligible: [] };
   const [bad, filled, guards] = await Promise.all([
-    prisma.shiftRecord.groupBy({
-      by: ["guardId"],
-      where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: "leave", leaveCode: { in: [...DISQUALIFY_CODES] } },
-    }),
+    // P18 驗收 M5：先跟來源優先次序，被忽略來源嘅 SL／NL 唔令人失去資格。
+    prisma.shiftRecord
+      .findMany({
+        where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+        select: { guardId: true, workDate: true, recordType: true, leaveCode: true, source: true, siteId: true },
+      })
+      .then((rows) => pickBySourcePriority(rows).picked.filter((r) => r.recordType === "leave" && (DISQUALIFY_CODES as readonly string[]).includes(r.leaveCode ?? ""))),
     prisma.longtermPayrollInput.groupBy({
       by: ["guardId"],
       where: { month: start, guardId: { in: guardIds }, kind: "special_allowance", status: "confirmed", voidedAt: null },
