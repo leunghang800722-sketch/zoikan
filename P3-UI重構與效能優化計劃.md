@@ -1115,3 +1115,17 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 ### 22.2 部署同 8 月重算（2026-10-15）
 - merge `6f85188`（§22 員工編號改序號）；部署 `6acf0340`。重算 8 月：8/2 例假個案已吻合；但「已確認短病假照出 4/5」令 5 人（試算底稿一律假設有醫生紙、銀行實際冇出）新增差額，另 1 人（短病假銀行有出但平均工資唔同）差額由 +3,444 變 −3,007。配對 51／吻合 44／差 7。處理：按老闆規則，該 5 段由人手改為「冇醫生紙」（Dispatch 經 UI），之後重算。
+## 23 階段 18（2026-10-14）：長工糧更表來源優先次序＋「出勤修正」面板
+- **根因**：aggregate 讀 `shift_records` 唔分來源，同人同日 `roster_upload`／`master_roster`／`payroll_only` 紀錄全 union（7/21 同入 NL、RD、AL；7/16 shift＋SL；7/3 SH＋shift），而且更表編輯器只改同 guard／date／shift_type 嗰條，蓋唔過其他來源舊紀錄；另一位長工所有更 settlement 係雞頭（唔係 B07），被當全部頂位更。
+- **P18.1**：新 `attendance-priority.ts`（`pickBySourcePriority`）：每人每日只取最高優先來源（`manual` > `roster_upload` > `master_roster` > `payroll_only` > 其他／null）嘅 shift／leave 紀錄；同來源同日多條全計；OT 不受影響；金額公式不變。`attendanceConflictNote` 文案加「已採用：來源 X」。發現 batch API 原本**冇寫 `source`**，故 batch 新建寫 `source="manual"`、更新現存格只喺代號類型改變先改寫 manual（改結算單位唔蓋）；對數套用仍寫 `roster_upload`。
+- **P18.2**：新 `GET /api/longterm/attendance-issues`（衝突日＋全歸雞頭長工）、長工糧頁新 tab「出勤修正」（`AttendanceFixPanel.tsx`）：採用代號／設為代號（batch 就地改最高來源紀錄為人手，舊內容留 audit）、歸公司兵（batch 設 B07，按 site 分批）、完成後「要重算本月先反映」＋重算掣、已鎖月唯讀。簽證形式長工唔列入「歸公司兵」。
+- **測試**：`tests/p18-attendance-priority.test.ts`（7 條）、`tests/e2e/p18-attendance-fix.spec.ts`（1 條）；`p16b-recon-tweaks` note 斷言同步。
+- **驗證**：見最終回報（vitest 隔離 PG 54405；e2e／gate 隔離 PG 54406、`next build`＋`next start` 3178）。已基於 main（含 P17），`gate:ltpay-aug` 為 55/56＋1 已知差異。
+- **補充（協調者 2026-10-14）**：(a) `countSlPending()` 對已鎖月份（含「全部當無薪」覆蓋鎖月）回 0 → `sl_drafts_pending` 通知、一鍵結算報告不再提示；首頁收件箱病假卡跳過 `sl-pending` 回 `locked:true` 嘅月份（長工糧頁面板仍可睇）。(b) `POST /api/longterm/inputs/confirm-batch` 遇 `draftSource=roster_leave:SL` 草稿 → 400（提示用 `sl-decision`；鎖月 403 優先）。已 rebase 到 main `6f85188`（含階段 17），所以 `gate:ltpay-aug` 為新基準。
+- **驗收修正（Opus 5.5）**：M1 SL 草稿生成／病假待確認清單先跟來源優先次序（連 shift 比較）；M2 面板改用專用 `POST /api/longterm/attendance-fix`（`長工糧:update`，會計可用；`attendance-issues` 回 `can_update` 停用掣）；採用 X 目標已係 X → 改揀代號唔同嗰條、仍無改動回 `noop:true`；來源層級加 `master_roster_only`／`master_roster_site`（＝master_roster）、`payroll`（＝payroll_only）；優先次序改按（保安員, 日, 盤）分組；單條 `POST/PATCH /api/shift-records` 寫 `source=manual`。其餘建議項目只作註明、不改。
+- **驗收修正 2**：M4 規則改為 shift 按（日, 盤）、leave 逐日跨盤比較（aggregate／SL 草稿／待確認清單／勤工獎／頂位津貼同一 helper）；M5 勤工獎資格先跟優先次序；M6 `attendance-fix` 補 auto 價卡 journal；(ii)a 頂位津貼先跟優先次序；(ii)b audit `via` 加入 `AUDIT_META_PASSTHROUGH_KEYS`。
+
+
+### 23.2 驗收、合併（2026-10-15）
+- Opus 5.5 四輪：第一輪 M1（SL 草稿未跟來源優先）、M2（會計冇權限）＋(ii)1–4、7；第二輪 M4（按盤分組引入跨盤 leave 錯配）、M5（勤工獎讀全部來源）、M6（attendance-fix 冇 journal auto 卡）＋(ii)a/b；規劃者補規則「最高來源當日只有 leave → 低來源 shift 一律唔計」；第三輪 M7（helper key 冇 guardId → 跨人污染，嚴重）、M8（跨盤衝突冇提示）；第四輪通過（三人 fixture 三處同 aggregate 一致）。留 (ii)：helper `guardId` 改 required；`ignored` 未接線；OT 跨來源唔去重；re-upload 蓋 manual。
+- merge（`--no-ff`，P3 doc 衝突兩節並存）；部署見 §23.3。

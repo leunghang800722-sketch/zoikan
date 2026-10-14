@@ -284,9 +284,13 @@ describe("P9.1 API", () => {
     expect((await confirmBatch(req("http://t/x", broker, "POST", { ids: [d3!.id] }))).status).toBe(403);
     expect((await confirmBatch(req("http://t/x", owner, "POST", { ids: [] }))).status).toBe(400);
     expect((await confirmBatch(req("http://t/x", owner, "POST", { ids: Array.from({ length: 51 }, (_, i) => `id-${i}`) }))).status).toBe(400);
-    const bt = await (await confirmBatch(req("http://t/x", owner, "POST", { ids: [d1!.id, d3!.id, "nope"] }))).json();
+    // P18：roster_leave:SL 草稿批量確認一律 400（要逐段 sl-decision）
+    expect((await confirmBatch(req("http://t/x", owner, "POST", { ids: [d1!.id, d3!.id, "nope"] }))).status).toBe(400);
+    expect((await prisma.longtermPayrollInput.findUniqueOrThrow({ where: { id: d3!.id } })).status).toBe("draft");
+    const cover = await prisma.longtermPayrollInput.create({ data: { month: AUG_MONTH, guardId: g.id, kind: "special_allowance", amount: 100, status: "draft", draftSource: "cover:rates", createdBy: b.actorUserId } });
+    const bt = await (await confirmBatch(req("http://t/x", owner, "POST", { ids: [d1!.id, cover.id, "nope"] }))).json();
     expect(bt.counts).toEqual({ confirmed: 1, skipped: 2 });
-    expect((await prisma.longtermPayrollInput.findUniqueOrThrow({ where: { id: d3!.id } })).status).toBe("confirmed");
+    expect((await prisma.longtermPayrollInput.findUniqueOrThrow({ where: { id: cover.id } })).status).toBe("confirmed");
     // 刪走草稿（DELETE＝作廢）
     await leave(b, g.id, [25], "SL");
     await generateLongtermInputDrafts(AUG_MONTH, b.actorUserId);
@@ -328,9 +332,7 @@ describe("P9 驗收修正 M1：確認草稿唔可以同已確認病假段重疊"
     const p = await patchInput(req("http://t/x", owner, "PATCH", { status: "confirmed" }), { params: Promise.resolve({ id: d!.id }) });
     expect(p.status).toBe(409);
     expect((await p.json()).error).toBe("overlaps_confirmed_leave");
-    const bt = await (await confirmBatch(req("http://t/x", owner, "POST", { ids: [d!.id] }))).json();
-    expect(bt.counts).toEqual({ confirmed: 0, skipped: 1 });
-    expect(bt.results[0].reason).toBe("同已確認病假段重疊");
+    expect((await confirmBatch(req("http://t/x", owner, "POST", { ids: [d!.id] }))).status).toBe(400); // P18：SL 草稿不可批量確認
     expect((await buildLongtermPayrollInputs(AUG_MONTH)).lines[0]!.gross).toBe(gross);
     const { POST: createInput } = await import("@/app/api/longterm/inputs/route");
     const c = await createInput(req("http://t/x", owner, "POST", { month: "2026-08-01", guard_id: g.id, kind: "leave", date_from: "2026-08-12", date_to: "2026-08-12" }));

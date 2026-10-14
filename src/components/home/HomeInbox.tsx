@@ -145,9 +145,9 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
       let segments = 0;
       let guardTotal = 0;
       for (const m of [prevMonth, currentMonthStr()]) {
-        const res = await apiGet<{ segment_count: number; guard_count: number }>(`/api/longterm/inputs/sl-pending?month=${m}`);
+        const res = await apiGet<{ segment_count: number; guard_count: number; locked?: boolean }>(`/api/longterm/inputs/sl-pending?month=${m}`);
         if (cancelled) return;
-        if (res.ok && res.data.segment_count > 0) {
+        if (res.ok && !res.data.locked && res.data.segment_count > 0) {
           first ??= m;
           segments += res.data.segment_count;
           guardTotal += res.data.guard_count;
