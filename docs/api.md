@@ -2650,4 +2650,4 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 - 通知 kind `sl_drafts_pending`（`/settings` 通知開關多一項）。
 - P17.4（前端）：合約編輯清空結束日送 `effective_to: null`（API 本身一直接受，`LongtermContractUpdateSchema.effective_to` 為 `nullableDateOnly`）；4xx（含 409 `contract_overlap`）喺表單位置顯示。
 - P17.5：aggregate 同日 RD／NPL 衝突按每週一日例假判定（見 docs/ops.md），無 API 變更。
-- 計算：`slSegmentVerdict(..., confirmedShortPaid)` 新參數，預設 `SL_CONFIRMED_SHORT_PAID=false`（行為不變，見 docs/ops.md）。
+- 計算：`slSegmentVerdict(..., confirmedShortPaid)` 新參數，預設 `SL_CONFIRMED_SHORT_PAID=true`（已確認短病假照出，見 docs/ops.md）。
