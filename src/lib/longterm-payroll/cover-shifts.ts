@@ -6,6 +6,7 @@
 import { prisma } from "@/lib/db";
 import { classifyRank } from "@/lib/roster-upload/match";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
+import { pickBySourcePriority } from "./attendance-priority";
 import { classifyLongtermShift } from "./shift-classify";
 import { monthRange } from "@/lib/reports/money";
 import type { CoverGrade } from "./cover-rates";
@@ -49,11 +50,15 @@ export async function loadCoverShifts(months: Date[]): Promise<CoverShiftLoad> {
     const guards = await prisma.guard.findMany({ where: { id: { in: ids }, visaSponsoredByBrokerId: null }, select: { id: true } });
     const guardIds = guards.map((g) => g.id);
     if (guardIds.length === 0) continue;
-    const recs = await prisma.shiftRecord.findMany({
-      where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: "shift" },
-      select: { guardId: true, workDate: true, siteId: true, settlementBrokerId: true, provenance: true, shiftType: { select: { code: true, billingGroup: true } }, site: { select: { canonicalName: true, parentSiteId: true } } },
+    // P18 驗收 (ii)a：先跟來源優先次序（連 leave 一齊比較）再認頂位更，同 aggregate 一致。
+    const allRecs = await prisma.shiftRecord.findMany({
+      where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+      select: { guardId: true, workDate: true, siteId: true, settlementBrokerId: true, provenance: true, recordType: true, source: true, shiftType: { select: { code: true, billingGroup: true } }, site: { select: { canonicalName: true, parentSiteId: true } } },
       orderBy: [{ workDate: "asc" }],
     });
+    const byGuard = new Map<string, typeof allRecs>();
+    for (const r of allRecs) byGuard.set(r.guardId, [...(byGuard.get(r.guardId) ?? []), r]);
+    const recs = [...byGuard.values()].flatMap((rs) => pickBySourcePriority(rs).picked).filter((r) => r.recordType === "shift");
     const rowIds = new Set<string>();
     for (const r of recs) {
       const rid = r.provenance && typeof r.provenance === "object" && !Array.isArray(r.provenance) ? (r.provenance as Record<string, unknown>).row_id : null;

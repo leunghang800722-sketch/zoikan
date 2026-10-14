@@ -12,6 +12,7 @@ import { ensureSystemUser } from "@/lib/system-user";
 import { assertNoPii } from "@/lib/notify/create";
 import { GET as slPendingRoute } from "@/app/api/longterm/inputs/sl-pending/route";
 import { POST as slDecision } from "@/app/api/longterm/inputs/[id]/sl-decision/route";
+import { POST as confirmBatch } from "@/app/api/longterm/inputs/confirm-batch/route";
 import { POST as monthCloseLock } from "@/app/api/month-closes/[id]/lock/route";
 
 const AUG = (d: number) => new Date(Date.UTC(2026, 7, d));
@@ -225,7 +226,22 @@ describe("P17 鎖月：未確認 SL 草稿擋鎖，老闆可「全部當無薪�
     expect(ok.status).toBe(200);
     const audit = await prisma.auditLog.findFirst({ where: { tableName: "month_closes", rowId: mcId, action: "lock_month" }, orderBy: { createdAt: "desc" } });
     expect((audit!.after as Record<string, unknown>).sl_unpaid_override).toEqual({ segments: 1, guards: 1, reason: "員工冇交紙，全部當無薪" });
-    expect((await countSlPending(AUG_MONTH)).segments).toBe(1); // 唔自動確認＝仍當無薪
+    expect(await prisma.longtermPayrollInput.count({ where: { month: AUG_MONTH, status: "draft", draftSource: "roster_leave:SL", voidedAt: null } })).toBe(1); // 唔自動確認＝仍當無薪
+    // P18 補充：已鎖月份（含覆蓋鎖月）唔再提示——計數／通知／sl-pending locked 旗
+    expect((await countSlPending(AUG_MONTH)).segments).toBe(0);
+    expect(await notifySlDraftsPending(AUG_MONTH)).toEqual({ notified: false, segments: 0, guards: 0 });
+    const pend = await (await slPendingRoute(req("http://t/x?month=2026-08", owner, "GET"))).json();
+    expect(pend.locked).toBe(true);
+  });
+
+  it("confirm-batch 拒收 roster_leave:SL 草稿（400，提示 sl-decision），草稿保持未確認", async () => {
+    const owner = await sessionCookieForUser(b.fx.userIds["老闆"]);
+    const g = await prisma.guard.findFirstOrThrow({ where: { nameZh: "測試己" } });
+    const [d] = await pendingDrafts(g.id);
+    const res = await confirmBatch(req("http://t/x", owner, "POST", { ids: [d!.id] }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toContain("sl-decision");
+    expect((await prisma.longtermPayrollInput.findUniqueOrThrow({ where: { id: d!.id } })).status).toBe("draft");
   });
 
   it("逐段處理完（當無薪）之後唔再擋", async () => {

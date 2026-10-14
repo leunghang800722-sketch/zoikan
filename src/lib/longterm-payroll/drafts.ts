@@ -6,6 +6,7 @@
 // 鎖月月份唔生成。經 prisma＋writeAudit（job 內自動帶 by_job）。
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
+import { pickBySourcePriority } from "./attendance-priority";
 import { isMonthLocked } from "@/lib/month-lock";
 import { monthRange } from "@/lib/reports/money";
 import { getSystemUserId } from "@/lib/system-user";
@@ -91,10 +92,12 @@ export async function generateLongtermInputDrafts(month: Date, actorUserId: stri
   const guardIds = [...new Set(contracts.map((c) => c.guardId))];
   if (guardIds.length === 0) return res;
 
-  const slRows = await prisma.shiftRecord.findMany({
-    where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: "leave", leaveCode: "SL" },
-    select: { guardId: true, workDate: true, provenance: true },
+  // P18 驗收 M1：SL 日子要先跟來源優先次序（同 aggregate）——連 shift 紀錄一齊比較，最高來源有班就唔當 SL。
+  const attRows = await prisma.shiftRecord.findMany({
+    where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+    select: { guardId: true, workDate: true, provenance: true, recordType: true, leaveCode: true, source: true, siteId: true },
   });
+  const slRows = pickBySourcePriority(attRows).picked.filter((r) => r.recordType === "leave" && r.leaveCode === "SL");
   const slByGuard = new Map<string, Map<string, string | null>>();
   for (const r of slRows) {
     const mp = slByGuard.get(r.guardId) ?? new Map<string, string | null>();
@@ -222,10 +225,13 @@ export async function listAttendanceBonusEligible(month: Date): Promise<{ month:
   const base = { month: iso(start).slice(0, 7), late_checked: false as const };
   if (guardIds.length === 0) return { ...base, eligible: [] };
   const [bad, filled, guards] = await Promise.all([
-    prisma.shiftRecord.groupBy({
-      by: ["guardId"],
-      where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: "leave", leaveCode: { in: [...DISQUALIFY_CODES] } },
-    }),
+    // P18 驗收 M5：先跟來源優先次序，被忽略來源嘅 SL／NL 唔令人失去資格。
+    prisma.shiftRecord
+      .findMany({
+        where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+        select: { guardId: true, workDate: true, recordType: true, leaveCode: true, source: true, siteId: true },
+      })
+      .then((rows) => pickBySourcePriority(rows).picked.filter((r) => r.recordType === "leave" && (DISQUALIFY_CODES as readonly string[]).includes(r.leaveCode ?? ""))),
     prisma.longtermPayrollInput.groupBy({
       by: ["guardId"],
       where: { month: start, guardId: { in: guardIds }, kind: "special_allowance", status: "confirmed", voidedAt: null },

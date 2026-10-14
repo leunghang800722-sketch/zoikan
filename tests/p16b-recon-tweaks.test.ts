@@ -108,8 +108,8 @@ describe("P16b.3 同日多來源更表紀錄衝突提示", () => {
       { workDate: d(5), recordType: "leave", leaveCode: "AL", source: "payroll_only" },
     ])!;
     expect(n.startsWith(ATTENDANCE_CONFLICT_PREFIX)).toBe(true);
-    expect(n).toContain("08-04（master_roster 代號 SL / roster_upload 代號 班）");
-    expect(n).toContain("08-05（master_roster 代號 NL＋RD / payroll_only 代號 AL）");
+    expect(n).toContain("08-04（master_roster 代號 SL / roster_upload 代號 班；已採用：來源 roster_upload）");
+    expect(n).toContain("08-05（master_roster 代號 NL＋RD / payroll_only 代號 AL；已採用：來源 master_roster）");
   });
 
   it("aggregate：合成兩來源衝突 → line.notes 有 ⚠ 提示，數字（workDays／autopay）同冇衝突來源一樣", async () => {
@@ -128,7 +128,7 @@ describe("P16b.3 同日多來源更表紀錄衝突提示", () => {
     await prisma.shiftRecord.create({ data: { workDate: d(4), siteId: site.id, shiftTypeId: st2.id, guardId: g.id, recordType: "leave", leaveCode: "SL", source: "master_roster", createdBy: "test" } });
     const after = (await buildLongtermPayrollInputs(new Date(Date.UTC(2026, 7, 1)))).lines[0]!;
     const note = after.notes.find((x) => x.startsWith(ATTENDANCE_CONFLICT_PREFIX));
-    expect(note).toContain("08-04（master_roster 代號 SL / roster_upload 代號 班）");
+    expect(note).toContain("08-04（master_roster 代號 SL / roster_upload 代號 班；已採用：來源 roster_upload）");
     expect(after.workDays).toBe(before.workDays);
     expect(after.netBasic).toBe(before.netBasic);
   });
