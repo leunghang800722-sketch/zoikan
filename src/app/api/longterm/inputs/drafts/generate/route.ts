@@ -8,6 +8,7 @@ import { brandSafeResponse } from "@/lib/api/serialize";
 import { ApiError, BadRequest, Forbidden } from "@/lib/api/errors";
 import { parseMonthParam, monthLabel } from "@/lib/reports/money";
 import { generateLongtermInputDrafts } from "@/lib/longterm-payroll/drafts";
+import { notifySlDraftsPending } from "@/lib/longterm-payroll/sl-confirm";
 import { generateCoverDrafts } from "@/lib/longterm-payroll/cover-drafts";
 import { withJobLock } from "@/lib/scheduler/lock";
 import { withAuditJob } from "@/lib/audit-job-context";
@@ -30,7 +31,9 @@ export async function POST(req: Request) {
         async () => {
           const draft = await generateLongtermInputDrafts(month, sysId);
           const cover = draft.locked ? null : await generateCoverDrafts(month, sysId);
-          return { draft, cover };
+          // P17：有未確認 SL 草稿就主動通知（dedupe 同每日 job 一致）
+          const sl = draft.locked ? null : await notifySlDraftsPending(month);
+          return { draft, cover, sl };
         },
         sysId,
       ),
@@ -38,6 +41,6 @@ export async function POST(req: Request) {
     if (!out.acquired) throw new ApiError(409, "drafts_busy", "草稿生成緊（排程或另一個請求），請稍後再試");
     // 以 session 用戶做 actor 嘅 audit（誰撳咗生成）；草稿本身由系統帳號寫
     await writeAudit({ actorUserId: session.userId, tableName: "longterm_payroll_inputs", rowId: `drafts-generate:${monthLabel(month)}`, action: "trigger_drafts_generate", after: { month: monthLabel(month), draft: out.value.draft, cover: out.value.cover }, ip: getClientIp(req) });
-    return ok(brandSafeResponse({ month: monthLabel(month), draft: out.value.draft, cover: out.value.cover }));
+    return ok(brandSafeResponse({ month: monthLabel(month), draft: out.value.draft, cover: out.value.cover, sl_pending: out.value.sl }));
   });
 }

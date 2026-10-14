@@ -8,6 +8,7 @@ export const NOTIFY_KINDS = [
   { kind: "one_click_auto", label: "自動一鍵結算結果" },
   { kind: "month_files_ready", label: "鎖月後檔案已備妥" },
   { kind: "permit_expiry_weekly", label: "證件到期週報" },
+  { kind: "sl_drafts_pending", label: "病假要確認醫生紙" },
   { kind: "ops_digest_ready", label: "每月修正摘要" },
   { kind: "job_failed", label: "排程出錯" },
 ] as const;

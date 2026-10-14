@@ -140,6 +140,8 @@ export const AUDIT_META_PASSTHROUGH_KEYS = [
   "superseded_upload_ids",
   "roster_upload_force",
   "roster_upload_coverage_issues",
+  // P17：鎖月時老闆「全部未確認病假當無薪」覆蓋（段數／人數／老闆填嘅原因；冇姓名）
+  "sl_unpaid_override",
   // WP-UPLOAD-VOID（Opus 5.5 驗收補）：作廢 active 版本時回復咗邊個舊版
   // （id／版本號，冇 PII）——之前 service 有傳但唔喺白名單，靜靜雞俾剝走。
   "revived_upload_id",

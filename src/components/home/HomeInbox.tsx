@@ -21,6 +21,8 @@ export interface HomeInboxProps {
   canGuardFix: boolean;
   /** P7.2：「出街價」view——有就查「價卡待確認」（月頭自動開新月之後仲未複製嘅卡）。 */
   canRateCards?: boolean;
+  /** P17：「長工糧」view——有就查「病假待確認」（更表有 SL 但未確認醫生紙嘅草稿段）。 */
+  canLongterm?: boolean;
 }
 
 /** P7.2：香港日曆「今日幾號」同「本月／下月」（YYYY-MM）。月頭自動開新月喺 25 號跑，所以 20 號至月初 5 號先查。 */
@@ -59,7 +61,7 @@ function Card({ testId, label, value, unit, note, href, tone }: { testId: string
   );
 }
 
-export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, canGuardFix, canRateCards = false }: HomeInboxProps) {
+export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, canGuardFix, canRateCards = false, canLongterm = false }: HomeInboxProps) {
   // 月結進度睇緊邊個月：同全站月份選擇器共用（URL → sessionStorage → 上個月，同一鍵結算頁預設一致）。
   const [month, , monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1));
   const prevMonth = addMonthsStr(currentMonthStr(), -1);
@@ -133,9 +135,34 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
     };
   }, [canRateCards]);
 
+  // P17（老闆 2026-10-14）：病假要人手確認醫生紙先出津貼——上月＋本月有未確認 SL 草稿就彈出卡，直達長工糧頁。
+  const [slPending, setSlPending] = useState<{ month: string; segments: number; guards: number } | null>(null);
+  useEffect(() => {
+    if (!canLongterm) return;
+    let cancelled = false;
+    (async () => {
+      let first: string | null = null;
+      let segments = 0;
+      let guardTotal = 0;
+      for (const m of [prevMonth, currentMonthStr()]) {
+        const res = await apiGet<{ segment_count: number; guard_count: number }>(`/api/longterm/inputs/sl-pending?month=${m}`);
+        if (cancelled) return;
+        if (res.ok && res.data.segment_count > 0) {
+          first ??= m;
+          segments += res.data.segment_count;
+          guardTotal += res.data.guard_count;
+        }
+      }
+      setSlPending(first ? { month: first, segments, guards: guardTotal } : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canLongterm, prevMonth]);
+
   const showApprovals = approvals !== null;
   const showTriage = triage !== null;
-  if (!showApprovals && !showTriage && !canRosterUploads && !canMonthClose && !(canGuardFix && needsBoss !== null) && !pendingCards) return null;
+  if (!showApprovals && !showTriage && !canRosterUploads && !canMonthClose && !(canGuardFix && needsBoss !== null) && !pendingCards && !slPending) return null;
 
   let runCard: React.ReactNode = null;
   if (canMonthClose) {
@@ -166,6 +193,7 @@ export function HomeInbox({ approvals, triage, canRosterUploads, canMonthClose, 
         )}
         {runCard}
         {pendingCards && <Card testId="inbox-pending-cards" label={`${pendingCards.month} 價卡待確認`} value={pendingCards.count} unit="張" tone="danger" note={pendingCards.autoCopy > 0 ? `要你確認（25 號自動複製其餘 ${pendingCards.autoCopy} 張）` : "價錢有變或新組合，未自動複製"} href={`/rate-cards?month=${pendingCards.month}&pending=1`} />}
+        {slPending && <Card testId="inbox-sl-pending" label="病假要確認醫生紙" value={slPending.segments} unit="段" tone="danger" note={`${slPending.guards} 人 · 未確認唔出津貼`} href={`/reports/longterm-payroll?month=${slPending.month}&focus=sl-drafts`} />}
         {canGuardFix && needsBoss !== null && <Card testId="inbox-needs-boss" label="要老闆決定" value={needsBoss} unit="項" tone={needsBoss > 0 ? "danger" : undefined} href={`/roster-uploads?tab=fix&month=${prevMonth}`} />}
       </div>
     </section>

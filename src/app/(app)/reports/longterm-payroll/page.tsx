@@ -26,7 +26,7 @@ import { BankReconcilePanel } from "./BankReconcilePanel";
 import { ContractCreateForm } from "./ContractCreateForm";
 import { BulkAvgWagesPanel } from "./BulkAvgWagesPanel";
 import { VoidMonthPanel } from "./VoidMonthPanel";
-import { DraftInputsPanel, BonusEligiblePanel, type DraftInputDTO } from "./DraftPanels";
+import { DraftInputsPanel, BonusEligiblePanel, SlConfirmPanel, type DraftInputDTO } from "./DraftPanels";
 
 // ---------------------------------------------------------------------------
 // 型別（snake_case，同 API response 一致）
@@ -144,6 +144,14 @@ const INPUT_KIND_LABEL: Record<string, string> = {
 export default function LongtermPayrollPage() {
   // P3-4.3（H19）：7 區直排 → 4 個 tab（本月糧／人手輸入／合約／平均工資與假期）；只分組顯示，唔改計糧，鎖月唯讀照舊。
   const [tab, setTab] = useState<"pay" | "inputs" | "contracts" | "avg" | "recon">("pay");
+  // P17：通知／首頁卡／一鍵結算報告連過嚟 `?focus=sl-drafts`＝直達「人手輸入」tab 嘅病假確認面板。
+  const [focusSl, setFocusSl] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("focus") === "sl-drafts") {
+      setFocusSl(true);
+      setTab("inputs");
+    }
+  }, []);
   const tabCls = (t: string) => (tab === t ? "flex flex-col gap-4" : "hidden");
   const [month, setMonth, monthReady] = useMonthState(addMonthsStr(currentMonthStr(), -1), { persistDefault: true });
   const [payroll, setPayroll] = useState<PayrollMonthDTO | null>(null);
@@ -361,7 +369,8 @@ export default function LongtermPayrollPage() {
       {/* ③ 人手輸入區 */}
       <div className={tabCls("inputs")} data-testid="ltpay-panel-inputs">
       <BulkInputsPanel month={month} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} onNotice={setNotice} />
-      <DraftInputsPanel drafts={inputs.filter((i) => i.status === "draft" && !i.voided_at) as unknown as DraftInputDTO[]} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
+      <SlConfirmPanel month={month} locked={!!payroll?.locked} refreshKey={inputs.length} focus={focusSl} onChanged={() => load(month)} onError={setError} onNotice={setNotice} />
+      <DraftInputsPanel drafts={inputs.filter((i) => i.status === "draft" && !i.voided_at && i.draft_source !== "roster_leave:SL") as unknown as DraftInputDTO[]} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
       <BonusEligiblePanel month={month} refreshKey={inputs.length} />
       <InputsSection month={month} inputs={inputs.filter((i) => i.status !== "draft")} guardOptions={guardOptions} locked={!!payroll?.locked} onChanged={() => load(month)} onError={setError} />
       </div>
