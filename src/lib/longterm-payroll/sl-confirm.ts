@@ -61,8 +61,9 @@ async function listSlPendingDrafts(month: Date) {
   });
 }
 
-/** 輕量計數（鎖月體檢／報告／首頁用）。 */
+/** 輕量計數（鎖月體檢／報告／首頁用）。已鎖月份（包括老闆用「全部當無薪」覆蓋鎖月）一律 0，唔再提示（P18 補充）。 */
 export async function countSlPending(month: Date): Promise<{ segments: number; guards: number; ids: string[] }> {
+  if (await isMonthLocked(monthRange(month).start)) return { segments: 0, guards: 0, ids: [] };
   const rows = await listSlPendingDrafts(month);
   return { segments: rows.length, guards: new Set(rows.map((r) => r.guardId)).size, ids: rows.map((r) => r.id).sort() };
 }
