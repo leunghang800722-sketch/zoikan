@@ -2,6 +2,7 @@
 // 兩次獨立讀「正規化後逐字相同」＋格式驗證通過先 confirmed；其餘 review／missing。
 import { canonicalHkid, formatHkid, hkidCheckDigitValid, normalizeTelHk } from "@/lib/guards/identity";
 import type { OcrFieldKey } from "./config";
+import { normalizeHkAddress, type AddressEdit } from "./hk-address";
 import type { RankedCandidate } from "./rank";
 
 export type FieldStatus = "confirmed" | "review" | "missing";
@@ -68,6 +69,11 @@ export interface Normalized {
   reason?: string;
   /** WP-OCR-3：額外候選（電話 9–10 位剔走疑似分格線 1 後嘅 8 位解，≤2）；只入候選池，唔自動確認 */
   extra?: string[];
+  /** WP-OCR-2（地址）：形近字糾錯建議（只喺命中屋邨／街道／地區表而原文寫法唔同時有）；唔自動套用 */
+  suggested?: string;
+  edits?: AddressEdit[];
+  /** WP-OCR-2（地址）：唔做形近字歸一嘅 canon（候選排序去重用） */
+  strict?: string;
 }
 
 /**
@@ -132,11 +138,11 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
       return { canon: c, display: c, valid: ok, ...(ok ? {} : { reason: "name_en_format" }) };
     }
     case "address": {
-      // 逗號／空白差異忽略，但當「token 分隔」（折疊成單一空格，唔係刪走）；數字之間嘅 / - 同 號／樓／室／座 保留。
-      // 「15/F, Block A」＝「15/F Block A」；「Block 1, 23/F」(BLOCK 1 23/F) ≠「Block 12, 3/F」(BLOCK 12 3/F)
-      const canon = t.toUpperCase().replace(/[\s,，、;；]+/g, " ").trim();
-      const ok = canon.length >= 6 && canon.length <= 200;
-      return { canon, display: t, valid: ok, ...(ok ? {} : { reason: "address_format" }) };
+      // WP-OCR-2：canon 由 normalizeHkAddress（形近字／全半形／空白標點／單位詞歸一）；原讀數保留喺 display；
+      // 形近字糾錯只出 suggested／edits（唔改原文）。逗號／空白差異忽略，數字之間嘅 / - 同 號／樓／室／座 保留。
+      const r = normalizeHkAddress(t);
+      const ok = r.canon.length >= 6 && r.canon.length <= 200;
+      return { canon: r.canon, display: t, valid: ok, strict: r.strict, ...(ok ? {} : { reason: "address_format" }), ...(r.edits.length ? { suggested: r.suggested, edits: r.edits } : {}) };
     }
   }
 }

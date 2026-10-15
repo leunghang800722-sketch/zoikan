@@ -7,7 +7,8 @@ import { buildArbiterSystemPrompt, buildArbiterUserText, buildArbiterUserTextCro
 import { sanitizeRefs, type Refs } from "./refs";
 import { hasCropFields, ocrBoxFields, sanitizeFieldBoxes, type FieldBoxes } from "./field-crops";
 import { isUnclear, normalizeField, type FieldResult } from "./normalize";
-import { reconcile } from "./reconcile";
+import { reconcile, type ExtraCandidate } from "./reconcile";
+import { lookupAlsCandidate } from "./als-client";
 import { fieldReadSchema, type FieldRead } from "./field-read";
 import { OcrUnavailableError, type OcrProviderName, type VisionClient, type VisionRequest, type VisionResponse } from "./vision-client";
 import type { ReadClients } from "./clients";
@@ -57,6 +58,8 @@ export interface DocumentReadResult {
   images_b_kind: ImagesBKind;
   /** WP-OCR-3（additive）：讀 B 有冇用讀 A 回報嘅 box 裁圖（＝images_b_kind 係 field_crops） */
   field_boxes_used: boolean;
+  /** WP-OCR-2（additive，淨計數）：ALS 有冇真係查過／有冇出候選／查失敗 */
+  als: { called: boolean; candidate: boolean; failed: boolean };
 }
 
 export interface DocumentImages {
@@ -215,20 +218,33 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   // WP-OCR-4 第三讀仲裁：某欄兩讀唔同（正規化後）且兩讀 confidence 都唔係 high → 一次過問 Claude（每份文件最多 1 次）。
   // 仲裁出錯（OcrUnavailableError）唔影響主流程：照用兩讀結果。其他錯誤（bug）原樣拋。
   // WP-OCR-3：仲裁用全圖＋（欄位級裁圖：分歧欄對應裁圖／2×2 格）；冇全圖就唔仲裁。
+  // WP-OCR-2：ALS（政府地址庫）——reconcile 之後（用預備 reconcile 揀出要查嘅地址）、仲裁之前；每份文件最多 1 次，失敗靜靜略過
+  let als: { called: boolean; candidate: boolean; failed: boolean } = { called: false, candidate: false, failed: false };
+  let alsExtra: ExtraCandidate | null = null;
+  if (clients.als && fields.includes("address")) {
+    const pre = reconcile("address", pa?.address ?? null, pb?.address ?? null, now);
+    if (pre.status === "review" && pre.value) { // 只喺 review（兩讀未確認）先查；confirmed／missing 唔查
+      const r = await lookupAlsCandidate(pre.value, clients.als);
+      als = { called: r.called, candidate: r.status === "candidate", failed: r.status === "failed" };
+      if (r.status === "candidate") alsExtra = { value: r.value, source: "als", als_score: r.score };
+    }
+  }
   const disputed = clients.arbiter && c.providerA === "claude" && imagesB.full ? disputedFields(fields, c.pa, pb, now) : [];
   let rArb: VisionResponse | null = null;
   let pArb: ModelReads | null = null;
   if (clients.arbiter && imagesB.full && disputed.length > 0) {
     const cands: Partial<Record<OcrFieldKey, string[]>> = {};
     for (const f of disputed) cands[f] = candidateValues(pa?.[f], pb?.[f]);
+    // WP-OCR-2：ALS 建議另列（唔當兩讀候選）
+    const alsSug: Partial<Record<OcrFieldKey, string>> = alsExtra && disputed.includes("address") ? { address: alsExtra.value } : {};
     let reqArb: VisionRequest;
     if (imagesB.kind === "field_crops") {
       const fieldOf = imagesB.fieldOf ?? [];
       const idx = fieldOf.flatMap((f, i) => (f && disputed.includes(f) ? [i] : []));
       const cropFields = idx.map((i) => fieldOf[i]!);
-      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserTextCrops(type, cands, cropFields), images: [imagesB.full, ...idx.map((i) => imagesB.images[i]!)], fields: disputed };
+      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserTextCrops(type, cands, cropFields, alsSug), images: [imagesB.full, ...idx.map((i) => imagesB.images[i]!)], fields: disputed };
     } else {
-      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserText(type, cands, imagesB.images.length), images: [imagesB.full, ...imagesB.images], fields: disputed };
+      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserText(type, cands, imagesB.images.length, alsSug), images: [imagesB.full, ...imagesB.images], fields: disputed };
     }
     try {
       rArb = await clients.arbiter.complete(reqArb);
@@ -239,7 +255,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   }
 
   const out: Partial<Record<OcrFieldKey, FieldResult>> = {};
-  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined);
+  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined, f === "address" && alsExtra ? [alsExtra] : undefined);
   const byProvider: UsageByProvider = { claude: { promptTokens: 0, completionTokens: 0, calls: 0 }, deepseek: { promptTokens: 0, completionTokens: 0, calls: 0 } };
   const used: UsageEntry[] = [...c.priorUsage, { provider: providerOf(clients.b), promptTokens: rb.promptTokens, completionTokens: rb.completionTokens, truncated: !!rb.truncated }];
   if (rArb && clients.arbiter) used.push({ provider: providerOf(clients.arbiter), promptTokens: rArb.promptTokens, completionTokens: rArb.completionTokens, truncated: !!rArb.truncated });
@@ -266,6 +282,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
     arbiter: { called: rArb !== null, fields: rArb ? disputed.length : 0 },
     images_b_kind: imagesB.kind,
     field_boxes_used: imagesB.kind === "field_crops",
+    als,
   };
 }
 

@@ -77,6 +77,19 @@ export function ocrArbiterEnabled(): boolean {
   return !(v === "0" || v === "false" || v === "off" || v === "no");
 }
 
+/**
+ * WP-OCR-2：ALS（香港政府地址查詢服務）開關 `GUARD_OCR_ALS`（預設 1＝開，老闆 2026-10-15 決定）。0／false／off／no＝完全唔呼叫。
+ * 送出嘅只係冇樓層／室號嘅地址（見 hk-address.alsQueryFromParts）。
+ */
+export function ocrAlsEnabled(): boolean {
+  const v = process.env.GUARD_OCR_ALS?.trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "no");
+}
+/** ALS 呼叫逾時（毫秒）。 */
+export const OCR_ALS_TIMEOUT_MS = 3_000;
+/** ALS Score 低過呢個值就唔出候選。 */
+export const OCR_ALS_MIN_SCORE = 60;
+
 export function ocrModel(): string {
   return process.env.GUARD_OCR_MODEL?.trim() || DEFAULT_OCR_MODEL;
 }
