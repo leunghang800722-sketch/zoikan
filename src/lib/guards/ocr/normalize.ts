@@ -66,6 +66,31 @@ export interface Normalized {
   valid: boolean;
   /** valid=false 嘅原因碼（唔含值） */
   reason?: string;
+  /** WP-OCR-3：額外候選（電話 9–10 位剔走疑似分格線 1 後嘅 8 位解，≤2）；只入候選池，唔自動確認 */
+  extra?: string[];
+}
+
+/**
+ * WP-OCR-3：電話分格線防呆。9 位剔走一個「1」、10 位剔走兩個「1」，得出首位 2–9 嘅 8 位數；
+ * 解唯一或者最多 2 個（多於 2 個＝太不確定，唔出候選）。回傳去重後嘅解（已按字串排序，確定性）。
+ */
+export function phoneGridlineCandidates(digits: string): string[] {
+  if (!/^\d{9,10}$/.test(digits)) return [];
+  const drop = digits.length - 8;
+  const ones: number[] = [];
+  for (let i = 0; i < digits.length; i++) if (digits[i] === "1") ones.push(i);
+  const out = new Set<string>();
+  const pick = (from: number, left: number, removed: number[]) => {
+    if (left === 0) {
+      const s = digits.split("").filter((_, i) => !removed.includes(i)).join("");
+      if (/^[2-9]\d{7}$/.test(s)) out.add(s);
+      return;
+    }
+    for (let k = from; k < ones.length; k++) pick(k + 1, left - 1, [...removed, ones[k]!]);
+  };
+  pick(0, drop, []);
+  const list = [...out].sort();
+  return list.length >= 1 && list.length <= 2 ? list : [];
 }
 
 export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Date()): Normalized {
@@ -89,7 +114,9 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
     case "phone": {
       const n = normalizeTelHk(t);
       if (!n) return { canon: t.replace(/\D/g, ""), display: t, valid: false, reason: "phone_format" };
-      return /^[2-9]\d{7}$/.test(n) ? { canon: n, display: n, valid: true } : { canon: n, display: n, valid: false, reason: "phone_not_hk" };
+      if (/^[2-9]\d{7}$/.test(n)) return { canon: n, display: n, valid: true };
+      const grid = phoneGridlineCandidates(n);
+      return grid.length ? { canon: n, display: n, valid: false, reason: "phone_gridline_suspect", extra: grid } : { canon: n, display: n, valid: false, reason: "phone_not_hk" };
     }
     case "name_zh": {
       const c = t.replace(/\s+/g, "").replace(/[·・•‧]/g, "·"); // 間隔號統一（· ・ • ‧）
