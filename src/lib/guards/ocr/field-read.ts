@@ -15,6 +15,8 @@ export interface FieldRead {
   reason?: ReadReason;
   /** 同一欄嘅其他可能讀法（每個都係完整欄值），≤2 */
   alternatives?: string[];
+  /** WP-OCR-3：模型自報嘅位數（電話／戶口號碼）；只用於後處理，唔直接信 */
+  digit_count?: number;
 }
 
 const text = z.union([z.string().max(400), z.number().transform((n) => String(n))]);
@@ -29,12 +31,13 @@ const objectRead = z.object({
   confidence: z.preprocess(lower, z.enum(READ_CONFIDENCE)).optional().catch(undefined),
   reason: z.preprocess(lower, z.enum(READ_REASONS)).nullish().catch(undefined),
   alternatives: z.array(altItem).optional().catch(undefined),
+  digit_count: z.number().int().min(0).max(40).nullish().catch(undefined),
 });
 
 export const fieldReadSchema = z.union([
   scalar.transform((v): FieldRead => ({ value: v })),
   objectRead.transform((o): FieldRead => {
     const alts = [...new Set((o.alternatives ?? []).flatMap((a) => (typeof a === "string" && a.trim() ? [a.trim()] : [])))].slice(0, MAX_ALTERNATIVES);
-    return { value: o.value, ...(o.confidence ? { confidence: o.confidence } : {}), ...(o.reason ? { reason: o.reason } : {}), ...(alts.length ? { alternatives: alts } : {}) };
+    return { value: o.value, ...(o.confidence ? { confidence: o.confidence } : {}), ...(o.reason ? { reason: o.reason } : {}), ...(alts.length ? { alternatives: alts } : {}), ...(typeof o.digit_count === "number" ? { digit_count: o.digit_count } : {}) };
   }),
 ]);

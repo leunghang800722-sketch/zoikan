@@ -1,5 +1,5 @@
 // WP-OCR-5：OCR 準確度評估腳本（本機跑，規劃者用真檔；執行員只用合成 fixture）。
-//   npx tsx scripts/staff-import/eval-ocr.ts --manifest <manifest.json> --out data/2026-10/ocr-eval/report.json [--limit N] [--only-doc-type id_card|address_proof|onboarding_form] [--concurrency 2]
+//   npx tsx scripts/staff-import/eval-ocr.ts --manifest <manifest.json> --out data/2026-10/ocr-eval/report.json [--flow legacy|two-stage] [--limit N] [--only-doc-type id_card|address_proof|onboarding_form] [--concurrency 2]
 //   npx tsx scripts/staff-import/eval-ocr.ts --dry [--manifest tests/fixtures/ocr-eval/manifest.dry.json]   # fake client＋合成 fixture，唔打任何 API
 // 真跑用同一條應用內路徑：同規格圖（1,600px 全圖＋2×2 放大格）→ getReadClients()（真 Claude／DeepSeek，key 由 .env 經 dotenv 載入；
 // 指定其他 env 檔用 DOTENV_CONFIG_PATH）→ readDocument（reconcile／候選／仲裁）→ 逐欄對 truth（現有 normalize canon）。
@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OCR_DOC_TYPES, type OcrDocType } from '@/lib/guards/ocr/config';
 import { getReadClients } from '@/lib/guards/ocr/clients';
-import { ArgError, fakeClientsFor, parseManifest, resolveReportPath, runEval, summaryLines, type EvalDeps } from './lib/eval-ocr-core';
+import { ArgError, fakeClientsFor, type EvalFlow, parseManifest, resolveReportPath, runEval, summaryLines, type EvalDeps } from './lib/eval-ocr-core';
 import { prepareDocumentImages } from './lib/eval-ocr-images';
 
 interface Args {
@@ -20,10 +20,11 @@ interface Args {
   limit: number | null;
   onlyDocType: OcrDocType | null;
   concurrency: number;
+  flow: EvalFlow;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const a: Args = { manifest: null, out: null, dry: false, limit: null, onlyDocType: null, concurrency: 2 };
+  const a: Args = { manifest: null, out: null, dry: false, limit: null, onlyDocType: null, concurrency: 2, flow: 'two-stage' };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => {
@@ -39,7 +40,11 @@ export function parseArgs(argv: readonly string[]): Args {
       if (!/^\d+$/.test(x) || Number(x) < 1) throw new ArgError('--limit 必須係正整數');
       a.limit = Number(x);
     }
-    else if (k === '--only-doc-type') {
+    else if (k === '--flow') {
+      const f = v();
+      if (f !== 'legacy' && f !== 'two-stage') throw new ArgError('--flow 必須係 legacy｜two-stage');
+      a.flow = f;
+    } else if (k === '--only-doc-type') {
       const t = v();
       if (!(OCR_DOC_TYPES as readonly string[]).includes(t)) throw new ArgError('--only-doc-type 必須係 id_card｜address_proof｜onboarding_form');
       a.onlyDocType = t as OcrDocType;
@@ -71,8 +76,9 @@ export async function main(argv: readonly string[]): Promise<number> {
     prepare: (p, page) => prepareDocumentImages(p, page ?? 1),
     baseDir: path.dirname(manifestPath),
     onlyDocType: args.onlyDocType,
+    flow: args.flow,
   };
-  console.log(`[eval-ocr] ${args.dry ? 'dry（fake client）' : 'live（真 client）'}｜cases ${parsed.manifest.cases.length}｜concurrency ${args.concurrency}`);
+  console.log(`[eval-ocr] ${args.dry ? 'dry（fake client）' : 'live（真 client）'}｜flow ${args.flow}｜cases ${parsed.manifest.cases.length}｜concurrency ${args.concurrency}`);
   const report = await runEval({
     manifest: parsed.manifest,
     deps,

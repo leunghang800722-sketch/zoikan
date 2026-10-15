@@ -10,7 +10,7 @@ import type { OcrPage } from './lib/ocr';
 import { FIELDS_OUT } from './lib/fields-render';
 import {
   bankByCode, bankCodeFromName, expiryInRange, issueInRange, joinInRange, normAcct, normDate, normPermitNo, normTelHkStrict, normZh,
-  applyHandRules, isPureHand, acctAgreeKind, isCardControlNo, permitMatchesHkid, resolveField, sameNameTokens, normText, splitPermit, type Cand, type FieldOut, type SrcKind, TODAY,
+  applyHandRules, acctDigitsReason, isPureHand, acctAgreeKind, isCardControlNo, permitMatchesHkid, resolveField, sameNameTokens, normText, splitPermit, type Cand, type FieldOut, type SrcKind, TODAY,
 } from './lib/fields-ext';
 import { normalizeTelHk } from '@/lib/guards/identity';
 import { OUT } from './lib/render';
@@ -386,7 +386,10 @@ async function main() {
         reasons.push(kinds.every((k) => k !== 'no') ? (kinds.some((k) => k === 'nobranch') ? 'bank_copy_agrees_without_branch' : 'bank_copy_agrees') : 'bank_copy_disagrees');
       }
       if (mxAcct && mxAcct !== e.acct) reasons.push('maxwell_acct_differs');
-      const ok = hard && !reasons.some((r) => r.endsWith('disagrees') || r.endsWith('differs'));
+      // WP-OCR-3：戶口位數按 HKICL 銀行代號核對（表外銀行唔檢查）；唔啱 → review，唔自動改值
+      const digitsBad = acctDigitsReason(e.acct, e.code);
+      if (digitsBad) reasons.push(digitsBad);
+      const ok = hard && !digitsBad && !reasons.some((r) => r.endsWith('disagrees') || r.endsWith('differs'));
       const code = e.code ? e.code.padStart(3, '0') : null;
       const cands = (v: string) => [{ value: v, sources: src }];
       F.bankAccountNo = bankOut(e.acct, ok ? 'confirmed' : 'review', reasons, src, cands(e.acct));

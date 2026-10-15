@@ -6,6 +6,8 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { planFieldCrops, type FieldBoxes } from '@/lib/guards/ocr/field-crops';
+import type { OcrDocType } from '@/lib/guards/ocr/config';
 import { JPEG_DATA_URL_PREFIX, JPEG_LAST_QUALITY, JPEG_QUALITIES, SOURCE_MAX_EDGE, jpegFitsLimit, planDocumentImages } from '@/lib/guards/ocr/image-plan';
 
 const magickBin = () => process.env.MAGICK_BIN || '/opt/homebrew/bin/magick';
@@ -59,6 +61,21 @@ async function toJpegDataUrl(png: Buffer, pre: string[], outW: number, outH: num
 export interface PreparedDoc {
   full: string;
   tiles: string[];
+  /** WP-OCR-3：按讀 A 回報嘅 boxes 欄位級裁圖（幾何同瀏覽器一致，由 field-crops.ts 算；呢度只負責用 ImageMagick 裁） */
+  cropFields: (type: OcrDocType, boxes: FieldBoxes) => Promise<{ images: string[]; fieldOf: import('@/lib/guards/ocr/config').OcrFieldKey[] } | null>;
+}
+
+/**
+ * 由 2,400px 來源 PNG 按 boxes 裁欄位級圖。計劃（矩形、輸出尺寸、保守規則）全部來自 planFieldCrops；
+ * 冇有效 box／該類型冇裁圖設計 → null（caller 退回 2×2 格）。
+ */
+export async function cropFields(png: Buffer, type: OcrDocType, boxes: FieldBoxes): Promise<{ images: string[]; fieldOf: import('@/lib/guards/ocr/config').OcrFieldKey[] } | null> {
+  const { w, h } = pngSize(png);
+  const plan = planFieldCrops(type, boxes, w, h);
+  if (plan.kind !== 'field_crops') return null;
+  const images: string[] = [];
+  for (const c of plan.crops) images.push(await toJpegDataUrl(png, ['-crop', `${c.rect.w}x${c.rect.h}+${c.rect.x}+${c.rect.y}`, '+repage'], c.out.w, c.out.h));
+  return { images, fieldOf: plan.crops.map((c) => c.field) };
 }
 
 /** 同瀏覽器一樣嘅輸出：1,600px 全圖＋4 張放大格。 */
@@ -72,5 +89,5 @@ export async function prepareDocumentImages(abs: string, page = 1): Promise<Prep
     const [x, y, tw, th] = t.rect;
     tiles.push(await toJpegDataUrl(png, ['-crop', `${tw}x${th}+${x}+${y}`, '+repage'], t.out.w, t.out.h));
   }
-  return { full, tiles };
+  return { full, tiles, cropFields: (type, boxes) => cropFields(png, type, boxes) };
 }
