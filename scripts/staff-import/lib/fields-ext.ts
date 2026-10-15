@@ -4,6 +4,7 @@ import { normalizeTelHk } from '@/lib/guards/identity';
 import { HKICL_BANK_OPTIONS } from '@/lib/longterm-payroll/hkicl-bank-codes';
 import { rankPool, type RankedCandidate, type RankInput } from '@/lib/guards/ocr/rank';
 import type { ReadConfidence } from '@/lib/guards/ocr/field-read';
+import { acctDigitsCheck } from './hkicl-digits';
 
 export const TODAY = '2026-10-05';
 export type Status = 'confirmed' | 'review' | 'missing';
@@ -49,6 +50,13 @@ export function normAcct(raw: string | null | undefined): string | null {
   const d = digitsOnly(raw);
   return d.length >= 6 && d.length <= 20 ? d : null;
 }
+/** WP-OCR-3：戶口號碼位數按 HKICL 銀行代號核對。唔啱 → 'acct_digits_mismatch'（用作 resolveField 嘅 validate，令該欄 review，唔改值）；表外銀行／冇代號／本身唔合格式 → null。 */
+export function acctDigitsReason(raw: string | null | undefined, bankCode: string | null | undefined): 'acct_digits_mismatch' | null {
+  const d = normAcct(raw);
+  return d && acctDigitsCheck(d, bankCode) === 'mismatch' ? 'acct_digits_mismatch' : null;
+}
+/** resolveField 用嘅 validate 工廠：`resolveField(cands, { validate: acctValidate(bankCode) })`。 */
+export const acctValidate = (bankCode: string | null | undefined) => (v: string): string | null => acctDigitsReason(v, bankCode);
 /** 香港電話：8 位、首位 2–9；其餘（內地等）回 null 並由 caller 記 tel_not_hk_format。 */
 export function normTelHkStrict(raw: string | null | undefined): string | null {
   const n = normalizeTelHk(raw);
