@@ -12,6 +12,7 @@ import { Pill } from "@/components/ui/Pill";
 import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 import { canvasFromImageFile, cropFieldsFromCanvas, isPdfFile, openPdf, prepareFromCanvas, type PdfHandle, type PreparedImage } from "@/lib/guards/ocr/browser-images";
+import { hasCropFields } from "@/lib/guards/ocr/field-crops";
 import { readTwoStage } from "@/lib/guards/ocr/two-stage";
 import { normalizeField } from "@/lib/guards/ocr/normalize";
 import { CRITICAL_MSG, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
@@ -173,7 +174,7 @@ export function NewFromDocsClient() {
     setSlots((s) => ({ ...s, [type]: { ...s[type], file, pdf, page, busy: true, error: null } }));
     try {
       const canvas = pdf ? await pdf.render(page) : await canvasFromImageFile(file);
-      const prepared = await prepareFromCanvas(canvas);
+      const prepared = await prepareFromCanvas(canvas, hasCropFields(type));
       urlsRef.current.push(prepared.previewUrl);
       setSlots((s) => {
         const old = s[type].prepared?.previewUrl;
@@ -216,15 +217,21 @@ export function NewFromDocsClient() {
     setError(null);
     // WP-OCR-3：先試兩段式（stage a 定位欄位 → 本機欄位級裁圖 → stage b）；任何一步失敗就退回舊單次流程，用戶無感。
     const two = await readTwoStage<OcrResponse>(
-      docs.map((t) => ({ type: t, full: slots[t].prepared!.full, tiles: slots[t].prepared!.tiles, sourceW: slots[t].prepared!.source.width, sourceH: slots[t].prepared!.source.height })),
+      docs.map((t) => ({ type: t, full: slots[t].prepared!.full, tiles: slots[t].prepared!.tiles, sourceW: slots[t].prepared!.source?.width ?? 0, sourceH: slots[t].prepared!.source?.height ?? 0 })),
       {
         post: async <T,>(body: unknown) => {
           const r = await apiPost<T>("/api/guards/ocr/read", body);
           return r.ok ? { ok: true as const, data: r.data } : { ok: false as const, status: r.status, message: r.message };
         },
-        crop: (doc, plan) => cropFieldsFromCanvas(slots[doc.type].prepared!.source, plan.crops),
+        crop: (doc, plan) => cropFieldsFromCanvas(slots[doc.type].prepared!.source!, plan.crops),
       },
     );
+    // 429／503（provider 繁忙、用唔到、配額）：唔退回舊流程，直接顯示錯誤
+    if (!two.ok && two.fatal) {
+      setBusy(false);
+      setError(two.fatal.status === 503 ? `${two.fatal.message}（可以撳「全部自己輸入」繼續）` : two.fatal.message);
+      return;
+    }
     const res = two.ok ? ({ ok: true, status: 200, data: two.data } as const) : await apiPost<OcrResponse>("/api/guards/ocr/read", { documents: docs.map((t) => ({ type: t, full: slots[t].prepared!.full, tiles: slots[t].prepared!.tiles })) });
     setBusy(false);
     if (!res.ok) {

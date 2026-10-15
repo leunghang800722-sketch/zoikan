@@ -16,8 +16,8 @@ export interface PreparedImage {
   tiles: string[];
   /** 並排核對用嘅 object URL（要 revoke） */
   previewUrl: string;
-  /** WP-OCR-3：2,400px 來源 canvas（欄位級裁圖用；只留記憶體，slot 被取代／移除即釋放） */
-  source: HTMLCanvasElement;
+  /** WP-OCR-3：2,400px 來源 canvas（欄位級裁圖用；只有 keepSource 時保留，其他文件出完 full／tiles 即釋放） */
+  source?: HTMLCanvasElement;
 }
 
 function makeCanvas(w: number, h: number): HTMLCanvasElement {
@@ -47,11 +47,16 @@ function toJpegDataUrl(c: HTMLCanvasElement): string {
   return c.toDataURL("image/jpeg", JPEG_LAST_QUALITY);
 }
 
-export async function prepareFromCanvas(source: HTMLCanvasElement): Promise<PreparedImage> {
+export async function prepareFromCanvas(source: HTMLCanvasElement, keepSource = false): Promise<PreparedImage> {
   const fullCanvas = drawScaled(source, 0, 0, source.width, source.height, FULL_MAX_EDGE);
   const tiles = tileRects(source.width, source.height).map(([x, y, w, h]) => toJpegDataUrl(drawScaled(source, x, y, w, h, TILE_MAX_EDGE)));
   const blob = await new Promise<Blob>((resolve, reject) => fullCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob"))), "image/jpeg", 0.8));
-  return { full: toJpegDataUrl(fullCanvas), tiles, previewUrl: URL.createObjectURL(blob), source };
+  const out = { full: toJpegDataUrl(fullCanvas), tiles, previewUrl: URL.createObjectURL(blob) };
+  if (keepSource) return { ...out, source };
+  // 驗收 N4：唔需要欄位級裁圖嘅文件即刻釋放 2,400px canvas 記憶體
+  source.width = 0;
+  source.height = 0;
+  return out;
 }
 
 /** WP-OCR-3：按 field-crops 計劃由來源 canvas 裁欄位級圖（矩形／輸出尺寸全部由純函數算好，呢度淨係畫）。 */

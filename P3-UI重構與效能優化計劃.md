@@ -1221,3 +1221,11 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - vitest（隔離 PG；因 dev PG 佔住 54418，全套用 54419）**265 檔，3,972 passed｜0 failed**（基線 264 檔／3,913；新增 `tests/ocr3-field-crops.test.ts` 56 條：box sanity、padBox 邊界／clamp／鄰欄／最少 3%、cropOutSize、planFieldCrops、continuation 簽名／過期／篡改／別人／重用、readStageA／B、stage a／b route〔含 audit 無值〕、後備、電話 9–10 位候選、戶口位數、路徑 B 外擴、`readTwoStage`、Node 裁圖幾何、`--flow`）；tsc 0；lint 0；knip 0（只有既有 configuration hints）；`rm -rf .next` 後 build 過。
 - Playwright 全套（隔離 dev PG 54418、`next build`＋`next start` 3184、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**262 passed｜4 skipped（原有）｜0 failed**（新 `ocr-two-stage.spec.ts` 4 條：欄位級裁圖〔電話／地址各一張、≤1,000px、field_of、身份證仍 tiles〕、box 缺失後備、stage b 400 退回舊流程、手機 375px；既有 `ocr-candidates.spec.ts` 3 條照過）。
 - `gate:locked-months`（隔離 dev PG 54418）12 步：除 `gate-ltpay-aug`（rc=1＝其已知 harness 差異，見下）外 11 步 rc=0；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**金額 55/56 吻合＋1 已知差異**（1 人金額欄＋1 人 workDays INFO）——數字同 §25.4 逐個相同，OCR 路徑獨立，不受影響。
+
+### 26.5 驗收修正（OCR-3.6，Opus 5.5：M0／S3／N7）
+- S1：`padBox` 鄰欄分類改為「同自己垂直重疊 <20%（較矮者高度計）＝上／下鄰欄，否則左右鄰欄」，並排嘅電話／地址上下外擴仍係完整 1.2×h（新 test）。
+- S2：`HKICL_ACCT_DIGITS` 清空（各來源戶口位數口徑不一，開檢查會造大量假 review）；函數與 unknown_bank 路徑保留，待戶口格式正規化後再填。
+- S3：兩段式只用於入職表。stage a 收到身份證／住址證明（須帶 tiles）→ 伺服器 A＋B(2×2) 並行讀完回 `final:true`＋`fields`，唔發 continuation；client 對呢類文件唔打 stage b。
+- N2：stage a／b 收到 429／503 唔退回舊流程，直接顯示錯誤；其他失敗（網絡、400）照退回。
+- N4：2,400px 來源 canvas 只保留入職表 slot，其他 slot 出完 full／tiles 即釋放（寬高設 0）。
+- 驗證：vitest 265 檔 3,978 passed｜0 failed；tsc／lint／knip 0；Playwright（ocr-two-stage 5、ocr-candidates 3、reconcile-ui、guard-fix、p3-5-guards-page）通過。
