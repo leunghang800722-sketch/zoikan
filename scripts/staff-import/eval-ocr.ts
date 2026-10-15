@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OCR_DOC_TYPES, type OcrDocType } from '@/lib/guards/ocr/config';
 import { getReadClients } from '@/lib/guards/ocr/clients';
-import { fakeClientsFor, parseManifest, resolveReportPath, runEval, summaryLines, type EvalDeps } from './lib/eval-ocr-core';
+import { ArgError, fakeClientsFor, parseManifest, resolveReportPath, runEval, summaryLines, type EvalDeps } from './lib/eval-ocr-core';
 import { prepareDocumentImages } from './lib/eval-ocr-images';
 
 interface Args {
@@ -28,19 +28,23 @@ export function parseArgs(argv: readonly string[]): Args {
     const k = argv[i];
     const v = () => {
       const x = argv[++i];
-      if (x === undefined) throw new Error(`missing value for ${k}`);
+      if (x === undefined) throw new ArgError(`${k} 缺少參數值`);
       return x;
     };
     if (k === '--manifest') a.manifest = v();
     else if (k === '--out') a.out = v();
     else if (k === '--dry') a.dry = true;
-    else if (k === '--limit') a.limit = Math.max(1, Number.parseInt(v(), 10) || 0) || null;
+    else if (k === '--limit') {
+      const x = v();
+      if (!/^\d+$/.test(x) || Number(x) < 1) throw new ArgError('--limit 必須係正整數');
+      a.limit = Number(x);
+    }
     else if (k === '--only-doc-type') {
       const t = v();
-      if (!(OCR_DOC_TYPES as readonly string[]).includes(t)) throw new Error('bad --only-doc-type');
+      if (!(OCR_DOC_TYPES as readonly string[]).includes(t)) throw new ArgError('--only-doc-type 必須係 id_card｜address_proof｜onboarding_form');
       a.onlyDocType = t as OcrDocType;
     } else if (k === '--concurrency') a.concurrency = Math.min(8, Math.max(1, Number.parseInt(v(), 10) || 2));
-    else throw new Error(`unknown argument ${k}`);
+    else throw new ArgError(`唔認得嘅參數 ${k}`);
   }
   return a;
 }
@@ -88,7 +92,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   main(process.argv.slice(2)).then((c) => process.exit(c), (e) => {
-    console.error(`[eval-ocr] error ${e instanceof Error ? e.name : typeof e}`);
+    console.error(e instanceof ArgError ? `[eval-ocr] ${e.message}` : `[eval-ocr] error ${e instanceof Error ? e.name : typeof e}`);
     process.exit(1);
   });
 }

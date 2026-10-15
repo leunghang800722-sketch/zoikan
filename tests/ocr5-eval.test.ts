@@ -56,9 +56,9 @@ describe("manifest／報表／路徑", () => {
   });
   it("resolveReportPath：只准 data/ 之下", () => {
     expect(resolveReportPath("data/2026-10/ocr-eval/r.json", "/w")).toBe("/w/data/2026-10/ocr-eval/r.json");
-    expect(() => resolveReportPath("out/r.json", "/w")).toThrow("out_not_under_data");
-    expect(() => resolveReportPath("data/../etc/r.json", "/w")).toThrow("out_not_under_data");
-    expect(() => resolveReportPath("/tmp/r.json", "/w")).toThrow("out_not_under_data");
+    expect(() => resolveReportPath("out/r.json", "/w")).toThrow("--out 必須喺 data/ 之下");
+    expect(() => resolveReportPath("data/../etc/r.json", "/w")).toThrow("--out 必須喺 data/ 之下");
+    expect(() => resolveReportPath("/tmp/r.json", "/w")).toThrow("--out 必須喺 data/ 之下");
   });
   it("runPool：保持次序、並行度受限", async () => {
     let active = 0;
@@ -200,6 +200,7 @@ describe("eval-ocr CLI：參數同 --dry 端到端", () => {
     expect(parseArgs(["--dry", "--limit", "3", "--only-doc-type", "id_card", "--concurrency", "4", "--out", "data/x.json", "--manifest", "m.json"])).toMatchObject({ dry: true, limit: 3, onlyDocType: "id_card", concurrency: 4, out: "data/x.json", manifest: "m.json" });
     expect(() => parseArgs(["--only-doc-type", "passport"])).toThrow();
     expect(() => parseArgs(["--nope"])).toThrow();
+    for (const bad of ["0", "-3", "abc", "2.5", ""]) expect(() => parseArgs(["--limit", bad])).toThrow("--limit 必須係正整數");
     expect(() => parseArgs(["--limit"])).toThrow();
   });
   it("合成 manifest 格式正確，且 fixture 檔案存在", () => {
@@ -249,7 +250,7 @@ describe("eval-ocr CLI：參數同 --dry 端到端", () => {
     }
   });
   it("--out 唔喺 data/ 之下 → main 拋 out_not_under_data（唔寫檔）", async () => {
-    await expect(main(["--dry", "--manifest", path.join(FIX, "manifest.dry.json"), "--out", "/tmp/ocr5-never.json"])).rejects.toThrow("out_not_under_data");
+    await expect(main(["--dry", "--manifest", path.join(FIX, "manifest.dry.json"), "--out", "/tmp/ocr5-never.json"])).rejects.toThrow("--out 必須喺 data/ 之下");
     expect(fs.existsSync("/tmp/ocr5-never.json")).toBe(false);
   });
   it("缺 --manifest 又唔係 --dry → exit 2；manifest 壞 → exit 2（只印路徑）", async () => {
