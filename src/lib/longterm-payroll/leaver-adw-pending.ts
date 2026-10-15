@@ -19,6 +19,8 @@ interface LeaverAdwPendingItem {
   /** 按條例補入缺失月份後嘅建議平均工資（參考，唔係已確認）。 */
   suggested_adw: number | null;
   history_incomplete: boolean;
+  /** 有冇做過條例自動計（日薪制為 false）。 */
+  eo_computed: boolean;
   months_missing: string[];
   balance_days: number;
   /** 該月已有 guard_avg_wages 記錄但仲未重算本月套用。 */
@@ -72,8 +74,9 @@ export async function listLeaverAdwPending(month: Date): Promise<LeaverAdwPendin
       leave_date: adw.leaveDate,
       basis: r.basis,
       daily_rate_used: adw.rateUsed != null ? round2(adw.rateUsed) : null,
-      suggested_adw: adw.eo && adw.eo.daysCounted > 0 ? adw.eo.adw : null,
+      suggested_adw: adw.eo && adw.eo.daysCounted > 0 && adw.eo.adw > 0 ? adw.eo.adw : null,
       history_incomplete: !!adw.eo?.historyIncomplete,
+      eo_computed: !!adw.eo,
       months_missing: adw.eo?.monthsMissing ?? [],
       balance_days: adw.balanceDays,
       saved_awaiting_recompute: savedWage != null,

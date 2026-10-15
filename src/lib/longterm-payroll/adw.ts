@@ -124,6 +124,6 @@ export interface AlDailyRateResolution {
 export function resolveAlDailyRate(input: { manualAmount: number | null | undefined; imported: number | null | undefined; eo: EoAdwResult | null; monthlyFallback: number }): AlDailyRateResolution {
   if (input.manualAmount != null) return { rate: null, basis: "manual_amount", needsConfirm: false };
   if (input.imported != null) return { rate: input.imported, basis: "imported", needsConfirm: false };
-  if (input.eo && !input.eo.historyIncomplete && input.eo.daysCounted > 0) return { rate: input.eo.adw, basis: "computed_eo", needsConfirm: false };
+  if (input.eo && !input.eo.historyIncomplete && input.eo.daysCounted > 0 && input.eo.adw > 0) return { rate: input.eo.adw, basis: "computed_eo", needsConfirm: false };
   return { rate: input.monthlyFallback, basis: "fallback_monthly", needsConfirm: true };
 }

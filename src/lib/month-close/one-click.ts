@@ -225,9 +225,13 @@ export async function stepPrecheck(month: Date, _actorUserId: string, _ip: strin
   }
 
   // (1b) P19b：離職者年假補償平均工資待確認——純提示（唔阻結算、唔阻鎖月）。
-  const leaverAdw = await listLeaverAdwPending(start);
-  numbers.leaverAdwPending = leaverAdw.pending_count;
-  if (leaverAdw.pending_count > 0) warnings.push(`${leaverAdw.pending_count} 位離職者年假補償未有平均工資記錄（系統用咗月薪÷當月日數），請到長工糧月報頁「離職者平均工資待確認」卡輸入`);
+  try {
+    const leaverAdw = await listLeaverAdwPending(start);
+    numbers.leaverAdwPending = leaverAdw.pending_count;
+    if (leaverAdw.pending_count > 0) warnings.push(`${leaverAdw.pending_count} 位離職者年假補償未有平均工資記錄（系統用咗月薪÷當月日數），請到長工糧月報頁「離職者平均工資待確認」卡輸入`);
+  } catch (err) {
+    warnings.push(`離職者平均工資待確認檢查失敗（${err instanceof Error ? err.message : "未知錯誤"}），唔影響結算，請自行到長工糧月報頁核對`);
+  }
 
   // (2) 本月每個有 active 上載嘅盤：有更種？有生效價卡？冇→唔寫卡（WP-
   // PHASE3），淨係喺 needsHuman 建議去價目卡頁撳「複製上月卡到本月」（有

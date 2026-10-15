@@ -649,6 +649,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
         let basisText: string;
         if (resolved.basis === "imported") basisText = `guard_avg_wages：${avgWageEntry!.source}`;
         else if (resolved.basis === "computed_eo") basisText = `僱傭條例第 2(3) 條自動計：${eo!.periodFrom}～${eo!.periodTo} 工資 ${eo!.wages.toFixed(2)} ÷ ${eo!.daysCounted}（日曆日扣 ${eo!.disregardedDays} 日不獲全薪日子）`;
+        else if (eo && !eo.historyIncomplete) basisText = `冇平均工資記錄，條例自動計出嚟嘅平均工資 ${eo.adw.toFixed(2)} 唔合理（≤0），fallback 月薪÷當月日數，請會計用終止僱傭合約薪酬計算表核對後輸入平均工資`;
         else if (eo) basisText = `冇平均工資記錄，系統歷史糧線唔齊（缺 ${eo.monthsMissing.join("、")}），fallback 月薪÷當月日數；按條例補入建議 ${eo.adw.toFixed(2)}，請會計用終止僱傭合約薪酬計算表核對後輸入平均工資`;
         else basisText = "冇平均工資記錄，fallback 日薪";
         notes.push(`★ 離職補年假：${entResult.reason}；已放 ${alTakenCumulative.toFixed(2)} 日 → 結餘 ${balance.toFixed(2)} 日 × 日薪 ${avgWage.toFixed(2)}（${basisText}）＝ ${alPayment.toFixed(2)}`);

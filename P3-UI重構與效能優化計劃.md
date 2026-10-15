@@ -1162,7 +1162,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **背景**：辦公室「終止僱傭合約薪酬計算表」公式同系統規則 9 完全一致，唯一差異係年假補償平均工資——系統冇 `guard_avg_wages` 就 fallback 月薪÷當月日數（8 月兩位離職者因此差 +17.31／+21.06）。
 - **改動**：新 `adw.ts`（純函數 `computeEoAdw`／`resolveAlDailyRate`）＋`adw-history.ts`（由歷史 `longterm_payroll_lines` 砌每月工資同不獲全薪日子）；aggregate 離職分支按 人手金額 ＞ guard_avg_wages ＞ EO（期間完整）＞ 月薪÷日數 揀；歷史唔齊維持現行數（8 月 oracle 不變）。additive 欄 `al_daily_rate_basis`／`al_adw_json`；`GET /api/longterm/leaver-adw`；長工糧頁頂 `LeaverAdwCard`；鎖月／一鍵結算 precheck 加警告（唔阻）。
 - **保守取捨（簡報冇講清）**：①Prisma client 唔重生（簡報禁 prisma generate）→ 新欄用原生 SQL 讀寫，schema.prisma 同步加欄；②歷史月份不獲全薪日子＝糧線 `npl_days`＋病假日（更表 SL 日同 `npsl_days` 取大）＋無薪法定假日（npsh 扣款÷合約日薪近似）；③人手扣款加返入工資（唔當不獲全薪日子）；④期間邊界月按日比例攤；⑤日薪制長工唔做 EO；⑥補入缺失月份用現行合約月薪；⑦手動金額 basis＝`manual_amount`；⑧每月只取最新未作廢 run 嘅糧線。
-- **測試**：`tests/p19b-leaver-adw.test.ts`（15 條：公式結構兩例、四層優先次序、EO 計算含不獲全薪日／12 個月截斷／服務期短／邊界月／歷史唔齊、aggregate 接入、卡出現／消失、precheck warning）、`tests/e2e/p19b-leaver-adw.spec.ts`（4 條：卡、輸入儲存、手機 375px、消失）。
+- **測試**：`tests/p19b-leaver-adw.test.ts`（15 條：公式結構兩例、四層優先次序、EO 計算含不獲全薪日／12 個月截斷／服務期短／邊界月／歷史唔齊、aggregate 接入、卡出現／消失、precheck warning）、`tests/e2e/p19b-leaver-adw.spec.ts`（3 條：卡、輸入儲存、手機 375px、消失）。
 
 ## 25 OCR-5／OCR-4（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §2；branch `ocr54-eval-candidates`，未 merge）
 
