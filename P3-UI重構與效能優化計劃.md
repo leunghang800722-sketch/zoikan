@@ -1166,6 +1166,7 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 
 ### 24.5 P19b.4 平均工資口徑（勞工處定義，2026-10-15 老闆拍板）
 - 津貼一律計入；加班費有條件計入（期內每個有糧線月份都有 OT，或每月平均 OT ≥ 同期每月平均工資（不含 OT）20% → 全部計入，否則全部剔除）；不獲全薪日子連工資剔走（維持）。`adw.ts` `evaluateOtRule()`；`al_adw_json.otRule` additive；備註一句講明。測試 `tests/p19b-leaver-adw.test.ts` 加 7 條（OT 每月都有／部分月 ≥20%／<20%／無 OT／制服津貼／恰好 20%／aggregate 寫入）。詳見 `docs/ops.md`「平均工資口徑」。
+- **P19b.5（Opus 複檢）**：`evaluateOtRule` 按每月 factor（期間內日子比例，邊界月攤分）加權 OT 同不含 OT 工資，平均用期間月數（期間日數÷(365/12)）；固定性質＝期內有糧線月份全部 OT>0 且至少 2 個月（只有 1 個月唔判固定，仍可按 20%——**規劃者保守取捨，待老闆確認**）；OT 負數當 0；不含 OT 工資 ≤0 時 ratio=null（備註「無法計算比率」）。
 
 ## 25 OCR-5／OCR-4（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §2；branch `ocr54-eval-candidates`，未 merge）
 

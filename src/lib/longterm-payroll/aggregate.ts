@@ -97,6 +97,7 @@ type PrismaLike = PrismaClient | Prisma.TransactionClient;
 function otText(eo: EoAdwResult): string {
   const r = eo.otRule;
   if (r.reason === "constant") return `加班費計入（期內 ${r.monthsCounted} 個月每月都有）`;
+  if (r.ratio === null) return `加班費${r.included ? "計入" : "剔除"}（不含加班費工資 ≤0，無法計算比率）`;
   if (r.reason === "ge_20pct") return `加班費計入（每月平均 ${r.avgOt.toFixed(2)} 達同期不含加班費平均工資 ${r.avgWagesExOt.toFixed(2)} 嘅 ${(r.ratio * 100).toFixed(1)}%，≥20%）`;
   return `加班費剔除（${r.monthsWithOt}/${r.monthsCounted} 個月有加班費，平均只佔 ${(r.ratio * 100).toFixed(1)}%，<20%）`;
 }
