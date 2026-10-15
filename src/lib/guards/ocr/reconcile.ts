@@ -12,7 +12,14 @@ export type ReadInput = string | null | undefined | FieldRead;
 const asRead = (x: ReadInput): FieldRead => (x !== null && typeof x === "object" ? x : { value: x ?? null });
 const usableAlts = (r: FieldRead): string[] => (r.alternatives ?? []).filter((v) => !isUnclear(v));
 
-export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Date = new Date(), arbiter?: ReadInput): FieldResult {
+/** WP-OCR-2：外部（ALS）候選——只入候選池，唔自動確認。 */
+export interface ExtraCandidate {
+  value: string;
+  source: "als";
+  als_score?: number;
+}
+
+export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Date = new Date(), arbiter?: ReadInput, extras?: readonly ExtraCandidate[]): FieldResult {
   const ra = asRead(a);
   const rb = asRead(b);
   const rr = arbiter === undefined ? null : asRead(arbiter);
@@ -36,14 +43,24 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
     }
   }
 
+  // WP-OCR-2（地址）：形近字糾錯建議入池（derived：分數封頂、唔搶預填）；ALS 候選同樣
+  const nA = ua ? null : normalizeField(key, ra.value!, now);
+  const nB = ub ? null : normalizeField(key, rb.value!, now);
+  const addrEdits = key === "address" && ((nA?.edits?.length ?? 0) > 0 || (nB?.edits?.length ?? 0) > 0);
+  if (key === "address") {
+    for (const n of [nA, nB]) if (n?.suggested) pool.push({ value: n.suggested, source: "hk_address", derived: true });
+    for (const x of extras ?? []) if (!isUnclear(x.value)) pool.push({ value: x.value, source: x.source, derived: true, ...(x.als_score !== undefined ? { als_score: x.als_score } : {}) });
+  }
+
   if (ua && ub && pool.length === 0) return { status: "missing", value: "", candidates: [], candidates_ranked: [], reason: "unclear" };
   const na = ua ? null : normalizeField(key, ra.value!, now);
   const nb = ub ? null : normalizeField(key, rb.value!, now);
 
   if (na && nb && na.canon === nb.canon) {
-    if (na.valid) return { status: "confirmed", value: na.display, candidates: [], candidates_ranked: [] };
+    // WP-OCR-2：兩讀歸一後一致，但有形近字糾錯建議 → review（候選＝原文＋建議）
+    if (na.valid && !addrEdits) return { status: "confirmed", value: na.display, candidates: [], candidates_ranked: [] };
     const ranked = rankFieldCandidates(key, pool, now);
-    return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason: na.reason ?? "invalid_format" };
+    return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason: na.valid ? "address_variant_suggested" : (na.reason ?? "invalid_format") };
   }
 
   if (na && nb) {
