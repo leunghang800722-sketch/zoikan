@@ -1164,6 +1164,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **保守取捨（簡報冇講清）**：①Prisma client 唔重生（簡報禁 prisma generate）→ 新欄用原生 SQL 讀寫，schema.prisma 同步加欄；②歷史月份不獲全薪日子＝糧線 `npl_days`＋病假日（更表 SL 日同 `npsl_days` 取大）＋無薪法定假日（npsh 扣款÷合約日薪近似）；③人手扣款加返入工資（唔當不獲全薪日子）；④期間邊界月按日比例攤；⑤日薪制長工唔做 EO；⑥補入缺失月份用現行合約月薪；⑦手動金額 basis＝`manual_amount`；⑧每月只取最新未作廢 run 嘅糧線。
 - **測試**：`tests/p19b-leaver-adw.test.ts`（15 條：公式結構兩例、四層優先次序、EO 計算含不獲全薪日／12 個月截斷／服務期短／邊界月／歷史唔齊、aggregate 接入、卡出現／消失、precheck warning）、`tests/e2e/p19b-leaver-adw.spec.ts`（3 條：卡、輸入儲存、手機 375px、消失）。
 
+### 24.5 P19b.4 平均工資口徑（勞工處定義，2026-10-15 老闆拍板）
+- 津貼一律計入；加班費有條件計入（期內每個有糧線月份都有 OT，或每月平均 OT ≥ 同期每月平均工資（不含 OT）20% → 全部計入，否則全部剔除）；不獲全薪日子連工資剔走（維持）。`adw.ts` `evaluateOtRule()`；`al_adw_json.otRule` additive；備註一句講明。測試 `tests/p19b-leaver-adw.test.ts` 加 7 條（OT 每月都有／部分月 ≥20%／<20%／無 OT／制服津貼／恰好 20%／aggregate 寫入）。詳見 `docs/ops.md`「平均工資口徑」。
+
 ## 25 OCR-5／OCR-4（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §2；branch `ocr54-eval-candidates`，未 merge）
 
 執行：Sonnet 5.5（`claude-sonnet-5-5`）。範圍：路徑 A（證件新增保安員）＋路徑 B 共用排序；OCR-1／2／3 未動。全程只用合成 fixture／fake client，冇讀 `data/` 內容、`.env`、冇 PII；圖片同辨識值冇落地（audit 只加 `arbiter_calls` 數量）。

@@ -94,6 +94,13 @@ import {
 
 type PrismaLike = PrismaClient | Prisma.TransactionClient;
 
+function otText(eo: EoAdwResult): string {
+  const r = eo.otRule;
+  if (r.reason === "constant") return `加班費計入（期內 ${r.monthsCounted} 個月每月都有）`;
+  if (r.reason === "ge_20pct") return `加班費計入（每月平均 ${r.avgOt.toFixed(2)} 達同期不含加班費平均工資 ${r.avgWagesExOt.toFixed(2)} 嘅 ${(r.ratio * 100).toFixed(1)}%，≥20%）`;
+  return `加班費剔除（${r.monthsWithOt}/${r.monthsCounted} 個月有加班費，平均只佔 ${(r.ratio * 100).toFixed(1)}%，<20%）`;
+}
+
 function iso(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -152,6 +159,8 @@ export interface LeaverAdwInfo {
   monthlyFallback: number;
   /** EO 自動計結果（有計先有；歷史唔齊時 adw 為補入後建議值）。 */
   eo: EoAdwResult | null;
+  /** 勞工處口徑：加班費計入規則（有做條例自動計先有）。 */
+  otRule: EoAdwResult["otRule"] | null;
   needsConfirm: boolean;
   leaveDate: string;
   balanceDays: number;
@@ -631,6 +640,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
         const monthData = await loadAdwMonthData(client, guardId, histMonths);
         const curSlDays = slCoveredDates.size + uncoveredSl.length;
         monthData[start.toISOString().slice(0, 7)] = {
+          ot: otAmount,
           wages: round2(netBasic + otAmount + specialAllowance + otherAllowance + shResult.npsh + nplDeduct + slDeduct), // 人手扣款唔係不獲全薪日子，唔減
           disregardedDays: nplDates.length + curSlDays + shResult.unpaidDays,
         };
@@ -639,7 +649,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
       }
       const resolved = resolveAlDailyRate({ manualAmount, imported: avgWageEntry ? avgWageEntry.value : null, eo, monthlyFallback });
       alDailyRateBasis = resolved.basis;
-      alAdw = { basis: resolved.basis, rateUsed: resolved.rate, monthlyFallback: round2(monthlyFallback), eo, needsConfirm: resolved.needsConfirm, leaveDate: iso(employEnd), balanceDays: balance };
+      alAdw = { basis: resolved.basis, rateUsed: resolved.rate, monthlyFallback: round2(monthlyFallback), eo, otRule: eo?.otRule ?? null, needsConfirm: resolved.needsConfirm, leaveDate: iso(employEnd), balanceDays: balance };
       if (manualAmount != null) {
         alPayment = manualAmount;
         notes.push(`★ 離職補年假：人手輸入金額 ${alPayment.toFixed(2)}（${leaverInput?.note ?? "會計已用終止僱傭合約薪酬計算表核實"}）`);
@@ -648,7 +658,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
         alPayment = alLeaverPayout(balance, avgWage);
         let basisText: string;
         if (resolved.basis === "imported") basisText = `guard_avg_wages：${avgWageEntry!.source}`;
-        else if (resolved.basis === "computed_eo") basisText = `僱傭條例第 2(3) 條自動計：${eo!.periodFrom}～${eo!.periodTo} 工資 ${eo!.wages.toFixed(2)} ÷ ${eo!.daysCounted}（日曆日扣 ${eo!.disregardedDays} 日不獲全薪日子）`;
+        else if (resolved.basis === "computed_eo") basisText = `僱傭條例第 2(3) 條自動計：${eo!.periodFrom}～${eo!.periodTo} 工資 ${eo!.wages.toFixed(2)} ÷ ${eo!.daysCounted}（日曆日扣 ${eo!.disregardedDays} 日不獲全薪日子；${otText(eo!)}）`;
         else if (eo && !eo.historyIncomplete) basisText = `冇平均工資記錄，條例自動計出嚟嘅平均工資 ${eo.adw.toFixed(2)} 唔合理（≤0），fallback 月薪÷當月日數，請會計用終止僱傭合約薪酬計算表核對後輸入平均工資`;
         else if (eo) basisText = `冇平均工資記錄，系統歷史糧線唔齊（缺 ${eo.monthsMissing.join("、")}），fallback 月薪÷當月日數；按條例補入建議 ${eo.adw.toFixed(2)}，請會計用終止僱傭合約薪酬計算表核對後輸入平均工資`;
         else basisText = "冇平均工資記錄，fallback 日薪";

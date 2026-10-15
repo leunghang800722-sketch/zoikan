@@ -60,7 +60,7 @@ export async function loadAdwMonthData(client: PrismaLike, guardId: string, mont
     const sickDays = Math.max(slDates.get(key)?.size ?? 0, Math.round(n(line.npslDays)));
     const shCount = shDates.get(key)?.size ?? 0;
     const shUnpaid = n(line.npsh) < 0 && monthly > 0 ? Math.min(shCount, Math.max(1, Math.round(-n(line.npsh) / (monthly / dim)))) : 0;
-    out[key] = { wages, disregardedDays: Math.round(n(line.nplDays)) + sickDays + shUnpaid };
+    out[key] = { wages, ot: round2(n(line.otAmount)), disregardedDays: Math.round(n(line.nplDays)) + sickDays + shUnpaid };
   }
   return out;
 }
