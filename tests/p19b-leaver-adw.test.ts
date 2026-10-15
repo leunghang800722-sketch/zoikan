@@ -2,7 +2,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { prisma, clearAll } from "./lib/db";
 import { buildLongtermPayrollInputs, recomputeLongtermPayroll } from "@/lib/longterm-payroll/aggregate";
-import { computeEoAdw, resolveAlDailyRate, eoPeriodFrom, eoPeriodMonths, type AdwMonthData } from "@/lib/longterm-payroll/adw";
+import { evaluateOtRule, computeEoAdw, resolveAlDailyRate, eoPeriodFrom, eoPeriodMonths, type AdwMonthData } from "@/lib/longterm-payroll/adw";
 import { listLeaverAdwPending } from "@/lib/longterm-payroll/leaver-adw-pending";
 import { stepPrecheck } from "@/lib/month-close/one-click";
 import { round2 } from "@/lib/reports/money";
@@ -75,7 +75,8 @@ describe("P19b 離職月公式結構（沿用規則 9）", () => {
 });
 
 describe("P19b ADW 優先次序（四層）", () => {
-  const eoOk = { adw: 700, basis: "computed_eo" as const, periodFrom: "2025-09-01", periodTo: "2026-08-31", daysCounted: 365, disregardedDays: 0, wages: 255500, historyIncomplete: false, monthsMissing: [] };
+  const otRule = { included: true, reason: "constant" as const, avgOt: 0, avgWagesExOt: 0, ratio: 0, monthsWithOt: 0, monthsCounted: 12 };
+  const eoOk = { otRule, adw: 700, basis: "computed_eo" as const, periodFrom: "2025-09-01", periodTo: "2026-08-31", daysCounted: 365, disregardedDays: 0, wages: 255500, historyIncomplete: false, monthsMissing: [] };
   const eoBad = { ...eoOk, basis: "fallback_monthly" as const, historyIncomplete: true, monthsMissing: ["2025-09"] };
   it("人手金額 ＞ guard_avg_wages ＞ EO（完整）＞ 月薪÷日數", () => {
     expect(resolveAlDailyRate({ manualAmount: 500, imported: 800, eo: eoOk, monthlyFallback: 600 })).toEqual({ rate: null, basis: "manual_amount", needsConfirm: false });
@@ -161,6 +162,71 @@ describe("P19b EO 平均工資計算（純函數）", () => {
     expect(r.monthsMissing).toEqual(["2025-12"]);
     expect(r.basis).toBe("fallback_monthly");
     expect(r.wages).toBe(240000); // 補入 20000
+  });
+});
+
+describe("P19b.4 平均工資口徑（勞工處定義）：加班費條件計入、津貼一律計入", () => {
+  const sal = () => 20000;
+  /** 12 個月（2025-09 至 2026-08），每月底薪 20,000，ot[i] 為該月加班費。 */
+  function year(ot: number[], allowance = 0): Record<string, AdwMonthData> {
+    const out: Record<string, AdwMonthData> = {};
+    for (let m = 0; m < 12; m++) {
+      const k = new Date(Date.UTC(2025, 8 + m, 1)).toISOString().slice(0, 7);
+      out[k] = { wages: 20000 + allowance + ot[m], ot: ot[m], disregardedDays: 0 };
+    }
+    return out;
+  }
+  const run = (md: Record<string, AdwMonthData>) => computeEoAdw({ serviceStart: d("2020-01-01"), leaveDate: d("2026-08-31"), monthData: md, monthlySalaryForMonth: sal });
+
+  it("OT 每月都有（固定性質）→ 計入", () => {
+    const r = run(year(Array(12).fill(500)));
+    expect(r.otRule.reason).toBe("constant");
+    expect(r.otRule.included).toBe(true);
+    expect(r.wages).toBe(12 * 20500);
+  });
+  it("OT 只有部分月但平均 ≥20% → 計入", () => {
+    const r = run(year([8000, 8000, 8000, 0, 0, 0, 0, 0, 0, 0, 0, 0])); // 平均 2000 ÷ 20000 = 10%…下面用更大
+    expect(r.otRule.reason).toBe("excluded"); // 10% 未夠
+    const r2 = run(year([16000, 16000, 16000, 0, 0, 0, 0, 0, 0, 0, 0, 0])); // 平均 4000／20000 = 20%
+    expect(r2.otRule.reason).toBe("ge_20pct");
+    const r3 = run(year([20000, 20000, 20000, 0, 0, 0, 0, 0, 0, 0, 0, 0])); // 25%
+    expect(r3.otRule.included).toBe(true);
+    expect(r3.wages).toBe(12 * 20000 + 60000);
+  });
+  it("OT 部分月且 <20% → 全部剔除", () => {
+    const r = run(year([1000, 0, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+    expect(r.otRule.included).toBe(false);
+    expect(r.otRule.monthsWithOt).toBe(2);
+    expect(r.wages).toBe(240000);
+    expect(r.adw).toBe(round2(240000 / 365));
+  });
+  it("無 OT → 剔除（無影響）、ratio 0", () => {
+    const r = run(year(Array(12).fill(0)));
+    expect(r.otRule.reason).toBe("excluded");
+    expect(r.otRule.ratio).toBe(0);
+    expect(r.wages).toBe(240000);
+  });
+  it("制服等津貼一律計入（唔受 OT 規則影響）", () => {
+    const r = run(year(Array(12).fill(0), 300));
+    expect(r.wages).toBe(12 * 20300);
+  });
+  it("邊界：ratio 恰好 20% → 計入", () => {
+    const o = evaluateOtRule([{ wages: 12000, ot: 2000, disregardedDays: 0 }, { wages: 10000, ot: 0, disregardedDays: 0 }]); // avgOt 1000／avgExOt 10000 = 10%… 
+    expect(o.included).toBe(false);
+    const e = evaluateOtRule([{ wages: 12000, ot: 2000, disregardedDays: 0 }]); // 2000／10000
+    expect(e.ratio).toBe(0.2);
+    expect(e.reason).toBe("constant");
+    const e2 = evaluateOtRule([{ wages: 14000, ot: 4000, disregardedDays: 0 }, { wages: 10000, ot: 0, disregardedDays: 0 }]); // avgOt 2000／avgExOt 10000
+    expect(e2.ratio).toBe(0.2);
+    expect(e2.reason).toBe("ge_20pct");
+  });
+  it("aggregate 把 otRule 寫入 al_adw_json 同備註", async () => {
+    const { actorUserId } = await base();
+    const g = await mkLeaver({ hire: "2026-05-01", leave: "2026-08-31", salary: 20000, dob: "1985-01-01", actor: actorUserId });
+    for (const m of ["2026-05-01", "2026-06-01", "2026-07-01"]) await seedHistoryLine(g.id, actorUserId, m, { netBasic: 20000 });
+    const line = (await buildLongtermPayrollInputs(AUG)).lines[0];
+    expect(line.alAdw?.otRule?.reason).toBe("excluded");
+    expect(line.notes.some((n) => n.includes("加班費剔除"))).toBe(true);
   });
 });
 

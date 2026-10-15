@@ -178,6 +178,11 @@ P19a 修正：年資起點取**現行連續合約鏈**第一段生效日——�
 - 鎖月、一鍵結算 precheck 只出警告（有幾多位待確認），唔阻擋。
 - 日薪制長工唔做條例自動計（維持每更價）。歷史月份補入用現行合約月薪（舊月份調薪冇追溯）。
 
+### 平均工資口徑（勞工處《僱傭條例》平均工資定義，P19b.4，老闆 2026-10-15 拍板）
+- **一律計入**：津貼（交通、勤工／花紅、佣金、制服等 `special_allowance`／`other_allowance`／頂位津貼）。
+- **加班費有條件計入**：計算期（離職前 12 個月或服務期）內，(a) 每個有糧線嘅月份都有加班費（>0，固定性質），或 (b) 每月平均加班費 ≥ 同期每月平均工資（不含加班費）嘅 20%（恰好 20% 算計入）→ 全部加班費計入分子；否則加班費全部剔除。結果記入 `al_adw_json.otRule`（`included`／`reason` constant｜ge_20pct｜excluded／`avgOt`／`avgWagesExOt`／`ratio`／`monthsWithOt`／`monthsCounted`），逐人「★ 離職補年假」備註一句講明。
+- **不予計算期間**：4/5 病假、無薪假、無薪法定假等不獲全薪日子，連同該等日子嘅工資一齊由分子分母剔走（按勞工處定義）；年假補償、4/5 病假津貼、人手扣款不計。
+
 ## OCR 準確度評估（OCR-5）＋第三讀仲裁開關（OCR-4）
 
 評估腳本 `scripts/staff-import/eval-ocr.ts`——**本機由規劃者跑真檔；執行員／CI 只跑合成 fixture**（`--dry`）。用同一條應用內路徑：同規格圖（1,600px 全圖＋2×2 放大格，ImageMagick `magick`／PDF 用 `pdftoppm`，可用 `MAGICK_BIN`／`PDFTOPPM_BIN` 覆蓋）→ `getReadClients()`（真 Claude＋DeepSeek，key 由 `.env` 經 dotenv 載入；其他 env 檔用 `DOTENV_CONFIG_PATH=…`）→ `readDocument`（候選字／仲裁）→ 逐欄對 truth（現有 normalize canon）。

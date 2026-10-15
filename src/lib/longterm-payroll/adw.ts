@@ -14,6 +14,8 @@ export type AlDailyRateBasis = AdwBasis | "manual_amount";
 export interface AdwMonthData {
   /** 該月工資（已扣走不獲全薪日子嘅工資；唔含年假補償、病假津貼、人手扣款）。 */
   wages: number;
+  /** 其中加班費（已包含喺 wages 入面；P19b.4 按勞工處口徑決定整體計唔計）。 */
+  ot?: number;
   /** 該月不獲全薪日子（NPL／NPSH／病假日）。 */
   disregardedDays: number;
 }
@@ -27,7 +29,33 @@ export interface EoAdwInput {
   monthlySalaryForMonth: (monthStart: Date) => number;
 }
 
+/** 加班費計入規則（勞工處平均工資定義）：固定性質（期內每月都有）或每月平均 ≥ 同期每月平均工資（不含加班費）20% → 全部計入，否則全部剔除。 */
+export interface OtRule {
+  included: boolean;
+  reason: "constant" | "ge_20pct" | "excluded";
+  avgOt: number;
+  avgWagesExOt: number;
+  ratio: number;
+  monthsWithOt: number;
+  monthsCounted: number;
+}
+
+export function evaluateOtRule(months: AdwMonthData[]): OtRule {
+  const monthsCounted = months.length;
+  const totalOt = months.reduce((a, m) => a + (m.ot ?? 0), 0);
+  const totalExOt = months.reduce((a, m) => a + m.wages - (m.ot ?? 0), 0);
+  const monthsWithOt = months.filter((m) => (m.ot ?? 0) > 0).length;
+  const avgOt = monthsCounted ? totalOt / monthsCounted : 0;
+  const avgWagesExOt = monthsCounted ? totalExOt / monthsCounted : 0;
+  const ratio = avgWagesExOt > 0 ? avgOt / avgWagesExOt : avgOt > 0 ? Infinity : 0;
+  const constant = monthsCounted > 0 && monthsWithOt === monthsCounted;
+  const ge20 = avgOt > 0 && ratio >= 0.2 - 1e-9;
+  const reason: OtRule["reason"] = constant ? "constant" : ge20 ? "ge_20pct" : "excluded";
+  return { included: reason !== "excluded", reason, avgOt: round2(avgOt), avgWagesExOt: round2(avgWagesExOt), ratio: Number.isFinite(ratio) ? Math.round(ratio * 10000) / 10000 : 9999, monthsWithOt, monthsCounted };
+}
+
 export interface EoAdwResult {
+  otRule: OtRule;
   adw: number;
   basis: AdwBasis;
   periodFrom: string;
@@ -67,6 +95,7 @@ export function eoPeriodMonths(serviceStart: Date, leaveDate: Date): Date[] {
 export function computeEoAdw(input: EoAdwInput): EoAdwResult {
   const { serviceStart, leaveDate } = input;
   const from = eoPeriodFrom(serviceStart, leaveDate);
+  const otRule = evaluateOtRule(eoPeriodMonths(serviceStart, leaveDate).map((ms) => input.monthData[monthKey(ms)]).filter((d): d is AdwMonthData => !!d));
   let wages = 0;
   let disregarded = 0;
   let calendarDays = 0;
@@ -86,7 +115,7 @@ export function computeEoAdw(input: EoAdwInput): EoAdwResult {
     const key = monthKey(ms);
     const d = input.monthData[key];
     if (d) {
-      wages += d.wages * factor;
+      wages += (otRule.included ? d.wages : d.wages - (d.ot ?? 0)) * factor;
       disregarded += d.disregardedDays * factor;
     } else {
       monthsMissing.push(key);
@@ -97,6 +126,7 @@ export function computeEoAdw(input: EoAdwInput): EoAdwResult {
   const incomplete = monthsMissing.length > 0;
   const adw = daysCounted > 0 ? round2(wages / daysCounted) : 0;
   return {
+    otRule,
     adw,
     basis: incomplete ? "fallback_monthly" : "computed_eo",
     periodFrom: isoDay(from),
