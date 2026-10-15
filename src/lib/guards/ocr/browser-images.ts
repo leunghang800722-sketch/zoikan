@@ -3,12 +3,10 @@
 // - 縮圖長邊 ≤1,600px JPEG；另切 2×2 重疊放大分格
 // - 圖片只留喺瀏覽器記憶體（Blob／object URL）；儲存／離開頁面即 revoke
 import { OCR_MAX_IMAGE_CHARS } from "./config";
+import { FULL_MAX_EDGE, JPEG_LAST_QUALITY, JPEG_QUALITIES, SOURCE_MAX_EDGE, TILE_MAX_EDGE, scaledSize, tileRects } from "./image-plan";
 
-const FULL_MAX_EDGE = 1600;
-const TILE_MAX_EDGE = 1000;
-/** 分格佔原圖邊長比例；2×2 之間重疊 = 2×0.6-1 = 20%。 */
-const TILE_FRACTION = 0.6;
-const SOURCE_MAX_EDGE = 2400;
+// WP-OCR-5：規格常數／分格座標／縮圖尺寸抽咗去 image-plan.ts（同 Node 評估腳本共用）；呢度保留 re-export 俾舊 import。
+export { tileRects };
 
 export interface PreparedImage {
   /** 全圖 data URL（長邊 ≤1,600、JPEG） */
@@ -27,8 +25,8 @@ function makeCanvas(w: number, h: number): HTMLCanvasElement {
 }
 
 function drawScaled(src: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, maxEdge: number): HTMLCanvasElement {
-  const scale = Math.min(1, maxEdge / Math.max(sw, sh));
-  const c = makeCanvas(sw * scale, sh * scale);
+  const out = scaledSize(sw, sh, maxEdge);
+  const c = makeCanvas(out.w, out.h);
   const ctx = c.getContext("2d")!;
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, c.width, c.height);
@@ -39,22 +37,11 @@ function drawScaled(src: CanvasImageSource, sx: number, sy: number, sw: number, 
 
 /** canvas → JPEG data URL，過大就逐步降質素（保證 ≤ 單張上限）。 */
 function toJpegDataUrl(c: HTMLCanvasElement): string {
-  for (const q of [0.85, 0.75, 0.65, 0.5, 0.4]) {
+  for (const q of JPEG_QUALITIES) {
     const url = c.toDataURL("image/jpeg", q);
     if (url.length <= OCR_MAX_IMAGE_CHARS) return url;
   }
-  return c.toDataURL("image/jpeg", 0.3);
-}
-
-/** 分格座標（2×2 重疊）：回傳 TL,TR,BL,BR 嘅 [x,y,w,h]。純函數，方便測試。 */
-export function tileRects(width: number, height: number, fraction = TILE_FRACTION): [number, number, number, number][] {
-  const tw = Math.round(width * fraction);
-  const th = Math.round(height * fraction);
-  const xs = [0, width - tw];
-  const ys = [0, height - th];
-  const out: [number, number, number, number][] = [];
-  for (const y of ys) for (const x of xs) out.push([x, y, tw, th]);
-  return out;
+  return c.toDataURL("image/jpeg", JPEG_LAST_QUALITY);
 }
 
 export async function prepareFromCanvas(source: HTMLCanvasElement): Promise<PreparedImage> {

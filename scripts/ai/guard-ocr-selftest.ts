@@ -31,7 +31,7 @@ async function runOne(provider: "claude" | "deepseek", img: Buffer): Promise<voi
     const client: VisionClient = provider === "claude" ? new ClaudeVisionClient({ timeoutMs: TIMEOUT_MS }) : new DeepSeekVisionClient({ timeoutMs: TIMEOUT_MS });
     const r = await client.complete({ system: buildSystemPrompt("id_card"), userText: buildUserTextFull("id_card"), images: [`data:image/jpeg;base64,${img.toString("base64")}`], fields: FIELDS });
     const parsed = parseModelJson(r.text, FIELDS);
-    const hk = parsed?.hkid ? normalizeField("hkid", parsed.hkid) : null;
+    const hk = parsed?.hkid?.value ? normalizeField("hkid", parsed.hkid.value) : null;
     const hkidOk = !!hk && hk.valid && hk.canon === EXPECTED_HKID;
     console.log(`[guard-ocr-selftest] ${parsed ? "ok" : "fail"} provider=${provider} model=${model} ms=${Date.now() - t0} prompt_tokens=${r.promptTokens} completion_tokens=${r.completionTokens} hkid_read_ok=${hkidOk}`);
   } catch (e) {
