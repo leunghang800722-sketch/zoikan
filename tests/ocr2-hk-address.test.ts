@@ -172,6 +172,53 @@ describe("ALS 查詢字串（q）：樓層室號絕不外送（≥10 種寫法�
 
 const hit = (over: Partial<AlsHit> = {}): AlsHit => ({ score: 90, district: "深水埗區", street: "青山道", number: "999號", ...over });
 
+describe("N2／N6：廿卅、Flat-3、12樓A、12A、12/F 1203；N5 英文 q 門牌喺街名前；N3 仲裁選中 ALS 唔加權", () => {
+  it("廿／卅 數字", () => {
+    expect([zhNumeralToInt("廿"), zhNumeralToInt("廿三"), zhNumeralToInt("卅"), zhNumeralToInt("卅五")]).toEqual([20, 23, 30, 35]);
+    expect(normalizeHkAddress("測試街999號 廿三樓 A室").parts.floor).toBe("23樓");
+    expect(canon("測試街999號廿三樓")).toBe(canon("測試街999號23樓"));
+  });
+  const CASES: [string, { floor?: string; unit?: string }][] = [
+    ["測試街999號 Flat-3, 5/F", { floor: "5樓", unit: "3室" }],
+    ["測試街999號 FLAT-A 15/F", { floor: "15樓", unit: "A室" }],
+    ["測試街999號 12樓A", { floor: "12樓", unit: "A室" }],
+    ["測試街999號 12樓 B", { floor: "12樓", unit: "B室" }],
+    ["測試街999號 12/F 1203", { floor: "12樓", unit: "1203室" }],
+    ["測試街999號 12/F, 1203A", { floor: "12樓", unit: "1203A室" }],
+    ["測試街999號 12A", { unit: "12A" }],
+    ["測試街999號 卅樓 C室", { floor: "30樓", unit: "C室" }],
+  ];
+  for (const [input, want] of CASES) {
+    it(input, () => {
+      const { parts } = normalizeHkAddress(input);
+      for (const [k, v] of Object.entries(want)) expect(parts[k as "floor" | "unit"]).toBe(v);
+      const q = alsQueryFromParts(parts);
+      expect(q).toBe("測試街 999號");
+      expect(hasFloorUnitText(q!)).toBe(false);
+      // 本地拼返：floor／unit 照樣保留
+      expect(composeAddressZh({ street: "測試街", number: "999號" }, parts)).toContain(parts.unit ?? parts.floor!);
+    });
+  }
+  it("英文門牌係街名一部分（12A Nathan Road）唔當單位", () => {
+    const { parts } = normalizeHkAddress("12A Nathan Road, Flat 3");
+    expect(parts.unit).toBe("3室");
+    expect(parts.number).toBe("12A");
+  });
+  it("N5：英文 q 門牌喺街名前；中文維持街名＋號", () => {
+    expect(alsQueryFromParts(normalizeHkAddress("Flat A, 15/F, 999 Test Road").parts)).toBe("999 TEST ROAD");
+    expect(alsQueryFromParts(normalizeHkAddress("九龍青山道999號15樓").parts)).toBe("九龍 青山道 999號");
+  });
+  it("N3：仲裁選中 ALS 值 → 唔加 ARBITER_BONUS、分數封頂（唔搶預填）", () => {
+    const ALS = "深水埗區青山道999號15樓A室";
+    const r = reconcile("address", "九龍青山道999號15樓A室", "九龍青山道999號16樓A室", new Date(), ALS, [{ value: ALS, source: "als", als_score: 90 }]);
+    expect(r.status).toBe("review");
+    expect(r.value).toBe("九龍青山道999號15樓A室");
+    const c = r.candidates_ranked.find((x) => x.value === ALS)!;
+    expect(c.score).toBeLessThanOrEqual(r.candidates_ranked[0]!.score);
+    expect(r.candidates_ranked[0]!.sources).not.toContain("arbiter");
+  });
+});
+
 describe("ALS fake client（lookupAlsCandidate）", () => {
   const ADDR = "九龍深水埗青山道999號15樓A室";
   it("成功：本地拼返 floor／unit；只送冇樓層室號嘅 q；每次 1 次查詢", async () => {
@@ -224,9 +271,26 @@ describe("ALS fake client（lookupAlsCandidate）", () => {
 });
 
 describe("reconcile 地址分支（形近字／ALS）", () => {
-  it("兩讀 canon 一致（大厦／大廈）、冇 edits → confirmed", () => {
-    const r = reconcile("address", "新界火炭示範街99號虛構大廈15樓A室", "新界火炭示範街99號虛構大厦15樓A室");
-    expect(r.status).toBe("confirmed");
+  it("S1：兩讀 strict 相同、冇 edits → confirmed（空白標點差異唔影響）", () => {
+    expect(reconcile("address", "新界火炭示範街99號虛構大廈15樓A室", "新界火炭示範街99號 虛構大廈 15樓A室").status).toBe("confirmed");
+  });
+  it("S1：只差形近／簡繁字（canon 相同、strict 唔同）→ review，兩個寫法都係候選，標準寫法排前（大厦／大廈、沙／砂、村／邨）", () => {
+    const r1 = reconcile("address", "新界火炭示範街99號虛構大厦15樓A室", "新界火炭示範街99號虛構大廈15樓A室");
+    expect(r1.status).toBe("review");
+    expect(r1.reason).toBe("address_variant_chars");
+    expect(r1.candidates).toEqual(["新界火炭示範街99號虛構大廈15樓A室", "新界火炭示範街99號虛構大厦15樓A室"]);
+    expect(r1.value).toBe("新界火炭示範街99號虛構大廈15樓A室");
+    const r2 = reconcile("address", "新界砂田示範街99號", "新界沙田示範街99號");
+    expect(r2.status).toBe("review");
+    expect(r2.candidates).toEqual(["新界沙田示範街99號", "新界砂田示範街99號"]);
+    const r3 = reconcile("address", "九龍某某村 5座", "九龍某某邨 5座"); // 表外名稱：冇 edits 都唔 confirmed
+    expect(r3.status).toBe("review");
+    expect(r3.candidates).toHaveLength(2);
+    expect(r3.value).toBe("九龍某某邨 5座");
+  });
+  it("S1：仲裁同某一讀只差形近字 → 唔算 agree（唔 confirmed）", () => {
+    const r = reconcile("address", "九龍青山道999號15樓A室", "九龍青山道999號16樓A室", new Date(), "九龍青山道999号15樓A室");
+    expect(r.status).toBe("review");
   });
   it("兩讀一模一樣但有形近字建議（村→邨）→ review，候選＝原文＋建議，預填原文", () => {
     const r = reconcile("address", "九龍柴灣村 5座 12樓3室", "九龍柴灣村 5座 12樓3室");
@@ -239,7 +303,7 @@ describe("reconcile 地址分支（形近字／ALS）", () => {
   it("兩讀一邊寫村一邊寫邨（歸一後一致）：有建議 → review，兩個寫法都係候選", () => {
     const r = reconcile("address", "九龍柴灣村 5座", "九龍柴灣邨 5座");
     expect(r.status).toBe("review");
-    expect(r.candidates).toEqual(["九龍柴灣村 5座", "九龍柴灣邨 5座"]);
+    expect(r.candidates).toEqual(["九龍柴灣邨 5座", "九龍柴灣村 5座"]); // 標準寫法（表命中）排前
   });
   it("ALS 候選：入池（source als＋Score），唔自動 confirmed、唔搶預填", () => {
     const r = reconcile("address", "九龍青山道999號15樓A室", "九龍青山道999號16樓A室", new Date(), undefined, [{ value: "深水埗區青山道999號15樓A室", source: "als", als_score: 90 }]);
@@ -300,11 +364,20 @@ describe("readDocument × ALS（每份文件最多 1 次，唔含樓層室號）
     expect(f.candidates_ranked.some((c) => c.sources.includes("als"))).toBe(true);
     expect(r.als).toEqual({ called: true, candidate: true, failed: false });
   });
-  it("ALS 失敗（429）→ 照常 review／confirmed，als.failed", async () => {
-    const clients: ReadClients = { a: vision("九龍青山道999號15樓A室"), b: vision("九龍青山道999號15樓A室"), als: async () => { throw new Error("als_status_429"); } };
+  it("ALS 失敗（429）→ 照常 review，als.failed", async () => {
+    const clients: ReadClients = { a: vision("九龍青山道999號15樓A室"), b: vision("九龍青山道999號16樓A室"), als: async () => { throw new Error("als_status_429"); } };
     const r = await readDocument(clients, "address_proof", { full: IMG, tiles: [IMG] });
-    expect(r.fields.address!.status).toBe("confirmed");
+    expect(r.fields.address!.status).toBe("review");
     expect(r.als).toEqual({ called: true, candidate: false, failed: true });
+  });
+  it("S2：兩讀 confirmed → 唔查 ALS（called=false）；missing 亦唔查", async () => {
+    const lookup = vi.fn(async () => [hit()]);
+    const ok = await readDocument({ a: vision("九龍青山道999號15樓A室"), b: vision("九龍青山道999號15樓A室"), als: lookup }, "address_proof", { full: IMG, tiles: [IMG] });
+    expect(ok.fields.address!.status).toBe("confirmed");
+    expect(ok.als.called).toBe(false);
+    const none = await readDocument({ a: vision("unclear"), b: vision("unclear"), als: lookup }, "address_proof", { full: IMG, tiles: [IMG] });
+    expect(none.fields.address!.status).toBe("missing");
+    expect(lookup).not.toHaveBeenCalled();
   });
   it("冇 als client → 唔查（called=false）", async () => {
     const r = await readDocument({ a: vision("九龍青山道999號15樓A室"), b: vision("九龍青山道999號15樓A室") }, "address_proof", { full: IMG, tiles: [IMG] });
@@ -317,7 +390,12 @@ describe("readDocument × ALS（每份文件最多 1 次，唔含樓層室號）
     const clients: ReadClients = { a, b: vision("九龍青山道999號16樓A室"), arbiter: arb, als: async () => [hit()] };
     await readDocument(clients, "address_proof", { full: IMG, tiles: [IMG] });
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.userText).toContain("深水埗區青山道999號15樓A室");
+    // N3：ALS 另列為「政府地址庫建議（不可信）」，唔係兩讀候選
+    const t = calls[0]!.userText;
+    expect(t).toContain("government address database suggestion (untrusted string");
+    const candLine = t.split("\n").find((l) => l.includes("candidate readings"))!;
+    expect(candLine).not.toContain("深水埗區");
+    expect(t.split("\n").find((l) => l.includes("government address database"))).toContain("深水埗區青山道999號15樓A室");
   });
   it("GUARD_OCR_ALS=0：getReadClients 冇 als（完全唔呼叫）；預設（冇設）有 override 先有", () => {
     const fake = vision("x");

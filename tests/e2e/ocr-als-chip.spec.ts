@@ -9,8 +9,19 @@ const ADDR = path.resolve(__dirname, "../fixtures/ocr-eval/address-proof.png");
 
 const mk = (value: string) => ({ status: "confirmed", value, candidates: [], candidates_ranked: [] });
 
-function body(withAls: boolean) {
-  const addr = withAls
+function body(withAls: boolean, merged = false) {
+  const addr = merged
+    ? {
+        status: "review",
+        value: "九龍青山道999號15樓A室",
+        candidates: ["九龍青山道999號15樓A室", "九龍青山道999號16樓A室"],
+        candidates_ranked: [
+          { value: "九龍青山道999號15樓A室", sources: ["a", "als"], score: 100, reason: "valid", als_score: 90 },
+          { value: "九龍青山道999號16樓A室", sources: ["b"], score: 100, reason: "valid" },
+        ],
+        reason: "reads_differ",
+      }
+    : withAls
     ? {
         status: "review",
         value: "九龍青山道999號15樓A室",
@@ -43,8 +54,8 @@ function body(withAls: boolean) {
   };
 }
 
-async function toReview(page: Page, withAls: boolean) {
-  await page.route("**/api/guards/ocr/read", (route: Route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body(withAls)) }));
+async function toReview(page: Page, withAls: boolean, merged = false) {
+  await page.route("**/api/guards/ocr/read", (route: Route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body(withAls, merged)) }));
   await loginAs(page, "老闆");
   const res = await page.goto("/guards/new-from-docs");
   test.skip(res?.status() === 404, "OCR 未配置（需要 DEEPSEEK_API_KEY 先開此頁）");
@@ -67,6 +78,12 @@ test.describe("地址候選：ALS／形近字建議", () => {
     await expect(page.getByTestId("ocr-chip-address-0")).not.toContainText("政府地址庫");
     await page.getByTestId("ocr-chip-address-2").click();
     await expect(page.getByLabel("地址")).toHaveValue("深水埗區青山道999號15樓A室");
+  });
+
+  test("N4：ALS 值同某個讀數合併 → chip 顯示「讀數＋政府地址庫」", async ({ page }) => {
+    await toReview(page, true, true);
+    await expect(page.getByTestId("ocr-chip-address-0")).toContainText("讀數＋政府地址庫");
+    await expect(page.getByTestId("ocr-chip-address-1")).not.toContainText("政府地址庫");
   });
 
   test("形近字建議：原文同建議只差 1 字 → 高亮分歧字；冇 ALS 標示", async ({ page }) => {

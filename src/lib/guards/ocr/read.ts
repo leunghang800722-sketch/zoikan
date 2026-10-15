@@ -223,7 +223,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   let alsExtra: ExtraCandidate | null = null;
   if (clients.als && fields.includes("address")) {
     const pre = reconcile("address", pa?.address ?? null, pb?.address ?? null, now);
-    if (pre.status !== "missing" && pre.value) {
+    if (pre.status === "review" && pre.value) { // 只喺 review（兩讀未確認）先查；confirmed／missing 唔查
       const r = await lookupAlsCandidate(pre.value, clients.als);
       als = { called: r.called, candidate: r.status === "candidate", failed: r.status === "failed" };
       if (r.status === "candidate") alsExtra = { value: r.value, source: "als", als_score: r.score };
@@ -234,15 +234,17 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   let pArb: ModelReads | null = null;
   if (clients.arbiter && imagesB.full && disputed.length > 0) {
     const cands: Partial<Record<OcrFieldKey, string[]>> = {};
-    for (const f of disputed) cands[f] = candidateValues(pa?.[f], pb?.[f], f === "address" ? alsExtra?.value : undefined);
+    for (const f of disputed) cands[f] = candidateValues(pa?.[f], pb?.[f]);
+    // WP-OCR-2：ALS 建議另列（唔當兩讀候選）
+    const alsSug: Partial<Record<OcrFieldKey, string>> = alsExtra && disputed.includes("address") ? { address: alsExtra.value } : {};
     let reqArb: VisionRequest;
     if (imagesB.kind === "field_crops") {
       const fieldOf = imagesB.fieldOf ?? [];
       const idx = fieldOf.flatMap((f, i) => (f && disputed.includes(f) ? [i] : []));
       const cropFields = idx.map((i) => fieldOf[i]!);
-      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserTextCrops(type, cands, cropFields), images: [imagesB.full, ...idx.map((i) => imagesB.images[i]!)], fields: disputed };
+      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserTextCrops(type, cands, cropFields, alsSug), images: [imagesB.full, ...idx.map((i) => imagesB.images[i]!)], fields: disputed };
     } else {
-      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserText(type, cands, imagesB.images.length), images: [imagesB.full, ...imagesB.images], fields: disputed };
+      reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserText(type, cands, imagesB.images.length, alsSug), images: [imagesB.full, ...imagesB.images], fields: disputed };
     }
     try {
       rArb = await clients.arbiter.complete(reqArb);
@@ -329,9 +331,7 @@ function disputedFields(fields: readonly OcrFieldKey[], pa: ModelReads | null, p
 }
 
 /** 仲裁 prompt 嘅候選值：讀 A、讀 B 主值＋各自 alternatives（去重，≤4）。 */
-function candidateValues(x: FieldRead | undefined, y: FieldRead | undefined, als?: string): string[] {
+function candidateValues(x: FieldRead | undefined, y: FieldRead | undefined): string[] {
   const all = [x?.value, y?.value, ...(x?.alternatives ?? []), ...(y?.alternatives ?? [])].filter((v): v is string => typeof v === "string" && !isUnclear(v));
-  const uniq = [...new Set(all.map((v) => v.trim()))];
-  // WP-OCR-2：ALS 候選（當不可信字串）佔最後一個位
-  return als ? [...new Set([...uniq.slice(0, 3), als])] : uniq.slice(0, 4);
+  return [...new Set(all.map((v) => v.trim()))].slice(0, 4);
 }
