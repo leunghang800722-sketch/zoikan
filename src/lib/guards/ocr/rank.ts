@@ -70,8 +70,8 @@ export function rankPool(inputs: readonly RankInput[], scoreOf: (value: string) 
     else groups.set(s.canon, { display: s.display, base: s.base, reason: s.reason, inputs: [inp], first: idx });
   });
   const rows = [...groups.values()].map((g) => {
-    const reads = new Set(g.inputs.map((i) => readOf(i.source)));
-    const score = g.base + AGREE_BONUS * (reads.size - 1) + (reads.has("arbiter") ? ARBITER_BONUS : 0);
+    const reads = new Set(g.inputs.filter((i) => !i.derived).map((i) => readOf(i.source))); // 推導候選唔算獨立讀數
+    const score = g.base + AGREE_BONUS * Math.max(0, reads.size - 1) + (reads.has("arbiter") ? ARBITER_BONUS : 0);
     return { g, score, conf: Math.max(...g.inputs.map(confRank)), onlyDerived: g.inputs.every((i) => i.derived) };
   });
   // WP-OCR-2：純推導候選（形近字建議、ALS）分數封頂喺最高嘅原讀數分數

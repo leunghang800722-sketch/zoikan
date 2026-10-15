@@ -6,6 +6,8 @@ import { OCR_CROP_FIELDS } from '@/lib/guards/ocr/field-crops';
 import { confirmedRefsFromDocs, countCross, crossForOnboarding, type Refs } from '@/lib/guards/ocr/refs';
 import { OCR_CROSS_FIELDS, OCR_DOC_FIELDS, OCR_DOC_TYPES, type OcrDocType, type OcrFieldKey } from '@/lib/guards/ocr/config';
 import { normalizeField, type FieldResult, type FieldStatus } from '@/lib/guards/ocr/normalize';
+import { normalizeHkAddress } from '@/lib/guards/ocr/hk-address';
+import type { AlsLookup } from '@/lib/guards/ocr/als-client';
 import { readDocument, readStageA, readStageB, type DocumentReadResult, type StageAResult } from '@/lib/guards/ocr/read';
 import type { FieldBoxes } from '@/lib/guards/ocr/field-crops';
 import type { ReadClients } from '@/lib/guards/ocr/clients';
@@ -68,6 +70,8 @@ export interface FieldEval {
   valueCorrect: boolean;
   /** review 欄嘅候選數（confirmed／missing＝0） */
   candidateCount: number;
+  /** WP-OCR-2：review 欄嘅 truth 只喺 ALS 候選（冇任何讀數支持）先出現 */
+  truthFromAls?: boolean;
 }
 
 /**
@@ -83,7 +87,8 @@ export function classifyField(field: OcrFieldKey, truth: string, r: FieldResult,
   if (r.status === 'missing') outcome = 'missing';
   else if (r.status === 'confirmed') outcome = valueCorrect ? 'exact' : 'wrong';
   else outcome = valueCorrect || cands.some((c) => canon(c) === t) ? 'review_contains_truth' : 'wrong';
-  return { doc, field, outcome, status: r.status, valueCorrect, candidateCount: r.status === 'review' ? cands.length : 0 };
+  const truthFromAls = r.status === 'review' && field === 'address' && (r.candidates_ranked ?? []).some((c) => canon(c.value) === t && c.sources.length > 0 && c.sources.every((x) => x === 'als'));
+  return { doc, field, outcome, status: r.status, valueCorrect, candidateCount: r.status === 'review' ? cands.length : 0, ...(truthFromAls ? { truthFromAls: true } : {}) };
 }
 
 // ---------- 彙總 ----------
@@ -182,6 +187,11 @@ export interface CaseOutcome {
   /** WP-OCR-1：注入咗 refs 嘅入職表文件數；入職表 name_zh／hkid／dob 對身份證嘅交叉核對計數（淨計數） */
   refs_injected_docs?: number;
   cross?: CrossCounts;
+  /** WP-OCR-2：ALS 淨計數（查過／出咗候選／查失敗）；truth 只來自 ALS 候選嘅欄數 */
+  als_called_docs?: number;
+  als_candidate_docs?: number;
+  als_failed?: number;
+  als_truth_from_candidate?: number;
 }
 
 export interface CrossCounts {
@@ -209,12 +219,18 @@ export interface EvalReport {
   refs_injected_docs: number;
   refs_enabled: boolean;
   cross: CrossCounts;
+  /** WP-OCR-2：ALS（政府地址庫）計數（淨計數）：開關／查過嘅文件／出咗候選嘅文件／查失敗／review_contains_truth 入面「真值來自 ALS 候選」 */
+  als_enabled: boolean;
+  als_called_docs: number;
+  als_candidate_docs: number;
+  als_failed: number;
+  als_truth_from_candidate: number;
   /** 逐 case：淨 id＋逐欄結果類別（doc.field → outcome），冇值 */
   per_case: { id: string; ok: boolean; error?: string; outcomes: Record<string, Outcome> }[];
   notes: string[];
 }
 
-export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry' | 'live'; limit: number | null; onlyDocType: OcrDocType | null; concurrency: number; flow?: EvalFlow; refs?: boolean; now?: Date }): EvalReport {
+export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry' | 'live'; limit: number | null; onlyDocType: OcrDocType | null; concurrency: number; flow?: EvalFlow; refs?: boolean; als?: boolean; now?: Date }): EvalReport {
   const overall = emptyTally();
   const crossFields = emptyTally();
   // WP-OCR-1：入職表 name_zh／hkid／dob 係交叉核對欄，唔計入 overall／by_field（令樣本數同 OCR-5 基線可比），另出 cross_fields
@@ -266,6 +282,11 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
     refs_injected_docs: outcomes.reduce((n, c) => n + (c.refs_injected_docs ?? 0), 0),
     refs_enabled: meta.refs !== false && (meta.flow ?? 'two-stage') === 'two-stage',
     cross: outcomes.reduce<CrossCounts>((a, c) => ({ match: a.match + (c.cross?.match ?? 0), differs: a.differs + (c.cross?.differs ?? 0), unreadable: a.unreadable + (c.cross?.unreadable ?? 0) }), { match: 0, differs: 0, unreadable: 0 }),
+    als_enabled: meta.als !== false,
+    als_called_docs: outcomes.reduce((n, c) => n + (c.als_called_docs ?? 0), 0),
+    als_candidate_docs: outcomes.reduce((n, c) => n + (c.als_candidate_docs ?? 0), 0),
+    als_failed: outcomes.reduce((n, c) => n + (c.als_failed ?? 0), 0),
+    als_truth_from_candidate: outcomes.reduce((n, c) => n + (c.als_truth_from_candidate ?? 0), 0),
     per_case: outcomes.map((c) => ({ id: c.id, ok: c.ok, ...(c.error ? { error: c.error } : {}), outcomes: Object.fromEntries(c.fields.map((e) => [`${e.doc}.${e.field}`, e.outcome])) })),
     notes,
   };
@@ -281,6 +302,7 @@ export function summaryLines(r: EvalReport): string[] {
     `流程 ${r.flow}｜欄位級裁圖文件 ${r.field_crops_docs}｜後備 2×2 格文件 ${r.fallback_tiles_docs}`,
     `交叉核對欄（入職表 name_zh/hkid/dob，不計入總體）：n=${r.cross_fields.n} exact ${r.cross_fields.exact}｜wrong ${r.cross_fields.wrong}｜missing ${r.cross_fields.missing}`,
     `跨文件 refs：${r.refs_enabled ? '開' : '關'}｜注入 refs 入職表文件 ${r.refs_injected_docs}｜cross match ${r.cross.match} / differs ${r.cross.differs} / unreadable ${r.cross.unreadable}`,
+    `ALS 政府地址庫：${r.als_enabled ? '開' : '關'}｜查過文件 ${r.als_called_docs}｜出候選文件 ${r.als_candidate_docs}｜失敗 ${r.als_failed}｜review_contains_truth 入面真值來自 ALS 候選 ${r.als_truth_from_candidate}`,
     `呼叫 ${r.usage.calls}（仲裁 ${r.usage.arbiter_calls} 份文件）｜tokens in ${r.usage.prompt_tokens} / out ${r.usage.completion_tokens}｜claude ${r.usage.by_provider.claude.calls} 次、deepseek ${r.usage.by_provider.deepseek.calls} 次`,
   ];
   for (const [k, v] of Object.entries(r.by_field)) lines.push(`  ${k}: n=${v.n} exact ${v.pct.exact}% review_has_truth ${v.pct.review_contains_truth}% wrong ${v.pct.wrong}% missing ${v.pct.missing}%`);
@@ -309,6 +331,8 @@ export interface EvalDeps {
   flow?: EvalFlow;
   /** WP-OCR-1：false（--no-refs）＝入職表讀 A 唔注入 refs（亦就冇 cross），方便前後對比；預設 true（只對 two-stage 生效） */
   refs?: boolean;
+  /** WP-OCR-2：false（--no-als）＝唔查 ALS（亦唔會有 als 候選） */
+  als?: boolean;
   now?: Date;
 }
 
@@ -323,6 +347,7 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
   let fallbackTilesDocs = 0;
   let refsInjectedDocs = 0;
   const cross: CrossCounts = { match: 0, differs: 0, unreadable: 0 };
+  const alsN = { called: 0, candidate: 0, failed: 0, truth: 0 };
   const twoStage = (deps.flow ?? 'two-stage') === 'two-stage';
   // WP-OCR-1：two-stage 次序同 client 一樣——先印刷文件（身份證／住址證明），再入職表（讀 A 注入印刷證件 confirmed 欄位值）
   const ordered = twoStage ? [...docs.filter((d) => !OCR_CROP_FIELDS[d.type]), ...docs.filter((d) => OCR_CROP_FIELDS[d.type])] : docs;
@@ -330,7 +355,9 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
   for (const d of ordered) {
     const abs = path.isAbsolute(d.image) ? d.image : path.resolve(deps.baseDir, d.image);
     const images = await deps.prepare(abs, d.page);
-    const clients = deps.clientsFor(c, d.type);
+    const clients0 = deps.clientsFor(c, d.type);
+    // WP-OCR-2：--no-als＝剔走 ALS（live 另外會設 GUARD_OCR_ALS=0）
+    const clients: ReadClients = deps.als === false ? { ...clients0, als: undefined } : clients0;
     let r: DocumentReadResult;
     if (!twoStage) {
       r = await readDocument(clients, d.type, images, now);
@@ -355,18 +382,23 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
       if (!isForm) printedResults.push(r);
     }
     addUsage(usage, r);
+    if (r.als.called) alsN.called += 1;
+    if (r.als.candidate) alsN.candidate += 1;
+    if (r.als.failed) alsN.failed += 1;
     for (const f of OCR_DOC_FIELDS[d.type]) {
       const truth = c.truth[f as TruthField];
       const res = r.fields[f];
       if (!truth || !res) continue;
-      fields.push(classifyField(f, truth, res, d.type, now));
+      const fe = classifyField(f, truth, res, d.type, now);
+      if (fe.truthFromAls) alsN.truth += 1;
+      fields.push(fe);
     }
   }
   for (const k of EVALUABLE) {
     const t = c.truth[k as TruthField];
     if (t && !docs.some((d) => OCR_DOC_FIELDS[d.type].includes(k as OcrFieldKey))) skipped.add(k);
   }
-  return { id: c.id, ok: true, fields, usage, skipped_truth_fields: [...skipped], field_crops_docs: fieldCropsDocs, fallback_tiles_docs: fallbackTilesDocs, refs_injected_docs: refsInjectedDocs, cross };
+  return { id: c.id, ok: true, fields, usage, skipped_truth_fields: [...skipped], field_crops_docs: fieldCropsDocs, fallback_tiles_docs: fallbackTilesDocs, refs_injected_docs: refsInjectedDocs, cross, als_called_docs: alsN.called, als_candidate_docs: alsN.candidate, als_failed: alsN.failed, als_truth_from_candidate: alsN.truth };
 }
 
 /** 跑一個 case；失敗重試 1 次；仍失敗＝ok:false（淨記錯誤類別）。 */
@@ -413,6 +445,15 @@ const DEFAULT_FAKE_BOXES: Record<string, { x: number; y: number; w: number; h: n
   dob: { x: 0.08, y: 0.22, w: 0.4, h: 0.04 },
 };
 
+/**
+ * WP-OCR-2 --dry 用 fake ALS：照收到嘅 q（已冇樓層室號）回一個「標準化」結果（Score 90）——
+ * 成分由 normalizeHkAddress(q).parts 抽，再由 compose 拼返（本地 floor／unit 由 lookupAlsCandidate 補）。冇打網絡。
+ */
+export const fakeAls: AlsLookup = async (q) => {
+  const p = normalizeHkAddress(q).parts;
+  return [{ score: 90, ...(p.district ? { district: p.district } : {}), ...(p.street ? { street: p.street } : {}), ...(p.number ? { number: p.number } : {}), ...(p.estate ? { estate: p.estate } : {}), ...(p.block ? { block: p.block } : {}), ...(p.building ? { building: p.building } : {}) }];
+};
+
 /** dry：按 case.truth 完美回應（仲裁亦預設讀啱），case.fake 可逐欄覆蓋讀 A／讀 B／仲裁（支援舊字串同新 object 格式）。 */
 export function fakeClientsFor(c: EvalCase, doc: OcrDocType): ReadClients {
   const std: Record<string, unknown> = {};
@@ -432,7 +473,7 @@ export function fakeClientsFor(c: EvalCase, doc: OcrDocType): ReadClients {
       return { text: respond(out), promptTokens: 100, completionTokens: 20, truncated: false };
     },
   });
-  return { a: mk('claude', 'fake-a', spec?.a, spec?.boxes ?? undefined), b: mk('deepseek', 'fake-b', spec?.b), arbiter: mk('claude', 'fake-arbiter', spec?.arbiter) };
+  return { a: mk('claude', 'fake-a', spec?.a, spec?.boxes ?? undefined), b: mk('deepseek', 'fake-b', spec?.b), arbiter: mk('claude', 'fake-arbiter', spec?.arbiter), als: fakeAls };
 }
 
 export interface RunEvalOptions {
@@ -443,6 +484,7 @@ export interface RunEvalOptions {
   concurrency: number;
   flow?: EvalFlow;
   refs?: boolean;
+  als?: boolean;
   onProgress?: (done: number, total: number, ok: boolean) => void;
 }
 
@@ -455,7 +497,7 @@ export async function runEval(o: RunEvalOptions): Promise<EvalReport> {
     o.onProgress?.(done, cases.length, r.ok);
     return r;
   });
-  return buildReport(outcomes, { mode: o.mode, limit: o.limit, onlyDocType: o.deps.onlyDocType, concurrency: o.concurrency, flow: o.deps.flow ?? o.flow ?? 'two-stage', refs: o.deps.refs ?? o.refs });
+  return buildReport(outcomes, { mode: o.mode, limit: o.limit, onlyDocType: o.deps.onlyDocType, concurrency: o.concurrency, flow: o.deps.flow ?? o.flow ?? 'two-stage', refs: o.deps.refs ?? o.refs, als: o.deps.als ?? o.als });
 }
 
 /** `--out` 必須喺 `<cwd>/data/` 之下（報表含 case id／逐欄結果，唔入 git）。 */

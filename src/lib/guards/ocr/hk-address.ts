@@ -5,7 +5,7 @@
 //   suggested 只喺「形近字歸一後命中屋邨／街道／地區表」而原文寫法唔同時，先喺原文改該段（其餘不動）；唔命中唔改
 //   edits     逐項 { from, to, reason, index }（index＝喺 display 入面嘅字元位置）
 //   parts     規則抽出嘅地址成分（floor／unit 供 ALS 外送前剔走；見 alsQueryFromParts）
-import { BUILDING_SUFFIXES, EXTRA_ESTATES, HK_DISTRICTS, HK_ESTATES, HK_REGIONS, MAJOR_STREETS } from "./hk-address-data";
+import { BUILDING_SUFFIXES, ESTATE_SUFFIXES, STREET_SUFFIXES, EXTRA_ESTATES, HK_DISTRICTS, HK_ESTATES, HK_REGIONS, MAJOR_STREETS } from "./hk-address-data";
 
 /**
  * 形近／同音／簡繁字映射（只限地址語境；一對一、等長，所以位置可對齊）。
@@ -18,7 +18,7 @@ interface FoldPair {
   canon: boolean;
   note: string;
 }
-export const FOLD_PAIRS: readonly FoldPair[] = [
+const FOLD_PAIRS: readonly FoldPair[] = [
   { variant: "村", canonical: "邨", canon: true, note: "屋邨名慣用邨，常被寫成村" },
   { variant: "步", canonical: "埗", canon: true, note: "深水埗" },
   { variant: "湧", canonical: "涌", canon: true, note: "東涌／葵涌／大涌／鰂魚涌" },
@@ -59,7 +59,7 @@ const mapChars = (s: string, m: ReadonlyMap<string, string>): string => {
   return o;
 };
 /** 形近字歸一（等長 1:1）。 */
-export const foldVariants = (s: string): string => mapChars(s, CANON_FOLD);
+const foldVariants = (s: string): string => mapChars(s, CANON_FOLD);
 
 export interface AddressEdit {
   from: string;
@@ -141,6 +141,7 @@ const numRunRe = new RegExp(`${NUM_RUN}(?=[號樓層室座期舖鋪])`, "g");
 function convertUnitWords(input: string): string {
   let t = mapChars(input, UNIT_CHAR_FOLD);
   t = t.replace(/([0-9A-Z])\s+(?=[號樓層室座期舖鋪])/g, "$1"); // 「5 舖」「100 號」「3 室」
+  t = t.replace(new RegExp(`(${NUM_RUN})\\s+(?=[號樓層室座期舖鋪])`, "g"), "$1"); // 「一 樓」
   t = t.replace(numRunRe, (m) => {
     const n = zhNumeralToInt(m);
     return n === null ? m : String(n);
@@ -287,8 +288,8 @@ const UNIT_RES: RegExp[] = [
   /單位\s*[A-Z0-9]+/g,
 ];
 
-const ESTATE_GENERIC = new RegExp(`${ZH}{1,6}?(?:新邨|邨|苑|花園|山莊|半島|城)`, "u");
-const STREET_GENERIC = new RegExp(`${ZH}{1,6}?(?:大道|道|街|路|里|徑|巷|坊|圍|橋)(?:[東南西北中](?:段)?)?`, "u");
+const ESTATE_GENERIC = new RegExp(`${ZH}{1,6}?(?:${ESTATE_SUFFIXES.join("|")})`, "u");
+const STREET_GENERIC = new RegExp(`${ZH}{1,6}?(?:${STREET_SUFFIXES.map((x) => (x === "圍" ? "圍(?![道街路里徑巷])" : x)).join("|")})(?:[東南西北中](?:段)?)?`, "u");
 const BUILDING_GENERIC = new RegExp(`${ZH}{1,8}?(?:${BUILDING_SUFFIXES.join("|")})`, "u");
 
 /** 抽成分。src＝已套用 edits 嘅文字（保留大小寫唔重要，內部轉大寫）。 */
@@ -353,7 +354,7 @@ function extractParts(srcRaw: string): HkAddressParts {
     let rest = text.replace(/^\s+/, "");
     for (let guard = 0; guard < 4; guard++) {
       // 地名後面緊接街道／屋邨後綴字＝其實係街名／屋邨名嘅一部分（例如「青山道」），唔當地區
-      const hit = names.find((n) => rest.startsWith(n) && !/^[道街路里徑巷坊圍橋邨苑]/.test(rest.slice(n.length)));
+      const hit = names.find((n) => rest.startsWith(n) && !/^[道街路里徑巷坊圍橋邨苑]/.test(rest.slice(n.length)) && !MAJOR_STREETS.some((st) => rest.startsWith(st)));
       if (!hit) break;
       got.push(hit);
       rest = rest.slice(hit.length).replace(/^\s+/, "");
@@ -433,7 +434,7 @@ export function normalizeHkAddress(raw: string): HkAddressResult {
 
 // ---------- ALS 外送：只准地區／街道／門牌／屋邨／座／大廈，樓層室號絕不外送 ----------
 /** 樓層／室號 pattern（assert 用）：中文 樓／層／室／舖／單位／字樓、英文 Flat／Room／Rm／Unit／Shop／Floor、15/F、15F、G/F。 */
-export const FLOOR_UNIT_PATTERN = /樓|层|層|室|舖|鋪|單位|单位|[\s\d](?:\/\s*)?F(?![A-Za-z])|\/F|\bFLAT\b|\bFLT\b|\bROOMS?\b|\bRM\b|\bUNIT\b|\bSHOP\b|\bFLOORS?\b|\bFL\b|\bG\/F\b|地下|閣樓|天台/i;
+const FLOOR_UNIT_PATTERN = /樓|层|層|室|舖|鋪|單位|单位|[\s\d](?:\/\s*)?F(?![A-Za-z])|\/F|\bFLAT\b|\bFLT\b|\bROOMS?\b|\bRM\b|\bUNIT\b|\bSHOP\b|\bFLOORS?\b|\bFL\b|\bG\/F\b|地下|閣樓|天台/i;
 
 /** 部件有冇含樓層／室號字眼（含 building 名「xx樓」）。 */
 export const hasFloorUnitText = (s: string): boolean => FLOOR_UNIT_PATTERN.test(s) || /^\d+F$/i.test(s.trim());

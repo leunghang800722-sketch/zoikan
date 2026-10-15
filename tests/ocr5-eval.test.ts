@@ -230,7 +230,8 @@ describe("eval-ocr CLI：參數同 --dry 端到端", () => {
     expect(text).toContain("missing 1 (7.7%)");
     expect(text).toContain("交叉核對欄（入職表 name_zh/hkid/dob，不計入總體）：n=3 exact 3｜wrong 0｜missing 0");
     expect(text).toContain("注入 refs 入職表文件 1｜cross match 3 / differs 0 / unreadable 0");
-    expect(text).toContain("仲裁 3 份文件");
+    expect(text).toContain("仲裁 2 份文件"); // OCR-2：大厦／大廈 形近字歸一後兩讀一致（原本靠仲裁 2/3），故 3 → 2
+    expect(text).toContain("ALS 政府地址庫：開｜查過文件 2｜出候選文件 2｜失敗 0｜review_contains_truth 入面真值來自 ALS 候選 0");
     for (const v of ["測試甲", "Z900001", "90001111", "示範街", "syn-0", "form.png"]) expect(text).not.toContain(v);
   });
   it.skipIf(!hasMagick)("--out 寫入 cwd/data/ 之下：JSON 淨有 case id＋逐欄結果類別，冇值冇路徑", async () => {
