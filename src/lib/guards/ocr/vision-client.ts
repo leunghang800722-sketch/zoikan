@@ -12,6 +12,8 @@ export interface VisionRequest {
   images: readonly string[];
   /** 要抽嘅欄位 key（Claude structured output 用嚟砌 JSON schema；DeepSeek 忽略） */
   fields?: readonly string[];
+  /** WP-OCR-3：讀 A 要求回報 field_boxes 嘅欄位（Claude 加入 schema；DeepSeek 只靠 prompt） */
+  boxFields?: readonly string[];
 }
 export interface VisionResponse {
   text: string;

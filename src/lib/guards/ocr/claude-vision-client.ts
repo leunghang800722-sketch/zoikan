@@ -21,7 +21,7 @@ export function anthropicClientOptions(apiKey: string, timeoutMs: number) {
  * value＝字串（含 "unclear"）或 null；reason 無則 null；alternatives 最多 2 個由 read.ts 截（structured output 唔支援 maxItems）。
  * 舊純字串格式只會由 DeepSeek／舊 fake 出，read.ts 照樣接受。
  */
-export function ocrJsonSchema(fields: readonly string[]): { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false } {
+export function ocrJsonSchema(fields: readonly string[], boxFields: readonly string[] = []): { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false } {
   const fieldObject = {
     type: "object",
     properties: {
@@ -33,12 +33,26 @@ export function ocrJsonSchema(fields: readonly string[]): { type: "object"; prop
     required: ["value", "confidence", "reason", "alternatives"],
     additionalProperties: false,
   };
-  return {
-    type: "object",
-    properties: Object.fromEntries(fields.map((f) => [f, fieldObject])),
-    required: [...fields],
-    additionalProperties: false,
+  // WP-OCR-3：電話欄加 digit_count（模型自報位數，只用於後處理）
+  const phoneObject = {
+    ...fieldObject,
+    properties: { ...fieldObject.properties, digit_count: { anyOf: [{ type: "integer" }, { type: "null" }] } },
+    required: [...fieldObject.required, "digit_count"],
   };
+  // WP-OCR-3：讀 A 回報欄位 box（0–1 正規化）；冇法定位就 null
+  const box = {
+    anyOf: [
+      { type: "null" },
+      { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, w: { type: "number" }, h: { type: "number" } }, required: ["x", "y", "w", "h"], additionalProperties: false },
+    ],
+  };
+  const properties: Record<string, unknown> = Object.fromEntries(fields.map((f) => [f, f === "phone" ? phoneObject : fieldObject]));
+  const required = [...fields];
+  if (boxFields.length > 0) {
+    properties.field_boxes = { type: "object", properties: Object.fromEntries(boxFields.map((f) => [f, box])), required: [...boxFields], additionalProperties: false };
+    required.push("field_boxes");
+  }
+  return { type: "object", properties, required, additionalProperties: false };
 }
 
 const DEFAULT_FIELDS: readonly OcrFieldKey[] = ["name_zh", "name_en", "hkid", "dob", "sex", "phone", "address"];
@@ -96,7 +110,7 @@ export class ClaudeVisionClient implements VisionClient {
       res = await this.api.messages.create({
         model: this.model,
         max_tokens: OCR_CLAUDE_MAX_OUTPUT_TOKENS,
-        output_config: { effort: "low", format: { type: "json_schema", schema: ocrJsonSchema(req.fields ?? DEFAULT_FIELDS) } },
+        output_config: { effort: "low", format: { type: "json_schema", schema: ocrJsonSchema(req.fields ?? DEFAULT_FIELDS, req.boxFields ?? []) } },
         system: req.system,
         messages: [
           {
