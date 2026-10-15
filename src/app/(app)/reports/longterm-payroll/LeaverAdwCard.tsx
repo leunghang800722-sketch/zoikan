@@ -16,6 +16,7 @@ interface Item {
   daily_rate_used: number | null;
   suggested_adw: number | null;
   history_incomplete: boolean;
+  eo_computed: boolean;
   months_missing: string[];
   balance_days: number;
   saved_awaiting_recompute: boolean;
@@ -28,6 +29,7 @@ interface Result {
   pending_count: number;
   awaiting_recompute_count: number;
   source_prefill: string;
+  can_create: boolean;
 }
 
 export function LeaverAdwCard({ month, locked, refreshKey, onChanged, onError, onNotice }: { month: string; locked: boolean; refreshKey: string; onChanged: () => void; onError: (m: string) => void; onNotice: (m: string) => void }) {
@@ -65,16 +67,20 @@ export function LeaverAdwCard({ month, locked, refreshKey, onChanged, onError, o
       <p className="text-zk-sm text-zk-text">離職補年假要用《僱傭條例》平均工資。系統歷史糧線唔齊，暫用月薪÷當月日數計；請用「{data.source_prefill}」嘅平均日薪輸入，再重算本月。</p>
       <ul className="flex flex-col gap-2">
         {data.items.map((it) => (
-          <li key={it.guard_id} className="flex flex-col gap-2 rounded border border-zk-border bg-white p-3" data-testid={`leaver-adw-item-${it.guard_staff_no ?? it.guard_id}`}>
+          <li key={it.guard_id} className="flex flex-col gap-2 rounded border border-zk-border bg-white p-3" data-testid={`leaver-adw-item-${it.guard_id.slice(0, 8)}`}>
             <div className="text-zk-sm font-semibold">
               {it.guard_name}
               {it.guard_staff_no && <span className="ml-1 font-normal text-zk-faint">（{it.guard_staff_no}）</span>}
               <span className="ml-2 font-normal text-zk-muted">離職日 {it.leave_date}</span>
             </div>
             <div className="text-zk-sm text-zk-text">
-              系統用咗日薪 {it.daily_rate_used != null ? fmtMoney(it.daily_rate_used) : "—"}（月薪÷當月日數）× 未放年假 {it.balance_days} 日
+              系統用咗日薪 {it.daily_rate_used != null ? fmtMoney(it.daily_rate_used) : "—"}（{it.eo_computed ? "月薪÷當月日數" : "每更價"}）× 未放年假 {it.balance_days} 日
               {it.suggested_adw != null && <span>；按條例補入缺失月份參考值 {fmtMoney(it.suggested_adw)}</span>}
-              {it.months_missing.length > 0 && <span className="text-zk-faint">（系統缺 {it.months_missing.join("、")} 糧線）</span>}
+              {it.history_incomplete && it.months_missing.length > 0 ? (
+                <span className="text-zk-faint">（系統缺 {it.months_missing.join("、")} 糧線）</span>
+              ) : (
+                it.suggested_adw == null && <span className="text-zk-faint">（未能自動計算平均工資）</span>
+              )}
             </div>
             {it.saved_awaiting_recompute ? (
               <div className="text-zk-sm text-zk-success-dark" data-testid="leaver-adw-saved">已儲存平均日薪 {fmtMoney(it.saved_avg_daily_wage ?? 0)}——{it.advice}</div>
@@ -90,13 +96,13 @@ export function LeaverAdwCard({ month, locked, refreshKey, onChanged, onError, o
                   aria-label={`${it.guard_name} 平均日薪`}
                   value={values[it.guard_id] ?? ""}
                   onChange={(e) => setValues((p) => ({ ...p, [it.guard_id]: e.target.value }))}
-                  disabled={locked}
+                  disabled={locked || !data.can_create}
                   data-testid="leaver-adw-input"
                 />
-                <Button variant="primary" size="sm" onClick={() => void save(it)} disabled={locked || busy === it.guard_id || !values[it.guard_id]} data-testid="leaver-adw-save">
+                <Button variant="primary" size="sm" onClick={() => void save(it)} disabled={locked || !data.can_create || busy === it.guard_id || !values[it.guard_id]} data-testid="leaver-adw-save">
                   儲存平均日薪
                 </Button>
-                <span className="text-zk-xs text-zk-faint">來源：{data.source_prefill}</span>
+                <span className="text-zk-xs text-zk-faint">{data.can_create ? `來源：${data.source_prefill}` : "你冇輸入平均工資嘅權限，請搵會計或老闆"}</span>
               </div>
             )}
           </li>

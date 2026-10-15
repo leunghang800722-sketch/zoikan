@@ -85,6 +85,13 @@ describe("P19b ADW 優先次序（四層）", () => {
     expect(resolveAlDailyRate({ manualAmount: null, imported: null, eo: null, monthlyFallback: 600 })).toEqual({ rate: 600, basis: "fallback_monthly", needsConfirm: true });
   });
 
+  it("S1：EO adw ≤0（wages 負數／0）→ fallback_monthly＋needsConfirm", () => {
+    for (const wages of [-100, 0]) {
+      const eo = { ...eoOk, adw: round2(wages / 365), wages };
+      expect(resolveAlDailyRate({ manualAmount: null, imported: null, eo, monthlyFallback: 600 })).toEqual({ rate: 600, basis: "fallback_monthly", needsConfirm: true });
+    }
+  });
+
   it("aggregate：guard_avg_wages 記錄 → imported；人手金額 → manual_amount", async () => {
     const { actorUserId } = await base();
     const g = await mkLeaver({ hire: "2026-05-01", leave: "2026-08-31", salary: 20000, dob: "1985-01-01", actor: actorUserId });
