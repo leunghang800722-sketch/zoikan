@@ -182,11 +182,25 @@ npx tsx scripts/staff-import/eval-ocr.ts --manifest data/2026-10/ocr-eval/manife
 npx tsx scripts/staff-import/eval-ocr.ts --manifest … --limit 5 --only-doc-type onboarding_form --concurrency 2
 # 合成 fixture＋fake client（唔打 API，無需 key）
 npx tsx scripts/staff-import/eval-ocr.ts --dry
+# WP-OCR-3：流程選擇（預設 two-stage＝讀 A 定位 → 欄位級裁圖 → 讀 B；legacy＝舊單次流程 1,600px 全圖＋2×2 格）
+npx tsx scripts/staff-import/eval-ocr.ts --manifest … --flow legacy --out data/2026-10/ocr-eval/report-legacy.json
+npx tsx scripts/staff-import/eval-ocr.ts --manifest … --flow two-stage --out data/2026-10/ocr-eval/report-twostage.json
 ```
 
 - manifest：`{ cases:[{ id, docs:[{ type:"id_card"|"address_proof"|"onboarding_form", image:"<jpg/png/pdf 路徑，相對 manifest 所在資料夾或絕對>", page?:<PDF 頁，預設 1> }], truth:{ name_zh?, name_en?, hkid?, dob?, sex?, phone?, address?, bank_account? } }] }`。`bank_account` 路徑 A 唔讀，會略過並喺報表 notes 標明。`--dry` 專用可選 `fake`（每種文件嘅 a／b／arbiter 覆蓋，見 `tests/fixtures/ocr-eval/manifest.dry.json`）。
 - 逐欄結果：`exact`（confirmed 且啱）／`review_contains_truth`（review 而預填值或候選含 truth）／`wrong`（confirmed 但錯＝最危險，另計 `confirmed_wrong`；或 review 而候選都唔含 truth）／`missing`。另出：review 率、review 欄平均候選數、估算人手改字次數（wrong＋missing）、估算撳候選次數（review 含 truth 但預填唔啱）、calls／tokens（含 `by_provider`、仲裁文件數）。失敗 case 重試 1 次，仍失敗只記錯誤類別、唔計入欄位統計。
 - **隱私**：console 同 `--out` JSON 只有計數／百分比；per-case 只有 case id＋`doc.field → 結果類別`，唔印欄位值、姓名、圖片路徑。`--out` 必須喺 `<cwd>/data/` 之下（否則拒絕）。圖片只喺記憶體經 stdin／stdout 傳（PDF 例外：`pdftoppm` 暫存 PNG 放系統 temp，用完即刪）。
 - 建議每個 OCR 子階段改動前後各跑一次（同一 manifest），比 before／after。
+- **`--flow legacy|two-stage`（WP-OCR-3，預設 two-stage）**：two-stage 用 `readStageA`（全圖＋要求回報電話／地址欄位 box）→ Node 端 `cropFields`（ImageMagick 按 `src/lib/guards/ocr/field-crops.ts` 同一套幾何裁：外擴、鄰欄限制、長邊 1,000px）→ `readStageB`。報表同 console 多 `flow`、`field_crops_docs`（用咗欄位級裁圖嘅文件數）、`fallback_tiles_docs`（本應欄位級但冇有效 box 而退回 2×2 格嘅文件數；身份證／住址證明本身冇欄位級設計，唔計）。同一 manifest 跑兩個 flow 即可比較。`--dry` 可選 `fake.<docType>.boxes`（欄位 → `{x,y,w,h}`｜null）測 box／後備路徑，見 `tests/fixtures/ocr-eval/manifest.dry-crops.json`。
+
+## 證件辨識兩段式讀（OCR-3：欄位級裁圖）
+
+- 入職表（電話、地址）放大圖改為**欄位級裁圖**：每欄一張，完整包住欄位格（印刷 label＋手寫內容），長邊 ≤1,000px（細過就放大，最多 2×），由 2,400px 來源圖裁出；唔再用固定 2×2 格切斷手寫行。2×2 格只係後備（讀 A 冇回報有效 box、box 不合格、或者任何一步失敗）。身份證／住址證明照舊用 2×2 格。
+- 流程：瀏覽器 `POST /api/guards/ocr/read` `stage:"a"`（只傳全圖）→ 伺服器回 `field_boxes`＋`continuation` → 瀏覽器用 `field-crops.ts` 算幾何、canvas 裁圖 → `stage:"b"`。任何一步失敗（網絡／400／503／格式怪）自動退回舊單次流程，用戶無感。細節見 `docs/api.md`。
+- **`continuation`**：伺服器簽名（HMAC-SHA256，key 由 `SESSION_SECRET` 經固定 label 衍生）嘅 token，10 分鐘有效、綁定 session 用戶、單次使用（process 內記 nonce）；**伺服器唔存任何 state**。`SESSION_SECRET` 輪換會令未用嘅 continuation 作廢（用戶重新辨識即可）。token 內含讀 A 嘅原始讀數（本來就會回俾同一 client），**唔加密、唔寫 log／DB／audit**。多實例部署下單次使用只係盡力而為（nonce 唔跨實例），核心防線係簽名＋10 分鐘＋userId。
+- **配額**：`stage:"a"` 同舊單次流程各預留 1 次（同一次辨識只計 1 次）；`stage:"b"` 唔另外預留（continuation 證明 a 已預留）。stage b 失敗而 client 退回舊流程時，該次辨識會計 2 次預留（a＋舊流程）。
+- **audit `guard_ocr_read`**：`after.stage`＝`"a"`｜`"b"`（舊流程冇此欄）。stage a 另記每份文件 `boxes`（有效 box 欄數）；stage b 另記 `field_crops_docs`／`fallback_tiles_docs`（淨計數）。冇值、冇 box 座標、冇 continuation、冇圖。
+- **分格線防呆**：prompt 加「印刷分格線唔係數字 1；電話固定 8 位；見到 9–10 位請重新數並剔走疑似分格線；戶口號碼按格數抄」＋電話 `digit_count`（模型自報位數，目前只解析保留）。電話 9–10 位時 `normalize.ts` 嘗試剔走「1」得出首位 2–9 嘅 8 位解（唯一或最多 2 個）→ 入候選（reason `phone_gridline_suspect`，status `review`，唔自動 confirmed）。
+- **路徑 B**（`scripts/staff-import/lib/`）：`phone-crop.ts`／`form-address-crop.ts`／`crop-box.ts` 外擴改為按 label 行高比例（上下 1.2×、左右 0.6×、最少 0.03），唔越過上／下一個 label 行同同行嘅左右 label（`crop-pad.ts`），`pad` 參數俾 caller 調。戶口號碼位數按 HKICL 銀行代號核對（`hkicl-digits.ts`，只收計劃書列明嘅匯豐 9／12、中銀 12／14、恒生 9；表外銀行唔檢查），唔啱 → review `acct_digits_mismatch`（`15-fields-merge.ts` 套用）。**位數表需要規劃者核實同補齊其他銀行。**
 
 **`GUARD_OCR_ARBITER`**（Zeabur env，預設 `1`）：分歧欄第三讀仲裁開關；`0`／`false`／`off`／`no` 關閉＝回到兩讀。成本：每份文件最多多 1 次 Claude 呼叫（只喺有分歧欄且兩讀 confidence 都唔係 high 時），用量計入 audit `guard_ocr_read` 嘅 `usage_by_provider.claude`，另有 `arbiter_calls`。冇 `CLAUDE_API_KEY`（純 DeepSeek 模式）自動冇仲裁。
