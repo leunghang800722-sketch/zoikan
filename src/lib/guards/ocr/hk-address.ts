@@ -104,11 +104,12 @@ function cleanAddr(raw: string): string {
 
 // ---------- 數字（〇零一二…／壹貳叁…）----------
 const DIGIT_ZH: Record<string, number> = { 〇: 0, 零: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 壹: 1, 貳: 2, 叁: 3, 參: 3, 肆: 4, 伍: 5, 陸: 6, 柒: 7, 捌: 8, 玖: 9 };
-const NUM_RUN = "[〇零一二兩三四五六七八九十百壹貳叁參肆伍陸柒捌玖拾佰]+";
+const NUM_RUN = "[〇零一二兩三四五六七八九十百壹貳叁參肆伍陸柒捌玖拾佰廿卅]+";
 
 /** 中文數字串 → 阿拉伯數字（≤999）；唔識 → null。 */
-export function zhNumeralToInt(s: string): number | null {
-  if (!s) return null;
+export function zhNumeralToInt(input: string): number | null {
+  if (!input) return null;
+  const s = input.replace(/廿/g, "二十").replace(/卅/g, "三十"); // 廿＝二十、卅＝三十（廿三樓＝23樓）
   if (!/[十拾百佰]/.test(s)) {
     let o = "";
     for (const ch of s) {
@@ -138,8 +139,8 @@ const numRunRe = new RegExp(`${NUM_RUN}(?=[號樓層室座期舖鋪])`, "g");
  * 單位詞歸一（中文形式）：數字＋號／樓／室／座／期 前嘅中文數字→阿拉伯；15/F、15F→15樓；Flat／Rm／Room／Unit X→X室；
  * Block／Blk／Tower X→X座；Phase X→X期；G/F→地下。輸入已大寫。
  */
-function convertUnitWords(input: string): string {
-  let t = mapChars(input, UNIT_CHAR_FOLD);
+function convertUnitWords(input: string, foldChars = true): string {
+  let t = foldChars ? mapChars(input, UNIT_CHAR_FOLD) : input;
   t = t.replace(/([0-9A-Z])\s+(?=[號樓層室座期舖鋪])/g, "$1"); // 「5 舖」「100 號」「3 室」
   t = t.replace(new RegExp(`(${NUM_RUN})\\s+(?=[號樓層室座期舖鋪])`, "g"), "$1"); // 「一 樓」
   t = t.replace(numRunRe, (m) => {
@@ -151,16 +152,19 @@ function convertUnitWords(input: string): string {
   t = t.replace(/\b(\d+[A-Z]?)\s*(?:\/\s*F|F)(?![A-Z])/g, "$1樓");
   t = t.replace(/\b(?:FLOOR|FL)\.?\s*(\d+)\b/g, "$1樓");
   t = t.replace(/\b(\d+)\s*(?:ST|ND|RD|TH)?\s*(?:FLOOR|FL)\b/g, "$1樓");
-  t = t.replace(/\b(?:FLAT|FLT|RM|ROOM|UNIT)\.?\s*([A-Z0-9]+(?:-[A-Z0-9]+)?)/g, "$1室");
+  t = t.replace(/\b(?:FLAT|FLT|RM|ROOM|UNIT)[.\-:]?\s*([A-Z0-9]+(?:-[A-Z0-9]+)?)/g, "$1室");
   t = t.replace(/\bSHOP\.?\s*([A-Z0-9]+(?:-[A-Z0-9]+)?)/g, "$1舖");
   t = t.replace(/\b(?:BLOCK|BLK|TOWER)\.?\s*([A-Z0-9]+)/g, "$1座");
   t = t.replace(/\bPHASE\s*([0-9]+|[IVX]+)/g, "$1期");
+  // 樓層後面冇單位詞嘅單位：「12樓A」→12樓A室；「12/F 1203」→12樓1203室（後面緊接 號／樓／室／座／期 就唔係）
+  t = t.replace(/(\d+[A-Z]?樓)[\s,，、]*([A-Z]\d{0,2})(?![A-Z0-9號樓層室座期舖鋪])/g, "$1$2室");
+  t = t.replace(/(\d+[A-Z]?樓)[\s,，、]*(\d{2,4}[A-Z]?)(?![A-Z0-9號樓層室座期舖鋪])(?!\s*[A-Z' ]{0,30}\b(?:ROAD|STREET|LANE|AVENUE|PATH|DRIVE|SQUARE|TERRACE|RD|ST)\b)/g, "$1$2室");
   return t;
 }
 
 /** 比對用 canonical：形近字歸一＋大寫＋單位詞歸一＋標點／空白（中文字旁邊嘅空白刪走，其餘折疊成單一空格）。 */
 function canonOf(clean: string, fold = true): string {
-  let t = convertUnitWords((fold ? foldVariants(clean) : clean).toUpperCase());
+  let t = convertUnitWords((fold ? foldVariants(clean) : clean).toUpperCase(), fold);
   t = t.replace(/[\s,，、;；.．。·]+/g, " ");
   t = t.replace(/\s+(?=\p{Script=Han})|(?<=\p{Script=Han})\s+/gu, "");
   return t.trim();
@@ -286,6 +290,8 @@ const UNIT_RES: RegExp[] = [
   /\d+[A-Z]?(?:號)?[舖鋪]/g, // 5舖、10號舖
   /(?:[A-Z]?\d+[A-Z]?|[A-Z])單位/g,
   /單位\s*[A-Z0-9]+/g,
+  // 單獨 12A 呢類（數字＋字母、冇任何單位詞）：寧願當單位剔走；後面跟英文街名（12A Nathan Road）就係門牌，唔剔
+  /(?<![0-9A-Z-])\d{1,3}[A-Z](?![0-9A-Z號樓層室座期舖鋪])(?!\s*[A-Z' ]{0,30}\b(?:ROAD|STREET|LANE|AVENUE|PATH|DRIVE|SQUARE|TERRACE|RD|ST)\b)/g,
 ];
 
 const ESTATE_GENERIC = new RegExp(`${ZH}{1,6}?(?:${ESTATE_SUFFIXES.join("|")})`, "u");
@@ -447,9 +453,19 @@ export const hasFloorUnitText = (s: string): boolean => FLOOR_UNIT_PATTERN.test(
 export function alsQueryFromParts(p: HkAddressParts): string | null {
   const safe = (s: string | undefined): string => (s && !hasFloorUnitText(s) ? s : "");
   if (!safe(p.street) && !safe(p.estate) && !safe(p.building)) return null;
-  const q = [safe(p.district), safe(p.street), safe(p.street) ? safe(p.number) : "", safe(p.estate), safe(p.block), safe(p.building)].filter(Boolean).join(" ").trim();
+  // 中文：街名＋「999號」；英文：「999 TEST ROAD」（門牌喺街名前）
+  const num = safe(p.street) ? safe(p.number) : "";
+  const enNum = !!num && !/號/.test(num);
+  const q = [safe(p.district), ...(enNum ? [num, safe(p.street)] : [safe(p.street), num]), safe(p.estate), safe(p.block), safe(p.building)].filter(Boolean).join(" ").trim();
   if (!q || q.length > 200 || hasFloorUnitText(q)) return null;
   return q;
+}
+
+/** 形近／簡繁變體字個數（只計 canon 歸一表入面嘅變體字）：越少越似標準寫法（候選排序用）。 */
+export function variantCharCount(s: string): number {
+  let n = 0;
+  for (const ch of s) if (CANON_FOLD.has(ch)) n += 1;
+  return n;
 }
 
 /** 本地拼返標準地址：<district?><street><number><estate><block><building><floor><unit>（中文慣例；floor／unit 係本地保留嘅，唔經 ALS）。 */

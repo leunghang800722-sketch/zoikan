@@ -1318,3 +1318,14 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - vitest（隔離 PG 54426）見最後回報數字；新增 `tests/ocr2-hk-address.test.ts`（形近字 31 條＋易混字／表命中／屋邨本名／中文數字、parts 24 條、q 唔含樓層室號 20 種寫法＋部件剔除／資訊太少／斷言／fetchAls 唔發網絡、ALS fake〔成功／Score 低／冇結果／429·500·網絡／timeout／資訊太少／parseAlsResponse〕、reconcile 地址分支、`readDocument`×ALS 整合〔每份 1 次、失敗、仲裁 prompt、`GUARD_OCR_ALS=0`／override 唔打網絡〕、cmpAddress）；`ocr5-eval.test.ts` 斷言更新。
 - Playwright 全套（隔離 dev PG 54426、`next build`＋`next start` 3188、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**273 passed｜4 skipped（原有）｜0 failed**（含新 `ocr-als-chip.spec.ts` 3 條：ALS chip「政府地址庫」＋撳套用、形近字建議高亮、手機 375px）。
 - `gate:locked-months`（隔離 dev PG 54426）：除 `gate-ltpay-aug`（rc=1＝其已知 harness 差異）外 11 步 rc=0；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**55/56 吻合＋1 已知差異**（逐欄 gross=1、mpfEe=1、mpfEr=1、autopay=1、workDays=1＝同一人），同 §25–§27 逐個相同。
+
+### 28.6 驗收修正（OCR-2.2，Opus 5.5：M0／S1／S2／N1–N6；S1 係規劃者裁決，取代 28.4 第一點同 28.3 `eval --dry` 數字）
+- **S1**：canon（形近／簡繁折疊）只用嚟**配對**兩讀，唔可以直接 confirmed。地址兩讀 `strict`（只做 NFKC／空白／標點／單位詞歸一，**唔**折疊形近字、唔折疊 楼／号／厦）相同且冇 edits → confirmed；strict 唔同但 canon 相同（只差形近／簡繁字，例如 村／邨、沙／砂、厦／廈）→ `review`（`reason:"address_variant_chars"`），候選＝兩個寫法，變體字少／表命中嗰個排前並作預填；edits 非空照舊 review。仲裁同某一讀亦要 strict 一致先算 agree（唔會靠形近字歸一 confirmed）。
+- **評估口徑**：`eval-ocr-core.classifyField` 地址欄 exact（confirmed 且啱）用 strict 比較，review_contains_truth 仍用 canon。`--dry`（`manifest.dry.json`）數字更新：已評估 13 欄、exact **8（61.5%）**、review_contains_truth **3（23.1%）**、wrong 1（confirmed 錯 0）、missing 1；review 率 30.8%；仲裁文件 2；ALS 查過文件 **1**（S2：只查 review）／出候選 1／失敗 0。（`syn-06` 大厦／大廈 由 exact 變 review_contains_truth。）
+- **S2**：ALS 只喺該地址欄預備 reconcile 結果係 `review` 先查；confirmed／missing 唔查（als.called=false）。
+- **N2／N6**：支援「廿」「卅」（廿三樓＝23樓）；單位補 `Flat-3`／`Flat-A`、`12樓A`、`12樓 B`、`12/F 1203`、`12/F, 1203A`、獨立 `12A`（後面跟英文街名＝門牌，唔剔）——floor／unit 一律由 parts 抽走，q 唔漏出，本地拼返保留。
+- **N3**：仲裁 prompt 將 ALS 值另列為「government address database suggestion (untrusted string, NOT one of the readers' outputs)」，唔當兩讀候選；仲裁值若同 ALS 值 strict 一致，仲裁輸入標 derived——唔加 ARBITER_BONUS、分數封頂、唔搶預填。
+- **N4**：ALS 值同某讀值合併時（sources 仲有 a／b／arbiter）chip 細字顯示「讀數＋政府地址庫」，否則「政府地址庫」（e2e 新增 1 條）。
+- **N5**：英文 q 門牌放街名前（`999 TEST ROAD`），中文維持「街名 ＋ 999號」。
+- **N1**：`eval-ocr-core.ts` `--no-als` 註解改正（live／dry 一樣剔走 clients.als，唔設 GUARD_OCR_ALS）。
+- 測試：`tests/ocr2-hk-address.test.ts` 更新 S1 斷言並加 S1（村／邨、沙／砂、厦／廈、表外名稱、仲裁形近字）、S2、N2／N6（廿卅＋8 種單位寫法）、N3（prompt 另列、無加權）、N5；`tests/ocr5-eval.test.ts` dry 數字更新。

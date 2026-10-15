@@ -6,6 +6,7 @@ import type { OcrFieldKey } from "./config";
 import type { FieldRead } from "./field-read";
 import { isUnclear, normalizeField, type FieldResult } from "./normalize";
 import { rankFieldCandidates, type RankInput } from "./rank";
+import { variantCharCount } from "./hk-address";
 
 export type ReadInput = string | null | undefined | FieldRead;
 
@@ -27,11 +28,23 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
   const ub = isUnclear(rb.value);
   const urr = rr ? isUnclear(rr.value) : true;
   const pool: RankInput[] = [];
+  // WP-OCR-2：地址形近字——兩讀 canon 一致但 strict 唔同，變體字少嗰個（較似標準寫法）排前（同分時入池次序決定預填）
+  const addrStrict = (v: string | null) => (v && !isUnclear(v) ? (normalizeField("address", v, now).strict ?? "") : "");
+  const variantFirst = key === "address" && !ua && !ub && variantCharCount(rb.value!) < variantCharCount(ra.value!);
+  // 仲裁值同 ALS 候選一致（strict）→ 當推導（唔加仲裁加權、分數封頂），避免 ALS 借仲裁名義搶預填
+  const alsStrict = key === "address" ? new Set((extras ?? []).map((x) => addrStrict(x.value))) : null;
   const pushMain = (src: string, r: FieldRead, unclear: boolean) => {
-    if (!unclear) pool.push({ value: r.value!, source: src, ...(r.confidence ? { confidence: r.confidence } : {}) });
+    if (unclear) return;
+    const derived = src === "arbiter" && alsStrict !== null && alsStrict.has(addrStrict(r.value));
+    pool.push({ value: r.value!, source: src, ...(r.confidence ? { confidence: r.confidence } : {}), ...(derived ? { derived: true } : {}) });
   };
-  pushMain("a", ra, ua);
-  pushMain("b", rb, ub);
+  if (variantFirst) {
+    pushMain("b", rb, ub);
+    pushMain("a", ra, ua);
+  } else {
+    pushMain("a", ra, ua);
+    pushMain("b", rb, ub);
+  }
   if (rr) pushMain("arbiter", rr, urr);
   for (const [src, r] of [["a", ra], ["b", rb], ...(rr ? [["arbiter", rr] as const] : [])] as const) for (const v of usableAlts(r)) pool.push({ value: v, source: `${src}_alt` });
 
@@ -57,10 +70,12 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
   const nb = ub ? null : normalizeField(key, rb.value!, now);
 
   if (na && nb && na.canon === nb.canon) {
-    // WP-OCR-2：兩讀歸一後一致，但有形近字糾錯建議 → review（候選＝原文＋建議）
-    if (na.valid && !addrEdits) return { status: "confirmed", value: na.display, candidates: [], candidates_ranked: [] };
+    // WP-OCR-2：canon（形近字歸一）只用嚟配對兩讀；地址要 strict（只做 NFKC／空白／標點）都相同且冇糾錯建議先 confirmed。
+    // 只差形近／簡繁字 → review（候選＝兩個寫法，標準寫法排前）；有形近字糾錯建議 → review（候選＝原文＋建議）
+    const strictSame = key !== "address" || na.strict === nb.strict;
+    if (na.valid && !addrEdits && strictSame) return { status: "confirmed", value: na.display, candidates: [], candidates_ranked: [] };
     const ranked = rankFieldCandidates(key, pool, now);
-    return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason: na.valid ? "address_variant_suggested" : (na.reason ?? "invalid_format") };
+    return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason: na.valid ? (addrEdits ? "address_variant_suggested" : "address_variant_chars") : (na.reason ?? "invalid_format") };
   }
 
   if (na && nb) {
@@ -69,7 +84,9 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
     if (rr && urr) tag = "unclear";
     else if (rr) {
       const nr = normalizeField(key, rr.value!, now);
-      tag = nr.canon === na.canon ? "agree_a" : nr.canon === nb.canon ? "agree_b" : "independent";
+      // 地址：仲裁同某一讀要 strict 一致先算 agree（形近字歸一唔當一致）
+      const same = (x: typeof nr, y: typeof na) => (key === "address" ? x.strict === y.strict : x.canon === y.canon);
+      tag = same(nr, na) ? "agree_a" : same(nr, nb) ? "agree_b" : "independent";
       if (nr.valid && tag !== "independent") return { status: "confirmed", value: nr.display, candidates: [], candidates_ranked: [], arbiter: tag };
     }
     const ranked = rankFieldCandidates(key, pool, now);

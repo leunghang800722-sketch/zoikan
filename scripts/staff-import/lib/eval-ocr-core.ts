@@ -83,9 +83,12 @@ export function classifyField(field: OcrFieldKey, truth: string, r: FieldResult,
   const canon = (v: string) => normalizeField(field, v, now).canon;
   const valueCorrect = r.status !== 'missing' && r.value !== '' && canon(r.value) === t;
   const cands = r.status === 'review' ? (r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates) : [];
+  // WP-OCR-2：地址 exact（confirmed 且啱）用 strict 比較（形近／簡繁字唔同當錯）；review_contains_truth 仍用 canon
+  const strictOf = (v: string) => (field === 'address' ? (normalizeField(field, v, now).strict ?? canon(v)) : canon(v));
+  const exactCorrect = r.status !== 'missing' && r.value !== '' && strictOf(r.value) === strictOf(truth);
   let outcome: Outcome;
   if (r.status === 'missing') outcome = 'missing';
-  else if (r.status === 'confirmed') outcome = valueCorrect ? 'exact' : 'wrong';
+  else if (r.status === 'confirmed') outcome = exactCorrect ? 'exact' : 'wrong';
   else outcome = valueCorrect || cands.some((c) => canon(c) === t) ? 'review_contains_truth' : 'wrong';
   const truthFromAls = r.status === 'review' && field === 'address' && (r.candidates_ranked ?? []).some((c) => canon(c.value) === t && c.sources.length > 0 && c.sources.every((x) => x === 'als'));
   return { doc, field, outcome, status: r.status, valueCorrect, candidateCount: r.status === 'review' ? cands.length : 0, ...(truthFromAls ? { truthFromAls: true } : {}) };
@@ -356,7 +359,7 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
     const abs = path.isAbsolute(d.image) ? d.image : path.resolve(deps.baseDir, d.image);
     const images = await deps.prepare(abs, d.page);
     const clients0 = deps.clientsFor(c, d.type);
-    // WP-OCR-2：--no-als＝剔走 ALS（live 另外會設 GUARD_OCR_ALS=0）
+    // WP-OCR-2：--no-als＝剔走 clients.als（live／dry 一樣；唔需要、亦唔會設 GUARD_OCR_ALS）
     const clients: ReadClients = deps.als === false ? { ...clients0, als: undefined } : clients0;
     let r: DocumentReadResult;
     if (!twoStage) {
