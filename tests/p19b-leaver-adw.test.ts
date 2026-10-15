@@ -211,14 +211,49 @@ describe("P19b.4 平均工資口徑（勞工處定義）：加班費條件計入
     expect(r.wages).toBe(12 * 20300);
   });
   it("邊界：ratio 恰好 20% → 計入", () => {
-    const o = evaluateOtRule([{ wages: 12000, ot: 2000, disregardedDays: 0 }, { wages: 10000, ot: 0, disregardedDays: 0 }]); // avgOt 1000／avgExOt 10000 = 10%… 
+    const o = evaluateOtRule([{ wages: 12000, ot: 2000 }, { wages: 10000, ot: 0 }]); // avgOt 1000／avgExOt 10000 = 10%… 
     expect(o.included).toBe(false);
-    const e = evaluateOtRule([{ wages: 12000, ot: 2000, disregardedDays: 0 }]); // 2000／10000
+    const e = evaluateOtRule([{ wages: 12000, ot: 2000 }]); // 2000／10000
     expect(e.ratio).toBe(0.2);
-    expect(e.reason).toBe("constant");
-    const e2 = evaluateOtRule([{ wages: 14000, ot: 4000, disregardedDays: 0 }, { wages: 10000, ot: 0, disregardedDays: 0 }]); // avgOt 2000／avgExOt 10000
+    expect(e.reason).toBe("ge_20pct"); // 單月唔判 constant
+    const e2 = evaluateOtRule([{ wages: 14000, ot: 4000 }, { wages: 10000, ot: 0 }]); // avgOt 2000／avgExOt 10000
     expect(e2.ratio).toBe(0.2);
     expect(e2.reason).toBe("ge_20pct");
+  });
+  it("S1 邊界月攤分：離職日 2026-08-15、期間起 2025-08-16，只有 2025-08 有 OT 60,000 → 攤分後 <20% → excluded", () => {
+    const md: Record<string, AdwMonthData> = {};
+    for (let m = 0; m < 13; m++) {
+      const k = new Date(Date.UTC(2025, 7 + m, 1)).toISOString().slice(0, 7);
+      md[k] = k === "2025-08" ? { wages: 80000, ot: 60000, disregardedDays: 0 } : { wages: 20000, ot: 0, disregardedDays: 0 };
+    }
+    const r = computeEoAdw({ serviceStart: d("2020-01-01"), leaveDate: d("2026-08-15"), monthData: md, monthlySalaryForMonth: sal });
+    expect(r.periodFrom).toBe("2025-08-16");
+    expect(r.otRule.reason).toBe("excluded");
+    expect(r.otRule.ratio!).toBeGreaterThan(0.1);
+    expect(r.otRule.ratio!).toBeLessThan(0.2);
+    expect(r.otRule.monthsCounted).toBe(13);
+  });
+  it("N13 負數 OT 當 0，唔會加返入工資", () => {
+    const md = year(Array(12).fill(0));
+    md["2026-03"] = { wages: 20000 - 100, ot: -100, disregardedDays: 0 };
+    const r = run(md);
+    expect(r.otRule.included).toBe(false);
+    expect(r.wages).toBe(240000); // 負數 OT 當 0：不含 OT 工資 20,000，唔計入
+    const o = evaluateOtRule([{ wages: 19900, ot: -100 }, { wages: 20000, ot: 0 }]);
+    expect(o.avgOt).toBe(0);
+    expect(o.monthsWithOt).toBe(0);
+  });
+  it("N14 只有 1 個有糧線月份唔判 constant，但仍可按 20% 計入", () => {
+    const a = evaluateOtRule([{ wages: 10100, ot: 100 }]);
+    expect(a.reason).toBe("excluded");
+    const b = evaluateOtRule([{ wages: 12000, ot: 2000 }]);
+    expect(b.reason).toBe("ge_20pct");
+    expect(evaluateOtRule([{ wages: 10100, ot: 100 }, { wages: 10100, ot: 100 }]).reason).toBe("constant");
+  });
+  it("N16 不含 OT 工資 ≤0 → ratio null", () => {
+    const o = evaluateOtRule([{ wages: 500, ot: 500 }, { wages: 0, ot: 0 }]);
+    expect(o.ratio).toBeNull();
+    expect(o.included).toBe(true);
   });
   it("aggregate 把 otRule 寫入 al_adw_json 同備註", async () => {
     const { actorUserId } = await base();
