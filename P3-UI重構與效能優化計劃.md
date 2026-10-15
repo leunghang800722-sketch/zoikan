@@ -1188,3 +1188,36 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - vitest（隔離 PG 54415）**264 檔，3,913 passed｜0 failed**（基線 261 檔／3,823；新增 3 檔 90 條）；tsc 0；lint 0；knip 0（只有既有 configuration hints）；`rm -rf .next` 後 build 過。
 - Playwright 全套（隔離 PG 54416、`next build`＋`next start` 3182、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**258 passed｜4 skipped（原有）｜0 failed**（含新 `ocr-candidates.spec.ts` 3 條）。
 - `gate:locked-months`（隔離 dev PG 54416，需 `SESSION_SECRET` 已設）**12/12 rc=0**；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**55/56 吻合＋1 已知差異**（同 P17.5 數字逐個相同）——OCR 路徑獨立，不受影響。
+
+## 26 OCR-3（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §1 問題 3／§2 OCR-3 及老闆硬性要求；branch `ocr3-field-crops`，未 merge）
+
+執行：Sonnet 5.5（`claude-sonnet-5-5`）。起點 main `e269099`（OCR-5／OCR-4 已合併）。範圍：路徑 A 兩段式讀＋欄位級裁圖、分格線防呆、路徑 B 外擴與戶口位數；OCR-1／2 未動。全程只用合成 fixture／fake client，冇讀 `data/` 內容、`.env`、冇 PII；圖片同辨識值冇落地（audit 只加計數）。
+
+### 26.1 老闆硬性要求（欄位級裁圖）
+入職表放大圖由「固定 2×2 格」改為**欄位級裁圖**：電話、地址各一張，**完整包住欄位格（印刷 label＋手寫內容）**，按讀 A 回報嘅欄位 box 裁，長邊 ≤1,000px（細過就放大，最多 2×），由 2,400px 來源圖（`SOURCE_MAX_EDGE`）裁出；2×2 格只係後備（無有效 box／任何一步失敗）。日後姓名／HKID／出生日期喺 `OCR_CROP_FIELDS` 加欄即可。
+
+### 26.2 逐點
+1. **`read.ts` 兩段式**：`readStageA(clients,type,full)`（全圖 1 張；入職表要求 `field_boxes`，退回 DeepSeek／解析失敗＝冇 box）→ `StageAResult{a_fields_raw, field_boxes, usage, provider, model, fallback_reason, parse_ok}`；`readStageB(clients,type,stageA,imagesB{kind,images,fieldOf?,full?})` → 讀 B＋reconcile＋仲裁 → `DocumentReadResult`（加 `images_b_kind`、`field_boxes_used`）。`readDocument` 行為不變（A、B 仍同時發出；內部共用 `finishRead`），現有 tests 不變。
+2. **幾何 `src/lib/guards/ocr/field-crops.ts`**（純函數，browser／Node 共用）：`sanitizeBox`（0≤x,y；x+w≤1、y+h≤1；面積 0.3%–60%；w≥3%、h≥1.5%）、`padBox`（上下 1.2×h、左右 0.6×h、最少 3% 圖邊；越入鄰欄 box 唔超過該鄰欄高度 20%；clamp 到圖內；唔縮入原 box）、`cropOutSize`、`planFieldCrops`（所有裁圖欄位都有有效 box 先 `field_crops`，否則 `tiles`；≤4 張）。Node 評估腳本 `cropFields` 同瀏覽器 `cropFieldsFromCanvas` 都只負責「按計劃裁」，幾何由同一函數算（測試核對輸出尺寸一致）。
+3. **API**（additive，詳見 `docs/api.md`）：`stage:"a"`→`documents[].{field_boxes, continuation}`；`stage:"b"`→同舊格式 `fields`＋`images_b_kind`。`continuation`＝HMAC-SHA256（`SESSION_SECRET` 經固定 label 衍生）簽名 base64url JSON（讀 A 原始讀數＋box＋type＋iat），10 分鐘、綁用戶、單次使用、≤64k；伺服器唔存 state；驗簽／過期失敗＝400 固定字串。audit 只加計數（`stage`、`boxes`、`field_crops_docs`、`fallback_tiles_docs`）。
+4. **瀏覽器**：`PreparedImage.source` 保留 2,400px 來源 canvas；`two-stage.ts`（純邏輯）`readTwoStage`：stage a → `planFieldCrops` → 裁 → stage b；任何一步失敗回 `{ok:false}`，`NewFromDocsClient` 退回舊單次流程。review 面板細字「放大圖：欄位級／後備格」（`data-testid=ocr-b-kind`，唔含值）。
+5. **讀 B prompt（field_crops）**：「第 n 張係電話欄，含印刷 label 同手寫內容」，只抄該欄；仲裁（欄位級）＝全圖＋分歧欄對應裁圖。
+6. **分格線防呆**：prompt（只喺有電話欄嘅文件）加「分格線唔係數字 1；電話 8 位；9–10 位請重數；戶口按格數」＋`digit_count`（Claude schema 電話欄 required，`field-read.ts` 解析）；`normalize.ts` `phoneGridlineCandidates`（9 位剔 1 個、10 位剔 2 個 1，首位 2–9，唯一或 ≤2 個解）→ reason `phone_gridline_suspect`、`extra`；`reconcile` 入候選池（source `_grid`）、`rank.ts` 配合（基礎分 20，剔走後 100）；**唔自動 confirmed**。UI `REASON_MSG` 加說明。
+7. **路徑 B**：新 `scripts/staff-import/lib/crop-pad.ts`（`padAround`：行高比例外擴＋唔越過上下／同行左右 label 行＋`pad` 參數）；`phone-crop.ts`／`form-address-crop.ts`／`crop-box.ts`（姓名、地址 block、出生日期、姓名第二套）改用；新 `hkicl-digits.ts`（匯豐 9／12、中銀 12／14、恒生 9——計劃書 §1 3.6 列明嗰幾間）＋`fields-ext.acctDigitsReason`／`acctValidate`，`15-fields-merge.ts` 戶口位數唔啱 → review `acct_digits_mismatch`（`normAcct` 本身行為不變）。
+8. **評估腳本**：`eval-ocr.ts --flow legacy|two-stage`（預設 two-stage）；報表／console 加 `flow`、`field_crops_docs`、`fallback_tiles_docs`；`--dry` fake 可帶 `boxes`；新 fixture `manifest.dry-crops.json`（4 case：明確 box、地址 box 缺失、不合格 box、身份證）。dry 結果：two-stage 欄位級裁圖文件 1、後備 2×2 格文件 2；legacy 全 0。
+
+### 26.3 保守取捨（簡報冇講清）
+- **欄位級裁圖 all-or-nothing**：該文件類型所有裁圖欄位（入職表＝電話＋地址）都有有效 box 先用；只得一欄有 box → 整份退回 2×2 格（避免 B prompt 同圖片混合）。身份證／住址證明冇欄位級設計（印刷體，2×2 格照舊），故唔計入 `fallback_tiles_docs`。
+- **stage b 多收 optional `full`**（簡報冇列）：仲裁需要全圖；冇 `full` 就唔仲裁。client 會傳。
+- **continuation 加 userId 綁定＋單次使用（process 內 nonce）**：簡報只要求簽名＋10 分鐘；多實例下單次使用盡力而為。stage b 唔另外預留配額；stage b 失敗後退回舊流程會計 2 次預留。
+- **`digit_count` 目前只解析、保留，未參與排序**（保守；確認有用後再加）。
+- **9–10 位解多於 2 個＝唔出候選**（太不確定），照舊 `phone_not_hk`。
+- **HKICL 位數表只收計劃書列明嘅 3 間**（匯豐／中銀／恒生）；表外銀行唔檢查。數字出自計劃書，**需要規劃者核實並補齊**。
+- **路徑 B 既有 tests 邊界調整**：`staff-import-a6` 範本 B 地址 `y1` 上限 0.66 → 0.68（variant b 外擴最少 0.042）。`crop-box` 嘅 card／page 後備框（整張卡／成頁）冇欄位行高可比例，保持不變。
+- 外擴「唔越過下一個 label 行」嘅 label 判斷＝非數字為主嘅文字行（`isLabelLine`：數字 ≤2 個、≤40 字、含中英文），避免手寫數字行被當界線。
+- Worktree 環境：共用 `node_modules` 嘅 Prisma client 過時（缺新表），改用 `cp -c`（APFS clone）自 `zoi-kan-wt-ocr54` 嘅完整 `node_modules`（冇 `prisma generate`）；e2e seed 需要 `data/`、`tools/importer/out`，以 symlink 指向主 repo（只供 seed 腳本讀，我冇讀內容）。
+
+### 26.4 驗證
+- vitest（隔離 PG；因 dev PG 佔住 54418，全套用 54419）**265 檔，3,972 passed｜0 failed**（基線 264 檔／3,913；新增 `tests/ocr3-field-crops.test.ts` 56 條：box sanity、padBox 邊界／clamp／鄰欄／最少 3%、cropOutSize、planFieldCrops、continuation 簽名／過期／篡改／別人／重用、readStageA／B、stage a／b route〔含 audit 無值〕、後備、電話 9–10 位候選、戶口位數、路徑 B 外擴、`readTwoStage`、Node 裁圖幾何、`--flow`）；tsc 0；lint 0；knip 0（只有既有 configuration hints）；`rm -rf .next` 後 build 過。
+- Playwright 全套（隔離 dev PG 54418、`next build`＋`next start` 3184、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**262 passed｜4 skipped（原有）｜0 failed**（新 `ocr-two-stage.spec.ts` 4 條：欄位級裁圖〔電話／地址各一張、≤1,000px、field_of、身份證仍 tiles〕、box 缺失後備、stage b 400 退回舊流程、手機 375px；既有 `ocr-candidates.spec.ts` 3 條照過）。
+- `gate:locked-months`（隔離 dev PG 54418）12 步：除 `gate-ltpay-aug`（rc=1＝其已知 harness 差異，見下）外 11 步 rc=0；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**金額 55/56 吻合＋1 已知差異**（1 人金額欄＋1 人 workDays INFO）——數字同 §25.4 逐個相同，OCR 路徑獨立，不受影響。
