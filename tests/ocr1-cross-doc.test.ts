@@ -207,6 +207,15 @@ describe("crossForOnboarding：只用 confirmed 入職表值；review／missing�
     const o = crossForOnboarding(refs, { name_zh: fr({ status: "review", value: "測試甲", reason: "reads_differ", candidates: ["測試甲", "測試乙"] }) });
     expect(o.form.name_zh!.result).toBe("unreadable");
   });
+  it("S1：入職表欄靠仲裁 agree_a 先 confirmed（讀 A 見過 refs＝ref，讀 B 唔同，仲裁揀 A）→ unreadable；agree_b 照比", () => {
+    const o = crossForOnboarding(refs, {
+      name_zh: fr({ status: "confirmed", value: "測試甲", arbiter: "agree_a" }),
+      hkid: fr({ status: "confirmed", value: "Z900001(2)", arbiter: "agree_b" }),
+    });
+    expect(o.form.name_zh!.result).toBe("unreadable");
+    expect(o.id.name_zh!.result).toBe("unreadable");
+    expect(o.form.hkid!.result).toBe("match");
+  });
   it("冇 refs 值嘅欄就冇 cross；完全冇 refs＝空", () => {
     expect(crossForOnboarding({ hkid: "Z900001(2)" }, { name_zh: fr({ status: "confirmed", value: "測試甲" }), hkid: fr({ status: "confirmed", value: "Z900001(2)" }) }).form).toEqual({ hkid: { against: "id_card", result: "match" } });
     expect(crossForOnboarding({}, { hkid: fr({ status: "confirmed", value: "Z900001(2)" }) })).toEqual({ form: {}, id: {} });
@@ -422,6 +431,13 @@ describe("POST /api/guards/ocr/read：refs（stage a 簽發／注入）與 cross
     expect(v.ok && v.refs.name_zh).toBeUndefined();
   });
 
+  it("N1：同一請求混入入職表 → 唔簽發 refs_token", async () => {
+    setVisionClientForTests(fake("claude", baseAnswers, []));
+    const res = await post({ stage: "a", documents: [{ type: "id_card", full: IMG, tiles: T4 }, { type: "onboarding_form", full: IMG }] });
+    expect(res.status).toBe(200);
+    expect((await res.json()).refs_token).toBeUndefined();
+  });
+
   it("入職表 stage a 帶有效 refs_token：refs 只注入讀 A；stage b 讀 B／仲裁 prompt 唔帶 refs（盲讀）", async () => {
     const { j } = await printedStage(baseAnswers);
     const calls: VisionRequest[] = [];
@@ -565,7 +581,7 @@ describe("POST /api/guards/ocr/read：refs（stage a 簽發／注入）與 cross
     const mixed = await post({ stage: "a", documents: [{ type: "id_card", full: IMG, tiles: T4 }, { type: "onboarding_form", full: IMG }] });
     expect(mixed.status).toBe(200);
     const mj = await mixed.json();
-    expect(typeof mj.refs_token).toBe("string");
+    expect(mj.refs_token).toBeUndefined();
     expect(calls.filter((c) => c.userText.includes("Reference values"))).toHaveLength(0);
   });
 });
@@ -626,6 +642,16 @@ describe("eval-ocr：two-stage 次序（印刷→refs→入職表）、cross 統
     expect(rep.refs_enabled).toBe(false);
     expect(rep.refs_injected_docs).toBe(0);
     expect(rep.cross).toEqual({ match: 0, differs: 0, unreadable: 0 });
+  });
+  it("N4：入職表 name_zh／hkid／dob 唔計入 overall／by_field，另出 cross_fields；by_field.hkid 只含身份證", async () => {
+    const rep = await runEval({ manifest: load(), deps: deps(), mode: "dry", limit: null, concurrency: 1 });
+    expect(rep.cross_fields.n).toBe(18); // 6 case × 3 欄
+    expect(rep.cross_fields.exact + rep.cross_fields.wrong + rep.cross_fields.missing + rep.cross_fields.review_contains_truth).toBe(18);
+    expect(rep.by_field.hkid!.n).toBe(6);
+    expect(rep.by_field.name_zh!.n).toBe(6);
+    expect(rep.by_field.dob!.n).toBe(6);
+    expect(rep.overall.n).toBe(60 - 18);
+    expect(rep.by_doc_field["onboarding_form.hkid"]!.n).toBe(6);
   });
   it("by_doc_field 自然多出 onboarding_form 嘅 name_zh／hkid／dob", async () => {
     const rep = await runEval({ manifest: load(), deps: deps(), mode: "dry", limit: null, concurrency: 1 });
@@ -694,6 +720,26 @@ describe("路徑 B：printed 來源（同一文件包身份證抽取值）優先
     expect(withPrinted.cmp.hkid.printed).toBe("mismatch");
     expect(withPrinted.status.hkid).toBe("mismatch");
     expect(withPrinted.reasons).toContain("mismatch_hkid");
+  });
+  it("M1：身份證同手寫表都係 Z900001(2)、名單係 Z900002(0)：printed match 唔可以蓋過名單 mismatch（仍然 fail＋mismatch_hkid）", () => {
+    const ex = stub({ aux: { formHkid: F("Z900001(2)") } });
+    const typed = ref({ hkid: "Z9000020" }); // RefRow.hkid 係 canonical 形式
+    const off = crosscheck(ex, "U99999", null, idx([typed]));
+    const on = crosscheck(ex, "U99999", null, idx([typed]), undefined, { printed: true });
+    expect(off.grade).toBe("fail");
+    expect(off.reasons).toContain("mismatch_hkid");
+    expect(on.cmp.hkid.printed).toBe("match");
+    expect(on.status.hkid).toBe("mismatch");
+    expect(on.grade).toBe("fail");
+    expect(on.reasons).toContain("mismatch_hkid");
+  });
+  it("M1：身份證 HKID 係 corrected_by_corroboration（靠手寫表修正）→ 唔計 printed 比對（避免循環）", () => {
+    const fixed = { value: "Z900001(2)", level: "A", conf: 0.9, page: 1, evidence: "", note: "corrected_by_corroboration" } as never;
+    const ex = stub({ hkid: fixed, aux: { formHkid: F("Z900001(2)") } });
+    expect(printedRefCmp(ex).hkid).toBe("no_reference");
+    const c = crosscheck(ex, "U99999", null, idx([ref({ hkid: "Z9000012" })]), undefined, { printed: true });
+    expect(c.cmp.hkid.printed).toBe("no_reference");
+    expect(c.status.hkid).toBe("match"); // 只由名單決定；hkidFixed 防線照舊
   });
   it("printed 冇明確結果（no_reference）→ 照舊綜合打字名單", () => {
     const ex = stub({ aux: {} });
