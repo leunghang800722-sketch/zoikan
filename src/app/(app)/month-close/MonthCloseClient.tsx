@@ -341,7 +341,7 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
       />
 
       <Banner kind="error" message={error} />
-      {!lockedOverride && leaverAdwPending > 0 && (
+      {!locked && leaverAdwPending > 0 && (
         <Banner kind="warning" message={`${leaverAdwPending} 位離職者年假補償未有平均工資記錄（系統用咗月薪÷當月日數）——唔阻鎖月，建議鎖定前到長工糧月報頁核對`} data-testid="leaver-adw-lock-warning" />
       )}
       <Banner kind="success" message={notice} />
