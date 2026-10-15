@@ -3,8 +3,9 @@
 // 模型輸出當資料：zod 嚴格解析（只認白名單 key，其餘丟棄），解析失敗＝該次讀全部 unclear。
 import { z } from "zod";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "./config";
-import { buildArbiterSystemPrompt, buildArbiterUserText, buildArbiterUserTextCrops, buildSystemPrompt, buildUserTextFieldCrops, buildUserTextFull, buildUserTextTiles } from "./prompts";
-import { OCR_CROP_FIELDS, hasCropFields, sanitizeFieldBoxes, type FieldBoxes } from "./field-crops";
+import { buildArbiterSystemPrompt, buildArbiterUserText, buildArbiterUserTextCrops, buildSystemPrompt, buildUserTextFieldCrops, buildUserTextFull, buildUserTextTiles, buildUserTextWithContext } from "./prompts";
+import { sanitizeRefs, type Refs } from "./refs";
+import { hasCropFields, ocrBoxFields, sanitizeFieldBoxes, type FieldBoxes } from "./field-crops";
 import { isUnclear, normalizeField, type FieldResult } from "./normalize";
 import { reconcile } from "./reconcile";
 import { fieldReadSchema, type FieldRead } from "./field-read";
@@ -82,8 +83,8 @@ function extractJson(text: string): unknown {
 
 /** WP-OCR-3：讀 A 回報嘅 field_boxes（未信任）→ 只保留裁圖欄位、sanity 合格嘅 box。解析唔到＝空。 */
 function parseFieldBoxes(text: string, type: OcrDocType): FieldBoxes {
-  const fields = OCR_CROP_FIELDS[type];
-  if (!fields) return {};
+  const fields = ocrBoxFields(type);
+  if (fields.length === 0) return {};
   const raw = extractJson(text);
   if (!raw || typeof raw !== "object") return {};
   return sanitizeFieldBoxes((raw as Record<string, unknown>).field_boxes, fields);
@@ -133,14 +134,20 @@ export interface StageAResult {
   model: string;
   fallback_reason: string | null;
   parse_ok: boolean;
+  /** WP-OCR-1：有幾多個 refs 欄位注入咗讀 A 嘅 prompt（淨計數；0＝冇注入） */
+  refs_injected: number;
 }
 
-/** WP-OCR-3 讀 A（兩段式第一段）：全圖 1 張；有裁圖設計嘅文件類型同時要求回報欄位 box。 */
-export async function readStageA(clientOrClients: VisionClient | ReadClients, type: OcrDocType, full: string): Promise<StageAResult> {
+/**
+ * WP-OCR-3 讀 A（兩段式第一段）：全圖 1 張；有裁圖設計嘅文件類型同時要求回報欄位 box。
+ * WP-OCR-1：refs（同一申請人印刷證件已核實值）只注入讀 A，而且只對有欄位級裁圖設計嘅文件（入職表）生效。
+ */
+export async function readStageA(clientOrClients: VisionClient | ReadClients, type: OcrDocType, full: string, refs?: Refs | null): Promise<StageAResult> {
   const clients: ReadClients = "complete" in clientOrClients ? { a: clientOrClients, b: clientOrClients } : clientOrClients;
   const fields = OCR_DOC_FIELDS[type];
   const wantBoxes = hasCropFields(type);
-  const req = stageARequest(type, full, wantBoxes);
+  const useRefs = wantBoxes ? sanitizeRefs(refs) : {};
+  const req = stageARequest(type, full, wantBoxes, useRefs);
   const { resp, usedA, fallbackReason } = await runReadA(clients, req, fields);
   const pa = parseModelJson(resp.text, fields);
   // 讀 A 退回 DeepSeek 或者解析失敗 → 冇 box（後備 2×2）
@@ -154,13 +161,14 @@ export async function readStageA(clientOrClients: VisionClient | ReadClients, ty
     model: usedA.model,
     fallback_reason: fallbackReason,
     parse_ok: pa !== null,
+    refs_injected: Object.keys(useRefs).filter((k) => OCR_DOC_FIELDS[type].includes(k as OcrFieldKey)).length,
   };
 }
 
-function stageARequest(type: OcrDocType, full: string, withBoxes: boolean): VisionRequest {
+function stageARequest(type: OcrDocType, full: string, withBoxes: boolean, refs: Refs = {}): VisionRequest {
   const fields = OCR_DOC_FIELDS[type];
   return withBoxes
-    ? { system: buildSystemPrompt(type, { boxes: true }), userText: buildUserTextFull(type, { boxes: true }), images: [full], fields, boxFields: OCR_CROP_FIELDS[type] ?? [] }
+    ? { system: buildSystemPrompt(type, { boxes: true }), userText: buildUserTextWithContext(type, refs, { boxes: true }), images: [full], fields, boxFields: ocrBoxFields(type) }
     : { system: buildSystemPrompt(type), userText: buildUserTextFull(type), images: [full], fields };
 }
 

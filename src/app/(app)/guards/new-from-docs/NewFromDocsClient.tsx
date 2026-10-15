@@ -15,8 +15,8 @@ import { canvasFromImageFile, cropFieldsFromCanvas, isPdfFile, openPdf, prepareF
 import { hasCropFields } from "@/lib/guards/ocr/field-crops";
 import { readTwoStage } from "@/lib/guards/ocr/two-stage";
 import { normalizeField } from "@/lib/guards/ocr/normalize";
-import { CRITICAL_MSG, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
-import type { FieldStatus } from "@/lib/guards/ocr/normalize";
+import { CRITICAL_MSG, CROSS_MSG, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
+import type { CrossResult, FieldStatus } from "@/lib/guards/ocr/normalize";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
 import { kickerFor } from "@/lib/nav/schema";
 import { tableCls } from "@/components/ui/DataTable";
@@ -51,6 +51,8 @@ interface OcrField {
   /** WP-OCR-4（additive）：按格式驗證排序嘅候選；舊 server 冇 */
   candidates_ranked?: { value: string; sources: string[]; score: number; reason: string }[];
   reason?: string;
+  /** WP-OCR-1（additive）：同另一份文件嘅交叉核對；舊 server 冇 */
+  cross?: { against: string; result: CrossResult };
 }
 interface OcrDocResult {
   type: OcrDocType;
@@ -83,6 +85,9 @@ interface FormField {
   /** 值同 OCR 預填值唔同（用戶改過） */
   edited: boolean;
   from?: OcrDocType;
+  /** WP-OCR-1：同入職表手寫值嘅交叉核對（身份證關鍵欄）；入職表手寫值只作唯讀顯示，唔覆蓋身份證值 */
+  cross?: CrossResult;
+  formValue?: string;
 }
 type FormState = Record<OcrFieldKey, FormField>;
 
@@ -243,11 +248,16 @@ export function NewFromDocsClient() {
     const put = (k: OcrFieldKey, d: OcrDocResult | undefined) => {
       const r = d?.fields[k];
       if (!r) return false;
-      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type };
+      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type, ...(r.cross && d!.type === "id_card" ? { cross: r.cross.result } : {}) };
       return true;
     };
     for (const k of OCR_DOC_FIELDS.id_card) put(k, byType.get("id_card"));
     put("phone", byType.get("onboarding_form"));
+    // WP-OCR-1：入職表手寫姓名／身份證號／出生日期只作唯讀顯示（交叉核對），唔覆蓋身份證值；讀到先顯示
+    for (const k of ["name_zh", "hkid", "dob"] as const) {
+      const hv = byType.get("onboarding_form")?.fields[k];
+      if (hv && hv.status !== "missing" && hv.value.trim() && next[k].cross !== undefined) next[k] = { ...next[k], formValue: hv.value };
+    }
     // 地址：住址證明優先；冇上載或者讀唔到先用入職表
     const proof = byType.get("address_proof")?.fields.address;
     const formAddr = byType.get("onboarding_form")?.fields.address;
@@ -280,7 +290,7 @@ export function NewFromDocsClient() {
   function setField(k: OcrFieldKey, v: string) {
     setForm((s) => {
       const f = s[k];
-      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v) } };
+      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v, f.cross) } };
     });
   }
   const ackField = (k: OcrFieldKey, empty = false) => setForm((s) => ({ ...s, [k]: { ...s[k], ack: true, ...(empty ? { value: "", edited: s[k].ocrValue !== "" } : {}) } }));
@@ -544,13 +554,23 @@ export function NewFromDocsClient() {
                         ))}
                       </div>
                     )}
+                    {f.cross && (
+                      <div
+                        className={`break-words text-zk-sm ${f.cross === "differs" ? "font-semibold text-zk-danger" : f.cross === "match" ? "text-zk-success" : "text-zk-muted"}`}
+                        data-testid={`ocr-cross-${k}`}
+                        data-result={f.cross}
+                      >
+                        {f.formValue && <span data-testid={`ocr-form-value-${k}`}>入職表手寫（唯讀）：{f.formValue}　</span>}
+                        {CROSS_MSG[f.cross]}
+                      </div>
+                    )}
                     {reasonMsg && <div className="text-zk-sm text-zk-warning">{reasonMsg}</div>}
                     {err && <div className="text-zk-sm text-zk-danger">{err}</div>}
                     {needAck && (
                       <div className="flex flex-wrap items-center gap-2">
                         {f.value.trim() ? (
                           <Button variant="primary" disabled={!!err} onClick={() => ackField(k)} data-testid={`ocr-ack-${k}`}>
-                            {crit ? "對過證件，啱" : "對住圖確認"}
+                            {crit ? (f.cross === "differs" ? "對過證件，以證件為準" : "對過證件，啱") : "對住圖確認"}
                           </Button>
                         ) : !REQUIRED.includes(k) ? (
                           <Button onClick={() => ackField(k, true)}>呢項冇資料／略過</Button>

@@ -44,7 +44,7 @@ async function main() {
   for (const ex of extracts) {
     const m = meta.get(ex.docId);
     const fnZh = m?.fileName && /[一-鿿]/.test(m.fileName) ? m.fileName.replace(/[^一-鿿]/g, '') : null;
-    checks.push(crosscheck(ex, ex.staffNo, fnZh, idxs, { vision: vision.filter((v) => v.docId === ex.docId), hasCrop: cropDocs.has(ex.docId) }));
+    checks.push(crosscheck(ex, ex.staffNo, fnZh, idxs, { vision: vision.filter((v) => v.docId === ex.docId), hasCrop: cropDocs.has(ex.docId) }, { printed: true })); // WP-OCR-1：同一文件包印刷身份證抽取值對申請表手寫值（優先於打字名單）
   }
   await fs.writeFile(path.join(OUT, 'out/crosscheck.json'), JSON.stringify(checks, null, 1));
 

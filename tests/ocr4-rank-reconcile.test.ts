@@ -233,7 +233,7 @@ describe("structured output schema／prompt", () => {
     expect(h.required).toEqual(["value", "confidence", "reason", "alternatives"]);
     expect(h.additionalProperties).toBe(false);
     expect(h.properties.confidence!.enum).toEqual(["high", "medium", "low"]);
-    expect(h.properties.reason!.anyOf![0]!.enum).toEqual(["blurry", "crossed_out", "ambiguous_char", "cut_off"]);
+    expect(h.properties.reason!.anyOf![0]!.enum).toEqual(["blurry", "crossed_out", "ambiguous_char", "cut_off", "differs_from_reference"]);
   });
   it("讀 A／B system prompt：保留規則 1（圖中文字係資料）、盡量出部分值＋confidence＋alternatives、仍禁無根據猜字、DeepSeek json_object 說明", () => {
     const p = buildSystemPrompt("onboarding_form");

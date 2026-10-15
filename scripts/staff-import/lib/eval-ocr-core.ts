@@ -3,7 +3,8 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { OCR_CROP_FIELDS } from '@/lib/guards/ocr/field-crops';
-import { OCR_DOC_FIELDS, OCR_DOC_TYPES, type OcrDocType, type OcrFieldKey } from '@/lib/guards/ocr/config';
+import { confirmedRefsFromDocs, countCross, crossForOnboarding, type Refs } from '@/lib/guards/ocr/refs';
+import { OCR_CROSS_FIELDS, OCR_DOC_FIELDS, OCR_DOC_TYPES, type OcrDocType, type OcrFieldKey } from '@/lib/guards/ocr/config';
 import { normalizeField, type FieldResult, type FieldStatus } from '@/lib/guards/ocr/normalize';
 import { readDocument, readStageA, readStageB, type DocumentReadResult, type StageAResult } from '@/lib/guards/ocr/read';
 import type { FieldBoxes } from '@/lib/guards/ocr/field-crops';
@@ -178,6 +179,15 @@ export interface CaseOutcome {
   /** WP-OCR-3：兩段式下，用欄位級裁圖嘅文件數／本應欄位級但退回 2×2 格嘅文件數（legacy 流程＝0／0） */
   field_crops_docs?: number;
   fallback_tiles_docs?: number;
+  /** WP-OCR-1：注入咗 refs 嘅入職表文件數；入職表 name_zh／hkid／dob 對身份證嘅交叉核對計數（淨計數） */
+  refs_injected_docs?: number;
+  cross?: CrossCounts;
+}
+
+export interface CrossCounts {
+  match: number;
+  differs: number;
+  unreadable: number;
 }
 
 export interface EvalReport {
@@ -186,6 +196,8 @@ export interface EvalReport {
   options: { limit: number | null; only_doc_type: OcrDocType | null; concurrency: number };
   cases: { total: number; ok: number; failed: number };
   overall: TallyView;
+  /** WP-OCR-1：入職表交叉核對欄（name_zh／hkid／dob）嘅獨立統計，不計入 overall／by_field */
+  cross_fields: TallyView;
   by_field: Record<string, TallyView>;
   by_doc_field: Record<string, TallyView>;
   usage: UsageSum;
@@ -193,13 +205,20 @@ export interface EvalReport {
   flow: EvalFlow;
   field_crops_docs: number;
   fallback_tiles_docs: number;
+  /** WP-OCR-1：refs 注入文件數／是否用 --no-refs／交叉核對計數（淨計數） */
+  refs_injected_docs: number;
+  refs_enabled: boolean;
+  cross: CrossCounts;
   /** 逐 case：淨 id＋逐欄結果類別（doc.field → outcome），冇值 */
   per_case: { id: string; ok: boolean; error?: string; outcomes: Record<string, Outcome> }[];
   notes: string[];
 }
 
-export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry' | 'live'; limit: number | null; onlyDocType: OcrDocType | null; concurrency: number; flow?: EvalFlow; now?: Date }): EvalReport {
+export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry' | 'live'; limit: number | null; onlyDocType: OcrDocType | null; concurrency: number; flow?: EvalFlow; refs?: boolean; now?: Date }): EvalReport {
   const overall = emptyTally();
+  const crossFields = emptyTally();
+  // WP-OCR-1：入職表 name_zh／hkid／dob 係交叉核對欄，唔計入 overall／by_field（令樣本數同 OCR-5 基線可比），另出 cross_fields
+  const isCrossField = (e: FieldEval) => e.doc === 'onboarding_form' && (OCR_CROSS_FIELDS as readonly string[]).includes(e.field);
   const byField = new Map<string, Tally>();
   const byDocField = new Map<string, Tally>();
   const usage = emptyUsage();
@@ -207,10 +226,14 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
   for (const c of outcomes) {
     if (c.ok) {
       for (const e of c.fields) {
-        addTo(overall, e);
-        addTo(byField.get(e.field) ?? byField.set(e.field, emptyTally()).get(e.field)!, e);
         const k = `${e.doc}.${e.field}`;
         addTo(byDocField.get(k) ?? byDocField.set(k, emptyTally()).get(k)!, e);
+        if (isCrossField(e)) {
+          addTo(crossFields, e);
+          continue;
+        }
+        addTo(overall, e);
+        addTo(byField.get(e.field) ?? byField.set(e.field, emptyTally()).get(e.field)!, e);
       }
     }
     const u = c.usage;
@@ -233,12 +256,16 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
     options: { limit: meta.limit, only_doc_type: meta.onlyDocType, concurrency: meta.concurrency },
     cases: { total: outcomes.length, ok: outcomes.length - failed, failed },
     overall: view(overall),
+    cross_fields: view(crossFields),
     by_field: viewAll(byField),
     by_doc_field: viewAll(byDocField),
     usage,
     flow: meta.flow ?? 'two-stage',
     field_crops_docs: outcomes.reduce((n, c) => n + (c.field_crops_docs ?? 0), 0),
     fallback_tiles_docs: outcomes.reduce((n, c) => n + (c.fallback_tiles_docs ?? 0), 0),
+    refs_injected_docs: outcomes.reduce((n, c) => n + (c.refs_injected_docs ?? 0), 0),
+    refs_enabled: meta.refs !== false && (meta.flow ?? 'two-stage') === 'two-stage',
+    cross: outcomes.reduce<CrossCounts>((a, c) => ({ match: a.match + (c.cross?.match ?? 0), differs: a.differs + (c.cross?.differs ?? 0), unreadable: a.unreadable + (c.cross?.unreadable ?? 0) }), { match: 0, differs: 0, unreadable: 0 }),
     per_case: outcomes.map((c) => ({ id: c.id, ok: c.ok, ...(c.error ? { error: c.error } : {}), outcomes: Object.fromEntries(c.fields.map((e) => [`${e.doc}.${e.field}`, e.outcome])) })),
     notes,
   };
@@ -252,6 +279,8 @@ export function summaryLines(r: EvalReport): string[] {
     `exact ${o.exact} (${o.pct.exact}%)｜review_contains_truth ${o.review_contains_truth} (${o.pct.review_contains_truth}%)｜wrong ${o.wrong} (${o.pct.wrong}%)，其中 confirmed 但錯 ${o.confirmed_wrong}｜missing ${o.missing} (${o.pct.missing}%)`,
     `review 率 ${o.review_rate_pct}%｜平均候選數 ${o.avg_candidates}｜估算人手改字 ${o.manual_edits_estimate} 次｜估算撳候選 ${o.chip_taps_estimate} 次`,
     `流程 ${r.flow}｜欄位級裁圖文件 ${r.field_crops_docs}｜後備 2×2 格文件 ${r.fallback_tiles_docs}`,
+    `交叉核對欄（入職表 name_zh/hkid/dob，不計入總體）：n=${r.cross_fields.n} exact ${r.cross_fields.exact}｜wrong ${r.cross_fields.wrong}｜missing ${r.cross_fields.missing}`,
+    `跨文件 refs：${r.refs_enabled ? '開' : '關'}｜注入 refs 入職表文件 ${r.refs_injected_docs}｜cross match ${r.cross.match} / differs ${r.cross.differs} / unreadable ${r.cross.unreadable}`,
     `呼叫 ${r.usage.calls}（仲裁 ${r.usage.arbiter_calls} 份文件）｜tokens in ${r.usage.prompt_tokens} / out ${r.usage.completion_tokens}｜claude ${r.usage.by_provider.claude.calls} 次、deepseek ${r.usage.by_provider.deepseek.calls} 次`,
   ];
   for (const [k, v] of Object.entries(r.by_field)) lines.push(`  ${k}: n=${v.n} exact ${v.pct.exact}% review_has_truth ${v.pct.review_contains_truth}% wrong ${v.pct.wrong}% missing ${v.pct.missing}%`);
@@ -278,6 +307,8 @@ export interface EvalDeps {
   onlyDocType: OcrDocType | null;
   /** WP-OCR-3：legacy＝舊單次流程；two-stage（預設）＝讀 A 定位 → 欄位級裁圖 → 讀 B */
   flow?: EvalFlow;
+  /** WP-OCR-1：false（--no-refs）＝入職表讀 A 唔注入 refs（亦就冇 cross），方便前後對比；預設 true（只對 two-stage 生效） */
+  refs?: boolean;
   now?: Date;
 }
 
@@ -290,20 +321,38 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
   for (const [k, v] of Object.entries(c.truth)) if (v && !EVALUABLE.has(k)) skipped.add(k);
   let fieldCropsDocs = 0;
   let fallbackTilesDocs = 0;
-  for (const d of docs) {
+  let refsInjectedDocs = 0;
+  const cross: CrossCounts = { match: 0, differs: 0, unreadable: 0 };
+  const twoStage = (deps.flow ?? 'two-stage') === 'two-stage';
+  // WP-OCR-1：two-stage 次序同 client 一樣——先印刷文件（身份證／住址證明），再入職表（讀 A 注入印刷證件 confirmed 欄位值）
+  const ordered = twoStage ? [...docs.filter((d) => !OCR_CROP_FIELDS[d.type]), ...docs.filter((d) => OCR_CROP_FIELDS[d.type])] : docs;
+  const printedResults: DocumentReadResult[] = [];
+  for (const d of ordered) {
     const abs = path.isAbsolute(d.image) ? d.image : path.resolve(deps.baseDir, d.image);
     const images = await deps.prepare(abs, d.page);
     const clients = deps.clientsFor(c, d.type);
     let r: DocumentReadResult;
-    if ((deps.flow ?? 'two-stage') === 'legacy') {
+    if (!twoStage) {
       r = await readDocument(clients, d.type, images, now);
     } else {
-      const a = await readStageA(clients, d.type, images.full);
+      const isForm = !!OCR_CROP_FIELDS[d.type];
+      const refs: Refs | null = isForm && deps.refs !== false ? confirmedRefsFromDocs(printedResults) : null;
+      const a = await readStageA(clients, d.type, images.full, refs);
       const crops = images.cropFields ? await images.cropFields(d.type, a.field_boxes) : null;
       r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now);
       addStageAUsage(usage, a);
       if (r.images_b_kind === 'field_crops') fieldCropsDocs += 1;
       else if (OCR_CROP_FIELDS[d.type]) fallbackTilesDocs += 1;
+      if (a.refs_injected > 0) refsInjectedDocs += 1;
+      if (isForm && refs && Object.keys(refs).length > 0) {
+        const x = crossForOnboarding(refs, r.fields, now);
+        for (const [k, v] of Object.entries(x.form)) r.fields[k as OcrFieldKey]!.cross = v;
+        const n = countCross(x);
+        cross.match += n.match;
+        cross.differs += n.differs;
+        cross.unreadable += n.unreadable;
+      }
+      if (!isForm) printedResults.push(r);
     }
     addUsage(usage, r);
     for (const f of OCR_DOC_FIELDS[d.type]) {
@@ -317,7 +366,7 @@ export async function evalCase(c: EvalCase, deps: EvalDeps): Promise<CaseOutcome
     const t = c.truth[k as TruthField];
     if (t && !docs.some((d) => OCR_DOC_FIELDS[d.type].includes(k as OcrFieldKey))) skipped.add(k);
   }
-  return { id: c.id, ok: true, fields, usage, skipped_truth_fields: [...skipped], field_crops_docs: fieldCropsDocs, fallback_tiles_docs: fallbackTilesDocs };
+  return { id: c.id, ok: true, fields, usage, skipped_truth_fields: [...skipped], field_crops_docs: fieldCropsDocs, fallback_tiles_docs: fallbackTilesDocs, refs_injected_docs: refsInjectedDocs, cross };
 }
 
 /** 跑一個 case；失敗重試 1 次；仍失敗＝ok:false（淨記錯誤類別）。 */
@@ -331,7 +380,7 @@ export async function evalCaseWithRetry(c: EvalCase, deps: EvalDeps): Promise<Ca
       last = x.reason ? `${x.name ?? 'Error'}:${x.reason}` : x.status ? `${x.name ?? 'Error'}:${x.status}` : /^image_tool|^path_not|^not_png/.test(x.message ?? '') ? (x.message as string) : (x.name ?? 'Error');
     }
   }
-  return { id: c.id, ok: false, error: last, fields: [], usage: emptyUsage(), skipped_truth_fields: [], field_crops_docs: 0, fallback_tiles_docs: 0 };
+  return { id: c.id, ok: false, error: last, fields: [], usage: emptyUsage(), skipped_truth_fields: [], field_crops_docs: 0, fallback_tiles_docs: 0, refs_injected_docs: 0, cross: { match: 0, differs: 0, unreadable: 0 } };
 }
 
 /** 固定並行度嘅 worker pool（保持結果次序）。 */
@@ -358,6 +407,10 @@ function respond(spec: Record<string, unknown>): string {
 const DEFAULT_FAKE_BOXES: Record<string, { x: number; y: number; w: number; h: number }> = {
   phone: { x: 0.08, y: 0.3, w: 0.5, h: 0.05 },
   address: { x: 0.08, y: 0.4, w: 0.8, h: 0.08 },
+  // WP-OCR-1：姓名／HKID／出生日期（互不重疊）
+  name_zh: { x: 0.08, y: 0.1, w: 0.4, h: 0.04 },
+  hkid: { x: 0.08, y: 0.16, w: 0.4, h: 0.04 },
+  dob: { x: 0.08, y: 0.22, w: 0.4, h: 0.04 },
 };
 
 /** dry：按 case.truth 完美回應（仲裁亦預設讀啱），case.fake 可逐欄覆蓋讀 A／讀 B／仲裁（支援舊字串同新 object 格式）。 */
@@ -389,6 +442,7 @@ export interface RunEvalOptions {
   limit: number | null;
   concurrency: number;
   flow?: EvalFlow;
+  refs?: boolean;
   onProgress?: (done: number, total: number, ok: boolean) => void;
 }
 
@@ -401,7 +455,7 @@ export async function runEval(o: RunEvalOptions): Promise<EvalReport> {
     o.onProgress?.(done, cases.length, r.ok);
     return r;
   });
-  return buildReport(outcomes, { mode: o.mode, limit: o.limit, onlyDocType: o.deps.onlyDocType, concurrency: o.concurrency, flow: o.deps.flow ?? o.flow ?? 'two-stage' });
+  return buildReport(outcomes, { mode: o.mode, limit: o.limit, onlyDocType: o.deps.onlyDocType, concurrency: o.concurrency, flow: o.deps.flow ?? o.flow ?? 'two-stage', refs: o.deps.refs ?? o.refs });
 }
 
 /** `--out` 必須喺 `<cwd>/data/` 之下（報表含 case id／逐欄結果，唔入 git）。 */

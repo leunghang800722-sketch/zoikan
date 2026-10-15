@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export const READ_CONFIDENCE = ["high", "medium", "low"] as const;
 export type ReadConfidence = (typeof READ_CONFIDENCE)[number];
-export const READ_REASONS = ["blurry", "crossed_out", "ambiguous_char", "cut_off"] as const;
+export const READ_REASONS = ["blurry", "crossed_out", "ambiguous_char", "cut_off", "differs_from_reference"] as const;
 type ReadReason = (typeof READ_REASONS)[number];
 /** alternatives 上限（模型要求最多 2 個；多出嚟嘅丟棄）。 */
 const MAX_ALTERNATIVES = 2;

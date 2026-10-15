@@ -2,7 +2,7 @@
 // 讀 A（全圖）回報每個欄位格（連印刷 label 同手寫內容）嘅 bounding box（0–1 正規化）；
 // 呢度負責 sanity 檢查、外擴（按 box 高度比例）、避開鄰欄、算輸出尺寸。真正裁圖由 caller 做（browser canvas／Node ImageMagick），
 // 幾何一律由本檔算，所以兩邊完全一致。冇有效 box → 後備 2×2 重疊格（image-plan.ts）。
-import { OCR_MAX_TILES, OCR_FIELDS, type OcrDocType, type OcrFieldKey } from "./config";
+import { OCR_MAX_FIELD_CROPS, OCR_FIELDS, type OcrDocType, type OcrFieldKey } from "./config";
 import { TILE_MAX_EDGE } from "./image-plan";
 
 /** 正規化 box：x,y＝左上角，w,h＝闊高，全部 0–1（相對全圖）。 */
@@ -25,6 +25,17 @@ export interface PixelRect {
 export const OCR_CROP_FIELDS: Partial<Record<OcrDocType, readonly OcrFieldKey[]>> = {
   onboarding_form: ["phone", "address"],
 };
+
+/**
+ * WP-OCR-1：額外（optional）裁圖欄位——有有效 box 就加裁圖，冇就唔加（唔影響 all-or-nothing 後備判定）。
+ * 入職表：姓名／HKID／出生日期（交叉核對用）。
+ */
+export const OCR_EXTRA_CROP_FIELDS: Partial<Record<OcrDocType, readonly OcrFieldKey[]>> = {
+  onboarding_form: ["name_zh", "hkid", "dob"],
+};
+
+/** 讀 A 要求回報 box 嘅欄位（必須＋額外）。 */
+export const ocrBoxFields = (type: OcrDocType): readonly OcrFieldKey[] => (hasCropFields(type) ? [...(OCR_CROP_FIELDS[type] ?? []), ...(OCR_EXTRA_CROP_FIELDS[type] ?? [])] : []);
 
 /** 文件類型有冇欄位級裁圖設計（有＝讀 A 要求回報 box）。 */
 export const hasCropFields = (type: OcrDocType): boolean => (OCR_CROP_FIELDS[type]?.length ?? 0) > 0;
@@ -151,17 +162,24 @@ export type FieldCropPlan = { kind: "field_crops"; crops: FieldCrop[] } | { kind
 
 /**
  * 按該文件類型嘅裁圖欄位同讀 A 回報嘅 boxes 出裁圖計劃。
- * 保守規則：該類型所有裁圖欄位都要有有效 box 先用欄位級裁圖；有任何一欄冇 box（或者根本冇裁圖設計）→ tiles（後備 2×2）。
- * 每份文件最多 OCR_MAX_TILES 張。
+ * 保守規則：該類型所有「必須」裁圖欄位（電話、地址）都要有有效 box 先用欄位級裁圖；有任何一欄冇 box（或者根本冇裁圖設計）→ tiles（後備 2×2）。
+ * WP-OCR-1：額外欄位（姓名／HKID／出生日期）有有效 box 就加裁圖、冇就唔加（唔影響後備判定）。每份文件最多 OCR_MAX_FIELD_CROPS 張。
  */
 export function planFieldCrops(type: OcrDocType, boxes: FieldBoxes, sourceW: number, sourceH: number): FieldCropPlan {
-  const fields = OCR_CROP_FIELDS[type];
-  if (!fields || fields.length === 0 || fields.length > OCR_MAX_TILES) return { kind: "tiles", crops: [] };
-  const valid = fields.map((f) => [f, sanitizeBox(boxes[f])] as const);
-  if (valid.some(([, b]) => !b)) return { kind: "tiles", crops: [] };
-  const all = valid.map(([, b]) => b!);
+  const required = OCR_CROP_FIELDS[type];
+  if (!required || required.length === 0) return { kind: "tiles", crops: [] };
+  const extra = OCR_EXTRA_CROP_FIELDS[type] ?? [];
+  if (required.length > OCR_MAX_FIELD_CROPS) return { kind: "tiles", crops: [] };
+  const req = required.map((f) => [f, sanitizeBox(boxes[f])] as const);
+  if (req.some(([, b]) => !b)) return { kind: "tiles", crops: [] };
+  const opt = extra.flatMap((f) => {
+    const b = sanitizeBox(boxes[f]);
+    return b ? [[f, b] as const] : [];
+  });
+  const valid = [...req.map(([f, b]) => [f, b!] as const), ...opt].slice(0, OCR_MAX_FIELD_CROPS);
+  const all = valid.map(([, b]) => b);
   const crops: FieldCrop[] = valid.map(([field, b]) => {
-    const rect = padBox(b!, all, sourceW, sourceH);
+    const rect = padBox(b, all, sourceW, sourceH);
     return { field, rect, out: cropOutSize(rect.w, rect.h) };
   });
   return { kind: "field_crops", crops };

@@ -75,7 +75,7 @@ describe("manifest／報表／路徑", () => {
   });
   it("buildReport：計數、百分比、review 率、平均候選、人手改字／撳候選估算、usage；per_case 冇值", () => {
     const mk = (id: string, ev: Parameters<typeof buildReport>[0][number]["fields"]) => ({ id, ok: true, fields: ev, usage: { calls: 3, prompt_tokens: 100, completion_tokens: 10, arbiter_calls: 1, by_provider: { claude: { calls: 2, prompt_tokens: 80, completion_tokens: 8 }, deepseek: { calls: 1, prompt_tokens: 20, completion_tokens: 2 } } }, skipped_truth_fields: ["bank_account"] });
-    const f = (outcome: "exact" | "review_contains_truth" | "wrong" | "missing", status: "confirmed" | "review" | "missing", valueCorrect = false, candidateCount = 0, field: "phone" | "hkid" = "phone") => ({ doc: "onboarding_form" as const, field, outcome, status, valueCorrect, candidateCount });
+    const f = (outcome: "exact" | "review_contains_truth" | "wrong" | "missing", status: "confirmed" | "review" | "missing", valueCorrect = false, candidateCount = 0, field: "phone" | "hkid" = "phone") => ({ doc: (field === "hkid" ? "id_card" : "onboarding_form") as "id_card" | "onboarding_form", field, outcome, status, valueCorrect, candidateCount });
     const r = buildReport([
       mk("c1", [f("exact", "confirmed", true), f("review_contains_truth", "review", true, 2), f("review_contains_truth", "review", false, 3, "hkid")]),
       mk("c2", [f("wrong", "confirmed"), f("missing", "missing")]),
@@ -88,7 +88,7 @@ describe("manifest／報表／路徑", () => {
     expect(r.by_field.hkid!.n).toBe(1);
     expect(r.by_doc_field["onboarding_form.phone"]!.n).toBe(4);
     expect(r.usage).toMatchObject({ calls: 6, prompt_tokens: 200, completion_tokens: 20, arbiter_calls: 2 });
-    expect(r.per_case[0]).toEqual({ id: "c1", ok: true, outcomes: { "onboarding_form.phone": "review_contains_truth", "onboarding_form.hkid": "review_contains_truth" } });
+    expect(r.per_case[0]).toEqual({ id: "c1", ok: true, outcomes: { "onboarding_form.phone": "review_contains_truth", "id_card.hkid": "review_contains_truth" } });
     expect(r.per_case[2]).toMatchObject({ ok: false, error: "OcrUnavailableError:429" });
     expect(r.notes.join("|")).toContain("bank_account");
     expect(summaryLines(r).join("\n")).toContain("review 率 40%");
@@ -119,12 +119,12 @@ describe("evalCaseWithRetry：失敗重試 1 次", () => {
     expect(r).toMatchObject({ ok: false, error: "OcrUnavailableError:api_error", fields: [] });
   });
   it("--only-doc-type 過濾：唔包含嘅文件唔讀、truth 欄記入 skipped", async () => {
-    const c2: EvalCase = { id: "t2", docs: [{ type: "id_card", image: "a.png" }, { type: "onboarding_form", image: "b.png" }], truth: { hkid: "Z900001(2)", phone: "90001111" } };
+    const c2: EvalCase = { id: "t2", docs: [{ type: "id_card", image: "a.png" }, { type: "onboarding_form", image: "b.png" }], truth: { sex: "M", phone: "90001111" } };
     const seen: string[] = [];
     const r = await evalCaseWithRetry(c2, base({ onlyDocType: "onboarding_form", prepare: async (p) => { seen.push(path.basename(p)); return { full: IMG, tiles: [IMG] }; } }));
     expect(seen).toEqual(["b.png"]);
     expect(r.fields.map((e) => e.field)).toEqual(["phone"]);
-    expect(r.skipped_truth_fields).toContain("hkid");
+    expect(r.skipped_truth_fields).toContain("sex");
   });
   it("runEval --limit／進度回調", async () => {
     const manifest = { cases: [c, { ...c, id: "t3" }, { ...c, id: "t4" }] };
@@ -222,11 +222,14 @@ describe("eval-ocr CLI：參數同 --dry 端到端", () => {
     const text = logs.join("\n");
     expect(text).toContain("dry（fake client）");
     expect(text).toContain("cases 6/6 ok");
+    // OCR-1.2：入職表 name_zh／hkid／dob 係交叉核對欄，唔計入總體（同 OCR-5 基線 13 欄可比），另出 cross_fields
     expect(text).toContain("已評估欄位 13");
     expect(text).toContain("exact 9 (69.2%)");
     expect(text).toContain("review_contains_truth 2 (15.4%)");
     expect(text).toContain("wrong 1 (7.7%)，其中 confirmed 但錯 0");
     expect(text).toContain("missing 1 (7.7%)");
+    expect(text).toContain("交叉核對欄（入職表 name_zh/hkid/dob，不計入總體）：n=3 exact 3｜wrong 0｜missing 0");
+    expect(text).toContain("注入 refs 入職表文件 1｜cross match 3 / differs 0 / unreadable 0");
     expect(text).toContain("仲裁 3 份文件");
     for (const v of ["測試甲", "Z900001", "90001111", "示範街", "syn-0", "form.png"]) expect(text).not.toContain(v);
   });
