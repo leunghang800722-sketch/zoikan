@@ -22,6 +22,7 @@ import { buildReconciliation } from "@/lib/reports/reconciliation";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { checkRosterUploadCoverage } from "@/lib/roster-upload/lock-precondition";
 import { countSlPending } from "@/lib/longterm-payroll/sl-confirm";
+import { listLeaverAdwPending } from "@/lib/longterm-payroll/leaver-adw-pending";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return withApiError(async () => {
@@ -106,7 +107,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       },
       ip: getClientIp(req),
     });
-    return ok(brandSafeResponse({ month_close: await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(after)), reconciliation, roster_upload_coverage: coverage }));
+    // P19b：離職者平均工資待確認——只警告，唔阻鎖（鎖完先查，免影響鎖月流程）。
+    const leaverAdw = await listLeaverAdwPending(before.month).catch(() => null);
+    const warnings = leaverAdw && leaverAdw.pending_count > 0 ? [`${leaverAdw.pending_count} 位離職者年假補償未有平均工資記錄（系統用咗月薪÷當月日數），建議到長工糧月報頁核對`] : [];
+    return ok(brandSafeResponse({ month_close: await applyFieldGroupGate(session, "month_closes", toMonthCloseDTO(after)), reconciliation, roster_upload_coverage: coverage, warnings, leaver_adw_pending: leaverAdw?.pending_count ?? 0 }));
   });
 }
 

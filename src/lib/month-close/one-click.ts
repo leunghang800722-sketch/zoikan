@@ -27,6 +27,7 @@
 // 背景工作／advisory lock／15 分鐘卡死復原 pattern 同 `guard-fix/apply.ts`
 // ／`roster-upload/reconcile-all.ts` 一致，見
 // `src/app/api/month-close/one-click/route.ts`。
+import { listLeaverAdwPending } from "@/lib/longterm-payroll/leaver-adw-pending";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { monthRange, monthLabel, n, round2 } from "@/lib/reports/money";
@@ -222,6 +223,11 @@ export async function stepPrecheck(month: Date, _actorUserId: string, _ip: strin
     // 硬停：即刻返，唔好再落去做 (2) 卡沿用（Opus 驗收：原版照寫卡先停）。
     return { numbers, warnings, needsHuman, halt: "上月未鎖定，一鍵結算已停低——請先鎖定上月" };
   }
+
+  // (1b) P19b：離職者年假補償平均工資待確認——純提示（唔阻結算、唔阻鎖月）。
+  const leaverAdw = await listLeaverAdwPending(start);
+  numbers.leaverAdwPending = leaverAdw.pending_count;
+  if (leaverAdw.pending_count > 0) warnings.push(`${leaverAdw.pending_count} 位離職者年假補償未有平均工資記錄（系統用咗月薪÷當月日數），請到長工糧月報頁「離職者平均工資待確認」卡輸入`);
 
   // (2) 本月每個有 active 上載嘅盤：有更種？有生效價卡？冇→唔寫卡（WP-
   // PHASE3），淨係喺 needsHuman 建議去價目卡頁撳「複製上月卡到本月」（有
