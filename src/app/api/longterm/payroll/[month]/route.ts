@@ -40,6 +40,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
       prisma.longtermPayrollLine.findMany({ where: { runId: run.id }, include: { guard: { select: { nameZh: true, staffNo: true, staffNoMw: true } } }, orderBy: { createdAt: "asc" } }),
       prevRun ? prisma.longtermPayrollLine.findMany({ where: { runId: prevRun.id }, select: { guardId: true, gross: true, autopay: true } }) : Promise.resolve([]),
     ]);
+    // P19b：離職者年假補償日薪來源（additive 欄，原生 SQL 讀）
+    const basisRows = await prisma.$queryRaw<Array<{ id: string; basis: string }>>`SELECT id, al_daily_rate_basis AS basis FROM longterm_payroll_lines WHERE run_id = ${run.id} AND al_daily_rate_basis IS NOT NULL`;
+    const basisByLine = new Map(basisRows.map((r) => [r.id, r.basis]));
     const prevByGuard = new Map(prevLines.map((l) => [l.guardId, { gross: n(l.gross), autopay: n(l.autopay) }]));
 
     const linesDto = lines.map((l) => {
@@ -48,6 +51,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ month: s
         ...l,
         guardName: l.guard.nameZh,
         guardStaffNo: l.guard.staffNo ?? l.guard.staffNoMw ?? null,
+        alDailyRateBasis: basisByLine.get(l.id) ?? null,
         prevGross: prev ? prev.gross : null,
         prevAutopay: prev ? prev.autopay : null,
         grossDelta: prev ? round2(n(l.gross) - prev.gross) : null,
