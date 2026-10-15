@@ -55,6 +55,15 @@ export function effectiveOcrProvider(): OcrProviderMode | null {
   return hasDeepseek ? "deepseek" : null;
 }
 
+/**
+ * WP-OCR-4：第三讀仲裁開關 `GUARD_OCR_ARBITER`（預設 1＝開）。0／false／off／no＝關。
+ * 仲裁只用 Claude client（冇 Claude 就自動冇仲裁）；每份文件最多 1 次呼叫。
+ */
+export function ocrArbiterEnabled(): boolean {
+  const v = process.env.GUARD_OCR_ARBITER?.trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "no");
+}
+
 export function ocrModel(): string {
   return process.env.GUARD_OCR_MODEL?.trim() || DEFAULT_OCR_MODEL;
 }

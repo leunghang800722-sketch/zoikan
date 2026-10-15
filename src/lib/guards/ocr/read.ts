@@ -3,19 +3,21 @@
 // 模型輸出當資料：zod 嚴格解析（只認白名單 key，其餘丟棄），解析失敗＝該次讀全部 unclear。
 import { z } from "zod";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "./config";
-import { buildSystemPrompt, buildUserTextFull, buildUserTextTiles } from "./prompts";
-import { reconcile, type FieldResult } from "./normalize";
+import { buildArbiterSystemPrompt, buildArbiterUserText, buildSystemPrompt, buildUserTextFull, buildUserTextTiles } from "./prompts";
+import { isUnclear, normalizeField, type FieldResult } from "./normalize";
+import { reconcile } from "./reconcile";
+import { fieldReadSchema, type FieldRead } from "./field-read";
 import { OcrUnavailableError, type OcrProviderName, type VisionClient, type VisionRequest, type VisionResponse } from "./vision-client";
 import type { ReadClients } from "./clients";
 
-const fieldValue = z.union([z.string().max(400), z.number().transform((n) => String(n)), z.null()]);
-
 function outputSchema(fields: readonly OcrFieldKey[]) {
-  return z.object(Object.fromEntries(fields.map((f) => [f, fieldValue.optional()])) as Record<OcrFieldKey, z.ZodOptional<typeof fieldValue>>);
+  return z.object(Object.fromEntries(fields.map((f) => [f, fieldReadSchema.optional()])) as Record<OcrFieldKey, z.ZodOptional<typeof fieldReadSchema>>);
 }
 
-/** 抽出第一個 JSON object（容忍 ```json 圍欄），zod 解析。失敗 → null。 */
-export function parseModelJson(text: string, fields: readonly OcrFieldKey[]): Partial<Record<OcrFieldKey, string | null>> | null {
+export type ModelReads = Partial<Record<OcrFieldKey, FieldRead>>;
+
+/** 抽出第一個 JSON object（容忍 ```json 圍欄），zod 解析。每欄接受舊純字串或新 `{value,confidence,reason,alternatives}`。失敗 → null。 */
+export function parseModelJson(text: string, fields: readonly OcrFieldKey[]): ModelReads | null {
   let t = text.trim();
   const fence = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   if (fence) t = fence[1]!;
@@ -30,7 +32,7 @@ export function parseModelJson(text: string, fields: readonly OcrFieldKey[]): Pa
   }
   const r = outputSchema(fields).safeParse(raw);
   if (!r.success) return null;
-  return r.data as Partial<Record<OcrFieldKey, string | null>>;
+  return r.data as ModelReads;
 }
 
 interface ReadUsage {
@@ -55,6 +57,8 @@ export interface DocumentReadResult {
   /** 讀 A 由 Claude 退回 DeepSeek 嘅原因類別（冇退回＝null；只係固定字串） */
   fallback_reason: string | null;
   usage_by_provider: UsageByProvider;
+  /** WP-OCR-4：第三讀仲裁（每份文件最多 1 次）——called＝有冇呼叫；fields＝送去仲裁嘅分歧欄數（淨計數） */
+  arbiter: { called: boolean; fields: number };
 }
 
 export interface DocumentImages {
@@ -95,10 +99,30 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
   const [ra, rb] = await Promise.all([readA(), clients.b.complete(reqB)]);
   const pa = parseModelJson(ra.text, fields);
   const pb = parseModelJson(rb.text, fields);
+
+  // WP-OCR-4 第三讀仲裁：某欄兩讀唔同（正規化後）且兩讀 confidence 都唔係 high → 一次過問 Claude（每份文件最多 1 次）。
+  // 仲裁出錯（OcrUnavailableError）唔影響主流程：照用兩讀結果。其他錯誤（bug）原樣拋。
+  const disputed = clients.arbiter && usedA.provider === "claude" ? disputedFields(fields, pa, pb, now) : [];
+  let rArb: VisionResponse | null = null;
+  let pArb: ModelReads | null = null;
+  if (clients.arbiter && disputed.length > 0) {
+    const cands: Partial<Record<OcrFieldKey, string[]>> = {};
+    for (const f of disputed) cands[f] = candidateValues(pa?.[f], pb?.[f]);
+    const reqArb: VisionRequest = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserText(type, cands, images.tiles.length), images: [images.full, ...images.tiles], fields: disputed };
+    try {
+      rArb = await clients.arbiter.complete(reqArb);
+      pArb = parseModelJson(rArb.text, disputed);
+    } catch (e) {
+      if (!(e instanceof OcrUnavailableError)) throw e;
+    }
+  }
+
   const out: Partial<Record<OcrFieldKey, FieldResult>> = {};
-  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now);
+  for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined);
   const byProvider: UsageByProvider = { claude: { promptTokens: 0, completionTokens: 0, calls: 0 }, deepseek: { promptTokens: 0, completionTokens: 0, calls: 0 } };
-  for (const [c, r] of [[usedA, ra], [clients.b, rb]] as const) {
+  const used: [VisionClient, VisionResponse][] = [[usedA, ra], [clients.b, rb]];
+  if (rArb && clients.arbiter) used.push([clients.arbiter, rArb]);
+  for (const [c, r] of used) {
     const u = byProvider[providerOf(c)];
     u.promptTokens += r.promptTokens;
     u.completionTokens += r.completionTokens;
@@ -108,10 +132,33 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
     type,
     fields: out,
     parse_ok: { a: pa !== null, b: pb !== null },
-    usage: { promptTokens: ra.promptTokens + rb.promptTokens, completionTokens: ra.completionTokens + rb.completionTokens, calls: 2, truncated: (ra.truncated ? 1 : 0) + (rb.truncated ? 1 : 0) },
+    usage: {
+      promptTokens: used.reduce((n, [, r]) => n + r.promptTokens, 0),
+      completionTokens: used.reduce((n, [, r]) => n + r.completionTokens, 0),
+      calls: used.length,
+      truncated: used.reduce((n, [, r]) => n + (r.truncated ? 1 : 0), 0),
+    },
     provider_used: { a: providerOf(usedA), b: providerOf(clients.b) },
     model_used: { a: usedA.model, b: clients.b.model },
     fallback_reason: fallbackReason,
     usage_by_provider: byProvider,
+    arbiter: { called: rArb !== null, fields: rArb ? disputed.length : 0 },
   };
+}
+
+/** 兩讀都有值、正規化後唔同、而且兩讀 confidence 都唔係 high 嘅欄位。 */
+function disputedFields(fields: readonly OcrFieldKey[], pa: ModelReads | null, pb: ModelReads | null, now: Date): OcrFieldKey[] {
+  return fields.filter((f) => {
+    const x = pa?.[f];
+    const y = pb?.[f];
+    if (!x || !y || isUnclear(x.value) || isUnclear(y.value)) return false;
+    if (x.confidence === "high" || y.confidence === "high") return false;
+    return normalizeField(f, x.value!, now).canon !== normalizeField(f, y.value!, now).canon;
+  });
+}
+
+/** 仲裁 prompt 嘅候選值：讀 A、讀 B 主值＋各自 alternatives（去重，≤4）。 */
+function candidateValues(x: FieldRead | undefined, y: FieldRead | undefined): string[] {
+  const all = [x?.value, y?.value, ...(x?.alternatives ?? []), ...(y?.alternatives ?? [])].filter((v): v is string => typeof v === "string" && !isUnclear(v));
+  return [...new Set(all.map((v) => v.trim()))].slice(0, 4);
 }
