@@ -61,7 +61,8 @@ export function printedRefCmp(ex: DocExtract): Partial<Record<FieldName, Cmp | '
   const out: Partial<Record<FieldName, Cmp | 'not_comparable'>> = {};
   const idHkid = ex.hkid && ex.hkidValid ? canonicalHkid(ex.hkid.value) : null;
   const formHkid = ex.aux.formHkid ? canonicalHkid(ex.aux.formHkid.value) : null;
-  out.hkid = cmpHkid(formHkid, idHkid);
+  // 身份證 HKID 係靠手寫表修正（corrected_by_corroboration）嘅話，用佢對手寫表即循環證據 → 唔計
+  out.hkid = ex.hkid?.note === 'corrected_by_corroboration' ? 'no_reference' : cmpHkid(formHkid, idHkid);
   const z = cmpZh(ex.aux.formNameZh?.value ?? null, ex.nameZh?.value ?? null);
   out.nameZh = z.near ? 'no_reference' : z.r; // 差一字當軟訊號（同打字名單一致）
   out.nameEn = cmpEn(ex.aux.formNameEn?.value ?? null, ex.nameEn?.value ?? null);
@@ -140,9 +141,9 @@ export function crosscheck(
 
   const status = {} as DocCheck['status'];
   for (const f of FIELDS) {
-    // WP-OCR-1：printed 優先級高過打字名單——印刷證件有明確結果（match／mismatch）就以佢為準；冇就照舊綜合
-    const pr = cmp[f].printed;
-    status[f] = pr === 'match' || pr === 'mismatch' ? pr : fieldStatus(Object.values(cmp[f]));
+    // WP-OCR-1：printed 只可以降級——printed mismatch 生效→mismatch；printed match 永遠唔可以蓋過名單 mismatch（status 只由其他來源綜合）
+    const { printed: pr, ...others } = cmp[f];
+    status[f] = pr === 'mismatch' ? 'mismatch' : fieldStatus(Object.values(others));
   }
   const present: DocCheck['present'] = {
     hkid: !!ex.hkid,

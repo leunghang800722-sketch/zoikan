@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { OCR_CROP_FIELDS } from '@/lib/guards/ocr/field-crops';
 import { confirmedRefsFromDocs, countCross, crossForOnboarding, type Refs } from '@/lib/guards/ocr/refs';
-import { OCR_DOC_FIELDS, OCR_DOC_TYPES, type OcrDocType, type OcrFieldKey } from '@/lib/guards/ocr/config';
+import { OCR_CROSS_FIELDS, OCR_DOC_FIELDS, OCR_DOC_TYPES, type OcrDocType, type OcrFieldKey } from '@/lib/guards/ocr/config';
 import { normalizeField, type FieldResult, type FieldStatus } from '@/lib/guards/ocr/normalize';
 import { readDocument, readStageA, readStageB, type DocumentReadResult, type StageAResult } from '@/lib/guards/ocr/read';
 import type { FieldBoxes } from '@/lib/guards/ocr/field-crops';
@@ -196,6 +196,8 @@ export interface EvalReport {
   options: { limit: number | null; only_doc_type: OcrDocType | null; concurrency: number };
   cases: { total: number; ok: number; failed: number };
   overall: TallyView;
+  /** WP-OCR-1：入職表交叉核對欄（name_zh／hkid／dob）嘅獨立統計，不計入 overall／by_field */
+  cross_fields: TallyView;
   by_field: Record<string, TallyView>;
   by_doc_field: Record<string, TallyView>;
   usage: UsageSum;
@@ -214,6 +216,9 @@ export interface EvalReport {
 
 export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry' | 'live'; limit: number | null; onlyDocType: OcrDocType | null; concurrency: number; flow?: EvalFlow; refs?: boolean; now?: Date }): EvalReport {
   const overall = emptyTally();
+  const crossFields = emptyTally();
+  // WP-OCR-1：入職表 name_zh／hkid／dob 係交叉核對欄，唔計入 overall／by_field（令樣本數同 OCR-5 基線可比），另出 cross_fields
+  const isCrossField = (e: FieldEval) => e.doc === 'onboarding_form' && (OCR_CROSS_FIELDS as readonly string[]).includes(e.field);
   const byField = new Map<string, Tally>();
   const byDocField = new Map<string, Tally>();
   const usage = emptyUsage();
@@ -221,10 +226,14 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
   for (const c of outcomes) {
     if (c.ok) {
       for (const e of c.fields) {
-        addTo(overall, e);
-        addTo(byField.get(e.field) ?? byField.set(e.field, emptyTally()).get(e.field)!, e);
         const k = `${e.doc}.${e.field}`;
         addTo(byDocField.get(k) ?? byDocField.set(k, emptyTally()).get(k)!, e);
+        if (isCrossField(e)) {
+          addTo(crossFields, e);
+          continue;
+        }
+        addTo(overall, e);
+        addTo(byField.get(e.field) ?? byField.set(e.field, emptyTally()).get(e.field)!, e);
       }
     }
     const u = c.usage;
@@ -247,6 +256,7 @@ export function buildReport(outcomes: readonly CaseOutcome[], meta: { mode: 'dry
     options: { limit: meta.limit, only_doc_type: meta.onlyDocType, concurrency: meta.concurrency },
     cases: { total: outcomes.length, ok: outcomes.length - failed, failed },
     overall: view(overall),
+    cross_fields: view(crossFields),
     by_field: viewAll(byField),
     by_doc_field: viewAll(byDocField),
     usage,
@@ -269,6 +279,7 @@ export function summaryLines(r: EvalReport): string[] {
     `exact ${o.exact} (${o.pct.exact}%)｜review_contains_truth ${o.review_contains_truth} (${o.pct.review_contains_truth}%)｜wrong ${o.wrong} (${o.pct.wrong}%)，其中 confirmed 但錯 ${o.confirmed_wrong}｜missing ${o.missing} (${o.pct.missing}%)`,
     `review 率 ${o.review_rate_pct}%｜平均候選數 ${o.avg_candidates}｜估算人手改字 ${o.manual_edits_estimate} 次｜估算撳候選 ${o.chip_taps_estimate} 次`,
     `流程 ${r.flow}｜欄位級裁圖文件 ${r.field_crops_docs}｜後備 2×2 格文件 ${r.fallback_tiles_docs}`,
+    `交叉核對欄（入職表 name_zh/hkid/dob，不計入總體）：n=${r.cross_fields.n} exact ${r.cross_fields.exact}｜wrong ${r.cross_fields.wrong}｜missing ${r.cross_fields.missing}`,
     `跨文件 refs：${r.refs_enabled ? '開' : '關'}｜注入 refs 入職表文件 ${r.refs_injected_docs}｜cross match ${r.cross.match} / differs ${r.cross.differs} / unreadable ${r.cross.unreadable}`,
     `呼叫 ${r.usage.calls}（仲裁 ${r.usage.arbiter_calls} 份文件）｜tokens in ${r.usage.prompt_tokens} / out ${r.usage.completion_tokens}｜claude ${r.usage.by_provider.claude.calls} 次、deepseek ${r.usage.by_provider.deepseek.calls} 次`,
   ];

@@ -57,6 +57,7 @@ export interface CrossOutcome {
  * 入職表 reconcile 結果 vs refs → 交叉核對。有 refs 值先有該欄。
  * 保守：入職表欄只有 confirmed（兩讀一致）先拎值嚟比；review／missing 一律 unreadable
  * （讀 A 睇過 refs，讀 B 盲讀，兩讀唔一致就唔可以話「一致」）。
+ * 靠仲裁 agree_a 先 confirmed 亦當 unreadable：仲裁收讀 A 候選，唔係獨立證據。
  */
 export function crossForOnboarding(refs: Refs, formFields: Partial<Record<OcrFieldKey, FieldResult>>, now: Date = new Date()): CrossOutcome {
   const out: CrossOutcome = { form: {}, id: {} };
@@ -64,7 +65,7 @@ export function crossForOnboarding(refs: Refs, formFields: Partial<Record<OcrFie
     const idv = refs[k];
     if (!idv) continue;
     const f = formFields[k];
-    const result = f && f.status === "confirmed" ? crossCheck(f.value, idv, k, now) : "unreadable";
+    const result = f && f.status === "confirmed" && f.arbiter !== "agree_a" ? crossCheck(f.value, idv, k, now) : "unreadable";
     out.form[k] = { against: "id_card", result };
     out.id[k] = { against: "onboarding_form", result };
   }

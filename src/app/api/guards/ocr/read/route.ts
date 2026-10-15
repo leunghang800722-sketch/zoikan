@@ -191,7 +191,8 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
   // WP-OCR-1：印刷證件（final）嘅 confirmed 欄位值 → refs_token（additive，客戶端帶去入職表 stage a／b）。冇 final 文件＝唔簽發。
   const finals = items.flatMap((i) => (i.kind === "final" ? [i.r] : []));
   let refsToken: string | undefined;
-  if (finals.length > 0) {
+  // 同一請求混入入職表（舊 client 一次過傳）唔簽發：入職表讀 A 同 refs 嘅來源要分開兩次請求
+  if (finals.length > 0 && !docs.some((d) => hasCropFields(d.type))) {
     try {
       refsToken = signRefs(confirmedRefsFromDocs(finals), session.userId, secret);
     } catch {
