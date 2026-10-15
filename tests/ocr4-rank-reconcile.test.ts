@@ -49,11 +49,11 @@ describe("rankFieldCandidates：按格式驗證排序", () => {
   });
   describe("phone（8 位、首位 2–9）", () => {
     it("9 位對 8 位 → 8 位排前", () => {
-      expect(rankFieldCandidates("phone", [A("612345678"), B("61234567")], NOW).map((c) => c.value)).toEqual(["61234567", "612345678"]);
+      expect(rankFieldCandidates("phone", [A("900012345"), B("90001234")], NOW).map((c) => c.value)).toEqual(["90001234", "900012345"]);
     });
     it("首位 1 唔係香港電話 → 首位 6 排前", () => {
-      const r = rankFieldCandidates("phone", [A("11234567"), B("61234567")], NOW);
-      expect(r[0]!.value).toBe("61234567");
+      const r = rankFieldCandidates("phone", [A("10001234"), B("90001234")], NOW);
+      expect(r[0]!.value).toBe("90001234");
       expect(r[1]!.reason).toBe("phone_not_hk");
     });
     it("空格／+852 正規化後同值合併（顯示用正規化值），去重", () => {
@@ -148,10 +148,14 @@ describe("reconcile（WP-OCR-4）：候選池、舊格式相容、仲裁規則",
     // 測試甲 被兩個讀數都提到 → 加權後排第一
     expect(r.value).toBe("測試甲");
   });
-  it("一邊 unclear 但有 alternatives：仍 review，候選齊全（唔掉資訊）", () => {
-    const r = reconcile("phone", { value: "unclear", confidence: "low", reason: "blurry", alternatives: ["90001111", "90001112"] }, null);
-    expect(r).toMatchObject({ status: "review", reason: "one_read_unclear", value: "90001111" });
-    expect(r.candidates).toEqual(["90001111", "90001112"]);
+  it("一邊 unclear（有 alternatives）、另一邊有值：review one_read_unclear，候選齊全", () => {
+    const r = reconcile("phone", { value: "unclear", confidence: "low", reason: "blurry", alternatives: ["90001111", "90001112"] }, "90001113");
+    expect(r).toMatchObject({ status: "review", reason: "one_read_unclear" });
+    expect(r.candidates).toEqual(["90001113", "90001111", "90001112"]);
+  });
+  it("兩讀都 unclear 但有 alternatives：review＋預填第一個 alternative，reason＝both_unclear_alternatives", () => {
+    const r = reconcile("phone", { value: "unclear", alternatives: ["90001111"] }, "unclear");
+    expect(r).toMatchObject({ status: "review", reason: "both_unclear_alternatives", value: "90001111", candidates: ["90001111"] });
   });
   it("兩邊都 unclear 且冇 alternatives → missing", () => {
     expect(reconcile("phone", { value: "unclear" }, { value: null })).toMatchObject({ status: "missing", candidates_ranked: [] });
@@ -194,7 +198,7 @@ describe("zod：新舊格式", () => {
   const f = OCR_DOC_FIELDS.id_card;
   it("舊純字串／數字／null 照樣解析", () => {
     expect(parseModelJson('{"name_zh":"測試甲","sex":"M","dob":null}', f)).toEqual({ name_zh: { value: "測試甲" }, sex: { value: "M" }, dob: { value: null } });
-    expect(fieldReadSchema.parse(61234567)).toEqual({ value: "61234567" });
+    expect(fieldReadSchema.parse(90001234)).toEqual({ value: "90001234" });
   });
   it("新 object 格式：confidence／reason／alternatives（截 2 個、去重、去空）", () => {
     const r = parseModelJson(JSON.stringify({ name_zh: { value: "測試申", confidence: "medium", reason: "ambiguous_char", alternatives: ["測試甲", "測試甲", "測試由", "測試田", "", null] } }), f)!;
@@ -204,6 +208,15 @@ describe("zod：新舊格式", () => {
     expect(parseModelJson('{"hkid":{"value":"A1","confidence":"super","reason":"foo"}}', f)!.hkid).toEqual({ value: "A1" });
     expect(parseModelJson('{"hkid":{"value":"A1","confidence":"high","reason":null,"alternatives":[]}}', f)!.hkid).toEqual({ value: "A1", confidence: "high" });
     expect(parseModelJson('{"hkid":{"confidence":"high"}}', f)).toBeNull();
+  });
+  it("單個 alternative 超長（>400 字）只丟該項，其餘保留", () => {
+    const r = parseModelJson(JSON.stringify({ name_zh: { value: "測試申", alternatives: ["x".repeat(500), "測試甲"] } }), f)!;
+    expect(r.name_zh).toEqual({ value: "測試申", alternatives: ["測試甲"] });
+  });
+  it("confidence／reason 大小寫唔敏感", () => {
+    const r = parseModelJson('{"hkid":{"value":"A1","confidence":"HIGH","reason":"Blurry"},"sex":{"value":"M","confidence":" Medium "}}', f)!;
+    expect(r.hkid).toEqual({ value: "A1", confidence: "high", reason: "blurry" });
+    expect(r.sex!.confidence).toBe("medium");
   });
   it("同一個 JSON 混合新舊格式", () => {
     const r = parseModelJson('{"name_zh":{"value":"測試甲","confidence":"high"},"hkid":"Z900001(2)"}', f)!;
@@ -280,16 +293,16 @@ describe("diffChars／候選 chip", () => {
 describe("路徑 B：resolveField sources_disagree 輸出排序候選", () => {
   const phoneOk = (v: string) => (/^[2-9]\d{7}$/.test(v) ? null : "tel_not_hk_format");
   it("兩個手寫讀數唔同 → review＋candidates_ranked（validate 通過排前）", () => {
-    const r = resolveField([{ src: "hand_read1", value: "11234567" }, { src: "hand_read2", value: "61234567" }], { validate: phoneOk });
+    const r = resolveField([{ src: "hand_read1", value: "10001234" }, { src: "hand_read2", value: "90001234" }], { validate: phoneOk });
     expect(r).toMatchObject({ status: "review", value: null, reasons: ["sources_disagree"] });
-    expect(r.candidates_ranked!.map((c) => c.value)).toEqual(["61234567", "11234567"]);
+    expect(r.candidates_ranked!.map((c) => c.value)).toEqual(["90001234", "10001234"]);
     expect(r.candidates).toHaveLength(2); // 舊欄位不變
   });
   it("Cand.alternatives 入排序池，confidence high 同分優先；單一值路徑（確認規則）完全不受影響", () => {
-    const r = resolveField([{ src: "hand_read1", value: "61234567", confidence: "low", alternatives: ["61234568"] }, { src: "hand_read2", value: "91234567", confidence: "high" }], { validate: phoneOk });
-    expect(r.candidates_ranked!.map((c) => c.value)).toEqual(["91234567", "61234567", "61234568"]);
-    const same = resolveField([{ src: "hand_read1", value: "61234567", alternatives: ["61234568"] }, { src: "typed_pe", value: "61234567" }], { validate: phoneOk });
-    expect(same).toMatchObject({ status: "confirmed", value: "61234567" });
+    const r = resolveField([{ src: "hand_read1", value: "90001234", confidence: "low", alternatives: ["90001235"] }, { src: "hand_read2", value: "90009999", confidence: "high" }], { validate: phoneOk });
+    expect(r.candidates_ranked!.map((c) => c.value)).toEqual(["90009999", "90001234", "90001235"]);
+    const same = resolveField([{ src: "hand_read1", value: "90001234", alternatives: ["90001235"] }, { src: "typed_pe", value: "90001234" }], { validate: phoneOk });
+    expect(same).toMatchObject({ status: "confirmed", value: "90001234" });
     expect(same.candidates_ranked).toBeUndefined();
   });
   it("rankDisagreement：唔 validate 都有結果；同一排序函數（agreement 加權）", () => {

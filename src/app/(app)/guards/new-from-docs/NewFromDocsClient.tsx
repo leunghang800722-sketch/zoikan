@@ -36,6 +36,7 @@ const REASON_MSG: Record<string, string> = {
   address_format: "地址太短",
   reads_differ: "兩次辨識結果唔一樣，請對住圖揀一個或者自己改",
   one_read_unclear: "其中一次辨識睇唔清，請對住圖核對",
+  both_unclear_alternatives: "兩次都睇唔清，只有候選字，請對住圖核對",
   unclear: "睇唔清，請自己輸入",
   simplified_chars: "疑似簡體字，請對住證件核對原字",
 };

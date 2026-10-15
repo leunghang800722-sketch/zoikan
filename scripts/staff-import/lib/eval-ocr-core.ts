@@ -8,6 +8,14 @@ import { readDocument, type DocumentReadResult } from '@/lib/guards/ocr/read';
 import type { ReadClients } from '@/lib/guards/ocr/clients';
 import type { VisionClient, VisionRequest, VisionResponse } from '@/lib/guards/ocr/vision-client';
 
+/** 命令列參數錯誤：message 係固定說明（唔帶值），CLI 會原樣印出。 */
+export class ArgError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ArgError';
+  }
+}
+
 export const TRUTH_FIELDS = ['name_zh', 'name_en', 'hkid', 'dob', 'sex', 'phone', 'address', 'bank_account'] as const;
 export type TruthField = (typeof TRUTH_FIELDS)[number];
 /** 路徑 A 讀得到嘅欄位（bank_account 唔係 A 路徑嘅欄，truth 有都會略過並喺報表標明） */
@@ -344,6 +352,6 @@ export async function runEval(o: RunEvalOptions): Promise<EvalReport> {
 export function resolveReportPath(out: string, cwd: string): string {
   const abs = path.resolve(cwd, out);
   const dataDir = path.resolve(cwd, 'data') + path.sep;
-  if (!abs.startsWith(dataDir)) throw new Error('out_not_under_data');
+  if (!abs.startsWith(dataDir)) throw new ArgError('out_not_under_data: --out 必須喺 data/ 之下');
   return abs;
 }

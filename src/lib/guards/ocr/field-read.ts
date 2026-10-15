@@ -21,11 +21,14 @@ const text = z.union([z.string().max(400), z.number().transform((n) => String(n)
 const scalar = z.union([text, z.null()]);
 
 // 物件格式：value 必須出現（冇 value 當格式錯）；confidence／reason／alternatives 寬鬆——認唔得就當冇寫，唔令整個解析失敗。
+const lower = (v: unknown) => (typeof v === "string" ? v.trim().toLowerCase() : v);
+// alternatives 逐項處理：單項超長／型別錯只丟該項，唔令整個陣列消失
+const altItem = text.nullable().catch(null);
 const objectRead = z.object({
   value: scalar,
-  confidence: z.enum(READ_CONFIDENCE).optional().catch(undefined),
-  reason: z.enum(READ_REASONS).nullish().catch(undefined),
-  alternatives: z.array(scalar).optional().catch(undefined),
+  confidence: z.preprocess(lower, z.enum(READ_CONFIDENCE)).optional().catch(undefined),
+  reason: z.preprocess(lower, z.enum(READ_REASONS)).nullish().catch(undefined),
+  alternatives: z.array(altItem).optional().catch(undefined),
 });
 
 export const fieldReadSchema = z.union([

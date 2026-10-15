@@ -53,5 +53,5 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
 
   // 只有一個主讀數（或兩個主讀數都 unclear 但有 alternatives）
   const ranked = rankFieldCandidates(key, pool, now);
-  return { status: "review", value: ranked[0]?.value ?? (na ?? nb)?.display ?? "", candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason: "one_read_unclear" };
+  return { status: "review", value: ranked[0]?.value ?? (na ?? nb)?.display ?? "", candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason: ua && ub ? "both_unclear_alternatives" : "one_read_unclear" };
 }
