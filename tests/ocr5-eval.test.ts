@@ -119,12 +119,12 @@ describe("evalCaseWithRetry：失敗重試 1 次", () => {
     expect(r).toMatchObject({ ok: false, error: "OcrUnavailableError:api_error", fields: [] });
   });
   it("--only-doc-type 過濾：唔包含嘅文件唔讀、truth 欄記入 skipped", async () => {
-    const c2: EvalCase = { id: "t2", docs: [{ type: "id_card", image: "a.png" }, { type: "onboarding_form", image: "b.png" }], truth: { hkid: "Z900001(2)", phone: "90001111" } };
+    const c2: EvalCase = { id: "t2", docs: [{ type: "id_card", image: "a.png" }, { type: "onboarding_form", image: "b.png" }], truth: { sex: "M", phone: "90001111" } };
     const seen: string[] = [];
     const r = await evalCaseWithRetry(c2, base({ onlyDocType: "onboarding_form", prepare: async (p) => { seen.push(path.basename(p)); return { full: IMG, tiles: [IMG] }; } }));
     expect(seen).toEqual(["b.png"]);
     expect(r.fields.map((e) => e.field)).toEqual(["phone"]);
-    expect(r.skipped_truth_fields).toContain("hkid");
+    expect(r.skipped_truth_fields).toContain("sex");
   });
   it("runEval --limit／進度回調", async () => {
     const manifest = { cases: [c, { ...c, id: "t3" }, { ...c, id: "t4" }] };
@@ -222,11 +222,13 @@ describe("eval-ocr CLI：參數同 --dry 端到端", () => {
     const text = logs.join("\n");
     expect(text).toContain("dry（fake client）");
     expect(text).toContain("cases 6/6 ok");
-    expect(text).toContain("已評估欄位 13");
-    expect(text).toContain("exact 9 (69.2%)");
-    expect(text).toContain("review_contains_truth 2 (15.4%)");
-    expect(text).toContain("wrong 1 (7.7%)，其中 confirmed 但錯 0");
-    expect(text).toContain("missing 1 (7.7%)");
+    // OCR-1：入職表加讀姓名／HKID／出生日期（syn-01 多 3 欄 exact）→ 13 欄變 16 欄
+    expect(text).toContain("已評估欄位 16");
+    expect(text).toContain("exact 12 (75%)");
+    expect(text).toContain("review_contains_truth 2 (12.5%)");
+    expect(text).toContain("wrong 1 (6.3%)，其中 confirmed 但錯 0");
+    expect(text).toContain("missing 1 (6.3%)");
+    expect(text).toContain("注入 refs 入職表文件 1｜cross match 3 / differs 0 / unreadable 0");
     expect(text).toContain("仲裁 3 份文件");
     for (const v of ["測試甲", "Z900001", "90001111", "示範街", "syn-0", "form.png"]) expect(text).not.toContain(v);
   });

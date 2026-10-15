@@ -2305,6 +2305,15 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
   - **配額**：stage a 同舊流程各預留 1 次；stage b 唔另外預留。
   - **audit `guard_ocr_read`**：`after.stage`＝`"a"`｜`"b"`；stage a 另有 `documents[].boxes`（有效 box 欄數）；stage b 另有 `field_crops_docs`、`fallback_tiles_docs`（淨計數）。冇值、冇座標、冇 token、冇圖。
   - **電話分格線（additive）**：電話 9–10 位時 `candidates_ranked` 多來源後綴 `_grid`（剔走疑似分格線「1」後嘅 8 位推算，≤2 個），`reason:"phone_gridline_suspect"`，`status` 仍 `review`（唔自動 confirmed）；模型電話欄可帶 `digit_count`（目前只解析保留）。
+- **WP-OCR-1 跨文件上下文＋入職表交叉核對（additive；舊 client、舊單次流程完全不變）**
+  - **次序**（新 client）：① `stage:"a"` 只傳印刷文件（身份證／住址證明，帶 `tiles`；伺服器 `final:true` 直接讀完）→ 回應頂層加 **`refs_token`**；② `stage:"a"` 只傳入職表，body 加 optional **`refs_token`**；③ `stage:"b"`（入職表）body 再加 optional `refs_token`。冇 `refs_token` 或驗簽失敗＝照舊讀（唔報錯；audit 計 `refs_rejected`）。
+  - **`refs_token`**：同 `continuation` 同一套機制（HMAC-SHA256，key 由 `SESSION_SECRET` 經另一個固定 label 衍生，兩種 token 唔通用；綁 session 用戶；10 分鐘；上限 8,000 字元；唔加密）。內容＝該批印刷文件 **confirmed** 欄位值（兩讀一致＋格式啱；仲裁 2/3 確認、review、missing 一律唔收）：`name_zh`／`name_en`／`hkid`／`dob`／`sex`／`address`（冇 confirmed 就冇該欄；每值消毒、≤200 字）。可重複驗證（入職表 stage a 同 stage b 都帶），伺服器唔存 state。
+  - **注入範圍**：refs 只注入入職表**讀 A** prompt（`buildUserTextWithContext`：只可用嚟判斷潦草字係咪同一個字、唔准填圖中冇嘅內容、手寫明顯唔同就照抄並標 `reason:"differs_from_reference"`；只列該文件要抽嘅欄位）。**讀 B（欄位裁圖）同第三讀仲裁盲讀，唔帶 refs**。
+  - **入職表加讀 `name_zh`／`hkid`／`dob`**（只做交叉核對，唔覆蓋身份證值）。`stage:"a"` 入職表 `field_boxes` 多 `name_zh`／`hkid`／`dob`（可為 null）；`stage:"b"` `images_b.images` 上限由 4 升至 **`OCR_MAX_FIELD_CROPS`＝6**（`tiles` 仍 ≤4）；`field_crops` 時 `field_of` 必須包括 `phone`＋`address`，可再加 `name_zh`／`hkid`／`dob`（每欄最多一張，其他欄 400）。planFieldCrops：電話＋地址有效 box 就用欄位級裁圖；姓名／HKID／出生日期有 box 就加、冇就唔加（唔影響後備判定）。body 上限 `OCR_MAX_BODY_CHARS`（8,000,000）夠用：stage b 最多 1 全圖＋6 裁圖＝7 張 ×900,000 ≈ 6.3M＋token，所以冇調高。
+  - **`FieldResult.cross?: { against:"id_card"|"onboarding_form", result:"match"|"differs"|"unreadable" }`**（additive）：只喺 `stage:"b"` 且帶有效 `refs_token` 時由伺服器計。入職表 `name_zh`／`hkid`／`dob` 欄 `against:"id_card"`；回應頂層另加 **`id_cross`**（`{name_zh?,hkid?,dob?: {against:"onboarding_form", result}}`），client 併入身份證各欄。規則：入職表欄須 **confirmed**（兩讀一致）先拎值比（HKID 全字、出生日期比 ISO 日期、中文姓名全字）；review／missing 或手寫值格式唔成立＝`unreadable`（唔當唔一致）；格式成立但同身份證唔同＝`differs`。冇 refs＝冇 cross。
+  - **配額**：有效 `refs_token` 令「只含入職表」嘅 stage a 免再預留（credit 單次使用，process 內記 nonce）；同一流程仍只計 1 次。token 無效／已用過就照常預留。
+  - **audit `guard_ocr_read`（淨計數，冇值、冇 token）**：stage a 加 `refs_issued`（0|1）、`refs_injected_docs`、`refs_rejected`；stage b 加 `refs_rejected` 同 `cross:{match,differs,unreadable}`。
+  - **評估腳本**：`eval-ocr.ts` two-stage 同 client 一樣次序（印刷→refs→入職表）；報表加 `refs_enabled`、`refs_injected_docs`、`cross{match,differs,unreadable}`；`--no-refs` 關閉注入（亦就冇 cross）。
 - **WP-OCR-5 評估腳本**：`scripts/staff-import/eval-ocr.ts`（本機跑，用法見 `docs/ops.md`「OCR 準確度評估」）。圖片規格（1,600px 全圖、2×2 放大格 0.6／1,000px、JPEG 質素梯級）抽到 `src/lib/guards/ocr/image-plan.ts`，瀏覽器 `browser-images.ts` 同 Node 腳本共用。
   - 供應商超時／401／429／5xx／網絡（退回後仍失敗）→ **503** `{error:"ocr_unavailable", message}`（介面改為全部自己輸入）。
   - 每日上限：非老闆 100 次（`NON_BOSS_MAX_OCR_READS_PER_DAY`，只數 `guard_quota_reserve` 預留行〔kind=ocr〕，失敗／超時唔退還）→ 429；攞唔到連線 → 429「上一個請求未完成」。老闆唔受限、唔寫預留行。

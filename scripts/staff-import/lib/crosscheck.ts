@@ -53,11 +53,28 @@ export function resolveRef(idx: RefIndex, staffNo: string | null, hkid: string |
   );
 }
 
+/**
+ * WP-OCR-1：同一文件包嘅印刷身份證抽取值（ex.hkid／nameZh／nameEn／address）對同一包入面申請表手寫抽取值（ex.aux.form*）。
+ * 兩邊其中一邊冇值 → no_reference（唔估）。申請表冇抽取 dob／phone，所以兩欄不參與。
+ */
+export function printedRefCmp(ex: DocExtract): Partial<Record<FieldName, Cmp | 'not_comparable'>> {
+  const out: Partial<Record<FieldName, Cmp | 'not_comparable'>> = {};
+  const idHkid = ex.hkid && ex.hkidValid ? canonicalHkid(ex.hkid.value) : null;
+  const formHkid = ex.aux.formHkid ? canonicalHkid(ex.aux.formHkid.value) : null;
+  out.hkid = cmpHkid(formHkid, idHkid);
+  const z = cmpZh(ex.aux.formNameZh?.value ?? null, ex.nameZh?.value ?? null);
+  out.nameZh = z.near ? 'no_reference' : z.r; // 差一字當軟訊號（同打字名單一致）
+  out.nameEn = cmpEn(ex.aux.formNameEn?.value ?? null, ex.nameEn?.value ?? null);
+  if (ex.aux.formAddress && ex.address) out.address = cmpAddress(ex.aux.formAddress.value, ex.address.value);
+  return out;
+}
+
 export interface DocCheck {
   docId: string;
   staffNo: string | null;
   refs: Record<Src, { basis: Resolved['basis']; ref: string | null; ambiguous: boolean }>;
-  cmp: Record<FieldName, Record<Src | 'file', Cmp | 'not_comparable'>>;
+  /** `printed` 只喺 opts.printed 開啟時先有（additive） */
+  cmp: Record<FieldName, Record<Src | 'file', Cmp | 'not_comparable'> & { printed?: Cmp | 'not_comparable' }>;
   status: Record<FieldName, Cmp | 'mixed'>;
   nameZhNear: boolean;
   present: Record<FieldName, boolean>;
@@ -72,12 +89,15 @@ export function crosscheck(
   fileNameZh: string | null,
   idxs: Record<Src, RefIndex>,
   phoneIn: { vision: VisionRead[]; hasCrop: boolean } = { vision: [], hasCrop: false },
+  opts: { printed?: boolean } = {},
 ): DocCheck {
   const hkid = ex.hkid ? canonicalHkid(ex.hkid.value) : null;
   const zh = ex.nameZh?.value ?? fileNameZh;
   const refs = {} as DocCheck['refs'];
   const cmp = {} as DocCheck['cmp'];
   for (const f of FIELDS) cmp[f] = { utem: 'no_reference', maxwell: 'no_reference', db: 'no_reference', file: 'no_reference' };
+  const printedCmp = opts.printed ? printedRefCmp(ex) : null;
+  if (printedCmp) for (const f of FIELDS) cmp[f].printed = printedCmp[f] ?? 'no_reference';
   let near = false;
   const reasons: string[] = [];
 
@@ -119,7 +139,11 @@ export function crosscheck(
   near ||= !!fz?.near;
 
   const status = {} as DocCheck['status'];
-  for (const f of FIELDS) status[f] = fieldStatus(Object.values(cmp[f]));
+  for (const f of FIELDS) {
+    // WP-OCR-1：printed 優先級高過打字名單——印刷證件有明確結果（match／mismatch）就以佢為準；冇就照舊綜合
+    const pr = cmp[f].printed;
+    status[f] = pr === 'match' || pr === 'mismatch' ? pr : fieldStatus(Object.values(cmp[f]));
+  }
   const present: DocCheck['present'] = {
     hkid: !!ex.hkid,
     nameZh: !!ex.nameZh,

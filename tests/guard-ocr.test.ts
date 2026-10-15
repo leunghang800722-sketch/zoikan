@@ -156,7 +156,7 @@ describe("readDocument：兩次獨立讀", () => {
     const p = await readDocument(client, "address_proof", { full: IMG, tiles: [IMG] });
     expect(Object.keys(p.fields)).toEqual(["address"]);
     const f = await readDocument(client, "onboarding_form", { full: IMG, tiles: [IMG] });
-    expect(Object.keys(f.fields).sort()).toEqual(["address", "phone"]);
+    expect(Object.keys(f.fields).sort()).toEqual(["address", "dob", "hkid", "name_zh", "phone"]); // OCR-1：入職表加讀姓名／HKID／出生日期（交叉核對用）
     expect(f.fields.phone).toMatchObject({ status: "confirmed", value: SYN_TEL });
   });
   it("模型輸出解析失敗 → 該次讀全部 unclear（唔拋錯）；兩次都壞 → 全部 missing", async () => {

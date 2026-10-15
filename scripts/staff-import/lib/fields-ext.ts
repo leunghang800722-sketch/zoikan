@@ -8,7 +8,7 @@ import { acctDigitsCheck } from './hkicl-digits';
 
 export const TODAY = '2026-10-05';
 export type Status = 'confirmed' | 'review' | 'missing';
-export type SrcKind = 'typed_maxwell' | 'typed_uteam' | 'typed_pe' | 'printed_ocr' | 'printed_read1' | 'printed_read2' | 'hand_read1' | 'hand_read2' | 'bank_copy_read1' | 'bank_copy_read2';
+export type SrcKind = 'typed_maxwell' | 'typed_uteam' | 'typed_pe' | 'printed_ref' | 'printed_ocr' | 'printed_read1' | 'printed_read2' | 'hand_read1' | 'hand_read2' | 'bank_copy_read1' | 'bank_copy_read2';
 /** WP-OCR-4：confidence／alternatives 係 optional（舊呼叫照用）；alternatives 必須已經用同一個 norm 正規化，只用嚟喺 sources_disagree 時排序，唔影響確認規則。 */
 export interface Cand { src: SrcKind; value: string; ref?: string; confidence?: ReadConfidence; alternatives?: string[] }
 export interface FieldOut { value: string | null; status: Status; candidates: { value: string; sources: string[] }[]; sources: string[]; reasons: string[]; /** WP-OCR-4（additive）：sources_disagree 時按驗證排序嘅候選（≤4，與 path A 同一排序函數） */ candidates_ranked?: RankedCandidate[] }
@@ -87,6 +87,8 @@ const HAND: SrcKind[] = ['hand_read1', 'hand_read2'];
 /** 獨立證據類別：打字名單（算一個）、本機 OCR、視覺第一讀、第二（盲）讀。 */
 function evidenceClass(s: SrcKind): string {
   if (TYPED.includes(s)) return 'typed';
+  // WP-OCR-1：同一文件包嘅印刷身份證抽取值——獨立於打字名單同手寫讀數嘅證據類別
+  if (s === 'printed_ref') return 'printed_ref';
   if (s === 'printed_ocr') return 'ocr';
   if (s === 'printed_read1' || s === 'hand_read1' || s === 'bank_copy_read1') return 'read1';
   return 'read2';
