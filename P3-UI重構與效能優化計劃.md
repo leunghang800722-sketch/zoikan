@@ -1279,3 +1279,42 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **S1**（`refs.ts`）：入職表欄靠仲裁 `agree_a` 先 confirmed → `cross` 一律 `unreadable`（讀 A 睇過 refs，仲裁又收讀 A 候選，唔係獨立證據）；`agree_b` 照比。新增 test。
 - **N1**（`route.ts`）：`refs_token` 只喺該次 stage a 請求**冇**入職表時先簽發；同一請求混入入職表唔簽發。新增 test。
 - **N4**（`eval-ocr-core.ts`）：入職表 `name_zh`／`hkid`／`dob` 唔計入 `overall`／`by_field`，另出 `cross_fields`（n／exact／wrong／missing…）及 console 一行；`by_doc_field` 保留。`--dry` 數字還原為 OCR-5 基線：已評估欄位 13／exact 9（69.2%）／review_contains_truth 2／wrong 1（confirmed 錯 0）／missing 1，`cross_fields` n=3 exact 3；`manifest.dry-refs.json`：overall 42、cross_fields 18。
+
+## 28 OCR-2（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §1 問題 2／§2 OCR-2／§3 決定 1 及老闆決定「ALS 預設開，但樓層／室號絕不外送」；branch `ocr2-hk-address`，起點 main `bf1508a`，已 merge main `5d190ac`，未 merge 回 main）
+
+執行：Sonnet 5.5（`claude-sonnet-5-5`）。範圍：香港地址正規化（純函數）＋ALS 政府地址庫候選＋UI／評估／測試／文件。全程只用合成地址（虛構門牌＋真實公開街道／屋邨名）、fake ALS，冇讀 `data/` 內容、`.env` 內容（只將 DB port 改 54426）、冇 PII；ALS 查詢字串冇寫 log／audit／DB／error message。
+
+### 28.1 `hk-address.ts`／`hk-address-data.ts`（純函數，browser／Node 共用）
+- **資料表**：公共屋邨 270 個（維基百科「香港公共屋邨列表」，取自房委會公開資料，2026-10-15 由 wikitext 抽取各區表格首欄；該頁冇英文名，所以屋邨冇英文欄）、18 區中英＋區內常見地名（手編）、街道後綴、建築物後綴、手補私人屋苑 12 個、手補主要街道約 55 條（非窮盡，註明）。
+- **形近／簡繁字映射**（每條註解；簡報清單全收，另補「栅→柵」）：canon 歸一（邨村、埗步、涌湧、鰂則、埔浦、灣湾、荔茘、葵癸、嶺岭、沙砂、澳奧、邊园樓厦興華丰寶丽榮龍号…）；**角↔咀（旺角／尖沙咀）只做候選**（`candidate_only`，唔入 canon）。
+- `normalizeHkAddress(raw) → {display, canon, strict, suggested, edits[{from,to,reason,index}], parts}`：`display` 保留原讀數；`suggested`／`edits` 只喺命中屋邨／街道／地區表而原文寫法唔同先有（唔命中唔改；屋邨本身就叫「健康村」「漁光村」唔當錯）；`canon` 另做全形半形、空白標點、單位詞歸一（15/F＝15樓、Flat／Rm／Room／Unit＝室、Block／Blk／Tower＝座、Phase＝期、G/F＝地下、中文數字〇零一二…壹貳叁…→阿拉伯）；`strict`＝唔做形近字歸一嘅 canon（候選去重用，令「邨／村」係兩個候選）；`parts` 規則抽出 district／street／number／estate／block／floor／unit／building（另 phase）。
+- **ALS 外送守則**：`alsQueryFromParts(parts)` 只由 district／street／number（有 street 先帶）／estate／block／building 砌 q；floor／unit 永遠唔入；任何部件仍含樓層室號字眼（例如大廈名「利美樓」）→ 該部件整個唔送；資訊太少（冇街道／屋邨／大廈）→ null（唔查詢）；q 最後再用 `hasFloorUnitText` 斷言一次，唔過 → null；`fetchAls` 送出前再斷言一次（失敗即拋，唔發網絡）。
+
+### 28.2 `als-client.ts`（server-only）
+- `GET https://www.als.gov.hk/lookup?q=<percent-encoded>&n=3`；`Accept: application/json`、`Accept-Language: zh-Hant`；唔傳 `3d`／`floor`／`unit`；Node 原生 fetch；`AbortSignal.timeout(3000)`（注入嘅 fake 亦受 3 秒上限）；非 2xx（400／406／413／429／500）／逾時／網絡錯誤＝拋，`lookupAlsCandidate` 捕捉後回 `failed`，唔 log 查詢。
+- `parseAlsResponse` 解析 `SuggestedAddress[].Address.PremisesAddress.ChiPremisesAddress{ChiDistrict.DcDistrict, ChiStreet{StreetName,BuildingNoFrom,BuildingNoTo}, ChiEstate.EstateName, ChiBlock{BlockDescriptor,BlockNo}, BuildingName}`＋`ValidationInformation.Score`（寬鬆、防禦）。
+- `lookupAlsCandidate(address, lookup)`：由原讀數抽 parts → q → 查詢 → 取最高分（Score ≥ 60 先要）→ 本地按 `<district><street><number><estate><block><building><floor><unit>` 拼返（floor／unit 係本地保留嘅，從冇外送）→ 候選。
+- `GUARD_OCR_ALS` 預設 1（`0`／`false`／`off`／`no` 完全唔呼叫，`getReadClients` 唔帶 `als`）；測試 override（`setVisionClientForTests`）下只有注入咗 `setAlsOverride` 嘅 fake 先有 ALS，**唔會打真網絡**。
+
+### 28.3 讀取流程／reconcile／rank／route／UI／評估
+- **呼叫點**：`read.ts` `finishRead`（stage b、舊單次流程、印刷文件 final 路徑共用）——兩讀解析後、仲裁前，用預備 `reconcile("address", A, B)` 揀出要查嘅地址，每份文件最多 1 次（address_proof／onboarding_form，所以每次請求最多 2 份）；ALS 候選以 `ExtraCandidate{source:"als", als_score}` 入 reconcile，並放仲裁 prompt 最後一個候選位（當不可信字串）。`DocumentReadResult.als={called,candidate,failed}`。
+- **reconcile 地址分支**：兩讀 canon 一致＋`edits` 空 → confirmed（`大厦／大廈` 現在直接 confirmed，毋須仲裁）；`edits` 非空（兩讀一致都係）→ `review`、`reason:"address_variant_suggested"`、候選＝原文＋建議（`hk_address`）；兩讀一邊村一邊邨（canon 一致但有建議）→ review，兩個寫法都係候選。
+- **rank**：推導候選（`hk_address`、`als`）`derived`——唔算獨立讀數（唔加同意分）、分數封頂喺最高原讀數分數、同分排後（唔搶預填）；address 分組用 `strict`（邨／村 分開兩個候選，空白標點差異仍合併）；`RankedCandidate.als_score` additive。
+- **route**（additive）：每份 document 多 `als:{called,candidate,failed}`；audit `guard_ocr_read` 多 `als_called_docs`／`als_candidate_docs`／`als_failed`（淨數量）。
+- **UI**：`candidates_ranked` 嘅 ALS 候選 chip 加細字「政府地址庫」（`data-testid=ocr-chip-als-address`）；形近字建議同原文只差 1–2 字時高亮分歧字（沿用 `diffChars`）；撳 chip＝`ackAfterEdit` 規則不變；375px 實測冇橫向捲動。
+- **路徑 B**：`compare.cmpAddress` 中文地址用 `hk-address` canon（邨／村、埗／步、單位詞歸一）。
+- **評估**：`eval-ocr.ts` 報表／console 加 `als_enabled`／`als_called_docs`／`als_candidate_docs`／`als_failed`／`als_truth_from_candidate`（review_contains_truth 入面真值只來自 ALS 候選嘅欄數）；`--no-als` 唔查；`--dry` 用 `fakeAls`（照 q 回標準化結果，冇網絡）。`--dry`（`manifest.dry.json`）：已評估 13 欄、exact 9、review_contains_truth 2、wrong 1（confirmed 錯 0）、missing 1 **不變**；仲裁文件 3→2（`syn-06` 嘅「大厦／大廈」現歸一後兩讀一致，毋須仲裁）；ALS 查過文件 2／出候選 2／失敗 0。
+
+### 28.4 保守取捨（簡報冇講清）
+- 兩讀歸一後一致、`edits` 空、但字面唔同（例如兩邊都係表外嘅「某某村」／「某某邨」）→ 照簡報 confirmed，`value` 用讀 A 寫法。
+- ALS 唔改變已 confirmed 欄位；ALS 候選只喺 review 欄出現。
+- 查詢字串資訊太少（冇街道／屋邨／大廈）就唔查，寧願冇候選都唔送半截地址；大廈名含「樓」嘅部件整個唔送。
+- ALS Score 當 0–100（≥ 60 先要）；`ChiBlock` 拼法：描述係「座／閣／樓」→ `<號><描述>`，否則 `<描述><號>`（規格冇講中文序，揀最常見寫法）。
+- parts 只取第一個命中嘅已知屋邨；地區只認開頭連續嘅地名；一個地址有多個「樓／室」只當 floor／unit 全部剔走（保守）。
+- `eval --dry` 嘅 `syn-06` 預期行為變咗（仲裁 3→2），`ocr5-eval.test.ts` 斷言相應更新並加 ALS 行斷言。
+- Worktree 環境同 OCR-1：`node_modules` 以 `cp -c` 自 `zoi-kan-wt-ocr1` 複製（冇 `prisma generate`）；e2e seed 用 `data/`、`tools/importer/out` symlink 指向主 repo（冇讀內容，已隨後保留為 gitignored symlink）；Playwright 用 `next build`＋`next start`，設 dummy `DEEPSEEK_API_KEY`（辨識 API 全部 `page.route` 攔截）。
+
+### 28.5 驗證
+- vitest（隔離 PG 54426）見最後回報數字；新增 `tests/ocr2-hk-address.test.ts`（形近字 31 條＋易混字／表命中／屋邨本名／中文數字、parts 24 條、q 唔含樓層室號 20 種寫法＋部件剔除／資訊太少／斷言／fetchAls 唔發網絡、ALS fake〔成功／Score 低／冇結果／429·500·網絡／timeout／資訊太少／parseAlsResponse〕、reconcile 地址分支、`readDocument`×ALS 整合〔每份 1 次、失敗、仲裁 prompt、`GUARD_OCR_ALS=0`／override 唔打網絡〕、cmpAddress）；`ocr5-eval.test.ts` 斷言更新。
+- Playwright 全套（隔離 dev PG 54426、`next build`＋`next start` 3188、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**273 passed｜4 skipped（原有）｜0 failed**（含新 `ocr-als-chip.spec.ts` 3 條：ALS chip「政府地址庫」＋撳套用、形近字建議高亮、手機 375px）。
+- `gate:locked-months`（隔離 dev PG 54426）：除 `gate-ltpay-aug`（rc=1＝其已知 harness 差異）外 11 步 rc=0；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**55/56 吻合＋1 已知差異**（逐欄 gross=1、mpfEe=1、mpfEr=1、autopay=1、workDays=1＝同一人），同 §25–§27 逐個相同。

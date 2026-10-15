@@ -14,7 +14,7 @@ export interface HkDistrict {
   areas: readonly string[];
 }
 
-export const HK_REGIONS: readonly string[] = ["港島", "香港島", "九龍", "新界"];
+export const HK_REGIONS: readonly string[] = ["香港", "港島", "香港島", "九龍", "新界"];
 
 export const HK_DISTRICTS: readonly HkDistrict[] = [
   { zh: "中西區", en: "Central and Western", areas: ["中環", "上環", "西環", "堅尼地城", "半山", "西營盤", "石塘咀"] },
@@ -40,11 +40,9 @@ export const HK_DISTRICTS: readonly HkDistrict[] = [
 /** 街道後綴（中文） */
 export const STREET_SUFFIXES: readonly string[] = ["大道", "道", "街", "路", "里", "徑", "巷", "坊", "圍", "橋"];
 /** 屋邨／屋苑後綴 */
-export const ESTATE_SUFFIXES: readonly string[] = ["新邨", "邨", "苑", "花園", "山莊", "半島", "城", "園"];
+export const ESTATE_SUFFIXES: readonly string[] = ["新邨", "邨", "苑", "花園", "山莊", "半島", "城"];
 /** 大廈／建築物後綴 */
 export const BUILDING_SUFFIXES: readonly string[] = ["工業大廈", "工廠大廈", "商業大廈", "大廈", "大樓", "中心", "廣場", "商場", "閣", "臺", "台", "軒", "居", "樓", "莊", "匯"];
-/** 單位詞（中文） */
-export const UNIT_WORDS: readonly string[] = ["樓", "室", "座", "期", "號", "舖", "鋪"];
 
 /** 公共屋邨名（房委會）。 */
 export const HK_ESTATES: readonly string[] = [

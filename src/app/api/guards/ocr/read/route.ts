@@ -203,7 +203,7 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
   const documents = items.map((i) => {
     if (i.kind === "final") {
       const r = i.r;
-      return { type: r.type, final: true, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used, model_used: r.model_used, arbiter: r.arbiter, images_b_kind: r.images_b_kind, field_boxes_used: r.field_boxes_used };
+      return { type: r.type, final: true, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used, model_used: r.model_used, arbiter: r.arbiter, images_b_kind: r.images_b_kind, field_boxes_used: r.field_boxes_used, als: r.als };
     }
     const r = i.r;
     return {
@@ -239,6 +239,7 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
       images: docs.reduce((n, d) => n + 1 + (hasCropFields(d.type) ? 0 : d.tiles!.length), 0),
       ms,
       arbiter_calls: items.filter((i) => i.kind === "final" && i.r.arbiter.called).length,
+      ...alsCounts(finals),
       // WP-OCR-1：淨計數（冇值）——簽發咗 refs_token 冇／幾多份入職表讀 A 注入咗 refs／帶嚟嘅 refs_token 驗簽失敗
       refs_issued: refsToken ? 1 : 0,
       refs_injected_docs: refsInjectedDocs,
@@ -346,6 +347,15 @@ async function handleLegacy(req: Request, session: Session, raw: unknown): Promi
   }
 }
 
+/** WP-OCR-2 audit 只加計數（冇查詢字串、冇地址）：查過 ALS 嘅文件數／出咗候選嘅文件數／查失敗數。 */
+function alsCounts(results: readonly Pick<DocumentReadResult, "als">[]) {
+  return {
+    als_called_docs: results.filter((r) => r.als.called).length,
+    als_candidate_docs: results.filter((r) => r.als.candidate).length,
+    als_failed: results.filter((r) => r.als.failed).length,
+  };
+}
+
 /** WP-OCR-3 audit 只加計數：用欄位級裁圖嘅文件數／本應欄位級但退回 2×2 格嘅文件數。 */
 function stageBCounts(results: readonly DocumentReadResult[]) {
   return {
@@ -381,7 +391,7 @@ async function respondResults(req: Request, session: Session, client: ReturnType
     // truncated_calls：撞 output token 上限嘅呼叫數（只記數量，冇內容）
     // arbiter_calls：第三讀仲裁呼叫數（只記數量）
     // WP-OCR-1：stage b 另記交叉核對計數（match／differs／unreadable）同 refs_rejected——淨數字
-    after: { ok: true, ...(stage ? { stage, ...stageBCounts(results) } : {}), ...(extra ? { refs_rejected: extra.refsRejected, ...(extra.cross ? { cross: countCross(extra.cross) } : {}) } : {}), model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, arbiter_calls: results.filter((r) => r.arbiter.called).length, ...usage },
+    after: { ok: true, ...(stage ? { stage, ...stageBCounts(results) } : {}), ...(extra ? { refs_rejected: extra.refsRejected, ...(extra.cross ? { cross: countCross(extra.cross) } : {}) } : {}), model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, arbiter_calls: results.filter((r) => r.arbiter.called).length, ...alsCounts(results), ...usage },
     ip: getClientIp(req),
   });
   return NextResponse.json({
@@ -395,6 +405,6 @@ async function respondResults(req: Request, session: Session, client: ReturnType
     ...(extra?.cross && Object.keys(extra.cross.id).length > 0 ? { id_cross: extra.cross.id } : {}),
     models_used: { a: results.every((r) => r.model_used.a === results[0]!.model_used.a) ? results[0]!.model_used.a : results.find((r) => r.provider_used.a === "deepseek")!.model_used.a, b: results[0]?.model_used.b ?? client.b.model },
     // WP-OCR-4（additive）：每欄多 candidates_ranked／arbiter；每份文件多 arbiter { called, fields }（淨計數）
-    documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used, arbiter: r.arbiter, images_b_kind: r.images_b_kind, field_boxes_used: r.field_boxes_used })),
+    documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used, arbiter: r.arbiter, images_b_kind: r.images_b_kind, field_boxes_used: r.field_boxes_used, als: r.als })),
   });
 }
