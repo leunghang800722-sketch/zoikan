@@ -22,7 +22,8 @@ describe("申請表地址定位", () => {
     const r = locateFormAddressBox([L("地址：", 0.06, 0.62), L("Address：", 0.06, 0.61), L("香港身份證：", 0.06, 0.57), L("聯絡電話", 0.06, 0.5)], "b");
     expect(r?.template).toBe("B");
     expect(r!.box.y0).toBeGreaterThan(0.57);
-    expect(r!.box.y1).toBeLessThan(0.66);
+    // WP-OCR-3：外擴按行高比例（variant b 最少 0.042），上界＝label 頂 0.63 + 0.042
+    expect(r!.box.y1).toBeLessThan(0.68);
   });
   it("後備：只有『通訊地址』／『香港身份證：』label；全冇 → null", () => {
     expect(locateFormAddressBox([L("通訊地址（如與上述不同請提供）：", 0.13, 0.575)], "a")?.template).toBe("A");

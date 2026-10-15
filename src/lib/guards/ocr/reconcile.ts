@@ -28,6 +28,14 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
   if (rr) pushMain("arbiter", rr, urr);
   for (const [src, r] of [["a", ra], ["b", rb], ...(rr ? [["arbiter", rr] as const] : [])] as const) for (const v of usableAlts(r)) pool.push({ value: v, source: `${src}_alt` });
 
+  // WP-OCR-3：電話 9–10 位 → 剔走疑似分格線「1」嘅推算候選入池（排序靠格式驗證；唔自動確認）
+  if (key === "phone") {
+    for (const [src, r, unclear] of [["a", ra, ua], ["b", rb, ub], ...(rr ? [["arbiter", rr, urr] as const] : [])] as const) {
+      if (unclear) continue;
+      for (const v of normalizeField(key, r.value!, now).extra ?? []) pool.push({ value: v, source: `${src}_grid` });
+    }
+  }
+
   if (ua && ub && pool.length === 0) return { status: "missing", value: "", candidates: [], candidates_ranked: [], reason: "unclear" };
   const na = ua ? null : normalizeField(key, ra.value!, now);
   const nb = ub ? null : normalizeField(key, rb.value!, now);

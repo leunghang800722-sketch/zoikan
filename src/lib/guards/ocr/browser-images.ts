@@ -4,6 +4,7 @@
 // - 圖片只留喺瀏覽器記憶體（Blob／object URL）；儲存／離開頁面即 revoke
 import { OCR_MAX_IMAGE_CHARS } from "./config";
 import { FULL_MAX_EDGE, JPEG_LAST_QUALITY, JPEG_QUALITIES, SOURCE_MAX_EDGE, TILE_MAX_EDGE, scaledSize, tileRects } from "./image-plan";
+import type { FieldCrop } from "./field-crops";
 
 // WP-OCR-5：規格常數／分格座標／縮圖尺寸抽咗去 image-plan.ts（同 Node 評估腳本共用）；呢度保留 re-export 俾舊 import。
 export { tileRects };
@@ -15,6 +16,8 @@ export interface PreparedImage {
   tiles: string[];
   /** 並排核對用嘅 object URL（要 revoke） */
   previewUrl: string;
+  /** WP-OCR-3：2,400px 來源 canvas（欄位級裁圖用；只有 keepSource 時保留，其他文件出完 full／tiles 即釋放） */
+  source?: HTMLCanvasElement;
 }
 
 function makeCanvas(w: number, h: number): HTMLCanvasElement {
@@ -44,11 +47,29 @@ function toJpegDataUrl(c: HTMLCanvasElement): string {
   return c.toDataURL("image/jpeg", JPEG_LAST_QUALITY);
 }
 
-export async function prepareFromCanvas(source: HTMLCanvasElement): Promise<PreparedImage> {
+export async function prepareFromCanvas(source: HTMLCanvasElement, keepSource = false): Promise<PreparedImage> {
   const fullCanvas = drawScaled(source, 0, 0, source.width, source.height, FULL_MAX_EDGE);
   const tiles = tileRects(source.width, source.height).map(([x, y, w, h]) => toJpegDataUrl(drawScaled(source, x, y, w, h, TILE_MAX_EDGE)));
   const blob = await new Promise<Blob>((resolve, reject) => fullCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob"))), "image/jpeg", 0.8));
-  return { full: toJpegDataUrl(fullCanvas), tiles, previewUrl: URL.createObjectURL(blob) };
+  const out = { full: toJpegDataUrl(fullCanvas), tiles, previewUrl: URL.createObjectURL(blob) };
+  if (keepSource) return { ...out, source };
+  // 驗收 N4：唔需要欄位級裁圖嘅文件即刻釋放 2,400px canvas 記憶體
+  source.width = 0;
+  source.height = 0;
+  return out;
+}
+
+/** WP-OCR-3：按 field-crops 計劃由來源 canvas 裁欄位級圖（矩形／輸出尺寸全部由純函數算好，呢度淨係畫）。 */
+export function cropFieldsFromCanvas(source: HTMLCanvasElement, crops: readonly FieldCrop[]): string[] {
+  return crops.map((c) => {
+    const out = makeCanvas(c.out.w, c.out.h);
+    const ctx = out.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, c.rect.x, c.rect.y, c.rect.w, c.rect.h, 0, 0, out.width, out.height);
+    return toJpegDataUrl(out);
+  });
 }
 
 export async function canvasFromImageFile(file: File): Promise<HTMLCanvasElement> {

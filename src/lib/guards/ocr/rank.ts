@@ -13,7 +13,7 @@ const ARBITER_BONUS = 3;
 
 export interface RankInput {
   value: string;
-  /** 來源標籤：a／b／arbiter（主讀數）；後綴 `_alt`＝該讀數嘅 alternatives（confidence 當最低） */
+  /** 來源標籤：a／b／arbiter（主讀數）；後綴 `_alt`＝該讀數嘅 alternatives、`_grid`＝電話分格線剔走 1 嘅推算候選（confidence 都當最低） */
   source: string;
   confidence?: ReadConfidence;
 }
@@ -27,7 +27,7 @@ export interface RankedCandidate {
 
 const CONF_RANK: Record<ReadConfidence, number> = { high: 3, medium: 2, low: 1 };
 /** 冇寫 confidence（舊格式）當 medium；alternatives 永遠最低 */
-const confRank = (i: RankInput): number => (i.source.endsWith("_alt") ? 0 : i.confidence ? CONF_RANK[i.confidence] : 2);
+const confRank = (i: RankInput): number => (/_(alt|grid)$/.test(i.source) ? 0 : i.confidence ? CONF_RANK[i.confidence] : 2);
 
 const BASE_BY_REASON: Record<string, number> = {
   hkid_check_digit: 40,
@@ -35,6 +35,7 @@ const BASE_BY_REASON: Record<string, number> = {
   dob_year_implausible: 40,
   dob_calendar: 5,
   phone_not_hk: 30,
+  phone_gridline_suspect: 20,
   phone_format: 5,
   simplified_chars: 60,
   name_zh_format: 5,
@@ -50,7 +51,7 @@ function validityScore(key: OcrFieldKey, n: Normalized): number {
   return 70 + (/\p{Script=Han}/u.test(n.canon) ? 10 : 0) + (/[0-9]/.test(n.canon) && /[樓室座號鋪舖層]|\/F|FLAT|ROOM|RM |BLOCK/.test(n.canon) ? 10 : 0);
 }
 
-const readOf = (source: string) => source.replace(/_alt$/, "");
+const readOf = (source: string) => source.replace(/_(alt|grid)$/, "");
 
 /** 通用排序核心：按 canon 合併同值、算分、排序、截 4。scoreOf 回 { canon, display, base, reason }。 */
 export function rankPool(inputs: readonly RankInput[], scoreOf: (value: string) => { canon: string; display: string; base: number; reason: string }): RankedCandidate[] {
