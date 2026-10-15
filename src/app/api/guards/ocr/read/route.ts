@@ -10,7 +10,7 @@ import { getClientIp, handleApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
 import { reserveQuota } from "@/lib/guards/import/limits";
 import { OCR_DOC_TYPES, OCR_FIELDS, OCR_MAX_BODY_CHARS, OCR_MAX_DOCS, OCR_MAX_IMAGE_CHARS, OCR_MAX_TILES, isGuardOcrConfigured, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
-import { OCR_CROP_FIELDS } from "@/lib/guards/ocr/field-crops";
+import { OCR_CROP_FIELDS, hasCropFields } from "@/lib/guards/ocr/field-crops";
 import { CONTINUATION_INVALID_MSG, OCR_MAX_CONTINUATION_CHARS, signContinuation, verifyContinuation } from "@/lib/guards/ocr/continuation";
 import { OcrUnavailableError } from "@/lib/guards/ocr/vision-client";
 import { getReadClients } from "@/lib/guards/ocr/clients";
@@ -34,7 +34,7 @@ const bodySchema = z
   })
   .strict();
 
-// WP-OCR-3 stage a：同舊 body，tiles optional（兩段式唔需要，有傳都忽略）
+// WP-OCR-3 stage a：同舊 body，tiles optional（入職表唔需要；身份證／住址證明要帶，伺服器直接讀完回 final:true）
 const bodyASchema = z
   .object({
     stage: z.literal("a"),
@@ -151,14 +151,23 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
   if (!parsed.success) throw BadRequest(`請求格式唔啱（${zodPath(parsed.error)}）`);
   const docs = parsed.data.documents;
   if (new Set(docs.map((d) => d.type)).size !== docs.length) throw BadRequest("每種文件只可以傳一份");
+  // 驗收 S3：非入職表文件（冇欄位級裁圖設計）要帶 tiles，伺服器直接讀完
+  if (docs.some((d) => !hasCropFields(d.type) && !(d.tiles && d.tiles.length > 0))) throw BadRequest("請求格式唔啱（documents.tiles）");
   await reserveQuota(session, "ocr");
   const got = clientsOr503();
   if ("res" in got) return got.res;
   const client = got.client;
+  // WP-OCR-3 驗收 S3：兩段式只用於有欄位級裁圖設計嘅文件（入職表）。其他類型（身份證／住址證明）要帶 tiles，
+  // 伺服器直接 A＋B(2×2) 並行讀完回最終 fields（final:true），唔發 continuation。
   const t0 = Date.now();
-  let results: StageAResult[];
+  type Item = { kind: "a"; r: StageAResult } | { kind: "final"; r: DocumentReadResult };
+  let items: Item[];
   try {
-    results = await Promise.all(docs.map((d) => readStageA(client, d.type, d.full)));
+    items = await Promise.all(
+      docs.map(async (d): Promise<Item> =>
+        hasCropFields(d.type) ? { kind: "a", r: await readStageA(client, d.type, d.full) } : { kind: "final", r: await readDocument(client, d.type, { full: d.full, tiles: d.tiles! }) },
+      ),
+    );
   } catch (e) {
     if (e instanceof OcrUnavailableError) {
       await auditUnavailable(session, req, e, client.a.model, docs.map((d) => d.type), docs.length, Date.now() - t0, "a");
@@ -167,25 +176,49 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
     throw e;
   }
   const ms = Date.now() - t0;
-  const usage = sumUsage(results);
+  const usage = sumUsage(items.map((i) => i.r));
   const secret = sessionSecret();
-  const documents = results.map((r) => ({
-    type: r.type,
-    // 欄位 box（0–1 正規化版面座標，唔含任何辨識值）；冇有效 box＝空物件
-    field_boxes: r.field_boxes,
-    continuation: signContinuation({ type: r.type, uid: session.userId, a: r.a_fields_raw, boxes: r.field_boxes, provider: r.provider, model: r.model, fb: r.fallback_reason, usage: r.usage }, secret),
-    parse_ok: { a: r.parse_ok },
-    provider_used: { a: r.provider },
-    model_used: { a: r.model },
-  }));
-  const providerUsed = { a: results.every((r) => r.provider === "claude") ? ("claude" as const) : ("deepseek" as const) };
+  const documents = items.map((i) => {
+    if (i.kind === "final") {
+      const r = i.r;
+      return { type: r.type, final: true, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used, model_used: r.model_used, arbiter: r.arbiter, images_b_kind: r.images_b_kind, field_boxes_used: r.field_boxes_used };
+    }
+    const r = i.r;
+    return {
+      type: r.type,
+      // 欄位 box（0–1 正規化版面座標，唔含任何辨識值）；冇有效 box＝空物件
+      field_boxes: r.field_boxes,
+      continuation: signContinuation({ type: r.type, uid: session.userId, a: r.a_fields_raw, boxes: r.field_boxes, provider: r.provider, model: r.model, fb: r.fallback_reason, usage: r.usage }, secret),
+      parse_ok: { a: r.parse_ok },
+      provider_used: { a: r.provider },
+      model_used: { a: r.model },
+    };
+  });
+  const provA = items.map((i) => (i.kind === "a" ? i.r.provider : i.r.provider_used.a));
+  const providerUsed = { a: provA.every((p) => p === "claude") ? ("claude" as const) : ("deepseek" as const) };
   await writeAudit({
     actorUserId: session.userId,
     tableName: "guard_ocr",
     rowId: session.userId,
     action: "guard_ocr_read",
-    // stage a：淨記文件類型、有效 box 欄數、tokens、耗時（冇值、冇 box 座標、冇 continuation）
-    after: { ok: true, stage: "a", model: client.a.model, provider_used: providerUsed, claude_fallbacks: results.flatMap((r) => (r.fallback_reason ? [r.fallback_reason] : [])), documents: results.map((r) => ({ type: r.type, boxes: Object.keys(r.field_boxes).length, parse_failed: r.parse_ok ? 0 : 1 })), images: docs.length, ms, ...usage },
+    // stage a：淨記文件類型、有效 box 欄數、tokens、耗時（冇值、冇 box 座標、冇 continuation）；final 文件另記狀態計數
+    after: {
+      ok: true,
+      stage: "a",
+      model: client.a.model,
+      provider_used: providerUsed,
+      claude_fallbacks: items.flatMap((i) => (i.r.fallback_reason ? [i.r.fallback_reason] : [])),
+      documents: items.map((i) => {
+        if (i.kind === "a") return { type: i.r.type, boxes: Object.keys(i.r.field_boxes).length, parse_failed: i.r.parse_ok ? 0 : 1 };
+        const counts = { confirmed: 0, review: 0, missing: 0 };
+        for (const f of Object.values(i.r.fields)) if (f) counts[f.status] += 1;
+        return { type: i.r.type, final: true, ...counts, parse_failed: (i.r.parse_ok.a ? 0 : 1) + (i.r.parse_ok.b ? 0 : 1) };
+      }),
+      images: docs.reduce((n, d) => n + 1 + (hasCropFields(d.type) ? 0 : d.tiles!.length), 0),
+      ms,
+      arbiter_calls: items.filter((i) => i.kind === "final" && i.r.arbiter.called).length,
+      ...usage,
+    },
     ip: getClientIp(req),
   });
   return NextResponse.json({ stage: "a", model: client.a.model, ms, usage: { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, calls: usage.calls }, provider_used: providerUsed, documents });

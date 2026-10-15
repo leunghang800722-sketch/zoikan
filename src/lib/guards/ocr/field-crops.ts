@@ -105,9 +105,11 @@ export function padBox(box: NormBox, allBoxes: readonly NormBox[], imgW: number,
   const others = allBoxes.map((b) => toPx(b, imgW, imgH));
   const cy = o.y + o.h / 2;
   const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0) > 0;
+  // 鄰欄分類（驗收 S1）：同自己垂直重疊 <20%（以較矮者高度計）＝上／下鄰欄；否則（幾乎同一行）＝左右鄰欄。
+  const isRow = (p: PixelRect) => Math.min(o.y + o.h, p.y + p.h) - Math.max(o.y, p.y) >= 0.2 * Math.min(o.h, p.h);
   // 先縱
   for (const p of others) {
-    if (!overlap(left, right, p.x, p.x + p.w)) continue;
+    if (isRow(p) || !overlap(left, right, p.x, p.x + p.w)) continue;
     const pc = p.y + p.h / 2;
     if (pc < cy) top = Math.max(top, p.y + p.h - intr * p.h);
     else if (pc > cy) bottom = Math.min(bottom, p.y + intr * p.h);
@@ -115,10 +117,10 @@ export function padBox(box: NormBox, allBoxes: readonly NormBox[], imgW: number,
   // 唔縮入原 box
   top = Math.min(top, o.y);
   bottom = Math.max(bottom, o.y + o.h);
-  // 後橫
+  // 後橫（只睇同一行嘅鄰欄）
   const cx = o.x + o.w / 2;
   for (const p of others) {
-    if (!overlap(top, bottom, p.y, p.y + p.h)) continue;
+    if (!isRow(p) || !overlap(top, bottom, p.y, p.y + p.h)) continue;
     const pc = p.x + p.w / 2;
     if (pc < cx) left = Math.max(left, p.x + p.w - intr * p.h);
     else if (pc > cx) right = Math.min(right, p.x + intr * p.h);

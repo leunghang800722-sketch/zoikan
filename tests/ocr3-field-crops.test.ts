@@ -25,7 +25,7 @@ import { padAround, isLabelLine } from "../scripts/staff-import/lib/crop-pad";
 import { locatePhoneBox } from "../scripts/staff-import/lib/phone-crop";
 import { locateFormAddressBox } from "../scripts/staff-import/lib/form-address-crop";
 import { acctDigitsReason, normAcct } from "../scripts/staff-import/lib/fields-ext";
-import { acctDigitsCheck } from "../scripts/staff-import/lib/hkicl-digits";
+import { HKICL_ACCT_DIGITS, acctDigitsCheck } from "../scripts/staff-import/lib/hkicl-digits";
 import type { OcrLine } from "../scripts/staff-import/lib/ocr";
 
 const IMG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD";
@@ -107,6 +107,25 @@ describe("padBox 幾何", () => {
     // l 右緣 = 0.25*2000 = 500px，高 150px → m 左緣 ≥ 500 − 30
     expect(r.x).toBeGreaterThanOrEqual(470);
     expect(r.x).toBeLessThanOrEqual(0.26 * W);
+  });
+  it("驗收 S1：同一行並排嘅電話／地址互為左右鄰欄，上下外擴仍係完整 1.2×h（唔被對方截停）", () => {
+    const W1 = 1800;
+    const H1 = 2400;
+    const ph: NormBox = { x: 0.05, y: 0.3, w: 0.35, h: 0.04 };
+    const ad: NormBox = { x: 0.41, y: 0.295, w: 0.5, h: 0.06 };
+    for (const [b, hPx] of [[ph, 0.04 * H1], [ad, 0.06 * H1]] as const) {
+      const r = padBox(b, [ph, ad], W1, H1);
+      const padY = Math.max(1.2 * hPx, 0.03 * H1);
+      expect(r.y).toBe(Math.floor(b.y * H1 - padY));
+      expect(r.y + r.h).toBe(Math.ceil((b.y + b.h) * H1 + padY));
+    }
+    // 左右仍然唔越入對方 20% 以上
+    const rp = padBox(ph, [ph, ad], W1, H1);
+    expect(rp.x + rp.w).toBeLessThanOrEqual(Math.ceil(0.41 * W1 + 0.2 * 0.06 * H1));
+    // 真正上下疊嘅（重疊 <20%）仍然受限
+    const top: NormBox = { x: 0.1, y: 0.3, w: 0.5, h: 0.05 };
+    const bot: NormBox = { x: 0.1, y: 0.36, w: 0.8, h: 0.08 };
+    expect(padBox(top, [top, bot], W1, H1).y + padBox(top, [top, bot], W1, H1).h).toBeLessThanOrEqual(Math.ceil(0.36 * H1 + 0.2 * 0.08 * H1));
   });
   it("cropOutSize：長邊縮到 1,000；細過放大但最多 2×", () => {
     expect(cropOutSize(2000, 400)).toEqual({ w: 1000, h: 200 });
@@ -365,24 +384,15 @@ describe("電話分格線（9–10 位）", () => {
   });
 });
 
-describe("戶口號碼位數（HKICL 表）", () => {
-  it("acctDigitsCheck：表內銀行位數對／唔對；表外銀行／冇代號 → unknown_bank", () => {
-    expect(acctDigitsCheck("123456789", "004")).toBe("ok");
-    expect(acctDigitsCheck("123456789012", "004")).toBe("ok");
-    expect(acctDigitsCheck("12345678901", "004")).toBe("mismatch");
-    expect(acctDigitsCheck("123456789012", "012")).toBe("ok");
-    expect(acctDigitsCheck("12345678901234", "012")).toBe("ok");
-    expect(acctDigitsCheck("123456789", "024")).toBe("ok");
-    expect(acctDigitsCheck("1234567890", "024")).toBe("mismatch");
-    expect(acctDigitsCheck("1234567890", "999")).toBe("unknown_bank");
-    expect(acctDigitsCheck("1234567890", null)).toBe("unknown_bank");
-    expect(acctDigitsCheck("123456789", "4")).toBe("ok"); // padStart(3)
+describe("戶口號碼位數（HKICL 表，驗收 S2：表暫時清空）", () => {
+  it("表空＝所有銀行 unknown_bank，唔判錯（函數保留，待戶口格式正規化後再填）", () => {
+    expect(Object.keys(HKICL_ACCT_DIGITS)).toEqual([]);
+    for (const code of ["004", "012", "024", "999", null]) for (const d of ["123456789", "1234567890", "123456789012"]) expect(acctDigitsCheck(d, code)).toBe("unknown_bank");
   });
-  it("acctDigitsReason：只喺表內銀行位數唔啱先回 acct_digits_mismatch；normAcct 本身行為不變", () => {
-    expect(acctDigitsReason("012-345678", "004")).toBeNull(); // 9 位
-    expect(acctDigitsReason("0123456789", "004")).toBe("acct_digits_mismatch"); // 10 位
-    expect(acctDigitsReason("0123456789", "050")).toBeNull();
-    expect(acctDigitsReason("abc", "004")).toBeNull(); // 本身唔合格式（normAcct null）另有處理
+  it("acctDigitsReason 全部 null；normAcct 本身行為不變", () => {
+    expect(acctDigitsReason("0123456789", "004")).toBeNull();
+    expect(acctDigitsReason("012345678", "012")).toBeNull();
+    expect(acctDigitsReason("abc", "004")).toBeNull();
     expect(normAcct("012-345678-9")).toBe("0123456789");
     expect(normAcct("12345")).toBeNull();
   });
@@ -496,6 +506,57 @@ describe("兩段式 client 流程（readTwoStage）", () => {
   });
 });
 
+describe("readTwoStage：混合文件＋429／503 唔退回（驗收 S3／N2）", () => {
+  const doc = { type: "onboarding_form" as const, full: IMG + "F", tiles: [IMG, IMG, IMG, IMG], sourceW: 2400, sourceH: 3200 };
+  const idDoc = { type: "id_card" as const, full: IMG + "I", tiles: [IMG + "1", IMG + "2", IMG + "3", IMG + "4"], sourceW: 0, sourceH: 0 };
+  const finalId = { type: "id_card", final: true, fields: { hkid: { status: "confirmed", value: "x" } }, images_b_kind: "tiles" };
+  const formA = { type: "onboarding_form", field_boxes: { phone: PHONE, address: ADDR }, continuation: "tok" };
+  const ok = (documents: unknown[]) => ({ ok: true as const, data: { model: "m", ms: 10, usage: { prompt_tokens: 1, completion_tokens: 1, calls: 3 }, documents } });
+  it("身份證 final:true 唔打 stage b；入職表照 a→裁→b；documents 按上載次序合併", async () => {
+    const bodies: { stage: string; documents: { type: string; tiles?: unknown[] }[] }[] = [];
+    const out = await readTwoStage([idDoc, doc], {
+      post: async (body) => {
+        const b = body as (typeof bodies)[number];
+        bodies.push(b);
+        if (b.stage === "a") return ok([finalId, formA]) as never;
+        return { ok: true, data: { ms: 5, usage: { prompt_tokens: 1, completion_tokens: 1, calls: 1 }, documents: [{ type: "onboarding_form", fields: {}, images_b_kind: "field_crops" }] } } as never;
+      },
+      crop: (_d, p) => p.crops.map(() => IMG),
+    });
+    expect(out.ok).toBe(true);
+    expect(bodies.map((b) => b.stage)).toEqual(["a", "b"]);
+    expect(bodies[0]!.documents.find((d) => d.type === "id_card")!.tiles).toHaveLength(4);
+    expect(bodies[0]!.documents.find((d) => d.type === "onboarding_form")!.tiles).toBeUndefined();
+    expect(bodies[1]!.documents.map((d) => d.type)).toEqual(["onboarding_form"]);
+    if (out.ok) {
+      expect(out.data.documents.map((d) => d.type)).toEqual(["id_card", "onboarding_form"]);
+      expect(out.data.usage.calls).toBe(4);
+    }
+  });
+  it("只有身份證：完全唔打 stage b", async () => {
+    const stages: string[] = [];
+    const out = await readTwoStage([idDoc], { post: async (body) => { stages.push((body as { stage: string }).stage); return ok([finalId]) as never; }, crop: () => [] });
+    expect(stages).toEqual(["a"]);
+    expect(out.ok && out.data.documents).toHaveLength(1);
+  });
+  it("伺服器對非入職表冇回 final → ok:false（退回舊流程）", async () => {
+    expect((await readTwoStage([idDoc], { post: async () => ok([{ type: "id_card", continuation: "x" }]) as never, crop: () => [] })).ok).toBe(false);
+  });
+  it("stage a／b 收到 429／503 → fatal（唔退回）；400／網絡 0 → 普通失敗（退回）", async () => {
+    for (const st of [429, 503]) {
+      const a = await readTwoStage([doc], { post: async () => ({ ok: false, status: st, message: "m" }) as never, crop: () => [] });
+      expect(a).toMatchObject({ ok: false, fatal: { status: st, message: "m" } });
+      const b = await readTwoStage([doc], { post: async (body) => ((body as { stage: string }).stage === "a" ? ok([formA]) : { ok: false, status: st, message: "mb" }) as never, crop: (_d, p) => p.crops.map(() => IMG) });
+      expect(b).toMatchObject({ ok: false, fatal: { status: st, message: "mb" } });
+    }
+    for (const st of [400, 0, 500]) {
+      const a = await readTwoStage([doc], { post: async () => ({ ok: false, status: st, message: "m" }) as never, crop: () => [] });
+      expect(a.ok).toBe(false);
+      expect((a as { fatal?: unknown }).fatal).toBeUndefined();
+    }
+  });
+});
+
 describe("POST /api/guards/ocr/read：stage a／stage b", () => {
   let fx: Wp2Fixture;
   let owner: string;
@@ -539,6 +600,27 @@ describe("POST /api/guards/ocr/read：stage a／stage b", () => {
     expect(typeof j.documents[0].continuation).toBe("string");
     expect(j.documents[0].continuation.split(".")).toHaveLength(2);
     expect(j.documents[0].fields).toBeUndefined();
+  });
+  it("驗收 S3：stage a 混合三種文件——身份證／住址證明連 tiles 直接讀完（final:true、冇 continuation），入職表出 box＋continuation", async () => {
+    const calls: VisionRequest[] = [];
+    setVisionClientForTests(fake("claude", { ...formAnswers(), a: { phone: obj("90001111"), address: obj(ADDR_TXT), field_boxes: { phone: PHONE, address: ADDR }, hkid: obj("Z900001(2)"), name_zh: obj("測試甲"), name_en: obj("TEST ALPHA"), dob: obj("15-01-1990"), sex: obj("M") }, b: { phone: obj("90001111"), address: obj(ADDR_TXT), hkid: obj("Z900001(2)"), name_zh: obj("測試甲"), name_en: obj("TEST ALPHA"), dob: obj("15-01-1990"), sex: obj("M") } }, calls));
+    const t = [IMG, IMG, IMG, IMG];
+    const res = await post({ stage: "a", documents: [{ type: "id_card", full: IMG, tiles: t }, { type: "address_proof", full: IMG, tiles: t }, { type: "onboarding_form", full: IMG }] });
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    const by = Object.fromEntries(j.documents.map((d: { type: string }) => [d.type, d]));
+    expect(by.id_card.final).toBe(true);
+    expect(by.id_card.continuation).toBeUndefined();
+    expect(by.id_card.fields.hkid).toMatchObject({ status: "confirmed", value: "Z900001(2)" });
+    expect(by.id_card.images_b_kind).toBe("tiles");
+    expect(by.address_proof.final).toBe(true);
+    expect(by.onboarding_form.final).toBeUndefined();
+    expect(typeof by.onboarding_form.continuation).toBe("string");
+    expect(by.onboarding_form.field_boxes).toEqual({ phone: PHONE, address: ADDR });
+    expect(calls).toHaveLength(2 + 2 + 1); // id_card A＋B、address_proof A＋B、入職表 A
+    expect(j.usage.calls).toBe(5);
+    // 非入職表冇 tiles → 400（quota 前驗）
+    expect((await post({ stage: "a", documents: [{ type: "id_card", full: IMG }] })).status).toBe(400);
   });
   it("stage a 唔需要 tiles（有傳都接受）；格式錯 → 400", async () => {
     setVisionClientForTests(fake("claude", formAnswers(), []));

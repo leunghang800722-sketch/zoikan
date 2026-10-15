@@ -57,7 +57,12 @@ async function install(page: Page, log: ReqLog[], mode: Mode) {
         model: "fake",
         ms: 10,
         usage: { prompt_tokens: 1, completion_tokens: 1, calls: body.documents.length },
-        documents: body.documents.map((d) => ({ type: d.type, field_boxes: d.type === "onboarding_form" && mode.boxes === "ok" ? { phone: PHONE_BOX, address: ADDR_BOX } : {}, continuation: `fake-continuation-${d.type}` })),
+        // 驗收 S3：身份證／住址證明由伺服器直接讀完（final:true）；入職表出 box＋continuation
+        documents: body.documents.map((d) =>
+          d.type === "onboarding_form"
+            ? { type: d.type, field_boxes: mode.boxes === "ok" ? { phone: PHONE_BOX, address: ADDR_BOX } : {}, continuation: `fake-continuation-${d.type}` }
+            : { type: d.type, final: true, fields: idFields, images_b_kind: "tiles", field_boxes_used: false, arbiter: { called: false, fields: 0 } },
+        ),
       });
     }
     if (body.stage === "b") {
@@ -97,12 +102,14 @@ test.describe("OCR 兩段式讀（欄位級裁圖）", () => {
     await install(page, log, { boxes: "ok", stageB: "ok" });
     await toReview(page);
     expect(log.map((l) => l.stage)).toEqual(["a", "b"]);
-    // stage a 淨傳全圖（冇 tiles）
+    // stage a：入職表淨傳全圖；身份證連 2×2 格（伺服器直接讀完）
     for (const d of log[0]!.body.documents) {
       expect(d.full).toMatch(/^data:image\/jpeg;base64,/);
-      expect(d.tiles).toBeUndefined();
+      if (d.type === "onboarding_form") expect(d.tiles).toBeUndefined();
+      else expect(d.tiles).toHaveLength(4);
     }
     const b = log[1]!.body.documents;
+    expect(b.map((d) => d.type)).toEqual(["onboarding_form"]); // 身份證唔打 stage b
     const form = b.find((d) => d.type === "onboarding_form")!;
     expect(form.continuation).toBe("fake-continuation-onboarding_form");
     expect(form.full).toMatch(/^data:image\/jpeg;base64,/);
@@ -117,9 +124,6 @@ test.describe("OCR 兩段式讀（欄位級裁圖）", () => {
     // 欄位格係闊扁形（電話 box 闊 > 高），唔係 2×2 格嘅 0.6×0.6 近正方形
     const [pw, ph] = jpegSize(form.images_b!.images[0]!);
     expect(pw).toBeGreaterThan(ph);
-    const id = b.find((d) => d.type === "id_card")!;
-    expect(id.images_b!.kind).toBe("tiles");
-    expect(id.images_b!.images).toHaveLength(4);
     await expect(page.getByTestId("ocr-b-kind")).toHaveAttribute("data-kind", "field_crops");
     await expect(page.getByTestId("ocr-b-kind")).toHaveText("放大圖：欄位級");
     // 結果照樣填入表單
@@ -147,6 +151,23 @@ test.describe("OCR 兩段式讀（欄位級裁圖）", () => {
     await expect(page.getByLabel("中文姓名")).toHaveValue("測試甲");
     await expect(page.getByTestId("ocr-b-kind")).toHaveText("放大圖：後備格");
     await expect(page.getByTestId("ocr-step-review")).toBeVisible();
+  });
+
+  test("stage a 回 429／503 → 唔退回舊流程，直接顯示錯誤（驗收 N2）", async ({ page }) => {
+    const log: ReqLog[] = [];
+    await page.route("**/api/guards/ocr/read", async (route: Route) => {
+      const body = route.request().postDataJSON() as { stage?: string; documents: ReqLog["body"]["documents"] };
+      log.push({ stage: body.stage ?? "legacy", body });
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "ocr_unavailable", message: "證件辨識暫時用唔到，請改為全部自己輸入，或者遲啲再試" }) });
+    });
+    await loginAs(page, "老闆");
+    const res = await page.goto("/guards/new-from-docs");
+    test.skip(res?.status() === 404, "OCR 未配置（需要 DEEPSEEK_API_KEY 先開此頁）");
+    await page.getByTestId("ocr-file-id_card").setInputFiles(ID_IMG);
+    await expect(page.getByTestId("ocr-read")).toBeEnabled();
+    await page.getByTestId("ocr-read").click();
+    await expect(page.getByText("證件辨識暫時用唔到")).toBeVisible();
+    expect(log.map((l) => l.stage)).toEqual(["a"]); // 冇再打舊流程
   });
 
   test.describe("手機 375px", () => {
