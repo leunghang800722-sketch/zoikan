@@ -11,7 +11,8 @@ import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
-import { canvasFromImageFile, isPdfFile, openPdf, prepareFromCanvas, type PdfHandle, type PreparedImage } from "@/lib/guards/ocr/browser-images";
+import { canvasFromImageFile, cropFieldsFromCanvas, isPdfFile, openPdf, prepareFromCanvas, type PdfHandle, type PreparedImage } from "@/lib/guards/ocr/browser-images";
+import { readTwoStage } from "@/lib/guards/ocr/two-stage";
 import { normalizeField } from "@/lib/guards/ocr/normalize";
 import { CRITICAL_MSG, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
 import type { FieldStatus } from "@/lib/guards/ocr/normalize";
@@ -31,6 +32,7 @@ const REASON_MSG: Record<string, string> = {
   sex_format: "性別請填 M 或 F",
   phone_format: "電話格式唔啱",
   phone_not_hk: "唔係香港 8 位電話",
+  phone_gridline_suspect: "電話多咗一兩位，可能將印刷分格線睇成數字 1，請對住圖核對",
   name_zh_format: "中文姓名請只填中文字",
   name_en_format: "英文姓名格式唔啱",
   address_format: "地址太短",
@@ -52,6 +54,8 @@ interface OcrField {
 interface OcrDocResult {
   type: OcrDocType;
   fields: Partial<Record<OcrFieldKey, OcrField>>;
+  /** WP-OCR-3（additive）：讀 B 用咗欄位級裁圖定後備 2×2 格 */
+  images_b_kind?: "tiles" | "field_crops";
 }
 interface OcrResponse {
   model: string;
@@ -141,6 +145,7 @@ export function NewFromDocsClient() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [ocrInfo, setOcrInfo] = useState<string | null>(null);
+  const [formBKind, setFormBKind] = useState<"tiles" | "field_crops" | null>(null);
   const [preview, setPreview] = useState<PreviewRes | null>(null);
   const [pkgState, setPkgState] = useState<{ pkg: unknown; decisions: Record<string, unknown> } | null>(null);
   const [applyRes, setApplyRes] = useState<ApplyRes | null>(null);
@@ -209,7 +214,18 @@ export function NewFromDocsClient() {
     if (!slots.id_card.prepared) return;
     setBusy(true);
     setError(null);
-    const res = await apiPost<OcrResponse>("/api/guards/ocr/read", { documents: docs.map((t) => ({ type: t, full: slots[t].prepared!.full, tiles: slots[t].prepared!.tiles })) });
+    // WP-OCR-3：先試兩段式（stage a 定位欄位 → 本機欄位級裁圖 → stage b）；任何一步失敗就退回舊單次流程，用戶無感。
+    const two = await readTwoStage<OcrResponse>(
+      docs.map((t) => ({ type: t, full: slots[t].prepared!.full, tiles: slots[t].prepared!.tiles, sourceW: slots[t].prepared!.source.width, sourceH: slots[t].prepared!.source.height })),
+      {
+        post: async <T,>(body: unknown) => {
+          const r = await apiPost<T>("/api/guards/ocr/read", body);
+          return r.ok ? { ok: true as const, data: r.data } : { ok: false as const, status: r.status, message: r.message };
+        },
+        crop: (doc, plan) => cropFieldsFromCanvas(slots[doc.type].prepared!.source, plan.crops),
+      },
+    );
+    const res = two.ok ? ({ ok: true, status: 200, data: two.data } as const) : await apiPost<OcrResponse>("/api/guards/ocr/read", { documents: docs.map((t) => ({ type: t, full: slots[t].prepared!.full, tiles: slots[t].prepared!.tiles })) });
     setBusy(false);
     if (!res.ok) {
       setError(res.status === 503 ? `${res.message}（可以撳「全部自己輸入」繼續）` : res.message);
@@ -237,6 +253,7 @@ export function NewFromDocsClient() {
     }
     if (prefill.name && !next.name_zh.value.trim()) next.name_zh = prefilledNameField(prefill.name);
     setForm(next);
+    setFormBKind(res.data.documents.find((d) => d.type === "onboarding_form")?.images_b_kind ?? null);
     const u = res.data.usage;
     setOcrInfo(`辨識完成（${Math.round(res.data.ms / 100) / 10} 秒，${u.calls} 次讀取）`);
     setViewDoc("id_card");
@@ -249,6 +266,7 @@ export function NewFromDocsClient() {
     setForm(f);
     setAddrFrom("address_proof");
     setOcrInfo(null);
+    setFormBKind(null);
     setStep("review");
   }
 
@@ -423,6 +441,11 @@ export function NewFromDocsClient() {
       {step === "review" && (
         <div className="space-y-3" data-testid="ocr-step-review" data-sticky-page>
           {ocrInfo && <div className="text-zk-sm text-zk-muted">{ocrInfo}。請對住圖逐欄核對：「要核對」同「讀唔到」嘅欄要你確認或者改正先可以繼續。</div>}
+          {ocrInfo && formBKind && (
+            <div className="text-zk-sm text-zk-muted" data-testid="ocr-b-kind" data-kind={formBKind}>
+              放大圖：{formBKind === "field_crops" ? "欄位級" : "後備格"}
+            </div>
+          )}
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
             {/* 證件圖：手機 375 闊 sticky 細圖（撳一下放大），桌面 sticky 大圖——對欄值唔使捲上捲落 */}
             <div className="sticky top-0 z-20 space-y-2 bg-zk-bg pb-2 lg:top-2 lg:w-1/2 lg:self-start" data-testid="ocr-image-pane">
