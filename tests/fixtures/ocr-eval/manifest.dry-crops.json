@@ -1,0 +1,27 @@
+{
+  "cases": [
+    {
+      "id": "crop-01-explicit-boxes",
+      "docs": [{ "type": "onboarding_form", "image": "form.png" }],
+      "truth": { "phone": "90001111", "address": "新界火炭示範街99號虛構大廈15樓A室" },
+      "fake": { "onboarding_form": { "boxes": { "phone": { "x": 0.1, "y": 0.2, "w": 0.4, "h": 0.04 }, "address": { "x": 0.1, "y": 0.35, "w": 0.8, "h": 0.06 } } } }
+    },
+    {
+      "id": "crop-02-address-box-missing-falls-back-to-tiles",
+      "docs": [{ "type": "onboarding_form", "image": "form.png" }],
+      "truth": { "phone": "90001111", "address": "新界火炭示範街99號虛構大廈15樓A室" },
+      "fake": { "onboarding_form": { "boxes": { "phone": { "x": 0.1, "y": 0.2, "w": 0.4, "h": 0.04 } } } }
+    },
+    {
+      "id": "crop-03-insane-box-falls-back-to-tiles",
+      "docs": [{ "type": "onboarding_form", "image": "form.png" }],
+      "truth": { "phone": "90001111", "address": "新界火炭示範街99號虛構大廈15樓A室" },
+      "fake": { "onboarding_form": { "boxes": { "phone": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 }, "address": { "x": 0.1, "y": 0.35, "w": 0.8, "h": 0.06 } } } }
+    },
+    {
+      "id": "crop-04-id-card-never-crops",
+      "docs": [{ "type": "id_card", "image": "id-card.png" }],
+      "truth": { "name_zh": "測試甲", "hkid": "Z900001(2)" }
+    }
+  ]
+}
