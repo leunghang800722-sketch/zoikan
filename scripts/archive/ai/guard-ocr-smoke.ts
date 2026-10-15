@@ -67,7 +67,7 @@ async function main() {
       fieldsTotal++;
       const canon = (v: string) => normalizeField(f, v).canon;
       const ok = res.status === "confirmed" && canon(res.value) === canon(e);
-      const ra = pa?.[f], rb = pb?.[f];
+      const ra = pa?.[f]?.value, rb = pb?.[f]?.value;
       const aOk = !!ra && canon(ra) === canon(e), bOk = !!rb && canon(rb) === canon(e);
       readsTotal++;
       if (ra && rb && canon(ra) === canon(rb)) agree++;

@@ -140,7 +140,8 @@ async function handle(req: Request): Promise<NextResponse> {
       rowId: session.userId,
       action: "guard_ocr_read",
       // truncated_calls：撞 output token 上限嘅呼叫數（只記數量，冇內容）
-      after: { ok: true, model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, ...usage },
+      // arbiter_calls：第三讀仲裁呼叫數（只記數量）
+      after: { ok: true, model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, arbiter_calls: results.filter((r) => r.arbiter.called).length, ...usage },
       ip: getClientIp(req),
     });
     return NextResponse.json({
@@ -151,7 +152,8 @@ async function handle(req: Request): Promise<NextResponse> {
       // WP-OCR-CLAUDE §36（additive）：兩次讀實際用咗邊個供應商／型號（淨係標籤，冇圖片、冇欄位值）
       provider_used: providerUsed,
       models_used: { a: results.every((r) => r.model_used.a === results[0]!.model_used.a) ? results[0]!.model_used.a : results.find((r) => r.provider_used.a === "deepseek")!.model_used.a, b: results[0]?.model_used.b ?? client.b.model },
-      documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used })),
+      // WP-OCR-4（additive）：每欄多 candidates_ranked／arbiter；每份文件多 arbiter { called, fields }（淨計數）
+      documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used, arbiter: r.arbiter })),
     });
   }
 }

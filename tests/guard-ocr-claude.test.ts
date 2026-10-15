@@ -58,11 +58,12 @@ describe("ClaudeVisionClient：請求形狀＋回應處理", () => {
     ]);
     expect(JSON.stringify(req.system)).not.toContain("base64");
   });
-  it("structured output schema：全部 required、禁多餘 key、欄位可為 string／null", () => {
+  it("structured output schema：全部 required、禁多餘 key、每欄係 object", () => {
     const s = ocrJsonSchema(["hkid", "dob"]);
     expect(s.required).toEqual(["hkid", "dob"]);
     expect(s.additionalProperties).toBe(false);
-    expect(s.properties.hkid).toEqual({ anyOf: [{ type: "string" }, { type: "null" }] });
+    // WP-OCR-4：每欄係 object { value, confidence, reason, alternatives }
+    expect(s.properties.hkid).toMatchObject({ type: "object", required: ["value", "confidence", "reason", "alternatives"], additionalProperties: false });
   });
   it("structured output 回應文字經現有解析器得出欄位（readDocument 一致 → confirmed）", async () => {
     const claude = mkClaude(vi.fn().mockResolvedValue(claudeMsg()));
