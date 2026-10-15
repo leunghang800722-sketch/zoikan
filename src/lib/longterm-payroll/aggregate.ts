@@ -67,6 +67,8 @@ import { Conflict } from "@/lib/api/errors";
 import { monthRange, monthStart as toMonthStart, monthLabel, n, round2 } from "@/lib/reports/money";
 import { findInternalLongtermBrokerId } from "@/lib/pricing/longterm-settlement";
 import { classifyLongtermShift } from "./shift-classify";
+import { computeEoAdw, resolveAlDailyRate, eoPeriodMonths, type AlDailyRateBasis, type EoAdwResult } from "./adw";
+import { loadAdwMonthData } from "./adw-history";
 import { HK_STATUTORY_HOLIDAYS_2026 } from "./hk-holidays";
 import {
   type ContractSegment,
@@ -91,6 +93,14 @@ import {
 } from "./compute";
 
 type PrismaLike = PrismaClient | Prisma.TransactionClient;
+
+function otText(eo: EoAdwResult): string {
+  const r = eo.otRule;
+  if (r.reason === "constant") return `加班費計入（期內 ${r.monthsCounted} 個月每月都有）`;
+  if (r.ratio === null) return `加班費${r.included ? "計入" : "剔除"}（不含加班費工資 ≤0，無法計算比率）`;
+  if (r.reason === "ge_20pct") return `加班費計入（每月平均 ${r.avgOt.toFixed(2)} 達同期不含加班費平均工資 ${r.avgWagesExOt.toFixed(2)} 嘅 ${(r.ratio * 100).toFixed(1)}%，≥20%）`;
+  return `加班費剔除（${r.monthsWithOt}/${r.monthsCounted} 個月有加班費，平均只佔 ${(r.ratio * 100).toFixed(1)}%，<20%）`;
+}
 
 function iso(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -125,6 +135,10 @@ interface LongtermPayrollLineResult {
   /** §14 規則 12 簽證形式長工（照出糧，passthrough 由雞頭結算扣返）。 */
   visaPassthrough: boolean;
   notes: string[];
+  /** P19b：離職年假補償日薪來源（非離職者 null）；持久化到 longterm_payroll_lines.al_daily_rate_basis。 */
+  alDailyRateBasis: AlDailyRateBasis | null;
+  /** P19b：離職年假補償平均工資明細（導航卡用；持久化到 al_adw_json）。 */
+  alAdw: LeaverAdwInfo | null;
   // §21 任務 4b(f)：`guard_leave_balances` 寫回用（唔喺 `LongtermPayrollLine`
   // 表出現，`recomputeLongtermPayroll()` persist 嗰陣先讀呢幾個欄
   // upsert `guard_leave_balances`；`buildLongtermPayrollInputs()` 本身
@@ -136,6 +150,21 @@ interface LongtermPayrollLineResult {
     alOpeningUsed: number; // 呢次計糧用嗰個「呢個月開始前」嘅 AL 累積（寫返做新嘅 alTakenOpening）
     slOpeningUsed: number; // 同上，SL 版
   };
+}
+
+export interface LeaverAdwInfo {
+  basis: AlDailyRateBasis;
+  /** 年假補償實際用嘅日薪（manual_amount＝null）。 */
+  rateUsed: number | null;
+  /** 月薪÷當月日數（fallback 值）。 */
+  monthlyFallback: number;
+  /** EO 自動計結果（有計先有；歷史唔齊時 adw 為補入後建議值）。 */
+  eo: EoAdwResult | null;
+  /** 勞工處口徑：加班費計入規則（有做條例自動計先有）。 */
+  otRule: EoAdwResult["otRule"] | null;
+  needsConfirm: boolean;
+  leaveDate: string;
+  balanceDays: number;
 }
 
 export interface BuildLongtermPayrollResult {
@@ -228,14 +257,14 @@ export function continuousChainStart(segs: { effectiveFrom: Date; effectiveTo: D
 /** 法定假日（SH）扣款——`statutoryHolidayPaidFrom==='after_3_months'`
  * 且截至嗰日未做滿 3 個月先扣（未經 oracle 個案驗證，見檔頭「刻意冇做」
  * 第 3 點）。 */
-function computeShDeduction(shDates: string[], segments: ContractSegment[], monthDaysCount: number, hireDate: Date | null, statutoryHolidayPaidFrom: string): { npsh: number; notes: string[] } {
-  if (!shDates.length) return { npsh: 0, notes: [] };
+function computeShDeduction(shDates: string[], segments: ContractSegment[], monthDaysCount: number, hireDate: Date | null, statutoryHolidayPaidFrom: string): { npsh: number; notes: string[]; unpaidDays: number } {
+  if (!shDates.length) return { npsh: 0, notes: [], unpaidDays: 0 };
   // §21 任務 4b(d)：更表 leaveCode=SH 嘅日子理應同官方法定假日一致——
   // 唔喺官方清單嘅就標低（資料質素信號，唔擋計算，見 hk-holidays.ts）。
   const unknownShDates = shDates.filter((d) => !HK_STATUTORY_HOLIDAYS_2026.includes(d));
   const dataQualityNote = unknownShDates.length ? [`⚠ leaveCode=SH 嘅 ${unknownShDates.join("、")} 唔喺 hk-holidays.ts 官方法定假日清單入面，可能係更表打錯代號，人手覆核`] : [];
   if (statutoryHolidayPaidFrom !== "after_3_months" || !hireDate) {
-    return { npsh: 0, notes: [`法定假 ${shDates.join("、")}：有薪（${statutoryHolidayPaidFrom === "after_3_months" ? "冇入職日資料，保守當有薪" : "immediate"}），冇扣款`, ...dataQualityNote] };
+    return { npsh: 0, notes: [`法定假 ${shDates.join("、")}：有薪（${statutoryHolidayPaidFrom === "after_3_months" ? "冇入職日資料，保守當有薪" : "immediate"}），冇扣款`, ...dataQualityNote], unpaidDays: 0 };
   }
   const threeMonthMark = addMonths(hireDate, 3);
   let deduct = 0;
@@ -247,10 +276,11 @@ function computeShDeduction(shDates: string[], segments: ContractSegment[], mont
       unpaidDates.push(dISO);
     }
   }
-  if (!unpaidDates.length) return { npsh: 0, notes: [`法定假 ${shDates.join("、")}：已做滿 3 個月，有薪，冇扣款`, ...dataQualityNote] };
+  if (!unpaidDates.length) return { npsh: 0, notes: [`法定假 ${shDates.join("、")}：已做滿 3 個月，有薪，冇扣款`, ...dataQualityNote], unpaidDays: 0 };
   return {
     npsh: -round2(deduct),
     notes: [`法定假未做滿 3 個月（試用期未過 statutoryHolidayPaidFrom=after_3_months）：${unpaidDates.join("、")} 扣 -${round2(deduct).toFixed(2)}（未經 oracle 個案驗證，人手覆核）`, ...dataQualityNote],
+    unpaidDays: unpaidDates.length,
   };
 }
 
@@ -592,6 +622,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
     const priorAl = openingLeaveTaken(guardId).al;
     const alTakenCumulative = round2(priorAl + alDatesThisMonth.length);
     let alPayment = 0;
+    let alDailyRateBasis: AlDailyRateBasis | null = null;
+    let alAdw: LeaverAdwInfo | null = null;
     if (isLeaver) {
       const serviceStart = firstContractByGuard.get(guardId, employEnd) ?? (guard.hireDate ? toUtcDate(guard.hireDate) : employStart); // 規則 9：AL entitlement 由長工合約入職日計，唔計轉長工前散工段
       const entitleYearDays = n(rawSegs.find((s) => toUtcDate(s.effectiveFrom).getTime() <= employEnd.getTime())?.annualLeaveDays ?? 7);
@@ -599,16 +631,39 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
       const hireDateForProbation = serviceStart; // 試用期跟長工合約（Maxwell Commencement）起計
       const entResult = alEntitlementProrata(entitleYearDays, serviceStart, employEnd, hireDateForProbation, probationMonths);
       const balance = alLeaverBalance(entResult.entitled, alTakenCumulative);
-      if (leaverInput?.amount != null) {
-        alPayment = n(leaverInput.amount);
-        notes.push(`★ 離職補年假：人手輸入金額 ${alPayment.toFixed(2)}（${leaverInput.note ?? "會計已用終止僱傭合約薪酬計算表核實"}）`);
+      const monthlyFallback = dailyRateOnDate(segments, employEnd, monthDaysCount); // 月薪÷當月日數（日薪制＝每更價）
+      const manualAmount = leaverInput?.amount != null ? n(leaverInput.amount) : null;
+      const avgWageEntry = avgWageByGuard.get(guardId);
+      // P19b：冇人手金額、冇 guard_avg_wages 記錄先按《僱傭條例》第 2(3) 條自動計（日薪制長工唔計，維持 fallback）。
+      let eo: EoAdwResult | null = null;
+      if (manualAmount == null && !avgWageEntry && !isDailyBasis) {
+        const histMonths = eoPeriodMonths(serviceStart, employEnd).filter((m) => m.getTime() < start.getTime());
+        const monthData = await loadAdwMonthData(client, guardId, histMonths);
+        const curSlDays = slCoveredDates.size + uncoveredSl.length;
+        monthData[start.toISOString().slice(0, 7)] = {
+          ot: otAmount,
+          wages: round2(netBasic + otAmount + specialAllowance + otherAllowance + shResult.npsh + nplDeduct + slDeduct), // 人手扣款唔係不獲全薪日子，唔減
+          disregardedDays: nplDates.length + curSlDays + shResult.unpaidDays,
+        };
+        // 補入缺失月份用現行合約月薪（segments 只含本月生效合約，舊月份調薪冇追溯）
+        eo = computeEoAdw({ serviceStart, leaveDate: employEnd, monthData, monthlySalaryForMonth: (ms) => contractSegmentForDate(segments, ms.getTime() < employStart.getTime() ? employStart : ms).monthlySalary });
+      }
+      const resolved = resolveAlDailyRate({ manualAmount, imported: avgWageEntry ? avgWageEntry.value : null, eo, monthlyFallback });
+      alDailyRateBasis = resolved.basis;
+      alAdw = { basis: resolved.basis, rateUsed: resolved.rate, monthlyFallback: round2(monthlyFallback), eo, otRule: eo?.otRule ?? null, needsConfirm: resolved.needsConfirm, leaveDate: iso(employEnd), balanceDays: balance };
+      if (manualAmount != null) {
+        alPayment = manualAmount;
+        notes.push(`★ 離職補年假：人手輸入金額 ${alPayment.toFixed(2)}（${leaverInput?.note ?? "會計已用終止僱傭合約薪酬計算表核實"}）`);
       } else {
-        const avgWageEntry = avgWageByGuard.get(guardId);
-        const avgWage = avgWageEntry ? avgWageEntry.value : dailyRateOnDate(segments, employEnd, monthDaysCount); // 有 guard_avg_wages 就用嗰個月記錄，冇先 fallback 日薪
+        const avgWage = resolved.rate!;
         alPayment = alLeaverPayout(balance, avgWage);
-        notes.push(
-          `★ 離職補年假：${entResult.reason}；已放 ${alTakenCumulative.toFixed(2)} 日 → 結餘 ${balance.toFixed(2)} 日 × 日薪 ${avgWage.toFixed(2)}（${avgWageEntry ? `guard_avg_wages：${avgWageEntry.source}` : "冇平均工資記錄，fallback 日薪"}）＝ ${alPayment.toFixed(2)}`,
-        );
+        let basisText: string;
+        if (resolved.basis === "imported") basisText = `guard_avg_wages：${avgWageEntry!.source}`;
+        else if (resolved.basis === "computed_eo") basisText = `僱傭條例第 2(3) 條自動計：${eo!.periodFrom}～${eo!.periodTo} 工資 ${eo!.wages.toFixed(2)} ÷ ${eo!.daysCounted}（日曆日扣 ${eo!.disregardedDays} 日不獲全薪日子；${otText(eo!)}）`;
+        else if (eo && !eo.historyIncomplete) basisText = `冇平均工資記錄，條例自動計出嚟嘅平均工資 ${eo.adw.toFixed(2)} 唔合理（≤0），fallback 月薪÷當月日數，請會計用終止僱傭合約薪酬計算表核對後輸入平均工資`;
+        else if (eo) basisText = `冇平均工資記錄，系統歷史糧線唔齊（缺 ${eo.monthsMissing.join("、")}），fallback 月薪÷當月日數；按條例補入建議 ${eo.adw.toFixed(2)}，請會計用終止僱傭合約薪酬計算表核對後輸入平均工資`;
+        else basisText = "冇平均工資記錄，fallback 日薪";
+        notes.push(`★ 離職補年假：${entResult.reason}；已放 ${alTakenCumulative.toFixed(2)} 日 → 結餘 ${balance.toFixed(2)} 日 × 日薪 ${avgWage.toFixed(2)}（${basisText}）＝ ${alPayment.toFixed(2)}`);
       }
     }
 
@@ -671,6 +726,8 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
       autopay,
       visaPassthrough: isVisa,
       notes,
+      alDailyRateBasis,
+      alAdw,
       leaveBalanceWriteback: {
         alTakenCumulative,
         slTakenCumulative: round2(usedBal),
@@ -740,7 +797,7 @@ export async function recomputeLongtermPayroll(month: Date, actorUserId: string,
       });
 
       for (const line of built.lines) {
-        await tx.longtermPayrollLine.create({
+        const createdLine = await tx.longtermPayrollLine.create({
           data: {
             runId: run.id,
             guardId: line.guardId,
@@ -766,6 +823,10 @@ export async function recomputeLongtermPayroll(month: Date, actorUserId: string,
             notesJson: line.notes as unknown as Prisma.InputJsonValue,
           },
         });
+        // P19b：離職者年假補償日薪來源（additive 欄，原生 SQL 寫——唔使重生 Prisma client）
+        if (line.alDailyRateBasis) {
+          await tx.$executeRaw`UPDATE longterm_payroll_lines SET al_daily_rate_basis = ${line.alDailyRateBasis}, al_adw_json = ${JSON.stringify(line.alAdw)}::jsonb WHERE id = ${createdLine.id}`;
+        }
       }
 
       // §21 任務 4b(f)：`guard_leave_balances` 寫回——`leaveBalanceWriteback`
