@@ -57,6 +57,8 @@ async function install(page: Page, log: ReqLog[], mode: Mode) {
         model: "fake",
         ms: 10,
         usage: { prompt_tokens: 1, completion_tokens: 1, calls: body.documents.length },
+        // OCR-1：印刷文件 stage a 回 refs_token
+        ...(body.documents.some((d) => d.type !== "onboarding_form") ? { refs_token: "fake-refs-token" } : {}),
         // 驗收 S3：身份證／住址證明由伺服器直接讀完（final:true）；入職表出 box＋continuation
         documents: body.documents.map((d) =>
           d.type === "onboarding_form"
@@ -101,14 +103,15 @@ test.describe("OCR 兩段式讀（欄位級裁圖）", () => {
     const log: ReqLog[] = [];
     await install(page, log, { boxes: "ok", stageB: "ok" });
     await toReview(page);
-    expect(log.map((l) => l.stage)).toEqual(["a", "b"]);
-    // stage a：入職表淨傳全圖；身份證連 2×2 格（伺服器直接讀完）
-    for (const d of log[0]!.body.documents) {
-      expect(d.full).toMatch(/^data:image\/jpeg;base64,/);
-      if (d.type === "onboarding_form") expect(d.tiles).toBeUndefined();
-      else expect(d.tiles).toHaveLength(4);
-    }
-    const b = log[1]!.body.documents;
+    // OCR-1：先印刷文件 stage a，再入職表 stage a，再 stage b
+    expect(log.map((l) => l.stage)).toEqual(["a", "a", "b"]);
+    // stage a（印刷）：身份證連 2×2 格（伺服器直接讀完）；stage a（入職表）：淨傳全圖
+    expect(log[0]!.body.documents.map((d) => d.type)).toEqual(["id_card"]);
+    expect(log[0]!.body.documents[0]!.tiles).toHaveLength(4);
+    expect(log[1]!.body.documents.map((d) => d.type)).toEqual(["onboarding_form"]);
+    expect(log[1]!.body.documents[0]!.tiles).toBeUndefined();
+    for (const d of [...log[0]!.body.documents, ...log[1]!.body.documents]) expect(d.full).toMatch(/^data:image\/jpeg;base64,/);
+    const b = log[2]!.body.documents;
     expect(b.map((d) => d.type)).toEqual(["onboarding_form"]); // 身份證唔打 stage b
     const form = b.find((d) => d.type === "onboarding_form")!;
     expect(form.continuation).toBe("fake-continuation-onboarding_form");
@@ -134,8 +137,8 @@ test.describe("OCR 兩段式讀（欄位級裁圖）", () => {
     const log: ReqLog[] = [];
     await install(page, log, { boxes: "none", stageB: "ok" });
     await toReview(page);
-    expect(log.map((l) => l.stage)).toEqual(["a", "b"]);
-    const form = log[1]!.body.documents.find((d) => d.type === "onboarding_form")!;
+    expect(log.map((l) => l.stage)).toEqual(["a", "a", "b"]);
+    const form = log[2]!.body.documents.find((d) => d.type === "onboarding_form")!;
     expect(form.images_b!.kind).toBe("tiles");
     expect(form.images_b!.images).toHaveLength(4);
     await expect(page.getByTestId("ocr-b-kind")).toHaveText("放大圖：後備格");
@@ -145,9 +148,9 @@ test.describe("OCR 兩段式讀（欄位級裁圖）", () => {
     const log: ReqLog[] = [];
     await install(page, log, { boxes: "ok", stageB: "fail400" });
     await toReview(page);
-    expect(log.map((l) => l.stage)).toEqual(["a", "b", "legacy"]);
+    expect(log.map((l) => l.stage)).toEqual(["a", "a", "b", "legacy"]);
     // 舊流程 body：full＋tiles（每份 4 格），冇 stage
-    for (const d of log[2]!.body.documents) expect(d.tiles).toHaveLength(4);
+    for (const d of log[3]!.body.documents) expect(d.tiles).toHaveLength(4);
     await expect(page.getByLabel("中文姓名")).toHaveValue("測試甲");
     await expect(page.getByTestId("ocr-b-kind")).toHaveText("放大圖：後備格");
     await expect(page.getByTestId("ocr-step-review")).toBeVisible();
@@ -176,7 +179,7 @@ test.describe("OCR 兩段式讀（欄位級裁圖）", () => {
       const log: ReqLog[] = [];
       await install(page, log, { boxes: "ok", stageB: "ok" });
       await toReview(page);
-      expect(log.map((l) => l.stage)).toEqual(["a", "b"]);
+      expect(log.map((l) => l.stage)).toEqual(["a", "a", "b"]);
       const label = page.getByTestId("ocr-b-kind");
       await expect(label).toBeVisible();
       const box = await label.boundingBox();

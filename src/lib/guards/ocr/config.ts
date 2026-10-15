@@ -14,11 +14,24 @@ export type OcrFieldKey = (typeof OCR_FIELDS)[number];
 export const OCR_DOC_FIELDS: Record<OcrDocType, readonly OcrFieldKey[]> = {
   id_card: ["name_zh", "name_en", "hkid", "dob", "sex"],
   address_proof: ["address"],
-  onboarding_form: ["phone", "address"],
+  // WP-OCR-1：入職表加讀姓名／HKID／出生日期——只做交叉核對（對印刷證件已核實值），唔覆蓋身份證值
+  onboarding_form: ["phone", "address", "name_zh", "hkid", "dob"],
 };
+
+/** WP-OCR-1：印刷證件已核實值（refs）可以帶嘅欄位（唔含電話：身份證冇）。 */
+export const OCR_REFS_FIELDS = ["name_zh", "name_en", "hkid", "dob", "sex", "address"] as const satisfies readonly OcrFieldKey[];
+export type OcrRefsField = (typeof OCR_REFS_FIELDS)[number];
+/** 入職表同身份證交叉核對嘅欄位。 */
+export const OCR_CROSS_FIELDS = ["name_zh", "hkid", "dob"] as const satisfies readonly OcrFieldKey[];
+/** refs_token 字元上限。 */
+export const OCR_MAX_REFS_CHARS = 8_000;
+/** refs 單欄值字元上限（消毒時截斷）。 */
+export const OCR_MAX_REF_VALUE_CHARS = 200;
 
 export const OCR_MAX_DOCS = 3;
 export const OCR_MAX_TILES = 4;
+/** WP-OCR-1：欄位級裁圖上限（電話＋地址＋姓名＋HKID＋出生日期＝5，留 1 個餘位）；2×2 格（tiles）上限 OCR_MAX_TILES 不變。 */
+export const OCR_MAX_FIELD_CROPS = 6;
 /** 單張 data URL 字元上限（1,600px JPEG 一般 < 500KB → base64 < 700KB）。 */
 export const OCR_MAX_IMAGE_CHARS = 900_000;
 /** 整個請求體字元上限（3 份文件 × 5 張）。 */

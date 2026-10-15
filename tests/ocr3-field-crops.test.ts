@@ -228,7 +228,7 @@ describe("readStageA／readStageB", () => {
     const { clients, calls } = clientsOf({ a: { phone: obj("90001111"), address: obj(ADDR_TXT), field_boxes: { phone: PHONE, address: { x: 5, y: 0, w: 1, h: 1 } } } });
     const a = await readStageA(clients, "onboarding_form", IMG);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.boxFields).toEqual(["phone", "address"]);
+    expect(calls[0]!.boxFields).toEqual(["phone", "address", "name_zh", "hkid", "dob"]); // OCR-1：額外欄位姓名／HKID／出生日期
     expect(calls[0]!.system).toContain('"field_boxes"');
     expect(calls[0]!.userText).toBe(buildUserTextFull("onboarding_form", { boxes: true }));
     expect(a.field_boxes).toEqual({ phone: PHONE }); // address 不合格被丟
@@ -512,25 +512,30 @@ describe("readTwoStage：混合文件＋429／503 唔退回（驗收 S3／N2）"
   const finalId = { type: "id_card", final: true, fields: { hkid: { status: "confirmed", value: "x" } }, images_b_kind: "tiles" };
   const formA = { type: "onboarding_form", field_boxes: { phone: PHONE, address: ADDR }, continuation: "tok" };
   const ok = (documents: unknown[]) => ({ ok: true as const, data: { model: "m", ms: 10, usage: { prompt_tokens: 1, completion_tokens: 1, calls: 3 }, documents } });
-  it("身份證 final:true 唔打 stage b；入職表照 a→裁→b；documents 按上載次序合併", async () => {
-    const bodies: { stage: string; documents: { type: string; tiles?: unknown[] }[] }[] = [];
+  it("身份證 final:true 唔打 stage b；入職表照 a→裁→b；documents 按上載次序合併（OCR-1：先印刷文件 stage a，再入職表 stage a）", async () => {
+    const bodies: { stage: string; refs_token?: string; documents: { type: string; tiles?: unknown[] }[] }[] = [];
     const out = await readTwoStage([idDoc, doc], {
       post: async (body) => {
         const b = body as (typeof bodies)[number];
         bodies.push(b);
-        if (b.stage === "a") return ok([finalId, formA]) as never;
+        if (b.stage === "a") return (b.documents[0]!.type === "id_card" ? { ok: true, data: { ...ok([finalId]).data, refs_token: "rt" } } : ok([formA])) as never;
         return { ok: true, data: { ms: 5, usage: { prompt_tokens: 1, completion_tokens: 1, calls: 1 }, documents: [{ type: "onboarding_form", fields: {}, images_b_kind: "field_crops" }] } } as never;
       },
       crop: (_d, p) => p.crops.map(() => IMG),
     });
     expect(out.ok).toBe(true);
-    expect(bodies.map((b) => b.stage)).toEqual(["a", "b"]);
-    expect(bodies[0]!.documents.find((d) => d.type === "id_card")!.tiles).toHaveLength(4);
-    expect(bodies[0]!.documents.find((d) => d.type === "onboarding_form")!.tiles).toBeUndefined();
+    expect(bodies.map((b) => b.stage)).toEqual(["a", "a", "b"]);
+    expect(bodies[0]!.documents.map((d) => d.type)).toEqual(["id_card"]);
+    expect(bodies[0]!.documents[0]!.tiles).toHaveLength(4);
+    expect(bodies[0]!.refs_token).toBeUndefined();
     expect(bodies[1]!.documents.map((d) => d.type)).toEqual(["onboarding_form"]);
+    expect(bodies[1]!.documents[0]!.tiles).toBeUndefined();
+    expect(bodies[1]!.refs_token).toBe("rt");
+    expect(bodies[2]!.refs_token).toBe("rt");
+    expect(bodies[2]!.documents.map((d) => d.type)).toEqual(["onboarding_form"]);
     if (out.ok) {
       expect(out.data.documents.map((d) => d.type)).toEqual(["id_card", "onboarding_form"]);
-      expect(out.data.usage.calls).toBe(4);
+      expect(out.data.usage.calls).toBe(7); // 3（印刷 stage a）＋3（入職表 stage a）＋1（stage b）
     }
   });
   it("只有身份證：完全唔打 stage b", async () => {
@@ -548,6 +553,9 @@ describe("readTwoStage：混合文件＋429／503 唔退回（驗收 S3／N2）"
       expect(a).toMatchObject({ ok: false, fatal: { status: st, message: "m" } });
       const b = await readTwoStage([doc], { post: async (body) => ((body as { stage: string }).stage === "a" ? ok([formA]) : { ok: false, status: st, message: "mb" }) as never, crop: (_d, p) => p.crops.map(() => IMG) });
       expect(b).toMatchObject({ ok: false, fatal: { status: st, message: "mb" } });
+      // OCR-1：印刷文件 stage a 收到 429／503 同樣 fatal
+      const c = await readTwoStage([idDoc, doc], { post: async () => ({ ok: false, status: st, message: "mc" }) as never, crop: () => [] });
+      expect(c).toMatchObject({ ok: false, fatal: { status: st, message: "mc" } });
     }
     for (const st of [400, 0, 500]) {
       const a = await readTwoStage([doc], { post: async () => ({ ok: false, status: st, message: "m" }) as never, crop: () => [] });

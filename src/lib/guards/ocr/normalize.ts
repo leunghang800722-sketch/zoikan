@@ -141,6 +141,26 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
   }
 }
 
+/** WP-OCR-1：入職表手寫值 vs 身份證印刷值交叉核對結果。 */
+export type CrossResult = "match" | "differs" | "unreadable";
+export interface CrossInfo {
+  /** 對照嘅係邊份文件（身份證欄：onboarding_form；入職表欄：id_card） */
+  against: "id_card" | "onboarding_form";
+  result: CrossResult;
+}
+
+/**
+ * WP-OCR-1：入職表（手寫）值 vs 身份證（印刷、已核實）值。用現有 canon 比較（HKID 全字、dob 比 ISO 日期、中文姓名全字）。
+ * unreadable＝任何一邊睇唔清／空，或者手寫值本身格式唔成立（讀唔穿，唔當「唔一致」）；differs＝手寫值格式成立但同身份證唔同。
+ */
+export function crossCheck(formValue: string | null | undefined, idValue: string | null | undefined, field: OcrFieldKey, now: Date = new Date()): CrossResult {
+  if (isUnclear(formValue) || isUnclear(idValue)) return "unreadable";
+  const nf = normalizeField(field, formValue!, now);
+  const ni = normalizeField(field, idValue!, now);
+  if (nf.canon === ni.canon) return nf.canon === "" ? "unreadable" : "match";
+  return nf.valid && ni.valid ? "differs" : "unreadable";
+}
+
 export interface FieldResult {
   status: FieldStatus;
   /** confirmed＝確認值；review＝預填（候選排序最高分；同分讀 A 優先）；missing＝"" */
@@ -153,4 +173,6 @@ export interface FieldResult {
   reason?: string;
   /** WP-OCR-4（additive）：第三讀仲裁嘅結果類別（淨標籤）：agree_a／agree_b＝仲裁同其中一讀一致且 valid（confirmed）；independent＝仲裁讀到第三個值；unclear＝仲裁睇唔清 */
   arbiter?: "agree_a" | "agree_b" | "independent" | "unclear";
+  /** WP-OCR-1（additive）：同另一份文件嘅交叉核對（只有兩段式下伺服器有 refs 先有） */
+  cross?: CrossInfo;
 }

@@ -203,4 +203,14 @@ npx tsx scripts/staff-import/eval-ocr.ts --manifest … --flow two-stage --out d
 - **分格線防呆**：prompt 加「印刷分格線唔係數字 1；電話固定 8 位；見到 9–10 位請重新數並剔走疑似分格線；戶口號碼按格數抄」＋電話 `digit_count`（模型自報位數，目前只解析保留）。電話 9–10 位時 `normalize.ts` 嘗試剔走「1」得出首位 2–9 嘅 8 位解（唯一或最多 2 個）→ 入候選（reason `phone_gridline_suspect`，status `review`，唔自動 confirmed）。
 - **路徑 B**（`scripts/staff-import/lib/`）：`phone-crop.ts`／`form-address-crop.ts`／`crop-box.ts` 外擴改為按 label 行高比例（上下 1.2×、左右 0.6×、最少 0.03），唔越過上／下一個 label 行同同行嘅左右 label（`crop-pad.ts`），`pad` 參數俾 caller 調。戶口號碼位數按 HKICL 銀行代號核對（`hkicl-digits.ts`，只收計劃書列明嘅匯豐 9／12、中銀 12／14、恒生 9；表外銀行唔檢查），唔啱 → review `acct_digits_mismatch`（`15-fields-merge.ts` 套用）。**位數表需要規劃者核實同補齊其他銀行。**
 
+## 證件辨識跨文件上下文（OCR-1）
+
+- 流程：先讀印刷證件（身份證／住址證明）→ 伺服器回 `refs_token`（已核實欄位值，簽名、10 分鐘、綁用戶、≤8k）→ 入職表 stage a／b 帶 token。入職表**讀 A** 見到印刷證件 confirmed 值（只用嚟判斷潦草字；明顯唔同就照抄並標 `differs_from_reference`），**讀 B 同仲裁盲讀**。只收兩讀一致嘅 confirmed 值：身份證讀錯／兩讀唔同／靠仲裁確認嘅欄唔會帶入。
+- 入職表加讀姓名／身份證號／出生日期，**只做交叉核對**，唔覆蓋身份證值。UI 喺身份證三個關鍵欄下面顯示「入職表手寫（唯讀）：…　同身份證一致 ✓／⚠ 同身份證唔一致／手寫讀唔到」；⚠ 嘅欄要撳「對過證件，以證件為準」先可繼續（改值唔會自動算確認）。入職表欄只有兩讀一致（confirmed）先參與比較，否則顯示「手寫讀唔到」。
+- 欄位級裁圖上限 `OCR_MAX_FIELD_CROPS=6`（電話、地址、姓名、HKID、出生日期；2×2 格上限 4 不變）。姓名／HKID／出生日期冇 box 就唔加裁圖，唔影響後備判定。
+- **配額**：同一次辨識仍只計 1 次（入職表第二個 stage a 用 refs_token 抵銷預留，單次使用）；token 無效就照常預留。`SESSION_SECRET` 輪換會令進行中嘅 token 失效（自動照舊讀／退回舊流程）。
+- **audit `guard_ocr_read`**（淨計數）：stage a `refs_issued`／`refs_injected_docs`／`refs_rejected`；stage b `refs_rejected`、`cross{match,differs,unreadable}`。冇值、冇 token。
+- **評估**：`eval-ocr.ts` two-stage 次序同 client 一致；console 多「跨文件 refs」一行（注入文件數、cross 三類計數）；`--no-refs` 關閉注入方便前後對比。`by_doc_field` 自然多 `onboarding_form.name_zh/hkid/dob`。
+- **路徑 B**：`crosscheck(…, { printed: true })`（`03-crosscheck.ts` 已開）加 `cmp[f].printed`＝同一文件包印刷身份證抽取值對申請表手寫抽取值（姓名／身份證號／英文名／地址）；有明確結果（match／mismatch）時優先於 U Team／Maxwell／DB 打字名單。`fields-ext` 證據類別加 `printed_ref`（獨立於打字名單同手寫讀數；`15-fields-merge` 尚未接入，需要時喺該檔將身份證抽取值以 `printed_ref` 加入 Cand）。
+
 **`GUARD_OCR_ARBITER`**（Zeabur env，預設 `1`）：分歧欄第三讀仲裁開關；`0`／`false`／`off`／`no` 關閉＝回到兩讀。成本：每份文件最多多 1 次 Claude 呼叫（只喺有分歧欄且兩讀 confidence 都唔係 high 時），用量計入 audit `guard_ocr_read` 嘅 `usage_by_provider.claude`，另有 `arbiter_calls`。冇 `CLAUDE_API_KEY`（純 DeepSeek 模式）自動冇仲裁。

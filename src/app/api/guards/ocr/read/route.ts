@@ -9,9 +9,10 @@ import { ApiError, BadRequest, NotFound } from "@/lib/api/errors";
 import { getClientIp, handleApiError } from "@/lib/api/http";
 import { writeAudit } from "@/lib/audit";
 import { reserveQuota } from "@/lib/guards/import/limits";
-import { OCR_DOC_TYPES, OCR_FIELDS, OCR_MAX_BODY_CHARS, OCR_MAX_DOCS, OCR_MAX_IMAGE_CHARS, OCR_MAX_TILES, isGuardOcrConfigured, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
-import { OCR_CROP_FIELDS, hasCropFields } from "@/lib/guards/ocr/field-crops";
-import { CONTINUATION_INVALID_MSG, OCR_MAX_CONTINUATION_CHARS, signContinuation, verifyContinuation } from "@/lib/guards/ocr/continuation";
+import { OCR_DOC_TYPES, OCR_FIELDS, OCR_MAX_BODY_CHARS, OCR_MAX_DOCS, OCR_MAX_FIELD_CROPS, OCR_MAX_IMAGE_CHARS, OCR_MAX_TILES, isGuardOcrConfigured, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
+import { OCR_CROP_FIELDS, OCR_EXTRA_CROP_FIELDS, hasCropFields } from "@/lib/guards/ocr/field-crops";
+import { CONTINUATION_INVALID_MSG, OCR_MAX_CONTINUATION_CHARS, consumeRefsCredit, signContinuation, signRefs, verifyContinuation, verifyRefs } from "@/lib/guards/ocr/continuation";
+import { confirmedRefsFromDocs, countCross, crossForOnboarding, refsCount, type CrossOutcome, type Refs } from "@/lib/guards/ocr/refs";
 import { OcrUnavailableError } from "@/lib/guards/ocr/vision-client";
 import { getReadClients } from "@/lib/guards/ocr/clients";
 import { readDocument, readStageA, readStageB, type DocumentReadResult, type StageAResult } from "@/lib/guards/ocr/read";
@@ -39,6 +40,8 @@ const bodyASchema = z
   .object({
     stage: z.literal("a"),
     documents: z.array(z.object({ type: docTypes, full: dataUrl, tiles: z.array(dataUrl).max(OCR_MAX_TILES).optional() }).strict()).min(1).max(OCR_MAX_DOCS),
+    // WP-OCR-1（additive）：印刷證件 stage a 回應嘅 refs_token；驗簽失敗唔報錯（照舊讀，audit 計 refs_rejected）。長度由 verifyRefs 判斷（超長＝rejected）。
+    refs_token: z.string().max(200_000).optional(),
   })
   .strict();
 
@@ -53,12 +56,14 @@ const bodyBSchema = z
             type: docTypes,
             continuation: z.string().min(1).max(OCR_MAX_CONTINUATION_CHARS),
             full: dataUrl.optional(),
-            images_b: z.object({ kind: z.enum(["tiles", "field_crops"]), images: z.array(dataUrl).min(1).max(OCR_MAX_TILES), field_of: z.array(z.union([z.enum(OCR_FIELDS), z.null()])).max(OCR_MAX_TILES).optional() }).strict(),
+            images_b: z.object({ kind: z.enum(["tiles", "field_crops"]), images: z.array(dataUrl).min(1).max(OCR_MAX_FIELD_CROPS), field_of: z.array(z.union([z.enum(OCR_FIELDS), z.null()])).max(OCR_MAX_FIELD_CROPS).optional() }).strict(),
           })
           .strict(),
       )
       .min(1)
       .max(OCR_MAX_DOCS),
+    // WP-OCR-1（additive）：同 stage a 一樣；有效先計交叉核對
+    refs_token: z.string().max(200_000).optional(),
   })
   .strict();
 
@@ -153,7 +158,13 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
   if (new Set(docs.map((d) => d.type)).size !== docs.length) throw BadRequest("每種文件只可以傳一份");
   // 驗收 S3：非入職表文件（冇欄位級裁圖設計）要帶 tiles，伺服器直接讀完
   if (docs.some((d) => !hasCropFields(d.type) && !(d.tiles && d.tiles.length > 0))) throw BadRequest("請求格式唔啱（documents.tiles）");
-  await reserveQuota(session, "ocr");
+  // WP-OCR-1：refs_token 驗簽（失敗＝照舊讀，唔報錯，audit 計 refs_rejected）。有效 token 證明同一流程嘅印刷證件 stage a 已預留過配額
+  // → 第二次 stage a（入職表）用 token 抵銷一次預留（單次使用 credit）；token 無效／已用過就照常預留。
+  const secret = sessionSecret();
+  const rv = parsed.data.refs_token !== undefined ? verifyRefs(parsed.data.refs_token, secret, session.userId) : null;
+  const refsRejected = rv !== null && !rv.ok ? 1 : 0;
+  const refs: Refs | null = rv && rv.ok ? rv.refs : null;
+  if (!(rv && rv.ok && docs.every((d) => hasCropFields(d.type)) && consumeRefsCredit(rv.nonce))) await reserveQuota(session, "ocr");
   const got = clientsOr503();
   if ("res" in got) return got.res;
   const client = got.client;
@@ -165,7 +176,7 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
   try {
     items = await Promise.all(
       docs.map(async (d): Promise<Item> =>
-        hasCropFields(d.type) ? { kind: "a", r: await readStageA(client, d.type, d.full) } : { kind: "final", r: await readDocument(client, d.type, { full: d.full, tiles: d.tiles! }) },
+        hasCropFields(d.type) ? { kind: "a", r: await readStageA(client, d.type, d.full, refs) } : { kind: "final", r: await readDocument(client, d.type, { full: d.full, tiles: d.tiles! }) },
       ),
     );
   } catch (e) {
@@ -177,7 +188,18 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
   }
   const ms = Date.now() - t0;
   const usage = sumUsage(items.map((i) => i.r));
-  const secret = sessionSecret();
+  // WP-OCR-1：印刷證件（final）嘅 confirmed 欄位值 → refs_token（additive，客戶端帶去入職表 stage a／b）。冇 final 文件＝唔簽發。
+  const finals = items.flatMap((i) => (i.kind === "final" ? [i.r] : []));
+  let refsToken: string | undefined;
+  // 同一請求混入入職表（舊 client 一次過傳）唔簽發：入職表讀 A 同 refs 嘅來源要分開兩次請求
+  if (finals.length > 0 && !docs.some((d) => hasCropFields(d.type))) {
+    try {
+      refsToken = signRefs(confirmedRefsFromDocs(finals), session.userId, secret);
+    } catch {
+      refsToken = undefined; // 過大／secret 問題：當冇 token（入職表照舊讀）
+    }
+  }
+  const refsInjectedDocs = items.filter((i) => i.kind === "a" && i.r.refs_injected > 0).length;
   const documents = items.map((i) => {
     if (i.kind === "final") {
       const r = i.r;
@@ -217,19 +239,25 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
       images: docs.reduce((n, d) => n + 1 + (hasCropFields(d.type) ? 0 : d.tiles!.length), 0),
       ms,
       arbiter_calls: items.filter((i) => i.kind === "final" && i.r.arbiter.called).length,
+      // WP-OCR-1：淨計數（冇值）——簽發咗 refs_token 冇／幾多份入職表讀 A 注入咗 refs／帶嚟嘅 refs_token 驗簽失敗
+      refs_issued: refsToken ? 1 : 0,
+      refs_injected_docs: refsInjectedDocs,
+      refs_rejected: refsRejected,
       ...usage,
     },
     ip: getClientIp(req),
   });
-  return NextResponse.json({ stage: "a", model: client.a.model, ms, usage: { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, calls: usage.calls }, provider_used: providerUsed, documents });
+  return NextResponse.json({ stage: "a", model: client.a.model, ms, usage: { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, calls: usage.calls }, provider_used: providerUsed, ...(refsToken ? { refs_token: refsToken } : {}), documents });
 }
 
 /** field_crops 嘅 field_of 必須正好係該文件類型嘅裁圖欄位（每欄一張、冇重複），images 長度一致。 */
 function fieldCropsValid(type: OcrDocType, imagesLen: number, fieldOf: readonly (OcrFieldKey | null)[] | undefined): boolean {
   const want = OCR_CROP_FIELDS[type];
-  if (!want || !fieldOf || fieldOf.length !== imagesLen) return false;
+  if (!want || !fieldOf || fieldOf.length !== imagesLen || imagesLen > OCR_MAX_FIELD_CROPS) return false;
   const got = fieldOf.filter((f): f is OcrFieldKey => f !== null);
-  return got.length === fieldOf.length && new Set(got).size === got.length && got.length === want.length && want.every((f) => got.includes(f));
+  // WP-OCR-1：必須欄位（電話、地址）一定要有；額外欄位（姓名／HKID／出生日期）有就收；每欄最多一張
+  const extra = OCR_EXTRA_CROP_FIELDS[type] ?? [];
+  return got.length === fieldOf.length && new Set(got).size === got.length && want.every((f) => got.includes(f)) && got.every((f) => want.includes(f) || extra.includes(f));
 }
 
 async function handleStageB(req: Request, session: Session, raw: unknown): Promise<NextResponse> {
@@ -242,6 +270,7 @@ async function handleStageB(req: Request, session: Session, raw: unknown): Promi
   const conts = docs.map((d) => verifyContinuation(d.continuation, secret, session.userId));
   if (conts.some((c) => !c.ok) || docs.some((d, i) => (conts[i] as { ok: true; payload: { type: OcrDocType } }).payload.type !== d.type)) throw BadRequest(CONTINUATION_INVALID_MSG);
   for (const d of docs) {
+    if (d.images_b.kind === "tiles" && d.images_b.images.length > OCR_MAX_TILES) throw BadRequest("請求格式唔啱（images_b.images）");
     if (d.images_b.kind === "field_crops" && !fieldCropsValid(d.type, d.images_b.images.length, d.images_b.field_of)) throw BadRequest("請求格式唔啱（images_b.field_of）");
   }
   // stage b 唔另外預留配額：continuation 證明 stage a 已預留過（stage a 同舊單次流程各計一次）
@@ -270,7 +299,16 @@ async function handleStageB(req: Request, session: Session, raw: unknown): Promi
     }
     throw e;
   }
-  return respondResults(req, session, client, results, imagesCount, Date.now() - t0, "b");
+  // WP-OCR-1：有效 refs_token → 入職表欄同身份證值交叉核對（伺服器計；冇 refs 就冇 cross）
+  const rv = parsed.data.refs_token !== undefined ? verifyRefs(parsed.data.refs_token, secret, session.userId) : null;
+  const refsRejected = rv !== null && !rv.ok ? 1 : 0;
+  let cross: CrossOutcome | null = null;
+  const formRes = results.find((r) => r.type === "onboarding_form");
+  if (rv && rv.ok && refsCount(rv.refs) > 0 && formRes) {
+    cross = crossForOnboarding(rv.refs, formRes.fields);
+    for (const [k, c] of Object.entries(cross.form)) formRes.fields[k as OcrFieldKey]!.cross = c;
+  }
+  return respondResults(req, session, client, results, imagesCount, Date.now() - t0, "b", { cross, refsRejected });
 }
 
 async function handleLegacy(req: Request, session: Session, raw: unknown): Promise<NextResponse> {
@@ -316,7 +354,7 @@ function stageBCounts(results: readonly DocumentReadResult[]) {
   };
 }
 
-async function respondResults(req: Request, session: Session, client: ReturnType<typeof getReadClients>, results: DocumentReadResult[], imagesCount: number, ms: number, stage?: "b"): Promise<NextResponse> {
+async function respondResults(req: Request, session: Session, client: ReturnType<typeof getReadClients>, results: DocumentReadResult[], imagesCount: number, ms: number, stage?: "b", extra?: { cross: CrossOutcome | null; refsRejected: number }): Promise<NextResponse> {
   const usage = results.reduce((a, r) => ({ prompt_tokens: a.prompt_tokens + r.usage.promptTokens, completion_tokens: a.completion_tokens + r.usage.completionTokens, calls: a.calls + r.usage.calls, truncated_calls: a.truncated_calls + r.usage.truncated }), { prompt_tokens: 0, completion_tokens: 0, calls: 0, truncated_calls: 0 });
   // 供應商：任何一份文件讀 A 退回咗 DeepSeek，頂層就報 deepseek（每份文件另有自己嘅 provider_used）
   const providerUsed = { a: results.every((r) => r.provider_used.a === "claude") ? ("claude" as const) : ("deepseek" as const), b: results.every((r) => r.provider_used.b === "claude") ? ("claude" as const) : ("deepseek" as const) };
@@ -342,7 +380,8 @@ async function respondResults(req: Request, session: Session, client: ReturnType
     action: "guard_ocr_read",
     // truncated_calls：撞 output token 上限嘅呼叫數（只記數量，冇內容）
     // arbiter_calls：第三讀仲裁呼叫數（只記數量）
-    after: { ok: true, ...(stage ? { stage, ...stageBCounts(results) } : {}), model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, arbiter_calls: results.filter((r) => r.arbiter.called).length, ...usage },
+    // WP-OCR-1：stage b 另記交叉核對計數（match／differs／unreadable）同 refs_rejected——淨數字
+    after: { ok: true, ...(stage ? { stage, ...stageBCounts(results) } : {}), ...(extra ? { refs_rejected: extra.refsRejected, ...(extra.cross ? { cross: countCross(extra.cross) } : {}) } : {}), model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, arbiter_calls: results.filter((r) => r.arbiter.called).length, ...usage },
     ip: getClientIp(req),
   });
   return NextResponse.json({
@@ -352,6 +391,8 @@ async function respondResults(req: Request, session: Session, client: ReturnType
     usage_by_provider: byProvider,
     // WP-OCR-CLAUDE §36（additive）：兩次讀實際用咗邊個供應商／型號（淨係標籤，冇圖片、冇欄位值）
     provider_used: providerUsed,
+    // WP-OCR-1（additive）：身份證欄對入職表手寫值嘅交叉核對（只有 stage b 且帶有效 refs_token 先有）；client 併入 id_card 文件各欄嘅 cross
+    ...(extra?.cross && Object.keys(extra.cross.id).length > 0 ? { id_cross: extra.cross.id } : {}),
     models_used: { a: results.every((r) => r.model_used.a === results[0]!.model_used.a) ? results[0]!.model_used.a : results.find((r) => r.provider_used.a === "deepseek")!.model_used.a, b: results[0]?.model_used.b ?? client.b.model },
     // WP-OCR-4（additive）：每欄多 candidates_ranked／arbiter；每份文件多 arbiter { called, fields }（淨計數）
     documents: results.map((r) => ({ type: r.type, fields: r.fields, parse_ok: r.parse_ok, provider_used: r.provider_used, arbiter: r.arbiter, images_b_kind: r.images_b_kind, field_boxes_used: r.field_boxes_used })),
