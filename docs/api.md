@@ -2679,3 +2679,10 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 - P17.4（前端）：合約編輯清空結束日送 `effective_to: null`（API 本身一直接受，`LongtermContractUpdateSchema.effective_to` 為 `nullableDateOnly`）；4xx（含 409 `contract_overlap`）喺表單位置顯示。
 - P17.5：aggregate 同日 RD／NPL 衝突按每週一日例假判定（見 docs/ops.md），無 API 變更。
 - 計算：`slSegmentVerdict(..., confirmedShortPaid)` 新參數，預設 `SL_CONFIRMED_SHORT_PAID=true`（已確認短病假照出，見 docs/ops.md）。
+
+## P19b（離職月結算：平均工資 ADW 自動計＋離職者導航卡）
+- **migration（只加）** `20261017000000_p19b_leaver_adw`：`longterm_payroll_lines` 加 nullable `al_daily_rate_basis`（TEXT：`imported`／`computed_eo`／`fallback_monthly`／`manual_amount`；非離職者 null）同 `al_adw_json`（JSONB：`basis`、`rateUsed`、`monthlyFallback`、`eo{adw,periodFrom,periodTo,daysCounted,disregardedDays,wages,historyIncomplete,monthsMissing}`、`needsConfirm`、`leaveDate`、`balanceDays`）。寫入用原生 SQL（唔使重生 Prisma client）。
+- `GET /api/longterm/payroll/:month`：每行 additive `al_daily_rate_basis`。其餘欄位、`POST /api/longterm/avg-wages` 不變。
+- 新 `GET /api/longterm/leaver-adw?month=YYYY-MM`（`長工糧:view`，唯讀）：`{ month, items[], pending_count, awaiting_recompute_count, source_prefill }`；`items[]`＝`guard_id`／`guard_name`／`guard_staff_no`／`leave_date`／`basis`／`daily_rate_used`／`suggested_adw`／`history_incomplete`／`months_missing`／`balance_days`／`saved_awaiting_recompute`／`saved_avg_daily_wage`／`advice`。條件：最新未作廢 run 嘅離職者糧線 `basis` 係 `fallback_monthly`（歷史糧線唔齊）；已有 `guard_avg_wages` 記錄但未重算＝`saved_awaiting_recompute`；重算後 `basis=imported` 即消失。
+- 鎖月 `POST /api/month-closes/:id/lock` 回應 additive `warnings: string[]`、`leaver_adw_pending: number`（只警告，唔阻鎖）；一鍵結算 precheck `numbers.leaverAdwPending` ＋ warning（唔 halt）。
+- 計算（`src/lib/longterm-payroll/adw.ts`、`adw-history.ts`）：年假補償日薪優先次序＝人手金額（`leaver_settlement.amount`）＞ `guard_avg_wages` 該月記錄 ＞ 《僱傭條例》第 2(3) 條自動計（期間完整先用）＞ 月薪÷當月日數。8 月 oracle 兩位離職者冇糧線歷史→維持月薪÷31，gate 數字不變。
