@@ -1892,6 +1892,10 @@ model LongtermPayrollLine {
 
   notesJson Json @default("[]") @map("notes_json") // string[]，逐項來源說明（跟 s07 flags 一致精神）
 
+  // P19b：離職者年假補償日薪來源（imported／computed_eo／fallback_monthly／manual_amount）＋平均工資明細；非離職者 null
+  alDailyRateBasis String? @map("al_daily_rate_basis")
+  alAdwJson        Json?   @map("al_adw_json")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

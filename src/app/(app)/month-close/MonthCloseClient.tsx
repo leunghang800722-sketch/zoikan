@@ -69,6 +69,18 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
   useEffect(() => {
     monthRef.current = month;
   }, [month]);
+  // P19b：鎖月前顯示「離職者平均工資待確認」人數（只警告，唔阻鎖）；GET 失敗就唔顯示。
+  const [leaverAdwPending, setLeaverAdwPending] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    setLeaverAdwPending(0);
+    void apiGet<{ pending_count: number }>(`/api/longterm/leaver-adw?month=${month}`).then((r) => {
+      if (alive && r.ok) setLeaverAdwPending(r.data.pending_count);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [month]);
   async function loadMonthClose() {
     const reqMonth = month;
     const res = await apiGet<{ rows: Array<{ id: string; locked_at: string | null }> }>(`/api/month-closes?month=${reqMonth}`);
@@ -252,11 +264,12 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
       body.sl_unpaid_override = true;
       body.sl_unpaid_reason = slUnpaid.reason;
     }
-    const res = await apiPost(`/api/month-closes/${gen.data.month_close.id}/lock`, body);
+    const res = await apiPost<{ warnings?: string[] }>(`/api/month-closes/${gen.data.month_close.id}/lock`, body);
     setBusy(false);
     if (!res.ok) setError(res.message);
     else {
-      setNotice(`${month} 已鎖定`);
+      const lockWarnings = res.data?.warnings ?? [];
+      setNotice(`${month} 已鎖定${lockWarnings.length ? `。注意：${lockWarnings.join("；")}` : ""}`);
       setLockedOverride(true);
       void loadMonthClose();
       setNeedDiffReason(false);
@@ -328,6 +341,9 @@ export default function MonthCloseOneClickPage({ isBoss, canUnlock }: { isBoss: 
       />
 
       <Banner kind="error" message={error} />
+      {!locked && leaverAdwPending > 0 && (
+        <Banner kind="warning" message={`${leaverAdwPending} 位離職者年假補償未有平均工資記錄（系統用咗月薪÷當月日數）——唔阻鎖月，建議鎖定前到長工糧月報頁核對`} data-testid="leaver-adw-lock-warning" />
+      )}
       <Banner kind="success" message={notice} />
       <Banner kind="error" message={unsentMsg} />
       {locked && <div className="rounded border border-zk-warning-border bg-zk-warning-bg px-3 py-2 text-zk-sm text-zk-warning-dark">{month} 已鎖定，成頁只讀；要改要搵有「月結鎖定解鎖」權限嘅同事。</div>}

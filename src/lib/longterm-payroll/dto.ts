@@ -41,7 +41,7 @@ const LINE_FIELDS = [
 // DTO 之前 merge 落 row，再喺呢度嘅白名單明文列出，PDPO：淨係
 // nameZh／staffNo，唔夾帶其他 guard PII）；`prevGross`/`prevAutopay`/
 // `grossDelta`/`autopayDelta`＝「同上月比較」欄（見 route.ts）。
-const LINE_WITH_GUARD_FIELDS = [...LINE_FIELDS, "guardName", "guardStaffNo", "prevGross", "prevAutopay", "grossDelta", "autopayDelta"] as const;
+const LINE_WITH_GUARD_FIELDS = [...LINE_FIELDS, "guardName", "guardStaffNo", "prevGross", "prevAutopay", "grossDelta", "autopayDelta", "alDailyRateBasis"] as const;
 
 const CONTRACT_WITH_GUARD_FIELDS = [...CONTRACT_FIELDS, "guardName", "guardStaffNo"] as const;
 
