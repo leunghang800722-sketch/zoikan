@@ -63,6 +63,73 @@ export function groupHkid(v: string): string {
   return m ? `${m[1]} ${m[2]} (${m[3]})` : v;
 }
 
+// ---------- WP-OCR-4：候選 chip（一撳套用）＋字級分歧高亮 ----------
+
+interface DiffSeg {
+  ch: string;
+  /** 呢個字同對方唔同（刪／換／加） */
+  diff: boolean;
+}
+export interface CharDiff {
+  a: DiffSeg[];
+  b: DiffSeg[];
+  /** max(a 嘅不同字數, b 嘅不同字數) */
+  changed: number;
+}
+
+/** 逐字（code point）LCS 比對：回傳兩邊各字係咪屬於分歧位。純函數。 */
+export function diffChars(a: string, b: string): CharDiff {
+  const x = [...a];
+  const y = [...b];
+  const dp: number[][] = Array.from({ length: x.length + 1 }, () => new Array<number>(y.length + 1).fill(0));
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) dp[i]![j] = x[i] === y[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+  const sa: DiffSeg[] = [];
+  const sb: DiffSeg[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) {
+      sa.push({ ch: x[i]!, diff: false });
+      sb.push({ ch: y[j]!, diff: false });
+      i++;
+      j++;
+    } else if (j >= y.length || (i < x.length && dp[i + 1]![j]! >= dp[i]![j + 1]!)) {
+      sa.push({ ch: x[i]!, diff: true });
+      i++;
+    } else {
+      sb.push({ ch: y[j]!, diff: true });
+      j++;
+    }
+  }
+  return { a: sa, b: sb, changed: Math.max(sa.filter((s) => s.diff).length, sb.filter((s) => s.diff).length) };
+}
+
+/** 兩個候選只差 1–2 個字（高亮分歧字先有意義）。 */
+export function isCloseVariant(a: string, b: string, maxChanged = 2): boolean {
+  if (!a || !b || a === b) return false;
+  const d = diffChars(a, b);
+  return d.changed >= 1 && d.changed <= maxChanged;
+}
+
+const MAX_CHIPS = 4;
+export interface CandidateChip {
+  value: string;
+  /** 逐字分歧高亮（淨中文姓名／地址、同參考候選只差 1–2 字先有）；null＝唔高亮 */
+  segs: DiffSeg[] | null;
+}
+
+/** review 欄嘅候選 chip：最多 4 個、去重；中文姓名／地址同第一個候選（第一個本身對第二個）比對高亮分歧字。 */
+export function candidateChips(k: OcrFieldKey, candidates: readonly string[]): CandidateChip[] {
+  const vals = [...new Set(candidates.map((c) => c.trim()).filter(Boolean))].slice(0, MAX_CHIPS);
+  const highlight = k === "name_zh" || k === "address";
+  return vals.map((value, i) => {
+    const ref = i === 0 ? vals[1] : vals[0];
+    if (!highlight || !ref || !isCloseVariant(value, ref)) return { value, segs: null };
+    const d = diffChars(value, ref);
+    return { value, segs: d.a };
+  });
+}
+
 const WRITTEN_LABEL: Record<string, string> = {
   hkid: "身份證號", name_zh: "中文姓名", name_en: "英文姓名", date_of_birth: "出生日期", phone: "電話", address: "地址",
   nameZh: "中文姓名", nameEn: "英文姓名", dateOfBirth: "出生日期", sex: "性別",

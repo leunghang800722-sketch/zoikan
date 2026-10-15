@@ -2,6 +2,7 @@
 // 兩次獨立讀「正規化後逐字相同」＋格式驗證通過先 confirmed；其餘 review／missing。
 import { canonicalHkid, formatHkid, hkidCheckDigitValid, normalizeTelHk } from "@/lib/guards/identity";
 import type { OcrFieldKey } from "./config";
+import type { RankedCandidate } from "./rank";
 
 export type FieldStatus = "confirmed" | "review" | "missing";
 
@@ -115,28 +116,14 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
 
 export interface FieldResult {
   status: FieldStatus;
-  /** confirmed＝確認值；review＝預填（讀 A 優先）；missing＝"" */
+  /** confirmed＝確認值；review＝預填（候選排序最高分；同分讀 A 優先）；missing＝"" */
   value: string;
-  /** review：兩個讀數（去重）。confirmed／missing 為空 */
+  /** review：候選值（按排序，去重，≤4）。confirmed／missing 為空（舊欄位，保留向後相容） */
   candidates: string[];
+  /** WP-OCR-4（additive）：排序候選＋來源＋分數＋驗證結果；confirmed／missing 為空陣列 */
+  candidates_ranked: RankedCandidate[];
   /** 原因碼（無值）：reads_differ｜one_read_unclear｜invalid_format 類｜unclear */
   reason?: string;
-}
-
-/** 兩個獨立讀數（原始字串或 unclear）→ 欄位結果。 */
-export function reconcile(key: OcrFieldKey, a: string | null | undefined, b: string | null | undefined, now: Date = new Date()): FieldResult {
-  const ua = isUnclear(a);
-  const ub = isUnclear(b);
-  if (ua && ub) return { status: "missing", value: "", candidates: [], reason: "unclear" };
-  const na = ua ? null : normalizeField(key, a!, now);
-  const nb = ub ? null : normalizeField(key, b!, now);
-  if (na && nb) {
-    if (na.canon === nb.canon) {
-      if (na.valid) return { status: "confirmed", value: na.display, candidates: [] };
-      return { status: "review", value: na.display, candidates: [na.display], reason: na.reason ?? "invalid_format" };
-    }
-    return { status: "review", value: na.display, candidates: [...new Set([na.display, nb.display])], reason: "reads_differ" };
-  }
-  const only = (na ?? nb)!;
-  return { status: "review", value: only.display, candidates: [only.display], reason: "one_read_unclear" };
+  /** WP-OCR-4（additive）：第三讀仲裁嘅結果類別（淨標籤）：agree_a／agree_b＝仲裁同其中一讀一致且 valid（confirmed）；independent＝仲裁讀到第三個值；unclear＝仲裁睇唔清 */
+  arbiter?: "agree_a" | "agree_b" | "independent" | "unclear";
 }

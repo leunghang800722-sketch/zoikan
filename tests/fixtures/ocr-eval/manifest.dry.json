@@ -1,0 +1,67 @@
+{
+  "cases": [
+    {
+      "id": "syn-01-perfect",
+      "docs": [
+        { "type": "id_card", "image": "id-card.png" },
+        { "type": "onboarding_form", "image": "form.png" }
+      ],
+      "truth": { "name_zh": "測試甲", "name_en": "TEST ALPHA", "hkid": "Z900001(2)", "dob": "1990-01-15", "sex": "M", "phone": "90001111", "address": "新界火炭示範街99號虛構大廈15樓A室", "bank_account": "000000000" }
+    },
+    {
+      "id": "syn-02-alternative-has-truth",
+      "docs": [{ "type": "id_card", "image": "id-card.png" }],
+      "truth": { "name_zh": "測試甲" },
+      "fake": {
+        "id_card": {
+          "a": { "name_zh": { "value": "測試申", "confidence": "medium", "reason": "ambiguous_char", "alternatives": ["測試甲"] } },
+          "b": { "name_zh": "測試由" }
+        }
+      }
+    },
+    {
+      "id": "syn-03-arbiter-majority",
+      "docs": [{ "type": "onboarding_form", "image": "form.png" }],
+      "truth": { "phone": "90001112" },
+      "fake": {
+        "onboarding_form": {
+          "a": { "phone": { "value": "9000 1112", "confidence": "low", "reason": "blurry" } },
+          "b": { "phone": { "value": "9000 1113", "confidence": "low", "reason": "blurry" } }
+        }
+      }
+    },
+    {
+      "id": "syn-04-wrong-and-missing",
+      "docs": [{ "type": "id_card", "image": "id-card.png" }],
+      "truth": { "hkid": "Z900001(2)", "dob": "1991-02-03" },
+      "fake": {
+        "id_card": {
+          "a": { "hkid": "Z900001(3)", "dob": "unclear" },
+          "b": { "hkid": "Z900001(3)", "dob": null }
+        }
+      }
+    },
+    {
+      "id": "syn-05-check-digit-ranks-first",
+      "docs": [{ "type": "id_card", "image": "id-card.png" }],
+      "truth": { "hkid": "Z900002(0)" },
+      "fake": {
+        "id_card": {
+          "a": { "hkid": { "value": "Z900002(8)", "confidence": "high" } },
+          "b": { "hkid": "Z900002(0)" }
+        }
+      }
+    },
+    {
+      "id": "syn-06-address-lookalike",
+      "docs": [{ "type": "address_proof", "image": "address-proof.png" }],
+      "truth": { "address": "新界火炭示範街99號虛構大廈15樓A室" },
+      "fake": {
+        "address_proof": {
+          "a": { "address": "新界火炭示範街99號虛構大廈15樓A室" },
+          "b": { "address": "新界火炭示範街99號虛構大厦15樓A室" }
+        }
+      }
+    }
+  ]
+}

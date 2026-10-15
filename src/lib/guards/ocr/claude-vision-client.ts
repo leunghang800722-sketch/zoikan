@@ -5,6 +5,7 @@
 // - 錯誤用 SDK 型別映射，全部變 OcrUnavailableError（訊息唔帶請求內容）。SDK log 關（唔印 request body）。
 import Anthropic from "@anthropic-ai/sdk";
 import { OCR_CALL_TIMEOUT_MS, OCR_CLAUDE_MAX_OUTPUT_TOKENS, ocrClaudeModel, type OcrFieldKey } from "./config";
+import { READ_CONFIDENCE, READ_REASONS } from "./field-read";
 import { OcrUnavailableError, type VisionClient, type VisionRequest, type VisionResponse } from "./vision-client";
 
 type MessagesApi = { messages: Pick<Anthropic["messages"], "create"> };
@@ -15,11 +16,26 @@ export function anthropicClientOptions(apiKey: string, timeoutMs: number) {
   return { apiKey, baseURL: "https://api.anthropic.com", authToken: null, timeout: timeoutMs, maxRetries: 0, logLevel: "off" as const };
 }
 
-/** 每個欄位：字串（含 "unclear"）或 null；全部 required、唔准多餘 key。 */
+/**
+ * WP-OCR-4：每個欄位係 object `{ value, confidence, reason, alternatives }`（全部 required、唔准多餘 key）。
+ * value＝字串（含 "unclear"）或 null；reason 無則 null；alternatives 最多 2 個由 read.ts 截（structured output 唔支援 maxItems）。
+ * 舊純字串格式只會由 DeepSeek／舊 fake 出，read.ts 照樣接受。
+ */
 export function ocrJsonSchema(fields: readonly string[]): { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false } {
+  const fieldObject = {
+    type: "object",
+    properties: {
+      value: { anyOf: [{ type: "string" }, { type: "null" }] },
+      confidence: { type: "string", enum: [...READ_CONFIDENCE] },
+      reason: { anyOf: [{ type: "string", enum: [...READ_REASONS] }, { type: "null" }] },
+      alternatives: { type: "array", items: { type: "string" } },
+    },
+    required: ["value", "confidence", "reason", "alternatives"],
+    additionalProperties: false,
+  };
   return {
     type: "object",
-    properties: Object.fromEntries(fields.map((f) => [f, { anyOf: [{ type: "string" }, { type: "null" }] }])),
+    properties: Object.fromEntries(fields.map((f) => [f, fieldObject])),
     required: [...fields],
     additionalProperties: false,
   };

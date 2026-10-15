@@ -13,7 +13,7 @@ import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 import { canvasFromImageFile, isPdfFile, openPdf, prepareFromCanvas, type PdfHandle, type PreparedImage } from "@/lib/guards/ocr/browser-images";
 import { normalizeField } from "@/lib/guards/ocr/normalize";
-import { CRITICAL_MSG, FIELD_LABEL, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
+import { CRITICAL_MSG, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
 import type { FieldStatus } from "@/lib/guards/ocr/normalize";
 import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
 import { kickerFor } from "@/lib/nav/schema";
@@ -36,6 +36,7 @@ const REASON_MSG: Record<string, string> = {
   address_format: "地址太短",
   reads_differ: "兩次辨識結果唔一樣，請對住圖揀一個或者自己改",
   one_read_unclear: "其中一次辨識睇唔清，請對住圖核對",
+  both_unclear_alternatives: "兩次都睇唔清，只有候選字，請對住圖核對",
   unclear: "睇唔清，請自己輸入",
   simplified_chars: "疑似簡體字，請對住證件核對原字",
 };
@@ -44,6 +45,8 @@ interface OcrField {
   status: FieldStatus;
   value: string;
   candidates: string[];
+  /** WP-OCR-4（additive）：按格式驗證排序嘅候選；舊 server 冇 */
+  candidates_ranked?: { value: string; sources: string[]; score: number; reason: string }[];
   reason?: string;
 }
 interface OcrDocResult {
@@ -217,7 +220,7 @@ export function NewFromDocsClient() {
     const put = (k: OcrFieldKey, d: OcrDocResult | undefined) => {
       const r = d?.fields[k];
       if (!r) return false;
-      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates, reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type };
+      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type };
       return true;
     };
     for (const k of OCR_DOC_FIELDS.id_card) put(k, byType.get("id_card"));
@@ -493,11 +496,20 @@ export function NewFromDocsClient() {
                       />
                     )}
                     {f.candidates.length > 1 && (
-                      <div className="flex flex-wrap items-center gap-1.5 text-zk-sm">
-                        <span className="text-zk-faint">兩次辨識：</span>
-                        {f.candidates.map((c) => (
-                          <Button variant="secondary" size="sm" key={c} type="button" onClick={() => setField(k, c)}>
-                            {c}
+                      <div className="flex flex-wrap items-center gap-1.5 text-zk-sm" data-testid={`ocr-chips-${k}`}>
+                        <span className="text-zk-faint">候選（撳一下套用）：</span>
+                        {candidateChips(k, f.candidates).map((c, i) => (
+                          <Button
+                            variant={c.value === f.value ? "primary" : "secondary"}
+                            size="sm"
+                            key={c.value}
+                            type="button"
+                            className="max-w-full whitespace-normal break-all text-left"
+                            aria-pressed={c.value === f.value}
+                            data-testid={`ocr-chip-${k}-${i}`}
+                            onClick={() => setField(k, c.value)}
+                          >
+                            {c.segs ? c.segs.map((sg, n) => (sg.diff ? <mark key={n} className="rounded-sm bg-zk-warning-bg px-px font-bold text-zk-danger-dark" data-diff="1">{sg.ch}</mark> : <span key={n}>{sg.ch}</span>)) : c.value}
                           </Button>
                         ))}
                       </div>

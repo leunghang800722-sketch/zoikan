@@ -7,7 +7,8 @@ import fsp from "node:fs/promises";
 import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { hkidCheckDigitValid } from "@/lib/guards/identity";
-import { isUnclear, normalizeField, parseDob, reconcile } from "@/lib/guards/ocr/normalize";
+import { isUnclear, normalizeField, parseDob } from "@/lib/guards/ocr/normalize";
+import { reconcile } from "@/lib/guards/ocr/reconcile";
 import { parseModelJson, readDocument } from "@/lib/guards/ocr/read";
 import { buildSystemPrompt, buildUserTextFull, buildUserTextTiles } from "@/lib/guards/ocr/prompts";
 import { DeepSeekVisionClient, OcrUnavailableError, setVisionClientForTests, type VisionClient, type VisionRequest, type VisionResponse } from "@/lib/guards/ocr/vision-client";
@@ -111,12 +112,12 @@ describe("正規化／格式驗證／reconcile（純函數）", () => {
   });
   it("zod 解析：只認白名單 key、壞 JSON／錯型別 → null；圍欄 JSON 可解析", () => {
     const f = OCR_DOC_FIELDS.id_card;
-    expect(parseModelJson('{"hkid":"A123456(3)","extra":"x"}', f)).toEqual({ hkid: "A123456(3)" });
-    expect(parseModelJson('```json\n{"hkid":"A123456(3)"}\n```', f)).toEqual({ hkid: "A123456(3)" });
+    expect(parseModelJson('{"hkid":"A123456(3)","extra":"x"}', f)).toEqual({ hkid: { value: "A123456(3)" } });
+    expect(parseModelJson('```json\n{"hkid":"A123456(3)"}\n```', f)).toEqual({ hkid: { value: "A123456(3)" } });
     expect(parseModelJson("not json", f)).toBeNull();
     expect(parseModelJson('{"hkid":{"a":1}}', f)).toBeNull();
     expect(parseModelJson('{"hkid":"' + "x".repeat(500) + '"}', f)).toBeNull();
-    expect(parseModelJson('{"hkid":null}', f)).toEqual({ hkid: null });
+    expect(parseModelJson('{"hkid":null}', f)).toEqual({ hkid: { value: null } });
   });
   it("tileRects：2×2 重疊 20%，覆蓋全圖", () => {
     const r = tileRects(1000, 500);
