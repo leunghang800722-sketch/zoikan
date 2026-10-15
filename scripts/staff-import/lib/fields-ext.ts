@@ -2,12 +2,15 @@
 // 規則：兩個獨立來源正規化後逐字相同先 confirmed；讀數唔同一律 review（候選全留）；睇唔清／冇＝missing，唔估。
 import { normalizeTelHk } from '@/lib/guards/identity';
 import { HKICL_BANK_OPTIONS } from '@/lib/longterm-payroll/hkicl-bank-codes';
+import { rankPool, type RankedCandidate, type RankInput } from '@/lib/guards/ocr/rank';
+import type { ReadConfidence } from '@/lib/guards/ocr/field-read';
 
 export const TODAY = '2026-10-05';
 export type Status = 'confirmed' | 'review' | 'missing';
 export type SrcKind = 'typed_maxwell' | 'typed_uteam' | 'typed_pe' | 'printed_ocr' | 'printed_read1' | 'printed_read2' | 'hand_read1' | 'hand_read2' | 'bank_copy_read1' | 'bank_copy_read2';
-export interface Cand { src: SrcKind; value: string; ref?: string }
-export interface FieldOut { value: string | null; status: Status; candidates: { value: string; sources: string[] }[]; sources: string[]; reasons: string[] }
+/** WP-OCR-4：confidence／alternatives 係 optional（舊呼叫照用）；alternatives 必須已經用同一個 norm 正規化，只用嚟喺 sources_disagree 時排序，唔影響確認規則。 */
+export interface Cand { src: SrcKind; value: string; ref?: string; confidence?: ReadConfidence; alternatives?: string[] }
+export interface FieldOut { value: string | null; status: Status; candidates: { value: string; sources: string[] }[]; sources: string[]; reasons: string[]; /** WP-OCR-4（additive）：sources_disagree 時按驗證排序嘅候選（≤4，與 path A 同一排序函數） */ candidates_ranked?: RankedCandidate[] }
 
 // ---------- 正規化 ----------
 /** 日期：接受 yyyy-mm-dd／yyyy.m.d／d-m-yy(yy)（香港寫法 日-月-年）；回傳 ISO 或 null（曆法不合）。 */
@@ -85,6 +88,18 @@ export interface ResolveOpts {
   /** 呢欄驗證失敗嘅原因（例如日期範圍）；null＝通過 */
   validate?: (v: string) => string | null;
 }
+
+/** sources_disagree 嘅排序候選：值＋alternatives 入池，validate 通過＝100、唔通過＝30；同分 confidence high 優先，再按輸入次序。 */
+export function rankDisagreement(cands: Cand[], validate?: (v: string) => string | null): RankedCandidate[] {
+  const inputs: RankInput[] = [
+    ...cands.map((c) => ({ value: c.value, source: c.src, ...(c.confidence ? { confidence: c.confidence } : {}) })),
+    ...cands.flatMap((c) => (c.alternatives ?? []).map((v) => ({ value: v, source: `${c.src}_alt` }))),
+  ];
+  return rankPool(inputs, (v) => {
+    const bad = validate?.(v) ?? null;
+    return { canon: v, display: v, base: bad ? 30 : 100, reason: bad ?? 'valid' };
+  });
+}
 /**
  * cands：已正規化嘅候選。邏輯：
  * - 冇候選 → missing
@@ -100,7 +115,7 @@ export function resolveField(cands: Cand[], opts: ResolveOpts = {}): FieldOut {
   for (const c of cands) byVal.set(c.value, [...(byVal.get(c.value) ?? []), c]);
   const candidates = [...byVal.entries()].map(([value, cs]) => ({ value, sources: [...new Set(cs.map((c) => c.src))] }));
   const allSrc = [...new Set(cands.map((c) => c.src))];
-  if (byVal.size > 1) return { value: null, status: 'review', candidates, sources: allSrc, reasons: ['sources_disagree'] };
+  if (byVal.size > 1) return { value: null, status: 'review', candidates, sources: allSrc, reasons: ['sources_disagree'], candidates_ranked: rankDisagreement(cands, opts.validate) };
   const [value, cs] = [...byVal.entries()][0];
   const classes = new Set(cs.map((c) => evidenceClass(c.src)));
   const reasons: string[] = [];
