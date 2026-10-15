@@ -4,7 +4,8 @@
 // 唔加密：內容本來就會回俾同一個 client（只係防篡改／防冒充）。鐵則：呢個 token 只經 HTTP 往返，唔寫 log／DB／audit。
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { OCR_DOC_TYPES, OCR_FIELDS } from "./config";
+import { OCR_DOC_TYPES, OCR_FIELDS, OCR_MAX_REFS_CHARS } from "./config";
+import { sanitizeRefs, type Refs } from "./refs";
 import { fieldReadSchema } from "./field-read";
 import { sanitizeFieldBoxes, type FieldBoxes } from "./field-crops";
 import type { ModelReads } from "./read";
@@ -105,4 +106,68 @@ export function verifyContinuation(token: string, secret: string, uid: string, n
   } catch {
     return { ok: false };
   }
+}
+
+// ---------------------------------------------------------------------------
+// WP-OCR-1：refs_token——印刷證件 confirmed 欄位值（跨文件上下文）。同 continuation 一樣機制：
+// HMAC-SHA256（key 由 SESSION_SECRET 經另一個固定 label 衍生，同 continuation 唔通用）、綁 userId、10 分鐘、≤OCR_MAX_REFS_CHARS。
+// 唔加密（內容本來就係回俾同一個 client）；只防篡改／冒充／換人。可重複驗證（stage a 入職表、stage b 都帶），
+// 但「抵銷第二次配額預留」嘅 credit 單次使用（process 內記 nonce；多實例盡力而為）。
+// ---------------------------------------------------------------------------
+const REFS_LABEL = "guard-ocr-refs-v1";
+const refsPayloadSchema = z.object({
+  v: z.literal(1),
+  iat: z.number().int(),
+  nonce: z.string().min(8).max(64),
+  uid: z.string().min(1).max(100),
+  refs: z.record(z.string(), z.unknown()),
+});
+
+function refsKey(secret: string): Buffer {
+  if (!secret || secret.length < 32) throw new Error("SESSION_SECRET 未設定或長度不足 32 字符");
+  return createHmac("sha256", secret).update(REFS_LABEL).digest();
+}
+
+/** 簽發 refs token（refs 會先消毒）。超過字元上限 → throw（caller 當冇 token）。 */
+export function signRefs(refs: Refs, uid: string, secret: string, now: number = Date.now()): string {
+  const body = b64u(JSON.stringify({ v: 1, iat: now, nonce: randomBytes(12).toString("base64url"), uid, refs: sanitizeRefs(refs) }));
+  const token = `${body}.${b64u(createHmac("sha256", refsKey(secret)).update(body).digest())}`;
+  if (token.length > OCR_MAX_REFS_CHARS) throw new Error("refs_too_large");
+  return token;
+}
+
+export type VerifyRefsResult = { ok: true; refs: Refs; nonce: string } | { ok: false };
+
+/** 驗簽、過期、userId、長度；任何失敗 { ok:false }（唔講原因）。唔消耗 nonce。 */
+export function verifyRefs(token: string, secret: string, uid: string, now: number = Date.now()): VerifyRefsResult {
+  try {
+    if (token.length > OCR_MAX_REFS_CHARS) return { ok: false };
+    const parts = token.split(".");
+    if (parts.length !== 2) return { ok: false };
+    const [body, sig] = parts as [string, string];
+    const expect = createHmac("sha256", refsKey(secret)).update(body).digest();
+    const got = Buffer.from(sig, "base64url");
+    if (got.length !== expect.length || !timingSafeEqual(got, expect)) return { ok: false };
+    const parsed = refsPayloadSchema.safeParse(JSON.parse(Buffer.from(body, "base64url").toString("utf-8")));
+    if (!parsed.success) return { ok: false };
+    const d = parsed.data;
+    if (d.uid !== uid) return { ok: false };
+    if (d.iat > now + 60_000 || now - d.iat > CONTINUATION_TTL_MS) return { ok: false };
+    return { ok: true, refs: sanitizeRefs(d.refs), nonce: d.nonce };
+  } catch {
+    return { ok: false };
+  }
+}
+
+const creditUsed = new Map<string, number>();
+/** 抵銷「第二次 stage a 配額預留」嘅 credit：同一 refs token 只可以用一次（true＝首次，可以免預留）。 */
+export function consumeRefsCredit(nonce: string, now: number = Date.now()): boolean {
+  for (const [n, exp] of creditUsed) if (exp < now) creditUsed.delete(n);
+  if (creditUsed.has(nonce)) return false;
+  creditUsed.set(nonce, now + CONTINUATION_TTL_MS + 60_000);
+  return true;
+}
+/** 測試用：清空已用 credit */
+export function resetRefsCredits(): void {
+  creditUsed.clear();
 }

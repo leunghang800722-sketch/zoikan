@@ -2,7 +2,7 @@
 // 中文姓名、身份證號、出生日期三欄就算兩讀一致（confirmed）都要用戶逐欄撳「對過證件，啱」先算已確認
 // （同一模型兩讀可以犯同一錯）；其他欄 confirmed 預設已確認但可改。「全部自己輸入」（OCR 狀態 missing）嘅欄由用戶自己打字，打字即算確認。
 import { OCR_FIELDS, type OcrFieldKey } from "./config";
-import { normalizeField, type FieldStatus } from "./normalize";
+import { normalizeField, type CrossResult, type FieldStatus } from "./normalize";
 
 const CRITICAL_FIELDS: readonly OcrFieldKey[] = ["name_zh", "hkid", "dob"];
 export const REQUIRED_FIELDS: readonly OcrFieldKey[] = ["name_zh", "hkid"];
@@ -17,8 +17,19 @@ export function initialAck(k: OcrFieldKey, status: FieldStatus): boolean {
   return isCritical(k) ? false : status === "confirmed";
 }
 
-/** 用戶改值之後嘅確認狀態：關鍵欄（OCR 讀到過）改咗要重新撳確認；OCR 讀唔到／全人手模式打字即算確認。 */
-export function ackAfterEdit(k: OcrFieldKey, ocrStatus: FieldStatus, newValue: string): boolean {
+/** WP-OCR-1：交叉核對（入職表手寫 vs 身份證）顯示文字。 */
+export const CROSS_MSG: Record<CrossResult, string> = {
+  match: "同身份證一致 ✓",
+  differs: "⚠ 同身份證唔一致，請對住證件再確認",
+  unreadable: "手寫讀唔到，未能交叉核對",
+};
+
+/**
+ * 用戶改值之後嘅確認狀態：關鍵欄（OCR 讀到過）改咗要重新撳確認；OCR 讀唔到／全人手模式打字即算確認。
+ * WP-OCR-1（additive，第 4 個參數 optional）：交叉核對「唔一致」(differs) 嘅關鍵欄，一律要人手「對過證件」——打字都唔自動算確認。
+ */
+export function ackAfterEdit(k: OcrFieldKey, ocrStatus: FieldStatus, newValue: string, cross?: CrossResult): boolean {
+  if (isCritical(k) && cross === "differs") return false;
   if (isCritical(k) && ocrStatus !== "missing") return false;
   if (ocrStatus === "confirmed") return true;
   return newValue.trim() !== "";
@@ -27,6 +38,8 @@ export function ackAfterEdit(k: OcrFieldKey, ocrStatus: FieldStatus, newValue: s
 export interface ReviewField {
   value: string;
   ack: boolean;
+  /** WP-OCR-1：同入職表手寫值嘅交叉核對結果（身份證關鍵欄；冇＝冇 refs／舊 server） */
+  cross?: CrossResult;
 }
 
 /** 格式錯誤訊息（空值唔報）。 */
@@ -46,7 +59,7 @@ export function reviewProblems(form: Record<OcrFieldKey, ReviewField>, reasonMsg
     else {
       const err = fieldError(k, v, reasonMsg);
       if (err) out.push(`${FIELD_LABEL[k]}：${err}`);
-      else if (!f.ack) out.push(isCritical(k) && v ? `${FIELD_LABEL[k]}要對過證件確認` : `${FIELD_LABEL[k]}要確認`);
+      else if (!f.ack) out.push(isCritical(k) && v ? (f.cross === "differs" ? `${FIELD_LABEL[k]}同入職表手寫唔一致，要對過證件確認` : `${FIELD_LABEL[k]}要對過證件確認`) : `${FIELD_LABEL[k]}要確認`);
     }
   }
   return out;

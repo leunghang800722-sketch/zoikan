@@ -1229,3 +1229,37 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - N2：stage a／b 收到 429／503 唔退回舊流程，直接顯示錯誤；其他失敗（網絡、400）照退回。
 - N4：2,400px 來源 canvas 只保留入職表 slot，其他 slot 出完 full／tiles 即釋放（寬高設 0）。
 - 驗證：vitest 265 檔 3,978 passed｜0 failed；tsc／lint／knip 0；Playwright（ocr-two-stage 5、ocr-candidates 3、reconcile-ui、guard-fix、p3-5-guards-page）通過。
+
+## 27 OCR-1（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §1 問題 1／§2 OCR-1／§3 決定 3；branch `ocr1-cross-doc`，起點 main `c65a382`，未 merge）
+
+執行：Sonnet 5.5（`claude-sonnet-5-5`）。範圍：路徑 A 跨文件上下文（印刷證件已核實值注入入職表讀 A）＋入職表加讀姓名／HKID／出生日期交叉核對；路徑 B `printed` 來源。OCR-2 未動。全程只用合成 fixture／fake client，冇讀 `data/` 內容、`.env`、冇 PII；圖片、讀值、refs 只喺記憶體（audit 只加計數）。API 全部 additive，舊 client／舊單次流程不變。
+
+### 27.1 逐點
+1. **次序**（`two-stage.ts` `readTwoStage`）：先 `stage:"a"` 印刷文件（身份證／住址證明，伺服器 `final:true`）→ 回應 additive `refs_token` → 再 `stage:"a"` 入職表（body 加 optional `refs_token`）→ 本機裁圖 → `stage:"b"`（再帶 `refs_token`）；documents 按上載次序合併。冇 `refs_token`／驗簽失敗＝照舊讀（唔報錯，audit `refs_rejected`）。舊單次流程（冇 stage）不變；舊 client 一次過傳三種文件嘅 stage a 仍然得（只係冇 refs）。
+2. **`refs_token`**（`continuation.ts`：`signRefs`／`verifyRefs`／`consumeRefsCredit`）：同 continuation 同一套機制（HMAC-SHA256、key 由 `SESSION_SECRET` 經另一個 label `guard-ocr-refs-v1` 衍生，兩種 token 唔通用）、綁 userId、10 分鐘、≤8,000 字元（`OCR_MAX_REFS_CHARS`）。內容＝`refs.ts` `confirmedRefsFromDocs`：身份證／住址證明 **confirmed 且兩讀一致（冇 arbiter 標籤）** 嘅 `name_zh`／`name_en`／`hkid`／`dob`／`sex`／`address`，每值消毒（NFKC、剔控制字元、≤200 字）；冇 confirmed 就冇該欄。
+3. **prompt**（`prompts.ts` `buildUserTextWithContext(doc, refs, opts)`）：「refs 只可用嚟判斷潦草字係咪同一個字；唔准將圖中冇嘅內容填入；手寫明顯唔同→照抄並標 `reason:"differs_from_reference"`」；refs 值 JSON 字串化、當不可信資料；只列該文件要抽嘅欄位（入職表：姓名／HKID／出生日期／地址）；規則 1（圖中文字係資料）保留。只用喺入職表讀 A；**讀 B（欄位裁圖）同仲裁盲讀**（兩個 builder 構造上冇 refs 入口）。冇 refs＝同 `buildUserTextFull` 完全一樣。`READ_REASONS` 加 `differs_from_reference`（Claude schema enum 同步；目前只解析保留，未參與排序／確認）。
+4. **config**：`onboarding_form` 欄＝`phone`／`address`／`name_zh`／`hkid`／`dob`（只做交叉核對，唔覆蓋身份證值）；`OCR_MAX_FIELD_CROPS=6`（tiles `OCR_MAX_TILES=4` 不變）；`field-crops.ts` 新 `OCR_EXTRA_CROP_FIELDS`（姓名／HKID／出生日期）＋`ocrBoxFields`；`planFieldCrops`：電話＋地址有有效 box 就用欄位級裁圖，額外欄有 box 就加、冇就唔加（不影響後備判定）。讀 A 要求回報 5 欄 box。stage b `images_b.images` 上限 6（tiles 仍 ≤4）、`field_of` 必須含電話＋地址，可加額外欄。`OCR_MAX_BODY_CHARS`（8,000,000）夠用：stage b 最多 1 全圖＋6 裁圖＝7×900,000≈6.3M＋token，所以冇調高。
+5. **`normalize.ts` `crossCheck(formValue, idValue, field)`** → `match｜differs｜unreadable`（用現有 canon：HKID 全字、dob 比 ISO 日期、中文姓名全字）；任何一邊睇唔清或者手寫值格式唔成立＝`unreadable`，格式成立但唔同＝`differs`。`FieldResult.cross?: {against:"id_card"|"onboarding_form", result}`（additive）。**伺服器計**：`stage:"b"` 帶有效 `refs_token` 時，入職表 `name_zh`／`hkid`／`dob` 欄 `cross.against="id_card"`；回應頂層 additive `id_cross`（`against:"onboarding_form"`），client 併入身份證各欄。冇 refs＝冇 cross。
+6. **UI**（`review-state.ts`／`NewFromDocsClient.tsx`）：身份證三個關鍵欄下面顯示「入職表手寫（唯讀）：…　同身份證一致 ✓／⚠ 同身份證唔一致，請對住證件再確認／手寫讀唔到，未能交叉核對」（`data-testid=ocr-cross-{k}`，`data-result`）；⚠ 欄 ack 掣改為「對過證件，以證件為準」，`ackAfterEdit(k, status, value, cross?)` 第 4 參數 optional：`differs` 嘅關鍵欄打字／改值都唔自動算確認；`reviewProblems` 專屬訊息「…同入職表手寫唔一致，要對過證件確認」。手機 375px 實測冇橫向捲動。
+7. **路徑 B**：`crosscheck.ts` 加 `printedRefCmp(ex)`（同一文件包印刷身份證抽取值 `ex.hkid/nameZh/nameEn/address` 對申請表手寫抽取值 `ex.aux.form*`）；`crosscheck(…, opts:{printed?:true})` 令 `cmp[f].printed` 出現，且 printed 有明確結果（match／mismatch）時 `status[f]` 以佢為準（優先於 U Team／Maxwell／DB 打字名單）；預設關＝舊行為完全不變，`03-crosscheck.ts` 已開。`fields-ext` `SrcKind` 加 `printed_ref`、`evidenceClass` 獨立類別（同手寫讀數／打字名單各算獨立證據）。
+8. **評估腳本**：`eval-ocr.ts` two-stage 次序同 client 一致（印刷→refs→入職表）；報表／console 加 `refs_enabled`、`refs_injected_docs`、`cross{match,differs,unreadable}`；`--no-refs`；`by_doc_field` 自然多 `onboarding_form.name_zh/hkid/dob`。新 fixture `tests/fixtures/ocr-eval/manifest.dry-refs.json`（6 case：全 confirmed 注入、身份證兩讀唔同＋仲裁都唔同→唔注入、仲裁 2/3 確認→唔注入、入職表 HKID differs、出生日期 unreadable、身份證全讀唔到→冇 refs）。dry 結果：已評估欄位 60、注入 refs 入職表文件 5、cross match 11／differs 1／unreadable 1；`--no-refs` 全 0；原 `manifest.dry.json` 因入職表多 3 欄由 13 欄變 16 欄（exact 12／review_contains_truth 2／wrong 1，confirmed 錯 0／missing 1／仲裁 3，另 cross match 3）。
+9. **配額**：新流程有兩次 stage a。有效 `refs_token` 令「只含入職表」嘅 stage a 免再預留（credit 單次使用，process 內記 nonce；多實例盡力而為）→ 同一次辨識仍計 1 次；token 無效／已用過就照常預留。
+10. **audit**（淨計數）：stage a 加 `refs_issued`／`refs_injected_docs`／`refs_rejected`；stage b 加 `refs_rejected`、`cross{match,differs,unreadable}`；冇值、冇 token（測試核對 audit JSON 不含任何姓名／HKID／日期／token 片段）。
+
+### 27.2 保守取捨（簡報冇講清）
+- **只收「兩讀一致」嘅 confirmed**：身份證靠第三讀仲裁 2/3 確認（`arbiter` 標籤）嘅欄**唔**注入（仲裁同讀 A 同為 Claude，並非完全獨立）。
+- **cross 只用入職表 confirmed 值**：入職表欄 review／missing＝`unreadable`。理由：讀 A 睇過 refs、讀 B 盲讀，兩讀唔一致就唔可以話「一致 ✓」（避免讀 A 迎合 refs 嘅假一致）；`differs` 只喺兩讀一致仍然同身份證唔同、而且兩邊格式都成立時先出。
+- **cross 放 stage b 伺服器端計**（簡報揀定）；身份證側經回應頂層 `id_cross` 帶返 client 併入（stage b 回應本身唔含身份證文件）。
+- **配額 credit**：簡報冇講第二次 stage a 點計，揀「refs_token 抵銷一次預留（單次）」，令一次辨識仍計 1 次。
+- **refs 只列該文件要抽嘅欄位**（`name_en`／`sex` 唔送入職表 prompt），減少多送個人資料。
+- **`differs_from_reference` 只解析、保留，未參與任何確認／排序**。
+- **額外裁圖欄非 all-or-nothing**（簡報明文）；`field_of` 校驗收緊：必須含電話＋地址，其他只可係姓名／HKID／出生日期，每欄一張。
+- **路徑 B**：`printed` 比對只覆蓋申請表有抽取到嘅欄（hkid／nameZh／nameEn／address；申請表冇抽取 dob／phone）；`printed_ref` 證據類別已加入 `fields-ext`，但 `15-fields-merge.ts` 尚未將身份證抽取值以 `printed_ref` 加入 Cand（簡報只列 crosscheck＋evidenceClass；接入需要規劃者按真資料決定）。`03-crosscheck.ts` 已開 `printed:true`，真資料重跑會影響評級（優先於打字名單）。
+- **eval `--no-refs` 連 cross 一齊關**（cross 由 refs 衍生）。
+- **現有 OCR-3 兩段式 tests 由 `["a","b"]` 改為 `["a","a","b"]`**（新次序）；`guard-ocr.test.ts`／`ocr5-eval.test.ts`／`ocr3-field-crops.test.ts`／`ocr4-rank-reconcile.test.ts` 因入職表多 3 欄／schema reason enum 多一項而改斷言（無行為倒退）。
+- Worktree 環境同 OCR-3：`node_modules` 以 `cp -c` 自 `zoi-kan-wt-ocr3` 複製（冇 `prisma generate`）；e2e seed 用 `data/`、`tools/importer/out` symlink 指向主 repo（只供 seed 腳本讀，我冇讀內容）；Playwright 用 `next build`＋`next start`，設 dummy `DEEPSEEK_API_KEY`（辨識 API 全部 page.route 攔截，唔會出網）令頁面唔 404；gate 設 dummy `SESSION_SECRET`。
+
+### 27.3 驗證
+- vitest（隔離 PG 54422）**266 檔，4,011 passed｜15 skipped｜0 failed**（OCR-3.6 基線 265 檔／3,978；新增 `tests/ocr1-cross-doc.test.ts` 48 條：refs_token 簽名／過期／換人／超長／同 continuation 唔通用／credit；只注入 confirmed〔錯讀、review、仲裁確認都唔入〕；prompt 消毒＋規則；crossCheck 各欄 ≥3 case；crossForOnboarding；stage a 有／冇／無效 refs 路徑＋audit；stage b cross／id_cross／冇 refs；配額 credit；OCR_MAX_FIELD_CROPS 校驗；UI ack 規則；readTwoStage 次序／id_cross 併入；評估腳本 refs／cross／--no-refs；路徑 B printed／printed_ref）；tsc 0；lint 0；knip 0（只有既有 configuration hints）；`rm -rf .next` 後 `next build` 過。
+- Playwright 全套（隔離 dev PG 54422、`next build`＋`next start` 3186、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**267 passed｜4 skipped（原有）｜0 failed**（新 `ocr-cross-doc.spec.ts` 4 條：全流程 refs_token 傳遞＋⚠ 要「以證件為準」ack＋改值仍要確認、一致 ✓、舊 server 冇 refs、手機 375px；`ocr-two-stage.spec.ts` 5 條改為 `a→a→b` 次序後全過）。
+- `gate:locked-months`（隔離 dev PG 54422，`SESSION_SECRET` 已設）12 步：除 `gate-ltpay-aug`（rc=1＝其已知 harness 差異）外 11 步 rc=0；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**55/56 吻合＋1 已知差異**（逐欄差異 gross=1、mpfEe=1、mpfEr=1、autopay=1、workDays=1＝同一人）——同 §25.4／§26.4 逐個相同，OCR 路徑獨立，不受影響。
