@@ -224,13 +224,14 @@ describe("eval-ocr CLI：參數同 --dry 端到端", () => {
     expect(text).toContain("cases 6/6 ok");
     // OCR-1.2：入職表 name_zh／hkid／dob 係交叉核對欄，唔計入總體（同 OCR-5 基線 13 欄可比），另出 cross_fields
     expect(text).toContain("已評估欄位 13");
-    expect(text).toContain("exact 9 (69.2%)");
-    expect(text).toContain("review_contains_truth 2 (15.4%)");
+    expect(text).toContain("exact 8 (61.5%)"); // OCR-2.2：地址 exact 用 strict，syn-06 大厦／大廈 由 exact 變 review_contains_truth
+    expect(text).toContain("review_contains_truth 3 (23.1%)");
     expect(text).toContain("wrong 1 (7.7%)，其中 confirmed 但錯 0");
     expect(text).toContain("missing 1 (7.7%)");
     expect(text).toContain("交叉核對欄（入職表 name_zh/hkid/dob，不計入總體）：n=3 exact 3｜wrong 0｜missing 0");
     expect(text).toContain("注入 refs 入職表文件 1｜cross match 3 / differs 0 / unreadable 0");
-    expect(text).toContain("仲裁 3 份文件");
+    expect(text).toContain("仲裁 2 份文件"); // OCR-2：大厦／大廈 canon 一致，唔再入仲裁（改為 review 兩個寫法），故 3 → 2
+    expect(text).toContain("ALS 政府地址庫：開｜查過文件 1｜出候選文件 1｜失敗 0｜review_contains_truth 入面真值來自 ALS 候選 0");
     for (const v of ["測試甲", "Z900001", "90001111", "示範街", "syn-0", "form.png"]) expect(text).not.toContain(v);
   });
   it.skipIf(!hasMagick)("--out 寫入 cwd/data/ 之下：JSON 淨有 case id＋逐欄結果類別，冇值冇路徑", async () => {

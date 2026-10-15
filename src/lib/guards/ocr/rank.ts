@@ -16,6 +16,10 @@ export interface RankInput {
   /** 來源標籤：a／b／arbiter（主讀數）；後綴 `_alt`＝該讀數嘅 alternatives、`_grid`＝電話分格線剔走 1 嘅推算候選（confidence 都當最低） */
   source: string;
   confidence?: ReadConfidence;
+  /** WP-OCR-2：推導出嚟嘅候選（hk_address 形近字建議、als 政府地址庫）——分數封頂喺最高嘅原讀數分數，同分排喺原讀數後面（唔會搶預填） */
+  derived?: boolean;
+  /** WP-OCR-2：ALS 回傳嘅 Score（只作顯示） */
+  als_score?: number;
 }
 export interface RankedCandidate {
   value: string;
@@ -23,6 +27,8 @@ export interface RankedCandidate {
   score: number;
   /** 格式驗證結果：valid｜invalid 原因碼（唔含值） */
   reason: string;
+  /** WP-OCR-2（additive）：ALS 候選嘅 Score */
+  als_score?: number;
 }
 
 const CONF_RANK: Record<ReadConfidence, number> = { high: 3, medium: 2, low: 1 };
@@ -64,18 +70,24 @@ export function rankPool(inputs: readonly RankInput[], scoreOf: (value: string) 
     else groups.set(s.canon, { display: s.display, base: s.base, reason: s.reason, inputs: [inp], first: idx });
   });
   const rows = [...groups.values()].map((g) => {
-    const reads = new Set(g.inputs.map((i) => readOf(i.source)));
-    const score = g.base + AGREE_BONUS * (reads.size - 1) + (reads.has("arbiter") ? ARBITER_BONUS : 0);
-    return { g, score, conf: Math.max(...g.inputs.map(confRank)) };
+    const reads = new Set(g.inputs.filter((i) => !i.derived).map((i) => readOf(i.source))); // 推導候選唔算獨立讀數
+    const score = g.base + AGREE_BONUS * Math.max(0, reads.size - 1) + (reads.has("arbiter") ? ARBITER_BONUS : 0);
+    return { g, score, conf: Math.max(...g.inputs.map(confRank)), onlyDerived: g.inputs.every((i) => i.derived) };
   });
-  rows.sort((x, y) => y.score - x.score || y.conf - x.conf || x.g.first - y.g.first);
-  return rows.slice(0, MAX_CANDIDATES).map(({ g, score }) => ({ value: g.display, sources: [...new Set(g.inputs.map((i) => i.source))], score, reason: g.reason }));
+  // WP-OCR-2：純推導候選（形近字建議、ALS）分數封頂喺最高嘅原讀數分數
+  const maxRaw = Math.max(-1, ...rows.filter((r) => !r.onlyDerived).map((r) => r.score));
+  if (maxRaw >= 0) for (const r of rows) if (r.onlyDerived && r.score > maxRaw) r.score = maxRaw;
+  rows.sort((x, y) => y.score - x.score || Number(x.onlyDerived) - Number(y.onlyDerived) || y.conf - x.conf || x.g.first - y.g.first);
+  return rows.slice(0, MAX_CANDIDATES).map(({ g, score }) => {
+    const als = g.inputs.find((i) => typeof i.als_score === "number")?.als_score;
+    return { value: g.display, sources: [...new Set(g.inputs.map((i) => i.source))], score, reason: g.reason, ...(als !== undefined ? { als_score: als } : {}) };
+  });
 }
 
 /** 路徑 A：按欄位格式驗證（HKID check digit、電話、日期曆法＋年齡、地址長度／中文字…）排序。 */
 export function rankFieldCandidates(key: OcrFieldKey, inputs: readonly RankInput[], now: Date = new Date()): RankedCandidate[] {
   return rankPool(inputs, (value) => {
     const n = normalizeField(key, value, now);
-    return { canon: n.canon, display: n.display, base: validityScore(key, n), reason: n.valid ? "valid" : (n.reason ?? "invalid_format") };
+    return { canon: key === "address" ? (n.strict ?? n.canon) : n.canon, display: n.display, base: validityScore(key, n), reason: n.valid ? "valid" : (n.reason ?? "invalid_format") };
   });
 }

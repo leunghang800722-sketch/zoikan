@@ -49,7 +49,7 @@ interface OcrField {
   value: string;
   candidates: string[];
   /** WP-OCR-4（additive）：按格式驗證排序嘅候選；舊 server 冇 */
-  candidates_ranked?: { value: string; sources: string[]; score: number; reason: string }[];
+  candidates_ranked?: { value: string; sources: string[]; score: number; reason: string; als_score?: number }[];
   reason?: string;
   /** WP-OCR-1（additive）：同另一份文件嘅交叉核對；舊 server 冇 */
   cross?: { against: string; result: CrossResult };
@@ -79,6 +79,10 @@ interface FormField {
   ocrStatus: FieldStatus;
   ocrValue: string;
   candidates: string[];
+  /** WP-OCR-2：來自 ALS（政府地址庫）嘅候選值（chip 加細字標示）；冇＝undefined */
+  alsValue?: string;
+  /** N4：ALS 值同某個讀數合併（sources 除 als／hk_address 外仲有讀數來源）→ chip 標「讀數＋政府地址庫」 */
+  alsMerged?: boolean;
   reason?: string;
   /** 用戶已確認／改正／標明冇資料 */
   ack: boolean;
@@ -92,6 +96,10 @@ interface FormField {
 type FormState = Record<OcrFieldKey, FormField>;
 
 const emptySlot = (): Slot => ({ file: null, pdf: null, page: 1, prepared: null, busy: false, error: null });
+function alsInfo(ranked: OcrField["candidates_ranked"]): { alsValue?: string; alsMerged?: boolean } {
+  const c = ranked?.find((x) => x.sources.includes("als"));
+  return c ? { alsValue: c.value, alsMerged: c.sources.some((s) => s !== "als" && s !== "hk_address") } : {};
+}
 const blankField = (): FormField => ({ value: "", ocrStatus: "missing", ocrValue: "", candidates: [], ack: false, edited: false });
 // 更表寫咗嘅姓名預填：當作用戶自己輸入（edited），仍要逐欄核對確認先可以繼續。
 const prefilledNameField = (name: string): FormField => ({ ...blankField(), value: name, edited: true, ack: ackAfterEdit("name_zh", "missing", name) });
@@ -248,7 +256,7 @@ export function NewFromDocsClient() {
     const put = (k: OcrFieldKey, d: OcrDocResult | undefined) => {
       const r = d?.fields[k];
       if (!r) return false;
-      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type, ...(r.cross && d!.type === "id_card" ? { cross: r.cross.result } : {}) };
+      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, ...alsInfo(r.candidates_ranked), reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type, ...(r.cross && d!.type === "id_card" ? { cross: r.cross.result } : {}) };
       return true;
     };
     for (const k of OCR_DOC_FIELDS.id_card) put(k, byType.get("id_card"));
@@ -550,6 +558,7 @@ export function NewFromDocsClient() {
                             onClick={() => setField(k, c.value)}
                           >
                             {c.segs ? c.segs.map((sg, n) => (sg.diff ? <mark key={n} className="rounded-sm bg-zk-warning-bg px-px font-bold text-zk-danger-dark" data-diff="1">{sg.ch}</mark> : <span key={n}>{sg.ch}</span>)) : c.value}
+                            {f.alsValue === c.value && <span className="ml-1 text-[10px] font-normal text-zk-faint" data-testid={`ocr-chip-als-${k}`}>{f.alsMerged ? "讀數＋政府地址庫" : "政府地址庫"}</span>}
                           </Button>
                         ))}
                       </div>

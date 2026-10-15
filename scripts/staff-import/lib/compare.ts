@@ -1,5 +1,6 @@
 // 交叉核對用嘅比對正規化（純函數）。
 import { editDistance } from './text';
+import { normalizeHkAddress } from '@/lib/guards/ocr/hk-address';
 
 export type Cmp = 'match' | 'mismatch' | 'no_reference';
 
@@ -132,9 +133,14 @@ function jacc(a: string[], b: string[]): number {
 
 export function cmpAddress(a: string | null, b: string | null): Cmp | 'not_comparable' {
   if (!a || !b) return 'no_reference';
-  const x = addrSig(a);
-  const y = addrSig(b);
+  let x = addrSig(a);
+  let y = addrSig(b);
   if (x.script === 'none' || y.script === 'none' || x.script !== y.script) return 'not_comparable';
+  // WP-OCR-2：中文地址用 hk-address canon（形近字歸一：邨／村、埗／步、涌／湧…；單位詞歸一）比對
+  if (x.script === 'zh') {
+    x = addrSig(normalizeHkAddress(a).canon);
+    y = addrSig(normalizeHkAddress(b).canon);
+  }
   const wj = jacc(x.words, y.words);
   const nj = x.nums.length && y.nums.length ? jacc(x.nums, y.nums) : 0.5;
   return wj >= 0.5 && nj >= 0.5 ? 'match' : 'mismatch';

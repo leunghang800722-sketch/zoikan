@@ -1,5 +1,5 @@
 // WP-OCR-5：OCR 準確度評估腳本（本機跑，規劃者用真檔；執行員只用合成 fixture）。
-//   npx tsx scripts/staff-import/eval-ocr.ts --manifest <manifest.json> --out data/2026-10/ocr-eval/report.json [--flow legacy|two-stage] [--no-refs] [--limit N] [--only-doc-type id_card|address_proof|onboarding_form] [--concurrency 2]
+//   npx tsx scripts/staff-import/eval-ocr.ts --manifest <manifest.json> --out data/2026-10/ocr-eval/report.json [--flow legacy|two-stage] [--no-refs] [--no-als] [--limit N] [--only-doc-type id_card|address_proof|onboarding_form] [--concurrency 2]
 //   npx tsx scripts/staff-import/eval-ocr.ts --dry [--manifest tests/fixtures/ocr-eval/manifest.dry.json]   # fake client＋合成 fixture，唔打任何 API
 // 真跑用同一條應用內路徑：同規格圖（1,600px 全圖＋2×2 放大格）→ getReadClients()（真 Claude／DeepSeek，key 由 .env 經 dotenv 載入；
 // 指定其他 env 檔用 DOTENV_CONFIG_PATH）→ readDocument（reconcile／候選／仲裁）→ 逐欄對 truth（現有 normalize canon）。
@@ -22,10 +22,12 @@ interface Args {
   concurrency: number;
   flow: EvalFlow;
   refs: boolean;
+  /** WP-OCR-2：false（--no-als）＝唔查 ALS 政府地址庫 */
+  als: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const a: Args = { manifest: null, out: null, dry: false, limit: null, onlyDocType: null, concurrency: 2, flow: 'two-stage', refs: true };
+  const a: Args = { manifest: null, out: null, dry: false, limit: null, onlyDocType: null, concurrency: 2, flow: 'two-stage', refs: true, als: true };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => {
@@ -37,6 +39,7 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (k === '--out') a.out = v();
     else if (k === '--dry') a.dry = true;
     else if (k === '--no-refs') a.refs = false;
+    else if (k === '--no-als') a.als = false;
     else if (k === '--limit') {
       const x = v();
       if (!/^\d+$/.test(x) || Number(x) < 1) throw new ArgError('--limit 必須係正整數');
@@ -80,8 +83,9 @@ export async function main(argv: readonly string[]): Promise<number> {
     onlyDocType: args.onlyDocType,
     flow: args.flow,
     refs: args.refs,
+    als: args.als,
   };
-  console.log(`[eval-ocr] ${args.dry ? 'dry（fake client）' : 'live（真 client）'}｜flow ${args.flow}｜refs ${args.refs && args.flow === 'two-stage' ? 'on' : 'off'}｜cases ${parsed.manifest.cases.length}｜concurrency ${args.concurrency}`);
+  console.log(`[eval-ocr] ${args.dry ? 'dry（fake client）' : 'live（真 client）'}｜flow ${args.flow}｜refs ${args.refs && args.flow === 'two-stage' ? 'on' : 'off'}｜als ${args.als ? 'on' : 'off'}｜cases ${parsed.manifest.cases.length}｜concurrency ${args.concurrency}`);
   const report = await runEval({
     manifest: parsed.manifest,
     deps,
