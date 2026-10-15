@@ -1157,3 +1157,34 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **9 月：配對 50／吻合 49／差 1**（病假結餘：辦公室出 8 日、系統累積結餘只出 4 日）／系統有銀行冇 2（離職者）／銀行有系統冇 20（寫字樓）。
 - **8 月：配對 51／吻合 48／差 3**（D2 病假結餘 −3,936.43（含已加補假日 806.45）、兩離職者 −21.06／−17.31 待辦公室離職結算口徑）。
 - 7 月維持 48／51（四捨五入）。三個月剩餘差異全部等辦公室兩條資料：病假結餘（截至 7/1 已放／結餘＋累積口徑）、離職結算計法。
+
+## 25 OCR-5／OCR-4（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §2；branch `ocr54-eval-candidates`，未 merge）
+
+執行：Sonnet 5.5（`claude-sonnet-5-5`）。範圍：路徑 A（證件新增保安員）＋路徑 B 共用排序；OCR-1／2／3 未動。全程只用合成 fixture／fake client，冇讀 `data/` 內容、`.env`、冇 PII；圖片同辨識值冇落地（audit 只加 `arbiter_calls` 數量）。
+
+### 25.1 OCR-5 評估腳本
+- `scripts/staff-import/eval-ocr.ts`（CLI）＋`lib/eval-ocr-core.ts`（比較／報表／重試／並行／fake client）＋`lib/eval-ocr-images.ts`（Node 出圖）。用法見 `docs/ops.md`「OCR 準確度評估」。`--manifest`／`--out`（限 `data/` 之下）／`--dry`／`--limit`／`--only-doc-type`／`--concurrency`（預設 2）；失敗重試 1 次；逐 case 進度只印 `n/總數`。
+- 同一條應用內路徑：圖片規格抽到 `src/lib/guards/ocr/image-plan.ts`（來源 ≤2,400px → 全圖 ≤1,600px、2×2 分格 0.6／≤1,000px、JPEG 質素梯級至 ≤900,000 字元），`browser-images.ts` 改用同一份（`tileRects` 照舊由 browser-images re-export）；Node 端用 ImageMagick（同其他 staff-import 腳本）；然後 `getReadClients()`（真 client）→ `readDocument` → 逐欄對 truth（`normalizeField` canon）。
+- 輸出：`exact`／`review_contains_truth`／`wrong`（另計 confirmed 但錯）／`missing` 計數＋百分比（整體、按欄、按 doc.field）、review 率、review 欄平均候選數、估算人手改字（wrong＋missing）、估算撳候選、calls／tokens／按供應商／仲裁文件數。console 同 JSON 冇欄位值、姓名、圖片路徑；per-case 只有 id＋結果類別。
+- fixture：`tests/fixtures/ocr-eval/`（3 張合成圖＋`manifest.dry.json` 6 個 case：完美、alternatives 含 truth、仲裁 2/3、錯值＋缺值、check digit 排序、地址形近字）。`--dry` 固定結果：6/6 case、13 欄、exact 9（69.2%）／review_contains_truth 2（15.4%）／wrong 1（7.7%，confirmed 錯 0）／missing 1（7.7%）、仲裁 3 份。
+
+### 25.2 OCR-4 候選字＋雙模型共識（逐點）
+1. **輸出結構 additive**：每欄舊純字串或 `{value, confidence, reason?, alternatives?(≤2)}`；`field-read.ts` zod 兩種都收（未知 confidence／reason 當冇寫，缺 `value` 先算格式錯）；`ocrJsonSchema` 每欄 object（全 required、禁多餘 key）；DeepSeek `json_object` 靠 prompt 說明；prompt 規則 2 改為「盡量出部分值＋confidence＋alternatives，仍唔准猜無根據嘅字」，規則 1 保留。
+2. **`reconcile` 升級**（移到 `reconcile.ts`，`rank.ts` 係排序核心）：候選池＝讀 A、讀 B、各自 alternatives、仲裁值（去重、≤4）；分數＝格式驗證基礎分（HKID check digit、電話 8 位首位 2–9、日期曆法＋年齡、中文姓名純中文／簡體疑似、地址長度／中文字／門牌標記）＋每多一個獨立讀數同意 +5＋仲裁 +3；同分 confidence high 優先、再讀 A 優先；輸出 `candidates_ranked:{value,sources,score,reason}[]`，舊 `candidates:string[]` 保留；`value`＝最高分候選；兩讀一致且 valid 先 confirmed（不變）。
+3. **第三讀仲裁**（`GUARD_OCR_ARBITER`，預設開）：見 `docs/api.md` 同 `docs/ops.md`。規則：兩讀正規化後唔同且兩讀 confidence 都唔係 high（舊格式冇 confidence＝唔係 high）→ Claude 對該份文件一次過問所有分歧欄；仲裁值同其中一讀一致**且 valid** → confirmed（`arbiter: agree_a|agree_b`）；否則入候選池加權、仍 review。仲裁出錯唔影響主流程；用量計入 `usage`／`usage_by_provider`；audit 多 `arbiter_calls`。
+4. **UI**：review 欄候選 chip（≤4、一撳套用、`aria-pressed`）；中文姓名／地址候選只差 1–2 字時高亮分歧字（純函數 `diffChars`／`isCloseVariant`／`candidateChips`，`review-state.ts`）；套用後 `ackAfterEdit` 不變（關鍵欄仍要「對過證件，啱」）；舊 server 回應（冇 `candidates_ranked`）用 `candidates`。375px 實測 chip 喺視窗內、冇橫向捲動。
+5. **路徑 B**：`fields-ext.ts` `Cand` 加 optional `confidence`／`alternatives`，`resolveField` 在 `sources_disagree` 時多出 `candidates_ranked`（同一個 `rankPool`）；確認規則完全不變。
+6. **測試**：`tests/ocr4-rank-reconcile.test.ts`（47：排序每種欄位 ≥3 case 含 check digit、reconcile 候選池／舊格式／仲裁規則、zod 兩格式、schema／prompt、diffChars／chip、路徑 B）、`tests/ocr4-arbiter.test.ts`（17：觸發／唔觸發／high 跳過／一次過／上限 1 次／出錯／用量／開關／route 新舊格式＋audit 無值）、`tests/ocr5-eval.test.ts`（26）、`tests/e2e/ocr-candidates.spec.ts`（3：撳 chip、舊格式、手機 375）；既有 `guard-ocr*.test.ts` 只改 parse／schema 斷言及 import。
+
+### 25.3 保守取捨（簡報冇講清）
+- 仲裁圖＝全圖＋全部放大格（路徑 A 冇欄位位置資訊，無法揀「相關格」）；prompt 只列分歧欄。
+- 仲裁只喺讀 A 係 Claude（冇退回 DeepSeek）時用；測試 override 只有自報 `provider:"claude"` 嘅 fake 先有仲裁，其他 fake 行為同舊版（2 次呼叫）。
+- 2/3 一致 confirmed 係簡報明文規則；但仲裁同讀 A 同樣係 Claude，並非完全獨立證據——關鍵欄（姓名／身份證號／出生日期）仍然要人撳「對過證件」，唔受影響。
+- `value` 預填由「永遠讀 A」改為「最高分候選」（簡報要求）；`candidates` 次序可能同舊版唔同（格式啱嗰個排前），其餘語意不變。
+- Node 出圖用 ImageMagick／pdftoppm（repo 慣例、已有腳本用），冇引入 `sharp`／`canvas` 依賴（兩者都只係 transitive）。
+- truth 嘅 `bank_account` 路徑 A 唔讀，評估時略過並喺報表 notes 標明。
+
+### 25.4 驗證
+- vitest（隔離 PG 54415）**264 檔，3,913 passed｜0 failed**（基線 261 檔／3,823；新增 3 檔 90 條）；tsc 0；lint 0；knip 0（只有既有 configuration hints）；`rm -rf .next` 後 build 過。
+- Playwright 全套（隔離 PG 54416、`next build`＋`next start` 3182、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**258 passed｜4 skipped（原有）｜0 failed**（含新 `ocr-candidates.spec.ts` 3 條）。
+- `gate:locked-months`（隔離 dev PG 54416，需 `SESSION_SECRET` 已設）**12/12 rc=0**；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**55/56 吻合＋1 已知差異**（同 P17.5 數字逐個相同）——OCR 路徑獨立，不受影響。

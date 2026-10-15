@@ -50,6 +50,7 @@ job 自己嘅記憶，只存月份／時間戳，無 PII：`auto_one_click`＝`{
 | `APP_BASE_URL` | 否 | email 內連結根網址；預設 `https://zoikan.zeabur.app` |
 | `JOB_TIMEOUT_MS` | 否 | 單個 job 最長執行毫秒，預設 600000 |
 | `SCHEDULER_ENABLED` | 否 | `1`／`0`。冇設＝production 開，dev／test 關。e2e（Playwright）固定 `0` |
+| `GUARD_OCR_ARBITER` | 否 | `1`（預設）／`0`。證件辨識分歧欄第三讀仲裁（Claude，每份文件最多 1 次）；見下面「OCR 準確度評估」段 |
 
 Email 內容同站內通知 body 一樣：只有盤名／數字／id／月份，連結指向 `APP_BASE_URL`。用戶電郵由本人喺「改密碼」頁、或老闆喺「用戶」頁（`通知電郵`）設定；電郵屬聯絡資料，唔入 `ai` schema、唔入 AI 工具輸出、audit 只記「已改」。`notify_prefs` 可逐類關電郵（站內通知照常有）。
 
@@ -169,3 +170,23 @@ Email 內容同站內通知 body 一樣：只有盤名／數字／id／月份，
 散工轉長工嘅人（`guards.hire_date` 係散工入職日），MPF 同法定假一律由長工合約生效日起計。糧單 notes 會寫「年資起點：長工合約 YYYY-MM-DD（散工段唔計）」（只喺同入職日唔同時出）。
 
 P19a 修正：年資起點取**現行連續合約鏈**第一段生效日——由該月生效嘅合約段向前追溯，前段 `effectiveTo` 同後段 `effectiveFrom` 相差 ≤1 日先當連續；離職再入職（有中斷）就由中斷後第一段起計。MPF 豁免、法定假 3 個月、年假 entitlement 同一口徑；舊規則月份（8 月以前 under60days）同樣跟呢個起點。合約日早過 hire_date 只出 warning（唔改計算）；「散工段唔計」note 只喺合約日遲過入職日先出。
+
+## OCR 準確度評估（OCR-5）＋第三讀仲裁開關（OCR-4）
+
+評估腳本 `scripts/staff-import/eval-ocr.ts`——**本機由規劃者跑真檔；執行員／CI 只跑合成 fixture**（`--dry`）。用同一條應用內路徑：同規格圖（1,600px 全圖＋2×2 放大格，ImageMagick `magick`／PDF 用 `pdftoppm`，可用 `MAGICK_BIN`／`PDFTOPPM_BIN` 覆蓋）→ `getReadClients()`（真 Claude＋DeepSeek，key 由 `.env` 經 dotenv 載入；其他 env 檔用 `DOTENV_CONFIG_PATH=…`）→ `readDocument`（候選字／仲裁）→ 逐欄對 truth（現有 normalize canon）。
+
+```
+# 真跑（key 在 .env；manifest 同報表都放 data/，唔入 git）
+npx tsx scripts/staff-import/eval-ocr.ts --manifest data/2026-10/ocr-eval/manifest.json --out data/2026-10/ocr-eval/report-before.json
+# 試跑少量／單一文件類型／並行度（預設 2）
+npx tsx scripts/staff-import/eval-ocr.ts --manifest … --limit 5 --only-doc-type onboarding_form --concurrency 2
+# 合成 fixture＋fake client（唔打 API，無需 key）
+npx tsx scripts/staff-import/eval-ocr.ts --dry
+```
+
+- manifest：`{ cases:[{ id, docs:[{ type:"id_card"|"address_proof"|"onboarding_form", image:"<jpg/png/pdf 路徑，相對 manifest 所在資料夾或絕對>", page?:<PDF 頁，預設 1> }], truth:{ name_zh?, name_en?, hkid?, dob?, sex?, phone?, address?, bank_account? } }] }`。`bank_account` 路徑 A 唔讀，會略過並喺報表 notes 標明。`--dry` 專用可選 `fake`（每種文件嘅 a／b／arbiter 覆蓋，見 `tests/fixtures/ocr-eval/manifest.dry.json`）。
+- 逐欄結果：`exact`（confirmed 且啱）／`review_contains_truth`（review 而預填值或候選含 truth）／`wrong`（confirmed 但錯＝最危險，另計 `confirmed_wrong`；或 review 而候選都唔含 truth）／`missing`。另出：review 率、review 欄平均候選數、估算人手改字次數（wrong＋missing）、估算撳候選次數（review 含 truth 但預填唔啱）、calls／tokens（含 `by_provider`、仲裁文件數）。失敗 case 重試 1 次，仍失敗只記錯誤類別、唔計入欄位統計。
+- **隱私**：console 同 `--out` JSON 只有計數／百分比；per-case 只有 case id＋`doc.field → 結果類別`，唔印欄位值、姓名、圖片路徑。`--out` 必須喺 `<cwd>/data/` 之下（否則拒絕）。圖片只喺記憶體經 stdin／stdout 傳（PDF 例外：`pdftoppm` 暫存 PNG 放系統 temp，用完即刪）。
+- 建議每個 OCR 子階段改動前後各跑一次（同一 manifest），比 before／after。
+
+**`GUARD_OCR_ARBITER`**（Zeabur env，預設 `1`）：分歧欄第三讀仲裁開關；`0`／`false`／`off`／`no` 關閉＝回到兩讀。成本：每份文件最多多 1 次 Claude 呼叫（只喺有分歧欄且兩讀 confidence 都唔係 high 時），用量計入 audit `guard_ocr_read` 嘅 `usage_by_provider.claude`，另有 `arbiter_calls`。冇 `CLAUDE_API_KEY`（純 DeepSeek 模式）自動冇仲裁。
