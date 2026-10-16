@@ -273,3 +273,43 @@ npx tsx scripts/staff-import/19-triage-reread.ts --dry     # fake client＋記�
 - `POST /api/shift-records/batch`：shift 寫入同 `audit_log` 喺同一個 `$transaction`（`writeAuditMany(…, tx)`，一條 `createMany`，次序／內容同舊版一致；timeout 60s／maxWait 10s 不變）。tx 中途失敗（unique 衝突、鎖月、audit 寫入失敗）→ shift 同 audit 一齊 rollback。
 - `POST /api/shift-records`：撞 unique 而現存行係 `cancelled` 就重用該行（`update`＋audit `update`，`after.reused_cancelled=true`，回 201＋`reused:true`）；現存行唔係 cancelled 仍 409。audit 同寫入同 tx。
 - **G4b**：`openMonth()`（`src/lib/months/open-month.ts`）、`applyAttendanceFix()`（`src/lib/longterm-payroll/attendance-fix.ts`）、`applyReconcileDecisions()`（`src/lib/roster-upload/reconcile-apply.ts`）嘅 audit 同樣用 `writeAuditMany(…, tx)` 喺同一 transaction 最後一步一條 `createMany` 寫入，失敗一齊 rollback（reconcile-apply 只收 SAVEPOINT 成功項嘅 audit）。attendance-fix 嘅 auto 價卡 journal 維持 commit 後 best effort（唔拖冧主寫入）。2,000 條 audit createMany 喺 tx 內實測約 0.1 秒。
+
+## WhatsApp 報更：WAHA Zeabur service 設定清單（W0，2026-10）
+
+> 計劃書：`docs/plans/whatsapp-roster-plan.md`（§3 webhook、§7 部署、§7.2 防封號）。下面係老闆喺 Zeabur 照做嘅清單；**所有 key／secret 只放 Zeabur env，唔入 git**。W0 只落庫，未解析、未寫更表。
+
+**A. 新增 `waha` service（同系統同一個 Zeabur 專案）**
+
+| 項目 | 設定 |
+|---|---|
+| Image | `devlikeapro/waha`（用 NOWEB engine，**唔用** Chromium engine，慳資源） |
+| Volume | 持久 volume 掛 `/app/.sessions`（session 檔；重啟唔使再掃 QR） |
+| `WHATSAPP_DEFAULT_ENGINE` | `NOWEB` |
+| `WHATSAPP_HOOK_URL` | `http://<系統 service 內部名>:8080/api/webhooks/whatsapp`（Zeabur 私網服務名；唔支援私網就用系統公開網址 `https://…/api/webhooks/whatsapp`，HMAC＋header 照驗） |
+| `WHATSAPP_HOOK_EVENTS` | `message,message.edited,message.revoked`（**唔好**訂 `message.any`／`message.ack`／`presence`） |
+| `WHATSAPP_HOOK_HMAC_KEY` | 隨機長字串（例 `openssl rand -hex 32`）＝系統 env `WA_WEBHOOK_HMAC_KEY` |
+| `WHATSAPP_HOOK_CUSTOM_HEADERS` | `X-Zoikan-Hook:<另一個隨機字串>`＝系統 env `WA_WEBHOOK_HEADER_SECRET` |
+| `WAHA_API_KEY` | 隨機字串＝系統 env `WAHA_API_KEY`（系統查 session 狀態／群組列表用，header `X-Api-Key`） |
+| `WAHA_DASHBOARD_ENABLED` | `false`（要用 dashboard 掃 QR 時先暫時開，掃完即關或加 basic auth） |
+| `WHATSAPP_DOWNLOAD_MEDIA` | `false`（唔下載圖／語音／貼圖） |
+| 對外網路 | **唔開公網**（私網即可）；系統先會用 `WAHA_BASE_URL` 連入 |
+
+**B. 系統（Next）service 加 env**
+
+`WA_ENABLED`（`0`／`1`；預設 `0`＝webhook 一律回 503，確認 WAHA 設定好先開 `1`）、`WA_WEBHOOK_HMAC_KEY`、`WA_WEBHOOK_HEADER_SECRET`、`WAHA_BASE_URL`（例 `http://waha:3000`）、`WAHA_API_KEY`、`WAHA_SESSION`（預設 `default`）。
+
+**C. 開通步驟**
+
+1. 用**專用公司 SIM 號碼**（唔好用老闆私人號），先人手入群、養號 1–2 星期；一次入 ≤10 個群，逐週加。
+2. 起 `waha` service，開 dashboard 建 session `default`、掃 QR 登入；掃完關 dashboard。
+3. 系統加上面 env，`WA_ENABLED=1`，重新部署。
+4. 登入系統 →「WhatsApp 報更」→ 撳「同步群組」（新群預設「略過」）→ 逐個群揀類型、綁盤口／判頭。
+5. 群組有訊息後，頁面「系統狀態」應見 WAHA session `WORKING`、「最後收到訊息」更新、訊息清單有行。
+
+**D. 驗收／排錯**
+
+- webhook 回 `503 {"error":"whatsapp_disabled"}`＝`WA_ENABLED` 未設 `1`；`401`＝HMAC key 或 `X-Zoikan-Hook` 不符（或系統未設 key／secret，一律拒絕；唔會落庫、唔會記 body）；`413`＝body >64 KB；`400`＝格式錯。
+- 重覆投遞（WAHA 重試）由 `message_id` 唯一約束吸收，回 200。
+- 保留期：`whatsapp_retention` job 每日 03:00 將超過 90 日嘅訊息原文置空（設定頁「自動排程」可見）。
+- 一旦封號／斷線：系統其他部分唔受影響，照舊人手入更；健康區 WAHA 狀態會變 `FAILED`／「連唔到」。
+- **鐵則**：系統永遠唔呼叫任何發送／已讀／輸入中 API（`tests/whatsapp-misc.test.ts` 掃描 `src/lib/whatsapp` 等目錄禁用字串）。

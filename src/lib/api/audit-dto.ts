@@ -40,6 +40,7 @@ import {
   toRosterUploadRowDTO,
 } from "./dto";
 import { toCoverRateDTO } from "../longterm-payroll/dto";
+import { toWaGroupDTO } from "../whatsapp/dto";
 import type { Dto } from "./serialize";
 import type { AuditAction } from "../audit";
 
@@ -94,6 +95,9 @@ export const AUDIT_DTO_BY_TABLE: Record<string, (row: RowLike) => Dto> = {
   roster_upload_rows: (r) => toRosterUploadRowDTO(r),
   // P10.1：頂位津貼價目表（無 PII；evidence 只有盤 id／金額／次數／人數）。
   cover_shift_rates: (r) => toCoverRateDTO(r),
+  // W0：whatsapp_groups 綁定改動（群 jid／群名／kind／盤／判頭／口語對照／開關；全部非 PII）。
+  // whatsapp_messages／whatsapp_intents 唔寫 audit（原文含 PII；ai.audit_log 亦排除三表）。
+  whatsapp_groups: (r) => toWaGroupDTO(r),
 };
 
 /** 呢啲 action 代表「呢個值本身係一個完整資源 row」——先會行 DTO

@@ -178,6 +178,7 @@ enum RosterUploadGuardMatch {
 // ---------------------------------------------------------------------------
 model Broker {
   id               String         @id @default(uuid())
+  whatsappGroups   WhatsappGroup[]
   code             String         @unique // K/W/G/D/T/Y…
   name             String // 業務代號或真名——真名對照見 gitignored 嘅 data/mappings-private/brokers.csv，git 內預設用代號 K/W/G/D/T/Y
   kind             BrokerKind
@@ -450,6 +451,7 @@ model Guard {
   // `emergency_contact_*` 呢幾個舊欄改做**同步顯示值**，見
   // src/lib/guards/contacts.ts syncLegacyGuardContactColumns()）。
   phones                GuardPhone[]
+  whatsappMessages      WhatsappMessage[]
   emergencyContacts     GuardEmergencyContact[]
   addresses             GuardAddress[]
   rosterUploadRows      RosterUploadRow[]
@@ -683,6 +685,7 @@ enum GuardStaffNumberStatus {
 // ---------------------------------------------------------------------------
 model Site {
   id                  String        @id @default(uuid())
+  whatsappGroups      WhatsappGroup[]
   canonicalName       String        @unique @map("canonical_name")
   aliases             String[]      @default([])
   clientName          String        @map("client_name")
@@ -2089,4 +2092,128 @@ model CoverShiftRate {
   @@unique([siteId, grade, effectiveFrom])
   @@index([siteId, grade])
   @@map("cover_shift_rates")
+}
+
+// ---------------------------------------------------------------------------
+// W0（WhatsApp 報更模組基建，docs/plans/whatsapp-roster-plan.md §3／§4／§9）
+// 三張新表放 public，**唔入 ai schema**；ai.audit_log 排除 whatsapp_* 三個 table_name。
+// whatsapp_messages.text 含訊息原文（PII），保留期 90 日後置空（jobs/whatsapp-retention.ts）。
+// ---------------------------------------------------------------------------
+enum WhatsappGroupKind {
+  site
+  multi_site
+  broker
+  office
+  ignored
+}
+
+enum WhatsappMessageStatus {
+  received
+  filtered
+  parsed
+  routed
+  done
+  ignored
+  error
+  revoked
+}
+
+enum WhatsappIntentKind {
+  shift
+  leave
+  cover
+  cancel
+  unclear
+  question_only
+}
+
+enum WhatsappIntentRouted {
+  auto_write
+  triage
+  ignored
+  pending
+}
+
+model WhatsappGroup {
+  id            String            @id @default(uuid())
+  groupJid      String            @unique @map("group_jid")
+  label         String            @default("")
+  kind          WhatsappGroupKind @default(ignored)
+  siteId        String?           @map("site_id")
+  site          Site?             @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  brokerId      String?           @map("broker_id")
+  broker        Broker?           @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  shiftWordMap  Json              @default("{}") @map("shift_word_map")
+  autoWrite     Boolean           @default(false) @map("auto_write")
+  autoConfirm   Boolean           @default(false) @map("auto_confirm")
+  active        Boolean           @default(true)
+  lastMessageAt DateTime?         @map("last_message_at") @db.Timestamptz(3)
+  createdBy     String            @map("created_by")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  @@map("whatsapp_groups")
+}
+
+model WhatsappMessage {
+  id              String                @id @default(uuid())
+  session         String
+  chatJid         String                @map("chat_jid")
+  messageId       String                @unique @map("message_id")
+  revision        Int                   @default(1)
+  senderJid       String                @map("sender_jid")
+  senderTelNorm   String?               @map("sender_tel_norm")
+  senderGuardId   String?               @map("sender_guard_id")
+  senderGuard     Guard?                @relation(fields: [senderGuardId], references: [id], onDelete: SetNull)
+  ts              DateTime              @db.Timestamptz(3)
+  text            String                @default("")
+  textHistory     Json                  @default("[]") @map("text_history")
+  mediaType       String?               @map("media_type")
+  quotedMessageId String?               @map("quoted_message_id")
+  status          WhatsappMessageStatus @default(received)
+  ignoreReason    String?               @map("ignore_reason")
+  filterScore     Int?                  @map("filter_score")
+  filterReasons   Json                  @default("[]") @map("filter_reasons")
+  parsedJson      Json?                 @map("parsed_json")
+  llmProvider     String?               @map("llm_provider")
+  llmModel        String?               @map("llm_model")
+  llmTokensIn     Int?                  @map("llm_tokens_in")
+  llmTokensOut    Int?                  @map("llm_tokens_out")
+  error           String?
+  editedAt        DateTime?             @map("edited_at") @db.Timestamptz(3)
+  revokedAt       DateTime?             @map("revoked_at") @db.Timestamptz(3)
+  redactedAt      DateTime?             @map("redacted_at") @db.Timestamptz(3)
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+
+  intents WhatsappIntent[]
+
+  @@unique([messageId, revision])
+  @@index([chatJid, ts])
+  @@index([status])
+  @@map("whatsapp_messages")
+}
+
+model WhatsappIntent {
+  id              String               @id @default(uuid())
+  messageId       String               @map("message_id")
+  message         WhatsappMessage      @relation(fields: [messageId], references: [messageId], onDelete: Cascade)
+  messageRevision Int                  @map("message_revision")
+  idx             Int
+  kind            WhatsappIntentKind
+  workDate        DateTime?            @map("work_date") @db.Date
+  siteId          String?              @map("site_id")
+  guardId         String?              @map("guard_id")
+  shiftTypeId     String?              @map("shift_type_id")
+  leaveCode       String?              @map("leave_code")
+  hours           Decimal?             @db.Decimal(6, 2)
+  confidence      Decimal?             @db.Decimal(4, 3)
+  resolution      Json                 @default("{}")
+  routed          WhatsappIntentRouted @default(pending)
+  resultRef       String?              @map("result_ref")
+  sourceChanged   Boolean              @default(false) @map("source_changed")
+  createdAt       DateTime             @default(now()) @map("created_at")
+
+  @@unique([messageId, messageRevision, idx])
+  @@map("whatsapp_intents")
 }
