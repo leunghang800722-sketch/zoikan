@@ -1211,6 +1211,13 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **M1**：`reconcile.ts` 地址「canon 一致但 strict 唔同」分支，仲裁 agree 只喺仲裁值係標準寫法（`variantCharCount(仲裁值) ≤ 另一讀`）先 confirmed；2/3 同意嘅係變體字（厦）寫法 → 維持 review（`address_variant_chars`，`arbiter` 標籤保留、標準寫法排前；仲裁加權後以變體字數穩定重排，確保預填係標準寫法）。
 - **N1**：形近字 test 補 status／reason 斷言；加 M1 正反兩個 case（仲裁「大廈」→ confirmed agree_b；仲裁「大厦」→ review agree_a，預填「大廈」）。
 
+### 25.8 OCR-5.6 DeepSeek 讀 B 輸出上限（branch `ocr56-deepseek-budget`，起點 main `927d5b8`，未 merge）
+
+- **根因**：`deepseek-flash`（V4.1）係思考模型，思考 token 計入 `max_tokens`；舊上限 1,500 令入職表讀 B（5 欄裁圖）思考用晒 → content 空、`finish_reason=length` → `parse_ok.b=false` → 每欄 `one_read_unclear`（review，唔會仲裁）。規劃者實測上限 4,000 後 4 份入職表 B 全部解析成功。
+- **改動**：`config.ts` 舊 `OCR_MAX_OUTPUT_TOKENS`（1500，只有 DeepSeek 用）改為 `OCR_MAX_OUTPUT_TOKENS_DEEPSEEK=4000`（env `GUARD_OCR_DEEPSEEK_MAX_TOKENS` 覆蓋，≤8,000）；Claude 路徑一直用 `OCR_CLAUDE_MAX_OUTPUT_TOKENS=8000` 不變（簡報「CLAUDE=1500」冇對應用途，唔另設死常數）。DeepSeek 請求加 `reasoning_effort`（預設 `low`；env `GUARD_OCR_DEEPSEEK_REASONING=low|high|max|off`，`off`＝`thinking:{type:"disabled"}`）。
+- **防守**：讀 B 同仲裁回應 `truncated` 且 content 空 → 自動重試一次，`max_tokens` 加倍（上限 8,000，`VisionRequest.maxTokens`）；仍失敗當 parse 失敗；兩次呼叫 usage 都計；audit `guard_ocr_read` 加淨計數 `b_retry_truncated`；`DocumentReadResult.b_retry_truncated`（additive）。
+- **真 API 實測**（`ocr-schema-smoke.ts` 加 DeepSeek 段，有 `DEEPSEEK_API_KEY` 先跑）：`reasoning_effort:"low"` 同 `response_format json_object` 相容；身份證／住址證明／入職表（5 圖）三次 content 非空、JSON 合法、未撞頂（6/6 通過）。low 對準確度影響留規劃者用真檔評估。
+
 ## 26 OCR-3（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §1 問題 3／§2 OCR-3 及老闆硬性要求；branch `ocr3-field-crops`，未 merge）
 
 執行：Sonnet 5.5（`claude-sonnet-5-5`）。起點 main `e269099`（OCR-5／OCR-4 已合併）。範圍：路徑 A 兩段式讀＋欄位級裁圖、分格線防呆、路徑 B 外擴與戶口位數；OCR-1／2 未動。全程只用合成 fixture／fake client，冇讀 `data/` 內容、`.env`、冇 PII；圖片同辨識值冇落地（audit 只加計數）。

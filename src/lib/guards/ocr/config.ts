@@ -40,7 +40,10 @@ export const OCR_MAX_BODY_CHARS = 8_000_000;
 const DEFAULT_OCR_MODEL = "deepseek-flash";
 export const DEFAULT_OCR_BASE_URL = "https://api.deepseek.com";
 export const OCR_CALL_TIMEOUT_MS = 60_000;
-export const OCR_MAX_OUTPUT_TOKENS = 1500;
+/** OCR-5.6：DeepSeek（V4.1）係思考模型，思考 token 計入 max_tokens；1500 令入職表讀 B（5 欄裁圖）撞頂、content 空。 */
+export const OCR_MAX_OUTPUT_TOKENS_DEEPSEEK = 4000;
+/** OCR-5.6：撞頂自動重試嘅 max_tokens 絕對上限。 */
+export const OCR_RETRY_MAX_TOKENS_CAP = 8000;
 /** Claude（Opus 5.5）thinking 計入 max_tokens，1500 會令每次 max_tokens 退回 DeepSeek，所以另設。 */
 export const OCR_CLAUDE_MAX_OUTPUT_TOKENS = 8000;
 
@@ -89,6 +92,19 @@ export function ocrAlsEnabled(): boolean {
 export const OCR_ALS_TIMEOUT_MS = 3_000;
 /** ALS Score 低過呢個值就唔出候選。 */
 export const OCR_ALS_MIN_SCORE = 60;
+
+/** OCR-5.6：DeepSeek max_tokens——env `GUARD_OCR_DEEPSEEK_MAX_TOKENS`（正整數、≤8000）覆蓋，否則 4000。 */
+export function ocrDeepseekMaxTokens(): number {
+  const n = Number.parseInt(process.env.GUARD_OCR_DEEPSEEK_MAX_TOKENS?.trim() ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, OCR_RETRY_MAX_TOKENS_CAP) : OCR_MAX_OUTPUT_TOKENS_DEEPSEEK;
+}
+
+export type OcrDeepseekReasoning = "low" | "high" | "max" | "off";
+/** OCR-5.6：DeepSeek 思考力度——env `GUARD_OCR_DEEPSEEK_REASONING`（low|high|max|off），預設 low；唔認得當 low。 */
+export function ocrDeepseekReasoning(): OcrDeepseekReasoning {
+  const v = process.env.GUARD_OCR_DEEPSEEK_REASONING?.trim().toLowerCase();
+  return v === "high" || v === "max" || v === "off" ? v : "low";
+}
 
 export function ocrModel(): string {
   return process.env.GUARD_OCR_MODEL?.trim() || DEFAULT_OCR_MODEL;
