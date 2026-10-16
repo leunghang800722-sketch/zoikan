@@ -30,6 +30,7 @@ interface ListRes {
   sessions: SessionRow[];
   open_total: number;
   eligible_owners: { id: string; name: string; role_name: string }[];
+  can_answer?: boolean;
 }
 
 const SOURCE_LABEL: Record<string, string> = { guard_import: "保安員證件資料導入", roster_upload: "更表上載", month_close: "一鍵結算（要你睇）", postorder_backfill: "補齊價目卡（Postorder／自動卡）" };
@@ -131,12 +132,12 @@ export default function TriagePage() {
                 {s.counts.open > 0 ? "繼續答" : "冇未答"}
               </Button>
               {isMcSource(s.source_type) && s.counts.open > 0 && !s.superseded_all && <BatchAcceptButton sessionId={s.id} onDone={() => { router.refresh(); void load(); }} />}
-              {(isBossView || s.source_type === "guard_import") && (
+              {(isBossView || (s.source_type === "guard_import" && data?.can_answer)) && (
                 <Button variant="ghost" size="sm" aria-label="更多" onClick={() => setMoreOpen((v) => (v === s.id ? null : s.id))} data-testid="triage-more">
                   ⋯
                 </Button>
               )}
-              {s.source_type === "guard_import" && moreOpen === s.id && (
+              {s.source_type === "guard_import" && data?.can_answer && moreOpen === s.id && (
                 <Button size="sm" onClick={() => { setRereadId(s.id); setMoreOpen(null); }} data-testid="triage-ocr-reread">
                   導入 OCR 重讀建議
                 </Button>

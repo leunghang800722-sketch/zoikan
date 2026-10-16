@@ -199,6 +199,33 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect((await send(accountant, sid, [prop(uuid2, "nameZh", "導入測試員無證", { match: { hkid: null, staff_numbers: ["U90003"] } })], true)).body).toMatchObject({ skipped_kind: 1 });
   });
 
+  it("N1 身份檢查：match 同題目 evidence 唔一致（身份證／工號）→ skipped_identity_mismatch；冇 match 而 key 只撞 personKey 但 evidence 唔對亦擋；一致先過", async () => {
+    const { pa, sid } = await seed();
+    const uuid = "11111111-2222-4333-8444-555555555555";
+    const ok = { hkid: H[1]!, staff_numbers: ["U90001"] };
+    // 推導 key 唔等於題目 personKey（hkid 對唔上）
+    expect((await send(accountant, sid, [prop(uuid, "nameZh", "導入測試員甲", { match: { hkid: H[2]!, staff_numbers: ["U90001"] } })], true)).body).toMatchObject({ applied: 0, skipped_identity_mismatch: 1 });
+    // key 對得上但工號集合唔同（身份證有 → key 由身份證推，工號唔入 key，但 evidence 工號唔一致）
+    expect((await send(accountant, sid, [prop(pa.key, "nameZh", "導入測試員甲", { match: { hkid: H[1]!, staff_numbers: ["U90001", "U99999"] } })], true)).body).toMatchObject({ applied: 0, skipped_identity_mismatch: 1 });
+    expect((await send(accountant, sid, [prop(uuid, "nameZh", "導入測試員甲", { match: ok })], true)).body).toMatchObject({ applied: 1, skipped_identity_mismatch: 0 });
+    // 冇 match：person_key 直接等於 evidence.person.key 先過；evidence 冇 person.key（舊／缺）→ 擋
+    expect((await send(accountant, sid, [prop(pa.key, "nameZh", "導入測試員甲")], true)).body).toMatchObject({ applied: 1 });
+    const q = await qOf("name_not_confirmed");
+    const ev = q.evidenceJson as { person: Record<string, unknown> };
+    await prisma.triageQuestion.update({ where: { id: q.id }, data: { evidenceJson: { ...ev, person: { ...ev.person, key: "other" } } as never } });
+    expect((await send(accountant, sid, [prop(pa.key, "nameZh", "導入測試員甲")], true)).body).toMatchObject({ applied: 0, skipped_identity_mismatch: 1 });
+  });
+
+  it("N4 OCR 重讀答嘅題 audit manual_confirmed=false；N3 session 列表帶 can_answer", async () => {
+    const { pa, sid } = await seed();
+    await send(accountant, sid, [prop(pa.key, "nameZh", "導入測試員甲")]);
+    const q = await qOf("name_not_confirmed");
+    const a = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_answer", rowId: q.id } });
+    expect((a.after as { manual_confirmed?: boolean }).manual_confirmed).toBe(false);
+    const list = await (await listRoute(new Request("http://t/api/triage/sessions?mine=1", { headers: { cookie: accountant } }))).json();
+    expect(list.can_answer).toBe(true);
+  });
+
   it("restricted／錯誤分類：現有權限 403 → skipped_restricted；4xx → skipped_invalid；其他 → errors（dispOf）", () => {
     expect(dispOf(Forbidden("x"))).toBe("skipped_restricted");
     expect(dispOf(BadRequest("x"))).toBe("skipped_invalid");
