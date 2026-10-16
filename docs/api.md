@@ -2719,7 +2719,7 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 向 WAHA `GET /api/{session}/groups` 攞群組（只取 id＋名；id 可係字串或 `{_serialized}`；只收 `@g.us`），新群 `kind=ignored`、自動寫入全關；已存在只更新群名。回 `{ total, created, relabelled }`；audit action `whatsapp_group_sync`（`row_id="sync"`）。`WAHA_BASE_URL` 未設 → `503 waha_not_configured`；WAHA 連唔到／非 2xx／格式錯 → `502 waha_unavailable`（唔洩漏 URL／key）。
 
 ### `GET /api/whatsapp/messages?group=&status=&take=`（view）
-最近訊息（`take` 預設及上限 200；`group` 可係群 id 或 jid；`status` 非法 → 400）。**唔回傳原文**、WAHA `message_id`（含發訊人電話）、完整電話；`sender`＝有「安員:view」顯示保安員姓名，否則 `…`＋電話尾 4 位；另有 `revision`、`edited`、`revoked`、`redacted`、`media_type`、`filter_score`、`ignore_reason`、`text_len`。
+最近訊息（`take` 預設及上限 200；`group` 可係群 id 或 jid；`status` 非法 → 400）。**唔回傳原文**、WAHA `message_id`（含發訊人電話）、完整電話；`sender`＝有「保安員:view」顯示保安員姓名，否則 `…`＋電話尾 4 位；另有 `revision`、`edited`、`revoked`、`redacted`、`media_type`、`filter_score`、`ignore_reason`、`text_len`。
 
 ### `GET /api/whatsapp/health`（view）
 `{ enabled, waha_configured, waha_ok, waha_status, waha_error, last_received_at, backlog(status=received), errors_24h, messages_24h }`；WAHA 連線 5s timeout。
@@ -2733,8 +2733,8 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 
 ### `GET /api/whatsapp/intents?group=&from=&to=&routed=&take=`（view）
 - `group`＝群 id 或 jid；`from`／`to`＝香港日曆日 `YYYY-MM-DD`（含頭尾；冇傳＝最近 14 日；格式錯／`from>to` → 400）；`routed`＝`auto_write|triage|ignored|pending`（非法 → 400）；`take` 預設及上限 200。按訊息時間新→舊。
-- 每行：`message_ts`、`group_id`／`group_label`、`sender`（有「安員:view」＝保安員姓名，否則 `…`＋電話尾 4 位）、`text`（**只有「安員:view」權先有**，保留期後 `null`＋`text_redacted:true`）、`revision`、`kind`、`work_date`、`site_id`／`site_name`、`guard_id`／`guard_name`（同樣要「安員:view」；`has_guard` 恆有）、`shift_code`、`leave_code`、`confidence`、`routed`、`reasons[]`（阻擋自動寫入嘅原因碼）、`notes[]`（資訊備註）、`candidate_counts`（只係數量）、`group_auto_write`、`superseded`（被編輯後新 revision 取代）、`revoked`、`source_changed`、`compare`、`actual[]`。
-- 原因碼：`person_ambiguous|person_unknown|site_ambiguous|date_ambiguous|date_missing|date_unparseable|date_out_of_range|shift_unmapped|shift_ambiguous|leave_unmapped|leave_ambiguous|conflict_other_shift|conflict_leave|conflict_shift_vs_leave|already_exists|month_locked|slot_full|quota_full|type_not_auto|question_only|unclear|duplicate_in_message`；備註碼：`group_auto_write_off|month_rolled|llm_bad_output|llm_no_intent`。
+- 每行：`message_ts`、`group_id`／`group_label`、`sender`（有「保安員:view」＝保安員姓名，否則 `…`＋電話尾 4 位）、`text`（**只有「保安員:view」權先有**，保留期後 `null`＋`text_redacted:true`）、`revision`、`kind`、`work_date`、`site_id`／`site_name`、`guard_id`／`guard_name`（同樣要「保安員:view」；`has_guard` 恆有）、`shift_code`、`leave_code`、`confidence`、`routed`、`reasons[]`（阻擋自動寫入嘅原因碼）、`notes[]`（資訊備註）、`candidate_counts`（只係數量）、`group_auto_write`、`superseded`（被編輯後新 revision 取代）、`revoked`、`source_changed`、`compare`、`actual[]`。
+- 原因碼：`person_ambiguous|person_unknown|site_ambiguous|date_ambiguous|date_missing|date_unparseable|date_out_of_range|shift_unmapped|shift_ambiguous|leave_unmapped|leave_ambiguous|leave_code_unclear|low_confidence|conflict_other_shift|conflict_leave|conflict_shift_vs_leave|already_exists|month_locked|slot_full|quota_full|type_not_auto|question_only|unclear|duplicate_in_message`；備註碼：`group_auto_write_off|month_rolled|llm_bad_output|llm_no_intent`。
 - `compare`（對照「實際排更」＝同人同日非取消嘅 `shift_records`，OT 唔計）：`match`（✓）／`mismatch`（✗）／`none`（—，實際未有排更）／`null`（`cover`／`cancel`／`unclear`／`question_only` 或未配到人／日，不對照）。`actual` 例 `["shift:N","leave:SL"]`。
 - **唔回傳** WAHA `message_id`、`group_jid`、完整電話；`resolution` json 本身唔含訊息原文（只有原因碼、id 列表、basis 代碼）。
 

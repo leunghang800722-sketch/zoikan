@@ -3,6 +3,7 @@
 // 全部假資料：測試甲／乙、測試盤W1、假電話 9000001x、假群 w1-g*@g.us。
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { prisma, clearAll } from "./lib/db";
+import { prisma as appPrisma } from "@/lib/db"; // 應用程式用嘅 client（spy 要打呢個）
 import { runWhatsappParse, runWhatsappDailySummary } from "@/lib/jobs/whatsapp-parse";
 import { runWhatsappRetention } from "@/lib/jobs/whatsapp-retention";
 import { ingestEvent } from "@/lib/whatsapp/ingest";
@@ -259,6 +260,25 @@ describe("W1 job：重試與 stale", () => {
     expect(await msgRow("s1")).toMatchObject({ status: "received", revision: 2 });
     await run(fakeLlm(() => leaveJson("19號")));
     expect((await intentsOf("s1")).map((i) => i.messageRevision)).toEqual([2]);
+  });
+});
+
+describe("W1 job：任何例外都計失敗（唔無限重試）", () => {
+  it("落結果 transaction 持續拋錯 → 3 次後 status=error，LLM 只叫 3 次，之後唔再叫", async () => {
+    await ingest(ev("message", "pf1", "我聽日18號病假"));
+    const holder = appPrisma as unknown as { $transaction: unknown };
+    const orig = holder.$transaction;
+    holder.$transaction = async () => {
+      throw new Error("db boom");
+    };
+    try {
+      const llm = fakeLlm(() => leaveJson());
+      for (let i = 0; i < 5; i++) await run(llm);
+    } finally {
+      holder.$transaction = orig;
+    }
+    expect(calls.length).toBe(3);
+    expect(await msgRow("pf1")).toMatchObject({ status: "error", parseAttempts: 3, error: "process_failed" });
   });
 });
 

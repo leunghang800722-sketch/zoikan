@@ -168,6 +168,28 @@ describe("W1 dates：凌晨 00:00–05:00 跨日歧義", () => {
   });
 });
 
+describe("W1 dates：凌晨相對 range 降級", () => {
+  it("「聽日至後日」01:00 → date_ambiguous（含聽日、當日候選）", () => {
+    const x = r("聽日至後日", new Date("2026-10-16T17:00:00Z")); // HK 2026-10-17 01:00
+    expect(x.ok).toBe(false);
+    if (!x.ok) {
+      expect(x.reason).toBe("date_ambiguous");
+      expect(x.detail).toBe("dawn_cross_day");
+      expect(x.candidates).toEqual(["2026-10-18", "2026-10-17"]);
+    }
+  });
+  it("「今日至聽日」02:00 → date_ambiguous", () => {
+    const x = r("今日至聽日", DAWN_SAT);
+    expect(x.ok).toBe(false);
+    if (!x.ok) expect([...x.candidates].sort()).toEqual(["2026-10-16", "2026-10-17", "2026-10-18"]);
+  });
+  it("「後日至大後日」凌晨唔降級；數字 range 凌晨不變；日間「聽日至後日」不變", () => {
+    expect(okDates("後日至大後日", DAWN_SAT)).toEqual(["2026-10-19", "2026-10-20"]);
+    expect(okDates("17-19號", DAWN_SAT)).toEqual(["2026-10-17", "2026-10-18", "2026-10-19"]);
+    expect(okDates("聽日至後日")).toEqual(["2026-10-17", "2026-10-18"]);
+  });
+});
+
 describe("W1 dates：缺失／亂碼", () => {
   it("冇日期文字 → date_missing", () => {
     const x = r(null);

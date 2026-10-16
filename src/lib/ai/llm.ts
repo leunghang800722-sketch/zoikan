@@ -42,6 +42,8 @@ interface LlmStructuredOptions {
   /** 輸出上限（含思考 token）。 */
   maxTokens: number;
   temperature?: number;
+  /** DeepSeek 專用輸出上限（有就覆寫 maxTokens；Claude 路徑唔受影響）。 */
+  deepseekMaxTokens?: number;
   /** DeepSeek reasoning_effort。 */
   reasoningEffort?: "low" | "medium" | "high";
 }
@@ -54,6 +56,8 @@ export interface LlmChatResult {
   /** WP-AI-DIAG（additive）：邊個 provider／型號答嘅（audit／SSE `done` 用）；舊 client／測試 fake 可以冇。 */
   provider?: string;
   model?: string;
+  /** W1（additive）：撞咗 output token 上限（DeepSeek finish_reason=length／Claude stop_reason=max_tokens）。 */
+  truncated?: boolean;
 }
 
 export interface LlmClient {
@@ -127,7 +131,7 @@ export class AnthropicLlmClient implements LlmClient {
           messages: [{ role: "user", content: params.userMessage }],
         });
         const out = msg.content.filter((b): b is AnthropicTypes.TextBlock => b.type === "text").map((b) => b.text).join("");
-        return { text: out, toolsUsed: [], inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, provider: this.providerName, model: this.model };
+        return { text: out, toolsUsed: [], inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, provider: this.providerName, model: this.model, truncated: msg.stop_reason === "max_tokens" };
       } catch (err) {
         if (err instanceof Anthropic.APIError) throw new LlmUnavailableError(err);
         throw err;

@@ -226,6 +226,15 @@ export function resolveDates(input: DateInput, ts: Date): DateResult {
   // 「聽日至後日」：兩個相對詞（連同 至／到／-）
   const rangeWord = /(至|到|-)/.test(cleanRaw(rawStr));
   if (rangeWord && ex.rel.length === 2 && ex.weekday.length === 0 && ex.abs.length === 0) {
+    // 凌晨：任一相對詞屬當日／翌日類 → 降級（候選同單日規則，取聯集）
+    if (dawn) {
+      const cands: string[] = [];
+      for (const r of ex.rel) {
+        if (r.cls === "same") cands.push(today, addDays(today, -1));
+        else if (r.cls === "next") cands.push(addDays(today, 1), today);
+      }
+      if (cands.length > 0) return { ok: false, reason: "date_ambiguous", detail: "dawn_cross_day", candidates: [...new Set(cands)] };
+    }
     const [a, b] = [ex.rel[0]!.offset, ex.rel[1]!.offset].sort((x, y) => x - y) as [number, number];
     if (b - a + 1 > MAX_RANGE_DAYS) return { ok: false, reason: "range_too_long", detail: "range_over_14_days", candidates: [] };
     const dates: string[] = [];
