@@ -31,6 +31,21 @@ export interface LlmChatParams {
   userMessage: string;
   maxToolRounds: number;
   onTextDelta?: (delta: string) => void;
+  /** W1（additive）：結構化單次輸出（WhatsApp 解析用）。有值＝單次 JSON 輸出、冇工具、冇歷史；
+   * DeepSeek 用 response_format json_object＋temperature＋reasoning_effort＋max_tokens；Claude 用單次 messages.create
+   * （唔傳 temperature／thinking，避免新型號拒收）。冇值＝原有行為完全不變。 */
+  structured?: LlmStructuredOptions;
+}
+
+interface LlmStructuredOptions {
+  format: "json_object";
+  /** 輸出上限（含思考 token）。 */
+  maxTokens: number;
+  temperature?: number;
+  /** DeepSeek 專用輸出上限（有就覆寫 maxTokens；Claude 路徑唔受影響）。 */
+  deepseekMaxTokens?: number;
+  /** DeepSeek reasoning_effort。 */
+  reasoningEffort?: "low" | "medium" | "high";
 }
 
 export interface LlmChatResult {
@@ -41,6 +56,8 @@ export interface LlmChatResult {
   /** WP-AI-DIAG（additive）：邊個 provider／型號答嘅（audit／SSE `done` 用）；舊 client／測試 fake 可以冇。 */
   provider?: string;
   model?: string;
+  /** W1（additive）：撞咗 output token 上限（DeepSeek finish_reason=length／Claude stop_reason=max_tokens）。 */
+  truncated?: boolean;
 }
 
 export interface LlmClient {
@@ -103,6 +120,23 @@ export class AnthropicLlmClient implements LlmClient {
     let text = "";
     let inputTokens = 0;
     let outputTokens = 0;
+
+    if (params.structured) {
+      // W1：單次 JSON 輸出（無工具、無 thinking、無 temperature）；上限 = structured.maxTokens
+      try {
+        const msg = await this.client.messages.create({
+          model: this.model,
+          max_tokens: params.structured.maxTokens,
+          system: params.systemPrompt,
+          messages: [{ role: "user", content: params.userMessage }],
+        });
+        const out = msg.content.filter((b): b is AnthropicTypes.TextBlock => b.type === "text").map((b) => b.text).join("");
+        return { text: out, toolsUsed: [], inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, provider: this.providerName, model: this.model, truncated: msg.stop_reason === "max_tokens" };
+      } catch (err) {
+        if (err instanceof Anthropic.APIError) throw new LlmUnavailableError(err);
+        throw err;
+      }
+    }
 
     try {
       const runner = this.client.beta.messages.toolRunner({
@@ -195,6 +229,11 @@ const FAKE_DIAG_REPLY = [
 
 class FakeDevLlmClient implements LlmClient {
   async chat(params: LlmChatParams): Promise<LlmChatResult> {
+    if (params.structured) {
+      // W1：結構化輸出（WhatsApp 解析）——假 client 一律回「純雜訊」，唔會冒充任何業務數據
+      const text = JSON.stringify({ noise: true, intents: [] });
+      return { text, toolsUsed: [], inputTokens: 0, outputTokens: text.length, provider: "fake", model: "fake" };
+    }
     const text = params.systemPrompt.includes(FEEDBACK_SUMMARIZE_MARKER)
       ? fakeFeedbackSummaryJson(params.userMessage)
       : params.userMessage.includes("診斷")

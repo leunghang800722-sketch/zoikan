@@ -35,10 +35,10 @@ describe("W0 保留期 job", () => {
     expect(r).toEqual({ status: "ok", summary: { redacted: 2, retention_days: 90 } });
     const rows = Object.fromEntries((await prisma.whatsappMessage.findMany()).map((m) => [m.messageId, m]));
     for (const id of ["old1", "old2"]) {
-      expect(rows[id]).toMatchObject({ text: "", textHistory: [], parsedJson: { keep: true }, status: "done" });
+      expect(rows[id]).toMatchObject({ text: "", textHistory: [], parsedJson: null, status: "done" }); // W1：parsed_json 含 LLM 抽出嘅原話片段，一併清走（原本斷言為保留）
       expect(rows[id]!.redactedAt?.getTime()).toBe(now.getTime());
     }
-    expect(rows["new1"]).toMatchObject({ text: "原文-new1", redactedAt: null });
+    expect(rows["new1"]).toMatchObject({ text: "原文-new1", redactedAt: null, parsedJson: { keep: true } });
     expect(rows["done0"]!.redactedAt?.getTime()).toBe(d(10).getTime());
     const again = await runWhatsappRetention(now);
     expect(again).toEqual({ status: "skipped", summary: { redacted: 0, retention_days: 90 } });
