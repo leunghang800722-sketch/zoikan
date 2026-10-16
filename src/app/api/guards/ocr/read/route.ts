@@ -12,7 +12,7 @@ import { reserveQuota } from "@/lib/guards/import/limits";
 import { OCR_DOC_TYPES, OCR_FIELDS, OCR_MAX_BODY_CHARS, OCR_MAX_DOCS, OCR_MAX_FIELD_CROPS, OCR_MAX_IMAGE_CHARS, OCR_MAX_TILES, isGuardOcrConfigured, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
 import { OCR_CROP_FIELDS, OCR_EXTRA_CROP_FIELDS, hasCropFields } from "@/lib/guards/ocr/field-crops";
 import { CONTINUATION_INVALID_MSG, OCR_MAX_CONTINUATION_CHARS, consumeRefsCredit, signContinuation, signRefs, verifyContinuation, verifyRefs } from "@/lib/guards/ocr/continuation";
-import { confirmedRefsFromDocs, countCross, crossForOnboarding, refsCount, type CrossOutcome, type Refs } from "@/lib/guards/ocr/refs";
+import { confirmedRefsFromDocs, countCross, crossForOnboarding, refsCount, tagSourceOfTruth, type CrossOutcome, type Refs } from "@/lib/guards/ocr/refs";
 import { OcrUnavailableError } from "@/lib/guards/ocr/vision-client";
 import { getReadClients } from "@/lib/guards/ocr/clients";
 import { readDocument, readStageA, readStageB, type DocumentReadResult, type StageAResult } from "@/lib/guards/ocr/read";
@@ -199,6 +199,8 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
       refsToken = undefined; // 過大／secret 問題：當冇 token（入職表照舊讀）
     }
   }
+  // WP-OCR-1.3：每欄標示最終採用邊份文件（source_of_truth，additive；就地標記，唔改值）
+  for (const f of finals) tagSourceOfTruth(f.type, f.fields);
   const refsInjectedDocs = items.filter((i) => i.kind === "a" && i.r.refs_injected > 0).length;
   const documents = items.map((i) => {
     if (i.kind === "final") {
@@ -311,7 +313,7 @@ async function handleStageB(req: Request, session: Session, raw: unknown): Promi
     cross = crossForOnboarding(rv.refs, formRes.fields);
     for (const [k, c] of Object.entries(cross.form)) formRes.fields[k as OcrFieldKey]!.cross = c;
   }
-  return respondResults(req, session, client, results, imagesCount, Date.now() - t0, "b", { cross, refsRejected });
+  return respondResults(req, session, client, results, imagesCount, Date.now() - t0, "b", { cross, refsRejected, addressFromProof: !!(rv && rv.ok && rv.refs.address) });
 }
 
 async function handleLegacy(req: Request, session: Session, raw: unknown): Promise<NextResponse> {
@@ -366,7 +368,10 @@ function stageBCounts(results: readonly DocumentReadResult[]) {
   };
 }
 
-async function respondResults(req: Request, session: Session, client: ReturnType<typeof getReadClients>, results: DocumentReadResult[], imagesCount: number, ms: number, stage?: "b", extra?: { cross: CrossOutcome | null; refsRejected: number }): Promise<NextResponse> {
+async function respondResults(req: Request, session: Session, client: ReturnType<typeof getReadClients>, results: DocumentReadResult[], imagesCount: number, ms: number, stage?: "b", extra?: { cross: CrossOutcome | null; refsRejected: number; addressFromProof?: boolean }): Promise<NextResponse> {
+  // WP-OCR-1.3：source_of_truth 標示（stage b 由 refs 判斷；舊單次流程按同一請求有冇住址證明地址）
+  const addressFromProof = extra?.addressFromProof ?? results.some((r) => r.type === "address_proof" && r.fields.address && r.fields.address.status !== "missing");
+  for (const r of results) tagSourceOfTruth(r.type, r.fields, addressFromProof);
   const usage = results.reduce((a, r) => ({ prompt_tokens: a.prompt_tokens + r.usage.promptTokens, completion_tokens: a.completion_tokens + r.usage.completionTokens, calls: a.calls + r.usage.calls, truncated_calls: a.truncated_calls + r.usage.truncated }), { prompt_tokens: 0, completion_tokens: 0, calls: 0, truncated_calls: 0 });
   // 供應商：任何一份文件讀 A 退回咗 DeepSeek，頂層就報 deepseek（每份文件另有自己嘅 provider_used）
   const providerUsed = { a: results.every((r) => r.provider_used.a === "claude") ? ("claude" as const) : ("deepseek" as const), b: results.every((r) => r.provider_used.b === "claude") ? ("claude" as const) : ("deepseek" as const) };
