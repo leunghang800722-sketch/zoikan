@@ -33,6 +33,17 @@ export const CROSS_MSG_ADDRESS: Record<CrossResult, string> = {
   unreadable: "手寫讀唔到，未能交叉核對",
 };
 
+/** WP-OCR-1.5：用戶撳「用呢個值填入」後嘅提示（取代「已以證件／住址證明為準」，因為值已經換成入職表手寫值）。 */
+export const FORM_FILLED_MSG = "已採用入職表手寫值（請對住圖確認）";
+
+/**
+ * WP-OCR-1.5：由「用呢個值填入」填入入職表手寫參考值之後嘅確認狀態——**所有欄**（關鍵欄同地址等非關鍵欄）一律未確認，
+ * 要用戶撳「對住圖確認」／「對過證件，啱」先可提交（手寫值係模型讀出嚟，唔係用戶自己打）。其後用戶再人手改字，回到 ackAfterEdit 規則。
+ */
+export function ackAfterFill(): boolean {
+  return false;
+}
+
 /** 用戶改值之後嘅確認狀態：關鍵欄（OCR 讀到過）改咗要重新撳確認；OCR 讀唔到／全人手模式打字即算確認。 */
 export function ackAfterEdit(k: OcrFieldKey, ocrStatus: FieldStatus, newValue: string): boolean {
   if (isCritical(k) && ocrStatus !== "missing") return false;

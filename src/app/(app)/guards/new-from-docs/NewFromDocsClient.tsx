@@ -16,7 +16,7 @@ import { hasCropFields } from "@/lib/guards/ocr/field-crops";
 import { mergeDocFields } from "@/lib/guards/ocr/merge-docs";
 import { readTwoStage } from "@/lib/guards/ocr/two-stage";
 import { normalizeField } from "@/lib/guards/ocr/normalize";
-import { CRITICAL_MSG, CROSS_MSG, CROSS_MSG_ADDRESS, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
+import { CRITICAL_MSG, CROSS_MSG, CROSS_MSG_ADDRESS, FIELD_LABEL, FORM_FILLED_MSG, ackAfterFill, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
 import type { CrossResult, FieldStatus } from "@/lib/guards/ocr/normalize";
 import type { OcrDocType, OcrFieldKey } from "@/lib/guards/ocr/config";
 import { kickerFor } from "@/lib/nav/schema";
@@ -95,6 +95,8 @@ interface FormField {
   formValue?: string;
   /** WP-OCR-1.4：手寫值只係參考（證件欄 missing／review） */
   refOnly?: boolean;
+  /** WP-OCR-1.5：value 係由「用呢個值填入」填入嘅入職表手寫值（提交時來源標 application_form）；用戶之後再人手改字就清走 */
+  filledFromForm?: boolean;
 }
 type FormState = Record<OcrFieldKey, FormField>;
 
@@ -287,15 +289,15 @@ export function NewFromDocsClient() {
   function setField(k: OcrFieldKey, v: string) {
     setForm((s) => {
       const f = s[k];
-      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v) } };
+      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v), filledFromForm: false } };
     });
   }
-  // WP-OCR-1.4：一撳填入入職表手寫參考值＝人手改值（走 ackAfterEdit）；手寫值係模型讀出嚟（唔係用戶自己打），所以關鍵欄一律要重新「對過證件」
+  // WP-OCR-1.5：一撳填入入職表手寫參考值＝所有欄一律未確認（ackAfterFill），要用戶撳確認先可提交；提交時來源標 application_form
   const fillFromForm = (k: OcrFieldKey) =>
     setForm((s) => {
       const f = s[k];
       const v = f.formValue ?? "";
-      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: isCritical(k) ? false : ackAfterEdit(k, f.ocrStatus, v) } };
+      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterFill(), filledFromForm: true } };
     });
   const ackField = (k: OcrFieldKey, empty = false) => setForm((s) => ({ ...s, [k]: { ...s[k], ack: true, ...(empty ? { value: "", edited: s[k].ocrValue !== "" } : {}) } }));
 
@@ -334,7 +336,7 @@ export function NewFromDocsClient() {
           dateOfBirth: mk("dob", "date_of_birth"),
           sex: mk("sex"),
           phone: mk("phone", "phone"),
-          address: { ...addr, source: addrFrom === "onboarding_form" ? ("application_form" as const) : ("address_proof" as const) },
+          address: { ...addr, source: addrFrom === "onboarding_form" || form.address.filledFromForm ? ("application_form" as const) : ("address_proof" as const) },
           staffNumbers: [],
           rating: "review" as const,
           reasons: [] as string[],
@@ -566,12 +568,13 @@ export function NewFromDocsClient() {
                         data-result={f.cross}
                       >
                         {f.formValue && !f.refOnly && <span data-testid={`ocr-form-value-${k}`}>入職表手寫（唯讀）：{f.formValue}　</span>}
-                        {(k === "address" ? CROSS_MSG_ADDRESS : CROSS_MSG)[f.cross]}
+                        {f.filledFromForm ? FORM_FILLED_MSG : (k === "address" ? CROSS_MSG_ADDRESS : CROSS_MSG)[f.cross]}
                       </div>
                     )}
                     {f.refOnly && f.formValue && (
                       <div className="flex flex-wrap items-center gap-2 break-words text-zk-sm text-zk-muted" data-testid={`ocr-form-ref-${k}`}>
                         <span>入職表手寫（參考）：{f.formValue}</span>
+                        {f.filledFromForm && !f.cross && <span data-testid={`ocr-filled-${k}`}>{FORM_FILLED_MSG}</span>}
                         {f.value !== f.formValue && (
                           <Button size="sm" type="button" data-testid={`ocr-use-form-${k}`} onClick={() => fillFromForm(k)}>
                             用呢個值填入

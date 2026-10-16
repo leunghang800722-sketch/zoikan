@@ -1,7 +1,7 @@
 // WP-OCR-1.4：證件欄 missing／review 時，入職表手寫值做唯讀參考（referenceOnly）；唔自動填、唔改 value、來源仍係證件。
 import { describe, it, expect } from "vitest";
 import { mergeDocFields } from "@/lib/guards/ocr/merge-docs";
-import { ackAfterEdit } from "@/lib/guards/ocr/review-state";
+import { FORM_FILLED_MSG, ackAfterEdit, ackAfterFill } from "@/lib/guards/ocr/review-state";
 import type { FieldResult } from "@/lib/guards/ocr/normalize";
 import type { OcrDocType, OcrFieldKey } from "@/lib/guards/ocr/config";
 
@@ -53,5 +53,13 @@ describe("mergeDocFields：證件欄 missing／review → 入職表手寫值做�
     expect(ackAfterEdit("hkid", "missing", "Z900001(2)")).toBe(true); // missing：打字即算（現有規則）
     expect(ackAfterEdit("hkid", "review", "Z900001(2)")).toBe(false); // review 嘅關鍵欄：改值仍要對過證件
     expect(ackAfterEdit("address", "review", "示範街98號")).toBe(true);
+  });
+  it("OCR-1.5 ackAfterFill：填入後所有欄一律未確認；其後人手改字回到 ackAfterEdit 規則", () => {
+    expect(ackAfterFill()).toBe(false);
+    // 人手改字（ackAfterEdit）：非關鍵欄有值即確認、missing 關鍵欄打字即確認、review 關鍵欄要重新確認
+    expect(ackAfterEdit("address", "review", "示範街98號A")).toBe(true);
+    expect(ackAfterEdit("hkid", "review", "Z900001(2)")).toBe(false);
+    expect(FORM_FILLED_MSG).toBe("已採用入職表手寫值（請對住圖確認）");
+    expect(FORM_FILLED_MSG).not.toContain("已以");
   });
 });

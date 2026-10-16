@@ -1359,3 +1359,8 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - 身份證欄 `missing`／`review`（或住址證明 `review`）而入職表有手寫值：`mergeDocFields` 設 `formValue`＋`referenceOnly`；UI 顯示「入職表手寫（參考）：…」唯讀一行＋「用呢個值填入」掣。**唔自動填、唔改 value、來源仍係證件**（身份證 missing 時欄位仍然空）。
 - 一撳填入＝人手改值：非關鍵欄走現有 `ackAfterEdit`；關鍵欄（姓名／身份證號／出生日期）另外強制 `ack=false`（手寫值係模型讀出嚟，唔係用戶自己打），仍要「對過證件，啱」。住址證明 `missing` 時按 OCR-1.3 來源規則直接用入職表地址（唔屬參考）。冇手寫值就冇參考行。
 - 測試：`tests/ocr14-form-hint.test.ts`（6 條：missing／review 有手寫、冇手寫、confirmed 唔算、住址證明 review／confirmed／missing）、`tests/e2e/ocr-form-hint.spec.ts`（2 條，含 375px）。
+
+### 27.7 OCR-1.5：填入來源與確認規則（Opus 驗收 N1／N2／N3）
+- N1：「用呢個值填入」填入嘅值，提交 payload 地址 `source` 標 `application_form`（`FormField.filledFromForm`；包格式只有地址有來源欄）；**所有欄**（含地址等非關鍵欄）填入後一律 `ack=false`，要撳確認先可提交。純函數 `ackAfterFill()`（`review-state.ts`）；其後用戶再人手改字清走 `filledFromForm`，回到 `ackAfterEdit` 規則。
+- N2：填入後交叉核對提示改為 `FORM_FILLED_MSG`「已採用入職表手寫值（請對住圖確認）」，唔再顯示「已以證件／住址證明為準」。
+- N3：`ackAfterFill` 單元測試（`tests/ocr14-form-hint.test.ts`）；e2e 加：地址填入後 data-ack=0、提示文字、預覽掣要確認後先可撳、preview request `address.source==="application_form"`、再人手改字回復。

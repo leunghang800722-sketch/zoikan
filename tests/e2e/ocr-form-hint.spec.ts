@@ -80,11 +80,29 @@ test.describe("證件欄讀唔到／待覆核：入職表手寫值做唯讀參�
     await page.getByTestId("ocr-use-form-name_zh").click();
     await expect(page.getByLabel("中文姓名")).toHaveValue("測試丙");
     await expect(page.getByTestId("ocr-field-name_zh")).toHaveAttribute("data-ack", "0");
-    // 地址填入：非關鍵欄，沿用現有規則（改值後有值即算確認）
+    // OCR-1.5：地址（非關鍵欄）填入後同樣一律未確認；提示改為「已採用入職表手寫值（請對住圖確認）」，唔再講「已以住址證明為準」
+    await expect(page.getByTestId("ocr-cross-address")).toBeVisible();
     await page.getByTestId("ocr-use-form-address").click();
     await expect(page.getByLabel("地址")).toHaveValue(FORM_ADDR);
+    await expect(page.getByTestId("ocr-field-address")).toHaveAttribute("data-ack", "0");
+    await expect(page.getByTestId("ocr-cross-address")).toContainText("已採用入職表手寫值（請對住圖確認）");
+    await expect(page.getByTestId("ocr-cross-address")).not.toContainText("已以住址證明為準");
     for (const k of ["name_zh", "hkid", "dob"]) await page.getByTestId(`ocr-ack-${k}`).click();
+    await expect(page.getByTestId("ocr-to-preview")).toBeDisabled(); // 地址仲未確認
+    await page.getByTestId("ocr-ack-address").click();
     await expect(page.getByTestId("ocr-to-preview")).toBeEnabled();
+    // 提交 payload：填入嘅地址來源標 application_form（唔係 address_proof）
+    let source: string | null = null;
+    await page.route("**/api/guards/import/preview", async (route) => {
+      source = (route.request().postDataJSON() as { package: { persons: { address: { source: string } }[] } }).package.persons[0]!.address.source;
+      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "bad_request", message: "測試攔截" }) });
+    });
+    await page.getByTestId("ocr-to-preview").click();
+    await expect.poll(() => source).toBe("application_form");
+    // 填入後再人手改字：回到現有規則（非關鍵欄有值即算確認）、唔再顯示「已採用」提示
+    await page.getByLabel("地址").fill(FORM_ADDR + "A");
+    await expect(page.getByTestId("ocr-field-address")).toHaveAttribute("data-ack", "1");
+    await expect(page.getByTestId("ocr-cross-address")).not.toContainText("已採用入職表手寫值");
   });
 
   test.describe("手機 375px", () => {
