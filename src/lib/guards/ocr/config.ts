@@ -93,10 +93,12 @@ export const OCR_ALS_TIMEOUT_MS = 3_000;
 /** ALS Score 低過呢個值就唔出候選。 */
 export const OCR_ALS_MIN_SCORE = 60;
 
-/** OCR-5.6：DeepSeek max_tokens——env `GUARD_OCR_DEEPSEEK_MAX_TOKENS`（正整數、≤8000）覆蓋，否則 4000。 */
+/** OCR-5.6：DeepSeek max_tokens——env `GUARD_OCR_DEEPSEEK_MAX_TOKENS` 嚴格 `^\d+$` 且 1,000–8,000 先生效，其他（空／負／非數字／帶空白／科學記號／越界）一律預設 4000。 */
 export function ocrDeepseekMaxTokens(): number {
-  const n = Number.parseInt(process.env.GUARD_OCR_DEEPSEEK_MAX_TOKENS?.trim() ?? "", 10);
-  return Number.isFinite(n) && n > 0 ? Math.min(n, OCR_RETRY_MAX_TOKENS_CAP) : OCR_MAX_OUTPUT_TOKENS_DEEPSEEK;
+  const raw = process.env.GUARD_OCR_DEEPSEEK_MAX_TOKENS;
+  if (raw === undefined || !/^\d+$/.test(raw)) return OCR_MAX_OUTPUT_TOKENS_DEEPSEEK;
+  const n = Number(raw);
+  return n >= 1000 && n <= OCR_RETRY_MAX_TOKENS_CAP ? n : OCR_MAX_OUTPUT_TOKENS_DEEPSEEK;
 }
 
 export type OcrDeepseekReasoning = "low" | "high" | "max" | "off";

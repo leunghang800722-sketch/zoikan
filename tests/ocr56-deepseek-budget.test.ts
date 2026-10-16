@@ -3,7 +3,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { readStageB, readDocument } from "@/lib/guards/ocr/read";
 import type { ReadClients } from "@/lib/guards/ocr/clients";
-import { DeepSeekVisionClient, type VisionClient, type VisionRequest, type VisionResponse } from "@/lib/guards/ocr/vision-client";
+import { ocrDeepseekMaxTokens } from "@/lib/guards/ocr/config";
+import { DeepSeekVisionClient, OcrUnavailableError, type VisionClient, type VisionRequest, type VisionResponse } from "@/lib/guards/ocr/vision-client";
 
 const IMG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD";
 const GOOD = JSON.stringify({ phone: { value: "90001111", confidence: "high", reason: null, alternatives: [] } });
@@ -85,6 +86,69 @@ describe("讀 B 撞頂重試", () => {
     const r = await readDocument({ a, b }, "onboarding_form", { full: IMG, tiles: [IMG, IMG, IMG, IMG] });
     expect(r.b_retry_truncated).toBe(1);
     expect(r.usage.calls).toBe(3);
+  });
+});
+
+describe("驗收修正（OCR-5.7）", () => {
+  function seq(steps: (VisionResponse | Error)[]): VisionClient & { calls: VisionRequest[] } {
+    const calls: VisionRequest[] = [];
+    return {
+      model: "fake-b",
+      provider: "deepseek",
+      calls,
+      async complete(req) {
+        calls.push(req);
+        const x = steps[Math.min(calls.length - 1, steps.length - 1)]!;
+        if (x instanceof Error) throw x;
+        return x;
+      },
+    };
+  }
+  it("S1：重試回 429 → 降級（唔拋）；第一次 usage 照計；parse b 失敗", async () => {
+    const b = seq([trunc, new OcrUnavailableError(429)]);
+    const r = await readStageB({ a: b, b }, "onboarding_form", A, imgs);
+    expect(b.calls).toHaveLength(2);
+    expect(r.parse_ok.b).toBe(false);
+    expect(r.usage.calls).toBe(1);
+    expect(r.usage.completionTokens).toBe(4000);
+  });
+  it("S1：非 OcrUnavailableError 照拋", async () => {
+    const b = seq([trunc, new Error("bug")]);
+    await expect(readStageB({ a: b, b }, "onboarding_form", A, imgs)).rejects.toThrow("bug");
+  });
+  it("S1：仲裁重試失敗 → usage 計數、唔拋", async () => {
+    const a: VisionClient = { model: "a", provider: "claude", async complete() { return { text: JSON.stringify({ phone: { value: "90001111", confidence: "medium", reason: "x", alternatives: [] } }), promptTokens: 1, completionTokens: 1 }; } };
+    const b: VisionClient = { model: "b", provider: "deepseek", async complete() { return { text: JSON.stringify({ phone: { value: "90001112", confidence: "medium", reason: "x", alternatives: [] } }), promptTokens: 1, completionTokens: 1 }; } };
+    const arb = seq([trunc, new OcrUnavailableError(429)]);
+    const arbiter = { ...arb, provider: "claude" as const, complete: arb.complete };
+    const r = await readStageB({ a, b, arbiter }, "onboarding_form", { a_fields_raw: { phone: { value: "90001111", confidence: "medium", reason: "x", alternatives: [] } } as never, provider: "claude", model: "a", fallback_reason: null }, { kind: "tiles", images: [IMG], full: IMG });
+    expect(arb.calls).toHaveLength(2);
+    expect(r.arbiter.called).toBe(true);
+    expect(r.usage_by_provider.claude.calls).toBe(1);
+    expect(r.usage_by_provider.claude.completionTokens).toBe(4000);
+  });
+  it("N1：truncated 但內容非空而 JSON 被截 → 重試", async () => {
+    const b = scripted([{ text: '{"phone":{"value":"9000', promptTokens: 1, completionTokens: 4000, truncated: true }, ok]);
+    const r = await readStageB({ a: b, b }, "onboarding_form", A, imgs);
+    expect(b.calls).toHaveLength(2);
+    expect(r.parse_ok.b).toBe(true);
+  });
+  it("N3：base 已達 8000 → 唔重試", async () => {
+    process.env.GUARD_OCR_DEEPSEEK_MAX_TOKENS = "8000";
+    const b = scripted([trunc, ok]);
+    const r = await readStageB({ a: b, b }, "onboarding_form", A, imgs);
+    expect(b.calls).toHaveLength(1);
+    expect(r.b_retry_truncated).toBe(0);
+  });
+  it("N4：env 嚴格解析", () => {
+    const get = (v: string) => {
+      process.env.GUARD_OCR_DEEPSEEK_MAX_TOKENS = v;
+      return ocrDeepseekMaxTokens();
+    };
+    for (const bad of ["0", "-5", "abc", "9000", " 3000 ", "12abc", "1e3", "500", ""]) expect(get(bad)).toBe(4000);
+    expect(get("1000")).toBe(1000);
+    expect(get("3000")).toBe(3000);
+    expect(get("8000")).toBe(8000);
   });
 });
 
