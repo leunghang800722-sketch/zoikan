@@ -2145,6 +2145,8 @@ model WhatsappGroup {
   brokerId      String?           @map("broker_id")
   broker        Broker?           @relation(fields: [brokerId], references: [id], onDelete: SetNull)
   shiftWordMap  Json              @default("{}") @map("shift_word_map")
+  // W1：第 0 層過濾閾值（群組層覆寫；null＝預設 40）
+  filterThreshold Int?            @map("filter_threshold")
   autoWrite     Boolean           @default(false) @map("auto_write")
   autoConfirm   Boolean           @default(false) @map("auto_confirm")
   active        Boolean           @default(true)
@@ -2185,6 +2187,8 @@ model WhatsappMessage {
   revokedAt       DateTime?             @map("revoked_at") @db.Timestamptz(3)
   redactedAt      DateTime?             @map("redacted_at") @db.Timestamptz(3)
   pendingEdit     Boolean               @default(false) @map("pending_edit")
+  // W1：解析重試次數（成功處理後歸零；3 次失敗 → status=error）
+  parseAttempts   Int                   @default(0) @map("parse_attempts")
   createdAt       DateTime              @default(now()) @map("created_at")
   updatedAt       DateTime              @updatedAt @map("updated_at")
 
@@ -2214,8 +2218,12 @@ model WhatsappIntent {
   routed          WhatsappIntentRouted @default(pending)
   resultRef       String?              @map("result_ref")
   sourceChanged   Boolean              @default(false) @map("source_changed")
+  // W1：訊息被編輯後，舊 revision 嘅 intents 標「被邊個新 revision 取代」；撤回 → revoked_at
+  supersededByRevision Int?            @map("superseded_by_revision")
+  revokedAt       DateTime?            @map("revoked_at") @db.Timestamptz(3)
   createdAt       DateTime             @default(now()) @map("created_at")
 
   @@unique([messageId, messageRevision, idx])
+  @@index([createdAt])
   @@map("whatsapp_intents")
 }

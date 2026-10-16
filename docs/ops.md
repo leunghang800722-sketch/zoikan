@@ -315,3 +315,25 @@ npx tsx scripts/staff-import/19-triage-reread.ts --dry     # fake client＋記�
 - 保留期：`whatsapp_retention` job 每日 03:00 將超過 90 日嘅訊息原文置空（設定頁「自動排程」可見）。
 - 一旦封號／斷線：系統其他部分唔受影響，照舊人手入更；健康區 WAHA 狀態會變 `FAILED`／「連唔到」。
 - **鐵則**：系統永遠唔呼叫任何發送／已讀／輸入中 API（`tests/whatsapp-misc.test.ts` 掃描 `src/lib/whatsapp` 等目錄禁用字串）。
+
+## WhatsApp 解析 dry-run 流程（W1，2026-10）
+
+**目的**：試點群（2 個單盤群＋1 個判頭群，連續 2 星期）只「記錄建議」同實際排更對照，量度準確率；**不寫更表、不開分流題**。
+
+**A. 開通**
+1. W0 嘅 WAHA／webhook 已通（見上節）；`WA_ENABLED=1`；`DEEPSEEK_API_KEY` 已設（預設 provider；`CLAUDE_API_KEY` 有設＝DeepSeek 連唔到時 Claude 後備）。
+2. 「WhatsApp 報更」→ 試點群揀類型、綁盤口／判頭、口語對照（`早→A`、`夜→N`…；冇對照時用更別 `startTime` 時段推：06–12 早、12–18 中、18– 夜）。**唔好開「自動寫入」**（W1 唔會寫，W3 先生效）。
+3. `/settings/jobs` 確認 `WhatsApp 報更解析（dry-run）`（每分鐘）已啟用；日摘要 job 每日 09:00 通知老闆。
+4. 每日睇 `/whatsapp/intents`：統計卡（收／過濾／解析／建議自動／分流／忽略／對照一致率）＋逐條 ✓／✗／—。
+
+**B. 驗收指標（計劃書 §9 W1）**：試點 2 星期「建議自動」嘅對照一致率 ≥90%（卡上「建議自動 · 一致率」）；誤殺率 <5%（`/whatsapp` 訊息清單篩「略過」→ 人手抽查 `filtered_out` 訊息；過濾閾值可喺群組「綁定設定」逐群調，預設 40）。
+
+**C. 判定規則（只記錄）**：`routed=auto_write` 只睇計劃書 §6.1 第 1–6 項（盤口／人／日期＋未鎖月＋−2～+45 日／更碼／無衝突且未額滿／類別 shift 或 leave）；第 7 項（群組 `auto_write`）記喺 `resolution.group_auto_write`，頁面顯示「群組未開自動寫入」備註。`cover`／`cancel` 一律 `triage`。凌晨 00:00–05:00 發出而用「今日／今晚／而家／今個更／聽日」→ `date_ambiguous`（候選：當日、前一日）。
+
+**D. 真 API smoke（規劃者跑；改過 `src/lib/whatsapp/parse.ts` 嘅 schema／prompt／上限後必跑）**
+```
+npx tsx scripts/whatsapp/parse-smoke.ts [deepseek|claude|both]
+```
+用合成訊息（測試甲／乙、假日期）各打一次真 provider，斷言：`json_object` 輸出過 zod 嚴格解析、輸出 token 唔撞 2,000 上限（reasoning_effort low；思考 token 計入上限）。key 由 `.env`（或 `DOTENV_CONFIG_PATH`）載入，console 只印通過／失敗同 token 數。執行員測試一律用 fake LLM，唔打真 API。
+
+**E. 排錯**：訊息 `status=error`＝LLM 連唔到／處理失敗 3 次（`error` 欄只有原因碼 `llm_unavailable|parse_failed|resolve_failed`；SQL 將 `status` 改返 `received`、`parse_attempts` 歸零即可重跑）；`/whatsapp` 頁「積壓」＝`status=received` 數量；排程只有 1 分鐘精度，所以 job 每分鐘跑一次、每次處理到冇待處理或 45 秒預算用盡。

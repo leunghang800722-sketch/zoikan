@@ -2,6 +2,7 @@
 // W0：WhatsApp 報更——群組綁定、訊息清單、health（docs/plans/whatsapp-roster-plan.md §4／§9）。
 // 本階段只「落庫」，未解析／未寫更。所有資料經 /api/whatsapp/*；訊息原文唔顯示。手機 375px 友善（卡片列表，無橫向捲動）。
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -27,6 +28,7 @@ interface GroupRow {
   broker_id: string | null;
   broker_code: string | null;
   shift_word_map: WordPair[];
+  filter_threshold: number | null;
   auto_write: boolean;
   auto_confirm: boolean;
   active: boolean;
@@ -136,9 +138,10 @@ export default function WhatsappPage() {
       <PageHeader
         kicker={kickerFor("/whatsapp")}
         title="WhatsApp 報更"
-        subtitle="被動收聽公司專用號碼所在群組嘅訊息（只聽唔講）。本階段只落庫，未解析、未寫入更表。"
+        subtitle="被動收聽公司專用號碼所在群組嘅訊息（只聽唔講）。解析只係 dry-run 建議（見「解析對照」），未寫入更表。"
         actions={
           <>
+            <Link href="/whatsapp/intents" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">解析對照（dry-run）</Link>
             <Button onClick={() => { void loadGroups(); void loadMessages(); void loadHealth(); }}>重新整理</Button>
             {canUpdate && (
               <Button variant="primary" disabled={syncing} onClick={() => void sync()}>
@@ -297,6 +300,7 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
   const [autoWrite, setAutoWrite] = useState(group.auto_write);
   const [autoConfirm, setAutoConfirm] = useState(group.auto_confirm);
   const [active, setActive] = useState(group.active);
+  const [threshold, setThreshold] = useState(group.filter_threshold === null ? "" : String(group.filter_threshold));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const noAuto = kind === "ignored" || kind === "office";
@@ -311,6 +315,7 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
       site_id: kind === "site" ? siteId || null : null,
       broker_id: kind === "broker" ? brokerId || null : null,
       shift_word_map: cleaned,
+      filter_threshold: threshold.trim() === "" ? null : Number(threshold),
       auto_write: noAuto ? false : autoWrite,
       auto_confirm: noAuto || !autoWrite ? false : autoConfirm,
       active,
@@ -369,6 +374,10 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
           ))}
           {pairs.length < 30 && <Button size="sm" onClick={() => setPairs([...pairs, { word: "", code: "" }])}>加一行對照</Button>}
         </div>
+        <label className="block space-y-1">
+          <span className="block text-sm text-zk-text-secondary">過濾閾值（0–100，留空＝預設 40）</span>
+          <input className={inputCls} type="number" min={0} max={100} aria-label="過濾閾值" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
+        </label>
         <label className={`flex items-center gap-2 text-sm ${noAuto ? "opacity-50" : ""}`}>
           <input type="checkbox" checked={!noAuto && autoWrite} disabled={noAuto} onChange={(e) => { setAutoWrite(e.target.checked); if (!e.target.checked) setAutoConfirm(false); }} />
           自動寫入（之後階段先生效）

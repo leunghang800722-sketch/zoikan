@@ -20,7 +20,8 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: `npm run dev -- -p ${PW_PORT}`,
+    // W1：PW_SERVER_CMD 可覆寫（例：`npx next start -p 3214`＝跑 production build；預設 dev server 不變）
+    command: process.env.PW_SERVER_CMD || `npm run dev -- -p ${PW_PORT}`,
     url: `http://localhost:${PW_PORT}`,
     reuseExistingServer: true,
     timeout: 120_000,
