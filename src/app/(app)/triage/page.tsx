@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/DataTable";
 import { TriageDialog } from "@/components/TriageDialog";
 import { BatchAcceptButton } from "@/components/BatchAcceptButton";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
+import { OcrRereadImportDialog } from "@/components/OcrRereadImportDialog";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { kickerFor } from "@/lib/nav/schema";
 
@@ -23,11 +24,13 @@ interface SessionRow {
   completed_at: string | null;
   counts: { open: number; answered: number; skipped: number; superseded?: number; total: number; important_open: number; supplementary_open: number };
   superseded_all?: boolean;
+  ocr_reread_answered?: number;
 }
 interface ListRes {
   sessions: SessionRow[];
   open_total: number;
   eligible_owners: { id: string; name: string; role_name: string }[];
+  can_answer?: boolean;
 }
 
 const SOURCE_LABEL: Record<string, string> = { guard_import: "保安員證件資料導入", roster_upload: "更表上載", month_close: "一鍵結算（要你睇）", postorder_backfill: "補齊價目卡（Postorder／自動卡）" };
@@ -45,6 +48,8 @@ export default function TriagePage() {
   // P3-4.3（H14）：預設只顯示「有未答」嘅 session；已處理晒／被取代嘅摺埋，「顯示全部」先出。轉交收入每張卡嘅「⋯」。
   const [showAll, setShowAll] = useState(false);
   const [moreOpen, setMoreOpen] = useState<string | null>(null);
+  // TR-1：導入 OCR 重讀建議（保安員導入 session 專用）
+  const [rereadId, setRereadId] = useState<string | null>(null);
   // 左欄 badge：答題後 debounce 2 秒先 refresh layout（唔再每次關對話框就整頁重載）
   const badgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshBadge = useCallback(() => {
@@ -118,6 +123,7 @@ export default function TriagePage() {
               <span className="text-zk-faint">
                 共 {s.counts.total} 條 · 已答 {s.counts.answered} · 跳過 {s.counts.skipped}{(s.counts.superseded ?? 0) > 0 ? ` · ${s.counts.superseded} 條已被較新嘅導入取代` : ""}
               </span>
+              {(s.ocr_reread_answered ?? 0) > 0 && <span className="text-zk-xs text-zk-faint" data-testid="triage-card-reread">OCR 重讀自動答 {s.ocr_reread_answered} 條</span>}
               <span className="text-zk-faint">{new Date(s.created_at).toLocaleString("zh-HK")}</span>
               {isBossView && <span className="text-zk-muted">上載者／擁有人：{s.owner_name ?? "—"}</span>}
             </div>
@@ -126,9 +132,14 @@ export default function TriagePage() {
                 {s.counts.open > 0 ? "繼續答" : "冇未答"}
               </Button>
               {isMcSource(s.source_type) && s.counts.open > 0 && !s.superseded_all && <BatchAcceptButton sessionId={s.id} onDone={() => { router.refresh(); void load(); }} />}
-              {isBossView && (
+              {(isBossView || (s.source_type === "guard_import" && data?.can_answer)) && (
                 <Button variant="ghost" size="sm" aria-label="更多" onClick={() => setMoreOpen((v) => (v === s.id ? null : s.id))} data-testid="triage-more">
                   ⋯
+                </Button>
+              )}
+              {s.source_type === "guard_import" && data?.can_answer && moreOpen === s.id && (
+                <Button size="sm" onClick={() => { setRereadId(s.id); setMoreOpen(null); }} data-testid="triage-ocr-reread">
+                  導入 OCR 重讀建議
                 </Button>
               )}
               {isBossView && moreOpen === s.id && (
@@ -157,6 +168,19 @@ export default function TriagePage() {
           </div>
         ))}
       </div>
+      {rereadId && (
+        <OcrRereadImportDialog
+          sessionId={rereadId}
+          onClose={() => {
+            setRereadId(null);
+            void load();
+          }}
+          onDone={() => {
+            void load();
+            refreshBadge();
+          }}
+        />
+      )}
       {openId && isMcSource(data?.sessions.find((s) => s.id === openId)?.source_type) && (
         <MonthCloseTriageDialog
           sessionId={openId}
