@@ -295,17 +295,51 @@ describe("W0 webhook", () => {
 
   describe("W0.2 驗收修正：亂序／重放／tombstone／窗口", () => {
     const T = nowSec() - 3600;
-    it("S1：A→B→C 之後重放 B（舊 timestamp）或再送 B（新 timestamp，但已喺歷史）→ 仍係 C", async () => {
+    it("S1：A→B→C 之後重放 B（舊 timestamp）或同一 event id 換新 timestamp 再送 → 仍係 C", async () => {
       await post(msgEvent(MID("60"), { timestamp: T, body: "A" }));
-      await post(msgEvent(MID("60"), { timestamp: T + 10, body: "B" }, "message.edited"));
-      await post(msgEvent(MID("60"), { timestamp: T + 20, body: "C" }, "message.edited"));
-      await post(msgEvent(MID("60"), { timestamp: T + 10, body: "B" }, "message.edited")); // 舊事件重放
+      await post(msgEvent("EVT-B", { timestamp: T + 10, body: "B" }, "message.edited", { editedMessageId: MID("60") }));
+      await post(msgEvent("EVT-C", { timestamp: T + 20, body: "C" }, "message.edited", { editedMessageId: MID("60") }));
+      await post(msgEvent("EVT-B", { timestamp: T + 10, body: "B" }, "message.edited", { editedMessageId: MID("60") })); // 舊事件重放
       let row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("60") } });
       expect(row).toMatchObject({ text: "C", revision: 3 });
-      await post(msgEvent(MID("60"), { timestamp: T + 30, body: "B" }, "message.edited")); // 新時間但文字已喺歷史
+      await post(msgEvent("EVT-B", { timestamp: T + 30, body: "B" }, "message.edited", { editedMessageId: MID("60") })); // 同一 event id、新時間
       row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("60") } });
       expect(row).toMatchObject({ text: "C", revision: 3 });
       expect((row.textHistory as unknown[]).length).toBe(2);
+    });
+    it("S1（W0.3）：合法 A→B→A（t+10、t+20）→ revision 3、文字 A；B 重放（同 event id）no-op；timestamp 等於原訊息 ts 嘅編輯照處理；無 payload id 用 hash 去重", async () => {
+      await post(msgEvent(MID("70"), { timestamp: T, body: "A" }));
+      await post(msgEvent("EVT-1", { timestamp: T + 10, body: "B" }, "message.edited", { editedMessageId: MID("70") }));
+      await post(msgEvent("EVT-2", { timestamp: T + 20, body: "A" }, "message.edited", { editedMessageId: MID("70") }));
+      let row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("70") } });
+      expect(row).toMatchObject({ text: "A", revision: 3 });
+      expect((row.textHistory as { event_id?: string }[]).map((h) => h.event_id)).toEqual(["EVT-1", "EVT-2"]);
+      await post(msgEvent("EVT-1", { timestamp: T + 25, body: "B" }, "message.edited", { editedMessageId: MID("70") }));
+      row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("70") } });
+      expect(row).toMatchObject({ text: "A", revision: 3 });
+      // 編輯 timestamp 等於原訊息 ts：照處理
+      await post(msgEvent(MID("71"), { timestamp: T, body: "X" }));
+      await post(msgEvent("EVT-3", { timestamp: T, body: "Y" }, "message.edited", { editedMessageId: MID("71") }));
+      expect(await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("71") } })).toMatchObject({ text: "Y", revision: 2 });
+      // 無獨立 payload id（id＝目標訊息 id）：同一事件重送（同 ts、同文字）→ hash 去重；之後回到舊文字（新 ts）→ 照處理
+      await post(msgEvent(MID("72"), { timestamp: T, body: "P" }));
+      await post(msgEvent(MID("72"), { timestamp: T + 5, body: "Q" }, "message.edited"));
+      await post(msgEvent(MID("72"), { timestamp: T + 5, body: "Q" }, "message.edited"));
+      await post(msgEvent(MID("72"), { timestamp: T + 9, body: "P" }, "message.edited"));
+      expect(await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("72") } })).toMatchObject({ text: "P", revision: 3 });
+    });
+    it("N3（W0.3）：編輯先到嘅 tombstone，原訊息後到補返 sender_guard_id／media_type／quoted／群 last_message_at，唔改文字", async () => {
+      const admin = await prisma.user.findFirstOrThrow();
+      await prisma.whatsappGroup.create({ data: { groupJid: GROUP, label: "測試群", createdBy: admin.id } });
+      const g = await prisma.guard.create({ data: { nameZh: "測試甲", employmentType: "cash_casual", tel: "90000001", createdBy: "test" } });
+      await post(msgEvent("EVT-T", { timestamp: T + 5, body: "編輯後" }, "message.edited", { editedMessageId: MID("73") }));
+      let row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("73") } });
+      expect(row).toMatchObject({ mediaType: null, quotedMessageId: null, senderGuardId: null });
+      expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { groupJid: GROUP } })).lastMessageAt).toBeNull();
+      await post(msgEvent(MID("73"), { timestamp: T, body: "原文", hasMedia: true, media: { mimetype: "image/png" } }, "message", { replyTo: { id: "orig-q" } }));
+      row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("73") } });
+      expect(row).toMatchObject({ text: "編輯後", revision: 1, pendingEdit: true, status: "received", mediaType: "image", quotedMessageId: "orig-q", senderGuardId: g.id, senderTelNorm: "90000001", senderJid: SENDER });
+      expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { groupJid: GROUP } })).lastMessageAt).not.toBeNull();
     });
     it("S1：編輯／撤回事件套 72h 窗口；冇 timestamp → no-op", async () => {
       await post(msgEvent(MID("61"), { timestamp: nowSec() - 10, body: "A" }));
