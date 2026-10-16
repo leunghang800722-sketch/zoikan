@@ -477,13 +477,9 @@ export async function POST(req: Request) {
     }
 
     // ---- 全部 validate 過關，先開 transaction 寫入 --------------------
-    // 重要：`writeAudit()` 用嘅係外層 `prisma`（唔係 `tx`）嚟寫
-    // audit_log——喺 `$transaction` callback 入面直接 call 佢嘅話，audit
-    // 記錄會即刻獨立 commit，同呢個 transaction 本身唔同步：如果 transaction
-    // 之後先撞 P2002 rollback，之前幾格已經寫低嘅 audit_log 會變成「孤兒」
-    // （指住一條已經俾 rollback 走嘅記錄）。所以呢度**淨係喺 transaction
-    // 入面收集 audit 素材，transaction 成功 commit 之後先真係逐條
-    // writeAudit()**，保證 audit_log 同實際落咗 DB 嘅嘢一致。
+    // G4：audit 同 shift 寫入喺同一個 `$transaction`——tx 內收集 audit 素材，
+    // tx 最後一步（所有 shift 寫入之後）用 `writeAuditMany(…, tx)`（一條 createMany）寫入；
+    // 任何一步失敗成個 tx（shift＋audit）一齊 rollback，唔會有孤兒 audit。
     const ip = getClientIp(req);
     const results: { key: string; id: string; action: string; settlement_inferred?: boolean }[] = [];
     type PendingAudit = { rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
@@ -496,6 +492,8 @@ export async function POST(req: Request) {
     const keyOfPlan = (p: Exclude<PlannedOp, { kind: "noop" }>) => `${p.cell.guard_id}|${p.cell.work_date.toISOString().slice(0, 10)}|${p.cell.shift_type_id}`;
     const activePlans = plans.filter((p): p is Exclude<PlannedOp, { kind: "noop" }> => p.kind !== "noop");
     const hasDuplicateCells = new Set(activePlans.map(keyOfPlan)).size !== activePlans.length;
+    const writeBatchAudits = (tx: Prisma.TransactionClient) =>
+      writeAuditMany(pendingAudits.map((a) => ({ actorUserId: session.userId, tableName: "shift_records", rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip })), tx);
     try {
       await prisma.$transaction(
         async (tx) => {
@@ -528,6 +526,7 @@ export async function POST(req: Request) {
                 results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
               }
             }
+            await writeBatchAudits(tx);
             return;
           }
 
@@ -591,6 +590,7 @@ export async function POST(req: Request) {
               results.push({ key, id: created.id, action: "created", settlement_inferred: plan.settlementInferred });
             }
           }
+          await writeBatchAudits(tx);
         },
         // P3-1.7（B-3）：Prisma interactive tx 預設 5 s——放寬到 60 s。
         { timeout: 60_000, maxWait: 10_000 },
@@ -602,10 +602,7 @@ export async function POST(req: Request) {
       throw err;
     }
 
-    // transaction 已經成功 commit——而家先逐條真係寫 audit_log。
-    // P3-2.5：一條 createMany（createdAt 按 plan 次序逐 ms 遞增，保持列表次序）。
-    await writeAuditMany(pendingAudits.map((a) => ({ actorUserId: session.userId, tableName: "shift_records", rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip })));
-
+    // G4：audit 已喺 tx 內同 shift 一齊 commit。
     await journalAutoCardUsesSafe(autoCardUses);
 
     const warnings = await computeWarnings(guardIds, parsed.site_id, month, monthEnd, broker);
