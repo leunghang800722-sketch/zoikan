@@ -86,7 +86,10 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
     }
     let ranked = rankFieldCandidates(key, pool, now);
     // M1：仲裁同意變體字寫法時，仲裁加權唔可以令變體寫法搶預填——標準寫法（變體字少）排前（穩定排序，同數保持原次序）
-    if (key === "address" && vtag && vtag !== "independent") ranked = ranked.map((c, i) => ({ c, i })).sort((x, y) => variantCharCount(x.c.value) - variantCharCount(y.c.value) || x.i - y.i).map((x) => x.c);
+    if (key === "address" && vtag && vtag !== "independent") {
+      const rk = (v: string) => [normalizeField("address", v, now).valid ? 0 : 1, variantCharCount(v)] as const;
+      ranked = ranked.map((c, i) => ({ c, i, k: rk(c.value) })).sort((x, y) => x.k[0] - y.k[0] || x.k[1] - y.k[1] || x.i - y.i).map((x) => x.c);
+    }
     return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, ...(vtag ? { arbiter: vtag } : {}), reason: na.valid ? (addrEdits ? "address_variant_suggested" : "address_variant_chars") : (na.reason ?? "invalid_format") };
   }
 
