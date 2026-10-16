@@ -248,3 +248,8 @@ OCR-5.6 起，有 `DEEPSEEK_API_KEY` 時另跑 DeepSeek 段（三種文件各 1 
 - **紀錄**：查詢字串唔寫 log／audit／DB；audit `guard_ocr_read` 只加計數 `als_called_docs`／`als_candidate_docs`／`als_failed`。
 - **關閉**：Zeabur env 設 `GUARD_OCR_ALS=0`（或 `false`／`off`／`no`）並重啟，完全唔會連 `als.gov.hk`。
 - **評估**：`eval-ocr.ts` 報表多 `als_enabled`／`als_called_docs`／`als_candidate_docs`／`als_failed`／`als_truth_from_candidate`（review_contains_truth 入面真值只來自 ALS 候選嘅欄數）；`--no-als` 唔查 ALS；`--dry` 用 fake ALS（唔打網絡）。
+
+## 更表寫入：audit 同 transaction（G2／G4，2026-10）
+- `POST /api/shift-records/batch`：shift 寫入同 `audit_log` 喺同一個 `$transaction`（`writeAuditMany(…, tx)`，一條 `createMany`，次序／內容同舊版一致；timeout 60s／maxWait 10s 不變）。tx 中途失敗（unique 衝突、鎖月、audit 寫入失敗）→ shift 同 audit 一齊 rollback。
+- `POST /api/shift-records`：撞 unique 而現存行係 `cancelled` 就重用該行（`update`＋audit `update`，`after.reused_cancelled=true`，回 201＋`reused:true`）；現存行唔係 cancelled 仍 409。audit 同寫入同 tx。
+- 其餘仍「commit 後先寫 audit」嘅路徑（只列、未改，記入 P3 §29）：`src/lib/months/open-month.ts:108`、`src/lib/longterm-payroll/attendance-fix.ts:156`、`src/lib/roster-upload/reconcile-apply.ts`（pendingAudits）。

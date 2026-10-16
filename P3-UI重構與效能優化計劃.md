@@ -1364,3 +1364,10 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - N1：「用呢個值填入」填入嘅值，提交 payload 地址 `source` 標 `application_form`（`FormField.filledFromForm`；包格式只有地址有來源欄）；**所有欄**（含地址等非關鍵欄）填入後一律 `ack=false`，要撳確認先可提交。純函數 `ackAfterFill()`（`review-state.ts`）；其後用戶再人手改字清走 `filledFromForm`，回到 `ackAfterEdit` 規則。
 - N2：填入後交叉核對提示改為 `FORM_FILLED_MSG`「已採用入職表手寫值（請對住圖確認）」，唔再顯示「已以證件／住址證明為準」。
 - N3：`ackAfterFill` 單元測試（`tests/ocr14-form-hint.test.ts`）；e2e 加：地址填入後 data-ack=0、提示文字、預覽掣要確認後先可撳、preview request `address.source==="application_form"`、再人手改字回復。
+
+## 29 G2/G4（Gemini 審查跟進；branch `gem24-shift-reuse-audit-tx`，起點 main `0dfcfdf`，未 merge）
+- **G2**：`POST /api/shift-records`（雞頭／內部兩分支）改用 `src/lib/shift-records/create-or-reuse.ts`：`$transaction` 內 `findUnique(guard_id,work_date,shift_type_id)`——冇行→create；`cancelled`→update 重用（id／created_by／created_at 保留；其餘非 key 欄先重設做新建預設〔status=confirmed、OT／parent／billed／paid／rescue／provenance 等清走〕再寫入今次 data）；非 cancelled→P2002 風格 409（照舊）。回 201，body additive `reused:true`；audit `update`（before＝cancelled 行、after＋`reused_cancelled:true`，`AUDIT_META_PASSTHROUGH_KEYS` 加 `reused_cancelled`），audit 同 tx（`writeAuditTx`）；journal before＝被重用行 snapshot。鎖月檢查位置不變（tx 前）。並發 P2002 fallback 保留。
+- **G4**：`batch/route.ts` audit 搬入同一 `$transaction`（`writeAuditMany(…, tx)`，既有函數本身已支援 tx client，唔使新增 `writeAuditManyTx`），tx 最後一步寫，rollback 一齊回滾；`pendingAudits` 次序／內容不變。
+- **保守取捨**：schema 冇 `updated_by` 欄（唔改 schema）→ 只靠 audit actor；重用行 `source` 取 caller 帶嘅值或 manual。
+- **後續（只列，未改）**：commit 後先寫 audit 嘅路徑——`src/lib/months/open-month.ts`（`writeAuditMany(pendingAudits…)`）、`src/lib/longterm-payroll/attendance-fix.ts:156`、`src/lib/roster-upload/reconcile-apply.ts`（逐條 `writeAudit`，pendingAudits）。
+- 測試：`tests/g2-g4-shift-reuse-audit-tx.test.ts`（G2 兩分支×4 case＋G4 成功／audit 失敗全回滾／鎖月擋）；`tests/p3-2-batch-write.test.ts` 對比不變。
