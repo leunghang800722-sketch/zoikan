@@ -101,6 +101,10 @@ export const MODULES = [
   // 新 run；update＝人手輸入項（津貼/扣款/假期段）、編輯合約；void＝
   // 作廢人手輸入項／合約段；export＝Autopay 檔（CSV／BOCHK）。
   "長工糧",
+  // W0（WhatsApp 報更模組，docs/plans/whatsapp-roster-plan.md §8 決策 9，老闆 2026-10-17 批）：
+  // 群組綁定／訊息清單／health。view＝睇群組、訊息、health；update＝改綁定、同步群組（config）。
+  // 老闆 config／update；會計、主管 view；雞頭／安員硬性拒（群組原話含其他雞頭嘅人）。
+  "WhatsApp 報更",
 ] as const;
 export type Module = (typeof MODULES)[number];
 
@@ -165,6 +169,7 @@ const OWNER: RoleMatrix = {
   安員配對修復: row(G, G, G, D, D), // WP-GUARD-FIX-UI：淨係老闆——上載名單/計算計劃/套用全部✓；void/export 冇對應能力
   一鍵結算: row(G, G, G, D, D), // WP-ONE-CLICK：老闆——撳一鍵/睇進度報告/重新執行全部✓；void/export 冇對應能力
   長工糧: row(G, G, G, G, G), // WP-LTPAY：老闆全開——睇/導入/計糧/人手輸入/作廢/出 Autopay 檔
+  "WhatsApp 報更": row(G, NA, G, NA, NA), // W0：老闆 config（view＋update）；冇 create/void/export 概念
 };
 
 // ---------------------------------------------------------------------------
@@ -203,6 +208,7 @@ const SUPERVISOR: RoleMatrix = {
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
   一鍵結算: row(G, D, D, D, D), // WP-ONE-CLICK：任務書明文「主管可 view 報告」——淨係睇進度／報告／歷史 runs，唔可以撳一鍵/重新執行
   長工糧: uniformRow(D), // WP-LTPAY：同「安員銀行資料」一致粒度——主管硬性拒（薪金/MPF 最嚴 PII）
+  "WhatsApp 報更": row(G, NA, NA, NA, NA), // W0：主管 view（睇群組／訊息／health）；冇 config 權
 };
 
 // ---------------------------------------------------------------------------
@@ -238,6 +244,7 @@ const ACCOUNTANT: RoleMatrix = {
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆（會批量建人、睇身份證）
   一鍵結算: row(G, G, G, D, D), // WP-ONE-CLICK：任務書明文「只老闆／會計可用」——會計同老闆一致全開
   長工糧: row(G, G, G, G, G), // WP-LTPAY：任務書明文「只老闆／會計可用」——會計同老闆一致全開
+  "WhatsApp 報更": row(G, NA, NA, NA, NA), // W0：會計 view；冇 config 權
 };
 
 // ---------------------------------------------------------------------------
@@ -292,6 +299,7 @@ const BROKER: RoleMatrix = {
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
   一鍵結算: uniformRow(D), // WP-ONE-CLICK：硬性拒——任務書明文「雞頭／安員 403」
   長工糧: uniformRow(D), // WP-LTPAY：硬性拒——任務書明文「雞頭永遠 403」
+  "WhatsApp 報更": uniformRow(D), // W0：硬性拒——群組原話含其他雞頭嘅人（計劃書 §8 決策 9）
 };
 
 // ---------------------------------------------------------------------------
@@ -327,6 +335,7 @@ const GUARD_SELF: RoleMatrix = {
   安員配對修復: uniformRow(D), // WP-GUARD-FIX-UI：硬性拒——淨係老闆
   一鍵結算: uniformRow(D), // WP-ONE-CLICK：硬性拒——任務書明文「雞頭／安員 403」
   長工糧: uniformRow(D), // WP-LTPAY：硬性拒
+  "WhatsApp 報更": uniformRow(D), // W0：硬性拒
 };
 
 export const DEFAULT_MATRIX: Record<RoleName, RoleMatrix> = {

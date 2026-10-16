@@ -28,6 +28,9 @@ export async function clearAll() {
   await prisma.aiDailyUsage.deleteMany({}); // P9.2：AI 每日額度計數（無 FK）
   await prisma.generatedFile.deleteMany({}); // P8.3：鎖月後生成嘅檔（無 FK）
   await prisma.scheduledJob.deleteMany({});
+  await prisma.whatsappIntent.deleteMany({}); // W0：WhatsApp 三表（intent 先於 message；groups 對 site／broker／guard 係 SET NULL，但仍然每個 test 清走）
+  await prisma.whatsappMessage.deleteMany({});
+  await prisma.whatsappGroup.deleteMany({});
   await prisma.appErrorLog.deleteMany({}); // WP-AI-DIAG：應用層錯誤日誌（無 FK）
   await prisma.monthCloseAutoChange.deleteMany({}); // WP-ONE-CLICK-AUTO：自動改動流水帳（FK 落 month_close_runs）
   await prisma.reconcileAllRun.deleteMany({}); // 唔好令前一個 test 檔留低嘅 running 對數 run 擋住下一個

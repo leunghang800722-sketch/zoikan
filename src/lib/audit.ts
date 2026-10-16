@@ -104,7 +104,9 @@ export type AuditAction =
   | "confirm"
   | "trigger_drafts_generate"
   | "void_longterm_payroll_month"
-  | "bulk_avg_wages";
+  | "bulk_avg_wages"
+  // W0：WhatsApp 群組由 WAHA 同步（table_name="whatsapp_groups"，row_id="sync"，after 淨係計數）。
+  | "whatsapp_group_sync";
 
 export interface WriteAuditInput {
   actorUserId: string | null;
