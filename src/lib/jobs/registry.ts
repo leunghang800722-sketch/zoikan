@@ -9,8 +9,9 @@ import { permitExpiryWeeklyJob } from "./permit-expiry-weekly";
 import { lockOpsDigestJob } from "./lock-ops-digest";
 import { longtermInputDraftsJob } from "./longterm-input-drafts";
 import { whatsappRetentionJob } from "./whatsapp-retention";
+import { whatsappParseJob, whatsappDailySummaryJob } from "./whatsapp-parse";
 
-export const JOBS: JobDef[] = [openNextMonthJob, nightlyMonthHealthJob, triageReminderJob, autoOneClickJob, afterLockExportsJob, permitExpiryWeeklyJob, lockOpsDigestJob, longtermInputDraftsJob, whatsappRetentionJob];
+export const JOBS: JobDef[] = [openNextMonthJob, nightlyMonthHealthJob, triageReminderJob, autoOneClickJob, afterLockExportsJob, permitExpiryWeeklyJob, lockOpsDigestJob, longtermInputDraftsJob, whatsappRetentionJob, whatsappParseJob, whatsappDailySummaryJob];
 
 export function findJob(key: string): JobDef | undefined {
   return JOBS.find((j) => j.key === key);

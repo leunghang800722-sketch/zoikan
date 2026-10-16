@@ -2726,3 +2726,31 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 
 ### 保留期 job
 `whatsapp_retention`（每日 03:00 HKT，`/settings/jobs` 可見）：`ts < now-90d` 且未 redact 嘅訊息 `text`、`text_history` 置空、設 `redacted_at`；解析結果／audit 照舊。summary 只有 `{ redacted, retention_days }`。
+
+## WhatsApp 解析 dry-run（W1，2026-10；全部 additive）
+
+只記錄「建議」（`whatsapp_intents.routed` 判定），**唔寫 `shift_records`、唔開 Triage 題**。Migration `20261019000000_wa_w1_parse`（只加欄／index）：`whatsapp_groups.filter_threshold`、`whatsapp_messages.parse_attempts`、`whatsapp_intents.superseded_by_revision`／`revoked_at`。權限同 W0：module `WhatsApp 報更` view（老闆／會計／主管）；雞頭、保安員 403。
+
+### `GET /api/whatsapp/intents?group=&from=&to=&routed=&take=`（view）
+- `group`＝群 id 或 jid；`from`／`to`＝香港日曆日 `YYYY-MM-DD`（含頭尾；冇傳＝最近 14 日；格式錯／`from>to` → 400）；`routed`＝`auto_write|triage|ignored|pending`（非法 → 400）；`take` 預設及上限 200。按訊息時間新→舊。
+- 每行：`message_ts`、`group_id`／`group_label`、`sender`（有「安員:view」＝保安員姓名，否則 `…`＋電話尾 4 位）、`text`（**只有「安員:view」權先有**，保留期後 `null`＋`text_redacted:true`）、`revision`、`kind`、`work_date`、`site_id`／`site_name`、`guard_id`／`guard_name`（同樣要「安員:view」；`has_guard` 恆有）、`shift_code`、`leave_code`、`confidence`、`routed`、`reasons[]`（阻擋自動寫入嘅原因碼）、`notes[]`（資訊備註）、`candidate_counts`（只係數量）、`group_auto_write`、`superseded`（被編輯後新 revision 取代）、`revoked`、`source_changed`、`compare`、`actual[]`。
+- 原因碼：`person_ambiguous|person_unknown|site_ambiguous|date_ambiguous|date_missing|date_unparseable|date_out_of_range|shift_unmapped|shift_ambiguous|leave_unmapped|leave_ambiguous|conflict_other_shift|conflict_leave|conflict_shift_vs_leave|already_exists|month_locked|slot_full|quota_full|type_not_auto|question_only|unclear|duplicate_in_message`；備註碼：`group_auto_write_off|month_rolled|llm_bad_output|llm_no_intent`。
+- `compare`（對照「實際排更」＝同人同日非取消嘅 `shift_records`，OT 唔計）：`match`（✓）／`mismatch`（✗）／`none`（—，實際未有排更）／`null`（`cover`／`cancel`／`unclear`／`question_only` 或未配到人／日，不對照）。`actual` 例 `["shift:N","leave:SL"]`。
+- **唔回傳** WAHA `message_id`、`group_jid`、完整電話；`resolution` json 本身唔含訊息原文（只有原因碼、id 列表、basis 代碼）。
+
+### `GET /api/whatsapp/stats?from=&to=&group=`（view）
+全部數字：`received`（收，不含私訊／本機發出）、`filtered`（第 0 層過濾＋未綁定／略過群）、`parsed`（有食 LLM）、`auto_write`／`triage`／`ignored`（現行 intents 判定，已被取代／撤回嘅不計）、`intents`、`compared`／`consistent`／`inconsistent`／`not_scheduled`、`consistency_rate`（`consistent/compared`，`compared=0`＝`null`）、`auto_write_compared`／`auto_write_consistent`／`auto_write_consistency_rate`（只計判為 `auto_write` 且實際已有排更者）、`errors`、`pending`（`status=received`）。對照最多取最近 5,000 條 shift／leave intents。
+
+### `PATCH /api/whatsapp/groups` 新增欄位
+`filter_threshold`（整數 0–100 或 `null`＝預設 40；第 0 層過濾閾值群組層覆寫）；GET／PATCH 回傳 DTO 加 `filter_threshold`。
+
+### 頁面
+`/whatsapp/intents`（dry-run 對照頁，從 `/whatsapp` 頁首連入，不加導覽項）：統計卡（收／過濾／解析／建議自動／分流／忽略／對照一致率）、群組／日期／判定篩選、每條 intent 卡（原話〔有權限〕、日期／盤／人／更／請假／信心、判定、原因、✓／✗／—）；手機 375px 無橫向捲動。
+
+### 排程 job（`/settings/jobs` 可見）
+- `whatsapp_parse`（每分鐘，`WA_ENABLED=1` 先跑，否則 skipped）：揀 `status=received`（按 `ts`）→ 第 0 層過濾 → LLM（`json_object`、temperature 0、`reasoning_effort low`、輸出上限 2,000）→ 程式碼配對 → 寫 `whatsapp_intents`。每次連續處理到冇待處理或用盡 45 秒預算。錯誤（LLM 連唔到／處理失敗）`parse_attempts+1`，3 次後 `status=error`（`error` 只係原因碼）。編輯：新 revision 重新走一次，舊 revision intents `superseded_by_revision=新 revision`；撤回：intents `revoked_at`。summary 只有數字。
+- `whatsapp_daily_summary`（每日 09:00 HKT，同樣受 `WA_ENABLED` 控制）：通知老闆前一日「收／過濾／解析／建議自動／分流／忽略／對照一致率」，只有數字，dedupe `whatsapp_daily:<日期>`。
+- `whatsapp_retention` 加：一併將 `parsed_json`（含 LLM 抽出嘅原話片段）置空；intents 保留。
+
+### `LlmClient` 結構化模式（additive）
+`LlmChatParams.structured?: { format:"json_object", maxTokens, temperature?, reasoningEffort? }`：單次 JSON 輸出（冇工具／歷史）。DeepSeek 用 `response_format json_object`＋`temperature`＋`reasoning_effort`＋`max_tokens`；Claude 用單次 `messages.create`（只傳 `max_tokens`，**唔傳 temperature／thinking**，避免新型號拒收）；`AI_LLM=fake` 回 `{"noise":true,"intents":[]}`。冇傳 `structured` 時行為完全不變。

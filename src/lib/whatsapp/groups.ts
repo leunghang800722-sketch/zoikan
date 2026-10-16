@@ -24,6 +24,8 @@ export const GroupPatchSchema = z.object({
   auto_write: z.boolean().optional(),
   auto_confirm: z.boolean().optional(),
   active: z.boolean().optional(),
+  /** W1：第 0 層過濾閾值（0–100）；null＝用預設 40。 */
+  filter_threshold: z.number().int().min(0).max(100).nullable().optional(),
 });
 
 export function pairsToWordMap(pairs: WordPair[]): Record<string, string> {
