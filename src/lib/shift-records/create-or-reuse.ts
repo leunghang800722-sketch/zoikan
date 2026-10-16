@@ -6,15 +6,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { MANUAL_SOURCE } from "@/lib/longterm-payroll/attendance-priority";
-import { toNum } from "@/lib/pricing/auto-card-journal";
 
-type SnapshotTriple = [number | null, number | null, number | null];
 
 export interface CreateOrReuseResult {
   record: Prisma.ShiftRecordGetPayload<object>;
   reused: boolean;
-  /** 重用時＝被重用嘅 cancelled 行三個 snapshot；新建＝null（呼叫者用自己嘅 manualBefore）。 */
-  beforeSnapshots: SnapshotTriple | null;
 }
 
 /** 重用 cancelled 行時，先將所有「非 key」欄重設做新建預設，再蓋上今次 data——避免舊行殘留
@@ -38,7 +34,7 @@ function resetDefaults(): Prisma.ShiftRecordUncheckedUpdateInput {
     clientRateSnapshot: null,
     guardWageSnapshot: null,
     brokerFeeSnapshot: null,
-    provenance: Prisma.JsonNull,
+    provenance: Prisma.DbNull, // SQL NULL（唔係 JSON null）
   };
 }
 
@@ -56,7 +52,7 @@ export async function createOrReuseShiftRecord(input: {
     if (!existing) {
       const created = await tx.shiftRecord.create({ data: { ...data, source, createdBy: actorUserId } });
       await writeAuditTx(tx, { actorUserId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip });
-      return { record: created, reused: false, beforeSnapshots: null };
+      return { record: created, reused: false };
     }
     if (existing.status !== "cancelled") {
       // 同現行語意一致：交俾呼叫者轉 409（用同 P2002 一樣嘅 code，route 既有 catch 直接接住）。
@@ -79,8 +75,7 @@ export async function createOrReuseShiftRecord(input: {
     });
     return {
       record: updated,
-      reused: true,
-      beforeSnapshots: [toNum(existing.clientRateSnapshot), toNum(existing.guardWageSnapshot), toNum(existing.brokerFeeSnapshot)],
+      reused: true
     };
   });
 }

@@ -1371,3 +1371,4 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **保守取捨**：schema 冇 `updated_by` 欄（唔改 schema）→ 只靠 audit actor；重用行 `source` 取 caller 帶嘅值或 manual。
 - **後續（只列，未改）**：commit 後先寫 audit 嘅路徑——`src/lib/months/open-month.ts`（`writeAuditMany(pendingAudits…)`）、`src/lib/longterm-payroll/attendance-fix.ts:156`、`src/lib/roster-upload/reconcile-apply.ts`（逐條 `writeAudit`，pendingAudits）。
 - 測試：`tests/g2-g4-shift-reuse-audit-tx.test.ts`（G2 兩分支×4 case＋G4 成功／audit 失敗全回滾／鎖月擋）；`tests/p3-2-batch-write.test.ts` 對比不變。
+- **G2.2（Opus 驗收修正）**：S1 重用行 journal `before` 一律用 `manualBefore`（雞頭分支 `[null,null,null]`），移除 `beforeSnapshots`——行已 reset 至新建預設，用舊 snapshot 做 before 會令「舊值＝新自動價」時漏寫 journal；測試加「舊 snapshot 等於新自動價仍寫 journal」。N1 provenance 清空改 `Prisma.DbNull`（SQL NULL）並加斷言。N3 雞頭分支重用斷言 `status===pending_approval`。

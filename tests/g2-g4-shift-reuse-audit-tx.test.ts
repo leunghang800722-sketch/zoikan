@@ -19,6 +19,7 @@ describe("G2 單條新建重用 cancelled 行", () => {
     fx = await seedWp2Fixture();
     owner = await sessionCookieForUser(fx.userIds["老闆"]);
     broker = await sessionCookieForUser(fx.userIds["雞頭"]);
+    await prisma.broker.update({ where: { id: fx.brokerA.id }, data: { requiresApproval: true } });
   });
 
   for (const branch of ["內部", "雞頭"] as const) {
@@ -46,6 +47,10 @@ describe("G2 單條新建重用 cancelled 行", () => {
       expect(row.status).not.toBe("cancelled");
       expect(row.otHours).toBeNull();
       expect(row.billed).toBe(false);
+      // provenance 係 SQL NULL（唔係 JSON null）
+      const pv = await prisma.$queryRaw<{ isnull: boolean }[]>`SELECT (provenance IS NULL) AS isnull FROM shift_records WHERE id = ${fx.shiftRecordA.id}`;
+      expect(pv[0]!.isnull).toBe(true);
+      if (branch === "雞頭") expect(row.status).toBe("pending_approval");
       expect(row.createdBy).toBe(before.createdBy);
       expect(row.createdAt.getTime()).toBe(before.createdAt.getTime());
       expect(await prisma.shiftRecord.count({ where: { guardId: fx.guardA.id, workDate: before.workDate, shiftTypeId: fx.shiftType.id } })).toBe(1);
@@ -55,6 +60,17 @@ describe("G2 單條新建重用 cancelled 行", () => {
       expect((audits[0]!.before as { status?: string }).status).toBe("cancelled");
       expect((audits[0]!.after as { status?: string; reused_cancelled?: boolean }).reused_cancelled).toBe(true);
       expect((audits[0]!.after as { status?: string }).status).toBe(row.status);
+    });
+
+    it(`${branch}：重用行舊 snapshot 等於新自動價 → 仍然寫 journal 行`, async () => {
+      const run = await prisma.monthCloseRun.create({ data: { month: new Date(Date.UTC(2026, 7, 1)), startedById: fx.userIds["老闆"] } });
+      await prisma.rateCard.updateMany({ where: { id: { in: [fx.rateCardBrokerA.id, fx.rateCardGeneric.id] } }, data: { source: `auto:one-click:${run.id}` } });
+      // 舊行 snapshot 設成同新自動價一樣（brokerA 卡：client 888／wage 650／fee 60）
+      await prisma.shiftRecord.update({ where: { id: fx.shiftRecordA.id }, data: { status: "cancelled", clientRateSnapshot: 888, guardWageSnapshot: 650, brokerFeeSnapshot: 60 } });
+      const res = await createShift(post(url, cookie(), body(fx.guardA.id)));
+      expect(res.status).toBe(201);
+      expect((await res.json()).reused).toBe(true);
+      expect(await prisma.monthCloseAutoChange.count({ where: { runId: run.id, kind: "price_snapshots" } })).toBeGreaterThan(0);
     });
 
     it(`${branch}：非 cancelled → 409，唔改行、唔寫 audit`, async () => {
