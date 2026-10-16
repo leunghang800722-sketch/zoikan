@@ -39,6 +39,8 @@ export const INTERNAL_NAV: NavSchemaEntry[] = [
   { href: "/roster", label: "更表", group: "排更", kicker: "排更", module: "更表" },
   { href: "/quotas", label: "配額", group: "排更", kicker: "排更", module: "配額" },
   { href: "/approvals", label: "審批", group: "排更", kicker: "排更", module: "審批", badge: "approvals" },
+  // W0：WhatsApp 報更（群組綁定／訊息／health）；雞頭／保安員硬性拒，所以只放內部導覽。
+  { href: "/whatsapp", label: "WhatsApp 報更", group: "排更", kicker: "排更", module: "WhatsApp 報更" },
   { href: "/roster-uploads", label: "更表上載", group: "對數", kicker: "對數", module: "更表上載" },
   { href: "/roster-uploads?tab=fix", label: "未配對保安員修復", group: "對數", kicker: "對數", module: "安員配對修復" },
   { href: "/month-close", label: "一鍵結算", group: "月結", kicker: "月結", module: "一鍵結算" },
