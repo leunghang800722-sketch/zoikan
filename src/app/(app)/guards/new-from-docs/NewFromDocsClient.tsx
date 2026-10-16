@@ -93,6 +93,8 @@ interface FormField {
   /** WP-OCR-1：同入職表手寫值嘅交叉核對（身份證關鍵欄）；入職表手寫值只作唯讀顯示，唔覆蓋身份證值 */
   cross?: CrossResult;
   formValue?: string;
+  /** WP-OCR-1.4：手寫值只係參考（證件欄 missing／review） */
+  refOnly?: boolean;
 }
 type FormState = Record<OcrFieldKey, FormField>;
 
@@ -260,7 +262,7 @@ export function NewFromDocsClient() {
       const p = picks[k];
       if (!p) continue;
       const r = p.result;
-      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, ...alsInfo(r.candidates_ranked), reason: r.reason, ack: initialAck(k, r.status), edited: false, from: p.doc, ...(p.cross ? { cross: p.cross } : {}), ...(p.formValue ? { formValue: p.formValue } : {}) };
+      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, ...alsInfo(r.candidates_ranked), reason: r.reason, ack: initialAck(k, r.status), edited: false, from: p.doc, ...(p.cross ? { cross: p.cross } : {}), ...(p.formValue ? { formValue: p.formValue } : {}), ...(p.referenceOnly ? { refOnly: true } : {}) };
     }
     if (addrSrc) setAddrFrom(addrSrc);
     if (prefill.name && !next.name_zh.value.trim()) next.name_zh = prefilledNameField(prefill.name);
@@ -288,6 +290,13 @@ export function NewFromDocsClient() {
       return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v) } };
     });
   }
+  // WP-OCR-1.4：一撳填入入職表手寫參考值＝人手改值（走 ackAfterEdit）；手寫值係模型讀出嚟（唔係用戶自己打），所以關鍵欄一律要重新「對過證件」
+  const fillFromForm = (k: OcrFieldKey) =>
+    setForm((s) => {
+      const f = s[k];
+      const v = f.formValue ?? "";
+      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: isCritical(k) ? false : ackAfterEdit(k, f.ocrStatus, v) } };
+    });
   const ackField = (k: OcrFieldKey, empty = false) => setForm((s) => ({ ...s, [k]: { ...s[k], ack: true, ...(empty ? { value: "", edited: s[k].ocrValue !== "" } : {}) } }));
 
   const problems = reviewProblems(form, REASON_MSG);
@@ -556,8 +565,18 @@ export function NewFromDocsClient() {
                         data-testid={`ocr-cross-${k}`}
                         data-result={f.cross}
                       >
-                        {f.formValue && <span data-testid={`ocr-form-value-${k}`}>入職表手寫（唯讀）：{f.formValue}　</span>}
+                        {f.formValue && !f.refOnly && <span data-testid={`ocr-form-value-${k}`}>入職表手寫（唯讀）：{f.formValue}　</span>}
                         {(k === "address" ? CROSS_MSG_ADDRESS : CROSS_MSG)[f.cross]}
+                      </div>
+                    )}
+                    {f.refOnly && f.formValue && (
+                      <div className="flex flex-wrap items-center gap-2 break-words text-zk-sm text-zk-muted" data-testid={`ocr-form-ref-${k}`}>
+                        <span>入職表手寫（參考）：{f.formValue}</span>
+                        {f.value !== f.formValue && (
+                          <Button size="sm" type="button" data-testid={`ocr-use-form-${k}`} onClick={() => fillFromForm(k)}>
+                            用呢個值填入
+                          </Button>
+                        )}
                       </div>
                     )}
                     {reasonMsg && <div className="text-zk-sm text-zk-warning">{reasonMsg}</div>}
