@@ -136,11 +136,19 @@ describe("W0 webhook", () => {
 
   it("非群組（私訊）→ ignored:not_group；唔存原文、jid 以 hash 取代、唔解析電話", async () => {
     await post(msgEvent("false_85290000002@c.us_PRIV1", { from: "85290000002@c.us", participant: undefined, body: "私人訊息 不應保存" }));
-    const row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: "false_85290000002@c.us_PRIV1" } });
+    expect(await prisma.whatsappMessage.count({ where: { messageId: "false_85290000002@c.us_PRIV1" } })).toBe(0); // message_id 含電話 → 唔存原值
+    const row = await prisma.whatsappMessage.findFirstOrThrow({ where: { ignoreReason: "not_group" } });
     expect(row).toMatchObject({ status: "ignored", ignoreReason: "not_group", text: "", senderTelNorm: null, senderGuardId: null });
+    expect(row.messageId.startsWith("private:")).toBe(true);
     expect(row.chatJid.startsWith("private:")).toBe(true);
-    expect(row.chatJid).not.toContain("85290000002");
-    expect(row.senderJid).not.toContain("85290000002");
+    // 整行（所有欄）冇任何 8 位數字、冇 @c.us、冇電話
+    const dump = JSON.stringify(row);
+    expect(dump).not.toMatch(/\d{8}/);
+    expect(dump).not.toContain("@c.us");
+    expect(dump).not.toContain("85290000002");
+    // 同一私訊重覆投遞：hash 穩定，仍然 1 行
+    await post(msgEvent("false_85290000002@c.us_PRIV1", { from: "85290000002@c.us", participant: undefined, body: "私人訊息 不應保存" }));
+    expect(await prisma.whatsappMessage.count({ where: { ignoreReason: "not_group" } })).toBe(1);
   });
 
   it("stale（>72h）→ ignored:stale；71 小時內照收", async () => {
@@ -214,9 +222,7 @@ describe("W0 webhook", () => {
       expect((row.textHistory as unknown[]).length).toBe(2);
     });
 
-    it("冇收過原訊息／空內容／已撤回／ignored 訊息 → no-op（200，唔補建）", async () => {
-      expect((await post(msgEvent(MID("22"), { body: "x" }, "message.edited"))).status).toBe(200);
-      expect(await prisma.whatsappMessage.count()).toBe(0);
+    it("空內容／已撤回／ignored 訊息 → no-op（200）", async () => {
       await post(msgEvent(MID("23")));
       await post(msgEvent(MID("23"), { body: "" }, "message.edited"));
       expect((await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("23") } })).revision).toBe(1);
@@ -244,12 +250,10 @@ describe("W0 webhook", () => {
       expect((await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("30") } })).revokedAt!.getTime()).toBe(t1);
     });
 
-    it("用 before.id 指向原訊息亦得；冇收過原訊息 → no-op 200", async () => {
+    it("用 before.id 指向原訊息亦得", async () => {
       await post(msgEvent(MID("31")));
       await post(msgEvent("REV-EVT-2", {}, "message.revoked", { before: { id: MID("31") } }));
       expect((await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("31") } })).status).toBe("revoked");
-      expect((await post(msgEvent(MID("32"), {}, "message.revoked"))).status).toBe(200);
-      expect(await prisma.whatsappMessage.count({ where: { messageId: MID("32") } })).toBe(0);
     });
   });
 
@@ -286,6 +290,68 @@ describe("W0 webhook", () => {
     it("body 內嘅 session 落庫；冇就 default", async () => {
       await post({ ...msgEvent(MID("45")), session: "s2" });
       expect((await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("45") } })).session).toBe("s2");
+    });
+  });
+
+  describe("W0.2 驗收修正：亂序／重放／tombstone／窗口", () => {
+    const T = nowSec() - 3600;
+    it("S1：A→B→C 之後重放 B（舊 timestamp）或再送 B（新 timestamp，但已喺歷史）→ 仍係 C", async () => {
+      await post(msgEvent(MID("60"), { timestamp: T, body: "A" }));
+      await post(msgEvent(MID("60"), { timestamp: T + 10, body: "B" }, "message.edited"));
+      await post(msgEvent(MID("60"), { timestamp: T + 20, body: "C" }, "message.edited"));
+      await post(msgEvent(MID("60"), { timestamp: T + 10, body: "B" }, "message.edited")); // 舊事件重放
+      let row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("60") } });
+      expect(row).toMatchObject({ text: "C", revision: 3 });
+      await post(msgEvent(MID("60"), { timestamp: T + 30, body: "B" }, "message.edited")); // 新時間但文字已喺歷史
+      row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("60") } });
+      expect(row).toMatchObject({ text: "C", revision: 3 });
+      expect((row.textHistory as unknown[]).length).toBe(2);
+    });
+    it("S1：編輯／撤回事件套 72h 窗口；冇 timestamp → no-op", async () => {
+      await post(msgEvent(MID("61"), { timestamp: nowSec() - 10, body: "A" }));
+      await post(msgEvent(MID("61"), { timestamp: nowSec() - 73 * 3600, body: "舊編輯" }, "message.edited"));
+      await post(msgEvent(MID("61"), { timestamp: undefined, body: "無時間編輯" }, "message.edited"));
+      await post(msgEvent(MID("61"), { timestamp: nowSec() + 11 * 60, body: "未來編輯" }, "message.edited"));
+      await post(msgEvent(MID("61"), { timestamp: nowSec() - 73 * 3600 }, "message.revoked"));
+      await post(msgEvent(MID("61"), { timestamp: undefined }, "message.revoked"));
+      expect(await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("61") } })).toMatchObject({ text: "A", revision: 1, status: "received", revokedAt: null });
+      // 窗口外嘅編輯／撤回亦唔會為不存在嘅訊息寫 tombstone
+      await post(msgEvent(MID("62"), { timestamp: nowSec() - 73 * 3600, body: "x" }, "message.edited"));
+      await post(msgEvent(MID("62"), { timestamp: nowSec() - 73 * 3600 }, "message.revoked"));
+      expect(await prisma.whatsappMessage.count({ where: { messageId: MID("62") } })).toBe(0);
+    });
+    it("S2：撤回先於原訊息 → tombstone（revoked、text 空）；原訊息後到保持 revoked、唔還原文字", async () => {
+      expect((await post(msgEvent(MID("63"), {}, "message.revoked"))).status).toBe(200);
+      let row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("63") } });
+      expect(row).toMatchObject({ status: "revoked", text: "", chatJid: GROUP });
+      expect(row.revokedAt).not.toBeNull();
+      await post(msgEvent(MID("63"), { body: "遲到嘅原文" }));
+      row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("63") } });
+      expect(row).toMatchObject({ status: "revoked", text: "" });
+      expect(await prisma.whatsappMessage.count({ where: { messageId: MID("63") } })).toBe(1);
+    });
+    it("S3：編輯先於原訊息 → tombstone（received、編輯後文字、revision 1、pending_edit）；原訊息後到 no-op 保留編輯後文字", async () => {
+      await post(msgEvent(MID("64"), { body: "編輯後" }, "message.edited"));
+      let row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("64") } });
+      expect(row).toMatchObject({ status: "received", text: "編輯後", revision: 1, pendingEdit: true });
+      await post(msgEvent(MID("64"), { body: "原文（遲到）" }));
+      row = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("64") } });
+      expect(row).toMatchObject({ text: "編輯後", revision: 1, pendingEdit: true });
+      // 之後再有更新嘅編輯 → 正常 revision+1 並清 pending_edit
+      await post(msgEvent(MID("64"), { timestamp: nowSec() + 5, body: "再編輯" }, "message.edited"));
+      expect(await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("64") } })).toMatchObject({ text: "再編輯", revision: 2, pendingEdit: false });
+    });
+    it("N1：編輯／撤回事件 chat 同原行唔一致 → no-op（文字、狀態不變）＋warn 計數", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await post(msgEvent(MID("65"), { body: "A" }));
+      await post(msgEvent(MID("65"), { from: "other-g@g.us", body: "被偷換" }, "message.edited"));
+      await post(msgEvent(MID("65"), { from: "other-g@g.us" }, "message.revoked"));
+      expect(await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("65") } })).toMatchObject({ text: "A", revision: 1, status: "received", revokedAt: null });
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes("chat_mismatch")).length).toBe(2);
+    });
+    it("N2：message payload 冇 timestamp → ignored:no_timestamp（唔用 now）", async () => {
+      await post(msgEvent(MID("66"), { timestamp: undefined }));
+      expect(await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: MID("66") } })).toMatchObject({ status: "ignored", ignoreReason: "no_timestamp" });
     });
   });
 

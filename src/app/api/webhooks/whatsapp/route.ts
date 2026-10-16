@@ -76,7 +76,9 @@ export async function POST(req: Request) {
   if (!ev) return J({ error: "bad_request" }, 400);
 
   try {
-    await ingestEvent(ev);
+    const outcome = await ingestEvent(ev);
+    // 編輯／撤回事件嘅 chat 同原行唔一致：no-op，只記計數字樣（唔記 body／id）
+    if (outcome === "chat_mismatch") console.warn("[whatsapp] chat_mismatch：編輯／撤回事件嘅群同原訊息唔一致，已忽略");
   } catch (e) {
     console.error("[whatsapp] webhook 落庫失敗", safeErrorSummary(e));
     return J({ error: "internal_error" }, 500); // WAHA 會重試；冪等吸收

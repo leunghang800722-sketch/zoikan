@@ -294,6 +294,8 @@ npx tsx scripts/staff-import/19-triage-reread.ts --dry     # fake client＋記�
 | `WHATSAPP_DOWNLOAD_MEDIA` | `false`（唔下載圖／語音／貼圖） |
 | 對外網路 | **唔開公網**（私網即可）；系統先會用 `WAHA_BASE_URL` 連入 |
 
+> **注意（W0.2）**：計劃書 §3.2 第 3 重「私網／IP allowlist／middleware 擋外網 `/api/webhooks/*`」**未實作**。而家 webhook 只靠 **HMAC-sha512 + `X-Zoikan-Hook` header** 兩重驗證（key／secret 未設一律拒絕）；請務必設足夠長嘅隨機 key，並盡量用私網 hook URL。
+
 **B. 系統（Next）service 加 env**
 
 `WA_ENABLED`（`0`／`1`；預設 `0`＝webhook 一律回 503，確認 WAHA 設定好先開 `1`）、`WA_WEBHOOK_HMAC_KEY`、`WA_WEBHOOK_HEADER_SECRET`、`WAHA_BASE_URL`（例 `http://waha:3000`）、`WAHA_API_KEY`、`WAHA_SESSION`（預設 `default`）。

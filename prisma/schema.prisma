@@ -2138,6 +2138,7 @@ model WhatsappGroup {
   id            String            @id @default(uuid())
   groupJid      String            @unique @map("group_jid")
   label         String            @default("")
+  labelLocked   Boolean           @default(false) @map("label_locked")
   kind          WhatsappGroupKind @default(ignored)
   siteId        String?           @map("site_id")
   site          Site?             @relation(fields: [siteId], references: [id], onDelete: SetNull)
@@ -2183,6 +2184,7 @@ model WhatsappMessage {
   editedAt        DateTime?             @map("edited_at") @db.Timestamptz(3)
   revokedAt       DateTime?             @map("revoked_at") @db.Timestamptz(3)
   redactedAt      DateTime?             @map("redacted_at") @db.Timestamptz(3)
+  pendingEdit     Boolean               @default(false) @map("pending_edit")
   createdAt       DateTime              @default(now()) @map("created_at")
   updatedAt       DateTime              @updatedAt @map("updated_at")
 

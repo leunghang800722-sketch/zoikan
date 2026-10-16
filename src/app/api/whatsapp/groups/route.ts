@@ -1,5 +1,5 @@
 // W0：WhatsApp 群組列表／綁定。GET＝view（老闆／會計／主管）；PATCH＝update（淨係老闆）。
-// 雞頭／安員硬性拒（matrix.ts）。群組綁定改動寫 audit（whatsapp_groups，before／after 白名單 DTO）。
+// 雞頭／保安員角色硬性拒（matrix.ts）。群組綁定改動寫 audit（whatsapp_groups，before／after 白名單 DTO）。
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { prisma } from "@/lib/db";
 import { ok, getClientIp, withApiError } from "@/lib/api/http";
@@ -68,7 +68,10 @@ export async function PATCH(req: Request) {
     const autoConfirm = body.auto_confirm ?? cur.autoConfirm;
     assertGroupConsistent({ kind, siteId, brokerId, autoWrite, autoConfirm });
     const data: Prisma.WhatsappGroupUncheckedUpdateInput = { kind, siteId, brokerId, autoWrite, autoConfirm };
-    if (body.label !== undefined) data.label = body.label;
+    if (body.label !== undefined && body.label !== cur.label) {
+      data.label = body.label;
+      data.labelLocked = true; // 用戶手動改群名：之後 WAHA 同步唔再覆蓋
+    }
     if (body.active !== undefined) data.active = body.active;
     if (body.shift_word_map !== undefined) data.shiftWordMap = pairsToWordMap(body.shift_word_map);
     const updated = await prisma.$transaction(async (tx) => {

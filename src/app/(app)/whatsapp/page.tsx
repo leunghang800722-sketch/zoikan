@@ -68,7 +68,7 @@ interface HealthRes {
 
 const KIND_LABEL: Record<string, string> = { site: "單盤群", multi_site: "大群（多盤）", broker: "判頭群", office: "辦公室", ignored: "略過" };
 const STATUS_LABEL: Record<string, string> = { received: "已收", filtered: "已過濾", parsed: "已解析", routed: "已分流", done: "完成", ignored: "略過", error: "錯誤", revoked: "已撤回" };
-const IGNORE_LABEL: Record<string, string> = { not_group: "非群組", from_me: "本機發出", stale: "過期", future_ts: "時間異常" };
+const IGNORE_LABEL: Record<string, string> = { not_group: "非群組", from_me: "本機發出", stale: "過期", no_timestamp: "冇時間", future_ts: "時間異常" };
 const STATUS_FILTERS = ["", "received", "ignored", "error", "revoked"] as const;
 
 function statusVariant(s: string): "success" | "neutral" | "warning" | "danger" {

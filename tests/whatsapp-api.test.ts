@@ -124,6 +124,17 @@ describe("W0 WhatsApp API", () => {
       expect(await prisma.whatsappGroup.count()).toBe(1);
     });
 
+    it("N3：用戶手動改過群名（label_locked）→ 同步唔覆蓋；冇改過嘅照更新", async () => {
+      const g = await seedGroup({ kind: "office" });
+      const r = await groupsPatch(req("/api/whatsapp/groups", cookies["老闆"], "PATCH", { id: g.id, label: "老闆自訂名" }));
+      expect(r.status).toBe(200);
+      expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } })).labelLocked).toBe(true);
+      fakeFetch([{ id: "test-g1@g.us", name: "WAHA 新群名" }]);
+      const res = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
+      expect(await res.json()).toEqual({ total: 1, created: 0, relabelled: 0 });
+      expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } })).label).toBe("老闆自訂名");
+    });
+
     it("WAHA 未設定 → 503 waha_not_configured；WAHA 500／連唔到／格式錯 → 502，唔洩漏 URL／key", async () => {
       delete process.env.WAHA_BASE_URL;
       const r0 = await syncPost(req("/api/whatsapp/groups/sync", cookies["老闆"], "POST"));
