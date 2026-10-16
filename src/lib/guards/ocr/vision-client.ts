@@ -38,16 +38,32 @@ export function deepseekReasoningParams(): Record<string, unknown> {
   return mode === "off" ? { thinking: { type: "disabled" } } : { reasoning_effort: mode };
 }
 
+function isParsableJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * OCR-5.6：呼叫一次；回應撞 output 上限（truncated）而 content 空 → 用加倍 max_tokens（上限 8,000）重試一次。
- * 回傳最後一次回應，加 retried（有冇重試）同兩次呼叫合計用量（usage 計兩次）。
+ * OCR-5.6：呼叫一次；回應撞 output 上限（truncated）而 content 空或 JSON 被截（parse 唔到）→ 用加倍 max_tokens（上限 8,000）重試一次。
+ * base 已達上限就唔重試。重試本身拋 OcrUnavailableError → 降級：回第一次回應（retried:true、extra:null），由呼叫方照舊當 parse 失敗。
+ * 重試成功時 extra＝第一次回應（usage 兩次都計）。只對 DeepSeek 有意義（Claude 遇 max_tokens 直接拋，唔會 truncated）。
  */
 export async function completeWithTruncRetry(client: VisionClient, req: VisionRequest): Promise<{ resp: VisionResponse; retried: boolean; extra: VisionResponse | null }> {
   const first = await client.complete(req);
-  if (!first.truncated || first.text.trim() !== "") return { resp: first, retried: false, extra: null };
+  if (!first.truncated || (first.text.trim() !== "" && isParsableJson(first.text))) return { resp: first, retried: false, extra: null };
   const base = req.maxTokens ?? ocrDeepseekMaxTokens();
-  const second = await client.complete({ ...req, maxTokens: Math.min(base * 2, OCR_RETRY_MAX_TOKENS_CAP) });
-  return { resp: second, retried: true, extra: first };
+  if (base >= OCR_RETRY_MAX_TOKENS_CAP) return { resp: first, retried: false, extra: null };
+  try {
+    const second = await client.complete({ ...req, maxTokens: Math.min(base * 2, OCR_RETRY_MAX_TOKENS_CAP) });
+    return { resp: second, retried: true, extra: first };
+  } catch (e) {
+    if (!(e instanceof OcrUnavailableError)) throw e;
+    return { resp: first, retried: true, extra: null };
+  }
 }
 
 export class OcrUnavailableError extends Error {
