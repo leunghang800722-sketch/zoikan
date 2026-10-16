@@ -79,12 +79,14 @@ export interface FieldEval {
  * wrong＝confirmed 但值錯（最危險），或 review 但候選都唔含 truth；missing＝讀唔到。比較用現有 normalize canon。
  */
 export function classifyField(field: OcrFieldKey, truth: string, r: FieldResult, doc: OcrDocType, now: Date = new Date()): FieldEval {
-  const t = normalizeField(field, truth, now).canon;
-  const canon = (v: string) => normalizeField(field, v, now).canon;
+  // OCR-5.3：地址比較忽略標點／空白／大小寫（只比字母數字），避免打字真值同讀數因逗號／空格計錯
+  const loose = (s: string) => (field === 'address' ? s.replace(/[^\p{L}\p{N}]/gu, '').toUpperCase() : s);
+  const t = loose(normalizeField(field, truth, now).canon);
+  const canon = (v: string) => loose(normalizeField(field, v, now).canon);
   const valueCorrect = r.status !== 'missing' && r.value !== '' && canon(r.value) === t;
   const cands = r.status === 'review' ? (r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates) : [];
   // WP-OCR-2：地址 exact（confirmed 且啱）用 strict 比較（形近／簡繁字唔同當錯）；review_contains_truth 仍用 canon
-  const strictOf = (v: string) => (field === 'address' ? (normalizeField(field, v, now).strict ?? canon(v)) : canon(v));
+  const strictOf = (v: string) => (field === 'address' ? loose(normalizeField(field, v, now).strict ?? canon(v)) : canon(v));
   const exactCorrect = r.status !== 'missing' && r.value !== '' && strictOf(r.value) === strictOf(truth);
   let outcome: Outcome;
   if (r.status === 'missing') outcome = 'missing';
