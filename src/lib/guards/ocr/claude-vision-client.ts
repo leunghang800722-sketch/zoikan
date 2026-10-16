@@ -21,7 +21,7 @@ export function anthropicClientOptions(apiKey: string, timeoutMs: number) {
  * value＝字串（含 "unclear"）或 null；reason 無則 null；alternatives 最多 2 個由 read.ts 截（structured output 唔支援 maxItems）。
  * 舊純字串格式只會由 DeepSeek／舊 fake 出，read.ts 照樣接受。
  */
-export const BOX_COORDS = ["x", "y", "w", "h"] as const;
+const BOX_COORDS = ["x", "y", "w", "h"] as const;
 
 export function ocrJsonSchema(fields: readonly string[], boxFields: readonly string[] = []): { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false } {
   const fieldObject = {

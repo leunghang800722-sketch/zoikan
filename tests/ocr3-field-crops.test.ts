@@ -338,6 +338,18 @@ describe("readStageA／readStageB", () => {
     expect(unflattenFieldBoxes({ phone_x: "a", phone_y: 1, phone_w: 1, phone_h: 1 }, ["phone"])).toEqual({ phone_x: "a", phone_y: 1, phone_w: 1, phone_h: 1 });
     expect(unflattenFieldBoxes(null, ["phone"])).toBeNull();
   });
+  it("OCR-5.4：readStageA 收到攤平 box（Claude schema 格式）→ field_boxes 巢狀；超界／全 0 嘅欄丟棄", async () => {
+    const text = JSON.stringify({
+      phone: { value: "90001111", confidence: "high", reason: null, alternatives: [], digit_count: 8 },
+      address: { value: "測試街 999 號", confidence: "medium", reason: null, alternatives: [] },
+      field_boxes: { phone_x: 0.1, phone_y: 0.2, phone_w: 0.3, phone_h: 0.05, address_x: 0, address_y: 0, address_w: 0, address_h: 0 },
+    });
+    const fake = { model: "fake", provider: "claude" as const, complete: async () => ({ text, promptTokens: 1, completionTokens: 1, truncated: false }) };
+    const r = await readStageA({ a: fake, b: fake } as never, "onboarding_form", "data:image/jpeg;base64,AAAA");
+    expect(r.parse_ok).toBe(true);
+    expect(r.field_boxes.phone).toMatchObject({ x: 0.1, y: 0.2, w: 0.3, h: 0.05 });
+    expect(r.field_boxes.address ?? null).toBeNull();
+  });
   it("digit_count 解析（模型自報）：整數保留，亂值丟棄", () => {
     expect(fieldReadSchema.parse({ value: "9", digit_count: 8 })).toMatchObject({ digit_count: 8 });
     expect(fieldReadSchema.parse({ value: "9", digit_count: "x" })).toEqual({ value: "9" });
