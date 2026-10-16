@@ -61,6 +61,8 @@ export interface SessionSummary {
   /** 所有題都已被較新嘅導入取代（顯示「已被較新嘅導入取代」，唔係「已處理晒」） */
   superseded_all?: boolean;
   counts: { open: number; answered: number; skipped: number; superseded: number; total: number; important_open: number; supplementary_open: number; restricted_open: number };
+  /** TR-1（additive）：其中由「OCR 重讀建議」自動答嘅題數 */
+  ocr_reread_answered: number;
 }
 
 /** 「補充資料」層（field_review／ext_field_conflict／ext_field_review）：唔急，排喺要人手／衝突／銀行之後，badge 唔計。 */
@@ -79,6 +81,9 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
   if (sessions.length === 0) return [];
   const restricted = new Set(await restrictedKindsFor(actor));
   const grouped = await prisma.triageQuestion.groupBy({ by: ["sessionId", "status", "kind"], where: { sessionId: { in: sessions.map((s) => s.id) } }, _count: { _all: true } });
+  const rereadBy = new Map(
+    (await prisma.triageQuestion.groupBy({ by: ["sessionId"], where: { sessionId: { in: sessions.map((s) => s.id) }, status: "answered", answerJson: { path: ["source"], equals: "ocr_reread" } }, _count: { _all: true } })).map((g) => [g.sessionId, g._count._all]),
+  );
   return sessions.map((s) => {
     const counts = { open: 0, answered: 0, skipped: 0, superseded: 0, total: 0, important_open: 0, supplementary_open: 0, restricted_open: 0 };
     for (const g of grouped) {
@@ -92,7 +97,7 @@ export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolea
       if (g.status === "open" && restricted.has(g.kind)) counts.restricted_open += g._count._all; // 要有權限嘅同事處理（唔計入佢嘅待答數／badge）
       counts.total += g._count._all;
     }
-    return { id: s.id, source_type: s.sourceType, owner_user_id: s.ownerUserId, owner_name: s.owner.name, status: s.status, created_at: s.createdAt, completed_at: s.completedAt, counts, superseded_all: counts.superseded > 0 && counts.total === 0 };
+    return { id: s.id, source_type: s.sourceType, owner_user_id: s.ownerUserId, owner_name: s.owner.name, status: s.status, created_at: s.createdAt, completed_at: s.completedAt, counts, ocr_reread_answered: rereadBy.get(s.id) ?? 0, superseded_all: counts.superseded > 0 && counts.total === 0 };
   });
 }
 

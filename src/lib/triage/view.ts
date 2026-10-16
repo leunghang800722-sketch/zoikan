@@ -162,7 +162,7 @@ export interface QuestionView {
     /** bank_identity_unknown：戶口（遮罩；全號淨係有銀行資料 view 先回） */
     unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
   };
-  answer: { option: string; guard_id?: string } | null;
+  answer: { option: string; guard_id?: string; source?: "ocr_reread" } | null;
   answered_by: string | null;
   answered_at: Date | null;
   impact: unknown;
@@ -178,7 +178,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
   const cards = await loadCandidateCards(guardIds, c);
   return rows.map((r, i) => {
     const e = ev[i]!;
-    const ans = r.answerJson as { option?: string; guard_id?: string } | null;
+    const ans = r.answerJson as { option?: string; guard_id?: string; source?: string } | null;
     if (((BANK_KINDS as readonly string[]).includes(r.kind) && !c.bankUpdate) || (r.kind === "ext_identity_check" && !(c.pii && c.guardUpdate))) {
       return {
         id: r.id,
@@ -243,7 +243,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
           : null,
       },
       // 答案內容（可能含輸入嘅身份證號）唔回傳，淨回選項
-      answer: ans?.option ? { option: ans.option, ...(ans.guard_id ? { guard_id: ans.guard_id } : {}) } : null,
+      answer: ans?.option ? { option: ans.option, ...(ans.guard_id ? { guard_id: ans.guard_id } : {}), ...(ans.source === "ocr_reread" ? { source: "ocr_reread" as const } : {}) } : null,
       answered_by: r.answeredBy,
       answered_at: r.answeredAt,
       // impact_json 存原始結構化值（唔分讀者），每次讀取先按「讀者」嘅 caps 重新砌＋遮罩
