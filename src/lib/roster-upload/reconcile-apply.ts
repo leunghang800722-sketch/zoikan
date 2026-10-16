@@ -20,7 +20,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { assertMonthNotLocked, assertMonthNotLockedTx, monthStart as toMonthStart } from "@/lib/month-lock";
-import { writeAudit } from "@/lib/audit";
+import { writeAuditMany } from "@/lib/audit";
 import { BadRequest } from "@/lib/api/errors";
 import { resolveShiftPricing, type BrokerKindLike } from "@/lib/pricing/resolve-rate";
 import { journalAutoCardUses } from "@/lib/pricing/auto-card-journal";
@@ -48,10 +48,8 @@ type Tx = PrismaClient | Prisma.TransactionClient;
 
 type Pricing = { clientRate: number | null; guardWage: number | null; brokerFee: number | null; sources?: { clientCardId?: string; payoutCardId?: string } };
 
-/** 驗收修正（Opus 5.5，2026-09-24）：`writeAudit()` 用外層 `prisma`
- * 寫，唔喺 transaction 入面——所以一律喺 transaction 入面收集，commit
- * 成功之後先逐條寫（同 `shift-records/batch/route.ts` 一致），避免
- * rollback 之後留低「孤兒」audit。 */
+/** 驗收修正（Opus 5.5，2026-09-24）＋G4b：audit 喺 transaction 入面收集（SAVEPOINT 失敗嘅項唔收），
+ * tx 最後一步用 `writeAuditMany(…, tx)` 一條 createMany 同資料一齊 commit／rollback，冇孤兒 audit。 */
 type PendingAudit = { tableName: string; rowId: string; action: "create" | "update" | "void"; before?: unknown; after: unknown };
 
 /** OT 記錉要掛靠返呢個保安員呢日嘅正更記錉（`parent_shift_id`）——搵唔到
@@ -401,15 +399,12 @@ export async function applyReconcileDecisions(params: ApplyReconcileParams): Pro
         if (r.ok) results.push({ key: input.key, category: item.category, action: input.action, ok: true });
         else results.push({ key: input.key, category: item.category, action: input.action, ok: false, error: r.err instanceof Error ? r.err.message : "寫入失敗" });
       }
+      // G4b：audit 同寫入同一 tx（最後一步，一條 createMany；SAVEPOINT 失敗嘅項冇 audit，唔會孤兒）。
+      await writeAuditMany(pendingAudits.map((a) => ({ actorUserId: params.actorUserId, tableName: a.tableName, rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip: ctx.ip })), tx);
     },
     // 一個真實月份可以有幾百至千幾格——預設 5 秒唔夠。
     { timeout: 120_000, maxWait: 10_000 },
   );
-
-  // transaction 已經 commit——而家先逐條寫 audit_log（同 batch/route.ts 一致）。
-  for (const a of pendingAudits) {
-    await writeAudit({ actorUserId: params.actorUserId, tableName: a.tableName, rowId: a.rowId, action: a.action, before: a.before, after: a.after, ip: ctx.ip });
-  }
 
   // 套用完之後重新分類，計返仲有幾多項未有決定——齊晒先轉 confirmed。
   const { items: itemsAfter } = await reconcileUpload(params.uploadId);

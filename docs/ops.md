@@ -252,4 +252,4 @@ OCR-5.6 起，有 `DEEPSEEK_API_KEY` 時另跑 DeepSeek 段（三種文件各 1 
 ## 更表寫入：audit 同 transaction（G2／G4，2026-10）
 - `POST /api/shift-records/batch`：shift 寫入同 `audit_log` 喺同一個 `$transaction`（`writeAuditMany(…, tx)`，一條 `createMany`，次序／內容同舊版一致；timeout 60s／maxWait 10s 不變）。tx 中途失敗（unique 衝突、鎖月、audit 寫入失敗）→ shift 同 audit 一齊 rollback。
 - `POST /api/shift-records`：撞 unique 而現存行係 `cancelled` 就重用該行（`update`＋audit `update`，`after.reused_cancelled=true`，回 201＋`reused:true`）；現存行唔係 cancelled 仍 409。audit 同寫入同 tx。
-- 其餘仍「commit 後先寫 audit」嘅路徑（只列、未改，記入 P3 §29）：`src/lib/months/open-month.ts:108`、`src/lib/longterm-payroll/attendance-fix.ts:156`、`src/lib/roster-upload/reconcile-apply.ts`（pendingAudits）。
+- **G4b**：`openMonth()`（`src/lib/months/open-month.ts`）、`applyAttendanceFix()`（`src/lib/longterm-payroll/attendance-fix.ts`）、`applyReconcileDecisions()`（`src/lib/roster-upload/reconcile-apply.ts`）嘅 audit 同樣用 `writeAuditMany(…, tx)` 喺同一 transaction 最後一步一條 `createMany` 寫入，失敗一齊 rollback（reconcile-apply 只收 SAVEPOINT 成功項嘅 audit）。attendance-fix 嘅 auto 價卡 journal 維持 commit 後 best effort（唔拖冧主寫入）。2,000 條 audit createMany 喺 tx 內實測約 0.1 秒。
