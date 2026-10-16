@@ -1,5 +1,5 @@
 // W0：GET /api/whatsapp/messages?group=&status=&take=——最近訊息清單（view 權；take 預設／上限 200）。
-// 不回傳訊息原文、WAHA message_id（含發訊人電話）、完整電話；發訊人顯示：有「安員:view」→ 保安員姓名，否則電話尾 4 位。
+// 不回傳訊息原文、WAHA message_id（含發訊人電話）、完整電話；發訊人顯示：有「保安員」view 權→ 保安員姓名，否則電話尾 4 位。
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { prisma } from "@/lib/db";
 import { ok, withApiError } from "@/lib/api/http";

@@ -13,9 +13,8 @@ async function shot(page: Page, name: string) {
 
 const navLinks = (page: Page) => page.locator('aside [data-testid^="nav-/"]');
 
-// W0：老闆導覽加咗「WhatsApp 報更」第 19 條（+26px），1512×700 會多 15px 要捲；唔改產品 CSS，viewport 高度 700 → 720（其餘斷言不變）。
-test.describe("導覽列（桌面 1512×720）", () => {
-  test.use({ viewport: { width: 1512, height: 720 } });
+test.describe("導覽列（桌面 1512×700）", () => {
+  test.use({ viewport: { width: 1512, height: 700 } });
 
   test("老闆：19 條、6 組、唔使捲（nav scrollHeight ≤ clientHeight）", async ({ page }) => {
     await loginAs(page, "老闆");

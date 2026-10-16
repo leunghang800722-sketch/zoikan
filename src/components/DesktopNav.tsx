@@ -56,7 +56,7 @@ export function DesktopNav({
                     key={l.href}
                     href={l.href}
                     data-testid={`nav-${l.href.split("&month=")[0]}`}
-                    className={`flex items-center justify-between rounded-md px-2 py-[3px] text-zk-base leading-5 ${
+                    className={`flex items-center justify-between rounded-md px-2 py-[3px] text-zk-base leading-[19px] ${
                       active ? "bg-zk-primary-tint-soft font-semibold text-zk-primary-dark" : "font-normal text-zk-text-secondary hover:bg-zk-surface"
                     }`}
                   >

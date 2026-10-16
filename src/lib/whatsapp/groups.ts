@@ -58,14 +58,14 @@ export async function syncGroupsFromWaha(actorUserId: string, ip: string | null,
   const found = r.data;
   const summary: SyncSummary = { total: found.length, created: 0, relabelled: 0 };
   await prisma.$transaction(async (tx) => {
-    const existing = await tx.whatsappGroup.findMany({ where: { groupJid: { in: found.map((g) => g.jid) } }, select: { id: true, groupJid: true, label: true } });
+    const existing = await tx.whatsappGroup.findMany({ where: { groupJid: { in: found.map((g) => g.jid) } }, select: { id: true, groupJid: true, label: true, labelLocked: true } });
     const byJid = new Map(existing.map((e) => [e.groupJid, e]));
     for (const g of found) {
       const cur = byJid.get(g.jid);
       if (!cur) {
         const res = await tx.whatsappGroup.createMany({ data: [{ groupJid: g.jid, label: g.name, kind: "ignored", createdBy: actorUserId }], skipDuplicates: true });
         summary.created += res.count;
-      } else if (g.name && g.name !== cur.label) {
+      } else if (g.name && g.name !== cur.label && !cur.labelLocked) {
         await tx.whatsappGroup.update({ where: { id: cur.id }, data: { label: g.name } });
         summary.relabelled++;
       }

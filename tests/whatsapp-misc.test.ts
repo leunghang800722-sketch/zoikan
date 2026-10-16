@@ -87,6 +87,20 @@ describe("W0 migration 規矩＋AI 隔離", () => {
       expect(sql).not.toMatch(new RegExp(`\\bai\\.${t}\\b`));
     }
   });
+  it("W0.2 migration：只加兩個欄、冪等", async () => {
+    const sql2 = fs.readFileSync(path.join(ROOT, "prisma/migrations/20261018010000_wa_w0_2_pending_edit_label_lock/migration.sql"), "utf-8");
+    expect(sql2).not.toMatch(/\bDROP\b|\bDELETE\b|\bTRUNCATE\b|gen_random_uuid|\bRAISE\b/i);
+    expect(sql2).toMatch(/ADD COLUMN IF NOT EXISTS "pending_edit"/);
+    expect(sql2).toMatch(/ADD COLUMN IF NOT EXISTS "label_locked"/);
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    await client.connect();
+    try {
+      await client.query(sql2);
+      await client.query(sql2);
+    } finally {
+      await client.end();
+    }
+  });
   it("重跑一次冪等（表同 view 正常）", async () => {
     const client = new Client({ connectionString: process.env.DATABASE_URL });
     await client.connect();
@@ -171,6 +185,7 @@ describe("W0 純函數", () => {
     expect(ignoreReasonFor(g, now, now)).toBeNull();
     expect(ignoreReasonFor({ chatJid: "x@c.us", fromMe: true }, new Date(0), now)).toBe("not_group");
     expect(ignoreReasonFor({ ...g, fromMe: true }, new Date(0), now)).toBe("from_me");
+    expect(ignoreReasonFor(g, null, now)).toBe("no_timestamp");
     expect(ignoreReasonFor(g, new Date(now.getTime() - 72 * 3600e3 - 1), now)).toBe("stale");
     expect(ignoreReasonFor(g, new Date(now.getTime() - 72 * 3600e3), now)).toBeNull();
     expect(ignoreReasonFor(g, new Date(now.getTime() + 10 * 60e3 + 1), now)).toBe("future_ts");
