@@ -91,7 +91,19 @@ async function ingestMessage(ev: NormalizedWaEvent, now: Date): Promise<IngestOu
     ],
     skipDuplicates: true,
   });
-  if (res.count === 0) return "duplicate"; // 含「撤回／編輯先到」tombstone：保持其狀態同文字
+  if (res.count === 0) {
+    // 「編輯先到」tombstone 行：原訊息後到時補返欄位（唔改文字／狀態／revision）；撤回 tombstone 完全保持
+    if (!isPrivate) {
+      const filled = await prisma.whatsappMessage.updateMany({
+        where: { messageId: ev.messageId, pendingEdit: true, chatJid: ev.chatJid },
+        data: { senderJid: ev.senderJid, senderTelNorm: telNorm, senderGuardId, mediaType: ev.mediaType, quotedMessageId: ev.quotedMessageId },
+      });
+      if (filled.count > 0 && ts) {
+        await prisma.whatsappGroup.updateMany({ where: { groupJid: ev.chatJid, OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: ts } }] }, data: { lastMessageAt: ts } });
+      }
+    }
+    return "duplicate";
+  }
   if (!isPrivate && ts) {
     await prisma.whatsappGroup.updateMany({
       where: { groupJid: ev.chatJid, OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: ts } }] },
@@ -145,9 +157,9 @@ async function ingestEdited(ev: NormalizedWaEvent, now: Date): Promise<IngestOut
     if (evTs.getTime() < base.getTime()) return "edit_noop";
     const cur = await tx.whatsappMessage.findUniqueOrThrow({ where: { id: row.id }, select: { textHistory: true } });
     const history = Array.isArray(cur.textHistory) ? (cur.textHistory as Prisma.JsonArray) : [];
-    // 新文字已喺歷史出現過（B→C→B 重放）→ no-op
-    if (history.some((h) => typeof h === "object" && h !== null && (h as { text?: unknown }).text === ev.text)) return "edit_noop";
-    const entry = { revision: row.revision, text: row.text, replaced_at: now.toISOString() };
+    // 唔用文字去重（合法 A→B→A 要照處理）；用編輯事件 id：已處理過嘅 event_id 再嚟 → no-op
+    if (history.some((h) => typeof h === "object" && h !== null && (h as { event_id?: unknown }).event_id === ev.eventId)) return "edit_noop";
+    const entry = { revision: row.revision, text: row.text, replaced_at: now.toISOString(), event_id: ev.eventId };
     await tx.whatsappMessage.update({
       where: { id: row.id },
       data: {

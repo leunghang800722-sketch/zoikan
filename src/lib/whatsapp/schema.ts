@@ -6,6 +6,7 @@
 //       fromMe, body, hasMedia, media?{mimetype}, replyTo?{id}, _data?{key?{participant}},
 //       editedMessageId?(edited：原訊息 id；冇就用 id), revokedMessageId? | before?{id}(revoked：原訊息 id；冇就用 id) } }
 // 型別錯（例如 fromMe 係字串）→ 400。未知 top-level 欄位忽略。
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { WA_MAX_TEXT_CHARS } from "./config";
 
@@ -49,6 +50,8 @@ export interface NormalizedWaEvent {
   text: string;
   mediaType: string | null;
   quotedMessageId: string | null;
+  /** 編輯事件自己嘅 id（去重用）：payload.id（若同目標訊息 id 唔同）；否則 sha256(message_id+timestamp+text)。 */
+  eventId: string;
 }
 
 export const EVENT_KIND: Record<string, WaEventKind | undefined> = {
@@ -97,6 +100,8 @@ export function normalizeEvent(kind: WaEventKind, env: z.infer<typeof WebhookEnv
   const participant = p.participant ?? (dig(p._data, ["key", "participant"]) as string | undefined) ?? (dig(p._data, ["participant"]) as string | undefined);
   const senderJid = typeof participant === "string" && participant ? participant : chatJid;
   const body = (p.body ?? "").slice(0, WA_MAX_TEXT_CHARS);
+  const ts = parseTimestamp(p.timestamp);
+  const eventId = p.id && p.id !== messageId ? p.id : createHash("sha256").update(`${messageId}|${ts?.getTime() ?? ""}|${body}`, "utf8").digest("hex");
   return {
     kind,
     session: env.session || "default",
@@ -104,10 +109,11 @@ export function normalizeEvent(kind: WaEventKind, env: z.infer<typeof WebhookEnv
     chatJid,
     senderJid,
     fromMe: p.fromMe === true,
-    ts: parseTimestamp(p.timestamp),
+    ts,
     text: body,
     mediaType: mediaTypeOf(p),
     quotedMessageId: p.replyTo?.id ?? null,
+    eventId,
   };
 }
 
