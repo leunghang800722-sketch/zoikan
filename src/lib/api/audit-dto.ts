@@ -130,6 +130,8 @@ export const AUDIT_META_PASSTHROUGH_KEYS = [
   "import_via",
   "hold_override",
   "void_reason",
+  // G2：單條新建重用已取消行（非 PII 標記）
+  "reused_cancelled",
   "unlock_reason",
   "copied_from",
   // P7.2：排程 job 代做嘅寫入（值＝job key，例 open_next_month；非 PII）
