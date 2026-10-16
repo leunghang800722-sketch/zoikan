@@ -15,6 +15,8 @@ interface FieldPick<F extends FieldLike> {
   cross?: CrossResult;
   /** 入職表手寫值（只供唯讀顯示；讀到先有） */
   formValue?: string;
+  /** WP-OCR-1.4：證件／住址證明呢欄 missing 或 review，入職表手寫值只係「參考」（唯讀顯示＋可一撳填入；唔自動填、唔改 value、來源仍係證件） */
+  referenceOnly?: boolean;
 }
 export interface MergedFields<F extends FieldLike> {
   picks: Partial<Record<OcrFieldKey, FieldPick<F>>>;
@@ -38,7 +40,13 @@ export function mergeDocFields<F extends FieldLike>(docs: ReadonlyMap<OcrDocType
   for (const k of ID_CROSS_FIELDS) {
     const hv = form?.fields[k];
     const p = picks[k];
-    if (p && p.cross !== undefined && hv && hv.status !== "missing" && hv.value.trim()) p.formValue = hv.value;
+    if (!p || !hv || hv.status === "missing" || !hv.value.trim()) continue;
+    if (p.cross !== undefined) p.formValue = hv.value;
+    else if (p.result.status !== "confirmed") {
+      // WP-OCR-1.4：證件欄 missing／review（冇 cross）→ 手寫值做唯讀參考，方便人手打字；值照舊係證件嘅 value（missing＝空）
+      p.formValue = hv.value;
+      p.referenceOnly = true;
+    }
   }
   // 地址：住址證明有值（confirmed 或 review）就用佢；冇上載或者讀唔到先用入職表
   const proof = docs.get("address_proof")?.fields.address;
@@ -50,6 +58,7 @@ export function mergeDocFields<F extends FieldLike>(docs: ReadonlyMap<OcrDocType
     if (formAddr) {
       const hasForm = formAddr.status !== "missing" && formAddr.value.trim() !== "";
       if (hasForm) p.formValue = formAddr.value;
+      if (hasForm && proof.status !== "confirmed") p.referenceOnly = true; // 住址證明 review：手寫地址只做參考（missing 時按來源規則直接用入職表地址）
       if (formAddr.cross) p.cross = formAddr.cross.result;
       else if (proof.status !== "missing" && proof.value.trim()) p.cross = crossForField("address", formAddr, proof.value, now);
     }
