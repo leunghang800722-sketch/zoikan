@@ -1,0 +1,159 @@
+// TR-1：scripts/staff-import/19-triage-reread.ts 核心——mapping／保守規則（fake FieldResult）＋ --dry 合成 manifest。全部合成、無 PII、唔打 API。
+import { describe, it, expect } from "vitest";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
+import { parseArgs, resolveSourcePage, run, main } from "../scripts/staff-import/19-triage-reread";
+import { ArgError } from "../scripts/staff-import/lib/eval-ocr-core";
+import { proposalsBodySchema } from "@/lib/triage/proposals";
+
+const NOW = new Date("2026-10-16T00:00:00Z");
+const lf = (value: string | null, status: "confirmed" | "review" | "missing") => ({ value, status });
+const person = (over: Partial<PkgPerson> = {}): PkgPerson => ({
+  key: "pk-1",
+  hkid: lf("Z900001(2)", "review"),
+  nameZh: lf("測試乙", "review"),
+  nameEn: lf("TEST ALPHA", "review"),
+  dateOfBirth: lf("1990-01-15", "review"),
+  phone: lf("90001110", "review"),
+  address: lf("舊地址", "review"),
+  staffNumbers: [{ scheme: "DRY", number: "DRY1" }],
+  reasons: [],
+  ...over,
+});
+const fr = (value: string, status: "confirmed" | "review" | "missing" = "confirmed", arbiter?: "agree_a" | "agree_b") => ({ status, value, ...(arbiter ? { arbiter } : {}) });
+const GOOD = {
+  name_zh: { doc: "id_card" as const, result: fr("測試甲"), cross: "match" as const },
+  name_en: { doc: "id_card" as const, result: fr("TEST ALPHA") },
+  hkid: { doc: "id_card" as const, result: fr("Z900001(2)") },
+  dob: { doc: "id_card" as const, result: fr("1990-01-15") },
+  phone: { doc: "onboarding_form" as const, result: fr("9000 1111") },
+  address: { doc: "address_proof" as const, result: fr("新界火炭示範街99號虛構大廈15樓A室") },
+};
+
+describe("proposeFromPicks：保守規則", () => {
+  it("全部 confirmed＋valid → 6 欄建議；值用 canon；confidence 按交叉核對；match 帶身份證／工號", () => {
+    const o = proposeFromPicks(person(), GOOD, NOW);
+    expect(o.skipped).toEqual({});
+    expect(o.proposals.map((p) => [p.field, p.value, p.basis, p.doc, p.confidence])).toEqual([
+      ["nameZh", "測試甲", "two_reads", "id_card", "high"],
+      ["nameEn", "TEST ALPHA", "two_reads", "id_card", "medium"],
+      ["hkid", "Z9000012", "two_reads", "id_card", "medium"],
+      ["dateOfBirth", "1990-01-15", "two_reads", "id_card", "medium"],
+      ["phone", "90001111", "two_reads", "onboarding_form", "medium"],
+      ["address", "新界火炭示範街99號虛構大廈15樓A室", "two_reads", "address_proof", "medium"],
+    ]);
+    expect(o.proposals[0]!.match).toEqual({ hkid: "Z900001(2)", staff_numbers: ["DRY1"] });
+  });
+  it("只對 package 為 review 嘅欄出建議；confirmed／missing 欄唔重讀", () => {
+    const p = person({ nameZh: lf("測試乙", "confirmed"), hkid: lf(null, "missing") });
+    const o = proposeFromPicks(p, GOOD, NOW);
+    expect(o.proposals.map((x) => x.field)).toEqual(["nameEn", "dateOfBirth", "phone", "address"]);
+    expect(needsReread(person({ nameZh: lf("a", "confirmed"), hkid: lf("b", "confirmed"), nameEn: lf("c", "confirmed"), dateOfBirth: lf("d", "confirmed"), phone: lf("e", "confirmed"), address: lf("f", "confirmed") }))).toBe(false);
+    expect(needsReread(person({ nameZh: lf("a", "confirmed"), hkid: lf("b", "review"), nameEn: lf("c", "confirmed"), dateOfBirth: lf("d", "confirmed"), phone: lf("e", "confirmed"), address: lf("f", "confirmed") }))).toBe(true);
+  });
+  it("review／missing／arbiter agree_a／格式錯／來源錯／cross differs／打字名單唔一致 → 唔建議並計原因", () => {
+    const picks = {
+      name_zh: { doc: "id_card" as const, result: fr("測試甲", "review") },
+      name_en: { doc: "id_card" as const, result: fr("TEST ALPHA", "confirmed", "agree_a") },
+      hkid: { doc: "id_card" as const, result: fr("Z900001(3)") }, // check digit 錯
+      dob: { doc: "id_card" as const, result: fr("1990-01-15"), cross: "differs" as const },
+      phone: { doc: "address_proof" as const, result: fr("90001111") }, // 來源錯
+      address: { doc: "onboarding_form" as const, result: fr("新界火炭示範街99號虛構大廈15樓A室") }, // 住址證明冇 → 入職表地址唔收
+    };
+    const o = proposeFromPicks(person(), picks, NOW);
+    expect(o.proposals).toEqual([]);
+    expect(o.skipped).toEqual({ not_confirmed: 1, arbiter_agree_a: 1, invalid_format: 1, cross_differs: 1, wrong_source: 2 });
+    const typed = proposeFromPicks(person({ reasons: ["mismatch_nameZh", "phone_differs_from_list", "nameZh_near_match"] }), GOOD, NOW);
+    expect(typed.skipped).toEqual({ typed_list_disagrees: 2 });
+    expect(typed.proposals.map((x) => x.field)).toEqual(["nameEn", "hkid", "dateOfBirth", "address"]);
+    expect(proposeFromPicks(person(), {}, NOW).skipped).toEqual({ no_read: 6 });
+  });
+  it("arbiter agree_b → basis=arbiter（照收）；日期曆法／電話 8 位／姓名格式把關", () => {
+    const o = proposeFromPicks(person(), { ...GOOD, hkid: { doc: "id_card", result: fr("Z900001(2)", "confirmed", "agree_b") }, dob: { doc: "id_card", result: fr("1990-02-30") }, phone: { doc: "onboarding_form", result: fr("1234567") }, name_zh: { doc: "id_card", result: fr("TEST") } }, NOW);
+    expect(o.proposals.find((x) => x.field === "hkid")!.basis).toBe("arbiter");
+    expect(o.skipped).toEqual({ invalid_format: 3 });
+  });
+});
+
+describe("揀頁／工號索引", () => {
+  const ex = (docId: string, pages: ExtractRow["pages"], address?: { page: number }): ExtractRow => ({ docId, pages, ...(address ? { address } : {}) });
+  it("身份證／住址證明（優先 extract.address.page）／入職表各 1 頁；缺就缺", () => {
+    const m = new Map([
+      ["d1", ex("d1", [{ page: 1, kinds: ["blank"] }, { page: 2, kinds: ["id_card"], primary: "id_card" }, { page: 3, kinds: ["address_proof"] }, { page: 4, kinds: ["address_proof"] }], { page: 4 })],
+      ["d2", ex("d2", [{ page: 1, kinds: ["application_form"], primary: "application_form" }])],
+    ]);
+    expect(pickDocPages(["d1", "d2"], m)).toEqual([
+      { type: "id_card", docId: "d1", page: 2 },
+      { type: "address_proof", docId: "d1", page: 4 },
+      { type: "onboarding_form", docId: "d2", page: 1 },
+    ]);
+    expect(pickDocPages(["d2"], m)).toEqual([{ type: "onboarding_form", docId: "d2", page: 1 }]);
+    expect(pickDocPages(["zzz"], m)).toEqual([]);
+  });
+  it("工號（key 或 staffNos，正規化大小寫／空白）→ docIds，去重", () => {
+    const idx = buildStaffNoIndex([{ key: "u 90001", docIds: ["a"] }, { key: "x", staffNos: ["U90001", "U90002"], docIds: ["b", "a"] }, { key: "none", docIds: [] }]);
+    expect(docIdsForPerson(person({ staffNumbers: [{ number: "U90001" }, { number: "U90002" }] }), idx)).toEqual(["a", "b"]);
+    expect(docIdsForPerson(person({ staffNumbers: [{ number: "U1" }] }), idx)).toEqual([]);
+  });
+});
+
+describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
+  it("run：6 人入 5 人需重讀、1 人冇文件；18 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
+    const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2 }, NOW);
+    expect(r.summary).toMatchObject({ persons_in_package: 6, persons_needing_reread: 5, persons_no_docs: 1, persons_processed: 4, persons_failed: 0, persons_with_proposals: 4, proposals_total: 18 });
+    expect(r.summary.proposals_by_field).toEqual({ nameZh: 3, nameEn: 4, dateOfBirth: 3, phone: 4, address: 4 });
+    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 18 });
+    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 1, typed_list_disagrees: 1, arbiter_agree_a: 1 });
+    expect(r.summary.ocr_calls).toBeGreaterThan(0);
+    expect(proposalsBodySchema.safeParse({ version: 1, summary: r.summary, proposals: r.proposals }).success).toBe(true);
+    const lines = summaryLines(r.summary).join("\n");
+    expect(lines).not.toMatch(/測試|Z90000|9000111|火炭/);
+    // --limit／--only-key
+    const one = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: 1, onlyKey: null, concurrency: 2 }, NOW);
+    expect(one.summary.persons_processed).toBe(1);
+    const key = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: "dry-person-3", concurrency: 2 }, NOW);
+    expect(key.summary).toMatchObject({ persons_processed: 1, proposals_total: 4 });
+  });
+  it("addOutcome／emptySummary 純計數", () => {
+    const s = emptySummary(NOW);
+    addOutcome(s, proposeFromPicks(person(), GOOD, NOW));
+    expect(s).toMatchObject({ persons_with_proposals: 1, proposals_total: 6 });
+  });
+});
+
+describe("參數／路徑", () => {
+  it("parseArgs：預設／錯誤；--out 必須喺 data/ 下", async () => {
+    expect(parseArgs(["--dry", "--limit", "3", "--only-key", "k", "--concurrency", "9"])).toMatchObject({ dry: true, limit: 3, onlyKey: "k", concurrency: 8, docsDir: "data/2026-09/staff-docs" });
+    expect(() => parseArgs(["--limit", "0"])).toThrow(ArgError);
+    expect(() => parseArgs(["--zzz"])).toThrow(ArgError);
+    expect(() => parseArgs(["--out"])).toThrow(ArgError);
+    await expect(main(["--dry", "--out", "/tmp/not-under-data.json"])).rejects.toThrow(ArgError);
+    await expect(main([])).rejects.toThrow(ArgError); // 真跑缺 --out
+  });
+  it("resolveSourcePage：單檔 PDF 用頁碼、單圖頁=1、資料夾多圖按頁揀、含 PDF 又多檔＝null、唔存在＝null", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "tr1-"));
+    try {
+      await writeFile(path.join(dir, "a.pdf"), "x");
+      await writeFile(path.join(dir, "b.jpg"), "x");
+      await mkdir(path.join(dir, "imgs"));
+      await writeFile(path.join(dir, "imgs", "2.jpg"), "x");
+      await writeFile(path.join(dir, "imgs", "1.jpg"), "x");
+      await mkdir(path.join(dir, "mixed"));
+      await writeFile(path.join(dir, "mixed", "1.pdf"), "x");
+      await writeFile(path.join(dir, "mixed", "2.jpg"), "x");
+      await mkdir(path.join(dir, "onepdf"));
+      await writeFile(path.join(dir, "onepdf", "1.pdf"), "x");
+      expect(await resolveSourcePage(dir, "a.pdf", 3)).toEqual({ abs: path.join(dir, "a.pdf"), page: 3 });
+      expect(await resolveSourcePage(dir, "b.jpg", 5)).toEqual({ abs: path.join(dir, "b.jpg"), page: 1 });
+      expect(await resolveSourcePage(dir, "imgs", 2)).toEqual({ abs: path.join(dir, "imgs", "2.jpg"), page: 1 });
+      expect(await resolveSourcePage(dir, "imgs", 3)).toBeNull();
+      expect(await resolveSourcePage(dir, "mixed", 1)).toBeNull();
+      expect(await resolveSourcePage(dir, "onepdf", 2)).toEqual({ abs: path.join(dir, "onepdf", "1.pdf"), page: 2 });
+      expect(await resolveSourcePage(dir, "nope", 1)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

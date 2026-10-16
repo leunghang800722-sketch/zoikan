@@ -55,6 +55,8 @@ interface Question {
   title?: string;
   /** 銀行題而你冇「保安員銀行資料」修改權：內容收埋 */
   restricted?: boolean;
+  /** 已答題嘅答案摘要；source=ocr_reread＝由「OCR 重讀建議」自動答 */
+  answer?: { option: string; source?: "ocr_reread" } | null;
   options: Option[];
   evidence: {
     pii_visible: boolean;
@@ -620,11 +622,13 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               {readOnly && viewing && (
                 <div className="rounded-lg border border-zk-success/30 bg-zk-success-bg p-3 text-zk-base" data-testid="triage-readonly">
                   你答咗：<b>{viewing.label}</b> <Pill variant="success">已送出</Pill>
+                  {viewing.q.answer?.source === "ocr_reread" && <Pill variant="neutral" data-testid="triage-ocr-reread-badge">OCR 重讀自動答</Pill>}
                   <div className="text-zk-xs text-zk-muted">已經寫入，唔可以喺度改；想改答案留待下一輪導入分診。</div>
                 </div>
               )}
               <div className="flex flex-wrap items-center gap-2">
                 <Pill variant="neutral">{shownQ.kind_label}</Pill>
+                {shownQ.answer?.source === "ocr_reread" && <Pill variant="neutral">OCR 重讀自動答</Pill>}
                 {shownQ.evidence.reasons.slice(0, 3).map((r) => (
                   <span key={r} className="text-zk-sm text-zk-muted">
                     {reasonLabel(r)}

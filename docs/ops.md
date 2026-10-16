@@ -249,6 +249,26 @@ OCR-5.6 起，有 `DEEPSEEK_API_KEY` 時另跑 DeepSeek 段（三種文件各 1 
 - **關閉**：Zeabur env 設 `GUARD_OCR_ALS=0`（或 `false`／`off`／`no`）並重啟，完全唔會連 `als.gov.hk`。
 - **評估**：`eval-ocr.ts` 報表多 `als_enabled`／`als_called_docs`／`als_candidate_docs`／`als_failed`／`als_truth_from_candidate`（review_contains_truth 入面真值只來自 ALS 候選嘅欄數）；`--no-als` 唔查 ALS；`--dry` 用 fake ALS（唔打網絡）。
 
+## 舊分流題 OCR 重讀（TR-1，2026-10）
+
+目的：生產 `guard_import` 分流 session 仲有大量 `field_review`／`name_not_confirmed`／`hkid_not_confirmed` 未答；用新 OCR 管線（兩段式＋refs＋仲裁）重讀原文件，**只喺極有把握時**出「建議答案」，老闆確認計數後批量套用，餘下留人手。
+
+流程（全部喺本機＋/triage）：
+1. **本機跑重讀（規劃者，真 API）**：
+```bash
+npx tsx scripts/staff-import/19-triage-reread.ts \
+  --package data/2026-10/staff-import/out/import-package.json \
+  --person-fields data/2026-10/staff-fields/person-fields-ext.json \
+  --extract data/2026-10/staff-import/out/extract.json \
+  --index data/2026-10/staff-import/index.json \
+  --out data/2026-10/triage-reread/proposals.json [--docs-dir data/2026-09/staff-docs] [--limit N] [--only-key K] [--concurrency 2]
+npx tsx scripts/staff-import/19-triage-reread.ts --dry     # fake client＋記憶體內合成 fixture，唔讀 data、唔打 API（執行員／CI 用）
+```
+   `--out` 必須喺 `data/` 之下（gitignored）。console 同 `summary` 只有計數（人數、每欄建議數、唔建議原因計數）；`proposals[]` 含欄位值，**只喺 `data/` 本機檔**。每人揀身份證／住址證明（`extract.address.page`）／入職表各 1 頁，次序同 client 一樣（印刷文件 stage A → refs → 入職表 stage A → 裁圖 → stage B），`mergeDocFields` 按來源規則（身份證／住址證明為準）得最終欄。
+2. **保守規則**（`scripts/staff-import/lib/triage-reread-core.ts`）：只對 package 狀態為 `review` 嘅欄出建議；最終欄 `confirmed`（兩讀一致，或仲裁 `agree_b`；`agree_a` 唔收——仲裁只收讀 A 候選，非獨立證據；`ACCEPT_ARBITER_AGREE_A` 常數）而且格式 valid（HKID 檢查碼、電話 8 位、日期曆法、姓名全中文…）；地址只收住址證明來源；入職表同身份證交叉核對 `differs` → 唔建議；package `reasons` 顯示舊 crosscheck 對打字名單（Maxwell／Uteam／DB）有唔一致（`mismatch_<欄>`／`nameZh_near_match`／`phone_differs_from_list`）→ 唔建議。唔建議原因計數：`no_read`／`not_confirmed`／`wrong_source`／`arbiter_agree_a`／`invalid_format`／`cross_differs`／`typed_list_disagrees`。資料夾型來源（多張圖）只支援「全部圖片」或「單一 PDF」，其餘版面該人當失敗（唔猜頁）。
+3. **上載**：`/triage` → 保安員證件資料導入嗰張卡 →「⋯」→「導入 OCR 重讀建議」→ 揀 `proposals.json` → 自動 **dry run** 顯示計數（建議共幾條／配對幾題／可自動答幾題／各 skipped 原因）→ 確認「確認套用 N 題」。亦可直接 `POST /api/triage/sessions/:id/proposals?dry_run=1`（見 `docs/api.md`）。
+4. **注意**：dry run 係每題獨立預覽，套用時前面幾題寫入可能令後面嘅題（例如同一電話／工號）寫唔到，實際 `applied` 可能少過 dry run；套用中途中斷可直接重跑（已答嘅題自動略過）。`field_review` 只有部分欄有建議會整題略過（留人手，唔會令其餘欄變「已答」）。自動答嘅題 `answerJson.source=ocr_reread`，session 卡顯示「OCR 重讀自動答 N 條」；寫入係「確認」性質（只補空欄／確認包內值，唔覆蓋現有唔同值），無自動撤銷（現有「撤銷補齊」只屬補齊價目卡題，唔適用保安員導入題）；改正要用人手改保安員資料。
+
 ## 更表寫入：audit 同 transaction（G2／G4，2026-10）
 - `POST /api/shift-records/batch`：shift 寫入同 `audit_log` 喺同一個 `$transaction`（`writeAuditMany(…, tx)`，一條 `createMany`，次序／內容同舊版一致；timeout 60s／maxWait 10s 不變）。tx 中途失敗（unique 衝突、鎖月、audit 寫入失敗）→ shift 同 audit 一齊 rollback。
 - `POST /api/shift-records`：撞 unique 而現存行係 `cancelled` 就重用該行（`update`＋audit `update`，`after.reused_cancelled=true`，回 201＋`reused:true`）；現存行唔係 cancelled 仍 409。audit 同寫入同 tx。
