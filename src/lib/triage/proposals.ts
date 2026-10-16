@@ -11,6 +11,7 @@ import { ApiError } from "@/lib/api/errors";
 import { writeAudit } from "@/lib/audit";
 import { canonicalHkid } from "@/lib/guards/identity";
 import { fieldValue } from "@/lib/guards/import/package";
+import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { serverPersonKey } from "@/lib/guards/import/person-key";
 import { normTel8, normZh, parseBirthDate } from "@/lib/guards/import/text";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
@@ -55,11 +56,12 @@ interface ProposalCounts {
   skipped_invalid: number;
   skipped_restricted: number;
   skipped_partial: number;
+  skipped_identity_mismatch: number;
   errors: number;
 }
-const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_partial: 0, errors: 0 });
+const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
 
-type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_partial" | "errors";
+type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
 
 export type QuestionPlan =
   | { type: "none" } // 呢條題同呢個人嘅建議冇關係（唔計 matched）
@@ -155,6 +157,19 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
     qsByKey.set(key, [...hit.values()].sort((a, b) => a.sort - b.sort || a.id.localeCompare(b.id)));
   }
   const restricted = new Set(await restrictedKindsFor(actor));
+  /** N1 顯式身份檢查：有 match＝推導 key 要等於題目 personKey，而且身份證／工號集合要同 evidence.person 一致；冇 match＝person_key 要等於 evidence.person.key（冇 evidence 可對就唔過） */
+  const identityOk = (q: TriageQuestion, key: string): boolean => {
+    const ep = (q.evidenceJson as unknown as QuestionEvidence | null)?.person;
+    if (!ep) return false;
+    const m = matchOf.get(key);
+    if (!m) return ep.key === key;
+    const derived = serverPersonKey({ key, hkid: { value: m.hkid ?? null }, staffNumbers: (m.staff_numbers ?? []).map((number) => ({ number })) });
+    if (derived !== (q.personKey ?? ep.key)) return false;
+    if ((canonicalHkid(m.hkid ?? null) ?? null) !== (canonicalHkid(ep.hkid?.value ?? null) ?? null)) return false;
+    const a = [...new Set((m.staff_numbers ?? []).map(normalizeStaffNumber))].sort().join(",");
+    const b = [...new Set((ep.staffNumbers ?? []).map((n) => normalizeStaffNumber(n.number)))].sort().join(",");
+    return a === b;
+  };
   const caps = await viewerCaps(actor);
 
   for (const [key, fieldMap] of byKey) {
@@ -163,9 +178,14 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
     mark(key, conflicting, "skipped_invalid");
     const props = new Map<ProposalField, string>();
     for (const f of allFields) if (!conflicting.includes(f)) props.set(f, [...fieldMap.get(f)!][0]!);
-    const qs = qsByKey.get(key) ?? [];
-    if (qs.length === 0) {
+    const qsRaw = qsByKey.get(key) ?? [];
+    if (qsRaw.length === 0) {
       mark(key, allFields, "skipped_no_question");
+      continue;
+    }
+    const qs = qsRaw.filter((q) => identityOk(q, key));
+    if (qs.length === 0) {
+      mark(key, allFields, "skipped_identity_mismatch");
       continue;
     }
     const eligible = qs.filter((q) => (PROPOSAL_KINDS as readonly string[]).includes(q.kind));

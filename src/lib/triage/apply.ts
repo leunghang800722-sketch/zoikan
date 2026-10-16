@@ -277,7 +277,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         tableName: "triage_questions",
         rowId: q.id,
         action: "triage_answer",
-        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: true, ...(extra ? { answered_via: extra.source } : {}) },
+        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: !extra, ...(extra ? { answered_via: extra.source } : {}) },
         ip,
       });
       // 同 guard_import_apply summary 一致形狀（月度修正摘要會計入「覆核決定」）
