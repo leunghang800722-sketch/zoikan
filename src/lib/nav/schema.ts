@@ -88,6 +88,7 @@ const EXTRA_KICKERS: Record<string, string> = {
   "/feedback/detail": "設定",
   "/settings/cover-rates": "設定",
   "/settings/cover-rates/infer": "設定",
+  "/whatsapp/intents": "排更",
   "/change-password": "帳號",
   "/notifications": "帳號",
 };

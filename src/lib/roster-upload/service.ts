@@ -26,6 +26,7 @@ import { BadRequest, Conflict } from "@/lib/api/errors";
 import { writeAuditTx } from "@/lib/audit";
 import { parseRosterWorkbook, type ParseResult, type ParsedCellRow } from "./parse";
 import { shiftTypeTimeSlot } from "./time-range";
+import { loadGuardMatchIndex } from "./guard-index";
 import { AMBIGUOUS_SUBSITE_WARNING_PREFIX } from "./reconcile";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import {
@@ -33,7 +34,6 @@ import {
   matchBroker,
   matchShiftType,
   matchGuard,
-  buildGuardMatchIndex,
   resolveRosterUploadSite,
   type SiteCandidate,
   type BrokerCandidate,
@@ -156,13 +156,7 @@ async function matchRowsAndSummarize(
   // 時段完全一樣，例如數碼港 CP5「D」）嗰陣俾 rank_raw 第三層收窄用。
   const shiftTypes: ShiftTypeCandidate[] = shiftTypesRaw.map((s) => ({ id: s.id, siteId: s.siteId, code: s.code, timeSlot: shiftTypeTimeSlot(s.startTime, s.endTime), billingGroup: s.billingGroup }));
 
-  const [guardsRaw, staffNumbersRaw, phonesRaw, matchOverridesRaw] = await Promise.all([
-    tx.guard.findMany({ select: { id: true, nameZh: true, tel: true, staffNo: true, staffNoMw: true, nameAliases: true } }),
-    tx.guardStaffNumber.findMany({ select: { number: true, guardId: true, status: true } }),
-    tx.guardPhone.findMany({ select: { guardId: true, tel: true } }),
-    tx.guardMatchOverride.findMany({ where: { voidedAt: null }, select: { staffNo: true, nameRaw: true, guardId: true } }),
-  ]);
-  const guardIndex = buildGuardMatchIndex({ guards: guardsRaw, staffNumbers: staffNumbersRaw, phones: phonesRaw, matchOverrides: matchOverridesRaw });
+  const guardIndex = await loadGuardMatchIndex(tx);
 
   // ---------------------------------------------------------------------
   // WP-GUARD-FIX 第二輪（老闆 2026-09-25 更正根因）：對數頁大量「未寫子

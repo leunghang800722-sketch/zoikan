@@ -73,6 +73,7 @@ export async function PATCH(req: Request) {
       data.labelLocked = true; // 用戶手動改群名：之後 WAHA 同步唔再覆蓋
     }
     if (body.active !== undefined) data.active = body.active;
+    if (body.filter_threshold !== undefined) data.filterThreshold = body.filter_threshold;
     if (body.shift_word_map !== undefined) data.shiftWordMap = pairsToWordMap(body.shift_word_map);
     const updated = await prisma.$transaction(async (tx) => {
       const u = await tx.whatsappGroup.update({ where: { id: cur.id }, data });

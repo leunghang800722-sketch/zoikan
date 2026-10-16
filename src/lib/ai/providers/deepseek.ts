@@ -136,6 +136,7 @@ export class DeepSeekLlmClient implements LlmClient {
   }
 
   async chat(params: LlmChatParams): Promise<LlmChatResult> {
+    if (params.structured) return this.chatStructured(params, params.structured);
     // Set：同 `AnthropicLlmClient` 一致——一個工具喺多輪之間可能被 call
     // 多次，`toolsUsed` 對上層（audit_log／SSE `done` event）嚟講係
     // 「用過邊啲工具」嘅集合，唔係逐次調用嘅流水帳。
@@ -225,5 +226,28 @@ export class DeepSeekLlmClient implements LlmClient {
     }
 
     return { text: finalText, toolsUsed: [...toolsUsed], inputTokens, outputTokens, provider: "deepseek", model: this.model };
+  }
+
+  /** W1：單次 JSON 輸出（response_format json_object）。不帶工具、不帶歷史；temperature／reasoning_effort／max_tokens 由呼叫方定。 */
+  private async chatStructured(params: LlmChatParams, opts: NonNullable<LlmChatParams["structured"]>): Promise<LlmChatResult> {
+    try {
+      const body = {
+        model: this.model,
+        max_tokens: opts.maxTokens,
+        temperature: opts.temperature ?? 0,
+        response_format: { type: "json_object" as const },
+        ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
+        messages: [
+          { role: "system" as const, content: params.systemPrompt },
+          { role: "user" as const, content: params.userMessage },
+        ],
+      };
+      const response = await this.client.chat.completions.create(body as Parameters<Pick<OpenAI, "chat">["chat"]["completions"]["create"]>[0]);
+      const text = "choices" in response ? (response.choices[0]?.message?.content ?? "") : "";
+      const usage = "usage" in response ? response.usage : undefined;
+      return { text, toolsUsed: [], inputTokens: usage?.prompt_tokens ?? 0, outputTokens: usage?.completion_tokens ?? 0, provider: "deepseek", model: this.model };
+    } catch (err) {
+      throw mapDeepSeekError(err);
+    }
   }
 }

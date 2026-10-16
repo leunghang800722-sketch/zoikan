@@ -175,6 +175,7 @@ async function ingestEdited(ev: NormalizedWaEvent, now: Date): Promise<IngestOut
         editedAt: evTs,
         redactedAt: null,
         pendingEdit: false,
+        parseAttempts: 0,
       },
     });
     // W0 只標記；W1 先做 reject／supersede 同重新解析。
