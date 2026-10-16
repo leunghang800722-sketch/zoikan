@@ -90,7 +90,22 @@ function parseFieldBoxes(text: string, type: OcrDocType): FieldBoxes {
   if (fields.length === 0) return {};
   const raw = extractJson(text);
   if (!raw || typeof raw !== "object") return {};
-  return sanitizeFieldBoxes((raw as Record<string, unknown>).field_boxes, fields);
+  return sanitizeFieldBoxes(unflattenFieldBoxes((raw as Record<string, unknown>).field_boxes, fields), fields);
+}
+
+/** OCR-5.4：攤平格式 `<欄>_x/_y/_w/_h`（Claude schema）→ 巢狀 `{x,y,w,h}`；四個數全 0（或 w／h 為 0）＝冇法定位→null；巢狀格式原樣保留。 */
+export function unflattenFieldBoxes(raw: unknown, fields: readonly OcrFieldKey[]): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const rec = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...rec };
+  for (const f of fields) {
+    if (f in rec) continue;
+    const nums = ["x", "y", "w", "h"].map((c) => rec[`${f}_${c}`]);
+    if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) continue;
+    const [x, y, w, h] = nums as number[];
+    out[f] = w! > 0 && h! > 0 ? { x, y, w, h } : null;
+  }
+  return out;
 }
 
 interface UsageEntry {

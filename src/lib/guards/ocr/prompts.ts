@@ -35,7 +35,7 @@ const GRIDLINE_RULES =
 
 const FIELD_BOXES_FORMAT = (fields: readonly OcrFieldKey[]) =>
   [
-    `- "field_boxes": an object with exactly these keys: ${fields.map((f) => `"${f}"`).join(", ")}. Each is null when the field cannot be located, otherwise {"x","y","w","h"}: the bounding box of the WHOLE field cell on the page, normalised to 0-1 relative to the whole image (x,y = top-left corner; w,h = width,height). The box must enclose the printed label AND the whole area where the content is written or printed, including any handwriting that extends past the cell lines. Do not include neighbouring fields.`,
+    `- "field_boxes": an object with exactly these numeric keys: ${fields.flatMap((f) => ["x", "y", "w", "h"].map((c) => `"${f}_${c}"`)).join(", ")}. For each field they describe the bounding box of the WHOLE field cell on the page, normalised to 0-1 relative to the whole image (x,y = top-left corner; w,h = width,height). The box must enclose the printed label AND the whole area where the content is written or printed, including any handwriting that extends past the cell lines. Do not include neighbouring fields. When a field cannot be located, set all four of its numbers to 0.`,
   ];
 
 export interface PromptOpts {

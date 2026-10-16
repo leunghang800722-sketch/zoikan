@@ -5,7 +5,7 @@ import { prisma, clearAll } from "./lib/db";
 import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
 import { OCR_CROP_FIELDS, PAD_MIN_FRACTION, cropOutSize, padBox, planFieldCrops, sanitizeBox, sanitizeFieldBoxes, type NormBox } from "@/lib/guards/ocr/field-crops";
 import { CONTINUATION_TTL_MS, signContinuation, verifyContinuation, resetContinuationNonces, type ContinuationPayload } from "@/lib/guards/ocr/continuation";
-import { readStageA, readStageB, readDocument } from "@/lib/guards/ocr/read";
+import { readStageA, readStageB, readDocument, unflattenFieldBoxes } from "@/lib/guards/ocr/read";
 import { buildArbiterUserTextCrops, buildSystemPrompt, buildUserTextFieldCrops, buildUserTextFull } from "@/lib/guards/ocr/prompts";
 import { ocrJsonSchema } from "@/lib/guards/ocr/claude-vision-client";
 import { normalizeField, phoneGridlineCandidates } from "@/lib/guards/ocr/normalize";
@@ -318,13 +318,25 @@ describe("readStageA／readStageB", () => {
   it("Claude schema：stage A 加 field_boxes（required、可 null）；電話欄加 digit_count；其他不變", () => {
     const s = ocrJsonSchema(["phone", "address"], ["phone", "address"]);
     expect(s.required).toEqual(["phone", "address", "field_boxes"]);
-    const fb = s.properties.field_boxes as { properties: Record<string, { anyOf: { type: string }[] }>; required: string[] };
-    expect(fb.required).toEqual(["phone", "address"]);
-    expect(fb.properties.phone!.anyOf.map((x) => x.type)).toEqual(["null", "object"]);
+    // OCR-5.4 熱修：box 攤平成 <欄>_x/_y/_w/_h 數字（巢狀 anyOf 會令 Anthropic 文法過大 → 400）
+    const fb = s.properties.field_boxes as { properties: Record<string, { type: string }>; required: string[]; additionalProperties: boolean };
+    expect(fb.required).toEqual(["phone_x", "phone_y", "phone_w", "phone_h", "address_x", "address_y", "address_w", "address_h"]);
+    expect(Object.keys(fb.properties)).toEqual(fb.required);
+    expect(fb.properties.phone_x).toEqual({ type: "number" });
+    expect(fb.additionalProperties).toBe(false);
+    expect(JSON.stringify(s)).not.toContain("anyOf\":[{\"type\":\"null\"},{\"type\":\"object\"");
     const ph = s.properties.phone as { required: string[] };
     expect(ph.required).toEqual(["value", "confidence", "reason", "alternatives", "digit_count"]);
     expect((s.properties.address as { required: string[] }).required).toEqual(["value", "confidence", "reason", "alternatives"]);
     expect(ocrJsonSchema(["hkid"]).required).toEqual(["hkid"]);
+  });
+  it("OCR-5.4：parseFieldBoxes 接受攤平格式（全 0＝null）同巢狀格式", () => {
+    const flat = { phone_x: 0.1, phone_y: 0.2, phone_w: 0.3, phone_h: 0.05, address_x: 0, address_y: 0, address_w: 0, address_h: 0 };
+    expect(unflattenFieldBoxes(flat, ["phone", "address"])).toMatchObject({ phone: { x: 0.1, y: 0.2, w: 0.3, h: 0.05 }, address: null });
+    const nested = { phone: { x: 0.1, y: 0.2, w: 0.3, h: 0.05 }, address: null };
+    expect(unflattenFieldBoxes(nested, ["phone", "address"])).toEqual(nested);
+    expect(unflattenFieldBoxes({ phone_x: "a", phone_y: 1, phone_w: 1, phone_h: 1 }, ["phone"])).toEqual({ phone_x: "a", phone_y: 1, phone_w: 1, phone_h: 1 });
+    expect(unflattenFieldBoxes(null, ["phone"])).toBeNull();
   });
   it("digit_count 解析（模型自報）：整數保留，亂值丟棄", () => {
     expect(fieldReadSchema.parse({ value: "9", digit_count: 8 })).toMatchObject({ digit_count: 8 });

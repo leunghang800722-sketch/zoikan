@@ -21,6 +21,8 @@ export function anthropicClientOptions(apiKey: string, timeoutMs: number) {
  * value＝字串（含 "unclear"）或 null；reason 無則 null；alternatives 最多 2 個由 read.ts 截（structured output 唔支援 maxItems）。
  * 舊純字串格式只會由 DeepSeek／舊 fake 出，read.ts 照樣接受。
  */
+export const BOX_COORDS = ["x", "y", "w", "h"] as const;
+
 export function ocrJsonSchema(fields: readonly string[], boxFields: readonly string[] = []): { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false } {
   const fieldObject = {
     type: "object",
@@ -39,17 +41,14 @@ export function ocrJsonSchema(fields: readonly string[], boxFields: readonly str
     properties: { ...fieldObject.properties, digit_count: { anyOf: [{ type: "integer" }, { type: "null" }] } },
     required: [...fieldObject.required, "digit_count"],
   };
-  // WP-OCR-3：讀 A 回報欄位 box（0–1 正規化）；冇法定位就 null
-  const box = {
-    anyOf: [
-      { type: "null" },
-      { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, w: { type: "number" }, h: { type: "number" } }, required: ["x", "y", "w", "h"], additionalProperties: false },
-    ],
-  };
+  // WP-OCR-3／OCR-5.4 熱修：讀 A 回報欄位 box（0–1 正規化）。原本每欄 anyOf(null|object) 嘅巢狀寫法加埋 5 欄候選結構會令
+  // Anthropic structured output 嘅文法「compiled grammar is too large」（HTTP 400）→ 整份入職表退回 DeepSeek。改為攤平成
+  // `<欄>_x／_y／_w／_h` 四個數字（冇法定位就全部 0；parseFieldBoxes 接受巢狀同攤平兩種）。實測 5 欄＋5 box 可通過。
   const properties: Record<string, unknown> = Object.fromEntries(fields.map((f) => [f, f === "phone" ? phoneObject : fieldObject]));
   const required = [...fields];
   if (boxFields.length > 0) {
-    properties.field_boxes = { type: "object", properties: Object.fromEntries(boxFields.map((f) => [f, box])), required: [...boxFields], additionalProperties: false };
+    const boxKeys = boxFields.flatMap((f) => BOX_COORDS.map((c) => `${f}_${c}`));
+    properties.field_boxes = { type: "object", properties: Object.fromEntries(boxKeys.map((k) => [k, { type: "number" }])), required: boxKeys, additionalProperties: false };
     required.push("field_boxes");
   }
   return { type: "object", properties, required, additionalProperties: false };
