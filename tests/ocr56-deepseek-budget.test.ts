@@ -54,6 +54,7 @@ describe("讀 B 撞頂重試", () => {
     expect(b.calls[1]!.maxTokens).toBe(8000);
     expect(r.parse_ok.b).toBe(true);
     expect(r.b_retry_truncated).toBe(1);
+    expect(r.b_retry_failed).toBe(0);
     expect(r.usage.calls).toBe(2);
     expect(r.usage.completionTokens).toBe(4900);
     expect(r.usage_by_provider.deepseek.calls).toBe(2);
@@ -109,6 +110,8 @@ describe("驗收修正（OCR-5.7）", () => {
     const r = await readStageB({ a: b, b }, "onboarding_form", A, imgs);
     expect(b.calls).toHaveLength(2);
     expect(r.parse_ok.b).toBe(false);
+    expect(r.b_retry_truncated).toBe(0);
+    expect(r.b_retry_failed).toBe(1);
     expect(r.usage.calls).toBe(1);
     expect(r.usage.completionTokens).toBe(4000);
   });
@@ -124,6 +127,8 @@ describe("驗收修正（OCR-5.7）", () => {
     const r = await readStageB({ a, b, arbiter }, "onboarding_form", { a_fields_raw: { phone: { value: "90001111", confidence: "medium", reason: "x", alternatives: [] } } as never, provider: "claude", model: "a", fallback_reason: null }, { kind: "tiles", images: [IMG], full: IMG });
     expect(arb.calls).toHaveLength(2);
     expect(r.arbiter.called).toBe(true);
+    expect(r.b_retry_failed).toBe(1);
+    expect(r.b_retry_truncated).toBe(0);
     expect(r.usage_by_provider.claude.calls).toBe(1);
     expect(r.usage_by_provider.claude.completionTokens).toBe(4000);
   });
