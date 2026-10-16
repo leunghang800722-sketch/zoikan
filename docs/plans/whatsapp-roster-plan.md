@@ -1,6 +1,6 @@
 # WhatsApp 群組 AI 自動報更與請假／替更分流模組 — 實施計劃書（分析階段，未動 code）
 
-> 規劃：Fable 5.1（2026-10-16）。純分析＋計劃，等老闆批核先開工。執行照常規：Sonnet 5.5 執行、Opus 5.5 驗收、gate 不變先 merge／部署。
+> 規劃：Fable 5.1（2026-10-16）。**老闆 2026-10-17 批核**：§8 九個決策點全部照建議方案；另加三個補充（問號規則 §5.1、編輯／撤回 §3.1／§3.3、凌晨跨日 §5.2）。執行照常規：Sonnet 5.5 執行、Opus 5.5 驗收、gate 不變先 merge／部署。
 
 ## 0. 一句總結
 
@@ -39,7 +39,7 @@ WhatsApp 群組 ──► WAHA 容器（被動）──webhook(HMAC)──► PO
 ## 3. 核心問題 1：Webhook 接收、冪等、安全
 
 ### 3.1 路由
-`POST /api/webhooks/whatsapp`（Next route；**唔經 session／RBAC**，獨立保護）。只接受 WAHA 事件 `message`（唔訂 `message.any`／`message.ack`／`presence`）。
+`POST /api/webhooks/whatsapp`（Next route；**唔經 session／RBAC**，獨立保護）。接受 WAHA 事件 `message`、**`message.edited`**（WAHA ≥2024.x 支援編輯事件，payload 帶原 `id`＋新 `body`）同 **`message.revoked`**（撤回；payload 帶被撤回嘅原 `id`）；唔訂 `message.any`／`message.ack`／`presence`。
 
 ### 3.2 來源驗證（三重）
 1. **HMAC**：WAHA 內置 `WHATSAPP_HOOK_HMAC_KEY` → 每個 webhook 帶 `X-Webhook-Hmac`（sha512，對 raw body）＋`X-Webhook-Hmac-Algorithm`。系統用 `crypto.createHmac("sha512", WA_WEBHOOK_HMAC_KEY)` 對 **raw body bytes**（唔係 re-serialize 嘅 JSON）計算，`timingSafeEqual` 比對；key 只放 Zeabur env，唔入 git。
@@ -47,7 +47,8 @@ WhatsApp 群組 ──► WAHA 容器（被動）──webhook(HMAC)──► PO
 3. **私網**：WAHA 同 Next 同一 Zeabur 專案，hook URL 用內部服務名（`http://zoikan:8080/...`）；外網路徑 `/api/webhooks/*` 由 middleware 擋（只接受帶內部 header 嘅請求；如 Zeabur 唔支援私網就用 IP allowlist＋HMAC）。
 
 ### 3.3 冪等／防重覆
-- `whatsapp_messages.message_id` **unique**（WAHA `payload.id`），另 `(session, chat_jid, message_id)` 索引。處理順序：先驗簽 → `INSERT … ON CONFLICT DO NOTHING` → 200。重覆投遞（WAHA 重試、網絡抖動）＝no-op 200。
+- `whatsapp_messages.message_id` **unique**（WAHA `payload.id`），另 `(session, chat_jid, message_id)` 索引。處理順序：先驗簽 → `INSERT … ON CONFLICT DO NOTHING` → 200。重覆投遞（WAHA 重試、網絡抖動）＝no-op 200——**只限同一事件類型嘅重覆**。
+- **編輯／撤回（老闆 2026-10-17 補充）**：編輯後 `message_id` 不變，所以 `message.edited` 唔可以被 ON CONFLICT 吞走。做法：`whatsapp_messages` 加 `revision`（int，初始 1）、`edited_at`、`revoked_at`、`text_history[]`（舊文字，受保留期）；收到 `message.edited` → 同一 `message_id` 行 `revision+1`、`text` 更新、`status` 重設為 `received`（重新過濾／解析）；`message.revoked` → `revoked_at` 設定、`status=revoked`。對原訊息已產生嘅 `whatsapp_intents`：(a) 仍係 `pending_approval` 嘅更／請假 → 自動 reject（audit `reason=source_message_edited|revoked`）並由新 revision 重新產生；(b) Triage 題未答 → 標 `superseded`（現有狀態）並由新 revision 重出新題（撤回則只 supersede、唔重出）；(c) 已批核／已答 → **唔自動改**，只喺排更格／題卡顯示「⚠ 原訊息已被發訊人修改／撤回」（`whatsapp_intents.source_changed=true`），留人手判斷。冪等：`(message_id, revision)` 唯一；編輯事件嘅 revision 由 server 遞增，唔信 payload。
 - 事件時間窗：`timestamp` 早過 72 小時或喺未來 10 分鐘以外 → 落庫但標 `ignored:stale`（防重放）。
 - body 上限 64 KB；非 JSON／schema 唔啱 → 400（唔記 body）。
 - `fromMe=true`（公司號碼自己發）→ 忽略；非群組（`@g.us` 以外）→ 落庫標 `ignored:not_group`（唔處理私訊，私隱）。
@@ -88,7 +89,8 @@ UI：「WhatsApp 報更」頁 → 群組列表（WAHA `GET /api/{session}/groups
 - 群組 `kind=ignored` 或未綁定 → ignore（但落庫，俾文員喺 UI 見到「未綁定群組有訊息」）。
 - 文字長度 <2 或純 emoji／貼圖／媒體 → ignore。
 - 關鍵詞命中加分：日期 token（`聽日|今日|後日|大後日|星期[一二三四五六日]|\d{1,2}[/／月]\d{1,2}|\d{1,2}號`）、請假（`病假|SL|AL|年假|放假|唔返|返唔到|請假|告假`）、更（`早|中|夜|通宵|A更|B更|N更|C更|返工|開工|OT|加班|頂|替|換更|補更`）、盤口 alias 命中、發訊人係已知保安員／判頭。
-- 減分：問句（`？|?|幾時|邊個`）、謝謝／收到／OK 類、轉發長文、連結。
+- 減分：謝謝／收到／OK 類、轉發長文、連結。
+- **問號規則（老闆 2026-10-17 補充）**：帶問號嘅訊息**唔可以**淨因為「？／?／邊個」減分——「我聽日18號病假返唔到，有冇人頂？」「聽日陳大文返早得唔得？」係真實請假／報更。規則：訊息同時命中日期 token＋（更別詞或請假詞）即視為「帶問句嘅指令」，問號不減分、照交 AI；只有**純疑問句**（冇日期＋更別／請假組合，例如「幾點返？」「邊個返聽日？」）先減分。AI schema 嘅 `intent.type` 另加 `question_only` 俾模型標示純查詢，code 對 `question_only` 唔自動寫、落 `wa_unparsed`（忽略）。
 - 回覆（quoted）訊息：帶上被回覆嘅文字做上下文（只限同群 24 小時內）。
 - 所有規則可喺 `whatsapp_groups` 層面微調閾值；UI 顯示「被過濾」訊息俾人抽查，調校誤殺。
 
@@ -110,6 +112,7 @@ UI：「WhatsApp 報更」頁 → 群組列表（WAHA `GET /api/{session}/groups
 ```
 - Prompt 策略：system prompt 列明「只抽取，唔推斷未出現嘅內容；相對日期只回 raw＋以訊息時間（HK）推算嘅 iso_guess，最終由程式決定；一句可以多條指令；替更＝兩條（replaced 嘅人 cancel／leave ＋ worker 嘅 shift）」；few-shot 用**合成**例子（測試甲／乙、假日期）；`temperature 0`、`reasoning_effort low`、輸出上限 2,000（吸收 OCR-5.6 教訓：思考 token 計入上限，要真 API 實測）；DeepSeek 失敗退回 Claude（`LlmClient` 已支援）。
 - 日期最終解析喺 code：`src/lib/whatsapp/dates.ts`（HK 時區、以訊息 `ts` 為「今日」；「聽日 17 號」同時有相對＋絕對 → 兩者一致先採用，否則 `wa_date_ambiguous`；「下星期一」＝下一個星期一；range「17–19 號」展開逐日）。
+- **凌晨跨日歧義（老闆 2026-10-17 補充）**：訊息香港時間 **00:00–05:00** 發出、而且日期詞係「今日／今晚／而家／今個更」呢類相對當日詞（冇絕對日期）→ 一律 `wa_date_ambiguous` 交 Triage（題目預填兩個候選：訊息當日、前一日嘅夜更），**唔自動寫入**；「聽日」喺凌晨同樣降級（夜更保安凌晨講「聽日」可能指今日）。有絕對日期（「18 號」）或日期＋星期一致就照常。
 
 ### 5.3 人嘅配對（code，唔靠 AI 認人；`src/lib/whatsapp/resolve.ts`）
 重用 `GuardMatchIndex`（`service.ts` 起 index 嘅做法）：
