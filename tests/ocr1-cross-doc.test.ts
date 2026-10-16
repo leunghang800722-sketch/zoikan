@@ -254,33 +254,30 @@ describe("OCR_MAX_FIELD_CROPS＝6（tiles 上限 4 不變）", () => {
   });
 });
 
-// ---------- UI ack 規則 ----------
-describe("review-state：交叉核對 ack 規則（additive）", () => {
-  it("differs：關鍵欄打字／改值都唔自動算確認；冇 cross 行為同舊版一樣", () => {
-    expect(ackAfterEdit("hkid", "missing", "Z900001(2)", "differs")).toBe(false);
-    expect(ackAfterEdit("hkid", "missing", "Z900001(2)")).toBe(true); // 舊行為
-    expect(ackAfterEdit("hkid", "confirmed", "Z900001(2)", "differs")).toBe(false);
-    expect(ackAfterEdit("hkid", "confirmed", "Z900001(2)", "match")).toBe(false); // 關鍵欄本來就要重新撳確認
-    expect(ackAfterEdit("phone", "confirmed", "90001111", "differs")).toBe(true); // 非關鍵欄不受影響
+// ---------- UI ack 規則（OCR-1.3：differs 唔加鎖） ----------
+describe("review-state：交叉核對 differs 唔係阻塞警示（OCR-1.3 老闆指示）", () => {
+  it("ackAfterEdit／initialAck 同 OCR-1 之前一樣（關鍵欄一律要撳『對過證件』；唔因 differs 額外加鎖）", () => {
+    expect(ackAfterEdit("hkid", "missing", "Z900001(2)")).toBe(true);
+    expect(ackAfterEdit("hkid", "confirmed", "Z900001(2)")).toBe(false);
+    expect(ackAfterEdit("phone", "confirmed", "90001111")).toBe(true);
     expect(initialAck("hkid", "confirmed")).toBe(false);
   });
-  it("reviewProblems：differs 未確認 → 專屬訊息；確認後清走", () => {
-    const base = (cross: ReviewField["cross"], ack: boolean): Record<string, ReviewField> => ({
+  it("reviewProblems：關鍵欄未確認＝同舊訊息；確認後清走（冇 cross 專屬訊息）", () => {
+    const base = (ack: boolean): Record<string, ReviewField> => ({
       name_zh: { value: "測試甲", ack: true },
       name_en: { value: "", ack: true },
-      hkid: { value: "Z900001(2)", ack, ...(cross ? { cross } : {}) },
+      hkid: { value: "Z900001(2)", ack },
       dob: { value: "1990-01-15", ack: true },
       sex: { value: "M", ack: true },
       phone: { value: "90001111", ack: true },
       address: { value: "示範街99號虛構大廈15樓", ack: true },
     });
-    expect(reviewProblems(base("differs", false) as never, {})).toEqual(["身份證號同入職表手寫唔一致，要對過證件確認"]);
-    expect(reviewProblems(base("match", false) as never, {})).toEqual(["身份證號要對過證件確認"]);
-    expect(reviewProblems(base("differs", true) as never, {})).toEqual([]);
+    expect(reviewProblems(base(false) as never, {})).toEqual(["身份證號要對過證件確認"]);
+    expect(reviewProblems(base(true) as never, {})).toEqual([]);
   });
-  it("文字：match ✓／differs ⚠／unreadable 手寫讀唔到", () => {
+  it("文字：differs 係中度提示『已以證件為準』（無 ⚠、無要求確認）", () => {
     expect(CROSS_MSG.match).toContain("✓");
-    expect(CROSS_MSG.differs).toContain("⚠");
+    expect(CROSS_MSG.differs).toBe("入職表手寫同證件唔同，已以證件為準");
     expect(CROSS_MSG.unreadable).toContain("手寫讀唔到");
   });
 });

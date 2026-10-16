@@ -13,11 +13,12 @@ import { apiPost } from "@/lib/ui/api-client";
 import { TriageDialog, reasonLabel } from "@/components/TriageDialog";
 import { canvasFromImageFile, cropFieldsFromCanvas, isPdfFile, openPdf, prepareFromCanvas, type PdfHandle, type PreparedImage } from "@/lib/guards/ocr/browser-images";
 import { hasCropFields } from "@/lib/guards/ocr/field-crops";
+import { mergeDocFields } from "@/lib/guards/ocr/merge-docs";
 import { readTwoStage } from "@/lib/guards/ocr/two-stage";
 import { normalizeField } from "@/lib/guards/ocr/normalize";
-import { CRITICAL_MSG, CROSS_MSG, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
+import { CRITICAL_MSG, CROSS_MSG, CROSS_MSG_ADDRESS, FIELD_LABEL, candidateChips, REQUIRED_FIELDS, ackAfterEdit, criticalPending, fieldError as fieldErrorOf, groupHkid, applySummaryText, initialAck, isCritical, reviewProblems } from "@/lib/guards/ocr/review-state";
 import type { CrossResult, FieldStatus } from "@/lib/guards/ocr/normalize";
-import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from "@/lib/guards/ocr/config";
+import type { OcrDocType, OcrFieldKey } from "@/lib/guards/ocr/config";
 import { kickerFor } from "@/lib/nav/schema";
 import { tableCls } from "@/components/ui/DataTable";
 
@@ -253,29 +254,15 @@ export function NewFromDocsClient() {
     }
     const byType = new Map(res.data.documents.map((d) => [d.type, d]));
     const next = blankForm();
-    const put = (k: OcrFieldKey, d: OcrDocResult | undefined) => {
-      const r = d?.fields[k];
-      if (!r) return false;
-      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, ...alsInfo(r.candidates_ranked), reason: r.reason, ack: initialAck(k, r.status), edited: false, from: d!.type, ...(r.cross && d!.type === "id_card" ? { cross: r.cross.result } : {}) };
-      return true;
-    };
-    for (const k of OCR_DOC_FIELDS.id_card) put(k, byType.get("id_card"));
-    put("phone", byType.get("onboarding_form"));
-    // WP-OCR-1：入職表手寫姓名／身份證號／出生日期只作唯讀顯示（交叉核對），唔覆蓋身份證值；讀到先顯示
-    for (const k of ["name_zh", "hkid", "dob"] as const) {
-      const hv = byType.get("onboarding_form")?.fields[k];
-      if (hv && hv.status !== "missing" && hv.value.trim() && next[k].cross !== undefined) next[k] = { ...next[k], formValue: hv.value };
+    // WP-OCR-1.3：來源優先（身份證／住址證明值為準，入職表手寫只做交叉核對）——合併邏輯喺純函數 mergeDocFields
+    const { picks, addrFrom: addrSrc } = mergeDocFields(byType);
+    for (const k of FIELD_ORDER) {
+      const p = picks[k];
+      if (!p) continue;
+      const r = p.result;
+      next[k] = { value: r.value, ocrStatus: r.status, ocrValue: r.value, candidates: r.candidates_ranked?.length ? r.candidates_ranked.map((c) => c.value) : r.candidates, ...alsInfo(r.candidates_ranked), reason: r.reason, ack: initialAck(k, r.status), edited: false, from: p.doc, ...(p.cross ? { cross: p.cross } : {}), ...(p.formValue ? { formValue: p.formValue } : {}) };
     }
-    // 地址：住址證明優先；冇上載或者讀唔到先用入職表
-    const proof = byType.get("address_proof")?.fields.address;
-    const formAddr = byType.get("onboarding_form")?.fields.address;
-    if (proof && (proof.status !== "missing" || !formAddr || formAddr.status === "missing")) {
-      put("address", byType.get("address_proof"));
-      setAddrFrom("address_proof");
-    } else if (formAddr) {
-      put("address", byType.get("onboarding_form"));
-      setAddrFrom("onboarding_form");
-    }
+    if (addrSrc) setAddrFrom(addrSrc);
     if (prefill.name && !next.name_zh.value.trim()) next.name_zh = prefilledNameField(prefill.name);
     setForm(next);
     setFormBKind(res.data.documents.find((d) => d.type === "onboarding_form")?.images_b_kind ?? null);
@@ -298,7 +285,7 @@ export function NewFromDocsClient() {
   function setField(k: OcrFieldKey, v: string) {
     setForm((s) => {
       const f = s[k];
-      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v, f.cross) } };
+      return { ...s, [k]: { ...f, value: v, edited: v !== f.ocrValue, ack: ackAfterEdit(k, f.ocrStatus, v) } };
     });
   }
   const ackField = (k: OcrFieldKey, empty = false) => setForm((s) => ({ ...s, [k]: { ...s[k], ack: true, ...(empty ? { value: "", edited: s[k].ocrValue !== "" } : {}) } }));
@@ -565,12 +552,12 @@ export function NewFromDocsClient() {
                     )}
                     {f.cross && (
                       <div
-                        className={`break-words text-zk-sm ${f.cross === "differs" ? "font-semibold text-zk-danger" : f.cross === "match" ? "text-zk-success" : "text-zk-muted"}`}
+                        className={`break-words text-zk-sm ${f.cross === "differs" ? "text-zk-warning" : f.cross === "match" ? "text-zk-success" : "text-zk-muted"}`}
                         data-testid={`ocr-cross-${k}`}
                         data-result={f.cross}
                       >
                         {f.formValue && <span data-testid={`ocr-form-value-${k}`}>入職表手寫（唯讀）：{f.formValue}　</span>}
-                        {CROSS_MSG[f.cross]}
+                        {(k === "address" ? CROSS_MSG_ADDRESS : CROSS_MSG)[f.cross]}
                       </div>
                     )}
                     {reasonMsg && <div className="text-zk-sm text-zk-warning">{reasonMsg}</div>}
@@ -579,7 +566,7 @@ export function NewFromDocsClient() {
                       <div className="flex flex-wrap items-center gap-2">
                         {f.value.trim() ? (
                           <Button variant="primary" disabled={!!err} onClick={() => ackField(k)} data-testid={`ocr-ack-${k}`}>
-                            {crit ? (f.cross === "differs" ? "對過證件，以證件為準" : "對過證件，啱") : "對住圖確認"}
+                            {crit ? "對過證件，啱" : "對住圖確認"}
                           </Button>
                         ) : !REQUIRED.includes(k) ? (
                           <Button onClick={() => ackField(k, true)}>呢項冇資料／略過</Button>

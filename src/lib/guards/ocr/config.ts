@@ -23,6 +23,8 @@ export const OCR_REFS_FIELDS = ["name_zh", "name_en", "hkid", "dob", "sex", "add
 export type OcrRefsField = (typeof OCR_REFS_FIELDS)[number];
 /** 入職表同身份證交叉核對嘅欄位。 */
 export const OCR_CROSS_FIELDS = ["name_zh", "hkid", "dob"] as const satisfies readonly OcrFieldKey[];
+/** WP-OCR-1.3：入職表手寫值做交叉核對嘅欄位＝上面三欄＋地址（對住址證明）。 */
+export const OCR_CROSS_CHECK_FIELDS = [...OCR_CROSS_FIELDS, "address"] as const satisfies readonly OcrFieldKey[];
 /** refs_token 字元上限。 */
 export const OCR_MAX_REFS_CHARS = 8_000;
 /** refs 單欄值字元上限（消毒時截斷）。 */

@@ -2320,6 +2320,10 @@ _opentest.xlsx`）：四個 sheet 名 PASS、`Summary!B38`＝84.85 讀返啱，
   - **配額**：有效 `refs_token` 令「只含入職表」嘅 stage a 免再預留（credit 單次使用，process 內記 nonce）；同一流程仍只計 1 次。token 無效／已用過就照常預留。
   - **audit `guard_ocr_read`（淨計數，冇值、冇 token）**：stage a 加 `refs_issued`（0|1）、`refs_injected_docs`、`refs_rejected`；stage b 加 `refs_rejected` 同 `cross:{match,differs,unreadable}`。
   - **評估腳本**：`eval-ocr.ts` two-stage 同 client 一樣次序（印刷→refs→入職表）；報表加 `refs_enabled`、`refs_injected_docs`、`cross{match,differs,unreadable}`；`--no-refs` 關閉注入（亦就冇 cross）。
+- **WP-OCR-1.3 來源優先規則（老闆指示；additive）**：身份證號碼、出生日期、中英文姓名**一律以身份證為準**；住址**一律以住址證明為準**（冇住址證明／讀唔到先用入職表手寫地址）；電話只有入職表。入職表手寫值只做交叉核對——「唔一致」唔係阻塞警示，最終紀錄直接採用證件／住址證明值，UI 只顯示中度（warning）提示「入職表手寫同證件唔同，已以證件為準」，唔改值、唔額外要求確認（關鍵欄本身「對過證件」ack 規則維持原樣）。
+  - **每欄新增 `source_of_truth: "id_card"|"address_proof"|"onboarding_form"`**（`FieldResult`，所有回應 additive）：身份證文件各欄＝`id_card`；住址證明地址＝`address_proof`；入職表 `name_zh`／`hkid`／`dob`＝`id_card`（手寫值只做 cross）、`phone`＝`onboarding_form`、`address`＝`address_proof`（refs 有住址證明 confirmed 地址，或舊單次流程同一請求有住址證明地址）否則 `onboarding_form`。伺服器標示係 best-effort：住址證明只係 review 值時伺服器唔入 refs，入職表地址仍標 `onboarding_form`，最終採用邊份由 client `mergeDocFields` 按住址證明有冇值（confirmed 或 review）決定——住址證明有值就用佢。
+  - **地址 cross**：`refs.address`（住址證明 confirmed）有值時，stage b 入職表 `address` 欄加 `cross:{against:"address_proof", result}`（canon 比較，規則同其他欄：入職表地址須 confirmed 且非仲裁 `agree_a` 先比，否則 `unreadable`）；`id_cross` 仍只有 `name_zh`／`hkid`／`dob`。住址證明係 review 時伺服器冇 cross，client 用同一純函數 `crossForField` 補算。
+  - **合併邏輯**：`src/lib/guards/ocr/merge-docs.ts` `mergeDocFields`（純函數）係唯一決定每個表單欄採用邊份文件值嘅地方；入職表手寫值只入 `formValue`（唯讀顯示）＋`cross`，冇任何路徑覆蓋證件／住址證明值（`tests/ocr13-source-of-truth.test.ts` 證明）。
 - **WP-OCR-5 評估腳本**：`scripts/staff-import/eval-ocr.ts`（本機跑，用法見 `docs/ops.md`「OCR 準確度評估」）。圖片規格（1,600px 全圖、2×2 放大格 0.6／1,000px、JPEG 質素梯級）抽到 `src/lib/guards/ocr/image-plan.ts`，瀏覽器 `browser-images.ts` 同 Node 腳本共用。
   - 供應商超時／401／429／5xx／網絡（退回後仍失敗）→ **503** `{error:"ocr_unavailable", message}`（介面改為全部自己輸入）。
   - 每日上限：非老闆 100 次（`NON_BOSS_MAX_OCR_READS_PER_DAY`，只數 `guard_quota_reserve` 預留行〔kind=ocr〕，失敗／超時唔退還）→ 429；攞唔到連線 → 429「上一個請求未完成」。老闆唔受限、唔寫預留行。
