@@ -110,6 +110,12 @@ describe("第三讀仲裁：觸發條件", () => {
     const r2 = await readDocument(vr.clients, "onboarding_form", IMGS);
     expect(r2.fields.address).toMatchObject({ status: "review", reason: "address_variant_chars", arbiter: "agree_a" });
     expect(r2.fields.address!.value).toBe(B);
+    expect(r2.fields.address!.candidates.slice(0, 2)).toEqual([B, A]);
+    // OCR-4.6：invalid（過短）alternative 唔可以跳到有效候選前面；預填不變
+    const inv = trio({ a: { address: obj(A, "medium", { alternatives: ["短址"] }) }, b: { address: obj(B, "medium") }, arbiter: { address: obj(A, "medium") } });
+    const r3 = await readDocument(inv.clients, "onboarding_form", IMGS);
+    expect(r3.fields.address).toMatchObject({ status: "review", arbiter: "agree_a", value: B });
+    expect(r3.fields.address!.candidates).toEqual([B, A, "短址"]);
   });
   it("OCR-4.4：地址 strict 完全一致 → 唔觸發", async () => {
     const t = trio({ a: { address: obj("新界火炭示範街99號虛構大廈15樓A室", "low") }, b: { address: obj("新界火炭示範街99號虛構大廈15樓A室", "medium") }, arbiter: {} });
