@@ -141,8 +141,9 @@ describe("W0 webhook", () => {
     expect(row).toMatchObject({ status: "ignored", ignoreReason: "not_group", text: "", senderTelNorm: null, senderGuardId: null });
     expect(row.messageId.startsWith("private:")).toBe(true);
     expect(row.chatJid.startsWith("private:")).toBe(true);
-    // 整行（所有欄）冇任何 8 位數字、冇 @c.us、冇電話
-    const dump = JSON.stringify(row);
+    // 整行（所有欄）冇任何 8 位數字、冇 @c.us、冇電話——剔走隨機 uuid id 同時間戳（uuid 本身約 8% 機會含 8 位連續數字，唔係 PII）
+    const { id: _id, createdAt: _c, updatedAt: _u, ...rowNoRandom } = row;
+    const dump = JSON.stringify(rowNoRandom);
     expect(dump).not.toMatch(/\d{8}/);
     expect(dump).not.toContain("@c.us");
     expect(dump).not.toContain("85290000002");
