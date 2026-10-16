@@ -1348,3 +1348,9 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **N5**：英文 q 門牌放街名前（`999 TEST ROAD`），中文維持「街名 ＋ 999號」。
 - **N1**：`eval-ocr-core.ts` `--no-als` 註解改正（live／dry 一樣剔走 clients.als，唔設 GUARD_OCR_ALS）。
 - 測試：`tests/ocr2-hk-address.test.ts` 更新 S1 斷言並加 S1（村／邨、沙／砂、厦／廈、表外名稱、仲裁形近字）、S2、N2／N6（廿卅＋8 種單位寫法）、N3（prompt 另列、無加權）、N5；`tests/ocr5-eval.test.ts` dry 數字更新。
+
+### 27.5 OCR-1.3：來源優先規則（老闆指示，branch `ocr13-source-of-truth`，起點 main `c54fc2e`）
+- **規則**：身份證號碼、出生日期、中英文姓名一律以身份證副本為準；住址一律以住址證明為準（冇住址證明／讀唔到先用入職表手寫地址）。入職表手寫值只做交叉核對；「唔一致」唔係人手判斷嘅阻塞警示——最終紀錄直接採用證件／住址證明值，差異只顯示 warning 級提示。
+- **改動**：①`review-state.ts`：移除 OCR-1.2 前加嘅 `differs` 專屬 ack 規則（`ackAfterEdit` 回復三參數、`reviewProblems` 唔再有 cross 訊息）——關鍵欄「對過證件，啱」規則維持原本（一致／冇手寫值都要）；`CROSS_MSG.differs`＝「入職表手寫同證件唔同，已以證件為準」，新 `CROSS_MSG_ADDRESS`。UI 提示改 warning 色、ack 掣文字不變。②地址：新 `merge-docs.ts` `mergeDocFields`（純函數，client 唯一合併點）：住址證明有 confirmed 或 review 值就用佢，入職表地址只做 cross＋唯讀顯示；`refs.ts` `crossForField`／`crossForOnboarding` 加地址 cross（`against:"address_proof"`），住址證明 review 時 client 用同一函數補算；`OCR_CROSS_CHECK_FIELDS`（`OCR_CROSS_FIELDS` 保持三欄，eval 嘅 `cross_fields` 統計範圍不變）。③`FieldResult.source_of_truth`（additive，`tagSourceOfTruth` 就地標示，唔改值），stage a final、stage b、舊單次流程回應都有。④docs/api.md、docs/ops.md 已寫明。
+- **證明冇覆蓋路徑**（`tests/ocr13-source-of-truth.test.ts`）：身份證 confirmed 值＋入職表 differs → `mergeDocFields` 採用身份證值（手寫值只入 `formValue`）；身份證 missing 亦唔借用手寫值；proof 地址＋form 地址 differs → 最終用 proof（server cross／client 補算兩條路）；冇住址證明或讀唔到先用入職表地址；route 回應值唔變、`source_of_truth`／cross 正確。
+- **保守取捨**：`source_of_truth` 伺服器標示 best-effort（住址證明只有 review 值時入職表地址仍標 `onboarding_form`，最終以 client `mergeDocFields` 為準，已喺 API 文件寫明）；地址 cross 只喺入職表地址 confirmed（非仲裁 agree_a）先比，否則 `unreadable`；OCR-1.2 嘅 e2e／unit 斷言（⚠、『以證件為準』ack 掣、differs 專屬訊息）已按新規則改寫。

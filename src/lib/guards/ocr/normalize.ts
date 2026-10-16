@@ -151,7 +151,7 @@ export function normalizeField(key: OcrFieldKey, raw: string, now: Date = new Da
 export type CrossResult = "match" | "differs" | "unreadable";
 export interface CrossInfo {
   /** 對照嘅係邊份文件（身份證欄：onboarding_form；入職表欄：id_card） */
-  against: "id_card" | "onboarding_form";
+  against: "id_card" | "onboarding_form" | "address_proof";
   result: CrossResult;
 }
 
@@ -181,4 +181,7 @@ export interface FieldResult {
   arbiter?: "agree_a" | "agree_b" | "independent" | "unclear";
   /** WP-OCR-1（additive）：同另一份文件嘅交叉核對（只有兩段式下伺服器有 refs 先有） */
   cross?: CrossInfo;
+  /** WP-OCR-1.3（additive）：呢一欄最終紀錄採用邊份文件嘅值（身份證號／出生日期／中英文姓名＝id_card；住址＝address_proof，冇住址證明先 onboarding_form；電話＝onboarding_form）。入職表手寫值只做交叉核對。 */
+  source_of_truth?: SourceOfTruth;
 }
+export type SourceOfTruth = "id_card" | "address_proof" | "onboarding_form";
