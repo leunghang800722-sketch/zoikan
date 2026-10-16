@@ -10,6 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { OCR_DOC_TYPES, type OcrDocType } from '@/lib/guards/ocr/config';
+import { DeepSeekVisionClient } from '@/lib/guards/ocr/vision-client';
 import { ClaudeVisionClient } from '@/lib/guards/ocr/claude-vision-client';
 import { readStageA } from '@/lib/guards/ocr/read';
 import { prepareDocumentImages } from './lib/eval-ocr-images';
@@ -51,9 +52,11 @@ async function main(): Promise<void> {
     console.error('[ocr-schema-smoke] 冇 CLAUDE_API_KEY（.env 或 DOTENV_CONFIG_PATH）');
     process.exit(2);
   }
+  const wantDeepseek = !!process.env.DEEPSEEK_API_KEY;
   const dir = await mkdtemp(path.join(os.tmpdir(), 'ocr-smoke-'));
   const client = new ClaudeVisionClient();
   let failed = 0;
+  let total = 3;
   try {
     for (const type of OCR_DOC_TYPES) {
       try {
@@ -69,10 +72,35 @@ async function main(): Promise<void> {
         console.log(`[ocr-schema-smoke] ${type}: FAIL｜status ${x.status ?? '-'}｜reason ${x.reason ?? '-'}｜type ${x.errorType ?? '-'}｜${(x.errorMessage ?? (e as Error).message ?? '').slice(0, 300)}`);
       }
     }
+    // OCR-5.6：DeepSeek 段落——json_object＋reasoning_effort（預設 low，或 GUARD_OCR_DEEPSEEK_REASONING）要相容、content 非空。
+    // 三種文件各一次；入職表另用 5 張裁圖情境（同一合成圖重複 5 次，模擬讀 B 最大輸出）。
+    if (wantDeepseek) {
+      const ds = new DeepSeekVisionClient();
+      for (const type of OCR_DOC_TYPES) {
+        try {
+          const doc = await prepareDocumentImages(await synth(dir, type));
+          const images = type === 'onboarding_form' ? [doc.full, doc.full, doc.full, doc.full, doc.full] : [doc.full];
+          const r = await ds.complete({ system: 'Read the form. Reply with a JSON object only: {"name":{"value":"","confidence":"high|medium|low"},"phone":{"value":"","confidence":"high|medium|low"},"address":{"value":"","confidence":"high|medium|low"}}', userText: `Extract the fields from ${images.length} image(s).`, images });
+          let json = false;
+          try { JSON.parse(r.text); json = true; } catch { /* 唔係 JSON */ }
+          const ok = r.text.length > 0 && json && !r.truncated;
+          if (!ok) failed++;
+          total++;
+          console.log(`[ocr-schema-smoke] deepseek ${type}(${images.length} img): ${ok ? 'OK 200' : 'FAIL'}｜content_len ${r.text.length}｜json ${json}｜truncated ${!!r.truncated}｜tokens in ${r.promptTokens} / out ${r.completionTokens}`);
+        } catch (e) {
+          failed++;
+          total++;
+          const x = e as { status?: number | null };
+          console.log(`[ocr-schema-smoke] deepseek ${type}: FAIL｜status ${x.status ?? '-'}`);
+        }
+      }
+    } else {
+      console.log('[ocr-schema-smoke] 冇 DEEPSEEK_API_KEY：略過 DeepSeek 段落');
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-  console.log(`[ocr-schema-smoke] ${failed === 0 ? '全部通過（3/3）' : `失敗 ${failed}/3`}`);
+  console.log(`[ocr-schema-smoke] ${failed === 0 ? `全部通過（${total}/${total}）` : `失敗 ${failed}/${total}`}`);
   process.exit(failed === 0 ? 0 : 1);
 }
 

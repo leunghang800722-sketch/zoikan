@@ -10,7 +10,7 @@ import { isUnclear, normalizeField, type FieldResult } from "./normalize";
 import { reconcile, type ExtraCandidate } from "./reconcile";
 import { lookupAlsCandidate } from "./als-client";
 import { fieldReadSchema, type FieldRead } from "./field-read";
-import { OcrUnavailableError, type OcrProviderName, type VisionClient, type VisionRequest, type VisionResponse } from "./vision-client";
+import { OcrUnavailableError, completeWithTruncRetry, type OcrProviderName, type VisionClient, type VisionRequest, type VisionResponse } from "./vision-client";
 import type { ReadClients } from "./clients";
 
 function outputSchema(fields: readonly OcrFieldKey[]) {
@@ -54,6 +54,8 @@ export interface DocumentReadResult {
   usage_by_provider: UsageByProvider;
   /** WP-OCR-4：第三讀仲裁（每份文件最多 1 次）——called＝有冇呼叫；fields＝送去仲裁嘅分歧欄數（淨計數） */
   arbiter: { called: boolean; fields: number };
+  /** OCR-5.6（additive）：讀 B／仲裁因撞 output 上限且 content 空而自動重試嘅次數（淨計數） */
+  b_retry_truncated: number;
   /** WP-OCR-3（additive）：讀 B 用咗邊種放大圖（tiles＝2×2 格／後備；field_crops＝欄位級裁圖） */
   images_b_kind: ImagesBKind;
   /** WP-OCR-3（additive）：讀 B 有冇用讀 A 回報嘅 box 裁圖（＝images_b_kind 係 field_crops） */
@@ -220,6 +222,8 @@ interface FinishCtx {
   modelA: string;
   fallbackReason: string | null;
   rb: VisionResponse;
+  /** OCR-5.6：讀 B 撞頂重試前嗰次回應（usage 要計；冇重試＝null） */
+  rbFirst?: VisionResponse | null;
   imagesB: ImagesB;
   /** 計入 usage 嘅條目（legacy＝A＋B；stage B＝只有 B） */
   priorUsage: UsageEntry[];
@@ -246,6 +250,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   }
   const disputed = clients.arbiter && c.providerA === "claude" && imagesB.full ? disputedFields(fields, c.pa, pb, now) : [];
   let rArb: VisionResponse | null = null;
+  let rArbFirst: VisionResponse | null = null;
   let pArb: ModelReads | null = null;
   if (clients.arbiter && imagesB.full && disputed.length > 0) {
     const cands: Partial<Record<OcrFieldKey, string[]>> = {};
@@ -262,8 +267,10 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
       reqArb = { system: buildArbiterSystemPrompt(type, disputed), userText: buildArbiterUserText(type, cands, imagesB.images.length, alsSug), images: [imagesB.full, ...imagesB.images], fields: disputed };
     }
     try {
-      rArb = await clients.arbiter.complete(reqArb);
-      pArb = parseModelJson(rArb.text, disputed);
+      const t = await completeWithTruncRetry(clients.arbiter, reqArb);
+      rArb = t.resp;
+      rArbFirst = t.extra;
+      pArb = parseModelJson(t.resp.text, disputed);
     } catch (e) {
       if (!(e instanceof OcrUnavailableError)) throw e;
     }
@@ -272,7 +279,10 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   const out: Partial<Record<OcrFieldKey, FieldResult>> = {};
   for (const f of fields) out[f] = reconcile(f, pa?.[f] ?? null, pb?.[f] ?? null, now, pArb && disputed.includes(f) ? (pArb[f] ?? null) : undefined, f === "address" && alsExtra ? [alsExtra] : undefined);
   const byProvider: UsageByProvider = { claude: { promptTokens: 0, completionTokens: 0, calls: 0 }, deepseek: { promptTokens: 0, completionTokens: 0, calls: 0 } };
-  const used: UsageEntry[] = [...c.priorUsage, { provider: providerOf(clients.b), promptTokens: rb.promptTokens, completionTokens: rb.completionTokens, truncated: !!rb.truncated }];
+  const used: UsageEntry[] = [...c.priorUsage];
+  if (c.rbFirst) used.push({ provider: providerOf(clients.b), promptTokens: c.rbFirst.promptTokens, completionTokens: c.rbFirst.completionTokens, truncated: !!c.rbFirst.truncated });
+  used.push({ provider: providerOf(clients.b), promptTokens: rb.promptTokens, completionTokens: rb.completionTokens, truncated: !!rb.truncated });
+  if (rArbFirst && clients.arbiter) used.push({ provider: providerOf(clients.arbiter), promptTokens: rArbFirst.promptTokens, completionTokens: rArbFirst.completionTokens, truncated: !!rArbFirst.truncated });
   if (rArb && clients.arbiter) used.push({ provider: providerOf(clients.arbiter), promptTokens: rArb.promptTokens, completionTokens: rArb.completionTokens, truncated: !!rArb.truncated });
   for (const u of used) {
     const t = byProvider[u.provider];
@@ -295,6 +305,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
     fallback_reason: c.fallbackReason,
     usage_by_provider: byProvider,
     arbiter: { called: rArb !== null, fields: rArb ? disputed.length : 0 },
+    b_retry_truncated: (c.rbFirst ? 1 : 0) + (rArbFirst ? 1 : 0),
     images_b_kind: imagesB.kind,
     field_boxes_used: imagesB.kind === "field_crops",
     als,
@@ -307,8 +318,8 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
  */
 export async function readStageB(clientOrClients: VisionClient | ReadClients, type: OcrDocType, stageA: Pick<StageAResult, "a_fields_raw" | "provider" | "model" | "fallback_reason">, imagesB: ImagesB, now: Date = new Date()): Promise<DocumentReadResult> {
   const clients: ReadClients = "complete" in clientOrClients ? { a: clientOrClients, b: clientOrClients } : clientOrClients;
-  const rb = await clients.b.complete(requestB(type, imagesB));
-  return finishRead({ clients, type, now, pa: stageA.a_fields_raw, providerA: stageA.provider, modelA: stageA.model, fallbackReason: stageA.fallback_reason, rb, imagesB, priorUsage: [] });
+  const tb = await completeWithTruncRetry(clients.b, requestB(type, imagesB));
+  return finishRead({ clients, type, now, pa: stageA.a_fields_raw, providerA: stageA.provider, modelA: stageA.model, fallbackReason: stageA.fallback_reason, rb: tb.resp, rbFirst: tb.extra, imagesB, priorUsage: [] });
 }
 
 /** 舊單次流程：讀 A（全圖）同讀 B（2×2 格）同時發出，行為同 OCR-4 一樣。 */
@@ -318,7 +329,7 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
   const imagesB: ImagesB = { kind: "tiles", images: images.tiles, full: images.full };
   const reqA = stageARequest(type, images.full, false);
   // 兩次獨立讀：同時發出；B 嘅 request 只由 (type, tiles) 構成。
-  const [ra, rb] = await Promise.all([runReadA(clients, reqA, fields), clients.b.complete(requestB(type, imagesB))]);
+  const [ra, tb] = await Promise.all([runReadA(clients, reqA, fields), completeWithTruncRetry(clients.b, requestB(type, imagesB))]);
   const pa = parseModelJson(ra.resp.text, fields);
   return finishRead({
     clients,
@@ -328,7 +339,8 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
     providerA: providerOf(ra.usedA),
     modelA: ra.usedA.model,
     fallbackReason: ra.fallbackReason,
-    rb,
+    rb: tb.resp,
+    rbFirst: tb.extra,
     imagesB,
     priorUsage: [{ provider: providerOf(ra.usedA), promptTokens: ra.resp.promptTokens, completionTokens: ra.resp.completionTokens, truncated: !!ra.resp.truncated }],
   });

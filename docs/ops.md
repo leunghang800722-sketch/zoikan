@@ -51,6 +51,8 @@ job 自己嘅記憶，只存月份／時間戳，無 PII：`auto_one_click`＝`{
 | `JOB_TIMEOUT_MS` | 否 | 單個 job 最長執行毫秒，預設 600000 |
 | `SCHEDULER_ENABLED` | 否 | `1`／`0`。冇設＝production 開，dev／test 關。e2e（Playwright）固定 `0` |
 | `GUARD_OCR_ALS` | 否 | `1`（預設）／`0`。證件辨識地址欄查香港政府 ALS 地址庫作候選；**預設開**，送出去嘅係冇樓層室號嘅地址；`0` 完全唔呼叫；見「GUARD_OCR_ALS」段 |
+| `GUARD_OCR_DEEPSEEK_MAX_TOKENS` | 否 | 預設 `4000`（≤8000）。DeepSeek 讀 B max_tokens；deepseek-flash 思考 token 計入上限，1500 會令入職表讀 B content 空（OCR-5.6）。撞頂（content 空或 JSON 被截）自動重試一次（加倍、封頂 8000；已達 8000 唔重試；重試本身失敗就降級照舊）；只對 DeepSeek 生效（Claude 遇 max_tokens 直接拋）。env 嚴格 `^\d+$` 且 1000–8000，否則用 4000 |
+| `GUARD_OCR_DEEPSEEK_REASONING` | 否 | `low`（預設）／`high`／`max`／`off`（`thinking:{type:"disabled"}`）。DeepSeek 思考力度（OCR-5.6） |
 | `GUARD_OCR_ARBITER` | 否 | `1`（預設）／`0`。證件辨識分歧欄第三讀仲裁（Claude，每份文件最多 1 次）；見下面「OCR 準確度評估」段 |
 
 Email 內容同站內通知 body 一樣：只有盤名／數字／id／月份，連結指向 `APP_BASE_URL`。用戶電郵由本人喺「改密碼」頁、或老闆喺「用戶」頁（`通知電郵`）設定；電郵屬聯絡資料，唔入 `ai` schema、唔入 AI 工具輸出、audit 只記「已改」。`notify_prefs` 可逐類關電郵（站內通知照常有）。
@@ -215,6 +217,8 @@ npx tsx scripts/staff-import/ocr-schema-smoke.ts        # key 由 .env 經 doten
 ```
 
 腳本用 ImageMagick 生成三張合成圖（白底黑字假表格，冇 PII），三種文件類型各打一次真 Claude stage A（入職表含 box／refs），斷言 200、冇退回後備、解析成功；只印通過／失敗同 token 數，唔印 key。共 3 次真呼叫。
+
+OCR-5.6 起，有 `DEEPSEEK_API_KEY` 時另跑 DeepSeek 段（三種文件各 1 次 `json_object`，入職表用 5 圖情境，共 3 次）：斷言 content 非空、JSON 合法、未撞頂——改 DeepSeek 請求參數（`reasoning_effort`／`thinking`／`max_tokens`）之後必須跑。審計：`guard_ocr_read` 加 `b_retry_truncated`（讀 B／仲裁撞頂 content 空而重試嘅次數，淨計數）。根因：deepseek-flash 係思考模型，思考 token 計入 max_tokens，舊 1500 令入職表 5 欄裁圖讀 B 撞頂、整份退成 `one_read_unclear`。
 
 ## 證件辨識兩段式讀（OCR-3：欄位級裁圖）
 

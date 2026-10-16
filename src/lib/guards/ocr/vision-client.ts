@@ -3,7 +3,7 @@
 // - 唔改 `LlmClient`／AI 助手。client 可注入（測試用 fake，vitest 唔准真打外部 API）。
 // - 錯誤：超時／401／429／5xx／網絡 → OcrUnavailableError（route 回 503）。錯誤訊息唔帶任何請求內容。
 import OpenAI from "openai";
-import { DEFAULT_OCR_BASE_URL, OCR_CALL_TIMEOUT_MS, OCR_MAX_OUTPUT_TOKENS, getOcrClientOverride, ocrModel, setOcrClientOverrideFlag } from "./config";
+import { DEFAULT_OCR_BASE_URL, OCR_CALL_TIMEOUT_MS, OCR_RETRY_MAX_TOKENS_CAP, getOcrClientOverride, ocrDeepseekMaxTokens, ocrDeepseekReasoning, ocrModel, setOcrClientOverrideFlag } from "./config";
 
 export interface VisionRequest {
   system: string;
@@ -14,6 +14,8 @@ export interface VisionRequest {
   fields?: readonly string[];
   /** WP-OCR-3：讀 A 要求回報 field_boxes 嘅欄位（Claude 加入 schema；DeepSeek 只靠 prompt） */
   boxFields?: readonly string[];
+  /** OCR-5.6：覆蓋預設 output token 上限（撞頂重試用；Claude client 忽略） */
+  maxTokens?: number;
 }
 export interface VisionResponse {
   text: string;
@@ -28,6 +30,40 @@ export interface VisionClient {
   /** 供應商標籤（冇寫＝deepseek／測試 fake） */
   readonly provider?: OcrProviderName;
   complete(req: VisionRequest): Promise<VisionResponse>;
+}
+
+/** OCR-5.6：DeepSeek 請求參數（抽出嚟方便單元測試）。 */
+export function deepseekReasoningParams(): Record<string, unknown> {
+  const mode = ocrDeepseekReasoning();
+  return mode === "off" ? { thinking: { type: "disabled" } } : { reasoning_effort: mode };
+}
+
+function isParsableJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * OCR-5.6：呼叫一次；回應撞 output 上限（truncated）而 content 空或 JSON 被截（parse 唔到）→ 用加倍 max_tokens（上限 8,000）重試一次。
+ * base 已達上限就唔重試。重試本身拋 OcrUnavailableError → 降級：回第一次回應（retried:true、extra:null），由呼叫方照舊當 parse 失敗。
+ * 重試成功時 extra＝第一次回應（usage 兩次都計）。只對 DeepSeek 有意義（Claude 遇 max_tokens 直接拋，唔會 truncated）。
+ */
+export async function completeWithTruncRetry(client: VisionClient, req: VisionRequest): Promise<{ resp: VisionResponse; retried: boolean; extra: VisionResponse | null }> {
+  const first = await client.complete(req);
+  if (!first.truncated || (first.text.trim() !== "" && isParsableJson(first.text))) return { resp: first, retried: false, extra: null };
+  const base = req.maxTokens ?? ocrDeepseekMaxTokens();
+  if (base >= OCR_RETRY_MAX_TOKENS_CAP) return { resp: first, retried: false, extra: null };
+  try {
+    const second = await client.complete({ ...req, maxTokens: Math.min(base * 2, OCR_RETRY_MAX_TOKENS_CAP) });
+    return { resp: second, retried: true, extra: first };
+  } catch (e) {
+    if (!(e instanceof OcrUnavailableError)) throw e;
+    return { resp: first, retried: true, extra: null };
+  }
 }
 
 export class OcrUnavailableError extends Error {
@@ -75,9 +111,10 @@ export class DeepSeekVisionClient implements VisionClient {
     try {
       const res = await this.api.chat.completions.create({
         model: this.model,
-        max_tokens: OCR_MAX_OUTPUT_TOKENS,
+        max_tokens: req.maxTokens ?? ocrDeepseekMaxTokens(),
         temperature: 0,
         response_format: { type: "json_object" },
+        ...deepseekReasoningParams(),
         messages: [
           { role: "system", content: req.system },
           { role: "user", content: [{ type: "text", text: req.userText }, ...req.images.map((url) => ({ type: "image_url" as const, image_url: { url } }))] },

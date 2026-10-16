@@ -7,7 +7,7 @@ import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixture
 import { ClaudeVisionClient, anthropicClientOptions, ocrJsonSchema, splitDataUrl } from "@/lib/guards/ocr/claude-vision-client";
 import { OcrUnavailableError, setVisionClientForTests, type VisionClient, type VisionRequest } from "@/lib/guards/ocr/vision-client";
 import { readDocument } from "@/lib/guards/ocr/read";
-import { OCR_CLAUDE_MAX_OUTPUT_TOKENS, OCR_MAX_OUTPUT_TOKENS, effectiveOcrProvider, isGuardOcrConfigured, ocrClaudeModel } from "@/lib/guards/ocr/config";
+import { OCR_CLAUDE_MAX_OUTPUT_TOKENS, OCR_MAX_OUTPUT_TOKENS_DEEPSEEK, effectiveOcrProvider, isGuardOcrConfigured, ocrClaudeModel } from "@/lib/guards/ocr/config";
 import { selftestFailLine } from "@/lib/guards/ocr/selftest-log";
 import { getReadClients, type ReadClients } from "@/lib/guards/ocr/clients";
 import { POST as ocrRoute } from "@/app/api/guards/ocr/read/route";
@@ -43,7 +43,7 @@ describe("ClaudeVisionClient：請求形狀＋回應處理", () => {
     expect(req.model).toBe("claude-opus-5-5");
     expect(req.max_tokens).toBe(8000);
     expect(OCR_CLAUDE_MAX_OUTPUT_TOKENS).toBe(8000);
-    expect(OCR_MAX_OUTPUT_TOKENS).toBe(1500);
+    expect(OCR_MAX_OUTPUT_TOKENS_DEEPSEEK).toBe(4000);
     expect(req.system).toBe("SYS");
     expect(req.output_config.effort).toBe("low");
     expect(req.output_config.format).toEqual({ type: "json_schema", schema: ocrJsonSchema(["hkid", "dob"]) });
