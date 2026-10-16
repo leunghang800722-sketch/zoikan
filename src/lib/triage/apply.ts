@@ -200,7 +200,7 @@ export interface AnswerOutput {
   open_remaining: number;
 }
 
-export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, previewHash: string | undefined, caps: ViewerCaps, ip: string | null): Promise<AnswerOutput> {
+export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, previewHash: string | undefined, caps: ViewerCaps, ip: string | null, extra?: { source: "ocr_reread" }): Promise<AnswerOutput> {
   assertAnswerable(q);
   await assertNoNewer(prisma, q, actor);
   assertBankAllowed(q, caps);
@@ -239,7 +239,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         where: { id: q.id, status: { in: ["open", "skipped"] } },
         data: {
           status: "answered",
-          answerJson: JSON.parse(JSON.stringify(answer)),
+          answerJson: JSON.parse(JSON.stringify(extra ? { ...answer, source: extra.source } : answer)),
           answeredBy: actor.userId,
           answeredAt: now,
           // 存原始結構化值（白名單欄），讀取時按讀者權限遮罩；唔存答題人視角嘅已遮罩版本
@@ -277,7 +277,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         tableName: "triage_questions",
         rowId: q.id,
         action: "triage_answer",
-        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: true },
+        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: true, ...(extra ? { answered_via: extra.source } : {}) },
         ip,
       });
       // 同 guard_import_apply summary 一致形狀（月度修正摘要會計入「覆核決定」）
@@ -299,6 +299,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
           review_decisions: 1,
           via: "triage",
           question_id: q.id,
+          ...(extra ? { answered_via: extra.source } : {}),
         },
         ip,
       });
