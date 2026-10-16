@@ -74,8 +74,15 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
     // 只差形近／簡繁字 → review（候選＝兩個寫法，標準寫法排前）；有形近字糾錯建議 → review（候選＝原文＋建議）
     const strictSame = key !== "address" || na.strict === nb.strict;
     if (na.valid && !addrEdits && strictSame) return { status: "confirmed", value: na.display, candidates: [], candidates_ranked: [] };
+    // OCR-4.4：地址只差形近字而入咗仲裁 → 仲裁值同其中一讀 strict 一致且 valid（且冇糾錯建議）= 2/3 一致，confirmed
+    let vtag: FieldResult["arbiter"];
+    if (key === "address" && !strictSame && !addrEdits && rr && !urr) {
+      const nr = normalizeField(key, rr.value!, now);
+      vtag = nr.strict === na.strict ? "agree_a" : nr.strict === nb.strict ? "agree_b" : "independent";
+      if (nr.valid && vtag !== "independent") return { status: "confirmed", value: nr.display, candidates: [], candidates_ranked: [], arbiter: vtag };
+    }
     const ranked = rankFieldCandidates(key, pool, now);
-    return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, reason: na.valid ? (addrEdits ? "address_variant_suggested" : "address_variant_chars") : (na.reason ?? "invalid_format") };
+    return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, ...(vtag ? { arbiter: vtag } : {}), reason: na.valid ? (addrEdits ? "address_variant_suggested" : "address_variant_chars") : (na.reason ?? "invalid_format") };
   }
 
   if (na && nb) {
