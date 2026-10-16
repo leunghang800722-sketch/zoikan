@@ -79,9 +79,14 @@ export function reconcile(key: OcrFieldKey, a: ReadInput, b: ReadInput, now: Dat
     if (key === "address" && !strictSame && !addrEdits && rr && !urr) {
       const nr = normalizeField(key, rr.value!, now);
       vtag = nr.strict === na.strict ? "agree_a" : nr.strict === nb.strict ? "agree_b" : "independent";
-      if (nr.valid && vtag !== "independent") return { status: "confirmed", value: nr.display, candidates: [], candidates_ranked: [], arbiter: vtag };
+      // M1：只有仲裁值係標準寫法（變體字數 ≤ 另一讀）先 confirmed；否則（2/3 同意嘅係變體字寫法）維持 review
+      const other = vtag === "agree_a" ? rb : ra;
+      const standard = variantCharCount(rr.value!) <= variantCharCount(other.value!);
+      if (nr.valid && vtag !== "independent" && standard) return { status: "confirmed", value: nr.display, candidates: [], candidates_ranked: [], arbiter: vtag };
     }
-    const ranked = rankFieldCandidates(key, pool, now);
+    let ranked = rankFieldCandidates(key, pool, now);
+    // M1：仲裁同意變體字寫法時，仲裁加權唔可以令變體寫法搶預填——標準寫法（變體字少）排前（穩定排序，同數保持原次序）
+    if (key === "address" && vtag && vtag !== "independent") ranked = ranked.map((c, i) => ({ c, i })).sort((x, y) => variantCharCount(x.c.value) - variantCharCount(y.c.value) || x.i - y.i).map((x) => x.c);
     return { status: "review", value: ranked[0]?.value ?? na.display, candidates: ranked.map((c) => c.value), candidates_ranked: ranked, ...(vtag ? { arbiter: vtag } : {}), reason: na.valid ? (addrEdits ? "address_variant_suggested" : "address_variant_chars") : (na.reason ?? "invalid_format") };
   }
 

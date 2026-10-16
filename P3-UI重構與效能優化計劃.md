@@ -1207,6 +1207,10 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - `eval --dry` 數字（取代 §28.6）：已評估 13 欄、exact **10（76.9%）**、review_contains_truth **1（7.7%）**、wrong 1（confirmed 錯 0）、missing 1；review 率 15.4%；仲裁文件 2→**4**；ALS 查過文件 1。
 - 測試：`tests/ocr4-arbiter.test.ts` 觸發矩陣（hh／hm／mh／ll／hl、一致唔觸發）、地址 strict 分歧入仲裁＋agree_b、strict 一致唔觸發；`tests/ocr5-eval.test.ts` dry 數字更新。
 
+### 25.7 驗收修正（OCR-4.5，Opus 5.5：M1／N1）
+- **M1**：`reconcile.ts` 地址「canon 一致但 strict 唔同」分支，仲裁 agree 只喺仲裁值係標準寫法（`variantCharCount(仲裁值) ≤ 另一讀`）先 confirmed；2/3 同意嘅係變體字（厦）寫法 → 維持 review（`address_variant_chars`，`arbiter` 標籤保留、標準寫法排前；仲裁加權後以變體字數穩定重排，確保預填係標準寫法）。
+- **N1**：形近字 test 補 status／reason 斷言；加 M1 正反兩個 case（仲裁「大廈」→ confirmed agree_b；仲裁「大厦」→ review agree_a，預填「大廈」）。
+
 ## 26 OCR-3（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §1 問題 3／§2 OCR-3 及老闆硬性要求；branch `ocr3-field-crops`，未 merge）
 
 執行：Sonnet 5.5（`claude-sonnet-5-5`）。起點 main `e269099`（OCR-5／OCR-4 已合併）。範圍：路徑 A 兩段式讀＋欄位級裁圖、分格線防呆、路徑 B 外擴與戶口位數；OCR-1／2 未動。全程只用合成 fixture／fake client，冇讀 `data/` 內容、`.env`、冇 PII；圖片同辨識值冇落地（audit 只加計數）。
