@@ -1199,6 +1199,18 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - Playwright 全套（隔離 PG 54416、`next build`＋`next start` 3182、`AI_LLM=fake`、`SCHEDULER_ENABLED=0`，跑前 `db:reset`＋`db:seed`）**258 passed｜4 skipped（原有）｜0 failed**（含新 `ocr-candidates.spec.ts` 3 條）。
 - `gate:locked-months`（隔離 dev PG 54416，需 `SESSION_SECRET` 已設）**12/12 rc=0**；`gate:ltpay-aug` 56 人 Gross 918,488.09／Autopay 882,728.97／MPF EE 35,759.12／ER 35,996.80，**55/56 吻合＋1 已知差異**（同 P17.5 數字逐個相同）——OCR 路徑獨立，不受影響。
 
+### 25.6 OCR-4.4 仲裁觸發放寬＋形近字分歧入仲裁＋schema 實測（branch `ocr44-arbiter-trigger`，起點 main `08b6ca0`，未 merge）
+執行：Sonnet 5.5（`claude-sonnet-5-5`）。背景：真檔評估入職表電話預填值啱 28/36 但只 13 份 confirmed——讀 A（Claude，有 box／refs）多數自報 high，舊條件「兩讀都唔係 high」令仲裁幾乎唔觸發。
+- `read.ts` `disputedFields`：兩讀正規化後唔同，**除非兩讀 confidence 都係 high** 先仲裁（A high/B high 唔觸發；high/medium、medium/high、low/low、high/low 觸發）；每份文件最多 1 次、`GUARD_OCR_ARBITER`、「仲裁值同其中一讀 strict 一致且 valid 先 confirmed」全部不變。
+- Opus N7：地址欄分歧用 strict 比較（只差形近／簡繁字都入仲裁）。`reconcile.ts` 地址「canon 一致但 strict 唔同」分支原本唔睇仲裁值（OCR-2.2 S1），放寬後仲裁會白叫——該分支加：冇糾錯建議（`edits` 空）且仲裁值 valid、同其中一讀 strict 一致 → confirmed（`arbiter: agree_a|agree_b`）；有糾錯建議仍 review。
+- `scripts/staff-import/ocr-schema-smoke.ts`＋`docs/ops.md`「真 API schema 實測」：合成圖三種文件類型各打真 Claude stage A 一次，斷言 200／冇後備／解析成功。
+- `eval --dry` 數字（取代 §28.6）：已評估 13 欄、exact **10（76.9%）**、review_contains_truth **1（7.7%）**、wrong 1（confirmed 錯 0）、missing 1；review 率 15.4%；仲裁文件 2→**4**；ALS 查過文件 1。
+- 測試：`tests/ocr4-arbiter.test.ts` 觸發矩陣（hh／hm／mh／ll／hl、一致唔觸發）、地址 strict 分歧入仲裁＋agree_b、strict 一致唔觸發；`tests/ocr5-eval.test.ts` dry 數字更新。
+
+### 25.7 驗收修正（OCR-4.5，Opus 5.5：M1／N1）
+- **M1**：`reconcile.ts` 地址「canon 一致但 strict 唔同」分支，仲裁 agree 只喺仲裁值係標準寫法（`variantCharCount(仲裁值) ≤ 另一讀`）先 confirmed；2/3 同意嘅係變體字（厦）寫法 → 維持 review（`address_variant_chars`，`arbiter` 標籤保留、標準寫法排前；仲裁加權後以變體字數穩定重排，確保預填係標準寫法）。
+- **N1**：形近字 test 補 status／reason 斷言；加 M1 正反兩個 case（仲裁「大廈」→ confirmed agree_b；仲裁「大厦」→ review agree_a，預填「大廈」）。
+
 ## 26 OCR-3（2026-10-15，基於 `docs/plans/ocr-accuracy-plan.md` §1 問題 3／§2 OCR-3 及老闆硬性要求；branch `ocr3-field-crops`，未 merge）
 
 執行：Sonnet 5.5（`claude-sonnet-5-5`）。起點 main `e269099`（OCR-5／OCR-4 已合併）。範圍：路徑 A 兩段式讀＋欄位級裁圖、分格線防呆、路徑 B 外擴與戶口位數；OCR-1／2 未動。全程只用合成 fixture／fake client，冇讀 `data/` 內容、`.env`、冇 PII；圖片同辨識值冇落地（audit 只加計數）。

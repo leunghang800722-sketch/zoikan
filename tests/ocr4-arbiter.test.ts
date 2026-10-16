@@ -63,13 +63,64 @@ describe("第三讀仲裁：觸發條件", () => {
     expect(arb.userText).toContain("90001112");
     expect(arb.userText).not.toContain("新界火炭");
   });
-  it("任何一讀 confidence=high → 唔觸發，直接 review（reads_differ）", async () => {
-    const t = trio({ a: { phone: obj("90001111", "high") }, b: { phone: obj("90001112", "low") }, arbiter: { phone: obj("90001111", "high") } });
+  it("OCR-4.4 觸發矩陣：A high/B high 唔觸發；A high/B medium、A medium/B high、A low/B low 觸發", async () => {
+    const run = async (ca: "high" | "medium" | "low", cb: "high" | "medium" | "low") => {
+      const t = trio({ a: { phone: obj("90001111", ca) }, b: { phone: obj("90001112", cb) }, arbiter: { phone: obj("90001111", "medium") } });
+      const r = await readDocument(t.clients, "onboarding_form", IMGS);
+      return { n: t.arbCalls().length, r };
+    };
+    const hh = await run("high", "high");
+    expect(hh.n).toBe(0);
+    expect(hh.r.fields.phone).toMatchObject({ status: "review", reason: "reads_differ" });
+    expect(hh.r.arbiter).toEqual({ called: false, fields: 0 });
+    expect(hh.r.usage.calls).toBe(2);
+    for (const [ca, cb] of [["high", "medium"], ["medium", "high"], ["low", "low"], ["high", "low"]] as const) {
+      const x = await run(ca, cb);
+      expect(x.n, `${ca}/${cb}`).toBe(1);
+      expect(x.r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
+    }
+  });
+  it("OCR-4.4：兩讀一致（即使都 high 或 low）唔觸發", async () => {
+    for (const c of ["high", "low"] as const) {
+      const t = trio({ a: { phone: obj("90001111", c) }, b: { phone: obj("90001111", c) }, arbiter: { phone: obj("90001112", "high") } });
+      const r = await readDocument(t.clients, "onboarding_form", IMGS);
+      expect(t.arbCalls()).toHaveLength(0);
+      expect(r.fields.phone).toMatchObject({ status: "confirmed" });
+    }
+  });
+  it("OCR-4.4：地址只差形近字（村／邨）→ strict 分歧入仲裁（即使 canon 一致）；仲裁同讀 B strict 一致 → confirmed", async () => {
+    const t = trio({
+      a: { address: obj("新界火炭示範村99號虛構樓15樓A室", "medium") },
+      b: { address: obj("新界火炭示範邨99號虛構樓15樓A室", "medium") },
+      arbiter: { address: obj("新界火炭示範邨99號虛構樓15樓A室", "medium") },
+    });
     const r = await readDocument(t.clients, "onboarding_form", IMGS);
+    expect(t.arbCalls()).toHaveLength(1);
+    expect(t.arbCalls()[0]!.fields).toEqual(["address"]);
+    expect(r.fields.address).toMatchObject({ status: "confirmed", arbiter: "agree_b" });
+  });
+  it("OCR-4.5 M1：仲裁同標準寫法（廈）一致 → confirmed agree_b；同變體寫法（厦）一致 → 維持 review（vtag 保留、標準寫法排前）", async () => {
+    const A = "新界火炭示範街99號虛構大厦15樓A室";
+    const B = "新界火炭示範街99號虛構大廈15樓A室";
+    const std = trio({ a: { address: obj(A, "medium") }, b: { address: obj(B, "medium") }, arbiter: { address: obj(B, "medium") } });
+    const r1 = await readDocument(std.clients, "onboarding_form", IMGS);
+    expect(std.arbCalls()).toHaveLength(1);
+    expect(r1.fields.address).toMatchObject({ status: "confirmed", value: B, arbiter: "agree_b" });
+    const vr = trio({ a: { address: obj(A, "medium") }, b: { address: obj(B, "medium") }, arbiter: { address: obj(A, "medium") } });
+    const r2 = await readDocument(vr.clients, "onboarding_form", IMGS);
+    expect(r2.fields.address).toMatchObject({ status: "review", reason: "address_variant_chars", arbiter: "agree_a" });
+    expect(r2.fields.address!.value).toBe(B);
+    expect(r2.fields.address!.candidates.slice(0, 2)).toEqual([B, A]);
+    // OCR-4.6：invalid（過短）alternative 唔可以跳到有效候選前面；預填不變
+    const inv = trio({ a: { address: obj(A, "medium", { alternatives: ["短址"] }) }, b: { address: obj(B, "medium") }, arbiter: { address: obj(A, "medium") } });
+    const r3 = await readDocument(inv.clients, "onboarding_form", IMGS);
+    expect(r3.fields.address).toMatchObject({ status: "review", arbiter: "agree_a", value: B });
+    expect(r3.fields.address!.candidates).toEqual([B, A, "短址"]);
+  });
+  it("OCR-4.4：地址 strict 完全一致 → 唔觸發", async () => {
+    const t = trio({ a: { address: obj("新界火炭示範街99號虛構大廈15樓A室", "low") }, b: { address: obj("新界火炭示範街99號虛構大廈15樓A室", "medium") }, arbiter: {} });
+    await readDocument(t.clients, "onboarding_form", IMGS);
     expect(t.arbCalls()).toHaveLength(0);
-    expect(r.fields.phone).toMatchObject({ status: "review", reason: "reads_differ" });
-    expect(r.arbiter).toEqual({ called: false, fields: 0 });
-    expect(r.usage.calls).toBe(2);
   });
   it("舊純字串格式（冇 confidence）兩讀唔同 → 當唔係 high，觸發仲裁", async () => {
     const t = trio({ a: { phone: "90001111" }, b: { phone: "90001112" }, arbiter: { phone: "90001113" } });

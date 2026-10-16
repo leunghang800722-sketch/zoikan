@@ -206,6 +206,16 @@ npx tsx scripts/staff-import/eval-ocr.ts --manifest … --flow two-stage --out d
 - 建議每個 OCR 子階段改動前後各跑一次（同一 manifest），比 before／after。
 - **`--flow legacy|two-stage`（WP-OCR-3，預設 two-stage）**：two-stage 用 `readStageA`（全圖＋要求回報電話／地址欄位 box）→ Node 端 `cropFields`（ImageMagick 按 `src/lib/guards/ocr/field-crops.ts` 同一套幾何裁：外擴、鄰欄限制、長邊 1,000px）→ `readStageB`。報表同 console 多 `flow`、`field_crops_docs`（用咗欄位級裁圖嘅文件數）、`fallback_tiles_docs`（本應欄位級但冇有效 box 而退回 2×2 格嘅文件數；身份證／住址證明本身冇欄位級設計，唔計）。同一 manifest 跑兩個 flow 即可比較。`--dry` 可選 `fake.<docType>.boxes`（欄位 → `{x,y,w,h}`｜null）測 box／後備路徑，見 `tests/fixtures/ocr-eval/manifest.dry-crops.json`。
 
+### 真 API schema 實測（OCR-4.4，改 schema／prompt 後必須跑）
+
+fake client 驗唔到 Claude structured output 對 schema 文法大細／結構嘅 400（OCR-5.4 事故：入職表 5 欄＋5 box → 整份退回 DeepSeek）。所以**改過 `ocrJsonSchema`、stage A／仲裁 prompt、欄位 box 結構之後，必須本機跑一次**：
+
+```
+npx tsx scripts/staff-import/ocr-schema-smoke.ts        # key 由 .env 經 dotenv 載入；其他檔用 DOTENV_CONFIG_PATH=<path>
+```
+
+腳本用 ImageMagick 生成三張合成圖（白底黑字假表格，冇 PII），三種文件類型各打一次真 Claude stage A（入職表含 box／refs），斷言 200、冇退回後備、解析成功；只印通過／失敗同 token 數，唔印 key。共 3 次真呼叫。
+
 ## 證件辨識兩段式讀（OCR-3：欄位級裁圖）
 
 - 入職表（電話、地址）放大圖改為**欄位級裁圖**：每欄一張，完整包住欄位格（印刷 label＋手寫內容），長邊 ≤1,000px（細過就放大，最多 2×），由 2,400px 來源圖裁出；唔再用固定 2×2 格切斷手寫行。2×2 格只係後備（讀 A 冇回報有效 box、box 不合格、或者任何一步失敗）。身份證／住址證明照舊用 2×2 格。
@@ -226,7 +236,7 @@ npx tsx scripts/staff-import/eval-ocr.ts --manifest … --flow two-stage --out d
 - **評估**：`eval-ocr.ts` two-stage 次序同 client 一致；console 多「跨文件 refs」一行（注入文件數、cross 三類計數）；`--no-refs` 關閉注入方便前後對比。`by_doc_field` 自然多 `onboarding_form.name_zh/hkid/dob`。
 - **路徑 B**：`crosscheck(…, { printed: true })`（`03-crosscheck.ts` 已開）加 `cmp[f].printed`＝同一文件包印刷身份證抽取值對申請表手寫抽取值（姓名／身份證號／英文名／地址）；有明確結果（match／mismatch）時優先於 U Team／Maxwell／DB 打字名單。`fields-ext` 證據類別加 `printed_ref`（獨立於打字名單同手寫讀數；`15-fields-merge` 尚未接入，需要時喺該檔將身份證抽取值以 `printed_ref` 加入 Cand）。
 
-**`GUARD_OCR_ARBITER`**（Zeabur env，預設 `1`）：分歧欄第三讀仲裁開關；`0`／`false`／`off`／`no` 關閉＝回到兩讀。成本：每份文件最多多 1 次 Claude 呼叫（只喺有分歧欄且兩讀 confidence 都唔係 high 時），用量計入 audit `guard_ocr_read` 嘅 `usage_by_provider.claude`，另有 `arbiter_calls`。冇 `CLAUDE_API_KEY`（純 DeepSeek 模式）自動冇仲裁。
+**`GUARD_OCR_ARBITER`**（Zeabur env，預設 `1`）：分歧欄第三讀仲裁開關；`0`／`false`／`off`／`no` 關閉＝回到兩讀。成本：每份文件最多多 1 次 Claude 呼叫（只喺有分歧欄且唔係兩讀 confidence 都係 high 時（OCR-4.4）；地址欄只差形近字亦算分歧），用量計入 audit `guard_ocr_read` 嘅 `usage_by_provider.claude`，另有 `arbiter_calls`。冇 `CLAUDE_API_KEY`（純 DeepSeek 模式）自動冇仲裁。
 
 **`GUARD_OCR_ALS`**（Zeabur env，預設 `1`＝開，老闆 2026-10-15 決定）：證件辨識（住址證明、入職表）嘅地址欄，喺兩讀完成後（仲裁之前）向香港政府 ALS（Address Lookup Service，`https://www.als.gov.hk/lookup`，免費、免 key）查一次標準地址，作為額外候選（chip 上有細字「政府地址庫」），**唔會自動 confirmed**。
 - **送出去嘅內容**：只有 地區／街道／門牌／屋邨／座／大廈 組成嘅查詢字串；**樓層、室號（15樓、A室、Flat A、15/F、Room 1203、G/F、舖、單位…）一律先剔走先送**（`hk-address.alsQueryFromParts`，送出前再斷言一次；大廈名本身含「樓」字嘅部件亦唔送）；永遠唔送姓名、電話或其他欄位。查詢資訊太少（冇街道／屋邨／大廈）就唔查。ALS 回嚟嘅標準地址由本地拼返樓層室號，樓層室號從來冇出過公司。
