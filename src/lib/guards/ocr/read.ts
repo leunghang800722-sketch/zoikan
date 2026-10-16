@@ -56,6 +56,8 @@ export interface DocumentReadResult {
   arbiter: { called: boolean; fields: number };
   /** OCR-5.6（additive）：讀 B／仲裁因撞 output 上限且 content 空而自動重試嘅次數（淨計數） */
   b_retry_truncated: number;
+  /** OCR-5.8（additive）：重試本身失敗而降級嘅次數（淨計數；唔計入 b_retry_truncated） */
+  b_retry_failed: number;
   /** WP-OCR-3（additive）：讀 B 用咗邊種放大圖（tiles＝2×2 格／後備；field_crops＝欄位級裁圖） */
   images_b_kind: ImagesBKind;
   /** WP-OCR-3（additive）：讀 B 有冇用讀 A 回報嘅 box 裁圖（＝images_b_kind 係 field_crops） */
@@ -224,6 +226,8 @@ interface FinishCtx {
   rb: VisionResponse;
   /** OCR-5.6：讀 B 撞頂重試前嗰次回應（usage 要計；冇重試＝null） */
   rbFirst?: VisionResponse | null;
+  /** OCR-5.8：讀 B 有冇試過重試（成功＝rbFirst 非 null；retried 但 rbFirst null＝重試失敗降級） */
+  rbRetried?: boolean;
   imagesB: ImagesB;
   /** 計入 usage 嘅條目（legacy＝A＋B；stage B＝只有 B） */
   priorUsage: UsageEntry[];
@@ -251,6 +255,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
   const disputed = clients.arbiter && c.providerA === "claude" && imagesB.full ? disputedFields(fields, c.pa, pb, now) : [];
   let rArb: VisionResponse | null = null;
   let rArbFirst: VisionResponse | null = null;
+  let arbRetried = false;
   let pArb: ModelReads | null = null;
   if (clients.arbiter && imagesB.full && disputed.length > 0) {
     const cands: Partial<Record<OcrFieldKey, string[]>> = {};
@@ -270,6 +275,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
       const t = await completeWithTruncRetry(clients.arbiter, reqArb);
       rArb = t.resp;
       rArbFirst = t.extra;
+      arbRetried = t.retried;
       pArb = parseModelJson(t.resp.text, disputed);
     } catch (e) {
       if (!(e instanceof OcrUnavailableError)) throw e;
@@ -306,6 +312,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
     usage_by_provider: byProvider,
     arbiter: { called: rArb !== null, fields: rArb ? disputed.length : 0 },
     b_retry_truncated: (c.rbFirst ? 1 : 0) + (rArbFirst ? 1 : 0),
+    b_retry_failed: (c.rbRetried && !c.rbFirst ? 1 : 0) + (arbRetried && !rArbFirst ? 1 : 0),
     images_b_kind: imagesB.kind,
     field_boxes_used: imagesB.kind === "field_crops",
     als,
@@ -319,7 +326,7 @@ async function finishRead(c: FinishCtx): Promise<DocumentReadResult> {
 export async function readStageB(clientOrClients: VisionClient | ReadClients, type: OcrDocType, stageA: Pick<StageAResult, "a_fields_raw" | "provider" | "model" | "fallback_reason">, imagesB: ImagesB, now: Date = new Date()): Promise<DocumentReadResult> {
   const clients: ReadClients = "complete" in clientOrClients ? { a: clientOrClients, b: clientOrClients } : clientOrClients;
   const tb = await completeWithTruncRetry(clients.b, requestB(type, imagesB));
-  return finishRead({ clients, type, now, pa: stageA.a_fields_raw, providerA: stageA.provider, modelA: stageA.model, fallbackReason: stageA.fallback_reason, rb: tb.resp, rbFirst: tb.extra, imagesB, priorUsage: [] });
+  return finishRead({ clients, type, now, pa: stageA.a_fields_raw, providerA: stageA.provider, modelA: stageA.model, fallbackReason: stageA.fallback_reason, rb: tb.resp, rbFirst: tb.extra, rbRetried: tb.retried, imagesB, priorUsage: [] });
 }
 
 /** 舊單次流程：讀 A（全圖）同讀 B（2×2 格）同時發出，行為同 OCR-4 一樣。 */
@@ -341,6 +348,7 @@ export async function readDocument(clientOrClients: VisionClient | ReadClients, 
     fallbackReason: ra.fallbackReason,
     rb: tb.resp,
     rbFirst: tb.extra,
+    rbRetried: tb.retried,
     imagesB,
     priorUsage: [{ provider: providerOf(ra.usedA), promptTokens: ra.resp.promptTokens, completionTokens: ra.resp.completionTokens, truncated: !!ra.resp.truncated }],
   });

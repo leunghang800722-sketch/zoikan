@@ -240,6 +240,7 @@ async function handleStageA(req: Request, session: Session, raw: unknown): Promi
       ms,
       arbiter_calls: items.filter((i) => i.kind === "final" && i.r.arbiter.called).length,
       b_retry_truncated: items.reduce((n, i) => n + (i.kind === "final" ? i.r.b_retry_truncated : 0), 0),
+      b_retry_failed: items.reduce((n, i) => n + (i.kind === "final" ? i.r.b_retry_failed : 0), 0),
       ...alsCounts(finals),
       // WP-OCR-1：淨計數（冇值）——簽發咗 refs_token 冇／幾多份入職表讀 A 注入咗 refs／帶嚟嘅 refs_token 驗簽失敗
       refs_issued: refsToken ? 1 : 0,
@@ -392,7 +393,7 @@ async function respondResults(req: Request, session: Session, client: ReturnType
     // truncated_calls：撞 output token 上限嘅呼叫數（只記數量，冇內容）
     // arbiter_calls：第三讀仲裁呼叫數（只記數量）
     // WP-OCR-1：stage b 另記交叉核對計數（match／differs／unreadable）同 refs_rejected——淨數字
-    after: { ok: true, ...(stage ? { stage, ...stageBCounts(results) } : {}), ...(extra ? { refs_rejected: extra.refsRejected, ...(extra.cross ? { cross: countCross(extra.cross) } : {}) } : {}), model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, arbiter_calls: results.filter((r) => r.arbiter.called).length, b_retry_truncated: results.reduce((n, r) => n + r.b_retry_truncated, 0), ...alsCounts(results), ...usage },
+    after: { ok: true, ...(stage ? { stage, ...stageBCounts(results) } : {}), ...(extra ? { refs_rejected: extra.refsRejected, ...(extra.cross ? { cross: countCross(extra.cross) } : {}) } : {}), model: client.a.model, provider_used: providerUsed, claude_fallbacks: fallbackReasons, usage_by_provider: byProvider, documents: summary, images: imagesCount, ms, arbiter_calls: results.filter((r) => r.arbiter.called).length, b_retry_truncated: results.reduce((n, r) => n + r.b_retry_truncated, 0), b_retry_failed: results.reduce((n, r) => n + r.b_retry_failed, 0), ...alsCounts(results), ...usage },
     ip: getClientIp(req),
   });
   return NextResponse.json({
