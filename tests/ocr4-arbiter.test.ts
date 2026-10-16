@@ -63,13 +63,46 @@ describe("第三讀仲裁：觸發條件", () => {
     expect(arb.userText).toContain("90001112");
     expect(arb.userText).not.toContain("新界火炭");
   });
-  it("任何一讀 confidence=high → 唔觸發，直接 review（reads_differ）", async () => {
-    const t = trio({ a: { phone: obj("90001111", "high") }, b: { phone: obj("90001112", "low") }, arbiter: { phone: obj("90001111", "high") } });
+  it("OCR-4.4 觸發矩陣：A high/B high 唔觸發；A high/B medium、A medium/B high、A low/B low 觸發", async () => {
+    const run = async (ca: "high" | "medium" | "low", cb: "high" | "medium" | "low") => {
+      const t = trio({ a: { phone: obj("90001111", ca) }, b: { phone: obj("90001112", cb) }, arbiter: { phone: obj("90001111", "medium") } });
+      const r = await readDocument(t.clients, "onboarding_form", IMGS);
+      return { n: t.arbCalls().length, r };
+    };
+    const hh = await run("high", "high");
+    expect(hh.n).toBe(0);
+    expect(hh.r.fields.phone).toMatchObject({ status: "review", reason: "reads_differ" });
+    expect(hh.r.arbiter).toEqual({ called: false, fields: 0 });
+    expect(hh.r.usage.calls).toBe(2);
+    for (const [ca, cb] of [["high", "medium"], ["medium", "high"], ["low", "low"], ["high", "low"]] as const) {
+      const x = await run(ca, cb);
+      expect(x.n, `${ca}/${cb}`).toBe(1);
+      expect(x.r.fields.phone).toMatchObject({ status: "confirmed", value: "90001111", arbiter: "agree_a" });
+    }
+  });
+  it("OCR-4.4：兩讀一致（即使都 high 或 low）唔觸發", async () => {
+    for (const c of ["high", "low"] as const) {
+      const t = trio({ a: { phone: obj("90001111", c) }, b: { phone: obj("90001111", c) }, arbiter: { phone: obj("90001112", "high") } });
+      const r = await readDocument(t.clients, "onboarding_form", IMGS);
+      expect(t.arbCalls()).toHaveLength(0);
+      expect(r.fields.phone).toMatchObject({ status: "confirmed" });
+    }
+  });
+  it("OCR-4.4：地址只差形近字（村／邨）→ strict 分歧入仲裁（即使 canon 一致）；仲裁同讀 B strict 一致 → confirmed", async () => {
+    const t = trio({
+      a: { address: obj("新界火炭示範村99號虛構樓15樓A室", "medium") },
+      b: { address: obj("新界火炭示範邨99號虛構樓15樓A室", "medium") },
+      arbiter: { address: obj("新界火炭示範邨99號虛構樓15樓A室", "medium") },
+    });
     const r = await readDocument(t.clients, "onboarding_form", IMGS);
+    expect(t.arbCalls()).toHaveLength(1);
+    expect(t.arbCalls()[0]!.fields).toEqual(["address"]);
+    expect(r.fields.address!.arbiter).toBe("agree_b");
+  });
+  it("OCR-4.4：地址 strict 完全一致 → 唔觸發", async () => {
+    const t = trio({ a: { address: obj("新界火炭示範街99號虛構大廈15樓A室", "low") }, b: { address: obj("新界火炭示範街99號虛構大廈15樓A室", "medium") }, arbiter: {} });
+    await readDocument(t.clients, "onboarding_form", IMGS);
     expect(t.arbCalls()).toHaveLength(0);
-    expect(r.fields.phone).toMatchObject({ status: "review", reason: "reads_differ" });
-    expect(r.arbiter).toEqual({ called: false, fields: 0 });
-    expect(r.usage.calls).toBe(2);
   });
   it("舊純字串格式（冇 confidence）兩讀唔同 → 當唔係 high，觸發仲裁", async () => {
     const t = trio({ a: { phone: "90001111" }, b: { phone: "90001112" }, arbiter: { phone: "90001113" } });
