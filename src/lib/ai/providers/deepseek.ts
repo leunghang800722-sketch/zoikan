@@ -233,7 +233,7 @@ export class DeepSeekLlmClient implements LlmClient {
     try {
       const body = {
         model: this.model,
-        max_tokens: opts.maxTokens,
+        max_tokens: opts.deepseekMaxTokens ?? opts.maxTokens,
         temperature: opts.temperature ?? 0,
         response_format: { type: "json_object" as const },
         ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
@@ -244,8 +244,9 @@ export class DeepSeekLlmClient implements LlmClient {
       };
       const response = await this.client.chat.completions.create(body as Parameters<Pick<OpenAI, "chat">["chat"]["completions"]["create"]>[0]);
       const text = "choices" in response ? (response.choices[0]?.message?.content ?? "") : "";
+      const truncated = "choices" in response && response.choices[0]?.finish_reason === "length";
       const usage = "usage" in response ? response.usage : undefined;
-      return { text, toolsUsed: [], inputTokens: usage?.prompt_tokens ?? 0, outputTokens: usage?.completion_tokens ?? 0, provider: "deepseek", model: this.model };
+      return { text, toolsUsed: [], inputTokens: usage?.prompt_tokens ?? 0, outputTokens: usage?.completion_tokens ?? 0, provider: "deepseek", model: this.model, truncated };
     } catch (err) {
       throw mapDeepSeekError(err);
     }

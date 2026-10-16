@@ -69,7 +69,7 @@ describe("W1 intents／stats API", () => {
     expect(JSON.stringify(body)).not.toMatch(/group_jid|85290000011|message_id|w1-api-g1/);
   });
 
-  it("原話／姓名只俾有「安員」view 權者：撤走會計 安員:view → text／guard_name 變 null", async () => {
+  it("原話／姓名只俾有「保安員」view 權者：撤走會計 安員:view → text／guard_name 變 null", async () => {
     const role = await prisma.role.findFirstOrThrow({ where: { name: "會計" } });
     const perm = await prisma.permission.findFirstOrThrow({ where: { module: "安員", action: "view" } });
     await prisma.rolePermission.update({ where: { roleId_permissionId: { roleId: role.id, permissionId: perm.id } }, data: { granted: false } });

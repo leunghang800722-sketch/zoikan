@@ -1,6 +1,6 @@
 "use client";
 // W1：WhatsApp 解析 dry-run 對照頁——每條 intent 嘅解析結果、routed 判定、原因碼，對照「實際排更」。
-// 只讀：唔寫更、唔開分流題。所有資料經 /api/whatsapp/{intents,stats,groups}；原話同姓名要「安員」view 權。手機 375px 友善。
+// 只讀：唔寫更、唔開分流題。所有資料經 /api/whatsapp/{intents,stats,groups}；原話同姓名要「保安員」view 權。手機 375px 友善。
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -86,6 +86,8 @@ const REASON_LABEL: Record<string, string> = {
   shift_unmapped: "更別對唔到",
   shift_ambiguous: "更別唔肯定",
   leave_unmapped: "請假類別對唔到",
+  leave_code_unclear: "放假類別唔清楚（年假／事假／例假？）",
+  low_confidence: "AI 信心偏低",
   leave_ambiguous: "請假類別唔肯定",
   conflict_other_shift: "同日已有其他更",
   conflict_leave: "同日已有請假",

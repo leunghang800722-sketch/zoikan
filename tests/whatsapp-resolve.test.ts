@@ -201,10 +201,12 @@ describe("W1 resolve：更碼／請假碼", () => {
     expect(r.resolution.candidates.shift_type_ids).toEqual(["t-n"]);
   });
   it("請假碼對照：病假→SL、年假→AL、放假→RD、事假→NL、公假→SH", async () => {
-    for (const [raw, code] of [["病假", "SL"], ["年假", "AL"], ["放假", "RD"], ["事假", "NL"], ["公假", "SH"], ["SL", "SL"], ["al", "AL"]] as const) {
+    for (const [raw, code] of [["病假", "SL"], ["年假", "AL"], ["事假", "NL"], ["公假", "SH"], ["SL", "SL"], ["al", "AL"]] as const) {
       expect(mapLeaveCode(raw).code, raw).toBe(code);
     }
     expect(mapLeaveCode("好攰").code).toBeNull();
+    for (const [raw, code] of [["例假", "RD"], ["RD", "RD"], ["OFF", "RD"]] as const) expect(mapLeaveCode(raw).code, raw).toBe(code);
+    expect(mapLeaveCode("放假")).toMatchObject({ code: null, unclear: true });
     const r = await one(mk({ type: "leave", leave_raw: "病假", shift_raw: null }));
     expect(r).toMatchObject({ kind: "leave", leaveCode: "SL", routed: "auto_write" });
   });
@@ -242,7 +244,7 @@ describe("W1 resolve：衝突與守則", () => {
   it("報請假但當日有更 → conflict_shift_vs_leave；同一請假已存在 → no-op（OFF≈RD）", async () => {
     const a = await one(mk({ type: "leave", leave_raw: "病假", shift_raw: null }), ctx({}, { existing: { "g1|2026-10-17": [rec({})] } }));
     expect(a.resolution.reasons).toContain("conflict_shift_vs_leave");
-    const b = await one(mk({ type: "leave", leave_raw: "放假", shift_raw: null }), ctx({}, { existing: { "g1|2026-10-17": [rec({ recordType: "leave", leaveCode: "OFF" })] } }));
+    const b = await one(mk({ type: "leave", leave_raw: "例假", shift_raw: null }), ctx({}, { existing: { "g1|2026-10-17": [rec({ recordType: "leave", leaveCode: "OFF" })] } }));
     expect(b.routed).toBe("ignored");
   });
   it("鎖月 → month_locked", async () => {
@@ -288,6 +290,22 @@ describe("W1 resolve：衝突與守則", () => {
     expect(r.routed).toBe("auto_write");
     expect(r.resolution.group_auto_write).toBe(false);
     expect(r.resolution.notes).toContain("group_auto_write_off");
+  });
+});
+
+describe("W1 resolve：信心與放假", () => {
+  it("信心 < 0.6 → low_confidence，唔 auto_write；0.6 剛好過", async () => {
+    const lo = await one(mk({ confidence: 0.59 }));
+    expect(lo.routed).toBe("triage");
+    expect(lo.resolution.reasons).toEqual(["low_confidence"]);
+    expect((await one(mk({ confidence: 0.6 }))).routed).toBe("auto_write");
+  });
+  it("「放假」唔自動對 RD：leave_code 空＋leave_code_unclear（triage）", async () => {
+    const r = await one(mk({ type: "leave", leave_raw: "放假", shift_raw: null }));
+    expect(r.leaveCode).toBeNull();
+    expect(r.routed).toBe("triage");
+    expect(r.resolution.reasons).toContain("leave_code_unclear");
+    expect((await one(mk({ type: "leave", leave_raw: "例假", shift_raw: null }))).leaveCode).toBe("RD");
   });
 });
 

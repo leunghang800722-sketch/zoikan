@@ -65,7 +65,7 @@ describe("W1 parse：parseMessage（fake LLM）", () => {
     const r = await parseMessage(INPUT, [stub(VALID, seen)]);
     expect(r.ok).toBe(true);
     expect(r.usage).toEqual({ provider: "fake", model: "fake-m", tokensIn: 123, tokensOut: 45 });
-    expect(seen[0]!.structured).toEqual({ format: "json_object", maxTokens: 2000, temperature: 0, reasoningEffort: "low" });
+    expect(seen[0]!.structured).toEqual({ format: "json_object", maxTokens: 2000, deepseekMaxTokens: 4000, temperature: 0, reasoningEffort: "low" });
     expect(WA_LLM_MAX_TOKENS).toBe(2000);
     expect(seen[0]!.tools).toEqual([]);
     expect(seen[0]!.history).toEqual([]);
@@ -115,7 +115,7 @@ describe("W1 parse：provider 結構化模式（additive，原有行為不變）
     expect(r.ok).toBe(true);
     expect(r.usage).toEqual({ provider: "deepseek", model: "deepseek-test", tokensIn: 100, tokensOut: 30 });
     const body = (create.mock.calls[0] as unknown as [Record<string, unknown>])[0];
-    expect(body).toMatchObject({ model: "deepseek-test", max_tokens: 2000, temperature: 0, reasoning_effort: "low", response_format: { type: "json_object" } });
+    expect(body).toMatchObject({ model: "deepseek-test", max_tokens: 4000, temperature: 0, reasoning_effort: "low", response_format: { type: "json_object" } });
     expect(body).not.toHaveProperty("tools");
     expect((body.messages as Array<{ role: string }>).map((m) => m.role)).toEqual(["system", "user"]);
   });
@@ -136,5 +136,61 @@ describe("W1 parse：provider 結構化模式（additive，原有行為不變）
     const c = getLlmClient();
     const r = await parseMessage(INPUT, [c]);
     expect(r.ok && r.output).toEqual({ noise: true, intents: [] });
+  });
+});
+
+describe("W1 parse：DeepSeek 上限與 truncated 重試", () => {
+  const mkDs = (replies: Array<{ content: string; finish: string; out: number }>) => {
+    let i = 0;
+    const create = vi.fn(async () => {
+      const r = replies[Math.min(i++, replies.length - 1)]!;
+      return { choices: [{ message: { content: r.content }, finish_reason: r.finish }], usage: { prompt_tokens: 10, completion_tokens: r.out } };
+    });
+    return { create, client: new DeepSeekLlmClient({ client: { chat: { completions: { create } } } as never, model: "ds" }) };
+  };
+  const maxOf = (create: ReturnType<typeof vi.fn>, n: number) => ((create.mock.calls[n] as unknown as [Record<string, unknown>])[0].max_tokens as number);
+  afterEach(() => {
+    delete process.env.WA_DEEPSEEK_MAX_TOKENS;
+  });
+  it("預設 DeepSeek max_tokens 4000（Claude 仍 2000）", async () => {
+    const { create, client } = mkDs([{ content: VALID, finish: "stop", out: 50 }]);
+    await parseMessage(INPUT, [client]);
+    expect(maxOf(create, 0)).toBe(4000);
+  });
+  it("env WA_DEEPSEEK_MAX_TOKENS 嚴格解析：1000–8000 純數字先生效，其他一律 4000", async () => {
+    for (const [v, want] of [["1000", 1000], ["8000", 8000], ["6000", 6000], ["999", 4000], ["8001", 4000], [" 5000", 4000], ["5e3", 4000], ["-1", 4000], ["", 4000], ["abc", 4000]] as const) {
+      process.env.WA_DEEPSEEK_MAX_TOKENS = v;
+      const { create, client } = mkDs([{ content: VALID, finish: "stop", out: 5 }]);
+      await parseMessage(INPUT, [client]);
+      expect(maxOf(create, 0), v).toBe(want);
+    }
+  });
+  it("truncated＋空內容 → 加倍重試一次（4000→8000），成功則採用，用量兩次相加", async () => {
+    const { create, client } = mkDs([{ content: "", finish: "length", out: 4000 }, { content: VALID, finish: "stop", out: 900 }]);
+    const r = await parseMessage(INPUT, [client]);
+    expect(r.ok).toBe(true);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect([maxOf(create, 0), maxOf(create, 1)]).toEqual([4000, 8000]);
+    expect(r.usage.tokensOut).toBe(4900);
+  });
+  it("truncated＋JSON 被截 → 重試；重試仍壞 → bad_json（只重試一次）", async () => {
+    const { create, client } = mkDs([{ content: '{"noise":false,"intents":[{"type":"le', finish: "length", out: 4000 }, { content: '{"noise":false,"intents":[{"ty', finish: "length", out: 8000 }]);
+    const r = await parseMessage(INPUT, [client]);
+    expect(r).toMatchObject({ ok: false, error: "bad_json" });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+  it("冇 truncated 嘅壞 JSON 唔重試；已達 8000 上限唔重試", async () => {
+    const a = mkDs([{ content: "垃圾", finish: "stop", out: 5 }]);
+    await parseMessage(INPUT, [a.client]);
+    expect(a.create).toHaveBeenCalledTimes(1);
+    process.env.WA_DEEPSEEK_MAX_TOKENS = "8000";
+    const b = mkDs([{ content: "", finish: "length", out: 8000 }]);
+    const r = await parseMessage(INPUT, [b.client]);
+    expect(r.ok).toBe(false);
+    expect(b.create).toHaveBeenCalledTimes(1);
+  });
+  it("few-shot 有「3日＝期間」負例", () => {
+    expect(WA_SYSTEM_PROMPT).toContain("我病假3日");
+    expect(WA_SYSTEM_PROMPT).toContain("唔係 3 號");
   });
 });

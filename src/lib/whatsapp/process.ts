@@ -69,7 +69,7 @@ function rowFor(messageId: string, revision: number, idx: number, r: ResolvedInt
   };
 }
 
-async function failAttempt(id: string, revision: number, code: string): Promise<ProcessOutcome> {
+export async function failAttempt(id: string, revision: number, code: string): Promise<ProcessOutcome> {
   const cur = await prisma.whatsappMessage.findUnique({ where: { id }, select: { parseAttempts: true, revision: true, status: true } });
   if (!cur || cur.revision !== revision || cur.status !== "received") return "stale";
   const attempts = cur.parseAttempts + 1;

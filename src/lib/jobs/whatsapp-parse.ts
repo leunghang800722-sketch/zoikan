@@ -3,7 +3,7 @@
 // （取代簡報嘅「每 30 秒」）。WA_ENABLED=1 先跑；scheduler 有 PG advisory lock 防並發。
 import { prisma } from "@/lib/db";
 import { waEnabled } from "@/lib/whatsapp/config";
-import { loadRunContext, markRevokedIntents, processWhatsappMessage, type ProcessStats } from "@/lib/whatsapp/process";
+import { failAttempt, loadRunContext, markRevokedIntents, processWhatsappMessage, type ProcessStats } from "@/lib/whatsapp/process";
 import { computeStats, parseRange } from "@/lib/whatsapp/stats";
 import { addDays, hkDateOf } from "@/lib/whatsapp/dates";
 import { createNotification } from "@/lib/notify/create";
@@ -38,7 +38,9 @@ export async function runWhatsappParse(now: Date, opts: { llm?: LlmClient[]; bud
       try {
         outcome = await processWhatsappMessage(r.id, ctx, stats);
       } catch {
-        outcome = "retry";
+        // 任何例外都計一次失敗（3 次 → error），唔可以無限重試打 LLM
+        const cur = await prisma.whatsappMessage.findUnique({ where: { id: r.id }, select: { revision: true } }).catch(() => null);
+        outcome = cur ? await failAttempt(r.id, cur.revision, "process_failed").catch(() => "retry" as const) : "retry";
       }
       counts.processed++;
       counts[outcome]++;

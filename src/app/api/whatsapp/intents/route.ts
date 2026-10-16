@@ -1,5 +1,5 @@
 // W1：GET /api/whatsapp/intents?group=&from=&to=&routed=&take=——dry-run 解析結果清單（view 權）。
-// 原話＋姓名只喺有「安員」view 權時回傳（同 W0 messages API 一致）；resolution 只含原因碼／id，唔含原文。
+// 原話＋姓名只喺有「保安員」view 權時回傳（同 W0 messages API 一致）；resolution 只含原因碼／id，唔含原文。
 // 每條附「實際排更」對照（✓／✗／—）。唔寫任何資料。
 import { requirePermission, hasPermission } from "@/lib/rbac/requirePermission";
 import { prisma } from "@/lib/db";

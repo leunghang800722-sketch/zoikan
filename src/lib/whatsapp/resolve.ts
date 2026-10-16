@@ -12,6 +12,7 @@ import { dateInWindow, resolveDates, addDays, hkDateOf } from "./dates";
 type IntentKind = "shift" | "leave" | "cover" | "cancel" | "unclear" | "question_only";
 type Routed = "auto_write" | "triage" | "ignored";
 
+const MIN_AUTO_CONFIDENCE = 0.6;
 const RECENT_DAYS = 60;
 
 export interface ShiftTypeLite {
@@ -233,14 +234,17 @@ const LEAVE_TABLE: Array<{ code: string; re: RegExp }> = [
   { code: "SL", re: /病假|病|\bSL\b|sick/i },
   { code: "AL", re: /年假|\bAL\b|annual/i },
   { code: "NL", re: /事假|無薪|\bNL\b|\bNPL\b/i },
-  { code: "RD", re: /放假|休息|休假|例假|\bRD\b|\bOFF\b/i },
+  { code: "RD", re: /例假|\bRD\b|\bOFF\b/i },
   { code: "SH", re: /公假|公眾假期|法定假|\bSH\b/i },
 ];
-export function mapLeaveCode(raw: string | null | undefined): { code: string | null; ambiguous: boolean } {
+// 「放假／休息／休假」可以係年假、事假、例假——唔自動對 RD，留 leave_code 空＋leave_code_unclear（只有明確「例假／RD」先 RD）
+const UNCLEAR_LEAVE_RE = /放假|休息|休假/;
+export function mapLeaveCode(raw: string | null | undefined): { code: string | null; ambiguous: boolean; unclear?: boolean } {
   const t = (raw ?? "").normalize("NFKC").trim();
   if (!t) return { code: null, ambiguous: false };
   const hits = LEAVE_TABLE.filter((x) => x.re.test(t)).map((x) => x.code);
   if (hits.length === 1) return { code: hits[0]!, ambiguous: false };
+  if (hits.length === 0 && UNCLEAR_LEAVE_RE.test(t)) return { code: null, ambiguous: false, unclear: true };
   return { code: null, ambiguous: hits.length > 1 };
 }
 
@@ -321,7 +325,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
     } else if (kind === "leave") {
       const lv = mapLeaveCode(it.leave_raw);
       if (lv.code) leaveCode = lv.code;
-      else baseReasons.push(lv.ambiguous ? "leave_ambiguous" : "leave_unmapped");
+      else baseReasons.push(lv.unclear ? "leave_code_unclear" : lv.ambiguous ? "leave_ambiguous" : "leave_unmapped");
     }
 
     const dates: Array<string | null> = dateRes.ok ? dateRes.dates : [null];
@@ -434,6 +438,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
           }
         }
 
+        if (conf < MIN_AUTO_CONFIDENCE) pushUnique(res.reasons, "low_confidence"); // LLM 信心過低唔自動
         row.routed = res.reasons.length === 0 ? "auto_write" : "triage";
         out.push(row);
       }
