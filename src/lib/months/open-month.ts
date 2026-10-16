@@ -94,6 +94,9 @@ export async function openMonth(params: { targetMonth: Date; actorUserId: string
     for (const created of createdDR) pendingAudits.push({ tableName: "daily_requirements", rowId: created.id, after: { ...created, copied_from: copiedFrom, ...byJob } });
     const drCreated = createdDR.length;
 
+    // G4b：audit 同寫入同一 tx（最後一步，一條 createMany）；失敗一齊 rollback。
+    await writeAuditMany(pendingAudits.map((a) => ({ actorUserId, tableName: a.tableName, rowId: a.rowId, action: "create" as const, after: a.after, ip })), tx);
+
     return {
       assignmentsCreated,
       quotasCreated,
@@ -103,9 +106,6 @@ export async function openMonth(params: { targetMonth: Date; actorUserId: string
     };
   }, { timeout: 60_000, maxWait: 10_000 }); // P3-1.7（B-3）：daily_requirements 逐行 round trip，預設 5 s 太短
 
-
-  // transaction 已經成功 commit——而家先逐條真係寫 audit_log。
-  await writeAuditMany(pendingAudits.map((a) => ({ actorUserId, tableName: a.tableName, rowId: a.rowId, action: "create" as const, after: a.after, ip })));
 
   const alreadyOpen = assignmentsCreated === 0 && quotasCreated === 0 && drCreated === 0 && sourceHadAnything;
   return { sourceMonth, assignmentsCreated, quotasCreated, drCreated, drSkippedOutOfRange, sourceHadAnything, alreadyOpen };

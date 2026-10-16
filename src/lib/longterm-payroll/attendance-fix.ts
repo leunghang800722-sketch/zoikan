@@ -140,7 +140,7 @@ export async function applyAttendanceFix(params: { month: Date; actions: FixActi
     p.data = { ...p.data, clientRateSnapshot: pricing.clientRate ?? null, guardWageSnapshot: pricing.guardWage ?? null, brokerFeeSnapshot: pricing.brokerFee ?? null };
   }
 
-  // ---- 寫入（一個 transaction；audit 喺 commit 後先寫）----
+  // ---- 寫入（一個 transaction；audit 同 tx）----
   const afters = new Map<string, ShiftRecord>();
   if (plans.size > 0) {
     await prisma.$transaction(
@@ -149,11 +149,11 @@ export async function applyAttendanceFix(params: { month: Date; actions: FixActi
         const ids = [...plans.keys()].sort();
         await tx.$queryRaw`SELECT id FROM shift_records WHERE id = ANY(${ids}::text[]) ORDER BY id FOR UPDATE`;
         for (const p of plans.values()) afters.set(p.id, await tx.shiftRecord.update({ where: { id: p.id }, data: p.data }));
+        // G4b：audit 同寫入同一 tx（最後一步一條 createMany）。`via` 標記經 AUDIT_META_PASSTHROUGH_KEYS 保留（shift_records audit 其餘欄位照 DTO mapping）
+        await writeAuditMany([...plans.values()].map((p) => ({ actorUserId, tableName: "shift_records", rowId: p.id, action: "update" as const, before: p.before, after: { ...afters.get(p.id)!, via: "longterm_attendance_fix" }, ip })), tx);
       },
       { timeout: 60_000, maxWait: 10_000 },
     );
-    // `via` 標記經 AUDIT_META_PASSTHROUGH_KEYS 保留（shift_records audit 其餘欄位照 DTO mapping）
-    await writeAuditMany([...plans.values()].map((p) => ({ actorUserId, tableName: "shift_records", rowId: p.id, action: "update" as const, before: p.before, after: { ...afters.get(p.id)!, via: "longterm_attendance_fix" }, ip })));
     // N4 不變式：寫咗價錢 snapshot 就補 journal（best effort，令 undo 清得到）
     const uses: AutoCardUse[] = [];
     for (const p of plans.values()) {
