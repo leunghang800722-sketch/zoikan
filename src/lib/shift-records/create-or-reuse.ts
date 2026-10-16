@@ -1,0 +1,86 @@
+// G2（Gemini 審查跟進）：單條新建 shift_record——撞 unique（guard／日／更別）而
+// 現存行係 status=cancelled 就「重用」呢行（update），唔再 409。同更表 batch
+// （existingByKey）、更表上載（reconcile-apply）一致。非 cancelled 嘅現存行仍然 409
+// （呼叫者見到 P2002 或 Conflict 就轉 409）。audit 同 create／update 喺同一個 transaction。
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
+import { writeAuditTx } from "@/lib/audit";
+import { MANUAL_SOURCE } from "@/lib/longterm-payroll/attendance-priority";
+import { toNum } from "@/lib/pricing/auto-card-journal";
+
+type SnapshotTriple = [number | null, number | null, number | null];
+
+export interface CreateOrReuseResult {
+  record: Prisma.ShiftRecordGetPayload<object>;
+  reused: boolean;
+  /** 重用時＝被重用嘅 cancelled 行三個 snapshot；新建＝null（呼叫者用自己嘅 manualBefore）。 */
+  beforeSnapshots: SnapshotTriple | null;
+}
+
+/** 重用 cancelled 行時，先將所有「非 key」欄重設做新建預設，再蓋上今次 data——避免舊行殘留
+ * （例如舊 OT 時數、parent、billed／paid、人手 rescue 價、provenance）。id／createdAt／createdBy 保留。 */
+function resetDefaults(): Prisma.ShiftRecordUncheckedUpdateInput {
+  return {
+    settlementBrokerId: null,
+    operationalBrokerId: null,
+    referralFeeSnapshot: null,
+    rescueRate: null,
+    status: "confirmed", // create 預設；雞頭分支／caller 明確帶 status 會蓋過
+    recordType: "shift",
+    leaveCode: null,
+    otHours: null,
+    parentShiftId: null,
+    locationTag: null,
+    isExternal: false,
+    billed: false,
+    paid: false,
+    settlementPage: null,
+    clientRateSnapshot: null,
+    guardWageSnapshot: null,
+    brokerFeeSnapshot: null,
+    provenance: Prisma.JsonNull,
+  };
+}
+
+export async function createOrReuseShiftRecord(input: {
+  data: Prisma.ShiftRecordUncheckedCreateInput;
+  actorUserId: string;
+  ip: string | null;
+}): Promise<CreateOrReuseResult> {
+  const { data, actorUserId, ip } = input;
+  const source = data.source ?? MANUAL_SOURCE;
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.shiftRecord.findUnique({
+      where: { guardId_workDate_shiftTypeId: { guardId: data.guardId, workDate: data.workDate as Date, shiftTypeId: data.shiftTypeId } },
+    });
+    if (!existing) {
+      const created = await tx.shiftRecord.create({ data: { ...data, source, createdBy: actorUserId } });
+      await writeAuditTx(tx, { actorUserId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip });
+      return { record: created, reused: false, beforeSnapshots: null };
+    }
+    if (existing.status !== "cancelled") {
+      // 同現行語意一致：交俾呼叫者轉 409（用同 P2002 一樣嘅 code，route 既有 catch 直接接住）。
+      throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed (active shift_record exists)", { code: "P2002", clientVersion: Prisma.prismaVersion.client });
+    }
+    const { guardId: _g, workDate: _w, shiftTypeId: _s, ...rest } = data;
+    void _g; void _w; void _s;
+    const updated = await tx.shiftRecord.update({
+      where: { id: existing.id },
+      data: { ...resetDefaults(), ...(rest as Prisma.ShiftRecordUncheckedUpdateInput), source },
+    });
+    await writeAuditTx(tx, {
+      actorUserId,
+      tableName: "shift_records",
+      rowId: updated.id,
+      action: "update",
+      before: existing,
+      after: { ...updated, reused_cancelled: true },
+      ip,
+    });
+    return {
+      record: updated,
+      reused: true,
+      beforeSnapshots: [toNum(existing.clientRateSnapshot), toNum(existing.guardWageSnapshot), toNum(existing.brokerFeeSnapshot)],
+    };
+  });
+}

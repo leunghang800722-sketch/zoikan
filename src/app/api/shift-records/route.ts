@@ -1,4 +1,3 @@
-import { MANUAL_SOURCE } from "@/lib/longterm-payroll/attendance-priority";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import {
@@ -19,7 +18,7 @@ import { paginationParams, readJson } from "@/lib/api/query";
 import { parseBody } from "@/lib/api/validate";
 import { snakeToCamelShallow } from "@/lib/api/case";
 import { ShiftRecordCreateSchema, BrokerShiftRecordCreateSchema } from "@/lib/api/schemas";
-import { writeAudit } from "@/lib/audit";
+import { createOrReuseShiftRecord } from "@/lib/shift-records/create-or-reuse";
 import { BadRequest, Conflict, NotFound } from "@/lib/api/errors";
 import type { Prisma } from "@prisma/client";
 // WP-PRICE：單條建立都要計價（同 batch/route.ts 一樣，之前完全冇寫
@@ -175,10 +174,10 @@ export async function POST(req: Request) {
       await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
       try {
-        const created = await prisma.shiftRecord.create({ data: { ...data, source: data.source ?? MANUAL_SOURCE, createdBy: session.userId } }); // P18：單條新建寫 source=manual（同 batch 一致；caller 明確帶 source 先保留）
-        await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
-        await journalAutoCardUsesSafe([{ recordId: created.id, before: [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...brokerPricingSource }]);
-        return ok(scrubForBrokerSession(session, toBrokerShiftRecordDTO(created)), 201);
+        // G2：撞 unique 而現存行係 cancelled → 重用（update）；非 cancelled → P2002 → 409。audit 同 tx。
+        const { record: created, reused, beforeSnapshots } = await createOrReuseShiftRecord({ data, actorUserId: session.userId, ip: getClientIp(req) });
+        await journalAutoCardUsesSafe([{ recordId: created.id, before: beforeSnapshots ?? [null, null, null], after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...brokerPricingSource }]);
+        return ok({ ...scrubForBrokerSession(session, toBrokerShiftRecordDTO(created)), ...(reused ? { reused: true } : {}) }, 201);
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
           throw Conflict("同一保安員、同一日、同一更別已經有記錄（硬性規則2）");
@@ -289,10 +288,12 @@ export async function POST(req: Request) {
     await assertMonthNotLocked({ workDate, actorUserId: session.userId, tableName: "shift_records", rowId: "new", ip: getClientIp(req) });
 
     try {
-      const created = await prisma.shiftRecord.create({ data: { ...data, source: data.source ?? MANUAL_SOURCE, createdBy: session.userId } }); // P18：單條新建寫 source=manual（同 batch 一致；caller 明確帶 source 先保留）
-      await writeAudit({ actorUserId: session.userId, tableName: "shift_records", rowId: created.id, action: "create", after: created, ip: getClientIp(req) });
-      await journalAutoCardUsesSafe([{ recordId: created.id, before: manualBefore, after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...internalSource }]);
-      return ok(await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(created)), 201);
+      // P18：單條新建寫 source=manual（同 batch 一致；caller 明確帶 source 先保留）——helper 內處理。
+      // G2：撞 unique 而現存行係 cancelled → 重用（update）；非 cancelled → P2002 → 409。audit 同 tx。
+      const { record: created, reused, beforeSnapshots } = await createOrReuseShiftRecord({ data, actorUserId: session.userId, ip: getClientIp(req) });
+      await journalAutoCardUsesSafe([{ recordId: created.id, before: beforeSnapshots ?? manualBefore, after: [toNum(created.clientRateSnapshot), toNum(created.guardWageSnapshot), toNum(created.brokerFeeSnapshot)], ...internalSource }]);
+      const dto = await applyFieldGroupGate(session, "shift_records", toShiftRecordFullDTO(created));
+      return ok(reused ? Object.assign(dto, { reused: true }) : dto, 201); // additive：reused 標記
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
         throw Conflict("同一保安員、同一日、同一更別已經有記錄（硬性規則2）");
