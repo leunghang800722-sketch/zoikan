@@ -2697,3 +2697,32 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 - 新 `GET /api/longterm/leaver-adw?month=YYYY-MM`（`長工糧:view`，唯讀）：`{ month, items[], pending_count, awaiting_recompute_count, source_prefill }`；`items[]`＝`guard_id`／`guard_name`／`guard_staff_no`／`leave_date`／`basis`／`daily_rate_used`／`suggested_adw`／`history_incomplete`／`months_missing`／`balance_days`／`saved_awaiting_recompute`／`saved_avg_daily_wage`／`advice`。條件：最新未作廢 run 嘅離職者糧線 `basis` 係 `fallback_monthly`（歷史糧線唔齊）；已有 `guard_avg_wages` 記錄但未重算＝`saved_awaiting_recompute`；重算後 `basis=imported` 即消失。
 - 鎖月 `POST /api/month-closes/:id/lock` 回應 additive `warnings: string[]`、`leaver_adw_pending: number`（只警告，唔阻鎖）；一鍵結算 precheck `numbers.leaverAdwPending` ＋ warning（唔 halt）。
 - 計算（`src/lib/longterm-payroll/adw.ts`、`adw-history.ts`）：年假補償日薪優先次序＝人手金額（`leaver_settlement.amount`）＞ `guard_avg_wages` 該月記錄 ＞ 《僱傭條例》第 2(3) 條自動計（期間完整先用）＞ 月薪÷當月日數。8 月 oracle 兩位離職者冇糧線歷史→維持月薪÷31，gate 數字不變。
+
+## WhatsApp 報更（W0，2026-10；全部 additive）
+
+計劃書 `docs/plans/whatsapp-roster-plan.md`。三張新表 `whatsapp_groups`／`whatsapp_messages`／`whatsapp_intents`（public schema，**唔入 `ai` schema**；`ai.audit_log` 排除三個 table_name）。RBAC 新 module **`WhatsApp 報更`**：老闆 view＋update；會計、主管 view；雞頭、保安員全部硬性拒。
+
+### `POST /api/webhooks/whatsapp`（無 session，獨立保護）
+- `WA_ENABLED!=="1"` → `503 {"error":"whatsapp_disabled"}`。
+- raw body ≤64 KB（content-length 預檢＋串流計數；超過 `413 payload_too_large`）。
+- 驗證：`X-Webhook-Hmac`（sha512 hex，對 **raw body bytes**，key＝`WA_WEBHOOK_HMAC_KEY`）＋`X-Zoikan-Hook`（＝`WA_WEBHOOK_HEADER_SECRET`），均 `timingSafeEqual`；`X-Webhook-Hmac-Algorithm` 若有必須係 `sha512`。key／secret 未設＝一律拒絕。唔過 → `401 {"error":"unauthorized"}`（唔落庫、唔 log body）。
+- body 假設（WAHA 常見格式，欄位大多 optional；型別錯 → `400 {"error":"bad_request"}`）：`{ event, session?, payload:{ id, timestamp(秒；>1e12 當毫秒), from, participant?, fromMe?, body?, hasMedia?, media?{mimetype}, replyTo?{id}, editedMessageId?, revokedMessageId?|before?{id}, _data? } }`。
+- 事件：`message`（`INSERT … ON CONFLICT (message_id) DO NOTHING`）、`message.edited`（目標 id＝`editedMessageId ?? id`；`revision+1`、舊文字入 `text_history`、`status=received`、`edited_at`；已有 `whatsapp_intents` 標 `source_changed=true`；同文字重覆、空內容、已撤回、ignored、冇原訊息＝no-op）、`message.revoked`（目標 id＝`revokedMessageId ?? before.id ?? id`；`revoked_at`、`status=revoked`、intents `source_changed`）。其他事件 → `200` 不處理。
+- 落庫即標 `ignored`（`ignore_reason`）：`not_group`（非 `@g.us`；**唔存原文**，jid 以 hash 取代，唔解析電話）、`from_me`、`stale`（早過 72h）、`future_ts`（遲過 now+10 分鐘）。媒體只記 `media_type`（mimetype 主類，如 `image`／`audio`），唔下載。
+- 回 `200 {"ok":true}`（唔做任何解析）；落庫失敗 `500`（WAHA 重試，冪等）。
+
+### `GET /api/whatsapp/groups`（view）／`PATCH /api/whatsapp/groups`（update，老闆）
+- GET → `{ rows:[{ id, group_jid, label, kind, site_id, site_name, broker_id, broker_code, shift_word_map:[{word,code}], auto_write, auto_confirm, active, last_message_at, unprocessed_count, … }], total, can_update, site_options, broker_options }`（`*_options` 淨係有 update 權先有內容）。`shift_word_map` 對外係**陣列**（DB 存物件），避免 key 被 camel→snake 轉換。
+- PATCH body：`{ id, label?, kind?(site|multi_site|broker|office|ignored), site_id?, broker_id?, shift_word_map?:[{word,code}] (≤30，口語唔可重覆), auto_write?, auto_confirm?, active? }`。保守一致性檢查（400）：`site` 要綁盤、`broker` 要綁判頭、`ignored`／`office` 唔准開自動、`auto_confirm` 要先 `auto_write`、盤／判頭要存在；轉類型而冇傳 `site_id`／`broker_id` 會清走唔相干嘅舊綁定。寫 audit（`whatsapp_groups`，`update`，before／after 白名單 DTO）。
+
+### `POST /api/whatsapp/groups/sync`（update，老闆）
+向 WAHA `GET /api/{session}/groups` 攞群組（只取 id＋名；id 可係字串或 `{_serialized}`；只收 `@g.us`），新群 `kind=ignored`、自動寫入全關；已存在只更新群名。回 `{ total, created, relabelled }`；audit action `whatsapp_group_sync`（`row_id="sync"`）。`WAHA_BASE_URL` 未設 → `503 waha_not_configured`；WAHA 連唔到／非 2xx／格式錯 → `502 waha_unavailable`（唔洩漏 URL／key）。
+
+### `GET /api/whatsapp/messages?group=&status=&take=`（view）
+最近訊息（`take` 預設及上限 200；`group` 可係群 id 或 jid；`status` 非法 → 400）。**唔回傳原文**、WAHA `message_id`（含發訊人電話）、完整電話；`sender`＝有「安員:view」顯示保安員姓名，否則 `…`＋電話尾 4 位；另有 `revision`、`edited`、`revoked`、`redacted`、`media_type`、`filter_score`、`ignore_reason`、`text_len`。
+
+### `GET /api/whatsapp/health`（view）
+`{ enabled, waha_configured, waha_ok, waha_status, waha_error, last_received_at, backlog(status=received), errors_24h, messages_24h }`；WAHA 連線 5s timeout。
+
+### 保留期 job
+`whatsapp_retention`（每日 03:00 HKT，`/settings/jobs` 可見）：`ts < now-90d` 且未 redact 嘅訊息 `text`、`text_history` 置空、設 `redacted_at`；解析結果／audit 照舊。summary 只有 `{ redacted, retention_days }`。

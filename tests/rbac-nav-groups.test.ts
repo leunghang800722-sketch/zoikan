@@ -26,13 +26,13 @@ async function navFor(role: RoleName) {
 const sig = (groups: ReturnType<typeof groupNavLinks>) => groups.map((g) => `${g.title}:${g.links.map((l) => l.href.replace(/&month=\d{4}-\d{2}$/, "")).join(",")}`);
 
 describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
-  it("老闆：18 條、6 組（首頁／排更／對數／月結／資料／設定），次序同組內次序固定", async () => {
+  it("老闆：19 條、6 組（首頁／排更／對數／月結／資料／設定），次序同組內次序固定", async () => {
     const { links, groups } = await navFor("老闆");
-    expect(links).toHaveLength(18);
+    expect(links).toHaveLength(19);
     expect(groups.map((g) => g.title)).toEqual(["", "排更", "對數", "月結", "資料", "設定"]);
     expect(sig(groups)).toEqual([
       ":/",
-      "排更:/roster,/quotas,/approvals",
+      "排更:/roster,/quotas,/approvals,/whatsapp",
       "對數:/roster-uploads,/roster-uploads?tab=fix",
       "月結:/month-close,/triage,/reports/monthly-close",
       "資料:/sites,/guards,/brokers,/rate-cards",
@@ -46,16 +46,16 @@ describe("NAV_SCHEMA 導覽（P3-3.1，出廠矩陣逐個角色）", () => {
     expect(links.find((l) => l.label === "未配對保安員修復")!.href).toMatch(/^\/roster-uploads\?tab=fix&month=\d{4}-\d{2}$/);
   });
 
-  it("主管：11 條（按出廠權限減——冇修復、報表、設定組）", async () => {
+  it("主管：12 條（按出廠權限減——冇修復、報表、設定組）", async () => {
     const { links, groups } = await navFor("主管");
-    expect(links).toHaveLength(11);
-    expect(sig(groups)).toEqual([":/", "排更:/roster,/quotas,/approvals", "對數:/roster-uploads", "月結:/month-close,/triage", "資料:/sites,/guards,/brokers,/rate-cards"]);
+    expect(links).toHaveLength(12);
+    expect(sig(groups)).toEqual([":/", "排更:/roster,/quotas,/approvals,/whatsapp", "對數:/roster-uploads", "月結:/month-close,/triage", "資料:/sites,/guards,/brokers,/rate-cards"]);
   });
 
-  it("會計：11 條（有報表，冇審批、修復、設定組）", async () => {
+  it("會計：12 條（有報表，冇審批、修復、設定組）", async () => {
     const { links, groups } = await navFor("會計");
-    expect(links).toHaveLength(11);
-    expect(sig(groups)).toEqual([":/", "排更:/roster,/quotas", "對數:/roster-uploads", "月結:/month-close,/triage,/reports/monthly-close", "資料:/sites,/guards,/brokers,/rate-cards"]);
+    expect(links).toHaveLength(12);
+    expect(sig(groups)).toEqual([":/", "排更:/roster,/quotas,/whatsapp", "對數:/roster-uploads", "月結:/month-close,/triage,/reports/monthly-close", "資料:/sites,/guards,/brokers,/rate-cards"]);
   });
 
   it("雞頭：6 條、3 組（首頁／排更／我的）；唔出 /brokers", async () => {
