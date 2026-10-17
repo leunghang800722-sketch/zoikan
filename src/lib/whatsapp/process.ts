@@ -190,6 +190,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
       shiftTable.push({ code: t.code, label: t.label, time: slot ? `${slot.slice(0, 2)}:${slot.slice(2, 4)}-${slot.slice(5, 7)}:${slot.slice(7, 9)}` : null });
     }
   }
+  const leaveWordMap = (group.leaveWordMap && typeof group.leaveWordMap === "object" && !Array.isArray(group.leaveWordMap) ? group.leaveWordMap : {}) as Record<string, string>;
   const wordMap = (group.shiftWordMap && typeof group.shiftWordMap === "object" && !Array.isArray(group.shiftWordMap) ? group.shiftWordMap : {}) as Record<string, string>;
 
   let parsed;
@@ -212,7 +213,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     const intents: ParsedIntent[] = parsed.ok ? parsed.output.intents : [];
     const resolveCtx = {
       ts: msg.ts,
-      group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wordMap, autoWrite: group.autoWrite },
+      group: { id: group.id, kind: group.kind, siteId: group.siteId, brokerId: group.brokerId, shiftWordMap: wordMap, leaveWordMap, autoWrite: group.autoWrite },
       senderGuardId: msg.senderGuardId,
       senderTelNorm: msg.senderTelNorm,
       sites: ctx.sites,

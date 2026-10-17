@@ -28,6 +28,7 @@ interface GroupRow {
   broker_id: string | null;
   broker_code: string | null;
   shift_word_map: WordPair[];
+  leave_word_map: WordPair[];
   filter_threshold: number | null;
   auto_write: boolean;
   auto_confirm: boolean;
@@ -41,6 +42,8 @@ interface GroupsRes {
   can_update: boolean;
   site_options: { id: string; name: string }[];
   broker_options: { id: string; code: string }[];
+  shift_code_options: { site_id: string; codes: { code: string; label: string | null }[] }[];
+  leave_code_options: string[];
 }
 interface MessageRow {
   id: string;
@@ -67,7 +70,11 @@ interface HealthRes {
   backlog: number;
   errors_24h: number;
   messages_24h: number;
+  recent_alerts: { id: string; title: string; body: string; created_at: string }[];
 }
+const LEAVE_LABEL: Record<string, string> = { SL: "病假 SL", AL: "年假 AL", NL: "事假／無薪 NL", RD: "例假 RD", SH: "公假 SH" };
+/** 內建請假詞（resolve.ts LEAVE_TABLE）：只做提示，群組可覆寫。 */
+const BUILTIN_LEAVE_HINT = "內建：病假→SL、年假→AL、事假／無薪→NL、例假／RD→RD、公假→SH";
 
 const KIND_LABEL: Record<string, string> = { site: "單盤群", multi_site: "大群（多盤）", broker: "判頭群", office: "辦公室", ignored: "略過" };
 const STATUS_LABEL: Record<string, string> = { received: "已收", filtered: "已過濾", parsed: "已解析", routed: "已分流", done: "完成", ignored: "略過", error: "錯誤", revoked: "已撤回" };
@@ -149,6 +156,7 @@ export default function WhatsappPage() {
         subtitle="被動收聽公司專用號碼所在群組嘅訊息（只聽唔講）。已開「自動寫入」嘅群組，解析有把握嘅更／請假會直接寫入更表（待批核），其餘去分流。"
         actions={
           <>
+            <Link href="/whatsapp/metrics" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">指標</Link>
             <Link href="/whatsapp/pending" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">WhatsApp 待批</Link>
             <Link href="/whatsapp/intents" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">解析對照（dry-run）</Link>
             <Button onClick={() => { void loadGroups(); void loadMessages(); void loadHealth(); void loadSuggested(); }}>重新整理</Button>
@@ -199,6 +207,19 @@ export default function WhatsappPage() {
               <div className="text-zk-xs text-zk-muted">建議自動但群組未開（近 14 日）</div>
               <div className="text-zk-text">{suggested ?? "—"}</div>
             </div>
+          </div>
+        )}
+        {health && health.recent_alerts.length > 0 && (
+          <div className="mt-3 border-t border-zk-border-soft pt-2" data-testid="wa-health-alerts">
+            <div className="mb-1 text-zk-xs text-zk-muted">最近告警</div>
+            <ul className="space-y-1">
+              {health.recent_alerts.map((a) => (
+                <li key={a.id} className="text-zk-sm" data-testid="wa-health-alert">
+                  <span className="font-medium text-zk-text">{a.title}</span>
+                  <span className="ml-2 text-zk-xs text-zk-muted">{fmtDateTime(a.created_at)}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </section>
@@ -286,6 +307,8 @@ export default function WhatsappPage() {
           key={editing.id}
           group={editing}
           sites={groups.site_options}
+          shiftCodes={groups.shift_code_options}
+          leaveCodes={groups.leave_code_options}
           brokers={groups.broker_options}
           onClose={() => setEditing(null)}
           onSaved={async () => {
@@ -299,8 +322,64 @@ export default function WhatsappPage() {
   );
 }
 
-function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
+/** 一行「口語詞 → 代碼」：詞輸入＋代碼下拉＋刪除。 */
+function WordMapRows({ title, hint, pairs, setPairs, options, optionLabel, wordPh, testid }: {
+  title: string;
+  hint: string;
+  pairs: WordPair[];
+  setPairs: (p: WordPair[]) => void;
+  options: string[];
+  optionLabel: (c: string) => string;
+  wordPh: string;
+  testid: string;
+}) {
+  const norm = (w: string) => w.normalize("NFKC").trim();
+  const seen = new Map<string, number>();
+  pairs.forEach((p) => { const w = norm(p.word); if (w) seen.set(w, (seen.get(w) ?? 0) + 1); });
+  return (
+    <div className="space-y-1.5" data-testid={testid}>
+      <div className="text-sm text-zk-text-secondary">{title}</div>
+      {pairs.length === 0 && <div className="text-zk-xs text-zk-faint">{hint}</div>}
+      {pairs.map((p, i) => {
+        const dup = norm(p.word) !== "" && (seen.get(norm(p.word)) ?? 0) > 1;
+        const opts = p.code && !options.includes(p.code) ? [...options, p.code] : options;
+        return (
+          <div key={i} className="space-y-0.5" data-testid="wa-wordmap-row">
+            <div className="flex items-center gap-2">
+              <input className={`${inputCls} ${dup ? "!border-zk-danger" : ""}`} aria-label={`${title}口語 ${i + 1}`} placeholder={wordPh} maxLength={20} value={p.word} onChange={(e) => setPairs(pairs.map((x, j) => (j === i ? { ...x, word: e.target.value } : x)))} />
+              <span aria-hidden className="text-zk-muted">→</span>
+              <select className={`${selectCls} !w-28 shrink-0`} aria-label={`${title}代碼 ${i + 1}`} value={p.code} onChange={(e) => setPairs(pairs.map((x, j) => (j === i ? { ...x, code: e.target.value } : x)))}>
+                <option value="">（揀）</option>
+                {opts.map((c) => (
+                  <option key={c} value={c}>{optionLabel(c)}</option>
+                ))}
+              </select>
+              <Button size="sm" variant="ghost" aria-label={`刪除${title} ${i + 1}`} onClick={() => setPairs(pairs.filter((_, j) => j !== i))}>刪</Button>
+            </div>
+            {dup && <div className="text-zk-xs text-zk-danger" data-testid="wa-wordmap-dup">口語詞重覆</div>}
+          </div>
+        );
+      })}
+      {pairs.length < 30 && <Button size="sm" onClick={() => setPairs([...pairs, { word: "", code: "" }])}>加一行</Button>}
+    </div>
+  );
+}
+
+function hasDup(pairs: WordPair[]): boolean {
+  const s = new Set<string>();
+  for (const p of pairs) {
+    const w = p.word.normalize("NFKC").trim();
+    if (!w) continue;
+    if (s.has(w)) return true;
+    s.add(w);
+  }
+  return false;
+}
+
+function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, onSaved }: {
   group: GroupRow;
+  shiftCodes: GroupsRes["shift_code_options"];
+  leaveCodes: string[];
   sites: { id: string; name: string }[];
   brokers: { id: string; code: string }[];
   onClose: () => void;
@@ -310,6 +389,7 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
   const [siteId, setSiteId] = useState(group.site_id ?? "");
   const [brokerId, setBrokerId] = useState(group.broker_id ?? "");
   const [pairs, setPairs] = useState<WordPair[]>(group.shift_word_map);
+  const [leavePairs, setLeavePairs] = useState<WordPair[]>(group.leave_word_map ?? []);
   const [autoWrite, setAutoWrite] = useState(group.auto_write);
   const [autoConfirm, setAutoConfirm] = useState(group.auto_confirm);
   const [active, setActive] = useState(group.active);
@@ -318,10 +398,24 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const noAuto = kind === "ignored" || kind === "office";
+  // 更碼下拉：單盤群＝該盤有效更別；其餘（大群／判頭群）＝所有盤嘅更碼（去重）
+  const shiftCodeList = (() => {
+    const src = kind === "site" && siteId ? shiftCodes.filter((x) => x.site_id === siteId) : shiftCodes;
+    return [...new Set(src.flatMap((x) => x.codes.map((c) => c.code)))].sort();
+  })();
 
   async function save() {
-    setSaving(true);
     setErr(null);
+    if (hasDup(pairs) || hasDup(leavePairs)) {
+      setErr("口語詞重覆，請修正後再儲存");
+      return;
+    }
+    const half = [...pairs, ...leavePairs].find((p) => (p.word.trim() && !p.code) || (!p.word.trim() && p.code));
+    if (half) {
+      setErr("有對照行只填咗一半（口語詞同代碼都要填），請補齊或刪除");
+      return;
+    }
+    setSaving(true);
     const cleaned = pairs.map((p) => ({ word: p.word.trim(), code: p.code.trim() })).filter((p) => p.word && p.code);
     const r = await apiPatch(`/api/whatsapp/groups`, {
       id: group.id,
@@ -329,6 +423,7 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
       site_id: kind === "site" ? siteId || null : null,
       broker_id: kind === "broker" ? brokerId || null : null,
       shift_word_map: cleaned,
+      leave_word_map: leavePairs.map((p) => ({ word: p.word.trim(), code: p.code })).filter((p) => p.word && p.code),
       filter_threshold: threshold.trim() === "" ? null : Number(threshold),
       auto_write: noAuto ? false : autoWrite,
       auto_confirm: noAuto || !autoWrite ? false : autoConfirm,
@@ -377,18 +472,26 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
             </select>
           </label>
         )}
-        <div className="space-y-1.5">
-          <div className="text-sm text-zk-text-secondary">口語 → 更碼對照</div>
-          {pairs.length === 0 && <div className="text-zk-xs text-zk-faint">冇對照時，之後會用該盤更別時段推斷。</div>}
-          {pairs.map((p, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input className={inputCls} aria-label={`口語 ${i + 1}`} placeholder="口語（例：夜）" maxLength={20} value={p.word} onChange={(e) => setPairs(pairs.map((x, j) => (j === i ? { ...x, word: e.target.value } : x)))} />
-              <input className={`${inputCls} !w-24`} aria-label={`更碼 ${i + 1}`} placeholder="更碼" maxLength={12} value={p.code} onChange={(e) => setPairs(pairs.map((x, j) => (j === i ? { ...x, code: e.target.value } : x)))} />
-              <Button size="sm" variant="ghost" aria-label={`刪除對照 ${i + 1}`} onClick={() => setPairs(pairs.filter((_, j) => j !== i))}>刪</Button>
-            </div>
-          ))}
-          {pairs.length < 30 && <Button size="sm" onClick={() => setPairs([...pairs, { word: "", code: "" }])}>加一行對照</Button>}
-        </div>
+        <WordMapRows
+          title="口語 → 更碼對照"
+          hint="冇對照時，之後會用該盤更別時段推斷。"
+          pairs={pairs}
+          setPairs={setPairs}
+          options={shiftCodeList}
+          optionLabel={(c) => c}
+          wordPh="口語（例：夜）"
+          testid="wa-shift-wordmap"
+        />
+        <WordMapRows
+          title="請假詞對照（可選，覆寫內建）"
+          hint={BUILTIN_LEAVE_HINT}
+          pairs={leavePairs}
+          setPairs={setLeavePairs}
+          options={leaveCodes}
+          optionLabel={(c) => LEAVE_LABEL[c] ?? c}
+          wordPh="口語（例：病）"
+          testid="wa-leave-wordmap"
+        />
         <label className="block space-y-1">
           <span className="block text-sm text-zk-text-secondary">過濾閾值（0–100，留空＝預設 40）</span>
           <input className={inputCls} type="number" min={0} max={100} aria-label="過濾閾值" value={threshold} onChange={(e) => setThreshold(e.target.value)} />

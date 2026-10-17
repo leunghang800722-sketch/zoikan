@@ -14,6 +14,10 @@ export type GroupKind = (typeof GROUP_KINDS)[number];
 
 const PairSchema = z.object({ word: z.string().trim().min(1).max(20), code: z.string().trim().min(1).max(12) });
 
+/** W5：群組可覆寫嘅請假碼（內建對照見 resolve.ts LEAVE_TABLE）。 */
+export const LEAVE_OVERRIDE_CODES = ["SL", "AL", "NL", "RD", "SH"] as const;
+const LeavePairSchema = z.object({ word: z.string().trim().min(1).max(20), code: z.enum(LEAVE_OVERRIDE_CODES) });
+
 export const GroupPatchSchema = z.object({
   id: z.string().min(1).max(64),
   label: z.string().trim().max(200).optional(),
@@ -21,6 +25,7 @@ export const GroupPatchSchema = z.object({
   site_id: z.string().min(1).max(64).nullable().optional(),
   broker_id: z.string().min(1).max(64).nullable().optional(),
   shift_word_map: z.array(PairSchema).max(30).optional(),
+  leave_word_map: z.array(LeavePairSchema).max(30).optional(),
   auto_write: z.boolean().optional(),
   auto_confirm: z.boolean().optional(),
   active: z.boolean().optional(),
@@ -33,8 +38,11 @@ export const GroupPatchSchema = z.object({
 export function pairsToWordMap(pairs: WordPair[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const p of pairs) {
-    if (Object.prototype.hasOwnProperty.call(out, p.word)) throw BadRequest(`口語對照重覆：「${p.word}」`);
-    out[p.word] = p.code;
+    // W5：詞先 NFKC 正規化（resolve 配對用 NFKC），全形／半形算重覆
+    const word = p.word.normalize("NFKC").trim();
+    if (!word) throw BadRequest("口語詞唔可以留空");
+    if (Object.prototype.hasOwnProperty.call(out, word)) throw BadRequest(`口語對照重覆：「${word}」`);
+    out[word] = p.code;
   }
   return out;
 }

@@ -380,3 +380,24 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 - 群組開咗自動寫入但冇記錄＝睇 `/whatsapp/intents` 嗰條嘅原因碼；`只係建議（群組未開自動寫入）`＝群組開關未開。
 - 突然全部去分流＝查 `WA_AUTO_WRITE_ENABLED` 係咪設咗 `0`／亂碼，或群組當日已達上限。
 - 寫入嘅身份係「系統排程」帳號（`created_by`）；審計日誌 action＝`create`／`void`，`source=whatsapp`，`provenance` 含 `message_id`、`revision`、`intent_idx`、`sender_guard_id`。
+
+## WhatsApp 運維 runbook（W5，2026-10）
+
+**每日睇邊度**：`/whatsapp` 頂部「系統狀態」（WAHA session、最後收到時間、積壓、24 小時錯誤、最近告警）；`/whatsapp/metrics`（近 7／30 日數字：收訊、過濾、解析、建議自動、實際自動寫入、待批／已批／退回、Triage 開題／已答、對照一致率、AI 呼叫／token、錯誤；可按群睇）；每日 09:00 日摘要通知。
+
+**告警（`whatsapp_health` job，每 15 分鐘，`/settings/jobs` 可見；通知類別「WhatsApp 橋接異常／斷線／積壓」，通知設定可關 email）**
+- 「WhatsApp 橋接異常：…」＝WAHA session 唔係 WORKING。同一狀態 6 小時最多提醒一次；恢復後會有一條「已恢復」。
+- 「WhatsApp 橋接可能斷線」＝週一至六 07:00–23:00（香港）所有已綁定群超過 6 小時冇訊息。注意：週一至六 07:00 左右若前一晚本來就冇人講嘢，可能誤報——睇 WAHA 狀態即可確認；每日最多一條。
+- 「WhatsApp 解析積壓」＝待解析超過 200 條，或最舊一條等超過 30 分鐘：先睇「WhatsApp 報更解析＋自動寫入」job 有冇出錯（`/settings/jobs`）、AI 服務（`DEEPSEEK_API_KEY`／AI Hub）連唔連得到；job 每分鐘自動重試，3 次失敗嘅訊息會標「錯誤」。
+
+**被封號／session 失敗（FAILED）後點做**
+1. 確認：`/whatsapp` 見 WAHA session 「FAILED」或「連唔到」；用 WAHA dashboard（只限內網／老闆）睇 session。
+2. 後備：報更照舊人手入更（主管轉發／雞頭入更），系統其他部分唔受影響；唔好急住換號重複登入（頻密登出／重掃會增加封號風險，見計劃書 §7.2）。
+3. 若只係斷線／STOPPED：喺 Zeabur 重啟 `waha` service（volume `/app/.sessions` 持久，通常唔使重掃 QR）。
+4. 若係 SCAN_QR_CODE：用 WAHA dashboard 對該 session 重掃 QR（用公司專用 SIM 嘅手機：WhatsApp → 已連結裝置 → 連結裝置）。掃完 session 應轉 WORKING，15 分鐘內會收到「已恢復」。
+5. 若確認被封：換專用 SIM／新號碼，按 W0 清單重新建 session、人手入群（一次 ≤10 個群，逐週加），再喺 `/whatsapp` 撳「同步群組」；舊綁定嘅 `group_jid` 通常不變（群冇換）。期間群組開關可保持，訊息補唔返（唔抓歷史）——受影響日子由主管人手入更。
+6. 斷線期間冇收到嘅訊息唔會補；恢復後只收新訊息。
+
+**口語對照**：`/whatsapp` → 群組「綁定設定」。「口語 → 更碼」每行揀該盤有效更別（大群／判頭群顯示所有盤嘅更碼）；詞唔可以重覆（全形／半形算同一個詞）。「請假詞對照」係可選覆寫：例如該群習慣講「病」就係年假，就加「病 → AL」；冇覆寫就用內建（病假→SL、年假→AL、事假／無薪→NL、例假／RD→RD、公假→SH）。「放假／休息」內建唔自動入，群組可覆寫成 RD。改咗對照只影響之後新解析嘅訊息。
+
+**保留期**：訊息原文 90 日後由 `whatsapp_retention`（每日 03:00）置空；解析結果、審計日誌照舊保留。指標只用數字，唔受影響。

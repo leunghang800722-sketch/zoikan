@@ -8,7 +8,7 @@ import { parseBody } from "@/lib/api/validate";
 import { BadRequest, NotFound } from "@/lib/api/errors";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { writeAuditTx } from "@/lib/audit";
-import { assertGroupConsistent, GroupPatchSchema, pairsToWordMap } from "@/lib/whatsapp/groups";
+import { assertGroupConsistent, GroupPatchSchema, LEAVE_OVERRIDE_CODES, pairsToWordMap } from "@/lib/whatsapp/groups";
 import { toWaGroupDTO } from "@/lib/whatsapp/dto";
 import type { Prisma } from "@prisma/client";
 
@@ -30,12 +30,16 @@ export async function GET(req: Request) {
       }),
     );
     // 綁定表單選項：淨係有 update 權先出（盤名＋判頭代號，唔含收客價／真名）
-    const [siteOptions, brokerOptions] = canUpdate
+    const [siteOptions, brokerOptions, shiftTypes] = canUpdate
       ? await Promise.all([
           prisma.site.findMany({ where: { status: { in: ["active", "paused"] } }, select: { id: true, canonicalName: true }, orderBy: { canonicalName: "asc" } }),
           prisma.broker.findMany({ select: { id: true, code: true }, orderBy: { code: "asc" } }),
+          // W5：口語對照下拉用——每盤有效更別（只有更碼＋標籤，無價）
+          prisma.shiftType.findMany({ where: { voidedAt: null }, select: { siteId: true, code: true, label: true }, orderBy: [{ code: "asc" }] }),
         ])
-      : [[], []];
+      : [[], [], []];
+    const codesBySite = new Map<string, { code: string; label: string | null }[]>();
+    for (const t of shiftTypes) codesBySite.set(t.siteId, [...(codesBySite.get(t.siteId) ?? []), { code: t.code, label: t.label }]);
     return ok(
       brandSafeResponse({
         rows,
@@ -43,6 +47,8 @@ export async function GET(req: Request) {
         can_update: canUpdate,
         site_options: siteOptions.map((s) => ({ id: s.id, name: s.canonicalName })),
         broker_options: brokerOptions.map((b) => ({ id: b.id, code: b.code })),
+        shift_code_options: [...codesBySite.entries()].map(([site_id, codes]) => ({ site_id, codes })),
+        leave_code_options: [...LEAVE_OVERRIDE_CODES],
       }),
     );
   });
@@ -76,6 +82,7 @@ export async function PATCH(req: Request) {
     if (body.auto_write_daily_cap !== undefined) data.autoWriteDailyCap = body.auto_write_daily_cap;
     if (body.filter_threshold !== undefined) data.filterThreshold = body.filter_threshold;
     if (body.shift_word_map !== undefined) data.shiftWordMap = pairsToWordMap(body.shift_word_map);
+    if (body.leave_word_map !== undefined) data.leaveWordMap = pairsToWordMap(body.leave_word_map);
     const updated = await prisma.$transaction(async (tx) => {
       const u = await tx.whatsappGroup.update({ where: { id: cur.id }, data });
       await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "whatsapp_groups", rowId: cur.id, action: "update", before: cur, after: u, ip: getClientIp(req) });
