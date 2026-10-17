@@ -19,6 +19,9 @@ interface Counts {
   skipped_restricted: number;
   skipped_partial: number;
   errors: number;
+  /** TR-2（additive，舊 server 冇） */
+  applied_partial?: number;
+  follow_up_created?: number;
 }
 const SKIP_LABEL: [keyof Counts, string][] = [
   ["skipped_no_question", "冇對應未答題"],
@@ -96,6 +99,11 @@ export function OcrRereadImportDialog({ sessionId, onClose, onDone }: { sessionI
             <div className="font-semibold">{done ? "已套用" : "預覽（未寫入）"}</div>
             <div>建議共 {shown.proposals_total} 條 · 配對到 {shown.matched_questions} 題</div>
             <div data-testid="ocr-reread-applied">{done ? "已答" : "可自動答"} {shown.applied} 題</div>
+            {(shown.applied_partial ?? 0) > 0 && (
+              <div className="text-zk-sm text-zk-muted" data-testid="ocr-reread-partial">
+                其中 {shown.applied_partial} 題只答有建議嘅欄，另開 {shown.follow_up_created ?? 0} 條跟進題畀剩餘欄
+              </div>
+            )}
             {SKIP_LABEL.filter(([k]) => (shown[k] as number) > 0).map(([k, label]) => (
               <div key={k} className="text-zk-sm text-zk-muted">
                 {label}：{shown[k] as number} 條
