@@ -2149,6 +2149,8 @@ model WhatsappGroup {
   filterThreshold Int?            @map("filter_threshold")
   autoWrite     Boolean           @default(false) @map("auto_write")
   autoConfirm   Boolean           @default(false) @map("auto_confirm")
+  // W3：每群每日自動寫入上限（超過 → 改 Triage）
+  autoWriteDailyCap Int           @default(50) @map("auto_write_daily_cap")
   active        Boolean           @default(true)
   lastMessageAt DateTime?         @map("last_message_at") @db.Timestamptz(3)
   createdBy     String            @map("created_by")

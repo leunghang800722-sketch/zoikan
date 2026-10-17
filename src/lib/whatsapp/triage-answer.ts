@@ -20,6 +20,7 @@ import { answerSchema, KIND_LABEL, type QuestionKind, type QuestionOption, type 
 import { TRIAGE_LOCK } from "@/lib/triage/session";
 import { addDays, hkDateOf, isoToDbDate } from "./dates";
 import { createPrismaResolveRepo } from "./repo";
+import { leaveRowShiftType } from "./leave-row";
 import { evaluateWaState, type WaEffective } from "./triage-eval";
 import { buildDraft, insertWaQuestions, refreshWaSession } from "./triage";
 import type { WaEvidence, WaHuman } from "./triage-types";
@@ -271,14 +272,6 @@ async function loadWordMap(groupId: string): Promise<Record<string, string>> {
   return (m && typeof m === "object" && !Array.isArray(m) ? m : {}) as Record<string, string>;
 }
 
-/** 洗唔到 DB 嘅 leave 格：揀返呢個保安員喺該盤最近用過嘅更種，冇就該盤第一個更種。 */
-async function leaveRowShiftType(siteId: string, guardId: string): Promise<string | null> {
-  const last = await prisma.shiftRecord.findFirst({ where: { guardId, siteId, status: { not: "cancelled" }, recordType: "shift", shiftType: { voidedAt: null, code: { not: "PR" } } }, orderBy: { workDate: "desc" }, select: { shiftTypeId: true } });
-  if (last) return last.shiftTypeId;
-  const first = await prisma.shiftType.findFirst({ where: { siteId, voidedAt: null, code: { not: "PR" } }, orderBy: [{ code: "asc" }, { id: "asc" }], select: { id: true } });
-  return first?.id ?? null;
-}
-
 const normAlias = (s: string): string => s.normalize("NFKC").trim();
 
 async function resolveWaPlan(actor: AuthedSession, q: QRowWithSession, answer: TriageAnswer): Promise<{ plan: WaPlan; fingerprint: string; impact: WaImpact }> {
@@ -361,7 +354,7 @@ async function resolveWaPlan(actor: AuthedSession, q: QRowWithSession, answer: T
     code = st.code;
   } else {
     if (!eff.leaveCode) throw BadRequest("請假碼唔明，唔可以入更");
-    shiftTypeId = await leaveRowShiftType(eff.siteId, eff.guardId);
+    shiftTypeId = await leaveRowShiftType(prisma, eff.siteId, eff.guardId);
     if (!shiftTypeId) throw BadRequest("呢個盤冇可用更種，請人手處理");
     code = eff.leaveCode;
   }
@@ -391,6 +384,7 @@ async function resolveWaPlan(actor: AuthedSession, q: QRowWithSession, answer: T
     impact.changes.push({ table: "guards", action: "update", label: "新增保安員別名", fields: [{ label: "別名", from: null, to: alias.raw }] });
   }
   if (evaluated.reasons.length === 0 && ev.reasons.includes("low_confidence")) impact.notes.push("AI 對呢條嘅信心偏低，已由你確認");
+  if (evaluated.reasons.length === 0 && ev.reasons.some((r) => r === "daily_cap" || r === "auto_disabled")) impact.notes.push("自動寫入被安全閥擋住（每日上限／總開關），已由你確認");
   const fingerprint = JSON.stringify({ w: [eff.siteId, eff.guardId, eff.workDate, shiftTypeId, code], c: cancelIds, a: alias ? [alias.guardId, alias.raw] : null, ex: evaluated.existing.map((r) => `${r.id}:${r.status}`).sort() });
   return { plan: { type: "write", evidence: ev2, eff, code, shiftTypeId: shiftTypeId!, cancelIds, alias }, fingerprint, impact };
 }
