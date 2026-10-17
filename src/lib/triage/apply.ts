@@ -202,6 +202,8 @@ export interface AnswerOutput {
   follow_up_created?: boolean;
 }
 
+const FOLLOW_UP_SUFFIX = "（剩餘欄位）";
+
 /** TR-2：部分欄答題時，同 tx 開嘅 field_review 跟進題（同 personKey、新 groupKey、evidence 只含剩餘欄、sort 同舊題）。 */
 export interface FollowUpDraft {
   groupKey: string;
@@ -274,7 +276,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
                 personKey: q.personKey,
                 targetGuardId: q.targetGuardId,
                 sort: q.sort,
-                title: q.title,
+                title: q.title.endsWith(FOLLOW_UP_SUFFIX) ? q.title : `${q.title}${FOLLOW_UP_SUFFIX}`,
                 evidenceJson: JSON.parse(JSON.stringify({ ...ev, review_fields: rest })),
                 optionsJson: JSON.parse(JSON.stringify(q.optionsJson)),
               },

@@ -2,6 +2,7 @@
 // 流程同應用內 client 一樣：印刷文件（身份證 → 住址證明）stage A → refs → 入職表 stage A（注入 refs）→ 欄位級裁圖 → stage B；
 // 然後 mergeDocFields 得最終欄（來源規則：身份證／住址證明為準）→ 保守建議規則。
 // 鐵則：欄位值只喺記憶體同 --out 檔（data/ 下）；console／summary 淨計數，唔印值、姓名、路徑、docId。
+import { createHash } from 'node:crypto';
 import { OCR_CROP_FIELDS } from '@/lib/guards/ocr/field-crops';
 import { confirmedRefsFromDocs, crossForOnboarding, type Refs } from '@/lib/guards/ocr/refs';
 import { mergeDocFields } from '@/lib/guards/ocr/merge-docs';
@@ -202,8 +203,19 @@ export function docIdsForPerson(p: PkgPerson, idx: ReadonlyMap<string, string[]>
 // ---------- 讀 ----------
 /** TR-2：讀數快取（每 docId＋doc type＋page 一份 stage 結果；真跑落 data/ 下 JSON，測試用記憶體實作） */
 export interface DocCache {
-  get(d: DocPage): Promise<DocumentReadResult | null>;
-  set(d: DocPage, r: DocumentReadResult): Promise<void>;
+  /** refsHash＝入職表注入嘅 refs 指紋（印刷文件＝'none'）；docId／管線版本／refsHash 任一唔對＝miss */
+  get(d: DocPage, refsHash: string): Promise<DocumentReadResult | null>;
+  set(d: DocPage, r: DocumentReadResult, refsHash: string): Promise<void>;
+}
+
+/** TR-2.2：讀數管線版本（改 prompt／model／讀取流程時要手動遞增，令舊快取失效） */
+export const OCR_PIPELINE_VERSION = 'ocr-2026-10-tr2.1';
+
+/** refs 指紋：key 排序後 JSON 嘅 sha256 前 16 位；冇 refs＝'none' */
+export function refsHashOf(refs: Refs | null): string {
+  if (!refs || Object.keys(refs).length === 0) return 'none';
+  const sorted = Object.fromEntries(Object.entries(refs).sort(([a], [b]) => a.localeCompare(b)));
+  return createHash('sha256').update(JSON.stringify(sorted)).digest('hex').slice(0, 16);
 }
 
 export interface RereadDeps {
@@ -227,7 +239,7 @@ export async function readPerson(docs: readonly DocPage[], deps: RereadDeps): Pr
   for (const d of ordered) {
     const isForm = !!OCR_CROP_FIELDS[d.type];
     const refs: Refs | null = isForm ? confirmedRefsFromDocs(printed) : null;
-    let r: DocumentReadResult | null = deps.cache ? await deps.cache.get(d) : null;
+    let r: DocumentReadResult | null = deps.cache ? await deps.cache.get(d, refsHashOf(refs)) : null;
     if (r) cacheHits += 1;
     else {
       const images = await deps.prepare(d);
@@ -237,7 +249,7 @@ export async function readPerson(docs: readonly DocPage[], deps: RereadDeps): Pr
       r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now);
       calls += a.usage.calls + r.usage.calls;
       // 先存（未加 cross）：cross 每次按 refs 重算
-      if (deps.cache) await deps.cache.set(d, r);
+      if (deps.cache) await deps.cache.set(d, r, refsHashOf(refs));
     }
     if (isForm && refs && Object.keys(refs).length > 0) {
       const x = crossForOnboarding(refs, r.fields, now);
