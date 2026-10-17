@@ -198,9 +198,17 @@ export interface AnswerOutput {
   impact: ImpactView | null;
   session_status: "open" | "done";
   open_remaining: number;
+  /** TR-2：同一 tx 內為剩餘覆核欄開咗跟進題（只有 ocr_reread 部分欄答題先會有） */
+  follow_up_created?: boolean;
 }
 
-export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, previewHash: string | undefined, caps: ViewerCaps, ip: string | null, extra?: { source: "ocr_reread" }): Promise<AnswerOutput> {
+/** TR-2：部分欄答題時，同 tx 開嘅 field_review 跟進題（同 personKey、新 groupKey、evidence 只含剩餘欄、sort 同舊題）。 */
+export interface FollowUpDraft {
+  groupKey: string;
+  restFields: string[];
+}
+
+export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unknown, previewHash: string | undefined, caps: ViewerCaps, ip: string | null, extra?: { source: "ocr_reread"; followUp?: FollowUpDraft }): Promise<AnswerOutput> {
   assertAnswerable(q);
   await assertNoNewer(prisma, q, actor);
   assertBankAllowed(q, caps);
@@ -211,6 +219,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
   const mismatch = await identityMismatch(q, answer);
   if (mismatch && !answer.confirm_identity) throw new ApiError(422, "unprocessable", mismatch);
   const now = new Date();
+  let followUpCreated = false;
 
   if (resolved.mode === "skip") {
     await prisma.$transaction(async (tx) => {
@@ -249,6 +258,31 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         },
       });
       if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
+      // TR-2：部分欄答題——為剩餘覆核欄開新 field_review 題（冪等：同 session 已有同 groupKey 就唔重覆開）
+      if (extra?.followUp && q.kind === "field_review" && q.personKey) {
+        const fu = extra.followUp;
+        const exists = await tx.triageQuestion.findFirst({ where: { sessionId: q.sessionId, groupKey: fu.groupKey }, select: { id: true } });
+        if (!exists) {
+          const ev = q.evidenceJson as unknown as QuestionEvidence;
+          const rest = (ev.review_fields ?? []).filter((r) => fu.restFields.includes(r.field));
+          if (rest.length > 0) {
+            await tx.triageQuestion.create({
+              data: {
+                sessionId: q.sessionId,
+                kind: q.kind,
+                groupKey: fu.groupKey,
+                personKey: q.personKey,
+                targetGuardId: q.targetGuardId,
+                sort: q.sort,
+                title: q.title,
+                evidenceJson: JSON.parse(JSON.stringify({ ...ev, review_fields: rest })),
+                optionsJson: JSON.parse(JSON.stringify(q.optionsJson)),
+              },
+            });
+            followUpCreated = true;
+          }
+        }
+      }
       // R2：身份確認（照寫入）之後，仍然 held／冇寫到／衝突嘅欄（長工入職日期、銀行、衝突）補開跟進題；鎖定同一個目標 guard
       if (q.kind === "ext_identity_check" && answer.option === "confirm_ext_identity") {
         const ev = q.evidenceJson as unknown as QuestionEvidence;
@@ -305,7 +339,8 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
       });
     },
   });
-  return await finish("answered", impact, q.sessionId);
+  const out = await finish("answered", impact, q.sessionId);
+  return followUpCreated ? { ...out, follow_up_created: true } : out;
 }
 
 async function finish(status: "answered" | "skipped", impact: ImpactView | null, sessionId: string): Promise<AnswerOutput> {
