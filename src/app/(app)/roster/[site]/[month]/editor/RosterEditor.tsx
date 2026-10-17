@@ -327,6 +327,8 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
 
 
   // ---- 雞頭人數／更數統計條（老闆 feedback 2026-09-12）------------------
+  // W2：WhatsApp 分診答題寫入、仍待批核嘅格數（頁首提示用）
+  const waPending = useMemo(() => records.filter((r) => r.source === "whatsapp" && r.status === "pending_approval").length, [records]);
   const brokerStats = useMemo(() => computeBrokerStats(records, guardsById, brokersById, quotas), [records, guardsById, brokersById, quotas]);
 
   // ---- 畫面 ---------------------------------------------------------------
@@ -454,6 +456,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         warnings={warnings}
         errorBanner={errorBanner}
         infoBanner={infoBanner}
+        waPending={waPending}
       />
 
       <RosterGrid

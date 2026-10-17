@@ -54,6 +54,8 @@ export type ShiftRecordDto = {
   record_type: RecordType;
   leave_code: string | null;
   status: RecordStatus;
+  /** W2：來源（"whatsapp"＝WhatsApp 分診答題寫入）；舊 API 回應冇呢欄 */
+  source?: string | null;
 };
 
 export type DailyRequirementDto = {
@@ -121,6 +123,8 @@ export type CellState = {
   id: string | null;
   status: RecordStatus | null;
   recordType: RecordType | null;
+  /** W2：來源（顯示「來自 WhatsApp」用；唔影響 dirty 判斷） */
+  source?: string | null;
 };
 
 export type RowMeta = {
