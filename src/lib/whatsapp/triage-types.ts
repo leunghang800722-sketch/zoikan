@@ -3,11 +3,14 @@
 // 冇電話全號：發訊人只記保安員 id＋電話尾 4 位。
 import type { QuestionKind, QuestionOption } from "@/lib/triage/types";
 
-export type WaKind = Extract<QuestionKind, "wa_person_ambiguous" | "wa_person_unknown" | "wa_site_ambiguous" | "wa_date_ambiguous" | "wa_shift_conflict" | "wa_unparsed">;
+export type WaKind = Extract<QuestionKind, "wa_person_ambiguous" | "wa_person_unknown" | "wa_site_ambiguous" | "wa_date_ambiguous" | "wa_shift_conflict" | "wa_unparsed" | "wa_cover" | "wa_cancel">;
 export type WaIntentKind = "shift" | "leave" | "cover" | "cancel" | "unclear" | "question_only";
 
 /** 同一 intent 最多問兩輪；第三輪一律 wa_unparsed（只剩人手／忽略）。 */
-export const WA_MAX_ROUNDS = 2;
+const WA_MAX_ROUNDS = 2;
+/** W4：替更／取消要先經盤口、日子等題再到最後確認題，容許多兩輪。 */
+const WA_MAX_ROUNDS_COVER_CANCEL = 4;
+export const maxRoundsOf = (kind: WaIntentKind): number => (kind === "cover" || kind === "cancel" ? WA_MAX_ROUNDS_COVER_CANCEL : WA_MAX_ROUNDS);
 
 interface WaSrc {
   person_raw: string | null;
@@ -25,6 +28,15 @@ export interface WaHuman {
   work_date?: string;
   /** 人手揀咗仍然入更（額滿／超配額）／照解析入更 */
   force?: boolean;
+  /** W4：替更題人手揀咗嘅被替者 */
+  replaced_guard_id?: string;
+}
+
+/** W4：替更題額外證據（被替者配對結果＋被替者當日該更記錄）。 */
+interface WaCoverEvidence {
+  replaced_guard_id: string | null;
+  replaced_candidate_ids: string[];
+  replaced_record_ids: string[];
 }
 
 export interface WaEvidence {
@@ -52,6 +64,8 @@ export interface WaEvidence {
   notes: string[];
   candidates: { guard_ids: string[]; site_ids: string[]; dates: string[]; shift_type_ids: string[]; existing_record_ids: string[] };
   human: WaHuman;
+  /** W4：只喺 intent.kind=cover 有 */
+  cover?: WaCoverEvidence;
   /** 工作月（YYYY-MM-01）；鎖月檢查／session 月份用。未知日期就用訊息月。 */
   month: string;
 }
@@ -66,7 +80,7 @@ export interface WaQuestionDraft {
 }
 
 // ---------------------------------------------------------------- 原因碼分類
-const UNPARSED_REASONS = new Set(["unclear", "type_not_auto", "shift_unmapped", "shift_ambiguous", "leave_code_unclear", "leave_ambiguous", "leave_unmapped", "llm_bad_output", "question_only"]);
+const UNPARSED_REASONS = new Set(["unclear", "type_not_auto", "shift_unmapped", "shift_ambiguous", "leave_code_unclear", "leave_ambiguous", "leave_unmapped", "llm_bad_output", "question_only", "no_cancel_target"]);
 const SITE_REASONS = new Set(["site_ambiguous"]);
 const PERSON_REASONS = new Set(["person_ambiguous", "person_unknown"]);
 const DATE_REASONS = new Set(["date_missing", "date_unparseable", "date_ambiguous", "date_out_of_range"]);
@@ -75,10 +89,21 @@ const CONFLICT_REASONS = new Set(["conflict_leave", "conflict_other_shift", "con
 /** W3：只係安全閥／低信心擋住（解析本身完整）→ 「照解析結果入更」。 */
 const SOFT_REASONS = new Set(["low_confidence", "daily_cap", "auto_disabled"]);
 
-/** 優先次序：unparsed > site > person > date > conflict（低信心單獨出現 → unparsed＋「照解析入更」）。 */
-export function pickWaKind(reasons: readonly string[]): WaKind {
+/**
+ * 優先次序：unparsed > site > person > date > conflict（低信心單獨出現 → unparsed＋「照解析入更」）。
+ * W4：替更 → unparsed > site > date > 鎖月 > wa_cover（人／撞更喺 wa_cover 題內處理）；
+ *     取消 → unparsed > person > date > 鎖月 > wa_cancel（唔需要盤口）。
+ */
+export function pickWaKind(reasons: readonly string[], intentKind?: WaIntentKind): WaKind {
   const has = (set: Set<string>) => reasons.some((r) => set.has(r));
   if (has(UNPARSED_REASONS)) return "wa_unparsed";
+  if (intentKind === "cover" || intentKind === "cancel") {
+    if (intentKind === "cover" && has(SITE_REASONS)) return "wa_site_ambiguous";
+    if (intentKind === "cancel" && has(PERSON_REASONS)) return reasons.includes("person_ambiguous") ? "wa_person_ambiguous" : "wa_person_unknown";
+    if (has(DATE_REASONS)) return "wa_date_ambiguous";
+    if (reasons.includes("month_locked")) return "wa_shift_conflict";
+    return intentKind === "cover" ? "wa_cover" : "wa_cancel";
+  }
   if (has(SITE_REASONS)) return "wa_site_ambiguous";
   if (has(PERSON_REASONS)) return reasons.includes("person_ambiguous") ? "wa_person_ambiguous" : "wa_person_unknown";
   if (has(DATE_REASONS)) return "wa_date_ambiguous";
@@ -118,6 +143,23 @@ export function optionsForWa(kind: WaKind, ev: Pick<WaEvidence, "candidates" | "
       if (hard) return [{ id: "wa_use_whatsapp", label: "以 WhatsApp 為準（取消舊記錄）" }, { id: "wa_keep_old", label: "保留舊記錄（唔入更）" }, { id: "wa_manual", label: "人手改（去排更頁）" }, SKIP];
       return [{ id: "wa_force_write", label: "仍然入更（待批核）" }, { id: "wa_keep_old", label: "唔入更（保留現狀）" }, { id: "wa_manual", label: "人手改（去排更頁）" }, SKIP];
     }
+    case "wa_cover": {
+      const conflict = ev.reasons.some((r) => r === "conflict_leave" || r === "conflict_other_shift");
+      return [
+        ...(conflict
+          ? [{ id: "wa_use_whatsapp", label: "以 WhatsApp 為準（取消替更者同日原有記錄，連被替者該更一併改）" } as QuestionOption]
+          : [{ id: "wa_cover_confirm", label: "確認替更（被替者該更取消，替更者入更）" } as QuestionOption, { id: "wa_cover_add_only", label: "只加替更者（唔改被替者）" } as QuestionOption]),
+        { id: "wa_manual", label: "人手處理（去排更頁）" },
+        SKIP,
+      ];
+    }
+    case "wa_cancel":
+      return [
+        { id: "wa_cancel_apply", label: "取消該更／請假" },
+        { id: "wa_cancel_to_leave", label: "改為請假（揀碼）", input: "leave_code" },
+        { id: "wa_manual", label: "人手處理（去排更頁）" },
+        SKIP,
+      ];
     case "wa_unparsed": {
       const i = ev.intent;
       const complete = (i.kind === "shift" || i.kind === "leave") && ev.reasons.length > 0 && ev.reasons.every((r) => SOFT_REASONS.has(r));

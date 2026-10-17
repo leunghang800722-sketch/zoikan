@@ -323,7 +323,8 @@ export default function WhatsappPage() {
 }
 
 /** 一行「口語詞 → 代碼」：詞輸入＋代碼下拉＋刪除。 */
-function WordMapRows({ title, hint, pairs, setPairs, options, optionLabel, wordPh, testid }: {
+function WordMapRows({ title, hint, pairs, setPairs, options, optionLabel, wordPh, testid, minLen = 1 }: {
+  minLen?: number;
   title: string;
   hint: string;
   pairs: WordPair[];
@@ -357,7 +358,7 @@ function WordMapRows({ title, hint, pairs, setPairs, options, optionLabel, wordP
               <Button size="sm" variant="ghost" aria-label={`刪除${title} ${i + 1}`} onClick={() => setPairs(pairs.filter((_, j) => j !== i))}>刪</Button>
             </div>
             {dup && <div className="text-zk-xs text-zk-danger" data-testid="wa-wordmap-dup">口語詞重覆</div>}
-            {norm(p.word) !== "" && [...norm(p.word)].length < 2 && <div className="text-zk-xs text-zk-danger" data-testid="wa-wordmap-short">口語詞最少 2 個字</div>}
+            {minLen > 1 && norm(p.word) !== "" && [...norm(p.word)].length < minLen && <div className="text-zk-xs text-zk-danger" data-testid="wa-wordmap-short">請假詞最少 {minLen} 個字</div>}
           </div>
         );
       })}
@@ -411,9 +412,9 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
       setErr("口語詞重覆，請修正後再儲存");
       return;
     }
-    const short = [...pairs, ...leavePairs].find((p) => p.word.trim() && [...p.word.normalize("NFKC").trim()].length < 2);
+    const short = leavePairs.find((p) => p.word.trim() && [...p.word.normalize("NFKC").trim()].length < 2);
     if (short) {
-      setErr("口語詞最少 2 個字（單字太易誤中），請修正後再儲存");
+      setErr("請假詞最少 2 個字（單字太易誤中），請修正後再儲存");
       return;
     }
     const half = [...pairs, ...leavePairs].find((p) => (p.word.trim() && !p.code) || (!p.word.trim() && p.code));
@@ -495,8 +496,9 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
           setPairs={setLeavePairs}
           options={leaveCodes}
           optionLabel={(c) => LEAVE_LABEL[c] ?? c}
-          wordPh="口語（例：病）"
+          wordPh="口語（例：病假，最少 2 字）"
           testid="wa-leave-wordmap"
+          minLen={2}
         />
         <label className="block space-y-1">
           <span className="block text-sm text-zk-text-secondary">過濾閾值（0–100，留空＝預設 40）</span>
