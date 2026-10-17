@@ -4,7 +4,9 @@ import { isMonthLocked } from "@/lib/month-lock";
 import { isoToDbDate, monthStartOf } from "./dates";
 import type { ExistingRecord, ResolveRepo, ShiftTypeLite } from "./resolve";
 
-export function createPrismaResolveRepo(): ResolveRepo {
+/** @param excludeIds 將會喺同一 tx 被取消嘅舊 revision 待批記錄（resolve 時當佢哋唔存在，唔當「已存在」／額滿）。 */
+export function createPrismaResolveRepo(excludeIds: readonly string[] = []): ResolveRepo {
+  const ex = excludeIds.length > 0 ? { id: { notIn: [...excludeIds] } } : {};
   const typeCache = new Map<string, ShiftTypeLite[]>();
   const existingCache = new Map<string, ExistingRecord[]>();
   const lockCache = new Map<string, boolean>();
@@ -29,7 +31,7 @@ export function createPrismaResolveRepo(): ResolveRepo {
       const key = `${guardId}|${dateIso}`;
       const hit = existingCache.get(key);
       if (hit) return hit;
-      const rows = await prisma.shiftRecord.findMany({ where: { guardId, workDate: isoToDbDate(dateIso), status: { not: "cancelled" } }, select: { id: true, siteId: true, shiftTypeId: true, recordType: true, leaveCode: true, status: true } });
+      const rows = await prisma.shiftRecord.findMany({ where: { guardId, workDate: isoToDbDate(dateIso), status: { not: "cancelled" }, ...ex }, select: { id: true, siteId: true, shiftTypeId: true, recordType: true, leaveCode: true, status: true } });
       const out: ExistingRecord[] = rows.map((r) => ({ id: r.id, siteId: r.siteId, shiftTypeId: r.shiftTypeId, recordType: r.recordType, leaveCode: r.leaveCode, status: r.status }));
       existingCache.set(key, out);
       return out;
@@ -39,7 +41,7 @@ export function createPrismaResolveRepo(): ResolveRepo {
       const [dr, st, current] = await Promise.all([
         prisma.dailyRequirement.findUnique({ where: { siteId_shiftTypeId_workDate: { siteId, shiftTypeId, workDate: date } }, select: { headcountRequired: true, voidedAt: true } }),
         prisma.shiftType.findUnique({ where: { id: shiftTypeId }, select: { headcountRequired: true } }),
-        prisma.shiftRecord.count({ where: { siteId, shiftTypeId, workDate: date, recordType: "shift", status: { not: "cancelled" } } }),
+        prisma.shiftRecord.count({ where: { siteId, shiftTypeId, workDate: date, recordType: "shift", status: { not: "cancelled" }, ...ex } }),
       ]);
       const required = dr && !dr.voidedAt ? dr.headcountRequired : (st?.headcountRequired ?? null);
       return { required, current };
@@ -51,7 +53,7 @@ export function createPrismaResolveRepo(): ResolveRepo {
       const q = await prisma.quota.findUnique({ where: { month_siteId_shiftTypeId_brokerId: { month, siteId, shiftTypeId, brokerId: g.defaultBrokerId } }, select: { targetShifts: true, voidedAt: true } });
       if (!q || q.voidedAt) return null;
       const next = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1));
-      const actual = await prisma.shiftRecord.count({ where: { siteId, shiftTypeId, settlementBrokerId: g.defaultBrokerId, recordType: "shift", status: { not: "cancelled" }, workDate: { gte: month, lt: next } } });
+      const actual = await prisma.shiftRecord.count({ where: { siteId, shiftTypeId, settlementBrokerId: g.defaultBrokerId, recordType: "shift", status: { not: "cancelled" }, workDate: { gte: month, lt: next }, ...ex } });
       return { target: q.targetShifts, actual };
     },
     async monthLocked(dateIso) {

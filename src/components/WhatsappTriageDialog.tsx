@@ -71,6 +71,7 @@ const REASON_LABEL: Record<string, string> = {
   quota_full: "超過配額",
   month_locked: "月份已鎖定",
   low_confidence: "AI 信心偏低",
+  source_edited_failed: "原訊息已修改，自動處理失敗（舊記錄仍待批）",
   daily_cap: "呢個群今日自動寫入已達上限",
   auto_disabled: "自動寫入總開關已關",
   duplicate_recent: "5 分鐘內重覆",

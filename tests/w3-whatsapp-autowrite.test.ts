@@ -205,6 +205,18 @@ describe("W3 安全閥：每日上限、總開關、5 分鐘去重", () => {
     expect(await recs(ids.gB)).toHaveLength(2);
   });
 
+  it("N1：群組未開自動寫入 → 計入 stats suggested（建議自動但群組未開），唔開題", async () => {
+    await setGroup({ autoWrite: false });
+    await feed("n1", "聽日測試乙返夜", llmJson());
+    const sr = await json(await statsGet(req("/api/whatsapp/stats?from=2026-10-16&to=2026-10-16")));
+    expect(sr.auto_results.suggested).toBe(1);
+    expect(await qCount()).toBe(0);
+    const next = new Date(T0.getTime() + 24 * 3600 * 1000);
+    await runWhatsappDailySummary(next, { force: true });
+    const n = await prisma.appNotification.findFirstOrThrow({ where: { kind: "whatsapp_daily" } });
+    expect(n.body).toContain("建議自動但群組未開 1");
+  });
+
   it("總開關 WA_AUTO_WRITE_ENABLED=0（或亂碼）→ 全部改 triage（auto_disabled），唔寫；預設／1 → 開", async () => {
     expect(waAutoWriteEnabled()).toBe(true);
     process.env.WA_AUTO_WRITE_ENABLED = "1";
@@ -282,8 +294,24 @@ describe("W3 autoWriteIntentsTx 直接測（併發競態／鎖月 race）", () =
     // 同格（leaveRowShiftType＝最近用過嘅更種 A）已有 shift 記錄 → 類型唔同 → 409
     const out = await prisma.$transaction((tx) => autoWriteIntentsTx(tx, { msg: m(msg), group: grp(), rows: [row], actorUserId: boss }));
     expect(out.patches.get(0)).toMatchObject({ routed: "triage" });
+    expect(out.patches.get(0)!.resolution).toMatchObject({ reasons: ["conflict_shift_vs_leave"] });
+    expect(await recs()).toHaveLength(1);
+  });
+
+  it("N2：resolve 之後先出現同日另一更（race）→ tx 內再查，改 triage（conflict_other_shift），唔寫", async () => {
+    const { msg, row } = await seedIntent();
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-10-17T00:00:00Z"), siteId: ids.site, shiftTypeId: ids.tA, guardId: ids.gB, recordType: "shift", status: "confirmed", source: "manual", createdBy: boss } });
+    const out = await prisma.$transaction((tx) => autoWriteIntentsTx(tx, { msg: m(msg), group: grp(), rows: [row], actorUserId: boss }));
+    expect(out.patches.get(0)).toMatchObject({ routed: "triage" });
     expect(out.patches.get(0)!.resolution).toMatchObject({ reasons: ["conflict_other_shift"] });
     expect(await recs()).toHaveLength(1);
+  });
+
+  it("N2：同日已有請假 → conflict_leave", async () => {
+    const { msg, row } = await seedIntent();
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-10-17T00:00:00Z"), siteId: ids.site, shiftTypeId: ids.tA, guardId: ids.gB, recordType: "leave", leaveCode: "AL", status: "confirmed", source: "manual", createdBy: boss } });
+    const out = await prisma.$transaction((tx) => autoWriteIntentsTx(tx, { msg: m(msg), group: grp(), rows: [row], actorUserId: boss }));
+    expect(out.patches.get(0)!.resolution).toMatchObject({ reasons: ["conflict_leave"] });
   });
 });
 
@@ -342,6 +370,41 @@ describe("W3 編輯／撤回後續", () => {
     expect(its[0]!.resolution).toMatchObject({ auto_write: { followup: "flagged" } });
     expect(its[1]).toMatchObject({ routed: "triage" });
     expect(await prisma.auditLog.count({ where: { tableName: "shift_records", rowId: old.id, action: "void" } })).toBe(0);
+  });
+
+  it("S1：編輯後新 revision 連續失敗 3 次 → 舊 pending 記錄保留（唔先取消），開 wa_unparsed 題標「原訊息已修改，自動處理失敗」", async () => {
+    await feed("f1", "聽日測試乙返夜", llmJson());
+    const old = (await recs(ids.gB))[0]!;
+    await ingest(ev("edited", "f1", "聽日測試乙返早", 30));
+    const boom: LlmClient = { async chat() { throw new Error("boom"); } };
+    await run(boom);
+    // 第 1 次失敗：舊記錄仍 pending
+    expect((await recs(ids.gB)).find((r) => r.id === old.id)!.status).toBe("pending_approval");
+    await run(boom);
+    await run(boom);
+    const m = await prisma.whatsappMessage.findUniqueOrThrow({ where: { messageId: "f1" } });
+    expect(m.status).toBe("error");
+    expect((await recs(ids.gB)).find((r) => r.id === old.id)!.status).toBe("pending_approval");
+    const qs = await prisma.triageQuestion.findMany({ where: { session: { sourceType: "whatsapp" }, evidenceJson: { path: ["message", "message_id"], equals: "f1" } } });
+    expect(qs).toHaveLength(1);
+    expect(qs[0]).toMatchObject({ kind: "wa_unparsed", status: "open" });
+    expect(JSON.stringify(qs[0]!.evidenceJson)).toContain("source_edited_failed");
+    expect((await recs(ids.gB))).toHaveLength(1);
+  });
+
+  it("S1：新 revision 解析成功時，取消舊記錄同寫新記錄同一個 tx（寫新失敗 → 舊記錄冇被取消）", async () => {
+    await feed("f2", "聽日測試乙返夜", llmJson());
+    const old = (await recs(ids.gB))[0]!;
+    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION w3_fail() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'w3 forced'; END; $$ LANGUAGE plpgsql`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER w3_fail_trg BEFORE INSERT ON whatsapp_intents FOR EACH ROW EXECUTE FUNCTION w3_fail()`);
+    try {
+      await ingest(ev("edited", "f2", "聽日測試乙返早", 30));
+      await run(fakeLlm(() => llmJson({ shift_raw: "早" })));
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS w3_fail_trg ON whatsapp_intents`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS w3_fail()`);
+    }
+    expect((await recs(ids.gB)).find((r) => r.id === old.id)!.status).toBe("pending_approval");
   });
 
   it("舊記錄 pending 但該月已鎖 → 唔退回，只標示", async () => {
@@ -471,6 +534,7 @@ describe("W3 排更格 records API、統計、對照頁、日摘要、群組 cap
     expect(r.summary).toMatchObject({ auto_written: 1, auto_pending: 1, auto_rejected: 0 });
     const n = await prisma.appNotification.findFirstOrThrow({ where: { kind: "whatsapp_daily" } });
     expect(n.body).toContain("自動寫入 1、待批 1、拒絕 0");
+    expect(n.body).toContain("建議自動但群組未開 0");
     expect(n.body).not.toMatch(/測試|\d{8}/);
   });
 

@@ -147,6 +147,20 @@ export async function autoWriteIntentsTx(tx: Tx, args: { msg: AutoWriteMsg; grou
       code = normLeave(row.leaveCode)!;
     }
 
+    // N2：寫入前喺 tx 內再查一次同人同日嘅記錄（FOR SHARE 鎖住，防 resolve 之後先出現嘅撞更／請假），
+    // writeShiftCells 本身只會對「同一格」撞唔同類型先報 409，同日其他更種唔會擋。
+    const sameDay = await tx.$queryRaw<{ shift_type_id: string; record_type: string; leave_code: string | null }[]>`
+      SELECT shift_type_id, record_type::text AS record_type, leave_code::text AS leave_code FROM shift_records
+      WHERE guard_id = ${row.guardId} AND work_date = ${row.workDate.toISOString().slice(0, 10)}::date AND status <> 'cancelled' AND record_type::text <> 'ot' ORDER BY id FOR SHARE`;
+    if (sameDay.length > 0) {
+      const same = row.kind === "leave" ? sameDay.some((r) => r.record_type === "leave" && normLeave(r.leave_code) === normLeave(row.leaveCode)) : sameDay.some((r) => r.record_type === "shift" && r.shift_type_id === shiftTypeId);
+      if (!same) {
+        const hasLeave = sameDay.some((r) => r.record_type === "leave");
+        patches.set(row.idx, downgrade(base, row.kind === "shift" ? (hasLeave ? "conflict_leave" : "conflict_other_shift") : hasLeave ? "conflict_leave" : "conflict_shift_vs_leave"));
+        continue;
+      }
+    }
+
     try {
       const w = await writeShiftCells(tx, {
         siteId: row.siteId!,

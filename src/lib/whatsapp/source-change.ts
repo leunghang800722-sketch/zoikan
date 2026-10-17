@@ -4,6 +4,7 @@
 //   (b) 已確認／已批核／已結算（或當月已鎖）→ 唔自動改，只標 intents.source_changed=true（排更格／待批清單顯示「⚠ 原訊息已被發訊人修改／撤回」）。
 // 取捨：簡報寫「現有 reject 路徑」，但現有 reject 係 status→draft；draft 仍佔住 (guard,date,shift) 格，
 //   新 revision 重寫同一格會被當「已存在」no-op、永遠寫唔返，所以呢度改用 cancelled（可重用行），audit 保留 reject_reason。
+// S1（Opus 驗收）：編輯後嘅取消一定同新 revision 結果（寫入／忽略）喺同一 tx 內做，唔可以先取消再解析。
 // 一律喺呼叫者 tx 內執行，並持 TRIAGE_LOCK（同 Triage 答題寫入、自動寫入序列化）。
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -14,7 +15,7 @@ import { TRIAGE_LOCK } from "@/lib/triage/session";
 type Tx = Prisma.TransactionClient;
 type SourceChangeReason = "source_message_edited" | "source_message_revoked";
 
-export interface SourceChangeResult {
+interface SourceChangeResult {
   /** 自動退回（取消）嘅記錄數 */
   rejected: number;
   /** 唔自動改、只標示嘅記錄數（已確認／已批核／鎖月） */
@@ -34,7 +35,7 @@ async function recordsOfMessage(tx: Tx, messageId: string, belowRevision: number
   });
 }
 
-async function applySourceChangeTx(tx: Tx, args: { messageId: string; belowRevision: number | null; reason: SourceChangeReason; actorUserId: string; ip?: string | null }): Promise<SourceChangeResult> {
+export async function applySourceChangeTx(tx: Tx, args: { messageId: string; belowRevision: number | null; reason: SourceChangeReason; actorUserId: string; ip?: string | null }): Promise<SourceChangeResult> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
   const recs = await recordsOfMessage(tx, args.messageId, args.belowRevision);
   if (recs.length === 0) return { rejected: 0, flagged: 0 };
@@ -68,10 +69,18 @@ async function applySourceChangeTx(tx: Tx, args: { messageId: string; belowRevis
   return { rejected, flagged: flaggedIds.length };
 }
 
-/** 新 revision（>1）開始處理前：舊 revision 寫過嘅記錄 pending → 退回；其餘標示。自己開 tx。 */
-export async function followUpEditedMessage(messageId: string, revision: number, actorUserId: string): Promise<SourceChangeResult> {
-  if (revision <= 1) return { rejected: 0, flagged: 0 };
-  return prisma.$transaction((tx) => applySourceChangeTx(tx, { messageId, belowRevision: revision, reason: "source_message_edited", actorUserId }));
+/** 舊 revision 寫過、仍 pending_approval、當月未鎖（＝同 tx 會被取消）嘅記錄 id（resolve 時要當佢哋唔存在）。 */
+export async function staleEditedPendingIds(messageId: string, revision: number): Promise<string[]> {
+  if (revision <= 1) return [];
+  const rows = await prisma.shiftRecord.findMany({ where: { source: "whatsapp", status: "pending_approval", provenance: { path: ["message_id"], equals: messageId } }, select: { id: true, workDate: true, provenance: true } });
+  const out: string[] = [];
+  for (const r of rows) {
+    const rev = (r.provenance as { revision?: unknown } | null)?.revision;
+    if (typeof rev !== "number" || rev >= revision) continue;
+    if (await prisma.monthClose.findFirst({ where: { month: new Date(Date.UTC(r.workDate.getUTCFullYear(), r.workDate.getUTCMonth(), 1)), lockedAt: { not: null } }, select: { month: true } })) continue;
+    out.push(r.id);
+  }
+  return out;
 }
 
 /**

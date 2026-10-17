@@ -79,12 +79,12 @@ export async function runWhatsappDailySummary(now: Date, opts: { force?: boolean
   const r = await createNotification({
     kind: "whatsapp_daily",
     title: `WhatsApp 報更日摘要 ${day}`,
-    body: `收 ${s.received}、過濾 ${s.filtered}、解析 ${s.parsed}；建議自動 ${s.auto_write}、分流 ${s.triage}、忽略 ${s.ignored}；自動寫入 ${s.auto_results.written}、待批 ${s.auto_results.pending}、拒絕 ${s.auto_results.rejected}；對照一致率 ${rate}。`,
+    body: `收 ${s.received}、過濾 ${s.filtered}、解析 ${s.parsed}；建議自動 ${s.auto_write}、分流 ${s.triage}、忽略 ${s.ignored}；建議自動但群組未開 ${s.auto_results.suggested}；自動寫入 ${s.auto_results.written}、待批 ${s.auto_results.pending}、拒絕 ${s.auto_results.rejected}；對照一致率 ${rate}。`,
     href: "/whatsapp/intents",
     audience: ["老闆"],
     dedupeKey: `whatsapp_daily:${day}`,
   });
-  return { summary: { day, received: s.received, filtered: s.filtered, parsed: s.parsed, auto_write: s.auto_write, triage: s.triage, ignored: s.ignored, auto_written: s.auto_results.written, auto_pending: s.auto_results.pending, auto_rejected: s.auto_results.rejected, notified: r.created } };
+  return { summary: { day, received: s.received, filtered: s.filtered, parsed: s.parsed, auto_write: s.auto_write, triage: s.triage, ignored: s.ignored, auto_written: s.auto_results.written, auto_pending: s.auto_results.pending, auto_rejected: s.auto_results.rejected, auto_suggested_group_off: s.auto_results.suggested, notified: r.created } };
 }
 
 export const whatsappDailySummaryJob: JobDef = {
