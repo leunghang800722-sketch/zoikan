@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
-import { parseArgs, resolveSourcePage, run, main } from "../scripts/staff-import/19-triage-reread";
+import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, OCR_PIPELINE_VERSION, refsHashOf, type DocCache, type DocPage, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
+import { fileDocCache, parseArgs, resolveSourcePage, run, main } from "../scripts/staff-import/19-triage-reread";
 import { ArgError } from "../scripts/staff-import/lib/eval-ocr-core";
 import { proposalsBodySchema } from "@/lib/triage/proposals";
 
@@ -53,7 +53,7 @@ describe("proposeFromPicks：保守規則", () => {
     expect(needsReread(person({ nameZh: lf("a", "confirmed"), hkid: lf("b", "confirmed"), nameEn: lf("c", "confirmed"), dateOfBirth: lf("d", "confirmed"), phone: lf("e", "confirmed"), address: lf("f", "confirmed") }))).toBe(false);
     expect(needsReread(person({ nameZh: lf("a", "confirmed"), hkid: lf("b", "review"), nameEn: lf("c", "confirmed"), dateOfBirth: lf("d", "confirmed"), phone: lf("e", "confirmed"), address: lf("f", "confirmed") }))).toBe(true);
   });
-  it("review／missing／arbiter agree_a／格式錯／來源錯／cross differs／打字名單唔一致 → 唔建議並計原因", () => {
+  it("review／missing／arbiter agree_a／格式錯／來源錯／打字名單唔一致 → 唔建議並計原因；入職表交叉核對 differs 唔阻擋（TR-2）", () => {
     const picks = {
       name_zh: { doc: "id_card" as const, result: fr("測試甲", "review") },
       name_en: { doc: "id_card" as const, result: fr("TEST ALPHA", "confirmed", "agree_a") },
@@ -63,12 +63,18 @@ describe("proposeFromPicks：保守規則", () => {
       address: { doc: "onboarding_form" as const, result: fr("新界火炭示範街99號虛構大廈15樓A室") }, // 住址證明冇 → 入職表地址唔收
     };
     const o = proposeFromPicks(person(), picks, NOW);
-    expect(o.proposals).toEqual([]);
-    expect(o.skipped).toEqual({ not_confirmed: 1, arbiter_agree_a: 1, invalid_format: 1, cross_differs: 1, wrong_source: 2 });
+    expect(o.proposals.map((x) => [x.field, x.confidence])).toEqual([["dateOfBirth", "medium"]]);
+    expect(o.skipped).toEqual({ not_confirmed: 1, arbiter_agree_a: 1, invalid_format: 1, wrong_source: 2 });
+    expect(o.skippedByField).toEqual({ nameZh: { not_confirmed: 1 }, nameEn: { arbiter_agree_a: 1 }, hkid: { invalid_format: 1 }, phone: { wrong_source: 1 }, address: { wrong_source: 1 } });
     const typed = proposeFromPicks(person({ reasons: ["mismatch_nameZh", "phone_differs_from_list", "nameZh_near_match"] }), GOOD, NOW);
     expect(typed.skipped).toEqual({ typed_list_disagrees: 2 });
+    expect(typed.skippedByField).toEqual({ nameZh: { typed_list_disagrees: 1 }, phone: { typed_list_disagrees: 1 } });
     expect(typed.proposals.map((x) => x.field)).toEqual(["nameEn", "hkid", "dateOfBirth", "address"]);
     expect(proposeFromPicks(person(), {}, NOW).skipped).toEqual({ no_read: 6 });
+  });
+  it("TR-2：身份證 differs（入職表手寫唔一致）照建議，confidence=medium；match 先 high", () => {
+    const o = proposeFromPicks(person(), { name_zh: { doc: "id_card", result: fr("測試甲"), cross: "differs" }, hkid: { doc: "id_card", result: fr("Z900001(2)"), cross: "match" } }, NOW);
+    expect(o.proposals.map((x) => [x.field, x.confidence])).toEqual([["nameZh", "medium"], ["hkid", "high"]]);
   });
   it("arbiter agree_b → basis=arbiter（照收）；日期曆法／電話 8 位／姓名格式把關", () => {
     const o = proposeFromPicks(person(), { ...GOOD, hkid: { doc: "id_card", result: fr("Z900001(2)", "confirmed", "agree_b") }, dob: { doc: "id_card", result: fr("1990-02-30") }, phone: { doc: "onboarding_form", result: fr("1234567") }, name_zh: { doc: "id_card", result: fr("TEST") } }, NOW);
@@ -101,7 +107,7 @@ describe("揀頁／工號索引", () => {
 
 describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
   it("run：6 人入 5 人需重讀、1 人冇文件；18 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
-    const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2 }, NOW);
+    const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false }, NOW);
     expect(r.summary).toMatchObject({ persons_in_package: 6, persons_needing_reread: 5, persons_no_docs: 1, persons_processed: 4, persons_failed: 0, persons_with_proposals: 4, proposals_total: 18 });
     expect(r.summary.proposals_by_field).toEqual({ nameZh: 3, nameEn: 4, dateOfBirth: 3, phone: 4, address: 4 });
     expect(r.summary.proposals_by_basis).toEqual({ two_reads: 18 });
@@ -111,15 +117,85 @@ describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
     const lines = summaryLines(r.summary).join("\n");
     expect(lines).not.toMatch(/測試|Z90000|9000111|火炭/);
     // --limit／--only-key
-    const one = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: 1, onlyKey: null, concurrency: 2 }, NOW);
+    const one = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: 1, onlyKey: null, concurrency: 2, cache: null, noCache: false }, NOW);
     expect(one.summary.persons_processed).toBe(1);
-    const key = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: "dry-person-3", concurrency: 2 }, NOW);
+    const key = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: "dry-person-3", concurrency: 2, cache: null, noCache: false }, NOW);
     expect(key.summary).toMatchObject({ persons_processed: 1, proposals_total: 4 });
   });
   it("addOutcome／emptySummary 純計數", () => {
     const s = emptySummary(NOW);
     addOutcome(s, proposeFromPicks(person(), GOOD, NOW));
     expect(s).toMatchObject({ persons_with_proposals: 1, proposals_total: 6 });
+  });
+});
+
+describe("TR-2 讀數快取", () => {
+  const A = { package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false };
+  const memCache = () => {
+    const m = new Map<string, unknown>();
+    const stats = { gets: 0, hits: 0, sets: 0 };
+    const c: DocCache = {
+      async get(d) {
+        stats.gets += 1;
+        const v = m.get(`${d.type}|${d.docId}|${d.page}`);
+        if (v) stats.hits += 1;
+        return v ? (JSON.parse(JSON.stringify(v)) as never) : null;
+      },
+      async set(d, r) {
+        stats.sets += 1;
+        m.set(`${d.type}|${d.docId}|${d.page}`, JSON.parse(JSON.stringify(r)));
+      },
+    };
+    return { c, stats };
+  };
+  it("第一次跑寫快取、第二次全命中（0 次 OCR 呼叫）而且結果一樣", async () => {
+    const { c, stats } = memCache();
+    const r1 = await run(A, NOW, c);
+    expect(r1.summary.ocr_calls).toBeGreaterThan(0);
+    expect(r1.summary.cache_hits).toBe(0);
+    expect(stats.sets).toBeGreaterThan(0);
+    const r2 = await run(A, NOW, c);
+    expect(r2.summary.ocr_calls).toBe(0);
+    expect(r2.summary.cache_hits).toBe(stats.sets);
+    expect(r2.proposals).toEqual(r1.proposals);
+    expect(r2.summary.not_proposed_reasons).toEqual(r1.summary.not_proposed_reasons);
+    expect(r2.summary.skipped_by_field).toEqual(r1.summary.skipped_by_field);
+  });
+  it("fileDocCache：落檔／讀返／--no-cache 強制 miss／壞檔當 miss；parseArgs --cache／--no-cache；cache 路徑要喺 data/ 下", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "tr2-"));
+    try {
+      const d: DocPage = { type: "id_card", docId: "doc/../x", page: 2 };
+      const fake = { type: "id_card", fields: {}, usage: { calls: 1 } } as never;
+      await fileDocCache(dir, false).set(d, fake, "none");
+      expect(await fileDocCache(dir, false).get(d, "none")).toMatchObject({ type: "id_card" });
+      expect(await fileDocCache(dir, true).get(d, "none")).toBeNull();
+      expect(await fileDocCache(dir, false).get({ ...d, type: "address_proof" }, "none")).toBeNull();
+      expect(await fileDocCache(dir, false).get({ ...d, page: 3 }, "none")).toBeNull();
+      await writeFile(path.join(dir, "id_card__doc____x__p2.json"), "{oops");
+      expect(await fileDocCache(dir, false).get(d, "none")).toBeNull();
+      // TR-2.2：refs 指紋／docId／管線版本任一唔對＝miss
+      const f = path.join(dir, "id_card__doc____x__p2.json");
+      const good = { version: OCR_PIPELINE_VERSION, docId: d.docId, refsHash: "abc", result: fake };
+      await writeFile(f, JSON.stringify(good));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toMatchObject({ type: "id_card" });
+      expect(await fileDocCache(dir, false).get(d, "zzz")).toBeNull();
+      await writeFile(f, JSON.stringify({ ...good, docId: "other" }));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toBeNull();
+      await writeFile(f, JSON.stringify({ ...good, version: "old" }));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toBeNull();
+      await writeFile(f, JSON.stringify({ ...good, version: 1 }));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toBeNull();
+      expect(refsHashOf(null)).toBe("none");
+      expect(refsHashOf({})).toBe("none");
+      const r1 = { name_zh: { value: "甲" }, hkid: { value: "X" } } as never;
+      const r2 = { hkid: { value: "X" }, name_zh: { value: "甲" } } as never;
+      expect(refsHashOf(r1)).toBe(refsHashOf(r2));
+      expect(refsHashOf(r1)).not.toBe(refsHashOf({ hkid: { value: "Y" } } as never));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect(parseArgs(["--cache", "data/x/cache", "--no-cache"])).toMatchObject({ cache: "data/x/cache", noCache: true });
+    await expect(main(["--dry", "--cache", "/tmp/not-under-data"])).rejects.toThrow(ArgError);
   });
 });
 
