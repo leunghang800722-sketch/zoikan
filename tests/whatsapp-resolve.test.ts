@@ -310,14 +310,42 @@ describe("W1 resolve：信心與放假", () => {
 });
 
 describe("W1 resolve：類別", () => {
-  it("cover／cancel 首階段一律 triage（type_not_auto），並記被替人", async () => {
-    const r = await one(mk({ type: "cover", self_reference: false, persons: [{ raw: "測試乙", role: "worker" }, { raw: "測試甲", role: "replaced" }], shift_raw: "夜" }));
+  it("cover 首階段一律 triage（W4：唔再用 type_not_auto），並記被替人＋被替者當日該更", async () => {
+    const r = await one(
+      mk({ type: "cover", self_reference: false, persons: [{ raw: "測試乙", role: "worker" }, { raw: "測試甲", role: "replaced" }], shift_raw: "夜" }),
+      ctx({}, { existing: { "g1|2026-10-17": [{ id: "r-g1-n", siteId: S1, shiftTypeId: "t-n", recordType: "shift", leaveCode: null, status: "confirmed" }] } }),
+    );
     expect(r.routed).toBe("triage");
-    expect(r.resolution.reasons).toContain("type_not_auto");
+    expect(r.resolution.reasons).not.toContain("type_not_auto");
     expect(r.guardId).toBe("g2");
     expect(r.resolution.replaced_guard_id).toBe("g1");
-    const c = await one(mk({ type: "cancel" }));
+    expect(r.resolution.replaced_record_ids).toEqual(["r-g1-n"]);
+    expect(r.resolution.notes).toContain("cover_triage");
+  });
+  it("cover：被替者冇當日更 → replaced_no_shift；替更者同日有其他更 → conflict_other_shift；冇講被替者 → replaced_missing", async () => {
+    const base = mk({ type: "cover", self_reference: false, persons: [{ raw: "測試乙", role: "worker" }, { raw: "測試甲", role: "replaced" }], shift_raw: "夜" });
+    const a = await one(base);
+    expect(a.resolution.notes).toContain("replaced_no_shift");
+    expect(a.resolution.replaced_record_ids).toEqual([]);
+    const b = await one(base, ctx({}, { existing: { "g2|2026-10-17": [{ id: "r-g2-a", siteId: S1, shiftTypeId: "t-a", recordType: "shift", leaveCode: null, status: "confirmed" }] } }));
+    expect(b.resolution.reasons).toContain("conflict_other_shift");
+    expect(b.resolution.existing_record_ids).toEqual(["r-g2-a"]);
+    expect(b.routed).toBe("triage");
+    const c = await one(mk({ type: "cover", self_reference: false, persons: [{ raw: "測試乙", role: "worker" }], shift_raw: "夜" }));
+    expect(c.resolution.notes).toContain("replaced_missing");
+  });
+  it("cancel 首階段一律 triage：有可取消記錄 → existing_record_ids；冇 → no_cancel_target；唔要盤口", async () => {
+    const none = await one(mk({ type: "cancel", shift_raw: null }));
+    expect(none.routed).toBe("triage");
+    expect(none.resolution.reasons).toContain("no_cancel_target");
+    const rec = { id: "r-g1-a", siteId: S1, shiftTypeId: "t-a", recordType: "shift" as const, leaveCode: null, status: "pending_approval" };
+    const c = await one(mk({ type: "cancel", shift_raw: null }), ctx({}, { existing: { "g1|2026-10-17": [rec] } }));
     expect(c.routed).toBe("triage");
+    expect(c.resolution.reasons).toEqual([]);
+    expect(c.resolution.existing_record_ids).toEqual(["r-g1-a"]);
+    const multi = await one(mk({ type: "cancel", shift_raw: null }), ctx({ group: { id: "grp2", kind: "multi_site", siteId: null, brokerId: null, shiftWordMap: {}, autoWrite: true } }, { existing: { "g1|2026-10-17": [rec] } }));
+    expect(multi.resolution.reasons).not.toContain("site_ambiguous");
+    expect(multi.resolution.existing_record_ids).toEqual(["r-g1-a"]);
   });
   it("question_only → ignored；unclear → triage", async () => {
     expect((await one(mk({ type: "question_only" }))).routed).toBe("ignored");

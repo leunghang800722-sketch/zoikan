@@ -21,9 +21,9 @@ import { TRIAGE_LOCK } from "@/lib/triage/session";
 import { addDays, hkDateOf, isoToDbDate } from "./dates";
 import { createPrismaResolveRepo } from "./repo";
 import { leaveRowShiftType } from "./leave-row";
-import { evaluateWaState, type WaEffective } from "./triage-eval";
+import { evaluateCancelState, evaluateCoverState, evaluateWaState, type WaEffective } from "./triage-eval";
 import { buildDraft, insertWaQuestions, refreshWaSession } from "./triage";
-import type { WaEvidence, WaHuman } from "./triage-types";
+import { maxRoundsOf, type WaEvidence, type WaHuman } from "./triage-types";
 
 type QRowWithSession = TriageQuestion & { session: TriageSession };
 
@@ -95,7 +95,16 @@ export interface WaQuestionView {
     guard_candidates: Array<{ guard_id: string; name_zh: string; name_en: string | null; staff_numbers: string[]; recent_sites: Array<{ name: string; last_date: string }>; recent_here: boolean }>;
     site_options: Array<{ id: string; name: string }>;
     date_candidates: string[];
-    existing: Array<{ id: string; site_name: string; shift_code: string; record_type: string; leave_code: string | null; status: string }>;
+    existing: Array<{ id: string; site_name: string; shift_code: string; record_type: string; leave_code: string | null; status: string; work_date: string }>;
+    /** W4：替更題——被替者（已配對／候選）＋當日該更記錄 */
+    cover: {
+      worker: { guard_id: string | null; name: string | null };
+      replaced: { guard_id: string | null; name: string | null };
+      replaced_candidates: Array<{ guard_id: string; name_zh: string; name_en: string | null; staff_numbers: string[]; recent_sites: Array<{ name: string; last_date: string }>; recent_here: boolean }>;
+      replaced_records: Array<{ id: string; site_name: string; shift_code: string; work_date: string; status: string }>;
+    } | null;
+    /** W4：確認後會被取消嘅記錄（「會取消 10 月 18 日 N 更」）；撞更題／取消題／替更題 */
+    cancel_preview: string[];
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -105,6 +114,31 @@ export interface WaQuestionView {
   impact: unknown;
 }
 
+
+type RecLite = { guardId: string; workDate: Date; recordType: string; leaveCode: string | null; shiftType: { code: string }; site: { canonicalName: string } };
+const dayLabel = (d: Date): string => `${d.getUTCMonth() + 1} 月 ${d.getUTCDate()} 日`;
+const recLabel = (x: RecLite): string => `${dayLabel(x.workDate)} ${x.recordType === "leave" ? `請假 ${x.leaveCode ?? ""}` : `${x.shiftType.code} 更`}（${x.site.canonicalName}）`;
+
+/** 確認後會被取消嘅記錄文字（撞更題「以 WhatsApp 為準」／取消題／替更題）。names＝null 代表冇權睇姓名。 */
+function cancelPreviewOf(kind: string, ev: WaEvidence, recBy: Map<string, RecLite & { id: string }>, names: Map<string, { nameZh: string }> | null): string[] {
+  const out: string[] = [];
+  const lines = (ids: string[], who: (guardId: string) => string) => {
+    for (const id of ids) {
+      const x = recBy.get(id);
+      if (x) out.push(`會取消 ${who(x.guardId)}${recLabel(x)}`);
+    }
+  };
+  const none = () => "";
+  const named = (gid: string) => (names?.get(gid)?.nameZh ? `${names.get(gid)!.nameZh} ` : "");
+  if (kind === "wa_cancel") lines(ev.candidates.existing_record_ids, none);
+  else if (kind === "wa_shift_conflict" && ev.reasons.some((r) => r === "conflict_leave" || r === "conflict_other_shift" || r === "conflict_shift_vs_leave")) lines(ev.candidates.existing_record_ids, none);
+  else if (kind === "wa_cover") {
+    lines(ev.cover?.replaced_record_ids ?? [], named);
+    if (ev.reasons.some((r) => r === "conflict_leave" || r === "conflict_other_shift")) lines(ev.candidates.existing_record_ids, named);
+  }
+  return out;
+}
+
 export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Promise<WaQuestionView[]> {
   const evs = rows.map(evOf);
   const guardIds = new Set<string>();
@@ -112,10 +146,10 @@ export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Pro
   const recordIds = new Set<string>();
   const msgIds = new Set<string>();
   for (const e of evs) {
-    for (const g of e.candidates.guard_ids) guardIds.add(g);
-    for (const x of [e.intent.guard_id, e.human.guard_id, e.sender.guard_id]) if (x) guardIds.add(x);
+    for (const g of [...e.candidates.guard_ids, ...(e.cover?.replaced_candidate_ids ?? [])]) guardIds.add(g);
+    for (const x of [e.intent.guard_id, e.human.guard_id, e.sender.guard_id, e.cover?.replaced_guard_id, e.human.replaced_guard_id]) if (x) guardIds.add(x);
     for (const s of [...e.candidates.site_ids, e.intent.site_id, e.human.site_id]) if (s) siteIds.add(s);
-    for (const r of e.candidates.existing_record_ids) recordIds.add(r);
+    for (const r of [...e.candidates.existing_record_ids, ...(e.cover?.replaced_record_ids ?? [])]) recordIds.add(r);
     msgIds.add(e.message.message_id);
   }
   const recentSince = addDays(hkDateOf(new Date()), -RECENT_DAYS);
@@ -126,7 +160,7 @@ export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Pro
     siteIds.size ? prisma.site.findMany({ where: { id: { in: [...siteIds] } }, select: { id: true, canonicalName: true } }) : Promise.resolve([]),
     needAllSites ? prisma.site.findMany({ where: { status: { in: ["active", "paused"] } }, select: { id: true, canonicalName: true }, orderBy: { canonicalName: "asc" }, take: 300 }) : Promise.resolve([]),
     prisma.shiftType.findMany({ where: { siteId: { in: [...siteIds] } }, select: { id: true, code: true } }),
-    recordIds.size ? prisma.shiftRecord.findMany({ where: { id: { in: [...recordIds] } }, select: { id: true, siteId: true, shiftTypeId: true, recordType: true, leaveCode: true, status: true } }) : Promise.resolve([]),
+    recordIds.size ? prisma.shiftRecord.findMany({ where: { id: { in: [...recordIds] } }, select: { id: true, guardId: true, siteId: true, workDate: true, shiftTypeId: true, recordType: true, leaveCode: true, status: true, shiftType: { select: { code: true } }, site: { select: { canonicalName: true } } } }) : Promise.resolve([]),
     prisma.whatsappMessage.findMany({ where: { messageId: { in: [...msgIds] } }, select: { messageId: true, revision: true, revokedAt: true, redactedAt: true } }),
     caps.canSee && guardIds.size
       ? prisma.$queryRaw<{ guard_id: string; site_id: string; name: string; last_date: Date }[]>`
@@ -152,6 +186,12 @@ export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Pro
     const guardIdForLink = ev.human.guard_id ?? ev.intent.guard_id;
     const effGuard = guardIdForLink ? guardBy.get(guardIdForLink) : undefined;
     const senderG = ev.sender.guard_id ? guardBy.get(ev.sender.guard_id) : undefined;
+    const candOf = (gid: string, hereSite: string | null) => {
+      const g = guardBy.get(gid);
+      if (!g) return [];
+      const rs = recent.filter((x) => x.guard_id === gid).sort((a, b) => b.last_date.getTime() - a.last_date.getTime());
+      return [{ guard_id: gid, name_zh: g.nameZh, name_en: g.nameEn, staff_numbers: nos.filter((n) => n.guardId === gid).map((n) => n.number), recent_sites: rs.slice(0, 3).map((x) => ({ name: x.name, last_date: x.last_date.toISOString().slice(0, 10) })), recent_here: !!hereSite && rs.some((x) => x.site_id === hereSite) }];
+    };
     const sitePool = new Set<string>([...ev.candidates.site_ids, ...(ev.intent.site_id ? [ev.intent.site_id] : [])]);
     const siteOptions = r.kind === "wa_site_ambiguous" ? (sitePool.size > 0 ? [...sitePool].map((id) => ({ id, name: siteBy.get(id) ?? "（未知盤）" })) : allSites.map((s) => ({ id: s.id, name: s.canonicalName }))) : [];
     return {
@@ -185,21 +225,30 @@ export async function waQuestionViews(rows: TriageQuestion[], caps: WaCaps): Pro
           confidence: ev.intent.confidence,
         },
         raw: caps.canSee ? { person: ev.src.person_raw, site: ev.src.site_raw, date: ev.src.date_raw, shift: ev.src.shift_raw, leave: ev.src.leave_raw } : null,
-        guard_candidates: caps.canSee
-          ? ev.candidates.guard_ids.slice(0, 8).flatMap((gid) => {
-              const g = guardBy.get(gid);
-              if (!g) return [];
-              const rs = recent.filter((x) => x.guard_id === gid).sort((a, b) => b.last_date.getTime() - a.last_date.getTime());
-              return [{ guard_id: gid, name_zh: g.nameZh, name_en: g.nameEn, staff_numbers: nos.filter((n) => n.guardId === gid).map((n) => n.number), recent_sites: rs.slice(0, 3).map((x) => ({ name: x.name, last_date: x.last_date.toISOString().slice(0, 10) })), recent_here: !!siteIdForLink && rs.some((x) => x.site_id === siteIdForLink) }];
-            })
-          : [],
+        guard_candidates: caps.canSee ? ev.candidates.guard_ids.slice(0, 8).flatMap((gid) => candOf(gid, siteIdForLink)) : [],
         site_options: siteOptions,
         date_candidates: ev.candidates.dates,
         existing: ev.candidates.existing_record_ids.flatMap((id) => {
           const x = recBy.get(id);
-          return x ? [{ id, site_name: siteBy.get(x.siteId) ?? "", shift_code: typeBy.get(x.shiftTypeId) ?? "", record_type: x.recordType, leave_code: x.leaveCode, status: x.status }] : [];
+          return x ? [{ id, site_name: x.site.canonicalName, shift_code: x.shiftType.code, record_type: x.recordType, leave_code: x.leaveCode, status: x.status, work_date: x.workDate.toISOString().slice(0, 10) }] : [];
         }),
-        can_remember_alias: caps.canSee && (r.kind === "wa_person_ambiguous" || r.kind === "wa_person_unknown") && !!ev.src.person_raw,
+        cover:
+          ev.intent.kind === "cover"
+            ? {
+                worker: { guard_id: caps.canSee ? (ev.human.guard_id ?? ev.intent.guard_id) : null, name: caps.canSee && effGuard ? effGuard.nameZh : null },
+                replaced: {
+                  guard_id: caps.canSee ? (ev.human.replaced_guard_id ?? ev.cover?.replaced_guard_id ?? null) : null,
+                  name: caps.canSee ? (guardBy.get(ev.human.replaced_guard_id ?? ev.cover?.replaced_guard_id ?? "")?.nameZh ?? null) : null,
+                },
+                replaced_candidates: caps.canSee ? (ev.cover?.replaced_candidate_ids ?? []).slice(0, 8).flatMap((gid) => candOf(gid, siteIdForLink)) : [],
+                replaced_records: (ev.cover?.replaced_record_ids ?? []).flatMap((id) => {
+                  const x = recBy.get(id);
+                  return x ? [{ id, site_name: x.site.canonicalName, shift_code: x.shiftType.code, work_date: x.workDate.toISOString().slice(0, 10), status: x.status }] : [];
+                }),
+              }
+            : null,
+        cancel_preview: cancelPreviewOf(r.kind, ev, recBy, caps.canSee ? guardBy : null),
+        can_remember_alias: caps.canSee && (r.kind === "wa_person_ambiguous" || r.kind === "wa_person_unknown") && ev.intent.kind !== "cancel" && !!ev.src.person_raw,
         manual_href: siteIdForLink ? `/roster/${siteIdForLink}/${month}${workDate || guardIdForLink ? `?${[workDate ? `date=${workDate}` : "", guardIdForLink ? `guard=${guardIdForLink}` : ""].filter(Boolean).join("&")}` : ""}` : null,
       },
       answer: ans?.option ? { option: ans.option } : null,
@@ -227,7 +276,10 @@ type WaPlan =
   | { type: "manual" }
   | { type: "exists"; ids: string[] }
   | { type: "next"; evidence: WaEvidence }
-  | { type: "write"; evidence: WaEvidence; eff: WaEffective; code: string; shiftTypeId: string; cancelIds: string[]; alias: { guardId: string; raw: string } | null };
+  | { type: "write"; evidence: WaEvidence; eff: WaEffective; code: string; shiftTypeId: string; cancelIds: string[]; alias: { guardId: string; raw: string } | null }
+  | { type: "blocked"; message: string }
+  | { type: "cover"; siteId: string; workDate: string; shiftTypeId: string; code: string; workerId: string; replacedId: string | null; cancelReplacedIds: string[]; cancelWorkerIds: string[] }
+  | { type: "cancel"; guardId: string; ids: string[]; toLeave: { siteId: string; shiftTypeId: string; code: string; workDate: string } | null };
 
 async function assertCanAnswer(actor: AuthedSession, q: QRowWithSession): Promise<void> {
   if (q.status === "answered") throw Conflict("呢條問題已經答過，唔可以重複套用");
@@ -263,8 +315,24 @@ async function validateAnswerAgainstOptions(q: QRowWithSession, a: TriageAnswer)
     const v = a.value ?? "";
     if (!isIsoDate(v)) throw BadRequest("日期要係 YYYY-MM-DD 而且係真實日子");
     if (!same.some((o) => o.date === v) && !same.some((o) => o.input === "date")) throw BadRequest("呢個日子唔屬於候選");
+  } else if (a.option === "wa_cancel_to_leave") {
+    if (!a.value || !WA_LEAVE_CODES.includes(a.value)) throw BadRequest("請揀請假碼（AL／SL／NL／RD／SH）");
+  }
+  // W4：替更題——替更者／被替者只可以喺未配對時揀；揀嘅人要喺候選入面（候選為空＝搜尋揀，要存在）
+  if (evOf(q).intent.kind === "cover" && (a.option === "wa_cover_confirm" || a.option === "wa_cover_add_only" || a.option === "wa_use_whatsapp")) {
+    const ev = evOf(q);
+    const check = async (id: string | undefined, resolved: string | null, cands: string[], what: string) => {
+      if (!id) return;
+      if (resolved && id !== resolved) throw BadRequest(`${what}已經配對好，唔使再揀`);
+      if (cands.length > 0 && !cands.includes(id)) throw BadRequest(`${what}唔屬於候選`);
+      if (!(await prisma.guard.findUnique({ where: { id }, select: { id: true } }))) throw BadRequest(`揀咗嘅${what}唔存在`);
+    };
+    await check(a.guard_id, ev.human.guard_id ?? ev.intent.guard_id, ev.candidates.guard_ids, "替更者");
+    await check(a.replaced_guard_id, ev.human.replaced_guard_id ?? ev.cover?.replaced_guard_id ?? null, ev.cover?.replaced_candidate_ids ?? [], "被替者");
   }
 }
+
+const WA_LEAVE_CODES = ["AL", "SL", "NL", "RD", "SH"];
 
 async function loadWordMap(groupId: string): Promise<Record<string, string>> {
   const g = await prisma.whatsappGroup.findUnique({ where: { id: groupId }, select: { shiftWordMap: true } });
@@ -293,6 +361,9 @@ async function resolveWaPlan(actor: AuthedSession, q: QRowWithSession, answer: T
       impact.summary.push("人手處理：呢條當處理咗，請到排更頁自己入／改");
       return { plan: { type: "manual" }, fingerprint: "manual", impact };
   }
+
+  if (ev.intent.kind === "cover") return resolveCoverPlan(actor, q, answer, impact);
+  if (ev.intent.kind === "cancel") return resolveCancelPlan(actor, q, answer, impact);
 
   const human: WaHuman = { ...ev.human };
   let aliasFor: string | null = null;
@@ -389,6 +460,132 @@ async function resolveWaPlan(actor: AuthedSession, q: QRowWithSession, answer: T
   return { plan: { type: "write", evidence: ev2, eff, code, shiftTypeId: shiftTypeId!, cancelIds, alias }, fingerprint, impact };
 }
 
+// ---------------------------------------------------------------------------
+// W4：替更（cover）／取消（cancel）——首階段一律 Triage，由人確認。
+// ---------------------------------------------------------------------------
+type PlanOut = { plan: WaPlan; fingerprint: string; impact: WaImpact };
+const fmtDay = (iso: string): string => `${Number(iso.slice(5, 7))} 月 ${Number(iso.slice(8, 10))} 日`;
+
+/** 取消記錄嘅風險提示（已確認／已完成／已開單／已結算）。 */
+async function riskNotes(ids: string[]): Promise<{ rows: Array<{ id: string; status: string; billed: boolean; paid: boolean }>; note: string | null }> {
+  const rows = ids.length ? await prisma.shiftRecord.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, billed: true, paid: true } }) : [];
+  const risky = rows.filter((x) => x.status === "confirmed" || x.status === "completed" || x.billed || x.paid).length;
+  return { rows, note: risky > 0 ? `⚠ 會取消已確認／已結算記錄（${risky} 條）——請確認 WhatsApp 先係啱嘅` : null };
+}
+
+/** 下一輪題（盤／日子等未齊，或取消冇目標）。 */
+function nextPlan(ev: WaEvidence, ev2: WaEvidence, evaluatedReasons: string[], extra: Partial<WaEvidence>, impact: WaImpact, ts: Date): PlanOut {
+  const next: WaEvidence = { ...ev2, ...extra, round: ev.round + 1, reasons: evaluatedReasons };
+  const kind = buildDraft(next, { label: ev.group.label }, ts).kind;
+  impact.summary.push(`收到答案，下一步：${KIND_LABEL[kind]}（會開下一條題）`);
+  if (next.round > maxRoundsOf(ev.intent.kind)) impact.notes.push("已經問過好多輪，下一條會轉做「人手處理」");
+  return { plan: { type: "next", evidence: next }, fingerprint: `next:${evaluatedReasons.join(",")}:${next.round}`, impact };
+}
+
+async function resolveCoverPlan(actor: AuthedSession, q: QRowWithSession, answer: TriageAnswer, impact: WaImpact): Promise<PlanOut> {
+  const ev = evOf(q);
+  const human: WaHuman = { ...ev.human };
+  const confirmish = answer.option === "wa_cover_confirm" || answer.option === "wa_cover_add_only" || answer.option === "wa_use_whatsapp";
+  if (answer.option === "wa_pick_site") human.site_id = answer.site_id;
+  else if (answer.option === "wa_set_date") human.work_date = answer.value;
+  else if (confirmish) {
+    if (answer.guard_id) human.guard_id = answer.guard_id;
+    if (answer.replaced_guard_id) human.replaced_guard_id = answer.replaced_guard_id;
+  } else throw BadRequest("唔支援嘅選項");
+  const ev2: WaEvidence = { ...ev, human };
+  const ts = new Date(ev.sent_at);
+  const useWhatsapp = answer.option === "wa_use_whatsapp";
+  const ce = await evaluateCoverState(ev2, { ts, repo: createPrismaResolveRepo(), wordMap: await loadWordMap(ev.group.id), useWhatsapp });
+  if (ce.reasons.includes("month_locked")) throw BadRequest(WA_LOCKED_MSG);
+  const structural = ce.reasons.filter((r) => r !== "person_unknown" && r !== "conflict_leave" && r !== "conflict_other_shift");
+  if (!confirmish || structural.length > 0) {
+    return nextPlan(ev, ev2, ce.reasons, { candidates: { ...ev.candidates, shift_type_ids: ce.candidates.shift_type_ids, existing_record_ids: ce.conflictIds }, cover: { replaced_guard_id: ev.cover?.replaced_guard_id ?? null, replaced_candidate_ids: ev.cover?.replaced_candidate_ids ?? [], replaced_record_ids: ce.replacedRecordIds } }, impact, ts);
+  }
+  const { workerId, replacedId, siteId, workDate, shiftTypeId } = ce.effective;
+  if (!workerId) throw BadRequest("要揀替更者");
+  if (!siteId || !workDate || !shiftTypeId) throw BadRequest("資料唔齊，唔可以入更");
+  const addOnly = answer.option === "wa_cover_add_only";
+  if (!addOnly && !replacedId) throw BadRequest("要揀被替者；或者改用「只加替更者」");
+  if (replacedId && replacedId === workerId) throw BadRequest("替更者同被替者唔可以係同一個人");
+  const [guards, site, st] = await Promise.all([
+    prisma.guard.findMany({ where: { id: { in: [workerId, ...(replacedId ? [replacedId] : [])] } }, select: { id: true, nameZh: true } }),
+    prisma.site.findUnique({ where: { id: siteId }, select: { canonicalName: true } }),
+    prisma.shiftType.findUnique({ where: { id: shiftTypeId }, select: { code: true, siteId: true, voidedAt: true } }),
+  ]);
+  if (!st || st.siteId !== siteId || st.voidedAt) throw BadRequest("更種唔屬於呢個盤，唔可以入更");
+  const nameOf = (id: string | null) => guards.find((g) => g.id === id)?.nameZh ?? "";
+  if (ce.conflictIds.length > 0 && !useWhatsapp) {
+    impact.can_confirm = false;
+    impact.summary.push(`替更者 ${nameOf(workerId)} 喺 ${fmtDay(workDate)} 已經有其他更／請假，唔可以自動入更；請改用「人手處理」`);
+    return { plan: { type: "blocked", message: "替更者同日已有其他記錄，請人手處理" }, fingerprint: `blocked:${ce.conflictIds.sort().join(",")}`, impact };
+  }
+  const cancelReplacedIds = addOnly ? [] : [...ce.replacedRecordIds].sort();
+  const cancelWorkerIds = useWhatsapp ? [...ce.conflictIds].sort() : [];
+  const allCancel = [...cancelReplacedIds, ...cancelWorkerIds];
+  if (allCancel.length > 0 && !(await hasPermission(actor, "更表", "void"))) throw Forbidden("取消舊記錄要有「更表」作廢權限嘅同事（老闆／主管）處理");
+  const targetRow = await prisma.shiftRecord.findUnique({ where: { guardId_workDate_shiftTypeId: { guardId: workerId, workDate: isoToDbDate(workDate), shiftTypeId } }, select: { id: true } });
+  if (targetRow && !(await hasPermission(actor, "更表", "update"))) throw Forbidden("呢格已有記錄，要有「更表」修改權限嘅同事處理");
+  const risk = await riskNotes(allCancel);
+  if (ce.workerHasShift) impact.notes.push(`${nameOf(workerId)} 喺 ${fmtDay(workDate)} 已經有 ${st.code} 更，唔會重覆入`);
+  else impact.summary.push(`替更者入更（待批核，來源 WhatsApp）：${nameOf(workerId)}｜${site?.canonicalName ?? ""}｜${workDate}｜${st.code}`);
+  if (!addOnly && replacedId) {
+    if (cancelReplacedIds.length > 0) impact.summary.push(`被替者 ${nameOf(replacedId)} 嘅 ${fmtDay(workDate)} ${st.code} 更會取消（原因：被 WhatsApp 替更）`);
+    else impact.notes.push(`被替者 ${nameOf(replacedId)} 喺 ${fmtDay(workDate)} 冇呢一更（可能本身冇排），只會加替更者嘅更`);
+  }
+  if (addOnly) impact.summary.push("只加替更者，唔改被替者嘅記錄");
+  if (cancelWorkerIds.length > 0) impact.summary.push(`同時取消替更者同日 ${cancelWorkerIds.length} 條原有記錄`);
+  if (risk.note) impact.notes.unshift(risk.note);
+  if (!ce.workerHasShift) impact.changes.push({ table: "shift_records", action: "create", label: "新增排更記錄（待批核）", fields: [{ label: "日期", from: null, to: workDate }, { label: "更別", from: null, to: st.code }] });
+  if (allCancel.length > 0) impact.changes.push({ table: "shift_records", action: "void", label: "取消舊記錄", fields: [{ label: "記錄數", from: String(allCancel.length), to: "取消" }] });
+  const fingerprint = JSON.stringify({ w: [siteId, workerId, workDate, shiftTypeId], r: replacedId, o: answer.option, cr: cancelReplacedIds, cw: cancelWorkerIds, st: risk.rows.map((x) => `${x.id}:${x.status}`).sort(), has: ce.workerHasShift });
+  return { plan: { type: "cover", siteId, workDate, shiftTypeId, code: st.code, workerId, replacedId: addOnly ? null : replacedId, cancelReplacedIds, cancelWorkerIds }, fingerprint, impact };
+}
+
+async function resolveCancelPlan(actor: AuthedSession, q: QRowWithSession, answer: TriageAnswer, impact: WaImpact): Promise<PlanOut> {
+  const ev = evOf(q);
+  const human: WaHuman = { ...ev.human };
+  const apply = answer.option === "wa_cancel_apply" || answer.option === "wa_cancel_to_leave";
+  if (answer.option === "wa_pick_guard") human.guard_id = answer.guard_id;
+  else if (answer.option === "wa_set_date") human.work_date = answer.value;
+  else if (!apply) throw BadRequest("唔支援嘅選項");
+  const ev2: WaEvidence = { ...ev, human };
+  const ts = new Date(ev.sent_at);
+  const ce = await evaluateCancelState(ev2, { ts, repo: createPrismaResolveRepo() });
+  if (ce.reasons.includes("month_locked")) throw BadRequest(WA_LOCKED_MSG);
+  if (!apply || ce.reasons.length > 0) return nextPlan(ev, ev2, ce.reasons, { candidates: { ...ev.candidates, existing_record_ids: ce.targets.map((r) => r.id) } }, impact, ts);
+  const { guardId, workDate } = ce.effective;
+  if (!guardId || !workDate) throw BadRequest("資料唔齊，唔可以取消");
+  const ids = ce.targets.map((r) => r.id).sort();
+  if (!(await hasPermission(actor, "更表", "void"))) throw Forbidden("取消記錄要有「更表」作廢權限嘅同事（老闆／主管）處理");
+  const [guard, recs] = await Promise.all([
+    prisma.guard.findUnique({ where: { id: guardId }, select: { nameZh: true } }),
+    prisma.shiftRecord.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, recordType: true, leaveCode: true, siteId: true, shiftTypeId: true, billed: true, paid: true, site: { select: { canonicalName: true } }, shiftType: { select: { code: true } } } }),
+  ]);
+  const label = (x: (typeof recs)[number]) => `${x.site.canonicalName}｜${x.recordType === "leave" ? `請假 ${x.leaveCode ?? ""}` : `${x.shiftType.code} 更`}`;
+  let toLeave: { siteId: string; shiftTypeId: string; code: string; workDate: string } | null = null;
+  if (answer.option === "wa_cancel_to_leave") {
+    const code = answer.value!;
+    if (recs.some((x) => x.recordType === "leave" && x.leaveCode === code)) {
+      impact.summary.push("呢日已經係呢個請假碼，唔使再改；呢條當處理咗");
+      return { plan: { type: "exists", ids: recs.filter((x) => x.recordType === "leave" && x.leaveCode === code).map((x) => x.id) }, fingerprint: `exists:${ids.join(",")}`, impact };
+    }
+    const siteId = ce.effective.siteId ?? recs[0]!.siteId;
+    const shiftTypeId = await leaveRowShiftType(prisma, siteId, guardId);
+    if (!shiftTypeId) throw BadRequest("呢個盤冇可用更種，請人手處理");
+    const targetRow = await prisma.shiftRecord.findUnique({ where: { guardId_workDate_shiftTypeId: { guardId, workDate: isoToDbDate(workDate), shiftTypeId } }, select: { id: true } });
+    if (targetRow && !(await hasPermission(actor, "更表", "update"))) throw Forbidden("呢格已有記錄，要有「更表」修改權限嘅同事處理");
+    toLeave = { siteId, shiftTypeId, code, workDate };
+  }
+  const risk = await riskNotes(ids);
+  impact.summary.push(`取消 ${guard?.nameZh ?? ""} ${fmtDay(workDate)} 嘅記錄：${recs.map(label).join("、")}（原因：WhatsApp 取消）`);
+  if (toLeave) impact.summary.push(`改為請假 ${toLeave.code}（待批核，來源 WhatsApp）`);
+  if (risk.note) impact.notes.unshift(risk.note);
+  impact.changes.push({ table: "shift_records", action: "void", label: "取消記錄", fields: [{ label: "記錄數", from: String(ids.length), to: "取消" }] });
+  if (toLeave) impact.changes.push({ table: "shift_records", action: "create", label: "新增請假記錄（待批核）", fields: [{ label: "日期", from: null, to: workDate }, { label: "請假", from: null, to: toLeave.code }] });
+  const fingerprint = JSON.stringify({ g: guardId, d: workDate, c: ids, o: answer.option, v: answer.value ?? null, st: risk.rows.map((x) => `${x.id}:${x.status}`).sort(), l: toLeave ? [toLeave.siteId, toLeave.shiftTypeId] : null });
+  return { plan: { type: "cancel", guardId, ids, toLeave }, fingerprint, impact };
+}
+
 export interface WaPreviewOutput {
   preview_hash: string;
   writes: boolean;
@@ -399,7 +596,7 @@ export async function previewWaAnswer(actor: AuthedSession, q: QRowWithSession, 
   await assertCanAnswer(actor, q);
   const answer = parseAnswer(rawAnswer);
   const { plan, fingerprint, impact } = await resolveWaPlan(actor, q, answer);
-  return { preview_hash: hashOf(q.id, answer, fingerprint), writes: plan.type === "write", impact };
+  return { preview_hash: hashOf(q.id, answer, fingerprint), writes: plan.type === "write" || plan.type === "cover" || plan.type === "cancel", impact };
 }
 
 export interface WaAnswerOutput {
@@ -424,6 +621,7 @@ export async function submitWaAnswer(actor: AuthedSession, q: QRowWithSession, r
     if (hashOf(q.id, answer, fingerprint) !== previewHash) throw new ApiError(409, "conflict", "資料喺預覽之後有變，請重新預覽再確認");
   }
 
+  if (plan.type === "blocked") throw Conflict(plan.message);
   const result: Record<string, unknown> = {};
   let note: string | null = null;
   const autoCardUses: Awaited<ReturnType<typeof writeShiftCells>>["autoCardUses"] = [];
@@ -473,6 +671,50 @@ export async function submitWaAnswer(actor: AuthedSession, q: QRowWithSession, r
           applyResult = { plan: "write", shift_record_ids: result.shift_record_ids, cancelled: result.cancelled ?? 0, alias_added: result.alias_added ?? false };
           if (w.noSettlementCount > 0) note = "呢條記錄搵唔到結算單位，糧單暫時唔會出現，請到排更頁補返";
           else if (w.pricing.unpriced > 0) note = "呢條記錄未有價目，請到排更頁／價目卡補價";
+        } else if (plan.type === "cover" || plan.type === "cancel") {
+          // W4：取消 + 寫入同一個 tx（鎖月：先 assertMonthNotLockedTx，writeShiftCells 開頭再 FOR SHARE 一次）
+          const dateIso = plan.type === "cover" ? plan.workDate : (plan.toLeave?.workDate ?? null);
+          const day = dateIso ? isoToDbDate(dateIso) : null;
+          const cancelIdsAll = plan.type === "cover" ? [...plan.cancelReplacedIds, ...plan.cancelWorkerIds] : plan.ids;
+          if (cancelIdsAll.length > 0) {
+            const anyRow = await tx.shiftRecord.findFirstOrThrow({ where: { id: { in: cancelIdsAll } }, select: { workDate: true } });
+            await assertMonthNotLockedTx(tx, { workDate: anyRow.workDate, actorUserId: actor.userId, tableName: "shift_records", rowId: "whatsapp", ip });
+          }
+          let cancelled = 0;
+          if (plan.type === "cover") {
+            if (plan.cancelReplacedIds.length > 0) cancelled += await cancelShiftRecordsTx(tx, { ids: plan.cancelReplacedIds, actorUserId: actor.userId, ip, reason: "covered_by_whatsapp" });
+            if (plan.cancelWorkerIds.length > 0) cancelled += await cancelShiftRecordsTx(tx, { ids: plan.cancelWorkerIds, actorUserId: actor.userId, ip, reason: "whatsapp:use_whatsapp" });
+          } else {
+            cancelled += await cancelShiftRecordsTx(tx, { ids: plan.ids, actorUserId: actor.userId, ip, reason: "cancelled_by_whatsapp" });
+          }
+          result.cancelled = cancelled;
+          const cell =
+            plan.type === "cover"
+              ? { siteId: plan.siteId, guardId: plan.workerId, shiftTypeId: plan.shiftTypeId, code: plan.code }
+              : plan.toLeave
+                ? { siteId: plan.toLeave.siteId, guardId: plan.guardId, shiftTypeId: plan.toLeave.shiftTypeId, code: plan.toLeave.code }
+                : null;
+          let recordIds: string[] = [];
+          if (cell && day) {
+            const w = await writeShiftCells(tx, {
+              siteId: cell.siteId,
+              month: day,
+              cells: [{ guard_id: cell.guardId, shift_type_id: cell.shiftTypeId, work_date: day, code: cell.code }],
+              actor: { userId: actor.userId },
+              ip,
+              source: "whatsapp",
+              provenance: { message_id: ev.message.message_id, revision: ev.message.revision, intent_idx: ev.message.idx, triage_question_id: q.id, ...(plan.type === "cover" ? { cover: { replaced_guard_id: plan.replacedId } } : { cancel_to_leave: true }) },
+              statusPolicy: "pending_approval",
+              overwriteActive: false,
+            });
+            autoCardUses.push(...w.autoCardUses);
+            recordIds = w.results.map((r) => r.id);
+            result.shift_record_ids = recordIds;
+            result.records = w.results.map((r) => r.action);
+            if (w.noSettlementCount > 0) note = "呢條記錄搵唔到結算單位，糧單暫時唔會出現，請到排更頁補返";
+            else if (w.pricing.unpriced > 0) note = "呢條記錄未有價目，請到排更頁／價目卡補價";
+          }
+          applyResult = { plan: plan.type, shift_record_ids: recordIds, cancelled };
         } else if (plan.type === "next") {
           const draft = buildDraft(plan.evidence, { label: ev.group.label }, new Date(ev.sent_at));
           const { created, existing } = await insertWaQuestions(tx, q.sessionId, [draft]);

@@ -67,6 +67,8 @@ interface Resolution {
   group_auto_write: boolean;
   replaced_guard_id?: string | null;
   replaced_candidate_ids?: string[];
+  /** W4：替更題——被替者當日（同盤同更別）嘅現有更記錄 */
+  replaced_record_ids?: string[];
   existing_record_ids?: string[];
   [k: string]: unknown;
 }
@@ -384,7 +386,37 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
         };
 
         if (!AUTO_TYPES.has(kind)) {
-          pushUnique(res.reasons, "type_not_auto"); // cover／cancel 首階段一律 Triage
+          // W4：cover／cancel 首階段一律 Triage（wa_cover／wa_cancel 題）；呢度只做診斷（唔再用 type_not_auto 擋）
+          pushUnique(res.notes, kind === "cover" ? "cover_triage" : "cancel_triage");
+          if (kind === "cancel") res.reasons = res.reasons.filter((r) => r !== "site_ambiguous"); // 取消唔需要盤口
+          if (d) {
+            if (!dateInWindow(d, ctx.ts)) pushUnique(res.reasons, "date_out_of_range");
+            else if (await ctx.repo.monthLocked(d)) pushUnique(res.reasons, "month_locked");
+          }
+          if (kind === "cover") {
+            if (replacedGuardId === undefined) pushUnique(res.notes, "replaced_missing");
+            if (d && !res.reasons.includes("month_locked")) {
+              if (row.guardId) {
+                const real = (await ctx.repo.existing(row.guardId, d)).filter((r) => r.status !== "cancelled" && r.recordType !== "ot");
+                const clash = real.filter((r) => !(r.recordType === "shift" && r.shiftTypeId === row.shiftTypeId));
+                if (real.length > clash.length) pushUnique(res.notes, "worker_already_has_shift");
+                if (clash.length > 0) {
+                  pushUnique(res.reasons, clash.some((r) => r.recordType === "leave") ? "conflict_leave" : "conflict_other_shift");
+                  res.existing_record_ids = clash.map((r) => r.id);
+                }
+              }
+              if (replacedGuardId) {
+                const rrec = (await ctx.repo.existing(replacedGuardId, d)).filter((r) => r.status !== "cancelled" && r.recordType === "shift");
+                const mine = rrec.filter((r) => (!row.siteId || r.siteId === row.siteId) && (!row.shiftTypeId || r.shiftTypeId === row.shiftTypeId));
+                res.replaced_record_ids = mine.map((r) => r.id);
+                if (mine.length === 0) pushUnique(res.notes, "replaced_no_shift");
+              }
+            }
+          } else if (row.guardId && d && !res.reasons.includes("month_locked")) {
+            const real = (await ctx.repo.existing(row.guardId, d)).filter((r) => r.status !== "cancelled" && r.recordType !== "ot" && (!row.siteId || r.siteId === row.siteId));
+            res.existing_record_ids = real.map((r) => r.id);
+            if (real.length === 0) pushUnique(res.reasons, "no_cancel_target");
+          }
           out.push(row);
           continue;
         }
