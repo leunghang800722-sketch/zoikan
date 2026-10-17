@@ -273,15 +273,15 @@ async function loadWordMap(groupId: string): Promise<Record<string, string>> {
 
 /** 洗唔到 DB 嘅 leave 格：揀返呢個保安員喺該盤最近用過嘅更種，冇就該盤第一個更種。 */
 async function leaveRowShiftType(siteId: string, guardId: string): Promise<string | null> {
-  const last = await prisma.shiftRecord.findFirst({ where: { guardId, siteId, status: { not: "cancelled" }, recordType: "shift", shiftType: { voidedAt: null } }, orderBy: { workDate: "desc" }, select: { shiftTypeId: true } });
+  const last = await prisma.shiftRecord.findFirst({ where: { guardId, siteId, status: { not: "cancelled" }, recordType: "shift", shiftType: { voidedAt: null, code: { not: "PR" } } }, orderBy: { workDate: "desc" }, select: { shiftTypeId: true } });
   if (last) return last.shiftTypeId;
-  const first = await prisma.shiftType.findFirst({ where: { siteId, voidedAt: null }, orderBy: [{ code: "asc" }, { id: "asc" }], select: { id: true } });
+  const first = await prisma.shiftType.findFirst({ where: { siteId, voidedAt: null, code: { not: "PR" } }, orderBy: [{ code: "asc" }, { id: "asc" }], select: { id: true } });
   return first?.id ?? null;
 }
 
 const normAlias = (s: string): string => s.normalize("NFKC").trim();
 
-async function resolveWaPlan(q: QRowWithSession, answer: TriageAnswer): Promise<{ plan: WaPlan; fingerprint: string; impact: WaImpact }> {
+async function resolveWaPlan(actor: AuthedSession, q: QRowWithSession, answer: TriageAnswer): Promise<{ plan: WaPlan; fingerprint: string; impact: WaImpact }> {
   const impact: WaImpact = { can_confirm: true, summary: [], changes: [], field_outcomes: [], notes: [] };
   const ev = evOf(q);
   if (answer.option === "skip") {
@@ -371,12 +371,19 @@ async function resolveWaPlan(q: QRowWithSession, answer: TriageAnswer): Promise<
     const raw = normAlias(ev.src.person_raw);
     if (g && raw && raw !== normAlias(g.nameZh) && !g.nameAliases.some((x) => normAlias(x) === raw) && !/^(我|本人|自己|小弟|小妹|in)$/i.test(raw)) alias = { guardId: aliasFor, raw };
   }
-  const [guard, site] = await Promise.all([prisma.guard.findUnique({ where: { id: eff.guardId }, select: { nameZh: true } }), prisma.site.findUnique({ where: { id: eff.siteId }, select: { canonicalName: true } })]);
   const cancelIds = [...evaluated.conflictRecordIds].sort();
+  // S1：取消舊記錄要「更表:void」；目標格已有行（含已取消重用）要「更表:update」——preview／submit 都檢查
+  if (cancelIds.length > 0 && !(await hasPermission(actor, "更表", "void"))) throw Forbidden("取消舊記錄要有「更表」作廢權限嘅同事（老闆／主管）處理");
+  const targetRow = await prisma.shiftRecord.findUnique({ where: { guardId_workDate_shiftTypeId: { guardId: eff.guardId, workDate: isoToDbDate(eff.workDate), shiftTypeId: shiftTypeId! } }, select: { id: true } });
+  if (targetRow && !(await hasPermission(actor, "更表", "update"))) throw Forbidden("呢格已有記錄，要有「更表」修改權限嘅同事處理");
+  const cancelRows = cancelIds.length ? await prisma.shiftRecord.findMany({ where: { id: { in: cancelIds } }, select: { status: true, billed: true, paid: true } }) : [];
+  const [guard, site] = await Promise.all([prisma.guard.findUnique({ where: { id: eff.guardId }, select: { nameZh: true } }), prisma.site.findUnique({ where: { id: eff.siteId }, select: { canonicalName: true } })]);
   impact.summary.push(`入更（待批核，來源 WhatsApp）：${guard?.nameZh ?? ""}｜${site?.canonicalName ?? ""}｜${eff.workDate}｜${code}`);
   impact.changes.push({ table: "shift_records", action: "create", label: "新增排更記錄（待批核）", fields: [{ label: "日期", from: null, to: eff.workDate }, { label: eff.kind === "shift" ? "更別" : "請假", from: null, to: code }] });
   if (cancelIds.length > 0) {
     impact.summary.push(`同時取消 ${cancelIds.length} 條舊記錄`);
+    const risky = cancelRows.filter((x) => x.status === "confirmed" || x.status === "completed" || x.billed || x.paid).length;
+    if (risky > 0) impact.notes.unshift(`⚠ 會取消已確認／已結算記錄（${risky} 條）——請確認 WhatsApp 先係啱嘅`);
     impact.changes.push({ table: "shift_records", action: "void", label: "取消舊記錄", fields: [{ label: "記錄數", from: String(cancelIds.length), to: "取消" }] });
   }
   if (alias) {
@@ -397,7 +404,7 @@ export interface WaPreviewOutput {
 export async function previewWaAnswer(actor: AuthedSession, q: QRowWithSession, rawAnswer: unknown): Promise<WaPreviewOutput> {
   await assertCanAnswer(actor, q);
   const answer = parseAnswer(rawAnswer);
-  const { plan, fingerprint, impact } = await resolveWaPlan(q, answer);
+  const { plan, fingerprint, impact } = await resolveWaPlan(actor, q, answer);
   return { preview_hash: hashOf(q.id, answer, fingerprint), writes: plan.type === "write", impact };
 }
 
@@ -417,7 +424,7 @@ export async function submitWaAnswer(actor: AuthedSession, q: QRowWithSession, r
   const now = new Date();
   const noWrite = answer.option === "skip" || answer.option === "wa_ignore" || answer.option === "wa_keep_old" || answer.option === "wa_manual";
 
-  const { plan, fingerprint, impact } = await resolveWaPlan(q, answer);
+  const { plan, fingerprint, impact } = await resolveWaPlan(actor, q, answer);
   if (!noWrite) {
     if (!previewHash) throw BadRequest("要先預覽影響，再帶返 preview_hash 確認");
     if (hashOf(q.id, answer, fingerprint) !== previewHash) throw new ApiError(409, "conflict", "資料喺預覽之後有變，請重新預覽再確認");
@@ -437,11 +444,15 @@ export async function submitWaAnswer(actor: AuthedSession, q: QRowWithSession, r
         let applyResult: Record<string, unknown> = { plan: plan.type };
 
         if (plan.type === "write") {
+          let aliasBefore: string[] = [];
+          let aliasAfter: string[] = [];
           if (plan.alias) {
             const before = await tx.guard.findUniqueOrThrow({ where: { id: plan.alias.guardId }, select: { nameAliases: true } });
             const next = [...new Set([...before.nameAliases, plan.alias.raw])];
+            aliasBefore = before.nameAliases;
+            aliasAfter = next;
             await tx.guard.update({ where: { id: plan.alias.guardId }, data: { nameAliases: next } });
-            await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "guards", rowId: plan.alias.guardId, action: "update", after: { id: plan.alias.guardId, alias_added: true, via: "whatsapp_triage", question_id: q.id }, ip });
+            await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "guards", rowId: plan.alias.guardId, action: "update", before: { id: plan.alias.guardId, nameAliases: aliasBefore }, after: { id: plan.alias.guardId, alias_added: true, nameAliases: aliasAfter, via: "whatsapp_triage", question_id: q.id }, ip });
             result.alias_added = true;
           }
           const day = isoToDbDate(plan.eff.workDate!);

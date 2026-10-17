@@ -609,3 +609,77 @@ describe("W2 batch-accept 白名單", () => {
     expect(((await res.json()) as { items: unknown[] }).items).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+describe("W2.3 驗收修正（S1／N1／N2／N3）", () => {
+  async function asManagerOwner(q: { sessionId: string }, off: Array<"void" | "update">) {
+    const mgr = fx.userIds["主管"];
+    await prisma.triageSession.update({ where: { id: q.sessionId }, data: { ownerUserId: mgr } });
+    for (const a of off) {
+      const perm = await prisma.permission.findFirstOrThrow({ where: { module: "更表", action: a } });
+      await prisma.rolePermission.updateMany({ where: { roleId: fx.roleIds["主管"], permissionId: perm.id }, data: { granted: false } });
+    }
+    return sessionCookieForUser(mgr);
+  }
+
+  it("S1：有 create 冇 void 嘅角色揀「以 WhatsApp 為準」→ preview／submit 都 403，舊記錄不變", async () => {
+    const old = await prisma.shiftRecord.create({ data: { workDate: new Date("2026-10-17T00:00:00Z"), siteId: ids.site, shiftTypeId: ids.tA, guardId: ids.gB, recordType: "shift", status: "confirmed", createdBy: "test:w2" } });
+    await feed("s1", "測試乙聽日夜更", llmJson());
+    const [q] = await qsOf("s1");
+    const ck = await asManagerOwner(q!, ["void"]);
+    expect((await preview(q!.id, { option: "wa_use_whatsapp" }, ck)).status).toBe(403);
+    expect((await answer(q!.id, { option: "wa_use_whatsapp" }, "0".repeat(64), ck)).status).toBe(403);
+    expect((await prisma.shiftRecord.findUniqueOrThrow({ where: { id: old.id } })).status).toBe("confirmed");
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q!.id } })).status).toBe("open");
+    // 唔取消舊記錄嘅答案（保留舊）仍然得
+    expect((await answer(q!.id, { option: "wa_keep_old" }, undefined, ck)).status).toBe(200);
+  });
+
+  it("S1：目標格已有行（已取消重用）→ 要「更表:update」，冇就 403；有就照寫", async () => {
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-10-17T00:00:00Z"), siteId: ids.site, shiftTypeId: ids.tN, guardId: ids.gM1, recordType: "shift", status: "cancelled", createdBy: "test:w2" } });
+    await feed("s2", "阿明聽日夜更", llmJson(person("阿明")));
+    const [q] = await qsOf("s2");
+    const ans = { option: "wa_pick_guard", guard_id: ids.gM1 };
+    const ck = await asManagerOwner(q!, ["update"]);
+    expect((await preview(q!.id, ans, ck)).status).toBe(403);
+    expect((await answer(q!.id, ans, "0".repeat(64), ck)).status).toBe(403);
+    expect(await prisma.shiftRecord.count({ where: { source: "whatsapp" } })).toBe(0);
+    // 老闆（有 update）照寫
+    expect((await confirm(q!.id, ans)).status).toBe(200);
+    expect(await prisma.shiftRecord.count({ where: { source: "whatsapp", guardId: ids.gM1 } })).toBe(1);
+  });
+
+  it("N1：請假格揀更種時排除 PR 佔位更別（最近用過 PR／盤只剩 PR 以外第一個）", async () => {
+    const pr = await prisma.shiftType.create({ data: { siteId: ids.site, code: "A0PR", label: "佔位", hours: 0, createdBy: "test:w2" } });
+    await prisma.shiftType.update({ where: { id: pr.id }, data: { code: "PR" } });
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-10-12T00:00:00Z"), siteId: ids.site, shiftTypeId: pr.id, guardId: ids.gB, recordType: "shift", status: "confirmed", createdBy: "test:w2" } });
+    await feed("n1", "今晚測試乙病假", llmJson({ type: "leave", shift_raw: null, leave_raw: "病假", date: { raw: "今晚", kind: "relative" } }), 13 * 3600);
+    const [q] = await qsOf("n1");
+    expect((await confirm(q!.id, { option: "wa_set_date", value: "2026-10-17" })).status).toBe(200);
+    const rec = (await recOf(ids.gB, "2026-10-17"))[0]!;
+    expect(rec.recordType).toBe("leave");
+    expect(rec.shiftTypeId).not.toBe(pr.id);
+    expect(rec.shiftTypeId).toBe(ids.tA); // 排除 PR 後第一個（代號 A）
+  });
+
+  it("N2：被取消記錄含已確認／已結算 → 預覽有明顯警示，仍可繼續", async () => {
+    await prisma.shiftRecord.create({ data: { workDate: new Date("2026-10-17T00:00:00Z"), siteId: ids.site, shiftTypeId: ids.tA, guardId: ids.gB, recordType: "shift", status: "confirmed", billed: true, createdBy: "test:w2" } });
+    await feed("n2", "測試乙聽日夜更", llmJson());
+    const [q] = await qsOf("n2");
+    const pv = await preview(q!.id, { option: "wa_use_whatsapp" });
+    expect(pv.status).toBe(200);
+    expect(pv.body.impact.can_confirm).toBe(true);
+    expect((pv.body.impact.notes as string[]).join("")).toContain("會取消已確認／已結算記錄");
+    expect((await answer(q!.id, { option: "wa_use_whatsapp" }, pv.body.preview_hash)).status).toBe(200);
+  });
+
+  it("N3：alias 學習 audit 帶 before／after nameAliases 陣列", async () => {
+    await feed("n3", "明仔聽日夜更", llmJson(person("明仔")));
+    const [q] = await qsOf("n3");
+    expect((await confirm(q!.id, { option: "wa_pick_guard", guard_id: ids.gM1, remember_alias: true })).status).toBe(200);
+    const a = (await prisma.auditLog.findMany({ where: { tableName: "guards", rowId: ids.gM1, action: "update" } })).find((x) => JSON.stringify(x.after).includes("whatsapp_triage"))!;
+    expect(JSON.stringify(a.before)).toContain("阿明");
+    expect(JSON.stringify(a.before)).not.toContain("明仔");
+    expect(JSON.stringify(a.after)).toContain("明仔");
+  });
+});
