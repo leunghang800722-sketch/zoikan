@@ -12,11 +12,11 @@ import type { WordPair } from "./dto";
 const GROUP_KINDS = ["site", "multi_site", "broker", "office", "ignored"] as const;
 export type GroupKind = (typeof GROUP_KINDS)[number];
 
-const PairSchema = z.object({ word: z.string().trim().min(1).max(20), code: z.string().trim().min(1).max(12) });
+const PairSchema = z.object({ word: z.string().trim().min(2, "口語詞最少 2 個字").max(20), code: z.string().trim().min(1).max(12) });
 
 /** W5：群組可覆寫嘅請假碼（內建對照見 resolve.ts LEAVE_TABLE）。 */
 export const LEAVE_OVERRIDE_CODES = ["SL", "AL", "NL", "RD", "SH"] as const;
-const LeavePairSchema = z.object({ word: z.string().trim().min(1).max(20), code: z.enum(LEAVE_OVERRIDE_CODES) });
+const LeavePairSchema = z.object({ word: z.string().trim().min(2, "口語詞最少 2 個字").max(20), code: z.enum(LEAVE_OVERRIDE_CODES) });
 
 export const GroupPatchSchema = z.object({
   id: z.string().min(1).max(64),
@@ -40,7 +40,7 @@ export function pairsToWordMap(pairs: WordPair[]): Record<string, string> {
   for (const p of pairs) {
     // W5：詞先 NFKC 正規化（resolve 配對用 NFKC），全形／半形算重覆
     const word = p.word.normalize("NFKC").trim();
-    if (!word) throw BadRequest("口語詞唔可以留空");
+    if ([...word].length < 2) throw BadRequest("口語詞最少 2 個字");
     if (Object.prototype.hasOwnProperty.call(out, word)) throw BadRequest(`口語對照重覆：「${word}」`);
     out[word] = p.code;
   }

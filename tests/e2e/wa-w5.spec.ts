@@ -55,11 +55,11 @@ test.describe("WhatsApp 運維（W5）", () => {
     await shiftMap.getByRole("button", { name: "加一行" }).click();
     const opts = await shiftMap.getByLabel("口語 → 更碼對照代碼 1").locator("option").allTextContents();
     expect(opts).toEqual(["（揀）", "A", "N"]);
-    await shiftMap.getByLabel("口語 → 更碼對照口語 1").fill("夜");
+    await shiftMap.getByLabel("口語 → 更碼對照口語 1").fill("夜班");
     await shiftMap.getByLabel("口語 → 更碼對照代碼 1").selectOption("N");
     // 重覆詞
     await shiftMap.getByRole("button", { name: "加一行" }).click();
-    await shiftMap.getByLabel("口語 → 更碼對照口語 2").fill("夜");
+    await shiftMap.getByLabel("口語 → 更碼對照口語 2").fill("夜班");
     await shiftMap.getByLabel("口語 → 更碼對照代碼 2").selectOption("A");
     await expect(shiftMap.getByTestId("wa-wordmap-dup").first()).toBeVisible();
     await ed.getByRole("button", { name: "儲存" }).click();
@@ -67,11 +67,18 @@ test.describe("WhatsApp 運維（W5）", () => {
     expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { groupJid: G1 } })).kind).toBe("ignored");
     await shiftMap.getByRole("button", { name: "刪除口語 → 更碼對照 2" }).click();
     await expect(shiftMap.getByTestId("wa-wordmap-dup")).toHaveCount(0);
+    // N2：單字口語詞被擋
+    await shiftMap.getByLabel("口語 → 更碼對照口語 1").fill("夜");
+    await expect(shiftMap.getByTestId("wa-wordmap-short")).toBeVisible();
+    await ed.getByRole("button", { name: "儲存" }).click();
+    await expect(ed.getByText(/口語詞最少 2 個字/).first()).toBeVisible();
+    await shiftMap.getByLabel("口語 → 更碼對照口語 1").fill("夜班");
+    await expect(shiftMap.getByTestId("wa-wordmap-short")).toHaveCount(0);
     // 請假詞覆寫
     const leaveMap = ed.getByTestId("wa-leave-wordmap");
     await expect(leaveMap.getByText(/內建：病假→SL/)).toBeVisible();
     await leaveMap.getByRole("button", { name: "加一行" }).click();
-    await leaveMap.getByLabel("請假詞對照（可選，覆寫內建）口語 1").fill("病");
+    await leaveMap.getByLabel("請假詞對照（可選，覆寫內建）口語 1").fill("病假");
     expect(await leaveMap.getByLabel("請假詞對照（可選，覆寫內建）代碼 1").locator("option").allTextContents()).toEqual(["（揀）", "病假 SL", "年假 AL", "事假／無薪 NL", "例假 RD", "公假 SH"]);
     // 只填一半被擋
     await ed.getByRole("button", { name: "儲存" }).click();
@@ -80,11 +87,11 @@ test.describe("WhatsApp 運維（W5）", () => {
     await ed.getByRole("button", { name: "儲存" }).click();
     await expect(page.getByText("已儲存群組綁定。")).toBeVisible();
     const row = await prisma.whatsappGroup.findUniqueOrThrow({ where: { groupJid: G1 } });
-    expect(row).toMatchObject({ kind: "site", shiftWordMap: { 夜: "N" }, leaveWordMap: { 病: "AL" } });
+    expect(row).toMatchObject({ kind: "site", shiftWordMap: { 夜班: "N" }, leaveWordMap: { 病假: "AL" } });
     // 重開抽屜：值保留
     await page.getByTestId("wa-group-card").filter({ hasText: LABEL }).getByRole("button", { name: "綁定設定" }).click();
     const ed2 = page.getByTestId("wa-group-editor");
-    await expect(ed2.getByTestId("wa-leave-wordmap").getByLabel("請假詞對照（可選，覆寫內建）口語 1")).toHaveValue("病");
+    await expect(ed2.getByTestId("wa-leave-wordmap").getByLabel("請假詞對照（可選，覆寫內建）口語 1")).toHaveValue("病假");
     await expect(ed2.getByTestId("wa-leave-wordmap").getByLabel("請假詞對照（可選，覆寫內建）代碼 1")).toHaveValue("AL");
   });
 
