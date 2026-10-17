@@ -61,6 +61,7 @@
 import { ATTENDANCE_CONFLICT_PREFIX } from "./attendance-conflict";
 import { pickBySourcePriority } from "./attendance-priority";
 import type { PrismaClient, Prisma } from "@prisma/client";
+import { excludeUnapprovedWhatsapp } from "./approved-only";
 import { prisma } from "@/lib/db";
 import { writeAuditTx } from "@/lib/audit";
 import { Conflict } from "@/lib/api/errors";
@@ -334,7 +335,7 @@ export async function buildLongtermPayrollInputs(month: Date, client: PrismaLike
   }
 
   const shiftRecords = await client.shiftRecord.findMany({
-    where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" } },
+    where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, ...excludeUnapprovedWhatsapp() },
     select: { guardId: true, workDate: true, recordType: true, leaveCode: true, otHours: true, settlementBrokerId: true, source: true, siteId: true },
   });
   const shiftsByGuard = new Map<string, typeof shiftRecords>();

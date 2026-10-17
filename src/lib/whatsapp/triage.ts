@@ -11,7 +11,7 @@ import { ensureSystemUser } from "@/lib/system-user";
 import { TRIAGE_OWNER_ROLES, TRIAGE_LOCK } from "@/lib/triage/session";
 import { hkDateOf } from "./dates";
 import type { IntentSrc } from "./resolve";
-import { groupKeyOf, optionsForWa, pickWaKind, sortOfTs, WA_MAX_ROUNDS, type WaEvidence, type WaIntentKind, type WaKind, type WaQuestionDraft } from "./triage-types";
+import { groupKeyOf, maxRoundsOf, optionsForWa, pickWaKind, sortOfTs, type WaEvidence, type WaIntentKind, type WaKind, type WaQuestionDraft } from "./triage-types";
 
 type Tx = Prisma.TransactionClient;
 type Db = Tx | typeof prisma;
@@ -94,6 +94,15 @@ function draftFromIntent(msg: WaMessageCtx, group: WaGroupCtx, row: WaIntentRow,
     notes: strArr(res.notes),
     candidates: { guard_ids: strArr(cands.guard_ids), site_ids: strArr(cands.site_ids), dates: strArr(cands.dates), shift_type_ids: strArr(cands.shift_type_ids), existing_record_ids: strArr((res as { existing_record_ids?: unknown }).existing_record_ids) },
     human: {},
+    ...(row.kind === "cover"
+      ? {
+          cover: {
+            replaced_guard_id: typeof (res as { replaced_guard_id?: unknown }).replaced_guard_id === "string" ? ((res as { replaced_guard_id: string }).replaced_guard_id) : null,
+            replaced_candidate_ids: strArr((res as { replaced_candidate_ids?: unknown }).replaced_candidate_ids),
+            replaced_record_ids: strArr((res as { replaced_record_ids?: unknown }).replaced_record_ids),
+          },
+        }
+      : {}),
     month: `${(workDate ?? hkDateOf(msg.ts)).slice(0, 7)}-01`,
   };
   return buildDraft(ev, group, msg.ts);
@@ -101,7 +110,8 @@ function draftFromIntent(msg: WaMessageCtx, group: WaGroupCtx, row: WaIntentRow,
 
 /** 由 evidence（已含 reasons／round）砌題目：kind 按優先次序；round>WA_MAX_ROUNDS 一律 wa_unparsed。 */
 export function buildDraft(ev: WaEvidence, group: Pick<WaGroupCtx, "label">, ts: Date): WaQuestionDraft {
-  const kind: WaKind = ev.round > WA_MAX_ROUNDS ? "wa_unparsed" : pickWaKind(ev.reasons);
+  const over = ev.round > maxRoundsOf(ev.intent.kind);
+  const kind: WaKind = over ? "wa_unparsed" : pickWaKind(ev.reasons, ev.intent.kind);
   const hk = new Date(ts.getTime() + 8 * 3600 * 1000).toISOString();
   const title = `${group.label || "WhatsApp 群組"}｜${hk.slice(5, 10)} ${hk.slice(11, 16)}`;
   return {
@@ -110,7 +120,7 @@ export function buildDraft(ev: WaEvidence, group: Pick<WaGroupCtx, "label">, ts:
     sort: sortOfTs(ts), // 同一訊息嘅跟進輪次維持原次序
     title,
     evidence: ev,
-    options: ev.round > WA_MAX_ROUNDS ? optionsForWa("wa_unparsed", { ...ev, reasons: ev.reasons.filter((r) => r !== "low_confidence") }) : optionsForWa(kind, ev),
+    options: over ? optionsForWa("wa_unparsed", { ...ev, reasons: ev.reasons.filter((r) => r !== "low_confidence") }) : optionsForWa(kind, ev),
   };
 }
 

@@ -15,10 +15,18 @@ interface WaOption {
   id: string;
   label: string;
   hint?: string;
-  input?: "text" | "hkid" | "guard_search" | "date";
+  input?: "text" | "hkid" | "guard_search" | "date" | "leave_code";
   guard_id?: string;
   site_id?: string;
   date?: string;
+}
+interface WaCand {
+  guard_id: string;
+  name_zh: string;
+  name_en: string | null;
+  staff_numbers: string[];
+  recent_sites: Array<{ name: string; last_date: string }>;
+  recent_here: boolean;
 }
 interface WaQuestion {
   id: string;
@@ -44,7 +52,14 @@ interface WaQuestion {
     guard_candidates: Array<{ guard_id: string; name_zh: string; name_en: string | null; staff_numbers: string[]; recent_sites: Array<{ name: string; last_date: string }>; recent_here: boolean }>;
     site_options: Array<{ id: string; name: string }>;
     date_candidates: string[];
-    existing: Array<{ id: string; site_name: string; shift_code: string; record_type: string; leave_code: string | null; status: string }>;
+    existing: Array<{ id: string; site_name: string; shift_code: string; record_type: string; leave_code: string | null; status: string; work_date: string }>;
+    cover: {
+      worker: { guard_id: string | null; name: string | null };
+      replaced: { guard_id: string | null; name: string | null };
+      replaced_candidates: WaCand[];
+      replaced_records: Array<{ id: string; site_name: string; shift_code: string; work_date: string; status: string }>;
+    } | null;
+    cancel_preview: string[];
     can_remember_alias: boolean;
     manual_href: string | null;
   };
@@ -76,6 +91,7 @@ const REASON_LABEL: Record<string, string> = {
   auto_disabled: "自動寫入總開關已關",
   duplicate_recent: "5 分鐘內重覆",
   type_not_auto: "替更／取消，首階段要人手",
+  no_cancel_target: "搵唔到可以取消嘅更／請假",
   unclear: "未能理解",
   shift_unmapped: "唔知係邊一更",
   shift_ambiguous: "更種有幾個可能",
@@ -85,6 +101,28 @@ const REASON_LABEL: Record<string, string> = {
 };
 const INTENT_LABEL: Record<string, string> = { shift: "報更", leave: "請假", cover: "替更", cancel: "取消", unclear: "未明", question_only: "查詢" };
 const NO_WRITE = new Set(["wa_ignore", "wa_keep_old", "wa_manual"]);
+const COVER_OPTS = new Set(["wa_cover_confirm", "wa_cover_add_only", "wa_use_whatsapp"]);
+const LEAVE_CODES = ["AL", "SL", "NL", "RD", "SH"];
+
+/** W4：替更題人選（候選一鍵揀；冇候選就搜尋）。 */
+function PersonPicker({ title, testid, picked, cands, onPick }: { title: string; testid: string; picked: string | null; cands: WaCand[]; onPick: (id: string | null) => void }) {
+  return (
+    <div className="space-y-1" data-testid={testid}>
+      <div className="text-zk-sm font-semibold">{title}</div>
+      {cands.map((c) => (
+        <button key={c.guard_id} type="button" data-testid={`${testid}-${c.guard_id}`} aria-pressed={picked === c.guard_id} className={choiceBtn(picked === c.guard_id, "block w-full text-left break-words")} onClick={() => onPick(c.guard_id)}>
+          <span className="font-semibold">{c.name_zh}</span>
+          {c.name_en ? <span className="ml-1 text-zk-faint">{c.name_en}</span> : null}
+          {c.recent_here ? <span className="ml-2 rounded bg-zk-success-bg px-1.5 text-zk-xs text-zk-success-dark">近 60 日同盤</span> : null}
+          <span className="block text-zk-sm text-zk-muted">
+            {c.staff_numbers.length ? `工號 ${c.staff_numbers.join("、")} · ` : ""}最近返更盤：{c.recent_sites.length ? c.recent_sites.map((x) => `${x.name}（${x.last_date}）`).join("、") : "未有紀錄"}
+          </span>
+        </button>
+      ))}
+      {cands.length === 0 && <GuardSearch onPick={(g) => onPick(g ? g.id : null)} />}
+    </div>
+  );
+}
 
 function GuardSearch({ onPick }: { onPick: (g: { id: string; name: string } | null) => void }) {
   const [term, setTerm] = useState("");
@@ -130,6 +168,9 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
   const [pickedGuard, setPickedGuard] = useState<{ id: string; name: string } | null>(null);
   const [dateText, setDateText] = useState("");
   const [remember, setRemember] = useState(false);
+  const [coverWorker, setCoverWorker] = useState<string | null>(null);
+  const [coverReplaced, setCoverReplaced] = useState<string | null>(null);
+  const [leaveCode, setLeaveCode] = useState("AL");
   const [impact, setImpact] = useState<Impact | null>(null);
   const [hash, setHash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -154,6 +195,9 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
     setPickedGuard(null);
     setDateText(q?.wa.date_candidates[0] ?? "");
     setRemember(false);
+    setCoverWorker(null);
+    setCoverReplaced(null);
+    setLeaveCode("AL");
     setImpact(null);
     setHash(null);
     setError(null);
@@ -174,6 +218,14 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
       const v = opt.date ?? dateText.trim();
       return /^\d{4}-\d{2}-\d{2}$/.test(v) ? { option: opt.id, value: v } : null;
     }
+    if (q?.kind === "wa_cover" && COVER_OPTS.has(opt.id)) {
+      const c = q.wa.cover;
+      const needWorker = !c?.worker.guard_id;
+      const needReplaced = opt.id !== "wa_cover_add_only" && !c?.replaced.guard_id;
+      if ((needWorker && !coverWorker) || (needReplaced && !coverReplaced)) return null;
+      return { option: opt.id, ...(needWorker && coverWorker ? { guard_id: coverWorker } : {}), ...(needReplaced && coverReplaced ? { replaced_guard_id: coverReplaced } : {}) };
+    }
+    if (opt.id === "wa_cancel_to_leave") return { option: opt.id, value: leaveCode };
     return { option: opt.id };
   }
   const answer = buildAnswer();
@@ -282,8 +334,33 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
                     <div className="space-y-1 rounded border border-zk-border p-2 text-zk-sm" data-testid="wa-existing">
                       <div className="font-semibold">現有記錄</div>
                       {q.wa.existing.map((e) => (
-                        <div key={e.id}>{e.site_name} · {e.record_type === "leave" ? `請假 ${e.leave_code ?? ""}` : `${e.shift_code} 更`} · {e.status === "pending_approval" ? "待批核" : e.status === "confirmed" ? "已確認" : e.status}</div>
+                        <div key={e.id}>{e.work_date.slice(5, 7)}/{e.work_date.slice(8, 10)} · {e.site_name} · {e.record_type === "leave" ? `請假 ${e.leave_code ?? ""}` : `${e.shift_code} 更`} · {e.status === "pending_approval" ? "待批核" : e.status === "confirmed" ? "已確認" : e.status}</div>
                       ))}
+                    </div>
+                  )}
+
+                  {q.wa.cancel_preview.length > 0 && (
+                    <div className="rounded border border-zk-warning/40 bg-zk-warning-bg p-2 text-zk-sm font-semibold text-zk-warning" data-testid="wa-cancel-preview">
+                      {q.wa.cancel_preview.map((l) => (
+                        <div key={l}>{l}</div>
+                      ))}
+                    </div>
+                  )}
+                  {q.kind === "wa_cover" && q.wa.cover && (
+                    <div className="space-y-3 rounded-lg border border-zk-border p-2" data-testid="wa-cover-panel">
+                      {q.wa.cover.worker.guard_id ? (
+                        <div className="text-zk-sm" data-testid="wa-cover-worker-fixed">替更者：<span className="font-semibold">{q.wa.cover.worker.name ?? "（已配對）"}</span></div>
+                      ) : (
+                        <PersonPicker title="邊個替更（替更者）？" testid="wa-cover-worker" picked={coverWorker} cands={q.wa.guard_candidates} onPick={(id) => { setCoverWorker(id); setImpact(null); setHash(null); }} />
+                      )}
+                      {q.wa.cover.replaced.guard_id ? (
+                        <div className="text-zk-sm" data-testid="wa-cover-replaced-fixed">
+                          被替者：<span className="font-semibold">{q.wa.cover.replaced.name ?? "（已配對）"}</span>
+                          {q.wa.cover.replaced_records.length === 0 && <span className="ml-1 text-zk-warning">（當日冇呢一更，只會加替更者）</span>}
+                        </div>
+                      ) : (
+                        <PersonPicker title="替邊個（被替者）？" testid="wa-cover-replaced" picked={coverReplaced} cands={q.wa.cover.replaced_candidates} onPick={(id) => { setCoverReplaced(id); setImpact(null); setHash(null); }} />
+                      )}
                     </div>
                   )}
 
@@ -321,6 +398,13 @@ export function WhatsappTriageDialog({ sessionId, onClose, onChanged, focusQuest
                           {isSel && o.input === "guard_search" && <GuardSearch onPick={(g) => { setPickedGuard(g); setImpact(null); setHash(null); }} />}
                           {isSel && o.input === "date" && (
                             <input type="date" className="mt-1.5 w-full rounded-[5px] border border-zk-border px-2 py-1.5" aria-label="日期" data-testid="wa-date-input" value={dateText} onChange={(e) => { setDateText(e.target.value); setImpact(null); setHash(null); }} />
+                          )}
+                          {isSel && o.input === "leave_code" && (
+                            <select className="mt-1.5 w-full rounded-[5px] border border-zk-border px-2 py-1.5" aria-label="請假碼" data-testid="wa-leave-code" value={leaveCode} onChange={(e) => { setLeaveCode(e.target.value); setImpact(null); setHash(null); }}>
+                              {LEAVE_CODES.map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
                           )}
                           {isSel && o.id === "wa_manual" && q.wa.manual_href && <div className="mt-1 text-zk-sm text-zk-muted">確認後會喺新分頁開排更頁。</div>}
                         </div>
