@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, type DocCache, type DocPage, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
+import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, OCR_PIPELINE_VERSION, refsHashOf, type DocCache, type DocPage, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
 import { fileDocCache, parseArgs, resolveSourcePage, run, main } from "../scripts/staff-import/19-triage-reread";
 import { ArgError } from "../scripts/staff-import/lib/eval-ocr-core";
 import { proposalsBodySchema } from "@/lib/triage/proposals";
@@ -166,13 +166,31 @@ describe("TR-2 讀數快取", () => {
     try {
       const d: DocPage = { type: "id_card", docId: "doc/../x", page: 2 };
       const fake = { type: "id_card", fields: {}, usage: { calls: 1 } } as never;
-      await fileDocCache(dir, false).set(d, fake);
-      expect(await fileDocCache(dir, false).get(d)).toMatchObject({ type: "id_card" });
-      expect(await fileDocCache(dir, true).get(d)).toBeNull();
-      expect(await fileDocCache(dir, false).get({ ...d, type: "address_proof" })).toBeNull();
-      expect(await fileDocCache(dir, false).get({ ...d, page: 3 })).toBeNull();
+      await fileDocCache(dir, false).set(d, fake, "none");
+      expect(await fileDocCache(dir, false).get(d, "none")).toMatchObject({ type: "id_card" });
+      expect(await fileDocCache(dir, true).get(d, "none")).toBeNull();
+      expect(await fileDocCache(dir, false).get({ ...d, type: "address_proof" }, "none")).toBeNull();
+      expect(await fileDocCache(dir, false).get({ ...d, page: 3 }, "none")).toBeNull();
       await writeFile(path.join(dir, "id_card__doc____x__p2.json"), "{oops");
-      expect(await fileDocCache(dir, false).get(d)).toBeNull();
+      expect(await fileDocCache(dir, false).get(d, "none")).toBeNull();
+      // TR-2.2：refs 指紋／docId／管線版本任一唔對＝miss
+      const f = path.join(dir, "id_card__doc____x__p2.json");
+      const good = { version: OCR_PIPELINE_VERSION, docId: d.docId, refsHash: "abc", result: fake };
+      await writeFile(f, JSON.stringify(good));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toMatchObject({ type: "id_card" });
+      expect(await fileDocCache(dir, false).get(d, "zzz")).toBeNull();
+      await writeFile(f, JSON.stringify({ ...good, docId: "other" }));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toBeNull();
+      await writeFile(f, JSON.stringify({ ...good, version: "old" }));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toBeNull();
+      await writeFile(f, JSON.stringify({ ...good, version: 1 }));
+      expect(await fileDocCache(dir, false).get(d, "abc")).toBeNull();
+      expect(refsHashOf(null)).toBe("none");
+      expect(refsHashOf({})).toBe("none");
+      const r1 = { name_zh: { value: "甲" }, hkid: { value: "X" } } as never;
+      const r2 = { hkid: { value: "X" }, name_zh: { value: "甲" } } as never;
+      expect(refsHashOf(r1)).toBe(refsHashOf(r2));
+      expect(refsHashOf(r1)).not.toBe(refsHashOf({ hkid: { value: "Y" } } as never));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
