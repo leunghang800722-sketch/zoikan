@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/Button";
 import { brokerColor } from "@/lib/ui/broker-color";
 import { shiftCodeStyle } from "@/lib/ui/shift-code-color";
 import { DayCell } from "./DayCell";
-import type { BrokerDto, CellState, GuardDto, RowMeta, SelRange } from "./roster-types";
+import type { BrokerDto, CellState, GuardDto, RowMeta, SelRange, WaCellInfo } from "./roster-types";
+import { fmtDateTime } from "@/lib/ui/format";
+
+/** tooltip 用：訊息時間（香港時間、短格式）。 */
+const fmtWaTime = (iso: string): string => fmtDateTime(iso);
 import { LEAVE_CODES } from "./roster-types";
 import {
   cellKeyOf,
@@ -66,6 +70,7 @@ export function RosterGrid({
   onCellDoubleClick,
   openContextMenu,
   commitEdit,
+  waInfo,
 }: {
   compact: boolean;
   isBrokerSession: boolean;
@@ -109,6 +114,8 @@ export function RosterGrid({
   onCellDoubleClick: (r: number, d: number) => void;
   openContextMenu: (r: number, d: number, x: number, y: number) => void;
   commitEdit: () => void;
+  /** W3：來自 WhatsApp 嘅格仔 tooltip 資料（record id → 原訊息資訊） */
+  waInfo?: Map<string, WaCellInfo>;
 }) {
   // ---- WP-R2：桌面／手機固定欄闊度（README §04/§23）--------------------
   const showBrokerCol = !isBrokerSession && !compact;
@@ -155,7 +162,9 @@ export function RosterGrid({
     const m = dayMetaList[d - 1];
 
     const chip = invalid ? { bg: "var(--zk-danger-tint)", fg: "var(--zk-danger-dark)", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
-    const title = c?.status ? `${c.source === "whatsapp" ? "來自 WhatsApp｜" : ""}狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
+    const wa = c?.source === "whatsapp" && c.id ? waInfo?.get(c.id) : undefined;
+    const waText = wa ? [wa.group_label, wa.message_ts ? fmtWaTime(wa.message_ts) : null, wa.text ? `「${wa.text.length > 120 ? `${wa.text.slice(0, 120)}…` : wa.text}」` : null, wa.source_changed ? (wa.revoked ? "⚠ 原訊息已被發訊人撤回" : "⚠ 原訊息已被發訊人修改") : null].filter(Boolean).join("｜") : "";
+    const title = c?.status ? `${c.source === "whatsapp" ? `來自 WhatsApp｜${waText ? `${waText}｜` : ""}` : ""}狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
 
     return (
       <DayCell

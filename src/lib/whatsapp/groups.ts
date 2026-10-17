@@ -24,6 +24,8 @@ export const GroupPatchSchema = z.object({
   auto_write: z.boolean().optional(),
   auto_confirm: z.boolean().optional(),
   active: z.boolean().optional(),
+  /** W3：每群每日自動寫入上限（0–1000；0＝全部改 Triage）。 */
+  auto_write_daily_cap: z.number().int().min(0).max(1000).optional(),
   /** W1：第 0 層過濾閾值（0–100）；null＝用預設 40。 */
   filter_threshold: z.number().int().min(0).max(100).nullable().optional(),
 });

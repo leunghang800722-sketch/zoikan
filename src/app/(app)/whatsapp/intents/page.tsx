@@ -44,6 +44,9 @@ interface IntentRow {
   triage_question_id: string | null;
   triage_session_id: string | null;
   triage_status: string | null;
+  /** W3：routed=auto_write 嘅實際結果 */
+  auto_result: "pending" | "approved" | "rejected" | "no_op" | "suggested" | null;
+  auto_record_id: string | null;
 }
 interface IntentsRes {
   rows: IntentRow[];
@@ -71,6 +74,7 @@ interface StatsRes {
   auto_write_consistency_rate: number | null;
   errors: number;
   pending: number;
+  auto_results: { written: number; pending: number; approved: number; rejected: number; no_op: number; suggested: number };
 }
 interface GroupOpt {
   id: string;
@@ -104,12 +108,23 @@ const REASON_LABEL: Record<string, string> = {
   question_only: "純查詢",
   unclear: "睇唔明",
   duplicate_in_message: "同一訊息重覆",
+  source_edited_failed: "原訊息已修改，自動處理失敗（舊記錄仍待批）",
+  daily_cap: "呢個群今日自動寫入已達上限",
+  auto_disabled: "自動寫入總開關已關",
+  duplicate_recent: "5 分鐘內重覆（去重）",
 };
 const NOTE_LABEL: Record<string, string> = {
   group_auto_write_off: "群組未開自動寫入",
   month_rolled: "日期推去下個月",
   llm_bad_output: "AI 輸出無效",
   llm_no_intent: "AI 冇抽到指令",
+};
+const AUTO_RESULT_LABEL: Record<string, { text: string; variant: "success" | "warning" | "danger" | "neutral" }> = {
+  pending: { text: "已自動寫入・待批", variant: "warning" },
+  approved: { text: "已自動寫入・已批", variant: "success" },
+  rejected: { text: "已自動寫入・已拒／已取消", variant: "danger" },
+  no_op: { text: "已有相同記錄（no-op）", variant: "neutral" },
+  suggested: { text: "只係建議（群組未開自動寫入）", variant: "neutral" },
 };
 const COMPARE_LABEL: Record<string, { text: string; variant: "success" | "danger" | "neutral" }> = {
   match: { text: "✓ 一致", variant: "success" },
@@ -167,7 +182,7 @@ export default function WhatsappIntentsPage() {
       <PageHeader
         kicker={kickerFor("/whatsapp/intents")}
         title="WhatsApp 解析對照（dry-run）"
-        subtitle="每條訊息嘅解析結果同「實際排更」對一對。只係建議，唔會寫更、亦唔會開分流題。"
+        subtitle="每條訊息嘅解析結果同「實際排更」對一對。群組未開自動寫入＝只係建議；已開嘅，自動寫入結果（待批／已批／已拒）都會喺度顯示。"
         actions={
           <>
             <Link href="/whatsapp" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">群組同訊息</Link>
@@ -198,6 +213,12 @@ export default function WhatsappIntentsPage() {
                 <div className="text-zk-lg font-semibold text-zk-text">{v}</div>
               </div>
             ))}
+            <div data-testid="wa-stat-auto-results" className="col-span-2 sm:col-span-4">
+              <div className="text-zk-xs text-zk-muted">自動寫入結果</div>
+              <div className="text-zk-sm text-zk-text">
+                已寫 {stats.auto_results.written}（待批 {stats.auto_results.pending}、已批 {stats.auto_results.approved}、已拒 {stats.auto_results.rejected}）· no-op {stats.auto_results.no_op} · 只係建議 {stats.auto_results.suggested}
+              </div>
+            </div>
             <div data-testid="wa-stat-consistency">
               <div className="text-zk-xs text-zk-muted">對照一致率</div>
               <div className="text-zk-lg font-semibold text-zk-text">{pct(stats.consistency_rate)}</div>
@@ -301,6 +322,9 @@ export default function WhatsappIntentsPage() {
                     <Link href={`/triage?open=${r.triage_session_id}&focus=${r.triage_question_id}`} className="text-zk-xs text-zk-primary underline" data-testid="wa-intent-triage-link">
                       {r.triage_status === "open" ? "去答分診題 ›" : r.triage_status === "answered" ? "已答 ›" : "睇分診題 ›"}
                     </Link>
+                  )}
+                  {r.auto_result && (
+                    <span data-testid="wa-intent-auto-result" data-result={r.auto_result}><Pill variant={AUTO_RESULT_LABEL[r.auto_result]!.variant}>{AUTO_RESULT_LABEL[r.auto_result]!.text}</Pill></span>
                   )}
                   {r.superseded && <Pill variant="warning">已被編輯後版本取代</Pill>}
                   {r.revoked && <Pill variant="danger">原訊息已撤回</Pill>}

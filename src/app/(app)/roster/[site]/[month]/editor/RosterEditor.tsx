@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { invalidateLookups } from "@/lib/ui/lookup-cache";
+import { apiGet } from "@/lib/ui/api-client";
 import { confirmLeaveIfUnsaved, setUnsavedCount } from "@/lib/ui/unsaved-guard";
 import { rememberMonth } from "@/lib/ui/month-store";
 import { MQ_BELOW_SM } from "@/lib/ui/breakpoints";
@@ -37,7 +38,7 @@ import { RosterGrid } from "./RosterGrid";
 import { RosterHeader } from "./RosterHeader";
 import { QuotaStrip, RosterNotices } from "./RosterNotices";
 import { SaveToast } from "./SaveToast";
-import type { RowMeta } from "./roster-types";
+import type { RowMeta, WaCellInfo } from "./roster-types";
 import { MOBILE_KEYPAD_LEAVE_CODES } from "./roster-types";
 import {
   cellsEqual,
@@ -329,6 +330,25 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
   // ---- 雞頭人數／更數統計條（老闆 feedback 2026-09-12）------------------
   // W2：WhatsApp 分診答題寫入、仍待批核嘅格數（頁首提示用）
   const waPending = useMemo(() => records.filter((r) => r.source === "whatsapp" && r.status === "pending_approval").length, [records]);
+  // W3：來自 WhatsApp 嘅格仔 → 原訊息資訊（tooltip：群、時間、原話〔有「保安員」view 權先有〕、⚠ 原訊息已修改／撤回）。
+  // 冇「WhatsApp 報更」權限會 403 → 靜靜忽略（格仔仍然標「來自 WhatsApp」）。
+  const waIdsKey = useMemo(() => records.filter((r) => r.source === "whatsapp").map((r) => r.id).sort().join(","), [records]);
+  const [waInfo, setWaInfo] = useState<Map<string, WaCellInfo>>(new Map());
+  useEffect(() => {
+    if (!waIdsKey) {
+      setWaInfo(new Map());
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const r = await apiGet<{ rows: WaCellInfo[] }>(`/api/whatsapp/records?site=${encodeURIComponent(siteId)}&month=${encodeURIComponent(month)}`);
+      if (alive && r.ok) setWaInfo(new Map(r.data.rows.map((x) => [x.record_id, x])));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [waIdsKey, siteId, month]);
+  const waChanged = useMemo(() => [...waInfo.values()].filter((x) => x.source_changed).length, [waInfo]);
   const brokerStats = useMemo(() => computeBrokerStats(records, guardsById, brokersById, quotas), [records, guardsById, brokersById, quotas]);
 
   // ---- 畫面 ---------------------------------------------------------------
@@ -457,6 +477,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         errorBanner={errorBanner}
         infoBanner={infoBanner}
         waPending={waPending}
+        waChanged={waChanged}
       />
 
       <RosterGrid
@@ -502,6 +523,7 @@ export default function RosterEditor({ siteId, month, canReprice = false }: { si
         onCellDoubleClick={onCellDoubleClick}
         openContextMenu={openContextMenu}
         commitEdit={commitEdit}
+        waInfo={waInfo}
       />
 
       {mobileKeypadRow && mobileKeypadDay !== null && (
