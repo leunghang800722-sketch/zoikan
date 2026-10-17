@@ -2,7 +2,8 @@
 // 上載後按 personKey 配對該 session 嘅 open 題，砌成現有 answerSchema 答案，逐題經現有 previewAnswer → submitAnswer 寫入。
 //  - 唔新增任何 option 種類；唔直接 update DB（全部經現有預覽＝寫入路徑，同樣 validations／preview_hash／audit）。
 //  - 只處理 field_review／name_not_confirmed／hkid_not_confirmed；其餘 kind 一律唔掂（skipped_kind）。
-//  - 保守：field_review 一題多欄，要全部要覆核嘅欄都有建議先答（否則整題 skipped_partial，唔會令未決定嘅欄跟住變「已答」）。
+//  - TR-2：field_review 一題多欄，只得部分覆核欄有建議（或有欄格式唔合法）→ 答有建議嘅欄，並喺同一 tx 為剩餘覆核欄開新 field_review 題
+//    （groupKey `<舊>:rest`、evidence 只含剩餘欄），避免未決定嘅欄跟住變「已答」。冪等：同 groupKey 已存在就唔重覆開。
 //  - 回應淨係計數（唔回任何欄位值）；單位：skipped_* 以「建議條數」計；matched_questions／applied 以「題目數」計。
 import { z } from "zod";
 import type { TriageQuestion } from "@prisma/client";
@@ -15,7 +16,7 @@ import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { serverPersonKey } from "@/lib/guards/import/person-key";
 import { normTel8, normZh, parseBirthDate } from "@/lib/guards/import/text";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
-import { previewAnswer, submitAnswer } from "./apply";
+import { previewAnswer, submitAnswer, type FollowUpDraft } from "./apply";
 import { restrictedKindsFor } from "./session";
 import { viewerCaps } from "./view";
 import type { QuestionEvidence, QuestionOption, ReviewField, TriageAnswer } from "./types";
@@ -53,26 +54,35 @@ interface ProposalCounts {
   skipped_no_question: number;
   skipped_kind: number;
   skipped_field_mismatch: number;
+  /** skipped_field_mismatch 細分：建議欄唔喺題目覆核欄 */
+  skipped_field_not_under_review: number;
+  /** skipped_field_mismatch 細分：name／hkid 確認類值同題目唔同 */
+  skipped_value_mismatch: number;
   skipped_invalid: number;
   skipped_restricted: number;
   skipped_partial: number;
   skipped_identity_mismatch: number;
   errors: number;
+  /** applied 之中，只答部分覆核欄嘅題數 */
+  applied_partial: number;
+  /** 為剩餘覆核欄開（dry＝會開）嘅跟進題數 */
+  follow_up_created: number;
 }
-const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
+const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
 
-type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
+type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
 
 export type QuestionPlan =
   | { type: "none" } // 呢條題同呢個人嘅建議冇關係（唔計 matched）
   | { type: "skip"; disp: Exclude<Disp, "applied" | "skipped_no_question" | "skipped_kind" | "errors">; fields: ProposalField[] }
-  | { type: "answer"; answer: TriageAnswer; fields: ProposalField[] };
+  /** fields＝今次答咗嘅欄；rest＝仍要覆核而今次冇答嘅欄（要開跟進題）；invalidFields＝有建議但格式唔合法（留喺 rest） */
+  | { type: "answer"; answer: TriageAnswer; fields: ProposalField[]; rest: ReviewField[]; invalidFields: ProposalField[] };
 
 /**
  * 純函數：一條 open 題 ＋ 該人嘅建議（欄位 → 值）→ 要答乜／跳過原因。
  *  - name_not_confirmed：只接受 nameZh 建議而且同題目 evidence 嘅姓名一致（＝確認，option use_package_name）。
  *  - hkid_not_confirmed：只接受 hkid 建議而且同 evidence 嘅身份證號（canonical）一致（option use_package_hkid）。
- *  - field_review：要覆核嘅欄（evidence.review_fields）全部有建議先答（apply_fields；action=confirm＋值：只補空／確認，唔覆蓋現有唔同值）。
+ *  - field_review：答有建議而且格式合法嘅覆核欄（apply_fields；action=confirm＋值：只補空／確認，唔覆蓋現有唔同值）；剩餘覆核欄放 rest（由 runProposals 開跟進題）。
  */
 export function planForQuestion(q: Pick<TriageQuestion, "kind" | "optionsJson" | "evidenceJson">, props: ReadonlyMap<ProposalField, string>): QuestionPlan {
   const ev = q.evidenceJson as unknown as QuestionEvidence;
@@ -81,33 +91,37 @@ export function planForQuestion(q: Pick<TriageQuestion, "kind" | "optionsJson" |
     const v = props.get("nameZh");
     if (v === undefined) return { type: "none" };
     const pkg = fieldValue(ev.person.nameZh);
-    if (!pkg || !normZh(v) || normZh(v) !== normZh(pkg)) return { type: "skip", disp: "skipped_field_mismatch", fields: ["nameZh"] };
+    if (!pkg || !normZh(v) || normZh(v) !== normZh(pkg)) return { type: "skip", disp: "skipped_value_mismatch", fields: ["nameZh"] };
     if (!opts.some((o) => o.id === "use_package_name")) return { type: "skip", disp: "skipped_invalid", fields: ["nameZh"] };
-    return { type: "answer", answer: { option: "use_package_name" }, fields: ["nameZh"] };
+    return { type: "answer", answer: { option: "use_package_name" }, fields: ["nameZh"], rest: [], invalidFields: [] };
   }
   if (q.kind === "hkid_not_confirmed") {
     const v = props.get("hkid");
     if (v === undefined) return { type: "none" };
     const want = canonicalHkid(v);
     const pkg = canonicalHkid(fieldValue(ev.person.hkid));
-    if (!want || !pkg || want !== pkg) return { type: "skip", disp: "skipped_field_mismatch", fields: ["hkid"] };
+    if (!want || !pkg || want !== pkg) return { type: "skip", disp: "skipped_value_mismatch", fields: ["hkid"] };
     if (!opts.some((o) => o.id === "use_package_hkid")) return { type: "skip", disp: "skipped_invalid", fields: ["hkid"] };
-    return { type: "answer", answer: { option: "use_package_hkid" }, fields: ["hkid"] };
+    return { type: "answer", answer: { option: "use_package_hkid" }, fields: ["hkid"], rest: [], invalidFields: [] };
   }
   if (q.kind === "field_review") {
     const rf = (ev.review_fields ?? []).map((r) => r.field);
     const have = rf.filter((f) => props.has(f));
     if (have.length === 0) return { type: "none" };
     if (!opts.some((o) => o.id === "apply_fields")) return { type: "skip", disp: "skipped_invalid", fields: have };
-    if (have.length < rf.length) return { type: "skip", disp: "skipped_partial", fields: have };
     const fields: NonNullable<TriageAnswer["fields"]> = {};
+    const invalidFields: ProposalField[] = [];
     for (const f of rf) {
+      if (!props.has(f)) continue;
       const v = props.get(f)!;
       const bad = (f === "dateOfBirth" && !parseBirthDate(v)) || (f === "phone" && !normTel8(v)) || (f === "nameZh" && !normZh(v));
-      if (bad) return { type: "skip", disp: "skipped_invalid", fields: have };
-      fields[f as ReviewField] = { action: "confirm", value: v };
+      if (bad) invalidFields.push(f);
+      else fields[f as ReviewField] = { action: "confirm", value: v };
     }
-    return { type: "answer", answer: { option: "apply_fields", fields }, fields: have };
+    const answered = Object.keys(fields) as ProposalField[];
+    if (answered.length === 0) return { type: "skip", disp: "skipped_invalid", fields: have };
+    const rest = rf.filter((f) => !answered.includes(f));
+    return { type: "answer", answer: { option: "apply_fields", fields }, fields: answered, rest, invalidFields };
   }
   return { type: "none" };
 }
@@ -211,18 +225,26 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
           mark(key, plan.fields, "skipped_invalid");
           continue;
         }
-        if (!opts.dryRun) await submitAnswer(actor, q, plan.answer, prev.preview_hash, caps, opts.ip, { source: OCR_REREAD_SOURCE });
+        const followUp: FollowUpDraft | undefined = plan.rest.length > 0 ? { groupKey: `${q.groupKey}:rest`, restFields: plan.rest } : undefined;
+        let followCreated = false;
+        if (opts.dryRun) followCreated = !!followUp && !(await prisma.triageQuestion.findFirst({ where: { sessionId, groupKey: followUp.groupKey }, select: { id: true } }));
+        else followCreated = !!(await submitAnswer(actor, q, plan.answer, prev.preview_hash, caps, opts.ip, { source: OCR_REREAD_SOURCE, ...(followUp ? { followUp } : {}) })).follow_up_created;
         mark(key, plan.fields, "applied");
+        mark(key, plan.invalidFields, "skipped_invalid");
         counts.applied += 1;
+        if (followUp) counts.applied_partial += 1;
+        if (followCreated) counts.follow_up_created += 1;
       } catch (e) {
         mark(key, plan.fields, dispOf(e));
       }
     }
     // 呢個人冇被任何題認領嘅建議（欄位唔喺任何 open 題嘅覆核欄內）
-    mark(key, allFields, "skipped_field_mismatch");
+    mark(key, allFields, "skipped_field_not_under_review");
   }
   for (const d of disp) {
-    if (d && d !== "applied") counts[d] += 1;
+    if (!d || d === "applied") continue;
+    counts[d] += 1;
+    if (d === "skipped_field_not_under_review" || d === "skipped_value_mismatch") counts.skipped_field_mismatch += 1;
   }
   if (!opts.dryRun) {
     await writeAudit({

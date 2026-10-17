@@ -2,16 +2,18 @@
 //   npx tsx scripts/staff-import/19-triage-reread.ts --package data/2026-10/staff-import/out/import-package.json \
 //     --person-fields data/2026-10/staff-fields/person-fields-ext.json --extract data/2026-10/staff-import/out/extract.json \
 //     --index data/2026-10/staff-import/index.json --out data/2026-10/triage-reread/proposals.json [--docs-dir data/2026-09/staff-docs] [--limit N] [--only-key K] [--concurrency 2]
+//     [--cache data/2026-10/triage-reread/cache/] [--no-cache]   # TR-2：每 docId＋doc type＋page 嘅讀數存 JSON（gitignored），再跑命中就唔打 API；--no-cache 強制重讀（並覆寫快取）
 //   npx tsx scripts/staff-import/19-triage-reread.ts --dry [--out data/…/proposals.json]   # fake client＋記憶體內合成 fixture，唔讀任何 data、唔打 API
 // 對每個「有 ≥1 個 review 欄」嘅 person（package 該欄 status=review；nameZh／hkid 亦然）：經工號連去 person-fields-ext 嘅 docIds，
 // 由 extract 揀身份證／住址證明／入職表各 1 頁，兩段式＋refs 流程讀，mergeDocFields 得最終欄，再按保守規則出「建議答案」。
 // 輸出 --out（必須喺 data/ 之下）＝{version:1, generated_at, summary, proposals[]}；console 淨計數（唔印值、姓名、docId、路徑）。
 // 上載 proposals.json 去 /triage 嘅「⋯ → 導入 OCR 重讀建議」（先 dry run 再套用）。
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { OcrDocType } from '@/lib/guards/ocr/config';
 import { getReadClients } from '@/lib/guards/ocr/clients';
+import type { DocumentReadResult } from '@/lib/guards/ocr/read';
 import { ArgError, fakeClientsFor, resolveReportPath, runPool, type EvalCase, type PreparedImages } from './lib/eval-ocr-core';
 import { prepareDocumentImages } from './lib/eval-ocr-images';
 import {
@@ -24,6 +26,7 @@ import {
   proposeFromPicks,
   readPerson,
   summaryLines,
+  type DocCache,
   type DocPage,
   type ExtRow,
   type ExtractRow,
@@ -44,10 +47,13 @@ export interface Args {
   limit: number | null;
   onlyKey: string | null;
   concurrency: number;
+  /** TR-2：讀數快取目錄（必須喺 data/ 之下） */
+  cache: string | null;
+  noCache: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', out: null, dry: false, limit: null, onlyKey: null, concurrency: 2 };
+  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => {
@@ -63,6 +69,8 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (k === '--out') a.out = v();
     else if (k === '--dry') a.dry = true;
     else if (k === '--only-key') a.onlyKey = v();
+    else if (k === '--cache') a.cache = v();
+    else if (k === '--no-cache') a.noCache = true;
     else if (k === '--limit') {
       const x = v();
       if (!/^\d+$/.test(x) || Number(x) < 1) throw new ArgError('--limit 必須係正整數');
@@ -71,6 +79,29 @@ export function parseArgs(argv: readonly string[]): Args {
     else throw new ArgError(`唔認得嘅參數 ${k}`);
   }
   return a;
+}
+
+/** TR-2：檔案快取。key＝type＋docId＋page（淨字元）；寫入先落 tmp 再 rename；讀到壞檔當 miss。 */
+export function fileDocCache(dir: string, noCache: boolean): DocCache {
+  const fileOf = (d: DocPage) => path.join(dir, `${d.type}__${d.docId.replace(/[^A-Za-z0-9_-]/g, '_')}__p${d.page}.json`);
+  return {
+    async get(d) {
+      if (noCache) return null;
+      try {
+        const j = JSON.parse(await readFile(fileOf(d), 'utf-8')) as { version?: number; result?: DocumentReadResult };
+        return j.version === 1 && j.result && j.result.type === d.type ? j.result : null;
+      } catch {
+        return null;
+      }
+    },
+    async set(d, r) {
+      await mkdir(dir, { recursive: true });
+      const f = fileOf(d);
+      const tmp = `${f}.tmp`;
+      await writeFile(tmp, JSON.stringify({ version: 1, result: r }));
+      await rename(tmp, f);
+    },
+  };
 }
 
 /** index.json 嘅 file（相對 docs-dir；單檔或資料夾）＋ OCR 頁碼 → 可交畀 prepareDocumentImages 嘅絕對路徑＋頁。唔支援嘅版面（資料夾內有 PDF 又多於一個檔）→ null。 */
@@ -191,7 +222,7 @@ export interface RunResult {
   summary: RereadSummary;
 }
 
-export async function run(args: Args, now: Date = new Date()): Promise<RunResult> {
+export async function run(args: Args, now: Date = new Date(), cacheOverride?: DocCache): Promise<RunResult> {
   const inp = await loadInputs(args);
   const summary = emptySummary(now);
   summary.persons_in_package = inp.persons.length;
@@ -200,6 +231,8 @@ export async function run(args: Args, now: Date = new Date()): Promise<RunResult
   if (args.onlyKey) todo = todo.filter((p) => p.key === args.onlyKey);
   if (args.limit) todo = todo.slice(0, args.limit);
   const proposals: RereadProposal[] = [];
+  const cacheDir = args.cache ? resolveReportPath(args.cache, process.cwd()) : null;
+  const cache = cacheDir ? fileDocCache(cacheDir, args.noCache) : (cacheOverride ?? null);
   const concurrency = args.dry ? 1 : args.concurrency;
   await runPool(todo, concurrency, async (p, i) => {
     const docs = pickDocPages(docIdsForPerson(p, inp.staffIdx), inp.extractBy);
@@ -210,11 +243,12 @@ export async function run(args: Args, now: Date = new Date()): Promise<RunResult
     let ok = false;
     for (let attempt = 0; attempt < 2 && !ok; attempt++) {
       try {
-        const r = await readPerson(docs, { ...inp.deps, ...(args.dry ? { now: now } : {}) });
+        const r = await readPerson(docs, { ...inp.deps, ...(args.dry ? { now: now } : {}), ...(cache ? { cache } : {}) });
         const o = proposeFromPicks(p, r.picks, now);
         proposals.push(...o.proposals);
         addOutcome(summary, o);
         summary.ocr_calls += r.calls;
+        summary.cache_hits += r.cacheHits;
         summary.persons_processed += 1;
         ok = true;
       } catch {
@@ -232,6 +266,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   if (!args.dry) await import('dotenv/config'); // 真跑先載入 .env（key）；--dry 唔掂
   const outPath = args.out ? resolveReportPath(args.out, process.cwd()) : null;
   if (!args.dry && !outPath) throw new ArgError('需要 --out（必須喺 data/ 之下）');
+  if (args.cache) resolveReportPath(args.cache, process.cwd()); // 早啲驗路徑
   console.log(`[triage-reread] ${args.dry ? 'dry（fake client＋合成 fixture）' : 'live（真 client）'}｜concurrency ${args.dry ? 1 : args.concurrency}`);
   const { proposals, summary } = await run(args);
   for (const l of summaryLines(summary)) console.log(`[triage-reread] ${l}`);

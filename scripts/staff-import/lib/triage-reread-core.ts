@@ -59,7 +59,7 @@ const TYPED_LIST_REASONS: Record<ProposalFieldName, readonly string[]> = {
   address: ['mismatch_address'],
 };
 
-export type SkipReason = 'not_review' | 'no_read' | 'wrong_source' | 'not_confirmed' | 'arbiter_agree_a' | 'invalid_format' | 'cross_differs' | 'typed_list_disagrees';
+export type SkipReason = 'not_review' | 'no_read' | 'wrong_source' | 'not_confirmed' | 'arbiter_agree_a' | 'invalid_format' | 'typed_list_disagrees';
 
 /** 需要覆核嘅欄＝package 該欄 status=review（nameZh／hkid 亦然）。 */
 export function needsReread(p: PkgPerson): boolean {
@@ -70,6 +70,8 @@ export interface ProposeOutcome {
   proposals: RereadProposal[];
   /** 唔建議嘅原因計數（只計 package 為 review 嘅欄） */
   skipped: Partial<Record<SkipReason, number>>;
+  /** TR-2：每欄每原因計數（只計 package 為 review 嘅欄） */
+  skippedByField: Partial<Record<ProposalFieldName, Partial<Record<SkipReason, number>>>>;
 }
 
 type Pick_ = { doc: OcrDocType; result: Pick<FieldResult, 'status' | 'value' | 'arbiter'>; cross?: 'match' | 'differs' | 'unreadable' };
@@ -79,16 +81,18 @@ type Pick_ = { doc: OcrDocType; result: Pick<FieldResult, 'status' | 'value' | '
  *  - 只對 package 狀態為 review 嘅欄出建議；
  *  - 來源：姓名／身份證號／出生日期＝身份證；地址＝住址證明（唔收入職表手寫地址）；電話＝入職表；
  *  - 最終欄 status 必須 confirmed（兩讀一致，或仲裁同意；arbiter=agree_a 唔收）且格式 valid（HKID check digit、電話 8 位、日期曆法…）；
- *  - 入職表 vs 身份證交叉核對 differs → 唔建議；
- *  - package.reasons 顯示舊 crosscheck 對打字名單有唔一致 → 唔建議（留人手）。
+ *  - TR-2（老闆 2026-10-17）：身份證號／出生日期／中英文姓名以身份證副本為準、住址以住址證明為準——入職表手寫同印刷文件唔一致唔阻擋（只係 confidence 標 medium）；
+ *  - package.reasons 顯示舊 crosscheck 對打字名單有唔一致 → 唔建議（留人手；打字名單係辦公室資料，唔一致係真警號）。
  */
 export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey, Pick_>>, now: Date = new Date()): ProposeOutcome {
-  const out: ProposeOutcome = { proposals: [], skipped: {} };
-  const skip = (r: SkipReason) => {
-    out.skipped[r] = (out.skipped[r] ?? 0) + 1;
-  };
+  const out: ProposeOutcome = { proposals: [], skipped: {}, skippedByField: {} };
   for (const m of FIELD_MAP) {
     if (p[m.pkg].status !== 'review') continue;
+    const skip = (r: SkipReason) => {
+      out.skipped[r] = (out.skipped[r] ?? 0) + 1;
+      const f = (out.skippedByField[m.field] ??= {});
+      f[r] = (f[r] ?? 0) + 1;
+    };
     const pick = picks[m.ocr];
     if (!pick || pick.result.status === 'missing') {
       skip('no_read');
@@ -110,10 +114,6 @@ export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey
     const n = normalizeField(m.ocr, r.value, now);
     if (!n.valid || !n.canon) {
       skip('invalid_format');
-      continue;
-    }
-    if (pick.cross === 'differs') {
-      skip('cross_differs');
       continue;
     }
     if ((p.reasons ?? []).some((x) => TYPED_LIST_REASONS[m.field].includes(x))) {
@@ -200,7 +200,15 @@ export function docIdsForPerson(p: PkgPerson, idx: ReadonlyMap<string, string[]>
 }
 
 // ---------- 讀 ----------
+/** TR-2：讀數快取（每 docId＋doc type＋page 一份 stage 結果；真跑落 data/ 下 JSON，測試用記憶體實作） */
+export interface DocCache {
+  get(d: DocPage): Promise<DocumentReadResult | null>;
+  set(d: DocPage, r: DocumentReadResult): Promise<void>;
+}
+
 export interface RereadDeps {
+  /** TR-2：可選快取；命中就唔準備圖、唔打 API */
+  cache?: DocCache;
   /** 每種文件砌 client（真跑＝同一組真 client；dry＝fake） */
   clientsFor(type: OcrDocType): ReadClients;
   /** 揀咗嘅一頁 → 圖片（真跑：prepareDocumentImages 經 docId/page 解析來源檔；dry：固定假圖） */
@@ -209,21 +217,28 @@ export interface RereadDeps {
 }
 
 /** 同 client 流程一樣次序讀一個人嘅 ≤3 份文件，回 mergeDocFields 嘅最終欄＋交叉核對。 */
-export async function readPerson(docs: readonly DocPage[], deps: RereadDeps): Promise<{ picks: Partial<Record<OcrFieldKey, Pick_>>; calls: number }> {
+export async function readPerson(docs: readonly DocPage[], deps: RereadDeps): Promise<{ picks: Partial<Record<OcrFieldKey, Pick_>>; calls: number; cacheHits: number }> {
   const now = deps.now ?? new Date();
   const ordered = [...docs.filter((d) => !OCR_CROP_FIELDS[d.type]), ...docs.filter((d) => OCR_CROP_FIELDS[d.type])];
   const printed: DocumentReadResult[] = [];
   const byType = new Map<OcrDocType, DocumentReadResult>();
   let calls = 0;
+  let cacheHits = 0;
   for (const d of ordered) {
-    const images = await deps.prepare(d);
     const isForm = !!OCR_CROP_FIELDS[d.type];
     const refs: Refs | null = isForm ? confirmedRefsFromDocs(printed) : null;
-    const clients = deps.clientsFor(d.type);
-    const a = await readStageA(clients, d.type, images.full, refs);
-    const crops = images.cropFields ? await images.cropFields(d.type, a.field_boxes) : null;
-    const r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now);
-    calls += a.usage.calls + r.usage.calls;
+    let r: DocumentReadResult | null = deps.cache ? await deps.cache.get(d) : null;
+    if (r) cacheHits += 1;
+    else {
+      const images = await deps.prepare(d);
+      const clients = deps.clientsFor(d.type);
+      const a = await readStageA(clients, d.type, images.full, refs);
+      const crops = images.cropFields ? await images.cropFields(d.type, a.field_boxes) : null;
+      r = await readStageB(clients, d.type, a, crops ? { kind: 'field_crops', images: crops.images, fieldOf: crops.fieldOf, full: images.full } : { kind: 'tiles', images: images.tiles, full: images.full }, now);
+      calls += a.usage.calls + r.usage.calls;
+      // 先存（未加 cross）：cross 每次按 refs 重算
+      if (deps.cache) await deps.cache.set(d, r);
+    }
     if (isForm && refs && Object.keys(refs).length > 0) {
       const x = crossForOnboarding(refs, r.fields, now);
       for (const [k, v] of Object.entries(x.form)) r.fields[k as OcrFieldKey]!.cross = v;
@@ -238,7 +253,7 @@ export async function readPerson(docs: readonly DocPage[], deps: RereadDeps): Pr
     if (!OCR_DOC_FIELDS[v.doc].includes(k)) continue;
     picks[k] = { doc: v.doc, result: v.result, ...(v.cross ? { cross: v.cross } : {}) };
   }
-  return { picks, calls };
+  return { picks, calls, cacheHits };
 }
 
 // ---------- 彙總（淨計數） ----------
@@ -254,11 +269,15 @@ export interface RereadSummary {
   proposals_by_field: Record<string, number>;
   proposals_by_basis: Record<string, number>;
   not_proposed_reasons: Record<string, number>;
+  /** TR-2：每欄每原因計數 */
+  skipped_by_field: Record<string, Record<string, number>>;
   ocr_calls: number;
+  /** TR-2：讀數快取命中份數（文件） */
+  cache_hits: number;
 }
 
 export function emptySummary(now: Date = new Date()): RereadSummary {
-  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, ocr_calls: 0 };
+  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0 };
 }
 
 export function addOutcome(s: RereadSummary, o: ProposeOutcome): void {
@@ -269,6 +288,10 @@ export function addOutcome(s: RereadSummary, o: ProposeOutcome): void {
     s.proposals_by_basis[p.basis] = (s.proposals_by_basis[p.basis] ?? 0) + 1;
   }
   for (const [k, v] of Object.entries(o.skipped)) s.not_proposed_reasons[k] = (s.not_proposed_reasons[k] ?? 0) + (v ?? 0);
+  for (const [f, rs] of Object.entries(o.skippedByField)) {
+    const t = (s.skipped_by_field[f] ??= {});
+    for (const [k, v] of Object.entries(rs ?? {})) t[k] = (t[k] ?? 0) + (v ?? 0);
+  }
 }
 
 export function summaryLines(s: RereadSummary): string[] {
@@ -277,5 +300,6 @@ export function summaryLines(s: RereadSummary): string[] {
     `有建議嘅人 ${s.persons_with_proposals}｜建議共 ${s.proposals_total}｜OCR 呼叫 ${s.ocr_calls}`,
     `每欄建議：${JSON.stringify(s.proposals_by_field)}｜依據：${JSON.stringify(s.proposals_by_basis)}`,
     `唔建議原因：${JSON.stringify(s.not_proposed_reasons)}`,
+    `每欄唔建議原因：${JSON.stringify(s.skipped_by_field)}｜讀數快取命中 ${s.cache_hits}`,
   ];
 }
