@@ -2145,6 +2145,8 @@ model WhatsappGroup {
   brokerId      String?           @map("broker_id")
   broker        Broker?           @relation(fields: [brokerId], references: [id], onDelete: SetNull)
   shiftWordMap  Json              @default("{}") @map("shift_word_map")
+  // W5：請假詞對照（{ 口語: 請假碼 }）；群組覆寫優先於內建 LEAVE_TABLE
+  leaveWordMap  Json              @default("{}") @map("leave_word_map")
   // W1：第 0 層過濾閾值（群組層覆寫；null＝預設 40）
   filterThreshold Int?            @map("filter_threshold")
   autoWrite     Boolean           @default(false) @map("auto_write")

@@ -2812,6 +2812,25 @@ Migration `20261020000000_wa_w3_auto_write_cap`（只加欄）：`whatsapp_group
 ### 頁面
 `/whatsapp/pending`（WhatsApp 待批，375px 友善）；`/whatsapp` 綁定抽屜加「每日自動寫入上限」；排更頁加格仔 tooltip（群／時間／原話）同「⚠ 原訊息已被發訊人修改／撤回」橫幅。
 
+
+## WhatsApp 運維（W5，2026-10；全部 additive）
+
+Migration `20261021000000_wa_w5_leave_word_map`（只加欄 `whatsapp_groups.leave_word_map` jsonb，預設 `{}`）。權限同 W0：module `WhatsApp 報更` view（老闆／會計／主管）；update 淨係老闆；雞頭、保安員 403。
+
+### `GET /api/whatsapp/metrics?days=7`（view）
+近 N 日（`days` 1–90 整數，預設 7；香港日曆日，含今日）運維指標。回 `{ days, from, to, totals, groups }`；`totals` 同 `groups[]`（另有 `group_id`、`label`；只列期間內有訊息或有 Triage 題嘅群，最多 30 個，按收訊數降序）都係：`received`（收訊）、`filtered`（過濾）、`parsed`（解析＝LLM 呼叫）、`auto_judged`（建議自動）、`auto_written`（實際自動寫入＝待批＋已批＋已拒）、`pending`／`approved`／`rejected`、`triage_opened`／`triage_answered`（`wa_*` 題；開題按建立時間、已答按答題時間）、`consistency_rate`（對照一致率；無可比對＝null）、`llm_calls`、`llm_tokens_in`／`llm_tokens_out`、`errors`。只有數字同群名標籤，無原文。`days` 不合法 → 400。
+
+### `GET /api/whatsapp/health` 新增
+`recent_alerts: [{ id, title, body, created_at }]`——最近 5 條 `kind=whatsapp_health` 通知（新到舊；內容只有狀態碼／數字）。
+
+### `GET /api/whatsapp/groups` 新增（有 update 權先有選項）
+`shift_code_options: [{ site_id, codes: [{ code, label }] }]`（每盤有效更別，供口語對照下拉）、`leave_code_options: ["SL","AL","NL","RD","SH"]`；每個群組 DTO 加 `leave_word_map: [{ word, code }]`。
+
+### `PATCH /api/whatsapp/groups` 新增
+`leave_word_map?: [{ word, code }]`（≤30；`code` 必須係 `SL|AL|NL|RD|SH`）。`leave_word_map` 嘅 `word` 最少 2 個字元（NFKC 正規化後計；請假詞用包含式匹配，UI 同 API 都擋，400）；`shift_word_map` 嘅 `word` 最少 1 字（精確匹配，LLM 嘅 `shift_raw` 多數單字，如「早」「夜」）。`shift_word_map` 同 `leave_word_map` 嘅 `word` 一律先 NFKC 正規化再存；正規化後重覆 → 400「口語對照重覆」。resolve 時群組請假詞覆寫優先於內建對照（全字相同先，其次包含，最長詞優先）；冇覆寫就用內建。
+
+### 排程 job `whatsapp_health`（每 15 分鐘，`WA_ENABLED=1` 先跑）
+通知 kind `whatsapp_health`（audience 老闆，href `/whatsapp`，用戶可喺通知設定關閉）：① WAHA session ≠ WORKING（FAILED／STOPPED／SCAN_QR_CODE／STARTING／連唔到＝`UNREACHABLE`）→ 同一狀態 6 小時內最多一條（key 含已恢復次數，故障→恢復→再故障會再報）；恢復 WORKING → 一條「已恢復」（每個告警最多一條）。② 週一至六香港 13:00–23:00，所有啟用中而非「略過」嘅群自 max(當日 07:00, 現在−6h) 起冇收到任何訊息 → 「可能斷線」（每次故障一條：dedupe key 以最後一條訊息時間為準，有新訊息即重設；從未有訊息則每日一條）。③ 解析積壓（`status=received` 超過 200 條，或最舊一條等咗超過 30 分鐘）→ 6 小時內最多一條。summary 只有狀態碼／數字。
 ## WhatsApp 請假／替更／取消（W4，2026-10；全部 additive，無 migration）
 
 ### 新題型（`triage_questions.kind`，sourceType=`whatsapp`）

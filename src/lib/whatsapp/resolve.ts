@@ -47,7 +47,7 @@ export interface ResolveRepo {
 
 export interface ResolveContext {
   ts: Date;
-  group: { id: string; kind: "site" | "multi_site" | "broker" | "office" | "ignored"; siteId: string | null; brokerId: string | null; shiftWordMap: Record<string, string>; autoWrite: boolean };
+  group: { id: string; kind: "site" | "multi_site" | "broker" | "office" | "ignored"; siteId: string | null; brokerId: string | null; shiftWordMap: Record<string, string>; /** W5：群組請假詞覆寫（優先於內建）；冇就用內建 */ leaveWordMap?: Record<string, string>; autoWrite: boolean };
   senderGuardId: string | null;
   senderTelNorm: string | null;
   sites: readonly SiteNameCandidate[];
@@ -252,9 +252,16 @@ const LEAVE_TABLE: Array<{ code: string; re: RegExp }> = [
 ];
 // 「放假／休息／休假」可以係年假、事假、例假——唔自動對 RD，留 leave_code 空＋leave_code_unclear（只有明確「例假／RD」先 RD）
 const UNCLEAR_LEAVE_RE = /放假|休息|休假/;
-export function mapLeaveCode(raw: string | null | undefined): { code: string | null; ambiguous: boolean; unclear?: boolean } {
+export function mapLeaveCode(raw: string | null | undefined, overrides?: Record<string, string>): { code: string | null; ambiguous: boolean; unclear?: boolean } {
   const t = (raw ?? "").normalize("NFKC").trim();
   if (!t) return { code: null, ambiguous: false };
+  // W5：群組覆寫優先——全字相同先，其次包含（最長詞優先）；詞已 NFKC 正規化
+  if (overrides) {
+    const keys = Object.keys(overrides).filter((k) => k);
+    if (Object.prototype.hasOwnProperty.call(overrides, t)) return { code: overrides[t]!, ambiguous: false };
+    const hit = keys.filter((k) => t.includes(k)).sort((a, b) => b.length - a.length)[0];
+    if (hit) return { code: overrides[hit]!, ambiguous: false };
+  }
   const hits = LEAVE_TABLE.filter((x) => x.re.test(t)).map((x) => x.code);
   if (hits.length === 1) return { code: hits[0]!, ambiguous: false };
   if (hits.length === 0 && UNCLEAR_LEAVE_RE.test(t)) return { code: null, ambiguous: false, unclear: true };
@@ -336,7 +343,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
     if (kind === "shift" || kind === "cover") {
       if (site.siteId) shift = resolveShift(it.shift_raw, it.shift_code_guess, await typesOf(site.siteId), ctx.group.shiftWordMap);
     } else if (kind === "leave") {
-      const lv = mapLeaveCode(it.leave_raw);
+      const lv = mapLeaveCode(it.leave_raw, ctx.group.leaveWordMap);
       if (lv.code) leaveCode = lv.code;
       else baseReasons.push(lv.unclear ? "leave_code_unclear" : lv.ambiguous ? "leave_ambiguous" : "leave_unmapped");
     }
