@@ -357,6 +357,8 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 
 **開通步驟（建議）**：先喺一個試點群開「自動寫入」（**唔好**開「自動確認」），睇 `/whatsapp/intents` 嘅「自動寫入結果」同 `/whatsapp/pending` 一星期，一致率夠高、主管冇大量退回，先考慮擴到其他群。
 
+**兩個開關都要開先會自動寫**：① 環境變數 `WA_AUTO_WRITE_ENABLED`（總開關，冇設／`1`＝開）**同** ② 該群組喺「綁定設定」撳開「自動寫入」。任何一個關，都唔會寫更表：總開關關＝已開群組嘅訊息全部改去分流；群組開關關＝只記建議（dry-run，唔開題），並計入 `/whatsapp` 頁同日摘要嘅「建議自動但群組未開 N」。**上線前要逐群開**（新同步嘅群預設「略過」、自動寫入全關）；睇到「建議自動但群組未開」有數字，就係有群組仲未開。
+
 **寫入條件（全部齊先寫，缺一即分流）**：群組 `auto_write=true`＋總開關 `WA_AUTO_WRITE_ENABLED`＋LLM 信心 ≥0.6＋計劃書 §6.1 第 1–6 項（盤口、保安員硬鍵、日期 −2～+45 日且未鎖月、更碼對得到、冇撞更／同更已存在／額滿／配額滿、`shift`／`leave`）＋今日該群未達上限＋5 分鐘內冇重覆。群組未開「自動寫入」＝dry-run（只記建議，同 W1）。
 
 **安全閥**：
@@ -364,11 +366,12 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 - **總開關** `WA_AUTO_WRITE_ENABLED=0` → 全部分流（reason `auto_disabled`），無需重新部署以外嘅操作；改 env 後重啟 service。
 - **5 分鐘去重**：同一發訊人 5 分鐘內，另一條訊息已自動寫入同一保安員／日子／更別（或請假碼）→ 當重覆（`ignored`，reason `duplicate_recent`），唔再寫（例如主管剛退回嗰條，發訊人又 send 多次）。
 - 鎖月：寫入前同 transaction 內再檢查；鎖咗 → 分流（「鎖月中」題）。
+- 撞更：寫入前同 transaction 內再用 `FOR SHARE` 查一次同人同日（其他更種／請假）；有 → 分流，唔寫。
 
 **批核**：`/whatsapp/pending`（WhatsApp 待批）逐條或「批核已選」（逐條走現有 `/api/shift-records/[id]/approve`）；「全選」唔包含有 ⚠ 嘅記錄。退回要寫原因（走現有 reject＝回 draft）。排更頁頁首「本月有 N 格來自 WhatsApp，等緊批核」連去待批清單；格仔 hover 見「來自 WhatsApp｜群｜時間｜原話」（原話要「保安員:view」權）。
 
 **編輯／撤回**：發訊人編輯（新 revision）或撤回後——
-- 舊記錄仍 `pending_approval`（且當月未鎖）→ **自動退回**：記錄設 `cancelled`（audit `void`，`void_reason=source_message_edited｜source_message_revoked`），編輯嘅由新 revision 重新解析重寫（同一格會重用該行）；
+- 舊記錄仍 `pending_approval`（且當月未鎖）→ **自動退回**（同新 revision 嘅解析結果喺同一個 transaction：新結果寫入成功先取消舊記錄；新 revision 連續 3 次處理失敗＝舊記錄保留，另開一條「原訊息已修改，自動處理失敗」分流題）：記錄設 `cancelled`（audit `void`，`void_reason=source_message_edited｜source_message_revoked`），編輯嘅由新 revision 重新解析重寫（同一格會重用該行）；
 - 已確認／已批核／已結算（或當月已鎖）→ **唔自動改**，只標 `source_changed`：待批清單、排更格 tooltip、排更頁橫幅顯示「⚠ 原訊息已被發訊人修改／撤回」，由人手判斷。
 
 **日摘要**（每日 09:00 通知老闆）加「自動寫入 N、待批 M、拒絕 K」（只有數字）。

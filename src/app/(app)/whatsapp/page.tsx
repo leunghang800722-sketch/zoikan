@@ -85,6 +85,8 @@ export default function WhatsappPage() {
   const [groups, setGroups] = useState<GroupsRes | null>(null);
   const [messages, setMessages] = useState<MessageRow[] | null>(null);
   const [health, setHealth] = useState<HealthRes | null>(null);
+  // N1：近 14 日「建議自動但群組未開自動寫入」嘅條數（唔開題、唔寫）
+  const [suggested, setSuggested] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -105,6 +107,10 @@ export default function WhatsappPage() {
     if (r.ok) setMessages(r.data.rows);
     else setError(r.message);
   }, [groupFilter, statusFilter]);
+  const loadSuggested = useCallback(async () => {
+    const r = await apiGet<{ auto_results: { suggested: number } }>("/api/whatsapp/stats");
+    if (r.ok) setSuggested(r.data.auto_results.suggested);
+  }, []);
   const loadHealth = useCallback(async () => {
     const r = await apiGet<HealthRes>("/api/whatsapp/health");
     if (r.ok) setHealth(r.data);
@@ -113,7 +119,8 @@ export default function WhatsappPage() {
   useEffect(() => {
     void loadGroups();
     void loadHealth();
-  }, [loadGroups, loadHealth]);
+    void loadSuggested();
+  }, [loadGroups, loadHealth, loadSuggested]);
   useEffect(() => {
     void loadMessages();
   }, [loadMessages]);
@@ -144,7 +151,7 @@ export default function WhatsappPage() {
           <>
             <Link href="/whatsapp/pending" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">WhatsApp 待批</Link>
             <Link href="/whatsapp/intents" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">解析對照（dry-run）</Link>
-            <Button onClick={() => { void loadGroups(); void loadMessages(); void loadHealth(); }}>重新整理</Button>
+            <Button onClick={() => { void loadGroups(); void loadMessages(); void loadHealth(); void loadSuggested(); }}>重新整理</Button>
             {canUpdate && (
               <Button variant="primary" disabled={syncing} onClick={() => void sync()}>
                 {syncing ? "同步緊…" : "同步群組"}
@@ -187,6 +194,10 @@ export default function WhatsappPage() {
             <div>
               <div className="text-zk-xs text-zk-muted">24 小時收到</div>
               <div className="text-zk-text">{health.messages_24h}</div>
+            </div>
+            <div data-testid="wa-suggested-off">
+              <div className="text-zk-xs text-zk-muted">建議自動但群組未開（近 14 日）</div>
+              <div className="text-zk-text">{suggested ?? "—"}</div>
             </div>
           </div>
         )}

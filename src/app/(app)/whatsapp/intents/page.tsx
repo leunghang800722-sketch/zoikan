@@ -108,6 +108,7 @@ const REASON_LABEL: Record<string, string> = {
   question_only: "純查詢",
   unclear: "睇唔明",
   duplicate_in_message: "同一訊息重覆",
+  source_edited_failed: "原訊息已修改，自動處理失敗（舊記錄仍待批）",
   daily_cap: "呢個群今日自動寫入已達上限",
   auto_disabled: "自動寫入總開關已關",
   duplicate_recent: "5 分鐘內重覆（去重）",
