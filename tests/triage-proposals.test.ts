@@ -144,17 +144,56 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(again.body).toMatchObject({ applied: 0, skipped_no_question: 1 });
   });
 
-  it("field_review 只有部分欄有建議 → 整題 skipped_partial（唔答，題仍 open）", async () => {
+  it("TR-2 field_review 只有部分欄有建議 → 答有建議嘅欄＋同 tx 開剩餘欄跟進題；重覆上載冪等", async () => {
     const { pc, sid } = await seed();
+    const old = await qOf("field_review");
+    const dry = await send(accountant, sid, [prop(pc.key, "nameEn", "TEST CHAU")], true);
+    expect(dry.body).toMatchObject({ dry_run: true, matched_questions: 1, applied: 1, applied_partial: 1, follow_up_created: 1, skipped_partial: 0 });
+    expect(await prisma.triageQuestion.count({ where: { groupKey: `${old.groupKey}:rest` } })).toBe(0);
     const r = await send(accountant, sid, [prop(pc.key, "nameEn", "TEST CHAU")]);
-    expect(r.body).toMatchObject({ matched_questions: 1, applied: 0, skipped_partial: 1 });
-    expect((await qOf("field_review")).status).toBe("open");
+    expect(r.body).toMatchObject({ dry_run: false, applied: 1, applied_partial: 1, follow_up_created: 1 });
+    const done = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: old.id } });
+    expect(done.status).toBe("answered");
+    expect(Object.keys((done.answerJson as { fields: object }).fields)).toEqual(["nameEn"]);
+    const rest = await prisma.triageQuestion.findFirstOrThrow({ where: { groupKey: `${old.groupKey}:rest` } });
+    expect(rest.title).toBe(`${old.title}（剩餘欄位）`);
+    expect(rest).toMatchObject({ status: "open", kind: "field_review", personKey: old.personKey, sessionId: sid, sort: old.sort, targetGuardId: old.targetGuardId });
+    expect((rest.evidenceJson as { review_fields: { field: string }[] }).review_fields.map((x) => x.field)).toEqual(["address"]);
+    expect((rest.evidenceJson as { person: { key: string } }).person.key).toBe((old.evidenceJson as { person: { key: string } }).person.key);
+    // 再上載同一建議：舊題已答；跟進題只覆核 address → nameEn 唔屬任何 open 題 → no-op，唔重覆開
+    const again = await send(accountant, sid, [prop(pc.key, "nameEn", "TEST CHAU")]);
+    expect(again.body).toMatchObject({ applied: 0, follow_up_created: 0, skipped_field_not_under_review: 1 });
+    expect(await prisma.triageQuestion.count({ where: { groupKey: `${old.groupKey}:rest` } })).toBe(1);
+    // 剩餘欄之後有建議 → 答 rest 題（全覆蓋，唔再開跟進）
+    const second = await send(accountant, sid, [prop(pc.key, "address", "改正地址456號")]);
+    expect(second.body).toMatchObject({ applied: 1, applied_partial: 0, follow_up_created: 0 });
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: rest.id } })).status).toBe("answered");
+    // 冪等：同 groupKey 已存在（任何狀態）就唔重覆開
+    await prisma.triageQuestion.update({ where: { id: old.id }, data: { status: "open", answeredAt: null, answeredBy: null } });
+    const dup = await send(accountant, sid, [prop(pc.key, "nameEn", "TEST CHAU")]);
+    expect(dup.body).toMatchObject({ applied_partial: 1, follow_up_created: 0 });
+    expect(await prisma.triageQuestion.count({ where: { groupKey: `${old.groupKey}:rest` } })).toBe(1);
+  });
+
+  it("TR-2 全部覆核欄有建議 → 照舊一題答晒（唔開跟進）", async () => {
+    const { pc, sid } = await seed();
+    const r = await send(accountant, sid, [prop(pc.key, "nameEn", "TEST CHAU"), prop(pc.key, "address", "改正地址456號")]);
+    expect(r.body).toMatchObject({ applied: 1, applied_partial: 0, follow_up_created: 0 });
+    expect(await prisma.triageQuestion.count({ where: { groupKey: { endsWith: ":rest" } } })).toBe(0);
+  });
+
+  it("TR-2 field_review 覆核欄含 phone：phone 格式唔合法 → 其餘欄答，phone 留跟進題並計 skipped_invalid", () => {
+    const ev = { v: 1, person: person({ hkid: H[1] }), reasons: [], candidate_guard_ids: [], review_fields: [{ field: "nameEn", check: "fill" }, { field: "phone", check: "fill" }] };
+    const q = { kind: "field_review", evidenceJson: ev as never, optionsJson: [{ id: "apply_fields", label: "x" }] as never };
+    const p = planForQuestion(q, new Map([["nameEn", "A B"], ["phone", "12"]]) as never);
+    expect(p).toMatchObject({ type: "answer", fields: ["nameEn"], rest: ["phone"], invalidFields: ["phone"], answer: { option: "apply_fields", fields: { nameEn: { action: "confirm", value: "A B" } } } });
+    expect(planForQuestion(q, new Map([["phone", "12"]]) as never)).toMatchObject({ type: "skip", disp: "skipped_invalid" });
   });
 
   it("name_not_confirmed／hkid_not_confirmed：值同題目 evidence 唔一致 → skipped_field_mismatch（只接受「確認」）", async () => {
     const { pa, pb, sid } = await seed();
     const r = await send(accountant, sid, [prop(pa.key, "nameZh", "另一個名"), prop(pb.key, "hkid", H[3]!), prop(pb.key, "nameZh", "導入測試員乙")]);
-    expect(r.body).toMatchObject({ applied: 0, skipped_field_mismatch: 3 });
+    expect(r.body).toMatchObject({ applied: 0, skipped_field_mismatch: 3, skipped_value_mismatch: 2, skipped_field_not_under_review: 1 });
     expect((await qOf("name_not_confirmed")).status).toBe("open");
     expect((await qOf("hkid_not_confirmed")).status).toBe("open");
   });
@@ -162,13 +201,13 @@ describe("TR-1 OCR 重讀建議導入", () => {
   it("kind 過濾／personKey 唔對：no_id_card 等 kind 唔處理（skipped_kind）；未知 key（skipped_no_question）；欄位不在覆核欄（field_mismatch）", async () => {
     const { pc, pn, sid } = await seed();
     const r = await send(accountant, sid, [prop(pn.key, "nameZh", "導入測試員無證", { match: { hkid: null, staff_numbers: ["U90003"] } }), prop("00000000-0000-4000-8000-0000000000aa", "nameZh", "冇呢個人"), prop(pc.key, "phone", "91000012")]);
-    expect(r.body).toMatchObject({ applied: 0, skipped_kind: 1, skipped_no_question: 1, skipped_field_mismatch: 1 });
+    expect(r.body).toMatchObject({ applied: 0, skipped_kind: 1, skipped_no_question: 1, skipped_field_mismatch: 1, skipped_field_not_under_review: 1, skipped_value_mismatch: 0 });
   });
 
   it("同人同欄多個唔同值 → skipped_invalid（唔猜）；格式唔合法（dob）→ skipped_invalid；相同重複值當一條", async () => {
     const { pc, sid } = await seed();
     const r1 = await send(accountant, sid, [prop(pc.key, "nameEn", "TEST A"), prop(pc.key, "nameEn", "TEST B"), prop(pc.key, "address", "改正地址456號")], true);
-    expect(r1.body).toMatchObject({ applied: 0, skipped_invalid: 2, skipped_partial: 1 });
+    expect(r1.body).toMatchObject({ applied: 1, applied_partial: 1, skipped_invalid: 2, skipped_partial: 0 });
     const r2 = await send(accountant, sid, [prop(pc.key, "nameEn", "TEST CHAU"), prop(pc.key, "nameEn", "TEST CHAU"), prop(pc.key, "address", "改正地址456號")], true);
     expect(r2.body).toMatchObject({ applied: 1, skipped_invalid: 0 });
   });
@@ -238,13 +277,13 @@ describe("TR-1 OCR 重讀建議導入", () => {
     const q = (kind: string, evidence: object, opts: string[]) => ({ kind, evidenceJson: evidence as never, optionsJson: opts.map((id) => ({ id, label: id })) as never });
     const m = (e: [string, string][]) => new Map(e) as never;
     const fr = q("field_review", ev({ review_fields: [{ field: "nameEn", check: "fill" }, { field: "phone", check: "fill" }] }), ["apply_fields", "skip"]);
-    expect(planForQuestion(fr, m([["nameEn", "A B"]]))).toMatchObject({ type: "skip", disp: "skipped_partial" });
-    expect(planForQuestion(fr, m([["nameEn", "A B"], ["phone", "12"]]))).toMatchObject({ type: "skip", disp: "skipped_invalid" });
+    expect(planForQuestion(fr, m([["nameEn", "A B"]]))).toMatchObject({ type: "answer", fields: ["nameEn"], rest: ["phone"] });
+    expect(planForQuestion(fr, m([["nameEn", "A B"], ["phone", "12"]]))).toMatchObject({ type: "answer", fields: ["nameEn"], rest: ["phone"], invalidFields: ["phone"] });
     expect(planForQuestion(fr, m([["nameEn", "A B"], ["phone", "91000001"]]))).toMatchObject({ type: "answer", answer: { option: "apply_fields", fields: { nameEn: { action: "confirm", value: "A B" }, phone: { action: "confirm", value: "91000001" } } } });
     expect(planForQuestion(fr, m([["address", "x"]]))).toEqual({ type: "none" });
     const nn = q("name_not_confirmed", ev(), ["use_package_name", "skip"]);
     expect(planForQuestion(nn, m([["nameZh", "導入 測試員甲"]]))).toMatchObject({ type: "answer", answer: { option: "use_package_name" } });
-    expect(planForQuestion(nn, m([["nameZh", "冇關係"]]))).toMatchObject({ type: "skip", disp: "skipped_field_mismatch" });
+    expect(planForQuestion(nn, m([["nameZh", "冇關係"]]))).toMatchObject({ type: "skip", disp: "skipped_value_mismatch" });
     expect(planForQuestion(nn, m([["hkid", H[1]!]]))).toEqual({ type: "none" });
     const hk = q("hkid_not_confirmed", ev(), ["use_package_hkid", "skip"]);
     expect(planForQuestion(hk, m([["hkid", H[1]!.toLowerCase()]]))).toMatchObject({ type: "answer", answer: { option: "use_package_hkid" } });
