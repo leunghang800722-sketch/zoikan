@@ -357,6 +357,7 @@ function WordMapRows({ title, hint, pairs, setPairs, options, optionLabel, wordP
               <Button size="sm" variant="ghost" aria-label={`刪除${title} ${i + 1}`} onClick={() => setPairs(pairs.filter((_, j) => j !== i))}>刪</Button>
             </div>
             {dup && <div className="text-zk-xs text-zk-danger" data-testid="wa-wordmap-dup">口語詞重覆</div>}
+            {norm(p.word) !== "" && [...norm(p.word)].length < 2 && <div className="text-zk-xs text-zk-danger" data-testid="wa-wordmap-short">口語詞最少 2 個字</div>}
           </div>
         );
       })}
@@ -408,6 +409,11 @@ function GroupEditor({ group, sites, shiftCodes, leaveCodes, brokers, onClose, o
     setErr(null);
     if (hasDup(pairs) || hasDup(leavePairs)) {
       setErr("口語詞重覆，請修正後再儲存");
+      return;
+    }
+    const short = [...pairs, ...leavePairs].find((p) => p.word.trim() && [...p.word.normalize("NFKC").trim()].length < 2);
+    if (short) {
+      setErr("口語詞最少 2 個字（單字太易誤中），請修正後再儲存");
       return;
     }
     const half = [...pairs, ...leavePairs].find((p) => (p.word.trim() && !p.code) || (!p.word.trim() && p.code));

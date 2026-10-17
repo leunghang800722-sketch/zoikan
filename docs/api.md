@@ -2827,7 +2827,7 @@ Migration `20261021000000_wa_w5_leave_word_map`（只加欄 `whatsapp_groups.lea
 `shift_code_options: [{ site_id, codes: [{ code, label }] }]`（每盤有效更別，供口語對照下拉）、`leave_code_options: ["SL","AL","NL","RD","SH"]`；每個群組 DTO 加 `leave_word_map: [{ word, code }]`。
 
 ### `PATCH /api/whatsapp/groups` 新增
-`leave_word_map?: [{ word, code }]`（≤30；`code` 必須係 `SL|AL|NL|RD|SH`）。`shift_word_map` 同 `leave_word_map` 嘅 `word` 一律先 NFKC 正規化再存；正規化後重覆 → 400「口語對照重覆」。resolve 時群組請假詞覆寫優先於內建對照（全字相同先，其次包含，最長詞優先）；冇覆寫就用內建。
+`leave_word_map?: [{ word, code }]`（≤30；`code` 必須係 `SL|AL|NL|RD|SH`）。兩種對照嘅 `word` 最少 2 個字元（NFKC 正規化後計；UI 同 API 都擋，400）。`shift_word_map` 同 `leave_word_map` 嘅 `word` 一律先 NFKC 正規化再存；正規化後重覆 → 400「口語對照重覆」。resolve 時群組請假詞覆寫優先於內建對照（全字相同先，其次包含，最長詞優先）；冇覆寫就用內建。
 
 ### 排程 job `whatsapp_health`（每 15 分鐘，`WA_ENABLED=1` 先跑）
-通知 kind `whatsapp_health`（audience 老闆，href `/whatsapp`，用戶可喺通知設定關閉）：① WAHA session ≠ WORKING（FAILED／STOPPED／SCAN_QR_CODE／STARTING／連唔到＝`UNREACHABLE`）→ 同一狀態 6 小時內最多一條；恢復 WORKING → 一條「已恢復」（每個告警最多一條）。② 週一至六香港 07:00–23:00，所有啟用中而非「略過」嘅群超過 6 小時冇收到任何訊息 → 「可能斷線」（每日一條）。③ 解析積壓（`status=received` 超過 200 條，或最舊一條等咗超過 30 分鐘）→ 6 小時內最多一條。summary 只有狀態碼／數字。
+通知 kind `whatsapp_health`（audience 老闆，href `/whatsapp`，用戶可喺通知設定關閉）：① WAHA session ≠ WORKING（FAILED／STOPPED／SCAN_QR_CODE／STARTING／連唔到＝`UNREACHABLE`）→ 同一狀態 6 小時內最多一條（key 含已恢復次數，故障→恢復→再故障會再報）；恢復 WORKING → 一條「已恢復」（每個告警最多一條）。② 週一至六香港 13:00–23:00，所有啟用中而非「略過」嘅群自 max(當日 07:00, 現在−6h) 起冇收到任何訊息 → 「可能斷線」（每次故障一條：dedupe key 以最後一條訊息時間為準，有新訊息即重設；從未有訊息則每日一條）。③ 解析積壓（`status=received` 超過 200 條，或最舊一條等咗超過 30 分鐘）→ 6 小時內最多一條。summary 只有狀態碼／數字。

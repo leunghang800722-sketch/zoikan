@@ -1,7 +1,7 @@
 // W5：WhatsApp 橋接健康告警（計劃書 §7.2／§7.3）。每 15 分鐘：
 //  1) WAHA session 狀態 ≠ WORKING（FAILED／STOPPED／SCAN_QR_CODE／連唔到…）→ 通知老闆（同一狀態每 6 小時最多一次）；
 //     之後恢復 WORKING → 一條「已恢復」（每個告警最多一條）。
-//  2) 工作日（週一至六）香港 07:00–23:00：所有啟用中、已綁定嘅群超過 6 小時冇收過任何訊息 → 「可能斷線」（每日一次）。
+//  2) 週一至六香港 13:00–23:00：所有啟用中、已綁定嘅群自 max(當日 07:00, 現在−6h) 起冇收過任何訊息 → 「可能斷線」（每次故障一次，有訊息即重設）。
 //  3) 解析積壓（status=received 超過 200 條，或最舊一條等咗超過 30 分鐘）→ 通知（每 6 小時最多一次）。
 // 全部通知只有狀態碼／數字，唔含 PII。去重：dedupe_key 內嵌時間戳（毫秒）以判斷「6 小時內已通知」。
 import { prisma } from "@/lib/db";
@@ -13,7 +13,8 @@ import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
 const WHATSAPP_HEALTH_KEY = "whatsapp_health";
 const WA_ALERT_REPEAT_MS = 6 * 3600 * 1000;
-const WA_SILENCE_MS = 6 * 3600 * 1000;
+const H = 3600 * 1000;
+const WA_SILENCE_MS = 6 * H;
 const WA_BACKLOG_COUNT = 200;
 const WA_BACKLOG_AGE_MS = 30 * 60 * 1000;
 const RECOVERY_LOOKBACK_MS = 7 * 86400000;
@@ -57,7 +58,9 @@ export async function runWhatsappHealth(now: Date, opts: { fetchImpl?: typeof fe
     const state = r.ok ? r.data.status : "UNREACHABLE";
     out.waha_state = state;
     if (state !== "WORKING") {
-      const prefix = `whatsapp_health:state:${state}:`;
+      // N1：key 內嵌「已恢復次數」——故障→恢復→再故障，6 小時內都會再報
+      const recovered = await prisma.appNotification.count({ where: { kind: KIND, dedupeKey: { startsWith: "whatsapp_health:recovered:" } } });
+      const prefix = `whatsapp_health:state:${state}:r${recovered}:`;
       if (!(await alertedWithin(prefix, now, WA_ALERT_REPEAT_MS))) {
         const label = STATE_LABEL[state] ?? `狀態 ${state}`;
         out.waha_alerted = await notify(`WhatsApp 橋接異常：${label}`, `WAHA session 狀態為 ${state}，暫時收唔到群組訊息。處理方法見「運維說明」WhatsApp 章節（重掃 QR／重啟）。報更可照舊人手入更。`, `${prefix}${now.getTime()}`);
@@ -68,14 +71,22 @@ export async function runWhatsappHealth(now: Date, opts: { fetchImpl?: typeof fe
     }
   }
 
-  // 2) 工作日無訊息
+  // 2) 工作日冇訊息（S1）：只計工作時段內嘅靜默。香港週一至六 13:00–23:00 先檢查，
+  //    條件＝自 max(當日 07:00, now−6h) 起冇任何訊息；每次故障（＝同一條「最後一條訊息」）只報一次，有新訊息到達即重設。
   const { dow, hour } = hkWeekdayHour(now);
-  if (dow >= 1 && dow <= 6 && hour >= 7 && hour < 23) {
+  if (dow >= 1 && dow <= 6 && hour >= 13 && hour < 23) {
     const groups = await prisma.whatsappGroup.findMany({ where: { active: true, kind: { not: "ignored" } }, select: { groupJid: true } });
     if (groups.length > 0) {
-      const n = await prisma.whatsappMessage.count({ where: { chatJid: { in: groups.map((g) => g.groupJid) }, createdAt: { gte: new Date(now.getTime() - WA_SILENCE_MS) } } });
+      const jids = groups.map((g) => g.groupJid);
+      const dayOpen = new Date(`${hkDateOf(now)}T07:00:00+08:00`);
+      const since = new Date(Math.max(dayOpen.getTime(), now.getTime() - WA_SILENCE_MS));
+      const recent = await prisma.whatsappMessage.count({ where: { chatJid: { in: jids }, createdAt: { gte: since } } });
       out.silent_groups = groups.length;
-      if (n === 0) out.silence_alerted = await notify("WhatsApp 橋接可能斷線", `已綁定嘅 ${groups.length} 個群超過 6 小時冇收到任何訊息（工作日），請檢查 WAHA session 同群組。`, `whatsapp_health:silence:${hkDateOf(now)}`);
+      if (recent === 0) {
+        const last = await prisma.whatsappMessage.aggregate({ where: { chatJid: { in: jids } }, _max: { createdAt: true } });
+        const key = last._max.createdAt ? `whatsapp_health:silence:${last._max.createdAt.getTime()}` : `whatsapp_health:silence:none:${hkDateOf(now)}`;
+        out.silence_alerted = await notify("WhatsApp 橋接可能斷線", `已綁定嘅 ${groups.length} 個群於工作時段內超過 ${Math.round((now.getTime() - since.getTime()) / H)} 小時冇收到任何訊息，請檢查 WAHA session 同群組。`, key);
+      }
     }
   }
 

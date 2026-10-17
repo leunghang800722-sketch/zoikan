@@ -107,6 +107,16 @@ describe("W5 健康 job：WAHA session 狀態", () => {
     expect(await alerts()).toHaveLength(3);
   });
 
+  it("N1：同一狀態 故障→恢復→再故障，6 小時內都要再報", async () => {
+    const f = wahaFetch("FAILED");
+    await runWhatsappHealth(NOW, { force: true, fetchImpl: f });
+    await runWhatsappHealth(new Date(NOW.getTime() + 10 * 60_000), { force: true, fetchImpl: wahaFetch("WORKING") });
+    const r = await runWhatsappHealth(new Date(NOW.getTime() + 20 * 60_000), { force: true, fetchImpl: f });
+    expect(r.summary).toMatchObject({ waha_alerted: true });
+    expect((await runWhatsappHealth(new Date(NOW.getTime() + 30 * 60_000), { force: true, fetchImpl: f })).summary).toMatchObject({ waha_alerted: false }); // 同一次故障仍去重
+    expect((await alerts()).filter((n) => n.title.includes("異常"))).toHaveLength(2);
+  });
+
   it("異常後恢復 WORKING → 一條「已恢復」（只一條）", async () => {
     await runWhatsappHealth(NOW, { force: true, fetchImpl: wahaFetch("FAILED") });
     const t1 = new Date(NOW.getTime() + 30 * 60_000);
@@ -123,7 +133,7 @@ describe("W5 健康 job：WAHA session 狀態", () => {
   });
 });
 
-describe("W5 健康 job：工作日冇訊息", () => {
+describe("W5 健康 job：工作日冇訊息（S1：只計工作時段）", () => {
   beforeEach(async () => {
     delete process.env.WAHA_BASE_URL;
     await prisma.whatsappGroup.createMany({
@@ -135,35 +145,49 @@ describe("W5 健康 job：工作日冇訊息", () => {
   });
   const run = (now: Date) => runWhatsappHealth(now, { force: true });
   const silent = async () => (await alerts()).filter((n) => n.title.includes("可能斷線"));
+  const hk = (d: string, hhmm: string) => new Date(`${d}T${hhmm}:00+08:00`);
 
-  it("週五 13:00、已綁定群 6 小時冇訊息 → 通知；同日再跑唔重覆；翌日（週六）再通知", async () => {
-    expect((await run(NOW)).summary).toMatchObject({ silence_alerted: true });
-    expect((await run(new Date(NOW.getTime() + H))).summary).toMatchObject({ silence_alerted: false });
-    expect((await run(new Date(NOW.getTime() + 24 * H))).summary).toMatchObject({ silence_alerted: true }); // 週六 13:00
+  it("星期一 22:00 最後訊息 → 星期二 07:00／12:00 唔報、13:00 報；同一次故障唔重覆；有新訊息再靜 6h 再報", async () => {
+    await mkMsg(G1, "w5-s1", { createdAt: hk("2026-10-19", "22:00") });
+    for (const t of ["07:00", "09:00", "12:00", "12:59"]) expect((await run(hk("2026-10-20", t))).summary, t).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-20", "13:00"))).summary).toMatchObject({ silence_alerted: true });
+    expect((await run(hk("2026-10-20", "13:15"))).summary).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-20", "18:00"))).summary).toMatchObject({ silence_alerted: false });
+    expect(await silent()).toHaveLength(1);
+    // 15:00 有訊息到達 → 重設；之後 21:00 前仍有訊息在 6h 內（since＝15:00）唔報
+    await mkMsg(G1, "w5-s2", { createdAt: hk("2026-10-20", "15:00") });
+    expect((await run(hk("2026-10-20", "20:59"))).summary).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-20", "21:01"))).summary).toMatchObject({ silence_alerted: true });
+    expect((await run(hk("2026-10-20", "22:00"))).summary).toMatchObject({ silence_alerted: false });
     expect(await silent()).toHaveLength(2);
   });
 
-  it("6 小時內有訊息（任何已綁定群、任何狀態）→ 唔通知；剛過 6 小時 → 通知", async () => {
-    await mkMsg(G1, "w5-a", { createdAt: new Date(NOW.getTime() - 5 * H) });
-    expect((await run(NOW)).summary).toMatchObject({ silence_alerted: false });
-    expect((await run(new Date(NOW.getTime() + 1.5 * H))).summary).toMatchObject({ silence_alerted: true });
+  it("當日 07:00 後已有訊息 → 13:00 唔報；since＝max(當日 07:00, now−6h)", async () => {
+    await mkMsg(G1, "w5-a", { createdAt: hk("2026-10-20", "07:30") });
+    expect((await run(hk("2026-10-20", "13:00"))).summary).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-20", "13:29"))).summary).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-20", "13:31"))).summary).toMatchObject({ silence_alerted: true });
   });
 
-  it("只有「略過」群有訊息唔算；冇任何已綁定群 → 唔通知", async () => {
-    await mkMsg(G2, "w5-b", { createdAt: new Date(NOW.getTime() - 1 * H) });
-    expect((await run(NOW)).summary).toMatchObject({ silence_alerted: true });
+  it("任何狀態嘅訊息都算；只有「略過」群有訊息唔算；停用／冇綁定群 → 唔檢查", async () => {
+    await mkMsg(G2, "w5-b", { createdAt: hk("2026-10-20", "12:00") });
+    expect((await run(hk("2026-10-20", "14:00"))).summary).toMatchObject({ silence_alerted: true });
+    await mkMsg(G1, "w5-c", { status: "ignored", createdAt: hk("2026-10-21", "10:00") });
+    expect((await run(hk("2026-10-21", "14:00"))).summary).toMatchObject({ silence_alerted: false });
     await prisma.whatsappGroup.update({ where: { groupJid: G1 }, data: { active: false } });
-    expect((await run(new Date(NOW.getTime() + 24 * H))).summary).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-22", "14:00"))).summary).toMatchObject({ silence_alerted: false });
   });
 
-  it("星期日、香港 07:00 前、23:00 後唔檢查", async () => {
-    const sunday = new Date("2026-10-18T05:00:00Z"); // HK 星期日 13:00
-    const early = new Date("2026-10-15T22:30:00Z"); // HK 06:30 週五
-    const late = new Date("2026-10-16T15:00:00Z"); // HK 23:00 週五
-    for (const t of [sunday, early, late]) expect((await run(t)).summary).toMatchObject({ silence_alerted: false });
-    const justOpen = new Date("2026-10-15T23:00:00Z"); // HK 07:00 週五
-    expect((await run(justOpen)).summary).toMatchObject({ silence_alerted: true });
-    expect(await silent()).toHaveLength(1);
+  it("從未收過訊息 → 每日一次（13:00 起）", async () => {
+    expect((await run(hk("2026-10-20", "13:00"))).summary).toMatchObject({ silence_alerted: true });
+    expect((await run(hk("2026-10-20", "15:00"))).summary).toMatchObject({ silence_alerted: false });
+    expect((await run(hk("2026-10-21", "13:00"))).summary).toMatchObject({ silence_alerted: true });
+  });
+
+  it("星期日、23:00 後、13:00 前唔檢查", async () => {
+    for (const t of [hk("2026-10-18", "14:00"), hk("2026-10-20", "23:00"), hk("2026-10-20", "12:59"), hk("2026-10-20", "07:00")]) expect((await run(t)).summary).toMatchObject({ silence_alerted: false });
+    expect(await silent()).toHaveLength(0);
+    expect((await run(hk("2026-10-17", "14:00"))).summary).toMatchObject({ silence_alerted: true }); // 星期六照檢查
   });
 });
 
@@ -234,32 +258,37 @@ describe("W5 口語對照 API", () => {
 
   it("PATCH leave_word_map：儲存、讀返、audit；清空；非老闆 403", async () => {
     const { g } = await seedGroup();
-    const res = await patch(g.id, { leave_word_map: [{ word: "病", code: "AL" }, { word: "放假", code: "RD" }] });
+    const res = await patch(g.id, { leave_word_map: [{ word: "病假", code: "AL" }, { word: "放假", code: "RD" }] });
     expect(res.status).toBe(200);
     const row = await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } });
-    expect(row.leaveWordMap).toEqual({ 病: "AL", 放假: "RD" });
+    expect(row.leaveWordMap).toEqual({ 病假: "AL", 放假: "RD" });
     const list = (await (await groupsGet(req("/api/whatsapp/groups", cookies["老闆"]))).json()) as { rows: { leave_word_map: { word: string; code: string }[] }[] };
-    expect([...list.rows[0]!.leave_word_map].sort((a, b) => a.word.localeCompare(b.word))).toEqual([{ word: "放假", code: "RD" }, { word: "病", code: "AL" }]);
+    expect([...list.rows[0]!.leave_word_map].sort((a, b) => a.word.localeCompare(b.word))).toEqual([{ word: "放假", code: "RD" }, { word: "病假", code: "AL" }]);
     const au = await prisma.auditLog.findFirst({ where: { tableName: "whatsapp_groups", rowId: g.id, action: "update" }, orderBy: { createdAt: "desc" } });
     expect(JSON.stringify(au!.after)).toContain("leave_word_map");
     expect((await patch(g.id, { leave_word_map: [] })).status).toBe(200);
     expect((await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } })).leaveWordMap).toEqual({});
-    expect((await patch(g.id, { leave_word_map: [{ word: "病", code: "SL" }] }, "主管")).status).toBe(403);
+    expect((await patch(g.id, { leave_word_map: [{ word: "病假", code: "SL" }] }, "主管")).status).toBe(403);
   });
 
   it("驗證：請假碼要在清單內；詞重覆（含全形／半形）；空詞；超過 30 行 → 400，原值不變", async () => {
     const { g } = await seedGroup();
-    await patch(g.id, { leave_word_map: [{ word: "病", code: "SL" }], shift_word_map: [{ word: "夜", code: "N" }] });
+    await patch(g.id, { leave_word_map: [{ word: "病假", code: "SL" }], shift_word_map: [{ word: "夜班", code: "N" }] });
     const bad = async (over: Record<string, unknown>) => expect((await patch(g.id, over)).status, JSON.stringify(over)).toBe(400);
-    await bad({ leave_word_map: [{ word: "病", code: "XX" }] });
-    await bad({ leave_word_map: [{ word: "病", code: "SL" }, { word: "病", code: "AL" }] });
+    await bad({ leave_word_map: [{ word: "病假", code: "XX" }] });
+    await bad({ leave_word_map: [{ word: "病", code: "SL" }, { word: "病假", code: "AL" }] });
     await bad({ leave_word_map: [{ word: "ＳＬ", code: "SL" }, { word: "SL", code: "AL" }] });
     await bad({ shift_word_map: [{ word: "ＯＴ", code: "A" }, { word: "OT", code: "N" }] });
     await bad({ leave_word_map: [{ word: "", code: "SL" }] });
+    // N2：口語詞最少 2 個字元（口語對照、請假詞對照都一樣）
+    await bad({ leave_word_map: [{ word: "病", code: "SL" }] });
+    await bad({ shift_word_map: [{ word: "夜", code: "N" }] });
+    await bad({ shift_word_map: [{ word: " 夜 ", code: "N" }] });
+    await bad({ shift_word_map: [{ word: "Ｏ", code: "N" }] });
     await bad({ leave_word_map: Array.from({ length: 31 }, (_, i) => ({ word: `詞${i}`, code: "SL" })) });
     const row = await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } });
-    expect(row.leaveWordMap).toEqual({ 病: "SL" });
-    expect(row.shiftWordMap).toEqual({ 夜: "N" });
+    expect(row.leaveWordMap).toEqual({ 病假: "SL" });
+    expect(row.shiftWordMap).toEqual({ 夜班: "N" });
   });
 
   it("詞先 NFKC 正規化再存（ＯＴ → OT）", async () => {
