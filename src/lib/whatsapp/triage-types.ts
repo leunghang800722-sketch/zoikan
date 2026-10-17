@@ -72,6 +72,9 @@ const PERSON_REASONS = new Set(["person_ambiguous", "person_unknown"]);
 const DATE_REASONS = new Set(["date_missing", "date_unparseable", "date_ambiguous", "date_out_of_range"]);
 const CONFLICT_REASONS = new Set(["conflict_leave", "conflict_other_shift", "conflict_shift_vs_leave", "slot_full", "quota_full", "month_locked"]);
 
+/** W3：只係安全閥／低信心擋住（解析本身完整）→ 「照解析結果入更」。 */
+const SOFT_REASONS = new Set(["low_confidence", "daily_cap", "auto_disabled"]);
+
 /** 優先次序：unparsed > site > person > date > conflict（低信心單獨出現 → unparsed＋「照解析入更」）。 */
 export function pickWaKind(reasons: readonly string[]): WaKind {
   const has = (set: Set<string>) => reasons.some((r) => set.has(r));
@@ -117,7 +120,7 @@ export function optionsForWa(kind: WaKind, ev: Pick<WaEvidence, "candidates" | "
     }
     case "wa_unparsed": {
       const i = ev.intent;
-      const complete = (i.kind === "shift" || i.kind === "leave") && ev.reasons.length > 0 && ev.reasons.every((r) => r === "low_confidence");
+      const complete = (i.kind === "shift" || i.kind === "leave") && ev.reasons.length > 0 && ev.reasons.every((r) => SOFT_REASONS.has(r));
       return [...(complete ? [{ id: "wa_accept", label: "照解析結果入更（待批核）" } as QuestionOption] : []), { id: "wa_manual", label: "人手入更（去排更頁）" }, { id: "wa_ignore", label: "忽略（唔入更）" }, SKIP];
     }
   }

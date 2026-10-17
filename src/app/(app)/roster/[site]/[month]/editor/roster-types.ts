@@ -140,3 +140,15 @@ export type RowMeta = {
 
 export type SelRange = { a: { r: number; d: number }; b: { r: number; d: number } };
 
+
+/** W3：來自 WhatsApp 嘅排更記錄 ↔ 原訊息資訊（GET /api/whatsapp/records）。 */
+export type WaCellInfo = {
+  record_id: string;
+  message_ts: string | null;
+  group_label: string | null;
+  sender: string;
+  text: string | null;
+  text_redacted: boolean;
+  source_changed: boolean;
+  revoked: boolean;
+};

@@ -31,6 +31,7 @@ interface GroupRow {
   filter_threshold: number | null;
   auto_write: boolean;
   auto_confirm: boolean;
+  auto_write_daily_cap: number;
   active: boolean;
   last_message_at: string | null;
   unprocessed_count: number;
@@ -84,6 +85,8 @@ export default function WhatsappPage() {
   const [groups, setGroups] = useState<GroupsRes | null>(null);
   const [messages, setMessages] = useState<MessageRow[] | null>(null);
   const [health, setHealth] = useState<HealthRes | null>(null);
+  // N1：近 14 日「建議自動但群組未開自動寫入」嘅條數（唔開題、唔寫）
+  const [suggested, setSuggested] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -104,6 +107,10 @@ export default function WhatsappPage() {
     if (r.ok) setMessages(r.data.rows);
     else setError(r.message);
   }, [groupFilter, statusFilter]);
+  const loadSuggested = useCallback(async () => {
+    const r = await apiGet<{ auto_results: { suggested: number } }>("/api/whatsapp/stats");
+    if (r.ok) setSuggested(r.data.auto_results.suggested);
+  }, []);
   const loadHealth = useCallback(async () => {
     const r = await apiGet<HealthRes>("/api/whatsapp/health");
     if (r.ok) setHealth(r.data);
@@ -112,7 +119,8 @@ export default function WhatsappPage() {
   useEffect(() => {
     void loadGroups();
     void loadHealth();
-  }, [loadGroups, loadHealth]);
+    void loadSuggested();
+  }, [loadGroups, loadHealth, loadSuggested]);
   useEffect(() => {
     void loadMessages();
   }, [loadMessages]);
@@ -138,11 +146,12 @@ export default function WhatsappPage() {
       <PageHeader
         kicker={kickerFor("/whatsapp")}
         title="WhatsApp 報更"
-        subtitle="被動收聽公司專用號碼所在群組嘅訊息（只聽唔講）。解析只係 dry-run 建議（見「解析對照」），未寫入更表。"
+        subtitle="被動收聽公司專用號碼所在群組嘅訊息（只聽唔講）。已開「自動寫入」嘅群組，解析有把握嘅更／請假會直接寫入更表（待批核），其餘去分流。"
         actions={
           <>
+            <Link href="/whatsapp/pending" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">WhatsApp 待批</Link>
             <Link href="/whatsapp/intents" className="rounded-md border border-zk-input-border bg-white px-3.5 py-[7px] text-zk-base text-zk-text-secondary transition-colors hover:bg-zk-header">解析對照（dry-run）</Link>
-            <Button onClick={() => { void loadGroups(); void loadMessages(); void loadHealth(); }}>重新整理</Button>
+            <Button onClick={() => { void loadGroups(); void loadMessages(); void loadHealth(); void loadSuggested(); }}>重新整理</Button>
             {canUpdate && (
               <Button variant="primary" disabled={syncing} onClick={() => void sync()}>
                 {syncing ? "同步緊…" : "同步群組"}
@@ -185,6 +194,10 @@ export default function WhatsappPage() {
             <div>
               <div className="text-zk-xs text-zk-muted">24 小時收到</div>
               <div className="text-zk-text">{health.messages_24h}</div>
+            </div>
+            <div data-testid="wa-suggested-off">
+              <div className="text-zk-xs text-zk-muted">建議自動但群組未開（近 14 日）</div>
+              <div className="text-zk-text">{suggested ?? "—"}</div>
             </div>
           </div>
         )}
@@ -301,6 +314,7 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
   const [autoConfirm, setAutoConfirm] = useState(group.auto_confirm);
   const [active, setActive] = useState(group.active);
   const [threshold, setThreshold] = useState(group.filter_threshold === null ? "" : String(group.filter_threshold));
+  const [cap, setCap] = useState(String(group.auto_write_daily_cap ?? 50));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const noAuto = kind === "ignored" || kind === "office";
@@ -318,6 +332,7 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
       filter_threshold: threshold.trim() === "" ? null : Number(threshold),
       auto_write: noAuto ? false : autoWrite,
       auto_confirm: noAuto || !autoWrite ? false : autoConfirm,
+      auto_write_daily_cap: cap.trim() === "" ? 50 : Number(cap),
       active,
     });
     setSaving(false);
@@ -380,11 +395,15 @@ function GroupEditor({ group, sites, brokers, onClose, onSaved }: {
         </label>
         <label className={`flex items-center gap-2 text-sm ${noAuto ? "opacity-50" : ""}`}>
           <input type="checkbox" checked={!noAuto && autoWrite} disabled={noAuto} onChange={(e) => { setAutoWrite(e.target.checked); if (!e.target.checked) setAutoConfirm(false); }} />
-          自動寫入（之後階段先生效）
+          自動寫入（有把握嘅更／請假直接寫入，待批核）
         </label>
         <label className={`flex items-center gap-2 text-sm ${noAuto || !autoWrite ? "opacity-50" : ""}`}>
           <input type="checkbox" checked={!noAuto && autoWrite && autoConfirm} disabled={noAuto || !autoWrite} onChange={(e) => setAutoConfirm(e.target.checked)} />
           自動確認（唔經主管批核）
+        </label>
+        <label className={`block space-y-1 ${noAuto || !autoWrite ? "opacity-50" : ""}`}>
+          <span className="block text-sm text-zk-text-secondary">每日自動寫入上限（0–1000；超過會改去分流）</span>
+          <input className={inputCls} type="number" min={0} max={1000} aria-label="每日自動寫入上限" disabled={noAuto || !autoWrite} value={cap} onChange={(e) => setCap(e.target.value)} />
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />

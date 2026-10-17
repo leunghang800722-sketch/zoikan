@@ -53,6 +53,8 @@ export interface WaStats {
   auto_write_consistency_rate: number | null;
   errors: number;
   pending: number;
+  /** W3：routed=auto_write 嘅實際結果（已寫待批／已批／已拒／no-op／只係建議） */
+  auto_results: AutoWriteBreakdown;
 }
 
 const NON_GROUP_REASONS = ["not_group", "from_me"];
@@ -126,5 +128,50 @@ export async function computeStats(range: WaRange, groupJid: string | null): Pro
     auto_write_consistency_rate: rate(awConsistent, awCompared),
     errors,
     pending,
+    auto_results: await computeAutoWriteBreakdown(range, groupJid),
   };
+}
+
+// ---------------------------------------------------------------- W3：自動寫入實際結果
+export type AutoWriteOutcome = "pending" | "approved" | "rejected" | "no_op" | "suggested";
+
+/** 純函數：一條 routed=auto_write 嘅 intent → 實際結果。written＋記錄狀態：pending_approval＝待批；draft／cancelled／冇記錄＝已拒；其餘＝已批。 */
+export function autoWriteOutcomeOf(resolution: unknown, recordStatus: string | null | undefined): AutoWriteOutcome {
+  const aw = resolution && typeof resolution === "object" ? (resolution as { auto_write?: { result?: unknown } }).auto_write : undefined;
+  const result = aw && typeof aw === "object" ? aw.result : undefined;
+  if (result === "no_op") return "no_op";
+  if (result !== "written") return "suggested";
+  if (recordStatus === "pending_approval") return "pending";
+  if (!recordStatus || recordStatus === "draft" || recordStatus === "cancelled") return "rejected";
+  return "approved";
+}
+
+interface AutoWriteBreakdown {
+  /** 自動寫入咗（待批＋已批＋已拒） */
+  written: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  no_op: number;
+  /** 群組未開自動寫入（dry-run）：只係建議 */
+  suggested: number;
+}
+
+/** 範圍內所有 routed=auto_write 嘅 intent（包括之後被新 revision 取代／撤回嘅——寫過就算）嘅實際結果。 */
+async function computeAutoWriteBreakdown(range: WaRange, groupJid: string | null): Promise<AutoWriteBreakdown> {
+  const rows = await prisma.whatsappIntent.findMany({
+    where: { routed: "auto_write", message: { ts: { gte: range.start, lt: range.end }, ...(groupJid ? { chatJid: groupJid } : {}) } },
+    select: { resolution: true, resultRef: true },
+    take: MAX_COMPARE_INTENTS,
+  });
+  const recIds = [...new Set(rows.map((r) => r.resultRef).filter((x): x is string => !!x))];
+  const recs = recIds.length ? await prisma.shiftRecord.findMany({ where: { id: { in: recIds } }, select: { id: true, status: true } }) : [];
+  const st = new Map(recs.map((r) => [r.id, r.status as string]));
+  const out: AutoWriteBreakdown = { written: 0, pending: 0, approved: 0, rejected: 0, no_op: 0, suggested: 0 };
+  for (const r of rows) {
+    const o = autoWriteOutcomeOf(r.resolution, r.resultRef ? st.get(r.resultRef) : null);
+    out[o]++;
+    if (o === "pending" || o === "approved" || o === "rejected") out.written++;
+  }
+  return out;
 }

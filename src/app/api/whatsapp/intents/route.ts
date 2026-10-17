@@ -7,7 +7,7 @@ import { ok, withApiError } from "@/lib/api/http";
 import { BadRequest } from "@/lib/api/errors";
 import { brandSafeResponse } from "@/lib/api/serialize";
 import { compareIntents } from "@/lib/whatsapp/compare";
-import { parseRange, resolveGroupJid } from "@/lib/whatsapp/stats";
+import { autoWriteOutcomeOf, parseRange, resolveGroupJid } from "@/lib/whatsapp/stats";
 import type { Prisma } from "@prisma/client";
 
 const ROUTED = ["auto_write", "triage", "ignored", "pending"] as const;
@@ -39,13 +39,16 @@ export async function GET(req: Request) {
     const guardIds = [...new Set(rows.map((r) => r.guardId).filter((x): x is string => !!x))];
     const shiftTypeIds = [...new Set(rows.map((r) => r.shiftTypeId).filter((x): x is string => !!x))];
     const qIds = [...new Set(rows.filter((r) => r.routed === "triage" && r.resultRef).map((r) => r.resultRef as string))];
-    const [groups, sites, guards, types, questions] = await Promise.all([
+    const awRefs = [...new Set(rows.filter((r) => r.routed === "auto_write" && r.resultRef).map((r) => r.resultRef as string))];
+    const [groups, sites, guards, types, questions, awRecs] = await Promise.all([
       prisma.whatsappGroup.findMany({ where: { groupJid: { in: jids } }, select: { id: true, groupJid: true, label: true } }),
       prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true } }),
       showNames ? prisma.guard.findMany({ where: { id: { in: guardIds } }, select: { id: true, nameZh: true } }) : Promise.resolve([]),
       prisma.shiftType.findMany({ where: { id: { in: shiftTypeIds } }, select: { id: true, code: true } }),
       qIds.length ? prisma.triageQuestion.findMany({ where: { id: { in: qIds } }, select: { id: true, sessionId: true, status: true } }) : Promise.resolve([]),
+      awRefs.length ? prisma.shiftRecord.findMany({ where: { id: { in: awRefs } }, select: { id: true, status: true } }) : Promise.resolve([]),
     ]);
+    const awStatus = new Map(awRecs.map((x) => [x.id, x.status as string]));
     const qBy = new Map(questions.map((x) => [x.id, x]));
     const gBy = new Map(groups.map((g) => [g.groupJid, g]));
     const siteBy = new Map(sites.map((s) => [s.id, s.canonicalName]));
@@ -90,6 +93,9 @@ export async function GET(req: Request) {
         triage_question_id: r.routed === "triage" && r.resultRef && qBy.has(r.resultRef) ? r.resultRef : null,
         triage_session_id: r.routed === "triage" && r.resultRef ? (qBy.get(r.resultRef)?.sessionId ?? null) : null,
         triage_status: r.routed === "triage" && r.resultRef ? (qBy.get(r.resultRef)?.status ?? null) : null,
+        // W3：routed=auto_write 嘅實際結果（pending 待批／approved 已批／rejected 已拒／no_op／suggested 只係建議〔群組未開自動寫入〕）
+        auto_result: r.routed === "auto_write" ? autoWriteOutcomeOf(r.resolution, r.resultRef ? awStatus.get(r.resultRef) : null) : null,
+        auto_record_id: r.routed === "auto_write" && r.resultRef && awStatus.has(r.resultRef) ? r.resultRef : null,
       });
     });
     return ok(brandSafeResponse({ rows: out, total: out.length, take, from: range.fromIso, to: range.toIso, can_see_text: showNames }));

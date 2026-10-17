@@ -2789,3 +2789,26 @@ routed=triage 嘅行加 `triage_question_id`、`triage_session_id`、`triage_sta
 
 ### 共用排更 write service
 `src/lib/shift-records/write.ts`（由 `POST /api/shift-records/batch` 抽出，batch 行為 byte-for-byte 不變）：`computePlanPricing`／`applyShiftPlansTx`／`computeWarnings`（batch 與 WhatsApp 共用）、`writeShiftCells(tx, { siteId, month, cells, actor, source, provenance, statusPolicy:"confirmed"|"pending_approval", overwriteActive? })`（tx 內鎖月 → 重用已取消行 → 計價 snapshot → audit 一條 createMany；已存在相同＝`exists` no-op；同格唔同類型預設 409）、`cancelShiftRecordsTx`。
+
+## WhatsApp 自動寫入（W3，2026-10；全部 additive）
+
+Migration `20261020000000_wa_w3_auto_write_cap`（只加欄）：`whatsapp_groups.auto_write_daily_cap`（int，預設 50）。群組 DTO／`PATCH /api/whatsapp/groups` 加 `auto_write_daily_cap`（0–1000；老闆）。
+
+### 自動寫入（`whatsapp_parse` job 內，同一 transaction）
+`src/lib/whatsapp/autowrite.ts`：落完 intents 後，`routed=auto_write` **而且**群組 `auto_write=true` 嘅 intent 逐條過閘 → `writeShiftCells`（`statusPolicy`＝群組 `auto_confirm ? confirmed : pending_approval`；`source="whatsapp"`；`provenance={message_id, revision, intent_idx, sender_guard_id}`；actor＝系統排程帳號）。結果寫入 `whatsapp_intents`：`result_ref`＝`shift_record_id`、`resolution.auto_write={result:"written"|"no_op", record_id, status}`；任何一閘唔過 → `routed=triage`＋原因碼（`auto_disabled`／`low_confidence`／`daily_cap`／`month_locked`／`conflict_other_shift`…，由 W2 generator 開題），同 5 分鐘去重 → `routed=ignored`（`duplicate_recent`）。群組 `auto_write=false`＝dry-run，行為同 W1。env `WA_AUTO_WRITE_ENABLED`（預設開；非 `1`＝關）。
+
+### 編輯／撤回後續（`src/lib/whatsapp/source-change.ts`）
+新 revision 處理前／job tick 見到訊息已撤回：由該訊息寫入（`provenance.message_id`）、仍 `pending_approval` 且當月未鎖嘅記錄 → `cancelled`（audit `void`，`after.void_reason=source_message_edited|source_message_revoked`）；其餘只標 intents `source_changed=true`（`resolution.auto_write.followup`＝`rejected_edited|rejected_revoked|flagged`）。
+
+### `GET /api/whatsapp/pending?group=&take=`
+權限 `WhatsApp 報更` view。回 `{ rows, total, take, can_see_text, can_approve }`；`rows[]`＝來源 WhatsApp、`pending_approval` 嘅記錄：`id, created_at, message_ts, group_label, sender, site_name, work_date, record_type, code, guard_name?, text?, text_redacted, source_changed, revoked`。`guard_name`／`text` 要「保安員:view」（否則 null）；`can_approve`＝有「審批:update」。批核／退回照舊用 `POST /api/shift-records/{id}/approve｜reject`（權限、鎖月、補計價不變）。
+
+### `GET /api/whatsapp/records?site=<id>&month=YYYY-MM`
+權限 `WhatsApp 報更` view。該盤該月來源 WhatsApp 且非取消嘅記錄對應原訊息資訊（排更格 tooltip 用）：`rows[]={record_id, message_ts, group_label, sender, text?, text_redacted, source_changed, revoked}`。
+
+### 對照頁／統計（additive）
+`GET /api/whatsapp/intents` 每條加 `auto_result`（`pending|approved|rejected|no_op|suggested`，只 `routed=auto_write` 有）、`auto_record_id`。`GET /api/whatsapp/stats` 加 `auto_results={written, pending, approved, rejected, no_op, suggested}`。每日摘要通知加「自動寫入 N、待批 M、拒絕 K」。
+
+### 頁面
+`/whatsapp/pending`（WhatsApp 待批，375px 友善）；`/whatsapp` 綁定抽屜加「每日自動寫入上限」；排更頁加格仔 tooltip（群／時間／原話）同「⚠ 原訊息已被發訊人修改／撤回」橫幅。
+

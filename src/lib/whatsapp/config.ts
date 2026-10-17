@@ -31,3 +31,17 @@ export function wahaApiKey(): string {
 export function wahaSession(): string {
   return process.env.WAHA_SESSION || "default";
 }
+
+/**
+ * W3：自動寫入總開關。預設開（env 冇設）；設 "1" 都係開；任何其他值（"0"、"false"、亂碼）一律當關（fail closed）
+ * ——關咗之後 routed=auto_write 嘅 intent 全部改 Triage（reason `auto_disabled`），唔寫更。
+ */
+export function waAutoWriteEnabled(): boolean {
+  const v = process.env.WA_AUTO_WRITE_ENABLED;
+  if (v === undefined) return true;
+  return v.trim() === "1";
+}
+/** W3：同一發訊人重覆同一 intent 嘅去重窗口。 */
+export const WA_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+/** W3：自動寫入最低信心（§6.1；W1 resolve 已擋，寫入前再擋一次）。 */
+export const WA_AUTO_MIN_CONFIDENCE = 0.6;

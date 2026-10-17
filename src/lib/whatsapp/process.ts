@@ -14,6 +14,10 @@ import { isoToDbDate } from "./dates";
 import { shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
 import { createWaQuestionsTx, notifyWaTriage, supersedeWaQuestions, type WaTriageResult } from "./triage";
 import { TRIAGE_LOCK } from "@/lib/triage/session";
+import { ensureSystemUser } from "@/lib/system-user";
+import { journalAutoCardUsesSafe, type AutoCardUse } from "@/lib/pricing/auto-card-journal";
+import { autoWriteIntentsTx } from "./autowrite";
+import { applySourceChangeTx, staleEditedPendingIds } from "./source-change";
 
 const WA_MAX_ATTEMPTS = 3;
 const QUOTE_WINDOW_MS = 24 * 3600 * 1000;
@@ -76,11 +80,45 @@ export async function failAttempt(id: string, revision: number, code: string): P
   if (!cur || cur.revision !== revision || cur.status !== "received") return "stale";
   const attempts = cur.parseAttempts + 1;
   const giveUp = attempts >= WA_MAX_ATTEMPTS;
-  await prisma.whatsappMessage.updateMany({
-    where: { id, revision, status: "received" },
-    data: giveUp ? { parseAttempts: attempts, status: "error", error: code } : { parseAttempts: attempts, error: code },
-  });
-  return giveUp ? "error" : "retry";
+  if (!giveUp) {
+    await prisma.whatsappMessage.updateMany({ where: { id, revision, status: "received" }, data: { parseAttempts: attempts, error: code } });
+    return "retry";
+  }
+  // S1：編輯後新 revision 3 次都處理失敗 → 舊 revision 嘅 pending 記錄保留，開一條 wa_unparsed 題（人手決定）
+  const u = await prisma.whatsappMessage.updateMany({ where: { id, revision, status: "received" }, data: { parseAttempts: attempts, status: "error", error: code } });
+  if (u.count === 0 || revision <= 1) return "error";
+  let tri: WaTriageResult | null = null;
+  // 開題係 best-effort（失敗唔影響 status=error 已落）
+  const done = await prisma.$transaction(async (tx) => {
+    const msg = await tx.whatsappMessage.findUniqueOrThrow({ where: { id } });
+    const group = await tx.whatsappGroup.findUnique({ where: { groupJid: msg.chatJid } });
+    if (!group) return false;
+    const old = await tx.shiftRecord.findMany({ where: { source: "whatsapp", status: "pending_approval", provenance: { path: ["message_id"], equals: msg.messageId } }, select: { provenance: true } });
+    if (!old.some((r) => typeof (r.provenance as { revision?: unknown } | null)?.revision === "number" && (r.provenance as { revision: number }).revision < revision)) return false;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
+    await tx.whatsappIntent.deleteMany({ where: { messageId: msg.messageId, messageRevision: revision } });
+    const row = await tx.whatsappIntent.create({
+      data: {
+        messageId: msg.messageId,
+        messageRevision: revision,
+        idx: 0,
+        kind: "unclear",
+        confidence: 0,
+        resolution: { type: "unclear", reasons: ["unclear", "source_edited_failed"], notes: ["source_edited_process_failed"], basis: {}, candidates: {}, group_id: group.id, group_auto_write: group.autoWrite },
+        routed: "triage",
+      },
+    });
+    tri = await createWaQuestionsTx(tx, {
+      msg: { messageId: msg.messageId, revision, ts: msg.ts, chatJid: msg.chatJid, text: msg.text, senderGuardId: msg.senderGuardId, senderTelNorm: msg.senderTelNorm },
+      group: { id: group.id, label: group.label, kind: group.kind, siteId: group.siteId },
+      rows: [{ id: row.id, idx: 0, kind: "unclear", workDate: null, siteId: null, guardId: null, shiftTypeId: null, leaveCode: null, confidence: 0, resolution: row.resolution, routed: "triage" }],
+      srcs: [undefined],
+    });
+    return true;
+  }).catch(() => false);
+  const made = tri as WaTriageResult | null;
+  if (done && made && made.created > 0 && made.sessionId && made.ownerUserId) await notifyWaTriage(made.ownerUserId, made.sessionId, made.created, new Date());
+  return "error";
 }
 
 /** 處理一條 status=received 嘅訊息。 */
@@ -89,6 +127,10 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
   if (!msg || msg.status !== "received" || msg.revokedAt) return "skipped";
   const rev = msg.revision;
   const group = await prisma.whatsappGroup.findUnique({ where: { groupJid: msg.chatJid } });
+  // W3（S1）：編輯後新 revision——舊 revision 已寫嘅 pending 記錄**同新結果同一個 tx** 先取消（唔可以先取消再解析：
+  // 解析失敗會變成舊記錄冇咗、新記錄又冇）。resolve 時將呢批舊記錄當「唔存在」（唔當已存在／額滿）；已確認嘅只標示。
+  const staleIds = await staleEditedPendingIds(msg.messageId, rev);
+  const editActor = rev > 1 ? await ensureSystemUser() : "";
 
   const ignoreNow = async (reason: string, score: number, reasons: string[], extra: Prisma.WhatsappMessageUncheckedUpdateManyInput = {}): Promise<ProcessOutcome> => {
     return prisma.$transaction(async (tx) => {
@@ -97,6 +139,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
         data: { status: "ignored", ignoreReason: reason, filterScore: score, filterReasons: reasons, parseAttempts: 0, error: null, ...extra },
       });
       if (u.count === 0) return "stale" as const;
+      if (rev > 1) await applySourceChangeTx(tx, { messageId: msg.messageId, belowRevision: rev, reason: "source_message_edited", actorUserId: editActor });
       // 編輯後新 revision 被過濾／雜訊：舊 revision 嘅 intents 一樣標被取代
       await tx.whatsappIntent.updateMany({ where: { messageId: msg.messageId, messageRevision: { lt: rev }, supersededByRevision: null }, data: { supersededByRevision: rev } });
       // W2：舊 revision 嘅 open 分診題一併作廢（新 revision 被過濾／雜訊＝冇新題）
@@ -174,7 +217,7 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
       senderTelNorm: msg.senderTelNorm,
       sites: ctx.sites,
       index: ctx.index,
-      repo: createPrismaResolveRepo(),
+      repo: createPrismaResolveRepo(staleIds),
     };
     if (!parsed.ok || intents.length === 0) {
       const reason = parsed.ok ? "llm_no_intent" : "llm_bad_output";
@@ -202,6 +245,10 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
   // ---- 落結果（單一 transaction；訊息期間被編輯／撤回 → stale，下一輪用新 revision 重來）
   // W2：同一 tx 內即時開 Triage 題（routed=triage 嘅 intent 一題；舊 revision 嘅 open 題 superseded）。
   let tri: WaTriageResult | null = null;
+  // W3：群組開咗自動寫入 + 有 routed=auto_write 嘅 intent 先需要寫入身份（系統排程帳號）
+  const needsActor = rev > 1 || group.autoWrite && resolved.some((r) => r.routed === "auto_write");
+  const actorUserId = needsActor ? (editActor || (await ensureSystemUser())) : "";
+  const autoCardUses: AutoCardUse[] = [];
   const outcome = await prisma.$transaction(async (tx) => {
     const u = await tx.whatsappMessage.updateMany({
       where: { id: msg.id, revision: rev, status: "received", revokedAt: null },
@@ -221,14 +268,37 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     await tx.whatsappIntent.deleteMany({ where: { messageId: msg.messageId, messageRevision: rev } });
     const created = await tx.whatsappIntent.createManyAndReturn({ data: resolved.map((r, i) => rowFor(msg.messageId, rev, i, r)) });
     const byIdx = [...created].sort((a, b) => a.idx - b.idx);
+    // S1：先喺同一 tx 取消舊 revision 嘅 pending 記錄，再（重）寫新結果
+    if (rev > 1) await applySourceChangeTx(tx, { messageId: msg.messageId, belowRevision: rev, reason: "source_message_edited", actorUserId });
+    // W3：自動寫入（同 tx；用 TRIAGE_LOCK 序列化每日上限／去重計數同 Triage 答題寫入）
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
+    const aw = await autoWriteIntentsTx(tx, {
+      msg: { messageId: msg.messageId, revision: rev, chatJid: msg.chatJid, senderJid: msg.senderJid, senderGuardId: msg.senderGuardId, ts: msg.ts },
+      group: { id: group.id, autoWrite: group.autoWrite, autoConfirm: group.autoConfirm, autoWriteDailyCap: group.autoWriteDailyCap },
+      rows: byIdx,
+      actorUserId,
+    });
+    autoCardUses.push(...aw.autoCardUses);
+    const finalRows = byIdx.map((r) => {
+      const p = aw.patches.get(r.idx);
+      return p ? { ...r, routed: p.routed, resolution: p.resolution as Prisma.JsonValue, resultRef: p.resultRef } : r;
+    });
+    for (const r of finalRows) {
+      const p = aw.patches.get(r.idx);
+      if (p) {
+        resolved[r.idx]!.routed = p.routed;
+        await tx.whatsappIntent.update({ where: { id: r.id }, data: { routed: p.routed, resolution: toJson(p.resolution), resultRef: p.resultRef } });
+      }
+    }
     tri = await createWaQuestionsTx(tx, {
       msg: { messageId: msg.messageId, revision: rev, ts: msg.ts, chatJid: msg.chatJid, text: msg.text, senderGuardId: msg.senderGuardId, senderTelNorm: msg.senderTelNorm },
       group: { id: group.id, label: group.label, kind: group.kind, siteId: group.siteId },
-      rows: byIdx.map((r) => ({ id: r.id, idx: r.idx, kind: r.kind, workDate: r.workDate, siteId: r.siteId, guardId: r.guardId, shiftTypeId: r.shiftTypeId, leaveCode: r.leaveCode, confidence: r.confidence === null ? null : Number(r.confidence), resolution: r.resolution, routed: r.routed })),
-      srcs: byIdx.map((r) => resolved[r.idx]?.src),
+      rows: finalRows.map((r) => ({ id: r.id, idx: r.idx, kind: r.kind, workDate: r.workDate, siteId: r.siteId, guardId: r.guardId, shiftTypeId: r.shiftTypeId, leaveCode: r.leaveCode, confidence: r.confidence === null ? null : Number(r.confidence), resolution: r.resolution, routed: r.routed })),
+      srcs: finalRows.map((r) => resolved[r.idx]?.src),
     });
     return "routed" as const;
   });
+  if (outcome === "routed" && autoCardUses.length > 0) await journalAutoCardUsesSafe(autoCardUses);
   const made = tri as WaTriageResult | null;
   if (outcome === "routed" && made && made.created > 0 && made.sessionId && made.ownerUserId) await notifyWaTriage(made.ownerUserId, made.sessionId, made.created, msg.ts);
   if (outcome === "routed") {
