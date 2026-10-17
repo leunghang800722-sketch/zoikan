@@ -173,7 +173,7 @@ describe("W2 產題：六種 kind、session、owner、冪等、通知", () => {
     await feed("k-conf", "測試甲聽日夜更", llmJson(person("測試甲")), 2);
     await feed("k-cover", "測試甲頂測試乙聽日夜更", llmJson({ type: "cover", persons: [{ raw: "測試甲", role: "worker" }, { raw: "測試乙", role: "replaced" }] }), 3);
     const kinds = Object.fromEntries(await Promise.all(["k-site", "k-unk", "k-date", "k-conf", "k-cover"].map(async (m) => [m, (await qsOf(m))[0]?.kind])));
-    expect(kinds).toEqual({ "k-site": "wa_site_ambiguous", "k-unk": "wa_person_unknown", "k-date": "wa_date_ambiguous", "k-conf": "wa_shift_conflict", "k-cover": "wa_unparsed" });
+    expect(kinds).toEqual({ "k-site": "wa_site_ambiguous", "k-unk": "wa_person_unknown", "k-date": "wa_date_ambiguous", "k-conf": "wa_shift_conflict", "k-cover": "wa_cover" });
   });
 
   it("優先次序 unparsed > site > person > date > conflict（一條 intent 同時卡幾樣，只出最優先一題）", async () => {
@@ -408,9 +408,10 @@ describe("W2 wa_shift_conflict", () => {
 
 // ---------------------------------------------------------------------------
 describe("W2 wa_unparsed、輪次上限、鎖月", () => {
-  it("替更（cover）→ wa_unparsed：只有人手／忽略／跳過（冇「照解析入更」）；忽略→answered 唔寫", async () => {
-    await feed("u1", "測試甲頂測試乙聽日夜更", llmJson({ type: "cover", persons: [{ raw: "測試甲", role: "worker" }, { raw: "測試乙", role: "replaced" }] }));
+  it("取消冇可取消記錄（cancel）→ wa_unparsed：只有人手／忽略／跳過（冇「照解析入更」）；忽略→answered 唔寫", async () => {
+    await feed("u1", "測試甲聽日唔返", llmJson({ type: "cancel", persons: [{ raw: "測試甲", role: "worker" }], shift_raw: null }));
     const [q] = await qsOf("u1");
+    expect(q!.kind).toBe("wa_unparsed");
     expect((q!.optionsJson as Array<{ id: string }>).map((o) => o.id)).toEqual(["wa_manual", "wa_ignore", "skip"]);
     expect((await answer(q!.id, { option: "wa_ignore" })).status).toBe(200);
     expect(await prisma.shiftRecord.count({ where: { source: "whatsapp" } })).toBe(0);

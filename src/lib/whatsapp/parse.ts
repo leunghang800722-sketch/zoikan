@@ -99,6 +99,12 @@ const FEW_SHOTS = `例子（全部虛構）：
 訊息時間 2026-10-16 18:00（星期五）；訊息：「19號測試丙換測試丁夜更」
 {"noise":false,"intents":[{"type":"cover","date":{"raw":"19號","kind":"absolute","iso_guess":"2026-10-19","to_iso_guess":null},"site_raw":null,"persons":[{"raw":"測試丁","role":"worker"},{"raw":"測試丙","role":"replaced"}],"self_reference":false,"shift_raw":"夜","shift_code_guess":"N","hours":null,"leave_raw":null,"leave_code_guess":null,"confidence":0.8,"evidence":"19號測試丙換測試丁夜更"}]}
 
+訊息時間 2026-10-16 09:00（星期五）；訊息：「我17-19號病假」
+{"noise":false,"intents":[{"type":"leave","date":{"raw":"17-19號","kind":"range","iso_guess":"2026-10-17","to_iso_guess":"2026-10-19"},"site_raw":null,"persons":[],"self_reference":true,"shift_raw":null,"shift_code_guess":null,"hours":null,"leave_raw":"病假","leave_code_guess":"SL","confidence":0.88,"evidence":"我17-19號病假"}]}
+
+訊息時間 2026-10-16 20:00（星期五）；訊息：「聽日唔返喇，取消聽日嗰更」
+{"noise":false,"intents":[{"type":"cancel","date":{"raw":"聽日","kind":"relative","iso_guess":"2026-10-17","to_iso_guess":null},"site_raw":null,"persons":[],"self_reference":true,"shift_raw":null,"shift_code_guess":null,"hours":null,"leave_raw":null,"leave_code_guess":null,"confidence":0.85,"evidence":"聽日唔返喇，取消聽日嗰更"}]}
+
 訊息時間 2026-10-16 09:00（星期五）；訊息：「幾點返？」
 {"noise":false,"intents":[{"type":"question_only","date":null,"site_raw":null,"persons":[],"self_reference":false,"shift_raw":null,"shift_code_guess":null,"hours":null,"leave_raw":null,"leave_code_guess":null,"confidence":0.9,"evidence":"幾點返？"}]}
 
@@ -119,7 +125,8 @@ export const WA_SYSTEM_PROMPT = `你係保安公司排更訊息嘅「抽取器�
 6. 第一人稱（我／本人）講自己 → self_reference=true，persons 可為空。
 7. 純查詢（問幾點返、邊個返，冇可執行嘅報更／請假）→ type=question_only。
 8. 更別：shift_raw 抄訊息字眼（例如「早」「夜」「N更」）；shift_code_guess 只可以係下面更碼表入面嘅 code，唔肯定就 null。請假：leave_raw 抄字眼，leave_code_guess 只可以係 AL/SL/NL/RD/SH。
-9. 有帶問號嘅指令（例如「聽日陳大文返早得唔得？」）仍然係報更，照抽，唔好當閒聊。
+9. 取消／唔返（例如「聽日唔返」「取消聽日嗰更」）= type cancel；講明因病／請假先用 leave。cancel 唔使 shift_raw。
+10. 有帶問號嘅指令（例如「聽日陳大文返早得唔得？」）仍然係報更，照抽，唔好當閒聊。
 
 ${FEW_SHOTS}`;
 
