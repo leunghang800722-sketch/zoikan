@@ -16,7 +16,7 @@ import { bankAccountRef, keyFingerprint, serverPersonKey, weakIdsOf } from "@/li
 import { draftGuardImportQuestions } from "./generators/guard-import";
 import type { QuestionEvidence } from "./types";
 import { allExtSig, extValueSig } from "@/lib/guards/import/ext";
-import { BANK_KINDS, SUPPLEMENTARY_KINDS } from "./types";
+import { BANK_KINDS, SUPPLEMENTARY_KINDS, WA_KINDS } from "./types";
 import { hasPermission } from "@/lib/rbac/requirePermission";
 
 export const isBoss = (s: Pick<AuthedSession, "baseRole">): boolean => s.baseRole === "老闆";
@@ -71,8 +71,9 @@ export const isSupplementary = (kind: string): boolean => (SUPPLEMENTARY_KINDS a
 /** 呢個讀者答唔到（restricted）嘅題目類別：銀行題要銀行 update 權；身份確認要個人資料 view＋保安員 update。唔計入佢嘅待答數。 */
 export async function restrictedKindsFor(actor: Pick<AuthedSession, "baseRole" | "userId" | "roleId">): Promise<string[]> {
   const a = actor as AuthedSession;
-  const [bankU, pii, guardU] = await Promise.all([hasPermission(a, "安員銀行資料", "update"), hasPermission(a, "安員個人資料", "view"), hasPermission(a, "安員", "update")]);
-  return [...(bankU ? [] : BANK_KINDS), ...(pii && guardU ? [] : ["ext_identity_check"])];
+  const [bankU, pii, guardU, guardV, rosterC] = await Promise.all([hasPermission(a, "安員銀行資料", "update"), hasPermission(a, "安員個人資料", "view"), hasPermission(a, "安員", "update"), hasPermission(a, "安員", "view"), hasPermission(a, "更表", "create")]);
+  // W2：WhatsApp 分診題要「保安員:view」（原話／姓名）＋「更表:create」（入更）先答到
+  return [...(bankU ? [] : BANK_KINDS), ...(pii && guardU ? [] : ["ext_identity_check"]), ...(guardV && rosterC ? [] : WA_KINDS)];
 }
 
 export async function listSessionsFor(actor: AuthedSession, opts: { mine: boolean }): Promise<SessionSummary[]> {

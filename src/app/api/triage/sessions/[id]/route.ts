@@ -6,6 +6,7 @@ import { getSessionFor, isSupplementary, restrictedKindsFor } from "@/lib/triage
 import { SUPPLEMENTARY_KINDS } from "@/lib/triage/types";
 import { BadRequest } from "@/lib/api/errors";
 import { questionViews, viewerCaps } from "@/lib/triage/view";
+import { waCaps, waQuestionViews } from "@/lib/whatsapp/triage-answer";
 import { mcQuestionViews } from "@/lib/month-close/auto/triage";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
@@ -56,7 +57,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     }
     const caps = await viewerCaps(actor);
     // WP-ONE-CLICK-AUTO：month_close 分診題（一鍵結算自我修復）用自己嘅 DTO，唔經保安員導入證據遮罩。
-    const questions = session.sourceType === "month_close" || session.sourceType === "postorder_backfill" ? await mcQuestionViews(rows, { pii: caps.pii }) : await questionViews(rows, caps);
+    const questions =
+      session.sourceType === "whatsapp"
+        ? await waQuestionViews(rows, await waCaps(actor))
+        : session.sourceType === "month_close" || session.sourceType === "postorder_backfill"
+          ? await mcQuestionViews(rows, { pii: caps.pii })
+          : await questionViews(rows, caps);
     return ok(
       brandSafeResponse({
         session: { id: session.id, source_type: session.sourceType, owner_user_id: session.ownerUserId, status: session.status, created_at: session.createdAt, completed_at: session.completedAt, counts: c },

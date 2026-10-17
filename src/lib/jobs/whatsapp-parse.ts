@@ -4,6 +4,7 @@
 import { prisma } from "@/lib/db";
 import { waEnabled } from "@/lib/whatsapp/config";
 import { failAttempt, loadRunContext, markRevokedIntents, processWhatsappMessage, type ProcessStats } from "@/lib/whatsapp/process";
+import { supersedeRevokedWaQuestions } from "@/lib/whatsapp/triage";
 import { computeStats, parseRange } from "@/lib/whatsapp/stats";
 import { addDays, hkDateOf } from "@/lib/whatsapp/dates";
 import { createNotification } from "@/lib/notify/create";
@@ -21,6 +22,8 @@ export async function runWhatsappParse(now: Date, opts: { llm?: LlmClient[]; bud
   const started = Date.now();
   const budget = opts.budgetMs ?? WA_PARSE_BUDGET_MS;
   const revoked = await markRevokedIntents(now);
+  // W2：已撤回訊息嘅 open 分診題 → superseded（冪等）
+  const revokedQs = await supersedeRevokedWaQuestions();
   const counts = { processed: 0, ignored: 0, routed: 0, retry: 0, error: 0, stale: 0, skipped: 0 };
   const stats: ProcessStats = { intents: 0, autoWrite: 0, triage: 0, ignoredIntents: 0, llmIn: 0, llmOut: 0 };
   const attempted = new Set<string>();
@@ -49,7 +52,7 @@ export async function runWhatsappParse(now: Date, opts: { llm?: LlmClient[]; bud
   const left = await prisma.whatsappMessage.count({ where: { status: "received", revokedAt: null } });
   return {
     status: counts.processed === 0 && revoked === 0 ? "skipped" : "ok",
-    summary: { ...counts, revoked_marked: revoked, intents: stats.intents, auto_write: stats.autoWrite, triage: stats.triage, ignored_intents: stats.ignoredIntents, llm_tokens_in: stats.llmIn, llm_tokens_out: stats.llmOut, backlog: left },
+    summary: { ...counts, revoked_marked: revoked, revoked_questions: revokedQs, intents: stats.intents, auto_write: stats.autoWrite, triage: stats.triage, ignored_intents: stats.ignoredIntents, llm_tokens_in: stats.llmIn, llm_tokens_out: stats.llmOut, backlog: left },
   };
 }
 
