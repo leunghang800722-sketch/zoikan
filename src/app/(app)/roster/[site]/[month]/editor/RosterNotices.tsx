@@ -21,6 +21,7 @@ export function RosterNotices({
   warnings,
   errorBanner,
   infoBanner,
+  waPending = 0,
 }: {
   monthLocked: boolean;
   month: string;
@@ -34,9 +35,16 @@ export function RosterNotices({
   warnings: string[];
   errorBanner: string | null;
   infoBanner: string | null;
+  /** W2：來自 WhatsApp、待批核嘅格數 */
+  waPending?: number;
 }) {
   return (
     <>
+      {waPending > 0 && (
+        <Banner compact kind="info" data-testid="roster-wa-notice" action={<Link href="/approvals" className="text-zk-sm underline" style={{ color: "inherit" }}>去批核</Link>}>
+          本月有 {waPending} 格來自 WhatsApp，等緊批核（格仔 hover 會顯示「來自 WhatsApp」）。
+        </Banner>
+      )}
       {/* ================= 鎖定／提示橫幅 ================= */}
       {monthLocked ? (
         <Banner compact

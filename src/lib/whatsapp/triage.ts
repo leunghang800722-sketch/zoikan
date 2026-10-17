@@ -1,0 +1,254 @@
+// W2：由 whatsapp_intents（routed=triage）產生 Triage 題（計劃書 §6.3）。
+//  - session：sourceType="whatsapp"，sourceRef=`<group_jid>:<YYYY-MM>`（每群每月一個；月＝訊息香港日所屬月）；
+//    擁有人：群綁定盤口嘅「主管」（BrokerSiteAssignment → 該判頭名下、屬 TRIAGE_OWNER_ROLES 嘅啟用中用戶；
+//    系統暫時冇「用戶↔盤」主管關係，通常揾唔到）→ 冇就老闆（最早建立、啟用中）。
+//  - 每個 intent 一題；kind 按原因碼優先次序 unparsed > site > person > date > conflict；groupKey `<message_id>:<revision>:<idx>`（冪等）。
+//  - 新 revision → 同一訊息舊 revision 嘅 open 題 superseded；撤回 → 全部 open 題 superseded。
+//  - 同 tx 內執行（由 process.ts 呼叫），用全域 TRIAGE_LOCK 序列化。evidence 含原話（PII，只存 DB）。
+import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
+import { ensureSystemUser } from "@/lib/system-user";
+import { TRIAGE_OWNER_ROLES, TRIAGE_LOCK } from "@/lib/triage/session";
+import { hkDateOf } from "./dates";
+import type { IntentSrc } from "./resolve";
+import { groupKeyOf, optionsForWa, pickWaKind, sortOfTs, WA_MAX_ROUNDS, type WaEvidence, type WaIntentKind, type WaKind, type WaQuestionDraft } from "./triage-types";
+
+type Tx = Prisma.TransactionClient;
+type Db = Tx | typeof prisma;
+
+/** 訊息香港日所屬月（YYYY-MM）。 */
+const hkMonthOf = (ts: Date): string => hkDateOf(ts).slice(0, 7);
+const waSessionRef = (groupJid: string, ym: string): string => `${groupJid}:${ym}`;
+
+/** 群綁定盤嘅負責人：揾唔到主管就老闆（最早建立、啟用中）；全部揾唔到先用系統帳號。 */
+export async function pickWaOwner(db: Db, siteId: string | null): Promise<string> {
+  if (siteId) {
+    const assigned = await db.brokerSiteAssignment.findMany({ where: { siteId }, select: { brokerId: true }, distinct: ["brokerId"] });
+    if (assigned.length > 0) {
+      const u = await db.user.findFirst({
+        where: { status: "active", brokerId: { in: assigned.map((a) => a.brokerId) }, role: { baseRole: { in: [...TRIAGE_OWNER_ROLES] } } },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        select: { id: true },
+      });
+      if (u) return u.id;
+    }
+  }
+  const boss = await db.user.findFirst({ where: { status: "active", role: { baseRole: "老闆" } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true } });
+  if (boss) return boss.id;
+  return ensureSystemUser();
+}
+
+export interface WaMessageCtx {
+  messageId: string;
+  revision: number;
+  ts: Date;
+  chatJid: string;
+  text: string;
+  senderGuardId: string | null;
+  senderTelNorm: string | null;
+}
+export interface WaGroupCtx {
+  id: string;
+  label: string;
+  kind: string;
+  siteId: string | null;
+}
+export interface WaIntentRow {
+  id: string;
+  idx: number;
+  kind: WaIntentKind;
+  workDate: Date | null;
+  siteId: string | null;
+  guardId: string | null;
+  shiftTypeId: string | null;
+  leaveCode: string | null;
+  confidence: number | null;
+  resolution: unknown;
+}
+
+const EMPTY_SRC: IntentSrc = { person_raw: null, site_raw: null, date_raw: null, shift_raw: null, leave_raw: null, replaced_raw: null };
+
+function strArr(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+/** 純函數：一個 triage intent → 第 1 輪題目草稿。 */
+function draftFromIntent(msg: WaMessageCtx, group: WaGroupCtx, row: WaIntentRow, src: IntentSrc | undefined): WaQuestionDraft {
+  const res = (row.resolution ?? {}) as { reasons?: unknown; notes?: unknown; candidates?: Record<string, unknown> };
+  const reasons = strArr(res.reasons);
+  const cands = res.candidates ?? {};
+  const workDate = row.workDate ? row.workDate.toISOString().slice(0, 10) : null;
+  const tail = msg.senderTelNorm ? msg.senderTelNorm.slice(-4) : null;
+  const ev: WaEvidence = {
+    v: 1,
+    wa: true,
+    round: 1,
+    message: { message_id: msg.messageId, revision: msg.revision, idx: row.idx, intent_id: row.id },
+    group: { id: group.id, label: group.label, kind: group.kind },
+    sent_at: msg.ts.toISOString(),
+    sender: { guard_id: msg.senderGuardId, tel_tail4: tail },
+    text: msg.text,
+    intent: { kind: row.kind, work_date: workDate, site_id: row.siteId, guard_id: row.guardId, shift_type_id: row.shiftTypeId, leave_code: row.leaveCode, confidence: row.confidence },
+    src: src ?? EMPTY_SRC,
+    reasons,
+    notes: strArr(res.notes),
+    candidates: { guard_ids: strArr(cands.guard_ids), site_ids: strArr(cands.site_ids), dates: strArr(cands.dates), shift_type_ids: strArr(cands.shift_type_ids), existing_record_ids: strArr((res as { existing_record_ids?: unknown }).existing_record_ids) },
+    human: {},
+    month: `${(workDate ?? hkDateOf(msg.ts)).slice(0, 7)}-01`,
+  };
+  return buildDraft(ev, group, msg.ts);
+}
+
+/** 由 evidence（已含 reasons／round）砌題目：kind 按優先次序；round>WA_MAX_ROUNDS 一律 wa_unparsed。 */
+export function buildDraft(ev: WaEvidence, group: Pick<WaGroupCtx, "label">, ts: Date): WaQuestionDraft {
+  const kind: WaKind = ev.round > WA_MAX_ROUNDS ? "wa_unparsed" : pickWaKind(ev.reasons);
+  const hk = new Date(ts.getTime() + 8 * 3600 * 1000).toISOString();
+  const title = `${group.label || "WhatsApp 群組"}｜${hk.slice(5, 10)} ${hk.slice(11, 16)}`;
+  return {
+    kind,
+    groupKey: groupKeyOf(ev.message.message_id, ev.message.revision, ev.message.idx, ev.round),
+    sort: sortOfTs(ts), // 同一訊息嘅跟進輪次維持原次序
+    title,
+    evidence: ev,
+    options: ev.round > WA_MAX_ROUNDS ? optionsForWa("wa_unparsed", { ...ev, reasons: ev.reasons.filter((r) => r !== "low_confidence") }) : optionsForWa(kind, ev),
+  };
+}
+
+interface WaSessionLite {
+  id: string;
+  ownerUserId: string;
+}
+
+/** 攞（或建）呢個群呢個月嘅 session；呼叫者應已持有 TRIAGE_LOCK。 */
+async function getOrCreateWaSession(tx: Tx, args: { groupJid: string; ym: string; siteId: string | null; createdBy?: string }): Promise<{ session: WaSessionLite; created: boolean }> {
+  const sourceRef = waSessionRef(args.groupJid, args.ym);
+  const existing = await tx.triageSession.findUnique({ where: { sourceType_sourceRef: { sourceType: "whatsapp", sourceRef } }, select: { id: true, ownerUserId: true } });
+  if (existing) return { session: existing, created: false };
+  const owner = await pickWaOwner(tx, args.siteId);
+  const created = await tx.triageSession.create({ data: { sourceType: "whatsapp", sourceRef, ownerUserId: owner, createdBy: args.createdBy ?? owner, statsJson: {} }, select: { id: true, ownerUserId: true } });
+  return { session: created, created: true };
+}
+
+/** 刷新 session 狀態＋統計（有新 open 題就重開）。 */
+export async function refreshWaSession(tx: Tx, sessionId: string): Promise<void> {
+  const byKind: Record<string, number> = {};
+  for (const g of await tx.triageQuestion.groupBy({ by: ["kind"], where: { sessionId, status: { not: "superseded" } }, _count: { _all: true } })) byKind[g.kind] = g._count._all;
+  const total = Object.values(byKind).reduce((a, b) => a + b, 0);
+  const open = await tx.triageQuestion.count({ where: { sessionId, status: "open" } });
+  const status = open === 0 ? "done" : "open";
+  await tx.triageSession.update({ where: { id: sessionId }, data: { statsJson: { total, by_kind: byKind }, lastAppliedAt: new Date(), status, completedAt: status === "done" ? new Date() : null } });
+}
+
+export interface InsertedQuestion {
+  id: string;
+  groupKey: string;
+  kind: string;
+  intentId: string;
+}
+
+/** 冪等插入題目（同 session 已有同 groupKey → 唔再建）。 */
+export async function insertWaQuestions(tx: Tx, sessionId: string, drafts: readonly WaQuestionDraft[]): Promise<{ created: InsertedQuestion[]; existing: Map<string, string> }> {
+  const keys = drafts.map((d) => d.groupKey);
+  const prior = keys.length ? await tx.triageQuestion.findMany({ where: { sessionId, groupKey: { in: keys } }, select: { id: true, groupKey: true } }) : [];
+  const existing = new Map(prior.map((p) => [p.groupKey, p.id]));
+  const fresh = drafts.filter((d) => !existing.has(d.groupKey));
+  const created: InsertedQuestion[] = [];
+  if (fresh.length > 0) {
+    const rows = await tx.triageQuestion.createManyAndReturn({
+      data: fresh.map((d) => ({
+        sessionId,
+        kind: d.kind,
+        groupKey: d.groupKey,
+        sort: d.sort,
+        title: d.title,
+        evidenceJson: JSON.parse(JSON.stringify(d.evidence)) as Prisma.InputJsonValue,
+        optionsJson: JSON.parse(JSON.stringify(d.options)) as Prisma.InputJsonValue,
+      })),
+      select: { id: true, groupKey: true, kind: true },
+    });
+    const byKey = new Map(fresh.map((d) => [d.groupKey, d]));
+    for (const r of rows) created.push({ id: r.id, groupKey: r.groupKey, kind: r.kind, intentId: byKey.get(r.groupKey)!.evidence.message.intent_id });
+  }
+  return { created, existing };
+}
+
+/** 同一訊息舊 revision（< belowRevision）嘅 open 題 → superseded。回受影響 session id。 */
+export async function supersedeWaQuestions(tx: Tx, messageId: string, belowRevision: number): Promise<string[]> {
+  const rows = await tx.$queryRaw<{ session_id: string }[]>`
+    UPDATE triage_questions q SET status = 'superseded', updated_at = now()
+    FROM triage_sessions s
+    WHERE s.id = q.session_id AND s.source_type = 'whatsapp' AND q.status = 'open'
+      AND q.evidence_json->'message'->>'message_id' = ${messageId}
+      AND (q.evidence_json->'message'->>'revision')::int < ${belowRevision}::int
+    RETURNING q.session_id`;
+  const ids = [...new Set(rows.map((r) => r.session_id))];
+  for (const id of ids) await refreshWaSession(tx, id);
+  return ids;
+}
+
+export interface WaTriageResult {
+  sessionId: string | null;
+  ownerUserId: string | null;
+  created: number;
+  newSession: boolean;
+}
+
+/**
+ * process.ts 落完 intents 後（同一 tx）即時呼叫：每個 routed=triage 嘅 intent 一題；result_ref=題目 id。
+ * 新 revision：先 supersede 舊 revision 嘅 open 題。冇 triage intent 就只做 supersede。
+ */
+export async function createWaQuestionsTx(tx: Tx, args: { msg: WaMessageCtx; group: WaGroupCtx; rows: Array<WaIntentRow & { routed: string }>; srcs: ReadonlyArray<IntentSrc | undefined> }): Promise<WaTriageResult> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
+  await supersedeWaQuestions(tx, args.msg.messageId, args.msg.revision);
+  const triageRows = args.rows.filter((r) => r.routed === "triage");
+  if (triageRows.length === 0) return { sessionId: null, ownerUserId: null, created: 0, newSession: false };
+  const ym = hkMonthOf(args.msg.ts);
+  const { session, created: newSession } = await getOrCreateWaSession(tx, { groupJid: args.msg.chatJid, ym, siteId: args.group.siteId ?? triageRows.find((r) => r.siteId)?.siteId ?? null });
+  const drafts = triageRows.map((r) => draftFromIntent(args.msg, args.group, r, args.srcs[args.rows.indexOf(r)]));
+  const { created, existing } = await insertWaQuestions(tx, session.id, drafts);
+  for (const c of created) await tx.whatsappIntent.update({ where: { id: c.intentId }, data: { resultRef: c.id } });
+  // 已存在嘅題（重送／重跑）：result_ref 補返
+  for (const d of drafts) {
+    const qid = existing.get(d.groupKey);
+    if (qid) await tx.whatsappIntent.update({ where: { id: d.evidence.message.intent_id }, data: { resultRef: qid } });
+  }
+  await refreshWaSession(tx, session.id);
+  return { sessionId: session.id, ownerUserId: session.ownerUserId, created: created.length, newSession };
+}
+
+/** 撤回：呢個 job tick 將「訊息已撤回」嘅 open 題 superseded（一條 SQL，冪等）。回受影響題數。 */
+export async function supersedeRevokedWaQuestions(): Promise<number> {
+  const pending = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT count(*)::bigint AS n FROM triage_questions q JOIN triage_sessions s ON s.id = q.session_id
+    WHERE s.source_type = 'whatsapp' AND q.status = 'open'
+      AND q.evidence_json->'message'->>'message_id' IN (SELECT message_id FROM whatsapp_messages WHERE revoked_at IS NOT NULL)`;
+  if (Number(pending[0]?.n ?? 0) === 0) return 0;
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
+    const rows = await tx.$queryRaw<{ session_id: string }[]>`
+      UPDATE triage_questions q SET status = 'superseded', updated_at = now()
+      FROM triage_sessions s
+      WHERE s.id = q.session_id AND s.source_type = 'whatsapp' AND q.status = 'open'
+        AND q.evidence_json->'message'->>'message_id' IN (SELECT message_id FROM whatsapp_messages WHERE revoked_at IS NOT NULL)
+      RETURNING q.session_id`;
+    for (const id of new Set(rows.map((r) => r.session_id))) await refreshWaSession(tx, id);
+    return rows.length;
+  });
+}
+
+/** 通知負責人有新分流題（唔含任何個人資料／群名；同一 session 同一香港日只通知一次）。永不拋錯。 */
+export async function notifyWaTriage(ownerUserId: string, sessionId: string, n: number, ts: Date): Promise<void> {
+  try {
+    const { createNotification } = await import("@/lib/notify/create");
+    await createNotification({
+      kind: "whatsapp_triage",
+      title: "WhatsApp 報更有新分流題",
+      body: `WhatsApp 報更有 ${n} 條新題目要你揀答案，請到「待答問題」處理。`,
+      href: "/triage",
+      audience: [ownerUserId],
+      dedupeKey: `whatsapp_triage:${sessionId}:${hkDateOf(ts)}`,
+    });
+  } catch (e) {
+    console.error("[whatsapp] triage notify failed:", e instanceof Error ? e.name : "error");
+  }
+}

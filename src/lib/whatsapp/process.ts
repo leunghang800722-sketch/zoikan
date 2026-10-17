@@ -12,6 +12,8 @@ import { resolveIntents, type ResolvedIntent } from "./resolve";
 import { createPrismaResolveRepo } from "./repo";
 import { isoToDbDate } from "./dates";
 import { shiftTypeTimeSlot } from "@/lib/roster-upload/time-range";
+import { createWaQuestionsTx, notifyWaTriage, supersedeWaQuestions, type WaTriageResult } from "./triage";
+import { TRIAGE_LOCK } from "@/lib/triage/session";
 
 const WA_MAX_ATTEMPTS = 3;
 const QUOTE_WINDOW_MS = 24 * 3600 * 1000;
@@ -97,6 +99,9 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
       if (u.count === 0) return "stale" as const;
       // 編輯後新 revision 被過濾／雜訊：舊 revision 嘅 intents 一樣標被取代
       await tx.whatsappIntent.updateMany({ where: { messageId: msg.messageId, messageRevision: { lt: rev }, supersededByRevision: null }, data: { supersededByRevision: rev } });
+      // W2：舊 revision 嘅 open 分診題一併作廢（新 revision 被過濾／雜訊＝冇新題）
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
+      await supersedeWaQuestions(tx, msg.messageId, rev);
       return "ignored" as const;
     });
   };
@@ -195,6 +200,8 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
   }
 
   // ---- 落結果（單一 transaction；訊息期間被編輯／撤回 → stale，下一輪用新 revision 重來）
+  // W2：同一 tx 內即時開 Triage 題（routed=triage 嘅 intent 一題；舊 revision 嘅 open 題 superseded）。
+  let tri: WaTriageResult | null = null;
   const outcome = await prisma.$transaction(async (tx) => {
     const u = await tx.whatsappMessage.updateMany({
       where: { id: msg.id, revision: rev, status: "received", revokedAt: null },
@@ -212,9 +219,18 @@ export async function processWhatsappMessage(messageRowId: string, ctx: RunConte
     if (u.count === 0) return "stale" as const;
     await tx.whatsappIntent.updateMany({ where: { messageId: msg.messageId, messageRevision: { lt: rev }, supersededByRevision: null }, data: { supersededByRevision: rev } });
     await tx.whatsappIntent.deleteMany({ where: { messageId: msg.messageId, messageRevision: rev } });
-    await tx.whatsappIntent.createMany({ data: resolved.map((r, i) => rowFor(msg.messageId, rev, i, r)) });
+    const created = await tx.whatsappIntent.createManyAndReturn({ data: resolved.map((r, i) => rowFor(msg.messageId, rev, i, r)) });
+    const byIdx = [...created].sort((a, b) => a.idx - b.idx);
+    tri = await createWaQuestionsTx(tx, {
+      msg: { messageId: msg.messageId, revision: rev, ts: msg.ts, chatJid: msg.chatJid, text: msg.text, senderGuardId: msg.senderGuardId, senderTelNorm: msg.senderTelNorm },
+      group: { id: group.id, label: group.label, kind: group.kind, siteId: group.siteId },
+      rows: byIdx.map((r) => ({ id: r.id, idx: r.idx, kind: r.kind, workDate: r.workDate, siteId: r.siteId, guardId: r.guardId, shiftTypeId: r.shiftTypeId, leaveCode: r.leaveCode, confidence: r.confidence === null ? null : Number(r.confidence), resolution: r.resolution, routed: r.routed })),
+      srcs: byIdx.map((r) => resolved[r.idx]?.src),
+    });
     return "routed" as const;
   });
+  const made = tri as WaTriageResult | null;
+  if (outcome === "routed" && made && made.created > 0 && made.sessionId && made.ownerUserId) await notifyWaTriage(made.ownerUserId, made.sessionId, made.created, msg.ts);
   if (outcome === "routed") {
     for (const r of resolved) {
       stats.intents++;

@@ -4,6 +4,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { getQuestionFor } from "@/lib/triage/session";
 import { previewAnswer } from "@/lib/triage/apply";
 import { previewMcAnswer } from "@/lib/month-close/auto/triage";
+import { previewWaAnswer } from "@/lib/whatsapp/triage-answer";
 import { previewBodySchema } from "@/lib/triage/types";
 import { viewerCaps } from "@/lib/triage/view";
 import { getClientIp, ok, withApiError } from "@/lib/api/http";
@@ -21,6 +22,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (q.session.sourceType === "month_close" || q.session.sourceType === "postorder_backfill") {
       const mc = await previewMcAnswer(actor, q, body.answer);
       return ok(brandSafeResponse({ preview_hash: mc.preview_hash, writes: mc.writes, impact: { ...mc.impact } }));
+    }
+    if (q.session.sourceType === "whatsapp") {
+      const wa = await previewWaAnswer(actor, q, body.answer);
+      return ok(brandSafeResponse({ preview_hash: wa.preview_hash, writes: wa.writes, impact: { ...wa.impact } }));
     }
     const out = await previewAnswer(actor, q, body.answer, await viewerCaps(actor), getClientIp(req));
     return ok(brandSafeResponse({ preview_hash: out.preview_hash, writes: out.writes, impact: { ...out.impact } }));

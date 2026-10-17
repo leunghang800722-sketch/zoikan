@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/DataTable";
 import { TriageDialog } from "@/components/TriageDialog";
 import { BatchAcceptButton } from "@/components/BatchAcceptButton";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
+import { WhatsappTriageDialog } from "@/components/WhatsappTriageDialog";
 import { OcrRereadImportDialog } from "@/components/OcrRereadImportDialog";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { kickerFor } from "@/lib/nav/schema";
@@ -33,9 +34,11 @@ interface ListRes {
   can_answer?: boolean;
 }
 
-const SOURCE_LABEL: Record<string, string> = { guard_import: "保安員證件資料導入", roster_upload: "更表上載", month_close: "一鍵結算（要你睇）", postorder_backfill: "補齊價目卡（Postorder／自動卡）" };
+const SOURCE_LABEL: Record<string, string> = { guard_import: "保安員證件資料導入", roster_upload: "更表上載", month_close: "一鍵結算（要你睇）", postorder_backfill: "補齊價目卡（Postorder／自動卡）", whatsapp: "WhatsApp 報更分流" };
 // month_close 同 postorder_backfill 都係 month_close_* 題型，用同一個對話框。
 const isMcSource = (t: string | undefined): boolean => t === "month_close" || t === "postorder_backfill";
+// W2：WhatsApp 報更分流題（wa_* 題型）用自己嘅對話框。
+const isWaSource = (t: string | undefined): boolean => t === "whatsapp";
 
 export default function TriagePage() {
   const router = useRouter();
@@ -44,6 +47,7 @@ export default function TriagePage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [mineOnly, setMineOnly] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null); // W2：由 /whatsapp/intents 深連結入嚟（?open=<session>&focus=<question>）
   const [owner, setOwner] = useState<Record<string, string>>({});
   // P3-4.3（H14）：預設只顯示「有未答」嘅 session；已處理晒／被取代嘅摺埋，「顯示全部」先出。轉交收入每張卡嘅「⋯」。
   const [showAll, setShowAll] = useState(false);
@@ -69,6 +73,14 @@ export default function TriagePage() {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const o = sp.get("open");
+    if (o) {
+      setOpenId(o);
+      setFocusId(sp.get("focus"));
+    }
+  }, []);
 
   async function reassign(sessionId: string) {
     const to = owner[sessionId];
@@ -131,7 +143,7 @@ export default function TriagePage() {
               <Button variant="primary" disabled={s.counts.open === 0} onClick={() => setOpenId(s.id)}>
                 {s.counts.open > 0 ? "繼續答" : "冇未答"}
               </Button>
-              {isMcSource(s.source_type) && s.counts.open > 0 && !s.superseded_all && <BatchAcceptButton sessionId={s.id} onDone={() => { router.refresh(); void load(); }} />}
+              {(isMcSource(s.source_type) || isWaSource(s.source_type)) && s.counts.open > 0 && !s.superseded_all && <BatchAcceptButton sessionId={s.id} onDone={() => { router.refresh(); void load(); }} />}
               {(isBossView || (s.source_type === "guard_import" && data?.can_answer)) && (
                 <Button variant="ghost" size="sm" aria-label="更多" onClick={() => setMoreOpen((v) => (v === s.id ? null : s.id))} data-testid="triage-more">
                   ⋯
@@ -194,7 +206,22 @@ export default function TriagePage() {
           }}
         />
       )}
-      {openId && !isMcSource(data?.sessions.find((s) => s.id === openId)?.source_type) && (
+      {openId && isWaSource(data?.sessions.find((s) => s.id === openId)?.source_type) && (
+        <WhatsappTriageDialog
+          sessionId={openId}
+          focusQuestionId={focusId}
+          onClose={() => {
+            setOpenId(null);
+            setFocusId(null);
+            void load();
+          }}
+          onChanged={() => {
+            void load();
+            refreshBadge();
+          }}
+        />
+      )}
+      {openId && data && !isMcSource(data?.sessions.find((s) => s.id === openId)?.source_type) && !isWaSource(data?.sessions.find((s) => s.id === openId)?.source_type) && (
         <TriageDialog
           sessionId={openId}
           onClose={() => {

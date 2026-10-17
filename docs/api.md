@@ -2754,3 +2754,38 @@ AI 助手白名單多 `triage_accept_batch{question_ids[]（≤50）}` 動作卡
 
 ### `LlmClient` 結構化模式（additive）
 `LlmChatParams.structured?: { format:"json_object", maxTokens, temperature?, reasoningEffort? }`：單次 JSON 輸出（冇工具／歷史）。DeepSeek 用 `response_format json_object`＋`temperature`＋`reasoning_effort`＋`max_tokens`；Claude 用單次 `messages.create`（只傳 `max_tokens`，**唔傳 temperature／thinking**，避免新型號拒收）；`AI_LLM=fake` 回 `{"noise":true,"intents":[]}`。冇傳 `structured` 時行為完全不變。
+
+## WhatsApp 分診題（W2，2026-10；全部 additive，**冇 migration**）
+
+`whatsapp_intents.routed=triage` 嘅 intent 由 `whatsapp_parse` job 喺寫完 intents 後、**同一個 transaction** 即時開 Triage 題（`src/lib/whatsapp/triage.ts`）。仍然冇自動寫入（`routed=auto_write` 要 W3）；W2 只有「人答題 → 寫入」。
+
+### Triage session／題目
+- `TriageSession`：`source_type="whatsapp"`、`source_ref=<group_jid>:<YYYY-MM>`（每群每月一個；月＝訊息香港日所屬月）；擁有人＝群綁定盤口嘅主管（`BrokerSiteAssignment` → 該判頭名下、屬老闆／會計／主管而且啟用中嘅用戶；系統暫時冇「用戶↔盤」主管關係，通常揾唔到）→ 冇就最早建立、啟用中嘅老闆（再冇先用系統帳號）。老闆照舊可轉交（`/api/triage/sessions/:id/reassign`）。
+- 六種新 `kind`（`GET /api/triage/sessions/:id` 嘅 `kind`／`kind_label`）：`wa_person_ambiguous`、`wa_person_unknown`、`wa_site_ambiguous`、`wa_date_ambiguous`、`wa_shift_conflict`、`wa_unparsed`。每個 intent 一題，按 W1 原因碼優先次序 `unparsed > site > person > date > conflict`（低信心單獨出現＝`wa_unparsed`＋「照解析結果入更」）。`group_key=<message_id>:<revision>:<idx>`（跟進輪次加 `:r2`／`:r3`）；冪等：同一 session 已有同 `group_key` 就唔再開，`whatsapp_intents.result_ref=題目 id`。
+- 編輯 → 同一訊息舊 revision 嘅 open 題 `superseded`（新 revision 重出新題）；撤回／編輯成閒話 → open 題 `superseded`（job 每分鐘冪等清理）。已答題唔自動改，題目 view 標 `source_changed`／`source_revoked`（「⚠ 原訊息已被修改／撤回」）。
+- `evidence_json`（只存 DB；含原話＋人名＝PII；**冇電話全號**，發訊人只記保安員 id＋電話尾 4 位）、`options_json`（`wa_pick_guard`／`wa_pick_site`／`wa_set_date`／`wa_use_whatsapp`／`wa_keep_old`／`wa_force_write`／`wa_accept`／`wa_manual`／`wa_ignore`／`skip`；`QuestionOption` additive 加 `site_id`、`date`、`input:"date"`）。
+
+### `GET /api/triage/sessions/:id`（whatsapp session）
+題目 DTO：`wa:{ round, text, text_redacted, group_label, sent_at, sender, source_changed, source_revoked, reasons, notes, intent:{…}, raw:{person,site,date,shift,leave}, guard_candidates:[{guard_id,name_zh,name_en,staff_numbers,recent_sites,recent_here}], site_options, date_candidates, existing, can_remember_alias, manual_href }`。**原話／姓名／候選／raw 只喺有「保安員:view」時回**；冇「保安員:view」或冇「更表:create」→ `restricted:true`（唔計入佢嘅待答 badge）。
+
+### `POST /api/triage/questions/:id/preview`／`answer`（whatsapp 題）
+- 權限：「導入分診:update」＋「保安員:view」＋「更表:create」（老闆／主管；會計冇更表新增＝403）＋ session 擁有人（老闆全部）。
+- body：`{ answer:{ option, guard_id?, site_id?, value?(YYYY-MM-DD), remember_alias? }, preview_hash? }`（`answerSchema` additive 加 `site_id`、`remember_alias`）。答案必須屬於題目選項（候選 guard／盤／日子；有 `guard_search`／`date` 輸入選項先容許任意現存保安員／真實日子）。
+- 流程：答案補足 intent → 重跑阻擋評估（唔再叫 LLM）：全齊 → 經共用 write service 寫入（`status=pending_approval`、`source="whatsapp"`、`provenance={message_id,revision,intent_idx,triage_question_id}`）；仍有阻擋 → 開下一輪題（同一 intent 最多 2 輪，第 3 輪一律 `wa_unparsed`）；同更／同請假已存在 → 當處理咗（`plan:"exists"`）；人手揀過日子或「仍然入更」就唔再擋 −2～+45 日窗口。
+- `wa_use_whatsapp`（以 WhatsApp 為準）：同一 transaction 取消舊記錄（audit `void`、`void_reason=whatsapp:use_whatsapp`）＋寫新；任何一步失敗全部 rollback、題保持 open。
+- `remember_alias`：同一 transaction 加 `Guard.nameAliases`（原話人名；已存在／自稱「我」唔加）＋ audit（`guards` `update`，`via:"whatsapp_triage"`；同 guard-fix link 一樣只有 audit，冇 journal）。
+- 鎖月：預覽／確認都回 **400** 固定字串「呢個月已鎖定，唔可以入更，請人手處理」，題保持 open；tx 內 `assertMonthNotLockedTx` 再擋一次。
+- `preview_hash`（HMAC）綁住題目＋答案＋當刻狀態指紋；資料中途變咗 → 409。`wa_ignore`／`wa_keep_old`／`wa_manual`／`skip` 唔使 hash。
+- 回應：`{ status:"answered"|"skipped", impact, session_status, open_remaining, result:{shift_record_ids?, cancelled?, alias_added?, next_question_id?, next_kind?, manual?}, note }`。
+
+### `POST /api/triage/questions/batch-accept`／`GET …/batch-accept/preview`
+加 `whatsapp` 來源白名單（要「保安員:view」＋「更表:create」；鎖月份唔列）：只限 ① `wa_person_ambiguous` 候選入面剛好一位「近 60 日（由訊息日起計）喺同一個盤有更」→ 揀佢；② `wa_shift_conflict`（撞更／撞請假）預設「保留舊記錄（唔入更）」。其餘 wa_* 題 `skipped(no_suggestion)`。preview 項目帶 `summary`／`suggestion`（影響摘要）；audit `triage_answer` 帶 `batch_id`。
+
+### `GET /api/whatsapp/intents`（additive 欄）
+routed=triage 嘅行加 `triage_question_id`、`triage_session_id`、`triage_status`（對照頁連去 `/triage?open=<session>&focus=<question>`）。
+
+### `GET /api/shift-records?view=grid`（additive 欄）
+加 `source`（`"whatsapp"`＝WhatsApp 分診答題寫入；排更頁頁首顯示「本月有 N 格來自 WhatsApp，等緊批核」、格仔 tooltip 「來自 WhatsApp」）。
+
+### 共用排更 write service
+`src/lib/shift-records/write.ts`（由 `POST /api/shift-records/batch` 抽出，batch 行為 byte-for-byte 不變）：`computePlanPricing`／`applyShiftPlansTx`／`computeWarnings`（batch 與 WhatsApp 共用）、`writeShiftCells(tx, { siteId, month, cells, actor, source, provenance, statusPolicy:"confirmed"|"pending_approval", overwriteActive? })`（tx 內鎖月 → 重用已取消行 → 計價 snapshot → audit 一條 createMany；已存在相同＝`exists` no-op；同格唔同類型預設 409）、`cancelShiftRecordsTx`。

@@ -28,7 +28,14 @@ export type QuestionKind =
   | "month_close_pricing" // 未定價（候選價／冇依據）
   | "month_close_settlement" // 冇結算雞頭
   | "month_close_guard_match" // 保安員配對要核實
-  | "month_close_shift_variance" // 更數差異解釋唔到;
+  | "month_close_shift_variance" // 更數差異解釋唔到
+  // W2（WhatsApp 報更分流題，docs/plans/whatsapp-roster-plan.md §6.3）
+  | "wa_person_ambiguous" // 名／花名／電話對到多位保安員
+  | "wa_person_unknown" // 搵唔到呢位保安員
+  | "wa_site_ambiguous" // 盤口唔肯定
+  | "wa_date_ambiguous" // 日期唔肯定
+  | "wa_shift_conflict" // 同現有排更撞（撞更／請假／額滿／鎖月）
+  | "wa_unparsed"; // 未能自動理解（含替更／取消首階段）
 
 export const KIND_LABEL: Record<QuestionKind, string> = {
   no_id_card: "冇可用嘅身份證號",
@@ -54,7 +61,16 @@ export const KIND_LABEL: Record<QuestionKind, string> = {
   month_close_settlement: "冇結算雞頭",
   month_close_guard_match: "保安員配對要核實",
   month_close_shift_variance: "更數差異解釋唔到",
+  wa_person_ambiguous: "WhatsApp 報更：人名對到多位保安員",
+  wa_person_unknown: "WhatsApp 報更：搵唔到呢位保安員",
+  wa_site_ambiguous: "WhatsApp 報更：盤口唔肯定",
+  wa_date_ambiguous: "WhatsApp 報更：日期唔肯定",
+  wa_shift_conflict: "WhatsApp 報更：同現有排更撞",
+  wa_unparsed: "WhatsApp 報更：未能自動理解",
 };
+
+/** W2：WhatsApp 分診題 kind（session.sourceType="whatsapp"）；evidence 含原話＋姓名（PII，只存 DB）。 */
+export const WA_KINDS: readonly QuestionKind[] = ["wa_person_ambiguous", "wa_person_unknown", "wa_site_ambiguous", "wa_date_ambiguous", "wa_shift_conflict", "wa_unparsed"];
 
 /** 一題入面可揀嘅選項 id。`skip` 永遠有，唔經 apply。 */
 export const OPTION_IDS = [
@@ -77,6 +93,16 @@ export const OPTION_IDS = [
   "mc_new", // 當新盤（site_alias 題）
   "mc_price", // 自己輸入價錢（pricing／site_new 題）
   "mc_ack", // 我已覆核，冇問題（更數差異題）
+  // W2：wa_* 題專用
+  "wa_pick_guard", // 揀候選／搜尋嘅保安員（guard_id；remember_alias 可選）
+  "wa_pick_site", // 揀盤口（site_id）
+  "wa_set_date", // 定日子（value＝YYYY-MM-DD）
+  "wa_use_whatsapp", // 以 WhatsApp 為準（取消舊記錄再寫新）
+  "wa_keep_old", // 保留舊記錄（唔寫）
+  "wa_force_write", // 額滿／超配額仍然入更
+  "wa_accept", // 照解析結果入更（待批核）
+  "wa_manual", // 人手入更（去排更頁）
+  "wa_ignore", // 忽略（唔入更，答完）
   "skip", // 跳過，留返人手
 ] as const;
 type OptionId = (typeof OPTION_IDS)[number];
@@ -86,9 +112,12 @@ export interface QuestionOption {
   label: string;
   hint?: string;
   /** 需要用戶輸入嘅類型 */
-  input?: "text" | "hkid" | "guard_search";
+  input?: "text" | "hkid" | "guard_search" | "date";
   /** link 選項對應嘅候選保安員 id（顯示時由 server 加候選卡） */
   guard_id?: string;
+  /** W2：wa_pick_site 選項對應嘅盤 id；wa_set_date 選項對應嘅候選日子（YYYY-MM-DD） */
+  site_id?: string;
+  date?: string;
 }
 
 export const REVIEW_FIELDS = ["nameZh", "nameEn", "dateOfBirth", "phone", "address"] as const;
@@ -143,6 +172,10 @@ export const answerSchema = z
     replace_existing: z.boolean().optional(),
     /** assign_bank：目標保安員英文名同收款人唔夾／唔係長工 autopay 時，要額外確認「我確認呢個戶口屬於呢位保安員」 */
     confirm_identity: z.boolean().optional(),
+    /** W2：wa_pick_site 揀咗邊個盤 */
+    site_id: z.string().min(1).max(64).optional(),
+    /** W2：wa_pick_guard 同時「記住呢個花名」（將原話人名加做佢嘅別名） */
+    remember_alias: z.boolean().optional(),
     /** month_close_*：揀咗邊個候選（evidence.candidates[].id） */
     candidate_id: z.string().min(1).max(64).optional(),
     /** month_close_pricing／site_new：自己輸入嘅價（元／更） */

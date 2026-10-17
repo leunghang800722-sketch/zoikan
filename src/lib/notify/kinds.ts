@@ -11,6 +11,7 @@ export const NOTIFY_KINDS = [
   { kind: "sl_drafts_pending", label: "病假要確認醫生紙" },
   { kind: "ops_digest_ready", label: "每月修正摘要" },
   { kind: "job_failed", label: "排程出錯" },
+  { kind: "whatsapp_triage", label: "WhatsApp 報更有新分流題" },
 ] as const;
 
 export const NOTIFY_KIND_SET: ReadonlySet<string> = new Set(NOTIFY_KINDS.map((k) => k.kind));

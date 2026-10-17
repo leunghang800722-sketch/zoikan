@@ -1,6 +1,8 @@
 // P8.2：待答題「批量接受建議」。
 //  - 只處理「一鍵結算／補齊價目卡」嘅 month_close_* 題（有系統預填建議答案＝evidence.prefillCandidateId 且選項有 mc_accept）。
 //    保安員導入題（guard_import）冇「系統建議答案」概念，一律 skipped（no_suggestion），要逐題人手答。
+//  - W2：加 `whatsapp` 來源白名單，只限兩類（見 waSuggestedAnswer）：wa_person_ambiguous 有唯一「近 60 日同盤」候選；
+//    wa_shift_conflict（撞更／撞請假）預設「保留舊記錄」。其餘 wa_* 題一律 skipped（no_suggestion）。
 //  - 逐題行現有流程：previewMcAnswer（預覽、攞 preview_hash）→ submitMcAnswer（同單題完全同一條寫入路徑、同鎖月檢查、同 audit，
 //    只係 audit after 多 batch_id）。一題失敗唔影響其餘。
 //  - 任何一題屬已鎖月份 → 整個請求 403（預先檢查，唔寫任何嘢）。
@@ -13,6 +15,8 @@ import type { McEvidence } from "@/lib/month-close/auto/types";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { z } from "zod";
 import { canAccessOwnedBy, listSessionsFor } from "./session";
+import { previewWaAnswer, submitWaAnswer, waCaps, waQuestionViews, waSuggestedAnswer } from "@/lib/whatsapp/triage-answer";
+import type { WaEvidence } from "@/lib/whatsapp/triage-types";
 import type { QuestionOption } from "./types";
 
 /** 每個 request 最多幾題（逐題串行，過多會逾時）；UI 自動分批。 */
@@ -20,6 +24,7 @@ const BATCH_ACCEPT_MAX = 50;
 export const batchAcceptBodySchema = z.object({ question_ids: z.array(z.string().min(1).max(64)).min(1).max(BATCH_ACCEPT_MAX) }).strict();
 
 const MC_SOURCES = ["month_close", "postorder_backfill"] as const;
+const WA_SOURCE = "whatsapp";
 const ACCEPT_ANSWER = { option: "mc_accept" } as const;
 
 type BatchItemStatus = "answered" | "skipped" | "error";
@@ -56,6 +61,11 @@ function hasSuggestion(q: { optionsJson: unknown; evidenceJson: unknown }): bool
 
 /** 可批量接受清單（唔寫任何嘢）。scope：session_id 或 month（YYYY-MM）。已鎖月份唔列。 */
 export async function listBatchAcceptable(actor: AuthedSession, scope: { sessionId?: string; month?: string }): Promise<BatchAcceptablePreviewItem[]> {
+  const [mc, wa] = await Promise.all([listMcAcceptable(actor, scope), listWaAcceptable(actor, scope)]);
+  return [...mc, ...wa];
+}
+
+async function listMcAcceptable(actor: AuthedSession, scope: { sessionId?: string; month?: string }): Promise<BatchAcceptablePreviewItem[]> {
   if (!(await hasPermission(actor, "一鍵結算", "create"))) return []; // 冇權答 mc 題就冇嘢可批量接受
   const caps = { pii: await hasPermission(actor, "安員個人資料", "view") };
   let sessionIds: string[];
@@ -95,6 +105,51 @@ export async function listBatchAcceptable(actor: AuthedSession, scope: { session
   }));
 }
 
+/** W2：WhatsApp 題嘅可批量接受清單（要「保安員:view」＋「更表:create」）。鎖月份唔列。 */
+async function listWaAcceptable(actor: AuthedSession, scope: { sessionId?: string; month?: string }): Promise<BatchAcceptablePreviewItem[]> {
+  const caps = await waCaps(actor);
+  if (!caps.canSee || !caps.canWrite) return [];
+  let sessionIds: string[];
+  if (scope.sessionId) {
+    const s = await prisma.triageSession.findUnique({ where: { id: scope.sessionId } });
+    if (!s) throw new ApiError(404, "not_found", "搵唔到");
+    if (!(await canAccessOwnedBy(actor, s.ownerUserId))) throw new ApiError(403, "forbidden", "呢批分診唔係你上載嘅");
+    sessionIds = s.sourceType === WA_SOURCE ? [s.id] : [];
+  } else {
+    const list = await listSessionsFor(actor, { mine: false });
+    sessionIds = list.filter((x) => x.source_type === WA_SOURCE && x.counts.open > 0).map((x) => x.id);
+  }
+  if (sessionIds.length === 0) return [];
+  const rows = await prisma.triageQuestion.findMany({ where: { sessionId: { in: sessionIds }, status: "open", kind: { in: ["wa_person_ambiguous", "wa_shift_conflict"] } }, orderBy: [{ sort: "asc" }, { id: "asc" }] });
+  const lockedCache = new Map<string, boolean>();
+  const picked: Array<{ row: (typeof rows)[number]; suggestion: string }> = [];
+  for (const r of rows) {
+    const ev = r.evidenceJson as unknown as WaEvidence;
+    const m = ev.month.slice(0, 7);
+    if (scope.month && m !== scope.month) continue;
+    if (!lockedCache.has(m)) lockedCache.set(m, await isMonthLocked(new Date(`${m}-01T00:00:00.000Z`)));
+    if (lockedCache.get(m)) continue;
+    const sug = await waSuggestedAnswer(r);
+    if (sug) picked.push({ row: r, suggestion: sug.label });
+  }
+  if (picked.length === 0) return [];
+  const views = await waQuestionViews(picked.map((p) => p.row), caps);
+  const sugBy = new Map(picked.map((p) => [p.row.id, p.suggestion]));
+  return views.map((v) => ({
+    id: v.id,
+    session_id: v.session_id,
+    kind: v.kind,
+    kind_label: v.kind_label,
+    title: v.title,
+    month: (picked.find((p) => p.row.id === v.id)!.row.evidenceJson as unknown as WaEvidence).month.slice(0, 7),
+    summary: v.kind === "wa_person_ambiguous" ? `${v.wa.group_label}：原話人名對到多位保安員，只有一位近 60 日喺同一個盤有更` : `${v.wa.group_label}：同現有排更撞更／撞請假`,
+    suggestion: sugBy.get(v.id) ?? null,
+    confidence: "propose" as const,
+    count: null,
+    identity_label: v.wa.raw?.person ?? null,
+  }));
+}
+
 function reasonOf(e: unknown): string {
   // ApiError 訊息係 lib 自己寫嘅中文句（唔含 PII）；其他錯誤唔洩露內容
   return e instanceof ApiError ? e.message.slice(0, 200) : "內部錯誤";
@@ -126,6 +181,25 @@ export async function runBatchAccept(actor: AuthedSession, questionIds: string[]
     }
     if (q.status !== "open") {
       results.push({ id, status: "skipped", reason: q.status === "answered" ? "already_answered" : "not_open" });
+      continue;
+    }
+    if (q.session.sourceType === WA_SOURCE) {
+      try {
+        const sug = await waSuggestedAnswer(q);
+        if (!sug) {
+          results.push({ id, status: "skipped", reason: "no_suggestion" });
+          continue;
+        }
+        const pv = await previewWaAnswer(actor, q, sug.answer);
+        if (!pv.impact.can_confirm) {
+          results.push({ id, status: "skipped", reason: "cannot_confirm" });
+          continue;
+        }
+        await submitWaAnswer(actor, q, sug.answer, pv.preview_hash, ip, { batchId });
+        results.push({ id, status: "answered", reason: null });
+      } catch (e) {
+        results.push({ id, status: "error", reason: reasonOf(e) });
+      }
       continue;
     }
     if (!(MC_SOURCES as readonly string[]).includes(q.session.sourceType) || !hasSuggestion(q)) {
