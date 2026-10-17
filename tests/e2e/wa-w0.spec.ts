@@ -9,12 +9,18 @@ test.describe.configure({ mode: "serial" });
 const G1 = "e2e-wa-g1@g.us";
 const G2 = "e2e-wa-g2@g.us";
 
+const W0_SITE = "E2E綁定盤W0";
 async function cleanup() {
+  await prisma.shiftType.deleteMany({ where: { createdBy: "e2e:wa-w0" } });
+  await prisma.site.deleteMany({ where: { createdBy: "e2e:wa-w0" } });
   await prisma.whatsappMessage.deleteMany({ where: { chatJid: { in: [G1, G2] } } });
   await prisma.whatsappGroup.deleteMany({ where: { groupJid: { in: [G1, G2] } } });
 }
 
 async function seed() {
+  // W5：口語對照改為下拉（該盤有效更別）——種一個有 N 更別嘅盤，綁定流程揀呢個盤
+  const site = await prisma.site.create({ data: { canonicalName: W0_SITE, clientName: "E2E客戶W0", billingModel: "per_shift", createdBy: "e2e:wa-w0" } });
+  await prisma.shiftType.create({ data: { siteId: site.id, code: "N", label: "夜更", createdBy: "e2e:wa-w0" } });
   const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
   await prisma.whatsappGroup.createMany({
     data: [
@@ -61,11 +67,12 @@ test.describe("WhatsApp 報更頁", () => {
     await ed.getByLabel("群組類型").selectOption("site");
     const siteSel = ed.getByLabel("綁定盤口");
     await expect(siteSel).toBeVisible();
-    const firstSite = await siteSel.locator("option").nth(1).textContent();
-    await siteSel.selectOption({ index: 1 });
-    await ed.getByRole("button", { name: "加一行對照" }).click();
-    await ed.getByLabel("口語 1").fill("夜");
-    await ed.getByLabel("更碼 1").fill("N");
+    const firstSite = W0_SITE;
+    await siteSel.selectOption({ label: W0_SITE });
+    const shiftMap = ed.getByTestId("wa-shift-wordmap");
+    await shiftMap.getByRole("button", { name: "加一行" }).click();
+    await shiftMap.getByLabel("口語 → 更碼對照口語 1").fill("夜");
+    await shiftMap.getByLabel("口語 → 更碼對照代碼 1").selectOption("N");
     await ed.getByLabel(/^自動寫入/).check();
     await ed.getByRole("button", { name: "儲存" }).click();
     await expect(page.getByText("已儲存群組綁定。")).toBeVisible();
@@ -152,7 +159,7 @@ test.describe("WhatsApp 報更頁", () => {
     const ed = page.getByTestId("wa-group-editor");
     await expect(ed).toBeVisible();
     await ed.getByLabel("群組類型").selectOption("site");
-    await ed.getByRole("button", { name: "加一行對照" }).click();
+    await ed.getByTestId("wa-shift-wordmap").getByRole("button", { name: "加一行" }).click();
     const box = await ed.boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(375);
