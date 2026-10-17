@@ -130,7 +130,7 @@ export function buildRowsAndCells(
     const rowKey = `${r.shift_type_id}|${r.guard_id}`;
     const st = shiftTypesById.get(r.shift_type_id);
     const code = r.record_type === "shift" || r.record_type === "ot" ? (st?.code ?? "?") : (r.leave_code ?? "?");
-    cellsMap.set(cellKeyOf(rowKey, day), { code, id: r.id, status: r.status, recordType: r.record_type });
+    cellsMap.set(cellKeyOf(rowKey, day), { code, id: r.id, status: r.status, recordType: r.record_type, source: r.source ?? null });
 
     if (!rowsMap.has(rowKey)) {
       const guard = guardsById.get(r.guard_id);

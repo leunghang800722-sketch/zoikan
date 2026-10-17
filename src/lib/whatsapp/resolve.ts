@@ -82,6 +82,17 @@ export interface ResolvedIntent {
   confidence: number;
   resolution: Resolution;
   routed: Routed;
+  /** W2：LLM 抽出嘅原始片段（記憶體限定，唔落 whatsapp_intents；Triage 題 evidence 用，含人名＝PII，只存 DB）。 */
+  src?: IntentSrc;
+}
+
+export interface IntentSrc {
+  person_raw: string | null;
+  site_raw: string | null;
+  date_raw: string | null;
+  shift_raw: string | null;
+  leave_raw: string | null;
+  replaced_raw: string | null;
 }
 
 // ---------------------------------------------------------------- 盤口
@@ -168,7 +179,7 @@ async function resolveNamed(raw: string, ctx: ResolveContext, siteId: string | n
 }
 
 // ---------------------------------------------------------------- 更別
-interface ShiftRes {
+export interface ShiftRes {
   shiftTypeId: string | null;
   reasons: string[];
   candidates: string[];
@@ -194,7 +205,7 @@ function pickByCode(types: ShiftTypeLite[], code: string): ShiftTypeLite[] {
   return types.filter((t) => t.code.trim().toLowerCase() === c);
 }
 
-function resolveShift(shiftRaw: string | null | undefined, codeGuess: string | null | undefined, types: ShiftTypeLite[], wordMap: Record<string, string>): ShiftRes {
+export function resolveShift(shiftRaw: string | null | undefined, codeGuess: string | null | undefined, types: ShiftTypeLite[], wordMap: Record<string, string>): ShiftRes {
   const raw = (shiftRaw ?? "").normalize("NFKC").trim();
   if (!raw) return { shiftTypeId: null, reasons: ["shift_unmapped"], candidates: [], basis: "no_shift_word" };
   if (types.length === 0) return { shiftTypeId: null, reasons: ["shift_unmapped"], candidates: [], basis: "site_has_no_shift_types" };
@@ -248,7 +259,7 @@ export function mapLeaveCode(raw: string | null | undefined): { code: string | n
   return { code: null, ambiguous: hits.length > 1 };
 }
 
-function normLeave(code: string | null): string | null {
+export function normLeave(code: string | null): string | null {
   if (code === "OFF") return "RD";
   if (code === "NPL") return "NL";
   return code;
@@ -369,6 +380,7 @@ export async function resolveIntents(intents: readonly ParsedIntent[], ctx: Reso
           confidence: conf,
           resolution: res,
           routed: "triage",
+          src: { person_raw: w.raw, site_raw: it.site_raw ?? null, date_raw: it.date?.raw ?? null, shift_raw: it.shift_raw ?? null, leave_raw: it.leave_raw ?? null, replaced_raw: replaced[0]?.raw ?? null },
         };
 
         if (!AUTO_TYPES.has(kind)) {

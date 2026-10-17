@@ -4,6 +4,7 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { getQuestionFor } from "@/lib/triage/session";
 import { submitAnswer } from "@/lib/triage/apply";
 import { submitMcAnswer } from "@/lib/month-close/auto/triage";
+import { submitWaAnswer } from "@/lib/whatsapp/triage-answer";
 import { answerBodySchema } from "@/lib/triage/types";
 import { viewerCaps } from "@/lib/triage/view";
 import { getClientIp, ok, withApiError } from "@/lib/api/http";
@@ -22,6 +23,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (q.session.sourceType === "month_close" || q.session.sourceType === "postorder_backfill") {
       const mc = await submitMcAnswer(actor, q, body.answer, typeof body.preview_hash === "string" ? body.preview_hash : undefined, getClientIp(req));
       return ok(brandSafeResponse({ status: mc.status, impact: mc.impact ? { ...mc.impact } : null, session_status: mc.session_status, open_remaining: mc.open_remaining, result: mc.result, note: mc.note }));
+    }
+    if (q.session.sourceType === "whatsapp") {
+      const wa = await submitWaAnswer(actor, q, body.answer, typeof body.preview_hash === "string" ? body.preview_hash : undefined, getClientIp(req));
+      return ok(brandSafeResponse({ status: wa.status, impact: wa.impact ? { ...wa.impact } : null, session_status: wa.session_status, open_remaining: wa.open_remaining, result: wa.result, note: wa.note }));
     }
     const out = await submitAnswer(actor, q, body.answer, typeof body.preview_hash === "string" ? body.preview_hash : undefined, await viewerCaps(actor), getClientIp(req));
     return ok(brandSafeResponse({ status: out.status, impact: out.impact ? { ...out.impact } : null, session_status: out.session_status, open_remaining: out.open_remaining }));

@@ -155,7 +155,7 @@ export function RosterGrid({
     const m = dayMetaList[d - 1];
 
     const chip = invalid ? { bg: "var(--zk-danger-tint)", fg: "var(--zk-danger-dark)", border: undefined } : shiftCodeStyle(code, { isLeave, isDraft });
-    const title = c?.status ? `狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
+    const title = c?.status ? `${c.source === "whatsapp" ? "來自 WhatsApp｜" : ""}狀態：${c.status}（已排 ${dayTotals[d - 1]} / 所需 ${dailyReq[d - 1] ?? 0}）` : undefined;
 
     return (
       <DayCell

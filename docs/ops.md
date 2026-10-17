@@ -337,3 +337,14 @@ npx tsx scripts/whatsapp/parse-smoke.ts [deepseek|claude|both]
 用合成訊息（測試甲／乙、假日期）各打一次真 provider，斷言：`json_object` 輸出過 zod 嚴格解析、輸出 token 唔撞 2,000 上限（reasoning_effort low；思考 token 計入上限）。key 由 `.env`（或 `DOTENV_CONFIG_PATH`）載入，console 只印通過／失敗同 token 數。執行員測試一律用 fake LLM，唔打真 API。
 
 **E. 排錯**：訊息 `status=error`＝LLM 連唔到／處理失敗 3 次（`error` 欄只有原因碼 `llm_unavailable|parse_failed|resolve_failed`；SQL 將 `status` 改返 `received`、`parse_attempts` 歸零即可重跑）；`/whatsapp` 頁「積壓」＝`status=received` 數量；排程只有 1 分鐘精度，所以 job 每分鐘跑一次、每次處理到冇待處理或 45 秒預算用盡。
+
+## WhatsApp 分診題流程（W2，2026-10）
+
+W1 dry-run 之後，`routed=triage` 嘅 intent 會即時變成「待答問題」（`/triage`，來源「WhatsApp 報更分流」）；仍然**唔會自動寫更表**（W3 先做）。無 migration、無新 env。
+
+**A. 文員日常**：`/triage` → 「WhatsApp 報更分流」卡 →「繼續答」。題卡顯示 WhatsApp 原話＋群名＋時間＋發訊人＋系統解析＋卡住原因；候選保安員一鍵揀（標「近 60 日同盤」），揀完「預覽影響」→「確認寫入」＝新增一條**待批核**排更（`source=whatsapp`，主管喺批核頁 `/approvals` 批；排更頁頁首會提示「本月有 N 格來自 WhatsApp」）。勾「記住呢個花名」＝之後同一個叫法直接對到佢。同一條訊息最多問兩輪，之後只剩「人手入更／忽略」。
+**B. 撞更**：「以 WhatsApp 為準」＝取消舊記錄再寫新（同一 transaction，失敗全部還原）；「保留舊」＝唔入更。額滿／超配額：「仍然入更（待批核）」或「唔入更」。月份已鎖：只可「人手處理」；若答題時月份被鎖，系統回「呢個月已鎖定，唔可以入更，請人手處理」，題保持未答。
+**C. 負責人**：群綁定盤有主管就歸主管（系統暫時冇「用戶↔盤」主管關係，實際上通常歸老闆）；老闆可喺 `/triage` 「⋯ → 轉交」。新題會通知負責人（站內通知「WhatsApp 報更有新分流題」，同一 session 同一日只通知一次，內容冇個人資料）；`triage_reminder` job 照舊催辦超過 2 日未答嘅題。
+**D. 批量**：卡上「批量接受建議」只處理兩類——有唯一「近 60 日同盤」候選嘅 `wa_person_ambiguous`、撞更／撞請假嘅 `wa_shift_conflict`（預設保留舊）。
+**E. 編輯／撤回**：發訊人編輯 → 舊題作廢、按新文字重出新題；撤回 → 未答題作廢。已答題唔會自動改，題目卡會標「⚠ 原訊息已被修改／撤回」。
+**F. 權限**：睇原話／姓名要「保安員:view」，入更要「更表:create」（老闆、主管有；會計冇更表新增，只會見到 restricted）；雞頭、保安員硬性拒。

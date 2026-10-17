@@ -40,6 +40,10 @@ interface IntentRow {
   source_changed: boolean;
   compare: "match" | "mismatch" | "none" | null;
   actual: string[];
+  /** W2：routed=triage 嘅 intent 對應嘅分診題 */
+  triage_question_id: string | null;
+  triage_session_id: string | null;
+  triage_status: string | null;
 }
 interface IntentsRes {
   rows: IntentRow[];
@@ -293,6 +297,11 @@ export default function WhatsappIntentsPage() {
                     <span data-testid="wa-intent-compare"><Pill variant="neutral">對照：不適用</Pill></span>
                   )}
                   {r.actual.length > 0 && <span className="text-zk-xs text-zk-muted">實際：{r.actual.join("、")}</span>}
+                  {r.routed === "triage" && r.triage_question_id && r.triage_session_id && (
+                    <Link href={`/triage?open=${r.triage_session_id}&focus=${r.triage_question_id}`} className="text-zk-xs text-zk-primary underline" data-testid="wa-intent-triage-link">
+                      {r.triage_status === "open" ? "去答分診題 ›" : r.triage_status === "answered" ? "已答 ›" : "睇分診題 ›"}
+                    </Link>
+                  )}
                   {r.superseded && <Pill variant="warning">已被編輯後版本取代</Pill>}
                   {r.revoked && <Pill variant="danger">原訊息已撤回</Pill>}
                   {r.source_changed && !r.superseded && !r.revoked && <Pill variant="warning">原訊息已修改</Pill>}

@@ -38,12 +38,15 @@ export async function GET(req: Request) {
     const siteIds = [...new Set(rows.map((r) => r.siteId).filter((x): x is string => !!x))];
     const guardIds = [...new Set(rows.map((r) => r.guardId).filter((x): x is string => !!x))];
     const shiftTypeIds = [...new Set(rows.map((r) => r.shiftTypeId).filter((x): x is string => !!x))];
-    const [groups, sites, guards, types] = await Promise.all([
+    const qIds = [...new Set(rows.filter((r) => r.routed === "triage" && r.resultRef).map((r) => r.resultRef as string))];
+    const [groups, sites, guards, types, questions] = await Promise.all([
       prisma.whatsappGroup.findMany({ where: { groupJid: { in: jids } }, select: { id: true, groupJid: true, label: true } }),
       prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, canonicalName: true } }),
       showNames ? prisma.guard.findMany({ where: { id: { in: guardIds } }, select: { id: true, nameZh: true } }) : Promise.resolve([]),
       prisma.shiftType.findMany({ where: { id: { in: shiftTypeIds } }, select: { id: true, code: true } }),
+      qIds.length ? prisma.triageQuestion.findMany({ where: { id: { in: qIds } }, select: { id: true, sessionId: true, status: true } }) : Promise.resolve([]),
     ]);
+    const qBy = new Map(questions.map((x) => [x.id, x]));
     const gBy = new Map(groups.map((g) => [g.groupJid, g]));
     const siteBy = new Map(sites.map((s) => [s.id, s.canonicalName]));
     const guardBy = new Map(guards.map((g) => [g.id, g.nameZh]));
@@ -84,6 +87,9 @@ export async function GET(req: Request) {
         source_changed: r.sourceChanged,
         compare: c?.status ?? null,
         actual: c?.actual ?? [],
+        triage_question_id: r.routed === "triage" && r.resultRef && qBy.has(r.resultRef) ? r.resultRef : null,
+        triage_session_id: r.routed === "triage" && r.resultRef ? (qBy.get(r.resultRef)?.sessionId ?? null) : null,
+        triage_status: r.routed === "triage" && r.resultRef ? (qBy.get(r.resultRef)?.status ?? null) : null,
       });
     });
     return ok(brandSafeResponse({ rows: out, total: out.length, take, from: range.fromIso, to: range.toIso, can_see_text: showNames }));
