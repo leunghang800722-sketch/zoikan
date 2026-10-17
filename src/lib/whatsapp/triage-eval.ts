@@ -118,3 +118,94 @@ export async function evaluateWaState(ev: WaEvidence, opts: WaEvalOptions): Prom
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// W4：替更（cover）／取消（cancel）評估——純讀。
+// ---------------------------------------------------------------------------
+export interface CoverEval {
+  effective: { siteId: string | null; workDate: string | null; shiftTypeId: string | null; workerId: string | null; replacedId: string | null };
+  /** 阻擋原因：盤／日子／更種／鎖月／替更者撞更（useWhatsapp 時唔計撞更）／替更者未定（person_unknown） */
+  reasons: string[];
+  candidates: { shift_type_ids: string[] };
+  /** 替更者同日已有同一更（唔使再入） */
+  workerHasShift: boolean;
+  /** 替更者同日其他更／請假（撞更） */
+  conflictIds: string[];
+  /** 被替者當日（同盤、同更別）嘅現有更記錄 */
+  replacedRecordIds: string[];
+  existing: ExistingRecord[];
+}
+
+export async function evaluateCoverState(ev: WaEvidence, opts: WaEvalOptions): Promise<CoverEval> {
+  const i = ev.intent;
+  const h = ev.human;
+  const siteId = h.site_id ?? i.site_id;
+  const workDate = h.work_date ?? i.work_date;
+  const workerId = h.guard_id ?? i.guard_id;
+  const replacedId = h.replaced_guard_id ?? ev.cover?.replaced_guard_id ?? null;
+  const reasons: string[] = [];
+  const out: CoverEval = { effective: { siteId, workDate, shiftTypeId: null, workerId, replacedId }, reasons, candidates: { shift_type_ids: [] }, workerHasShift: false, conflictIds: [], replacedRecordIds: [], existing: [] };
+
+  if (!siteId) push(reasons, "site_ambiguous");
+  if (!workDate) push(reasons, "date_missing");
+  if (siteId) {
+    if (i.shift_type_id && (!h.site_id || h.site_id === i.site_id)) {
+      out.effective.shiftTypeId = i.shift_type_id;
+    } else {
+      const r = resolveShift(ev.src.shift_raw, null, await opts.repo.shiftTypes(siteId), opts.wordMap);
+      out.effective.shiftTypeId = r.shiftTypeId;
+      out.candidates.shift_type_ids = r.candidates;
+      push(reasons, ...r.reasons);
+    }
+  }
+  if (workDate) {
+    if (!h.work_date && !dateInWindow(workDate, opts.ts)) push(reasons, "date_out_of_range");
+    if (await opts.repo.monthLocked(workDate)) push(reasons, "month_locked");
+  }
+  if (!workerId) push(reasons, "person_unknown");
+  if (workDate && !reasons.includes("month_locked")) {
+    if (workerId) {
+      const ex = (await opts.repo.existing(workerId, workDate)).filter((r) => r.status !== "cancelled" && r.recordType !== "ot");
+      out.existing = ex;
+      const stId = out.effective.shiftTypeId;
+      const same = ex.filter((r) => r.recordType === "shift" && !!stId && r.shiftTypeId === stId);
+      out.workerHasShift = same.length > 0;
+      const clash = ex.filter((r) => !same.includes(r));
+      out.conflictIds = clash.map((r) => r.id);
+      if (clash.length > 0 && !opts.useWhatsapp) push(reasons, clash.some((r) => r.recordType === "leave") ? "conflict_leave" : "conflict_other_shift");
+    }
+    if (replacedId) {
+      const rr = (await opts.repo.existing(replacedId, workDate)).filter((r) => r.status !== "cancelled" && r.recordType === "shift");
+      out.replacedRecordIds = rr.filter((r) => (!siteId || r.siteId === siteId) && (!out.effective.shiftTypeId || r.shiftTypeId === out.effective.shiftTypeId)).map((r) => r.id);
+    }
+  }
+  return out;
+}
+
+export interface CancelEval {
+  effective: { guardId: string | null; workDate: string | null; siteId: string | null };
+  reasons: string[];
+  /** 將會被取消嘅記錄（當日自己嘅更／請假；有盤口就只限該盤） */
+  targets: ExistingRecord[];
+}
+
+export async function evaluateCancelState(ev: WaEvidence, opts: Pick<WaEvalOptions, "ts" | "repo">): Promise<CancelEval> {
+  const i = ev.intent;
+  const h = ev.human;
+  const guardId = h.guard_id ?? i.guard_id;
+  const workDate = h.work_date ?? i.work_date;
+  const siteId = h.site_id ?? i.site_id;
+  const reasons: string[] = [];
+  const out: CancelEval = { effective: { guardId, workDate, siteId }, reasons, targets: [] };
+  if (!guardId) push(reasons, "person_unknown");
+  if (!workDate) push(reasons, "date_missing");
+  if (workDate) {
+    if (!h.work_date && !dateInWindow(workDate, opts.ts)) push(reasons, "date_out_of_range");
+    if (await opts.repo.monthLocked(workDate)) push(reasons, "month_locked");
+  }
+  if (guardId && workDate && !reasons.includes("month_locked")) {
+    out.targets = (await opts.repo.existing(guardId, workDate)).filter((r) => r.status !== "cancelled" && r.recordType !== "ot" && (!siteId || r.siteId === siteId));
+    if (out.targets.length === 0) push(reasons, "no_cancel_target");
+  }
+  return out;
+}

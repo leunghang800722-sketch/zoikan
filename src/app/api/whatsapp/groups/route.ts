@@ -82,7 +82,7 @@ export async function PATCH(req: Request) {
     if (body.auto_write_daily_cap !== undefined) data.autoWriteDailyCap = body.auto_write_daily_cap;
     if (body.filter_threshold !== undefined) data.filterThreshold = body.filter_threshold;
     if (body.shift_word_map !== undefined) data.shiftWordMap = pairsToWordMap(body.shift_word_map);
-    if (body.leave_word_map !== undefined) data.leaveWordMap = pairsToWordMap(body.leave_word_map);
+    if (body.leave_word_map !== undefined) data.leaveWordMap = pairsToWordMap(body.leave_word_map, 2);
     const updated = await prisma.$transaction(async (tx) => {
       const u = await tx.whatsappGroup.update({ where: { id: cur.id }, data });
       await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "whatsapp_groups", rowId: cur.id, action: "update", before: cur, after: u, ip: getClientIp(req) });

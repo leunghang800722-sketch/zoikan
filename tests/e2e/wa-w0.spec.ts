@@ -71,7 +71,7 @@ test.describe("WhatsApp 報更頁", () => {
     await siteSel.selectOption({ label: W0_SITE });
     const shiftMap = ed.getByTestId("wa-shift-wordmap");
     await shiftMap.getByRole("button", { name: "加一行" }).click();
-    await shiftMap.getByLabel("口語 → 更碼對照口語 1").fill("夜班");
+    await shiftMap.getByLabel("口語 → 更碼對照口語 1").fill("夜");
     await shiftMap.getByLabel("口語 → 更碼對照代碼 1").selectOption("N");
     await ed.getByLabel(/^自動寫入/).check();
     await ed.getByRole("button", { name: "儲存" }).click();
@@ -82,7 +82,7 @@ test.describe("WhatsApp 報更頁", () => {
     const row = await prisma.whatsappGroup.findUniqueOrThrow({ where: { groupJid: G1 } });
     expect(row).toMatchObject({ kind: "site", autoWrite: true, autoConfirm: false });
     expect(row.siteId).not.toBeNull();
-    expect(row.shiftWordMap).toEqual({ 夜班: "N" });
+    expect(row.shiftWordMap).toEqual({ 夜: "N" });
     const a = await prisma.auditLog.findFirst({ where: { tableName: "whatsapp_groups", action: "update", rowId: row.id } });
     expect(a).not.toBeNull();
   });

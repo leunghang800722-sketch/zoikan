@@ -164,7 +164,7 @@ describe("W0 WhatsApp API", () => {
           id: g.id,
           kind: "site",
           site_id: fx.site.id,
-          shift_word_map: [{ word: "夜班", code: "N" }, { word: "OT", code: "OT" }],
+          shift_word_map: [{ word: "夜", code: "N" }, { word: "OT", code: "OT" }],
           auto_write: true,
         }),
       );
@@ -172,9 +172,9 @@ describe("W0 WhatsApp API", () => {
       const body = (await res.json()) as { kind: string; site_id: string; shift_word_map: { word: string; code: string }[]; auto_write: boolean };
       expect(body).toMatchObject({ kind: "site", site_id: fx.site.id, auto_write: true });
       // jsonb 唔保證 key 次序，所以排序後比較
-      expect([...body.shift_word_map].sort((a, b) => a.word.localeCompare(b.word))).toEqual([{ word: "OT", code: "OT" }, { word: "夜班", code: "N" }]);
+      expect([...body.shift_word_map].sort((a, b) => a.word.localeCompare(b.word))).toEqual([{ word: "OT", code: "OT" }, { word: "夜", code: "N" }]);
       const row = await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } });
-      expect(row.shiftWordMap).toEqual({ 夜班: "N", OT: "OT" });
+      expect(row.shiftWordMap).toEqual({ 夜: "N", OT: "OT" });
       const a = await prisma.auditLog.findFirstOrThrow({ where: { tableName: "whatsapp_groups", action: "update", rowId: g.id } });
       expect(a.actorUserId).toBe(fx.userIds["老闆"]);
       expect(a.before).toMatchObject({ kind: "ignored", site_id: null });
@@ -191,7 +191,7 @@ describe("W0 WhatsApp API", () => {
       await bad({ kind: "multi_site", auto_confirm: true });
       await bad({ kind: "site", site_id: "no-such-site" });
       await bad({ kind: "broker", broker_id: "no-such-broker" });
-      await bad({ shift_word_map: [{ word: "夜班", code: "N" }, { word: "夜班", code: "C" }] });
+      await bad({ shift_word_map: [{ word: "夜", code: "N" }, { word: "夜", code: "C" }] });
       await bad({ kind: "bogus" });
       await bad({ shift_word_map: [{ word: "", code: "N" }] });
       expect((await groupsPatch(req("/api/whatsapp/groups", cookies["老闆"], "PATCH", { id: "nope", active: false }))).status).toBe(404);

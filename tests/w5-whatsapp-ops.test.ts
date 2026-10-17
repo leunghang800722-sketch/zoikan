@@ -280,15 +280,29 @@ describe("W5 口語對照 API", () => {
     await bad({ leave_word_map: [{ word: "ＳＬ", code: "SL" }, { word: "SL", code: "AL" }] });
     await bad({ shift_word_map: [{ word: "ＯＴ", code: "A" }, { word: "OT", code: "N" }] });
     await bad({ leave_word_map: [{ word: "", code: "SL" }] });
-    // N2：口語詞最少 2 個字元（口語對照、請假詞對照都一樣）
+    // N2：請假詞最少 2 個字元（更碼對照唔受限，見下一條）
     await bad({ leave_word_map: [{ word: "病", code: "SL" }] });
-    await bad({ shift_word_map: [{ word: "夜", code: "N" }] });
-    await bad({ shift_word_map: [{ word: " 夜 ", code: "N" }] });
-    await bad({ shift_word_map: [{ word: "Ｏ", code: "N" }] });
+    await bad({ leave_word_map: [{ word: " 病 ", code: "SL" }] });
+    await bad({ leave_word_map: [{ word: "Ｏ", code: "SL" }] });
     await bad({ leave_word_map: Array.from({ length: 31 }, (_, i) => ({ word: `詞${i}`, code: "SL" })) });
     const row = await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } });
     expect(row.leaveWordMap).toEqual({ 病假: "SL" });
     expect(row.shiftWordMap).toEqual({ 夜班: "N" });
+  });
+
+  it("M1：更碼對照單字詞可儲存（含舊有單字 key 同場儲存）同匹配", async () => {
+    const { g } = await seedGroup();
+    const r = await patch(g.id, { shift_word_map: [{ word: "早", code: "A" }, { word: "夜", code: "N" }, { word: "OT", code: "N" }], leave_word_map: [{ word: "病假", code: "AL" }] });
+    expect(r.status).toBe(200);
+    const row = await prisma.whatsappGroup.findUniqueOrThrow({ where: { id: g.id } });
+    expect(row.shiftWordMap).toEqual({ 早: "A", 夜: "N", OT: "N" });
+    // 匹配：resolveShift 用精確匹配單字 key
+    const { resolveShift } = await import("@/lib/whatsapp/resolve");
+    const types = [{ id: "ta", siteId: "s", code: "A", label: null, startHour: 7 }, { id: "tn", siteId: "s", code: "N", label: null, startHour: 19 }];
+    expect(resolveShift("夜", null, types, row.shiftWordMap as Record<string, string>)).toMatchObject({ shiftTypeId: "tn", basis: "word_map" });
+    expect(resolveShift("早", null, types, row.shiftWordMap as Record<string, string>)).toMatchObject({ shiftTypeId: "ta", basis: "word_map" });
+    // 空詞仍然唔得
+    expect((await patch(g.id, { shift_word_map: [{ word: " ", code: "N" }] })).status).toBe(400);
   });
 
   it("詞先 NFKC 正規化再存（ＯＴ → OT）", async () => {
