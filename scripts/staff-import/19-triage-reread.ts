@@ -21,6 +21,7 @@ import {
   buildStaffNoIndex,
   docIdsForPerson,
   emptySummary,
+  OCR_PIPELINE_VERSION,
   needsReread,
   pickDocPages,
   proposeFromPicks,
@@ -85,20 +86,20 @@ export function parseArgs(argv: readonly string[]): Args {
 export function fileDocCache(dir: string, noCache: boolean): DocCache {
   const fileOf = (d: DocPage) => path.join(dir, `${d.type}__${d.docId.replace(/[^A-Za-z0-9_-]/g, '_')}__p${d.page}.json`);
   return {
-    async get(d) {
+    async get(d, refsHash) {
       if (noCache) return null;
       try {
-        const j = JSON.parse(await readFile(fileOf(d), 'utf-8')) as { version?: number; result?: DocumentReadResult };
-        return j.version === 1 && j.result && j.result.type === d.type ? j.result : null;
+        const j = JSON.parse(await readFile(fileOf(d), 'utf-8')) as { version?: string; docId?: string; refsHash?: string; result?: DocumentReadResult };
+        return j.version === OCR_PIPELINE_VERSION && j.docId === d.docId && j.refsHash === refsHash && j.result && j.result.type === d.type ? j.result : null;
       } catch {
         return null;
       }
     },
-    async set(d, r) {
+    async set(d, r, refsHash) {
       await mkdir(dir, { recursive: true });
       const f = fileOf(d);
       const tmp = `${f}.tmp`;
-      await writeFile(tmp, JSON.stringify({ version: 1, result: r }));
+      await writeFile(tmp, JSON.stringify({ version: OCR_PIPELINE_VERSION, docId: d.docId, refsHash, result: r }));
       await rename(tmp, f);
     },
   };

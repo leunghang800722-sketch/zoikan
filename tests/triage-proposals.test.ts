@@ -156,6 +156,7 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(done.status).toBe("answered");
     expect(Object.keys((done.answerJson as { fields: object }).fields)).toEqual(["nameEn"]);
     const rest = await prisma.triageQuestion.findFirstOrThrow({ where: { groupKey: `${old.groupKey}:rest` } });
+    expect(rest.title).toBe(`${old.title}（剩餘欄位）`);
     expect(rest).toMatchObject({ status: "open", kind: "field_review", personKey: old.personKey, sessionId: sid, sort: old.sort, targetGuardId: old.targetGuardId });
     expect((rest.evidenceJson as { review_fields: { field: string }[] }).review_fields.map((x) => x.field)).toEqual(["address"]);
     expect((rest.evidenceJson as { person: { key: string } }).person.key).toBe((old.evidenceJson as { person: { key: string } }).person.key);
