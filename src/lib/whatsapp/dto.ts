@@ -27,6 +27,7 @@ export function toWaGroupDTO(row: Record<string, unknown>): Dto {
     site_id: g.siteId,
     broker_id: g.brokerId,
     shift_word_map: wordMapToPairs(g.shiftWordMap),
+    leave_word_map: wordMapToPairs(g.leaveWordMap),
     filter_threshold: g.filterThreshold ?? null,
     auto_write: g.autoWrite,
     auto_confirm: g.autoConfirm,

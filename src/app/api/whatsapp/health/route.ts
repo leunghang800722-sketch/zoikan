@@ -11,12 +11,14 @@ export async function GET(req: Request) {
   return withApiError(async () => {
     await requirePermission(req, "WhatsApp 報更", "view");
     const since = new Date(Date.now() - 24 * 3600 * 1000);
-    const [waha, last, backlog, errors24h, messages24h] = await Promise.all([
+    const [waha, last, backlog, errors24h, messages24h, alerts] = await Promise.all([
       wahaBaseUrl() ? getSessionStatus() : Promise.resolve({ ok: false as const, error: "not_configured" as const }),
       prisma.whatsappMessage.aggregate({ _max: { createdAt: true } }),
       prisma.whatsappMessage.count({ where: { status: "received" } }),
       prisma.whatsappMessage.count({ where: { status: "error", updatedAt: { gte: since } } }),
       prisma.whatsappMessage.count({ where: { createdAt: { gte: since } } }),
+      // W5：最近 5 條健康告警（通知內容只有狀態碼／數字，無 PII）
+      prisma.appNotification.findMany({ where: { kind: "whatsapp_health" }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, title: true, body: true, createdAt: true } }),
     ]);
     return ok(
       brandSafeResponse({
@@ -29,6 +31,7 @@ export async function GET(req: Request) {
         backlog,
         errors_24h: errors24h,
         messages_24h: messages24h,
+        recent_alerts: alerts.map((a) => ({ id: a.id, title: a.title, body: a.body, created_at: a.createdAt.toISOString() })),
       }),
     );
   });

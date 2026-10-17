@@ -14,6 +14,10 @@ export type GroupKind = (typeof GROUP_KINDS)[number];
 
 const PairSchema = z.object({ word: z.string().trim().min(1).max(20), code: z.string().trim().min(1).max(12) });
 
+/** W5：群組可覆寫嘅請假碼（內建對照見 resolve.ts LEAVE_TABLE）。 */
+export const LEAVE_OVERRIDE_CODES = ["SL", "AL", "NL", "RD", "SH"] as const;
+const LeavePairSchema = z.object({ word: z.string().trim().min(2, "口語詞最少 2 個字").max(20), code: z.enum(LEAVE_OVERRIDE_CODES) });
+
 export const GroupPatchSchema = z.object({
   id: z.string().min(1).max(64),
   label: z.string().trim().max(200).optional(),
@@ -21,6 +25,7 @@ export const GroupPatchSchema = z.object({
   site_id: z.string().min(1).max(64).nullable().optional(),
   broker_id: z.string().min(1).max(64).nullable().optional(),
   shift_word_map: z.array(PairSchema).max(30).optional(),
+  leave_word_map: z.array(LeavePairSchema).max(30).optional(),
   auto_write: z.boolean().optional(),
   auto_confirm: z.boolean().optional(),
   active: z.boolean().optional(),
@@ -30,11 +35,15 @@ export const GroupPatchSchema = z.object({
   filter_threshold: z.number().int().min(0).max(100).nullable().optional(),
 });
 
-export function pairsToWordMap(pairs: WordPair[]): Record<string, string> {
+/** minLen：更碼對照 1（LLM 嘅 shift_raw 多數單字，如「早／夜」）；請假詞 2（單字太易誤中，包含式匹配）。 */
+export function pairsToWordMap(pairs: WordPair[], minLen = 1): Record<string, string> {
   const out: Record<string, string> = {};
   for (const p of pairs) {
-    if (Object.prototype.hasOwnProperty.call(out, p.word)) throw BadRequest(`口語對照重覆：「${p.word}」`);
-    out[p.word] = p.code;
+    // W5：詞先 NFKC 正規化（resolve 配對用 NFKC），全形／半形算重覆
+    const word = p.word.normalize("NFKC").trim();
+    if (word.length < minLen) throw BadRequest(minLen > 1 ? `口語詞最少 ${minLen} 個字` : "口語詞唔可以留空");
+    if (Object.prototype.hasOwnProperty.call(out, word)) throw BadRequest(`口語對照重覆：「${word}」`);
+    out[word] = p.code;
   }
   return out;
 }

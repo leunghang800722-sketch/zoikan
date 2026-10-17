@@ -12,6 +12,7 @@ export const NOTIFY_KINDS = [
   { kind: "ops_digest_ready", label: "每月修正摘要" },
   { kind: "job_failed", label: "排程出錯" },
   { kind: "whatsapp_triage", label: "WhatsApp 報更有新分流題" },
+  { kind: "whatsapp_health", label: "WhatsApp 橋接異常／斷線／積壓" },
 ] as const;
 
 export const NOTIFY_KIND_SET: ReadonlySet<string> = new Set(NOTIFY_KINDS.map((k) => k.kind));
