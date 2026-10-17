@@ -22,6 +22,7 @@ export function RosterNotices({
   errorBanner,
   infoBanner,
   waPending = 0,
+  waChanged = 0,
 }: {
   monthLocked: boolean;
   month: string;
@@ -37,12 +38,19 @@ export function RosterNotices({
   infoBanner: string | null;
   /** W2：來自 WhatsApp、待批核嘅格數 */
   waPending?: number;
+  /** W3：原訊息已被發訊人修改／撤回嘅 WhatsApp 格數 */
+  waChanged?: number;
 }) {
   return (
     <>
       {waPending > 0 && (
-        <Banner compact kind="info" data-testid="roster-wa-notice" action={<Link href="/approvals" className="text-zk-sm underline" style={{ color: "inherit" }}>去批核</Link>}>
+        <Banner compact kind="info" data-testid="roster-wa-notice" action={<Link href="/whatsapp/pending" className="text-zk-sm underline" style={{ color: "inherit" }}>去批核</Link>}>
           本月有 {waPending} 格來自 WhatsApp，等緊批核（格仔 hover 會顯示「來自 WhatsApp」）。
+        </Banner>
+      )}
+      {waChanged > 0 && (
+        <Banner compact kind="warning" data-testid="roster-wa-changed">
+          ⚠ 本月有 {waChanged} 格嘅 WhatsApp 原訊息已被發訊人修改／撤回（已確認嘅唔會自動改，請人手核對）。
         </Banner>
       )}
       {/* ================= 鎖定／提示橫幅 ================= */}

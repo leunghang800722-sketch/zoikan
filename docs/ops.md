@@ -49,6 +49,7 @@ job 自己嘅記憶，只存月份／時間戳，無 PII：`auto_one_click`＝`{
 | `NOTIFY_FROM` | 否 | 寄件人顯示，例 `在勤 <notify@你的網域>`；預設 `在勤 <no-reply@zoikan.local>` |
 | `APP_BASE_URL` | 否 | email 內連結根網址；預設 `https://zoikan.zeabur.app` |
 | `JOB_TIMEOUT_MS` | 否 | 單個 job 最長執行毫秒，預設 600000 |
+| `WA_AUTO_WRITE_ENABLED` | 否 | W3：WhatsApp 自動寫入總開關。冇設／`1`＝開（仍要群組自己開「自動寫入」）；`0` 或任何其他值＝全部改去分流（reason `auto_disabled`），**唔寫更表**（fail closed）。緊急剎車用 |
 | `SCHEDULER_ENABLED` | 否 | `1`／`0`。冇設＝production 開，dev／test 關。e2e（Playwright）固定 `0` |
 | `GUARD_OCR_ALS` | 否 | `1`（預設）／`0`。證件辨識地址欄查香港政府 ALS 地址庫作候選；**預設開**，送出去嘅係冇樓層室號嘅地址；`0` 完全唔呼叫；見「GUARD_OCR_ALS」段 |
 | `GUARD_OCR_DEEPSEEK_MAX_TOKENS` | 否 | 預設 `4000`（≤8000）。DeepSeek 讀 B max_tokens；deepseek-flash 思考 token 計入上限，1500 會令入職表讀 B content 空（OCR-5.6）。撞頂（content 空或 JSON 被截）自動重試一次（加倍、封頂 8000；已達 8000 唔重試；重試本身失敗就降級照舊）；只對 DeepSeek 生效（Claude 遇 max_tokens 直接拋）。env 只接受 1000–8000 嘅整數（嚴格 `^\d+$`），其他一律回預設 4000（唔係 clamp，例如 9000／500 都係 4000）。audit：`b_retry_truncated`＝重試成功數、`b_retry_failed`＝重試失敗降級數 |
@@ -349,3 +350,30 @@ W1 dry-run 之後，`routed=triage` 嘅 intent 會即時變成「待答問題」
 **D. 批量**：卡上「批量接受建議」只處理兩類——有唯一「近 60 日同盤」候選嘅 `wa_person_ambiguous`、撞更／撞請假嘅 `wa_shift_conflict`（預設保留舊）。
 **E. 編輯／撤回**：發訊人編輯 → 舊題作廢、按新文字重出新題；撤回 → 未答題作廢。已答題唔會自動改，題目卡會標「⚠ 原訊息已被修改／撤回」。
 **F. 權限**：睇原話／姓名要「保安員:view」，入更要「更表:create」（老闆、主管有；會計冇更表新增，只會見到 restricted）；雞頭、保安員硬性拒。
+
+## WhatsApp 自動寫入（W3，2026-10）
+
+W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅更／請假會直接寫入更表（`source=whatsapp`、狀態 `pending_approval`＝待批核；群組再開「自動確認」先直接 `confirmed`）。其餘照 W2 去分流。Migration `20261020000000_wa_w3_auto_write_cap`（只加欄 `whatsapp_groups.auto_write_daily_cap`，預設 50）。
+
+**開通步驟（建議）**：先喺一個試點群開「自動寫入」（**唔好**開「自動確認」），睇 `/whatsapp/intents` 嘅「自動寫入結果」同 `/whatsapp/pending` 一星期，一致率夠高、主管冇大量退回，先考慮擴到其他群。
+
+**寫入條件（全部齊先寫，缺一即分流）**：群組 `auto_write=true`＋總開關 `WA_AUTO_WRITE_ENABLED`＋LLM 信心 ≥0.6＋計劃書 §6.1 第 1–6 項（盤口、保安員硬鍵、日期 −2～+45 日且未鎖月、更碼對得到、冇撞更／同更已存在／額滿／配額滿、`shift`／`leave`）＋今日該群未達上限＋5 分鐘內冇重覆。群組未開「自動寫入」＝dry-run（只記建議，同 W1）。
+
+**安全閥**：
+- **每群每日上限** `auto_write_daily_cap`（預設 50，`/whatsapp` →「綁定設定」可改，0–1000；0＝全部分流）：按訊息香港日計，超過 → 分流（reason `daily_cap`，題卡可「照解析結果入更」）。
+- **總開關** `WA_AUTO_WRITE_ENABLED=0` → 全部分流（reason `auto_disabled`），無需重新部署以外嘅操作；改 env 後重啟 service。
+- **5 分鐘去重**：同一發訊人 5 分鐘內，另一條訊息已自動寫入同一保安員／日子／更別（或請假碼）→ 當重覆（`ignored`，reason `duplicate_recent`），唔再寫（例如主管剛退回嗰條，發訊人又 send 多次）。
+- 鎖月：寫入前同 transaction 內再檢查；鎖咗 → 分流（「鎖月中」題）。
+
+**批核**：`/whatsapp/pending`（WhatsApp 待批）逐條或「批核已選」（逐條走現有 `/api/shift-records/[id]/approve`）；「全選」唔包含有 ⚠ 嘅記錄。退回要寫原因（走現有 reject＝回 draft）。排更頁頁首「本月有 N 格來自 WhatsApp，等緊批核」連去待批清單；格仔 hover 見「來自 WhatsApp｜群｜時間｜原話」（原話要「保安員:view」權）。
+
+**編輯／撤回**：發訊人編輯（新 revision）或撤回後——
+- 舊記錄仍 `pending_approval`（且當月未鎖）→ **自動退回**：記錄設 `cancelled`（audit `void`，`void_reason=source_message_edited｜source_message_revoked`），編輯嘅由新 revision 重新解析重寫（同一格會重用該行）；
+- 已確認／已批核／已結算（或當月已鎖）→ **唔自動改**，只標 `source_changed`：待批清單、排更格 tooltip、排更頁橫幅顯示「⚠ 原訊息已被發訊人修改／撤回」，由人手判斷。
+
+**日摘要**（每日 09:00 通知老闆）加「自動寫入 N、待批 M、拒絕 K」（只有數字）。
+
+**疑難**：
+- 群組開咗自動寫入但冇記錄＝睇 `/whatsapp/intents` 嗰條嘅原因碼；`只係建議（群組未開自動寫入）`＝群組開關未開。
+- 突然全部去分流＝查 `WA_AUTO_WRITE_ENABLED` 係咪設咗 `0`／亂碼，或群組當日已達上限。
+- 寫入嘅身份係「系統排程」帳號（`created_by`）；審計日誌 action＝`create`／`void`，`source=whatsapp`，`provenance` 含 `message_id`、`revision`、`intent_idx`、`sender_guard_id`。
