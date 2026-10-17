@@ -36,7 +36,11 @@ export async function GET(req: Request) {
     });
     const jids = [...new Set(rows.map((r) => r.message.chatJid))];
     const siteIds = [...new Set(rows.map((r) => r.siteId).filter((x): x is string => !!x))];
-    const guardIds = [...new Set(rows.map((r) => r.guardId).filter((x): x is string => !!x))];
+    const replacedOf = (r: (typeof rows)[number]): string | null => {
+      const v = (r.resolution as { replaced_guard_id?: unknown } | null)?.replaced_guard_id;
+      return typeof v === "string" ? v : null;
+    };
+    const guardIds = [...new Set(rows.flatMap((r) => [r.guardId, replacedOf(r)]).filter((x): x is string => !!x))];
     const shiftTypeIds = [...new Set(rows.map((r) => r.shiftTypeId).filter((x): x is string => !!x))];
     const qIds = [...new Set(rows.filter((r) => r.routed === "triage" && r.resultRef).map((r) => r.resultRef as string))];
     const awRefs = [...new Set(rows.filter((r) => r.routed === "auto_write" && r.resultRef).map((r) => r.resultRef as string))];
@@ -57,7 +61,7 @@ export async function GET(req: Request) {
     const cmp = await compareIntents(rows.map((r) => ({ id: r.id, kind: r.kind, guardId: r.guardId, workDate: r.workDate ? r.workDate.toISOString().slice(0, 10) : null, shiftTypeId: r.shiftTypeId, leaveCode: r.leaveCode })));
     const out = rows.map((r) => {
       const m = r.message;
-      const res = (r.resolution ?? {}) as { reasons?: unknown; notes?: unknown; basis?: unknown; candidates?: unknown; group_auto_write?: unknown; replaced_guard_id?: unknown };
+      const res = (r.resolution ?? {}) as { reasons?: unknown; notes?: unknown; basis?: unknown; candidates?: unknown; group_auto_write?: unknown; replaced_guard_id?: unknown; replaced_candidate_ids?: unknown; replaced_record_ids?: unknown; existing_record_ids?: unknown };
       const g = gBy.get(m.chatJid);
       const tail = m.senderTelNorm ? m.senderTelNorm.slice(-4) : null;
       const c = cmp.get(r.id);
@@ -77,6 +81,12 @@ export async function GET(req: Request) {
         guard_id: showNames ? r.guardId : null,
         guard_name: showNames && r.guardId ? (guardBy.get(r.guardId) ?? null) : null,
         has_guard: r.guardId !== null,
+        // W4：替更／取消解析結果（對照頁顯示）：被替者配對情況、被替者當日該更數、取消目標記錄數
+        replaced_guard_name: showNames && replacedOf(r) ? (guardBy.get(replacedOf(r)!) ?? null) : null,
+        has_replaced: r.kind === "cover" ? replacedOf(r) !== null : null,
+        replaced_candidate_count: r.kind === "cover" && Array.isArray(res.replaced_candidate_ids) ? res.replaced_candidate_ids.length : null,
+        replaced_shift_count: r.kind === "cover" && replacedOf(r) !== null ? (Array.isArray(res.replaced_record_ids) ? res.replaced_record_ids.length : 0) : null,
+        cancel_target_count: r.kind === "cancel" ? (Array.isArray(res.existing_record_ids) ? res.existing_record_ids.length : 0) : null,
         shift_code: r.shiftTypeId ? (typeBy.get(r.shiftTypeId) ?? null) : null,
         leave_code: r.leaveCode,
         confidence: r.confidence === null ? null : Number(r.confidence),

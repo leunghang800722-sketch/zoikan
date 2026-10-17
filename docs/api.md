@@ -2812,3 +2812,26 @@ Migration `20261020000000_wa_w3_auto_write_cap`（只加欄）：`whatsapp_group
 ### 頁面
 `/whatsapp/pending`（WhatsApp 待批，375px 友善）；`/whatsapp` 綁定抽屜加「每日自動寫入上限」；排更頁加格仔 tooltip（群／時間／原話）同「⚠ 原訊息已被發訊人修改／撤回」橫幅。
 
+## WhatsApp 請假／替更／取消（W4，2026-10；全部 additive，無 migration）
+
+### 新題型（`triage_questions.kind`，sourceType=`whatsapp`）
+- `wa_cover`（替更）：LLM intent `cover`（persons＝`worker` 替更者＋`replaced` 被替者）→ 首階段**一律 Triage**（resolve 唔再加 `type_not_auto`，改記 notes `cover_triage`／`replaced_missing`／`replaced_no_shift`／`worker_already_has_shift`）。`evidence.cover={replaced_guard_id, replaced_candidate_ids[], replaced_record_ids[]}`（被替者配對結果＋被替者當日同盤同更別嘅現有更）；`evidence.candidates.guard_ids`＝替更者候選、`existing_record_ids`＝替更者同日撞更記錄。盤／日期／更種未明先出 `wa_site_ambiguous`／`wa_date_ambiguous`／`wa_unparsed`（答咗再出 `wa_cover`）；鎖月出 `wa_shift_conflict`（只可人手）。
+- `wa_cancel`（取消）：intent `cancel`（「聽日唔返」「取消聽日」）→ 一律 Triage，唔需要盤口；人未定先出 `wa_person_*`、日子未定先出 `wa_date_ambiguous`。`evidence.candidates.existing_record_ids`＝將取消嘅記錄（自己當日更／請假；有盤口就只限該盤）。冇可取消記錄 → `wa_unparsed`（reason `no_cancel_target`）。
+- 同一 intent 輪次上限：一般 2 輪；`cover`／`cancel` 放寬到 4 輪（要先經盤／日子／人，再到最後確認題）。
+
+### 選項／答案（additive）
+- 新 option id：`wa_cover_confirm`（確認替更）、`wa_cover_add_only`（只加替更者）、`wa_cancel_apply`（取消該更／請假）、`wa_cancel_to_leave`（改為請假；`value`＝`AL|SL|NL|RD|SH`，option `input:"leave_code"`）。替更題如替更者同日撞更：只提供 `wa_use_whatsapp`（以 WhatsApp 為準＝取消替更者同日原有記錄＋確認替更）／`wa_manual`／`skip`。`QuestionOption.input` 加 `"leave_code"`。
+- 答案 schema 加 `replaced_guard_id`（替更題揀被替者；替更者沿用 `guard_id`）。替更者／被替者只可喺**未配對**時揀；揀嘅人要喺候選入面（候選為空＝搜尋揀，要存在）；兩人唔可以同一個。`wa_cover_confirm`／`wa_use_whatsapp` 要有被替者；`wa_cover_add_only` 唔使。
+- 預覽（`POST /api/triage/questions/:id/preview`）`impact.summary` 逐行列出「替更者入更（待批核）」／「被替者 X 嘅 M 月 D 日 N 更會取消（原因：被 WhatsApp 替更）」／被替者冇該更嘅提示（`notes`）；替更者揀咗之後先發現撞更 → `impact.can_confirm=false`（確認會 409，改用人手處理）。
+- 確認（`POST …/answer`，要 preview_hash）：同一個 transaction——`assertMonthNotLockedTx` → 被替者該更 `cancelled`（audit `void`，`after.void_reason=covered_by_whatsapp`；**唔係請假**，唔寫 leave）→（`wa_use_whatsapp`）替更者原有記錄 `cancelled`（`whatsapp:use_whatsapp`）→ `writeShiftCells` 寫替更者更（`pending_approval`、`source=whatsapp`、provenance `{message_id, revision, intent_idx, triage_question_id, cover:{replaced_guard_id}}`）。被替者冇當日更／揀「只加替更者」→ 只寫替更者更。取消題：`cancelled`（`void_reason=cancelled_by_whatsapp`）；「改為請假」＝取消＋同 tx 寫 leave（`pending_approval`；provenance `cancel_to_leave:true`）；已經係同一請假碼＝當處理咗（`exists`）。
+- 權限：同 W2——取消任何舊記錄要「更表:void」、目標格已有行要「更表:update」（preview／submit 都檢查，403）；答題要「導入分診:update」＋「保安員:view」＋「更表:create」。`restrictedKindsFor` 加 `wa_cover`／`wa_cancel`（`WA_KINDS`）。**batch-accept 唔收 `wa_cover`／`wa_cancel`**（白名單不變，直接 POST → `skipped`／`no_suggestion`）。
+- 題 view（`GET /api/triage/sessions/:id` 嘅 `wa`）加：`existing[].work_date`；`cover`（替更題：`worker`／`replaced`〔guard_id、name〕、`replaced_candidates[]`、`replaced_records[]`）；`cancel_preview[]`（「會取消 [姓名 ]10 月 17 日 N 更（盤）」；撞更題「以 WhatsApp 為準」、取消題、替更題都有；姓名要「保安員:view」）。
+
+### 請假（leave）
+WhatsApp 請假（AL／SL／NL／RD／SH；range 17–19 號逐日展開）經 W3 同一條 write service 寫 `shift_records recordType=leave`（`pending_approval`）；「放假」仍 `leave_code_unclear` → Triage。**過濾層補 RD／SH／NPL 口語**（例假／公假／休假／公眾假期／法定假／RD／SH／NPL），否則「我21號例假」會喺 filter 被丟棄。同日已有更而報請假 → `conflict_shift_vs_leave` → `wa_shift_conflict`，題卡顯示「會取消 X 月 X 日 X 更」，「以 WhatsApp 為準」＝取消該更＋寫 leave 同 tx。
+
+### 病假接現有「醫生紙待確認」流程
+長工病假草稿（`generateLongtermInputDrafts`／`listSlPending`）本來就由 `shift_records` leave SL 產生。W4 新增 `src/lib/longterm-payroll/approved-only.ts`：**來源 `whatsapp` 而仍 `pending_approval` 嘅記錄唔計入**長工糧 aggregate、SL 草稿生成、SL 待確認清單、勤工獎資格（批核→`confirmed` 後先計；其他來源嘅 `pending_approval` 行為不變）。草稿一律 `status=draft`、`doctorNoteVerified=false`（群組 `auto_confirm` 都唔會令病假自動確認）；醫生紙確認仍經 `decideSlDraft`。批核之後草稿由下次草稿生成（月結／排程／重算）出現。
+
+### 對照頁／統計（additive）
+`GET /api/whatsapp/intents` 每條加 `replaced_guard_name`（要「保安員:view」）、`has_replaced`、`replaced_candidate_count`、`replaced_shift_count`（cover）、`cancel_target_count`（cancel）；其餘 kind 為 null。

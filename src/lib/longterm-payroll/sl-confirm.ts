@@ -5,6 +5,7 @@
 //   - decideSlDraft：逐段「有醫生紙，確認」／「冇醫生紙，當無薪」（後者＝作廢草稿記原因，之後同段唔再生成）
 // 唔自動確認任何草稿。
 import { createHash } from "node:crypto";
+import { excludeUnapprovedWhatsapp } from "./approved-only";
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { isMonthLocked } from "@/lib/month-lock";
@@ -85,7 +86,7 @@ export async function listSlPending(month: Date): Promise<SlPendingResult> {
     // P18 驗收 M1：先跟來源優先次序（連 shift 紀錄比較）再篩 SL，同 aggregate／草稿生成一致。
     prisma.shiftRecord
       .findMany({
-        where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+        where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] }, ...excludeUnapprovedWhatsapp() },
         select: { guardId: true, workDate: true, recordType: true, leaveCode: true, source: true, siteId: true },
       })
       .then((rows) => pickBySourcePriority(rows).picked.filter((r) => r.recordType === "leave" && r.leaveCode === "SL")),

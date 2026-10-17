@@ -35,7 +35,10 @@ export type QuestionKind =
   | "wa_site_ambiguous" // 盤口唔肯定
   | "wa_date_ambiguous" // 日期唔肯定
   | "wa_shift_conflict" // 同現有排更撞（撞更／請假／額滿／鎖月）
-  | "wa_unparsed"; // 未能自動理解（含替更／取消首階段）
+  | "wa_unparsed" // 未能自動理解
+  // W4（替更／取消，首階段一律 Triage）
+  | "wa_cover" // 替更：確認被替者該更取消＋替更者入更
+  | "wa_cancel"; // 取消：取消自己當日更／請假，或改為請假
 
 export const KIND_LABEL: Record<QuestionKind, string> = {
   no_id_card: "冇可用嘅身份證號",
@@ -67,10 +70,12 @@ export const KIND_LABEL: Record<QuestionKind, string> = {
   wa_date_ambiguous: "WhatsApp 報更：日期唔肯定",
   wa_shift_conflict: "WhatsApp 報更：同現有排更撞",
   wa_unparsed: "WhatsApp 報更：未能自動理解",
+  wa_cover: "WhatsApp 報更：替更要你確認",
+  wa_cancel: "WhatsApp 報更：取消要你確認",
 };
 
 /** W2：WhatsApp 分診題 kind（session.sourceType="whatsapp"）；evidence 含原話＋姓名（PII，只存 DB）。 */
-export const WA_KINDS: readonly QuestionKind[] = ["wa_person_ambiguous", "wa_person_unknown", "wa_site_ambiguous", "wa_date_ambiguous", "wa_shift_conflict", "wa_unparsed"];
+export const WA_KINDS: readonly QuestionKind[] = ["wa_person_ambiguous", "wa_person_unknown", "wa_site_ambiguous", "wa_date_ambiguous", "wa_shift_conflict", "wa_unparsed", "wa_cover", "wa_cancel"];
 
 /** 一題入面可揀嘅選項 id。`skip` 永遠有，唔經 apply。 */
 export const OPTION_IDS = [
@@ -103,6 +108,11 @@ export const OPTION_IDS = [
   "wa_accept", // 照解析結果入更（待批核）
   "wa_manual", // 人手入更（去排更頁）
   "wa_ignore", // 忽略（唔入更，答完）
+  // W4
+  "wa_cover_confirm", // 確認替更（被替者該更取消＋替更者入更，同 tx）
+  "wa_cover_add_only", // 只加替更者，唔改被替者
+  "wa_cancel_apply", // 取消該更／請假
+  "wa_cancel_to_leave", // 取消該更並改為請假（value＝請假碼）
   "skip", // 跳過，留返人手
 ] as const;
 type OptionId = (typeof OPTION_IDS)[number];
@@ -112,7 +122,7 @@ export interface QuestionOption {
   label: string;
   hint?: string;
   /** 需要用戶輸入嘅類型 */
-  input?: "text" | "hkid" | "guard_search" | "date";
+  input?: "text" | "hkid" | "guard_search" | "date" | "leave_code";
   /** link 選項對應嘅候選保安員 id（顯示時由 server 加候選卡） */
   guard_id?: string;
   /** W2：wa_pick_site 選項對應嘅盤 id；wa_set_date 選項對應嘅候選日子（YYYY-MM-DD） */
@@ -174,6 +184,8 @@ export const answerSchema = z
     confirm_identity: z.boolean().optional(),
     /** W2：wa_pick_site 揀咗邊個盤 */
     site_id: z.string().min(1).max(64).optional(),
+    /** W4：wa_cover_confirm／wa_cover_add_only／wa_use_whatsapp（替更題）揀咗邊個做被替者（替更者用 guard_id） */
+    replaced_guard_id: z.string().min(1).max(64).optional(),
     /** W2：wa_pick_guard 同時「記住呢個花名」（將原話人名加做佢嘅別名） */
     remember_alias: z.boolean().optional(),
     /** month_close_*：揀咗邊個候選（evidence.candidates[].id） */

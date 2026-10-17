@@ -4,6 +4,7 @@
 //   - AL／NL／NPL／SH：aggregate 已由更表自動計（AL 在職只記日數、離職自動結算；NL／NPL 自動扣日薪）→ 唔生成（見 docs/ P3 §13.1 對照表）。
 //   - 勤工獎：只出「合資格清單」，唔建 input、唔填金額。
 // 鎖月月份唔生成。經 prisma＋writeAudit（job 內自動帶 by_job）。
+import { excludeUnapprovedWhatsapp } from "./approved-only";
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { pickBySourcePriority } from "./attendance-priority";
@@ -94,7 +95,7 @@ export async function generateLongtermInputDrafts(month: Date, actorUserId: stri
 
   // P18 驗收 M1：SL 日子要先跟來源優先次序（同 aggregate）——連 shift 紀錄一齊比較，最高來源有班就唔當 SL。
   const attRows = await prisma.shiftRecord.findMany({
-    where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+    where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] }, ...excludeUnapprovedWhatsapp() },
     select: { guardId: true, workDate: true, provenance: true, recordType: true, leaveCode: true, source: true, siteId: true },
   });
   const slRows = pickBySourcePriority(attRows).picked.filter((r) => r.recordType === "leave" && r.leaveCode === "SL");
@@ -228,7 +229,7 @@ export async function listAttendanceBonusEligible(month: Date): Promise<{ month:
     // P18 驗收 M5：先跟來源優先次序，被忽略來源嘅 SL／NL 唔令人失去資格。
     prisma.shiftRecord
       .findMany({
-        where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] } },
+        where: { guardId: { in: guardIds }, workDate: { gte: start, lte: end }, status: { not: "cancelled" }, recordType: { in: ["shift", "leave"] }, ...excludeUnapprovedWhatsapp() },
         select: { guardId: true, workDate: true, recordType: true, leaveCode: true, source: true, siteId: true },
       })
       .then((rows) => pickBySourcePriority(rows).picked.filter((r) => r.recordType === "leave" && (DISQUALIFY_CODES as readonly string[]).includes(r.leaveCode ?? ""))),

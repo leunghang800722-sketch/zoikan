@@ -27,6 +27,11 @@ interface IntentRow {
   site_name: string | null;
   guard_name: string | null;
   has_guard: boolean;
+  replaced_guard_name: string | null;
+  has_replaced: boolean | null;
+  replaced_candidate_count: number | null;
+  replaced_shift_count: number | null;
+  cancel_target_count: number | null;
   shift_code: string | null;
   leave_code: string | null;
   confidence: number | null;
@@ -105,6 +110,7 @@ const REASON_LABEL: Record<string, string> = {
   slot_full: "該更已滿額",
   quota_full: "配額已滿",
   type_not_auto: "替更／取消（首階段人手）",
+  no_cancel_target: "搵唔到可取消嘅更／請假",
   question_only: "純查詢",
   unclear: "睇唔明",
   duplicate_in_message: "同一訊息重覆",
@@ -118,6 +124,11 @@ const NOTE_LABEL: Record<string, string> = {
   month_rolled: "日期推去下個月",
   llm_bad_output: "AI 輸出無效",
   llm_no_intent: "AI 冇抽到指令",
+  cover_triage: "替更：一律人手確認",
+  cancel_triage: "取消：一律人手確認",
+  replaced_missing: "冇講被替者",
+  replaced_no_shift: "被替者當日冇呢一更",
+  worker_already_has_shift: "替更者已有呢一更",
 };
 const AUTO_RESULT_LABEL: Record<string, { text: string; variant: "success" | "warning" | "danger" | "neutral" }> = {
   pending: { text: "已自動寫入・待批", variant: "warning" },
@@ -310,6 +321,13 @@ export default function WhatsappIntentsPage() {
                     <dd>{r.confidence === null ? "—" : r.confidence.toFixed(2)}</dd>
                   </div>
                 </dl>
+                {(r.kind === "cover" || r.kind === "cancel") && (
+                  <div className="mt-1.5 text-zk-sm text-zk-muted" data-testid="wa-intent-cover-cancel">
+                    {r.kind === "cover"
+                      ? `被替者：${r.replaced_guard_name ?? (r.has_replaced ? "（已配對）" : r.replaced_candidate_count ? `未能確定（${r.replaced_candidate_count} 個候選）` : "未能配對")}${r.has_replaced ? `・當日該更 ${r.replaced_shift_count ?? 0} 條` : ""}`
+                      : `將取消：${r.cancel_target_count ?? 0} 條記錄`}
+                  </div>
+                )}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <Pill variant={routedVariant(r.routed)}>{ROUTED_LABEL[r.routed] ?? r.routed}</Pill>
                   {r.compare ? (
