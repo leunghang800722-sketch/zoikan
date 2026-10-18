@@ -174,10 +174,15 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
   }
 
   // TE-3：補姓名（人手對住證據圖輸入）——直接當 confirmed 寫入包內 person；preview／answer 同一路徑
-  if (answer.extra && (answer.extra.name_zh || answer.extra.name_en)) {
+  if (answer.extra && (answer.extra.name_zh || answer.extra.name_en || answer.extra.dob)) {
     if (!EXTRA_NAME_OPTIONS.includes(answer.option)) throw BadRequest("呢個選項唔使補姓名");
     if (answer.extra.name_zh) person.nameZh = { value: requireName(answer.extra.name_zh), status: "confirmed" };
     if (answer.extra.name_en) person.nameEn = { value: answer.extra.name_en.trim(), status: "confirmed" };
+    // TE-4：OCR 重讀嵌入身份證副本一併帶出生日期（格式要合法）
+    if (answer.extra.dob) {
+      if (!parseBirthDate(answer.extra.dob)) throw BadRequest("出生日期格式唔啱（YYYY-MM-DD）");
+      person.dateOfBirth = { value: answer.extra.dob, status: "confirmed" };
+    }
   }
 
   return {

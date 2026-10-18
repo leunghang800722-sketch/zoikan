@@ -94,3 +94,6 @@
 
 ## 9. TE-3（老闆試用反饋）
 (1) 題卡淨顯示問題欄裁圖（`requiredFieldsFor` 收窄，讀取時過濾，孤兒由 cleanup 刪）。(2) 「確認寫入」灰色問題：preview 回 `needs_fields`＋`reason_text`，answer 加 `extra` 姓名，UI 一鍵確認＋同卡展開補姓名（附姓名裁圖）。全部 reason code 皆有人話（`BLOCK_TEXT`）；可補姓名嘅兩個有 needs_fields，其餘講下一步（揀其他選項／跳過）。(3) 導入抽取行內 HKID 搜尋＋OCR 混淆修正＋`printedHkid` 來源；下次導入生效。
+
+## 10. TE-4 重讀腳本嵌入身份證副本（老闆：讀到嵌入卡就以卡為準自動答題）
+`19-triage-reread.ts` 搵嵌入卡（第一階段整頁行＋TE-2.1 二階段局部 OCR，四方向）→ 轉正裁成獨立卡圖（≤1600px）→ 真 OCR 管線 id_card two-stage → proposal（卡為準）；印刷佐證（TE-3 (3) printedHkid）一致＝high、唔一致＝low＋`printed_card_conflict`（留人手）、冇卡只有印刷＝low `printed_only`；伺服器 no_id_card 題接受 hkid＋姓名＋出生日期（`enter_hkid`＋`extra`）。細節見 `docs/ops.md`「TE-4」。
