@@ -14,6 +14,7 @@ App 起身時（Next.js `src/instrumentation.ts`，Node runtime）起一個每�
 | `permit_expiry_weekly` | 逢星期一 09:00（`0 9 * * 1`） | P8.4：牌照（現算值）／平安卡／QAS：30 日內到期 N 人、已過期但本月／下月仍有排更 M 人；通知主管＋老闆，連結 `/guards?expiring=30`；全部 0 就唔通知；同週一條（dedupe） | 否（唯讀） |
 | `lock_ops_digest` | 每 5 分鐘 | P8.5：鎖月後生成每月修正摘要（`buildOpsDigest`）→ 通知老闆：數字摘要一定有；有 AI 設定就附 AI 摘要（經現有輸出 guard＋`assertNoPii`；失敗／guard 觸發／疑似含 PII 就只推數字）；同月只推一次；連結 `/reports/ops-digest?month=` | 否（唯讀；AI 用量寫一行 `ai_chat` audit，actor＝系統帳號＋`by_job`） |
 | `longterm_input_drafts` | 每日 21:30（`30 21 * * *`）；更表上載自動一鍵結算 done 後亦觸發一次 | P9.1：本月＋上月（未鎖）由更表 SL 日子生成「病假段（醫生紙待核）」**草稿**（`longterm_payroll_inputs.status=draft`；連續日合併一段、金額空、醫生紙＝未核、同日期集合 dedupe、更表改咗只更新未確認草稿、會計刪走嘅唔再生成、已確認嘅唔郁但出「更表同已確認輸入唔同」通知）；另計勤工獎合資格清單（更表冇 SL／NL／NPL；**唔建 input、唔填金額**）。通知會計「N 條草稿待確認」「勤工獎合資格 N 人」（body 只有月份／數字）。**老闆規則：草稿未確認唔計糧。** P10.3：同一個 job 另外按「頂位價目表」（`/settings/cover-rates`）為每位長工每月出一條「頂位津貼」草稿（金額＝逐更價之和；無價嘅盤／職級唔生成，通知老闆＋會計「N 個盤／職級未有頂位價，去設定 ›」；同月已有已確認頂位津貼就唔出）。鎖月月份唔生成 | 是（只寫 `status=draft` 輸入；actor＝排程系統帳號、audit 帶 `by_job`） |
+| `triage_evidence_cleanup` | 每日 03:30（`30 3 * * *`） | TE-1：刪 `triage_evidence_images` 過期（建立 180 日／跳過題 30 日）同孤兒圖（已冇 open／skipped 題需要該欄）；分批 500、每批喺分診全域 advisory lock 下行；summary／audit 只計數（`expired`、`orphans`） | 是（只刪證據裁圖；actor＝系統） |
 
 ### 2b. 「唔會自動跑」嘅情況（P8.1 `auto_one_click`）
 - 月份已鎖（`month_closes.locked_at`）。
@@ -270,6 +271,30 @@ npx tsx scripts/staff-import/19-triage-reread.ts --dry     # fake client＋記�
    **讀數快取（TR-2）**：加 `--cache data/2026-10/triage-reread/cache/`，每個 docId＋doc type＋page 嘅 stage 結果（fields、arbiter、usage…；入職表 cross 每次按 refs 重算）存 JSON（`data/` 下，gitignored，路徑必須喺 `data/` 下），再跑命中就唔打 API、唔準備圖；`--no-cache` 強制重讀並覆寫。失敗嘅人唔入快取（已讀完嘅印刷文件會入）。資料夾型來源（多張圖）只支援「全部圖片」或「單一 PDF」，其餘版面該人當失敗（唔猜頁）。
 3. **上載**：`/triage` → 保安員證件資料導入嗰張卡 →「⋯」→「導入 OCR 重讀建議」→ 揀 `proposals.json` → 自動 **dry run** 顯示計數（建議共幾條／配對幾題／可自動答幾題／各 skipped 原因）→ 確認「確認套用 N 題」。亦可直接 `POST /api/triage/sessions/:id/proposals?dry_run=1`（見 `docs/api.md`）。
 4. **注意**：dry run 係每題獨立預覽，套用時前面幾題寫入可能令後面嘅題（例如同一電話／工號）寫唔到，實際 `applied` 可能少過 dry run；套用中途中斷可直接重跑（已答嘅題自動略過）。`field_review` 只有部分覆核欄有建議（或某欄格式唔合法）→ **答有建議嘅欄**（`applied_partial`），並喺同一 tx 為剩餘覆核欄開新 `field_review` 題（`follow_up_created`；groupKey `<舊>:rest`、同 personKey／sort／targetGuard、evidence 只含剩餘欄），舊題 answered，未決定嘅欄仍有人問；同 groupKey 已存在就唔重覆開（冪等）。dry run 亦顯示 `applied_partial`／`follow_up_created`；`skipped_field_mismatch` 細分 `skipped_field_not_under_review`（建議欄唔喺題目覆核欄）／`skipped_value_mismatch`（name／hkid 確認類值唔同）。自動答嘅題 `answerJson.source=ocr_reread`，session 卡顯示「OCR 重讀自動答 N 條」；寫入係「確認」性質（只補空欄／確認包內值，唔覆蓋現有唔同值），無自動撤銷（現有「撤銷補齊」只屬補齊價目卡題，唔適用保安員導入題）；改正要用人手改保安員資料。
+
+## 分流覆核證據裁圖補做流程（TE-1，2026-10）
+
+目的：題卡直接顯示原文件相應欄位嘅裁圖（身份證號／姓名／出生日期／電話／地址），覆核人對住圖打返正確資料。**只存欄位裁圖**（唔存成頁），AES-256-GCM 加密，**答題即刪**，保留期（跳過 30 日／最長 180 日）只係安全網。
+
+**來源優先順序（老闆 2026-10-18）**：身份證號／中英文姓名／出生日期＝身份證副本（priority 1）→ 入職表手寫（priority 2）；住址＝住址證明（1）→ 入職表（2）；電話＝入職表。兩個來源都有就兩張都出（優先排前），題卡先顯示優先來源，第二張摺埋「亦見入職表手寫」，每張標來源（身份證副本／住址證明／入職表手寫）。
+
+補做 280 條現有題嘅次序（S5）：
+1. **先跑 TR 自動答題**（`19-triage-reread.ts` → `/triage` 「⋯ → 導入 OCR 重讀建議」），令有把握嘅題先答晒（答咗嘅題唔需要圖）。
+2. **本機出圖（規劃者）**：
+```bash
+npx tsx scripts/staff-import/20-triage-evidence.ts \
+  --package data/2026-10/staff-import/out/import-package.json \
+  --person-fields data/2026-10/staff-fields/person-fields-ext.json \
+  --extract data/2026-10/staff-import/out/extract.json \
+  --index data/2026-10/staff-import/index.json \
+  --existing-crops data/2026-10/staff-import/out/phone-crops.json,data/2026-10/staff-import/out/address-crops-new.json \
+  --out data/2026-10/triage-evidence/ [--docs-dir data/2026-09/staff-docs] [--limit N] [--only-key K]
+npx tsx scripts/staff-import/20-triage-evidence.ts --dry     # 合成假證件版面（ImageMagick 即時畫），唔讀 data、唔打 API
+```
+   對**所有**有 review 欄嘅人出圖（伺服器只收仍有 open／skipped 題需要嘅欄，其餘 `skipped_not_needed`）。身份證圖一律即時由原 PDF 頁裁（號碼區／中文姓名區／英文姓名區／出生日期區各自裁，**避開相片區**；認唔出卡面就唔裁）；電話／住址證明優先用現成單欄裁圖，冇就用 OCR 幾何即時裁；入職表其他欄用 label 行（best effort，只作 priority 2）。縮至長邊 ≤800px、JPEG、`-strip`（剝 EXIF／APPn）、≤120 KB。輸出 `--out/triage-evidence-001.zip…`（每 zip ≤300 張／≤7 MB；entry 名＝圖 sha256 前 32 位；manifest 每張帶 `field`／`doc_kind`／`priority`／`match`，`match` 同圖由同一條 package 記錄產生）。console 只有計數。`--out` 必須喺 `data/` 下。**`data/ops/` 備份要納入保留政策**（zip 內係明文 JPEG，補做完要刪）。
+3. **上載**：`/triage` → 保安員證件資料導入嗰張卡 →「⋯」→「上載覆核裁圖」→ 揀 zip → 自動 dry run（檔內幾張／配對幾題／可儲存幾張／各跳過原因）→ 確認「確認儲存 N 張」。分批（約 600 張＝3–4 個 zip）逐個上載；重覆上載同一 zip 安全（`skipped_duplicate`）。
+4. **首批人手抽查 10 題（M7）**：上載後喺題卡抽 10 題，對住圖睇人↔圖有冇對錯（伺服器只驗 manifest 身份同題目 evidence 一致，驗唔到圖內容）；有錯就停手回報，唔好繼續答。
+5. **私隱／運維**：DB 備份／dump 內只有密文（`SESSION_SECRET` 輪換後舊圖解唔開＝當搵唔到，題目 key 輪換時舊圖亦會隨 supersede 刪走）；hard delete 後磁碟空間要 VACUUM／WAL／快照先真正清走。全表大小告警：>200 MB 要查（正常 <20 MB）。`ai.audit_log` 已排除本表，`zoikan_ai_ro` 讀唔到。
 
 ## 更表寫入：audit 同 transaction（G2／G4，2026-10）
 - `POST /api/shift-records/batch`：shift 寫入同 `audit_log` 喺同一個 `$transaction`（`writeAuditMany(…, tx)`，一條 `createMany`，次序／內容同舊版一致；timeout 60s／maxWait 10s 不變）。tx 中途失敗（unique 衝突、鎖月、audit 寫入失敗）→ shift 同 audit 一齊 rollback。

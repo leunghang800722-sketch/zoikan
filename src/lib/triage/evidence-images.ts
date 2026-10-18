@@ -2,7 +2,7 @@
 //  - 只存欄位裁圖（唔存成頁）；image_bytes＝AES-256-GCM 密文（key 由 SESSION_SECRET 經 HKDF，info "triage-evidence-v1"，唔加新 secret）。
 //  - **bytes 白名單（M4）**：`imageBytes`／`iv`／`tag` 只喺本檔出現（insert／loadImageBytes）；其餘一律 EVIDENCE_META_SELECT。
 //  - **保留不變式（M5）**：圖以 (session_id, person_key, field) 為鍵；只要仍有 open／skipped 題需要該欄，圖就存在；否則同一 tx 刪除（deleteUnneeded）。
-//  - 權限（M3）：姓名／出生日期／地址／身份證號 → 「安員個人資料:view」；電話／牌照號 → 「安員:view」；銀行欄剔除範圍；加 restrictedKindsFor／canAccessOwnedBy。
+//  - 權限（M3）：姓名／出生日期／地址／身份證號 → 「保安員個人資料:view」；電話／牌照號 → 「保安員:view」；銀行欄剔除範圍；加 restrictedKindsFor／canAccessOwnedBy。
 //  - 優先順序（老闆 2026-10-18 補充，方案 §7）：每欄有優先來源（priority 1）同退而求其次（priority 2）；每欄 ≤2 張，優先排前。
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, randomUUID, createHash } from "node:crypto";
 import type { Prisma, TriageQuestion } from "@prisma/client";
@@ -22,7 +22,6 @@ const DAY_MS = 86_400_000;
 export {
   DOC_KINDS,
   DOC_KIND_LABEL,
-  ENC_VERSION,
   EVIDENCE_FIELDS,
   FIELD_DOC_PRIORITY,
   MAX_IMAGE_BYTES,
@@ -34,7 +33,6 @@ export {
   priorityOf,
   type DocKind,
   type EvidenceField,
-  type ImageInfo,
 } from "./evidence-format";
 
 // ---------------------------------------------------------------------------
@@ -96,7 +94,6 @@ export const EVIDENCE_META_SELECT = {
   createdAt: true,
   expiresAt: true,
 } as const satisfies Prisma.TriageEvidenceImageSelect;
-export type EvidenceMeta = Prisma.TriageEvidenceImageGetPayload<{ select: typeof EVIDENCE_META_SELECT }>;
 
 /** 對外 DTO（snake_case 由 ok() 轉）：只有 id／欄／來源／priority／尺寸。 */
 export interface EvidenceImageView {
@@ -139,7 +136,7 @@ export function decryptImage(enc: { bytes: Uint8Array; iv: Uint8Array; tag: Uint
 const PII_FIELDS: readonly EvidenceField[] = ["hkid", "name_zh", "name_en", "dob", "address"];
 const INTERNAL_ROLES = ["老闆", "主管", "會計"];
 
-/** 讀者可以睇邊啲欄嘅證據圖（空 Set＝完全唔准）。雞頭／安員硬性 deny。 */
+/** 讀者可以睇邊啲欄嘅證據圖（空 Set＝完全唔准）。雞頭／保安員硬性 deny。 */
 export async function viewableFields(actor: AuthedSession): Promise<Set<EvidenceField>> {
   if (!INTERNAL_ROLES.includes(actor.baseRole)) return new Set();
   const [triage, pii, guard] = await Promise.all([hasPermission(actor, "導入分診", "view"), hasPermission(actor, "安員個人資料", "view"), hasPermission(actor, "安員", "view")]);
@@ -157,7 +154,7 @@ export async function canViewField(actor: AuthedSession, field: EvidenceField): 
 type Db = Prisma.TransactionClient | typeof prisma;
 
 /** (session, personKey) 而家仍然需要嘅欄（open／skipped 題）。 */
-export async function neededFields(db: Db, sessionId: string, personKey: string): Promise<Set<EvidenceField>> {
+async function neededFields(db: Db, sessionId: string, personKey: string): Promise<Set<EvidenceField>> {
   const qs = await db.triageQuestion.findMany({ where: { sessionId, personKey, status: { in: ["open", "skipped"] } }, select: { kind: true, evidenceJson: true } });
   return new Set(qs.flatMap((q) => requiredFieldsFor(q)));
 }

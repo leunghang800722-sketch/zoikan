@@ -13,10 +13,10 @@ export interface EvidenceImageDto {
   height: number;
 }
 
-export const EVIDENCE_DOC_LABEL: Record<string, string> = { id_card: "身份證副本", address_proof: "住址證明", onboarding_form: "入職表手寫", sia_permit: "牌照卡副本" };
+const EVIDENCE_DOC_LABEL: Record<string, string> = { id_card: "身份證副本", address_proof: "住址證明", onboarding_form: "入職表手寫", sia_permit: "牌照卡副本" };
 /** TriageDialog review_fields 嘅 field 名 → 證據圖 field 名 */
 export const REVIEW_TO_EVIDENCE_FIELD: Record<string, string> = { nameZh: "name_zh", nameEn: "name_en", dateOfBirth: "dob", phone: "phone", address: "address" };
-export const EVIDENCE_FIELD_LABEL: Record<string, string> = { hkid: "身份證號", name_zh: "中文姓名", name_en: "英文姓名", dob: "出生日期", phone: "電話", address: "地址", permit_no: "牌照號碼" };
+const EVIDENCE_FIELD_LABEL: Record<string, string> = { hkid: "身份證號", name_zh: "中文姓名", name_en: "英文姓名", dob: "出生日期", phone: "電話", address: "地址", permit_no: "牌照號碼" };
 
 function Zoomable({ img, label, onOpen }: { img: EvidenceImageDto; label: string; onOpen: (id: string) => void }) {
   return (

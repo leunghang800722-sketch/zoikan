@@ -9,7 +9,7 @@ import { TRIAGE_LOCK } from "@/lib/triage/session";
 import { deleteUnneeded } from "@/lib/triage/evidence-images";
 import type { JobDef, JobResult } from "@/lib/scheduler/types";
 
-export const TRIAGE_EVIDENCE_CLEANUP_KEY = "triage_evidence_cleanup";
+const TRIAGE_EVIDENCE_CLEANUP_KEY = "triage_evidence_cleanup";
 const BATCH = 500;
 
 export async function runTriageEvidenceCleanup(now: Date): Promise<JobResult> {

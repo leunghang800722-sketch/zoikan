@@ -15,7 +15,6 @@ import { POST as uploadRoute } from "@/app/api/triage/sessions/[id]/evidence-ima
 import { GET as imageRoute } from "@/app/api/triage/evidence-images/[id]/route";
 import { POST as previewRoute } from "@/app/api/triage/questions/[id]/preview/route";
 import { POST as answerRoute } from "@/app/api/triage/questions/[id]/answer/route";
-import { POST as proposalsRoute } from "@/app/api/triage/sessions/[id]/proposals/route";
 import {
   DOC_KIND_LABEL,
   EVIDENCE_META_SELECT,
@@ -35,6 +34,8 @@ import { runTriageEvidenceCleanup } from "@/lib/jobs/triage-evidence-cleanup";
 import { JOBS } from "@/lib/jobs/registry";
 import { triageEvidenceCleanupJob } from "@/lib/jobs/triage-evidence-cleanup";
 import { createGuardImportTriage } from "@/lib/triage/session";
+import { previewAnswer, submitAnswer } from "@/lib/triage/apply";
+import { viewerCaps } from "@/lib/triage/view";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { buildZip, entryName, fakeJpeg, fakePng, zipOf } from "./lib/te1-images";
 
@@ -554,11 +555,17 @@ describe("TE-1 證據裁圖", () => {
     });
 
     it("3. TR-2 部分作答：只刪已答欄嘅圖，剩餘欄（跟進題）嘅圖保留", async () => {
-      const { sid, pc, kc } = await seed();
+      const { sid, kc } = await seed();
       await put(sid, kc, "name_en", 4);
       await put(sid, kc, "address", 5);
-      const r = await json(proposalsRoute as never, `/api/triage/sessions/${sid}/proposals`, accountant, { version: 1, proposals: [{ person_key: pc.key, field: "nameEn", value: "TEST CHAU", basis: "two_reads", doc: "id_card", confidence: "medium", match: matchOf(pc) }] }, sid);
-      expect((await r.json()).applied_partial).toBe(1);
+      // 直接經 lib（submitAnswer＋followUp，同 TR-2 一樣）答 nameEn；唔用 proposals route（佢嘅 triage_proposals_import audit 會污染 triage-proposals.test 嘅無排序 findFirst）
+      const actor = { userId: fx.userIds["會計"], baseRole: "會計", roleId: fx.roleIds["會計"], tokenVersion: 0 } as unknown as AuthedSession;
+      const q0 = await qOf("field_review", kc);
+      const ans = { option: "apply_fields", fields: { nameEn: { action: "confirm", value: "TEST CHAU" } } };
+      const caps = await viewerCaps(actor);
+      const pv = await previewAnswer(actor, q0, ans, caps, null);
+      const out = await submitAnswer(actor, q0, ans, pv.preview_hash, caps, null, { source: "ocr_reread", followUp: { groupKey: `${q0.groupKey}:rest`, restFields: ["address"] } });
+      expect(out.follow_up_created).toBe(true);
       expect(await imgCount({ personKey: kc, field: "name_en" })).toBe(0);
       expect(await imgCount({ personKey: kc, field: "address" })).toBe(1);
       // 剩餘欄再答 → 全刪

@@ -30,9 +30,9 @@ import {
 } from "./evidence-images";
 
 export const MAX_ZIP_BYTES = 8 * 1024 * 1024;
-export const MAX_ENTRIES = 400;
-export const MAX_UNZIPPED_BYTES = 32 * 1024 * 1024;
-export const ENTRY_NAME_RE = /^[a-f0-9]{16,64}\.(jpg|png)$/;
+const MAX_ENTRIES = 400;
+const MAX_UNZIPPED_BYTES = 32 * 1024 * 1024;
+const ENTRY_NAME_RE = /^[a-f0-9]{16,64}\.(jpg|png)$/;
 const DAY_MS = 86_400_000;
 
 const itemSchema = z
