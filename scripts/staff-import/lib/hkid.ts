@@ -99,31 +99,53 @@ export function repairHkidLeadingLetter(text: string): string | null {
 
 const PREFIX_FIX: Record<string, string[]> = { '2': ['Z'], '0': ['O', 'D', 'Q'], '1': ['I', 'L'], '5': ['S'], '8': ['B'], '6': ['G'], '4': ['A'], '7': ['T'] };
 
+/** 似日期（ddmmyyyy／yyyymmdd，有效日期）或似電話（8 位、5／6／9 開頭）嘅 8 位純數字——唔可當身份證號修正。 */
+export function looksLikeDateOrPhone(digits8: string): boolean {
+  if (!/^\d{8}$/.test(digits8)) return false;
+  if (/^[569]/.test(digits8)) return true;
+  const valid = (y: number, m: number, d: number): boolean => {
+    if (y < 1900 || y > 2100) return false;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+  };
+  const n = (a: number, l: number) => Number(digits8.slice(a, a + l));
+  return valid(n(4, 4), n(2, 2), n(0, 2)) || valid(n(0, 4), n(4, 2), n(6, 2));
+}
+
+/** 身份證號結構：1–2 位前綴＋6 位＋（末位喺括號內〔右括號可缺〕，或空格分開嘅 check digit）。冇呢個結構線索就唔做混淆修正。 */
+const RE_HKID_TOKEN = /^([A-Z0-9]{1,2})\s?([A-Z0-9]{6})(?:\s?[(\[]\s?([A-Z0-9])\s?[)\]]?|\s([A-Z0-9]))(?![A-Z0-9])/;
+
 /**
- * TE-3：緊跟身份證 label 之後嘅 7–9 位英數串（括號可能消失、首位字母被讀成數字，例 Z→2）——
- * 試常見 OCR 混淆（首位 2↔Z、0↔O／D、1↔I、5↔S、8↔B、6↔G；數字位入面嘅字母轉返數字），
- * 只接受 check digit 通過而且**唯一**嘅一個。回 { value, fixed }（fixed＝有用到混淆修正）；多個候選或冇候選＝null。
+ * TE-3（M1 收緊）：緊跟身份證 label 之後嘅 token（括號可缺右邊、首位字母被讀成數字，例 Z→2）。
+ *  - 原文一定要有身份證號結構線索（末位喺括號內，或空格分開 check digit）；
+ *  - 8 位純數字而且似日期（ddmmyyyy／yyyymmdd 有效日期）或電話（5／6／9 開頭）→ 拒絕；
+ *  - 試常見 OCR 混淆（首位 2↔Z、0↔O／D、1↔I、5↔S、8↔B、6↔G；數字位入面嘅字母轉返數字），只接受 check digit 通過而且**唯一**嘅一個。
+ * 回 { value, fixed, end }：fixed＝有用到混淆修正（修正值只可當 low、唔可獨力確認／配對）；end＝token 喺（NFKC＋大寫）輸入嘅結束位置。
  */
-export function hkidFromConfusableToken(raw: string): { value: string; fixed: boolean } | null {
-  const s = raw.normalize('NFKC').toUpperCase().replace(/[^0-9A-Z]/g, '');
+export function hkidFromConfusableToken(raw: string): { value: string; fixed: boolean; end: number } | null {
+  const t = raw.normalize('NFKC').toUpperCase().trimStart();
+  const m = RE_HKID_TOKEN.exec(t);
+  if (!m) return null;
+  const prefix = m[1]!;
+  const six = m[2]!;
+  const chk = (m[3] ?? m[4])!;
+  const s = `${prefix}${six}${chk}`;
+  if (looksLikeDateOrPhone(s)) return null;
   const hits = new Map<string, boolean>();
-  for (const k of [1, 2]) {
-    if (s.length !== k + 7) continue;
-    const prefix = s.slice(0, k);
-    const six = s.slice(k, k + 6);
-    const chk = s[k + 6]!;
+  const k = prefix.length;
+  if (s.length === k + 7) {
     const opts = [...prefix].map((c) => (/[A-Z]/.test(c) ? [c] : (PREFIX_FIX[c] ?? [])));
-    if (opts.some((o) => o.length === 0)) continue;
     const digits = [...six].map((c) => (/\d/.test(c) ? c : (CONFUSABLE[c] ?? '')));
-    if (digits.some((d) => !d)) continue;
     const checks = /\d|A/.test(chk) ? [chk] : CONFUSABLE[chk] ? [CONFUSABLE[chk]!] : [];
-    const combos = opts.reduce<string[]>((acc, o) => acc.flatMap((a) => o.map((c) => a + c)), ['']);
-    for (const pre of combos) for (const c of checks) {
-      const cand = `${pre}${digits.join('')}${c}`;
-      if (hkidCheckDigitValid(cand)) hits.set(cand, cand !== s);
+    if (!opts.some((o) => o.length === 0) && !digits.some((d) => !d)) {
+      const combos = opts.reduce<string[]>((acc, o) => acc.flatMap((a) => o.map((c) => a + c)), ['']);
+      for (const pre of combos) for (const c of checks) {
+        const cand = `${pre}${digits.join('')}${c}`;
+        if (hkidCheckDigitValid(cand)) hits.set(cand, cand !== s);
+      }
     }
   }
-  return hits.size === 1 ? { value: [...hits.keys()][0]!, fixed: [...hits.values()][0]! } : null;
+  return hits.size === 1 ? { value: [...hits.keys()][0]!, fixed: [...hits.values()][0]!, end: m[0].length } : null;
 }
 
 /** NFKC 後喺文字任何位置搵 HKID 候選（唔要求整行），check digit 通過先收。 */

@@ -20,7 +20,7 @@ import { getReadClients } from '@/lib/guards/ocr/clients';
 import type { DocumentReadResult } from '@/lib/guards/ocr/read';
 import { ArgError, fakeClientsFor, resolveReportPath, runPool, type EvalCase, type PreparedImages } from './lib/eval-ocr-core';
 import { prepareDocumentImages } from './lib/eval-ocr-images';
-import { applyCorroboration, cropCardToPng, printedOnlyProposal, scanForCard, type CardDeps, type CardPageRef, type CardScan } from './lib/card-reread';
+import { applyCorroboration, cardKeyHash, cardNamesConflict, cropCardToPng, markCardNameConflict, printedOnlyProposal, scanForCard, type CardDeps, type CardPageRef, type CardScan } from './lib/card-reread';
 import { canonicalHkid, hkidCheckDigitValid } from './lib/hkid';
 import { rotateLines } from './lib/triage-evidence-core';
 import type { OcrLine, OcrPage } from './lib/ocr';
@@ -108,7 +108,7 @@ export function parseArgs(argv: readonly string[]): Args {
 
 /** TR-2：檔案快取。key＝type＋docId＋page（淨字元）；寫入先落 tmp 再 rename；讀到壞檔當 miss。 */
 export function fileDocCache(dir: string, noCache: boolean): DocCache {
-  const fileOf = (d: DocPage) => path.join(dir, `${d.type}__${d.docId.replace(/[^A-Za-z0-9_-]/g, '_')}__p${d.page}${d.embedded ? '__emb' : ''}.json`);
+  const fileOf = (d: DocPage) => path.join(dir, `${d.type}__${d.docId.replace(/[^A-Za-z0-9_-]/g, '_')}__p${d.page}${d.embedded ? `__emb${cardKeyHash(d.embedded)}` : ''}.json`);
   return {
     async get(d, refsHash) {
       if (noCache) return null;
@@ -208,6 +208,7 @@ export function dryFixture(): { persons: DryPerson[] } {
       { p: dryCard(7), truth: truth(7), docs: true, pages: [dryPermitPage({ inverted: true }), dryCertPage(DRY_HKID)] }, // 卡（第一階段）＋印刷一致 → high
       { p: dryCard(8), truth: truth(8), docs: true, pages: [dryPermitPage({ inverted: true, hidden: true })] }, // 卡只有二階段先讀到、冇印刷 → medium（自動答）
       { p: dryCard(9), truth: truth(9), docs: true, pages: [dryPermitPage({ inverted: true }), dryCertPage('A123456(3)')] }, // 印刷同卡唔一致 → low＋printed_card_conflict
+      { p: { ...dryCard(11), nameZh: lf('完全不同嘅人', 'review') }, truth: truth(11), docs: true, pages: [dryPermitPage({ inverted: true })] }, // TE-4.1：卡姓名同包內姓名唔一致 → 全 low＋card_name_conflict
       { p: dryCard(10), truth: truth(10), docs: true, pages: [dryCertPage(DRY_HKID)] }, // 冇卡，只有印刷 → low（review）
       { p: base(6, { nameZh: lf('測試乙', 'confirmed'), nameEn: lf('TEST ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001116', 'confirmed'), address: lf('舊地址', 'confirmed') }), truth: truth(6), docs: true }, // 冇 review 欄 → 唔重讀
     ],
@@ -409,11 +410,14 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
     }
     // 印刷身份證號佐證：掃描所得＋導入抽取已有嘅 printedHkid／permitHkid（TE-3 下次導入先有）
     const printed = [...(scan?.printed ?? [])];
+    const printedFixed = [...(scan?.printedFixed ?? [])]; // TE-4.1 S1：經混淆修正先得嘅值只可令狀態變唔一致，唔可升 high
     for (const docId of docIds) {
       const aux = inp.extractBy.get(docId)?.aux;
-      for (const v of [aux?.printedHkid?.value, aux?.permitHkid?.value]) {
-        const c = canonicalHkid(v ?? null);
-        if (c && hkidCheckDigitValid(c) && !printed.includes(c)) printed.push(c);
+      for (const f of [aux?.printedHkid, aux?.permitHkid]) {
+        const c = canonicalHkid(f?.value ?? null);
+        if (!c || !hkidCheckDigitValid(c)) continue;
+        const bucket = (f as { note?: string }).note === 'ocr_confusion_fixed' ? printedFixed : printed;
+        if (!bucket.includes(c)) bucket.push(c);
       }
     }
     const match = { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) };
@@ -441,10 +445,21 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
           const cardFields = new Set(['hkid', 'nameZh', 'nameEn', 'dateOfBirth']);
           const cardProps = o.proposals.filter((x) => cardFields.has(x.field) && x.doc === 'id_card');
           const rest = o.proposals.filter((x) => !cardProps.includes(x));
-          const c = applyCorroboration(cardProps, printed);
+          const c = applyCorroboration(cardProps, printed, printedFixed);
           if (c.state === 'corroborated') summary.card_printed_corroborated += 1;
           if (c.state === 'conflict') summary.card_printed_conflict += 1;
-          o.proposals = [...c.proposals, ...rest];
+          let cardOut = c.proposals;
+          // TE-4.1 M1：整人一致性——卡讀到嘅姓名同包內任何已有姓名比對（就算冇出建議）；卡欄喺入職表 cross／打字名單檢查唔一致；包內完全冇姓名先唔受姓名比對影響
+          const cardRead = (k: 'name_zh' | 'name_en') => (r.picks[k]?.doc === 'id_card' ? r.picks[k]!.result.value : null);
+          const cardFieldKeys = ['name_zh', 'name_en', 'hkid', 'dob'] as const;
+          const crossBad = cardFieldKeys.some((k) => r.picks[k]?.doc === 'id_card' && r.picks[k]!.cross === 'differs');
+          const typedBad = ['hkid', 'nameZh', 'nameEn', 'dateOfBirth'].some((f) => (o.skippedByField as Record<string, Record<string, number> | undefined>)[f]?.typed_list_disagrees);
+          const nameBad = cardNamesConflict({ nameZh: p.nameZh.value, nameEn: p.nameEn.value }, { nameZh: cardRead('name_zh'), nameEn: cardRead('name_en') });
+          if ((crossBad || typedBad || nameBad) && cardOut.length > 0) {
+            cardOut = markCardNameConflict(cardOut);
+            summary.card_name_conflict += 1;
+          }
+          o.proposals = [...cardOut, ...rest];
         } else if (!o.proposals.some((x) => x.field === 'hkid')) {
           const po = printedOnly();
           if (po) {

@@ -872,7 +872,10 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                           maxLength={100}
                           aria-label={nf.label}
                           data-testid={`triage-extra-${nf.field}`}
-                          onChange={(e) => setExtraNames((m) => ({ ...m, [nf.field]: e.target.value }))}
+                          onChange={(e) => {
+                            setExtraNames((m) => ({ ...m, [nf.field]: e.target.value }));
+                            setHash(null); // TE-3 S2：答案變咗，舊 hash 作廢；確認前會自動重新預覽
+                          }}
                         />
                       </label>
                     </div>

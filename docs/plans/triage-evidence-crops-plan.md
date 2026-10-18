@@ -97,3 +97,6 @@
 
 ## 10. TE-4 重讀腳本嵌入身份證副本（老闆：讀到嵌入卡就以卡為準自動答題）
 `19-triage-reread.ts` 搵嵌入卡（第一階段整頁行＋TE-2.1 二階段局部 OCR，四方向）→ 轉正裁成獨立卡圖（≤1600px）→ 真 OCR 管線 id_card two-stage → proposal（卡為準）；印刷佐證（TE-3 (3) printedHkid）一致＝high、唔一致＝low＋`printed_card_conflict`（留人手）、冇卡只有印刷＝low `printed_only`；伺服器 no_id_card 題接受 hkid＋姓名＋出生日期（`enter_hkid`＋`extra`）。細節見 `docs/ops.md`「TE-4」。
+
+## 11. TE-4.1 Opus 驗收修正
+混淆修正收緊（同行 token、拒日期／電話、結構線索、修正值 low 唔獨力採用；誤收率回歸 ≤0.5%）；嵌入卡整人一致性（`card_name_conflict`）；印刷佐證只用未修正值；快取 key 加卡區 hash；server `extra` 姓名只喺未確認先收；UI 打姓名作廢舊 hash。

@@ -22,7 +22,7 @@ export interface RereadProposal {
   doc: OcrDocType;
   confidence: 'high' | 'medium' | 'low';
   /** TE-4：嵌入身份證副本／印刷佐證旗標 */
-  flags?: ('printed_card_conflict' | 'embedded_card' | 'printed_corroborated' | 'printed_only')[];
+  flags?: ('printed_card_conflict' | 'embedded_card' | 'printed_corroborated' | 'printed_only' | 'card_name_conflict')[];
   /** 配對提示：伺服器題目 personKey 係 HMAC（身份證 → 工號集合 → 包內 key），server 用呢兩項推返同一個 key（只用嚟砌 key，唔寫入） */
   match: { hkid: string | null; staff_numbers: string[] };
 }
@@ -306,10 +306,12 @@ export interface RereadSummary {
   printed_only_review: number;
   /** TE-4：confidence=low（留人手）嘅建議條數 */
   proposals_low_confidence: number;
+  /** TE-4.1：卡上姓名／cross／打字名單同包內唔一致 → 該人卡建議降 low */
+  card_name_conflict: number;
 }
 
 export function emptySummary(now: Date = new Date()): RereadSummary {
-  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0, embedded_cards_found: 0, embedded_second_stage_found: 0, second_stage_pages: 0, card_printed_corroborated: 0, card_printed_conflict: 0, printed_only_review: 0, proposals_low_confidence: 0 };
+  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0, embedded_cards_found: 0, embedded_second_stage_found: 0, second_stage_pages: 0, card_printed_corroborated: 0, card_printed_conflict: 0, printed_only_review: 0, proposals_low_confidence: 0, card_name_conflict: 0 };
 }
 
 export function addOutcome(s: RereadSummary, o: ProposeOutcome): void {
@@ -333,6 +335,6 @@ export function summaryLines(s: RereadSummary): string[] {
     `每欄建議：${JSON.stringify(s.proposals_by_field)}｜依據：${JSON.stringify(s.proposals_by_basis)}`,
     `唔建議原因：${JSON.stringify(s.not_proposed_reasons)}`,
     `每欄唔建議原因：${JSON.stringify(s.skipped_by_field)}｜讀數快取命中 ${s.cache_hits}`,
-    `嵌入身份證副本 ${s.embedded_cards_found}（二階段 ${s.embedded_second_stage_found}／二階段掃描頁 ${s.second_stage_pages}）｜印刷佐證一致 ${s.card_printed_corroborated}｜印刷同卡唔一致 ${s.card_printed_conflict}｜淨印刷待覆核 ${s.printed_only_review}｜low 信心建議 ${s.proposals_low_confidence}`,
+    `嵌入身份證副本 ${s.embedded_cards_found}（二階段 ${s.embedded_second_stage_found}／二階段掃描頁 ${s.second_stage_pages}）｜印刷佐證一致 ${s.card_printed_corroborated}｜印刷同卡唔一致 ${s.card_printed_conflict}｜淨印刷待覆核 ${s.printed_only_review}｜low 信心建議 ${s.proposals_low_confidence}｜卡姓名／核對唔一致 ${s.card_name_conflict}`,
   ];
 }

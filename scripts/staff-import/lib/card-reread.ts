@@ -7,6 +7,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import { canonicalHkid, hkidCheckDigitValid } from './hkid';
+import { createHash } from 'node:crypto';
+import { normZh } from '@/lib/guards/import/text';
+import { sameEnglishTokens } from '@/lib/triage/generators/guard-import';
 import { scanPageHkids } from './extract';
 import { inBox, type Box } from './embedded-card';
 import { detectEmbeddedCards, rotateLines, type Rotation } from './triage-evidence-core';
@@ -42,8 +45,10 @@ export interface CardDeps {
 }
 export interface CardScan {
   card: CardSource | null;
-  /** 印刷身份證號（canon、checksum 通過、唔喺卡區內；去重） */
+  /** 印刷身份證號（canon、checksum 通過、唔喺卡區內；去重；未經混淆修正） */
   printed: string[];
+  /** TE-4.1 S1：經 OCR 混淆修正先得嘅印刷號碼（只可令狀態變「唔一致」，唔可升 high） */
+  printedFixed: string[];
   pagesScanned: number;
   secondStagePages: number;
 }
@@ -54,10 +59,10 @@ export function linesOutsideCards(lines: readonly OcrLine[], det: { rot: Rotatio
   return lines.filter((l) => !det.cards.some((c) => inBox(c.box, rotateLines([l], det.rot)[0]!)));
 }
 
-const printedOf = (page: number, lines: readonly OcrLine[], det: { rot: Rotation; cards: { box: Box }[] } | null): string[] =>
+const printedOf = (page: number, lines: readonly OcrLine[], det: { rot: Rotation; cards: { box: Box }[] } | null): { value: string; fixed: boolean }[] =>
   scanPageHkids(page, linesOutsideCards(lines, det))
-    .map((f) => canonicalHkid(f.value) ?? '')
-    .filter((v) => !!v && hkidCheckDigitValid(v));
+    .map((f) => ({ value: canonicalHkid(f.value) ?? '', fixed: f.note === 'ocr_confusion_fixed' }))
+    .filter((v) => !!v.value && hkidCheckDigitValid(v.value));
 
 /**
  * 掃一個人嘅頁（任何導入分類）：第一階段全部頁先；搵唔到卡先逐頁二階段（只對呢批人）。印刷號碼兩個階段都收（去重）。
@@ -65,9 +70,12 @@ const printedOf = (page: number, lines: readonly OcrLine[], det: { rot: Rotation
  */
 export async function scanForCard(pages: readonly CardPageRef[], deps: CardDeps, opts: { maxPages?: number } = {}): Promise<CardScan> {
   const list = pages.slice(0, opts.maxPages ?? MAX_SCAN_PAGES);
-  const out: CardScan = { card: null, printed: [], pagesScanned: 0, secondStagePages: 0 };
-  const addPrinted = (vals: string[]) => {
-    for (const v of vals) if (!out.printed.includes(v)) out.printed.push(v);
+  const out: CardScan = { card: null, printed: [], printedFixed: [], pagesScanned: 0, secondStagePages: 0 };
+  const addPrinted = (vals: { value: string; fixed: boolean }[]) => {
+    for (const v of vals) {
+      const bucket = v.fixed ? out.printedFixed : out.printed;
+      if (!bucket.includes(v.value)) bucket.push(v.value);
+    }
   };
   for (const ref of list) {
     const lines = await deps.lines(ref).catch(() => null);
@@ -128,24 +136,47 @@ export type CardPrintedState = 'corroborated' | 'conflict' | 'no_printed';
 
 /**
  * 卡讀到嘅 hkid 對照印刷號碼：
- *  - 印刷有一個同卡一致 → corroborated（confidence 升 high）；
- *  - 印刷有 checksum 通過嘅號碼但冇一個同卡一致 → conflict（全部該人嘅卡建議降 low＋printed_card_conflict，留人手）；
+ *  - 未經混淆修正嘅印刷號有一個同卡一致 → corroborated（confidence 升 high）；
+ *  - 有 checksum 通過嘅印刷號但冇一個（未修正）同卡一致 → conflict（全部該人嘅卡建議降 low＋printed_card_conflict，留人手）；
+ *  - TE-4.1 S1：經混淆修正嘅印刷號（fixed）只可令狀態變 conflict（同卡唔同值），同卡一致都唔算佐證（唔升 high）；
  *  - 冇印刷號碼 → no_printed（卡自己為準，照自動答）。
  */
-export function corroborate(cardHkid: string | null, printed: readonly string[]): CardPrintedState {
+export function corroborate(cardHkid: string | null, printed: readonly string[], fixed: readonly string[] = []): CardPrintedState {
   const c = canonicalHkid(cardHkid ?? null);
   const valid = printed.filter((p) => hkidCheckDigitValid(p));
-  if (valid.length === 0) return 'no_printed';
-  return c && valid.includes(c) ? 'corroborated' : 'conflict';
+  if (valid.length > 0) return c && valid.includes(c) ? 'corroborated' : 'conflict';
+  const fv = fixed.filter((p) => hkidCheckDigitValid(p));
+  if (fv.length === 0) return 'no_printed';
+  return c && fv.includes(c) ? 'no_printed' : 'conflict';
+}
+
+/** TE-4.1：卡上讀到嘅姓名 vs 包內任何已有姓名（唔理 status、就算冇出建議）。 */
+export function cardNamesConflict(pkg: { nameZh?: string | null; nameEn?: string | null }, card: { nameZh?: string | null; nameEn?: string | null }): boolean {
+  const pz = pkg.nameZh?.trim();
+  const pe = pkg.nameEn?.trim();
+  if (card.nameZh && pz && normZh(card.nameZh) !== normZh(pz)) return true;
+  if (card.nameEn && pe && !sameEnglishTokens(card.nameEn, pe)) return true;
+  return false;
 }
 
 /** 套用印刷佐證去呢個人嘅（來自嵌入卡）建議。回新建議陣列＋狀態。 */
-export function applyCorroboration(proposals: readonly RereadProposal[], printed: readonly string[]): { proposals: RereadProposal[]; state: CardPrintedState | 'no_card_hkid' } {
+export function applyCorroboration(proposals: readonly RereadProposal[], printed: readonly string[], fixed: readonly string[] = []): { proposals: RereadProposal[]; state: CardPrintedState | 'no_card_hkid' } {
   const hk = proposals.find((p) => p.field === 'hkid');
   if (!hk) return { proposals: proposals.map((p) => ({ ...p, flags: ['embedded_card'] as RereadProposal['flags'] })), state: 'no_card_hkid' };
-  const state = corroborate(hk.value, printed);
+  const state = corroborate(hk.value, printed, fixed);
   const flags: NonNullable<RereadProposal['flags']> = state === 'corroborated' ? ['embedded_card', 'printed_corroborated'] : state === 'conflict' ? ['embedded_card', 'printed_card_conflict'] : ['embedded_card'];
   return { proposals: proposals.map((p) => ({ ...p, confidence: state === 'conflict' ? 'low' : state === 'corroborated' ? 'high' : p.confidence, flags })), state };
+}
+
+/** TE-4.1：整人一致性不通過（卡姓名／cross／打字名單同包內唔一致）→ 該人所有卡建議降 low＋card_name_conflict。 */
+export function markCardNameConflict(proposals: readonly RereadProposal[]): RereadProposal[] {
+  return proposals.map((p) => ({ ...p, confidence: 'low', flags: [...new Set([...(p.flags ?? []), 'card_name_conflict' as const])] }));
+}
+
+/** 快取 key 用：卡區 box／rot／stage 嘅短 hash（改咗卡區就唔會誤中舊快取）。 */
+export function cardKeyHash(e: { rot: number; box: Box; stage: string }): string {
+  const r = (n: number) => n.toFixed(4);
+  return createHash('sha256').update(`${e.rot}|${r(e.box.x0)}|${r(e.box.y0)}|${r(e.box.x1)}|${r(e.box.y1)}|${e.stage}`).digest('hex').slice(0, 8);
 }
 
 /** 冇卡、只有印刷號碼（唯一一個 checksum 通過）→ 標 review（low，唔自動答）嘅 hkid 建議。 */

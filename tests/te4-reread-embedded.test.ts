@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { run, parseArgs } from "../scripts/staff-import/19-triage-reread";
-import { applyCorroboration, cardRect, corroborate, cropCardToPng, padCardBox, printedOnlyProposal, scanForCard, type CardDeps } from "../scripts/staff-import/lib/card-reread";
+import { applyCorroboration, cardKeyHash, cardNamesConflict, markCardNameConflict, cardRect, corroborate, cropCardToPng, padCardBox, printedOnlyProposal, scanForCard, type CardDeps } from "../scripts/staff-import/lib/card-reread";
 import { detectEmbeddedCards, rotateLines } from "../scripts/staff-import/lib/triage-evidence-core";
 import { hkidCheckDigitValid } from "../scripts/staff-import/lib/hkid";
 import { summaryLines, type RereadProposal } from "../scripts/staff-import/lib/triage-reread-core";
@@ -31,17 +31,20 @@ describe("dry fixture：倒轉嵌入卡 → 轉正 → fake OCR → proposal", (
     // 9：印刷同卡唔一致 → 全部 low＋printed_card_conflict
     expect(sig(9).every((x) => x.endsWith(":low:embedded_card+printed_card_conflict"))).toBe(true);
     expect(sig(9)).toHaveLength(4);
+    // 11：卡姓名同包內姓名唔一致 → 全 low＋card_name_conflict（就算冇印刷）
+    expect(sig(11)).toHaveLength(4);
+    expect(sig(11).every((x) => x.includes(":low:embedded_card+card_name_conflict"))).toBe(true);
     // 10：冇卡、只有印刷 → 淨 hkid low printed_only
     expect(sig(10)).toEqual(["hkid:low:printed_only"]);
     for (const p of r.proposals.filter((x) => x.field === "hkid")) expect(hkidCheckDigitValid(p.value)).toBe(true);
-    expect(r.summary).toMatchObject({ embedded_cards_found: 3, embedded_second_stage_found: 1, card_printed_corroborated: 1, card_printed_conflict: 1, printed_only_review: 1, persons_failed: 0 });
+    expect(r.summary).toMatchObject({ embedded_cards_found: 4, embedded_second_stage_found: 1, card_name_conflict: 1, card_printed_corroborated: 1, card_printed_conflict: 1, printed_only_review: 1, persons_failed: 0 });
     expect(proposalsBodySchema.safeParse({ version: 1, summary: r.summary, proposals: r.proposals }).success).toBe(true);
     expect(summaryLines(r.summary).join("\n")).not.toMatch(/測試|Z90000|A12345|火炭/);
   });
   it("--only-missing-hkid／--only-key／--no-embedded", async () => {
     const m = await run({ ...A, onlyMissingHkid: true }, NOW);
     expect(m.summary.persons_processed + m.summary.persons_failed + m.summary.persons_no_docs + m.summary.printed_only_review).toBeGreaterThan(0);
-    expect(new Set(m.proposals.map((p) => p.person_key))).toEqual(new Set(["dry-person-7", "dry-person-8", "dry-person-9", "dry-person-10"]));
+    expect(new Set(m.proposals.map((p) => p.person_key))).toEqual(new Set(["dry-person-7", "dry-person-8", "dry-person-9", "dry-person-10", "dry-person-11"]));
     const k = await run({ ...A, onlyKey: "dry-person-8" }, NOW);
     expect(new Set(k.proposals.map((p) => p.person_key))).toEqual(new Set(["dry-person-8"]));
     const n = await run({ ...A, noEmbedded: true, onlyMissingHkid: true }, NOW);
@@ -114,6 +117,33 @@ describe("印刷佐證規則", () => {
   });
 });
 
+describe("TE-4.1：整人一致性／S1 修正值唔升 high／N2 快取 key", () => {
+  const P = (field: RereadProposal["field"], value: string): RereadProposal => ({ person_key: "k", field, value, basis: "two_reads", doc: "id_card", confidence: "medium", match: { hkid: null, staff_numbers: ["U1"] } });
+  it("cardNamesConflict：中文 normZh 相等、英文 token 相同先一致；包內冇姓名唔比對", () => {
+    expect(cardNamesConflict({ nameZh: "測試 甲" }, { nameZh: "測試甲" })).toBe(false);
+    expect(cardNamesConflict({ nameZh: "測試乙" }, { nameZh: "測試甲" })).toBe(true);
+    expect(cardNamesConflict({ nameEn: "TESTER ALPHA" }, { nameEn: "ALPHA, Tester" })).toBe(false);
+    expect(cardNamesConflict({ nameEn: "OTHER PERSON" }, { nameEn: "TESTER ALPHA" })).toBe(true);
+    expect(cardNamesConflict({}, { nameZh: "測試甲", nameEn: "TESTER" })).toBe(false);
+    const m = markCardNameConflict([P("hkid", "Z9000012")]);
+    expect(m[0]).toMatchObject({ confidence: "low", flags: ["card_name_conflict"] });
+  });
+  it("S1：修正過嘅印刷號同卡一致唔升 high（no_printed）；同卡唔同值 → conflict；未修正一致先 corroborated", () => {
+    expect(corroborate("Z9000012", [], ["Z9000012"])).toBe("no_printed");
+    expect(corroborate("Z9000012", [], ["A1234563"])).toBe("conflict");
+    expect(corroborate("Z9000012", ["Z9000012"], ["A1234563"])).toBe("corroborated");
+    expect(applyCorroboration([P("hkid", "Z9000012")], [], ["Z9000012"]).proposals[0]!.confidence).toBe("medium");
+  });
+  it("N2：cardKeyHash 隨 box／rot／stage 改變", () => {
+    const b = { x0: 0.5, y0: 0.1, x1: 0.8, y1: 0.24 };
+    const h = cardKeyHash({ rot: 180, box: b, stage: "first" });
+    expect(h).toMatch(/^[0-9a-f]{8}$/);
+    expect(cardKeyHash({ rot: 0, box: b, stage: "first" })).not.toBe(h);
+    expect(cardKeyHash({ rot: 180, box: { ...b, x0: 0.51 }, stage: "first" })).not.toBe(h);
+    expect(cardKeyHash({ rot: 180, box: b, stage: "second" })).not.toBe(h);
+  });
+});
+
 describe("伺服器：no_id_card 建議", () => {
   const q = (opts = ["enter_hkid", "skip"]) => ({ kind: "no_id_card", optionsJson: opts.map((id) => ({ id })), evidenceJson: { person: {} } }) as never;
   const props = (o: Record<string, string>) => new Map(Object.entries(o)) as ReadonlyMap<ProposalField, string>;
@@ -125,5 +155,11 @@ describe("伺服器：no_id_card 建議", () => {
     expect(planForQuestion(q(), props({ nameZh: "測試甲" }))).toEqual({ type: "none" });
     const bad = planForQuestion(q(), props({ hkid: "Z9000012", dateOfBirth: "1990-02-30" }));
     expect(bad.type === "answer" && bad.answer.extra).toBeUndefined(); // 唔合法出生日期唔帶
+  });
+  it("TE-3 S1：包內姓名已確認 → 建議唔帶姓名 extra", () => {
+    const confirmed = { kind: "no_id_card", optionsJson: [{ id: "enter_hkid" }], evidenceJson: { person: { nameZh: { value: "既有", status: "confirmed" }, nameEn: { value: null, status: "missing" } } } } as never;
+    const r = planForQuestion(confirmed, props({ hkid: "Z9000012", nameZh: "測試甲", nameEn: "TESTER" }));
+    expect(r).toMatchObject({ type: "answer", answer: { extra: { name_en: "TESTER" } } });
+    expect(r.type === "answer" && r.answer.extra?.name_zh).toBeUndefined();
   });
 });
