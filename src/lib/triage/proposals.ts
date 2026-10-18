@@ -120,7 +120,7 @@ export function planForQuestion(q: Pick<TriageQuestion, "kind" | "optionsJson" |
     const nameOpen = (f: { value?: string | null; status?: string } | undefined) => !(f?.value && f.status === "confirmed");
     const nz = nameOpen(ev.person?.nameZh) ? props.get("nameZh") : undefined;
     const ne = nameOpen(ev.person?.nameEn) ? props.get("nameEn") : undefined;
-    const dob = props.get("dateOfBirth");
+    const dob = nameOpen(ev.person?.dateOfBirth) ? props.get("dateOfBirth") : undefined; // TE-4.2 S1：已確認出生日期唔帶
     const extra: NonNullable<TriageAnswer["extra"]> = {};
     const fields: ProposalField[] = ["hkid"];
     if (nz && normZh(nz)) { extra.name_zh = nz; fields.push("nameZh"); }

@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { run, parseArgs } from "../scripts/staff-import/19-triage-reread";
-import { applyCorroboration, cardKeyHash, cardNamesConflict, markCardNameConflict, cardRect, corroborate, cropCardToPng, padCardBox, printedOnlyProposal, scanForCard, type CardDeps } from "../scripts/staff-import/lib/card-reread";
+import { applyCorroboration, cardKeyHash, cardNamesConflict, looseEnglishNameMatch, markCardNameConflict, cardRect, corroborate, cropCardToPng, padCardBox, printedOnlyProposal, scanForCard, type CardDeps } from "../scripts/staff-import/lib/card-reread";
 import { detectEmbeddedCards, rotateLines } from "../scripts/staff-import/lib/triage-evidence-core";
 import { hkidCheckDigitValid } from "../scripts/staff-import/lib/hkid";
 import { summaryLines, type RereadProposal } from "../scripts/staff-import/lib/triage-reread-core";
@@ -128,6 +128,24 @@ describe("TE-4.1：整人一致性／S1 修正值唔升 high／N2 快取 key", (
     const m = markCardNameConflict([P("hkid", "Z9000012")]);
     expect(m[0]).toMatchObject({ confidence: "low", flags: ["card_name_conflict"] });
   });
+  it("TE-4.2 S2：中文名兩邊一致→唔理英文名差異；英文接受縮寫／連寫，姓氏要相同", () => {
+    expect(cardNamesConflict({ nameZh: "測試甲", nameEn: "OTHER NAME" }, { nameZh: "測試甲", nameEn: "TESTER ALPHA" })).toBe(false);
+    expect(cardNamesConflict({ nameZh: "測試甲" }, { nameZh: "測試乙" })).toBe(true);
+    expect(looseEnglishNameMatch("CHAN, Tai Man", "CHAN T M")).toBe(true);
+    expect(looseEnglishNameMatch("CHAN T M", "CHAN TAI MAN")).toBe(true);
+    expect(looseEnglishNameMatch("CHAN TAIMAN", "CHAN TAI MAN")).toBe(true);
+    expect(looseEnglishNameMatch("TAI MAN CHAN", "Chan, Tai-Man")).toBe(true);
+    expect(looseEnglishNameMatch("WONG TAI MAN", "CHAN TAI MAN")).toBe(false); // 姓氏唔同
+    expect(looseEnglishNameMatch("CHAN, Tai Man", "WONG T M")).toBe(false);
+    expect(looseEnglishNameMatch("CHAN TAI MAN", "CHAN TAI")).toBe(false); // token 數唔同
+    expect(looseEnglishNameMatch("CHAN TAI MAN", "CHAN SIU MING")).toBe(false);
+    expect(cardNamesConflict({ nameEn: "CHAN T M" }, { nameEn: "CHAN TAI MAN" })).toBe(false);
+  });
+  it("TE-4.2 S1：卡出生日期同包內已確認出生日期唔同 → 唔一致；相同／包內未確認唔比", () => {
+    expect(cardNamesConflict({ dobConfirmed: "1990-01-15" }, { dob: "1990-01-16" })).toBe(true);
+    expect(cardNamesConflict({ dobConfirmed: "1990-01-15" }, { dob: "1990-01-15" })).toBe(false);
+    expect(cardNamesConflict({}, { dob: "1990-01-16" })).toBe(false);
+  });
   it("S1：修正過嘅印刷號同卡一致唔升 high（no_printed）；同卡唔同值 → conflict；未修正一致先 corroborated", () => {
     expect(corroborate("Z9000012", [], ["Z9000012"])).toBe("no_printed");
     expect(corroborate("Z9000012", [], ["A1234563"])).toBe("conflict");
@@ -161,5 +179,10 @@ describe("伺服器：no_id_card 建議", () => {
     const r = planForQuestion(confirmed, props({ hkid: "Z9000012", nameZh: "測試甲", nameEn: "TESTER" }));
     expect(r).toMatchObject({ type: "answer", answer: { extra: { name_en: "TESTER" } } });
     expect(r.type === "answer" && r.answer.extra?.name_zh).toBeUndefined();
+  });
+  it("TE-4.2 S1：包內出生日期已確認 → 建議唔帶 extra.dob", () => {
+    const withDob = { kind: "no_id_card", optionsJson: [{ id: "enter_hkid" }], evidenceJson: { person: { dateOfBirth: { value: "1990-05-06", status: "confirmed" } } } } as never;
+    const r = planForQuestion(withDob, props({ hkid: "Z9000012", dateOfBirth: "1991-02-03", nameZh: "測試甲" }));
+    expect(r.type === "answer" && r.answer.extra).toEqual({ name_zh: "測試甲" });
   });
 });

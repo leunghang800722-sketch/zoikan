@@ -142,4 +142,20 @@ describe("TE-3 M1 混淆修正收緊", () => {
     expect(rate(date, true)).toBeLessThanOrEqual(0.005); // 日期即使套上括號結構亦拒
     expect(rate(phone, true)).toBeLessThanOrEqual(0.005);
   });
+  it("已知水平：隨機 7 位數字＋(d) 結構（check digit 巧合通過）誤收 ≤10%——靠唯一 checksum＋low 唔獨力採用兜住", () => {
+    let seed = 987;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    let bad = 0;
+    const N = 2000;
+    for (let i = 0; i < N; i++) {
+      const d7 = Array.from({ length: 7 }, () => Math.floor(rnd() * 10)).join("");
+      const tok = `${d7}(${Math.floor(rnd() * 10)})`;
+      const r = scanPageHkids(1, [L(`身份證號碼 ${tok}`)]);
+      if (r.length) {
+        bad++;
+        expect(r[0]).toMatchObject({ level: "low", note: "ocr_confusion_fixed" }); // 誤收都只係 low
+      }
+    }
+    expect(bad / N).toBeLessThanOrEqual(0.1);
+  });
 });

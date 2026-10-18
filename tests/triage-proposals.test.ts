@@ -306,6 +306,7 @@ describe("TR-1 OCR 重讀建議導入", () => {
     const ev = qn.evidenceJson as { person: Record<string, unknown> };
     ev.person.nameZh = { value: null, status: "missing" };
     ev.person.nameEn = { value: null, status: "missing" };
+    ev.person.dateOfBirth = { value: null, status: "missing" }; // TE-4.2：已確認出生日期唔會被卡覆蓋，所以清走先測補 dob
     await prisma.triageQuestion.update({ where: { id: qn.id }, data: { evidenceJson: ev as never } });
     const NEW = mkHkid("W", "300001");
     // (1) low 信心 → skipped_low_confidence，唔寫

@@ -22,6 +22,7 @@ import { ArgError, fakeClientsFor, resolveReportPath, runPool, type EvalCase, ty
 import { prepareDocumentImages } from './lib/eval-ocr-images';
 import { applyCorroboration, cardKeyHash, cardNamesConflict, cropCardToPng, markCardNameConflict, printedOnlyProposal, scanForCard, type CardDeps, type CardPageRef, type CardScan } from './lib/card-reread';
 import { canonicalHkid, hkidCheckDigitValid } from './lib/hkid';
+import { normalizeField } from '@/lib/guards/ocr/normalize';
 import { rotateLines } from './lib/triage-evidence-core';
 import type { OcrLine, OcrPage } from './lib/ocr';
 import {
@@ -454,7 +455,9 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
           const cardFieldKeys = ['name_zh', 'name_en', 'hkid', 'dob'] as const;
           const crossBad = cardFieldKeys.some((k) => r.picks[k]?.doc === 'id_card' && r.picks[k]!.cross === 'differs');
           const typedBad = ['hkid', 'nameZh', 'nameEn', 'dateOfBirth'].some((f) => (o.skippedByField as Record<string, Record<string, number> | undefined>)[f]?.typed_list_disagrees);
-          const nameBad = cardNamesConflict({ nameZh: p.nameZh.value, nameEn: p.nameEn.value }, { nameZh: cardRead('name_zh'), nameEn: cardRead('name_en') });
+          const dobCard = r.picks.dob?.doc === 'id_card' ? normalizeField('dob', r.picks.dob.result.value, now).canon : null;
+          const dobPkg = p.dateOfBirth.status === 'confirmed' && p.dateOfBirth.value ? normalizeField('dob', p.dateOfBirth.value, now).canon : null;
+          const nameBad = cardNamesConflict({ nameZh: p.nameZh.value, nameEn: p.nameEn.value, dobConfirmed: dobPkg }, { nameZh: cardRead('name_zh'), nameEn: cardRead('name_en'), dob: dobCard });
           if ((crossBad || typedBad || nameBad) && cardOut.length > 0) {
             cardOut = markCardNameConflict(cardOut);
             summary.card_name_conflict += 1;

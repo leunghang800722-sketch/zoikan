@@ -184,7 +184,10 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
     // TE-4：OCR 重讀嵌入身份證副本一併帶出生日期（格式要合法）
     if (answer.extra.dob) {
       if (!parseBirthDate(answer.extra.dob)) throw BadRequest("出生日期格式唔啱（YYYY-MM-DD）");
-      person.dateOfBirth = { value: answer.extra.dob, status: "confirmed" };
+      // TE-4.2 S1：包內出生日期已確認——唔同＝400，相同當冇事
+      if (confirmed(person.dateOfBirth)) {
+        if (person.dateOfBirth.value !== answer.extra.dob) throw BadRequest("呢個人嘅出生日期已經確認，唔使再補");
+      } else person.dateOfBirth = { value: answer.extra.dob, status: "confirmed" };
     }
   }
 

@@ -927,6 +927,17 @@ describe("TE-1 證據裁圖", () => {
       expect(ok.status).toBe(200);
     });
 
+    it("TE-4.2 S1：包內出生日期已確認——extra.dob 唔同 400、相同當冇事", async () => {
+      await seed();
+      const base = person({ hkid: null, name: "x", nos: ["U90041"], rating: "fail" }); // person() 出生日期 1990-05-06 confirmed
+      const pn = { ...base, nameZh: F(null, "missing"), nameEn: F(null, "missing") } as PackagePerson;
+      const r0 = await applyPkg(accountant, [pn]);
+      const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: r0.body.triage.session_id as string, kind: "no_id_card" } });
+      const pv = (extra: object) => json(previewRoute as never, `/api/triage/questions/${qn.id}/preview`, accountant, { answer: { option: "enter_hkid", value: H[9], extra: { name_zh: "補名測試員", ...extra } } }, qn.id);
+      expect((await pv({ dob: "1991-02-03" })).status).toBe(400);
+      expect((await pv({ dob: "1990-05-06" })).status).toBe(200);
+    });
+
     it("TE-3(2) explainBlocked：每個 reason code 都有人話；可補嘅（create_no_name／name_not_confirmed）帶 needs_fields，其餘講下一步", () => {
       for (const code of Object.keys(BLOCK_TEXT)) {
         const e = explainBlocked([code], "enter_hkid", EXTRA_NAME_OPTIONS, false);

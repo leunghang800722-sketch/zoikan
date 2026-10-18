@@ -100,3 +100,6 @@
 
 ## 11. TE-4.1 Opus 驗收修正
 混淆修正收緊（同行 token、拒日期／電話、結構線索、修正值 low 唔獨力採用；誤收率回歸 ≤0.5%）；嵌入卡整人一致性（`card_name_conflict`）；印刷佐證只用未修正值；快取 key 加卡區 hash；server `extra` 姓名只喺未確認先收；UI 打姓名作廢舊 hash。
+
+## 12. TE-4.2
+出生日期已確認即唔被卡／extra 覆蓋（server 400／proposals 唔帶／卡唔同＝card_name_conflict）；英文名放寬比對（縮寫、連寫、姓氏相同；中文名一致優先）；隨機 7 位＋(d) 誤收 ≤10% 回歸。
