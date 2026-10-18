@@ -13,6 +13,11 @@ import {
   buildExistingIndex,
   dryFixture,
   drawSyntheticPage,
+  SYNTHETIC_FORM_PHOTO,
+  syntheticAddressProofPage,
+  finalizeChecked,
+  darkBandRatios,
+  cropRequest,
   emptyStats,
   finalizeImage,
   parseArgs,
@@ -28,7 +33,11 @@ import {
   entryNameOf,
   evidenceFieldsOf,
   intersects,
-  locateFormFieldBox,
+  locateFormCell,
+  detectUprightRotation,
+  rotateLines,
+  FORM_PHOTO_BOX,
+  addressRegionLikely,
   locateIdCardBoxes,
   matchOfPerson,
   planRequests,
@@ -187,11 +196,263 @@ describe("身份證裁圖幾何（M8：真卡版面——相片右上、號碼�
     }
   });
 
-  it("入職表：電話／地址用現有幾何；姓名／身份證號／出生日期用 label 行；冇 label＝null", () => {
+  it("入職表單格裁（c）：每欄只含自己嗰格（label 包埋）；右界＝下一個 label；上下界唔過上一行／下一行 label；冇 label＝null", () => {
     const f = syntheticFormPage();
-    for (const field of ["phone", "address", "name_zh", "name_en", "dob", "hkid"] as const) expect(locateFormFieldBox(field, f), field).not.toBeNull();
-    expect(locateFormFieldBox("name_zh", [])).toBeNull();
-    expect(locateFormFieldBox("dob", f.filter((l) => !/出生日期/.test(l.t)))).toBeNull();
+    const lineOf = (t: string) => f.find((l) => l.t.includes(t))!;
+    const inside = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => l.x >= b.x0 - 1e-9 && l.x + l.w <= b.x1 + 1e-9 && l.y >= b.y0 - 1e-9 && l.y + l.h <= b.y1 + 1e-9;
+    const overlapsAny = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => intersects(b, { x0: l.x, x1: l.x + l.w, y0: l.y, y1: l.y + l.h });
+    const cell = (field: Parameters<typeof locateFormCell>[0]) => locateFormCell(field, f).box!;
+    // hkid 行三格並排：只含 hkid 格（label＋值），唔含出生日期格／出生地點格
+    const hk = cell("hkid");
+    expect(inside(hk, lineOf("香港身份證"))).toBe(true);
+    expect(inside(hk, lineOf("Z900001"))).toBe(true);
+    expect(overlapsAny(hk, lineOf("出生日期"))).toBe(false);
+    expect(overlapsAny(hk, lineOf("15-01-1990"))).toBe(false);
+    expect(overlapsAny(hk, lineOf("出生地點"))).toBe(false);
+    expect(hk.x1).toBeLessThan(lineOf("出生日期").x); // 右界喺下一個 label 左邊
+    // 出生日期格：右界＝出生地點 label 左邊
+    const dob = cell("dob");
+    expect(inside(dob, lineOf("15-01-1990"))).toBe(true);
+    expect(overlapsAny(dob, lineOf("出生地點"))).toBe(false);
+    expect(overlapsAny(dob, lineOf("Z900001"))).toBe(false);
+    // name_zh：冇露出下一行（hkid 行）；冇 English Name 格
+    const zh = cell("name_zh");
+    expect(inside(zh, lineOf("測試甲"))).toBe(true);
+    expect(overlapsAny(zh, lineOf("English Name"))).toBe(false);
+    expect(overlapsAny(zh, lineOf("香港身份證"))).toBe(false);
+    expect(overlapsAny(zh, lineOf("Z900001"))).toBe(false);
+    expect(zh.y0).toBeGreaterThan(lineOf("香港身份證").y + lineOf("香港身份證").h);
+    // name_en：右界冇伸去表格右邊（相片格）
+    const en = cell("name_en");
+    expect(inside(en, lineOf("TESTER ALPHA"))).toBe(true);
+    expect(en.x1).toBeLessThanOrEqual(FORM_PHOTO_BOX.x0);
+    // phone：只含手提電話格（唔含住所電話、下一行住址）
+    const ph = cell("phone");
+    expect(inside(ph, lineOf("90001110"))).toBe(true);
+    expect(overlapsAny(ph, lineOf("住所電話"))).toBe(false);
+    expect(overlapsAny(ph, lineOf("住址："))).toBe(false);
+    expect(overlapsAny(ph, lineOf("火炭"))).toBe(false);
+    // address：含值，唔含通訊地址 label／手提電話行
+    const ad = cell("address");
+    expect(inside(ad, lineOf("火炭"))).toBe(true);
+    expect(overlapsAny(ad, lineOf("通訊地址"))).toBe(false);
+    expect(overlapsAny(ad, lineOf("90001110"))).toBe(false);
+    // 全部唔入相片格
+    for (const b of [hk, dob, zh, en, ph, ad]) expect(intersects(b, FORM_PHOTO_BOX)).toBe(false);
+    expect(locateFormCell("name_zh", []).reason).toBe("form_label_not_located");
+    expect(locateFormCell("dob", f.filter((l) => !/出生日期/.test(l.t))).box).toBeNull();
+  });
+
+  it("入職表相片格：label 喺相片區入面／右界被夾到切入 label → 跳過 form_photo_overlap；一般夾右緣到相片左邊", () => {
+    const lab = (t: string, x: number, y: number, w: number) => ({ t, c: 0.9, x, y, w, h: 0.025 });
+    // 出生地點 label 喺相片區（x≥0.75、y≥0.65）內：唔應該裁
+    const inZone = [lab("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.92, 0.5), lab("出生日期：", 0.78, 0.8, 0.1), lab("15-01-1990", 0.89, 0.8, 0.08)];
+    expect(locateFormCell("dob", inZone)).toMatchObject({ box: null, reason: "form_photo_overlap" });
+    // 冇下一個 label、手寫字伸入相片區：右緣夾到相片左邊
+    const wide = [lab("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.92, 0.5), lab("中文姓名：", 0.08, 0.8, 0.12), lab("測試甲甲甲甲甲甲甲甲甲", 0.21, 0.8, 0.65)];
+    const r = locateFormCell("name_zh", wide);
+    expect(r.box).not.toBeNull();
+    expect(r.box!.x1).toBeLessThanOrEqual(FORM_PHOTO_BOX.x0);
+  });
+
+  it.skipIf(!hasMagick)("入職表像素級：右上深色相片格、hkid 行三格並排——hkid 裁圖冇相片色；name_zh／phone 裁圖冇露出下一行（唔含 hkid 值／電話行）", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1f-"));
+    try {
+      const lines = syntheticFormPage();
+      const png = path.join(tmp, "form.png");
+      await drawSyntheticPage({ doc: doc("onboarding_form"), lines, photo: SYNTHETIC_FORM_PHOTO }, png);
+      const dark = async (file: string) => Number((await sh(MAGICK, [file, "-colorspace", "Gray", "-threshold", "70%", "-format", "%[fx:1-mean]", "info:"])).stdout);
+      const crop = async (field: Parameters<typeof locateFormCell>[0]) => {
+        const box = locateFormCell(field, lines).box!;
+        const r = await finalizeChecked(png, box, tmp, { bandCheck: true });
+        expect("bytes" in r, field).toBe(true);
+        const out = path.join(tmp, `f-${field}.jpg`);
+        await (await import("node:fs/promises")).writeFile(out, (r as { bytes: Uint8Array }).bytes);
+        return out;
+      };
+      for (const f of ["hkid", "name_zh", "name_en", "dob", "phone", "address"] as const) {
+        const out = await crop(f);
+        // 裁圖內深色大塊（相片格係深色）比例：整張圖暗像素比例要細（文字細條）
+        expect(await dark(out), `${f} 冇大塊深色`).toBeLessThan(0.3);
+      }
+      // 對照：成頁一定有大塊深色
+      expect(await dark(png)).toBeGreaterThan(0.03);
+      // 唔含下一行：name_zh 裁圖高度細過兩行；crop 高度 ≤ label 行高 ×(1+0.5)+字高變化
+      const zhBox = locateFormCell("name_zh", lines).box!;
+      expect(zhBox.y1 - zhBox.y0).toBeLessThan(0.025 * 2);
+      const phBox = locateFormCell("phone", lines).box!;
+      expect(phBox.y1 - phBox.y0).toBeLessThan(0.025 * 2);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("身份證：相片緊貼名行底（長英文名橫跨相片 x 範圍）", () => {
+  const inside = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => l.x >= b.x0 - 1e-9 && l.x + l.w <= b.x1 + 1e-9 && l.y >= b.y0 - 1e-9 && l.y + l.h <= b.y1 + 1e-9;
+
+  it("英文名框唔入相片：向下 padding 收窄到相片頂以上（最少 0.05×行高），完整包住名字；其他欄不變", () => {
+    const { lines, photo } = syntheticIdCardPage(true, 0.005, { longName: true });
+    const g = locateIdCardBoxes(1, lines);
+    const en = lines.find((l) => l.t.includes("LONGFAMILY"))!;
+    expect(en.x + en.w).toBeGreaterThan(photo.x0); // 名行橫跨相片 x 範圍
+    expect(g.name_en).not.toBeNull();
+    expect(intersects(g.name_en!, photo)).toBe(false);
+    expect(intersects(g.name_en!, g.photo!)).toBe(false);
+    expect(inside(g.name_en!, en)).toBe(true);
+    expect(g.name_en!.y0).toBeGreaterThanOrEqual(photo.y1 - 1e-9);
+    expect(en.y - g.name_en!.y0).toBeGreaterThanOrEqual(0.05 * en.h - 1e-9); // 最少 0.05×行高 padding
+    // 垂直 padding ≤0.15×行高
+    expect(g.name_en!.y1 - (en.y + en.h)).toBeLessThanOrEqual(0.15 * en.h + 1e-9);
+    for (const k of ["hkid", "name_zh", "dob"] as const) {
+      expect(g[k], k).not.toBeNull();
+      expect(intersects(g[k]!, photo), k).toBe(false);
+    }
+    expect(g.overlap).toBeUndefined();
+  });
+
+  it("名行底同相片頂之間冇 0.05×行高空位（相片貼死名行）→ 收窄右緣仍切到字 → 跳過 id_photo_overlap", () => {
+    const { lines } = syntheticIdCardPage(true, 0.005, { longName: true });
+    const g = locateIdCardBoxes(1, lines);
+    expect(g.name_en).not.toBeNull();
+    // 把名行改成貼死：令相片估算頂高過 base.y0 - minPad —— 用兩行英文名（第二行橫跨相片區）模擬
+    const wrapped = [...lines, { t: "SECOND-SEGMENT", c: 0.9, x: 0.1, y: 0.69 - 0.001, w: 0.45, h: 0.02 }];
+    const g2 = locateIdCardBoxes(1, wrapped);
+    for (const k of ["name_en"] as const) if (g2[k]) expect(intersects(g2[k]!, g2.photo!)).toBe(false);
+  });
+
+  it("id_card 垂直 padding ≤0.15×行高、左右 0.3×；號碼框右 0.6×行高（括號唔被切）", () => {
+    const { lines } = syntheticIdCardPage();
+    const g = locateIdCardBoxes(1, lines);
+    const zh = lines.find((l) => l.t.includes("測試甲"))!;
+    expect(zh.x - g.name_zh!.x0).toBeLessThanOrEqual(0.3 * zh.h + 0.0021);
+    expect(g.name_zh!.y1 - (zh.y + zh.h)).toBeLessThanOrEqual(0.15 * zh.h + 0.0021);
+    const hk = lines.find((l) => l.t.includes("Z900001"))!;
+    expect(g.hkid!.x1 - (hk.x + hk.w)).toBeGreaterThan(0.3 * hk.h); // 右邊 padding 較闊
+    expect(g.hkid!.x1 - (hk.x + hk.w)).toBeLessThanOrEqual(0.6 * hk.h + 1e-9);
+    expect(hk.y - g.hkid!.y0).toBeLessThanOrEqual(0.15 * hk.h + 0.0021);
+  });
+
+  it.skipIf(!hasMagick)("像素級：長英文名橫跨相片 x 範圍、相片緊貼名行底——四個 id 欄裁圖冇相片色", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1l-"));
+    try {
+      const { lines, photo } = syntheticIdCardPage(true, 0.005, { longName: true });
+      const png = path.join(tmp, "p.png");
+      await drawSyntheticPage({ doc: doc("id_card"), lines, photo }, png);
+      const g = locateIdCardBoxes(1, lines);
+      for (const k of ["hkid", "name_zh", "name_en", "dob"] as const) {
+        const r = await finalizeChecked(png, g[k], tmp, { bandCheck: true });
+        expect("bytes" in r, k).toBe(true);
+        const out = path.join(tmp, `o-${k}.jpg`);
+        await (await import("node:fs/promises")).writeFile(out, (r as { bytes: Uint8Array }).bytes);
+        const m = await sh(MAGICK, [out, "-fx", "r-g", "-format", "%[fx:maxima]", "info:"]);
+        expect(Number(m.stdout), `${k} 冇紅色`).toBeLessThan(0.15);
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("防線二：邊緣帶暗像素檢查（所有 doc_kind）", () => {
+  const mk = async (tmp: string, name: string, draw: string[]) => {
+    const f = path.join(tmp, name);
+    await sh(MAGICK, ["-size", "200x100", "xc:white", ...draw, f]);
+    return f;
+  };
+  it.skipIf(!hasMagick)("底部大塊深色（>35%）→ 先收窄 20% 再量，仍超標就跳過 photo_suspect；乾淨圖／細印刷線條唔觸發", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1b-"));
+    try {
+      const big = await mk(tmp, "big.png", ["-fill", "black", "-draw", "rectangle 0,55 199,99"]); // 底部 45% 深色
+      expect(await finalizeChecked(big, null, tmp, { bandCheck: true })).toEqual({ reason: "photo_suspect" });
+      expect((await darkBandRatios(big)).bottom).toBeGreaterThan(0.35);
+      // 只有最底 18% 深色：收窄 20% 後就乾淨 → 通過（輸出高度細咗）
+      const thin = await mk(tmp, "thin.png", ["-fill", "black", "-draw", "rectangle 0,82 199,99"]);
+      const r = await finalizeChecked(thin, null, tmp, { bandCheck: true });
+      expect("bytes" in r).toBe(true);
+      // 白底細線（表格線＋少少字）：唔觸發
+      const lines = await mk(tmp, "lines.png", ["-fill", "gray20", "-draw", "rectangle 0,0 199,1", "-draw", "rectangle 0,98 199,99", "-draw", "rectangle 20,40 90,55"]);
+      expect("bytes" in (await finalizeChecked(lines, null, tmp, { bandCheck: true }))).toBe(true);
+      // 左／右邊大塊深色亦觸發
+      const side = await mk(tmp, "side.png", ["-fill", "black", "-draw", "rectangle 130,0 199,99"]);
+      expect(await finalizeChecked(side, null, tmp, { bandCheck: true })).toEqual({ reason: "photo_suspect" });
+      // 唔開檢查就照出（舊行為）
+      expect("bytes" in (await finalizeChecked(big, null, tmp))).toBe(true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("轉頁方向（90／180／270）", () => {
+  const turn = (d: number) => ((360 - d) % 360) as 0 | 90 | 180 | 270;
+  it("rotateLines：四個方向連續轉回原位；轉 90 後 w／h 互換", () => {
+    const { lines } = syntheticIdCardPage();
+    const r = rotateLines(rotateLines(rotateLines(rotateLines(lines, 90), 90), 90), 90);
+    r.forEach((l, i) => {
+      for (const k of ["x", "y", "w", "h"] as const) expect(l[k]).toBeCloseTo(lines[i]![k], 9);
+    });
+    const a = rotateLines(lines, 90)[0]!;
+    expect(a.w).toBeCloseTo(lines[0]!.h, 9);
+  });
+
+  it("detectUprightRotation（身份證／入職表）：θ 度擺反嘅頁偵測到要轉 360-θ；正向回 0；住址證明正向回 0", () => {
+    const id = syntheticIdCardPage().lines;
+    const form = syntheticFormPage();
+    for (const th of [0, 90, 180, 270] as const) {
+      expect(detectUprightRotation("id_card", rotateLines(id, th)), `id ${th}`).toBe(turn(th));
+      expect(detectUprightRotation("onboarding_form", rotateLines(form, th)), `form ${th}`).toBe(turn(th));
+    }
+    expect(detectUprightRotation("address_proof", syntheticAddressProofPage())).toBe(0);
+    expect(detectUprightRotation("id_card", [])).toBeNull();
+  });
+
+  it.skipIf(!hasMagick)("像素級：90／180／270 嘅頁經 cropRequest 轉正後，輸出同正向版本幾乎一致（身份證四欄＋入職表 hkid／phone）", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1r-"));
+    try {
+      const idPage = syntheticIdCardPage();
+      const formLines = syntheticFormPage();
+      const cases: { docKind: "id_card" | "onboarding_form"; field: "hkid" | "name_zh" | "name_en" | "dob" | "phone"; lines: typeof idPage.lines; photo: typeof idPage.photo | undefined }[] = [
+        ...(["hkid", "name_zh", "name_en", "dob"] as const).map((field) => ({ docKind: "id_card" as const, field, lines: idPage.lines, photo: idPage.photo })),
+        ...(["hkid", "phone"] as const).map((field) => ({ docKind: "onboarding_form" as const, field, lines: formLines, photo: SYNTHETIC_FORM_PHOTO })),
+      ];
+      for (const c of cases) {
+        const d = doc(c.docKind);
+        const req = { field: c.field, docKind: c.docKind, priority: 1 as const, doc: d };
+        const outs: Record<number, string> = {};
+        for (const th of [0, 90, 180, 270] as const) {
+          const png = path.join(tmp, `p-${c.docKind}-${th}.png`);
+          await drawSyntheticPage({ doc: d, lines: c.lines, photo: c.photo }, png, { w: 1000, h: 1400 }, th);
+          const r = await cropRequest(req, png, rotateLines(c.lines, th), tmp);
+          expect("bytes" in r, `${c.docKind}/${c.field}/${th}`).toBe(true);
+          const f = path.join(tmp, `o-${c.docKind}-${c.field}-${th}.jpg`);
+          await (await import("node:fs/promises")).writeFile(f, (r as { bytes: Uint8Array }).bytes);
+          outs[th] = f;
+        }
+        for (const th of [90, 180, 270]) {
+          const id0 = await sh(MAGICK, ["identify", "-format", "%w %h", outs[0]!]);
+          const idT = await sh(MAGICK, ["identify", "-format", "%w %h", outs[th]!]);
+          const [w0, h0] = id0.stdout.split(" ").map(Number) as [number, number];
+          const [wt, ht] = idT.stdout.split(" ").map(Number) as [number, number];
+          expect(Math.abs(wt - w0), `${c.field}/${th} 寬`).toBeLessThanOrEqual(3);
+          expect(Math.abs(ht - h0), `${c.field}/${th} 高`).toBeLessThanOrEqual(3);
+          // 縮到同一尺寸再比 RMSE（正規化 0–1）
+          const cmp = await sh(MAGICK, ["compare", "-metric", "RMSE", outs[0]!, "(", outs[th]!, "-resize", `${w0}x${h0}!`, ")", "null:"]).then((r) => r.stderr, (e: { stderr: string }) => e.stderr);
+          const norm = Number(/\(([0-9.]+)\)/.exec(cmp)?.[1]);
+          expect(norm, `${c.docKind}/${c.field}/${th} 同正向版本幾乎一致`).toBeLessThan(0.08);
+        }
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("住址證明地址區 sanity：框內冇數字／樓／室／座／F／FLAT → address_region_unlikely；正常地址通過", () => {
+    const ap = syntheticAddressProofPage();
+    const box = { x0: 0.05, x1: 0.5, y0: 0.6, y1: 0.72 };
+    expect(addressRegionLikely(box, ap)).toBe(true);
+    const logo = [{ t: "某某機構 有限公司", c: 0.9, x: 0.1, y: 0.9, w: 0.3, h: 0.03 }];
+    expect(addressRegionLikely({ x0: 0.05, x1: 0.5, y0: 0.88, y1: 0.95 }, logo)).toBe(false);
   });
 });
 
@@ -289,7 +550,7 @@ describe("zip 分批與上限", () => {
 });
 
 describe("現成裁圖索引（M8／M3）與依賴注入", () => {
-  it("只認 phone*-crops（入職表電話）同 address-crops*（住址證明）；name-crops／其他一律忽略；路徑相對 json 上一層", () => {
+  it("只認 address-crops*（住址證明）；phone*-crops（成行裁、含下一行同相片）／name-crops／其他一律忽略；路徑相對 json 上一層", () => {
     const e = (docId: string, page: number, file: string) => ({ docId, page, file });
     const { index, ignored } = buildExistingIndex([
       { name: "phone-crops.json", base: "/base", entries: [e("d1", 3, "crops/phone/d1-p3.png")] },
@@ -298,19 +559,18 @@ describe("現成裁圖索引（M8／M3）與依賴注入", () => {
       { name: "name-crops.json", base: "/base", entries: [e("d4", 1, "crops/name/d4.png"), e("d5", 1, "crops/name/d5.png")] },
       { name: "crops-manifest.json", base: "/base", entries: [e("d6", 1, "crops/form/x.png")] },
     ]);
-    expect(index.get("phone|onboarding_form|d1|3")).toBe("/base/crops/phone/d1-p3.png");
-    expect(index.get("phone|onboarding_form|d2|1")).toBe("/base/crops/phone2/d2-p1.png");
+    expect(index.has("phone|onboarding_form|d1|3")).toBe(false);
     expect(index.get("address|address_proof|d3|2")).toBe("/base/crops/address/d3-p2.png");
-    expect(index.size).toBe(3);
-    expect(ignored).toBe(3);
+    expect(index.size).toBe(1);
+    expect(ignored).toBe(5);
   });
 
-  it.skipIf(!hasMagick)("produceItems：電話／住址證明用現成裁圖；身份證欄就算 existing 有圖都唔用（一律即時裁）", async () => {
+  it.skipIf(!hasMagick)("produceItems：住址證明用現成裁圖；身份證／入職表欄就算 existing 有圖都唔用（一律即時裁）", async () => {
     const fx = dryFixture();
     const tmp = await mkdtemp(path.join(os.tmpdir(), "te1x-"));
     try {
       const existingPng = path.join(tmp, "existing.png");
-      await sh(MAGICK, ["-size", "300x60", "xc:white", "-fill", "rgb(60,60,60)", "-draw", "rectangle 10,10 200,40", existingPng]);
+      await sh(MAGICK, ["-size", "300x60", "xc:white", "-fill", "rgb(60,60,60)", "-draw", "rectangle 10,25 200,32", existingPng]);
       const asked: string[] = [];
       const base = {
         async lines(d: DocPage) {
@@ -332,10 +592,9 @@ describe("現成裁圖索引（M8／M3）與依賴注入", () => {
       const people: PersonInput[] = [fx.people[0]!];
       const items = await produceItems(people, deps, stats);
       const sig = items.map((i) => `${i.field}:${i.docKind}:${i.priority}`);
-      expect(sig).toContain("phone:onboarding_form:1");
       expect(sig).toContain("address:address_proof:1");
-      expect(sig.some((s) => s.includes("id_card"))).toBe(false); // render 失敗＋身份證唔用現成圖
-      expect(asked.some((a) => a.endsWith(":id_card"))).toBe(false); // 連問都冇問過
+      expect(sig.some((s) => s.includes("id_card") || s.includes("onboarding_form"))).toBe(false); // render 失敗＋身份證／入職表唔用現成圖
+      expect(asked.every((a) => a.endsWith(":address_proof"))).toBe(true); // 連問都冇問過
       expect(stats.from_existing).toBeGreaterThan(0);
       expect(stats.skipped.render_fail).toBeGreaterThan(0);
     } finally {

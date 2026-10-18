@@ -28,6 +28,9 @@ import {
   SHRINK_EDGES,
   boxForRequest,
   buildEvidenceZips,
+  detectUprightRotation,
+  rotateLines,
+  type Rotation,
   evidenceFieldsOf,
   magickOutArgs,
   matchOfPerson,
@@ -103,7 +106,7 @@ export function buildExistingIndex(files: readonly ExistingCropFile[]): { index:
   const index: ExistingIndex = new Map();
   let ignored = 0;
   for (const f of files) {
-    const kind = /^phone\d*-crops\.json$/.test(f.name) ? ({ field: 'phone', doc: 'onboarding_form' } as const) : /^address-crops[A-Za-z0-9-]*\.json$/.test(f.name) ? ({ field: 'address', doc: 'address_proof' } as const) : null;
+    const kind = /^address-crops[A-Za-z0-9-]*\.json$/.test(f.name) ? ({ field: 'address', doc: 'address_proof' } as const) : null; // 電話 crops 係成行裁（含下一行、相片），唔用
     if (!kind) {
       ignored += f.entries.length;
       continue;
@@ -131,35 +134,111 @@ export interface Deps {
   cleanup(png: string): Promise<void>;
 }
 
-/** png（可選裁剪 box）→ 規格 JPEG bytes（長邊 ≤800、-strip、≤120 KB）；做唔到＝null。 */
-export async function finalizeImage(png: string, box: Box | null, tmp: string): Promise<Uint8Array | null> {
-  let src = png;
-  const crop = path.join(tmp, `c-${Math.random().toString(36).slice(2)}.png`);
+export type FinalizeResult = { bytes: Uint8Array } | { reason: 'photo_suspect' | 'image_spec_fail' };
+
+/** 暗像素門檻：灰階 <70% 當暗（相片頭髮／衣服／深色格；皮膚色較亮，白底印刷字線條比例低） */
+const DARK_THRESHOLD = '70%';
+const BAND = 0.15;
+const BAND_LIMIT = 0.35;
+const SHRINK = 0.2;
+
+async function sizeOf(png: string): Promise<{ w: number; h: number }> {
+  const id = await sh(MAGICK, ['identify', '-format', '%w %h', png]);
+  const [w, h] = id.stdout.trim().split(' ').map(Number) as [number, number];
+  return { w, h };
+}
+
+/** 四條 15% 邊緣帶（上／下／左／右）嘅暗像素比例。 */
+export async function darkBandRatios(png: string): Promise<{ top: number; bottom: number; left: number; right: number }> {
+  const { w, h } = await sizeOf(png);
+  const bh = Math.max(1, Math.round(h * BAND));
+  const bw = Math.max(1, Math.round(w * BAND));
+  const ratio = async (cw: number, ch: number, x: number, y: number) => {
+    const r = await sh(MAGICK, [png, '-crop', `${cw}x${ch}+${x}+${y}`, '+repage', '-colorspace', 'Gray', '-threshold', DARK_THRESHOLD, '-format', '%[fx:1-mean]', 'info:']);
+    return Number(r.stdout.trim());
+  };
+  return { top: await ratio(w, bh, 0, 0), bottom: await ratio(w, bh, 0, h - bh), left: await ratio(bw, h, 0, 0), right: await ratio(bw, h, w - bw, 0) };
+}
+
+/**
+ * 防線二（唔依賴版面假設）：任一邊緣帶暗比例 >35% 當疑似相片／深色格 → 向內收窄 20%（只由超標嗰邊收）再量，仍超標就跳過（photo_suspect）。
+ * 回傳（可能收窄後）嘅 png 路徑；null＝跳過。
+ */
+async function bandGuard(png: string, tmp: string): Promise<string | null> {
+  let cur = png;
+  for (let round = 0; round < 2; round++) {
+    const r = await darkBandRatios(cur);
+    const bad = { top: r.top > BAND_LIMIT, bottom: r.bottom > BAND_LIMIT, left: r.left > BAND_LIMIT, right: r.right > BAND_LIMIT };
+    if (!bad.top && !bad.bottom && !bad.left && !bad.right) return cur;
+    if (round === 1) return null;
+    const { w, h } = await sizeOf(cur);
+    const dt = bad.top ? Math.round(h * SHRINK) : 0;
+    const db = bad.bottom ? Math.round(h * SHRINK) : 0;
+    const dl = bad.left ? Math.round(w * SHRINK) : 0;
+    const dr = bad.right ? Math.round(w * SHRINK) : 0;
+    const cw = w - dl - dr;
+    const ch = h - dt - db;
+    if (cw < 8 || ch < 4) return null;
+    const next = path.join(tmp, `g-${Math.random().toString(36).slice(2)}.png`);
+    await sh(MAGICK, [cur, '-crop', `${cw}x${ch}+${dl}+${dt}`, '+repage', next]);
+    cur = next;
+  }
+  return null;
+}
+
+/** png（可選先順時針轉 rotate 度、再裁 box；可選邊緣帶檢查）→ 規格 JPEG（長邊 ≤800、-strip、≤120 KB）。 */
+export async function finalizeChecked(png: string, box: Box | null, tmp: string, opts: { rotate?: Rotation; bandCheck?: boolean; rotatedCache?: Map<string, string> } = {}): Promise<FinalizeResult> {
+  let page = png;
+  if (opts.rotate) {
+    const k = `${png}|${opts.rotate}`;
+    let r = opts.rotatedCache?.get(k);
+    if (!r) {
+      r = path.join(tmp, `r-${Math.random().toString(36).slice(2)}.png`);
+      await sh(MAGICK, [png, '-rotate', String(opts.rotate), r]);
+      opts.rotatedCache?.set(k, r);
+    }
+    page = r;
+  }
+  let src = page;
   if (box) {
-    const id = await sh(MAGICK, ['identify', '-format', '%w %h', png]);
-    const [w, h] = id.stdout.trim().split(' ').map(Number) as [number, number];
+    const { w, h } = await sizeOf(page);
     const x = Math.max(0, Math.round(box.x0 * w));
     const y = Math.max(0, Math.round((1 - box.y1) * h));
     const cw = Math.min(w - x, Math.round((box.x1 - box.x0) * w));
     const ch = Math.min(h - y, Math.round((box.y1 - box.y0) * h));
-    if (cw < 8 || ch < 4) return null;
-    await sh(MAGICK, [png, '-crop', `${cw}x${ch}+${x}+${y}`, '+repage', crop]);
-    src = crop;
+    if (cw < 8 || ch < 4) return { reason: 'image_spec_fail' };
+    src = path.join(tmp, `c-${Math.random().toString(36).slice(2)}.png`);
+    await sh(MAGICK, [page, '-crop', `${cw}x${ch}+${x}+${y}`, '+repage', src]);
   }
-  try {
-    for (const edge of SHRINK_EDGES) {
-      for (const q of JPEG_QUALITY_STEPS) {
-        const out = path.join(tmp, `o-${edge}-${q}.jpg`);
-        await sh(MAGICK, [src, ...magickOutArgs(edge, q), out]);
-        const bytes = new Uint8Array(await readFile(out));
-        await rm(out, { force: true });
-        if (bytes.byteLength <= MAX_IMAGE_BYTES) return bytes;
-      }
+  if (opts.bandCheck) {
+    const g = await bandGuard(src, tmp);
+    if (!g) return { reason: 'photo_suspect' };
+    src = g;
+  }
+  for (const edge of SHRINK_EDGES) {
+    for (const q of JPEG_QUALITY_STEPS) {
+      const out = path.join(tmp, `o-${edge}-${q}-${Math.random().toString(36).slice(2)}.jpg`);
+      await sh(MAGICK, [src, ...magickOutArgs(edge, q), out]);
+      const bytes = new Uint8Array(await readFile(out));
+      await rm(out, { force: true });
+      if (bytes.byteLength <= MAX_IMAGE_BYTES) return { bytes };
     }
-    return null;
-  } finally {
-    await rm(crop, { force: true });
   }
+  return { reason: 'image_spec_fail' };
+}
+
+/** 舊簽名（測試／簡單用途）：冇邊緣帶檢查。 */
+export async function finalizeImage(png: string, box: Box | null, tmp: string): Promise<Uint8Array | null> {
+  const r = await finalizeChecked(png, box, tmp);
+  return 'bytes' in r ? r.bytes : null;
+}
+
+/** 身份證／入職表／住址證明一個欄：偵測方向 → 轉正 lines → 定位 → 轉正頁面 → 裁 → 邊緣帶檢查。回 bytes 或跳過原因。 */
+export async function cropRequest(req: CropRequest, png: string, lines: OcrLine[], tmp: string, rotatedCache?: Map<string, string>): Promise<FinalizeResult | { reason: string }> {
+  const rot: Rotation = detectUprightRotation(req.docKind, lines) ?? 0;
+  const g = boxForRequest(req, rotateLines(lines, rot));
+  if (!g.box) return { reason: g.reason ?? 'no_box' };
+  return finalizeChecked(png, g.box, tmp, { rotate: rot, bandCheck: true, rotatedCache });
 }
 
 export interface Stats {
@@ -204,6 +283,7 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const match = matchOfPerson(pi.person);
       const reqs = planRequests(fields, pi.docs);
       const pageCache = new Map<string, string | null>();
+      const rotCache = new Map<string, string>();
       const getPage = async (d: DocPage) => {
         const k = `${d.docId}|${d.page}`;
         if (!pageCache.has(k)) pageCache.set(k, await deps.render(d));
@@ -214,32 +294,31 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
           stats.requests_total += 1;
           let bytes: Uint8Array | null = null;
           let from: 'existing' | 'live' = 'live';
-          const ex = req.docKind === 'id_card' ? null : deps.existing(req); // M8：身份證一律即時裁
+          let skip: string | null = null;
+          const ex = req.docKind === 'address_proof' ? deps.existing(req) : null; // M8：身份證一律即時裁；入職表（成行裁、含相片）亦一律即時單格裁；現成圖只用於住址證明
           if (ex) {
-            bytes = await finalizeImage(ex, null, tmp).catch(() => null);
-            from = 'existing';
+            const r = await finalizeChecked(ex, null, tmp, { bandCheck: true }).catch(() => ({ reason: 'image_spec_fail' as const }));
+            if ('bytes' in r) {
+              bytes = r.bytes;
+              from = 'existing';
+            } else skip = r.reason;
           }
-          if (!bytes) {
+          if (!bytes && !skip) {
             const lines = await deps.lines(req.doc);
-            if (!lines) {
-              bump(stats.skipped, 'no_ocr_lines');
-              continue;
+            if (!lines) skip = 'no_ocr_lines';
+            else {
+              const png = await getPage(req.doc);
+              if (!png) skip = 'render_fail';
+              else {
+                const r = await cropRequest(req, png, lines, tmp, rotCache).catch(() => ({ reason: 'image_spec_fail' }));
+                if ('bytes' in r) bytes = r.bytes;
+                else skip = r.reason;
+                from = 'live';
+              }
             }
-            const g = boxForRequest(req, lines);
-            if (!g.box) {
-              bump(stats.skipped, g.reason ?? 'no_box');
-              continue;
-            }
-            const png = await getPage(req.doc);
-            if (!png) {
-              bump(stats.skipped, 'render_fail');
-              continue;
-            }
-            bytes = await finalizeImage(png, g.box, tmp).catch(() => null);
-            from = 'live';
           }
           if (!bytes) {
-            bump(stats.skipped, 'image_spec_fail');
+            bump(stats.skipped, skip ?? 'image_spec_fail');
             continue;
           }
           items.push({ bytes, field: req.field, docKind: req.docKind, priority: req.priority, match });
@@ -363,10 +442,10 @@ const L = (t: string, x: number, y: number, w: number, h = 0.025): OcrLine => ({
  * 假身份證頁 OCR 行——**真卡版面**（香港智能身份證）：相片右上、號碼喺相片正下方（右下）、左邊中英文姓名／出生日期／簽發日期。
  * 座標係 Vision 正規化（原點左下）。photoGap＝相片下緣高過號碼行頂幾多（預設 0.005；邊界測試用 0.003）。
  */
-export function syntheticIdCardPage(withAnchor = true, photoGap = 0.005): { lines: OcrLine[]; photo: Box; hkidTop: number } {
+export function syntheticIdCardPage(withAnchor = true, photoGap = 0.005, opts: { longName?: boolean } = {}): { lines: OcrLine[]; photo: Box; hkidTop: number } {
   const lines: OcrLine[] = [
     ...(withAnchor ? [L('香港永久性居民身份證', 0.12, 0.8, 0.34), L('HONG KONG PERMANENT IDENTITY CARD', 0.12, 0.77, 0.44, 0.02)] : []),
-    L('TESTER, Alpha', 0.1, 0.7, 0.25),
+    opts.longName ? L('TESTER-LONGFAMILYNAME, Alphabeta Gamma', 0.1, 0.7, 0.45) : L('TESTER, Alpha', 0.1, 0.7, 0.25),
     L('測試甲', 0.1, 0.66, 0.12),
     L('出生日期 Date of Birth', 0.1, 0.6, 0.24, 0.02),
     L('15-01-1990', 0.14, 0.57, 0.16),
@@ -375,13 +454,26 @@ export function syntheticIdCardPage(withAnchor = true, photoGap = 0.005): { line
     L(HK_ID_VALID, 0.44, 0.54, 0.12, 0.035),
   ];
   const hkidTop = 0.54 + 0.035;
-  const photo: Box = { x0: 0.4, x1: 0.56, y0: hkidTop + photoGap, y1: 0.78 };
+  // 長英文名：名行橫跨相片 x 範圍，相片緊貼名行底（低 0.002）；一般：相片伸到卡頂
+  const photo: Box = { x0: 0.4, x1: 0.56, y0: hkidTop + photoGap, y1: opts.longName ? 0.7 - 0.002 : 0.78 };
   return { lines, photo, hkidTop };
 }
 
+/** 入職表假頁：右上角貼相片（SYNTHETIC_FORM_PHOTO）；「香港身份證｜出生日期｜出生地點」三格並排；其餘欄各自一行。 */
 export function syntheticFormPage(): OcrLine[] {
-  return [L('職位申請表 EMPLOYMENT APPLICATION', 0.1, 0.92, 0.5), L('中文姓名', 0.08, 0.8, 0.1), L('英文姓名', 0.08, 0.74, 0.1), L('出生日期', 0.08, 0.68, 0.1), L('香港身份證', 0.08, 0.62, 0.12), L('手提電話', 0.08, 0.5, 0.1), L('住址：', 0.08, 0.42, 0.06), L('通訊地址', 0.08, 0.36, 0.1), L('緊急聯絡人', 0.08, 0.2, 0.12)];
+  return [
+    L('職位申請表 EMPLOYMENT APPLICATION', 0.1, 0.92, 0.5),
+    L('中文姓名：', 0.08, 0.8, 0.12), L('測試甲', 0.21, 0.8, 0.12), L('English Name:', 0.4, 0.8, 0.14), L('TESTER ALPHA', 0.55, 0.8, 0.16),
+    L('香港身份證：', 0.08, 0.7, 0.12), L(HK_ID_VALID, 0.21, 0.7, 0.13), L('出生日期：', 0.4, 0.7, 0.11), L('15-01-1990', 0.52, 0.7, 0.13), L('出生地點：', 0.68, 0.7, 0.09), L('香港', 0.78, 0.6, 0.05),
+    L('手提電話：', 0.08, 0.5, 0.11), L('90001110', 0.2, 0.5, 0.12), L('住所電話：', 0.45, 0.5, 0.11),
+    L('住址：', 0.08, 0.42, 0.06), L('火炭示範街99號虛構大廈15樓A室', 0.15, 0.42, 0.4),
+    L('通訊地址：', 0.08, 0.34, 0.1),
+    L('緊急聯絡人', 0.08, 0.2, 0.12),
+  ];
 }
+
+/** 假入職表相片格（深色大塊，位置喺 FORM_PHOTO_BOX 之內） */
+export const SYNTHETIC_FORM_PHOTO: Box = { x0: 0.78, x1: 0.97, y0: 0.68, y1: 0.93 };
 
 export function syntheticAddressProofPage(): OcrLine[] {
   return [L('水務署 付款通知書', 0.1, 0.9, 0.3), L('測試乙', 0.1, 0.7, 0.1), L('九龍火炭示範街99號', 0.1, 0.67, 0.3), L('虛構大廈15樓A室', 0.1, 0.64, 0.3), L('新界 香港', 0.1, 0.61, 0.2)];
@@ -419,23 +511,26 @@ export function dryFixture(): { people: PersonInput[]; docs: Map<string, DryDoc>
   return {
     docs,
     people: [
-      { person: dryPerson(1), docs: [add('id_card', 1, a.lines, a.photo), add('address_proof', 1, syntheticAddressProofPage()), add('onboarding_form', 1, syntheticFormPage())] }, // 三份文件齊
-      { person: dryPerson(2), docs: [add('id_card', 2, b.lines, b.photo), add('onboarding_form', 2, syntheticFormPage())] }, // 冇住址證明 → 住址退入職表
-      { person: dryPerson(3), docs: [add('onboarding_form', 3, syntheticFormPage())] }, // 冇證件 → 退入職表
+      { person: dryPerson(1), docs: [add('id_card', 1, a.lines, a.photo), add('address_proof', 1, syntheticAddressProofPage()), add('onboarding_form', 1, syntheticFormPage(), SYNTHETIC_FORM_PHOTO)] }, // 三份文件齊
+      { person: dryPerson(2), docs: [add('id_card', 2, b.lines, b.photo), add('onboarding_form', 2, syntheticFormPage(), SYNTHETIC_FORM_PHOTO)] }, // 冇住址證明 → 住址退入職表
+      { person: dryPerson(3), docs: [add('onboarding_form', 3, syntheticFormPage(), SYNTHETIC_FORM_PHOTO)] }, // 冇證件 → 退入職表
       { person: dryPerson(4), docs: [] }, // 冇文件
-      { person: dryPerson(5), docs: [add('id_card', 5, noAnchor.lines, noAnchor.photo), add('onboarding_form', 5, syntheticFormPage())] }, // 認唔出卡面 → 身份證欄唔裁（避免連相片一齊裁）
+      { person: dryPerson(5), docs: [add('id_card', 5, noAnchor.lines, noAnchor.photo), add('onboarding_form', 5, syntheticFormPage(), SYNTHETIC_FORM_PHOTO)] }, // 認唔出卡面 → 身份證欄唔裁（避免連相片一齊裁）
       { person: dryPerson(6, { hkid: lf(HK_ID_VALID, 'confirmed'), nameZh: lf('測試甲', 'confirmed'), nameEn: lf('TESTER ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001110', 'confirmed'), address: lf('舊地址', 'confirmed') }), docs: [] }, // 冇 review 欄
     ],
   };
 }
 
-/** 用 ImageMagick 畫假頁：白底、文字行＝深灰塊、相片區＝純紅（測試用嚟證明裁圖冇紅色）。 */
-export async function drawSyntheticPage(d: DryDoc, out: string, size = { w: 1000, h: 1400 }): Promise<void> {
+/**
+ * 用 ImageMagick 畫假頁：白底、文字行＝深灰細條（高度 40%，似字形比 OCR box 細）、相片區＝純紅（身份證）／深色格（入職表）。
+ * rotateDeg＝將成頁順時針轉（模擬掃描時擺反：OCR 行座標要用 rotateLines 同步轉）。
+ */
+export async function drawSyntheticPage(d: DryDoc, out: string, size = { w: 1000, h: 1400 }, rotateDeg: Rotation = 0): Promise<void> {
   const args = ['-size', `${size.w}x${size.h}`, 'xc:white'];
   const rect = (b: Box, color: string) => ['-fill', color, '-draw', `rectangle ${Math.round(b.x0 * size.w)},${Math.round((1 - b.y1) * size.h)} ${Math.round(b.x1 * size.w)},${Math.round((1 - b.y0) * size.h)}`];
-  if (d.photo) args.push(...rect(d.photo, 'rgb(255,0,0)'));
-  for (const l of d.lines) args.push(...rect({ x0: l.x, x1: l.x + l.w, y0: l.y, y1: l.y + l.h }, 'rgb(60,60,60)'));
-  await sh(MAGICK, [...args, out]);
+  if (d.photo) args.push(...rect(d.photo, d.doc.type === 'onboarding_form' ? 'rgb(40,30,30)' : 'rgb(255,0,0)'));
+  for (const l of d.lines) args.push(...rect({ x0: l.x, x1: l.x + l.w, y0: l.y + l.h * 0.3, y1: l.y + l.h * 0.7 }, 'rgb(60,60,60)'));
+  await sh(MAGICK, [...args, ...(rotateDeg ? ['-rotate', String(rotateDeg)] : []), out]);
 }
 
 function dryDeps(docs: Map<string, DryDoc>): Deps {
