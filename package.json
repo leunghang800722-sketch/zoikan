@@ -32,6 +32,7 @@
     "staff-import:name-crops": "tsx scripts/staff-import/07-name-crops.ts",
     "staff-import:address-crops": "tsx scripts/staff-import/08-address-crops.ts",
     "staff-import:package": "tsx scripts/staff-import/06-build-package.ts",
+    "staff-import:triage-evidence": "tsx scripts/staff-import/20-triage-evidence.ts",
     "gate:roster-parse": "tsx scripts/gate/roster-parse.ts",
     "gate:ltpay-aug-fixture": "tsx scripts/gate/build-ltpay-aug-fixture.ts",
     "gate:ltpay-aug": "tsx scripts/gate/build-ltpay-aug-fixture.ts && tsx scripts/gate/longterm-payroll-aug.ts",
