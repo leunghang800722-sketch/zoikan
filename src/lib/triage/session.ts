@@ -18,6 +18,7 @@ import type { QuestionEvidence } from "./types";
 import { allExtSig, extValueSig } from "@/lib/guards/import/ext";
 import { BANK_KINDS, SUPPLEMENTARY_KINDS, WA_KINDS } from "./types";
 import { hasPermission } from "@/lib/rbac/requirePermission";
+import { deleteUnneeded } from "./evidence-images";
 
 export const isBoss = (s: Pick<AuthedSession, "baseRole">): boolean => s.baseRole === "老闆";
 
@@ -216,11 +217,16 @@ export async function createGuardImportTriage(input: { pkg: ImportPackage; packa
       }
       const drafts = input.openQuestions === false ? [] : draftGuardImportQuestions(input.pkg, evals, { viewPii, viewBank, guards, written });
       const touched = new Set<string>();
+      /** TE-1 M5：被作廢題涉及嘅 (session, person)——全部新題建好之後先 deleteUnneeded（同人同欄新題沿用舊圖；key 輪換就刪舊 person_key 嘅圖） */
+      const evidencePairs = new Map<string, { sessionId: string; personKey: string }>();
       const supersede = async (where: Prisma.TriageQuestionWhereInput): Promise<void> => {
-        const affected = await tx.triageQuestion.findMany({ where: { ...where, status: "open" }, select: { sessionId: true }, distinct: ["sessionId"] });
+        const affected = await tx.triageQuestion.findMany({ where: { ...where, status: "open" }, select: { sessionId: true, personKey: true }, distinct: ["sessionId", "personKey"] });
         if (affected.length === 0) return;
         await tx.triageQuestion.updateMany({ where: { ...where, status: "open" }, data: { status: "superseded" } });
-        for (const a of affected) touched.add(a.sessionId);
+        for (const a of affected) {
+          touched.add(a.sessionId);
+          if (a.personKey) evidencePairs.set(`${a.sessionId}|${a.personKey}`, { sessionId: a.sessionId, personKey: a.personKey });
+        }
       };
 
       // G. SESSION_SECRET 輪換：key 指紋唔同（或未記）嘅 session（包括自己呢個），open 題一律作廢
@@ -286,6 +292,7 @@ export async function createGuardImportTriage(input: { pkg: ImportPackage; packa
         });
       }
       if (session) touched.add(session.id);
+      for (const p of evidencePairs.values()) await deleteUnneeded(tx, p.sessionId, p.personKey);
       for (const id of touched) {
         const open = await tx.triageQuestion.count({ where: { sessionId: id, status: "open" } });
         const status = open === 0 ? "done" : "open";

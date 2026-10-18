@@ -20,6 +20,7 @@ import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from ".
 import { sameEnglishTokens } from "./generators/guard-import";
 import { TRIAGE_LOCK, kindClass } from "./session";
 import { identityFollowUps } from "./generators/guard-import";
+import { deleteUnneeded, shortenForSkipped } from "./evidence-images";
 import { BANK_KINDS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
 type QRow = TriageQuestion;
@@ -230,6 +231,8 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         data: { status: "skipped", answerJson: { option: "skip" }, answeredBy: actor.userId, answeredAt: now },
       });
       if (n.count !== 1) throw Conflict("呢條問題已經答過，唔可以重複套用");
+      // TE-1 M5：跳過＝仍然需要該欄證據圖（保留），但最長只留 30 日
+      await shortenForSkipped(tx, q, now);
       await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_questions", rowId: q.id, action: "triage_answer", after: { session_id: q.sessionId, kind: q.kind, option: "skip", writes: false }, ip });
     });
     return await finish("skipped", null, q.sessionId);
@@ -307,13 +310,15 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
           });
         }
       }
+      // TE-1 M5：答題即刪——喺跟進題建立之後，刪走已冇 open／skipped 題需要嘅欄嘅證據圖（部分作答只刪已答欄）
+      const evidenceDeleted = await deleteUnneeded(tx, q.sessionId, q.personKey);
       const r = outcome.result;
       await writeAuditTx(tx, {
         actorUserId: actor.userId,
         tableName: "triage_questions",
         rowId: q.id,
         action: "triage_answer",
-        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: !extra, ...(extra ? { answered_via: extra.source } : {}) },
+        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: !extra, ...(extra ? { answered_via: extra.source } : {}), ...(evidenceDeleted > 0 ? { evidence_deleted: evidenceDeleted } : {}) },
         ip,
       });
       // 同 guard_import_apply summary 一致形狀（月度修正摘要會計入「覆核決定」）

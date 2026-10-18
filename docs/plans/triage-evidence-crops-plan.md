@@ -50,9 +50,9 @@
 - **M3 權限**：讀圖按欄位映射現有 field-group：姓名／出生日期／地址／身份證號 → 「安員個人資料:view」；電話 → 「安員:view」；銀行欄**剔除範圍**；另加 `restrictedKindsFor` 同 `canAccessOwnedBy`（主管只睇自己嗰批）。
 - **M4 bytes 白名單**：`image_bytes` 只由圖片 GET 讀；所有 session／題目 JSON DTO 用 META_SELECT（照 `meta-select.ts`）並加白名單測試，斷言 JSON 永不含 bytes（`brandSafeResponse` 只係 type cast，runtime 唔過濾）。
 - **M5 保留不變式**：圖以 `(session_id, person_key, field)` 為鍵；**只要仍有 open 或 skipped 題需要該欄，圖就存在；否則同一 tx 刪除**。覆蓋：submitAnswer（`beforeCommit`，`updateMany count===1` 之後）、TR-2 部分作答（只刪已答欄）、跳過可再答（保留至 30 日）、session done 喺 commit 後（由不變式＋job 處理，唔靠 done 事件）、supersede 兩類（key 輪換刪舊 person_key；重新導入同人同欄新題沿用舊圖）。每日 job（registry＋advisory lock、分批）清 30 日／180 日安全網同孤兒圖；audit 只計數。每類情況都要測試。
-- **M6 zip 安全**：entry 名必須係不透明 id（唔准真名）；伺服器唔回顯 entry 名／manifest 內容（回應、error、`app_error_log` 都唔准）；限解壓總量（≤32 MB）／entry 數（≤400）；驗 JPEG／PNG magic bytes；manifest 必須有 `match`，冇就整個拒絕。
+- **M6 zip 安全**（Opus 驗收 bca497c 再修，已修：逐 entry 串流解壓、唔信 zip 宣告尺寸，單張超 120 KB 即時中止、全部見過 bytes ≤32 MB、解壓錯誤一律固定句 400）：entry 名必須係不透明 id（唔准真名）；伺服器唔回顯 entry 名／manifest 內容（回應、error、`app_error_log` 都唔准）；限解壓總量（≤32 MB）／entry 數（≤400）；驗 JPEG／PNG magic bytes；manifest 必須有 `match`，冇就整個拒絕。
 - **M7 配對**：本機腳本由同一條 extract 記錄（文件→人）同時產生裁圖同 `match`，唔分開兩次配對；伺服器只驗 manifest 身份同題目 evidence 一致（驗唔到圖內容）；上載前 dry-run 顯示計數，首批由人喺 UI 抽查 10 題。
-- **M8 身份證裁圖**：唔可以包含相片頭像——姓名區、號碼區各自裁，避開相片區（幾何用身份證版面比例，另加測試圖）。
+- **M8 身份證裁圖**（Opus 驗收 bca497c 再修，已修：fixture 改真卡版面——相片右上、號碼喺相片正下方；號碼框只向下外擴並以相片下緣做 barrier，左邊欄位以相片左緣做右 barrier；加真版面像素測試＋號碼行緊貼相片底邊界測試）：唔可以包含相片頭像——姓名區、號碼區各自裁，避開相片區（幾何用身份證版面比例，另加測試圖）。
 - **M9 顯示／隔離**：唔用 `next/image`（會落磁碟快取）；回應 `Cache-Control: private, no-store`＋`X-Content-Type-Options: nosniff`；新表加入 `ai.audit_log` NOT IN；加 `zoikan_ai_ro` 讀唔到新表嘅真連線隔離測試（同 WhatsApp 表一樣）。
 - **S1 應用層加密（採納）**：`image_bytes` 用 AES-256-GCM 加密後存；key 由現有 `SESSION_SECRET` 經 HKDF（info `triage-evidence-v1`）派生，**唔加新 secret**；DB 備份／dump 唔係明文。
 - **S2**：每欄 ≤2 張、每題總數 ≤12；**S3**：睇圖寫只計數 audit（題 id＋張數）；**S4**：本機腳本剝走 EXIF／APPn，伺服器驗 header；**S5**：補做次序＝先跑 TR 自動答題，再上載裁圖。
@@ -70,3 +70,4 @@
 
 - 本機腳本按此表揀來源；zip manifest 每張圖帶 `doc_kind`（id_card／address_proof／onboarding_form／sia_permit）同 `priority`（1＝優先來源、2＝退而求其次），**兩個來源都有時可以兩張都出**（每欄 ≤2 張，優先來源排前），題卡先顯示優先來源，第二張摺埋「亦見入職表手寫」。
 - 題卡顯示來源標籤（「身份證副本」／「住址證明」／「入職表手寫」）俾覆核人知道對住邊份文件。
+- **驗收後再修（S-a／S-b，已修）**：`inspectJpeg` 掃到 EOI 為止（SOF 之後 APPn／COM、EOI 後尾巴都拒），圖片長邊上限收緊到 800；上載 route 串流讀 body、累計 >8 MB 即 413 固定句（唔靠 content-length）。

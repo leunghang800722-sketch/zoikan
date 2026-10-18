@@ -23,6 +23,7 @@ export async function clearAll() {
   // granted 值會俾測試改（例如 tests/wp2-roles-permissions-endpoint.
   // test.ts 開一格 off→on）——所以呢度每次都刪晒再照出廠矩陣重種一次，
   // 保證每個 test 開始都係出廠設定，唔會俾第啲 test file 嘅改動漏過嚟。
+  await prisma.triageEvidenceImage.deleteMany({}); // TE-1：覆核證據裁圖（FK 落 triage_sessions，cascade；呢度顯式清）
   await prisma.appNotification.deleteMany({}); // P7.1：通知（無 FK）
   await prisma.jobRun.deleteMany({}); // P7.1：排程紀錄（無 FK）
   await prisma.aiDailyUsage.deleteMany({}); // P9.2：AI 每日額度計數（無 FK）
