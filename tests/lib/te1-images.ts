@@ -39,7 +39,7 @@ export interface ManifestItem {
   file: string;
   field: string;
   doc_kind: string;
-  priority: 1 | 2;
+  priority: 1 | 2 | 3;
   match?: { hkid?: string | null; staff_numbers?: string[] };
 }
 
@@ -50,7 +50,7 @@ export async function buildZip(entries: Record<string, Uint8Array | string>): Pr
 }
 
 /** 一張圖一個 item：回 zip bytes。 */
-export async function zipOf(items: { bytes: Uint8Array; field: string; doc_kind: string; priority: 1 | 2; match: { hkid?: string | null; staff_numbers?: string[] }; ext?: "jpg" | "png" }[], extra: Record<string, Uint8Array | string> = {}): Promise<Uint8Array> {
+export async function zipOf(items: { bytes: Uint8Array; field: string; doc_kind: string; priority: 1 | 2 | 3; match: { hkid?: string | null; staff_numbers?: string[] }; ext?: "jpg" | "png" }[], extra: Record<string, Uint8Array | string> = {}): Promise<Uint8Array> {
   const entries: Record<string, Uint8Array | string> = {};
   const manifest: ManifestItem[] = [];
   for (const it of items) {

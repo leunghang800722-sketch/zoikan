@@ -6,6 +6,7 @@ import {
   extractAddress,
   extractForm,
   extractIdCard,
+  embeddedCardLines,
   extractPermit,
   type AddressResult,
   type Classified,
@@ -112,7 +113,8 @@ export function aggregateDoc(
   pages.forEach((p, i) => {
     const kinds = classified[i].kinds;
     if (kinds.includes('id_card')) {
-      const r = extractIdCard(p.page, p.lines);
+      // TE-2：夾喺牌照頁等嘅細身份證副本——抽取只對卡區行做（避免掃到整頁其他資料）
+      const r = extractIdCard(p.page, classified[i].embeddedCard ? (embeddedCardLines(p.lines) ?? p.lines) : p.lines);
       ids.push(r);
       if (p.alt) idAlt.set(r, p.rot ?? 0);
     }

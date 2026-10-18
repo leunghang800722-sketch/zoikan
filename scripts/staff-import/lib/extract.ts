@@ -1,6 +1,7 @@
 // 頁面分類＋欄位抽取（純函數，輸入 OCR 行，無 IO）。
 import { canonicalHkid, findHkidCandidates, hkidCheckDigitValid, repairHkid, repairHkidLeadingLetter } from './hkid';
 import { cy, norm, readingOrder, toRows, type OcrLine, type OcrPage } from './ocr';
+import { cardLines, findEmbeddedCards } from './embedded-card';
 
 export type PageKind = 'id_card' | 'address_proof' | 'address_declaration' | 'application_form' | 'sia_permit' | 'bank' | 'other' | 'blank';
 export type Level = 'high' | 'medium' | 'low';
@@ -19,6 +20,12 @@ export interface Field<T = string> {
 }
 
 // ---------------------------------------------------------------- 分類
+/** TE-2：頁內第一張嵌入式身份證嘅卡區行（搵唔到＝null）。頁面闊高比唔知，用 A4 直向 0.707。 */
+export function embeddedCardLines(lines: readonly OcrLine[]): OcrLine[] | null {
+  const c = findEmbeddedCards(lines, 210 / 297)[0];
+  return c ? cardLines(c, lines) : null;
+}
+
 const RE_ID_ANCHOR = /永久性?居民身份[證讚證]|居民身份證|PERMANENT\s*IDENTITY|HONG\s*KONG\s*(?:PERMANENT\s*)?IDENTITY\s*CARD|香港身份證(?!號)|香港身分證(?!號)/i;
 const RE_ORG = /LIMITED|LTD|DEPARTMENT|REVENUE|局|公司|MOBILE|BANK|銀行|COMPANY|HOLDINGS/i;
 /** 身份證 anchor 係卡面短標題行；申請表「香港身份證號碼：」「H.K. I.D. Card」呢類欄位標籤唔算。 */
@@ -121,6 +128,8 @@ export interface Classified {
   page: number;
   kinds: PageKind[]; // 可多標籤（拼貼頁）
   primary: PageKind;
+  /** TE-2：呢頁嘅 id_card 標籤係靠「夾喺頁入面嘅細身份證副本」補標（唔係整頁身份證）——身份證抽取只對卡區行做 */
+  embeddedCard?: boolean;
 }
 
 export function classifyPage(p: OcrPage): Classified {
@@ -151,9 +160,15 @@ export function classifyPage(p: OcrPage): Classified {
   if (isPermit) kinds.push('sia_permit');
   if (RE_BANK.test(text) && !kinds.includes('address_proof')) kinds.push('bank');
   if (!kinds.length) kinds.push('other');
+  // TE-2：一頁多文件——整頁唔係身份證，但夾住細身份證副本（例如保安牌照頁右下角）→ 補標 id_card（primary 唔變）
+  let embeddedCard = false;
+  if (!kinds.includes('id_card') && !isForm && embeddedCardLines(lines)) {
+    kinds.push('id_card');
+    embeddedCard = true;
+  }
   const order: PageKind[] = ['application_form', 'id_card', 'address_proof', 'address_declaration', 'sia_permit', 'bank', 'other'];
-  const primary = order.find((k) => kinds.includes(k)) ?? 'other';
-  return { page: p.page, kinds, primary };
+  const primary = order.find((k) => kinds.includes(k) && !(embeddedCard && k === 'id_card')) ?? 'other';
+  return { page: p.page, kinds, primary, ...(embeddedCard ? { embeddedCard: true } : {}) };
 }
 
 // ---------------------------------------------------------------- 身份證頁

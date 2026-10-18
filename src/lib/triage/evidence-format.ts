@@ -1,31 +1,37 @@
 // TE-1：證據裁圖「格式／來源表」——純函數、零 DB 依賴（伺服器同本機腳本 scripts/staff-import/20-triage-evidence.ts 共用）。
 //  - 欄位／文件類別／每欄來源優先順序（老闆 2026-10-18 補充，方案 §7）／張數與大小上限。
 //  - 圖片 header 驗證（S4）：magic bytes、尺寸、剝走 EXIF／APPn／文字 chunk。
-export const EVIDENCE_FIELDS = ["hkid", "name_zh", "name_en", "dob", "phone", "address", "permit_no"] as const;
+export const EVIDENCE_FIELDS = ["hkid", "name_zh", "name_en", "dob", "phone", "address", "permit_no", "hire_date"] as const;
 export type EvidenceField = (typeof EVIDENCE_FIELDS)[number];
-export const DOC_KINDS = ["id_card", "onboarding_form", "address_proof", "sia_permit"] as const;
+export const DOC_KINDS = ["id_card", "onboarding_form", "address_proof", "sia_permit", "printed"] as const;
 export type DocKind = (typeof DOC_KINDS)[number];
 
-/** 每欄來源優先順序（方案 §7）：index 0＝優先來源（priority 1），index 1＝退而求其次（priority 2）。 */
+/**
+ * 每欄來源優先順序（方案 §7；TE-2：身份證號加「印刷」來源）：priority＝喺該欄清單入面嘅位置（1 起）。
+ * 身份證號：身份證副本（含夾喺牌照頁等嘅嵌入式身份證）1 ＞ 牌照／證書印刷 2 ＞ 入職表手寫 3。
+ */
 export const FIELD_DOC_PRIORITY: Record<EvidenceField, readonly DocKind[]> = {
-  hkid: ["id_card", "onboarding_form"],
+  hkid: ["id_card", "printed", "onboarding_form"],
   name_zh: ["id_card", "onboarding_form"],
   name_en: ["id_card", "onboarding_form"],
   dob: ["id_card", "onboarding_form"],
   address: ["address_proof", "onboarding_form"],
   phone: ["onboarding_form"],
   permit_no: ["sia_permit", "onboarding_form"],
+  // TE-2：入職表「入職日期」（人事部格）同「可到職日期」兩格，同屬 onboarding_form（priority 1）；非敏感，權限跟「保安員:view」
+  hire_date: ["onboarding_form"],
 };
-/** doc_kind 喺該欄嘅 priority（1／2）；唔屬該欄允許來源＝null。 */
-export function priorityOf(field: EvidenceField, doc: DocKind): 1 | 2 | null {
+/** doc_kind 喺該欄嘅 priority（1／2／3）；唔屬該欄允許來源＝null。 */
+export function priorityOf(field: EvidenceField, doc: DocKind): 1 | 2 | 3 | null {
   const i = FIELD_DOC_PRIORITY[field].indexOf(doc);
-  return i === 0 ? 1 : i === 1 ? 2 : null;
+  return i === 0 ? 1 : i === 1 ? 2 : i === 2 ? 3 : null;
 }
-export const DOC_KIND_LABEL: Record<DocKind, string> = { id_card: "身份證副本", address_proof: "住址證明", onboarding_form: "入職表手寫", sia_permit: "牌照卡副本" };
+export const DOC_KIND_LABEL: Record<DocKind, string> = { id_card: "身份證副本", address_proof: "住址證明", onboarding_form: "入職表手寫", sia_permit: "牌照卡副本", printed: "牌照／證書印刷" };
 
 export const MAX_IMAGE_BYTES = 120 * 1024;
-export const MAX_PER_FIELD = 2;
-export const MAX_PER_PERSON = 12;
+/** TE-2：每欄 ≤3（身份證副本／印刷／入職表手寫），每人 ≤18（原 2／12） */
+export const MAX_PER_FIELD = 3;
+export const MAX_PER_PERSON = 18;
 export const RETENTION_DAYS = 180;
 export const SKIPPED_RETENTION_DAYS = 30;
 export const ENC_VERSION = 1;

@@ -33,6 +33,10 @@ import {
   detectUprightRotation,
   capBox,
   clipToPhoto,
+  detectEmbeddedCards,
+  findPrintedHkidLines,
+  type EmbeddedSource,
+  type PrintedSource,
   expectedValuesFor,
   findOverflow,
   lineHasOwnLabel,
@@ -50,6 +54,7 @@ import {
   type CropRequest,
   type EvidenceItem,
 } from './lib/triage-evidence-core';
+import { inBox } from './lib/embedded-card';
 import { buildStaffNoIndex, docIdsForPerson, pickDocPages, type DocPage, type ExtRow, type ExtractRow, type PkgPerson } from './lib/triage-reread-core';
 import { resolveSourcePage } from './19-triage-reread';
 
@@ -270,11 +275,24 @@ export async function finalizeImage(png: string, box: Box | null, tmp: string): 
 }
 
 /** 身份證／入職表／住址證明一個欄：偵測方向 → 轉正 lines → 定位 → 轉正頁面 → 裁 → 邊緣帶檢查。回 bytes 或跳過原因。 */
-export async function cropRequest(req: CropRequest, png: string, lines: OcrLine[], tmp: string, rotatedCache?: Map<string, string>, verify?: VerifyHook, opts: { assumeRot?: Rotation | null } = {}): Promise<(FinalizeResult | { reason: string }) & { capped?: boolean }> {
-  const rot: Rotation = ('assumeRot' in opts ? opts.assumeRot : detectUprightRotation(req.docKind, lines)) ?? 0;
+export async function cropRequest(req0: CropRequest, png: string, lines: OcrLine[], tmp: string, rotatedCache?: Map<string, string>, verify?: VerifyHook, opts: { assumeRot?: Rotation | null } = {}): Promise<(FinalizeResult | { reason: string }) & { capped?: boolean }> {
+  let req = req0;
   const { w, h } = await sizeOf(png);
-  const [W, H] = rot === 90 || rot === 270 ? [h, w] : [w, h]; // 轉正後 frame 嘅頁面像素
-  const g = boxForRequest(req, rotateLines(lines, rot), W / H);
+  const dims = (r: Rotation): [number, number] => (r === 90 || r === 270 ? [h, w] : [w, h]); // 轉正後 frame 嘅頁面像素
+  // 嵌入式身份證／印刷號碼行：方向喺偵測時已經定（rot）；其餘按版面推算
+  let rot: Rotation = req.embedded?.rot ?? req.printed?.rot ?? (('assumeRot' in opts ? opts.assumeRot : detectUprightRotation(req.docKind, lines)) ?? 0);
+  let [W, H] = dims(rot);
+  let g = boxForRequest(req, rotateLines(lines, rot), W / H);
+  if (!g.box && g.reason === 'no_card_anchor' && req.docKind === 'id_card' && !req.embedded) {
+    // 導入分類為 id_card 但頁面其實係夾住細卡嘅牌照頁等（冇整頁標題 anchor）→ 試嵌入式偵測
+    const det = detectEmbeddedCards(lines, w / h);
+    if (det) {
+      req = { ...req, embedded: { rot: det.rot, region: det.cards[0]!.box } };
+      rot = det.rot;
+      [W, H] = dims(rot);
+      g = boxForRequest(req, rotateLines(lines, rot), W / H);
+    }
+  }
   if (!g.box) return { reason: g.reason ?? 'no_box' };
   let box = g.box;
   let capped = false;
@@ -371,26 +389,29 @@ const textOf = (p: VisionPage | undefined): string => (p?.lines ?? []).map((l) =
  * 冇預期值（例如身份證號 missing）＝無法驗證（score null，唔轉）。
  */
 export async function verifyCrop(png: string, field: EvidenceField, expected: readonly string[], run: VisionRunner, tmp: string, opts: { checkOverflow?: boolean; pagePrior?: Rotation | null } = {}): Promise<VerifyOutcome> {
-  if (expected.length === 0) return { ok: true, score: null, rotate: 0 };
+  // 冇預期值（TE-2：missing 欄照裁）：跳過相似度驗證（score null），方向（.fast 可讀字數）、越界檢查照做
+  const noExp = expected.length === 0;
   // Vision 輸入：放大到高度 ≥200px（上限 4×）＋四邊留白 24px——細裁圖直接讀會漏字
   const { h } = await sizeOf(png);
   const scale = Math.min(4, Math.max(1, 200 / Math.max(1, h)));
   const vin = path.join(tmp, `vin-${Math.random().toString(36).slice(2)}.png`);
   await sh(MAGICK, [png, ...(scale > 1.01 ? ['-filter', 'Lanczos', '-resize', `${Math.round(scale * 100)}%`] : []), '-bordercolor', 'white', '-border', '24', vin]);
   const [acc] = await run([vin], false);
-  const score = similarity(field, textOf(acc), expected);
-  if (score < VERIFY_THRESHOLD[field]) return { ok: false, reason: 'value_mismatch', score };
+  const score = noExp ? null : similarity(field, textOf(acc), expected);
+  if (score !== null && score < VERIFY_THRESHOLD[field]) return { ok: false, reason: 'value_mismatch', score };
   const vs = await sizeOf(vin);
   const sideways = textUprightness(acc?.lines ?? [], vs.w, vs.h) < 0;
   const cands: Rotation[] = sideways ? [90, 270] : [0, 180];
   const files = await Promise.all(cands.map((d) => rotateFile(vin, d, tmp)));
   const fast = await run(files, true);
-  const sc = fast.map((p) => similarity(field, textOf(p), expected));
+  // 有預期值：.fast 讀數對預期值嘅相似度；冇：.fast 讀到嘅字母數字數（對方向敏感：正向先讀得到）
+  const sc = fast.map((p) => (noExp ? textOf(p).replace(/[^0-9A-Za-z\u4e00-\u9fff]/g, '').length : similarity(field, textOf(p), expected)));
   const [a, b] = [sc[0] ?? 0, sc[1] ?? 0];
+  const decided = noExp ? Math.max(a, b) >= 4 && Math.max(a, b) >= 2 * Math.min(a, b) + 2 : Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2;
   // 入職表：裁圖文字越界檢查（其他欄 label 關鍵詞）——座標由 Vision 輸入（放大＋留白）換返裁圖正規化
   const overflow = opts.checkOverflow ? findOverflow(field, (acc?.lines ?? []).map((l) => ({ t: l.t, x: (l.x * vs.w - 24) / (vs.w - 48), y: (l.y * vs.h - 24) / (vs.h - 48), w: (l.w * vs.w) / (vs.w - 48), h: (l.h * vs.h) / (vs.h - 48) })), (l) => lineHasOwnLabel(field, l.t) || scoreAgainst(field, l.t, expected[0] ?? '') >= 0.5 || similarity(field, l.t, expected) >= 0.5) : null;
   const ov = overflow ? { overflow } : {};
-  if (Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]!, decisive: true, ...ov };
+  if (decided) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]!, decisive: true, ...ov };
   // S3：冇證據（例如純中文 .fast 讀唔準）→ 沿用同一頁其他欄判到嘅方向（同頁方向一致）；全頁冇任何欄判到就維持 prior（橫排當 0°、側躺 unknown）
   const pp = opts.pagePrior;
   if (pp !== undefined && pp !== null && cands.includes(pp)) return { ok: true, score, rotate: pp, decisive: false, followedPage: true, ...ov };
@@ -433,7 +454,12 @@ export interface PersonInput {
   docs: DocPage[];
   /** 額外候選值／讀數（例如 person-fields 嘅 candidates），只用嚟驗證 */
   extra?: Partial<Record<EvidenceField, string[]>>;
+  /** TE-2：呢個人所有文件嘅所有頁（唔理導入分類）——搵嵌入式身份證、印刷身份證號 */
+  scanPages?: { docId: string; page: number }[];
 }
+
+/** 掃描頁假設嘅頁面闊高比（A4 直向）；實際裁圖用真實像素尺寸 */
+const SCAN_ASPECT = 210 / 297;
 
 /** 核心：每人 → 請求 → 圖（現成優先；否則 OCR 幾何即時裁）→ items。純粹經 deps 做 IO。 */
 export async function produceItems(people: readonly PersonInput[], deps: Deps, stats: Stats, opts: { concurrency?: number } = {}): Promise<EvidenceItem[]> {
@@ -444,13 +470,32 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const fields = evidenceFieldsOf(pi.person);
       if (fields.length === 0) return;
       stats.persons_with_fields += 1;
-      if (pi.docs.length === 0) {
+      if (pi.docs.length === 0 && !(pi.scanPages?.length)) {
         stats.persons_no_docs += 1;
         return;
       }
       const match = matchOfPerson(pi.person);
       // name_zh（純中文，.fast 判唔準方向）排最後，先令其他欄有機會判到同頁方向
-      const reqs = [...planRequests(fields, pi.docs)].sort((x, y) => Number(x.field === 'name_zh') - Number(y.field === 'name_zh'));
+      // TE-2：一頁多文件——搵嵌入式身份證（冇整頁身份證副本時）同印刷身份證號行（任何頁，唔理導入分類）
+      const needsId = fields.some((f) => f === 'hkid' || f === 'name_zh' || f === 'name_en' || f === 'dob');
+      const hasClassicId = pi.docs.some((d) => d.type === 'id_card');
+      const embedded: EmbeddedSource[] = [];
+      const printed: PrintedSource[] = [];
+      if ((needsId && !hasClassicId) || fields.includes('hkid')) {
+        for (const sp of pi.scanPages ?? []) {
+          if (embedded.length > 0 && printed.length > 0) break;
+          const doc: DocPage = { type: 'id_card', docId: sp.docId, page: sp.page };
+          const lines = await deps.lines(doc).catch(() => null);
+          if (!lines) continue;
+          const det = detectEmbeddedCards(lines, SCAN_ASPECT);
+          if (det && needsId && !hasClassicId && embedded.length === 0) embedded.push({ doc, rot: det.rot, region: det.cards[0]!.box });
+          if (fields.includes('hkid') && printed.length === 0) {
+            const inCard = (l: OcrLine) => !!det && det.cards.some((c) => inBox(c.box, rotateLines([l], det.rot)[0]!));
+            for (const pr of findPrintedHkidLines(lines, SCAN_ASPECT, inCard)) printed.push({ doc, rot: pr.rot, line: pr.line });
+          }
+        }
+      }
+      const reqs = [...planRequests(fields, pi.docs, { embedded, printed })].sort((x, y) => Number(x.field === 'name_zh') - Number(y.field === 'name_zh'));
       const pageCache = new Map<string, string | null>();
       const rotCache = new Map<string, string>();
       // S3：同一頁方向一致——有欄判到（decisive）就記低，純中文姓名等判唔到嘅欄跟返
@@ -640,7 +685,10 @@ async function loadLive(args: Args): Promise<Loaded> {
     }
     return out;
   };
-  return { people: persons.map((person) => ({ person, docs: pickDocPages(docIdsForPerson(person, staffIdx), extractBy), extra: extraOf(person) })), deps, existingIgnored: ex.ignored, personsTotal };
+  // TE-2：每個人所有文件嘅所有頁（除入職表頁）——搵嵌入式身份證／印刷身份證號（唔理導入分類）
+  const scanPagesOf = (person: PkgPerson) =>
+    docIdsForPerson(person, staffIdx).flatMap((docId) => (extractBy.get(docId)?.pages ?? []).filter((pg) => !pg.kinds.includes('application_form') && !pg.kinds.includes('blank')).map((pg) => ({ docId, page: pg.page })));
+  return { people: persons.map((person) => ({ person, docs: pickDocPages(docIdsForPerson(person, staffIdx), extractBy), extra: extraOf(person), scanPages: scanPagesOf(person) })), deps, existingIgnored: ex.ignored, personsTotal };
 }
 
 // ---------------------------------------------------------------------------
@@ -681,6 +729,7 @@ export function syntheticFormPage(): OcrLine[] {
     L('職位申請表 EMPLOYMENT APPLICATION', 0.1, 0.92, 0.5),
     L('中文姓名：', 0.08, 0.8, 0.12), L('測試甲', 0.21, 0.8, 0.12), L('English Name:', 0.4, 0.8, 0.14), L('TESTER ALPHA', 0.55, 0.8, 0.16),
     L('香港身份證：', 0.08, 0.7, 0.12), L(HK_ID_VALID, 0.21, 0.7, 0.13), L('出生日期：', 0.4, 0.7, 0.11), L('15-01-1990', 0.52, 0.7, 0.13), L('出生地點：', 0.68, 0.7, 0.09), L('香港', 0.78, 0.6, 0.05),
+    L('入職日期：', 0.08, 0.6, 0.11), L('可到職日期：', 0.4, 0.6, 0.13), L('2026-11-01', 0.54, 0.6, 0.12),
     L('手提電話：', 0.08, 0.5, 0.11), L('90001110', 0.2, 0.5, 0.12), L('住所電話：', 0.45, 0.5, 0.11),
     L('住址：', 0.08, 0.42, 0.06), L('火炭示範街99號虛構大廈15樓A室', 0.15, 0.42, 0.4),
     L('通訊地址：', 0.08, 0.34, 0.1),
@@ -693,6 +742,31 @@ export const SYNTHETIC_FORM_PHOTO: Box = { x0: 0.78, x1: 0.97, y0: 0.68, y1: 0.9
 
 export function syntheticAddressProofPage(): OcrLine[] {
   return [L('水務署 付款通知書', 0.1, 0.9, 0.3), L('測試乙', 0.1, 0.7, 0.1), L('九龍火炭示範街99號', 0.1, 0.67, 0.3), L('虛構大廈15樓A室', 0.1, 0.64, 0.3), L('新界 香港', 0.1, 0.61, 0.2)];
+}
+
+/**
+ * 保安牌照頁（右下角貼住一張細身份證副本）——TE-2 嵌入式身份證 fixture。
+ * 卡：號碼印喺相片正下方（右下）、左邊英文名／中文名／出生日期／簽發日期；卡區 x≈0.51–0.82、y≈0.10–0.24。
+ */
+export function syntheticPermitPageWithEmbeddedCard(): { lines: OcrLine[]; photo: Box } {
+  const lines: OcrLine[] = [
+    L('保安人員許可證 SECURITY PERSONNEL PERMIT', 0.08, 0.92, 0.6),
+    L('許可證編號 PERMIT NO. S-123456-7', 0.08, 0.85, 0.4),
+    L('屆滿日期 2028-03-01', 0.08, 0.8, 0.3),
+    // 嵌入式身份證副本
+    L('TESTER, Alpha', 0.53, 0.215, 0.14, 0.012),
+    L('測試甲', 0.53, 0.2, 0.06, 0.012),
+    L('出生日期 Date of Birth', 0.53, 0.185, 0.16, 0.012),
+    L('15-01-1990', 0.55, 0.17, 0.1, 0.012),
+    L('簽發日期 Date of Issue', 0.53, 0.15, 0.15, 0.012),
+    L(HK_ID_VALID, 0.72, 0.12, 0.08, 0.016),
+  ];
+  return { lines, photo: { x0: 0.71, x1: 0.81, y0: 0.142, y1: 0.235 } };
+}
+
+/** 證書頁（QASRS）：印刷咗身份證號（整行，唔喺任何卡區內）。 */
+export function syntheticCertificatePage(): OcrLine[] {
+  return [L('QASRS 證書 CERTIFICATE', 0.1, 0.9, 0.4), L('姓名 NAME TESTER ALPHA', 0.1, 0.8, 0.4), L(HK_ID_VALID, 0.4, 0.6, 0.12, 0.02), L('2026-01-01', 0.4, 0.5, 0.1)];
 }
 
 interface DryDoc {
@@ -723,7 +797,9 @@ export function dryFixture(): { people: PersonInput[]; docs: Map<string, DryDoc>
   };
   const a = syntheticIdCardPage();
   const b = syntheticIdCardPage();
+  // 認唔出卡面：冇標題 anchor、亦冇出生日期／簽發日期 label（連嵌入式偵測都認唔到）
   const noAnchor = syntheticIdCardPage(false);
+  noAnchor.lines = noAnchor.lines.filter((l) => !/出生日期|簽發日期/.test(l.t));
   return {
     docs,
     people: [
@@ -732,6 +808,18 @@ export function dryFixture(): { people: PersonInput[]; docs: Map<string, DryDoc>
       { person: dryPerson(3), docs: [add('onboarding_form', 3, syntheticFormPage(), SYNTHETIC_FORM_PHOTO)] }, // 冇證件 → 退入職表
       { person: dryPerson(4), docs: [] }, // 冇文件
       { person: dryPerson(5), docs: [add('id_card', 5, noAnchor.lines, noAnchor.photo), add('onboarding_form', 5, syntheticFormPage(), SYNTHETIC_FORM_PHOTO)] }, // 認唔出卡面 → 身份證欄唔裁（避免連相片一齊裁）
+      // TE-2：全部欄 missing（導入流程分類漏咗）：入職表 1 頁；牌照頁右下角嵌身份證；證書頁印刷咗號碼
+      (() => {
+        const permit = syntheticPermitPageWithEmbeddedCard();
+        const permitDoc = add('sia_permit' as DocPage['type'], 7, permit.lines, permit.photo);
+        const certDoc = add('sia_permit' as DocPage['type'], 70, syntheticCertificatePage());
+        const form = add('onboarding_form', 7, syntheticFormPage(), SYNTHETIC_FORM_PHOTO);
+        return {
+          person: dryPerson(7, { hkid: lf(null, 'missing'), nameZh: lf(null, 'missing'), nameEn: lf(null, 'missing'), dateOfBirth: lf(null, 'missing'), phone: lf(null, 'missing'), address: lf(null, 'missing') }),
+          docs: [form],
+          scanPages: [permitDoc, certDoc].map((d) => ({ docId: d.docId, page: d.page })),
+        } as PersonInput;
+      })(),
       { person: dryPerson(6, { hkid: lf(HK_ID_VALID, 'confirmed'), nameZh: lf('測試甲', 'confirmed'), nameEn: lf('TESTER ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001110', 'confirmed'), address: lf('舊地址', 'confirmed') }), docs: [] }, // 冇 review 欄
     ],
   };

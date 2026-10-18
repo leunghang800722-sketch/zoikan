@@ -71,3 +71,14 @@
 - 本機腳本按此表揀來源；zip manifest 每張圖帶 `doc_kind`（id_card／address_proof／onboarding_form／sia_permit）同 `priority`（1＝優先來源、2＝退而求其次），**兩個來源都有時可以兩張都出**（每欄 ≤2 張，優先來源排前），題卡先顯示優先來源，第二張摺埋「亦見入職表手寫」。
 - 題卡顯示來源標籤（「身份證副本」／「住址證明」／「入職表手寫」）俾覆核人知道對住邊份文件。
 - **驗收後再修（S-a／S-b，已修）**：`inspectJpeg` 掃到 EOI 為止（SOF 之後 APPn／COM、EOI 後尾巴都拒），圖片長邊上限收緊到 800；上載 route 串流讀 body、累計 >8 MB 即 413 固定句（唔靠 content-length）。
+
+## 8. TE-2 補充（老闆 2026-10 核實個案後）：觸發、一頁多文件、印刷來源、入職日期、題型映射
+原則：**題目仲 open、需要嗰個欄，就按 label／版面位置裁出嚟俾人睇，唔理 OCR 讀到讀唔到值。**
+- **觸發**：對每個人所有**非 confirmed** 欄（review／missing／absent）出裁圖請求（hkid、name_zh、name_en、dob、address、phone）＋入職日期；伺服器將唔需要嘅欄計 skipped_not_needed。冇預期值：Vision 相似度驗證跳過（無 `verify_score`），方向（`.fast` 可讀字數）、越界檢查、相片防線、capBox 照做；入職表欄靠 label 定位，格內空白都裁。
+- **一頁多文件**：每人每一頁（唔理導入分類）用 OCR 行搵嵌入式身份證——整行符合 HKID 格式＋卡區內有「出生日期／Date of Birth／簽發日期」label；由號碼行闊度（約卡闊 1/3.8）推 85.6×54mm 卡區（號碼印喺相片正下方右下）；喺卡區行現有 id_card 裁圖邏輯，doc_kind=`id_card`、priority 1（整頁身份證副本優先於嵌入卡）。
+- **印刷來源**：符合 HKID 格式、唔喺卡區、唔係整頁身份證（有標題 anchor）嘅行（牌照頁、證書頁）裁該行，小 padding，doc_kind=`printed`。
+- **優先順序**：身份證號＝身份證副本 1 ＞ 牌照／證書印刷 2 ＞ 入職表手寫 3（其他欄不變：身份證欄 身份證 1／入職表 2；住址 住址證明 1／入職表 2；電話 入職表 1）。**每欄上限 2→3，每人上限 12→18。**題卡來源標籤加「牌照／證書印刷」，第二、三張摺埋。
+- **新欄 `hire_date`**：入職表「入職日期」（OCR 誤讀「人職日期」都認）同「可到職日期」各裁一格（入職日期先），doc_kind=`onboarding_form`，權限跟「保安員:view」（非敏感）。
+- **題型→所需欄**：name_only_candidate→name_zh＋name_en；tel_only_candidate／dup_tel_across_persons→phone；ext_identity_check→hkid＋name_zh＋name_en（另加 ext 欄：牌照號、入職日期）；no_id_card→hkid＋name_zh＋name_en＋dob；ext 入職日期（`hireDate`／`staffHire.*`）→hire_date。答題即刪照舊（`deleteUnneeded` 按同一映射重算）。
+- **導入分類**：頁面可多 kind（例如 `["sia_permit","id_card"]`，primary 唔變），身份證抽取對嵌入卡區行做；**只改 code，唔重跑導入；下次導入先生效**。
+
