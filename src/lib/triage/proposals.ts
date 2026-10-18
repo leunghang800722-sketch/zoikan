@@ -10,7 +10,7 @@ import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/api/errors";
 import { writeAudit } from "@/lib/audit";
-import { canonicalHkid } from "@/lib/guards/identity";
+import { canonicalHkid, hkidCheckDigitValid } from "@/lib/guards/identity";
 import { fieldValue } from "@/lib/guards/import/package";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
 import { serverPersonKey } from "@/lib/guards/import/person-key";
@@ -25,7 +25,7 @@ const PROPOSAL_MAX = 2000;
 const PROPOSAL_FIELDS = ["nameZh", "nameEn", "hkid", "dateOfBirth", "phone", "address"] as const;
 export type ProposalField = (typeof PROPOSAL_FIELDS)[number];
 /** 呢個功能處理嘅題目類別（其餘一律 skipped_kind） */
-const PROPOSAL_KINDS = ["field_review", "name_not_confirmed", "hkid_not_confirmed"] as const;
+const PROPOSAL_KINDS = ["field_review", "name_not_confirmed", "hkid_not_confirmed", "no_id_card"] as const;
 const OCR_REREAD_SOURCE = "ocr_reread" as const;
 
 const proposalSchema = z
@@ -35,7 +35,10 @@ const proposalSchema = z
     value: z.string().trim().min(1).max(500),
     basis: z.enum(["two_reads", "arbiter"]),
     doc: z.enum(["id_card", "address_proof", "onboarding_form"]),
+    /** TE-4：low＝只有印刷／唔一致，要人手覆核（唔自動答；計 skipped_low_confidence） */
     confidence: z.enum(["high", "medium", "low"]),
+    /** TE-4：可選旗標（例 printed_card_conflict、embedded_card）；只用嚟顯示／統計，伺服器唔據此寫入 */
+    flags: z.array(z.enum(["printed_card_conflict", "embedded_card", "printed_corroborated", "printed_only"])).max(4).optional(),
     /**
      * 配對提示（additive，可選）：題目嘅 personKey 係伺服器 HMAC（serverPersonKey：身份證 → 工號集合 → 包內 key），唔係包內 persons[].key。
      * 本機腳本帶埋包內該人嘅身份證值／工號，伺服器用同一個函數推返 personKey 去配對。只用嚟砌 key，唔寫入任何地方。
@@ -60,6 +63,8 @@ interface ProposalCounts {
   skipped_value_mismatch: number;
   skipped_invalid: number;
   skipped_restricted: number;
+  /** TE-4：confidence=low（印刷冇卡／印刷同卡唔一致）——留人手 */
+  skipped_low_confidence: number;
   skipped_partial: number;
   skipped_identity_mismatch: number;
   errors: number;
@@ -68,9 +73,9 @@ interface ProposalCounts {
   /** 為剩餘覆核欄開（dry＝會開）嘅跟進題數 */
   follow_up_created: number;
 }
-const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
+const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_low_confidence: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
 
-type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
+type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_low_confidence" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
 
 export type QuestionPlan =
   | { type: "none" } // 呢條題同呢個人嘅建議冇關係（唔計 matched）
@@ -103,6 +108,23 @@ export function planForQuestion(q: Pick<TriageQuestion, "kind" | "optionsJson" |
     if (!want || !pkg || want !== pkg) return { type: "skip", disp: "skipped_value_mismatch", fields: ["hkid"] };
     if (!opts.some((o) => o.id === "use_package_hkid")) return { type: "skip", disp: "skipped_invalid", fields: ["hkid"] };
     return { type: "answer", answer: { option: "use_package_hkid" }, fields: ["hkid"], rest: [], invalidFields: [] };
+  }
+  if (q.kind === "no_id_card") {
+    // TE-4：嵌入身份證副本讀到 hkid（＋姓名／出生日期）→ 揀「輸入身份證號」並帶 extra 補姓名／出生日期（解決 create_no_name）；身份檢查照舊（號碼已屬他人 → 預覽唔寫）
+    const v = props.get("hkid");
+    if (v === undefined) return { type: "none" };
+    const canon = canonicalHkid(v);
+    if (!canon || !hkidCheckDigitValid(canon)) return { type: "skip", disp: "skipped_invalid", fields: ["hkid"] };
+    if (!opts.some((o) => o.id === "enter_hkid")) return { type: "skip", disp: "skipped_invalid", fields: ["hkid"] };
+    const nz = props.get("nameZh");
+    const ne = props.get("nameEn");
+    const dob = props.get("dateOfBirth");
+    const extra: NonNullable<TriageAnswer["extra"]> = {};
+    const fields: ProposalField[] = ["hkid"];
+    if (nz && normZh(nz)) { extra.name_zh = nz; fields.push("nameZh"); }
+    if (ne) { extra.name_en = ne; fields.push("nameEn"); }
+    if (dob && parseBirthDate(dob)) { extra.dob = dob; fields.push("dateOfBirth"); }
+    return { type: "answer", answer: { option: "enter_hkid", value: canon, ...(Object.keys(extra).length ? { extra } : {}) }, fields, rest: [], invalidFields: [] };
   }
   if (q.kind === "field_review") {
     const rf = (ev.review_fields ?? []).map((r) => r.field);
@@ -192,6 +214,15 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
     mark(key, conflicting, "skipped_invalid");
     const props = new Map<ProposalField, string>();
     for (const f of allFields) if (!conflicting.includes(f)) props.set(f, [...fieldMap.get(f)!][0]!);
+    // TE-4：低信心（印刷冇卡／印刷同卡唔一致）嘅建議唔自動答——先剔走，其餘照處理
+    for (const f of [...props.keys()]) {
+      const idxs = idxOf.get(`${key}|${f}`) ?? [];
+      if (idxs.length > 0 && idxs.every((i) => proposals[i]!.confidence === "low")) {
+        mark(key, [f], "skipped_low_confidence");
+        props.delete(f);
+      }
+    }
+    if (props.size === 0) continue;
     const qsRaw = qsByKey.get(key) ?? [];
     if (qsRaw.length === 0) {
       mark(key, allFields, "skipped_no_question");
@@ -222,7 +253,9 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
       try {
         const prev = await previewAnswer(actor, q, plan.answer, caps, opts.ip);
         if (!prev.writes) {
-          mark(key, plan.fields, "skipped_invalid");
+          // TE-4：no_id_card 輸入嘅號碼已屬他人／同名唔同號 → 身份對唔上，計 skipped_identity_mismatch
+          const idMismatch = q.kind === "no_id_card" && prev.impact.notes.some((n) => /hkid_belongs_to_other_guard|same_name_different_hkid|guard_hkid_differs|name_differs_from_guard/.test(n));
+          mark(key, plan.fields, idMismatch ? "skipped_identity_mismatch" : "skipped_invalid");
           continue;
         }
         const followUp: FollowUpDraft | undefined = plan.rest.length > 0 ? { groupKey: `${q.groupKey}:rest`, restFields: plan.rest } : undefined;
@@ -235,7 +268,9 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
         if (followUp) counts.applied_partial += 1;
         if (followCreated) counts.follow_up_created += 1;
       } catch (e) {
-        mark(key, plan.fields, dispOf(e));
+        // TE-4：no_id_card 輸入嘅號碼已屬他人（checkHkidOwner 422）＝身份對唔上
+        const ownerClash = q.kind === "no_id_card" && e instanceof ApiError && e.status === 422 && e.message.includes("身份證號已屬於另一位");
+        mark(key, plan.fields, ownerClash ? "skipped_identity_mismatch" : dispOf(e));
       }
     }
     // 呢個人冇被任何題認領嘅建議（欄位唔喺任何 open 題嘅覆核欄內）

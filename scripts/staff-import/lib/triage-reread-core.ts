@@ -20,7 +20,9 @@ export interface RereadProposal {
   value: string;
   basis: Basis;
   doc: OcrDocType;
-  confidence: 'high' | 'medium';
+  confidence: 'high' | 'medium' | 'low';
+  /** TE-4：嵌入身份證副本／印刷佐證旗標 */
+  flags?: ('printed_card_conflict' | 'embedded_card' | 'printed_corroborated' | 'printed_only')[];
   /** 配對提示：伺服器題目 personKey 係 HMAC（身份證 → 工號集合 → 包內 key），server 用呢兩項推返同一個 key（只用嚟砌 key，唔寫入） */
   match: { hkid: string | null; staff_numbers: string[] };
 }
@@ -85,10 +87,12 @@ type Pick_ = { doc: OcrDocType; result: Pick<FieldResult, 'status' | 'value' | '
  *  - TR-2（老闆 2026-10-17）：身份證號／出生日期／中英文姓名以身份證副本為準、住址以住址證明為準——入職表手寫同印刷文件唔一致唔阻擋（只係 confidence 標 medium）；
  *  - package.reasons 顯示舊 crosscheck 對打字名單有唔一致 → 唔建議（留人手；打字名單係辦公室資料，唔一致係真警號）。
  */
-export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey, Pick_>>, now: Date = new Date()): ProposeOutcome {
+export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey, Pick_>>, now: Date = new Date(), opts: { embedded?: boolean } = {}): ProposeOutcome {
   const out: ProposeOutcome = { proposals: [], skipped: {}, skippedByField: {} };
   for (const m of FIELD_MAP) {
-    if (p[m.pkg].status !== 'review') continue;
+    // TE-4：嵌入身份證副本係證件為準——身份證欄（hkid／姓名／出生日期）missing 都出建議；其餘欄照舊只對 review
+    const cardField = opts.embedded && m.doc === 'id_card';
+    if (p[m.pkg].status !== 'review' && !(cardField && p[m.pkg].status === 'missing')) continue;
     const skip = (r: SkipReason) => {
       out.skipped[r] = (out.skipped[r] ?? 0) + 1;
       const f = (out.skippedByField[m.field] ??= {});
@@ -136,6 +140,10 @@ export interface ExtractPage {
 }
 export interface ExtractRow {
   docId: string;
+  /** 旋轉救援頁嘅度數（OCR 座標係旋轉後嘅頁） */
+  rescuedRot?: number | null;
+  /** TE-3：導入抽取嘅其他來源 HKID（下次導入先有） */
+  aux?: { printedHkid?: { value: string } | null; permitHkid?: { value: string } | null } | null;
   pages: ExtractPage[];
   address?: { page: number } | null;
 }
@@ -143,6 +151,8 @@ export interface DocPage {
   type: OcrDocType;
   docId: string;
   page: number;
+  /** TE-4：呢個 id_card「頁」其實係頁面入面夾住嘅嵌入式身份證副本（轉正裁出嚟）；rot＝要順時針轉幾多度頁面先令卡正向 */
+  embedded?: { rot: 0 | 90 | 180 | 270; box: { x0: number; y0: number; x1: number; y1: number }; stage: 'first' | 'second' };
 }
 
 const KIND_OF: Record<OcrDocType, string> = { id_card: 'id_card', address_proof: 'address_proof', onboarding_form: 'application_form' };
@@ -286,10 +296,20 @@ export interface RereadSummary {
   ocr_calls: number;
   /** TR-2：讀數快取命中份數（文件） */
   cache_hits: number;
+  /** TE-4：搵到嵌入身份證副本嘅人數（其中二階段局部 OCR 搵到）／二階段掃描頁數 */
+  embedded_cards_found: number;
+  embedded_second_stage_found: number;
+  second_stage_pages: number;
+  /** TE-4：印刷佐證一致／同卡唔一致（printed_card_conflict）／冇卡淨印刷（review） */
+  card_printed_corroborated: number;
+  card_printed_conflict: number;
+  printed_only_review: number;
+  /** TE-4：confidence=low（留人手）嘅建議條數 */
+  proposals_low_confidence: number;
 }
 
 export function emptySummary(now: Date = new Date()): RereadSummary {
-  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0 };
+  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0, embedded_cards_found: 0, embedded_second_stage_found: 0, second_stage_pages: 0, card_printed_corroborated: 0, card_printed_conflict: 0, printed_only_review: 0, proposals_low_confidence: 0 };
 }
 
 export function addOutcome(s: RereadSummary, o: ProposeOutcome): void {
@@ -313,5 +333,6 @@ export function summaryLines(s: RereadSummary): string[] {
     `每欄建議：${JSON.stringify(s.proposals_by_field)}｜依據：${JSON.stringify(s.proposals_by_basis)}`,
     `唔建議原因：${JSON.stringify(s.not_proposed_reasons)}`,
     `每欄唔建議原因：${JSON.stringify(s.skipped_by_field)}｜讀數快取命中 ${s.cache_hits}`,
+    `嵌入身份證副本 ${s.embedded_cards_found}（二階段 ${s.embedded_second_stage_found}／二階段掃描頁 ${s.second_stage_pages}）｜印刷佐證一致 ${s.card_printed_corroborated}｜印刷同卡唔一致 ${s.card_printed_conflict}｜淨印刷待覆核 ${s.printed_only_review}｜low 信心建議 ${s.proposals_low_confidence}`,
   ];
 }

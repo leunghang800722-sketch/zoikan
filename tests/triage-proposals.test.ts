@@ -198,10 +198,10 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect((await qOf("hkid_not_confirmed")).status).toBe("open");
   });
 
-  it("kind 過濾／personKey 唔對：no_id_card 等 kind 唔處理（skipped_kind）；未知 key（skipped_no_question）；欄位不在覆核欄（field_mismatch）", async () => {
+  it("kind 過濾／personKey 唔對：（TE-4：no_id_card 已支援，淨姓名冇 hkid＝唔屬覆核欄）；未知 key（skipped_no_question）；欄位不在覆核欄（field_mismatch）", async () => {
     const { pc, pn, sid } = await seed();
     const r = await send(accountant, sid, [prop(pn.key, "nameZh", "導入測試員無證", { match: { hkid: null, staff_numbers: ["U90003"] } }), prop("00000000-0000-4000-8000-0000000000aa", "nameZh", "冇呢個人"), prop(pc.key, "phone", "91000012")]);
-    expect(r.body).toMatchObject({ applied: 0, skipped_kind: 1, skipped_no_question: 1, skipped_field_mismatch: 1, skipped_field_not_under_review: 1, skipped_value_mismatch: 0 });
+    expect(r.body).toMatchObject({ applied: 0, skipped_kind: 0, skipped_no_question: 1, skipped_field_mismatch: 2, skipped_field_not_under_review: 2, skipped_value_mismatch: 0 });
   });
 
   it("同人同欄多個唔同值 → skipped_invalid（唔猜）；格式唔合法（dob）→ skipped_invalid；相同重複值當一條", async () => {
@@ -235,7 +235,7 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect((await send(accountant, sid, [withMatch], true)).body).toMatchObject({ applied: 1 });
     // 無身份證者用工號推 key
     const uuid2 = "99999999-2222-4333-8444-555555555555";
-    expect((await send(accountant, sid, [prop(uuid2, "nameZh", "導入測試員無證", { match: { hkid: null, staff_numbers: ["U90003"] } })], true)).body).toMatchObject({ skipped_kind: 1 });
+    expect((await send(accountant, sid, [prop(uuid2, "nameZh", "導入測試員無證", { match: { hkid: null, staff_numbers: ["U90003"] } })], true)).body).toMatchObject({ skipped_field_not_under_review: 1 });
   });
 
   it("N1 身份檢查：match 同題目 evidence 唔一致（身份證／工號）→ skipped_identity_mismatch；冇 match 而 key 只撞 personKey 但 evidence 唔對亦擋；一致先過", async () => {
@@ -288,6 +288,7 @@ describe("TR-1 OCR 重讀建議導入", () => {
     const hk = q("hkid_not_confirmed", ev(), ["use_package_hkid", "skip"]);
     expect(planForQuestion(hk, m([["hkid", H[1]!.toLowerCase()]]))).toMatchObject({ type: "answer", answer: { option: "use_package_hkid" } });
     expect(planForQuestion(q("no_id_card", ev(), []), m([["nameZh", "x"]]))).toEqual({ type: "none" });
+    expect(planForQuestion(q("tel_only_candidate", ev(), []), m([["nameZh", "x"]]))).toEqual({ type: "none" });
   });
 
   it("proposalsBodySchema：額外頂層 summary 收得；proposal 多餘欄／缺欄拒", () => {
@@ -295,5 +296,38 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(proposalsBodySchema.safeParse(ok).success).toBe(true);
     expect(proposalsBodySchema.safeParse({ version: 1, proposals: [{ ...ok.proposals[0], extra: 1 }] }).success).toBe(false);
     expect(proposalsBodySchema.safeParse({ version: 2, proposals: [] }).success).toBe(false);
+  });
+
+  it("TE-4 no_id_card：嵌入卡 hkid＋姓名＋出生日期 → enter_hkid 帶 extra 建檔；low 信心唔自動答；號碼已屬他人 → skipped_identity_mismatch", async () => {
+    const { pn, pa, sid } = await seed(); // 丑（H[12]）已建檔
+    const match = { hkid: null, staff_numbers: ["U90003"] };
+    // 無名無證：把 no_id_card 人嘅包內姓名清走，模擬 create_no_name（用 evidence 改）
+    const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { kind: "no_id_card" } });
+    const ev = qn.evidenceJson as { person: Record<string, unknown> };
+    ev.person.nameZh = { value: null, status: "missing" };
+    ev.person.nameEn = { value: null, status: "missing" };
+    await prisma.triageQuestion.update({ where: { id: qn.id }, data: { evidenceJson: ev as never } });
+    const NEW = mkHkid("W", "300001");
+    // (1) low 信心 → skipped_low_confidence，唔寫
+    const low = await send(accountant, sid, [prop(pn.key, "hkid", NEW, { match, confidence: "low", flags: ["printed_card_conflict"] })]);
+    expect(low.body).toMatchObject({ applied: 0, skipped_low_confidence: 1 });
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("open");
+    // (2) 號碼已屬他人（甲嘅 hkid）→ 身份對唔上，唔寫
+    const other = await send(accountant, sid, [prop(pn.key, "hkid", H[12]!, { match }), prop(pn.key, "nameZh", "補名測試員", { match })]);
+    expect(other.body).toMatchObject({ applied: 0, skipped_identity_mismatch: 2 });
+    expect((await prisma.guard.findFirstOrThrow({ where: { hkid: H[12]! }, select: { nameZh: true } })).nameZh).toBe("導入測試員丑"); // 丑嘅檔案冇被碰
+    // (3) 正常：hkid＋姓名＋出生日期 → 一次過建檔，冇需要人手補姓名
+    const ok = await send(accountant, sid, [prop(pn.key, "hkid", NEW, { match, confidence: "high", flags: ["embedded_card", "printed_corroborated"] }), prop(pn.key, "nameZh", "補名測試員", { match }), prop(pn.key, "nameEn", "BO MING", { match }), prop(pn.key, "dateOfBirth", "1991-02-03", { match })]);
+    expect(ok.body).toMatchObject({ applied: 1, errors: 0 });
+    const q2 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } });
+    expect(q2.status).toBe("answered");
+    const g = await prisma.guard.findFirstOrThrow({ where: { hkid: NEW }, select: { nameZh: true, nameEn: true, dateOfBirth: true } });
+    expect(g.nameZh).toBe("補名測試員");
+    expect(g.nameEn).toBe("BO MING");
+    expect(g.dateOfBirth?.toISOString().slice(0, 10)).toBe("1991-02-03");
+    const au = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_answer", rowId: qn.id } });
+    expect((au.after as { extra_names?: string[] }).extra_names).toEqual(["name_zh", "name_en", "dob"]);
+    expect(JSON.stringify(ok.body)).not.toContain("補名測試員");
+    void pa;
   });
 });
