@@ -55,6 +55,7 @@ import {
   textUprightness,
   capBox,
   findOverflow,
+  clipToPhoto,
 } from "../scripts/staff-import/lib/triage-evidence-core";
 import type { DocPage } from "../scripts/staff-import/lib/triage-reread-core";
 import { readEvidenceZip, evidenceManifestSchema } from "@/lib/triage/evidence-upload";
@@ -1122,4 +1123,171 @@ describe("TE-1.8 診斷：value_mismatch 最高相似度分佈（只計數）", 
     expect(txt).toContain("value_mismatch 最高相似度分佈");
     expect(txt).not.toMatch(/Y123456|陳大文|Z900001/);
   }, 120_000);
+});
+
+// ===========================================================================
+// TE-1.9
+// ===========================================================================
+describe("TE-1.9 S1：capBox 收窄之後再同相片範圍做相交檢查", () => {
+  const photo = { x0: 0.4, x1: 0.56, y0: 0.5775, y1: 0.78 };
+  const line = (t: string, x: number, y: number, w: number, h = 0.035) => ({ t, c: 0.9, x, y, w, h });
+
+  it("clipToPhoto：冇相交原樣；號碼框（行喺相片 x 範圍內）夾 y 到相片下緣；左邊欄夾 x 到相片左緣", () => {
+    const hk = line("Z900001(2)", 0.44, 0.54, 0.12);
+    const clean = { x0: 0.43, x1: 0.57, y0: 0.53, y1: 0.57 };
+    expect(clipToPhoto(clean, photo, [hk])).toEqual(clean);
+    expect(clipToPhoto(clean, null, [hk])).toEqual(clean);
+    // 收窄後向上 0.3×行厚（0.0105）伸入相片
+    const narrowed = { x0: 0.43, x1: 0.57, y0: 0.53, y1: 0.54 + 0.035 + 0.0105 };
+    const c = clipToPhoto(narrowed, photo, [hk])!;
+    expect(c).not.toBeNull();
+    expect(c.y1).toBeLessThan(photo.y0);
+    expect(c.y1).toBeGreaterThanOrEqual(hk.y + hk.h);
+    expect(intersects(c, photo)).toBe(false);
+    // 左邊欄（行喺相片左邊）：右緣夾到相片左緣
+    const en = line("TESTER, Alpha", 0.1, 0.7, 0.25, 0.025);
+    const wideEn = { x0: 0.09, x1: 0.5, y0: 0.69, y1: 0.73 };
+    const ce = clipToPhoto(wideEn, photo, [en])!;
+    expect(ce.x1).toBeLessThan(photo.x0);
+    expect(ce.x1).toBeGreaterThanOrEqual(en.x + en.w);
+    expect(intersects(ce, photo)).toBe(false);
+  });
+
+  it("夾唔走（字本身伸入相片區）或者夾走咗字 → null（呼叫者計 id_photo_overlap）", () => {
+    const longEn = line("TESTER-LONGFAMILYNAME, Alphabeta", 0.1, 0.7, 0.45, 0.025);
+    const box = { x0: 0.09, x1: 0.56, y0: 0.52, y1: 0.73 }; // 同相片重疊，而名行本身 x 伸入相片範圍
+    expect(clipToPhoto(box, photo, [longEn])).toBeNull();
+    // 號碼行本身喺相片裡面（理論上唔會發生）→ y 夾會夾走字 → null
+    const inside = line("Z900001(2)", 0.44, 0.6, 0.12);
+    expect(clipToPhoto({ x0: 0.43, x1: 0.57, y0: 0.59, y1: 0.64 }, photo, [inside])).toBeNull();
+  });
+
+  it("capBox 窄化出嚟嘅框經 cropRequest 都會過 clipToPhoto：成個 id 欄流程冇相片色（hkid 緊貼相片底、行厚 98px）", async () => {
+    if (!hasMagick) return;
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1s1-"));
+    try {
+      const { lines, photo: ph } = syntheticIdCardPage(true, 0.003);
+      const d = doc("id_card");
+      const png = path.join(tmp, "p.png");
+      await drawSyntheticPage({ doc: d, lines, photo: ph }, png);
+      const r = await cropRequest({ field: "hkid", docKind: "id_card", priority: 1, doc: d }, png, lines, tmp);
+      expect("bytes" in r).toBe(true);
+      const f = path.join(tmp, "o.jpg");
+      await (await import("node:fs/promises")).writeFile(f, (r as { bytes: Uint8Array }).bytes);
+      const m = await sh(MAGICK, [f, "-fx", "r-g", "-format", "%[fx:maxima]", "info:"]);
+      expect(Number(m.stdout)).toBeLessThan(0.15);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("TE-1.9 S2：真跑搵唔到 Vision 就停（exit 1），除非明確 --no-verify；--dry 降級 warn", () => {
+  it("run（非 dry）：--vision-bin 唔存在 → ArgError（提示 --no-verify），唔讀任何檔；加 --no-verify 就唔會因 Vision 而停", async () => {
+    const deps: Deps = { lines: async () => null, existing: () => null, render: async () => null, cleanup: async () => {} };
+    const args = parseArgs(["--vision-bin", "/definitely/not/there", "--out", "data/x"]);
+    await expect(run(args, { people: [], deps })).rejects.toThrow(/--no-verify/);
+    await expect(run(args, { people: [], deps })).rejects.toThrow(/vision-ocr/);
+    const ok = await run(parseArgs(["--no-verify", "--out", "data/x"]), { people: [], deps });
+    expect(ok.items).toEqual([]);
+  });
+
+  it("main：真跑 --vision-bin 唔存在 → 喺讀 package 之前 reject（CLI 層 exit 1）；--no-verify 就越過呢關（之後先因檔案唔存在失敗）", async () => {
+    const { main } = await import("../scripts/staff-import/20-triage-evidence");
+    const base = ["--package", "/nope/a.json", "--person-fields", "/nope/b.json", "--extract", "/nope/c.json", "--index", "/nope/d.json", "--out", "data/te1-s2-test"];
+    await expect(main([...base, "--vision-bin", "/definitely/not/there"])).rejects.toThrow(/--no-verify/);
+    await expect(main([...base, "--no-verify"])).rejects.not.toThrow(/vision-ocr/);
+  });
+
+  it.skipIf(!hasMagick)("--dry 搵唔到 Vision：warn 後自動 no-verify，照出圖（全部未驗證）", async () => {
+    const warn: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => void warn.push(a.join(" "));
+    try {
+      const r = await run_(parseArgs(["--dry", "--vision-bin", "/definitely/not/there"]));
+      expect(r.items.length).toBeGreaterThan(0);
+      expect(r.stats.verified).toBe(0);
+      expect(r.stats.unverified).toBe(r.items.length);
+      expect(warn.join("\n")).toContain("no-verify");
+    } finally {
+      console.warn = orig;
+    }
+  }, 120_000);
+});
+
+describe.skipIf(!canVision)("TE-1.9 S3：純中文姓名方向沿用同頁其他欄", () => {
+  const FONT_LATIN = "/System/Library/Fonts/Supplemental/Arial.ttf";
+  const FONT_CJK = "/System/Library/Fonts/Hiragino Sans GB.ttc";
+  const run = makeVisionRunner(visionBin!);
+  const crop = async (tmp: string, name: string, text: string, deg = 0, cjk = false) => {
+    const f = path.join(tmp, `${name}.png`);
+    await sh(MAGICK, ["-size", `${Math.max(420, text.length * (cjk ? 70 : 38) + 60)}x110`, "xc:white", "-font", cjk ? FONT_CJK : FONT_LATIN, "-pointsize", "58", "-fill", "black", "-annotate", "+24+78", text, ...(deg ? ["-rotate", String(deg)] : []), f]);
+    return f;
+  };
+
+  it("verifyCrop：Latin 欄判到 180°（decisive）；純中文 180° 冇證據→0（decisive=false）；帶 pagePrior=180 就跟（followedPage）；側躺跟 90／270，prior 唔屬候選→unknown", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1s3-"));
+    try {
+      const en = await crop(tmp, "en", "TESTER, Alpha", 180);
+      const ve = await verifyCrop(en, "name_en", ["TESTER ALPHA"], run, tmp);
+      expect(ve).toMatchObject({ ok: true, rotate: 180, decisive: true });
+      const zh = await crop(tmp, "zh", "測試甲", 180, true);
+      expect(await verifyCrop(zh, "name_zh", ["測試甲"], run, tmp)).toMatchObject({ ok: true, rotate: 0, decisive: false });
+      expect(await verifyCrop(zh, "name_zh", ["測試甲"], run, tmp, { pagePrior: 180 })).toMatchObject({ ok: true, rotate: 180, decisive: false, followedPage: true });
+      expect(await verifyCrop(zh, "name_zh", ["測試甲"], run, tmp, { pagePrior: null })).toMatchObject({ ok: true, rotate: 0 });
+      const side = await crop(tmp, "zh90", "測試甲 火炭", 90, true);
+      expect(await verifyCrop(side, "name_zh", ["測試甲"], run, tmp, { pagePrior: 270 })).toMatchObject({ ok: true, rotate: 270, followedPage: true });
+      expect(await verifyCrop(side, "name_zh", ["測試甲"], run, tmp, { pagePrior: 180 })).toEqual({ ok: false, reason: "orientation_unknown" });
+      expect(await verifyCrop(side, "name_zh", ["測試甲"], run, tmp)).toEqual({ ok: false, reason: "orientation_unknown" });
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("produceItems：整頁 180° 倒轉（Vision 睇到嘅裁圖全部上下顛倒）——英文名／號碼等判到 180°，中文名排最後並沿用；全頁冇欄判到就維持 prior", async () => {
+    const fx = dryFixture();
+    const base = run;
+    const flip: typeof base = async (paths, fast) => {
+      const tmp2 = await mkdtemp(path.join(os.tmpdir(), "te1flip-"));
+      try {
+        const outs = await Promise.all(paths.map(async (pth, i) => {
+          const o = path.join(tmp2, `f${i}.png`);
+          await sh(MAGICK, [pth, "-rotate", "180", o]);
+          return o;
+        }));
+        return await base(outs, fast);
+      } finally {
+        await rm(tmp2, { recursive: true, force: true });
+      }
+    };
+    const mk = (vision: typeof base): Deps => ({
+      async lines(d) {
+        return fx.docs.get(`${d.docId}|${d.page}`)?.lines ?? null;
+      },
+      existing: () => null,
+      async render(d) {
+        const out = path.join(os.tmpdir(), `te1s3p-${process.pid}-${Math.random().toString(36).slice(2)}.png`);
+        await drawSyntheticPage(fx.docs.get(`${d.docId}|${d.page}`)!, out);
+        return out;
+      },
+      async cleanup(png) {
+        await rm(png, { force: true });
+      },
+      vision,
+    });
+    const person = fx.people[0]!;
+    const stats = emptyStats();
+    const items = await produceItems([person], mk(flip), stats);
+    const zhIdx = items.map((i, k) => (i.field === "name_zh" ? k : -1)).filter((k) => k >= 0);
+    const others = items.map((i, k) => (i.field !== "name_zh" ? k : -1)).filter((k) => k >= 0);
+    expect(zhIdx.length).toBeGreaterThanOrEqual(1);
+    expect(Math.min(...zhIdx)).toBeGreaterThan(Math.max(...others)); // name_zh 排最後
+    expect(stats.skipped.orientation_unknown ?? 0).toBe(0);
+    expect(stats.page_orientation_followed).toBeGreaterThanOrEqual(1); // 中文名沿用同頁方向
+    // 正向版本（冇倒轉）：英文名等判到 0°（decisive），中文名跟 0°，同樣有 followed
+    const stats2 = emptyStats();
+    const items2 = await produceItems([person], mk(base), stats2);
+    expect(items2.some((i) => i.field === "name_zh")).toBe(true);
+    expect(stats2.page_orientation_followed).toBeGreaterThanOrEqual(1);
+  }, 240_000);
 });

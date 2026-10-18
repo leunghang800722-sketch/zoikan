@@ -32,6 +32,7 @@ import {
   VERIFY_THRESHOLD,
   detectUprightRotation,
   capBox,
+  clipToPhoto,
   expectedValuesFor,
   findOverflow,
   lineHasOwnLabel,
@@ -282,6 +283,12 @@ export async function cropRequest(req: CropRequest, png: string, lines: OcrLine[
     const c = capBox(box, g.anchor, W, H);
     box = c.box;
     capped = c.capped;
+    if (g.anchor.mode === 'id') {
+      // S1：收窄之後再同相片範圍做相交檢查；夾唔走就跳過
+      const clipped = clipToPhoto(box, g.anchor.photo, g.anchor.own);
+      if (!clipped) return { reason: 'id_photo_overlap', capped };
+      box = clipped;
+    }
   }
   const label = g.anchor?.mode === 'form' ? g.anchor.own[0] : undefined;
   for (let attempt = 0; ; attempt++) {
@@ -315,7 +322,7 @@ export interface VisionPage {
 }
 /** 一次 call 讀多張圖（輸出次序同輸入一致）；fast＝.fast 級別（對方向敏感）。 */
 export type VisionRunner = (paths: string[], fast: boolean) => Promise<VisionPage[]>;
-export type VerifyOutcome = { ok: true; score: number | null; rotate: Rotation; overflow?: OverflowHit } | { ok: false; reason: 'value_mismatch'; score: number } | { ok: false; reason: 'orientation_unknown' };
+export type VerifyOutcome = { ok: true; score: number | null; rotate: Rotation; overflow?: OverflowHit; /** 方向由 .fast 比較判到（true）定係冇證據（false） */ decisive?: boolean; /** 冇證據，沿用同頁其他欄判到嘅方向 */ followedPage?: boolean } | { ok: false; reason: 'value_mismatch'; score: number } | { ok: false; reason: 'orientation_unknown' };
 export type VerifyHook = (cropPng: string) => Promise<VerifyOutcome>;
 
 export function makeVisionRunner(bin: string): VisionRunner {
@@ -363,7 +370,7 @@ const textOf = (p: VisionPage | undefined): string => (p?.lines ?? []).map((l) =
  *     限制：中文姓名 .fast 讀唔準，180° 倒轉嘅純中文裁圖分唔出（只靠版面 prior）。
  * 冇預期值（例如身份證號 missing）＝無法驗證（score null，唔轉）。
  */
-export async function verifyCrop(png: string, field: EvidenceField, expected: readonly string[], run: VisionRunner, tmp: string, opts: { checkOverflow?: boolean } = {}): Promise<VerifyOutcome> {
+export async function verifyCrop(png: string, field: EvidenceField, expected: readonly string[], run: VisionRunner, tmp: string, opts: { checkOverflow?: boolean; pagePrior?: Rotation | null } = {}): Promise<VerifyOutcome> {
   if (expected.length === 0) return { ok: true, score: null, rotate: 0 };
   // Vision 輸入：放大到高度 ≥200px（上限 4×）＋四邊留白 24px——細裁圖直接讀會漏字
   const { h } = await sizeOf(png);
@@ -383,8 +390,11 @@ export async function verifyCrop(png: string, field: EvidenceField, expected: re
   // 入職表：裁圖文字越界檢查（其他欄 label 關鍵詞）——座標由 Vision 輸入（放大＋留白）換返裁圖正規化
   const overflow = opts.checkOverflow ? findOverflow(field, (acc?.lines ?? []).map((l) => ({ t: l.t, x: (l.x * vs.w - 24) / (vs.w - 48), y: (l.y * vs.h - 24) / (vs.h - 48), w: (l.w * vs.w) / (vs.w - 48), h: (l.h * vs.h) / (vs.h - 48) })), (l) => lineHasOwnLabel(field, l.t) || scoreAgainst(field, l.t, expected[0] ?? '') >= 0.5 || similarity(field, l.t, expected) >= 0.5) : null;
   const ov = overflow ? { overflow } : {};
-  if (Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]!, ...ov };
-  if (!sideways) return { ok: true, score, rotate: 0, ...ov };
+  if (Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]!, decisive: true, ...ov };
+  // S3：冇證據（例如純中文 .fast 讀唔準）→ 沿用同一頁其他欄判到嘅方向（同頁方向一致）；全頁冇任何欄判到就維持 prior（橫排當 0°、側躺 unknown）
+  const pp = opts.pagePrior;
+  if (pp !== undefined && pp !== null && cands.includes(pp)) return { ok: true, score, rotate: pp, decisive: false, followedPage: true, ...ov };
+  if (!sideways) return { ok: true, score, rotate: 0, decisive: false, ...ov };
   return { ok: false, reason: 'orientation_unknown' };
 }
 
@@ -406,12 +416,14 @@ export interface Stats {
   unverified: number;
   /** TE-1.8：硬性尺寸上限收窄咗幾多張 */
   size_capped: number;
+  /** TE-1.9：純中文等判唔到方向嘅欄，沿用同頁其他欄方向嘅張數 */
+  page_orientation_followed: number;
   /** TE-1.8：value_mismatch 嘅最高相似度分佈（按欄；四格 0–0.2／0.2–0.4／0.4–0.6／0.6–0.7） */
   mismatch_hist: Record<string, [number, number, number, number]>;
   zips: number;
   zip_bytes: number;
 }
-export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
+export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, page_orientation_followed: 0, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
 const bump = (r: Record<string, number>, k: string) => {
   r[k] = (r[k] ?? 0) + 1;
 };
@@ -437,13 +449,22 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
         return;
       }
       const match = matchOfPerson(pi.person);
-      const reqs = planRequests(fields, pi.docs);
+      // name_zh（純中文，.fast 判唔準方向）排最後，先令其他欄有機會判到同頁方向
+      const reqs = [...planRequests(fields, pi.docs)].sort((x, y) => Number(x.field === 'name_zh') - Number(y.field === 'name_zh'));
       const pageCache = new Map<string, string | null>();
       const rotCache = new Map<string, string>();
+      // S3：同一頁方向一致——有欄判到（decisive）就記低，純中文姓名等判唔到嘅欄跟返
+      const pageRot = new Map<string, Rotation>();
       const hookFor = (req: CropRequest): VerifyHook | undefined => {
         if (!deps.vision) return undefined;
         const expected = expectedValuesFor(req.field, pi.person, pi.extra?.[req.field] ?? []);
-        return (png) => verifyCrop(png, req.field, expected, deps.vision!, tmp, { checkOverflow: req.docKind === 'onboarding_form' });
+        const key = `${req.doc.docId}|${req.doc.page}`;
+        return async (png) => {
+          const out = await verifyCrop(png, req.field, expected, deps.vision!, tmp, { checkOverflow: req.docKind === 'onboarding_form', pagePrior: pageRot.get(key) ?? null });
+          if (out.ok && out.decisive) pageRot.set(key, out.rotate);
+          if (out.ok && out.followedPage) stats.page_orientation_followed += 1;
+          return out;
+        };
       };
       const getPage = async (d: DocPage) => {
         const k = `${d.docId}|${d.page}`;
@@ -772,6 +793,14 @@ export interface RunResult {
 
 export async function run(args: Args, injected?: { people: PersonInput[]; deps: Deps }): Promise<RunResult> {
   const stats = emptyStats();
+  // S2：先搵 Vision（讀檔之前）。真跑搵唔到＝停止（exit 1），除非明確 --no-verify；--dry 自動降級 warn。
+  let vision: VisionRunner | undefined = injected?.deps.vision;
+  if (!args.noVerify && !vision) {
+    const bin = await resolveVisionBin(args.visionBin);
+    if (bin) vision = makeVisionRunner(bin);
+    else if (args.dry) console.warn('[triage-evidence] 搵唔到／編譯唔到 vision-ocr（要 swiftc）——--dry 自動 no-verify（唔驗證裁圖內容同方向）');
+    else throw new ArgError('搵唔到／編譯唔到 vision-ocr（要 swiftc，或 --vision-bin 指定執行檔）——真跑唔可以靜靜哋唔驗證；確實要跳過驗證請明確加 --no-verify');
+  }
   let people: PersonInput[];
   let deps: Deps;
   if (injected) ({ people, deps } = injected);
@@ -787,11 +816,7 @@ export async function run(args: Args, injected?: { people: PersonInput[]; deps: 
     stats.persons_total = l.personsTotal;
   }
   if (!stats.persons_total) stats.persons_total = people.length;
-  if (!args.noVerify && !deps.vision) {
-    const bin = await resolveVisionBin(args.visionBin);
-    if (bin) deps = { ...deps, vision: makeVisionRunner(bin) };
-    else console.warn('[triage-evidence] 搵唔到／編譯唔到 vision-ocr（要 swiftc）——自動 no-verify（唔驗證裁圖內容同方向）');
-  }
+  if (vision) deps = { ...deps, vision };
   const items = await produceItems(people, deps, stats, { concurrency: args.dry ? 1 : args.concurrency });
   const built = await buildEvidenceZips(items);
   stats.zips = built.zips.length;
@@ -803,7 +828,7 @@ export const statsLines = (s: Stats): string[] => [
   `package 人數 ${s.persons_total}｜有 review 欄 ${s.persons_with_fields}｜冇文件 ${s.persons_no_docs}｜失敗 ${s.persons_failed}`,
   `請求 ${s.requests_total}｜現成裁圖 ${s.from_existing}｜即時裁 ${s.live_cropped}｜出圖 ${s.images_out}｜Vision 驗證 ${s.verified}／未驗證 ${s.unverified}｜zip ${s.zips}（${s.zip_bytes} bytes）`,
   `每欄：${JSON.stringify(s.by_field)}｜來源:優先：${JSON.stringify(s.by_doc_priority)}`,
-  `跳過原因：${JSON.stringify(s.skipped)}｜忽略嘅現成裁圖清單項 ${s.existing_ignored_entries}｜硬性尺寸上限收窄 ${s.size_capped}`,
+  `跳過原因：${JSON.stringify(s.skipped)}｜忽略嘅現成裁圖清單項 ${s.existing_ignored_entries}｜硬性尺寸上限收窄 ${s.size_capped}｜沿用同頁方向 ${s.page_orientation_followed}`,
   `value_mismatch 最高相似度分佈（按欄；[0–0.2, 0.2–0.4, 0.4–0.6, 0.6–0.7]）：${JSON.stringify(s.mismatch_hist)}`,
 ];
 
