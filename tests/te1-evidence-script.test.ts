@@ -1517,7 +1517,7 @@ describe.skipIf(!hasMagick || !hasSyntheticFonts)("TE-2 嵌入式身份證裁圖
 // TE-2.1
 // ===========================================================================
 import { splitMergedLines, locateFormCell as locateCell } from "../scripts/staff-import/lib/triage-evidence-core";
-import { crossNameOk, detectFormPhoto, readabilityScore, secondStageLines } from "../scripts/staff-import/20-triage-evidence";
+import { crossNameOk, detectFormPhoto, pageResidual, readabilityScore, secondStageLines } from "../scripts/staff-import/20-triage-evidence";
 
 describe("TE-2.1 A：HKID checksum（牌照號唔當 HKID）", () => {
   const A4 = 210 / 297;
@@ -1578,8 +1578,7 @@ describe("TE-2.1 B：merged OCR line——label 關鍵詞偏移定位", () => {
     expect(r.box).not.toBeNull();
     expect(r.box!.x0).toBeGreaterThanOrEqual(exp.x + exp.w - 1e-6); // 唔包屆滿日期格
     expect(r.box!.x0).toBeLessThanOrEqual(hire.x);
-    expect(r.box!.x1).toBeCloseTo(0.1 + 0.7, 2); // 行尾
-    expect(r.box!.x1).toBeLessThanOrEqual(0.1 + 0.7 + 1e-6);
+    expect(r.box!.x1).toBeCloseTo(0.1 + 0.7 + 0.8 * 0.025, 4); // 行尾 + 0.8×行高（TE-2.2）
   });
 });
 
@@ -1811,4 +1810,187 @@ describe("TE-2.1 S4：無預期值 hkid 圖（printed／嵌入卡）交叉一致
     const none = await run1({});
     expect(none.hk).toEqual(expect.arrayContaining(["id_card:1", "printed:2"]));
   }, 180_000);
+});
+
+// ===========================================================================
+// TE-2.2
+// ===========================================================================
+describe("TE-2.2 範本 B 姓名欄：兩行 label（中文＋Name (English)／Name (Chinese)）、單獨「Name：」", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.022) => ({ t, c: 0.9, x, y, w, h });
+  const ov = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => intersects(b, { x0: l.x, x1: l.x + l.w, y0: l.y, y1: l.y + l.h });
+  const inside = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => l.x >= b.x0 - 1e-9 && l.x + l.w <= b.x1 + 1e-9 && l.y >= b.y0 - 1e-9 && l.y + l.h <= b.y1 + 1e-9;
+  const head = lab("申請人個人資料 Personal Particulars", 0.08, 0.92, 0.5);
+
+  it("「英文姓名:」＋下一行「Name (English):」、值寫喺右邊偏下 → block 包埋值兩行；唔包下一格（中文姓名）", () => {
+    const en = lab("英文姓名:", 0.08, 0.8, 0.12);
+    const tr = lab("Name (English):", 0.08, 0.776, 0.16);
+    const v1 = lab("TESTER", 0.3, 0.79, 0.1);
+    const v2 = lab("ALPHA", 0.3, 0.768, 0.1); // 偏下
+    const zh = lab("中文姓名:", 0.08, 0.7, 0.12);
+    const ztr = lab("Name (Chinese):", 0.08, 0.676, 0.16);
+    const zv = lab("測試甲", 0.3, 0.68, 0.1);
+    const lines = [head, en, tr, v1, v2, zh, ztr, zv];
+    const e = locateCell("name_en", lines);
+    expect(e.box).not.toBeNull();
+    for (const l of [en, tr, v1, v2]) expect(inside(e.box!, l), l.t).toBe(true);
+    expect(ov(e.box!, zh)).toBe(false);
+    const z = locateCell("name_zh", lines);
+    for (const l of [zh, ztr, zv]) expect(inside(z.box!, l), l.t).toBe(true);
+    expect(ov(z.box!, en)).toBe(false); // 唔包上一格
+    expect(ov(z.box!, v2)).toBe(false);
+  });
+
+  it("互不當翻譯行：「中文姓名:」下一行係獨立嘅「English Name:」行 → 唔合併；x 範圍重疊 <50% 或垂直 >1.2×行高 → 唔合併", () => {
+    const zh = lab("中文姓名:", 0.08, 0.8, 0.12);
+    const en = lab("English Name:", 0.08, 0.776, 0.14);
+    const zv = lab("測試甲", 0.25, 0.8, 0.1);
+    const r = locateCell("name_zh", [head, zh, en, zv]);
+    expect(ov(r.box!, en)).toBe(false);
+    const far = lab("Name (Chinese):", 0.08, 0.7, 0.16); // 垂直太遠
+    const r2 = locateCell("name_zh", [head, zh, far, zv]);
+    expect(ov(r2.box!, far)).toBe(false);
+    const side = lab("Name (Chinese):", 0.6, 0.776, 0.16); // 水平冇重疊
+    const r3 = locateCell("name_zh", [head, zh, side, zv]);
+    expect(r3.box!.x1).toBeLessThanOrEqual(0.6);
+  });
+
+  it("單獨「Name：」label（冇 English／中文）→ 認作英文姓名；值分幾段、離 label 好遠都取到下一個 label／行尾", () => {
+    const nm = lab("Name：", 0.08, 0.8, 0.07);
+    const a = lab("TESTER", 0.4, 0.8, 0.08);
+    const b = lab("ALPHA KAP", 0.52, 0.8, 0.12); // 同行、隔咗 >3×行高
+    const next = lab("出生日期：", 0.75, 0.8, 0.1);
+    const r = locateCell("name_en", [head, nm, a, b, next]);
+    expect(r.box).not.toBeNull();
+    expect(inside(r.box!, a) && inside(r.box!, b)).toBe(true);
+    expect(r.box!.x1).toBeLessThan(next.x);
+    // 冇下一個 label：取到行尾（最後一段值右邊 +0.6×行高）
+    const r2 = locateCell("name_en", [head, nm, a, b]);
+    expect(r2.box!.x1).toBeGreaterThanOrEqual(b.x + b.w);
+  });
+});
+
+describe("TE-2.2 hire_date merged row：label 喺行尾冇值／空格／人職／前綴描述字", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.025) => ({ t, c: 0.9, x, y, w, h });
+  const title = lab("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.95, 0.5);
+
+  it("splitMergedLines：容許「入 職日期」「人職日期」；前綴「申請職位 Position Apply ……」切開（唔令成行變 label）", () => {
+    for (const t of ["許可證號碼： 許可證屆滿日期： 入 職日期：", "許可證號碼： 許可證屆滿日期： 人職日期：", "許 可證號碼： 許可證屆滿日期： 入職日期："]) {
+      const segs = splitMergedLines([lab(t, 0.1, 0.55, 0.7)]);
+      expect(segs.map((x) => x.t).length, t).toBe(3);
+      expect(segs[2]!.endX).toBeCloseTo(0.8, 6);
+    }
+    const pos = splitMergedLines([lab("申請職位 Position Apply ……可到職日期：", 0.1, 0.6, 0.7)]);
+    expect(pos.map((x) => x.t)).toEqual(["申請職位 Position Apply ……", "可到職日期："]);
+    expect(pos[1]!.x).toBeGreaterThan(0.1 + 0.2);
+    // 聯絡人類前綴仍然屬 label
+    expect(splitMergedLines([lab("遇有緊急事故聯絡人姓名：", 0.1, 0.4, 0.3)]).map((x) => x.t)).toEqual(["遇有緊急事故聯絡人姓名："]);
+  });
+
+  it("「許可證號碼｜許可證屆滿日期｜入職日期：」label 喺行尾冇值 → 裁「label 推算 x 起到行右邊＋0.8×行高」嘅格（空白格照出），唔包牌照號同屆滿日", () => {
+    const merged = lab("許可證號碼： 許可證屆滿日期： 入職日期：", 0.1, 0.55, 0.7);
+    const segs = splitMergedLines([merged]);
+    const hire = segs[2]!;
+    const exp = segs[1]!;
+    const r = locateCell("hire_date", [title, merged], 0).box!;
+    expect(r.x0).toBeGreaterThanOrEqual(exp.x + exp.w - 1e-6);
+    expect(r.x0).toBeLessThanOrEqual(hire.x);
+    expect(r.x1).toBeCloseTo(0.8 + 0.8 * 0.025, 4);
+    // 含數值嘅併行（牌照號＋屆滿日）
+    const withVals = lab("許可證號碼： A1234567 許可證屆滿日期： 01-01-2028 入職日期：", 0.1, 0.55, 0.8);
+    const r2 = locateCell("hire_date", [title, withVals], 0).box!;
+    const s2 = splitMergedLines([withVals]);
+    const h2 = s2.find((x) => x.t.startsWith("入職日期"))!;
+    expect(r2.x0).toBeGreaterThanOrEqual(s2.find((x) => x.t === "01-01-2028")!.x + 0.001);
+    expect(r2.x0).toBeLessThanOrEqual(h2.x);
+  });
+
+  it("「申請職位 Position Apply ……可到職日期：」→ variant 1 只裁可到職日期格，唔包申請職位", () => {
+    const merged = lab("申請職位 Position Apply ……可到職日期：", 0.1, 0.6, 0.7);
+    const segs = splitMergedLines([merged]);
+    const r = locateCell("hire_date", [title, merged], 1).box!;
+    expect(r.x0).toBeGreaterThanOrEqual(segs[0]!.x + segs[0]!.w - 1e-6);
+    expect(r.x1).toBeCloseTo(0.8 + 0.8 * 0.025, 4);
+    expect(locateCell("hire_date", [title, merged], 0).reason).toBe("form_label_not_located");
+  });
+
+  it("越界檢查：hire_date 裁圖 Vision 讀到「許可證／屆滿／申請職位」→ findOverflow 回 permit／position 組（非 PII：S3 唔跳過，收界重裁）", () => {
+    const vl = (t: string, x: number, y: number, w: number, h = 0.3) => ({ t, x, y, w, h });
+    const hit = findOverflow("hire_date", [vl("入職日期： 許可證屆滿日期：", 0.02, 0.35, 0.9)], (l) => /入職/.test(l.t));
+    expect(hit).toMatchObject({ side: "right", group: "permit" });
+    expect(PII_OVERFLOW_GROUPS_TEST.has(hit!.group!)).toBe(false);
+    expect(findOverflow("hire_date", [vl("入職日期： 申請職位 Position", 0.02, 0.35, 0.9)], (l) => /入職/.test(l.t))).toMatchObject({ group: "position" });
+  });
+});
+import { PII_OVERFLOW_GROUPS as PII_OVERFLOW_GROUPS_TEST } from "../scripts/staff-import/lib/triage-evidence-core";
+
+describe.skipIf(!canVision || !hasMagick || !hasSyntheticFonts)("TE-2.2 頁面級方向判斷（入職表頁／印刷行所在頁）", () => {
+  const FONT = "/System/Library/Fonts/Supplemental/Arial.ttf";
+  const run = makeVisionRunner(visionBin!);
+  const page = async (tmp: string, name: string, deg = 0, blank = false) => {
+    const f = path.join(tmp, `${name}.png`);
+    const args = ["-size", "1400x1980", "xc:white"];
+    if (!blank) {
+      args.push("-font", FONT, "-pointsize", "44", "-fill", "black");
+      const texts = ["EMPLOYMENT APPLICATION FORM", "English Name: TESTER ALPHA", "Phone: 90001110", "Address: FLAT 15 TEST STREET", "Date of Birth: 15-01-1990", "Position Applied: GUARD"];
+      texts.forEach((t, i) => args.push("-annotate", `+80+${120 + i * 120}`, t));
+    }
+    await sh(MAGICK, [...args, ...(deg ? ["-rotate", String(deg)] : []), f]);
+    return f;
+  };
+  it("pageResidual：正向→0、倒轉→180、空白→null；先按 prior 轉正再判（prior 90 嘅側躺頁）", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te22p-"));
+    try {
+      expect(await pageResidual(await page(tmp, "up"), 0, tmp, undefined, run)).toBe(0);
+      expect(await pageResidual(await page(tmp, "flip", 180), 0, tmp, undefined, run)).toBe(180);
+      expect(await pageResidual(await page(tmp, "blank", 0, true), 0, tmp, undefined, run)).toBeNull();
+      // 頁面順時針轉咗 90°，版面 prior 話要轉 270 先正向；轉正後係正向 → 0
+      const side = await page(tmp, "side", 90);
+      expect(await pageResidual(side, 270, tmp, new Map(), run)).toBe(0);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("produceItems：整份入職表倒轉（Vision 睇到嘅圖全部上下顛倒）→ 頁面級方向判到 180°，hire_date 等無預期值裁圖沿用（followedPage），page_oriented_pages ≥1；每頁只判一次", async () => {
+    const fx = dryFixture();
+    const base = run;
+    const flip: typeof base = async (paths, fast) => {
+      const t2 = await mkdtemp(path.join(os.tmpdir(), "te22flip-"));
+      try {
+        const outs = await Promise.all(paths.map(async (pth, i) => {
+          const o = path.join(t2, `f${i}.png`);
+          await sh(MAGICK, [pth, "-rotate", "180", o]);
+          return o;
+        }));
+        return await base(outs, fast);
+      } finally {
+        await rm(t2, { recursive: true, force: true });
+      }
+    };
+    let pageCalls = 0;
+    const counting: typeof base = async (paths, fast) => {
+      if (fast && paths.length === 2 && paths.every((p) => /po(0|180)-/.test(p))) pageCalls += 1;
+      return flip(paths, fast);
+    };
+    const deps: Deps = {
+      lines: async (d) => fx.docs.get(`${d.docId}|${d.page}`)?.lines ?? null,
+      existing: () => null,
+      render: async (d) => {
+        const out = path.join(os.tmpdir(), `te22i-${process.pid}-${Math.random().toString(36).slice(2)}.png`);
+        await drawSyntheticPage(fx.docs.get(`${d.docId}|${d.page}`)!, out);
+        return out;
+      },
+      cleanup: async (p) => {
+        await rm(p, { force: true });
+      },
+      vision: counting,
+    };
+    const seven = fx.people.find((x) => x.person.staffNumbers[0]!.number === "DRY7")!;
+    const stats = emptyStats();
+    const items = await produceItems([seven], deps, stats);
+    expect(items.filter((i) => i.field === "hire_date")).toHaveLength(2);
+    expect(stats.page_oriented_pages).toBeGreaterThanOrEqual(1);
+    expect(stats.page_orientation_followed).toBeGreaterThanOrEqual(2);
+    expect(pageCalls).toBeLessThanOrEqual(3); // 入職表頁＋印刷行頁（牌照／證書頁）各一次
+  }, 240_000);
 });

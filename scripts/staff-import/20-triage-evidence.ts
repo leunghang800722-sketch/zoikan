@@ -483,6 +483,8 @@ export interface Stats {
   page_orientation_followed: number;
   /** TE-2.1 G：做咗二階段局部 OCR（300dpi 切塊）嘅頁數 */
   second_stage_pages: number;
+  /** TE-2.2：做咗頁面級方向判斷（判到方向）嘅頁數 */
+  page_oriented_pages: number;
   /** TE-2.1 H：按欄嘅跳過原因分佈 */
   skipped_by_field: Record<string, Record<string, number>>;
   /** TE-1.8：value_mismatch 嘅最高相似度分佈（按欄；四格 0–0.2／0.2–0.4／0.4–0.6／0.6–0.7） */
@@ -490,10 +492,33 @@ export interface Stats {
   zips: number;
   zip_bytes: number;
 }
-export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, page_orientation_followed: 0, second_stage_pages: 0, skipped_by_field: {}, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
+export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, page_orientation_followed: 0, second_stage_pages: 0, page_oriented_pages: 0, skipped_by_field: {}, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
 const bump = (r: Record<string, number>, k: string) => {
   r[k] = (r[k] ?? 0) + 1;
 };
+
+const PAGE_DICT = /申請人|個人資料|姓名|電話|住址|日期|Name|Phone|Address|Date|Position/gi;
+/** 字典詞命中權重高（亂碼都會有字母數字，淨計字數分唔開正倒）；可讀字元數只作輔助。 */
+const pageScore = (t: string): number => 0.3 * (t.match(/[0-9A-Za-z]/g) ?? []).length + 20 * (t.match(PAGE_DICT) ?? []).length;
+
+/**
+ * TE-2.2：頁面級方向判斷（入職表頁、印刷行所在頁）。將（已按版面 prior 轉正嘅）整頁縮到 1000px 闊，Vision .fast 讀 0° 同 180°，
+ * 比較字典詞命中（×20）＋可讀字元數（×0.3）；差距明顯（最高 ≥20 且 ≥1.5×另一個＋8）就回方向，否則 null。每頁只做一次（caller 快取）。
+ */
+export async function pageResidual(png: string, rot: Rotation, tmp: string, rotCache: Map<string, string> | undefined, run: VisionRunner): Promise<Rotation | null> {
+  const page = await rotatedPage(png, rot, tmp, rotCache);
+  const id = Math.random().toString(36).slice(2);
+  const t0 = path.join(tmp, `po0-${id}.png`);
+  const t180 = path.join(tmp, `po180-${id}.png`);
+  await sh(MAGICK, [page, '-resize', '1000x', '-colorspace', 'Gray', t0]);
+  await sh(MAGICK, [t0, '-rotate', '180', t180]);
+  const [a, b] = await run([t0, t180], true);
+  const [sa, sb] = [pageScore(textOf(a)), pageScore(textOf(b))];
+  const hi = Math.max(sa, sb);
+  const lo = Math.min(sa, sb);
+  if (hi >= 20 && hi >= 1.5 * lo + 8) return sa >= sb ? 0 : 180;
+  return null;
+}
 
 /**
  * TE-2.1 G：嵌入卡二階段局部 OCR。200dpi 整頁 OCR 讀唔到右下角細卡，就將該頁以 300dpi 渲染、切 2×2 四格＋中間一格
@@ -617,6 +642,7 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const rotCache = new Map<string, string>();
       // S3：同一頁方向一致——有欄判到（decisive）就記低，純中文姓名等判唔到嘅欄跟返
       const pageRot = new Map<string, Rotation>();
+      const pageOriented = new Set<string>();
       const hookFor = (req: CropRequest): VerifyHook | undefined => {
         if (!deps.vision) return undefined;
         const expected = expectedValuesFor(req.field, pi.person, pi.extra?.[req.field] ?? []);
@@ -658,6 +684,17 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
               if (crossBad) skip = 'cross_name_mismatch';
               else if (!png) skip = 'render_fail';
               else {
+                // TE-2.2：入職表頁／印刷行所在頁——頁面級方向（每頁一次），所有該頁裁圖沿用（無預期值嘅欄靠呢個）
+                const pkey = `${req.doc.docId}|${req.doc.page}`;
+                if (deps.vision && (req.docKind === 'onboarding_form' || req.printed) && !pageOriented.has(pkey)) {
+                  pageOriented.add(pkey);
+                  const prior = req.printed?.rot ?? detectUprightRotation(req.docKind, lines) ?? 0;
+                  const res = await pageResidual(png, prior, tmp, rotCache, deps.vision).catch(() => null);
+                  if (res !== null) {
+                    pageRot.set(pkey, res);
+                    stats.page_oriented_pages += 1;
+                  }
+                }
                 const r = await cropRequest(req, png, lines, tmp, rotCache, hookFor(req)).catch(() => ({ reason: 'image_spec_fail' }) as { reason: string; capped?: boolean; score?: number });
                 if (r.capped) stats.size_capped += 1;
                 if ('bytes' in r) {
@@ -1051,7 +1088,7 @@ export const statsLines = (s: Stats): string[] => [
   `請求 ${s.requests_total}｜現成裁圖 ${s.from_existing}｜即時裁 ${s.live_cropped}｜出圖 ${s.images_out}｜Vision 驗證 ${s.verified}／未驗證 ${s.unverified}｜zip ${s.zips}（${s.zip_bytes} bytes）`,
   `每欄：${JSON.stringify(s.by_field)}｜來源:優先：${JSON.stringify(s.by_doc_priority)}`,
   `跳過原因：${JSON.stringify(s.skipped)}｜忽略嘅現成裁圖清單項 ${s.existing_ignored_entries}｜硬性尺寸上限收窄 ${s.size_capped}｜沿用同頁方向 ${s.page_orientation_followed}`,
-  `二階段局部 OCR 頁數 ${s.second_stage_pages}｜按欄跳過原因：${JSON.stringify(s.skipped_by_field)}`,
+  `二階段局部 OCR 頁數 ${s.second_stage_pages}｜頁面級方向判到 ${s.page_oriented_pages}｜按欄跳過原因：${JSON.stringify(s.skipped_by_field)}`,
   `value_mismatch 最高相似度分佈（按欄；[0–0.2, 0.2–0.4, 0.4–0.6, 0.6–0.7]）：${JSON.stringify(s.mismatch_hist)}`,
 ];
 
