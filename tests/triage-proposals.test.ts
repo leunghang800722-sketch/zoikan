@@ -331,4 +331,19 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(JSON.stringify(ok.body)).not.toContain("補名測試員");
     void pa;
   });
+  it("TE-5：同名現有保安員（needs_decision）→ proposals 唔自動答，計 skipped_needs_decision；唔按姓名自動連結", async () => {
+    const { pn, sid } = await seed();
+    const g = await prisma.guard.create({ data: { nameZh: "補名測試員甲", employmentType: "cash_casual", createdBy: "t" } });
+    const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { kind: "no_id_card" } });
+    const ev = qn.evidenceJson as { person: Record<string, unknown> };
+    ev.person.nameZh = { value: null, status: "missing" };
+    ev.person.nameEn = { value: null, status: "missing" };
+    await prisma.triageQuestion.update({ where: { id: qn.id }, data: { evidenceJson: ev as never } });
+    const match = { hkid: null, staff_numbers: ["U90003"] };
+    const NEW = mkHkid("W", "400001");
+    const r = await send(accountant, sid, [prop(pn.key, "hkid", NEW, { match }), prop(pn.key, "nameZh", "補名測試員甲", { match })]);
+    expect(r.body).toMatchObject({ applied: 0, skipped_needs_decision: 2, errors: 0 });
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("open");
+    expect(await prisma.guard.findUniqueOrThrow({ where: { id: g.id }, select: { hkid: true } })).toEqual({ hkid: null });
+  });
 });

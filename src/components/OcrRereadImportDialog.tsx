@@ -25,6 +25,8 @@ interface Counts {
   /** TE-4（additive，舊 server 冇） */
   skipped_low_confidence?: number;
   skipped_identity_mismatch?: number;
+  /** TE-5 */
+  skipped_needs_decision?: number;
 }
 const SKIP_LABEL: [keyof Counts, string][] = [
   ["skipped_no_question", "冇對應未答題"],
@@ -35,6 +37,7 @@ const SKIP_LABEL: [keyof Counts, string][] = [
   ["skipped_partial", "只有部分欄有建議"],
   ["skipped_low_confidence", "低信心（印刷冇卡／同卡唔一致），留人手"],
   ["skipped_identity_mismatch", "身份對唔上（號碼已屬他人等）"],
+  ["skipped_needs_decision", "要人決定連結／建新人"],
   ["errors", "出錯"],
 ];
 

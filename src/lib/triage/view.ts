@@ -7,7 +7,7 @@ import { maskAccountNo, type PersonResult, type WriteChange } from "@/lib/guards
 import { EXT_OUTCOME_LABEL, SCALARS, bankLeaves, contactsOf, extLabel, isBankKey, isEmergencyKey, staffHiresOf } from "@/lib/guards/import/ext";
 import { NAME_REASONS } from "@/lib/guards/import/project";
 import { fieldValue, type PackagePerson } from "@/lib/guards/import/package";
-import { maskAddressImport, maskHkidImport, maskTelImport, sameNameStrict } from "@/lib/guards/import/text";
+import { maskAddressImport, maskHkidImport, maskTelImport, normZh, sameNameStrict } from "@/lib/guards/import/text";
 import { hasPermission, type AuthedSession } from "@/lib/rbac/requirePermission";
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { BANK_KINDS, KIND_LABEL, REVIEW_FIELD_LABEL, type QuestionEvidence, type QuestionKind, type QuestionOption } from "./types";
@@ -366,6 +366,59 @@ export interface ImpactView {
   reason_text?: string;
   /** TE-3：補咗呢啲資料就可以過（UI 喺同一張卡展開輸入框）；required=false 嘅欄可以留空 */
   needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
+  /** TE-5：系統有同名現有保安員，淨姓名對唔夠硬——要人決定「連結」定「建新人」 */
+  needs_decision?: { reason: "name_only_candidate" | "same_name_different_dob"; candidates: DecisionCandidate[]; options: ("link" | "create_new")[] };
+}
+
+export interface DecisionCandidate {
+  guard_id: string;
+  name_zh: string;
+  /** 英文名跟「保安員個人資料:view」 */
+  name_en: string | null;
+  has_hkid: boolean;
+  has_dob: boolean;
+  staff_numbers: string[];
+  /** 冇「保安員個人資料:view」就遮罩 */
+  phone_masked: string | null;
+  created_at: string;
+  /** 最近出更月份（YYYY-MM；冇更＝null） */
+  last_shift_month: string | null;
+  active: boolean;
+}
+
+/** TE-5：需要人決定連結／建新人嘅原因碼 */
+export const DECISION_REASONS = ["name_only_candidate", "same_name_different_dob"] as const;
+export const DECISION_TEXT = "系統已有一位同名保安員，請確認係咪同一人：係＝連結並補資料；唔係＝建新人";
+
+/** 同名（normZh 相同）現有保安員候選卡（live 讀，欄位級權限過濾）。 */
+export async function loadDecisionCandidates(nameZh: string, c: ViewerCaps): Promise<DecisionCandidate[]> {
+  const want = normZh(nameZh);
+  if (!want) return [];
+  const rows = await prisma.guard.findMany({ where: { nameZh: { contains: want[0]! } }, select: { id: true, nameZh: true, nameEn: true, hkid: true, dateOfBirth: true, tel: true, createdAt: true, status: true } });
+  const same = rows.filter((g) => normZh(g.nameZh) === want).slice(0, 5);
+  const ids = same.map((g) => g.id);
+  if (ids.length === 0) return [];
+  const [phones, nos, last] = await Promise.all([
+    prisma.guardPhone.findMany({ where: { guardId: { in: ids } }, select: { guardId: true, tel: true } }),
+    prisma.guardStaffNumber.findMany({ where: { guardId: { in: ids } }, select: { guardId: true, number: true } }),
+    prisma.$queryRaw<{ guard_id: string; last_date: Date }[]>`SELECT guard_id, max(work_date) AS last_date FROM shift_records WHERE guard_id = ANY(${ids}::text[]) AND status <> 'cancelled' GROUP BY guard_id`,
+  ]);
+  return same.map((g) => {
+    const tel = phones.find((p) => p.guardId === g.id)?.tel ?? g.tel ?? null;
+    const ld = last.find((r) => r.guard_id === g.id)?.last_date ?? null;
+    return {
+      guard_id: g.id,
+      name_zh: g.nameZh,
+      name_en: c.pii ? g.nameEn : null,
+      has_hkid: !!g.hkid,
+      has_dob: !!g.dateOfBirth,
+      staff_numbers: nos.filter((n) => n.guardId === g.id).map((n) => n.number),
+      phone_masked: tel ? (c.pii ? tel : maskTelImport(tel)) : null,
+      created_at: g.createdAt.toISOString().slice(0, 10),
+      last_shift_month: ld ? ld.toISOString().slice(0, 7) : null,
+      active: g.status === "active",
+    };
+  });
 }
 
 /** TE-3：令 can_confirm=false 嘅原因碼 → 人話＋下一步（唔再淨係「原因碼」）。 */

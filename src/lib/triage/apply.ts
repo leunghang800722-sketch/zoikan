@@ -16,7 +16,7 @@ import { applyOnePerson, extOutcomeOf, summarizeExt, type ApplyOptions } from "@
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
-import { buildImpact, explainBlocked, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
+import { DECISION_REASONS, DECISION_TEXT, buildImpact, explainBlocked, loadDecisionCandidates, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
 import { sameEnglishTokens } from "./generators/guard-import";
 import { TRIAGE_LOCK, kindClass } from "./session";
 import { identityFollowUps } from "./generators/guard-import";
@@ -144,6 +144,7 @@ async function checkHkidOwner(q: QRow, answer: TriageAnswer): Promise<boolean> {
   const canon = canonicalHkid(answer.option === "enter_hkid" ? (answer.value ?? null) : fieldValue(ev.person.hkid));
   if (!canon) return false; // resolveAnswer 會 400
   const owner = await prisma.guard.findFirst({ where: { hkid: canon }, select: { id: true, nameZh: true } });
+  if (owner && answer.extra?.link_guard_id === owner.id) return false; // TE-5：人手揀咗連去呢位（身份證號本來就係佢嘅）
   if (!owner || ev.candidate_guard_ids.includes(owner.id)) return false;
   const a = normZh(owner.nameZh);
   if (a && a === normZh(fieldValue(ev.person.nameZh))) return true;
@@ -181,6 +182,17 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   if (mismatch) {
     impact.notes.unshift(mismatch);
     if (!answer.confirm_identity) impact.can_confirm = false;
+  }
+  // TE-5：同名現有保安員（淨姓名對唔夠硬）→ 要人決定連結／建新人；唔准按姓名自動連結
+  const decisionReason = !impact.can_confirm && !answer.extra?.link_guard_id && !answer.extra?.create_new && EXTRA_NAME_OPTIONS.includes(answer.option) ? DECISION_REASONS.find((r) => out.result.reasons.includes(r)) : undefined;
+  if (decisionReason) {
+    const nm = fieldValue(resolved.pkg.persons[0]!.nameZh);
+    const candidates = nm ? await loadDecisionCandidates(nm, caps) : [];
+    if (candidates.length > 0) {
+      impact.needs_decision = { reason: decisionReason, candidates, options: ["link", "create_new"] };
+      impact.reason_text = DECISION_TEXT;
+      return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: false, impact };
+    }
   }
   // TE-3：唔過嘅原因用人話講清楚；缺姓名而選項容許補姓名就列出要補嘅欄（UI 同一張卡展開輸入）
   if (!impact.can_confirm) Object.assign(impact, explainBlocked(out.result.reasons, answer.option, EXTRA_NAME_OPTIONS, !!answer.extra?.name_zh));
@@ -320,7 +332,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         tableName: "triage_questions",
         rowId: q.id,
         action: "triage_answer",
-        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: !extra, ...(extra ? { answered_via: extra.source } : {}), ...(answer.extra ? { extra_names: (["name_zh", "name_en", "dob"] as const).filter((k) => !!answer.extra?.[k]) } : {}), ...(evidenceDeleted > 0 ? { evidence_deleted: evidenceDeleted } : {}) },
+        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: !extra, ...(extra ? { answered_via: extra.source } : {}), ...(answer.extra ? { extra_names: (["name_zh", "name_en", "dob"] as const).filter((k) => !!answer.extra?.[k]) } : {}), ...(answer.extra?.link_guard_id ? { decision: "link", link_guard_id: answer.extra.link_guard_id } : answer.extra?.create_new ? { decision: "create_new" } : {}), ...(evidenceDeleted > 0 ? { evidence_deleted: evidenceDeleted } : {}) },
         ip,
       });
       // 同 guard_import_apply summary 一致形狀（月度修正摘要會計入「覆核決定」）

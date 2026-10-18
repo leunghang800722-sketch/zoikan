@@ -1466,3 +1466,4 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **TE-4（branch `te4-reread-embedded`，起點 te3-ui-fixes 858218d）**：重讀腳本支援嵌入身份證副本（倒轉卡轉正裁圖→真 OCR→proposal）、印刷佐證升降信心、`--only-missing-hkid`；伺服器 proposals 接受 `no_id_card`（hkid＋姓名＋出生日期）。
 - **TE-4.1（branch `te4-1-fixes`，起點 main ffd7376）**：TE-3 M1 混淆修正收緊＋誤收率回歸；TE-4 M1 嵌入卡整人一致性；S1／S2／N2 修正。
 - **TE-4.2（branch `te4-2-fixes`，起點 main e406fcc）**：出生日期已確認保護；英文名放寬比對；7 位＋(d) 誤收水平回歸。
+- **TE-5（branch `te5-link-decision`，起點 te4-2-fixes bb44be4）**：同名現有保安員 needs_decision（連結／建新人），UI 一撳流程，proposals 唔自動連結。
