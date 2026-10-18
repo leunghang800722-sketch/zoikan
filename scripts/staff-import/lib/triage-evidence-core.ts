@@ -291,6 +291,23 @@ export function addressRegionLikely(box: Box, lines: readonly OcrLine[]): boolea
 export interface CapAnchor {
   own: readonly OcrLine[];
   mode: 'id' | 'form';
+  /** id 模式：版面規則推出嘅相片區（capBox 收窄後再檢查用） */
+  photo?: Box | null;
+}
+
+/**
+ * S1（TE-1.9）：capBox 收窄之後再同相片範圍做相交檢查。仍相交先夾一次（號碼框 y 上限＝相片下緣；其他欄右緣＝相片左緣），
+ * 夾完仍相交、或者夾走咗字本身（行 bbox 唔再被包住）→ null（呼叫者跳過，計 id_photo_overlap）。
+ */
+export function clipToPhoto(box: Box, photo: Box | null | undefined, own: readonly OcrLine[]): Box | null {
+  if (!photo || !intersects(box, photo)) return box;
+  const base = bboxOf(own);
+  const b = { ...box };
+  const isNumber = base.x0 + (base.x1 - base.x0) / 2 >= photo.x0; // 行喺相片 x 範圍之內（右下號碼）→ 只可以靠 y 夾
+  if (isNumber) b.y1 = Math.min(b.y1, photo.y0 - 1e-6);
+  else b.x1 = Math.min(b.x1, photo.x0 - 0.005);
+  const cuts = own.length > 0 && (b.x0 > base.x0 + 1e-9 || b.x1 < base.x1 - 1e-9 || b.y0 > base.y0 + 1e-9 || b.y1 < base.y1 - 1e-9);
+  return !valid(b) || intersects(b, photo) || cuts ? null : b;
 }
 
 /** 一個請求 → 裁圖範圍（null＝冇可靠幾何）。lines 必須已經係正向 frame（見 detectUprightRotation／rotateLines）。aspect＝頁寬／頁高。 */
@@ -299,7 +316,7 @@ export function boxForRequest(req: CropRequest, lines: readonly OcrLine[], aspec
     const f = req.field as 'hkid' | 'name_zh' | 'name_en' | 'dob';
     const g = locateIdCardBoxes(req.doc.page, lines, aspect);
     const b = g[f] ?? null;
-    return b ? { box: b, anchor: { own: g.own?.[f] ?? [], mode: 'id' } } : { box: null, reason: g.overlap?.includes(f) ? 'id_photo_overlap' : (g.reason ?? 'id_field_not_located') };
+    return b ? { box: b, anchor: { own: g.own?.[f] ?? [], mode: 'id', photo: g.photo } } : { box: null, reason: g.overlap?.includes(f) ? 'id_photo_overlap' : (g.reason ?? 'id_field_not_located') };
   }
   if (req.docKind === 'address_proof') {
     const b = locateAddressProofBox(lines);
