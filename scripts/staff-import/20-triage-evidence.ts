@@ -359,20 +359,24 @@ const HK_ID_VALID = (() => {
 
 const L = (t: string, x: number, y: number, w: number, h = 0.025): OcrLine => ({ t, c: 0.95, x, y, w, h });
 
-/** 假身份證頁 OCR 行：layout A＝文字喺左、相片喺右；B＝相反。座標係 Vision 正規化（原點左下）。 */
-export function syntheticIdCardPage(layout: 'A' | 'B', withAnchor = true): { lines: OcrLine[]; photo: Box } {
-  const x0 = layout === 'A' ? 0.08 : 0.46;
+/**
+ * 假身份證頁 OCR 行——**真卡版面**（香港智能身份證）：相片右上、號碼喺相片正下方（右下）、左邊中英文姓名／出生日期／簽發日期。
+ * 座標係 Vision 正規化（原點左下）。photoGap＝相片下緣高過號碼行頂幾多（預設 0.005；邊界測試用 0.003）。
+ */
+export function syntheticIdCardPage(withAnchor = true, photoGap = 0.005): { lines: OcrLine[]; photo: Box; hkidTop: number } {
   const lines: OcrLine[] = [
-    ...(withAnchor ? [L('香港永久性居民身份證', x0, 0.8, 0.34), L('HONG KONG PERMANENT IDENTITY CARD', x0, 0.77, 0.44, 0.02)] : []),
-    L('TESTER, Alpha', x0, 0.72, 0.3),
-    L('測試甲', x0, 0.68, 0.12),
-    L('出生日期 Date of Birth', x0, 0.63, 0.26, 0.02),
-    L('15-01-1990', x0 + 0.04, 0.6, 0.16),
-    L('男 M', x0 + 0.22, 0.6, 0.06),
-    L(HK_ID_VALID, x0, 0.54, 0.22, 0.03),
+    ...(withAnchor ? [L('香港永久性居民身份證', 0.12, 0.8, 0.34), L('HONG KONG PERMANENT IDENTITY CARD', 0.12, 0.77, 0.44, 0.02)] : []),
+    L('TESTER, Alpha', 0.1, 0.7, 0.25),
+    L('測試甲', 0.1, 0.66, 0.12),
+    L('出生日期 Date of Birth', 0.1, 0.6, 0.24, 0.02),
+    L('15-01-1990', 0.14, 0.57, 0.16),
+    L('男 M', 0.32, 0.57, 0.05),
+    L('簽發日期 Date of Issue', 0.1, 0.53, 0.22, 0.02),
+    L(HK_ID_VALID, 0.44, 0.54, 0.12, 0.035),
   ];
-  const photo: Box = layout === 'A' ? { x0: 0.62, x1: 0.9, y0: 0.52, y1: 0.78 } : { x0: 0.08, x1: 0.36, y0: 0.52, y1: 0.78 };
-  return { lines, photo };
+  const hkidTop = 0.54 + 0.035;
+  const photo: Box = { x0: 0.4, x1: 0.56, y0: hkidTop + photoGap, y1: 0.78 };
+  return { lines, photo, hkidTop };
 }
 
 export function syntheticFormPage(): OcrLine[] {
@@ -409,14 +413,14 @@ export function dryFixture(): { people: PersonInput[]; docs: Map<string, DryDoc>
     docs.set(`${doc.docId}|1`, { doc, lines, ...(photo ? { photo } : {}) });
     return doc;
   };
-  const a = syntheticIdCardPage('A');
-  const b = syntheticIdCardPage('B');
-  const noAnchor = syntheticIdCardPage('A', false);
+  const a = syntheticIdCardPage();
+  const b = syntheticIdCardPage();
+  const noAnchor = syntheticIdCardPage(false);
   return {
     docs,
     people: [
       { person: dryPerson(1), docs: [add('id_card', 1, a.lines, a.photo), add('address_proof', 1, syntheticAddressProofPage()), add('onboarding_form', 1, syntheticFormPage())] }, // 三份文件齊
-      { person: dryPerson(2), docs: [add('id_card', 2, b.lines, b.photo), add('onboarding_form', 2, syntheticFormPage())] }, // 相片喺左；冇住址證明 → 住址退入職表
+      { person: dryPerson(2), docs: [add('id_card', 2, b.lines, b.photo), add('onboarding_form', 2, syntheticFormPage())] }, // 冇住址證明 → 住址退入職表
       { person: dryPerson(3), docs: [add('onboarding_form', 3, syntheticFormPage())] }, // 冇證件 → 退入職表
       { person: dryPerson(4), docs: [] }, // 冇文件
       { person: dryPerson(5), docs: [add('id_card', 5, noAnchor.lines, noAnchor.photo), add('onboarding_form', 5, syntheticFormPage())] }, // 認唔出卡面 → 身份證欄唔裁（避免連相片一齊裁）

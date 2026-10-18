@@ -30,6 +30,7 @@ import {
   requiredFieldsFor,
   viewableFields,
 } from "@/lib/triage/evidence-images";
+import { readEvidenceZip } from "@/lib/triage/evidence-upload";
 import { runTriageEvidenceCleanup } from "@/lib/jobs/triage-evidence-cleanup";
 import { JOBS } from "@/lib/jobs/registry";
 import { triageEvidenceCleanupJob } from "@/lib/jobs/triage-evidence-cleanup";
@@ -179,6 +180,20 @@ describe("TE-1 證據裁圖", () => {
       expect(inspectImage(new Uint8Array(0))).toBeNull();
       expect(inspectImage(fakeJpeg(300, 50, { pad: MAX_IMAGE_BYTES }))).toBeNull();
       expect(inspectImage(fakeJpeg(0, 0))).toBeNull();
+      // S-a：掃到 EOI；SOF 之後嘅 APPn／COM、EOI 後尾巴、長邊 >800 都拒
+      const j = fakeJpeg(300, 50, { seed: 3 });
+      const sofIdx = j.findIndex((v, i) => v === 0xff && j[i + 1] === 0xc0);
+      const sosIdx = j.findIndex((v, i) => i > sofIdx && v === 0xff && j[i + 1] === 0xda);
+      const app1 = [0xff, 0xe1, 0, 8, 0x45, 0x78, 0x69, 0x66, 0, 0];
+      const withAfterSof = new Uint8Array([...j.slice(0, sosIdx), ...app1, ...j.slice(sosIdx)]);
+      expect(inspectImage(withAfterSof)).toBeNull();
+      const com = new Uint8Array([...j.slice(0, sosIdx), 0xff, 0xfe, 0, 4, 0x68, 0x69, ...j.slice(sosIdx)]);
+      expect(inspectImage(com)).toBeNull();
+      expect(inspectImage(new Uint8Array([...j, 1, 2, 3, 4, 5, 6, 7, 8]))).toBeNull(); // EOI 後有尾巴
+      expect(inspectImage(j.slice(0, j.length - 2))).toBeNull(); // 冇 EOI
+      expect(inspectImage(fakeJpeg(801, 50))).toBeNull();
+      expect(inspectImage(fakeJpeg(800, 800))).not.toBeNull();
+      expect(inspectImage(fakePng(801, 50))).toBeNull();
       expect(inspectImage(new TextEncoder().encode("GIF89a-not-allowed-here-xxxxxxxxxxxxxxxx"))).toBeNull();
     });
   });
@@ -311,21 +326,86 @@ describe("TE-1 證據裁圖", () => {
       expect((await upload(accountant, sid, z2)).status).toBe(400);
     });
 
-    it("entry 數 >400 → 400；解壓總量 >32 MB（zip bomb）→ 400；zip >8 MB／唔係 zip／冇 manifest／冇 file → 400", async () => {
+    it("entry 數 >400 → 400；zip >8 MB／唔係 zip／冇 manifest／冇 file → 400", async () => {
       const { sid } = await seed();
       const many: Record<string, Uint8Array | string> = { "manifest.json": JSON.stringify({ version: 1, items: [] }) };
       for (let i = 0; i < 401; i++) many[`${String(i).padStart(32, "a")}.jpg`.replace(/a/g, (c, idx) => ((idx + i) % 16).toString(16))] = J(i);
       expect(Object.keys(many).length).toBeGreaterThan(401);
       expect((await upload(accountant, sid, await buildZip(many))).status).toBe(400);
-      const big: Record<string, Uint8Array | string> = { "manifest.json": JSON.stringify({ version: 1, items: [] }) };
-      for (let i = 0; i < 3; i++) big[`${i}`.padStart(32, "b") + ".jpg"] = new Uint8Array(12 * 1024 * 1024);
-      const bomb = await buildZip(big);
-      expect(bomb.byteLength).toBeLessThan(2 * 1024 * 1024);
-      expect((await upload(accountant, sid, bomb)).status).toBe(400);
       expect((await upload(accountant, sid, new Uint8Array(8 * 1024 * 1024 + 10).fill(1))).status).toBe(400);
       expect((await upload(accountant, sid, new TextEncoder().encode("not a zip"))).status).toBe(400);
       expect((await upload(accountant, sid, await buildZip({ [entryName(J(1))]: J(1) }))).status).toBe(400);
       expect((await upload(accountant, sid, null)).status).toBe(400);
+    });
+
+    /** 把 zip 內所有 entry 宣告嘅解壓前／後尺寸（central dir＋local header）改成 fake（zip 檔自己作假）。 */
+    const forgeDeclaredSize = (zip: Uint8Array, fake: number): Uint8Array => {
+      const b = Buffer.from(zip);
+      for (let i = 0; i + 46 < b.length; i++) {
+        if (b.readUInt32LE(i) === 0x02014b50) b.writeUInt32LE(fake, i + 24); // central: uncompressed size
+        else if (b.readUInt32LE(i) === 0x04034b50) b.writeUInt32LE(fake, i + 22); // local: uncompressed size
+      }
+      return new Uint8Array(b);
+    };
+
+    it("M6 zip bomb（宣告尺寸作假：宣告 1000 bytes、實際 40 MB）→ 串流計數喺 120 KB 中止：保留 ≤120KB、唔爆記憶體、唔 500", async () => {
+      const { sid } = await seed();
+      const big = new Uint8Array(40 * 1024 * 1024); // 40 MB 零，壓縮後細
+      const name = entryName(big);
+      const zip = forgeDeclaredSize(await buildZip({ [name]: big, "manifest.json": JSON.stringify({ version: 1, items: [] }) }), 1000);
+      expect(zip.byteLength).toBeLessThan(500 * 1024);
+      let kept = 0;
+      let seen = 0;
+      const before = process.memoryUsage();
+      const r = await readEvidenceZip(zip, { onKept: (n) => (kept += n), onSeen: (n) => (seen += n) }).then((x) => ({ ok: true as const, x }), (e) => ({ ok: false as const, e }));
+      const after = process.memoryUsage();
+      expect(kept).toBeLessThanOrEqual(MAX_IMAGE_BYTES); // 保留（會 buffer）嘅 bytes 唔會超過 120 KB
+      expect(seen).toBeLessThan(40 * 1024 * 1024); // 冇真係解晒 40 MB
+      expect(after.arrayBuffers - before.arrayBuffers).toBeLessThan(30 * 1024 * 1024);
+      if (r.ok) expect(r.x.images.has(name)).toBe(false); // 超大單張唔入 map
+      // 經 route：回 200（該 item 之後計 skipped_invalid_image）或固定句 400，絕不 500，亦唔回顯 entry 名
+      const res = await upload(accountant, sid, zip, true);
+      expect([200, 400]).toContain(res.status);
+      expect(res.text).not.toContain(name);
+    });
+
+    it("M6 解壓錯誤（宣告尺寸同實際唔符）一律固定句 400：唔回顯 entry 名／內部訊息（唔係 500）", async () => {
+      const { sid } = await seed();
+      const bytes = J(77, { pad: 5000 });
+      const name = entryName(bytes);
+      const zip = forgeDeclaredSize(await buildZip({ [name]: bytes, "manifest.json": JSON.stringify({ version: 1, items: [] }) }), 1000);
+      const res = await upload(accountant, sid, zip, true);
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe("zip 檔案格式唔啱或超出限制");
+      expect(res.text).not.toContain(name);
+      expect(res.text.toLowerCase()).not.toContain("mismatch");
+    });
+
+    it("M6 總量上限：300 張各 ≤120KB 但解壓合共 >32 MB（zip 只有幾十 KB）→ 400", async () => {
+      const { sid } = await seed();
+      const entries: Record<string, Uint8Array | string> = { "manifest.json": JSON.stringify({ version: 1, items: [] }) };
+      for (let i = 0; i < 300; i++) entries[`${i.toString(16).padStart(32, "c")}.jpg`] = new Uint8Array(120_000).fill(0);
+      const zip = await buildZip(entries);
+      expect(zip.byteLength).toBeLessThan(2 * 1024 * 1024);
+      expect((await upload(accountant, sid, zip, true)).status).toBe(400);
+    });
+
+    it("S-b 上載 body 串流上限：冇 content-length header 都擋（>8 MB → 413 固定句），唔會照讀成個 body", async () => {
+      const { sid } = await seed();
+      let pulled = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(ctl) {
+          pulled += 1;
+          if (pulled > 40) return ctl.close();
+          ctl.enqueue(new Uint8Array(1024 * 1024));
+        },
+      });
+      const req = new Request(`http://t/api/triage/sessions/${sid}/evidence-images`, { method: "POST", headers: { cookie: accountant, "content-type": "multipart/form-data; boundary=x" }, body: stream, duplex: "half" } as RequestInit);
+      expect(req.headers.get("content-length")).toBeNull();
+      const res = await uploadRoute(req, { params: Promise.resolve({ id: sid }) } as never);
+      expect(res.status).toBe(413);
+      expect((await res.json()).message).toBe("zip 檔案太大（上限 8 MB）");
+      expect(pulled).toBeLessThan(20); // 讀到超限即中止，冇讀晒 40 MB
     });
 
     it("單張 >120KB／magic bytes 唔啱／帶 EXIF／副檔名同格式唔符 → skipped_invalid_image（其餘照收）", async () => {

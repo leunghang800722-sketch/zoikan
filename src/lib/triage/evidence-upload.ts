@@ -6,7 +6,7 @@ import JSZip from "jszip";
 import { z } from "zod";
 import type { TriageQuestion } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { BadRequest } from "@/lib/api/errors";
+import { ApiError, BadRequest } from "@/lib/api/errors";
 import { writeAuditTx } from "@/lib/audit";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { TRIAGE_LOCK, restrictedKindsFor } from "./session";
@@ -68,37 +68,84 @@ export interface EvidenceUploadCounts {
 
 const GENERIC_ZIP_ERR = "zip 檔案格式唔啱或超出限制";
 
-/** 解 zip：所有失敗一律同一句 400，唔回顯 entry 名。回 manifest 同 entries（name → bytes）。 */
-export async function readEvidenceZip(buf: Uint8Array): Promise<{ manifest: EvidenceManifest; images: Map<string, Uint8Array> }> {
+interface StreamHelper {
+  on(ev: "data", cb: (chunk: Uint8Array) => void): StreamHelper;
+  on(ev: "end", cb: () => void): StreamHelper;
+  on(ev: "error", cb: (e: unknown) => void): StreamHelper;
+  pause(): StreamHelper;
+  resume(): StreamHelper;
+}
+const MANIFEST_MAX_BYTES = 1_000_000;
+
+/**
+ * 逐 entry 串流解壓（M6）：**唔信 zip 自己宣告嘅尺寸**。邊解邊計 bytes，超過 limit 即刻 pause 並放棄（回 null＝超大），
+ * 之後嘅 chunk 一律丟棄唔儲存；`seen` 累計所有見過嘅解壓 bytes（含被丟棄），由 caller 對總量設上限。
+ * 解壓出錯（資料壞／宣告尺寸同實際唔符）→ reject（caller 轉固定句 400）。
+ */
+function readEntryBounded(e: JSZip.JSZipObject, limit: number, onSeen: (n: number) => void, onKept?: (n: number) => void): Promise<Uint8Array | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let kept = 0;
+    let done = false;
+    const h = (e as unknown as { internalStream(t: "uint8array"): StreamHelper }).internalStream("uint8array");
+    h.on("data", (chunk) => {
+      onSeen(chunk.byteLength);
+      if (done) return;
+      if (kept + chunk.byteLength > limit) {
+        done = true;
+        h.pause();
+        resolve(null);
+        return;
+      }
+      kept += chunk.byteLength;
+      onKept?.(chunk.byteLength);
+      chunks.push(chunk);
+    });
+    h.on("error", () => {
+      if (done) return;
+      done = true;
+      reject(new Error("unzip"));
+    });
+    h.on("end", () => {
+      if (done) return;
+      done = true;
+      resolve(Buffer.concat(chunks));
+    });
+    h.resume();
+  });
+}
+
+/** 解 zip：所有失敗一律同一句 400，唔回顯 entry 名／內部訊息。回 manifest 同 entries（name → bytes；超大單張唔入 map）。 */
+export async function readEvidenceZip(buf: Uint8Array, hooks: { onKept?: (n: number) => void; onSeen?: (n: number) => void } = {}): Promise<{ manifest: EvidenceManifest; images: Map<string, Uint8Array> }> {
   if (buf.byteLength === 0 || buf.byteLength > MAX_ZIP_BYTES) throw BadRequest("zip 檔案太大或係空嘅（上限 8 MB）");
-  let zip: JSZip;
   try {
-    zip = await JSZip.loadAsync(buf);
-  } catch {
-    throw BadRequest(GENERIC_ZIP_ERR);
+    return await readEvidenceZipInner(buf, hooks);
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    throw BadRequest(GENERIC_ZIP_ERR); // JSZip／pako 嘅內部錯誤訊息可能帶 entry 名，一律唔回顯
   }
+}
+
+async function readEvidenceZipInner(buf: Uint8Array, hooks: { onKept?: (n: number) => void; onSeen?: (n: number) => void }): Promise<{ manifest: EvidenceManifest; images: Map<string, Uint8Array> }> {
+  const zip = await JSZip.loadAsync(buf);
   const entries = Object.values(zip.files);
   if (entries.length > MAX_ENTRIES + 1) throw BadRequest(GENERIC_ZIP_ERR);
-  let declared = 0;
   for (const e of entries) {
     if (e.dir) throw BadRequest(GENERIC_ZIP_ERR);
     if (e.name !== "manifest.json" && !ENTRY_NAME_RE.test(e.name)) throw BadRequest(GENERIC_ZIP_ERR); // 唔准真名／路徑
-    // JSZip 內部記錄嘅解壓前宣告尺寸：先擋 zip bomb，唔好真係解出嚟先量
-    const size = (e as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
-    if (typeof size === "number") {
-      if (size > (e.name === "manifest.json" ? 1_000_000 : MAX_IMAGE_BYTES)) {
-        if (e.name === "manifest.json") throw BadRequest(GENERIC_ZIP_ERR);
-        // 超大單張：之後計 skipped_invalid_image（唔解壓）
-      }
-      declared += size;
-      if (declared > MAX_UNZIPPED_BYTES) throw BadRequest(GENERIC_ZIP_ERR);
-    }
   }
+  let seen = 0;
+  const onSeen = (n: number) => {
+    seen += n;
+    hooks.onSeen?.(n);
+  };
   const mf = zip.file("manifest.json");
   if (!mf) throw BadRequest(GENERIC_ZIP_ERR);
+  const mfBytes = await readEntryBounded(mf, MANIFEST_MAX_BYTES, onSeen, hooks.onKept);
+  if (!mfBytes) throw BadRequest(GENERIC_ZIP_ERR);
   let manifest: EvidenceManifest;
   try {
-    const parsed = evidenceManifestSchema.safeParse(JSON.parse(await mf.async("string")));
+    const parsed = evidenceManifestSchema.safeParse(JSON.parse(Buffer.from(mfBytes).toString("utf8")));
     if (!parsed.success) throw new Error("schema");
     manifest = parsed.data;
   } catch {
@@ -106,15 +153,14 @@ export async function readEvidenceZip(buf: Uint8Array): Promise<{ manifest: Evid
     throw BadRequest("manifest 格式唔啱（每張圖都要有 match，而且 priority／doc_kind／field 要啱規格）");
   }
   const images = new Map<string, Uint8Array>();
-  let total = 0;
   for (const e of entries) {
     if (e.name === "manifest.json") continue;
-    const size = (e as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
-    if (typeof size === "number" && size > MAX_IMAGE_BYTES) continue; // 超大：當冇呢張，之後該 item 計 skipped_invalid_image
-    const bytes = await e.async("uint8array");
-    total += bytes.byteLength;
-    if (total > MAX_UNZIPPED_BYTES) throw BadRequest(GENERIC_ZIP_ERR);
-    if (bytes.byteLength <= MAX_IMAGE_BYTES) images.set(e.name, bytes);
+    // 宣告嘅壓縮後尺寸只作快速排除（唔係信任依據）：真正限制係串流計數
+    const csize = (e as unknown as { _data?: { compressedSize?: number } })._data?.compressedSize;
+    if (typeof csize === "number" && csize > MAX_IMAGE_BYTES + 1024) continue;
+    const bytes = await readEntryBounded(e, MAX_IMAGE_BYTES, onSeen, hooks.onKept);
+    if (seen > MAX_UNZIPPED_BYTES) throw BadRequest(GENERIC_ZIP_ERR);
+    if (bytes) images.set(e.name, bytes); // 超過 120 KB＝null＝唔入 map（之後該 item 計 skipped_invalid_image）
   }
   return { manifest, images };
 }

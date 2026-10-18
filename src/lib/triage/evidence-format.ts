@@ -40,6 +40,9 @@ export interface ImageInfo {
 }
 
 /** 回 null＝唔合格（唔係 JPEG／PNG、太大、仲有 EXIF／APPn／comment／文字 chunk、讀唔到尺寸）。 */
+/** 規格長邊上限（本機腳本縮至 800px）。 */
+const MAX_EDGE = 800;
+
 export function inspectImage(buf: Uint8Array): ImageInfo | null {
   if (buf.length < 16 || buf.length > MAX_IMAGE_BYTES) return null;
   const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -50,29 +53,42 @@ export function inspectImage(buf: Uint8Array): ImageInfo | null {
 
 function inspectJpeg(b: Buffer): ImageInfo | null {
   let i = 2;
-  while (i + 4 <= b.length) {
+  let dims: { width: number; height: number } | null = null;
+  while (i + 2 <= b.length) {
     if (b[i] !== 0xff) return null;
     const m = b[i + 1]!;
     if (m === 0xff) {
       i += 1;
       continue;
     }
-    if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) {
+    if (m === 0xd9) {
+      // EOI：必須喺檔尾（EOI 後有尾巴＝可能夾帶資料 → 拒）
+      return dims && i + 2 === b.length ? { mime: "image/jpeg", ...dims } : null;
+    }
+    if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01 || m === 0x00) {
       i += 2;
       continue;
     }
-    if (m === 0xd9) return null; // EOI 先於 SOF
+    if (i + 4 > b.length) return null;
     const len = b.readUInt16BE(i + 2);
     if (len < 2 || i + 2 + len > b.length) return null;
-    // APP1–APP15（EXIF／XMP／ICC／Adobe…）同 COM 一律唔收；APP0（JFIF）准
+    // APP1–APP15（EXIF／XMP／ICC／Adobe…）同 COM 一律唔收（SOF 前後都掃）；APP0（JFIF）准
     if ((m >= 0xe1 && m <= 0xef) || m === 0xfe) return null;
     if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
-      if (len < 8) return null;
+      if (len < 8 || dims) return null;
       const height = b.readUInt16BE(i + 5);
       const width = b.readUInt16BE(i + 7);
-      return width > 0 && height > 0 && width <= 4000 && height <= 4000 ? { mime: "image/jpeg", width, height } : null;
+      if (!(width > 0 && height > 0 && width <= MAX_EDGE && height <= MAX_EDGE)) return null;
+      dims = { width, height };
     }
     i += 2 + len;
+    if (m === 0xda) {
+      // SOS 之後係 entropy-coded data：跳過直到下一個真 marker（0xFF 後面唔係 00／RSTn）
+      while (i + 1 < b.length) {
+        if (b[i] === 0xff && b[i + 1] !== 0x00 && !(b[i + 1]! >= 0xd0 && b[i + 1]! <= 0xd7) && b[i + 1] !== 0xff) break;
+        i += 1;
+      }
+    }
   }
   return null;
 }
@@ -91,6 +107,6 @@ function inspectPng(b: Buffer): ImageInfo | null {
     else if (type === "IEND") break;
     i += 12 + len;
   }
-  return dims && dims.width > 0 && dims.height > 0 && dims.width <= 4000 && dims.height <= 4000 ? { mime: "image/png", ...dims } : null;
+  return dims && dims.width > 0 && dims.height > 0 && dims.width <= MAX_EDGE && dims.height <= MAX_EDGE ? { mime: "image/png", ...dims } : null;
 }
 

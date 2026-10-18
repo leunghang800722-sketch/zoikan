@@ -92,70 +92,92 @@ describe("來源優先順序（老闆 2026-10-18 補充，方案 §7）", () => 
   });
 });
 
-describe("身份證裁圖幾何（M8：避開相片區、各欄分開）", () => {
-  for (const layout of ["A", "B"] as const) {
-    it(`版面 ${layout}（相片喺${layout === "A" ? "右" : "左"}）：所有欄位框唔入相片區（真相片矩形＋緊貼 F 嘅左右相片區）；號碼／中文名／英文名／出生日期各自一框`, () => {
-      const { lines, photo } = syntheticIdCardPage(layout);
-      const g = locateIdCardBoxes(1, lines);
-      expect(g.photoZones).not.toBeNull();
-      for (const k of ["hkid", "name_zh", "name_en", "dob"] as const) {
-        const b = g[k];
-        expect(b, k).not.toBeNull();
-        expect(intersects(b!, photo), `${k} 唔入真相片區`).toBe(false);
-        for (const z of g.photoZones!) expect(intersects(b!, z), `${k} 唔入相片 zone`).toBe(false);
-      }
-      // 各欄只包住自己嘅文字行，唔包其他欄嘅行
-      const lineOf = (t: string) => lines.find((l) => l.t.includes(t))!;
-      const inside = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => l.x >= b.x0 - 1e-9 && l.x + l.w <= b.x1 + 1e-9 && l.y >= b.y0 - 1e-9 && l.y + l.h <= b.y1 + 1e-9;
-      expect(inside(g.hkid!, lineOf("Z900001"))).toBe(true);
-      expect(inside(g.name_zh!, lineOf("測試甲"))).toBe(true);
-      expect(inside(g.name_en!, lineOf("TESTER"))).toBe(true);
-      expect(inside(g.dob!, lineOf("15-01-1990"))).toBe(true);
-      expect(inside(g.hkid!, lineOf("TESTER"))).toBe(false);
-      expect(inside(g.hkid!, lineOf("測試甲"))).toBe(false);
-      expect(inside(g.name_zh!, lineOf("Z900001"))).toBe(false);
-      expect(inside(g.name_zh!, lineOf("TESTER"))).toBe(false);
-      expect(inside(g.name_en!, lineOf("測試甲"))).toBe(false);
-      expect(inside(g.dob!, lineOf("Z900001"))).toBe(false);
-      // 最闊都唔夠相片區嗰邊：框嘅外緣喺欄位文字範圍 ±0.01 之內
-      const xs = lines.filter((l) => !/永久|PERMANENT/.test(l.t));
-      const F = { x0: Math.min(...xs.map((l) => l.x)), x1: Math.max(...xs.map((l) => l.x + l.w)) };
-      for (const k of ["hkid", "name_zh", "name_en", "dob"] as const) {
-        expect(g[k]!.x0).toBeGreaterThanOrEqual(F.x0 - 0.0101);
-        expect(g[k]!.x1).toBeLessThanOrEqual(F.x1 + 0.0101);
-      }
-    });
-  }
+describe("身份證裁圖幾何（M8：真卡版面——相片右上、號碼喺相片正下方）", () => {
+  const lineOf = (lines: { t: string }[], t: string) => lines.find((l) => l.t.includes(t))! as { t: string; x: number; y: number; w: number; h: number };
+  const inside = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => l.x >= b.x0 - 1e-9 && l.x + l.w <= b.x1 + 1e-9 && l.y >= b.y0 - 1e-9 && l.y + l.h <= b.y1 + 1e-9;
+
+  it("真版面：所有欄位框唔入真相片矩形，亦唔入規則推出嘅相片區；號碼／中文名／英文名／出生日期各自一框", () => {
+    const { lines, photo } = syntheticIdCardPage();
+    const g = locateIdCardBoxes(1, lines);
+    expect(g.photo).not.toBeNull();
+    for (const k of ["hkid", "name_zh", "name_en", "dob"] as const) {
+      const b = g[k];
+      expect(b, k).not.toBeNull();
+      expect(intersects(b!, photo), `${k} 唔入真相片區`).toBe(false);
+      expect(intersects(b!, g.photo!), `${k} 唔入推算相片區`).toBe(false);
+    }
+    expect(inside(g.hkid!, lineOf(lines, "Z900001"))).toBe(true);
+    expect(inside(g.name_zh!, lineOf(lines, "測試甲"))).toBe(true);
+    expect(inside(g.name_en!, lineOf(lines, "TESTER"))).toBe(true);
+    expect(inside(g.dob!, lineOf(lines, "15-01-1990"))).toBe(true);
+    expect(inside(g.hkid!, lineOf(lines, "TESTER"))).toBe(false);
+    expect(inside(g.hkid!, lineOf(lines, "測試甲"))).toBe(false);
+    expect(inside(g.name_zh!, lineOf(lines, "Z900001"))).toBe(false);
+    expect(inside(g.name_zh!, lineOf(lines, "TESTER"))).toBe(false);
+    expect(inside(g.name_en!, lineOf(lines, "測試甲"))).toBe(false);
+    expect(inside(g.dob!, lineOf(lines, "Z900001"))).toBe(false);
+  });
+
+  it("號碼框只向下外擴（向上最多 0.001，唔切入相片底）；左邊欄位右緣喺相片左緣之前", () => {
+    const { lines, photo } = syntheticIdCardPage();
+    const g = locateIdCardBoxes(1, lines);
+    const hk = lineOf(lines, "Z900001");
+    expect(g.hkid!.y1).toBeLessThanOrEqual(hk.y + hk.h + 0.0011);
+    expect(g.hkid!.y0).toBeLessThan(hk.y); // 向下有外擴
+    expect(g.hkid!.y1).toBeLessThanOrEqual(photo.y0);
+    for (const k of ["name_zh", "name_en", "dob"] as const) expect(g[k]!.x1, k).toBeLessThanOrEqual(photo.x0);
+  });
+
+  it("邊界：號碼行緊貼相片底（相片下緣只高過行頂 0.003）→ 號碼框頂仍然低過相片底", () => {
+    const { lines, photo, hkidTop } = syntheticIdCardPage(true, 0.003);
+    expect(photo.y0 - hkidTop).toBeCloseTo(0.003, 6);
+    const g = locateIdCardBoxes(1, lines);
+    expect(g.hkid).not.toBeNull();
+    expect(g.hkid!.y1).toBeLessThan(photo.y0);
+    expect(intersects(g.hkid!, photo)).toBe(false);
+    // 再貼近少少（0.0015）：框頂仍然唔入相片
+    const tight = syntheticIdCardPage(true, 0.0015);
+    const g2 = locateIdCardBoxes(1, tight.lines);
+    expect(g2.hkid!.y1).toBeLessThan(tight.photo.y0);
+  });
+
+  it("右側冇文字行（版面唔同）→ 保守當相片佔右側上方 55%；號碼若喺左邊仍然唔入相片區", () => {
+    const { lines } = syntheticIdCardPage();
+    const left = lines.map((l) => (l.t.includes("Z900001") ? { ...l, x: 0.1, y: 0.49 } : l));
+    const g = locateIdCardBoxes(1, left);
+    expect(g.photo).not.toBeNull();
+    for (const k of ["hkid", "name_zh", "name_en", "dob"] as const) if (g[k]) expect(intersects(g[k]!, g.photo!), k).toBe(false);
+  });
 
   it("認唔出卡面（冇身份證 anchor）→ 一律唔裁，寧願冇圖都唔好連相片一齊裁", () => {
-    const g = locateIdCardBoxes(1, syntheticIdCardPage("A", false).lines);
+    const g = locateIdCardBoxes(1, syntheticIdCardPage(false).lines);
     expect(g).toMatchObject({ hkid: null, name_zh: null, name_en: null, dob: null, reason: "no_card_anchor" });
   });
 
-  it.skipIf(!hasMagick)("像素級：畫假證件頁（相片＝純紅），經真 finalizeImage 裁出嚟嘅圖冇紅色；JPEG 過伺服器 header 檢查、≤120KB、長邊 ≤800", async () => {
+  it.skipIf(!hasMagick)("像素級（真版面）：畫假證件頁（相片＝純紅，號碼喺相片正下方），經真 finalizeImage 裁出嚟嘅圖冇紅色；JPEG 過伺服器 header 檢查、≤120KB、長邊 ≤800", async () => {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "te1t-"));
     try {
-      for (const layout of ["A", "B"] as const) {
-        const { lines, photo } = syntheticIdCardPage(layout);
-        const png = path.join(tmp, `page-${layout}.png`);
+      for (const gap of [0.005, 0.003]) {
+        const { lines, photo } = syntheticIdCardPage(true, gap);
+        const png = path.join(tmp, `page-${gap}.png`);
         await drawSyntheticPage({ doc: doc("id_card"), lines, photo }, png);
         const g = locateIdCardBoxes(1, lines);
         for (const k of ["hkid", "name_zh", "name_en", "dob"] as const) {
           const bytes = await finalizeImage(png, g[k], tmp);
-          expect(bytes, `${layout}/${k}`).not.toBeNull();
+          expect(bytes, `${gap}/${k}`).not.toBeNull();
           expect(bytes!.byteLength).toBeLessThanOrEqual(MAX_IMAGE_BYTES);
           const info = inspectImage(bytes!);
           expect(info?.mime).toBe("image/jpeg"); // 冇 EXIF／APPn（-strip）
           expect(Math.max(info!.width, info!.height)).toBeLessThanOrEqual(800);
-          const out = path.join(tmp, `o-${layout}-${k}.jpg`);
+          const out = path.join(tmp, `o-${gap}-${k}.jpg`);
           await (await import("node:fs/promises")).writeFile(out, bytes!);
           // r-g 嘅最大值：紅色相片 ≈1，灰／白 ≈0
           const m = await sh(MAGICK, [out, "-fx", "r-g", "-format", "%[fx:maxima]", "info:"]);
-          expect(Number(m.stdout), `${layout}/${k} 冇紅色`).toBeLessThan(0.15);
+          expect(Number(m.stdout), `${gap}/${k} 冇紅色`).toBeLessThan(0.15);
         }
         // 對照：成頁（唔避開）一定有紅色，證明測試真係量度到相片
         const whole = await finalizeImage(png, null, tmp);
-        const wp = path.join(tmp, `whole-${layout}.jpg`);
+        const wp = path.join(tmp, `whole-${gap}.jpg`);
         await (await import("node:fs/promises")).writeFile(wp, whole!);
         const m2 = await sh(MAGICK, [wp, "-fx", "r-g", "-format", "%[fx:maxima]", "info:"]);
         expect(Number(m2.stdout)).toBeGreaterThan(0.5);

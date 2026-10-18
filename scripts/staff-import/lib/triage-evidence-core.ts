@@ -93,28 +93,34 @@ export interface IdCardGeometry {
   name_zh: Box | null;
   name_en: Box | null;
   dob: Box | null;
-  /** 欄位文字範圍左右兩邊緊貼嘅相片區（相片喺邊邊都覆蓋到；裁圖保證唔入呢兩個範圍） */
-  photoZones: [Box, Box] | null;
+  /** 由版面規則推出嘅相片區（卡右側、號碼行以上）；裁圖保證唔入呢個範圍 */
+  photo: Box | null;
   /** 全部 null 嘅原因（冇 anchor 等） */
   reason?: 'no_card_anchor' | 'no_field_lines';
 }
 
-const CJK = /[一-鿿]/;
+const CJK = /[\u4e00-\u9fff]/;
+/** 相片區左緣＝卡面文字範圍由左起 62%（香港智能身份證：相片喺右上，號碼印喺相片正下方） */
+const PHOTO_X_RATIO = 0.62;
+/** 相片下緣高過右側最高文字行頂 0.002（讓號碼框頂可以包住字頂） */
+const PHOTO_BOTTOM_GAP = 0.002;
 
 /**
- * M8：身份證各欄裁圖——號碼區、中文姓名區、英文姓名區、出生日期區**各自裁**，並且避開相片區。
- * 做法（保守，三重保證）：
- *  ① 每個框只由該欄自己嘅 OCR 行砌（水平外擴 ≤0.4×行高、垂直 ≤0.8×行高），並唔越過其他文字行（barriers）；
- *  ② 相片區估計：欄位文字（號碼／姓名／出生日期行）集中喺卡面嘅一邊，相片就喺另一邊 → 所有框嘅外緣夾喺「欄位文字總範圍」之內（再加 0.01），相片側一律唔准越過；
- *  ③ 冇身份證 anchor（認唔出卡面範圍）→ 一律唔裁（寧願冇圖，都唔好連相片一齊裁）。
+ * M8：身份證各欄裁圖——號碼區、中文姓名區、英文姓名區、出生日期區各自裁，並且避開相片區。
+ * 真卡版面（2003／2018 版智能身份證）：相片喺右上，**號碼印喺相片正下方（右下）**，左邊係中英文姓名／出生日期／簽發日期。
+ * 相片區由版面規則推（本機冇 AI 回傳 box）：卡面文字範圍（cardRegion 嘅 bbox）右側 38% 嘅直條、下緣＝右側最高文字行（通常係號碼行）頂；
+ * 右側冇文字行（版面唔同）就保守當相片佔右側上方 55%。
+ *  ① 每個框只由該欄自己嘅 OCR 行砌，並唔越過其他文字行（barriers）；
+ *  ② 號碼框**只向下外擴**（向上最多 0.001，免得切入相片底），上緣另以相片下緣做 barrier；
+ *  ③ 左邊欄位（姓名／出生日期）若同相片區垂直重疊，右緣以相片左緣做 barrier；
+ *  ④ 冇身份證 anchor（認唔出卡面範圍）→ 一律唔裁，寧願冇圖，都唔好連相片一齊裁。
  */
 export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[]): IdCardGeometry {
-  const empty: IdCardGeometry = { hkid: null, name_zh: null, name_en: null, dob: null, photoZones: null };
+  const empty: IdCardGeometry = { hkid: null, name_zh: null, name_en: null, dob: null, photo: null };
   const clean = allLines.filter((l) => l.t.trim());
   if (!clean.some((l) => isIdAnchorLine(l.t))) return { ...empty, reason: 'no_card_anchor' };
   const region = cardRegion(clean);
   const r = extractIdCard(page, clean);
-  // 號碼行：卡面範圍內 check digit 啱嘅 hkid 候選行（離 anchor 最近）
   const anchor = clean.filter((l) => isIdAnchorLine(l.t))[0]!;
   const hkidLine = region
     .filter((l) => findHkidCandidates(l.t).some(hkidCheckDigitValid) && !/PERMIT|許可證編號/i.test(l.t))
@@ -123,30 +129,29 @@ export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[]): I
   const zhLines = nl.filter((l) => CJK.test(l.t));
   const enLines = nl.filter((l) => !CJK.test(l.t));
   const dobLines = r.dobLines ?? [];
-  const fieldLines = [...(hkidLine ? [hkidLine] : []), ...nl, ...dobLines];
-  if (fieldLines.length === 0) return { ...empty, reason: 'no_field_lines' };
+  if (!hkidLine && nl.length === 0 && dobLines.length === 0) return { ...empty, reason: 'no_field_lines' };
 
-  // ② 欄位文字總範圍 F；相片喺卡面某一邊（左／右，唔靠估計邊邊）→ 兩邊緊貼 F 外嘅區域都當相片區（photoZones）
-  const F = bboxOf(fieldLines);
-  const photoW = Math.max(0.12, (F.x1 - F.x0) * 0.6);
-  const zoneY = { y0: Math.max(0, F.y0 - 0.05), y1: Math.min(1, F.y1 + 0.05) };
-  const photoZones: [Box, Box] = [
-    { x0: Math.max(0, F.x0 - 0.012 - photoW), x1: F.x0 - 0.012, ...zoneY },
-    { x0: F.x1 + 0.012, x1: Math.min(1, F.x1 + 0.012 + photoW), ...zoneY },
-  ];
+  // 相片區（版面規則）
+  const C = bboxOf(region.length ? region : clean);
+  const photoX0 = C.x0 + PHOTO_X_RATIO * (C.x1 - C.x0);
+  const rightLines = region.filter((l) => l.x >= photoX0 - 0.01 && !isIdAnchorLine(l.t));
+  const rightTop = rightLines.length ? Math.max(...rightLines.map((l) => l.y + l.h)) : null;
+  const photoBottom = rightTop !== null ? rightTop + PHOTO_BOTTOM_GAP : C.y0 + 0.45 * (C.y1 - C.y0);
+  const photo: Box = { x0: photoX0, x1: Math.min(1, C.x1 + 0.03), y0: photoBottom, y1: Math.min(1, C.y1 + 0.03) };
 
-  const boxFor = (own: readonly OcrLine[]): Box | null => {
+  const boxFor = (own: readonly OcrLine[], kind: 'number' | 'left'): Box | null => {
     if (own.length === 0) return null;
     const barriers = clean.filter((l) => !own.includes(l));
-    const b = padAround(bboxOf(own), avgH(own), barriers, { vertical: 0.8, horizontal: 0.4, min: 0.008 });
-    // ② 夾喺欄位文字總範圍（+0.01）之內：相片側外緣唔准越過
-    const clipped: Box = { x0: Math.max(b.x0, F.x0 - 0.01), x1: Math.min(b.x1, F.x1 + 0.01), y0: b.y0, y1: b.y1 };
-    // ① 保險：同任何一邊相片區有交疊就再縮（理論上唔會發生）
-    if (intersects(clipped, photoZones[1])) clipped.x1 = Math.min(clipped.x1, photoZones[1].x0 - 1e-6);
-    if (intersects(clipped, photoZones[0])) clipped.x0 = Math.max(clipped.x0, photoZones[0].x1 + 1e-6);
-    return valid(clipped) ? clipped : null;
+    const base = bboxOf(own);
+    const b = padAround(base, avgH(own), barriers, { vertical: 0.8, horizontal: 0.4, min: 0.008 });
+    if (kind === 'number') b.y1 = Math.min(b.y1, base.y1 + 0.001); // ② 只向下外擴，向上最多 0.001
+    if (intersects(b, photo)) {
+      if (kind === 'number') b.y1 = Math.min(b.y1, photo.y0 - 1e-6); // 相片下緣做 barrier
+      else b.x1 = Math.min(b.x1, photo.x0 - 0.005); // ③ 相片左緣做右 barrier
+    }
+    return valid(b) && !intersects(b, photo) ? b : null;
   };
-  return { hkid: boxFor(hkidLine ? [hkidLine] : []), name_zh: boxFor(zhLines), name_en: boxFor(enLines), dob: boxFor(dobLines), photoZones };
+  return { hkid: boxFor(hkidLine ? [hkidLine] : [], 'number'), name_zh: boxFor(zhLines, 'left'), name_en: boxFor(enLines, 'left'), dob: boxFor(dobLines, 'left'), photo };
 }
 
 // ---- 入職表（冇相片）：電話／地址用現有幾何；姓名／身份證號／出生日期用 label 行（best effort，只作 priority 2） ----

@@ -9,7 +9,7 @@ export function fakeJpeg(w = 320, h = 80, o: { seed?: number; exif?: boolean; pa
   b.push(0xff, 0xc0, 0, 11, 8, (h >> 8) & 255, h & 255, (w >> 8) & 255, w & 255, 1, 1, 0x11, 0);
   b.push(0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0);
   const seed = o.seed ?? 0;
-  for (let i = 0; i < 24; i++) b.push((seed * 31 + i * 7) & 0xff);
+  for (let i = 0; i < 24; i++) b.push((seed * 31 + i * 7) & 0x7f);
   for (let i = 0; i < (o.pad ?? 0); i++) b.push(i & 0x7f);
   b.push(0xff, 0xd9);
   return new Uint8Array(b);
