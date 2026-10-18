@@ -12,6 +12,7 @@ import { BatchAcceptButton } from "@/components/BatchAcceptButton";
 import { MonthCloseTriageDialog } from "@/components/MonthCloseTriageDialog";
 import { WhatsappTriageDialog } from "@/components/WhatsappTriageDialog";
 import { OcrRereadImportDialog } from "@/components/OcrRereadImportDialog";
+import { EvidenceUploadDialog } from "@/components/EvidenceUploadDialog";
 import { apiGet, apiPost } from "@/lib/ui/api-client";
 import { kickerFor } from "@/lib/nav/schema";
 
@@ -54,6 +55,7 @@ export default function TriagePage() {
   const [moreOpen, setMoreOpen] = useState<string | null>(null);
   // TR-1：導入 OCR 重讀建議（保安員導入 session 專用）
   const [rereadId, setRereadId] = useState<string | null>(null);
+  const [evidenceId, setEvidenceId] = useState<string | null>(null);
   // 左欄 badge：答題後 debounce 2 秒先 refresh layout（唔再每次關對話框就整頁重載）
   const badgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshBadge = useCallback(() => {
@@ -154,6 +156,11 @@ export default function TriagePage() {
                   導入 OCR 重讀建議
                 </Button>
               )}
+              {s.source_type === "guard_import" && data?.can_answer && moreOpen === s.id && (
+                <Button size="sm" onClick={() => { setEvidenceId(s.id); setMoreOpen(null); }} data-testid="triage-evidence-upload">
+                  上載覆核裁圖
+                </Button>
+              )}
               {isBossView && moreOpen === s.id && (
                 <>
                   <select
@@ -191,6 +198,16 @@ export default function TriagePage() {
             void load();
             refreshBadge();
           }}
+        />
+      )}
+      {evidenceId && (
+        <EvidenceUploadDialog
+          sessionId={evidenceId}
+          onClose={() => {
+            setEvidenceId(null);
+            void load();
+          }}
+          onDone={() => void load()}
         />
       )}
       {openId && isMcSource(data?.sessions.find((s) => s.id === openId)?.source_type) && (

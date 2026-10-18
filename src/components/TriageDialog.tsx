@@ -3,6 +3,7 @@
 // 一條一條問：證據卡 → 揀選項（系統列舉，唔收自由指令）→「預覽影響」→「確認寫入」；
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
+import { EvidenceImages, EvidenceSection, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -58,6 +59,8 @@ interface Question {
   /** 已答題嘅答案摘要；source=ocr_reread＝由「OCR 重讀建議」自動答 */
   answer?: { option: string; source?: "ocr_reread" } | null;
   options: Option[];
+  /** TE-1：原文件欄位裁圖 meta（唔含 bytes；圖由 GET /api/triage/evidence-images/:id 攞） */
+  evidence_images?: EvidenceImageDto[];
   evidence: {
     pii_visible: boolean;
     pii_update: boolean;
@@ -641,6 +644,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                 </div>
               )}
               <PersonCard q={shownQ} />
+              {(shownQ.kind !== "field_review" || !choice) && <EvidenceSection images={shownQ.evidence_images} />}
               {shownQ.evidence.candidates.map((c, i) => (
                 <CandidateCard key={c.guard_id} c={c} idx={i} />
               ))}
@@ -762,6 +766,9 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                           {a === "confirm" ? "確認" : a === "replace" ? "改正後確認" : "略過"}
                                         </button>
                                       ))}
+                                    </span>
+                                    <span className="mt-1 block">
+                                      <EvidenceImages imgs={(q.evidence_images ?? []).filter((im) => im.field === REVIEW_TO_EVIDENCE_FIELD[rf.field])} fieldLabel={rf.label} />
                                     </span>
                                     {replaceDenied(rf.field, rf.check) && <span className="mt-1 block text-zk-xs text-zk-warning">「改正後確認」要有修改權限嘅同事（例如老闆）先可以做。</span>}
                                     {cur && cur.action !== "skip" && (

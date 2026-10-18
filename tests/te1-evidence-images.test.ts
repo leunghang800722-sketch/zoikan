@@ -1,0 +1,668 @@
+// TE-1：分流題覆核證據裁圖（docs/plans/triage-evidence-crops-plan.md；Opus 條件 M1–M9／S1–S5；§7 來源優先順序）。
+// 全部合成資料：假名「導入測試員X」、合法 check digit 假 HKID、合成 header-only JPEG/PNG（tests/lib/te1-images.ts）。
+import { describe, it, expect, beforeEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+import { prisma, clearAll } from "./lib/db";
+import { seedWp2Fixture, sessionCookieForUser, type Wp2Fixture } from "./fixtures/wp2-fixture";
+import { hkidCheckDigitValid } from "@/lib/guards/identity";
+import { hashPackage, importPackageSchema, personKeyForHkid, type PackagePerson } from "@/lib/guards/import/package";
+import { serverPersonKey } from "@/lib/guards/import/person-key";
+import { POST as applyRoute } from "@/app/api/guards/import/apply/route";
+import { GET as sessionRoute } from "@/app/api/triage/sessions/[id]/route";
+import { POST as uploadRoute } from "@/app/api/triage/sessions/[id]/evidence-images/route";
+import { GET as imageRoute } from "@/app/api/triage/evidence-images/[id]/route";
+import { POST as previewRoute } from "@/app/api/triage/questions/[id]/preview/route";
+import { POST as answerRoute } from "@/app/api/triage/questions/[id]/answer/route";
+import { POST as proposalsRoute } from "@/app/api/triage/sessions/[id]/proposals/route";
+import {
+  DOC_KIND_LABEL,
+  EVIDENCE_META_SELECT,
+  FIELD_DOC_PRIORITY,
+  MAX_IMAGE_BYTES,
+  decryptImage,
+  deleteUnneeded,
+  encryptImage,
+  inspectImage,
+  insertEvidenceImage,
+  loadImageBytes,
+  priorityOf,
+  requiredFieldsFor,
+  viewableFields,
+} from "@/lib/triage/evidence-images";
+import { runTriageEvidenceCleanup } from "@/lib/jobs/triage-evidence-cleanup";
+import { JOBS } from "@/lib/jobs/registry";
+import { triageEvidenceCleanupJob } from "@/lib/jobs/triage-evidence-cleanup";
+import { createGuardImportTriage } from "@/lib/triage/session";
+import type { AuthedSession } from "@/lib/rbac/requirePermission";
+import { buildZip, entryName, fakeJpeg, fakePng, zipOf } from "./lib/te1-images";
+
+function mkHkid(prefix: string, digits: string): string {
+  const base = `${prefix}${digits}`;
+  const c = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A"].find((x) => hkidCheckDigitValid(base + x))!;
+  return base + c;
+}
+const H = Array.from({ length: 14 }, (_, i) => mkHkid(String.fromCharCode(65 + i), `20000${i % 10}`));
+
+type St = "confirmed" | "review" | "missing";
+const F = (value: string | null, status: St) => (value ? { value, status } : { value: null, status: "missing" as St });
+function person(o: { hkid?: string | null; hkidStatus?: St; name?: string; nameStatus?: St; nos?: string[]; rating?: "auto_ok" | "review" | "fail" }): PackagePerson {
+  const hk = o.hkid === undefined ? H[0]! : o.hkid;
+  return {
+    key: personKeyForHkid(hk ?? `none-${o.name ?? "x"}-${(o.nos ?? []).join("")}`),
+    hkid: F(hk, o.hkidStatus ?? "confirmed"),
+    nameZh: F(o.name ?? "導入測試員甲", o.nameStatus ?? "confirmed"),
+    nameEn: F("TEST AYUEN KAP", "review"),
+    dateOfBirth: F("1990-05-06", "confirmed"),
+    sex: F("M", "confirmed"),
+    phone: F(null, "confirmed"),
+    address: { ...F("測試道123號測試大廈4樓A室", "review") },
+    staffNumbers: (o.nos ?? []).map((n) => ({ scheme: n.match(/^[A-Z]+/)![0], number: n })),
+    rating: o.rating ?? "auto_ok",
+    reasons: [],
+    conflicts: [],
+  } as PackagePerson;
+}
+const pkgOf = (persons: PackagePerson[], at = "2026-10-04T00:00:00.000Z") => ({ version: 2 as const, generatedAt: at, persons });
+
+describe("TE-1 證據裁圖", () => {
+  let fx: Wp2Fixture;
+  let owner: string;
+  let accountant: string;
+  let supervisor: string;
+  let broker: string;
+  let guardUser: string;
+
+  beforeEach(async () => {
+    await clearAll();
+    await prisma.triageQuestion.deleteMany({});
+    await prisma.triageSession.deleteMany({});
+    fx = await seedWp2Fixture();
+    const mkUser = async (role: "會計" | "主管") => {
+      const tel = `6${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      return (await prisma.user.create({ data: { name: `測試${role}新`, tel, passwordHash: "x", roleId: fx.roleIds[role], createdBy: "t" } })).id;
+    };
+    fx.userIds["會計"] = await mkUser("會計");
+    fx.userIds["主管"] = await mkUser("主管");
+    owner = await sessionCookieForUser(fx.userIds["老闆"]);
+    accountant = await sessionCookieForUser(fx.userIds["會計"]);
+    supervisor = await sessionCookieForUser(fx.userIds["主管"]);
+    broker = await sessionCookieForUser(fx.userIds["雞頭"]);
+    guardUser = await sessionCookieForUser(fx.userIds["安員"]);
+  });
+
+  const json = (route: (r: Request, c: never) => Promise<Response>, url: string, cookie: string, body: unknown, id: string) =>
+    route(new Request(`http://t${url}`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id }) } as never);
+  const upload = async (cookie: string, sid: string, zip: Uint8Array | null, dry = false) => {
+    const fd = new FormData();
+    if (zip) fd.append("file", new Blob([zip as BlobPart], { type: "application/zip" }), "x.zip");
+    const res = await uploadRoute(new Request(`http://t/api/triage/sessions/${sid}/evidence-images${dry ? "?dry_run=1" : ""}`, { method: "POST", headers: { cookie }, body: fd }), { params: Promise.resolve({ id: sid }) } as never);
+    return { status: res.status, text: await res.clone().text(), body: await res.json() };
+  };
+  const getImage = (cookie: string, id: string) => imageRoute(new Request(`http://t/api/triage/evidence-images/${id}`, { headers: { cookie } }), { params: Promise.resolve({ id }) } as never);
+  const getSession = async (cookie: string, sid: string) => {
+    const res = await sessionRoute(new Request(`http://t/api/triage/sessions/${sid}`, { headers: { cookie } }), { params: Promise.resolve({ id: sid }) } as never);
+    return { status: res.status, text: await res.clone().text(), body: await res.json() };
+  };
+  const confirm = async (cookie: string, qid: string, ans: unknown) => {
+    const pv = await (await json(previewRoute as never, `/api/triage/questions/${qid}/preview`, cookie, { answer: ans }, qid)).json();
+    return json(answerRoute as never, `/api/triage/questions/${qid}/answer`, cookie, { answer: ans, preview_hash: pv.preview_hash }, qid);
+  };
+  const applyPkg = async (cookie: string, persons: PackagePerson[], at?: string) => {
+    const pkg = pkgOf(persons, at);
+    const res = await json(applyRoute as never, "/api/guards/import/apply", cookie, { package: pkg, package_hash: hashPackage(importPackageSchema.parse(pkg)) }, "x");
+    return { status: res.status, body: await res.json() };
+  };
+
+  /** 甲：name_not_confirmed（nameZh review）＋ field_review(nameEn,address)；乙：hkid_not_confirmed；丑：field_review(nameEn,address) */
+  async function seed() {
+    const pa = person({ hkid: H[1], name: "導入測試員甲", nameStatus: "review", nos: ["U90001"] });
+    const pb = person({ hkid: H[2], hkidStatus: "review", name: "導入測試員乙", nos: ["U90002"] });
+    const pc = person({ hkid: H[12], name: "導入測試員丑", nos: ["U90012"] });
+    const r = await applyPkg(accountant, [pa, pb, pc]);
+    expect(r.status).toBe(200);
+    const sid = r.body.triage.session_id as string;
+    const key = (p: PackagePerson) => serverPersonKey({ key: p.key, hkid: { value: p.hkid.value }, staffNumbers: p.staffNumbers });
+    return { pa, pb, pc, sid, ka: key(pa), kb: key(pb), kc: key(pc) };
+  }
+  const matchOf = (p: PackagePerson) => ({ hkid: p.hkid.value, staff_numbers: p.staffNumbers.map((n) => n.number) });
+  const qOf = (kind: string, personKey?: string) => prisma.triageQuestion.findFirstOrThrow({ where: { kind, ...(personKey ? { personKey } : {}) } });
+  const imgCount = (where: object = {}) => prisma.triageEvidenceImage.count({ where });
+  const J = (n: number, o: Parameters<typeof fakeJpeg>[2] = {}) => fakeJpeg(320, 80, { seed: n, ...o });
+
+  // -------------------------------------------------------------------------
+  describe("加密（S1）", () => {
+    it("往返成功、密文唔同明文、錯 key／錯 AAD／改 tag／改密文都失敗", () => {
+      const plain = J(1);
+      const key = randomBytes(32);
+      const e = encryptImage(plain, "img-1", key);
+      expect(Buffer.from(e.bytes).equals(Buffer.from(plain))).toBe(false);
+      expect(new Uint8Array(decryptImage(e, "img-1", key))).toEqual(plain);
+      expect(() => decryptImage(e, "img-1", randomBytes(32))).toThrow();
+      expect(() => decryptImage(e, "img-2", key)).toThrow();
+      expect(() => decryptImage({ ...e, tag: Buffer.alloc(16) }, "img-1", key)).toThrow();
+      const bad = Buffer.from(e.bytes);
+      bad[0] = bad[0]! ^ 1;
+      expect(() => decryptImage({ ...e, bytes: bad }, "img-1", key)).toThrow();
+      // 每次 iv 唔同
+      expect(encryptImage(plain, "img-1", key).iv.equals(e.iv)).toBe(false);
+    });
+
+    it("預設 key 由 SESSION_SECRET HKDF 派生：SESSION_SECRET 一變就解唔開（DB 內存嘅係密文）", async () => {
+      const { sid, kc } = await seed();
+      const plain = J(7);
+      await insertEvidenceImage(prisma, { sessionId: sid, questionId: null, personKey: kc, guardId: null, field: "name_en", docKind: "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
+      const row = await prisma.triageEvidenceImage.findFirstOrThrow({ select: { id: true, imageBytes: true, iv: true, tag: true } });
+      expect(Buffer.from(row.imageBytes).equals(Buffer.from(plain))).toBe(false);
+      expect(Buffer.from(row.imageBytes).indexOf(Buffer.from([0xff, 0xd8, 0xff]))).toBe(-1);
+      expect(new Uint8Array(decryptImage({ bytes: row.imageBytes, iv: row.iv, tag: row.tag }, row.id))).toEqual(plain);
+      const old = process.env.SESSION_SECRET;
+      process.env.SESSION_SECRET = "another-session-secret-for-rotation-test-0123456789";
+      try {
+        expect(() => decryptImage({ bytes: row.imageBytes, iv: row.iv, tag: row.tag }, row.id)).toThrow();
+        expect(await loadImageBytes(row.id)).toBeNull(); // 讀唔開＝null（route 回 404），唔洩露原因
+      } finally {
+        process.env.SESSION_SECRET = old;
+      }
+    });
+  });
+
+  describe("圖片 header 驗證（S4／M6）", () => {
+    it("合法 JPEG／PNG 過；EXIF／XMP(APP1)／COM／PNG 文字 chunk／garbage／超 120KB／空白 一律唔過", () => {
+      expect(inspectImage(fakeJpeg(300, 50, { seed: 1 }))).toEqual({ mime: "image/jpeg", width: 300, height: 50 });
+      expect(inspectImage(fakePng(200, 60))).toEqual({ mime: "image/png", width: 200, height: 60 });
+      expect(inspectImage(fakeJpeg(300, 50, { exif: true }))).toBeNull();
+      expect(inspectImage(fakePng(200, 60, { exif: true }))).toBeNull();
+      expect(inspectImage(new Uint8Array(40).fill(7))).toBeNull();
+      expect(inspectImage(new Uint8Array(0))).toBeNull();
+      expect(inspectImage(fakeJpeg(300, 50, { pad: MAX_IMAGE_BYTES }))).toBeNull();
+      expect(inspectImage(fakeJpeg(0, 0))).toBeNull();
+      expect(inspectImage(new TextEncoder().encode("GIF89a-not-allowed-here-xxxxxxxxxxxxxxxx"))).toBeNull();
+    });
+  });
+
+  describe("requiredFieldsFor／優先順序表", () => {
+    it("由 kind／review_fields／ext_review 推欄；銀行欄剔除", () => {
+      const ev = (extra: object) => ({ v: 1, person: person({}), reasons: [], candidate_guard_ids: [], ...extra }) as never;
+      expect(requiredFieldsFor({ kind: "name_not_confirmed", evidenceJson: ev({}) })).toEqual(["name_zh"]);
+      expect(requiredFieldsFor({ kind: "hkid_not_confirmed", evidenceJson: ev({}) })).toEqual(["hkid"]);
+      expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({}) })).toEqual(["hkid"]);
+      expect(requiredFieldsFor({ kind: "field_review", evidenceJson: ev({ review_fields: [{ field: "nameEn", check: "x" }, { field: "dateOfBirth", check: "x" }, { field: "phone", check: "x" }, { field: "address", check: "x" }, { field: "nameZh", check: "x" }] }) }).sort()).toEqual(["address", "dob", "name_en", "name_zh", "phone"]);
+      expect(requiredFieldsFor({ kind: "ext_field_review", evidenceJson: ev({ ext_review: [{ key: "siaPermit.no", check: "x", status: "review" }, { key: "bank", check: "x", status: "review" }, { key: "hireDate", check: "x", status: "review" }] }) })).toEqual(["permit_no"]);
+      expect(requiredFieldsFor({ kind: "bank_review", evidenceJson: ev({ ext_review: [{ key: "bank", check: "x", status: "review" }] }) })).toEqual([]);
+      expect(requiredFieldsFor({ kind: "wa_unparsed", evidenceJson: ev({}) })).toEqual([]);
+    });
+
+    it("§7 來源優先順序表：證件欄＝身份證優先、住址＝住址證明優先、電話＝入職表；priorityOf 1／2／null", () => {
+      for (const f of ["hkid", "name_zh", "name_en", "dob"] as const) {
+        expect(FIELD_DOC_PRIORITY[f]).toEqual(["id_card", "onboarding_form"]);
+        expect(priorityOf(f, "id_card")).toBe(1);
+        expect(priorityOf(f, "onboarding_form")).toBe(2);
+        expect(priorityOf(f, "address_proof")).toBeNull();
+      }
+      expect(priorityOf("address", "address_proof")).toBe(1);
+      expect(priorityOf("address", "onboarding_form")).toBe(2);
+      expect(priorityOf("address", "id_card")).toBeNull();
+      expect(priorityOf("phone", "onboarding_form")).toBe(1);
+      expect(priorityOf("phone", "id_card")).toBeNull();
+      expect(DOC_KIND_LABEL.id_card).toBe("身份證副本");
+      expect(DOC_KIND_LABEL.address_proof).toBe("住址證明");
+      expect(DOC_KIND_LABEL.onboarding_form).toBe("入職表手寫");
+    });
+  });
+
+  describe("M4 bytes 白名單", () => {
+    it("META_SELECT 永不含 bytes／iv／tag；source 內 imageBytes 只喺 evidence-images.ts；冇 include evidenceImages", () => {
+      for (const k of ["imageBytes", "iv", "tag"]) expect(Object.keys(EVIDENCE_META_SELECT)).not.toContain(k);
+      const root = path.resolve(__dirname, "../src");
+      const hits: string[] = [];
+      const walk = (d: string) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const p = path.join(d, e.name);
+          if (e.isDirectory()) walk(p);
+          else if (/\.(ts|tsx)$/.test(e.name)) {
+            const s = fs.readFileSync(p, "utf8");
+            const rel = path.relative(root, p).split(path.sep).join("/");
+            if (/\bimageBytes\b|\bimage_bytes\b/.test(s) && rel !== "lib/triage/evidence-images.ts") hits.push(`${rel}: imageBytes`);
+            if (/\bevidenceImages\b/.test(s)) hits.push(`${rel}: evidenceImages`);
+            // 凡係讀 triageEvidenceImage 嘅 find*，必須有 select
+            for (const m of s.matchAll(/triageEvidenceImage\.(findMany|findFirst|findUnique)\(\s*\{([\s\S]{0,400}?)\}\s*\)/g)) if (!/select\s*:/.test(m[2]!)) hits.push(`${rel}: find without select`);
+          }
+        }
+      };
+      walk(root);
+      expect(hits).toEqual([]);
+    });
+
+    it("session GET JSON 只有 evidence_images meta：永不含 bytes／iv／tag／密文 base64", async () => {
+      const { pa, sid, ka } = await seed();
+      const z = await zipOf([{ bytes: J(11), field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) }]);
+      expect((await upload(accountant, sid, z)).body.accepted_images).toBe(1);
+      const row = await prisma.triageEvidenceImage.findFirstOrThrow({ select: { imageBytes: true, iv: true, tag: true } });
+      const s = await getSession(accountant, sid);
+      expect(s.status).toBe(200);
+      for (const bad of ["image_bytes", "imageBytes", "\"iv\"", "\"tag\"", Buffer.from(row.imageBytes).toString("base64").slice(0, 16)]) expect(s.text).not.toContain(bad);
+      const q = s.body.questions.find((x: { kind: string }) => x.kind === "name_not_confirmed");
+      expect(q.evidence_images).toHaveLength(1);
+      expect(Object.keys(q.evidence_images[0]).sort()).toEqual(["doc_kind", "field", "height", "id", "priority", "width"]);
+      expect(q.evidence_images[0]).toMatchObject({ field: "name_zh", doc_kind: "id_card", priority: 1, width: 320, height: 80 });
+      void ka;
+    });
+  });
+
+  describe("上載 zip（M6／M7／S2）", () => {
+    it("dry_run 只計數唔寫；apply 後存密文；回應／audit 淨計數（冇檔名、冇身份證、冇姓名）", async () => {
+      const { pa, pb, sid } = await seed();
+      const a = J(21);
+      const z = await zipOf([
+        { bytes: a, field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) },
+        { bytes: J(22), field: "hkid", doc_kind: "id_card", priority: 1, match: matchOf(pb) },
+      ]);
+      const dry = await upload(accountant, sid, z, true);
+      expect(dry.status).toBe(200);
+      expect(dry.body).toMatchObject({ dry_run: true, items_total: 2, matched_questions: 2, accepted_images: 2 });
+      expect(await imgCount()).toBe(0);
+      const audits0 = await prisma.auditLog.count({ where: { action: "triage_evidence_upload" } }); // audit_log append-only，跨 test 累積，用差值
+      expect(await prisma.auditLog.count({ where: { action: "triage_evidence_upload" } })).toBe(audits0);
+      const res = await upload(accountant, sid, z);
+      expect(res.body).toMatchObject({ dry_run: false, accepted_images: 2, matched_questions: 2 });
+      expect(await imgCount()).toBe(2);
+      expect(await prisma.auditLog.count({ where: { action: "triage_evidence_upload" } })).toBe(audits0 + 1);
+      const aud = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_evidence_upload", rowId: sid }, orderBy: { createdAt: "desc" } });
+      const blob = JSON.stringify(aud) + res.text + dry.text;
+      for (const bad of [entryName(a), H[1]!, H[2]!, "導入測試員", "U90001", "manifest"]) expect(blob).not.toContain(bad);
+      expect(aud.after).toMatchObject({ accepted_images: 2, session_id: sid });
+      // 重覆上載同一 zip：全部 duplicate
+      expect((await upload(accountant, sid, z)).body).toMatchObject({ accepted_images: 0, skipped_duplicate: 2 });
+      expect(await imgCount()).toBe(2);
+    });
+
+    it("manifest 冇 match → 整個 400（唔寫）；match 空物件亦 400", async () => {
+      const { pa, sid } = await seed();
+      const bytes = J(31);
+      const file = entryName(bytes);
+      const bad = await buildZip({ [file]: bytes, "manifest.json": JSON.stringify({ version: 1, items: [{ file, field: "name_zh", doc_kind: "id_card", priority: 1 }] }) });
+      const r = await upload(accountant, sid, bad);
+      expect(r.status).toBe(400);
+      expect(r.text).not.toContain(file);
+      const empty = await buildZip({ [file]: bytes, "manifest.json": JSON.stringify({ version: 1, items: [{ file, field: "name_zh", doc_kind: "id_card", priority: 1, match: {} }] }) });
+      expect((await upload(accountant, sid, empty)).status).toBe(400);
+      // 一個有 match、一個冇 → 整個拒絕（唔會部分收）
+      const b2 = J(32);
+      const mixed = await buildZip({ [file]: bytes, [entryName(b2)]: b2, "manifest.json": JSON.stringify({ version: 1, items: [{ file, field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) }, { file: entryName(b2), field: "name_zh", doc_kind: "id_card", priority: 1 }] }) });
+      expect((await upload(accountant, sid, mixed)).status).toBe(400);
+      expect(await imgCount()).toBe(0);
+    });
+
+    it("entry 名唔係不透明 id（真名／路徑／副檔名唔啱）→ 400，唔回顯 entry 名", async () => {
+      const { pa, sid } = await seed();
+      const bytes = J(41);
+      for (const name of ["導入測試員甲.jpg", "../evil.jpg", "dir/aaaaaaaaaaaaaaaa.jpg", "AAAAAAAAAAAAAAAAAAAA.jpg", "abc.jpg", "aaaaaaaaaaaaaaaa.gif"]) {
+        const z = await buildZip({ [name]: bytes, "manifest.json": JSON.stringify({ version: 1, items: [{ file: entryName(bytes), field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) }] }) });
+        const r = await upload(accountant, sid, z);
+        expect(r.status).toBe(400);
+        expect(r.text).not.toContain(name);
+        expect(r.text).not.toContain("evil");
+      }
+      // manifest 指向唔合規格嘅 file 名 → 400
+      const z2 = await buildZip({ [entryName(bytes)]: bytes, "manifest.json": JSON.stringify({ version: 1, items: [{ file: "導入測試員甲.jpg", field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) }] }) });
+      expect((await upload(accountant, sid, z2)).status).toBe(400);
+    });
+
+    it("entry 數 >400 → 400；解壓總量 >32 MB（zip bomb）→ 400；zip >8 MB／唔係 zip／冇 manifest／冇 file → 400", async () => {
+      const { sid } = await seed();
+      const many: Record<string, Uint8Array | string> = { "manifest.json": JSON.stringify({ version: 1, items: [] }) };
+      for (let i = 0; i < 401; i++) many[`${String(i).padStart(32, "a")}.jpg`.replace(/a/g, (c, idx) => ((idx + i) % 16).toString(16))] = J(i);
+      expect(Object.keys(many).length).toBeGreaterThan(401);
+      expect((await upload(accountant, sid, await buildZip(many))).status).toBe(400);
+      const big: Record<string, Uint8Array | string> = { "manifest.json": JSON.stringify({ version: 1, items: [] }) };
+      for (let i = 0; i < 3; i++) big[`${i}`.padStart(32, "b") + ".jpg"] = new Uint8Array(12 * 1024 * 1024);
+      const bomb = await buildZip(big);
+      expect(bomb.byteLength).toBeLessThan(2 * 1024 * 1024);
+      expect((await upload(accountant, sid, bomb)).status).toBe(400);
+      expect((await upload(accountant, sid, new Uint8Array(8 * 1024 * 1024 + 10).fill(1))).status).toBe(400);
+      expect((await upload(accountant, sid, new TextEncoder().encode("not a zip"))).status).toBe(400);
+      expect((await upload(accountant, sid, await buildZip({ [entryName(J(1))]: J(1) }))).status).toBe(400);
+      expect((await upload(accountant, sid, null)).status).toBe(400);
+    });
+
+    it("單張 >120KB／magic bytes 唔啱／帶 EXIF／副檔名同格式唔符 → skipped_invalid_image（其餘照收）", async () => {
+      const { pa, sid } = await seed();
+      const m = matchOf(pa);
+      const items = [
+        { bytes: J(51, { pad: 130 * 1024 }), field: "name_zh", doc_kind: "id_card", priority: 1 as const, match: m }, // 太大
+        { bytes: new Uint8Array(64).fill(9), field: "name_zh", doc_kind: "id_card", priority: 1 as const, match: m }, // magic 唔啱
+        { bytes: J(52, { exif: true }), field: "name_zh", doc_kind: "id_card", priority: 1 as const, match: m }, // EXIF
+        { bytes: fakePng(100, 50, { seed: 53 }), field: "name_zh", doc_kind: "id_card", priority: 1 as const, match: m, ext: "jpg" as const }, // PNG 但 .jpg
+        { bytes: J(54), field: "name_zh", doc_kind: "id_card", priority: 1 as const, match: m }, // OK
+      ];
+      const r = await upload(accountant, sid, await zipOf(items), true);
+      expect(r.body).toMatchObject({ items_total: 5, accepted_images: 1, skipped_invalid_image: 4 });
+    });
+
+    it("身份防呆：match 同題目 evidence 唔一致／推唔到 key／冇題 → 對應計數；不被接受", async () => {
+      const { pa, pc, sid } = await seed();
+      const wrongHkid = { hkid: H[7]!, staff_numbers: ["U90001"] };
+      const wrongNos = { hkid: pa.hkid.value, staff_numbers: ["U90001", "U99999"] };
+      const noKey = { hkid: "ZZZ", staff_numbers: [] };
+      const nobody = { hkid: H[9]!, staff_numbers: ["U77777"] };
+      const r = await upload(
+        accountant,
+        sid,
+        await zipOf([
+          { bytes: J(61), field: "name_zh", doc_kind: "id_card", priority: 1, match: wrongHkid },
+          { bytes: J(62), field: "name_zh", doc_kind: "id_card", priority: 1, match: wrongNos },
+          { bytes: J(63), field: "name_zh", doc_kind: "id_card", priority: 1, match: noKey },
+          { bytes: J(64), field: "name_zh", doc_kind: "id_card", priority: 1, match: nobody },
+          { bytes: J(65), field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) },
+        ]),
+        true,
+      );
+      // 錯身份證＝推出另一個 key，session 冇呢個人（no_question）；同 key 但工號集合唔同／推唔到 key＝identity_mismatch
+      expect(r.body).toMatchObject({ accepted_images: 1, skipped_identity_mismatch: 2, skipped_no_question: 2 });
+      void pc;
+    });
+
+    it("只收題目需要嘅欄／來源（§7）：不需要欄、來源唔啱欄、priority 同來源唔符 → 各自計數", async () => {
+      const { pa, pb, sid } = await seed();
+      const r = await upload(
+        accountant,
+        sid,
+        await zipOf([
+          { bytes: J(71), field: "phone", doc_kind: "onboarding_form", priority: 1, match: matchOf(pa) }, // 甲冇 phone 題
+          { bytes: J(72), field: "hkid", doc_kind: "id_card", priority: 1, match: matchOf(pa) }, // 甲冇 hkid 題
+          { bytes: J(73), field: "address", doc_kind: "id_card", priority: 1, match: matchOf(pa) }, // 住址唔可以用身份證
+          { bytes: J(74), field: "name_zh", doc_kind: "id_card", priority: 2, match: matchOf(pa) }, // priority 同來源唔符
+          { bytes: J(75), field: "hkid", doc_kind: "id_card", priority: 1, match: matchOf(pb) }, // OK
+        ]),
+        true,
+      );
+      expect(r.body).toMatchObject({ accepted_images: 1, skipped_not_needed: 2, skipped_invalid: 2 });
+    });
+
+    it("每欄 ≤2：優先來源排前；第 3 張 over_limit；每人總數 ≤12", async () => {
+      const { pc, sid } = await seed();
+      const m = matchOf(pc);
+      // 丑 field_review: nameEn + address。nameEn：id_card(1)、onboarding_form(2)、再一張 id_card → 超額
+      const r = await upload(
+        accountant,
+        sid,
+        await zipOf([
+          { bytes: J(81), field: "name_en", doc_kind: "onboarding_form", priority: 2, match: m },
+          { bytes: J(82), field: "name_en", doc_kind: "id_card", priority: 1, match: m },
+          { bytes: J(83), field: "name_en", doc_kind: "id_card", priority: 1, match: m },
+          { bytes: J(84), field: "address", doc_kind: "address_proof", priority: 1, match: m },
+        ]),
+      );
+      expect(r.body).toMatchObject({ accepted_images: 3, skipped_over_limit: 1 });
+      const rows = await prisma.triageEvidenceImage.findMany({ where: { field: "name_en" }, select: { docKind: true, priority: true }, orderBy: { createdAt: "asc" } });
+      expect(rows.map((x) => x.priority)).toEqual([1, 1]); // 優先來源保住；入職表（priority 2）因超額被擠走
+      expect(rows.map((x) => x.docKind)).toEqual(["id_card", "id_card"]);
+    });
+
+    it("TE: 有證件用證件、冇證件退入職表、兩者都有次序（session GET evidence_images 次序＝priority）", async () => {
+      const { pc, pa, pb, sid } = await seed();
+      // 丑：name_en 只有入職表（冇證件）→ 退入職表；address 兩者都有（入職表先上載，住址證明後上載）
+      await upload(
+        accountant,
+        sid,
+        await zipOf([
+          { bytes: J(91), field: "name_en", doc_kind: "onboarding_form", priority: 2, match: matchOf(pc) },
+          { bytes: J(92), field: "address", doc_kind: "onboarding_form", priority: 2, match: matchOf(pc) },
+          { bytes: J(93), field: "address", doc_kind: "address_proof", priority: 1, match: matchOf(pc) },
+        ]),
+      );
+      // 甲：name_zh 有身份證
+      await upload(accountant, sid, await zipOf([{ bytes: J(94), field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) }]));
+      void pb;
+      const s = await getSession(accountant, sid);
+      const fr = s.body.questions.find((x: { kind: string; evidence_images: unknown[] }) => x.kind === "field_review" && x.evidence_images.length > 0);
+      const byField = (f: string) => fr.evidence_images.filter((i: { field: string }) => i.field === f);
+      expect(byField("name_en").map((i: { doc_kind: string }) => i.doc_kind)).toEqual(["onboarding_form"]); // 冇證件：退入職表
+      expect(byField("address").map((i: { doc_kind: string; priority: number }) => `${i.priority}:${i.doc_kind}`)).toEqual(["1:address_proof", "2:onboarding_form"]); // 兩者都有：優先排前
+      const na = s.body.questions.find((x: { kind: string }) => x.kind === "name_not_confirmed");
+      expect(na.evidence_images.map((i: { doc_kind: string }) => i.doc_kind)).toEqual(["id_card"]);
+    });
+
+    it("session 類型／權限：非 guard_import 400；雞頭／安員 403；他人 session（主管）403；老闆可", async () => {
+      const { pa, sid } = await seed();
+      const z = await zipOf([{ bytes: J(101), field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) }]);
+      expect((await upload(broker, sid, z, true)).status).toBe(403);
+      expect((await upload(guardUser, sid, z, true)).status).toBe(403);
+      expect((await upload(supervisor, sid, z, true)).status).toBe(403);
+      expect((await upload(owner, sid, z, true)).status).toBe(200);
+      const other = await prisma.triageSession.create({ data: { sourceType: "month_close", sourceRef: "te1-mc", ownerUserId: fx.userIds["會計"], createdBy: fx.userIds["會計"] } });
+      expect((await upload(accountant, other.id, z, true)).status).toBe(400);
+    });
+  });
+
+  describe("讀圖 GET + 欄位級權限（M3／M9／S3）", () => {
+    async function oneImage(field: "name_zh" | "phone" | "name_en", kind: "name_not_confirmed" | "field_review" = "name_not_confirmed") {
+      const s = await seed();
+      void kind;
+      const target = field === "phone" ? null : s.pa;
+      if (!target) {
+        // 為 phone 造一條需要電話嘅 field_review 題
+        const q = await qOf("field_review", s.kc);
+        const ev = q.evidenceJson as { review_fields: object[] };
+        await prisma.triageQuestion.update({ where: { id: q.id }, data: { evidenceJson: { ...ev, review_fields: [...ev.review_fields, { field: "phone", check: "fill" }] } as never } });
+        await upload(accountant, s.sid, await zipOf([{ bytes: J(111), field: "phone", doc_kind: "onboarding_form", priority: 1, match: matchOf(s.pc) }]));
+      } else if (field === "name_zh") {
+        await upload(accountant, s.sid, await zipOf([{ bytes: J(112), field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(s.pa) }]));
+      } else {
+        await upload(accountant, s.sid, await zipOf([{ bytes: J(113), field: "name_en", doc_kind: "id_card", priority: 1, match: matchOf(s.pc) }]));
+      }
+      const img = await prisma.triageEvidenceImage.findFirstOrThrow({ select: { id: true } });
+      return { ...s, id: img.id };
+    }
+
+    it("回解密後 image/jpeg；no-store、nosniff；內容＝原圖；寫一條只計數嘅 view audit", async () => {
+      const { id } = await oneImage("name_zh");
+      const res = await getImage(accountant, id);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("image/jpeg");
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(J(112));
+      const a = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_evidence_view" } });
+      expect(a.after).toMatchObject({ images: 1 });
+      expect(JSON.stringify(a)).not.toContain("導入測試員");
+    });
+
+    it("權限矩陣：老闆／會計(擁有人)可；主管(非擁有人)403；雞頭／安員 403；未登入 401", async () => {
+      const { id } = await oneImage("name_zh");
+      expect((await getImage(owner, id)).status).toBe(200);
+      expect((await getImage(accountant, id)).status).toBe(200);
+      expect((await getImage(supervisor, id)).status).toBe(403);
+      expect((await getImage(broker, id)).status).toBe(403);
+      expect((await getImage(guardUser, id)).status).toBe(403);
+      expect((await getImage("", id)).status).toBe(401);
+      expect((await getImage(owner, "00000000-0000-4000-8000-000000000000")).status).toBe(404);
+    });
+
+    it("欄位級：冇「安員個人資料:view」睇唔到姓名圖(403)，睇到電話圖(200)；冇「安員:view」兩樣都唔得；session GET 亦按此過濾", async () => {
+      const { id: nameId, sid } = await oneImage("name_zh");
+      const setPerm = async (role: "會計", module: string, granted: boolean) => {
+        const perm = await prisma.permission.findFirstOrThrow({ where: { module, action: "view" } });
+        await prisma.rolePermission.updateMany({ where: { roleId: fx.roleIds[role], permissionId: perm.id }, data: { granted } });
+      };
+      await setPerm("會計", "安員個人資料", false);
+      expect((await getImage(accountant, nameId)).status).toBe(403);
+      const s1 = await getSession(accountant, sid);
+      expect(s1.body.questions.every((q: { evidence_images: unknown[] }) => q.evidence_images.length === 0)).toBe(true);
+      const caps = await viewableFields({ userId: fx.userIds["會計"], baseRole: "會計", roleId: fx.roleIds["會計"] } as unknown as AuthedSession);
+      expect(caps.has("phone")).toBe(true);
+      expect(caps.has("name_zh")).toBe(false);
+      expect(caps.has("hkid")).toBe(false);
+      expect(caps.has("address")).toBe(false);
+      await setPerm("會計", "安員個人資料", true);
+      await setPerm("會計", "安員", false);
+      const caps2 = await viewableFields({ userId: fx.userIds["會計"], baseRole: "會計", roleId: fx.roleIds["會計"] } as unknown as AuthedSession);
+      expect(caps2.has("phone")).toBe(false);
+      expect(caps2.has("permit_no")).toBe(false);
+      expect(caps2.has("name_zh")).toBe(true);
+      await setPerm("會計", "安員", true);
+    });
+
+    it("電話圖用「安員:view」：冇「安員個人資料:view」仍可睇", async () => {
+      const { id } = await oneImage("phone");
+      const perm = await prisma.permission.findFirstOrThrow({ where: { module: "安員個人資料", action: "view" } });
+      await prisma.rolePermission.updateMany({ where: { roleId: fx.roleIds["會計"], permissionId: perm.id }, data: { granted: false } });
+      expect((await getImage(accountant, id)).status).toBe(200);
+    });
+
+    it("restricted kind（讀者答唔到）唔回圖；答完後（圖已刪）404", async () => {
+      const { id, pa } = await oneImage("name_zh");
+      expect((await getImage(accountant, id)).status).toBe(200);
+      const q = await qOf("name_not_confirmed");
+      expect((await confirm(accountant, q.id, { option: "use_package_name" })).status).toBe(200);
+      expect((await getImage(accountant, id)).status).toBe(404);
+      void pa;
+    });
+  });
+
+  describe("M5 保留不變式（答題即刪）", () => {
+    const put = async (sid: string, personKey: string, field: "name_zh" | "hkid" | "name_en" | "address" | "dob", n: number, expiresAt = new Date(Date.now() + 100 * 86400000)) => {
+      const plain = J(n);
+      await insertEvidenceImage(prisma, { sessionId: sid, questionId: null, personKey, guardId: null, field, docKind: field === "address" ? "address_proof" : "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt });
+    };
+
+    it("1. 答題即刪：submitAnswer 後同一 tx 內該題嘅圖已冇；audit 帶 evidence_deleted 計數；其他人嘅圖唔受影響", async () => {
+      const { sid, ka, kb } = await seed();
+      await put(sid, ka, "name_zh", 1);
+      await put(sid, kb, "hkid", 2);
+      const q = await qOf("name_not_confirmed", ka);
+      expect((await confirm(accountant, q.id, { option: "use_package_name" })).status).toBe(200);
+      expect(await imgCount({ personKey: ka, field: "name_zh" })).toBe(0);
+      expect(await imgCount({ personKey: kb })).toBe(1);
+      const a = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_answer", rowId: q.id } });
+      expect((a.after as { evidence_deleted?: number }).evidence_deleted).toBe(1);
+    });
+
+    it("2. 同一人另一條仍 open 題需要同一欄 → 圖保留，直至最後一條答完", async () => {
+      const { sid, kc } = await seed();
+      const fr = await qOf("field_review", kc);
+      // 同人再有一條需要 name_en 嘅 open 題
+      const dup = await prisma.triageQuestion.create({ data: { sessionId: sid, kind: "field_review", groupKey: "te1-dup", personKey: kc, sort: fr.sort + 1, title: "dup", evidenceJson: fr.evidenceJson as never, optionsJson: fr.optionsJson as never } });
+      await put(sid, kc, "name_en", 3);
+      const ans = { option: "apply_fields", fields: { nameEn: { action: "skip" }, address: { action: "skip" } } };
+      expect((await confirm(accountant, fr.id, ans)).status).toBe(200);
+      expect(await imgCount({ personKey: kc, field: "name_en" })).toBe(1); // dup 仍需要
+      expect((await confirm(accountant, dup.id, ans)).status).toBe(200);
+      expect(await imgCount({ personKey: kc })).toBe(0);
+    });
+
+    it("3. TR-2 部分作答：只刪已答欄嘅圖，剩餘欄（跟進題）嘅圖保留", async () => {
+      const { sid, pc, kc } = await seed();
+      await put(sid, kc, "name_en", 4);
+      await put(sid, kc, "address", 5);
+      const r = await json(proposalsRoute as never, `/api/triage/sessions/${sid}/proposals`, accountant, { version: 1, proposals: [{ person_key: pc.key, field: "nameEn", value: "TEST CHAU", basis: "two_reads", doc: "id_card", confidence: "medium", match: matchOf(pc) }] }, sid);
+      expect((await r.json()).applied_partial).toBe(1);
+      expect(await imgCount({ personKey: kc, field: "name_en" })).toBe(0);
+      expect(await imgCount({ personKey: kc, field: "address" })).toBe(1);
+      // 剩餘欄再答 → 全刪
+      const rest = await prisma.triageQuestion.findFirstOrThrow({ where: { personKey: kc, status: "open", groupKey: { endsWith: ":rest" } } });
+      expect((await confirm(accountant, rest.id, { option: "apply_fields", fields: { address: { action: "skip" } } })).status).toBe(200);
+      expect(await imgCount({ personKey: kc })).toBe(0);
+    });
+
+    it("4. 跳過保留：圖仍在，expires_at 縮到 ≤30 日；跳過後再答 → 即刪", async () => {
+      const { sid, ka } = await seed();
+      await put(sid, ka, "name_zh", 6, new Date(Date.now() + 170 * 86400000));
+      const q = await qOf("name_not_confirmed", ka);
+      expect((await confirm(accountant, q.id, { option: "skip" })).status).toBe(200);
+      const row = await prisma.triageEvidenceImage.findFirstOrThrow({ where: { personKey: ka }, select: { expiresAt: true } });
+      expect(row.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 30 * 86400000 + 5000);
+      expect(row.expiresAt.getTime()).toBeGreaterThan(Date.now() + 29 * 86400000);
+      expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("skipped");
+      expect((await confirm(accountant, q.id, { option: "use_package_name" })).status).toBe(200); // skipped 可再答
+      expect(await imgCount({ personKey: ka, field: "name_zh" })).toBe(0);
+    });
+
+    it("5a. supersede(re-import)：同人同欄新題沿用舊圖（同 session）", async () => {
+      const { sid, ka, pa, pb, pc } = await seed();
+      await put(sid, ka, "name_zh", 7);
+      const before = await prisma.triageQuestion.findFirstOrThrow({ where: { personKey: ka, kind: "name_not_confirmed" } });
+      // 同一包再 apply：舊 open 題被作廢、新 open 題（新 row）建立喺同一 session
+      const again = await applyPkg(accountant, [pa, pb, pc]);
+      expect(again.status).toBe(200);
+      expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: before.id } })).status).toBe("superseded");
+      const fresh = await prisma.triageQuestion.findFirst({ where: { personKey: ka, kind: "name_not_confirmed", status: "open" } });
+      expect(fresh).not.toBeNull();
+      expect(fresh!.sessionId).toBe(sid);
+      expect(await imgCount({ personKey: ka, field: "name_zh" })).toBe(1);
+    });
+
+    it("5b. supersede(key 輪換)：SESSION_SECRET 指紋唔同 → 舊 session open 題作廢、舊 person_key 嘅圖即刪", async () => {
+      const { sid, ka, pa } = await seed();
+      await put(sid, ka, "name_zh", 8);
+      await prisma.triageSession.update({ where: { id: sid }, data: { keyFp: "00000000" } });
+      const actor = { userId: fx.userIds["會計"], baseRole: "會計", roleId: fx.roleIds["會計"], tokenVersion: 0 } as unknown as AuthedSession;
+      const other = pkgOf([person({ hkid: H[5], name: "導入測試員戊", nameStatus: "review", nos: ["U90055"] })], "2026-10-05T00:00:00.000Z");
+      const parsed = importPackageSchema.parse(other);
+      await createGuardImportTriage({ pkg: parsed, packageHash: hashPackage(parsed), actor, ip: null });
+      expect((await prisma.triageQuestion.findFirstOrThrow({ where: { personKey: ka } })).status).toBe("superseded");
+      expect(await imgCount({ sessionId: sid })).toBe(0);
+      void pa;
+    });
+
+    it("6. session done 後漏網／孤兒：每日 job 清（孤兒＋過期）；registry 有登記；summary 淨計數", async () => {
+      expect(JOBS).toContain(triageEvidenceCleanupJob);
+      expect(triageEvidenceCleanupJob.defaultSchedule).toBe("30 3 * * *");
+      const { sid, ka, kb } = await seed();
+      await put(sid, ka, "name_zh", 9); // 甲 name_zh 仍有 open 題 → 保留
+      await put(sid, ka, "dob", 10); // 甲冇 dob 題 → 孤兒
+      await put(sid, kb, "hkid", 11, new Date(Date.now() - 1000)); // 過期
+      await put(sid, "stray-person-key", "hkid", 12); // 完全冇題
+      const r = await runTriageEvidenceCleanup(new Date());
+      expect(r.summary).toEqual({ expired: 1, orphans: 2 });
+      expect(await imgCount()).toBe(1);
+      expect(await imgCount({ personKey: ka, field: "name_zh" })).toBe(1);
+      expect(JSON.stringify(r)).not.toContain(ka);
+      const aud = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_evidence_cleanup" } });
+      expect(aud.after).toMatchObject({ expired: 1, orphans: 2 });
+      // 冇嘢可清 → skipped
+      expect((await runTriageEvidenceCleanup(new Date())).status).toBe("skipped");
+      // session 全部答晒（done）後再有漏網圖 → job 清走
+      for (const q of await prisma.triageQuestion.findMany({ where: { sessionId: sid, status: "open" } })) await prisma.triageQuestion.update({ where: { id: q.id }, data: { status: "answered" } });
+      expect((await runTriageEvidenceCleanup(new Date())).summary).toEqual({ expired: 0, orphans: 1 });
+      expect(await imgCount()).toBe(0);
+    });
+
+    it("deleteUnneeded 直接：冇 personKey 唔做嘢；只刪不被需要嘅欄", async () => {
+      const { sid, ka } = await seed();
+      await put(sid, ka, "name_zh", 13);
+      await put(sid, ka, "hkid", 14);
+      expect(await deleteUnneeded(prisma, sid, null)).toBe(0);
+      expect(await deleteUnneeded(prisma, sid, ka)).toBe(1);
+      expect(await imgCount({ personKey: ka })).toBe(1);
+    });
+  });
+
+  describe("M9 AI 隔離", () => {
+    it("ai.audit_log view 排除 triage_evidence_images；ai schema 冇呢張表；真 zoikan_ai_ro 連線讀 public 表被拒", async () => {
+      const def = (await prisma.$queryRawUnsafe<{ viewdef: string }[]>(`SELECT pg_get_viewdef('ai.audit_log'::regclass, true) AS viewdef`))[0]!.viewdef;
+      expect(def).toContain("'triage_evidence_images'");
+      expect(def).toContain("'whatsapp_messages'"); // 舊排除清單逐字保留
+      expect(def).toContain("'triage_questions'");
+      const names = (await prisma.$queryRawUnsafe<{ table_name: string }[]>(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'ai'`)).map((r) => r.table_name);
+      expect(names).not.toContain("triage_evidence_images");
+      const { Client } = await import("pg");
+      const c = new Client({ connectionString: process.env.AI_DATABASE_URL });
+      await c.connect();
+      try {
+        await expect(c.query(`SELECT count(*) FROM public.triage_evidence_images`)).rejects.toThrow(/permission denied/i);
+        await expect(c.query(`SELECT image_bytes FROM public.triage_evidence_images LIMIT 1`)).rejects.toThrow(/permission denied/i);
+        await expect(c.query(`SELECT count(*) FROM ai.triage_evidence_images`)).rejects.toThrow();
+        // 寫 audit（table_name 係本表）→ ai.audit_log 睇唔到
+        const admin = await prisma.user.findFirstOrThrow();
+        await prisma.auditLog.create({ data: { actorUserId: admin.id, tableName: "triage_evidence_images", rowId: "ai-iso-probe", action: "update", before: {}, after: { n: 1 } } });
+        const r = await c.query(`SELECT count(*)::int AS n FROM ai.audit_log WHERE table_name = 'triage_evidence_images'`);
+        expect(r.rows[0].n).toBe(0);
+      } finally {
+        await c.end();
+      }
+    });
+  });
+});

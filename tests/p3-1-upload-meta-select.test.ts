@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
-const MODELS = ["rosterUpload", "postorderUpload", "staffListUpload"];
+const MODELS = ["rosterUpload", "postorderUpload", "staffListUpload", "triageEvidenceImage"]; // TE-1：triageEvidenceImage 亦有 bytea（image_bytes 密文），find* 一律要 select（EVIDENCE_META_SELECT）
 const FIND_RE = new RegExp(`\\b(?:${MODELS.join("|")})\\.(?:findMany|findFirst|findUnique|findUniqueOrThrow|findFirstOrThrow)\\(`, "g");
 
 // key＝`<相對 src 路徑>#<第 n 個無 select 嘅呼叫>`；值＝原因。

@@ -534,10 +534,43 @@ model TriageSession {
   lastAppliedAt DateTime? @map("last_applied_at")
 
   questions TriageQuestion[]
+  evidenceImages TriageEvidenceImage[]
 
   @@unique([sourceType, sourceRef])
   @@index([ownerUserId, status])
   @@map("triage_sessions")
+}
+
+/// TE-1：分流題「覆核證據裁圖」（docs/plans/triage-evidence-crops-plan.md）。只存欄位裁圖；imageBytes 係 AES-256-GCM 密文（iv／tag 另欄）。
+/// 新表放 public，**唔入 ai schema**，ai.audit_log 排除。imageBytes 只准由圖片 GET 讀（其餘一律 META_SELECT，見 src/lib/triage/evidence-images.ts）。
+model TriageEvidenceImage {
+  id         String        @id @default(uuid())
+  sessionId  String        @map("session_id")
+  session    TriageSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  questionId String?       @map("question_id")
+  personKey  String        @map("person_key")
+  guardId    String?       @map("guard_id")
+  field      String
+  docKind    String        @map("doc_kind")
+  /// 1＝優先來源（身份證／住址證明）、2＝退而求其次（入職表）
+  priority   Int           @default(1)
+  imageBytes Bytes         @map("image_bytes")
+  iv         Bytes
+  tag        Bytes
+  encVersion Int           @default(1) @map("enc_version")
+  width      Int
+  height     Int
+  mime       String
+  sha256     String
+  source     String        @default("batch_crops")
+  createdBy  String        @map("created_by")
+  createdAt  DateTime      @default(now()) @map("created_at")
+  expiresAt  DateTime      @map("expires_at")
+
+  @@unique([sessionId, personKey, field, sha256])
+  @@index([sessionId, personKey, field])
+  @@index([expiresAt])
+  @@map("triage_evidence_images")
 }
 
 model TriageQuestion {
