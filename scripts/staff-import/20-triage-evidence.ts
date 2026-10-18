@@ -28,11 +28,14 @@ import {
   JPEG_QUALITY_STEPS,
   SHRINK_EDGES,
   boxForRequest,
+  FORM_PHOTO_BOX,
   buildEvidenceZips,
   VERIFY_THRESHOLD,
   detectUprightRotation,
   capBox,
   clipToPhoto,
+  NON_PII_FIELDS,
+  PII_OVERFLOW_GROUPS,
   detectEmbeddedCards,
   findPrintedHkidLines,
   type EmbeddedSource,
@@ -215,19 +218,38 @@ async function bandGuard(png: string, tmp: string): Promise<string | null> {
   return null;
 }
 
+/** 整頁順時針轉 rot 度（結果按 png|rot 快取喺 cache）。 */
+async function rotatedPage(png: string, rot: Rotation, tmp: string, cache?: Map<string, string>): Promise<string> {
+  if (!rot) return png;
+  const k = `${png}|${rot}`;
+  let r = cache?.get(k);
+  if (!r) {
+    r = path.join(tmp, `r-${Math.random().toString(36).slice(2)}.png`);
+    await sh(MAGICK, [png, '-rotate', String(rot), r]);
+    cache?.set(k, r);
+  }
+  return r;
+}
+
+/** TE-2.1：入職表右上 25%×35% 要真係有相（灰階 <80% 嘅暗像素比例 ≥15%）先當相片格；否則唔排除。 */
+export async function detectFormPhoto(png: string, rot: Rotation, tmp: string, cache?: Map<string, string>): Promise<Box | null> {
+  const key = `formphoto|${png}|${rot}`;
+  let v = cache?.get(key);
+  if (v === undefined) {
+    const page = await rotatedPage(png, rot, tmp, cache);
+    const { w, h } = await sizeOf(page);
+    const x = Math.round(FORM_PHOTO_BOX.x0 * w);
+    const ch = Math.round((1 - FORM_PHOTO_BOX.y0) * h);
+    const r = await sh(MAGICK, [page, '-crop', `${w - x}x${ch}+${x}+0`, '+repage', '-colorspace', 'Gray', '-threshold', '80%', '-format', '%[fx:1-mean]', 'info:']);
+    v = Number(r.stdout.trim()) >= 0.15 ? '1' : '0';
+    cache?.set(key, v);
+  }
+  return v === '1' ? FORM_PHOTO_BOX : null;
+}
+
 /** png（可選先順時針轉 rotate 度、再裁 box；可選邊緣帶檢查）→ 規格 JPEG（長邊 ≤800、-strip、≤120 KB）。 */
 export async function finalizeChecked(png: string, box: Box | null, tmp: string, opts: { rotate?: Rotation; bandCheck?: boolean; rotatedCache?: Map<string, string>; verify?: VerifyHook } = {}): Promise<FinalizeResult> {
-  let page = png;
-  if (opts.rotate) {
-    const k = `${png}|${opts.rotate}`;
-    let r = opts.rotatedCache?.get(k);
-    if (!r) {
-      r = path.join(tmp, `r-${Math.random().toString(36).slice(2)}.png`);
-      await sh(MAGICK, [png, '-rotate', String(opts.rotate), r]);
-      opts.rotatedCache?.set(k, r);
-    }
-    page = r;
-  }
+  const page = await rotatedPage(png, opts.rotate ?? 0, tmp, opts.rotatedCache);
   let src = page;
   if (box) {
     const { w, h } = await sizeOf(page);
@@ -282,7 +304,8 @@ export async function cropRequest(req0: CropRequest, png: string, lines: OcrLine
   // 嵌入式身份證／印刷號碼行：方向喺偵測時已經定（rot）；其餘按版面推算
   let rot: Rotation = req.embedded?.rot ?? req.printed?.rot ?? (('assumeRot' in opts ? opts.assumeRot : detectUprightRotation(req.docKind, lines)) ?? 0);
   let [W, H] = dims(rot);
-  let g = boxForRequest(req, rotateLines(lines, rot), W / H);
+  const formPhoto = req.docKind === 'onboarding_form' ? await detectFormPhoto(png, rot, tmp, rotatedCache) : FORM_PHOTO_BOX;
+  let g = boxForRequest(req, rotateLines(lines, rot), W / H, formPhoto);
   if (!g.box && g.reason === 'no_card_anchor' && req.docKind === 'id_card' && !req.embedded) {
     // 導入分類為 id_card 但頁面其實係夾住細卡嘅牌照頁等（冇整頁標題 anchor）→ 試嵌入式偵測
     const det = detectEmbeddedCards(lines, w / h);
@@ -315,6 +338,8 @@ export async function cropRequest(req0: CropRequest, png: string, lines: OcrLine
     // 越界：右界收到關鍵詞左邊 → 再裁再驗；仍越界收下（上）界；再仍越界跳過 cell_overflow
     if (attempt >= 2) return { reason: 'cell_overflow', capped };
     const ov = r.overflow;
+    // S3：非個人資料欄（電話、入職日期、牌照號）溢出到個人資料格——唔收界重裁，直接跳過（避免只有「保安員:view」嘅人見到相鄰個人資料）
+    if (NON_PII_FIELDS.has(req.field) && ov.group !== undefined && PII_OVERFLOW_GROUPS.has(ov.group)) return { reason: 'cell_overflow_pii', capped };
     const bw = box.x1 - box.x0;
     const bh = box.y1 - box.y0;
     const next: Box = ov.side === 'right' ? { ...box, x1: box.x0 + ov.frac * bw - 0.002 } : ov.side === 'below' ? { ...box, y0: box.y1 - ov.frac * bh } : { ...box, y1: box.y1 - ov.frac * bh };
@@ -378,6 +403,11 @@ const rotateFile = async (png: string, deg: Rotation, tmp: string): Promise<stri
   await sh(MAGICK, [png, '-rotate', String(deg), out]);
   return out;
 };
+const DICT_WORDS = /出生日期|English|Name|Phone|Address|香港/gi;
+/** 冇預期值時 .fast 讀數嘅可讀程度：字母數字數＋字典詞命中×6（正向先讀得準，倒轉／側躺會亂碼）。 */
+export function readabilityScore(t: string): number {
+  return (t.match(/[0-9A-Za-z]/g) ?? []).length + 6 * (t.match(DICT_WORDS) ?? []).length;
+}
 const textOf = (p: VisionPage | undefined): string => (p?.lines ?? []).map((l) => l.t).join(' ');
 
 /**
@@ -401,15 +431,27 @@ export async function verifyCrop(png: string, field: EvidenceField, expected: re
   if (score !== null && score < VERIFY_THRESHOLD[field]) return { ok: false, reason: 'value_mismatch', score };
   const vs = await sizeOf(vin);
   const sideways = textUprightness(acc?.lines ?? [], vs.w, vs.h) < 0;
+  // 入職表：裁圖文字越界檢查（其他欄 label 關鍵詞）——座標由 Vision 輸入（放大＋留白）換返裁圖正規化
+  const overflow = opts.checkOverflow ? findOverflow(field, (acc?.lines ?? []).map((l) => ({ t: l.t, x: (l.x * vs.w - 24) / (vs.w - 48), y: (l.y * vs.h - 24) / (vs.h - 48), w: (l.w * vs.w) / (vs.w - 48), h: (l.h * vs.h) / (vs.h - 48) })), (l) => lineHasOwnLabel(field, l.t) || scoreAgainst(field, l.t, expected[0] ?? '') >= 0.5 || similarity(field, l.t, expected) >= 0.5) : null;
+  const ov0 = overflow ? { overflow } : {};
+  if (noExp) {
+    // TE-2.1 F：冇預期值——① 沿用同頁其他欄（有預期值）判到嘅方向；② 全頁冇就 .fast 讀四方向（可讀字元數＋字典詞命中）比較，差距明顯先決定；③ 否則維持版面 prior
+    const pp0 = opts.pagePrior;
+    if (pp0 !== undefined && pp0 !== null) return { ok: true, score: null, rotate: pp0, decisive: false, followedPage: true, ...ov0 };
+    const dirs: Rotation[] = [0, 90, 180, 270];
+    const f4 = await run(await Promise.all(dirs.map((d) => rotateFile(vin, d, tmp))), true);
+    const sc4 = f4.map((p) => readabilityScore(textOf(p)));
+    const order = sc4.map((v, i) => ({ v, i })).sort((x, y) => y.v - x.v);
+    if (order[0]!.v >= 4 && order[0]!.v >= 1.5 * order[1]!.v + 2) return { ok: true, score: null, rotate: dirs[order[0]!.i]!, decisive: true, ...ov0 };
+    if (!sideways) return { ok: true, score: null, rotate: 0, decisive: false, ...ov0 };
+    return { ok: false, reason: 'orientation_unknown' };
+  }
   const cands: Rotation[] = sideways ? [90, 270] : [0, 180];
   const files = await Promise.all(cands.map((d) => rotateFile(vin, d, tmp)));
   const fast = await run(files, true);
-  // 有預期值：.fast 讀數對預期值嘅相似度；冇：.fast 讀到嘅字母數字數（對方向敏感：正向先讀得到）
-  const sc = fast.map((p) => (noExp ? textOf(p).replace(/[^0-9A-Za-z\u4e00-\u9fff]/g, '').length : similarity(field, textOf(p), expected)));
+  const sc = fast.map((p) => similarity(field, textOf(p), expected));
   const [a, b] = [sc[0] ?? 0, sc[1] ?? 0];
-  const decided = noExp ? Math.max(a, b) >= 4 && Math.max(a, b) >= 2 * Math.min(a, b) + 2 : Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2;
-  // 入職表：裁圖文字越界檢查（其他欄 label 關鍵詞）——座標由 Vision 輸入（放大＋留白）換返裁圖正規化
-  const overflow = opts.checkOverflow ? findOverflow(field, (acc?.lines ?? []).map((l) => ({ t: l.t, x: (l.x * vs.w - 24) / (vs.w - 48), y: (l.y * vs.h - 24) / (vs.h - 48), w: (l.w * vs.w) / (vs.w - 48), h: (l.h * vs.h) / (vs.h - 48) })), (l) => lineHasOwnLabel(field, l.t) || scoreAgainst(field, l.t, expected[0] ?? '') >= 0.5 || similarity(field, l.t, expected) >= 0.5) : null;
+  const decided = Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2;
   const ov = overflow ? { overflow } : {};
   if (decided) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]!, decisive: true, ...ov };
   // S3：冇證據（例如純中文 .fast 讀唔準）→ 沿用同一頁其他欄判到嘅方向（同頁方向一致）；全頁冇任何欄判到就維持 prior（橫排當 0°、側躺 unknown）
@@ -439,15 +481,54 @@ export interface Stats {
   size_capped: number;
   /** TE-1.9：純中文等判唔到方向嘅欄，沿用同頁其他欄方向嘅張數 */
   page_orientation_followed: number;
+  /** TE-2.1 G：做咗二階段局部 OCR（300dpi 切塊）嘅頁數 */
+  second_stage_pages: number;
+  /** TE-2.1 H：按欄嘅跳過原因分佈 */
+  skipped_by_field: Record<string, Record<string, number>>;
   /** TE-1.8：value_mismatch 嘅最高相似度分佈（按欄；四格 0–0.2／0.2–0.4／0.4–0.6／0.6–0.7） */
   mismatch_hist: Record<string, [number, number, number, number]>;
   zips: number;
   zip_bytes: number;
 }
-export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, page_orientation_followed: 0, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
+export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, page_orientation_followed: 0, second_stage_pages: 0, skipped_by_field: {}, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
 const bump = (r: Record<string, number>, k: string) => {
   r[k] = (r[k] ?? 0) + 1;
 };
+
+/**
+ * TE-2.1 G：嵌入卡二階段局部 OCR。200dpi 整頁 OCR 讀唔到右下角細卡，就將該頁以 300dpi 渲染、切 2×2 四格＋中間一格
+ * （格間 10% 重疊），各自跑 Vision .accurate，行座標映射返全頁（原點左下）。讀數只喺記憶體。
+ */
+export async function secondStageLines(doc: DocPage, deps: Deps, tmp: string): Promise<{ lines: OcrLine[]; aspect: number } | null> {
+  if (!deps.vision) return null;
+  const png = await deps.render(doc);
+  if (!png) return null;
+  try {
+    const { w, h } = await sizeOf(png);
+    const tiles: Box[] = [
+      { x0: 0, x1: 0.55, y0: 0.45, y1: 1 },
+      { x0: 0.45, x1: 1, y0: 0.45, y1: 1 },
+      { x0: 0, x1: 0.55, y0: 0, y1: 0.55 },
+      { x0: 0.45, x1: 1, y0: 0, y1: 0.55 },
+      { x0: 0.25, x1: 0.75, y0: 0.25, y1: 0.75 },
+    ];
+    const files: string[] = [];
+    for (const [i, t] of tiles.entries()) {
+      const f = path.join(tmp, `s2-${i}-${Math.random().toString(36).slice(2)}.png`);
+      await sh(MAGICK, [png, '-crop', `${Math.round((t.x1 - t.x0) * w)}x${Math.round((t.y1 - t.y0) * h)}+${Math.round(t.x0 * w)}+${Math.round((1 - t.y1) * h)}`, '+repage', f]);
+      files.push(f);
+    }
+    const pages = await deps.vision(files, false);
+    const lines: OcrLine[] = [];
+    pages.forEach((pg, i) => {
+      const t = tiles[i]!;
+      for (const l of pg.lines) lines.push({ t: l.t, c: l.c, x: t.x0 + l.x * (t.x1 - t.x0), y: t.y0 + l.y * (t.y1 - t.y0), w: l.w * (t.x1 - t.x0), h: l.h * (t.y1 - t.y0) });
+    });
+    return { lines, aspect: w / h };
+  } finally {
+    await deps.cleanup(png);
+  }
+}
 
 export interface PersonInput {
   person: PkgPerson;
@@ -456,6 +537,21 @@ export interface PersonInput {
   extra?: Partial<Record<EvidenceField, string[]>>;
   /** TE-2：呢個人所有文件嘅所有頁（唔理導入分類）——搵嵌入式身份證、印刷身份證號 */
   scanPages?: { docId: string; page: number }[];
+}
+
+const rank = (f: EvidenceField): number => (f === 'hire_date' ? 2 : f === 'name_zh' ? 1 : 0);
+
+/**
+ * S4：無預期值嘅 hkid 圖（printed／嵌入卡）加交叉一致性——該人有任何 confirmed 姓名（中或英）時，同一頁 OCR 行（二階段局部 OCR 讀數）
+ * 要有相似姓名（中文字元重疊 ≥0.5／英文 token 覆蓋 ≥0.5）先出圖；冇 confirmed 姓名照出。只喺記憶體比對。
+ */
+export function crossNameOk(p: PkgPerson, pageLines: readonly OcrLine[]): boolean {
+  const names: { field: EvidenceField; value: string }[] = [];
+  if (p.nameZh.status === 'confirmed' && p.nameZh.value) names.push({ field: 'name_zh', value: p.nameZh.value });
+  if (p.nameEn.status === 'confirmed' && p.nameEn.value) names.push({ field: 'name_en', value: p.nameEn.value });
+  if (names.length === 0) return true;
+  const text = pageLines.map((l) => l.t).join(' ');
+  return names.some((n) => scoreAgainst(n.field, text, n.value) >= 0.5);
 }
 
 /** 掃描頁假設嘅頁面闊高比（A4 直向）；實際裁圖用真實像素尺寸 */
@@ -480,6 +576,7 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const needsId = fields.some((f) => f === 'hkid' || f === 'name_zh' || f === 'name_en' || f === 'dob');
       const hasClassicId = pi.docs.some((d) => d.type === 'id_card');
       const embedded: EmbeddedSource[] = [];
+      const extraLines = new Map<string, OcrLine[]>(); // 二階段局部 OCR 嘅行（deps.lines 讀唔到嵌入卡）
       const printed: PrintedSource[] = [];
       if ((needsId && !hasClassicId) || fields.includes('hkid')) {
         for (const sp of pi.scanPages ?? []) {
@@ -495,7 +592,27 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
           }
         }
       }
-      const reqs = [...planRequests(fields, pi.docs, { embedded, printed })].sort((x, y) => Number(x.field === 'name_zh') - Number(y.field === 'name_zh'));
+      // TE-2.1 G：hkid 未確認、冇整頁身份證、第一階段又搵唔到嵌入卡 → 對該人每個掃描頁做二階段局部 OCR（只對呢批人，控制成本）
+      if (deps.vision && pi.person.hkid.status !== 'confirmed' && !hasClassicId && embedded.length === 0) {
+        for (const sp of pi.scanPages ?? []) {
+          if (embedded.length > 0) break;
+          const doc: DocPage = { type: 'id_card', docId: sp.docId, page: sp.page };
+          const s2 = await secondStageLines(doc, deps, tmp).catch(() => null);
+          if (!s2) continue;
+          stats.second_stage_pages += 1;
+          const det = detectEmbeddedCards(s2.lines, s2.aspect);
+          if (det) {
+            embedded.push({ doc, rot: det.rot, region: det.cards[0]!.box });
+            // 二階段嘅卡區行座標係局部 OCR 嘅——crop 流程要用同一批行（deps.lines 讀唔到卡）
+            extraLines.set(`${doc.docId}|${doc.page}`, s2.lines);
+          }
+          if (printed.length === 0) {
+            const inCard = (l: OcrLine) => !!det && det.cards.some((c) => inBox(c.box, rotateLines([l], det.rot)[0]!));
+            for (const pr of findPrintedHkidLines(s2.lines, s2.aspect, inCard)) printed.push({ doc, rot: pr.rot, line: pr.line });
+          }
+        }
+      }
+      const reqs = [...planRequests(fields, pi.docs, { embedded, printed })].sort((x, y) => rank(x.field) - rank(y.field)); // 有預期值嘅欄先（記低同頁方向），name_zh（純中文判唔到方向）、hire_date（冇預期值）最後
       const pageCache = new Map<string, string | null>();
       const rotCache = new Map<string, string>();
       // S3：同一頁方向一致——有欄判到（decisive）就記低，純中文姓名等判唔到嘅欄跟返
@@ -533,11 +650,13 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
             } else skip = r.reason;
           }
           if (!bytes && !skip) {
-            const lines = await deps.lines(req.doc);
+            const lines = (req.embedded || req.printed ? extraLines.get(`${req.doc.docId}|${req.doc.page}`) : undefined) ?? (await deps.lines(req.doc));
             if (!lines) skip = 'no_ocr_lines';
             else {
-              const png = await getPage(req.doc);
-              if (!png) skip = 'render_fail';
+              const crossBad = req.field === 'hkid' && (req.printed || req.embedded) && expectedValuesFor('hkid', pi.person, pi.extra?.hkid ?? []).length === 0 && !crossNameOk(pi.person, lines);
+              const png = crossBad ? null : await getPage(req.doc);
+              if (crossBad) skip = 'cross_name_mismatch';
+              else if (!png) skip = 'render_fail';
               else {
                 const r = await cropRequest(req, png, lines, tmp, rotCache, hookFor(req)).catch(() => ({ reason: 'image_spec_fail' }) as { reason: string; capped?: boolean; score?: number });
                 if (r.capped) stats.size_capped += 1;
@@ -558,6 +677,7 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
           }
           if (!bytes) {
             bump(stats.skipped, skip ?? 'image_spec_fail');
+            bump((stats.skipped_by_field[req.field] ??= {}), skip ?? 'image_spec_fail');
             continue;
           }
           if (score !== undefined) stats.verified += 1;
@@ -771,8 +891,11 @@ export function syntheticCertificatePage(): OcrLine[] {
 
 interface DryDoc {
   doc: DocPage;
+  /** deps.lines 回嘅 OCR 行（200dpi 整頁 OCR 讀到嘅） */
   lines: OcrLine[];
   photo?: Box;
+  /** TE-2.1：頁面上有畫、但 200dpi 整頁 OCR 讀唔到嘅行（細卡）——只有二階段局部 OCR 先讀到 */
+  hidden?: OcrLine[];
 }
 const lf = (value: string | null, status: 'confirmed' | 'review' | 'missing') => ({ value, status });
 const dryPerson = (n: number, over: Partial<PkgPerson> = {}): PkgPerson => ({
@@ -790,9 +913,9 @@ const dryPerson = (n: number, over: Partial<PkgPerson> = {}): PkgPerson => ({
 
 export function dryFixture(): { people: PersonInput[]; docs: Map<string, DryDoc> } {
   const docs = new Map<string, DryDoc>();
-  const add = (type: DocPage['type'], n: number, lines: OcrLine[], photo?: Box): DocPage => {
+  const add = (type: DocPage['type'], n: number, lines: OcrLine[], photo?: Box, hidden?: OcrLine[]): DocPage => {
     const doc: DocPage = { type, docId: `dry-doc-${n}-${type}`, page: 1 };
-    docs.set(`${doc.docId}|1`, { doc, lines, ...(photo ? { photo } : {}) });
+    docs.set(`${doc.docId}|1`, { doc, lines, ...(photo ? { photo } : {}), ...(hidden ? { hidden } : {}) });
     return doc;
   };
   const a = syntheticIdCardPage();
@@ -820,6 +943,17 @@ export function dryFixture(): { people: PersonInput[]; docs: Map<string, DryDoc>
           scanPages: [permitDoc, certDoc].map((d) => ({ docId: d.docId, page: d.page })),
         } as PersonInput;
       })(),
+      // TE-2.1 G：hkid missing；牌照頁嘅細卡 200dpi 整頁 OCR 讀唔到（hidden），要二階段局部 OCR 先搵到
+      (() => {
+        const permit = syntheticPermitPageWithEmbeddedCard();
+        const isCard = (l: OcrLine) => l.y < 0.25 && l.x > 0.5;
+        const permitDoc = add('sia_permit' as DocPage['type'], 8, permit.lines.filter((l) => !isCard(l)), permit.photo, permit.lines.filter(isCard));
+        return {
+          person: dryPerson(8, { hkid: lf(null, 'missing'), nameZh: lf(null, 'missing'), nameEn: lf(null, 'missing'), dateOfBirth: lf(null, 'missing'), phone: lf(null, 'missing'), address: lf(null, 'missing') }),
+          docs: [add('onboarding_form', 8, syntheticFormPage(), SYNTHETIC_FORM_PHOTO)],
+          scanPages: [{ docId: permitDoc.docId, page: permitDoc.page }],
+        } as PersonInput;
+      })(),
       { person: dryPerson(6, { hkid: lf(HK_ID_VALID, 'confirmed'), nameZh: lf('測試甲', 'confirmed'), nameEn: lf('TESTER ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001110', 'confirmed'), address: lf('舊地址', 'confirmed') }), docs: [] }, // 冇 review 欄
     ],
   };
@@ -838,7 +972,7 @@ export async function drawSyntheticPage(d: DryDoc, out: string, size = { w: 2000
   const args = ['-size', `${size.w}x${size.h}`, 'xc:white'];
   const rect = (b: Box, color: string) => ['-fill', color, '-draw', `rectangle ${Math.round(b.x0 * size.w)},${Math.round((1 - b.y1) * size.h)} ${Math.round(b.x1 * size.w)},${Math.round((1 - b.y0) * size.h)}`];
   if (d.photo) args.push(...rect(d.photo, d.doc.type === 'onboarding_form' ? 'rgb(40,30,30)' : 'rgb(255,0,0)'));
-  for (const l of d.lines) {
+  for (const l of [...d.lines, ...(d.hidden ?? [])]) {
     if (!hasSyntheticFonts) {
       args.push(...rect({ x0: l.x, x1: l.x + l.w, y0: l.y + l.h * 0.3, y1: l.y + l.h * 0.7 }, 'rgb(60,60,60)'));
       continue;
@@ -917,6 +1051,7 @@ export const statsLines = (s: Stats): string[] => [
   `請求 ${s.requests_total}｜現成裁圖 ${s.from_existing}｜即時裁 ${s.live_cropped}｜出圖 ${s.images_out}｜Vision 驗證 ${s.verified}／未驗證 ${s.unverified}｜zip ${s.zips}（${s.zip_bytes} bytes）`,
   `每欄：${JSON.stringify(s.by_field)}｜來源:優先：${JSON.stringify(s.by_doc_priority)}`,
   `跳過原因：${JSON.stringify(s.skipped)}｜忽略嘅現成裁圖清單項 ${s.existing_ignored_entries}｜硬性尺寸上限收窄 ${s.size_capped}｜沿用同頁方向 ${s.page_orientation_followed}`,
+  `二階段局部 OCR 頁數 ${s.second_stage_pages}｜按欄跳過原因：${JSON.stringify(s.skipped_by_field)}`,
   `value_mismatch 最高相似度分佈（按欄；[0–0.2, 0.2–0.4, 0.4–0.6, 0.6–0.7]）：${JSON.stringify(s.mismatch_hist)}`,
 ];
 

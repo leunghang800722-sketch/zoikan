@@ -82,3 +82,13 @@
 - **題型→所需欄**：name_only_candidate→name_zh＋name_en；tel_only_candidate／dup_tel_across_persons→phone；ext_identity_check→hkid＋name_zh＋name_en（另加 ext 欄：牌照號、入職日期）；no_id_card→hkid＋name_zh＋name_en＋dob；ext 入職日期（`hireDate`／`staffHire.*`）→hire_date。答題即刪照舊（`deleteUnneeded` 按同一映射重算）。
 - **導入分類**：頁面可多 kind（例如 `["sia_permit","id_card"]`，primary 唔變），身份證抽取對嵌入卡區行做；**只改 code，唔重跑導入；下次導入先生效**。
 
+### 8.1 TE-2.1（真檔重跑後修正）
+- **HKID 判斷一律驗 check digit**（單字母前綴當空格 36、權重 9…2、mod 11；有／冇括號都驗）——保安牌照號（A＋7 位）自然排除；printed／嵌入卡／分類補標都用。
+- **merged OCR line**：入職表 label 定位按「關鍵詞喺行內字元偏移 × 行闊（CJK 全寬 1／其他 0.55）」將成行切成 label／值 virtual 行；cell 右界＝下一個關鍵詞推算 x，最後一格＝行尾；格內空白照裁。範本 B 兩行 label（中文＋英文翻譯）合併成 block。
+- **姓名 label** 只喺「申請人個人資料／Personal Particulars」段（到「過去 3 年受僱記錄／諮詢人資料」標題止；搵唔到標題取頁頂 50%）；表頭樣式「姓 名」唔算。
+- **相片格**要真係有相（右上 25%×35% 暗像素 ≥15%）先排除。
+- **冇預期值**嘅方向：同頁其他欄 pagePrior ＞ `.fast` 四方向（可讀字元數＋字典詞）明顯差距 ＞ 版面 prior。
+- **嵌入卡二階段局部 OCR**：hkid 未確認、冇整頁身份證、第一階段搵唔到嘅人，將其掃描頁 300dpi 切 2×2＋中間 5 格各跑 Vision `.accurate`，映射返全頁再偵測卡區；console 計「二階段局部 OCR 頁數」；讀數只在記憶體。
+- **S3（Opus）**：非個人資料欄（電話、入職日期、牌照號）越界檢查遇個人資料 label → 直接跳過（`cell_overflow_pii`），唔收界重裁。**S4（Opus）**：無預期值 hkid 圖（printed／嵌入卡）如果該人有 confirmed 姓名，同頁 OCR 行要有相似姓名（中文字元重疊 ≥0.5／英文 token 近乎吻合覆蓋 ≥0.5）先出圖，否則 `cross_name_mismatch`。
+- **S1（Opus）導入分類備註**：分類改動（一頁多 kind、嵌入卡補標 id_card）**唔重跑導入**；**重跑導入前先用新舊 extract 逐欄計數對比**（hkid／姓名／出生日期有值嘅人數、各 kind 頁數），確認改動方向合理先正式跑。
+

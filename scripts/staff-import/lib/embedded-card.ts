@@ -1,7 +1,8 @@
 // TE-2：一頁多文件——嵌入式身份證偵測（純函數，零 IO）。
 // 例：保安牌照頁右下角貼住一張身份證副本。導入流程原本只按「整頁」分類，會漏咗嵌入卡；呢度用 OCR 行搵：
-//  有符合 HKID 格式嘅整行（^[A-Z]{1,2}\s?\d{6}\s?\(?[0-9A]\)?$）＋附近（卡區內）有「出生日期／Date of Birth／簽發日期」label，
+//  有符合 HKID 格式（含 check digit）嘅整行（^[A-Z]{1,2}\s?\d{6}\s?\(?[0-9A]\)?$）＋附近（卡區內）有「出生日期／Date of Birth／簽發日期」label，
 //  就由號碼行闊度估算卡闊（85.6×54mm 比例），推一個「卡區」。座標係 Vision 正規化（原點左下）。
+import { canonicalHkid, hkidCheckDigitValid } from './hkid';
 import { norm, type OcrLine } from './ocr';
 
 export interface Box {
@@ -21,7 +22,11 @@ export interface CardRegion {
 
 const HKID_LINE = /^[A-Z]{1,2}\s?\d{6}\s?\(?\s?[0-9A]\s?\)?$/;
 /** 整行符合 HKID 格式（容許全形括號、前後空白）。 */
-export const isHkidFormatLine = (t: string): boolean => HKID_LINE.test(norm(t).toUpperCase().replace(/[（]/g, '(').replace(/[）]/g, ')').trim());
+export const isHkidFormatLine = (t: string): boolean => {
+  const u = norm(t).toUpperCase().replace(/[（]/g, '(').replace(/[）]/g, ')').trim();
+  // TE-2.1：格式＋香港身份證 check digit（單字母前綴當空格 36、權重 9…2、mod 11；有／冇括號都驗）——保安牌照號（A＋7 位數字）自然排除
+  return HKID_LINE.test(u) && hkidCheckDigitValid(canonicalHkid(u));
+};
 const CARD_LABEL = /出生日期|Date\s*of\s*Birth|簽發日期|Date\s*of\s*Issue/i;
 
 /** 號碼行闊度約佔卡闊嘅 1/3.8（真卡版面：號碼印喺右下，約四分一卡闊）；卡比例 85.6×54mm。 */
