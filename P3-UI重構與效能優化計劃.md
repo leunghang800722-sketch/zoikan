@@ -1464,3 +1464,4 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **TE-2.2.1（Opus M：name_en 揀中緊急聯絡人＝錯證據）**：`OTHER_PERSON` 加英文詞（Emergency／Contact Person／Guarantor／Witness／Employer／Referee／Reference／Spouse）同中文（諮詢人／介紹人／配偶）；`isTableHeaderName` 套用落 name_en 並加 Address／Tel／Phone；單獨「Name：」只喺同行／上一行冇其他人物詞、且位於個人資料段落頂部 40%（冇標題＝頁頂 50% 嘅頂 40%）先接受。注意：用 `Contact Person` 而唔係單獨 `Contact`，免得誤殺「Contact Phone」類本人電話 label。
 - **TE-3（老闆試用反饋；branch `te3-ui-fixes`）**：題卡只顯示問題欄裁圖；「確認寫入」一鍵（自動預覽）；無姓名建人經 `needs_fields`／`extra` 同卡補姓名；導入抽取行內 HKID 搜尋＋OCR 混淆修正＋`printedHkid` 來源（下次導入生效）。
 - **TE-4（branch `te4-reread-embedded`，起點 te3-ui-fixes 858218d）**：重讀腳本支援嵌入身份證副本（倒轉卡轉正裁圖→真 OCR→proposal）、印刷佐證升降信心、`--only-missing-hkid`；伺服器 proposals 接受 `no_id_card`（hkid＋姓名＋出生日期）。
+- **TE-4.1（branch `te4-1-fixes`，起點 main ffd7376）**：TE-3 M1 混淆修正收緊＋誤收率回歸；TE-4 M1 嵌入卡整人一致性；S1／S2／N2 修正。

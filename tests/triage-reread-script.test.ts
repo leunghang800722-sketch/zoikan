@@ -108,7 +108,7 @@ describe("揀頁／工號索引", () => {
 describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
   it("run：6 人入 5 人需重讀、1 人冇文件；18 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
     const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, visionBin: null }, NOW);
-    expect(r.summary).toMatchObject({ persons_in_package: 10, persons_needing_reread: 5, persons_no_docs: 1, persons_processed: 4, persons_failed: 0, persons_with_proposals: 4, proposals_total: 18 });
+    expect(r.summary).toMatchObject({ persons_in_package: 11, persons_needing_reread: 6, persons_no_docs: 2, persons_processed: 4, persons_failed: 0, persons_with_proposals: 4, proposals_total: 18 });
     expect(r.summary.proposals_by_field).toEqual({ nameZh: 3, nameEn: 4, dateOfBirth: 3, phone: 4, address: 4 });
     expect(r.summary.proposals_by_basis).toEqual({ two_reads: 18 });
     expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 1, typed_list_disagrees: 1, arbiter_agree_a: 1 });

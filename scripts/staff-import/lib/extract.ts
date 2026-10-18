@@ -565,25 +565,28 @@ export function scanPageHkids(page: number, lines: OcrLine[]): Field[] {
     const t = l.t.normalize('NFKC');
     const m = RE_HKID_LABEL.exec(t);
     if (!m) return;
+    // M1：同一行緊跟 label 嘅 token（token 後可以有其他字）；label 後冇字先睇下一行，而且下一行要淨係得呢個 token
     let tail = t.slice(m.index + m[0].length).trim();
     let src = l;
+    let wholeLine = false;
     if (!tail) {
       const nx = rows[i + 1];
       if (nx && !RE_PERMIT_NO_LINE.test(nx.t)) {
         tail = nx.t.normalize('NFKC').trim();
         src = nx;
+        wholeLine = true;
       }
     }
-    const tok = /^[A-Za-z0-9()（）\s]{7,14}/.exec(tail)?.[0];
-    const r = tok ? hkidFromConfusableToken(tok) : null;
-    if (r) push(r.value, src, r.fixed ? 'ocr_confusion_fixed' : undefined);
+    const r = tail ? hkidFromConfusableToken(tail) : null;
+    if (r && (!wholeLine || !tail.toUpperCase().slice(r.end).trim())) push(r.value, src, r.fixed ? 'ocr_confusion_fixed' : undefined);
   });
   return out;
 }
 
 export function extractPermit(page: number, lines: OcrLine[]): { hkid: Field | null } {
   // TE-3：行內搜尋＋label 後 OCR 混淆修正（舊版只認整行 check digit 啱嘅候選）
-  const f = scanPageHkids(page, lines)[0];
+  const all = scanPageHkids(page, lines);
+  const f = all.find((x) => x.note !== 'ocr_confusion_fixed') ?? all[0]; // 未經混淆修正嘅優先
   return { hkid: f ?? null };
 }
 

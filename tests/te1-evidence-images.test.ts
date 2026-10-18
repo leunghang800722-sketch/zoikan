@@ -915,6 +915,18 @@ describe("TE-1 證據裁圖", () => {
       expect(await imgCount({ sessionId: sid2 })).toBe(0); // hkid＋兩個姓名圖答咗即刪
     });
 
+    it("TE-3 S1：包內姓名已確認嘅人，answer／preview 帶 extra 姓名 → 400（唔准人手蓋已確認姓名）", async () => {
+      await seed();
+      const pn = person({ hkid: null, name: "導入測試員有名", nos: ["U90031"], rating: "fail" });
+      const r0 = await applyPkg(accountant, [pn]);
+      expect(r0.status).toBe(200);
+      const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: r0.body.triage.session_id as string, kind: "no_id_card" } });
+      const res = await json(previewRoute as never, `/api/triage/questions/${qn.id}/preview`, accountant, { answer: { option: "enter_hkid", value: H[9], extra: { name_zh: "另一個名" } } }, qn.id);
+      expect(res.status).toBe(400);
+      const ok = await json(previewRoute as never, `/api/triage/questions/${qn.id}/preview`, accountant, { answer: { option: "enter_hkid", value: H[9] } }, qn.id);
+      expect(ok.status).toBe(200);
+    });
+
     it("TE-3(2) explainBlocked：每個 reason code 都有人話；可補嘅（create_no_name／name_not_confirmed）帶 needs_fields，其餘講下一步", () => {
       for (const code of Object.keys(BLOCK_TEXT)) {
         const e = explainBlocked([code], "enter_hkid", EXTRA_NAME_OPTIONS, false);

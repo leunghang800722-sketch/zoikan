@@ -176,6 +176,9 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
   // TE-3：補姓名（人手對住證據圖輸入）——直接當 confirmed 寫入包內 person；preview／answer 同一路徑
   if (answer.extra && (answer.extra.name_zh || answer.extra.name_en || answer.extra.dob)) {
     if (!EXTRA_NAME_OPTIONS.includes(answer.option)) throw BadRequest("呢個選項唔使補姓名");
+    // TE-3 S1：extra 只喺包內冇姓名／姓名未確認先接受（已確認嘅姓名唔俾人手蓋）
+    const confirmed = (f: { value: string | null; status: string } | undefined) => !!f?.value && f.status === "confirmed";
+    if ((answer.extra.name_zh && confirmed(person.nameZh)) || (answer.extra.name_en && confirmed(person.nameEn))) throw BadRequest("呢個人嘅姓名已經確認，唔使再補");
     if (answer.extra.name_zh) person.nameZh = { value: requireName(answer.extra.name_zh), status: "confirmed" };
     if (answer.extra.name_en) person.nameEn = { value: answer.extra.name_en.trim(), status: "confirmed" };
     // TE-4：OCR 重讀嵌入身份證副本一併帶出生日期（格式要合法）

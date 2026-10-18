@@ -138,9 +138,11 @@ export function aggregateDoc(
 
   const flags: string[] = [...new Set(flagsTmp)];
   // 一個檔可能夾住家人／擔保人嘅身份證：逐張卡打分，揀「屬於呢個人」嗰張，所有欄位跟同一張卡
+  // TE-3 M1：混淆修正值（ocr_confusion_fixed）永遠 low，唔可獨力確認／當本人佐證／做配對 key，除非另一獨立（未修正）來源一致
+  const isFixed = (f: Field | null | undefined): boolean => f?.note === 'ocr_confusion_fixed';
   const formHkidPre = bestBy(forms.map((f) => f.hkid).filter((f): f is Field => !!f), (f) => (hkidCheckDigitValid(f.value) ? 10 : 0) + f.conf);
-  const permitHkidPre = bestBy(permitHkids, (f) => f.conf);
-  const own = new Set([formHkidPre, permitHkidPre].filter((f): f is Field => !!f && hkidCheckDigitValid(f.value)).map((f) => f.value));
+  const permitHkidPre = bestBy(permitHkids, (f) => (isFixed(f) ? 0 : 1) + f.conf * 0.01);
+  const own = new Set([formHkidPre, permitHkidPre].filter((f): f is Field => !!f && !isFixed(f) && hkidCheckDigitValid(f.value)).map((f) => f.value));
   const cardScore = (r: IdCardResult): number => {
     let sc = 0;
     if (r.hkid && hkidCheckDigitValid(r.hkid.value)) sc += 5;
@@ -207,13 +209,15 @@ export function aggregateDoc(
   if (!forms.length) flags.push('no_form_page');
 
   const formHkid = bestBy(forms.map((f) => f.hkid).filter((f): f is Field => !!f), (f) => (hkidCheckDigitValid(f.value) ? 10 : 0) + f.conf);
-  const permitHkid = bestBy(permitHkids, (f) => f.conf);
+  const permitHkid = bestBy(permitHkids, (f) => (isFixed(f) ? 0 : 1) + f.conf * 0.01);
   // TE-3：身份證頁冇讀到 HKID 時，後備來源優先次序 permit > printed > form（只收 check digit 通過；印刷來源多於一個唯一值＝可能夾家人，唔用）
   const printedVals = new Set(printedAll.map((f) => f.value));
-  const printedHkid = printedVals.size === 1 ? bestBy(printedAll, (f) => f.conf) : null;
+  const printedHkid = printedVals.size === 1 ? bestBy(printedAll, (f) => (isFixed(f) ? 0 : 1) + f.conf * 0.01) : null;
   if (printedVals.size > 1) flags.push('hkid_printed_multiple');
   if (!hkidFinal) {
-    const alt = ([['permit', permitHkid], ['printed', printedHkid], ['form', formHkid]] as const).find(([, f]) => f && hkidCheckDigitValid(f.value));
+    const cands = ([['permit', permitHkid], ['printed', printedHkid], ['form', formHkid]] as const).filter(([, f]) => f && hkidCheckDigitValid(f.value));
+    // 修正值要有另一個獨立（未修正）來源同值先可用
+    const alt = cands.find(([, f]) => !isFixed(f) || cands.some(([, g]) => g !== f && !isFixed(g) && g!.value === f!.value));
     if (alt) {
       hkidFinal = { ...alt[1]!, level: 'low', note: `secondary_source_${alt[0]}` };
       flags.push('hkid_from_secondary');
@@ -224,7 +228,7 @@ export function aggregateDoc(
     const needFix = !hkidCheckDigitValid(hkidFinal.value) || hkidFinal.note === 'repaired';
     if (needFix) {
       for (const f of [permitHkid, formHkid]) {
-        if (f && hkidCheckDigitValid(f.value) && editDistance(f.value, hkidFinal.value) <= 2) {
+        if (f && !isFixed(f) && hkidCheckDigitValid(f.value) && editDistance(f.value, hkidFinal.value) <= 2) {
           hkidFinal = { ...hkidFinal, value: f.value, level: 'medium', note: 'corrected_by_corroboration' };
           flags.push('hkid_corrected');
           break;
