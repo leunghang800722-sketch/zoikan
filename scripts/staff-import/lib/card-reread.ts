@@ -9,7 +9,6 @@ import { existsSync } from 'node:fs';
 import { canonicalHkid, hkidCheckDigitValid } from './hkid';
 import { createHash } from 'node:crypto';
 import { normZh } from '@/lib/guards/import/text';
-import { sameEnglishTokens } from '@/lib/triage/generators/guard-import';
 import { scanPageHkids } from './extract';
 import { inBox, type Box } from './embedded-card';
 import { detectEmbeddedCards, rotateLines, type Rotation } from './triage-evidence-core';
@@ -150,12 +149,68 @@ export function corroborate(cardHkid: string | null, printed: readonly string[],
   return c && fv.includes(c) ? 'no_printed' : 'conflict';
 }
 
-/** TE-4.1：卡上讀到嘅姓名 vs 包內任何已有姓名（唔理 status、就算冇出建議）。 */
-export function cardNamesConflict(pkg: { nameZh?: string | null; nameEn?: string | null }, card: { nameZh?: string | null; nameEn?: string | null }): boolean {
+const EN_TITLES = /^(MR|MS|MRS|MISS)$/;
+/** 英文名 token（NFKC 大寫、標點當空格、去稱謂）；surname＝逗號前嗰個 token（冇逗號＝null） */
+function enParts(v: string): { toks: string[]; surname: string | null } {
+  const t = v.normalize('NFKC').toUpperCase();
+  const comma = t.indexOf(',');
+  const clean = (x: string) => x.replace(/[^A-Z]+/g, ' ').trim().split(' ').filter((w) => w && !EN_TITLES.test(w));
+  const toks = clean(t);
+  const surname = comma > 0 ? (clean(t.slice(0, comma)).slice(-1)[0] ?? null) : null;
+  return { toks, surname };
+}
+/** 若 t 等於 pool 內兩個 token 連寫（任何次序）就將呢兩個併成一個（TAIMAN ≈ TAI + MAN）。 */
+function mergeConcat(pool: string[], t: string): string[] {
+  for (let i = 0; i < pool.length; i++) for (let j = 0; j < pool.length; j++) if (i !== j && pool[i]! + pool[j]! === t) return pool.filter((_, k) => k !== i && k !== j).concat(t);
+  return pool;
+}
+/**
+ * TE-4.2 S2：放寬嘅英文名比對（只用嚟卡 vs 包內一致性，唔影響銀行配對用嘅 sameEnglishTokens）：
+ * 接受縮寫（只比首字母，CHAN T M ≈ CHAN TAI MAN）同名字連寫（TAIMAN ≈ TAI MAN）；token 數要相同；姓氏要相同（有逗號就係逗號前嗰個，冇就至少一個 ≥2 字母嘅完整 token 相同）。
+ */
+export function looseEnglishNameMatch(a: string, b: string): boolean {
+  const A = enParts(a);
+  const B = enParts(b);
+  let x = [...A.toks];
+  let y = [...B.toks];
+  if (x.length === 0 || y.length === 0) return false;
+  for (const t of [...x]) if (!y.includes(t) && t.length > 2) y = mergeConcat(y, t);
+  for (const t of [...y]) if (!x.includes(t) && t.length > 2) x = mergeConcat(x, t);
+  if (x.length !== y.length || x.length < 2) return false;
+  const exact: string[] = [];
+  const rest = [...y];
+  const left: string[] = [];
+  for (const t of x) {
+    const i = rest.indexOf(t);
+    if (i >= 0) {
+      rest.splice(i, 1);
+      if (t.length >= 2) exact.push(t);
+    } else left.push(t);
+  }
+  for (const t of left) {
+    const i = rest.findIndex((u) => (t.length === 1 && u.startsWith(t)) || (u.length === 1 && t.startsWith(u)));
+    if (i < 0) return false;
+    rest.splice(i, 1);
+  }
+  const sn = A.surname ?? B.surname;
+  return sn ? exact.includes(sn) : exact.length >= 1;
+}
+
+/**
+ * TE-4.1／4.2：卡上讀到嘅姓名／出生日期 vs 包內已有資料（唔理 status、就算冇出建議；出生日期只比已確認）。
+ *  - 中文名兩邊都有而且一致（normZh）→ 唔理英文名差異；中文名兩邊都有但唔同 → 唔一致；
+ *  - 否則英文名用 looseEnglishNameMatch（縮寫／連寫／姓氏相同）；
+ *  - 出生日期：包內已確認而卡上讀到唔同日 → 唔一致。
+ */
+export function cardNamesConflict(pkg: { nameZh?: string | null; nameEn?: string | null; dobConfirmed?: string | null }, card: { nameZh?: string | null; nameEn?: string | null; dob?: string | null }): boolean {
   const pz = pkg.nameZh?.trim();
   const pe = pkg.nameEn?.trim();
-  if (card.nameZh && pz && normZh(card.nameZh) !== normZh(pz)) return true;
-  if (card.nameEn && pe && !sameEnglishTokens(card.nameEn, pe)) return true;
+  if (card.dob && pkg.dobConfirmed && card.dob.trim() !== pkg.dobConfirmed.trim()) return true;
+  if (card.nameZh && pz) {
+    if (normZh(card.nameZh) !== normZh(pz)) return true;
+    return false; // 中文名一致：唔理英文名差異
+  }
+  if (card.nameEn && pe && !looseEnglishNameMatch(card.nameEn, pe)) return true;
   return false;
 }
 
