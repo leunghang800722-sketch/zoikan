@@ -8,6 +8,7 @@ import {
   extractIdCard,
   embeddedCardLines,
   extractPermit,
+  scanPageHkids,
   type AddressResult,
   type Classified,
   type Field,
@@ -37,6 +38,7 @@ export interface DocExtract {
   aux: {
     formHkid: Field | null;
     permitHkid: Field | null;
+    printedHkid: Field | null;
     formAddress: Field | null;
     formNameZh: Field | null;
     formNameEn: Field | null;
@@ -109,6 +111,7 @@ export function aggregateDoc(
   const addrs: AddressResult[] = [];
   const forms: FormResult[] = [];
   const permitHkids: Field[] = [];
+  const printedAll: Field[] = [];
   const flagsTmp: string[] = [];
   pages.forEach((p, i) => {
     const kinds = classified[i].kinds;
@@ -129,6 +132,8 @@ export function aggregateDoc(
       const r = extractPermit(p.page, p.lines);
       if (r.hkid) permitHkids.push(r.hkid);
     }
+    // TE-3：每頁（包括 other／certificate）每行「行內任何位置」搵印刷 HKID，check digit 通過先收；身份證卡頁本身已由 extractIdCard 處理
+    if (!p.alt && !kinds.includes('id_card')) printedAll.push(...scanPageHkids(p.page, p.lines));
   });
 
   const flags: string[] = [...new Set(flagsTmp)];
@@ -203,6 +208,17 @@ export function aggregateDoc(
 
   const formHkid = bestBy(forms.map((f) => f.hkid).filter((f): f is Field => !!f), (f) => (hkidCheckDigitValid(f.value) ? 10 : 0) + f.conf);
   const permitHkid = bestBy(permitHkids, (f) => f.conf);
+  // TE-3：身份證頁冇讀到 HKID 時，後備來源優先次序 permit > printed > form（只收 check digit 通過；印刷來源多於一個唯一值＝可能夾家人，唔用）
+  const printedVals = new Set(printedAll.map((f) => f.value));
+  const printedHkid = printedVals.size === 1 ? bestBy(printedAll, (f) => f.conf) : null;
+  if (printedVals.size > 1) flags.push('hkid_printed_multiple');
+  if (!hkidFinal) {
+    const alt = ([['permit', permitHkid], ['printed', printedHkid], ['form', formHkid]] as const).find(([, f]) => f && hkidCheckDigitValid(f.value));
+    if (alt) {
+      hkidFinal = { ...alt[1]!, level: 'low', note: `secondary_source_${alt[0]}` };
+      flags.push('hkid_from_secondary');
+    }
+  }
   if (hkidFinal) {
     // 身份證頁讀出嚟 check digit 唔啱（或靠修補）時，若許可證／申請表有 check digit 啱而且只差 ≤2 字，視為 OCR 錯字，採用佢（保留 note）
     const needFix = !hkidCheckDigitValid(hkidFinal.value) || hkidFinal.note === 'repaired';
@@ -236,6 +252,7 @@ export function aggregateDoc(
     aux: {
       formHkid,
       permitHkid,
+      printedHkid,
       formAddress: bestBy(forms.map((f) => f.address).filter((f): f is Field => !!f), (f) => f.conf),
       formNameZh: bestBy(forms.map((f) => f.nameZh).filter((f): f is Field => !!f), (f) => f.conf),
       formNameEn: bestBy(forms.map((f) => f.nameEn).filter((f): f is Field => !!f), (f) => f.conf),

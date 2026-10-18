@@ -9,7 +9,7 @@ import { normTel8, normZh, parseBirthDate } from "@/lib/guards/import/text";
 import type { ExtDecision } from "@/lib/guards/import/ext";
 import { HKICL_BANK_OPTIONS } from "@/lib/longterm-payroll/hkicl-bank-codes";
 import { normalizeStaffNumber } from "@/lib/guards/staff-numbers";
-import type { QuestionEvidence, QuestionKind, QuestionOption, ReviewField, TriageAnswer } from "./types";
+import { EXTRA_NAME_OPTIONS, type QuestionEvidence, type QuestionKind, type QuestionOption, type ReviewField, type TriageAnswer } from "./types";
 
 export interface ResolvedWrite {
   mode: "write";
@@ -171,6 +171,13 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
     }
     default:
       throw BadRequest("唔支援嘅選項");
+  }
+
+  // TE-3：補姓名（人手對住證據圖輸入）——直接當 confirmed 寫入包內 person；preview／answer 同一路徑
+  if (answer.extra && (answer.extra.name_zh || answer.extra.name_en)) {
+    if (!EXTRA_NAME_OPTIONS.includes(answer.option)) throw BadRequest("呢個選項唔使補姓名");
+    if (answer.extra.name_zh) person.nameZh = { value: requireName(answer.extra.name_zh), status: "confirmed" };
+    if (answer.extra.name_en) person.nameEn = { value: answer.extra.name_en.trim(), status: "confirmed" };
   }
 
   return {

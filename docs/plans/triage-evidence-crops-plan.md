@@ -92,3 +92,5 @@
 - **S3（Opus）**：非個人資料欄（電話、入職日期、牌照號）越界檢查遇個人資料 label → 直接跳過（`cell_overflow_pii`），唔收界重裁。**S4（Opus）**：無預期值 hkid 圖（printed／嵌入卡）如果該人有 confirmed 姓名，同頁 OCR 行要有相似姓名（中文字元重疊 ≥0.5／英文 token 近乎吻合覆蓋 ≥0.5）先出圖，否則 `cross_name_mismatch`。
 - **S1（Opus）導入分類備註**：分類改動（一頁多 kind、嵌入卡補標 id_card）**唔重跑導入**；**重跑導入前先用新舊 extract 逐欄計數對比**（hkid／姓名／出生日期有值嘅人數、各 kind 頁數），確認改動方向合理先正式跑。
 
+## 9. TE-3（老闆試用反饋）
+(1) 題卡淨顯示問題欄裁圖（`requiredFieldsFor` 收窄，讀取時過濾，孤兒由 cleanup 刪）。(2) 「確認寫入」灰色問題：preview 回 `needs_fields`＋`reason_text`，answer 加 `extra` 姓名，UI 一鍵確認＋同卡展開補姓名（附姓名裁圖）。全部 reason code 皆有人話（`BLOCK_TEXT`）；可補姓名嘅兩個有 needs_fields，其餘講下一步（揀其他選項／跳過）。(3) 導入抽取行內 HKID 搜尋＋OCR 混淆修正＋`printedHkid` 來源；下次導入生效。

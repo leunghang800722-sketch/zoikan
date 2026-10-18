@@ -26,6 +26,7 @@ const CN = RUN.replace(/\d/g, (d) => "〇一二三四五六七八九"[Number(d)]
 const P = [
   { n: 1, name: `導入測試員${CN}壹`, hkid: mkHkid(`66${RUN}1`), no: `ZE${RUN}1` },
   { n: 2, name: `導入測試員${CN}貳`, hkid: mkHkid(`66${RUN}2`), no: `ZE${RUN}2` },
+  { n: 3, name: "", hkid: mkHkid(`66${RUN}3`), no: `ZE${RUN}3` }, // TE-3：無證、冇姓名嘅人（hkid 係人手輸入嗰個）
 ];
 const f = (value: string | null, status = "confirmed") => ({ value, status });
 const personOf = (p: (typeof P)[number], over: Record<string, unknown> = {}) => ({
@@ -43,7 +44,7 @@ const personOf = (p: (typeof P)[number], over: Record<string, unknown> = {}) => 
   conflicts: [],
   ...over,
 });
-const keyOf = (p: (typeof P)[number]) => serverPersonKey({ key: `e2e-te1-${p.n}`, hkid: { value: p.hkid }, staffNumbers: [{ number: p.no }] });
+const keyOf = (p: (typeof P)[number]) => serverPersonKey({ key: `e2e-te1-${p.n}`, hkid: { value: p.n === 3 ? null : p.hkid }, staffNumbers: [{ number: p.no }] });
 
 async function cleanup() {
   const ss = await prisma.triageSession.findMany({ where: { sourceRef: REF }, select: { id: true } });
@@ -200,5 +201,81 @@ test.describe("TE-1 覆核證據裁圖", () => {
     expect(anon.status()).toBe(401);
     const res = await page.request.get("/api/triage/evidence-images/00000000-0000-4000-8000-000000000000");
     expect(res.status()).toBe(404);
+  });
+
+  test("TE-3 375px：無證冇姓名 → 揀輸入身份證號 → 一鍵「確認寫入」自動預覽 → 同一張卡展開姓名輸入＋姓名裁圖 → 填中文姓名自動重預覽 → 一鍵寫入建檔；答咗身份證號／姓名圖即刪", async ({ page }) => {
+    await cleanup();
+    const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
+    const ses = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: REF, ownerUserId: boss.id, createdBy: boss.id } });
+    const p3 = P[2]!;
+    const person = personOf(p3, { hkid: f(null, "missing"), nameZh: f(null, "missing"), nameEn: f(null, "missing"), rating: "fail" });
+    await prisma.triageQuestion.create({
+      data: {
+        sessionId: ses.id,
+        kind: "no_id_card",
+        groupKey: "e2e-te1-3",
+        sort: 1,
+        title: "no_id_card",
+        personKey: keyOf(p3),
+        evidenceJson: { v: 1, person, reasons: [], candidate_guard_ids: [] } as never,
+        optionsJson: [{ id: "enter_hkid", label: "輸入身份證號", input: "hkid" }, { id: "skip", label: "skip" }] as never,
+      },
+    });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "te3e2e-"));
+    try {
+      const m = { staff_numbers: [p3.no] };
+      const items = [
+        { bytes: realJpeg(dir, "h.jpg", 240, 60, 30), field: "hkid", doc_kind: "id_card", priority: 1, match: m },
+        { bytes: realJpeg(dir, "z.jpg", 240, 60, 60), field: "name_zh", doc_kind: "id_card", priority: 1, match: m },
+        { bytes: realJpeg(dir, "e.jpg", 240, 60, 90), field: "name_en", doc_kind: "id_card", priority: 1, match: m },
+        { bytes: realJpeg(dir, "d.jpg", 240, 60, 120), field: "dob", doc_kind: "id_card", priority: 1, match: m }, // TE-3：唔需要 dob → skipped_not_needed
+      ];
+      const entries: Record<string, Uint8Array | string> = {};
+      const manifest = items.map((it) => {
+        const file = entryName(it.bytes);
+        entries[file] = it.bytes;
+        return { file, field: it.field, doc_kind: it.doc_kind, priority: it.priority, match: it.match };
+      });
+      entries["manifest.json"] = JSON.stringify({ version: 1, items: manifest });
+      const zip = await buildZip(entries);
+      await page.setViewportSize(MOBILE);
+      await loginAs(page, "老闆");
+      await page.goto("/triage");
+      const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
+      await card.getByTestId("triage-more").click();
+      await card.getByTestId("triage-evidence-upload").click();
+      const dlg = page.getByTestId("evidence-upload-dialog");
+      await dlg.getByTestId("evidence-upload-file").setInputFiles({ name: "裁圖.zip", mimeType: "application/zip", buffer: Buffer.from(zip) });
+      await expect(dlg.getByTestId("evidence-upload-accepted")).toContainText("可儲存 3 張");
+      await dlg.getByTestId("evidence-upload-apply").click();
+      await expect(dlg.getByTestId("evidence-upload-accepted")).toContainText("已儲存 3 張");
+      await dlg.getByTestId("evidence-upload-close").click();
+
+      await card.getByRole("button", { name: /繼續答/ }).click();
+      // 題卡頂：只見身份證號裁圖（姓名圖喺需要補嗰陣先喺輸入框旁出現）
+      const sec = page.getByTestId("evidence-section");
+      await expect(sec.getByTestId("evidence-img")).toHaveCount(1);
+      await page.getByRole("radio").first().check();
+      await page.getByPlaceholder("例：A123456(3)").fill(p3.hkid);
+      // 一鍵：直接撳「確認寫入」（冇預覽過）→ 自動預覽 → 見到要補姓名
+      await page.getByTestId("triage-confirm").click();
+      const need = page.getByTestId("triage-needs-fields");
+      await expect(need).toBeVisible();
+      await expect(need.getByTestId("evidence-img")).toHaveCount(2); // 中文姓名圖＋英文姓名圖
+      await expect(page.getByTestId("triage-reason-text")).toContainText("姓名");
+      expect(await prisma.guard.count({ where: { hkid: p3.hkid } })).toBe(0); // 未寫
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      // 填中文姓名 → 自動重新預覽（reason 消失）→ 一鍵寫入
+      await page.getByTestId("triage-extra-name_zh").fill(`補名測試員${CN}`);
+      await expect(page.getByTestId("triage-reason-text")).toHaveCount(0, { timeout: 10_000 });
+      await expect(page.getByTestId("triage-extra-name_zh")).toBeVisible(); // 補完仍見輸入框
+      await page.getByTestId("triage-confirm").click();
+      await expect.poll(() => prisma.guard.count({ where: { hkid: p3.hkid } }), { timeout: 15_000 }).toBe(1);
+      const g = await prisma.guard.findFirstOrThrow({ where: { hkid: p3.hkid }, select: { nameZh: true } });
+      expect(g.nameZh).toBe(`補名測試員${CN}`);
+      await expect.poll(() => prisma.triageEvidenceImage.count({ where: { sessionId: ses.id } }), { timeout: 15_000 }).toBe(0); // hkid＋姓名圖答咗即刪
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

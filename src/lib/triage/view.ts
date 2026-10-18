@@ -362,6 +362,66 @@ export interface ImpactView {
   changes: { table: string; action: "create" | "update"; label: string; guard_id: string | null; fields: { label: string; from: string | null; to: string }[] }[];
   field_outcomes: { field: string; label: string; outcome: string }[];
   notes: string[];
+  /** TE-3：can_confirm=false 時嘅人話原因（取代只有原因碼）＋下一步 */
+  reason_text?: string;
+  /** TE-3：補咗呢啲資料就可以過（UI 喺同一張卡展開輸入框）；required=false 嘅欄可以留空 */
+  needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
+}
+
+/** TE-3：令 can_confirm=false 嘅原因碼 → 人話＋下一步（唔再淨係「原因碼」）。 */
+export const BLOCK_TEXT: Record<string, string> = {
+  create_no_name: "呢位保安員冇姓名，要一併輸入先可以建立",
+  name_not_confirmed: "姓名未確認，要輸入／確認中文姓名先可以建立",
+  create_hkid_not_confirmed: "身份證號未確認，唔可以建立：請揀「輸入身份證號」並輸入合法號碼",
+  hkid_not_confirmed_no_other_key: "身份證號未確認，又冇工號／電話可以對上現有保安員：請輸入身份證號",
+  guard_has_other_hkid_unconfirmed: "同名現有保安員已有另一個身份證號：請核對身份證號，或者揀「連去現有保安員」",
+  extract_fail: "證件讀取失敗：請輸入身份證號",
+  tel_only_candidate: "淨係電話對到現有保安員：請揀「連去」嗰位，或者核對資料",
+  name_only_candidate: "淨係姓名對到現有保安員，冇硬證據：請揀「連去」嗰位，或者輸入身份證號",
+  name_multi_candidate: "有幾個同名嘅現有保安員：請揀其中一位連去",
+  same_name_different_dob: "同名現有保安員，但出生日期唔同：請核對後揀「連去」或者「新開」",
+  staffno_shared_by_persons: "同一個工號出現喺導入包內多個人：請揀「唔寫有爭議嘅工號／電話」",
+  dup_tel_across_persons: "同一個電話出現喺導入包內多個人：請揀「唔寫有爭議嘅工號／電話」",
+  group_name_differs: "同一個身份證喺唔同檔案嘅姓名唔一致：請核對姓名",
+  duplicate_hkid_in_package: "導入包內有重複身份證：請核對後處理",
+  duplicate_key_in_package: "導入包內有重複記錄：請核對後處理",
+  hkid_multi_guard: "多個現有保安員用同一個身份證號：請先處理重複保安員",
+  staffno_multi_guard: "工號對到多個現有保安員：請先處理工號重複",
+  hkid_vs_staffno_differ: "身份證同工號指向唔同嘅現有保安員：請核對，揀其中一位連去",
+  guard_hkid_differs: "該保安員已有另一個身份證號：請核對身份證號",
+  tel_belongs_to_other_guard: "電話屬於另一位現有保安員：請核對電話或者揀「連去」嗰位",
+  tel_guard_has_other_hkid: "電話對到嘅現有保安員有另一個身份證號：請核對",
+  tel_multi_guard: "電話對到多位現有保安員：請核對電話",
+  name_differs_from_guard: "姓名同現有保安員紀錄唔同：請核對",
+  same_name_different_hkid: "同名但現有保安員嘅身份證號唔同：請核對，唔好亂連",
+  forced_guard_missing: "揀咗嘅保安員已經唔存在：請重新載入再揀",
+  hkid_belongs_to_other_guard: "呢個身份證號已屬於另一位保安員：請核對身份證號，或者改揀「連去現有保安員」",
+  apply_failed: "套用失敗：請稍後再試，仍然唔得就跳過留返人手",
+  overwrite_forbidden: "要有保安員個人資料／保安員修改權限嘅同事處理（你冇權覆蓋現有資料）",
+  longterm_hire_via_triage: "長工入職日期會影響長工糧：要喺分診題逐條確認，唔可以批量",
+  staffno_belongs_to_other: "有工號屬於另一個保安員：請先處理另一題",
+  staffno_scheme_has_other_current: "有工號同現有工號類別重複：請先處理另一題",
+  staffno_invalid: "有工號格式唔合法：請核對工號",
+  bank_incomplete: "銀行資料四欄唔齊：只可以跳過，唔准砌半套戶口",
+  bank_acct_belongs_to_other: "呢個戶口已屬於另一位保安員：請先處理另一題",
+  bank_acct_shared_by_persons: "同一個戶口出現喺導入包內多個人：請先處理另一題",
+};
+const NAME_REASONS_NEEDING_INPUT = new Set(["create_no_name", "name_not_confirmed"]);
+
+/**
+ * TE-3：can_confirm=false 時嘅解釋。reasons＝applyOnePerson 結果嘅原因碼；optionId＝今次揀嘅選項。
+ * 缺姓名類原因而且選項容許補姓名（extraOptions）→ 回 needs_fields（中文姓名必填、英文姓名可選）。
+ */
+export function explainBlocked(reasons: readonly string[], optionId: string, extraOptions: readonly string[], alreadyGaveName = false): Pick<ImpactView, "reason_text" | "needs_fields"> {
+  const uniq = [...new Set(reasons)];
+  const texts = uniq.map((r) => BLOCK_TEXT[r]).filter((x): x is string => !!x);
+  const unknown = uniq.filter((r) => !BLOCK_TEXT[r]);
+  const needs = !alreadyGaveName && extraOptions.includes(optionId) && uniq.some((r) => NAME_REASONS_NEEDING_INPUT.has(r));
+  const parts = [...texts, ...(unknown.length ? ["照呢個答案暫時未能寫入：請揀其他選項，或者跳過留返人手處理"] : [])];
+  return {
+    reason_text: parts.length ? parts.join("；") : "照呢個答案唔會寫入任何資料：請揀其他選項，或者跳過留返人手處理",
+    ...(needs ? { needs_fields: [{ field: "name_zh" as const, label: "中文姓名", required: true }, { field: "name_en" as const, label: "英文姓名", required: false }] } : {}),
+  };
 }
 
 export function buildImpact(result: PersonResult, changes: readonly WriteChange[], c: ViewerCaps): ImpactView {

@@ -3,7 +3,7 @@
 // 鐵則：欄位值／姓名／檔名／路徑唔入 console、唔入 zip entry 名（entry 名＝圖 sha256 前 32 位）。
 import JSZip from 'jszip';
 import { createHash } from 'node:crypto';
-import { findHkidCandidates, hkidCheckDigitValid } from './hkid';
+import { findHkidCandidates, hkidCheckDigitValid, hkidSpanInLine } from './hkid';
 import { cardRegion, extractIdCard, isIdAnchorLine } from './extract';
 import { cy, norm, type OcrLine } from './ocr';
 import { padAround } from './crop-pad';
@@ -726,10 +726,19 @@ export function findPrintedHkidLines(lines: readonly OcrLine[], aspect: number, 
   if (lines.some((l) => isIdAnchorLine(l.t))) return [];
   const out: { rot: Rotation; line: OcrLine }[] = [];
   for (const l of lines) {
-    if (!l.t.trim() || !isHkidFormatLine(l.t) || inCard(l)) continue;
+    if (!l.t.trim() || inCard(l)) continue;
+    // TE-3：行內任何位置搜尋（NFKC＋check digit），號碼前後有文字（例「身份證號碼：A123456(7) 簽發…」）時只裁號碼嘅 x 範圍（按字元比例）
+    const span = hkidSpanInLine(l.t);
+    if (!span && !isHkidFormatLine(l.t)) continue;
     const horizontal = l.w * aspect >= l.h;
     const rot: Rotation = horizontal ? 0 : 90;
-    out.push({ rot, line: rotateLines([l], rot)[0]! });
+    let src: OcrLine = l;
+    if (span && horizontal && (span.start > 0 || span.end < span.len)) {
+      const f0 = Math.max(0, span.start - 0.5) / span.len;
+      const f1 = Math.min(span.len, span.end + 0.5) / span.len;
+      src = { ...l, x: l.x + l.w * f0, w: l.w * (f1 - f0) }; // 側躺行文字方向未定，唔裁 x 範圍
+    }
+    out.push({ rot, line: rotateLines([src], rot)[0]! });
   }
   return out;
 }
