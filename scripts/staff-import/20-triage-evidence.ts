@@ -12,6 +12,7 @@
 //     staff-fields/crops 嘅 form_personal 係成條個人資料帶（含其他欄），違反欄位級權限（M3），所以唔用。
 // 輸出：縮至長邊 ≤800px、JPEG、-strip 剝 EXIF/APPn、≤120 KB；zip（entry 名＝圖 sha256 前 32 位）分批每 zip ≤300 張／≤7 MB。console 只計數。
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -28,8 +29,13 @@ import {
   SHRINK_EDGES,
   boxForRequest,
   buildEvidenceZips,
+  VERIFY_THRESHOLD,
   detectUprightRotation,
+  expectedValuesFor,
   rotateLines,
+  similarity,
+  textUprightness,
+  type EvidenceField,
   type Rotation,
   evidenceFieldsOf,
   magickOutArgs,
@@ -58,10 +64,14 @@ export interface Args {
   limit: number | null;
   onlyKey: string | null;
   concurrency: number;
+  /** TE-1.7：唔做 Vision 驗證 */
+  noVerify: boolean;
+  /** TE-1.7：vision-ocr 執行檔（要支援 --fast）；預設由 vision-ocr.swift 編譯到 os.tmpdir */
+  visionBin: string | null;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', ocrDir: null, existingCrops: [], out: null, dry: false, limit: null, onlyKey: null, concurrency: 2 };
+  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', ocrDir: null, existingCrops: [], out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, noVerify: false, visionBin: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => {
@@ -78,6 +88,8 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (k === '--existing-crops') a.existingCrops.push(...v().split(',').map((x) => x.trim()).filter(Boolean));
     else if (k === '--out') a.out = v();
     else if (k === '--dry') a.dry = true;
+    else if (k === '--no-verify') a.noVerify = true;
+    else if (k === '--vision-bin') a.visionBin = v();
     else if (k === '--only-key') a.onlyKey = v();
     else if (k === '--limit') {
       const x = v();
@@ -132,9 +144,11 @@ export interface Deps {
   render(doc: DocPage): Promise<string | null>;
   /** 清理 render 出嚟嘅暫存檔 */
   cleanup(png: string): Promise<void>;
+  /** TE-1.7：Vision 驗證（冇＝唔驗證） */
+  vision?: VisionRunner;
 }
 
-export type FinalizeResult = { bytes: Uint8Array } | { reason: 'photo_suspect' | 'image_spec_fail' };
+export type FinalizeResult = { bytes: Uint8Array; score?: number } | { reason: 'photo_suspect' | 'image_spec_fail' | 'value_mismatch' | 'orientation_unknown' };
 
 /** 暗像素門檻：灰階 <70% 當暗（相片頭髮／衣服／深色格；皮膚色較亮，白底印刷字線條比例低） */
 const DARK_THRESHOLD = '70%';
@@ -187,7 +201,7 @@ async function bandGuard(png: string, tmp: string): Promise<string | null> {
 }
 
 /** png（可選先順時針轉 rotate 度、再裁 box；可選邊緣帶檢查）→ 規格 JPEG（長邊 ≤800、-strip、≤120 KB）。 */
-export async function finalizeChecked(png: string, box: Box | null, tmp: string, opts: { rotate?: Rotation; bandCheck?: boolean; rotatedCache?: Map<string, string> } = {}): Promise<FinalizeResult> {
+export async function finalizeChecked(png: string, box: Box | null, tmp: string, opts: { rotate?: Rotation; bandCheck?: boolean; rotatedCache?: Map<string, string>; verify?: VerifyHook } = {}): Promise<FinalizeResult> {
   let page = png;
   if (opts.rotate) {
     const k = `${png}|${opts.rotate}`;
@@ -210,6 +224,17 @@ export async function finalizeChecked(png: string, box: Box | null, tmp: string,
     src = path.join(tmp, `c-${Math.random().toString(36).slice(2)}.png`);
     await sh(MAGICK, [page, '-crop', `${cw}x${ch}+${x}+${y}`, '+repage', src]);
   }
+  let score: number | undefined;
+  if (opts.verify) {
+    const v = await opts.verify(src);
+    if (!v.ok) return { reason: v.reason };
+    if (v.score !== null) score = v.score;
+    if (v.rotate) {
+      const rp = path.join(tmp, `v-${Math.random().toString(36).slice(2)}.png`);
+      await sh(MAGICK, [src, '-rotate', String(v.rotate), rp]);
+      src = rp;
+    }
+  }
   if (opts.bandCheck) {
     const g = await bandGuard(src, tmp);
     if (!g) return { reason: 'photo_suspect' };
@@ -221,7 +246,7 @@ export async function finalizeChecked(png: string, box: Box | null, tmp: string,
       await sh(MAGICK, [src, ...magickOutArgs(edge, q), out]);
       const bytes = new Uint8Array(await readFile(out));
       await rm(out, { force: true });
-      if (bytes.byteLength <= MAX_IMAGE_BYTES) return { bytes };
+      if (bytes.byteLength <= MAX_IMAGE_BYTES) return { bytes, ...(score !== undefined ? { score } : {}) };
     }
   }
   return { reason: 'image_spec_fail' };
@@ -234,11 +259,97 @@ export async function finalizeImage(png: string, box: Box | null, tmp: string): 
 }
 
 /** 身份證／入職表／住址證明一個欄：偵測方向 → 轉正 lines → 定位 → 轉正頁面 → 裁 → 邊緣帶檢查。回 bytes 或跳過原因。 */
-export async function cropRequest(req: CropRequest, png: string, lines: OcrLine[], tmp: string, rotatedCache?: Map<string, string>): Promise<FinalizeResult | { reason: string }> {
+export async function cropRequest(req: CropRequest, png: string, lines: OcrLine[], tmp: string, rotatedCache?: Map<string, string>, verify?: VerifyHook): Promise<FinalizeResult | { reason: string }> {
   const rot: Rotation = detectUprightRotation(req.docKind, lines) ?? 0;
   const g = boxForRequest(req, rotateLines(lines, rot));
   if (!g.box) return { reason: g.reason ?? 'no_box' };
-  return finalizeChecked(png, g.box, tmp, { rotate: rot, bandCheck: true, rotatedCache });
+  return finalizeChecked(png, g.box, tmp, { rotate: rot, bandCheck: true, rotatedCache, ...(verify ? { verify } : {}) });
+}
+
+// ---------------------------------------------------------------------------
+// TE-1.7 Vision 驗證（本機、離線 Apple Vision；讀出嘅文字只喺記憶體比對，唔寫 log／檔案）
+// ---------------------------------------------------------------------------
+export interface VisionLine {
+  t: string;
+  c: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export interface VisionPage {
+  lines: VisionLine[];
+}
+/** 一次 call 讀多張圖（輸出次序同輸入一致）；fast＝.fast 級別（對方向敏感）。 */
+export type VisionRunner = (paths: string[], fast: boolean) => Promise<VisionPage[]>;
+export type VerifyOutcome = { ok: true; score: number | null; rotate: Rotation } | { ok: false; reason: 'value_mismatch' | 'orientation_unknown' };
+export type VerifyHook = (cropPng: string) => Promise<VerifyOutcome>;
+
+export function makeVisionRunner(bin: string): VisionRunner {
+  return async (paths, fast) => {
+    try {
+      const r = await sh(bin, [...(fast ? ['--fast'] : []), ...paths], { maxBuffer: 64 * 1024 * 1024 });
+      const pages = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l) as { lines?: VisionLine[] });
+      return paths.map((_, i) => ({ lines: pages[i]?.lines ?? [] }));
+    } catch {
+      return paths.map(() => ({ lines: [] }));
+    }
+  };
+}
+
+/** vision-ocr 執行檔：--vision-bin；否則將 vision-ocr.swift 編譯去 os.tmpdir（按源碼 hash 快取，要 swiftc）。冇＝null（自動 no-verify）。 */
+export async function resolveVisionBin(explicit: string | null): Promise<string | null> {
+  if (explicit) return existsSync(explicit) ? explicit : null;
+  const src = path.join(path.dirname(fileURLToPath(import.meta.url)), 'vision-ocr.swift');
+  const hash = createHash('sha256').update(await readFile(src)).digest('hex').slice(0, 8);
+  const dir = path.join(os.tmpdir(), `te1-vision-${hash}`);
+  const bin = path.join(dir, 'vision-ocr');
+  if (existsSync(bin)) return bin;
+  try {
+    await mkdir(dir, { recursive: true });
+    await sh('swiftc', ['-O', src, '-o', bin], { timeout: 300_000 });
+    return bin;
+  } catch {
+    return null;
+  }
+}
+
+const rotateFile = async (png: string, deg: Rotation, tmp: string): Promise<string> => {
+  if (deg === 0) return png;
+  const out = path.join(tmp, `vr-${deg}-${Math.random().toString(36).slice(2)}.png`);
+  await sh(MAGICK, [png, '-rotate', String(deg), out]);
+  return out;
+};
+const textOf = (p: VisionPage | undefined): string => (p?.lines ?? []).map((l) => l.t).join(' ');
+
+/**
+ * 驗證一張裁圖：
+ *  ① .accurate 讀一次（對方向**不敏感**——實測 Vision 四個方向都讀到同一串字，所以唔能夠靠「四方向邊個最像」揀方向）→ 同預期值比相似度，低過門檻＝value_mismatch（裁錯欄／錯人／發票抬頭）；
+ *  ② 方向：由行 box 縱橫比分「橫排（0°／180°）」同「側躺（90°／270°）」兩個候選；再用 .fast（對方向敏感：正向先讀得準）讀兩個候選，
+ *     相似度明顯較高（≥0.5 且差 ≥0.2）者勝；分唔出：橫排當 0°（沿用版面推算嘅 prior），側躺＝orientation_unknown（跳過）。
+ *     限制：中文姓名 .fast 讀唔準，180° 倒轉嘅純中文裁圖分唔出（只靠版面 prior）。
+ * 冇預期值（例如身份證號 missing）＝無法驗證（score null，唔轉）。
+ */
+export async function verifyCrop(png: string, field: EvidenceField, expected: readonly string[], run: VisionRunner, tmp: string): Promise<VerifyOutcome> {
+  if (expected.length === 0) return { ok: true, score: null, rotate: 0 };
+  // Vision 輸入：放大到高度 ≥200px（上限 4×）＋四邊留白 24px——細裁圖直接讀會漏字
+  const { h } = await sizeOf(png);
+  const scale = Math.min(4, Math.max(1, 200 / Math.max(1, h)));
+  const vin = path.join(tmp, `vin-${Math.random().toString(36).slice(2)}.png`);
+  await sh(MAGICK, [png, ...(scale > 1.01 ? ['-filter', 'Lanczos', '-resize', `${Math.round(scale * 100)}%`] : []), '-bordercolor', 'white', '-border', '24', vin]);
+  const [acc] = await run([vin], false);
+  const score = similarity(field, textOf(acc), expected);
+  if (score < VERIFY_THRESHOLD[field]) return { ok: false, reason: 'value_mismatch' };
+  const vs = await sizeOf(vin);
+  const sideways = textUprightness(acc?.lines ?? [], vs.w, vs.h) < 0;
+  const cands: Rotation[] = sideways ? [90, 270] : [0, 180];
+  const files = await Promise.all(cands.map((d) => rotateFile(vin, d, tmp)));
+  const fast = await run(files, true);
+  const sc = fast.map((p) => similarity(field, textOf(p), expected));
+  const [a, b] = [sc[0] ?? 0, sc[1] ?? 0];
+  if (Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]! };
+  if (!sideways) return { ok: true, score, rotate: 0 };
+  return { ok: false, reason: 'orientation_unknown' };
 }
 
 export interface Stats {
@@ -254,10 +365,13 @@ export interface Stats {
   by_doc_priority: Record<string, number>;
   skipped: Record<string, number>;
   existing_ignored_entries: number;
+  /** TE-1.7：Vision 驗證通過／冇預期值或冇 Vision 未驗證 */
+  verified: number;
+  unverified: number;
   zips: number;
   zip_bytes: number;
 }
-export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, zips: 0, zip_bytes: 0 });
+export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, zips: 0, zip_bytes: 0 });
 const bump = (r: Record<string, number>, k: string) => {
   r[k] = (r[k] ?? 0) + 1;
 };
@@ -265,6 +379,8 @@ const bump = (r: Record<string, number>, k: string) => {
 export interface PersonInput {
   person: PkgPerson;
   docs: DocPage[];
+  /** 額外候選值／讀數（例如 person-fields 嘅 candidates），只用嚟驗證 */
+  extra?: Partial<Record<EvidenceField, string[]>>;
 }
 
 /** 核心：每人 → 請求 → 圖（現成優先；否則 OCR 幾何即時裁）→ items。純粹經 deps 做 IO。 */
@@ -284,6 +400,11 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const reqs = planRequests(fields, pi.docs);
       const pageCache = new Map<string, string | null>();
       const rotCache = new Map<string, string>();
+      const hookFor = (req: CropRequest): VerifyHook | undefined => {
+        if (!deps.vision) return undefined;
+        const expected = expectedValuesFor(req.field, pi.person, pi.extra?.[req.field] ?? []);
+        return (png) => verifyCrop(png, req.field, expected, deps.vision!, tmp);
+      };
       const getPage = async (d: DocPage) => {
         const k = `${d.docId}|${d.page}`;
         if (!pageCache.has(k)) pageCache.set(k, await deps.render(d));
@@ -295,11 +416,13 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
           let bytes: Uint8Array | null = null;
           let from: 'existing' | 'live' = 'live';
           let skip: string | null = null;
+          let score: number | undefined;
           const ex = req.docKind === 'address_proof' ? deps.existing(req) : null; // M8：身份證一律即時裁；入職表（成行裁、含相片）亦一律即時單格裁；現成圖只用於住址證明
           if (ex) {
-            const r = await finalizeChecked(ex, null, tmp, { bandCheck: true }).catch(() => ({ reason: 'image_spec_fail' as const }));
+            const r = await finalizeChecked(ex, null, tmp, { bandCheck: true, ...(hookFor(req) ? { verify: hookFor(req)! } : {}) }).catch(() => ({ reason: 'image_spec_fail' as const }));
             if ('bytes' in r) {
               bytes = r.bytes;
+              score = r.score;
               from = 'existing';
             } else skip = r.reason;
           }
@@ -310,8 +433,11 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
               const png = await getPage(req.doc);
               if (!png) skip = 'render_fail';
               else {
-                const r = await cropRequest(req, png, lines, tmp, rotCache).catch(() => ({ reason: 'image_spec_fail' }));
-                if ('bytes' in r) bytes = r.bytes;
+                const r = await cropRequest(req, png, lines, tmp, rotCache, hookFor(req)).catch(() => ({ reason: 'image_spec_fail' }));
+                if ('bytes' in r) {
+                  bytes = r.bytes;
+                  score = (r as { score?: number }).score;
+                }
                 else skip = r.reason;
                 from = 'live';
               }
@@ -321,7 +447,9 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
             bump(stats.skipped, skip ?? 'image_spec_fail');
             continue;
           }
-          items.push({ bytes, field: req.field, docKind: req.docKind, priority: req.priority, match });
+          if (score !== undefined) stats.verified += 1;
+          else stats.unverified += 1;
+          items.push({ bytes, field: req.field, docKind: req.docKind, priority: req.priority, match, ...(score !== undefined ? { verifyScore: score } : {}) });
           if (from === 'existing') stats.from_existing += 1;
           else stats.live_cropped += 1;
           bump(stats.by_field, req.field);
@@ -424,7 +552,27 @@ async function loadLive(args: Args): Promise<Loaded> {
   if (args.onlyKey) persons = persons.filter((p) => p.key === args.onlyKey);
   persons = persons.filter((p) => evidenceFieldsOf(p).length > 0);
   if (args.limit) persons = persons.slice(0, args.limit);
-  return { people: persons.map((person) => ({ person, docs: pickDocPages(docIdsForPerson(person, staffIdx), extractBy) })), deps, existingIgnored: ex.ignored, personsTotal };
+  // 額外候選值／讀數：person-fields-ext 若帶 `fields.<欄>.value／candidates` 就一併當預期值（淨用嚟驗證）
+  const normNo = (x: string) => x.normalize('NFKC').toUpperCase().replace(/\s+/g, '');
+  type ExtFields = Record<string, { value?: string | null; candidates?: string[] }>;
+  const extByNo = new Map<string, ExtFields[]>();
+  for (const r of ext as (ExtRow & { fields?: ExtFields })[]) {
+    if (!r.fields) continue;
+    for (const no of [...(r.key ? [r.key] : []), ...(r.staffNos ?? [])]) extByNo.set(normNo(no), [...(extByNo.get(normNo(no)) ?? []), r.fields]);
+  }
+  const PKG_TO_EXT: Partial<Record<EvidenceField, string>> = { hkid: 'hkid', name_zh: 'nameZh', name_en: 'nameEn', dob: 'dateOfBirth', phone: 'phone', address: 'address' };
+  const extraOf = (person: PkgPerson): PersonInput['extra'] => {
+    const out: Partial<Record<EvidenceField, string[]>> = {};
+    for (const f of Object.keys(PKG_TO_EXT) as EvidenceField[]) {
+      const vals = person.staffNumbers.flatMap((n) => extByNo.get(normNo(n.number)) ?? []).flatMap((fl) => {
+        const e = fl[PKG_TO_EXT[f]!];
+        return e ? [...(e.value ? [e.value] : []), ...(e.candidates ?? [])] : [];
+      });
+      if (vals.length) out[f] = vals;
+    }
+    return out;
+  };
+  return { people: persons.map((person) => ({ person, docs: pickDocPages(docIdsForPerson(person, staffIdx), extractBy), extra: extraOf(person) })), deps, existingIgnored: ex.ignored, personsTotal };
 }
 
 // ---------------------------------------------------------------------------
@@ -492,7 +640,7 @@ const dryPerson = (n: number, over: Partial<PkgPerson> = {}): PkgPerson => ({
   nameEn: lf('TESTER ALPHA', 'review'),
   dateOfBirth: lf('1990-01-15', 'review'),
   phone: lf('90001110', 'review'),
-  address: lf('舊地址', 'review'),
+  address: lf('火炭示範街99號虛構大廈15樓A室', 'review'),
   staffNumbers: [{ scheme: 'DRY', number: `DRY${n}` }],
   reasons: [],
   ...over,
@@ -525,11 +673,25 @@ export function dryFixture(): { people: PersonInput[]; docs: Map<string, DryDoc>
  * 用 ImageMagick 畫假頁：白底、文字行＝深灰細條（高度 40%，似字形比 OCR box 細）、相片區＝純紅（身份證）／深色格（入職表）。
  * rotateDeg＝將成頁順時針轉（模擬掃描時擺反：OCR 行座標要用 rotateLines 同步轉）。
  */
-export async function drawSyntheticPage(d: DryDoc, out: string, size = { w: 1000, h: 1400 }, rotateDeg: Rotation = 0): Promise<void> {
+const FONT_LATIN = '/System/Library/Fonts/Supplemental/Arial.ttf';
+const FONT_CJK = '/System/Library/Fonts/Hiragino Sans GB.ttc';
+/** 本機有字體先畫真文字（Vision 驗證 fixture 用）；冇就畫細條 */
+export const hasSyntheticFonts = existsSync(FONT_LATIN) && existsSync(FONT_CJK);
+
+export async function drawSyntheticPage(d: DryDoc, out: string, size = { w: 2000, h: 2800 }, rotateDeg: Rotation = 0): Promise<void> {
   const args = ['-size', `${size.w}x${size.h}`, 'xc:white'];
   const rect = (b: Box, color: string) => ['-fill', color, '-draw', `rectangle ${Math.round(b.x0 * size.w)},${Math.round((1 - b.y1) * size.h)} ${Math.round(b.x1 * size.w)},${Math.round((1 - b.y0) * size.h)}`];
   if (d.photo) args.push(...rect(d.photo, d.doc.type === 'onboarding_form' ? 'rgb(40,30,30)' : 'rgb(255,0,0)'));
-  for (const l of d.lines) args.push(...rect({ x0: l.x, x1: l.x + l.w, y0: l.y + l.h * 0.3, y1: l.y + l.h * 0.7 }, 'rgb(60,60,60)'));
+  for (const l of d.lines) {
+    if (!hasSyntheticFonts) {
+      args.push(...rect({ x0: l.x, x1: l.x + l.w, y0: l.y + l.h * 0.3, y1: l.y + l.h * 0.7 }, 'rgb(60,60,60)'));
+      continue;
+    }
+    const cjk = (l.t.match(/[\u3000-\u9fff\uff00-\uffef]/g) ?? []).length;
+    const unit = cjk > 0 ? 1.0 : 0.6; // 每字約佔 pointsize 幾多
+    const ps = Math.max(8, Math.min(l.h * size.h * 0.72, (l.w * size.w) / Math.max(1, l.t.length * unit)));
+    args.push('-font', cjk > 0 ? FONT_CJK : FONT_LATIN, '-pointsize', String(Math.round(ps)), '-fill', 'rgb(30,30,30)', '-gravity', 'NorthWest', '-annotate', `+${Math.round(l.x * size.w)}+${Math.round((1 - (l.y + l.h)) * size.h + l.h * size.h * 0.1)}`, l.t);
+  }
   await sh(MAGICK, [...args, ...(rotateDeg ? ['-rotate', String(rotateDeg)] : []), out]);
 }
 
@@ -578,6 +740,11 @@ export async function run(args: Args, injected?: { people: PersonInput[]; deps: 
     stats.persons_total = l.personsTotal;
   }
   if (!stats.persons_total) stats.persons_total = people.length;
+  if (!args.noVerify && !deps.vision) {
+    const bin = await resolveVisionBin(args.visionBin);
+    if (bin) deps = { ...deps, vision: makeVisionRunner(bin) };
+    else console.warn('[triage-evidence] 搵唔到／編譯唔到 vision-ocr（要 swiftc）——自動 no-verify（唔驗證裁圖內容同方向）');
+  }
   const items = await produceItems(people, deps, stats, { concurrency: args.dry ? 1 : args.concurrency });
   const built = await buildEvidenceZips(items);
   stats.zips = built.zips.length;
@@ -587,7 +754,7 @@ export async function run(args: Args, injected?: { people: PersonInput[]; deps: 
 
 export const statsLines = (s: Stats): string[] => [
   `package 人數 ${s.persons_total}｜有 review 欄 ${s.persons_with_fields}｜冇文件 ${s.persons_no_docs}｜失敗 ${s.persons_failed}`,
-  `請求 ${s.requests_total}｜現成裁圖 ${s.from_existing}｜即時裁 ${s.live_cropped}｜出圖 ${s.images_out}｜zip ${s.zips}（${s.zip_bytes} bytes）`,
+  `請求 ${s.requests_total}｜現成裁圖 ${s.from_existing}｜即時裁 ${s.live_cropped}｜出圖 ${s.images_out}｜Vision 驗證 ${s.verified}／未驗證 ${s.unverified}｜zip ${s.zips}（${s.zip_bytes} bytes）`,
   `每欄：${JSON.stringify(s.by_field)}｜來源:優先：${JSON.stringify(s.by_doc_priority)}`,
   `跳過原因：${JSON.stringify(s.skipped)}｜忽略嘅現成裁圖清單項 ${s.existing_ignored_entries}`,
 ];

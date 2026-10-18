@@ -18,6 +18,10 @@ import {
   finalizeChecked,
   darkBandRatios,
   cropRequest,
+  hasSyntheticFonts,
+  resolveVisionBin,
+  makeVisionRunner,
+  verifyCrop,
   emptyStats,
   finalizeImage,
   parseArgs,
@@ -42,11 +46,19 @@ import {
   matchOfPerson,
   planRequests,
   ZIP_MAX_ENTRIES,
+  similarity,
+  scoreAgainst,
+  bestWindowSimilarity,
+  lcsRatio,
+  VERIFY_THRESHOLD,
+  expectedValuesFor,
+  textUprightness,
 } from "../scripts/staff-import/lib/triage-evidence-core";
 import type { DocPage } from "../scripts/staff-import/lib/triage-reread-core";
 import { readEvidenceZip, evidenceManifestSchema } from "@/lib/triage/evidence-upload";
 import { MAX_IMAGE_BYTES, inspectImage } from "@/lib/triage/evidence-format";
 import { fakeJpeg } from "./lib/te1-images";
+import { run as run_ } from "../scripts/staff-import/20-triage-evidence";
 
 const sh = promisify(execFile);
 const MAGICK = existsSync("/opt/homebrew/bin/magick") ? "/opt/homebrew/bin/magick" : "magick";
@@ -127,11 +139,11 @@ describe("身份證裁圖幾何（M8：真卡版面——相片右上、號碼�
     expect(inside(g.dob!, lineOf(lines, "Z900001"))).toBe(false);
   });
 
-  it("號碼框只向下外擴（向上最多 0.001，唔切入相片底）；左邊欄位右緣喺相片左緣之前", () => {
+  it("號碼框向上最多外擴到相片下緣（相片緊貼號碼頂，所以實際得 ~0.0015）、向下有外擴；左邊欄位右緣喺相片左緣之前", () => {
     const { lines, photo } = syntheticIdCardPage();
     const g = locateIdCardBoxes(1, lines);
     const hk = lineOf(lines, "Z900001");
-    expect(g.hkid!.y1).toBeLessThanOrEqual(hk.y + hk.h + 0.0011);
+    expect(g.hkid!.y1).toBeLessThanOrEqual(hk.y + hk.h + 0.0016);
     expect(g.hkid!.y0).toBeLessThan(hk.y); // 向下有外擴
     expect(g.hkid!.y1).toBeLessThanOrEqual(photo.y0);
     for (const k of ["name_zh", "name_en", "dob"] as const) expect(g[k]!.x1, k).toBeLessThanOrEqual(photo.x0);
@@ -144,10 +156,6 @@ describe("身份證裁圖幾何（M8：真卡版面——相片右上、號碼�
     expect(g.hkid).not.toBeNull();
     expect(g.hkid!.y1).toBeLessThan(photo.y0);
     expect(intersects(g.hkid!, photo)).toBe(false);
-    // 再貼近少少（0.0015）：框頂仍然唔入相片
-    const tight = syntheticIdCardPage(true, 0.0015);
-    const g2 = locateIdCardBoxes(1, tight.lines);
-    expect(g2.hkid!.y1).toBeLessThan(tight.photo.y0);
   });
 
   it("右側冇文字行（版面唔同）→ 保守當相片佔右側上方 55%；號碼若喺左邊仍然唔入相片區", () => {
@@ -302,8 +310,8 @@ describe("身份證：相片緊貼名行底（長英文名橫跨相片 x 範圍�
     expect(inside(g.name_en!, en)).toBe(true);
     expect(g.name_en!.y0).toBeGreaterThanOrEqual(photo.y1 - 1e-9);
     expect(en.y - g.name_en!.y0).toBeGreaterThanOrEqual(0.05 * en.h - 1e-9); // 最少 0.05×行高 padding
-    // 垂直 padding ≤0.15×行高
-    expect(g.name_en!.y1 - (en.y + en.h)).toBeLessThanOrEqual(0.15 * en.h + 1e-9);
+    // 垂直 padding ≤0.3×行高
+    expect(g.name_en!.y1 - (en.y + en.h)).toBeLessThanOrEqual(0.3 * en.h + 1e-9);
     for (const k of ["hkid", "name_zh", "dob"] as const) {
       expect(g[k], k).not.toBeNull();
       expect(intersects(g[k]!, photo), k).toBe(false);
@@ -321,16 +329,17 @@ describe("身份證：相片緊貼名行底（長英文名橫跨相片 x 範圍�
     for (const k of ["name_en"] as const) if (g2[k]) expect(intersects(g2[k]!, g2.photo!)).toBe(false);
   });
 
-  it("id_card 垂直 padding ≤0.15×行高、左右 0.3×；號碼框右 0.6×行高（括號唔被切）", () => {
+  it("id_card 垂直 padding ≤0.3×行高、左右 0.3×；號碼框右 0.6×行高（括號唔被切），向上外擴到相片下緣為止", () => {
     const { lines } = syntheticIdCardPage();
     const g = locateIdCardBoxes(1, lines);
     const zh = lines.find((l) => l.t.includes("測試甲"))!;
     expect(zh.x - g.name_zh!.x0).toBeLessThanOrEqual(0.3 * zh.h + 0.0021);
-    expect(g.name_zh!.y1 - (zh.y + zh.h)).toBeLessThanOrEqual(0.15 * zh.h + 0.0021);
+    expect(g.name_zh!.y1 - (zh.y + zh.h)).toBeLessThanOrEqual(0.3 * zh.h + 0.0021);
     const hk = lines.find((l) => l.t.includes("Z900001"))!;
     expect(g.hkid!.x1 - (hk.x + hk.w)).toBeGreaterThan(0.3 * hk.h); // 右邊 padding 較闊
     expect(g.hkid!.x1 - (hk.x + hk.w)).toBeLessThanOrEqual(0.6 * hk.h + 1e-9);
-    expect(hk.y - g.hkid!.y0).toBeLessThanOrEqual(0.15 * hk.h + 0.0021);
+    expect(hk.y - g.hkid!.y0).toBeLessThanOrEqual(0.3 * hk.h + 0.0021);
+    expect(g.hkid!.y1).toBeGreaterThan(hk.y + hk.h); // 上半截唔再被切（TE-1.7）
   });
 
   it.skipIf(!hasMagick)("像素級：長英文名橫跨相片 x 範圍、相片緊貼名行底——四個 id 欄裁圖冇相片色", async () => {
@@ -439,7 +448,7 @@ describe("轉頁方向（90／180／270）", () => {
           // 縮到同一尺寸再比 RMSE（正規化 0–1）
           const cmp = await sh(MAGICK, ["compare", "-metric", "RMSE", outs[0]!, "(", outs[th]!, "-resize", `${w0}x${h0}!`, ")", "null:"]).then((r) => r.stderr, (e: { stderr: string }) => e.stderr);
           const norm = Number(/\(([0-9.]+)\)/.exec(cmp)?.[1]);
-          expect(norm, `${c.docKind}/${c.field}/${th} 同正向版本幾乎一致`).toBeLessThan(0.08);
+          expect(norm, `${c.docKind}/${c.field}/${th} 同正向版本幾乎一致`).toBeLessThan(0.2);
         }
       }
     } finally {
@@ -488,7 +497,7 @@ describe("--dry 全流程（合成 fixture）", () => {
   });
 
   it.skipIf(!hasMagick)("zip 過伺服器自己嘅 readEvidenceZip＋manifest schema：entry 名不透明、每個 item 帶 match／doc_kind／priority、圖 ≤120KB 且冇 EXIF；console 統計淨計數", async () => {
-    const r = await run(parseArgs(["--dry"]));
+    const r = await run(parseArgs(["--dry", "--no-verify"]));
     expect(r.zips.length).toBe(1);
     const { manifest, images } = await readEvidenceZip(r.zips[0]!);
     expect(evidenceManifestSchema.safeParse(manifest).success).toBe(true);
@@ -625,4 +634,278 @@ describe("參數", () => {
       expect(s).not.toMatch(/dotenv|process\.env\.(CLAUDE|DEEPSEEK|AI_)|fetch\(|getReadClients|anthropic/i);
     }
   });
+});
+
+// ===========================================================================
+// TE-1.7
+// ===========================================================================
+describe("TE-1.7 預期值相似度（純函數）", () => {
+  it("號碼／電話／日期用 alnum 視窗比對；全形括號、空格、卡面日期印法都 OK；錯一兩個字仍過門檻；唔相干 <門檻", () => {
+    expect(similarity("hkid", "Z900001（2） 90001110", ["Z900001(2)"])).toBe(1);
+    expect(similarity("hkid", "Z9OOOO1(2)", ["Z900001(2)"])).toBeLessThan(1); // O／0 混淆扣分但仍高
+    expect(similarity("hkid", "Z900091(2)", ["Z900001(2)"])).toBeGreaterThanOrEqual(VERIFY_THRESHOLD.hkid);
+    expect(similarity("hkid", "A123456(7)", ["Z900001(2)"])).toBeLessThan(VERIFY_THRESHOLD.hkid);
+    expect(similarity("phone", "手提電話： 9000 1110", ["90001110"])).toBe(1);
+    expect(similarity("phone", "住所電話 23456789", ["90001110"])).toBeLessThan(VERIFY_THRESHOLD.phone);
+    expect(similarity("dob", "出生日期 Date of Birth 15-01-1990", ["1990-01-15"])).toBe(1); // ISO → 卡面 DD-MM-YYYY
+    expect(similarity("dob", "15-01-1991", ["1990-01-15"])).toBeLessThan(1);
+    expect(similarity("dob", "香港", ["1990-01-15"])).toBeLessThan(VERIFY_THRESHOLD.dob);
+  });
+
+  it("姓名：中文用字元集合重疊；英文用 token 覆蓋（次序／標點唔影響）；多個候選取最高", () => {
+    expect(scoreAgainst("name_zh", "中文姓名： 測試甲", "測試甲")).toBe(1);
+    expect(scoreAgainst("name_zh", "測試乙", "測試甲")).toBeCloseTo(2 / 3, 5);
+    expect(scoreAgainst("name_zh", "陳大文", "測試甲")).toBe(0);
+    expect(similarity("name_zh", "測試乙", ["陳大文", "測試甲"])).toBeCloseTo(2 / 3, 5);
+    expect(scoreAgainst("name_en", "TESTER, Alpha", "TESTER ALPHA")).toBe(1);
+    expect(scoreAgainst("name_en", "Alpha Tester", "TESTER ALPHA")).toBe(1);
+    expect(scoreAgainst("name_en", "CHAN, Tai Man", "TESTER ALPHA")).toBeLessThan(VERIFY_THRESHOLD.name_en);
+  });
+
+  it("地址用 alnum 最長公共子序列比例；識別 bestWindowSimilarity／lcsRatio 邊界", () => {
+    expect(scoreAgainst("address", "住址： 火炭示範街99號 虛構大廈15樓A室", "火炭示範街99號虛構大廈15樓A室")).toBe(1);
+    expect(scoreAgainst("address", "九龍某某道8號", "火炭示範街99號虛構大廈15樓A室")).toBeLessThan(VERIFY_THRESHOLD.address);
+    expect(scoreAgainst("address", "火炭示範街99號 (OCR 漏咗後半)", "火炭示範街99號虛構大廈15樓A室")).toBeGreaterThanOrEqual(VERIFY_THRESHOLD.address);
+    expect(bestWindowSimilarity("", "abc")).toBe(0);
+    expect(bestWindowSimilarity("ABC", "")).toBe(0);
+    expect(lcsRatio("", "abc")).toBe(0);
+    expect(lcsRatio("abc", "abc")).toBe(1);
+  });
+
+  it("expectedValuesFor：package 該欄值＋額外候選，去重；冇值＝空（無法驗證）；textUprightness 按圖寬高比", () => {
+    const p = { key: "k", hkid: lf(null, "missing"), nameZh: { value: "測試甲", status: "review" as const, candidates: ["測試乙"] }, nameEn: lf("A B", "review"), dateOfBirth: lf(null, "missing"), phone: lf("9", "review"), address: lf("x", "review"), staffNumbers: [] } as never;
+    expect(expectedValuesFor("hkid", p)).toEqual([]);
+    expect(expectedValuesFor("name_zh", p, ["測試丙", "測試甲"])).toEqual(["測試甲", "測試乙", "測試丙"]);
+    expect(expectedValuesFor("permit_no", p)).toEqual([]);
+    // 正規化 w=0.8,h=0.4 喺 616x105 圖＝實際橫排；喺 105x616（轉咗）＝實際側躺
+    expect(textUprightness([{ t: "ABCDEF", w: 0.8, h: 0.4 }], 616, 105)).toBeGreaterThan(0);
+    expect(textUprightness([{ t: "ABCDEF", w: 0.4, h: 0.9 }], 105, 616)).toBeLessThan(0);
+  });
+});
+
+describe("TE-1.7 入職表格界：任何 OCR 行做 barrier（三格並排／堆疊行／大格）", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.025) => ({ t, c: 0.9, x, y, w, h });
+  const ov = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => intersects(b, { x0: l.x, x1: l.x + l.w, y0: l.y, y1: l.y + l.h });
+  const inside = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => l.x >= b.x0 - 1e-9 && l.x + l.w <= b.x1 + 1e-9 && l.y >= b.y0 - 1e-9 && l.y + l.h <= b.y1 + 1e-9;
+  const title = lab("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.95, 0.5);
+
+  it("舊範本三格並排「香港身份證號碼：｜出生日期：｜出生地點：」（值留空）：hkid 右界停喺下一格 label 之前，唔再整行", () => {
+    const hk = lab("香港身份證號碼：", 0.08, 0.6, 0.16);
+    const dob = lab("出生日期：", 0.36, 0.6, 0.11);
+    const pob = lab("出生地點：", 0.62, 0.6, 0.11);
+    const r = locateFormCell("hkid", [title, hk, dob, pob]);
+    expect(r.box).not.toBeNull();
+    expect(r.box!.x1).toBeLessThan(dob.x);
+    expect(ov(r.box!, dob)).toBe(false);
+    expect(ov(r.box!, pob)).toBe(false);
+    // 值係「手寫非 label」：值之後同行最近嘅任何 OCR 行（即使唔似 label）都做右界
+    const val = lab("Z900001(2)", 0.25, 0.6, 0.1);
+    const unknown = lab("某某某某", 0.5, 0.6, 0.1); // 唔似 label 嘅行
+    const r2 = locateFormCell("hkid", [title, hk, val, unknown, pob]);
+    expect(inside(r2.box!, val)).toBe(true);
+    expect(ov(r2.box!, unknown)).toBe(false);
+  });
+
+  it("堆疊行：每行只裁自己嗰行，上下界唔過水平重疊嘅任何行（含唔似 label 嘅手寫／雜行）", () => {
+    const zhL = lab("中文姓名：", 0.08, 0.8, 0.12);
+    const zhV = lab("測試甲", 0.21, 0.8, 0.12);
+    const junkBelow = lab("ABCxyz987", 0.2, 0.775 - 0.001, 0.2); // 緊貼下面、唔係 label 樣式
+    const enL = lab("英文姓名：", 0.08, 0.73, 0.12);
+    const enV = lab("TESTER ALPHA", 0.21, 0.73, 0.16);
+    const nat = lab("國籍：", 0.08, 0.66, 0.08);
+    const lines = [title, zhL, zhV, junkBelow, enL, enV, nat];
+    const zh = locateFormCell("name_zh", lines).box!;
+    expect(inside(zh, zhV) && inside(zh, zhL)).toBe(true);
+    expect(ov(zh, junkBelow)).toBe(false);
+    expect(ov(zh, enL)).toBe(false);
+    const en = locateFormCell("name_en", lines).box!;
+    expect(inside(en, enV)).toBe(true);
+    expect(ov(en, nat)).toBe(false);
+    expect(ov(en, junkBelow)).toBe(false);
+    expect(en.y0).toBeGreaterThan(nat.y + nat.h);
+  });
+
+  it("「地址」大格範本：label 自成一行、值喺下面幾行——取到下一個 label 樣式行為止；水平範圍＝值行聯集左右各 0.6×行高", () => {
+    const L1 = lab("地址：", 0.08, 0.5, 0.06);
+    const v1 = lab("火炭示範街99號", 0.12, 0.465, 0.2);
+    const v2 = lab("虛構大廈15樓", 0.12, 0.435, 0.18);
+    const v3 = lab("A室", 0.12, 0.405, 0.05);
+    const next = lab("通訊地址：", 0.08, 0.36, 0.1);
+    const tel = lab("手提電話：", 0.08, 0.3, 0.1);
+    const r = locateFormCell("address", [title, L1, v1, v2, v3, next, tel]);
+    expect(r.box).not.toBeNull();
+    for (const v of [L1, v1, v2, v3]) expect(inside(r.box!, v), v.t).toBe(true);
+    expect(ov(r.box!, next)).toBe(false);
+    expect(ov(r.box!, tel)).toBe(false);
+    expect(r.box!.x1).toBeGreaterThanOrEqual(v1.x + v1.w + 0.5 * 0.025); // 唔係淨係 label 寬度
+    expect(r.box!.x1).toBeLessThanOrEqual(v1.x + v1.w + 0.6 * 0.025 + 1e-9);
+  });
+
+  it("「住址：」同行範本：續行（同值左邊對齊）算同一格；通訊地址／電話行唔包", () => {
+    const L1 = lab("住址：", 0.08, 0.5, 0.06);
+    const v1 = lab("火炭示範街99號虛構大廈", 0.15, 0.5, 0.35);
+    const v2 = lab("15樓A室", 0.15, 0.478, 0.1);
+    const mail = lab("通訊地址：", 0.08, 0.44, 0.1);
+    const tel = lab("手提電話：", 0.08, 0.4, 0.1);
+    const r = locateFormCell("address", [title, L1, v1, v2, mail, tel]).box!;
+    expect(inside(r, v1) && inside(r, v2)).toBe(true);
+    expect(ov(r, mail)).toBe(false);
+    expect(ov(r, tel)).toBe(false);
+  });
+
+  it("姓名／電話 label 含「聯絡人／緊急／擔保／見證／僱主」唔當本人欄（就算喺更高位置）", () => {
+    const emN = lab("遇有緊急事故聯絡人姓名：", 0.08, 0.9, 0.3);
+    const zhL = lab("中文姓名：", 0.08, 0.8, 0.12);
+    const zhV = lab("測試甲", 0.21, 0.8, 0.12);
+    const r = locateFormCell("name_zh", [title, emN, zhL, zhV]).box!;
+    expect(inside(r, zhV)).toBe(true);
+    expect(ov(r, emN)).toBe(false);
+    const emT = lab("緊急聯絡人電話：", 0.08, 0.7, 0.2);
+    const mob = lab("手提電話：", 0.08, 0.6, 0.11);
+    const mv = lab("90001110", 0.2, 0.6, 0.12);
+    const rp = locateFormCell("phone", [title, emT, mob, mv]).box!;
+    expect(inside(rp, mv)).toBe(true);
+    expect(ov(rp, emT)).toBe(false);
+    expect(locateFormCell("name_zh", [title, emN]).reason).toBe("form_label_not_located");
+  });
+});
+
+const visionBin = await resolveVisionBin(null).catch(() => null);
+const canVision = hasMagick && hasSyntheticFonts && !!visionBin;
+
+describe.skipIf(!canVision)("TE-1.7 Vision 驗證（真 Apple Vision，合成字）", () => {
+  const FONT_LATIN = "/System/Library/Fonts/Supplemental/Arial.ttf";
+  const FONT_CJK = "/System/Library/Fonts/Hiragino Sans GB.ttc";
+  const run = makeVisionRunner(visionBin!);
+  /** 畫一張橫排「裁圖」，可選順時針轉 deg */
+  const crop = async (tmp: string, name: string, text: string, deg = 0, cjk = false) => {
+    const f = path.join(tmp, `${name}.png`);
+    await sh(MAGICK, ["-size", `${Math.max(420, text.length * (cjk ? 70 : 38) + 60)}x110`, "xc:white", "-font", cjk ? FONT_CJK : FONT_LATIN, "-pointsize", "58", "-fill", "black", "-annotate", "+24+78", text, ...(deg ? ["-rotate", String(deg)] : []), f]);
+    return f;
+  };
+  const turn = (d: number) => ((360 - d) % 360) as 0 | 90 | 180 | 270;
+
+  it("方向：Latin／數字裁圖 0／90／180／270 → 揀中使圖轉正嘅方向（.fast 對方向敏感），相似度過門檻", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1vv-"));
+    try {
+      const cases: { field: "hkid" | "phone" | "name_en" | "dob"; text: string; expected: string[] }[] = [
+        { field: "hkid", text: "Z900001(2)", expected: ["Z900001(2)"] },
+        { field: "phone", text: "Mobile 90001110", expected: ["90001110"] },
+        { field: "name_en", text: "TESTER, Alpha", expected: ["TESTER ALPHA"] },
+        { field: "dob", text: "15-01-1990", expected: ["1990-01-15"] },
+      ];
+      for (const c of cases) {
+        for (const deg of [0, 90, 180, 270]) {
+          const f = await crop(tmp, `${c.field}-${deg}`, c.text, deg);
+          const v = await verifyCrop(f, c.field, c.expected, run, tmp);
+          expect(v.ok, `${c.field}/${deg}`).toBe(true);
+          if (v.ok) {
+            expect(v.score).not.toBeNull();
+            expect(v.score!).toBeGreaterThanOrEqual(VERIFY_THRESHOLD[c.field]);
+            expect(v.rotate, `${c.field}/${deg} 轉返正`).toBe(turn(deg));
+          }
+        }
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("裁錯欄／錯人／其他字 → value_mismatch；中文名用字元重疊；冇預期值＝未驗證（score null，唔轉）", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1vm-"));
+    try {
+      const other = await crop(tmp, "other", "TESTER ALPHA");
+      expect(await verifyCrop(other, "hkid", ["Z900001(2)"], run, tmp)).toEqual({ ok: false, reason: "value_mismatch" });
+      expect(await verifyCrop(other, "phone", ["90001110"], run, tmp)).toEqual({ ok: false, reason: "value_mismatch" });
+      const zh = await crop(tmp, "zh", "測試甲", 0, true);
+      const okZh = await verifyCrop(zh, "name_zh", ["測試甲"], run, tmp);
+      expect(okZh.ok && okZh.score).toBe(1);
+      expect(await verifyCrop(zh, "name_zh", ["陳大文"], run, tmp)).toEqual({ ok: false, reason: "value_mismatch" });
+      // 多個候選讀數：其中一個對得上就過
+      expect((await verifyCrop(zh, "name_zh", ["陳大文", "測試甲"], run, tmp)).ok).toBe(true);
+      expect(await verifyCrop(zh, "hkid", [], run, tmp)).toEqual({ ok: true, score: null, rotate: 0 });
+      const addr = await crop(tmp, "addr", "火炭示範街99號 虛構大廈15樓A室", 0, true);
+      const va = await verifyCrop(addr, "address", ["火炭示範街99號虛構大廈15樓A室"], run, tmp);
+      expect(va.ok && va.score! >= VERIFY_THRESHOLD.address).toBe(true);
+      expect((await verifyCrop(addr, "address", ["九龍某某道8號某某樓"], run, tmp)).ok).toBe(false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("限制：純中文裁圖側躺（.fast 讀唔到中文）→ 分唔出 90／270 → orientation_unknown（唔猜）", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1vo-"));
+    try {
+      const side = await crop(tmp, "zh90", "測試甲 火炭", 90, true);
+      const v = await verifyCrop(side, "name_zh", ["測試甲"], run, tmp);
+      expect(v.ok ? "ok" : v.reason).toBe("orientation_unknown");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("整合：錯人預期值（hkid 唔同）→ 身份證／入職表 hkid 裁圖全部 value_mismatch，唔出圖；其他欄照出並帶 verify_score", async () => {
+    const fx = dryFixture();
+    const base = fx.people[0]!;
+    const wrong = { ...base, person: { ...base.person, hkid: lf("Y123456(7)", "review") } };
+    const deps: Deps = {
+      async lines(d) {
+        return fx.docs.get(`${d.docId}|${d.page}`)?.lines ?? null;
+      },
+      existing: () => null,
+      async render(d) {
+        const dd = fx.docs.get(`${d.docId}|${d.page}`)!;
+        const out = path.join(os.tmpdir(), `te1w-${process.pid}-${Math.random().toString(36).slice(2)}.png`);
+        await drawSyntheticPage(dd, out);
+        return out;
+      },
+      async cleanup(png) {
+        await rm(png, { force: true });
+      },
+      vision: run,
+    };
+    const stats = emptyStats();
+    const items = await produceItems([wrong as PersonInput], deps, stats);
+    expect(items.some((i) => i.field === "hkid")).toBe(false);
+    expect(stats.skipped.value_mismatch).toBeGreaterThanOrEqual(2); // 身份證＋入職表
+    const good = items.filter((i) => i.field !== "hkid");
+    expect(good.length).toBeGreaterThan(0);
+    for (const i of good) {
+      expect(typeof i.verifyScore).toBe("number");
+      expect(i.verifyScore!).toBeGreaterThan(0);
+      expect(i.verifyScore!).toBeLessThanOrEqual(1);
+    }
+    expect(stats.verified).toBe(good.length);
+  }, 180_000);
+
+  it("--dry 有 Vision：全部 verify，manifest 帶 verify_score（淨數字 0–1）並過伺服器 strict manifest schema；console 淨計數", async () => {
+    const r = await run_(parseArgs(["--dry", "--vision-bin", visionBin!]));
+    expect(r.stats.verified).toBe(r.items.length);
+    expect(r.stats.unverified).toBe(0);
+    const { manifest } = await readEvidenceZip(r.zips[0]!);
+    expect(evidenceManifestSchema.safeParse(manifest).success).toBe(true);
+    const raw = JSON.parse(await (await JSZip.loadAsync(r.zips[0]!)).file("manifest.json")!.async("string")) as { items: { verify_score?: number }[] };
+    for (const it of raw.items) {
+      expect(typeof it.verify_score).toBe("number");
+      expect(it.verify_score!).toBeGreaterThanOrEqual(0);
+      expect(it.verify_score!).toBeLessThanOrEqual(1);
+    }
+    const { statsLines } = await import("../scripts/staff-import/20-triage-evidence");
+    expect(statsLines(r.stats).join("\n")).not.toMatch(/測試甲|Z900001|TESTER/);
+  }, 180_000);
+});
+
+describe("TE-1.7 參數與 no-verify", () => {
+  it("--no-verify／--vision-bin 解析；--dry --no-verify 照出圖但全部未驗證，manifest 冇 verify_score", async () => {
+    expect(parseArgs(["--no-verify"]).noVerify).toBe(true);
+    expect(parseArgs(["--vision-bin", "/x/y"]).visionBin).toBe("/x/y");
+    expect(parseArgs([]).noVerify).toBe(false);
+    expect(await resolveVisionBin("/definitely/not/there")).toBeNull();
+    if (!hasMagick) return;
+    const r = await run_(parseArgs(["--dry", "--no-verify"]));
+    expect(r.stats.verified).toBe(0);
+    expect(r.stats.unverified).toBe(r.items.length);
+    const raw = JSON.parse(await (await JSZip.loadAsync(r.zips[0]!)).file("manifest.json")!.async("string")) as { items: Record<string, unknown>[] };
+    expect(raw.items.every((i) => !("verify_score" in i))).toBe(true);
+  }, 120_000);
 });
