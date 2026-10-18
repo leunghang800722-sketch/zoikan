@@ -82,7 +82,6 @@ export function planRequests(fields: readonly EvidenceField[], docs: readonly Do
 // 3. 幾何
 // ---------------------------------------------------------------------------
 const bboxOf = (ls: readonly OcrLine[]): Box => ({ x0: Math.min(...ls.map((l) => l.x)), x1: Math.max(...ls.map((l) => l.x + l.w)), y0: Math.min(...ls.map((l) => l.y)), y1: Math.max(...ls.map((l) => l.y + l.h)) });
-const avgH = (ls: readonly OcrLine[]) => ls.reduce((a, l) => a + l.h, 0) / ls.length;
 export const intersects = (a: Box, b: Box): boolean => Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 1e-9 && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 1e-9;
 const xOverlap = (a: Box, l: OcrLine): boolean => Math.min(a.x1, l.x + l.w) - Math.max(a.x0, l.x) > 1e-9;
 const valid = (b: Box | null): b is Box => !!b && b.x1 - b.x0 > 0.01 && b.y1 - b.y0 > 0.005;
