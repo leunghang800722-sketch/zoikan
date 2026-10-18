@@ -960,7 +960,7 @@ describe("TE-1 證據裁圖", () => {
           const plain = J(260 + i);
           await insertEvidenceImage(prisma, { sessionId: sid2, questionId: null, personKey: qn.personKey!, guardId: null, field: f, docKind: "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
         }
-        const call = async (route: unknown, url: string, body: unknown) => json(route as never, `/api/triage/questions/${qn.id}/${url}`, accountant, body, qn.id);
+        const call = async (route: unknown, url: string, body: unknown) => json(route as never, `/api/triage/questions/${qn.id}/${url}`, owner, body, qn.id);
         const prev = async (extra: object) => {
           const res = await call(previewRoute, "preview", { answer: { option: "enter_hkid", value: H[9], extra: { name_zh: NM, dob: "1991-02-03", ...extra } } });
           return { status: res.status, body: await res.json() };
@@ -988,10 +988,10 @@ describe("TE-1 證據裁圖", () => {
         expect(await imgCount({ sessionId: sid2 })).toBe(3); // 未決定，圖仍在
         // 欄位級權限：冇「保安員個人資料:view」→ 英文名唔回、電話遮罩
         await prisma.guard.update({ where: { id: g.id }, data: { nameEn: "TEST SAME", tel: "91234567" } });
-        const lo = await loadDecisionCandidates(NM, { pii: false, piiUpdate: false, guardUpdate: false, bankView: false, bankUpdate: false });
+        const lo = (await loadDecisionCandidates(NM, { pii: false, piiUpdate: false, guardUpdate: false, bankView: false, bankUpdate: false })).candidates;
         expect(lo[0]).toMatchObject({ name_en: null });
         expect(lo[0]!.phone_masked).not.toBe("91234567");
-        const hi = await loadDecisionCandidates(NM, { pii: true, piiUpdate: true, guardUpdate: true, bankView: true, bankUpdate: true });
+        const hi = (await loadDecisionCandidates(NM, { pii: true, piiUpdate: true, guardUpdate: true, bankView: true, bankUpdate: true })).candidates;
         expect(hi[0]).toMatchObject({ name_en: "TEST SAME", phone_masked: "91234567" });
       });
 
@@ -1019,6 +1019,41 @@ describe("TE-1 證據裁圖", () => {
         expect(gs).toHaveLength(2);
         expect(gs.find((x) => x.id !== g.id)?.hkid).toBe(H[9]);
         expect(gs.find((x) => x.id === g.id)?.hkid).toBeNull();
+      });
+
+      it("M1：link_guard_id 唔係同名候選（無關保安員）→ 400（preview／answer 都係），冇寫入", async () => {
+        const { ans, prev, qn } = await setup();
+        const stranger = await prisma.guard.create({ data: { nameZh: "導入測試員無關路人", employmentType: "cash_casual", createdBy: "t" } });
+        expect((await prev({ link_guard_id: stranger.id })).status).toBe(400);
+        expect((await ans({ link_guard_id: stranger.id })).status).toBe(400);
+        expect((await prisma.guard.findUniqueOrThrow({ where: { id: stranger.id }, select: { hkid: true } })).hkid).toBeNull();
+        expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("open");
+        expect((await prev({ link_guard_id: "00000000-0000-4000-8000-00000000dead" })).status).toBe(400);
+      });
+
+      it("M2：冇「保安員個人資料:view」＋「保安員:update」→ link 403；preview 嘅 needs_decision 淨提供 create_new", async () => {
+        const { g, qn } = await setup();
+        const actor = { userId: fx.userIds["老闆"], baseRole: "老闆", roleId: fx.roleIds["老闆"], tokenVersion: 0 } as unknown as AuthedSession;
+        const full = await viewerCaps(actor);
+        expect(full.pii && full.guardUpdate).toBe(true);
+        const lowCaps = { ...full, pii: false, guardUpdate: false };
+        const q0 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } });
+        const base = { option: "enter_hkid", value: H[9], extra: { name_zh: NM } } as const;
+        const pv = await previewAnswer(actor, q0, base, lowCaps, null);
+        expect(pv.impact.needs_decision?.options).toEqual(["create_new"]);
+        const withCaps = await previewAnswer(actor, q0, base, { ...full, pii: true, guardUpdate: true }, null);
+        expect(withCaps.impact.needs_decision?.options).toEqual(["link", "create_new"]);
+        await expect(previewAnswer(actor, q0, { ...base, extra: { name_zh: NM, link_guard_id: g.id } }, lowCaps, null)).rejects.toMatchObject({ status: 403 });
+        await expect(previewAnswer(actor, q0, { ...base, extra: { name_zh: NM, link_guard_id: g.id } }, { ...full, pii: true, guardUpdate: false }, null)).rejects.toMatchObject({ status: 403 });
+        expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id }, select: { hkid: true } })).hkid).toBeNull();
+      });
+
+      it("S1：同名多過 5 位 → 只列 5 位，truncated=true", async () => {
+        const { prev } = await setup();
+        for (let i = 0; i < 6; i++) await prisma.guard.create({ data: { nameZh: NM, employmentType: "cash_casual", createdBy: "t" } });
+        const p = await prev({});
+        expect(p.body.impact.needs_decision.candidates).toHaveLength(5);
+        expect(p.body.impact.needs_decision.truncated).toBe(true);
       });
 
       it("身份檢查照舊：link 去已有另一個身份證號嘅同名者 → 攔（422）；身份證號屬第三者 → 攔；link／create_new 同時帶或選項唔啱 → 400", async () => {

@@ -151,6 +151,21 @@ async function checkHkidOwner(q: QRow, answer: TriageAnswer): Promise<boolean> {
   throw new ApiError(422, "unprocessable", "身份證號已屬於另一位保安員，請留返人手核對");
 }
 
+/**
+ * TE-5 M1／M2：`extra.link_guard_id` 要 (M2) 有「保安員個人資料:view」＋「保安員:update」，而且 (M1) 伺服器端重新計——
+ * 揀咗嘅保安員要係同名（normZh 相同）候選，或者題目 evidence 本身嘅候選；否則 400（唔准連去無關保安員）。
+ */
+async function assertLinkDecision(q: QRow, answer: TriageAnswer, resolved: ReturnType<typeof resolveAnswer>, caps: ViewerCaps): Promise<void> {
+  const id = answer.extra?.link_guard_id;
+  if (!id) return;
+  if (!(caps.pii && caps.guardUpdate)) throw Forbidden("要有保安員個人資料查看＋保安員修改權限嘅同事處理");
+  const ev = q.evidenceJson as unknown as QuestionEvidence;
+  if (ev.candidate_guard_ids.includes(id)) return;
+  const nm = normZh(resolved.mode === "write" ? fieldValue(resolved.pkg.persons[0]!.nameZh) : null);
+  const g = await prisma.guard.findUnique({ where: { id }, select: { nameZh: true } });
+  if (!g || !nm || normZh(g.nameZh) !== nm) throw BadRequest("揀咗嘅保安員唔係同名候選，請重新揀");
+}
+
 export interface PreviewOutput {
   preview_hash: string;
   writes: boolean;
@@ -164,6 +179,7 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   const answer = parseAnswer(rawAnswer);
   assertBankAnswerRules(q, answer, caps);
   const resolved = resolveAnswer(load(q), answer);
+  await assertLinkDecision(q, answer, resolved, caps);
   const warnOwner = await checkHkidOwner(q, answer);
   const mismatch = await identityMismatch(q, answer);
   if (resolved.mode === "skip") {
@@ -187,9 +203,10 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   const decisionReason = !impact.can_confirm && !answer.extra?.link_guard_id && !answer.extra?.create_new && EXTRA_NAME_OPTIONS.includes(answer.option) ? DECISION_REASONS.find((r) => out.result.reasons.includes(r)) : undefined;
   if (decisionReason) {
     const nm = fieldValue(resolved.pkg.persons[0]!.nameZh);
-    const candidates = nm ? await loadDecisionCandidates(nm, caps) : [];
+    const { candidates, truncated } = nm ? await loadDecisionCandidates(nm, caps) : { candidates: [], truncated: false };
     if (candidates.length > 0) {
-      impact.needs_decision = { reason: decisionReason, candidates, options: ["link", "create_new"] };
+      // M2：冇「保安員個人資料:view」＋「保安員:update」嘅人唔出「連結」，只可建新人／跳過
+      impact.needs_decision = { reason: decisionReason, candidates, options: caps.pii && caps.guardUpdate ? ["link", "create_new"] : ["create_new"], ...(truncated ? { truncated: true } : {}) };
       impact.reason_text = DECISION_TEXT;
       return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: false, impact };
     }
@@ -232,6 +249,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
   const answer = parseAnswer(rawAnswer);
   assertBankAnswerRules(q, answer, caps);
   const resolved = resolveAnswer(load(q), answer);
+  await assertLinkDecision(q, answer, resolved, caps);
   await checkHkidOwner(q, answer);
   const mismatch = await identityMismatch(q, answer);
   if (mismatch && !answer.confirm_identity) throw new ApiError(422, "unprocessable", mismatch);

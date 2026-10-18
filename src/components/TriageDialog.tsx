@@ -86,7 +86,7 @@ interface Impact {
   /** TE-3：補咗呢啲欄就可以確認（例：冇姓名要補中文姓名） */
   needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
   /** TE-5：同名現有保安員要人決定 */
-  needs_decision?: { reason: string; candidates: DecisionCandidate[]; options: ("link" | "create_new")[] };
+  needs_decision?: { reason: string; candidates: DecisionCandidate[]; options: ("link" | "create_new")[]; truncated?: boolean };
 }
 interface DecisionCandidate {
   guard_id: string;
@@ -927,11 +927,15 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                         {c.has_hkid ? "已有身份證號" : "冇身份證號"}・{c.has_dob ? "已有出生日期" : "冇出生日期"}・工號：{c.staff_numbers.length ? c.staff_numbers.join("、") : "冇"}
                         {c.phone_masked ? `・電話 ${c.phone_masked}` : ""}・建立 {c.created_at}・最近出更：{c.last_shift_month ?? "冇出過更"}
                       </div>
-                      <Button size="sm" type="button" disabled={busy} onClick={() => setDecision({ kind: "link", guardId: c.guard_id })} data-testid="triage-decision-link">
-                        係同一人，連結並補資料
-                      </Button>
+                      {impact.needs_decision!.options.includes("link") && (
+                        <Button size="sm" type="button" disabled={busy} onClick={() => setDecision({ kind: "link", guardId: c.guard_id })} data-testid="triage-decision-link">
+                          係同一人，連結並補資料
+                        </Button>
+                      )}
                     </div>
                   ))}
+                  {impact.needs_decision.truncated && <div className="text-zk-xs text-zk-warning" data-testid="triage-decision-truncated">仲有同名者，請用搜尋確認</div>}
+                  {!impact.needs_decision.options.includes("link") && <div className="text-zk-xs text-zk-muted">你冇權限連結現有保安員，只可以建新人或者跳過。</div>}
                   <Button size="sm" type="button" disabled={busy} onClick={() => setDecision({ kind: "create_new" })} data-testid="triage-decision-create">
                     唔係，建新人
                   </Button>
