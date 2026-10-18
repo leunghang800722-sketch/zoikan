@@ -43,3 +43,17 @@
 ## 5. 要老闆知／決定
 - 已確認（老闆 2026-10-18）：答題即刪；跳過 30 日、最長 180 日只係安全網。
 - 係咪接受「只存欄位裁圖、唔存成頁」（成頁要睇就去 Drive）。
+
+## 6. Opus 把關結果（2026-10-18）——納入條件（全部採納）
+- **M1 決定紀錄**：本方案推翻 2026-09-17「唔存掃描檔，原檔留 Drive」嘅決定嘅一部分——**只存欄位裁圖**（唔存成頁／成張證件）、答題即刪、最長 180 日。老闆 2026-10-18 明確要求「截返相應欄位嘅圖直接貼喺題卡」，視為對呢個例外嘅確認；本文件即係紀錄。
+- **M2 範圍**：今次只做本機批量補做（batch_crops）同日後批量導入嘅姊妹 zip；**剔除**「應用內 OCR 欄位裁圖一併 POST」——要另開一項、老闆明確批准、修訂 docs/api.md 鐵律文字先做。
+- **M3 權限**：讀圖按欄位映射現有 field-group：姓名／出生日期／地址／身份證號 → 「安員個人資料:view」；電話 → 「安員:view」；銀行欄**剔除範圍**；另加 `restrictedKindsFor` 同 `canAccessOwnedBy`（主管只睇自己嗰批）。
+- **M4 bytes 白名單**：`image_bytes` 只由圖片 GET 讀；所有 session／題目 JSON DTO 用 META_SELECT（照 `meta-select.ts`）並加白名單測試，斷言 JSON 永不含 bytes（`brandSafeResponse` 只係 type cast，runtime 唔過濾）。
+- **M5 保留不變式**：圖以 `(session_id, person_key, field)` 為鍵；**只要仍有 open 或 skipped 題需要該欄，圖就存在；否則同一 tx 刪除**。覆蓋：submitAnswer（`beforeCommit`，`updateMany count===1` 之後）、TR-2 部分作答（只刪已答欄）、跳過可再答（保留至 30 日）、session done 喺 commit 後（由不變式＋job 處理，唔靠 done 事件）、supersede 兩類（key 輪換刪舊 person_key；重新導入同人同欄新題沿用舊圖）。每日 job（registry＋advisory lock、分批）清 30 日／180 日安全網同孤兒圖；audit 只計數。每類情況都要測試。
+- **M6 zip 安全**：entry 名必須係不透明 id（唔准真名）；伺服器唔回顯 entry 名／manifest 內容（回應、error、`app_error_log` 都唔准）；限解壓總量（≤32 MB）／entry 數（≤400）；驗 JPEG／PNG magic bytes；manifest 必須有 `match`，冇就整個拒絕。
+- **M7 配對**：本機腳本由同一條 extract 記錄（文件→人）同時產生裁圖同 `match`，唔分開兩次配對；伺服器只驗 manifest 身份同題目 evidence 一致（驗唔到圖內容）；上載前 dry-run 顯示計數，首批由人喺 UI 抽查 10 題。
+- **M8 身份證裁圖**：唔可以包含相片頭像——姓名區、號碼區各自裁，避開相片區（幾何用身份證版面比例，另加測試圖）。
+- **M9 顯示／隔離**：唔用 `next/image`（會落磁碟快取）；回應 `Cache-Control: private, no-store`＋`X-Content-Type-Options: nosniff`；新表加入 `ai.audit_log` NOT IN；加 `zoikan_ai_ro` 讀唔到新表嘅真連線隔離測試（同 WhatsApp 表一樣）。
+- **S1 應用層加密（採納）**：`image_bytes` 用 AES-256-GCM 加密後存；key 由現有 `SESSION_SECRET` 經 HKDF（info `triage-evidence-v1`）派生，**唔加新 secret**；DB 備份／dump 唔係明文。
+- **S2**：每欄 ≤2 張、每題總數 ≤12；**S3**：睇圖寫只計數 audit（題 id＋張數）；**S4**：本機腳本剝走 EXIF／APPn，伺服器驗 header；**S5**：補做次序＝先跑 TR 自動答題，再上載裁圖。
+- **N**：hard delete 後磁碟要 VACUUM／WAL／快照先清（S1 加密令備份非明文）；本機 `data/ops/` 備份納入保留政策；工作量改估 2.5–3 日。
