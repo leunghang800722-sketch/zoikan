@@ -19,6 +19,8 @@ import {
   darkBandRatios,
   cropRequest,
   hasSyntheticFonts,
+  syntheticPermitPageWithEmbeddedCard,
+  syntheticCertificatePage,
   resolveVisionBin,
   makeVisionRunner,
   verifyCrop,
@@ -56,6 +58,8 @@ import {
   capBox,
   findOverflow,
   clipToPhoto,
+  detectEmbeddedCards,
+  findPrintedHkidLines,
 } from "../scripts/staff-import/lib/triage-evidence-core";
 import type { DocPage } from "../scripts/staff-import/lib/triage-reread-core";
 import { readEvidenceZip, evidenceManifestSchema } from "@/lib/triage/evidence-upload";
@@ -78,7 +82,7 @@ describe("來源優先順序（老闆 2026-10-18 補充，方案 §7）", () => 
 
   it("有證件用證件（身份證欄 priority 1），入職表排第二（兩張都出，優先排前）", () => {
     expect(sig([FORM, ID], ["hkid", "name_zh", "name_en", "dob"])).toEqual([
-      "hkid:id_card:1", "hkid:onboarding_form:2",
+      "hkid:id_card:1", "hkid:onboarding_form:3",
       "name_zh:id_card:1", "name_zh:onboarding_form:2",
       "name_en:id_card:1", "name_en:onboarding_form:2",
       "dob:id_card:1", "dob:onboarding_form:2",
@@ -86,7 +90,7 @@ describe("來源優先順序（老闆 2026-10-18 補充，方案 §7）", () => 
   });
 
   it("冇證件退入職表（priority 2）；冇入職表就只有證件", () => {
-    expect(sig([FORM], ["name_zh", "dob", "hkid"])).toEqual(["name_zh:onboarding_form:2", "dob:onboarding_form:2", "hkid:onboarding_form:2"]);
+    expect(sig([FORM], ["name_zh", "dob", "hkid"])).toEqual(["name_zh:onboarding_form:2", "dob:onboarding_form:2", "hkid:onboarding_form:3"]);
     expect(sig([ID], ["name_zh"])).toEqual(["name_zh:id_card:1"]);
     expect(sig([], ["name_zh"])).toEqual([]);
   });
@@ -104,9 +108,11 @@ describe("來源優先順序（老闆 2026-10-18 補充，方案 §7）", () => 
 
   it("evidenceFieldsOf：review 欄；身份證號 review／missing 都要；confirmed 唔出", () => {
     const p = (o: object) => ({ key: "k", hkid: lf(null, "missing"), nameZh: lf("測試甲", "confirmed"), nameEn: lf("A", "confirmed"), dateOfBirth: lf("1990-01-01", "confirmed"), phone: lf("9", "confirmed"), address: lf("x", "confirmed"), staffNumbers: [{ number: "U1" }], ...o }) as never;
-    expect(evidenceFieldsOf(p({}))).toEqual(["hkid"]);
-    expect(evidenceFieldsOf(p({ hkid: lf("Z1", "confirmed") }))).toEqual([]);
-    expect(evidenceFieldsOf(p({ hkid: lf("Z1", "review"), phone: lf("9", "review"), address: lf("x", "review") }))).toEqual(["hkid", "phone", "address"]);
+    // TE-2：所有非 confirmed 欄（review／missing／absent）＋入職日期一律出
+    expect(evidenceFieldsOf(p({}))).toEqual(["hkid", "hire_date"]);
+    expect(evidenceFieldsOf(p({ hkid: lf("Z1", "confirmed") }))).toEqual(["hire_date"]);
+    expect(evidenceFieldsOf(p({ hkid: lf("Z1", "review"), phone: lf("9", "review"), address: lf("x", "review") }))).toEqual(["hkid", "phone", "address", "hire_date"]);
+    expect(evidenceFieldsOf(p({ nameZh: lf(null, "missing"), dateOfBirth: undefined }))).toEqual(["hkid", "name_zh", "dob", "hire_date"]);
   });
 
   it("match 由同一條 package 記錄產生：身份證值＋工號", () => {
@@ -469,24 +475,24 @@ describe("轉頁方向（90／180／270）", () => {
 });
 
 describe("--dry 全流程（合成 fixture）", () => {
-  it.skipIf(!hasMagick)("每人出圖符合 §7：有證件用證件；冇證件退入職表；兩者都有次序；認唔出卡面唔裁身份證欄；冇文件／冇 review 欄唔出", async () => {
+  it.skipIf(!hasMagick)("每人出圖符合 §7：有證件用證件；冇證件退入職表；兩者都有次序；認唔出卡面唔裁身份證欄；冇文件／冇 review 欄唔出", { timeout: 180_000 }, async () => {
     const r = await run(parseArgs(["--dry"]));
     const bySig = (key: string) => r.items.filter((i) => i.match.staff_numbers[0] === key).map((i) => `${i.field}:${i.docKind}:${i.priority}`);
     // 人 1：三份文件齊
-    expect(bySig("DRY1")).toEqual(expect.arrayContaining(["hkid:id_card:1", "hkid:onboarding_form:2", "name_zh:id_card:1", "name_zh:onboarding_form:2", "dob:id_card:1", "address:address_proof:1", "address:onboarding_form:2", "phone:onboarding_form:1"]));
+    expect(bySig("DRY1")).toEqual(expect.arrayContaining(["hkid:id_card:1", "hkid:onboarding_form:3", "name_zh:id_card:1", "name_zh:onboarding_form:2", "dob:id_card:1", "address:address_proof:1", "address:onboarding_form:2", "phone:onboarding_form:1"]));
     // 人 2：冇住址證明 → 住址只有入職表（priority 2）；相片喺左嘅版面一樣出
     expect(bySig("DRY2")).toContain("address:onboarding_form:2");
     expect(bySig("DRY2")).not.toContain("address:address_proof:1");
     expect(bySig("DRY2")).toContain("name_en:id_card:1");
     // 人 3：冇證件 → 退入職表
-    expect(bySig("DRY3")).toEqual(expect.arrayContaining(["hkid:onboarding_form:2", "name_zh:onboarding_form:2", "name_en:onboarding_form:2", "dob:onboarding_form:2", "phone:onboarding_form:1", "address:onboarding_form:2"]));
+    expect(bySig("DRY3")).toEqual(expect.arrayContaining(["hkid:onboarding_form:3", "name_zh:onboarding_form:2", "name_en:onboarding_form:2", "dob:onboarding_form:2", "phone:onboarding_form:1", "address:onboarding_form:2"]));
     expect(bySig("DRY3").some((s) => s.includes("id_card"))).toBe(false);
     // 人 4 冇文件、人 6 冇 review 欄 → 冇圖
     expect(bySig("DRY4")).toEqual([]);
-    expect(bySig("DRY6")).toEqual([]);
+    expect(bySig("DRY6")).toEqual([]); // 冇文件（confirmed 欄；入職日期亦無頁可裁）
     // 人 5：認唔出卡面 → 身份證欄唔裁，退入職表
     expect(bySig("DRY5").some((s) => s.includes("id_card"))).toBe(false);
-    expect(r.stats).toMatchObject({ persons_total: 6, persons_with_fields: 5, persons_no_docs: 1, persons_failed: 0 });
+    expect(r.stats).toMatchObject({ persons_total: 8, persons_with_fields: 8, persons_no_docs: 2, persons_failed: 0 });
     expect(r.stats.skipped.no_card_anchor).toBe(4);
     // 同一欄 priority 1 一定排喺 priority 2 前面（每人內）
     for (const key of ["DRY1", "DRY2"]) {
@@ -494,7 +500,7 @@ describe("--dry 全流程（合成 fixture）", () => {
       for (const f of new Set(mine.map((i) => i.field))) {
         const pr = mine.filter((i) => i.field === f).map((i) => i.priority);
         expect(pr).toEqual([...pr].sort());
-        expect(pr.length).toBeLessThanOrEqual(2);
+        expect(pr.length).toBeLessThanOrEqual(3);
       }
     }
   });
@@ -507,7 +513,7 @@ describe("--dry 全流程（合成 fixture）", () => {
     expect(manifest.items.length).toBe(r.items.length);
     for (const it of manifest.items) {
       expect(it.file).toMatch(/^[a-f0-9]{32}\.jpg$/);
-      expect([1, 2]).toContain(it.priority);
+      expect([1, 2, 3]).toContain(it.priority);
       expect(it.match.hkid || (it.match.staff_numbers?.length ?? 0) > 0).toBeTruthy();
       const bytes = images.get(it.file)!;
       expect(bytes.byteLength).toBeLessThanOrEqual(MAX_IMAGE_BYTES);
@@ -826,7 +832,7 @@ describe.skipIf(!canVision)("TE-1.7 Vision 驗證（真 Apple Vision，合成字
       expect(await verifyCrop(zh, "name_zh", ["陳大文"], run, tmp)).toMatchObject({ ok: false, reason: "value_mismatch" });
       // 多個候選讀數：其中一個對得上就過
       expect((await verifyCrop(zh, "name_zh", ["陳大文", "測試甲"], run, tmp)).ok).toBe(true);
-      expect(await verifyCrop(zh, "hkid", [], run, tmp)).toEqual({ ok: true, score: null, rotate: 0 });
+      expect(await verifyCrop(zh, "hkid", [], run, tmp)).toMatchObject({ ok: true, score: null, rotate: 0 });
       const addr = await crop(tmp, "addr", "火炭示範街99號 虛構大廈15樓A室", 0, true);
       const va = await verifyCrop(addr, "address", ["火炭示範街99號虛構大廈15樓A室"], run, tmp);
       expect(va.ok && va.score! >= VERIFY_THRESHOLD.address).toBe(true);
@@ -871,7 +877,7 @@ describe.skipIf(!canVision)("TE-1.7 Vision 驗證（真 Apple Vision，合成字
     const items = await produceItems([wrong as PersonInput], deps, stats);
     expect(items.some((i) => i.field === "hkid")).toBe(false);
     expect(stats.skipped.value_mismatch).toBeGreaterThanOrEqual(2); // 身份證＋入職表
-    const good = items.filter((i) => i.field !== "hkid");
+    const good = items.filter((i) => i.field !== "hkid" && i.field !== "hire_date"); // hire_date 無預期值＝不驗證
     expect(good.length).toBeGreaterThan(0);
     for (const i of good) {
       expect(typeof i.verifyScore).toBe("number");
@@ -879,20 +885,24 @@ describe.skipIf(!canVision)("TE-1.7 Vision 驗證（真 Apple Vision，合成字
       expect(i.verifyScore!).toBeLessThanOrEqual(1);
     }
     expect(stats.verified).toBe(good.length);
+    expect(stats.unverified).toBe(items.length - good.length);
   }, 180_000);
 
   it("--dry 有 Vision：全部 verify，manifest 帶 verify_score（淨數字 0–1）並過伺服器 strict manifest schema；console 淨計數", async () => {
     const r = await run_(parseArgs(["--dry", "--vision-bin", visionBin!]));
-    expect(r.stats.verified).toBe(r.items.length);
-    expect(r.stats.unverified).toBe(0);
+    expect(r.stats.verified + r.stats.unverified).toBe(r.items.length);
+    expect(r.stats.verified).toBeGreaterThan(0);
+    expect(r.stats.unverified).toBeGreaterThan(0); // hire_date／全 missing 嘅人冇預期值
     const { manifest } = await readEvidenceZip(r.zips[0]!);
     expect(evidenceManifestSchema.safeParse(manifest).success).toBe(true);
     const raw = JSON.parse(await (await JSZip.loadAsync(r.zips[0]!)).file("manifest.json")!.async("string")) as { items: { verify_score?: number }[] };
     for (const it of raw.items) {
+      if (it.verify_score === undefined) continue; // 冇預期值
       expect(typeof it.verify_score).toBe("number");
-      expect(it.verify_score!).toBeGreaterThanOrEqual(0);
-      expect(it.verify_score!).toBeLessThanOrEqual(1);
+      expect(it.verify_score).toBeGreaterThanOrEqual(0);
+      expect(it.verify_score).toBeLessThanOrEqual(1);
     }
+    expect(raw.items.filter((i) => i.verify_score !== undefined).length).toBe(r.stats.verified);
     const { statsLines } = await import("../scripts/staff-import/20-triage-evidence");
     expect(statsLines(r.stats).join("\n")).not.toMatch(/測試甲|Z900001|TESTER/);
   }, 180_000);
@@ -1006,7 +1016,7 @@ describe("TE-1.8 入職表裁圖越界（Vision 讀到其他欄 label 關鍵詞�
     expect(findOverflow("hkid", [vl("香港身份證號碼： Z900001(2)", 0.02, 0.35, 0.6)], (l) => /身份證/.test(l.t))).toBeNull();
     // 分開兩條 line、同一行 → right，frac＝該 line 左緣
     const sep = [vl("香港身份證號碼： Z900001(2)", 0.02, 0.35, 0.45), vl("出生日期： 15-01-1990", 0.55, 0.35, 0.4)];
-    expect(findOverflow("hkid", sep, (l) => /身份證/.test(l.t))).toEqual({ side: "right", frac: 0.55 });
+    expect(findOverflow("hkid", sep, (l) => /身份證/.test(l.t))).toEqual({ side: "right", frac: 0.55, group: "dob" });
     // 下一行 label 露出（below）：frac＝關鍵詞頂緣比例（由上）
     const below = [vl("中文姓名： 測試甲", 0.02, 0.5, 0.5, 0.3), vl("English Name:", 0.02, 0.02, 0.4, 0.12)];
     expect(findOverflow("name_zh", below, (l) => /中文姓名/.test(l.t))).toMatchObject({ side: "below" });
@@ -1279,7 +1289,7 @@ describe.skipIf(!canVision)("TE-1.9 S3：純中文姓名方向沿用同頁其他
     const stats = emptyStats();
     const items = await produceItems([person], mk(flip), stats);
     const zhIdx = items.map((i, k) => (i.field === "name_zh" ? k : -1)).filter((k) => k >= 0);
-    const others = items.map((i, k) => (i.field !== "name_zh" ? k : -1)).filter((k) => k >= 0);
+    const others = items.map((i, k) => (i.field !== "name_zh" && i.field !== "hire_date" ? k : -1)).filter((k) => k >= 0); // hire_date（無預期值）排得更後
     expect(zhIdx.length).toBeGreaterThanOrEqual(1);
     expect(Math.min(...zhIdx)).toBeGreaterThan(Math.max(...others)); // name_zh 排最後
     expect(stats.skipped.orientation_unknown ?? 0).toBe(0);
@@ -1290,4 +1300,515 @@ describe.skipIf(!canVision)("TE-1.9 S3：純中文姓名方向沿用同頁其他
     expect(items2.some((i) => i.field === "name_zh")).toBe(true);
     expect(stats2.page_orientation_followed).toBeGreaterThanOrEqual(1);
   }, 240_000);
+});
+
+// ===========================================================================
+// TE-2
+// ===========================================================================
+import { findEmbeddedCards, isHkidFormatLine } from "../scripts/staff-import/lib/embedded-card";
+import { hkidCheckDigitValid } from "../scripts/staff-import/lib/hkid";
+import { classifyPage } from "../scripts/staff-import/lib/extract";
+import { aggregateDoc } from "../scripts/staff-import/lib/aggregate";
+
+describe("TE-2 嵌入式身份證／印刷號碼偵測（純函數）", () => {
+  const A4 = 210 / 297;
+  it("isHkidFormatLine：整行 HKID 格式（容許全形括號）；多餘字／缺括號內容唔算", () => {
+    const mk = (letters: string, six: string) => {
+      const c = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A"].find((x) => hkidCheckDigitValid(`${letters}${six}${x}`))!;
+      return `${letters}${six}${c}`;
+    };
+    const z = mk("Z", "900001"); // 有效 check digit
+    const ab = mk("AB", "123456");
+    for (const t of [`${z.slice(0, -1)}(${z.slice(-1)})`, `${z.slice(0, -1)}（${z.slice(-1)}）`, z, `${z.slice(0, -1)} (${z.slice(-1)})`, `${ab.slice(0, -1)}(${ab.slice(-1)})`]) expect(isHkidFormatLine(t), t).toBe(true);
+    for (const t of ["香港身份證號碼 Z900001(2)", `${z} 90001110`, "12345678", "Z90000", ""]) expect(isHkidFormatLine(t), t).toBe(false);
+    // TE-2.1 A：格式啱但 check digit 錯 → 唔當 HKID；保安牌照號（A＋7 位數字）排除
+    const bad = z.slice(0, -1) + (z.endsWith("0") ? "1" : "0");
+    expect(isHkidFormatLine(bad)).toBe(false);
+    expect(isHkidFormatLine("A1234567")).toBe(false);
+    expect(isHkidFormatLine("A1234567(8)")).toBe(false);
+  });
+
+  it("findEmbeddedCards：牌照頁右下角細卡→一個卡區（含號碼行同 label，卡比例 85.6×54）；冇 label／冇號碼行→無", () => {
+    const { lines } = syntheticPermitPageWithEmbeddedCard();
+    const cards = findEmbeddedCards(lines, A4);
+    expect(cards).toHaveLength(1);
+    const c = cards[0]!;
+    expect(c.hkid.t).toContain("Z900001");
+    expect(c.labels.length).toBeGreaterThanOrEqual(1);
+    const wPx = (c.box.x1 - c.box.x0) * A4; // 頁高單位
+    const hPx = c.box.y1 - c.box.y0;
+    expect(wPx / hPx).toBeGreaterThan(1.4);
+    expect(wPx / hPx).toBeLessThan(1.8);
+    // 卡內行都喺卡區入面
+    for (const t of ["TESTER", "測試甲", "15-01-1990"]) {
+      const l = lines.find((x) => x.t.includes(t))!;
+      expect(l.x).toBeGreaterThanOrEqual(c.box.x0 - 1e-9);
+      expect(l.x + l.w).toBeLessThanOrEqual(c.box.x1 + 1e-9);
+    }
+    expect(findEmbeddedCards(lines.filter((l) => !/出生日期|簽發日期/.test(l.t)), A4)).toEqual([]);
+    expect(findEmbeddedCards(lines.filter((l) => !l.t.includes("Z900001")), A4)).toEqual([]);
+  });
+
+  it("detectEmbeddedCards：頁面擺反（90／180／270）都搵到，回要轉幾多度同轉正後卡區", () => {
+    const { lines } = syntheticPermitPageWithEmbeddedCard();
+    for (const th of [0, 90, 180, 270] as const) {
+      const det = detectEmbeddedCards(rotateLines(lines, th), A4);
+      expect(det, `θ=${th}`).not.toBeNull();
+      expect(det!.rot).toBe(((360 - th) % 360) as 0 | 90 | 180 | 270);
+      expect(det!.cards).toHaveLength(1);
+    }
+  });
+
+  it("findPrintedHkidLines：證書頁印刷號碼行（唔喺卡區內）；卡內嗰行唔算；有身份證標題嘅整頁身份證唔算", () => {
+    const cert = syntheticCertificatePage();
+    const pr = findPrintedHkidLines(cert, A4);
+    expect(pr).toHaveLength(1);
+    expect(pr[0]!.rot).toBe(0);
+    expect(pr[0]!.line.t).toContain("Z900001");
+    const { lines } = syntheticPermitPageWithEmbeddedCard();
+    const det = detectEmbeddedCards(lines, A4)!;
+    expect(findPrintedHkidLines(lines, A4, (l) => det.cards.some((c) => c.hkid.t === l.t))).toEqual([]);
+    expect(findPrintedHkidLines(syntheticIdCardPage().lines, A4)).toEqual([]); // 真身份證頁有 anchor
+    // 側躺嘅印刷行 → rot 90
+    const side = rotateLines(cert, 90);
+    expect(findPrintedHkidLines(side, A4)[0]!.rot).toBe(90);
+  });
+});
+
+describe("TE-2 來源優先順序：身份證副本 1 ＞ 印刷 2 ＞ 入職表手寫 3；每欄 ≤3、每人 ≤18", () => {
+  const FORM = doc("onboarding_form");
+  const ID = doc("id_card");
+  const sig = (docs: DocPage[], fields: Parameters<typeof planRequests>[0], extra: Parameters<typeof planRequests>[2] = {}) => planRequests(fields, docs, extra).map((r) => `${r.field}:${r.docKind}:${r.priority}${r.variant !== undefined ? `#${r.variant}` : ""}${r.embedded ? "@emb" : ""}${r.printed ? "@prt" : ""}`);
+  const emb = { doc: doc("id_card", 9), rot: 0 as const, region: { x0: 0.5, x1: 0.8, y0: 0.1, y1: 0.24 } };
+  const prt = { doc: doc("id_card", 8), rot: 0 as const, line: { t: "Z900001(2)", c: 0.9, x: 0.4, y: 0.6, w: 0.12, h: 0.02 } };
+
+  it("冇整頁身份證副本：嵌入式身份證做 priority 1，印刷 2，入職表 3；hkid 三張，其餘身份證欄 1＋入職表 2", () => {
+    expect(sig([FORM], ["hkid", "name_zh", "dob"], { embedded: [emb], printed: [prt] })).toEqual([
+      "hkid:id_card:1@emb", "hkid:printed:2@prt", "hkid:onboarding_form:3",
+      "name_zh:id_card:1@emb", "name_zh:onboarding_form:2",
+      "dob:id_card:1@emb", "dob:onboarding_form:2",
+    ]);
+  });
+
+  it("有整頁身份證副本就唔用嵌入式；冇印刷來源就跳過；hire_date 入職表兩格（入職日期先）；phone／address 不受印刷影響", () => {
+    expect(sig([FORM, ID], ["hkid"], { embedded: [emb], printed: [] })).toEqual(["hkid:id_card:1", "hkid:onboarding_form:3"]);
+    expect(sig([FORM], ["hire_date"])).toEqual(["hire_date:onboarding_form:1#0", "hire_date:onboarding_form:1#1"]);
+    expect(sig([], ["hire_date"])).toEqual([]);
+    expect(sig([FORM], ["phone", "address"], { printed: [prt] })).toEqual(["phone:onboarding_form:1", "address:onboarding_form:2"]);
+  });
+
+  it("人數上限：全欄全來源 ≤ 18（最多 hkid3＋name_zh2＋name_en2＋dob2＋phone1＋address2＋hire2＝14）", () => {
+    const r = planRequests(["hkid", "name_zh", "name_en", "dob", "phone", "address", "hire_date"], [FORM, doc("address_proof")], { embedded: [emb], printed: [prt] });
+    expect(r.length).toBe(14);
+    expect(r.length).toBeLessThanOrEqual(18);
+    for (const f of new Set(r.map((x) => x.field))) expect(r.filter((x) => x.field === f).length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("TE-2 入職日期兩格（入職日期／可到職日期；OCR 誤讀「人職」都認）", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.025) => ({ t, c: 0.9, x, y, w, h });
+  const ov = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => intersects(b, { x0: l.x, x1: l.x + l.w, y0: l.y, y1: l.y + l.h });
+  it("variant 0＝入職日期格（格內空白都裁）；variant 1＝可到職日期格（含值）；兩格互不包含對方 label", () => {
+    const lines = syntheticFormPage();
+    const l0 = lines.find((l) => l.t.includes("入職日期"))!;
+    const l1 = lines.find((l) => l.t.includes("可到職日期"))!;
+    const v1 = lines.find((l) => l.t.includes("2026-11-01"))!;
+    const c0 = locateFormCell("hire_date", lines, 0).box!;
+    const c1 = locateFormCell("hire_date", lines, 1).box!;
+    expect(c0.x0).toBeLessThanOrEqual(l0.x);
+    expect(c0.x1).toBeGreaterThanOrEqual(l0.x + l0.w);
+    expect(ov(c0, l1)).toBe(false);
+    expect(c0.x1).toBeLessThan(l1.x); // 入職日期格右界停喺下一格 label 之前（值空白）
+    expect(c1.x0).toBeLessThanOrEqual(l1.x);
+    expect(c1.x1).toBeGreaterThanOrEqual(v1.x + v1.w);
+    expect(ov(c1, l0)).toBe(false);
+    expect(locateFormCell("hire_date", lines.filter((l) => !l.t.includes("可到職")), 1).reason).toBe("form_label_not_located");
+  });
+  it("OCR 誤讀「人職日期」照認；「可到職日期」唔會被當入職日期格", () => {
+    const f = [lab("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.92, 0.5), lab("人職日期：", 0.08, 0.6, 0.11), lab("可到職日期：", 0.4, 0.6, 0.13)];
+    const c0 = locateFormCell("hire_date", f, 0).box!;
+    expect(ov(c0, f[2]!)).toBe(false);
+    expect(c0.x0).toBeLessThanOrEqual(0.08);
+    const only = [f[0]!, f[2]!];
+    expect(locateFormCell("hire_date", only, 0).reason).toBe("form_label_not_located");
+  });
+});
+
+describe("TE-2 導入流程分類：一頁多 kind（牌照頁＋嵌入身份證）", () => {
+  it("classifyPage：牌照頁夾細身份證 → kinds 含 sia_permit＋id_card（embeddedCard），primary 仍然 sia_permit；整頁普通牌照頁／整頁身份證不變", () => {
+    const { lines } = syntheticPermitPageWithEmbeddedCard();
+    const c = classifyPage({ page: 1, lines });
+    expect(c.kinds).toEqual(expect.arrayContaining(["sia_permit", "id_card"]));
+    expect(c.primary).toBe("sia_permit");
+    expect(c.embeddedCard).toBe(true);
+    const plain = classifyPage({ page: 1, lines: lines.filter((l) => !/出生日期|簽發日期|TESTER|測試甲|15-01|Z900001/.test(l.t)).concat([{ t: "備註", c: 0.9, x: 0.1, y: 0.7, w: 0.1, h: 0.02 }]) });
+    expect(plain.kinds).not.toContain("id_card");
+    const idPage = classifyPage({ page: 1, lines: syntheticIdCardPage().lines });
+    expect(idPage.kinds).toContain("id_card");
+    expect(idPage.embeddedCard).toBeUndefined();
+  });
+
+  it("aggregateDoc：身份證抽取對嵌入卡區行做——抽到卡上嘅號碼／姓名／出生日期（唔掃整頁牌照資料）", () => {
+    const { lines } = syntheticPermitPageWithEmbeddedCard();
+    const d = aggregateDoc("d-embedded", [{ page: 1, lines }]);
+    expect(d.hkid?.value).toContain("Z900001");
+    expect(d.pages[0]!.kinds).toContain("id_card");
+  });
+});
+
+describe.skipIf(!hasMagick || !hasSyntheticFonts)("TE-2 嵌入式身份證裁圖（像素級）：牌照頁右下角細卡", () => {
+  it("四個身份證欄都裁到（doc_kind id_card、卡區內、行現有相片區／barrier／capBox 邏輯），冇相片色；印刷行裁細 padding", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te2e-"));
+    try {
+      const permit = syntheticPermitPageWithEmbeddedCard();
+      const d = doc("id_card", 7);
+      const png = path.join(tmp, "permit.png");
+      await drawSyntheticPage({ doc: d, lines: permit.lines, photo: permit.photo }, png);
+      const det = detectEmbeddedCards(permit.lines, 2000 / 2800)!;
+      for (const field of ["hkid", "name_zh", "name_en", "dob"] as const) {
+        const req = { field, docKind: "id_card" as const, priority: 1 as const, doc: d, embedded: { rot: det.rot, region: det.cards[0]!.box } };
+        const r = await cropRequest(req, png, permit.lines, tmp);
+        expect("bytes" in r, field).toBe(true);
+        const f = path.join(tmp, `o-${field}.jpg`);
+        await (await import("node:fs/promises")).writeFile(f, (r as { bytes: Uint8Array }).bytes);
+        const m = await sh(MAGICK, [f, "-fx", "r-g", "-format", "%[fx:maxima]", "info:"]);
+        expect(Number(m.stdout), `${field} 冇相片色`).toBeLessThan(0.15);
+        const id = await sh(MAGICK, ["identify", "-format", "%w %h", f]);
+        const [w, h] = id.stdout.split(" ").map(Number) as [number, number];
+        expect(h, `${field} 唔係成頁`).toBeLessThan(300);
+        expect(w).toBeLessThan(800);
+      }
+      // 印刷行（證書頁）
+      const cert = syntheticCertificatePage();
+      const cd = doc("id_card", 70);
+      const cpng = path.join(tmp, "cert.png");
+      await drawSyntheticPage({ doc: cd, lines: cert }, cpng);
+      const pr = findPrintedHkidLines(cert, 2000 / 2800)[0]!;
+      const pr2 = await cropRequest({ field: "hkid", docKind: "printed", priority: 2, doc: cd, printed: pr }, cpng, cert, tmp);
+      expect("bytes" in pr2).toBe(true);
+      const pf = path.join(tmp, "printed.jpg");
+      await (await import("node:fs/promises")).writeFile(pf, (pr2 as { bytes: Uint8Array }).bytes);
+      const pid = await sh(MAGICK, ["identify", "-format", "%w %h", pf]);
+      const [pw, ph] = pid.stdout.split(" ").map(Number) as [number, number];
+      expect(ph).toBeLessThan(120); // 只係該行＋小 padding
+      expect(pw).toBeLessThan(400);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("--dry 人 7（全部欄 missing）：嵌入卡四欄＋印刷 hkid＋入職表 hkid／phone／address／hire_date×2 全部出圖；無預期值不驗證但方向照做", async () => {
+    const r = await run_(parseArgs(["--dry", "--no-verify"]));
+    const mine = r.items.filter((i) => i.match.staff_numbers[0] === "DRY7").map((i) => `${i.field}:${i.docKind}:${i.priority}`);
+    expect(mine).toEqual(expect.arrayContaining(["hkid:id_card:1", "hkid:printed:2", "hkid:onboarding_form:3", "name_zh:id_card:1", "name_en:id_card:1", "dob:id_card:1", "phone:onboarding_form:1", "address:onboarding_form:2"]));
+    expect(mine.filter((s) => s.startsWith("hire_date"))).toHaveLength(2);
+  }, 120_000);
+
+  it.skipIf(!canVision)("--dry 人 7 有 Vision：冇預期值→未驗證（無 verify_score），其餘照出", async () => {
+    const r = await run_(parseArgs(["--dry", "--vision-bin", visionBin!]));
+    const seven = r.items.filter((i) => i.match.staff_numbers[0] === "DRY7");
+    expect(seven.length).toBeGreaterThanOrEqual(10);
+    expect(seven.every((i) => i.verifyScore === undefined)).toBe(true);
+    expect(r.items.filter((i) => i.match.staff_numbers[0] === "DRY1").some((i) => i.verifyScore !== undefined)).toBe(true);
+  }, 240_000);
+});
+
+// ===========================================================================
+// TE-2.1
+// ===========================================================================
+import { splitMergedLines, locateFormCell as locateCell } from "../scripts/staff-import/lib/triage-evidence-core";
+import { crossNameOk, detectFormPhoto, readabilityScore, secondStageLines } from "../scripts/staff-import/20-triage-evidence";
+
+describe("TE-2.1 A：HKID checksum（牌照號唔當 HKID）", () => {
+  const A4 = 210 / 297;
+  const L = (t: string, x: number, y: number, w: number, h = 0.02) => ({ t, c: 0.9, x, y, w, h });
+  it("printed 偵測：保安牌照號（A＋7 位）、check digit 錯嘅號碼都唔收；有效號碼收", () => {
+    const page = [L("保安人員許可證 PERMIT", 0.1, 0.9, 0.5), L("A1234567", 0.52, 0.49, 0.1), L("B7654321", 0.52, 0.45, 0.1), L("Z900002(9)", 0.5, 0.4, 0.1)];
+    // Z900002(9)：check digit 係刻意錯嘅（有效嗰個係 Z900001(?) 嗰類，呢度另選）
+    const valid = syntheticCertificatePage().find((l) => l.t.includes("Z900001"))!;
+    expect(findPrintedHkidLines(page, A4)).toEqual([]);
+    expect(findPrintedHkidLines([...page, valid], A4)).toHaveLength(1);
+    // 牌照號喺卡區附近亦唔會推出卡區
+    const permit = syntheticPermitPageWithEmbeddedCard().lines.map((l) => (l.t.includes("Z900001") ? { ...l, t: "A1234567" } : l));
+    expect(findEmbeddedCards(permit, A4)).toEqual([]);
+  });
+});
+
+describe("TE-2.1 B：merged OCR line——label 關鍵詞偏移定位", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.025) => ({ t, c: 0.9, x, y, w, h });
+  const title = lab("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.95, 0.5);
+  const ov = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => intersects(b, { x0: l.x, x1: l.x + l.w, y0: l.y, y1: l.y + l.h });
+
+  it("splitMergedLines：39 字併行切成 label／值 virtual 行，x 按字元寬度比例單調遞增；最後冇值嘅 label 帶 endX＝行尾；單 label 行原樣", () => {
+    const merged = lab("香港身份證號碼：Z900001(2) 出生日期： 15-01-1990 出生地點：", 0.131, 0.672, 0.595);
+    const segs = splitMergedLines([merged]);
+    expect(segs.map((x) => x.t)).toEqual(["香港身份證號碼：", "Z900001(2)", "出生日期：", "15-01-1990", "出生地點："]);
+    for (let i = 1; i < segs.length; i++) expect(segs[i]!.x).toBeGreaterThan(segs[i - 1]!.x);
+    expect(segs[0]!.x).toBeCloseTo(0.131, 6);
+    expect(segs[4]!.endX).toBeCloseTo(0.131 + 0.595, 6);
+    expect(segs.every((x) => x.x >= 0.131 - 1e-9 && x.x + x.w <= 0.131 + 0.595 + 1e-6)).toBe(true);
+    const single = lab("手提電話：", 0.08, 0.5, 0.11);
+    expect(splitMergedLines([single])).toEqual([single]);
+    // 描述字 + label（無數字）屬同一 label：「遇有緊急事故聯絡人姓名：」唔切開
+    expect(splitMergedLines([lab("遇有緊急事故聯絡人姓名： 陳大文", 0.1, 0.4, 0.5)]).map((x) => x.t)).toEqual(["遇有緊急事故聯絡人姓名：", "陳大文"]);
+  });
+
+  it("老闆個案第 1 頁：「香港身份證號碼：｜出生日期：｜出生地點：」成行一條 39 字 line（手寫號碼 OCR 冇讀到）→ hkid 格只裁第一格（右界＝出生日期關鍵詞推算 x），不含出生日期／出生地點", () => {
+    const merged = lab("香港身份證號碼： 出生日期： 出生地點：", 0.131, 0.672, 0.595);
+    const segs = splitMergedLines([merged]);
+    const dob = segs.find((x) => x.t.startsWith("出生日期"))!;
+    const pob = segs.find((x) => x.t.startsWith("出生地點"))!;
+    const hk = locateCell("hkid", [title, merged]);
+    expect(hk.box).not.toBeNull();
+    expect(hk.box!.x0).toBeLessThanOrEqual(0.131);
+    expect(hk.box!.x1).toBeLessThanOrEqual(dob.x);
+    expect(hk.box!.x1).toBeGreaterThan(0.131 + 0.05);
+    const d = locateCell("dob", [title, merged]).box!;
+    expect(d.x0).toBeGreaterThanOrEqual(dob.x - 1e-9);
+    expect(d.x1).toBeLessThanOrEqual(pob.x);
+    expect(ov(d, { x: pob.x, y: 0.672, w: pob.w, h: 0.025 })).toBe(false);
+  });
+
+  it("入職日期：「許可證號碼｜許可證屆滿日期｜入職日期：」併行（格內空白）→ 只裁入職日期格（行尾為界），唔包牌照號同屆滿日", () => {
+    const merged = lab("許可證號碼： 許可證屆滿日期： 入職日期：", 0.1, 0.55, 0.7);
+    const segs = splitMergedLines([merged]);
+    const hire = segs.find((x) => x.t.startsWith("入職日期"))!;
+    const exp = segs.find((x) => x.t.startsWith("許可證屆滿日期"))!;
+    const r = locateCell("hire_date", [title, merged], 0);
+    expect(r.box).not.toBeNull();
+    expect(r.box!.x0).toBeGreaterThanOrEqual(exp.x + exp.w - 1e-6); // 唔包屆滿日期格
+    expect(r.box!.x0).toBeLessThanOrEqual(hire.x);
+    expect(r.box!.x1).toBeCloseTo(0.1 + 0.7, 2); // 行尾
+    expect(r.box!.x1).toBeLessThanOrEqual(0.1 + 0.7 + 1e-6);
+  });
+});
+
+describe("TE-2.1 C：範本 B 兩行 label block", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.022) => ({ t, c: 0.9, x, y, w, h });
+  const ov = (b: { x0: number; x1: number; y0: number; y1: number }, l: { x: number; y: number; w: number; h: number }) => intersects(b, { x0: l.x, x1: l.x + l.w, y0: l.y, y1: l.y + l.h });
+  it("「香港身份證:」＋「H.K. I.D. Card No.:」兩行 label、值寫喺右邊跨兩行 → 合併 block，cell 高度＝block＋0.25×行高，值兩行都包；下一行 label 唔入；cap 以 block 計唔切走值", () => {
+    const zh = lab("香港身份證:", 0.08, 0.6, 0.13);
+    const en = lab("H.K. I.D. Card No.:", 0.08, 0.576, 0.17);
+    const v1 = lab("Z900001", 0.28, 0.6, 0.1);
+    const v2 = lab("(2)", 0.28, 0.576, 0.05);
+    const next = lab("出生日期:", 0.08, 0.53, 0.12);
+    const title = lab("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.95, 0.5);
+    const lines = [title, zh, en, v1, v2, next];
+    const r = locateCell("hkid", lines);
+    expect(r.box).not.toBeNull();
+    for (const l of [zh, en, v1, v2]) expect(ov(r.box!, l)).toBe(true);
+    expect(r.box!.y0).toBeLessThanOrEqual(en.y);
+    expect(r.box!.y1).toBeGreaterThanOrEqual(zh.y + zh.h);
+    expect(ov(r.box!, next)).toBe(false);
+    expect(r.box!.y1 - r.box!.y0).toBeLessThanOrEqual(0.022 * 2 + 0.002 + 0.25 * 0.046 * 2 + 0.01); // block 高度＋上下 pad
+    // label 即 block：cap 錨喺 block，唔會把雙行值切走
+    const b = capBox(r.box!, { own: [r.label!], mode: "form" }, 2000, 2800);
+    expect(b.capped).toBe(false);
+    // 單行 label（冇英文翻譯行）照舊
+    const single = locateCell("hkid", [title, zh, v1]);
+    expect(single.box!.y0).toBeGreaterThan(en.y);
+  });
+});
+
+describe("TE-2.1 D：姓名 label 只喺申請人個人資料段落；表頭「姓 名」唔算", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.022) => ({ t, c: 0.9, x, y, w, h });
+  it("有標題：個人資料段內嘅「中文姓名：」中；頁底「諮詢人資料」表格嘅「姓 名」（同行有地址／電話／關係）唔中", () => {
+    const lines = [
+      lab("申請人個人資料 Personal Particulars", 0.08, 0.9, 0.5),
+      lab("中文姓名：", 0.08, 0.82, 0.12), lab("測試甲", 0.21, 0.82, 0.1),
+      lab("過去 3 年受僱記錄", 0.08, 0.5, 0.3),
+      lab("諮詢人資料", 0.08, 0.2, 0.2),
+      lab("姓 名", 0.08, 0.15, 0.06), lab("地址", 0.3, 0.15, 0.06), lab("電話", 0.5, 0.15, 0.06), lab("關係", 0.7, 0.15, 0.06),
+    ];
+    const r = locateCell("name_zh", lines);
+    expect(r.box).not.toBeNull();
+    expect(r.box!.y0).toBeGreaterThan(0.5); // 喺個人資料段
+    // 個人資料段冇姓名 label、淨得頁底表頭 → 唔中
+    const onlyHeader = lines.filter((l) => !l.t.includes("中文姓名") && l.t !== "測試甲");
+    expect(locateCell("name_zh", onlyHeader).reason).toBe("form_label_not_located");
+    // 冇標題：取頁頂 50%——頁底（y<0.5）嘅「姓名：」唔中
+    const noHeading = [lab("姓名：", 0.08, 0.2, 0.08), lab("陳大文", 0.17, 0.2, 0.1)];
+    expect(locateCell("name_zh", noHeading).reason).toBe("form_label_not_located");
+    expect(locateCell("name_zh", [lab("姓名：", 0.08, 0.7, 0.08), lab("陳大文", 0.17, 0.7, 0.1)]).box).not.toBeNull();
+  });
+});
+
+describe.skipIf(!hasMagick)("TE-2.1 E：相片格要真係有相先排除", () => {
+  it("detectFormPhoto：右上 25%×35% 有深色相片格→回 FORM_PHOTO_BOX；冇相→null；冇相片格時右上格（English Name／出生地點）唔被 form_photo_overlap 殺", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te21e-"));
+    try {
+      const lines = syntheticFormPage();
+      const withPhoto = path.join(tmp, "with.png");
+      const noPhoto = path.join(tmp, "no.png");
+      await drawSyntheticPage({ doc: doc("onboarding_form"), lines, photo: SYNTHETIC_FORM_PHOTO }, withPhoto);
+      await drawSyntheticPage({ doc: doc("onboarding_form"), lines }, noPhoto);
+      expect(await detectFormPhoto(withPhoto, 0, tmp)).toEqual(FORM_PHOTO_BOX);
+      expect(await detectFormPhoto(noPhoto, 0, tmp)).toBeNull();
+      // 右上格：English Name（x .55–.71，y .8）喺 FORM_PHOTO_BOX 之外；造一格喺相片區內嘅 label
+      const rightTop = [lab0("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.95, 0.5), lab0("中文姓名：", 0.08, 0.8, 0.12), lab0("English Name:", 0.78, 0.8, 0.13), lab0("TESTER ALPHA", 0.78, 0.77, 0.15)];
+      expect(locateCell("name_en", rightTop).reason).toBe("form_photo_overlap"); // 預設當有相片格
+      expect(locateCell("name_en", rightTop, 0, null).box).not.toBeNull(); // 冇相片格：照裁
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+const lab0 = (t: string, x: number, y: number, w: number, h = 0.025) => ({ t, c: 0.9, x, y, w, h });
+
+describe.skipIf(!canVision)("TE-2.1 F：冇預期值嘅方向判斷", () => {
+  const FONT = "/System/Library/Fonts/Supplemental/Arial.ttf";
+  const run = makeVisionRunner(visionBin!);
+  const crop = async (tmp: string, name: string, text: string, deg = 0) => {
+    const f = path.join(tmp, `${name}.png`);
+    await sh(MAGICK, ["-size", `${Math.max(480, text.length * 36 + 60)}x110`, "xc:white", "-font", FONT, "-pointsize", "56", "-fill", "black", "-annotate", "+24+78", text, ...(deg ? ["-rotate", String(deg)] : []), f]);
+    return f;
+  };
+  it("readabilityScore：字母數字＋字典詞命中", () => {
+    expect(readabilityScore("English Name: TESTER")).toBeGreaterThan(readabilityScore("OLLL0006 (z)"));
+    expect(readabilityScore("")).toBe(0);
+  });
+  it("有同頁 prior→跟 prior（followedPage）；冇 prior→.fast 四方向讀數明顯差距先決定（180°→rotate 180）；差距唔明顯→維持 prior（0，非側躺）", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te21f-"));
+    try {
+      const up = await crop(tmp, "up", "English Name: TESTER ALPHA");
+      const d180 = await crop(tmp, "d180", "English Name: TESTER ALPHA", 180);
+      expect(await verifyCrop(d180, "hire_date", [], run, tmp, { pagePrior: 180 })).toMatchObject({ ok: true, score: null, rotate: 180, followedPage: true });
+      expect(await verifyCrop(d180, "hire_date", [], run, tmp)).toMatchObject({ ok: true, score: null, rotate: 180, decisive: true });
+      expect(await verifyCrop(up, "hire_date", [], run, tmp)).toMatchObject({ ok: true, score: null, rotate: 0, decisive: true });
+      const side = await crop(tmp, "side", "English Name: TESTER ALPHA", 90);
+      expect(await verifyCrop(side, "hire_date", [], run, tmp)).toMatchObject({ ok: true, rotate: 270 });
+      const blank = path.join(tmp, "blank.png");
+      await sh(MAGICK, ["-size", "400x100", "xc:white", blank]);
+      expect(await verifyCrop(blank, "hire_date", [], run, tmp)).toMatchObject({ ok: true, rotate: 0, decisive: false });
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+});
+
+describe.skipIf(!canVision || !hasMagick)("TE-2.1 G：嵌入卡二階段局部 OCR（200dpi 整頁 OCR 讀唔到細卡）", () => {
+  it("secondStageLines：300dpi 切 2×2＋中間，行座標映射返全頁，搵到細卡（detectEmbeddedCards）；第一階段 lines 冇卡", async () => {
+    const fx = dryFixture();
+    const d = [...fx.docs.values()].find((x) => x.doc.docId.includes("8-sia_permit"))!;
+    expect(detectEmbeddedCards(d.lines, 210 / 297)).toBeNull(); // 整頁 OCR 讀唔到
+    const deps: Deps = {
+      lines: async () => d.lines,
+      existing: () => null,
+      render: async () => {
+        const out = path.join(os.tmpdir(), `te21g-${process.pid}-${Math.random().toString(36).slice(2)}.png`);
+        await drawSyntheticPage(d, out);
+        return out;
+      },
+      cleanup: async (p) => {
+        await rm(p, { force: true });
+      },
+      vision: makeVisionRunner(visionBin!),
+    };
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te21g-"));
+    try {
+      const s2 = await secondStageLines(d.doc, deps, tmp);
+      expect(s2).not.toBeNull();
+      const det = detectEmbeddedCards(s2!.lines, s2!.aspect);
+      expect(det).not.toBeNull();
+      const box = det!.cards[0]!.box;
+      expect(box.x0).toBeGreaterThan(0.4);
+      expect(box.y1).toBeLessThan(0.4); // 右下角
+      expect(await secondStageLines(d.doc, { ...deps, vision: undefined }, tmp)).toBeNull(); // 冇 Vision 唔做
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it("--dry 人 8（hkid missing、牌照頁細卡只有二階段先讀到）：二階段頁數 ≥1，嵌入卡四欄出圖；有 Vision 先做", async () => {
+    const r = await run_(parseArgs(["--dry", "--vision-bin", visionBin!]));
+    expect(r.stats.second_stage_pages).toBeGreaterThanOrEqual(1);
+    const eight = r.items.filter((i) => i.match.staff_numbers[0] === "DRY8").map((i) => `${i.field}:${i.docKind}:${i.priority}`);
+    expect(eight).toEqual(expect.arrayContaining(["hkid:id_card:1", "name_en:id_card:1", "dob:id_card:1"]));
+    // 冇 Vision（--no-verify）→ 唔做二階段，人 8 搵唔到嵌入卡
+    const r2 = await run_(parseArgs(["--dry", "--no-verify"]));
+    expect(r2.stats.second_stage_pages).toBe(0);
+    expect(r2.items.filter((i) => i.match.staff_numbers[0] === "DRY8").some((i) => i.docKind === "id_card")).toBe(false);
+    // H：按欄跳過原因分佈只有計數
+    const { statsLines } = await import("../scripts/staff-import/20-triage-evidence");
+    const txt = statsLines(r.stats).join("\n");
+    expect(txt).toContain("按欄跳過原因");
+    expect(txt).toContain("二階段局部 OCR 頁數");
+    expect(txt).not.toMatch(/Z900001|TESTER|測試甲/);
+  }, 300_000);
+});
+
+describe("TE-2.1 S3：非個人資料欄溢出到個人資料格——直接跳過（cell_overflow_pii），個人資料欄之間照收界重裁", () => {
+  it.skipIf(!hasMagick)("hire_date／phone 遇上個人資料關鍵詞（hkid／dob／name／address）→ cell_overflow_pii 唔重裁；溢出到電話（非 PII）照收界；hkid 旁邊出生日期（PII↔PII）照重裁", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te21s3-"));
+    try {
+      const lines = syntheticFormPage();
+      const png = path.join(tmp, "form.png");
+      await drawSyntheticPage({ doc: doc("onboarding_form"), lines, photo: SYNTHETIC_FORM_PHOTO }, png);
+      const mk = (field: "hire_date" | "phone" | "hkid") => ({ field, docKind: "onboarding_form" as const, priority: 1 as const, doc: doc("onboarding_form") });
+      const hookOnce = (group: string) => {
+        let n = 0;
+        return async () => {
+          n += 1;
+          return n === 1 ? { ok: true as const, score: null, rotate: 0 as const, overflow: { side: "right" as const, frac: 0.6, group } } : { ok: true as const, score: null, rotate: 0 as const };
+        };
+      };
+      for (const g of ["hkid", "dob", "name_en", "address", "pob"]) {
+        expect(await cropRequest(mk("hire_date"), png, lines, tmp, undefined, hookOnce(g)), `hire_date→${g}`).toMatchObject({ reason: "cell_overflow_pii" });
+        expect(await cropRequest(mk("phone"), png, lines, tmp, undefined, hookOnce(g)), `phone→${g}`).toMatchObject({ reason: "cell_overflow_pii" });
+      }
+      // 非 PII 關鍵詞（電話）：照收界重裁
+      expect("bytes" in (await cropRequest(mk("hire_date"), png, lines, tmp, undefined, hookOnce("phone")))).toBe(true);
+      // 個人資料欄之間：hkid 格旁邊係出生日期 → 照舊收界重裁
+      expect("bytes" in (await cropRequest(mk("hkid"), png, lines, tmp, undefined, hookOnce("dob")))).toBe(true);
+      // findOverflow 帶 group
+      expect(findOverflow("hire_date", [{ t: "入職日期： 香港身份證號碼：", x: 0.02, y: 0.35, w: 0.9, h: 0.3 }], (l) => /入職/.test(l.t))).toMatchObject({ side: "right", group: "hkid" });
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("TE-2.1 S4：無預期值 hkid 圖（printed／嵌入卡）交叉一致性——confirmed 姓名要喺同頁 OCR 行出現", () => {
+  const p0 = (over: Record<string, unknown>) => ({ key: "k", hkid: lf(null, "missing"), nameZh: lf(null, "missing"), nameEn: lf(null, "missing"), dateOfBirth: lf(null, "missing"), phone: lf(null, "missing"), address: lf(null, "missing"), staffNumbers: [], ...over }) as never;
+  const page = syntheticCertificatePage(); // 「姓名 NAME TESTER ALPHA」
+  it("crossNameOk：冇 confirmed 姓名→true；英文名 token 覆蓋 ≥0.5→true；中文字元重疊 ≥0.5→true；有 confirmed 姓名但頁面完全唔夾→false；非 confirmed 姓名唔計", () => {
+    expect(crossNameOk(p0({}), page)).toBe(true);
+    expect(crossNameOk(p0({ nameEn: lf("TESTER ALPHA", "confirmed") }), page)).toBe(true);
+    expect(crossNameOk(p0({ nameEn: lf("CHAN TAI MAN", "confirmed") }), page)).toBe(false);
+    expect(crossNameOk(p0({ nameEn: lf("CHAN TAI MAN", "review") }), page)).toBe(true); // review 唔計
+    const withZh = [...page, { t: "測試甲", c: 0.9, x: 0.1, y: 0.7, w: 0.1, h: 0.02 }];
+    expect(crossNameOk(p0({ nameZh: lf("測試甲", "confirmed") }), withZh)).toBe(true);
+    expect(crossNameOk(p0({ nameZh: lf("陳大文", "confirmed") }), withZh)).toBe(false);
+    // 中英其中一個夾就過
+    expect(crossNameOk(p0({ nameZh: lf("陳大文", "confirmed"), nameEn: lf("TESTER ALPHA", "confirmed") }), page)).toBe(true);
+  });
+
+  it.skipIf(!hasMagick)("produceItems：人 7（printed＋嵌入卡）——confirmed 姓名唔夾→hkid 嵌入卡／印刷圖 cross_name_mismatch 跳過（入職表 hkid 照出）；夾→照出；冇 confirmed→照出", async () => {
+    const mkDeps = (fx: ReturnType<typeof dryFixture>): Deps => ({
+      lines: async (d) => fx.docs.get(`${d.docId}|${d.page}`)?.lines ?? null,
+      existing: () => null,
+      render: async (d) => {
+        const out = path.join(os.tmpdir(), `te21s4-${process.pid}-${Math.random().toString(36).slice(2)}.png`);
+        await drawSyntheticPage(fx.docs.get(`${d.docId}|${d.page}`)!, out);
+        return out;
+      },
+      cleanup: async (png) => {
+        await rm(png, { force: true });
+      },
+    });
+    const fx = dryFixture();
+    const seven = fx.people.find((x) => x.person.staffNumbers[0]!.number === "DRY7")!;
+    const run1 = async (over: Record<string, unknown>) => {
+      const stats = emptyStats();
+      const items = await produceItems([{ ...seven, person: { ...seven.person, ...over } }], mkDeps(fx), stats);
+      return { items, stats, hk: items.filter((i) => i.field === "hkid").map((i) => `${i.docKind}:${i.priority}`) };
+    };
+    const bad = await run1({ nameEn: lf("CHAN TAI MAN", "confirmed") });
+    expect(bad.hk).toEqual(["onboarding_form:3"]);
+    expect(bad.stats.skipped_by_field.hkid?.cross_name_mismatch).toBe(2); // 嵌入卡＋印刷
+    const good = await run1({ nameEn: lf("TESTER ALPHA", "confirmed") });
+    expect(good.hk).toEqual(expect.arrayContaining(["id_card:1", "printed:2", "onboarding_form:3"]));
+    const none = await run1({});
+    expect(none.hk).toEqual(expect.arrayContaining(["id_card:1", "printed:2"]));
+  }, 180_000);
 });

@@ -276,7 +276,7 @@ npx tsx scripts/staff-import/19-triage-reread.ts --dry     # fake client＋記�
 
 目的：題卡直接顯示原文件相應欄位嘅裁圖（身份證號／姓名／出生日期／電話／地址），覆核人對住圖打返正確資料。**只存欄位裁圖**（唔存成頁），AES-256-GCM 加密，**答題即刪**，保留期（跳過 30 日／最長 180 日）只係安全網。
 
-**來源優先順序（老闆 2026-10-18）**：身份證號／中英文姓名／出生日期＝身份證副本（priority 1）→ 入職表手寫（priority 2）；住址＝住址證明（1）→ 入職表（2）；電話＝入職表。兩個來源都有就兩張都出（優先排前），題卡先顯示優先來源，第二張摺埋「亦見入職表手寫」，每張標來源（身份證副本／住址證明／入職表手寫）。
+**來源優先順序（老闆 2026-10-18；TE-2 加印刷）**：身份證號＝身份證副本 1 → 牌照／證書印刷 2 → 入職表手寫 3；中英文姓名／出生日期＝身份證副本 1 → 入職表手寫 2；住址＝住址證明（1）→ 入職表（2）；電話＝入職表。兩個來源都有就兩張都出（優先排前），題卡先顯示優先來源，第二張摺埋「亦見入職表手寫」，每張標來源（身份證副本／住址證明／入職表手寫）。
 
 補做 280 條現有題嘅次序（S5）：
 1. **先跑 TR 自動答題**（`19-triage-reread.ts` → `/triage` 「⋯ → 導入 OCR 重讀建議」），令有把握嘅題先答晒（答咗嘅題唔需要圖）。
@@ -291,7 +291,7 @@ npx tsx scripts/staff-import/20-triage-evidence.ts \
   --out data/2026-10/triage-evidence/ [--docs-dir data/2026-09/staff-docs] [--limit N] [--only-key K]
 npx tsx scripts/staff-import/20-triage-evidence.ts --dry     # 合成假證件版面（ImageMagick 即時畫），唔讀 data、唔打 API
 ```
-   對**所有**有 review 欄嘅人出圖（伺服器只收仍有 open／skipped 題需要嘅欄，其餘 `skipped_not_needed`）。身份證圖一律即時由原 PDF 頁裁（號碼區／中文姓名區／英文姓名區／出生日期區各自裁，**避開相片區**；認唔出卡面就唔裁）；電話／住址證明優先用現成單欄裁圖，冇就用 OCR 幾何即時裁；入職表其他欄用 label 行（best effort，只作 priority 2）。縮至長邊 ≤800px、JPEG、`-strip`（剝 EXIF／APPn）、≤120 KB。輸出 `--out/triage-evidence-001.zip…`（每 zip ≤300 張／≤7 MB；entry 名＝圖 sha256 前 32 位；manifest 每張帶 `field`／`doc_kind`／`priority`／`match`，`match` 同圖由同一條 package 記錄產生）。console 只有計數。`--out` 必須喺 `data/` 下。
+   TE-2：對每個人**所有非 confirmed 欄**（review／missing／absent）＋入職日期出圖，唔理 OCR 讀到讀唔到值；每頁（唔理導入分類）搵夾喺牌照頁等嘅嵌入式身份證同證書頁印刷嘅身份證號；**每欄上限 3 張、每人 18 張（原 2／12）**。伺服器只收仍有 open／skipped 題需要嘅欄，其餘 `skipped_not_needed`。身份證圖一律即時由原 PDF 頁裁（號碼區／中文姓名區／英文姓名區／出生日期區各自裁，**避開相片區**；認唔出卡面就唔裁）；電話／住址證明優先用現成單欄裁圖，冇就用 OCR 幾何即時裁；入職表其他欄用 label 行（best effort，只作 priority 2）。縮至長邊 ≤800px、JPEG、`-strip`（剝 EXIF／APPn）、≤120 KB。輸出 `--out/triage-evidence-001.zip…`（每 zip ≤300 張／≤7 MB；entry 名＝圖 sha256 前 32 位；manifest 每張帶 `field`／`doc_kind`／`priority`／`match`，`match` 同圖由同一條 package 記錄產生）。console 只有計數。`--out` 必須喺 `data/` 下。
    **Vision 驗證（TE-1.7）**：每張裁圖裁完用本機 Apple Vision（`vision-ocr.swift`，離線；預設編譯到 os.tmpdir，要 swiftc；可 `--vision-bin`）讀一次同 package 該欄預期值比對（號碼／電話／日期 ≥0.7、姓名 ≥0.5、地址 ≥0.4），低過門檻跳過（`value_mismatch`＝裁錯欄／錯人／抬頭）；方向由 `.fast` 識別級別判斷（對方向敏感；`.accurate` 四個方向都讀到同一串字，所以唔能靠它揀方向），純中文裁圖分唔出 180°／側躺 90°／270°（`orientation_unknown` 跳過，其餘靠版面推算 prior）。Vision 讀出嘅文字只喺記憶體比對，唔寫 log／檔案；manifest 帶 `verify_score`。冇 swiftc 自動 no-verify（或 `--no-verify`）。**`data/ops/` 備份要納入保留政策**（zip 內係明文 JPEG，補做完要刪）。
 3. **上載**：`/triage` → 保安員證件資料導入嗰張卡 →「⋯」→「上載覆核裁圖」→ 揀 zip → 自動 dry run（檔內幾張／配對幾題／可儲存幾張／各跳過原因）→ 確認「確認儲存 N 張」。分批（約 600 張＝3–4 個 zip）逐個上載；重覆上載同一 zip 安全（`skipped_duplicate`）。
 4. **首批人手抽查 10 題（M7）**：上載後喺題卡抽 10 題，對住圖睇人↔圖有冇對錯（伺服器只驗 manifest 身份同題目 evidence 一致，驗唔到圖內容）；有錯就停手回報，唔好繼續答。

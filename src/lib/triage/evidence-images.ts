@@ -47,13 +47,31 @@ const REVIEW_TO_EVIDENCE: Record<ReviewField, EvidenceField> = { nameZh: "name_z
 export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson">): EvidenceField[] {
   const ev = q.evidenceJson as unknown as QuestionEvidence | null;
   const out = new Set<EvidenceField>();
+  const addExt = () => {
+    for (const r of ev?.ext_review ?? []) {
+      if (r.key === "siaPermit.no") out.add("permit_no");
+      // TE-2：入職日期（ext key `hireDate`／`staffHire.<工號>`）
+      if (r.key === "hireDate" || r.key.startsWith("staffHire.")) out.add("hire_date");
+    }
+  };
   switch (q.kind) {
     case "name_not_confirmed":
       out.add("name_zh");
       break;
     case "hkid_not_confirmed":
-    case "no_id_card":
       out.add("hkid");
+      break;
+    case "no_id_card":
+      // TE-2：冇身份證號——俾人對住證件答：號碼、中英文姓名、出生日期
+      for (const f of ["hkid", "name_zh", "name_en", "dob"] as const) out.add(f);
+      break;
+    case "name_only_candidate":
+      out.add("name_zh");
+      out.add("name_en");
+      break;
+    case "tel_only_candidate":
+    case "dup_tel_across_persons":
+      out.add("phone");
       break;
     case "field_review":
       for (const r of ev?.review_fields ?? []) {
@@ -62,9 +80,13 @@ export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson
       }
       break;
     case "ext_identity_check":
+      // TE-2：確認身份——號碼＋中英文姓名（另加 ext 欄：牌照號、入職日期）
+      for (const f of ["hkid", "name_zh", "name_en"] as const) out.add(f);
+      addExt();
+      break;
     case "ext_field_conflict":
     case "ext_field_review":
-      for (const r of ev?.ext_review ?? []) if (r.key === "siaPermit.no") out.add("permit_no");
+      addExt();
       break;
     default:
       break;

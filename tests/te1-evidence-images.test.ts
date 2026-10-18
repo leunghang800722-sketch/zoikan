@@ -19,6 +19,8 @@ import {
   DOC_KIND_LABEL,
   EVIDENCE_META_SELECT,
   FIELD_DOC_PRIORITY,
+  MAX_PER_FIELD,
+  MAX_PER_PERSON,
   MAX_IMAGE_BYTES,
   decryptImage,
   deleteUnneeded,
@@ -31,6 +33,7 @@ import {
   viewableFields,
 } from "@/lib/triage/evidence-images";
 import { readEvidenceZip } from "@/lib/triage/evidence-upload";
+import { evidenceManifestSchema } from "@/lib/triage/evidence-upload";
 import { runTriageEvidenceCleanup } from "@/lib/jobs/triage-evidence-cleanup";
 import { JOBS } from "@/lib/jobs/registry";
 import { triageEvidenceCleanupJob } from "@/lib/jobs/triage-evidence-cleanup";
@@ -203,20 +206,31 @@ describe("TE-1 證據裁圖", () => {
       const ev = (extra: object) => ({ v: 1, person: person({}), reasons: [], candidate_guard_ids: [], ...extra }) as never;
       expect(requiredFieldsFor({ kind: "name_not_confirmed", evidenceJson: ev({}) })).toEqual(["name_zh"]);
       expect(requiredFieldsFor({ kind: "hkid_not_confirmed", evidenceJson: ev({}) })).toEqual(["hkid"]);
-      expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({}) })).toEqual(["hkid"]);
+      expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({}) }).sort()).toEqual(["dob", "hkid", "name_en", "name_zh"]); // TE-2：俾人對住證件答
       expect(requiredFieldsFor({ kind: "field_review", evidenceJson: ev({ review_fields: [{ field: "nameEn", check: "x" }, { field: "dateOfBirth", check: "x" }, { field: "phone", check: "x" }, { field: "address", check: "x" }, { field: "nameZh", check: "x" }] }) }).sort()).toEqual(["address", "dob", "name_en", "name_zh", "phone"]);
-      expect(requiredFieldsFor({ kind: "ext_field_review", evidenceJson: ev({ ext_review: [{ key: "siaPermit.no", check: "x", status: "review" }, { key: "bank", check: "x", status: "review" }, { key: "hireDate", check: "x", status: "review" }] }) })).toEqual(["permit_no"]);
+      expect(requiredFieldsFor({ kind: "ext_field_review", evidenceJson: ev({ ext_review: [{ key: "siaPermit.no", check: "x", status: "review" }, { key: "bank", check: "x", status: "review" }, { key: "hireDate", check: "x", status: "review" }] }) }).sort()).toEqual(["hire_date", "permit_no"]);
       expect(requiredFieldsFor({ kind: "bank_review", evidenceJson: ev({ ext_review: [{ key: "bank", check: "x", status: "review" }] }) })).toEqual([]);
       expect(requiredFieldsFor({ kind: "wa_unparsed", evidenceJson: ev({}) })).toEqual([]);
     });
 
     it("§7 來源優先順序表：證件欄＝身份證優先、住址＝住址證明優先、電話＝入職表；priorityOf 1／2／null", () => {
-      for (const f of ["hkid", "name_zh", "name_en", "dob"] as const) {
+      for (const f of ["name_zh", "name_en", "dob"] as const) {
         expect(FIELD_DOC_PRIORITY[f]).toEqual(["id_card", "onboarding_form"]);
         expect(priorityOf(f, "id_card")).toBe(1);
         expect(priorityOf(f, "onboarding_form")).toBe(2);
         expect(priorityOf(f, "address_proof")).toBeNull();
       }
+      // TE-2：身份證號 身份證副本 1 ＞ 牌照／證書印刷 2 ＞ 入職表手寫 3；入職日期只有入職表
+      expect(FIELD_DOC_PRIORITY.hkid).toEqual(["id_card", "printed", "onboarding_form"]);
+      expect(priorityOf("hkid", "id_card")).toBe(1);
+      expect(priorityOf("hkid", "printed")).toBe(2);
+      expect(priorityOf("hkid", "onboarding_form")).toBe(3);
+      expect(priorityOf("name_zh", "printed")).toBeNull();
+      expect(priorityOf("hire_date", "onboarding_form")).toBe(1);
+      expect(priorityOf("hire_date", "id_card")).toBeNull();
+      expect(DOC_KIND_LABEL.printed).toBe("牌照／證書印刷");
+      expect(MAX_PER_FIELD).toBe(3);
+      expect(MAX_PER_PERSON).toBe(18);
       expect(priorityOf("address", "address_proof")).toBe(1);
       expect(priorityOf("address", "onboarding_form")).toBe(2);
       expect(priorityOf("address", "id_card")).toBeNull();
@@ -462,7 +476,7 @@ describe("TE-1 證據裁圖", () => {
       expect(r.body).toMatchObject({ accepted_images: 1, skipped_not_needed: 2, skipped_invalid: 2 });
     });
 
-    it("每欄 ≤2：優先來源排前；第 3 張 over_limit；每人總數 ≤12", async () => {
+    it("每欄 ≤3：優先來源排前；第 4 張 over_limit", async () => {
       const { pc, sid } = await seed();
       const m = matchOf(pc);
       // 丑 field_review: nameEn + address。nameEn：id_card(1)、onboarding_form(2)、再一張 id_card → 超額
@@ -473,13 +487,14 @@ describe("TE-1 證據裁圖", () => {
           { bytes: J(81), field: "name_en", doc_kind: "onboarding_form", priority: 2, match: m },
           { bytes: J(82), field: "name_en", doc_kind: "id_card", priority: 1, match: m },
           { bytes: J(83), field: "name_en", doc_kind: "id_card", priority: 1, match: m },
+          { bytes: J(85), field: "name_en", doc_kind: "id_card", priority: 1, match: m },
           { bytes: J(84), field: "address", doc_kind: "address_proof", priority: 1, match: m },
         ]),
       );
-      expect(r.body).toMatchObject({ accepted_images: 3, skipped_over_limit: 1 });
+      expect(r.body).toMatchObject({ accepted_images: 4, skipped_over_limit: 1 });
       const rows = await prisma.triageEvidenceImage.findMany({ where: { field: "name_en" }, select: { docKind: true, priority: true }, orderBy: { createdAt: "asc" } });
-      expect(rows.map((x) => x.priority)).toEqual([1, 1]); // 優先來源保住；入職表（priority 2）因超額被擠走
-      expect(rows.map((x) => x.docKind)).toEqual(["id_card", "id_card"]);
+      expect(rows.map((x) => x.priority)).toEqual([1, 1, 1]); // 優先來源保住；入職表（priority 2）因超額被擠走
+      expect(rows.map((x) => x.docKind)).toEqual(["id_card", "id_card", "id_card"]);
     });
 
     it("TE: 有證件用證件、冇證件退入職表、兩者都有次序（session GET evidence_images 次序＝priority）", async () => {
@@ -724,6 +739,140 @@ describe("TE-1 證據裁圖", () => {
       expect(await deleteUnneeded(prisma, sid, null)).toBe(0);
       expect(await deleteUnneeded(prisma, sid, ka)).toBe(1);
       expect(await imgCount({ personKey: ka })).toBe(1);
+    });
+  });
+
+  describe("TE-2：題型→所需欄擴闊、印刷來源 priority 1–3、入職日期 hire_date", () => {
+    const evq = (extra: object) => ({ v: 1, person: person({}), reasons: [], candidate_guard_ids: [], ...extra }) as never;
+    it("requiredFieldsFor 新映射：name_only_candidate→name_zh＋name_en；tel_only／dup_tel→phone；ext_identity_check→hkid＋name_zh＋name_en（＋ext 欄）；no_id_card→hkid＋name_zh＋name_en＋dob；ext 入職日期（hireDate／staffHire.*）→hire_date", () => {
+      const f = (kind: string, extra: object = {}) => requiredFieldsFor({ kind, evidenceJson: evq(extra) }).sort();
+      expect(f("name_only_candidate")).toEqual(["name_en", "name_zh"]);
+      expect(f("tel_only_candidate")).toEqual(["phone"]);
+      expect(f("dup_tel_across_persons")).toEqual(["phone"]);
+      expect(f("ext_identity_check")).toEqual(["hkid", "name_en", "name_zh"]);
+      expect(f("ext_identity_check", { ext_review: [{ key: "staffHire.U90001", check: "x", status: "review" }, { key: "siaPermit.no", check: "x", status: "review" }, { key: "bank", check: "x", status: "review" }] })).toEqual(["hire_date", "hkid", "name_en", "name_zh", "permit_no"]);
+      expect(f("no_id_card")).toEqual(["dob", "hkid", "name_en", "name_zh"]);
+      expect(f("ext_field_review", { ext_review: [{ key: "staffHire.U90001", check: "x", status: "review" }] })).toEqual(["hire_date"]);
+      expect(f("ext_field_review", { ext_review: [{ key: "hireDate", check: "x", status: "review" }] })).toEqual(["hire_date"]);
+      expect(f("staffno_shared_by_persons")).toEqual([]);
+      expect(f("bank_review", { ext_review: [{ key: "bank", check: "x", status: "review" }] })).toEqual([]);
+    });
+
+    it("上載：hkid 身份證副本1＋印刷2＋入職表3 三張都收；第 4 張 over_limit；priority 同來源唔符、印刷用喺 name_zh→skipped_invalid；manifest 收 verify_score", async () => {
+      const { pb, sid } = await seed(); // 乙：hkid_not_confirmed
+      const m = matchOf(pb);
+      const r = await upload(
+        accountant,
+        sid,
+        await zipOf([
+          { bytes: J(201), field: "hkid", doc_kind: "id_card", priority: 1, match: m },
+          { bytes: J(202), field: "hkid", doc_kind: "printed", priority: 2, match: m },
+          { bytes: J(203), field: "hkid", doc_kind: "onboarding_form", priority: 3, match: m },
+          { bytes: J(204), field: "hkid", doc_kind: "onboarding_form", priority: 3, match: m }, // 第 4 張
+          { bytes: J(205), field: "hkid", doc_kind: "printed", priority: 3, match: m }, // priority 同來源唔符
+          { bytes: J(206), field: "name_zh", doc_kind: "printed", priority: 2, match: m }, // 印刷淨限 hkid
+        ]),
+      );
+      expect(r.body).toMatchObject({ accepted_images: 3, skipped_over_limit: 1, skipped_invalid: 2 });
+      const s2 = await getSession(accountant, sid);
+      const q = s2.body.questions.find((x: { kind: string }) => x.kind === "hkid_not_confirmed");
+      expect(q.evidence_images.map((i: { doc_kind: string; priority: number }) => `${i.priority}:${i.doc_kind}`)).toEqual(["1:id_card", "2:printed", "3:onboarding_form"]);
+      // verify_score（可選淨數字）通過 strict schema；越界值／非數字拒絕
+      const pr = (x: unknown) => evidenceManifestSchema.safeParse(x);
+      expect(pr({ version: 1, items: [{ file: "a".repeat(16) + ".jpg", field: "hkid", doc_kind: "printed", priority: 2, match: { hkid: "Z900001(2)" }, verify_score: 0.93 }] }).success).toBe(true);
+      expect(pr({ version: 1, items: [{ file: "a".repeat(16) + ".jpg", field: "hkid", doc_kind: "printed", priority: 4, match: { hkid: "Z900001(2)" } }] }).success).toBe(false);
+      expect(pr({ version: 1, items: [{ file: "a".repeat(16) + ".jpg", field: "hkid", doc_kind: "printed", priority: 2, match: { hkid: "Z900001(2)" }, verify_score: 1.5 }] }).success).toBe(false);
+      expect(pr({ version: 1, items: [{ file: "a".repeat(16) + ".jpg", field: "hkid", doc_kind: "printed", priority: 2, match: { hkid: "Z900001(2)" }, verify_score: "高" }] }).success).toBe(false);
+    });
+
+    /** 為某人造一條指定 kind 嘅 open 題（同 seed 人同 personKey） */
+    const mkQ = async (sid: string, personKey: string, kind: string, evidence: object, over: object = {}) =>
+      prisma.triageQuestion.create({ data: { sessionId: sid, kind, groupKey: `te2-${kind}-${Math.random().toString(36).slice(2)}`, personKey, sort: 50, title: kind, evidenceJson: evidence as never, optionsJson: [{ id: "skip", label: "skip" }] as never, ...over } });
+
+    it("hire_date：ext_field_review（入職日期）題接受入職表圖（priority 1，最多 3）；GET 權限跟「保安員:view」——冇「保安員個人資料:view」仍睇到；題卡 evidence_images 帶 hire_date", async () => {
+      const { pa, ka, sid } = await seed();
+      const ev = (await qOf("name_not_confirmed", ka)).evidenceJson as object;
+      await mkQ(sid, ka, "ext_field_review", { ...ev, ext_review: [{ key: "staffHire.U90001", check: "new", status: "review" }] });
+      const m = matchOf(pa);
+      const r = await upload(accountant, sid, await zipOf([
+        { bytes: J(211), field: "hire_date", doc_kind: "onboarding_form", priority: 1, match: m },
+        { bytes: J(212), field: "hire_date", doc_kind: "onboarding_form", priority: 1, match: m },
+        { bytes: J(213), field: "hire_date", doc_kind: "id_card", priority: 1, match: m }, // 入職日期唔係身份證來源
+      ]));
+      expect(r.body).toMatchObject({ accepted_images: 2, skipped_invalid: 1 });
+      const img = await prisma.triageEvidenceImage.findFirstOrThrow({ where: { field: "hire_date" }, select: { id: true } });
+      const perm = await prisma.permission.findFirstOrThrow({ where: { module: "安員個人資料", action: "view" } });
+      await prisma.rolePermission.updateMany({ where: { roleId: fx.roleIds["會計"], permissionId: perm.id }, data: { granted: false } });
+      expect((await getImage(accountant, img.id)).status).toBe(200); // 非敏感
+      const s2 = await getSession(accountant, sid);
+      const q = s2.body.questions.find((x: { kind: string }) => x.kind === "ext_field_review");
+      expect(q.evidence_images.map((i: { field: string }) => i.field)).toEqual(["hire_date", "hire_date"]);
+      const caps = await viewableFields({ userId: fx.userIds["會計"], baseRole: "會計", roleId: fx.roleIds["會計"] } as unknown as AuthedSession);
+      expect(caps.has("hire_date")).toBe(true);
+      expect(caps.has("hkid")).toBe(false);
+    });
+
+    it("擴闊映射上載：name_only_candidate 收 name_zh＋name_en 圖；tel_only_candidate 收 phone 圖；ext_identity_check 收 hkid；其他欄 skipped_not_needed", async () => {
+      const { pa, ka, sid } = await seed();
+      const ev = (await qOf("name_not_confirmed", ka)).evidenceJson as object;
+      await prisma.triageQuestion.updateMany({ where: { personKey: ka }, data: { status: "answered" } });
+      await mkQ(sid, ka, "name_only_candidate", ev);
+      await mkQ(sid, ka, "tel_only_candidate", ev);
+      const m = matchOf(pa);
+      const r = await upload(accountant, sid, await zipOf([
+        { bytes: J(221), field: "name_zh", doc_kind: "id_card", priority: 1, match: m },
+        { bytes: J(222), field: "name_en", doc_kind: "id_card", priority: 1, match: m },
+        { bytes: J(223), field: "phone", doc_kind: "onboarding_form", priority: 1, match: m },
+        { bytes: J(224), field: "hkid", doc_kind: "id_card", priority: 1, match: m }, // 呢兩題唔需要 hkid
+        { bytes: J(225), field: "dob", doc_kind: "id_card", priority: 1, match: m },
+      ]));
+      expect(r.body).toMatchObject({ accepted_images: 3, skipped_not_needed: 2 });
+    });
+
+    it("(8) 答題即刪：no_id_card（hkid＋name_zh＋name_en＋dob 四欄）答咗→四欄圖全刪；name_only_candidate 同人另一條 tel_only_candidate 仍需要 phone→phone 圖保留", async () => {
+      const { sid } = await seed();
+      // 無證嘅人：no_id_card 題
+      const pn = person({ hkid: null, name: "導入測試員無證", nos: ["U90003"], rating: "fail" });
+      const r0 = await applyPkg(accountant, [pn]);
+      expect(r0.status).toBe(200);
+      const sid2 = r0.body.triage.session_id as string;
+      const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
+      const kn = qn.personKey!;
+      const put = async (field: "hkid" | "name_zh" | "name_en" | "dob" | "phone", n: number, session = sid2, key = kn) => {
+        const plain = J(n);
+        await insertEvidenceImage(prisma, { sessionId: session, questionId: null, personKey: key, guardId: null, field, docKind: field === "phone" ? "onboarding_form" : "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
+      };
+      for (const [i, f] of (["hkid", "name_zh", "name_en", "dob"] as const).entries()) await put(f, 230 + i);
+      await put("phone", 235); // no_id_card 唔需要 phone
+      expect(await imgCount({ sessionId: sid2 })).toBe(5);
+      expect(requiredFieldsFor(qn).sort()).toEqual(["dob", "hkid", "name_en", "name_zh"]);
+      const ans = { option: "enter_hkid", value: H[9] };
+      const res = await confirm(accountant, qn.id, ans);
+      expect(res.status).toBe(200);
+      expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("answered");
+      // 四欄圖全刪；冇題需要嘅 phone 圖亦一併刪（孤兒）
+      expect(await imgCount({ sessionId: sid2 })).toBe(0);
+      void sid;
+    });
+
+    it("(8) 同一人兩條題需要不同欄：答 name_only_candidate（name_zh＋name_en）只刪呢兩欄；tel_only_candidate 需要嘅 phone 圖保留", async () => {
+      const { ka, sid } = await seed();
+      const base = await qOf("name_not_confirmed", ka);
+      await prisma.triageQuestion.updateMany({ where: { personKey: ka }, data: { status: "answered" } });
+      const nq = await mkQ(sid, ka, "name_only_candidate", base.evidenceJson as object);
+      await mkQ(sid, ka, "tel_only_candidate", base.evidenceJson as object);
+      const put = async (field: "name_zh" | "name_en" | "phone", n: number) => {
+        const plain = J(n);
+        await insertEvidenceImage(prisma, { sessionId: sid, questionId: null, personKey: ka, guardId: null, field, docKind: field === "phone" ? "onboarding_form" : "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
+      };
+      await put("name_zh", 241);
+      await put("name_en", 242);
+      await put("phone", 243);
+      // 直接走 deleteUnneeded（submitAnswer 喺 tx 內 call 同一函數；answer 已 answered 嘅狀態＋重算）
+      await prisma.triageQuestion.update({ where: { id: nq.id }, data: { status: "answered" } });
+      expect(await deleteUnneeded(prisma, sid, ka)).toBe(2);
+      expect(await imgCount({ personKey: ka, field: "phone" })).toBe(1);
+      expect(await imgCount({ personKey: ka, field: { in: ["name_zh", "name_en"] } })).toBe(0);
     });
   });
 

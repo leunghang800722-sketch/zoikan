@@ -40,7 +40,7 @@ const itemSchema = z
     file: z.string().regex(ENTRY_NAME_RE),
     field: z.enum(EVIDENCE_FIELDS),
     doc_kind: z.enum(DOC_KINDS),
-    priority: z.union([z.literal(1), z.literal(2)]),
+    priority: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     /** TE-1.7：本機 Vision 驗證相似度（淨數字 0–1，可選；伺服器唔使用，只容許通過 strict schema） */
     verify_score: z.number().min(0).max(1).optional(),
     match: z
