@@ -41,6 +41,8 @@ const itemSchema = z
     field: z.enum(EVIDENCE_FIELDS),
     doc_kind: z.enum(DOC_KINDS),
     priority: z.union([z.literal(1), z.literal(2)]),
+    /** TE-1.7：本機 Vision 驗證相似度（淨數字 0–1，可選；伺服器唔使用，只容許通過 strict schema） */
+    verify_score: z.number().min(0).max(1).optional(),
     match: z
       .object({ hkid: z.string().max(20).nullable().optional(), staff_numbers: z.array(z.string().min(1).max(32)).max(20).optional() })
       .strict()

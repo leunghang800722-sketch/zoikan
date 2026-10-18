@@ -6,10 +6,9 @@ import { createHash } from 'node:crypto';
 import { findHkidCandidates, hkidCheckDigitValid } from './hkid';
 import { cardRegion, extractIdCard, isIdAnchorLine } from './extract';
 import { cy, norm, type OcrLine } from './ocr';
-import { isLabelLine, padAround } from './crop-pad';
+import { padAround } from './crop-pad';
 import { locateAddressBox } from './crop-box';
-import { locateFormAddressBox } from './form-address-crop';
-import { locatePhoneBox, type Box } from './phone-crop';
+import type { Box } from './phone-crop';
 import {
   FIELD_DOC_PRIORITY,
   MAX_IMAGE_BYTES,
@@ -83,8 +82,8 @@ export function planRequests(fields: readonly EvidenceField[], docs: readonly Do
 // 3. 幾何
 // ---------------------------------------------------------------------------
 const bboxOf = (ls: readonly OcrLine[]): Box => ({ x0: Math.min(...ls.map((l) => l.x)), x1: Math.max(...ls.map((l) => l.x + l.w)), y0: Math.min(...ls.map((l) => l.y)), y1: Math.max(...ls.map((l) => l.y + l.h)) });
-const avgH = (ls: readonly OcrLine[]) => ls.reduce((a, l) => a + l.h, 0) / ls.length;
 export const intersects = (a: Box, b: Box): boolean => Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 1e-9 && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 1e-9;
+const xOverlap = (a: Box, l: OcrLine): boolean => Math.min(a.x1, l.x + l.w) - Math.max(a.x0, l.x) > 1e-9;
 const valid = (b: Box | null): b is Box => !!b && b.x1 - b.x0 > 0.01 && b.y1 - b.y0 > 0.005;
 
 export interface IdCardGeometry {
@@ -93,29 +92,37 @@ export interface IdCardGeometry {
   name_zh: Box | null;
   name_en: Box | null;
   dob: Box | null;
-  /** 由版面規則推出嘅相片區（卡右側、號碼行以上）；裁圖保證唔入呢個範圍 */
+  /** 由版面規則推出嘅相片區（卡右側、英文名行底邊以下、號碼行頂以上）；裁圖保證唔入呢個範圍 */
   photo: Box | null;
+  /** 每欄自己嘅 OCR 行（硬性尺寸上限用） */
+  own?: Partial<Record<'hkid' | 'name_zh' | 'name_en' | 'dob', OcrLine[]>>;
+  /** 因為同相片區無法分開而跳過嘅欄（計 id_photo_overlap） */
+  overlap?: ('hkid' | 'name_zh' | 'name_en' | 'dob')[];
   /** 全部 null 嘅原因（冇 anchor 等） */
   reason?: 'no_card_anchor' | 'no_field_lines';
 }
 
-const CJK = /[\u4e00-\u9fff]/;
+const CJK = /[一-鿿]/;
 /** 相片區左緣＝卡面文字範圍由左起 62%（香港智能身份證：相片喺右上，號碼印喺相片正下方） */
 const PHOTO_X_RATIO = 0.62;
 /** 相片下緣高過右側最高文字行頂 0.002（讓號碼框頂可以包住字頂） */
-const PHOTO_BOTTOM_GAP = 0.002;
+const PHOTO_BOTTOM_GAP = 0.0015;
+/** 相片頂＝英文名最高一行底邊再低 0.05×行高（咁名框最少仲有 0.05×行高 padding） */
+const PHOTO_TOP_GAP = 0.05;
+/** 垂直 padding 0.3×行高（TE-1.7：0.15 太緊，有號碼上半截被切）、左右 0.3×；號碼行右邊冇相片，右 0.6×；相片 barrier 照舊 */
+const ID_PAD = { vertical: 0.3, horizontal: 0.3, min: 0.002 };
 
 /**
  * M8：身份證各欄裁圖——號碼區、中文姓名區、英文姓名區、出生日期區各自裁，並且避開相片區。
- * 真卡版面（2003／2018 版智能身份證）：相片喺右上，**號碼印喺相片正下方（右下）**，左邊係中英文姓名／出生日期／簽發日期。
- * 相片區由版面規則推（本機冇 AI 回傳 box）：卡面文字範圍（cardRegion 嘅 bbox）右側 38% 嘅直條、下緣＝右側最高文字行（通常係號碼行）頂；
- * 右側冇文字行（版面唔同）就保守當相片佔右側上方 55%。
- *  ① 每個框只由該欄自己嘅 OCR 行砌，並唔越過其他文字行（barriers）；
- *  ② 號碼框**只向下外擴**（向上最多 0.001，免得切入相片底），上緣另以相片下緣做 barrier；
- *  ③ 左邊欄位（姓名／出生日期）若同相片區垂直重疊，右緣以相片左緣做 barrier；
- *  ④ 冇身份證 anchor（認唔出卡面範圍）→ 一律唔裁，寧願冇圖，都唔好連相片一齊裁。
+ * 真卡版面（2003／2018 版智能身份證）：相片喺右上，**號碼印喺相片正下方（右下）**，左邊係中英文姓名／出生日期／簽發日期；
+ * 長英文名可以橫跨相片 x 範圍，相片緊貼名行底。
+ * 相片區由版面規則推（本機冇 AI 回傳 box）：x＝卡面文字範圍右側 38%；y 頂＝英文名最高一行嘅底邊（再低 0.05×行高）；y 底＝右側最高文字行（通常係號碼行）頂。
+ * 右側冇文字行（版面唔同）就保守當相片佔右側上方 55%。所有欄位框一律同相片區「不相交」：
+ *  ① 有重疊先收窄向下 padding 到相片頂以上（最少 0.05×行高）；② 仍重疊就收窄右緣到相片左緣；③ 仍重疊（或收窄後切到字）就跳過（id_photo_overlap）；
+ *  ④ 號碼框向上外擴 0.3×行高，但上緣以相片下緣做 barrier；
+ *  ⑤ 冇身份證 anchor（認唔出卡面範圍）→ 一律唔裁。
  */
-export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[]): IdCardGeometry {
+export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[], aspect = 1): IdCardGeometry {
   const empty: IdCardGeometry = { hkid: null, name_zh: null, name_en: null, dob: null, photo: null };
   const clean = allLines.filter((l) => l.t.trim());
   if (!clean.some((l) => isIdAnchorLine(l.t))) return { ...empty, reason: 'no_card_anchor' };
@@ -137,43 +144,135 @@ export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[]): I
   const rightLines = region.filter((l) => l.x >= photoX0 - 0.01 && !isIdAnchorLine(l.t));
   const rightTop = rightLines.length ? Math.max(...rightLines.map((l) => l.y + l.h)) : null;
   const photoBottom = rightTop !== null ? rightTop + PHOTO_BOTTOM_GAP : C.y0 + 0.45 * (C.y1 - C.y0);
-  const photo: Box = { x0: photoX0, x1: Math.min(1, C.x1 + 0.03), y0: photoBottom, y1: Math.min(1, C.y1 + 0.03) };
+  const topEn = enLines.length ? [...enLines].sort((a, b) => b.y + b.h - (a.y + a.h))[0]! : null;
+  const nameTop = topEn ? topEn.y - PHOTO_TOP_GAP * topEn.h : null;
+  const photoTop = nameTop !== null && nameTop > photoBottom ? nameTop : Math.min(1, C.y1 + 0.03);
+  const photo: Box = { x0: photoX0, x1: Math.min(1, C.x1 + 0.03), y0: photoBottom, y1: photoTop };
 
-  const boxFor = (own: readonly OcrLine[], kind: 'number' | 'left'): Box | null => {
+  const overlap: NonNullable<IdCardGeometry['overlap']> = [];
+  const boxFor = (own: readonly OcrLine[], kind: 'number' | 'left', field: 'hkid' | 'name_zh' | 'name_en' | 'dob'): Box | null => {
     if (own.length === 0) return null;
-    const barriers = clean.filter((l) => !own.includes(l));
     const base = bboxOf(own);
-    const b = padAround(base, avgH(own), barriers, { vertical: 0.8, horizontal: 0.4, min: 0.008 });
-    if (kind === 'number') b.y1 = Math.min(b.y1, base.y1 + 0.001); // ② 只向下外擴，向上最多 0.001
+    // 行厚度（TE-1.8）：側躺行嘅 box 長邊係字串長度，唔可以當行高——用 min(h, w×頁闊高比)
+    const h = own.reduce((a, l) => a + Math.min(l.h, l.w * aspect), 0) / own.length;
+    // barrier＝水平上有重疊嘅其他行（唔同欄、唔同 x 範圍嘅行唔應該限制垂直 padding——例如右下號碼行唔受左邊出生日期行影響）
+    const barriers = clean.filter((l) => !own.includes(l) && xOverlap({ x0: base.x0 - 0.6 * h, x1: base.x1 + 0.6 * h, y0: 0, y1: 1 }, l));
+    const b = padAround(base, h, barriers, kind === 'number' ? { ...ID_PAD, horizontal: 0.6 } : ID_PAD);
     if (intersects(b, photo)) {
       if (kind === 'number') b.y1 = Math.min(b.y1, photo.y0 - 1e-6); // 相片下緣做 barrier
-      else b.x1 = Math.min(b.x1, photo.x0 - 0.005); // ③ 相片左緣做右 barrier
+      else if (base.y0 - PHOTO_TOP_GAP * h >= photo.y1 - 1e-9) b.y0 = Math.max(b.y0, photo.y1); // ① 收窄向下 padding（最少 0.05×行高）
+      else b.x1 = Math.min(b.x1, photo.x0 - 0.005); // ② 相片左緣做右 barrier
     }
-    return valid(b) && !intersects(b, photo) ? b : null;
+    if (intersects(b, photo)) b.x1 = Math.min(b.x1, photo.x0 - 0.005);
+    // ③ 仍重疊、或者收窄後切到字本身 → 跳過
+    const cutsText = b.x0 > base.x0 + 1e-9 || b.x1 < base.x1 - 1e-9 || b.y0 > base.y0 + 1e-9 || b.y1 < base.y1 - 1e-9;
+    if (!valid(b) || intersects(b, photo) || cutsText) {
+      overlap.push(field);
+      return null;
+    }
+    return b;
   };
-  return { hkid: boxFor(hkidLine ? [hkidLine] : [], 'number'), name_zh: boxFor(zhLines, 'left'), name_en: boxFor(enLines, 'left'), dob: boxFor(dobLines, 'left'), photo };
+  const hk = boxFor(hkidLine ? [hkidLine] : [], 'number', 'hkid');
+  const zh = boxFor(zhLines, 'left', 'name_zh');
+  const en = boxFor(enLines, 'left', 'name_en');
+  const dob = boxFor(dobLines, 'left', 'dob');
+  return { hkid: hk, name_zh: zh, name_en: en, dob, photo, own: { hkid: hkidLine ? [hkidLine] : [], name_zh: zhLines, name_en: enLines, dob: dobLines }, ...(overlap.length ? { overlap } : {}) };
 }
 
-// ---- 入職表（冇相片）：電話／地址用現有幾何；姓名／身份證號／出生日期用 label 行（best effort，只作 priority 2） ----
-const FORM_LABEL: Partial<Record<EvidenceField, RegExp>> = {
-  name_zh: /中文姓名|姓名\s*[（(]?\s*中文|Name\s*[（(]?\s*Chinese/i,
-  name_en: /英文姓名|English\s*Name|姓名\s*[（(]?\s*英文|Name\s*[（(]?\s*English/i,
-  hkid: /香港身份證|身份證號|I\.?D\.?\s*Card\s*No|HKID/i,
-  dob: /出生日期|Date\s*of\s*Birth/i,
-};
+// ---- 入職表：單格裁（label 包埋）；右上角貼相片，相片區推算＝右側 25%、頁頂 35% ----
+/** 入職表相片格（右上角）：x ≥ 0.75、y ≥ 0.65（原點左下，即頁頂 35%） */
+export const FORM_PHOTO_BOX: Box = { x0: 0.75, x1: 1, y0: 0.65, y1: 1 };
 
-/** 入職表欄位裁圖範圍；定位唔到＝null。 */
-export function locateFormFieldBox(field: EvidenceField, lines: readonly OcrLine[]): Box | null {
+const FORM_VOCAB = /姓名|Name|出生|Birth|身份證|ID\s*Card|電話|Phone|Mobile|MOBILE|住址|地址|Address|通訊|關係|Relation|年齡|Age|性別|Sex|籍貫|婚姻|國籍|Email|電郵|職位|聯絡|緊急|到職|入職|Date|Place|地點|Tel|傳真|Fax|住所|僱主/i;
+const isFormLabel = (l: OcrLine): boolean => {
+  const t = norm(l.t);
+  return t.length > 0 && t.length <= 40 && (t.match(/\d/g) ?? []).length <= 2 && (FORM_VOCAB.test(t) || /[:：]\s*$/.test(t));
+};
+/** 緊急聯絡人／擔保人／見證人／僱主欄嘅「姓名」「電話」唔係申請人本人 */
+const OTHER_PERSON = /聯絡人|緊急|擔保|見證|僱主/;
+const FORM_LABEL: Partial<Record<EvidenceField, { re: RegExp; not?: RegExp }>> = {
+  name_zh: { re: /中文姓名|姓名/, not: new RegExp(`英文|English|${OTHER_PERSON.source}`, 'i') },
+  name_en: { re: /英文姓名|English\s*Name/i, not: OTHER_PERSON },
+  hkid: { re: /香港身份證|身份證|HKID|ID\s*Card/i },
+  dob: { re: /出生日期|Date\s*of\s*Birth/i },
+  phone: { re: /[手车半F千]?提[電範]?話|MOBILE|聯絡電話|Phone\s*No/i, not: new RegExp(`住所|${OTHER_PERSON.source}`) },
+  address: { re: /^[住生世佳售]\s*址|[住生世佳售]址\s*[:：]|^地址\s*[:：]?$|^Address/i, not: new RegExp(`通訊|電郵|Email|諮詢|學校|${OTHER_PERSON.source}`, 'i') },
+};
+const sameRow = (a: OcrLine, b: OcrLine): boolean => Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) >= 0.5 * Math.min(a.h, b.h);
+
+/**
+ * 入職表欄位**單格**裁圖（TE-1.7：barrier 用「任何 OCR 行」，唔只係認到嘅 label）。
+ *  - 同行格（「住址：值」「香港身份證：值｜出生日期：值｜…」）：值＝label 右邊同行連續（間距 ≤3×行高）而且唔係 label 樣式嘅行；
+ *    右界＝值之後**同行右邊最近嘅任何 OCR 行**左邊（冇就值最右＋0.6×行高）；
+ *  - 大格範本（label 自成一行、值喺下面幾行，例如「地址」）：取 label 下方直到下一個 label 樣式行（含「：」或在詞表）為止嘅所有行；
+ *    水平範圍＝label 同呢啲行 box 聯集左右各 0.6×行高；
+ *  - 上下界＝格內行各 ≤0.25×行高，唔過上方／下方、水平重疊嘅**任何** OCR 行（padAround barrier）；
+ *  - 地址值多行（續行同值左邊對齊、緊貼下一行）亦算同一格；
+ *  - 姓名／電話 label 含「聯絡人／緊急／擔保／見證／僱主」唔當本人欄。
+ * 相片格（右上角）：同相片區相交先夾右緣，仍相交跳過（form_photo_overlap）。
+ */
+export function locateFormCell(field: EvidenceField, lines: readonly OcrLine[]): { box: Box | null; label?: OcrLine; reason?: 'form_label_not_located' | 'form_photo_overlap' } {
+  const spec = FORM_LABEL[field];
+  if (!spec) return { box: null, reason: 'form_label_not_located' };
   const ls = lines.filter((l) => l.t.trim());
-  if (field === 'phone') return locatePhoneBox([...ls])?.box ?? null;
-  if (field === 'address') return locateFormAddressBox([...ls])?.box ?? null;
-  const re = FORM_LABEL[field];
-  if (!re) return null;
-  const lab = ls.filter((l) => re.test(norm(l.t)) && l.x < 0.5).sort((a, b) => cy(b) - cy(a))[0];
-  if (!lab) return null;
-  const barriers = ls.filter((l) => l !== lab && isLabelLine(l));
-  const b = padAround({ x0: lab.x, x1: 0.99, y0: lab.y, y1: lab.y + lab.h }, lab.h, barriers, {});
-  return valid(b) ? b : null;
+  const L = ls.filter((l) => isFormLabel(l) && spec.re.test(norm(l.t)) && !(spec.not && spec.not.test(norm(l.t)))).sort((a, b) => cy(b) - cy(a))[0];
+  if (!L) return { box: null, reason: 'form_label_not_located' };
+  const others = ls.filter((l) => l !== L);
+
+  // 同行右邊嘅行（由左到右）
+  const rowRight = others.filter((l) => sameRow(l, L) && l.x >= L.x + L.w - 0.01).sort((a, b) => a.x - b.x);
+  const values: OcrLine[] = [];
+  let prevRight = L.x + L.w;
+  for (const l of rowRight) {
+    if (isFormLabel(l) || l.x - prevRight > 3 * L.h) break;
+    values.push(l);
+    prevRight = l.x + l.w;
+  }
+  const stopper = rowRight.find((l) => !values.includes(l)) ?? null; // 值之後同行右邊最近嘅任何 OCR 行
+  let members: OcrLine[] = [L, ...values];
+  let x0 = L.x;
+  let x1: number;
+
+  if (values.length === 0 && !stopper) {
+    // 大格範本：label 下方直到下一個 label 樣式行
+    const below = others.filter((l) => cy(l) < L.y && !sameRow(l, L)).sort((a, b) => cy(b) - cy(a));
+    const block: OcrLine[] = [];
+    let prevBottom = L.y;
+    for (const l of below) {
+      if (isFormLabel(l) || prevBottom - (l.y + l.h) > 2.5 * L.h) break;
+      block.push(l);
+      prevBottom = l.y;
+    }
+    if (block.length > 0) {
+      members = [L, ...block];
+      x0 = Math.min(...members.map((m) => m.x)) - 0.6 * L.h;
+      x1 = Math.max(...members.map((m) => m.x + m.w)) + 0.6 * L.h;
+    } else x1 = L.x + L.w + 0.15;
+  } else {
+    x1 = stopper ? stopper.x - 0.004 : values.length ? Math.max(...values.map((v) => v.x + v.w)) + 0.6 * L.h : L.x + L.w + 0.15;
+    if (field === 'address' && values.length > 0) {
+      // 值多行：續行同首個值左邊對齊、緊貼，而且唔係 label 樣式
+      let last = values[0]!;
+      for (;;) {
+        const cont = others.filter((l) => !members.includes(l) && !isFormLabel(l) && Math.abs(l.x - values[0]!.x) < 0.03 && cy(l) < last.y && last.y - (l.y + l.h) < 0.8 * L.h).sort((a, b) => cy(b) - cy(a))[0];
+        if (!cont) break;
+        members = [...members, cont];
+        x1 = Math.max(x1, cont.x + cont.w + 0.6 * L.h);
+        last = cont;
+      }
+    }
+  }
+  x0 = Math.max(0, x0);
+  x1 = Math.min(1, Math.max(x1, L.x + L.w));
+  const base: Box = { x0, x1, y0: Math.min(...members.map((m) => m.y)), y1: Math.max(...members.map((m) => m.y + m.h)) };
+  // 上下界：唔過水平重疊嘅任何 OCR 行（格內成員除外）
+  const barriers = others.filter((l) => !members.includes(l) && xOverlap(base, l));
+  const b = padAround(base, L.h, barriers, { vertical: 0.25, horizontal: 0, min: 0.001 });
+  b.x0 = x0;
+  b.x1 = x1;
+  if (intersects(b, FORM_PHOTO_BOX)) b.x1 = Math.min(b.x1, FORM_PHOTO_BOX.x0 - 0.003);
+  if (!valid(b) || intersects(b, FORM_PHOTO_BOX) || b.x1 < L.x + L.w) return { box: null, reason: 'form_photo_overlap' };
+  return { box: b, label: L };
 }
 
 /** 住址證明地址區：定位唔到（成頁）＝null——成頁含太多其他資料，唔出。 */
@@ -182,22 +281,324 @@ export function locateAddressProofBox(lines: readonly OcrLine[]): Box | null {
   return r.how === 'block' && valid(r.box) ? r.box : null;
 }
 
-/** 一個請求 → 裁圖範圍（null＝冇可靠幾何）。 */
-export function boxForRequest(req: CropRequest, lines: readonly OcrLine[]): { box: Box | null; reason?: string } {
+/** 地址區 sanity：框內文字要含數字或「樓／室／座／F／FLAT」。 */
+export function addressRegionLikely(box: Box, lines: readonly OcrLine[]): boolean {
+  const text = lines.filter((l) => cy(l) >= box.y0 && cy(l) <= box.y1 && l.x + l.w / 2 >= box.x0 && l.x + l.w / 2 <= box.x1).map((l) => l.t).join(' ');
+  return /\d|樓|室|座|\bF\b|FLAT|ROOM|RM\b/i.test(text);
+}
+
+/** 硬性尺寸上限用：呢個欄嘅「自己行」同模式 */
+export interface CapAnchor {
+  own: readonly OcrLine[];
+  mode: 'id' | 'form';
+}
+
+/** 一個請求 → 裁圖範圍（null＝冇可靠幾何）。lines 必須已經係正向 frame（見 detectUprightRotation／rotateLines）。aspect＝頁寬／頁高。 */
+export function boxForRequest(req: CropRequest, lines: readonly OcrLine[], aspect = 1): { box: Box | null; reason?: string; anchor?: CapAnchor } {
   if (req.docKind === 'id_card') {
-    const g = locateIdCardBoxes(req.doc.page, lines);
-    const b = g[req.field as 'hkid' | 'name_zh' | 'name_en' | 'dob'] ?? null;
-    return b ? { box: b } : { box: null, reason: g.reason ?? 'id_field_not_located' };
+    const f = req.field as 'hkid' | 'name_zh' | 'name_en' | 'dob';
+    const g = locateIdCardBoxes(req.doc.page, lines, aspect);
+    const b = g[f] ?? null;
+    return b ? { box: b, anchor: { own: g.own?.[f] ?? [], mode: 'id' } } : { box: null, reason: g.overlap?.includes(f) ? 'id_photo_overlap' : (g.reason ?? 'id_field_not_located') };
   }
   if (req.docKind === 'address_proof') {
     const b = locateAddressProofBox(lines);
-    return b ? { box: b } : { box: null, reason: 'address_block_not_located' };
+    if (!b) return { box: null, reason: 'address_block_not_located' };
+    return addressRegionLikely(b, lines) ? { box: b } : { box: null, reason: 'address_region_unlikely' };
   }
   if (req.docKind === 'onboarding_form') {
-    const b = locateFormFieldBox(req.field, lines);
-    return b ? { box: b } : { box: null, reason: 'form_label_not_located' };
+    const r = locateFormCell(req.field, lines);
+    if (!r.box) return { box: null, reason: r.reason ?? 'form_label_not_located' };
+    const single = req.field !== 'address';
+    return { box: r.box, ...(single && r.label ? { anchor: { own: [r.label], mode: 'form' as const } } : {}) };
   }
   return { box: null, reason: 'doc_kind_unsupported' };
+}
+
+/**
+ * 硬性尺寸上限（TE-1.8；唔依賴方向／版面推算嘅最後防線）。喺輸出 frame、按實際像素量度（W×H＝該 frame 頁面像素）：
+ *  - id：厚度方向（橫排＝高；側躺＝闊）≤max(1.8×行厚, 自己行 bbox 厚度＋0.6×行厚)；長度方向 ≤自己行 bbox 長度＋1.2×行厚；
+ *    超出就收窄到行 bbox ± 0.3×行厚（唔係跳過）；
+ *  - form（單行欄）：厚度方向 ≤2.2×label 行厚；超出就收窄到 label 行 ± 0.25×行厚（長度方向照舊）。
+ * 回 { box, capped }。
+ */
+export function capBox(box: Box, a: CapAnchor, W: number, H: number): { box: Box; capped: boolean } {
+  if (a.own.length === 0) return { box, capped: false };
+  const base = bboxOf(a.own);
+  const pxW = (n: number) => n * W;
+  const pxH = (n: number) => n * H;
+  const horizontal = a.own.reduce((s, l) => s + pxW(l.w) - pxH(l.h), 0) >= 0;
+  const t = a.own.reduce((s, l) => s + Math.min(pxW(l.w), pxH(l.h)), 0) / a.own.length; // 行厚（px）
+  const bw = pxW(base.x1 - base.x0);
+  const bh = pxH(base.y1 - base.y0);
+  const cw = pxW(box.x1 - box.x0);
+  const ch = pxH(box.y1 - box.y0);
+  const thickC = horizontal ? ch : cw;
+  const lenC = horizontal ? cw : ch;
+  const thickB = horizontal ? bh : bw;
+  const lenB = horizontal ? bw : bh;
+  const maxThick = a.mode === 'id' ? Math.max(1.8 * t, thickB + 0.6 * t) : 2.2 * t;
+  const maxLen = a.mode === 'id' ? lenB + 1.2 * t : Infinity;
+  if (thickC <= maxThick + 0.5 && lenC <= maxLen + 0.5) return { box, capped: false };
+  const padX = (px: number) => px / W;
+  const padY = (px: number) => px / H;
+  if (a.mode === 'id') {
+    const p = 0.3 * t;
+    return { box: { x0: Math.max(0, base.x0 - padX(p)), x1: Math.min(1, base.x1 + padX(p)), y0: Math.max(0, base.y0 - padY(p)), y1: Math.min(1, base.y1 + padY(p)) }, capped: true };
+  }
+  const p = 0.25 * t;
+  // form：只收窄厚度方向
+  return horizontal
+    ? { box: { ...box, y0: Math.max(0, base.y0 - padY(p)), y1: Math.min(1, base.y1 + padY(p)) }, capped: true }
+    : { box: { ...box, x0: Math.max(0, base.x0 - padX(p)), x1: Math.min(1, base.x1 + padX(p)) }, capped: true };
+}
+
+// ---------------------------------------------------------------------------
+// 3a'. 入職表裁圖越界檢查（TE-1.8）：Vision 讀到裁圖入面有「其他欄 label 關鍵詞」
+// ---------------------------------------------------------------------------
+/** 關鍵詞（label 別名一組）；每組係一個「欄」。 */
+const OVERFLOW_GROUPS: { id: string; re: RegExp }[] = [
+  { id: 'dob', re: /出生日期|Date\s*of\s*Birth/i },
+  { id: 'pob', re: /出生地點|Place\s*of\s*Birth/i },
+  { id: 'name_en', re: /English\s*Name|英文姓名/i },
+  { id: 'name_zh', re: /中文姓名/i },
+  { id: 'hkid', re: /身份證/i },
+  { id: 'phone', re: /電話|Mobile|Phone/i },
+  { id: 'address', re: /住址|地址|Address/i },
+  { id: 'nationality', re: /國籍|Nationality/i },
+  { id: 'origin', re: /籍貫/i },
+  { id: 'marital', re: /婚姻|Marital/i },
+];
+/** 呢條 Vision line 係咪含自己欄 label（同行判斷用） */
+export function lineHasOwnLabel(field: EvidenceField, t: string): boolean {
+  const own = new Set(OWN_GROUPS[field] ?? []);
+  return OVERFLOW_GROUPS.some((g) => own.has(g.id) && g.re.test(t)) || (field === 'name_zh' && /姓名/.test(t) && !/英文|English/i.test(t));
+}
+
+/** 自己欄嘅關鍵詞組（排除）；name_zh 亦包含泛稱「姓名」。 */
+const OWN_GROUPS: Partial<Record<EvidenceField, string[]>> = { dob: ['dob'], name_en: ['name_en'], name_zh: ['name_zh'], hkid: ['hkid'], phone: ['phone'], address: ['address'] };
+
+export interface VisionBoxLine {
+  t: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export interface OverflowHit {
+  /** right＝同一行右邊溢出（右界收到關鍵詞左邊）；below／above＝上下行溢出 */
+  side: 'right' | 'below' | 'above';
+  /** right：關鍵詞左緣喺裁圖闊度嘅比例（由左）；below：關鍵詞頂緣喺裁圖高度嘅比例（由上）；above：關鍵詞底緣比例（由上） */
+  frac: number;
+}
+
+/** 字串內第 idx 個字元嘅水平位置比例（CJK 全寬 1、其餘 0.55）。 */
+function charFrac(t: string, idx: number): number {
+  const wt = (c: string) => (/[　-鿿＀-￯]/.test(c) ? 1 : 0.55);
+  const chars = [...t];
+  const total = chars.reduce((a, c) => a + wt(c), 0) || 1;
+  return chars.slice(0, idx).reduce((a, c) => a + wt(c), 0) / total;
+}
+
+/**
+ * 喺裁圖 Vision 讀數（正規化於裁圖，原點左下；已扣走放大／留白）搵「其他欄 label 關鍵詞」。
+ * 同行（含自己欄 label 或預期值嗰行；成行合併成一條 line 時用字元比例估關鍵詞位置）→ right；其他行 → below／above。
+ * ownRow(line)：呢條 line 係咪自己欄嗰行。
+ */
+export function findOverflow(field: EvidenceField, lines: readonly VisionBoxLine[], ownRow: (l: VisionBoxLine) => boolean): OverflowHit | null {
+  const own = new Set(OWN_GROUPS[field] ?? []);
+  const ownRegex = OVERFLOW_GROUPS.filter((g) => own.has(g.id)).map((g) => g.re);
+  // 自己欄嗰行嘅垂直帶：標記為 ownRow 嘅行；冇就當裁圖正中一行
+  const ownLines = lines.filter(ownRow);
+  const band = ownLines.length ? { y0: Math.min(...ownLines.map((l) => l.y)), y1: Math.max(...ownLines.map((l) => l.y + l.h)) } : { y0: 0.35, y1: 0.65 };
+  const bandH = Math.max(1e-6, band.y1 - band.y0);
+  const hits: (OverflowHit & { dist: number })[] = [];
+  for (const l of lines) {
+    const t = l.t;
+    const cyL = l.y + l.h / 2;
+    const inBand = ownRow(l) || (cyL >= band.y0 - 0.5 * bandH && cyL <= band.y1 + 0.5 * bandH);
+    for (const g of OVERFLOW_GROUPS) {
+      if (own.has(g.id)) continue;
+      const m = g.re.exec(t);
+      if (!m) continue;
+      if (ownRegex.some((re) => re.test(m[0]))) continue;
+      if (inBand) {
+        const f = l.x + charFrac(t, m.index) * l.w;
+        if (f > 0.02) hits.push({ side: 'right', frac: f, dist: f });
+      } else if (cyL < band.y0) hits.push({ side: 'below', frac: 1 - (l.y + l.h), dist: 1 - cyL });
+      else hits.push({ side: 'above', frac: 1 - l.y, dist: cyL });
+    }
+  }
+  if (hits.length === 0) return null;
+  // 先處理同行右溢出（最靠左嗰個），再上下
+  const right = hits.filter((h) => h.side === 'right').sort((a, b) => a.dist - b.dist)[0];
+  if (right) return { side: right.side, frac: right.frac };
+  const other = hits.sort((a, b) => b.dist - a.dist)[0]!;
+  return { side: other.side, frac: other.frac };
+}
+
+// ---------------------------------------------------------------------------
+// 3b. 頁面方向（轉頁）：由 OCR 行推要順時針轉幾多度先正向；再將行座標轉入正向 frame
+// ---------------------------------------------------------------------------
+export type Rotation = 0 | 90 | 180 | 270;
+
+/** 將行座標隨整頁順時針轉 deg 度（Vision 正規化、原點左下；w／h 同樣互換）。 */
+export function rotateLines(lines: readonly OcrLine[], deg: Rotation): OcrLine[] {
+  if (deg === 0) return [...lines];
+  return lines.map((l) => {
+    if (deg === 90) return { ...l, x: l.y, y: 1 - l.x - l.w, w: l.h, h: l.w };
+    if (deg === 180) return { ...l, x: 1 - l.x - l.w, y: 1 - l.y - l.h };
+    return { ...l, x: 1 - l.y - l.h, y: l.x, w: l.h, h: l.w };
+  });
+}
+
+const RE_DOB_LABEL = /出生日期|DATE\s*OF\s*BIRTH/i;
+const RE_FORM_TITLE = /職位申請表|EMPLOYMENT\s*APPLICATION/i;
+const RE_FORM_BELOW = /緊急聯絡人|手提電話|出生日期|中文姓名/;
+
+/**
+ * 推「要順時針轉幾多度頁面先正向」。OCR 行冇方向欄位，所以用版面順序＋行 box 縱橫比：
+ *  - 縱橫比：長行（≥4 字）轉正後要大多數 w≥h（排除 90／270 側躺）；
+ *  - id_card：標題 anchor 要喺出生日期 label 同號碼行之上，出生日期 label 喺號碼行之上而且偏左（真卡版面）；
+ *  - onboarding_form：標題（職位申請表）要喺其他欄 label 之上；
+ *  - address_proof：只有縱橫比（無可靠 180° 線索）→ 側躺時兩個候選就唔猜（null），正向回 0。
+ * 唯一候選先回；候選有 0 就回 0；否則 null（唔轉）。
+ */
+export function detectUprightRotation(kind: DocKind, lines: readonly OcrLine[]): Rotation | null {
+  const clean = lines.filter((l) => l.t.trim());
+  if (clean.length < 3) return null;
+  const cands: Rotation[] = [0, 90, 180, 270];
+  const pass = (r: Rotation): boolean => {
+    const t = rotateLines(clean, r);
+    const long = t.filter((l) => norm(l.t).length >= 4);
+    if (long.length >= 3 && long.filter((l) => l.w >= l.h).length / long.length < 0.6) return false;
+    const up = (a: OcrLine, b: OcrLine) => a.y + a.h / 2 > b.y + b.h / 2;
+    if (kind === 'id_card') {
+      const idx = clean.map((l, i) => ({ l, i }));
+      const pick = (f: (l: OcrLine) => boolean) => idx.find((x) => f(x.l));
+      const A = pick((l) => isIdAnchorLine(l.t));
+      const D = pick((l) => RE_DOB_LABEL.test(norm(l.t)));
+      const K = pick((l) => findHkidCandidates(l.t).some(hkidCheckDigitValid) && !/PERMIT|許可證編號/i.test(l.t));
+      const g = (x?: { i: number }) => (x ? t[x.i]! : null);
+      const a = g(A);
+      const d = g(D);
+      const k = g(K);
+      if (a && k && !up(a, k)) return false;
+      if (a && d && !up(a, d)) return false;
+      if (d && k && (!up(d, k) || d.x + d.w / 2 > k.x + k.w / 2)) return false;
+    } else if (kind === 'onboarding_form') {
+      const title = t.find((l) => RE_FORM_TITLE.test(norm(l.t)));
+      const rest = t.filter((l) => RE_FORM_BELOW.test(norm(l.t)));
+      if (title && rest.some((l) => !up(title, l))) return false;
+    }
+    return true;
+  };
+  const ok = cands.filter(pass);
+  if (ok.length === 1) return ok[0]!;
+  if (ok.includes(0)) return 0;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 3c. 裁圖內容驗證（Vision 讀數 vs 預期值）——純函數；讀出嘅文字只喺記憶體比對，唔寫 log／檔案
+// ---------------------------------------------------------------------------
+/** 通過門檻（按 --dry fixture 調過）：號碼／電話／日期 ≥0.7、姓名 ≥0.5、地址 ≥0.4 */
+export const VERIFY_THRESHOLD: Record<EvidenceField, number> = { hkid: 0.7, phone: 0.7, dob: 0.7, permit_no: 0.7, name_zh: 0.5, name_en: 0.5, address: 0.4 };
+
+const alnum = (s: string): string => s.normalize('NFKC').toUpperCase().replace(/[^0-9A-Z]/g, '');
+const cjkChars = (s: string): string[] => [...s.normalize('NFKC')].filter((c) => /[一-鿿]/.test(c));
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n]!;
+}
+
+/** exp 喺 text 內最相似視窗嘅相似度 0–1（1−編輯距離/長度；視窗長度 L−1..L+1）。 */
+export function bestWindowSimilarity(exp: string, text: string): number {
+  if (!exp) return 0;
+  if (!text) return 0;
+  if (text.length <= exp.length + 1) return Math.max(0, 1 - levenshtein(exp, text) / Math.max(exp.length, text.length));
+  let best = 0;
+  for (let len = Math.max(1, exp.length - 1); len <= exp.length + 1; len++) {
+    for (let i = 0; i + len <= text.length; i++) {
+      best = Math.max(best, 1 - levenshtein(exp, text.slice(i, i + len)) / exp.length);
+      if (best >= 1) return 1;
+    }
+  }
+  return Math.max(0, best);
+}
+
+/** 最長公共子序列長度 / exp 長度。 */
+export function lcsRatio(exp: string, text: string): number {
+  if (!exp || !text) return 0;
+  let prev = new Array<number>(text.length + 1).fill(0);
+  for (let i = 1; i <= exp.length; i++) {
+    const cur = [0];
+    for (let j = 1; j <= text.length; j++) cur[j] = exp[i - 1] === text[j - 1] ? prev[j - 1]! + 1 : Math.max(prev[j]!, cur[j - 1]!);
+    prev = cur;
+  }
+  return prev[text.length]! / exp.length;
+}
+
+/** 預期值變體：出生日期 ISO（YYYY-MM-DD）→ 另加卡面印法 DDMMYYYY。 */
+function variantsOf(field: EvidenceField, v: string): string[] {
+  const t = v.trim();
+  if (field === 'dob') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+    return m ? [`${m[1]}${m[2]}${m[3]}`, `${m[3]}${m[2]}${m[1]}`] : [alnum(t)];
+  }
+  return [t];
+}
+
+/** 一個讀出嘅文字同一個預期值嘅相似度 0–1。 */
+export function scoreAgainst(field: EvidenceField, read: string, expected: string): number {
+  if (field === 'name_zh') {
+    const e = cjkChars(expected);
+    if (e.length === 0) return 0;
+    const r = new Set(cjkChars(read));
+    return e.filter((c) => r.has(c)).length / e.length;
+  }
+  if (field === 'name_en') {
+    const tokens = expected.normalize('NFKC').toUpperCase().split(/[^A-Z]+/).filter((t) => t.length >= 2);
+    if (tokens.length === 0) return 0;
+    const letters = read.normalize('NFKC').toUpperCase().replace(/[^A-Z]/g, '');
+    return tokens.reduce((a, t) => a + bestWindowSimilarity(t, letters), 0) / tokens.length;
+  }
+  if (field === 'address') return lcsRatio(alnumCjk(expected), alnumCjk(read));
+  // hkid／phone／dob／permit_no：alnum 視窗比對
+  const text = alnum(read);
+  return Math.max(0, ...variantsOf(field, expected).map((v) => bestWindowSimilarity(field === 'dob' ? v : alnum(v), text)));
+}
+const alnumCjk = (s: string): string => s.normalize('NFKC').toUpperCase().replace(/[^0-9A-Z一-鿿]/g, '');
+
+/** 讀出文字同所有預期值（package 該欄值＋候選讀數）嘅最高相似度。 */
+export function similarity(field: EvidenceField, read: string, expected: readonly string[]): number {
+  return Math.max(0, ...expected.filter((e) => e.trim()).map((e) => scoreAgainst(field, read, e)));
+}
+
+const PKG_KEY: Partial<Record<EvidenceField, keyof Pick<PkgPerson, 'hkid' | 'nameZh' | 'nameEn' | 'dateOfBirth' | 'phone' | 'address'>>> = { hkid: 'hkid', name_zh: 'nameZh', name_en: 'nameEn', dob: 'dateOfBirth', phone: 'phone', address: 'address' };
+
+/**
+ * 預期值＝package 該人該欄嘅值，加 person-fields 等來源可選嘅候選值／讀數（`candidates`）。
+ * 冇任何預期值（例如身份證號 missing）→ 空陣列＝無法驗證。
+ */
+export function expectedValuesFor(field: EvidenceField, p: PkgPerson, extraCandidates: readonly string[] = []): string[] {
+  const k = PKG_KEY[field];
+  if (!k) return [];
+  const v = p[k] as { value: string | null; candidates?: string[] };
+  return [...new Set([...(v.value ? [v.value] : []), ...(v.candidates ?? []), ...extraCandidates].map((x) => x.trim()).filter(Boolean))];
+}
+
+/** 裁圖內文字行嘅「正向程度」（w／h 係 Vision 正規化，要乘圖寬高先比較）：行 box 實際寬≥高 嘅字數減 寬<高 嘅字數（>0＝橫排：0°／180°；<0＝側躺：90°／270°）。 */
+export function textUprightness(lines: readonly { t: string; w: number; h: number }[], imgW = 1, imgH = 1): number {
+  return lines.reduce((a, l) => a + norm(l.t).length * (l.w * imgW >= l.h * imgH ? 1 : -1), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +622,8 @@ export interface EvidenceItem {
   docKind: DocKind;
   priority: 1 | 2;
   match: { hkid: string | null; staff_numbers: string[] };
+  /** Vision 驗證相似度 0–1（淨數字；冇驗證＝undefined） */
+  verifyScore?: number;
 }
 
 export const ZIP_MAX_ENTRIES = 300;
@@ -255,7 +658,7 @@ export async function buildEvidenceZips(items: readonly EvidenceItem[], opts: { 
     const manifest = b.map((it) => {
       const file = entryNameOf(it.bytes);
       if (!z.file(file)) z.file(file, it.bytes);
-      return { file, field: it.field, doc_kind: it.docKind, priority: it.priority, match: it.match };
+      return { file, field: it.field, doc_kind: it.docKind, priority: it.priority, match: it.match, ...(it.verifyScore !== undefined ? { verify_score: Math.round(it.verifyScore * 1000) / 1000 } : {}) };
     });
     z.file('manifest.json', JSON.stringify({ version: 1, items: manifest }));
     zips.push(await z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }));
