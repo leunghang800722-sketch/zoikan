@@ -231,14 +231,15 @@ const isFormLabel = (l: OcrLine): boolean => {
   return t.length > 0 && t.length <= 40 && (t.match(/\d/g) ?? []).length <= 2 && (FORM_VOCAB.test(t) || /[:：]\s*$/.test(t));
 };
 /** 緊急聯絡人／擔保人／見證人／僱主欄嘅「姓名」「電話」唔係申請人本人 */
-const OTHER_PERSON = /聯絡人|緊急|擔保|見證|僱主/;
+/** 緊急聯絡人／擔保人／見證人／僱主／諮詢人／介紹人／配偶欄（中英文）——嘅「姓名」「電話」唔係申請人本人。 */
+const OTHER_PERSON = /聯絡人|緊急|擔保|見證|僱主|諮詢人|介紹人|配偶|Emergency|Contact\s*Person|Guarantor|Witness|Employer|Referee|Reference|Spouse/i;
 const FORM_LABEL: Partial<Record<EvidenceField, { re: RegExp; not?: RegExp }>> = {
   name_zh: { re: /中文姓名|姓名/, not: new RegExp(`英文|English|${OTHER_PERSON.source}`, 'i') },
   // TE-2.2：單獨「Name：」（冇「English」字）都當英文姓名 label（範本 B 嘅翻譯行 / 英文版本）
   name_en: { re: /英文姓名|English\s*Name|^Name\s*[:：]?$/i, not: OTHER_PERSON },
   hkid: { re: /香港身份證|身份證|HKID|ID\s*Card/i },
   dob: { re: /出生日期|Date\s*of\s*Birth/i },
-  phone: { re: /[手车半F千]?提[電範]?話|MOBILE|聯絡電話|Phone\s*No/i, not: new RegExp(`住所|${OTHER_PERSON.source}`) },
+  phone: { re: /[手车半F千]?提[電範]?話|MOBILE|聯絡電話|Phone\s*No/i, not: new RegExp(`住所|${OTHER_PERSON.source}`, 'i') },
   address: { re: /^[住生世佳售]\s*址|[住生世佳售]址\s*[:：]|^地址\s*[:：]?$|^Address/i, not: new RegExp(`通訊|電郵|Email|諮詢|學校|${OTHER_PERSON.source}`, 'i') },
 };
 /** 同一欄喺入職表有多個 label 位置（hire_date：0＝入職日期〔人事部格；OCR 或誤讀「人職」〕、1＝可到職日期） */
@@ -336,16 +337,17 @@ const xOverlapFrac = (a: OcrLine, b: OcrLine): number => Math.max(0, Math.min(a.
  * 申請人個人資料段落範圍（姓名 label 只喺呢度搵）：由「申請人個人資料／Personal Particulars」標題到「過去 3 年受僱記錄／諮詢人資料」標題之間；
  * 搵唔到標題就取頁頂 50%。回判斷函數（label 行是否喺段落內）。
  */
-function inPersonalSection(ls: readonly OcrLine[]): (l: OcrLine) => boolean {
+function inPersonalSection(ls: readonly OcrLine[]): { inSection: (l: OcrLine) => boolean; inTop40: (l: OcrLine) => boolean } {
   const head = ls.filter((l) => /申請人個人資料|Personal\s*Particulars/i.test(l.t)).sort((a, b) => cy(b) - cy(a))[0];
-  if (!head) return (l) => cy(l) >= 0.5;
+  if (!head) return { inSection: (l) => cy(l) >= 0.5, inTop40: (l) => cy(l) >= 0.8 }; // 頁頂 50% 嘅頂 40%
   const end = ls.filter((l) => cy(l) < cy(head) && /過去\s*[3三]\s*年|受僱記錄|諮詢人資料|Employment\s*Record/i.test(l.t)).sort((a, b) => cy(b) - cy(a))[0];
-  return (l) => cy(l) < cy(head) && (!end || cy(l) > cy(end));
+  const bottom = end ? cy(end) : 0;
+  return { inSection: (l) => cy(l) < cy(head) && (!end || cy(l) > cy(end)), inTop40: (l) => cy(l) >= cy(head) - 0.4 * (cy(head) - bottom) };
 }
 /** 表頭樣式嘅「姓 名」（姓同名中間有空格，或者同行有地址／電話／關係 label）唔算本人姓名欄。 */
 function isTableHeaderName(l: OcrLine, ls: readonly OcrLine[]): boolean {
   if (/^姓\s+名$/.test(norm(l.t).trim()) || /^姓\s+名\s*[:：]?$/.test(l.t.trim())) return true;
-  return ls.some((o) => o !== l && sameRow(o, l) && /地址|電話|關係|Relation/i.test(o.t));
+  return ls.some((o) => o !== l && sameRow(o, l) && /地址|電話|關係|Relation|Address|Tel|Phone/i.test(o.t));
 }
 
 /**
@@ -363,8 +365,17 @@ export function locateFormCell(field: EvidenceField, lines: readonly OcrLine[], 
   const spec = FORM_LABEL_VARIANTS[field]?.[variant] ?? FORM_LABEL[field];
   if (!spec) return { box: null, reason: 'form_label_not_located' };
   const ls = splitMergedLines(lines.filter((l) => l.t.trim()));
-  const inSection = field === 'name_zh' || field === 'name_en' ? inPersonalSection(ls) : () => true;
-  const L0 = ls.filter((l) => isFormLabel(l) && spec.re.test(norm(l.t)) && !(spec.not && spec.not.test(norm(l.t))) && inSection(l) && !(field === 'name_zh' && isTableHeaderName(l, ls))).sort((a, b) => cy(b) - cy(a))[0] as SegLine | undefined;
+  const isName = field === 'name_zh' || field === 'name_en';
+  const sec = isName ? inPersonalSection(ls) : null;
+  /** 單獨「Name：」（冇 English／中文）：同行或上一行冇任何其他人物詞，而且喺個人資料段落頂部 40% 先接受（避免揀中緊急聯絡人表頭） */
+  const standaloneOk = (l: OcrLine): boolean => {
+    if (!/^Name\s*[:：]?$/i.test(norm(l.t).trim())) return true;
+    if (!sec?.inTop40(l)) return false;
+    return !ls.some((o) => o !== l && OTHER_PERSON.test(o.t) && (sameRow(o, l) || (cy(o) > cy(l) && cy(o) - cy(l) < 2.2 * l.h)));
+  };
+  const L0 = ls
+    .filter((l) => isFormLabel(l) && spec.re.test(norm(l.t)) && !(spec.not && spec.not.test(norm(l.t))) && (!sec || sec.inSection(l)) && !(isName && isTableHeaderName(l, ls)) && (field !== 'name_en' || standaloneOk(l)))
+    .sort((a, b) => cy(b) - cy(a))[0] as SegLine | undefined;
   if (!L0) return { box: null, reason: 'form_label_not_located' };
   // 範本 B：中文 label 下一行係英文翻譯 → 合併成 label block（高度＝block；cap 以 block 計）
   // 範本 B：中文 label 下一行係英文翻譯（規則：以英文字母開頭、含 Name／Phone／Address／Birth／Card／Date 之一、x 範圍重疊 ≥50%、垂直距離 ≤1.2×行高）→ 合併成 label block

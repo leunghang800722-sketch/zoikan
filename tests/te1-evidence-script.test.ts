@@ -1994,3 +1994,45 @@ describe.skipIf(!canVision || !hasMagick || !hasSyntheticFonts)("TE-2.2 頁面�
     expect(pageCalls).toBeLessThanOrEqual(3); // 入職表頁＋印刷行頁（牌照／證書頁）各一次
   }, 240_000);
 });
+
+describe("TE-2.2.1 Opus M：name_en 唔可以揀中緊急聯絡人／其他人物欄（錯證據）", () => {
+  const lab = (t: string, x: number, y: number, w: number, h = 0.022) => ({ t, c: 0.9, x, y, w, h });
+  const head = lab("申請人個人資料 Personal Particulars", 0.08, 0.92, 0.5);
+  const end = lab("過去 3 年受僱記錄", 0.08, 0.4, 0.3);
+
+  it("情況 2：申請人「英文姓名：」冇 OCR 到，只剩緊急聯絡人表頭「Name」（同行有 Tel／關係／地址）→ 唔揀（not located），唔會裁聯絡人", () => {
+    const emHeader = [lab("緊急聯絡人 Emergency Contact", 0.08, 0.6, 0.4), lab("Name：", 0.08, 0.56, 0.07), lab("陳大文", 0.17, 0.56, 0.1), lab("Tel：", 0.45, 0.56, 0.06), lab("關係：", 0.7, 0.56, 0.08)];
+    expect(locateCell("name_en", [head, ...emHeader, end]).reason).toBe("form_label_not_located");
+    // 表頭「Name」同行只有 Address／Phone 亦當表頭
+    expect(locateCell("name_en", [head, lab("Name：", 0.08, 0.56, 0.07), lab("Address：", 0.4, 0.56, 0.1), end]).reason).toBe("form_label_not_located");
+    // 同行冇表頭詞，但上一行係「Emergency Contact」標題 → 單獨 Name 唔接受
+    expect(locateCell("name_en", [head, lab("Emergency Contact", 0.08, 0.64, 0.3), lab("Name：", 0.08, 0.61, 0.07), lab("陳大文", 0.17, 0.61, 0.1), end]).reason).toBe("form_label_not_located");
+    // 申請人自己嘅「英文姓名：」仍然優先／正常
+    const own = [lab("英文姓名：", 0.08, 0.8, 0.12), lab("TESTER ALPHA", 0.22, 0.8, 0.15)];
+    expect(locateCell("name_en", [head, ...own, ...emHeader, end]).box).not.toBeNull();
+    expect(locateCell("name_en", [head, ...own, ...emHeader, end]).box!.y0).toBeGreaterThan(0.7);
+  });
+
+  it("情況 3：「Emergency Contact English Name:」（切開前綴 + English Name）唔當申請人英文姓名；英文其他人物詞（Guarantor／Witness／Employer／Referee／Reference／Spouse）同樣排除；中文 諮詢人／介紹人／配偶", () => {
+    for (const t of ["Emergency Contact English Name:", "Guarantor English Name:", "Witness English Name:", "Employer English Name:", "Referee English Name:", "Reference English Name:", "Spouse English Name:"]) {
+      const r = locateCell("name_en", [head, lab(t, 0.08, 0.7, 0.4), lab("CHAN", 0.5, 0.7, 0.1), end]);
+      expect(r.reason, t).toBe("form_label_not_located");
+    }
+    for (const t of ["諮詢人英文姓名：", "介紹人中文姓名：", "配偶中文姓名：", "緊急聯絡人姓名："]) {
+      const f = t.includes("英文") ? "name_en" : "name_zh";
+      expect(locateCell(f, [head, lab(t, 0.08, 0.7, 0.3), lab("陳大文", 0.4, 0.7, 0.1), end]).reason, t).toBe("form_label_not_located");
+    }
+    // 同一行或上一行冇其他人物詞時，單獨 Name 照收（個人資料段頂部 40%）
+    expect(locateCell("name_en", [head, lab("Name：", 0.08, 0.85, 0.07), lab("TESTER", 0.18, 0.85, 0.1), end]).box).not.toBeNull();
+    // 但喺個人資料段下半部（頂部 40% 以外）單獨 Name 唔接受
+    expect(locateCell("name_en", [head, lab("Name：", 0.08, 0.5, 0.07), lab("TESTER", 0.18, 0.5, 0.1), end]).reason).toBe("form_label_not_located");
+    // 冇標題：取頁頂 50% 嘅頂 40%（cy ≥ 0.8）
+    expect(locateCell("name_en", [lab("Name：", 0.08, 0.9, 0.07), lab("TESTER", 0.18, 0.9, 0.1)]).box).not.toBeNull();
+    expect(locateCell("name_en", [lab("Name：", 0.08, 0.65, 0.07), lab("TESTER", 0.18, 0.65, 0.1)]).reason).toBe("form_label_not_located");
+  });
+
+  it("phone／address label 亦排除英文其他人物詞（Emergency Contact Phone 唔當本人電話）；一般 Contact 字眼（聯絡電話）照收", () => {
+    expect(locateCell("phone", [head, lab("Emergency Contact Phone No.:", 0.08, 0.7, 0.4), lab("91234567", 0.5, 0.7, 0.1), end]).reason).toBe("form_label_not_located");
+    expect(locateCell("phone", [head, lab("聯絡電話：", 0.08, 0.7, 0.12), lab("90001110", 0.22, 0.7, 0.1), end]).box).not.toBeNull();
+  });
+});
