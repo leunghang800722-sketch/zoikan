@@ -53,6 +53,8 @@ import {
   VERIFY_THRESHOLD,
   expectedValuesFor,
   textUprightness,
+  capBox,
+  findOverflow,
 } from "../scripts/staff-import/lib/triage-evidence-core";
 import type { DocPage } from "../scripts/staff-import/lib/triage-reread-core";
 import { readEvidenceZip, evidenceManifestSchema } from "@/lib/triage/evidence-upload";
@@ -815,12 +817,12 @@ describe.skipIf(!canVision)("TE-1.7 Vision 驗證（真 Apple Vision，合成字
     const tmp = await mkdtemp(path.join(os.tmpdir(), "te1vm-"));
     try {
       const other = await crop(tmp, "other", "TESTER ALPHA");
-      expect(await verifyCrop(other, "hkid", ["Z900001(2)"], run, tmp)).toEqual({ ok: false, reason: "value_mismatch" });
-      expect(await verifyCrop(other, "phone", ["90001110"], run, tmp)).toEqual({ ok: false, reason: "value_mismatch" });
+      expect(await verifyCrop(other, "hkid", ["Z900001(2)"], run, tmp)).toMatchObject({ ok: false, reason: "value_mismatch" });
+      expect(await verifyCrop(other, "phone", ["90001110"], run, tmp)).toMatchObject({ ok: false, reason: "value_mismatch" });
       const zh = await crop(tmp, "zh", "測試甲", 0, true);
       const okZh = await verifyCrop(zh, "name_zh", ["測試甲"], run, tmp);
       expect(okZh.ok && okZh.score).toBe(1);
-      expect(await verifyCrop(zh, "name_zh", ["陳大文"], run, tmp)).toEqual({ ok: false, reason: "value_mismatch" });
+      expect(await verifyCrop(zh, "name_zh", ["陳大文"], run, tmp)).toMatchObject({ ok: false, reason: "value_mismatch" });
       // 多個候選讀數：其中一個對得上就過
       expect((await verifyCrop(zh, "name_zh", ["陳大文", "測試甲"], run, tmp)).ok).toBe(true);
       expect(await verifyCrop(zh, "hkid", [], run, tmp)).toEqual({ ok: true, score: null, rotate: 0 });
@@ -907,5 +909,217 @@ describe("TE-1.7 參數與 no-verify", () => {
     expect(r.stats.unverified).toBe(r.items.length);
     const raw = JSON.parse(await (await JSZip.loadAsync(r.zips[0]!)).file("manifest.json")!.async("string")) as { items: Record<string, unknown>[] };
     expect(raw.items.every((i) => !("verify_score" in i))).toBe(true);
+  }, 120_000);
+});
+
+// ===========================================================================
+// TE-1.8
+// ===========================================================================
+describe("TE-1.8 硬性尺寸上限 capBox（輸出 frame、按像素；唔依賴方向／版面推算）", () => {
+  const W = 2000;
+  const H = 2800;
+  const hline = { t: "Z900001(2)", c: 0.9, x: 0.44, y: 0.54, w: 0.12, h: 0.035 }; // 橫排：行高 98px
+  const t = 0.035 * H;
+  const px = (b: { x0: number; x1: number; y0: number; y1: number }) => ({ w: (b.x1 - b.x0) * W, h: (b.y1 - b.y0) * H });
+
+  it("id：超高（包住相片）→ 收窄到行 bbox ± 0.3×行厚（唔係跳過）；厚度 ≤1.8×、闊度 ≤行闊＋1.2×行厚", () => {
+    const huge = { x0: 0.4, x1: 0.6, y0: 0.4, y1: 0.8 };
+    const r = capBox(huge, { own: [hline], mode: "id" }, W, H);
+    expect(r.capped).toBe(true);
+    const d = px(r.box);
+    expect(d.h).toBeLessThanOrEqual(1.8 * t + 0.5);
+    expect(d.w).toBeLessThanOrEqual(0.12 * W + 1.2 * t + 0.5);
+    expect(r.box.y0).toBeCloseTo(0.54 - (0.3 * t) / H, 6);
+    // 合理 padding 唔動
+    const ok = { x0: 0.44 - 0.3 * t / W, x1: 0.56 + 0.6 * t / W, y0: 0.54 - 0.3 * t / H, y1: 0.575 + 0.3 * t / H };
+    expect(capBox(ok, { own: [hline], mode: "id" }, W, H)).toEqual({ box: ok, capped: false });
+  });
+
+  it("id：側躺（90° frame，行 box 高而窄）→ 厚度方向係闊；長度方向係高；一樣收窄", () => {
+    // 轉 90 後：x'=y, y'=1-x-w, w'=h, h'=w（頁面 2800×2000）
+    const [Wr, Hr] = [H, W];
+    const vline = { t: "Z900001(2)", c: 0.9, x: 0.54, y: 1 - 0.44 - 0.12, w: 0.035, h: 0.12 };
+    const tr = Math.min(vline.w * Wr, vline.h * Hr); // 厚度＝98px
+    const huge = { x0: 0.3, x1: 0.8, y0: 0.2, y1: 0.9 };
+    const r = capBox(huge, { own: [vline], mode: "id" }, Wr, Hr);
+    expect(r.capped).toBe(true);
+    expect((r.box.x1 - r.box.x0) * Wr).toBeLessThanOrEqual(1.8 * tr + 0.5); // 厚度方向＝闊
+    expect((r.box.y1 - r.box.y0) * Hr).toBeLessThanOrEqual(vline.h * Hr + 1.2 * tr + 0.5);
+  });
+
+  it("form 單行欄：高度 ≤2.2×label 行高；超出收窄到 label 行 ± 0.25×行高，闊度（長度方向）照舊", () => {
+    const label = { t: "香港身份證：", c: 0.9, x: 0.08, y: 0.7, w: 0.12, h: 0.025 };
+    const tl = 0.025 * H;
+    const two = { x0: 0.08, x1: 0.5, y0: 0.7 - 0.03, y1: 0.7 + 0.025 + 0.03 };
+    const r = capBox(two, { own: [label], mode: "form" }, W, H);
+    expect(r.capped).toBe(true);
+    expect(px(r.box).h).toBeLessThanOrEqual(0.025 * H + 0.5 * tl + 0.5);
+    expect(r.box.x0).toBe(two.x0);
+    expect(r.box.x1).toBe(two.x1);
+    const fine = { x0: 0.08, x1: 0.5, y0: 0.7 - 0.25 * 0.025, y1: 0.725 + 0.25 * 0.025 };
+    expect(capBox(fine, { own: [label], mode: "form" }, W, H).capped).toBe(false);
+    expect(capBox(two, { own: [], mode: "form" }, W, H).capped).toBe(false);
+  });
+});
+
+describe.skipIf(!hasMagick)("TE-1.8 90／270 身份證——轉正前相片喺號碼行旁邊：即使方向偵測失敗，hkid 裁圖都唔包相片", () => {
+  it("assumeRot=null（偵測失敗，喺側躺 frame 直接定位）＋偵測正常，兩條路 hkid 裁圖厚度 ≤1.8×行厚、冇相片色", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1c-"));
+    try {
+      const { lines, photo } = syntheticIdCardPage();
+      const d = doc("id_card");
+      const req = { field: "hkid" as const, docKind: "id_card" as const, priority: 1 as const, doc: d };
+      const rowThickness = 0.035 * 2800; // 98px
+      for (const th of [90, 270] as const) {
+        const png = path.join(tmp, `p-${th}.png`);
+        await drawSyntheticPage({ doc: d, lines, photo }, png, { w: 2000, h: 2800 }, th);
+        for (const mode of ["detected", "failed"] as const) {
+          const r = await cropRequest(req, png, rotateLines(lines, th), tmp, undefined, undefined, mode === "failed" ? { assumeRot: null } : {});
+          expect("bytes" in r, `${th}/${mode}`).toBe(true);
+          const f = path.join(tmp, `o-${th}-${mode}.jpg`);
+          await (await import("node:fs/promises")).writeFile(f, (r as { bytes: Uint8Array }).bytes);
+          const id = await sh(MAGICK, ["identify", "-format", "%w %h", f]);
+          const [w, h] = id.stdout.split(" ").map(Number) as [number, number];
+          // 偵測正常＝已轉正（厚度＝高）；偵測失敗＝仍然側躺（厚度＝闊）
+          const thick = mode === "detected" ? h : w;
+          expect(thick, `${th}/${mode} 厚度`).toBeLessThanOrEqual(1.8 * rowThickness + 1);
+          const m = await sh(MAGICK, [f, "-fx", "r-g", "-format", "%[fx:maxima]", "info:"]);
+          expect(Number(m.stdout), `${th}/${mode} 冇紅色`).toBeLessThan(0.15);
+        }
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+});
+
+describe("TE-1.8 入職表裁圖越界（Vision 讀到其他欄 label 關鍵詞）", () => {
+  const vl = (t: string, x: number, y: number, w: number, h = 0.3) => ({ t, x, y, w, h });
+  it("findOverflow：成行合併 line → 右界（關鍵詞左緣比例按字元估）；其他行 → below／above；自己欄 label 唔算；冇就 null", () => {
+    const merged = [vl("香港身份證號碼： Z900001(2) 出生日期： 15-01-1990", 0.02, 0.35, 0.95)];
+    const hit = findOverflow("hkid", merged, (l) => /身份證/.test(l.t));
+    expect(hit?.side).toBe("right");
+    expect(hit!.frac).toBeGreaterThan(0.3);
+    expect(hit!.frac).toBeLessThan(0.8);
+    // 自己欄：只有自己 label → null
+    expect(findOverflow("hkid", [vl("香港身份證號碼： Z900001(2)", 0.02, 0.35, 0.6)], (l) => /身份證/.test(l.t))).toBeNull();
+    // 分開兩條 line、同一行 → right，frac＝該 line 左緣
+    const sep = [vl("香港身份證號碼： Z900001(2)", 0.02, 0.35, 0.45), vl("出生日期： 15-01-1990", 0.55, 0.35, 0.4)];
+    expect(findOverflow("hkid", sep, (l) => /身份證/.test(l.t))).toEqual({ side: "right", frac: 0.55 });
+    // 下一行 label 露出（below）：frac＝關鍵詞頂緣比例（由上）
+    const below = [vl("中文姓名： 測試甲", 0.02, 0.5, 0.5, 0.3), vl("English Name:", 0.02, 0.02, 0.4, 0.12)];
+    expect(findOverflow("name_zh", below, (l) => /中文姓名/.test(l.t))).toMatchObject({ side: "below" });
+    const b = findOverflow("name_zh", below, (l) => /中文姓名/.test(l.t))!;
+    expect(b.frac).toBeCloseTo(1 - 0.14, 5);
+    // 上一行露出（above）
+    const above = [vl("國籍： 香港", 0.02, 0.88, 0.4, 0.1), vl("手提電話： 90001110", 0.02, 0.4, 0.5, 0.25)];
+    expect(findOverflow("phone", above, (l) => /電話/.test(l.t))).toMatchObject({ side: "above" });
+    // name_zh 自己 label 含「姓名」，English Name 先係越界
+    expect(findOverflow("name_en", [vl("English Name: TESTER", 0.02, 0.4, 0.6)], (l) => /English/.test(l.t))).toBeNull();
+    expect(findOverflow("hkid", [], () => false)).toBeNull();
+  });
+
+  it("cropRequest 越界重裁：右溢出 → 收右界重驗；再 below → 收下界；第三次仍越界 → cell_overflow 跳過（假 verify hook）", async () => {
+    // 用假頁（不涉 magick 內容）：只量 box 調整；finalizeChecked 需要 magick
+    if (!hasMagick) return;
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1o-"));
+    try {
+      const lines = syntheticFormPage();
+      const png = path.join(tmp, "form.png");
+      await drawSyntheticPage({ doc: doc("onboarding_form"), lines, photo: SYNTHETIC_FORM_PHOTO }, png);
+      const req = { field: "name_zh" as const, docKind: "onboarding_form" as const, priority: 2 as const, doc: doc("onboarding_form") };
+      const seen: number[] = [];
+      let n = 0;
+      const hook = async () => {
+        n += 1;
+        seen.push(n);
+        if (n === 1) return { ok: true as const, score: 0.9, rotate: 0 as const, overflow: { side: "right" as const, frac: 0.6 } };
+        if (n === 2) return { ok: true as const, score: 0.9, rotate: 0 as const, overflow: { side: "below" as const, frac: 0.7 } };
+        return { ok: true as const, score: 0.9, rotate: 0 as const };
+      };
+      const r = await cropRequest(req, png, lines, tmp, undefined, hook);
+      expect("bytes" in r).toBe(true);
+      expect(seen).toEqual([1, 2, 3]); // 重裁兩次，第三次通過
+      let m = 0;
+      const always = async () => {
+        m += 1;
+        return { ok: true as const, score: 0.9, rotate: 0 as const, overflow: { side: "right" as const, frac: 0.6 } };
+      };
+      const r2 = await cropRequest(req, png, lines, tmp, undefined, always);
+      expect(r2).toMatchObject({ reason: "cell_overflow" });
+      expect(m).toBeGreaterThanOrEqual(2); // 每次越界都收窄再驗，最多重裁兩次；收窄到切入 label 就提早跳過
+      expect(m).toBeLessThanOrEqual(3);
+      // 收窄後切到 label 本身 → 直接 cell_overflow（唔再裁）
+      const cutsLabel = async () => ({ ok: true as const, score: 0.9, rotate: 0 as const, overflow: { side: "right" as const, frac: 0.01 } });
+      expect(await cropRequest(req, png, lines, tmp, undefined, cutsLabel)).toMatchObject({ reason: "cell_overflow" });
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it.skipIf(!canVision)("真 Vision：OCR 將「出生日期＋值」併成一條 line（值行唔似 label）→ hkid 格右溢出，重裁後輸出入面冇「出生日期」", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "te1m-"));
+    try {
+      const L = (t: string, x: number, y: number, w: number, h = 0.025) => ({ t, c: 0.9, x, y, w, h });
+      // OCR 行：label 獨立；值同後面兩格併成一條（digits >2 → 唔係 label 樣式）
+      const lines = [
+        L("職位申請表 EMPLOYMENT APPLICATION", 0.1, 0.92, 0.5),
+        L("香港身份證號碼：", 0.08, 0.7, 0.18),
+        L("Z900001(2) 出生日期： 15-01-1990 出生地點： 香港", 0.27, 0.7, 0.62),
+        L("手提電話：", 0.08, 0.5, 0.11),
+      ];
+      const png = path.join(tmp, "m.png");
+      await drawSyntheticPage({ doc: doc("onboarding_form"), lines }, png);
+      const run = makeVisionRunner(visionBin!);
+      const req = { field: "hkid" as const, docKind: "onboarding_form" as const, priority: 2 as const, doc: doc("onboarding_form") };
+      const hook = (c: string) => verifyCrop(c, "hkid", ["Z900001(2)"], run, tmp, { checkOverflow: true });
+      const r = await cropRequest(req, png, lines, tmp, undefined, hook);
+      expect("bytes" in r, JSON.stringify("reason" in r ? r.reason : "")).toBe(true);
+      const out = path.join(tmp, "o.jpg");
+      await (await import("node:fs/promises")).writeFile(out, (r as { bytes: Uint8Array }).bytes);
+      const [pg] = await run([out], false);
+      const text = pg!.lines.map((l) => l.t).join(" ");
+      expect(text).toContain("Z900001");
+      expect(text).not.toContain("出生日期");
+      expect(text).not.toContain("15");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+});
+
+describe("TE-1.8 診斷：value_mismatch 最高相似度分佈（只計數）", () => {
+  it.skipIf(!canVision)("錯人預期值 → hkid 落喺 mismatch_hist；statsLines 印得出、冇值／姓名", async () => {
+    const fx = dryFixture();
+    const base = fx.people[0]!;
+    const wrong = { ...base, person: { ...base.person, hkid: lf("Y123456(7)", "review"), nameZh: lf("陳大文", "review") } };
+    const run = makeVisionRunner(visionBin!);
+    const deps: Deps = {
+      async lines(d) {
+        return fx.docs.get(`${d.docId}|${d.page}`)?.lines ?? null;
+      },
+      existing: () => null,
+      async render(d) {
+        const out = path.join(os.tmpdir(), `te1h-${process.pid}-${Math.random().toString(36).slice(2)}.png`);
+        await drawSyntheticPage(fx.docs.get(`${d.docId}|${d.page}`)!, out);
+        return out;
+      },
+      async cleanup(png) {
+        await rm(png, { force: true });
+      },
+      vision: run,
+    };
+    const stats = emptyStats();
+    await produceItems([wrong as PersonInput], deps, stats);
+    expect(stats.skipped.value_mismatch).toBeGreaterThanOrEqual(2);
+    const hk = stats.mismatch_hist.hkid!;
+    expect(hk.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(2);
+    expect(hk.length).toBe(4);
+    const zh = stats.mismatch_hist.name_zh!;
+    expect(zh[0]).toBeGreaterThanOrEqual(1); // 完全唔夾（0 重疊）→ 第一格
+    const { statsLines } = await import("../scripts/staff-import/20-triage-evidence");
+    const txt = statsLines(stats).join("\n");
+    expect(txt).toContain("value_mismatch 最高相似度分佈");
+    expect(txt).not.toMatch(/Y123456|陳大文|Z900001/);
   }, 120_000);
 });

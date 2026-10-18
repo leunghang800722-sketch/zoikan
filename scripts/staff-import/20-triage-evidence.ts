@@ -31,11 +31,16 @@ import {
   buildEvidenceZips,
   VERIFY_THRESHOLD,
   detectUprightRotation,
+  capBox,
   expectedValuesFor,
+  findOverflow,
+  lineHasOwnLabel,
   rotateLines,
+  scoreAgainst,
   similarity,
   textUprightness,
   type EvidenceField,
+  type OverflowHit,
   type Rotation,
   evidenceFieldsOf,
   magickOutArgs,
@@ -148,7 +153,11 @@ export interface Deps {
   vision?: VisionRunner;
 }
 
-export type FinalizeResult = { bytes: Uint8Array; score?: number } | { reason: 'photo_suspect' | 'image_spec_fail' | 'value_mismatch' | 'orientation_unknown' };
+export type FinalizeResult =
+  | { bytes: Uint8Array; score?: number }
+  | { reason: 'photo_suspect' | 'image_spec_fail' | 'orientation_unknown'; score?: number }
+  | { reason: 'value_mismatch'; score: number }
+  | { reason: 'cell_overflow'; overflow: OverflowHit };
 
 /** 暗像素門檻：灰階 <70% 當暗（相片頭髮／衣服／深色格；皮膚色較亮，白底印刷字線條比例低） */
 const DARK_THRESHOLD = '70%';
@@ -227,7 +236,8 @@ export async function finalizeChecked(png: string, box: Box | null, tmp: string,
   let score: number | undefined;
   if (opts.verify) {
     const v = await opts.verify(src);
-    if (!v.ok) return { reason: v.reason };
+    if (!v.ok) return v.reason === 'value_mismatch' ? { reason: 'value_mismatch', score: v.score } : { reason: v.reason };
+    if (v.overflow) return { reason: 'cell_overflow', overflow: v.overflow };
     if (v.score !== null) score = v.score;
     if (v.rotate) {
       const rp = path.join(tmp, `v-${Math.random().toString(36).slice(2)}.png`);
@@ -259,11 +269,34 @@ export async function finalizeImage(png: string, box: Box | null, tmp: string): 
 }
 
 /** 身份證／入職表／住址證明一個欄：偵測方向 → 轉正 lines → 定位 → 轉正頁面 → 裁 → 邊緣帶檢查。回 bytes 或跳過原因。 */
-export async function cropRequest(req: CropRequest, png: string, lines: OcrLine[], tmp: string, rotatedCache?: Map<string, string>, verify?: VerifyHook): Promise<FinalizeResult | { reason: string }> {
-  const rot: Rotation = detectUprightRotation(req.docKind, lines) ?? 0;
-  const g = boxForRequest(req, rotateLines(lines, rot));
+export async function cropRequest(req: CropRequest, png: string, lines: OcrLine[], tmp: string, rotatedCache?: Map<string, string>, verify?: VerifyHook, opts: { assumeRot?: Rotation | null } = {}): Promise<(FinalizeResult | { reason: string }) & { capped?: boolean }> {
+  const rot: Rotation = ('assumeRot' in opts ? opts.assumeRot : detectUprightRotation(req.docKind, lines)) ?? 0;
+  const { w, h } = await sizeOf(png);
+  const [W, H] = rot === 90 || rot === 270 ? [h, w] : [w, h]; // 轉正後 frame 嘅頁面像素
+  const g = boxForRequest(req, rotateLines(lines, rot), W / H);
   if (!g.box) return { reason: g.reason ?? 'no_box' };
-  return finalizeChecked(png, g.box, tmp, { rotate: rot, bandCheck: true, rotatedCache, ...(verify ? { verify } : {}) });
+  let box = g.box;
+  let capped = false;
+  if (g.anchor) {
+    // 硬性尺寸上限：喺最終輸出 frame 量度，唔依賴方向／版面推算
+    const c = capBox(box, g.anchor, W, H);
+    box = c.box;
+    capped = c.capped;
+  }
+  const label = g.anchor?.mode === 'form' ? g.anchor.own[0] : undefined;
+  for (let attempt = 0; ; attempt++) {
+    const r = await finalizeChecked(png, box, tmp, { rotate: rot, bandCheck: true, rotatedCache, ...(verify ? { verify } : {}) });
+    if (!('reason' in r) || r.reason !== 'cell_overflow') return { ...r, capped };
+    // 越界：右界收到關鍵詞左邊 → 再裁再驗；仍越界收下（上）界；再仍越界跳過 cell_overflow
+    if (attempt >= 2) return { reason: 'cell_overflow', capped };
+    const ov = r.overflow;
+    const bw = box.x1 - box.x0;
+    const bh = box.y1 - box.y0;
+    const next: Box = ov.side === 'right' ? { ...box, x1: box.x0 + ov.frac * bw - 0.002 } : ov.side === 'below' ? { ...box, y0: box.y1 - ov.frac * bh } : { ...box, y1: box.y1 - ov.frac * bh };
+    const keepsLabel = !label || (next.x1 > label.x + label.w && next.y0 <= label.y + label.h * 0.5 && next.y1 >= label.y + label.h * 0.5);
+    if (next.x1 - next.x0 < 0.01 || next.y1 - next.y0 < 0.005 || !keepsLabel) return { reason: 'cell_overflow', capped };
+    box = next;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +315,7 @@ export interface VisionPage {
 }
 /** 一次 call 讀多張圖（輸出次序同輸入一致）；fast＝.fast 級別（對方向敏感）。 */
 export type VisionRunner = (paths: string[], fast: boolean) => Promise<VisionPage[]>;
-export type VerifyOutcome = { ok: true; score: number | null; rotate: Rotation } | { ok: false; reason: 'value_mismatch' | 'orientation_unknown' };
+export type VerifyOutcome = { ok: true; score: number | null; rotate: Rotation; overflow?: OverflowHit } | { ok: false; reason: 'value_mismatch'; score: number } | { ok: false; reason: 'orientation_unknown' };
 export type VerifyHook = (cropPng: string) => Promise<VerifyOutcome>;
 
 export function makeVisionRunner(bin: string): VisionRunner {
@@ -330,7 +363,7 @@ const textOf = (p: VisionPage | undefined): string => (p?.lines ?? []).map((l) =
  *     限制：中文姓名 .fast 讀唔準，180° 倒轉嘅純中文裁圖分唔出（只靠版面 prior）。
  * 冇預期值（例如身份證號 missing）＝無法驗證（score null，唔轉）。
  */
-export async function verifyCrop(png: string, field: EvidenceField, expected: readonly string[], run: VisionRunner, tmp: string): Promise<VerifyOutcome> {
+export async function verifyCrop(png: string, field: EvidenceField, expected: readonly string[], run: VisionRunner, tmp: string, opts: { checkOverflow?: boolean } = {}): Promise<VerifyOutcome> {
   if (expected.length === 0) return { ok: true, score: null, rotate: 0 };
   // Vision 輸入：放大到高度 ≥200px（上限 4×）＋四邊留白 24px——細裁圖直接讀會漏字
   const { h } = await sizeOf(png);
@@ -339,7 +372,7 @@ export async function verifyCrop(png: string, field: EvidenceField, expected: re
   await sh(MAGICK, [png, ...(scale > 1.01 ? ['-filter', 'Lanczos', '-resize', `${Math.round(scale * 100)}%`] : []), '-bordercolor', 'white', '-border', '24', vin]);
   const [acc] = await run([vin], false);
   const score = similarity(field, textOf(acc), expected);
-  if (score < VERIFY_THRESHOLD[field]) return { ok: false, reason: 'value_mismatch' };
+  if (score < VERIFY_THRESHOLD[field]) return { ok: false, reason: 'value_mismatch', score };
   const vs = await sizeOf(vin);
   const sideways = textUprightness(acc?.lines ?? [], vs.w, vs.h) < 0;
   const cands: Rotation[] = sideways ? [90, 270] : [0, 180];
@@ -347,8 +380,11 @@ export async function verifyCrop(png: string, field: EvidenceField, expected: re
   const fast = await run(files, true);
   const sc = fast.map((p) => similarity(field, textOf(p), expected));
   const [a, b] = [sc[0] ?? 0, sc[1] ?? 0];
-  if (Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]! };
-  if (!sideways) return { ok: true, score, rotate: 0 };
+  // 入職表：裁圖文字越界檢查（其他欄 label 關鍵詞）——座標由 Vision 輸入（放大＋留白）換返裁圖正規化
+  const overflow = opts.checkOverflow ? findOverflow(field, (acc?.lines ?? []).map((l) => ({ t: l.t, x: (l.x * vs.w - 24) / (vs.w - 48), y: (l.y * vs.h - 24) / (vs.h - 48), w: (l.w * vs.w) / (vs.w - 48), h: (l.h * vs.h) / (vs.h - 48) })), (l) => lineHasOwnLabel(field, l.t) || scoreAgainst(field, l.t, expected[0] ?? '') >= 0.5 || similarity(field, l.t, expected) >= 0.5) : null;
+  const ov = overflow ? { overflow } : {};
+  if (Math.max(a, b) >= 0.5 && Math.abs(a - b) >= 0.2) return { ok: true, score, rotate: cands[a >= b ? 0 : 1]!, ...ov };
+  if (!sideways) return { ok: true, score, rotate: 0, ...ov };
   return { ok: false, reason: 'orientation_unknown' };
 }
 
@@ -368,10 +404,14 @@ export interface Stats {
   /** TE-1.7：Vision 驗證通過／冇預期值或冇 Vision 未驗證 */
   verified: number;
   unverified: number;
+  /** TE-1.8：硬性尺寸上限收窄咗幾多張 */
+  size_capped: number;
+  /** TE-1.8：value_mismatch 嘅最高相似度分佈（按欄；四格 0–0.2／0.2–0.4／0.4–0.6／0.6–0.7） */
+  mismatch_hist: Record<string, [number, number, number, number]>;
   zips: number;
   zip_bytes: number;
 }
-export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, zips: 0, zip_bytes: 0 });
+export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
 const bump = (r: Record<string, number>, k: string) => {
   r[k] = (r[k] ?? 0) + 1;
 };
@@ -403,7 +443,7 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const hookFor = (req: CropRequest): VerifyHook | undefined => {
         if (!deps.vision) return undefined;
         const expected = expectedValuesFor(req.field, pi.person, pi.extra?.[req.field] ?? []);
-        return (png) => verifyCrop(png, req.field, expected, deps.vision!, tmp);
+        return (png) => verifyCrop(png, req.field, expected, deps.vision!, tmp, { checkOverflow: req.docKind === 'onboarding_form' });
       };
       const getPage = async (d: DocPage) => {
         const k = `${d.docId}|${d.page}`;
@@ -433,12 +473,19 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
               const png = await getPage(req.doc);
               if (!png) skip = 'render_fail';
               else {
-                const r = await cropRequest(req, png, lines, tmp, rotCache, hookFor(req)).catch(() => ({ reason: 'image_spec_fail' }));
+                const r = await cropRequest(req, png, lines, tmp, rotCache, hookFor(req)).catch(() => ({ reason: 'image_spec_fail' }) as { reason: string; capped?: boolean; score?: number });
+                if (r.capped) stats.size_capped += 1;
                 if ('bytes' in r) {
                   bytes = r.bytes;
                   score = (r as { score?: number }).score;
+                } else {
+                  skip = r.reason;
+                  if (r.reason === 'value_mismatch' && typeof (r as { score?: number }).score === 'number') {
+                    const sc = (r as { score: number }).score;
+                    const hist = (stats.mismatch_hist[req.field] ??= [0, 0, 0, 0]);
+                    hist[sc < 0.2 ? 0 : sc < 0.4 ? 1 : sc < 0.6 ? 2 : 3] += 1;
+                  }
                 }
-                else skip = r.reason;
                 from = 'live';
               }
             }
@@ -756,7 +803,8 @@ export const statsLines = (s: Stats): string[] => [
   `package 人數 ${s.persons_total}｜有 review 欄 ${s.persons_with_fields}｜冇文件 ${s.persons_no_docs}｜失敗 ${s.persons_failed}`,
   `請求 ${s.requests_total}｜現成裁圖 ${s.from_existing}｜即時裁 ${s.live_cropped}｜出圖 ${s.images_out}｜Vision 驗證 ${s.verified}／未驗證 ${s.unverified}｜zip ${s.zips}（${s.zip_bytes} bytes）`,
   `每欄：${JSON.stringify(s.by_field)}｜來源:優先：${JSON.stringify(s.by_doc_priority)}`,
-  `跳過原因：${JSON.stringify(s.skipped)}｜忽略嘅現成裁圖清單項 ${s.existing_ignored_entries}`,
+  `跳過原因：${JSON.stringify(s.skipped)}｜忽略嘅現成裁圖清單項 ${s.existing_ignored_entries}｜硬性尺寸上限收窄 ${s.size_capped}`,
+  `value_mismatch 最高相似度分佈（按欄；[0–0.2, 0.2–0.4, 0.4–0.6, 0.6–0.7]）：${JSON.stringify(s.mismatch_hist)}`,
 ];
 
 export async function main(argv: readonly string[]): Promise<number> {
