@@ -81,7 +81,17 @@ interface Impact {
   changes: { table: string; action: string; label: string; fields: { label: string; from: string | null; to: string }[] }[];
   field_outcomes: { field: string; label: string; outcome: string }[];
   notes: string[];
+  /** TE-3：唔可以確認時嘅人話原因（server 逐個 reason code 轉出嚟） */
+  reason_text?: string;
+  /** TE-3：補咗呢啲欄就可以確認（例：冇姓名要補中文姓名） */
+  needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
 }
+/** TE-3：建人類題型——姓名圖只喺「要補姓名」嗰陣喺輸入框旁出現，題卡頂淨係身份證號圖 */
+const NAME_ON_DEMAND_KINDS = new Set(["no_id_card", "hkid_not_confirmed", "ext_identity_check"]);
+const NAME_FIELDS: { field: "name_zh" | "name_en"; label: string; required: boolean }[] = [
+  { field: "name_zh", label: "中文姓名", required: true },
+  { field: "name_en", label: "英文姓名", required: false },
+];
 const SUPP_KINDS = ["field_review", "ext_field_conflict", "ext_field_review"];
 const isSupp = (k: string) => SUPP_KINDS.includes(k);
 
@@ -289,6 +299,11 @@ function ImpactCard({ impact }: { impact: Impact }) {
           {n}
         </div>
       ))}
+      {!impact.can_confirm && impact.reason_text && (
+        <div className="text-zk-sm font-semibold text-zk-danger" data-testid="triage-reason-text">
+          唔可以寫入：{impact.reason_text}
+        </div>
+      )}
     </div>
   );
 }
@@ -354,6 +369,8 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const [confirmIdentity, setConfirmIdentity] = useState(false);
   const [impact, setImpact] = useState<Impact | null>(null);
   const [hash, setHash] = useState<string | null>(null);
+  const [extraNames, setExtraNames] = useState<{ name_zh: string; name_en: string }>({ name_zh: "", name_en: "" });
+  const [extraShown, setExtraShown] = useState(false); // 曾經要補姓名：之後預覽可確認（needs_fields 消失）都要繼續帶 extra
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -450,11 +467,16 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     setConfirmIdentity(false);
     setImpact(null);
     setHash(null);
+    setExtraNames({ name_zh: "", name_en: "" });
+    setExtraShown(false);
     setError(null);
   };
   useEffect(() => {
     reset();
   }, [q?.id]);
+  useEffect(() => {
+    setExtraShown(false);
+  }, [choice]);
 
   const selected = useMemo(() => (q ? q.options.find((o, i) => `${o.id}:${o.guard_id ?? ""}:${i}` === choice) ?? null : null), [q, choice]);
 
@@ -467,12 +489,15 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       if (!gid) return null;
       return { option: "assign_bank", guard_id: gid, ...(replaceExisting ? { replace_existing: true } : {}), ...(confirmIdentity ? { confirm_identity: true } : {}) };
     }
-    return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: text } : {}) };
+    const nz = extraNames.name_zh.trim();
+    const ne = extraNames.name_en.trim();
+    const extra = extraShown && (nz || ne) ? { extra: { ...(nz ? { name_zh: nz } : {}), ...(ne ? { name_en: ne } : {}) } } : {};
+    return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: text } : {}), ...extra };
   }
 
-  async function onPreview() {
+  async function runPreview(): Promise<{ hash: string; impact: Impact } | null> {
     const answer = buildAnswer();
-    if (!q || !answer) return;
+    if (!q || !answer) return null;
     setBusy(true);
     setError(null);
     const res = await apiPost<{ preview_hash: string; writes: boolean; impact: Impact }>(`/api/triage/questions/${q.id}/preview`, { answer });
@@ -481,11 +506,33 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       setError(res.message);
       setImpact(null);
       setHash(null);
-      return;
+      return null;
     }
+    if (res.data.impact.needs_fields) setExtraShown(true);
     setImpact(res.data.impact);
     setHash(res.data.preview_hash);
+    return { hash: res.data.preview_hash, impact: res.data.impact };
   }
+  const onPreview = async () => {
+    await runPreview();
+  };
+
+  // TE-3：補咗中文姓名之後自動重新預覽（debounce），唔使再撳「預覽影響」
+  const needsFieldsOpen = extraShown;
+  const namesKey = `${extraNames.name_zh.trim()}|${extraNames.name_en.trim()}`;
+  const lastAuto = useRef("");
+  useEffect(() => {
+    if (!needsFieldsOpen) {
+      lastAuto.current = "";
+      return;
+    }
+    if (!extraNames.name_zh.trim() || lastAuto.current === namesKey) return;
+    const t = setTimeout(() => {
+      lastAuto.current = namesKey;
+      void runPreview();
+    }, 600);
+    return () => clearTimeout(t);
+  }, [namesKey, needsFieldsOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function next() {
     if (!q) return;
@@ -513,10 +560,23 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   }
 
   async function onConfirm() {
+    // TE-3：一鍵確認——未預覽就先自動預覽；可以確認即寫入，否則留低原因／要補嘅欄
+    let useHash = hash;
+    let useImpact = impact;
+    if (!useHash || !useImpact) {
+      const r = await runPreview();
+      if (!r) return;
+      useHash = r.hash;
+      useImpact = r.impact;
+    }
     const answer = buildAnswer();
-    if (!q || !answer || !hash) return;
+    if (!q || !answer || !useHash) return;
+    if (!useImpact?.can_confirm) {
+      setError(useImpact?.reason_text || "呢個答案暫時唔可以寫入");
+      return;
+    }
     setBusy(true);
-    const res = await apiPost(`/api/triage/questions/${q.id}/answer`, { answer, preview_hash: hash });
+    const res = await apiPost(`/api/triage/questions/${q.id}/answer`, { answer, preview_hash: useHash });
     setBusy(false);
     if (!res.ok) {
       setError(res.status === 409 ? `${res.message}（請再撳「預覽影響」）` : res.message);
@@ -644,7 +704,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                 </div>
               )}
               <PersonCard q={shownQ} />
-              {(shownQ.kind !== "field_review" || !choice) && <EvidenceSection images={shownQ.evidence_images} />}
+              {(shownQ.kind !== "field_review" || !choice) && <EvidenceSection images={NAME_ON_DEMAND_KINDS.has(shownQ.kind) ? shownQ.evidence_images?.filter((im) => im.field !== "name_zh" && im.field !== "name_en") : shownQ.evidence_images} />}
               {shownQ.evidence.candidates.map((c, i) => (
                 <CandidateCard key={c.guard_id} c={c} idx={i} />
               ))}
@@ -797,6 +857,28 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                 {q.options.filter((o) => o.id !== "skip").length === 0 && <div className="text-zk-sm text-zk-muted">呢條同現有資料矛盾，系統唔會自動處理——可以跳過留返人手。</div>}
               </fieldset>
 
+              {(impact?.needs_fields || extraShown) && (
+                <div className="space-y-2 rounded-lg border border-zk-warning/50 bg-zk-header/40 p-3" data-testid="triage-needs-fields">
+                  <div className="text-zk-sm font-semibold text-zk-warning">要補返以下資料先寫得入（對住原文件裁圖打）</div>
+                  {(impact?.needs_fields ?? NAME_FIELDS).map((nf) => (
+                    <div key={nf.field} className="space-y-1">
+                      <EvidenceImages imgs={(q.evidence_images ?? []).filter((im) => im.field === nf.field)} fieldLabel={nf.label} />
+                      <label className="block text-zk-sm">
+                        {nf.label}
+                        {nf.required ? "（必填）" : "（選填）"}
+                        <input
+                          className="mt-1 w-full rounded-[5px] border border-zk-border px-2 py-1.5"
+                          value={extraNames[nf.field]}
+                          maxLength={100}
+                          aria-label={nf.label}
+                          data-testid={`triage-extra-${nf.field}`}
+                          onChange={(e) => setExtraNames((m) => ({ ...m, [nf.field]: e.target.value }))}
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              )}
               {impact && <ImpactCard impact={impact} />}
               </>)}
             </>
@@ -824,7 +906,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               <Button disabled={!canPreview} onClick={onPreview} data-testid="triage-preview">
                 預覽影響
               </Button>
-              <Button variant="primary" disabled={busy || !hash || !impact?.can_confirm} onClick={onConfirm} data-testid="triage-confirm">
+              <Button variant="primary" disabled={!canPreview || (!!impact && !impact.can_confirm && !impact.needs_fields)} onClick={onConfirm} data-testid="triage-confirm">
                 {busy ? "處理緊…" : "確認寫入"}
               </Button>
             </div>

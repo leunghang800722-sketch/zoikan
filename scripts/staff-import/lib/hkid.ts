@@ -96,3 +96,47 @@ export function repairHkidLeadingLetter(text: string): string | null {
   const c = canonicalHkid(`${l}${m[2]}${m[3]}`);
   return c && hkidCheckDigitValid(c) ? c : null;
 }
+
+const PREFIX_FIX: Record<string, string[]> = { '2': ['Z'], '0': ['O', 'D', 'Q'], '1': ['I', 'L'], '5': ['S'], '8': ['B'], '6': ['G'], '4': ['A'], '7': ['T'] };
+
+/**
+ * TE-3：緊跟身份證 label 之後嘅 7–9 位英數串（括號可能消失、首位字母被讀成數字，例 Z→2）——
+ * 試常見 OCR 混淆（首位 2↔Z、0↔O／D、1↔I、5↔S、8↔B、6↔G；數字位入面嘅字母轉返數字），
+ * 只接受 check digit 通過而且**唯一**嘅一個。回 { value, fixed }（fixed＝有用到混淆修正）；多個候選或冇候選＝null。
+ */
+export function hkidFromConfusableToken(raw: string): { value: string; fixed: boolean } | null {
+  const s = raw.normalize('NFKC').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  const hits = new Map<string, boolean>();
+  for (const k of [1, 2]) {
+    if (s.length !== k + 7) continue;
+    const prefix = s.slice(0, k);
+    const six = s.slice(k, k + 6);
+    const chk = s[k + 6]!;
+    const opts = [...prefix].map((c) => (/[A-Z]/.test(c) ? [c] : (PREFIX_FIX[c] ?? [])));
+    if (opts.some((o) => o.length === 0)) continue;
+    const digits = [...six].map((c) => (/\d/.test(c) ? c : (CONFUSABLE[c] ?? '')));
+    if (digits.some((d) => !d)) continue;
+    const checks = /\d|A/.test(chk) ? [chk] : CONFUSABLE[chk] ? [CONFUSABLE[chk]!] : [];
+    const combos = opts.reduce<string[]>((acc, o) => acc.flatMap((a) => o.map((c) => a + c)), ['']);
+    for (const pre of combos) for (const c of checks) {
+      const cand = `${pre}${digits.join('')}${c}`;
+      if (hkidCheckDigitValid(cand)) hits.set(cand, cand !== s);
+    }
+  }
+  return hits.size === 1 ? { value: [...hits.keys()][0]!, fixed: [...hits.values()][0]! } : null;
+}
+
+/** NFKC 後喺文字任何位置搵 HKID 候選（唔要求整行），check digit 通過先收。 */
+export function findValidHkidsInText(text: string): string[] {
+  return findHkidCandidates(text.normalize('NFKC')).filter((c) => hkidCheckDigitValid(c));
+}
+
+/** TE-3：NFKC 後行內第一個 check digit 通過嘅 HKID 位置（字元起止＋總長），供裁圖按字元比例定 x 範圍。 */
+export function hkidSpanInLine(text: string): { start: number; end: number; len: number } | null {
+  const t = text.normalize('NFKC');
+  const re = /[A-Za-z]{1,2}\s?\d{6}\s?[(\[]?\s?[0-9Aa]\s?[)\]]?/g;
+  for (const m of t.matchAll(re)) {
+    if (hkidCheckDigitValid(canonicalHkid(m[0]))) return { start: m.index!, end: m.index! + m[0].length, len: t.length };
+  }
+  return null;
+}

@@ -54,20 +54,30 @@ export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson
       if (r.key === "hireDate" || r.key.startsWith("staffHire.")) out.add("hire_date");
     }
   };
+  // TE-3：邊個欄位有問題就只顯示嗰個欄嘅裁圖。姓名題：包內中文名有值就中文名，冇值先退到英文名
+  const nameField = (): EvidenceField => (ev?.person?.nameZh?.value?.trim() ? "name_zh" : "name_en");
+  // TE-3：建人類題（冇身份證號／身份證號未確認／確認身份）答呢題必須補姓名——包內冇中文名就要睇中文名圖；中英文名都冇就兩樣都要
+  const addNamesIfMissing = () => {
+    const zh = !!ev?.person?.nameZh?.value?.trim();
+    const en = !!ev?.person?.nameEn?.value?.trim();
+    if (!zh) out.add("name_zh");
+    if (!zh && !en) out.add("name_en");
+  };
   switch (q.kind) {
     case "name_not_confirmed":
-      out.add("name_zh");
+      out.add(nameField());
       break;
     case "hkid_not_confirmed":
       out.add("hkid");
+      addNamesIfMissing();
       break;
     case "no_id_card":
-      // TE-2：冇身份證號——俾人對住證件答：號碼、中英文姓名、出生日期
-      for (const f of ["hkid", "name_zh", "name_en", "dob"] as const) out.add(f);
+      // TE-3：問題係冇身份證號，所以身份證號裁圖（TE-2 曾帶埋姓名／出生日期，老闆話唔要）；包內冇姓名先加姓名圖（要補姓名先建到人）
+      out.add("hkid");
+      addNamesIfMissing();
       break;
     case "name_only_candidate":
-      out.add("name_zh");
-      out.add("name_en");
+      out.add(nameField());
       break;
     case "tel_only_candidate":
     case "dup_tel_across_persons":
@@ -80,8 +90,9 @@ export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson
       }
       break;
     case "ext_identity_check":
-      // TE-2：確認身份——號碼＋中英文姓名（另加 ext 欄：牌照號、入職日期）
-      for (const f of ["hkid", "name_zh", "name_en"] as const) out.add(f);
+      // TE-3：確認身份——身份證號（另加 ext 欄：牌照號、入職日期；包內冇姓名先加姓名圖）
+      out.add("hkid");
+      addNamesIfMissing();
       addExt();
       break;
     case "ext_field_conflict":

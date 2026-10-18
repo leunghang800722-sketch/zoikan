@@ -1,5 +1,5 @@
 // 頁面分類＋欄位抽取（純函數，輸入 OCR 行，無 IO）。
-import { canonicalHkid, findHkidCandidates, hkidCheckDigitValid, repairHkid, repairHkidLeadingLetter } from './hkid';
+import { canonicalHkid, findHkidCandidates, findValidHkidsInText, hkidCheckDigitValid, hkidFromConfusableToken, repairHkid, repairHkidLeadingLetter } from './hkid';
 import { cy, norm, readingOrder, toRows, type OcrLine, type OcrPage } from './ocr';
 import { cardLines, findEmbeddedCards } from './embedded-card';
 
@@ -540,15 +540,51 @@ export function extractForm(page: number, lines: OcrLine[]): FormResult {
 }
 
 // ---------------------------------------------------------------- 許可證（互證）
-export function extractPermit(page: number, lines: OcrLine[]): { hkid: Field | null } {
-  const rows = readingOrder(lines);
-  for (const l of rows) {
-    const cs = findHkidCandidates(l.t).filter(hkidCheckDigitValid);
-    if (cs.length && !/PERMIT\s*NO|許可證編號/i.test(l.t)) {
-      return { hkid: { value: cs[0], level: 'medium', conf: l.c, page, evidence: l.t } };
+const RE_HKID_LABEL = /(身份證號碼|身份證|I\.?\s?D\.?\s*Card\s*No\.?|HKID|Identity\s*Card\s*No\.?)\s*[:：]?/i;
+const RE_PERMIT_NO_LINE = /PERMIT\s*NO|許可證編號/i;
+
+/**
+ * TE-3：一頁入面所有身份證號候選（任何頁，唔理分類）。① 每行用「行內任何位置」搜尋（NFKC，唔要求整行），check digit 通過先收；
+ * ② 緊跟身份證 label（身份證號碼／I.D. Card No／HKID／Identity Card No）之後嘅 7–9 位英數串（同行，或者 label 後面冇字就取下一行），
+ *    試常見 OCR 混淆（Z→2、括號消失等），只接受 check digit 通過而且唯一嘅一個，記 note `ocr_confusion_fixed`。純數字冇 label 唔收。
+ */
+export function scanPageHkids(page: number, lines: OcrLine[]): Field[] {
+  const rows = readingOrder(lines.filter((l) => l.t.trim()));
+  const out: Field[] = [];
+  const seen = new Set<string>();
+  const push = (value: string, l: OcrLine, note?: string) => {
+    if (seen.has(value)) return;
+    seen.add(value);
+    out.push({ value, level: note ? 'low' : 'medium', conf: l.c, page, evidence: l.t, ...(note ? { note } : {}) });
+  };
+  rows.forEach((l, i) => {
+    if (RE_PERMIT_NO_LINE.test(l.t)) return;
+    const direct = findValidHkidsInText(l.t);
+    for (const c of direct) push(c, l);
+    if (direct.length) return;
+    const t = l.t.normalize('NFKC');
+    const m = RE_HKID_LABEL.exec(t);
+    if (!m) return;
+    let tail = t.slice(m.index + m[0].length).trim();
+    let src = l;
+    if (!tail) {
+      const nx = rows[i + 1];
+      if (nx && !RE_PERMIT_NO_LINE.test(nx.t)) {
+        tail = nx.t.normalize('NFKC').trim();
+        src = nx;
+      }
     }
-  }
-  return { hkid: null };
+    const tok = /^[A-Za-z0-9()（）\s]{7,14}/.exec(tail)?.[0];
+    const r = tok ? hkidFromConfusableToken(tok) : null;
+    if (r) push(r.value, src, r.fixed ? 'ocr_confusion_fixed' : undefined);
+  });
+  return out;
+}
+
+export function extractPermit(page: number, lines: OcrLine[]): { hkid: Field | null } {
+  // TE-3：行內搜尋＋label 後 OCR 混淆修正（舊版只認整行 check digit 啱嘅候選）
+  const f = scanPageHkids(page, lines)[0];
+  return { hkid: f ?? null };
 }
 
 export { canonicalHkid };

@@ -696,7 +696,7 @@ describe("路徑 B：printed 來源（同一文件包身份證抽取值）優先
       flags: [],
       rescuedRot: null,
       ...over,
-      aux: { formHkid: null, permitHkid: null, formAddress: null, formNameZh: null, formNameEn: null, ...(over.aux ?? {}) },
+      aux: { formHkid: null, permitHkid: null, printedHkid: null, formAddress: null, formNameZh: null, formNameEn: null, ...(over.aux ?? {}) },
     }) as DocExtract;
   const ref = (over: Partial<RefRow>): RefRow => ({ src: "utem", ref: "utem:1", staffNos: ["U99999"], hkid: null, nameZh: null, nameEn: null, dob: null, tels: [], addresses: [], ...over });
   const idx = (rows: RefRow[]) => ({ utem: buildIndex(rows), maxwell: buildIndex([]), db: buildIndex([]) });

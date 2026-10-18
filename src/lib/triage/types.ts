@@ -182,6 +182,11 @@ export const answerSchema = z
     replace_existing: z.boolean().optional(),
     /** assign_bank：目標保安員英文名同收款人唔夾／唔係長工 autopay 時，要額外確認「我確認呢個戶口屬於呢位保安員」 */
     confirm_identity: z.boolean().optional(),
+    /**
+     * TE-3：補資料——建人類選項（use_package_hkid／enter_hkid／create_new／keep）而包內冇姓名時，人手對住證據圖補中文／英文姓名
+     * （寫入前確認為 confirmed；preview 同 answer 行同一條 code path）。
+     */
+    extra: z.object({ name_zh: z.string().trim().max(100).optional(), name_en: z.string().trim().max(100).optional() }).strict().optional(),
     /** W2：wa_pick_site 揀咗邊個盤 */
     site_id: z.string().min(1).max(64).optional(),
     /** W4：wa_cover_confirm／wa_cover_add_only／wa_use_whatsapp（替更題）揀咗邊個做被替者（替更者用 guard_id） */
@@ -198,6 +203,8 @@ export const answerSchema = z
   })
   .strict();
 export type TriageAnswer = z.infer<typeof answerSchema>;
+/** TE-3：容許帶 `extra`（補姓名）嘅選項——即係會建立／確認一個人嘅選項。 */
+export const EXTRA_NAME_OPTIONS: readonly string[] = ["use_package_hkid", "enter_hkid", "create_new", "keep"];
 
 export const previewBodySchema = z.object({ answer: answerSchema }).strict();
 export const answerBodySchema = z.object({ answer: answerSchema, preview_hash: z.string().length(64) }).strict();

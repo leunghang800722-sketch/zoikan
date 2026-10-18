@@ -16,12 +16,12 @@ import { applyOnePerson, extOutcomeOf, summarizeExt, type ApplyOptions } from "@
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
-import { buildImpact, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
+import { buildImpact, explainBlocked, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
 import { sameEnglishTokens } from "./generators/guard-import";
 import { TRIAGE_LOCK, kindClass } from "./session";
 import { identityFollowUps } from "./generators/guard-import";
 import { deleteUnneeded, shortenForSkipped } from "./evidence-images";
-import { BANK_KINDS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
+import { BANK_KINDS, EXTRA_NAME_OPTIONS, answerSchema, type QuestionEvidence, type QuestionKind, type QuestionOption, type TriageAnswer } from "./types";
 
 type QRow = TriageQuestion;
 
@@ -182,6 +182,8 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
     impact.notes.unshift(mismatch);
     if (!answer.confirm_identity) impact.can_confirm = false;
   }
+  // TE-3：唔過嘅原因用人話講清楚；缺姓名而選項容許補姓名就列出要補嘅欄（UI 同一張卡展開輸入）
+  if (!impact.can_confirm) Object.assign(impact, explainBlocked(out.result.reasons, answer.option, EXTRA_NAME_OPTIONS, !!answer.extra?.name_zh));
   return { preview_hash: hashOf(q.id, answer, out.fingerprint), writes: impact.can_confirm, impact };
 }
 
@@ -318,7 +320,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
         tableName: "triage_questions",
         rowId: q.id,
         action: "triage_answer",
-        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: !extra, ...(extra ? { answered_via: extra.source } : {}), ...(evidenceDeleted > 0 ? { evidence_deleted: evidenceDeleted } : {}) },
+        after: { session_id: q.sessionId, kind: q.kind, option: answer.option, writes: true, outcome: r.outcome, manual_confirmed: !extra, ...(extra ? { answered_via: extra.source } : {}), ...(answer.extra ? { extra_names: (["name_zh", "name_en"] as const).filter((k) => !!answer.extra?.[k]) } : {}), ...(evidenceDeleted > 0 ? { evidence_deleted: evidenceDeleted } : {}) },
         ip,
       });
       // 同 guard_import_apply summary 一致形狀（月度修正摘要會計入「覆核決定」）

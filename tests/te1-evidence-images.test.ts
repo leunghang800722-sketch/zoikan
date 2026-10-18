@@ -39,7 +39,8 @@ import { JOBS } from "@/lib/jobs/registry";
 import { triageEvidenceCleanupJob } from "@/lib/jobs/triage-evidence-cleanup";
 import { createGuardImportTriage } from "@/lib/triage/session";
 import { previewAnswer, submitAnswer } from "@/lib/triage/apply";
-import { viewerCaps } from "@/lib/triage/view";
+import { viewerCaps, explainBlocked, BLOCK_TEXT } from "@/lib/triage/view";
+import { EXTRA_NAME_OPTIONS } from "@/lib/triage/types";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { buildZip, entryName, fakeJpeg, fakePng, zipOf } from "./lib/te1-images";
 
@@ -206,7 +207,7 @@ describe("TE-1 證據裁圖", () => {
       const ev = (extra: object) => ({ v: 1, person: person({}), reasons: [], candidate_guard_ids: [], ...extra }) as never;
       expect(requiredFieldsFor({ kind: "name_not_confirmed", evidenceJson: ev({}) })).toEqual(["name_zh"]);
       expect(requiredFieldsFor({ kind: "hkid_not_confirmed", evidenceJson: ev({}) })).toEqual(["hkid"]);
-      expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({}) }).sort()).toEqual(["dob", "hkid", "name_en", "name_zh"]); // TE-2：俾人對住證件答
+      expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({}) })).toEqual(["hkid"]); // TE-3：淨係有問題嘅欄（身份證號）
       expect(requiredFieldsFor({ kind: "field_review", evidenceJson: ev({ review_fields: [{ field: "nameEn", check: "x" }, { field: "dateOfBirth", check: "x" }, { field: "phone", check: "x" }, { field: "address", check: "x" }, { field: "nameZh", check: "x" }] }) }).sort()).toEqual(["address", "dob", "name_en", "name_zh", "phone"]);
       expect(requiredFieldsFor({ kind: "ext_field_review", evidenceJson: ev({ ext_review: [{ key: "siaPermit.no", check: "x", status: "review" }, { key: "bank", check: "x", status: "review" }, { key: "hireDate", check: "x", status: "review" }] }) }).sort()).toEqual(["hire_date", "permit_no"]);
       expect(requiredFieldsFor({ kind: "bank_review", evidenceJson: ev({ ext_review: [{ key: "bank", check: "x", status: "review" }] }) })).toEqual([]);
@@ -744,14 +745,20 @@ describe("TE-1 證據裁圖", () => {
 
   describe("TE-2：題型→所需欄擴闊、印刷來源 priority 1–3、入職日期 hire_date", () => {
     const evq = (extra: object) => ({ v: 1, person: person({}), reasons: [], candidate_guard_ids: [], ...extra }) as never;
-    it("requiredFieldsFor 新映射：name_only_candidate→name_zh＋name_en；tel_only／dup_tel→phone；ext_identity_check→hkid＋name_zh＋name_en（＋ext 欄）；no_id_card→hkid＋name_zh＋name_en＋dob；ext 入職日期（hireDate／staffHire.*）→hire_date", () => {
+    it("requiredFieldsFor 映射（TE-3：只顯示有問題嗰個欄）：name_only_candidate／name_not_confirmed→name_zh（包內中文名冇值先退 name_en）；tel_only／dup_tel→phone；ext_identity_check→hkid（＋ext 欄）；no_id_card→hkid；ext 入職日期（hireDate／staffHire.*）→hire_date", () => {
       const f = (kind: string, extra: object = {}) => requiredFieldsFor({ kind, evidenceJson: evq(extra) }).sort();
-      expect(f("name_only_candidate")).toEqual(["name_en", "name_zh"]);
+      expect(f("name_only_candidate")).toEqual(["name_zh"]);
+      expect(f("name_not_confirmed")).toEqual(["name_zh"]);
+      // 包內中文名冇值 → 退到英文名
+      const noZh = { person: { ...person({}), nameZh: { value: null, status: "missing" } } };
+      expect(f("name_only_candidate", noZh)).toEqual(["name_en"]);
+      expect(f("name_not_confirmed", noZh)).toEqual(["name_en"]);
+      expect(f("name_not_confirmed", { person: { ...person({}), nameZh: { value: "  ", status: "review" } } })).toEqual(["name_en"]);
       expect(f("tel_only_candidate")).toEqual(["phone"]);
       expect(f("dup_tel_across_persons")).toEqual(["phone"]);
-      expect(f("ext_identity_check")).toEqual(["hkid", "name_en", "name_zh"]);
-      expect(f("ext_identity_check", { ext_review: [{ key: "staffHire.U90001", check: "x", status: "review" }, { key: "siaPermit.no", check: "x", status: "review" }, { key: "bank", check: "x", status: "review" }] })).toEqual(["hire_date", "hkid", "name_en", "name_zh", "permit_no"]);
-      expect(f("no_id_card")).toEqual(["dob", "hkid", "name_en", "name_zh"]);
+      expect(f("ext_identity_check")).toEqual(["hkid"]);
+      expect(f("ext_identity_check", { ext_review: [{ key: "staffHire.U90001", check: "x", status: "review" }, { key: "siaPermit.no", check: "x", status: "review" }, { key: "bank", check: "x", status: "review" }] })).toEqual(["hire_date", "hkid", "permit_no"]);
+      expect(f("no_id_card")).toEqual(["hkid"]);
       expect(f("ext_field_review", { ext_review: [{ key: "staffHire.U90001", check: "x", status: "review" }] })).toEqual(["hire_date"]);
       expect(f("ext_field_review", { ext_review: [{ key: "hireDate", check: "x", status: "review" }] })).toEqual(["hire_date"]);
       expect(f("staffno_shared_by_persons")).toEqual([]);
@@ -812,7 +819,7 @@ describe("TE-1 證據裁圖", () => {
       expect(caps.has("hkid")).toBe(false);
     });
 
-    it("擴闊映射上載：name_only_candidate 收 name_zh＋name_en 圖；tel_only_candidate 收 phone 圖；ext_identity_check 收 hkid；其他欄 skipped_not_needed", async () => {
+    it("映射上載（TE-3）：name_only_candidate 只收 name_zh 圖（name_en 係 skipped_not_needed）；tel_only_candidate 收 phone 圖；其他欄 skipped_not_needed", async () => {
       const { pa, ka, sid } = await seed();
       const ev = (await qOf("name_not_confirmed", ka)).evidenceJson as object;
       await prisma.triageQuestion.updateMany({ where: { personKey: ka }, data: { status: "answered" } });
@@ -826,10 +833,10 @@ describe("TE-1 證據裁圖", () => {
         { bytes: J(224), field: "hkid", doc_kind: "id_card", priority: 1, match: m }, // 呢兩題唔需要 hkid
         { bytes: J(225), field: "dob", doc_kind: "id_card", priority: 1, match: m },
       ]));
-      expect(r.body).toMatchObject({ accepted_images: 3, skipped_not_needed: 2 });
+      expect(r.body).toMatchObject({ accepted_images: 2, skipped_not_needed: 3 });
     });
 
-    it("(8) 答題即刪：no_id_card（hkid＋name_zh＋name_en＋dob 四欄）答咗→四欄圖全刪；name_only_candidate 同人另一條 tel_only_candidate 仍需要 phone→phone 圖保留", async () => {
+    it("(8) 答題即刪：no_id_card（淨 hkid）——多餘欄（name／dob／phone）嘅舊圖讀取時唔顯示、GET 404、答咗題一併當孤兒刪；hkid 圖答咗即刪", async () => {
       const { sid } = await seed();
       // 無證嘅人：no_id_card 題
       const pn = person({ hkid: null, name: "導入測試員無證", nos: ["U90003"], rating: "fail" });
@@ -845,17 +852,83 @@ describe("TE-1 證據裁圖", () => {
       for (const [i, f] of (["hkid", "name_zh", "name_en", "dob"] as const).entries()) await put(f, 230 + i);
       await put("phone", 235); // no_id_card 唔需要 phone
       expect(await imgCount({ sessionId: sid2 })).toBe(5);
-      expect(requiredFieldsFor(qn).sort()).toEqual(["dob", "hkid", "name_en", "name_zh"]);
+      expect(requiredFieldsFor(qn)).toEqual(["hkid"]);
+      // 讀取時只回 hkid 圖（舊版上載過嘅多餘欄圖唔顯示），多餘欄圖 GET 404
+      const sv = await getSession(accountant, sid2);
+      const qv = sv.body.questions.find((x: { kind: string }) => x.kind === "no_id_card");
+      expect(qv.evidence_images.map((i: { field: string }) => i.field)).toEqual(["hkid"]);
+      const extra = await prisma.triageEvidenceImage.findFirstOrThrow({ where: { sessionId: sid2, field: "name_zh" }, select: { id: true } });
+      expect((await getImage(accountant, extra.id)).status).toBe(404);
+      const own = await prisma.triageEvidenceImage.findFirstOrThrow({ where: { sessionId: sid2, field: "hkid" }, select: { id: true } });
+      expect((await getImage(accountant, own.id)).status).toBe(200);
       const ans = { option: "enter_hkid", value: H[9] };
       const res = await confirm(accountant, qn.id, ans);
       expect(res.status).toBe(200);
       expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("answered");
-      // 四欄圖全刪；冇題需要嘅 phone 圖亦一併刪（孤兒）
+      // hkid 圖刪；冇題需要嘅其他欄舊圖亦一併刪（孤兒）
       expect(await imgCount({ sessionId: sid2 })).toBe(0);
       void sid;
     });
 
-    it("(8) 同一人兩條題需要不同欄：答 name_only_candidate（name_zh＋name_en）只刪呢兩欄；tel_only_candidate 需要嘅 phone 圖保留", async () => {
+    it("TE-3(2) 冇姓名嘅無證人：requiredFieldsFor 加 name_zh＋name_en；預覽返 needs_fields＋reason_text；補 extra 先寫入（建檔帶姓名），唔補 → 422；答咗 hkid＋兩個姓名圖都刪", async () => {
+      await seed();
+      const base = person({ hkid: null, name: "x", nos: ["U90021"], rating: "fail" });
+      const pn = { ...base, nameZh: F(null, "missing"), nameEn: F(null, "missing") } as PackagePerson;
+      const r0 = await applyPkg(accountant, [pn]);
+      expect(r0.status).toBe(200);
+      const sid2 = r0.body.triage.session_id as string;
+      const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
+      expect([...requiredFieldsFor(qn)].sort()).toEqual(["hkid", "name_en", "name_zh"]);
+      for (const [i, f] of (["hkid", "name_zh", "name_en"] as const).entries()) {
+        const plain = J(250 + i);
+        await insertEvidenceImage(prisma, { sessionId: sid2, questionId: null, personKey: qn.personKey!, guardId: null, field: f, docKind: "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
+      }
+      const sv = await getSession(accountant, sid2);
+      expect(sv.body.questions.find((x: { kind: string }) => x.kind === "no_id_card").evidence_images.map((i: { field: string }) => i.field).sort()).toEqual(["hkid", "name_en", "name_zh"]);
+      const prev = async (ans: unknown) => (await json(previewRoute as never, `/api/triage/questions/${qn.id}/preview`, accountant, { answer: ans }, qn.id)).json();
+      // 預覽：未補姓名 → 唔可以確認，帶 needs_fields＋人話 reason_text
+      const p1 = await prev({ option: "enter_hkid", value: H[9] });
+      expect(p1.impact.can_confirm).toBe(false);
+      expect(p1.impact.needs_fields).toEqual([
+        { field: "name_zh", label: "中文姓名", required: true },
+        { field: "name_en", label: "英文姓名", required: false },
+      ]);
+      expect(p1.impact.reason_text.length).toBeGreaterThan(5);
+      expect(p1.impact.reason_text).not.toMatch(/create_no_name/);
+      // 直接答（冇 extra）→ 422，唔寫任何嘢
+      const bad = await json(answerRoute as never, `/api/triage/questions/${qn.id}/answer`, accountant, { answer: { option: "enter_hkid", value: H[9] }, preview_hash: p1.preview_hash }, qn.id);
+      expect(bad.status).toBe(422);
+      expect(await prisma.guard.count({ where: { hkid: H[9] } })).toBe(0);
+      // 預覽同答題用同一套 code path：補 extra 之後預覽可確認
+      const ans = { option: "enter_hkid", value: H[9], extra: { name_zh: "補名測試員", name_en: "BO MING" } };
+      const p2 = await prev(ans);
+      expect(p2.impact.can_confirm).toBe(true);
+      expect(p2.impact.needs_fields).toBeUndefined();
+      const ok = await json(answerRoute as never, `/api/triage/questions/${qn.id}/answer`, accountant, { answer: ans, preview_hash: p2.preview_hash }, qn.id);
+      expect(ok.status).toBe(200);
+      const g = await prisma.guard.findFirstOrThrow({ where: { hkid: H[9] }, select: { nameZh: true, nameEn: true } });
+      expect(g.nameZh).toBe("補名測試員");
+      expect(g.nameEn).toBe("BO MING");
+      // audit 只記 extra 嘅 key，唔記姓名
+      const au = await prisma.auditLog.findMany({ where: { tableName: "triage_questions", rowId: qn.id } });
+      expect(JSON.stringify(au)).not.toContain("補名測試員");
+      expect(await imgCount({ sessionId: sid2 })).toBe(0); // hkid＋兩個姓名圖答咗即刪
+    });
+
+    it("TE-3(2) explainBlocked：每個 reason code 都有人話；可補嘅（create_no_name／name_not_confirmed）帶 needs_fields，其餘講下一步", () => {
+      for (const code of Object.keys(BLOCK_TEXT)) {
+        const e = explainBlocked([code], "enter_hkid", EXTRA_NAME_OPTIONS, false);
+        expect(e.reason_text!.length, code).toBeGreaterThan(0);
+        expect(e.reason_text!, code).not.toMatch(/^[a-z_]+$/);
+        if (code === "create_no_name" || code === "name_not_confirmed") expect(e.needs_fields, code).toHaveLength(2);
+        else expect(e.needs_fields, code).toBeUndefined();
+      }
+      expect(explainBlocked(["create_no_name"], "skip_x", EXTRA_NAME_OPTIONS, false).needs_fields).toBeUndefined();
+      expect(explainBlocked(["create_no_name"], "enter_hkid", EXTRA_NAME_OPTIONS, true).needs_fields).toBeUndefined();
+      expect(explainBlocked(["totally_unknown_code"], "enter_hkid", EXTRA_NAME_OPTIONS, false).reason_text).toContain("跳過");
+    });
+
+    it("(8) 同一人兩條題需要不同欄：答 name_only_candidate（name_zh；name_en 舊圖係孤兒）後 name 兩欄都刪；tel_only_candidate 需要嘅 phone 圖保留", async () => {
       const { ka, sid } = await seed();
       const base = await qOf("name_not_confirmed", ka);
       await prisma.triageQuestion.updateMany({ where: { personKey: ka }, data: { status: "answered" } });
