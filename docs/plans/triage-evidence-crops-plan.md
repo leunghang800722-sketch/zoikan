@@ -103,3 +103,6 @@
 
 ## 12. TE-4.2
 出生日期已確認即唔被卡／extra 覆蓋（server 400／proposals 唔帶／卡唔同＝card_name_conflict）；英文名放寬比對（縮寫、連寫、姓氏相同；中文名一致優先）；隨機 7 位＋(d) 誤收 ≤10% 回歸。
+
+## 13. TE-5 同名現有保安員：連結／建新人決定
+preview `needs_decision`（候選卡、權限過濾）＋answer `extra.link_guard_id`／`create_new`（forced link／create，同一 code path，身份檢查照舊）；UI 同卡兩個掣＋自動重預覽；proposals 唔自動連結（`skipped_needs_decision`）。

@@ -39,7 +39,7 @@ import { JOBS } from "@/lib/jobs/registry";
 import { triageEvidenceCleanupJob } from "@/lib/jobs/triage-evidence-cleanup";
 import { createGuardImportTriage } from "@/lib/triage/session";
 import { previewAnswer, submitAnswer } from "@/lib/triage/apply";
-import { viewerCaps, explainBlocked, BLOCK_TEXT } from "@/lib/triage/view";
+import { viewerCaps, explainBlocked, BLOCK_TEXT, loadDecisionCandidates } from "@/lib/triage/view";
 import { EXTRA_NAME_OPTIONS } from "@/lib/triage/types";
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { buildZip, entryName, fakeJpeg, fakePng, zipOf } from "./lib/te1-images";
@@ -936,6 +936,139 @@ describe("TE-1 證據裁圖", () => {
       const pv = (extra: object) => json(previewRoute as never, `/api/triage/questions/${qn.id}/preview`, accountant, { answer: { option: "enter_hkid", value: H[9], extra: { name_zh: "補名測試員", ...extra } } }, qn.id);
       expect((await pv({ dob: "1991-02-03" })).status).toBe(400);
       expect((await pv({ dob: "1990-05-06" })).status).toBe(200);
+      // N1：包內值帶空白（格式唔同但同一日）→ 唔應 400
+      const q2 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } });
+      const ev = q2.evidenceJson as { person: { dateOfBirth: { value: string; status: string } } };
+      ev.person.dateOfBirth = { value: " 1990-05-06 ", status: "confirmed" };
+      await prisma.triageQuestion.update({ where: { id: qn.id }, data: { evidenceJson: ev as never } });
+      expect((await pv({ dob: "1990-05-06" })).status).toBe(200);
+      expect((await pv({ dob: "1990-05-07" })).status).toBe(400);
+    });
+
+    describe("TE-5 同名現有保安員：needs_decision → 連結／建新人", () => {
+      const NM = "導入測試員同名甲";
+      async function setup(existing: { hkid?: string | null; no?: string } = {}) {
+        await seed();
+        const g = await prisma.guard.create({ data: { nameZh: NM, employmentType: "cash_casual", ...(existing.hkid ? { hkid: existing.hkid } : {}), createdBy: "t" } });
+        const base = person({ hkid: null, name: "x", nos: ["U90051"], rating: "fail" });
+        const pn = { ...base, nameZh: F(null, "missing"), nameEn: F(null, "missing"), dateOfBirth: F(null, "missing") } as PackagePerson;
+        const r0 = await applyPkg(accountant, [pn]);
+        expect(r0.status).toBe(200);
+        const sid2 = r0.body.triage.session_id as string;
+        const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
+        for (const [i, f] of (["hkid", "name_zh", "name_en"] as const).entries()) {
+          const plain = J(260 + i);
+          await insertEvidenceImage(prisma, { sessionId: sid2, questionId: null, personKey: qn.personKey!, guardId: null, field: f, docKind: "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
+        }
+        const call = async (route: unknown, url: string, body: unknown) => json(route as never, `/api/triage/questions/${qn.id}/${url}`, owner, body, qn.id);
+        const prev = async (extra: object) => {
+          const res = await call(previewRoute, "preview", { answer: { option: "enter_hkid", value: H[9], extra: { name_zh: NM, dob: "1991-02-03", ...extra } } });
+          return { status: res.status, body: await res.json() };
+        };
+        const ans = async (extra: object) => {
+          const answer = { option: "enter_hkid", value: H[9], extra: { name_zh: NM, dob: "1991-02-03", ...extra } };
+          const pv = await (await call(previewRoute, "preview", { answer })).json();
+          return call(answerRoute, "answer", { answer, preview_hash: pv.preview_hash });
+        };
+        return { g, qn, sid2, prev, ans };
+      }
+
+      it("preview：同名候選 → needs_decision（候選卡欄位）＋人話 reason_text，writes=false；唔按姓名自動連結", async () => {
+        const { g, prev, sid2 } = await setup();
+        const p = await prev({});
+        expect(p.status).toBe(200);
+        expect(p.body.impact.can_confirm).toBe(false);
+        expect(p.body.writes).toBe(false);
+        expect(p.body.impact.needs_decision.reason).toBe("name_only_candidate");
+        expect(p.body.impact.needs_decision.options).toEqual(["link", "create_new"]);
+        expect(p.body.impact.reason_text).toContain("同名保安員");
+        expect(p.body.impact.needs_decision.candidates).toHaveLength(1);
+        expect(p.body.impact.needs_decision.candidates[0]).toMatchObject({ guard_id: g.id, name_zh: NM, has_hkid: false, has_dob: false, staff_numbers: [], last_shift_month: null, active: true });
+        expect(Object.keys(p.body.impact.needs_decision.candidates[0]).sort()).toEqual(["active", "created_at", "guard_id", "has_dob", "has_hkid", "last_shift_month", "name_en", "name_zh", "phone_masked", "staff_numbers"]);
+        expect(await imgCount({ sessionId: sid2 })).toBe(3); // 未決定，圖仍在
+        // 欄位級權限：冇「保安員個人資料:view」→ 英文名唔回、電話遮罩
+        await prisma.guard.update({ where: { id: g.id }, data: { nameEn: "TEST SAME", tel: "91234567" } });
+        const lo = (await loadDecisionCandidates(NM, { pii: false, piiUpdate: false, guardUpdate: false, bankView: false, bankUpdate: false })).candidates;
+        expect(lo[0]).toMatchObject({ name_en: null });
+        expect(lo[0]!.phone_masked).not.toBe("91234567");
+        const hi = (await loadDecisionCandidates(NM, { pii: true, piiUpdate: true, guardUpdate: true, bankView: true, bankUpdate: true })).candidates;
+        expect(hi[0]).toMatchObject({ name_en: "TEST SAME", phone_masked: "91234567" });
+      });
+
+      it("link：連去該位——寫入身份證號／出生日期到該 guard（唔新增人）；圖刪；audit 記 decision＋guard id（唔記值）", async () => {
+        const { g, prev, ans, qn, sid2 } = await setup();
+        const p = await prev({ link_guard_id: g.id });
+        expect(p.body.impact.can_confirm).toBe(true);
+        expect(p.body.impact.needs_decision).toBeUndefined();
+        const before = await prisma.guard.count();
+        expect((await ans({ link_guard_id: g.id })).status).toBe(200);
+        expect(await prisma.guard.count()).toBe(before);
+        const after = await prisma.guard.findUniqueOrThrow({ where: { id: g.id }, select: { hkid: true, dateOfBirth: true } });
+        expect(after.hkid).toBe(H[9]);
+        expect(after.dateOfBirth?.toISOString().slice(0, 10)).toBe("1991-02-03");
+        expect(await imgCount({ sessionId: sid2 })).toBe(0);
+        const au = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_answer", rowId: qn.id } });
+        expect(au.after).toMatchObject({ decision: "link", link_guard_id: g.id });
+        expect(JSON.stringify(au.after)).not.toContain(H[9]!);
+      });
+
+      it("create_new：建新人（同名兩個）", async () => {
+        const { g, ans } = await setup();
+        expect((await ans({ create_new: true })).status).toBe(200);
+        const gs = await prisma.guard.findMany({ where: { nameZh: NM }, select: { id: true, hkid: true } });
+        expect(gs).toHaveLength(2);
+        expect(gs.find((x) => x.id !== g.id)?.hkid).toBe(H[9]);
+        expect(gs.find((x) => x.id === g.id)?.hkid).toBeNull();
+      });
+
+      it("M1：link_guard_id 唔係同名候選（無關保安員）→ 400（preview／answer 都係），冇寫入", async () => {
+        const { ans, prev, qn } = await setup();
+        const stranger = await prisma.guard.create({ data: { nameZh: "導入測試員無關路人", employmentType: "cash_casual", createdBy: "t" } });
+        expect((await prev({ link_guard_id: stranger.id })).status).toBe(400);
+        expect((await ans({ link_guard_id: stranger.id })).status).toBe(400);
+        expect((await prisma.guard.findUniqueOrThrow({ where: { id: stranger.id }, select: { hkid: true } })).hkid).toBeNull();
+        expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("open");
+        expect((await prev({ link_guard_id: "00000000-0000-4000-8000-00000000dead" })).status).toBe(400);
+      });
+
+      it("M2：冇「保安員個人資料:view」＋「保安員:update」→ link 403；preview 嘅 needs_decision 淨提供 create_new", async () => {
+        const { g, qn } = await setup();
+        const actor = { userId: fx.userIds["老闆"], baseRole: "老闆", roleId: fx.roleIds["老闆"], tokenVersion: 0 } as unknown as AuthedSession;
+        const full = await viewerCaps(actor);
+        expect(full.pii && full.guardUpdate).toBe(true);
+        const lowCaps = { ...full, pii: false, guardUpdate: false };
+        const q0 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } });
+        const base = { option: "enter_hkid", value: H[9], extra: { name_zh: NM } } as const;
+        const pv = await previewAnswer(actor, q0, base, lowCaps, null);
+        expect(pv.impact.needs_decision?.options).toEqual(["create_new"]);
+        const withCaps = await previewAnswer(actor, q0, base, { ...full, pii: true, guardUpdate: true }, null);
+        expect(withCaps.impact.needs_decision?.options).toEqual(["link", "create_new"]);
+        await expect(previewAnswer(actor, q0, { ...base, extra: { name_zh: NM, link_guard_id: g.id } }, lowCaps, null)).rejects.toMatchObject({ status: 403 });
+        await expect(previewAnswer(actor, q0, { ...base, extra: { name_zh: NM, link_guard_id: g.id } }, { ...full, pii: true, guardUpdate: false }, null)).rejects.toMatchObject({ status: 403 });
+        expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id }, select: { hkid: true } })).hkid).toBeNull();
+      });
+
+      it("S1：同名多過 5 位 → 只列 5 位，truncated=true", async () => {
+        const { prev } = await setup();
+        for (let i = 0; i < 6; i++) await prisma.guard.create({ data: { nameZh: NM, employmentType: "cash_casual", createdBy: "t" } });
+        const p = await prev({});
+        expect(p.body.impact.needs_decision.candidates).toHaveLength(5);
+        expect(p.body.impact.needs_decision.truncated).toBe(true);
+      });
+
+      it("身份檢查照舊：link 去已有另一個身份證號嘅同名者 → 攔（422）；身份證號屬第三者 → 攔；link／create_new 同時帶或選項唔啱 → 400", async () => {
+        const { g, ans, prev, qn } = await setup({ hkid: H[10] });
+        // 同名但 hkid 唔同（H[10]）：輸入 H[9] 係 same_name_different_hkid → 自動走建新人，唔需要決定；硬 link 去佢 → guard_hkid_differs 攔
+        expect((await ans({ link_guard_id: g.id })).status).toBe(422);
+        expect((await prev({ link_guard_id: g.id, create_new: true })).status).toBe(400);
+        const third = await prisma.guard.create({ data: { nameZh: "導入測試員第三者", employmentType: "cash_casual", hkid: H[9], createdBy: "t" } });
+        const g2 = await prisma.guard.create({ data: { nameZh: NM, employmentType: "cash_casual", createdBy: "t" } });
+        const r = await ans({ link_guard_id: g2.id });
+        expect(r.status).toBe(422); // H[9] 屬第三者 → 唔准連去另一位
+        expect(await prisma.guard.findUniqueOrThrow({ where: { id: third.id }, select: { nameZh: true } })).toMatchObject({ nameZh: "導入測試員第三者" });
+        const bad = await json(previewRoute as never, `/api/triage/questions/${qn.id}/preview`, accountant, { answer: { option: "keep", extra: { link_guard_id: g.id } } }, qn.id);
+        expect(bad.status).toBe(400);
+      });
     });
 
     it("TE-3(2) explainBlocked：每個 reason code 都有人話；可補嘅（create_no_name／name_not_confirmed）帶 needs_fields，其餘講下一步", () => {

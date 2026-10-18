@@ -173,6 +173,18 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       throw BadRequest("唔支援嘅選項");
   }
 
+  // TE-5：同名現有保安員要人手決定——連結（link_guard_id）或建新人（create_new）。唔准按姓名自動連結；仍然過 evaluate 嘅唯一性／身份矛盾檢查
+  if (answer.extra && (answer.extra.link_guard_id || answer.extra.create_new)) {
+    if (!EXTRA_NAME_OPTIONS.includes(answer.option) || answer.option === "keep") throw BadRequest("呢個選項唔使決定連結／建新人");
+    if (answer.extra.link_guard_id && answer.extra.create_new) throw BadRequest("連結同建新人只可揀其中一個");
+    if (forced) throw BadRequest("呢個選項已經指定咗連結／建新人");
+    if (answer.extra.link_guard_id) forced = { mode: "link", guardId: answer.extra.link_guard_id };
+    else {
+      forced = { mode: "create" };
+      autoKeepPendingName = true;
+    }
+  }
+
   // TE-3：補姓名（人手對住證據圖輸入）——直接當 confirmed 寫入包內 person；preview／answer 同一路徑
   if (answer.extra && (answer.extra.name_zh || answer.extra.name_en || answer.extra.dob)) {
     if (!EXTRA_NAME_OPTIONS.includes(answer.option)) throw BadRequest("呢個選項唔使補姓名");
@@ -186,7 +198,11 @@ export function resolveAnswer(q: QuestionLike, answer: TriageAnswer): Resolved {
       if (!parseBirthDate(answer.extra.dob)) throw BadRequest("出生日期格式唔啱（YYYY-MM-DD）");
       // TE-4.2 S1：包內出生日期已確認——唔同＝400，相同當冇事
       if (confirmed(person.dateOfBirth)) {
-        if (person.dateOfBirth.value !== answer.extra.dob) throw BadRequest("呢個人嘅出生日期已經確認，唔使再補");
+        // N1：兩邊先經 parseBirthDate 轉成日期再比（格式唔同但同一日唔算唔同）
+        const a = parseBirthDate(person.dateOfBirth.value ?? "");
+        const b = parseBirthDate(answer.extra.dob);
+        const same = a && b ? a.getTime() === b.getTime() : person.dateOfBirth.value?.trim() === answer.extra.dob;
+        if (!same) throw BadRequest("呢個人嘅出生日期已經確認，唔使再補");
       } else person.dateOfBirth = { value: answer.extra.dob, status: "confirmed" };
     }
   }

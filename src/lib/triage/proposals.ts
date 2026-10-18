@@ -65,6 +65,8 @@ interface ProposalCounts {
   skipped_restricted: number;
   /** TE-4：confidence=low（印刷冇卡／印刷同卡唔一致）——留人手 */
   skipped_low_confidence: number;
+  /** TE-5：preview 回 needs_decision（同名現有保安員）——要人決定連結／建新人，唔按姓名自動連結 */
+  skipped_needs_decision: number;
   skipped_partial: number;
   skipped_identity_mismatch: number;
   errors: number;
@@ -73,9 +75,9 @@ interface ProposalCounts {
   /** 為剩餘覆核欄開（dry＝會開）嘅跟進題數 */
   follow_up_created: number;
 }
-const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_low_confidence: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
+const emptyCounts = (): ProposalCounts => ({ proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_low_confidence: 0, skipped_needs_decision: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
 
-type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_low_confidence" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
+type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_low_confidence" | "skipped_needs_decision" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
 
 export type QuestionPlan =
   | { type: "none" } // 呢條題同呢個人嘅建議冇關係（唔計 matched）
@@ -254,6 +256,10 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
       }
       try {
         const prev = await previewAnswer(actor, q, plan.answer, caps, opts.ip);
+        if (prev.impact.needs_decision) {
+          mark(key, plan.fields, "skipped_needs_decision");
+          continue;
+        }
         if (!prev.writes) {
           // TE-4：no_id_card 輸入嘅號碼已屬他人／同名唔同號 → 身份對唔上，計 skipped_identity_mismatch
           const idMismatch = q.kind === "no_id_card" && prev.impact.notes.some((n) => /hkid_belongs_to_other_guard|same_name_different_hkid|guard_hkid_differs|name_differs_from_guard/.test(n));

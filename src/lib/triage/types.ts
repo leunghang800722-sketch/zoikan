@@ -186,7 +186,7 @@ export const answerSchema = z
      * TE-3：補資料——建人類選項（use_package_hkid／enter_hkid／create_new／keep）而包內冇姓名時，人手對住證據圖補中文／英文姓名
      * （寫入前確認為 confirmed；preview 同 answer 行同一條 code path）。
      */
-    extra: z.object({ name_zh: z.string().trim().max(100).optional(), name_en: z.string().trim().max(100).optional(), dob: z.string().trim().max(10).optional() }).strict().optional(),
+    extra: z.object({ name_zh: z.string().trim().max(100).optional(), name_en: z.string().trim().max(100).optional(), dob: z.string().trim().max(10).optional(), link_guard_id: z.string().min(1).max(64).optional(), create_new: z.boolean().optional() }).strict().optional(),
     /** W2：wa_pick_site 揀咗邊個盤 */
     site_id: z.string().min(1).max(64).optional(),
     /** W4：wa_cover_confirm／wa_cover_add_only／wa_use_whatsapp（替更題）揀咗邊個做被替者（替更者用 guard_id） */

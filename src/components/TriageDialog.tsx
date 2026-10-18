@@ -85,6 +85,20 @@ interface Impact {
   reason_text?: string;
   /** TE-3：補咗呢啲欄就可以確認（例：冇姓名要補中文姓名） */
   needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
+  /** TE-5：同名現有保安員要人決定 */
+  needs_decision?: { reason: string; candidates: DecisionCandidate[]; options: ("link" | "create_new")[]; truncated?: boolean };
+}
+interface DecisionCandidate {
+  guard_id: string;
+  name_zh: string;
+  name_en: string | null;
+  has_hkid: boolean;
+  has_dob: boolean;
+  staff_numbers: string[];
+  phone_masked: string | null;
+  created_at: string;
+  last_shift_month: string | null;
+  active: boolean;
 }
 /** TE-3：建人類題型——姓名圖只喺「要補姓名」嗰陣喺輸入框旁出現，題卡頂淨係身份證號圖 */
 const NAME_ON_DEMAND_KINDS = new Set(["no_id_card", "hkid_not_confirmed", "ext_identity_check"]);
@@ -370,6 +384,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const [impact, setImpact] = useState<Impact | null>(null);
   const [hash, setHash] = useState<string | null>(null);
   const [extraNames, setExtraNames] = useState<{ name_zh: string; name_en: string }>({ name_zh: "", name_en: "" });
+  const [decision, setDecision] = useState<{ kind: "link"; guardId: string } | { kind: "create_new" } | null>(null); // TE-5
   const [extraShown, setExtraShown] = useState(false); // 曾經要補姓名：之後預覽可確認（needs_fields 消失）都要繼續帶 extra
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -469,6 +484,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     setHash(null);
     setExtraNames({ name_zh: "", name_en: "" });
     setExtraShown(false);
+    setDecision(null);
     setError(null);
   };
   useEffect(() => {
@@ -476,7 +492,19 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   }, [q?.id]);
   useEffect(() => {
     setExtraShown(false);
+    setDecision(null);
   }, [choice]);
+  // TE-5：揀咗連結／建新人 → 自動重新預覽（之後一撳「確認寫入」）
+  const lastDecision = useRef<string>("");
+  useEffect(() => {
+    const k = decision ? (decision.kind === "link" ? `l:${decision.guardId}` : "c") : "";
+    if (!k || lastDecision.current === k) {
+      if (!k) lastDecision.current = "";
+      return;
+    }
+    lastDecision.current = k;
+    void runPreview();
+  }, [decision]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = useMemo(() => (q ? q.options.find((o, i) => `${o.id}:${o.guard_id ?? ""}:${i}` === choice) ?? null : null), [q, choice]);
 
@@ -491,7 +519,10 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     }
     const nz = extraNames.name_zh.trim();
     const ne = extraNames.name_en.trim();
-    const extra = extraShown && (nz || ne) ? { extra: { ...(nz ? { name_zh: nz } : {}), ...(ne ? { name_en: ne } : {}) } } : {};
+    const nameExtra = extraShown ? { ...(nz ? { name_zh: nz } : {}), ...(ne ? { name_en: ne } : {}) } : {};
+    const decisionExtra = decision ? (decision.kind === "link" ? { link_guard_id: decision.guardId } : { create_new: true }) : {};
+    const extraObj = { ...nameExtra, ...decisionExtra };
+    const extra = Object.keys(extraObj).length > 0 ? { extra: extraObj } : {};
     return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: text } : {}), ...extra };
   }
 
@@ -882,6 +913,39 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                   ))}
                 </div>
               )}
+              {impact?.needs_decision && (
+                <div className="space-y-2 rounded-lg border border-zk-warning/50 bg-zk-header/40 p-3" data-testid="triage-needs-decision">
+                  <div className="text-zk-sm font-semibold text-zk-warning">系統已有同名保安員，請確認係咪同一人</div>
+                  {impact.needs_decision.candidates.map((c) => (
+                    <div key={c.guard_id} className="space-y-1 rounded border border-zk-border bg-white p-2 text-zk-sm" data-testid="triage-decision-candidate">
+                      <div className="font-semibold">
+                        {c.name_zh}
+                        {c.name_en ? `（${c.name_en}）` : ""}
+                        {!c.active && <span className="ml-1 text-zk-xs text-zk-muted">（非在職）</span>}
+                      </div>
+                      <div className="text-zk-muted">
+                        {c.has_hkid ? "已有身份證號" : "冇身份證號"}・{c.has_dob ? "已有出生日期" : "冇出生日期"}・工號：{c.staff_numbers.length ? c.staff_numbers.join("、") : "冇"}
+                        {c.phone_masked ? `・電話 ${c.phone_masked}` : ""}・建立 {c.created_at}・最近出更：{c.last_shift_month ?? "冇出過更"}
+                      </div>
+                      {impact.needs_decision!.options.includes("link") && (
+                        <Button size="sm" type="button" disabled={busy} onClick={() => setDecision({ kind: "link", guardId: c.guard_id })} data-testid="triage-decision-link">
+                          係同一人，連結並補資料
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  {impact.needs_decision.truncated && <div className="text-zk-xs text-zk-warning" data-testid="triage-decision-truncated">仲有同名者，請用搜尋確認</div>}
+                  {!impact.needs_decision.options.includes("link") && <div className="text-zk-xs text-zk-muted">你冇權限連結現有保安員，只可以建新人或者跳過。</div>}
+                  <Button size="sm" type="button" disabled={busy} onClick={() => setDecision({ kind: "create_new" })} data-testid="triage-decision-create">
+                    唔係，建新人
+                  </Button>
+                </div>
+              )}
+              {decision && !impact?.needs_decision && (
+                <div className="text-zk-sm text-zk-muted" data-testid="triage-decision-chosen">
+                  已揀：{decision.kind === "link" ? "係同一人，連結並補資料" : "唔係，建新人"}（再撳「確認寫入」；想改可以重新揀答案）
+                </div>
+              )}
               {impact && <ImpactCard impact={impact} />}
               </>)}
             </>
@@ -909,7 +973,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               <Button disabled={!canPreview} onClick={onPreview} data-testid="triage-preview">
                 預覽影響
               </Button>
-              <Button variant="primary" disabled={!canPreview || (!!impact && !impact.can_confirm && !impact.needs_fields)} onClick={onConfirm} data-testid="triage-confirm">
+              <Button variant="primary" disabled={!canPreview || (!!impact && !impact.can_confirm && !impact.needs_fields && !impact.needs_decision)} onClick={onConfirm} data-testid="triage-confirm">
                 {busy ? "處理緊…" : "確認寫入"}
               </Button>
             </div>
