@@ -1471,3 +1471,4 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **TE-8（branch `te8-printed-guard`，起點 main 3b18c75）**：printed HKID 防誤中（token 邊界／label 優先／多值跳過）、printed 自檢腳本、錯圖撤回＋取代上載。
 - **TE-9（branch `te9-hkid-owner-link`，起點 main 6d4cb5c）**：hkid 屬現有保安員 → needs_decision 連結（唔准建新人）。
 - **TE-10（branch `te10-name-crop-extent`，起點 main 20cf804）**：中文名裁圖延伸防切字＋Vision 字數規則＋自檢；題卡 409 自動重預覽。
+- **TE-11（branch `te11-card-truth`，起點 main 95af3ab）**：身份證英文名兩行合併、證件為準自動答、import 兩讀一致即 confirmed、自動關閉自檢。

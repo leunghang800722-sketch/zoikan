@@ -166,7 +166,11 @@ export function resolvePerson(p: PersonIn): PersonFields {
     // 新規則：第一視覺 clear＋第二讀 clear＋逐字相同（卡面兩個獨立讀數）
     const twoReads = !!v2zh && exactZh(v2zh) === exactZh(v.zh);
     const disagree = !!v2zh && !twoReads; // 第二讀數 clear 但同第一讀數逐字唔同：一律 review（就算同檔名／名單一致）
-    if ((corroborated || twoReads) && !disagree && !zhReasons.includes('nameZh_differs_between_files')) {
+    // TE-11：Vision 字數齊——Vision 中文名字數少過本機 OCR 讀到嘅身份證中文名字數＝可能被切尾字，唔准 confirmed
+    const hanN = (x: string) => [...x.normalize('NFKC')].filter((c) => /\p{Script=Han}/u.test(c)).length;
+    const short = zhLocal.some((z) => hanN(z) > hanN(v.zh!));
+    if (short) zhReasons.push('nameZh_vision_short');
+    if ((corroborated || twoReads) && !disagree && !short && !zhReasons.includes('nameZh_differs_between_files')) {
       nameZh = out('confirmed', v.zh, zhLocal, info);
       nameZh.source = 'id_card';
     } else nameZh = out('review', v.zh, [...zhLocal, ...zhFiles, ...(v2zh && !twoReads ? [v2zh] : [])], [...zhReasons, ...info, !disagree && (corroborated || twoReads) ? '' : disagree ? 'nameZh_reads_disagree' : 'nameZh_vision_uncorroborated'].filter(Boolean));
@@ -188,7 +192,10 @@ export function resolvePerson(p: PersonIn): PersonFields {
     const corroborated = enLocal.some((x) => enKey(x) === k) || enList.some((x) => enKey(x) === k);
     const twoReads = !!v2en && exactEn(v2en) === exactEn(v.en);
     const disagree = !!v2en && !twoReads;
-    if ((corroborated || twoReads) && !disagree && !enReasons.includes('nameEn_differs_between_files')) {
+    // TE-11：Vision 英文名 token 數少過身份證頁 OCR 讀到嘅 token 數（例如續行漏讀）＝唔准 confirmed；入職表（formNameEn）唔一致只係資訊，唔阻 confirmed
+    const enShort = enLocal.some((x) => enTokens(x).length > enTokens(v.en!).length);
+    if (enShort) enReasons.push('nameEn_vision_short');
+    if ((corroborated || twoReads) && !disagree && !enShort && !enReasons.includes('nameEn_differs_between_files')) {
       nameEn = out('confirmed', v.en.toUpperCase(), enLocal);
       nameEn.source = 'id_card';
     } else nameEn = out('review', v.en.toUpperCase(), [...enLocal, ...(v2en && !twoReads ? [v2en.toUpperCase()] : [])], [...enReasons, !disagree && (corroborated || twoReads) ? '' : disagree ? 'nameEn_reads_disagree' : 'nameEn_vision_uncorroborated'].filter(Boolean));
