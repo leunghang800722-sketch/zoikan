@@ -91,7 +91,7 @@ interface Impact {
   /** TE-3：補咗呢啲欄就可以確認（例：冇姓名要補中文姓名） */
   needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
   /** TE-5：同名現有保安員要人決定 */
-  needs_decision?: { reason: string; candidates: DecisionCandidate[]; options: ("link" | "create_new")[]; truncated?: boolean };
+  needs_decision?: { reason: string; candidates: DecisionCandidate[]; options: ("link" | "create_new" | "skip")[]; truncated?: boolean };
 }
 interface DecisionCandidate {
   guard_id: string;
@@ -104,6 +104,7 @@ interface DecisionCandidate {
   created_at: string;
   last_shift_month: string | null;
   active: boolean;
+  same_hkid?: boolean;
 }
 /** TE-3：建人類題型——姓名圖只喺「要補姓名」嗰陣喺輸入框旁出現，題卡頂淨係身份證號圖 */
 const NAME_ON_DEMAND_KINDS = new Set(["no_id_card", "hkid_not_confirmed", "ext_identity_check"]);
@@ -937,6 +938,11 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                         {c.name_zh}
                         {c.name_en ? `（${c.name_en}）` : ""}
                         {!c.active && <span className="ml-1 text-zk-xs text-zk-muted">（非在職）</span>}
+                        {c.same_hkid && (
+                          <span className="ml-1 rounded bg-zk-warning-tint px-1.5 py-px text-zk-xs font-semibold text-zk-warning" data-testid="triage-decision-same-hkid">
+                            身份證號相同
+                          </span>
+                        )}
                       </div>
                       <div className="text-zk-muted">
                         {c.has_hkid ? "已有身份證號" : "冇身份證號"}・{c.has_dob ? "已有出生日期" : "冇出生日期"}・工號：{c.staff_numbers.length ? c.staff_numbers.join("、") : "冇"}
@@ -950,10 +956,14 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                     </div>
                   ))}
                   {impact.needs_decision.truncated && <div className="text-zk-xs text-zk-warning" data-testid="triage-decision-truncated">仲有同名者，請用搜尋確認</div>}
-                  {!impact.needs_decision.options.includes("link") && <div className="text-zk-xs text-zk-muted">你冇權限連結現有保安員，只可以建新人或者跳過。</div>}
-                  <Button size="sm" type="button" disabled={busy} onClick={() => setDecision({ kind: "create_new" })} data-testid="triage-decision-create">
-                    唔係，建新人
-                  </Button>
+                  {!impact.needs_decision.options.includes("link") && <div className="text-zk-xs text-zk-muted">你冇權限連結現有保安員，只可以{impact.needs_decision.options.includes("create_new") ? "建新人或者" : ""}跳過。</div>}
+                  {impact.needs_decision.options.includes("create_new") ? (
+                    <Button size="sm" type="button" disabled={busy} onClick={() => setDecision({ kind: "create_new" })} data-testid="triage-decision-create">
+                      唔係，建新人
+                    </Button>
+                  ) : (
+                    <div className="text-zk-xs text-zk-muted" data-testid="triage-decision-no-create">同一個身份證號唔可以建兩個人：確認係同一人就連結；唔係就核對身份證號，或者跳過留返人手。</div>
+                  )}
                 </div>
               )}
               {decision && !impact?.needs_decision && (

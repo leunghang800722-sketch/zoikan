@@ -946,6 +946,87 @@ describe("TE-1 證據裁圖", () => {
       expect((await pv({ dob: "1990-05-07" })).status).toBe(400);
     });
 
+    describe("TE-9 身份證號屬系統內現有保安員：連結（唔准建新人）", () => {
+      async function setup9() {
+        await seed();
+        const owner9 = await prisma.guard.create({ data: { nameZh: "既有在職保安員甲", employmentType: "cash_casual", hkid: H[9], createdBy: "t" } });
+        await prisma.guardStaffNumber.create({ data: { guardId: owner9.id, scheme: "U", number: "U90091", status: "current" } });
+        const orphanBase = person({ hkid: null, name: "x", nos: [], rating: "fail" });
+        const orphan = { ...orphanBase, nameZh: F(null, "missing"), nameEn: F(null, "missing"), dateOfBirth: F(null, "missing"), address: F(null, "missing"), phone: F(null, "missing") } as PackagePerson;
+        const r0 = await applyPkg(accountant, [orphan]);
+        const sid2 = r0.body.triage.session_id as string;
+        const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
+        const plain = J(441);
+        await insertEvidenceImage(prisma, { sessionId: sid2, questionId: null, personKey: qn.personKey!, guardId: null, field: "hkid", docKind: "printed", priority: 2, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
+        const call = (route: unknown, url: string, body: unknown, cookie = owner) => json(route as never, `/api/triage/questions/${qn.id}/${url}`, cookie, body, qn.id);
+        const prev = async (extra?: object, cookie = owner) => {
+          const res = await call(previewRoute, "preview", { answer: { option: "enter_hkid", value: H[9], ...(extra ? { extra } : {}) } }, cookie);
+          return { status: res.status, body: await res.json() };
+        };
+        return { owner9, sid2, qn, call, prev };
+      }
+
+      it("preview：hkid 等於唯一一位現有保安員（唔喺候選）→ needs_decision hkid_matches_existing_guard、候選卡標 same_hkid、只可 link／skip、人話 reason_text；號碼格式（括號／小寫）唔影響", async () => {
+        const { owner9, prev, call } = await setup9();
+        const p = await prev();
+        expect(p.status).toBe(200);
+        expect(p.body.writes).toBe(false);
+        expect(p.body.impact.can_confirm).toBe(false);
+        expect(p.body.impact.needs_decision).toMatchObject({ reason: "hkid_matches_existing_guard", options: ["link", "skip"] });
+        expect(p.body.impact.needs_decision.candidates).toHaveLength(1);
+        expect(p.body.impact.needs_decision.candidates[0]).toMatchObject({ guard_id: owner9.id, same_hkid: true, has_hkid: true, staff_numbers: ["U90091"] });
+        expect(p.body.impact.reason_text).toContain("已屬於系統內一位保安員");
+        const lower = await call(previewRoute, "preview", { answer: { option: "enter_hkid", value: `${H[9]!.slice(0, -1)}(${H[9]!.slice(-1)})`.toLowerCase() } });
+        expect((await lower.json()).impact.needs_decision.reason).toBe("hkid_matches_existing_guard");
+      });
+
+      it("冇「個人資料:view＋保安員:update」→ options 淨 skip；link 403", async () => {
+        const { qn } = await setup9();
+        const actor = { userId: fx.userIds["老闆"], baseRole: "老闆", roleId: fx.roleIds["老闆"], tokenVersion: 0 } as unknown as AuthedSession;
+        const full = await viewerCaps(actor);
+        const q0 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } });
+        const base = { option: "enter_hkid", value: H[9] } as const;
+        expect((await previewAnswer(actor, q0, base, { ...full, pii: false }, null)).impact.needs_decision?.options).toEqual(["skip"]);
+        expect((await previewAnswer(actor, q0, base, full, null)).impact.needs_decision?.options).toEqual(["link", "skip"]);
+      });
+
+      it("唔准建新人：extra.create_new → 400；冇 link 直接答 → 422；連去無關保安員（名／號碼都唔同）→ 400", async () => {
+        const { prev, call } = await setup9();
+        expect((await prev({ create_new: true })).status).toBe(400);
+        const pv = await prev();
+        const direct = await call(answerRoute, "answer", { answer: { option: "enter_hkid", value: H[9] }, preview_hash: pv.body.preview_hash });
+        expect(direct.status).toBe(422);
+        const stranger = await prisma.guard.create({ data: { nameZh: "無關路人乙", employmentType: "cash_casual", createdBy: "t" } });
+        expect((await prev({ link_guard_id: stranger.id })).status).toBe(400);
+      });
+
+      it("link：連結成功——唔新增人、guard 身份證號不變、題 answered、圖答題即刪（M5）、audit 記 link decision", async () => {
+        const { owner9, sid2, qn, call, prev } = await setup9();
+        const before = await prisma.guard.count();
+        const p = await prev({ link_guard_id: owner9.id });
+        expect(p.status).toBe(200);
+        expect(p.body.impact.can_confirm).toBe(true);
+        expect(p.body.impact.needs_decision).toBeUndefined();
+        const res = await call(answerRoute, "answer", { answer: { option: "enter_hkid", value: H[9], extra: { link_guard_id: owner9.id } }, preview_hash: p.body.preview_hash });
+        expect(res.status).toBe(200);
+        expect(await prisma.guard.count()).toBe(before);
+        expect((await prisma.guard.findUniqueOrThrow({ where: { id: owner9.id }, select: { hkid: true } })).hkid).toBe(H[9]);
+        expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("answered");
+        expect(await imgCount({ sessionId: sid2 })).toBe(0);
+        const au = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_answer", rowId: qn.id } });
+        expect(au.after).toMatchObject({ decision: "link", link_guard_id: owner9.id });
+      });
+
+      it("資料異常：同一個身份證號（canonical）屬兩位保安員（寫法唔同）→ 攔並人話（422），唔出連結選項", async () => {
+        const { prev, owner9 } = await setup9();
+        await prisma.guard.update({ where: { id: owner9.id }, data: { hkid: `${H[9]!.slice(0, -1)}(${H[9]!.slice(-1)})` } });
+        await prisma.guard.create({ data: { nameZh: "重複號碼乙", employmentType: "cash_casual", hkid: H[9], createdBy: "t" } });
+        const p = await prev();
+        expect(p.status).toBe(422);
+        expect(JSON.stringify(p.body)).toContain("多位保安員");
+      });
+    });
+
     describe("TE-8 錯圖撤回／取代上載", () => {
       const withdraw = (cookie: string, id: string, body: unknown = { reason: "wrong" }) => withdrawRoute(new Request(`http://t/api/triage/evidence-images/${id}/withdraw`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id }) } as never);
 

@@ -454,4 +454,46 @@ test.describe("TE-1 覆核證據裁圖", () => {
     expect(await (await post()).json()).toMatchObject({ accepted_images: 0, skipped_withdrawn: 1 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
+
+  test("TE-9 375px：孤兒人輸入已屬現有保安員嘅身份證號 → 候選卡標「身份證號相同」、冇建新人掣 → 連結 → 一撳寫入（唔建重複）", async ({ page }) => {
+    await cleanup();
+    const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
+    const ses = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: REF, ownerUserId: boss.id, createdBy: boss.id } });
+    const p7 = { n: 7, name: "", hkid: mkHkid(`66${RUN}7`), no: `ZE${RUN}7` };
+    const existing = await prisma.guard.create({ data: { nameZh: `既有保安員${CN}`, employmentType: "cash_casual", hkid: p7.hkid, createdBy: "e2e" } });
+    const person = personOf(p7, { hkid: f(null, "missing"), nameZh: f(null, "missing"), nameEn: f(null, "missing"), dateOfBirth: f(null, "missing"), phone: f(null, "missing"), address: f(null, "missing"), staffNumbers: [], rating: "fail" });
+    await prisma.triageQuestion.create({
+      data: {
+        sessionId: ses.id,
+        kind: "no_id_card",
+        groupKey: "e2e-te1-7",
+        sort: 1,
+        title: "no_id_card",
+        personKey: serverPersonKey({ key: "e2e-te1-7", hkid: { value: null }, staffNumbers: [] }),
+        evidenceJson: { v: 1, person, reasons: [], candidate_guard_ids: [] } as never,
+        optionsJson: [{ id: "enter_hkid", label: "輸入身份證號", input: "hkid" }, { id: "skip", label: "skip" }] as never,
+      },
+    });
+    const before = await prisma.guard.count();
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    await page.goto("/triage");
+    const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
+    await card.getByRole("button", { name: /繼續答/ }).click();
+    await page.getByRole("radio").first().check();
+    await page.getByPlaceholder("例：A123456(3)").fill(p7.hkid);
+    await page.getByTestId("triage-confirm").click(); // 一鍵：自動預覽 → 同號現有保安員
+    const dec = page.getByTestId("triage-needs-decision");
+    await expect(dec).toBeVisible();
+    await expect(dec.getByTestId("triage-decision-same-hkid")).toBeVisible();
+    await expect(dec.getByTestId("triage-decision-create")).toHaveCount(0); // 唔准建新人
+    await expect(dec.getByTestId("triage-decision-no-create")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await dec.getByTestId("triage-decision-link").click();
+    await expect(page.getByTestId("triage-decision-chosen")).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId("triage-confirm").click();
+    await expect.poll(() => prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: ses.id } }).then((q) => q.status), { timeout: 15_000 }).toBe("answered");
+    expect(await prisma.guard.count()).toBe(before);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: existing.id }, select: { hkid: true } })).hkid).toBe(p7.hkid);
+  });
 });
