@@ -496,4 +496,43 @@ test.describe("TE-1 覆核證據裁圖", () => {
     expect(await prisma.guard.count()).toBe(before);
     expect((await prisma.guard.findUniqueOrThrow({ where: { id: existing.id }, select: { hkid: true } })).hkid).toBe(p7.hkid);
   });
+
+  test("TE-9.1 375px：同一身份證號屬兩位保安員（資料異常）→ 題卡出導航卡「去處理重複保安員」（href 冇個人資料）＋人話，冇連結／建新人", async ({ page }) => {
+    await cleanup();
+    const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
+    const ses = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: REF, ownerUserId: boss.id, createdBy: boss.id } });
+    const p8 = { n: 8, name: "", hkid: mkHkid(`66${RUN}8`), no: `ZE${RUN}8` };
+    await prisma.guard.create({ data: { nameZh: `重複甲${CN}`, employmentType: "cash_casual", hkid: p8.hkid, createdBy: "e2e" } });
+    await prisma.guard.create({ data: { nameZh: `重複乙${CN}`, employmentType: "cash_casual", hkid: `${p8.hkid.slice(0, -1)}(${p8.hkid.slice(-1)})`, createdBy: "e2e" } });
+    const person = personOf(p8, { hkid: f(null, "missing"), nameZh: f(null, "missing"), nameEn: f(null, "missing"), dateOfBirth: f(null, "missing"), phone: f(null, "missing"), address: f(null, "missing"), staffNumbers: [], rating: "fail" });
+    await prisma.triageQuestion.create({
+      data: {
+        sessionId: ses.id,
+        kind: "no_id_card",
+        groupKey: "e2e-te1-8",
+        sort: 1,
+        title: "no_id_card",
+        personKey: serverPersonKey({ key: "e2e-te1-8", hkid: { value: null }, staffNumbers: [] }),
+        evidenceJson: { v: 1, person, reasons: [], candidate_guard_ids: [] } as never,
+        optionsJson: [{ id: "enter_hkid", label: "輸入身份證號", input: "hkid" }, { id: "skip", label: "skip" }] as never,
+      },
+    });
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    await page.goto("/triage");
+    const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
+    await card.getByRole("button", { name: /繼續答/ }).click();
+    await page.getByRole("radio").first().check();
+    await page.getByPlaceholder("例：A123456(3)").fill(p8.hkid);
+    await page.getByTestId("triage-confirm").click();
+    const nav = page.getByTestId("triage-nav-card");
+    await expect(nav).toBeVisible();
+    await expect(nav).toContainText("有多位保安員");
+    const go = nav.getByTestId("triage-nav-go");
+    await expect(go).toHaveText("去處理重複保安員");
+    expect(await go.getAttribute("href")).toBe("/guards"); // 冇任何個人資料
+    await expect(page.getByTestId("triage-needs-decision")).toHaveCount(0);
+    await expect(page.getByTestId("triage-reason-text")).toContainText("多位保安員");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });

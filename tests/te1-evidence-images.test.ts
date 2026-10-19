@@ -1017,13 +1017,34 @@ describe("TE-1 證據裁圖", () => {
         expect(au.after).toMatchObject({ decision: "link", link_guard_id: owner9.id });
       });
 
-      it("資料異常：同一個身份證號（canonical）屬兩位保安員（寫法唔同）→ 攔並人話（422），唔出連結選項", async () => {
-        const { prev, owner9 } = await setup9();
+      it("資料異常：同一個身份證號（canonical）屬兩位保安員（寫法唔同）→ preview 回人話＋導航卡「去處理重複保安員」（href 唔帶個人資料）、冇連結選項；冇個人資料 view 唔出導航；直接答 422", async () => {
+        const { prev, owner9, qn, call } = await setup9();
         await prisma.guard.update({ where: { id: owner9.id }, data: { hkid: `${H[9]!.slice(0, -1)}(${H[9]!.slice(-1)})` } });
         await prisma.guard.create({ data: { nameZh: "重複號碼乙", employmentType: "cash_casual", hkid: H[9], createdBy: "t" } });
         const p = await prev();
-        expect(p.status).toBe(422);
-        expect(JSON.stringify(p.body)).toContain("多位保安員");
+        expect(p.status).toBe(200);
+        expect(p.body.writes).toBe(false);
+        expect(p.body.impact).toMatchObject({ can_confirm: false, nav: { label: "去處理重複保安員", href: "/guards" } });
+        expect(p.body.impact.reason_text).toContain("多位保安員");
+        expect(p.body.impact.needs_decision).toBeUndefined();
+        expect(JSON.stringify(p.body.impact.nav)).not.toContain(H[9]!);
+        const actor = { userId: fx.userIds["老闆"], baseRole: "老闆", roleId: fx.roleIds["老闆"], tokenVersion: 0 } as unknown as AuthedSession;
+        const q0 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } });
+        const noPii = await previewAnswer(actor, q0, { option: "enter_hkid", value: H[9] }, { ...(await viewerCaps(actor)), pii: false }, null);
+        expect(noPii.impact.nav).toBeUndefined();
+        expect((await call(answerRoute, "answer", { answer: { option: "enter_hkid", value: H[9] }, preview_hash: p.body.preview_hash })).status).toBe(422);
+      });
+
+      it("S2：連結時輸入嘅姓名同目標保安員現有姓名唔同 → preview note（保留／將覆蓋，按實際寫入變更）；相同姓名冇 note", async () => {
+        const { prev, owner9 } = await setup9();
+        const diff = await prev({ link_guard_id: owner9.id, name_zh: "完全另一個名字" });
+        expect(diff.status).toBe(200);
+        const note = (diff.body.impact.notes as string[]).find((n) => n.includes("輸入嘅姓名同現有紀錄唔同"));
+        expect(note).toBeTruthy();
+        const overwrites = (diff.body.impact.changes as { table: string; action: string; fields: { label: string; from: string | null }[] }[]).some((c) => c.table === "guards" && c.fields.some((f) => f.label === "中文姓名" && f.from !== null));
+        expect(note).toContain(overwrites ? "將覆蓋" : "保留現有姓名");
+        const same = await prev({ link_guard_id: owner9.id, name_zh: "既有在職保安員甲" });
+        expect((same.body.impact.notes as string[]).some((n) => n.includes("輸入嘅姓名同現有紀錄唔同"))).toBe(false);
       });
     });
 

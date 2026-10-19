@@ -16,7 +16,7 @@ import { applyOnePerson, extOutcomeOf, summarizeExt, type ApplyOptions } from "@
 import type { AuthedSession } from "@/lib/rbac/requirePermission";
 import { resolveAnswer, type ResolvedWrite } from "./resolve";
 import { refreshSessionStatus } from "./session";
-import { DECISION_REASONS, DECISION_TEXT, HKID_OWNER_TEXT, buildImpact, explainBlocked, loadDecisionCandidates, loadHkidOwnerCard, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
+import { DECISION_REASONS, DECISION_TEXT, HKID_OWNER_TEXT, DUP_HKID_TEXT, buildImpact, explainBlocked, loadDecisionCandidates, loadHkidOwnerCard, toImpactSource, type ImpactView, type ViewerCaps } from "./view";
 import { sameEnglishTokens } from "./generators/guard-import";
 import { TRIAGE_LOCK, kindClass } from "./session";
 import { identityFollowUps } from "./generators/guard-import";
@@ -138,14 +138,14 @@ function optsFor(r: ResolvedWrite, actor: AuthedSession, ip: string | null, caps
  * enter_hkid／use_package_hkid：輸入嘅身份證號如果已屬於一位「唔喺候選名單」嘅現有保安員，
  * 只有姓名同導入包完全相同先准（預覽要警告），否則 422。回 true＝要警告。
  */
-async function checkHkidOwner(q: QRow, answer: TriageAnswer): Promise<{ warn: boolean; ownerId?: string }> {
+async function checkHkidOwner(q: QRow, answer: TriageAnswer): Promise<{ warn: boolean; ownerId?: string; duplicate?: boolean }> {
   if (answer.option !== "enter_hkid" && answer.option !== "use_package_hkid") return { warn: false };
   const ev = q.evidenceJson as unknown as QuestionEvidence;
   const canon = canonicalHkid(answer.option === "enter_hkid" ? (answer.value ?? null) : fieldValue(ev.person.hkid));
   if (!canon) return { warn: false }; // resolveAnswer 會 400
   // 按 canonical 比較（guards.hkid 可能帶括號寫法；unique index 只擋完全相同字串）
   const owners = await prisma.$queryRaw<{ id: string; name_zh: string }[]>`SELECT id, name_zh FROM guards WHERE regexp_replace(upper(hkid), '[()（）[:space:]]', '', 'g') = ${canon} LIMIT 3`;
-  if (owners.length > 1) throw new ApiError(422, "unprocessable", "呢個身份證號喺系統內屬於多位保安員（資料異常），請先處理重複保安員先再答");
+  if (owners.length > 1) return { warn: false, duplicate: true }; // 資料異常：preview 回導航卡，submit 422
   const owner = owners[0];
   if (owner && answer.extra?.link_guard_id === owner.id) return { warn: false }; // TE-5：人手揀咗連去呢位（身份證號本來就係佢嘅）
   if (!owner || ev.candidate_guard_ids.includes(owner.id)) return { warn: false };
@@ -191,6 +191,11 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   const ownerChk = await checkHkidOwner(q, answer);
   const warnOwner = ownerChk.warn;
   const mismatch = await identityMismatch(q, answer);
+  if (ownerChk.duplicate) {
+    // TE-9.1：資料異常（同一身份證號屬多位保安員）→ 導航卡「去處理重複保安員」（href 唔帶個人資料；冇「個人資料:view」唔出導航）
+    const impact: ImpactView = { can_confirm: false, summary: [DUP_HKID_TEXT], changes: [], field_outcomes: [], notes: [], reason_text: DUP_HKID_TEXT, ...(caps.pii ? { nav: { label: "去處理重複保安員", href: "/guards" } } : {}) };
+    return { preview_hash: hashOf(q.id, answer, "hkid-duplicate"), writes: false, impact };
+  }
   if (ownerChk.ownerId && !answer.extra?.link_guard_id) {
     // TE-9：要人決定連結（冇權限就只可跳過）
     const cards = await loadHkidOwnerCard(ownerChk.ownerId, caps);
@@ -213,6 +218,18 @@ export async function previewAnswer(actor: AuthedSession, q: QRow, rawAnswer: un
   if (mismatch) {
     impact.notes.unshift(mismatch);
     if (!answer.confirm_identity) impact.can_confirm = false;
+  }
+  // TE-9.1 S2：連結時輸入嘅姓名同目標保安員現有姓名唔同 → 提示（保留／將覆蓋——睇實際寫入變更）
+  if (answer.extra?.link_guard_id && (answer.extra.name_zh || answer.extra.name_en)) {
+    const tg = await prisma.guard.findUnique({ where: { id: answer.extra.link_guard_id }, select: { nameZh: true, nameEn: true } });
+    if (tg) {
+      const zhDiff = !!answer.extra.name_zh && !!tg.nameZh && normZh(tg.nameZh) !== normZh(answer.extra.name_zh);
+      const enDiff = !!answer.extra.name_en && !!tg.nameEn && tg.nameEn.trim().toUpperCase() !== answer.extra.name_en.trim().toUpperCase();
+      if (zhDiff || enDiff) {
+        const overwrites = impact.changes.some((c) => c.table === "guards" && c.action === "update" && c.fields.some((f) => (f.label === "中文姓名" || f.label === "英文姓名") && f.from !== null));
+        impact.notes.push(overwrites ? "輸入嘅姓名同現有紀錄唔同，連結後將覆蓋現有姓名（請再核對係咪同一人）" : "輸入嘅姓名同現有紀錄唔同，連結後保留現有姓名（請再核對係咪同一人）");
+      }
+    }
   }
   // TE-5：同名現有保安員（淨姓名對唔夠硬）→ 要人決定連結／建新人；唔准按姓名自動連結
   const decisionReason = !impact.can_confirm && !answer.extra?.link_guard_id && !answer.extra?.create_new && EXTRA_NAME_OPTIONS.includes(answer.option) ? DECISION_REASONS.find((r) => out.result.reasons.includes(r)) : undefined;
@@ -266,6 +283,7 @@ export async function submitAnswer(actor: AuthedSession, q: QRow, rawAnswer: unk
   const resolved = resolveAnswer(load(q), answer);
   await assertLinkDecision(q, answer, resolved, caps);
   const ownerSubmit = await checkHkidOwner(q, answer);
+  if (ownerSubmit.duplicate) throw new ApiError(422, "unprocessable", DUP_HKID_TEXT);
   if (ownerSubmit.ownerId && !answer.extra?.link_guard_id) throw new ApiError(422, "unprocessable", HKID_OWNER_TEXT);
   const mismatch = await identityMismatch(q, answer);
   if (mismatch && !answer.confirm_identity) throw new ApiError(422, "unprocessable", mismatch);

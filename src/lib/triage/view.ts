@@ -371,6 +371,8 @@ export interface ImpactView {
   /** TE-3：補咗呢啲資料就可以過（UI 喺同一張卡展開輸入框）；required=false 嘅欄可以留空 */
   needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
   /** TE-5：系統有同名現有保安員，淨姓名對唔夠硬——要人決定「連結」定「建新人」 */
+  /** TE-9.1：資料異常（例如同一身份證號屬多位保安員）→ 導航卡：去邊度處理（href 唔帶任何個人資料）；只對有「個人資料:view」者回 */
+  nav?: { label: string; href: string };
   needs_decision?: { reason: "name_only_candidate" | "same_name_different_dob" | "name_multi_candidate" | "hkid_matches_existing_guard"; candidates: DecisionCandidate[]; options: ("link" | "create_new" | "skip")[]; /** 同名者多過 5 位，只列頭 5 位 */ truncated?: boolean };
 }
 
@@ -394,6 +396,7 @@ export interface DecisionCandidate {
 
 /** TE-5：需要人決定連結／建新人嘅原因碼 */
 export const DECISION_REASONS = ["name_only_candidate", "same_name_different_dob", "name_multi_candidate"] as const;
+export const DUP_HKID_TEXT = "呢個身份證號喺系統內屬於多位保安員（資料異常），請先處理重複保安員先再答";
 export const HKID_OWNER_TEXT = "呢個身份證號已屬於系統內一位保安員，確認係同一人就連結";
 export const DECISION_TEXT = "系統已有一位同名保安員，請確認係咪同一人：係＝連結並補資料；唔係＝建新人";
 

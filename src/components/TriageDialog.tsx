@@ -90,6 +90,8 @@ interface Impact {
   reason_text?: string;
   /** TE-3：補咗呢啲欄就可以確認（例：冇姓名要補中文姓名） */
   needs_fields?: { field: "name_zh" | "name_en"; label: string; required: boolean }[];
+  /** TE-9.1：資料異常導航卡 */
+  nav?: { label: string; href: string };
   /** TE-5：同名現有保安員要人決定 */
   needs_decision?: { reason: string; candidates: DecisionCandidate[]; options: ("link" | "create_new" | "skip")[]; truncated?: boolean };
 }
@@ -969,6 +971,21 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
               {decision && !impact?.needs_decision && (
                 <div className="text-zk-sm text-zk-muted" data-testid="triage-decision-chosen">
                   已揀：{decision.kind === "link" ? "係同一人，連結並補資料" : "唔係，建新人"}（再撳「確認寫入」；想改可以重新揀答案）
+                </div>
+              )}
+              {impact?.nav && (
+                <div className="space-y-1.5 rounded-lg border border-zk-warning/50 bg-zk-header/40 p-3" data-testid="triage-nav-card">
+                  <div className="text-zk-sm font-semibold text-zk-warning">呢個身份證號喺系統內有多位保安員，要先處理重複記錄</div>
+                  <div className="flex flex-wrap gap-2">
+                    <a href={impact.nav.href} className="inline-flex min-h-[44px] items-center rounded-[5px] border border-zk-primary bg-white px-3 text-zk-base font-semibold text-zk-primary" data-testid="triage-nav-go">
+                      {impact.nav.label}
+                    </a>
+                    {hkidSt?.canon && (
+                      <Button size="sm" type="button" onClick={() => void navigator.clipboard?.writeText(hkidSt.canon!)} data-testid="triage-nav-copy">
+                        複製身份證號（去搜尋用）
+                      </Button>
+                    )}
+                  </div>
                 </div>
               )}
               {impact && <ImpactCard impact={impact} />}
