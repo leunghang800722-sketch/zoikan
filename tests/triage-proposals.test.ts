@@ -396,4 +396,40 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qb.id } })).status).toBe("answered");
     expect(await prisma.guard.count({ where: { hkid: NEW } })).toBe(1);
   });
+  it("TE-11.4 invalid_reasons：skipped_invalid 唔吞——preview 唔可寫入記原因（唔記值）；dry 同 apply 同一批計數一致", async () => {
+    const { pn, sid } = await seed();
+    const match = { hkid: null, staff_numbers: ["U90003"] };
+    const DUP = mkHkid("T", "900001");
+    // 同一個身份證號（canonical）屬兩位保安員（寫法唔同）→ preview 唔可寫入（資料異常）
+    await prisma.guard.create({ data: { nameZh: "重複號碼甲", employmentType: "cash_casual", hkid: DUP, createdBy: "t" } });
+    await prisma.guard.create({ data: { nameZh: "重複號碼乙", employmentType: "cash_casual", hkid: `${DUP.slice(0, -1)}(${DUP.slice(-1)})`, createdBy: "t" } });
+    const props = [prop(pn.key, "hkid", DUP, { match, confidence: "high" })];
+    const dry = await send(accountant, sid, props, true);
+    const real = await send(accountant, sid, props);
+    expect(real.body.applied).toBe(dry.body.applied);
+    expect(real.body.skipped_invalid).toBe(1);
+    expect(Object.keys(real.body.invalid_reasons)).toHaveLength(1);
+    expect(Object.keys(real.body.invalid_reasons)[0]).toMatch(/^preview:/);
+    expect(real.body.invalid_reasons).toEqual(dry.body.invalid_reasons);
+    expect(JSON.stringify(real.body)).not.toContain(DUP);
+    expect(JSON.stringify(real.body)).not.toContain("重複號碼");
+  });
+
+  it("TE-11.4 同一人兩條題（name_not_confirmed＋hkid_not_confirmed 各一人）順序自動答：dry 同 apply 計數相同、兩題都 answered", async () => {
+    const { pa, pb, sid } = await seed();
+    const ma = { hkid: pa.hkid.value, staff_numbers: pa.staffNumbers.map((n) => n.number) };
+    const mb = { hkid: pb.hkid.value, staff_numbers: pb.staffNumbers.map((n) => n.number) };
+    const NEW = mkHkid("U", "700001");
+    const props = [
+      prop(pa.key, "nameZh", "卡上正確姓名甲", { match: ma, confidence: "high" }),
+      prop(pa.key, "nameEn", "CARD TRUE NAME", { match: ma, confidence: "high" }),
+      prop(pb.key, "hkid", NEW, { match: mb, confidence: "high" }),
+    ];
+    const dry = await send(accountant, sid, props, true);
+    const real = await send(accountant, sid, props);
+    expect(dry.body).toMatchObject({ applied: 2, skipped_invalid: 0, errors: 0 });
+    expect(real.body).toMatchObject({ applied: dry.body.applied, skipped_invalid: 0, errors: 0, resubmitted: 0 });
+    expect(real.body.invalid_reasons).toEqual({});
+    for (const kind of ["name_not_confirmed", "hkid_not_confirmed"]) expect((await qOf(kind)).status).toBe("answered");
+  });
 });
