@@ -72,7 +72,12 @@ export function EvidenceImages({ imgs, fieldLabel }: { imgs: readonly EvidenceIm
 
 /** 按欄分組顯示（非 field_review 題用）。 */
 export function EvidenceSection({ images }: { images: readonly EvidenceImageDto[] | undefined }) {
-  if (!images || images.length === 0) return null;
+  if (!images || images.length === 0)
+    return (
+      <div className="text-zk-xs text-zk-faint" data-testid="evidence-empty">
+        冇裁圖（文件讀唔到）
+      </div>
+    );
   const fields = [...new Set(images.map((i) => i.field))];
   return (
     <div className="space-y-2 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="evidence-section">

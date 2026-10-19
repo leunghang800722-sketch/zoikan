@@ -51,6 +51,7 @@ function personView(p: PackagePerson, c: ViewerCaps) {
     phone: { ...f(p.phone), value: mTel(fieldValue(p.phone), c) },
     address: { ...f(p.address), value: mAddr(fieldValue(p.address), c) },
     staff_numbers: p.staffNumbers.map((n) => n.number),
+    doc_info: p.docInfo ? { page_count: p.docInfo.pageCount, pages_by_kind: p.docInfo.pagesByKind, file_ext: p.docInfo.fileExts ?? [] } : null,
     rating: p.rating,
     ext: extView(p, c),
   };

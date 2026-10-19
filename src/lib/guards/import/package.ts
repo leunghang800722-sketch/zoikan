@@ -107,6 +107,15 @@ const personTail = {
   reasons: z.array(z.string().max(80)).max(60),
   /** 包內群組層面衝突理由（例如同 hkid 不同檔中文名差異大）；有就一律 conflict。 */
   conflicts: z.array(z.string().max(80)).max(20).optional(),
+  /** TE-7：呢個人嘅來源文件資訊（頁數／各類頁數／檔案類型；冇 PII），分診題卡「冇讀到任何資料」時顯示 */
+  docInfo: z
+    .object({
+      pageCount: z.number().int().min(0).max(2000),
+      pagesByKind: z.record(z.string().max(30), z.number().int().min(0).max(2000)),
+      fileExts: z.array(z.string().max(8)).max(5).optional(),
+    })
+    .strict()
+    .optional(),
 };
 
 // 欄位次序刻意同 v2 一致（hashPackage 用 JSON.stringify，key 次序即 hash）。

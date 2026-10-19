@@ -106,3 +106,6 @@
 
 ## 13. TE-5 同名現有保安員：連結／建新人決定
 preview `needs_decision`（候選卡、權限過濾）＋answer `extra.link_guard_id`／`create_new`（forced link／create，同一 code path，身份檢查照舊）；UI 同卡兩個掣＋自動重預覽；proposals 唔自動連結（`skipped_needs_decision`）。
+
+## 14. TE-7 空資料題卡 fallback＋reason label 全覆蓋
+PersonCard 全空→明確 fallback（原因人話、docInfo、下一步）；missing 欄顯示「—（未讀到）」；reason-labels.ts 覆蓋全部 code；裁圖區 0 張顯示一行。

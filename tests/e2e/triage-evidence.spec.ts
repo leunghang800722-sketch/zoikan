@@ -321,4 +321,31 @@ test.describe("TE-1 覆核證據裁圖", () => {
     await expect.poll(() => prisma.guard.findUniqueOrThrow({ where: { id: existing.id }, select: { hkid: true } }).then((g) => g.hkid), { timeout: 15_000 }).toBe(p4.hkid);
     expect(await prisma.guard.count({ where: { nameZh: NM } })).toBe(1); // 連去舊嗰位，冇建新人
   });
+
+  test("TE-7 375px：extract_fail 人（導入包冇讀到任何欄）題卡顯示明確 fallback＋人話原因＋文件資訊＋下一步；冇裁圖一行", async ({ page }) => {
+    await cleanup();
+    const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
+    const ses = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: REF, ownerUserId: boss.id, createdBy: boss.id } });
+    const empty = { key: "e2e-te7-empty", hkid: f(null, "missing"), nameZh: f(null, "missing"), nameEn: f(null, "missing"), dateOfBirth: f(null, "missing"), sex: f(null, "missing"), phone: f(null, "missing"), address: f(null, "missing"), staffNumbers: [], rating: "fail", reasons: ["extract_fail", "nameEn_missing_no_id_page", "address_recipient_not_matched"], conflicts: [], docInfo: { pageCount: 3, pagesByKind: { other: 2, application_form: 1 } } };
+    const mk = (title: string, sort: number, person: object, kind = "no_id_card") =>
+      prisma.triageQuestion.create({
+        data: { sessionId: ses.id, kind, groupKey: `e2e-te7-${sort}`, sort, title, personKey: `e2e-te7-key-${sort}`, evidenceJson: { v: 1, person, reasons: (person as { reasons: string[] }).reasons, candidate_guard_ids: [] } as never, optionsJson: [{ id: "enter_hkid", label: "輸入身份證號", input: "hkid" }, { id: "skip", label: "skip" }] as never },
+      });
+    await mk("empty", 1, empty);
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    await page.goto("/triage");
+    const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
+    await card.getByRole("button", { name: /繼續答/ }).click();
+    const box = page.getByTestId("triage-person-empty");
+    await expect(box).toBeVisible();
+    await expect(box).toContainText("導入包冇讀到呢位嘅任何資料");
+    await expect(box).toContainText("證件讀取失敗");
+    await expect(box).toContainText("冇身份證頁，所以讀唔到英文姓名");
+    await expect(box).toContainText("共 3 頁");
+    await expect(box).toContainText("請補交身份證副本／入職表再導入，或者人手輸入");
+    await expect(page.getByText("其他原因")).toHaveCount(0);
+    await expect(page.getByTestId("evidence-empty")).toContainText("冇裁圖（文件讀唔到）");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });

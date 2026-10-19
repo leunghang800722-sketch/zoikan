@@ -38,6 +38,21 @@ function splitStaffNo(raw: string): { scheme: string; number: string } | null {
   return m ? { scheme: m[1], number: n } : null;
 }
 
+/** TE-7：來源文件資訊（頁數、各類頁數；冇 PII） */
+function docInfoOf(docs: (DocExtract | undefined)[]): { pageCount: number; pagesByKind: Record<string, number> } {
+  const pagesByKind: Record<string, number> = {};
+  let pageCount = 0;
+  for (const d of docs) {
+    if (!d) continue;
+    pageCount += d.pageCount;
+    for (const pg of d.pages) {
+      const k = pg.primary ?? pg.kinds?.[0] ?? 'other';
+      pagesByKind[k] = (pagesByKind[k] ?? 0) + 1;
+    }
+  }
+  return { pageCount, pagesByKind };
+}
+
 async function main() {
   const ex = JSON.parse(await fs.readFile(path.join(OUT, 'out/extract.json'), 'utf8')) as (DocExtract & { staffNo: string | null })[];
   const cc = new Map((JSON.parse(await fs.readFile(path.join(OUT, 'out/crosscheck.json'), 'utf8')) as DocCheck[]).map((c) => [c.docId, c]));
@@ -85,6 +100,7 @@ async function main() {
       staffNumbers,
       rating,
       reasons,
+      docInfo: docInfoOf(row.docIds.map((d) => exBy.get(d))),
       conflicts: groupReasons.includes('group_name_differs') ? ['group_name_differs'] : [],
     };
   });
