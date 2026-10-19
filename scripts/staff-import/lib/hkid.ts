@@ -148,17 +148,88 @@ export function hkidFromConfusableToken(raw: string): { value: string; fixed: bo
   return hits.size === 1 ? { value: [...hits.keys()][0]!, fixed: [...hits.values()][0]!, end: m[0].length } : null;
 }
 
-/** NFKC 後喺文字任何位置搵 HKID 候選（唔要求整行），check digit 通過先收。 */
-export function findValidHkidsInText(text: string): string[] {
-  return findHkidCandidates(text.normalize('NFKC')).filter((c) => hkidCheckDigitValid(c));
+/** 身份證 label（身份證號碼／身份證／I.D. Card No／ID No／HKID／Identity Card）。 */
+export const HKID_LABEL_SRC = '(?:身份證號碼|身份證|身分證|I\\.?\\s?D\\.?\\s*Card\\s*No\\.?|I\\.?D\\.?\\s*No\\.?|HKID|Identity\\s*Card(?:\\s*No\\.?)?)';
+
+// TE-8：token 邊界——候選前後唔可以緊貼英數字（QATW1026240 入面嘅 TW102624(0) 唔算）；括號 check digit 本身係邊界。
+const RE_TOKEN_BRACKET = /(?<![A-Z0-9])([A-Z]{1,2})\s?(\d{6})\s?[(\[]\s?([0-9A])\s?(?:[)\]]|(?![A-Z0-9]))/g;
+const RE_TOKEN_PLAIN = /(?<![A-Z0-9])([A-Z]{1,2})\s?(\d{6})\s?([0-9A])(?![A-Z0-9])/g;
+
+export interface HkidToken {
+  value: string;
+  /** 喺（NFKC＋大寫）文字內嘅起止 */
+  start: number;
+  end: number;
+  /** check digit 喺括號內 */
+  bracketed: boolean;
 }
 
-/** TE-3：NFKC 後行內第一個 check digit 通過嘅 HKID 位置（字元起止＋總長），供裁圖按字元比例定 x 範圍。 */
-export function hkidSpanInLine(text: string): { start: number; end: number; len: number } | null {
-  const t = text.normalize('NFKC');
-  const re = /[A-Za-z]{1,2}\s?\d{6}\s?[(\[]?\s?[0-9Aa]\s?[)\]]?/g;
-  for (const m of t.matchAll(re)) {
-    if (hkidCheckDigitValid(canonicalHkid(m[0]))) return { start: m.index!, end: m.index! + m[0].length, len: t.length };
+/** NFKC＋大寫後搵 HKID 形狀 token（有 token 邊界）；check digit 通過先收；唔做 OCR 混淆。 */
+export function findHkidTokens(text: string): HkidToken[] {
+  const t = text.normalize('NFKC').toUpperCase();
+  const out: HkidToken[] = [];
+  const seen = new Set<number>();
+  for (const [re, bracketed] of [[RE_TOKEN_BRACKET, true], [RE_TOKEN_PLAIN, false]] as const) {
+    re.lastIndex = 0;
+    for (const m of t.matchAll(re)) {
+      const value = canonicalHkid(`${m[1]}${m[2]}${m[3]}`);
+      if (!value || !hkidCheckDigitValid(value) || seen.has(m.index!)) continue;
+      seen.add(m.index!);
+      out.push({ value, start: m.index!, end: m.index! + m[0].length, bracketed });
+    }
   }
-  return null;
+  return out.sort((a, b) => a.start - b.start);
+}
+
+export interface HkidHit extends HkidToken {
+  /** 喺邊一行（輸入 texts 嘅 index） */
+  line: number;
+  /** 同行（或緊貼上一行淨係 label）有身份證 label */
+  labelled: boolean;
+  /** label 起點：同行＝喺本行文字內嘅 offset；上一行＝labelLine 嗰行內嘅 offset */
+  labelStart: number | null;
+  /** label 所在行（同行＝line；上一行＝line-1） */
+  labelLine: number | null;
+}
+
+const RE_LABEL_G = new RegExp(HKID_LABEL_SRC, 'gi');
+const RE_LABEL_TAIL = new RegExp(`${HKID_LABEL_SRC}\\s*[:：]?\\s*$`, 'i');
+
+/**
+ * TE-8：逐行搵 HKID 候選（有 token 邊界＋checksum），並標示有冇身份證 label——
+ * 同行 label 後面（中間只有空格／冒號／點／連字符）緊跟嘅 token，或者 token 喺行首而上一行淨係 label。
+ */
+export function scanHkidHits(texts: readonly string[], skip: (t: string) => boolean = () => false): HkidHit[] {
+  const out: HkidHit[] = [];
+  texts.forEach((raw, i) => {
+    if (skip(raw)) return;
+    const t = raw.normalize('NFKC');
+    const labels = [...t.matchAll(RE_LABEL_G)].map((m) => ({ start: m.index!, end: m.index! + m[0].length }));
+    for (const tok of findHkidTokens(t)) {
+      const lb = [...labels].reverse().find((l) => l.end <= tok.start && /^[\s:：.\-]*$/.test(t.slice(l.end, tok.start)));
+      if (lb) {
+        out.push({ ...tok, line: i, labelled: true, labelStart: lb.start, labelLine: i });
+        continue;
+      }
+      if (i > 0 && t.slice(0, tok.start).trim() === '' && !skip(texts[i - 1]!)) {
+        const prev = texts[i - 1]!.normalize('NFKC');
+        const pm = RE_LABEL_TAIL.exec(prev);
+        if (pm) {
+          out.push({ ...tok, line: i, labelled: true, labelStart: pm.index, labelLine: i - 1 });
+          continue;
+        }
+      }
+      out.push({ ...tok, line: i, labelled: false, labelStart: null, labelLine: null });
+    }
+  });
+  return out;
+}
+
+/**
+ * TE-8：printed 來源挑選——有 label 候選就只出 label 候選；冇 label 先退到無 label 候選，而且要有括號 check digit
+ * （唔接受純英數串，例如證書序號 QATW1026240）。
+ */
+export function selectPrintedHits<T extends { labelled: boolean; bracketed: boolean }>(hits: readonly T[]): T[] {
+  const lab = hits.filter((h) => h.labelled);
+  return lab.length > 0 ? lab : hits.filter((h) => h.bracketed);
 }

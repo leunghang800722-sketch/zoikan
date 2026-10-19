@@ -1468,3 +1468,4 @@ StageBar 一行可橫捲；`RightRail` 同一組 testid 但 <lg 變底部 sticky
 - **TE-4.2（branch `te4-2-fixes`，起點 main e406fcc）**：出生日期已確認保護；英文名放寬比對；7 位＋(d) 誤收水平回歸。
 - **TE-5（branch `te5-link-decision`，起點 te4-2-fixes bb44be4）**：同名現有保安員 needs_decision（連結／建新人），UI 一撳流程，proposals 唔自動連結。
 - **TE-7（branch `te7-empty-fallback`，起點 main f510886）**：空資料題卡 fallback、reason code 人話全覆蓋、package docInfo。
+- **TE-8（branch `te8-printed-guard`，起點 main 3b18c75）**：printed HKID 防誤中（token 邊界／label 優先／多值跳過）、printed 自檢腳本、錯圖撤回＋取代上載。

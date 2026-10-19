@@ -28,6 +28,8 @@ import {
   priorityOf,
   requiredFieldsFor,
   sha256Hex,
+  withdrawImages,
+  restoreEvidenceImage,
   type DocKind,
   type EvidenceField,
 } from "./evidence-images";
@@ -61,8 +63,10 @@ const docRefSchema = z
   .object({ file_name: z.string().max(200), page_count: z.number().int().min(0).max(2000), pages_by_kind: z.record(z.string().max(30), z.number().int().min(0).max(2000)) })
   .strict();
 type DocRef = z.infer<typeof docRefSchema>;
+/** TE-8：取代模式——對 manifest 入面有圖嘅每個人，將同欄同 doc_kind 嘅舊圖（唔喺今次 manifest sha 內）軟刪 */
+const replaceSchema = z.object({ doc_kind: z.enum(DOC_KINDS), field: z.enum(EVIDENCE_FIELDS) }).strict();
 export const evidenceManifestSchema = z
-  .object({ version: z.literal(1), items: z.array(itemSchema).max(MAX_ENTRIES), people: z.array(z.object({ match: matchSchema, doc_ref: docRefSchema }).strict()).max(MAX_ENTRIES).optional() })
+  .object({ version: z.literal(1), items: z.array(itemSchema).max(MAX_ENTRIES), replace: z.array(replaceSchema).max(10).optional(), people: z.array(z.object({ match: matchSchema, doc_ref: docRefSchema }).strict()).max(MAX_ENTRIES).optional() })
   .strict();
 export type EvidenceManifest = z.infer<typeof evidenceManifestSchema>;
 
@@ -82,6 +86,10 @@ export interface EvidenceUploadCounts {
   skipped_over_limit: number;
   /** TE-7：寫入（dry＝會寫入）doc_ref 嘅題目數 */
   doc_refs_set: number;
+  /** TE-8：重上載已被撤回嘅同 sha 圖 */
+  skipped_withdrawn: number;
+  /** TE-8：取代模式會軟刪（apply＝已軟刪）嘅舊圖張數 */
+  would_withdraw: number;
 }
 
 const GENERIC_ZIP_ERR = "zip 檔案格式唔啱或超出限制";
@@ -198,6 +206,8 @@ interface Plan {
   anyOpen: boolean;
   qids: string[];
   pageNo: number | null;
+  /** TE-8 S2：恢復被取代上載軟刪嘅同 sha 圖（更新原 row，唔 insert） */
+  restoreId: string | null;
 }
 
 /**
@@ -209,16 +219,34 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
   const { manifest, images } = await readEvidenceZip(zipBytes);
   const restricted = new Set(await restrictedKindsFor(actor));
 
-  const body = async (db: Pick<typeof prisma, "triageQuestion" | "triageEvidenceImage">): Promise<{ plans: Plan[]; counts: EvidenceUploadCounts; docRefs: { qid: string; docRef: DocRef }[] }> => {
-    const counts: EvidenceUploadCounts = { dry_run: opts.dryRun, items_total: manifest.items.length, matched_questions: 0, accepted_images: 0, skipped_invalid: 0, skipped_invalid_image: 0, skipped_identity_mismatch: 0, skipped_no_question: 0, skipped_not_needed: 0, skipped_restricted: 0, skipped_duplicate: 0, skipped_over_limit: 0, doc_refs_set: 0 };
+  const body = async (db: Pick<typeof prisma, "triageQuestion" | "triageEvidenceImage">): Promise<{ plans: Plan[]; counts: EvidenceUploadCounts; docRefs: { qid: string; docRef: DocRef }[]; withdrawIds: string[]; withdrawInfo: { id: string; field: string; docKind: string }[] }> => {
+    const counts: EvidenceUploadCounts = { dry_run: opts.dryRun, items_total: manifest.items.length, matched_questions: 0, accepted_images: 0, skipped_invalid: 0, skipped_invalid_image: 0, skipped_identity_mismatch: 0, skipped_no_question: 0, skipped_not_needed: 0, skipped_restricted: 0, skipped_duplicate: 0, skipped_over_limit: 0, doc_refs_set: 0, skipped_withdrawn: 0, would_withdraw: 0 };
     const qs = await db.triageQuestion.findMany({ where: { sessionId, status: { in: ["open", "skipped"] }, personKey: { not: null } }, orderBy: [{ sort: "asc" }, { id: "asc" }] });
     const byKey = new Map<string, TriageQuestion[]>();
     for (const q of qs) byKey.set(q.personKey!, [...(byKey.get(q.personKey!) ?? []), q]);
-    const existing = await db.triageEvidenceImage.findMany({ where: { sessionId }, select: { personKey: true, field: true, sha256: true } });
     const perField = new Map<string, number>();
     const perPerson = new Map<string, number>();
     const seenSha = new Set<string>();
+    const existing = await db.triageEvidenceImage.findMany({ where: { sessionId }, select: { id: true, personKey: true, field: true, docKind: true, sha256: true, withdrawnAt: true, withdrawnReason: true } });
+    // TE-8：取代模式——只喺今次真係「接受咗」同一人、同一欄、同一 doc_kind 嘅新圖，先將該組舊圖（sha 唔喺今次 manifest）軟刪；
+    // 只出現喺 people[]、或新圖唔合格／被跳過嘅人唔會被軟刪（見下面逐 item 處理）。
+    const withdrawIds = new Set<string>();
+    const shaByPerson = new Map<string, Set<string>>();
+    if (manifest.replace?.length) {
+      const known = new Set(byKey.keys());
+      for (const it of manifest.items) {
+        const pk = derivePersonKey(it.match, known);
+        if (!pk || !(byKey.get(pk) ?? []).some((q) => matchIdentityOk(q, it.match))) continue;
+        const plain = images.get(it.file);
+        if (plain) (shaByPerson.get(pk) ?? shaByPerson.set(pk, new Set()).get(pk)!).add(sha256Hex(plain));
+      }
+    }
+    const withdrawnSha = new Map<string, { id: string; reason: string | null }>();
     for (const e of existing) {
+      if (e.withdrawnAt) {
+        withdrawnSha.set(`${e.personKey}|${e.field}|${e.sha256}`, { id: e.id, reason: e.withdrawnReason });
+        continue;
+      }
       perField.set(`${e.personKey}|${e.field}`, (perField.get(`${e.personKey}|${e.field}`) ?? 0) + 1);
       if (e.field !== "page") perPerson.set(e.personKey, (perPerson.get(e.personKey) ?? 0) + 1);
       seenSha.add(`${e.personKey}|${e.field}|${e.sha256}`);
@@ -265,6 +293,12 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
       }
       const sha = sha256Hex(plain);
       const shaKey = `${personKey}|${item.field}|${sha}`;
+      // TE-8 S2：被「取代上載」軟刪嘅圖，同 sha 重上載＝恢復；人手撤回（wrong／unrelated）嘅圖永遠唔再收
+      const wd = withdrawnSha.get(shaKey);
+      if (wd && wd.reason !== "replaced_by_upload") {
+        counts.skipped_withdrawn += 1;
+        continue;
+      }
       if (seenSha.has(shaKey)) {
         counts.skipped_duplicate += 1;
         continue;
@@ -272,16 +306,26 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
       const fk = `${personKey}|${item.field}`;
       // TE-7：整頁原稿另計（每人 ≤8 頁，唔計入 18）
       const isPage = item.field === "page";
-      if ((perField.get(fk) ?? 0) >= (isPage ? MAX_PAGES_PER_PERSON : MAX_PER_FIELD) || (!isPage && (perPerson.get(personKey) ?? 0) >= MAX_PER_PERSON)) {
+      // 取代模式：呢張新圖若被接受，同組舊圖會被軟刪，先暫時釋出佢哋佔嘅額度
+      const freed = manifest.replace?.some((r) => r.field === item.field && r.doc_kind === item.doc_kind)
+        ? existing.filter((e) => !e.withdrawnAt && !withdrawIds.has(e.id) && e.personKey === personKey && e.field === item.field && e.docKind === item.doc_kind && !shaByPerson.get(personKey)?.has(e.sha256))
+        : [];
+      const ofField = (perField.get(fk) ?? 0) - freed.length;
+      const ofPerson = (perPerson.get(personKey) ?? 0) - (isPage ? 0 : freed.length);
+      if (ofField >= (isPage ? MAX_PAGES_PER_PERSON : MAX_PER_FIELD) || (!isPage && ofPerson >= MAX_PER_PERSON)) {
         counts.skipped_over_limit += 1;
         continue;
       }
+      for (const e of freed) withdrawIds.add(e.id);
+      perField.set(fk, ofField);
+      if (!isPage) perPerson.set(personKey, ofPerson);
       seenSha.add(shaKey);
       perField.set(fk, (perField.get(fk) ?? 0) + 1);
       if (!isPage) perPerson.set(personKey, (perPerson.get(personKey) ?? 0) + 1);
       for (const q of allowed) matchedQ.add(q.id);
-      plans.push({ item, personKey, field: item.field, docKind: item.doc_kind, priority: item.priority, plain, info, sha, questionId: allowed[0]!.id, guardId: allowed[0]!.targetGuardId, anyOpen: allowed.some((q) => q.status === "open"), qids: allowed.map((q) => q.id), pageNo: item.page_no ?? null });
+      plans.push({ item, personKey, field: item.field, docKind: item.doc_kind, priority: item.priority, plain, info, sha, questionId: allowed[0]!.id, guardId: allowed[0]!.targetGuardId, anyOpen: allowed.some((q) => q.status === "open"), qids: allowed.map((q) => q.id), pageNo: item.page_no ?? null, restoreId: wd?.id ?? null });
     }
+    counts.would_withdraw = withdrawIds.size;
     counts.accepted_images = plans.length;
     counts.matched_questions = matchedQ.size;
     // TE-7：每人來源檔案線索 doc_ref——寫入該人所有 open／skipped 題嘅 evidence.doc_ref（只補，唔覆蓋）
@@ -298,7 +342,7 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
       }
     }
     counts.doc_refs_set = docRefs.length;
-    return { plans, counts, docRefs };
+    return { plans, counts, docRefs, withdrawIds: [...withdrawIds], withdrawInfo: existing.filter((e) => withdrawIds.has(e.id)) };
   };
 
   if (opts.dryRun) return (await body(prisma)).counts;
@@ -306,14 +350,23 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
   await prisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
-      const { plans, counts, docRefs } = await body(tx);
+      const { plans, counts, docRefs, withdrawIds, withdrawInfo } = await body(tx);
       final = counts;
+      if (withdrawIds.length > 0) {
+        await withdrawImages(tx, { id: { in: withdrawIds } }, "replaced_by_upload", now);
+        for (const w of withdrawInfo) await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_evidence_images", rowId: w.id, action: "triage_evidence_withdraw", after: { session_id: sessionId, image_id: w.id, field: w.field, doc_kind: w.docKind, reason: "replaced_by_upload" }, ip: opts.ip });
+      }
       for (const d of docRefs) {
         const cur = await tx.triageQuestion.findUnique({ where: { id: d.qid }, select: { evidenceJson: true } });
         const ej = (cur?.evidenceJson ?? {}) as Record<string, unknown>;
         if (cur && !ej.doc_ref) await tx.triageQuestion.update({ where: { id: d.qid }, data: { evidenceJson: { ...ej, doc_ref: d.docRef } as never } });
       }
       for (const p of plans) {
+        if (p.restoreId) {
+          await restoreEvidenceImage(tx, p.restoreId, p.plain, p.info, new Date(now.getTime() + (p.anyOpen ? RETENTION_DAYS : SKIPPED_RETENTION_DAYS) * DAY_MS));
+          await writeAuditTx(tx, { actorUserId: actor.userId, tableName: "triage_evidence_images", rowId: p.restoreId, action: "triage_evidence_withdraw", after: { session_id: sessionId, image_id: p.restoreId, field: p.field, doc_kind: p.docKind, reason: "restored" }, ip: opts.ip });
+          continue;
+        }
         await insertEvidenceImage(tx, {
           sessionId,
           questionId: p.questionId,

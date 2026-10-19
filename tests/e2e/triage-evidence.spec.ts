@@ -419,4 +419,39 @@ test.describe("TE-1 覆核證據裁圖", () => {
     await expect(page.getByTestId("triage-impact")).toBeVisible(); // 送去 server 嘅係 canonical，預覽正常
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
+
+  test("TE-8 375px：裁圖「呢張圖錯／唔相關」→ 即時隱藏、DB 軟刪；重上載同圖計 skipped_withdrawn", async ({ page }) => {
+    await cleanup();
+    const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
+    const ses = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: REF, ownerUserId: boss.id, createdBy: boss.id } });
+    const p6 = { n: 6, name: `撤回測試員${CN}`, hkid: mkHkid(`66${RUN}6`), no: `ZE${RUN}6` };
+    await prisma.triageQuestion.create({
+      data: {
+        sessionId: ses.id,
+        kind: "hkid_not_confirmed",
+        groupKey: "e2e-te1-6",
+        sort: 1,
+        title: "hkid_not_confirmed",
+        personKey: keyOf(p6),
+        evidenceJson: { v: 1, person: personOf(p6, { hkid: f(p6.hkid, "review") }), reasons: [], candidate_guard_ids: [] } as never,
+        optionsJson: [{ id: "use_package_hkid", label: "用導入包嘅身份證號" }, { id: "skip", label: "skip" }] as never,
+      },
+    });
+    const bytes = fakeJpeg(300, 80, { seed: 880 });
+    const file = entryName(bytes);
+    const zipBytes = await buildZip({ [file]: bytes, "manifest.json": JSON.stringify({ version: 1, items: [{ file, field: "hkid", doc_kind: "printed", priority: 2, match: { hkid: p6.hkid, staff_numbers: [p6.no] } }] }) });
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    const post = () => page.request.post(`/api/triage/sessions/${ses.id}/evidence-images`, { multipart: { file: { name: "x.zip", mimeType: "application/zip", buffer: Buffer.from(zipBytes) } } });
+    expect((await (await post()).json()).accepted_images).toBe(1);
+    await page.goto("/triage");
+    const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
+    await card.getByRole("button", { name: /繼續答/ }).click();
+    await expect(page.getByTestId("evidence-img")).toHaveCount(1);
+    await page.getByTestId("evidence-withdraw").click();
+    await expect(page.getByTestId("evidence-img")).toHaveCount(0);
+    await expect.poll(() => prisma.triageEvidenceImage.count({ where: { sessionId: ses.id, withdrawnAt: { not: null } } })).toBe(1);
+    expect(await (await post()).json()).toMatchObject({ accepted_images: 0, skipped_withdrawn: 1 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });
