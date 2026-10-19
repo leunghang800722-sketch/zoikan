@@ -212,7 +212,7 @@ export function dryFixture(): { persons: DryPerson[] } {
     persons: [
       { p: base(1), truth: truth(1), docs: true }, // 全部欄兩讀一致 → 建議
       { p: base(2, { hkid: lf('Z900001(3)', 'review'), nameZh: lf('測試乙', 'review') }), truth: truth(2), docs: true, fake: { id_card: { a: { hkid: 'Z900001(3)' }, b: { hkid: 'Z900001(3)' } } } }, // check digit 錯 → invalid_format
-      { p: base(3, { reasons: ['mismatch_nameZh'] }), truth: truth(3), docs: true }, // 打字名單唔一致 → 姓名唔建議
+      { p: base(3, { reasons: ['mismatch_nameZh'] }), truth: truth(3), docs: true, listMatch: true }, // 打字名單唔一致 → 姓名唔建議
       { p: base(4), truth: truth(4), docs: false }, // 冇文件
       { p: base(5), truth: truth(5), docs: true, fake: { id_card: { a: { dob: '1990-01-15' }, b: { dob: '1991-02-03' } } } }, // 兩讀唔一致 → 唔建議（仲裁預設讀啱 → arbiter）
       // TE-4：嵌入身份證副本（倒轉）＋印刷佐證
@@ -229,6 +229,7 @@ export function dryFixture(): { persons: DryPerson[] } {
       { p: base(17), truth: truth(17), docs: true, fake: { onboarding_form: { a: { name_zh: '測試甲乙', hkid: null }, b: { name_zh: '測試甲乙', hkid: null } } } }, // 只得中文可比、差字而冇硬證據（form 冇 hkid）→ medium＋form_differs
       { p: base(18), truth: truth(18), docs: true, formEn: 'DIFFERENT PERSON', fake: { onboarding_form: { a: { name_zh: '測試乙' }, b: { name_zh: '測試乙' } } } }, // 兄弟姊妹：中文差 1 字、英文唔同 → conflict
       { p: base(19, { reasons: ['mismatch_nameZh'] }), truth: truth(19), docs: true, fake: { onboarding_form: { a: { hkid: null }, b: { hkid: null } } } }, // TE-12：打字名單唔一致、入職表冇 hkid（冇硬證據）→ 照出建議但降 medium＋typed_list_differs
+      { p: base(20, { reasons: ['mismatch_nameZh'] }), truth: truth(20), docs: true }, // TE-12.1：整包配錯人——卡＋入職表 hkid 互相一致，但冇名單佐證 → medium 留人
       { p: base(16), truth: truth(16), docs: true, listMatch: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、名單一致 → high
       { p: base(6, { nameZh: lf('測試乙', 'confirmed'), nameEn: lf('TEST ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001116', 'confirmed'), address: lf('舊地址', 'confirmed') }), truth: truth(6), docs: true }, // 冇 review 欄 → 唔重讀
     ],
@@ -516,7 +517,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
             { nameZh: r.formReads.name_zh ?? null, nameEn: auxEn, dob: dobCanon(r.formReads.dob) },
             hard,
           );
-          o.proposals = applyTypedListEvidence(applyFormGrade(o.proposals, grade, listOk), hard);
+          o.proposals = applyTypedListEvidence(applyFormGrade(o.proposals, grade, listOk), listOk) // TE-12.1：typed_list_differs 只認獨立於文件包嘅名單佐證（listOk）;
           if (grade === 'conflict') summary.form_conflict += 1;
           else if (o.proposals.some((x) => x.flags?.includes('card_unverified'))) summary.card_unverified += 1;
           else if (grade === 'minor_unproven') summary.form_unproven += 1;

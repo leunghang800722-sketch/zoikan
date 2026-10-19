@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, applyTypedListEvidence, diagnosePerson, OCR_PIPELINE_VERSION, refsHashOf, type DocCache, type DocPage, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
+import { addOutcome, buildStaffNoIndex, docIdsForPerson, emptySummary, needsReread, pickDocPages, proposeFromPicks, summaryLines, applyTypedListEvidence, OCR_PIPELINE_VERSION, refsHashOf, type DocCache, type DocPage, type ExtractRow, type PkgPerson } from "../scripts/staff-import/lib/triage-reread-core";
 import { fileDocCache, parseArgs, resolveSourcePage, run, main } from "../scripts/staff-import/19-triage-reread";
 import { ArgError } from "../scripts/staff-import/lib/eval-ocr-core";
 import { proposalsBodySchema } from "@/lib/triage/proposals";
@@ -79,6 +79,10 @@ describe("proposeFromPicks：保守規則", () => {
     expect(applyTypedListEvidence(typed.proposals, false)[0]!.confidence).toBe("medium");
     expect(applyTypedListEvidence(typed.proposals, true)[0]!.confidence).toBe("high");
     expect(applyTypedListEvidence(typed.proposals, false)[1]!.confidence).toBe("high"); // 冇 typed_list_differs 嘅唔受影響
+    // TE-12.1：今次卡讀數同打字名單（package 值）一致＝舊導入 OCR 讀錯已修正 → high、唔加旗
+    const fixed = proposeFromPicks(person({ nameZh: lf("測試甲", "review"), reasons: ["mismatch_nameZh"] }), GOOD, NOW);
+    expect(fixed.proposals[0]).toMatchObject({ field: "nameZh", confidence: "high" });
+    expect(fixed.proposals[0]!.flags).toBeUndefined();
     // 仲裁介入嘅身份證欄、打字名單唔一致 → 照舊阻擋
     const arbTyped = proposeFromPicks(person({ reasons: ["mismatch_nameZh"] }), { name_zh: { doc: "id_card", result: fr("測試甲", "confirmed", "agree_b") } }, NOW);
     expect(arbTyped.skipped.typed_list_disagrees).toBe(1);
@@ -121,19 +125,21 @@ describe("揀頁／工號索引", () => {
 });
 
 describe("--dry 合成 manifest（fake client，無 API／無 data）", () => {
-  it("run：19 人入 14 人需重讀（TE-11.2／11.3 加 7 個入職表分級個案；TE-12 加 1 個打字名單無硬證據個案）、2 人冇文件；52 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
+  it("run：20 人入 15 人需重讀（TE-11.2／11.3 加 7 個入職表分級個案；TE-12 加 1 個打字名單無硬證據個案）、2 人冇文件；56 條建議；原因計數固定；輸出符合 server proposalsBodySchema；console 摘要冇值", async () => {
     const r = await run({ package: null, personFields: null, extract: null, index: null, docsDir: "x", out: null, dry: true, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: true, ocrDir: null, crosscheck: null, visionBin: null }, NOW);
-    expect(r.summary).toMatchObject({ persons_in_package: 19, persons_needing_reread: 14, persons_no_docs: 2, persons_processed: 12, persons_failed: 0, persons_with_proposals: 12, proposals_total: 52, form_differs: 1, form_conflict: 3, card_unverified: 1, form_unproven: 1, typed_list_differs: 2, typed_list_differs_medium: 1 });
-    expect(r.summary.proposals_by_field).toEqual({ nameZh: 12, nameEn: 12, dateOfBirth: 12, phone: 4, address: 12 });
-    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 51, arbiter: 1 });
-    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 9 }); // TE-12：typed_list（身份證頁）同 arbiter_agree_a 唔再計入唔建議； TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
+    expect(r.summary).toMatchObject({ persons_in_package: 20, persons_needing_reread: 15, persons_no_docs: 2, persons_processed: 13, persons_failed: 0, persons_with_proposals: 13, proposals_total: 56, form_differs: 1, form_conflict: 3, card_unverified: 1, form_unproven: 1, typed_list_differs: 3, typed_list_differs_medium: 2 });
+    expect(r.summary.proposals_by_field).toEqual({ nameZh: 13, nameEn: 13, dateOfBirth: 13, phone: 4, address: 13 });
+    expect(r.summary.proposals_by_basis).toEqual({ two_reads: 55, arbiter: 1 });
+    expect(r.summary.not_proposed_reasons).toEqual({ not_confirmed: 10 }); // TE-12：typed_list（身份證頁）同 arbiter_agree_a 唔再計入唔建議； TE-11.2 新個案嘅電話 fake 讀數唔一致（只影響 phone，唔係分級對象）
     expect(r.summary.ocr_calls).toBeGreaterThan(0);
     expect(proposalsBodySchema.safeParse({ version: 1, summary: r.summary, proposals: r.proposals }).success).toBe(true);
     // TE-12：逐人診斷（唔記值）：每個要覆核嘅欄有 status／reason；冇文件／打字名單 flag／降 medium 都睇得到
     const d = (k: string) => r.summary.persons.find((x) => x.person_key === `dry-person-${k}`)!;
-    expect(r.summary.persons).toHaveLength(14);
+    expect(r.summary.persons).toHaveLength(15);
     expect(d("11").fields).toEqual({ nameZh: { status: "skipped", reason: "no_docs" } });
     expect(d("3").fields.nameZh).toEqual({ status: "proposed", reason: "proposed", confidence: "high", flags: ["typed_list_differs"] });
+    // TE-12.1：整包配錯人（卡＋入職表 hkid 互相一致、冇名單佐證）→ medium 留人；名單佐證（person 3）先 high
+    expect(d("20").fields.nameZh).toEqual({ status: "proposed", reason: "proposed", confidence: "medium", flags: ["typed_list_differs"] });
     expect(d("19").fields.nameZh).toEqual({ status: "proposed", reason: "proposed", confidence: "medium", flags: ["typed_list_differs"] });
     expect(d("19").fields.phone).toEqual({ status: "skipped", reason: "not_confirmed" });
     expect(d("19").staff_numbers).toEqual(["DRY19"]);
