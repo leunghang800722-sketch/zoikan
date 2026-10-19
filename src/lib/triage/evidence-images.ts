@@ -65,11 +65,12 @@ export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson
     if (!zh) out.add("name_zh");
     if (!zh && !en) out.add("name_en");
   };
-  // TE-7：包內全欄 missing（抽取失敗人）＋建人／核對類題型 → 加整頁原稿（field=page；需最高權限先睇到）
+  // TE-7：文件抽取失敗人（評級 fail，或六欄全空而且冇工號；同本機腳本 isFailedPerson 一致）＋建人／核對類題型 → 加整頁原稿（field=page；需最高權限先睇到）
   const pp = ev?.person;
   const allMissing = !!pp && ![pp.hkid, pp.nameZh, pp.nameEn, pp.dateOfBirth, pp.phone, pp.address].some((f) => !!f?.value?.trim()) && (pp.staffNumbers?.length ?? 0) === 0;
+  const failedPerson = !!pp && (pp.rating === "fail" || allMissing);
   const addPage = () => {
-    if (allMissing) out.add("page");
+    if (failedPerson) out.add("page");
   };
   switch (q.kind) {
     case "name_not_confirmed":

@@ -48,7 +48,7 @@ export const hanCount = (s: string): number => s.match(/\p{Script=Han}/gu)?.leng
 
 /**
  * TE-6：身份證號輸入框即時狀態。NFKC（全形英數／括號／空白）＋大寫＋去括號空白後：
- * 空＝empty；格式未齊（未成 1–2 字母＋6 數字＋檢查碼）；格式已經唔可能變合法（太長／數字開頭／有雜字元）＝bad_format＝partial；格式齊但 check digit 唔啱＝bad_check；合法＝valid（canon＝送出值）。
+ * 空＝empty；仲可以打落去變合法（未成 1–2 字母＋6 數字＋檢查碼）＝partial；格式已經唔可能變合法（太長／數字開頭／有雜字元）＝bad_format；格式齊但 check digit 唔啱＝bad_check；合法＝valid（canon＝送出值）。
  */
 export function hkidInputState(raw: string): { state: HkidInputState; canon: string | null } {
   const t = raw.normalize("NFKC");

@@ -852,7 +852,7 @@ describe("TE-1 證據裁圖", () => {
       for (const [i, f] of (["hkid", "name_zh", "name_en", "dob"] as const).entries()) await put(f, 230 + i);
       await put("phone", 235); // no_id_card 唔需要 phone
       expect(await imgCount({ sessionId: sid2 })).toBe(5);
-      expect(requiredFieldsFor(qn)).toEqual(["hkid"]);
+      expect([...requiredFieldsFor(qn)].sort()).toEqual(["hkid", "page"]); // rating fail 人另加整頁原稿（TE-7）
       // 讀取時只回 hkid 圖（舊版上載過嘅多餘欄圖唔顯示），多餘欄圖 GET 404
       const sv = await getSession(accountant, sid2);
       const qv = sv.body.questions.find((x: { kind: string }) => x.kind === "no_id_card");
@@ -878,7 +878,7 @@ describe("TE-1 證據裁圖", () => {
       expect(r0.status).toBe(200);
       const sid2 = r0.body.triage.session_id as string;
       const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
-      expect([...requiredFieldsFor(qn)].sort()).toEqual(["hkid", "name_en", "name_zh"]);
+      expect([...requiredFieldsFor(qn)].sort()).toEqual(["hkid", "name_en", "name_zh", "page"]);
       for (const [i, f] of (["hkid", "name_zh", "name_en"] as const).entries()) {
         const plain = J(250 + i);
         await insertEvidenceImage(prisma, { sessionId: sid2, questionId: null, personKey: qn.personKey!, guardId: null, field: f, docKind: "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
@@ -971,12 +971,19 @@ describe("TE-1 證據裁圖", () => {
         return { pf, sid2, qn, match, page, docRef, zipPages };
       }
 
-      it("requiredFieldsFor：全欄 missing（冇工號）＋建人／核對類題型加 page；有任何欄有值就唔加", () => {
+      it("requiredFieldsFor：抽取失敗人（rating fail，或全欄 missing 冇工號）＋建人／核對類題型加 page；rating 非 fail 而且有資料就唔加", () => {
         const ev = (person: object) => ({ v: 1, person, reasons: [], candidate_guard_ids: [] }) as never;
         const empty = { ...person({ hkid: null, name: "x" }), nameZh: F(null, "missing"), nameEn: F(null, "missing"), dateOfBirth: F(null, "missing"), address: F(null, "missing"), phone: F(null, "missing"), staffNumbers: [] };
         for (const kind of ["no_id_card", "hkid_not_confirmed", "ext_identity_check", "name_only_candidate", "field_review"]) expect(requiredFieldsFor({ kind, evidenceJson: ev(empty) } as never)).toContain("page");
-        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...empty, phone: F("91234567", "review") }) } as never)).not.toContain("page");
-        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...empty, staffNumbers: [{ scheme: "U", number: "U1" }] }) } as never)).not.toContain("page");
+        const some = { ...empty, phone: F("91234567", "review") };
+        const withNo = { ...empty, staffNumbers: [{ scheme: "U", number: "U1" }] };
+        // rating ok：有資料／有工號 → 唔需要；全空冇工號 → 需要
+        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...some, rating: "auto_ok" }) } as never)).not.toContain("page");
+        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...withNo, rating: "review" }) } as never)).not.toContain("page");
+        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...empty, rating: "auto_ok" }) } as never)).toContain("page");
+        // rating fail：即使有 1–3 個欄有值／有工號，都屬抽取失敗人 → 需要
+        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...some, rating: "fail" }) } as never)).toContain("page");
+        expect(requiredFieldsFor({ kind: "hkid_not_confirmed", evidenceJson: ev({ ...withNo, rating: "fail" }) } as never)).toContain("page");
         expect(requiredFieldsFor({ kind: "tel_only_candidate", evidenceJson: ev(empty) } as never)).not.toContain("page");
       });
 
@@ -1048,6 +1055,29 @@ describe("TE-1 證據裁圖", () => {
         expect((await getImage(accountant, pageId)).status).toBe(403);
         // 雞頭／保安員硬性 deny
         expect((await getImage(broker, pageId)).status).toBe(403);
+      });
+
+      it("rating fail 但有部分欄／工號嘅人：page 照需要（上載收、題 open 時保留）；該人冇 open／skipped 題需要 page 時即刪（deleteUnneeded）", async () => {
+        await seed();
+        const base = person({ hkid: null, name: "x", nos: ["U90061"], rating: "fail" }); // 有工號、有 phone 以外嘅資料（出生日期 confirmed），但 rating fail
+        const pf = { ...base, nameZh: F(null, "missing"), nameEn: F(null, "missing"), phone: F("91234567", "review") } as PackagePerson;
+        const r0 = await applyPkg(accountant, [pf]);
+        expect(r0.status).toBe(200);
+        const sid2 = r0.body.triage.session_id as string;
+        const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
+        expect(requiredFieldsFor(qn)).toContain("page");
+        const match = { staff_numbers: ["U90061"] };
+        const b = fakeJpeg(1200, 1600, { seed: 901, pad: 200 * 1024 });
+        const f = entryName(b);
+        const zip = await buildZip({ [f]: b, "manifest.json": JSON.stringify({ version: 1, items: [{ file: f, field: "page", doc_kind: "full_page", priority: 1, page_no: 1, match }] }) });
+        expect((await upload(accountant, sid2, zip)).body).toMatchObject({ accepted_images: 1 });
+        expect(await imgCount({ sessionId: sid2, field: "page" })).toBe(1);
+        // 題仍 open：deleteUnneeded 唔刪
+        expect(await deleteUnneeded(prisma, sid2, qn.personKey)).toBe(0);
+        // 題答咗／冇題需要：即刪
+        await prisma.triageQuestion.update({ where: { id: qn.id }, data: { status: "answered" } });
+        expect(await deleteUnneeded(prisma, sid2, qn.personKey)).toBe(1);
+        expect(await imgCount({ sessionId: sid2, field: "page" })).toBe(0);
       });
 
       it("答題即刪：補完資料答題後整頁原稿圖一併刪；跳過題縮到 ≤30 日", async () => {
