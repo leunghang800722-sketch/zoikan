@@ -41,16 +41,23 @@ export function hkidCheckDigitValid(raw: string | null | undefined): boolean {
 }
 
 
-export type HkidInputState = "empty" | "partial" | "bad_check" | "valid";
+export type HkidInputState = "empty" | "partial" | "bad_format" | "bad_check" | "valid";
+
+/** TE-6：漢字個數（含擴展 A／B、香港增補字，例如「𠝹」）；輸入框「中文姓名 ≥2 個中文字」用。 */
+export const hanCount = (s: string): number => s.match(/\p{Script=Han}/gu)?.length ?? 0;
 
 /**
  * TE-6：身份證號輸入框即時狀態。NFKC（全形英數／括號／空白）＋大寫＋去括號空白後：
- * 空＝empty；格式未齊（未成 1–2 字母＋6 數字＋檢查碼）＝partial；格式齊但 check digit 唔啱＝bad_check；合法＝valid（canon＝送出值）。
+ * 空＝empty；格式未齊（未成 1–2 字母＋6 數字＋檢查碼）；格式已經唔可能變合法（太長／數字開頭／有雜字元）＝bad_format＝partial；格式齊但 check digit 唔啱＝bad_check；合法＝valid（canon＝送出值）。
  */
 export function hkidInputState(raw: string): { state: HkidInputState; canon: string | null } {
   const t = raw.normalize("NFKC");
   if (!t.trim()) return { state: "empty", canon: null };
   const canon = canonicalHkid(t);
-  if (!canon) return { state: "partial", canon: null };
+  if (!canon) {
+    // 長度超出／出現唔屬身份證嘅字元／次序唔對（例如數字開頭、多咗一位）→ 格式唔啱；仲可以打落去先係「未齊」
+    const u = t.toUpperCase().replace(/[\s　()（）]/g, "");
+    return { state: /^[A-Z]{1,2}\d{0,6}[0-9A]?$/.test(u) && u.length <= 9 ? "partial" : "bad_format", canon: null };
+  }
   return hkidCheckDigitValid(canon) ? { state: "valid", canon } : { state: "bad_check", canon };
 }

@@ -3,7 +3,7 @@
 // 一條一條問：證據卡 → 揀選項（系統列舉，唔收自由指令）→「預覽影響」→「確認寫入」；
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
-import { hkidInputState } from "@/lib/guards/hkid-pure";
+import { hanCount, hkidInputState } from "@/lib/guards/hkid-pure";
 import { EvidenceImages, EvidenceSection, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
@@ -291,6 +291,7 @@ function HkidHint({ raw }: { raw: string }) {
   const { state } = hkidInputState(raw);
   if (state === "empty") return <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-hkid-hint" data-state="empty">格式：A123456(3)</span>;
   if (state === "partial") return <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-hkid-hint" data-state="partial">格式：A123456(3)（未齊）</span>;
+  if (state === "bad_format") return <span className="mt-1 block text-zk-xs text-zk-danger-dark" data-testid="triage-hkid-hint" data-state="bad_format">格式唔啱：要 1–2 個英文字母＋6 位數字＋檢查碼，例 A123456(3)</span>;
   if (state === "bad_check") return <span className="mt-1 block text-zk-xs text-zk-danger" data-testid="triage-hkid-hint" data-state="bad_check">檢查碼唔啱，請對住裁圖再睇（括號內係檢查碼）</span>;
   return <span className="mt-1 block text-zk-xs text-zk-success" data-testid="triage-hkid-hint" data-state="valid">✓ 身份證號合法</span>;
 }
@@ -568,7 +569,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       lastAuto.current = "";
       return;
     }
-    if ((extraNames.name_zh.match(/[\u4e00-\u9fff]/g)?.length ?? 0) < 2 || lastAuto.current === namesKey) return;
+    if (hanCount(extraNames.name_zh) < 2 || lastAuto.current === namesKey) return;
     const t = setTimeout(() => {
       lastAuto.current = namesKey;
       void runPreview();
@@ -651,7 +652,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   // TE-6：即時驗證——身份證號 check digit、補姓名（中文 ≥2 個中文字）、其他文字輸入唔可空白
   const hkidSt = selected?.input === "hkid" ? hkidInputState(text) : null;
   const textOk = !needsText || (selected?.input === "hkid" ? hkidSt?.state === "valid" : text.trim().length > 0);
-  const nameZhOk = !extraShown || (extraNames.name_zh.match(/[\u4e00-\u9fff]/g)?.length ?? 0) >= 2;
+  const nameZhOk = !extraShown || hanCount(extraNames.name_zh) >= 2;
   const fieldsReady =
     (selected?.id !== "apply_fields" || Object.keys(fields).length > 0) &&
     (selected?.id !== "apply_ext_fields" || Object.keys(extChoices).length > 0) &&
@@ -929,7 +930,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                             setHash(null); // TE-3 S2：答案變咗，舊 hash 作廢；確認前會自動重新預覽
                           }}
                         />
-                        {nf.field === "name_zh" && (extraNames.name_zh.match(/[\u4e00-\u9fff]/g)?.length ?? 0) < 2 && (
+                        {nf.field === "name_zh" && hanCount(extraNames.name_zh) < 2 && (
                           <span className="mt-0.5 block text-zk-xs text-zk-danger-dark" data-testid="triage-extra-name_zh-hint">
                             中文姓名要最少 2 個中文字
                           </span>
