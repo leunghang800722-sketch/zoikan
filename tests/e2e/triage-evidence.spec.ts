@@ -321,4 +321,55 @@ test.describe("TE-1 覆核證據裁圖", () => {
     await expect.poll(() => prisma.guard.findUniqueOrThrow({ where: { id: existing.id }, select: { hkid: true } }).then((g) => g.hkid), { timeout: 15_000 }).toBe(p4.hkid);
     expect(await prisma.guard.count({ where: { nameZh: NM } })).toBe(1); // 連去舊嗰位，冇建新人
   });
+
+  test("TE-6 375px：身份證號即時驗證——check digit 唔啱 → 紅字＋預覽／確認 disabled；改正 → enable；全形括號＋小寫可過", async ({ page }) => {
+    await cleanup();
+    const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
+    const ses = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: REF, ownerUserId: boss.id, createdBy: boss.id } });
+    const p5 = { n: 5, name: `即時驗證員${CN}`, hkid: mkHkid(`66${RUN}5`), no: `ZE${RUN}5` };
+    await prisma.triageQuestion.create({
+      data: {
+        sessionId: ses.id,
+        kind: "no_id_card",
+        groupKey: "e2e-te1-5",
+        sort: 1,
+        title: "no_id_card",
+        personKey: serverPersonKey({ key: "e2e-te1-5", hkid: { value: null }, staffNumbers: [{ number: p5.no }] }),
+        evidenceJson: { v: 1, person: personOf(p5, { hkid: f(null, "missing"), rating: "fail" }), reasons: [], candidate_guard_ids: [] } as never,
+        optionsJson: [{ id: "enter_hkid", label: "輸入身份證號", input: "hkid" }, { id: "skip", label: "skip" }] as never,
+      },
+    });
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    await page.goto("/triage");
+    const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
+    await card.getByRole("button", { name: /繼續答/ }).click();
+    await page.getByRole("radio").first().check();
+    const input = page.getByPlaceholder("例：A123456(3)");
+    const hint = page.getByTestId("triage-hkid-hint");
+    const preview = page.getByTestId("triage-preview");
+    const confirm = page.getByTestId("triage-confirm");
+    await expect(hint).toHaveAttribute("data-state", "empty");
+    await expect(confirm).toBeDisabled();
+    await input.fill("Y66");
+    await expect(hint).toHaveAttribute("data-state", "partial");
+    await expect(confirm).toBeDisabled();
+    // 錯 check digit：把合法號碼最後一位改掉
+    const good = p5.hkid;
+    const last = good.slice(-1);
+    const wrong = `${good.slice(0, -1)}${last === "5" ? "6" : "5"}`;
+    await input.fill(wrong);
+    await expect(hint).toHaveAttribute("data-state", "bad_check");
+    await expect(hint).toContainText("檢查碼唔啱");
+    await expect(preview).toBeDisabled();
+    await expect(confirm).toBeDisabled();
+    // 改正（全形括號＋小寫）→ enable
+    await input.fill(`${good.slice(0, -1).toLowerCase()}（${last}）`);
+    await expect(hint).toHaveAttribute("data-state", "valid");
+    await expect(preview).toBeEnabled();
+    await expect(confirm).toBeEnabled();
+    await preview.click();
+    await expect(page.getByTestId("triage-impact")).toBeVisible(); // 送去 server 嘅係 canonical，預覽正常
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });

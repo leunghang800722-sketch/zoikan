@@ -3,6 +3,7 @@
 // 一條一條問：證據卡 → 揀選項（系統列舉，唔收自由指令）→「預覽影響」→「確認寫入」；
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
+import { hkidInputState } from "@/lib/guards/hkid-pure";
 import { EvidenceImages, EvidenceSection, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
@@ -285,6 +286,15 @@ function CandidateCard({ c, idx }: { c: Candidate; idx: number }) {
   );
 }
 
+/** TE-6：身份證號即時提示（灰＝格式未齊；紅＝check digit 唔啱；綠＝合法） */
+function HkidHint({ raw }: { raw: string }) {
+  const { state } = hkidInputState(raw);
+  if (state === "empty") return <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-hkid-hint" data-state="empty">格式：A123456(3)</span>;
+  if (state === "partial") return <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-hkid-hint" data-state="partial">格式：A123456(3)（未齊）</span>;
+  if (state === "bad_check") return <span className="mt-1 block text-zk-xs text-zk-danger" data-testid="triage-hkid-hint" data-state="bad_check">檢查碼唔啱，請對住裁圖再睇（括號內係檢查碼）</span>;
+  return <span className="mt-1 block text-zk-xs text-zk-success" data-testid="triage-hkid-hint" data-state="valid">✓ 身份證號合法</span>;
+}
+
 function ImpactCard({ impact }: { impact: Impact }) {
   return (
     <div className="space-y-2 rounded-lg border border-zk-primary/30 bg-zk-primary-tint-soft p-3 text-zk-base" data-testid="triage-impact">
@@ -523,7 +533,8 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     const decisionExtra = decision ? (decision.kind === "link" ? { link_guard_id: decision.guardId } : { create_new: true }) : {};
     const extraObj = { ...nameExtra, ...decisionExtra };
     const extra = Object.keys(extraObj).length > 0 ? { extra: extraObj } : {};
-    return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: text } : {}), ...extra };
+    const sendValue = selected.input === "hkid" ? (hkidInputState(text).canon ?? text) : text; // 全形括號／空格／小寫 → canonical 後送出
+    return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: sendValue } : {}), ...extra };
   }
 
   async function runPreview(): Promise<{ hash: string; impact: Impact } | null> {
@@ -557,7 +568,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       lastAuto.current = "";
       return;
     }
-    if (!extraNames.name_zh.trim() || lastAuto.current === namesKey) return;
+    if ((extraNames.name_zh.match(/[\u4e00-\u9fff]/g)?.length ?? 0) < 2 || lastAuto.current === namesKey) return;
     const t = setTimeout(() => {
       lastAuto.current = namesKey;
       void runPreview();
@@ -637,6 +648,10 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   }
 
   const needsText = !!selected?.input && selected.input !== "guard_search";
+  // TE-6：即時驗證——身份證號 check digit、補姓名（中文 ≥2 個中文字）、其他文字輸入唔可空白
+  const hkidSt = selected?.input === "hkid" ? hkidInputState(text) : null;
+  const textOk = !needsText || (selected?.input === "hkid" ? hkidSt?.state === "valid" : text.trim().length > 0);
+  const nameZhOk = !extraShown || (extraNames.name_zh.match(/[\u4e00-\u9fff]/g)?.length ?? 0) >= 2;
   const fieldsReady =
     (selected?.id !== "apply_fields" || Object.keys(fields).length > 0) &&
     (selected?.id !== "apply_ext_fields" || Object.keys(extChoices).length > 0) &&
@@ -647,7 +662,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     if (!q || check === "fill" || check === "new") return false;
     return f === "dateOfBirth" || f === "address" ? !q.evidence.pii_update : f === "nameZh" || f === "nameEn" ? !q.evidence.guard_update : false;
   };
-  const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy;
+  const canPreview = !!selected && selected.id !== "skip" && textOk && nameZhOk && fieldsReady && !busy;
   const suppNow = !!q && isSupp(q.kind);
   // 總數＝已答＋仍然未答（身份題答完補開跟進題後都計到）
   const liveTotals = !queueReady || !cnt ? null : { imp: done.imp + impRemaining, sup: done.sup + supRemaining };
@@ -777,6 +792,12 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                 setHash(null);
                               }}
                             />
+                          )}
+                          {choice === val && o.input === "hkid" && <HkidHint raw={text} />}
+                          {choice === val && o.input && o.input !== "guard_search" && o.input !== "hkid" && !text.trim() && (
+                            <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-text-hint">
+                              請輸入內容
+                            </span>
                           )}
                           {choice === val && o.input === "guard_search" && <GuardSearch onPick={(g) => { setPickedGuard(g); setImpact(null); setHash(null); }} />}
                           {choice === val && o.id === "assign_bank" && (
@@ -908,6 +929,11 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                             setHash(null); // TE-3 S2：答案變咗，舊 hash 作廢；確認前會自動重新預覽
                           }}
                         />
+                        {nf.field === "name_zh" && (extraNames.name_zh.match(/[\u4e00-\u9fff]/g)?.length ?? 0) < 2 && (
+                          <span className="mt-0.5 block text-zk-xs text-zk-danger-dark" data-testid="triage-extra-name_zh-hint">
+                            中文姓名要最少 2 個中文字
+                          </span>
+                        )}
                       </label>
                     </div>
                   ))}
