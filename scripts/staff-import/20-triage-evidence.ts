@@ -51,13 +51,19 @@ import {
   type OverflowHit,
   type Rotation,
   evidenceFieldsOf,
+  imageOk,
+  isFailedPerson,
   magickOutArgs,
   matchOfPerson,
+  PAGE_JPEG_QUALITY_STEPS,
+  pageMagickArgs,
+  type PersonDocRef,
   planRequests,
   type CropRequest,
   type EvidenceItem,
 } from './lib/triage-evidence-core';
 import { inBox } from './lib/embedded-card';
+import { MAX_PAGES_PER_PERSON } from '@/lib/triage/evidence-format';
 import { buildStaffNoIndex, docIdsForPerson, pickDocPages, type DocPage, type ExtRow, type ExtractRow, type PkgPerson } from './lib/triage-reread-core';
 import { resolveSourcePage } from './19-triage-reread';
 
@@ -80,12 +86,14 @@ export interface Args {
   concurrency: number;
   /** TE-1.7：唔做 Vision 驗證 */
   noVerify: boolean;
+  /** TE-7：對抽取失敗人（rating fail／全欄 missing）將每頁渲染成整頁原稿暫存圖（≤8 頁、長邊 ≤1600、≤400 KB）一併上載 */
+  fullPagesForFailed: boolean;
   /** TE-1.7：vision-ocr 執行檔（要支援 --fast）；預設由 vision-ocr.swift 編譯到 os.tmpdir */
   visionBin: string | null;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', ocrDir: null, existingCrops: [], out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, noVerify: false, visionBin: null };
+  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', ocrDir: null, existingCrops: [], out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, noVerify: false, visionBin: null, fullPagesForFailed: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => {
@@ -103,6 +111,7 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (k === '--out') a.out = v();
     else if (k === '--dry') a.dry = true;
     else if (k === '--no-verify') a.noVerify = true;
+    else if (k === '--full-pages-for-failed') a.fullPagesForFailed = true;
     else if (k === '--vision-bin') a.visionBin = v();
     else if (k === '--only-key') a.onlyKey = v();
     else if (k === '--limit') {
@@ -491,8 +500,11 @@ export interface Stats {
   mismatch_hist: Record<string, [number, number, number, number]>;
   zips: number;
   zip_bytes: number;
+  /** TE-7：整頁原稿輸出頁數／跳過頁數（壓唔到 ≤400 KB 或渲染失敗） */
+  full_pages_out: number;
+  full_pages_skipped: number;
 }
-export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, page_orientation_followed: 0, second_stage_pages: 0, page_oriented_pages: 0, skipped_by_field: {}, mismatch_hist: {}, zips: 0, zip_bytes: 0 });
+export const emptyStats = (): Stats => ({ persons_total: 0, persons_with_fields: 0, persons_no_docs: 0, persons_failed: 0, requests_total: 0, from_existing: 0, live_cropped: 0, images_out: 0, by_field: {}, by_doc_priority: {}, skipped: {}, existing_ignored_entries: 0, verified: 0, unverified: 0, size_capped: 0, page_orientation_followed: 0, second_stage_pages: 0, page_oriented_pages: 0, skipped_by_field: {}, mismatch_hist: {}, zips: 0, zip_bytes: 0, full_pages_out: 0, full_pages_skipped: 0 });
 const bump = (r: Record<string, number>, k: string) => {
   r[k] = (r[k] ?? 0) + 1;
 };
@@ -562,6 +574,9 @@ export interface PersonInput {
   extra?: Partial<Record<EvidenceField, string[]>>;
   /** TE-2：呢個人所有文件嘅所有頁（唔理導入分類）——搵嵌入式身份證、印刷身份證號 */
   scanPages?: { docId: string; page: number }[];
+  /** TE-7：來源檔案線索（file_name 係 Drive 檔名）＋全部頁（含入職表，唔含空白頁）供整頁原稿；只對抽取失敗人 */
+  docRef?: { file_name: string; page_count: number; pages_by_kind: Record<string, number> };
+  allPages?: { docId: string; page: number }[];
 }
 
 const rank = (f: EvidenceField): number => (f === 'hire_date' ? 2 : f === 'name_zh' ? 1 : 0);
@@ -579,11 +594,23 @@ export function crossNameOk(p: PkgPerson, pageLines: readonly OcrLine[]): boolea
   return names.some((n) => scoreAgainst(n.field, text, n.value) >= 0.5);
 }
 
+/** TE-7：整頁 png → JPEG（長邊 ≤1600、-strip、≤400 KB；質素梯級下調）。壓唔到＝null。 */
+export async function pageJpeg(png: string, tmp: string): Promise<Uint8Array | null> {
+  for (const q of PAGE_JPEG_QUALITY_STEPS) {
+    const out = path.join(tmp, `pg-${q}-${Math.random().toString(36).slice(2)}.jpg`);
+    await sh(MAGICK, [png, ...pageMagickArgs(q), out]);
+    const bytes = new Uint8Array(await readFile(out));
+    await rm(out, { force: true });
+    if (imageOk(bytes, true)) return bytes;
+  }
+  return null;
+}
+
 /** 掃描頁假設嘅頁面闊高比（A4 直向）；實際裁圖用真實像素尺寸 */
 const SCAN_ASPECT = 210 / 297;
 
 /** 核心：每人 → 請求 → 圖（現成優先；否則 OCR 幾何即時裁）→ items。純粹經 deps 做 IO。 */
-export async function produceItems(people: readonly PersonInput[], deps: Deps, stats: Stats, opts: { concurrency?: number } = {}): Promise<EvidenceItem[]> {
+export async function produceItems(people: readonly PersonInput[], deps: Deps, stats: Stats, opts: { concurrency?: number; fullPages?: boolean } = {}): Promise<EvidenceItem[]> {
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'te1-'));
   const items: EvidenceItem[] = [];
   try {
@@ -591,11 +618,26 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const fields = evidenceFieldsOf(pi.person);
       if (fields.length === 0) return;
       stats.persons_with_fields += 1;
+      const match = matchOfPerson(pi.person);
+      // TE-7：抽取失敗人 → 整頁原稿暫存圖（方案 §14 例外）。每人 ≤8 頁；渲染 → 長邊 ≤1600 JPEG（-strip）≤400 KB；失敗計 full_pages_skipped
+      if (opts.fullPages && isFailedPerson(pi.person)) {
+        const pages = (pi.allPages ?? []).slice(0, MAX_PAGES_PER_PERSON);
+        for (const [i, d] of pages.entries()) {
+          const png = await deps.render({ type: 'id_card', docId: d.docId, page: d.page }).catch(() => null);
+          const bytes = png ? await pageJpeg(png, tmp).catch(() => null) : null;
+          if (png) await deps.cleanup(png);
+          if (!bytes) {
+            stats.full_pages_skipped += 1;
+            continue;
+          }
+          items.push({ bytes, field: 'page', docKind: 'full_page', priority: 1, pageNo: i + 1, match });
+          stats.full_pages_out += 1;
+        }
+      }
       if (pi.docs.length === 0 && !(pi.scanPages?.length)) {
         stats.persons_no_docs += 1;
         return;
       }
-      const match = matchOfPerson(pi.person);
       // name_zh（純中文，.fast 判唔準方向）排最後，先令其他欄有機會判到同頁方向
       // TE-2：一頁多文件——搵嵌入式身份證（冇整頁身份證副本時）同印刷身份證號行（任何頁，唔理導入分類）
       const needsId = fields.some((f) => f === 'hkid' || f === 'name_zh' || f === 'name_en' || f === 'dob');
@@ -845,7 +887,24 @@ async function loadLive(args: Args): Promise<Loaded> {
   // TE-2：每個人所有文件嘅所有頁（除入職表頁）——搵嵌入式身份證／印刷身份證號（唔理導入分類）
   const scanPagesOf = (person: PkgPerson) =>
     docIdsForPerson(person, staffIdx).flatMap((docId) => (extractBy.get(docId)?.pages ?? []).filter((pg) => !pg.kinds.includes('application_form') && !pg.kinds.includes('blank')).map((pg) => ({ docId, page: pg.page })));
-  return { people: persons.map((person) => ({ person, docs: pickDocPages(docIdsForPerson(person, staffIdx), extractBy), extra: extraOf(person), scanPages: scanPagesOf(person) })), deps, existingIgnored: ex.ignored, personsTotal };
+  // TE-7：抽取失敗人嘅來源檔案線索＋全部頁（唔含空白頁）
+  const docRefOf = (person: PkgPerson): Pick<PersonInput, 'docRef' | 'allPages'> => {
+    if (!isFailedPerson(person)) return {};
+    const docIds = docIdsForPerson(person, staffIdx);
+    const pages = docIds.flatMap((docId) => (extractBy.get(docId)?.pages ?? []).map((pg) => ({ docId, pg })));
+    if (docIds.length === 0) return {};
+    const pages_by_kind: Record<string, number> = {};
+    for (const { pg } of pages) {
+      const k = pg.primary ?? pg.kinds[0] ?? 'other';
+      pages_by_kind[k] = (pages_by_kind[k] ?? 0) + 1;
+    }
+    const file_name = [...new Set(docIds.map((d) => fileOf.get(d)).filter((x): x is string => !!x))].join('、').slice(0, 200);
+    return {
+      docRef: { file_name, page_count: pages.length, pages_by_kind },
+      allPages: pages.filter(({ pg }) => !pg.kinds.includes('blank')).map(({ docId, pg }) => ({ docId, page: pg.page })),
+    };
+  };
+  return { people: persons.map((person) => ({ person, docs: pickDocPages(docIdsForPerson(person, staffIdx), extractBy), extra: extraOf(person), scanPages: scanPagesOf(person), ...docRefOf(person) })), deps, existingIgnored: ex.ignored, personsTotal };
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,8 +1135,10 @@ export async function run(args: Args, injected?: { people: PersonInput[]; deps: 
   }
   if (!stats.persons_total) stats.persons_total = people.length;
   if (vision) deps = { ...deps, vision };
-  const items = await produceItems(people, deps, stats, { concurrency: args.dry ? 1 : args.concurrency });
-  const built = await buildEvidenceZips(items);
+  const items = await produceItems(people, deps, stats, { concurrency: args.dry ? 1 : args.concurrency, fullPages: args.fullPagesForFailed });
+  // TE-7：來源檔案線索（只對抽取失敗人）
+  const docRefs: PersonDocRef[] = people.filter((p) => p.docRef && isFailedPerson(p.person)).map((p) => ({ match: matchOfPerson(p.person), doc_ref: p.docRef! }));
+  const built = await buildEvidenceZips(items, { docRefs });
   stats.zips = built.zips.length;
   stats.zip_bytes = built.zips.reduce((a, z) => a + z.byteLength, 0);
   return { items, zips: built.zips, stats };

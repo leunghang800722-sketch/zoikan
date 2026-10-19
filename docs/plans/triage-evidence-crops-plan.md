@@ -109,3 +109,5 @@ preview `needs_decision`（候選卡、權限過濾）＋answer `extra.link_guar
 
 ## 14. TE-7 空資料題卡 fallback＋reason label 全覆蓋
 PersonCard 全空→明確 fallback（原因人話、docInfo、下一步）；missing 欄顯示「—（未讀到）」；reason-labels.ts 覆蓋全部 code；裁圖區 0 張顯示一行。
+
+**§14.1 整頁原稿暫存圖（TE-1「不存成頁」嘅例外，老闆明確要求）**：範圍只限**抽取失敗人**（rating fail 或六欄全空、冇工號）；`--full-pages-for-failed` 先出（預設關）；每人 ≤8 頁、空白頁跳過、長邊 ≤1600、≤400 KB、`-strip`；應用層加密同欄位裁圖一樣；**只有同時有個人資料 view＋銀行資料 view 嘅人睇到**；答題即刪（`page` 納入 requiredFieldsFor）、跳過 30 日、最長 180 日；唔入 ai schema；每次睇圖寫 `triage_evidence_view` 計數 audit。另 manifest `people[].doc_ref` 提供來源檔案線索（只補唔覆蓋）。

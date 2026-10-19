@@ -20,6 +20,8 @@ const DAY_MS = 86_400_000;
 // 常數
 // ---------------------------------------------------------------------------
 export {
+  MAX_PAGES_PER_PERSON,
+  MAX_PAGE_IMAGE_BYTES,
   DOC_KINDS,
   DOC_KIND_LABEL,
   EVIDENCE_FIELDS,
@@ -63,6 +65,12 @@ export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson
     if (!zh) out.add("name_zh");
     if (!zh && !en) out.add("name_en");
   };
+  // TE-7：包內全欄 missing（抽取失敗人）＋建人／核對類題型 → 加整頁原稿（field=page；需最高權限先睇到）
+  const pp = ev?.person;
+  const allMissing = !!pp && ![pp.hkid, pp.nameZh, pp.nameEn, pp.dateOfBirth, pp.phone, pp.address].some((f) => !!f?.value?.trim()) && (pp.staffNumbers?.length ?? 0) === 0;
+  const addPage = () => {
+    if (allMissing) out.add("page");
+  };
   switch (q.kind) {
     case "name_not_confirmed":
       out.add(nameField());
@@ -70,14 +78,17 @@ export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson
     case "hkid_not_confirmed":
       out.add("hkid");
       addNamesIfMissing();
+      addPage();
       break;
     case "no_id_card":
       // TE-3：問題係冇身份證號，所以身份證號裁圖（TE-2 曾帶埋姓名／出生日期，老闆話唔要）；包內冇姓名先加姓名圖（要補姓名先建到人）
       out.add("hkid");
       addNamesIfMissing();
+      addPage();
       break;
     case "name_only_candidate":
       out.add(nameField());
+      addPage();
       break;
     case "tel_only_candidate":
     case "dup_tel_across_persons":
@@ -88,12 +99,14 @@ export function requiredFieldsFor(q: Pick<TriageQuestion, "kind" | "evidenceJson
         const f = REVIEW_TO_EVIDENCE[r.field];
         if (f) out.add(f);
       }
+      addPage();
       break;
     case "ext_identity_check":
       // TE-3：確認身份——身份證號（另加 ext 欄：牌照號、入職日期；包內冇姓名先加姓名圖）
       out.add("hkid");
       addNamesIfMissing();
       addExt();
+      addPage();
       break;
     case "ext_field_conflict":
     case "ext_field_review":
@@ -117,6 +130,7 @@ export const EVIDENCE_META_SELECT = {
   field: true,
   docKind: true,
   priority: true,
+  pageNo: true,
   encVersion: true,
   width: true,
   height: true,
@@ -136,6 +150,8 @@ export interface EvidenceImageView {
   priority: number;
   width: number;
   height: number;
+  /** TE-7：整頁原稿頁碼 */
+  page_no?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,9 +188,10 @@ const INTERNAL_ROLES = ["老闆", "主管", "會計"];
 /** 讀者可以睇邊啲欄嘅證據圖（空 Set＝完全唔准）。雞頭／保安員硬性 deny。 */
 export async function viewableFields(actor: AuthedSession): Promise<Set<EvidenceField>> {
   if (!INTERNAL_ROLES.includes(actor.baseRole)) return new Set();
-  const [triage, pii, guard] = await Promise.all([hasPermission(actor, "導入分診", "view"), hasPermission(actor, "安員個人資料", "view"), hasPermission(actor, "安員", "view")]);
+  const [triage, pii, guard, bank] = await Promise.all([hasPermission(actor, "導入分診", "view"), hasPermission(actor, "安員個人資料", "view"), hasPermission(actor, "安員", "view"), hasPermission(actor, "安員銀行資料", "view")]);
   if (!triage) return new Set();
-  return new Set(EVIDENCE_FIELDS.filter((f) => (PII_FIELDS.includes(f) ? pii : guard)));
+  // TE-7：整頁原稿可能有相片、銀行資料——要同時有「保安員個人資料:view」＋「保安員銀行資料:view」
+  return new Set(EVIDENCE_FIELDS.filter((f) => (f === "page" ? pii && bank : PII_FIELDS.includes(f) ? pii : guard)));
 }
 
 export async function canViewField(actor: AuthedSession, field: EvidenceField): Promise<boolean> {
@@ -223,6 +240,8 @@ export interface NewEvidenceImage {
   field: EvidenceField;
   docKind: DocKind;
   priority: number;
+  /** TE-7：整頁原稿頁碼 */
+  pageNo?: number | null;
   plain: Uint8Array;
   info: ImageInfo;
   createdBy: string;
@@ -243,6 +262,7 @@ export async function insertEvidenceImage(db: Db, n: NewEvidenceImage): Promise<
       field: n.field,
       docKind: n.docKind,
       priority: n.priority,
+      pageNo: n.pageNo ?? null,
       imageBytes: new Uint8Array(enc.bytes),
       iv: new Uint8Array(enc.iv),
       tag: new Uint8Array(enc.tag),
@@ -277,13 +297,18 @@ export async function loadImageBytes(id: string): Promise<{ bytes: Buffer; mime:
 export interface EvidenceMatch {
   hkid?: string | null;
   staff_numbers?: string[];
+  /** TE-7：全無身份證號／工號嘅人（抽取失敗）——用包內 key 推 personKey（serverPersonKey 同一函數）；只喺 hkid、工號都冇時先採用 */
+  package_key?: string | null;
 }
 
 /** match 推導嘅 personKey；hkid 唔合法而又冇工號＝null（唔准用包內 key 兜底）。 */
 export function derivePersonKey(m: EvidenceMatch): string | null {
   const hasHkid = !!canonicalHkid(m.hkid?.trim() || null);
   const nos = (m.staff_numbers ?? []).filter((x) => x.trim());
-  if (!hasHkid && nos.length === 0) return null;
+  if (!hasHkid && nos.length === 0) {
+    const pk = m.package_key?.trim();
+    return pk ? serverPersonKey({ key: pk, hkid: { value: null }, staffNumbers: [] }) : null;
+  }
   return serverPersonKey({ key: "evidence-match", hkid: { value: m.hkid ?? null }, staffNumbers: nos.map((number) => ({ number })) });
 }
 
@@ -315,13 +340,28 @@ export async function evidenceViewsFor(actor: AuthedSession, rows: readonly Tria
   const imgs = await prisma.triageEvidenceImage.findMany({
     where: { sessionId: { in: [...new Set(withKey.map((r) => r.sessionId))] }, personKey: { in: [...new Set(withKey.map((r) => r.personKey!))] } },
     select: EVIDENCE_META_SELECT,
-    orderBy: [{ priority: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    orderBy: [{ priority: "asc" }, { pageNo: "asc" }, { createdAt: "asc" }, { id: "asc" }],
   });
   if (imgs.length === 0) return out;
   for (const r of withKey) {
     const need = new Set(requiredFieldsFor(r).filter((f) => can.has(f)));
     const mine = imgs.filter((i) => i.sessionId === r.sessionId && i.personKey === r.personKey && need.has(i.field as EvidenceField));
-    if (mine.length) out.set(r.id, mine.map((i) => ({ id: i.id, field: i.field as EvidenceField, doc_kind: i.docKind as DocKind, priority: i.priority, width: i.width, height: i.height })));
+    if (mine.length) out.set(r.id, mine.map((i) => ({ id: i.id, field: i.field as EvidenceField, doc_kind: i.docKind as DocKind, priority: i.priority, width: i.width, height: i.height, ...(i.field === "page" ? { page_no: i.pageNo } : {}) })));
+  }
+  return out;
+}
+
+/** TE-7：有整頁原稿但讀者冇權睇（冇「個人資料」＋「銀行資料」view）→ 每條題回頁數，題卡顯示「有 N 頁原稿，需最高權限查看」。 */
+export async function hiddenPageCounts(actor: AuthedSession, rows: readonly TriageQuestion[], restrictedKinds: ReadonlySet<string>): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const withKey = rows.filter((r) => r.personKey && (r.status === "open" || r.status === "skipped") && !restrictedKinds.has(r.kind) && requiredFieldsFor(r).includes("page"));
+  if (withKey.length === 0) return out;
+  const can = await viewableFields(actor);
+  if (can.has("page")) return out;
+  const groups = await prisma.triageEvidenceImage.groupBy({ by: ["sessionId", "personKey"], where: { field: "page", sessionId: { in: [...new Set(withKey.map((r) => r.sessionId))] }, personKey: { in: [...new Set(withKey.map((r) => r.personKey!))] } }, _count: { _all: true } });
+  for (const r of withKey) {
+    const n = groups.find((g) => g.sessionId === r.sessionId && g.personKey === r.personKey)?._count._all ?? 0;
+    if (n > 0) out.set(r.id, n);
   }
   return out;
 }

@@ -554,6 +554,8 @@ model TriageEvidenceImage {
   docKind    String        @map("doc_kind")
   /// 1＝優先來源（身份證／住址證明）、2＝退而求其次（入職表）
   priority   Int           @default(1)
+  /// TE-7：整頁原稿（field=page）嘅頁碼；欄位裁圖＝null
+  pageNo     Int?          @map("page_no")
   imageBytes Bytes         @map("image_bytes")
   iv         Bytes
   tag        Bytes

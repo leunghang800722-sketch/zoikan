@@ -4,7 +4,7 @@
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
 import { reasonLabel } from "@/lib/triage/reason-labels";
-import { EvidenceImages, EvidenceSection, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
+import { EvidenceImages, EvidenceSection, OriginalPages, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -62,6 +62,8 @@ interface Question {
   options: Option[];
   /** TE-1：原文件欄位裁圖 meta（唔含 bytes；圖由 GET /api/triage/evidence-images/:id 攞） */
   evidence_images?: EvidenceImageDto[];
+  /** TE-7：有整頁原稿但冇權限睇（頁數） */
+  evidence_pages_hidden?: number;
   evidence: {
     pii_visible: boolean;
     pii_update: boolean;
@@ -70,6 +72,7 @@ interface Question {
     bank_update: boolean;
     person: { hkid: Field; name_zh: Field; name_en: Field; date_of_birth: Field; phone: Field; address: Field; staff_numbers: string[]; ext: ExtView | null; doc_info?: { page_count: number; pages_by_kind: Record<string, number>; file_ext: string[] } | null } | null;
     reasons: string[];
+    doc_ref?: { file_name: string | null; page_count: number; pages_by_kind: Record<string, number> } | null;
     candidates: Candidate[];
     review_fields: { field: string; label: string; check: string }[];
     ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
@@ -111,6 +114,8 @@ const SUPP_KINDS = ["field_review", "ext_field_conflict", "ext_field_review"];
 const isSupp = (k: string) => SUPP_KINDS.includes(k);
 
 export { reasonLabel };
+
+const KIND_PAGE_LABEL: Record<string, string> = { id_card: "身份證", application_form: "入職表", address_proof: "住址證明", sia_permit: "牌照", bank: "銀行", address_declaration: "地址聲明", other: "其他", blank: "空白" };
 
 const STATUS_LABEL: Record<string, string> = { confirmed: "已確認", review: "待核對", missing: "冇資料" };
 const CHECK_LABEL: Record<string, string> = { hidden: "你冇權限睇現有資料",  fill: "現有資料冇，會補", differs: "同現有資料唔同", invalid_date: "日期唔合法", new: "新", held: "待你決定", add: "會加多一位", same: "同現有資料一樣", not_stored: "系統未儲存" };
@@ -217,7 +222,14 @@ function PersonCard({ q }: { q: Question }) {
             {di.file_ext.length > 0 ? `・類型 ${di.file_ext.join("、")}` : ""}
           </div>
         )}
+        {q.evidence.doc_ref && (
+          <div className="text-zk-sm text-zk-muted" data-testid="triage-doc-ref">
+            檔案：{q.evidence.doc_ref.file_name ?? "（你冇權限睇檔名）"}（{q.evidence.doc_ref.page_count} 頁
+            {Object.keys(q.evidence.doc_ref.pages_by_kind).length > 0 ? `：${Object.entries(q.evidence.doc_ref.pages_by_kind).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${KIND_PAGE_LABEL[k] ?? k} ${n}`).join("、")}` : ""}）
+          </div>
+        )}
         <div className="text-zk-sm text-zk-muted">下一步：請補交身份證副本／入職表再導入，或者人手輸入。</div>
+        <OriginalPages imgs={q.evidence_images ?? []} hidden={q.evidence_pages_hidden ?? 0} />
       </div>
     );
   }

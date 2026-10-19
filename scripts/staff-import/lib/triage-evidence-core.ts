@@ -13,6 +13,8 @@ import { findEmbeddedCards, inBox, isHkidFormatLine, type CardRegion } from './e
 import {
   FIELD_DOC_PRIORITY,
   MAX_IMAGE_BYTES,
+  MAX_PAGE_EDGE,
+  MAX_PAGE_IMAGE_BYTES,
   MAX_PER_FIELD,
   MAX_PER_PERSON,
   inspectImage,
@@ -49,8 +51,16 @@ export function evidenceFieldsOf(p: PkgPerson): EvidenceField[] {
 }
 
 /** manifest match：同一條 package 記錄（身份證值＋工號），即係同一個人嘅文件→裁圖→match（M7）。 */
-export function matchOfPerson(p: PkgPerson): { hkid: string | null; staff_numbers: string[] } {
-  return { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) };
+export function matchOfPerson(p: PkgPerson): { hkid: string | null; staff_numbers: string[]; package_key?: string } {
+  const m = { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) };
+  // TE-7：全無身份證號／工號（抽取失敗）——用包內 key 配對（server 用同一函數推 personKey）
+  return !m.hkid && m.staff_numbers.length === 0 && p.key ? { ...m, package_key: p.key } : m;
+}
+
+/** TE-7：抽取失敗人＝評級 fail，或者六個身份欄全部冇值（冇工號亦當失敗）。整頁原稿暫存圖淨係對呢批人。 */
+export function isFailedPerson(p: PkgPerson): boolean {
+  const empty = [p.hkid, p.nameZh, p.nameEn, p.dateOfBirth, p.phone, p.address].every((f) => !f?.value?.trim());
+  return p.rating === 'fail' || (empty && p.staffNumbers.length === 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -747,7 +757,7 @@ export function findPrintedHkidLines(lines: readonly OcrLine[], aspect: number, 
 // 3c. 裁圖內容驗證（Vision 讀數 vs 預期值）——純函數；讀出嘅文字只喺記憶體比對，唔寫 log／檔案
 // ---------------------------------------------------------------------------
 /** 通過門檻（按 --dry fixture 調過）：號碼／電話／日期 ≥0.7、姓名 ≥0.5、地址 ≥0.4 */
-export const VERIFY_THRESHOLD: Record<EvidenceField, number> = { hire_date: 0.7, hkid: 0.7, phone: 0.7, dob: 0.7, permit_no: 0.7, name_zh: 0.5, name_en: 0.5, address: 0.4 };
+export const VERIFY_THRESHOLD: Record<EvidenceField, number> = { hire_date: 0.7, hkid: 0.7, phone: 0.7, dob: 0.7, permit_no: 0.7, name_zh: 0.5, name_en: 0.5, address: 0.4, page: 0 };
 
 const alnum = (s: string): string => s.normalize('NFKC').toUpperCase().replace(/[^0-9A-Z]/g, '');
 const cjkChars = (s: string): string[] => [...s.normalize('NFKC')].filter((c) => /[一-鿿]/.test(c));
@@ -866,7 +876,9 @@ export interface EvidenceItem {
   field: EvidenceField;
   docKind: DocKind;
   priority: 1 | 2 | 3;
-  match: { hkid: string | null; staff_numbers: string[] };
+  match: { hkid: string | null; staff_numbers: string[]; package_key?: string };
+  /** TE-7：整頁原稿頁碼（field=page） */
+  pageNo?: number;
   /** Vision 驗證相似度 0–1（淨數字；冇驗證＝undefined） */
   verifyScore?: number;
 }
@@ -877,17 +889,29 @@ export const ZIP_MAX_BYTES = 7 * 1024 * 1024;
 export const entryNameOf = (bytes: Uint8Array): string => `${createHash('sha256').update(bytes).digest('hex').slice(0, 32)}.jpg`;
 
 /** 檢查單張圖符合伺服器規格（≤120 KB、JPEG header、冇 EXIF）。 */
-export const imageOk = (bytes: Uint8Array): boolean => bytes.byteLength > 0 && bytes.byteLength <= MAX_IMAGE_BYTES && inspectImage(bytes)?.mime === 'image/jpeg';
+export const imageOk = (bytes: Uint8Array, page = false): boolean => bytes.byteLength > 0 && bytes.byteLength <= (page ? MAX_PAGE_IMAGE_BYTES : MAX_IMAGE_BYTES) && inspectImage(bytes, { page })?.mime === 'image/jpeg';
+
+/** TE-7：整頁原稿 JPEG（長邊 ≤1600、-strip、≤400 KB；質素梯級下調）。回 null＝壓唔到。 */
+export const PAGE_JPEG_QUALITY_STEPS = [75, 65, 55, 45, 35] as const;
+export function pageMagickArgs(quality: number): string[] {
+  return ['-strip', '-resize', `${MAX_PAGE_EDGE}x${MAX_PAGE_EDGE}>`, '-colorspace', 'sRGB', '-sampling-factor', '4:2:0', '-quality', String(quality)];
+}
+
+/** TE-7：manifest.people 一條（來源檔案線索 doc_ref；file_name 係 Drive 檔名，可能含人名） */
+export interface PersonDocRef {
+  match: { hkid: string | null; staff_numbers: string[]; package_key?: string };
+  doc_ref: { file_name: string; page_count: number; pages_by_kind: Record<string, number> };
+}
 
 /** 分批：每 zip ≤300 張、≤7 MB（zip ≤8 MB 上限留餘地）；manifest 每個 item 帶 doc_kind＋priority＋match。 */
-export async function buildEvidenceZips(items: readonly EvidenceItem[], opts: { maxEntries?: number; maxBytes?: number } = {}): Promise<{ zips: Uint8Array[]; items: number }> {
+export async function buildEvidenceZips(items: readonly EvidenceItem[], opts: { maxEntries?: number; maxBytes?: number; docRefs?: readonly PersonDocRef[] } = {}): Promise<{ zips: Uint8Array[]; items: number }> {
   const maxEntries = opts.maxEntries ?? ZIP_MAX_ENTRIES;
   const maxBytes = opts.maxBytes ?? ZIP_MAX_BYTES;
   const batches: EvidenceItem[][] = [];
   let cur: EvidenceItem[] = [];
   let bytes = 0;
   for (const it of items) {
-    if (!imageOk(it.bytes)) continue;
+    if (!imageOk(it.bytes, it.field === 'page')) continue;
     if (cur.length >= maxEntries || (cur.length > 0 && bytes + it.bytes.byteLength > maxBytes)) {
       batches.push(cur);
       cur = [];
@@ -898,14 +922,16 @@ export async function buildEvidenceZips(items: readonly EvidenceItem[], opts: { 
   }
   if (cur.length) batches.push(cur);
   const zips: Uint8Array[] = [];
-  for (const b of batches) {
+  // 來源檔案線索（每人一條）放入第一個 zip；冇圖都有（人冇裁圖亦要俾老闆搵到檔案）
+  if (batches.length === 0 && (opts.docRefs?.length ?? 0) > 0) batches.push([]);
+  for (const [bi, b] of batches.entries()) {
     const z = new JSZip();
     const manifest = b.map((it) => {
       const file = entryNameOf(it.bytes);
       if (!z.file(file)) z.file(file, it.bytes);
-      return { file, field: it.field, doc_kind: it.docKind, priority: it.priority, match: it.match, ...(it.verifyScore !== undefined ? { verify_score: Math.round(it.verifyScore * 1000) / 1000 } : {}) };
+      return { file, field: it.field, doc_kind: it.docKind, priority: it.priority, ...(it.pageNo !== undefined ? { page_no: it.pageNo } : {}), match: it.match, ...(it.verifyScore !== undefined ? { verify_score: Math.round(it.verifyScore * 1000) / 1000 } : {}) };
     });
-    z.file('manifest.json', JSON.stringify({ version: 1, items: manifest }));
+    z.file('manifest.json', JSON.stringify({ version: 1, items: manifest, ...(bi === 0 && (opts.docRefs?.length ?? 0) > 0 ? { people: opts.docRefs } : {}) }));
     zips.push(await z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }));
   }
   return { zips, items: batches.reduce((a, b) => a + b.length, 0) };

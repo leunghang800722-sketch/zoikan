@@ -945,6 +945,121 @@ describe("TE-1 證據裁圖", () => {
       expect((await pv({ dob: "1990-05-07" })).status).toBe(400);
     });
 
+    describe("TE-7 整頁原稿暫存圖＋doc_ref（抽取失敗人）", () => {
+      /** 全欄 missing、冇身份證號、冇工號嘅人（抽取失敗）→ no_id_card 題 */
+      async function setupFailed() {
+        await seed();
+        const base = person({ hkid: null, name: "x", nos: [], rating: "fail" });
+        const pf = { ...base, nameZh: F(null, "missing"), nameEn: F(null, "missing"), dateOfBirth: F(null, "missing"), address: F(null, "missing"), phone: F(null, "missing") } as PackagePerson;
+        const r0 = await applyPkg(accountant, [pf]);
+        expect(r0.status).toBe(200);
+        const sid2 = r0.body.triage.session_id as string;
+        const qn = await prisma.triageQuestion.findFirstOrThrow({ where: { sessionId: sid2, kind: "no_id_card" } });
+        const match = { package_key: pf.key };
+        const page = (n: number, o: { pad?: number; w?: number; h?: number } = {}) => fakeJpeg(o.w ?? 1200, o.h ?? 1600, { seed: 300 + n, pad: o.pad ?? 300 * 1024 });
+        const docRef = { file_name: "測試檔案夾/入職文件.pdf", page_count: 3, pages_by_kind: { application_form: 1, other: 2 } };
+        const zipPages = async (pages: { bytes: Uint8Array; no: number }[], extra: object = {}) => {
+          const entries: Record<string, Uint8Array | string> = {};
+          const items = pages.map((p) => {
+            const file = entryName(p.bytes);
+            entries[file] = p.bytes;
+            return { file, field: "page", doc_kind: "full_page", priority: 1, page_no: p.no, match };
+          });
+          entries["manifest.json"] = JSON.stringify({ version: 1, items, people: [{ match, doc_ref: docRef }], ...extra });
+          return buildZip(entries);
+        };
+        return { pf, sid2, qn, match, page, docRef, zipPages };
+      }
+
+      it("requiredFieldsFor：全欄 missing（冇工號）＋建人／核對類題型加 page；有任何欄有值就唔加", () => {
+        const ev = (person: object) => ({ v: 1, person, reasons: [], candidate_guard_ids: [] }) as never;
+        const empty = { ...person({ hkid: null, name: "x" }), nameZh: F(null, "missing"), nameEn: F(null, "missing"), dateOfBirth: F(null, "missing"), address: F(null, "missing"), phone: F(null, "missing"), staffNumbers: [] };
+        for (const kind of ["no_id_card", "hkid_not_confirmed", "ext_identity_check", "name_only_candidate", "field_review"]) expect(requiredFieldsFor({ kind, evidenceJson: ev(empty) } as never)).toContain("page");
+        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...empty, phone: F("91234567", "review") }) } as never)).not.toContain("page");
+        expect(requiredFieldsFor({ kind: "no_id_card", evidenceJson: ev({ ...empty, staffNumbers: [{ scheme: "U", number: "U1" }] }) } as never)).not.toContain("page");
+        expect(requiredFieldsFor({ kind: "tel_only_candidate", evidenceJson: ev(empty) } as never)).not.toContain("page");
+      });
+
+      it("manifest 驗證：page 項要有 page_no、field=page 同 doc_kind=full_page 要成對；package_key 單獨可作 match", async () => {
+        const { page, match, zipPages } = await setupFailed();
+        const b = page(1);
+        const f = entryName(b);
+        const mk = (item: object) => buildZip({ [f]: b, "manifest.json": JSON.stringify({ version: 1, items: [{ file: f, priority: 1, match, ...item }] }) });
+        await expect(readEvidenceZip(await mk({ field: "page", doc_kind: "full_page" }))).rejects.toMatchObject({ status: 400 }); // 冇 page_no
+        await expect(readEvidenceZip(await mk({ field: "hkid", doc_kind: "full_page", page_no: 1 }))).rejects.toMatchObject({ status: 400 });
+        await expect(readEvidenceZip(await mk({ field: "page", doc_kind: "id_card", page_no: 1 }))).rejects.toMatchObject({ status: 400 });
+        const ok = await readEvidenceZip(await zipPages([{ bytes: b, no: 1 }]));
+        expect(ok.manifest.items).toHaveLength(1);
+        expect(ok.images.get(f)!.byteLength).toBeGreaterThan(120 * 1024); // 整頁放寬到 400 KB
+      });
+
+      it("上載：尺寸／大小規格（≤400 KB、長邊 ≤1600）、頁數上限 8（另計）、doc_ref 寫入唔覆蓋；dry 同 apply 同計數；圖加密落庫帶 page_no", async () => {
+        const { sid2, page, zipPages, qn } = await setupFailed();
+        const good = [1, 2].map((n) => ({ bytes: page(n), no: n }));
+        const zip = await zipPages([...good, { bytes: page(3, { pad: 410 * 1024 }), no: 3 }, { bytes: page(4, { w: 1000, h: 1700 }), no: 4 }]);
+        const dry = await upload(accountant, sid2, zip, true);
+        expect(dry.status).toBe(200);
+        expect(dry.body).toMatchObject({ accepted_images: 2, skipped_invalid_image: 2, doc_refs_set: 1 });
+        expect(await imgCount({ sessionId: sid2, field: "page" })).toBe(0);
+        const r = await upload(accountant, sid2, zip);
+        expect(r.body).toMatchObject({ accepted_images: 2, skipped_invalid_image: 2, doc_refs_set: 1 });
+        const rows = await prisma.triageEvidenceImage.findMany({ where: { sessionId: sid2, field: "page" }, orderBy: { pageNo: "asc" } });
+        expect(rows.map((x) => [x.pageNo, x.docKind, x.priority])).toEqual([[1, "full_page", 1], [2, "full_page", 1]]);
+        expect(Buffer.from(rows[0]!.imageBytes).includes(Buffer.from("JFIF"))).toBe(false); // 密文
+        // doc_ref 寫入題目 evidence；再上載唔同 doc_ref 唔覆蓋
+        const q1 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } });
+        expect((q1.evidenceJson as { doc_ref?: { page_count: number } }).doc_ref?.page_count).toBe(3);
+        const again = await zipPages([{ bytes: page(6), no: 6 }]);
+        const r2 = await upload(accountant, sid2, again);
+        expect(r2.body.doc_refs_set).toBe(0); // 已有 doc_ref＝只補唔覆蓋
+        expect(((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).evidenceJson as { doc_ref: { file_name: string } }).doc_ref.file_name).toBe("測試檔案夾/入職文件.pdf");
+        expect(await imgCount({ sessionId: sid2, field: "page" })).toBe(3);
+      });
+
+      it("每人 ≤8 頁（另計，唔食 18 張裁圖額度）", async () => {
+        const { sid2, page, zipPages } = await setupFailed();
+        const r = await upload(accountant, sid2, await zipPages(Array.from({ length: 10 }, (_, i) => ({ bytes: page(10 + i), no: i + 1 }))));
+        expect(r.body).toMatchObject({ accepted_images: 8, skipped_over_limit: 2 });
+      });
+
+      it("權限：整頁原稿要「個人資料:view」＋「銀行資料:view」；冇權限嘅人 DTO 唔回圖、回頁數；GET 圖 403；有權限（老闆）見到圖＋可讀", async () => {
+        const { sid2, page, zipPages, qn } = await setupFailed();
+        await upload(accountant, sid2, await zipPages([1, 2, 3].map((n) => ({ bytes: page(20 + n), no: n }))));
+        const ownerView = await getSession(owner, sid2);
+        const qo = ownerView.body.questions.find((x: { id: string }) => x.id === qn.id);
+        expect(qo.evidence_images.filter((i: { field: string }) => i.field === "page").map((i: { page_no: number }) => i.page_no)).toEqual([1, 2, 3]);
+        expect(qo.evidence_pages_hidden).toBe(0);
+        expect(qo.evidence.doc_ref).toMatchObject({ page_count: 3 });
+        const pageId = qo.evidence_images.find((i: { field: string }) => i.field === "page").id as string;
+        const ok = await getImage(owner, pageId);
+        expect(ok.status).toBe(200);
+        expect(ok.headers.get("cache-control")).toBe("private, no-store");
+        // 會計本來有個人資料＋銀行資料 view（睇得到頁）；撤走銀行資料 view → 頁圖唔回、回頁數、GET 圖被拒
+        const actor = { userId: fx.userIds["會計"], baseRole: "會計", roleId: fx.roleIds["會計"], tokenVersion: 0 } as unknown as AuthedSession;
+        expect((await viewableFields(actor)).has("page")).toBe(true);
+        const accOk = (await getSession(accountant, sid2)).body.questions.find((x: { id: string }) => x.id === qn.id);
+        expect(accOk.evidence_images.filter((i: { field: string }) => i.field === "page")).toHaveLength(3);
+        await prisma.rolePermission.updateMany({ where: { roleId: fx.roleIds["會計"], permission: { module: "安員銀行資料", action: "view" } }, data: { granted: false } });
+        const actor2 = { ...actor } as unknown as AuthedSession; // 權限集按 session 物件快取，要新物件
+        expect((await viewableFields(actor2)).has("page")).toBe(false);
+        const accNo = (await getSession(accountant, sid2)).body.questions.find((x: { id: string }) => x.id === qn.id);
+        expect(accNo.evidence_images.filter((i: { field: string }) => i.field === "page")).toHaveLength(0);
+        expect(accNo.evidence_pages_hidden).toBe(3);
+        expect((await getImage(accountant, pageId)).status).toBe(403);
+        // 雞頭／保安員硬性 deny
+        expect((await getImage(broker, pageId)).status).toBe(403);
+      });
+
+      it("答題即刪：補完資料答題後整頁原稿圖一併刪；跳過題縮到 ≤30 日", async () => {
+        const { sid2, page, zipPages, qn } = await setupFailed();
+        await upload(accountant, sid2, await zipPages([1, 2].map((n) => ({ bytes: page(30 + n), no: n }))));
+        expect(await imgCount({ sessionId: sid2, field: "page" })).toBe(2);
+        const res = await confirm(owner, qn.id, { option: "enter_hkid", value: H[11], extra: { name_zh: "整頁原稿測試員" } });
+        expect(res.status).toBe(200);
+        expect(await imgCount({ sessionId: sid2 })).toBe(0);
+      });
+    });
+
     describe("TE-5 同名現有保安員：needs_decision → 連結／建新人", () => {
       const NM = "導入測試員同名甲";
       async function setup(existing: { hkid?: string | null; no?: string } = {}) {

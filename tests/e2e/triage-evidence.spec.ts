@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { loginAs } from "./helpers";
 import { prisma, TEST_TEL } from "./db-helpers";
-import { buildZip, entryName } from "../lib/te1-images";
+import { buildZip, entryName, fakeJpeg } from "../lib/te1-images";
 import { serverPersonKey } from "../../src/lib/guards/import/person-key";
 
 test.describe.configure({ mode: "serial" });
@@ -329,11 +329,23 @@ test.describe("TE-1 覆核證據裁圖", () => {
     const empty = { key: "e2e-te7-empty", hkid: f(null, "missing"), nameZh: f(null, "missing"), nameEn: f(null, "missing"), dateOfBirth: f(null, "missing"), sex: f(null, "missing"), phone: f(null, "missing"), address: f(null, "missing"), staffNumbers: [], rating: "fail", reasons: ["extract_fail", "nameEn_missing_no_id_page", "address_recipient_not_matched"], conflicts: [], docInfo: { pageCount: 3, pagesByKind: { other: 2, application_form: 1 } } };
     const mk = (title: string, sort: number, person: object, kind = "no_id_card") =>
       prisma.triageQuestion.create({
-        data: { sessionId: ses.id, kind, groupKey: `e2e-te7-${sort}`, sort, title, personKey: `e2e-te7-key-${sort}`, evidenceJson: { v: 1, person, reasons: (person as { reasons: string[] }).reasons, candidate_guard_ids: [] } as never, optionsJson: [{ id: "enter_hkid", label: "輸入身份證號", input: "hkid" }, { id: "skip", label: "skip" }] as never },
+        data: { sessionId: ses.id, kind, groupKey: `e2e-te7-${sort}`, sort, title, personKey: serverPersonKey({ key: (person as { key: string }).key, hkid: { value: null }, staffNumbers: [] }), evidenceJson: { v: 1, person, reasons: (person as { reasons: string[] }).reasons, candidate_guard_ids: [] } as never, optionsJson: [{ id: "enter_hkid", label: "輸入身份證號", input: "hkid" }, { id: "skip", label: "skip" }] as never },
       });
     await mk("empty", 1, empty);
     await page.setViewportSize(MOBILE);
     await loginAs(page, "老闆");
+    // TE-7：上載整頁原稿（2 頁）＋doc_ref（來源檔案線索）
+    const pages = [1, 2].map((n) => fakeJpeg(600, 800, { seed: 700 + n, pad: 20_000 }));
+    const entries: Record<string, Uint8Array | string> = {};
+    const items = pages.map((b, i) => {
+      const file = entryName(b);
+      entries[file] = b;
+      return { file, field: "page", doc_kind: "full_page", priority: 1, page_no: i + 1, match: { package_key: "e2e-te7-empty" } };
+    });
+    entries["manifest.json"] = JSON.stringify({ version: 1, items, people: [{ match: { package_key: "e2e-te7-empty" }, doc_ref: { file_name: "e2e檔案夾/失敗.pdf", page_count: 3, pages_by_kind: { application_form: 1, other: 2 } } }] });
+    const up = await page.request.post(`/api/triage/sessions/${ses.id}/evidence-images`, { multipart: { file: { name: "x.zip", mimeType: "application/zip", buffer: Buffer.from(await buildZip(entries)) } } });
+    expect(up.status()).toBe(200);
+    expect(await up.json()).toMatchObject({ accepted_images: 2, doc_refs_set: 1 });
     await page.goto("/triage");
     const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
     await card.getByRole("button", { name: /繼續答/ }).click();
@@ -346,6 +358,14 @@ test.describe("TE-1 覆核證據裁圖", () => {
     await expect(box).toContainText("請補交身份證副本／入職表再導入，或者人手輸入");
     await expect(page.getByText("其他原因")).toHaveCount(0);
     await expect(page.getByTestId("evidence-empty")).toContainText("冇裁圖（文件讀唔到）");
+    await expect(page.getByTestId("triage-doc-ref")).toContainText("檔案：e2e檔案夾/失敗.pdf（3 頁：其他 2、入職表 1）");
+    const folder = page.getByTestId("evidence-pages");
+    await expect(folder.locator("summary")).toContainText("原稿頁（2）");
+    await expect(folder.getByTestId("evidence-img")).toHaveCount(0); // 摺埋：未撳開唔載入圖
+    await folder.locator("summary").click();
+    await expect(folder.getByTestId("evidence-img")).toHaveCount(2);
+    const srcs = await folder.getByTestId("evidence-img").evaluateAll((els) => els.map((e) => (e as HTMLImageElement).getAttribute("src")));
+    expect(srcs.every((x) => /^\/api\/triage\/evidence-images\/[0-9a-f-]{36}$/.test(x ?? ""))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });

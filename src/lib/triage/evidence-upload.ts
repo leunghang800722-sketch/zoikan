@@ -1,7 +1,8 @@
 // TE-1：`POST /api/triage/sessions/:id/evidence-images` 嘅核心——zip 解析（M6）＋身份防呆（M7）＋寫入。
 //  - zip 限制：≤400 entry、解壓總量 ≤32 MB、每張 ≤120 KB、entry 名必須 `^[a-f0-9]{16,64}\.(jpg|png)$`（唔准真名）、magic bytes、manifest 必須有 match（冇就整個 400）。
 //  - 伺服器**唔回顯** entry 名／manifest 內容：回應、錯誤訊息、audit 全部只有計數。
-//  - 只收該 session 仍有 open／skipped 題需要嘅欄（其餘計 skipped_not_needed）；每欄 ≤2、每人 ≤12；優先來源排前。
+//  - 只收該 session 仍有 open／skipped 題需要嘅欄（其餘計 skipped_not_needed）；每欄 ≤3、每人 ≤18；優先來源排前。
+//  - TE-7：整頁原稿（field=page／doc_kind=full_page，抽取失敗人嘅例外，≤400 KB／長邊 ≤1600，每人 ≤8 頁另計）＋manifest.people[].doc_ref（來源檔案線索）。
 import JSZip from "jszip";
 import { z } from "zod";
 import type { TriageQuestion } from "@prisma/client";
@@ -14,6 +15,8 @@ import {
   DOC_KINDS,
   EVIDENCE_FIELDS,
   MAX_IMAGE_BYTES,
+  MAX_PAGE_IMAGE_BYTES,
+  MAX_PAGES_PER_PERSON,
   MAX_PER_FIELD,
   MAX_PER_PERSON,
   RETENTION_DAYS,
@@ -35,21 +38,32 @@ const MAX_UNZIPPED_BYTES = 32 * 1024 * 1024;
 const ENTRY_NAME_RE = /^[a-f0-9]{16,64}\.(jpg|png)$/;
 const DAY_MS = 86_400_000;
 
+const matchSchema = z
+  .object({ hkid: z.string().max(20).nullable().optional(), staff_numbers: z.array(z.string().min(1).max(32)).max(20).optional(), package_key: z.string().min(1).max(80).nullable().optional() })
+  .strict()
+  .refine((m) => !!(m.hkid && m.hkid.trim()) || (m.staff_numbers?.length ?? 0) > 0 || !!m.package_key?.trim());
 const itemSchema = z
   .object({
     file: z.string().regex(ENTRY_NAME_RE),
     field: z.enum(EVIDENCE_FIELDS),
     doc_kind: z.enum(DOC_KINDS),
     priority: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    /** TE-7：整頁原稿頁碼（field=page／doc_kind=full_page 必填） */
+    page_no: z.number().int().min(1).max(500).optional(),
     /** TE-1.7：本機 Vision 驗證相似度（淨數字 0–1，可選；伺服器唔使用，只容許通過 strict schema） */
     verify_score: z.number().min(0).max(1).optional(),
-    match: z
-      .object({ hkid: z.string().max(20).nullable().optional(), staff_numbers: z.array(z.string().min(1).max(32)).max(20).optional() })
-      .strict()
-      .refine((m) => !!(m.hkid && m.hkid.trim()) || (m.staff_numbers?.length ?? 0) > 0),
+    match: matchSchema,
   })
+  .strict()
+  .refine((i) => (i.field === "page") === (i.doc_kind === "full_page") && (i.field !== "page" || i.page_no !== undefined));
+/** TE-7：每人來源檔案線索（file_name 係 Drive 檔名，可能含人名＝題目資料級，唔入 ai schema；只補唔覆蓋） */
+const docRefSchema = z
+  .object({ file_name: z.string().max(200), page_count: z.number().int().min(0).max(2000), pages_by_kind: z.record(z.string().max(30), z.number().int().min(0).max(2000)) })
   .strict();
-export const evidenceManifestSchema = z.object({ version: z.literal(1), items: z.array(itemSchema).max(MAX_ENTRIES) }).strict();
+type DocRef = z.infer<typeof docRefSchema>;
+export const evidenceManifestSchema = z
+  .object({ version: z.literal(1), items: z.array(itemSchema).max(MAX_ENTRIES), people: z.array(z.object({ match: matchSchema, doc_ref: docRefSchema }).strict()).max(MAX_ENTRIES).optional() })
+  .strict();
 export type EvidenceManifest = z.infer<typeof evidenceManifestSchema>;
 
 export interface EvidenceUploadCounts {
@@ -66,6 +80,8 @@ export interface EvidenceUploadCounts {
   skipped_restricted: number;
   skipped_duplicate: number;
   skipped_over_limit: number;
+  /** TE-7：寫入（dry＝會寫入）doc_ref 嘅題目數 */
+  doc_refs_set: number;
 }
 
 const GENERIC_ZIP_ERR = "zip 檔案格式唔啱或超出限制";
@@ -155,12 +171,13 @@ async function readEvidenceZipInner(buf: Uint8Array, hooks: { onKept?: (n: numbe
     throw BadRequest("manifest 格式唔啱（每張圖都要有 match，而且 priority／doc_kind／field 要啱規格）");
   }
   const images = new Map<string, Uint8Array>();
+  const pageFiles = new Set(manifest.items.filter((i) => i.doc_kind === "full_page").map((i) => i.file));
   for (const e of entries) {
     if (e.name === "manifest.json") continue;
     // 宣告嘅壓縮後尺寸只作快速排除（唔係信任依據）：真正限制係串流計數
     const csize = (e as unknown as { _data?: { compressedSize?: number } })._data?.compressedSize;
-    if (typeof csize === "number" && csize > MAX_IMAGE_BYTES + 1024) continue;
-    const bytes = await readEntryBounded(e, MAX_IMAGE_BYTES, onSeen, hooks.onKept);
+    if (typeof csize === "number" && csize > (pageFiles.has(e.name) ? MAX_PAGE_IMAGE_BYTES : MAX_IMAGE_BYTES) + 1024) continue;
+    const bytes = await readEntryBounded(e, pageFiles.has(e.name) ? MAX_PAGE_IMAGE_BYTES : MAX_IMAGE_BYTES, onSeen, hooks.onKept);
     if (seen > MAX_UNZIPPED_BYTES) throw BadRequest(GENERIC_ZIP_ERR);
     if (bytes) images.set(e.name, bytes); // 超過 120 KB＝null＝唔入 map（之後該 item 計 skipped_invalid_image）
   }
@@ -180,6 +197,7 @@ interface Plan {
   guardId: string | null;
   anyOpen: boolean;
   qids: string[];
+  pageNo: number | null;
 }
 
 /**
@@ -191,8 +209,8 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
   const { manifest, images } = await readEvidenceZip(zipBytes);
   const restricted = new Set(await restrictedKindsFor(actor));
 
-  const body = async (db: Pick<typeof prisma, "triageQuestion" | "triageEvidenceImage">): Promise<{ plans: Plan[]; counts: EvidenceUploadCounts }> => {
-    const counts: EvidenceUploadCounts = { dry_run: opts.dryRun, items_total: manifest.items.length, matched_questions: 0, accepted_images: 0, skipped_invalid: 0, skipped_invalid_image: 0, skipped_identity_mismatch: 0, skipped_no_question: 0, skipped_not_needed: 0, skipped_restricted: 0, skipped_duplicate: 0, skipped_over_limit: 0 };
+  const body = async (db: Pick<typeof prisma, "triageQuestion" | "triageEvidenceImage">): Promise<{ plans: Plan[]; counts: EvidenceUploadCounts; docRefs: { qid: string; docRef: DocRef }[] }> => {
+    const counts: EvidenceUploadCounts = { dry_run: opts.dryRun, items_total: manifest.items.length, matched_questions: 0, accepted_images: 0, skipped_invalid: 0, skipped_invalid_image: 0, skipped_identity_mismatch: 0, skipped_no_question: 0, skipped_not_needed: 0, skipped_restricted: 0, skipped_duplicate: 0, skipped_over_limit: 0, doc_refs_set: 0 };
     const qs = await db.triageQuestion.findMany({ where: { sessionId, status: { in: ["open", "skipped"] }, personKey: { not: null } }, orderBy: [{ sort: "asc" }, { id: "asc" }] });
     const byKey = new Map<string, TriageQuestion[]>();
     for (const q of qs) byKey.set(q.personKey!, [...(byKey.get(q.personKey!) ?? []), q]);
@@ -202,7 +220,7 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
     const seenSha = new Set<string>();
     for (const e of existing) {
       perField.set(`${e.personKey}|${e.field}`, (perField.get(`${e.personKey}|${e.field}`) ?? 0) + 1);
-      perPerson.set(e.personKey, (perPerson.get(e.personKey) ?? 0) + 1);
+      if (e.field !== "page") perPerson.set(e.personKey, (perPerson.get(e.personKey) ?? 0) + 1);
       seenSha.add(`${e.personKey}|${e.field}|${e.sha256}`);
     }
     const plans: Plan[] = [];
@@ -215,7 +233,7 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
         continue;
       }
       const plain = images.get(item.file);
-      const info = plain ? inspectImage(plain) : null;
+      const info = plain ? inspectImage(plain, { page: item.field === "page" }) : null;
       if (!plain || !info || (info.mime === "image/jpeg") !== item.file.endsWith(".jpg")) {
         counts.skipped_invalid_image += 1;
         continue;
@@ -252,19 +270,35 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
         continue;
       }
       const fk = `${personKey}|${item.field}`;
-      if ((perField.get(fk) ?? 0) >= MAX_PER_FIELD || (perPerson.get(personKey) ?? 0) >= MAX_PER_PERSON) {
+      // TE-7：整頁原稿另計（每人 ≤8 頁，唔計入 18）
+      const isPage = item.field === "page";
+      if ((perField.get(fk) ?? 0) >= (isPage ? MAX_PAGES_PER_PERSON : MAX_PER_FIELD) || (!isPage && (perPerson.get(personKey) ?? 0) >= MAX_PER_PERSON)) {
         counts.skipped_over_limit += 1;
         continue;
       }
       seenSha.add(shaKey);
       perField.set(fk, (perField.get(fk) ?? 0) + 1);
-      perPerson.set(personKey, (perPerson.get(personKey) ?? 0) + 1);
+      if (!isPage) perPerson.set(personKey, (perPerson.get(personKey) ?? 0) + 1);
       for (const q of allowed) matchedQ.add(q.id);
-      plans.push({ item, personKey, field: item.field, docKind: item.doc_kind, priority: item.priority, plain, info, sha, questionId: allowed[0]!.id, guardId: allowed[0]!.targetGuardId, anyOpen: allowed.some((q) => q.status === "open"), qids: allowed.map((q) => q.id) });
+      plans.push({ item, personKey, field: item.field, docKind: item.doc_kind, priority: item.priority, plain, info, sha, questionId: allowed[0]!.id, guardId: allowed[0]!.targetGuardId, anyOpen: allowed.some((q) => q.status === "open"), qids: allowed.map((q) => q.id), pageNo: item.page_no ?? null });
     }
     counts.accepted_images = plans.length;
     counts.matched_questions = matchedQ.size;
-    return { plans, counts };
+    // TE-7：每人來源檔案線索 doc_ref——寫入該人所有 open／skipped 題嘅 evidence.doc_ref（只補，唔覆蓋）
+    const docRefs: { qid: string; docRef: DocRef }[] = [];
+    const doneQ = new Set<string>();
+    for (const pe of manifest.people ?? []) {
+      const pk = derivePersonKey(pe.match);
+      if (!pk) continue;
+      for (const q of byKey.get(pk) ?? []) {
+        if (doneQ.has(q.id) || restricted.has(q.kind) || !matchIdentityOk(q, pe.match)) continue;
+        if ((q.evidenceJson as { doc_ref?: unknown } | null)?.doc_ref) continue;
+        doneQ.add(q.id);
+        docRefs.push({ qid: q.id, docRef: pe.doc_ref });
+      }
+    }
+    counts.doc_refs_set = docRefs.length;
+    return { plans, counts, docRefs };
   };
 
   if (opts.dryRun) return (await body(prisma)).counts;
@@ -272,8 +306,13 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
   await prisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TRIAGE_LOCK}))`;
-      const { plans, counts } = await body(tx);
+      const { plans, counts, docRefs } = await body(tx);
       final = counts;
+      for (const d of docRefs) {
+        const cur = await tx.triageQuestion.findUnique({ where: { id: d.qid }, select: { evidenceJson: true } });
+        const ej = (cur?.evidenceJson ?? {}) as Record<string, unknown>;
+        if (cur && !ej.doc_ref) await tx.triageQuestion.update({ where: { id: d.qid }, data: { evidenceJson: { ...ej, doc_ref: d.docRef } as never } });
+      }
       for (const p of plans) {
         await insertEvidenceImage(tx, {
           sessionId,
@@ -283,6 +322,7 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
           field: p.field,
           docKind: p.docKind,
           priority: p.priority,
+          pageNo: p.pageNo,
           plain: p.plain,
           info: p.info,
           createdBy: actor.userId,
