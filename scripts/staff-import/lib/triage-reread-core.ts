@@ -22,13 +22,10 @@ export interface RereadProposal {
   doc: OcrDocType;
   confidence: 'high' | 'medium' | 'low';
   /** TE-4：嵌入身份證副本／印刷佐證旗標 */
-  flags?: ('printed_card_conflict' | 'embedded_card' | 'printed_corroborated' | 'printed_only' | 'card_name_conflict' | 'form_differs' | 'form_conflict' | 'card_unverified')[];
+  flags?: ('printed_card_conflict' | 'embedded_card' | 'printed_corroborated' | 'printed_only' | 'card_name_conflict' | 'form_differs' | 'form_conflict' | 'card_unverified' | 'typed_list_differs' | 'arbiter_agree_a')[];
   /** 配對提示：伺服器題目 personKey 係 HMAC（身份證 → 工號集合 → 包內 key），server 用呢兩項推返同一個 key（只用嚟砌 key，唔寫入） */
   match: { hkid: string | null; staff_numbers: string[] };
 }
-
-/** 仲裁同意讀 A（agree_a）：仲裁只收讀 A 嘅候選，唔係獨立證據。保守＝唔收（要改寬鬆只改呢個常數）。 */
-export const ACCEPT_ARBITER_AGREE_A = false;
 
 type LF = { value: string | null; status: 'confirmed' | 'review' | 'missing' };
 export interface PkgPerson {
@@ -66,6 +63,20 @@ const TYPED_LIST_REASONS: Record<ProposalFieldName, readonly string[]> = {
 
 export type SkipReason = 'not_review' | 'no_read' | 'wrong_source' | 'not_confirmed' | 'arbiter_agree_a' | 'invalid_format' | 'typed_list_disagrees';
 
+/** TE-12：逐人診斷（唔記值）——每個要覆核嘅欄係出咗建議定跳過、點解 */
+export type DiagReason = SkipReason | 'proposed' | 'no_docs' | 'read_failed';
+export interface FieldDiag {
+  status: 'proposed' | 'skipped';
+  reason: DiagReason;
+  confidence?: 'high' | 'medium' | 'low';
+  flags?: string[];
+}
+export interface PersonDiag {
+  person_key: string;
+  staff_numbers: string[];
+  fields: Partial<Record<ProposalFieldName, FieldDiag>>;
+}
+
 /** 需要覆核嘅欄＝package 該欄 status=review（nameZh／hkid 亦然）。 */
 export function needsReread(p: PkgPerson): boolean {
   return FIELD_MAP.some((m) => p[m.pkg].status === 'review');
@@ -77,6 +88,8 @@ export interface ProposeOutcome {
   skipped: Partial<Record<SkipReason, number>>;
   /** TR-2：每欄每原因計數（只計 package 為 review 嘅欄） */
   skippedByField: Partial<Record<ProposalFieldName, Partial<Record<SkipReason, number>>>>;
+  /** TE-12：每欄（只計要覆核嘅欄）唔建議嘅原因 */
+  skipDetail: Partial<Record<ProposalFieldName, SkipReason>>;
 }
 
 /**
@@ -100,13 +113,14 @@ type Pick_ = { doc: OcrDocType; result: Pick<FieldResult, 'status' | 'value' | '
  *  - package.reasons 顯示舊 crosscheck 對打字名單有唔一致 → 唔建議（留人手；打字名單係辦公室資料，唔一致係真警號）。
  */
 export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey, Pick_>>, now: Date = new Date(), opts: { embedded?: boolean } = {}): ProposeOutcome {
-  const out: ProposeOutcome = { proposals: [], skipped: {}, skippedByField: {} };
+  const out: ProposeOutcome = { proposals: [], skipped: {}, skippedByField: {}, skipDetail: {} };
   for (const m of FIELD_MAP) {
     // TE-4：嵌入身份證副本係證件為準——身份證欄（hkid／姓名／出生日期）missing 都出建議；其餘欄照舊只對 review
     const cardField = opts.embedded && m.doc === 'id_card';
     if (p[m.pkg].status !== 'review' && !(cardField && p[m.pkg].status === 'missing')) continue;
     const skip = (r: SkipReason) => {
       out.skipped[r] = (out.skipped[r] ?? 0) + 1;
+      out.skipDetail[m.field] = r;
       const f = (out.skippedByField[m.field] ??= {});
       f[r] = (f[r] ?? 0) + 1;
     };
@@ -124,24 +138,47 @@ export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey
       skip('not_confirmed');
       continue;
     }
-    if (r.arbiter === 'agree_a' && !ACCEPT_ARBITER_AGREE_A) {
-      skip('arbiter_agree_a');
-      continue;
-    }
     const n = normalizeField(m.ocr, r.value, now);
     if (!n.valid || !n.canon) {
       skip('invalid_format');
       continue;
     }
-    if ((p.reasons ?? []).some((x) => TYPED_LIST_REASONS[m.field].includes(x))) {
+    // TE-12（老闆：證件為準）：打字名單唔一致唔再阻擋身份證頁 two_reads 一致嘅姓名／hkid／出生日期——照出建議，加 typed_list_differs（資訊；high 要硬證據，由 caller 用 applyTypedListEvidence 降級）。
+    // 電話／地址（非證件來源）同仲裁介入嘅身份證欄照舊阻擋。
+    const basis: Basis = r.arbiter ? 'arbiter' : 'two_reads';
+    const typedDiffers = (p.reasons ?? []).some((x) => TYPED_LIST_REASONS[m.field].includes(x));
+    if (typedDiffers && !(pick.doc === 'id_card' && basis === 'two_reads')) {
       skip('typed_list_disagrees');
       continue;
     }
+    // TE-12：仲裁同意讀 A 唔係獨立證據——唔自動答，但出 medium 預填建議（flag arbiter_agree_a）
+    const agreeA = r.arbiter === 'agree_a';
     // 值：hkid／dob／電話／姓名用 canon（同 server 校驗一致）；地址用最終讀數原文（canon 會歸一標點）
     const value = m.field === 'address' ? r.value.trim() : n.canon;
-    out.proposals.push({ person_key: p.key, field: m.field, value, basis: r.arbiter ? 'arbiter' : 'two_reads', doc: pick.doc, confidence: confidenceOf(pick, r.arbiter ? 'arbiter' : 'two_reads'), ...(pick.doc === 'id_card' && pick.cross === 'differs' ? { flags: ['form_differs' as const] } : {}), match: { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) } });
+    const flags: NonNullable<RereadProposal['flags']> = [...(pick.doc === 'id_card' && pick.cross === 'differs' ? (['form_differs'] as const) : []), ...(typedDiffers ? (['typed_list_differs'] as const) : []), ...(agreeA ? (['arbiter_agree_a'] as const) : [])];
+    out.proposals.push({ person_key: p.key, field: m.field, value, basis, doc: pick.doc, confidence: agreeA ? 'medium' : confidenceOf(pick, basis), ...(flags.length ? { flags } : {}), match: { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) } });
   }
   return out;
+}
+
+/** TE-12：typed_list_differs 嘅 high 建議冇硬證據（入職表手寫 hkid＝卡、印刷佐證、工號／電話對到）→ 降 medium（留人，唔自動答）。 */
+export function applyTypedListEvidence(proposals: readonly RereadProposal[], hard: boolean): RereadProposal[] {
+  return proposals.map((x) => (!hard && x.confidence === 'high' && x.flags?.includes('typed_list_differs') ? { ...x, confidence: 'medium' as const } : x));
+}
+
+/** TE-12：逐人診斷（唔記值）。noDocs／failed＝整人唔使讀或者讀失敗，每個要覆核嘅欄標同一原因。 */
+export function diagnosePerson(p: PkgPerson, o: ProposeOutcome | null, whole?: 'no_docs' | 'read_failed'): PersonDiag {
+  const fields: PersonDiag['fields'] = {};
+  for (const m of FIELD_MAP) {
+    if (whole) {
+      if (p[m.pkg].status === 'review') fields[m.field] = { status: 'skipped', reason: whole };
+      continue;
+    }
+    const pr = o?.proposals.find((x) => x.field === m.field);
+    if (pr) fields[m.field] = { status: 'proposed', reason: 'proposed', confidence: pr.confidence, ...(pr.flags?.length ? { flags: [...pr.flags] } : {}) };
+    else if (o?.skipDetail[m.field]) fields[m.field] = { status: 'skipped', reason: o.skipDetail[m.field]! };
+  }
+  return { person_key: p.key, staff_numbers: p.staffNumbers.map((n) => n.number), fields };
 }
 
 // ---------- docs 揀頁 ----------
@@ -331,10 +368,15 @@ export interface RereadSummary {
   card_unverified: number;
   /** TE-11.3：中文差 1 字而冇硬證據（medium＋form_differs，留人）嘅人數 */
   form_unproven: number;
+  /** TE-12：身份證頁姓名／hkid 等打字名單唔一致但照出建議（typed_list_differs）嘅條數；其中冇硬證據降 medium 嘅條數 */
+  typed_list_differs: number;
+  typed_list_differs_medium: number;
+  /** TE-12：逐人診斷（唔記值；只入 --out 檔） */
+  persons: PersonDiag[];
 }
 
 export function emptySummary(now: Date = new Date()): RereadSummary {
-  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0, embedded_cards_found: 0, embedded_second_stage_found: 0, second_stage_pages: 0, card_printed_corroborated: 0, card_printed_conflict: 0, printed_only_review: 0, proposals_low_confidence: 0, card_name_conflict: 0, form_differs: 0, form_conflict: 0, card_unverified: 0, form_unproven: 0 };
+  return { generated_at: now.toISOString(), persons_in_package: 0, persons_needing_reread: 0, persons_no_docs: 0, persons_processed: 0, persons_failed: 0, persons_with_proposals: 0, proposals_total: 0, proposals_by_field: {}, proposals_by_basis: {}, not_proposed_reasons: {}, skipped_by_field: {}, ocr_calls: 0, cache_hits: 0, embedded_cards_found: 0, embedded_second_stage_found: 0, second_stage_pages: 0, card_printed_corroborated: 0, card_printed_conflict: 0, printed_only_review: 0, proposals_low_confidence: 0, card_name_conflict: 0, form_differs: 0, form_conflict: 0, card_unverified: 0, form_unproven: 0, typed_list_differs: 0, typed_list_differs_medium: 0, persons: [] };
 }
 
 export function addOutcome(s: RereadSummary, o: ProposeOutcome): void {
@@ -359,5 +401,6 @@ export function summaryLines(s: RereadSummary): string[] {
     `唔建議原因：${JSON.stringify(s.not_proposed_reasons)}`,
     `每欄唔建議原因：${JSON.stringify(s.skipped_by_field)}｜讀數快取命中 ${s.cache_hits}`,
     `嵌入身份證副本 ${s.embedded_cards_found}（二階段 ${s.embedded_second_stage_found}／二階段掃描頁 ${s.second_stage_pages}）｜印刷佐證一致 ${s.card_printed_corroborated}｜印刷同卡唔一致 ${s.card_printed_conflict}｜淨印刷待覆核 ${s.printed_only_review}｜low 信心建議 ${s.proposals_low_confidence}｜卡姓名／核對唔一致 ${s.card_name_conflict}｜入職表輕微差異 ${s.form_differs}｜入職表完全唔相似 ${s.form_conflict}｜入職表冇名而冇名單佐證 ${s.card_unverified}｜中文差字冇硬證據 ${s.form_unproven}`,
+    `打字名單唔一致但照出建議 ${s.typed_list_differs}（冇硬證據降 medium ${s.typed_list_differs_medium}）｜逐人診斷 ${s.persons.length} 人`,
   ];
 }

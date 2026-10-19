@@ -28,6 +28,8 @@ import { rotateLines } from './lib/triage-evidence-core';
 import type { OcrLine, OcrPage } from './lib/ocr';
 import {
   addOutcome,
+  applyTypedListEvidence,
+  diagnosePerson,
   buildStaffNoIndex,
   docIdsForPerson,
   emptySummary,
@@ -226,6 +228,7 @@ export function dryFixture(): { persons: DryPerson[] } {
       { p: base(15), truth: truth(15), docs: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、冇名單佐證 → medium＋card_unverified
       { p: base(17), truth: truth(17), docs: true, fake: { onboarding_form: { a: { name_zh: '測試甲乙', hkid: null }, b: { name_zh: '測試甲乙', hkid: null } } } }, // 只得中文可比、差字而冇硬證據（form 冇 hkid）→ medium＋form_differs
       { p: base(18), truth: truth(18), docs: true, formEn: 'DIFFERENT PERSON', fake: { onboarding_form: { a: { name_zh: '測試乙' }, b: { name_zh: '測試乙' } } } }, // 兄弟姊妹：中文差 1 字、英文唔同 → conflict
+      { p: base(19, { reasons: ['mismatch_nameZh'] }), truth: truth(19), docs: true, fake: { onboarding_form: { a: { hkid: null }, b: { hkid: null } } } }, // TE-12：打字名單唔一致、入職表冇 hkid（冇硬證據）→ 照出建議但降 medium＋typed_list_differs
       { p: base(16), truth: truth(16), docs: true, listMatch: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、名單一致 → high
       { p: base(6, { nameZh: lf('測試乙', 'confirmed'), nameEn: lf('TEST ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001116', 'confirmed'), address: lf('舊地址', 'confirmed') }), truth: truth(6), docs: true }, // 冇 review 欄 → 唔重讀
     ],
@@ -461,6 +464,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
         summary.proposals_low_confidence += 1;
         summary.printed_only_review += 1;
       } else summary.persons_no_docs += 1;
+      summary.persons.push(po ? diagnosePerson(p, { proposals: [po], skipped: {}, skippedByField: {}, skipDetail: {} }) : diagnosePerson(p, null, 'no_docs'));
       return;
     }
     let ok = false;
@@ -481,7 +485,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
           // TE-4.1 M1：整人一致性——卡讀到嘅姓名同包內任何已有姓名比對（就算冇出建議）；卡欄喺入職表 cross／打字名單檢查唔一致；包內完全冇姓名先唔受姓名比對影響
           const cardRead = (k: 'name_zh' | 'name_en') => (r.picks[k]?.doc === 'id_card' ? r.picks[k]!.result.value : null);
           const crossBad = false; // TE-11.2：入職表差異改由 gradeFormAgreement 分級（輕微差異唔降級），唔再一律當錯人卡
-          const typedBad = ['hkid', 'nameZh', 'nameEn', 'dateOfBirth'].some((f) => (o.skippedByField as Record<string, Record<string, number> | undefined>)[f]?.typed_list_disagrees);
+          const typedBad = false; // TE-12：打字名單唔一致改為資訊旗標 typed_list_differs（硬證據才 high），唔再一律當錯人卡
           const dobCard = r.picks.dob?.doc === 'id_card' ? normalizeField('dob', r.picks.dob.result.value, now).canon : null;
           const dobPkg = p.dateOfBirth.status === 'confirmed' && p.dateOfBirth.value ? normalizeField('dob', p.dateOfBirth.value, now).canon : null;
           const nameBad = cardNamesConflict({ nameZh: p.nameZh.value, nameEn: p.nameEn.value, dobConfirmed: dobPkg }, { nameZh: cardRead('name_zh'), nameEn: cardRead('name_en'), dob: dobCard });
@@ -512,13 +516,18 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
             { nameZh: r.formReads.name_zh ?? null, nameEn: auxEn, dob: dobCanon(r.formReads.dob) },
             hard,
           );
-          o.proposals = applyFormGrade(o.proposals, grade, listOk);
+          o.proposals = applyTypedListEvidence(applyFormGrade(o.proposals, grade, listOk), hard);
           if (grade === 'conflict') summary.form_conflict += 1;
           else if (o.proposals.some((x) => x.flags?.includes('card_unverified'))) summary.card_unverified += 1;
           else if (grade === 'minor_unproven') summary.form_unproven += 1;
           else if (grade === 'minor') summary.form_differs += 1;
         }
         summary.proposals_low_confidence += o.proposals.filter((x) => x.confidence === 'low').length;
+        for (const x of o.proposals) if (x.flags?.includes('typed_list_differs')) {
+          summary.typed_list_differs += 1;
+          if (x.confidence !== 'high') summary.typed_list_differs_medium += 1;
+        }
+        summary.persons.push(diagnosePerson(p, o));
         proposals.push(...o.proposals);
         addOutcome(summary, o);
         summary.ocr_calls += r.calls;
@@ -529,9 +538,13 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
         /* 重試 1 次；錯誤內容唔印（可能帶路徑） */
       }
     }
-    if (!ok) summary.persons_failed += 1;
+    if (!ok) {
+      summary.persons_failed += 1;
+      summary.persons.push(diagnosePerson(p, null, 'read_failed'));
+    }
     console.log(`[triage-reread] ${i + 1}/${todo.length} ${ok ? 'ok' : 'failed'}`);
   });
+  summary.persons.sort((a, b) => (a.person_key < b.person_key ? -1 : a.person_key > b.person_key ? 1 : 0));
   return { proposals, summary };
 }
 
