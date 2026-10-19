@@ -362,7 +362,7 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(med.body).toMatchObject({ applied: 0, skipped_value_mismatch: 1 });
     expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qa.id } })).status).toBe("open");
     // high → 卡為準自動答
-    const r = await send(accountant, sid, [prop(pa.key, "nameZh", "卡上正確姓名甲", { match: matchA, confidence: "high" }), prop(pa.key, "nameEn", "CARD TRUE NAME", { match: matchA, confidence: "high" })]);
+    const r = await send(accountant, sid, [prop(pa.key, "nameZh", "卡上正確姓名甲", { match: matchA, confidence: "high", flags: ["form_differs"] }), prop(pa.key, "nameEn", "CARD TRUE NAME", { match: matchA, confidence: "high" })]);
     expect(r.body).toMatchObject({ applied: 1, errors: 0 });
     const qa2 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qa.id } });
     expect(qa2.status).toBe("answered");
@@ -370,6 +370,10 @@ describe("TR-1 OCR 重讀建議導入", () => {
     const g = await prisma.guard.findFirstOrThrow({ where: { hkid: pa.hkid.value! }, select: { nameZh: true, nameEn: true } });
     expect(g.nameZh).toBe("卡上正確姓名甲");
     expect(g.nameEn).toBe("CARD TRUE NAME");
+    // S2：自動答嘅題 audit 記 answered_via＋旗標（淨旗標，唔記值）
+    const au = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_answer", rowId: qa.id } });
+    expect(au.after).toMatchObject({ answered_via: "ocr_reread", answered_flags: ["form_differs"] });
+    expect(JSON.stringify(au.after)).not.toContain("卡上正確姓名甲");
     expect(await prisma.triageEvidenceImage.count({ where: { sessionId: sid, personKey: qa.personKey! } })).toBe(0); // M5
     void pb;
   });

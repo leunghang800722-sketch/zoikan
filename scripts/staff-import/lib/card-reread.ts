@@ -240,3 +240,57 @@ export function printedOnlyProposal(personKey: string, printed: readonly string[
   if (valid.length !== 1) return null;
   return { person_key: personKey, field: 'hkid', value: valid[0]!, basis: 'two_reads', doc: 'id_card', confidence: 'low', flags: ['printed_only'], match };
 }
+
+// ---------------------------------------------------------------------------
+// TE-11.2：錯人卡防線——卡讀數（整頁身份證／嵌入卡）同入職表讀數分級（證件為準，但夾錯證件要攔）
+// ---------------------------------------------------------------------------
+export type FormGrade = 'agree' | 'minor' | 'conflict' | 'no_form';
+export interface NameDob {
+  nameZh?: string | null;
+  nameEn?: string | null;
+  dob?: string | null;
+}
+
+const hanOf = (s: string): string[] => [...s.normalize('NFKC')].filter((c) => /\p{Script=Han}/u.test(c));
+/** 卡上中文字有幾多喺入職表中文名入面出現（0–1） */
+export function zhOverlap(card: string, form: string): number {
+  const c = hanOf(card);
+  const f = new Set(hanOf(form));
+  return c.length === 0 ? 0 : c.filter((x) => f.has(x)).length / c.length;
+}
+const enTokenSet = (s: string): string => [...(s.normalize('NFKC').toUpperCase().match(/[A-Z]+/g) ?? [])].sort().join(' ');
+
+/**
+ * 入職表差異分級：
+ *  - 出生日期兩邊都讀到而唔同 → conflict；
+ *  - 入職表冇可比姓名（冇名，或者卡上對應語言冇名）→ no_form（要打字名單佐證先 high）；
+ *  - 有可比姓名：中文字元重疊 ≥0.5 或英文 looseEnglishNameMatch 達標 → 全部完全相同＝agree，否則 minor（form_differs）；兩者都唔達標 → conflict。
+ */
+export function gradeFormAgreement(card: NameDob, form: NameDob): FormGrade {
+  if (card.dob && form.dob && card.dob.trim() !== form.dob.trim()) return 'conflict';
+  const zhCmp = !!card.nameZh && !!form.nameZh;
+  const enCmp = !!card.nameEn && !!form.nameEn;
+  if (!zhCmp && !enCmp) return 'no_form';
+  const zhOk = zhCmp && zhOverlap(card.nameZh!, form.nameZh!) >= 0.5;
+  const enOk = enCmp && looseEnglishNameMatch(card.nameEn!, form.nameEn!);
+  if (!zhOk && !enOk) return 'conflict';
+  const zhExact = !zhCmp || normZh(card.nameZh!) === normZh(form.nameZh!);
+  const enExact = !enCmp || enTokenSet(card.nameEn!) === enTokenSet(form.nameEn!);
+  return zhExact && enExact && (!zhCmp || zhOk) && (!enCmp || enOk) ? 'agree' : 'minor';
+}
+
+/**
+ * 套用分級去呢個人嘅「身份證卡」proposals（doc id_card、仲係 high 嘅）：
+ *  minor → 維持 high＋form_differs；conflict → medium＋form_conflict（留人）；
+ *  no_form → 打字名單（按工號／電話對到、姓名同卡一致）或印刷佐證一致（printed_corroborated）先維持 high，否則 medium＋card_unverified（留人）；agree → 不變。
+ */
+export function applyFormGrade(proposals: readonly RereadProposal[], grade: FormGrade, listAgrees: boolean): RereadProposal[] {
+  const addFlag = (p: RereadProposal, f: NonNullable<RereadProposal['flags']>[number]): RereadProposal => ({ ...p, flags: [...new Set([...(p.flags ?? []), f])] });
+  return proposals.map((p) => {
+    if (p.doc !== 'id_card' || p.confidence !== 'high') return p;
+    if (grade === 'minor') return addFlag(p, 'form_differs');
+    if (grade === 'conflict') return { ...addFlag(p, 'form_conflict'), confidence: 'medium' };
+    if (grade === 'no_form' && !listAgrees && !(p.flags ?? []).includes('printed_corroborated')) return { ...addFlag(p, 'card_unverified'), confidence: 'medium' };
+    return p;
+  });
+}

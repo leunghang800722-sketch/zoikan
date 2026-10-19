@@ -38,7 +38,7 @@ const proposalSchema = z
     /** TE-4：low＝只有印刷／唔一致，要人手覆核（唔自動答；計 skipped_low_confidence） */
     confidence: z.enum(["high", "medium", "low"]),
     /** TE-4：可選旗標（例 printed_card_conflict、embedded_card）；只用嚟顯示／統計，伺服器唔據此寫入 */
-    flags: z.array(z.enum(["printed_card_conflict", "embedded_card", "printed_corroborated", "printed_only", "card_name_conflict", "form_differs"])).max(4).optional(),
+    flags: z.array(z.enum(["printed_card_conflict", "embedded_card", "printed_corroborated", "printed_only", "card_name_conflict", "form_differs", "form_conflict", "card_unverified"])).max(4).optional(),
     /**
      * 配對提示（additive，可選）：題目嘅 personKey 係伺服器 HMAC（serverPersonKey：身份證 → 工號集合 → 包內 key），唔係包內 persons[].key。
      * 本機腳本帶埋包內該人嘅身份證值／工號，伺服器用同一個函數推返 personKey 去配對。只用嚟砌 key，唔寫入任何地方。
@@ -276,6 +276,8 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
         metaMap.set(f, { confidence: p.confidence, basis: p.basis, doc: p.doc, ...(p.flags ? { flags: p.flags } : {}) });
       }
     }
+    /** S2：自動答嘅題 audit 記今次用到嘅建議旗標（form_differs 等；淨旗標，唔記值） */
+    const flagsOf = (fields: readonly ProposalField[]): string[] => [...new Set(fields.flatMap((f) => metaMap.get(f)?.flags ?? []))];
     for (const q of eligible) {
       const plan = planForQuestion(q, props, metaMap);
       if (plan.type === "none") continue;
@@ -303,7 +305,7 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
         const followUp: FollowUpDraft | undefined = plan.rest.length > 0 ? { groupKey: `${q.groupKey}:rest`, restFields: plan.rest } : undefined;
         let followCreated = false;
         if (opts.dryRun) followCreated = !!followUp && !(await prisma.triageQuestion.findFirst({ where: { sessionId, groupKey: followUp.groupKey }, select: { id: true } }));
-        else followCreated = !!(await submitAnswer(actor, q, plan.answer, prev.preview_hash, caps, opts.ip, { source: OCR_REREAD_SOURCE, ...(followUp ? { followUp } : {}) })).follow_up_created;
+        else followCreated = !!(await submitAnswer(actor, q, plan.answer, prev.preview_hash, caps, opts.ip, { source: OCR_REREAD_SOURCE, ...(followUp ? { followUp } : {}), ...(flagsOf(plan.fields).length ? { flags: flagsOf(plan.fields) } : {}) })).follow_up_created;
         mark(key, plan.fields, "applied");
         mark(key, plan.invalidFields, "skipped_invalid");
         counts.applied += 1;

@@ -20,9 +20,10 @@ import { getReadClients } from '@/lib/guards/ocr/clients';
 import type { DocumentReadResult } from '@/lib/guards/ocr/read';
 import { ArgError, fakeClientsFor, resolveReportPath, runPool, type EvalCase, type PreparedImages } from './lib/eval-ocr-core';
 import { prepareDocumentImages } from './lib/eval-ocr-images';
-import { applyCorroboration, cardKeyHash, cardNamesConflict, cropCardToPng, markCardNameConflict, printedOnlyProposal, scanForCard, type CardDeps, type CardPageRef, type CardScan } from './lib/card-reread';
+import { applyCorroboration, applyFormGrade, gradeFormAgreement, cardKeyHash, cardNamesConflict, cropCardToPng, markCardNameConflict, printedOnlyProposal, scanForCard, type CardDeps, type CardPageRef, type CardScan } from './lib/card-reread';
 import { canonicalHkid, hkidCheckDigitValid } from './lib/hkid';
 import { normalizeField } from '@/lib/guards/ocr/normalize';
+import { normZh } from '@/lib/guards/import/text';
 import { rotateLines } from './lib/triage-evidence-core';
 import type { OcrLine, OcrPage } from './lib/ocr';
 import {
@@ -70,12 +71,14 @@ export interface Args {
   noEmbedded: boolean;
   /** TE-4：導入 OCR 行目錄（預設 extract 同層 ocr／ocr2） */
   ocrDir: string | null;
+  /** TE-11.2：導入 crosscheck.json（可選）——入職表冇姓名可比時，用打字名單（U Team／Maxwell／DB 按工號或電話對到）佐證卡上姓名 */
+  crosscheck: string | null;
   /** TE-4：vision-ocr 執行檔（二階段局部 OCR；預設由 vision-ocr.swift 編譯） */
   visionBin: string | null;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: false, ocrDir: null, visionBin: null };
+  const a: Args = { package: null, personFields: null, extract: null, index: null, docsDir: 'data/2026-09/staff-docs', out: null, dry: false, limit: null, onlyKey: null, concurrency: 2, cache: null, noCache: false, onlyMissingHkid: false, noEmbedded: false, ocrDir: null, crosscheck: null, visionBin: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = () => {
@@ -96,6 +99,7 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (k === '--only-missing-hkid') a.onlyMissingHkid = true;
     else if (k === '--no-embedded') a.noEmbedded = true;
     else if (k === '--ocr-dir') a.ocrDir = v();
+    else if (k === '--crosscheck') a.crosscheck = v();
     else if (k === '--vision-bin') a.visionBin = v();
     else if (k === '--limit') {
       const x = v();
@@ -153,6 +157,8 @@ interface DryPerson {
   truth: EvalCase['truth'];
   fake?: EvalCase['fake'];
   docs: boolean;
+  /** TE-11.2：打字名單（按工號／電話）佐證呢個人卡上姓名 */
+  listMatch?: boolean;
   /** TE-4：呢個人有幾頁（page 由 1 起）；lines＝第一階段整頁 OCR 讀到嘅行；hidden＝只有二階段局部 OCR 先讀到嘅行；kinds＝導入分類 */
   pages?: { lines: OcrLine[]; hidden?: OcrLine[]; kinds: string[] }[];
 }
@@ -211,6 +217,12 @@ export function dryFixture(): { persons: DryPerson[] } {
       { p: dryCard(9), truth: truth(9), docs: true, pages: [dryPermitPage({ inverted: true }), dryCertPage('A123456(3)')] }, // 印刷同卡唔一致 → low＋printed_card_conflict
       { p: { ...dryCard(11), nameZh: lf('完全不同嘅人', 'review') }, truth: truth(11), docs: true, pages: [dryPermitPage({ inverted: true })] }, // TE-4.1：卡姓名同包內姓名唔一致 → 全 low＋card_name_conflict
       { p: dryCard(10), truth: truth(10), docs: true, pages: [dryCertPage(DRY_HKID)] }, // 冇卡，只有印刷 → low（review）
+      // TE-11.2：整頁身份證 vs 入職表分級
+      { p: base(12), truth: truth(12), docs: true, fake: { onboarding_form: { a: { name_zh: '測試甲乙' }, b: { name_zh: '測試甲乙' } } } }, // 輕微差異 → high＋form_differs
+      { p: base(13), truth: truth(13), docs: true, fake: { onboarding_form: { a: { name_zh: '完全唔同' }, b: { name_zh: '完全唔同' } } } }, // 完全唔相似（疑錯人卡）→ medium＋form_conflict
+      { p: base(14), truth: truth(14), docs: true, fake: { onboarding_form: { a: { dob: '1991-02-03' }, b: { dob: '1991-02-03' } } } }, // 入職表出生日期唔同 → medium＋form_conflict
+      { p: base(15), truth: truth(15), docs: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、冇名單佐證 → medium＋card_unverified
+      { p: base(16), truth: truth(16), docs: true, listMatch: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、名單一致 → high
       { p: base(6, { nameZh: lf('測試乙', 'confirmed'), nameEn: lf('TEST ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001116', 'confirmed'), address: lf('舊地址', 'confirmed') }), truth: truth(6), docs: true }, // 冇 review 欄 → 唔重讀
     ],
   };
@@ -228,6 +240,8 @@ interface Inputs {
   deps: RereadDeps;
   /** TE-4：嵌入身份證副本掃描（冇＝唔做） */
   card?: { scan(pages: readonly CardPageRef[]): Promise<CardScan> };
+  /** TE-11.2：打字名單（按工號／電話對到）嘅姓名同卡上中文名一致（冇＝唔知＝false） */
+  listAgree?: (docIds: readonly string[], cardNameZh: string | null) => boolean;
 }
 
 async function loadInputs(args: Args): Promise<Inputs> {
@@ -262,7 +276,8 @@ async function loadInputs(args: Args): Promise<Inputs> {
         return pg ? { lines: [...pg.lines, ...(pg.hidden ?? [])], aspect: 210 / 297 } : null;
       },
     };
-    return { persons: fx.persons.map((d) => d.p), staffIdx: buildStaffNoIndex(rows), extractBy, deps, ...(args.noEmbedded ? {} : { card: { scan: (pages: readonly CardPageRef[]) => scanForCard(pages, cardDeps) } }) };
+    const listAgree = (docIds: readonly string[]) => docIds.some((id) => !!byDoc.get(id)?.listMatch);
+    return { persons: fx.persons.map((d) => d.p), staffIdx: buildStaffNoIndex(rows), extractBy, deps, listAgree, ...(args.noEmbedded ? {} : { card: { scan: (pages: readonly CardPageRef[]) => scanForCard(pages, cardDeps) } }) };
   }
   for (const k of ['package', 'personFields', 'extract', 'index'] as const) if (!args[k]) throw new ArgError('需要 --package --person-fields --extract --index（或者 --dry）');
   const J = async <T>(p: string) => JSON.parse(await readFile(path.resolve(p), 'utf-8')) as T;
@@ -358,7 +373,15 @@ async function loadInputs(args: Args): Promise<Inputs> {
     };
     card = { scan: (pages) => scanForCard(pages, cardDeps) };
   }
-  return { persons: pkg.persons, staffIdx: buildStaffNoIndex(ext), extractBy, deps, ...(card ? { card } : {}) };
+  // TE-11.2：打字名單佐證（--crosscheck）：該文件喺 crosscheck 嘅 nameZh 同任何名單 match，而且導入抽取嘅中文名＝今次卡讀數
+  let listAgree: Inputs['listAgree'];
+  if (args.crosscheck) {
+    const cc = await J<{ docId: string; cmp?: { nameZh?: Record<string, string> } }[]>(args.crosscheck);
+    const ccBy = new Map(cc.map((c) => [c.docId, c]));
+    listAgree = (docIds, cardZh) =>
+      !!cardZh && docIds.some((d) => ['utem', 'maxwell', 'db'].some((s) => ccBy.get(d)?.cmp?.nameZh?.[s] === 'match') && normZh(extractBy.get(d)?.nameZh?.value ?? null) === normZh(cardZh));
+  }
+  return { persons: pkg.persons, staffIdx: buildStaffNoIndex(ext), extractBy, deps, ...(card ? { card } : {}), ...(listAgree ? { listAgree } : {}) };
 }
 
 // dry 專用：記低「當前人」（dry 強制 concurrency 1，順序執行）
@@ -452,8 +475,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
           let cardOut = c.proposals;
           // TE-4.1 M1：整人一致性——卡讀到嘅姓名同包內任何已有姓名比對（就算冇出建議）；卡欄喺入職表 cross／打字名單檢查唔一致；包內完全冇姓名先唔受姓名比對影響
           const cardRead = (k: 'name_zh' | 'name_en') => (r.picks[k]?.doc === 'id_card' ? r.picks[k]!.result.value : null);
-          const cardFieldKeys = ['name_zh', 'name_en', 'hkid', 'dob'] as const;
-          const crossBad = cardFieldKeys.some((k) => r.picks[k]?.doc === 'id_card' && r.picks[k]!.cross === 'differs');
+          const crossBad = false; // TE-11.2：入職表差異改由 gradeFormAgreement 分級（輕微差異唔降級），唔再一律當錯人卡
           const typedBad = ['hkid', 'nameZh', 'nameEn', 'dateOfBirth'].some((f) => (o.skippedByField as Record<string, Record<string, number> | undefined>)[f]?.typed_list_disagrees);
           const dobCard = r.picks.dob?.doc === 'id_card' ? normalizeField('dob', r.picks.dob.result.value, now).canon : null;
           const dobPkg = p.dateOfBirth.status === 'confirmed' && p.dateOfBirth.value ? normalizeField('dob', p.dateOfBirth.value, now).canon : null;
@@ -469,6 +491,21 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
             o.proposals.push(po);
             summary.printed_only_review += 1;
           }
+        }
+        // TE-11.2：錯人卡防線——整頁身份證／嵌入卡兩條路徑都按入職表差異分級（minor→form_differs；conflict→medium＋form_conflict；入職表冇名要打字名單佐證）
+        if (o.proposals.some((x) => x.doc === 'id_card' && x.confidence === 'high')) {
+          const cardOf = (k: 'name_zh' | 'name_en') => (r.picks[k]?.doc === 'id_card' ? r.picks[k]!.result.value : null);
+          const dobCanon = (x: string | null | undefined) => (x ? normalizeField('dob', x, now).canon : null);
+          const auxEn = docIds.map((d) => inp.extractBy.get(d)?.aux?.formNameEn?.value).find(Boolean) ?? null;
+          const grade = gradeFormAgreement(
+            { nameZh: cardOf('name_zh'), nameEn: cardOf('name_en'), dob: r.picks.dob?.doc === 'id_card' ? dobCanon(r.picks.dob.result.value) : null },
+            { nameZh: r.formReads.name_zh ?? null, nameEn: auxEn, dob: dobCanon(r.formReads.dob) },
+          );
+          const listOk = !!inp.listAgree?.(docIds, cardOf('name_zh'));
+          o.proposals = applyFormGrade(o.proposals, grade, listOk);
+          if (grade === 'conflict') summary.form_conflict += 1;
+          else if (o.proposals.some((x) => x.flags?.includes('card_unverified'))) summary.card_unverified += 1;
+          else if (grade === 'minor') summary.form_differs += 1;
         }
         summary.proposals_low_confidence += o.proposals.filter((x) => x.confidence === 'low').length;
         proposals.push(...o.proposals);
