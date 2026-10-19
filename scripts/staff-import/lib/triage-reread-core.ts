@@ -10,8 +10,6 @@ import { OCR_DOC_FIELDS, type OcrDocType, type OcrFieldKey } from '@/lib/guards/
 import { normalizeField, type FieldResult } from '@/lib/guards/ocr/normalize';
 import { readStageA, readStageB, type DocumentReadResult } from '@/lib/guards/ocr/read';
 import type { ReadClients } from '@/lib/guards/ocr/clients';
-import { normZh } from '@/lib/guards/import/text';
-import { canonicalHkid } from './hkid';
 import type { PreparedImages } from './eval-ocr-core';
 
 export type ProposalFieldName = 'nameZh' | 'nameEn' | 'hkid' | 'dateOfBirth' | 'phone' | 'address';
@@ -61,15 +59,6 @@ const TYPED_LIST_REASONS: Record<ProposalFieldName, readonly string[]> = {
   dateOfBirth: ['mismatch_dob'],
   phone: ['phone_differs_from_list'],
   address: ['mismatch_address'],
-};
-
-const sameAsList = (f: ProposalFieldName, card: string, list: string | null): boolean => {
-  if (!list?.trim()) return false;
-  if (f === 'nameZh') return normZh(card) === normZh(list);
-  if (f === 'nameEn') return card.trim().toUpperCase().replace(/\s+/g, ' ') === list.trim().toUpperCase().replace(/\s+/g, ' ');
-  if (f === 'hkid') return canonicalHkid(card) === canonicalHkid(list);
-  if (f === 'dateOfBirth') return card.trim() === list.trim();
-  return false;
 };
 
 export type SkipReason = 'not_review' | 'no_read' | 'wrong_source' | 'not_confirmed' | 'arbiter_agree_a' | 'invalid_format' | 'typed_list_disagrees';
@@ -157,10 +146,9 @@ export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey
     // TE-12（老闆：證件為準）：打字名單唔一致唔再阻擋身份證頁 two_reads 一致嘅姓名／hkid／出生日期——照出建議，加 typed_list_differs（資訊；high 要硬證據，由 caller 用 applyTypedListEvidence 降級）。
     // 電話／地址（非證件來源）同仲裁介入嘅身份證欄照舊阻擋。
     const basis: Basis = r.arbiter ? 'arbiter' : 'two_reads';
-    const reasonHit = (p.reasons ?? []).some((x) => TYPED_LIST_REASONS[m.field].includes(x));
+    // TE-12.2：package 值係導入時由文件讀出（可能係配錯人嗰張卡），mismatch_* 正正係「package 值 vs 打字名單唔一致」——唔可以拎 package 值同卡比而當「已修正」；一律 typedDiffers，high 只靠獨立名單佐證（caller 嘅 listOk）
+    const typedDiffers = (p.reasons ?? []).some((x) => TYPED_LIST_REASONS[m.field].includes(x));
     const cardPath = pick.doc === 'id_card' && basis === 'two_reads';
-    // TE-12.1：身份證頁欄用「今次卡讀數」重新同打字名單（package 該欄值）比——一致＝舊導入 OCR 讀錯已修正，唔加旗；唔一致先 typed_list_differs
-    const typedDiffers = reasonHit && !(cardPath && sameAsList(m.field, n.canon, p[m.pkg].value));
     if (typedDiffers && !cardPath) {
       skip('typed_list_disagrees');
       continue;
@@ -175,7 +163,7 @@ export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey
   return out;
 }
 
-/** TE-12.1：typed_list_differs 嘅 high 建議冇獨立硬證據→降 medium（留人，唔自動答）。獨立證據＝按工號／電話對到嘅打字名單姓名同今次卡讀數一致；入職表 hkid／印刷佐證同卡嚟自同一文件包，整包配錯人時會互相一致，唔計。 */
+/** TE-12.1／12.2：typed_list_differs 嘅 high 建議冇獨立硬證據→降 medium（留人，唔自動答）。獨立證據＝按工號／電話對到嘅打字名單姓名同今次卡讀數一致；入職表 hkid／印刷佐證同卡嚟自同一文件包，整包配錯人時會互相一致，唔計。 */
 export function applyTypedListEvidence(proposals: readonly RereadProposal[], hard: boolean): RereadProposal[] {
   return proposals.map((x) => (!hard && x.confidence === 'high' && x.flags?.includes('typed_list_differs') ? { ...x, confidence: 'medium' as const } : x));
 }
@@ -209,6 +197,8 @@ export interface ExtractRow {
   aux?: { printedHkid?: { value: string } | null; permitHkid?: { value: string } | null; formNameEn?: { value: string } | null; formHkid?: { value: string } | null } | null;
   /** TE-11.2：導入抽取嘅身份證中文名（打字名單佐證時同卡讀數比） */
   nameZh?: { value: string } | null;
+  /** TE-12.2：導入抽取嘅身份證英文名（打字名單英文佐證用） */
+  nameEn?: { value: string } | null;
   pages: ExtractPage[];
   address?: { page: number } | null;
 }

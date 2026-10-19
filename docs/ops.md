@@ -483,3 +483,4 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 - 仲裁同意讀 A（`arbiter_agree_a`）改出 medium 預填建議（flag `arbiter_agree_a`，唔自動答）。server proposals schema 加咗兩個 flag。
 - `24-open-gap-audit.ts --open-questions <json> --package … --proposals … --out data/…`：未答題清單（person_key、staff_numbers、kind、review_fields，無值）逐題分類 auto_answerable／proposal_not_auto／wrong_field／no_proposal（帶逐欄原因）／no_docs／person_unmatched／kind_unsupported。
 - TE-12.1：`typed_list_differs` 要升 high 只認獨立於文件包嘅證據（按工號／電話對到嘅打字名單姓名＝今次卡讀數）；入職表手寫 hkid／印刷佐證同卡同源，整包配錯人時會互相一致，唔計 → medium 留人。`typed_list_differs` 本身改用今次卡讀數同 package 該欄（打字名單）值重新比較：一致＝OCR 讀錯已修正，high 唔加旗。
+- TE-12.2：刪走「卡讀數＝package 值就當已修正」捷徑（package 值本身由文件讀出，可能係配錯人嘅卡）；有 mismatch_* 一律 typed_list_differs，high 只靠 listOk（--crosscheck 名單按工號／電話 match 且導入抽取姓名＝今次卡讀數；中文 normZh、英文 looseEnglishNameMatch）。冇 --crosscheck＝全部 medium。
