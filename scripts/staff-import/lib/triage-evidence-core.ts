@@ -51,10 +51,11 @@ export function evidenceFieldsOf(p: PkgPerson): EvidenceField[] {
 }
 
 /** manifest match：同一條 package 記錄（身份證值＋工號），即係同一個人嘅文件→裁圖→match（M7）。 */
-export function matchOfPerson(p: PkgPerson): { hkid: string | null; staff_numbers: string[]; package_key?: string } {
+export function matchOfPerson(p: PkgPerson, prodKey?: string | null): { hkid: string | null; staff_numbers: string[]; package_key?: string; prod_person_key?: string } {
   const m = { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) };
-  // TE-7：全無身份證號／工號（抽取失敗）——用包內 key 配對（server 用同一函數推 personKey）
-  return !m.hkid && m.staff_numbers.length === 0 && p.key ? { ...m, package_key: p.key } : m;
+  // TE-7：全無身份證號／工號（抽取失敗）——用包內 key 配對（server 用同一函數推 personKey）；TE-7.2：加 production 現有 key（--person-key-map 對照表）
+  if (!m.hkid && m.staff_numbers.length === 0 && p.key) return { ...m, package_key: p.key, ...(prodKey ? { prod_person_key: prodKey } : {}) };
+  return m;
 }
 
 /** TE-7：抽取失敗人＝評級 fail，或者六個身份欄全部冇值（冇工號亦當失敗）。整頁原稿暫存圖淨係對呢批人。 */
@@ -876,7 +877,7 @@ export interface EvidenceItem {
   field: EvidenceField;
   docKind: DocKind;
   priority: 1 | 2 | 3;
-  match: { hkid: string | null; staff_numbers: string[]; package_key?: string };
+  match: { hkid: string | null; staff_numbers: string[]; package_key?: string; prod_person_key?: string };
   /** TE-7：整頁原稿頁碼（field=page） */
   pageNo?: number;
   /** Vision 驗證相似度 0–1（淨數字；冇驗證＝undefined） */
@@ -899,7 +900,7 @@ export function pageMagickArgs(quality: number): string[] {
 
 /** TE-7：manifest.people 一條（來源檔案線索 doc_ref；file_name 係 Drive 檔名，可能含人名） */
 export interface PersonDocRef {
-  match: { hkid: string | null; staff_numbers: string[]; package_key?: string };
+  match: { hkid: string | null; staff_numbers: string[]; package_key?: string; prod_person_key?: string };
   doc_ref: { file_name: string; page_count: number; pages_by_kind: Record<string, number> };
 }
 
@@ -922,8 +923,10 @@ export async function buildEvidenceZips(items: readonly EvidenceItem[], opts: { 
   }
   if (cur.length) batches.push(cur);
   const zips: Uint8Array[] = [];
-  // 來源檔案線索（每人一條）放入第一個 zip；冇圖都有（人冇裁圖亦要俾老闆搵到檔案）
+  // 來源檔案線索（每人一條）：放入「帶有該人圖」嘅每個 zip（TE-7.2：唔好淨係第一個 zip——只上載部分 zip 都要寫到 doc_ref）；冇圖嘅人放第一個 zip
   if (batches.length === 0 && (opts.docRefs?.length ?? 0) > 0) batches.push([]);
+  const idOf = (m: PersonDocRef['match']): string => `${m.hkid ?? ''}|${[...m.staff_numbers].sort().join(',')}|${m.package_key ?? ''}`;
+  const withItems = new Set(items.map((it) => idOf(it.match)));
   for (const [bi, b] of batches.entries()) {
     const z = new JSZip();
     const manifest = b.map((it) => {
@@ -931,7 +934,11 @@ export async function buildEvidenceZips(items: readonly EvidenceItem[], opts: { 
       if (!z.file(file)) z.file(file, it.bytes);
       return { file, field: it.field, doc_kind: it.docKind, priority: it.priority, ...(it.pageNo !== undefined ? { page_no: it.pageNo } : {}), match: it.match, ...(it.verifyScore !== undefined ? { verify_score: Math.round(it.verifyScore * 1000) / 1000 } : {}) };
     });
-    z.file('manifest.json', JSON.stringify({ version: 1, items: manifest, ...(bi === 0 && (opts.docRefs?.length ?? 0) > 0 ? { people: opts.docRefs } : {}) }));
+    z.file('manifest.json', JSON.stringify({ version: 1, items: manifest, ...(() => {
+      const here = new Set(b.map((it) => idOf(it.match)));
+      const people = (opts.docRefs ?? []).filter((d) => here.has(idOf(d.match)) || (bi === 0 && !withItems.has(idOf(d.match))));
+      return people.length > 0 ? { people } : {};
+    })() }));
     zips.push(await z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }));
   }
   return { zips, items: batches.reduce((a, b) => a + b.length, 0) };

@@ -87,6 +87,21 @@ describe.skipIf(!hasMagick)("整頁原稿 JPEG／zip", () => {
     }
   });
 
+  it("TE-7.2：doc_ref 隨該人嘅圖放入「每個」有佢圖嘅 zip（唔再淨係第一個）；冇圖嘅人放第一個；matchOfPerson 帶 prod_person_key", async () => {
+    const ref = (k: string) => ({ match: { hkid: null, staff_numbers: [], package_key: k }, doc_ref: { file_name: `${k}.pdf`, page_count: 1, pages_by_kind: {} } });
+    const jpeg = (n: number) => new Uint8Array(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, n, 2, 3, 0xff, 0xd9]));
+    const it = (k: string, n: number) => ({ bytes: jpeg(n), field: "page" as const, docKind: "full_page" as const, priority: 1 as const, pageNo: 1, match: { hkid: null, staff_numbers: [], package_key: k } });
+    // maxEntries 1：A 圖喺 zip0、B 圖喺 zip1；C 冇圖
+    const built = await buildEvidenceZips([it("A", 1), it("B", 2)], { maxEntries: 1, docRefs: [ref("A"), ref("B"), ref("C")] });
+    expect(built.zips).toHaveLength(2);
+    const names = async (z: Uint8Array) => ((await readEvidenceZip(z)).manifest.people ?? []).map((p) => p.match.package_key).sort();
+    expect(await names(built.zips[0]!)).toEqual(["A", "C"]);
+    expect(await names(built.zips[1]!)).toEqual(["B"]);
+    expect(matchOfPerson(failed(), "abc123abc123abc123abc123")).toEqual({ hkid: null, staff_numbers: [], package_key: "pk-failed", prod_person_key: "abc123abc123abc123abc123" });
+    expect(matchOfPerson(failed({ staffNumbers: [{ number: "U1" }] }), "abc")).toEqual({ hkid: null, staff_numbers: ["U1"] }); // 有工號唔用 prod key
+    expect(parseArgs(["--person-key-map", "m.json"]).personKeyMap).toBe("m.json");
+  });
+
   it("冇圖都帶 doc_ref（人冇裁圖亦要俾老闆搵到檔案）", async () => {
     const built = await buildEvidenceZips([], { docRefs: [{ match: { hkid: null, staff_numbers: [], package_key: "k" }, doc_ref: { file_name: "x.pdf", page_count: 1, pages_by_kind: {} } }] });
     expect(built.zips).toHaveLength(1);

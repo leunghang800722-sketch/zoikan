@@ -300,10 +300,24 @@ export interface EvidenceMatch {
   staff_numbers?: string[];
   /** TE-7：全無身份證號／工號嘅人（抽取失敗）——用包內 key 推 personKey（serverPersonKey 同一函數）；只喺 hkid、工號都冇時先採用 */
   package_key?: string | null;
+  /** TE-7.2：production 現有題目嘅 person key（本機 package key 同 production 舊 package 唔同時，由 --person-key-map 對照表帶入）；只對冇身份證號／工號嘅人生效 */
+  prod_person_key?: string | null;
+}
+
+const identityless = (m: EvidenceMatch): boolean => !canonicalHkid(m.hkid?.trim() || null) && (m.staff_numbers ?? []).filter((x) => x.trim()).length === 0;
+/** prod_person_key 可能係題目 personKey 本身（HMAC），或者 production package 嘅原 key（要經 serverPersonKey 推）——兩樣都收 */
+function prodKeyCandidates(m: EvidenceMatch): string[] {
+  const pk = m.prod_person_key?.trim();
+  return pk ? [pk, serverPersonKey({ key: pk, hkid: { value: null }, staffNumbers: [] })] : [];
 }
 
 /** match 推導嘅 personKey；hkid 唔合法而又冇工號＝null（唔准用包內 key 兜底）。 */
-export function derivePersonKey(m: EvidenceMatch): string | null {
+export function derivePersonKey(m: EvidenceMatch, known?: ReadonlySet<string>): string | null {
+  // TE-7.2：冇身份證號／工號 + prod_person_key → 揀一個真係存在題目嘅 key（冇 known 就唔解析）
+  if (identityless(m) && m.prod_person_key?.trim() && known) {
+    const hit = prodKeyCandidates(m).find((k) => known.has(k));
+    if (hit) return hit;
+  }
   const hasHkid = !!canonicalHkid(m.hkid?.trim() || null);
   const nos = (m.staff_numbers ?? []).filter((x) => x.trim());
   if (!hasHkid && nos.length === 0) {
@@ -317,6 +331,11 @@ export function derivePersonKey(m: EvidenceMatch): string | null {
 export function matchIdentityOk(q: Pick<TriageQuestion, "personKey" | "evidenceJson">, m: EvidenceMatch): boolean {
   const ep = (q.evidenceJson as unknown as QuestionEvidence | null)?.person;
   if (!ep) return false;
+  // TE-7.2：prod_person_key——只對冇身份證號／工號嘅人，而且題目 evidence 身份集合為空
+  if (identityless(m) && m.prod_person_key?.trim()) {
+    const qk = q.personKey ?? ep.key;
+    if (prodKeyCandidates(m).includes(qk) && !canonicalHkid(ep.hkid?.value ?? null) && (ep.staffNumbers ?? []).length === 0) return true;
+  }
   const derived = derivePersonKey(m);
   if (!derived || derived !== (q.personKey ?? ep.key)) return false;
   if ((canonicalHkid(m.hkid ?? null) ?? null) !== (canonicalHkid(ep.hkid?.value ?? null) ?? null)) return false;

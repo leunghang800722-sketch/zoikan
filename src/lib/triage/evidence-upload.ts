@@ -39,9 +39,9 @@ const ENTRY_NAME_RE = /^[a-f0-9]{16,64}\.(jpg|png)$/;
 const DAY_MS = 86_400_000;
 
 const matchSchema = z
-  .object({ hkid: z.string().max(20).nullable().optional(), staff_numbers: z.array(z.string().min(1).max(32)).max(20).optional(), package_key: z.string().min(1).max(80).nullable().optional() })
+  .object({ hkid: z.string().max(20).nullable().optional(), staff_numbers: z.array(z.string().min(1).max(32)).max(20).optional(), package_key: z.string().min(1).max(80).nullable().optional(), prod_person_key: z.string().min(1).max(80).nullable().optional() })
   .strict()
-  .refine((m) => !!(m.hkid && m.hkid.trim()) || (m.staff_numbers?.length ?? 0) > 0 || !!m.package_key?.trim());
+  .refine((m) => !!(m.hkid && m.hkid.trim()) || (m.staff_numbers?.length ?? 0) > 0 || !!m.package_key?.trim() || !!m.prod_person_key?.trim());
 const itemSchema = z
   .object({
     file: z.string().regex(ENTRY_NAME_RE),
@@ -238,7 +238,7 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
         counts.skipped_invalid_image += 1;
         continue;
       }
-      const personKey = derivePersonKey(item.match);
+      const personKey = derivePersonKey(item.match, new Set(byKey.keys()));
       const cands = personKey ? (byKey.get(personKey) ?? []) : [];
       if (!personKey) {
         counts.skipped_identity_mismatch += 1;
@@ -288,7 +288,7 @@ export async function runEvidenceUpload(actor: AuthedSession, sessionId: string,
     const docRefs: { qid: string; docRef: DocRef }[] = [];
     const doneQ = new Set<string>();
     for (const pe of manifest.people ?? []) {
-      const pk = derivePersonKey(pe.match);
+      const pk = derivePersonKey(pe.match, new Set(byKey.keys()));
       if (!pk) continue;
       for (const q of byKey.get(pk) ?? []) {
         if (doneQ.has(q.id) || restricted.has(q.kind) || !matchIdentityOk(q, pe.match)) continue;
