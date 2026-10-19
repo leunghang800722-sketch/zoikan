@@ -476,3 +476,11 @@ W1／W2 之後，**群組開咗「自動寫入」**嘅群，解析有把握嘅�
 ### TE-11.6 指紋差異診斷＋生成值正規化
 - 預覽／commit 指紋改用 `fingerprintInput`：本次 run 新生成嘅 row id（create 嗰筆 rowId）喺任何位置出現都換成穩定佔位 `<new#n>`；key 以 `xxxAt`／`xxx_at` 結尾嘅時間戳唔入指紋（原有 id／guardId／createdAt 等照舊剔除）。
 - commit 時 `preview_hash` 409 會帶 `details.diff_paths`（對比預覽暫存嘅指紋輸入，只路徑＋類型 `:value/:type/:missing/.length`，冇值），`invalid_reasons` 顯示為 `submit:409:conflict:<path>[,<path>]`（最多 3 條）。預覽輸入暫存喺 server 記憶體 10 分鐘；跨 instance／重啟會顯示 `preview_not_cached`。
+
+### TE-12 重讀 proposals 缺口
+- `19-triage-reread` 的 proposals.json `summary.persons[]`＝逐人診斷（person_key、staff_numbers、每個覆核欄 status／reason／confidence／flags，唔記值）；console 只計數。reason：`proposed`／`no_read`／`wrong_source`／`not_confirmed`／`invalid_format`／`typed_list_disagrees`／`no_docs`／`read_failed`。
+- 打字名單唔一致（`mismatch_*`）唔再阻擋身份證頁 two_reads 一致嘅姓名／hkid／出生日期：照出建議並加 flag `typed_list_differs`；有硬證據（入職表手寫 hkid＝卡、印刷佐證、工號／電話名單對到）先 high，否則 medium（唔自動答）。電話／地址（非證件來源）同仲裁介入欄照舊阻擋。
+- 仲裁同意讀 A（`arbiter_agree_a`）改出 medium 預填建議（flag `arbiter_agree_a`，唔自動答）。server proposals schema 加咗兩個 flag。
+- `24-open-gap-audit.ts --open-questions <json> --package … --proposals … --out data/…`：未答題清單（person_key、staff_numbers、kind、review_fields，無值）逐題分類 auto_answerable／proposal_not_auto／wrong_field／no_proposal（帶逐欄原因）／no_docs／person_unmatched／kind_unsupported。
+- TE-12.1：`typed_list_differs` 要升 high 只認獨立於文件包嘅證據（按工號／電話對到嘅打字名單姓名＝今次卡讀數）；入職表手寫 hkid／印刷佐證同卡同源，整包配錯人時會互相一致，唔計 → medium 留人。`typed_list_differs` 本身改用今次卡讀數同 package 該欄（打字名單）值重新比較：一致＝OCR 讀錯已修正，high 唔加旗。
+- TE-12.2：刪走「卡讀數＝package 值就當已修正」捷徑（package 值本身由文件讀出，可能係配錯人嘅卡）；有 mismatch_* 一律 typed_list_differs，high 只靠 listOk（--crosscheck 名單按工號／電話 match 且導入抽取姓名＝今次卡讀數；中文 normZh、英文 looseEnglishNameMatch）。冇 --crosscheck＝全部 medium。

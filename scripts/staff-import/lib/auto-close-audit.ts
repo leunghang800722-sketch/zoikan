@@ -9,7 +9,7 @@ export interface AutoCloseRow {
   kinds: { kind: 'name_not_confirmed' | 'hkid_not_confirmed' | 'field_review'; closable: boolean; via: 'use_package' | 'card_truth' | 'apply_fields' | null; blockedByFormConflict?: boolean; blockedByUnproven?: boolean }[];
 }
 
-const cardTruth = (p: RereadProposal | undefined): boolean => !!p && p.confidence === 'high' && p.basis === 'two_reads' && p.doc === 'id_card' && !(p.flags ?? []).some((f) => f === 'printed_card_conflict' || f === 'card_name_conflict');
+export const cardTruth = (p: RereadProposal | undefined): boolean => !!p && p.confidence === 'high' && p.basis === 'two_reads' && p.doc === 'id_card' && !(p.flags ?? []).some((f) => f === 'printed_card_conflict' || f === 'card_name_conflict');
 /** 身份證兩讀一致本來可靠卡為準修正，但入職表完全唔相似（form_conflict）而被降級留人 */
 const formConflictBlocked = (p: RereadProposal): boolean => p.doc === 'id_card' && p.basis === 'two_reads' && (p.flags ?? []).includes('form_conflict');
 /** 中文差 1 字而冇硬證據：medium＋form_differs（TE-11.3） */

@@ -20,7 +20,7 @@ import { getReadClients } from '@/lib/guards/ocr/clients';
 import type { DocumentReadResult } from '@/lib/guards/ocr/read';
 import { ArgError, fakeClientsFor, resolveReportPath, runPool, type EvalCase, type PreparedImages } from './lib/eval-ocr-core';
 import { prepareDocumentImages } from './lib/eval-ocr-images';
-import { applyCorroboration, applyFormGrade, gradeFormAgreement, cardKeyHash, cardNamesConflict, cropCardToPng, markCardNameConflict, printedOnlyProposal, scanForCard, type CardDeps, type CardPageRef, type CardScan } from './lib/card-reread';
+import { applyCorroboration, applyFormGrade, gradeFormAgreement, cardKeyHash, cardNamesConflict, cropCardToPng, looseEnglishNameMatch, markCardNameConflict, printedOnlyProposal, scanForCard, type CardDeps, type CardPageRef, type CardScan } from './lib/card-reread';
 import { canonicalHkid, hkidCheckDigitValid } from './lib/hkid';
 import { normalizeField } from '@/lib/guards/ocr/normalize';
 import { normZh } from '@/lib/guards/import/text';
@@ -28,6 +28,8 @@ import { rotateLines } from './lib/triage-evidence-core';
 import type { OcrLine, OcrPage } from './lib/ocr';
 import {
   addOutcome,
+  applyTypedListEvidence,
+  diagnosePerson,
   buildStaffNoIndex,
   docIdsForPerson,
   emptySummary,
@@ -210,7 +212,7 @@ export function dryFixture(): { persons: DryPerson[] } {
     persons: [
       { p: base(1), truth: truth(1), docs: true }, // 全部欄兩讀一致 → 建議
       { p: base(2, { hkid: lf('Z900001(3)', 'review'), nameZh: lf('測試乙', 'review') }), truth: truth(2), docs: true, fake: { id_card: { a: { hkid: 'Z900001(3)' }, b: { hkid: 'Z900001(3)' } } } }, // check digit 錯 → invalid_format
-      { p: base(3, { reasons: ['mismatch_nameZh'] }), truth: truth(3), docs: true }, // 打字名單唔一致 → 姓名唔建議
+      { p: base(3, { reasons: ['mismatch_nameZh'] }), truth: truth(3), docs: true, listMatch: true }, // 打字名單唔一致 → 姓名唔建議
       { p: base(4), truth: truth(4), docs: false }, // 冇文件
       { p: base(5), truth: truth(5), docs: true, fake: { id_card: { a: { dob: '1990-01-15' }, b: { dob: '1991-02-03' } } } }, // 兩讀唔一致 → 唔建議（仲裁預設讀啱 → arbiter）
       // TE-4：嵌入身份證副本（倒轉）＋印刷佐證
@@ -226,6 +228,10 @@ export function dryFixture(): { persons: DryPerson[] } {
       { p: base(15), truth: truth(15), docs: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、冇名單佐證 → medium＋card_unverified
       { p: base(17), truth: truth(17), docs: true, fake: { onboarding_form: { a: { name_zh: '測試甲乙', hkid: null }, b: { name_zh: '測試甲乙', hkid: null } } } }, // 只得中文可比、差字而冇硬證據（form 冇 hkid）→ medium＋form_differs
       { p: base(18), truth: truth(18), docs: true, formEn: 'DIFFERENT PERSON', fake: { onboarding_form: { a: { name_zh: '測試乙' }, b: { name_zh: '測試乙' } } } }, // 兄弟姊妹：中文差 1 字、英文唔同 → conflict
+      { p: base(19, { reasons: ['mismatch_nameZh'] }), truth: truth(19), docs: true, fake: { onboarding_form: { a: { hkid: null }, b: { hkid: null } } } }, // TE-12：打字名單唔一致、入職表冇 hkid（冇硬證據）→ 照出建議但降 medium＋typed_list_differs
+      { p: base(20, { reasons: ['mismatch_nameZh'] }), truth: truth(20), docs: true }, // TE-12.1：整包配錯人——卡＋入職表 hkid 互相一致，但冇名單佐證 → medium 留人
+      { p: base(21, { nameZh: lf('測試甲', 'review'), reasons: ['mismatch_nameZh'] }), truth: truth(21), docs: true }, // TE-12.2：package 值＝卡值（可能係配錯人嘅卡）、冇名單佐證 → medium＋typed_list_differs（唔當「已修正」）
+      { p: base(22, { nameZh: lf('測試甲', 'review'), reasons: ['mismatch_nameZh'] }), truth: truth(22), docs: true, listMatch: true }, // 同上但有名單佐證 → high
       { p: base(16), truth: truth(16), docs: true, listMatch: true, fake: { onboarding_form: { a: { name_zh: null }, b: { name_zh: null } } } }, // 入職表冇名、名單一致 → high
       { p: base(6, { nameZh: lf('測試乙', 'confirmed'), nameEn: lf('TEST ALPHA', 'confirmed'), dateOfBirth: lf('1990-01-15', 'confirmed'), phone: lf('90001116', 'confirmed'), address: lf('舊地址', 'confirmed') }), truth: truth(6), docs: true }, // 冇 review 欄 → 唔重讀
     ],
@@ -246,7 +252,7 @@ interface Inputs {
   /** TE-4：嵌入身份證副本掃描（冇＝唔做） */
   card?: { scan(pages: readonly CardPageRef[]): Promise<CardScan> };
   /** TE-11.2：打字名單（按工號／電話對到）嘅姓名同卡上中文名一致（冇＝唔知＝false） */
-  listAgree?: (docIds: readonly string[], cardNameZh: string | null) => boolean;
+  listAgree?: (docIds: readonly string[], cardNameZh: string | null, cardNameEn?: string | null) => boolean;
 }
 
 async function loadInputs(args: Args): Promise<Inputs> {
@@ -381,10 +387,17 @@ async function loadInputs(args: Args): Promise<Inputs> {
   // TE-11.2：打字名單佐證（--crosscheck）：該文件喺 crosscheck 嘅 nameZh 同任何名單 match，而且導入抽取嘅中文名＝今次卡讀數
   let listAgree: Inputs['listAgree'];
   if (args.crosscheck) {
-    const cc = await J<{ docId: string; cmp?: { nameZh?: Record<string, string> } }[]>(args.crosscheck);
+    const cc = await J<{ docId: string; cmp?: { nameZh?: Record<string, string>; nameEn?: Record<string, string> } }[]>(args.crosscheck);
     const ccBy = new Map(cc.map((c) => [c.docId, c]));
-    listAgree = (docIds, cardZh) =>
-      !!cardZh && docIds.some((d) => ['utem', 'maxwell', 'db'].some((s) => ccBy.get(d)?.cmp?.nameZh?.[s] === 'match') && normZh(extractBy.get(d)?.nameZh?.value ?? null) === normZh(cardZh));
+    const LISTS = ['utem', 'maxwell', 'db'];
+    // TE-12.2：名單本身按工號／電話對到（crosscheck match）且導入抽取姓名＝今次卡讀數（中文 normZh；英文 looseEnglishNameMatch）
+    listAgree = (docIds, cardZh, cardEn) =>
+      docIds.some((d) => {
+        const ex = extractBy.get(d);
+        const zh = !!cardZh && LISTS.some((s) => ccBy.get(d)?.cmp?.nameZh?.[s] === 'match') && normZh(ex?.nameZh?.value ?? null) === normZh(cardZh);
+        const en = !!cardEn && !!ex?.nameEn?.value && LISTS.some((s) => ccBy.get(d)?.cmp?.nameEn?.[s] === 'match') && looseEnglishNameMatch(ex.nameEn.value, cardEn);
+        return zh || en;
+      });
   }
   return { persons: pkg.persons, staffIdx: buildStaffNoIndex(ext), extractBy, deps, ...(card ? { card } : {}), ...(listAgree ? { listAgree } : {}) };
 }
@@ -461,6 +474,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
         summary.proposals_low_confidence += 1;
         summary.printed_only_review += 1;
       } else summary.persons_no_docs += 1;
+      summary.persons.push(po ? diagnosePerson(p, { proposals: [po], skipped: {}, skippedByField: {}, skipDetail: {} }) : diagnosePerson(p, null, 'no_docs'));
       return;
     }
     let ok = false;
@@ -481,7 +495,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
           // TE-4.1 M1：整人一致性——卡讀到嘅姓名同包內任何已有姓名比對（就算冇出建議）；卡欄喺入職表 cross／打字名單檢查唔一致；包內完全冇姓名先唔受姓名比對影響
           const cardRead = (k: 'name_zh' | 'name_en') => (r.picks[k]?.doc === 'id_card' ? r.picks[k]!.result.value : null);
           const crossBad = false; // TE-11.2：入職表差異改由 gradeFormAgreement 分級（輕微差異唔降級），唔再一律當錯人卡
-          const typedBad = ['hkid', 'nameZh', 'nameEn', 'dateOfBirth'].some((f) => (o.skippedByField as Record<string, Record<string, number> | undefined>)[f]?.typed_list_disagrees);
+          const typedBad = false; // TE-12：打字名單唔一致改為資訊旗標 typed_list_differs（硬證據才 high），唔再一律當錯人卡
           const dobCard = r.picks.dob?.doc === 'id_card' ? normalizeField('dob', r.picks.dob.result.value, now).canon : null;
           const dobPkg = p.dateOfBirth.status === 'confirmed' && p.dateOfBirth.value ? normalizeField('dob', p.dateOfBirth.value, now).canon : null;
           const nameBad = cardNamesConflict({ nameZh: p.nameZh.value, nameEn: p.nameEn.value, dobConfirmed: dobPkg }, { nameZh: cardRead('name_zh'), nameEn: cardRead('name_en'), dob: dobCard });
@@ -502,7 +516,7 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
           const cardOf = (k: 'name_zh' | 'name_en') => (r.picks[k]?.doc === 'id_card' ? r.picks[k]!.result.value : null);
           const dobCanon = (x: string | null | undefined) => (x ? normalizeField('dob', x, now).canon : null);
           const auxEn = docIds.map((d) => inp.extractBy.get(d)?.aux?.formNameEn?.value).find(Boolean) ?? null;
-          const listOk = !!inp.listAgree?.(docIds, cardOf('name_zh'));
+          const listOk = !!inp.listAgree?.(docIds, cardOf('name_zh'), cardOf('name_en'));
           // 硬證據：入職表手寫 hkid（checksum 過）＝卡 hkid；印刷佐證一致；打字名單按工號／電話對到而名單姓名＝卡姓名
           const cardHk = canonicalHkid(r.picks.hkid?.doc === 'id_card' ? r.picks.hkid.result.value : null);
           const formHk = canonicalHkid(r.formReads.hkid ?? docIds.map((d) => inp.extractBy.get(d)?.aux?.formHkid?.value).find(Boolean) ?? null);
@@ -512,13 +526,18 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
             { nameZh: r.formReads.name_zh ?? null, nameEn: auxEn, dob: dobCanon(r.formReads.dob) },
             hard,
           );
-          o.proposals = applyFormGrade(o.proposals, grade, listOk);
+          o.proposals = applyTypedListEvidence(applyFormGrade(o.proposals, grade, listOk), listOk) // TE-12.1：typed_list_differs 只認獨立於文件包嘅名單佐證（listOk）;
           if (grade === 'conflict') summary.form_conflict += 1;
           else if (o.proposals.some((x) => x.flags?.includes('card_unverified'))) summary.card_unverified += 1;
           else if (grade === 'minor_unproven') summary.form_unproven += 1;
           else if (grade === 'minor') summary.form_differs += 1;
         }
         summary.proposals_low_confidence += o.proposals.filter((x) => x.confidence === 'low').length;
+        for (const x of o.proposals) if (x.flags?.includes('typed_list_differs')) {
+          summary.typed_list_differs += 1;
+          if (x.confidence !== 'high') summary.typed_list_differs_medium += 1;
+        }
+        summary.persons.push(diagnosePerson(p, o));
         proposals.push(...o.proposals);
         addOutcome(summary, o);
         summary.ocr_calls += r.calls;
@@ -529,9 +548,13 @@ export async function run(args: Args, now: Date = new Date(), cacheOverride?: Do
         /* 重試 1 次；錯誤內容唔印（可能帶路徑） */
       }
     }
-    if (!ok) summary.persons_failed += 1;
+    if (!ok) {
+      summary.persons_failed += 1;
+      summary.persons.push(diagnosePerson(p, null, 'read_failed'));
+    }
     console.log(`[triage-reread] ${i + 1}/${todo.length} ${ok ? 'ok' : 'failed'}`);
   });
+  summary.persons.sort((a, b) => (a.person_key < b.person_key ? -1 : a.person_key > b.person_key ? 1 : 0));
   return { proposals, summary };
 }
 
