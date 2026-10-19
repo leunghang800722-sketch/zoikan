@@ -118,7 +118,7 @@ describe("來源優先順序（老闆 2026-10-18 補充，方案 §7）", () => 
   it("match 由同一條 package 記錄產生：身份證值＋工號", () => {
     const p = { key: "k", hkid: lf(" Z900001(1) ", "review"), staffNumbers: [{ number: "U1" }, { number: "U2" }] } as never;
     expect(matchOfPerson(p)).toEqual({ hkid: "Z900001(1)", staff_numbers: ["U1", "U2"] });
-    expect(matchOfPerson({ key: "k", hkid: lf(null, "missing"), staffNumbers: [] } as never)).toEqual({ hkid: null, staff_numbers: [] });
+    expect(matchOfPerson({ key: "k", hkid: lf(null, "missing"), staffNumbers: [] } as never)).toEqual({ hkid: null, staff_numbers: [], package_key: "k" }); // TE-7：全無身份證號／工號＝用包內 key 配對
   });
 });
 

@@ -51,6 +51,7 @@ function personView(p: PackagePerson, c: ViewerCaps) {
     phone: { ...f(p.phone), value: mTel(fieldValue(p.phone), c) },
     address: { ...f(p.address), value: mAddr(fieldValue(p.address), c) },
     staff_numbers: p.staffNumbers.map((n) => n.number),
+    doc_info: p.docInfo ? { page_count: p.docInfo.pageCount, pages_by_kind: p.docInfo.pagesByKind, file_ext: p.docInfo.fileExts ?? [] } : null,
     rating: p.rating,
     ext: extView(p, c),
   };
@@ -158,6 +159,8 @@ export interface QuestionView {
     reasons: string[];
     candidates: CandidateRow[];
     review_fields: { field: string; label: string; check: string }[];
+    /** TE-7：來源檔案線索（file_name 可能含人名，冇「保安員個人資料:view」＝null） */
+    doc_ref: { file_name: string | null; page_count: number; pages_by_kind: Record<string, number> } | null;
     ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
     /** bank_identity_unknown：戶口（遮罩；全號淨係有銀行資料 view 先回） */
     unassigned: { bank_code: string; bank_name: string | null; account_masked: string | null; account_full: string | null; payee_name: string | null; hidden?: boolean } | null;
@@ -190,7 +193,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         status: r.status,
         options: [],
         restricted: true,
-        evidence: { pii_visible: c.pii, pii_update: c.piiUpdate, guard_update: c.guardUpdate, bank_view: c.bankView, bank_update: false, person: null, reasons: [], candidates: [], review_fields: [], ext_review: [], unassigned: null },
+        evidence: { pii_visible: c.pii, pii_update: c.piiUpdate, guard_update: c.guardUpdate, bank_view: c.bankView, bank_update: false, person: null, reasons: [], candidates: [], review_fields: [], doc_ref: null, ext_review: [], unassigned: null },
         answer: ans?.option ? { option: ans.option } : null,
         answered_by: r.answeredBy,
         answered_at: r.answeredAt,
@@ -228,6 +231,7 @@ export async function questionViews(rows: TriageQuestion[], c: ViewerCaps): Prom
         person: personView(e.person, c),
         reasons: c.pii ? e.reasons : e.reasons.filter((x) => !NAME_REASONS.has(x)),
         candidates,
+        doc_ref: e.doc_ref ? { file_name: c.pii ? e.doc_ref.file_name : null, page_count: e.doc_ref.page_count, pages_by_kind: e.doc_ref.pages_by_kind } : null,
         // 逐欄 check 反映現有 DB 值嘅比較結果：冇「保安員個人資料:view」就剝走（免得變成探測現值嘅 oracle）
         review_fields: (e.review_fields ?? []).map((f) => ({ field: f.field, label: REVIEW_FIELD_LABEL[f.field], check: c.pii || !["same", "differs", "conflict"].includes(f.check) ? f.check : "hidden" })),
         ext_review: (e.ext_review ?? []).map((f) => {

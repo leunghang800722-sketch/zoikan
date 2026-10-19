@@ -157,6 +157,8 @@ export interface QuestionEvidence {
   ext_review?: { key: string; check: string; status: string; held?: string }[];
   /** bank_identity_unknown：Payroll Editor 對唔到人嘅戶口（含完整戶口號——同 guards 表同級，只存 DB，API 層按銀行資料權限遮罩） */
   unassigned?: { key: string; bankCode: string; accountNo: string; payeeName: string };
+  /** TE-7：來源檔案線索（證據圖上載時由本機腳本帶入；只補唔覆蓋） */
+  doc_ref?: { file_name: string; page_count: number; pages_by_kind: Record<string, number> };
 }
 
 /** 「補充資料」層：唔急，排喺要人手／衝突／銀行之後，badge 唔計。 */

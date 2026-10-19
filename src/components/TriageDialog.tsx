@@ -3,7 +3,9 @@
 // 一條一條問：證據卡 → 揀選項（系統列舉，唔收自由指令）→「預覽影響」→「確認寫入」；
 // 可以「跳過，留返人手」或「遲啲先答」（關閉，之後喺「待答問題」續答）。
 // 寫入全部由 server 經現有導入路徑做，呢度只負責問同顯示；回應 DTO 係 snake_case。
-import { EvidenceImages, EvidenceSection, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
+import { reasonLabel } from "@/lib/triage/reason-labels";
+import { hanCount, hkidInputState } from "@/lib/guards/hkid-pure";
+import { EvidenceImages, EvidenceSection, OriginalPages, REVIEW_TO_EVIDENCE_FIELD, type EvidenceImageDto } from "@/components/EvidenceImages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -61,14 +63,17 @@ interface Question {
   options: Option[];
   /** TE-1：原文件欄位裁圖 meta（唔含 bytes；圖由 GET /api/triage/evidence-images/:id 攞） */
   evidence_images?: EvidenceImageDto[];
+  /** TE-7：有整頁原稿但冇權限睇（頁數） */
+  evidence_pages_hidden?: number;
   evidence: {
     pii_visible: boolean;
     pii_update: boolean;
     guard_update: boolean;
     bank_view: boolean;
     bank_update: boolean;
-    person: { hkid: Field; name_zh: Field; name_en: Field; date_of_birth: Field; phone: Field; address: Field; staff_numbers: string[]; ext: ExtView | null } | null;
+    person: { hkid: Field; name_zh: Field; name_en: Field; date_of_birth: Field; phone: Field; address: Field; staff_numbers: string[]; ext: ExtView | null; doc_info?: { page_count: number; pages_by_kind: Record<string, number>; file_ext: string[] } | null } | null;
     reasons: string[];
+    doc_ref?: { file_name: string | null; page_count: number; pages_by_kind: Record<string, number> } | null;
     candidates: Candidate[];
     review_fields: { field: string; label: string; check: string }[];
     ext_review: { key: string; label: string; check: string; status: string; held?: "longterm_hire_date" | "identity" | "bank" }[];
@@ -109,64 +114,22 @@ const NAME_FIELDS: { field: "name_zh" | "name_en"; label: string; required: bool
 const SUPP_KINDS = ["field_review", "ext_field_conflict", "ext_field_review"];
 const isSupp = (k: string) => SUPP_KINDS.includes(k);
 
-const REASON_LABEL: Record<string, string> = {
-  name_not_confirmed: "姓名未能確認（身份證副本讀數唔一致或者未核對）",
-  create_no_name: "導入包冇姓名",
-  hkid_not_confirmed_no_other_key: "身份證號未確認，又冇工號／電話可以對上現有保安員",
-  create_hkid_not_confirmed: "身份證號未確認",
-  guard_has_other_hkid_unconfirmed: "同名現有保安員已有另一個身份證號，而導入包嘅身份證號未確認",
-  extract_fail: "證件讀取失敗／冇可用嘅身份證號",
-  tel_only_candidate: "淨係電話對到現有保安員，其他資料對唔上",
-  name_only_candidate: "淨係姓名對到現有保安員，冇硬證據",
-  name_multi_candidate: "有幾個同名嘅現有保安員",
-  same_name_different_dob: "同名現有保安員，但出生日期唔同",
-  staffno_shared_by_persons: "同一個工號出現喺導入包內多個人",
-  dup_tel_across_persons: "同一個電話出現喺導入包內多個人",
-  group_name_differs: "同一個身份證喺唔同檔案嘅姓名唔一致",
-  duplicate_hkid_in_package: "導入包內有重複身份證",
-  duplicate_key_in_package: "導入包內有重複記錄",
-  hkid_multi_guard: "多個現有保安員用同一個身份證號",
-  staffno_multi_guard: "工號對到多個現有保安員",
-  hkid_vs_staffno_differ: "身份證同工號指向唔同嘅現有保安員",
-  guard_hkid_differs: "現有保安員已有另一個身份證號",
-  tel_belongs_to_other_guard: "電話屬於另一個現有保安員",
-  tel_guard_has_other_hkid: "電話對到嘅現有保安員有另一個身份證號",
-  tel_multi_guard: "電話對到多個現有保安員",
-  name_differs_from_guard: "姓名同現有保安員紀錄唔同",
-  same_name_different_hkid: "同名但現有保安員嘅身份證號唔同",
-  forced_guard_missing: "揀咗嘅保安員已經唔存在",
-  hkid_belongs_to_other_guard: "呢個身份證號已屬於另一個保安員",
-  apply_failed: "套用失敗，請稍後再試",
-  overwrite_forbidden: "要有保安員個人資料／保安員修改權限嘅同事處理",
-  staffno_belongs_to_other: "有工號屬於另一個保安員",
-  staffno_scheme_has_other_current: "有工號同現有工號類別重複",
-  staffno_invalid: "有工號格式唔合法",
-  bank_copy_disagrees: "銀行卡／存摺副本同 Payroll Editor 戶口唔一致",
-  bank_copy_agrees: "銀行卡／存摺副本同 Payroll Editor 戶口一致",
-  bank_copy_only: "淨係有銀行卡／存摺副本，Payroll Editor 冇呢個戶口",
-  bank_identity_name_only: "戶口淨靠英文姓名對返呢個人",
-  bank_identity_name_ambiguous: "戶口嘅英文姓名對到多個人",
-  bank_identity_unknown: "Payroll Editor 戶口對唔到人",
-  maxwell_acct_differs: "Maxwell 名單戶口同 Payroll Editor 唔同",
-  maxwell_payee_differs: "Maxwell 名單收款人同 Payroll Editor 唔同",
-  typed_list_only_person: "淨係喺打字名單出現",
-  ext_identity_check: "工號／身份同另一位唔一致",
-  longterm_hire_via_triage: "長工入職日期會影響長工糧計算，要喺分診題逐條確認，唔可以批量決定",
-  bank_incomplete: "包內銀行資料四欄唔齊（編號／戶口／收款人／名稱），只可以跳過，唔准砌半套戶口",
-  bank_acct_belongs_to_other: "呢個戶口已屬於另一位保安員",
-  bank_acct_shared_by_persons: "同一個戶口出現喺導入包內多個人",
-};
+export { reasonLabel };
 
-/** reason code → 中文標籤；未知 code 一律顯示「其他原因」，唔露英文碼。 */
-export function reasonLabel(code: string): string {
-  return REASON_LABEL[code] ?? "其他原因";
-}
+const KIND_PAGE_LABEL: Record<string, string> = { id_card: "身份證", application_form: "入職表", address_proof: "住址證明", sia_permit: "牌照", bank: "銀行", address_declaration: "地址聲明", other: "其他", blank: "空白" };
 
 const STATUS_LABEL: Record<string, string> = { confirmed: "已確認", review: "待核對", missing: "冇資料" };
 const CHECK_LABEL: Record<string, string> = { hidden: "你冇權限睇現有資料",  fill: "現有資料冇，會補", differs: "同現有資料唔同", invalid_date: "日期唔合法", new: "新", held: "待你決定", add: "會加多一位", same: "同現有資料一樣", not_stored: "系統未儲存" };
 
 function FieldRow({ label, f }: { label: string; f: Field }) {
-  if (f.status === "missing" && !f.value) return null;
+  // TE-7：missing 欄唔再隱藏，要見到有邊啲欄係缺
+  if (f.status === "missing" && !f.value)
+    return (
+      <div className="flex flex-wrap items-center gap-x-2 text-zk-base text-zk-faint" data-testid="triage-field-missing">
+        <span className="w-[72px] shrink-0">{label}</span>
+        <span>—（未讀到）</span>
+      </div>
+    );
   return (
     <div className="flex flex-wrap items-center gap-x-2 text-zk-base">
       <span className="w-[72px] shrink-0 text-zk-faint">{label}</span>
@@ -245,6 +208,32 @@ function PersonCard({ q }: { q: Question }) {
     );
   }
   if (!p) return null;
+  const empty = [p.name_zh, p.name_en, p.hkid, p.date_of_birth, p.phone, p.address].every((f) => f.status === "missing" && !f.value) && p.staff_numbers.length === 0 && !p.ext;
+  if (empty) {
+    const di = p.doc_info;
+    return (
+      <div className="space-y-1 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="triage-person-empty">
+        <div className="text-zk-sm font-semibold text-zk-muted">導入包內嘅資料</div>
+        <div className="text-zk-base font-semibold text-zk-warning">導入包冇讀到呢位嘅任何資料</div>
+        {q.evidence.reasons.length > 0 && <div className="text-zk-sm text-zk-muted">原因：{[...new Set(q.evidence.reasons.map(reasonLabel))].join("、")}</div>}
+        {di && (
+          <div className="text-zk-sm text-zk-muted" data-testid="triage-doc-info">
+            來源文件：共 {di.page_count} 頁
+            {Object.keys(di.pages_by_kind).length > 0 ? `（${Object.entries(di.pages_by_kind).map(([k, n]) => `${k} ${n}`).join("、")}）` : ""}
+            {di.file_ext.length > 0 ? `・類型 ${di.file_ext.join("、")}` : ""}
+          </div>
+        )}
+        {q.evidence.doc_ref && (
+          <div className="text-zk-sm text-zk-muted" data-testid="triage-doc-ref">
+            檔案：{q.evidence.doc_ref.file_name ?? "（你冇權限睇檔名）"}（{q.evidence.doc_ref.page_count} 頁
+            {Object.keys(q.evidence.doc_ref.pages_by_kind).length > 0 ? `：${Object.entries(q.evidence.doc_ref.pages_by_kind).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${KIND_PAGE_LABEL[k] ?? k} ${n}`).join("、")}` : ""}）
+          </div>
+        )}
+        <div className="text-zk-sm text-zk-muted">下一步：請補交身份證副本／入職表再導入，或者人手輸入。</div>
+        <OriginalPages imgs={q.evidence_images ?? []} hidden={q.evidence_pages_hidden ?? 0} />
+      </div>
+    );
+  }
   return (
     <div className="space-y-1 rounded-lg border border-zk-border bg-zk-header/40 p-3" data-testid="triage-person">
       <div className="text-zk-sm font-semibold text-zk-muted">導入包內嘅資料</div>
@@ -283,6 +272,16 @@ function CandidateCard({ c, idx }: { c: Candidate; idx: number }) {
       <div className="text-zk-muted">最近返更盤：{c.recent_sites.length ? c.recent_sites.map((s) => `${s.name}（${s.last_date}）`).join("、") : "未有紀錄"}</div>
     </div>
   );
+}
+
+/** TE-6：身份證號即時提示（灰＝格式未齊；紅＝check digit 唔啱；綠＝合法） */
+function HkidHint({ raw }: { raw: string }) {
+  const { state } = hkidInputState(raw);
+  if (state === "empty") return <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-hkid-hint" data-state="empty">格式：A123456(3)</span>;
+  if (state === "partial") return <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-hkid-hint" data-state="partial">格式：A123456(3)（未齊）</span>;
+  if (state === "bad_format") return <span className="mt-1 block text-zk-xs text-zk-danger-dark" data-testid="triage-hkid-hint" data-state="bad_format">格式唔啱：要 1–2 個英文字母＋6 位數字＋檢查碼，例 A123456(3)</span>;
+  if (state === "bad_check") return <span className="mt-1 block text-zk-xs text-zk-danger" data-testid="triage-hkid-hint" data-state="bad_check">檢查碼唔啱，請對住裁圖再睇（括號內係檢查碼）</span>;
+  return <span className="mt-1 block text-zk-xs text-zk-success" data-testid="triage-hkid-hint" data-state="valid">✓ 身份證號合法</span>;
 }
 
 function ImpactCard({ impact }: { impact: Impact }) {
@@ -523,7 +522,8 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     const decisionExtra = decision ? (decision.kind === "link" ? { link_guard_id: decision.guardId } : { create_new: true }) : {};
     const extraObj = { ...nameExtra, ...decisionExtra };
     const extra = Object.keys(extraObj).length > 0 ? { extra: extraObj } : {};
-    return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: text } : {}), ...extra };
+    const sendValue = selected.input === "hkid" ? (hkidInputState(text).canon ?? text) : text; // 全形括號／空格／小寫 → canonical 後送出
+    return { option: selected.id, ...(selected.guard_id ? { guard_id: selected.guard_id } : {}), ...(selected.input && selected.input !== "guard_search" ? { value: sendValue } : {}), ...extra };
   }
 
   async function runPreview(): Promise<{ hash: string; impact: Impact } | null> {
@@ -557,7 +557,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
       lastAuto.current = "";
       return;
     }
-    if (!extraNames.name_zh.trim() || lastAuto.current === namesKey) return;
+    if (hanCount(extraNames.name_zh) < 2 || lastAuto.current === namesKey) return;
     const t = setTimeout(() => {
       lastAuto.current = namesKey;
       void runPreview();
@@ -637,6 +637,10 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   }
 
   const needsText = !!selected?.input && selected.input !== "guard_search";
+  // TE-6：即時驗證——身份證號 check digit、補姓名（中文 ≥2 個中文字）、其他文字輸入唔可空白
+  const hkidSt = selected?.input === "hkid" ? hkidInputState(text) : null;
+  const textOk = !needsText || (selected?.input === "hkid" ? hkidSt?.state === "valid" : text.trim().length > 0);
+  const nameZhOk = !extraShown || hanCount(extraNames.name_zh) >= 2;
   const fieldsReady =
     (selected?.id !== "apply_fields" || Object.keys(fields).length > 0) &&
     (selected?.id !== "apply_ext_fields" || Object.keys(extChoices).length > 0) &&
@@ -647,7 +651,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     if (!q || check === "fill" || check === "new") return false;
     return f === "dateOfBirth" || f === "address" ? !q.evidence.pii_update : f === "nameZh" || f === "nameEn" ? !q.evidence.guard_update : false;
   };
-  const canPreview = !!selected && selected.id !== "skip" && (!needsText || text.trim().length > 0) && fieldsReady && !busy;
+  const canPreview = !!selected && selected.id !== "skip" && textOk && nameZhOk && fieldsReady && !busy;
   const suppNow = !!q && isSupp(q.kind);
   // 總數＝已答＋仍然未答（身份題答完補開跟進題後都計到）
   const liveTotals = !queueReady || !cnt ? null : { imp: done.imp + impRemaining, sup: done.sup + supRemaining };
@@ -777,6 +781,12 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                                 setHash(null);
                               }}
                             />
+                          )}
+                          {choice === val && o.input === "hkid" && <HkidHint raw={text} />}
+                          {choice === val && o.input && o.input !== "guard_search" && o.input !== "hkid" && !text.trim() && (
+                            <span className="mt-1 block text-zk-xs text-zk-faint" data-testid="triage-text-hint">
+                              請輸入內容
+                            </span>
                           )}
                           {choice === val && o.input === "guard_search" && <GuardSearch onPick={(g) => { setPickedGuard(g); setImpact(null); setHash(null); }} />}
                           {choice === val && o.id === "assign_bank" && (
@@ -908,6 +918,11 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                             setHash(null); // TE-3 S2：答案變咗，舊 hash 作廢；確認前會自動重新預覽
                           }}
                         />
+                        {nf.field === "name_zh" && hanCount(extraNames.name_zh) < 2 && (
+                          <span className="mt-0.5 block text-zk-xs text-zk-danger-dark" data-testid="triage-extra-name_zh-hint">
+                            中文姓名要最少 2 個中文字
+                          </span>
+                        )}
                       </label>
                     </div>
                   ))}

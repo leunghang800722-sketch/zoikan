@@ -41,6 +41,8 @@ export interface PkgPerson {
   address: LF;
   staffNumbers: { scheme?: string; number: string }[];
   reasons?: string[];
+  /** TE-7：導入評級（fail＝抽取失敗人） */
+  rating?: string;
 }
 
 const FIELD_MAP: { field: ProposalFieldName; ocr: OcrFieldKey; pkg: keyof Pick<PkgPerson, 'hkid' | 'nameZh' | 'nameEn' | 'dateOfBirth' | 'phone' | 'address'>; doc: OcrDocType }[] = [

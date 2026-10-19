@@ -8,7 +8,7 @@ import { BadRequest } from "@/lib/api/errors";
 import { questionViews, viewerCaps } from "@/lib/triage/view";
 import { waCaps, waQuestionViews } from "@/lib/whatsapp/triage-answer";
 import { mcQuestionViews } from "@/lib/month-close/auto/triage";
-import { evidenceViewsFor } from "@/lib/triage/evidence-images";
+import { evidenceViewsFor, hiddenPageCounts } from "@/lib/triage/evidence-images";
 import { ok, withApiError } from "@/lib/api/http";
 import { brandSafeResponse } from "@/lib/api/serialize";
 
@@ -66,10 +66,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           : await questionViews(rows, caps);
     // TE-1（additive）：覆核證據裁圖 meta（唔含 bytes）；淨係 guard_import，按欄位權限／答得到嘅 kind 過濾
     const evImages = session.sourceType === "guard_import" ? await evidenceViewsFor(actor, rows, restricted) : new Map();
+    const hiddenPages = session.sourceType === "guard_import" ? await hiddenPageCounts(actor, rows, restricted) : new Map<string, number>();
     return ok(
       brandSafeResponse({
         session: { id: session.id, source_type: session.sourceType, owner_user_id: session.ownerUserId, status: session.status, created_at: session.createdAt, completed_at: session.completedAt, counts: c },
-        questions: questions.map((q) => ({ ...q, evidence_images: evImages.get(q.id) ?? [] })),
+        questions: questions.map((q) => ({ ...q, evidence_images: evImages.get(q.id) ?? [], evidence_pages_hidden: hiddenPages.get(q.id) ?? 0 })),
         ...(take !== null ? { next_cursor: hasMore ? rows[rows.length - 1]!.id : null } : {}),
       }),
     );
