@@ -84,6 +84,8 @@ export const REASON_LABEL: Record<string, string> = {
   linked_by_staff_no_only: "淨靠工號對到現有保安員",
   nameEn_differs_between_files: "唔同檔案嘅英文姓名唔一致",
   nameZh_differs_between_files: "唔同檔案嘅中文姓名唔一致",
+  nameZh_vision_short: "中文姓名視覺讀數字數少過身份證頁 OCR 字數（可能漏尾字）",
+  nameEn_vision_short: "英文姓名視覺讀數 token 數少過身份證頁 OCR（可能漏續行）",
   nameZh_near_match: "中文姓名同打字名單相近但唔完全一樣",
   nameEn_single_segment: "英文姓名淨得一段（可能缺名）",
   nameEn_missing_no_id_page: "冇身份證頁，所以讀唔到英文姓名",

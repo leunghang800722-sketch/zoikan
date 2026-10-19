@@ -10,6 +10,8 @@ import { GET as sessionRoute } from "@/app/api/triage/sessions/[id]/route";
 import { GET as listRoute } from "@/app/api/triage/sessions/route";
 import { dispOf, planForQuestion, proposalsBodySchema, type Proposal } from "@/lib/triage/proposals";
 import { BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
+import { insertEvidenceImage, inspectImage } from "@/lib/triage/evidence-images";
+import { fakeJpeg } from "./lib/te1-images";
 
 function mkHkid(prefix: string, digits: string): string {
   const base = `${prefix}${digits}`;
@@ -348,5 +350,46 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(r.body).toMatchObject({ applied: 0, skipped_needs_decision: 2, errors: 0 });
     expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qn.id } })).status).toBe("open");
     expect(await prisma.guard.findUniqueOrThrow({ where: { id: g.id }, select: { hkid: true } })).toEqual({ hkid: null });
+  });
+  it("TE-11 證件為準：name_not_confirmed 卡 high 同包內唔一致 → enter_name＋extra.name_en 自動答（建檔用卡上名）、圖答題即刪（M5）；medium 留人", async () => {
+    const { pa, pb, sid } = await seed();
+    const qa = await qOf("name_not_confirmed");
+    const plain = fakeJpeg(320, 80, { seed: 951 });
+    await insertEvidenceImage(prisma, { sessionId: sid, questionId: null, personKey: qa.personKey!, guardId: null, field: "name_zh", docKind: "id_card", priority: 1, plain, info: inspectImage(plain)!, createdBy: fx.userIds["會計"], expiresAt: new Date(Date.now() + 1e9) });
+    const matchA = { hkid: pa.hkid.value, staff_numbers: pa.staffNumbers.map((n) => n.number) };
+    // medium → 留人
+    const med = await send(accountant, sid, [prop(pa.key, "nameZh", "卡上正確姓名甲", { match: matchA, confidence: "medium" })]);
+    expect(med.body).toMatchObject({ applied: 0, skipped_value_mismatch: 1 });
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qa.id } })).status).toBe("open");
+    // high → 卡為準自動答
+    const r = await send(accountant, sid, [prop(pa.key, "nameZh", "卡上正確姓名甲", { match: matchA, confidence: "high" }), prop(pa.key, "nameEn", "CARD TRUE NAME", { match: matchA, confidence: "high" })]);
+    expect(r.body).toMatchObject({ applied: 1, errors: 0 });
+    const qa2 = await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qa.id } });
+    expect(qa2.status).toBe("answered");
+    expect((qa2.answerJson as { source?: string }).source).toBe("ocr_reread");
+    const g = await prisma.guard.findFirstOrThrow({ where: { hkid: pa.hkid.value! }, select: { nameZh: true, nameEn: true } });
+    expect(g.nameZh).toBe("卡上正確姓名甲");
+    expect(g.nameEn).toBe("CARD TRUE NAME");
+    expect(await prisma.triageEvidenceImage.count({ where: { sessionId: sid, personKey: qa.personKey! } })).toBe(0); // M5
+    void pb;
+  });
+
+  it("TE-11 證件為準：hkid_not_confirmed 卡 hkid（checksum 過、high）同包內唔同 → enter_hkid 自動答；medium 留人", async () => {
+    const { pb, sid } = await seed();
+    const qb = await qOf("hkid_not_confirmed");
+    const matchB = { hkid: pb.hkid.value, staff_numbers: pb.staffNumbers.map((n) => n.number) };
+    const NEW = mkHkid("V", "500001");
+    const med = await send(accountant, sid, [prop(pb.key, "hkid", NEW, { match: matchB, confidence: "medium" })]);
+    expect(med.body).toMatchObject({ applied: 0, skipped_value_mismatch: 1 });
+    // 身份決定照舊：卡 hkid 屬系統內另一位現有保安員 → needs_decision 留人（唔自動連／唔自動答）
+    const other = await prisma.guard.create({ data: { nameZh: "卡號持有人丙", employmentType: "cash_casual", hkid: NEW, createdBy: "t" } });
+    const held = await send(accountant, sid, [prop(pb.key, "hkid", NEW, { match: matchB, confidence: "high" })]);
+    expect(held.body).toMatchObject({ applied: 0, skipped_needs_decision: 1 });
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qb.id } })).status).toBe("open");
+    await prisma.guard.delete({ where: { id: other.id } });
+    const r = await send(accountant, sid, [prop(pb.key, "hkid", NEW, { match: matchB, confidence: "high" })]);
+    expect(r.body).toMatchObject({ applied: 1 });
+    expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qb.id } })).status).toBe("answered");
+    expect(await prisma.guard.count({ where: { hkid: NEW } })).toBe(1);
   });
 });

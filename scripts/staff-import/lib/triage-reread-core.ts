@@ -22,7 +22,7 @@ export interface RereadProposal {
   doc: OcrDocType;
   confidence: 'high' | 'medium' | 'low';
   /** TE-4：嵌入身份證副本／印刷佐證旗標 */
-  flags?: ('printed_card_conflict' | 'embedded_card' | 'printed_corroborated' | 'printed_only' | 'card_name_conflict')[];
+  flags?: ('printed_card_conflict' | 'embedded_card' | 'printed_corroborated' | 'printed_only' | 'card_name_conflict' | 'form_differs')[];
   /** 配對提示：伺服器題目 personKey 係 HMAC（身份證 → 工號集合 → 包內 key），server 用呢兩項推返同一個 key（只用嚟砌 key，唔寫入） */
   match: { hkid: string | null; staff_numbers: string[] };
 }
@@ -79,6 +79,16 @@ export interface ProposeOutcome {
   skippedByField: Partial<Record<ProposalFieldName, Partial<Record<SkipReason, number>>>>;
 }
 
+/**
+ * TE-11.1（老闆：證件為準，入職表差異只係中等警告、唔阻擋）：身份證頁（id_card／嵌入卡）欄位兩讀一致（basis two_reads；
+ * 格式 valid 已經喺 normalizeField 驗過：hkid checksum、dob 曆法）→ high，唔需要入職表交叉一致或印刷佐證；入職表唔一致只帶 flag form_differs（資訊）。
+ * 仲有仲裁（arbiter）介入嘅身份證欄、以及非身份證來源（電話／地址）照舊：交叉核對一致先 high，否則 medium。
+ */
+function confidenceOf(pick: Pick_, basis: Basis): 'high' | 'medium' {
+  if (pick.doc === 'id_card' && basis === 'two_reads') return 'high';
+  return pick.cross === 'match' ? 'high' : 'medium';
+}
+
 type Pick_ = { doc: OcrDocType; result: Pick<FieldResult, 'status' | 'value' | 'arbiter'>; cross?: 'match' | 'differs' | 'unreadable' };
 
 /**
@@ -129,7 +139,7 @@ export function proposeFromPicks(p: PkgPerson, picks: Partial<Record<OcrFieldKey
     }
     // 值：hkid／dob／電話／姓名用 canon（同 server 校驗一致）；地址用最終讀數原文（canon 會歸一標點）
     const value = m.field === 'address' ? r.value.trim() : n.canon;
-    out.proposals.push({ person_key: p.key, field: m.field, value, basis: r.arbiter ? 'arbiter' : 'two_reads', doc: pick.doc, confidence: pick.cross === 'match' ? 'high' : 'medium', match: { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) } });
+    out.proposals.push({ person_key: p.key, field: m.field, value, basis: r.arbiter ? 'arbiter' : 'two_reads', doc: pick.doc, confidence: confidenceOf(pick, r.arbiter ? 'arbiter' : 'two_reads'), ...(pick.doc === 'id_card' && pick.cross === 'differs' ? { flags: ['form_differs' as const] } : {}), match: { hkid: p.hkid.value?.trim() || null, staff_numbers: p.staffNumbers.map((n) => n.number) } });
   }
   return out;
 }

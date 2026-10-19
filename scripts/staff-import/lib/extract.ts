@@ -229,6 +229,10 @@ function dist(a: OcrLine, b: OcrLine): number {
   return Math.hypot(a.x - b.x, (cy(a) - cy(b)) * 1.2);
 }
 
+const RE_DOB_LABEL_LINE = /出生日期|DATE\s*OF\s*BIRTH|DATEOF|BIRTH|簽發|ISSUE/i;
+/** 英文名續行：每個 token 首字母大寫（Title-case 或全大寫），1–4 個 token。 */
+const isTitleCaseTokens = (t: string): boolean => /^[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,3}$/.test(norm(t).trim());
+
 export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
   const clean = all.filter((l) => l.t.trim());
   const anchors = clean.filter((l) => isIdAnchorLine(l.t));
@@ -296,6 +300,17 @@ export function extractIdCard(page: number, all: OcrLine[]): IdCardResult {
       if (!nx) break;
       used.push(nx);
       cur = nx;
+    }
+    // TE-11：卡好細時英文名換行成兩行——再接「英文名行之下 ≤1.3×行高、左對齊（x 差 ≤0.5 行高）、Title-case／大寫 token、未到出生日期 label」嘅下一行
+    const ASPECT_A4 = 210 / 297; // 行高換算 x 方向（頁闊正規化）用；extract 冇頁面尺寸，A4 直向估算
+    for (let k = 0; k < 3; k++) {
+      const last = used[used.length - 1]!;
+      const hx = last.h / ASPECT_A4;
+      const cont = region
+        .filter((l) => !used.includes(l) && isTitleCaseTokens(l.t) && !NOT_NAME.test(l.t) && !RE_DOB_LABEL_LINE.test(norm(l.t)) && cy(l) < cy(last) && last.y - (l.y + l.h) <= 1.3 * last.h && Math.abs(l.x - last.x) <= 0.5 * hx)
+        .sort((a, b) => cy(b) - cy(a))[0];
+      if (!cont) break;
+      used.push(cont);
     }
     nameLines = used;
     const joined = used.map((u) => norm(u.t)).join(' ').replace(/\s*[,，]\s*/, ', ').replace(/\s+/g, ' ');

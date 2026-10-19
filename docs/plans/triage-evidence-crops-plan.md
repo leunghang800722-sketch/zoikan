@@ -120,3 +120,6 @@ token 邊界、label 優先、跨頁多值跳過、裁圖連 label；全庫自�
 
 ## 17. TE-10 中文名裁圖延伸＋409 自動重預覽
 左欄文字欄右界按預期字數／barrier 延伸、capBox 上限考慮預期字數、Vision 字數規則（name_truncated＋重裁一次）、22 自檢；題卡 409 自動重新預覽。
+
+## 18. TE-11 證件為準自動關閉
+英文名兩行合併（extract／裁圖／Vision token 規則）；proposals name_not_confirmed／hkid_not_confirmed 以卡為準自動答；import 規則 C；23 自檢。

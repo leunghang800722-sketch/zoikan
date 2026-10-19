@@ -38,7 +38,7 @@ const proposalSchema = z
     /** TE-4：low＝只有印刷／唔一致，要人手覆核（唔自動答；計 skipped_low_confidence） */
     confidence: z.enum(["high", "medium", "low"]),
     /** TE-4：可選旗標（例 printed_card_conflict、embedded_card）；只用嚟顯示／統計，伺服器唔據此寫入 */
-    flags: z.array(z.enum(["printed_card_conflict", "embedded_card", "printed_corroborated", "printed_only", "card_name_conflict"])).max(4).optional(),
+    flags: z.array(z.enum(["printed_card_conflict", "embedded_card", "printed_corroborated", "printed_only", "card_name_conflict", "form_differs"])).max(4).optional(),
     /**
      * 配對提示（additive，可選）：題目嘅 personKey 係伺服器 HMAC（serverPersonKey：身份證 → 工號集合 → 包內 key），唔係包內 persons[].key。
      * 本機腳本帶埋包內該人嘅身份證值／工號，伺服器用同一個函數推返 personKey 去配對。只用嚟砌 key，唔寫入任何地方。
@@ -91,14 +91,33 @@ export type QuestionPlan =
  *  - hkid_not_confirmed：只接受 hkid 建議而且同 evidence 嘅身份證號（canonical）一致（option use_package_hkid）。
  *  - field_review：答有建議而且格式合法嘅覆核欄（apply_fields；action=confirm＋值：只補空／確認，唔覆蓋現有唔同值）；剩餘覆核欄放 rest（由 runProposals 開跟進題）。
  */
-export function planForQuestion(q: Pick<TriageQuestion, "kind" | "optionsJson" | "evidenceJson">, props: ReadonlyMap<ProposalField, string>): QuestionPlan {
+/** TE-11：每欄建議嘅來源資訊（證件為準自動答用）。 */
+export interface ProposalMeta {
+  confidence: "high" | "medium" | "low";
+  basis: "two_reads" | "arbiter";
+  doc: "id_card" | "address_proof" | "onboarding_form";
+  flags?: readonly string[];
+}
+/** 證件為準：身份證副本讀數（兩讀一致）＋confidence high（入職表交叉核對一致或印刷佐證）＋冇衝突旗 */
+const cardTruth = (m: ProposalMeta | undefined): boolean => !!m && m.confidence === "high" && m.basis === "two_reads" && m.doc === "id_card" && !(m.flags ?? []).some((f) => f === "printed_card_conflict" || f === "card_name_conflict");
+
+export function planForQuestion(q: Pick<TriageQuestion, "kind" | "optionsJson" | "evidenceJson">, props: ReadonlyMap<ProposalField, string>, meta: ReadonlyMap<ProposalField, ProposalMeta> = new Map()): QuestionPlan {
   const ev = q.evidenceJson as unknown as QuestionEvidence;
   const opts = (q.optionsJson as unknown as QuestionOption[]) ?? [];
   if (q.kind === "name_not_confirmed") {
     const v = props.get("nameZh");
     if (v === undefined) return { type: "none" };
     const pkg = fieldValue(ev.person.nameZh);
-    if (!pkg || !normZh(v) || normZh(v) !== normZh(pkg)) return { type: "skip", disp: "skipped_value_mismatch", fields: ["nameZh"] };
+    if (!pkg || !normZh(v) || normZh(v) !== normZh(pkg)) {
+      // TE-11 證件為準：卡讀數（two_reads、high、冇衝突旗）同包內唔一致 → 用 enter_name 寫入卡上中文名，並帶卡上英文名（包內英文名未確認先帶）；身份決定（同名／同號候選）由 preview 攔住留人
+      if (cardTruth(meta.get("nameZh")) && normZh(v) && opts.some((o) => o.id === "enter_name")) {
+        const en = props.get("nameEn");
+        const enOpen = !(ev.person.nameEn?.value && ev.person.nameEn.status === "confirmed");
+        const useEn = !!en && enOpen && meta.get("nameEn") !== undefined && meta.get("nameEn")!.confidence !== "low";
+        return { type: "answer", answer: { option: "enter_name", value: v, ...(useEn ? { extra: { name_en: en } } : {}) }, fields: useEn ? ["nameZh", "nameEn"] : ["nameZh"], rest: [], invalidFields: [] };
+      }
+      return { type: "skip", disp: "skipped_value_mismatch", fields: ["nameZh"] };
+    }
     if (!opts.some((o) => o.id === "use_package_name")) return { type: "skip", disp: "skipped_invalid", fields: ["nameZh"] };
     return { type: "answer", answer: { option: "use_package_name" }, fields: ["nameZh"], rest: [], invalidFields: [] };
   }
@@ -107,7 +126,11 @@ export function planForQuestion(q: Pick<TriageQuestion, "kind" | "optionsJson" |
     if (v === undefined) return { type: "none" };
     const want = canonicalHkid(v);
     const pkg = canonicalHkid(fieldValue(ev.person.hkid));
-    if (!want || !pkg || want !== pkg) return { type: "skip", disp: "skipped_value_mismatch", fields: ["hkid"] };
+    if (!want || !pkg || want !== pkg) {
+      // TE-11 證件為準：卡讀數 checksum 過＋two_reads high → enter_hkid（owner／同名候選等身份決定仍由 preview 留人）
+      if (want && hkidCheckDigitValid(want) && cardTruth(meta.get("hkid")) && opts.some((o) => o.id === "enter_hkid")) return { type: "answer", answer: { option: "enter_hkid", value: want }, fields: ["hkid"], rest: [], invalidFields: [] };
+      return { type: "skip", disp: "skipped_value_mismatch", fields: ["hkid"] };
+    }
     if (!opts.some((o) => o.id === "use_package_hkid")) return { type: "skip", disp: "skipped_invalid", fields: ["hkid"] };
     return { type: "answer", answer: { option: "use_package_hkid" }, fields: ["hkid"], rest: [], invalidFields: [] };
   }
@@ -245,8 +268,16 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
       mark(key, allFields, "skipped_kind");
       continue;
     }
+    const metaMap = new Map<ProposalField, ProposalMeta>();
+    for (const f of props.keys()) {
+      const pi = (idxOf.get(`${key}|${f}`) ?? [])[0];
+      if (pi !== undefined) {
+        const p = proposals[pi]!;
+        metaMap.set(f, { confidence: p.confidence, basis: p.basis, doc: p.doc, ...(p.flags ? { flags: p.flags } : {}) });
+      }
+    }
     for (const q of eligible) {
-      const plan = planForQuestion(q, props);
+      const plan = planForQuestion(q, props, metaMap);
       if (plan.type === "none") continue;
       counts.matched_questions += 1;
       if (plan.type === "skip") {

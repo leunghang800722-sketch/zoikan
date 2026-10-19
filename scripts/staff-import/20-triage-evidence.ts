@@ -356,10 +356,15 @@ export async function cropRequest(req0: CropRequest, png: string, lines: OcrLine
       nameRetried = true;
       const own = g.anchor.own;
       const tPx = own.length ? own.reduce((s, l) => s + Math.min(l.w * W, l.h * H), 0) / own.length : 0;
-      let ext: Box | null = { ...box, x1: Math.min(1, box.x1 + ((r.missing + 0.5) * tPx) / W) };
+      // 中文名＝向右延伸缺少字數；英文名（TE-11）＝向下延伸一行（續行）
+      let ext: Box | null = req.field === 'name_en' ? { ...box, y0: Math.max(0, box.y0 - (1.3 * tPx) / H) } : { ...box, x1: Math.min(1, box.x1 + ((r.missing + 0.5) * tPx) / W) };
       if (g.anchor.mode === 'id') ext = clipToPhoto(ext, g.anchor.photo, own);
-      if (!ext || ext.x1 <= box.x1 + 1e-6) return { reason: 'name_truncated', capped };
+      if (!ext || (req.field === 'name_en' ? ext.y0 >= box.y0 - 1e-6 : ext.x1 <= box.x1 + 1e-6)) return { reason: 'name_truncated', capped };
       // 上限放寬到「預期字數＋缺少字數＋1」（否則 capBox 會將延伸咗嘅框收返去）
+      if (req.field === 'name_en') {
+        box = ext; // 續行：厚度方向本來就會超過單行上限，唔再 cap（相片 barrier 已 clip）
+        continue;
+      }
       box = capBox(ext, { ...g.anchor, ...(g.anchor.expect ? { expect: { ...g.anchor.expect, chars: g.anchor.expect.chars + r.missing + 1 } } : {}) }, W, H).box;
       continue;
     }
@@ -463,6 +468,13 @@ export async function verifyCrop(png: string, field: EvidenceField, expected: re
     const readN = cjkChars(textOf(acc)).length;
     const need = Math.min(...expected.map((e) => cjkChars(e).length).filter((n) => n > 0));
     if (Number.isFinite(need) && readN < need) return { ok: false, reason: 'name_truncated', score: score ?? 0, missing: need - readN };
+  }
+  // TE-11：英文姓名裁圖讀數 token 數要 ≥ max(包內, 入職表 formNameEn …) token 數（expected 已包括候選讀數）——卡好細英文名換行時第二行容易被切走
+  if (field === 'name_en' && !noExp) {
+    const tokenN = (s: string) => (s.normalize('NFKC').match(/[A-Za-z]+/g) ?? []).length;
+    const readN = tokenN(textOf(acc));
+    const need = Math.max(0, ...expected.map(tokenN));
+    if (need > 0 && readN < need) return { ok: false, reason: 'name_truncated', score: score ?? 0, missing: need - readN };
   }
   const vs = await sizeOf(vin);
   const sideways = textUprightness(acc?.lines ?? [], vs.w, vs.h) < 0;
