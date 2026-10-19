@@ -8,7 +8,9 @@ import { POST as applyRoute } from "@/app/api/guards/import/apply/route";
 import { POST as proposalsRoute } from "@/app/api/triage/sessions/[id]/proposals/route";
 import { GET as sessionRoute } from "@/app/api/triage/sessions/[id]/route";
 import { GET as listRoute } from "@/app/api/triage/sessions/route";
-import { dispOf, planForQuestion, proposalsBodySchema, type Proposal } from "@/lib/triage/proposals";
+import { dispOf, planForQuestion, proposalsBodySchema, submitReason, type Proposal } from "@/lib/triage/proposals";
+import { fpNormalize } from "@/lib/guards/import/apply";
+import { createHash } from "node:crypto";
 import { BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
 import { insertEvidenceImage, inspectImage } from "@/lib/triage/evidence-images";
 import { fakeJpeg } from "./lib/te1-images";
@@ -395,5 +397,73 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(r.body).toMatchObject({ applied: 1 });
     expect((await prisma.triageQuestion.findUniqueOrThrow({ where: { id: qb.id } })).status).toBe("answered");
     expect(await prisma.guard.count({ where: { hkid: NEW } })).toBe(1);
+  });
+  it("TE-11.4 invalid_reasons：skipped_invalid 唔吞——preview 唔可寫入記原因（唔記值）；dry 同 apply 同一批計數一致", async () => {
+    const { pn, sid } = await seed();
+    const match = { hkid: null, staff_numbers: ["U90003"] };
+    const DUP = mkHkid("T", "900001");
+    // 同一個身份證號（canonical）屬兩位保安員（寫法唔同）→ preview 唔可寫入（資料異常）
+    await prisma.guard.create({ data: { nameZh: "重複號碼甲", employmentType: "cash_casual", hkid: DUP, createdBy: "t" } });
+    await prisma.guard.create({ data: { nameZh: "重複號碼乙", employmentType: "cash_casual", hkid: `${DUP.slice(0, -1)}(${DUP.slice(-1)})`, createdBy: "t" } });
+    const props = [prop(pn.key, "hkid", DUP, { match, confidence: "high" })];
+    const dry = await send(accountant, sid, props, true);
+    const real = await send(accountant, sid, props);
+    expect(real.body.applied).toBe(dry.body.applied);
+    expect(real.body.skipped_invalid).toBe(1);
+    expect(Object.keys(real.body.invalid_reasons)).toHaveLength(1);
+    expect(Object.keys(real.body.invalid_reasons)[0]).toMatch(/^preview:/);
+    expect(real.body.invalid_reasons).toEqual(dry.body.invalid_reasons);
+    expect(JSON.stringify(real.body)).not.toContain(DUP);
+    expect(JSON.stringify(real.body)).not.toContain("重複號碼");
+  });
+
+  it("TE-11.4 同一人兩條題（name_not_confirmed＋hkid_not_confirmed 各一人）順序自動答：dry 同 apply 計數相同、兩題都 answered", async () => {
+    const { pa, pb, sid } = await seed();
+    const ma = { hkid: pa.hkid.value, staff_numbers: pa.staffNumbers.map((n) => n.number) };
+    const mb = { hkid: pb.hkid.value, staff_numbers: pb.staffNumbers.map((n) => n.number) };
+    const NEW = mkHkid("U", "700001");
+    const props = [
+      prop(pa.key, "nameZh", "卡上正確姓名甲", { match: ma, confidence: "high" }),
+      prop(pa.key, "nameEn", "CARD TRUE NAME", { match: ma, confidence: "high" }),
+      prop(pb.key, "hkid", NEW, { match: mb, confidence: "high" }),
+    ];
+    const dry = await send(accountant, sid, props, true);
+    const real = await send(accountant, sid, props);
+    expect(dry.body).toMatchObject({ applied: 2, skipped_invalid: 0, errors: 0 });
+    expect(real.body).toMatchObject({ applied: dry.body.applied, skipped_invalid: 0, errors: 0, resubmitted: 0 });
+    expect(real.body.invalid_reasons).toEqual({});
+    for (const kind of ["name_not_confirmed", "hkid_not_confirmed"]) expect((await qOf(kind)).status).toBe("answered");
+  });
+  it("TE-11.5 M1：submitReason 只記 status＋code，唔帶訊息（訊息可能含電話／工號原值）", () => {
+    const r = submitReason(BadRequest("電話 91234567 格式唔啱；工號 U90001 重複"));
+    expect(r).toBe("submit:400:bad_request");
+    expect(r).not.toMatch(/\d{4}|U9/);
+    expect(submitReason(Conflict("資料中途變咗"))).toBe("submit:409:conflict");
+    expect(submitReason(new Error("x"))).toBe("submit:error");
+  });
+
+  it("TE-11.5 指紋穩定：fpNormalize 對陣列做標準排序——同一內容打亂次序（含巢狀）指紋相同；內容唔同指紋唔同", () => {
+    const fp = (v: unknown) => createHash("sha256").update(JSON.stringify(fpNormalize(v))).digest("hex");
+    const a = { res: { fields: { a: 1 }, ext: [{ k: "x", v: 1 }, { k: "y", v: 2 }, { k: "z", v: 3 }] }, changes: [{ table: "guards", after: { tels: ["91000001", "91000002"], addrs: ["甲", "乙", "丙"] } }, { table: "guard_phones", after: { tel: "91000003" } }] };
+    const b = { changes: [{ after: { addrs: ["丙", "甲", "乙"], tels: ["91000002", "91000001"] }, table: "guards" }, { after: { tel: "91000003" }, table: "guard_phones" }].reverse(), res: { ext: [{ v: 3, k: "z" }, { k: "x", v: 1 }, { k: "y", v: 2 }], fields: { a: 1 } } };
+    expect(fp(a)).toBe(fp(b));
+    expect(fp(a)).not.toBe(fp({ ...a, res: { ...a.res, ext: a.res.ext.slice(1) } }));
+    expect(fp([1, 2, 3])).toBe(fp([3, 1, 2]));
+    expect(fp([{ id: "x", n: 2 }, { id: "y", n: 1 }])).toBe(fp([{ id: "q", n: 1 }, { id: "r", n: 2 }])); // id 被剝走後只比內容
+  });
+
+  it("TE-11.5 去重：同一條題經兩個 person_key（本機 key 同推導 key）各配一次——只答一次，後者計 skipped_duplicate_question；dry 同 apply 一致，apply 冇 409", async () => {
+    const { pa, sid } = await seed();
+    const ma = { hkid: pa.hkid.value, staff_numbers: pa.staffNumbers.map((n) => n.number) };
+    const props = [
+      prop(pa.key, "nameZh", "卡上正確姓名甲", { match: ma, confidence: "high" }),
+      prop("00000000-0000-4000-8000-0000000000bb", "nameZh", "卡上正確姓名甲", { match: ma, confidence: "high" }), // 另一個本機 key，推導後係同一條題
+    ];
+    const dry = await send(accountant, sid, props, true);
+    const real = await send(accountant, sid, props);
+    expect(dry.body).toMatchObject({ applied: 1, skipped_duplicate_question: 1, skipped_invalid: 0 });
+    expect(real.body).toMatchObject({ applied: 1, skipped_duplicate_question: 1, skipped_invalid: 0, errors: 0 });
+    expect(real.body.invalid_reasons).toEqual({});
+    expect((await qOf("name_not_confirmed")).status).toBe("answered");
   });
 });

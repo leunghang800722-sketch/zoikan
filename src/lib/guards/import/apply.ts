@@ -90,11 +90,12 @@ async function loadCtx(db: Tx | typeof prisma): Promise<DbCtx> {
         siaPermitNo: true, safetyCardNo: true, safetyCardExpiry: true, qasIssueDate: true, qasExpiryDate: true, hireDate: true,
         bankCode: true, bankName: true, bankAccountNo: true, bankPayeeName: true, emergencyContactName: true, emergencyContactTel: true, employmentType: true,
       },
+      orderBy: { id: "asc" }, // TE-11.5：穩定讀序（冇 orderBy 時多次 update 後行序會變，預覽同 commit 指紋唔一致 → 409）
     }),
-    db.guardPhone.findMany({ select: { guardId: true, tel: true } }),
-    db.guardStaffNumber.findMany({ select: { guardId: true, scheme: true, number: true, status: true, validFrom: true } }),
-    db.guardAddress.findMany({ select: { guardId: true, address: true } }),
-    db.guardEmergencyContact.findMany({ select: { guardId: true, name: true, tel: true }, orderBy: { sortOrder: "asc" } }),
+    db.guardPhone.findMany({ select: { guardId: true, tel: true }, orderBy: [{ guardId: "asc" }, { id: "asc" }] }),
+    db.guardStaffNumber.findMany({ select: { guardId: true, scheme: true, number: true, status: true, validFrom: true }, orderBy: [{ guardId: "asc" }, { id: "asc" }] }),
+    db.guardAddress.findMany({ select: { guardId: true, address: true }, orderBy: [{ guardId: "asc" }, { id: "asc" }] }),
+    db.guardEmergencyContact.findMany({ select: { guardId: true, name: true, tel: true }, orderBy: [{ sortOrder: "asc" }, { id: "asc" }] }),
     db.guardLongtermContract.findMany({ select: { guardId: true }, distinct: ["guardId"] }),
     // 更表佐證（name_only 輔助判斷 c；只計 by_staff_no／by_name_tel／override 等有獨立鍵嘅行，by_name／ambiguous 唔計）：一次過預載未作廢上載入面各 guard 出現過嘅原始工號／電話（DISTINCT，唔 N+1）
     db.$queryRaw<{ guard_id: string; staff_no_raw: string | null; tel_raw: string | null }[]>`
@@ -1013,8 +1014,13 @@ export async function evaluateImportPackage(pkg: ImportPackage, piiView = true):
 class DryRunRollback extends Error {}
 
 const FP_STRIP = new Set(["id", "guardId", "createdAt", "updatedAt", "createdBy", "created_at", "updated_at", "created_by", "guard_id"]);
-function fpNormalize(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map((x) => fpNormalize(x));
+/** 指紋正規化：object key 排序；TE-11.5 起陣列亦做標準排序（元素先 normalize 再按 JSON 字串排），令讀序唔同（無 orderBy／update 後行序變）都唔影響預覽同 commit 指紋。 */
+export function fpNormalize(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => fpNormalize(x)).sort((a, b) => {
+    const sa = JSON.stringify(a) ?? "";
+    const sb = JSON.stringify(b) ?? "";
+    return sa < sb ? -1 : sa > sb ? 1 : 0;
+  });
   if (v && typeof v === "object") {
     const o = v as Record<string, unknown>;
     return Object.fromEntries(

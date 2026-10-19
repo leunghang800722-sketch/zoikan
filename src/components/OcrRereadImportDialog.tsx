@@ -27,6 +27,10 @@ interface Counts {
   skipped_identity_mismatch?: number;
   /** TE-5 */
   skipped_needs_decision?: number;
+  skipped_duplicate_question?: number;
+  /** TE-11.4 */
+  invalid_reasons?: Record<string, number>;
+  resubmitted?: number;
 }
 const SKIP_LABEL: [keyof Counts, string][] = [
   ["skipped_no_question", "冇對應未答題"],
@@ -38,6 +42,7 @@ const SKIP_LABEL: [keyof Counts, string][] = [
   ["skipped_low_confidence", "低信心（印刷冇卡／同卡唔一致），留人手"],
   ["skipped_identity_mismatch", "身份對唔上（號碼已屬他人等）"],
   ["skipped_needs_decision", "要人決定連結／建新人"],
+  ["skipped_duplicate_question", "同一題已被另一條建議處理（重複配對）"],
   ["errors", "出錯"],
 ];
 
@@ -117,6 +122,16 @@ export function OcrRereadImportDialog({ sessionId, onClose, onDone }: { sessionI
                 {label}：{shown[k] as number} 條
               </div>
             ))}
+            {Object.keys(shown.invalid_reasons ?? {}).length > 0 && (
+              <ul className="list-disc pl-5 text-zk-xs text-zk-muted" data-testid="ocr-reread-invalid-reasons">
+                {Object.entries(shown.invalid_reasons ?? {}).map(([k, n]) => (
+                  <li key={k}>
+                    「格式或預覽唔通過」原因 {k}：{n} 條
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(shown.resubmitted ?? 0) > 0 && <div className="text-zk-xs text-zk-muted">其中 {shown.resubmitted} 題遇「資料中途變咗」已自動重新預覽再答</div>}
           </div>
         )}
         <div className="flex flex-wrap justify-end gap-2">
