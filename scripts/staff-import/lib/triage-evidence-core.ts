@@ -67,6 +67,26 @@ export function isFailedPerson(p: PkgPerson): boolean {
 // ---------------------------------------------------------------------------
 // 2. 來源優先順序（方案 §7）
 // ---------------------------------------------------------------------------
+export interface ExpectLen {
+  chars: number;
+  em: number;
+}
+
+/** TE-10：由預期值推預期字數／字寬（name_zh＝中文字數、1 em；name_en＝字母數、0.55 em；其他欄＝undefined）。 */
+export function expectLenOf(field: EvidenceField, value: string | null | undefined): ExpectLen | undefined {
+  const v = (value ?? '').normalize('NFKC').trim();
+  if (!v) return undefined;
+  if (field === 'name_zh') {
+    const n = [...v].filter((c) => /\p{Script=Han}/u.test(c)).length;
+    return n > 0 ? { chars: n, em: 1 } : undefined;
+  }
+  if (field === 'name_en') {
+    const n = v.replace(/\s+/g, ' ').length;
+    return n > 0 ? { chars: n, em: 0.55 } : undefined;
+  }
+  return undefined;
+}
+
 export interface CropRequest {
   field: EvidenceField;
   docKind: DocKind;
@@ -74,6 +94,8 @@ export interface CropRequest {
   doc: DocPage;
   /** 同一欄喺入職表有幾個 label 位置時（hire_date：0＝入職日期、1＝可到職日期） */
   variant?: number;
+  /** TE-10：預期字數（package 該欄值）——中文姓名／英文姓名裁圖右邊界按字數延伸（OCR 行 box 可能漏字）；em＝每字闊度（行厚倍數：中文 1、英文 0.55） */
+  expect?: ExpectLen;
   /** TE-2 嵌入式身份證：rot＝要順時針轉幾多度頁面先令卡正向；region＝轉正後 frame 嘅卡區 */
   embedded?: { rot: Rotation; region: Box };
   /** TE-2 印刷身份證號行：rot 同上；line＝轉正後 frame 嘅 OCR 行 */
@@ -174,7 +196,7 @@ const ID_PAD = { vertical: 0.3, horizontal: 0.3, min: 0.002 };
  *  ④ 號碼框向上外擴 0.3×行高，但上緣以相片下緣做 barrier；
  *  ⑤ 冇身份證 anchor（認唔出卡面範圍）→ 一律唔裁。
  */
-export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[], aspect = 1, cardBox?: Box): IdCardGeometry {
+export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[], aspect = 1, cardBox?: Box, expect?: Partial<Record<'name_zh' | 'name_en' | 'dob', ExpectLen>>): IdCardGeometry {
   const empty: IdCardGeometry = { hkid: null, name_zh: null, name_en: null, dob: null, photo: null };
   // 嵌入式卡（TE-2）：只用卡區內嘅行，卡區 box 當卡面範圍（唔需要標題 anchor）
   const clean = allLines.filter((l) => l.t.trim() && (!cardBox || inBox(cardBox, l)));
@@ -217,6 +239,23 @@ export function locateIdCardBoxes(page: number, allLines: readonly OcrLine[], as
       else b.x1 = Math.min(b.x1, photo.x0 - 0.005); // ② 相片左緣做右 barrier
     }
     if (intersects(b, photo)) b.x1 = Math.min(b.x1, photo.x0 - 0.005);
+    // TE-10：左欄文字欄（姓名／出生日期）右邊界唔再止於 OCR 行 box（卡好細時 OCR 行會漏尾字）——延伸到
+    //   「相片左緣（行同相片垂直重疊先算）」或「同一行下一個 OCR 行左邊」（取較近）減 0.3×行厚；有預期字數就只延伸到預期字數×字寬（＋0.3×行厚），無預期值延伸到 barrier。
+    //   之後仍受 capBox 長度上限約束（上限同樣考慮預期字數）。
+    if (kind === 'left' && field !== 'hkid') {
+      const hx = h / aspect; // 行厚喺 x 方向（頁闊正規化）
+      const sameRowRight = clean.filter((l) => !own.includes(l) && l.x >= base.x1 - 1e-6 && Math.min(l.y + l.h, base.y1) - Math.max(l.y, base.y0) >= 0.3 * (base.y1 - base.y0));
+      const nextLeft = sameRowRight.length ? Math.min(...sameRowRight.map((l) => l.x)) : 1;
+      const photoNear = b.y0 < photo.y1 - 1e-9 && b.y1 > photo.y0 + 1e-9;
+      const limit = Math.min(nextLeft, photoNear ? photo.x0 - 0.005 : 1, 1) - 0.3 * hx;
+      const ex = expect?.[field as 'name_zh' | 'name_en' | 'dob'];
+      const target = ex ? base.x0 + ex.chars * ex.em * hx + 0.3 * hx : limit;
+      const x1 = Math.max(b.x1, Math.min(limit, target));
+      if (x1 > b.x1) {
+        const ext: Box = { ...b, x1 };
+        if (!intersects(ext, photo)) b.x1 = x1;
+      }
+    }
     // ③ 仍重疊、或者收窄後切到字本身 → 跳過
     const cutsText = b.x0 > base.x0 + 1e-9 || b.x1 < base.x1 - 1e-9 || b.y0 > base.y0 + 1e-9 || b.y1 < base.y1 - 1e-9;
     if (!valid(b) || intersects(b, photo) || cutsText) {
@@ -372,7 +411,7 @@ function isTableHeaderName(l: OcrLine, ls: readonly OcrLine[]): boolean {
  *  - 姓名／電話 label 含「聯絡人／緊急／擔保／見證／僱主」唔當本人欄。
  * 相片格（右上角）：同相片區相交先夾右緣，仍相交跳過（form_photo_overlap）。
  */
-export function locateFormCell(field: EvidenceField, lines: readonly OcrLine[], variant = 0, photoBox: Box | null = FORM_PHOTO_BOX): { box: Box | null; label?: OcrLine; reason?: 'form_label_not_located' | 'form_photo_overlap' } {
+export function locateFormCell(field: EvidenceField, lines: readonly OcrLine[], variant = 0, photoBox: Box | null = FORM_PHOTO_BOX, aspect = 1, expect?: ExpectLen): { box: Box | null; label?: OcrLine; reason?: 'form_label_not_located' | 'form_photo_overlap' } {
   const spec = FORM_LABEL_VARIANTS[field]?.[variant] ?? FORM_LABEL[field];
   if (!spec) return { box: null, reason: 'form_label_not_located' };
   const ls = splitMergedLines(lines.filter((l) => l.t.trim()));
@@ -442,6 +481,11 @@ export function locateFormCell(field: EvidenceField, lines: readonly OcrLine[], 
       }
     }
   }
+  // TE-10：姓名欄值之後冇其他 OCR 行（冇 stopper）而 OCR 值 box 漏尾字——右邊界按預期字數延伸（格右界係下一個 label／格線／相片，唔係 OCR 字 box）
+  if (isName && expect && !stopper && values.length > 0) {
+    const hx = L.h / aspect;
+    x1 = Math.max(x1, values[0]!.x + expect.chars * expect.em * hx + 0.6 * hx);
+  }
   x0 = Math.max(0, x0);
   x1 = Math.min(1, Math.max(x1, L.x + L.w));
   const base: Box = { x0, x1, y0: Math.min(...members.map((m) => m.y)), y1: Math.max(...members.map((m) => m.y + m.h)) };
@@ -473,6 +517,8 @@ export interface CapAnchor {
   mode: 'id' | 'form';
   /** id 模式：版面規則推出嘅相片區（capBox 收窄後再檢查用） */
   photo?: Box | null;
+  /** TE-10：預期字數×字寬——長度上限改為 max(行長＋1.2×行厚, 預期字數×字寬＋0.6×行厚) */
+  expect?: ExpectLen;
 }
 
 /**
@@ -501,9 +547,9 @@ export function boxForRequest(req: CropRequest, lines: readonly OcrLine[], aspec
   }
   if (req.docKind === 'id_card') {
     const f = req.field as 'hkid' | 'name_zh' | 'name_en' | 'dob';
-    const g = locateIdCardBoxes(req.doc.page, lines, aspect, req.embedded?.region);
+    const g = locateIdCardBoxes(req.doc.page, lines, aspect, req.embedded?.region, req.expect && (f === 'name_zh' || f === 'name_en') ? { [f]: req.expect } : undefined);
     const b = g[f] ?? null;
-    return b ? { box: b, anchor: { own: g.own?.[f] ?? [], mode: 'id', photo: g.photo } } : { box: null, reason: g.overlap?.includes(f) ? 'id_photo_overlap' : (g.reason ?? 'id_field_not_located') };
+    return b ? { box: b, anchor: { own: g.own?.[f] ?? [], mode: 'id', photo: g.photo, ...(req.expect && (f === 'name_zh' || f === 'name_en') ? { expect: req.expect } : {}) } } : { box: null, reason: g.overlap?.includes(f) ? 'id_photo_overlap' : (g.reason ?? 'id_field_not_located') };
   }
   if (req.docKind === 'address_proof') {
     const b = locateAddressProofBox(lines);
@@ -511,7 +557,7 @@ export function boxForRequest(req: CropRequest, lines: readonly OcrLine[], aspec
     return addressRegionLikely(b, lines) ? { box: b } : { box: null, reason: 'address_region_unlikely' };
   }
   if (req.docKind === 'onboarding_form') {
-    const r = locateFormCell(req.field, lines, req.variant ?? 0, formPhoto);
+    const r = locateFormCell(req.field, lines, req.variant ?? 0, formPhoto, aspect, req.expect);
     if (!r.box) return { box: null, reason: r.reason ?? 'form_label_not_located' };
     const single = req.field !== 'address';
     return { box: r.box, ...(single && r.label ? { anchor: { own: [r.label], mode: 'form' as const } } : {}) };
@@ -542,7 +588,8 @@ export function capBox(box: Box, a: CapAnchor, W: number, H: number): { box: Box
   const thickB = horizontal ? bh : bw;
   const lenB = horizontal ? bw : bh;
   const maxThick = a.mode === 'id' ? Math.max(1.8 * t, thickB + 0.6 * t) : 2.2 * t;
-  const maxLen = a.mode === 'id' ? lenB + 1.2 * t : Infinity;
+  const expLen = a.expect ? a.expect.chars * a.expect.em * t + 0.6 * t : 0;
+  const maxLen = a.mode === 'id' ? Math.max(lenB + 1.2 * t, expLen) : Infinity;
   if (thickC <= maxThick + 0.5 && lenC <= maxLen + 0.5) return { box, capped: false };
   const padX = (px: number) => px / W;
   const padY = (px: number) => px / H;
@@ -779,7 +826,7 @@ export function findPrintedHkidLines(lines: readonly OcrLine[], aspect: number, 
 export const VERIFY_THRESHOLD: Record<EvidenceField, number> = { hire_date: 0.7, hkid: 0.7, phone: 0.7, dob: 0.7, permit_no: 0.7, name_zh: 0.5, name_en: 0.5, address: 0.4, page: 0 };
 
 const alnum = (s: string): string => s.normalize('NFKC').toUpperCase().replace(/[^0-9A-Z]/g, '');
-const cjkChars = (s: string): string[] => [...s.normalize('NFKC')].filter((c) => /[一-鿿]/.test(c));
+export const cjkChars = (s: string): string[] => [...s.normalize('NFKC')].filter((c) => /\p{Script=Han}/u.test(c));
 
 function levenshtein(a: string, b: string): number {
   const m = a.length;

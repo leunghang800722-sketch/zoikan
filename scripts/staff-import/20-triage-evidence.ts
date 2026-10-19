@@ -59,6 +59,8 @@ import {
   pageMagickArgs,
   type PersonDocRef,
   planRequests,
+  cjkChars,
+  expectLenOf,
   type CropRequest,
   type EvidenceItem,
 } from './lib/triage-evidence-core';
@@ -178,6 +180,7 @@ export type FinalizeResult =
   | { bytes: Uint8Array; score?: number }
   | { reason: 'photo_suspect' | 'image_spec_fail' | 'orientation_unknown'; score?: number }
   | { reason: 'value_mismatch'; score: number }
+  | { reason: 'name_truncated'; score: number; missing: number }
   | { reason: 'cell_overflow'; overflow: OverflowHit };
 
 /** 暗像素門檻：灰階 <70% 當暗（相片頭髮／衣服／深色格；皮膚色較亮，白底印刷字線條比例低） */
@@ -276,7 +279,7 @@ export async function finalizeChecked(png: string, box: Box | null, tmp: string,
   let score: number | undefined;
   if (opts.verify) {
     const v = await opts.verify(src);
-    if (!v.ok) return v.reason === 'value_mismatch' ? { reason: 'value_mismatch', score: v.score } : { reason: v.reason };
+    if (!v.ok) return v.reason === 'value_mismatch' ? { reason: 'value_mismatch', score: v.score } : v.reason === 'name_truncated' ? { reason: 'name_truncated', score: v.score, missing: v.missing } : { reason: v.reason };
     if (v.overflow) return { reason: 'cell_overflow', overflow: v.overflow };
     if (v.score !== null) score = v.score;
     if (v.rotate) {
@@ -344,8 +347,22 @@ export async function cropRequest(req0: CropRequest, png: string, lines: OcrLine
     }
   }
   const label = g.anchor?.mode === 'form' ? g.anchor.own[0] : undefined;
+  let nameRetried = false;
   for (let attempt = 0; ; attempt++) {
     const r = await finalizeChecked(png, box, tmp, { rotate: rot, bandCheck: true, rotatedCache, ...(verify ? { verify } : {}) });
+    if ('reason' in r && r.reason === 'name_truncated') {
+      // TE-10：讀數字數少過包內字數 → 右邊界按缺少字數延伸一次（受相片 barrier／長度上限約束）再驗；仍少字就跳過（唔出斷字圖）
+      if (nameRetried || !g.anchor) return { reason: 'name_truncated', capped };
+      nameRetried = true;
+      const own = g.anchor.own;
+      const tPx = own.length ? own.reduce((s, l) => s + Math.min(l.w * W, l.h * H), 0) / own.length : 0;
+      let ext: Box | null = { ...box, x1: Math.min(1, box.x1 + ((r.missing + 0.5) * tPx) / W) };
+      if (g.anchor.mode === 'id') ext = clipToPhoto(ext, g.anchor.photo, own);
+      if (!ext || ext.x1 <= box.x1 + 1e-6) return { reason: 'name_truncated', capped };
+      // 上限放寬到「預期字數＋缺少字數＋1」（否則 capBox 會將延伸咗嘅框收返去）
+      box = capBox(ext, { ...g.anchor, ...(g.anchor.expect ? { expect: { ...g.anchor.expect, chars: g.anchor.expect.chars + r.missing + 1 } } : {}) }, W, H).box;
+      continue;
+    }
     if (!('reason' in r) || r.reason !== 'cell_overflow') return { ...r, capped };
     // 越界：右界收到關鍵詞左邊 → 再裁再驗；仍越界收下（上）界；再仍越界跳過 cell_overflow
     if (attempt >= 2) return { reason: 'cell_overflow', capped };
@@ -377,7 +394,7 @@ export interface VisionPage {
 }
 /** 一次 call 讀多張圖（輸出次序同輸入一致）；fast＝.fast 級別（對方向敏感）。 */
 export type VisionRunner = (paths: string[], fast: boolean) => Promise<VisionPage[]>;
-export type VerifyOutcome = { ok: true; score: number | null; rotate: Rotation; overflow?: OverflowHit; /** 方向由 .fast 比較判到（true）定係冇證據（false） */ decisive?: boolean; /** 冇證據，沿用同頁其他欄判到嘅方向 */ followedPage?: boolean } | { ok: false; reason: 'value_mismatch'; score: number } | { ok: false; reason: 'orientation_unknown' };
+export type VerifyOutcome = { ok: true; score: number | null; rotate: Rotation; overflow?: OverflowHit; /** 方向由 .fast 比較判到（true）定係冇證據（false） */ decisive?: boolean; /** 冇證據，沿用同頁其他欄判到嘅方向 */ followedPage?: boolean } | { ok: false; reason: 'value_mismatch'; score: number } | { ok: false; reason: 'name_truncated'; score: number; missing: number } | { ok: false; reason: 'orientation_unknown' };
 export type VerifyHook = (cropPng: string) => Promise<VerifyOutcome>;
 
 export function makeVisionRunner(bin: string): VisionRunner {
@@ -441,6 +458,12 @@ export async function verifyCrop(png: string, field: EvidenceField, expected: re
   const [acc] = await run([vin], false);
   const score = noExp ? null : similarity(field, textOf(acc), expected);
   if (score !== null && score < VERIFY_THRESHOLD[field]) return { ok: false, reason: 'value_mismatch', score };
+  // TE-10：中文姓名裁圖讀數字數少過包內字數＝可能被切走尾字（2/3 重疊都 ≥0.5 會過相似度）——要「字數 ≥ 包內字數 且重疊 ≥0.5」先算通過；否則 name_truncated（caller 延伸重裁一次，仍少字就跳過）
+  if (field === 'name_zh' && !noExp) {
+    const readN = cjkChars(textOf(acc)).length;
+    const need = Math.min(...expected.map((e) => cjkChars(e).length).filter((n) => n > 0));
+    if (Number.isFinite(need) && readN < need) return { ok: false, reason: 'name_truncated', score: score ?? 0, missing: need - readN };
+  }
   const vs = await sizeOf(vin);
   const sideways = textUprightness(acc?.lines ?? [], vs.w, vs.h) < 0;
   // 入職表：裁圖文字越界檢查（其他欄 label 關鍵詞）——座標由 Vision 輸入（放大＋留白）換返裁圖正規化
@@ -690,7 +713,13 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
         bump(stats.skipped, 'printed_multiple');
         bump((stats.skipped_by_field.hkid ??= {}), 'printed_multiple');
       } else printed = [...printedAll].sort((a, b) => Number(b.labelled) - Number(a.labelled)).slice(0, 2).map((x) => ({ doc: x.doc, rot: x.rot, line: x.line }));
-      const reqs = [...planRequests(fields, pi.docs, { embedded, printed })].sort((x, y) => rank(x.field) - rank(y.field)); // 有預期值嘅欄先（記低同頁方向），name_zh（純中文判唔到方向）、hire_date（冇預期值）最後
+      const reqs = [...planRequests(fields, pi.docs, { embedded, printed })]
+        .map((r) => {
+          // TE-10：身份證中文／英文姓名裁圖帶預期字數（package 值，或候選讀數）
+          const ex = (r.docKind === 'id_card' || r.docKind === 'onboarding_form') && (r.field === 'name_zh' || r.field === 'name_en') ? expectLenOf(r.field, expectedValuesFor(r.field, pi.person, pi.extra?.[r.field] ?? [])[0]) : undefined;
+          return ex ? { ...r, expect: ex } : r;
+        })
+        .sort((x, y) => rank(x.field) - rank(y.field)); // 有預期值嘅欄先（記低同頁方向），name_zh（純中文判唔到方向）、hire_date（冇預期值）最後
       const pageCache = new Map<string, string | null>();
       const rotCache = new Map<string, string>();
       // S3：同一頁方向一致——有欄判到（decisive）就記低，純中文姓名等判唔到嘅欄跟返

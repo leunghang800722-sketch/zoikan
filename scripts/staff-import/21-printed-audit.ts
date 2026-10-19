@@ -3,14 +3,14 @@
 //     --person-fields data/2026-10/staff-fields/person-fields-ext.json --extract data/2026-10/staff-import/out/extract.json \
 //     [--ocr-dir data/2026-10/staff-import/ocr] --out data/…/printed-audit.json [--person-key-map map.json]
 //   npx tsx scripts/staff-import/21-printed-audit.ts --dry     # 記憶體內合成 fixture，唔讀 data
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ArgError, resolveReportPath } from './lib/eval-ocr-core';
 import { hkidCheckDigitValid } from './lib/hkid';
 import { auditOne, isAffected, summarizeAudit, type AuditPerson, type AuditRow, type AuditSummary } from './lib/printed-audit';
-import { buildStaffNoIndex, docIdsForPerson, type ExtRow, type ExtractRow, type PkgPerson } from './lib/triage-reread-core';
-import type { OcrLine, OcrPage } from './lib/ocr';
+import { loadPeoplePages } from './lib/page-loader';
+import type { OcrLine } from './lib/ocr';
 
 export interface Args {
   package: string | null;
@@ -58,41 +58,8 @@ export function dryPersons(): AuditPerson[] {
 }
 
 async function loadLive(args: Args): Promise<AuditPerson[]> {
-  for (const k of ['package', 'personFields', 'extract'] as const) if (!args[k]) throw new ArgError('需要 --package --person-fields --extract（或者 --dry）');
-  const J = async <T>(p: string) => JSON.parse(await readFile(path.resolve(p), 'utf-8')) as T;
-  const pkg = await J<{ persons: PkgPerson[] }>(args.package!);
-  const ext = await J<ExtRow[]>(args.personFields!);
-  const extract = await J<ExtractRow[]>(args.extract!);
-  const extractBy = new Map(extract.map((e) => [e.docId, e]));
-  const idx = buildStaffNoIndex(ext);
-  const ocrDir = path.resolve(args.ocrDir ?? path.join(path.dirname(path.resolve(args.extract!)), 'ocr'));
-  const ocr2Dir = path.join(path.dirname(ocrDir), 'ocr2');
-  const linesOf = async (docId: string, page: number): Promise<OcrLine[] | null> => {
-    try {
-      const rot = extractBy.get(docId)?.rescuedRot ?? null;
-      if (rot !== null) {
-        const rows = (await readFile(path.join(ocr2Dir, `${docId}.jsonl`), 'utf-8')).split('\n').filter(Boolean).map((l) => JSON.parse(l) as { page: number; rot: number; lines: OcrLine[] });
-        return rows.find((r) => r.page === page && r.rot === rot)?.lines ?? null;
-      }
-      const rows = (await readFile(path.join(ocrDir, `${docId}.jsonl`), 'utf-8')).split('\n').filter(Boolean).map((l) => JSON.parse(l) as OcrPage);
-      return rows.find((r) => r.page === page && !r.alt)?.lines ?? null;
-    } catch {
-      return null;
-    }
-  };
-  const out: AuditPerson[] = [];
-  for (const p of pkg.persons) {
-    const pages: AuditPerson['pages'] = [];
-    for (const docId of docIdsForPerson(p, idx)) {
-      for (const pg of extractBy.get(docId)?.pages ?? []) {
-        if (pg.kinds.includes('id_card') || pg.kinds.includes('blank')) continue; // 非身份證頁
-        const lines = await linesOf(docId, pg.page);
-        if (lines) pages.push({ docId, page: pg.page, lines });
-      }
-    }
-    out.push({ key: p.key, pages });
-  }
-  return out;
+  // 非身份證頁
+  return (await loadPeoplePages(args, (kinds) => !kinds.includes('id_card') && !kinds.includes('blank'))).map((x) => ({ key: x.person.key, pages: x.pages }));
 }
 
 export interface AuditResult {
