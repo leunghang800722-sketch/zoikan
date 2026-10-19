@@ -13,6 +13,7 @@ import { POST as applyRoute } from "@/app/api/guards/import/apply/route";
 import { GET as sessionRoute } from "@/app/api/triage/sessions/[id]/route";
 import { POST as uploadRoute } from "@/app/api/triage/sessions/[id]/evidence-images/route";
 import { GET as imageRoute } from "@/app/api/triage/evidence-images/[id]/route";
+import { POST as withdrawRoute } from "@/app/api/triage/evidence-images/[id]/withdraw/route";
 import { POST as previewRoute } from "@/app/api/triage/questions/[id]/preview/route";
 import { POST as answerRoute } from "@/app/api/triage/questions/[id]/answer/route";
 import {
@@ -943,6 +944,69 @@ describe("TE-1 證據裁圖", () => {
       await prisma.triageQuestion.update({ where: { id: qn.id }, data: { evidenceJson: ev as never } });
       expect((await pv({ dob: "1990-05-06" })).status).toBe(200);
       expect((await pv({ dob: "1990-05-07" })).status).toBe(400);
+    });
+
+    describe("TE-8 錯圖撤回／取代上載", () => {
+      const withdraw = (cookie: string, id: string, body: unknown = { reason: "wrong" }) => withdrawRoute(new Request(`http://t/api/triage/evidence-images/${id}/withdraw`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) }), { params: Promise.resolve({ id }) } as never);
+
+      it("撤回：軟刪（bytes 清空）、DTO／GET 唔再回、audit 只記 id＋原因碼、重上載同 sha 計 skipped_withdrawn；冇權限／非法原因被拒", async () => {
+        const { pb, sid } = await seed();
+        const m = matchOf(pb);
+        const a = J(401);
+        const b = J(402);
+        const up = await upload(accountant, sid, await zipOf([{ bytes: a, field: "hkid", doc_kind: "printed", priority: 2, match: m }, { bytes: b, field: "hkid", doc_kind: "id_card", priority: 1, match: m }]));
+        expect(up.body.accepted_images).toBe(2);
+        const rowA = await prisma.triageEvidenceImage.findFirstOrThrow({ where: { sessionId: sid, docKind: "printed" } });
+        expect((await withdraw(broker, rowA.id)).status).toBe(403);
+        expect((await withdraw(accountant, rowA.id, { reason: "bad" })).status).toBe(400);
+        expect((await withdraw(accountant, rowA.id)).status).toBe(200);
+        const after = await prisma.triageEvidenceImage.findUniqueOrThrow({ where: { id: rowA.id } });
+        expect(after.withdrawnAt).not.toBeNull();
+        expect(after.withdrawnReason).toBe("wrong");
+        expect(after.imageBytes.length).toBe(0);
+        const q = (await getSession(owner, sid)).body.questions.find((x: { kind: string; evidence: { person: { hkid: unknown } } }) => x.kind === "hkid_not_confirmed");
+        expect(q.evidence_images.map((i: { doc_kind: string }) => i.doc_kind)).toEqual(["id_card"]);
+        expect((await getImage(owner, rowA.id)).status).toBe(404);
+        expect((await withdraw(accountant, rowA.id)).status).toBe(404); // 已撤回
+        const au = await prisma.auditLog.findFirstOrThrow({ where: { action: "triage_evidence_withdraw", tableName: "triage_questions" } });
+        expect(au.after).toMatchObject({ image_id: rowA.id, field: "hkid", doc_kind: "printed", reason: "wrong" });
+        expect(JSON.stringify(au.after)).not.toContain(H[2]!);
+        // 重上載同一張 → skipped_withdrawn（唔會再出現）
+        const again = await upload(accountant, sid, await zipOf([{ bytes: a, field: "hkid", doc_kind: "printed", priority: 2, match: m }]));
+        expect(again.body).toMatchObject({ accepted_images: 0, skipped_withdrawn: 1 });
+        expect(await imgCount({ sessionId: sid, withdrawnAt: null })).toBe(1);
+      });
+
+      it("取代模式 replace：manifest 有圖嘅人，同欄同 doc_kind 嘅舊圖（sha 唔喺今次）軟刪；其他欄／其他 doc_kind／manifest 冇嘅人唔受影響；dry 唔刪只計 would_withdraw", async () => {
+        const { pa, pb, sid } = await seed();
+        const mb = matchOf(pb);
+        const oldP = J(411);
+        const idImg = J(412);
+        const nameImg = J(413);
+        await upload(accountant, sid, await zipOf([{ bytes: oldP, field: "hkid", doc_kind: "printed", priority: 2, match: mb }, { bytes: idImg, field: "hkid", doc_kind: "id_card", priority: 1, match: mb }, { bytes: nameImg, field: "name_zh", doc_kind: "id_card", priority: 1, match: matchOf(pa) }]));
+        expect(await imgCount({ sessionId: sid })).toBe(3);
+        const newP = J(414);
+        const mk = async () => {
+          const f = entryName(newP);
+          return buildZip({ [f]: newP, "manifest.json": JSON.stringify({ version: 1, items: [{ file: f, field: "hkid", doc_kind: "printed", priority: 2, match: mb }], replace: [{ doc_kind: "printed", field: "hkid" }] }) });
+        };
+        const dry = await upload(accountant, sid, await mk(), true);
+        expect(dry.body).toMatchObject({ accepted_images: 1, would_withdraw: 1 });
+        expect(await imgCount({ sessionId: sid, withdrawnAt: null })).toBe(3); // dry 唔刪
+        const r = await upload(accountant, sid, await mk());
+        expect(r.body).toMatchObject({ accepted_images: 1, would_withdraw: 1 });
+        const rows = await prisma.triageEvidenceImage.findMany({ where: { sessionId: sid }, select: { docKind: true, field: true, withdrawnAt: true, withdrawnReason: true, sha256: true } });
+        const withdrawn = rows.filter((x) => x.withdrawnAt);
+        expect(withdrawn).toHaveLength(1);
+        expect(withdrawn[0]).toMatchObject({ docKind: "printed", field: "hkid", withdrawnReason: "replaced_by_upload" });
+        expect(rows.filter((x) => !x.withdrawnAt).map((x) => `${x.docKind}:${x.field}`).sort()).toEqual(["id_card:hkid", "id_card:name_zh", "printed:hkid"]);
+        const au = await prisma.auditLog.findMany({ where: { action: "triage_evidence_withdraw", tableName: "triage_evidence_images" } });
+        expect(au).toHaveLength(1);
+        expect(au[0]!.after).toMatchObject({ reason: "replaced_by_upload", field: "hkid", doc_kind: "printed" });
+        // 同一個 manifest 再上載：新圖已存在（重複），舊圖冇嘢可取代
+        const r2 = await upload(accountant, sid, await mk());
+        expect(r2.body).toMatchObject({ accepted_images: 0, would_withdraw: 0, skipped_duplicate: 1 });
+      });
     });
 
     describe("TE-7 整頁原稿暫存圖＋doc_ref（抽取失敗人）", () => {

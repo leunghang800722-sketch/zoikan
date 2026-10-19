@@ -110,6 +110,7 @@ export type AuditAction =
   // TE-1：分流題覆核證據裁圖（只計數，唔記圖／欄值／檔名）。
   | "triage_evidence_upload"
   | "triage_evidence_view"
+  | "triage_evidence_withdraw"
   | "triage_evidence_cleanup";
 
 export interface WriteAuditInput {

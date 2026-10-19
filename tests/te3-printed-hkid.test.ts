@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { aggregateDoc } from "../scripts/staff-import/lib/aggregate";
 import { scanPageHkids } from "../scripts/staff-import/lib/extract";
-import { hkidFromConfusableToken, hkidSpanInLine, findValidHkidsInText, looksLikeDateOrPhone } from "../scripts/staff-import/lib/hkid";
+import { hkidFromConfusableToken, findHkidTokens, looksLikeDateOrPhone } from "../scripts/staff-import/lib/hkid";
 import { findPrintedHkidLines } from "../scripts/staff-import/lib/triage-evidence-core";
 import type { OcrLine, OcrPage } from "../scripts/staff-import/lib/ocr";
 
@@ -40,11 +40,11 @@ describe("hkidFromConfusableToken", () => {
     expect(hits.length).toBeLessThanOrEqual(1);
     expect(hkidFromConfusableToken("00000000")).toBeNull();
   });
-  it("hkidSpanInLine／findValidHkidsInText", () => {
-    const s = hkidSpanInLine("身份證號碼 A123456(3) 簽發")!;
-    expect(s.start).toBeGreaterThan(0);
-    expect(s.end).toBeLessThan(s.len);
-    expect(findValidHkidsInText("x A123456（3） y")).toEqual(["A1234563"]);
+  it("findHkidTokens：NFKC、全形括號、有 token 邊界", () => {
+    const t = findHkidTokens("身份證號碼 A123456(3) 簽發")[0]!;
+    expect(t).toMatchObject({ value: "A1234563", bracketed: true });
+    expect(t.start).toBeGreaterThan(0);
+    expect(findHkidTokens("x A123456（3） y").map((x) => x.value)).toEqual(["A1234563"]);
   });
 });
 

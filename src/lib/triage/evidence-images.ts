@@ -132,6 +132,7 @@ export const EVIDENCE_META_SELECT = {
   docKind: true,
   priority: true,
   pageNo: true,
+  withdrawnAt: true,
   encVersion: true,
   width: true,
   height: true,
@@ -283,8 +284,8 @@ export const sha256Hex = (b: Uint8Array): string => createHash("sha256").update(
 
 /** 圖片 GET 專用：解密 bytes。 */
 export async function loadImageBytes(id: string): Promise<{ bytes: Buffer; mime: string } | null> {
-  const r = await prisma.triageEvidenceImage.findUnique({ where: { id }, select: { imageBytes: true, iv: true, tag: true, mime: true, encVersion: true } });
-  if (!r || r.encVersion !== ENC_VERSION) return null;
+  const r = await prisma.triageEvidenceImage.findUnique({ where: { id }, select: { imageBytes: true, iv: true, tag: true, mime: true, encVersion: true, withdrawnAt: true } });
+  if (!r || r.withdrawnAt || r.encVersion !== ENC_VERSION) return null;
   try {
     return { bytes: decryptImage({ bytes: r.imageBytes, iv: r.iv, tag: r.tag }, id), mime: r.mime };
   } catch {
@@ -358,7 +359,7 @@ export async function evidenceViewsFor(actor: AuthedSession, rows: readonly Tria
   const can = await viewableFields(actor);
   if (can.size === 0) return out;
   const imgs = await prisma.triageEvidenceImage.findMany({
-    where: { sessionId: { in: [...new Set(withKey.map((r) => r.sessionId))] }, personKey: { in: [...new Set(withKey.map((r) => r.personKey!))] } },
+    where: { withdrawnAt: null, sessionId: { in: [...new Set(withKey.map((r) => r.sessionId))] }, personKey: { in: [...new Set(withKey.map((r) => r.personKey!))] } },
     select: EVIDENCE_META_SELECT,
     orderBy: [{ priority: "asc" }, { pageNo: "asc" }, { createdAt: "asc" }, { id: "asc" }],
   });
@@ -378,10 +379,16 @@ export async function hiddenPageCounts(actor: AuthedSession, rows: readonly Tria
   if (withKey.length === 0) return out;
   const can = await viewableFields(actor);
   if (can.has("page")) return out;
-  const groups = await prisma.triageEvidenceImage.groupBy({ by: ["sessionId", "personKey"], where: { field: "page", sessionId: { in: [...new Set(withKey.map((r) => r.sessionId))] }, personKey: { in: [...new Set(withKey.map((r) => r.personKey!))] } }, _count: { _all: true } });
+  const groups = await prisma.triageEvidenceImage.groupBy({ by: ["sessionId", "personKey"], where: { withdrawnAt: null, field: "page", sessionId: { in: [...new Set(withKey.map((r) => r.sessionId))] }, personKey: { in: [...new Set(withKey.map((r) => r.personKey!))] } }, _count: { _all: true } });
   for (const r of withKey) {
     const n = groups.find((g) => g.sessionId === r.sessionId && g.personKey === r.personKey)?._count._all ?? 0;
     if (n > 0) out.set(r.id, n);
   }
   return out;
+}
+
+/** TE-8：軟刪證據圖（錯圖撤回／取代上載）：清空 bytes（保留 sha 令重上載計 skipped_withdrawn）、記時間同原因碼。回受影響張數。 */
+export async function withdrawImages(db: Db, where: Prisma.TriageEvidenceImageWhereInput, reason: string, now: Date): Promise<number> {
+  const r = await db.triageEvidenceImage.updateMany({ where: { ...where, withdrawnAt: null }, data: { withdrawnAt: now, withdrawnReason: reason, imageBytes: new Uint8Array(0), iv: new Uint8Array(0), tag: new Uint8Array(0) } });
+  return r.count;
 }

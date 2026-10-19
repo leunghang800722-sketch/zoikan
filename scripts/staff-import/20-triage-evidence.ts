@@ -649,18 +649,17 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
       const hasClassicId = pi.docs.some((d) => d.type === 'id_card');
       const embedded: EmbeddedSource[] = [];
       const extraLines = new Map<string, OcrLine[]>(); // 二階段局部 OCR 嘅行（deps.lines 讀唔到嵌入卡）
-      const printed: PrintedSource[] = [];
+      const printedAll: (PrintedSource & { value: string; labelled: boolean })[] = [];
       if ((needsId && !hasClassicId) || fields.includes('hkid')) {
         for (const sp of pi.scanPages ?? []) {
-          if (embedded.length > 0 && printed.length > 0) break;
           const doc: DocPage = { type: 'id_card', docId: sp.docId, page: sp.page };
           const lines = await deps.lines(doc).catch(() => null);
           if (!lines) continue;
           const det = detectEmbeddedCards(lines, SCAN_ASPECT);
           if (det && needsId && !hasClassicId && embedded.length === 0) embedded.push({ doc, rot: det.rot, region: det.cards[0]!.box });
-          if (fields.includes('hkid') && printed.length === 0) {
+          if (fields.includes('hkid')) {
             const inCard = (l: OcrLine) => !!det && det.cards.some((c) => inBox(c.box, rotateLines([l], det.rot)[0]!));
-            for (const pr of findPrintedHkidLines(lines, SCAN_ASPECT, inCard)) printed.push({ doc, rot: pr.rot, line: pr.line });
+            for (const pr of findPrintedHkidLines(lines, SCAN_ASPECT, inCard)) printedAll.push({ doc, rot: pr.rot, line: pr.line, value: pr.value, labelled: pr.labelled });
           }
         }
       }
@@ -678,12 +677,19 @@ export async function produceItems(people: readonly PersonInput[], deps: Deps, s
             // 二階段嘅卡區行座標係局部 OCR 嘅——crop 流程要用同一批行（deps.lines 讀唔到卡）
             extraLines.set(`${doc.docId}|${doc.page}`, s2.lines);
           }
-          if (printed.length === 0) {
+          if (printedAll.length === 0) {
             const inCard = (l: OcrLine) => !!det && det.cards.some((c) => inBox(c.box, rotateLines([l], det.rot)[0]!));
-            for (const pr of findPrintedHkidLines(s2.lines, s2.aspect, inCard)) printed.push({ doc, rot: pr.rot, line: pr.line });
+            for (const pr of findPrintedHkidLines(s2.lines, s2.aspect, inCard)) printedAll.push({ doc, rot: pr.rot, line: pr.line, value: pr.value, labelled: pr.labelled });
           }
         }
       }
+      // TE-8：同一人所有頁嘅 printed 候選 canonical 唔一致 → 整個 printed 來源跳過（printed_multiple），唔好隨機出一個；一致 → label 行優先，最多 2 張
+      const printedValues = new Set(printedAll.map((x) => x.value));
+      let printed: PrintedSource[] = [];
+      if (printedValues.size > 1) {
+        bump(stats.skipped, 'printed_multiple');
+        bump((stats.skipped_by_field.hkid ??= {}), 'printed_multiple');
+      } else printed = [...printedAll].sort((a, b) => Number(b.labelled) - Number(a.labelled)).slice(0, 2).map((x) => ({ doc: x.doc, rot: x.rot, line: x.line }));
       const reqs = [...planRequests(fields, pi.docs, { embedded, printed })].sort((x, y) => rank(x.field) - rank(y.field)); // 有預期值嘅欄先（記低同頁方向），name_zh（純中文判唔到方向）、hire_date（冇預期值）最後
       const pageCache = new Map<string, string | null>();
       const rotCache = new Map<string, string>();

@@ -3,9 +3,9 @@
 // 鐵則：欄位值／姓名／檔名／路徑唔入 console、唔入 zip entry 名（entry 名＝圖 sha256 前 32 位）。
 import JSZip from 'jszip';
 import { createHash } from 'node:crypto';
-import { findHkidCandidates, hkidCheckDigitValid, hkidSpanInLine } from './hkid';
+import { findHkidCandidates, hkidCheckDigitValid, scanHkidHits, selectPrintedHits } from './hkid';
 import { cardRegion, extractIdCard, isIdAnchorLine } from './extract';
-import { cy, norm, type OcrLine } from './ocr';
+import { cy, norm, readingOrder, type OcrLine } from './ocr';
 import { padAround } from './crop-pad';
 import { locateAddressBox } from './crop-box';
 import type { Box } from './phone-crop';
@@ -114,8 +114,8 @@ export function planRequests(fields: readonly EvidenceField[], docs: readonly Do
         n += 1;
       };
       if (kind === 'printed') {
-        const pr = extra.printed?.[0];
-        if (pr) push({ doc: pr.doc, printed: { rot: pr.rot, line: pr.line } });
+        // TE-8：同一個（一致）號碼可以出最多 2 張唔同行作佐證（label 行優先，受每欄上限約束）
+        for (const pr of (extra.printed ?? []).slice(0, 2)) push({ doc: pr.doc, printed: { rot: pr.rot, line: pr.line } });
         continue;
       }
       const doc = docs.find((d) => d.type === kind);
@@ -730,26 +730,44 @@ export function detectEmbeddedCards(lines: readonly OcrLine[], aspect = 1): { ro
 }
 
 /**
- * 印刷嘅身份證號行（牌照頁／證書頁）：符合 HKID 格式、唔喺任何卡區內（inCard 判斷，傳入原 frame 嘅行）、而且唔係真身份證頁（有標題 anchor）。
- * 回轉正後 frame 嘅行：橫排（實際闊≥高）rot 0；側躺 rot 90（之後 Vision .fast 再判 0／180）。
+ * 印刷嘅身份證號（牌照頁／證書頁）：唔喺任何卡區內（inCard 判斷，傳入原 frame 嘅行）、而且唔係真身份證頁（有標題 anchor）。
+ * TE-8：token 有邊界（QATW1026240 內嘅 TW102624(0) 唔算）；每頁淨出有身份證 label 嘅候選，冇 label 先退到有括號 check digit 嘅候選；
+ * 裁圖範圍由 label 起到號碼尾（有 label 時；label 喺上一行就兩行聯合），等覆核人見到上下文。
+ * 回轉正後 frame 嘅行：橫排（實際闊≥高）rot 0；側躺 rot 90（之後 Vision .fast 再判 0／180）；value＝canonical 號碼（跨頁一致性檢查用）。
  */
-export function findPrintedHkidLines(lines: readonly OcrLine[], aspect: number, inCard: (l: OcrLine) => boolean = () => false): { rot: Rotation; line: OcrLine }[] {
+export function findPrintedHkidLines(lines: readonly OcrLine[], aspect: number, inCard: (l: OcrLine) => boolean = () => false): { rot: Rotation; line: OcrLine; value: string; labelled: boolean }[] {
   if (lines.some((l) => isIdAnchorLine(l.t))) return [];
-  const out: { rot: Rotation; line: OcrLine }[] = [];
-  for (const l of lines) {
-    if (!l.t.trim() || inCard(l)) continue;
-    // TE-3：行內任何位置搜尋（NFKC＋check digit），號碼前後有文字（例「身份證號碼：A123456(7) 簽發…」）時只裁號碼嘅 x 範圍（按字元比例）
-    const span = hkidSpanInLine(l.t);
-    if (!span && !isHkidFormatLine(l.t)) continue;
+  const rows = readingOrder(lines.filter((l) => l.t.trim()));
+  const hits = scanHkidHits(rows.map((l) => l.t), (t) => /PERMIT\s*NO|許可證編號/i.test(t)).filter((h) => !inCard(rows[h.line]!));
+  const out: { rot: Rotation; line: OcrLine; value: string; labelled: boolean }[] = [];
+  const frac = (l: OcrLine, a: number, b: number): [number, number] => {
+    const len = Math.max(1, l.t.normalize('NFKC').length);
+    return [l.x + (l.w * Math.max(0, a - 0.5)) / len, l.x + (l.w * Math.min(len, b + 0.5)) / len];
+  };
+  for (const h of selectPrintedHits(hits)) {
+    const l = rows[h.line]!;
     const horizontal = l.w * aspect >= l.h;
     const rot: Rotation = horizontal ? 0 : 90;
     let src: OcrLine = l;
-    if (span && horizontal && (span.start > 0 || span.end < span.len)) {
-      const f0 = Math.max(0, span.start - 0.5) / span.len;
-      const f1 = Math.min(span.len, span.end + 0.5) / span.len;
-      src = { ...l, x: l.x + l.w * f0, w: l.w * (f1 - f0) }; // 側躺行文字方向未定，唔裁 x 範圍
+    const lab = h.labelLine !== null && h.labelLine !== h.line ? rows[h.labelLine]! : null;
+    if (horizontal) {
+      const [nx0, nx1] = frac(l, h.labelled && !lab && h.labelStart !== null ? h.labelStart : h.start, h.end);
+      if (lab) {
+        const [lx0] = frac(lab, h.labelStart ?? 0, lab.t.normalize('NFKC').length);
+        const x0 = Math.min(lx0, nx0);
+        const x1 = Math.max(lab.x + lab.w, nx1);
+        const y0 = Math.min(lab.y, l.y);
+        const y1 = Math.max(lab.y + lab.h, l.y + l.h);
+        src = { ...l, t: `${lab.t} ${l.t}`, x: x0, w: x1 - x0, y: y0, h: y1 - y0 };
+      } else src = { ...l, x: nx0, w: nx1 - nx0 }; // 側躺行文字方向未定，唔裁 x 範圍
+    } else if (lab) {
+      const y0 = Math.min(lab.y, l.y);
+      const y1 = Math.max(lab.y + lab.h, l.y + l.h);
+      const x0 = Math.min(lab.x, l.x);
+      const x1 = Math.max(lab.x + lab.w, l.x + l.w);
+      src = { ...l, t: `${lab.t} ${l.t}`, x: x0, w: x1 - x0, y: y0, h: y1 - y0 };
     }
-    out.push({ rot, line: rotateLines([src], rot)[0]! });
+    out.push({ rot, line: rotateLines([src], rot)[0]!, value: h.value, labelled: h.labelled });
   }
   return out;
 }

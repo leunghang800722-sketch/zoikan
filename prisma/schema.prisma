@@ -556,6 +556,9 @@ model TriageEvidenceImage {
   priority   Int           @default(1)
   /// TE-7：整頁原稿（field=page）嘅頁碼；欄位裁圖＝null
   pageNo     Int?          @map("page_no")
+  /// TE-8：覆核人標記「呢張圖錯／唔相關」或被取代上載軟刪（bytes 已清空，保留 sha 令重上載計 skipped_withdrawn）
+  withdrawnAt     DateTime? @map("withdrawn_at")
+  withdrawnReason String?   @map("withdrawn_reason")
   imageBytes Bytes         @map("image_bytes")
   iv         Bytes
   tag        Bytes

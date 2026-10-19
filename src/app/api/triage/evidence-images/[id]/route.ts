@@ -15,7 +15,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const actor = await requirePermission(req, "導入分診", "view");
     const { id } = await params;
     const meta = await prisma.triageEvidenceImage.findUnique({ where: { id }, select: EVIDENCE_META_SELECT });
-    if (!meta) throw NotFound("搵唔到呢張圖");
+    if (!meta || meta.withdrawnAt) throw NotFound("搵唔到呢張圖");
     const session = await prisma.triageSession.findUnique({ where: { id: meta.sessionId }, select: { ownerUserId: true } });
     if (!session || !(await canAccessOwnedBy(actor, session.ownerUserId))) throw Forbidden("呢張圖唔係你上載嗰批");
     const field = meta.field as EvidenceField;

@@ -1,7 +1,7 @@
 // 頁面分類＋欄位抽取（純函數，輸入 OCR 行，無 IO）。
-import { canonicalHkid, findHkidCandidates, findValidHkidsInText, hkidCheckDigitValid, hkidFromConfusableToken, repairHkid, repairHkidLeadingLetter } from './hkid';
+import { canonicalHkid, findHkidCandidates, scanHkidHits, selectPrintedHits, hkidCheckDigitValid, hkidFromConfusableToken, repairHkid, repairHkidLeadingLetter } from './hkid';
 import { cy, norm, readingOrder, toRows, type OcrLine, type OcrPage } from './ocr';
-import { cardLines, findEmbeddedCards } from './embedded-card';
+import { cardLines, findEmbeddedCards, isHkidFormatLine } from './embedded-card';
 
 export type PageKind = 'id_card' | 'address_proof' | 'address_declaration' | 'application_form' | 'sia_permit' | 'bank' | 'other' | 'blank';
 export type Level = 'high' | 'medium' | 'low';
@@ -550,36 +550,40 @@ const RE_PERMIT_NO_LINE = /PERMIT\s*NO|許可證編號/i;
  */
 export function scanPageHkids(page: number, lines: OcrLine[]): Field[] {
   const rows = readingOrder(lines.filter((l) => l.t.trim()));
-  const out: Field[] = [];
-  const seen = new Set<string>();
-  const push = (value: string, l: OcrLine, note?: string) => {
-    if (seen.has(value)) return;
-    seen.add(value);
-    out.push({ value, level: note ? 'low' : 'medium', conf: l.c, page, evidence: l.t, ...(note ? { note } : {}) });
-  };
+  const skip = (t: string) => RE_PERMIT_NO_LINE.test(t);
+  // TE-8：有 token 邊界＋label 偵測（同行或緊貼上一行淨係 label）
+  const hits = scanHkidHits(rows.map((l) => l.t), skip);
+  type Cand = { value: string; line: OcrLine; labelled: boolean; bracketed: boolean; note?: string };
+  const cands: Cand[] = hits.map((h) => ({ value: h.value, line: rows[h.line]!, labelled: h.labelled, bracketed: h.bracketed }));
+  // ② 有 label 但冇（有邊界嘅）合法 token → OCR 混淆修正（只接受唯一 checksum 通過；永遠 labelled＋low）
   rows.forEach((l, i) => {
-    if (RE_PERMIT_NO_LINE.test(l.t)) return;
-    const direct = findValidHkidsInText(l.t);
-    for (const c of direct) push(c, l);
-    if (direct.length) return;
+    if (skip(l.t) || hits.some((h) => h.line === i && h.labelled)) return;
     const t = l.t.normalize('NFKC');
     const m = RE_HKID_LABEL.exec(t);
     if (!m) return;
-    // M1：同一行緊跟 label 嘅 token（token 後可以有其他字）；label 後冇字先睇下一行，而且下一行要淨係得呢個 token
+    // M1：同一行緊跟 label 嘅 token；label 後冇字先睇下一行，而且下一行要淨係得呢個 token
     let tail = t.slice(m.index + m[0].length).trim();
     let src = l;
     let wholeLine = false;
     if (!tail) {
       const nx = rows[i + 1];
-      if (nx && !RE_PERMIT_NO_LINE.test(nx.t)) {
+      if (nx && !skip(nx.t)) {
         tail = nx.t.normalize('NFKC').trim();
         src = nx;
         wholeLine = true;
       }
     }
     const r = tail ? hkidFromConfusableToken(tail) : null;
-    if (r && (!wholeLine || !tail.toUpperCase().slice(r.end).trim())) push(r.value, src, r.fixed ? 'ocr_confusion_fixed' : undefined);
+    if (r && r.fixed && (!wholeLine || !tail.toUpperCase().slice(r.end).trim())) cands.push({ value: r.value, line: src, labelled: true, bracketed: true, note: 'ocr_confusion_fixed' });
   });
+  // TE-8：每頁淨出 label 候選；冇先退到有括號 check digit 嘅無 label 候選
+  const out: Field[] = [];
+  const seen = new Set<string>();
+  for (const c of selectPrintedHits(cands)) {
+    if (seen.has(c.value)) continue;
+    seen.add(c.value);
+    out.push({ value: c.value, level: c.note ? 'low' : 'medium', conf: c.line.c, page, evidence: c.line.t, ...(c.note ? { note: c.note } : {}), ...(c.labelled ? { flags: ['hkid_labelled'] } : {}) });
+  }
   return out;
 }
 
@@ -587,7 +591,10 @@ export function extractPermit(page: number, lines: OcrLine[]): { hkid: Field | n
   // TE-3：行內搜尋＋label 後 OCR 混淆修正（舊版只認整行 check digit 啱嘅候選）
   const all = scanPageHkids(page, lines);
   const f = all.find((x) => x.note !== 'ocr_confusion_fixed') ?? all[0]; // 未經混淆修正嘅優先
-  return { hkid: f ?? null };
+  if (f) return { hkid: f };
+  // TE-8：許可證頁容許「整行淨係一個號碼」（冇括號亦得）——整行本身就係 token，唔會係長序號內嘅子串
+  const whole = lines.find((l) => !RE_PERMIT_NO_LINE.test(l.t) && isHkidFormatLine(l.t));
+  return { hkid: whole ? { value: canonicalHkid(whole.t)!, level: 'medium', conf: whole.c, page, evidence: whole.t } : null };
 }
 
 export { canonicalHkid };
