@@ -535,4 +535,41 @@ test.describe("TE-1 覆核證據裁圖", () => {
     await expect(page.getByTestId("triage-reason-text")).toContainText("多位保安員");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
+
+  test("TE-10 375px：預覽後資料變咗（409）→ 確認 → 自動重新預覽＋提示「資料啱啱更新咗」→ 再確認成功", async ({ page }) => {
+    await cleanup();
+    const boss = await prisma.user.findFirstOrThrow({ where: { tel: TEST_TEL["老闆"] } });
+    const ses = await prisma.triageSession.create({ data: { sourceType: "guard_import", sourceRef: REF, ownerUserId: boss.id, createdBy: boss.id } });
+    const p9 = { n: 9, name: `重預覽員${CN}`, hkid: mkHkid(`66${RUN}9`), no: `ZE${RUN}9` };
+    const g = await prisma.guard.create({ data: { nameZh: p9.name, employmentType: "cash_casual", createdBy: "e2e" } });
+    await prisma.guardStaffNumber.create({ data: { guardId: g.id, scheme: "ZE", number: p9.no, status: "current" } });
+    await prisma.triageQuestion.create({
+      data: {
+        sessionId: ses.id,
+        kind: "hkid_not_confirmed",
+        groupKey: "e2e-te1-9",
+        sort: 1,
+        title: "hkid_not_confirmed",
+        personKey: keyOf(p9),
+        evidenceJson: { v: 1, person: personOf(p9, { hkid: f(p9.hkid, "review") }), reasons: [], candidate_guard_ids: [g.id] } as never,
+        optionsJson: [{ id: "use_package_hkid", label: "用導入包嘅身份證號" }, { id: "skip", label: "skip" }] as never,
+      },
+    });
+    await page.setViewportSize(MOBILE);
+    await loginAs(page, "老闆");
+    await page.goto("/triage");
+    const card = page.getByTestId("triage-session-card").filter({ hasText: "保安員證件資料導入" }).first();
+    await card.getByRole("button", { name: /繼續答/ }).click();
+    await page.getByRole("radio").first().check();
+    await page.getByTestId("triage-preview").click();
+    await expect(page.getByTestId("triage-impact")).toBeVisible();
+    // 預覽之後，同一保安員資料被改動（例如另一題先答咗）→ 計劃寫入 before／after 變咗
+    await prisma.guard.update({ where: { id: g.id }, data: { dateOfBirth: new Date("1990-05-06T00:00:00.000Z"), nameEn: "SOMEONE ELSE" } });
+    await page.getByTestId("triage-confirm").click();
+    await expect(page.getByTestId("triage-refreshed-note")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("資料中途變咗")).toHaveCount(0);
+    expect((await prisma.guard.findUniqueOrThrow({ where: { id: g.id }, select: { hkid: true } })).hkid).toBeNull(); // 未寫
+    await page.getByTestId("triage-confirm").click();
+    await expect.poll(() => prisma.guard.findUniqueOrThrow({ where: { id: g.id }, select: { hkid: true } }).then((x) => x.hkid), { timeout: 15_000 }).toBe(p9.hkid);
+  });
 });

@@ -387,6 +387,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
   const [hash, setHash] = useState<string | null>(null);
   const [extraNames, setExtraNames] = useState<{ name_zh: string; name_en: string }>({ name_zh: "", name_en: "" });
   const [decision, setDecision] = useState<{ kind: "link"; guardId: string } | { kind: "create_new" } | null>(null); // TE-5
+  const [refreshed, setRefreshed] = useState(false); // TE-10：409 後已自動重新預覽
   const [extraShown, setExtraShown] = useState(false); // 曾經要補姓名：之後預覽可確認（needs_fields 消失）都要繼續帶 extra
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -487,6 +488,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     setExtraNames({ name_zh: "", name_en: "" });
     setExtraShown(false);
     setDecision(null);
+    setRefreshed(false);
     setError(null);
   };
   useEffect(() => {
@@ -534,6 +536,7 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     if (!q || !answer) return null;
     setBusy(true);
     setError(null);
+    setRefreshed(false);
     const res = await apiPost<{ preview_hash: string; writes: boolean; impact: Impact }>(`/api/triage/questions/${q.id}/preview`, { answer });
     setBusy(false);
     if (!res.ok) {
@@ -613,11 +616,16 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
     const res = await apiPost(`/api/triage/questions/${q.id}/answer`, { answer, preview_hash: useHash });
     setBusy(false);
     if (!res.ok) {
-      setError(res.status === 409 ? `${res.message}（請再撳「預覽影響」）` : res.message);
       if (res.status === 409) {
+        // TE-10：資料啱啱變咗（例如同一人另一題先答咗）——自動重新預覽一次；成功就顯示新預覽＋一句提示，用戶再撳確認；仍失敗先顯示原本紅字
         setImpact(null);
         setHash(null);
+        const re = await runPreview();
+        if (re) setRefreshed(true);
+        else setError(`${res.message}（請再撳「預覽影響」）`);
+        return;
       }
+      setError(res.message);
       return;
     }
     lastKind.current = "answered";
@@ -986,6 +994,11 @@ export function TriageDialog({ sessionId, onClose, onChanged }: { sessionId: str
                       </Button>
                     )}
                   </div>
+                </div>
+              )}
+              {refreshed && impact && (
+                <div className="rounded-lg border border-zk-primary/40 bg-zk-primary-tint-soft p-2 text-zk-sm text-zk-primary-deep" data-testid="triage-refreshed-note">
+                  資料啱啱更新咗，已重新預覽，請再確認
                 </div>
               )}
               {impact && <ImpactCard impact={impact} />}
