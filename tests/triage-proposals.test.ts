@@ -8,7 +8,9 @@ import { POST as applyRoute } from "@/app/api/guards/import/apply/route";
 import { POST as proposalsRoute } from "@/app/api/triage/sessions/[id]/proposals/route";
 import { GET as sessionRoute } from "@/app/api/triage/sessions/[id]/route";
 import { GET as listRoute } from "@/app/api/triage/sessions/route";
-import { dispOf, planForQuestion, proposalsBodySchema, type Proposal } from "@/lib/triage/proposals";
+import { dispOf, planForQuestion, proposalsBodySchema, submitReason, type Proposal } from "@/lib/triage/proposals";
+import { fpNormalize } from "@/lib/guards/import/apply";
+import { createHash } from "node:crypto";
 import { BadRequest, Conflict, Forbidden } from "@/lib/api/errors";
 import { insertEvidenceImage, inspectImage } from "@/lib/triage/evidence-images";
 import { fakeJpeg } from "./lib/te1-images";
@@ -431,5 +433,37 @@ describe("TR-1 OCR 重讀建議導入", () => {
     expect(real.body).toMatchObject({ applied: dry.body.applied, skipped_invalid: 0, errors: 0, resubmitted: 0 });
     expect(real.body.invalid_reasons).toEqual({});
     for (const kind of ["name_not_confirmed", "hkid_not_confirmed"]) expect((await qOf(kind)).status).toBe("answered");
+  });
+  it("TE-11.5 M1：submitReason 只記 status＋code，唔帶訊息（訊息可能含電話／工號原值）", () => {
+    const r = submitReason(BadRequest("電話 91234567 格式唔啱；工號 U90001 重複"));
+    expect(r).toBe("submit:400:bad_request");
+    expect(r).not.toMatch(/\d{4}|U9/);
+    expect(submitReason(Conflict("資料中途變咗"))).toBe("submit:409:conflict");
+    expect(submitReason(new Error("x"))).toBe("submit:error");
+  });
+
+  it("TE-11.5 指紋穩定：fpNormalize 對陣列做標準排序——同一內容打亂次序（含巢狀）指紋相同；內容唔同指紋唔同", () => {
+    const fp = (v: unknown) => createHash("sha256").update(JSON.stringify(fpNormalize(v))).digest("hex");
+    const a = { res: { fields: { a: 1 }, ext: [{ k: "x", v: 1 }, { k: "y", v: 2 }, { k: "z", v: 3 }] }, changes: [{ table: "guards", after: { tels: ["91000001", "91000002"], addrs: ["甲", "乙", "丙"] } }, { table: "guard_phones", after: { tel: "91000003" } }] };
+    const b = { changes: [{ after: { addrs: ["丙", "甲", "乙"], tels: ["91000002", "91000001"] }, table: "guards" }, { after: { tel: "91000003" }, table: "guard_phones" }].reverse(), res: { ext: [{ v: 3, k: "z" }, { k: "x", v: 1 }, { k: "y", v: 2 }], fields: { a: 1 } } };
+    expect(fp(a)).toBe(fp(b));
+    expect(fp(a)).not.toBe(fp({ ...a, res: { ...a.res, ext: a.res.ext.slice(1) } }));
+    expect(fp([1, 2, 3])).toBe(fp([3, 1, 2]));
+    expect(fp([{ id: "x", n: 2 }, { id: "y", n: 1 }])).toBe(fp([{ id: "q", n: 1 }, { id: "r", n: 2 }])); // id 被剝走後只比內容
+  });
+
+  it("TE-11.5 去重：同一條題經兩個 person_key（本機 key 同推導 key）各配一次——只答一次，後者計 skipped_duplicate_question；dry 同 apply 一致，apply 冇 409", async () => {
+    const { pa, sid } = await seed();
+    const ma = { hkid: pa.hkid.value, staff_numbers: pa.staffNumbers.map((n) => n.number) };
+    const props = [
+      prop(pa.key, "nameZh", "卡上正確姓名甲", { match: ma, confidence: "high" }),
+      prop("00000000-0000-4000-8000-0000000000bb", "nameZh", "卡上正確姓名甲", { match: ma, confidence: "high" }), // 另一個本機 key，推導後係同一條題
+    ];
+    const dry = await send(accountant, sid, props, true);
+    const real = await send(accountant, sid, props);
+    expect(dry.body).toMatchObject({ applied: 1, skipped_duplicate_question: 1, skipped_invalid: 0 });
+    expect(real.body).toMatchObject({ applied: 1, skipped_duplicate_question: 1, skipped_invalid: 0, errors: 0 });
+    expect(real.body.invalid_reasons).toEqual({});
+    expect((await qOf("name_not_confirmed")).status).toBe("answered");
   });
 });

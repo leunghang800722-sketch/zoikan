@@ -67,6 +67,8 @@ interface ProposalCounts {
   skipped_low_confidence: number;
   /** TE-5：preview 回 needs_decision（同名現有保安員）——要人決定連結／建新人，唔按姓名自動連結 */
   skipped_needs_decision: number;
+  /** TE-11.5：同一條題被兩個 person_key（或推導 key）各配一次——只答一次，後者計呢項（避免 dry 重複計、apply 第二次 409 已答過） */
+  skipped_duplicate_question: number;
   skipped_partial: number;
   skipped_identity_mismatch: number;
   errors: number;
@@ -79,9 +81,9 @@ interface ProposalCounts {
   /** TE-11.4：commit 時遇 409「資料中途變咗」而自動重新預覽再答一次嘅題數 */
   resubmitted: number;
 }
-const emptyCounts = (): ProposalCounts => ({ invalid_reasons: {}, resubmitted: 0, proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_low_confidence: 0, skipped_needs_decision: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
+const emptyCounts = (): ProposalCounts => ({ invalid_reasons: {}, resubmitted: 0, proposals_total: 0, matched_questions: 0, applied: 0, applied_partial: 0, follow_up_created: 0, skipped_no_question: 0, skipped_kind: 0, skipped_field_mismatch: 0, skipped_field_not_under_review: 0, skipped_value_mismatch: 0, skipped_invalid: 0, skipped_restricted: 0, skipped_low_confidence: 0, skipped_needs_decision: 0, skipped_duplicate_question: 0, skipped_partial: 0, skipped_identity_mismatch: 0, errors: 0 });
 
-type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_low_confidence" | "skipped_needs_decision" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
+type Disp = "applied" | "skipped_no_question" | "skipped_kind" | "skipped_field_not_under_review" | "skipped_value_mismatch" | "skipped_invalid" | "skipped_restricted" | "skipped_low_confidence" | "skipped_needs_decision" | "skipped_duplicate_question" | "skipped_partial" | "skipped_identity_mismatch" | "errors";
 
 export type QuestionPlan =
   | { type: "none" } // 呢條題同呢個人嘅建議冇關係（唔計 matched）
@@ -184,9 +186,10 @@ function previewReason(notes: readonly string[], text?: string): string {
   const m = notes.map((n) => /原因碼：([A-Za-z0-9_,]+)/.exec(n)?.[1]).find(Boolean);
   return `preview:${m ?? (text ? text.slice(0, 40) : "not_writable")}`;
 }
-/** commit 失敗原因：ApiError＝狀態＋code＋固定訊息（開頭 60 字，訊息本身唔含值）；其他＝error */
-function submitReason(e: unknown): string {
-  return e instanceof ApiError ? `submit:${e.status}:${e.code}:${e.message.slice(0, 60)}` : "submit:error";
+/** commit 失敗原因：ApiError＝狀態＋code；其他＝error */
+export function submitReason(e: unknown): string {
+  // 只記狀態＋code（訊息可能帶電話／工號等原值，唔記）
+  return e instanceof ApiError ? `submit:${e.status}:${e.code}` : "submit:error";
 }
 
 export function dispOf(e: unknown): Disp {
@@ -211,6 +214,7 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
     idxOf.set(k, [...(idxOf.get(k) ?? []), i]);
   });
   /** TE-11.4：skipped_invalid 唔好吞——記原因碼（固定訊息／狀態碼，唔記任何值） */
+  const seenQuestions = new Set<string>(); // TE-11.5：同一題只處理一次
   const noteInvalid = (n: number, reason: string) => {
     counts.invalid_reasons[reason] = (counts.invalid_reasons[reason] ?? 0) + n;
   };
@@ -297,6 +301,11 @@ export async function runProposals(actor: AuthedSession, sessionId: string, prop
     /** S2：自動答嘅題 audit 記今次用到嘅建議旗標（form_differs 等；淨旗標，唔記值） */
     const flagsOf = (fields: readonly ProposalField[]): string[] => [...new Set(fields.flatMap((f) => metaMap.get(f)?.flags ?? []))];
     for (const q of eligible) {
+      if (seenQuestions.has(q.id)) {
+        mark(key, allFields, "skipped_duplicate_question");
+        continue;
+      }
+      seenQuestions.add(q.id);
       const plan = planForQuestion(q, props, metaMap);
       if (plan.type === "none") continue;
       counts.matched_questions += 1;
